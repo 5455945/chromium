@@ -1,13 +1,15 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef SERVICES_NETWORK_PUBLIC_CPP_INITIATOR_LOCK_COMPATIBILITY_H_
 #define SERVICES_NETWORK_PUBLIC_CPP_INITIATOR_LOCK_COMPATIBILITY_H_
 
+#include <optional>
+
 #include "base/component_export.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/origin.h"
+#include "url/origin_debug.h"
 
 namespace network {
 
@@ -40,10 +42,7 @@ enum class InitiatorLockCompatibility {
   // - HTML Imports (see https://crbug.com/871827#c9).
   kIncorrectLock = 4,
 
-  // Covered by AddAllowedRequestInitiatorForPlugin.
-  kAllowedRequestInitiatorForPlugin = 7,
-
-  kMaxValue = kAllowedRequestInitiatorForPlugin,
+  kMaxValue = kIncorrectLock
 };
 
 // Verifies if |request.request_initiator| matches
@@ -53,8 +52,8 @@ enum class InitiatorLockCompatibility {
 // (ones that are not coverd by the kExcludedPlugin exception).
 COMPONENT_EXPORT(NETWORK_CPP)
 InitiatorLockCompatibility VerifyRequestInitiatorLock(
-    const absl::optional<url::Origin>& request_initiator_origin_lock,
-    const absl::optional<url::Origin>& request_initiator);
+    const std::optional<url::Origin>& request_initiator_origin_lock,
+    const std::optional<url::Origin>& request_initiator);
 
 namespace debug {
 
@@ -62,7 +61,7 @@ class COMPONENT_EXPORT(NETWORK_CPP) ScopedRequestInitiatorOriginLockCrashKey
     : public url::debug::ScopedOriginCrashKey {
  public:
   explicit ScopedRequestInitiatorOriginLockCrashKey(
-      const absl::optional<url::Origin>& request_initiator_origin_lock);
+      const std::optional<url::Origin>& request_initiator_origin_lock);
   ~ScopedRequestInitiatorOriginLockCrashKey();
 
   ScopedRequestInitiatorOriginLockCrashKey(

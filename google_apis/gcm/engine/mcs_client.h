@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,8 +13,9 @@
 #include <vector>
 
 #include "base/containers/circular_deque.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "google_apis/gcm/base/gcm_export.h"
 #include "google_apis/gcm/base/mcs_message.h"
 #include "google_apis/gcm/engine/connection_factory.h"
@@ -24,7 +25,6 @@
 
 namespace base {
 class Clock;
-class RetainingOneShotTimer;
 }  // namespace base
 
 namespace google {
@@ -83,20 +83,13 @@ class GCM_EXPORT MCSClient {
     SEND_STATUS_COUNT
   };
 
-  // Callback for MCSClient's error conditions. A repeating callback is used
-  // because occasionally multiple errors are reported, see crbug.com/1039598
-  // for more context.
-  // TODO(fgorski): Keeping it as a callback with intention to add meaningful
-  // error information.
-  using ErrorCallback = base::RepeatingClosure;
   // Callback when a message is received.
   using OnMessageReceivedCallback =
       base::RepeatingCallback<void(const MCSMessage& message)>;
   // Callback when a message is sent (and receipt has been acknowledged by
   // the MCS endpoint).
   using OnMessageSentCallback =
-      base::RepeatingCallback<void(int64_t user_serial_number,
-                                   const std::string& app_id,
+      base::RepeatingCallback<void(const std::string& app_id,
                                    const std::string& message_id,
                                    MessageSendStatus status)>;
 
@@ -106,29 +99,26 @@ class GCM_EXPORT MCSClient {
             GCMStore* gcm_store,
             scoped_refptr<base::SequencedTaskRunner> io_task_runner,
             GCMStatsRecorder* recorder);
+
+  MCSClient(const MCSClient&) = delete;
+  MCSClient& operator=(const MCSClient&) = delete;
+
   virtual ~MCSClient();
 
-  // Initialize the client. Will load any previous id/token information as well
-  // as unacknowledged message information from the GCM storage, if it exists,
-  // passing the id/token information back via |initialization_callback| along
-  // with a |success == true| result. If no GCM information is present (and
-  // this is therefore a fresh client), a clean GCM store will be created and
-  // values of 0 will be returned via |initialization_callback| with
-  // |success == true|.
-  // If an error loading the GCM store is encountered,
-  // |initialization_callback| will be invoked with |success == false|.
-  void Initialize(const ErrorCallback& initialization_callback,
-                  const OnMessageReceivedCallback& message_received_callback,
+  // Initializes the client from `load_result`, restoring any previous id/token
+  // information and unacknowledged messages. If no device credentials are
+  // present in `load_result`, assumes a fresh client.
+  void Initialize(const OnMessageReceivedCallback& message_received_callback,
                   const OnMessageSentCallback& message_sent_callback,
                   std::unique_ptr<GCMStore::LoadResult> load_result);
 
   // Logs the client into the server. Client must be initialized.
-  // |android_id| and |security_token| are optional if this is not a new
+  // `android_id` and `security_token` are optional if this is not a new
   // client, else they must be non-zero.
-  // Successful login will result in |message_received_callback| being invoked
+  // Successful login will result in `message_received_callback` being invoked
   // with a valid LoginResponse.
-  // Login failure (typically invalid id/token) will shut down the client, and
-  // |initialization_callback| to be invoked with |success = false|.
+  // Login failure (typically invalid id/token) resets the client state and
+  // signals a connection reset.
   virtual void Login(uint64_t android_id, uint64_t security_token);
 
   // Sends a message, with or without reliable message queueing (RMQ) support.
@@ -151,22 +141,6 @@ class GCM_EXPORT MCSClient {
 
   // Returns text representation of the state enum.
   std::string GetStateString() const;
-
-  // Updates the timer used by |heartbeat_manager_| for sending heartbeats.
-  void UpdateHeartbeatTimer(std::unique_ptr<base::RetainingOneShotTimer> timer);
-
-  // Allows a caller to set a heartbeat interval (in milliseconds) with which
-  // the MCS connection will be monitored on both ends, to detect device
-  // presence. In case the newly set interval is smaller than the current one,
-  // connection will be restarted with new heartbeat interval. Valid values have
-  // to be between GetMax/GetMinClientHeartbeatIntervalMs of HeartbeatManager,
-  // otherwise the setting won't take effect.
-  void AddHeartbeatInterval(const std::string& scope, int interval_ms);
-  void RemoveHeartbeatInterval(const std::string& scope);
-
-  HeartbeatManager* GetHeartbeatManagerForTesting() {
-    return &heartbeat_manager_;
-  }
 
  private:
   using StreamId = uint32_t;
@@ -230,21 +204,16 @@ class GCM_EXPORT MCSClient {
   // any associated state).
   MCSPacketInternal PopMessageForSend();
 
-  // Gets the minimum interval from the map of scopes to intervals in
-  // milliseconds.
-  int GetMinHeartbeatIntervalMs();
-
   // Local version string. Sent on login.
   const std::string version_string_;
 
   // Clock for enforcing TTL. Passed in for testing.
-  base::Clock* const clock_;
+  const raw_ptr<base::Clock> clock_;
 
   // Client state.
   State state_;
 
   // Callbacks for owner.
-  ErrorCallback mcs_error_callback_;
   OnMessageReceivedCallback message_received_callback_;
   OnMessageSentCallback message_sent_callback_;
 
@@ -253,11 +222,11 @@ class GCM_EXPORT MCSClient {
   uint64_t security_token_;
 
   // Factory for creating new connections and connection handlers.
-  ConnectionFactory* connection_factory_;
+  raw_ptr<ConnectionFactory, DanglingUntriaged> connection_factory_;
 
   // Connection handler to handle all over-the-wire protocol communication
   // with the mobile connection server.
-  ConnectionHandler* connection_handler_;
+  raw_ptr<ConnectionHandler, DanglingUntriaged> connection_handler_;
 
   // -----  Reliablie Message Queue section -----
   // Note: all queues/maps are ordered from oldest (front/begin) message to
@@ -268,7 +237,8 @@ class GCM_EXPORT MCSClient {
   base::circular_deque<MCSPacketInternal> to_resend_;
 
   // Map of collapse keys to their pending messages.
-  std::map<CollapseKey, ReliablePacketInfo*> collapse_key_map_;
+  std::map<CollapseKey, raw_ptr<ReliablePacketInfo, CtnExperimental>>
+      collapse_key_map_;
 
   // Last device_to_server stream id acknowledged by the server.
   StreamId last_device_to_server_stream_id_received_;
@@ -298,22 +268,17 @@ class GCM_EXPORT MCSClient {
   PersistentIdList restored_unackeds_server_ids_;
 
   // The GCM persistent store. Not owned.
-  GCMStore* gcm_store_;
+  raw_ptr<GCMStore, DanglingUntriaged> gcm_store_;
 
   const scoped_refptr<base::SequencedTaskRunner> io_task_runner_;
 
   // Manager to handle triggering/detecting heartbeats.
   HeartbeatManager heartbeat_manager_;
 
-  // Custom heartbeat intervals requested by different components.
-  std::map<std::string, int> custom_heartbeat_intervals_;
-
   // Recorder that records GCM activities for debugging purpose. Not owned.
-  GCMStatsRecorder* recorder_;
+  raw_ptr<GCMStatsRecorder> recorder_;
 
   base::WeakPtrFactory<MCSClient> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(MCSClient);
 };
 
 } // namespace gcm

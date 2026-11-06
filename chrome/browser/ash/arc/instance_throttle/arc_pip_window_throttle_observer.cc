@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,18 +21,17 @@ aura::Window* GetPipContainer() {
   if (!exo::WMHelper::HasInstance())
     return nullptr;
   auto* const wm_helper = exo::WMHelper::GetInstance();
-  DCHECK(wm_helper);
+  CHECK(wm_helper, base::NotFatalUntil::M160);
   aura::Window* const pip_container =
       wm_helper->GetPrimaryDisplayContainer(ash::kShellWindowId_PipContainer);
-  DCHECK(pip_container);
+  CHECK(pip_container, base::NotFatalUntil::M160);
   return pip_container;
 }
 
 }  // namespace
 
 ArcPipWindowThrottleObserver::ArcPipWindowThrottleObserver()
-    : ThrottleObserver(ThrottleObserver::PriorityLevel::IMPORTANT,
-                       "ArcPipWindowIsVisible") {}
+    : ThrottleObserver("ArcPipWindowIsVisible") {}
 
 void ArcPipWindowThrottleObserver::StartObserving(
     content::BrowserContext* context,
@@ -62,8 +61,7 @@ void ArcPipWindowThrottleObserver::OnWindowRemoved(aura::Window* window) {
   // window may be removed after a new one is added.
   auto* const container = GetPipContainer();
   if (!container ||
-      std::none_of(container->children().begin(), container->children().end(),
-                   &ash::IsArcWindow)) {
+      std::ranges::none_of(container->children(), &ash::IsArcWindow)) {
     SetActive(false);
   }
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,10 @@
 
 #include <windows.h>
 
+#include <optional>
+#include <vector>
+
+#include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/path_service.h"
@@ -91,6 +95,14 @@ TEST_F(LzmaUtilTest, UnPackTest) {
   EXPECT_TRUE(base::PathExists(extract_dir.AppendASCII("archive\\a.exe")));
   EXPECT_TRUE(
       base::PathExists(extract_dir.AppendASCII("archive\\sub_dir\\text.txt")));
+  EXPECT_TRUE(
+      base::DirectoryExists(extract_dir.AppendASCII("archive\\empty_sub_dir")));
+  EXPECT_EQ(base::ComputeDirectorySize(
+                extract_dir.AppendASCII("archive\\empty_sub_dir")),
+            0);
+  EXPECT_TRUE(base::DirectoryExists(extract_dir.AppendASCII("empty_top_dir")));
+  EXPECT_EQ(
+      base::ComputeDirectorySize(extract_dir.AppendASCII("empty_top_dir")), 0);
 }
 
 // Test the static method that can be used to unpack archives.
@@ -120,4 +132,49 @@ TEST_F(LzmaUtilTest, UnPackArchiveTest) {
   archive = data_dir_.AppendASCII("invalid_archive.7z");
   EXPECT_EQ(UNPACK_SZAREX_OPEN_ERROR,
             UnPackArchive(archive, extract_dir, &unpacked_file));
+}
+
+TEST_F(LzmaUtilTest, EmptyFile) {
+  base::FilePath extract_dir(temp_dir_.GetPath());
+  base::FilePath archive = data_dir_.AppendASCII("archive_with_empty_file.7z");
+  LzmaUtilImpl lzma_util;
+  EXPECT_EQ(UNPACK_NO_ERROR, lzma_util.OpenArchive(archive));
+  EXPECT_EQ(UNPACK_NO_ERROR, lzma_util.UnPack(extract_dir, nullptr));
+}
+
+TEST_F(LzmaUtilTest, OpenArchiveBufferTest) {
+  base::FilePath archive = data_dir_.AppendASCII("archive1.7z");
+  std::optional<std::vector<uint8_t>> buffer = base::ReadFileToBytes(archive);
+  ASSERT_TRUE(buffer.has_value());
+
+  LzmaUtilImpl lzma_util;
+  EXPECT_EQ(UNPACK_NO_ERROR, lzma_util.OpenArchive(*buffer));
+
+  EXPECT_EQ(UNPACK_ARCHIVE_NOT_FOUND,
+            lzma_util.OpenArchive(base::span<const uint8_t>()));
+}
+
+TEST_F(LzmaUtilTest, UnPackArchiveBufferTest) {
+  base::FilePath extract_dir(temp_dir_.GetPath());
+  extract_dir = extract_dir.AppendASCII("UnPackArchiveBufferTest");
+  ASSERT_FALSE(base::PathExists(extract_dir));
+  EXPECT_TRUE(base::CreateDirectory(extract_dir));
+  ASSERT_TRUE(base::PathExists(extract_dir));
+
+  base::FilePath archive = data_dir_.AppendASCII("archive1.7z");
+  std::optional<std::vector<uint8_t>> buffer = base::ReadFileToBytes(archive);
+  ASSERT_TRUE(buffer.has_value());
+  base::FilePath unpacked_file;
+
+  EXPECT_EQ(UNPACK_NO_ERROR,
+            UnPackArchiveBuffer(*buffer, extract_dir, &unpacked_file));
+
+  EXPECT_TRUE(base::PathExists(extract_dir.AppendASCII("a.exe")));
+  EXPECT_TRUE(unpacked_file == extract_dir.AppendASCII("a.exe"));
+
+  archive = data_dir_.AppendASCII("invalid_archive.7z");
+  buffer = base::ReadFileToBytes(archive);
+  ASSERT_TRUE(buffer.has_value());
+  EXPECT_EQ(UNPACK_SZAREX_OPEN_ERROR,
+            UnPackArchiveBuffer(*buffer, extract_dir, &unpacked_file));
 }

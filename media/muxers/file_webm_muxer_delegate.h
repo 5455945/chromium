@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -37,7 +37,7 @@ class MEDIA_EXPORT FileWebmMuxerDelegate : public WebmMuxer::Delegate {
 
  protected:
   // WebmMuxerDelegate:
-  mkvmuxer::int32 DoWrite(const void* buf, mkvmuxer::uint32 len) override;
+  mkvmuxer::int32 DoWrite(base::span<const uint8_t> buf) override;
 
  private:
   base::File webm_file_ GUARDED_BY_CONTEXT(sequence_checker_);

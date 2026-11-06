@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,11 +9,8 @@
 
 #include <memory>
 
-#include "base/macros.h"
 #include "components/webauthn/core/browser/internal_authenticator.h"
 #include "content/public/browser/web_contents_observer.h"
-#include "mojo/public/cpp/bindings/pending_receiver.h"
-#include "mojo/public/cpp/bindings/receiver.h"
 #include "third_party/blink/public/mojom/webauthn/authenticator.mojom.h"
 #include "url/origin.h"
 
@@ -29,7 +26,7 @@ class RenderFrameHost;
 // Implementation of the public InternalAuthenticator interface.
 // This class is meant only for trusted and internal components of Chrome to
 // use.
-class InternalAuthenticatorImpl : public autofill::InternalAuthenticator,
+class InternalAuthenticatorImpl : public webauthn::InternalAuthenticator,
                                   public WebContentsObserver {
  public:
   explicit InternalAuthenticatorImpl(RenderFrameHost* render_frame_host);
@@ -40,16 +37,22 @@ class InternalAuthenticatorImpl : public autofill::InternalAuthenticator,
 
   // InternalAuthenticator:
   void SetEffectiveOrigin(const url::Origin& origin) override;
+  void SetPaymentOptions(blink::mojom::PaymentOptionsPtr payment) override;
   void MakeCredential(
       blink::mojom::PublicKeyCredentialCreationOptionsPtr options,
       blink::mojom::Authenticator::MakeCredentialCallback callback) override;
-  void GetAssertion(
-      blink::mojom::PublicKeyCredentialRequestOptionsPtr options,
-      blink::mojom::Authenticator::GetAssertionCallback callback) override;
+  void GetAssertion(blink::mojom::PublicKeyCredentialRequestOptionsPtr options,
+                    GetAssertionCallback callback) override;
   void IsUserVerifyingPlatformAuthenticatorAvailable(
       blink::mojom::Authenticator::
           IsUserVerifyingPlatformAuthenticatorAvailableCallback callback)
       override;
+  bool IsGetMatchingCredentialIdsSupported() override;
+  void GetMatchingCredentialIds(
+      std::string_view relying_party_id,
+      base::span<const std::vector<uint8_t>> credential_ids,
+      bool require_third_party_payment_bit,
+      webauthn::GetMatchingCredentialIdsCallback callback) override;
   void Cancel() override;
   content::RenderFrameHost* GetRenderFrameHost() override;
 
@@ -64,6 +67,7 @@ class InternalAuthenticatorImpl : public autofill::InternalAuthenticator,
   }
 
   url::Origin effective_origin_;
+  blink::mojom::PaymentOptionsPtr payment_;
   std::unique_ptr<AuthenticatorCommon> authenticator_common_;
 
   base::WeakPtrFactory<InternalAuthenticatorImpl> weak_factory_{this};

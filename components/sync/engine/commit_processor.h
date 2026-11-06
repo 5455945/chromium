@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,12 @@
 
 #include <stddef.h>
 
-#include "base/macros.h"
-#include "components/sync/base/model_type.h"
+#include <memory>
+
+#include "base/memory/raw_ptr.h"
+#include "components/sync/base/data_type.h"
 #include "components/sync/engine/commit.h"
-#include "components/sync/engine/model_type_registry.h"
+#include "components/sync/engine/data_type_registry.h"
 
 namespace syncer {
 
@@ -23,56 +25,54 @@ class CommitContributor;
 // not previously registered.
 class CommitProcessor {
  public:
-  // |commit_types| must contain NIGORI. |commit_contributor_map| must be not
+  // `commit_types` must contain NIGORI. `commit_contributor_map` must be not
   // null and must outlive this object.
-  CommitProcessor(ModelTypeSet commit_types,
+  CommitProcessor(DataTypeSet commit_types,
                   CommitContributorMap* commit_contributor_map);
+
+  CommitProcessor(const CommitProcessor&) = delete;
+  CommitProcessor& operator=(const CommitProcessor&) = delete;
+
   ~CommitProcessor();
 
   // Gathers a set of contributions to be used to populate a commit message.
   //
-  // For each of the |commit_types| in this CommitProcessor's CommitContributor
+  // For each of the `commit_types` in this CommitProcessor's CommitContributor
   // map, gather any entries queued for commit into CommitContributions.  The
   // total number of entries in all the returned CommitContributions shall not
-  // exceed |max_entries|.
+  // exceed `max_entries`, and the total `EntitySpecifics` byte size stops
+  // growing once it reaches or exceeds `max_target_specifics_bytes`.
   // Returns no contribution if previous call collected them from all datatypes
-  // and total number of collected entries was less than |max_entries|.
-  Commit::ContributionMap GatherCommitContributions(size_t max_entries);
+  // and no datatype had remaining local changes.
+  Commit::ContributionMap GatherCommitContributions(
+      size_t max_entries,
+      size_t max_target_specifics_bytes);
 
  private:
   // Gathering is split into phases for 2 reasons: 1) to provide prioritization,
-  // and 2) to avoid  infinite commit cycles when some data type generates
+  // and 2) to avoid infinite commit cycles when some data type generates
   // updates at very high speed.
-  enum class GatheringPhase { kPriority, kRegular, kDone };
+  enum class GatheringPhase { kHighPriority, kRegular, kLowPriority, kDone };
 
-  // Increments |phase| (in the order given above in GatheringPhase).
+  // Increments `phase` (in the order given above in GatheringPhase).
   static GatheringPhase IncrementGatheringPhase(GatheringPhase phase);
 
   // Returns user data types that should be gathered for committing in the
   // current phase.
-  ModelTypeSet GetUserTypesForCurrentCommitPhase() const;
+  DataTypeSet GetUserTypesForCurrentCommitPhase() const;
 
-  // Gathers commit contributions for an individual datatype and populates
-  // |*contributions|. Returns the number of entries added.
-  size_t GatherCommitContributionsForType(
-      ModelType type,
+  // Gathers commit contributions for an individual datatype, or returns null if
+  // nothing is contributed.
+  std::unique_ptr<CommitContribution> GatherCommitContributionsForType(
+      DataType type,
       size_t max_entries,
-      Commit::ContributionMap* contributions);
+      size_t max_target_specifics_bytes);
 
-  // Gathers commit contributions for |types| and populates |*contributions|.
-  // Returns the number of entries added.
-  size_t GatherCommitContributionsForTypes(
-      ModelTypeSet types,
-      size_t max_entries,
-      Commit::ContributionMap* contributions);
-
-  const ModelTypeSet commit_types_;
+  const DataTypeSet commit_types_;
 
   // A map of 'commit contributors', one for each enabled type.
-  CommitContributorMap* commit_contributor_map_;
+  const raw_ptr<CommitContributorMap> commit_contributor_map_;
   GatheringPhase phase_;
-
-  DISALLOW_COPY_AND_ASSIGN(CommitProcessor);
 };
 
 }  // namespace syncer

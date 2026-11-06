@@ -1,12 +1,13 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef EXTENSIONS_RENDERER_BINDINGS_TEST_JS_RUNNER_H_
 #define EXTENSIONS_RENDERER_BINDINGS_TEST_JS_RUNNER_H_
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/containers/span.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "extensions/renderer/bindings/js_runner.h"
 
 namespace extensions {
@@ -34,13 +35,15 @@ class TestJSRunner : public JSRunner {
   class Scope {
    public:
     Scope(std::unique_ptr<JSRunner> runner);
+
+    Scope(const Scope&) = delete;
+    Scope& operator=(const Scope&) = delete;
+
     ~Scope();
 
    private:
     std::unique_ptr<JSRunner> runner_;
-    JSRunner* old_runner_;
-
-    DISALLOW_COPY_AND_ASSIGN(Scope);
+    raw_ptr<JSRunner> old_runner_;
   };
 
   // A scoped object that allows errors to be thrown from running JS functions.
@@ -49,10 +52,11 @@ class TestJSRunner : public JSRunner {
   class AllowErrors {
    public:
     AllowErrors();
-    ~AllowErrors();
 
-   private:
-    DISALLOW_COPY_AND_ASSIGN(AllowErrors);
+    AllowErrors(const AllowErrors&) = delete;
+    AllowErrors& operator=(const AllowErrors&) = delete;
+
+    ~AllowErrors();
   };
 
   // A scoped object that suspends script execution through the JSRunner. While
@@ -63,28 +67,31 @@ class TestJSRunner : public JSRunner {
   class Suspension {
    public:
     Suspension();
-    ~Suspension();
 
-   private:
-    DISALLOW_COPY_AND_ASSIGN(Suspension);
+    Suspension(const Suspension&) = delete;
+    Suspension& operator=(const Suspension&) = delete;
+
+    ~Suspension();
   };
 
   TestJSRunner();
   // Provides a callback to be called just before JS will be executed.
   explicit TestJSRunner(const base::RepeatingClosure& will_call_js);
+
+  TestJSRunner(const TestJSRunner&) = delete;
+  TestJSRunner& operator=(const TestJSRunner&) = delete;
+
   ~TestJSRunner() override;
 
   // JSRunner:
   void RunJSFunction(v8::Local<v8::Function> function,
                      v8::Local<v8::Context> context,
-                     int argc,
-                     v8::Local<v8::Value> argv[],
+                     base::span<v8::Local<v8::Value>> args,
                      ResultCallback callback) override;
   v8::MaybeLocal<v8::Value> RunJSFunctionSync(
       v8::Local<v8::Function> function,
       v8::Local<v8::Context> context,
-      int argc,
-      v8::Local<v8::Value> argv[]) override;
+      base::span<v8::Local<v8::Value>> args) override;
 
  private:
   friend class Suspension;
@@ -94,7 +101,7 @@ class TestJSRunner : public JSRunner {
     ~PendingCall();
     PendingCall(PendingCall&& other);
 
-    v8::Isolate* isolate;
+    raw_ptr<v8::Isolate> isolate;
     v8::Global<v8::Function> function;
     v8::Global<v8::Context> context;
     std::vector<v8::Global<v8::Value>> arguments;
@@ -106,8 +113,6 @@ class TestJSRunner : public JSRunner {
 
   base::RepeatingClosure will_call_js_;
   std::vector<PendingCall> pending_calls_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestJSRunner);
 };
 
 }  // namespace extensions

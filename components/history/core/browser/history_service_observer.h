@@ -1,11 +1,10 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_HISTORY_CORE_BROWSER_HISTORY_SERVICE_OBSERVER_H_
 #define COMPONENTS_HISTORY_CORE_BROWSER_HISTORY_SERVICE_OBSERVER_H_
 
-#include "base/macros.h"
 #include "components/history/core/browser/history_types.h"
 #include "components/history/core/browser/keyword_id.h"
 
@@ -13,37 +12,65 @@ namespace history {
 
 class HistoryService;
 
+// Used by components external to History to observe `HistoryService` and
+// process tasks on the main thread.
+//
+// The notifications roughly correspond to the ones in `HistoryBackendObserver`,
+// although there are some differences.
 class HistoryServiceObserver {
  public:
-  HistoryServiceObserver() {}
-  virtual ~HistoryServiceObserver() {}
+  HistoryServiceObserver() = default;
 
-  // Called when user visits an URL.
+  HistoryServiceObserver(const HistoryServiceObserver&) = delete;
+  HistoryServiceObserver& operator=(const HistoryServiceObserver&) = delete;
+
+  virtual ~HistoryServiceObserver() = default;
+
+  // Called when a new visit is added to History. This happens in two
+  // scenarios:
+  //  1. User makes a new visit on the local device.
+  //  2. Sync brings a visit from a different device onto the local device.
+  //     Notably, this is called for each visit brought over.
   //
-  // The `row` ID will be set to the value that is currently in effect in the
-  // main history database. `redirects` is the list of redirects leading up to
-  // the URL. If we have a redirect chain A -> B -> C and user is visiting C,
-  // then `redirects[0]=B` and `redirects[1]=A`. If there are no redirects,
-  // `redirects` is an empty vector.
+  // The `visited_url_info` struct contains all the necessary information about
+  // the visit, including the URL and response code category.
+  // The values in `url_row` and `visit_row` members of `visited_url_info` are
+  // set to what is currently in the history database. The
+  // `response_code_category` member indicates whether or not the visit had a
+  // 404 response.
   virtual void OnURLVisited(HistoryService* history_service,
-                            ui::PageTransition transition,
-                            const URLRow& row,
-                            const RedirectList& redirects,
-                            base::Time visit_time) {}
+                            const VisitedURLInfo& visited_url_info) {}
 
-  // Called when a URL has been added or modified.
+  // Same as above, but including the navigation_id from the underlying
+  // `content::NavigationHandle`. Observers only need to override `OnURLVisited`
+  // or `OnNavigationURLVisited`, but not both.
+  virtual void OnURLVisitedWithNavigationId(
+      HistoryService* history_service,
+      const VisitedURLInfo& visited_url_info) {}
+
+  // Called when a URL has a metadata-only update. In situations where a URL has
+  // a metadata-only update AND new visits, both `OnURLsModified` and
+  // `OnURLVisited` will be called. Therefore observers that only care about new
+  // visits should only override `OnURLVisited`.
+  //
+  // These metadata-only updates happen in these scenarios:
+  //  1. When the Page Title is updated shortly after the page loads.
+  //  2. When History expiration expires some, but not all visits related to
+  //     a URL. In that case, the URL's metadata is updated.
   //
   // `changed_urls` lists the information for each of the URLs affected. The
   // rows will have the IDs that are currently in effect in the main history
   // database.
+  //
+  // Callers may receive URLRows that contain 404 visits and thus have
+  // visit counts or times that take 404 errors into account.
   virtual void OnURLsModified(HistoryService* history_service,
                               const URLRows& changed_urls) {}
 
-  // Called when one or more URLs are deleted.
-  //
-  // `deletion_info` describes the urls that have been removed from history.
-  virtual void OnURLsDeleted(HistoryService* history_service,
-                             const DeletionInfo& deletion_info) {}
+  // Called when one or more URLs and/or Visits are deleted.
+  // `deletion_info` describes all the deletions that have occurred.
+  virtual void OnHistoryDeletions(HistoryService* history_service,
+                                  const DeletionInfo& deletion_info) {}
 
   // Is called to notify when `history_service` has finished loading.
   virtual void OnHistoryServiceLoaded(HistoryService* history_service) {}
@@ -64,9 +91,6 @@ class HistoryServiceObserver {
   // `url_id` is the id of the url row.
   virtual void OnKeywordSearchTermDeleted(HistoryService* history_service,
                                           URLID url_id) {}
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(HistoryServiceObserver);
 };
 
 }  // namespace history

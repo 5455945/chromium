@@ -1,20 +1,14 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_PAYMENTS_CORE_PAYMENT_METHOD_DATA_H_
 #define COMPONENTS_PAYMENTS_CORE_PAYMENT_METHOD_DATA_H_
 
-#include <memory>
-#include <set>
 #include <string>
 #include <vector>
 
-#include "components/autofill/core/browser/data_model/credit_card.h"
-
-namespace base {
-class DictionaryValue;
-}
+#include "base/values.h"
 
 namespace payments {
 
@@ -26,12 +20,12 @@ class PaymentMethodData {
   PaymentMethodData(const PaymentMethodData& other);
   ~PaymentMethodData();
 
-  bool operator==(const PaymentMethodData& other) const;
-  bool operator!=(const PaymentMethodData& other) const;
+  friend bool operator==(const PaymentMethodData&,
+                         const PaymentMethodData&) = default;
 
-  // Populates the properties of this PaymentMethodData from |value|. Returns
+  // Populates the properties of this PaymentMethodData from |dict|. Returns
   // true if the required values are present.
-  bool FromDictionaryValue(const base::DictionaryValue& value);
+  bool FromValueDict(const base::DictValue& dict);
 
   // Payment method identifier for payment method that the merchant web site
   // accepts.

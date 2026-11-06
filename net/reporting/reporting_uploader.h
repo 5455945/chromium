@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,8 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "net/base/net_export.h"
 
 class GURL;
@@ -19,7 +20,8 @@ class Origin;
 
 namespace net {
 
-class NetworkIsolationKey;
+class IsolationInfo;
+class URLRequest;
 class URLRequestContext;
 
 // Uploads already-serialized reports and converts responses to one of the
@@ -29,18 +31,22 @@ class NET_EXPORT ReportingUploader {
   enum class Outcome { SUCCESS, REMOVE_ENDPOINT, FAILURE };
 
   using UploadCallback = base::OnceCallback<void(Outcome outcome)>;
+  using PrepareUploadRequestCallback =
+      base::RepeatingCallback<void(URLRequest*)>;
 
   virtual ~ReportingUploader();
 
   // Starts to upload the reports in |json| (properly tagged as JSON data) to
   // |url|, and calls |callback| when complete (whether successful or not).
   // All of the reports in |json| must describe requests to the same origin;
-  // |report_origin| must be that origin.
+  // |report_origin| must be that origin. Credentials may be sent with the
+  // upload if |eligible_for_credentials| is true.
   virtual void StartUpload(const url::Origin& report_origin,
                            const GURL& url,
-                           const NetworkIsolationKey& network_isolation_key,
+                           const IsolationInfo& isolation_info,
                            const std::string& json,
                            int max_depth,
+                           bool eligible_for_credentials,
                            UploadCallback callback) = 0;
 
   // Cancels pending uploads.
@@ -49,7 +55,8 @@ class NET_EXPORT ReportingUploader {
   // Creates a real implementation of |ReportingUploader| that uploads reports
   // using |context|.
   static std::unique_ptr<ReportingUploader> Create(
-      const URLRequestContext* context);
+      const URLRequestContext* context,
+      PrepareUploadRequestCallback callback = base::DoNothing());
 
   virtual int GetPendingUploadCountForTesting() const = 0;
 };

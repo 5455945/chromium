@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,28 +7,24 @@
 
 #include <cstdint>
 
-#include "base/macros.h"
-
-namespace remoting {
-namespace protocol {
+namespace remoting::protocol {
 
 struct HostFrameStats;
 
 // Interface used to send video frame stats from host to client.
 class VideoStatsStub {
  public:
+  VideoStatsStub(const VideoStatsStub&) = delete;
+  VideoStatsStub& operator=(const VideoStatsStub&) = delete;
+
   virtual void OnVideoFrameStats(uint32_t frame_id,
                                  const HostFrameStats& frame_stats) = 0;
 
  protected:
-  VideoStatsStub() {}
-  virtual ~VideoStatsStub() {}
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(VideoStatsStub);
+  VideoStatsStub() = default;
+  virtual ~VideoStatsStub() = default;
 };
 
-}  // namespace protocol
-}  // namespace remoting
+}  // namespace remoting::protocol
 
 #endif  // REMOTING_PROTOCOL_VIDEO_STATS_STUB_H_

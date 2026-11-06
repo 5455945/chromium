@@ -1,4 +1,6 @@
 include_rules = [
   "+components/performance_manager",
-  "+chromeos/memory"
+  "+components/system_cpu",
+  "+chromeos/ash/components/memory",
+  "+dbus"
 ]

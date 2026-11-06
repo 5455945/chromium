@@ -1,4 +1,4 @@
-# Copyright 2019 The Chromium Authors. All rights reserved.
+# Copyright 2019 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -41,12 +41,14 @@ satisfied.
 import sys
 
 try:
-  import numpy  # pylint: disable=import-error
+  import numpy
+
 except ImportError:
   numpy = None
 
 try:
-  import pandas  # pylint: disable=import-error
+  import pandas
+
 except ImportError:
   pandas = None
 
@@ -54,6 +56,7 @@ except ImportError:
 def RequireModules():
   if numpy is None or pandas is None:
     sys.exit(
-        'ERROR: Some required python modules are not available.\n\n'
-        'Make sure to run this script using vpython or ensure that '
-        'module dependencies listed in src/.vpython are satisfied.')
+      'ERROR: Some required python modules are not available.\n\n'
+      'Make sure to run this script using vpython or ensure that '
+      'module dependencies listed in src/.vpython are satisfied.'
+    )

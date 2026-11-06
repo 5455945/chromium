@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,6 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/macros.h"
 #include "device/bluetooth/bluetooth_remote_gatt_characteristic.h"
 #include "device/bluetooth/bluetooth_remote_gatt_descriptor.h"
 
@@ -35,6 +34,11 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothRemoteGattDescriptorAndroid
       const base::android::JavaRef<
           jobject>& /* chromeBluetoothDevice */ chrome_bluetooth_device);
 
+  BluetoothRemoteGattDescriptorAndroid(
+      const BluetoothRemoteGattDescriptorAndroid&) = delete;
+  BluetoothRemoteGattDescriptorAndroid& operator=(
+      const BluetoothRemoteGattDescriptorAndroid&) = delete;
+
   ~BluetoothRemoteGattDescriptorAndroid() override;
 
   // Returns the associated ChromeBluetoothRemoteGattDescriptor Java object.
@@ -48,19 +52,17 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothRemoteGattDescriptorAndroid
   BluetoothRemoteGattCharacteristic::Permissions GetPermissions()
       const override;
   void ReadRemoteDescriptor(ValueCallback callback) override;
-  void WriteRemoteDescriptor(const std::vector<uint8_t>& value,
+  void WriteRemoteDescriptor(base::span<const uint8_t> value,
                              base::OnceClosure callback,
                              ErrorCallback error_callback) override;
 
   // Called when Read operation completes.
   void OnRead(JNIEnv* env,
-              const base::android::JavaParamRef<jobject>& jcaller,
               int32_t status,
-              const base::android::JavaParamRef<jbyteArray>& value);
+              const base::android::JavaRef<jbyteArray>& value);
 
   // Called when Write operation completes.
   void OnWrite(JNIEnv* env,
-               const base::android::JavaParamRef<jobject>& jcaller,
                int32_t status);
 
  private:
@@ -83,8 +85,6 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothRemoteGattDescriptorAndroid
   ErrorCallback write_error_callback_;
 
   std::vector<uint8_t> value_;
-
-  DISALLOW_COPY_AND_ASSIGN(BluetoothRemoteGattDescriptorAndroid);
 };
 
 }  // namespace device

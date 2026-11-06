@@ -1,29 +1,27 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "ios/web/shell/view_controller.h"
 
-#import <MobileCoreServices/MobileCoreServices.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#import <stdint.h>
 
-#include <stdint.h>
+#import <memory>
+#import <utility>
 
-#include <memory>
-#include <utility>
-
-#include "base/strings/sys_string_conversions.h"
+#import "base/memory/raw_ptr.h"
+#import "base/strings/sys_string_conversions.h"
 #import "ios/web/public/navigation/navigation_manager.h"
-#include "ios/web/public/navigation/referrer.h"
+#import "ios/web/public/navigation/referrer.h"
 #import "ios/web/public/ui/context_menu_params.h"
 #import "ios/web/public/web_state.h"
 #import "ios/web/public/web_state_delegate_bridge.h"
 #import "ios/web/public/web_state_observer_bridge.h"
-#import "net/base/mac/url_conversions.h"
-#include "ui/base/page_transition_types.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "ios/web/shell/shell_browser_state.h"
+#import "ios/web/shell/shell_web_client.h"
+#import "net/base/apple/url_conversions.h"
+#import "ui/base/page_transition_types.h"
 
 NSString* const kWebShellBackButtonAccessibilityLabel = @"Back";
 NSString* const kWebShellForwardButtonAccessibilityLabel = @"Forward";
@@ -31,11 +29,11 @@ NSString* const kWebShellAddressFieldAccessibilityLabel = @"Address field";
 
 using web::NavigationManager;
 
-@interface ViewController ()<CRWWebStateDelegate,
-                             CRWWebStateObserver,
-                             UITextFieldDelegate,
-                             UIToolbarDelegate> {
-  web::BrowserState* _browserState;
+@interface ViewController () <CRWWebStateDelegate,
+                              CRWWebStateObserver,
+                              UITextFieldDelegate,
+                              UIToolbarDelegate> {
+  raw_ptr<web::BrowserState> _browserState;
   std::unique_ptr<web::WebState> _webState;
   std::unique_ptr<web::WebStateObserverBridge> _webStateObserver;
   std::unique_ptr<web::WebStateDelegateBridge> _webStateDelegate;
@@ -49,14 +47,6 @@ using web::NavigationManager;
 @synthesize field = _field;
 @synthesize containerView = _containerView;
 @synthesize toolbarView = _toolbarView;
-
-- (instancetype)initWithBrowserState:(web::BrowserState*)browserState {
-  self = [super initWithNibName:nil bundle:nil];
-  if (self) {
-    _browserState = browserState;
-  }
-  return self;
-}
 
 - (void)dealloc {
   if (_webState) {
@@ -73,8 +63,10 @@ using web::NavigationManager;
 
   // Set up the toolbar.
   _toolbarView = [[UIToolbar alloc] init];
-  _toolbarView.barTintColor =
-      [UIColor colorWithRed:0.337 green:0.467 blue:0.988 alpha:1.0];
+  _toolbarView.barTintColor = [UIColor colorWithRed:0.337
+                                              green:0.467
+                                               blue:0.988
+                                              alpha:1.0];
   _toolbarView.frame = CGRectMake(0, 20, CGRectGetWidth(bounds), 44);
   _toolbarView.autoresizingMask =
       UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleBottomMargin;
@@ -122,6 +114,10 @@ using web::NavigationManager;
   [_toolbarView setItems:@[
     back, forward, [[UIBarButtonItem alloc] initWithCustomView:field]
   ]];
+
+  web::ShellWebClient* client =
+      static_cast<web::ShellWebClient*>(web::GetWebClient());
+  _browserState = client->browser_state();
 
   web::WebState::CreateParams webStateCreateParams(_browserState);
   _webState = web::WebState::Create(webStateCreateParams);
@@ -268,38 +264,48 @@ using web::NavigationManager;
 // -----------------------------------------------------------------------
 // WebStateDelegate implementation.
 
-- (void)webState:(web::WebState*)webState
-    handleContextMenu:(const web::ContextMenuParams&)params {
+- (void)webState:(web::WebState*)webView
+    contextMenuConfigurationForParams:(const web::ContextMenuParams&)params
+                    completionHandler:(void (^)(UIContextMenuConfiguration*))
+                                          completionHandler {
   GURL link = params.link_url;
-  if (!link.is_valid()) {
-    return;
-  }
-
-  UIAlertController* alert = [UIAlertController
-      alertControllerWithTitle:params.menu_title
-                       message:nil
-                preferredStyle:UIAlertControllerStyleActionSheet];
-  alert.popoverPresentationController.sourceView = params.view;
-  alert.popoverPresentationController.sourceRect =
-      CGRectMake(params.location.x, params.location.y, 1.0, 1.0);
-
-  void (^handler)(UIAlertAction*) = ^(UIAlertAction*) {
+  void (^copyHandler)(UIAction*) = ^(UIAction* action) {
     NSDictionary* item = @{
-      static_cast<NSString*>(kUTTypeURL) : net::NSURLWithGURL(link),
-      static_cast<NSString*>(kUTTypeUTF8PlainText) : [base::SysUTF8ToNSString(
-          link.spec()) dataUsingEncoding:NSUTF8StringEncoding],
+      UTTypeURL.identifier : net::NSURLWithGURL(link),
+      UTTypeUTF8PlainText.identifier : [base::SysUTF8ToNSString(link.spec())
+          dataUsingEncoding:NSUTF8StringEncoding],
     };
     [[UIPasteboard generalPasteboard] setItems:@[ item ]];
   };
-  [alert addAction:[UIAlertAction actionWithTitle:@"Copy Link"
-                                            style:UIAlertActionStyleDefault
-                                          handler:handler]];
 
-  [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
-                                            style:UIAlertActionStyleCancel
-                                          handler:nil]];
+  UIContextMenuConfiguration* configuration = [UIContextMenuConfiguration
+      configurationWithIdentifier:nil
+      previewProvider:^{
+        UIViewController* controller = [[UIViewController alloc] init];
+        CGRect frame = CGRectMake(10, 200, 200, 21);
+        UILabel* label = [[UILabel alloc] initWithFrame:frame];
+        label.text = @"iOS13 Preview Page";
+        [controller.view addSubview:label];
+        return controller;
+      }
+      actionProvider:^(id _) {
+        NSArray* actions = @[
+          [UIAction actionWithTitle:@"Copy Link"
+                              image:nil
+                         identifier:nil
+                            handler:copyHandler],
+          [UIAction actionWithTitle:@"Cancel"
+                              image:nil
+                         identifier:nil
+                            handler:^(id ignored){
+                            }]
+        ];
+        NSString* menuTitle = [NSString
+            stringWithFormat:@"iOS13 Context Menu: %s", link.spec().c_str()];
+        return [UIMenu menuWithTitle:menuTitle children:actions];
+      }];
 
-  [self presentViewController:alert animated:YES completion:nil];
+  completionHandler(configuration);
 }
 
 - (void)webStateDestroyed:(web::WebState*)webState {

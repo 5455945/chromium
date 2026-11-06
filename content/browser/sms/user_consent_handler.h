@@ -1,20 +1,25 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_BROWSER_SMS_USER_CONSENT_HANDLER_H_
 #define CONTENT_BROWSER_SMS_USER_CONSENT_HANDLER_H_
 
-#include "base/callback_forward.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ref.h"
 #include "content/common/content_export.h"
-#include "third_party/blink/public/mojom/sms/webotp_service.mojom-shared.h"
 #include "url/origin.h"
 
 namespace content {
 
 class RenderFrameHost;
 
-enum class UserConsentResult { kApproved, kDenied, kNoDelegate };
+enum class UserConsentResult {
+  kApproved,
+  kDenied,
+  kNoDelegate,
+  kInactiveRenderFrameHost
+};
 using CompletionCallback = base::OnceCallback<void(UserConsentResult)>;
 
 class CONTENT_EXPORT UserConsentHandler {
@@ -47,7 +52,7 @@ class CONTENT_EXPORT PromptBasedUserConsentHandler : public UserConsentHandler {
  public:
   using OriginList = std::vector<url::Origin>;
 
-  PromptBasedUserConsentHandler(RenderFrameHost* frame_host,
+  PromptBasedUserConsentHandler(RenderFrameHost& frame_host,
                                 const OriginList& origin_list);
   ~PromptBasedUserConsentHandler() override;
 
@@ -60,7 +65,7 @@ class CONTENT_EXPORT PromptBasedUserConsentHandler : public UserConsentHandler {
   void OnCancel();
 
  private:
-  RenderFrameHost* frame_host_;
+  raw_ref<RenderFrameHost> frame_host_;
   const OriginList origin_list_;
   bool is_prompt_open_{false};
   CompletionCallback on_complete_;

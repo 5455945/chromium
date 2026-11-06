@@ -1,234 +1,239 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/autofill/core/common/autofill_prefs.h"
 
-#include "base/base64.h"
+#include "base/feature_list.h"
+#include "base/json/values_util.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/strings/string_util.h"
+#include "base/time/time.h"
+#include "base/values.h"
 #include "build/build_config.h"
+#include "components/autofill/core/common/autofill_features.h"
+#include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/pref_registry/pref_registry_syncable.h"
+#include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
-#include "crypto/sha2.h"
 
-namespace autofill {
-namespace prefs {
-namespace {
-
-// Returns the opt-in bitfield for the specific |account_id| or 0 if no entry
-// was found.
-int GetSyncTransportOptInBitFieldForAccount(const PrefService* prefs,
-                                            const std::string& account_hash) {
-  auto* dictionary = prefs->GetDictionary(prefs::kAutofillSyncTransportOptIn);
-
-  // If there is no dictionary it means the account didn't opt-in. Use 0 because
-  // it's the same as not having opted-in to anything.
-  if (!dictionary) {
-    return 0;
-  }
-
-  // If there is no entry in the dictionary, it means the account didn't opt-in.
-  // Use 0 because it's the same as not having opted-in to anything.
-  auto* found =
-      dictionary->FindKeyOfType(account_hash, base::Value::Type::INTEGER);
-  return found ? found->GetInt() : 0;
-}
-
-}  // namespace
-
-// Integer that is set to the last choice user made when prompted for saving a
-// credit card. The prompt is for user's consent in saving the card in the
-// server for signed in users and saving the card locally for non signed-in
-// users.
-const char kAutofillAcceptSaveCreditCardPromptState[] =
-    "autofill.accept_save_credit_card_prompt_state";
-
-// Boolean that is true if Autofill is enabled and allowed to save credit card
-// data.
-const char kAutofillCreditCardEnabled[] = "autofill.credit_card_enabled";
-
-// Boolean that is true if FIDO Authentication is enabled for card unmasking.
-const char kAutofillCreditCardFidoAuthEnabled[] =
-    "autofill.credit_card_fido_auth_enabled";
-
-#if defined(OS_ANDROID)
-// Boolean that is true if FIDO Authentication is enabled for card unmasking.
-const char kAutofillCreditCardFidoAuthOfferCheckboxState[] =
-    "autofill.credit_card_fido_auth_offer_checkbox_state";
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/device_info.h"
 #endif
 
-// Number of times the credit card signin promo has been shown.
-const char kAutofillCreditCardSigninPromoImpressionCount[] =
-    "autofill.credit_card_signin_promo_impression_count";
+namespace autofill::prefs {
 
-// Boolean that is true if Autofill is enabled and allowed to save data.
-const char kAutofillEnabledDeprecated[] = "autofill.enabled";
+namespace {
 
-// Deprecated 10/2019.
-const char kAutofillJapanCityFieldMigratedDeprecated[] =
-    "autofill.japan_city_field_migrated_to_street_address";
+// Deprecated pref names. Kept around to clear them, until they are removed one
+// year later.
+#if BUILDFLAG(IS_ANDROID)
+inline constexpr char kFacilitatedPaymentsPixAccountLinkingDeprecated[] =
+    "facilitated_payments.pix_account_linking";
+#endif
+constexpr char kAutofillRanExtraDeduplication[] =
+    "autofill.ran_extra_deduplication";
+constexpr char kAutofillAiSyncedOptInStatusDeprecated[] =
+    "autofill.autofill_ai.synced_opt_in_status";
 
-// Integer that is set to the last version where the profile deduping routine
-// was run. This routine will be run once per version.
-const char kAutofillLastVersionDeduped[] = "autofill.last_version_deduped";
-
-// Integer that is set to the last version where the profile validation routine
-// was run. We validate profiles at least once per version to keep track of the
-// changes in the validation logic.
-const char kAutofillLastVersionValidated[] = "autofill.last_version_validated";
-
-// Integer that is set to the last version where disused addresses were
-// deleted. This deletion will be run once per version.
-const char kAutofillLastVersionDisusedAddressesDeleted[] =
-    "autofill.last_version_disused_addresses_deleted";
-
-// Integer that is set to the last version where disused credit cards were
-// deleted. This deletion will be run once per version.
-const char kAutofillLastVersionDisusedCreditCardsDeleted[] =
-    "autofill.last_version_disused_credit_cards_deleted";
-
-// Boolean that is true if the orphan rows in the autofill table were removed.
-const char kAutofillOrphanRowsRemoved[] = "autofill.orphan_rows_removed";
-
-// Boolean that is true if Autofill is enabled and allowed to save profile data.
-const char kAutofillProfileEnabled[] = "autofill.profile_enabled";
-
-// The field type, validity state map of all profiles.
-// TODO(crbug.com/910596): Pref name is "autofill_" instead of "autofill."
-// because of a mismatch when the priorify prefs were generated. Consider
-// migrating this back to "autofill." in the future.
-const char kAutofillProfileValidity[] = "autofill_profile_validity";
-
-// This pref stores the file path where the autofill states data is
-// downloaded to.
-const char kAutofillStatesDataDir[] = "autofill.states_data_dir";
-
-// The opt-ins for Sync Transport features for each client.
-const char kAutofillSyncTransportOptIn[] = "autofill.sync_transport_opt_ins";
-
-// The (randomly inititialied) seed value to use when encoding form/field
-// metadata for randomized uploads. The value of this pref is a string.
-const char kAutofillUploadEncodingSeed[] = "autofill.upload_encoding_seed";
-
-// Dictionary pref used to track which form signature uploads have been
-// performed. Each entry in the dictionary maps a form signature (reduced
-// via a 10-bit modulus) to a integer bit-field where each bit denotes whether
-// or not a given upload event has occurred.
-const char kAutofillUploadEvents[] = "autofill.upload_events";
-
-// The timestamp (seconds since the Epoch UTC) for when the the upload event
-// pref was last reset.
-const char kAutofillUploadEventsLastResetTimestamp[] =
-    "autofill.upload_events_last_reset_timestamp";
-
-// Boolean that's true when Wallet card and address import is enabled by the
-// user.
-const char kAutofillWalletImportEnabled[] = "autofill.wallet_import_enabled";
-
-// Boolean that is set to the last choice user made when prompted for saving an
-// unmasked server card locally.
-const char kAutofillWalletImportStorageCheckboxState[] =
-    "autofill.wallet_import_storage_checkbox_state";
-
-// Integer that is set to the last major version where the Autocomplete
-// retention policy was run.
-const char kAutocompleteLastVersionRetentionPolicy[] =
-    "autocomplete.retention_policy_last_version";
+}  // namespace
 
 void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
   // Synced prefs. Used for cross-device choices, e.g., credit card Autofill.
   registry->RegisterBooleanPref(
-      prefs::kAutofillEnabledDeprecated, true,
+      kAutofillProfileEnabled, true,
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  registry->RegisterIntegerPref(
+      kAutofillLastVersionDeduped, 0,
       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
   registry->RegisterBooleanPref(
-      prefs::kAutofillProfileEnabled, true,
+      kAutofillAiIdentityEntitiesEnabled, true,
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  registry->RegisterBooleanPref(
+      kAutofillAiShoppingEntitiesEnabled, true,
       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
   registry->RegisterIntegerPref(
-      prefs::kAutofillLastVersionDeduped, 0,
+      kAutofillAiLastVersionDeduped, 0,
       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
-  registry->RegisterIntegerPref(
-      prefs::kAutofillLastVersionValidated, 0,
+  registry->RegisterBooleanPref(
+      kAutofillAiPrivateInferenceOptInStatus, true,
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  registry->RegisterBooleanPref(
+      kAutofillAiTravelEntitiesEnabled, true,
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID) || \
+    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_IOS)
+  registry->RegisterBooleanPref(
+      kAutofillAiReauthBeforeViewingSensitiveData, true,
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+#endif  // BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID) ||
+        // BUILDFLAG(IS_CHROMEOS)
+  registry->RegisterBooleanPref(
+      kAutofillHasSeenIban, false,
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  registry->RegisterBooleanPref(
+      kAutofillCreditCardEnabled, true,
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  registry->RegisterBooleanPref(
+      kAutofillPaymentCvcStorage, true,
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  registry->RegisterBooleanPref(
+      kAutofillPaymentCardBenefits, true,
       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
 
-  registry->RegisterIntegerPref(
-      prefs::kAutofillLastVersionDisusedAddressesDeleted, 0,
-      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
   registry->RegisterBooleanPref(
-      prefs::kAutofillCreditCardEnabled, true,
+      kAutofillGmailOtpFillingEnabled, false,
       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  registry->RegisterTimePref(
+      kAutofillGmailOtpFillingActivationDismissalTimestamp, base::Time(),
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+
   registry->RegisterStringPref(
-      prefs::kAutofillProfileValidity, "",
+      kAutofillNameAndEmailProfileSignature, "",
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PRIORITY_PREF);
+  registry->RegisterIntegerPref(
+      kAutofillNameAndEmailProfileNotSelectedCounter, 0,
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PRIORITY_PREF);
+  registry->RegisterBooleanPref(
+      kAutofillWasNameAndEmailProfileUsed, false,
       user_prefs::PrefRegistrySyncable::SYNCABLE_PRIORITY_PREF);
 
   // Non-synced prefs. Used for per-device choices, e.g., signin promo.
-  registry->RegisterBooleanPref(prefs::kAutofillCreditCardFidoAuthEnabled,
-                                false);
-#if defined(OS_ANDROID)
-  registry->RegisterBooleanPref(
-      prefs::kAutofillCreditCardFidoAuthOfferCheckboxState, true);
-#endif
-  registry->RegisterIntegerPref(
-      prefs::kAutofillCreditCardSigninPromoImpressionCount, 0);
-  registry->RegisterBooleanPref(prefs::kAutofillWalletImportEnabled, true);
-  registry->RegisterBooleanPref(
-      prefs::kAutofillWalletImportStorageCheckboxState, true);
-  registry->RegisterIntegerPref(
-      prefs::kAutofillAcceptSaveCreditCardPromptState,
-      prefs::PREVIOUS_SAVE_CREDIT_CARD_PROMPT_USER_DECISION_NONE);
-  registry->RegisterIntegerPref(
-      prefs::kAutofillLastVersionDisusedCreditCardsDeleted, 0);
-  registry->RegisterIntegerPref(prefs::kAutocompleteLastVersionRetentionPolicy,
-                                0);
-  registry->RegisterBooleanPref(prefs::kAutofillOrphanRowsRemoved, false);
-  registry->RegisterStringPref(prefs::kAutofillUploadEncodingSeed, "");
-  registry->RegisterDictionaryPref(prefs::kAutofillUploadEvents);
-  registry->RegisterTimePref(prefs::kAutofillUploadEventsLastResetTimestamp,
+  registry->RegisterDictionaryPref(kAutofillAiOptInStatus);
+  registry->RegisterTimePref(
+      kAutofillAiPrivateInferenceNoticeAcknowledgedTimestamp, base::Time());
+  registry->RegisterTimePref(kAutofillAiPrivateInferenceNoticeShownTimestamp,
                              base::Time());
-  registry->RegisterDictionaryPref(prefs::kAutofillSyncTransportOptIn);
+  registry->RegisterBooleanPref(kAutofillEmailVerificationEnabled, true);
+  registry->RegisterDictionaryPref(kAutofillEmailVerificationState);
+  registry->RegisterBooleanPref(kAutofillCreditCardFidoAuthEnabled, false);
+#if BUILDFLAG(IS_ANDROID)
+  registry->RegisterBooleanPref(kAutofillCreditCardFidoAuthOfferCheckboxState,
+                                true);
+#endif
+  registry->RegisterIntegerPref(kAutocompleteLastVersionRetentionPolicy, 0);
+  registry->RegisterStringPref(kAutofillUploadEncodingSeed, "");
+  registry->RegisterDictionaryPref(kAutofillVoteUploadEvents);
+  registry->RegisterDictionaryPref(
+      kAutofillVoteSecondaryFormSignatureUploadEvents);
+  registry->RegisterDictionaryPref(kAutofillMetadataUploadEvents);
+  registry->RegisterTimePref(kAutofillUploadEventsLastResetTimestamp, {});
+  registry->RegisterDictionaryPref(kAutofillSyncTransportOptIn);
+  registry->RegisterListPref(kAutofillTypesBlocked);
+#if BUILDFLAG(IS_ANDROID)
+  // Automotive devices require stricter data protection for user privacy, so
+  // mandatory reauth for autofill payment methods should always be enabled.
+  if (base::android::device_info::is_automotive()) {
+    registry->RegisterBooleanPref(kAutofillPaymentMethodsMandatoryReauth, true);
+  } else {
+    registry->RegisterBooleanPref(kAutofillPaymentMethodsMandatoryReauth,
+                                  false);
+  }
+  registry->RegisterIntegerPref(
+      kAutofillPaymentMethodsMandatoryReauthPromoShownCounter, 0);
+#elif BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
+  registry->RegisterBooleanPref(kAutofillPaymentMethodsMandatoryReauth, false);
+  registry->RegisterIntegerPref(
+      kAutofillPaymentMethodsMandatoryReauthPromoShownCounter, 0);
+#elif BUILDFLAG(IS_IOS)
+  registry->RegisterBooleanPref(kAutofillPaymentMethodsMandatoryReauth, true);
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+  registry->RegisterBooleanPref(kAutofillUsingPlatformAutofill, false);
+  registry->RegisterBooleanPref(kAutofillThirdPartyPasswordManagersAllowed,
+                                true);
+  registry->RegisterStringPref(
+      kAutofillThirdPartyPackageUsedForPlatformAutofill, "");
+  registry->RegisterBooleanPref(
+      kFacilitatedPaymentsEwallet, /*default_value=*/true,
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  // The eWallet account linking pref is a profile pref but not synced across
+  // devices since users may prefer to have a different value for it on
+  // different devices.
+  registry->RegisterBooleanPref(kFacilitatedPaymentsEwalletAccountLinking,
+                                /*default_value=*/true);
+  registry->RegisterBooleanPref(
+      kFacilitatedPaymentsPix, /*default_value=*/true,
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  // The Pix account linking pref is a profile pref but not synced across
+  // devices since users may prefer to have a different value for it on
+  // different devices.
+  registry->RegisterBooleanPref(kFacilitatedPaymentsPixAccountLinking,
+                                /*default_value=*/true);
+  registry->RegisterBooleanPref(
+      kFacilitatedPaymentsA2AEnabled, /*default_value=*/true,
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  registry->RegisterBooleanPref(
+      kFacilitatedPaymentsA2ATriggeredOnce, /*default_value=*/false,
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+#endif
+
+  registry->RegisterBooleanPref(
+      kAutofillBnplEnabled, true,
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  registry->RegisterBooleanPref(
+      kAutofillHasSeenBnpl, false,
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+
+  registry->RegisterBooleanPref(
+      kAutofillAmountExtractionAiTermsSeen, false,
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+
+  registry->RegisterBooleanPref(
+      kAutofillAtMemoryDoubleCtrlTriggerEnabled,
+      features::kAutofillAtMemoryDoubleCtrlDefaultPref.Get(),
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  registry->RegisterStringPref(kAutofillAtMemoryShortcut, "",
+                               user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  registry->RegisterIntegerPref(kAutofillAtMemoryShortcutPromoImpressionCount,
+                                0);
+
+  registry->RegisterDictionaryPref(
+      kAutofillHomeMetadata,
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PRIORITY_PREF);
+  registry->RegisterDictionaryPref(
+      kAutofillWorkMetadata,
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PRIORITY_PREF);
+  registry->RegisterIntegerPref(kAutofillSilentUpdatesToHomeAddress, 0);
+  registry->RegisterIntegerPref(kAutofillSilentUpdatesToWorkAddress, 0);
+  registry->RegisterIntegerPref(
+      kAutofillAutocompleteLabelSensitiveMigrationGeneration, 0);
+
+  registry->RegisterBooleanPref(
+      kAutofillWalletReminderNoticeShown, false,
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
 
   // Deprecated prefs registered for migration.
-  registry->RegisterBooleanPref(kAutofillJapanCityFieldMigratedDeprecated,
-                                false);
-  // Deprecated in profile prefs.
-  registry->RegisterStringPref(prefs::kAutofillStatesDataDir, "");
+  registry->RegisterBooleanPref(kAutofillEnabledDeprecated, true);
+  registry->RegisterStringPref(kAutofillAblationSeedPref, "");
+#if BUILDFLAG(IS_ANDROID)
+  registry->RegisterBooleanPref(kFacilitatedPaymentsPixAccountLinkingDeprecated,
+                                /*default_value=*/true);
+#endif  // BUILDFLAG(IS_ANDROID)
+  registry->RegisterBooleanPref(kAutofillRanExtraDeduplication, false);
+  registry->RegisterBooleanPref(kAutofillAiSyncedOptInStatusDeprecated, false);
+  // Don't add new prefs here. Add them before any deprecated prefs instead.
 }
 
-void MigrateDeprecatedAutofillPrefs(PrefService* prefs) {
-  // If kAutofillCreditCardEnabled and kAutofillProfileEnabled prefs are
-  // currently using their default value and kAutofillEnabledDeprecated has a
-  // non-default value, override the valuAues of the new prefs. The following
-  // blocks should execute only once and are needed for those users who had
-  // Autofill disabled before introduction of the fine-grained prefs.
-  // TODO(crbug.com/870328): Remove these once M70- users are sufficiently low.
-  const PrefService::Preference* deprecated_autofill_pref =
-      prefs->FindPreference(prefs::kAutofillEnabledDeprecated);
-  DCHECK(deprecated_autofill_pref);
+void MigrateDeprecatedAutofillPrefs(PrefService* pref_service) {
+  // Added 03/2025
+  pref_service->ClearPref(kAutofillEnabledDeprecated);
+#if BUILDFLAG(IS_ANDROID)
+  // Added 08/2025
+  pref_service->ClearPref(kFacilitatedPaymentsPixAccountLinkingDeprecated);
+#endif  // BUILDFLAG(IS_ANDROID)
+  // Added 01/2026
+  pref_service->ClearPref(kAutofillRanExtraDeduplication);
+  // Added 06/2026
+  pref_service->ClearPref(kAutofillAiSyncedOptInStatusDeprecated);
+  // Added 08/2026
+  DeduplicateEmailVerificationState(pref_service);
+}
 
-  const PrefService::Preference* autofill_credit_card_pref =
-      prefs->FindPreference(prefs::kAutofillCreditCardEnabled);
-  DCHECK(autofill_credit_card_pref);
-  if (autofill_credit_card_pref->IsDefaultValue() &&
-      !deprecated_autofill_pref->IsDefaultValue()) {
-    prefs->SetBoolean(kAutofillCreditCardEnabled,
-                      prefs->GetBoolean(kAutofillEnabledDeprecated));
-  }
-
-  const PrefService::Preference* autofill_profile_pref =
-      prefs->FindPreference(prefs::kAutofillProfileEnabled);
-  DCHECK(autofill_profile_pref);
-  if (autofill_profile_pref->IsDefaultValue() &&
-      !deprecated_autofill_pref->IsDefaultValue()) {
-    prefs->SetBoolean(kAutofillProfileEnabled,
-                      prefs->GetBoolean(kAutofillEnabledDeprecated));
-  }
-
-  // Added 10/2019.
-  prefs->ClearPref(kAutofillJapanCityFieldMigratedDeprecated);
-
-  // Added 11/2020
-  // TODO(crbug.com/1147852): Remove deprecated kAutofillStatesDataDir from
-  // autofill profile prefs.
-  prefs->ClearPref(kAutofillStatesDataDir);
+void RegisterLocalStatePrefs(PrefRegistrySimple* registry) {
+  registry->RegisterStringPref(kAutofillAblationSeedPref, "");
 }
 
 bool IsAutocompleteEnabled(const PrefService* prefs) {
@@ -243,16 +248,22 @@ void SetCreditCardFIDOAuthEnabled(PrefService* prefs, bool enabled) {
   prefs->SetBoolean(kAutofillCreditCardFidoAuthEnabled, enabled);
 }
 
-bool IsAutofillCreditCardEnabled(const PrefService* prefs) {
+bool IsAutofillPaymentMethodsEnabled(const PrefService* prefs) {
   return prefs->GetBoolean(kAutofillCreditCardEnabled);
 }
 
-void SetAutofillCreditCardEnabled(PrefService* prefs, bool enabled) {
+void SetAutofillPaymentMethodsEnabled(PrefService* prefs, bool enabled) {
   prefs->SetBoolean(kAutofillCreditCardEnabled, enabled);
 }
 
-bool IsAutofillManaged(const PrefService* prefs) {
-  return prefs->IsManagedPreference(kAutofillEnabledDeprecated);
+bool HasSeenIban(const PrefService* prefs) {
+  return prefs->GetBoolean(kAutofillHasSeenIban);
+}
+
+// If called, always sets the pref to true, and once true, it will follow the
+// user around forever.
+void SetAutofillHasSeenIban(PrefService* prefs) {
+  prefs->SetBoolean(kAutofillHasSeenIban, true);
 }
 
 bool IsAutofillProfileManaged(const PrefService* prefs) {
@@ -268,75 +279,356 @@ bool IsAutofillProfileEnabled(const PrefService* prefs) {
 }
 
 void SetAutofillProfileEnabled(PrefService* prefs, bool enabled) {
-  prefs->SetBoolean(kAutofillProfileEnabled, enabled);
-}
-
-bool IsPaymentsIntegrationEnabled(const PrefService* prefs) {
-  return prefs->GetBoolean(kAutofillWalletImportEnabled);
-}
-
-void SetPaymentsIntegrationEnabled(PrefService* prefs, bool enabled) {
-  prefs->SetBoolean(kAutofillWalletImportEnabled, enabled);
-}
-
-std::string GetAllProfilesValidityMapsEncodedString(const PrefService* prefs) {
-  std::string value = prefs->GetString(kAutofillProfileValidity);
-  if (base::Base64Decode(value, &value))
-    return value;
-  return std::string();
-}
-
-void SetUserOptedInWalletSyncTransport(PrefService* prefs,
-                                       const CoreAccountId& account_id,
-                                       bool opted_in) {
-  // Get the hash of the account id. The hashing here is only a secondary bit of
-  // obfuscation. The primary privacy guarantees are handled by clearing this
-  // whenever cookies are cleared.
-  std::string account_hash;
-  base::Base64Encode(crypto::SHA256HashString(account_id.ToString()),
-                     &account_hash);
-
-  DictionaryPrefUpdate update(prefs, prefs::kAutofillSyncTransportOptIn);
-  int value = GetSyncTransportOptInBitFieldForAccount(prefs, account_hash);
-
-  // If the user has opted in, set that bit while leaving the others intact.
-  if (opted_in) {
-    update->SetKey(account_hash,
-                   base::Value(value | sync_transport_opt_in::kWallet));
+  if (prefs->GetBoolean(kAutofillProfileEnabled) == enabled) {
     return;
   }
 
-  // Invert the mask in order to reset the Wallet bit while leaving the other
-  // bits intact, or remove the key entirely if the Wallet was the only opt-in.
-  if (value & ~sync_transport_opt_in::kWallet) {
-    update->SetKey(account_hash,
-                   base::Value(value & ~sync_transport_opt_in::kWallet));
-  } else {
-    update->RemoveKey(account_hash);
-  }
+  prefs->SetBoolean(kAutofillProfileEnabled, enabled);
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  //
+  // LINT.IfChange(AutofillAddressOptInChange)
+  enum class AutofillAddressOptInChange {
+    kOptIn = 0,
+    kOptOut = 1,
+    kMaxValue = kOptOut
+  };
+  // LINT.ThenChange(/tools/metrics/histograms/metadata/autofill/enums.xml:AutofillAddressOptInChange)
+  using enum AutofillAddressOptInChange;
+  base::UmaHistogramEnumeration("Autofill.Address.IsEnabled.Change",
+                                enabled ? kOptIn : kOptOut);
 }
 
-bool IsUserOptedInWalletSyncTransport(const PrefService* prefs,
-                                      const CoreAccountId& account_id) {
-#if defined(OS_ANDROID) || defined(OS_IOS)
-  // On mobile, no specific opt-in is required.
-  return true;
-#else
-  // Get the hash of the account id.
-  std::string account_hash;
-  base::Base64Encode(crypto::SHA256HashString(account_id.ToString()),
-                     &account_hash);
+bool IsAutofillGmailOtpFillingEnabled(const PrefService* prefs) {
+  return prefs->GetBoolean(kAutofillGmailOtpFillingEnabled);
+}
 
-  // Return whether the wallet opt-in bit is set.
-  return GetSyncTransportOptInBitFieldForAccount(prefs, account_hash) &
-         sync_transport_opt_in::kWallet;
-#endif  // OS_ANDROID || defined(OS_IOS)
+void SetAutofillGmailOtpFillingEnabled(PrefService* prefs, bool enabled) {
+  prefs->SetBoolean(kAutofillGmailOtpFillingEnabled, enabled);
+}
+
+base::Time GetAutofillGmailOtpFillingActivationDismissalTimestamp(
+    const PrefService* prefs) {
+  return prefs->GetTime(kAutofillGmailOtpFillingActivationDismissalTimestamp);
+}
+
+void SetAutofillGmailOtpFillingActivationDismissalTimestamp(PrefService* prefs,
+                                                            base::Time time) {
+  prefs->SetTime(kAutofillGmailOtpFillingActivationDismissalTimestamp, time);
+}
+
+void ClearAutofillGmailOtpFillingActivationDismissalTimestamp(
+    PrefService* prefs) {
+  prefs->ClearPref(kAutofillGmailOtpFillingActivationDismissalTimestamp);
+}
+
+bool IsAutofillAiReauthBeforeFillingEnabled(const PrefService* prefs) {
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID) || \
+    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_IOS)
+  return prefs->GetBoolean(kAutofillAiReauthBeforeViewingSensitiveData) &&
+         base::FeatureList::IsEnabled(features::kAutofillAiReauthRequired);
+#else
+  return false;
+#endif
+}
+
+void SetAutofillAiReauthBeforeFillingEnabled(PrefService* prefs, bool enabled) {
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID) || \
+    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_IOS)
+  prefs->SetBoolean(kAutofillAiReauthBeforeViewingSensitiveData, enabled);
+#endif
+}
+
+bool IsPaymentMethodsMandatoryReauthEnabled(const PrefService* prefs) {
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID) || \
+    BUILDFLAG(IS_IOS) || BUILDFLAG(IS_CHROMEOS)
+  return prefs->GetBoolean(kAutofillPaymentMethodsMandatoryReauth);
+#else
+  return false;
+#endif
+}
+
+void SetPaymentMethodsMandatoryReauthEnabled(PrefService* prefs, bool enabled) {
+#if BUILDFLAG(IS_ANDROID)
+  // The user should not be able to update the pref value on automotive devices.
+  CHECK(!base::android::device_info::is_automotive());
+#endif  // BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID) || \
+    BUILDFLAG(IS_IOS) || BUILDFLAG(IS_CHROMEOS)
+  prefs->SetBoolean(kAutofillPaymentMethodsMandatoryReauth, enabled);
+#endif
+}
+
+bool IsPaymentMethodsMandatoryReauthSetExplicitly(const PrefService* prefs) {
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID) || \
+    BUILDFLAG(IS_CHROMEOS)
+  return prefs->GetUserPrefValue(kAutofillPaymentMethodsMandatoryReauth) !=
+         nullptr;
+#else
+  return false;
+#endif
+}
+
+bool IsPaymentMethodsMandatoryReauthPromoShownCounterBelowMaxCap(
+    const PrefService* prefs) {
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID) || \
+    BUILDFLAG(IS_CHROMEOS)
+  return prefs->GetInteger(
+             kAutofillPaymentMethodsMandatoryReauthPromoShownCounter) <
+         kMaxValueForMandatoryReauthPromoShownCounter;
+#else
+  return false;
+#endif
+}
+
+void IncrementPaymentMethodsMandatoryReauthPromoShownCounter(
+    PrefService* prefs) {
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID) || \
+    BUILDFLAG(IS_CHROMEOS)
+  if (prefs->GetInteger(
+          kAutofillPaymentMethodsMandatoryReauthPromoShownCounter) >=
+      kMaxValueForMandatoryReauthPromoShownCounter) {
+    return;
+  }
+
+  prefs->SetInteger(
+      kAutofillPaymentMethodsMandatoryReauthPromoShownCounter,
+      prefs->GetInteger(
+          kAutofillPaymentMethodsMandatoryReauthPromoShownCounter) +
+          1);
+#endif
+}
+
+bool IsPaymentCvcStorageEnabled(const PrefService* prefs) {
+  return prefs->GetBoolean(kAutofillPaymentCvcStorage);
+}
+
+void SetPaymentCvcStorage(PrefService* prefs, bool value) {
+  prefs->SetBoolean(kAutofillPaymentCvcStorage, value);
+}
+
+bool IsPaymentCardBenefitsEnabled(const PrefService* prefs) {
+  return prefs->GetBoolean(kAutofillPaymentCardBenefits);
+}
+
+void SetPaymentCardBenefits(PrefService* prefs, bool value) {
+  prefs->SetBoolean(kAutofillPaymentCardBenefits, value);
 }
 
 void ClearSyncTransportOptIns(PrefService* prefs) {
-  DictionaryPrefUpdate update(prefs, prefs::kAutofillSyncTransportOptIn);
-  update->Clear();
+  prefs->SetDict(kAutofillSyncTransportOptIn, base::DictValue());
 }
 
-}  // namespace prefs
-}  // namespace autofill
+void ClearEmailVerificationState(PrefService* prefs,
+                                 const base::Time& delete_begin,
+                                 const base::Time& delete_end) {
+  if (delete_begin.is_null() && (delete_end.is_null() || delete_end.is_max())) {
+    prefs->ClearPref(kAutofillEmailVerificationState);
+    return;
+  }
+
+  const base::DictValue& state =
+      prefs->GetDict(kAutofillEmailVerificationState);
+  std::vector<std::string> keys_to_remove;
+
+  for (auto [email, email_data_value] : state) {
+    if (!email_data_value.is_dict()) {
+      continue;
+    }
+    const base::DictValue& email_dict = email_data_value.GetDict();
+    if (std::optional<base::Time> timestamp =
+            base::ValueToTime(email_dict.Find("timestamp"));
+        timestamp && *timestamp >= delete_begin && *timestamp <= delete_end) {
+      keys_to_remove.push_back(email);
+    }
+  }
+
+  if (!keys_to_remove.empty()) {
+    ScopedDictPrefUpdate update(prefs, kAutofillEmailVerificationState);
+    for (const std::string& key : keys_to_remove) {
+      update->Remove(key);
+    }
+  }
+}
+
+void DeduplicateEmailVerificationState(PrefService* prefs) {
+  const base::DictValue& state =
+      prefs->GetDict(kAutofillEmailVerificationState);
+  if (state.empty()) {
+    return;
+  }
+
+  base::DictValue migrated_state;
+  bool needs_update = false;
+
+  // Iterate through each entry in current `state`, and build `migrated_state`
+  // by making sure duplicate emails are correctly merged.
+  for (auto [email, email_data_value] : state) {
+    if (!email_data_value.is_dict()) {
+      needs_update = true;
+      continue;
+    }
+
+    const std::string lower_email = base::ToLowerASCII(email);
+    base::DictValue* migrated_entry = migrated_state.FindDict(lower_email);
+    // No existing entry for `lower_email`, so add the current entry.
+    if (!migrated_entry) {
+      // Flag `needs_update` if current email is not in lower case.
+      if (lower_email != email) {
+        needs_update = true;
+      }
+      migrated_state.Set(lower_email, email_data_value.Clone());
+      continue;
+    }
+
+    // Duplicate entry detected due to case difference (e.g. "user@example.com"
+    // and "USER@example.com"). Merge `current_entry` into `migrated_entry`.
+    needs_update = true;
+    const base::DictValue& current_entry = email_data_value.GetDict();
+
+    // Merge: prefer allowed == true if either entry was allowed.
+    const bool existing_allowed =
+        migrated_entry->FindBool("allowed").value_or(false);
+    const bool current_allowed =
+        current_entry.FindBool("allowed").value_or(false);
+    migrated_entry->Set("allowed", existing_allowed || current_allowed);
+
+    // Keep the newer timestamp and its corresponding issuer_site.
+    const std::optional<base::Time> existing_time =
+        base::ValueToTime(migrated_entry->Find("timestamp"));
+    const std::optional<base::Time> current_time =
+        base::ValueToTime(current_entry.Find("timestamp"));
+    if (!existing_time || (current_time && *current_time > *existing_time)) {
+      if (const std::string* issuer = current_entry.FindString("issuer_site")) {
+        migrated_entry->Set("issuer_site", *issuer);
+      }
+      if (current_time) {
+        migrated_entry->Set("timestamp", base::TimeToValue(*current_time));
+      }
+    }
+  }
+
+  if (needs_update) {
+    prefs->SetDict(kAutofillEmailVerificationState, std::move(migrated_state));
+  }
+}
+
+void SetFacilitatedPaymentsEwallet(PrefService* prefs, bool value) {
+#if BUILDFLAG(IS_ANDROID)
+  prefs->SetBoolean(kFacilitatedPaymentsEwallet, value);
+#endif  // BUILDFLAG(IS_ANDROID)
+}
+
+bool IsFacilitatedPaymentsEwalletEnabled(const PrefService* prefs) {
+#if BUILDFLAG(IS_ANDROID)
+  return prefs->GetBoolean(kFacilitatedPaymentsEwallet);
+#else
+  return false;
+#endif  // BUILDFLAG(IS_ANDROID)
+}
+
+void SetFacilitatedPaymentsEwalletAccountLinking(PrefService* prefs,
+                                                 bool value) {
+#if BUILDFLAG(IS_ANDROID)
+  prefs->SetBoolean(kFacilitatedPaymentsEwalletAccountLinking, value);
+#endif  // BUILDFLAG(IS_ANDROID)
+}
+
+bool IsFacilitatedPaymentsEwalletAccountLinkingEnabled(
+    const PrefService* prefs) {
+#if BUILDFLAG(IS_ANDROID)
+  return prefs->GetBoolean(kFacilitatedPaymentsEwalletAccountLinking);
+#else
+  return false;
+#endif  // BUILDFLAG(IS_ANDROID)
+}
+
+void SetFacilitatedPaymentsPix(PrefService* prefs, bool value) {
+#if BUILDFLAG(IS_ANDROID)
+  prefs->SetBoolean(kFacilitatedPaymentsPix, value);
+#endif  // BUILDFLAG(IS_ANDROID)
+}
+
+bool IsFacilitatedPaymentsPixEnabled(const PrefService* prefs) {
+#if BUILDFLAG(IS_ANDROID)
+  return prefs->GetBoolean(kFacilitatedPaymentsPix);
+#else
+  return false;
+#endif  // BUILDFLAG(IS_ANDROID)
+}
+
+void SetFacilitatedPaymentsPixAccountLinking(PrefService* prefs, bool value) {
+#if BUILDFLAG(IS_ANDROID)
+  prefs->SetBoolean(kFacilitatedPaymentsPixAccountLinking, value);
+#endif  // BUILDFLAG(IS_ANDROID)
+}
+
+bool IsFacilitatedPaymentsPixAccountLinkingEnabled(const PrefService* prefs) {
+#if BUILDFLAG(IS_ANDROID)
+  return prefs->GetBoolean(kFacilitatedPaymentsPixAccountLinking);
+#else
+  // Default to false on other platforms as the feature is Android-only.
+  return false;
+#endif  // BUILDFLAG(IS_ANDROID)
+}
+
+bool IsFacilitatedPaymentsA2AEnabled(const PrefService* prefs) {
+#if BUILDFLAG(IS_ANDROID)
+  return prefs->GetBoolean(kFacilitatedPaymentsA2AEnabled);
+#else
+  // Default to false on other platforms as the feature is Android-only.
+  return false;
+#endif  // BUILDFLAG(IS_ANDROID)
+}
+
+void SetFacilitatedPaymentsA2ATriggeredOnce(PrefService* prefs, bool value) {
+#if BUILDFLAG(IS_ANDROID)
+  prefs->SetBoolean(kFacilitatedPaymentsA2ATriggeredOnce, value);
+#endif  // BUILDFLAG(IS_ANDROID)
+}
+
+void SetAutofillBnplEnabled(PrefService* prefs, bool value) {
+  prefs->SetBoolean(kAutofillBnplEnabled, value);
+}
+
+bool IsAutofillBnplEnabled(const PrefService* prefs) {
+  return prefs->GetBoolean(kAutofillBnplEnabled);
+}
+
+// If called, always sets the pref to true, and once true, it will follow the
+// user around forever.
+void SetAutofillHasSeenBnpl(PrefService* prefs) {
+  prefs->SetBoolean(kAutofillHasSeenBnpl, true);
+}
+
+bool HasSeenBnpl(const PrefService* prefs) {
+  return prefs->GetBoolean(kAutofillHasSeenBnpl);
+}
+
+// If called, always sets the pref to true, and once true, it will follow the
+// user around forever.
+void SetAutofillAmountExtractionAiTermsSeen(PrefService* prefs) {
+  if (base::FeatureList::IsEnabled(
+          features::kAutofillEnableAiBasedAmountExtraction)) {
+    prefs->SetBoolean(kAutofillAmountExtractionAiTermsSeen, true);
+  }
+}
+
+bool AmountExtractionAiTermsSeen(const PrefService* prefs) {
+  return base::FeatureList::IsEnabled(
+             features::kAutofillEnableAiBasedAmountExtraction) &&
+         prefs->GetBoolean(kAutofillAmountExtractionAiTermsSeen);
+}
+
+void SetHasShownWalletReminderNotice(PrefService* prefs) {
+  if (prefs) {
+    prefs->SetBoolean(kAutofillWalletReminderNoticeShown, true);
+  }
+}
+
+bool HasShownWalletReminderNotice(const PrefService* prefs) {
+  return prefs && prefs->GetBoolean(kAutofillWalletReminderNoticeShown);
+}
+
+}  // namespace autofill::prefs

@@ -1,157 +1,117 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "android_webview/browser/aw_quota_manager_bridge.h"
 
+#include <memory>
+#include <optional>
 #include <set>
+#include <utility>
 
 #include "android_webview/browser/aw_browser_context.h"
 #include "android_webview/browser/aw_content_browser_client.h"
-#include "android_webview/browser_jni_headers/AwQuotaManagerBridge_jni.h"
-#include "base/android/jni_array.h"
+#include "android_webview/common/aw_features.h"
+#include "base/android/callback_android.h"
 #include "base/android/jni_string.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/android/scoped_java_ref.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/functional/concurrent_callbacks.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "base/synchronization/waitable_event.h"
+#include "base/task/bind_post_task.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/browsing_data_filter_builder.h"
+#include "content/public/browser/browsing_data_remover.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/common/content_client.h"
-#include "storage/browser/quota/quota_manager.h"
+#include "net/base/registry_controlled_domains/registry_controlled_domain.h"
+#include "net/base/schemeful_site.h"
+#include "storage/browser/quota/quota_manager_impl.h"
+#include "storage/browser/quota/quota_manager_proxy.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
-#include "third_party/blink/public/mojom/quota/quota_types.mojom.h"
+#include "third_party/jni_zero/default_conversions.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "android_webview/browser_jni_headers/AwQuotaManagerBridge_jni.h"
+
 using base::android::AttachCurrentThread;
-using base::android::JavaParamRef;
-using base::android::ScopedJavaLocalRef;
+using base::android::JavaRef;
+using base::android::ScopedJavaGlobalRef;
 using content::BrowserThread;
 using content::StoragePartition;
-using storage::QuotaManager;
 
 namespace android_webview {
 
 namespace {
 
-// This object lives on UI and IO threads. Care need to be taken to make sure
-// there are no concurrent accesses to instance variables. Also this object
-// is refcounted in the various callbacks, and is destroyed when all callbacks
-// are destroyed at the end of DoneOnUIThread.
-class GetStorageKeysTask
-    : public base::RefCountedThreadSafe<GetStorageKeysTask> {
- public:
-  GetStorageKeysTask(AwQuotaManagerBridge::GetOriginsCallback callback,
-                     QuotaManager* quota_manager);
+// Data removal mask for complete data removal.
+constexpr content::BrowsingDataRemover::DataType kDataRemovalMask =
+    content::BrowsingDataRemover::DATA_TYPE_ON_STORAGE_PARTITION |
+    content::BrowsingDataRemover::DATA_TYPE_MEDIA_LICENSES;
 
-  void Run();
+// Origin type mask for complete data removal.
+constexpr content::BrowsingDataRemover::OriginType
+    kDataRemovalOriginProtectionTypes =
+        content::BrowsingDataRemover::ORIGIN_TYPE_PROTECTED_WEB |
+        content::BrowsingDataRemover::ORIGIN_TYPE_UNPROTECTED_WEB;
 
- private:
-  friend class base::RefCountedThreadSafe<GetStorageKeysTask>;
-  ~GetStorageKeysTask();
-
-  void OnStorageKeysObtained(const std::set<blink::StorageKey>& storage_keys,
-                             blink::mojom::StorageType type);
-
-  void OnUsageAndQuotaObtained(const blink::StorageKey& storage_key,
-                               blink::mojom::QuotaStatusCode status_code,
-                               int64_t usage,
-                               int64_t quota);
-
-  void CheckDone();
-  void DoneOnUIThread();
-
-  AwQuotaManagerBridge::GetOriginsCallback ui_callback_;
-  scoped_refptr<QuotaManager> quota_manager_;
-
-  std::vector<std::string> origin_;
-  std::vector<int64_t> usage_;
-  std::vector<int64_t> quota_;
-
-  size_t num_callbacks_to_wait_;
-  size_t num_callbacks_received_;
-
-  DISALLOW_COPY_AND_ASSIGN(GetStorageKeysTask);
+struct OriginUsageAndQuota {
+  std::string origin;
+  int64_t usage;
+  int64_t quota;
 };
 
-GetStorageKeysTask::GetStorageKeysTask(
-    AwQuotaManagerBridge::GetOriginsCallback callback,
-    QuotaManager* quota_manager)
-    : ui_callback_(std::move(callback)), quota_manager_(quota_manager) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-}
+using GetOriginsResultCallback =
+    base::OnceCallback<void(std::vector<std::optional<OriginUsageAndQuota>>)>;
 
-GetStorageKeysTask::~GetStorageKeysTask() {}
-
-void GetStorageKeysTask::Run() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  content::GetIOThreadTaskRunner({})->PostTask(
-      FROM_HERE,
-      base::BindOnce(
-          &QuotaManager::GetStorageKeysModifiedBetween, quota_manager_,
-          blink::mojom::StorageType::kTemporary,
-          base::Time() /* Since beginning of time. */,
-          base::Time::Max() /* Until the end of time. */,
-          base::BindOnce(&GetStorageKeysTask::OnStorageKeysObtained, this)));
-}
-
-void GetStorageKeysTask::OnStorageKeysObtained(
-    const std::set<blink::StorageKey>& storage_keys,
-    blink::mojom::StorageType type) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  num_callbacks_to_wait_ = storage_keys.size();
-  num_callbacks_received_ = 0u;
-
-  for (const blink::StorageKey& storage_key : storage_keys) {
-    quota_manager_->GetUsageAndQuota(
-        storage_key, type,
-        base::BindOnce(&GetStorageKeysTask::OnUsageAndQuotaObtained, this,
-                       storage_key));
+// This object manages its own lifetime. It deletes itself once the callback has
+// been invoked.
+class DeleteDataObserver : public content::BrowsingDataRemover::Observer {
+ public:
+  explicit DeleteDataObserver(content::BrowsingDataRemover* data_remover,
+                              const base::android::JavaRef<jobject>& callback)
+      : observation_(this), callback_(callback) {
+    observation_.Observe(data_remover);
   }
+  ~DeleteDataObserver() override = default;
 
-  CheckDone();
-}
-
-void GetStorageKeysTask::OnUsageAndQuotaObtained(
-    const blink::StorageKey& storage_key,
-    blink::mojom::QuotaStatusCode status_code,
-    int64_t usage,
-    int64_t quota) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  if (status_code == blink::mojom::QuotaStatusCode::kOk) {
-    origin_.push_back(storage_key.origin().GetURL().spec());
-    usage_.push_back(usage);
-    quota_.push_back(quota);
-  }
-
-  ++num_callbacks_received_;
-  CheckDone();
-}
-
-void GetStorageKeysTask::CheckDone() {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  if (num_callbacks_received_ == num_callbacks_to_wait_) {
+  void OnBrowsingDataRemoverDone(uint64_t failed_data_types) override {
+    bool success = failed_data_types == 0;
+    // Post handling of callback to UI thread to avoid any long-running tasks
+    // from blocking or modifications of the data_remover_ observer list from
+    // interfering with iteration through observers.
     content::GetUIThreadTaskRunner({})->PostTask(
-        FROM_HERE, base::BindOnce(&GetStorageKeysTask::DoneOnUIThread, this));
-  } else if (num_callbacks_received_ > num_callbacks_to_wait_) {
-    NOTREACHED();
+        FROM_HERE, base::BindOnce(&DeleteDataObserver::OnRemovalDone,
+                                  base::Unretained(this), success));
   }
-}
 
-// This method is to avoid copying the 3 vector arguments into a bound callback.
-void GetStorageKeysTask::DoneOnUIThread() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  std::move(ui_callback_).Run(origin_, usage_, quota_);
-}
-
-void RunOnUIThread(base::OnceClosure task) {
-  if (BrowserThread::CurrentlyOn(BrowserThread::UI)) {
-    std::move(task).Run();
-  } else {
-    content::GetUIThreadTaskRunner({})->PostTask(FROM_HERE, std::move(task));
+  // Callback to be executed on the UI thread after removal is done.
+  // Will call the Java callback and delete itself.
+  void OnRemovalDone(bool success) {
+    base::android::RunBooleanCallbackAndroid(callback_, success);
+    delete this;
   }
+
+ private:
+  base::ScopedObservation<content::BrowsingDataRemover,
+                          content::BrowsingDataRemover::Observer>
+      observation_;
+  base::android::ScopedJavaGlobalRef<jobject> callback_;
+};
+
+std::string GetRegisterableDomain(const std::string& host) {
+  std::string domain = net::registry_controlled_domains::GetDomainAndRegistry(
+      host, net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
+  // The method above returns empty string for IP addresses and "localhost".
+  return domain.empty() ? host : domain;
 }
 
 }  // namespace
@@ -165,12 +125,7 @@ scoped_refptr<AwQuotaManagerBridge> AwQuotaManagerBridge::Create(
 AwQuotaManagerBridge::AwQuotaManagerBridge(AwBrowserContext* browser_context)
     : browser_context_(browser_context) {}
 
-AwQuotaManagerBridge::~AwQuotaManagerBridge() {}
-
-void AwQuotaManagerBridge::Init(JNIEnv* env,
-                                const JavaParamRef<jobject>& object) {
-  java_ref_ = JavaObjectWeakGlobalRef(env, object);
-}
+AwQuotaManagerBridge::~AwQuotaManagerBridge() = default;
 
 StoragePartition* AwQuotaManagerBridge::GetStoragePartition() const {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
@@ -182,152 +137,159 @@ StoragePartition* AwQuotaManagerBridge::GetStoragePartition() const {
   return storage_partition;
 }
 
-QuotaManager* AwQuotaManagerBridge::GetQuotaManager() const {
+scoped_refptr<storage::QuotaManagerProxy>
+AwQuotaManagerBridge::GetQuotaManagerProxy() const {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
-  QuotaManager* quota_manager = GetStoragePartition()->GetQuotaManager();
-  DCHECK(quota_manager);
-  return quota_manager;
+  scoped_refptr<storage::QuotaManagerProxy> quota_manager_proxy =
+      GetStoragePartition()->GetQuotaManagerProxy();
+  DCHECK(quota_manager_proxy);
+  return quota_manager_proxy;
 }
 
-void AwQuotaManagerBridge::DeleteAllData(JNIEnv* env,
-                                         const JavaParamRef<jobject>& object) {
-  RunOnUIThread(
-      base::BindOnce(&AwQuotaManagerBridge::DeleteAllDataOnUiThread, this));
-}
-
-void AwQuotaManagerBridge::DeleteAllDataOnUiThread() {
+void AwQuotaManagerBridge::DeleteBrowsingData(
+    const base::android::JavaRef<jobject>& jcallback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  GetStoragePartition()->ClearData(
-      // Clear all web storage data except cookies.
-      StoragePartition::REMOVE_DATA_MASK_APPCACHE |
-          StoragePartition::REMOVE_DATA_MASK_FILE_SYSTEMS |
-          StoragePartition::REMOVE_DATA_MASK_INDEXEDDB |
-          StoragePartition::REMOVE_DATA_MASK_LOCAL_STORAGE |
-          StoragePartition::REMOVE_DATA_MASK_WEBSQL,
-      StoragePartition::QUOTA_MANAGED_STORAGE_MASK_TEMPORARY, GURL(),
-      base::Time(), base::Time::Max(), base::DoNothing());
+
+  content::BrowsingDataRemover* data_remover =
+      browser_context_->GetBrowsingDataRemover();
+  // DeleteDataObserver manages its own lifetime.
+  DeleteDataObserver* observer =
+      new DeleteDataObserver(data_remover, jcallback);
+  data_remover->RemoveAndReply(base::Time(), base::Time::Max(),
+                               kDataRemovalMask,
+                               kDataRemovalOriginProtectionTypes, observer);
 }
 
-void AwQuotaManagerBridge::DeleteOrigin(JNIEnv* env,
-                                        const JavaParamRef<jobject>& object,
-                                        const JavaParamRef<jstring>& origin) {
-  std::u16string origin_string(
-      base::android::ConvertJavaStringToUTF16(env, origin));
-  RunOnUIThread(base::BindOnce(&AwQuotaManagerBridge::DeleteOriginOnUiThread,
-                               this, origin_string));
+std::string AwQuotaManagerBridge::DeleteBrowsingDataForSite(
+    const std::string& domain,
+    const base::android::JavaRef<jobject>& jcallback) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+
+  std::unique_ptr<content::BrowsingDataFilterBuilder> filter_builder =
+      content::BrowsingDataFilterBuilder::Create(
+          content::BrowsingDataFilterBuilder::Mode::kDelete,
+          content::BrowsingDataFilterBuilder::OriginMatchingMode::
+              kOriginAndThirdParty);
+  std::string site = GetRegisterableDomain(domain);
+  filter_builder->AddRegisterableDomain(site);
+
+  content::BrowsingDataRemover* data_remover =
+      browser_context_->GetBrowsingDataRemover();
+  // DeleteDataObserver manages its own lifetime.
+  DeleteDataObserver* observer =
+      new DeleteDataObserver(data_remover, jcallback);
+  data_remover->RemoveWithFilterAndReply(
+      base::Time(), base::Time::Max(), kDataRemovalMask,
+      kDataRemovalOriginProtectionTypes, std::move(filter_builder), observer);
+
+  return site;
 }
 
-void AwQuotaManagerBridge::DeleteOriginOnUiThread(
-    const std::u16string& origin) {
+void AwQuotaManagerBridge::DeleteAllDataFramework() {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+
+  // (Legacy) Clear all web storage data except cookies.
+  uint32_t remove_mask = StoragePartition::REMOVE_DATA_MASK_FILE_SYSTEMS |
+                         StoragePartition::REMOVE_DATA_MASK_INDEXEDDB |
+                         StoragePartition::REMOVE_DATA_MASK_LOCAL_STORAGE;
+  GetStoragePartition()->ClearData(remove_mask, blink::StorageKey(),
+                                   base::Time(), base::Time::Max(),
+                                   base::DoNothing());
+}
+
+void AwQuotaManagerBridge::DeleteOriginFramework(const std::u16string& origin) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   StoragePartition* storage_partition = GetStoragePartition();
-  storage_partition->ClearDataForOrigin(
-      // All (temporary) QuotaClient types.
-      StoragePartition::REMOVE_DATA_MASK_APPCACHE |
-          StoragePartition::REMOVE_DATA_MASK_FILE_SYSTEMS |
-          StoragePartition::REMOVE_DATA_MASK_INDEXEDDB |
-          StoragePartition::REMOVE_DATA_MASK_WEBSQL,
-      StoragePartition::QUOTA_MANAGED_STORAGE_MASK_TEMPORARY, GURL(origin));
+  // All (temporary) QuotaClient types.
+  uint32_t remove_mask = StoragePartition::REMOVE_DATA_MASK_FILE_SYSTEMS |
+                         StoragePartition::REMOVE_DATA_MASK_INDEXEDDB;
+  storage_partition->ClearDataForOrigin(remove_mask, GURL(origin),
+                                        base::DoNothing());
 }
 
 void AwQuotaManagerBridge::GetOrigins(JNIEnv* env,
-                                      const JavaParamRef<jobject>& object,
-                                      jint callback_id) {
-  RunOnUIThread(base::BindOnce(&AwQuotaManagerBridge::GetOriginsOnUiThread,
-                               this, callback_id));
-}
-
-void AwQuotaManagerBridge::GetOriginsOnUiThread(jint callback_id) {
+                                      const JavaRef<jobject>& object,
+                                      const JavaRef<jobject>& callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-
-  GetOriginsCallback ui_callback =
-      base::BindOnce(&AwQuotaManagerBridge::GetOriginsCallbackImpl,
-                     weak_factory_.GetWeakPtr(), callback_id);
-  base::MakeRefCounted<GetStorageKeysTask>(std::move(ui_callback),
-                                           GetQuotaManager())
-      ->Run();
+  GetOriginsResultCallback ui_callback = base::BindOnce(
+      [](const JavaRef<jobject>& obj, const JavaRef<jobject>& callback,
+         std::vector<std::optional<OriginUsageAndQuota>> results) {
+        std::vector<std::string> origins;
+        std::vector<int64_t> usages;
+        std::vector<int64_t> quotas;
+        for (std::optional<OriginUsageAndQuota>& result : results) {
+          if (result) {
+            origins.push_back(std::move(result->origin));
+            usages.push_back(result->usage);
+            quotas.push_back(result->quota);
+          }
+        }
+        JNIEnv* env = AttachCurrentThread();
+        Java_AwQuotaManagerBridge_onGetOriginsCallback(env, obj, callback,
+                                                       origins, usages, quotas);
+      },
+      ScopedJavaGlobalRef<jobject>(env, object),
+      ScopedJavaGlobalRef<jobject>(env, callback));
+  GetQuotaManagerProxy()->PostTaskWithQuotaManager(base::BindOnce(
+      [](GetOriginsResultCallback callback,
+         base::WeakPtr<storage::QuotaManagerImpl> quota_manager) {
+        if (!quota_manager) {
+          std::move(callback).Run({});
+          return;
+        }
+        quota_manager->GetAllStorageKeys(base::BindOnce(
+            [](base::WeakPtr<storage::QuotaManagerImpl> quota_manager,
+               GetOriginsResultCallback callback,
+               const std::set<blink::StorageKey>& storage_keys) {
+              base::ConcurrentCallbacks<std::optional<OriginUsageAndQuota>>
+                  aggregator;
+              for (const blink::StorageKey& storage_key : storage_keys) {
+                quota_manager->GetUsageAndQuota(
+                    storage_key,
+                    base::BindOnce(
+                        [](const blink::StorageKey& storage_key,
+                           blink::mojom::QuotaStatusCode status, int64_t usage,
+                           int64_t quota)
+                            -> std::optional<OriginUsageAndQuota> {
+                          if (status != blink::mojom::QuotaStatusCode::kOk) {
+                            return std::nullopt;
+                          }
+                          return OriginUsageAndQuota{
+                              storage_key.origin().GetURL().spec(), usage,
+                              quota};
+                        },
+                        storage_key)
+                        .Then(aggregator.CreateCallback()));
+              }
+              std::move(aggregator).Done(std::move(callback));
+            },
+            quota_manager, std::move(callback)));
+      },
+      base::BindPostTaskToCurrentDefault(std::move(ui_callback))));
 }
-
-void AwQuotaManagerBridge::GetOriginsCallbackImpl(
-    int jcallback_id,
-    const std::vector<std::string>& origin,
-    const std::vector<int64_t>& usage,
-    const std::vector<int64_t>& quota) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  JNIEnv* env = AttachCurrentThread();
-  ScopedJavaLocalRef<jobject> obj = java_ref_.get(env);
-  if (!obj)
-    return;
-
-  Java_AwQuotaManagerBridge_onGetOriginsCallback(
-      env, obj, jcallback_id, base::android::ToJavaArrayOfStrings(env, origin),
-      base::android::ToJavaLongArray(env, usage),
-      base::android::ToJavaLongArray(env, quota));
-}
-
-namespace {
-
-void OnUsageAndQuotaObtained(
-    AwQuotaManagerBridge::QuotaUsageCallback ui_callback,
-    blink::mojom::QuotaStatusCode status_code,
-    int64_t usage,
-    int64_t quota) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  if (status_code != blink::mojom::QuotaStatusCode::kOk) {
-    usage = 0;
-    quota = 0;
-  }
-  content::GetUIThreadTaskRunner({})->PostTask(
-      FROM_HERE, base::BindOnce(std::move(ui_callback), usage, quota));
-}
-
-}  // namespace
 
 void AwQuotaManagerBridge::GetUsageAndQuotaForOrigin(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& object,
-    const JavaParamRef<jstring>& origin,
-    jint callback_id,
-    bool is_quota) {
-  std::u16string origin_string(
-      base::android::ConvertJavaStringToUTF16(env, origin));
-  RunOnUIThread(
-      base::BindOnce(&AwQuotaManagerBridge::GetUsageAndQuotaForOriginOnUiThread,
-                     this, origin_string, callback_id, is_quota));
-}
-
-void AwQuotaManagerBridge::GetUsageAndQuotaForOriginOnUiThread(
     const std::u16string& origin,
-    jint callback_id,
+    const JavaRef<jobject>& callback,
     bool is_quota) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  QuotaUsageCallback ui_callback =
-      base::BindOnce(&AwQuotaManagerBridge::QuotaUsageCallbackImpl,
-                     weak_factory_.GetWeakPtr(), callback_id, is_quota);
 
-  // TODO(crbug.com/889590): Use helper for url::Origin creation from string.
-  content::GetIOThreadTaskRunner({})->PostTask(
-      FROM_HERE,
+  // TODO(crbug.com/41417435): Use helper for url::Origin creation from string.
+  GetQuotaManagerProxy()->GetUsageAndQuota(
+      blink::StorageKey::CreateFirstParty(url::Origin::Create(GURL(origin))),
       base::BindOnce(
-          &QuotaManager::GetUsageAndQuota, GetQuotaManager(),
-          blink::StorageKey(url::Origin::Create(GURL(origin))),
-          blink::mojom::StorageType::kTemporary,
-          base::BindOnce(&OnUsageAndQuotaObtained, std::move(ui_callback))));
-}
-
-void AwQuotaManagerBridge::QuotaUsageCallbackImpl(int jcallback_id,
-                                                  bool is_quota,
-                                                  int64_t usage,
-                                                  int64_t quota) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  JNIEnv* env = AttachCurrentThread();
-  ScopedJavaLocalRef<jobject> obj = java_ref_.get(env);
-  if (!obj)
-    return;
-
-  Java_AwQuotaManagerBridge_onGetUsageAndQuotaForOriginCallback(
-      env, obj, jcallback_id, is_quota, usage, quota);
+          [](bool is_quota, blink::mojom::QuotaStatusCode status, int64_t usage,
+             int64_t quota) -> int64_t {
+            return status == blink::mojom::QuotaStatusCode::kOk
+                       ? (is_quota ? quota : usage)
+                       : 0;
+          },
+          is_quota)
+          .Then(base::BindOnce(&base::android::RunLongCallbackAndroid,
+                               ScopedJavaGlobalRef<jobject>(callback))));
 }
 
 }  // namespace android_webview
+
+DEFINE_JNI(AwQuotaManagerBridge)

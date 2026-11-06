@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,7 +22,7 @@ float g_device_scale_factor = 0.f;
 }  // namespace
 
 void SetDefaultDeviceScaleFactor(float scale) {
-  DCHECK_NE(0.f, scale);
+  CHECK_NE(0.f, scale, base::NotFatalUntil::M163);
   g_device_scale_factor = scale;
 }
 
@@ -53,9 +53,9 @@ int GetDefaultSystemDPI() {
     // This value is safe to cache for the life time of the app since the
     // user must logout to change the DPI setting. This value also applies
     // to all screens.
-    dpi_x = GetDeviceCaps(screen_dc, LOGPIXELSX);
-    dpi_y = GetDeviceCaps(screen_dc, LOGPIXELSY);
-    DCHECK_EQ(dpi_x, dpi_y);
+    dpi_x = ::GetDeviceCaps(screen_dc, LOGPIXELSX);
+    dpi_y = ::GetDeviceCaps(screen_dc, LOGPIXELSY);
+    CHECK_EQ(dpi_x, dpi_y, base::NotFatalUntil::M163);
   }
   return dpi_x;
 }

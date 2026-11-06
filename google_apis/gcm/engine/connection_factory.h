@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 
 #include <string>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/time/time.h"
 #include "google_apis/gcm/base/gcm_export.h"
 #include "google_apis/gcm/engine/connection_handler.h"
@@ -37,19 +37,13 @@ class GCM_EXPORT ConnectionFactory {
   using BuildLoginRequestCallback =
       base::RepeatingCallback<void(mcs_proto::LoginRequest* login_request)>;
 
-  // Reasons for triggering a connection reset. Note that these enums are
-  // consumed by a histogram, so ordering should not be modified.
+  // Reasons for triggering a connection reset.
   enum ConnectionResetReason {
-    LOGIN_FAILURE,           // Login response included an error.
-    CLOSE_COMMAND,           // Received a close command.
-    HEARTBEAT_FAILURE,       // Heartbeat was not acknowledged in time.
-    SOCKET_FAILURE,          // net::Socket error.
-    NETWORK_CHANGE,          // NetworkChangeNotifier notified of a network
-                             // change.
-    NEW_HEARTBEAT_INTERVAL,  // New heartbeat interval was set.
-    // Count of total number of connection reset reasons. All new reset reasons
-    // should be added above this line.
-    CONNECTION_RESET_COUNT,
+    LOGIN_FAILURE,      // Login response included an error.
+    CLOSE_COMMAND,      // Received a close command.
+    HEARTBEAT_FAILURE,  // Heartbeat was not acknowledged in time.
+    SOCKET_FAILURE,     // net::Socket error.
+    NETWORK_CHANGE,     // NetworkChangeNotifier notified of a network change.
   };
 
   // Listener interface to be notified of endpoint connection events.

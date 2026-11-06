@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,5 +10,10 @@
     RuntimeEnabled=TextDetector
 ] interface TextDetector {
     [CallWith=ExecutionContext] constructor();
-    [CallWith=ScriptState, MeasureAs=TextDetectorDetect] Promise<sequence<DetectedText>> detect(ImageBitmapSource image);
+    // Asynchronously creates and ensures that the text detection backend is
+    // initialized and ready before resolving.
+    // TODO(crbug.com/40276465): Support TextDetectorCreateOptions (signal,
+    // languages).
+    [CallWith=ScriptState, MeasureAs=TextDetectorCreate, RaisesException] static Promise<TextDetector> create();
+    [CallWith=ScriptState, MeasureAs=TextDetectorDetect, RaisesException] Promise<sequence<DetectedText>> detect(ImageBitmapSource image);
 };

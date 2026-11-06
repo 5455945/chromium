@@ -1,17 +1,18 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_AURA_SCOPED_SIMPLE_KEYBOARD_HOOK_H_
 #define UI_AURA_SCOPED_SIMPLE_KEYBOARD_HOOK_H_
 
+#include <optional>
+
 #include "base/containers/flat_set.h"
-#include "base/macros.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/memory/weak_ptr.h"
 #include "ui/aura/scoped_keyboard_hook.h"
 
 namespace ui {
-enum class DomCode;
+enum class DomCode : uint32_t;
 }
 
 namespace aura {
@@ -24,16 +25,23 @@ namespace aura {
 class ScopedSimpleKeyboardHook : public ScopedKeyboardHook {
  public:
   explicit ScopedSimpleKeyboardHook(
-      absl::optional<base::flat_set<ui::DomCode>> dom_codes);
+      std::optional<base::flat_set<ui::DomCode>> dom_codes);
+
+  ScopedSimpleKeyboardHook(const ScopedSimpleKeyboardHook&) = delete;
+  ScopedSimpleKeyboardHook& operator=(const ScopedSimpleKeyboardHook&) = delete;
+
   ~ScopedSimpleKeyboardHook() override;
 
   // ScopedKeyboardHook override.
   bool IsKeyLocked(ui::DomCode dom_code) override;
 
- private:
-  absl::optional<base::flat_set<ui::DomCode>> dom_codes_;
+  base::WeakPtr<ScopedSimpleKeyboardHook> GetWeakPtr() {
+    return weak_factory_.GetWeakPtr();
+  }
 
-  DISALLOW_COPY_AND_ASSIGN(ScopedSimpleKeyboardHook);
+ private:
+  std::optional<base::flat_set<ui::DomCode>> dom_codes_;
+  base::WeakPtrFactory<ScopedSimpleKeyboardHook> weak_factory_{this};
 };
 
 }  // namespace aura

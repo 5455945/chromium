@@ -9,6 +9,7 @@
 <translation id="1591070050619849194">Onemogoči vse animacije slik.</translation>
 <translation id="1703735871906654364">Brskanje s kazalko</translation>
 <translation id="1791496371305830581">Omogoči vse animirane slike.</translation>
+<translation id="1974060860693918893">Dodatno</translation>
 <translation id="1996252509865389616">Želite omogočiti?</translation>
 <translation id="2079545284768500474">Razveljavi</translation>
 <translation id="2179565792157161713">Odpri daljši opis na novem zavihku</translation>
@@ -26,6 +27,7 @@
 <translation id="3812541808639806898">Image Alt Text Viewer</translation>
 <translation id="381767806621926835">Če želite dostopati do daljšega opisa, z desno tipko miške kliknite na kateri koli element z atributom »longdesc« ali »aria-describedat«.</translation>
 <translation id="4023902424053835668">Brskajte po besedilu spletnih strani s puščičnimi tipkami.</translation>
+<translation id="4384008284958619421">Sodobni bralniki zaslona in Google Chrome zdaj izvorno podpirajo dostopne opise elementov in standarde ARIA.</translation>
 <translation id="4388820049312272371">Označitev položaja kazalca s hitrim pobliskom.</translation>
 <translation id="4394049700291259645">Onemogoči</translation>
 <translation id="4769065380738716500">Slike so zamenjane s svojim besedilom »alt«.</translation>
@@ -51,6 +53,7 @@
 <translation id="6170146920149900756">Izboljševalnik barv</translation>
 <translation id="633394792577263429">Pridržite tipko &lt;span class='key'&gt;Control&lt;/span&gt;, če se želite pomikati po besedah.</translation>
 <translation id="6550675742724504774">Možnosti</translation>
+<translation id="6699630355767768222">3. korak: Preglasite barvno os zaradi popravljanja.</translation>
 <translation id="6838518108677880446">Nastavitev:</translation>
 <translation id="690628312087070417">Ko kazalka skoči daleč:</translation>
 <translation id="6965382102122355670">V redu</translation>
@@ -61,9 +64,11 @@
 <translation id="7658239707568436148">Prekliči</translation>
 <translation id="786423340267544509">Dodaj obrobo elementom z atributom »aria-describedat« ali »longdesc«.</translation>
 <translation id="7942349550061667556">Rdeča</translation>
+<translation id="8081200409424070383">Daljši opisi bodo 20. novembra 2026 zastareli.</translation>
 <translation id="8260673944985561857">Možnosti brskanja s kazalko</translation>
 <translation id="8321034316479930120">Pravilnik o animacijah</translation>
 <translation id="8480209185614411573">Visok kontrast</translation>
 <translation id="8609925175482059018">Pritisnite tipko &lt;span class='key'&gt;F7&lt;/span&gt;, če želite vklopiti brskanje s kazalko. Pritisnite tipko znova, če ga želite izklopiti.</translation>
+<translation id="8798099450830957504">Privzeto</translation>
 <translation id="894241283505723656">Daljši opisi v kontekstnem meniju</translation>
 </translationbundle>

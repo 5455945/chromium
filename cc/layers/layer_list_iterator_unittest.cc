@@ -1,10 +1,12 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "cc/layers/layer_list_iterator.h"
 
 #include <memory>
+#include <unordered_map>
+#include <utility>
 
 #include "base/containers/adapters.h"
 #include "cc/animation/animation_host.h"
@@ -20,9 +22,9 @@ namespace {
 
 TEST(LayerListIteratorTest, VerifyTraversalOrder) {
   // Unfortunate preamble.
-  FakeLayerTreeHostClient client;
+  FakeLayerTreeHostDelegate client;
   TestTaskGraphRunner task_graph_runner;
-  auto animation_host = AnimationHost::CreateForTesting(ThreadInstance::MAIN);
+  auto animation_host = AnimationHost::CreateForTesting(ThreadInstance::kMain);
   std::unique_ptr<FakeLayerTreeHost> host_ptr = FakeLayerTreeHost::Create(
       &client, &task_graph_runner, animation_host.get());
   FakeLayerTreeHost* host = host_ptr.get();
@@ -73,9 +75,9 @@ TEST(LayerListIteratorTest, VerifyTraversalOrder) {
 
 TEST(LayerListIteratorTest, VerifySingleLayer) {
   // Unfortunate preamble.
-  FakeLayerTreeHostClient client;
+  FakeLayerTreeHostDelegate client;
   TestTaskGraphRunner task_graph_runner;
-  auto animation_host = AnimationHost::CreateForTesting(ThreadInstance::MAIN);
+  auto animation_host = AnimationHost::CreateForTesting(ThreadInstance::kMain);
   std::unique_ptr<FakeLayerTreeHost> host_ptr = FakeLayerTreeHost::Create(
       &client, &task_graph_runner, animation_host.get());
   FakeLayerTreeHost* host = host_ptr.get();
@@ -107,9 +109,9 @@ TEST(LayerListIteratorTest, VerifyNullFirstLayer) {
 
 TEST(LayerListReverseIteratorTest, VerifyTraversalOrder) {
   // Unfortunate preamble.
-  FakeLayerTreeHostClient client;
+  FakeLayerTreeHostDelegate client;
   TestTaskGraphRunner task_graph_runner;
-  auto animation_host = AnimationHost::CreateForTesting(ThreadInstance::MAIN);
+  auto animation_host = AnimationHost::CreateForTesting(ThreadInstance::kMain);
   std::unique_ptr<FakeLayerTreeHost> host_ptr = FakeLayerTreeHost::Create(
       &client, &task_graph_runner, animation_host.get());
   FakeLayerTreeHost* host = host_ptr.get();
@@ -162,9 +164,9 @@ TEST(LayerListReverseIteratorTest, VerifyTraversalOrder) {
 
 TEST(LayerListReverseIteratorTest, VerifySingleLayer) {
   // Unfortunate preamble.
-  FakeLayerTreeHostClient client;
+  FakeLayerTreeHostDelegate client;
   TestTaskGraphRunner task_graph_runner;
-  auto animation_host = AnimationHost::CreateForTesting(ThreadInstance::MAIN);
+  auto animation_host = AnimationHost::CreateForTesting(ThreadInstance::kMain);
   std::unique_ptr<FakeLayerTreeHost> host_ptr = FakeLayerTreeHost::Create(
       &client, &task_graph_runner, animation_host.get());
   FakeLayerTreeHost* host = host_ptr.get();

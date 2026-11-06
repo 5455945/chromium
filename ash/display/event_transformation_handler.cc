@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -36,7 +36,7 @@ void EventTransformationHandler::OnScrollEvent(ui::ScrollEvent* event) {
   aura::Window* target = static_cast<aura::Window*>(event->target());
   ::wm::ConvertPointToScreen(target, &point_in_screen);
   const display::Display& display =
-      display::Screen::GetScreen()->GetDisplayNearestPoint(point_in_screen);
+      display::Screen::Get()->GetDisplayNearestPoint(point_in_screen);
 
   // Apply some additional scaling if the display is non-integrated.
   if (!display.IsInternal())

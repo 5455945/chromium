@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,7 +14,7 @@ class HeapLinkedStackTest : public TestSupportingGC {};
 }  // namespace
 
 TEST_F(HeapLinkedStackTest, PushPop) {
-  using Stack = HeapLinkedStack<Member<IntegerObject>>;
+  using Stack = GCedHeapLinkedStack<Member<IntegerObject>>;
 
   ClearOutOldGarbage();
   IntegerObject::destructor_calls = 0;

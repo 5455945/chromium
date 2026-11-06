@@ -20,14 +20,25 @@
 
 #include "third_party/blink/renderer/core/svg/svg_path_element.h"
 
-#include "third_party/blink/renderer/core/dom/node_computed_style.h"
-#include "third_party/blink/renderer/core/layout/layout_object.h"
+#include <algorithm>
+
+#include "third_party/blink/renderer/bindings/core/v8/v8_svg_path_data_settings.h"
+#include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
+#include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/core/svg/svg_animated_path.h"
 #include "third_party/blink/renderer/core/svg/svg_mpath_element.h"
+#include "third_party/blink/renderer/core/svg/svg_path.h"
+#include "third_party/blink/renderer/core/svg/svg_path_data.h"
 #include "third_party/blink/renderer/core/svg/svg_path_query.h"
+#include "third_party/blink/renderer/core/svg/svg_path_segments_builder.h"
 #include "third_party/blink/renderer/core/svg/svg_path_utilities.h"
 #include "third_party/blink/renderer/core/svg/svg_point_tear_off.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/core/svg/svg_zoom_migration.h"
+#include "third_party/blink/renderer/platform/geometry/path_builder.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/transforms/affine_transform.h"
 
 namespace blink {
 
@@ -35,17 +46,11 @@ SVGPathElement::SVGPathElement(Document& document)
     : SVGGeometryElement(svg_names::kPathTag, document),
       path_(MakeGarbageCollected<SVGAnimatedPath>(this,
                                                   svg_names::kDAttr,
-                                                  CSSPropertyID::kD)) {
-  AddToPropertyMap(path_);
-}
+                                                  CSSPropertyID::kD)) {}
 
 void SVGPathElement::Trace(Visitor* visitor) const {
   visitor->Trace(path_);
   SVGGeometryElement::Trace(visitor);
-}
-
-Path SVGPathElement::AttributePath() const {
-  return path_->CurrentValue()->GetStylePath()->GetPath();
 }
 
 const StylePath* SVGPathElement::GetStylePath() const {
@@ -66,12 +71,32 @@ const SVGPathByteStream& SVGPathElement::PathByteStream() const {
 }
 
 Path SVGPathElement::AsPath() const {
-  return GetStylePath()->GetPath();
+  const Path& unzoomed_path = GetStylePath()->GetUnzoomedPath();
+  if (!RuntimeEnabledFeatures::SvgNewZoomEnabled()) {
+    return unzoomed_path;
+  }
+
+  const ComputedStyle* style = GetComputedStyle();
+  if (!style || style->EffectiveZoom() == 1) {
+    return unzoomed_path;
+  }
+  return PathBuilder(unzoomed_path)
+      .Transform(AffineTransform::MakeScale(style->EffectiveZoom()))
+      .Finalize();
+}
+
+PathBuilder SVGPathElement::AsMutablePath() const {
+  return PathBuilder(AsPath());
+}
+
+const Path& SVGPathElement::GetUnzoomedAsPath() const {
+  return GetStylePath()->GetUnzoomedPath();
 }
 
 float SVGPathElement::getTotalLength(ExceptionState& exception_state) {
   GetDocument().UpdateStyleAndLayoutForNode(this,
                                             DocumentUpdateReason::kJavaScript);
+  EnsureComputedStyle();
   return SVGPathQuery(PathByteStream()).GetTotalLength();
 }
 
@@ -90,15 +115,66 @@ SVGPointTearOff* SVGPathElement::getPointAtLength(
   }
 
   SVGPathQuery path_query(byte_stream);
-  if (length < 0) {
-    length = 0;
-  } else {
-    float computed_length = path_query.GetTotalLength();
-    if (length > computed_length)
-      length = computed_length;
-  }
-  FloatPoint point = path_query.GetPointAtLength(length);
+  length = std::clamp(length, 0.0f, path_query.GetTotalLength());
+
+  gfx::PointF point = path_query.GetPointAtLength(length);
   return SVGPointTearOff::CreateDetached(point);
+}
+
+HeapVector<Member<SVGPathSegment>> SVGPathElement::getPathData(
+    const SVGPathDataSettings* settings) {
+  const bool normalize = settings->normalize();
+  if (normalize) {
+    UseCounter::Count(GetDocument(),
+                      WebFeature::kSVGPathElementGetPathDataNormalized);
+  }
+  // Read the attribute base value, unaffected by SMIL or CSS.
+  return BuildPathSegmentsFromByteStream(path_->BaseValue()->ByteStream(),
+                                         normalize);
+}
+
+void SVGPathElement::setPathData(
+    const HeapVector<Member<SVGPathSegment>>& path_data) {
+  // Build the valid-prefix byte stream and route it through setAttribute("d")
+  // so the full attribute mutation pipeline fires (invalidation, <use>
+  // instances, MutationObserver).
+  // TODO(crbug.com/40441025): Write the byte stream directly into SVGPath
+  // once lazy attribute sync fires Will/DidModifyAttribute.
+  SVGPathByteStream byte_stream = BuildByteStreamFromSegments(path_data);
+  // An empty result removes the attribute, matching other list-valued
+  // attributes.
+  if (byte_stream.IsEmpty()) {
+    removeAttribute(svg_names::kDAttr);
+    return;
+  }
+  setAttribute(svg_names::kDAttr, AtomicString(BuildStringFromByteStream(
+                                      byte_stream, kNoTransformation)));
+}
+
+SVGPathSegment* SVGPathElement::getPathSegmentAtLength(float distance) {
+  GetDocument().UpdateStyleAndLayoutForNode(this,
+                                            DocumentUpdateReason::kJavaScript);
+  EnsureComputedStyle();
+  const SVGPathByteStream& byte_stream = path_->BaseValue()->ByteStream();
+  if (byte_stream.IsEmpty()) {
+    return nullptr;
+  }
+
+  SVGPathQuery path_query(byte_stream);
+  distance = std::clamp(distance, 0.0f, path_query.GetTotalLength());
+
+  SVGPathSegmentsBuilder builder;
+  PathSegmentData segment_data = path_query.GetSegmentAtLength(distance);
+  builder.EmitSegment(segment_data);
+
+  HeapVector<Member<SVGPathSegment>> result = builder.Finalize();
+  CHECK_GT(result.size(), 0u);
+  return result[0].Get();
+}
+
+void SVGPathElement::DidRecalcStyle(const StyleRecalcChange change) {
+  SVGGeometryElement::DidRecalcStyle(change);
+  InvalidateMPathDependencies();
 }
 
 void SVGPathElement::SvgAttributeChanged(
@@ -106,29 +182,11 @@ void SVGPathElement::SvgAttributeChanged(
   const QualifiedName& attr_name = params.name;
   if (attr_name == svg_names::kDAttr) {
     InvalidateMPathDependencies();
-    GeometryPresentationAttributeChanged(attr_name);
+    GeometryPresentationAttributeChanged(params.property);
     return;
   }
 
   SVGGeometryElement::SvgAttributeChanged(params);
-}
-
-void SVGPathElement::CollectStyleForPresentationAttribute(
-    const QualifiedName& name,
-    const AtomicString& value,
-    MutableCSSPropertyValueSet* style) {
-  SVGAnimatedPropertyBase* property = PropertyFromAttribute(name);
-  if (property == path_) {
-    SVGAnimatedPath* path = GetPath();
-    // If this is a <use> instance, return the referenced path to maximize
-    // geometry sharing.
-    if (const SVGElement* element = CorrespondingElement())
-      path = To<SVGPathElement>(element)->GetPath();
-    AddPropertyToPresentationAttributeStyle(style, property->CssPropertyId(),
-                                            path->CssValue());
-    return;
-  }
-  SVGGeometryElement::CollectStyleForPresentationAttribute(name, value, style);
 }
 
 void SVGPathElement::InvalidateMPathDependencies() {
@@ -155,9 +213,30 @@ void SVGPathElement::RemovedFrom(ContainerNode& root_parent) {
   InvalidateMPathDependencies();
 }
 
-FloatRect SVGPathElement::GetBBox() {
+gfx::RectF SVGPathElement::GetBBox() {
   // We want the exact bounds.
-  return SVGPathElement::AsPath().TightBoundingRect();
+  return GetStylePath()->GetUnzoomedPath().TightBoundingRect();
+}
+
+SVGAnimatedPropertyBase* SVGPathElement::PropertyFromAttribute(
+    const QualifiedName& attribute_name) const {
+  if (attribute_name == svg_names::kDAttr) {
+    return path_.Get();
+  } else {
+    return SVGGeometryElement::PropertyFromAttribute(attribute_name);
+  }
+}
+
+void SVGPathElement::SynchronizeAllSVGAttributes() const {
+  SVGAnimatedPropertyBase* attrs[]{path_.Get()};
+  SynchronizeListOfSVGAttributes(attrs);
+  SVGGeometryElement::SynchronizeAllSVGAttributes();
+}
+
+void SVGPathElement::CollectExtraStyleForPresentationAttribute(
+    HeapVector<CSSPropertyValue, 8>& style) {
+  AddAnimatedPropertyToPresentationAttributeStyle(*path_, style);
+  SVGGeometryElement::CollectExtraStyleForPresentationAttribute(style);
 }
 
 }  // namespace blink

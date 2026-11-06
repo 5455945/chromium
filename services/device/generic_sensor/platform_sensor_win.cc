@@ -1,33 +1,29 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/device/generic_sensor/platform_sensor_win.h"
 
-#include "base/bind.h"
-#include "base/single_thread_task_runner.h"
+#include "base/functional/bind.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
+#include "services/device/public/cpp/generic_sensor/sensor_traits.h"
 
 namespace device {
-
-namespace {
-constexpr double kDefaultSensorReportingFrequency = 5.0;
-}  // namespace
 
 PlatformSensorWin::PlatformSensorWin(
     mojom::SensorType type,
     SensorReadingSharedBuffer* reading_buffer,
-    PlatformSensorProvider* provider,
-    scoped_refptr<base::SingleThreadTaskRunner> sensor_thread_runner,
-    std::unique_ptr<PlatformSensorReaderWinBase> sensor_reader)
-    : PlatformSensor(type, reading_buffer, provider),
-      sensor_thread_runner_(sensor_thread_runner),
-      sensor_reader_(sensor_reader.release()) {
+    base::WeakPtr<PlatformSensorProvider> provider,
+    ScopedPlatformSensorReaderWinBase sensor_reader)
+    : PlatformSensor(type, reading_buffer, std::move(provider)),
+      sensor_reader_(std::move(sensor_reader)) {
   DCHECK(sensor_reader_);
   sensor_reader_->SetClient(this);
 }
 
 PlatformSensorConfiguration PlatformSensorWin::GetDefaultConfiguration() {
-  return PlatformSensorConfiguration(kDefaultSensorReportingFrequency);
+  return PlatformSensorConfiguration(GetSensorDefaultFrequency(GetType()));
 }
 
 mojom::ReportingMode PlatformSensorWin::GetReportingMode() {
@@ -37,14 +33,17 @@ mojom::ReportingMode PlatformSensorWin::GetReportingMode() {
 }
 
 double PlatformSensorWin::GetMaximumSupportedFrequency() {
-  base::TimeDelta minimal_reporting_interval_ms =
+  base::TimeDelta minimal_reporting_interval =
       sensor_reader_->GetMinimalReportingInterval();
-  if (minimal_reporting_interval_ms.is_zero())
-    return kDefaultSensorReportingFrequency;
-  return 1.0 / minimal_reporting_interval_ms.InSecondsF();
+  if (minimal_reporting_interval.is_zero()) {
+    return GetSensorDefaultFrequency(GetType());
+  }
+  return minimal_reporting_interval.ToHz();
 }
 
 void PlatformSensorWin::OnReadingUpdated(const SensorReading& reading) {
+  // This function is called from the reader's sequence, which for
+  // PlatformSensorReaderWin32 is its COM STA sequence.
   UpdateSharedBufferAndNotifyClients(reading);
 }
 
@@ -68,17 +67,21 @@ void PlatformSensorWin::StopSensor() {
 bool PlatformSensorWin::CheckSensorConfiguration(
     const PlatformSensorConfiguration& configuration) {
   DCHECK(main_task_runner()->RunsTasksInCurrentSequence());
-  base::TimeDelta minimal_reporting_interval_ms =
+  const double frequency = configuration.frequency();
+  if (!IsValidSensorFrequency(frequency)) {
+    return false;
+  }
+  base::TimeDelta minimal_reporting_interval =
       sensor_reader_->GetMinimalReportingInterval();
-  if (minimal_reporting_interval_ms.is_zero())
+  if (minimal_reporting_interval.is_zero()) {
     return true;
-  double max_frequency = 1.0 / minimal_reporting_interval_ms.InSecondsF();
-  return configuration.frequency() <= max_frequency;
+  }
+  return frequency <= minimal_reporting_interval.ToHz();
 }
 
 PlatformSensorWin::~PlatformSensorWin() {
+  DCHECK(main_task_runner()->RunsTasksInCurrentSequence());
   sensor_reader_->SetClient(nullptr);
-  sensor_thread_runner_->DeleteSoon(FROM_HERE, sensor_reader_);
 }
 
 }  // namespace device

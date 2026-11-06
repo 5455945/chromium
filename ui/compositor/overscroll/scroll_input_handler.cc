@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -39,7 +39,7 @@ cc::ScrollState CreateScrollState(const ScrollEvent& scroll, bool is_begin) {
 ScrollInputHandler::ScrollInputHandler(
     const base::WeakPtr<cc::InputHandler>& input_handler)
     : input_handler_weak_ptr_(input_handler) {
-  DCHECK(input_handler_weak_ptr_);
+  CHECK(input_handler_weak_ptr_, base::NotFatalUntil::M163);
   input_handler_weak_ptr_->BindToClient(this);
 }
 
@@ -70,17 +70,17 @@ bool ScrollInputHandler::OnScrollEvent(const ScrollEvent& event,
 
   // Falling back to the main thread should never be required when an explicit
   // ElementId is provided.
-  DCHECK(!result.needs_main_thread_hit_test);
+  CHECK(result.main_thread_hit_test_reasons.empty(), base::NotFatalUntil::M163);
 
-  cc::ScrollState scroll_state = CreateScrollState(event, false);
-  input_handler_weak_ptr_->ScrollUpdate(&scroll_state, base::TimeDelta());
-  input_handler_weak_ptr_->ScrollEnd(/*should_snap=*/false);
+  input_handler_weak_ptr_->ScrollUpdate(CreateScrollState(event, false),
+                                        base::TimeDelta());
+  input_handler_weak_ptr_->ScrollEnd(/*should_snap=*/false, std::nullopt);
 
   return true;
 }
 
 void ScrollInputHandler::WillShutdown() {
-  DCHECK(input_handler_weak_ptr_);
+  CHECK(input_handler_weak_ptr_, base::NotFatalUntil::M163);
   input_handler_weak_ptr_.reset();
 }
 
@@ -88,9 +88,11 @@ void ScrollInputHandler::Animate(base::TimeTicks time) {}
 
 void ScrollInputHandler::ReconcileElasticOverscrollAndRootScroll() {}
 
+void ScrollInputHandler::SetPrefersReducedMotion(bool prefers_reduced_motion) {}
+
 void ScrollInputHandler::UpdateRootLayerStateForSynchronousInputHandler(
-    const gfx::ScrollOffset& total_scroll_offset,
-    const gfx::ScrollOffset& max_scroll_offset,
+    const gfx::PointF& total_scroll_offset,
+    const gfx::PointF& max_scroll_offset,
     const gfx::SizeF& scrollable_size,
     float page_scale_factor,
     float min_page_scale_factor,
@@ -99,5 +101,13 @@ void ScrollInputHandler::UpdateRootLayerStateForSynchronousInputHandler(
 void ScrollInputHandler::DeliverInputForBeginFrame(
     const viz::BeginFrameArgs& args) {}
 void ScrollInputHandler::DeliverInputForHighLatencyMode() {}
+void ScrollInputHandler::DeliverInputForDeadline() {}
+void ScrollInputHandler::DidFinishImplFrame() {}
+bool ScrollInputHandler::HasQueuedInput() const {
+  return false;
+}
+void ScrollInputHandler::SetScrollEventDispatchMode(
+    cc::InputHandlerClient::ScrollEventDispatchMode mode,
+    double scroll_deadline_ratio) {}
 
 }  // namespace ui

@@ -1,40 +1,84 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_VIEWS_PAYMENTS_PAYMENT_HANDLER_MODAL_DIALOG_MANAGER_DELEGATE_H_
 #define CHROME_BROWSER_UI_VIEWS_PAYMENTS_PAYMENT_HANDLER_MODAL_DIALOG_MANAGER_DELEGATE_H_
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
+#include "base/observer_list.h"
+#include "base/scoped_observation.h"
+#include "components/web_modal/web_contents_modal_dialog_host.h"
 #include "components/web_modal/web_contents_modal_dialog_manager_delegate.h"
-#include "content/public/browser/web_contents_observer.h"
+#include "ui/gfx/native_ui_types.h"
+#include "ui/views/view_observer.h"
+#include "ui/views/widget/widget_observer.h"
 
 namespace content {
 class WebContents;
 }
 
+namespace gfx {
+class Point;
+class Rect;
+class Size;
+}  // namespace gfx
+
+namespace views {
+class View;
+class Widget;
+}  // namespace views
+
 namespace web_modal {
-class WebContentsModalDialogHost;
+class ModalDialogHostObserver;
 }
 
 namespace payments {
 
-// A delegate for presenting modal dialogs that are triggered from a web-based
-// payment handler. Since the payment sheet is itself a modal dialog, the
-// WebContentsModalDialogHost is expected to be borrowed from the browser that
-// spawned the payment sheet. Observes the WebContents that spawned the payment
-// handler.
+// A delegate and host for presenting modal dialogs that are triggered from a
+// web-based payment handler. This class implements WebContentsModalDialogHost
+// directly so that child modal dialogs (e.g. WebAuthn, PageInfo Certificate
+// Viewer) are parented to the PaymentRequestDialogView widget.
+//
+// ┌────────────────────────────────────────────────────────────┐
+// │ Browser Tab (example-merchant.com)                         │
+// │                                                            │
+// │     ┌────────────────────────────────────────────────┐     │
+// │     │ Payment Request Dialog (host_view_)            │     │
+// │     │                                                │     │
+// │     │   ┌────────────────────────────────────────┐   │     │
+// │     │   │ views::WebView (web_contents_) hosting │   │     │
+// │     │   │ Payment Handler App (example-pay.com)  │   │     │
+// │     │   │                                        │   │     │
+// │     │   │      ┌──────────────────────────┐      │   │     │
+// │     │   │      │ Child Modal Dialog       │      │   │     │
+// │     │   │      │ (e.g. WebAuthn, PageInfo)│      │   │     │
+// │     │   │      │                          │      │   │     │
+// │     │   │      └──────────────────────────┘      │   │     │
+// │     │   └────────────────────────────────────────┘   │     │
+// │     └────────────────────────────────────────────────┘     │
+// └────────────────────────────────────────────────────────────┘
 class PaymentHandlerModalDialogManagerDelegate
     : public web_modal::WebContentsModalDialogManagerDelegate,
-      public content::WebContentsObserver {
+      public web_modal::WebContentsModalDialogHost,
+      public views::ViewObserver,
+      public views::WidgetObserver {
  public:
-  // |host| must not be null.
-  explicit PaymentHandlerModalDialogManagerDelegate(
-      content::WebContents* host_web_contents);
-  ~PaymentHandlerModalDialogManagerDelegate() override = default;
+  // |host_view| is the view representing the Payment Request dialog. Must not
+  // be null and must outlive this delegate.
+  explicit PaymentHandlerModalDialogManagerDelegate(views::View* host_view);
 
-  // Sets the |web_contents| that is behind the modal dialogs managed by this
-  // modal dialog manager. |web_contents| must not be null.
+  PaymentHandlerModalDialogManagerDelegate(
+      const PaymentHandlerModalDialogManagerDelegate&) = delete;
+  PaymentHandlerModalDialogManagerDelegate& operator=(
+      const PaymentHandlerModalDialogManagerDelegate&) = delete;
+
+  ~PaymentHandlerModalDialogManagerDelegate() override;
+
+  // Sets the payment handler's WebContents (the page displaying the payment
+  // app) whose modal dialogs are managed by this delegate. |web_contents| must
+  // not be null.
   void SetWebContents(content::WebContents* web_contents);
 
   // WebContentsModalDialogManagerDelegate:
@@ -42,15 +86,47 @@ class PaymentHandlerModalDialogManagerDelegate
   // provided to SetWebContents().
   void SetWebContentsBlocked(content::WebContents* web_contents,
                              bool blocked) override;
-  web_modal::WebContentsModalDialogHost* GetWebContentsModalDialogHost()
-      override;
+  web_modal::WebContentsModalDialogHost* GetWebContentsModalDialogHost(
+      content::WebContents* web_contents) override;
   bool IsWebContentsVisible(content::WebContents* web_contents) override;
 
- private:
-  // A not-owned pointer to the WebContents behind the modal dialogs.
-  content::WebContents* web_contents_;
+  // web_modal::ModalDialogHost:
+  gfx::NativeView GetHostView() const override;
+  gfx::Point GetDialogPosition(const gfx::Size& size) override;
+  void AddObserver(web_modal::ModalDialogHostObserver* observer) override;
+  void RemoveObserver(web_modal::ModalDialogHostObserver* observer) override;
 
-  DISALLOW_COPY_AND_ASSIGN(PaymentHandlerModalDialogManagerDelegate);
+  // web_modal::WebContentsModalDialogHost:
+  gfx::Size GetMaximumDialogSize() override;
+
+  // views::ViewObserver:
+  void OnViewAddedToWidget(views::View* observed_view) override;
+  void OnViewRemovedFromWidget(views::View* observed_view) override;
+  void OnViewBoundsChanged(views::View* observed_view) override;
+
+  // views::WidgetObserver:
+  void OnWidgetBoundsChanged(views::Widget* widget,
+                             const gfx::Rect& new_bounds) override;
+  void OnWidgetDestroying(views::Widget* widget) override;
+
+ private:
+  // web_modal::ModalDialogHost:
+  void NotifyPositionRequiresUpdate() override;
+
+  // The view against which modal dialogs are positioned and parented.
+  const raw_ref<views::View> host_view_;
+
+  base::ScopedObservation<views::View, views::ViewObserver>
+      host_view_observation_{this};
+  base::ScopedObservation<views::Widget, views::WidgetObserver>
+      widget_observation_{this};
+
+  // A not-owned pointer to the payment handler's WebContents (the web page
+  // displaying the payment app) whose modal dialogs are managed by this
+  // delegate.
+  raw_ptr<content::WebContents, DanglingUntriaged> web_contents_ = nullptr;
+
+  base::ObserverList<web_modal::ModalDialogHostObserver> observer_list_;
 };
 
 }  // namespace payments

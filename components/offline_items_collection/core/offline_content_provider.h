@@ -1,28 +1,25 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_OFFLINE_ITEMS_COLLECTION_CORE_OFFLINE_CONTENT_PROVIDER_H_
 #define COMPONENTS_OFFLINE_ITEMS_COLLECTION_CORE_OFFLINE_CONTENT_PROVIDER_H_
 
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "base/observer_list.h"
 #include "components/offline_items_collection/core/launch_location.h"
 #include "components/offline_items_collection/core/open_params.h"
 #include "components/offline_items_collection/core/rename_result.h"
 #include "components/offline_items_collection/core/update_delta.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "url/gurl.h"
 
 namespace offline_items_collection {
 
 struct ContentId;
 struct OfflineItem;
-struct OfflineItemSchedule;
 struct OfflineItemShareInfo;
 struct OfflineItemVisuals;
 
@@ -38,7 +35,7 @@ class OfflineContentProvider {
                               std::unique_ptr<OfflineItemShareInfo>)>;
   using MultipleItemCallback = base::OnceCallback<void(const OfflineItemList&)>;
   using SingleItemCallback =
-      base::OnceCallback<void(const absl::optional<OfflineItem>&)>;
+      base::OnceCallback<void(const std::optional<OfflineItem>&)>;
   using RenameCallback = base::OnceCallback<void(RenameResult)>;
   using DownloadRenameCallback = base::OnceCallback<RenameCallback>;
 
@@ -96,7 +93,7 @@ class OfflineContentProvider {
     // determine whether this call should be ignored.
     virtual void OnItemUpdated(
         const OfflineItem& item,
-        const absl::optional<UpdateDelta>& update_delta) = 0;
+        const std::optional<UpdateDelta>& update_delta) = 0;
 
     // Called right before this object gets destroyed, to lets observers
     // perform cleanup.
@@ -119,8 +116,11 @@ class OfflineContentProvider {
   virtual void PauseDownload(const ContentId& id) = 0;
 
   // Called to resume a paused download of an OfflineItem represented by |id|.
-  // TODO(shaktisahu): Remove |has_user_gesture| if we end up not needing it.
-  virtual void ResumeDownload(const ContentId& id, bool has_user_gesture) = 0;
+  virtual void ResumeDownload(const ContentId& id) = 0;
+
+  // Called to validate a dangerous download of an OfflineItem represented by
+  // |id|. Only applies to dangerous downloads, not insecure downloads.
+  virtual void ValidateDangerousDownload(const ContentId& id) = 0;
 
   // Requests for an OfflineItem represented by |id|. The implementer should
   // post any replies even if the result is available immediately to prevent
@@ -160,10 +160,6 @@ class OfflineContentProvider {
                           const std::string& name,
                           RenameCallback callback) = 0;
 
-  // Called to change when to start the OfflineItem represented by |id|.
-  virtual void ChangeSchedule(const ContentId& id,
-                              absl::optional<OfflineItemSchedule> schedule) = 0;
-
   // Adds an observer that should be notified of OfflineItem list modifications.
   void AddObserver(Observer* observer);
 
@@ -181,7 +177,7 @@ class OfflineContentProvider {
   void NotifyItemsAdded(const OfflineItemList& items);
   void NotifyItemRemoved(const ContentId& id);
   void NotifyItemUpdated(const OfflineItem& item,
-                         const absl::optional<UpdateDelta>& update_delta);
+                         const std::optional<UpdateDelta>& update_delta);
 
  private:
   base::ObserverList<Observer> observers_;

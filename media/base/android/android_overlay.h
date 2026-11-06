@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,7 @@
 #include <list>
 
 #include "base/android/scoped_java_ref.h"
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "media/base/android_overlay_config.h"
 #include "media/base/media_export.h"
@@ -40,6 +39,9 @@ namespace media {
 // AndroidOverlay isn't technically supposed to do that.
 class MEDIA_EXPORT AndroidOverlay {
  public:
+  AndroidOverlay(const AndroidOverlay&) = delete;
+  AndroidOverlay& operator=(const AndroidOverlay&) = delete;
+
   virtual ~AndroidOverlay();
 
   // Schedules a relayout of this overlay.  If called before the client is
@@ -54,7 +56,7 @@ class MEDIA_EXPORT AndroidOverlay {
   // Android.  It is not reporting the destruction of |this|.
   //
   // Destroying |this| prevents any further destroyed callbacks.  This includes
-  // cases in which an earlier callback out of multiple registred ones deletes
+  // cases in which an earlier callback out of multiple registered ones deletes
   // |this|.  None of the later callbacks will be called.
   //
   // These will be called in the same order that they're added.
@@ -73,8 +75,6 @@ class MEDIA_EXPORT AndroidOverlay {
   std::list<AndroidOverlayConfig::DeletedCB> deletion_cbs_;
 
   base::WeakPtrFactory<AndroidOverlay> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(AndroidOverlay);
 };
 
 }  // namespace media

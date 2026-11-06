@@ -1,4 +1,4 @@
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -8,17 +8,17 @@ See http://dev.chromium.org/developers/how-tos/depottools/presubmit-scripts
 for more details about the presubmit API built into depot_tools.
 """
 
-USE_PYTHON3 = True
-
 
 def _CheckWebDevStyle(input_api, output_api):
   results = []
   try:
     import sys
+
     old_sys_path = sys.path
     cwd = input_api.PresubmitLocalPath()
     sys.path += [input_api.os_path.join(cwd, '..', '..', '..', '..', 'tools')]
     import web_dev_style.presubmit_support
+
     results = web_dev_style.presubmit_support.CheckStyle(input_api, output_api)
   finally:
     sys.path = old_sys_path

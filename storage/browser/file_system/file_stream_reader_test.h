@@ -1,20 +1,27 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef STORAGE_BROWSER_FILE_SYSTEM_FILE_STREAM_READER_TEST_H_
 #define STORAGE_BROWSER_FILE_SYSTEM_FILE_STREAM_READER_TEST_H_
 
-#include "base/callback_helpers.h"
+#include <string_view>
+
 #include "base/files/scoped_temp_dir.h"
-#include "base/single_thread_task_runner.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
 #include "base/threading/thread.h"
+#include "base/time/time.h"
+#include "base/types/expected.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
 #include "net/base/test_completion_callback.h"
 #include "storage/browser/file_system/file_stream_reader.h"
 #include "storage/browser/file_system/file_stream_test_utils.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace storage {
@@ -25,16 +32,15 @@ namespace storage {
 // TouchFile to manipulate files for their particular implementation.
 class FileStreamReaderTest : public testing::Test {
  public:
-  static constexpr base::StringPiece kTestFileName = "test.dat";
-  static constexpr base::StringPiece kTestData = "0123456789";
+  static constexpr std::string_view kTestFileName = "test.dat";
+  static constexpr std::string_view kTestData = "0123456789";
 
   virtual std::unique_ptr<FileStreamReader> CreateFileReader(
       const std::string& file_name,
       int64_t initial_offset,
       const base::Time& expected_modification_time) = 0;
   virtual void WriteFile(const std::string& file_name,
-                         const char* buf,
-                         size_t buf_size,
+                         std::string_view buffer,
                          base::Time* modification_time) = 0;
   // Adjust a file's last modified time by |delta|.
   virtual void TouchFile(const std::string& file_name,
@@ -46,15 +52,21 @@ class FileStreamReaderTest : public testing::Test {
   }
 
   void WriteTestFile() {
-    WriteFile(std::string(kTestFileName), kTestData.data(), kTestData.size(),
+    WriteFile(std::string(kTestFileName), kTestData,
               &test_file_modification_time_);
   }
 
   static void NeverCalled(int unused) { ADD_FAILURE(); }
 
- private:
-  base::test::SingleThreadTaskEnvironment task_environment_{
-      base::test::SingleThreadTaskEnvironment::MainThreadType::IO};
+ protected:
+  // Must be listed before base::test::TaskEnvironment.
+  base::ScopedTempDir dir_;
+
+  // FileSystemContext queries QuotaDatabase, and even with MockQuotaManager
+  // (which really fakes parts of QuotaManagerImpl), a thread pool is created
+  // that requires TaskEnvironment.
+  base::test::TaskEnvironment task_environment_{
+      base::test::TaskEnvironment::MainThreadType::IO};
   base::Time test_file_modification_time_;
 };
 
@@ -73,120 +85,100 @@ TYPED_TEST_P(FileStreamReaderTypedTest, NonExistent) {
   const char kFileName[] = "nonexistent";
   std::unique_ptr<FileStreamReader> reader(
       this->CreateFileReader(kFileName, 0, base::Time()));
-  int result = 0;
-  std::string data;
-  ReadFromReader(reader.get(), &data, 10, &result);
-  ASSERT_EQ(net::ERR_FILE_NOT_FOUND, result);
-  ASSERT_EQ(0U, data.size());
+  auto data_or_error = ReadFromReader(*reader, /*bytes_to_read=*/10);
+  ASSERT_FALSE(data_or_error.has_value());
+  EXPECT_EQ(data_or_error.error(), net::ERR_FILE_NOT_FOUND);
 }
 
 TYPED_TEST_P(FileStreamReaderTypedTest, Empty) {
   const char kFileName[] = "empty";
-  this->WriteFile(kFileName, nullptr, 0, nullptr);
+  this->WriteFile(kFileName, /*data=*/std::string_view(),
+                  /*modification_time=*/nullptr);
 
   std::unique_ptr<FileStreamReader> reader(
       this->CreateFileReader(kFileName, 0, base::Time()));
-  int result = 0;
-  std::string data;
-  ReadFromReader(reader.get(), &data, 10, &result);
-  ASSERT_EQ(net::OK, result);
-  ASSERT_EQ(0U, data.size());
+  auto data_or_error = ReadFromReader(*reader, /*bytes_to_read=*/10);
+  ASSERT_TRUE(data_or_error.has_value());
+  EXPECT_THAT(data_or_error.value(), testing::IsEmpty());
 
-  net::TestInt64CompletionCallback callback;
-  int64_t length_result = reader->GetLength(callback.callback());
-  if (length_result == net::ERR_IO_PENDING)
-    length_result = callback.WaitForResult();
-  ASSERT_EQ(0, length_result);
+  auto length_result = GetLengthFromReader(reader.get());
+  ASSERT_TRUE(length_result.has_value());
+  ASSERT_EQ(0, length_result.value());
 }
 
 TYPED_TEST_P(FileStreamReaderTypedTest, GetLengthNormal) {
   std::unique_ptr<FileStreamReader> reader(
       this->CreateFileReader(std::string(this->kTestFileName), 0,
                              this->test_file_modification_time()));
-  net::TestInt64CompletionCallback callback;
-  int64_t result = reader->GetLength(callback.callback());
-  if (result == net::ERR_IO_PENDING)
-    result = callback.WaitForResult();
-  ASSERT_EQ(static_cast<int64_t>(this->kTestData.size()), result);
+  auto result = GetLengthFromReader(reader.get());
+  ASSERT_TRUE(result.has_value());
+  ASSERT_EQ(static_cast<int64_t>(this->kTestData.size()), result.value());
 }
 
 TYPED_TEST_P(FileStreamReaderTypedTest, GetLengthAfterModified) {
-  this->TouchFile(std::string(this->kTestFileName),
-                  base::TimeDelta::FromSeconds(10));
+  this->TouchFile(std::string(this->kTestFileName), base::Seconds(10));
 
   std::unique_ptr<FileStreamReader> reader(
       this->CreateFileReader(std::string(this->kTestFileName), 0,
                              this->test_file_modification_time()));
-  net::TestInt64CompletionCallback callback1;
-  int64_t result = reader->GetLength(callback1.callback());
-  if (result == net::ERR_IO_PENDING)
-    result = callback1.WaitForResult();
-  ASSERT_EQ(net::ERR_UPLOAD_FILE_CHANGED, result);
+  auto result = GetLengthFromReader(reader.get());
+  ASSERT_FALSE(result.has_value());
+  ASSERT_EQ(net::ERR_UPLOAD_FILE_CHANGED, result.error());
 
   // With nullptr expected modification time this should work.
   reader =
       this->CreateFileReader(std::string(this->kTestFileName), 0, base::Time());
-  net::TestInt64CompletionCallback callback2;
-  result = reader->GetLength(callback2.callback());
-  if (result == net::ERR_IO_PENDING)
-    result = callback2.WaitForResult();
-  ASSERT_EQ(static_cast<int64_t>(this->kTestData.size()), result);
+  result = GetLengthFromReader(reader.get());
+  ASSERT_TRUE(result.has_value());
+  ASSERT_EQ(static_cast<int64_t>(this->kTestData.size()), result.value());
 }
 
 TYPED_TEST_P(FileStreamReaderTypedTest, GetLengthWithOffset) {
   std::unique_ptr<FileStreamReader> reader(this->CreateFileReader(
       std::string(this->kTestFileName), 3, base::Time()));
-  net::TestInt64CompletionCallback callback;
-  int64_t result = reader->GetLength(callback.callback());
-  if (result == net::ERR_IO_PENDING)
-    result = callback.WaitForResult();
+  auto result = GetLengthFromReader(reader.get());
   // Initial offset does not affect the result of GetLength.
-  ASSERT_EQ(static_cast<int64_t>(this->kTestData.size()), result);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_EQ(static_cast<int64_t>(this->kTestData.size()), result.value());
 }
 
 TYPED_TEST_P(FileStreamReaderTypedTest, ReadNormal) {
   std::unique_ptr<FileStreamReader> reader(
       this->CreateFileReader(std::string(this->kTestFileName), 0,
                              this->test_file_modification_time()));
-  int result = 0;
-  std::string data;
-  ReadFromReader(reader.get(), &data, this->kTestData.size(), &result);
-  ASSERT_EQ(net::OK, result);
-  ASSERT_EQ(this->kTestData, data);
+  auto data_or_error =
+      ReadFromReader(*reader, /*bytes_to_read=*/this->kTestData.size());
+  ASSERT_TRUE(data_or_error.has_value());
+  EXPECT_EQ(data_or_error.value(), this->kTestData);
 }
 
 TYPED_TEST_P(FileStreamReaderTypedTest, ReadAfterModified) {
   // Touch file so that the file's modification time becomes different
   // from what we expect. Note that the resolution on some filesystems
   // is 1s so we can't test with deltas less than that.
-  this->TouchFile(std::string(this->kTestFileName),
-                  base::TimeDelta::FromSeconds(-1));
+  this->TouchFile(std::string(this->kTestFileName), base::Seconds(-1));
 
   std::unique_ptr<FileStreamReader> reader(
       this->CreateFileReader(std::string(this->kTestFileName), 0,
                              this->test_file_modification_time()));
-  int result = 0;
-  std::string data;
-  ReadFromReader(reader.get(), &data, this->kTestData.size(), &result);
-  ASSERT_EQ(net::ERR_UPLOAD_FILE_CHANGED, result);
-  ASSERT_EQ(0U, data.size());
+  auto data_or_error =
+      ReadFromReader(*reader, /*bytes_to_read=*/this->kTestData.size());
+  ASSERT_FALSE(data_or_error.has_value());
+  EXPECT_EQ(data_or_error.error(), net::ERR_UPLOAD_FILE_CHANGED);
 }
 
 TYPED_TEST_P(FileStreamReaderTypedTest, ReadAfterModifiedLessThanThreshold) {
   // Due to precision loss converting int64_t->double->int64_t (e.g. through
   // Blink) the expected/actual time may vary by microseconds. With
   // modification time delta < 10us this should work.
-  this->TouchFile(std::string(this->kTestFileName),
-                  base::TimeDelta::FromMicroseconds(1));
+  this->TouchFile(std::string(this->kTestFileName), base::Microseconds(1));
   std::unique_ptr<FileStreamReader> reader(
       this->CreateFileReader(std::string(this->kTestFileName), 0,
                              this->test_file_modification_time()));
-  int result = 0;
-  std::string data;
-
-  ReadFromReader(reader.get(), &data, this->kTestData.size(), &result);
-  ASSERT_EQ(net::OK, result);
-  ASSERT_EQ(this->kTestData, data);
+  auto data_or_error =
+      ReadFromReader(*reader, /*bytes_to_read=*/this->kTestData.size());
+  ASSERT_TRUE(data_or_error.has_value());
+  EXPECT_EQ(data_or_error.value(), this->kTestData);
 }
 
 TYPED_TEST_P(FileStreamReaderTypedTest, ReadAfterModifiedWithMatchingTimes) {
@@ -194,57 +186,46 @@ TYPED_TEST_P(FileStreamReaderTypedTest, ReadAfterModifiedWithMatchingTimes) {
   std::unique_ptr<FileStreamReader> reader(
       this->CreateFileReader(std::string(this->kTestFileName), 0,
                              this->test_file_modification_time()));
-  int result = 0;
-  std::string data;
-
-  ReadFromReader(reader.get(), &data, this->kTestData.size(), &result);
-  ASSERT_EQ(net::OK, result);
-  ASSERT_EQ(this->kTestData, data);
+  auto data_or_error =
+      ReadFromReader(*reader, /*bytes_to_read=*/this->kTestData.size());
+  ASSERT_TRUE(data_or_error.has_value());
+  EXPECT_EQ(data_or_error.value(), this->kTestData);
 }
 
 TYPED_TEST_P(FileStreamReaderTypedTest, ReadAfterModifiedWithoutExpectedTime) {
-  this->TouchFile(std::string(this->kTestFileName),
-                  base::TimeDelta::FromSeconds(-1));
+  this->TouchFile(std::string(this->kTestFileName), base::Seconds(-1));
   std::unique_ptr<FileStreamReader> reader(this->CreateFileReader(
       std::string(this->kTestFileName), 0, base::Time()));
-  int result = 0;
-  std::string data;
-
-  ReadFromReader(reader.get(), &data, this->kTestData.size(), &result);
-  ASSERT_EQ(net::OK, result);
-  ASSERT_EQ(this->kTestData, data);
+  auto data_or_error =
+      ReadFromReader(*reader, /*bytes_to_read=*/this->kTestData.size());
+  ASSERT_TRUE(data_or_error.has_value());
+  EXPECT_EQ(data_or_error.value(), this->kTestData);
 }
 
 TYPED_TEST_P(FileStreamReaderTypedTest, ReadWithOffset) {
   std::unique_ptr<FileStreamReader> reader(this->CreateFileReader(
       std::string(this->kTestFileName), 3, base::Time()));
-  int result = 0;
-  std::string data;
-  ReadFromReader(reader.get(), &data, this->kTestData.size(), &result);
-  ASSERT_EQ(net::OK, result);
-
-  ASSERT_EQ(this->kTestData.substr(3), data);
+  auto data_or_error =
+      ReadFromReader(*reader, /*bytes_to_read=*/this->kTestData.size());
+  ASSERT_TRUE(data_or_error.has_value());
+  EXPECT_EQ(data_or_error.value(), this->kTestData.substr(3));
 }
 
 TYPED_TEST_P(FileStreamReaderTypedTest, ReadWithNegativeOffset) {
   std::unique_ptr<FileStreamReader> reader(this->CreateFileReader(
       std::string(this->kTestFileName), -1, base::Time()));
-  int result = 0;
-  std::string data;
-  ReadFromReader(reader.get(), &data, 1, &result);
-  ASSERT_EQ(net::ERR_INVALID_ARGUMENT, result);
-  ASSERT_EQ(data.size(), 0u);
+  auto data_or_error = ReadFromReader(*reader, /*bytes_to_read=*/1);
+  ASSERT_FALSE(data_or_error.has_value());
+  EXPECT_EQ(data_or_error.error(), net::ERR_INVALID_ARGUMENT);
 }
 
 TYPED_TEST_P(FileStreamReaderTypedTest, ReadWithOffsetLargerThanFile) {
   std::unique_ptr<FileStreamReader> reader(
       this->CreateFileReader(std::string(this->kTestFileName),
                              this->kTestData.size() + 1, base::Time()));
-  int result = 0;
-  std::string data;
-  ReadFromReader(reader.get(), &data, 1, &result);
-  ASSERT_EQ(data.size(), 0u);
-  ASSERT_EQ(net::OK, result);
+  auto data_or_error = ReadFromReader(*reader, /*bytes_to_read=*/1);
+  ASSERT_TRUE(data_or_error.has_value());
+  EXPECT_THAT(data_or_error.value(), testing::IsEmpty());
 }
 
 TYPED_TEST_P(FileStreamReaderTypedTest, DeleteWithUnfinishedRead) {
@@ -254,7 +235,7 @@ TYPED_TEST_P(FileStreamReaderTypedTest, DeleteWithUnfinishedRead) {
   net::TestCompletionCallback callback;
   scoped_refptr<net::IOBufferWithSize> buf =
       base::MakeRefCounted<net::IOBufferWithSize>(this->kTestData.size());
-  int rv = reader->Read(buf.get(), buf->size(),
+  int rv = reader->Read(buf, buf->size(),
                         base::BindOnce(&FileStreamReaderTest::NeverCalled));
   if (rv < 0)
     ASSERT_EQ(rv, net::ERR_IO_PENDING);

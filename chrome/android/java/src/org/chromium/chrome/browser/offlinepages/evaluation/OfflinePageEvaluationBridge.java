@@ -1,16 +1,21 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.offlinepages.evaluation;
 
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JNINamespace;
+import org.jni_zero.JniPtr;
+import org.jni_zero.JniType;
+import org.jni_zero.JniTypeToken;
+import org.jni_zero.JniUniquePtr;
+import org.jni_zero.NativeMethods;
+
 import org.chromium.base.Callback;
 import org.chromium.base.Log;
 import org.chromium.base.ObserverList;
 import org.chromium.base.ThreadUtils;
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.JNINamespace;
-import org.chromium.base.annotations.NativeMethods;
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskRunner;
 import org.chromium.base.task.TaskTraits;
@@ -29,19 +34,18 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 
-/**
- * Class used for offline page evaluation testing tools.
- */
+/** Class used for offline page evaluation testing tools. */
 @JNINamespace("offline_pages::android")
 public class OfflinePageEvaluationBridge {
+    @JniType("::offline_pages::android::OfflinePageEvaluationBridge")
+    interface NativeOfflinePageEvaluationBridge extends JniTypeToken {}
+
     /**
      * Observer class for notifications on changes to save page requests or offline page model which
      * are used for testing.
      */
     public abstract static class OfflinePageEvaluationObserver {
-        /**
-         * Event fired when the offline page model is loaded.
-         */
+        /** Event fired when the offline page model is loaded. */
         public void offlinePageModelLoaded() {}
 
         /**
@@ -74,8 +78,8 @@ public class OfflinePageEvaluationBridge {
     public OfflinePageEvaluationBridge(Profile profile, boolean useEvaluationScheduler) {
         ThreadUtils.assertOnUiThread();
         mNativeOfflinePageEvaluationBridge =
-                OfflinePageEvaluationBridgeJni.get().createBridgeForProfile(
-                        OfflinePageEvaluationBridge.this, profile, useEvaluationScheduler);
+                OfflinePageEvaluationBridgeJni.get()
+                        .createBridgeForProfile(this, profile, useEvaluationScheduler);
     }
 
     private static final String TAG = "OPEvalBridge";
@@ -83,34 +87,28 @@ public class OfflinePageEvaluationBridge {
     private static TaskRunner sSequencedTaskRunner =
             PostTask.createSequencedTaskRunner(TaskTraits.BEST_EFFORT_MAY_BLOCK);
 
-    private long mNativeOfflinePageEvaluationBridge;
+    private JniUniquePtr<NativeOfflinePageEvaluationBridge> mNativeOfflinePageEvaluationBridge;
     private boolean mIsOfflinePageModelLoaded;
-    private ObserverList<OfflinePageEvaluationObserver> mObservers =
-            new ObserverList<OfflinePageEvaluationObserver>();
+    private ObserverList<OfflinePageEvaluationObserver> mObservers = new ObserverList<>();
 
     private OutputStreamWriter mLogOutput;
 
     /** Destroys the native portion of the bridge. */
     public void destroy() {
-        if (mNativeOfflinePageEvaluationBridge != 0) {
-            OfflinePageEvaluationBridgeJni.get().destroy(
-                    mNativeOfflinePageEvaluationBridge, OfflinePageEvaluationBridge.this);
-            mNativeOfflinePageEvaluationBridge = 0;
+        if (mNativeOfflinePageEvaluationBridge != null) {
+            mNativeOfflinePageEvaluationBridge.destroy();
+            mNativeOfflinePageEvaluationBridge = null;
             mIsOfflinePageModelLoaded = false;
         }
         mObservers.clear();
     }
 
-    /**
-     * Add an observer of the evaluation events.
-     */
+    /** Add an observer of the evaluation events. */
     public void addObserver(OfflinePageEvaluationObserver observer) {
         mObservers.addObserver(observer);
     }
 
-    /**
-     * Remove an observer of evaluation events.
-     */
+    /** Remove an observer of evaluation events. */
     public void removeObserver(OfflinePageEvaluationObserver observer) {
         mObservers.removeObserver(observer);
     }
@@ -122,8 +120,8 @@ public class OfflinePageEvaluationBridge {
      */
     public void getAllPages(final Callback<List<OfflinePageItem>> callback) {
         List<OfflinePageItem> result = new ArrayList<>();
-        OfflinePageEvaluationBridgeJni.get().getAllPages(mNativeOfflinePageEvaluationBridge,
-                OfflinePageEvaluationBridge.this, result, callback);
+        OfflinePageEvaluationBridgeJni.get()
+                .getAllPages(mNativeOfflinePageEvaluationBridge, result, callback);
     }
 
     /**
@@ -134,28 +132,35 @@ public class OfflinePageEvaluationBridge {
      */
     public void savePageLater(final String url, final String namespace, boolean userRequested) {
         ClientId clientId = ClientId.createGuidClientIdForNamespace(namespace);
-        OfflinePageEvaluationBridgeJni.get().savePageLater(mNativeOfflinePageEvaluationBridge,
-                OfflinePageEvaluationBridge.this, url, namespace, clientId.getId(), userRequested);
+        OfflinePageEvaluationBridgeJni.get()
+                .savePageLater(
+                        mNativeOfflinePageEvaluationBridge,
+                        url,
+                        namespace,
+                        clientId.getId(),
+                        userRequested);
     }
 
     /**
      * Forces request coordinator to process the requests in the queue.
+     *
      * @param callback The callback would be invoked after the operation completes.
      * @return True if processing starts successfully and callback is expected to be called, false
-     * otherwise.
+     *     otherwise.
      */
     public boolean pushRequestProcessing(final Callback<Boolean> callback) {
-        return OfflinePageEvaluationBridgeJni.get().pushRequestProcessing(
-                mNativeOfflinePageEvaluationBridge, OfflinePageEvaluationBridge.this, callback);
+        return OfflinePageEvaluationBridgeJni.get()
+                .pushRequestProcessing(mNativeOfflinePageEvaluationBridge, callback);
     }
 
     /**
      * Gets all requests in the queue.
+     *
      * @param callback The callback would be invoked with a list of requests which are in the queue.
      */
     public void getRequestsInQueue(Callback<SavePageRequest[]> callback) {
-        OfflinePageEvaluationBridgeJni.get().getRequestsInQueue(
-                mNativeOfflinePageEvaluationBridge, OfflinePageEvaluationBridge.this, callback);
+        OfflinePageEvaluationBridgeJni.get()
+                .getRequestsInQueue(mNativeOfflinePageEvaluationBridge, callback);
     }
 
     /**
@@ -168,9 +173,8 @@ public class OfflinePageEvaluationBridge {
         for (int i = 0; i < requestIds.size(); i++) {
             ids[i] = requestIds.get(i);
         }
-        OfflinePageEvaluationBridgeJni.get().removeRequestsFromQueue(
-                mNativeOfflinePageEvaluationBridge, OfflinePageEvaluationBridge.this, ids,
-                callback);
+        OfflinePageEvaluationBridgeJni.get()
+                .removeRequestsFromQueue(mNativeOfflinePageEvaluationBridge, ids, callback);
     }
 
     public void setLogOutputFile(File outputFile) throws IOException {
@@ -187,21 +191,28 @@ public class OfflinePageEvaluationBridge {
     }
 
     @CalledByNative
-    public void log(String sourceTag, String message) {
+    public void log(
+            @JniType("std::string") String sourceTag, @JniType("std::string") String message) {
         Date date = new Date(System.currentTimeMillis());
         SimpleDateFormat formatter =
                 new SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.getDefault());
-        String logString = formatter.format(date) + ": " + sourceTag + " | " + message
-                + System.getProperty("line.separator");
+        String logString =
+                formatter.format(date)
+                        + ": "
+                        + sourceTag
+                        + " | "
+                        + message
+                        + System.getProperty("line.separator");
         Log.d(TAG, logString);
-        sSequencedTaskRunner.postTask(() -> {
-            try {
-                mLogOutput.write(logString);
-                mLogOutput.flush();
-            } catch (IOException e) {
-                Log.e(TAG, e.getMessage(), e);
-            }
-        });
+        sSequencedTaskRunner.execute(
+                () -> {
+                    try {
+                        mLogOutput.write(logString);
+                        mLogOutput.flush();
+                    } catch (IOException e) {
+                        Log.e(TAG, e.getMessage(), e);
+                    }
+                });
     }
 
     public void closeLog() {
@@ -242,12 +253,32 @@ public class OfflinePageEvaluationBridge {
     }
 
     @CalledByNative
-    private static void createOfflinePageAndAddToList(List<OfflinePageItem> offlinePagesList,
-            String url, long offlineId, String clientNamespace, String clientId, String title,
-            String filePath, long fileSize, long creationTime, int accessCount,
-            long lastAccessTimeMs, String requestOrigin) {
-        offlinePagesList.add(createOfflinePageItem(url, offlineId, clientNamespace, clientId, title,
-                filePath, fileSize, creationTime, accessCount, lastAccessTimeMs, requestOrigin));
+    private static void createOfflinePageAndAddToList(
+            List<OfflinePageItem> offlinePagesList,
+            @JniType("std::string") String url,
+            long offlineId,
+            @JniType("std::string") String clientNamespace,
+            @JniType("std::string") String clientId,
+            @JniType("std::u16string") String title,
+            @JniType("std::string") String filePath,
+            long fileSize,
+            long creationTime,
+            int accessCount,
+            long lastAccessTimeMs,
+            @JniType("std::string") String requestOrigin) {
+        offlinePagesList.add(
+                createOfflinePageItem(
+                        url,
+                        offlineId,
+                        clientNamespace,
+                        clientId,
+                        title,
+                        filePath,
+                        fileSize,
+                        creationTime,
+                        accessCount,
+                        lastAccessTimeMs,
+                        requestOrigin));
     }
 
     // This is added as a utility method in the bridge because SavePageRequest_jni.h is supposed
@@ -255,33 +286,78 @@ public class OfflinePageEvaluationBridge {
     // used to create SavePageRequest on the native side.
     @CalledByNative
     private static SavePageRequest createSavePageRequest(
-            int state, long requestId, String url, String clientIdNamespace, String clientIdId) {
-        return SavePageRequest.create(state, requestId, url, clientIdNamespace, clientIdId);
+            int state,
+            long requestId,
+            @JniType("std::string") String url,
+            @JniType("std::string") String clientIdNamespace,
+            @JniType("std::string") String clientIdId,
+            @JniType("std::string") String originString,
+            int autoFetchNotificationState) {
+        return SavePageRequest.create(
+                state,
+                requestId,
+                url,
+                clientIdNamespace,
+                clientIdId,
+                originString,
+                autoFetchNotificationState);
     }
 
-    private static OfflinePageItem createOfflinePageItem(String url, long offlineId,
-            String clientNamespace, String clientId, String title, String filePath, long fileSize,
-            long creationTime, int accessCount, long lastAccessTimeMs, String requestOrigin) {
-        return new OfflinePageItem(url, offlineId, clientNamespace, clientId, title, filePath,
-                fileSize, creationTime, accessCount, lastAccessTimeMs, requestOrigin);
+    private static OfflinePageItem createOfflinePageItem(
+            String url,
+            long offlineId,
+            String clientNamespace,
+            String clientId,
+            String title,
+            String filePath,
+            long fileSize,
+            long creationTime,
+            int accessCount,
+            long lastAccessTimeMs,
+            String requestOrigin) {
+        return new OfflinePageItem(
+                url,
+                offlineId,
+                clientNamespace,
+                clientId,
+                title,
+                filePath,
+                fileSize,
+                creationTime,
+                accessCount,
+                lastAccessTimeMs,
+                requestOrigin);
     }
 
     @NativeMethods
     interface Natives {
-        long createBridgeForProfile(OfflinePageEvaluationBridge caller, Profile profile,
+        JniUniquePtr<NativeOfflinePageEvaluationBridge> createBridgeForProfile(
+                OfflinePageEvaluationBridge caller,
+                @JniType("Profile*") Profile profile,
                 boolean useEvaluationScheduler);
-        void destroy(long nativeOfflinePageEvaluationBridge, OfflinePageEvaluationBridge caller);
-        void getAllPages(long nativeOfflinePageEvaluationBridge, OfflinePageEvaluationBridge caller,
-                List<OfflinePageItem> offlinePages, final Callback<List<OfflinePageItem>> callback);
-        void savePageLater(long nativeOfflinePageEvaluationBridge,
-                OfflinePageEvaluationBridge caller, String url, String clientNamespace,
-                String clientId, boolean userRequested);
-        boolean pushRequestProcessing(long nativeOfflinePageEvaluationBridge,
-                OfflinePageEvaluationBridge caller, Callback<Boolean> callback);
-        void getRequestsInQueue(long nativeOfflinePageEvaluationBridge,
-                OfflinePageEvaluationBridge caller, final Callback<SavePageRequest[]> callback);
-        void removeRequestsFromQueue(long nativeOfflinePageEvaluationBridge,
-                OfflinePageEvaluationBridge caller, long[] requestIds,
-                final Callback<Integer> callback);
+
+        void getAllPages(
+                JniPtr<NativeOfflinePageEvaluationBridge> self,
+                List<OfflinePageItem> offlinePages,
+                Callback<List<OfflinePageItem>> callback);
+
+        void savePageLater(
+                JniPtr<NativeOfflinePageEvaluationBridge> self,
+                @JniType("std::string") String url,
+                @JniType("std::string") String clientNamespace,
+                @JniType("std::string") String clientId,
+                boolean userRequested);
+
+        boolean pushRequestProcessing(
+                JniPtr<NativeOfflinePageEvaluationBridge> self, Callback<Boolean> callback);
+
+        void getRequestsInQueue(
+                JniPtr<NativeOfflinePageEvaluationBridge> self,
+                Callback<SavePageRequest[]> callback);
+
+        void removeRequestsFromQueue(
+                JniPtr<NativeOfflinePageEvaluationBridge> self,
+                @JniType("std::vector<int64_t>") long[] requestIds,
+                Callback<Integer> callback);
     }
 }

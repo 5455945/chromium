@@ -1,23 +1,26 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ANDROID_WEBVIEW_BROWSER_RENDERER_HOST_AW_RENDER_VIEW_HOST_EXT_H_
 #define ANDROID_WEBVIEW_BROWSER_RENDERER_HOST_AW_RENDER_VIEW_HOST_EXT_H_
 
+#include <optional>
+
+#include "base/memory/raw_ptr.h"
 #include "content/public/browser/web_contents_observer.h"
 
 #include "android_webview/common/mojom/frame.mojom.h"
-#include "base/callback_forward.h"
-#include "base/macros.h"
-#include "base/sequence_checker.h"
-#include "content/public/browser/web_contents_receiver_set.h"
+#include "base/functional/callback_forward.h"
+#include "content/public/browser/global_routing_id.h"
+#include "content/public/browser/render_frame_host_receiver_set.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/geometry/size_f.h"
+#include "url/origin.h"
 
 namespace android_webview {
 
@@ -37,32 +40,34 @@ class AwRenderViewHostExtClient {
 class AwRenderViewHostExt : public content::WebContentsObserver,
                             mojom::FrameHost {
  public:
+  // Binds the Mojo receiver for the FrameHost endpoint to the
+  // AwRenderViewHostExt associated with the RenderFrameHost.
+  static void BindFrameHost(
+      mojo::PendingAssociatedReceiver<mojom::FrameHost> receiver,
+      content::RenderFrameHost* rfh);
+
   // To send receive messages to a RenderView we take the WebContents instance,
   // as it internally handles RenderViewHost instances changing underneath us.
   AwRenderViewHostExt(
       AwRenderViewHostExtClient* client, content::WebContents* contents);
+
+  AwRenderViewHostExt(const AwRenderViewHostExt&) = delete;
+  AwRenderViewHostExt& operator=(const AwRenderViewHostExt&) = delete;
+
   ~AwRenderViewHostExt() override;
 
   // |result| will be invoked with the outcome of the request.
   using DocumentHasImagesResult = base::OnceCallback<void(bool)>;
   void DocumentHasImages(DocumentHasImagesResult result);
 
-  // Do a hit test at the view port coordinates and asynchronously update
-  // |last_hit_test_data_|. Width and height in |touch_area| are in density
-  // independent pixels used by blink::WebView.
-  void RequestNewHitTestDataAt(const gfx::PointF& touch_center,
-                               const gfx::SizeF& touch_area);
-
-  // Optimization to avoid unnecessary Java object creation on hit test.
-  bool HasNewHitTestData() const;
-  void MarkHitTestDataRead();
-
   // Return |last_hit_test_data_|. Note that this is unavoidably racy;
   // the corresponding public WebView API is as well.
-  const mojom::HitTestData& GetLastHitTestData() const;
+  mojom::HitTestDataPtr TakeLastHitTestData();
 
-  // Sets the zoom factor for text only. Used in layout modes other than
-  // Text Autosizing.
+  // Sets the zoom factor for text only.
+  // NOTE: When modifying behavior related to setTextZoom, please e-mail
+  // webview-font-settings@google.com as an FYI. Googlers, more info is
+  // available at go/webview-font-settings.
   void SetTextZoomFactor(float factor);
 
   void ResetScrollAndScaleState();
@@ -74,11 +79,15 @@ class AwRenderViewHostExt : public content::WebContentsObserver,
 
   void SmoothScroll(int target_x, int target_y, base::TimeDelta duration);
 
+  // Asks the renderer to dispatch a "message" event at the main frame's
+  // window on behalf of the embedding application. A null `target_origin`
+  // acts as a wildcard. See android_webview.mojom.LocalMainFrame.
+  void PostEmbedderMessageEvent(
+      const std::optional<url::Origin>& target_origin,
+      mojom::EmbedderTransferableMessagePtr message);
+
  private:
   // content::WebContentsObserver implementation.
-  void RenderFrameCreated(content::RenderFrameHost* frame_host) override;
-  void RenderFrameHostChanged(content::RenderFrameHost* old_host,
-                              content::RenderFrameHost* new_host) override;
   void DidStartNavigation(
       content::NavigationHandle* navigation_handle) override;
   void DidFinishNavigation(
@@ -92,34 +101,26 @@ class AwRenderViewHostExt : public content::WebContentsObserver,
   void ShouldOverrideUrlLoading(
       const std::u16string& url,
       bool has_user_gesture,
-      bool is_redirect,
-      bool is_main_frame,
       ShouldOverrideUrlLoadingCallback callback) override;
 
-  bool IsRenderViewReady() const;
+  mojom::LocalMainFrame* GetLocalMainFrameRemote();
 
-  void ResetLocalMainFrameRemote(content::RenderFrameHost* frame_host);
-
-  AwRenderViewHostExtClient* client_;
+  raw_ptr<AwRenderViewHostExtClient> client_;
 
   // Authoritative copy of hit test data on the browser side. This is updated
   // as a result of DoHitTest called explicitly or when the FocusedNodeChanged
   // is called in AwRenderViewExt.
   android_webview::mojom::HitTestDataPtr last_hit_test_data_;
 
-  bool has_new_hit_test_data_;
-
   // Some WebView users might want to show their own error pages / logic.
   bool will_suppress_error_page_ = false;
 
-  content::WebContentsFrameReceiverSet<mojom::FrameHost> frame_host_receivers_;
+  content::GlobalRenderFrameHostId main_frame_global_id_;
+
+  content::RenderFrameHostReceiverSet<mojom::FrameHost> frame_host_receivers_;
 
   // Associated channel to the webview LocalMainFrame extensions.
   mojo::AssociatedRemote<mojom::LocalMainFrame> local_main_frame_remote_;
-
-  SEQUENCE_CHECKER(sequence_checker_);
-
-  DISALLOW_COPY_AND_ASSIGN(AwRenderViewHostExt);
 };
 
 }  // namespace android_webview

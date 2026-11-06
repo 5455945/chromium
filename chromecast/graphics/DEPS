@@ -1,7 +1,8 @@
 include_rules = [
+  "+chromecast/starboard/chromecast/events",
   "+chromecast/ui",
-  "+components/exo",
   "+components/viz/common/frame_sinks",
+  "+ui/accessibility/platform",
   "+ui/aura",
   "+ui/base",
   "+ui/base/ime",
@@ -13,6 +14,7 @@ include_rules = [
   "+ui/gl/test",
   "+ui/ozone/public",
   "+ui/platform_window",
+  "+ui/touch_selection",
   "+ui/views",
   "+ui/wm/core",
   "+ui/wm/public",
@@ -20,7 +22,7 @@ include_rules = [
 ]
 
 specific_include_rules = {
-  "run_all_unittests\.cc": [
+  "run_all_unittests\\.cc": [
       "+mojo/core/embedder",
   ]
 }

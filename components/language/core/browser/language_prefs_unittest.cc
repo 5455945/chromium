@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,12 +10,15 @@
 #include <utility>
 #include <vector>
 
+#include "base/i18n/language_tag.h"
 #include "base/json/json_reader.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/test_timeouts.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "components/language/core/browser/language_prefs_test_util.h"
 #include "components/language/core/browser/pref_names.h"
+#include "components/language/core/common/language_experiments.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -24,17 +27,6 @@
 using testing::ElementsAreArray;
 
 namespace language {
-
-static void ExpectEqualLanguageLists(
-    const base::Value* language_values,
-    const std::vector<std::string>& languages) {
-  const int input_size = languages.size();
-  ASSERT_EQ(input_size, static_cast<int>(language_values->GetList().size()));
-  for (int i = 0; i < input_size; ++i) {
-    std::string value = language_values->GetList()[i].GetString();
-    EXPECT_EQ(languages[i], value);
-  }
-}
 
 class LanguagePrefsTest : public testing::Test {
  protected:
@@ -46,138 +38,14 @@ class LanguagePrefsTest : public testing::Test {
 
   void SetUp() override {
     prefs_->SetString(language::prefs::kAcceptLanguages, std::string());
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     prefs_->SetString(language::prefs::kPreferredLanguages, std::string());
 #endif
-  }
-
-  void ExpectFluentLanguageListContent(
-      const std::vector<std::string>& list) const {
-    const base::Value* values = prefs_->Get(language::prefs::kFluentLanguages);
-    DCHECK(values);
-    ExpectEqualLanguageLists(values, list);
   }
 
   std::unique_ptr<sync_preferences::TestingPrefServiceSyncable> prefs_;
   std::unique_ptr<language::LanguagePrefs> language_prefs_;
 };
-
-TEST_F(LanguagePrefsTest, SetFluentTest) {
-  // `en` is a default fluent language, it should be present already.
-  ExpectFluentLanguageListContent({"en"});
-
-  // One language.
-  language_prefs_->SetFluent("fr-CA");
-  ExpectFluentLanguageListContent({"en", "fr"});
-
-  // Add a few more.
-  language_prefs_->SetFluent("es-AR");
-  language_prefs_->SetFluent("de-de");
-  ExpectFluentLanguageListContent({"en", "fr", "es", "de"});
-
-  // Add a duplicate.
-  language_prefs_->ResetFluentLanguagesToDefaults();
-  ExpectFluentLanguageListContent({"en"});
-  language_prefs_->SetFluent("es-AR");
-  language_prefs_->SetFluent("es-AR");
-  ExpectFluentLanguageListContent({"en", "es"});
-
-  // Two languages with the same base.
-  language_prefs_->ResetFluentLanguagesToDefaults();
-  language_prefs_->SetFluent("fr-CA");
-  language_prefs_->SetFluent("fr-FR");
-  ExpectFluentLanguageListContent({"en", "fr"});
-
-  // Chinese is a special case.
-  language_prefs_->ResetFluentLanguagesToDefaults();
-  language_prefs_->SetFluent("zh-MO");
-  language_prefs_->SetFluent("zh-CN");
-  ExpectFluentLanguageListContent({"en", "zh-TW", "zh-CN"});
-
-  language_prefs_->ResetFluentLanguagesToDefaults();
-  language_prefs_->SetFluent("zh-TW");
-  language_prefs_->SetFluent("zh-HK");
-  ExpectFluentLanguageListContent({"en", "zh-TW"});
-}
-
-TEST_F(LanguagePrefsTest, ClearFluentTest) {
-  // Language in the list.
-  // Should not clear fluent for last language.
-  language_prefs_->ClearFluent("en-UK");
-  ExpectFluentLanguageListContent({"en"});
-
-  // Language in the list but with different region.
-  // Should not clear fluent for last language.
-  language_prefs_->ClearFluent("en-AU");
-  ExpectFluentLanguageListContent({"en"});
-
-  // Language in the list.
-  language_prefs_->ResetFluentLanguagesToDefaults();
-  language_prefs_->SetFluent("fr");
-  language_prefs_->ClearFluent("en-UK");
-  ExpectFluentLanguageListContent({"fr"});
-
-  // Language in the list but with different region.
-  language_prefs_->ResetFluentLanguagesToDefaults();
-  language_prefs_->SetFluent("fr");
-  language_prefs_->ClearFluent("en-AU");
-  ExpectFluentLanguageListContent({"fr"});
-
-  // Multiple languages.
-  language_prefs_->ResetFluentLanguagesToDefaults();
-  language_prefs_->SetFluent("fr-CA");
-  language_prefs_->SetFluent("fr-FR");
-  language_prefs_->SetFluent("es-AR");
-  language_prefs_->ClearFluent("fr-FR");
-  ExpectFluentLanguageListContent({"en", "es"});
-
-  // Chinese is a special case.
-  language_prefs_->ResetFluentLanguagesToDefaults();
-  language_prefs_->SetFluent("zh-MO");
-  language_prefs_->SetFluent("zh-CN");
-  language_prefs_->ClearFluent("zh-TW");
-  ExpectFluentLanguageListContent({"en", "zh-CN"});
-
-  language_prefs_->ResetFluentLanguagesToDefaults();
-  language_prefs_->SetFluent("zh-MO");
-  language_prefs_->SetFluent("zh-CN");
-  language_prefs_->ClearFluent("zh-CN");
-  ExpectFluentLanguageListContent({"en", "zh-TW"});
-}
-
-TEST_F(LanguagePrefsTest, ResetEmptyFluentLanguagesToDefaultTest) {
-  ExpectFluentLanguageListContent({"en"});
-
-  language_prefs_->ResetEmptyFluentLanguagesToDefault();
-  ExpectFluentLanguageListContent({"en"});
-
-  language_prefs_->SetFluent("fr");
-  language_prefs_->ResetEmptyFluentLanguagesToDefault();
-  ExpectFluentLanguageListContent({"en", "fr"});
-
-  prefs_->Set(language::prefs::kFluentLanguages,
-              base::Value(base::Value::Type::LIST));
-  ExpectFluentLanguageListContent({});
-  language_prefs_->ResetEmptyFluentLanguagesToDefault();
-  ExpectFluentLanguageListContent({"en"});
-}
-
-TEST_F(LanguagePrefsTest, GetFluentLanguagesTest) {
-  // Default Fluent language is "en".
-  EXPECT_THAT(language_prefs_->GetFluentLanguages(), ElementsAreArray({"en"}));
-
-  // Add two languages with the same base.
-  language_prefs_->SetFluent("fr-FR");
-  language_prefs_->SetFluent("fr-CA");
-  EXPECT_THAT(language_prefs_->GetFluentLanguages(),
-              ElementsAreArray({"en", "fr"}));
-
-  // Add language that comes before English alphabetically. It should be
-  // appended to the list.
-  language_prefs_->SetFluent("af");
-  EXPECT_THAT(language_prefs_->GetFluentLanguages(),
-              ElementsAreArray({"en", "fr", "af"}));
-}
 
 TEST_F(LanguagePrefsTest, GetFirstLanguageTest) {
   EXPECT_EQ("a", language::GetFirstLanguage("a,b,c"));
@@ -205,20 +73,14 @@ TEST_F(LanguagePrefsTest, UpdateLanguageList) {
   content_languages_tester.ExpectAcceptLanguagePrefs("en,ja,it");
 
   // Locale-specific codes.
-  // The list is exanded by adding the base languagese.
   languages = {"en-US", "ja", "en-CA", "fr-CA"};
   language_prefs_->SetUserSelectedLanguagesList(languages);
   content_languages_tester.ExpectAcceptLanguagePrefs("en-US,ja,en-CA,fr-CA");
-
-  // List already expanded.
-  languages = {"en-US", "en", "fr", "fr-CA"};
-  language_prefs_->SetUserSelectedLanguagesList(languages);
-  content_languages_tester.ExpectAcceptLanguagePrefs("en-US,en,fr,fr-CA");
 }
 
 TEST_F(LanguagePrefsTest, UpdateForcedLanguageList) {
   // Only test policy-forced languages on non-Chrome OS platforms.
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   GTEST_SKIP();
 #else
   language::test::LanguagePrefTester content_languages_tester =
@@ -294,18 +156,104 @@ TEST_F(LanguagePrefsTest, ResetLanguagePrefs) {
   language_prefs_->SetUserSelectedLanguagesList({"en", "es", "fr"});
   content_languages_tester.ExpectSelectedLanguagePrefs("en,es,fr");
   content_languages_tester.ExpectAcceptLanguagePrefs("en,es,fr");
+#if BUILDFLAG(IS_ANDROID)
+  language_prefs_->SetULPLanguages({base::i18n::GetKnownLanguageTag("en"),
+                                    base::i18n::GetKnownLanguageTag("es"),
+                                    base::i18n::GetKnownLanguageTag("fr")});
+  EXPECT_THAT(language_prefs_->GetULPLanguages(),
+              testing::ElementsAre("en", "es", "fr"));
+#endif
 
   ResetLanguagePrefs(prefs_.get());
+#if BUILDFLAG(IS_ANDROID)
+  EXPECT_THAT(language_prefs_->GetULPLanguages(), testing::IsEmpty());
+#endif
   content_languages_tester.ExpectSelectedLanguagePrefs("");
   // Accept languages pref is reset to the default value, not cleared.
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   content_languages_tester.ExpectAcceptLanguagePrefs(
       prefs_->GetDefaultPrefValue(language::prefs::kPreferredLanguages)
           ->GetString());
-#else   // BUILDFLAG(IS_CHROMEOS_ASH)
+#else   // BUILDFLAG(IS_CHROMEOS)
   content_languages_tester.ExpectAcceptLanguagePrefs(
       prefs_->GetDefaultPrefValue(language::prefs::kAcceptLanguages)
           ->GetString());
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 }
+
+TEST_F(LanguagePrefsTest, ULPLanguagesPref) {
+#if BUILDFLAG(IS_ANDROID)
+  // ULPLanguagesPref is initially empty.
+  EXPECT_THAT(language_prefs_->GetULPLanguages(), testing::IsEmpty());
+
+  // Set ULP Language Preference.
+  language_prefs_->SetULPLanguages({base::i18n::GetKnownLanguageTag("en"),
+                                    base::i18n::GetKnownLanguageTag("es"),
+                                    base::i18n::GetKnownLanguageTag("fr")});
+  EXPECT_THAT(language_prefs_->GetULPLanguages(),
+              testing::ElementsAre("en", "es", "fr"));
+
+  // Setting ULP languages to a new list clears the old list.
+  language_prefs_->SetULPLanguages({base::i18n::GetKnownLanguageTag("de"),
+                                    base::i18n::GetKnownLanguageTag("pt"),
+                                    base::i18n::GetKnownLanguageTag("zh")});
+  EXPECT_THAT(language_prefs_->GetULPLanguages(),
+              testing::ElementsAre("de", "pt", "zh"));
+
+  // Setting ULP languages to a an empty list clears it.
+  language_prefs_->SetULPLanguages({});
+  EXPECT_THAT(language_prefs_->GetULPLanguages(), testing::IsEmpty());
+#endif
+}
+TEST_F(LanguagePrefsTest, GetIncognitoLanguageListTest) {
+  // Test mapping from generated map.
+  // For example "fr" should map to "fr-FR,fr,en-US,en" based on
+  // components_locale_settings_fr.xtb.
+  EXPECT_EQ("en-US,en", language::GetIncognitoLanguageList("en,fr"));
+  EXPECT_EQ("en-US,en", language::GetIncognitoLanguageList("en-US,fr"));
+  EXPECT_EQ("fr-FR,fr,en-US,en",
+            language::GetIncognitoLanguageList("fr,en-US"));
+  EXPECT_EQ("zh-CN,zh", language::GetIncognitoLanguageList("zh-CN,zh"));
+
+  // Test fallback heuristic for language not in map.
+  EXPECT_EQ("as,en-US,en", language::GetIncognitoLanguageList("as,en-US"));
+  EXPECT_EQ("zz,en-US,en", language::GetIncognitoLanguageList("zz,en-US"));
+
+  // Test empty or single language cases (should return unchanged).
+  EXPECT_EQ("", language::GetIncognitoLanguageList(""));
+  EXPECT_EQ("fr", language::GetIncognitoLanguageList("fr"));
+  EXPECT_EQ("zh-CN", language::GetIncognitoLanguageList("zh-CN"));
+  EXPECT_EQ("en", language::GetIncognitoLanguageList("en"));
+  EXPECT_EQ("en-US", language::GetIncognitoLanguageList("en-US"));
+}
+
+TEST_F(LanguagePrefsTest, GetLanguageWithDefaultLimits) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(kReduceAcceptLanguageCount);
+
+  EXPECT_EQ("en-US,ja,en-CA,fr-CA,zh-CN,en-GB,es,ru,pt,it",
+            language::GetLanguagesWithMaxCount(
+                "en-US,ja,en-CA,fr-CA,zh-CN,en-GB,es,ru,pt,it,ko"));
+}
+
+TEST_F(LanguagePrefsTest, GetLanguageWithCustomLimits) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeatureWithParameters(
+      kReduceAcceptLanguageCount, {{kMaxAcceptLanguage.name, "5"}});
+
+  EXPECT_EQ("en-US,ja,en-CA,fr-CA,zh-CN",
+            language::GetLanguagesWithMaxCount(
+                "en-US,ja,en-CA,fr-CA,zh-CN,en-GB,es,ru,pt,it,ko"));
+}
+
+TEST_F(LanguagePrefsTest, GetLanguageWithInvalidLimits) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeatureWithParameters(
+      kReduceAcceptLanguageCount, {{kMaxAcceptLanguage.name, "0"}});
+
+  EXPECT_EQ("en-US,ja,en-CA,fr-CA,zh-CN,en-GB,es,ru,pt,it,ko",
+            language::GetLanguagesWithMaxCount(
+                "en-US,ja,en-CA,fr-CA,zh-CN,en-GB,es,ru,pt,it,ko"));
+}
+
 }  // namespace language

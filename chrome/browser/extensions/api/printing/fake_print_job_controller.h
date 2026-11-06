@@ -1,54 +1,43 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_EXTENSIONS_API_PRINTING_FAKE_PRINT_JOB_CONTROLLER_H_
 #define CHROME_BROWSER_EXTENSIONS_API_PRINTING_FAKE_PRINT_JOB_CONTROLLER_H_
 
-#include "base/containers/flat_map.h"
-#include "chrome/browser/extensions/api/printing/print_job_controller.h"
-
-namespace chromeos {
-class CupsPrintersManager;
-class TestCupsPrintJobManager;
-}  // namespace chromeos
+#include "base/memory/weak_ptr.h"
+#include "chrome/browser/printing/print_job_controller.h"
 
 namespace extensions {
 
 // Fake print job controller which doesn't send print jobs to actual printing
 // pipeline.
 // It's used in unit and API integration tests.
-class FakePrintJobController : public PrintJobController {
+class FakePrintJobController : public printing::PrintJobController {
  public:
-  FakePrintJobController(chromeos::TestCupsPrintJobManager* print_job_manager,
-                         chromeos::CupsPrintersManager* printers_manager);
+  FakePrintJobController();
   ~FakePrintJobController() override;
 
-  // PrintJobController:
-  void StartPrintJob(const std::string& extension_id,
-                     std::unique_ptr<printing::MetafileSkia> metafile,
-                     std::unique_ptr<printing::PrintSettings> settings,
-                     StartPrintJobCallback callback) override;
-  bool CancelPrintJob(const std::string& job_id) override;
-  void OnPrintJobCreated(
-      const std::string& extension_id,
-      const std::string& job_id,
-      base::WeakPtr<chromeos::CupsPrintJob> cups_job) override;
-  void OnPrintJobFinished(const std::string& job_id) override;
+  // If `fail_` is set, call OnFailed() instead of OnDocDone().
+  void set_fail(bool fail) { fail_ = fail; }
 
-  // Helper method to be used in tests to access ongoing print jobs.
-  chromeos::CupsPrintJob* GetCupsPrintJob(const std::string& job_id);
+  // PrintJobController:
+  void CreatePrintJob(std::unique_ptr<printing::MetafileSkia> pdf,
+                      std::unique_ptr<printing::PrintSettings> settings,
+                      uint32_t page_count,
+                      printing::PrintJob::Source source,
+                      const std::string& source_id,
+                      PrintJobCreatedCallback callback) override;
 
  private:
-  // Not owned by FakePrintJobController.
-  chromeos::TestCupsPrintJobManager* print_job_manager_;
-  chromeos::CupsPrintersManager* printers_manager_;
+  void CreatePrintJobImpl(scoped_refptr<printing::PrintJob> job,
+                          std::unique_ptr<printing::PrintSettings> settings);
 
-  // Stores ongoing print jobs as a mapping from job id to CupsPrintJob.
-  base::flat_map<std::string, std::unique_ptr<chromeos::CupsPrintJob>> jobs_;
-
+  bool fail_ = false;
   // Current job id.
   int job_id_ = 0;
+
+  base::WeakPtrFactory<FakePrintJobController> weak_ptr_factory_{this};
 };
 
 }  // namespace extensions

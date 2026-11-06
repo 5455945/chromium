@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,18 +13,21 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/json/json_writer.h"
 #include "base/memory/ptr_util.h"
+#include "base/strings/escape.h"
 #include "base/strings/string_util.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
+#include "base/values.h"
 #include "build/build_config.h"
-#include "chrome/common/available_offline_content.mojom.h"
-#include "chrome/renderer/net/available_offline_content_helper.h"
 #include "components/error_page/common/error.h"
 #include "components/error_page/common/net_error_info.h"
+#include "components/grit/components_resources.h"
+#include "components/strings/grit/components_strings.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/test/mock_render_thread.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -32,11 +35,13 @@
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "net/base/net_errors.h"
 #include "net/dns/public/resolve_error_info.h"
+#include "skia/ext/skia_utils_base.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "url/gurl.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include "chrome/common/offline_page_auto_fetcher.mojom.h"
 #endif
 
@@ -82,6 +87,19 @@ std::string NetErrorString(net::Error net_error) {
   return ErrorToString(NetError(net_error), false);
 }
 
+error_page::LocalizedError::PageState GetErrorPageState(int error_code,
+                                                        bool is_kiosk_mode) {
+  return error_page::LocalizedError::GetPageState(
+      error_code, error_page::Error::kNetErrorDomain, GURL(kFailedUrl),
+      /*is_post=*/false,
+      /*is_secure_dns_network_error=*/false, /*stale_copy_in_cache=*/false,
+      /*can_show_network_diagnostics_dialog=*/false, /*is_incognito=*/false,
+      /*auto_fetch_feature_enabled=*/false, /*is_kiosk_mode=*/is_kiosk_mode,
+      /*locale=*/"",
+      /*is_blocked_by_extension=*/false,
+      /*error_page_params=*/nullptr);
+}
+
 class NetErrorHelperCoreTest : public testing::Test,
                                public NetErrorHelperCore::Delegate {
  public:
@@ -124,11 +142,6 @@ class NetErrorHelperCoreTest : public testing::Test,
     return last_can_show_network_diagnostics_dialog_;
   }
 
-  void set_offline_content_feature_enabled(
-      bool offline_content_feature_enabled) {
-    offline_content_feature_enabled_ = offline_content_feature_enabled;
-  }
-
   bool list_visible_by_prefs() const { return list_visible_by_prefs_; }
 
   void set_auto_fetch_allowed(bool allowed) { auto_fetch_allowed_ = allowed; }
@@ -145,10 +158,10 @@ class NetErrorHelperCoreTest : public testing::Test,
     return offline_content_summary_json_;
   }
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   // State of auto fetch, as reported to Delegate. Unset if SetAutoFetchState
   // was not called.
-  absl::optional<chrome::mojom::OfflinePageAutoFetcherScheduleResult>
+  std::optional<chrome::mojom::OfflinePageAutoFetcherScheduleResult>
   auto_fetch_state() const {
     return auto_fetch_state_;
   }
@@ -161,7 +174,8 @@ class NetErrorHelperCoreTest : public testing::Test,
     std::string html;
     core()->PrepareErrorPage(NetErrorHelperCore::MAIN_FRAME,
                              NetErrorForURL(error, url),
-                             false /* is_failed_post */, &html);
+                             /*is_failed_post=*/false,
+                             /*alternative_error_page_info=*/nullptr, &html);
     EXPECT_FALSE(html.empty());
     EXPECT_EQ(NetErrorStringForURL(error, url), html);
 
@@ -187,7 +201,6 @@ class NetErrorHelperCoreTest : public testing::Test,
   error_page::LocalizedError::PageState GetPageState() const {
     error_page::LocalizedError::PageState result;
     result.auto_fetch_allowed = auto_fetch_allowed_;
-    result.offline_content_feature_enabled = offline_content_feature_enabled_;
     result.is_offline_error = is_offline_error_;
     return result;
   }
@@ -197,7 +210,9 @@ class NetErrorHelperCoreTest : public testing::Test,
       const error_page::Error& error,
       bool is_failed_post,
       bool can_show_network_diagnostics_dialog,
-      std::string* html) const override {
+      content::mojom::AlternativeErrorPageOverrideInfoPtr
+          alternative_error_page_info,
+      std::string* html) override {
     last_can_show_network_diagnostics_dialog_ =
         can_show_network_diagnostics_dialog;
 
@@ -233,18 +248,13 @@ class NetErrorHelperCoreTest : public testing::Test,
     diagnose_error_url_ = page_url;
   }
 
+  void PortalSignin() override {}
+
   void DownloadPageLater() override { download_count_++; }
 
   void SetIsShowingDownloadButton(bool show) override {}
 
-  void OfflineContentAvailable(
-      bool list_visible_by_prefs,
-      const std::string& offline_content_json) override {
-    list_visible_by_prefs_ = list_visible_by_prefs;
-    offline_content_json_ = offline_content_json;
-  }
-
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   void SetAutoFetchState(
       chrome::mojom::OfflinePageAutoFetcherScheduleResult result) override {
     auto_fetch_state_ = result;
@@ -278,11 +288,10 @@ class NetErrorHelperCoreTest : public testing::Test,
   bool list_visible_by_prefs_;
   std::string offline_content_json_;
   std::string offline_content_summary_json_;
-#if defined(OS_ANDROID)
-  absl::optional<chrome::mojom::OfflinePageAutoFetcherScheduleResult>
+#if BUILDFLAG(IS_ANDROID)
+  std::optional<chrome::mojom::OfflinePageAutoFetcherScheduleResult>
       auto_fetch_state_;
 #endif
-  bool offline_content_feature_enabled_ = false;
   bool is_offline_error_ = false;
   bool auto_fetch_allowed_ = false;
 
@@ -307,9 +316,9 @@ TEST_F(NetErrorHelperCoreTest, SuccessfulPageLoad) {
 TEST_F(NetErrorHelperCoreTest, MainFrameNonDnsError) {
   // An error page is requested.
   std::string html;
-  core()->PrepareErrorPage(NetErrorHelperCore::MAIN_FRAME,
-                           NetError(net::ERR_CONNECTION_RESET),
-                           false /* is_failed_post */, &html);
+  core()->PrepareErrorPage(
+      NetErrorHelperCore::MAIN_FRAME, NetError(net::ERR_CONNECTION_RESET),
+      /*is_failed_post=*/false, /*alternative_error_page_info=*/nullptr, &html);
   // Should have returned a local error page.
   EXPECT_FALSE(html.empty());
   EXPECT_EQ(NetErrorString(net::ERR_CONNECTION_RESET), html);
@@ -328,9 +337,9 @@ TEST_F(NetErrorHelperCoreTest, MainFrameNonDnsErrorSpuriousStatus) {
   // Loading fails, and an error page is requested.
   std::string html;
   core()->OnNetErrorInfo(error_page::DNS_PROBE_FINISHED_NXDOMAIN);
-  core()->PrepareErrorPage(NetErrorHelperCore::MAIN_FRAME,
-                           NetError(net::ERR_CONNECTION_RESET),
-                           false /* is_failed_post */, &html);
+  core()->PrepareErrorPage(
+      NetErrorHelperCore::MAIN_FRAME, NetError(net::ERR_CONNECTION_RESET),
+      /*is_failed_post=*/false, /*alternative_error_page_info=*/nullptr, &html);
   core()->OnNetErrorInfo(error_page::DNS_PROBE_FINISHED_NXDOMAIN);
 
   // Should have returned a local error page.
@@ -350,12 +359,236 @@ TEST_F(NetErrorHelperCoreTest, MainFrameNonDnsErrorSpuriousStatus) {
   EXPECT_EQ(0, update_count());
 }
 
+TEST_F(NetErrorHelperCoreTest,
+       UserModeErrBlockedByAdministratorContainsDetails) {
+  error_page::LocalizedError::PageState page_state = GetErrorPageState(
+      net::ERR_BLOCKED_BY_ADMINISTRATOR, /*is_kiosk_mode=*/false);
+
+  auto* suggestions_details = page_state.strings.FindList("suggestionsDetails");
+  ASSERT_TRUE(suggestions_details);
+  ASSERT_TRUE(suggestions_details->empty());
+
+  auto* suggestions_summary_list =
+      page_state.strings.FindList("suggestionsSummaryList");
+  ASSERT_TRUE(suggestions_summary_list);
+  EXPECT_TRUE(suggestions_summary_list->empty());
+}
+
+TEST_F(NetErrorHelperCoreTest,
+       KioskModeErrBlockedByAdministratorDoenNotContainDetails) {
+  error_page::LocalizedError::PageState page_state = GetErrorPageState(
+      net::ERR_BLOCKED_BY_ADMINISTRATOR, /*is_kiosk_mode=*/true);
+
+  auto* suggestions_details = page_state.strings.FindList("suggestionsDetails");
+  ASSERT_TRUE(suggestions_details);
+  EXPECT_TRUE(suggestions_details->empty());
+
+  auto* suggestions_summary_list =
+      page_state.strings.FindList("suggestionsSummaryList");
+  ASSERT_TRUE(suggestions_summary_list);
+  EXPECT_TRUE(suggestions_summary_list->empty());
+}
+
+TEST_F(NetErrorHelperCoreTest, GetErrorPageStateStringPlaceholders) {
+  // Use a URL that contains non-escaped characters to ensure they are properly
+  // escaped when embedded in HTML strings returned to the frontend.
+  const std::string failed_url_string(
+      "https://does_not_exist_url.com/foo?bar=<hello>&baz=other");
+  const std::string failed_url_string_escaped =
+      base::EscapeForHTML(failed_url_string);
+  const GURL failed_url(failed_url_string);
+  const std::string failed_url_host(failed_url.GetHost());
+
+  struct FieldWithPlaceholder {
+    std::string_view key;
+    std::string_view value;
+  };
+
+  struct TestCase {
+    std::string_view description;
+    int error_code;
+    std::string_view error_domain;
+    std::vector<FieldWithPlaceholder> fields;
+  };
+
+  const TestCase test_cases[] = {
+      // error_page::Error::kHttpErrorDomain cases.
+
+      {
+          "case for IDS_ERRORPAGES_HEADING_NOT_FOUND, "
+          "IDS_ERRORPAGES_SUMMARY_NOT_FOUND",
+          404,
+          error_page::Error::kHttpErrorDomain,
+          {
+              {"heading.msg", failed_url_host},
+              {"summary.msg", failed_url_string_escaped},
+          },
+      },
+      {
+          "case IDS_ERRORPAGES_SUMMARY_GATEWAY_TIMEOUT",
+          504,
+          error_page::Error::kHttpErrorDomain,
+          {{"summary.msg", failed_url_host}},
+      },
+      {
+          "case IDS_ERRORPAGES_SUMMARY_WEBSITE_CANNOT_HANDLE_REQUEST",
+          500,
+          error_page::Error::kHttpErrorDomain,
+          {{"summary.msg", failed_url_host}},
+      },
+
+      // error_page::DNS_PROBE_FINISHED_NXDOMAIN cases.
+
+      {
+          "case IDS_ERRORPAGES_CHECK_TYPO_SUMMARY",
+          error_page::DNS_PROBE_FINISHED_NXDOMAIN,
+          error_page::Error::kDnsProbeErrorDomain,
+          {{"summary.msg", failed_url_host}},
+      },
+      {
+          "case IDS_ERRORPAGES_SUMMARY_DNS_PROBE_RUNNING",
+          error_page::DNS_PROBE_POSSIBLE,
+          error_page::Error::kDnsProbeErrorDomain,
+          {{"summary.msg", failed_url_host}},
+      },
+
+      // error_page::Error::kNetErrorDomain cases.
+
+      {
+          "case IDS_ERRORPAGES_HEADING_ACCESS_DENIED, "
+          "IDS_ERRORPAGES_SUMMARY_BAD_SSL_CLIENT_AUTH_CERT",
+          net::ERR_BAD_SSL_CLIENT_AUTH_CERT,
+          error_page::Error::kNetErrorDomain,
+          {
+              {"heading.msg", failed_url_host},
+              {"summary.msg", failed_url_host},
+          },
+      },
+      {
+          "case IDS_ERRORPAGES_HEADING_BLOCKED",
+          net::ERR_BLOCKED_BY_CLIENT,
+          error_page::Error::kNetErrorDomain,
+          {{"heading.msg", failed_url_host}},
+      },
+      {
+          "case IDS_ERRORPAGES_SUMMARY_CONNECTION_CLOSED, "
+          "IDS_ERRORPAGES_SUGGESTION_PROXY_DISABLE_PLATFORM",
+          net::ERR_CONNECTION_CLOSED,
+          error_page::Error::kNetErrorDomain,
+          {{"summary.msg", failed_url_host}},
+      },
+      {
+          "case IDS_ERRORPAGES_SUMMARY_CONNECTION_FAILED",
+          net::ERR_CONNECTION_FAILED,
+          error_page::Error::kNetErrorDomain,
+          {{"summary.msg", failed_url_host}},
+      },
+      {
+          "case IDS_ERRORPAGES_SUMMARY_CONNECTION_REFUSED",
+          net::ERR_CONNECTION_REFUSED,
+          error_page::Error::kNetErrorDomain,
+          {{"summary.msg", failed_url_host}},
+      },
+      {
+          "case IDS_ERRORPAGES_SUMMARY_EMPTY_RESPONSE",
+          net::ERR_EMPTY_RESPONSE,
+          error_page::Error::kNetErrorDomain,
+          {{"summary.msg", failed_url_host}},
+      },
+      {
+          "case IDS_ERRORPAGES_SUMMARY_INVALID_RESPONSE",
+          net::ERR_SSL_PROTOCOL_ERROR,
+          error_page::Error::kNetErrorDomain,
+          {{"summary.msg", failed_url_host}},
+      },
+      {
+          "case IDS_ERRORPAGES_SUMMARY_NAME_NOT_RESOLVED",
+          net::ERR_NAME_NOT_RESOLVED,
+          error_page::Error::kNetErrorDomain,
+          {{"summary.msg", failed_url_host}},
+      },
+      {
+          "case IDS_ERRORPAGES_SUMMARY_SSL_SECURITY_ERROR",
+          net::ERR_SSL_SERVER_CERT_BAD_FORMAT,
+          error_page::Error::kNetErrorDomain,
+          {{"summary.msg", failed_url_host}},
+      },
+      {
+          "case IDS_ERRORPAGES_SUMMARY_SSL_VERSION_OR_CIPHER_MISMATCH",
+          net::ERR_SSL_VERSION_OR_CIPHER_MISMATCH,
+          error_page::Error::kNetErrorDomain,
+          {{"summary.msg", failed_url_host}},
+      },
+      {
+          "case IDS_ERRORPAGES_SUMMARY_TIMED_OUT",
+          net::ERR_TIMED_OUT,
+          error_page::Error::kNetErrorDomain,
+          {{"summary.msg", failed_url_host}},
+      },
+      {
+          "case IDS_ERRORPAGES_SUMMARY_TOO_MANY_REDIRECTS",
+          net::ERR_TOO_MANY_REDIRECTS,
+          error_page::Error::kNetErrorDomain,
+          {{"summary.msg", failed_url_host}},
+      },
+      {
+          "case IDS_ERRORPAGES_SUMMARY_ADDRESS_UNREACHABLE",
+          net::ERR_ADDRESS_UNREACHABLE,
+          error_page::Error::kNetErrorDomain,
+          {{"summary.msg", failed_url_string_escaped}},
+      },
+      {
+          "case IDS_ERRORPAGES_SUMMARY_NOT_AVAILABLE",
+          net::ERR_TEMPORARILY_THROTTLED,
+          error_page::Error::kNetErrorDomain,
+          {{"summary.msg", failed_url_string_escaped}},
+      },
+  };
+
+  for (auto& test_case : test_cases) {
+    error_page::LocalizedError::PageState page_state =
+        error_page::LocalizedError::GetPageState(
+            test_case.error_code, std::string(test_case.error_domain),
+            failed_url,
+            /*is_post=*/false,
+            /*is_secure_dns_network_error=*/false,
+            /*stale_copy_in_cache=*/false,
+            /*can_show_network_diagnostics_dialog=*/false,
+            /*is_incognito=*/false,
+            /*auto_fetch_feature_enabled=*/false, /*is_kiosk_mode=*/false,
+            /*locale=*/"",
+            /*is_blocked_by_extension=*/false,
+            /*error_page_params=*/nullptr);
+
+    // Check that no "$1", "$2", "$3" placeholders have been left in anywhere in
+    // the response strings.
+    std::string json;
+    ASSERT_TRUE(base::JSONWriter::Write(page_state.strings, &json));
+    ASSERT_EQ(json.find("$1"), std::string::npos)
+        << "Failed for: " << test_case.description << ", found: " << json;
+    ASSERT_EQ(json.find("$2"), std::string::npos)
+        << "Failed for: " << test_case.description << ", found: " << json;
+    ASSERT_EQ(json.find("$3"), std::string::npos)
+        << "Failed for: " << test_case.description << ", found: " << json;
+
+    // Check that placeholder fields have been replaced with the correct value.
+    for (auto& field : test_case.fields) {
+      auto* value = page_state.strings.FindStringByDottedPath(field.key);
+      ASSERT_TRUE(value->find(field.value) != std::string::npos)
+          << "Faild to find replacement for: " << test_case.description
+          << "for key: '" << field.key << "', found: '" << *value
+          << "', which doesn't contain: '" << field.value << "'";
+    }
+  }
+}
+
 TEST_F(NetErrorHelperCoreTest, SubFrameErrorWithCustomErrorPage) {
   // Loading fails, and an error page is requested. |error_html| is null
   // indicating a custom error page. Calls below should not crash.
   core()->PrepareErrorPage(
       NetErrorHelperCore::SUB_FRAME, NetError(net::ERR_NAME_NOT_RESOLVED),
-      false /* is_failed_post */, nullptr /* error_html */);
+      /*is_failed_post=*/false, /*alternative_error_page_info=*/nullptr,
+      /*error_html=*/nullptr);
   core()->OnCommitLoad(NetErrorHelperCore::SUB_FRAME, error_url());
   core()->OnFinishLoad(NetErrorHelperCore::SUB_FRAME);
   EXPECT_EQ(0, update_count());
@@ -364,9 +597,9 @@ TEST_F(NetErrorHelperCoreTest, SubFrameErrorWithCustomErrorPage) {
 TEST_F(NetErrorHelperCoreTest, SubFrameDnsError) {
   // Loading fails, and an error page is requested.
   std::string html;
-  core()->PrepareErrorPage(NetErrorHelperCore::SUB_FRAME,
-                           NetError(net::ERR_NAME_NOT_RESOLVED),
-                           false /* is_failed_post */, &html);
+  core()->PrepareErrorPage(
+      NetErrorHelperCore::SUB_FRAME, NetError(net::ERR_NAME_NOT_RESOLVED),
+      /*is_failed_post=*/false, /*alternative_error_page_info=*/nullptr, &html);
   // Should have returned a local error page.
   EXPECT_EQ(NetErrorString(net::ERR_NAME_NOT_RESOLVED), html);
 
@@ -382,9 +615,9 @@ TEST_F(NetErrorHelperCoreTest, SubFrameDnsErrorSpuriousStatus) {
   // Loading fails, and an error page is requested.
   std::string html;
   core()->OnNetErrorInfo(error_page::DNS_PROBE_FINISHED_NXDOMAIN);
-  core()->PrepareErrorPage(NetErrorHelperCore::SUB_FRAME,
-                           NetError(net::ERR_NAME_NOT_RESOLVED),
-                           false /* is_failed_post */, &html);
+  core()->PrepareErrorPage(
+      NetErrorHelperCore::SUB_FRAME, NetError(net::ERR_NAME_NOT_RESOLVED),
+      /*is_failed_post=*/false, /*alternative_error_page_info=*/nullptr, &html);
   core()->OnNetErrorInfo(error_page::DNS_PROBE_FINISHED_NXDOMAIN);
 
   // Should have returned a local error page.
@@ -412,9 +645,9 @@ TEST_F(NetErrorHelperCoreTest, SubFrameDnsErrorSpuriousStatus) {
 TEST_F(NetErrorHelperCoreTest, FinishedBeforeProbe) {
   // Loading fails, and an error page is requested.
   std::string html;
-  core()->PrepareErrorPage(NetErrorHelperCore::MAIN_FRAME,
-                           NetError(net::ERR_NAME_NOT_RESOLVED),
-                           false /* is_failed_post */, &html);
+  core()->PrepareErrorPage(
+      NetErrorHelperCore::MAIN_FRAME, NetError(net::ERR_NAME_NOT_RESOLVED),
+      /*is_failed_post=*/false, /*alternative_error_page_info=*/nullptr, &html);
   // Should have returned a local error page indicating a probe may run.
   EXPECT_EQ(ProbeErrorString(error_page::DNS_PROBE_POSSIBLE), html);
 
@@ -442,9 +675,9 @@ TEST_F(NetErrorHelperCoreTest, FinishedBeforeProbe) {
 TEST_F(NetErrorHelperCoreTest, FinishedBeforeProbeNotRun) {
   // Loading fails, and an error page is requested.
   std::string html;
-  core()->PrepareErrorPage(NetErrorHelperCore::MAIN_FRAME,
-                           NetError(net::ERR_NAME_NOT_RESOLVED),
-                           false /* is_failed_post */, &html);
+  core()->PrepareErrorPage(
+      NetErrorHelperCore::MAIN_FRAME, NetError(net::ERR_NAME_NOT_RESOLVED),
+      /*is_failed_post=*/false, /*alternative_error_page_info=*/nullptr, &html);
   // Should have returned a local error page indicating a probe may run.
   EXPECT_EQ(ProbeErrorString(error_page::DNS_PROBE_POSSIBLE), html);
 
@@ -469,9 +702,9 @@ TEST_F(NetErrorHelperCoreTest, FinishedBeforeProbeNotRun) {
 TEST_F(NetErrorHelperCoreTest, FinishedBeforeProbeInconclusive) {
   // Loading fails, and an error page is requested.
   std::string html;
-  core()->PrepareErrorPage(NetErrorHelperCore::MAIN_FRAME,
-                           NetError(net::ERR_NAME_NOT_RESOLVED),
-                           false /* is_failed_post */, &html);
+  core()->PrepareErrorPage(
+      NetErrorHelperCore::MAIN_FRAME, NetError(net::ERR_NAME_NOT_RESOLVED),
+      /*is_failed_post=*/false, /*alternative_error_page_info=*/nullptr, &html);
   // Should have returned a local error page indicating a probe may run.
   EXPECT_EQ(ProbeErrorString(error_page::DNS_PROBE_POSSIBLE), html);
 
@@ -501,9 +734,9 @@ TEST_F(NetErrorHelperCoreTest, FinishedBeforeProbeNoInternet) {
 
   // Loading fails, and an error page is requested.
   std::string html;
-  core()->PrepareErrorPage(NetErrorHelperCore::MAIN_FRAME,
-                           NetError(net::ERR_NAME_NOT_RESOLVED),
-                           false /* is_failed_post */, &html);
+  core()->PrepareErrorPage(
+      NetErrorHelperCore::MAIN_FRAME, NetError(net::ERR_NAME_NOT_RESOLVED),
+      /*is_failed_post=*/false, /*alternative_error_page_info=*/nullptr, &html);
   // Should have returned a local error page indicating a probe may run.
   EXPECT_EQ(ProbeErrorString(error_page::DNS_PROBE_POSSIBLE), html);
 
@@ -533,9 +766,9 @@ TEST_F(NetErrorHelperCoreTest, FinishedBeforeProbeNoInternet) {
 
   // Perform a second error page load, and confirm that the previous load
   // doesn't affect the result.
-  core()->PrepareErrorPage(NetErrorHelperCore::MAIN_FRAME,
-                           NetError(net::ERR_NAME_NOT_RESOLVED),
-                           false /* is_failed_post */, &html);
+  core()->PrepareErrorPage(
+      NetErrorHelperCore::MAIN_FRAME, NetError(net::ERR_NAME_NOT_RESOLVED),
+      /*is_failed_post=*/false, /*alternative_error_page_info=*/nullptr, &html);
   EXPECT_EQ(ProbeErrorString(error_page::DNS_PROBE_POSSIBLE), html);
   core()->OnCommitLoad(NetErrorHelperCore::MAIN_FRAME, error_url());
   core()->OnFinishLoad(NetErrorHelperCore::MAIN_FRAME);
@@ -554,9 +787,9 @@ TEST_F(NetErrorHelperCoreTest, FinishedBeforeProbeNoInternet) {
 TEST_F(NetErrorHelperCoreTest, FinishedBeforeProbeBadConfig) {
   // Loading fails, and an error page is requested.
   std::string html;
-  core()->PrepareErrorPage(NetErrorHelperCore::MAIN_FRAME,
-                           NetError(net::ERR_NAME_NOT_RESOLVED),
-                           false /* is_failed_post */, &html);
+  core()->PrepareErrorPage(
+      NetErrorHelperCore::MAIN_FRAME, NetError(net::ERR_NAME_NOT_RESOLVED),
+      /*is_failed_post=*/false, /*alternative_error_page_info=*/nullptr, &html);
   // Should have returned a local error page indicating a probe may run.
   EXPECT_EQ(ProbeErrorString(error_page::DNS_PROBE_POSSIBLE), html);
 
@@ -586,9 +819,9 @@ TEST_F(NetErrorHelperCoreTest, FinishedBeforeProbeBadConfig) {
 TEST_F(NetErrorHelperCoreTest, FinishedAfterStartProbe) {
   // Loading fails, and an error page is requested.
   std::string html;
-  core()->PrepareErrorPage(NetErrorHelperCore::MAIN_FRAME,
-                           NetError(net::ERR_NAME_NOT_RESOLVED),
-                           false /* is_failed_post */, &html);
+  core()->PrepareErrorPage(
+      NetErrorHelperCore::MAIN_FRAME, NetError(net::ERR_NAME_NOT_RESOLVED),
+      /*is_failed_post=*/false, /*alternative_error_page_info=*/nullptr, &html);
   // Should have returned a local error page indicating a probe may run.
   EXPECT_EQ(ProbeErrorString(error_page::DNS_PROBE_POSSIBLE), html);
 
@@ -622,9 +855,9 @@ TEST_F(NetErrorHelperCoreTest, FinishedAfterStartProbe) {
 TEST_F(NetErrorHelperCoreTest, FinishedBeforeProbePost) {
   // Loading fails, and an error page is requested.
   std::string html;
-  core()->PrepareErrorPage(NetErrorHelperCore::MAIN_FRAME,
-                           NetError(net::ERR_NAME_NOT_RESOLVED),
-                           true /* is_failed_post */, &html);
+  core()->PrepareErrorPage(
+      NetErrorHelperCore::MAIN_FRAME, NetError(net::ERR_NAME_NOT_RESOLVED),
+      /*is_failed_post=*/true, /*alternative_error_page_info=*/nullptr, &html);
   // Should have returned a local error page indicating a probe may run.
   EXPECT_EQ(ErrorToString(ProbeError(error_page::DNS_PROBE_POSSIBLE), true),
             html);
@@ -652,9 +885,9 @@ TEST_F(NetErrorHelperCoreTest, FinishedBeforeProbePost) {
 TEST_F(NetErrorHelperCoreTest, ProbeFinishesEarly) {
   // Loading fails, and an error page is requested.
   std::string html;
-  core()->PrepareErrorPage(NetErrorHelperCore::MAIN_FRAME,
-                           NetError(net::ERR_NAME_NOT_RESOLVED),
-                           false /* is_failed_post */, &html);
+  core()->PrepareErrorPage(
+      NetErrorHelperCore::MAIN_FRAME, NetError(net::ERR_NAME_NOT_RESOLVED),
+      /*is_failed_post=*/false, /*alternative_error_page_info=*/nullptr, &html);
   // Should have returned a local error page indicating a probe may run.
   EXPECT_EQ(ProbeErrorString(error_page::DNS_PROBE_POSSIBLE), html);
 
@@ -685,9 +918,9 @@ TEST_F(NetErrorHelperCoreTest, ProbeFinishesEarly) {
 TEST_F(NetErrorHelperCoreTest, TwoErrorsWithProbes) {
   // Loading fails, and an error page is requested.
   std::string html;
-  core()->PrepareErrorPage(NetErrorHelperCore::MAIN_FRAME,
-                           NetError(net::ERR_NAME_NOT_RESOLVED),
-                           false /* is_failed_post */, &html);
+  core()->PrepareErrorPage(
+      NetErrorHelperCore::MAIN_FRAME, NetError(net::ERR_NAME_NOT_RESOLVED),
+      /*is_failed_post=*/false, /*alternative_error_page_info=*/nullptr, &html);
   // Should have returned a local error page indicating a probe may run.
   EXPECT_EQ(ProbeErrorString(error_page::DNS_PROBE_POSSIBLE), html);
 
@@ -705,9 +938,9 @@ TEST_F(NetErrorHelperCoreTest, TwoErrorsWithProbes) {
   // The process starts again.
 
   // Loading fails, and an error page is requested.
-  core()->PrepareErrorPage(NetErrorHelperCore::MAIN_FRAME,
-                           NetError(net::ERR_NAME_NOT_RESOLVED),
-                           false /* is_failed_post */, &html);
+  core()->PrepareErrorPage(
+      NetErrorHelperCore::MAIN_FRAME, NetError(net::ERR_NAME_NOT_RESOLVED),
+      /*is_failed_post=*/false, /*alternative_error_page_info=*/nullptr, &html);
   // Should have returned a local error page indicating a probe may run.
   EXPECT_EQ(ProbeErrorString(error_page::DNS_PROBE_POSSIBLE), html);
 
@@ -733,9 +966,9 @@ TEST_F(NetErrorHelperCoreTest, TwoErrorsWithProbes) {
 TEST_F(NetErrorHelperCoreTest, TwoErrorsWithProbesAfterSecondStarts) {
   // Loading fails, and an error page is requested.
   std::string html;
-  core()->PrepareErrorPage(NetErrorHelperCore::MAIN_FRAME,
-                           NetError(net::ERR_NAME_NOT_RESOLVED),
-                           false /* is_failed_post */, &html);
+  core()->PrepareErrorPage(
+      NetErrorHelperCore::MAIN_FRAME, NetError(net::ERR_NAME_NOT_RESOLVED),
+      /*is_failed_post=*/false, /*alternative_error_page_info=*/nullptr, &html);
   // Should have returned a local error page indicating a probe may run.
   EXPECT_EQ(ProbeErrorString(error_page::DNS_PROBE_POSSIBLE), html);
 
@@ -746,9 +979,9 @@ TEST_F(NetErrorHelperCoreTest, TwoErrorsWithProbesAfterSecondStarts) {
   // The process starts again.
 
   // Loading fails, and an error page is requested.
-  core()->PrepareErrorPage(NetErrorHelperCore::MAIN_FRAME,
-                           NetError(net::ERR_NAME_NOT_RESOLVED),
-                           false /* is_failed_post */, &html);
+  core()->PrepareErrorPage(
+      NetErrorHelperCore::MAIN_FRAME, NetError(net::ERR_NAME_NOT_RESOLVED),
+      /*is_failed_post=*/false, /*alternative_error_page_info=*/nullptr, &html);
   // Should have returned a local error page indicating a probe may run.
   EXPECT_EQ(ProbeErrorString(error_page::DNS_PROBE_POSSIBLE), html);
 
@@ -776,9 +1009,9 @@ TEST_F(NetErrorHelperCoreTest, TwoErrorsWithProbesAfterSecondStarts) {
 TEST_F(NetErrorHelperCoreTest, ErrorPageLoadInterrupted) {
   // Loading fails, and an error page is requested.
   std::string html;
-  core()->PrepareErrorPage(NetErrorHelperCore::MAIN_FRAME,
-                           NetError(net::ERR_NAME_NOT_RESOLVED),
-                           false /* is_failed_post */, &html);
+  core()->PrepareErrorPage(
+      NetErrorHelperCore::MAIN_FRAME, NetError(net::ERR_NAME_NOT_RESOLVED),
+      /*is_failed_post=*/false, /*alternative_error_page_info=*/nullptr, &html);
   // Should have returned a local error page indicating a probe may run.
   EXPECT_EQ(ProbeErrorString(error_page::DNS_PROBE_POSSIBLE), html);
 
@@ -788,9 +1021,9 @@ TEST_F(NetErrorHelperCoreTest, ErrorPageLoadInterrupted) {
   EXPECT_EQ(0, update_count());
 
   // A new navigation fails while the error page is loading.
-  core()->PrepareErrorPage(NetErrorHelperCore::MAIN_FRAME,
-                           NetError(net::ERR_NAME_NOT_RESOLVED),
-                           false /* is_failed_post */, &html);
+  core()->PrepareErrorPage(
+      NetErrorHelperCore::MAIN_FRAME, NetError(net::ERR_NAME_NOT_RESOLVED),
+      /*is_failed_post=*/false, /*alternative_error_page_info=*/nullptr, &html);
   // Should have returned a local error page indicating a probe may run.
   EXPECT_EQ(ProbeErrorString(error_page::DNS_PROBE_POSSIBLE), html);
 
@@ -832,7 +1065,39 @@ TEST_F(NetErrorHelperCoreTest, CanShowNetworkDiagnostics) {
   EXPECT_EQ(GURL(kFailedUrl), diagnose_error_url());
 }
 
-#if defined(OS_ANDROID)
+TEST_F(NetErrorHelperCoreTest, AlternativeErrorPageNoUpdates) {
+  // Relevant strings for the alternative error page can be found in
+  // `chrome/browser/web_applications/web_app_offline.h`
+  auto alternative_error_page_info =
+      content::mojom::AlternativeErrorPageOverrideInfo::New();
+  base::DictValue dict;
+  dict.Set("theme_color", skia::SkColorToHexString(SK_ColorBLUE));
+  dict.Set("customized_background_color",
+           skia::SkColorToHexString(SK_ColorYELLOW));
+  dict.Set("app_short_name", "Test Short Name");
+  dict.Set(
+      "web_app_error_page_message",
+      l10n_util::GetStringUTF16(IDS_ERRORPAGES_HEADING_INTERNET_DISCONNECTED));
+  alternative_error_page_info->alternative_error_page_params = std::move(dict);
+  alternative_error_page_info->resource_id = IDR_WEBAPP_ERROR_PAGE_HTML;
+
+  // Loading fails, and an error page is requested.
+  std::string html;
+  core()->PrepareErrorPage(
+      NetErrorHelperCore::MAIN_FRAME, NetError(net::ERR_NAME_NOT_RESOLVED),
+      /*is_failed_post=*/false, std::move(alternative_error_page_info), &html);
+
+  // Expect that for all probe updates the error page does not change
+  core()->OnCommitLoad(NetErrorHelperCore::MAIN_FRAME, error_url());
+  core()->OnFinishLoad(NetErrorHelperCore::MAIN_FRAME);
+  core()->OnNetErrorInfo(error_page::DNS_PROBE_STARTED);
+  core()->OnNetErrorInfo(error_page::DNS_PROBE_FINISHED_NXDOMAIN);
+  core()->OnNetErrorInfo(error_page::DNS_PROBE_STARTED);
+  core()->OnNetErrorInfo(error_page::DNS_PROBE_FINISHED_NXDOMAIN);
+  EXPECT_EQ(0, update_count());
+}
+
+#if BUILDFLAG(IS_ANDROID)
 TEST_F(NetErrorHelperCoreTest, Download) {
   DoErrorLoad(net::ERR_INTERNET_DISCONNECTED);
   EXPECT_EQ(0, download_count());
@@ -840,239 +1105,14 @@ TEST_F(NetErrorHelperCoreTest, Download) {
   EXPECT_EQ(1, download_count());
 }
 
-const char kThumbnailDataURI[] = "data:image/png;base64,abc";
-const char kFaviconDataURI[] = "data:image/png;base64,def";
-
-// Creates a couple of fake AvailableOfflineContent instances.
-std::vector<chrome::mojom::AvailableOfflineContentPtr>
-GetFakeAvailableContent() {
-  std::vector<chrome::mojom::AvailableOfflineContentPtr> content;
-  content.push_back(chrome::mojom::AvailableOfflineContent::New(
-      "ID", "name_space", "title", "snippet", "date_modified", "attribution",
-      GURL(kThumbnailDataURI), GURL(kFaviconDataURI),
-      chrome::mojom::AvailableContentType::kPrefetchedPage));
-  content.push_back(chrome::mojom::AvailableOfflineContent::New(
-      "ID2", "name_space2", "title2", "snippet2", "date_modified2",
-      "attribution2", GURL(kThumbnailDataURI), GURL(kFaviconDataURI),
-      chrome::mojom::AvailableContentType::kOtherPage));
-  return content;
-}
-
-// Builds the expected JSON representation of the AvailableOfflineContent
-// instances returned by |GetFakeAvailableContent|.
-const std::string GetExpectedAvailableContentAsJson() {
-  // About the below data:
-  // * |content_type| is an AvailableContentType enum value where
-  //   0 = kPrefetchedPage and 3=kOtherPage.
-  // * The base64 encoded values represent the encoded versions of the
-  //   respective entries returned by |GetFakeAvailableContent|.
-  std::string want_json = R"([
-    {
-      "ID": "ID",
-      "attribution_base64": "AGEAdAB0AHIAaQBiAHUAdABpAG8Abg==",
-      "content_type": 0,
-      "date_modified": "date_modified",
-      "favicon_data_uri": "data:image/png;base64,def",
-      "name_space": "name_space",
-      "snippet_base64": "AHMAbgBpAHAAcABlAHQ=",
-      "thumbnail_data_uri": "data:image/png;base64,abc",
-      "title_base64": "AHQAaQB0AGwAZQ=="
-    },
-    {
-      "ID": "ID2",
-      "attribution_base64": "AGEAdAB0AHIAaQBiAHUAdABpAG8AbgAy",
-      "content_type": 3,
-      "date_modified": "date_modified2",
-      "favicon_data_uri": "data:image/png;base64,def",
-      "name_space": "name_space2",
-      "snippet_base64": "AHMAbgBpAHAAcABlAHQAMg==",
-      "thumbnail_data_uri": "data:image/png;base64,abc",
-      "title_base64": "AHQAaQB0AGwAZQAy"
-    }
-  ])";
-  base::ReplaceChars(want_json, base::kWhitespaceASCII, "", &want_json);
-  return want_json;
-}
-
-class FakeAvailableOfflineContentProvider
-    : public chrome::mojom::AvailableOfflineContentProvider {
- public:
-  FakeAvailableOfflineContentProvider() = default;
-
-  void List(ListCallback callback) override {
-    if (return_content_) {
-      std::move(callback).Run(list_visible_by_prefs_,
-                              GetFakeAvailableContent());
-    } else {
-      std::move(callback).Run(list_visible_by_prefs_, {});
-    }
-  }
-
-  MOCK_METHOD2(LaunchItem,
-               void(const std::string& item_ID, const std::string& name_space));
-  MOCK_METHOD1(LaunchDownloadsPage, void(bool open_prefetched_articles_tab));
-  MOCK_METHOD1(ListVisibilityChanged, void(bool is_visible));
-
-  void AddBinding(
-      mojo::PendingReceiver<chrome::mojom::AvailableOfflineContentProvider>
-          receiver) {
-    receivers_.Add(this, std::move(receiver));
-  }
-
-  void set_return_content(bool return_content) {
-    return_content_ = return_content;
-  }
-
-  void set_list_visible_by_prefs(bool list_visible_by_prefs) {
-    list_visible_by_prefs_ = list_visible_by_prefs;
-  }
-
- private:
-  bool return_content_ = true;
-  bool list_visible_by_prefs_ = true;
-  mojo::ReceiverSet<chrome::mojom::AvailableOfflineContentProvider> receivers_;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeAvailableOfflineContentProvider);
-};
-
-// Provides set up for testing the 'available offline content' feature.
-class NetErrorHelperCoreAvailableOfflineContentTest
-    : public NetErrorHelperCoreTest {
- public:
-  void SetUp() override {
-    NetErrorHelperCoreTest::SetUp();
-    AvailableOfflineContentHelper::OverrideBinderForTesting(
-        base::BindRepeating(&FakeAvailableOfflineContentProvider::AddBinding,
-                            base::Unretained(&fake_provider_)));
-  }
-
-  void TearDown() override {
-    AvailableOfflineContentHelper::OverrideBinderForTesting(
-        base::NullCallback());
-  }
-
- protected:
-  FakeAvailableOfflineContentProvider fake_provider_;
-  base::HistogramTester histogram_tester_;
-};
-
-TEST_F(NetErrorHelperCoreAvailableOfflineContentTest, ListAvailableContent) {
-  set_offline_content_feature_enabled(true);
-  fake_provider_.set_return_content(true);
-
-  DoErrorLoad(net::ERR_INTERNET_DISCONNECTED);
-  task_environment()->RunUntilIdle();
-  EXPECT_TRUE(list_visible_by_prefs());
-  EXPECT_EQ(GetExpectedAvailableContentAsJson(), offline_content_json());
-
-  histogram_tester_.ExpectTotalCount("Net.ErrorPageCounts.SuggestionPresented",
-                                     2);
-  histogram_tester_.ExpectBucketCount(
-      "Net.ErrorPageCounts.SuggestionPresented",
-      chrome::mojom::AvailableContentType::kPrefetchedPage, 1);
-  histogram_tester_.ExpectBucketCount(
-      "Net.ErrorPageCounts.SuggestionPresented",
-      chrome::mojom::AvailableContentType::kOtherPage, 1);
-  histogram_tester_.ExpectBucketCount(
-      "Net.ErrorPageCounts",
-      error_page::NETWORK_ERROR_PAGE_OFFLINE_SUGGESTIONS_SHOWN, 1);
-  histogram_tester_.ExpectBucketCount(
-      "Net.ErrorPageCounts",
-      error_page::NETWORK_ERROR_PAGE_OFFLINE_SUGGESTIONS_SHOWN_COLLAPSED, 0);
-
-  core()->LaunchOfflineItem("ID", "name_space");
-  histogram_tester_.ExpectBucketCount(
-      "Net.ErrorPageCounts.SuggestionPresented",
-      chrome::mojom::AvailableContentType::kPrefetchedPage, 1);
-  histogram_tester_.ExpectBucketCount(
-      "Net.ErrorPageCounts",
-      error_page::NETWORK_ERROR_PAGE_OFFLINE_SUGGESTION_CLICKED, 1);
-
-  core()->LaunchDownloadsPage();
-  histogram_tester_.ExpectBucketCount(
-      "Net.ErrorPageCounts",
-      error_page::NETWORK_ERROR_PAGE_OFFLINE_DOWNLOADS_PAGE_CLICKED, 1);
-}
-
-TEST_F(NetErrorHelperCoreAvailableOfflineContentTest, ListHiddenByPrefs) {
-  set_offline_content_feature_enabled(true);
-  fake_provider_.set_return_content(true);
-  fake_provider_.set_list_visible_by_prefs(false);
-
-  DoErrorLoad(net::ERR_INTERNET_DISCONNECTED);
-  task_environment()->RunUntilIdle();
-  EXPECT_FALSE(list_visible_by_prefs());
-  EXPECT_EQ(GetExpectedAvailableContentAsJson(), offline_content_json());
-
-  histogram_tester_.ExpectTotalCount("Net.ErrorPageCounts.SuggestionPresented",
-                                     2);
-  histogram_tester_.ExpectBucketCount(
-      "Net.ErrorPageCounts.SuggestionPresented",
-      chrome::mojom::AvailableContentType::kPrefetchedPage, 1);
-  histogram_tester_.ExpectBucketCount(
-      "Net.ErrorPageCounts.SuggestionPresented",
-      chrome::mojom::AvailableContentType::kOtherPage, 1);
-  histogram_tester_.ExpectBucketCount(
-      "Net.ErrorPageCounts",
-      error_page::NETWORK_ERROR_PAGE_OFFLINE_SUGGESTIONS_SHOWN, 0);
-  histogram_tester_.ExpectBucketCount(
-      "Net.ErrorPageCounts",
-      error_page::NETWORK_ERROR_PAGE_OFFLINE_SUGGESTIONS_SHOWN_COLLAPSED, 1);
-
-  core()->LaunchOfflineItem("ID", "name_space");
-  histogram_tester_.ExpectBucketCount(
-      "Net.ErrorPageCounts.SuggestionPresented",
-      chrome::mojom::AvailableContentType::kPrefetchedPage, 1);
-  histogram_tester_.ExpectBucketCount(
-      "Net.ErrorPageCounts",
-      error_page::NETWORK_ERROR_PAGE_OFFLINE_SUGGESTION_CLICKED, 1);
-
-  core()->LaunchDownloadsPage();
-  histogram_tester_.ExpectBucketCount(
-      "Net.ErrorPageCounts",
-      error_page::NETWORK_ERROR_PAGE_OFFLINE_DOWNLOADS_PAGE_CLICKED, 1);
-}
-
-TEST_F(NetErrorHelperCoreAvailableOfflineContentTest, ListNoAvailableContent) {
-  set_offline_content_feature_enabled(true);
-  fake_provider_.set_return_content(false);
-
-  DoErrorLoad(net::ERR_INTERNET_DISCONNECTED);
-  task_environment()->RunUntilIdle();
-
-  EXPECT_TRUE(list_visible_by_prefs());
-  EXPECT_EQ("", offline_content_json());
-  histogram_tester_.ExpectBucketCount(
-      "Net.ErrorPageCounts",
-      error_page::NETWORK_ERROR_PAGE_OFFLINE_SUGGESTIONS_SHOWN, 0);
-  histogram_tester_.ExpectBucketCount(
-      "Net.ErrorPageCounts",
-      error_page::NETWORK_ERROR_PAGE_OFFLINE_SUGGESTIONS_SHOWN_COLLAPSED, 0);
-}
-
-TEST_F(NetErrorHelperCoreAvailableOfflineContentTest, NotAllowed) {
-  set_offline_content_feature_enabled(false);
-  fake_provider_.set_return_content(true);
-
-  DoErrorLoad(net::ERR_INTERNET_DISCONNECTED);
-  task_environment()->RunUntilIdle();
-
-  EXPECT_TRUE(list_visible_by_prefs());
-  EXPECT_EQ("", offline_content_json());
-  histogram_tester_.ExpectTotalCount("Net.ErrorPageCounts.SuggestionPresented",
-                                     0);
-  histogram_tester_.ExpectBucketCount(
-      "Net.ErrorPageCounts",
-      error_page::NETWORK_ERROR_PAGE_OFFLINE_SUGGESTIONS_SHOWN, 0);
-  histogram_tester_.ExpectBucketCount(
-      "Net.ErrorPageCounts",
-      error_page::NETWORK_ERROR_PAGE_OFFLINE_SUGGESTIONS_SHOWN_COLLAPSED, 0);
-}
-
 class FakeOfflinePageAutoFetcher
     : public chrome::mojom::OfflinePageAutoFetcher {
  public:
   FakeOfflinePageAutoFetcher() = default;
+
+  FakeOfflinePageAutoFetcher(const FakeOfflinePageAutoFetcher&) = delete;
+  FakeOfflinePageAutoFetcher& operator=(const FakeOfflinePageAutoFetcher&) =
+      delete;
 
   struct TryScheduleParameters {
     bool user_requested;
@@ -1101,8 +1141,6 @@ class FakeOfflinePageAutoFetcher
   mojo::ReceiverSet<chrome::mojom::OfflinePageAutoFetcher> receivers_;
   int cancel_calls_ = 0;
   std::vector<TryScheduleParameters> try_schedule_calls_;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeOfflinePageAutoFetcher);
 };
 // This uses the real implementation of PageAutoFetcherHelper, but with a
 // substituted fetcher.
@@ -1138,11 +1176,6 @@ class NetErrorHelperCoreAutoFetchTest : public NetErrorHelperCoreTest {
 
     core()->SetPageAutoFetcherHelperForTesting(
         std::make_unique<TestPageAutoFetcherHelper>(binder));
-  }
-
-  void TearDown() override {
-    AvailableOfflineContentHelper::OverrideBinderForTesting(
-        base::NullCallback());
   }
 
  protected:
@@ -1181,6 +1214,6 @@ TEST_F(NetErrorHelperCoreAutoFetchTest, AutoFetchTriggered) {
             auto_fetch_state());
 }
 
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
 
 }  // namespace

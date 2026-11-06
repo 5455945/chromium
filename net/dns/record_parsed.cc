@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,10 @@
 #include <utility>
 
 #include "base/logging.h"
+#include "base/memory/ptr_util.h"
 #include "net/dns/dns_response.h"
 #include "net/dns/https_record_rdata.h"
+#include "net/dns/opt_record_rdata.h"
 #include "net/dns/record_rdata.h"
 
 namespace net {
@@ -38,37 +40,35 @@ std::unique_ptr<const RecordParsed> RecordParsed::CreateFrom(
   if (!parser->ReadRecord(&record))
     return nullptr;
 
+  base::span<const uint8_t> rdata_span = base::as_byte_span(record.rdata);
   bool unrecognized_type = false;
   switch (record.type) {
     case ARecordRdata::kType:
-      rdata = ARecordRdata::Create(record.rdata, *parser);
+      rdata = ARecordRdata::Create(rdata_span, *parser);
       break;
     case AAAARecordRdata::kType:
-      rdata = AAAARecordRdata::Create(record.rdata, *parser);
+      rdata = AAAARecordRdata::Create(rdata_span, *parser);
       break;
     case CnameRecordRdata::kType:
-      rdata = CnameRecordRdata::Create(record.rdata, *parser);
+      rdata = CnameRecordRdata::Create(rdata_span, *parser);
       break;
     case PtrRecordRdata::kType:
-      rdata = PtrRecordRdata::Create(record.rdata, *parser);
+      rdata = PtrRecordRdata::Create(rdata_span, *parser);
       break;
     case SrvRecordRdata::kType:
-      rdata = SrvRecordRdata::Create(record.rdata, *parser);
+      rdata = SrvRecordRdata::Create(rdata_span, *parser);
       break;
     case TxtRecordRdata::kType:
-      rdata = TxtRecordRdata::Create(record.rdata, *parser);
+      rdata = TxtRecordRdata::Create(rdata_span, *parser);
       break;
     case NsecRecordRdata::kType:
-      rdata = NsecRecordRdata::Create(record.rdata, *parser);
+      rdata = NsecRecordRdata::Create(rdata_span, *parser);
       break;
     case OptRecordRdata::kType:
-      rdata = OptRecordRdata::Create(record.rdata, *parser);
-      break;
-    case IntegrityRecordRdata::kType:
-      rdata = IntegrityRecordRdata::Create(record.rdata);
+      rdata = OptRecordRdata::Create(rdata_span);
       break;
     case HttpsRecordRdata::kType:
-      rdata = HttpsRecordRdata::Parse(record.rdata);
+      rdata = HttpsRecordRdata::Parse(rdata_span);
       break;
     default:
       DVLOG(1) << "Unknown RData type for received record: " << record.type;
@@ -82,9 +82,9 @@ std::unique_ptr<const RecordParsed> RecordParsed::CreateFrom(
   if (!rdata.get() && !unrecognized_type)
     return nullptr;
 
-  return std::unique_ptr<const RecordParsed>(
-      new RecordParsed(record.name, record.type, record.klass, record.ttl,
-                       std::move(rdata), time_created));
+  return base::WrapUnique(new RecordParsed(record.name, record.type,
+                                           record.klass, record.ttl,
+                                           std::move(rdata), time_created));
 }
 
 bool RecordParsed::IsEqual(const RecordParsed* other, bool is_mdns) const {

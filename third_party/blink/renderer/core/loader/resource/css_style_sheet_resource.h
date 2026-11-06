@@ -26,9 +26,10 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_LOADER_RESOURCE_CSS_STYLE_SHEET_RESOURCE_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_LOADER_RESOURCE_CSS_STYLE_SHEET_RESOURCE_H_
 
+#include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/loader/resource/text_resource.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/loader/fetch/text_resource_decoder_options.h"
 #include "third_party/blink/renderer/platform/wtf/text/text_encoding.h"
 
@@ -47,8 +48,7 @@ class CORE_EXPORT CSSStyleSheetResource final : public TextResource {
   static CSSStyleSheetResource* Fetch(FetchParameters&,
                                       ResourceFetcher*,
                                       ResourceClient*);
-  static CSSStyleSheetResource* CreateForTest(const KURL&,
-                                              const WTF::TextEncoding&);
+  static CSSStyleSheetResource* CreateForTest(const KURL&, const TextEncoding&);
 
   CSSStyleSheetResource(const ResourceRequest&,
                         const ResourceLoaderOptions&,
@@ -82,11 +82,11 @@ class CORE_EXPORT CSSStyleSheetResource final : public TextResource {
   };
 
   bool CanUseSheet(const CSSParserContext*, MIMETypeCheck) const;
-  void NotifyFinished() override;
 
   void SetParsedStyleSheetCache(StyleSheetContents*);
   void SetDecodedSheetText(const String&);
 
+  void NotifyFinished() override;
   void DestroyDecodedDataIfPossible() override;
   void DestroyDecodedDataForFailedRevalidation() override;
   void UpdateDecodedSize();

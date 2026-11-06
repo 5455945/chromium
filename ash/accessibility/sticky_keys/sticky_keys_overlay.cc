@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,12 +10,16 @@
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
+#include "ash/wm/work_area_insets.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
+#include "ui/events/event_constants.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/font_list.h"
 #include "ui/gfx/geometry/insets.h"
@@ -46,8 +50,13 @@ const int kSlideAnimationDurationMs = 100;
 ///////////////////////////////////////////////////////////////////////////////
 //  StickyKeyOverlayLabel
 class StickyKeyOverlayLabel : public views::Label {
+  METADATA_HEADER(StickyKeyOverlayLabel, views::Label)
+
  public:
   explicit StickyKeyOverlayLabel(const std::string& key_name);
+
+  StickyKeyOverlayLabel(const StickyKeyOverlayLabel&) = delete;
+  StickyKeyOverlayLabel& operator=(const StickyKeyOverlayLabel&) = delete;
 
   ~StickyKeyOverlayLabel() override;
 
@@ -57,8 +66,6 @@ class StickyKeyOverlayLabel : public views::Label {
 
  private:
   StickyKeyState state_;
-
-  DISALLOW_COPY_AND_ASSIGN(StickyKeyOverlayLabel);
 };
 
 StickyKeyOverlayLabel::StickyKeyOverlayLabel(const std::string& key_name)
@@ -97,13 +104,22 @@ void StickyKeyOverlayLabel::SetKeyState(StickyKeyState state) {
   SetFontList(font_list().DeriveWithStyle(style));
 }
 
+BEGIN_METADATA(StickyKeyOverlayLabel)
+END_METADATA
+
 }  // namespace
 
 ///////////////////////////////////////////////////////////////////////////////
 //  StickyKeysOverlayView
 class StickyKeysOverlayView : public views::View {
+  METADATA_HEADER(StickyKeysOverlayView, views::View)
+
  public:
   StickyKeysOverlayView();
+
+  StickyKeysOverlayView(const StickyKeysOverlayView&) = delete;
+  StickyKeysOverlayView& operator=(const StickyKeysOverlayView&) = delete;
+
   ~StickyKeysOverlayView() override;
 
   // views::View overrides:
@@ -121,8 +137,6 @@ class StickyKeysOverlayView : public views::View {
 
   typedef std::map<ui::EventFlags, StickyKeyOverlayLabel*> ModifierLabelMap;
   ModifierLabelMap modifier_label_map_;
-
-  DISALLOW_COPY_AND_ASSIGN(StickyKeysOverlayView);
 };
 
 StickyKeysOverlayView::StickyKeysOverlayView() {
@@ -139,13 +153,14 @@ StickyKeysOverlayView::StickyKeysOverlayView() {
 
   SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kVertical,
-      gfx::Insets(vertical_spacing, horizontal_spacing), child_spacing));
+      gfx::Insets::VH(vertical_spacing, horizontal_spacing), child_spacing));
   AddKeyLabel(ui::EF_CONTROL_DOWN,
               l10n_util::GetStringUTF8(IDS_ASH_CONTROL_KEY));
   AddKeyLabel(ui::EF_ALT_DOWN, l10n_util::GetStringUTF8(IDS_ASH_ALT_KEY));
   AddKeyLabel(ui::EF_SHIFT_DOWN, l10n_util::GetStringUTF8(IDS_ASH_SHIFT_KEY));
   AddKeyLabel(ui::EF_COMMAND_DOWN,
               l10n_util::GetStringUTF8(IDS_ASH_SEARCH_KEY));
+  AddKeyLabel(ui::EF_FUNCTION_DOWN, l10n_util::GetStringUTF8(IDS_ASH_FN_KEY));
   AddKeyLabel(ui::EF_ALTGR_DOWN, l10n_util::GetStringUTF8(IDS_ASH_ALTGR_KEY));
   AddKeyLabel(ui::EF_MOD3_DOWN, l10n_util::GetStringUTF8(IDS_ASH_MOD3_KEY));
 }
@@ -196,16 +211,19 @@ void StickyKeysOverlayView::AddKeyLabel(ui::EventFlags modifier,
   modifier_label_map_[modifier] = label;
 }
 
+BEGIN_METADATA(StickyKeysOverlayView)
+END_METADATA
+
 ///////////////////////////////////////////////////////////////////////////////
 //  StickyKeysOverlay
 StickyKeysOverlay::StickyKeysOverlay() {
   auto overlay_view = std::make_unique<StickyKeysOverlayView>();
   widget_size_ = overlay_view->GetPreferredSize();
 
-  views::Widget::InitParams params;
-  params.type = views::Widget::InitParams::TYPE_POPUP;
+  views::Widget::InitParams params(
+      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
+      views::Widget::InitParams::TYPE_POPUP);
   params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
-  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
   params.accept_events = false;
   params.z_order = ui::ZOrderLevel::kFloatingUIElement;
   params.bounds = CalculateOverlayBounds();
@@ -249,10 +267,16 @@ void StickyKeysOverlay::Show(bool visible) {
   settings.SetPreemptionStrategy(
       ui::LayerAnimator::IMMEDIATELY_ANIMATE_TO_NEW_TARGET);
   settings.SetTweenType(visible ? gfx::Tween::EASE_OUT : gfx::Tween::EASE_IN);
-  settings.SetTransitionDuration(
-      base::TimeDelta::FromMilliseconds(kSlideAnimationDurationMs));
+  settings.SetTransitionDuration(base::Milliseconds(kSlideAnimationDurationMs));
 
   overlay_widget_->GetLayer()->SetTransform(gfx::Transform());
+}
+
+void StickyKeysOverlay::UpdateBoundsIfVisible() {
+  if (!is_visible_)
+    return;
+
+  overlay_widget_->SetBounds(CalculateOverlayBounds());
 }
 
 void StickyKeysOverlay::SetModifierVisible(ui::EventFlags modifier,
@@ -279,8 +303,15 @@ views::Widget* StickyKeysOverlay::GetWidgetForTesting() {
 }
 
 gfx::Rect StickyKeysOverlay::CalculateOverlayBounds() {
+  // Get work area to inset overlay (below Docked Magnifier or ChromeVox).
+  gfx::Rect work_area = WorkAreaInsets::ForWindow(Shell::GetPrimaryRootWindow())
+                            ->user_work_area_bounds();
+
   int x = is_visible_ ? kHorizontalOverlayOffset : -widget_size_.width();
-  return gfx::Rect(gfx::Point(x, kVerticalOverlayOffset), widget_size_);
+
+  return gfx::Rect(
+      gfx::Point(work_area.x() + x, work_area.y() + kVerticalOverlayOffset),
+      widget_size_);
 }
 
 void StickyKeysOverlay::OnImplicitAnimationsCompleted() {

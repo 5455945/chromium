@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -25,7 +25,7 @@ class Worklet;
 class CORE_EXPORT WorkletPendingTasks final
     : public GarbageCollected<WorkletPendingTasks> {
  public:
-  WorkletPendingTasks(Worklet*, ScriptPromiseResolver*);
+  WorkletPendingTasks(Worklet*, ScriptPromiseResolver<IDLUndefined>*);
 
   // This must be called after the construction and before decrementing the
   // counter.
@@ -37,14 +37,16 @@ class CORE_EXPORT WorkletPendingTasks final
   // Decrements |counter_| and resolves the promise if the counter becomes 0.
   void DecrementCounter();
 
-  virtual void Trace(Visitor*) const;
+  void Trace(Visitor*) const;
 
  private:
-  // The number of pending tasks. -1 indicates these tasks are aborted and
-  // |resolver_| already rejected the promise.
-  int counter_;
+  // -2: Uninitialized.
+  // -1: Aborted.
+  // 0: Resolved.
+  // > 0: Number of pending tasks.
+  int counter_ = -2;
 
-  Member<ScriptPromiseResolver> resolver_;
+  Member<ScriptPromiseResolver<IDLUndefined>> resolver_;
 
   Member<Worklet> worklet_;
 };

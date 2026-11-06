@@ -34,7 +34,10 @@
 #include "third_party/blink/renderer/core/editing/editing_utilities.h"
 #include "third_party/blink/renderer/core/editing/ephemeral_range.h"
 #include "third_party/blink/renderer/core/editing/iterators/text_iterator.h"
+#include "third_party/blink/renderer/core/editing/serializers/html_interchange.h"
+#include "third_party/blink/renderer/core/editing/serializers/serialization.h"
 #include "third_party/blink/renderer/core/html/html_document.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
@@ -55,31 +58,31 @@ StyledMarkupAccumulator::StyledMarkupAccumulator(
     const TextOffset& end,
     Document* document,
     const CreateMarkupOptions& options)
-    : formatter_(options.ShouldResolveURLs(),
-                 IsA<HTMLDocument>(document) ? SerializationType::kHTML
-                                             : SerializationType::kXML),
+    : formatter_(options.ShouldResolveUrls(),
+                 IsA<HTMLDocument>(document) ? SerializationType::kHtml
+                                             : SerializationType::kXml),
       start_(start),
       end_(end),
       document_(document),
       options_(options) {}
 
 void StyledMarkupAccumulator::AppendEndTag(const Element& element) {
-  AppendEndMarkup(result_, element);
+  AppendEndMarkup(element, result_);
 }
 
 void StyledMarkupAccumulator::AppendStartMarkup(Node& node) {
-  formatter_.AppendStartMarkup(result_, node);
+  formatter_.AppendStartMarkup(node, result_);
 }
 
-void StyledMarkupAccumulator::AppendEndMarkup(StringBuilder& result,
-                                              const Element& element) {
-  formatter_.AppendEndMarkup(result, element);
+void StyledMarkupAccumulator::AppendEndMarkup(const Element& element,
+                                              StringBuilder& result) {
+  formatter_.AppendEndMarkup(element, result);
 }
 
 void StyledMarkupAccumulator::AppendText(Text& text) {
   const String& str = text.data();
-  unsigned length = str.length();
-  unsigned start = 0;
+  wtf_size_t length = str.length();
+  wtf_size_t start = 0;
   if (end_.IsNotNull()) {
     if (text == end_.GetText())
       length = end_.Offset();
@@ -91,14 +94,17 @@ void StyledMarkupAccumulator::AppendText(Text& text) {
     }
   }
   MarkupFormatter::AppendCharactersReplacingEntities(
-      result_, StringView(str, start, length),
-      formatter_.EntityMaskForText(text));
+      StringView(str, start, length), formatter_.EntityMaskForText(text),
+      result_);
 }
 
 void StyledMarkupAccumulator::AppendTextWithInlineStyle(
     Text& text,
     EditingStyle* inline_style) {
-  if (inline_style) {
+  const bool skip_interchange_and_style =
+      RuntimeEnabledFeatures::SkipHtmlInterchangeInForeignContentEnabled() &&
+      IsInForeignContentForSerialization(text);
+  if (inline_style && !skip_interchange_and_style) {
     // wrappingStyleForAnnotatedSerialization should have removed
     // -webkit-text-decorations-in-effect.
     DCHECK(!ShouldAnnotate() ||
@@ -108,11 +114,14 @@ void StyledMarkupAccumulator::AppendTextWithInlineStyle(
     DCHECK(document_);
 
     result_.Append("<span style=\"");
-    MarkupFormatter::AppendAttributeValue(
-        result_, inline_style->Style()->AsText(), IsA<HTMLDocument>(document_));
+    MarkupFormatter::AppendAttributeValue(inline_style->Style()->AsText(),
+                                          GetSerializationType(*document_),
+                                          result_);
     result_.Append("\">");
   }
-  if (!ShouldAnnotate()) {
+  if (!ShouldAnnotate() ||
+      (skip_interchange_and_style &&
+       options_.IgnoresCssTextTransformsForRenderedText())) {
     AppendText(text);
   } else {
     const bool use_rendered_text = !EnclosingElementWithTag(
@@ -120,69 +129,79 @@ void StyledMarkupAccumulator::AppendTextWithInlineStyle(
     String content =
         use_rendered_text ? RenderedText(text) : StringValueForRange(text);
     StringBuilder buffer;
-    MarkupFormatter::AppendCharactersReplacingEntities(buffer, content,
-                                                       kEntityMaskInPCDATA);
-    // Keep collapsible white spaces as is during markup sanitization.
+    MarkupFormatter::AppendCharactersReplacingEntities(
+        content, kEntityMaskInPcdata, buffer);
+    // Tell the converter whether this text node sits at the selection's start
+    // or end, so an edge space becomes a non-breaking space but an interior one
+    // does not.
+    const IsAtSelectionStart is_at_selection_start(start_.IsNotNull() &&
+                                                   start_.GetText() == &text);
+    const IsAtSelectionEnd is_at_selection_end(end_.IsNotNull() &&
+                                               end_.GetText() == &text);
+    // Keep collapsible white spaces as is during markup sanitization or inside
+    // foreign content.
     const String text_to_append =
-        IsForMarkupSanitization()
+        (IsForMarkupSanitization() || skip_interchange_and_style)
             ? buffer.ToString()
-            : ConvertHTMLTextToInterchangeFormat(buffer.ToString(), text);
+            : ConvertHtmlTextToInterchangeFormat(buffer.ToString(), text,
+                                                 is_at_selection_start,
+                                                 is_at_selection_end);
     result_.Append(text_to_append);
   }
-  if (inline_style)
+  if (inline_style && !skip_interchange_and_style) {
     result_.Append("</span>");
+  }
 }
 
 void StyledMarkupAccumulator::AppendElementWithInlineStyle(
     const Element& element,
-    EditingStyle* style) {
-  AppendElementWithInlineStyle(result_, element, style);
+    const EditingStyle* style) {
+  AppendElementWithInlineStyle(element, style, result_);
 }
 
 void StyledMarkupAccumulator::AppendElementWithInlineStyle(
-    StringBuilder& out,
     const Element& element,
-    EditingStyle* style) {
-  const bool document_is_html = IsA<HTMLDocument>(element.GetDocument());
-  formatter_.AppendStartTagOpen(out, element);
+    const EditingStyle* style,
+    StringBuilder& out) {
+  const SerializationType type = GetSerializationType(element.GetDocument());
+  formatter_.AppendStartTagOpen(element, out);
   AttributeCollection attributes = element.Attributes();
   for (const auto& attribute : attributes) {
     // We'll handle the style attribute separately, below.
     if (attribute.GetName() == html_names::kStyleAttr)
       continue;
-    AppendAttribute(out, element, attribute);
+    AppendAttribute(element, attribute, out);
   }
   if (style && !style->IsEmpty()) {
     out.Append(" style=\"");
-    MarkupFormatter::AppendAttributeValue(out, style->Style()->AsText(),
-                                          document_is_html);
+    MarkupFormatter::AppendAttributeValue(style->Style()->AsText(), type, out);
     out.Append('\"');
   }
-  formatter_.AppendStartTagClose(out, element);
+  formatter_.AppendStartTagClose(element, out);
 }
 
 void StyledMarkupAccumulator::AppendElement(const Element& element) {
-  AppendElement(result_, element);
+  AppendElement(element, result_);
 }
 
-void StyledMarkupAccumulator::AppendElement(StringBuilder& out,
-                                            const Element& element) {
-  formatter_.AppendStartTagOpen(out, element);
+void StyledMarkupAccumulator::AppendElement(const Element& element,
+                                            StringBuilder& out) {
+  formatter_.AppendStartTagOpen(element, out);
   AttributeCollection attributes = element.Attributes();
   for (const auto& attribute : attributes)
-    AppendAttribute(out, element, attribute);
-  formatter_.AppendStartTagClose(out, element);
+    AppendAttribute(element, attribute, out);
+  formatter_.AppendStartTagClose(element, out);
 }
 
-void StyledMarkupAccumulator::AppendAttribute(StringBuilder& result,
-                                              const Element& element,
-                                              const Attribute& attribute) {
-  String value = formatter_.ResolveURLIfNeeded(element, attribute);
-  if (formatter_.SerializeAsHTML()) {
-    MarkupFormatter::AppendAttributeAsHTML(result, attribute, value);
+void StyledMarkupAccumulator::AppendAttribute(const Element& element,
+                                              const Attribute& attribute,
+                                              StringBuilder& result) {
+  String value = formatter_.ResolveUrlIfNeeded(element, attribute);
+  if (formatter_.SerializeAsHtml()) {
+    MarkupFormatter::AppendAttributeAsHtml(attribute, value, result);
   } else {
-    MarkupFormatter::AppendAttributeAsXMLWithoutNamespace(result, attribute,
-                                                          value);
+    MarkupFormatter::AppendAttributeAsXmlWithoutNamespace(attribute, value,
+                                                          result);
   }
 }
 
@@ -195,8 +214,8 @@ void StyledMarkupAccumulator::WrapWithStyleNode(CSSPropertyValueSet* style) {
 
   StringBuilder open_tag;
   open_tag.Append("<div style=\"");
-  MarkupFormatter::AppendAttributeValue(open_tag, style->AsText(),
-                                        IsA<HTMLDocument>(document_));
+  MarkupFormatter::AppendAttributeValue(
+      style->AsText(), GetSerializationType(*document_), open_tag);
   open_tag.Append("\">");
   reversed_preceding_markup_.push_back(open_tag.ToString());
 
@@ -225,8 +244,13 @@ String StyledMarkupAccumulator::RenderedText(Text& text_node) {
     start_offset = start_.Offset();
   if (end_.GetText() == text_node)
     end_offset = end_.Offset();
+
   return PlainText(EphemeralRange(Position(&text_node, start_offset),
-                                  Position(&text_node, end_offset)));
+                                  Position(&text_node, end_offset)),
+                   TextIteratorBehavior::Builder()
+                       .SetIgnoresCssTextTransforms(
+                           options_.IgnoresCssTextTransformsForRenderedText())
+                       .Build());
 }
 
 String StyledMarkupAccumulator::StringValueForRange(const Text& node) {
@@ -235,9 +259,9 @@ String StyledMarkupAccumulator::StringValueForRange(const Text& node) {
 
   String str = node.data();
   if (start_.GetText() == node)
-    str.Truncate(end_.Offset());
+    str = str.substr(0, end_.Offset());
   if (end_.GetText() == node)
-    str.Remove(0, start_.Offset());
+    str.erase(0, start_.Offset());
   return str;
 }
 

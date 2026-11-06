@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,10 @@
 
 chrome.test.runTests([
   function testTtsEngineApiSucceeds() {
-    var speakListener = function(utterance, options, sendTtsEvent) {
+    const speakListener = function(utterance, options, sendTtsEvent) {
       sendTtsEvent({'type': 'end'});
     };
-    var stopListener = function() {};
+    const stopListener = function() {};
 
     // This regressed after a recent refactoring because the internal
     // bindings for chrome.ttsEngine.onSpeak.addListener reference
@@ -21,5 +21,5 @@ chrome.test.runTests([
     chrome.ttsEngine.onStop.addListener(stopListener);
     chrome.test.assertNoLastError();
     chrome.test.succeed();
-  }
+  },
 ]);

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,28 +12,32 @@
 #include "components/spellcheck/common/spellcheck.mojom.h"
 #include "components/spellcheck/common/spellcheck_features.h"
 #include "components/spellcheck/common/spellcheck_result.h"
+#include "components/spellcheck/common/spelling_marker.h"
 #include "components/spellcheck/renderer/hunspell_engine.h"
 #include "components/spellcheck/renderer/spellcheck.h"
 #include "components/spellcheck/renderer/spellcheck_language.h"
 #include "components/spellcheck/spellcheck_buildflags.h"
+#include "third_party/blink/public/platform/web_runtime_features.h"
+#include "third_party/blink/public/web/web_text_check_client.h"
 
-#if defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+#if BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
 #include "base/path_service.h"
 
 namespace {
 base::FilePath GetHunspellDirectory() {
   base::FilePath hunspell_directory;
-  if (!base::PathService::Get(base::DIR_SOURCE_ROOT, &hunspell_directory))
+  if (!base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT,
+                              &hunspell_directory)) {
     return base::FilePath();
+  }
 
   hunspell_directory = hunspell_directory.AppendASCII("third_party");
   hunspell_directory = hunspell_directory.AppendASCII("hunspell_dictionaries");
   return hunspell_directory;
 }
 }  // namespace
-#endif  // defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+#endif  // BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
 
 FakeTextCheckingResult::FakeTextCheckingResult() = default;
 FakeTextCheckingResult::~FakeTextCheckingResult() = default;
@@ -42,10 +46,10 @@ FakeTextCheckingCompletion::FakeTextCheckingCompletion(
     FakeTextCheckingResult* result)
     : result_(result) {}
 
-FakeTextCheckingCompletion::~FakeTextCheckingCompletion() {}
+FakeTextCheckingCompletion::~FakeTextCheckingCompletion() = default;
 
 void FakeTextCheckingCompletion::DidFinishCheckingText(
-    const blink::WebVector<blink::WebTextCheckingResult>& results) {
+    const std::vector<blink::WebTextCheckingResult>& results) {
   ++result_->completion_count_;
   result_->results_ = results;
 }
@@ -66,7 +70,7 @@ void FakeSpellCheck::SetFakeLanguageCounts(size_t language_count,
   enabled_language_count_ = enabled_count;
 }
 
-#if defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+#if BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
 void FakeSpellCheck::InitializeSpellCheckForLocale(const std::string& language,
                                                    bool use_hunspell) {
   // Non-Hunspell case is passed invalid file to SpellcheckLanguage::Init.
@@ -90,7 +94,13 @@ void FakeSpellCheck::InitializeSpellCheckForLocale(const std::string& language,
       std::make_unique<HunspellEngine>(embedder_provider_);
   SpellCheck::languages_.back()->Init(std::move(file), language);
 }
-#endif  // defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+#endif  // BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+
+void FakeSpellCheck::InitializeSpellCheckWithLanguage() {
+  // Add the SpellcheckLanguage manually to the SpellCheck object.
+  SpellCheck::languages_.push_back(
+      std::make_unique<SpellcheckLanguage>(embedder_provider_));
+}
 
 size_t FakeSpellCheck::LanguageCount() {
   return use_fake_counts_ ? language_count_ : SpellCheck::LanguageCount();
@@ -103,14 +113,16 @@ size_t FakeSpellCheck::EnabledLanguageCount() {
 
 TestingSpellCheckProvider::TestingSpellCheckProvider(
     service_manager::LocalInterfaceProvider* embedder_provider)
-    : SpellCheckProvider(nullptr,
-                         new FakeSpellCheck(embedder_provider),
-                         embedder_provider) {}
+    : SpellCheckProvider(nullptr, new FakeSpellCheck(embedder_provider)) {
+  SetSpellCheckHostForTesting(receiver_.BindNewPipeAndPassRemote());
+}
 
 TestingSpellCheckProvider::TestingSpellCheckProvider(
     SpellCheck* spellcheck,
     service_manager::LocalInterfaceProvider* embedder_provider)
-    : SpellCheckProvider(nullptr, spellcheck, embedder_provider) {}
+    : SpellCheckProvider(nullptr, spellcheck) {
+  SetSpellCheckHostForTesting(receiver_.BindNewPipeAndPassRemote());
+}
 
 TestingSpellCheckProvider::~TestingSpellCheckProvider() {
   receiver_.reset();
@@ -121,14 +133,14 @@ TestingSpellCheckProvider::~TestingSpellCheckProvider() {
 
 void TestingSpellCheckProvider::RequestTextChecking(
     const std::u16string& text,
+    const std::vector<spellcheck::SpellingMarker>& spelling_markers,
+    blink::WebTextCheckClient::ShouldForceRefreshTextCheckService
+        should_force_refresh,
     std::unique_ptr<blink::WebTextCheckingCompletion> completion) {
-  if (!receiver_.is_bound())
-    SetSpellCheckHostForTesting(receiver_.BindNewPipeAndPassRemote());
-  SpellCheckProvider::RequestTextChecking(text, std::move(completion));
+  SpellCheckProvider::RequestTextChecking(
+      text, spelling_markers, should_force_refresh, std::move(completion));
   base::RunLoop().RunUntilIdle();
 }
-
-void TestingSpellCheckProvider::RequestDictionary() {}
 
 void TestingSpellCheckProvider::NotifyChecked(const std::u16string& word,
                                               bool misspelled) {}
@@ -164,18 +176,33 @@ void TestingSpellCheckProvider::OnCallSpellingService(
 void TestingSpellCheckProvider::ResetResult() {
   text_.clear();
 }
+
+int TestingSpellCheckProvider::AddCompletionForTest(
+    std::unique_ptr<FakeTextCheckingCompletion> completion) {
+  return SpellCheckProvider::text_check_completions_.Add(std::move(completion));
+}
+
+void TestingSpellCheckProvider::OnRespondSpellingService(
+    int identifier,
+    const std::u16string& text,
+    bool success,
+    const std::vector<SpellCheckResult>& results) {
+  SpellCheckProvider::OnRespondSpellingService(identifier, text, success,
+                                               results);
+}
 #endif  // BUILDFLAG(USE_RENDERER_SPELLCHECKER)
 
 #if BUILDFLAG(USE_BROWSER_SPELLCHECKER)
 void TestingSpellCheckProvider::RequestTextCheck(
     const std::u16string& text,
-    int,
+    const std::vector<spellcheck::SpellingMarker>& spelling_markers,
     RequestTextCheckCallback callback) {
-  text_check_requests_.push_back(std::make_pair(text, std::move(callback)));
+  text_check_requests_.emplace_back(text, spelling_markers,
+                                    std::move(callback));
 }
 
+#if BUILDFLAG(ENABLE_SPELLING_SERVICE)
 void TestingSpellCheckProvider::CheckSpelling(const std::u16string&,
-                                              int,
                                               CheckSpellingCallback) {
   NOTREACHED();
 }
@@ -184,23 +211,18 @@ void TestingSpellCheckProvider::FillSuggestionList(const std::u16string&,
                                                    FillSuggestionListCallback) {
   NOTREACHED();
 }
+#endif  // BUILDFLAG(ENABLE_SPELLING_SERVICE)
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 void TestingSpellCheckProvider::InitializeDictionaries(
     InitializeDictionariesCallback callback) {
-  if (base::FeatureList::IsEnabled(
-          spellcheck::kWinDelaySpellcheckServiceInit)) {
-    std::move(callback).Run(/*dictionaries=*/{}, /*custom_words=*/{},
-                            /*enable=*/false);
-    return;
-  }
-
-  NOTREACHED();
+  std::move(callback).Run(/*dictionaries=*/{}, /*custom_words=*/{},
+                          /*enable=*/false);
 }
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 #endif  // BUILDFLAG(USE_BROWSER_SPELLCHECKER)
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 void TestingSpellCheckProvider::DisconnectSessionBridge() {
   NOTREACHED();
 }
@@ -208,7 +230,7 @@ void TestingSpellCheckProvider::DisconnectSessionBridge() {
 
 void TestingSpellCheckProvider::SetLastResults(
     const std::u16string last_request,
-    blink::WebVector<blink::WebTextCheckingResult>& last_results) {
+    std::vector<blink::WebTextCheckingResult>& last_results) {
   last_request_ = last_request;
   last_results_ = last_results;
 }
@@ -219,7 +241,7 @@ bool TestingSpellCheckProvider::SatisfyRequestFromCache(
   return SpellCheckProvider::SatisfyRequestFromCache(text, completion);
 }
 
-#if defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+#if BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
 int TestingSpellCheckProvider::AddCompletionForTest(
     std::unique_ptr<FakeTextCheckingCompletion> completion,
     SpellCheckProvider::HybridSpellCheckRequestInfo request_info) {
@@ -236,8 +258,22 @@ void TestingSpellCheckProvider::OnRespondTextCheck(
   SpellCheckProvider::OnRespondTextCheck(identifier, line, results);
   base::RunLoop().RunUntilIdle();
 }
-#endif  // defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+#endif  // BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+
+base::WeakPtr<SpellCheckProvider> TestingSpellCheckProvider::GetWeakPtr() {
+  return weak_factory_.GetWeakPtr();
+}
 
 SpellCheckProviderTest::SpellCheckProviderTest()
     : provider_(&embedder_provider_) {}
-SpellCheckProviderTest::~SpellCheckProviderTest() {}
+SpellCheckProviderTest::~SpellCheckProviderTest() = default;
+
+void SpellCheckProviderTest::SetUp() {
+  custom_dictionary_api_enabled_ =
+      blink::WebRuntimeFeatures::IsSpellCheckCustomDictionaryAPIEnabled();
+}
+
+void SpellCheckProviderTest::TearDown() {
+  blink::WebRuntimeFeatures::EnableSpellCheckCustomDictionaryAPI(
+      custom_dictionary_api_enabled_);
+}

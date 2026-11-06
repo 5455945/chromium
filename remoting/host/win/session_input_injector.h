@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,13 @@
 
 #include <memory>
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/scoped_refptr.h"
 #include "remoting/host/input_injector.h"
 
 namespace base {
 class SingleThreadTaskRunner;
-} // namespace base
+}  // namespace base
 
 namespace remoting {
 
@@ -30,6 +29,10 @@ class SessionInputInjectorWin : public InputInjector {
       scoped_refptr<base::SingleThreadTaskRunner> execute_action_task_runner,
       const base::RepeatingClosure& inject_sas,
       const base::RepeatingClosure& lock_workstation);
+
+  SessionInputInjectorWin(const SessionInputInjectorWin&) = delete;
+  SessionInputInjectorWin& operator=(const SessionInputInjectorWin&) = delete;
+
   ~SessionInputInjectorWin() override;
 
   // InputInjector implementation.
@@ -37,8 +40,7 @@ class SessionInputInjectorWin : public InputInjector {
       std::unique_ptr<protocol::ClipboardStub> client_clipboard) override;
 
   // protocol::ClipboardStub implementation.
-  void InjectClipboardEvent(
-      const protocol::ClipboardEvent& event) override;
+  void InjectClipboardEvent(const protocol::ClipboardEvent& event) override;
 
   // protocol::InputStub implementation.
   void InjectKeyEvent(const protocol::KeyEvent& event) override;
@@ -50,8 +52,6 @@ class SessionInputInjectorWin : public InputInjector {
   // The actual implementation resides in SessionInputInjectorWin::Core class.
   class Core;
   scoped_refptr<Core> core_;
-
-  DISALLOW_COPY_AND_ASSIGN(SessionInputInjectorWin);
 };
 
 }  // namespace remoting

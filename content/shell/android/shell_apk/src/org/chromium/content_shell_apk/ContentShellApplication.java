@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,7 +13,7 @@ import org.chromium.base.ContextUtils;
 import org.chromium.base.PathUtils;
 import org.chromium.base.library_loader.LibraryLoader;
 import org.chromium.base.library_loader.LibraryProcessType;
-import org.chromium.ui.base.ResourceBundle;
+import org.chromium.net.NetworkChangeNotifier;
 
 /**
  * Entry point for the content shell application.  Handles initialization of information that needs
@@ -28,14 +28,23 @@ public class ContentShellApplication extends Application {
         super.attachBaseContext(base);
         boolean isBrowserProcess = !ContextUtils.getProcessName().contains(":");
         ContextUtils.initApplicationContext(this);
-        ResourceBundle.setNoAvailableLocalePaks();
-        LibraryLoader.getInstance().enableJniChecks();
-        LibraryLoader.getInstance().setLibraryProcessType(isBrowserProcess
-                        ? LibraryProcessType.PROCESS_BROWSER
-                        : LibraryProcessType.PROCESS_CHILD);
+        LibraryLoader.getInstance()
+                .setLibraryProcessType(
+                        isBrowserProcess
+                                ? LibraryProcessType.PROCESS_BROWSER
+                                : LibraryProcessType.PROCESS_CHILD);
         if (isBrowserProcess) {
             PathUtils.setPrivateDataDirectorySuffix(PRIVATE_DATA_DIRECTORY_SUFFIX);
             ApplicationStatus.initialize(this);
+        }
+    }
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        if (!ContextUtils.getProcessName().contains(":")) {
+            NetworkChangeNotifier.init();
+            NetworkChangeNotifier.setAutoDetectConnectivityState(true);
         }
     }
 

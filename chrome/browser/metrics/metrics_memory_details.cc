@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,14 +10,12 @@
 
 #include "base/location.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/single_thread_task_runner.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/site_isolation/site_details.h"
-#include "components/nacl/common/nacl_process_type.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/page.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host.h"
@@ -25,14 +23,13 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_constants.h"
 #include "content/public/common/process_type.h"
-#include "ppapi/buildflags/buildflags.h"
 
 namespace {
 
 void CountRenderProcessHosts(size_t* initialized_and_not_dead, size_t* all) {
   *initialized_and_not_dead = *all = 0;
 
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
   for (auto iter = content::RenderProcessHost::AllHostsIterator();
        !iter.IsAtEnd(); iter.Advance()) {
     content::RenderProcessHost& render_process_host = *iter.GetCurrentValue();
@@ -47,13 +44,12 @@ void CountRenderProcessHosts(size_t* initialized_and_not_dead, size_t* all) {
 MetricsMemoryDetails::MetricsMemoryDetails(base::OnceClosure callback)
     : callback_(std::move(callback)) {}
 
-MetricsMemoryDetails::~MetricsMemoryDetails() {
-}
+MetricsMemoryDetails::~MetricsMemoryDetails() = default;
 
 void MetricsMemoryDetails::OnDetailsAvailable() {
   UpdateHistograms();
-  base::ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE,
-                                                std::move(callback_));
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, std::move(callback_));
 }
 
 void MetricsMemoryDetails::UpdateHistograms() {
@@ -61,104 +57,24 @@ void MetricsMemoryDetails::UpdateHistograms() {
 
   const ProcessData& browser = *ChromeBrowser();
   int renderer_count = 0;
-  for (size_t index = 0; index < browser.processes.size(); index++) {
-    int num_open_fds = browser.processes[index].num_open_fds;
-    int open_fds_soft_limit = browser.processes[index].open_fds_soft_limit;
-    switch (browser.processes[index].process_type) {
-      case content::PROCESS_TYPE_BROWSER:
-        if (num_open_fds != -1 && open_fds_soft_limit != -1) {
-          UMA_HISTOGRAM_COUNTS_10000("Memory.Browser.OpenFDs", num_open_fds);
-          UMA_HISTOGRAM_COUNTS_10000("Memory.Browser.OpenFDsSoftLimit",
-                                     open_fds_soft_limit);
-        }
-        continue;
-      case content::PROCESS_TYPE_RENDERER: {
-        if (num_open_fds != -1 && open_fds_soft_limit != -1) {
-          UMA_HISTOGRAM_COUNTS_10000("Memory.RendererAll.OpenFDs",
-                                     num_open_fds);
-          UMA_HISTOGRAM_COUNTS_10000("Memory.RendererAll.OpenFDsSoftLimit",
-                                     open_fds_soft_limit);
-        }
-        ProcessMemoryInformation::RendererProcessType renderer_type =
-            browser.processes[index].renderer_type;
-        switch (renderer_type) {
-          case ProcessMemoryInformation::RENDERER_EXTENSION:
-            if (num_open_fds != -1) {
-              UMA_HISTOGRAM_COUNTS_10000("Memory.Extension.OpenFDs",
-                                         num_open_fds);
-            }
-            continue;
-          case ProcessMemoryInformation::RENDERER_CHROME:
-            if (num_open_fds != -1)
-              UMA_HISTOGRAM_COUNTS_10000("Memory.Chrome.OpenFDs", num_open_fds);
-            continue;
-          case ProcessMemoryInformation::RENDERER_UNKNOWN:
-            NOTREACHED() << "Unknown renderer process type.";
-            continue;
-          case ProcessMemoryInformation::RENDERER_NORMAL:
-          default:
-            if (num_open_fds != -1) {
-              UMA_HISTOGRAM_COUNTS_10000("Memory.Renderer.OpenFDs",
-                                         num_open_fds);
-            }
-            renderer_count++;
-            continue;
-        }
+  for (auto& process : browser.processes) {
+    if (process.process_type == content::PROCESS_TYPE_RENDERER) {
+      ProcessMemoryInformation::RendererProcessType renderer_type =
+          process.renderer_type;
+      switch (renderer_type) {
+        case ProcessMemoryInformation::RENDERER_EXTENSION:
+        case ProcessMemoryInformation::RENDERER_CHROME:
+          continue;
+        case ProcessMemoryInformation::RENDERER_UNKNOWN:
+          NOTREACHED() << "Unknown renderer process type.";
+        case ProcessMemoryInformation::RENDERER_NORMAL:
+        default:
+          renderer_count++;
+          continue;
       }
-      case content::PROCESS_TYPE_UTILITY:
-        if (num_open_fds != -1)
-          UMA_HISTOGRAM_COUNTS_10000("Memory.Utility.OpenFDs", num_open_fds);
-        continue;
-      case content::PROCESS_TYPE_ZYGOTE:
-        if (num_open_fds != -1)
-          UMA_HISTOGRAM_COUNTS_10000("Memory.Zygote.OpenFDs", num_open_fds);
-        continue;
-      case content::PROCESS_TYPE_SANDBOX_HELPER:
-        if (num_open_fds != -1) {
-          UMA_HISTOGRAM_COUNTS_10000("Memory.SandboxHelper.OpenFDs",
-                                     num_open_fds);
-        }
-        continue;
-      case content::PROCESS_TYPE_GPU:
-        if (num_open_fds != -1 && open_fds_soft_limit != -1) {
-          UMA_HISTOGRAM_COUNTS_10000("Memory.Gpu.OpenFDs", num_open_fds);
-          UMA_HISTOGRAM_COUNTS_10000("Memory.Gpu.OpenFDsSoftLimit",
-                                     open_fds_soft_limit);
-        }
-        continue;
-#if BUILDFLAG(ENABLE_PLUGINS)
-      case content::PROCESS_TYPE_PPAPI_PLUGIN: {
-        if (num_open_fds != -1) {
-          UMA_HISTOGRAM_COUNTS_10000("Memory.PepperPlugin.OpenFDs",
-                                     num_open_fds);
-        }
-        continue;
-      }
-      case content::PROCESS_TYPE_PPAPI_BROKER:
-        if (num_open_fds != -1) {
-          UMA_HISTOGRAM_COUNTS_10000("Memory.PepperPluginBroker.OpenFDs",
-                                     num_open_fds);
-        }
-        continue;
-#endif
-      case PROCESS_TYPE_NACL_LOADER:
-        if (num_open_fds != -1) {
-          UMA_HISTOGRAM_COUNTS_10000("Memory.NativeClient.OpenFDs",
-                                     num_open_fds);
-        }
-        continue;
-      case PROCESS_TYPE_NACL_BROKER:
-        if (num_open_fds != -1) {
-          UMA_HISTOGRAM_COUNTS_10000("Memory.NativeClientBroker.OpenFDs",
-                                     num_open_fds);
-        }
-        continue;
-      default:
-        NOTREACHED();
-        continue;
     }
   }
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Chrome OS exposes system-wide graphics driver memory which has historically
   // been a source of leak/bloat.
   base::GraphicsMemoryInfoKB meminfo;
@@ -168,22 +84,25 @@ void MetricsMemoryDetails::UpdateHistograms() {
   }
 #endif
 
-  UpdateSiteIsolationMetrics();
-
-  UMA_HISTOGRAM_COUNTS_100("Memory.ProcessCount",
-                           static_cast<int>(browser.processes.size()));
-  UMA_HISTOGRAM_COUNTS_100("Memory.RendererProcessCount", renderer_count);
-
-  size_t initialized_and_not_dead_rphs, all_rphs;
+  size_t initialized_and_not_dead_rphs;
+  size_t all_rphs;
   CountRenderProcessHosts(&initialized_and_not_dead_rphs, &all_rphs);
-  UMA_HISTOGRAM_COUNTS_100("Memory.RenderProcessHost.Count.All", all_rphs);
-  UMA_HISTOGRAM_COUNTS_100(
-      "Memory.RenderProcessHost.Count.InitializedAndNotDead",
+  UpdateSiteIsolationMetrics(initialized_and_not_dead_rphs);
+
+  UMA_HISTOGRAM_COUNTS_1000("Memory.ProcessCount2",
+                            static_cast<int>(browser.processes.size()));
+  UMA_HISTOGRAM_COUNTS_1000("Memory.RendererProcessCount2", renderer_count);
+
+  UMA_HISTOGRAM_COUNTS_1000("Memory.RenderProcessHost.Count2.All", all_rphs);
+  UMA_HISTOGRAM_COUNTS_1000(
+      "Memory.RenderProcessHost.Count2.InitializedAndNotDead",
       initialized_and_not_dead_rphs);
 }
 
-void MetricsMemoryDetails::UpdateSiteIsolationMetrics() {
-  DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+void MetricsMemoryDetails::UpdateSiteIsolationMetrics(
+    size_t live_process_count) {
+  CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI),
+        base::NotFatalUntil::M161);
 
   // Track site data for predicting process counts with out-of-process iframes.
   // See site_details.h.
@@ -207,14 +126,17 @@ void MetricsMemoryDetails::UpdateSiteIsolationMetrics() {
     if (!contents)
       continue;
 
-    // If this is a RVH for a subframe; skip it to avoid double-counting the
-    // WebContents.
-    if (rvh != contents->GetMainFrame()->GetRenderViewHost())
+    // Skip if this is not the RVH for the primary main frame of |contents|, as
+    // we want to call SiteDetails::CollectSiteInfo() once per WebContents.
+    if (rvh !=
+        contents->GetPrimaryPage().GetMainDocument().GetRenderViewHost()) {
+      // |rvh| is for a subframe document or a non primary page main document.
       continue;
+    }
 
     // The rest of this block will happen only once per WebContents.
     SiteData& site_data = site_data_map[contents->GetBrowserContext()];
-    SiteDetails::CollectSiteInfo(contents, &site_data);
+    SiteDetails::CollectSiteInfo(contents->GetPrimaryPage(), &site_data);
   }
-  SiteDetails::UpdateHistograms(site_data_map);
+  SiteDetails::UpdateHistograms(site_data_map, live_process_count);
 }

@@ -1,11 +1,15 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.content_public.browser.test.mock;
 
+import androidx.annotation.Nullable;
+
 import org.chromium.base.Callback;
+import org.chromium.blink.mojom.AuthenticatorStatus;
 import org.chromium.content_public.browser.GlobalRenderFrameHostId;
+import org.chromium.content_public.browser.JavaScriptCallback;
 import org.chromium.content_public.browser.LifecycleState;
 import org.chromium.content_public.browser.PermissionsPolicyFeature;
 import org.chromium.content_public.browser.RenderFrameHost;
@@ -13,9 +17,10 @@ import org.chromium.mojo.bindings.Interface;
 import org.chromium.url.GURL;
 import org.chromium.url.Origin;
 
-/**
- * Mock class for {@link RenderFrameHost}.
- */
+import java.util.Collections;
+import java.util.List;
+
+/** Mock class for {@link RenderFrameHost}. */
 public class MockRenderFrameHost implements RenderFrameHost {
     @Override
     public GURL getLastCommittedURL() {
@@ -28,7 +33,22 @@ public class MockRenderFrameHost implements RenderFrameHost {
     }
 
     @Override
+    public RenderFrameHost getMainFrame() {
+        return null;
+    }
+
+    @Override
+    public boolean isOutermostMainFrame() {
+        return false;
+    }
+
+    @Override
     public void getCanonicalUrlForSharing(Callback<GURL> callback) {}
+
+    @Override
+    public List<RenderFrameHost> getAllRenderFrameHosts() {
+        return Collections.emptyList();
+    }
 
     @Override
     public boolean isFeatureEnabled(@PermissionsPolicyFeature int feature) {
@@ -48,17 +68,30 @@ public class MockRenderFrameHost implements RenderFrameHost {
     public void notifyUserActivation() {}
 
     @Override
+    public boolean consumeTransientUserActivation() {
+        return false;
+    }
+
+    @Override
+    public void notifyWebAuthnAssertionRequestSucceeded() {}
+
+    @Override
     public boolean isIncognito() {
         return false;
     }
 
     @Override
-    public boolean signalModalCloseWatcherIfActive() {
+    public boolean isCloseWatcherActive() {
         return false;
     }
 
     @Override
-    public boolean isRenderFrameCreated() {
+    public boolean signalCloseWatcherIfActive() {
+        return false;
+    }
+
+    @Override
+    public boolean isRenderFrameLive() {
         return false;
     }
 
@@ -68,15 +101,33 @@ public class MockRenderFrameHost implements RenderFrameHost {
     }
 
     @Override
-    public int performGetAssertionWebAuthSecurityChecks(
-            String relyingPartyId, Origin effectiveOrigin) {
-        return 0;
+    public void performGetAssertionWebAuthSecurityChecks(
+            String relyingPartyId,
+            Origin effectiveOrigin,
+            boolean isPaymentCredentialGetAssertion,
+            @Nullable Origin remoteDesktopClientOverrideOrigin,
+            @Nullable String appId,
+            Callback<WebAuthSecurityChecksResults> callback) {
+        callback.onResult(new WebAuthSecurityChecksResults(AuthenticatorStatus.SUCCESS, false));
     }
 
     @Override
-    public int performMakeCredentialWebAuthSecurityChecks(
-            String relyingPartyId, Origin effectiveOrigin) {
-        return 0;
+    public void performMakeCredentialWebAuthSecurityChecks(
+            String relyingPartyId,
+            Origin effectiveOrigin,
+            boolean isPaymentCredentialCreation,
+            @Nullable Origin remoteDesktopClientOverrideOrigin,
+            @Nullable String appId,
+            Callback<WebAuthSecurityChecksResults> callback) {
+        callback.onResult(new WebAuthSecurityChecksResults(AuthenticatorStatus.SUCCESS, false));
+    }
+
+    @Override
+    public void performReportWebAuthSecurityChecks(
+            String relyingPartyId,
+            Origin effectiveOrigin,
+            Callback<WebAuthSecurityChecksResults> callback) {
+        callback.onResult(new WebAuthSecurityChecksResults(AuthenticatorStatus.SUCCESS, false));
     }
 
     @Override
@@ -87,5 +138,25 @@ public class MockRenderFrameHost implements RenderFrameHost {
     @Override
     public int getLifecycleState() {
         return LifecycleState.ACTIVE;
+    }
+
+    @Override
+    public void insertVisualStateCallback(Callback<Boolean> callback) {}
+
+    @Override
+    public void executeJavaScriptInIsolatedWorld(
+            String script, int worldId, @Nullable JavaScriptCallback callback) {}
+
+    @Override
+    public boolean hasHitTestDataForTesting() {
+        return true;
+    }
+
+    @Override
+    public void viewSource() {}
+
+    @Override
+    public boolean isCrossOriginIsolated() {
+        return false;
     }
 }

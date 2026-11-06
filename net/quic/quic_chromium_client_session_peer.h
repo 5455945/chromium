@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,35 +9,48 @@
 
 #include <string>
 
-#include "base/macros.h"
-#include "net/third_party/quiche/src/quic/core/quic_packets.h"
+#include "net/quic/quic_chromium_client_session.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_packets.h"
 
 namespace net {
 
-class QuicChromiumClientSession;
 class QuicChromiumClientStream;
 
 namespace test {
 
 class QuicChromiumClientSessionPeer {
  public:
+  QuicChromiumClientSessionPeer(const QuicChromiumClientSessionPeer&) = delete;
+  QuicChromiumClientSessionPeer& operator=(
+      const QuicChromiumClientSessionPeer&) = delete;
+
   static void SetHostname(QuicChromiumClientSession* session,
                           const std::string& hostname);
-
-  static uint64_t GetPushedBytesCount(QuicChromiumClientSession* session);
-
-  static uint64_t GetPushedAndUnclaimedBytesCount(
-      QuicChromiumClientSession* session);
 
   static QuicChromiumClientStream* CreateOutgoingStream(
       QuicChromiumClientSession* session);
 
+  // Used exclusively for tests.
+  static void SetNumTotalStreamsForTesting(QuicChromiumClientSession* session,
+                                           size_t num_total_streams);
+
   static bool GetSessionGoingAway(QuicChromiumClientSession* session);
 
-  static bool DoesSessionAllowPortMigration(QuicChromiumClientSession* session);
+  static QuicMigrationAttemptCause GetCurrentMigrationCause(
+      QuicChromiumClientSession* session);
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(QuicChromiumClientSessionPeer);
+  static void DisableConnectionMigration(QuicChromiumClientSession* session);
+
+  static void SetDefaultNetwork(QuicChromiumClientSession* session,
+                                handles::NetworkHandle network);
+
+  static bool IsMigrateBackToDefaultNetworkTimerRunning(
+      QuicChromiumClientSession* session);
+
+  static void OnCryptoHandshakeComplete(QuicChromiumClientSession* session);
+
+  static void SetEchConfigList(QuicChromiumClientSession* session,
+                               std::vector<uint8_t> ech_config_list);
 };
 
 }  // namespace test

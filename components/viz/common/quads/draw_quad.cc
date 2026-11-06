@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,32 +22,43 @@ DrawQuad::DrawQuad()
 
 DrawQuad::DrawQuad(const DrawQuad& other) = default;
 
-void DrawQuad::SetAll(const SharedQuadState* shared_quad_state,
-                      Material material,
-                      const gfx::Rect& rect,
-                      const gfx::Rect& visible_rect,
-                      bool needs_blending) {
+void DrawQuad::SetAll(const SharedQuadState* quad_state,
+                      Material m,
+                      const gfx::Rect& r,
+                      const gfx::Rect& visible_r,
+                      bool blending) {
   DCHECK(rect.Contains(visible_rect))
       << "rect: " << rect.ToString()
       << " visible_rect: " << visible_rect.ToString();
 
-  this->material = material;
-  this->rect = rect;
-  this->visible_rect = visible_rect;
-  this->needs_blending = needs_blending;
-  this->shared_quad_state = shared_quad_state;
+  material = m;
+  rect = r;
+  visible_rect = visible_r;
+  needs_blending = blending;
+  shared_quad_state = quad_state;
 
   DCHECK(shared_quad_state);
   DCHECK(material != Material::kInvalid);
 }
 
-DrawQuad::~DrawQuad() {}
+DrawQuad::~DrawQuad() = default;
 
-void DrawQuad::AsValueInto(base::trace_event::TracedValue* value) const {
+void DrawQuad::AsValueInto(
+    base::trace_event::TracedValue* value,
+    const std::unordered_map<const SharedQuadState*, size_t>&
+        sqs_pointer_to_index_map,
+    const std::unordered_map<ResourceId, size_t>& resource_id_to_index_map)
+    const {
   value->SetInteger("material", static_cast<int>(material));
-  TracedValue::SetIDRef(shared_quad_state, value, "shared_state");
+  cc::MathUtil::AddToTracedValue("rect", rect, value);
+  cc::MathUtil::AddToTracedValue("visible_rect", visible_rect, value);
+  value->SetBoolean("needs_blending", needs_blending);
 
-  cc::MathUtil::AddToTracedValue("content_space_rect", rect, value);
+  value->BeginDictionary("shared_quad_state");
+  auto it = sqs_pointer_to_index_map.find(shared_quad_state);
+  DCHECK(it != sqs_pointer_to_index_map.end());
+  value->SetInteger("index", it->second);
+  value->EndDictionary();
 
   bool rect_is_clipped;
   gfx::QuadF rect_as_target_space_quad =
@@ -55,30 +66,37 @@ void DrawQuad::AsValueInto(base::trace_event::TracedValue* value) const {
                             gfx::QuadF(gfx::RectF(rect)), &rect_is_clipped);
   cc::MathUtil::AddToTracedValue("rect_as_target_space_quad",
                                  rect_as_target_space_quad, value);
-
   value->SetBoolean("rect_is_clipped", rect_is_clipped);
-
-  cc::MathUtil::AddToTracedValue("content_space_visible_rect", visible_rect,
-                                 value);
 
   bool visible_rect_is_clipped;
   gfx::QuadF visible_rect_as_target_space_quad = cc::MathUtil::MapQuad(
       shared_quad_state->quad_to_target_transform,
       gfx::QuadF(gfx::RectF(visible_rect)), &visible_rect_is_clipped);
-
   cc::MathUtil::AddToTracedValue("visible_rect_as_target_space_quad",
                                  visible_rect_as_target_space_quad, value);
-
   value->SetBoolean("visible_rect_is_clipped", visible_rect_is_clipped);
 
-  value->SetBoolean("needs_blending", needs_blending);
-  value->SetBoolean("should_draw_with_blending", ShouldDrawWithBlending());
+  if (resource_id != kInvalidResourceId) {
+    value->SetInteger("resource_id",
+                      ResourceIdIndex(resource_id_to_index_map, resource_id));
+  }
+
   ExtendValue(value);
 }
 
-DrawQuad::Resources::Resources() : count(0) {
-  for (size_t i = 0; i < kMaxResourceIdCount; ++i)
-    ids[i] = kInvalidResourceId;
+int DrawQuad::ResourceIdIndex(
+    const std::unordered_map<ResourceId, size_t>& resource_id_to_index_map,
+    ResourceId id) const {
+  if (!resource_id_to_index_map.size()) {
+    // Not all code paths set up |resource_id_to_index_map|. In such cases,
+    // just log the original resource id.
+    return static_cast<int>(id.GetUnsafeValue());
+  }
+  auto it = resource_id_to_index_map.find(id);
+  if (it == resource_id_to_index_map.end()) {
+    return -1;
+  }
+  return static_cast<int>(it->second);
 }
 
 }  // namespace viz

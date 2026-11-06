@@ -1,13 +1,13 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/dom/document_statistics_collector.h"
 
+#include "base/trace_event/trace_event.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/web_distillability.h"
 #include "third_party/blink/renderer/core/dom/element_traversal.h"
-#include "third_party/blink/renderer/core/dom/node_computed_style.h"
 #include "third_party/blink/renderer/core/dom/text.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/visual_viewport.h"
@@ -17,9 +17,12 @@
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/input_type_names.h"
 #include "third_party/blink/renderer/core/page/page.h"
+#include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/platform/instrumentation/histogram.h"
 
 namespace blink {
+
+using mojom::blink::FormControlType;
 
 namespace {
 
@@ -70,8 +73,8 @@ bool MatchAttributes(const Element& element, const Vector<String>& words) {
   const String& classes = element.GetClassAttribute();
   const String& id = element.GetIdAttribute();
   for (const String& word : words) {
-    if (classes.FindIgnoringCase(word) != WTF::kNotFound ||
-        id.FindIgnoringCase(word) != WTF::kNotFound) {
+    if (classes.DeprecatedFindIgnoringCase(word) != kNotFound ||
+        id.DeprecatedFindIgnoringCase(word) != kNotFound) {
       return true;
     }
   }
@@ -81,7 +84,7 @@ bool MatchAttributes(const Element& element, const Vector<String>& words) {
 bool IsGoodForScoring(const WebDistillabilityFeatures& features,
                       const Element& element) {
   DEFINE_STATIC_LOCAL(Vector<String>, unlikely_candidates, ());
-  if (unlikely_candidates.IsEmpty()) {
+  if (unlikely_candidates.empty()) {
     auto words = {
         "banner",  "combx",      "comment", "community",  "disqus",  "extra",
         "foot",    "header",     "menu",    "related",    "remark",  "rss",
@@ -92,7 +95,7 @@ bool IsGoodForScoring(const WebDistillabilityFeatures& features,
     }
   }
   DEFINE_STATIC_LOCAL(Vector<String>, highly_likely_candidates, ());
-  if (highly_likely_candidates.IsEmpty()) {
+  if (highly_likely_candidates.empty()) {
     auto words = {"and", "article", "body", "column", "main", "shadow"};
     for (auto* word : words) {
       highly_likely_candidates.push_back(word);
@@ -124,9 +127,9 @@ void CollectFeatures(Element& root,
       features.form_count++;
     } else if (element.HasTagName(html_names::kInputTag)) {
       const auto& input = To<HTMLInputElement>(element);
-      if (input.type() == input_type_names::kText) {
+      if (input.FormControlType() == FormControlType::kInputText) {
         features.text_input_count++;
-      } else if (input.type() == input_type_names::kPassword) {
+      } else if (input.FormControlType() == FormControlType::kInputPassword) {
         features.password_input_count++;
       }
     } else if (element.HasTagName(html_names::kPTag) ||
@@ -169,7 +172,7 @@ bool HasOpenGraphArticle(const Element& head) {
 
     if (meta->GetName() == og_type ||
         meta->getAttribute(property_attr) == og_type) {
-      if (EqualIgnoringASCIICase(meta->Content(), "article")) {
+      if (EqualIgnoringAsciiCase(meta->Content(), "article")) {
         return true;
       }
     }
@@ -191,7 +194,7 @@ WebDistillabilityFeatures DocumentStatisticsCollector::CollectStatistics(
 
   WebDistillabilityFeatures features = WebDistillabilityFeatures();
 
-  if (!document.GetFrame() || !document.GetFrame()->IsMainFrame())
+  if (!document.GetFrame() || !document.GetFrame()->IsOutermostMainFrame())
     return features;
 
   DCHECK(document.HasFinishedParsing());

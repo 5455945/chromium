@@ -1,24 +1,27 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/editing/text_offset_mapping.h"
 
 #include <ostream>
+
 #include "third_party/blink/renderer/core/dom/node.h"
+#include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/editing/editing_utilities.h"
 #include "third_party/blink/renderer/core/editing/iterators/character_iterator.h"
 #include "third_party/blink/renderer/core/editing/iterators/text_iterator.h"
 #include "third_party/blink/renderer/core/editing/position.h"
 #include "third_party/blink/renderer/core/html/forms/text_control_element.h"
 #include "third_party/blink/renderer/core/layout/layout_block_flow.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
 namespace {
 
 // TODO(editing-dev): We may not need to do full-subtree traversal, but we're
-// not sure, e.g. ::first-line. See |enum PseudoId| for list of pseudo elements
+// not sure, e.g. ::first-line. See |enum PseudoId| for list of pseudo-elements
 // used in Blink.
 bool HasNonPsuedoNode(const LayoutObject& parent) {
   if (parent.NonPseudoNode())
@@ -36,10 +39,15 @@ bool HasNonPsuedoNode(const LayoutObject& parent) {
 
 bool CanBeInlineContentsContainer(const LayoutObject& layout_object) {
   const auto* block_flow = DynamicTo<LayoutBlockFlow>(layout_object);
-  if (!block_flow)
+  if (!block_flow) {
     return false;
-  if (!block_flow->ChildrenInline() || block_flow->IsAtomicInlineLevel())
+  }
+  if (!block_flow->ChildrenInline()) {
     return false;
+  }
+  if (block_flow->IsInline()) {
+    return false;
+  }
   if (block_flow->IsRuby()) {
     // We should not make |LayoutRubyAsBlock| as inline contents container,
     // because ruby base text comes after ruby text in layout tree.
@@ -53,8 +61,7 @@ bool CanBeInlineContentsContainer(const LayoutObject& layout_object) {
     return true;
   }
   // Since we can't create |EphemeralRange|, we exclude a |LayoutBlockFlow| if
-  // its entire subtree is anonymous, e.g. |LayoutMultiColumnSet|,
-  // and with anonymous layout objects.
+  // its entire subtree is anonymous.
   return HasNonPsuedoNode(*block_flow);
 }
 
@@ -74,16 +81,54 @@ const LayoutBlockFlow& RootInlineContentsContainerOf(
     const LayoutBlockFlow& block_flow) {
   DCHECK(block_flow.ChildrenInline()) << block_flow;
   const LayoutBlockFlow* root_block_flow = &block_flow;
-  for (const LayoutBlock* runner = block_flow.ContainingBlock(); runner;
-       runner = runner->ContainingBlock()) {
+  for (const LayoutBox* runner = block_flow.ContainingBox(); runner;
+       runner = runner->ContainingBox()) {
     auto* containing_block_flow = DynamicTo<LayoutBlockFlow>(runner);
-    if (!containing_block_flow || !runner->ChildrenInline())
+    if (!containing_block_flow || !containing_block_flow->ChildrenInline()) {
       break;
+    }
     root_block_flow = containing_block_flow;
   }
-  DCHECK(!root_block_flow->IsAtomicInlineLevel())
-      << block_flow << ' ' << root_block_flow;
+  DCHECK(!root_block_flow->IsInline()) << block_flow << ' ' << root_block_flow;
   return *root_block_flow;
+}
+
+bool ShouldSkipChildren(const Node& node) {
+  if (IsTextControl(node))
+    return true;
+  const ShadowRoot* const root = node.GetShadowRoot();
+  return root && root->IsUserAgent();
+}
+
+LayoutObject* NextForInlineContents(const LayoutObject& layout_object,
+                                    const LayoutObject& container) {
+  if (layout_object.IsBlockInInline())
+    return layout_object.NextInPreOrderAfterChildren(&container);
+  const Node* const node = layout_object.NonPseudoNode();
+  if (node && ShouldSkipChildren(*node))
+    return layout_object.NextInPreOrderAfterChildren(&container);
+  return layout_object.NextInPreOrder(&container);
+}
+
+const Node* FindFirstNonPseudoNodeIn(const LayoutObject& container) {
+  for (const LayoutObject* layout_object = container.SlowFirstChild();
+       layout_object;
+       layout_object = NextForInlineContents(*layout_object, container)) {
+    if (auto* node = layout_object->NonPseudoNode())
+      return node;
+  }
+  return nullptr;
+}
+
+const Node* FindLastNonPseudoNodeIn(const LayoutObject& container) {
+  const Node* last_node = nullptr;
+  for (const LayoutObject* layout_object = container.SlowFirstChild();
+       layout_object;
+       layout_object = NextForInlineContents(*layout_object, container)) {
+    if (auto* node = layout_object->NonPseudoNode())
+      last_node = node;
+  }
+  return last_node;
 }
 
 // TODO(editing-dev): We should have |ComputeInlineContents()| computing first
@@ -97,8 +142,8 @@ const LayoutBlockFlow& RootInlineContentsContainerOf(
 //  3. Gh
 // See RangeWithNestedInlineBlock* tests.
 
-// Note: Since "inline-block" and "float" are not considered as text segment
-// boundary, we should not consider them as block for scanning.
+// Note: Since "inline-block" is not considered as text segment
+// boundary, we should not consider it as block for scanning.
 // Example in selection text:
 //  <div>|ab<b style="display:inline-block">CD</b>ef</div>
 //  selection.modify('extent', 'forward', 'word')
@@ -109,9 +154,10 @@ const LayoutBlockFlow& RootInlineContentsContainerOf(
 // |LayoutBlockFlow|.
 const LayoutBlockFlow* ComputeInlineContentsAsBlockFlow(
     const LayoutObject& layout_object) {
-  const auto* block = DynamicTo<LayoutBlock>(layout_object);
-  if (!block)
-    block = layout_object.ContainingBlock();
+  const LayoutObject* block = DynamicTo<LayoutBlock>(layout_object);
+  if (!block) {
+    block = layout_object.ContainingBox();
+  }
 
   DCHECK(block) << layout_object;
   const auto* block_flow = DynamicTo<LayoutBlockFlow>(block);
@@ -119,12 +165,11 @@ const LayoutBlockFlow* ComputeInlineContentsAsBlockFlow(
     return nullptr;
   if (!block_flow->ChildrenInline())
     return nullptr;
-  if (block_flow->IsAtomicInlineLevel() ||
-      block_flow->IsFloatingOrOutOfFlowPositioned()) {
+  if (block_flow->IsInline()) {
     const LayoutBlockFlow& root_block_flow =
         RootInlineContentsContainerOf(*block_flow);
     // Skip |root_block_flow| if it's an anonymous wrapper created for
-    // pseudo elements. See test AnonymousBlockFlowWrapperForFloatPseudo.
+    // pseudo-elements. See test AnonymousBlockFlowWrapperForFloatPseudo.
     if (!CanBeInlineContentsContainer(root_block_flow))
       return nullptr;
     return &root_block_flow;
@@ -135,30 +180,70 @@ const LayoutBlockFlow* ComputeInlineContentsAsBlockFlow(
 }
 
 TextOffsetMapping::InlineContents CreateInlineContentsFromBlockFlow(
-    const LayoutBlockFlow& block_flow) {
+    const LayoutBlockFlow& block_flow,
+    const LayoutObject& target) {
   DCHECK(block_flow.ChildrenInline()) << block_flow;
+  DCHECK(target.NonPseudoNode()) << target;
+  const LayoutObject* layout_object = nullptr;
+  const LayoutObject* block_in_inline_before = nullptr;
   const LayoutObject* first = nullptr;
-  for (const LayoutObject* runner = block_flow.FirstChild(); runner;
-       runner = runner->NextInPreOrder(&block_flow)) {
-    if (runner->NonPseudoNode()) {
-      first = runner;
+  const LayoutObject* last = nullptr;
+  for (layout_object = block_flow.FirstChild(); layout_object;
+       layout_object = NextForInlineContents(*layout_object, block_flow)) {
+    if (layout_object->NonPseudoNode()) {
+      last = layout_object;
+      if (!first)
+        first = layout_object;
+    }
+    if (layout_object == &target) {
+      // Note: When |target| is in subtree of user agent shadow root, we don't
+      // reach here. See  http://crbug.com/1224206
+      last = first;
       break;
+    }
+    // Exclude out-of-flow objects (float/absolute/fixed) that are DOM
+    // descendants of `target`, since they don’t participate in the inline
+    // formatting context. See http://crbug.com/443752821.
+    if (layout_object->IsFloatingOrOutOfFlowPositioned() &&
+        layout_object->GetNode() &&
+        layout_object->GetNode()->IsDescendantOf(target.GetNode())) {
+      last = first;
+      break;
+    }
+    if (layout_object->IsBlockInInline()) {
+      if (target.IsDescendantOf(layout_object)) {
+        // Note: We reach here when `target` is `position:absolute` or
+        // `position:fixed`, aka `IsOutOfFlowPositioned()`, because
+        // `LayoutObject::ContainingBox()` handles them specially.
+        // See http://crbug.com/1324970
+        last = first;
+        break;
+      }
+      block_in_inline_before = layout_object;
+      first = last = nullptr;
     }
   }
   if (!first) {
-    DCHECK(block_flow.NonPseudoNode()) << block_flow;
-    return TextOffsetMapping::InlineContents(block_flow);
+    if (block_flow.NonPseudoNode() ||
+        !RuntimeEnabledFeatures::CreateInlineContentsAnonymousBlockEnabled()) {
+      return TextOffsetMapping::InlineContents(block_flow);
+    }
+    return TextOffsetMapping::InlineContents();
   }
-  const LayoutObject* last = nullptr;
-  for (const LayoutObject* runner = block_flow.LastLeafChild(); runner;
-       runner = runner->PreviousInPreOrder(&block_flow)) {
-    if (runner->NonPseudoNode()) {
-      last = runner;
+  const LayoutObject* block_in_inline_after = nullptr;
+  for (; layout_object;
+       layout_object = NextForInlineContents(*layout_object, block_flow)) {
+    if (layout_object->IsBlockInInline()) {
+      block_in_inline_after = layout_object;
       break;
+    }
+    if (layout_object->NonPseudoNode()) {
+      last = layout_object;
     }
   }
   DCHECK(last);
-  return TextOffsetMapping::InlineContents(block_flow, *first, *last);
+  return TextOffsetMapping::InlineContents(
+      block_flow, block_in_inline_before, *first, *last, block_in_inline_after);
 }
 
 TextOffsetMapping::InlineContents ComputeInlineContentsFromNode(
@@ -170,7 +255,20 @@ TextOffsetMapping::InlineContents ComputeInlineContentsFromNode(
       ComputeInlineContentsAsBlockFlow(*layout_object);
   if (!block_flow)
     return TextOffsetMapping::InlineContents();
-  return CreateInlineContentsFromBlockFlow(*block_flow);
+  // If the node is inside a User agent Shadow root and the block_flow
+  // is anonymous and outside the shadow root we should pass
+  // node as Shadow host and get the layout object from that.
+  if (node.IsInUserAgentShadowRoot() && block_flow->IsAnonymous()) {
+    auto* shadow_host_layout_object = node.OwnerShadowHost()->GetLayoutObject();
+    // The shadow host's LayoutObject may be null, for example when the host
+    // is a <slot> element with `display: contents`.
+    if (!shadow_host_layout_object) {
+      return TextOffsetMapping::InlineContents();
+    }
+    return CreateInlineContentsFromBlockFlow(*block_flow,
+                                             *shadow_host_layout_object);
+  }
+  return CreateInlineContentsFromBlockFlow(*block_flow, *layout_object);
 }
 
 String Ensure16Bit(const String& text) {
@@ -204,7 +302,8 @@ int TextOffsetMapping::ComputeTextOffset(
                                              behavior_);
 }
 
-PositionInFlatTree TextOffsetMapping::GetPositionBefore(unsigned offset) const {
+PositionInFlatTree TextOffsetMapping::GetPositionBefore(
+    wtf_size_t offset) const {
   DCHECK_LE(offset, text16_.length());
   CharacterIteratorInFlatTree iterator(range_, behavior_);
   if (offset >= 1 && offset == text16_.length()) {
@@ -215,30 +314,22 @@ PositionInFlatTree TextOffsetMapping::GetPositionBefore(unsigned offset) const {
   return iterator.GetPositionBefore();
 }
 
-PositionInFlatTree TextOffsetMapping::GetPositionAfter(unsigned offset) const {
+PositionInFlatTree TextOffsetMapping::GetPositionAfter(
+    wtf_size_t offset) const {
   DCHECK_LE(offset, text16_.length());
   CharacterIteratorInFlatTree iterator(range_, behavior_);
   iterator.Advance(offset);
   return iterator.GetPositionAfter();
 }
 
-EphemeralRangeInFlatTree TextOffsetMapping::ComputeRange(unsigned start,
-                                                         unsigned end) const {
+EphemeralRangeInFlatTree TextOffsetMapping::ComputeRange(wtf_size_t start,
+                                                         wtf_size_t end) const {
   DCHECK_LE(end, text16_.length());
   DCHECK_LE(start, end);
   if (start == end)
     return EphemeralRangeInFlatTree();
   return EphemeralRangeInFlatTree(GetPositionBefore(start),
                                   GetPositionAfter(end));
-}
-
-unsigned TextOffsetMapping::FindNonWhitespaceCharacterFrom(
-    unsigned offset) const {
-  for (unsigned runner = offset; runner < text16_.length(); ++runner) {
-    if (!IsWhitespace(text16_[runner]))
-      return runner;
-  }
-  return text16_.length();
 }
 
 // static
@@ -338,12 +429,8 @@ TextOffsetMapping::InlineContents TextOffsetMapping::FindForwardInlineContents(
 
   auto next_skipping_text_control = [](const Node& node) {
     DCHECK(!EnclosingTextControl(&node));
-    if (IsTextControl(node))
+    if (ShouldSkipChildren(node))
       return FlatTreeTraversal::NextSkippingChildren(node);
-    if (ShadowRoot* root = node.GetShadowRoot()) {
-      if (root->IsUserAgent())
-        return FlatTreeTraversal::NextSkippingChildren(node);
-    }
     return FlatTreeTraversal::Next(node);
   };
   DCHECK(!EnclosingTextControl(next_node));
@@ -365,9 +452,19 @@ TextOffsetMapping::InlineContents::InlineContents(
 // collapsible whitespace with anonymous object.
 TextOffsetMapping::InlineContents::InlineContents(
     const LayoutBlockFlow& block_flow,
+    const LayoutObject* block_in_inline_before,
     const LayoutObject& first,
-    const LayoutObject& last)
-    : block_flow_(&block_flow), first_(&first), last_(&last) {
+    const LayoutObject& last,
+    const LayoutObject* block_in_inline_after)
+    : block_flow_(&block_flow),
+      block_in_inline_before_(block_in_inline_before),
+      first_(&first),
+      last_(&last),
+      block_in_inline_after_(block_in_inline_after) {
+  DCHECK(!block_in_inline_before_ || block_in_inline_before_->IsBlockInInline())
+      << block_in_inline_before_;
+  DCHECK(!block_in_inline_after_ || block_in_inline_after_->IsBlockInInline())
+      << block_in_inline_after_;
   DCHECK(first_->NonPseudoNode()) << first_;
   DCHECK(last_->NonPseudoNode()) << last_;
   DCHECK(CanBeInlineContentsContainer(*block_flow_)) << block_flow_;
@@ -401,10 +498,14 @@ const LayoutObject& TextOffsetMapping::InlineContents::LastLayoutObject()
 EphemeralRangeInFlatTree TextOffsetMapping::InlineContents::GetRange() const {
   DCHECK(block_flow_);
   if (!first_) {
-    const Node& node = *block_flow_->NonPseudoNode();
-    return EphemeralRangeInFlatTree(
-        PositionInFlatTree::FirstPositionInNode(node),
-        PositionInFlatTree::LastPositionInNode(node));
+    const Node* node = block_flow_->NonPseudoNode();
+    if (node ||
+        !RuntimeEnabledFeatures::CreateInlineContentsAnonymousBlockEnabled()) {
+      return EphemeralRangeInFlatTree(
+          PositionInFlatTree::FirstPositionInNode(*node),
+          PositionInFlatTree::LastPositionInNode(*node));
+    }
+    return EphemeralRangeInFlatTree();
   }
   const Node& first_node = *first_->NonPseudoNode();
   const Node& last_node = *last_->NonPseudoNode();
@@ -420,6 +521,16 @@ EphemeralRangeInFlatTree TextOffsetMapping::InlineContents::GetRange() const {
 PositionInFlatTree
 TextOffsetMapping::InlineContents::LastPositionBeforeBlockFlow() const {
   DCHECK(block_flow_);
+  if (block_in_inline_before_) {
+    for (const LayoutObject* block = block_in_inline_before_->SlowLastChild();
+         block; block = block->PreviousSibling()) {
+      if (auto* block_node = block->NonPseudoNode())
+        return PositionInFlatTree::LastPositionInNode(*block_node);
+      if (auto* last_node = FindLastNonPseudoNodeIn(*block)) {
+        return PositionInFlatTree::AfterNode(*last_node);
+      }
+    }
+  }
   if (const Node* node = block_flow_->NonPseudoNode()) {
     if (!FlatTreeTraversal::Parent(*node)) {
       // Reached start of document.
@@ -427,15 +538,27 @@ TextOffsetMapping::InlineContents::LastPositionBeforeBlockFlow() const {
     }
     return PositionInFlatTree::BeforeNode(*node);
   }
-  DCHECK(first_);
-  DCHECK(first_->NonPseudoNode());
-  DCHECK(FlatTreeTraversal::Parent(*first_->NonPseudoNode()));
-  return PositionInFlatTree::BeforeNode(*first_->NonPseudoNode());
+  if ((first_ && first_->NonPseudoNode()) ||
+      !RuntimeEnabledFeatures::CreateInlineContentsAnonymousBlockEnabled()) {
+    DCHECK(FlatTreeTraversal::Parent(*first_->NonPseudoNode()));
+    return PositionInFlatTree::BeforeNode(*first_->NonPseudoNode());
+  }
+  return PositionInFlatTree();
 }
 
 PositionInFlatTree
 TextOffsetMapping::InlineContents::FirstPositionAfterBlockFlow() const {
   DCHECK(block_flow_);
+  if (block_in_inline_after_) {
+    for (const LayoutObject* block = block_in_inline_after_->SlowFirstChild();
+         block; block = block->NextSibling()) {
+      if (auto* block_node = block->NonPseudoNode())
+        return PositionInFlatTree::BeforeNode(*block_node);
+      if (auto* first_node = FindFirstNonPseudoNodeIn(*block)) {
+        return PositionInFlatTree::BeforeNode(*first_node);
+      }
+    }
+  }
   if (const Node* node = block_flow_->NonPseudoNode()) {
     if (!FlatTreeTraversal::Parent(*node)) {
       // Reached end of document.
@@ -443,10 +566,12 @@ TextOffsetMapping::InlineContents::FirstPositionAfterBlockFlow() const {
     }
     return PositionInFlatTree::AfterNode(*node);
   }
-  DCHECK(last_);
-  DCHECK(last_->NonPseudoNode());
-  DCHECK(FlatTreeTraversal::Parent(*last_->NonPseudoNode()));
-  return PositionInFlatTree::AfterNode(*last_->NonPseudoNode());
+  if ((last_ && last_->NonPseudoNode()) ||
+      !RuntimeEnabledFeatures::CreateInlineContentsAnonymousBlockEnabled()) {
+    DCHECK(FlatTreeTraversal::Parent(*last_->NonPseudoNode()));
+    return PositionInFlatTree::AfterNode(*last_->NonPseudoNode());
+  }
+  return PositionInFlatTree();
 }
 
 // static

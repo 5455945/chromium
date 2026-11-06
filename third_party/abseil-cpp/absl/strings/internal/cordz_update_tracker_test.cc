@@ -15,6 +15,7 @@
 #include "absl/strings/internal/cordz_update_tracker.h"
 
 #include <array>
+#include <cstdint>
 #include <thread>  // NOLINT
 
 #include "gmock/gmock.h"
@@ -38,6 +39,7 @@ using Methods = std::array<Method, Method::kNumMethods>;
 Methods AllMethods() {
   return Methods{Method::kUnknown,
                  Method::kAppendCord,
+                 Method::kAppendCordBuffer,
                  Method::kAppendExternalMemory,
                  Method::kAppendString,
                  Method::kAssignCord,
@@ -47,15 +49,18 @@ Methods AllMethods() {
                  Method::kConstructorString,
                  Method::kCordReader,
                  Method::kFlatten,
+                 Method::kGetAppendBuffer,
                  Method::kGetAppendRegion,
                  Method::kMakeCordFromExternal,
                  Method::kMoveAppendCord,
                  Method::kMoveAssignCord,
                  Method::kMovePrependCord,
                  Method::kPrependCord,
+                 Method::kPrependCordBuffer,
                  Method::kPrependString,
                  Method::kRemovePrefix,
                  Method::kRemoveSuffix,
+                 Method::kSetExpectedChecksum,
                  Method::kSubCord};
 }
 

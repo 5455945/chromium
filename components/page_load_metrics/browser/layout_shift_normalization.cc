@@ -1,21 +1,27 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/page_load_metrics/browser/layout_shift_normalization.h"
 
 namespace page_load_metrics {
-constexpr auto NEW_SHIFT_BUFFER_WINDOW_DURATION =
-    base::TimeDelta::FromSeconds(5);
+constexpr auto NEW_SHIFT_BUFFER_WINDOW_DURATION = base::Seconds(5);
 constexpr auto MAX_SHIFT_BUFFER_SIZE = 300;
 
 LayoutShiftNormalization::LayoutShiftNormalization() = default;
+LayoutShiftNormalization::LayoutShiftNormalization(
+    const LayoutShiftNormalization&) = default;
+LayoutShiftNormalization::LayoutShiftNormalization(LayoutShiftNormalization&&) =
+    default;
+LayoutShiftNormalization& LayoutShiftNormalization::operator=(
+    const LayoutShiftNormalization&) = default;
+LayoutShiftNormalization& LayoutShiftNormalization::operator=(
+    LayoutShiftNormalization&&) = default;
 LayoutShiftNormalization::~LayoutShiftNormalization() = default;
 
 void LayoutShiftNormalization::AddNewLayoutShifts(
-    const std::vector<page_load_metrics::mojom::LayoutShiftPtr>& new_shifts,
-    base::TimeTicks current_time,
-    float cumulative_layout_shift_score) {
+    base::span<const mojom::LayoutShiftPtr> new_shifts,
+    base::TimeTicks current_time) {
   if (new_shifts.empty() || normalized_cls_data_.data_tainted)
     return;
 
@@ -54,8 +60,8 @@ void LayoutShiftNormalization::AddNewLayoutShifts(
       [](auto time, auto const& shift) { return time < shift.first; });
 
   // Update sliding and session window CLS.
-  UpdateWindowCLS(current_time, recent_layout_shifts_.begin(), first_non_stale,
-                  recent_layout_shifts_.end(), cumulative_layout_shift_score);
+  UpdateWindowCLS(recent_layout_shifts_.begin(), first_non_stale,
+                  recent_layout_shifts_.end());
 
   // Finally, remove the stale shifts at this point.
   recent_layout_shifts_.erase(recent_layout_shifts_.begin(), first_non_stale);
@@ -73,14 +79,12 @@ void LayoutShiftNormalization::UpdateSessionWindow(
     base::TimeDelta max_duration,
     std::vector<std::pair<base::TimeTicks, double>>::const_iterator begin,
     std::vector<std::pair<base::TimeTicks, double>>::const_iterator end,
-    float& max_score,
-    uint32_t& count) {
+    float& max_score) {
   for (auto it = begin; it != end; ++it) {
     if ((it->first - session_window->last_time > gap) ||
         (it->first - session_window->start_time > max_duration)) {
       session_window->start_time = it->first;
       session_window->layout_shift_score = 0;
-      ++count;
     }
     session_window->last_time = it->first;
     session_window->layout_shift_score += it->second;
@@ -104,26 +108,20 @@ void LayoutShiftNormalization::UpdateSessionWindow(
 // we received. The second update is for all layout shifts we received so far in
 // case we need to record UKM right away.
 void LayoutShiftNormalization::UpdateWindowCLS(
-    base::TimeTicks current_time,
     std::vector<std::pair<base::TimeTicks, double>>::const_iterator first,
     std::vector<std::pair<base::TimeTicks, double>>::const_iterator
         first_non_stale,
-    std::vector<std::pair<base::TimeTicks, double>>::const_iterator last,
-    float cumulative_layout_shift_score) {
-  uint32_t dummy_count = 0;
-
+    std::vector<std::pair<base::TimeTicks, double>>::const_iterator last) {
   // Update Session Windows.
   UpdateSessionWindow(
-      &session_gap1000ms_max5000ms_, base::TimeDelta::FromMilliseconds(1000),
-      base::TimeDelta::FromMilliseconds(5000), first, first_non_stale,
-      normalized_cls_data_.session_windows_gap1000ms_max5000ms_max_cls,
-      dummy_count);
+      &session_gap1000ms_max5000ms_, base::Milliseconds(1000),
+      base::Milliseconds(5000), first, first_non_stale,
+      normalized_cls_data_.session_windows_gap1000ms_max5000ms_max_cls);
   auto tmp_session_gap1000ms_max5000ms = session_gap1000ms_max5000ms_;
 
   UpdateSessionWindow(
-      &tmp_session_gap1000ms_max5000ms, base::TimeDelta::FromMilliseconds(1000),
-      base::TimeDelta::FromMilliseconds(5000), first_non_stale, last,
-      normalized_cls_data_.session_windows_gap1000ms_max5000ms_max_cls,
-      dummy_count);
+      &tmp_session_gap1000ms_max5000ms, base::Milliseconds(1000),
+      base::Milliseconds(5000), first_non_stale, last,
+      normalized_cls_data_.session_windows_gap1000ms_max5000ms_max_cls);
 }
 }  // namespace page_load_metrics

@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,12 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/scoped_java_ref.h"
+#include "base/memory/raw_ptr.h"
+#include "content/browser/renderer_host/compositor_impl_android.h"
 #include "content/browser/renderer_host/input/synthetic_gesture_target_base.h"
 #include "content/browser/renderer_host/render_widget_host_view_android.h"
 #include "content/public/browser/android/motion_event_action.h"
+#include "ui/compositor/host_begin_frame_observer.h"
 
 namespace ui {
 class LatencyInfo;
@@ -20,10 +23,17 @@ namespace content {
 
 // Owned by |SyntheticGestureController|. Keeps a strong pointer to Java object,
 // which get destroyed together with the controller.
-class SyntheticGestureTargetAndroid : public SyntheticGestureTargetBase {
+class SyntheticGestureTargetAndroid
+    : public SyntheticGestureTargetBase,
+      public ui::HostBeginFrameObserver::SimpleBeginFrameObserver {
  public:
   SyntheticGestureTargetAndroid(RenderWidgetHostImpl* host,
                                 ui::ViewAndroid* view);
+
+  SyntheticGestureTargetAndroid(const SyntheticGestureTargetAndroid&) = delete;
+  SyntheticGestureTargetAndroid& operator=(
+      const SyntheticGestureTargetAndroid&) = delete;
+
   ~SyntheticGestureTargetAndroid() override;
 
   // SyntheticGestureTargetBase:
@@ -43,22 +53,35 @@ class SyntheticGestureTargetAndroid : public SyntheticGestureTargetBase {
   // SyntheticGestureTarget:
   content::mojom::GestureSourceType GetDefaultSyntheticGestureSourceType()
       const override;
+  void GetVSyncParameters(base::TimeTicks& timebase,
+                          base::TimeDelta& interval) const override;
   float GetTouchSlopInDips() const override;
   float GetMinScalingSpanInDips() const override;
 
  private:
+  // ui::HostBeginFrameObserver::SimpleBeginFrameObserver:
+  void OnBeginFrame(
+      base::TimeTicks frame_begin_time,
+      base::TimeDelta frame_interval,
+      std::optional<base::TimeTicks> first_coalesced_frame_begin_time) override;
+  void OnBeginFrameSourceShuttingDown() override;
+
   void TouchSetPointer(int index, float x, float y, int id);
   void TouchSetScrollDeltas(float x, float y, float dx, float dy);
   void TouchInject(MotionEventAction action,
-                   int pointer_count,
+                   int num_pointers,
+                   int pointer_index,
                    base::TimeTicks time);
 
   RenderWidgetHostViewAndroid* GetView() const;
 
-  ui::ViewAndroid* const view_;
+  const raw_ptr<ui::ViewAndroid> view_;
   base::android::ScopedJavaGlobalRef<jobject> java_ref_;
 
-  DISALLOW_COPY_AND_ASSIGN(SyntheticGestureTargetAndroid);
+  base::TimeTicks vsync_timebase_;
+  base::TimeDelta vsync_interval_{base::Microseconds(16667)};
+
+  raw_ptr<CompositorImpl> observed_compositor_;
 };
 
 }  // namespace content

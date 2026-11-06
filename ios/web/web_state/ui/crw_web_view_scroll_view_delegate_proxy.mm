@@ -1,22 +1,30 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "ios/web/web_state/ui/crw_web_view_scroll_view_delegate_proxy.h"
 
-#include <ostream>
+#import <string_view>
 
-#include "base/check_op.h"
+#import "base/check_op.h"
 #import "base/ios/crb_protocol_observers.h"
 #import "ios/web/web_state/ui/crw_web_view_scroll_view_proxy+internal.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+namespace {
+
+// Returns whether the two strings are equals.
+bool AreStringsEqual(std::string_view lhs, std::string_view rhs) {
+  return lhs == rhs;
+}
+
+}  // namespace
 
 @interface CRWWebViewScrollViewDelegateProxy ()
 
 @property(nonatomic, weak) CRWWebViewScrollViewProxy* scrollViewProxy;
+
+// Return YES if the user is currently performing a zoom gestures.
+@property(nonatomic, assign) BOOL userIsZooming;
 
 @end
 
@@ -63,13 +71,13 @@
   // Called when the method is not implemented in this class. Forwards the
   // method to the delegate of the scroll view proxy.
 
-  // Replaces the |sender| argument of the delegate method call with
-  // [self.scrollViewProxy asUIScrollView]. |sender| should be the first
+  // Replaces the `sender` argument of the delegate method call with
+  // [self.scrollViewProxy asUIScrollView]. `sender` should be the first
   // argument of every delegate method according to Apple's style guide:
   // https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/CodingGuidelines/Articles/NamingMethods.html#//apple_ref/doc/uid/20001282-BCIGIJJF
   // and it is true for all methods of UIScrollViewDelegate as of today. But
   // here performs a few safety checks to make sure that the first argument is
-  // |sender|:
+  // `sender`:
   //   - The method has at least one argument
   //   - The first argument is typed UIScrollView
   //   - The first argument is equal to the underlying scroll view
@@ -78,8 +86,8 @@
   // self and _cmd respectively.
   NSMethodSignature* signature = invocation.methodSignature;
   if (signature.numberOfArguments >= 3 &&
-      strcmp([signature getArgumentTypeAtIndex:2], @encode(UIScrollView*)) ==
-          0) {
+      AreStringsEqual([signature getArgumentTypeAtIndex:2],
+                      @encode(UIScrollView*))) {
     __unsafe_unretained UIScrollView* sender;
     [invocation getArgument:&sender atIndex:2];
     if (sender == self.scrollViewProxy.underlyingScrollView) {
@@ -102,6 +110,19 @@
   }
   [self.scrollViewProxy.observers
       webViewScrollViewDidScroll:self.scrollViewProxy];
+}
+
+- (void)scrollViewDidChangeAdjustedContentInset:(UIScrollView*)scrollView {
+  DCHECK_EQ(self.scrollViewProxy.underlyingScrollView, scrollView);
+  if ([self.delegateOfProxy
+          respondsToSelector:@selector(
+                                 scrollViewDidChangeAdjustedContentInset:)]) {
+    [self.delegateOfProxy
+        scrollViewDidChangeAdjustedContentInset:[self.scrollViewProxy
+                                                        asUIScrollView]];
+  }
+  [self.scrollViewProxy.observers
+      webViewScrollViewDidResetContentInset:self.scrollViewProxy];
 }
 
 - (void)scrollViewWillBeginDragging:(UIScrollView*)scrollView {
@@ -200,13 +221,16 @@
     [self.delegateOfProxy
         scrollViewDidZoom:[self.scrollViewProxy asUIScrollView]];
   }
-  [self.scrollViewProxy.observers
-      webViewScrollViewDidZoom:self.scrollViewProxy];
+  if (self.userIsZooming) {
+    [self.scrollViewProxy.observers
+        webViewScrollViewDidZoom:self.scrollViewProxy];
+  }
 }
 
 - (void)scrollViewWillBeginZooming:(UIScrollView*)scrollView
                           withView:(UIView*)view {
   DCHECK_EQ(self.scrollViewProxy.underlyingScrollView, scrollView);
+  self.userIsZooming = YES;
   if ([self.delegateOfProxy
           respondsToSelector:@selector(scrollViewWillBeginZooming:withView:)]) {
     [self.delegateOfProxy
@@ -221,6 +245,7 @@
                        withView:(UIView*)view
                         atScale:(CGFloat)scale {
   DCHECK_EQ(self.scrollViewProxy.underlyingScrollView, scrollView);
+  self.userIsZooming = NO;
   if ([self.delegateOfProxy respondsToSelector:@selector
                             (scrollViewDidEndZooming:withView:atScale:)]) {
     [self.delegateOfProxy

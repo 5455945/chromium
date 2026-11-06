@@ -42,7 +42,7 @@ class XMLParserInput {
  public:
   explicit XMLParserInput(const String& source)
       : source_(source), encoding_(nullptr), data_(nullptr), size_(0) {
-    if (source_.IsEmpty())
+    if (source_.empty())
       return;
 
     const UChar kBOM = 0xFEFF;
@@ -51,13 +51,12 @@ class XMLParserInput {
 
     if (source_.Is8Bit()) {
       encoding_ = "iso-8859-1";
-      data_ = reinterpret_cast<const char*>(source_.Characters8());
-      size_ = source_.length() * sizeof(LChar);
     } else {
       encoding_ = bom_high_byte == 0xFF ? "UTF-16LE" : "UTF-16BE";
-      data_ = reinterpret_cast<const char*>(source_.Characters16());
-      size_ = source_.length() * sizeof(UChar);
     }
+    auto byte_span = base::as_chars(source.RawByteSpan());
+    data_ = byte_span.data();
+    size_ = base::checked_cast<int>(byte_span.size());
   }
 
   const char* Encoding() const { return encoding_; }

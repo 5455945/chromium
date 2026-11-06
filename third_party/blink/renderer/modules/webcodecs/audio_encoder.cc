@@ -1,39 +1,215 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/webcodecs/audio_encoder.h"
 
+#include <algorithm>
 #include <cinttypes>
 #include <limits>
 
-#include "base/metrics/histogram_macros.h"
-#include "base/numerics/safe_conversions.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/strings/to_string.h"
 #include "base/trace_event/common/trace_event_common.h"
 #include "base/trace_event/trace_event.h"
+#include "build/build_config.h"
 #include "media/audio/audio_opus_encoder.h"
 #include "media/base/audio_parameters.h"
 #include "media/base/limits.h"
 #include "media/base/mime_util.h"
 #include "media/base/offloading_audio_encoder.h"
-#include "third_party/blink/public/mojom/web_feature/web_feature.mojom-blink.h"
-#include "third_party/blink/renderer/bindings/core/v8/v8_typedefs.h"
-#include "third_party/blink/renderer/bindings/core/v8/v8_union_arraybuffer_arraybufferview.h"
+#include "media/mojo/clients/mojo_audio_encoder.h"
+#include "media/mojo/mojom/interface_factory.mojom.h"
+#include "third_party/blink/public/common/thread_safe_browser_interface_broker_proxy.h"
+#include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-blink.h"
+#include "third_party/blink/public/platform/platform.h"
+#include "third_party/blink/renderer/bindings/core/v8/to_v8_traits.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_aac_encoder_config.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_audio_data_init.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_audio_decoder_config.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_audio_encoder_config.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_audio_encoder_support.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_encoded_audio_chunk_metadata.h"
-#include "third_party/blink/renderer/modules/webaudio/audio_buffer.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_opus_application.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_opus_encoder_config.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_opus_signal.h"
+#include "third_party/blink/renderer/modules/webcodecs/array_buffer_util.h"
 #include "third_party/blink/renderer/modules/webcodecs/encoded_audio_chunk.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/heap/cross_thread_handle.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
 
 namespace {
 
 constexpr const char kCategory[] = "media";
+
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+constexpr uint32_t kDefaultOpusComplexity = 5;
+#else
+constexpr uint32_t kDefaultOpusComplexity = 9;
+#endif
+
+template <typename T>
+bool VerifyParameterValues(const T& value,
+                           String error_message_base_base,
+                           Vector<T> supported_values,
+                           String* js_error_message) {
+  if (std::ranges::contains(supported_values, value)) {
+    return true;
+  }
+
+  Vector<String> supported_values_str;
+  for (const T& val : supported_values) {
+    supported_values_str.push_back(base::ToString(val));
+  }
+
+  StringBuilder error_builder;
+  error_builder.Append(error_message_base_base);
+  error_builder.Append(" Supported values: ");
+  error_builder.AppendRange(std::move(supported_values_str), ", ");
+  *js_error_message = error_builder.ReleaseString();
+  return false;
+}
+
+bool VerifyDurationValues(int64_t microseconds,
+                          String error_message_base_base,
+                          String* js_error_message) {
+  if (microseconds >= 2500 && microseconds <= 120000 &&
+      microseconds % 2500 == 0) {
+    return true;
+  }
+
+  StringBuilder error_builder;
+  error_builder.Append(error_message_base_base);
+  error_builder.Append(
+      " Needs to be a multiple of 2500 and in the range of [2500, 120000] "
+      "microseconds.");
+  *js_error_message = error_builder.ToString();
+  return false;
+}
+
+AudioEncoderTraits::ParsedConfig* ParseAacConfigStatic(
+    const AacEncoderConfig* aac_config,
+    AudioEncoderTraits::ParsedConfig* result,
+    ExceptionState& exception_state) {
+  result->options.aac = media::AudioEncoder::AacOptions();
+  switch (aac_config->format().AsEnum()) {
+    case V8AacBitstreamFormat::Enum::kAac:
+      result->options.aac->format = media::AudioEncoder::AacOutputFormat::AAC;
+      return result;
+    case V8AacBitstreamFormat::Enum::kAdts:
+      result->options.aac->format = media::AudioEncoder::AacOutputFormat::ADTS;
+      return result;
+  }
+  return result;
+}
+
+AudioEncoderTraits::ParsedConfig* ParseOpusConfigStatic(
+    const OpusEncoderConfig* opus_config,
+    AudioEncoderTraits::ParsedConfig* result,
+    ExceptionState& exception_state) {
+  constexpr uint32_t kComplexityUpperBound = 10;
+  uint32_t complexity = opus_config->getComplexityOr(kDefaultOpusComplexity);
+  if (complexity > kComplexityUpperBound) {
+    exception_state.ThrowTypeError(
+        ExceptionMessages::IndexExceedsMaximumBound<uint32_t>(
+            "Opus complexity", complexity, kComplexityUpperBound));
+    return nullptr;
+  }
+
+  constexpr uint32_t kPacketLossPercUpperBound = 100;
+  uint32_t packet_loss_perc = opus_config->packetlossperc();
+  if (packet_loss_perc > kPacketLossPercUpperBound) {
+    exception_state.ThrowTypeError(
+        ExceptionMessages::IndexExceedsMaximumBound<uint32_t>(
+            "Opus packetlossperc", packet_loss_perc,
+            kPacketLossPercUpperBound));
+    return nullptr;
+  }
+
+  // `frame_duration` must be a valid frame duration, defined in section 2.1.4.
+  // of RFC6716.
+  constexpr base::TimeDelta kFrameDurationLowerBound = base::Microseconds(2500);
+  constexpr base::TimeDelta kFrameDurationUpperBound = base::Milliseconds(120);
+  uint64_t frame_duration = opus_config->frameDuration();
+  if (frame_duration < kFrameDurationLowerBound.InMicroseconds() ||
+      frame_duration > kFrameDurationUpperBound.InMicroseconds()) {
+    exception_state.ThrowTypeError(
+        ExceptionMessages::IndexOutsideRange<uint64_t>(
+            "Opus frameDuration", frame_duration,
+            kFrameDurationLowerBound.InMicroseconds(),
+            ExceptionMessages::BoundType::kInclusiveBound,
+            kFrameDurationUpperBound.InMicroseconds(),
+            ExceptionMessages::BoundType::kInclusiveBound));
+    return nullptr;
+  }
+
+  // Any multiple of a frame duration is allowed by RFC6716. Concretely, this
+  // means any multiple of 2500 microseconds.
+  if (frame_duration % kFrameDurationLowerBound.InMicroseconds() != 0) {
+    exception_state.ThrowTypeError(
+        Format("Invalid Opus frameDuration; expected a multiple of {}, "
+               "received {}.",
+               kFrameDurationLowerBound.InMicroseconds(), frame_duration));
+    return nullptr;
+  }
+
+  if (result->options.bitrate.has_value() &&
+      result->options.bitrate.value() < media::AudioOpusEncoder::kMinBitrate) {
+    exception_state.ThrowTypeError(Format(
+        "Opus bitrate is too low; expected at least {}, received {}.",
+        media::AudioOpusEncoder::kMinBitrate, result->options.bitrate.value()));
+    return nullptr;
+  }
+
+  if (opus_config->format().AsEnum() == V8OpusBitstreamFormat::Enum::kOgg) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
+                                      "Opus Ogg format is unsupported");
+    return nullptr;
+  }
+
+  media::AudioEncoder::OpusSignal opus_signal;
+  switch (opus_config->signal().AsEnum()) {
+    case blink::V8OpusSignal::Enum::kAuto:
+      opus_signal = media::AudioEncoder::OpusSignal::kAuto;
+      break;
+    case blink::V8OpusSignal::Enum::kMusic:
+      opus_signal = media::AudioEncoder::OpusSignal::kMusic;
+      break;
+    case blink::V8OpusSignal::Enum::kVoice:
+      opus_signal = media::AudioEncoder::OpusSignal::kVoice;
+      break;
+  }
+
+  media::AudioEncoder::OpusApplication opus_application;
+  switch (opus_config->application().AsEnum()) {
+    case blink::V8OpusApplication::Enum::kVoip:
+      opus_application = media::AudioEncoder::OpusApplication::kVoip;
+      break;
+    case blink::V8OpusApplication::Enum::kAudio:
+      opus_application = media::AudioEncoder::OpusApplication::kAudio;
+      break;
+    case blink::V8OpusApplication::Enum::kLowdelay:
+      opus_application = media::AudioEncoder::OpusApplication::kLowDelay;
+      break;
+  }
+
+  result->options.opus = {
+      .frame_duration = base::Microseconds(frame_duration),
+      .signal = opus_signal,
+      .application = opus_application,
+      .complexity = complexity,
+      .packet_loss_perc = packet_loss_perc,
+      .use_in_band_fec = opus_config->useinbandfec(),
+      .use_dtx = opus_config->usedtx(),
+  };
+
+  return result;
+}
 
 AudioEncoderTraits::ParsedConfig* ParseConfigStatic(
     const AudioEncoderConfig* config,
@@ -42,88 +218,165 @@ AudioEncoderTraits::ParsedConfig* ParseConfigStatic(
     exception_state.ThrowTypeError("No config provided");
     return nullptr;
   }
-  auto* result = MakeGarbageCollected<AudioEncoderTraits::ParsedConfig>();
 
-  result->codec = media::kUnknownAudioCodec;
-  bool is_codec_ambiguous = true;
-  bool parse_succeeded = ParseAudioCodecString(
-      "", config->codec().Utf8(), &is_codec_ambiguous, &result->codec);
-
-  if (!parse_succeeded || is_codec_ambiguous) {
-    exception_state.ThrowTypeError("Unknown codec.");
+  if (config->codec().LengthWithStrippedWhiteSpace() == 0) {
+    exception_state.ThrowTypeError("Invalid codec; codec is required.");
     return nullptr;
   }
 
+  auto* result = MakeGarbageCollected<AudioEncoderTraits::ParsedConfig>();
+
+  std::optional<media::AudioType> audio_type =
+      media::ParseAudioCodecString("", config->codec().Utf8());
+  if (!audio_type) {
+    result->options.codec = media::AudioCodec::kUnknown;
+    return result;
+  }
+
+  // AudioCodecProfile isn't supported by any of Chromium's encoders. It's not
+  // likely in the future either since the existing profiles are for multi-pass
+  // type encodings that this API is not designed for.
+  result->options.codec = audio_type->codec;
   result->options.channels = config->numberOfChannels();
-  if (result->options.channels < 1 ||
-      result->options.channels > media::limits::kMaxChannels) {
-    exception_state.ThrowTypeError(String::Format(
-        "Invalid channel number; expected range from %d to %d, received %d.", 1,
-        media::limits::kMaxChannels, result->options.channels));
+  if (result->options.channels == 0) {
+    exception_state.ThrowTypeError(Format(
+        "Invalid channel count; channel count must be non-zero, received {}.",
+        result->options.channels));
     return nullptr;
   }
 
   result->options.sample_rate = config->sampleRate();
-  if (result->options.sample_rate < media::limits::kMinSampleRate ||
-      result->options.sample_rate > media::limits::kMaxSampleRate) {
-    exception_state.ThrowTypeError(String::Format(
-        "Invalid sample rate; expected range from %d to %d, received %d.",
-        media::limits::kMinSampleRate, media::limits::kMaxSampleRate,
+  if (result->options.sample_rate == 0) {
+    exception_state.ThrowTypeError(Format(
+        "Invalid sample rate; sample rate must be non-zero, received {}.",
         result->options.sample_rate));
     return nullptr;
   }
 
   result->codec_string = config->codec();
   if (config->hasBitrate()) {
+    if (config->bitrate() == 0) {
+      exception_state.ThrowTypeError("Bitrate must be greater than zero.");
+      return nullptr;
+    }
     if (config->bitrate() > std::numeric_limits<int>::max()) {
-      exception_state.ThrowTypeError(String::Format(
-          "Bitrate is too large; expected at most %d, received %" PRIu64,
-          std::numeric_limits<int>::max(), config->bitrate()));
+      exception_state.ThrowTypeError(
+          Format("Bitrate is too large; expected at most {}, received {}",
+                 std::numeric_limits<int>::max(), config->bitrate()));
       return nullptr;
     }
     result->options.bitrate = static_cast<int>(config->bitrate());
   }
 
-  return result;
+  if (config->hasBitrateMode()) {
+    result->options.bitrate_mode =
+        config->bitrateMode().AsEnum() == V8BitrateMode::Enum::kConstant
+            ? media::AudioEncoder::BitrateMode::kConstant
+            : media::AudioEncoder::BitrateMode::kVariable;
+  }
+
+  switch (result->options.codec) {
+    case media::AudioCodec::kOpus:
+      return ParseOpusConfigStatic(
+          config->hasOpus() ? config->opus() : OpusEncoderConfig::Create(),
+          result, exception_state);
+    case media::AudioCodec::kAAC: {
+      auto* aac_config =
+          config->hasAac() ? config->aac() : AacEncoderConfig::Create();
+      return ParseAacConfigStatic(aac_config, result, exception_state);
+    }
+    default:
+      return result;
+  }
 }
 
 bool VerifyCodecSupportStatic(AudioEncoderTraits::ParsedConfig* config,
-                              ExceptionState* exception_state) {
-  switch (config->codec) {
-    case media::kCodecOpus: {
-      if (config->options.channels > 2) {
-        // Our Opus implementation only supports up to 2 channels
-        if (exception_state) {
-          exception_state->ThrowDOMException(
-              DOMExceptionCode::kNotSupportedError,
-              String::Format("Too many channels for Opus encoder; "
-                             "expected at most 2, received %d.",
-                             config->options.channels));
-        }
+                              String* js_error_message) {
+  if (config->options.channels < 1 ||
+      config->options.channels > media::limits::kMaxChannels) {
+    *js_error_message = Format(
+        "Unsupported channel count; expected range from {} to {}, received {}.",
+        1, media::limits::kMaxChannels, config->options.channels);
+    return false;
+  }
+
+  if (config->options.sample_rate < media::limits::kMinSampleRate ||
+      config->options.sample_rate > media::limits::kMaxSampleRate) {
+    *js_error_message = Format(
+        "Unsupported sample rate; expected range from {} to {}, received {}.",
+        media::limits::kMinSampleRate, media::limits::kMaxSampleRate,
+        config->options.sample_rate);
+    return false;
+  }
+
+  switch (config->options.codec) {
+    case media::AudioCodec::kOpus: {
+      if (!VerifyDurationValues(
+              config->options.opus->frame_duration.InMicroseconds(),
+              "Unsupported Opus frameDuration.", js_error_message)) {
         return false;
       }
-      if (config->options.bitrate.has_value() &&
-          config->options.bitrate.value() <
-              media::AudioOpusEncoder::kMinBitrate) {
-        if (exception_state) {
-          exception_state->ThrowDOMException(
-              DOMExceptionCode::kNotSupportedError,
-              String::Format(
-                  "Opus bitrate is too low; expected at least %d, received %d.",
-                  media::AudioOpusEncoder::kMinBitrate,
-                  config->options.bitrate.value()));
-        }
+      if (config->options.channels > 2) {
+        // Our Opus implementation only supports up to 2 channels
+        *js_error_message = Format(
+            "Too many channels for Opus encoder; expected at most 2, received "
+            "{}.",
+            config->options.channels);
         return false;
       }
       return true;
     }
-    default:
-      if (exception_state) {
-        exception_state->ThrowDOMException(DOMExceptionCode::kNotSupportedError,
-                                           "Unsupported codec type.");
+    case media::AudioCodec::kAAC: {
+      if (media::MojoAudioEncoder::IsSupported(media::AudioCodec::kAAC)) {
+        if (!VerifyParameterValues(config->options.channels,
+                                   "Unsupported number of channels.", {1, 2, 6},
+                                   js_error_message)) {
+          return false;
+        }
+#if BUILDFLAG(IS_WIN)
+        if (config->options.bitrate.has_value()) {
+          if (!VerifyParameterValues(
+                  config->options.bitrate.value(), "Unsupported bitrate.",
+                  {96000, 128000, 160000, 192000}, js_error_message)) {
+            return false;
+          }
+        }
+#else
+        // Other platforms vary in their bitrate support, so we can't provide
+        // an accurate answer here.
+#endif
+        if (!VerifyParameterValues(config->options.sample_rate,
+                                   "Unsupported sample rate.", {44100, 48000},
+                                   js_error_message)) {
+          return false;
+        }
+        return true;
       }
+      [[fallthrough]];
+    }
+    default:
+      *js_error_message = "Unsupported codec type.";
       return false;
   }
+}
+
+AacEncoderConfig* CopyAacConfig(const AacEncoderConfig& config) {
+  auto* result = AacEncoderConfig::Create();
+  result->setFormat(config.format());
+  return result;
+}
+
+OpusEncoderConfig* CopyOpusConfig(const OpusEncoderConfig& config) {
+  auto* opus_result = OpusEncoderConfig::Create();
+  opus_result->setFormat(config.format());
+  opus_result->setSignal(config.signal());
+  opus_result->setApplication(config.application());
+  opus_result->setFrameDuration(config.frameDuration());
+  opus_result->setComplexity(config.getComplexityOr(kDefaultOpusComplexity));
+  opus_result->setPacketlossperc(config.packetlossperc());
+  opus_result->setUseinbandfec(config.useinbandfec());
+  opus_result->setUsedtx(config.usedtx());
+  return opus_result;
 }
 
 AudioEncoderConfig* CopyConfig(const AudioEncoderConfig& config) {
@@ -133,15 +386,48 @@ AudioEncoderConfig* CopyConfig(const AudioEncoderConfig& config) {
   result->setNumberOfChannels(config.numberOfChannels());
   if (config.hasBitrate())
     result->setBitrate(config.bitrate());
+
+  if (config.hasBitrateMode()) {
+    result->setBitrateMode(config.bitrateMode());
+  }
+
+  if (config.hasOpus()) {
+    result->setOpus(CopyOpusConfig(*config.opus()));
+  }
+  if (config.hasAac()) {
+    result->setAac(CopyAacConfig(*config.aac()));
+  }
+
   return result;
 }
 
-}  // namespace
-
-// static
-const char* AudioEncoderTraits::GetNameForDevTools() {
-  return "AudioEncoder(WebCodecs)";
+std::unique_ptr<media::AudioEncoder> CreateSoftwareAudioEncoder(
+    media::AudioCodec codec) {
+  if (codec != media::AudioCodec::kOpus)
+    return nullptr;
+  auto software_encoder = std::make_unique<media::AudioOpusEncoder>();
+  return std::make_unique<media::OffloadingAudioEncoder>(
+      std::move(software_encoder));
 }
+
+std::unique_ptr<media::AudioEncoder> CreatePlatformAudioEncoder(
+    media::AudioCodec codec) {
+  if (codec != media::AudioCodec::kAAC)
+    return nullptr;
+
+  mojo::PendingRemote<media::mojom::InterfaceFactory> pending_interface_factory;
+  mojo::Remote<media::mojom::InterfaceFactory> interface_factory;
+  Platform::Current()->GetBrowserInterfaceBroker()->GetInterface(
+      pending_interface_factory.InitWithNewPipeAndPassReceiver());
+  interface_factory.Bind(std::move(pending_interface_factory));
+
+  mojo::PendingRemote<media::mojom::AudioEncoder> encoder_remote;
+  interface_factory->CreateAudioEncoder(
+      encoder_remote.InitWithNewPipeAndPassReceiver());
+  return std::make_unique<media::MojoAudioEncoder>(std::move(encoder_remote));
+}
+
+}  // namespace
 
 // static
 const char* AudioEncoderTraits::GetName() {
@@ -166,27 +452,56 @@ AudioEncoder::AudioEncoder(ScriptState* script_state,
 
 AudioEncoder::~AudioEncoder() = default;
 
+std::unique_ptr<media::AudioEncoder> AudioEncoder::CreateMediaAudioEncoder(
+    const ParsedConfig& config) {
+  if (auto result = CreatePlatformAudioEncoder(config.options.codec)) {
+    is_platform_encoder_ = true;
+    return result;
+  }
+  is_platform_encoder_ = false;
+  return CreateSoftwareAudioEncoder(config.options.codec);
+}
+
 void AudioEncoder::ProcessConfigure(Request* request) {
   DCHECK_NE(state_.AsEnum(), V8CodecState::Enum::kClosed);
   DCHECK_EQ(request->type, Request::Type::kConfigure);
-  DCHECK(active_config_);
-  DCHECK_EQ(active_config_->codec, media::kCodecOpus);
+  DCHECK(request->config);
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   request->StartTracing();
 
-  auto software_encoder = std::make_unique<media::AudioOpusEncoder>();
-  media_encoder_ = std::make_unique<media::OffloadingAudioEncoder>(
-      std::move(software_encoder));
+  active_config_ = request->config;
+  String js_error_message;
+  if (!VerifyCodecSupport(active_config_, &js_error_message)) {
+    blocking_request_in_progress_ = request;
+    QueueHandleError(MakeGarbageCollected<DOMException>(
+        DOMExceptionCode::kNotSupportedError, js_error_message));
+    request->EndTracing();
+    return;
+  }
+
+  media_encoder_ = CreateMediaAudioEncoder(*active_config_);
+  if (!media_encoder_) {
+    blocking_request_in_progress_ = request;
+    QueueHandleError(MakeOperationError(
+        "Encoder creation error.",
+        media::EncoderStatus(
+            media::EncoderStatus::Codes::kEncoderInitializationError,
+            "Unable to create encoder (most likely unsupported "
+            "codec/acceleration requirement combination)")));
+    request->EndTracing();
+    return;
+  }
 
   auto output_cb = ConvertToBaseRepeatingCallback(CrossThreadBindRepeating(
-      &AudioEncoder::CallOutputCallback, WrapCrossThreadWeakPersistent(this),
+      &AudioEncoder::CallOutputCallback,
+      MakeUnwrappingCrossThreadWeakHandle(this),
       // We can't use |active_config_| from |this| because it can change by
       // the time the callback is executed.
-      WrapCrossThreadPersistent(active_config_.Get()), reset_count_));
+      MakeUnwrappingCrossThreadHandle(active_config_.Get()), reset_count_));
 
   auto done_callback = [](AudioEncoder* self, media::AudioCodec codec,
-                          Request* req, media::Status status) {
+                          Request* req, media::EncoderStatus status) {
     if (!self || self->reset_count_ != req->reset_count) {
       req->EndTracing(/*aborted=*/true);
       return;
@@ -194,24 +509,33 @@ void AudioEncoder::ProcessConfigure(Request* request) {
     DCHECK_CALLED_ON_VALID_SEQUENCE(self->sequence_checker_);
     if (!status.is_ok()) {
       self->HandleError(
-          self->logger_->MakeException("Encoding error.", status));
+          self->MakeOperationError("Encoding error.", std::move(status)));
     } else {
-      UMA_HISTOGRAM_ENUMERATION("Blink.WebCodecs.AudioEncoder.Codec", codec,
-                                media::kAudioCodecMax + 1);
+      base::UmaHistogramEnumeration("Blink.WebCodecs.AudioEncoder.Codec",
+                                    codec);
     }
 
     req->EndTracing();
-    self->stall_request_processing_ = false;
+    self->blocking_request_in_progress_ = nullptr;
     self->ProcessRequests();
   };
 
-  stall_request_processing_ = true;
+  blocking_request_in_progress_ = request;
   first_output_after_configure_ = true;
   media_encoder_->Initialize(
       active_config_->options, std::move(output_cb),
       ConvertToBaseOnceCallback(CrossThreadBindOnce(
-          done_callback, WrapCrossThreadWeakPersistent(this),
-          active_config_->codec, WrapCrossThreadPersistent(request))));
+          done_callback, MakeUnwrappingCrossThreadWeakHandle(this),
+          active_config_->options.codec,
+          MakeUnwrappingCrossThreadHandle(request))));
+}
+
+bool AudioEncoder::ReadyToProcessNextRequest() {
+  if (active_encodes_ >= kMaxActiveEncodes) {
+    return false;
+  }
+
+  return Base::ReadyToProcessNextRequest();
 }
 
 void AudioEncoder::ProcessEncode(Request* request) {
@@ -219,7 +543,7 @@ void AudioEncoder::ProcessEncode(Request* request) {
   DCHECK_EQ(state_, V8CodecState::Enum::kConfigured);
   DCHECK(media_encoder_);
   DCHECK_EQ(request->type, Request::Type::kEncode);
-  DCHECK_GT(requested_encodes_, 0);
+  DCHECK_GT(requested_encodes_, 0u);
 
   request->StartTracing();
 
@@ -231,7 +555,7 @@ void AudioEncoder::ProcessEncode(Request* request) {
   DCHECK(data);
 
   auto done_callback = [](AudioEncoder* self, Request* req,
-                          media::Status status) {
+                          media::EncoderStatus status) {
     if (!self || self->reset_count_ != req->reset_count) {
       req->EndTracing(/*aborted=*/true);
       return;
@@ -239,21 +563,22 @@ void AudioEncoder::ProcessEncode(Request* request) {
     DCHECK_CALLED_ON_VALID_SEQUENCE(self->sequence_checker_);
     if (!status.is_ok()) {
       self->HandleError(
-          self->logger_->MakeException("Encoding error.", status));
+          self->MakeEncodingError("Encoding error.", std::move(status)));
     }
 
+    --self->active_encodes_;
     req->EndTracing();
     self->ProcessRequests();
   };
 
   if (data->channel_count() != active_config_->options.channels ||
       data->sample_rate() != active_config_->options.sample_rate) {
-    media::Status error(media::StatusCode::kEncoderFailedEncode);
-    error.WithData("channels", data->channel_count());
-    error.WithData("sampleRate", data->sample_rate());
-
-    HandleError(logger_->MakeException(
-        "Input audio buffer is incompatible with codec parameters", error));
+    // Per spec we must queue a task for error handling.
+    QueueHandleError(MakeEncodingError(
+        "Input audio buffer is incompatible with codec parameters",
+        media::EncoderStatus(media::EncoderStatus::Codes::kEncoderFailedEncode)
+            .WithData("channels", data->channel_count())
+            .WithData("sampleRate", data->sample_rate())));
 
     request->EndTracing();
 
@@ -268,10 +593,14 @@ void AudioEncoder::ProcessEncode(Request* request) {
   base::TimeTicks timestamp = base::TimeTicks() + data->timestamp();
 
   --requested_encodes_;
-  media_encoder_->Encode(std::move(audio_bus), timestamp,
-                         ConvertToBaseOnceCallback(CrossThreadBindOnce(
-                             done_callback, WrapCrossThreadWeakPersistent(this),
-                             WrapCrossThreadPersistent(request))));
+  ScheduleDequeueEvent();
+  ++active_encodes_;
+
+  media_encoder_->Encode(
+      std::move(audio_bus), timestamp,
+      ConvertToBaseOnceCallback(CrossThreadBindOnce(
+          done_callback, MakeUnwrappingCrossThreadWeakHandle(this),
+          MakeUnwrappingCrossThreadHandle(request))));
 
   audio_data->close();
 }
@@ -280,7 +609,7 @@ void AudioEncoder::ProcessReconfigure(Request* request) {
   // Audio decoders don't currently support any meaningful reconfiguring
 }
 
-AudioEncoder::ParsedConfig* AudioEncoder::ParseConfig(
+AudioEncoder::ParsedConfig* AudioEncoder::OnNewConfigure(
     const AudioEncoderConfig* opts,
     ExceptionState& exception_state) {
   return ParseConfigStatic(opts, exception_state);
@@ -288,78 +617,114 @@ AudioEncoder::ParsedConfig* AudioEncoder::ParseConfig(
 
 bool AudioEncoder::CanReconfigure(ParsedConfig& original_config,
                                   ParsedConfig& new_config) {
-  return original_config.codec == new_config.codec &&
+  return original_config.options.codec == new_config.options.codec &&
          original_config.options.channels == new_config.options.channels &&
          original_config.options.bitrate == new_config.options.bitrate &&
          original_config.options.sample_rate == new_config.options.sample_rate;
 }
 
 bool AudioEncoder::VerifyCodecSupport(ParsedConfig* config,
-                                      ExceptionState& exception_state) {
-  return VerifyCodecSupportStatic(config, &exception_state);
+                                      String* js_error_message) {
+  return VerifyCodecSupportStatic(config, js_error_message);
 }
+
+void AudioEncoder::ResetInternal(DOMException* ex) {
+  Base::ResetInternal(ex);
+  active_encodes_ = 0;
+}
+
+void AudioEncoder::OnNewEncode(InputType* input,
+                               ExceptionState& exception_state) {}
 
 void AudioEncoder::CallOutputCallback(
     ParsedConfig* active_config,
     uint32_t reset_count,
     media::EncodedAudioBuffer encoded_buffer,
-    absl::optional<media::AudioEncoder::CodecDescription> codec_desc) {
+    std::optional<media::AudioEncoder::CodecDescription> codec_desc) {
   DCHECK(active_config);
   if (!script_state_->ContextIsValid() || !output_callback_ ||
       state_.AsEnum() != V8CodecState::Enum::kConfigured ||
-      reset_count != reset_count_)
+      reset_count != reset_count_) {
     return;
+  }
 
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  auto timestamp = encoded_buffer.timestamp - base::TimeTicks();
-  auto deleter = [](void* data, size_t length, void*) {
-    delete[] static_cast<uint8_t*>(data);
-  };
-  ArrayBufferContents data(encoded_buffer.encoded_data.release(),
-                           encoded_buffer.encoded_data_size, deleter);
-  auto* dom_array = MakeGarbageCollected<DOMArrayBuffer>(std::move(data));
-  auto* chunk = MakeGarbageCollected<EncodedAudioChunk>(
-      timestamp, /*key_frame=*/true, dom_array);
+
+  MarkCodecActive();
+
+  auto buffer =
+      media::DecoderBuffer::FromArray(std::move(encoded_buffer.encoded_data));
+  buffer->set_timestamp(encoded_buffer.timestamp - base::TimeTicks());
+  buffer->set_is_key_frame(true);
+  buffer->set_duration(encoded_buffer.duration);
+  auto* chunk = MakeGarbageCollected<EncodedAudioChunk>(std::move(buffer));
 
   auto* metadata = MakeGarbageCollected<EncodedAudioChunkMetadata>();
   if (first_output_after_configure_ || codec_desc.has_value()) {
     first_output_after_configure_ = false;
     auto* decoder_config = MakeGarbageCollected<AudioDecoderConfig>();
     decoder_config->setCodec(active_config->codec_string);
-    decoder_config->setSampleRate(active_config->options.sample_rate);
+    decoder_config->setSampleRate(encoded_buffer.params.sample_rate());
     decoder_config->setNumberOfChannels(active_config->options.channels);
     if (codec_desc.has_value()) {
-      auto* desc_array_buf = DOMArrayBuffer::Create(codec_desc.value().data(),
-                                                    codec_desc.value().size());
+      auto* desc_array_buf = DOMArrayBuffer::Create(codec_desc.value());
       decoder_config->setDescription(
-          MakeGarbageCollected<V8BufferSource>(desc_array_buf));
+          MakeGarbageCollected<AllowSharedBufferSource>(desc_array_buf));
     }
     metadata->setDecoderConfig(decoder_config);
   }
 
-  TRACE_EVENT_BEGIN1(kCategory, GetTraceNames()->output.c_str(), "timestamp",
-                     chunk->timestamp());
+  TRACE_EVENT(kCategory,
+              perfetto::StaticString(GetTraceNames()->output.c_str()),
+              "timestamp", chunk->timestamp());
 
   ScriptState::Scope scope(script_state_);
   output_callback_->InvokeAndReportException(nullptr, chunk, metadata);
-
-  TRACE_EVENT_END0(kCategory, GetTraceNames()->output.c_str());
 }
 
 // static
-ScriptPromise AudioEncoder::isConfigSupported(ScriptState* script_state,
-                                              const AudioEncoderConfig* config,
-                                              ExceptionState& exception_state) {
+ScriptPromise<AudioEncoderSupport> AudioEncoder::isConfigSupported(
+    ScriptState* script_state,
+    const AudioEncoderConfig* config,
+    ExceptionState& exception_state) {
   auto* parsed_config = ParseConfigStatic(config, exception_state);
   if (!parsed_config) {
     DCHECK(exception_state.HadException());
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
+  String unused_js_error_message;
   auto* support = AudioEncoderSupport::Create();
-  support->setSupported(VerifyCodecSupportStatic(parsed_config, nullptr));
+  support->setSupported(
+      VerifyCodecSupportStatic(parsed_config, &unused_js_error_message));
   support->setConfig(CopyConfig(*config));
-  return ScriptPromise::Cast(script_state, ToV8(support, script_state));
+  return ToResolvedPromise<AudioEncoderSupport>(script_state, support);
+}
+
+const AtomicString& AudioEncoder::InterfaceName() const {
+  return event_target_names::kAudioEncoder;
+}
+
+bool AudioEncoder::HasPendingActivity() const {
+  return (active_encodes_ > 0) || Base::HasPendingActivity();
+}
+
+DOMException* AudioEncoder::MakeOperationError(std::string error_msg,
+                                               media::EncoderStatus status) {
+  if (is_platform_encoder_) {
+    return logger_->MakeOperationError(std::move(error_msg), std::move(status));
+  }
+  return logger_->MakeSoftwareCodecOperationError(std::move(error_msg),
+                                                  std::move(status));
+}
+
+DOMException* AudioEncoder::MakeEncodingError(std::string error_msg,
+                                              media::EncoderStatus status) {
+  if (is_platform_encoder_) {
+    return logger_->MakeEncodingError(std::move(error_msg), std::move(status));
+  }
+  return logger_->MakeSoftwareCodecEncodingError(std::move(error_msg),
+                                                 std::move(status));
 }
 
 }  // namespace blink

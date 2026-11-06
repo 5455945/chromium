@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 #define COMPONENTS_PERMISSIONS_CONTEXTS_BLUETOOTH_CHOOSER_CONTEXT_H_
 
 #include <map>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -14,7 +15,7 @@
 #include "third_party/blink/public/mojom/bluetooth/web_bluetooth.mojom-forward.h"
 
 namespace base {
-class Value;
+class DictValue;
 }  // namespace base
 
 namespace content {
@@ -47,6 +48,11 @@ class BluetoothChooserContext : public ObjectPermissionContextBase {
   BluetoothChooserContext(const BluetoothChooserContext&) = delete;
   BluetoothChooserContext& operator=(const BluetoothChooserContext&) = delete;
 
+  static base::DictValue DeviceInfoToValue(
+      const device::BluetoothDevice* device,
+      const blink::mojom::WebBluetoothRequestDeviceOptions* options,
+      const blink::WebBluetoothDeviceId& device_id);
+
   // Helper methods for converting between a WebBluetoothDeviceId and a
   // Bluetooth device address string for a given origin pair.
   blink::WebBluetoothDeviceId GetWebBluetoothDeviceId(
@@ -68,6 +74,9 @@ class BluetoothChooserContext : public ObjectPermissionContextBase {
       const blink::mojom::WebBluetoothRequestDeviceOptions* options);
   bool HasDevicePermission(const url::Origin& origin,
                            const blink::WebBluetoothDeviceId& device_id);
+  void RevokeDevicePermissionWebInitiated(
+      const url::Origin& origin,
+      const blink::WebBluetoothDeviceId& device_id);
   bool IsAllowedToAccessAtLeastOneService(
       const url::Origin& origin,
       const blink::WebBluetoothDeviceId& device_id);
@@ -80,16 +89,29 @@ class BluetoothChooserContext : public ObjectPermissionContextBase {
       uint16_t manufacturer_code);
 
   static blink::WebBluetoothDeviceId GetObjectDeviceId(
-      const base::Value& object);
+      const base::DictValue& object);
 
-  // ObjectPermissionContextBase;
-  std::string GetKeyForObject(const base::Value& object) override;
-  bool IsValidObject(const base::Value& object) override;
-  std::u16string GetObjectDisplayName(const base::Value& object) override;
+  // ObjectPermissionContextBase:
+  std::string GetKeyForObject(const base::DictValue& object) override;
+  bool IsValidObject(const base::DictValue& object) override;
+  std::u16string GetObjectDisplayName(const base::DictValue& object) override;
+  std::u16string GetObjectDisplayNameForUI(
+      const base::DictValue& object) override;
+
+  // KeyedService:
+  void Shutdown() override;
+
+  // ObjectPermissionContextBase:
+  std::vector<url::Origin> RevokeEphemeralPermissions(
+      const ContentSettingsPattern& primary_pattern,
+      bool unconditional) override;
 
  private:
-  base::Value FindDeviceObject(const url::Origin& origin,
-                               const blink::WebBluetoothDeviceId& device_id);
+  static bool IsValidDict(const base::DictValue& dict);
+
+  std::optional<base::DictValue> FindDeviceObject(
+      const url::Origin& origin,
+      const blink::WebBluetoothDeviceId& device_id);
 
   // This map records the generated Web Bluetooth IDs for devices discovered via
   // the Scanning API. Each requesting/embedding origin pair has its own version

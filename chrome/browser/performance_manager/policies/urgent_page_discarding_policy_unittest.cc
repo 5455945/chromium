@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,16 @@
 
 #include <memory>
 
-#include "base/memory/memory_pressure_listener.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory_coordinator/memory_consumer.h"
+#include "base/memory_coordinator/test_memory_consumer_registry.h"
+#include "base/memory_coordinator/utils.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
-#include "base/util/memory_pressure/fake_memory_pressure_monitor.h"
-#include "chrome/browser/performance_manager/decorators/page_aggregator.h"
-#include "chrome/browser/performance_manager/policies/page_discarding_helper.h"
+#include "chrome/browser/performance_manager/policies/discard_eligibility_policy.h"
 #include "chrome/browser/performance_manager/policies/policy_features.h"
 #include "chrome/browser/performance_manager/test_support/page_discarding_utils.h"
+#include "components/performance_manager/decorators/page_aggregator.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace performance_manager {
@@ -31,6 +34,9 @@ class UrgentPageDiscardingPolicyTest
   void SetUp() override {
     testing::GraphTestHarnessWithMockDiscarder::SetUp();
 
+    scoped_feature_list_.InitAndDisableFeature(
+        features::kSustainedPMUrgentDiscarding);
+
     // Create the policy and pass it to the graph.
     auto policy = std::make_unique<UrgentPageDiscardingPolicy>();
     policy_ = policy.get();
@@ -38,20 +44,33 @@ class UrgentPageDiscardingPolicyTest
   }
 
   void TearDown() override {
-    graph()->TakeFromGraph(policy_);
+    if (policy_) {
+      std::unique_ptr<UrgentPageDiscardingPolicy> policy =
+          graph()->TakeFromGraphAs(policy_.get());
+      policy_ = nullptr;
+      policy.reset();
+    }
     testing::GraphTestHarnessWithMockDiscarder::TearDown();
   }
 
+ protected:
+  void TriggerMemoryPressure(base::MemoryLimit memory_limit) {
+    test_memory_consumer_registry_.NotifyUpdateMemoryLimitAndReleaseAsync(
+        memory_limit, task_env().QuitClosure());
+    task_env().RunUntilQuit();
+  }
+
+  base::TestMemoryConsumerRegistry test_memory_consumer_registry_;
+
  private:
-  UrgentPageDiscardingPolicy* policy_;
+  base::test::ScopedFeatureList scoped_feature_list_;
+  raw_ptr<UrgentPageDiscardingPolicy> policy_ = nullptr;
 };
 
 TEST_F(UrgentPageDiscardingPolicyTest, DiscardOnCriticalPressure) {
   EXPECT_CALL(*discarder(), DiscardPageNodeImpl(page_node()))
       .WillOnce(::testing::Return(true));
-  system_node()->OnMemoryPressureForTesting(
-      base::MemoryPressureListener::MemoryPressureLevel::
-          MEMORY_PRESSURE_LEVEL_CRITICAL);
+  TriggerMemoryPressure(base::MemoryLimit::CriticalPressureThreshold());
   ::testing::Mock::VerifyAndClearExpectations(discarder());
 
   // Send a second memory pressure notification without switching back to the
@@ -59,18 +78,14 @@ TEST_F(UrgentPageDiscardingPolicyTest, DiscardOnCriticalPressure) {
   // exit memory pressure.
   EXPECT_CALL(*discarder(), DiscardPageNodeImpl(page_node()))
       .WillOnce(::testing::Return(true));
-  PageDiscardingHelper::RemovesDiscardAttemptMarkerForTesting(page_node());
-  system_node()->OnMemoryPressureForTesting(
-      base::MemoryPressureListener::MemoryPressureLevel::
-          MEMORY_PRESSURE_LEVEL_CRITICAL);
+  DiscardEligibilityPolicy::RemovesDiscardAttemptMarkerForTesting(page_node());
+  TriggerMemoryPressure(base::MemoryLimit::CriticalPressureThreshold());
   ::testing::Mock::VerifyAndClearExpectations(discarder());
 }
 
 TEST_F(UrgentPageDiscardingPolicyTest, NoDiscardOnModeratePressure) {
   // No tab should be discarded on moderate pressure.
-  system_node()->OnMemoryPressureForTesting(
-      base::MemoryPressureListener::MemoryPressureLevel::
-          MEMORY_PRESSURE_LEVEL_MODERATE);
+  TriggerMemoryPressure(base::MemoryLimit::ModeratePressureThreshold());
   ::testing::Mock::VerifyAndClearExpectations(discarder());
 }
 

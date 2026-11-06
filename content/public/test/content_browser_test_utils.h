@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,24 +8,28 @@
 #include <map>
 #include <string>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
+#include "build/build_config.h"
 #include "content/public/common/page_type.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 
 namespace base {
 class FilePath;
 
-namespace mac {
+namespace apple {
 class ScopedObjCClassSwizzler;
-}  // namespace mac
+}  // namespace apple
 }  // namespace base
 
 namespace gfx {
 class Point;
+#if BUILDFLAG(IS_MAC)
 class Range;
+#endif
 class Rect;
 }  // namespace gfx
 
@@ -75,16 +79,16 @@ GURL GetTestUrl(const char* dir, const char* file);
 // version below which also takes the expected commit URL.  If the navigation
 // will not result in a commit, such as a download or a 204 response, use
 // NavigateToURLAndExpectNoCommit() instead.
-WARN_UNUSED_RESULT bool NavigateToURL(Shell* window, const GURL& url);
+[[nodiscard]] bool NavigateToURL(Shell* window, const GURL& url);
 
 // Same as above, but takes in an additional URL, |expected_commit_url|, to
 // which the navigation should eventually commit.  This is useful for cases
 // like redirects, where navigation starts on one URL but ends up committing a
 // different URL.  This function will return true if navigating to |url|
 // results in a successful commit to |expected_commit_url|.
-WARN_UNUSED_RESULT bool NavigateToURL(Shell* window,
-                                      const GURL& url,
-                                      const GURL& expected_commit_url);
+[[nodiscard]] bool NavigateToURL(Shell* window,
+                                 const GURL& url,
+                                 const GURL& expected_commit_url);
 
 // Navigates |window| to |url|, blocking until the given number of navigations
 // finishes. If |ignore_uncommitted_navigations| is true, then an aborted
@@ -98,8 +102,8 @@ void NavigateToURLBlockUntilNavigationsComplete(
 // Navigates |window| to |url|, blocks until the navigation finishes, and
 // checks that the navigation did not commit (e.g., due to a crash or
 // download).
-WARN_UNUSED_RESULT bool NavigateToURLAndExpectNoCommit(Shell* window,
-                                                       const GURL& url);
+[[nodiscard]] bool NavigateToURLAndExpectNoCommit(Shell* window,
+                                                  const GURL& url);
 
 // Reloads |window|, blocking until the given number of navigations finishes.
 void ReloadBlockUntilNavigationsComplete(Shell* window,
@@ -134,7 +138,7 @@ class AppModalDialogWaiter {
  private:
   void EarlyCallback();
   bool was_dialog_request_callback_called_ = false;
-  Shell* shell_;
+  raw_ptr<Shell> shell_;
 };
 
 // Extends the ToRenderFrameHost mechanism to content::Shells.
@@ -151,6 +155,10 @@ void LookupAndLogNameAndIdOfFirstCamera();
 class ShellAddedObserver {
  public:
   ShellAddedObserver();
+
+  ShellAddedObserver(const ShellAddedObserver&) = delete;
+  ShellAddedObserver& operator=(const ShellAddedObserver&) = delete;
+
   ~ShellAddedObserver();
 
   // Will run a message loop to wait for the new window if it hasn't been
@@ -160,25 +168,21 @@ class ShellAddedObserver {
  private:
   void ShellCreated(Shell* shell);
 
-  Shell* shell_ = nullptr;
+  raw_ptr<Shell, AcrossTasksDanglingUntriaged> shell_ = nullptr;
   std::unique_ptr<base::RunLoop> runner_;
-
-  DISALLOW_COPY_AND_ASSIGN(ShellAddedObserver);
 };
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 // An observer of the RenderWidgetHostViewCocoa which is the NSView
 // corresponding to the page.
 class RenderWidgetHostViewCocoaObserver {
  public:
-  // The method name for 'didAddSubview'.
-  static constexpr char kDidAddSubview[] = "didAddSubview:";
   static constexpr char kShowDefinitionForAttributedString[] =
       "showDefinitionForAttributedString:atPoint:";
 
   // Returns the method swizzler for the given |method_name|. This is useful
   // when the original implementation of the method is needed.
-  static base::mac::ScopedObjCClassSwizzler* GetSwizzler(
+  static base::apple::ScopedObjCClassSwizzler* GetSwizzler(
       const std::string& method_name);
 
   // Returns the unique RenderWidgetHostViewCocoaObserver instance (if any) for
@@ -188,14 +192,20 @@ class RenderWidgetHostViewCocoaObserver {
       WebContents* web_contents);
 
   explicit RenderWidgetHostViewCocoaObserver(WebContents* web_contents);
+
+  RenderWidgetHostViewCocoaObserver(const RenderWidgetHostViewCocoaObserver&) =
+      delete;
+  RenderWidgetHostViewCocoaObserver& operator=(
+      const RenderWidgetHostViewCocoaObserver&) = delete;
+
   virtual ~RenderWidgetHostViewCocoaObserver();
 
-  // Called when a new NSView is added as a subview of RWHVCocoa.
-  // |rect_in_root_view| represents the bounds of the NSView in RWHVCocoa
-  // coordinates. The view will be dismissed shortly after this call.
-  virtual void DidAddSubviewWillBeDismissed(
-      const gfx::Rect& rect_in_root_view) {}
-  // Called when RenderWidgeHostViewCocoa is asked to show definition of
+  // Called when a popup was attempted to be displayed, conveying the bounds of
+  // the popup rectangle (in the RenderWidgetHostViewCocoa coordinate system)
+  // and the initially-selected item. The popup will not actually be triggered.
+  virtual void DidAttemptToShowPopup(const gfx::Rect& bounds,
+                                     int selected_item) {}
+  // Called when RenderWidgetHostViewCocoa is asked to show definition of
   // |for_word| using Mac's dictionary popup.
   virtual void OnShowDefinitionForAttributedString(
       const std::string& for_word) {}
@@ -206,13 +216,12 @@ class RenderWidgetHostViewCocoaObserver {
   static void SetUpSwizzlers();
 
   static std::map<std::string,
-                  std::unique_ptr<base::mac::ScopedObjCClassSwizzler>>
-      rwhvcocoa_swizzlers_;
-  static std::map<WebContents*, RenderWidgetHostViewCocoaObserver*> observers_;
+                  std::unique_ptr<base::apple::ScopedObjCClassSwizzler>>&
+  RwhvcocoaSwizzlers();
+  static std::map<WebContents*, RenderWidgetHostViewCocoaObserver*>&
+  Observers();
 
-  WebContents* const web_contents_;
-
-  DISALLOW_COPY_AND_ASSIGN(RenderWidgetHostViewCocoaObserver);
+  const raw_ptr<WebContents> web_contents_;
 };
 
 void SetWindowBounds(gfx::NativeWindow window, const gfx::Rect& bounds);
@@ -251,12 +260,19 @@ void IsolateOriginsForTesting(
     WebContents* web_contents,
     std::vector<std::string> hostnames_to_isolate);
 
-#if defined(OS_WIN)
+// Same as above, but takes full origins as input.  In particular, this version
+// doesn't assume HTTP, so it can be used for also isolating HTTPS origins.
+void IsolateOriginsForTesting(
+    net::test_server::EmbeddedTestServer* embedded_test_server,
+    WebContents* web_contents,
+    std::vector<url::Origin> origins_to_isolate);
+
+#if BUILDFLAG(IS_WIN)
 
 void SetMockCursorPositionForTesting(WebContents* web_contents,
                                      const gfx::Point& position);
 
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
 }  // namespace content
 

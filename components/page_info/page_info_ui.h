@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,16 +9,17 @@
 #include <string>
 #include <vector>
 
+#include "base/memory/raw_ref.h"
 #include "build/build_config.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
+#include "components/content_settings/core/common/cookie_controls_state.h"
 #include "components/page_info/page_info.h"
 #include "components/permissions/object_permission_context_base.h"
 #include "components/safe_browsing/buildflags.h"
 #include "ui/base/models/image_model.h"
-#include "ui/gfx/native_widget_types.h"
 
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
 #include "ui/gfx/image/image_skia.h"
 #endif
 
@@ -37,10 +38,9 @@ class X509Certificate;
 // etc.).
 class PageInfoUI {
  public:
-  enum class SecuritySummaryColor {
-    RED,
-    GREEN,
-  };
+  // Specifies security icons and sections shown for the page info UI. For
+  // ENTERPRISE, a red business icon is shown in the omnibox.
+  enum class SecuritySummaryColor { RED, GREEN, ENTERPRISE };
 
   enum class SecurityDescriptionType {
     // The UI describes whether the connection is secure, e.g. secure
@@ -69,19 +69,38 @@ class PageInfoUI {
     SecurityDescriptionType type;
   };
 
-  // |CookieInfo| contains information about the cookies from a specific source.
-  // A source can for example be a specific origin or an entire wildcard domain.
-  struct CookieInfo {
-    CookieInfo();
+  // `CookiesRwsInfo` contains information about a specific Related website set.
+  struct CookiesRwsInfo {
+    explicit CookiesRwsInfo(const std::u16string& owner_name);
+    ~CookiesRwsInfo();
 
-    // The number of allowed cookies.
-    int allowed;
-    // The number of blocked cookies.
-    int blocked;
+    // The name of the owner of the RWS.
+    std::u16string owner_name;
 
-    // Whether these cookies are from the current top-level origin as seen by
-    // the user, or from third-party origins.
-    bool is_first_party;
+    // Whether the Rws are managed by the company.
+    bool is_managed = false;
+  };
+
+  // `CookiesInfo` contains information about the sites that are allowed
+  // to access cookies and rws cookies info for new UI.
+  struct CookiesInfo {
+    CookiesInfo();
+    CookiesInfo(CookiesInfo&&);
+    ~CookiesInfo();
+
+    // The number of sites allowed to access cookies.
+    int allowed_sites_count = -1;
+
+    // The status of enforcement of blocking third-party cookies.
+    CookieControlsEnforcement enforcement;
+
+    // The state of cookie controls to display.
+    CookieControlsState controls_state;
+
+    std::optional<CookiesRwsInfo> rws_info;
+
+    // The expiration of the active third-party cookie exception.
+    base::Time expiration;
   };
 
   // |ChosenObjectInfo| contains information about a single |chooser_object| of
@@ -93,7 +112,7 @@ class PageInfoUI {
             chooser_object);
     ~ChosenObjectInfo();
     // |ui_info| for this chosen object type.
-    const PageInfo::ChooserUIInfo& ui_info;
+    const raw_ref<const PageInfo::ChooserUIInfo> ui_info;
     // The opaque |chooser_object| representing the thing the user selected.
     std::unique_ptr<permissions::ObjectPermissionContextBase::Object>
         chooser_object;
@@ -119,7 +138,7 @@ class PageInfoUI {
     // Textual description of the Safe Browsing status.
     std::u16string safe_browsing_details;
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
     // Textual description of the site's identity status that is displayed to
     // the user.
     std::string identity_status_description_android;
@@ -127,16 +146,18 @@ class PageInfoUI {
 
     // The server certificate if a secure connection.
     scoped_refptr<net::X509Certificate> certificate;
+    // The 2-QWAC certificate if the site has a valid 2-QWAC.
+    scoped_refptr<net::X509Certificate> two_qwac;
     // Status of the site's connection.
     PageInfo::SiteConnectionStatus connection_status;
     // Textual description of the site's connection status that is displayed to
     // the user.
     std::string connection_status_description;
-    // Set when the user has explicitly bypassed an SSL error for this host and
-    // has a flag set to remember ssl decisions (explicit flag or in the
-    // experimental group).  When |show_ssl_decision_revoke_button| is true, the
-    // connection area of the page info will include an option for the user to
-    // revoke their decision to bypass the SSL error for this host.
+    // Set when the user has explicitly bypassed an SSL error for this host
+    // and/or the user has explicitly bypassed an HTTP warning (from HTTPS-First
+    // Mode) for this host. When `show_ssl_decision_revoke_button` is true, the
+    // connection area of the page info UI will include an option for the user
+    // to revoke their decision to bypass warnings for this host.
     bool show_ssl_decision_revoke_button;
     // Set when the user ignored the password reuse modal warning dialog. When
     // |show_change_password_buttons| is true, the page identity area of the
@@ -152,7 +173,13 @@ class PageInfoUI {
     bool is_vr_presentation_in_headset;
   };
 
-  using CookieInfoList = std::vector<CookieInfo>;
+  struct PermissionUIInfo {
+    ContentSettingsType type;
+    int string_id;
+    int string_id_mid_sentence;
+  };
+
+
   using PermissionInfoList = std::vector<PageInfo::PermissionInfo>;
   using ChosenObjectInfoList = std::vector<std::unique_ptr<ChosenObjectInfo>>;
 
@@ -160,41 +187,57 @@ class PageInfoUI {
 
   // Returns the UI string for the given permission |type|.
   static std::u16string PermissionTypeToUIString(ContentSettingsType type);
-
-  // Returns the UI string describing the action taken for a permission,
-  // including why that action was taken. E.g. "Allowed by you",
-  // "Blocked by default". If |setting| is default, specify the actual default
-  // setting using |default_setting|.
-  static std::u16string PermissionActionToUIString(
-      PageInfoUiDelegate* delegate,
+  // Returns the UI string for the given permission |type| when used
+  // mid-sentence.
+  static std::u16string PermissionTypeToUIStringMidSentence(
+      ContentSettingsType type);
+  // Returns a tooltip for permission |type|.
+  static std::u16string PermissionTooltipUiString(
       ContentSettingsType type,
-      ContentSetting setting,
-      ContentSetting default_setting,
-      content_settings::SettingSource source,
-      bool is_one_time);
+      const std::optional<url::Origin>& requesting_origin);
+  // Returns a tooltip for a subpage button for permission |type|.
+  static std::u16string PermissionSubpageButtonTooltipString(
+      ContentSettingsType type);
 
-  // Returns a string indicating whether the permission was blocked via an
-  // extension, enterprise policy, or embargo.
-  static std::u16string PermissionDecisionReasonToUIString(
+  static base::span<const PermissionUIInfo>
+  GetContentSettingsUIInfoForTesting();
+
+  static std::u16string PermissionStateToUIString(
       PageInfoUiDelegate* delegate,
       const PageInfo::PermissionInfo& permission);
+
+  static std::u16string PermissionMainPageStateToUIString(
+      PageInfoUiDelegate* delegate,
+      const PageInfo::PermissionInfo& permission);
+
+  static std::u16string PermissionManagedTooltipToUIString(
+      PageInfoUiDelegate* delegate,
+      const PageInfo::PermissionInfo& permission);
+
+  static std::u16string PermissionAutoBlockedToUIString(
+      PageInfoUiDelegate* delegate,
+      const PageInfo::PermissionInfo& permission);
+
+  static void ToggleBetweenAllowAndBlock(PageInfo::PermissionInfo& permission);
+
+  static void ToggleBetweenRememberAndForget(
+      PageInfo::PermissionInfo& permission);
+
+  static bool IsToggleOn(const PageInfo::PermissionInfo& permission);
 
   // Returns the color to use for the permission decision reason strings.
   static SkColor GetSecondaryTextColor();
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   // Returns the identity icon ID for the given identity |status|.
   static int GetIdentityIconID(PageInfo::SiteIdentityStatus status);
-
-  // Returns the connection icon ID for the given connection |status|.
-  static int GetConnectionIconID(PageInfo::SiteConnectionStatus status);
 
   // Returns the identity icon color ID for the given identity |status|.
   static int GetIdentityIconColorID(PageInfo::SiteIdentityStatus status);
 
   // Returns the connection icon color ID for the given connection |status|.
   static int GetConnectionIconColorID(PageInfo::SiteConnectionStatus status);
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
 
   // Return true if the given ContentSettingsType is in PageInfoUI.
   static bool ContentSettingsTypeInPageInfo(ContentSettingsType type);
@@ -203,7 +246,7 @@ class PageInfoUI {
   CreateSafetyTipSecurityDescription(const security_state::SafetyTipInfo& info);
 
   // Sets cookie information.
-  virtual void SetCookieInfo(const CookieInfoList& cookie_info_list) {}
+  virtual void SetCookieInfo(const CookiesInfo& cookie_info) {}
 
   // Sets permission information.
   virtual void SetPermissionInfo(const PermissionInfoList& permission_info_list,
@@ -222,7 +265,6 @@ class PageInfoUI {
       const IdentityInfo& identity_info) const;
 };
 
-typedef PageInfoUI::CookieInfoList CookieInfoList;
 typedef PageInfoUI::PermissionInfoList PermissionInfoList;
 typedef PageInfoUI::ChosenObjectInfoList ChosenObjectInfoList;
 

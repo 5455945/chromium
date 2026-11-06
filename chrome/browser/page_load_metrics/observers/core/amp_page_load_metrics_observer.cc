@@ -1,26 +1,30 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/page_load_metrics/observers/core/amp_page_load_metrics_observer.h"
 
 #include <algorithm>
+#include <optional>
 #include <string>
+#include <string_view>
 
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
 #include "components/page_load_metrics/browser/observers/core/largest_contentful_paint_handler.h"
+#include "components/page_load_metrics/browser/page_load_metrics_observer_delegate.h"
 #include "components/page_load_metrics/browser/page_load_metrics_util.h"
 #include "components/page_load_metrics/common/page_load_timing.h"
+#include "components/page_load_metrics/common/page_visit_final_status.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "net/base/url_util.h"
 #include "services/metrics/public/cpp/metrics_utils.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "third_party/blink/public/common/features.h"
 #include "url/gurl.h"
 
 namespace {
@@ -31,8 +35,6 @@ const char kHistogramAMPSubframeNavigationToInput[] =
     "Experimental.PageTiming.NavigationToInput.Subframe";
 const char kHistogramAMPSubframeInputToNavigation[] =
     "Experimental.PageTiming.InputToNavigation.Subframe";
-const char kHistogramAMPSubframeMainFrameToSubFrameNavigation[] =
-    "Experimental.PageTiming.MainFrameToSubFrameNavigationDelta.Subframe";
 const char kHistogramAMPSubframeFirstContentfulPaint[] =
     "PaintTiming.InputToFirstContentfulPaint.Subframe";
 const char kHistogramAMPSubframeFirstContentfulPaintFullNavigation[] =
@@ -43,12 +45,16 @@ const char kHistogramAMPSubframeLargestContentfulPaintFullNavigation[] =
     "PaintTiming.InputToLargestContentfulPaint.Subframe.FullNavigation";
 const char kHistogramAMPSubframeFirstInputDelay[] =
     "InteractiveTiming.FirstInputDelay4.Subframe";
-const char kHistogramAMPSubframeFirstInputDelayFullNavigation[] =
-    "InteractiveTiming.FirstInputDelay4.Subframe.FullNavigation";
-const char kHistogramAMPSubframeLayoutInstabilityShiftScore[] =
-    "LayoutInstability.CumulativeShiftScore.Subframe";
-const char kHistogramAMPSubframeLayoutInstabilityShiftScoreFullNavigation[] =
-    "LayoutInstability.CumulativeShiftScore.Subframe.FullNavigation";
+
+const char kHistogramAMPSubframeNumInteractions[] =
+    "InteractiveTiming.NumInteractions.Subframe";
+const char
+    kHistogramAMPSubframeUserInteractionHighPercentile2MaxEventDuration[] =
+        "InteractiveTiming.UserInteractionLatency."
+        "HighPercentile2.MaxEventDuration.Subframe";
+
+const char kHistogramAMPSubframeWorstUserInteractionLatencyMaxEventDuration[] =
+    "InteractiveTiming.WorstUserInteractionLatency.MaxEventDuration.Subframe";
 
 GURL GetCanonicalizedSameDocumentUrl(const GURL& url) {
   if (!url.has_ref())
@@ -77,15 +83,15 @@ GURL GetViewerUrlFromCacheUrl(const GURL& url) {
   // (&viewerURL=<URL>). net::QueryIterator only operates on the query string,
   // so we copy the fragment into the query string, then iterate over the
   // parameters below.
-  std::string ref = url.ref();
+  std::string_view ref = url.ref();
   GURL::Replacements replacements;
-  replacements.SetQuery(ref.c_str(), url::Component(0, ref.length()));
+  replacements.SetQueryStr(ref);
   GURL modified_url = url.ReplaceComponents(replacements);
   for (net::QueryIterator it(modified_url); !it.IsAtEnd(); it.Advance()) {
     if (it.GetKey() == "viewerUrl")
       return GURL(it.GetUnescapedValue());
   }
-  return GURL::EmptyGURL();
+  return GURL();
 }
 
 base::TimeDelta ClampToZero(base::TimeDelta t) {
@@ -94,20 +100,69 @@ base::TimeDelta ClampToZero(base::TimeDelta t) {
 
 }  // namespace
 
-AMPPageLoadMetricsObserver::AMPPageLoadMetricsObserver() {}
+bool IsInPrerenderingBeforeActivation(
+    const page_load_metrics::PageLoadMetricsObserverDelegate& delegate) {
+  return delegate.GetPrerenderingState() ==
+         page_load_metrics::PrerenderingState::kInPrerendering;
+}
 
-AMPPageLoadMetricsObserver::~AMPPageLoadMetricsObserver() {}
+AMPPageLoadMetricsObserver::AMPPageLoadMetricsObserver() = default;
+
+AMPPageLoadMetricsObserver::~AMPPageLoadMetricsObserver() = default;
 
 AMPPageLoadMetricsObserver::SubFrameInfo::SubFrameInfo() = default;
 AMPPageLoadMetricsObserver::SubFrameInfo::~SubFrameInfo() = default;
 
+const char* AMPPageLoadMetricsObserver::GetObserverName() const {
+  static const char kName[] = "AMPPageLoadMetricsObserver";
+  return kName;
+}
+
+page_load_metrics::PageLoadMetricsObserver::ObservePolicy
+AMPPageLoadMetricsObserver::OnFencedFramesStart(
+    content::NavigationHandle* navigation_handle,
+    const GURL& currently_committed_url) {
+  // This class needs forwarding for the events OnSubFrameRenderDataUpdate.
+  return FORWARD_OBSERVING;
+}
+
+page_load_metrics::PageLoadMetricsObserver::ObservePolicy
+AMPPageLoadMetricsObserver::OnPrerenderStart(
+    content::NavigationHandle* navigation_handle,
+    const GURL& currently_committed_url) {
+  // Note that this class is interested in the following sequence:
+  //
+  //    user action
+  // -> subframe navigation (can be omitted)
+  // -> mainframe same-site navigation
+  //
+  // Recorded metrics are, for example, the difference of page load timing of
+  // those navigations. So, they don't depend on the first mainframe navigation
+  // and we don't need correction of page load timings. If prerendered, we only
+  // postpone initialization and recording to activation.
+  return CONTINUE_OBSERVING;
+}
+
 page_load_metrics::PageLoadMetricsObserver::ObservePolicy
 AMPPageLoadMetricsObserver::OnCommit(
-    content::NavigationHandle* navigation_handle,
-    ukm::SourceId source_id) {
+    content::NavigationHandle* navigation_handle) {
   current_url_ = navigation_handle->GetURL();
   ProcessMainFrameNavigation(navigation_handle);
   return CONTINUE_OBSERVING;
+}
+
+void AMPPageLoadMetricsObserver::DidActivatePrerenderedPage(
+    content::NavigationHandle* navigation_handle) {
+  // Executes maybe postponed actions.
+
+  if (current_main_frame_nav_info_) {
+    CHECK_EQ(current_main_frame_nav_info_->ukm_source_id, ukm::kInvalidSourceId,
+             base::NotFatalUntil::M161);
+    current_main_frame_nav_info_->ukm_source_id = ukm::ConvertToSourceId(
+        navigation_handle->GetNavigationId(), ukm::SourceIdType::NAVIGATION_ID);
+  }
+
+  MaybeRecordLoadingBehaviorObserved();
 }
 
 void AMPPageLoadMetricsObserver::OnCommitSameDocumentNavigation(
@@ -119,9 +174,12 @@ void AMPPageLoadMetricsObserver::OnCommitSameDocumentNavigation(
     return;
   current_url_ = url;
 
-  // We're transitioning to a new URL, so record metrics for the previous AMP
-  // document, if any.
-  MaybeRecordAmpDocumentMetrics();
+  if (!GetDelegate().IsInPrerenderingBeforeActivationStart()) {
+    // We're transitioning to a new URL, so record metrics for the previous AMP
+    // document, if any.
+    MaybeRecordAmpDocumentMetrics();
+  }
+
   current_main_frame_nav_info_ = nullptr;
   ProcessMainFrameNavigation(navigation_handle);
 }
@@ -131,7 +189,7 @@ void AMPPageLoadMetricsObserver::OnDidFinishSubFrameNavigation(
   if (!navigation_handle->HasCommitted())
     return;
 
-  // Ignore same document navigations; see crbug.com/1104365
+  // Ignore same document navigations; see crbug.com/40705062
   if (navigation_handle->IsSameDocument())
     return;
 
@@ -139,10 +197,13 @@ void AMPPageLoadMetricsObserver::OnDidFinishSubFrameNavigation(
   // with this frame is discarded.
   amp_subframe_info_.erase(navigation_handle->GetRenderFrameHost());
 
-  // Only track frames that are direct descendents of the main frame.
-  if (navigation_handle->GetParentFrame() == nullptr ||
-      navigation_handle->GetParentFrame()->GetParent() != nullptr)
+  // Only track frames or fenced frames that are direct descendants of the main
+  // frame.
+  auto* parent_frame = navigation_handle->GetParentFrameOrOuterDocument();
+  if (parent_frame == nullptr ||
+      parent_frame->GetParentOrOuterDocument() != nullptr) {
     return;
+  }
 
   // Only track frames that have AMP cache-like URLs.
   if (!IsLikelyAmpCacheUrl(navigation_handle->GetURL()))
@@ -166,7 +227,11 @@ void AMPPageLoadMetricsObserver::OnRenderFrameDeleted(
     content::RenderFrameHost* rfh) {
   if (current_main_frame_nav_info_ &&
       current_main_frame_nav_info_->subframe_rfh == rfh) {
-    MaybeRecordAmpDocumentMetrics();
+    // We shouldn't record metrics if the page is in prerendering.
+    // Actually, this skip should not affect metrics because discarding subframe
+    // rendering AMP page may be triggered by user action.
+    if (!GetDelegate().IsInPrerenderingBeforeActivationStart())
+      MaybeRecordAmpDocumentMetrics();
     current_main_frame_nav_info_->subframe_rfh = nullptr;
   }
   amp_subframe_info_.erase(rfh);
@@ -185,24 +250,19 @@ void AMPPageLoadMetricsObserver::OnTimingUpdate(
   it->second.timing = timing.Clone();
 }
 
-void AMPPageLoadMetricsObserver::OnMobileFriendlinessUpdate(
-    const blink::MobileFriendliness& mf) {
-  if (mf == blink::MobileFriendliness() ||
-      current_main_frame_nav_info_ == nullptr ||
-      current_main_frame_nav_info_->subframe_rfh == nullptr)
+void AMPPageLoadMetricsObserver::OnEventTimingUpdate(
+    content::RenderFrameHost* subframe_rfh,
+    const std::vector<page_load_metrics::mojom::EventTimingPtr>&
+        event_timings) {
+  if (subframe_rfh == nullptr)
     return;
 
-  auto it = amp_subframe_info_.find(current_main_frame_nav_info_->subframe_rfh);
+  auto it = amp_subframe_info_.find(subframe_rfh);
   if (it == amp_subframe_info_.end())
     return;
 
-  SubFrameInfo& subframe_info = it->second;
-  if (subframe_info.viewer_url != current_main_frame_nav_info_->url ||
-      !subframe_info.amp_document_loaded) {
-    return;
-  }
-
-  subframe_info.mobile_friendliness = mf;
+  it->second.interaction_to_next_paint_calculator.AddNewEventTimings(
+      subframe_rfh->GetGlobalFrameToken(), event_timings);
 }
 
 void AMPPageLoadMetricsObserver::OnSubFrameRenderDataUpdate(
@@ -215,19 +275,27 @@ void AMPPageLoadMetricsObserver::OnSubFrameRenderDataUpdate(
   if (it == amp_subframe_info_.end())
     return;
 
-  it->second.render_data.layout_shift_score += render_data.layout_shift_delta;
-  it->second.render_data.layout_shift_score_before_input_or_scroll +=
-      render_data.layout_shift_delta_before_input_or_scroll;
+  for (const auto& entry : render_data.new_layout_shifts) {
+    it->second.render_data.layout_shift_score += entry->layout_shift_score;
+    if (!entry->after_input_or_scroll) {
+      it->second.render_data.layout_shift_score_before_input_or_scroll +=
+          entry->layout_shift_score;
+    }
+  }
 
   it->second.layout_shift_normalization.AddNewLayoutShifts(
-      render_data.new_layout_shifts, base::TimeTicks::Now(),
-      it->second.render_data.layout_shift_score);
+      render_data.new_layout_shifts, base::TimeTicks::Now());
 }
 
 void AMPPageLoadMetricsObserver::OnComplete(
     const page_load_metrics::mojom::PageLoadTiming& timing) {
+  if (GetDelegate().IsInPrerenderingBeforeActivationStart())
+    return;
+
   MaybeRecordAmpDocumentMetrics();
   current_main_frame_nav_info_ = nullptr;
+  page_load_metrics::RecordPageVisitFinalStatusForTiming(
+      timing, GetDelegate(), GetDelegate().GetPageUkmSourceId());
 }
 
 void AMPPageLoadMetricsObserver::ProcessMainFrameNavigation(
@@ -244,18 +312,31 @@ void AMPPageLoadMetricsObserver::ProcessMainFrameNavigation(
     }
   }
 
+  // If in prerendering, postpone initialization of ukm_source_id.
+  //
+  // Note for else case: We can't use `GetDelegate().GetPageUkmSourceId()` here
+  // because this path is also used in OnCommitSameDocumentNavigtion and URLs
+  // may be different. We'll take information of the latter navigation, which
+  // corresponds to a subframe that displays actual contents of the AMP page if
+  // IsLikelyAmpCacheUrl holds. For example, see
+  // AMPPageLoadMetricsObserverTest.SubFrameMultipleFrames.
+  const ukm::SourceId ukm_source_id =
+      IsInPrerenderingBeforeActivation(GetDelegate())
+          ? ukm::kInvalidSourceId
+          : ukm::ConvertToSourceId(navigation_handle->GetNavigationId(),
+                                   ukm::SourceIdType::NAVIGATION_ID);
   current_main_frame_nav_info_ = base::WrapUnique(new MainFrameNavigationInfo{
-      navigation_handle->GetURL(),
-      ukm::ConvertToSourceId(navigation_handle->GetNavigationId(),
-                             ukm::SourceIdType::NAVIGATION_ID),
-      subframe_rfh, navigation_handle->NavigationStart(),
+      navigation_handle->GetURL(), ukm_source_id, subframe_rfh,
+      navigation_handle->NavigationStart(),
       navigation_handle->IsSameDocument()});
 }
 
 void AMPPageLoadMetricsObserver::OnLoadingBehaviorObserved(
     content::RenderFrameHost* subframe_rfh,
     int behavior_flags) {
-  RecordLoadingBehaviorObserved();
+  // Postpone recording after activation if prerendered.
+  if (!IsInPrerenderingBeforeActivation(GetDelegate()))
+    MaybeRecordLoadingBehaviorObserved();
 
   if (subframe_rfh == nullptr)
     return;
@@ -284,7 +365,13 @@ void AMPPageLoadMetricsObserver::OnLoadingBehaviorObserved(
   }
 }
 
-void AMPPageLoadMetricsObserver::RecordLoadingBehaviorObserved() {
+void AMPPageLoadMetricsObserver::MaybeRecordLoadingBehaviorObserved() {
+  // This can be postponed after prerender activation with metrics unmodified
+  // because behavior flags are accumulated by PageLeadMetricsUpdateDispatcher.
+
+  CHECK(!IsInPrerenderingBeforeActivation(GetDelegate()),
+        base::NotFatalUntil::M161);
+
   ukm::builders::AmpPageLoad builder(GetDelegate().GetPageUkmSourceId());
   bool should_record = false;
   if (!observed_amp_main_frame_ &&
@@ -307,6 +394,9 @@ void AMPPageLoadMetricsObserver::RecordLoadingBehaviorObserved() {
 }
 
 void AMPPageLoadMetricsObserver::MaybeRecordAmpDocumentMetrics() {
+  CHECK(!GetDelegate().IsInPrerenderingBeforeActivationStart(),
+        base::NotFatalUntil::M161);
+
   if (current_main_frame_nav_info_ == nullptr ||
       current_main_frame_nav_info_->subframe_rfh == nullptr)
     return;
@@ -339,15 +429,7 @@ void AMPPageLoadMetricsObserver::MaybeRecordAmpDocumentMetrics() {
   builder.SetSubFrame_MainFrameToSubFrameNavigationDelta(
       -navigation_input_delta.InMilliseconds());
 
-  if (!current_main_frame_nav_info_->is_same_document_navigation) {
-    // For non same document navigations, we expect the main frame navigation
-    // to be before the subframe navigation. This measures the time from main
-    // frame navigation to the time the AMP subframe is added to the document.
-    PAGE_LOAD_HISTOGRAM(
-        std::string(kHistogramPrefix)
-            .append(kHistogramAMPSubframeMainFrameToSubFrameNavigation),
-        -navigation_input_delta);
-  } else {
+  if (current_main_frame_nav_info_->is_same_document_navigation) {
     if (navigation_input_delta >= base::TimeDelta()) {
       // Prerender case: subframe navigation happens before main frame
       // navigation.
@@ -396,17 +478,17 @@ void AMPPageLoadMetricsObserver::MaybeRecordAmpDocumentMetrics() {
       }
     }
 
-    absl::optional<base::TimeDelta> largest_content_paint_time;
+    std::optional<base::TimeDelta> largest_content_paint_time;
     uint64_t largest_content_paint_size;
-    page_load_metrics::ContentfulPaintTimingInfo::LargestContentType
-        largest_content_type;
+    page_load_metrics::ContentfulPaintTimingInfo::LargestContentTextOrImage
+        largest_content_text_or_image;
     const page_load_metrics::mojom::PaintTimingPtr& paint_timing =
         subframe_info.timing->paint_timing;
     if (page_load_metrics::LargestContentfulPaintHandler::
             AssignTimeAndSizeForLargestContentfulPaint(
                 *paint_timing->largest_contentful_paint,
                 &largest_content_paint_time, &largest_content_paint_size,
-                &largest_content_type)) {
+                &largest_content_text_or_image)) {
       builder.SetSubFrame_PaintTiming_NavigationToLargestContentfulPaint2(
           largest_content_paint_time.value().InMilliseconds());
 
@@ -426,16 +508,6 @@ void AMPPageLoadMetricsObserver::MaybeRecordAmpDocumentMetrics() {
             largest_content_paint_time.value());
       }
     }
-    // TODO(crbug.com/1045640): Stop reporting the experimental obsolete
-    // version.
-    if (page_load_metrics::LargestContentfulPaintHandler::
-            AssignTimeAndSizeForLargestContentfulPaint(
-                *paint_timing->experimental_largest_contentful_paint,
-                &largest_content_paint_time, &largest_content_paint_size,
-                &largest_content_type)) {
-      builder.SetSubFrame_PaintTiming_NavigationToLargestContentfulPaint(
-          largest_content_paint_time.value().InMilliseconds());
-    }
 
     if (subframe_info.timing->interactive_timing->first_input_delay
             .has_value()) {
@@ -444,19 +516,11 @@ void AMPPageLoadMetricsObserver::MaybeRecordAmpDocumentMetrics() {
               .InMilliseconds());
 
       if (current_main_frame_nav_info_->is_same_document_navigation) {
-        UMA_HISTOGRAM_CUSTOM_TIMES(
+        base::UmaHistogramCustomTimes(
             std::string(kHistogramPrefix)
                 .append(kHistogramAMPSubframeFirstInputDelay),
             subframe_info.timing->interactive_timing->first_input_delay.value(),
-            base::TimeDelta::FromMilliseconds(1),
-            base::TimeDelta::FromSeconds(60), 50);
-      } else {
-        UMA_HISTOGRAM_CUSTOM_TIMES(
-            std::string(kHistogramPrefix)
-                .append(kHistogramAMPSubframeFirstInputDelayFullNavigation),
-            subframe_info.timing->interactive_timing->first_input_delay.value(),
-            base::TimeDelta::FromMilliseconds(1),
-            base::TimeDelta::FromSeconds(60), 50);
+            base::Milliseconds(1), base::Seconds(60), 50);
       }
     }
   }
@@ -487,28 +551,20 @@ void AMPPageLoadMetricsObserver::MaybeRecordAmpDocumentMetrics() {
                     .session_windows_gap1000ms_max5000ms_max_cls));
   }
 
-  // For UMA, report (shift_score * 10) an an int in the range [0,100].
-  int32_t uma_value = static_cast<int>(roundf(clamped_shift_score * 10.0f));
-  if (current_main_frame_nav_info_->is_same_document_navigation) {
-    UMA_HISTOGRAM_COUNTS_100(
-        std::string(kHistogramPrefix)
-            .append(kHistogramAMPSubframeLayoutInstabilityShiftScore),
-        uma_value);
-    if (!normalized_cls_data.data_tainted) {
+  if (!normalized_cls_data.data_tainted) {
+    if (current_main_frame_nav_info_->is_same_document_navigation) {
       base::UmaHistogramCounts100(
           "PageLoad.Clients.AMP.LayoutInstability.MaxCumulativeShiftScore."
           "Subframe.SessionWindow.Gap1000ms.Max5000ms",
           page_load_metrics::LayoutShiftUmaValue(
               normalized_cls_data.session_windows_gap1000ms_max5000ms_max_cls));
-    }
-    RecordMobileFriendliness(builder);
-  } else {
-    UMA_HISTOGRAM_COUNTS_100(
-        std::string(kHistogramPrefix)
-            .append(
-                kHistogramAMPSubframeLayoutInstabilityShiftScoreFullNavigation),
-        uma_value);
-    if (!normalized_cls_data.data_tainted) {
+      base::UmaHistogramCustomCounts(
+          "PageLoad.Clients.AMP.LayoutInstability.MaxCumulativeShiftScore."
+          "Subframe.SessionWindow.Gap1000ms.Max5000ms2",
+          page_load_metrics::LayoutShiftUmaValue10000(
+              normalized_cls_data.session_windows_gap1000ms_max5000ms_max_cls),
+          1, 24000, 50);
+    } else {
       base::UmaHistogramCounts100(
           "PageLoad.Clients.AMP.LayoutInstability.MaxCumulativeShiftScore."
           "Subframe.FullNavigation.SessionWindow.Gap1000ms.Max5000ms",
@@ -517,51 +573,65 @@ void AMPPageLoadMetricsObserver::MaybeRecordAmpDocumentMetrics() {
     }
   }
 
+  RecordNormalizedResponsivenessMetrics(
+      subframe_info.interaction_to_next_paint_calculator, builder);
   builder.Record(ukm::UkmRecorder::Get());
 }
 
-void AMPPageLoadMetricsObserver::RecordMobileFriendliness(
+void AMPPageLoadMetricsObserver::RecordNormalizedResponsivenessMetrics(
+    const page_load_metrics::InteractionToNextPaintCalculator&
+        interaction_to_next_paint_calculator,
     ukm::builders::AmpPageLoad& builder) {
-  auto it = amp_subframe_info_.find(current_main_frame_nav_info_->subframe_rfh);
-  if (it == amp_subframe_info_.end())
+  CHECK(!GetDelegate().IsInPrerenderingBeforeActivationStart(),
+        base::NotFatalUntil::M161);
+
+  if (!interaction_to_next_paint_calculator.num_user_interactions()) {
     return;
-
-  const SubFrameInfo& subframe_info = it->second;
-  if (subframe_info.viewer_url != current_main_frame_nav_info_->url)
-    return;
-
-  if (!subframe_info.amp_document_loaded)
-    return;
-
-  const blink::MobileFriendliness& mf = subframe_info.mobile_friendliness;
-
-  if (mf.viewport_device_width == blink::mojom::ViewportStatus::kYes)
-    builder.SetSubFrame_MobileFriendliness_ViewportDeviceWidth(true);
-  else if (mf.viewport_device_width == blink::mojom::ViewportStatus::kNo)
-    builder.SetSubFrame_MobileFriendliness_ViewportDeviceWidth(false);
-
-  if (mf.allow_user_zoom == blink::mojom::ViewportStatus::kYes)
-    builder.SetSubFrame_MobileFriendliness_AllowUserZoom(true);
-  else if (mf.allow_user_zoom == blink::mojom::ViewportStatus::kNo)
-    builder.SetSubFrame_MobileFriendliness_AllowUserZoom(false);
-
-  if (mf.small_text_ratio != -1)
-    builder.SetSubFrame_MobileFriendliness_SmallTextRatio(mf.small_text_ratio);
-
-  if (mf.viewport_initial_scale_x10 != -1) {
-    builder.SetSubFrame_MobileFriendliness_ViewportInitialScaleX10(
-        page_load_metrics::GetBucketedViewportInitialScale(mf));
   }
 
-  if (mf.viewport_hardcoded_width != -1) {
-    builder.SetSubFrame_MobileFriendliness_ViewportHardcodedWidth(
-        page_load_metrics::GetBucketedViewportHardcodedWidth(mf));
-  }
-  if (mf.text_content_outside_viewport_percentage != -1) {
-    builder.SetSubFrame_MobileFriendliness_TextContentOutsideViewportPercentage(
-        mf.text_content_outside_viewport_percentage);
-  }
-  if (mf.bad_tap_targets_ratio != -1)
-    builder.SetSubFrame_MobileFriendliness_BadTapTargetsRatio(
-        mf.bad_tap_targets_ratio);
+  const std::string histogram_suffix =
+      current_main_frame_nav_info_->is_same_document_navigation
+          ? ""
+          : ".FullNavigation";
+
+  builder
+      .SetSubFrame_InteractiveTiming_WorstUserInteractionLatency_MaxEventDuration2(
+          interaction_to_next_paint_calculator.worst_latency()
+              .value()
+              .max_event.duration.InMilliseconds());
+
+  base::UmaHistogramCustomTimes(
+      std::string(kHistogramPrefix)
+          .append(
+              kHistogramAMPSubframeWorstUserInteractionLatencyMaxEventDuration)
+          .append(histogram_suffix),
+      interaction_to_next_paint_calculator.worst_latency()
+          .value()
+          .max_event.duration,
+      base::Milliseconds(1), base::Seconds(60), 50);
+
+  base::TimeDelta high_percentile2_max_event_duration =
+      interaction_to_next_paint_calculator.ApproximateHighPercentile()
+          .value()
+          .max_event.duration;
+
+  builder
+      .SetSubFrame_InteractiveTiming_UserInteractionLatency_HighPercentile2_MaxEventDuration(
+          high_percentile2_max_event_duration.InMilliseconds());
+
+  builder.SetSubFrame_InteractiveTiming_NumInteractions(
+      ukm::GetExponentialBucketMinForCounts1000(
+          interaction_to_next_paint_calculator.num_user_interactions()));
+
+  base::UmaHistogramCustomTimes(
+      std::string(kHistogramPrefix)
+          .append(
+              kHistogramAMPSubframeUserInteractionHighPercentile2MaxEventDuration)
+          .append(histogram_suffix),
+      high_percentile2_max_event_duration, base::Milliseconds(1),
+      base::Seconds(60), 50);
+  base::UmaHistogramCounts1000(
+      std::string(kHistogramPrefix)
+          .append(kHistogramAMPSubframeNumInteractions),
+      interaction_to_next_paint_calculator.num_user_interactions());
 }

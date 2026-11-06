@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,21 +6,19 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "services/audio/loopback_group_member.h"
+#include "base/functional/bind.h"
 
 namespace audio {
 
 LocalMuter::LocalMuter(LoopbackCoordinator* coordinator,
                        const base::UnguessableToken& group_id)
-    : coordinator_(coordinator), group_id_(group_id) {
-  DCHECK(coordinator_);
-
-  coordinator_->AddObserver(group_id_, this);
-  coordinator_->ForEachMemberInGroup(
-      group_id_, base::BindRepeating([](LoopbackGroupMember* member) {
-        member->StartMuting();
-      }));
+    : loopback_group_observer_(
+          LoopbackGroupObserver::CreateMatchingGroupObserver(coordinator,
+                                                             group_id)),
+      group_id_(group_id) {
+  loopback_group_observer_->StartObserving(this);
+  loopback_group_observer_->ForEachSource(
+      base::BindRepeating(&LocalMuter::OnSourceAdded, base::Unretained(this)));
 
   receivers_.set_disconnect_handler(
       base::BindRepeating(&LocalMuter::OnBindingLost, base::Unretained(this)));
@@ -29,43 +27,42 @@ LocalMuter::LocalMuter(LoopbackCoordinator* coordinator,
 LocalMuter::~LocalMuter() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  coordinator_->ForEachMemberInGroup(
-      group_id_, base::BindRepeating([](LoopbackGroupMember* member) {
-        member->StopMuting();
-      }));
-  coordinator_->RemoveObserver(group_id_, this);
+  // Un-mute all members of the group this muter was responsible for.
+  loopback_group_observer_->ForEachSource(base::BindRepeating(
+      [](LoopbackSource* source) { source->StopMuting(); }));
+  loopback_group_observer_->StopObserving();
 }
 
-void LocalMuter::SetAllBindingsLostCallback(base::OnceClosure callback) {
+void LocalMuter::SetAllBindingsLostCallback(base::RepeatingClosure callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  all_bindings_lost_callback_ = std::move(callback);
+  all_bindings_lost_callback_ = callback;
 }
 
 void LocalMuter::AddReceiver(
     mojo::PendingAssociatedReceiver<media::mojom::LocalMuter> receiver) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
   receivers_.Add(this, std::move(receiver));
-}
-
-void LocalMuter::OnMemberJoinedGroup(LoopbackGroupMember* member) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  member->StartMuting();
-}
-
-void LocalMuter::OnMemberLeftGroup(LoopbackGroupMember* member) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  // No change to muting state.
 }
 
 void LocalMuter::OnBindingLost() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  if (receivers_.empty()) {
-    std::move(all_bindings_lost_callback_).Run();
+  if (!HasReceivers()) {
+    all_bindings_lost_callback_.Run();
   }
+}
+
+void LocalMuter::OnSourceAdded(LoopbackSource* source) {
+  // Start muting each new source added to the group.
+  source->StartMuting();
+}
+
+void LocalMuter::OnSourceRemoved(LoopbackSource* source) {
+  // This looks like a potential bug, but the existing behavior is to do
+  // nothing when a source leaves the group. Probably because this
+  // normally happens when the audio stream is being destroyed.
 }
 
 }  // namespace audio

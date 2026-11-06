@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,27 +7,28 @@
 
 #include <cstddef>
 #include <iterator>
+#include <string_view>
 
-#include "base/strings/string_piece.h"
-#include "components/safe_browsing/core/browser/db/v4_protocol_manager_util.h"
+#include "components/safe_browsing/core/browser/db/sb_protocol_manager_util.h"
 
 namespace safe_browsing {
 
 // The prefix iterator is used to binary search within a |HashPrefixes|. It is
 // essentially a random access iterator that steps |PrefixSize| steps within the
 // underlying buffer.
-class PrefixIterator
-    : public std::iterator<std::random_access_iterator_tag, base::StringPiece> {
+class PrefixIterator {
  public:
-  using difference_type =
-      typename std::iterator<std::random_access_iterator_tag,
-                             base::StringPiece>::difference_type;
+  using iterator_category = std::random_access_iterator_tag;
+  using value_type = std::string_view;
+  using difference_type = std::ptrdiff_t;
+  using pointer = std::string_view*;
+  using reference = std::string_view&;
 
-  PrefixIterator(base::StringPiece prefixes, size_t index, size_t size);
+  PrefixIterator(std::string_view prefixes, size_t index, size_t size);
   PrefixIterator(const PrefixIterator& rhs);
 
-  base::StringPiece operator*() const { return GetPiece(index_); }
-  base::StringPiece operator[](const int& rhs) const {
+  std::string_view operator*() const { return GetPiece(index_); }
+  std::string_view operator[](const int& rhs) const {
     return GetPiece(index_ + rhs);
   }
 
@@ -68,9 +69,6 @@ class PrefixIterator
   bool operator==(const PrefixIterator& rhs) const {
     return index_ == rhs.index_;
   }
-  bool operator!=(const PrefixIterator& rhs) const {
-    return index_ != rhs.index_;
-  }
   bool operator>(const PrefixIterator& rhs) const {
     return index_ > rhs.index_;
   }
@@ -85,11 +83,11 @@ class PrefixIterator
   }
 
  private:
-  base::StringPiece GetPiece(size_t index) const {
+  std::string_view GetPiece(size_t index) const {
     return prefixes_.substr(index * size_, size_);
   }
 
-  base::StringPiece prefixes_;
+  std::string_view prefixes_;
   size_t index_;
   size_t size_;
 };

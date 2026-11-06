@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -43,6 +43,10 @@ class AudioFocusManager : public mojom::AudioFocusManager,
                           public mojom::MediaControllerManager {
  public:
   AudioFocusManager();
+
+  AudioFocusManager(const AudioFocusManager&) = delete;
+  AudioFocusManager& operator=(const AudioFocusManager&) = delete;
+
   ~AudioFocusManager() override;
 
   // TODO(beccahughes): Remove this.
@@ -75,6 +79,10 @@ class AudioFocusManager : public mojom::AudioFocusManager,
   void GetSourceFocusRequests(const base::UnguessableToken& source_id,
                               GetFocusRequestsCallback callback) override;
   void RequestIdReleased(const base::UnguessableToken& request_id) override;
+  void StartDuckingAllAudio(const std::optional<base::UnguessableToken>&
+                                exempted_request_id) override;
+  void StopDuckingAllAudio() override;
+  void FlushForTesting(FlushForTestingCallback callback) override;
 
   // mojom::AudioFocusManagerDebug.
   void GetDebugInfoForRequest(const RequestId& request_id,
@@ -183,13 +191,15 @@ class AudioFocusManager : public mojom::AudioFocusManager,
 
   mojom::EnforcementMode enforcement_mode_;
 
+  bool ducking_all_audio_ = false;
+
+  std::optional<base::UnguessableToken> ducking_exempted_request_id_;
+
   // Adding observers should happen on the same thread that the service is
   // running on.
   THREAD_CHECKER(thread_checker_);
 
   base::WeakPtrFactory<AudioFocusManager> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(AudioFocusManager);
 };
 
 }  // namespace media_session

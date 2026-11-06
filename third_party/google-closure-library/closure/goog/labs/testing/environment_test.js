@@ -1,16 +1,8 @@
-// Copyright 2014 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 goog.module('goog.labs.testing.environmentTest');
 goog.setTestOnly();
@@ -21,6 +13,7 @@ const PropertyReplacer = goog.require('goog.testing.PropertyReplacer');
 const TestCase = goog.require('goog.testing.TestCase');
 const asserts = goog.require('goog.asserts');
 const testingTestSuite = goog.require('goog.testing.testSuite');
+const {EnvironmentBase} = goog.require('goog.labs.testing.EnvironmentBase');
 
 let testCase = null;
 let mockControl = null;
@@ -33,15 +26,14 @@ let testing = false;
 
 // Bootstrap it because... why not.
 const env = new Environment();
-// The outer test case.
-const realTestCase = goog.labs.testing.EnvironmentTestCase_.getInstance();
 
 /** @suppress {visibility} */
 function setUpTestCase() {
-  /** @suppress {missingRequire} */
-  testCase = new goog.labs.testing.EnvironmentTestCase_();
-  goog.labs.testing.EnvironmentTestCase_.getInstance = () =>
-      asserts.assert(testCase);
+  // Clear the activeTestCase_ field to make an instance of Environment create a
+  // new EnvironmentTestCase instance.
+  EnvironmentBase.activeTestCase_ = null;
+  new Environment();  // Assigns a new value to Environment.activeTestCase_.
+  testCase = Environment.getTestCaseIfActive();
 }
 
 /**
@@ -59,7 +51,8 @@ function assertTestFailure(testCase, name, message) {
 /**
  * @param {?TestCase} testCase
  * @param {!Environment} environment
- * @suppress {visibility}
+ * @suppress {visibility,strictMissingProperties} suppression added to enable
+ * type checking
  */
 function registerEnvironment(testCase, environment) {
   asserts.assert(testCase).registerEnvironment_(environment);
@@ -274,29 +267,38 @@ testingTestSuite(testSuite = {
   testTearDownWithMockControl() {
     testing = true;
 
-    const envWith = new Environment();
-    const envWithout = new Environment();
+    // Environment#tearDown for an Environment with MockControl should tear down
+    // the value of its mockControl field as well.
 
     const mockControlMock = mockControl.createStrictMock(MockControl);
-    const mockControlCtorMock =
-        mockControl.createMethodMock(goog.testing, 'MockControl');
-    mockControlCtorMock().$times(1).$returns(mockControlMock);
-    // Expecting verify / reset calls twice since two environments use the same
-    // mockControl, but only one created it and is allowed to tear it down.
     mockControlMock.$verifyAll();
     mockControlMock.$replayAll();
     mockControlMock.$verifyAll();
     mockControlMock.$resetAll();
     mockControlMock.$tearDown().$times(1);
+
+    mockControl.$replayAll();
+    const envWith = new Environment();
+    envWith.withMockControl();
+    // Replace the MockControl instance instantiated in envWith.withMockControl.
+    envWith.mockControl = mockControlMock;
+    envWith.tearDown();
+    mockControl.$verifyAll();
+    mockControl.$resetAll();
+
+    // Environment#tearDown for an Environment without MockControl shouldn't be
+    // allowed tear down the value of its mockControl field even if it is
+    // assigned.
+
     mockControlMock.$verifyAll();
     mockControlMock.$replayAll();
     mockControlMock.$verifyAll();
     mockControlMock.$resetAll();
+    mockControlMock.$tearDown().$times(0);
 
     mockControl.$replayAll();
-    envWith.withMockControl();
+    const envWithout = new Environment();
     envWithout.mockControl = mockControlMock;
-    envWith.tearDown();
     envWithout.tearDown();
     mockControl.$verifyAll();
     mockControl.$resetAll();
@@ -312,8 +314,16 @@ testingTestSuite(testSuite = {
     const tearDownFn = testCase.tearDown;
     const tearDownPageFn = testCase.tearDownPage;
 
-    goog.global.testDummy1 = function() {};
-    goog.global.testDummy2 = function() {};
+    /**
+     * @suppress {strictMissingProperties} suppression added to enable type
+     * checking
+     */
+    globalThis.testDummy1 = function() {};
+    /**
+     * @suppress {strictMissingProperties} suppression added to enable type
+     * checking
+     */
+    globalThis.testDummy2 = function() {};
     testCase.autoDiscoverTests();
 
     assertEquals(setUpPageFn, testCase.setUpPage);
@@ -343,7 +353,7 @@ testingTestSuite(testSuite = {
     const tearDownFn = testCase.tearDown;
     const tearDownPageFn = testCase.tearDownPage;
 
-    testingTestSuite.initialized_ = false;
+    testingTestSuite.resetForTesting();
     testingTestSuite({
       // These lifecycle methods should not override the environment testcase
       // methods but they should be called, when the test runs.
@@ -400,6 +410,39 @@ testingTestSuite(testSuite = {
     assertTestFailure(testCase, 'testThatThrowsEventually', 'LateErrorMessage');
 
     testing = false;
+  },
+
+  async testAsyncMockClock() {
+    testing = true;
+
+    const env = new Environment().withMockClock({async: true});
+
+    testCase.setUp = () => {
+      env.mockClock.install();
+    };
+    testCase.addNewTest('testThatThrowsEventuallyAsync', () => {
+      setTimeout(() => {
+        throw new Error('LateErrorMessage');
+      }, 200);
+    });
+    testCase.tearDown = async () => {
+      await env.mockClock.tickAsync(Infinity);
+    };
+
+    await runTestsReturningPromise(testCase);
+    assertTestFailure(
+        testCase, 'testThatThrowsEventuallyAsync', 'LateErrorMessage');
+
+    testing = false;
+  },
+
+  async testMockClockOverwrites() {
+    const env = new Environment().withMockClock();
+    assertTrue(env.mockClock.isSynchronous());
+    env.withMockClock({async: true});
+    assertFalse(env.mockClock.isSynchronous());
+    env.withMockClock();
+    assertTrue(env.mockClock.isSynchronous());
   },
 
   async testMockControl() {

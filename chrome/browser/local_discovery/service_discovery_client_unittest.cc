@@ -1,16 +1,15 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <stdint.h>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/local_discovery/service_discovery_client_impl.h"
 #include "net/base/net_errors.h"
 #include "net/dns/mdns_client_impl.h"
@@ -20,7 +19,6 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 using ::testing::_;
-using ::testing::Invoke;
 using ::testing::StrictMock;
 using ::testing::NiceMock;
 using ::testing::Mock;
@@ -214,19 +212,18 @@ class ServiceDiscoveryTest : public ::testing::Test {
     EXPECT_EQ(net::OK, mdns_client_.StartListening(&socket_factory_));
   }
 
-  ~ServiceDiscoveryTest() override {}
+  ~ServiceDiscoveryTest() override = default;
 
  protected:
   void RunFor(base::TimeDelta time_period) {
     base::RunLoop run_loop;
     base::CancelableOnceClosure callback(run_loop.QuitWhenIdleClosure());
-    base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
         FROM_HERE, callback.callback(), time_period);
     run_loop.Run();
     callback.Cancel();
   }
 
-  void Stop() { base::RunLoop::QuitCurrentWhenIdleDeprecated(); }
 
   net::MockMDnsSocketFactory socket_factory_;
   net::MDnsClientImpl mdns_client_;
@@ -248,13 +245,13 @@ TEST_F(ServiceDiscoveryTest, AddRemoveService) {
                                          "hello._privet._tcp.local"))
       .Times(Exactly(1));
 
-  socket_factory_.SimulateReceive(kSamplePacketPTR, sizeof(kSamplePacketPTR));
+  socket_factory_.SimulateReceive(kSamplePacketPTR);
 
   EXPECT_CALL(delegate, OnServiceUpdated(ServiceWatcher::UPDATE_REMOVED,
                                          "hello._privet._tcp.local"))
       .Times(Exactly(1));
 
-  RunFor(base::TimeDelta::FromSeconds(2));
+  RunFor(base::Seconds(2));
 }
 
 TEST_F(ServiceDiscoveryTest, DiscoverNewServices) {
@@ -272,7 +269,7 @@ TEST_F(ServiceDiscoveryTest, DiscoverNewServices) {
 
   EXPECT_CALL(socket_factory_, OnSendTo(_)).Times(2);
 
-  RunFor(base::TimeDelta::FromSeconds(2));
+  RunFor(base::Seconds(2));
 }
 
 // Test that we can query the network with a service name that includes
@@ -292,11 +289,11 @@ TEST_F(ServiceDiscoveryTest, DiscoverNewServicesUnrestricted) {
 
   EXPECT_CALL(socket_factory_, OnSendTo(_)).Times(2);
 
-  RunFor(base::TimeDelta::FromSeconds(2));
+  RunFor(base::Seconds(2));
 }
 
 TEST_F(ServiceDiscoveryTest, ReadCachedServices) {
-  socket_factory_.SimulateReceive(kSamplePacketPTR, sizeof(kSamplePacketPTR));
+  socket_factory_.SimulateReceive(kSamplePacketPTR);
   StrictMock<MockServiceWatcherClient> delegate;
 
   std::unique_ptr<ServiceWatcher> watcher(
@@ -314,7 +311,7 @@ TEST_F(ServiceDiscoveryTest, ReadCachedServices) {
 
 
 TEST_F(ServiceDiscoveryTest, ReadCachedServicesMultiple) {
-  socket_factory_.SimulateReceive(kSamplePacketPTR2, sizeof(kSamplePacketPTR2));
+  socket_factory_.SimulateReceive(kSamplePacketPTR2);
 
   StrictMock<MockServiceWatcherClient> delegate;
   std::unique_ptr<ServiceWatcher> watcher =
@@ -347,7 +344,7 @@ TEST_F(ServiceDiscoveryTest, OnServiceChanged) {
                                          "hello._privet._tcp.local"))
       .Times(Exactly(1));
 
-  socket_factory_.SimulateReceive(kSamplePacketPTR, sizeof(kSamplePacketPTR));
+  socket_factory_.SimulateReceive(kSamplePacketPTR);
 
   base::RunLoop().RunUntilIdle();
 
@@ -355,9 +352,9 @@ TEST_F(ServiceDiscoveryTest, OnServiceChanged) {
                                          "hello._privet._tcp.local"))
       .Times(Exactly(1));
 
-  socket_factory_.SimulateReceive(kSamplePacketSRV, sizeof(kSamplePacketSRV));
+  socket_factory_.SimulateReceive(kSamplePacketSRV);
 
-  socket_factory_.SimulateReceive(kSamplePacketTXT, sizeof(kSamplePacketTXT));
+  socket_factory_.SimulateReceive(kSamplePacketTXT);
 
   base::RunLoop().RunUntilIdle();
 }
@@ -374,7 +371,7 @@ TEST_F(ServiceDiscoveryTest, SinglePacket) {
                                          "hello._privet._tcp.local"))
       .Times(Exactly(1));
 
-  socket_factory_.SimulateReceive(kSamplePacketPTR, sizeof(kSamplePacketPTR));
+  socket_factory_.SimulateReceive(kSamplePacketPTR);
 
   // Reset the "already updated" flag.
   base::RunLoop().RunUntilIdle();
@@ -383,9 +380,9 @@ TEST_F(ServiceDiscoveryTest, SinglePacket) {
                                          "hello._privet._tcp.local"))
       .Times(Exactly(1));
 
-  socket_factory_.SimulateReceive(kSamplePacketSRV, sizeof(kSamplePacketSRV));
+  socket_factory_.SimulateReceive(kSamplePacketSRV);
 
-  socket_factory_.SimulateReceive(kSamplePacketTXT, sizeof(kSamplePacketTXT));
+  socket_factory_.SimulateReceive(kSamplePacketTXT);
 
   base::RunLoop().RunUntilIdle();
 }
@@ -409,11 +406,11 @@ TEST_F(ServiceDiscoveryTest, ActivelyRefreshServices) {
   EXPECT_CALL(socket_factory_, OnSendTo(query_packet))
       .Times(2);
 
-  socket_factory_.SimulateReceive(kSamplePacketPTR, sizeof(kSamplePacketPTR));
+  socket_factory_.SimulateReceive(kSamplePacketPTR);
 
   base::RunLoop().RunUntilIdle();
 
-  socket_factory_.SimulateReceive(kSamplePacketSRV, sizeof(kSamplePacketSRV));
+  socket_factory_.SimulateReceive(kSamplePacketSRV);
 
   EXPECT_CALL(socket_factory_, OnSendTo(query_packet))
       .Times(4);  // IPv4 and IPv6 at 85% and 95%
@@ -422,7 +419,7 @@ TEST_F(ServiceDiscoveryTest, ActivelyRefreshServices) {
                                          "hello._privet._tcp.local"))
       .Times(Exactly(1));
 
-  RunFor(base::TimeDelta::FromSeconds(2));
+  RunFor(base::Seconds(2));
 
   base::RunLoop().RunUntilIdle();
 }
@@ -436,7 +433,7 @@ class ServiceResolverTest : public ServiceDiscoveryTest {
     EXPECT_TRUE(ip_address_expected_.AssignFromIPLiteral("1.2.3.4"));
   }
 
-  ~ServiceResolverTest() override {}
+  ~ServiceResolverTest() override = default;
 
   void SetUp() override {
     resolver_ = service_discovery_client_.CreateServiceResolver(
@@ -472,7 +469,7 @@ TEST_F(ServiceResolverTest, TxtAndSrvButNoA) {
 
   resolver_->StartResolving();
 
-  socket_factory_.SimulateReceive(kSamplePacketSRV, sizeof(kSamplePacketSRV));
+  socket_factory_.SimulateReceive(kSamplePacketSRV);
 
   base::RunLoop().RunUntilIdle();
 
@@ -481,7 +478,7 @@ TEST_F(ServiceResolverTest, TxtAndSrvButNoA) {
                                          address_expected_.ToString(),
                                          metadata_expected_, net::IPAddress()));
 
-  socket_factory_.SimulateReceive(kSamplePacketTXT, sizeof(kSamplePacketTXT));
+  socket_factory_.SimulateReceive(kSamplePacketTXT);
 }
 
 TEST_F(ServiceResolverTest, TxtSrvAndA) {
@@ -495,9 +492,9 @@ TEST_F(ServiceResolverTest, TxtSrvAndA) {
                                           metadata_expected_,
                                           ip_address_expected_));
 
-  socket_factory_.SimulateReceive(kSamplePacketTXT, sizeof(kSamplePacketTXT));
+  socket_factory_.SimulateReceive(kSamplePacketTXT);
 
-  socket_factory_.SimulateReceive(kSamplePacketSRVA, sizeof(kSamplePacketSRVA));
+  socket_factory_.SimulateReceive(kSamplePacketSRVA);
 }
 
 TEST_F(ServiceResolverTest, JustSrv) {
@@ -511,11 +508,11 @@ TEST_F(ServiceResolverTest, JustSrv) {
                                           std::vector<std::string>(),
                                           ip_address_expected_));
 
-  socket_factory_.SimulateReceive(kSamplePacketSRVA, sizeof(kSamplePacketSRVA));
+  socket_factory_.SimulateReceive(kSamplePacketSRVA);
 
   // TODO(noamsml): When NSEC record support is added, change this to use an
   // NSEC record.
-  RunFor(base::TimeDelta::FromSeconds(4));
+  RunFor(base::Seconds(4));
 }
 
 TEST_F(ServiceResolverTest, WithNothing) {
@@ -528,7 +525,7 @@ TEST_F(ServiceResolverTest, WithNothing) {
 
   // TODO(noamsml): When NSEC record support is added, change this to use an
   // NSEC record.
-  RunFor(base::TimeDelta::FromSeconds(4));
+  RunFor(base::Seconds(4));
 }
 
 }  // namespace

@@ -1,11 +1,15 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_BROWSER_MEDIA_SESSION_MEDIA_SESSION_UMA_HELPER_H_
 #define CONTENT_BROWSER_MEDIA_SESSION_MEDIA_SESSION_UMA_HELPER_H_
 
+#include <optional>
+
+#include "base/memory/raw_ptr.h"
 #include "base/time/clock.h"
+#include "base/time/time.h"
 #include "content/common/content_export.h"
 
 namespace base {
@@ -16,64 +20,47 @@ namespace content {
 
 class CONTENT_EXPORT MediaSessionUmaHelper {
  public:
-  // This is used for UMA histogram (Media.Session.Suspended). New values should
-  // be appended only and must be added before |Count|.
-  enum class MediaSessionSuspendedSource {
-    kSystemTransient = 0,
-    kSystemPermanent = 1,
-    kUI = 2,
-    kCONTENT = 3,
-    kSystemTransientDuck = 4,
-    kMaxValue = kSystemTransientDuck,
-  };
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  enum class EnterPictureInPictureType {
+    // EnterPictureInPicture was called for the default handler provided by
+    // MediaSessionImpl.
+    kDefaultManual = 0,
 
-  // Extended enum to media_session::mojom::MediaSessionAction, distinguishing
-  // default action handling.
-  enum class MediaSessionUserAction {
-    kPlay = 0,
-    kPlayDefault = 1,
-    kPause = 2,
-    kPauseDefault = 3,
-    kStopDefault = 4,
-    kPreviousTrack = 5,
-    kNextTrack = 6,
-    kSeekBackward = 7,
-    kSeekForward = 8,
-    kSkipAd = 9,
-    kStop = 10,
-    kSeekTo = 11,
-    kScrubTo = 12,
-    kEnterPictureInPicture = 13,
-    kExitPictureInPicture = 14,
-    kSwitchAudioDevice = 15,
-    kToggleMicrophone = 16,
-    kToggleCamera = 17,
-    kHangUp = 18,
-    kRaise = 19,
-    kMaxValue = kRaise,
+    // EnterPictureInPicture was called for an enterpictureinpicture handler
+    // provided by the website.
+    kRegisteredManual = 1,
+
+    // EnterAutoPictureInPicture was called for an enterpictureinpicture handler
+    // provided by the website.
+    kRegisteredAutomatic = 2,
+
+    // EnterAutoPictureInPicture was called for the default handler provided by
+    // MediaSessionImpl.
+    kDefaultAutomatic = 3,
+
+    kMaxValue = kDefaultAutomatic,
   };
 
   MediaSessionUmaHelper();
   ~MediaSessionUmaHelper();
 
-  static void RecordMediaSessionUserAction(MediaSessionUserAction action,
-                                           bool focused);
-
-  void RecordSessionSuspended(MediaSessionSuspendedSource source) const;
-
-  // Record the result of calling the native requestAudioFocus().
-  void RecordRequestAudioFocusResult(bool result) const;
+  void RecordEnterPictureInPicture(EnterPictureInPictureType type) const;
 
   void OnSessionActive();
   void OnSessionSuspended();
   void OnSessionInactive();
+  void OnServiceDestroyed();
+  void OnMediaPictureInPictureChanged(bool is_picture_in_picture);
 
   void SetClockForTest(const base::TickClock* testing_clock);
 
  private:
   base::TimeDelta total_active_time_;
   base::TimeTicks current_active_time_;
-  const base::TickClock* clock_;
+  std::optional<base::TimeTicks> current_enter_pip_time_ = std::nullopt;
+  std::optional<base::TimeDelta> total_pip_time_for_session_ = std::nullopt;
+  raw_ptr<const base::TickClock> clock_;
 };
 
 }  // namespace content

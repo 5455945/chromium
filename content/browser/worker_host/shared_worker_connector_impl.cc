@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,21 +24,36 @@ void SharedWorkerConnectorImpl::Create(
     GlobalRenderFrameHostId client_render_frame_host_id,
     mojo::PendingReceiver<blink::mojom::SharedWorkerConnector> receiver) {
   mojo::MakeSelfOwnedReceiver(base::WrapUnique(new SharedWorkerConnectorImpl(
-                                  client_render_frame_host_id)),
+                                  client_render_frame_host_id, std::nullopt)),
                               std::move(receiver));
 }
 
+// static
+void SharedWorkerConnectorImpl::Create(
+    base::PassKey<StorageAccessHandle>,
+    GlobalRenderFrameHostId client_render_frame_host_id,
+    const blink::StorageKey& storage_key_override,
+    mojo::PendingReceiver<blink::mojom::SharedWorkerConnector> receiver) {
+  mojo::MakeSelfOwnedReceiver(
+      base::WrapUnique(new SharedWorkerConnectorImpl(
+          client_render_frame_host_id, storage_key_override)),
+      std::move(receiver));
+}
+
 SharedWorkerConnectorImpl::SharedWorkerConnectorImpl(
-    GlobalRenderFrameHostId client_render_frame_host_id)
-    : client_render_frame_host_id_(client_render_frame_host_id) {}
+    GlobalRenderFrameHostId client_render_frame_host_id,
+    const std::optional<blink::StorageKey>& storage_key_override)
+    : client_render_frame_host_id_(client_render_frame_host_id),
+      storage_key_override_(storage_key_override) {}
+
+SharedWorkerConnectorImpl::~SharedWorkerConnectorImpl() = default;
 
 void SharedWorkerConnectorImpl::Connect(
     blink::mojom::SharedWorkerInfoPtr info,
     mojo::PendingRemote<blink::mojom::SharedWorkerClient> client,
     blink::mojom::SharedWorkerCreationContextType creation_context_type,
     blink::MessagePortDescriptor message_port,
-    mojo::PendingRemote<blink::mojom::BlobURLToken> blob_url_token,
-    ukm::SourceId client_ukm_source_id) {
+    mojo::PendingRemote<blink::mojom::BlobURLToken> blob_url_token) {
   RenderProcessHost* host =
       RenderProcessHost::FromID(client_render_frame_host_id_.child_id);
   // The render process was already terminated.
@@ -58,13 +73,12 @@ void SharedWorkerConnectorImpl::Connect(
         ChromeBlobStorageContext::URLLoaderFactoryForToken(
             host->GetStoragePartition(), std::move(blob_url_token));
   }
-  SharedWorkerServiceImpl* service =
-      static_cast<StoragePartitionImpl*>(host->GetStoragePartition())
-          ->GetSharedWorkerService();
+  SharedWorkerServiceImpl* service = static_cast<SharedWorkerServiceImpl*>(
+      host->GetStoragePartition()->GetSharedWorkerService());
   service->ConnectToWorker(
       client_render_frame_host_id_, std::move(info), std::move(client),
       creation_context_type, blink::MessagePortChannel(std::move(message_port)),
-      std::move(blob_url_loader_factory), client_ukm_source_id);
+      std::move(blob_url_loader_factory), storage_key_override_);
 }
 
 }  // namespace content

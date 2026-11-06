@@ -26,26 +26,66 @@
 #include "third_party/blink/renderer/platform/transforms/perspective_transform_operation.h"
 
 #include <algorithm>
+#include <cmath>
 #include "third_party/blink/renderer/platform/geometry/blend.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 
 namespace blink {
 
-scoped_refptr<TransformOperation> PerspectiveTransformOperation::Accumulate(
+TransformOperation* PerspectiveTransformOperation::Accumulate(
     const TransformOperation& other) {
   DCHECK(other.IsSameType(*this));
-  double other_p = To<PerspectiveTransformOperation>(other).UsedPerspective();
-  double p = UsedPerspective();
+  const auto& other_op = To<PerspectiveTransformOperation>(other);
 
   // We want to solve:
   //   -1/p + -1/p' == -1/p'', where we know p and p'.
   //
   // This can be rewritten as:
   //   p'' == (p * p') / (p + p')
-  return PerspectiveTransformOperation::Create((p * other_p) / (p + other_p));
+  std::optional<double> result;
+  if (!Perspective()) {
+    // In the special case of 'none', p is conceptually infinite, which
+    // means p'' equals p' (including if it's also 'none').
+    result = other_op.Perspective();
+  } else if (!other_op.Perspective()) {
+    result = Perspective();
+  } else {
+    double other_p = other_op.UsedPerspective();
+    double p = UsedPerspective();
+    result = (p * other_p) / (p + other_p);
+  }
+
+  return MakeGarbageCollected<PerspectiveTransformOperation>(result);
 }
 
-scoped_refptr<TransformOperation> PerspectiveTransformOperation::Blend(
+TransformOperation* PerspectiveTransformOperation::AccumulateN(
+    const TransformOperation& other,
+    int n) {
+  DCHECK(other.IsSameType(*this));
+  DCHECK_GT(n, 0);
+  const auto& other_op = To<PerspectiveTransformOperation>(other);
+
+  // Accumulate applied n times:
+  //   result = (base * delta) / (delta + n * base)
+  std::optional<double> result;
+  if (!Perspective()) {
+    if (!other_op.Perspective()) {
+      result = std::nullopt;
+    } else {
+      result = other_op.UsedPerspective() / n;
+    }
+  } else if (!other_op.Perspective()) {
+    result = Perspective();
+  } else {
+    double other_p = other_op.UsedPerspective();
+    double p = UsedPerspective();
+    result = (p * other_p) / (other_p + n * p);
+  }
+
+  return MakeGarbageCollected<PerspectiveTransformOperation>(result);
+}
+
+TransformOperation* PerspectiveTransformOperation::Blend(
     const TransformOperation* from,
     double progress,
     bool blend_to_identity) {
@@ -58,26 +98,31 @@ scoped_refptr<TransformOperation> PerspectiveTransformOperation::Blend(
   // yield, so just do that directly.
   double from_p_inverse, to_p_inverse;
   if (blend_to_identity) {
-    from_p_inverse = 1.0 / UsedPerspective();
+    from_p_inverse = InverseUsedPerspective();
     to_p_inverse = 0.0;
   } else {
     if (from) {
       const PerspectiveTransformOperation* from_op =
           static_cast<const PerspectiveTransformOperation*>(from);
-      from_p_inverse = 1.0 / from_op->UsedPerspective();
+      from_p_inverse = from_op->InverseUsedPerspective();
     } else {
       from_p_inverse = 0.0;
     }
-    to_p_inverse = 1.0 / UsedPerspective();
+    to_p_inverse = InverseUsedPerspective();
   }
-  double p =
-      1.0 / std::max(0.0, blink::Blend(from_p_inverse, to_p_inverse, progress));
-  return PerspectiveTransformOperation::Create(clampTo<double>(p, 0));
+  double p_inverse = blink::Blend(from_p_inverse, to_p_inverse, progress);
+  std::optional<double> p;
+  if (p_inverse > 0.0 && std::isnormal(p_inverse)) {
+    p = 1.0 / p_inverse;
+  }
+  return MakeGarbageCollected<PerspectiveTransformOperation>(p);
 }
 
-scoped_refptr<TransformOperation> PerspectiveTransformOperation::Zoom(
-    double factor) {
-  return Create(p_ * factor);
+TransformOperation* PerspectiveTransformOperation::Zoom(double factor) {
+  if (!p_) {
+    return MakeGarbageCollected<PerspectiveTransformOperation>(p_);
+  }
+  return MakeGarbageCollected<PerspectiveTransformOperation>(*p_ * factor);
 }
 
 }  // namespace blink

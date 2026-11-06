@@ -1,19 +1,15 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_WEB_DIALOGS_WEB_DIALOG_UI_H_
 #define UI_WEB_DIALOGS_WEB_DIALOG_UI_H_
 
-
-#include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "content/public/browser/web_contents_delegate.h"
+#include "base/memory/raw_ptr.h"
 #include "content/public/browser/web_ui_controller.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/web_dialogs/web_dialogs_export.h"
 #include "ui/webui/mojo_web_ui_controller.h"
-#include "url/gurl.h"
 
 namespace content {
 class WebContents;
@@ -22,35 +18,6 @@ class WebContents;
 namespace ui {
 
 class WebDialogDelegate;
-
-class WEB_DIALOGS_EXPORT WebDialogUIBase {
- public:
-  // Sets the delegate on the WebContents.
-  static void SetDelegate(content::WebContents* web_contents,
-                          WebDialogDelegate* delegate);
-
-  WebDialogUIBase(content::WebUI* web_ui);
-
-  // Close the dialog, passing the specified arguments to the close handler.
-  void CloseDialog(const base::ListValue* args);
-
- protected:
-  virtual ~WebDialogUIBase();
-
-  // Prepares |render_frame_host| to host a dialog.
-  void HandleRenderFrameCreated(content::RenderFrameHost* render_frame_host);
-
- private:
-  // Gets the delegate for the WebContent set with SetDelegate.
-  static WebDialogDelegate* GetDelegate(content::WebContents* web_contents);
-
-  // JS message handler.
-  void OnDialogClosed(const base::ListValue* args);
-
-  content::WebUI* web_ui_;
-
-  DISALLOW_COPY_AND_ASSIGN(WebDialogUIBase);
-};
 
 // Displays file URL contents inside a modal web dialog.
 //
@@ -63,9 +30,12 @@ class WEB_DIALOGS_EXPORT WebDialogUIBase {
 // the dialog to pass its delegate to the Web UI without having nasty accessors
 // on the WebContents. The correct design using RVH directly would avoid all of
 // this.
-class WEB_DIALOGS_EXPORT WebDialogUI : public WebDialogUIBase,
-                                       public content::WebUIController {
+class WEB_DIALOGS_EXPORT WebDialogUI : public content::WebUIController {
  public:
+  // Sets the delegate on the WebContents.
+  static void SetDelegate(content::WebContents* web_contents,
+                          WebDialogDelegate* delegate);
+
   // When created, the delegate should already be set as user data on the
   // WebContents.
   explicit WebDialogUI(content::WebUI* web_ui);
@@ -73,16 +43,31 @@ class WEB_DIALOGS_EXPORT WebDialogUI : public WebDialogUIBase,
   WebDialogUI(const WebDialogUI&) = delete;
   WebDialogUI& operator=(const WebDialogUI&) = delete;
 
- private:
+  // Close the dialog, passing the specified arguments to the close handler.
+  void CloseDialog(const base::ListValue& args);
+
+ protected:
   // content::WebUIController:
   void WebUIRenderFrameCreated(
       content::RenderFrameHost* render_frame_host) override;
+
+  // Prepares |render_frame_host| to host a dialog.
+  void HandleRenderFrameCreated(content::RenderFrameHost* render_frame_host);
+
+ private:
+  // Gets the delegate for the WebContent set with SetDelegate.
+  static WebDialogDelegate* GetDelegate(content::WebContents* web_contents);
+
+  // JS message handler.
+  void OnDialogClosed(const base::ListValue& args);
+
+  raw_ptr<content::WebUI> web_ui_;
 };
 
 // Displays file URL contents inside a modal web dialog while also enabling
 // Mojo calls to be made from within the dialog.
-class WEB_DIALOGS_EXPORT MojoWebDialogUI : public WebDialogUIBase,
-                                           public MojoWebUIController {
+class WEB_DIALOGS_EXPORT MojoWebDialogUI : public WebDialogUI,
+                                           public ui::EnableMojoWebUI {
  public:
   // When created, the delegate should already be set as user data on the
   // WebContents.

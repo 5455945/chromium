@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,19 +13,20 @@
 #include <utility>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
-#include "components/omnibox/browser/autocomplete_input.h"
+#include "components/omnibox/browser/aim_eligibility_service.h"
 #include "components/omnibox/browser/autocomplete_match_type.h"
 #include "components/omnibox/browser/autocomplete_provider.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "components/omnibox/common/omnibox_features.h"
 #include "third_party/metrics_proto/omnibox_event.pb.h"
 
 namespace base {
-class Time;
 class TimeDelta;
-struct Feature;
-}
+}  // namespace base
+
+class AiModeButtonService;
+class TemplateURLService;
 
 // The set of parameters customizing the HUP scoring.
 struct HUPScoringParams {
@@ -95,7 +96,7 @@ struct HUPScoringParams {
     bool use_decay_factor_;
   };
 
-  HUPScoringParams() {}
+  HUPScoringParams() = default;
 
   // Estimates dynamic memory usage.
   // See base/trace_event/memory_usage_estimator.h for more info.
@@ -112,7 +113,7 @@ namespace OmniboxFieldTrial {
 // A mapping that contains multipliers indicating that matches of the
 // specified type should have their relevance score multiplied by the
 // given number.  Omitted types are assumed to have multipliers of 1.0.
-typedef std::map<AutocompleteMatchType::Type, float> DemotionMultipliers;
+typedef std::map<omnibox::AutocompleteMatchType, float> DemotionMultipliers;
 
 // A vector that maps from the number of matching pages to the document
 // specificity score used in HistoryQuick provider / ScoredHistoryMatch
@@ -142,84 +143,11 @@ bool HasDynamicFieldTrialGroupPrefix(const char* group_prefix);
 void GetActiveSuggestFieldTrialHashes(std::vector<uint32_t>* field_trial_hash);
 
 // ---------------------------------------------------------
-// For the AutocompleteController "stop timer" field trial.
-
-// Returns the duration to be used for the AutocompleteController's stop
-// timer.  Returns the default value of 1.5 seconds if the stop timer
-// override experiment isn't active or if parsing the experiment-provided
-// duration fails.
-base::TimeDelta StopTimerFieldTrialDuration();
-
-// ---------------------------------------------------------
-// For the OmniboxLocalZeroSuggestAgeThreshold field trial.
-
-// Returns the age threshold since the last visit in order to consider a
-// normalized keyword search term as a zero-prefix suggestion.
-base::Time GetLocalHistoryZeroSuggestAgeThreshold();
-
-// ---------------------------------------------------------
-// For the ShortcutsScoringMaxRelevance experiment that's part of the
-// bundled omnibox field trial.
-
-// If the user is in an experiment group that, given the provided
-// |current_page_classification| context, changes the maximum relevance
-// ShortcutsProvider::CalculateScore() is supposed to assign, extract
-// that maximum relevance score and put in in |max_relevance|.  Returns
-// true on a successful extraction.  CalculateScore()'s return value is
-// a product of this maximum relevance score and some attenuating factors
-// that are all between 0 and 1.  (Note that Shortcuts results may have
-// their scores reduced later if the assigned score is higher than allowed
-// for non-inlineable results.  Shortcuts results are not allowed to be
-// inlined.)
-bool ShortcutsScoringMaxRelevance(
-    metrics::OmniboxEventProto::PageClassification current_page_classification,
-    int* max_relevance);
-
-// ---------------------------------------------------------
-// For the SearchHistory experiment that's part of the bundled omnibox
-// field trial.
-
-// Returns true if the user is in the experiment group that, given the
-// provided |current_page_classification| context, scores search history
-// query suggestions less aggressively so that they don't inline.
-bool SearchHistoryPreventInlining(
-    metrics::OmniboxEventProto::PageClassification current_page_classification);
-
-// Returns true if the user is in the experiment group that, given the
-// provided |current_page_classification| context, disables all query
-// suggestions from search history.
-bool SearchHistoryDisable(
-    metrics::OmniboxEventProto::PageClassification current_page_classification);
-
-// ---------------------------------------------------------
-// For the DemoteByType experiment that's part of the bundled omnibox field
-// trial.
-
-// If the user is in an experiment group that, in the provided
-// |current_page_classification| context, demotes the relevance scores
-// of certain types of matches, populates the |demotions_by_type| map
-// appropriately.  Otherwise, sets |demotions_by_type| to its default
-// value based on the context.
-void GetDemotionsByType(
-    metrics::OmniboxEventProto::PageClassification current_page_classification,
-    DemotionMultipliers* demotions_by_type);
-
-// ---------------------------------------------------------
 // For experiments related to the number of suggestions shown.
 
 // If the user is in an experiment group that specifies the max results for a
 // particular provider, returns the limit. Otherwise returns the default limit.
 size_t GetProviderMaxMatches(AutocompleteProvider::Type provider);
-
-// Returns whether the feature to limit the number of shown URL matches
-// is enabled.
-bool IsMaxURLMatchesFeatureEnabled();
-
-// Returns the maximum number of URL matches that should be allowed within
-// the Omnibox if there are search-type matches available to replace them.
-// If the capping feature is not enabled, or the parameter cannot be
-// parsed, it returns 0.
-size_t GetMaxURLMatches();
 
 // ---------------------------------------------------------
 // For the HistoryURL provider new scoring experiment that is part of the
@@ -334,77 +262,19 @@ bool HQPAlsoDoHUPLikeScoring();
 bool HUPSearchDatabase();
 
 // ---------------------------------------------------------
-// For the aggressive keyword matching experiment that's part of the bundled
-// omnibox field trial.
-
-// One function is missing from here to avoid a cyclic dependency
-// between search_engine and omnibox. In the search_engine component
-// there is a OmniboxFieldTrialKeywordRequiresRegistry function
-// that logically should be here.
-//
-// It returns whether KeywordProvider should consider the registry portion
-// (e.g., co.uk) of keywords that look like hostnames as an important part of
-// the keyword name for matching purposes.  Returns true if the experiment
-// isn't active.
-
-// Returns the relevance score that KeywordProvider should assign to keywords
-// with sufficiently-complete matches, i.e., the user has typed all of the
-// important part of the keyword.  Returns -1 if the experiment isn't active.
-int KeywordScoreForSufficientlyCompleteMatch();
-
-// ---------------------------------------------------------
 // For UI experiments.
 
-// Returns true if the tab switch suggestions flag is enabled.
-bool IsTabSwitchSuggestionsEnabled();
-
-// Returns true if the second batch of Pedals is enabled.
-bool IsPedalsBatch2Enabled();
-
-// Returns true if the second batch of Pedals is enabled for non-English
-// locales. This is only meaningful if batch 2 is enabled.
-bool IsPedalsBatch2NonEnglishEnabled();
-
-// Returns true if the third batch of Pedals is enabled.
-bool IsPedalsBatch3Enabled();
-
-// Returns true if the default icon used for Pedal buttons should be colored.
-bool IsPedalsDefaultIconColored();
-
-// Returns true if the Pedals synonyms should be loaded from the translation
-// console.
-bool IsPedalsTranslationConsoleEnabled();
-
-// Returns true if the keyword button and suggestion button row features are
-// enabled.
-bool IsKeywordSearchButtonEnabled();
-
-// Simply a convenient wrapper for testing a flag. Used downstream for an
-// assortment of keyword mode experiments.
-bool IsExperimentalKeywordModeEnabled();
-
-// Returns true if the new focus UI is enabled.
-bool IsRefinedFocusStateEnabled();
-
-// On Device Head Suggestions feature and its helper functions.
+// On Device Suggestions feature and its helper functions.
+// TODO(crbug.com/40218594): clean up head suggest flags once crbug.com/1307005
+// no longer happens.
 bool IsOnDeviceHeadSuggestEnabledForIncognito();
 bool IsOnDeviceHeadSuggestEnabledForNonIncognito();
 bool IsOnDeviceHeadSuggestEnabledForAnyMode();
+bool IsOnDeviceHeadSuggestEnabledForLocale(const std::string& locale);
+bool IsOnDeviceTailSuggestEnabled(const std::string& locale);
+bool ShouldEncodeLeadingSpaceForOnDeviceTailSuggest();
 // Functions can be used in both non-incognito and incognito.
 std::string OnDeviceHeadModelLocaleConstraint(bool is_incognito);
-int OnDeviceHeadSuggestMaxScoreForNonUrlInput(bool is_incognito);
-int OnDeviceSearchProviderDefaultLoaderTimeoutMs(bool is_incognito);
-int OnDeviceHeadSuggestDelaySuggestRequestMs(bool is_incognito);
-// Function only works in non-incognito when server suggestions are available.
-std::string OnDeviceHeadSuggestDemoteMode();
-
-// Returns true if CGI parameter names should not be considered when scoring
-// suggestions.
-bool ShouldDisableCGIParamMatching();
-
-// If true, enables a third category on the manage search engines page for
-// active search engines.
-bool IsActiveSearchEnginesEnabled();
 
 // ---------------------------------------------------------
 // Clipboard URL suggestions:
@@ -421,7 +291,6 @@ bool IsActiveSearchEnginesEnabled();
 extern const char kBundledExperimentFieldTrialName[];
 // Rule names used by the bundled experiment.
 extern const char kDisableProvidersRule[];
-extern const char kShortcutsScoringMaxRelevanceRule[];
 extern const char kSearchHistoryRule[];
 extern const char kDemoteByTypeRule[];
 extern const char kHQPBookmarkValueRule[];
@@ -436,11 +305,6 @@ extern const char kHQPNumTitleWordsRule[];
 extern const char kHQPAlsoDoHUPLikeScoringRule[];
 extern const char kHUPSearchDatabaseRule[];
 extern const char kPreventUWYTDefaultForNonURLInputsRule[];
-// kKeywordRequiresRegistryRule seemingly has no production uses, but the string
-// is actually used within TemplateURLService as a string to break a circular
-// omnibox -> search_engines -> omnibox dependency.
-extern const char kKeywordRequiresRegistryRule[];
-extern const char kKeywordScoreForSufficientlyCompleteMatchRule[];
 extern const char kHQPAllowDupMatchesForScoringRule[];
 extern const char kEmphasizeTitlesRule[];
 
@@ -463,14 +327,7 @@ extern const char kHQPExperimentalScoringTopicalityThresholdParam[];
 extern const char kMaxNumHQPUrlsIndexedAtStartupOnLowEndDevicesParam[];
 extern const char kMaxNumHQPUrlsIndexedAtStartupOnNonLowEndDevicesParam[];
 
-// Parameter name determining the age threshold for local zero-prefix
-// suggestions. The value of this parameter should be parsable as an unsigned
-// integer, which will be used to specify the age threshold in days.
-extern const char kOmniboxLocalZeroSuggestAgeThresholdParam[];
-
 // Parameter names used by num suggestion experiments.
-extern const char kMaxZeroSuggestMatchesParam[];
-extern const char kOmniboxMaxURLMatchesParam[];
 extern const char kUIMaxAutocompleteMatchesByProviderParam[];
 extern const char kUIMaxAutocompleteMatchesParam[];
 // The URL cutoff and increased limit for dynamic max autocompletion.
@@ -485,15 +342,8 @@ extern const char kUIMaxAutocompleteMatchesParam[];
 extern const char kDynamicMaxAutocompleteUrlCutoffParam[];
 extern const char kDynamicMaxAutocompleteIncreasedLimitParam[];
 
-// Parameter names used by on device head provider.
-// These four parameters are shared by both non-incognito and incognito.
+// Parameter names used by on device head model.
 extern const char kOnDeviceHeadModelLocaleConstraint[];
-extern const char kOnDeviceHeadSuggestMaxScoreForNonUrlInput[];
-extern const char kOnDeviceHeadSuggestDelaySuggestRequestMs[];
-extern const char kOnDeviceSearchProviderDefaultLoaderTimeoutMs[];
-// This parameter is for non-incognito which are only useful when server
-// suggestions are available.
-extern const char kOnDeviceHeadSuggestDemoteMode[];
 
 // The amount of time to wait before sending a new suggest request after the
 // previous one unless overridden by a field trial parameter.
@@ -506,56 +356,352 @@ extern const char kOmniboxUIUnelideURLOnHoverThresholdMsParam[];
 
 // `FeatureParam`s
 
+// Local history zero-prefix (aka zero-suggest) and prefix suggestions.
+
+// Whether to ignore all ZPS prefetch responses received from the Suggest
+// service when the user is on a Google SRP. This can be used, for example,
+// during experimentation to measure the performance impact of only the
+// request/response portion of ZPS prefetching (i.e. without updating the
+// user-visible list of suggestions in the Omnibox).
+extern const base::FeatureParam<bool>
+    kZeroSuggestPrefetchingOnSRPCounterfactual;
+
+// Determines the debouncing delay (in milliseconds) to use when throttling ZPS
+// prefetch requests.
+extern const base::FeatureParam<int> kZeroSuggestPrefetchDebounceDelay;
+
+// Determines whether to calculate debouncing delay relative to the latest
+// successful run (instead of the latest run request).
+extern const base::FeatureParam<bool> kZeroSuggestPrefetchDebounceFromLastRun;
+
+// Determines the maximum number of entries stored by the in-memory ZPS cache.
+extern const base::FeatureParam<int> kZeroSuggestCacheMaxSize;
+
+// Returns whether zero-suggest prefetching is enabled in the given context.
+bool IsZeroSuggestPrefetchingEnabledInContext(
+    metrics::OmniboxEventProto::PageClassification page_classification);
+
+// Returns whether on-focus zero-suggest is enabled in the given context.
+bool IsOnFocusZeroSuggestEnabledInContext(
+    metrics::OmniboxEventProto::PageClassification page_classification);
+
+// Returns whether suggestion group headers should be hidden in the Omnibox
+// popup in the given context.
+bool IsHideSuggestionGroupHeadersEnabledInContext(
+    metrics::OmniboxEventProto::PageClassification page_classification);
+
+// Returns whether AIM page action in Omnibox is enabled. This is a
+// runtime/dynamic check. I.e. its value can change without restarting the
+// browser.
+bool IsAimOmniboxEntrypointEnabled(
+    const AimEligibilityService* aim_eligibility_service,
+    const AiModeButtonService* ai_mode_button_service,
+    const TemplateURLService* template_url_service);
+
+// Returns whether AIM starter pack is enabled.
+bool IsAimStarterPackEnabled(
+    const AimEligibilityService* aim_eligibility_service);
+
 // Rich autocompletion.
 bool IsRichAutocompletionEnabled();
-bool RichAutocompletionShowAdditionalText();
-extern const base::FeatureParam<bool> kRichAutocompletionAutocompleteTitles;
-extern const base::FeatureParam<bool>
-    kRichAutocompletionAutocompleteTitlesShortcutProvider;
-extern const base::FeatureParam<bool>
-    kRichAutocompletionAutocompleteTitlesNoInputsWithSpaces;
-extern const base::FeatureParam<int>
+extern const base::FeatureParam<size_t>
     kRichAutocompletionAutocompleteTitlesMinChar;
-extern const base::FeatureParam<bool>
-    kRichAutocompletionAutocompleteNonPrefixAll;
-extern const base::FeatureParam<bool>
-    kRichAutocompletionAutocompleteNonPrefixShortcutProvider;
-extern const base::FeatureParam<bool>
-    kRichAutocompletionAutocompleteNonPrefixNoInputsWithSpaces;
+extern const base::FeatureParam<size_t>
+    kRichAutocompletionAutocompleteShortcutTextMinChar;
+
+// Specifies the relevance scores for the Site Search Starter Pack ACMatches
+// (e.g. @bookmarks, @history) provided by the Builtin Provider.
+extern const base::FeatureParam<int> kSiteSearchStarterPackRelevanceScore;
+
+// ---------------------------------------------------------
+// ML Relevance Scoring ->
+
+// The ML Relevance Scoring features and params configuration.
+// Use `GetMLConfig()` to get the current configuration.
+//
+// `MLConfig` has the same thread-safety as base::FeatureList. The first call to
+// `GetMLConfig()` (which performs initialization) must be done single threaded
+// on the main thread. After that, it can be called from any thread.
+struct MLConfig {
+  MLConfig();
+  ~MLConfig();
+  MLConfig(const MLConfig&);
+  MLConfig& operator=(const MLConfig& other);
+
+  // If true, logs Omnibox URL scoring signals to OmniboxEventProto.
+  // Equivalent to omnibox::kLogUrlScoringSignals.
+  bool log_url_scoring_signals{false};
+
+  // If true, enables history scoring signal annotator for populating history
+  // scoring signals associated with Search suggestions. These signals will be
+  // empty for Search suggestions otherwise.
+  bool enable_history_scoring_signals_annotator_for_searches{false};
+
+  // If true, enables scoring signal annotators for populating additional
+  // Omnibox URL scoring signals for logging or ML scoring.
+  bool enable_scoring_signals_annotators{false};
+
+  // If true, document suggestions from the shortcut provider will include
+  // shortcut signals.
+  bool shortcut_document_signals{false};
+
+  // If true, runs the ML scoring model to assign new relevance scores to the
+  // URL suggestions and reranks them.
+  // Equivalent to omnibox::kMlUrlScoring.
+  bool ml_url_scoring{false};
+
+  // If true, runs the ML scoring model but does not assign new relevance scores
+  // to the URL suggestions and does not rerank them.
+  // Equivalent to OmniboxFieldTrial::kMlUrlScoringCounterfactual.
+  bool ml_url_scoring_counterfactual{false};
+
+  // If true, increases the number of candidates the URL autocomplete providers
+  // pass to the controller beyond `provider_max_matches`.
+  // `ml_url_scoring_max_matches_by_provider` does nothing if this is true.
+  // Equivalent to OmniboxFieldTrial::kMlUrlScoringUnlimitedNumCandidates.
+  bool ml_url_scoring_unlimited_num_candidates{false};
+
+  // If true, creates Omnibox autocomplete URL scoring model.
+  // Equivalent to omnibox::kUrlScoringModel.
+  bool url_scoring_model{false};
+
+  // Sets the maximum matches provided by each provider.  See
+  // `OmniboxFieldTrial::GetProviderMaxMatches()` for more info. When ML Scoring
+  // is enabled, this param takes precedence over
+  // `OmniboxFieldTrial::kUIMaxAutocompleteMatchesByProviderParam`. This param
+  // has no effect if `ml_url_scoring_unlimited_num_candidates` is true.
+  std::string ml_url_scoring_max_matches_by_provider;
+
+  // There are 3 implementations for mapping ML scores [0, 1] to usable
+  // relevances scores.
+  // 1) The original implementation in `RunBatchUrlScoringModel()`. This
+  //    redistributes the traditional relevance scores and shortcut boosting so
+  //    that the highest ML scoring URLs are assigned the highest traditional
+  //    scores, but the overall set of scores remains unchanged. This results in
+  //    mostly stable search v URL balance, but can change the default match
+  //    from a URL to a search; or vice versa; and therefore also change the
+  //    number of URLs above searches by +/- 1; because it doesn't consider
+  //    `allowed_to_be_default`. We've experimented with this for multiple
+  //    milestone, so this has the advantage in potentially launching first.
+  // 2) The `mapped_search_blending` implementation in
+  //    `RunBatchUrlScoringModelMappedSearchBlending()`. It maps ML scores
+  //    linearly to a relevance score. Unlike the above 2, instead of trying to
+  //    maintain search v URL balance for each individual input, it tries to
+  //    balance them across all inputs, but allows shifts for individual inputs.
+  //    Not keeping the search v URL balance fixed for each individual input is
+  //    the long term goal, though we may end up with a more complicated or ML
+  //    approach.
+  // 3) The `piecewise_mapped_search_blending` implementation in
+  //    `RunBatchUrlScoringModelPiecewiseMappedSearchBlending()`. It maps ML
+  //    scores to relevance scores using a piecewise function (which must be
+  //    continuous with respect to ML scores) composed of individual line
+  //    segments whose break points are specified by
+  //    `piecewise_mapped_search_blending_break_points`. The Search vs Url
+  //    behavior of this implementation is similar to that noted above in (2).
+
+  // Enables approach (2) above.
+  // Map ML scores [0, 1] to [`min`, `max`]. Groups URLs above searches if their
+  // mapped relevance is greater than
+  // `mapped_search_blending_grouping_threshold`.
+  bool mapped_search_blending{false};
+  int mapped_search_blending_min{600};
+  int mapped_search_blending_max{2800};
+  int mapped_search_blending_grouping_threshold{1400};
+
+  // Enables approach (3) above.
+  // Map ML scores [0, 1] to relevance scores by using a piecewise score mapping
+  // function. Groups URLs above searches if their mapped relevance is greater
+  // than `piecewise_mapped_search_blending_grouping_threshold`.
+  bool piecewise_mapped_search_blending{false};
+  int piecewise_mapped_search_blending_grouping_threshold{1400};
+  // Specifies a list of N break points (x, y) which collectively define the N-1
+  // line segments that comprise the piecewise score mapping function. The list
+  // of break points must be sorted in ascending order with respect to their
+  // x-coordinates. This list of break points will be applied to score any
+  // suggestion which doesn't satisfy the criteria for applying one of the more
+  // specific break points params listed below.
+  // As an example, if we use "0,550;0.018,1300;0.14,1398;1,1422" as the value
+  // for this param, then the resulting list of break points would be [(0, 550),
+  // (0.018, 1300), (0.14, 1398), (1, 1422)].
+  std::string piecewise_mapped_search_blending_break_points;
+  // Similar to `piecewise_mapped_search_blending_break_points`, this param
+  // specifies a list of break points that will only be used when scoring
+  // verbatim URL suggestions.
+  // A "verbatim URL" suggestion is any suggestion that is UWYT itself or has
+  // been deduped with a UWYT suggestion.
+  std::string piecewise_mapped_search_blending_break_points_verbatim_url;
+  // Similar to `piecewise_mapped_search_blending_break_points`, this param
+  // specifies a list of break points that will only be used when scoring
+  // Search suggestions.
+  std::string piecewise_mapped_search_blending_break_points_search;
+  // Specifies a bias term that will be added to the relevance score which was
+  // computed by the piecewise score mapping function. By varying this term,
+  // it's possible to make the piecewise mapping function more or less
+  // aggressive at a global scale.
+  // The same bias param value will be used regardless of which one of the above
+  // "break points" variants is currently in use.
+  int piecewise_mapped_search_blending_relevance_bias{0};
+
+  // If true, ML scoring service will utilize in-memory ML score cache.
+  // Equivalent to omnibox::kMlUrlScoreCaching.
+  bool ml_url_score_caching{false};
+  // Maximum number of cached entries to store in the ML score cache.
+  int max_ml_score_cache_size{30};
+
+  // If true, Search suggestions will be eligible for re-ranking via ML scoring.
+  bool enable_ml_scoring_for_searches{false};
+
+  // If true, verbatim URL suggestions will be eligible for re-ranking via ML
+  // scoring.
+  bool enable_ml_scoring_for_verbatim_urls{false};
+};
+
+// A testing utility class for overriding the current configuration returned
+// by the global or member `GetMLConfig()` and restoring it once the instance
+// goes out of scope.
+class ScopedMLConfigForTesting {
+ public:
+  ScopedMLConfigForTesting();
+  ScopedMLConfigForTesting(const ScopedMLConfigForTesting&) = delete;
+  ScopedMLConfigForTesting& operator=(const ScopedMLConfigForTesting&) = delete;
+  ~ScopedMLConfigForTesting();
+
+  // Returns the current configuration.
+  MLConfig& GetMLConfig();
+
+ private:
+  std::unique_ptr<MLConfig> original_config_{nullptr};
+};
+
+// Returns the current configuration.
+const MLConfig& GetMLConfig();
+
+// If enabled, logs Omnibox scoring signals to OmniboxEventProto for training
+// the ML scoring models.
+bool IsReportingUrlScoringSignalsEnabled();
+
+// If enabled, populates scoring signals of URL matches.
+bool IsPopulatingUrlScoringSignalsEnabled();
+
+// Whether the scoring signal annotators are enabled for logging Omnibox scoring
+// signals to OmniboxEventProto.
+bool AreScoringSignalsAnnotatorsEnabled();
+
+// If enabled, runs the ML scoring model to assign new relevance scores to the
+// URL suggestions and reranks them.
+bool IsMlUrlScoringEnabled();
+
+// If true, runs the ML scoring model but does not assign new relevance scores
+// to URL suggestions.
+bool IsMlUrlScoringCounterfactual();
+
+// If true, increases the number of candidates the url autocomplete providers
+// pass to the controller.
+bool IsMlUrlScoringUnlimitedNumCandidatesEnabled();
+
+// Whether the URL scoring model is enabled.
+bool IsUrlScoringModelEnabled();
+
+// Whether ML URL score caching is enabled.
+bool IsMlUrlScoreCachingEnabled();
+
+enum class PiecewiseMappingVariant {
+  // Regular piecewise score mapping for most suggestion types.
+  kRegular,
+  // Piecewise score mapping specific to verbatim URL suggestions.
+  kVerbatimUrl,
+  // Piecewise score mapping specific to Search suggestions.
+  kSearch,
+
+  kPiecewiseMappingVariantSize,
+};
+
+// Converts the `piecewise_break_points` feature param into a vector of (x, y)
+// coordinates specifying the "break points" of the piecewise ML score mapping
+// function.
+// The `mapping_variant` parameter allows callers to fetch an alternative list
+// of break points which might be more relevant for suggestions of a certain
+// type.
+std::vector<std::pair<double, int>> GetPiecewiseMappingBreakPoints(
+    PiecewiseMappingVariant mapping_variant =
+        PiecewiseMappingVariant::kRegular);
+
+// <- Ipad suggestions limit
+// ---------------------------------------------------------
+// <- ML Relevance Scoring
+// ---------------------------------------------------------
+// Actions In Suggest ->
+
+// <- Actions In Suggest
+// ---------------------------------------------------------
+// Touch Down Trigger For Prefetch ->
 extern const base::FeatureParam<int>
-    kRichAutocompletionAutocompleteNonPrefixMinChar;
-extern const base::FeatureParam<bool> kRichAutocompletionShowAdditionalText;
-extern const base::FeatureParam<bool> kRichAutocompletionSplitTitleCompletion;
-extern const base::FeatureParam<bool> kRichAutocompletionSplitUrlCompletion;
-extern const base::FeatureParam<int> kRichAutocompletionSplitCompletionMinChar;
-extern const base::FeatureParam<bool> kRichAutocompletionCounterfactual;
-extern const base::FeatureParam<bool>
-    kRichAutocompletionAutocompletePreferUrlsOverPrefixes;
+    kTouchDownTriggerForPrefetchMaxPrefetchesPerOmniboxSession;
+// <- Touch Down Trigger For Prefetch
+// ---------------------------------------------------------
+// Site Search Starter Pack ->
+// When non-empty, the value of this param overrides the `search_url` for the
+// @gemini scope. This happens when the URL gets served, it does not affect the
+// DB or TemplateURLService's copy of the URL.
+extern const base::FeatureParam<std::string> kGeminiUrlOverride;
 
-// Bookmark paths.
-// Parameter names used for bookmark path variations that determine whether
-// bookmark suggestion texts will contain the title, URL, and/or path.
-extern const base::FeatureParam<std::string> kBookmarkPathsCounterfactual;
-extern const base::FeatureParam<bool> kBookmarkPathsUiReplaceTitle;
-extern const base::FeatureParam<bool> kBookmarkPathsUiReplaceUrl;
-extern const base::FeatureParam<bool> kBookmarkPathsUiAppendAfterTitle;
-extern const base::FeatureParam<bool> kBookmarkPathsUiDynamicReplaceUrl;
+// Whether the expansion pack (the `StarterPackId::kGemini` keyword/engine) for
+// the site search starter pack is enabled.
+bool IsStarterPackExpansionEnabled();
 
-// Short bookmarks.
-// Determine whether bookmarks should look for exact matches only or prefix
-// matches as well when the input is short.
-bool IsShortBookmarkSuggestionsEnabled();
-bool IsShortBookmarkSuggestionsByTotalInputLengthEnabled();
-// Returns the minimum input length to enable prefix matches.
-size_t ShortBookmarkSuggestionsByTotalInputLengthThreshold();
-// If true, when applicable, the feature will be logged as triggered but won't
-// affect omnibox results.
-extern const base::FeatureParam<bool>
-    kShortBookmarkSuggestionsByTotalInputLengthCounterfactual;
-extern const base::FeatureParam<int>
-    kShortBookmarkSuggestionsByTotalInputLengthThreshold;
+// When true, enables an informational IPH message at the bottom of the Omnibox
+// directing users to certain starter pack engines.
+bool IsStarterPackIPHEnabled();
 
-// New params should be inserted above this comment and formatted as:
+// <- Site Search Starter Pack
+// ---------------------------------------------------------
+// Power Tools -->
+constexpr base::FeatureParam<size_t> kOmniboxNumNtpZpsRecentSearches{
+    &omnibox::kNumNtpZpsRecentSearches, "omnibox_num_ntp_zps_recent_searches",
+    15};
+constexpr base::FeatureParam<size_t> kOmniboxNumNtpZpsTrendingSearches{
+    &omnibox::kNumNtpZpsTrendingSearches,
+    "omnibox_num_ntp_zps_trending_searches", 5};
+constexpr base::FeatureParam<size_t> kOmniboxNumWebZpsRecentSearches{
+    &omnibox::kNumWebZpsRecentSearches, "omnibox_num_web_zps_recent_searches",
+    15};
+constexpr base::FeatureParam<size_t> kOmniboxNumWebZpsRelatedSearches{
+    &omnibox::kNumWebZpsRelatedSearches, "omnibox_num_web_zps_related_searches",
+    8};
+constexpr base::FeatureParam<size_t> kOmniboxNumWebZpsMostVisitedUrls{
+    &omnibox::kNumWebZpsMostVisitedUrls,
+    "omnibox_num_web_zps_most_visited_urls", 10};
+constexpr base::FeatureParam<size_t> kOmniboxNumSrpZpsRecentSearches{
+    &omnibox::kNumSrpZpsRecentSearches, "omnibox_num_srp_zps_recent_searches",
+    15};
+constexpr base::FeatureParam<size_t> kOmniboxNumSrpZpsRelatedSearches{
+    &omnibox::kNumSrpZpsRelatedSearches, "omnibox_num_srp_zps_related_searches",
+    15};
+// <- Power Tools
+// ---------------------------------------------------------
+// Diagnostics -->
+#if BUILDFLAG(IS_ANDROID)
+inline constexpr base::FeatureParam<bool> kAndroidDiagInputConnection{
+    &omnibox::kDiagnostics, "omnibox_diag_input_connection", false};
+#endif
+// <- Diagnostics
+// ---------------------------------------------------------
+// Mobile Parity update -->
+inline constexpr base::FeatureParam<bool> kMobileParityEnableFeedForGoogleOnly{
+    &omnibox::kOmniboxMobileParityUpdate, "enable_feed_for_google_only", true};
+// <-- Mobile Parity update
+
+#if BUILDFLAG(IS_ANDROID)
+// Fusebox -->
+inline constexpr base::FeatureParam<bool>
+    kOmniboxMultimodalPrioritizeSuggestionsForFirstDocument{
+        &omnibox::kOmniboxMultimodalInput,
+        "prioritize_suggestions_for_first_document", false};
+// <-- Fusebox
+#endif
+
+// New params should be inserted above this comment. They should be ordered
+// consistently with `omnibox_features.h`. They should be formatted as:
 // - Short comment categorizing the relevant features & params.
 // - Optional: `bool Is[FeatureName]Enabled();` helpers that check if the
 //   related features in `omnibox_features.h` are enabled.
@@ -579,39 +725,6 @@ extern const base::FeatureParam<int>
   // If true, document suggestions will be hidden but logged for analysis.
   extern const base::FeatureParam<bool> kDocumentCounterfactual;
 */
-
-namespace internal {
-// The bundled omnibox experiment comes with a set of parameters
-// (key-value pairs).  Each key indicates a certain rule that applies in
-// a certain context.  The value indicates what the consequences of
-// applying the rule are.  For example, the value of a SearchHistory rule
-// in the context of a search results page might indicate that we should
-// prevent search history matches from inlining.
-//
-// This function returns the value associated with the |rule| that applies
-// in the current context (which currently consists of |page_classification|
-// and whether Instant Extended is enabled).  If no such rule exists in the
-// current context, fall back to the rule in various wildcard contexts and
-// return its value if found.  If the rule remains unfound in the global
-// context, returns the empty string.  For more details, including how we
-// prioritize different wildcard contexts, see the implementation.  How to
-// interpret the value is left to the caller; this is rule-dependent.
-//
-// Deprecated. Use GetValueForRuleInContextByFeature instead.
-std::string GetValueForRuleInContext(
-    const std::string& rule,
-    metrics::OmniboxEventProto::PageClassification page_classification);
-
-// Same as GetValueForRuleInContext, but by |feature| instead of the bundled
-// omnibox experiment.  Prefer to use this method over GetValueForRuleInContext
-// when possible, as it can be useful to configure parameters outside of the
-// omnibox bundled experiment.
-std::string GetValueForRuleInContextByFeature(
-    const base::Feature& feature,
-    const std::string& rule,
-    metrics::OmniboxEventProto::PageClassification page_classification);
-
-}  // namespace internal
 
 }  // namespace OmniboxFieldTrial
 

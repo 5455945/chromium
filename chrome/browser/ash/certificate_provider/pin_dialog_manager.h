@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,25 +6,26 @@
 #define CHROME_BROWSER_ASH_CERTIFICATE_PROVIDER_PIN_DIALOG_MANAGER_H_
 
 #include <map>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/certificate_provider/security_token_pin_dialog_host.h"
 #include "chrome/browser/ash/certificate_provider/security_token_pin_dialog_host_popup_impl.h"
 #include "chromeos/components/security_token_pin/constants.h"
 #include "components/account_id/account_id.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
-namespace ash {
+namespace chromeos {
 
 // Manages the state of the dialog that requests the PIN from user. Used by the
 // extensions that need to request the PIN. Implemented as requirement for
-// crbug.com/612886
+// crbug.com/41254507
 class PinDialogManager final {
  public:
   enum class RequestPinResult {
@@ -53,11 +54,14 @@ class PinDialogManager final {
   void AddSignRequestId(
       const std::string& extension_id,
       int sign_request_id,
-      const absl::optional<AccountId>& authenticating_user_account_id);
+      const std::optional<AccountId>& authenticating_user_account_id);
 
   // Removes the specified sign request, aborting both the current and the
   // future PIN dialogs related to it.
-  void AbortSignRequest(const std::string& extension_id, int sign_request_id);
+  void RemoveSignRequest(const std::string& extension_id, int sign_request_id);
+
+  // Returns the number of pending sign requests stored in sign_requests_
+  int StoredSignRequestsForTesting() const;
 
   // Creates and displays a new PIN dialog, or reuses the old dialog with just
   // updating the parameters if active one exists.
@@ -124,13 +128,13 @@ class PinDialogManager final {
   struct SignRequestState {
     SignRequestState(
         base::Time begin_time,
-        const absl::optional<AccountId>& authenticating_user_account_id);
+        const std::optional<AccountId>& authenticating_user_account_id);
     SignRequestState(const SignRequestState&);
     SignRequestState& operator=(const SignRequestState&);
     ~SignRequestState();
 
     base::Time begin_time;
-    absl::optional<AccountId> authenticating_user_account_id;
+    std::optional<AccountId> authenticating_user_account_id;
   };
 
   // Holds information related to the currently opened PIN dialog.
@@ -145,7 +149,7 @@ class PinDialogManager final {
     // Remember the host that was used to open the active dialog, as new hosts
     // could have been added since the dialog was opened, but we want to
     // continue calling the same host when dealing with the same active dialog.
-    SecurityTokenPinDialogHost* const host;
+    const raw_ptr<SecurityTokenPinDialogHost> host;
 
     const std::string extension_id;
     const std::string extension_name;
@@ -188,21 +192,16 @@ class PinDialogManager final {
   SecurityTokenPinDialogHostPopupImpl default_dialog_host_;
   // The list of dynamically added dialog hosts, in the same order as they were
   // added.
-  std::vector<SecurityTokenPinDialogHost*> added_dialog_hosts_;
+  std::vector<raw_ptr<SecurityTokenPinDialogHost, VectorExperimental>>
+      added_dialog_hosts_;
 
   // There can be only one active dialog to request the PIN at any point of
   // time.
-  absl::optional<ActiveDialogState> active_dialog_state_;
+  std::optional<ActiveDialogState> active_dialog_state_;
 
   base::WeakPtrFactory<PinDialogManager> weak_factory_{this};
 };
 
-}  // namespace ash
-
-// TODO(https://crbug.com/1164001): remove when Chrome OS code migration is
-// done.
-namespace chromeos {
-using ::ash::PinDialogManager;
-}
+}  // namespace chromeos
 
 #endif  // CHROME_BROWSER_ASH_CERTIFICATE_PROVIDER_PIN_DIALOG_MANAGER_H_

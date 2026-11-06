@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,13 @@
 #define UI_VIEWS_CONTROLS_PROGRESS_BAR_H_
 
 #include <memory>
+#include <optional>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "ui/color/color_id.h"
+#include "ui/color/color_variant.h"
 #include "ui/gfx/animation/animation_delegate.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
+#include "ui/views/metadata/view_factory.h"
 #include "ui/views/view.h"
 
 namespace gfx {
@@ -21,18 +23,18 @@ namespace views {
 
 // Progress bar is a control that indicates progress visually.
 class VIEWS_EXPORT ProgressBar : public View, public gfx::AnimationDelegate {
- public:
-  METADATA_HEADER(ProgressBar);
+  METADATA_HEADER(ProgressBar, View)
 
-  // The preferred height parameter makes it easier to use a ProgressBar with
-  // layout managers that size to preferred size.
-  explicit ProgressBar(int preferred_height = 5,
-                       bool allow_round_corner = true);
+ public:
+  ProgressBar();
+
+  ProgressBar(const ProgressBar&) = delete;
+  ProgressBar& operator=(const ProgressBar&) = delete;
+
   ~ProgressBar() override;
 
-  // View:
-  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const SizeBounds& /*available_size*/) const override;
   void VisibilityChanged(View* starting_from, bool is_visible) override;
   void AddedToWidget() override;
   void OnPaint(gfx::Canvas* canvas) override;
@@ -42,13 +44,29 @@ class VIEWS_EXPORT ProgressBar : public View, public gfx::AnimationDelegate {
   // be displayed with an infinite loading animation.
   void SetValue(double value);
 
+  // Sets whether the progress bar is paused.
+  void SetPaused(bool is_paused);
+
   // The color of the progress portion.
   SkColor GetForegroundColor() const;
-  void SetForegroundColor(SkColor color);
+  void SetForegroundColor(std::optional<ui::ColorVariant> color);
 
   // The color of the portion that displays potential progress.
   SkColor GetBackgroundColor() const;
-  void SetBackgroundColor(SkColor color);
+  void SetBackgroundColor(std::optional<ui::ColorVariant> color);
+
+  int GetPreferredHeight() const;
+  void SetPreferredHeight(int preferred_height);
+
+  // Calculates the rounded corners of the view based on
+  // `preferred_corner_radii_`. If `preferred_corner_radii_` was not provided,
+  // empty corners will be returned . If any corner radius in
+  // `preferred_corner_radii_` is greater than the height of the bar, its value
+  // will be capped to the height of the bar.
+  gfx::RoundedCornersF GetPreferredCornerRadii() const;
+
+  void SetPreferredCornerRadii(
+      std::optional<gfx::RoundedCornersF> preferred_corner_radii);
 
  protected:
   int preferred_height() const { return preferred_height_; }
@@ -59,6 +77,7 @@ class VIEWS_EXPORT ProgressBar : public View, public gfx::AnimationDelegate {
   void AnimationEnded(const gfx::Animation* animation) override;
 
   bool IsIndeterminate();
+  bool GetPaused() const { return is_paused_; }
   void OnPaintIndeterminate(gfx::Canvas* canvas);
 
   // Fire an accessibility event if visible and the progress has changed.
@@ -67,21 +86,38 @@ class VIEWS_EXPORT ProgressBar : public View, public gfx::AnimationDelegate {
   // Current progress to display, should be in the range 0.0 to 1.0.
   double current_value_ = 0.0;
 
-  // In DP, the preferred height of this progress bar.
-  const int preferred_height_;
+  // Is the progress bar paused.
+  bool is_paused_ = false;
 
-  const bool allow_round_corner_;
+  // In DP, the preferred height of this progress bar. This makes it easier to
+  // use a ProgressBar with layout managers that size to preferred size.
+  int preferred_height_ = 5;
 
-  absl::optional<SkColor> foreground_color_;
-  absl::optional<SkColor> background_color_;
+  // The radii to round the progress bar corners with. A value of
+  // `std::nullopt` will produce a bar with no rounded corners, otherwise a
+  // default value of 3 on all corners will be used.
+  std::optional<gfx::RoundedCornersF> preferred_corner_radii_ =
+      gfx::RoundedCornersF(3);
+
+  std::optional<ui::ColorVariant> foreground_color_;
+  std::optional<ui::ColorVariant> background_color_;
 
   std::unique_ptr<gfx::LinearAnimation> indeterminate_bar_animation_;
 
   int last_announced_percentage_ = -1;
-
-  DISALLOW_COPY_AND_ASSIGN(ProgressBar);
 };
 
+BEGIN_VIEW_BUILDER(VIEWS_EXPORT, ProgressBar, View)
+VIEW_BUILDER_PROPERTY(double, Value)
+VIEW_BUILDER_PROPERTY(bool, Paused)
+VIEW_BUILDER_PROPERTY(std::optional<ui::ColorVariant>, ForegroundColor)
+VIEW_BUILDER_PROPERTY(std::optional<ui::ColorVariant>, BackgroundColor)
+VIEW_BUILDER_PROPERTY(int, PreferredHeight)
+VIEW_BUILDER_PROPERTY(std::optional<gfx::RoundedCornersF>, PreferredCornerRadii)
+END_VIEW_BUILDER
+
 }  // namespace views
+
+DEFINE_VIEW_BUILDER(VIEWS_EXPORT, ProgressBar)
 
 #endif  // UI_VIEWS_CONTROLS_PROGRESS_BAR_H_

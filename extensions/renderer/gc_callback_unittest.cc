@@ -1,17 +1,17 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/renderer/gc_callback.h"
 
-#include "base/bind.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/extension_set.h"
 #include "extensions/common/features/feature.h"
+#include "extensions/renderer/bindings/test_js_runner.h"
 #include "extensions/renderer/scoped_web_frame.h"
 #include "extensions/renderer/script_context.h"
 #include "extensions/renderer/script_context_set.h"
@@ -36,22 +36,29 @@ class GCCallbackTest : public testing::TestWithParam<CallbackType> {
  public:
   GCCallbackTest() : script_context_set_(&active_extensions_) {}
 
+  GCCallbackTest(const GCCallbackTest&) = delete;
+  GCCallbackTest& operator=(const GCCallbackTest&) = delete;
+
  protected:
   ScriptContextSet& script_context_set() { return script_context_set_; }
 
+  v8::Isolate* Isolate() {
+    return web_frame_.frame()->GetAgentGroupScheduler()->Isolate();
+  }
+
   v8::Local<v8::Context> v8_context() {
-    return v8::Local<v8::Context>::New(v8::Isolate::GetCurrent(), v8_context_);
+    return v8::Local<v8::Context>::New(Isolate(), v8_context_);
   }
 
   ScriptContext* RegisterScriptContext() {
     // No world ID.
     return script_context_set_.Register(
-        web_frame_.frame(),
-        v8::Local<v8::Context>::New(v8::Isolate::GetCurrent(), v8_context_), 0);
+        web_frame_.frame(), v8::Local<v8::Context>::New(Isolate(), v8_context_),
+        /*world_id=*/0, /*is_webview=*/false);
   }
 
   void RequestGarbageCollection() {
-    v8::Isolate::GetCurrent()->RequestGarbageCollectionForTesting(
+    Isolate()->RequestGarbageCollectionForTesting(
         v8::Isolate::kFullGarbageCollection);
   }
 
@@ -93,12 +100,11 @@ class GCCallbackTest : public testing::TestWithParam<CallbackType> {
         return false;
     }
     NOTREACHED();
-    return false;
   }
 
  private:
   void SetUp() override {
-    v8::Isolate* isolate = v8::Isolate::GetCurrent();
+    v8::Isolate* isolate = Isolate();
     v8::HandleScope handle_scope(isolate);
     // We need a context that has been initialized by blink; grab the main world
     // context from the web frame.
@@ -106,10 +112,13 @@ class GCCallbackTest : public testing::TestWithParam<CallbackType> {
         web_frame_.frame()->MainWorldScriptContext();
     DCHECK(!local_v8_context.IsEmpty());
     v8_context_.Reset(isolate, local_v8_context);
+    test_js_runner_ =
+        std::make_unique<TestJSRunner::Scope>(std::make_unique<TestJSRunner>());
   }
 
   void TearDown() override {
     v8_context_.Reset();
+    test_js_runner_.reset();
     RequestGarbageCollection();
   }
 
@@ -121,12 +130,11 @@ class GCCallbackTest : public testing::TestWithParam<CallbackType> {
   ExtensionIdSet active_extensions_;
   ScriptContextSet script_context_set_;
   v8::Global<v8::Context> v8_context_;
-
-  DISALLOW_COPY_AND_ASSIGN(GCCallbackTest);
+  std::unique_ptr<TestJSRunner::Scope> test_js_runner_;
 };
 
 TEST_P(GCCallbackTest, GCBeforeContextInvalidated) {
-  v8::Isolate* isolate = v8::Isolate::GetCurrent();
+  v8::Isolate* isolate = Isolate();
   v8::HandleScope handle_scope(isolate);
   v8::Context::Scope context_scope(v8_context());
 
@@ -152,7 +160,7 @@ TEST_P(GCCallbackTest, GCBeforeContextInvalidated) {
 }
 
 TEST_P(GCCallbackTest, ContextInvalidatedBeforeGC) {
-  v8::Isolate* isolate = v8::Isolate::GetCurrent();
+  v8::Isolate* isolate = Isolate();
   v8::HandleScope handle_scope(isolate);
   v8::Context::Scope context_scope(v8_context());
 
@@ -183,7 +191,7 @@ TEST_P(GCCallbackTest, ContextInvalidatedBeforeGC) {
 // callback has a chance to run.
 TEST_P(GCCallbackTest,
        ContextInvalidatedBetweenGarbageCollectionAndCallbackRunning) {
-  v8::Isolate* isolate = v8::Isolate::GetCurrent();
+  v8::Isolate* isolate = Isolate();
   v8::HandleScope handle_scope(isolate);
   v8::Context::Scope context_scope(v8_context());
 

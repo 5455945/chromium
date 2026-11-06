@@ -1,15 +1,16 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef SERVICES_DEVICE_GENERIC_SENSOR_PLATFORM_SENSOR_PROVIDER_WINRT_H_
 #define SERVICES_DEVICE_GENERIC_SENSOR_PLATFORM_SENSOR_PROVIDER_WINRT_H_
 
+#include "base/memory/weak_ptr.h"
+#include "base/task/single_thread_task_runner.h"
 #include "services/device/generic_sensor/platform_sensor_provider.h"
+#include "services/device/generic_sensor/platform_sensor_reader_win_base.h"
 
 namespace device {
-
-class PlatformSensorReaderWinBase;
 
 // Helper class used to instantiate new PlatformSensorReaderWinBase instances.
 class SensorReaderFactory {
@@ -30,24 +31,25 @@ class PlatformSensorProviderWinrt final : public PlatformSensorProvider {
   PlatformSensorProviderWinrt();
   ~PlatformSensorProviderWinrt() override;
 
+  base::WeakPtr<PlatformSensorProvider> AsWeakPtr() override;
+
   void SetSensorReaderFactoryForTesting(
       std::unique_ptr<SensorReaderFactory> sensor_reader_factory);
 
  protected:
   // PlatformSensorProvider interface implementation.
   void CreateSensorInternal(mojom::SensorType type,
-                            SensorReadingSharedBuffer* reading_buffer,
                             CreateSensorCallback callback) override;
 
  private:
-  std::unique_ptr<PlatformSensorReaderWinBase> CreateSensorReader(
-      mojom::SensorType type);
+  // Wraps the factory-created reader in a pointer whose deleter posts back to
+  // |com_sta_task_runner_|, so the reader's COM objects are always released in
+  // the STA, including when the reply below never runs.
+  ScopedPlatformSensorReaderWinBase CreateSensorReader(mojom::SensorType type);
 
-  void SensorReaderCreated(
-      mojom::SensorType type,
-      SensorReadingSharedBuffer* reading_buffer,
-      CreateSensorCallback callback,
-      std::unique_ptr<PlatformSensorReaderWinBase> sensor_reader);
+  void SensorReaderCreated(mojom::SensorType type,
+                           CreateSensorCallback callback,
+                           ScopedPlatformSensorReaderWinBase sensor_reader);
 
   // The Windows.Devices.Sensors WinRT API supports both STA and MTA
   // threads. STA was chosen as PlatformSensorWin can only handle STA.
@@ -58,6 +60,8 @@ class PlatformSensorProviderWinrt final : public PlatformSensorProvider {
   PlatformSensorProviderWinrt(const PlatformSensorProviderWinrt&) = delete;
   PlatformSensorProviderWinrt& operator=(const PlatformSensorProviderWinrt&) =
       delete;
+
+  base::WeakPtrFactory<PlatformSensorProviderWinrt> weak_factory_{this};
 };
 
 }  // namespace device

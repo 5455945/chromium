@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,6 @@
 #define COMPONENTS_NO_STATE_PREFETCH_RENDERER_NO_STATE_PREFETCH_HELPER_H_
 
 #include "base/compiler_specific.h"
-#include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "content/public/renderer/render_frame_observer.h"
@@ -17,7 +16,7 @@ class URLLoaderThrottle;
 }  // namespace blink
 
 namespace prerender {
-class PrerenderURLLoaderThrottle;
+class NoStatePrefetchURLLoaderThrottle;
 
 // Helper class to track whether its RenderFrame is currently being no-state
 // prefetched. Created when prefetching starts and deleted as soon as it stops.
@@ -28,12 +27,15 @@ class NoStatePrefetchHelper
   NoStatePrefetchHelper(content::RenderFrame* render_frame,
                         const std::string& histogram_prefix);
 
+  NoStatePrefetchHelper(const NoStatePrefetchHelper&) = delete;
+  NoStatePrefetchHelper& operator=(const NoStatePrefetchHelper&) = delete;
+
   ~NoStatePrefetchHelper() override;
 
-  // Configures and returns a new PrerenderURLLoaderThrottle instance if the
-  // indicated frame has an associated NoStatePrefetchHelper.
+  // Configures and returns a new NoStatePrefetchURLLoaderThrottle instance if
+  // the indicated frame has an associated NoStatePrefetchHelper.
   static std::unique_ptr<blink::URLLoaderThrottle> MaybeCreateThrottle(
-      int render_frame_id);
+      const blink::LocalFrameToken& frame_token);
 
   // Returns true if |render_frame| is currently prefetching.
   static bool IsPrefetching(const content::RenderFrame* render_frame);
@@ -42,10 +44,10 @@ class NoStatePrefetchHelper
 
  private:
   // RenderFrameObserver implementation.
-  void DidFinishDocumentLoad() override;
+  void DidDispatchDOMContentLoadedEvent() override;
   void OnDestruct() override;
 
-  void AddThrottle(PrerenderURLLoaderThrottle& throttle);
+  void AddThrottle(NoStatePrefetchURLLoaderThrottle& throttle);
   void OnThrottleDestroyed();
   void SendPrefetchFinished();
 
@@ -54,11 +56,8 @@ class NoStatePrefetchHelper
   int prefetch_count_ = 0;
   bool prefetch_finished_ = false;
   base::TimeTicks start_time_;
-  base::TimeTicks parsed_time_;
 
   base::WeakPtrFactory<NoStatePrefetchHelper> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(NoStatePrefetchHelper);
 };
 
 }  // namespace prerender

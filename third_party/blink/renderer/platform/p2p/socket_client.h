@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,10 +11,6 @@
 #include "services/network/public/cpp/p2p_socket_type.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
-namespace rtc {
-struct PacketOptions;
-}
-
 namespace blink {
 
 class P2PSocketClientDelegate;
@@ -23,8 +19,6 @@ class P2PSocketClientDelegate;
 //
 // TODO(crbug.com/787254): Verify whether this class is still needed
 // now that all its clients are in Blink.
-//
-// Also, move it away from std::vector.
 class P2PSocketClient {
  public:
   virtual ~P2PSocketClient() {}
@@ -32,8 +26,11 @@ class P2PSocketClient {
   // Send the |data| to the |address| using Differentiated Services Code Point
   // |dscp|. Return value is the unique packet_id for this packet.
   virtual uint64_t Send(const net::IPEndPoint& address,
-                        const Vector<int8_t>& data,
-                        const rtc::PacketOptions& options) = 0;
+                        base::span<const uint8_t> data,
+                        const webrtc::AsyncSocketPacketOptions& options) = 0;
+
+  // Call to complete sending of any batched packets.
+  virtual void FlushBatch() = 0;
 
   virtual void SetOption(network::P2PSocketOption option, int value) = 0;
 

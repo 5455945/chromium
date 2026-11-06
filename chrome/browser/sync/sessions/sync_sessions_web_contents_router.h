@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,8 @@
 #include <set>
 
 #include "base/callback_list.h"
+#include "base/memory/raw_ptr.h"
+#include "build/build_config.h"
 
 // Android has no BrowserList or TabStripModel, so we exclude code that refers
 // to those two things. For non-android platforms, this code is used to
@@ -37,10 +39,17 @@ class SyncSessionsWebContentsRouter : public LocalSessionEventRouter,
  public:
   explicit SyncSessionsWebContentsRouter(Profile* profile);
 
+  SyncSessionsWebContentsRouter(const SyncSessionsWebContentsRouter&) = delete;
+  SyncSessionsWebContentsRouter& operator=(
+      const SyncSessionsWebContentsRouter&) = delete;
+  ~SyncSessionsWebContentsRouter() override;
+
   // Notify the router that the tab corresponding to |web_contents| has been
   // modified in some way.
   void NotifyTabModified(content::WebContents* web_contents,
                          bool page_load_completed);
+  // Notify the router that a tab was closed.
+  void NotifyTabClosed();
   // Notify the router that session restore has completed.
   void NotifySessionRestoreComplete();
   // Inject a flare that can be used to start sync. See the comment for
@@ -54,18 +63,13 @@ class SyncSessionsWebContentsRouter : public LocalSessionEventRouter,
   // KeyedService implementation.
   void Shutdown() override;
 
- protected:
-  ~SyncSessionsWebContentsRouter() override;
-
  private:
   syncer::SyncableService::StartSyncFlare flare_;
-  LocalSessionEventHandler* handler_ = nullptr;
+  raw_ptr<LocalSessionEventHandler> handler_ = nullptr;
 
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
   std::unique_ptr<BrowserListRouterHelper> browser_list_helper_;
-#endif  // !defined(OS_ANDROID)
-
-  DISALLOW_COPY_AND_ASSIGN(SyncSessionsWebContentsRouter);
+#endif  // !BUILDFLAG(IS_ANDROID)
 };
 
 }  // namespace sync_sessions

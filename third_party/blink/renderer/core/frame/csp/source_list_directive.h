@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_CSP_SOURCE_LIST_DIRECTIVE_H_
 
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
 #include "third_party/blink/renderer/core/frame/csp/csp_source.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_request.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
@@ -15,7 +16,7 @@ namespace blink {
 class KURL;
 
 CORE_EXPORT
-bool CSPSourceListAllows(
+CSPCheckResult CSPSourceListAllows(
     const network::mojom::blink::CSPSourceList& source_list,
     const network::mojom::blink::CSPSource& self_source,
     const KURL&,
@@ -30,7 +31,17 @@ bool CSPSourceListAllowNonce(
 CORE_EXPORT
 bool CSPSourceListAllowHash(
     const network::mojom::blink::CSPSourceList& source_list,
-    const network::mojom::blink::CSPHashSource& hash);
+    const network::IntegrityMetadata& hash);
+
+CORE_EXPORT
+bool CSPSourceListAllowEvalHash(
+    const network::mojom::blink::CSPSourceList& source_list,
+    const network::IntegrityMetadata& hash);
+
+CORE_EXPORT
+bool CSPSourceListAllowUrlHash(
+    const network::mojom::blink::CSPSourceList& source_list,
+    const network::IntegrityMetadata& url_hash);
 
 CORE_EXPORT
 bool CSPSourceListIsNone(
@@ -45,8 +56,13 @@ bool CSPSourceListIsHashOrNoncePresent(
     const network::mojom::blink::CSPSourceList& source_list);
 
 CORE_EXPORT
+bool CSPSourceListIsEvalHashPresent(
+    const network::mojom::blink::CSPSourceList& source_list);
+
+CORE_EXPORT
 bool CSPSourceListAllowAllInline(
     network::mojom::blink::CSPDirectiveName directive_type,
+    ContentSecurityPolicy::InlineType inline_type,
     const network::mojom::blink::CSPSourceList& source_list);
 
 CORE_EXPORT

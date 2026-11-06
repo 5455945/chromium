@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +8,11 @@
 #include <stddef.h>
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
-#include "base/sequenced_task_runner.h"
-#include "base/strings/string_piece.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "base/version.h"
 #include "build/build_config.h"
@@ -23,7 +21,7 @@
 #include "components/metrics/client_info.h"
 
 namespace installer {
-class ChannelInfo;
+class AdditionalParameters;
 class InstallationState;
 }  // namespace installer
 
@@ -71,6 +69,10 @@ class GoogleUpdateSettings {
     int last_extra_code;
   };
 
+  GoogleUpdateSettings() = delete;
+  GoogleUpdateSettings(const GoogleUpdateSettings&) = delete;
+  GoogleUpdateSettings& operator=(const GoogleUpdateSettings&) = delete;
+
   // Returns true if this install is system-wide, false if it is per-user.
   static bool IsSystemInstall();
 
@@ -92,15 +94,18 @@ class GoogleUpdateSettings {
   // false if the setting could not be recorded.
   static bool SetCollectStatsConsent(bool consented);
 
-#if defined(OS_WIN)
   // Returns the default (original) state of the "send usage stats" checkbox
   // shown to the user when they downloaded Chrome. The value is returned via
   // the out parameter |stats_consent_default|. This function returns true if
   // the default state is known and false otherwise. If false the out param
   // will not be set.
-  static bool GetCollectStatsConsentDefault(bool* stats_consent_default)
-      WARN_UNUSED_RESULT;
-#endif
+  [[nodiscard]] static bool GetCollectStatsConsentDefault(
+      bool* stats_consent_default);
+
+  // Returns a hash of the current update cohort ID string to which the
+  // browser is assigned, if any. Discards any cohort data past the final ":".
+  // If there is no ":", returns nullopt.
+  static std::optional<uint32_t> GetHashedCohortId();
 
   // Returns the metrics client info backed up in the registry. nullptr
   // if-and-only-if the client_id couldn't be retrieved (failure to retrieve
@@ -165,19 +170,9 @@ class GoogleUpdateSettings {
   // true if this operation succeeded.
   static bool ClearReferral();
 
-  // This method changes the Google Update "ap" value to move the installation
-  // on to or off of one of the recovery channels.
-  // - If incremental installer fails we append a magic string ("-full"), if
-  // it is not present already, so that Google Update server next time will send
-  // full installer to update Chrome on the local machine
-  // - If we are currently running full installer, we remove this magic
-  // string (if it is present) regardless of whether installer failed or not.
-  // There is no fall-back for full installer :)
-  // - Unconditionally clear a legacy "-stage:" modifier.
-  static void UpdateInstallStatus(bool system_install,
-                                  installer::ArchiveType archive_type,
-                                  int install_return_code,
-                                  const std::wstring& product_guid);
+  // This method unconditionally clears legacy "-full" modifiers from the
+  // Google Update "ap" key.
+  static void UpdateInstallStatus();
 
   // Sets the InstallerProgress value in the registry so that Google Update can
   // provide informative user feedback. |path| is the full path to the app's
@@ -187,29 +182,14 @@ class GoogleUpdateSettings {
                           const std::wstring& path,
                           int progress);
 
-  // This method updates the value for Google Update "ap" key for Chrome
-  // based on whether we are doing incremental install (or not) and whether
-  // the install succeeded.
-  // - If install worked, remove the magic string (if present).
-  // - If incremental installer failed, append a magic string (if
-  //   not present already).
-  // - If full installer failed, still remove this magic
-  //   string (if it is present already).
-  // Additionally, any legacy ""-stage:*" values are
-  // unconditionally removed.
-  //
-  // archive_type: tells whether this is incremental install or not.
-  // install_return_code: if 0, means installation was successful.
-  // value: current value of Google Update "ap" key.
+  // This method unconditionally clears legacy "-full" modifiers from |value|.
   // Returns true if |value| is modified.
-  static bool UpdateGoogleUpdateApKey(installer::ArchiveType archive_type,
-                                      int install_return_code,
-                                      installer::ChannelInfo* value);
+  static bool UpdateGoogleUpdateApKey(installer::AdditionalParameters& value);
 
   // Returns the effective update policy for |app_guid| as dictated by
   // Group Policy settings.  |is_overridden|, if non-nullptr, is populated with
   // true if an app-specific policy override is in force, or false otherwise.
-  static UpdatePolicy GetAppUpdatePolicy(base::WStringPiece app_guid,
+  static UpdatePolicy GetAppUpdatePolicy(std::wstring_view app_guid,
                                          bool* is_overridden);
 
   // Returns true if Chrome should be updated automatically by Google Update
@@ -266,24 +246,6 @@ class GoogleUpdateSettings {
   // Returns product data for the current product. (Equivalent to calling
   // GetUpdateDetailForApp with the current install mode's app guid.)
   static bool GetUpdateDetail(ProductData* data);
-
-  // Sets |experiment_labels| as the Google Update experiment_labels value in
-  // the ClientState key for this Chrome product, if appropriate. If
-  // |experiment_labels| is empty, this will delete the value instead. This will
-  // return true if the label was successfully set (or deleted), false otherwise
-  // (even if the label does not need to be set for this particular brand).
-  static bool SetExperimentLabels(const std::wstring& experiment_labels);
-
-  // Reads the Google Update experiment_labels value in the ClientState key for
-  // this Chrome product and writes it into |experiment_labels|. If the key or
-  // value does not exist, |experiment_labels| will be set to the empty string.
-  // If this brand does not set the experiment_labels value, this will do
-  // nothing to |experiment_labels|. This will return true if the label did not
-  // exist, or was successfully read.
-  static bool ReadExperimentLabels(std::wstring* experiment_labels);
-
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(GoogleUpdateSettings);
 };
 
 #endif  // CHROME_INSTALLER_UTIL_GOOGLE_UPDATE_SETTINGS_H_

@@ -34,11 +34,13 @@
 
 #include <memory>
 
+#include "base/time/time.h"
 #include "third_party/blink/public/web/web_frame_load_type.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/loader/frame_loader_types.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/core/probe/async_task_context.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 
@@ -80,6 +82,7 @@ class CORE_EXPORT HttpRefreshScheduler final
     KURL url;
     ClientNavigationReason reason;
     base::TimeTicks input_timestamp;
+    probe::AsyncTaskContext async_task_context;
   };
   std::unique_ptr<ScheduledHttpRefresh> refresh_;
 };

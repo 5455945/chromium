@@ -1,17 +1,23 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/peerconnection/mock_data_channel_impl.h"
 
-#include "base/notreached.h"
+#include <cstdint>
+#include <string>
+#include <utility>
+
+#include "base/notimplemented.h"
+#include "third_party/abseil-cpp/absl/functional/any_invocable.h"
+#include "third_party/webrtc/api/data_channel_interface.h"
+#include "third_party/webrtc/api/rtc_error.h"
 
 namespace blink {
 
 MockDataChannel::MockDataChannel(const std::string& label,
                                  const webrtc::DataChannelInit* config)
     : label_(label),
-      reliable_(config->reliable),
       state_(webrtc::DataChannelInterface::kConnecting),
       config_(*config),
       observer_(nullptr) {}
@@ -28,10 +34,6 @@ void MockDataChannel::UnregisterObserver() {
 
 std::string MockDataChannel::label() const {
   return label_;
-}
-
-bool MockDataChannel::reliable() const {
-  return reliable_;
 }
 
 bool MockDataChannel::ordered() const {
@@ -93,6 +95,18 @@ void MockDataChannel::Close() {
 
 bool MockDataChannel::Send(const webrtc::DataBuffer& buffer) {
   return state_ == webrtc::DataChannelInterface::kOpen;
+}
+
+void MockDataChannel::SendAsync(
+    webrtc::DataBuffer buffer,
+    absl::AnyInvocable<void(webrtc::RTCError) &&> on_complete) {
+  if (!on_complete) {
+    return;
+  }
+  std::move(on_complete)(
+      state_ == webrtc::DataChannelInterface::kOpen
+          ? webrtc::RTCError::OK()
+          : webrtc::RTCError(webrtc::RTCErrorType::INVALID_STATE));
 }
 
 }  // namespace blink

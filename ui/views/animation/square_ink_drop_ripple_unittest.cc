@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,6 +10,7 @@
 #include "base/numerics/safe_conversions.h"
 #include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/compositor/compositor.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/geometry/size_f.h"
@@ -19,24 +20,21 @@
 #include "ui/views/animation/test/test_ink_drop_ripple_observer.h"
 #include "ui/views/test/widget_test.h"
 
-namespace views {
-namespace test {
+namespace views::test {
 
 namespace {
 
 using PaintedShape = views::test::SquareInkDropRippleTestApi::PaintedShape;
 
-// Transforms a copy of |point| with |transform| and returns it.
-gfx::Point TransformPoint(const gfx::Transform& transform,
-                          const gfx::Point& point) {
-  gfx::Point transformed_point = point;
-  transform.TransformPoint(&transformed_point);
-  return transformed_point;
-}
-
 class SquareInkDropRippleCalculateTransformsTest : public WidgetTest {
  public:
   SquareInkDropRippleCalculateTransformsTest();
+
+  SquareInkDropRippleCalculateTransformsTest(
+      const SquareInkDropRippleCalculateTransformsTest&) = delete;
+  SquareInkDropRippleCalculateTransformsTest& operator=(
+      const SquareInkDropRippleCalculateTransformsTest&) = delete;
+
   ~SquareInkDropRippleCalculateTransformsTest() override;
 
  protected:
@@ -68,6 +66,7 @@ class SquareInkDropRippleCalculateTransformsTest : public WidgetTest {
 
   // The test target.
   SquareInkDropRipple ink_drop_ripple_{
+      nullptr,
       gfx::Size(kDrawnSize, kDrawnSize),
       2,
       gfx::Size(kHalfDrawnSize, kHalfDrawnSize),
@@ -82,9 +81,6 @@ class SquareInkDropRippleCalculateTransformsTest : public WidgetTest {
   // The gfx::Transforms collection that is populated via the
   // Calculate*Transforms() calls.
   SquareInkDropRippleTestApi::InkDropTransforms transforms_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(SquareInkDropRippleCalculateTransformsTest);
 };
 
 SquareInkDropRippleCalculateTransformsTest::
@@ -151,16 +147,13 @@ TEST_F(SquareInkDropRippleCalculateTransformsTest,
     SCOPED_TRACE(testing::Message() << " shape=" << shape);
     gfx::Transform transform = transforms_[shape];
 
-    EXPECT_EQ(test_case.center_point,
-              TransformPoint(transform, kDrawnCenterPoint));
-    EXPECT_EQ(test_case.mid_left_point,
-              TransformPoint(transform, kDrawnMidLeftPoint));
+    EXPECT_EQ(test_case.center_point, transform.MapPoint(kDrawnCenterPoint));
+    EXPECT_EQ(test_case.mid_left_point, transform.MapPoint(kDrawnMidLeftPoint));
     EXPECT_EQ(test_case.mid_right_point,
-              TransformPoint(transform, kDrawnMidRightPoint));
-    EXPECT_EQ(test_case.top_mid_point,
-              TransformPoint(transform, kDrawnTopMidPoint));
+              transform.MapPoint(kDrawnMidRightPoint));
+    EXPECT_EQ(test_case.top_mid_point, transform.MapPoint(kDrawnTopMidPoint));
     EXPECT_EQ(test_case.bottom_mid_point,
-              TransformPoint(transform, kDrawnBottomMidPoint));
+              transform.MapPoint(kDrawnBottomMidPoint));
   }
 }
 
@@ -214,16 +207,13 @@ TEST_F(SquareInkDropRippleCalculateTransformsTest,
     SCOPED_TRACE(testing::Message() << " shape=" << shape);
     gfx::Transform transform = transforms_[shape];
 
-    EXPECT_EQ(test_case.center_point,
-              TransformPoint(transform, kDrawnCenterPoint));
-    EXPECT_EQ(test_case.mid_left_point,
-              TransformPoint(transform, kDrawnMidLeftPoint));
+    EXPECT_EQ(test_case.center_point, transform.MapPoint(kDrawnCenterPoint));
+    EXPECT_EQ(test_case.mid_left_point, transform.MapPoint(kDrawnMidLeftPoint));
     EXPECT_EQ(test_case.mid_right_point,
-              TransformPoint(transform, kDrawnMidRightPoint));
-    EXPECT_EQ(test_case.top_mid_point,
-              TransformPoint(transform, kDrawnTopMidPoint));
+              transform.MapPoint(kDrawnMidRightPoint));
+    EXPECT_EQ(test_case.top_mid_point, transform.MapPoint(kDrawnTopMidPoint));
     EXPECT_EQ(test_case.bottom_mid_point,
-              TransformPoint(transform, kDrawnBottomMidPoint));
+              transform.MapPoint(kDrawnBottomMidPoint));
   }
 }
 
@@ -232,7 +222,7 @@ TEST_F(SquareInkDropRippleCalculateTransformsTest, RippleIsPixelAligned) {
   // scale factor.
   constexpr gfx::Point kCenter(14, 14);
   constexpr gfx::Rect kDrawnRectBounds(0, 0, 10, 10);
-  SquareInkDropRipple ink_drop_ripple(kDrawnRectBounds.size(), 2,
+  SquareInkDropRipple ink_drop_ripple(nullptr, kDrawnRectBounds.size(), 2,
                                       gfx::Size(1, 1),  // unimportant
                                       1, kCenter, SK_ColorBLACK, 0.175f);
   SquareInkDropRippleTestApi test_api(&ink_drop_ripple);
@@ -240,9 +230,9 @@ TEST_F(SquareInkDropRippleCalculateTransformsTest, RippleIsPixelAligned) {
   // Add to a widget so we can control the DSF.
   auto* widget = CreateTopLevelPlatformWidget();
   widget->SetBounds(gfx::Rect(0, 0, 100, 100));
-  auto* host_view = new View();
+  auto* host_view =
+      widget->GetContentsView()->AddChildView(std::make_unique<View>());
   host_view->SetPaintToLayer();
-  widget->GetContentsView()->AddChildView(host_view);
   host_view->layer()->Add(ink_drop_ripple.GetRootLayer());
 
   // Test a variety of scale factors and target transform sizes.
@@ -282,14 +272,14 @@ TEST_F(SquareInkDropRippleCalculateTransformsTest, RippleIsPixelAligned) {
       // what the target size was you should get an integer aligned bounding
       // box.
       gfx::Transform transform = transforms[PaintedShape::HORIZONTAL_RECT];
-      gfx::RectF horizontal_rect(kDrawnRectBounds);
-      transform.TransformRect(&horizontal_rect);
+      gfx::RectF horizontal_rect =
+          transform.MapRect(gfx::RectF(kDrawnRectBounds));
       horizontal_rect.Scale(dsf);
       verify_bounds(horizontal_rect);
 
       transform = transforms[PaintedShape::VERTICAL_RECT];
-      gfx::RectF vertical_rect(kDrawnRectBounds);
-      transform.TransformRect(&vertical_rect);
+      gfx::RectF vertical_rect =
+          transform.MapRect(gfx::RectF(kDrawnRectBounds));
       vertical_rect.Scale(dsf);
       verify_bounds(vertical_rect);
     }
@@ -298,5 +288,4 @@ TEST_F(SquareInkDropRippleCalculateTransformsTest, RippleIsPixelAligned) {
   widget->CloseNow();
 }
 
-}  // namespace test
-}  // namespace views
+}  // namespace views::test

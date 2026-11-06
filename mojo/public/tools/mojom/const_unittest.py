@@ -1,9 +1,8 @@
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 from mojom_parser_test_case import MojomParserTestCase
-from mojom.generate import module as mojom
 
 
 class ConstTest(MojomParserTestCase):
@@ -41,14 +40,16 @@ class ConstTest(MojomParserTestCase):
     self.WriteFile(a_mojom, 'module a; enum E { kA = 41, kB };')
     b_mojom = 'b.mojom'
     self.WriteFile(
-        b_mojom, """\
+      b_mojom,
+      """\
       import "a.mojom";
       const a.E kE1 = a.E.kB;
 
       // We also allow value names to be unqualified, implying scope from the
       // constant's type.
       const a.E kE2 = kB;
-      """)
+      """,
+    )
     self.ParseMojoms([a_mojom, b_mojom])
     a = self.LoadModule(a_mojom)
     b = self.LoadModule(b_mojom)

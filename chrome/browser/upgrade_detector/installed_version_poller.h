@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,14 @@
 
 #include <memory>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/upgrade_detector/get_installed_version.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class BuildState;
 class InstalledVersionMonitor;
@@ -41,7 +41,7 @@ class InstalledVersionPoller {
   // A type of callback that is run (in the background) to get the currently
   // installed version of the browser.
   using GetInstalledVersionCallback =
-      base::RepeatingCallback<InstalledAndCriticalVersion()>;
+      base::RepeatingCallback<void(InstalledVersionCallback)>;
 
   // A constructor for tests that provide a mock source of time and a mock
   // version getter.
@@ -93,7 +93,7 @@ class InstalledVersionPoller {
                           InstalledAndCriticalVersion installed_version);
 
   SEQUENCE_CHECKER(sequence_checker_);
-  BuildState* const build_state_;
+  raw_ptr<BuildState> const build_state_;
   const GetInstalledVersionCallback get_installed_version_;
   base::OneShotTimer timer_;
 

@@ -1,20 +1,24 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/base/fake_audio_renderer_sink.h"
 
-#include "base/bind.h"
+#include <array>
+
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/notimplemented.h"
+#include "base/task/sequenced_task_runner.h"
+#include "media/base/audio_glitch_info.h"
 
 namespace media {
 
 FakeAudioRendererSink::FakeAudioRendererSink()
     : FakeAudioRendererSink(
           AudioParameters(AudioParameters::AUDIO_FAKE,
-                          CHANNEL_LAYOUT_STEREO,
+                          ChannelLayoutConfig::Stereo(),
                           AudioParameters::kTelephoneSampleRate,
                           1)) {}
 
@@ -55,14 +59,14 @@ void FakeAudioRendererSink::Flush() {
   DCHECK_NE(state_, kPlaying);
 }
 
-void FakeAudioRendererSink::Pause() {
+void FakeAudioRendererSink::Pause(PauseReason reason) {
   DCHECK(state_ == kStarted || state_ == kPlaying) << "state_ " << state_;
+  last_pause_reason_ = reason;
   ChangeState(kPaused);
 }
 
 void FakeAudioRendererSink::Play() {
   DCHECK(state_ == kStarted || state_ == kPaused) << "state_ " << state_;
-  DCHECK_EQ(state_, kPaused);
   ChangeState(kPlaying);
 }
 
@@ -76,7 +80,7 @@ OutputDeviceInfo FakeAudioRendererSink::GetOutputDeviceInfo() {
 
 void FakeAudioRendererSink::GetOutputDeviceInfoAsync(
     OutputDeviceInfoCB info_cb) {
-  base::SequencedTaskRunnerHandle::Get()->PostTask(
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(std::move(info_cb), output_device_info_));
 }
 
@@ -95,7 +99,7 @@ bool FakeAudioRendererSink::Render(AudioBus* dest,
   if (state_ != kPlaying)
     return false;
 
-  *frames_written = callback_->Render(delay, base::TimeTicks::Now(), 0, dest);
+  *frames_written = callback_->Render(delay, base::TimeTicks::Now(), {}, dest);
   return true;
 }
 
@@ -111,14 +115,14 @@ void FakeAudioRendererSink::SetIsOptimizedForHardwareParameters(bool value) {
 }
 
 void FakeAudioRendererSink::ChangeState(State new_state) {
-  static const char* kStateNames[] = {
-    "kUninitialized",
-    "kInitialized",
-    "kStarted",
-    "kPaused",
-    "kPlaying",
-    "kStopped"
-  };
+  static auto kStateNames = std::to_array<const char*>({
+      "kUninitialized",
+      "kInitialized",
+      "kStarted",
+      "kPaused",
+      "kPlaying",
+      "kStopped",
+  });
 
   DVLOG(1) << __func__ << " : " << kStateNames[state_] << " -> "
            << kStateNames[new_state];

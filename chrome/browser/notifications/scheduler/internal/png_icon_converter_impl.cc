@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,8 @@
 #include <utility>
 
 #include "base/base64.h"
-#include "base/task/post_task.h"
+#include "base/containers/span.h"
+#include "base/strings/string_view_util.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/thread_restrictions.h"
 #include "chrome/browser/notifications/scheduler/internal/icon_entry.h"
@@ -18,33 +19,31 @@ namespace notifications {
 namespace {
 
 std::unique_ptr<EncodeResult> ConvertIconToStringInternal(
-    std::vector<SkBitmap> images) {
+    const std::vector<SkBitmap>& images) {
   base::AssertLongCPUWorkAllowed();
   std::vector<std::string> encoded_data;
-  for (size_t i = 0; i < images.size(); i++) {
-    std::vector<unsigned char> image_data;
-    bool success = gfx::PNGCodec::EncodeBGRASkBitmap(
-        std::move(images[i]), false /*discard_transparency*/, &image_data);
-    if (!success)
+  for (const auto& image : images) {
+    std::optional<std::vector<uint8_t>> image_data =
+        gfx::PNGCodec::EncodeBGRASkBitmap(image,
+                                          /*discard_transparency=*/false);
+    if (!image_data) {
       return std::make_unique<EncodeResult>(false, std::vector<std::string>());
-    std::string encoded(image_data.begin(), image_data.end());
-    encoded_data.emplace_back(std::move(encoded));
+    }
+    encoded_data.emplace_back(base::as_string_view(image_data.value()));
   }
   return std::make_unique<EncodeResult>(
       true, std::vector<std::string>(std::move(encoded_data)));
 }
 
 std::unique_ptr<DecodeResult> ConvertStringToIconInternal(
-    std::vector<std::string> encoded_data) {
+    const std::vector<std::string>& encoded_data) {
   base::AssertLongCPUWorkAllowed();
   std::vector<SkBitmap> icons;
-  for (size_t i = 0; i < encoded_data.size(); i++) {
-    SkBitmap image;
-    bool success = gfx::PNGCodec::Decode(reinterpret_cast<const unsigned char*>(
-                                             std::move(encoded_data[i]).data()),
-                                         encoded_data[i].length(), &image);
-    if (!success)
+  for (const auto& data : encoded_data) {
+    SkBitmap image = gfx::PNGCodec::Decode(base::as_byte_span(data));
+    if (image.isNull()) {
       return std::make_unique<DecodeResult>(false, std::vector<SkBitmap>());
+    }
 
     icons.emplace_back(std::move(image));
   }
@@ -60,7 +59,7 @@ PngIconConverterImpl::~PngIconConverterImpl() = default;
 
 void PngIconConverterImpl::ConvertIconToString(std::vector<SkBitmap> images,
                                                EncodeCallback callback) {
-  DCHECK(callback);
+  CHECK(callback, base::NotFatalUntil::M161);
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
       base::BindOnce(&ConvertIconToStringInternal, std::move(images)),
@@ -70,7 +69,7 @@ void PngIconConverterImpl::ConvertIconToString(std::vector<SkBitmap> images,
 void PngIconConverterImpl::ConvertStringToIcon(
     std::vector<std::string> encoded_data,
     DecodeCallback callback) {
-  DCHECK(callback);
+  CHECK(callback, base::NotFatalUntil::M161);
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
       base::BindOnce(&ConvertStringToIconInternal, std::move(encoded_data)),

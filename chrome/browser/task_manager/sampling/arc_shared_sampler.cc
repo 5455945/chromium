@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,9 @@
 
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check_op.h"
-#include "chrome/browser/ash/arc/process/arc_process_service.h"
+#include "base/functional/bind.h"
+#include "chromeos/ash/experiences/arc/process/arc_process_service.h"
 #include "content/public/browser/browser_thread.h"
 
 namespace task_manager {
@@ -29,20 +29,20 @@ ArcSharedSampler::~ArcSharedSampler() = default;
 void ArcSharedSampler::RegisterCallback(
     base::ProcessId process_id,
     OnSamplingCompleteCallback on_sampling_complete) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK_NE(process_id, base::kNullProcessId);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+  CHECK_NE(process_id, base::kNullProcessId, base::NotFatalUntil::M162);
   const bool result =
       callbacks_.emplace(process_id, std::move(on_sampling_complete)).second;
-  DCHECK(result);
+  CHECK(result, base::NotFatalUntil::M162);
 }
 
 void ArcSharedSampler::UnregisterCallback(base::ProcessId process_id) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   callbacks_.erase(process_id);
 }
 
 void ArcSharedSampler::Refresh() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   arc::ArcProcessService* arc_process_service = arc::ArcProcessService::Get();
   if (!arc_process_service)
     return;
@@ -74,7 +74,7 @@ void ArcSharedSampler::Refresh() {
 void ArcSharedSampler::OnReceiveMemoryDump(
     int type,
     std::vector<arc::mojom::ArcMemoryDumpPtr> process_dump) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   pending_memory_dump_types_ &= ~type;
 
   const auto now = base::Time::Now();
@@ -88,7 +88,7 @@ void ArcSharedSampler::OnReceiveMemoryDump(
     if (it == callbacks_.end())
       continue;
     const MemoryFootprintBytes result = proc->private_footprint_kb * 1024;
-    it->second.Run(absl::make_optional<MemoryFootprintBytes>(result));
+    it->second.Run(std::make_optional<MemoryFootprintBytes>(result));
   }
 }
 

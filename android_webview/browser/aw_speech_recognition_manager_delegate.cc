@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,20 +6,20 @@
 
 #include <string>
 
-#include "base/bind.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/speech_recognition_manager.h"
 #include "content/public/browser/speech_recognition_session_context.h"
 #include "content/public/browser/web_contents.h"
-#include "third_party/blink/public/mojom/speech/speech_recognition_error.mojom.h"
-#include "third_party/blink/public/mojom/speech/speech_recognition_result.mojom.h"
+#include "media/mojo/mojom/speech_recognition_error.mojom.h"
+#include "media/mojo/mojom/speech_recognition_result.mojom.h"
 
 using content::BrowserThread;
 
@@ -33,9 +33,6 @@ void AwSpeechRecognitionManagerDelegate::OnRecognitionStart(int session_id) {}
 
 void AwSpeechRecognitionManagerDelegate::OnAudioStart(int session_id) {}
 
-void AwSpeechRecognitionManagerDelegate::OnEnvironmentEstimationComplete(
-    int session_id) {}
-
 void AwSpeechRecognitionManagerDelegate::OnSoundStart(int session_id) {}
 
 void AwSpeechRecognitionManagerDelegate::OnSoundEnd(int session_id) {}
@@ -44,11 +41,11 @@ void AwSpeechRecognitionManagerDelegate::OnAudioEnd(int session_id) {}
 
 void AwSpeechRecognitionManagerDelegate::OnRecognitionResults(
     int session_id,
-    const std::vector<blink::mojom::SpeechRecognitionResultPtr>& result) {}
+    const std::vector<media::mojom::WebSpeechRecognitionResultPtr>& result) {}
 
 void AwSpeechRecognitionManagerDelegate::OnRecognitionError(
     int session_id,
-    const blink::mojom::SpeechRecognitionError& error) {}
+    const media::mojom::SpeechRecognitionError& error) {}
 
 void AwSpeechRecognitionManagerDelegate::OnAudioLevelsChange(
     int session_id,
@@ -68,22 +65,20 @@ void AwSpeechRecognitionManagerDelegate::CheckRecognitionIsAllowed(
 
   // Make sure that initiators (extensions/web pages) properly set the
   // |render_process_id| field, which is needed later to retrieve the profile.
-  DCHECK_NE(context.render_process_id, 0);
+  DCHECK(context.global_id.child_id);
 
-  int render_process_id = context.render_process_id;
-  int render_frame_id = context.render_frame_id;
-  if (context.embedder_render_process_id) {
+  content::GlobalRenderFrameHostId global_id = context.global_id;
+  if (context.embedder_global_id.child_id) {
     // If this is a request originated from a guest, we need to re-route the
     // permission check through the embedder (app).
-    render_process_id = context.embedder_render_process_id;
-    render_frame_id = context.embedder_render_frame_id;
+    global_id = context.embedder_global_id;
   }
 
   // Check that the render frame type is appropriate, and whether or not we
   // need to request permission from the user.
   content::GetUIThreadTaskRunner({})->PostTask(
-      FROM_HERE, base::BindOnce(&CheckRenderFrameType, std::move(callback),
-                                render_process_id, render_frame_id));
+      FROM_HERE,
+      base::BindOnce(&CheckRenderFrameType, std::move(callback), global_id));
 }
 
 content::SpeechRecognitionEventListener*
@@ -91,18 +86,10 @@ AwSpeechRecognitionManagerDelegate::GetEventListener() {
   return this;
 }
 
-bool AwSpeechRecognitionManagerDelegate::FilterProfanities(
-    int render_process_id) {
-  // TODO: to confirm whether this setting is relevant for android,
-  // https://crbug.com/876801.
-  return false;
-}
-
 // static.
 void AwSpeechRecognitionManagerDelegate::CheckRenderFrameType(
     base::OnceCallback<void(bool ask_user, bool is_allowed)> callback,
-    int render_process_id,
-    int render_frame_id) {
+    content::GlobalRenderFrameHostId global_id) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   // Regular tab contents.

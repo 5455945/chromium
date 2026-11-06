@@ -1,17 +1,19 @@
-// Copyright (c) 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/browser/api/clipboard/clipboard_api.h"
 
+#include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/lazy_instance.h"
 #include "base/strings/string_util.h"
 #include "base/values.h"
 #include "extensions/browser/api/extensions_api_client.h"
 #include "extensions/browser/event_router.h"
+#include "extensions/common/event_args.h"
 #include "ui/base/clipboard/clipboard_monitor.h"
 
 namespace extensions {
@@ -30,43 +32,41 @@ ClipboardAPI::GetFactoryInstance() {
 
 ClipboardAPI::ClipboardAPI(content::BrowserContext* context)
     : browser_context_(context) {
-  ui::ClipboardMonitor::GetInstance()->AddObserver(this);
+  clipboard_monitor_observation_.Observe(ui::ClipboardMonitor::GetInstance());
 }
 
-ClipboardAPI::~ClipboardAPI() {
-  ui::ClipboardMonitor::GetInstance()->RemoveObserver(this);
-}
+ClipboardAPI::~ClipboardAPI() = default;
 
 void ClipboardAPI::OnClipboardDataChanged() {
   EventRouter* router = EventRouter::Get(browser_context_);
   if (router &&
       router->HasEventListener(clipboard::OnClipboardDataChanged::kEventName)) {
-    std::unique_ptr<Event> event(
-        new Event(events::CLIPBOARD_ON_CLIPBOARD_DATA_CHANGED,
-                  clipboard::OnClipboardDataChanged::kEventName,
-                  std::vector<base::Value>()));
+    auto event_args = base::MakeRefCounted<EventArgs>();
+    auto event = std::make_unique<Event>(
+        events::CLIPBOARD_ON_CLIPBOARD_DATA_CHANGED,
+        clipboard::OnClipboardDataChanged::kEventName, std::move(event_args));
     router->BroadcastEvent(std::move(event));
   }
 }
 
-ClipboardSetImageDataFunction::~ClipboardSetImageDataFunction() {}
+ClipboardSetImageDataFunction::~ClipboardSetImageDataFunction() = default;
 
 ExtensionFunction::ResponseAction ClipboardSetImageDataFunction::Run() {
-  std::unique_ptr<clipboard::SetImageData::Params> params(
-      clipboard::SetImageData::Params::Create(*args_));
+  std::optional<clipboard::SetImageData::Params> params =
+      clipboard::SetImageData::Params::Create(args());
   EXTENSION_FUNCTION_VALIDATE(params);
 
   // Fill in the omitted additional data items with empty data.
   if (!params->additional_items)
-    params->additional_items = std::make_unique<AdditionalDataItemList>();
+    params->additional_items.emplace();
 
   if (!IsAdditionalItemsParamValid(*params->additional_items)) {
     return RespondNow(Error("Unsupported additionalItems parameter data."));
   }
 
   ExtensionsAPIClient::Get()->SaveImageDataToClipboard(
-      std::vector<char>(params->image_data.begin(), params->image_data.end()),
-      params->type, std::move(*params->additional_items),
+      std::move(params->image_data), params->type,
+      std::move(*params->additional_items),
       base::BindOnce(&ClipboardSetImageDataFunction::OnSaveImageDataSuccess,
                      this),
       base::BindOnce(&ClipboardSetImageDataFunction::OnSaveImageDataError,
@@ -92,12 +92,12 @@ bool ClipboardSetImageDataFunction::IsAdditionalItemsParamValid(
   bool has_text_html = false;
   for (const clipboard::AdditionalDataItem& item : items) {
     switch (item.type) {
-      case clipboard::DATA_ITEM_TYPE_TEXTPLAIN:
+      case clipboard::DataItemType::kTextPlain:
         if (has_text_plain)
           return false;
         has_text_plain = true;
         break;
-      case clipboard::DATA_ITEM_TYPE_TEXTHTML:
+      case clipboard::DataItemType::kTextHtml:
         if (has_text_html)
           return false;
         has_text_html = true;

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,19 +10,18 @@
 #include <utility>
 #include <vector>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/usb/usb_chooser_context.h"
 #include "components/permissions/chooser_controller.h"
+#include "content/public/browser/global_routing_id.h"
 #include "services/device/public/mojom/usb_device.mojom.h"
 #include "third_party/blink/public/mojom/usb/web_usb_service.mojom.h"
 #include "url/origin.h"
 
 namespace content {
 class RenderFrameHost;
-class WebContents;
 }
 
 // UsbChooserController creates a chooser for WebUSB.
@@ -31,8 +30,12 @@ class UsbChooserController : public permissions::ChooserController,
  public:
   UsbChooserController(
       content::RenderFrameHost* render_frame_host,
-      std::vector<device::mojom::UsbDeviceFilterPtr> device_filters,
+      blink::mojom::WebUsbRequestDeviceOptionsPtr options,
       blink::mojom::WebUsbService::GetPermissionCallback callback);
+
+  UsbChooserController(const UsbChooserController&) = delete;
+  UsbChooserController& operator=(const UsbChooserController&) = delete;
+
   ~UsbChooserController() override;
 
   // permissions::ChooserController:
@@ -52,17 +55,19 @@ class UsbChooserController : public permissions::ChooserController,
   void OnDeviceAdded(const device::mojom::UsbDeviceInfo& device_info) override;
   void OnDeviceRemoved(
       const device::mojom::UsbDeviceInfo& device_info) override;
-  void OnDeviceManagerConnectionError() override;
+  void OnBrowserContextShutdown() override;
 
  private:
   void GotUsbDeviceList(std::vector<device::mojom::UsbDeviceInfoPtr> devices);
   bool DisplayDevice(const device::mojom::UsbDeviceInfo& device) const;
 
-  std::vector<device::mojom::UsbDeviceFilterPtr> filters_;
+  blink::mojom::WebUsbRequestDeviceOptionsPtr options_;
   blink::mojom::WebUsbService::GetPermissionCallback callback_;
   url::Origin origin_;
 
-  content::WebContents* const web_contents_;
+  // Hold the GlobalRenderFrameHostId for requesting frame so we can always
+  // check whether the frame host is still valid before we access it.
+  const content::GlobalRenderFrameHostId render_frame_host_id_;
   base::WeakPtr<UsbChooserContext> chooser_context_;
   base::ScopedObservation<UsbChooserContext, UsbChooserContext::DeviceObserver>
       observation_{this};
@@ -72,8 +77,6 @@ class UsbChooserController : public permissions::ChooserController,
   // Maps from device name to number of devices.
   std::unordered_map<std::u16string, int> device_name_map_;
   base::WeakPtrFactory<UsbChooserController> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(UsbChooserController);
 };
 
 #endif  // CHROME_BROWSER_USB_USB_CHOOSER_CONTROLLER_H_

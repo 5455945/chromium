@@ -32,9 +32,10 @@
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_WEBSOCKETS_WEBSOCKET_CHANNEL_CLIENT_H_
 
 #include <stdint.h>
+
 #include "base/containers/span.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
@@ -47,7 +48,7 @@ class MODULES_EXPORT WebSocketChannelClient : public GarbageCollectedMixin {
   }
   virtual void DidReceiveTextMessage(const String&) {}
   virtual void DidReceiveBinaryMessage(
-      const Vector<base::span<const char>>& data) {}
+      const Vector<base::span<const uint8_t>>& data) {}
   virtual void DidError() {}
   virtual void DidConsumeBufferedAmount(uint64_t consumed) {}
   virtual void DidStartClosingHandshake() {}

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,17 +9,16 @@
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
-#include "net/base/io_buffer.h"
-#include "net/base/net_errors.h"
-#include "net/base/test_completion_callback.h"
-#include "storage/browser/file_system/file_stream_test_utils.h"
+#include "base/task/single_thread_task_runner.h"
+#include "storage/browser/file_system/file_stream_writer.h"
 #include "storage/browser/file_system/file_stream_writer_test.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/test/android/content_uri_test_utils.h"
+#endif
 
 namespace storage {
 
@@ -52,9 +51,9 @@ class LocalFileStreamWriterTest : public FileStreamWriterTest {
 
   std::unique_ptr<FileStreamWriter> CreateWriter(const std::string& name,
                                                  int64_t offset) override {
-    return base::WrapUnique(
-        new LocalFileStreamWriter(file_task_runner(), Path(name), offset,
-                                  FileStreamWriter::OPEN_EXISTING_FILE));
+    return FileStreamWriter::CreateForLocalFile(
+        file_task_runner(), Path(name), offset,
+        FileStreamWriter::OPEN_EXISTING_FILE);
   }
 
   bool FilePathExists(const std::string& name) override {
@@ -79,5 +78,50 @@ class LocalFileStreamWriterTest : public FileStreamWriterTest {
 INSTANTIATE_TYPED_TEST_SUITE_P(Local,
                                FileStreamWriterTypedTest,
                                LocalFileStreamWriterTest);
+
+#if BUILDFLAG(IS_ANDROID)
+class ContentUriLocalFileStreamWriterTest : public LocalFileStreamWriterTest {};
+
+TEST_F(ContentUriLocalFileStreamWriterTest, WriteAlwaysTruncates) {
+  EXPECT_TRUE(
+      this->CreateFileWithContent(std::string(this->kTestFileName), "foobar"));
+
+  base::FilePath content_uri =
+      *base::test::android::GetContentUriFromCacheDirFilePath(
+          Path(std::string(this->kTestFileName)));
+
+  auto writer = FileStreamWriter::CreateForLocalFile(
+      file_task_runner(), content_uri, 0, FileStreamWriter::OPEN_EXISTING_FILE);
+
+  EXPECT_EQ(net::OK, WriteStringToWriter(writer.get(), "foo"));
+
+  EXPECT_TRUE(this->FilePathExists(std::string(this->kTestFileName)));
+  EXPECT_EQ("foo", this->GetFileContent(std::string(this->kTestFileName)));
+}
+
+TEST_F(ContentUriLocalFileStreamWriterTest,
+       VirtualDocumentPathWriteAlwaysTruncates) {
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+  base::FilePath dir_vp =
+      *base::test::android::GetVirtualDocumentPathFromCacheDirDirectory(
+          temp_dir.GetPath());
+  base::FilePath file_vp = dir_vp.Append("test_file");
+  ASSERT_TRUE(file_vp.IsVirtualDocumentPath());
+
+  base::FilePath file_path = temp_dir.GetPath().AppendASCII("test_file");
+  ASSERT_TRUE(base::WriteFile(file_path, "foobar"));
+
+  auto writer = FileStreamWriter::CreateForLocalFile(
+      file_task_runner(), file_vp, 0, FileStreamWriter::OPEN_EXISTING_FILE);
+
+  EXPECT_EQ(net::OK, WriteStringToWriter(writer.get(), "foo"));
+
+  EXPECT_TRUE(base::PathExists(file_path));
+  std::string content;
+  ASSERT_TRUE(base::ReadFileToString(file_path, &content));
+  EXPECT_EQ("foo", content);
+}
+#endif
 
 }  // namespace storage

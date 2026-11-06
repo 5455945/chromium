@@ -1,9 +1,12 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/filters/ffmpeg_aac_bitstream_converter.h"
 
+#include <algorithm>
+
+#include "base/containers/span.h"
 #include "base/logging.h"
 #include "media/ffmpeg/ffmpeg_common.h"
 
@@ -12,26 +15,25 @@ namespace media {
 namespace {
 
 // Creates an ADTS header and stores in |hdr|
-// Assumes |hdr| points to an array of length |kAdtsHeaderSize|
 // Returns false if parameter values are for an unsupported configuration.
-bool GenerateAdtsHeader(int codec,
-                        int layer,
-                        int audio_profile,
-                        int sample_rate_index,
-                        int private_stream,
-                        int channel_configuration,
-                        int originality,
-                        int home,
-                        int copyrighted_stream,
-                        int copyright_start,
-                        int frame_length,
-                        int buffer_fullness,
-                        int number_of_frames_minus_one,
-                        uint8_t* hdr) {
+bool GenerateAdtsHeader(
+    int codec,
+    int layer,
+    int audio_profile,
+    int sample_rate_index,
+    int private_stream,
+    int channel_configuration,
+    int originality,
+    int home,
+    int copyrighted_stream,
+    int copyright_start,
+    int frame_length,
+    int buffer_fullness,
+    int number_of_frames_minus_one,
+    base::span<uint8_t, FFmpegAACBitstreamConverter::kAdtsHeaderSize> hdr) {
   DCHECK_EQ(codec, AV_CODEC_ID_AAC);
 
-  memset(reinterpret_cast<void *>(hdr), 0,
-         FFmpegAACBitstreamConverter::kAdtsHeaderSize);
+  std::ranges::fill(hdr, 0);
   // Ref: http://wiki.multimedia.cx/index.php?title=ADTS
   // ADTS header structure is the following
   // AAAAAAAA  AAAABCCD  EEFFFFGH  HHIJKLMM  MMMMMMMM  MMMOOOOO  OOOOOOPP
@@ -63,17 +65,17 @@ bool GenerateAdtsHeader(int codec,
   hdr[1] |= 1;
 
   switch (audio_profile) {
-    case FF_PROFILE_AAC_MAIN:
+    case AV_PROFILE_AAC_MAIN:
       break;
-    case FF_PROFILE_AAC_HE:
-    case FF_PROFILE_AAC_HE_V2:
-    case FF_PROFILE_AAC_LOW:
+    case AV_PROFILE_AAC_HE:
+    case AV_PROFILE_AAC_HE_V2:
+    case AV_PROFILE_AAC_LOW:
       hdr[2] |= (1 << 6);
       break;
-    case FF_PROFILE_AAC_SSR:
+    case AV_PROFILE_AAC_SSR:
       hdr[2] |= (2 << 6);
       break;
-    case FF_PROFILE_AAC_LTP:
+    case AV_PROFILE_AAC_LTP:
       hdr[2] |= (3 << 6);
       break;
     default:
@@ -153,41 +155,35 @@ bool GenerateAdtsHeader(int codec,
 
   return true;
 }
-
 }
 
 FFmpegAACBitstreamConverter::FFmpegAACBitstreamConverter(
     AVCodecParameters* stream_codec_parameters)
-    : stream_codec_parameters_(stream_codec_parameters),
-      header_generated_(false),
-      codec_(),
-      audio_profile_(),
-      sample_rate_index_(),
-      channel_configuration_(),
-      frame_length_() {
+    : stream_codec_parameters_(stream_codec_parameters) {
   CHECK(stream_codec_parameters_);
 }
 
 FFmpegAACBitstreamConverter::~FFmpegAACBitstreamConverter() = default;
 
 bool FFmpegAACBitstreamConverter::ConvertPacket(AVPacket* packet) {
-  if (packet == NULL || !packet->data) {
+  if (packet == nullptr || !packet->data || packet->size <= 0) {
     return false;
   }
 
   int header_plus_packet_size =
       packet->size + kAdtsHeaderSize;
   if (!stream_codec_parameters_->extradata) {
-    DLOG(ERROR) << "extradata is null";
-    return false;
+    DVLOG(3) << "extradata is null";
+    return true;
   }
   if (stream_codec_parameters_->extradata_size < 2) {
     DLOG(ERROR) << "extradata too small to contain MP4A header";
     return false;
   }
+  base::span<const uint8_t> extradata =
+      AVCodecParametersExtraDataToSpan(stream_codec_parameters_.get());
   int sample_rate_index =
-      ((stream_codec_parameters_->extradata[0] & 0x07) << 1) |
-      ((stream_codec_parameters_->extradata[1] & 0x80) >> 7);
+      ((extradata[0] & 0x07) << 1) | ((extradata[1] & 0x80) >> 7);
   if (sample_rate_index > 12) {
     sample_rate_index = 4;
   }
@@ -195,14 +191,15 @@ bool FFmpegAACBitstreamConverter::ConvertPacket(AVPacket* packet) {
   if (!header_generated_ || codec_ != stream_codec_parameters_->codec_id ||
       audio_profile_ != stream_codec_parameters_->profile ||
       sample_rate_index_ != sample_rate_index ||
-      channel_configuration_ != stream_codec_parameters_->channels ||
+      channel_configuration_ !=
+          stream_codec_parameters_->ch_layout.nb_channels ||
       frame_length_ != header_plus_packet_size) {
     header_generated_ =
         GenerateAdtsHeader(stream_codec_parameters_->codec_id,
                            0,  // layer
                            stream_codec_parameters_->profile, sample_rate_index,
                            0,  // private stream
-                           stream_codec_parameters_->channels,
+                           stream_codec_parameters_->ch_layout.nb_channels,
                            0,  // originality
                            0,  // home
                            0,  // copyrighted_stream
@@ -214,7 +211,7 @@ bool FFmpegAACBitstreamConverter::ConvertPacket(AVPacket* packet) {
     codec_ = stream_codec_parameters_->codec_id;
     audio_profile_ = stream_codec_parameters_->profile;
     sample_rate_index_ = sample_rate_index;
-    channel_configuration_ = stream_codec_parameters_->channels;
+    channel_configuration_ = stream_codec_parameters_->ch_layout.nb_channels;
     frame_length_ = header_plus_packet_size;
   }
 
@@ -227,9 +224,10 @@ bool FFmpegAACBitstreamConverter::ConvertPacket(AVPacket* packet) {
   if (av_new_packet(&dest_packet, header_plus_packet_size) != 0)
     return false;  // Memory allocation failure.
 
-  memcpy(dest_packet.data, hdr_, kAdtsHeaderSize);
-  memcpy(reinterpret_cast<void*>(dest_packet.data + kAdtsHeaderSize),
-         reinterpret_cast<void*>(packet->data), packet->size);
+  auto [dest_header, dest_payload] =
+      AVPacketData(dest_packet).split_at<kAdtsHeaderSize>();
+  dest_header.copy_from_nonoverlapping(hdr_);
+  dest_payload.copy_from_nonoverlapping(AVPacketData(*packet));
 
   // This is a bit tricky: since the interface does not allow us to replace
   // the pointer of the old packet with a new one, we will initially copy the
@@ -240,7 +238,7 @@ bool FFmpegAACBitstreamConverter::ConvertPacket(AVPacket* packet) {
   av_packet_unref(packet);
 
   // Finally, replace the values in the input packet.
-  memcpy(packet, &dest_packet, sizeof(*packet));
+  *packet = dest_packet;
   return true;
 }
 

@@ -1,13 +1,20 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {sendWithPromise} from 'chrome://resources/js/cr.m.js';
+import {sendWithPromise} from 'chrome://resources/js/cr.js';
 
-export type Extension = {
-  name: string,
-  permissions: string[],
-};
+export interface Application {
+  name: string;
+  icon?: string;
+  permissions: string[];
+}
+
+export interface Extension {
+  name: string;
+  icon?: string;
+  permissions: string[];
+}
 
 export enum ReportingType {
   SECURITY = 'security',
@@ -15,39 +22,45 @@ export enum ReportingType {
   USER = 'user',
   USER_ACTIVITY = 'user-activity',
   EXTENSIONS = 'extensions',
+  LEGACY_TECH = 'legacy-tech',
+  URL = 'url',
 }
 
-export type BrowserReportingResponse = {
-  messageId: string,
-  reportingType: ReportingType,
-};
+export interface BrowserReportingResponse {
+  messageId: string;
+  reportingType: ReportingType;
+}
 
-type ManagedDataResponse = {
-  browserManagementNotice: string,
-  extensionReportingTitle: string,
-  managedWebsitesSubtitle: string,
-  pageSubtitle: string,
-  managed: boolean,
-  overview: string,
-  customerLogo: string,
-  threatProtectionDescription: string,
-  showUpdateRequiredEol: boolean,
-  eolMessage: string,
-  eolAdminMessage: string,
-  showProxyServerPrivacyDisclosure: boolean,
-};
+interface ManagedDataResponse {
+  applicationReportingSubtitle: string;
+  browserManagementNotice: string;
+  extensionReportingSubtitle: string;
+  managedWebsitesSubtitle: string;
+  pageSubtitle: string;
+  managed: boolean;
+  overview: string;
+  customerLogo: string;
+  threatProtectionDescription: string;
+  showUpdateRequiredEol: boolean;
+  eolMessage: string;
+  eolAdminMessage: string;
+  showMonitoredNetworkPrivacyDisclosure: boolean;
+  showWindowsNoticeForDeskSync: boolean;
+  showCookiesNoticeForDeskSync: boolean;
+}
 
-type ThreatProtectionPermission = {
-  title: string,
-  permission: string,
-};
+interface ThreatProtectionPermission {
+  title: string;
+  permission: string;
+}
 
-export type ThreatProtectionInfo = {
-  info: Array<ThreatProtectionPermission>,
-  description: string,
-};
+export interface ThreatProtectionInfo {
+  info: ThreatProtectionPermission[];
+  description: string;
+  showSecureGatewayDisclosure?: boolean;
+}
 
-// <if expr="chromeos">
+// <if expr="is_chromeos">
 /**
  * @enum {string} Look at ToJSDeviceReportingType usage in
  *    management_ui_handler.cc for more details.
@@ -68,36 +81,46 @@ export enum DeviceReportingType {
   EXTENSION = 'extension',
   ANDROID_APPLICATION = 'android application',
   LOGIN_LOGOUT = 'login-logout',
+  CRD_SESSIONS = 'crd sessions',
+  PERIPHERALS = 'peripherals',
+  LEGACY_TECH = 'legacy-tech',
+  WEBSITE_INFO_AND_ACTIVITY = 'website info and activity',
+  FILE_EVENTS = 'file events',
 }
 
 
-export type DeviceReportingResponse = {
-  messageId: string,
-  reportingType: DeviceReportingType,
-};
+export interface DeviceReportingResponse {
+  messageId: string;
+  reportingType: DeviceReportingType;
+  messageParams?: string[];
+}
 // </if>
 
 /** @interface */
 export interface ManagementBrowserProxy {
-  getExtensions(): Promise<Array<Extension>>;
+  getExtensions(): Promise<Extension[]>;
 
-  getManagedWebsites(): Promise<Array<string>>;
+  getManagedWebsites(): Promise<string[]>;
 
-  // <if expr="chromeos">
+  getApplications(): Promise<Application[]>;
+
+  // <if expr="is_chromeos">
   /**
    * @return Whether trust root configured or not.
    */
   getLocalTrustRootsInfo(): Promise<boolean>;
 
   /**
-   * @return List of items to display in device reporting section.
+   * @return Whether uploading of downloads or screenshots to cloud storages is
+   *     configured.
    */
-  getDeviceReportingInfo(): Promise<Array<DeviceReportingResponse>>;
+  getFilesUploadToCloudInfo(): Promise<string>;
 
   /**
-   * @return Whether the Plugin VM data collection is enabled or not.
+   * @return List of items to display in device reporting section.
    */
-  getPluginVmDataCollectionStatus(): Promise<boolean>;
+  getDeviceReportingInfo(): Promise<DeviceReportingResponse[]>;
+
   // </if>
 
   getContextualManagedData(): Promise<ManagedDataResponse>;
@@ -107,42 +130,79 @@ export interface ManagementBrowserProxy {
   /**
    * @return The list of browser reporting info messages.
    */
-  initBrowserReportingInfo(): Promise<Array<BrowserReportingResponse>>;
+  initBrowserReportingInfo(): Promise<BrowserReportingResponse[]>;
+
+  /**
+   * @return The list of profile reporting info messages.
+   */
+  initProfileReportingInfo(): Promise<BrowserReportingResponse[]>;
+
+  /**
+   * @return Whether the promotion banner should be shown.
+   */
+  shouldShowPromotion(): Promise<boolean>;
+
+  setBannerDismissed(): Promise<void>;
+
+  recordBannerRedirected(): Promise<void>;
 }
 
 export class ManagementBrowserProxyImpl implements ManagementBrowserProxy {
   getExtensions() {
-    return sendWithPromise('getExtensions');
+    return sendWithPromise<Extension[]>('getExtensions');
   }
 
   getManagedWebsites() {
-    return sendWithPromise('getManagedWebsites');
+    return sendWithPromise<string[]>('getManagedWebsites');
   }
 
-  // <if expr="chromeos">
+  getApplications() {
+    return sendWithPromise<Application[]>('getApplications');
+  }
+
+  // <if expr="is_chromeos">
   getLocalTrustRootsInfo() {
-    return sendWithPromise('getLocalTrustRootsInfo');
+    return sendWithPromise<boolean>('getLocalTrustRootsInfo');
+  }
+
+  getFilesUploadToCloudInfo() {
+    return sendWithPromise<string>('getFilesUploadToCloudInfo');
   }
 
   getDeviceReportingInfo() {
-    return sendWithPromise('getDeviceReportingInfo');
+    return sendWithPromise<DeviceReportingResponse[]>('getDeviceReportingInfo');
   }
 
-  getPluginVmDataCollectionStatus() {
-    return sendWithPromise('getPluginVmDataCollectionStatus');
-  }
   // </if>
 
   getContextualManagedData() {
-    return sendWithPromise('getContextualManagedData');
+    return sendWithPromise<ManagedDataResponse>('getContextualManagedData');
   }
 
   getThreatProtectionInfo() {
-    return sendWithPromise('getThreatProtectionInfo');
+    return sendWithPromise<ThreatProtectionInfo>('getThreatProtectionInfo');
   }
 
   initBrowserReportingInfo() {
-    return sendWithPromise('initBrowserReportingInfo');
+    return sendWithPromise<BrowserReportingResponse[]>(
+        'initBrowserReportingInfo');
+  }
+
+  initProfileReportingInfo() {
+    return sendWithPromise<BrowserReportingResponse[]>(
+        'initProfileReportingInfo');
+  }
+
+  shouldShowPromotion() {
+    return sendWithPromise<boolean>('shouldShowPromotion');
+  }
+
+  setBannerDismissed() {
+    return sendWithPromise<void>('setBannerDismissed');
+  }
+
+  recordBannerRedirected() {
+    return sendWithPromise<void>('recordBannerRedirected');
   }
 
   static getInstance(): ManagementBrowserProxy {

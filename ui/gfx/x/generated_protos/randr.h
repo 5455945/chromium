@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,36 +7,19 @@
 //    ../../third_party/xcbproto/src \
 //    gen/ui/gfx/x \
 //    bigreq \
-//    composite \
-//    damage \
-//    dpms \
-//    dri2 \
 //    dri3 \
-//    ge \
 //    glx \
-//    present \
 //    randr \
-//    record \
 //    render \
-//    res \
 //    screensaver \
 //    shape \
 //    shm \
 //    sync \
-//    xc_misc \
-//    xevie \
-//    xf86dri \
-//    xf86vidmode \
 //    xfixes \
-//    xinerama \
 //    xinput \
 //    xkb \
-//    xprint \
 //    xproto \
-//    xselinux \
-//    xtest \
-//    xv \
-//    xvmc
+//    xtest
 
 #ifndef UI_GFX_X_GENERATED_PROTOS_RANDR_H_
 #define UI_GFX_X_GENERATED_PROTOS_RANDR_H_
@@ -45,16 +28,16 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <vector>
 
 #include "base/component_export.h"
 #include "base/files/scoped_file.h"
-#include "base/memory/ref_counted_memory.h"
 #include "base/memory/scoped_refptr.h"
 #include "render.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/gfx/x/error.h"
 #include "ui/gfx/x/ref_counted_fd.h"
+#include "ui/gfx/x/xproto_types.h"
 #include "xproto.h"
 
 namespace x11 {
@@ -167,29 +150,46 @@ class COMPONENT_EXPORT(X11) RandR {
 
   struct BadOutputError : public x11::Error {
     uint16_t sequence{};
+    uint32_t bad_value{};
+    uint16_t minor_opcode{};
+    uint8_t major_opcode{};
 
     std::string ToString() const override;
   };
 
   struct BadCrtcError : public x11::Error {
     uint16_t sequence{};
+    uint32_t bad_value{};
+    uint16_t minor_opcode{};
+    uint8_t major_opcode{};
 
     std::string ToString() const override;
   };
 
   struct BadModeError : public x11::Error {
     uint16_t sequence{};
+    uint32_t bad_value{};
+    uint16_t minor_opcode{};
+    uint8_t major_opcode{};
 
     std::string ToString() const override;
   };
 
   struct BadProviderError : public x11::Error {
     uint16_t sequence{};
+    uint32_t bad_value{};
+    uint16_t minor_opcode{};
+    uint8_t major_opcode{};
 
     std::string ToString() const override;
   };
 
   struct ScreenSize {
+    bool operator==(const ScreenSize& other) const {
+      return width == other.width && height == other.height &&
+             mwidth == other.mwidth && mheight == other.mheight;
+    }
+
     uint16_t width{};
     uint16_t height{};
     uint16_t mwidth{};
@@ -197,10 +197,23 @@ class COMPONENT_EXPORT(X11) RandR {
   };
 
   struct RefreshRates {
+    bool operator==(const RefreshRates& other) const {
+      return rates == other.rates;
+    }
+
     std::vector<uint16_t> rates{};
   };
 
   struct ModeInfo {
+    bool operator==(const ModeInfo& other) const {
+      return id == other.id && width == other.width && height == other.height &&
+             dot_clock == other.dot_clock && hsync_start == other.hsync_start &&
+             hsync_end == other.hsync_end && htotal == other.htotal &&
+             hskew == other.hskew && vsync_start == other.vsync_start &&
+             vsync_end == other.vsync_end && vtotal == other.vtotal &&
+             name_len == other.name_len && mode_flags == other.mode_flags;
+    }
+
     uint32_t id{};
     uint16_t width{};
     uint16_t height{};
@@ -217,9 +230,8 @@ class COMPONENT_EXPORT(X11) RandR {
   };
 
   struct ScreenChangeNotifyEvent {
-    static constexpr int type_id = 11;
+    static constexpr uint8_t type_id = 3;
     static constexpr uint8_t opcode = 0;
-    bool send_event{};
     Rotation rotation{};
     uint16_t sequence{};
     Time timestamp{};
@@ -232,13 +244,18 @@ class COMPONENT_EXPORT(X11) RandR {
     uint16_t height{};
     uint16_t mwidth{};
     uint16_t mheight{};
-
-    x11::Window* GetWindow() {
-      return reinterpret_cast<x11::Window*>(&request_window);
-    }
   };
 
   struct MonitorInfo {
+    bool operator==(const MonitorInfo& other) const {
+      return name == other.name && primary == other.primary &&
+             automatic == other.automatic && x == other.x && y == other.y &&
+             width == other.width && height == other.height &&
+             width_in_millimeters == other.width_in_millimeters &&
+             height_in_millimeters == other.height_in_millimeters &&
+             outputs == other.outputs;
+    }
+
     Atom name{};
     uint8_t primary{};
     uint8_t automatic{};
@@ -252,9 +269,8 @@ class COMPONENT_EXPORT(X11) RandR {
   };
 
   struct NotifyEvent {
-    static constexpr int type_id = 12;
+    static constexpr uint8_t type_id = 4;
     static constexpr uint8_t opcode = 1;
-    bool send_event{};
     uint16_t sequence{};
     struct Cc {
       Time timestamp{};
@@ -307,15 +323,13 @@ class COMPONENT_EXPORT(X11) RandR {
       Lease lease{};
       uint8_t created{};
     };
-    absl::optional<Cc> cc{};
-    absl::optional<Oc> oc{};
-    absl::optional<Op> op{};
-    absl::optional<Pc> pc{};
-    absl::optional<Pp> pp{};
-    absl::optional<Rc> rc{};
-    absl::optional<Lc> lc{};
-
-    x11::Window* GetWindow() { return nullptr; }
+    std::optional<Cc> cc{};
+    std::optional<Oc> oc{};
+    std::optional<Op> op{};
+    std::optional<Pc> pc{};
+    std::optional<Pp> pp{};
+    std::optional<Rc> rc{};
+    std::optional<Lc> lc{};
   };
 
   struct QueryVersionRequest {
@@ -1120,7 +1134,7 @@ class COMPONENT_EXPORT(X11) RandR {
     Atom type{};
     uint32_t bytes_after{};
     uint32_t num_items{};
-    scoped_refptr<base::RefCountedMemory> data{};
+    scoped_refptr<UnsizedRefCountedMemory> data{};
   };
 
   using GetProviderPropertyResponse = Response<GetProviderPropertyReply>;

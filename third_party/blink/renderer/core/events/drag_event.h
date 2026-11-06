@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -40,7 +40,7 @@ class CORE_EXPORT DragEvent final : public MouseEvent {
             base::TimeTicks platform_time_stamp,
             SyntheticEventType);
 
-  DataTransfer* getDataTransfer() const override {
+  DataTransfer* dataTransfer() const override {
     return IsDragEvent() ? data_transfer_.Get() : nullptr;
   }
 

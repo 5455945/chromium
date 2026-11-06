@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,20 +8,28 @@
 #include <functional>
 #include <map>
 #include <string>
+#include <string_view>
 
 #include "base/containers/flat_set.h"
-#include "base/macros.h"
-#include "base/strings/string_piece.h"
+#include "base/memory/raw_ptr.h"
 #include "components/search_engines/template_url.h"
 
-// Holds the host to template url mappings for the search providers. WARNING:
-// This class does not own any TemplateURLs passed to it and it is up to the
-// caller to ensure the right lifetime of them.
+// Holds the host to template url mappings for the search providers. This class
+// provides an efficient way to look up search engines by their host. It is
+// initialized with a set of TemplateURLs and maintains a map from host to a
+// set of TemplateURLs.
+//
+// WARNING: This class does not own any TemplateURLs passed to it and it is up
+// to the caller to ensure the right lifetime of them.
 class SearchHostToURLsMap {
  public:
-  using TemplateURLSet = base::flat_set<TemplateURL*>;
+  using TemplateURLSet = base::flat_set<raw_ptr<TemplateURL, CtnExperimental>>;
 
   SearchHostToURLsMap();
+
+  SearchHostToURLsMap(const SearchHostToURLsMap&) = delete;
+  SearchHostToURLsMap& operator=(const SearchHostToURLsMap&) = delete;
+
   ~SearchHostToURLsMap();
 
   // Initializes the map.
@@ -36,13 +44,13 @@ class SearchHostToURLsMap {
   // Removes the TemplateURL from the lookup.
   void Remove(const TemplateURL* template_url);
 
-  // Returns the first TemplateURL found with a URL using the specified |host|,
-  // or NULL if there are no such TemplateURLs
-  TemplateURL* GetTemplateURLForHost(base::StringPiece host);
+  // Returns the best TemplateURL found with a URL using the specified |host|,
+  // or nullptr if there are no such TemplateURLs
+  TemplateURL* GetTemplateURLForHost(std::string_view host);
 
   // Return the TemplateURLSet for the given the |host| or NULL if there are
   // none.
-  TemplateURLSet* GetURLsForHost(base::StringPiece host);
+  TemplateURLSet* GetURLsForHost(std::string_view host);
 
  private:
   friend class SearchHostToURLsMapTest;
@@ -61,8 +69,6 @@ class SearchHostToURLsMap {
 
   // Has Init been called?
   bool initialized_;
-
-  DISALLOW_COPY_AND_ASSIGN(SearchHostToURLsMap);
 };
 
 #endif  // COMPONENTS_SEARCH_ENGINES_SEARCH_HOST_TO_URLS_MAP_H_

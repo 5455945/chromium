@@ -1,14 +1,15 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef SERVICES_VIZ_PUBLIC_CPP_COMPOSITING_FRAME_DEADLINE_MOJOM_TRAITS_H_
 #define SERVICES_VIZ_PUBLIC_CPP_COMPOSITING_FRAME_DEADLINE_MOJOM_TRAITS_H_
 
-#include "services/viz/public/mojom/compositing/frame_deadline.mojom.h"
-
+#include "base/types/expected.h"
 #include "components/viz/common/quads/frame_deadline.h"
 #include "mojo/public/cpp/base/time_mojom_traits.h"
+#include "mojo/public/cpp/bindings/deserialization_error.h"
+#include "services/viz/public/mojom/compositing/frame_deadline.mojom.h"
 
 namespace mojo {
 
@@ -31,8 +32,9 @@ struct StructTraits<viz::mojom::FrameDeadlineDataView, viz::FrameDeadline> {
     return input.use_default_lower_bound_deadline();
   }
 
-  static bool Read(viz::mojom::FrameDeadlineDataView data,
-                   viz::FrameDeadline* out);
+  static base::expected<void, DeserializationError> Read(
+      viz::mojom::FrameDeadlineDataView data,
+      viz::FrameDeadline* out);
 };
 
 }  // namespace mojo

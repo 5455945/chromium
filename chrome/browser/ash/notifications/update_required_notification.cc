@@ -1,18 +1,20 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/notifications/update_required_notification.h"
 
+#include "ash/constants/notifier_catalogs.h"
 #include "ash/public/cpp/notification_utils.h"
-#include "base/bind.h"
+#include "ash/strings/grit/ash_strings.h"
+#include "base/check_is_test.h"
+#include "base/functional/bind.h"
 #include "base/i18n/message_formatter.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/notifications/system_notification_helper.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
+#include "ui/message_center/message_center.h"
 
 using NotificationType = policy::MinimumVersionPolicyHandler::NotificationType;
 using MessageFormatter = base::i18n::MessageFormatter;
@@ -114,7 +116,14 @@ message_center::SystemNotificationWarningLevel GetWarningLevel(
 
 UpdateRequiredNotification::UpdateRequiredNotification() = default;
 
-UpdateRequiredNotification::~UpdateRequiredNotification() = default;
+UpdateRequiredNotification::~UpdateRequiredNotification() {
+  if (message_center::MessageCenter::Get()) {
+    Hide();
+  } else {
+    // TODO(crbug.com/454766826): Fix shutdown order so this isn't needed.
+    CHECK_IS_TEST();
+  }
+}
 
 void UpdateRequiredNotification::Show(NotificationType type,
                                       base::TimeDelta warning_time,
@@ -131,7 +140,6 @@ void UpdateRequiredNotification::Show(NotificationType type,
   std::u16string button = GetButtonText(type);
   if (title.empty() || body.empty() || button.empty()) {
     NOTREACHED();
-    return;
   }
 
   DisplayNotification(title, body, button,
@@ -148,25 +156,27 @@ void UpdateRequiredNotification::DisplayNotification(
   message_center::RichNotificationData data;
   data.buttons.push_back(message_center::ButtonInfo(button_text));
 
-  std::unique_ptr<message_center::Notification> notification =
-      ash::CreateSystemNotification(
-          message_center::NOTIFICATION_TYPE_SIMPLE,
-          kUpdateRequiredNotificationId, title, message,
-          std::u16string() /*display_source*/, GURL(),
-          message_center::NotifierId(
-              message_center::NotifierType::SYSTEM_COMPONENT,
-              kUpdateRequiredNotificationId),
-          data,
-          base::MakeRefCounted<message_center::ThunkNotificationDelegate>(
-              weak_factory_.GetWeakPtr()),
-          vector_icons::kBusinessIcon, color_type);
+  auto notification = ash::CreateSystemNotificationPtr(
+      message_center::NOTIFICATION_TYPE_SIMPLE, kUpdateRequiredNotificationId,
+      title, message, std::u16string() /*display_source*/,
+      message_center::NotifierId(message_center::NotifierType::SYSTEM_COMPONENT,
+                                 kUpdateRequiredNotificationId,
+                                 NotificationCatalogName::kUpdateRequired),
+      data,
+      base::MakeRefCounted<message_center::ThunkNotificationDelegate>(
+          weak_factory_.GetWeakPtr()),
+      ::features::IsRoundedIconsEnabled() ? vector_icons::kDomainIcon
+                                          : vector_icons::kBusinessOldIcon,
+      color_type);
   notification->set_priority(priority);
 
-  SystemNotificationHelper::GetInstance()->Display(*notification);
+  message_center::MessageCenter::Get()->AddNotification(
+      std::move(notification));
 }
 
 void UpdateRequiredNotification::Hide() {
-  SystemNotificationHelper::GetInstance()->Close(kUpdateRequiredNotificationId);
+  message_center::MessageCenter::Get()->RemoveNotification(
+      kUpdateRequiredNotificationId, false /* by_user */);
 }
 
 void UpdateRequiredNotification::Close(bool by_user) {
@@ -175,8 +185,8 @@ void UpdateRequiredNotification::Close(bool by_user) {
 }
 
 void UpdateRequiredNotification::Click(
-    const absl::optional<int>& button_index,
-    const absl::optional<std::u16string>& reply) {
+    const std::optional<int>& button_index,
+    const std::optional<std::u16string>& reply) {
   // |button_index| may be empty if the notification body was clicked.
   if (!button_index)
     return;

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,11 @@
 #include <memory>
 
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/platform/heap/thread_state.h"
-#include "third_party/blink/renderer/platform/scheduler/public/thread.h"
+#include "third_party/blink/renderer/platform/scheduler/public/non_main_thread.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
-#include "third_party/blink/renderer/platform/wtf/threading_primitives.h"
 #include "v8/include/v8.h"
 
 namespace blink {
@@ -38,19 +37,27 @@ class CORE_EXPORT WorkerBackingThread final {
   void InitializeOnBackingThread(const WorkerBackingThreadStartupData&);
   void ShutdownOnBackingThread();
 
-  blink::Thread& BackingThread() {
+  blink::NonMainThread& BackingThread() {
     DCHECK(backing_thread_);
     return *backing_thread_;
   }
 
   v8::Isolate* GetIsolate() { return isolate_; }
 
+  void SetForegrounded();
+
   static void MemoryPressureNotificationToWorkerThreadIsolates(
       v8::MemoryPressureLevel);
+  static void SetWorkerThreadIsolatesPriority(v8::Isolate::Priority priority);
+  static void SetBatterySaverModeForWorkerThreadIsolates(
+      bool battery_saver_mode_enabled);
+  static void SetMemorySaverModeForWorkerThreadIsolates(
+      bool memory_saver_mode_enabled);
 
  private:
-  std::unique_ptr<blink::Thread> backing_thread_;
-  v8::Isolate* isolate_ = nullptr;
+  std::unique_ptr<blink::NonMainThread> backing_thread_;
+  raw_ptr<v8::Isolate, UnprotectedInRelease | DanglingUntriaged> isolate_ =
+      nullptr;
 };
 
 }  // namespace blink

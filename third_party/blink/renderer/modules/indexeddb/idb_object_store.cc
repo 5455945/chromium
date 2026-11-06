@@ -31,15 +31,17 @@
 
 #include "base/feature_list.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/safety_checks.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
-#include "third_party/blink/public/mojom/indexeddb/indexeddb.mojom-blink-forward.h"
+#include "third_party/blink/public/mojom/indexeddb/indexeddb.mojom-blink.h"
+#include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-shared.h"
 #include "third_party/blink/public/platform/web_blob_info.h"
 #include "third_party/blink/renderer/bindings/core/v8/serialization/serialized_script_value_factory.h"
-#include "third_party/blink/renderer/bindings/core/v8/to_v8_for_core.h"
-#include "third_party/blink/renderer/bindings/modules/v8/to_v8_for_modules.h"
+#include "third_party/blink/renderer/bindings/core/v8/to_v8_traits.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_microtasks_scope.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_binding_for_modules.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_idb_get_all_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_union_idbcursor_idbindex_idbobjectstore.h"
 #include "third_party/blink/renderer/core/dom/dom_string_list.h"
 #include "third_party/blink/renderer/core/dom/events/native_event_listener.h"
@@ -47,15 +49,16 @@
 #include "third_party/blink/renderer/modules/indexeddb/idb_any.h"
 #include "third_party/blink/renderer/modules/indexeddb/idb_cursor_with_value.h"
 #include "third_party/blink/renderer/modules/indexeddb/idb_database.h"
+#include "third_party/blink/renderer/modules/indexeddb/idb_get_all_options_helper.h"
 #include "third_party/blink/renderer/modules/indexeddb/idb_key.h"
 #include "third_party/blink/renderer/modules/indexeddb/idb_key_path.h"
-#include "third_party/blink/renderer/modules/indexeddb/idb_tracing.h"
 #include "third_party/blink/renderer/modules/indexeddb/idb_value_wrapping.h"
-#include "third_party/blink/renderer/modules/indexeddb/web_idb_callbacks_impl.h"
-#include "third_party/blink/renderer/modules/indexeddb/web_idb_database.h"
+#include "third_party/blink/renderer/modules/indexeddb/indexed_db_blink_mojom_traits.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
-#include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
+#include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "v8/include/v8.h"
 
 namespace blink {
@@ -75,7 +78,7 @@ void IDBObjectStore::Trace(Visitor* visitor) const {
 
 void IDBObjectStore::setName(const String& name,
                              ExceptionState& exception_state) {
-  IDB_TRACE("IDBObjectStore::setName");
+  TRACE_EVENT0("IndexedDB", "IDBObjectStore::setName");
   if (!transaction_->IsVersionChange()) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kInvalidStateError,
@@ -97,28 +100,29 @@ void IDBObjectStore::setName(const String& name,
 
   if (this->name() == name)
     return;
-  if (transaction_->db()->ContainsObjectStore(name)) {
+  if (db().ContainsObjectStore(name)) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kConstraintError,
         IDBDatabase::kObjectStoreNameTakenErrorMessage);
     return;
   }
-  if (!BackendDB()) {
+  if (!db().IsConnectionOpen()) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kDatabaseClosedErrorMessage);
     return;
   }
 
-  transaction_->db()->RenameObjectStore(Id(), name);
+  db().RenameObjectStore(Id(), name);
 }
 
 ScriptValue IDBObjectStore::keyPath(ScriptState* script_state) const {
-  return ScriptValue::From(script_state, Metadata().key_path);
+  return ScriptValue(script_state->GetIsolate(),
+                     Metadata().key_path.ToV8(script_state));
 }
 
 DOMStringList* IDBObjectStore::indexNames() const {
-  IDB_TRACE1("IDBObjectStore::indexNames", "store_name",
-             metadata_->name.Utf8());
+  TRACE_EVENT1("IndexedDB", "IDBObjectStore::indexNames", "store_name",
+               metadata_->name.Utf8());
   auto* index_names = MakeGarbageCollected<DOMStringList>();
   for (const auto& it : Metadata().indexes)
     index_names->Append(it.value->name);
@@ -129,9 +133,10 @@ DOMStringList* IDBObjectStore::indexNames() const {
 IDBRequest* IDBObjectStore::get(ScriptState* script_state,
                                 const ScriptValue& key,
                                 ExceptionState& exception_state) {
-  IDB_TRACE1("IDBObjectStore::getRequestSetup", "store_name",
-             metadata_->name.Utf8());
-  IDBRequest::AsyncTraceState metrics("IDBObjectStore::get");
+  TRACE_EVENT1("IndexedDB", "IDBObjectStore::getRequestSetup", "store_name",
+               metadata_->name.Utf8());
+  IDBRequest::AsyncTraceState metrics(
+      IDBRequest::TypeForMetrics::kObjectStoreGet);
   if (IsDeleted()) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kInvalidStateError,
@@ -154,7 +159,7 @@ IDBRequest* IDBObjectStore::get(ScriptState* script_state,
         IDBDatabase::kNoKeyOrKeyRangeErrorMessage);
     return nullptr;
   }
-  if (!BackendDB()) {
+  if (!db().IsConnectionOpen()) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kDatabaseClosedErrorMessage);
     return nullptr;
@@ -162,18 +167,19 @@ IDBRequest* IDBObjectStore::get(ScriptState* script_state,
 
   IDBRequest* request = IDBRequest::Create(
       script_state, this, transaction_.Get(), std::move(metrics));
-  BackendDB()->Get(transaction_->Id(), Id(), IDBIndexMetadata::kInvalidId,
-                   key_range, /*key_only=*/false,
-                   request->CreateWebCallbacks().release());
+  db().Get(transaction_->Id(), Id(), IDBIndexMetadata::kInvalidId, key_range,
+           /*key_only=*/false,
+           BindOnce(&IDBRequest::OnGet, WrapWeakPersistent(request)));
   return request;
 }
 
 IDBRequest* IDBObjectStore::getKey(ScriptState* script_state,
                                    const ScriptValue& key,
                                    ExceptionState& exception_state) {
-  IDB_TRACE1("IDBObjectStore::getKeyRequestSetup", "store_name",
-             metadata_->name.Utf8());
-  IDBRequest::AsyncTraceState metrics("IDBObjectStore::getKey");
+  TRACE_EVENT1("IndexedDB", "IDBObjectStore::getKeyRequestSetup", "store_name",
+               metadata_->name.Utf8());
+  IDBRequest::AsyncTraceState metrics(
+      IDBRequest::TypeForMetrics::kObjectStoreGetKey);
   if (IsDeleted()) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kInvalidStateError,
@@ -196,7 +202,7 @@ IDBRequest* IDBObjectStore::getKey(ScriptState* script_state,
         IDBDatabase::kNoKeyOrKeyRangeErrorMessage);
     return nullptr;
   }
-  if (!BackendDB()) {
+  if (!db().IsConnectionOpen()) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kDatabaseClosedErrorMessage);
     return nullptr;
@@ -204,104 +210,76 @@ IDBRequest* IDBObjectStore::getKey(ScriptState* script_state,
 
   IDBRequest* request = IDBRequest::Create(
       script_state, this, transaction_.Get(), std::move(metrics));
-  BackendDB()->Get(transaction_->Id(), Id(), IDBIndexMetadata::kInvalidId,
-                   key_range, /*key_only=*/true,
-                   request->CreateWebCallbacks().release());
+  db().Get(transaction_->Id(), Id(), IDBIndexMetadata::kInvalidId, key_range,
+           /*key_only=*/true,
+           BindOnce(&IDBRequest::OnGet, WrapPersistent(request)));
   return request;
 }
 
 IDBRequest* IDBObjectStore::getAll(ScriptState* script_state,
-                                   const ScriptValue& key_range,
+                                   const ScriptValue& range_or_options,
                                    ExceptionState& exception_state) {
-  return getAll(script_state, key_range, std::numeric_limits<uint32_t>::max(),
-                exception_state);
+  return getAll(script_state, range_or_options,
+                std::numeric_limits<uint32_t>::max(), exception_state);
 }
 
 IDBRequest* IDBObjectStore::getAll(ScriptState* script_state,
-                                   const ScriptValue& key_range,
+                                   const ScriptValue& range_or_options,
                                    uint32_t max_count,
                                    ExceptionState& exception_state) {
-  IDB_TRACE1("IDBObjectStore::getAllRequestSetup", "store_name",
-             metadata_->name.Utf8());
-  IDBRequest::AsyncTraceState metrics("IDBObjectStore::getAll");
-  if (!max_count)
-    max_count = std::numeric_limits<uint32_t>::max();
+  TRACE_EVENT1("IndexedDB", "IDBObjectStore::getAllRequestSetup", "store_name",
+               metadata_->name.Utf8());
 
-  if (IsDeleted()) {
-    exception_state.ThrowDOMException(
-        DOMExceptionCode::kInvalidStateError,
-        IDBDatabase::kObjectStoreDeletedErrorMessage);
+  IDBGetAllOptions* options =
+      IDBGetAllOptionsHelper::CreateFromArgumentsOrDictionary(
+          script_state, range_or_options, max_count, exception_state);
+  if (exception_state.HadException()) {
     return nullptr;
   }
-  if (!transaction_->IsActive()) {
-    exception_state.ThrowDOMException(
-        DOMExceptionCode::kTransactionInactiveError,
-        transaction_->InactiveErrorMessage());
-    return nullptr;
-  }
-  IDBKeyRange* range = IDBKeyRange::FromScriptValue(
-      ExecutionContext::From(script_state), key_range, exception_state);
-  if (exception_state.HadException())
-    return nullptr;
-  if (!BackendDB()) {
-    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
-                                      IDBDatabase::kDatabaseClosedErrorMessage);
-    return nullptr;
-  }
-
-  IDBRequest* request = IDBRequest::Create(
-      script_state, this, transaction_.Get(), std::move(metrics));
-  BackendDB()->GetAll(transaction_->Id(), Id(), IDBIndexMetadata::kInvalidId,
-                      range, max_count, false,
-                      request->CreateWebCallbacks().release());
-  return request;
+  return CreateGetAllRequest(
+      IDBRequest::TypeForMetrics::kObjectStoreGetAll, script_state, *options,
+      mojom::blink::IDBGetAllResultType::Values, exception_state);
 }
 
 IDBRequest* IDBObjectStore::getAllKeys(ScriptState* script_state,
-                                       const ScriptValue& key_range,
+                                       const ScriptValue& range_or_options,
                                        ExceptionState& exception_state) {
-  return getAllKeys(script_state, key_range,
+  return getAllKeys(script_state, range_or_options,
                     std::numeric_limits<uint32_t>::max(), exception_state);
 }
 
 IDBRequest* IDBObjectStore::getAllKeys(ScriptState* script_state,
-                                       const ScriptValue& key_range,
+                                       const ScriptValue& range_or_options,
                                        uint32_t max_count,
                                        ExceptionState& exception_state) {
-  IDB_TRACE1("IDBObjectStore::getAllKeysRequestSetup", "store_name",
-             metadata_->name.Utf8());
-  IDBRequest::AsyncTraceState metrics("IDBObjectStore::getAllKeys");
-  if (!max_count)
-    max_count = std::numeric_limits<uint32_t>::max();
+  TRACE_EVENT1("IndexedDB", "IDBObjectStore::getAllKeysRequestSetup",
+               "store_name", metadata_->name.Utf8());
 
-  if (IsDeleted()) {
-    exception_state.ThrowDOMException(
-        DOMExceptionCode::kInvalidStateError,
-        IDBDatabase::kObjectStoreDeletedErrorMessage);
+  IDBGetAllOptions* options =
+      IDBGetAllOptionsHelper::CreateFromArgumentsOrDictionary(
+          script_state, range_or_options, max_count, exception_state);
+  if (exception_state.HadException()) {
     return nullptr;
   }
-  if (!transaction_->IsActive()) {
-    exception_state.ThrowDOMException(
-        DOMExceptionCode::kTransactionInactiveError,
-        transaction_->InactiveErrorMessage());
-    return nullptr;
-  }
-  IDBKeyRange* range = IDBKeyRange::FromScriptValue(
-      ExecutionContext::From(script_state), key_range, exception_state);
-  if (exception_state.HadException())
-    return nullptr;
-  if (!BackendDB()) {
-    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
-                                      IDBDatabase::kDatabaseClosedErrorMessage);
-    return nullptr;
-  }
+  return CreateGetAllRequest(
+      IDBRequest::TypeForMetrics::kObjectStoreGetAllKeys, script_state,
+      *options, mojom::blink::IDBGetAllResultType::Keys, exception_state);
+}
 
-  IDBRequest* request = IDBRequest::Create(
-      script_state, this, transaction_.Get(), std::move(metrics));
-  BackendDB()->GetAll(transaction_->Id(), Id(), IDBIndexMetadata::kInvalidId,
-                      range, max_count, true,
-                      request->CreateWebCallbacks().release());
-  return request;
+IDBRequest* IDBObjectStore::getAllRecords(ScriptState* script_state,
+                                          const IDBGetAllOptions* options,
+                                          ExceptionState& exception_state) {
+  TRACE_EVENT1("IndexedDB", "IDBObjectStore::getAllRecordsRequestSetup",
+               "store_name", metadata_->name.Utf8());
+
+  // Explicitly count `kIndexedDBGetAllRecords` usage because the IDL definition
+  // for `getAllRecords()` already has a [Measure] recording `kIndexedDBRead`.
+  UseCounter::Count(ExecutionContext::From(script_state),
+                    WebFeature::kIndexedDBGetAllRecords);
+
+  return CreateGetAllRequest(
+      IDBRequest::TypeForMetrics::kObjectStoreGetAllRecords, script_state,
+      *options, mojom::blink::IDBGetAllResultType::Records, exception_state);
 }
 
 static Vector<std::unique_ptr<IDBKey>> GenerateIndexKeysForValue(
@@ -312,9 +290,9 @@ static Vector<std::unique_ptr<IDBKey>> GenerateIndexKeysForValue(
   NonThrowableExceptionState exception_state;
 
   // Look up the key using the index's key path.
-  std::unique_ptr<IDBKey> index_key = ScriptValue::To<std::unique_ptr<IDBKey>>(
-      isolate, object_value, exception_state, store_metadata.key_path,
-      index_metadata.key_path);
+  std::unique_ptr<IDBKey> index_key = CreateIDBKeyFromValueAndKeyPaths(
+      isolate, object_value.V8Value(), store_metadata.key_path,
+      index_metadata.key_path, exception_state);
 
   // No match. (In the special case for a store with a key generator and in-line
   // keys and where the store and index key paths match, the back-end will
@@ -355,8 +333,8 @@ IDBRequest* IDBObjectStore::add(ScriptState* script_state,
                                 const ScriptValue& value,
                                 const ScriptValue& key,
                                 ExceptionState& exception_state) {
-  IDB_TRACE1("IDBObjectStore::addRequestSetup", "store_name",
-             metadata_->name.Utf8());
+  TRACE_EVENT1("IndexedDB", "IDBObjectStore::addRequestSetup", "store_name",
+               metadata_->name.Utf8());
   return DoPut(script_state, mojom::IDBPutMode::AddOnly, value, key,
                exception_state);
 }
@@ -369,219 +347,12 @@ IDBRequest* IDBObjectStore::put(ScriptState* script_state,
              exception_state);
 }
 
-IDBRequest* IDBObjectStore::putAllValues(ScriptState* script_state,
-                                         const HeapVector<ScriptValue>& values,
-                                         ExceptionState& exception_state) {
-  IDB_TRACE1("IDBObjectStore::putAllRequestSetup", "store_name",
-             metadata_->name.Utf8());
-  v8::Isolate* isolate = script_state->GetIsolate();
-  HeapVector<ScriptValue> empty_keys(
-      values.size(), ScriptValue(isolate, v8::Undefined(isolate)));
-  return DoPutAll(script_state, values, empty_keys, exception_state);
-}
-
-IDBRequest* IDBObjectStore::DoPutAll(ScriptState* script_state,
-                                     const HeapVector<ScriptValue>& values,
-                                     const HeapVector<ScriptValue>& key_values,
-                                     ExceptionState& exception_state) {
-  DCHECK_EQ(values.size(), key_values.size());
-  Vector<mojom::blink::IDBPutParamsPtr> puts;
-  for (size_t i = 0; i < values.size(); i++) {
-    puts.push_back(mojom::blink::IDBPutParams::New());
-  }
-  Vector<std::unique_ptr<IDBKey>> keys;
-  for (const ScriptValue& key_value : key_values) {
-    std::unique_ptr<IDBKey> key_ptr =
-        key_value.IsUndefined()
-            ? nullptr
-            : ScriptValue::To<std::unique_ptr<IDBKey>>(
-                  script_state->GetIsolate(), key_value, exception_state);
-    if (exception_state.HadException())
-      return nullptr;
-    keys.push_back(std::move(key_ptr));
-  }
-
-  const IDBRequest::Source* source =
-      MakeGarbageCollected<IDBRequest::Source>(this);
-
-  IDBRequest::AsyncTraceState metrics("IDBObjectStore::putAll");
-  if (IsDeleted()) {
-    exception_state.ThrowDOMException(
-        DOMExceptionCode::kInvalidStateError,
-        IDBDatabase::kObjectStoreDeletedErrorMessage);
-    return nullptr;
-  }
-  if (!transaction_->IsActive()) {
-    exception_state.ThrowDOMException(
-        DOMExceptionCode::kTransactionInactiveError,
-        transaction_->InactiveErrorMessage());
-    return nullptr;
-  }
-  if (transaction_->IsReadOnly()) {
-    exception_state.ThrowDOMException(
-        DOMExceptionCode::kReadOnlyError,
-        IDBDatabase::kTransactionReadOnlyErrorMessage);
-    return nullptr;
-  }
-
-  v8::Isolate* isolate = script_state->GetIsolate();
-  DCHECK(isolate->InContext());
-  transaction_->SetActiveDuringSerialization(false);
-  // TODO(crbug.com/719053): This wasm behavior differs from other browsers.
-  SerializedScriptValue::SerializeOptions::WasmSerializationPolicy wasm_policy =
-      ExecutionContext::From(script_state)->IsSecureContext()
-          ? SerializedScriptValue::SerializeOptions::kSerialize
-          : SerializedScriptValue::SerializeOptions::kBlockedInNonSecureContext;
-  Vector<IDBValueWrapper> value_wrappers;
-  for (auto& value : values) {
-    value_wrappers.emplace_back(isolate, value.V8Value(), wasm_policy,
-                                exception_state);
-
-    if (exception_state.HadException())
-      return nullptr;
-  }
-  transaction_->SetActiveDuringSerialization(true);
-
-  const IDBKeyPath& key_path = IdbKeyPath();
-  const bool uses_in_line_keys = !key_path.IsNull();
-  const bool has_key_generator = autoIncrement();
-
-  if (uses_in_line_keys) {
-    for (const auto& key : keys) {
-      if (key) {
-        exception_state.ThrowDOMException(
-            DOMExceptionCode::kDataError,
-            "The object store uses in-line keys and "
-            "the key parameter was provided.");
-        return nullptr;
-      }
-    }
-  }
-
-  if (!uses_in_line_keys && !has_key_generator) {
-    for (const auto& key : keys) {
-      DCHECK(key);
-    }
-    exception_state.ThrowDOMException(DOMExceptionCode::kDataError,
-                                      "The object store uses out-of-line keys "
-                                      "and has no key generator and the key "
-                                      "parameter was not provided.");
-    return nullptr;
-  }
-
-  // Keys that need to be extracted must be taken from a clone so that
-  // side effects (i.e. getters) are not triggered. Construct the
-  // clones lazily since the operation may be expensive.
-  HeapVector<ScriptValue> clones(values.size());
-  // If the primary key is extracted from the values using a key path, this
-  // holds onto the extracted keys for the duration of the method.
-  if (uses_in_line_keys) {
-    std::unique_ptr<IDBKey> key_path_key;
-    DCHECK_EQ(value_wrappers.size(), clones.size());
-    DCHECK_EQ(value_wrappers.size(), keys.size());
-    for (unsigned int i = 0; i < value_wrappers.size(); ++i) {
-      value_wrappers[i].Clone(script_state, &clones[i]);
-      key_path_key = ScriptValue::To<std::unique_ptr<IDBKey>>(
-          script_state->GetIsolate(), clones[i], exception_state, key_path);
-      if (exception_state.HadException())
-        return nullptr;
-      if (key_path_key && !key_path_key->IsValid()) {
-        exception_state.ThrowDOMException(
-            DOMExceptionCode::kDataError,
-            "Evaluating the object store's key path yielded a value that is "
-            "not a valid key.");
-        return nullptr;
-      }
-      if (!key_path_key) {
-        if (!has_key_generator) {
-          exception_state.ThrowDOMException(DOMExceptionCode::kDataError,
-                                            "Evaluating the object store's key "
-                                            "path did not yield a value.");
-          return nullptr;
-        }
-        if (!CanInjectIDBKeyIntoScriptValue(script_state->GetIsolate(),
-                                            clones[i], key_path)) {
-          exception_state.ThrowDOMException(DOMExceptionCode::kDataError,
-                                            "A generated key could not be "
-                                            "inserted into the value.");
-          return nullptr;
-        }
-      }
-      keys[i] = std::move(key_path_key);
-    }
-  }
-
-  for (const auto& key : keys) {
-    if (key.get() && !key.get()->IsValid()) {
-      exception_state.ThrowDOMException(DOMExceptionCode::kDataError,
-                                        IDBDatabase::kNotValidKeyErrorMessage);
-      return nullptr;
-    }
-  }
-
-  if (!BackendDB()) {
-    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
-                                      IDBDatabase::kDatabaseClosedErrorMessage);
-    return nullptr;
-  }
-
-  for (unsigned int i = 0; i < value_wrappers.size(); ++i) {
-    if (clones[i].IsEmpty())
-      value_wrappers[i].Clone(script_state, &clones[i]);
-    Vector<IDBIndexKeys> keys_for_value;
-    for (const auto& it : Metadata().indexes) {
-      keys_for_value.emplace_back(IDBIndexKeys{
-          .id = it.key,
-          .keys = GenerateIndexKeysForValue(script_state->GetIsolate(),
-                                            Metadata(), *it.value, clones[i])});
-    }
-    puts[i]->index_keys = std::move(keys_for_value);
-  }
-  // Records 1KB to 1GB.
-  size_t total_value_wrapper_data_length = 0;
-  for (auto& value_wrapper : value_wrappers) {
-    total_value_wrapper_data_length +=
-        value_wrapper.DataLengthBeforeWrapInBytes() / 1024;
-  }
-  UMA_HISTOGRAM_COUNTS_1M("WebCore.IndexedDB.PutValueSize2",
-                          base::saturated_cast<base::HistogramBase::Sample>(
-                              total_value_wrapper_data_length / 1024));
-
-  DCHECK_EQ(value_wrappers.size(), puts.size());
-  for (unsigned int i = 0; i < value_wrappers.size(); i++) {
-    value_wrappers[i].DoneCloning();
-    value_wrappers[i].WrapIfBiggerThan(mojom::blink::kIDBWrapThreshold);
-
-    auto idb_value = std::make_unique<IDBValue>(
-        value_wrappers[i].TakeWireBytes(), value_wrappers[i].TakeBlobInfo(),
-        value_wrappers[i].TakeFileSystemAccessTransferTokens());
-    puts[i]->value = std::move(idb_value);
-  }
-
-  IDBRequest* request = IDBRequest::Create(
-      script_state, source, transaction_.Get(), std::move(metrics));
-  for (auto& value_wrapper : value_wrappers) {
-    for (auto& blob_data_handle : value_wrapper.TakeBlobDataHandles()) {
-      request->transit_blob_handles().push_back(std::move(blob_data_handle));
-    }
-  }
-  DCHECK_EQ(keys.size(), puts.size());
-  for (unsigned int i = 0; i < puts.size(); i++) {
-    puts[i]->key = IDBKey::Clone(keys[i]);
-  }
-
-  std::unique_ptr<WebIDBCallbacks> callbacks = request->CreateWebCallbacks();
-  transaction_->transaction_backend()->PutAll(Id(), std::move(puts),
-                                              std::move(callbacks));
-  return request;
-}
-
 IDBRequest* IDBObjectStore::put(ScriptState* script_state,
                                 const ScriptValue& value,
                                 const ScriptValue& key,
                                 ExceptionState& exception_state) {
-  IDB_TRACE1("IDBObjectStore::putRequestSetup", "store_name",
-             metadata_->name.Utf8());
+  TRACE_EVENT1("IndexedDB", "IDBObjectStore::putRequestSetup", "store_name",
+               metadata_->name.Utf8());
   return DoPut(script_state, mojom::IDBPutMode::AddOrUpdate, value, key,
                exception_state);
 }
@@ -594,8 +365,8 @@ IDBRequest* IDBObjectStore::DoPut(ScriptState* script_state,
   std::unique_ptr<IDBKey> key =
       key_value.IsUndefined()
           ? nullptr
-          : ScriptValue::To<std::unique_ptr<IDBKey>>(
-                script_state->GetIsolate(), key_value, exception_state);
+          : CreateIDBKeyFromValue(script_state->GetIsolate(),
+                                  key_value.V8Value(), exception_state);
   if (exception_state.HadException())
     return nullptr;
   return DoPut(script_state, put_mode,
@@ -609,19 +380,26 @@ IDBRequest* IDBObjectStore::DoPut(ScriptState* script_state,
                                   const ScriptValue& value,
                                   const IDBKey* key,
                                   ExceptionState& exception_state) {
-  const char* tracing_name = nullptr;
+  IDBRequest::TypeForMetrics tracing_type;
   switch (put_mode) {
     case mojom::IDBPutMode::AddOrUpdate:
-      tracing_name = "IDBObjectStore::put";
+      tracing_type = IDBRequest::TypeForMetrics::kObjectStorePut;
       break;
     case mojom::IDBPutMode::AddOnly:
-      tracing_name = "IDBObjectStore::add";
+      tracing_type = IDBRequest::TypeForMetrics::kObjectStoreAdd;
       break;
     case mojom::IDBPutMode::CursorUpdate:
-      tracing_name = "IDBCursor::update";
+      tracing_type = IDBRequest::TypeForMetrics::kObjectStoreUpdate;
       break;
   }
-  IDBRequest::AsyncTraceState metrics(tracing_name);
+  IDBRequest::AsyncTraceState metrics(tracing_type);
+
+  // This function is known to be heap allocation heavy and performance
+  // critical. Extra memory safety checks can introduce regression
+  // (https://crbug.com/425145252) and these are disabled here.
+  // TODO(https://crbug.com/433423496): Optimize to remove this annotation.
+  base::ScopedSafetyChecksExclusion scoped_unsafe;
+
   if (IsDeleted()) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kInvalidStateError,
@@ -650,7 +428,7 @@ IDBRequest* IDBObjectStore::DoPut(ScriptState* script_state,
           ? SerializedScriptValue::SerializeOptions::kSerialize
           : SerializedScriptValue::SerializeOptions::kBlockedInNonSecureContext;
   IDBValueWrapper value_wrapper(isolate, value.V8Value(), wasm_policy,
-                                exception_state);
+                                exception_state, db().Metadata().is_sqlite);
   transaction_->SetActiveDuringSerialization(true);
   if (exception_state.HadException())
     return nullptr;
@@ -683,8 +461,8 @@ IDBRequest* IDBObjectStore::DoPut(ScriptState* script_state,
     value_wrapper.Clone(script_state, &clone);
 
     DCHECK(!key_path_key);
-    key_path_key = ScriptValue::To<std::unique_ptr<IDBKey>>(
-        script_state->GetIsolate(), clone, exception_state, key_path);
+    key_path_key = CreateIDBKeyFromValueAndKeyPath(
+        script_state->GetIsolate(), clone.V8Value(), key_path, exception_state);
     if (exception_state.HadException())
       return nullptr;
     if (!key_path_key || !key_path_key->IsEqual(key)) {
@@ -712,8 +490,9 @@ IDBRequest* IDBObjectStore::DoPut(ScriptState* script_state,
       value_wrapper.Clone(script_state, &clone);
 
       DCHECK(!key_path_key);
-      key_path_key = ScriptValue::To<std::unique_ptr<IDBKey>>(
-          script_state->GetIsolate(), clone, exception_state, key_path);
+      key_path_key = CreateIDBKeyFromValueAndKeyPath(script_state->GetIsolate(),
+                                                     clone.V8Value(), key_path,
+                                                     exception_state);
       if (exception_state.HadException())
         return nullptr;
       if (key_path_key && !key_path_key->IsValid()) {
@@ -770,7 +549,7 @@ IDBRequest* IDBObjectStore::DoPut(ScriptState* script_state,
     return nullptr;
   }
 
-  if (!BackendDB()) {
+  if (!db().IsConnectionOpen()) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kDatabaseClosedErrorMessage);
     return nullptr;
@@ -786,28 +565,14 @@ IDBRequest* IDBObjectStore::DoPut(ScriptState* script_state,
         .keys = GenerateIndexKeysForValue(script_state->GetIsolate(),
                                           Metadata(), *it.value, clone)});
   }
-  // Records 1KB to 1GB.
-  UMA_HISTOGRAM_COUNTS_1M(
-      "WebCore.IndexedDB.PutValueSize2",
-      base::saturated_cast<base::HistogramBase::Sample>(
-          value_wrapper.DataLengthBeforeWrapInBytes() / 1024));
 
   IDBRequest* request = IDBRequest::Create(
       script_state, source, transaction_.Get(), std::move(metrics));
-
   value_wrapper.DoneCloning();
 
-  value_wrapper.WrapIfBiggerThan(mojom::blink::kIDBWrapThreshold);
-
-  auto idb_value = std::make_unique<IDBValue>(
-      value_wrapper.TakeWireBytes(), value_wrapper.TakeBlobInfo(),
-      value_wrapper.TakeFileSystemAccessTransferTokens());
-
-  request->transit_blob_handles() = value_wrapper.TakeBlobDataHandles();
-  transaction_->transaction_backend()->Put(
-      Id(), std::move(idb_value), IDBKey::Clone(key), put_mode,
-      base::WrapUnique(request->CreateWebCallbacks().release()),
-      std::move(index_keys));
+  transaction_->Put(Id(), std::move(value_wrapper).Build(), IDBKey::Clone(key),
+                    put_mode, std::move(index_keys),
+                    BindOnce(&IDBRequest::OnPut, WrapWeakPersistent(request)));
 
   return request;
 }
@@ -815,9 +580,17 @@ IDBRequest* IDBObjectStore::DoPut(ScriptState* script_state,
 IDBRequest* IDBObjectStore::Delete(ScriptState* script_state,
                                    const ScriptValue& key,
                                    ExceptionState& exception_state) {
-  IDB_TRACE1("IDBObjectStore::deleteRequestSetup", "store_name",
-             metadata_->name.Utf8());
-  IDBRequest::AsyncTraceState metrics("IDBObjectStore::delete");
+  TRACE_EVENT1("IndexedDB", "IDBObjectStore::deleteRequestSetup", "store_name",
+               metadata_->name.Utf8());
+  IDBRequest::AsyncTraceState metrics(
+      IDBRequest::TypeForMetrics::kObjectStoreDelete);
+
+  // This function is known to be heap allocation heavy and performance
+  // critical. Extra memory safety checks can introduce regression
+  // (https://crbug.com/425145252) and these are disabled here.
+  // TODO(https://crbug.com/433423496): Optimize to remove this annotation.
+  base::ScopedSafetyChecksExclusion scoped_unsafe;
+
   if (IsDeleted()) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kInvalidStateError,
@@ -847,7 +620,7 @@ IDBRequest* IDBObjectStore::Delete(ScriptState* script_state,
         IDBDatabase::kNoKeyOrKeyRangeErrorMessage);
     return nullptr;
   }
-  if (!BackendDB()) {
+  if (!db().IsConnectionOpen()) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kDatabaseClosedErrorMessage);
     return nullptr;
@@ -862,9 +635,8 @@ IDBRequest* IDBObjectStore::deleteFunction(
     IDBRequest::AsyncTraceState metrics) {
   IDBRequest* request = IDBRequest::Create(
       script_state, this, transaction_.Get(), std::move(metrics));
-
-  BackendDB()->DeleteRange(transaction_->Id(), Id(), key_range,
-                           request->CreateWebCallbacks().release());
+  db().DeleteRange(transaction_->Id(), Id(), key_range,
+                   BindOnce(&IDBRequest::OnDelete, WrapPersistent(request)));
   return request;
 }
 
@@ -874,15 +646,18 @@ IDBRequest* IDBObjectStore::getKeyGeneratorCurrentNumber(
   IDBRequest* request = IDBRequest::Create(
       script_state, this, transaction_.Get(), std::move(metrics));
 
-  BackendDB()->GetKeyGeneratorCurrentNumber(
-      transaction_->Id(), Id(), request->CreateWebCallbacks().release());
+  db().GetKeyGeneratorCurrentNumber(
+      transaction_->Id(), Id(),
+      BindOnce(&IDBRequest::OnGotKeyGeneratorCurrentNumber,
+               WrapWeakPersistent(request)));
   return request;
 }
 
 IDBRequest* IDBObjectStore::clear(ScriptState* script_state,
                                   ExceptionState& exception_state) {
-  IDB_TRACE("IDBObjectStore::clearRequestSetup");
-  IDBRequest::AsyncTraceState metrics("IDBObjectStore::clear");
+  TRACE_EVENT0("IndexedDB", "IDBObjectStore::clearRequestSetup");
+  IDBRequest::AsyncTraceState metrics(
+      IDBRequest::TypeForMetrics::kObjectStoreClear);
   if (IsDeleted()) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kInvalidStateError,
@@ -901,7 +676,7 @@ IDBRequest* IDBObjectStore::clear(ScriptState* script_state,
         IDBDatabase::kTransactionReadOnlyErrorMessage);
     return nullptr;
   }
-  if (!BackendDB()) {
+  if (!db().IsConnectionOpen()) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kDatabaseClosedErrorMessage);
     return nullptr;
@@ -909,8 +684,8 @@ IDBRequest* IDBObjectStore::clear(ScriptState* script_state,
 
   IDBRequest* request = IDBRequest::Create(
       script_state, this, transaction_.Get(), std::move(metrics));
-  BackendDB()->Clear(transaction_->Id(), Id(),
-                     request->CreateWebCallbacks().release());
+  db().Clear(transaction_->Id(), Id(),
+             BindOnce(&IDBRequest::OnClear, WrapPersistent(request)));
   return request;
 }
 
@@ -923,14 +698,12 @@ namespace {
 class IndexPopulator final : public NativeEventListener {
  public:
   IndexPopulator(ScriptState* script_state,
-                 IDBDatabase* database,
-                 int64_t transaction_id,
+                 IDBTransaction* transaction,
                  int64_t object_store_id,
                  scoped_refptr<const IDBObjectStoreMetadata> store_metadata,
                  scoped_refptr<const IDBIndexMetadata> index_metadata)
       : script_state_(script_state),
-        database_(database),
-        transaction_id_(transaction_id),
+        transaction_(transaction),
         object_store_id_(object_store_id),
         store_metadata_(store_metadata),
         index_metadata_(std::move(index_metadata)) {
@@ -939,7 +712,7 @@ class IndexPopulator final : public NativeEventListener {
 
   void Trace(Visitor* visitor) const override {
     visitor->Trace(script_state_);
-    visitor->Trace(database_);
+    visitor->Trace(transaction_);
     NativeEventListener::Trace(visitor);
   }
 
@@ -952,18 +725,17 @@ class IndexPopulator final : public NativeEventListener {
   void Invoke(ExecutionContext* execution_context, Event* event) override {
     if (!script_state_->ContextIsValid())
       return;
-    IDB_TRACE("IDBObjectStore::IndexPopulator::Invoke");
+    TRACE_EVENT0("IndexedDB", "IDBObjectStore::IndexPopulator::Invoke");
 
     DCHECK_EQ(ExecutionContext::From(script_state_), execution_context);
     DCHECK_EQ(event->type(), event_type_names::kSuccess);
-    EventTarget* target = event->target();
+    EventTarget* target = event->RawTarget();
     IDBRequest* request = static_cast<IDBRequest*>(target);
 
-    if (!database_->Backend())  // If database is stopped?
-      return;
-
+    // This event would be dispatched by native code, so create scopes required
+    // by possible V8 usage within.
     ScriptState::Scope scope(script_state_);
-
+    V8DoNotRunMicrotasksScope microtasksScope(script_state_);
     IDBAny* cursor_any = request->ResultAsAny();
     IDBCursorWithValue* cursor = nullptr;
     if (cursor_any->GetType() == IDBAny::kIDBCursorWithValueType)
@@ -976,31 +748,22 @@ class IndexPopulator final : public NativeEventListener {
       const IDBKey* primary_key = cursor->IdbPrimaryKey();
       ScriptValue value = cursor->value(script_state_);
 
-      Vector<IDBIndexKeys> index_keys;
-      index_keys.ReserveInitialCapacity(1);
-      index_keys.emplace_back(IDBIndexKeys{
-          .id = IndexMetadata().id,
-          .keys = GenerateIndexKeysForValue(script_state_->GetIsolate(),
-                                            ObjectStoreMetadata(),
-                                            IndexMetadata(), value)});
-
-      database_->Backend()->SetIndexKeys(transaction_id_, object_store_id_,
-                                         IDBKey::Clone(primary_key),
-                                         std::move(index_keys));
+      transaction_->SetIndexKeys(
+          object_store_id_, IDBKey::Clone(primary_key),
+          {.id = IndexMetadata().id,
+           .keys = GenerateIndexKeysForValue(script_state_->GetIsolate(),
+                                             ObjectStoreMetadata(),
+                                             IndexMetadata(), value)});
     } else {
       // Now that we are done indexing, tell the backend to go
       // back to processing tasks of type NormalTask.
-      Vector<int64_t> index_ids;
-      index_ids.push_back(IndexMetadata().id);
-      database_->Backend()->SetIndexesReady(transaction_id_, object_store_id_,
-                                            index_ids);
-      database_.Clear();
+      transaction_->SetIndexReady(object_store_id_);
+      transaction_.Clear();
     }
   }
 
   Member<ScriptState> script_state_;
-  Member<IDBDatabase> database_;
-  const int64_t transaction_id_;
+  Member<IDBTransaction> transaction_;
   const int64_t object_store_id_;
   scoped_refptr<const IDBObjectStoreMetadata> store_metadata_;
   scoped_refptr<const IDBIndexMetadata> index_metadata_;
@@ -1012,9 +775,10 @@ IDBIndex* IDBObjectStore::createIndex(ScriptState* script_state,
                                       const IDBKeyPath& key_path,
                                       const IDBIndexParameters* options,
                                       ExceptionState& exception_state) {
-  IDB_TRACE1("IDBObjectStore::createIndexRequestSetup", "store_name",
-             metadata_->name.Utf8());
-  IDBRequest::AsyncTraceState metrics("IDBObjectStore::createIndex");
+  TRACE_EVENT1("IndexedDB", "IDBObjectStore::createIndexRequestSetup",
+               "store_name", metadata_->name.Utf8());
+  IDBRequest::AsyncTraceState metrics(
+      IDBRequest::TypeForMetrics::kObjectStoreCreateIndex);
   if (!transaction_->IsVersionChange()) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kInvalidStateError,
@@ -1051,7 +815,7 @@ IDBIndex* IDBObjectStore::createIndex(ScriptState* script_state,
         "The keyPath argument was an array and the multiEntry option is true.");
     return nullptr;
   }
-  if (!BackendDB()) {
+  if (!db().IsConnectionOpen()) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kDatabaseClosedErrorMessage);
     return nullptr;
@@ -1059,8 +823,8 @@ IDBIndex* IDBObjectStore::createIndex(ScriptState* script_state,
 
   int64_t index_id = metadata_->max_index_id + 1;
   DCHECK_NE(index_id, IDBIndexMetadata::kInvalidId);
-  BackendDB()->CreateIndex(transaction_->Id(), Id(), index_id, name, key_path,
-                           options->unique(), options->multiEntry());
+  db().CreateIndex(transaction_->Id(), Id(), index_id, name, key_path,
+                   options->unique(), options->multiEntry());
 
   ++metadata_->max_index_id;
 
@@ -1084,15 +848,15 @@ IDBIndex* IDBObjectStore::createIndex(ScriptState* script_state,
   // This is kept alive by being the success handler of the request, which is in
   // turn kept alive by the owning transaction.
   auto* index_populator = MakeGarbageCollected<IndexPopulator>(
-      script_state, transaction()->db(), transaction_->Id(), Id(), metadata_,
-      std::move(index_metadata));
+      script_state, transaction(), Id(), metadata_, std::move(index_metadata));
   index_request->setOnsuccess(index_populator);
   return index;
 }
 
 IDBIndex* IDBObjectStore::index(const String& name,
                                 ExceptionState& exception_state) {
-  IDB_TRACE1("IDBObjectStore::index", "store_name", metadata_->name.Utf8());
+  TRACE_EVENT1("IndexedDB", "IDBObjectStore::index", "store_name",
+               metadata_->name.Utf8());
   if (IsDeleted()) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kInvalidStateError,
@@ -1108,7 +872,7 @@ IDBIndex* IDBObjectStore::index(const String& name,
 
   IDBIndexMap::iterator it = index_map_.find(name);
   if (it != index_map_.end())
-    return it->value;
+    return it->value.Get();
 
   int64_t index_id = FindIndexId(name);
   if (index_id == IDBIndexMetadata::kInvalidId) {
@@ -1129,8 +893,8 @@ IDBIndex* IDBObjectStore::index(const String& name,
 
 void IDBObjectStore::deleteIndex(const String& name,
                                  ExceptionState& exception_state) {
-  IDB_TRACE1("IDBObjectStore::deleteIndex", "store_name",
-             metadata_->name.Utf8());
+  TRACE_EVENT1("IndexedDB", "IDBObjectStore::deleteIndex", "store_name",
+               metadata_->name.Utf8());
   if (!transaction_->IsVersionChange()) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kInvalidStateError,
@@ -1155,13 +919,13 @@ void IDBObjectStore::deleteIndex(const String& name,
                                       IDBDatabase::kNoSuchIndexErrorMessage);
     return;
   }
-  if (!BackendDB()) {
+  if (!db().IsConnectionOpen()) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kDatabaseClosedErrorMessage);
     return;
   }
 
-  BackendDB()->DeleteIndex(transaction_->Id(), Id(), index_id);
+  db().DeleteIndex(transaction_->Id(), Id(), index_id);
 
   metadata_->indexes.erase(index_id);
   IDBIndexMap::iterator it = index_map_.find(name);
@@ -1174,11 +938,12 @@ void IDBObjectStore::deleteIndex(const String& name,
 
 IDBRequest* IDBObjectStore::openCursor(ScriptState* script_state,
                                        const ScriptValue& range,
-                                       const String& direction_string,
+                                       const V8IDBCursorDirection& v8_direction,
                                        ExceptionState& exception_state) {
-  IDB_TRACE1("IDBObjectStore::openCursorRequestSetup", "store_name",
-             metadata_->name.Utf8());
-  IDBRequest::AsyncTraceState metrics("IDBObjectStore::openCursor");
+  TRACE_EVENT1("IndexedDB", "IDBObjectStore::openCursorRequestSetup",
+               "store_name", metadata_->name.Utf8());
+  IDBRequest::AsyncTraceState metrics(
+      IDBRequest::TypeForMetrics::kObjectStoreOpenCursor);
   if (IsDeleted()) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kInvalidStateError,
@@ -1193,13 +958,13 @@ IDBRequest* IDBObjectStore::openCursor(ScriptState* script_state,
   }
 
   mojom::IDBCursorDirection direction =
-      IDBCursor::StringToDirection(direction_string);
+      IDBCursor::V8EnumToDirection(v8_direction.AsEnum());
   IDBKeyRange* key_range = IDBKeyRange::FromScriptValue(
       ExecutionContext::From(script_state), range, exception_state);
   if (exception_state.HadException())
     return nullptr;
 
-  if (!BackendDB()) {
+  if (!db().IsConnectionOpen()) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kDatabaseClosedErrorMessage);
     return nullptr;
@@ -1218,19 +983,20 @@ IDBRequest* IDBObjectStore::openCursor(ScriptState* script_state,
       script_state, this, transaction_.Get(), std::move(metrics));
   request->SetCursorDetails(indexed_db::kCursorKeyAndValue, direction);
 
-  BackendDB()->OpenCursor(transaction_->Id(), Id(),
-                          IDBIndexMetadata::kInvalidId, range, direction, false,
-                          task_type, request->CreateWebCallbacks().release());
+  db().OpenCursor(Id(), IDBIndexMetadata::kInvalidId, range, direction, false,
+                  task_type, request);
   return request;
 }
 
-IDBRequest* IDBObjectStore::openKeyCursor(ScriptState* script_state,
-                                          const ScriptValue& range,
-                                          const String& direction_string,
-                                          ExceptionState& exception_state) {
-  IDB_TRACE1("IDBObjectStore::openKeyCursorRequestSetup", "store_name",
-             metadata_->name.Utf8());
-  IDBRequest::AsyncTraceState metrics("IDBObjectStore::openKeyCursor");
+IDBRequest* IDBObjectStore::openKeyCursor(
+    ScriptState* script_state,
+    const ScriptValue& range,
+    const V8IDBCursorDirection& v8_direction,
+    ExceptionState& exception_state) {
+  TRACE_EVENT1("IndexedDB", "IDBObjectStore::openKeyCursorRequestSetup",
+               "store_name", metadata_->name.Utf8());
+  IDBRequest::AsyncTraceState metrics(
+      IDBRequest::TypeForMetrics::kObjectStoreOpenKeyCursor);
   if (IsDeleted()) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kInvalidStateError,
@@ -1245,13 +1011,13 @@ IDBRequest* IDBObjectStore::openKeyCursor(ScriptState* script_state,
   }
 
   mojom::IDBCursorDirection direction =
-      IDBCursor::StringToDirection(direction_string);
+      IDBCursor::V8EnumToDirection(v8_direction.AsEnum());
   IDBKeyRange* key_range = IDBKeyRange::FromScriptValue(
       ExecutionContext::From(script_state), range, exception_state);
   if (exception_state.HadException())
     return nullptr;
 
-  if (!BackendDB()) {
+  if (!db().IsConnectionOpen()) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kDatabaseClosedErrorMessage);
     return nullptr;
@@ -1261,19 +1027,18 @@ IDBRequest* IDBObjectStore::openKeyCursor(ScriptState* script_state,
       script_state, this, transaction_.Get(), std::move(metrics));
   request->SetCursorDetails(indexed_db::kCursorKeyOnly, direction);
 
-  BackendDB()->OpenCursor(transaction_->Id(), Id(),
-                          IDBIndexMetadata::kInvalidId, key_range, direction,
-                          true, mojom::IDBTaskType::Normal,
-                          request->CreateWebCallbacks().release());
+  db().OpenCursor(Id(), IDBIndexMetadata::kInvalidId, key_range, direction,
+                  true, mojom::blink::IDBTaskType::Normal, request);
   return request;
 }
 
 IDBRequest* IDBObjectStore::count(ScriptState* script_state,
                                   const ScriptValue& range,
                                   ExceptionState& exception_state) {
-  IDB_TRACE1("IDBObjectStore::countRequestSetup", "store_name",
-             metadata_->name.Utf8());
-  IDBRequest::AsyncTraceState metrics("IDBObjectStore::count");
+  TRACE_EVENT1("IndexedDB", "IDBObjectStore::countRequestSetup", "store_name",
+               metadata_->name.Utf8());
+  IDBRequest::AsyncTraceState metrics(
+      IDBRequest::TypeForMetrics::kObjectStoreCount);
   if (IsDeleted()) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kInvalidStateError,
@@ -1292,7 +1057,7 @@ IDBRequest* IDBObjectStore::count(ScriptState* script_state,
   if (exception_state.HadException())
     return nullptr;
 
-  if (!BackendDB()) {
+  if (!db().IsConnectionOpen()) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       IDBDatabase::kDatabaseClosedErrorMessage);
     return nullptr;
@@ -1300,8 +1065,8 @@ IDBRequest* IDBObjectStore::count(ScriptState* script_state,
 
   IDBRequest* request = IDBRequest::Create(
       script_state, this, transaction_.Get(), std::move(metrics));
-  BackendDB()->Count(transaction_->Id(), Id(), IDBIndexMetadata::kInvalidId,
-                     key_range, request->CreateWebCallbacks().release());
+  db().Count(transaction_->Id(), Id(), IDBIndexMetadata::kInvalidId, key_range,
+             BindOnce(&IDBRequest::OnCount, WrapWeakPersistent(request)));
   return request;
 }
 
@@ -1383,10 +1148,10 @@ void IDBObjectStore::RenameIndex(int64_t index_id, const String& new_name) {
   DCHECK(transaction_->IsVersionChange());
   DCHECK(transaction_->IsActive());
 
-  BackendDB()->RenameIndex(transaction_->Id(), Id(), index_id, new_name);
+  db().RenameIndex(transaction_->Id(), Id(), index_id, new_name);
 
   auto metadata_iterator = metadata_->indexes.find(index_id);
-  DCHECK_NE(metadata_iterator, metadata_->indexes.end()) << "Invalid index_id";
+  CHECK_NE(metadata_iterator, metadata_->indexes.end()) << "Invalid index_id";
   const String& old_name = metadata_iterator->value->name;
 
   DCHECK(index_map_.Contains(old_name))
@@ -1407,8 +1172,53 @@ int64_t IDBObjectStore::FindIndexId(const String& name) const {
   return IDBIndexMetadata::kInvalidId;
 }
 
-WebIDBDatabase* IDBObjectStore::BackendDB() const {
-  return transaction_->BackendDB();
+IDBRequest* IDBObjectStore::CreateGetAllRequest(
+    IDBRequest::TypeForMetrics type_for_metrics,
+    ScriptState* script_state,
+    const IDBGetAllOptions& options,
+    mojom::blink::IDBGetAllResultType result_type,
+    ExceptionState& exception_state) {
+  IDBRequest::AsyncTraceState metrics(type_for_metrics);
+
+  if (IsDeleted()) {
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kInvalidStateError,
+        IDBDatabase::kObjectStoreDeletedErrorMessage);
+    return nullptr;
+  }
+
+  if (!transaction_->IsActive()) {
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kTransactionInactiveError,
+        transaction_->InactiveErrorMessage());
+    return nullptr;
+  }
+
+  IDBKeyRange* key_range = IDBKeyRange::FromScriptValue(
+      ExecutionContext::From(script_state), options.query(), exception_state);
+  if (exception_state.HadException()) {
+    return nullptr;
+  }
+
+  if (!db().IsConnectionOpen()) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                      IDBDatabase::kDatabaseClosedErrorMessage);
+    return nullptr;
+  }
+
+  const uint32_t count = IDBGetAllOptionsHelper::GetCount(options);
+  const mojom::blink::IDBCursorDirection direction =
+      IDBCursor::V8EnumToDirection(options.direction().AsEnum());
+
+  IDBRequest* request = IDBRequest::Create(
+      script_state, this, transaction_.Get(), std::move(metrics));
+  db().GetAll(transaction_->Id(), Id(), IDBIndexMetadata::kInvalidId, key_range,
+              result_type, count, direction, request);
+  return request;
+}
+
+IDBDatabase& IDBObjectStore::db() const {
+  return transaction_->db();
 }
 
 }  // namespace blink

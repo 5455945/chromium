@@ -1,8 +1,7 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/macros.h"
 #include "base/strings/string_split.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chromecast/browser/test/cast_browser_test.h"
@@ -10,6 +9,7 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "media/base/test_data_util.h"
+#include "media/cdm/clear_key_cdm_common.h"
 #include "url/gurl.h"
 #include "url/url_constants.h"
 
@@ -20,13 +20,16 @@ const char16_t kEnded[] = u"ENDED";
 const char16_t kError[] = u"ERROR";
 const char16_t kFailed[] = u"FAILED";
 
-const char kClearKeyKeySystem[] = "org.w3.clearkey";
 const char kWebMAudioOnly[] = "audio/webm; codecs=\"vorbis\"";
 }
 
 class CastNavigationBrowserTest : public CastBrowserTest {
  public:
   CastNavigationBrowserTest() {}
+
+  CastNavigationBrowserTest(const CastNavigationBrowserTest&) = delete;
+  CastNavigationBrowserTest& operator=(const CastNavigationBrowserTest&) =
+      delete;
 
   void SetUpOnMainThread() override {
     embedded_test_server()->ServeFilesFromSourceDirectory(
@@ -37,10 +40,9 @@ class CastNavigationBrowserTest : public CastBrowserTest {
   void LoadAboutBlank() {
     content::WebContents* web_contents =
         NavigateToURL(GURL(url::kAboutBlankURL));
-    content::TitleWatcher title_watcher(
-        web_contents, base::ASCIIToUTF16(url::kAboutBlankURL));
+    content::TitleWatcher title_watcher(web_contents, url::kAboutBlankURL16);
     std::u16string result = title_watcher.WaitAndGetTitle();
-    EXPECT_EQ(url::kAboutBlankURL, base::UTF16ToASCII(result));
+    EXPECT_EQ(url::kAboutBlankURL16, result);
   }
   void PlayAudio(const std::string& media_file) {
     PlayMedia("audio", media_file);
@@ -85,8 +87,6 @@ class CastNavigationBrowserTest : public CastBrowserTest {
     title_watcher.AlsoWaitForTitle(kFailed);
     return title_watcher.WaitAndGetTitle();
   }
-
-  DISALLOW_COPY_AND_ASSIGN(CastNavigationBrowserTest);
 };
 
 IN_PROC_BROWSER_TEST_F(CastNavigationBrowserTest, EmptyTest) {
@@ -100,15 +100,14 @@ IN_PROC_BROWSER_TEST_F(CastNavigationBrowserTest,
   PlayAudio("bear_pcm.wav");
 }
 
-#if !BUILDFLAG(IS_CAST_AUDIO_ONLY)
 // TODO: reenable test; crashes occasionally: http://crbug.com/754269
 IN_PROC_BROWSER_TEST_F(CastNavigationBrowserTest, DISABLED_VideoPlaybackMp4) {
   PlayVideo("bear.mp4");
 }
-#endif
 
 IN_PROC_BROWSER_TEST_F(CastNavigationBrowserTest, ClearKeySupport) {
-  PlayEncryptedMedia(kClearKeyKeySystem, kWebMAudioOnly, "bear-a_enc-a.webm");
+  PlayEncryptedMedia(media::kClearKeyKeySystem, kWebMAudioOnly,
+                     "bear-a_enc-a.webm");
 }
 
 }  // namespace shell

@@ -33,19 +33,24 @@
 namespace blink {
 
 class ExceptionState;
+class NodeCloningData;
+struct TextDiffRange;
 
 class CORE_EXPORT CharacterData : public Node {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
+  CharacterData(const CharacterData&) = delete;
+  CharacterData& operator=(const CharacterData&) = delete;
+
   // Makes the data Parkable. This enables de-duplication and compression.
   void MakeParkable();
   const String& data() const {
-    return is_parkable_ ? parkable_data_.ToString() : data_;
+    return IsParkableCharacterData() ? parkable_data_.ToString() : data_;
   }
   void setData(const String&);
   unsigned length() const {
-    return is_parkable_ ? parkable_data_.length() : data_.length();
+    return IsParkableCharacterData() ? parkable_data_.length() : data_.length();
   }
   String substringData(unsigned offset, unsigned count, ExceptionState&);
   void appendData(const String&);
@@ -59,48 +64,72 @@ class CORE_EXPORT CharacterData : public Node {
 
   bool ContainsOnlyWhitespaceOrEmpty() const;
 
-  StringImpl* DataImpl() { return data().Impl(); }
-
   void ParserAppendData(const String&);
 
  protected:
   CharacterData(TreeScope& tree_scope,
                 const String& text,
                 ConstructionType type)
+      : Node(&tree_scope, type), data_(!text.IsNull() ? text : g_empty_string) {
+    DCHECK(type == kCreateComment || type == kCreateText ||
+           type == kCreateCdataSection ||
+           type == kCreateProcessingInstruction || type == kCreateEditingText);
+  }
+
+  CharacterData(TreeScope& tree_scope, String&& text, ConstructionType type)
       : Node(&tree_scope, type),
-        is_parkable_(false),
-        data_(!text.IsNull() ? text : g_empty_string) {
-    DCHECK(type == kCreateOther || type == kCreateText ||
-           type == kCreateEditingText);
+        data_(!text.IsNull() ? std::move(text) : g_empty_string) {
+    DCHECK(type == kCreateComment || type == kCreateText ||
+           type == kCreateCdataSection ||
+           type == kCreateProcessingInstruction || type == kCreateEditingText);
+    DCHECK(!IsParkableCharacterData());
+  }
+
+  ~CharacterData() noexcept override {
+    if (IsParkableCharacterData()) {
+      parkable_data_.~ParkableString();
+    } else {
+      data_.~String();
+    }
   }
 
   void SetDataWithoutUpdate(const String& data) {
     DCHECK(!data.IsNull());
-    if (is_parkable_) {
-      is_parkable_ = false;
-      parkable_data_ = ParkableString();
+    if (!IsParkableCharacterData()) {
+      data_ = data;
+      return;
     }
-    data_ = data;
+    SetParkableCharacterData(false);
+    parkable_data_.~ParkableString();
+    new (&data_) String(data);
   }
+
   enum UpdateSource {
     kUpdateFromParser,
     kUpdateFromNonParser,
+    kUpdateFromAttributeChange,
   };
   void DidModifyData(const String& old_value, UpdateSource);
+  void SetDataFromAttributeChange(const String&);
 
-  bool is_parkable_;
-  ParkableString parkable_data_;
-  String data_;
+  union {
+    ParkableString parkable_data_;
+    String data_;
+  };
 
  private:
   String nodeValue() const final;
-  void setNodeValue(const String&) final;
+  void setNodeValue(const String&, ExceptionState&) final;
   bool IsCharacterDataNode() const final { return true; }
   void SetDataAndUpdate(const String&,
-                        unsigned offset_of_replaced_data,
-                        unsigned old_length,
-                        unsigned new_length,
+                        const TextDiffRange&,
                         UpdateSource = kUpdateFromNonParser);
+  Node* Clone(Document& factory,
+              NodeCloningData& data,
+              ContainerNode* append_to,
+              CustomElementRegistry* fallback_registry,
+              ExceptionState& append_exception_state) const override;
+  virtual CharacterData* CloneWithData(Document&, const String&) const = 0;
 
   bool IsContainerNode() const =
       delete;  // This will catch anyone doing an unnecessary check.

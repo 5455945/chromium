@@ -1,13 +1,11 @@
-# Copyright 2021 The Chromium Authors. All rights reserved.
+# Copyright 2021 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 import web_idl
-from . import target
 from .rule_base import RuleBase
 from .rule_store import RuleStore
 from .target_store import TargetStore
-from .target_type import TargetType
 
 
 class Validator(object):
@@ -48,10 +46,12 @@ class Validator(object):
         def assert_(condition, text, *args, **kwargs):
             if not condition:
                 error_message = text.format(*args, **kwargs)
-                report_error(rule=rule,
-                             target=target_object,
-                             target_type=target_type,
-                             error_message=error_message)
+                report_error(
+                    rule=rule,
+                    target=target_object,
+                    target_type=target_type,
+                    error_message=error_message,
+                )
 
         for target_type in rule_store.all_target_types:
             rules = rule_store.get_rules(target_type)

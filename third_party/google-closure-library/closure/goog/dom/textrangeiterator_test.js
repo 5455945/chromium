@@ -1,21 +1,12 @@
-// Copyright 2008 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 goog.module('goog.dom.TextRangeIteratorTest');
 goog.setTestOnly();
 
-const StopIteration = goog.require('goog.iter.StopIteration');
 const TagName = goog.require('goog.dom.TagName');
 const TextRangeIterator = goog.require('goog.dom.TextRangeIterator');
 const dom = goog.require('goog.dom');
@@ -57,7 +48,7 @@ testSuite({
         new TextRangeIterator(test2.firstChild, 1, test2.lastChild, 2);
 
     // foo
-    let node = iterator.next();
+    let node = iterator.next().value;
     assertEquals(
         'Should have start offset at iteration step 1', 1,
         iterator.getStartTextOffset());
@@ -66,7 +57,7 @@ testSuite({
         iterator.getEndTextOffset());
 
     // <br>
-    node = iterator.next();
+    node = iterator.next().value;
     assertEquals(
         'Should not have start offset at iteration step 2', -1,
         iterator.getStartTextOffset());
@@ -75,7 +66,7 @@ testSuite({
         iterator.getEndTextOffset());
 
     // </br>
-    node = iterator.next();
+    node = iterator.next().value;
     assertEquals(
         'Should not have start offset at iteration step 3', -1,
         iterator.getStartTextOffset());
@@ -84,7 +75,7 @@ testSuite({
         iterator.getEndTextOffset());
 
     // bar
-    node = iterator.next();
+    node = iterator.next().value;
     assertEquals(
         'Should not have start offset at iteration step 4', 0,
         iterator.getStartTextOffset());
@@ -108,39 +99,49 @@ testSuite({
     testingDom.assertNodesMatch(iterator, ['e', '#b1']);
   },
 
+  /**
+   * @suppress {strictMissingProperties} suppression added to enable type
+   * checking
+   */
   testSkipTagDoesNotSkipEnd() {
     // Iterate over 'Tex'.
     const iterator = new TextRangeIterator(
         test.firstChild.firstChild, 0, test.firstChild.lastChild, 1);
 
-    let node = iterator.next();
+    let node = iterator.next().value;
     assertEquals('T', node.nodeValue);
 
-    node = iterator.next();
+    node = iterator.next().value;
     assertEquals(String(TagName.B), node.tagName);
 
     iterator.skipTag();
 
-    node = iterator.next();
+    node = iterator.next().value;
     assertEquals('xt', node.nodeValue);
   },
 
+  /**
+   * @suppress {strictMissingProperties} suppression added to enable type
+   * checking
+   */
   testSkipTagSkipsEnd() {
     // Iterate over 'Te'.
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const iterator = new TextRangeIterator(
         test.firstChild.firstChild, 0,
         dom.getElementsByTagName(TagName.B, test)[0].firstChild, 1);
 
-    let node = iterator.next();
+    let node = iterator.next().value;
     assertEquals('T', node.nodeValue);
 
-    node = iterator.next();
+    node = iterator.next().value;
     assertEquals(String(TagName.B), node.tagName);
 
-    const ex = assertThrows('Should stop iteration when skipping B', () => {
-      iterator.skipTag();
-    });
-    assertEquals(StopIteration, ex);
+    iterator.skipTag();
+    const lastVal = iterator.next();
+    assertTrue('Should be done:true when done', lastVal.done);
+    assertEquals(
+        'Should emit undefined value when done', undefined, lastVal.value);
   },
 
   testReverseIteration() {
@@ -165,7 +166,7 @@ testSuite({
         new TextRangeIterator(test2.firstChild, 1, test2.lastChild, 2, true);
 
     // bar
-    let node = iterator.next();
+    let node = iterator.next().value;
     assertEquals(
         'Should have start offset at iteration step 1', 0,
         iterator.getStartTextOffset());
@@ -174,7 +175,7 @@ testSuite({
         iterator.getEndTextOffset());
 
     // </br>
-    node = iterator.next();
+    node = iterator.next().value;
     assertEquals(
         'Should not have start offset at iteration step 2', -1,
         iterator.getStartTextOffset());
@@ -183,7 +184,7 @@ testSuite({
         iterator.getEndTextOffset());
 
     // <br>
-    node = iterator.next();
+    node = iterator.next().value;
     assertEquals(
         'Should not have start offset at iteration step 3', -1,
         iterator.getStartTextOffset());
@@ -192,12 +193,12 @@ testSuite({
         iterator.getEndTextOffset());
 
     // foo
-    node = iterator.next();
+    node = iterator.next().value;
     assertEquals(
         'Should not have start offset at iteration step 4', 1,
         iterator.getStartTextOffset());
     assertEquals(
         'Should have end offset at iteration step 4', node.nodeValue.length,
         iterator.getEndTextOffset());
-  },
+  }
 });

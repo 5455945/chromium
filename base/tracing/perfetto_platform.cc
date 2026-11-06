@@ -1,48 +1,70 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/tracing/perfetto_platform.h"
 
-#include "base/deferred_sequenced_task_runner.h"
+#include "base/process/process_handle.h"
+#include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
-#include "base/trace_event/trace_event.h"
 #include "base/tracing/perfetto_task_runner.h"
 #include "base/tracing_buildflags.h"
 #include "build/build_config.h"
-#include "third_party/perfetto/protos/perfetto/trace/track_event/thread_descriptor.gen.h"
 
-#if !defined(OS_NACL)
-#include "third_party/perfetto/include/perfetto/ext/base/thread_task_runner.h"
-#endif
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/apk_info.h"
+#endif  // BUILDFLAG(IS_ANDROID)
 
-namespace base {
-namespace tracing {
+namespace base::tracing {
 
-PerfettoPlatform::PerfettoPlatform(TaskRunnerType task_runner_type)
-    : task_runner_type_(task_runner_type),
-      deferred_task_runner_(new DeferredSequencedTaskRunner()),
+namespace {
+
+PerfettoPlatform* g_platform_instance = nullptr;
+
+}  // namespace
+
+// static
+PerfettoPlatform& PerfettoPlatform::MaybeCreateInstance(
+    scoped_refptr<base::SequencedTaskRunner> task_runner,
+    Options options) {
+  static base::NoDestructor<PerfettoPlatform> platform(std::move(task_runner),
+                                                       std::move(options));
+  return *platform;
+}
+
+// static
+PerfettoPlatform& PerfettoPlatform::Get() {
+  CHECK_NE(g_platform_instance, nullptr);
+  return *g_platform_instance;
+}
+
+PerfettoPlatform::PerfettoPlatform(
+    scoped_refptr<base::SequencedTaskRunner> task_runner,
+    Options options)
+    : process_name_prefix_(std::move(options.process_name_prefix)),
+      defer_delayed_tasks_(options.defer_delayed_tasks),
+      real_process_id_(options.real_process_id == base::kNullProcessId
+                           ? base::GetCurrentProcId()
+                           : options.real_process_id),
+      task_runner_(std::move(task_runner)),
       thread_local_object_([](void* object) {
         delete static_cast<ThreadLocalObject*>(object);
       }) {
-  ThreadIdNameManager::GetInstance()->AddObserver(this);
+  CHECK_EQ(g_platform_instance, nullptr);
+  g_platform_instance = this;
 }
 
-PerfettoPlatform::~PerfettoPlatform() {
-  ThreadIdNameManager::GetInstance()->RemoveObserver(this);
+PerfettoPlatform::~PerfettoPlatform() = default;
+
+void PerfettoPlatform::SetupForTesting(
+    scoped_refptr<base::SequencedTaskRunner> task_runner) {
+  ResetTaskRunner(std::move(task_runner));
 }
 
-void PerfettoPlatform::StartTaskRunner(
-    scoped_refptr<SequencedTaskRunner> task_runner) {
-  DCHECK_EQ(task_runner_type_, TaskRunnerType::kThreadPool);
-  DCHECK(!did_start_task_runner_);
-  deferred_task_runner_->StartWithTaskRunner(task_runner);
-  did_start_task_runner_ = true;
-}
-
-SequencedTaskRunner* PerfettoPlatform::task_runner() const {
-  return deferred_task_runner_.get();
+scoped_refptr<base::SequencedTaskRunner> PerfettoPlatform::task_runner() const {
+  return task_runner_;
 }
 
 PerfettoPlatform::ThreadLocalObject*
@@ -57,42 +79,48 @@ PerfettoPlatform::GetOrCreateThreadLocalObject() {
 
 std::unique_ptr<perfetto::base::TaskRunner> PerfettoPlatform::CreateTaskRunner(
     const CreateTaskRunnerArgs&) {
-  switch (task_runner_type_) {
-    case TaskRunnerType::kBuiltin:
-#if !defined(OS_NACL)
-      return std::make_unique<perfetto::base::ThreadTaskRunner>(
-          perfetto::base::ThreadTaskRunner::CreateAndStart());
-#else
-      DCHECK(false);
-      return nullptr;
-#endif
-    case TaskRunnerType::kThreadPool:
-      // We can't create a real task runner yet because the ThreadPool may not
-      // be initialized. Instead, we point Perfetto to a buffering task runner
-      // which will become active as soon as the thread pool is up (see
-      // StartTaskRunner).
-      return std::make_unique<PerfettoTaskRunner>(deferred_task_runner_);
+  DCHECK(!perfetto_task_runner_);
+  auto perfetto_task_runner =
+      std::make_unique<PerfettoTaskRunner>(task_runner_, defer_delayed_tasks_);
+  perfetto_task_runner_ = perfetto_task_runner->GetWeakPtr();
+  return perfetto_task_runner;
+}
+
+void PerfettoPlatform::ResetTaskRunner(
+    scoped_refptr<base::SequencedTaskRunner> task_runner) {
+  task_runner_ = task_runner;
+  if (perfetto_task_runner_) {
+    perfetto_task_runner_->ResetTaskRunner(task_runner);
   }
 }
 
+// This method is used by the SDK to determine the producer name.
+// Note that we override the producer name for the mojo backend in ProducerHost,
+// and thus this only affects the producer name for the system backend.
 std::string PerfettoPlatform::GetCurrentProcessName() {
-  // TODO(skyostil): Unimplemented since we're not registering producers through
-  // the client API yet.
-  return "";
-}
+#if BUILDFLAG(IS_ANDROID)
+  const std::string& host_package_name = android::apk_info::host_package_name();
+#else
+  std::string host_package_name;
+#endif  // BUILDFLAG(IS_ANDROID)
 
-void PerfettoPlatform::OnThreadNameChanged(const char* name) {
-#if BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
-  // TODO(skyostil): Also capture names for threads which predate tracing being
-  // initialized.
-  if (perfetto::Tracing::IsInitialized()) {
-    auto track = perfetto::ThreadTrack::Current();
-    auto desc = track.Serialize();
-    desc.mutable_thread()->set_thread_name(name);
-    perfetto::TrackEvent::SetTrackDescriptor(track, std::move(desc));
+  // On Android we want to include if this is webview inside of an app or
+  // Android Chrome. To aid this we add the host_package_name to differentiate
+  // the various apps and sources.
+  std::string process_name;
+  if (!host_package_name.empty()) {
+    process_name = StrCat({process_name_prefix_, host_package_name, "-",
+                           NumberToString(real_process_id_)});
+  } else {
+    process_name =
+        StrCat({process_name_prefix_, NumberToString(real_process_id_)});
   }
-#endif  // BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
+  return process_name;
 }
 
-}  // namespace tracing
-}  // namespace base
+perfetto::base::PlatformThreadId PerfettoPlatform::GetCurrentThreadId() {
+  return base::strict_cast<perfetto::base::PlatformThreadId>(
+      base::PlatformThread::CurrentId().raw());
+}
+
+}  // namespace base::tracing

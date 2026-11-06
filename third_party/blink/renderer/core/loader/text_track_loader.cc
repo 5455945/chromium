@@ -31,7 +31,7 @@
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_initiator_type_names.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_parameters.h"
 #include "third_party/blink/renderer/platform/loader/fetch/raw_resource.h"
@@ -66,13 +66,17 @@ void TextTrackLoader::CueLoadTimerFired(TimerBase* timer) {
     client_->CueLoadingCompleted(this, state_ == kFailed);
 }
 
+void TextTrackLoader::Detach() {
+  CancelLoad();
+  cue_load_timer_.Stop();
+}
+
 void TextTrackLoader::CancelLoad() {
   ClearResource();
 }
 
 void TextTrackLoader::DataReceived(Resource* resource,
-                                   const char* data,
-                                   size_t length) {
+                                   base::span<const char> data) {
   DCHECK_EQ(GetResource(), resource);
 
   if (state_ == kFailed)
@@ -83,7 +87,7 @@ void TextTrackLoader::DataReceived(Resource* resource,
         this, GetDocument());
   }
 
-  cue_parser_->ParseBytes(data, length);
+  cue_parser_->ParseBytes(data);
 }
 
 void TextTrackLoader::NotifyFinished(Resource* resource) {

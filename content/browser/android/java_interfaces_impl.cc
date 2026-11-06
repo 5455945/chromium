@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,31 +10,45 @@
 
 #include "base/android/jni_android.h"
 #include "base/memory/singleton.h"
+#include "base/task/single_thread_task_runner.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
-#include "content/public/android/content_jni_headers/InterfaceRegistrarImpl_jni.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
 #include "mojo/public/cpp/system/message_pipe.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "content/public/android/content_jni_headers/InterfaceRegistrarImpl_jni.h"
+
 namespace content {
 
 namespace {
 
+template <BrowserThread::ID thread>
 class JavaInterfaceProviderHolder {
  public:
   JavaInterfaceProviderHolder() {
     mojo::PendingRemote<service_manager::mojom::InterfaceProvider> provider;
     JNIEnv* env = base::android::AttachCurrentThread();
-    Java_InterfaceRegistrarImpl_createInterfaceRegistry(
-        env,
-        provider.InitWithNewPipeAndPassReceiver().PassPipe().release().value());
+    if (thread == BrowserThread::IO) {
+      Java_InterfaceRegistrarImpl_createInterfaceRegistryOnIOThread(
+          env, provider.InitWithNewPipeAndPassReceiver()
+                   .PassPipe()
+                   .release()
+                   .value());
+    } else {
+      Java_InterfaceRegistrarImpl_createInterfaceRegistry(
+          env, provider.InitWithNewPipeAndPassReceiver()
+                   .PassPipe()
+                   .release()
+                   .value());
+    }
     interface_provider_.Bind(std::move(provider));
   }
 
   static JavaInterfaceProviderHolder* GetInstance() {
-    DCHECK_CURRENTLY_ON(BrowserThread::UI);
-    return base::Singleton<JavaInterfaceProviderHolder>::get();
+    CHECK_CURRENTLY_ON(thread, base::NotFatalUntil::M159);
+    return base::Singleton<JavaInterfaceProviderHolder<thread>>::get();
   }
 
   service_manager::InterfaceProvider* GetJavaInterfaces() {
@@ -43,13 +57,19 @@ class JavaInterfaceProviderHolder {
 
  private:
   service_manager::InterfaceProvider interface_provider_{
-      base::ThreadTaskRunnerHandle::Get()};
+      base::SingleThreadTaskRunner::GetCurrentDefault()};
 };
 
 }  // namespace
 
 service_manager::InterfaceProvider* GetGlobalJavaInterfaces() {
-  return JavaInterfaceProviderHolder::GetInstance()->GetJavaInterfaces();
+  return JavaInterfaceProviderHolder<BrowserThread::UI>::GetInstance()
+      ->GetJavaInterfaces();
+}
+
+service_manager::InterfaceProvider* GetGlobalJavaInterfacesOnIOThread() {
+  return JavaInterfaceProviderHolder<BrowserThread::IO>::GetInstance()
+      ->GetJavaInterfaces();
 }
 
 void BindInterfaceRegistryForWebContents(
@@ -71,3 +91,5 @@ void BindInterfaceRegistryForRenderFrameHost(
 }
 
 }  // namespace content
+
+DEFINE_JNI(InterfaceRegistrarImpl)

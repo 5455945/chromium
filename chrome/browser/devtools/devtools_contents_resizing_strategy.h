@@ -1,11 +1,11 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_DEVTOOLS_DEVTOOLS_CONTENTS_RESIZING_STRATEGY_H_
 #define CHROME_BROWSER_DEVTOOLS_DEVTOOLS_CONTENTS_RESIZING_STRATEGY_H_
 
-#include "base/macros.h"
+#include "chrome/browser/devtools/devtools_dock_side.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
@@ -15,23 +15,29 @@
 class DevToolsContentsResizingStrategy {
  public:
   DevToolsContentsResizingStrategy();
-  explicit DevToolsContentsResizingStrategy(
-      const gfx::Rect& bounds);
+  DevToolsContentsResizingStrategy(devtools::DockSide dock_side,
+                                   const gfx::Rect& bounds);
+
+  DevToolsContentsResizingStrategy(const DevToolsContentsResizingStrategy&) =
+      delete;
+  DevToolsContentsResizingStrategy& operator=(
+      const DevToolsContentsResizingStrategy&) = delete;
 
   void CopyFrom(const DevToolsContentsResizingStrategy& strategy);
   bool Equals(const DevToolsContentsResizingStrategy& strategy);
 
   const gfx::Rect& bounds() const { return bounds_; }
   bool hide_inspected_contents() const { return hide_inspected_contents_; }
+  devtools::DockSide dock_side() const { return dock_side_; }
 
  private:
+  devtools::DockSide dock_side_ = devtools::DockSide::kNone;
+
   // Contents bounds. When non-empty, used instead of insets.
   gfx::Rect bounds_;
 
   // Determines whether inspected contents is visible.
   bool hide_inspected_contents_;
-
-  DISALLOW_COPY_AND_ASSIGN(DevToolsContentsResizingStrategy);
 };
 
 // Applies contents resizing strategy, producing bounds for devtools and
@@ -41,7 +47,7 @@ class DevToolsContentsResizingStrategy {
 // is allowed.
 void ApplyDevToolsContentsResizingStrategy(
     const DevToolsContentsResizingStrategy& strategy,
-    const gfx::Size& container_size,
+    const gfx::Rect& container_bounds,
     gfx::Rect* new_devtools_bounds,
     gfx::Rect* new_contents_bounds);
 

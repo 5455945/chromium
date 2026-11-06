@@ -1,22 +1,22 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_COOKIES_COOKIE_STORE_TEST_HELPERS_H_
 #define NET_COOKIES_COOKIE_STORE_TEST_HELPERS_H_
 
-#include "net/cookies/cookie_monster.h"
-
+#include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/ref_counted.h"
 #include "base/synchronization/lock.h"
 #include "net/cookies/cookie_change_dispatcher.h"
+#include "net/cookies/cookie_monster.h"
 #include "net/log/net_log_with_source.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class GURL;
 
@@ -25,26 +25,34 @@ namespace net {
 class DelayedCookieMonsterChangeDispatcher : public CookieChangeDispatcher {
  public:
   DelayedCookieMonsterChangeDispatcher();
+
+  DelayedCookieMonsterChangeDispatcher(
+      const DelayedCookieMonsterChangeDispatcher&) = delete;
+  DelayedCookieMonsterChangeDispatcher& operator=(
+      const DelayedCookieMonsterChangeDispatcher&) = delete;
+
   ~DelayedCookieMonsterChangeDispatcher() override;
 
   // net::CookieChangeDispatcher
-  std::unique_ptr<CookieChangeSubscription> AddCallbackForCookie(
+  [[nodiscard]] std::unique_ptr<CookieChangeSubscription> AddCallbackForCookie(
       const GURL& url,
       const std::string& name,
-      CookieChangeCallback callback) override WARN_UNUSED_RESULT;
-  std::unique_ptr<CookieChangeSubscription> AddCallbackForUrl(
+      const std::optional<CookiePartitionKey>& cookie_partition_key,
+      CookieChangeCallback callback) override;
+  [[nodiscard]] std::unique_ptr<CookieChangeSubscription> AddCallbackForUrl(
       const GURL& url,
-      CookieChangeCallback callback) override WARN_UNUSED_RESULT;
-  std::unique_ptr<CookieChangeSubscription> AddCallbackForAllChanges(
-      CookieChangeCallback callback) override WARN_UNUSED_RESULT;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(DelayedCookieMonsterChangeDispatcher);
+      const std::optional<CookiePartitionKey>& cookie_partition_key,
+      CookieChangeCallback callback) override;
+  [[nodiscard]] std::unique_ptr<CookieChangeSubscription>
+  AddCallbackForAllChanges(CookieChangeCallback callback) override;
 };
 
 class DelayedCookieMonster : public CookieStore {
  public:
   DelayedCookieMonster();
+
+  DelayedCookieMonster(const DelayedCookieMonster&) = delete;
+  DelayedCookieMonster& operator=(const DelayedCookieMonster&) = delete;
 
   ~DelayedCookieMonster() override;
 
@@ -52,14 +60,27 @@ class DelayedCookieMonster : public CookieStore {
   // invoke the internal callback.
   // Post a delayed task to invoke the original callback with the results.
 
-  void SetCanonicalCookieAsync(std::unique_ptr<CanonicalCookie> cookie,
-                               const GURL& source_url,
-                               const CookieOptions& options,
-                               SetCookiesCallback callback) override;
+  void SetCanonicalCookieAsync(
+      std::unique_ptr<CanonicalCookie> cookie,
+      const GURL& source_url,
+      const CookieOptions& options,
+      SetCookiesCallback callback,
+      const std::optional<CookieAccessResult> cookie_access_result =
+          std::nullopt) override;
 
-  void GetCookieListWithOptionsAsync(const GURL& url,
-                                     const CookieOptions& options,
-                                     GetCookieListCallback callback) override;
+  // This function is for test purposes only.
+  // Call the asynchronous CookieMonster function, expect it to immediately
+  // invoke the internal callback.
+  // Post a delayed task to invoke the original callback with the results.
+  void SetUnsafeCanonicalCookieForTestAsync(
+      std::unique_ptr<CanonicalCookie> cookie,
+      SetCookiesCallback callback) override;
+
+  void GetCookieListWithOptionsAsync(
+      const GURL& url,
+      const CookieOptions& options,
+      const CookiePartitionKeyCollection& cookie_partition_key_collection,
+      GetCookieListCallback callback) override;
 
   void GetAllCookiesAsync(GetAllCookiesCallback callback) override;
 
@@ -81,7 +102,7 @@ class DelayedCookieMonster : public CookieStore {
 
   CookieChangeDispatcher& GetChangeDispatcher() override;
 
-  void SetCookieableSchemes(const std::vector<std::string>& schemes,
+  void SetCookieableSchemes(std::vector<std::string> schemes,
                             SetCookieableSchemesCallback callback) override;
 
  private:
@@ -106,14 +127,12 @@ class DelayedCookieMonster : public CookieStore {
   std::unique_ptr<CookieMonster> cookie_monster_;
   DelayedCookieMonsterChangeDispatcher change_dispatcher_;
 
-  bool did_run_;
+  bool did_run_ = false;
   CookieAccessResult result_;
   std::string cookie_;
   std::string cookie_line_;
   CookieAccessResultList cookie_access_result_list_;
   CookieList cookie_list_;
-
-  DISALLOW_COPY_AND_ASSIGN(DelayedCookieMonster);
 };
 
 class CookieURLHelper {
@@ -121,7 +140,7 @@ class CookieURLHelper {
   explicit CookieURLHelper(const std::string& url_string);
 
   const std::string& domain() const { return domain_and_registry_; }
-  std::string host() const { return url_.host(); }
+  std::string host() const { return url_.GetHost(); }
   const GURL& url() const { return url_; }
   const GURL AppendPath(const std::string& path) const;
 
@@ -158,7 +177,7 @@ class FlushablePersistentStore : public CookieMonster::PersistentCookieStore {
  private:
   ~FlushablePersistentStore() override;
 
-  int flush_count_;
+  int flush_count_ = 0;
   base::Lock flush_count_lock_;  // Protects |flush_count_|.
 };
 
@@ -173,9 +192,14 @@ class CallbackCounter : public base::RefCountedThreadSafe<CallbackCounter> {
   friend class base::RefCountedThreadSafe<CallbackCounter>;
   ~CallbackCounter();
 
-  int callback_count_;
+  int callback_count_ = 0;
   base::Lock callback_count_lock_;  // Protects |callback_count_|.
 };
+
+// Returns a cookie expiration string in the form of "; expires=<date>", where
+// date is an RFC 7231 date a year in the future, which can be appended to
+// cookie lines.
+std::string FutureCookieExpirationString();
 
 }  // namespace net
 

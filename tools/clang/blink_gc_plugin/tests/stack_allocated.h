@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -50,6 +50,10 @@ private:
     StackObject m_anotherPart; // Also fine.
 };
 
+class IgnoringStackAllocated {
+ private:
+  STACK_ALLOCATED_IGNORE("for testing") StackObject m_stackObject;
+};
 }
 
-#endif
+#endif  // STACK_ALLOCATED_H_

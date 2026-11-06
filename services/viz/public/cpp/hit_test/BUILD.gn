@@ -1,4 +1,4 @@
-# Copyright 2018 The Chromium Authors. All rights reserved.
+# Copyright 2018 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -8,12 +8,14 @@ source_set("tests") {
   sources = [ "mojom_traits_unittest.cc" ]
 
   deps = [
+    "//base/test:fuzztest_support",
     "//base/test:test_support",
-    "//components/viz/common:common",
+    "//components/viz/common",
     "//components/viz/test:test_support",
     "//mojo/public/cpp/test_support:test_utils",
     "//services/viz/public/mojom",
     "//testing/gtest",
+    "//third_party/fuzztest",
     "//ui/gfx:test_support",
     "//ui/gfx/geometry/mojom:mojom_traits",
   ]

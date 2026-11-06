@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,37 +9,39 @@
 #include <vector>
 
 #include "ash/app_list/model/app_list_model.h"
-#include "ash/public/cpp/app_list/app_list_features.h"
-#include "ash/public/cpp/app_list/app_list_switches.h"
-#include "base/callback.h"
-#include "base/files/file_path.h"
-#include "base/strings/utf_string_conversions.h"
-#include "ui/gfx/image/image_skia.h"
+#include "ash/public/cpp/app_list/app_list_types.h"
+#include "base/functional/callback.h"
+#include "ui/base/mojom/menu_source_type.mojom-forward.h"
 
 namespace ash {
 namespace test {
 
 AppListTestViewDelegate::AppListTestViewDelegate()
     : model_(std::make_unique<AppListTestModel>()),
-      search_model_(std::make_unique<SearchModel>()) {}
-
-AppListTestViewDelegate::~AppListTestViewDelegate() {}
-
-AppListModel* AppListTestViewDelegate::GetModel() {
-  return model_.get();
+      search_model_(std::make_unique<SearchModel>()),
+      quick_app_access_model_(std::make_unique<QuickAppAccessModel>()) {
+  model_provider_.SetActiveModel(model_.get(), search_model_.get(),
+                                 quick_app_access_model_.get());
 }
 
-SearchModel* AppListTestViewDelegate::GetSearchModel() {
-  return search_model_.get();
-}
+AppListTestViewDelegate::~AppListTestViewDelegate() = default;
 
 bool AppListTestViewDelegate::KeyboardTraversalEngaged() {
   return true;
 }
 
+std::vector<AppListSearchControlCategory>
+AppListTestViewDelegate::GetToggleableCategories() const {
+  return std::vector<AppListSearchControlCategory>();
+}
+
+void AppListTestViewDelegate::StartZeroStateSearch(base::OnceClosure callback,
+                                                   base::TimeDelta timeout) {
+  std::move(callback).Run();
+}
+
 void AppListTestViewDelegate::OpenSearchResult(
     const std::string& result_id,
-    ash::AppListSearchResultType result_type,
     int event_flags,
     ash::AppListLaunchedFrom launched_from,
     ash::AppListLaunchType launch_type,
@@ -49,10 +51,6 @@ void AppListTestViewDelegate::OpenSearchResult(
   for (size_t i = 0; i < results->item_count(); ++i) {
     if (results->GetItemAt(i)->id() == result_id) {
       open_search_result_counts_[i]++;
-      if (app_list_features::IsAssistantSearchEnabled() &&
-          results->GetItemAt(i)->is_omnibox_search()) {
-        ++open_assistant_ui_count_;
-      }
       break;
     }
   }
@@ -61,12 +59,19 @@ void AppListTestViewDelegate::OpenSearchResult(
   if (launch_type == ash::AppListLaunchType::kAppSearchResult) {
     switch (launched_from) {
       case ash::AppListLaunchedFrom::kLaunchedFromSearchBox:
-      case ash::AppListLaunchedFrom::kLaunchedFromSuggestionChip:
+      case ash::AppListLaunchedFrom::kLaunchedFromRecentApps:
         RecordAppLaunched(launched_from);
         return;
       case ash::AppListLaunchedFrom::kLaunchedFromGrid:
       case ash::AppListLaunchedFrom::kLaunchedFromShelf:
+      case ash::AppListLaunchedFrom::kLaunchedFromContinueTask:
+      case ash::AppListLaunchedFrom::kLaunchedFromQuickAppAccess:
+      case ash::AppListLaunchedFrom::kLaunchedFromDiscoveryChip:
+      case ash::AppListLaunchedFrom::kLaunchedFromSearchBoxIcon:
         return;
+      case ash::AppListLaunchedFrom::DEPRECATED_kLaunchedFromAppsCollections:
+      case ash::AppListLaunchedFrom::DEPRECATED_kLaunchedFromSuggestionChip:
+        NOTREACHED();
     }
   }
 }
@@ -76,9 +81,12 @@ void AppListTestViewDelegate::DismissAppList() {
 }
 
 void AppListTestViewDelegate::ReplaceTestModel(int item_count) {
+  search_model_ = std::make_unique<SearchModel>();
   model_ = std::make_unique<AppListTestModel>();
   model_->PopulateApps(item_count);
-  search_model_ = std::make_unique<SearchModel>();
+  quick_app_access_model_ = std::make_unique<QuickAppAccessModel>();
+  model_provider_.SetActiveModel(model_.get(), search_model_.get(),
+                                 quick_app_access_model_.get());
 }
 
 void AppListTestViewDelegate::SetSearchEngineIsGoogle(bool is_google) {
@@ -89,20 +97,11 @@ void AppListTestViewDelegate::SetIsTabletModeEnabled(bool is_tablet_mode) {
   is_tablet_mode_ = is_tablet_mode;
 }
 
-void AppListTestViewDelegate::SetShouldShowSuggestedContentInfo(
-    bool should_show) {
-  should_show_suggested_content_info_ = should_show;
-}
-
-const std::vector<SkColor>&
-AppListTestViewDelegate::GetWallpaperProminentColors() {
-  return wallpaper_prominent_colors_;
-}
-
 void AppListTestViewDelegate::ActivateItem(
     const std::string& id,
     int event_flags,
-    ash::AppListLaunchedFrom launched_from) {
+    ash::AppListLaunchedFrom launched_from,
+    bool is_app_above_the_fold) {
   AppListItem* item = model_->FindItem(id);
   if (!item)
     return;
@@ -113,6 +112,7 @@ void AppListTestViewDelegate::ActivateItem(
 
 void AppListTestViewDelegate::GetContextMenuModel(
     const std::string& id,
+    AppListItemContext item_context,
     GetContextMenuModelCallback callback) {
   AppListItem* item = model_->FindItem(id);
   // TODO(stevenjb/jennyz): Implement this for folder items
@@ -124,14 +124,9 @@ void AppListTestViewDelegate::GetContextMenuModel(
   std::move(callback).Run(std::move(menu_model));
 }
 
-ui::ImplicitAnimationObserver* AppListTestViewDelegate::GetAnimationObserver(
-    ash::AppListViewState target_state) {
-  return nullptr;
-}
-
 void AppListTestViewDelegate::ShowWallpaperContextMenu(
     const gfx::Point& onscreen_location,
-    ui::MenuSourceType source_type) {
+    ui::mojom::MenuSourceType source_type) {
   ++show_wallpaper_context_menu_count_;
 }
 
@@ -143,59 +138,44 @@ bool AppListTestViewDelegate::ShouldDismissImmediately() {
   return false;
 }
 
-int AppListTestViewDelegate::GetTargetYForAppListHide(
-    aura::Window* root_window) {
-  return 0;
+bool AppListTestViewDelegate::HasValidProfile() const {
+  return true;
 }
 
-int AppListTestViewDelegate::AdjustAppListViewScrollOffset(int offset,
-                                                           ui::EventType type) {
-  return offset;
+bool AppListTestViewDelegate::ShouldHideContinueSection() const {
+  return false;
 }
 
-void AppListTestViewDelegate::GetSearchResultContextMenuModel(
-    const std::string& result_id,
-    GetContextMenuModelCallback callback) {
-  auto menu = std::make_unique<ui::SimpleMenuModel>(this);
-  // Change items if needed.
-  int command_id = 0;
-  menu->AddItem(command_id++, u"Item0");
-  menu->AddItem(command_id++, u"Item1");
-  std::move(callback).Run(std::move(menu));
-}
+void AppListTestViewDelegate::SetHideContinueSection(bool hide) {}
 
-ash::AssistantViewDelegate*
-AppListTestViewDelegate::GetAssistantViewDelegate() {
-  return nullptr;
+bool AppListTestViewDelegate::IsCategoryEnabled(
+    AppListSearchControlCategory category) {
+  return true;
 }
 
 void AppListTestViewDelegate::OnSearchResultVisibilityChanged(
     const std::string& id,
     bool visibility) {}
 
-void AppListTestViewDelegate::NotifySearchResultsForLogging(
-    const std::u16string& raw_query,
-    const ash::SearchResultIdWithPositionIndices& results,
-    int position_index) {}
-
-void AppListTestViewDelegate::MaybeIncreaseSuggestedContentInfoShownCount() {}
-
-bool AppListTestViewDelegate::IsAssistantAllowedAndEnabled() const {
-  return false;
-}
-
-bool AppListTestViewDelegate::ShouldShowSuggestedContentInfo() const {
-  return should_show_suggested_content_info_;
-}
-
-void AppListTestViewDelegate::MarkSuggestedContentInfoDismissed() {
-  should_show_suggested_content_info_ = false;
-}
-
 void AppListTestViewDelegate::OnStateTransitionAnimationCompleted(
-    ash::AppListViewState state) {}
+    AppListViewState state,
+    bool was_animation_interrupted) {}
 
-void AppListTestViewDelegate::OnViewStateChanged(AppListViewState state) {}
+AppListState AppListTestViewDelegate::GetCurrentAppListPage() const {
+  return app_list_page_;
+}
+
+void AppListTestViewDelegate::OnAppListPageChanged(AppListState page) {
+  app_list_page_ = page;
+}
+
+AppListViewState AppListTestViewDelegate::GetAppListViewState() const {
+  return app_list_view_state_;
+}
+
+void AppListTestViewDelegate::OnViewStateChanged(AppListViewState state) {
+  app_list_view_state_ = state;
+}
 
 void AppListTestViewDelegate::GetAppLaunchedMetricParams(
     AppLaunchedMetricParams* metric_params) {}
@@ -211,11 +191,15 @@ int AppListTestViewDelegate::GetShelfSize() {
   return 56;
 }
 
+int AppListTestViewDelegate::GetSystemShelfInsetsInTabletMode() {
+  return GetShelfSize();
+}
+
 bool AppListTestViewDelegate::AppListTargetVisibility() const {
   return true;
 }
 
-bool AppListTestViewDelegate::IsInTabletMode() {
+bool AppListTestViewDelegate::IsInTabletMode() const {
   return is_tablet_mode_;
 }
 
@@ -225,7 +209,7 @@ AppListNotifier* AppListTestViewDelegate::GetNotifier() {
 
 void AppListTestViewDelegate::RecordAppLaunched(
     ash::AppListLaunchedFrom launched_from) {
-  RecordAppListAppLaunched(launched_from, model_->state_fullscreen(),
+  RecordAppListAppLaunched(launched_from, app_list_view_state_,
                            false /*tablet mode*/,
                            false /*home launcher shown*/);
 }

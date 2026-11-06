@@ -1,23 +1,23 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/security_interstitials/core/blocked_interception_ui.h"
 
 #include "base/i18n/number_formatting.h"
+#include "base/strings/escape.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "components/security_interstitials/core/common_string_util.h"
 #include "components/security_interstitials/core/metrics_helper.h"
 #include "components/ssl_errors/error_info.h"
 #include "components/strings/grit/components_strings.h"
-#include "net/base/escape.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace security_interstitials {
 
 BlockedInterceptionUI::BlockedInterceptionUI(const GURL& request_url,
-                                             int cert_error,
+                                             net::Error cert_error,
                                              const net::SSLInfo& ssl_info,
                                              ControllerClient* controller)
     : request_url_(request_url),
@@ -40,46 +40,42 @@ BlockedInterceptionUI::~BlockedInterceptionUI() {
 }
 
 void BlockedInterceptionUI::PopulateStringsForHTML(
-    base::Value* load_time_data) {
-  CHECK(load_time_data);
-
+    base::DictValue& load_time_data) {
   // Shared with other SSL errors.
   common_string_util::PopulateSSLLayoutStrings(cert_error_, load_time_data);
   common_string_util::PopulateSSLDebuggingStrings(
       ssl_info_, base::Time::NowFromSystemTime(), load_time_data);
 
-  load_time_data->SetBoolKey("overridable", true);
-  load_time_data->SetBoolKey("hide_primary_button", false);
-  load_time_data->SetBoolKey("bad_clock", false);
-  load_time_data->SetStringKey("type", "BLOCKED_INTERCEPTION");
+  load_time_data.Set("overridable", true);
+  load_time_data.Set("hide_primary_button", false);
+  load_time_data.Set("bad_clock", false);
+  load_time_data.Set("type", "BLOCKED_INTERCEPTION");
 
   const std::u16string hostname(
       common_string_util::GetFormattedHostName(request_url_));
 
   // Set strings that are shared between enterprise and non-enterprise
   // interstitials.
-  load_time_data->SetStringKey(
+  load_time_data.Set(
       "tabTitle",
       l10n_util::GetStringFUTF16(IDS_BLOCKED_INTERCEPTION_HEADING, hostname));
-  load_time_data->SetStringKey(
+  load_time_data.Set(
       "heading",
       l10n_util::GetStringFUTF16(IDS_BLOCKED_INTERCEPTION_HEADING, hostname));
-  load_time_data->SetStringKey(
+  load_time_data.Set(
       "primaryButtonText",
       l10n_util::GetStringUTF16(IDS_SSL_OVERRIDABLE_SAFETY_BUTTON));
-  load_time_data->SetStringKey("finalParagraph", std::string());
+  load_time_data.Set("finalParagraph", "");
 
   // Reuse the strings from the WebUI page.
-  load_time_data->SetStringKey(
-      "primaryParagraph",
-      l10n_util::GetStringUTF16(IDS_KNOWN_INTERCEPTION_BODY1));
-  load_time_data->SetStringKey(
-      "explanationParagraph",
-      l10n_util::GetStringUTF16(IDS_KNOWN_INTERCEPTION_BODY2));
+  load_time_data.Set("primaryParagraph",
+                     l10n_util::GetStringUTF16(IDS_KNOWN_INTERCEPTION_BODY1));
+  load_time_data.Set("explanationParagraph",
+                     l10n_util::GetStringUTF16(IDS_KNOWN_INTERCEPTION_BODY2));
 
-  load_time_data->SetStringKey(
-      "finalParagraph", l10n_util::GetStringFUTF16(
-                            IDS_SSL_OVERRIDABLE_PROCEED_PARAGRAPH, hostname));
+  load_time_data.Set("finalParagraph",
+                     l10n_util::GetStringFUTF16(
+                         IDS_SSL_OVERRIDABLE_PROCEED_PARAGRAPH, hostname));
 }
 
 void BlockedInterceptionUI::HandleCommand(SecurityInterstitialCommand command) {
@@ -112,6 +108,7 @@ void BlockedInterceptionUI::HandleCommand(SecurityInterstitialCommand command) {
           security_interstitials::MetricsHelper::OPEN_ENHANCED_PROTECTION);
       controller_->OpenEnhancedProtectionSettings();
       break;
+    case CMD_OPEN_ANDROID_ADVANCED_PROTECTION_SETTINGS:
     case CMD_OPEN_HELP_CENTER:
     case CMD_DONT_PROCEED:
     case CMD_RELOAD:
@@ -119,9 +116,16 @@ void BlockedInterceptionUI::HandleCommand(SecurityInterstitialCommand command) {
     case CMD_OPEN_DIAGNOSTIC:
     case CMD_OPEN_LOGIN:
     case CMD_REPORT_PHISHING_ERROR:
-      // Not supported by the SSL error page.
+    case CMD_CLOSE_INTERSTITIAL_WITHOUT_UI:
+    case CMD_REQUEST_SITE_ACCESS_PERMISSION:
+    case CMD_OPEN_HELP_CENTER_IN_NEW_TAB:
+    case CMD_OPEN_DIAGNOSTIC_IN_NEW_TAB:
+    case CMD_OPEN_REPORTING_PRIVACY_IN_NEW_TAB:
+    case CMD_OPEN_WHITEPAPER_IN_NEW_TAB:
+    case CMD_REPORT_PHISHING_ERROR_IN_NEW_TAB:
+    case CMD_SHOW_CERTIFICATE_VIEWER:
+      // Not supported by the blocked interception page.
       NOTREACHED() << "Unsupported command: " << command;
-      break;
     case CMD_ERROR:
     case CMD_TEXT_FOUND:
     case CMD_TEXT_NOT_FOUND:

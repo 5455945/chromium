@@ -1,18 +1,19 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef MEDIA_FILTERS_PIPELINE_CONTROLLER_H_
 #define MEDIA_FILTERS_PIPELINE_CONTROLLER_H_
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include <optional>
+
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/threading/thread_checker.h"
 #include "base/time/time.h"
 #include "media/base/media_export.h"
 #include "media/base/pipeline.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace media {
 
@@ -58,11 +59,16 @@ class MEDIA_EXPORT PipelineController {
   //   - |error_cb| is called if any operation on |pipeline_| does not result
   //     in PIPELINE_OK or its error callback is called.
   PipelineController(std::unique_ptr<Pipeline> pipeline,
+                     RepeatingPipelineStatusCallback started_cb,
                      SeekedCB seeked_cb,
                      SuspendedCB suspended_cb,
                      BeforeResumeCB before_resume_cb,
                      ResumedCB resumed_cb,
-                     PipelineStatusCB error_cb);
+                     RepeatingPipelineStatusCallback error_cb);
+
+  PipelineController(const PipelineController&) = delete;
+  PipelineController& operator=(const PipelineController&) = delete;
+
   ~PipelineController();
 
   // Start |pipeline_|. |demuxer| will be retained and StartWaitingForSeek()/
@@ -131,9 +137,10 @@ class MEDIA_EXPORT PipelineController {
   void SetPlaybackRate(double playback_rate);
   float GetVolume() const;
   void SetVolume(float volume);
-  void SetLatencyHint(absl::optional<base::TimeDelta> latency_hint);
+  void SetLatencyHint(std::optional<base::TimeDelta> latency_hint);
   void SetPreservesPitch(bool preserves_pitch);
-  void SetAutoplayInitiated(bool autoplay_initiated);
+  void SetWasPlayedWithUserActivationAndHighMediaEngagement(
+      bool was_played_with_user_activation_and_high_media_engagement);
   base::TimeDelta GetMediaTime() const;
   Ranges<base::TimeDelta> GetBufferedTimeRanges() const;
   base::TimeDelta GetMediaDuration() const;
@@ -141,13 +148,18 @@ class MEDIA_EXPORT PipelineController {
   PipelineStatistics GetStatistics() const;
   void SetCdm(CdmContext* cdm_context, CdmAttachedCB cdm_attached_cb);
   void OnEnabledAudioTracksChanged(
-      const std::vector<MediaTrack::Id>& enabled_track_ids);
+      std::optional<MediaTrack::Id> enabled_track_ids);
   void OnSelectedVideoTrackChanged(
-      absl::optional<MediaTrack::Id> selected_track_id);
+      std::optional<MediaTrack::Id> selected_track_id);
+  void OnExternalVideoFrameRequest();
 
   // Used to fire the OnTrackChangeComplete function which is captured in a
   // OnceCallback, and doesn't play nicely with gmock.
   void FireOnTrackChangeCompleteForTesting(State set_to);
+
+  // Sets a flag indicating whether to render muted audio to the active sink or
+  // switch to a null sink.
+  void SetRenderMutedAudio(bool render_muted_audio);
 
  private:
   // Attempts to make progress from the current state to the target state.
@@ -160,6 +172,10 @@ class MEDIA_EXPORT PipelineController {
 
   // The Pipeline we are managing state for.
   std::unique_ptr<Pipeline> pipeline_;
+
+  // Called immediately when |pipeline_| completes starting, i.e., when
+  // metadata are ready.
+  const RepeatingPipelineStatusCallback started_cb_;
 
   // Called after seeks (which includes Start()) upon reaching a stable state.
   // Multiple seeks result in only one callback if no stable state occurs
@@ -176,10 +192,10 @@ class MEDIA_EXPORT PipelineController {
   const ResumedCB resumed_cb_;
 
   // Called immediately when any operation on |pipeline_| results in an error.
-  const PipelineStatusCB error_cb_;
+  const RepeatingPipelineStatusCallback error_cb_;
 
   // State for handling StartWaitingForSeek()/CancelPendingSeek().
-  Demuxer* demuxer_ = nullptr;
+  raw_ptr<Demuxer> demuxer_ = nullptr;
   bool waiting_for_seek_ = false;
 
   // When true, Resume() will start at time zero instead of seeking to the
@@ -220,13 +236,13 @@ class MEDIA_EXPORT PipelineController {
 
   // |pending_seek_time_| is only valid when |pending_seek_| is true.
   // |pending_track_change_type_| is only valid when |pending_track_change_|.
-  // |pending_audio_track_change_ids_| is only valid when
+  // |pending_audio_track_change_id_| is only valid when
   //   |pending_audio_track_change_|.
   // |pending_video_track_change_id_| is only valid when
   //   |pending_video_track_change_|.
   base::TimeDelta pending_seek_time_;
-  std::vector<MediaTrack::Id> pending_audio_track_change_ids_;
-  absl::optional<MediaTrack::Id> pending_video_track_change_id_;
+  std::optional<MediaTrack::Id> pending_audio_track_change_id_;
+  std::optional<MediaTrack::Id> pending_video_track_change_id_;
 
   // Set to true during Start(). Indicates that |seeked_cb_| must be fired once
   // we've completed startup.
@@ -234,8 +250,6 @@ class MEDIA_EXPORT PipelineController {
 
   base::ThreadChecker thread_checker_;
   base::WeakPtrFactory<PipelineController> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(PipelineController);
 };
 
 }  // namespace media

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,15 +13,18 @@
 #include <utility>
 
 #include "ash/public/cpp/shelf_model_observer.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "components/account_id/account_id.h"
 
-class ShelfItemDelegate;
 class ShelfSpinnerItemController;
 class ChromeShelfController;
 class Profile;
+
+namespace ash {
+class ShelfItemDelegate;
+}  // namespace ash
 
 namespace gfx {
 class ImageSkia;
@@ -37,6 +40,10 @@ class ShelfSpinnerController : public ash::ShelfModelObserver {
   class ShelfSpinnerData;
 
   explicit ShelfSpinnerController(ChromeShelfController* owner);
+
+  ShelfSpinnerController(const ShelfSpinnerController&) = delete;
+  ShelfSpinnerController& operator=(const ShelfSpinnerController&) = delete;
+
   ~ShelfSpinnerController() override;
 
   bool HasApp(const std::string& app_id) const;
@@ -98,7 +105,7 @@ class ShelfSpinnerController : public ash::ShelfModelObserver {
   void HideSpinner(const std::string& app_id);
 
   // Unowned pointers.
-  ChromeShelfController* owner_;
+  raw_ptr<ChromeShelfController> owner_;
 
   AccountId current_account_id_;
 
@@ -108,8 +115,6 @@ class ShelfSpinnerController : public ash::ShelfModelObserver {
 
   // Always keep this the last member of this class.
   base::WeakPtrFactory<ShelfSpinnerController> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ShelfSpinnerController);
 };
 
 #endif  // CHROME_BROWSER_UI_ASH_SHELF_SHELF_SPINNER_CONTROLLER_H_

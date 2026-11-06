@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,12 +14,9 @@ const int kFullscreenStatePollingIntervalSeconds = 1;
 
 FullscreenNotificationBlocker::FullscreenNotificationBlocker(
     message_center::MessageCenter* message_center)
-    : NotificationBlocker(message_center),
-      is_fullscreen_mode_(false) {
-}
+    : NotificationBlocker(message_center), is_fullscreen_mode_(false) {}
 
-FullscreenNotificationBlocker::~FullscreenNotificationBlocker() {
-}
+FullscreenNotificationBlocker::~FullscreenNotificationBlocker() = default;
 
 void FullscreenNotificationBlocker::CheckState() {
   bool was_fullscreen_mode = is_fullscreen_mode_;
@@ -28,10 +25,9 @@ void FullscreenNotificationBlocker::CheckState() {
     NotifyBlockingStateChanged();
 
   if (is_fullscreen_mode_) {
-    timer_.Start(
-        FROM_HERE,
-        base::TimeDelta::FromSeconds(kFullscreenStatePollingIntervalSeconds),
-        this, &FullscreenNotificationBlocker::CheckState);
+    timer_.Start(FROM_HERE,
+                 base::Seconds(kFullscreenStatePollingIntervalSeconds), this,
+                 &FullscreenNotificationBlocker::CheckState);
   }
 }
 

@@ -1,16 +1,8 @@
-// Copyright 2006 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 goog.module('goog.dom.formsTest');
 goog.setTestOnly();
@@ -32,7 +24,11 @@ function mockWindowOpen(mockForm) {
     document: {
       createElement: function(name) {
         if (name == 'form') {
-          return mockForm;
+          return Object.assign(mockForm, {
+            tagName: 'FORM',
+            namespaceURI: 'http://www.w3.org/1999/xhtml',
+            nodeType: Node.ELEMENT_NODE,
+          });
         }
         return {};
       },
@@ -70,9 +66,16 @@ testSuite({
     const appendChild = HTMLFormElement.prototype.appendChild;
     const submit = HTMLFormElement.prototype.submit;
 
+    /**
+     * @suppress {missingReturn} suppression added to enable type checking
+     */
     HTMLFormElement.prototype.appendChild = (child) => {
       formElements.push(child);
     };
+    /**
+     * @suppress {missingProperties} suppression added to enable type
+     * checking
+     */
     HTMLFormElement.prototype.submit = () => {
       assertArrayEquals(expectedForm, formElements);
       assertEquals('https://foo.xyz/baz', mockForm.action);
@@ -82,6 +85,7 @@ testSuite({
 
     const formEl = dom.getElement('testform1');
     const submitEl = dom.getElement('submitb');
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const result = forms.submitFormInNewWindow(formEl, submitEl);
     assertTrue(result);
     HTMLFormElement.prototype.appendChild = appendChild;
@@ -111,9 +115,16 @@ testSuite({
 
     const appendChild = HTMLFormElement.prototype.appendChild;
     const submit = HTMLFormElement.prototype.submit;
+    /**
+     * @suppress {missingReturn} suppression added to enable type checking
+     */
     HTMLFormElement.prototype.appendChild = (child) => {
       formElements.push(child);
     };
+    /**
+     * @suppress {missingProperties} suppression added to enable type
+     * checking
+     */
     HTMLFormElement.prototype.submit = () => {
       assertArrayEquals(expectedForm, formElements);
       assertEquals('https://foo.xyz/baz', mockForm.action);
@@ -123,6 +134,7 @@ testSuite({
 
     const formEl = dom.getElement('testform1');
     const submitEl = dom.getElement('submit');
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const result = forms.submitFormInNewWindow(formEl, submitEl);
     assertTrue(result);
     HTMLFormElement.prototype.appendChild = appendChild;
@@ -152,9 +164,16 @@ testSuite({
     const appendChild = HTMLFormElement.prototype.appendChild;
     const submit = HTMLFormElement.prototype.submit;
 
+    /**
+     * @suppress {missingReturn} suppression added to enable type checking
+     */
     HTMLFormElement.prototype.appendChild = (child) => {
       formElements.push(child);
     };
+    /**
+     * @suppress {missingProperties} suppression added to enable type
+     * checking
+     */
     HTMLFormElement.prototype.submit = () => {
       assertArrayEquals(expectedForm, formElements);
       assertEquals('https://foo.bar/baz', mockForm.action);
@@ -163,6 +182,7 @@ testSuite({
     mockWindowOpen(mockForm);
 
     const formEl = dom.getElement('testform1');
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const result = forms.submitFormInNewWindow(formEl);
     assertTrue(result);
     HTMLFormElement.prototype.appendChild = appendChild;
@@ -174,7 +194,15 @@ testSuite({
     const resetEl = dom.getElement('reset');
 
     assertThrows(
-        'Non-submit type elements cannot be used to submit form.', () => {
+        'Non-submit type elements cannot be used to submit form.', /**
+                                                                      @suppress {checkTypes}
+                                                                      suppression
+                                                                      added to
+                                                                      enable
+                                                                      type
+                                                                      checking
+                                                                    */
+        () => {
           forms.submitFormInNewWindow(formEl, resetEl);
         });
   },
@@ -201,9 +229,16 @@ testSuite({
 
     const appendChild = HTMLFormElement.prototype.appendChild;
     const submit = HTMLFormElement.prototype.submit;
+    /**
+     * @suppress {missingReturn} suppression added to enable type checking
+     */
     HTMLFormElement.prototype.appendChild = (child) => {
       formElements.push(child);
     };
+    /**
+     * @suppress {missingProperties} suppression added to enable type
+     * checking
+     */
     HTMLFormElement.prototype.submit = () => {
       assertArrayEquals(expectedForm, formElements);
       assertEquals('https://foo.bar/baz', mockForm.action);
@@ -212,7 +247,12 @@ testSuite({
     mockWindowOpen(mockForm);
 
     const formEl = dom.getElement('testform1');
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const formData = forms.getFormDataMap(formEl);
+    /**
+     * @suppress {strictMissingProperties} suppression added to enable type
+     * checking
+     */
     const result =
         forms.submitFormDataInNewWindow(formEl.action, formEl.method, formData);
     assertTrue(result);
@@ -222,6 +262,7 @@ testSuite({
 
   testGetFormDataString() {
     const el = dom.getElement('testform1');
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const result = forms.getFormDataString(el);
     assertEquals(
         'in1=foo&in2=bar&in2=baaz&in3=&pass=bar&textarea=foo%20bar%20baz&' +
@@ -231,6 +272,7 @@ testSuite({
 
   testGetFormDataMap() {
     const el = dom.getElement('testform1');
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const result = forms.getFormDataMap(el);
 
     assertArrayEquals(['foo'], result.get('in1'));
@@ -244,6 +286,7 @@ testSuite({
     assertArrayEquals(['Y'], result.get('radio2'));
   },
 
+  /** @suppress {checkTypes} suppression added to enable type checking */
   testHasFileInput() {
     let el = dom.getElement('testform1');
     assertFalse(forms.hasFileInput(el));
@@ -271,12 +314,14 @@ testSuite({
 
   testGetValueByNameForNonExistentElement() {
     const form = dom.getElement('testform1');
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const result = forms.getValueByName(form, 'non_existent');
     assertNull(result);
   },
 
   testHasValueByNameInput() {
     const form = dom.getElement('testform1');
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const result = forms.hasValueByName(form, 'in1');
     assertTrue(result);
   },
@@ -289,6 +334,7 @@ testSuite({
 
   testHasValueByNameEmpty() {
     const form = dom.getElement('testform1');
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const result = forms.hasValueByName(form, 'in3');
     assertFalse(result);
   },
@@ -301,6 +347,7 @@ testSuite({
 
   testHasValueByNameRadio() {
     const form = dom.getElement('testform1');
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const result = forms.hasValueByName(form, 'radio');
     assertTrue(result);
   },
@@ -313,6 +360,7 @@ testSuite({
 
   testHasValueByNameRadioNotChecked() {
     const form = dom.getElement('testform3');
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const result = forms.hasValueByName(form, 'radio3');
     assertFalse(result);
   },
@@ -325,6 +373,7 @@ testSuite({
 
   testHasValueByNameSelectSingle() {
     const form = dom.getElement('testform1');
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const result = forms.hasValueByName(form, 'select1');
     assertTrue(result);
   },
@@ -337,6 +386,7 @@ testSuite({
 
   testHasValueByNameSelectMultiple() {
     const form = dom.getElement('testform1');
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const result = forms.hasValueByName(form, 'select2');
     assertTrue(result);
   },
@@ -350,6 +400,7 @@ testSuite({
 
   testHasValueByNameSelectNotSelected() {
     const form = dom.getElement('testform1');
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const result = forms.hasValueByName(form, 'select3');
     assertFalse(result);
   },
@@ -362,6 +413,7 @@ testSuite({
 
   testHasValueByNameSelectMultipleNotSelected() {
     const form = dom.getElement('testform3');
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const result = forms.hasValueByName(form, 'select6');
     assertFalse(result);
   },
@@ -440,6 +492,7 @@ testSuite({
 
   testGetValueByNamePassword() {
     const form = dom.getElement('testform1');
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const result = forms.getValueByName(form, 'pass');
     assertEquals('bar', result);
   },
@@ -452,6 +505,7 @@ testSuite({
 
   testGetValueByNameTextarea() {
     const form = dom.getElement('testform1');
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const result = forms.getValueByName(form, 'textarea1');
     assertEquals('foo bar baz', result);
   },
@@ -471,6 +525,7 @@ testSuite({
 
   testGetValueByNameSelectSingle() {
     const form = dom.getElement('testform1');
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const result = forms.getValueByName(form, 'select1');
     assertEquals('1', result);
   },
@@ -511,6 +566,7 @@ testSuite({
 
   testGetValueByNameSelectMultiple() {
     const form = dom.getElement('testform1');
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const result = forms.getValueByName(form, 'select2');
     assertArrayEquals(['a', 'c'], result);
   },
@@ -542,8 +598,10 @@ testSuite({
 
   testGetValueByNameCheckbox() {
     const form = dom.getElement('testform1');
+    /** @suppress {checkTypes} suppression added to enable type checking */
     let result = forms.getValueByName(form, 'checkbox1');
     assertEquals('on', result);
+    /** @suppress {checkTypes} suppression added to enable type checking */
     result = forms.getValueByName(form, 'checkbox2');
     assertNull(result);
   },
@@ -559,9 +617,11 @@ testSuite({
 
   testGetValueByNameRadio() {
     const form = dom.getElement('testform1');
+    /** @suppress {checkTypes} suppression added to enable type checking */
     let result = forms.getValueByName(form, 'radio');
     assertEquals('X', result);
 
+    /** @suppress {checkTypes} suppression added to enable type checking */
     result = forms.getValueByName(form, 'radio2');
     assertEquals('Y', result);
   },
@@ -582,10 +642,5 @@ testSuite({
     const el = dom.getElement('reset');
     const result = forms.getValue(el);
     assertEquals('reset', result);
-  },
-
-  testGetFormDataHelperAndNonInputElements() {
-    const el = dom.getElement('testform4');
-    forms.getFormDataHelper_(el, {}, goog.nullFunction);
   },
 });

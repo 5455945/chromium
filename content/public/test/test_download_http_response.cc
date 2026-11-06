@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,34 +6,43 @@
 
 #include <inttypes.h>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/lazy_instance.h"
+#include <algorithm>
+
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
-#include "base/numerics/ranges.h"
+#include "base/no_destructor.h"
 #include "base/run_loop.h"
-#include "base/single_thread_task_runner.h"
 #include "base/strings/string_util.h"
+#include "base/strings/string_view_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/synchronization/lock.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "net/base/test_completion_callback.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_util.h"
+#include "net/test/embedded_test_server/http_response.h"
 
 namespace content {
 
 namespace {
 
-// Lock object for protecting |g_parameters_map|.
-base::LazyInstance<base::Lock>::Leaky g_lock = LAZY_INSTANCE_INITIALIZER;
+// Lock object for protecting |GetParametersMap()|.
+base::Lock& GetParametersMapLock() {
+  static base::NoDestructor<base::Lock> lock;
+  return *lock;
+}
 
 using ParametersMap = std::map<GURL, TestDownloadHttpResponse::Parameters>;
 // Maps url to Parameters so that requests for the same URL will get the same
 // parameters.
-base::LazyInstance<ParametersMap>::Leaky g_parameters_map =
-    LAZY_INSTANCE_INITIALIZER;
+ParametersMap& GetParametersMap() {
+  static base::NoDestructor<ParametersMap> parameters_map;
+  return *parameters_map;
+}
 
 const char* kTestDownloadPath = "/download/";
 
@@ -76,18 +85,21 @@ class HttpResponse : public net::test_server::HttpResponse {
  public:
   explicit HttpResponse(base::WeakPtr<TestDownloadHttpResponse> owner)
       : owner_(owner) {}
+
+  HttpResponse(const HttpResponse&) = delete;
+  HttpResponse& operator=(const HttpResponse&) = delete;
+
   ~HttpResponse() override = default;
 
  private:
   // net::test_server::HttpResponse implementations.
-  void SendResponse(const net::test_server::SendBytesCallback& send,
-                    net::test_server::SendCompleteCallback done) override {
+  void SendResponse(
+      base::WeakPtr<net::test_server::HttpResponseDelegate> delegate) override {
     if (owner_)
-      owner_->SendResponse(send, std::move(done));
+      owner_->SendResponse(delegate);
   }
 
   base::WeakPtr<TestDownloadHttpResponse> owner_;
-  DISALLOW_COPY_AND_ASSIGN(HttpResponse);
 };
 
 }  // namespace
@@ -132,9 +144,7 @@ TestDownloadHttpResponse::Parameters::Parameters()
       size(102400),
       pattern_generator_seed(1),
       support_byte_ranges(true),
-      support_partial_response(true),
-      connection_type(
-          net::HttpResponseInfo::ConnectionInfo::CONNECTION_INFO_UNKNOWN) {}
+      support_partial_response(true) {}
 
 TestDownloadHttpResponse::Parameters::Parameters(const Parameters& that) =
     default;
@@ -169,11 +179,10 @@ TestDownloadHttpResponse::CompletedRequest::~CompletedRequest() = default;
 void TestDownloadHttpResponse::StartServing(
     const TestDownloadHttpResponse::Parameters& parameters,
     const GURL& url) {
-  base::AutoLock lock(*g_lock.Pointer());
-  auto iter = g_parameters_map.Get().find(url);
-  if (iter != g_parameters_map.Get().end())
-    g_parameters_map.Get().erase(iter);
-  g_parameters_map.Get().emplace(url, parameters);
+  base::AutoLock lock(GetParametersMapLock());
+  auto& parameters_map = GetParametersMap();
+  parameters_map.erase(url);
+  parameters_map.emplace(url, parameters);
 }
 
 // static
@@ -199,12 +208,14 @@ std::string TestDownloadHttpResponse::GetPatternBytes(int seed,
   std::string output;
   while (length > 0) {
     uint64_t data = XorShift64StarWithIndex(seed, seed_offset);
-    int length_to_copy =
-        std::min(length, static_cast<int>(sizeof(data) - first_byte_position));
-    char* start_pos = reinterpret_cast<char*>(&data) + first_byte_position;
-    std::string string_to_append(start_pos, start_pos + length_to_copy);
-    output.append(string_to_append);
-    length -= length_to_copy;
+    auto data_span = base::byte_span_from_ref(data);
+    auto sub_span = data_span.subspan(
+        static_cast<size_t>(first_byte_position),
+        std::min(
+            static_cast<size_t>(length),
+            data_span.size() - static_cast<size_t>(first_byte_position)));
+    output.append(base::as_string_view(sub_span));
+    length -= sub_span.size();
     ++seed_offset;
     first_byte_position = 0;
   }
@@ -228,14 +239,13 @@ TestDownloadHttpResponse::TestDownloadHttpResponse(
 TestDownloadHttpResponse::~TestDownloadHttpResponse() = default;
 
 void TestDownloadHttpResponse::SendResponse(
-    const net::test_server::SendBytesCallback& send,
-    net::test_server::SendCompleteCallback done) {
-  bytes_sender_ = send;
-  done_callback_ = std::move(done);
+    base::WeakPtr<net::test_server::HttpResponseDelegate> delegate) {
+  response_delegate_ = delegate;
 
   // Throw error before sending headers.
   if (ShouldAbortImmediately()) {
-    bytes_sender_.Run(std::string(), GenerateResultClosure());
+    response_delegate_->SendRawResponseHeaders("");
+    response_delegate_->SendContents("", GenerateResultClosure());
     return;
   }
 
@@ -282,7 +292,11 @@ void TestDownloadHttpResponse::ParseRequestHeader() {
   request_range_ = ranges[0];
   if (parameters_.support_partial_response)
     range_.set_first_byte_position(request_range_.first_byte_position());
-  range_.ComputeBounds(parameters_.size);
+
+  if (request_range_.HasLastBytePosition())
+    range_.set_last_byte_position(request_range_.last_byte_position());
+  else
+    range_.ComputeBounds(parameters_.size);
 
   response_sent_offset_ = range_.first_byte_position();
 }
@@ -290,7 +304,8 @@ void TestDownloadHttpResponse::ParseRequestHeader() {
 void TestDownloadHttpResponse::SendResponseHeaders() {
   // Send static response in |parameters_| and close connection.
   if (!parameters_.static_response.empty()) {
-    bytes_sender_.Run(parameters_.static_response, GenerateResultClosure());
+    response_delegate_->SendRawResponseHeaders(parameters_.static_response);
+    response_delegate_->SendContents("", GenerateResultClosure());
     return;
   }
 
@@ -301,16 +316,18 @@ void TestDownloadHttpResponse::SendResponseHeaders() {
   if (GetResponseForRangeRequest(&response, &delay_response)) {
     if (delay_response) {
       delayed_response_callback_ =
-          base::BindOnce(bytes_sender_, response, GenerateResultClosure()),
-      bytes_sender_.Run(GetDefaultResponseHeaders(), base::DoNothing());
+          base::BindOnce(&net::test_server::HttpResponseDelegate::SendContents,
+                         response_delegate_, response, GenerateResultClosure());
+      response_delegate_->SendRawResponseHeaders(GetDefaultResponseHeaders());
     } else {
-      bytes_sender_.Run(response, GenerateResultClosure());
+      response_delegate_->SendContents(response, GenerateResultClosure());
     }
     return;
   }
 
   // Send the headers and start to send the body.
-  bytes_sender_.Run(GetDefaultResponseHeaders(), SendNextBodyChunkClosure());
+  response_delegate_->SendRawResponseHeaders(GetDefaultResponseHeaders());
+  SendResponseBodyChunk();
 }
 
 std::string TestDownloadHttpResponse::GetDefaultResponseHeaders() {
@@ -318,14 +335,12 @@ std::string TestDownloadHttpResponse::GetDefaultResponseHeaders() {
   // Send partial response.
   if (parameters_.support_partial_response && parameters_.support_byte_ranges) {
     bool has_if_range =
-        request_.headers.find(net::HttpRequestHeaders::kIfRange) !=
-        request_.headers.end();
+        request_.headers.contains(net::HttpRequestHeaders::kIfRange);
     if (((has_if_range &&
           request_.headers.at(net::HttpRequestHeaders::kIfRange) ==
               parameters_.etag) ||
          (!has_if_range &&
-          request_.headers.find(net::HttpRequestHeaders::kRange) !=
-              request_.headers.end())) &&
+          request_.headers.contains(net::HttpRequestHeaders::kRange))) &&
         HandleRangeAssumingValidatorMatch(headers)) {
       return headers;
     }
@@ -333,8 +348,7 @@ std::string TestDownloadHttpResponse::GetDefaultResponseHeaders() {
 
   // Send precondition failed for "If-Match" request header.
   if (parameters_.support_partial_response && parameters_.support_byte_ranges &&
-      request_.headers.find(net::HttpRequestHeaders::kIfMatch) !=
-          request_.headers.end()) {
+      request_.headers.contains(net::HttpRequestHeaders::kIfMatch)) {
     if (request_.headers.at(net::HttpRequestHeaders::kIfMatch) !=
             parameters_.etag ||
         !HandleRangeAssumingValidatorMatch(headers)) {
@@ -386,12 +400,13 @@ bool TestDownloadHttpResponse::GetResponseForRangeRequest(
       // next response will be different.
       if (it->is_transient) {
         parameters_.range_request_responses.erase(it);
-        base::AutoLock lock(*g_lock.Pointer());
+        base::AutoLock lock(GetParametersMapLock());
         GURL url = GetURLFromRequest(request_);
-        auto iter = g_parameters_map.Get().find(url);
-        if (iter != g_parameters_map.Get().end())
-          g_parameters_map.Get().erase(iter);
-        g_parameters_map.Get().emplace(url, std::move(parameters_));
+        auto iter = GetParametersMap().find(url);
+        if (iter != GetParametersMap().end()) {
+          GetParametersMap().erase(iter);
+        }
+        GetParametersMap().emplace(url, std::move(parameters_));
       }
 
       return true;
@@ -551,7 +566,8 @@ void TestDownloadHttpResponse::PauseResponsesAndWaitForResumption() {
       FROM_HERE,
       base::BindOnce(
           std::move(pause_callback),
-          base::BindOnce(OnResume, base::ThreadTaskRunnerHandle::Get(),
+          base::BindOnce(OnResume,
+                         base::SingleThreadTaskRunner::GetCurrentDefault(),
                          std::move(continue_closure))));
 }
 
@@ -562,9 +578,9 @@ void TestDownloadHttpResponse::SendResponseBodyChunk() {
     return;
   }
 
-  int64_t upper_bound = base::ClampToRange(response_sent_offset_ + kBufferSize,
-                                           range_.first_byte_position(),
-                                           range_.last_byte_position());
+  int64_t upper_bound =
+      std::clamp(response_sent_offset_ + kBufferSize,
+                 range_.first_byte_position(), range_.last_byte_position());
   auto buffer_range =
       net::HttpByteRange::Bounded(response_sent_offset_, upper_bound);
 
@@ -587,11 +603,10 @@ void TestDownloadHttpResponse::SendBodyChunkInternal(
     base::OnceClosure next) {
   std::string response_chunk = GetResponseChunk(buffer_range);
   transferred_bytes_ += static_cast<int64_t>(response_chunk.size());
-  bytes_sender_.Run(response_chunk, std::move(next));
+  response_delegate_->SendContents(response_chunk, std::move(next));
 }
 
-net::test_server::SendCompleteCallback
-TestDownloadHttpResponse::SendNextBodyChunkClosure() {
+base::OnceClosure TestDownloadHttpResponse::SendNextBodyChunkClosure() {
   return base::BindOnce(&TestDownloadHttpResponse::SendResponseBodyChunk,
                         base::Unretained(this));
 }
@@ -609,11 +624,10 @@ void TestDownloadHttpResponse::GenerateResult() {
                                  std::move(completed_request));
 
   // Close the HTTP connection.
-  std::move(done_callback_).Run();
+  response_delegate_->FinishResponse();
 }
 
-net::test_server::SendCompleteCallback
-TestDownloadHttpResponse::GenerateResultClosure() {
+base::OnceClosure TestDownloadHttpResponse::GenerateResultClosure() {
   return base::BindOnce(&TestDownloadHttpResponse::GenerateResult,
                         base::Unretained(this));
 }
@@ -622,17 +636,17 @@ std::unique_ptr<net::test_server::HttpResponse>
 TestDownloadResponseHandler::HandleTestDownloadRequest(
     TestDownloadHttpResponse::OnResponseSentCallback callback,
     const net::test_server::HttpRequest& request) {
-  server_task_runner_ = base::ThreadTaskRunnerHandle::Get();
+  server_task_runner_ = base::SingleThreadTaskRunner::GetCurrentDefault();
 
   if (request.headers.find(net::HttpRequestHeaders::kHost) ==
       request.headers.end()) {
     return nullptr;
   }
 
-  base::AutoLock lock(*g_lock.Pointer());
+  base::AutoLock lock(GetParametersMapLock());
   GURL url = GetURLFromRequest(request);
-  auto iter = g_parameters_map.Get().find(url);
-  if (iter != g_parameters_map.Get().end()) {
+  auto iter = GetParametersMap().find(url);
+  if (iter != GetParametersMap().end()) {
     auto test_response = std::make_unique<TestDownloadHttpResponse>(
         request, std::move(iter->second), std::move(callback));
     auto response = test_response->CreateResponseForTestServer();

@@ -1,17 +1,22 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+import {TestRunner} from 'test_runner';
+import {SourcesTestRunner} from 'sources_test_runner';
+
+import * as Sources from 'devtools/panels/sources/sources.js';
+import * as Breakpoints from 'devtools/models/breakpoints/breakpoints.js';
 
 (async function() {
   TestRunner.addResult(
       `Tests that there is no exception in front-end on page reload when breakpoint is set in HTML document and some dynamic scripts are loaded before the script with the breakpoint is loaded.`);
-  await TestRunner.loadModule('sources'); await TestRunner.loadTestModule('sources_test_runner');
   await TestRunner.showPanel('sources');
   await TestRunner.navigatePromise(
       'resources/dynamic-scripts-breakpoints.html');
 
-  Bindings.breakpointManager._storage._breakpoints = new Map();
-  var panel = UI.panels.sources;
+  Breakpoints.BreakpointManager.BreakpointManager.instance().storage.breakpoints = new Map();
+  var panel = Sources.SourcesPanel.SourcesPanel.instance();
 
   SourcesTestRunner.startDebuggerTest();
 
@@ -23,8 +28,8 @@
   }
 
   function dumpBreakpointStorage() {
-    var breakpointManager = Bindings.breakpointManager;
-    var breakpoints = breakpointManager._storage._setting.get();
+    var breakpointManager = Breakpoints.BreakpointManager.BreakpointManager.instance();
+    var breakpoints = breakpointManager.storage.setting.get();
     TestRunner.addResult('    Dumping breakpoint storage');
     for (var i = 0; i < breakpoints.length; ++i)
       TestRunner.addResult(
@@ -35,8 +40,8 @@
   async function didShowScriptSource(sourceFrame) {
     TestRunner.addResult('Setting breakpoint:');
     TestRunner.addSniffer(
-        Bindings.BreakpointManager.ModelBreakpoint.prototype,
-        '_addResolvedLocation', breakpointResolved);
+        Breakpoints.BreakpointManager.ModelBreakpoint.prototype,
+        'addResolvedLocation', breakpointResolved);
     await SourcesTestRunner.setBreakpoint(sourceFrame, 7, '', true);
   }
 

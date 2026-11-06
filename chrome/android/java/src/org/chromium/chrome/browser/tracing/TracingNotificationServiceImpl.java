@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,20 +10,22 @@ import android.content.Intent;
 
 import org.chromium.base.IntentUtils;
 import org.chromium.base.task.PostTask;
-import org.chromium.content_public.browser.UiThreadTaskTraits;
+import org.chromium.base.task.TaskTraits;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.base.SplitCompatIntentService;
+import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
+import org.chromium.chrome.browser.tracing.settings.TracingSettings;
+import org.chromium.components.browser_ui.settings.SettingsNavigation;
 
-/**
- * Service that handles the actions on tracing notifications.
- */
-public class TracingNotificationServiceImpl extends TracingNotificationService.Impl {
+/** Service that handles the actions on tracing notifications. */
+@NullMarked
+public class TracingNotificationServiceImpl extends SplitCompatIntentService.Impl {
     private static final String ACTION_STOP_RECORDING =
             "org.chromium.chrome.browser.tracing.STOP_RECORDING";
 
     private static final String ACTION_DISCARD_TRACE =
             "org.chromium.chrome.browser.tracing.DISCARD_TRACE";
-
-    private static final String ACTION_SHARE_TRACE =
-            "org.chromium.chrome.browser.tracing.SHARE_TRACE";
 
     /**
      * Get the intent to send to stop a trace recording.
@@ -34,7 +36,10 @@ public class TracingNotificationServiceImpl extends TracingNotificationService.I
     public static PendingIntent getStopRecordingIntent(Context context) {
         Intent intent = new Intent(context, TracingNotificationService.class);
         intent.setAction(ACTION_STOP_RECORDING);
-        return PendingIntent.getService(context, 0, intent,
+        return PendingIntent.getService(
+                context,
+                0,
+                intent,
                 PendingIntent.FLAG_UPDATE_CURRENT
                         | IntentUtils.getPendingIntentMutabilityFlag(false));
     }
@@ -48,41 +53,50 @@ public class TracingNotificationServiceImpl extends TracingNotificationService.I
     public static PendingIntent getDiscardTraceIntent(Context context) {
         Intent intent = new Intent(context, TracingNotificationService.class);
         intent.setAction(ACTION_DISCARD_TRACE);
-        return PendingIntent.getService(context, 0, intent,
+        return PendingIntent.getService(
+                context,
+                0,
+                intent,
                 PendingIntent.FLAG_UPDATE_CURRENT
                         | IntentUtils.getPendingIntentMutabilityFlag(false));
     }
 
     /**
-     * Get the intent to share a recorded trace.
+     * Get the intent to open the settings tab with a "share trace" button.
      *
      * @param context the application's context.
      * @return the intent.
      */
-    public static PendingIntent getShareTraceIntent(Context context) {
-        Intent intent = new Intent(context, TracingNotificationService.class);
-        intent.setAction(ACTION_SHARE_TRACE);
-        return PendingIntent.getService(context, 0, intent,
+    public static PendingIntent getOpenSettingsIntent(Context context) {
+        SettingsNavigation settingsNavigation =
+                SettingsNavigationFactory.createSettingsNavigation();
+        Intent intent = settingsNavigation.createSettingsIntent(context, TracingSettings.class);
+        return PendingIntent.getActivity(
+                context,
+                0,
+                intent,
                 PendingIntent.FLAG_UPDATE_CURRENT
                         | IntentUtils.getPendingIntentMutabilityFlag(false));
     }
 
     @Override
-    protected void onHandleIntent(Intent intent) {
-        PostTask.runSynchronously(UiThreadTaskTraits.DEFAULT, () -> {
-            // Clear the notification but don't do anything else if the TracingController went away.
-            if (!TracingController.isInitialized()) {
-                TracingNotificationManager.dismissNotification();
-                return;
-            }
+    protected void onHandleIntent(@Nullable Intent intent) {
+        PostTask.runSynchronously(
+                TaskTraits.UI_DEFAULT,
+                () -> {
+                    // Clear the notification but don't do anything else if the TracingController
+                    // went away.
+                    if (!TracingController.isInitialized()) {
+                        TracingNotificationManager.dismissNotification();
+                        return;
+                    }
 
-            if (ACTION_STOP_RECORDING.equals(intent.getAction())) {
-                TracingController.getInstance().stopRecording();
-            } else if (ACTION_SHARE_TRACE.equals(intent.getAction())) {
-                TracingController.getInstance().shareTrace();
-            } else if (ACTION_DISCARD_TRACE.equals(intent.getAction())) {
-                TracingController.getInstance().discardTrace();
-            }
-        });
+                    if (intent == null) return;
+                    if (ACTION_STOP_RECORDING.equals(intent.getAction())) {
+                        TracingController.getInstance().stopRecording();
+                    } else if (ACTION_DISCARD_TRACE.equals(intent.getAction())) {
+                        TracingController.getInstance().discardTrace();
+                    }
+                });
     }
 }

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 #include <utility>
 
 #include "base/check.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 
 namespace chromecast {
 namespace media {
@@ -16,17 +16,14 @@ CastAudioManagerHelper::CastAudioManagerHelper(
     ::media::AudioManagerBase* audio_manager,
     Delegate* delegate,
     base::RepeatingCallback<CmaBackendFactory*()> backend_factory_getter,
-    scoped_refptr<base::SingleThreadTaskRunner> media_task_runner,
-    mojo::PendingRemote<chromecast::mojom::ServiceConnector> connector)
+    scoped_refptr<base::SingleThreadTaskRunner> media_task_runner)
     : audio_manager_(audio_manager),
       delegate_(delegate),
       backend_factory_getter_(std::move(backend_factory_getter)),
-      media_task_runner_(std::move(media_task_runner)),
-      pending_connector_(std::move(connector)) {
-  DCHECK(audio_manager_);
-  DCHECK(delegate_);
-  DCHECK(backend_factory_getter_);
-  DCHECK(pending_connector_);
+      media_task_runner_(std::move(media_task_runner)) {
+  CHECK(audio_manager_, base::NotFatalUntil::M163);
+  CHECK(delegate_, base::NotFatalUntil::M163);
+  CHECK(backend_factory_getter_, base::NotFatalUntil::M163);
 }
 
 CastAudioManagerHelper::~CastAudioManagerHelper() = default;
@@ -48,14 +45,6 @@ bool CastAudioManagerHelper::IsAudioOnlySession(const std::string& session_id) {
 
 bool CastAudioManagerHelper::IsGroup(const std::string& session_id) {
   return delegate_->IsGroup(session_id);
-}
-
-chromecast::mojom::ServiceConnector* CastAudioManagerHelper::GetConnector() {
-  if (!connector_) {
-    DCHECK(pending_connector_);
-    connector_.Bind(std::move(pending_connector_));
-  }
-  return connector_.get();
 }
 
 }  // namespace media

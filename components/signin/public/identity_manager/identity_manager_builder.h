@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,94 +8,92 @@
 #include <memory>
 
 #include "base/files/file_path.h"
+#include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "components/signin/public/base/signin_buildflags.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
 #include "base/memory/scoped_refptr.h"
 #endif
 
-#if defined(OS_WIN)
-#include "base/callback.h"
+#if BUILDFLAG(IS_WIN)
+#include "base/functional/callback.h"
 #endif
 
+class AccountFetcherFactory;
 class PrefService;
 class SigninClient;
 
-#if !defined(OS_ANDROID)
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
 class TokenWebData;
+namespace unexportable_keys {
+class UnexportableKeyService;
+}  // namespace unexportable_keys
 #endif
 
-#if defined(OS_IOS)
+#if BUILDFLAG(IS_IOS)
 class DeviceAccountsProvider;
 #endif
 
 namespace image_fetcher {
 class ImageDecoder;
-}
+}  // namespace image_fetcher
+
+namespace metrics {
+class ProfileMetricsService;
+}  // namespace metrics
 
 namespace network {
 class NetworkConnectionTracker;
-}
+}  // namespace network
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-namespace ash {
-class AccountManager;
-}
-
-namespace account_manager {
-class AccountManagerFacade;
-}
-#endif
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_CHROMEOS)
 namespace account_manager {
 class AccountManagerFacade;
 }
 #endif
 
 namespace signin {
-enum class AccountConsistencyMethod;
 
 struct IdentityManagerBuildParams {
   IdentityManagerBuildParams();
   ~IdentityManagerBuildParams();
 
-  AccountConsistencyMethod account_consistency =
-      AccountConsistencyMethod::kDisabled;
   std::unique_ptr<image_fetcher::ImageDecoder> image_decoder;
-  PrefService* local_state = nullptr;
-  network::NetworkConnectionTracker* network_connection_tracker;
-  PrefService* pref_service = nullptr;
+  raw_ptr<PrefService> local_state = nullptr;
+  raw_ptr<network::NetworkConnectionTracker> network_connection_tracker;
+  raw_ptr<PrefService> pref_service = nullptr;
   base::FilePath profile_path;
-  SigninClient* signin_client = nullptr;
+  raw_ptr<SigninClient> signin_client = nullptr;
+  raw_ptr<metrics::ProfileMetricsService> profile_metrics_service = nullptr;
+  std::unique_ptr<AccountFetcherFactory> account_fetcher_factory;
+  std::unique_ptr<ProfileOAuth2TokenService> token_service;
+  std::unique_ptr<AccountTrackerService> account_tracker_service;
 
-#if !defined(OS_ANDROID)
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
   bool delete_signin_cookies_on_exit = false;
+#endif
+
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
   scoped_refptr<TokenWebData> token_web_data;
+  raw_ptr<unexportable_keys::UnexportableKeyService> unexportable_key_service =
+      nullptr;
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  account_manager::AccountManager* account_manager = nullptr;
-  account_manager::AccountManagerFacade* account_manager_facade = nullptr;
+#if BUILDFLAG(IS_CHROMEOS)
+  raw_ptr<account_manager::AccountManagerFacade, DanglingUntriaged>
+      account_manager_facade = nullptr;
   bool is_regular_profile = false;
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  account_manager::AccountManagerFacade* account_manager_facade = nullptr;
-  bool is_regular_profile = false;
-#endif
-
-#if defined(OS_IOS)
+#if BUILDFLAG(IS_IOS)
   std::unique_ptr<DeviceAccountsProvider> device_accounts_provider;
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   base::RepeatingCallback<bool()> reauth_callback;
 #endif
-
-  bool allow_access_token_fetch = true;
 };
 
 // Builds all required dependencies to initialize the IdentityManager instance.

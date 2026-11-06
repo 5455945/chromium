@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,6 +14,7 @@
 #include "third_party/skia/include/core/SkImageInfo.h"
 #include "third_party/skia/include/core/SkSize.h"
 #include "third_party/skia/include/core/SkYUVAPixmaps.h"
+#include "ui/gfx/hdr_metadata.h"
 
 namespace cc {
 
@@ -29,20 +30,18 @@ class CC_PAINT_EXPORT PaintImageGenerator : public SkRefCnt {
   PaintImageGenerator& operator=(const PaintImageGenerator&) = delete;
 
   // Returns a reference to the encoded content of this image.
-  virtual sk_sp<SkData> GetEncodedData() const = 0;
+  virtual sk_sp<const SkData> GetEncodedData() const = 0;
 
-  // Decode into the given pixels, a block of memory of size at least
-  // (info.fHeight - 1) * rowBytes + (info.fWidth *  bytesPerPixel). |info|
-  // represents the desired output format. Returns true on success.
+  // Decode into the given SkPixmap. This will modify the pixels pointed to by
+  // `dst_pixmap`, but will not modify any of its properties (e.g, its
+  // SkImageInfo).
   //
   // TODO(khushalsagar): |lazy_pixel_ref| is only present for
   // DecodingImageGenerator tracing needs. Remove it.
-  virtual bool GetPixels(const SkImageInfo& info,
-                         void* pixels,
-                         size_t row_bytes,
+  virtual bool GetPixels(SkPixmap dst_pixmap,
                          size_t frame_index,
                          PaintImage::GeneratorClientId client_id,
-                         uint32_t lazy_pixel_ref) = 0;
+                         uint64_t lazy_pixel_ref) = 0;
 
   // Returns true if the generator supports YUV decoding, providing the details
   // about planar configuration and conversion to RGB in |info|.
@@ -61,7 +60,8 @@ class CC_PAINT_EXPORT PaintImageGenerator : public SkRefCnt {
   // DecodingImageGenerator tracing needs. Remove it.
   virtual bool GetYUVAPlanes(const SkYUVAPixmaps& pixmaps,
                              size_t frame_index,
-                             uint32_t lazy_pixel_ref) = 0;
+                             uint64_t lazy_pixel_ref,
+                             PaintImage::GeneratorClientId client_id) = 0;
 
   // Returns the smallest size that is at least as big as the requested size,
   // such that we can decode to exactly that scale.
@@ -74,6 +74,7 @@ class CC_PAINT_EXPORT PaintImageGenerator : public SkRefCnt {
   virtual PaintImage::ContentId GetContentIdForFrame(size_t frame_index) const;
 
   const SkImageInfo& GetSkImageInfo() const { return info_; }
+  const gfx::HDRMetadata& GetHdrMetadata() const { return hdr_metadata_; }
   const std::vector<FrameMetadata>& GetFrameMetadata() const { return frames_; }
 
   // Returns the information required to decide whether or not hardware
@@ -83,10 +84,12 @@ class CC_PAINT_EXPORT PaintImageGenerator : public SkRefCnt {
  protected:
   // |info| is the info for this paint image generator.
   PaintImageGenerator(const SkImageInfo& info,
+                      const gfx::HDRMetadata& hdr_metadata,
                       std::vector<FrameMetadata> frames = {FrameMetadata()});
 
  private:
   const SkImageInfo info_;
+  gfx::HDRMetadata hdr_metadata_;
   const PaintImage::ContentId generator_content_id_;
   const std::vector<FrameMetadata> frames_;
 };

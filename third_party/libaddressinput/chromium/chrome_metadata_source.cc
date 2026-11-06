@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,11 @@
 
 #include <memory>
 #include <utility>
+#include <optional>
+#include <string>
 
-#include "base/bind.h"
 #include "base/check.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "net/base/io_buffer.h"
 #include "net/base/load_flags.h"
@@ -38,14 +39,15 @@ void ChromeMetadataSource::Get(const std::string& key,
 
 void ChromeMetadataSource::OnSimpleLoaderComplete(
     RequestList::iterator it,
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   const Callback& callback = it->get()->callback;
   const std::string& key = it->get()->key;
-  std::unique_ptr<std::string> data(new std::string());
-  bool ok = !!response_body;
-  if (ok)
-    data->swap(*response_body);
-  callback(ok, key, data.release());
+  std::string data;
+  bool ok = response_body.has_value();
+  if (ok) {
+    data.swap(*response_body);
+  }
+  callback(ok, key, std::move(data));
   requests_.erase(it);
 }
 
@@ -59,7 +61,7 @@ void ChromeMetadataSource::Download(const std::string& key,
                                     const Callback& downloaded) {
   GURL resource(validation_data_url_ + key);
   if (!resource.SchemeIsCryptographic()) {
-    downloaded(false, key, NULL);
+    downloaded(false, key, std::nullopt);
     return;
   }
   DCHECK(url_loader_factory_);
@@ -89,13 +91,13 @@ void ChromeMetadataSource::Download(const std::string& key,
           policy_exception_justification: "Not implemented."
         })");
   auto resource_request = std::make_unique<network::ResourceRequest>();
-  resource_request->url = resource;
+  resource_request->url = std::move(resource);
   resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
   std::unique_ptr<network::SimpleURLLoader> loader =
       network::SimpleURLLoader::Create(std::move(resource_request),
                                        traffic_annotation);
   // Limit the request duration to 5 seconds.
-  loader->SetTimeoutDuration(base::TimeDelta::FromSeconds(5));
+  loader->SetTimeoutDuration(base::Seconds(5));
 
   auto it = requests_.insert(
       requests_.begin(),

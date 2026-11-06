@@ -1,20 +1,17 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ios/web/public/init/web_main.h"
-#include "ios/web/public/init/web_main_runner.h"
+#import "ios/web/public/init/web_main.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "ios/web/public/init/web_main_runner.h"
 
 namespace web {
 
 WebMainParams::WebMainParams() : WebMainParams(nullptr) {}
 
 WebMainParams::WebMainParams(WebMainDelegate* delegate)
-    : delegate(delegate), register_exit_manager(true), argc(0), argv(nullptr) {}
+    : delegate(delegate), register_exit_manager(true) {}
 
 WebMainParams::~WebMainParams() = default;
 
@@ -29,6 +26,10 @@ WebMain::WebMain(WebMainParams params) {
 
 WebMain::~WebMain() {
   web_main_runner_->ShutDown();
+}
+
+int WebMain::Startup() {
+  return web_main_runner_->Startup();
 }
 
 }  // namespace web

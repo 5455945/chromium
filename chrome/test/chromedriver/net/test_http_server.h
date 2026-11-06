@@ -1,15 +1,13 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_TEST_CHROMEDRIVER_NET_TEST_HTTP_SERVER_H_
 #define CHROME_TEST_CHROMEDRIVER_NET_TEST_HTTP_SERVER_H_
 
+#include <optional>
 #include <set>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
 #include "base/synchronization/lock.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/threading/thread.h"
@@ -33,12 +31,17 @@ class TestHttpServer : public net::HttpServer::Delegate {
 
   enum WebSocketMessageAction {
     kEchoMessage,
-    kCloseOnMessage
+    kCloseOnMessage,
+    kEchoRawMessage
   };
 
   // Creates an http server. By default it accepts WebSockets and echoes
   // WebSocket messages back.
   TestHttpServer();
+
+  TestHttpServer(const TestHttpServer&) = delete;
+  TestHttpServer& operator=(const TestHttpServer&) = delete;
+
   ~TestHttpServer() override;
 
   // Starts the server. Returns whether it was started successfully.
@@ -60,23 +63,30 @@ class TestHttpServer : public net::HttpServer::Delegate {
   // Sets a callback to be called once when receiving next WebSocket message.
   void SetMessageCallback(base::OnceClosure callback);
 
+  GURL http_url() const;
+
   // Returns the web socket URL that points to the server.
   GURL web_socket_url() const;
 
   // Overridden from net::HttpServer::Delegate:
   void OnConnect(int connection_id) override;
   void OnHttpRequest(int connection_id,
-                     const net::HttpServerRequestInfo& info) override {}
+                     const net::HttpServerRequestInfo& info) override;
   void OnWebSocketRequest(int connection_id,
                           const net::HttpServerRequestInfo& info) override;
   void OnWebSocketMessage(int connection_id, std::string data) override;
   void OnClose(int connection_id) override;
 
+  void SetDataForPath(std::string path, std::string data);
+
  private:
   void StartOnServerThread(bool* success, base::WaitableEvent* event);
   void StopOnServerThread(base::WaitableEvent* event);
+  void SetDataForPathOnServerThread(std::string path,
+                                    std::string data,
+                                    base::WaitableEvent* event);
 
-  base::Thread thread_;
+  std::optional<base::Thread> thread_;
 
   // Access only on the server thread.
   std::unique_ptr<net::HttpServer> server_;
@@ -88,6 +98,7 @@ class TestHttpServer : public net::HttpServer::Delegate {
 
   // Protects |web_socket_url_|.
   mutable base::Lock url_lock_;
+  GURL http_url_;
   GURL web_socket_url_;
 
   // Protects the action flags and |message_callback_|.
@@ -96,7 +107,7 @@ class TestHttpServer : public net::HttpServer::Delegate {
   WebSocketMessageAction message_action_ = kEchoMessage;
   base::OnceClosure message_callback_;
 
-  DISALLOW_COPY_AND_ASSIGN(TestHttpServer);
+  std::map<std::string, std::string> resource_map_;
 };
 
 #endif  // CHROME_TEST_CHROMEDRIVER_NET_TEST_HTTP_SERVER_H_

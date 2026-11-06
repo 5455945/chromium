@@ -1,22 +1,20 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/feed/core/v2/public/test/stub_feed_api.h"
 
+#include <string_view>
+#include <type_traits>
+
 namespace feed {
 
-WebFeedSubscriptions& StubFeedApi::subscriptions() {
-  return web_feed_subscriptions_;
+static_assert(!std::is_abstract_v<StubFeedApi>);
+
+SurfaceId StubFeedApi::CreateSurface(const StreamType& type) {
+  return {};
 }
 bool StubFeedApi::IsArticlesListVisible() {
-  return {};
-}
-bool StubFeedApi::IsActivityLoggingEnabled(
-    const StreamType& stream_type) const {
-  return {};
-}
-std::string StubFeedApi::GetClientInstanceId() const {
   return {};
 }
 std::string StubFeedApi::GetSessionId() const {
@@ -31,20 +29,20 @@ PersistentKeyValueStore& StubFeedApi::GetPersistentKeyValueStore() {
   return persistent_key_value_store_;
 }
 EphemeralChangeId StubFeedApi::CreateEphemeralChange(
-    const StreamType& stream_type,
+    SurfaceId surface_id,
     std::vector<feedstore::DataOperation> operations) {
   return {};
 }
 EphemeralChangeId StubFeedApi::CreateEphemeralChangeFromPackedData(
-    const StreamType& stream_type,
-    base::StringPiece data) {
+    SurfaceId surface_id,
+    std::string_view data) {
   return {};
 }
-bool StubFeedApi::CommitEphemeralChange(const StreamType& stream_type,
+bool StubFeedApi::CommitEphemeralChange(SurfaceId surface_id,
                                         EphemeralChangeId id) {
   return {};
 }
-bool StubFeedApi::RejectEphemeralChange(const StreamType& stream_type,
+bool StubFeedApi::RejectEphemeralChange(SurfaceId surface_id,
                                         EphemeralChangeId id) {
   return {};
 }
@@ -55,6 +53,14 @@ DebugStreamData StubFeedApi::GetDebugStreamData() {
   return {};
 }
 std::string StubFeedApi::DumpStateForDebugging() {
+  return {};
+}
+
+base::Time StubFeedApi::GetLastFetchTime(SurfaceId surface_id) {
+  return base::Time();
+}
+
+std::vector<std::string> StubFeedApi::GetFeedUrls(SurfaceId surface_id) {
   return {};
 }
 

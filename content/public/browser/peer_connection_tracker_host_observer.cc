@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,6 +20,14 @@ PeerConnectionTrackerHostObserver::PeerConnectionTrackerHostObserver() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   PeerConnectionTrackerHost::AddObserver(
       base::PassKey<PeerConnectionTrackerHostObserver>(), this);
+}
+
+void PeerConnectionTrackerHostObserver::OnPeerConnectionSessionIdSet(
+    GlobalRenderFrameHostId render_frame_host_id,
+    int lid,
+    const std::string& session_id,
+    base::OnceClosure callback) {
+  std::move(callback).Run();
 }
 
 }  // namespace content

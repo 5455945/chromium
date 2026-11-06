@@ -14,20 +14,52 @@
 
 #include "absl/strings/internal/ostringstream.h"
 
+#include <cassert>
+#include <cstddef>
+#include <ios>
+#include <ostream>
+#include <streambuf>
+#include <string>
+#include <utility>
+
+#include "absl/base/config.h"
+
 namespace absl {
 ABSL_NAMESPACE_BEGIN
 namespace strings_internal {
 
-OStringStream::Buf::int_type OStringStream::overflow(int c) {
-  assert(s_);
-  if (!Buf::traits_type::eq_int_type(c, Buf::traits_type::eof()))
-    s_->push_back(static_cast<char>(c));
+OStringStream::OStringStream(std::string* str)
+    : std::ostream(&buf_), buf_(str) {}
+
+OStringStream::OStringStream(OStringStream&& that)
+    : std::ostream(std::move(static_cast<std::ostream&>(that))),
+      buf_(that.buf_) {
+  rdbuf(&buf_);
+}
+
+OStringStream& OStringStream::operator=(OStringStream&& that) {
+  std::ostream::operator=(std::move(static_cast<std::ostream&>(that)));
+  buf_ = that.buf_;
+  rdbuf(&buf_);
+  return *this;
+}
+
+OStringStream::~OStringStream() = default;
+
+OStringStream::Streambuf::~Streambuf() = default;
+
+OStringStream::Streambuf::int_type OStringStream::Streambuf::overflow(int c) {
+  assert(str_);
+  if (!std::streambuf::traits_type::eq_int_type(
+          c, std::streambuf::traits_type::eof()))
+    str_->push_back(static_cast<char>(c));
   return 1;
 }
 
-std::streamsize OStringStream::xsputn(const char* s, std::streamsize n) {
-  assert(s_);
-  s_->append(s, n);
+std::streamsize OStringStream::Streambuf::xsputn(const char* s,
+                                                 std::streamsize n) {
+  assert(str_);
+  str_->append(s, static_cast<size_t>(n));
   return n;
 }
 

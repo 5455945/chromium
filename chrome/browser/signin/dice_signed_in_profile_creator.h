@@ -1,61 +1,48 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_SIGNIN_DICE_SIGNED_IN_PROFILE_CREATOR_H_
 #define CHROME_BROWSER_SIGNIN_DICE_SIGNED_IN_PROFILE_CREATOR_H_
 
+#include <optional>
 #include <string>
+#include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/profiles/profile.h"
 #include "google_apis/gaia/core_account_id.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class TokensLoadedCallbackRunner;
 
-// Extracts an account from an existing profile and moves it to a new profile.
+// Extracts an initiator account and optional secondary accounts from an
+// existing profile and moves them atomically to a new profile.
 class DiceSignedInProfileCreator {
  public:
-  // Empty user data, attached to the profile if this is a guest profile and a
-  // signin token was transferred.
-  class GuestSigninTokenTransferredUserData
-      : public base::SupportsUserData::Data {
-   public:
-    GuestSigninTokenTransferredUserData() = default;
-    static void Set(Profile* profile) {
-      profile->SetUserData(
-          kGuestSigninTokenTransferredUserDataKey,
-          std::make_unique<GuestSigninTokenTransferredUserData>());
-    }
-    static bool Get(Profile* profile) {
-      return profile->GetUserData(kGuestSigninTokenTransferredUserDataKey);
-    }
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(GuestSigninTokenTransferredUserData);
-  };
-
-  // Creates a new profile or uses Guest profile if |use_guest_profile|, and
-  // moves the account from source_profile to it.
+  // Creates a new profile and moves the initiator account and secondary
+  // accounts from source_profile to it.
+  // The initiator account is automatically registered as the primary account of
+  // the new profile, while secondary accounts are added in the background.
   // The callback is called with the new profile or nullptr in case of failure.
   // The callback is never called synchronously.
   // If |local_profile_name| is not empty, it will be set as local name for the
   // new profile.
   // If |icon_index| is nullopt, a random icon will be selected.
   DiceSignedInProfileCreator(Profile* source_profile,
-                             CoreAccountId account_id,
+                             const CoreAccountId& initiator_account_id,
+                             std::vector<CoreAccountId> secondary_account_ids,
                              const std::u16string& local_profile_name,
-                             absl::optional<size_t> icon_index,
-                             bool use_guest_profile,
+                             std::optional<size_t> icon_index,
                              base::OnceCallback<void(Profile*)> callback);
 
   // Uses this version when the profile already exists at `target_profile_path`
   // but may not be loaded in memory. The profile is loaded if necessary, and
-  // the account is moved.
+  // the accounts are moved.
   DiceSignedInProfileCreator(Profile* source_profile,
-                             CoreAccountId account_id,
+                             const CoreAccountId& initiator_account_id,
+                             std::vector<CoreAccountId> secondary_account_ids,
                              const base::FilePath& target_profile_path,
                              base::OnceCallback<void(Profile*)> callback);
 
@@ -65,22 +52,25 @@ class DiceSignedInProfileCreator {
   DiceSignedInProfileCreator& operator=(const DiceSignedInProfileCreator&) =
       delete;
 
-  // Key for GuestSigninTokenTransferredUserDataKey.
-  static const void* const kGuestSigninTokenTransferredUserDataKey;
+  std::vector<CoreAccountId> account_ids_for_testing() const {
+    std::vector<CoreAccountId> ids = {initiator_account_id_};
+    ids.insert(ids.end(), secondary_account_ids_.begin(),
+               secondary_account_ids_.end());
+    return ids;
+  }
 
  private:
-  // Callback invoked once a profile is created, so we can transfer the
-  // credentials.
-  void OnNewProfileCreated(Profile* new_profile, Profile::CreateStatus status);
-
   // Called when the profile is initialized.
-  void OnNewProfileInitialized(Profile* new_profile);
+  void OnNewProfileInitialized(Profile* profile);
+
+  void LoadNewProfileTokens(Profile* new_profile);
 
   // Callback invoked once the token service is ready for the new profile.
   void OnNewProfileTokensLoaded(Profile* new_profile);
 
-  Profile* const source_profile_;
-  const CoreAccountId account_id_;
+  const base::WeakPtr<Profile> source_profile_;
+  const CoreAccountId initiator_account_id_;
+  const std::vector<CoreAccountId> secondary_account_ids_;
 
   base::OnceCallback<void(Profile*)> callback_;
   std::unique_ptr<TokensLoadedCallbackRunner> tokens_loaded_callback_runner_;

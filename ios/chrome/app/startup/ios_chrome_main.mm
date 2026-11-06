@@ -1,67 +1,78 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ios/chrome/app/startup/ios_chrome_main.h"
+#import "ios/chrome/app/startup/ios_chrome_main.h"
 
 #import <UIKit/UIKit.h>
 
-#include <vector>
+#import <optional>
+#import <vector>
 
-#include "base/check.h"
-#include "base/strings/string_piece.h"
-#include "base/strings/sys_string_conversions.h"
-#include "base/time/time.h"
-#include "ios/web/public/init/web_main_runner.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "base/check.h"
+#import "base/process/process.h"
+#import "base/strings/sys_string_conversions.h"
+#import "base/time/time.h"
+#import "base/timer/elapsed_timer.h"
+#import "base/types/fixed_array.h"
+#import "ios/web/public/init/web_main.h"
 
 namespace {
-base::TimeTicks* g_start_time;
+// Upper bound for a valid pre-main duration. Because both endpoints are
+// wall-clock times (base::Time), a forward clock adjustment (e.g. NTP sync)
+// between fork() and main() could inflate a delta.  So deltas above 30s are
+// discarded because they're more likely to represent a clock adjustment
+// than actual startup time, especially considering the iOS launch watchdog
+// is expected to terminate foreground launches that take >20s.  The watchdog
+// timer starts at fork(), so it will include pre-main duration
+constexpr base::TimeDelta kMaxPreMainDuration = base::Seconds(30);
+
+base::ElapsedNoSleepTimer* g_start_timer = nullptr;
+base::TimeDelta* g_pre_main_duration = nullptr;
 }  // namespace
 
 IOSChromeMain::IOSChromeMain() {
-  web_main_runner_.reset(web::WebMainRunner::Create());
-
   web::WebMainParams main_params(&main_delegate_);
-  NSArray* arguments = [[NSProcessInfo processInfo] arguments];
-  main_params.argc = [arguments count];
-  const char* argv[main_params.argc];
-  std::vector<std::string> argv_store;
+  NSArray<NSString*>* arguments = [[NSProcessInfo processInfo] arguments];
 
-  // Avoid using std::vector::push_back (or any other method that could cause
-  // the vector to grow) as this will cause the std::string to be copied or
-  // moved (depends on the C++ implementation) which may invalidates the pointer
-  // returned by std::string::c_str(). Even if the strings are moved, this may
-  // cause garbage if std::string uses optimisation for small strings (by
-  // returning pointer to the object internals in that case).
-  argv_store.resize([arguments count]);
-  for (NSUInteger i = 0; i < [arguments count]; i++) {
-    argv_store[i] = base::SysNSStringToUTF8([arguments objectAtIndex:i]);
-    argv[i] = argv_store[i].c_str();
+  main_params.args.reserve([arguments count]);
+  for (NSString* argument in arguments) {
+    main_params.args.push_back(base::SysNSStringToUTF8(argument));
   }
-  main_params.argv = argv;
 
-  // Chrome registers an AtExitManager in main in order to initialize breakpad
-  // early, so prevent a second registration by WebMainRunner.
+  // Chrome registers an AtExitManager in main in order to initialize the crash
+  // handler early, so prevent a second registration by WebMainRunner.
   main_params.register_exit_manager = false;
-  web_main_runner_->Initialize(std::move(main_params));
+  web_main_ = std::make_unique<web::WebMain>(std::move(main_params));
+  web_main_->Startup();
 }
 
-IOSChromeMain::~IOSChromeMain() {
-  web_main_runner_->ShutDown();
-}
+IOSChromeMain::~IOSChromeMain() {}
 
 // static
 void IOSChromeMain::InitStartTime() {
-  DCHECK(!g_start_time);
-  g_start_time = new base::TimeTicks(base::TimeTicks::Now());
+  DCHECK(!g_start_timer);
+  g_start_timer = new base::ElapsedNoSleepTimer();
+
+  const base::Time creation_time = base::Process::Current().CreationTime();
+  if (!creation_time.is_null()) {
+    const base::TimeDelta delta = base::Time::Now() - creation_time;
+    if (delta.is_positive() && delta <= kMaxPreMainDuration) {
+      g_pre_main_duration = new base::TimeDelta(delta);
+    }
+  }
 }
 
 // static
-const base::TimeTicks& IOSChromeMain::StartTime() {
-  CHECK(g_start_time);
-  return *g_start_time;
+base::ElapsedNoSleepTimer IOSChromeMain::StartTimer() {
+  CHECK(g_start_timer);
+  return *g_start_timer;
+}
+
+// static
+std::optional<base::TimeDelta> IOSChromeMain::PreMainDuration() {
+  if (g_pre_main_duration) {
+    return *g_pre_main_duration;
+  }
+  return std::nullopt;
 }

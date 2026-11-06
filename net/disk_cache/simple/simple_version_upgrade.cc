@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,8 @@
 
 #include <cstring>
 
+#include "base/containers/span.h"
+#include "base/feature_list.h"
 #include "base/files/file.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
@@ -13,39 +15,58 @@
 #include "base/files/memory_mapped_file.h"
 #include "base/logging.h"
 #include "base/pickle.h"
+#include "net/base/features.h"
+#include "net/disk_cache/cache_file.h"
+#include "net/disk_cache/disk_cache.h"
 #include "net/disk_cache/simple/simple_backend_version.h"
-#include "net/disk_cache/simple/simple_entry_format_history.h"
+#include "net/disk_cache/simple/simple_entry_format.h"
 #include "third_party/zlib/zlib.h"
 
 namespace {
 
 // It is not possible to upgrade cache structures on disk that are of version
 // below this, the entire cache should be dropped for them.
-const uint32_t kMinVersionAbleToUpgrade = 5;
+constexpr uint32_t kMinVersionAbleToUpgrade = 8;
 
-const char kFakeIndexFileName[] = "index";
-const char kIndexDirName[] = "index-dir";
-const char kIndexFileName[] = "the-real-index";
+constexpr char kFakeIndexFileName[] = "index";
+constexpr char kIndexDirName[] = "index-dir";
+constexpr char kIndexFileName[] = "the-real-index";
+
+// Value stored in `FakeIndexData::experiment_type` to record that a
+// `net::SHADER_CACHE` directory has already been wiped for
+// `kShaderDiskCacheBackendExperiment`.
+constexpr uint32_t kSimpleShaderCacheExperimentWiped = 3;
+
+uint32_t GetExpectedExperimentValue(net::CacheType cache_type) {
+  if (cache_type == net::SHADER_CACHE &&
+      base::FeatureList::IsEnabled(
+          net::features::kShaderDiskCacheBackendExperiment)) {
+    return kSimpleShaderCacheExperimentWiped;
+  }
+  return 0;
+}
 
 void LogMessageFailedUpgradeFromVersion(int version) {
   LOG(ERROR) << "Failed to upgrade Simple Cache from version: " << version;
 }
 
-bool WriteFakeIndexFile(const base::FilePath& file_name) {
-  base::File file(file_name, base::File::FLAG_CREATE | base::File::FLAG_WRITE);
-  if (!file.IsValid())
+bool WriteFakeIndexFile(disk_cache::BackendFileOperations* file_operations,
+                        const base::FilePath& file_name,
+                        uint32_t experiment_value) {
+  std::unique_ptr<disk_cache::CacheFile> file = file_operations->OpenFile(
+      file_name, base::File::FLAG_CREATE | base::File::FLAG_WRITE);
+  if (!file->IsValid()) {
     return false;
+  }
 
   disk_cache::FakeIndexData file_contents;
-  file_contents.initial_magic_number =
-      disk_cache::simplecache_v5::kSimpleInitialMagicNumber;
+  file_contents.initial_magic_number = disk_cache::kSimpleInitialMagicNumber;
   file_contents.version = disk_cache::kSimpleVersion;
-  file_contents.zero = 0;
+  file_contents.experiment_type = experiment_value;
   file_contents.zero2 = 0;
+  file_contents.encryption_status = file_operations->IsEncrypted() ? 1 : 0;
 
-  int bytes_written = file.Write(0, reinterpret_cast<char*>(&file_contents),
-                                 sizeof(file_contents));
-  if (bytes_written != sizeof(file_contents)) {
+  if (!file->WriteAndCheck(0, base::byte_span_from_ref(file_contents))) {
     LOG(ERROR) << "Failed to write fake index file: "
                << file_name.LossyDisplayName();
     return false;
@@ -58,56 +79,9 @@ bool WriteFakeIndexFile(const base::FilePath& file_name) {
 namespace disk_cache {
 
 FakeIndexData::FakeIndexData() {
-  // Make hashing repeatable: leave no padding bytes untouched.
-  std::memset(this, 0, sizeof(*this));
-}
-
-// Migrates the cache directory from version 4 to version 5.
-// Returns true iff it succeeds.
-//
-// The V5 and V6 caches differ in the name of the index file (it moved to a
-// subdirectory) and in the file format (directory last-modified time observed
-// by the index writer has gotten appended to the pickled format).
-//
-// To keep complexity small this specific upgrade code *deletes* the old index
-// file. The directory for the new index file has to be created lazily anyway,
-// so it is not done in the upgrader.
-//
-// Below is the detailed description of index file format differences. It is for
-// reference purposes. This documentation would be useful to move closer to the
-// next index upgrader when the latter gets introduced.
-//
-// Path:
-//   V5: $cachedir/the-real-index
-//   V6: $cachedir/index-dir/the-real-index
-//
-// Pickled file format:
-//   Both formats extend Pickle::Header by 32bit value of the CRC-32 of the
-//   pickled data.
-//   <v5-index> ::= <v5-index-metadata> <entry-info>*
-//   <v5-index-metadata> ::= UInt64(kSimpleIndexMagicNumber)
-//                           UInt32(4)
-//                           UInt64(<number-of-entries>)
-//                           UInt64(<cache-size-in-bytes>)
-//   <entry-info> ::= UInt64(<hash-of-the-key>)
-//                    Int64(<entry-last-used-time>)
-//                    UInt64(<entry-size-in-bytes>)
-//   <v6-index> ::= <v6-index-metadata>
-//                  <entry-info>*
-//                  Int64(<cache-dir-mtime>)
-//   <v6-index-metadata> ::= UInt64(kSimpleIndexMagicNumber)
-//                           UInt32(5)
-//                           UInt64(<number-of-entries>)
-//                           UInt64(<cache-size-in-bytes>)
-//   Where:
-//     <entry-size-in-bytes> is equal the sum of all file sizes of the entry.
-//     <cache-dir-mtime> is the last modification time with nanosecond precision
-//       of the directory, where all files for entries are stored.
-//     <hash-of-the-key> represent the first 64 bits of a SHA-1 of the key.
-bool UpgradeIndexV5V6(const base::FilePath& cache_directory) {
-  const base::FilePath old_index_file =
-      cache_directory.AppendASCII(kIndexFileName);
-  return base::DeleteFile(old_index_file);
+  // We don't want unset holes in types stored to disk.
+  static_assert(std::has_unique_object_representations_v<FakeIndexData>,
+                "FakeIndexData should have no implicit padding bytes");
 }
 
 // Some points about the Upgrade process are still not clear:
@@ -125,8 +99,12 @@ bool UpgradeIndexV5V6(const base::FilePath& cache_directory) {
 //    upgrade steps. Atomicity of this is an interesting research topic. The
 //    intermediate fake index flushing must be added as soon as we add more
 //    upgrade steps.
+// 3. This upgrade logic only upgrades the fake index file and not other files
+//    (entry cache file nor sparse entry file) on Version 9.
 SimpleCacheConsistencyResult UpgradeSimpleCacheOnDisk(
-    const base::FilePath& path) {
+    BackendFileOperations* file_operations,
+    const base::FilePath& path,
+    net::CacheType cache_type) {
   // There is a convention among disk cache backends: looking at the magic in
   // the file "index" it should be sufficient to determine if the cache belongs
   // to the currently running backend. The Simple Backend stores its index in
@@ -137,35 +115,34 @@ SimpleCacheConsistencyResult UpgradeSimpleCacheOnDisk(
   // 2. The Simple Backend has pickled file format for the index making it hacky
   //    to have the magic in the right place.
   const base::FilePath fake_index = path.AppendASCII(kFakeIndexFileName);
-  base::File fake_index_file(fake_index,
-                             base::File::FLAG_OPEN | base::File::FLAG_READ);
+  std::unique_ptr<CacheFile> fake_index_file = file_operations->OpenFile(
+      fake_index, base::File::FLAG_OPEN | base::File::FLAG_READ);
+  const uint32_t expected_experiment = GetExpectedExperimentValue(cache_type);
 
-  if (!fake_index_file.IsValid()) {
-    if (fake_index_file.error_details() == base::File::FILE_ERROR_NOT_FOUND) {
-      if (!WriteFakeIndexFile(fake_index)) {
-        base::DeleteFile(fake_index);
+  if (!fake_index_file->IsValid()) {
+    if (fake_index_file->error_details() == base::File::FILE_ERROR_NOT_FOUND) {
+      if (!WriteFakeIndexFile(file_operations, fake_index,
+                              expected_experiment)) {
+        file_operations->DeleteFile(fake_index);
         LOG(ERROR) << "Failed to write a new fake index.";
         return SimpleCacheConsistencyResult::kWriteFakeIndexFileFailed;
       }
-      return SimpleCacheConsistencyResult::kOK;
+      return SimpleCacheConsistencyResult::kOKCreated;
     }
     return SimpleCacheConsistencyResult::kBadFakeIndexFile;
   }
 
   FakeIndexData file_header;
-  int bytes_read = fake_index_file.Read(0,
-                                        reinterpret_cast<char*>(&file_header),
-                                        sizeof(file_header));
-  if (bytes_read != sizeof(file_header)) {
+  if (!fake_index_file->ReadAndCheck(0,
+                                     base::byte_span_from_ref(file_header))) {
     LOG(ERROR) << "Disk cache backend fake index file has wrong size.";
     return SimpleCacheConsistencyResult::kBadFakeIndexReadSize;
   }
-  if (file_header.initial_magic_number !=
-      disk_cache::simplecache_v5::kSimpleInitialMagicNumber) {
+  if (file_header.initial_magic_number != kSimpleInitialMagicNumber) {
     LOG(ERROR) << "Disk cache backend fake index file has wrong magic number.";
     return SimpleCacheConsistencyResult::kBadInitialMagicNumber;
   }
-  fake_index_file.Close();
+  fake_index_file.reset();
 
   uint32_t version_from = file_header.version;
   if (version_from < kMinVersionAbleToUpgrade) {
@@ -178,60 +155,47 @@ SimpleCacheConsistencyResult UpgradeSimpleCacheOnDisk(
     return SimpleCacheConsistencyResult::kVersionFromTheFuture;
   }
 
-  if (file_header.zero != 0 && file_header.zero2 != 0) {
+  if (file_header.experiment_type != expected_experiment ||
+      file_header.zero2 != 0) {
     LOG(WARNING) << "Rebuilding cache due to experiment change";
     return SimpleCacheConsistencyResult::kBadZeroCheck;
+  }
+
+  if (file_header.encryption_status != file_operations->IsEncrypted()) {
+    LOG(WARNING) << "Rebuilding cache due to encryption status change";
+    return SimpleCacheConsistencyResult::kEncryptionStatusMismatch;
   }
 
   bool new_fake_index_needed = (version_from != kSimpleVersion);
 
   // There should be one upgrade routine here for each incremental upgrade
   // starting at kMinVersionAbleToUpgrade.
-  static_assert(kMinVersionAbleToUpgrade == 5, "upgrade routines don't match");
-  DCHECK_LE(5U, version_from);
-  if (version_from == 5) {
-    // Upgrade only the index for V5 -> V6 move.
-    if (!UpgradeIndexV5V6(path)) {
-      LogMessageFailedUpgradeFromVersion(file_header.version);
-      return SimpleCacheConsistencyResult::kUpgradeIndexV5V6Failed;
-    }
-    version_from++;
-  }
-  DCHECK_LE(6U, version_from);
-  if (version_from == 6) {
-    // No upgrade from V6 -> V7, because the entry format has not changed and
-    // the V7 index reader is backwards compatible.
-    version_from++;
-  }
-
-  if (version_from == 7) {
-    // Likewise, V7 -> V8 is handled entirely by the index reader.
-    version_from++;
-  }
-
+  static_assert(kMinVersionAbleToUpgrade == 8, "upgrade routines don't match");
+  DCHECK_LE(8U, version_from);
   if (version_from == 8) {
     // Likewise, V8 -> V9 is handled entirely by the index reader.
     version_from++;
   }
 
-  DCHECK_EQ(kSimpleVersion, version_from);
+  DCHECK_EQ(kSimpleIndexFileVersion, version_from);
 
   if (!new_fake_index_needed)
-    return SimpleCacheConsistencyResult::kOK;
+    return SimpleCacheConsistencyResult::kOKNoUpgrade;
 
   const base::FilePath temp_fake_index = path.AppendASCII("upgrade-index");
-  if (!WriteFakeIndexFile(temp_fake_index)) {
-    base::DeleteFile(temp_fake_index);
+  if (!WriteFakeIndexFile(file_operations, temp_fake_index,
+                          expected_experiment)) {
+    file_operations->DeleteFile(temp_fake_index);
     LOG(ERROR) << "Failed to write a new fake index.";
     LogMessageFailedUpgradeFromVersion(file_header.version);
     return SimpleCacheConsistencyResult::kWriteFakeIndexFileFailed;
   }
-  if (!base::ReplaceFile(temp_fake_index, fake_index, nullptr)) {
+  if (!file_operations->ReplaceFile(temp_fake_index, fake_index, nullptr)) {
     LOG(ERROR) << "Failed to replace the fake index.";
     LogMessageFailedUpgradeFromVersion(file_header.version);
     return SimpleCacheConsistencyResult::kReplaceFileFailed;
   }
-  return SimpleCacheConsistencyResult::kOK;
+  return SimpleCacheConsistencyResult::kOKUpgraded;
 }
 
 bool DeleteIndexFilesIfCacheIsEmpty(const base::FilePath& path) {

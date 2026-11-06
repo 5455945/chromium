@@ -1,32 +1,36 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
-#include "gpu/command_buffer/service/gles2_cmd_decoder.h"
 
 #include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
 
+#include <algorithm>
+#include <array>
 #include <memory>
 
 #include "base/command_line.h"
-#include "base/cxx17_backports.h"
-#include "base/numerics/ranges.h"
+#include "base/compiler_specific.h"
+#include "base/containers/heap_array.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/string_number_conversions.h"
+#if defined(ADDRESS_SANITIZER)
+#include <sanitizer/asan_interface.h>
+#endif
 #include "gpu/command_buffer/common/gles2_cmd_format.h"
 #include "gpu/command_buffer/common/gles2_cmd_utils.h"
 #include "gpu/command_buffer/service/context_group.h"
 #include "gpu/command_buffer/service/context_state.h"
 #include "gpu/command_buffer/service/gl_surface_mock.h"
+#include "gpu/command_buffer/service/gles2_cmd_decoder.h"
 #include "gpu/command_buffer/service/gles2_cmd_decoder_unittest.h"
 #include "gpu/command_buffer/service/gpu_switches.h"
-#include "gpu/command_buffer/service/image_manager.h"
-#include "gpu/command_buffer/service/mailbox_manager.h"
 #include "gpu/command_buffer/service/mocks.h"
 #include "gpu/command_buffer/service/program_manager.h"
 #include "gpu/command_buffer/service/test_helper.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
 #include "ui/gl/gl_implementation.h"
 #include "ui/gl/gl_mock.h"
 #include "ui/gl/gl_surface_stub.h"
@@ -84,7 +88,6 @@ TEST_P(GLES2DecoderTest, CheckFramebufferStatusWithNoBoundTarget) {
 
 TEST_P(GLES2DecoderWithShaderTest, BindAndDeleteFramebuffer) {
   SetupTexture();
-  AddExpectationsForSimulatedAttrib0(kNumVertices, 0);
   SetupExpectationsForApplyingDefaultDirtyState();
   DoBindFramebuffer(
       GL_FRAMEBUFFER, client_framebuffer_id_, kServiceFramebufferId);
@@ -259,8 +262,8 @@ TEST_P(GLES2DecoderTest, FramebufferTexture2DInvalidArgs2_0) {
   DoBindFramebuffer(
       GL_FRAMEBUFFER, client_framebuffer_id_, kServiceFramebufferId);
   cmds::FramebufferTexture2D cmd;
-  cmd.Init(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_PROXY_TEXTURE_CUBE_MAP,
-           client_texture_id_, 0);
+  cmd.Init(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+           0x851B /*GL_PROXY_TEXTURE_CUBE_MAP*/, client_texture_id_, 0);
   EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
   EXPECT_EQ(GL_INVALID_ENUM, GetGLError());
 }
@@ -271,8 +274,8 @@ TEST_P(GLES3DecoderTest, FramebufferTexture2DInvalidArgs2_0) {
   DoBindFramebuffer(
       GL_FRAMEBUFFER, client_framebuffer_id_, kServiceFramebufferId);
   cmds::FramebufferTexture2D cmd;
-  cmd.Init(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_PROXY_TEXTURE_CUBE_MAP,
-           client_texture_id_, 1);
+  cmd.Init(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+           0x851B /*GL_PROXY_TEXTURE_CUBE_MAP*/, client_texture_id_, 1);
   EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
   EXPECT_EQ(GL_INVALID_ENUM, GetGLError());
 }
@@ -428,7 +431,7 @@ TEST_P(GLES2DecoderWithShaderTest,
   SetupTexture();
   DoBindRenderbuffer(
       GL_RENDERBUFFER, client_renderbuffer_id_, kServiceRenderbufferId);
-  DoRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA4, GL_RGBA, 1, 1, GL_NO_ERROR);
+  DoRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA4, 1, 1, GL_NO_ERROR);
 
   cmds::GetRenderbufferParameteriv cmd;
   cmd.Init(GL_RENDERBUFFER,
@@ -471,7 +474,7 @@ TEST_P(GLES2DecoderWithShaderTest, RenderbufferStorageRebindRenderbuffer) {
       GL_RENDERBUFFER, client_renderbuffer_id_, kServiceRenderbufferId);
   RestoreRenderbufferBindings();
   EnsureRenderbufferBound(true);
-  DoRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA4, GL_RGBA, 1, 1, GL_NO_ERROR);
+  DoRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA4, 1, 1, GL_NO_ERROR);
 }
 
 TEST_P(GLES2DecoderTest, RenderbufferStorageWithNoBoundTarget) {
@@ -516,7 +519,8 @@ class ReadPixelsEmulator {
     for (GLint yy = 0; yy < height; ++yy) {
       const int8_t* src = GetPixelAddress(src_pixels_, x, y + yy);
       const void* dst = ComputePackAlignmentAddress(0, yy, width, pixels);
-      memcpy(const_cast<void*>(dst), src, width * bytes_per_pixel_);
+      UNSAFE_TODO(
+          memcpy(const_cast<void*>(dst), src, width * bytes_per_pixel_));
     }
   }
 
@@ -525,9 +529,8 @@ class ReadPixelsEmulator {
                          GLsizei width,
                          const void* data) const {
     DCHECK(x + width <= width_ || width == 0);
-    return memcmp(data,
-                  GetPixelAddress(expected_pixels_, x, y),
-                  width * bytes_per_pixel_) == 0;
+    return UNSAFE_TODO(memcmp(data, GetPixelAddress(expected_pixels_, x, y),
+                              width * bytes_per_pixel_)) == 0;
   }
 
   // Helper to compute address of pixel in pack aligned data.
@@ -539,7 +542,7 @@ class ReadPixelsEmulator {
     GLint two_rows_size = ComputeImageDataSize(width, 2);
     GLsizei padded_row_size = two_rows_size - unpadded_row_size;
     GLint offset = y * padded_row_size + x * bytes_per_pixel_;
-    return static_cast<const int8_t*>(address) + offset;
+    return UNSAFE_TODO(static_cast<const int8_t*>(address) + offset);
   }
 
   GLint ComputeImageDataSize(GLint width, GLint height) const {
@@ -556,15 +559,15 @@ class ReadPixelsEmulator {
 
  private:
   const int8_t* GetPixelAddress(const int8_t* base, GLint x, GLint y) const {
-    return base + (width_ * y + x) * bytes_per_pixel_;
+    return UNSAFE_TODO(base + (width_ * y + x)) * bytes_per_pixel_;
   }
 
   GLsizei width_;
   GLsizei height_;
   GLint pack_alignment_;
   GLint bytes_per_pixel_;
-  const int8_t* src_pixels_;
-  const int8_t* expected_pixels_;
+  raw_ptr<const int8_t> src_pixels_;
+  raw_ptr<const int8_t> expected_pixels_;
 };
 
 }  // anonymous namespace
@@ -614,7 +617,10 @@ void GLES2DecoderTest::CheckReadPixelsOutOfRange(GLint in_read_x,
   uint32_t result_shm_offset = kSharedMemoryOffset;
   uint32_t pixels_shm_id = shared_memory_id_;
   uint32_t pixels_shm_offset = kSharedMemoryOffset + sizeof(*result);
-  void* dest = &result[1];
+  // SAFETY: shared memory extends past Result by at least the pixel window.
+  base::span<uint8_t> dest = UNSAFE_BUFFERS(
+      base::span(reinterpret_cast<uint8_t*>(result + 1),
+                 static_cast<size_t>(kWidth * kHeight * kBytesPerPixel)));
 
   EXPECT_CALL(*gl_, GetError())
       .WillOnce(Return(GL_NO_ERROR))
@@ -624,8 +630,8 @@ void GLES2DecoderTest::CheckReadPixelsOutOfRange(GLint in_read_x,
   // is requesting a larger size.
   GLint read_x = std::max(0, in_read_x);
   GLint read_y = std::max(0, in_read_y);
-  GLint read_end_x = base::ClampToRange(in_read_x + in_read_width, 0, kWidth);
-  GLint read_end_y = base::ClampToRange(in_read_y + in_read_height, 0, kHeight);
+  GLint read_end_x = std::clamp(in_read_x + in_read_width, 0, kWidth);
+  GLint read_end_y = std::clamp(in_read_y + in_read_height, 0, kHeight);
   GLint read_width = read_end_x - read_x;
   GLint read_height = read_end_y - read_y;
   if (read_width > 0 && read_height > 0) {
@@ -653,36 +659,35 @@ void GLES2DecoderTest::CheckReadPixelsOutOfRange(GLint in_read_x,
   EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
 
   GLint unpadded_row_size = emu.ComputeImageDataSize(in_read_width, 1);
-  std::unique_ptr<int8_t[]> zero(new int8_t[unpadded_row_size]);
-  std::unique_ptr<int8_t[]> pack(new int8_t[kPackAlignment]);
-  memset(zero.get(), kInitialMemoryValue, unpadded_row_size);
-  memset(pack.get(), kInitialMemoryValue, kPackAlignment);
+  auto zero = base::HeapArray<int8_t>::Uninit(unpadded_row_size);
+  auto pack = base::HeapArray<int8_t>::Uninit(kPackAlignment);
+  UNSAFE_TODO(memset(zero.data(), kInitialMemoryValue, unpadded_row_size));
+  UNSAFE_TODO(memset(pack.data(), kInitialMemoryValue, kPackAlignment));
   for (GLint yy = 0; yy < in_read_height; ++yy) {
     const int8_t* row = static_cast<const int8_t*>(
-        emu.ComputePackAlignmentAddress(0, yy, in_read_width, dest));
+        emu.ComputePackAlignmentAddress(0, yy, in_read_width, dest.data()));
     GLint y = in_read_y + yy;
     if (y < 0 || y >= kHeight) {
-      EXPECT_EQ(0, memcmp(zero.get(), row, unpadded_row_size));
+      UNSAFE_TODO(EXPECT_EQ(0, memcmp(zero.data(), row, unpadded_row_size)));
     } else {
       // check off left.
       GLint num_left_pixels = std::max(-in_read_x, 0);
       GLint num_left_bytes = num_left_pixels * kBytesPerPixel;
-      EXPECT_EQ(0, memcmp(zero.get(), row, num_left_bytes));
+      UNSAFE_TODO(EXPECT_EQ(0, memcmp(zero.data(), row, num_left_bytes)));
 
       // check off right.
       GLint num_right_pixels = std::max(in_read_x + in_read_width - kWidth, 0);
       GLint num_right_bytes = num_right_pixels * kBytesPerPixel;
-      EXPECT_EQ(0,
-                memcmp(zero.get(),
-                       row + unpadded_row_size - num_right_bytes,
-                       num_right_bytes));
+      UNSAFE_TODO(EXPECT_EQ(
+          0, memcmp(zero.data(), row + unpadded_row_size - num_right_bytes,
+                    num_right_bytes)));
 
       // check middle.
       GLint x = std::max(in_read_x, 0);
       GLint num_middle_pixels =
           std::max(in_read_width - num_left_pixels - num_right_pixels, 0);
-      EXPECT_TRUE(
-          emu.CompareRowSegment(x, y, num_middle_pixels, row + num_left_bytes));
+      UNSAFE_TODO(EXPECT_TRUE(emu.CompareRowSegment(x, y, num_middle_pixels,
+                                                    row + num_left_bytes)));
     }
 
     // check padding
@@ -691,8 +696,8 @@ void GLES2DecoderTest::CheckReadPixelsOutOfRange(GLint in_read_x,
       GLint padded_row_size = (temp / kPackAlignment ) * kPackAlignment;
       GLint num_padding_bytes = padded_row_size - unpadded_row_size;
       if (num_padding_bytes) {
-        EXPECT_EQ(0, memcmp(pack.get(),
-                            row + unpadded_row_size, num_padding_bytes));
+        UNSAFE_TODO(EXPECT_EQ(0, memcmp(pack.data(), row + unpadded_row_size,
+                                        num_padding_bytes)));
       }
     }
   }
@@ -718,7 +723,10 @@ TEST_P(GLES2DecoderTest, ReadPixels) {
   uint32_t result_shm_offset = kSharedMemoryOffset;
   uint32_t pixels_shm_id = shared_memory_id_;
   uint32_t pixels_shm_offset = kSharedMemoryOffset + sizeof(*result);
-  void* dest = &result[1];
+  // SAFETY: shared memory extends past Result by at least the pixel window.
+  base::span<uint8_t> dest = UNSAFE_BUFFERS(
+      base::span(reinterpret_cast<uint8_t*>(result + 1),
+                 static_cast<size_t>(kWidth * kHeight * kBytesPerPixel)));
   EXPECT_CALL(*gl_, GetError())
       .WillOnce(Return(GL_NO_ERROR))
       .WillOnce(Return(GL_NO_ERROR))
@@ -744,7 +752,8 @@ TEST_P(GLES2DecoderTest, ReadPixels) {
   EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
   for (GLint yy = 0; yy < kHeight; ++yy) {
     EXPECT_TRUE(emu.CompareRowSegment(
-        0, yy, kWidth, emu.ComputePackAlignmentAddress(0, yy, kWidth, dest)));
+        0, yy, kWidth,
+        emu.ComputePackAlignmentAddress(0, yy, kWidth, dest.data())));
   }
 }
 
@@ -831,48 +840,91 @@ TEST_P(GLES3DecoderTest, ReadPixels2PixelPackBuffer) {
   EXPECT_EQ(GL_NO_ERROR, GetGLError());
 }
 
-TEST_P(GLES3DecoderTest, ReadPixelsPixelPackBufferMapped) {
-  const GLsizei kWidth = 5;
-  const GLsizei kHeight = 3;
-  const GLint kBytesPerPixel = 4;
-  GLint size = kWidth * kHeight * kBytesPerPixel;
+TEST_P(GLES3DecoderManualInitTest, ReadPixelsR16ExtZeroSizeValidationOOB) {
+  InitState init;
+  init.extensions = "GL_EXT_texture_norm16";
+  init.gl_version = "OpenGL ES 3.0";
+  init.context_type = CONTEXT_TYPE_OPENGLES3;
+  InitDecoder(init);
 
-  DoBindBuffer(GL_PIXEL_PACK_BUFFER, client_buffer_id_, kServiceBufferId);
-  DoBufferData(GL_PIXEL_PACK_BUFFER, size);
+  // Step 1: directly demonstrate the validator/size-calculator desync.
+  uint32_t computed = 0xdeadbeef;
+  EXPECT_TRUE(GLES2Util::ComputeImageDataSizes(64, 64, 1, GL_R16_EXT,
+                                               GL_UNSIGNED_SHORT, 4, &computed,
+                                               nullptr, nullptr));
+  EXPECT_EQ(8192u, computed);
 
-  std::vector<int8_t> mapped_data(size);
+  // Step 2: send a hostile ReadPixels that a compromised renderer could craft.
+  // pixels_shm_offset = end-of-buffer; the decoder validates 0 bytes so this
+  // passes and returns base + kSharedBufferSize (one-past-end).
+  surface_->SetSize(gfx::Size(INT_MAX, INT_MAX));
+  const GLsizei kWidth = 32;
+  const GLsizei kHeight = 32;
+  // Native R16 + UNSIGNED_SHORT = 2 bytes/pixel -> 32*32*2 = 2048 bytes
+  // written by the driver, all of it past the validated buffer end.
+  const uint32_t kPixelsOffset = kSharedBufferSize;  // one-past-end
 
-  uint32_t result_shm_id = shared_memory_id_;
-  uint32_t result_shm_offset = kSharedMemoryOffset;
-  uint32_t data_shm_id = shared_memory_id_;
-  // uint32_t is Result for both MapBufferRange and UnmapBuffer commands.
-  uint32_t data_shm_offset = kSharedMemoryOffset + sizeof(uint32_t);
-  EXPECT_CALL(*gl_,
-              MapBufferRange(GL_PIXEL_PACK_BUFFER, 0, size, GL_MAP_READ_BIT))
-        .WillOnce(Return(mapped_data.data()))
-        .RetiresOnSaturation();
-  cmds::MapBufferRange map_buffer_range;
-  map_buffer_range.Init(GL_PIXEL_PACK_BUFFER, 0, size, GL_MAP_READ_BIT,
-                        data_shm_id, data_shm_offset,
-                        result_shm_id, result_shm_offset);
-  EXPECT_EQ(error::kNoError, ExecuteCmd(map_buffer_range));
-  EXPECT_EQ(GL_NO_ERROR, GetGLError());
+#if defined(ADDRESS_SANITIZER)
+  // The transfer buffer is mmap'd shared memory (no ASAN redzones). Poison the
+  // page slack past the logical buffer end so ASAN deterministically reports
+  // the OOB write instead of relying on whatever mapping happens to follow.
+  // kSharedBufferSize = 2048; the mapping is at least one 4096-byte page, so
+  // [base+2048, base+4096) is mapped slack we can safely poison.
 
-  EXPECT_CALL(*gl_, ReadPixels(_, _, _, _, _, _, _)).Times(0);
+  // SAFETY: this is the only feasible way to get the pointer we need.
+  // This test is temporary regardless and will be removed along with
+  // the validating command decoder.
+  uint8_t* poison_at = UNSAFE_BUFFERS(
+      static_cast<uint8_t*>(shared_memory_base_.get()) + kSharedBufferSize);
+  static_assert(kSharedBufferSize == 2048);
+  const size_t kPoisonLen = 2048;
+  ASAN_POISON_MEMORY_REGION(poison_at, kPoisonLen);
+  absl::Cleanup unpoison = [poison_at] {
+    ASAN_UNPOISON_MEMORY_REGION(poison_at, kPoisonLen);
+  };
+#endif
+
+  // The decoder falls through to the native-driver IMPLEMENTATION_COLOR_READ_*
+  // query because (GL_R16_EXT, GL_UNSIGNED_SHORT) is not in the hardcoded
+  // accepted list. Simulate an Android native driver that returns the sized
+  // enum (the precondition documented in the report).
+  EXPECT_CALL(*gl_, GetIntegerv(GL_IMPLEMENTATION_COLOR_READ_FORMAT, _))
+      .Times(AnyNumber())
+      .WillRepeatedly(SetArgPointee<1>(GL_R16_EXT));
+  EXPECT_CALL(*gl_, GetIntegerv(GL_IMPLEMENTATION_COLOR_READ_TYPE, _))
+      .Times(AnyNumber())
+      .WillRepeatedly(SetArgPointee<1>(GL_UNSIGNED_SHORT));
+  EXPECT_CALL(*gl_, GetError())
+      .Times(AnyNumber())
+      .WillRepeatedly(Return(GL_NO_ERROR));
+
+  // The "native driver" computes its own write size for R16 + UNSIGNED_SHORT
+  // (2 bytes/pixel) and writes into the pointer the decoder validated for 0
+  // bytes. With kWidth*kHeight*2 = 8192 bytes starting at one-past-end of a
+  // 2048-byte transfer buffer, this is a hard OOB write past the shm mapping.
+  EXPECT_CALL(
+      *gl_, ReadPixels(0, 0, kWidth, kHeight, GL_R16_EXT, GL_UNSIGNED_SHORT, _))
+      .Times(AnyNumber())
+      .WillRepeatedly([](GLint, GLint, GLsizei w, GLsizei h, GLenum, GLenum,
+                         void* pixels) {
+        // What a native R16 glReadPixels does: write w*h*2 bytes.
+
+        // SAFETY: taking a shortcut to fill this memory since this
+        // test is temporary and will be removed soon along with the
+        // validating command decoder.
+        UNSAFE_BUFFERS(memset(pixels, 0xAB, static_cast<size_t>(w) * h * 2u));
+      });
+
   cmds::ReadPixels cmd;
-  cmd.Init(0,
-           0,
-           kWidth,
-           kHeight,
-           GL_RGBA,
-           GL_UNSIGNED_BYTE,
-           0,
-           0,
-           0,
-           0,
-           false);
-  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-  EXPECT_EQ(GL_INVALID_OPERATION, GetGLError());
+  cmd.Init(0, 0, kWidth, kHeight, GL_R16_EXT, GL_UNSIGNED_SHORT,
+           shared_memory_id_, kPixelsOffset, /*result_shm_id=*/0,
+           /*result_shm_offset=*/0, /*async=*/false);
+  // OOB write fires inside this call: ASAN reports a 2048-byte write past the
+  // end of the transfer buffer (the region the decoder validated for 0 bytes).
+  // After the bandaid fix, the command is rejected with GL_INVALID_OPERATION
+  // before reaching glReadPixelsFn.
+  ExecuteCmd(cmd);
+  GetGLError();  // Consume the INVALID_OPERATION emitted by the fixed decoder.
 }
 
 TEST_P(GLES3DecoderTest, ReadPixelsPixelPackBufferIsNotLargeEnough) {
@@ -907,7 +959,6 @@ TEST_P(GLES2DecoderManualInitTest, ReadPixels2RowLengthWorkaround) {
   workarounds.pack_parameters_workaround_with_pack_buffer = true;
   InitState init;
   init.gl_version = "OpenGL ES 3.0";
-  init.bind_generates_resource = true;
   init.context_type = CONTEXT_TYPE_OPENGLES3;
   InitDecoderWithWorkarounds(init, workarounds);
 
@@ -953,12 +1004,325 @@ TEST_P(GLES2DecoderManualInitTest, ReadPixels2RowLengthWorkaround) {
   EXPECT_EQ(GL_NO_ERROR, GetGLError());
 }
 
+TEST_P(GLES2DecoderManualInitTest, ReadPixels2LargeRowLengthWorkaround) {
+  gpu::GpuDriverBugWorkarounds workarounds;
+  workarounds.pack_large_row_length_separately_pack_buffer = true;
+  InitState init;
+  init.gl_version = "OpenGL ES 3.0";
+  init.context_type = CONTEXT_TYPE_OPENGLES3;
+  InitDecoderWithWorkarounds(init, workarounds);
+
+  const GLsizei kWidth = 1;
+  const GLsizei kHeight = 2;
+  const GLenum kFormat = GL_RGBA;
+  const GLenum kType = GL_UNSIGNED_BYTE;
+  const GLint kLargeRowLength = 0x7fffffc;
+  constexpr GLsizeiptr kByteOffsetToVerify = 0x1ffffff0;
+  GLsizeiptr size = kByteOffsetToVerify + 256;
+
+  DoBindBuffer(GL_PIXEL_PACK_BUFFER, client_buffer_id_, kServiceBufferId);
+  DoBufferData(GL_PIXEL_PACK_BUFFER, size);
+
+  DoPixelStorei(GL_PACK_ROW_LENGTH, kLargeRowLength);
+
+  EXPECT_CALL(*gl_, GetError())
+      .WillOnce(Return(GL_NO_ERROR))
+      .RetiresOnSaturation();
+
+  EXPECT_CALL(*gl_, PixelStorei(GL_PACK_ROW_LENGTH, 0))
+      .Times(1)
+      .RetiresOnSaturation();
+  for (GLint ii = 0; ii < kHeight; ++ii) {
+    void* offset = reinterpret_cast<void*>(ii * kByteOffsetToVerify);
+    EXPECT_CALL(*gl_, ReadPixels(0, ii, kWidth, 1, kFormat, kType, offset))
+        .Times(1)
+        .RetiresOnSaturation();
+  }
+  EXPECT_CALL(*gl_, PixelStorei(GL_PACK_ROW_LENGTH, kLargeRowLength))
+      .Times(1)
+      .RetiresOnSaturation();
+
+  cmds::ReadPixels cmd;
+  cmd.Init(0, 0, kWidth, kHeight, kFormat, kType, 0, 0, 0, 0, false);
+  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
+}
+
+// Tests that a blocking ReadPixels whose GPU work was discarded by a device
+// reset does not deliver a result: the mocked driver completes the read but
+// reports GL_GUILTY_CONTEXT_RESET on the post-read robustness poll (the
+// crbug.com/552550589 report shape). Per ES 3.2 sec. 2.3.2, commands after a
+// reset must not have side effects. We expect no success, a zeroed
+// destination, kLostContext, and a guilty context loss.
+TEST_P(GLES2DecoderManualInitTest, ReadPixelsResetStatusWorkaroundGuilty) {
+  gpu::GpuDriverBugWorkarounds workarounds;
+  workarounds.check_graphics_reset_status_after_readback = true;
+  InitState init;
+  init.gl_version = "OpenGL ES 3.0";
+  init.context_type = CONTEXT_TYPE_OPENGLES3;
+  init.extensions = "GL_KHR_robustness";
+  InitDecoderWithWorkarounds(init, workarounds);
+
+  const GLsizei kWidth = 5;
+  const GLsizei kHeight = 3;
+  const GLint kBytesPerPixel = 4;
+  const GLint kPackAlignment = 4;
+  static const uint8_t kSrcPixels[kWidth * kHeight * kBytesPerPixel] = {
+      12, 13, 14, 255, 18, 19, 18, 255, 19, 12, 13, 255, 14, 18, 19, 255,
+      18, 19, 13, 255, 29, 28, 23, 255, 22, 21, 22, 255, 21, 29, 28, 255,
+      23, 22, 21, 255, 22, 21, 28, 255, 31, 34, 39, 255, 37, 32, 37, 255,
+      32, 31, 34, 255, 39, 37, 32, 255, 37, 32, 34, 255};
+
+  surface_->SetSize(gfx::Size(INT_MAX, INT_MAX));
+
+  ReadPixelsEmulator emu(kWidth, kHeight, kBytesPerPixel, kSrcPixels,
+                         kSrcPixels, kPackAlignment);
+  auto* result = GetSharedMemoryAs<cmds::ReadPixels::Result*>();
+  uint32_t result_shm_id = shared_memory_id_;
+  uint32_t result_shm_offset = kSharedMemoryOffset;
+  uint32_t pixels_shm_id = shared_memory_id_;
+  uint32_t pixels_shm_offset = kSharedMemoryOffset + sizeof(*result);
+  // SAFETY: the fixture's shared memory extends well past Result; the tests
+  // address exactly the pixel window that the command below is issued with.
+  base::span<uint8_t> dest = UNSAFE_BUFFERS(
+      base::span(reinterpret_cast<uint8_t*>(result + 1),
+                 static_cast<size_t>(kWidth * kHeight * kBytesPerPixel)));
+
+  EXPECT_CALL(*gl_, GetError()).WillRepeatedly(Return(GL_NO_ERROR));
+  EXPECT_CALL(*gl_,
+              ReadPixels(0, 0, kWidth, kHeight, GL_RGBA, GL_UNSIGNED_BYTE, _))
+      .WillOnce(Invoke(&emu, &ReadPixelsEmulator::ReadPixels));
+  // The workaround polls the reset status after the native read; the driver
+  // reports the latched queue-group fatal.
+  EXPECT_CALL(*gl_, GetGraphicsResetStatusARB())
+      .WillOnce(Return(GL_GUILTY_CONTEXT_RESET));
+  // Losing this context broadcasts to the rest of the group.
+  EXPECT_CALL(*mock_decoder_, MarkContextLost(error::kUnknown)).Times(1);
+
+  cmds::ReadPixels cmd;
+  cmd.Init(0, 0, kWidth, kHeight, GL_RGBA, GL_UNSIGNED_BYTE, pixels_shm_id,
+           pixels_shm_offset, result_shm_id, result_shm_offset, false);
+  result->success = 0;
+  EXPECT_EQ(error::kLostContext, ExecuteCmd(cmd));
+
+  // Delivery must be refused: success unset, context lost as guilty, and the
+  // shared-memory destination scrubbed (the emulator had written kSrcPixels).
+  EXPECT_EQ(0u, result->success);
+  EXPECT_TRUE(decoder_->WasContextLost());
+  EXPECT_TRUE(decoder_->WasContextLostByRobustnessExtension());
+  const uint32_t kPixelsSize = kWidth * kHeight * kBytesPerPixel;
+  for (uint32_t i = 0; i < kPixelsSize; ++i) {
+    EXPECT_EQ(0u, dest[i]) << "byte " << i << " not scrubbed";
+  }
+
+  // Consume the latched context-loss decoder error so the fixture can shut
+  // down cleanly (same pattern as GLES2DecoderLostContextTest).
+  EXPECT_CALL(*gl_, GetError())
+      .WillOnce(Return(GL_CONTEXT_LOST_KHR))
+      .RetiresOnSaturation();
+  cmds::GetError error_cmd;
+  error_cmd.Init(shared_memory_id_, shared_memory_offset_);
+  EXPECT_EQ(error::kLostContext, ExecuteCmd(error_cmd));
+}
+
+// Tests that readback delivery is byte-identical when the workaround is
+// enabled and no reset is reported. This ensures
+// `check_graphics_reset_status_after_readback` does not regress healthy
+// readbacks.
+TEST_P(GLES2DecoderManualInitTest, ReadPixelsResetStatusWorkaroundNoReset) {
+  gpu::GpuDriverBugWorkarounds workarounds;
+  workarounds.check_graphics_reset_status_after_readback = true;
+  InitState init;
+  init.gl_version = "OpenGL ES 3.0";
+  init.context_type = CONTEXT_TYPE_OPENGLES3;
+  init.extensions = "GL_KHR_robustness";
+  InitDecoderWithWorkarounds(init, workarounds);
+
+  const GLsizei kWidth = 5;
+  const GLsizei kHeight = 3;
+  const GLint kBytesPerPixel = 4;
+  const GLint kPackAlignment = 4;
+  static const uint8_t kSrcPixels[kWidth * kHeight * kBytesPerPixel] = {
+      12, 13, 14, 255, 18, 19, 18, 255, 19, 12, 13, 255, 14, 18, 19, 255,
+      18, 19, 13, 255, 29, 28, 23, 255, 22, 21, 22, 255, 21, 29, 28, 255,
+      23, 22, 21, 255, 22, 21, 28, 255, 31, 34, 39, 255, 37, 32, 37, 255,
+      32, 31, 34, 255, 39, 37, 32, 255, 37, 32, 34, 255};
+
+  surface_->SetSize(gfx::Size(INT_MAX, INT_MAX));
+
+  ReadPixelsEmulator emu(kWidth, kHeight, kBytesPerPixel, kSrcPixels,
+                         kSrcPixels, kPackAlignment);
+  auto* result = GetSharedMemoryAs<cmds::ReadPixels::Result*>();
+  uint32_t result_shm_id = shared_memory_id_;
+  uint32_t result_shm_offset = kSharedMemoryOffset;
+  uint32_t pixels_shm_id = shared_memory_id_;
+  uint32_t pixels_shm_offset = kSharedMemoryOffset + sizeof(*result);
+  // SAFETY: shared memory extends past Result by at least the pixel window.
+  base::span<uint8_t> dest = UNSAFE_BUFFERS(
+      base::span(reinterpret_cast<uint8_t*>(result + 1),
+                 static_cast<size_t>(kWidth * kHeight * kBytesPerPixel)));
+
+  EXPECT_CALL(*gl_, GetError()).WillRepeatedly(Return(GL_NO_ERROR));
+  EXPECT_CALL(*gl_,
+              ReadPixels(0, 0, kWidth, kHeight, GL_RGBA, GL_UNSIGNED_BYTE, _))
+      .WillOnce(Invoke(&emu, &ReadPixelsEmulator::ReadPixels));
+  EXPECT_CALL(*gl_, GetGraphicsResetStatusARB()).WillOnce(Return(GL_NO_ERROR));
+
+  cmds::ReadPixels cmd;
+  cmd.Init(0, 0, kWidth, kHeight, GL_RGBA, GL_UNSIGNED_BYTE, pixels_shm_id,
+           pixels_shm_offset, result_shm_id, result_shm_offset, false);
+  result->success = 0;
+  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+  EXPECT_EQ(1u, result->success);
+  EXPECT_FALSE(decoder_->WasContextLost());
+  for (GLint yy = 0; yy < kHeight; ++yy) {
+    EXPECT_TRUE(emu.CompareRowSegment(
+        0, yy, kWidth,
+        emu.ComputePackAlignmentAddress(0, yy, kWidth, dest.data())));
+  }
+}
+
+// Same shape as ReadPixelsResetStatusWorkaroundNoReset, but with the
+// workaround disabled: the decoder must not query the reset status on the
+// readback path at all (GetGraphicsResetStatusARB is expected exactly zero
+// times), and delivery must be byte-identical to the pre-workaround behavior.
+TEST_P(GLES2DecoderManualInitTest, ReadPixelsNoResetPollWithoutWorkaround) {
+  // Guard-silence: without the workaround the decoder must not poll the reset
+  // status on the readback path (StrictMock enforces Times(0)).
+  gpu::GpuDriverBugWorkarounds workarounds;
+  InitState init;
+  init.gl_version = "OpenGL ES 3.0";
+  init.context_type = CONTEXT_TYPE_OPENGLES3;
+  init.extensions = "GL_KHR_robustness";
+  InitDecoderWithWorkarounds(init, workarounds);
+
+  const GLsizei kWidth = 2;
+  const GLsizei kHeight = 2;
+  const GLint kBytesPerPixel = 4;
+  const GLint kPackAlignment = 4;
+  static const uint8_t kSrcPixels[kWidth * kHeight * kBytesPerPixel] = {
+      1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255};
+
+  surface_->SetSize(gfx::Size(INT_MAX, INT_MAX));
+
+  ReadPixelsEmulator emu(kWidth, kHeight, kBytesPerPixel, kSrcPixels,
+                         kSrcPixels, kPackAlignment);
+  auto* result = GetSharedMemoryAs<cmds::ReadPixels::Result*>();
+  // SAFETY: shared memory extends past Result by at least the pixel window.
+  base::span<uint8_t> dest = UNSAFE_BUFFERS(
+      base::span(reinterpret_cast<uint8_t*>(result + 1),
+                 static_cast<size_t>(kWidth * kHeight * kBytesPerPixel)));
+  EXPECT_CALL(*gl_, GetGraphicsResetStatusARB()).Times(0);
+  EXPECT_CALL(*gl_, GetError()).WillRepeatedly(Return(GL_NO_ERROR));
+  EXPECT_CALL(*gl_,
+              ReadPixels(0, 0, kWidth, kHeight, GL_RGBA, GL_UNSIGNED_BYTE, _))
+      .WillOnce(Invoke(&emu, &ReadPixelsEmulator::ReadPixels));
+
+  cmds::ReadPixels cmd;
+  cmd.Init(0, 0, kWidth, kHeight, GL_RGBA, GL_UNSIGNED_BYTE, shared_memory_id_,
+           kSharedMemoryOffset + sizeof(*result), shared_memory_id_,
+           kSharedMemoryOffset, false);
+  result->success = 0;
+  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+  EXPECT_EQ(1u, result->success);
+  EXPECT_FALSE(decoder_->WasContextLost());
+  for (GLint yy = 0; yy < kHeight; ++yy) {
+    EXPECT_TRUE(emu.CompareRowSegment(
+        0, yy, kWidth,
+        emu.ComputePackAlignmentAddress(0, yy, kWidth, dest.data())));
+  }
+}
+
+// Same shape as ReadPixelsResetStatusWorkaroundGuilty, but reading from a user
+// framebuffer object (the report's actual shape) rather than the
+// backbuffer; the decoder's read-target validation walks a different path.
+TEST_P(GLES2DecoderManualInitTest,
+       ReadPixelsFromFramebufferResetStatusWorkaroundGuilty) {
+  gpu::GpuDriverBugWorkarounds workarounds;
+  workarounds.check_graphics_reset_status_after_readback = true;
+  InitState init;
+  init.gl_version = "OpenGL ES 3.0";
+  init.context_type = CONTEXT_TYPE_OPENGLES3;
+  init.extensions = "GL_KHR_robustness";
+  InitDecoderWithWorkarounds(init, workarounds);
+
+  const GLsizei kWidth = 4;
+  const GLsizei kHeight = 4;
+  const GLint kBytesPerPixel = 4;
+  const GLint kPackAlignment = 4;
+  static const uint8_t kSrcPixels[kWidth * kHeight * kBytesPerPixel] = {
+      1,  2,  3,  255, 4,  5,  6,  255, 7,  8,  9,  255, 10, 11, 12, 255,
+      13, 14, 15, 255, 16, 17, 18, 255, 19, 20, 21, 255, 22, 23, 24, 255,
+      25, 26, 27, 255, 28, 29, 30, 255, 31, 32, 33, 255, 34, 35, 36, 255,
+      37, 38, 39, 255, 40, 41, 42, 255, 43, 44, 45, 255, 46, 47, 48, 255};
+
+  // Read source: a texture-backed user framebuffer (the readback that
+  // follows a framebuffer clear reads through this path).
+  DoBindTexture(GL_TEXTURE_2D, client_texture_id_, kServiceTextureId);
+  DoTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, kWidth, kHeight, 0, GL_RGBA,
+               GL_UNSIGNED_BYTE, shared_memory_id_, kSharedMemoryOffset);
+  DoBindFramebuffer(GL_FRAMEBUFFER, client_framebuffer_id_,
+                    kServiceFramebufferId);
+  DoFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                         client_texture_id_, kServiceTextureId, 0, GL_NO_ERROR);
+  EXPECT_CALL(*gl_, CheckFramebufferStatusEXT(GL_READ_FRAMEBUFFER))
+      .WillOnce(Return(GL_FRAMEBUFFER_COMPLETE))
+      .RetiresOnSaturation();
+
+  ReadPixelsEmulator emu(kWidth, kHeight, kBytesPerPixel, kSrcPixels,
+                         kSrcPixels, kPackAlignment);
+  auto* result = GetSharedMemoryAs<cmds::ReadPixels::Result*>();
+  uint32_t result_shm_id = shared_memory_id_;
+  uint32_t result_shm_offset = kSharedMemoryOffset;
+  uint32_t pixels_shm_id = shared_memory_id_;
+  uint32_t pixels_shm_offset = kSharedMemoryOffset + sizeof(*result);
+  // SAFETY: the fixture's shared memory extends well past Result; the tests
+  // address exactly the pixel window that the command below is issued with.
+  base::span<uint8_t> dest = UNSAFE_BUFFERS(
+      base::span(reinterpret_cast<uint8_t*>(result + 1),
+                 static_cast<size_t>(kWidth * kHeight * kBytesPerPixel)));
+
+  EXPECT_CALL(*gl_, GetError()).WillRepeatedly(Return(GL_NO_ERROR));
+  EXPECT_CALL(*gl_,
+              ReadPixels(0, 0, kWidth, kHeight, GL_RGBA, GL_UNSIGNED_BYTE, _))
+      .WillOnce(Invoke(&emu, &ReadPixelsEmulator::ReadPixels));
+  // The workaround polls the reset status after the native read; the driver
+  // reports the queue-group fatal latched while the read was blocked.
+  EXPECT_CALL(*gl_, GetGraphicsResetStatusARB())
+      .WillOnce(Return(GL_GUILTY_CONTEXT_RESET));
+  EXPECT_CALL(*mock_decoder_, MarkContextLost(error::kUnknown)).Times(1);
+
+  cmds::ReadPixels cmd;
+  cmd.Init(0, 0, kWidth, kHeight, GL_RGBA, GL_UNSIGNED_BYTE, pixels_shm_id,
+           pixels_shm_offset, result_shm_id, result_shm_offset, false);
+  result->success = 0;
+  EXPECT_EQ(error::kLostContext, ExecuteCmd(cmd));
+
+  // Delivery refused: success unset, context lost by robustness, and the
+  // shared-memory destination scrubbed (the emulator had written kSrcPixels).
+  EXPECT_EQ(0u, result->success);
+  EXPECT_TRUE(decoder_->WasContextLost());
+  EXPECT_TRUE(decoder_->WasContextLostByRobustnessExtension());
+  const uint32_t kPixelsSize = kWidth * kHeight * kBytesPerPixel;
+  for (uint32_t i = 0; i < kPixelsSize; ++i) {
+    EXPECT_EQ(0u, dest[i]) << "byte " << i << " not scrubbed";
+  }
+
+  // Consume the latched context-loss error so the fixture shuts down cleanly
+  // (same tail as ReadPixelsResetStatusWorkaroundGuilty).
+  EXPECT_CALL(*gl_, GetError())
+      .WillOnce(Return(GL_CONTEXT_LOST_KHR))
+      .RetiresOnSaturation();
+  cmds::GetError error_cmd;
+  error_cmd.Init(shared_memory_id_, shared_memory_offset_);
+  EXPECT_EQ(error::kLostContext, ExecuteCmd(error_cmd));
+}
+
 TEST_P(GLES2DecoderManualInitTest, ReadPixels2AlignmentWorkaround) {
   gpu::GpuDriverBugWorkarounds workarounds;
   workarounds.pack_parameters_workaround_with_pack_buffer = true;
   InitState init;
   init.gl_version = "OpenGL ES 3.0";
-  init.bind_generates_resource = true;
   init.context_type = CONTEXT_TYPE_OPENGLES3;
   InitDecoderWithWorkarounds(init, workarounds);
 
@@ -987,7 +1351,7 @@ TEST_P(GLES2DecoderManualInitTest, ReadPixels2AlignmentWorkaround) {
   EXPECT_CALL(*gl_, PixelStorei(GL_PACK_ALIGNMENT, 1))
       .Times(1)
       .RetiresOnSaturation();
-  offset += (kWidth * kBytesPerPixel + kPadding) * (kHeight - 1);
+  UNSAFE_TODO(offset += (kWidth * kBytesPerPixel + kPadding) * (kHeight - 1));
   EXPECT_CALL(*gl_,
               ReadPixels(0, kHeight - 1, kWidth, 1, kFormat, kType, offset))
       .Times(1)
@@ -1011,7 +1375,6 @@ TEST_P(GLES2DecoderManualInitTest,
   workarounds.pack_parameters_workaround_with_pack_buffer = true;
   InitState init;
   init.gl_version = "OpenGL ES 3.0";
-  init.bind_generates_resource = true;
   init.context_type = CONTEXT_TYPE_OPENGLES3;
   InitDecoderWithWorkarounds(init, workarounds);
 
@@ -1069,6 +1432,173 @@ TEST_P(GLES2DecoderManualInitTest,
   EXPECT_EQ(GL_NO_ERROR, GetGLError());
 }
 
+// Tests that a readback of a level defined by copyTexImage2D is refused
+// after a reset. This is the crbug.com/558111285 producer: the level is
+// marked defined from synchronous success while the driver's asynchronous
+// copy can still be discarded by a queue-group kill (ES 3.2 sec. 2.3.2). We
+// expect kLostContext, no success, and a scrubbed destination.
+TEST_P(GLES2DecoderManualInitTest,
+       ReadPixelsAfterCopyTexImage2DRefusedOnReset) {
+  gpu::GpuDriverBugWorkarounds workarounds;
+  workarounds.check_graphics_reset_status_after_readback = true;
+  InitState init;
+  init.gl_version = "OpenGL ES 2.0";
+  init.extensions = "GL_KHR_robustness";
+  init.has_alpha = true;
+  init.request_alpha = true;
+  InitDecoderWithWorkarounds(init, workarounds);
+
+  const GLuint kFBOClientTextureId = 4100;
+  const GLuint kFBOServiceTextureId = 4101;
+  const GLsizei kSize = 4;
+  const GLint kBytesPerPixel = 4;
+  const GLint kPackAlignment = 4;
+  static const uint8_t kSrcPixels[kSize * kSize * kBytesPerPixel] = {
+      1,  2,  3,  255, 4,  5,  6,  255, 7,  8,  9,  255, 10, 11, 12, 255,
+      13, 14, 15, 255, 16, 17, 18, 255, 19, 20, 21, 255, 22, 23, 24, 255,
+      25, 26, 27, 255, 28, 29, 30, 255, 31, 32, 33, 255, 34, 35, 36, 255,
+      37, 38, 39, 255, 40, 41, 42, 255, 43, 44, 45, 255, 46, 47, 48, 255};
+
+  EXPECT_CALL(*gl_, GenTextures(_, _))
+      .WillOnce(SetArgPointee<1>(kFBOServiceTextureId))
+      .RetiresOnSaturation();
+  GenHelper<cmds::GenTexturesImmediate>(kFBOClientTextureId);
+  DoBindTexture(GL_TEXTURE_2D, kFBOClientTextureId, kFBOServiceTextureId);
+
+  EXPECT_CALL(*gl_, GetError()).WillRepeatedly(Return(GL_NO_ERROR));
+  EXPECT_CALL(*gl_,
+              CopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, kSize, kSize, 0))
+      .Times(1)
+      .RetiresOnSaturation();
+  cmds::CopyTexImage2D copy_cmd;
+  copy_cmd.Init(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, kSize, kSize);
+  EXPECT_EQ(error::kNoError, ExecuteCmd(copy_cmd));
+
+  DoBindFramebuffer(GL_FRAMEBUFFER, client_framebuffer_id_,
+                    kServiceFramebufferId);
+  DoFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                         kFBOClientTextureId, kFBOServiceTextureId, 0,
+                         GL_NO_ERROR);
+  // ES2 context: the read framebuffer binding is GL_FRAMEBUFFER.
+  EXPECT_CALL(*gl_, CheckFramebufferStatusEXT(GL_FRAMEBUFFER))
+      .WillOnce(Return(GL_FRAMEBUFFER_COMPLETE))
+      .RetiresOnSaturation();
+
+  ReadPixelsEmulator emu(kSize, kSize, kBytesPerPixel, kSrcPixels, kSrcPixels,
+                         kPackAlignment);
+  auto* result = GetSharedMemoryAs<cmds::ReadPixels::Result*>();
+  uint32_t result_shm_id = shared_memory_id_;
+  uint32_t result_shm_offset = kSharedMemoryOffset;
+  uint32_t pixels_shm_id = shared_memory_id_;
+  uint32_t pixels_shm_offset = kSharedMemoryOffset + sizeof(*result);
+  // SAFETY: the fixture's shared memory extends well past Result; the tests
+  // address exactly the pixel window that the command below is issued with.
+  base::span<uint8_t> dest = UNSAFE_BUFFERS(
+      base::span(reinterpret_cast<uint8_t*>(result + 1),
+                 static_cast<size_t>(kSize * kSize * kBytesPerPixel)));
+
+  // The native read completes (the driver wrote into shm), but the reset
+  // latched while it was blocked: delivery must be refused and the
+  // destination scrubbed.
+  EXPECT_CALL(*gl_,
+              ReadPixels(0, 0, kSize, kSize, GL_RGBA, GL_UNSIGNED_BYTE, _))
+      .WillOnce(Invoke(&emu, &ReadPixelsEmulator::ReadPixels));
+  EXPECT_CALL(*gl_, GetGraphicsResetStatusARB())
+      .WillOnce(Return(GL_GUILTY_CONTEXT_RESET));
+  EXPECT_CALL(*mock_decoder_, MarkContextLost(error::kUnknown)).Times(1);
+
+  result->success = 0;
+  cmds::ReadPixels cmd;
+  cmd.Init(0, 0, kSize, kSize, GL_RGBA, GL_UNSIGNED_BYTE, pixels_shm_id,
+           pixels_shm_offset, result_shm_id, result_shm_offset, false);
+  EXPECT_EQ(error::kLostContext, ExecuteCmd(cmd));
+  EXPECT_EQ(0u, result->success);
+  EXPECT_TRUE(decoder_->WasContextLost());
+  EXPECT_TRUE(decoder_->WasContextLostByRobustnessExtension());
+  const uint32_t kPixelsSize = kSize * kSize * kBytesPerPixel;
+  for (uint32_t i = 0; i < kPixelsSize; ++i) {
+    EXPECT_EQ(0u, dest[i]) << "byte " << i << " not scrubbed";
+  }
+
+  // Consume the latched context-loss decoder error so the fixture can shut
+  // down cleanly (same tail as ReadPixelsResetStatusWorkaroundGuilty).
+  EXPECT_CALL(*gl_, GetError())
+      .WillOnce(Return(GL_CONTEXT_LOST_KHR))
+      .RetiresOnSaturation();
+  cmds::GetError error_cmd;
+  error_cmd.Init(shared_memory_id_, shared_memory_offset_);
+  EXPECT_EQ(error::kLostContext, ExecuteCmd(error_cmd));
+}
+
+// Same shape as ReadPixelsAfterCopyTexImage2DRefusedOnReset, but with no reset
+// reported: delivery must be unchanged. This ensures the workaround does
+// not regress copyTexImage2D-sourced readbacks.
+TEST_P(GLES2DecoderManualInitTest,
+       ReadPixelsAfterCopyTexImage2DDeliveredWhenNoReset) {
+  gpu::GpuDriverBugWorkarounds workarounds;
+  workarounds.check_graphics_reset_status_after_readback = true;
+  InitState init;
+  init.gl_version = "OpenGL ES 2.0";
+  init.extensions = "GL_KHR_robustness";
+  init.has_alpha = true;
+  init.request_alpha = true;
+  InitDecoderWithWorkarounds(init, workarounds);
+
+  const GLuint kFBOClientTextureId = 4100;
+  const GLuint kFBOServiceTextureId = 4101;
+  const GLsizei kSize = 4;
+
+  EXPECT_CALL(*gl_, GenTextures(_, _))
+      .WillOnce(SetArgPointee<1>(kFBOServiceTextureId))
+      .RetiresOnSaturation();
+  GenHelper<cmds::GenTexturesImmediate>(kFBOClientTextureId);
+  DoBindTexture(GL_TEXTURE_2D, kFBOClientTextureId, kFBOServiceTextureId);
+
+  EXPECT_CALL(*gl_, GetError()).WillRepeatedly(Return(GL_NO_ERROR));
+  EXPECT_CALL(*gl_,
+              CopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, kSize, kSize, 0))
+      .Times(1)
+      .RetiresOnSaturation();
+  cmds::CopyTexImage2D copy_cmd;
+  copy_cmd.Init(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, kSize, kSize);
+  EXPECT_EQ(error::kNoError, ExecuteCmd(copy_cmd));
+
+  DoBindFramebuffer(GL_FRAMEBUFFER, client_framebuffer_id_,
+                    kServiceFramebufferId);
+  DoFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                         kFBOClientTextureId, kFBOServiceTextureId, 0,
+                         GL_NO_ERROR);
+  // ES2 context: the read framebuffer binding is GL_FRAMEBUFFER.
+  EXPECT_CALL(*gl_, CheckFramebufferStatusEXT(GL_FRAMEBUFFER))
+      .WillOnce(Return(GL_FRAMEBUFFER_COMPLETE))
+      .RetiresOnSaturation();
+
+  EXPECT_CALL(*gl_,
+              ReadPixels(0, 0, kSize, kSize, GL_RGBA, GL_UNSIGNED_BYTE, _))
+      .Times(1)
+      .RetiresOnSaturation();
+  // AnyNumber so this test also passes on trees without the gate (the
+  // falsification negative): zero polls is acceptable, a poll must see
+  // NO_ERROR.
+  EXPECT_CALL(*gl_, GetGraphicsResetStatusARB())
+      .Times(AnyNumber())
+      .WillRepeatedly(Return(GL_NO_ERROR));
+
+  auto* result = GetSharedMemoryAs<cmds::ReadPixels::Result*>();
+  uint32_t result_shm_id = shared_memory_id_;
+  uint32_t result_shm_offset = kSharedMemoryOffset;
+  uint32_t pixels_shm_id = shared_memory_id_;
+  uint32_t pixels_shm_offset = kSharedMemoryOffset + sizeof(*result);
+  result->success = 0;
+  cmds::ReadPixels cmd;
+  cmd.Init(0, 0, kSize, kSize, GL_RGBA, GL_UNSIGNED_BYTE, pixels_shm_id,
+           pixels_shm_offset, result_shm_id, result_shm_offset, false);
+  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+  EXPECT_EQ(1u, result->success);
+  EXPECT_FALSE(decoder_->WasContextLost());
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
+}
+
 TEST_P(GLES2DecoderRGBBackbufferTest, ReadPixelsNoAlphaBackbuffer) {
   const GLsizei kWidth = 3;
   const GLsizei kHeight = 3;
@@ -1088,7 +1618,10 @@ TEST_P(GLES2DecoderRGBBackbufferTest, ReadPixelsNoAlphaBackbuffer) {
   uint32_t result_shm_offset = kSharedMemoryOffset;
   uint32_t pixels_shm_id = shared_memory_id_;
   uint32_t pixels_shm_offset = kSharedMemoryOffset + sizeof(*result);
-  void* dest = &result[1];
+  // SAFETY: shared memory extends past Result by at least the pixel window.
+  base::span<uint8_t> dest = UNSAFE_BUFFERS(
+      base::span(reinterpret_cast<uint8_t*>(result + 1),
+                 static_cast<size_t>(kWidth * kHeight * kBytesPerPixel)));
   EXPECT_CALL(*gl_, GetError())
       .WillOnce(Return(GL_NO_ERROR))
       .WillOnce(Return(GL_NO_ERROR))
@@ -1112,38 +1645,32 @@ TEST_P(GLES2DecoderRGBBackbufferTest, ReadPixelsNoAlphaBackbuffer) {
   EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
   for (GLint yy = 0; yy < kHeight; ++yy) {
     EXPECT_TRUE(emu.CompareRowSegment(
-        0, yy, kWidth, emu.ComputePackAlignmentAddress(0, yy, kWidth, dest)));
+        0, yy, kWidth,
+        emu.ComputePackAlignmentAddress(0, yy, kWidth, dest.data())));
   }
 }
 
 TEST_P(GLES2DecoderTest, ReadPixelsOutOfRange) {
-  static GLint tests[][4] = {
-      {
-       -2, -1, 9, 5,
-      },  // out of range on all sides
-      {
-       2, 1, 9, 5,
-      },  // out of range on right, bottom
-      {
-       -7, -4, 9, 5,
-      },  // out of range on left, top
-      {
-       0, -5, 9, 5,
-      },  // completely off top
-      {
-       0, 3, 9, 5,
-      },  // completely off bottom
-      {
-       -9, 0, 9, 5,
-      },  // completely off left
-      {
-       5, 0, 9, 5,
-      },  // completely off right
+  struct ReadPixelsTest {
+    GLint x;
+    GLint y;
+    GLsizei width;
+    GLsizei height;
   };
+  static constexpr auto tests = std::to_array<ReadPixelsTest>({
+      {-2, -1, 9, 5},  // out of range on all sides
+      {2, 1, 9, 5},    // out of range on right, bottom
+      {-7, -4, 9, 5},  // out of range on left, top
+      {0, -5, 9, 5},   // completely off top
+      {0, 3, 9, 5},    // completely off bottom
+      {-9, 0, 9, 5},   // completely off left
+      {5, 0, 9, 5},    // completely off right
+  });
 
-  for (size_t tt = 0; tt < base::size(tests); ++tt) {
-    CheckReadPixelsOutOfRange(
-        tests[tt][0], tests[tt][1], tests[tt][2], tests[tt][3], tt == 0);
+  bool first = true;
+  for (const auto& test : tests) {
+    CheckReadPixelsOutOfRange(test.x, test.y, test.width, test.height, first);
+    first = false;
   }
 }
 
@@ -1256,7 +1783,6 @@ TEST_P(GLES2DecoderManualInitTest, ReadPixelsAsyncError) {
   init.gl_version = "OpenGL ES 3.0";
   init.has_alpha = true;
   init.request_alpha = true;
-  init.bind_generates_resource = true;
   InitDecoder(init);
 
   auto* result = GetSharedMemoryAs<cmds::ReadPixels::Result*>();
@@ -1281,9 +1807,9 @@ TEST_P(GLES2DecoderManualInitTest, ReadPixelsAsyncError) {
       .Times(1);
   EXPECT_CALL(*gl_, GenBuffersARB(1, _)).Times(1);
   EXPECT_CALL(*gl_, DeleteBuffersARB(1, _)).Times(1);
-  EXPECT_CALL(*gl_, BindBuffer(GL_PIXEL_PACK_BUFFER_ARB, _)).Times(2);
+  EXPECT_CALL(*gl_, BindBuffer(GL_PIXEL_PACK_BUFFER, _)).Times(2);
   EXPECT_CALL(*gl_,
-              BufferData(GL_PIXEL_PACK_BUFFER_ARB, _, nullptr, GL_STREAM_READ))
+              BufferData(GL_PIXEL_PACK_BUFFER, _, nullptr, GL_STREAM_READ))
       .Times(1);
 
   cmds::ReadPixels cmd;
@@ -1310,7 +1836,6 @@ class GLES2ReadPixelsAsyncTest : public GLES2DecoderManualInitTest {
     init.gl_version = "OpenGL ES 3.0";
     init.has_alpha = true;
     init.request_alpha = true;
-    init.bind_generates_resource = true;
     InitDecoder(init);
   }
 
@@ -1326,10 +1851,10 @@ class GLES2ReadPixelsAsyncTest : public GLES2DecoderManualInitTest {
     EXPECT_CALL(*gl_, GenBuffersARB(1, _))
         .WillOnce(SetArgPointee<1>(kServiceBufferId))
         .RetiresOnSaturation();
-    EXPECT_CALL(*gl_, BindBuffer(GL_PIXEL_PACK_BUFFER_ARB, kServiceBufferId))
+    EXPECT_CALL(*gl_, BindBuffer(GL_PIXEL_PACK_BUFFER, kServiceBufferId))
         .Times(1);
-    EXPECT_CALL(*gl_, BindBuffer(GL_PIXEL_PACK_BUFFER_ARB, 0)).Times(1);
-    EXPECT_CALL(*gl_, BufferData(GL_PIXEL_PACK_BUFFER_ARB, kBufferSize, nullptr,
+    EXPECT_CALL(*gl_, BindBuffer(GL_PIXEL_PACK_BUFFER, 0)).Times(1);
+    EXPECT_CALL(*gl_, BufferData(GL_PIXEL_PACK_BUFFER, kBufferSize, nullptr,
                                  GL_STREAM_READ))
         .Times(1);
     GLsync sync = reinterpret_cast<GLsync>(kServiceSyncId);
@@ -1346,24 +1871,24 @@ class GLES2ReadPixelsAsyncTest : public GLES2DecoderManualInitTest {
     const size_t kBufferSize = width * height * 4;
     auto buffer = std::make_unique<char[]>(kBufferSize);
     for (size_t i = 0; i < kBufferSize; ++i)
-      buffer[i] = i;
+      UNSAFE_TODO(buffer[i]) = i;
 
     GLsync sync = reinterpret_cast<GLsync>(kServiceSyncId);
     EXPECT_CALL(*gl_, ClientWaitSync(sync, 0, 0))
         .WillOnce(Return(GL_CONDITION_SATISFIED));
-    EXPECT_CALL(*gl_, BindBuffer(GL_PIXEL_PACK_BUFFER_ARB, kServiceBufferId))
+    EXPECT_CALL(*gl_, BindBuffer(GL_PIXEL_PACK_BUFFER, kServiceBufferId))
         .Times(1);
-    EXPECT_CALL(*gl_, MapBufferRange(GL_PIXEL_PACK_BUFFER_ARB, 0, kBufferSize,
+    EXPECT_CALL(*gl_, MapBufferRange(GL_PIXEL_PACK_BUFFER, 0, kBufferSize,
                                      GL_MAP_READ_BIT))
         .WillOnce(Return(buffer.get()))
         .RetiresOnSaturation();
-    EXPECT_CALL(*gl_, UnmapBuffer(GL_PIXEL_PACK_BUFFER_ARB)).Times(1);
-    EXPECT_CALL(*gl_, BindBuffer(GL_PIXEL_PACK_BUFFER_ARB, 0)).Times(1);
+    EXPECT_CALL(*gl_, UnmapBuffer(GL_PIXEL_PACK_BUFFER)).Times(1);
+    EXPECT_CALL(*gl_, BindBuffer(GL_PIXEL_PACK_BUFFER, 0)).Times(1);
     EXPECT_CALL(*gl_, DeleteBuffersARB(1, _)).Times(1);
     EXPECT_CALL(*gl_, DeleteSync(sync)).Times(1);
     decoder_->PerformIdleWork();
     EXPECT_FALSE(decoder_->HasMoreIdleWork());
-    EXPECT_EQ(0, memcmp(pixels, buffer.get(), kBufferSize));
+    UNSAFE_TODO(EXPECT_EQ(0, memcmp(pixels, buffer.get(), kBufferSize)));
   }
 };
 
@@ -1375,7 +1900,7 @@ TEST_P(GLES2ReadPixelsAsyncTest, ReadPixelsAsync) {
   uint32_t result_shm_offset = kSharedMemoryOffset;
   uint32_t pixels_shm_id = shared_memory_id_;
   uint32_t pixels_shm_offset = kSharedMemoryOffset + sizeof(*result);
-  char* pixels = reinterpret_cast<char*>(result + 1);
+  char* pixels = reinterpret_cast<char*>(UNSAFE_TODO(result + 1));
 
   SetupReadPixelsAsyncExpectation(kWidth, kHeight);
 
@@ -1403,7 +1928,7 @@ TEST_P(GLES2ReadPixelsAsyncTest, ReadPixelsAsyncModifyCommand) {
   uint32_t result_shm_offset = kSharedMemoryOffset;
   uint32_t pixels_shm_id = shared_memory_id_;
   uint32_t pixels_shm_offset = kSharedMemoryOffset + sizeof(*result);
-  char* pixels = reinterpret_cast<char*>(result + 1);
+  char* pixels = reinterpret_cast<char*>(UNSAFE_TODO(result + 1));
 
   SetupReadPixelsAsyncExpectation(kWidth, kHeight);
 
@@ -1431,7 +1956,7 @@ TEST_P(GLES2ReadPixelsAsyncTest, ReadPixelsAsyncChangePackAlignment) {
   uint32_t result_shm_offset = kSharedMemoryOffset;
   uint32_t pixels_shm_id = shared_memory_id_;
   uint32_t pixels_shm_offset = kSharedMemoryOffset + sizeof(*result);
-  char* pixels = reinterpret_cast<char*>(result + 1);
+  char* pixels = reinterpret_cast<char*>(UNSAFE_TODO(result + 1));
 
   SetupReadPixelsAsyncExpectation(kWidth, kHeight);
 
@@ -1623,7 +2148,6 @@ TEST_P(GLES2DecoderManualInitTest, ActualAlphaMatchesRequestedAlpha) {
   InitState init;
   init.has_alpha = true;
   init.request_alpha = true;
-  init.bind_generates_resource = true;
   InitDecoder(init);
 
   EXPECT_CALL(*gl_, GetError())
@@ -1640,130 +2164,6 @@ TEST_P(GLES2DecoderManualInitTest, ActualAlphaMatchesRequestedAlpha) {
             result->GetNumResults());
   EXPECT_EQ(GL_NO_ERROR, GetGLError());
   EXPECT_EQ(8, result->GetData()[0]);
-}
-
-TEST_P(GLES2DecoderManualInitTest, ActualAlphaDoesNotMatchRequestedAlpha) {
-  InitState init;
-  init.has_alpha = true;
-  init.bind_generates_resource = true;
-  InitDecoder(init);
-
-  EXPECT_CALL(*gl_, GetError())
-      .WillOnce(Return(GL_NO_ERROR))
-      .WillOnce(Return(GL_NO_ERROR))
-      .RetiresOnSaturation();
-  auto* result =
-      static_cast<cmds::GetIntegerv::Result*>(shared_memory_address_);
-  result->size = 0;
-  cmds::GetIntegerv cmd2;
-  cmd2.Init(GL_ALPHA_BITS, shared_memory_id_, shared_memory_offset_);
-  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd2));
-  EXPECT_EQ(decoder_->GetGLES2Util()->GLGetNumValuesReturned(GL_ALPHA_BITS),
-            result->GetNumResults());
-  EXPECT_EQ(GL_NO_ERROR, GetGLError());
-  EXPECT_EQ(0, result->GetData()[0]);
-}
-
-TEST_P(GLES2DecoderManualInitTest, ActualDepthMatchesRequestedDepth) {
-  InitState init;
-  init.has_depth = true;
-  init.request_depth = true;
-  init.bind_generates_resource = true;
-  InitDecoder(init);
-
-  EXPECT_CALL(*gl_, GetError())
-      .WillOnce(Return(GL_NO_ERROR))
-      .WillOnce(Return(GL_NO_ERROR))
-      .RetiresOnSaturation();
-  auto* result =
-      static_cast<cmds::GetIntegerv::Result*>(shared_memory_address_);
-  EXPECT_CALL(*gl_, GetIntegerv(GL_DEPTH_BITS, _))
-      .WillOnce(SetArgPointee<1>(24))
-      .RetiresOnSaturation();
-  result->size = 0;
-  cmds::GetIntegerv cmd2;
-  cmd2.Init(GL_DEPTH_BITS, shared_memory_id_, shared_memory_offset_);
-  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd2));
-  EXPECT_EQ(decoder_->GetGLES2Util()->GLGetNumValuesReturned(GL_DEPTH_BITS),
-            result->GetNumResults());
-  EXPECT_EQ(GL_NO_ERROR, GetGLError());
-  EXPECT_EQ(24, result->GetData()[0]);
-}
-
-TEST_P(GLES2DecoderManualInitTest, ActualDepthDoesNotMatchRequestedDepth) {
-  InitState init;
-  init.has_depth = true;
-  init.bind_generates_resource = true;
-  InitDecoder(init);
-
-  EXPECT_CALL(*gl_, GetError())
-      .WillOnce(Return(GL_NO_ERROR))
-      .WillOnce(Return(GL_NO_ERROR))
-      .RetiresOnSaturation();
-  auto* result =
-      static_cast<cmds::GetIntegerv::Result*>(shared_memory_address_);
-  EXPECT_CALL(*gl_, GetIntegerv(GL_DEPTH_BITS, _))
-      .WillOnce(SetArgPointee<1>(24))
-      .RetiresOnSaturation();
-  result->size = 0;
-  cmds::GetIntegerv cmd2;
-  cmd2.Init(GL_DEPTH_BITS, shared_memory_id_, shared_memory_offset_);
-  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd2));
-  EXPECT_EQ(decoder_->GetGLES2Util()->GLGetNumValuesReturned(GL_DEPTH_BITS),
-            result->GetNumResults());
-  EXPECT_EQ(GL_NO_ERROR, GetGLError());
-  EXPECT_EQ(0, result->GetData()[0]);
-}
-
-TEST_P(GLES2DecoderManualInitTest, ActualStencilMatchesRequestedStencil) {
-  InitState init;
-  init.has_stencil = true;
-  init.request_stencil = true;
-  init.bind_generates_resource = true;
-  InitDecoder(init);
-
-  EXPECT_CALL(*gl_, GetError())
-      .WillOnce(Return(GL_NO_ERROR))
-      .WillOnce(Return(GL_NO_ERROR))
-      .RetiresOnSaturation();
-  auto* result =
-      static_cast<cmds::GetIntegerv::Result*>(shared_memory_address_);
-  EXPECT_CALL(*gl_, GetIntegerv(GL_STENCIL_BITS, _))
-      .WillOnce(SetArgPointee<1>(8))
-      .RetiresOnSaturation();
-  result->size = 0;
-  cmds::GetIntegerv cmd2;
-  cmd2.Init(GL_STENCIL_BITS, shared_memory_id_, shared_memory_offset_);
-  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd2));
-  EXPECT_EQ(decoder_->GetGLES2Util()->GLGetNumValuesReturned(GL_STENCIL_BITS),
-            result->GetNumResults());
-  EXPECT_EQ(GL_NO_ERROR, GetGLError());
-  EXPECT_EQ(8, result->GetData()[0]);
-}
-
-TEST_P(GLES2DecoderManualInitTest, ActualStencilDoesNotMatchRequestedStencil) {
-  InitState init;
-  init.has_stencil = true;
-  init.bind_generates_resource = true;
-  InitDecoder(init);
-
-  EXPECT_CALL(*gl_, GetError())
-      .WillOnce(Return(GL_NO_ERROR))
-      .WillOnce(Return(GL_NO_ERROR))
-      .RetiresOnSaturation();
-  auto* result =
-      static_cast<cmds::GetIntegerv::Result*>(shared_memory_address_);
-  EXPECT_CALL(*gl_, GetIntegerv(GL_STENCIL_BITS, _))
-      .WillOnce(SetArgPointee<1>(8))
-      .RetiresOnSaturation();
-  result->size = 0;
-  cmds::GetIntegerv cmd2;
-  cmd2.Init(GL_STENCIL_BITS, shared_memory_id_, shared_memory_offset_);
-  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd2));
-  EXPECT_EQ(decoder_->GetGLES2Util()->GLGetNumValuesReturned(GL_STENCIL_BITS),
-            result->GetNumResults());
-  EXPECT_EQ(GL_NO_ERROR, GetGLError());
-  EXPECT_EQ(0, result->GetData()[0]);
 }
 
 TEST_P(GLES2DecoderManualInitTest, PackedDepthStencilReportsCorrectValues) {
@@ -1774,7 +2174,6 @@ TEST_P(GLES2DecoderManualInitTest, PackedDepthStencilReportsCorrectValues) {
   init.has_stencil = true;
   init.request_depth = true;
   init.request_stencil = true;
-  init.bind_generates_resource = true;
   InitDecoder(init);
 
   EXPECT_CALL(*gl_, GetError())
@@ -1796,47 +2195,6 @@ TEST_P(GLES2DecoderManualInitTest, PackedDepthStencilReportsCorrectValues) {
             result->GetNumResults());
   EXPECT_EQ(GL_NO_ERROR, GetGLError());
   EXPECT_EQ(8, result->GetData()[0]);
-  result->size = 0;
-  cmd2.Init(GL_DEPTH_BITS, shared_memory_id_, shared_memory_offset_);
-  EXPECT_CALL(*gl_, GetIntegerv(GL_DEPTH_BITS, _))
-      .WillOnce(SetArgPointee<1>(24))
-      .RetiresOnSaturation();
-  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd2));
-  EXPECT_EQ(decoder_->GetGLES2Util()->GLGetNumValuesReturned(GL_DEPTH_BITS),
-            result->GetNumResults());
-  EXPECT_EQ(GL_NO_ERROR, GetGLError());
-  EXPECT_EQ(24, result->GetData()[0]);
-}
-
-TEST_P(GLES2DecoderManualInitTest, PackedDepthStencilNoRequestedStencil) {
-  InitState init;
-  init.extensions = "GL_OES_packed_depth_stencil";
-  init.gl_version = "OpenGL ES 2.0";
-  init.has_depth = true;
-  init.has_stencil = true;
-  init.request_depth = true;
-  init.bind_generates_resource = true;
-  InitDecoder(init);
-
-  EXPECT_CALL(*gl_, GetError())
-      .WillOnce(Return(GL_NO_ERROR))
-      .WillOnce(Return(GL_NO_ERROR))
-      .WillOnce(Return(GL_NO_ERROR))
-      .WillOnce(Return(GL_NO_ERROR))
-      .RetiresOnSaturation();
-  auto* result =
-      static_cast<cmds::GetIntegerv::Result*>(shared_memory_address_);
-  result->size = 0;
-  cmds::GetIntegerv cmd2;
-  cmd2.Init(GL_STENCIL_BITS, shared_memory_id_, shared_memory_offset_);
-  EXPECT_CALL(*gl_, GetIntegerv(GL_STENCIL_BITS, _))
-      .WillOnce(SetArgPointee<1>(8))
-      .RetiresOnSaturation();
-  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd2));
-  EXPECT_EQ(decoder_->GetGLES2Util()->GLGetNumValuesReturned(GL_STENCIL_BITS),
-            result->GetNumResults());
-  EXPECT_EQ(GL_NO_ERROR, GetGLError());
-  EXPECT_EQ(0, result->GetData()[0]);
   result->size = 0;
   cmd2.Init(GL_DEPTH_BITS, shared_memory_id_, shared_memory_offset_);
   EXPECT_CALL(*gl_, GetIntegerv(GL_DEPTH_BITS, _))
@@ -1853,7 +2211,6 @@ TEST_P(GLES2DecoderManualInitTest, PackedDepthStencilRenderbufferDepth) {
   InitState init;
   init.extensions = "GL_OES_packed_depth_stencil";
   init.gl_version = "OpenGL ES 2.0";
-  init.bind_generates_resource = true;
   InitDecoder(init);
   DoBindRenderbuffer(
       GL_RENDERBUFFER, client_renderbuffer_id_, kServiceRenderbufferId);
@@ -1923,7 +2280,6 @@ TEST_P(GLES2DecoderManualInitTest, PackedDepthStencilRenderbufferStencil) {
   InitState init;
   init.extensions = "GL_OES_packed_depth_stencil";
   init.gl_version = "OpenGL ES 2.0";
-  init.bind_generates_resource = true;
   InitDecoder(init);
   DoBindRenderbuffer(
       GL_RENDERBUFFER, client_renderbuffer_id_, kServiceRenderbufferId);
@@ -2062,7 +2418,7 @@ TEST_P(GLES2DecoderTest, RenderbufferStorageGLError) {
       .WillOnce(Return(GL_NO_ERROR))
       .WillOnce(Return(GL_OUT_OF_MEMORY))
       .RetiresOnSaturation();
-  EXPECT_CALL(*gl_, RenderbufferStorageEXT(GL_RENDERBUFFER, GL_RGBA, 100, 50))
+  EXPECT_CALL(*gl_, RenderbufferStorageEXT(GL_RENDERBUFFER, GL_RGBA4, 100, 50))
       .Times(1)
       .RetiresOnSaturation();
   cmds::RenderbufferStorage cmd;
@@ -2091,8 +2447,7 @@ TEST_P(GLES3DecoderTest, ClearBufferivImmediateValidArgs) {
       GL_FRAMEBUFFER, client_framebuffer_id_, kServiceFramebufferId);
   DoBindRenderbuffer(
       GL_RENDERBUFFER, client_renderbuffer_id_, kServiceRenderbufferId);
-  DoRenderbufferStorage(
-      GL_RENDERBUFFER, GL_RGBA8I, GL_RGBA8I, 1, 1, GL_NO_ERROR);
+  DoRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8I, 1, 1, GL_NO_ERROR);
   DoFramebufferRenderbuffer(
       GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER,
       client_renderbuffer_id_, kServiceRenderbufferId, GL_NO_ERROR);
@@ -2121,8 +2476,7 @@ TEST_P(GLES3DecoderTest, ClearBufferuivImmediateValidArgs) {
       GL_FRAMEBUFFER, client_framebuffer_id_, kServiceFramebufferId);
   DoBindRenderbuffer(
       GL_RENDERBUFFER, client_renderbuffer_id_, kServiceRenderbufferId);
-  DoRenderbufferStorage(
-      GL_RENDERBUFFER, GL_RGBA8UI, GL_RGBA8UI, 1, 1, GL_NO_ERROR);
+  DoRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8UI, 1, 1, GL_NO_ERROR);
   DoFramebufferRenderbuffer(
       GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER,
       client_renderbuffer_id_, kServiceRenderbufferId, GL_NO_ERROR);
@@ -2151,9 +2505,8 @@ TEST_P(GLES3DecoderTest, ClearBufferfvImmediateValidArgs) {
       GL_FRAMEBUFFER, client_framebuffer_id_, kServiceFramebufferId);
   DoBindRenderbuffer(
       GL_RENDERBUFFER, client_renderbuffer_id_, kServiceRenderbufferId);
-  DoRenderbufferStorage(
-      GL_RENDERBUFFER, GL_DEPTH_COMPONENT32F, GL_DEPTH_COMPONENT32F,
-      1, 1, GL_NO_ERROR);
+  DoRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT32F, 1, 1,
+                        GL_NO_ERROR);
   DoFramebufferRenderbuffer(
       GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER,
       client_renderbuffer_id_, kServiceRenderbufferId, GL_NO_ERROR);
@@ -2187,9 +2540,8 @@ TEST_P(GLES3DecoderTest, ClearBufferfiValidArgs) {
       GL_FRAMEBUFFER, client_framebuffer_id_, kServiceFramebufferId);
   DoBindRenderbuffer(
       GL_RENDERBUFFER, client_renderbuffer_id_, kServiceRenderbufferId);
-  DoRenderbufferStorage(
-      GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, GL_DEPTH24_STENCIL8,
-      1, 1, GL_NO_ERROR);
+  DoRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, 1, 1,
+                        GL_NO_ERROR);
   DoFramebufferRenderbuffer(
       GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER,
       client_renderbuffer_id_, kServiceRenderbufferId, GL_NO_ERROR);
@@ -2226,8 +2578,7 @@ TEST_P(GLES3DecoderTest, ClearBufferfiValidArgs) {
 TEST_P(GLES2DecoderManualInitTest,
        RenderbufferStorageMultisampleCHROMIUMGLError) {
   InitState init;
-  init.extensions = "GL_ARB_framebuffer_object";
-  init.bind_generates_resource = true;
+  init.gl_version = "OpenGL ES 3.0";
   InitDecoder(init);
   DoBindRenderbuffer(
       GL_RENDERBUFFER, client_renderbuffer_id_, kServiceRenderbufferId);
@@ -2236,7 +2587,9 @@ TEST_P(GLES2DecoderManualInitTest,
       .WillOnce(Return(GL_NO_ERROR))
       .WillOnce(Return(GL_OUT_OF_MEMORY))
       .RetiresOnSaturation();
-  EXPECT_CALL(*gl_, RenderbufferStorageMultisample(GL_RENDERBUFFER, 1, GL_RGBA,
+  SetupExpectationsForInternalFormatSampleCountsHelper(
+      GL_RENDERBUFFER, GL_RGBA4, 1, TestHelper::kMaxSamples);
+  EXPECT_CALL(*gl_, RenderbufferStorageMultisample(GL_RENDERBUFFER, 1, GL_RGBA4,
                                                    100, 50))
       .Times(1)
       .RetiresOnSaturation();
@@ -2249,8 +2602,7 @@ TEST_P(GLES2DecoderManualInitTest,
 TEST_P(GLES2DecoderManualInitTest,
        RenderbufferStorageMultisampleCHROMIUMBadArgs) {
   InitState init;
-  init.extensions = "GL_ARB_framebuffer_object";
-  init.bind_generates_resource = true;
+  init.gl_version = "OpenGL ES 3.0";
   InitDecoder(init);
   DoBindRenderbuffer(
       GL_RENDERBUFFER, client_renderbuffer_id_, kServiceRenderbufferId);
@@ -2263,55 +2615,62 @@ TEST_P(GLES2DecoderManualInitTest,
            GL_RGBA4,
            TestHelper::kMaxRenderbufferSize,
            1);
+  SetupExpectationsForInternalFormatSampleCountsHelper(
+      GL_RENDERBUFFER, GL_RGBA4, 1, TestHelper::kMaxSamples);
   EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-  EXPECT_EQ(GL_INVALID_VALUE, GetGLError());
+  EXPECT_EQ(GL_INVALID_OPERATION, GetGLError());
+
   cmd.Init(GL_RENDERBUFFER,
            TestHelper::kMaxSamples,
            GL_RGBA4,
            TestHelper::kMaxRenderbufferSize + 1,
            1);
+  SetupExpectationsForInternalFormatSampleCountsHelper(
+      GL_RENDERBUFFER, GL_RGBA4, 1, TestHelper::kMaxSamples);
   EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
   EXPECT_EQ(GL_INVALID_VALUE, GetGLError());
+
   cmd.Init(GL_RENDERBUFFER,
            TestHelper::kMaxSamples,
            GL_RGBA4,
            1,
            TestHelper::kMaxRenderbufferSize + 1);
+  SetupExpectationsForInternalFormatSampleCountsHelper(
+      GL_RENDERBUFFER, GL_RGBA4, 1, TestHelper::kMaxSamples);
   EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
   EXPECT_EQ(GL_INVALID_VALUE, GetGLError());
 }
 
 TEST_P(GLES2DecoderManualInitTest, RenderbufferStorageMultisampleCHROMIUM) {
   InitState init;
-  init.extensions = "GL_ARB_framebuffer_object";
+  init.gl_version = "OpenGL ES 3.0";
   InitDecoder(init);
   DoBindRenderbuffer(
       GL_RENDERBUFFER, client_renderbuffer_id_, kServiceRenderbufferId);
   InSequence sequence;
   DoRenderbufferStorageMultisampleCHROMIUM(
-      GL_RENDERBUFFER, TestHelper::kMaxSamples, GL_RGBA4, GL_RGBA,
+      GL_RENDERBUFFER, TestHelper::kMaxSamples, GL_RGBA4,
       TestHelper::kMaxRenderbufferSize, 1, false);
 }
 
 TEST_P(GLES2DecoderManualInitTest,
        RenderbufferStorageMultisampleCHROMIUMRebindRenderbuffer) {
   InitState init;
-  init.extensions = "GL_ARB_framebuffer_object";
+  init.gl_version = "OpenGL ES 3.0";
   InitDecoder(init);
   DoBindRenderbuffer(
       GL_RENDERBUFFER, client_renderbuffer_id_, kServiceRenderbufferId);
   RestoreRenderbufferBindings();
   InSequence sequence;
   DoRenderbufferStorageMultisampleCHROMIUM(
-      GL_RENDERBUFFER, TestHelper::kMaxSamples, GL_RGBA4, GL_RGBA,
+      GL_RENDERBUFFER, TestHelper::kMaxSamples, GL_RGBA4,
       TestHelper::kMaxRenderbufferSize, 1, true);
 }
 
 TEST_P(GLES2DecoderManualInitTest,
        RenderbufferStorageMultisampleEXTNotSupported) {
   InitState init;
-  init.extensions = "GL_ARB_framebuffer_object";
-  init.bind_generates_resource = true;
+  init.gl_version = "OpenGL ES 3.0";
   InitDecoder(init);
   DoBindRenderbuffer(
       GL_RENDERBUFFER, client_renderbuffer_id_, kServiceRenderbufferId);
@@ -2580,6 +2939,110 @@ TEST_P(GLES2DecoderWithShaderTest, UnClearedAttachmentsGetClearedOnReadPixels) {
   EXPECT_EQ(GL_NO_ERROR, GetGLError());
 }
 
+// Regression test for crbug.com/559727039: if the lazy clear of a never-written
+// attachment fails (GL_OUT_OF_MEMORY is permitted for any command by ES 3.2
+// section 2.3.1, and leaves the attachment holding a previous consumer's GPU
+// memory), the attachment must not be recorded as cleared and the read must not
+// return that memory to the client.
+TEST_P(GLES2DecoderWithShaderTest,
+       UnClearedAttachmentsNotMarkedClearedWhenClearFailsOnReadPixels) {
+  const GLuint kFBOClientTextureId = 4100;
+  const GLuint kFBOServiceTextureId = 4101;
+
+  // Register a texture id.
+  EXPECT_CALL(*gl_, GenTextures(_, _))
+      .WillOnce(SetArgPointee<1>(kFBOServiceTextureId))
+      .RetiresOnSaturation();
+  GenHelper<cmds::GenTexturesImmediate>(kFBOClientTextureId);
+
+  // Setup "render to" texture.
+  DoBindTexture(GL_TEXTURE_2D, kFBOClientTextureId, kFBOServiceTextureId);
+  DoTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0,
+               0);
+  DoBindFramebuffer(GL_FRAMEBUFFER, client_framebuffer_id_,
+                    kServiceFramebufferId);
+  DoFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                         kFBOClientTextureId, kFBOServiceTextureId, 0,
+                         GL_NO_ERROR);
+  DoEnableDisable(GL_SCISSOR_TEST, false);
+  DoScissor(0, 0, 1, 1);
+
+  // Setup "render from" texture.
+  SetupTexture();
+
+  FramebufferManager* framebuffer_manager = GetFramebufferManager();
+  Framebuffer* framebuffer =
+      framebuffer_manager->GetFramebuffer(client_framebuffer_id_);
+  ASSERT_TRUE(framebuffer != nullptr);
+  EXPECT_FALSE(framebuffer->IsCleared());
+
+  // The driver fails the lazy clear with GL_OUT_OF_MEMORY.
+  SetupExpectationsForFramebufferClearing(GL_FRAMEBUFFER,       // target
+                                          GL_COLOR_BUFFER_BIT,  // clear bits
+                                          0, 0, 0,
+                                          0,      // color
+                                          0,      // stencil
+                                          1.0f,   // depth
+                                          false,  // scissor test
+                                          0, 0, 1, 1,
+                                          GL_OUT_OF_MEMORY);  // clear error
+
+  // The read must be abandoned rather than copying the uncleared attachment
+  // into the client's shared memory.
+  EXPECT_CALL(*gl_, ReadPixels(_, _, _, _, _, _, _)).Times(0);
+
+  auto* result = GetSharedMemoryAs<cmds::ReadPixels::Result*>();
+  uint32_t result_shm_id = shared_memory_id_;
+  uint32_t result_shm_offset = kSharedMemoryOffset;
+  uint32_t pixels_shm_id = shared_memory_id_;
+  uint32_t pixels_shm_offset = kSharedMemoryOffset + sizeof(*result);
+  cmds::ReadPixels cmd;
+  cmd.Init(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixels_shm_id,
+           pixels_shm_offset, result_shm_id, result_shm_offset, false);
+  result->success = 0;
+  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+
+  // The out of memory must be surfaced rather than swallowed, and the
+  // attachment must still be uncleared so a later access retries the clear.
+  // Note GetGLError() reuses the shared memory that |result| points at.
+  EXPECT_EQ(GL_OUT_OF_MEMORY, GetGLError());
+  EXPECT_FALSE(framebuffer->IsCleared());
+
+  // A subsequent read retries the clear; when it succeeds the attachment is
+  // marked cleared and the read proceeds normally. These expectations mirror
+  // SetupExpectationsForFramebufferClearing() minus the completeness query,
+  // which is not repeated because the first read already cached the result.
+  EXPECT_CALL(*gl_, ClearColor(0.0f, 0.0f, 0.0f, 0.0f))
+      .Times(1)
+      .RetiresOnSaturation();
+  SetupExpectationsForColorMask(true, true, true, true);
+  SetupExpectationsForEnableDisable(GL_SCISSOR_TEST, false);
+  if (feature_info()->feature_flags().ext_window_rectangles) {
+    EXPECT_CALL(*gl_, WindowRectanglesEXT(GL_EXCLUSIVE_EXT, 0, nullptr))
+        .Times(1)
+        .RetiresOnSaturation();
+  }
+  EXPECT_CALL(*gl_, GetError())
+      .WillOnce(Return(GL_NO_ERROR))
+      .WillOnce(Return(GL_NO_ERROR))
+      .RetiresOnSaturation();
+  EXPECT_CALL(*gl_, Clear(GL_COLOR_BUFFER_BIT)).Times(1).RetiresOnSaturation();
+  SetupExpectationsForRestoreClearState(0, 0, 0, 0, 0, 1.0f, false, 0, 0, 1, 1);
+
+  EXPECT_CALL(*gl_, GetError())
+      .WillOnce(Return(GL_NO_ERROR))
+      .WillOnce(Return(GL_NO_ERROR))
+      .RetiresOnSaturation();
+  EXPECT_CALL(*gl_, ReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, _))
+      .Times(1)
+      .RetiresOnSaturation();
+  result = GetSharedMemoryAs<cmds::ReadPixels::Result*>();
+  result->success = 0;
+  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
+  EXPECT_TRUE(framebuffer->IsCleared());
+}
+
 TEST_P(GLES3DecoderTest, CopyTexImage2DValidInternalFormat) {
   const GLuint kFBOClientTextureId = 4100;
   const GLuint kFBOServiceTextureId = 4101;
@@ -2635,7 +3098,6 @@ TEST_P(GLES3DecoderManualInitTest, CopyTexImage2DValidInternalFormat_FloatEXT) {
   InitState init;
   init.extensions = "GL_EXT_color_buffer_float";
   init.gl_version = "OpenGL ES 3.0";
-  init.bind_generates_resource = true;
   init.context_type = CONTEXT_TYPE_OPENGLES3;
   InitDecoder(init);
 
@@ -2692,7 +3154,6 @@ TEST_P(GLES3DecoderManualInitTest,
   InitState init;
   init.extensions = "GL_EXT_color_buffer_float";
   init.gl_version = "OpenGL ES 3.0";
-  init.bind_generates_resource = true;
   init.context_type = CONTEXT_TYPE_OPENGLES3;
   InitDecoder(init);
 
@@ -2915,8 +3376,7 @@ TEST_P(GLES3DecoderTest, CopyTexImage2DInvalidInternalFormat_sRGB) {
 TEST_P(GLES2DecoderManualInitTest,
        UnClearedAttachmentsGetClearedOnReadPixelsAndDrawBufferGetsRestored) {
   InitState init;
-  init.extensions = "GL_ARB_framebuffer_object";
-  init.bind_generates_resource = true;
+  init.gl_version = "OpenGL ES 3.0";
   InitDecoder(init);
   const GLuint kFBOClientTextureId = 4100;
   const GLuint kFBOServiceTextureId = 4101;
@@ -2987,6 +3447,120 @@ TEST_P(GLES2DecoderManualInitTest,
   EXPECT_EQ(GL_NO_ERROR, GetGLError());
 }
 
+// Regression test: when lazily clearing a READ FBO (with a different DRAW
+// FBO), the decoder must rebind the lazy-clear target as DRAW before
+// calling PrepareDrawBuffersForClearingUninitializedAttachments().
+// Otherwise the wrong FBO's state is mutated, leading to skipped clears
+// and potential memory disclosure.
+TEST_P(GLES3DecoderTest, LazyClearReadFBORebindsDrawBeforePrepareDrawBuffers) {
+  // Setup: fboA with uncleared RGBA8 renderbuffer and drawBuffers=NONE
+  DoBindRenderbuffer(GL_RENDERBUFFER, client_renderbuffer_id_,
+                     kServiceRenderbufferId);
+  DoRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 1, 1, GL_NO_ERROR);
+
+  DoBindFramebuffer(GL_DRAW_FRAMEBUFFER, client_framebuffer_id_,
+                    kServiceFramebufferId);
+  DoFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                            GL_RENDERBUFFER, client_renderbuffer_id_,
+                            kServiceRenderbufferId, GL_NO_ERROR);
+  {
+    // Set drawBuffers to NONE on fboA.
+    const GLenum bufs[] = {GL_NONE};
+    EXPECT_CALL(*gl_, DrawBuffersARB(1, _)).Times(1).RetiresOnSaturation();
+    auto& db = *GetImmediateAs<cmds::DrawBuffersEXTImmediate>();
+    db.Init(1, bufs);
+    EXPECT_EQ(error::kNoError, ExecuteImmediateCmd(db, sizeof(bufs)));
+  }
+
+  // Bind fboB as DRAW (draw_framebuffer != fboA).
+  EXPECT_CALL(*gl_, GenFramebuffersEXT(1, _))
+      .WillOnce(SetArgPointee<1>(kNewServiceId))
+      .RetiresOnSaturation();
+  GLuint fbo_b_client = client_framebuffer_id_ + 1;
+  GenHelper<cmds::GenFramebuffersImmediate>(fbo_b_client);
+  DoBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo_b_client, kNewServiceId);
+
+  // Bind fboA as READ.
+  DoBindFramebuffer(GL_READ_FRAMEBUFFER, client_framebuffer_id_,
+                    kServiceFramebufferId);
+
+  // Trigger ReadPixels, which should lazy clear fboA.
+  struct Tracker {
+    GLuint bound_draw_fbo;
+    GLuint fbo_at_prepare_drawbuffers;
+    GLuint fbo_at_clear;
+    int drawbuffers_calls;
+  };
+  auto t = std::make_shared<Tracker>();
+  t->bound_draw_fbo = kNewServiceId;
+  t->fbo_at_prepare_drawbuffers = 0xDEADBEEF;
+  t->fbo_at_clear = 0xDEADBEEF;
+  t->drawbuffers_calls = 0;
+
+  EXPECT_CALL(*gl_, CheckFramebufferStatusEXT(GL_READ_FRAMEBUFFER))
+      .WillOnce(Return(GL_FRAMEBUFFER_COMPLETE))
+      .RetiresOnSaturation();
+
+  EXPECT_CALL(*gl_, BindFramebufferEXT(_, _))
+      .WillRepeatedly([t](GLenum target, GLuint id) {
+        if (target == GL_DRAW_FRAMEBUFFER || target == GL_FRAMEBUFFER) {
+          t->bound_draw_fbo = id;
+        }
+      });
+
+  EXPECT_CALL(*gl_, DrawBuffersARB(_, _))
+      .WillRepeatedly([t](GLsizei, const GLenum*) {
+        // First call is PrepareDrawBuffers, second is RestoreDrawBuffers.
+        if (t->drawbuffers_calls++ == 0) {
+          t->fbo_at_prepare_drawbuffers = t->bound_draw_fbo;
+        }
+      });
+
+  EXPECT_CALL(*gl_, Clear(GL_COLOR_BUFFER_BIT))
+      .WillOnce([t](GLbitfield) { t->fbo_at_clear = t->bound_draw_fbo; })
+      .RetiresOnSaturation();
+
+  // Absorb the rest of the lazy-clear / restore-state noise.
+  EXPECT_CALL(*gl_, ClearColor(_, _, _, _)).Times(AnyNumber());
+  EXPECT_CALL(*gl_, ColorMask(_, _, _, _)).Times(AnyNumber());
+  EXPECT_CALL(*gl_, ClearStencil(_)).Times(AnyNumber());
+  EXPECT_CALL(*gl_, ClearDepth(_)).Times(AnyNumber());
+  EXPECT_CALL(*gl_, StencilMaskSeparate(_, _)).Times(AnyNumber());
+  EXPECT_CALL(*gl_, DepthMask(_)).Times(AnyNumber());
+  EXPECT_CALL(*gl_, Disable(_)).Times(AnyNumber());
+  EXPECT_CALL(*gl_, Enable(_)).Times(AnyNumber());
+  EXPECT_CALL(*gl_, Scissor(_, _, _, _)).Times(AnyNumber());
+  EXPECT_CALL(*gl_, WindowRectanglesEXT(_, _, _)).Times(AnyNumber());
+  EXPECT_CALL(*gl_, GetError()).WillRepeatedly(Return(GL_NO_ERROR));
+  EXPECT_CALL(*gl_, ReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, _))
+      .Times(1)
+      .RetiresOnSaturation();
+
+  auto* result = GetSharedMemoryAs<cmds::ReadPixels::Result*>();
+  cmds::ReadPixels rp;
+  rp.Init(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, shared_memory_id_,
+          kSharedMemoryOffset + sizeof(*result), shared_memory_id_,
+          kSharedMemoryOffset, false);
+  result->success = 0;
+  EXPECT_EQ(error::kNoError, ExecuteCmd(rp));
+
+  // Assertions
+  // PrepareDrawBuffers should have been called.
+  EXPECT_GE(t->drawbuffers_calls, 1)
+      << "PrepareDrawBuffers should have issued glDrawBuffersARB.";
+
+  // glClear must target fboA.
+  EXPECT_EQ(static_cast<GLuint>(kServiceFramebufferId), t->fbo_at_clear)
+      << "glClear targetted wrong FBO.";
+
+  // Verify fboA was bound as DRAW when PrepareDrawBuffers was called.
+  EXPECT_EQ(static_cast<GLuint>(kServiceFramebufferId),
+            t->fbo_at_prepare_drawbuffers)
+      << "PrepareDrawBuffers called with wrong DRAW framebuffer bound: "
+      << t->fbo_at_prepare_drawbuffers << " instead of "
+      << kServiceFramebufferId;
+}
+
 TEST_P(GLES2DecoderWithShaderTest, CopyTexImageWithInCompleteFBOFails) {
   GLenum target = GL_TEXTURE_2D;
   GLint level = 0;
@@ -2998,7 +3572,7 @@ TEST_P(GLES2DecoderWithShaderTest, CopyTexImageWithInCompleteFBOFails) {
       GL_RENDERBUFFER, client_renderbuffer_id_, kServiceRenderbufferId);
   DoBindFramebuffer(
       GL_FRAMEBUFFER, client_framebuffer_id_, kServiceFramebufferId);
-  DoRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA4, GL_RGBA, 0, 0, GL_NO_ERROR);
+  DoRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA4, 0, 0, GL_NO_ERROR);
   DoFramebufferRenderbuffer(GL_FRAMEBUFFER,
                             GL_COLOR_ATTACHMENT0,
                             GL_RENDERBUFFER,
@@ -3023,7 +3597,7 @@ void GLES2DecoderWithShaderTest::CheckRenderbufferChangesMarkFBOAsNotComplete(
       GL_RENDERBUFFER, client_renderbuffer_id_, kServiceRenderbufferId);
   DoBindFramebuffer(
       GL_FRAMEBUFFER, client_framebuffer_id_, kServiceFramebufferId);
-  DoRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA4, GL_RGBA, 1, 1, GL_NO_ERROR);
+  DoRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA4, 1, 1, GL_NO_ERROR);
   DoFramebufferRenderbuffer(GL_FRAMEBUFFER,
                             GL_COLOR_ATTACHMENT0,
                             GL_RENDERBUFFER,
@@ -3042,7 +3616,7 @@ void GLES2DecoderWithShaderTest::CheckRenderbufferChangesMarkFBOAsNotComplete(
   EXPECT_TRUE(framebuffer_manager->IsComplete(framebuffer));
 
   // Test that renderbufferStorage marks fbo as not complete.
-  DoRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA4, GL_RGBA, 1, 1, GL_NO_ERROR);
+  DoRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA4, 1, 1, GL_NO_ERROR);
   EXPECT_FALSE(framebuffer_manager->IsComplete(framebuffer));
   framebuffer_manager->MarkAsComplete(framebuffer);
   EXPECT_TRUE(framebuffer_manager->IsComplete(framebuffer));
@@ -3109,7 +3683,6 @@ void GLES2DecoderWithShaderTest::CheckTextureChangesMarkFBOAsNotComplete(
       GL_FRAMEBUFFER, client_framebuffer_id_, kServiceFramebufferId);
   DoRenderbufferStorage(GL_RENDERBUFFER,
                         GL_DEPTH_COMPONENT16,
-                        GL_DEPTH_COMPONENT,
                         1,
                         1,
                         GL_NO_ERROR);
@@ -3194,12 +3767,12 @@ TEST_P(GLES2DecoderTest, CanChangeSurface) {
   scoped_refptr<GLSurfaceMock> other_surface(new GLSurfaceMock);
   EXPECT_CALL(*other_surface.get(), GetBackingFramebufferObject())
       .WillOnce(Return(7));
-  EXPECT_CALL(*gl_, BindFramebufferEXT(GL_FRAMEBUFFER_EXT, 7));
+  EXPECT_CALL(*gl_, BindFramebufferEXT(GL_FRAMEBUFFER, 7));
 
   decoder_->SetSurface(other_surface);
 }
 
-TEST_P(GLES2DecoderTest, DrawBuffersEXTImmediateSuccceeds) {
+TEST_P(GLES3DecoderTest, DrawBuffersEXTImmediateSucceeds) {
   const GLsizei count = 1;
   const GLenum bufs[] = {GL_COLOR_ATTACHMENT0};
   auto& cmd = *GetImmediateAs<cmds::DrawBuffersEXTImmediate>();
@@ -3224,7 +3797,7 @@ TEST_P(GLES2DecoderTest, DrawBuffersEXTImmediateFails) {
   EXPECT_EQ(GL_INVALID_OPERATION, GetGLError());
 }
 
-TEST_P(GLES2DecoderTest, DrawBuffersEXTImmediateBackbuffer) {
+TEST_P(GLES3DecoderTest, DrawBuffersEXTImmediateBackbuffer) {
   const GLsizei count = 1;
   const GLenum bufs[] = {GL_BACK};
   auto& cmd = *GetImmediateAs<cmds::DrawBuffersEXTImmediate>();
@@ -3243,11 +3816,11 @@ TEST_P(GLES2DecoderTest, DrawBuffersEXTImmediateBackbuffer) {
   EXPECT_EQ(GL_NO_ERROR, GetGLError());
 }
 
-TEST_P(GLES2DecoderTest, DrawBuffersEXTMainFramebuffer) {
+TEST_P(GLES3DecoderTest, DrawBuffersEXTMainFramebuffer) {
   auto& cmd = *GetImmediateAs<cmds::DrawBuffersEXTImmediate>();
   {
     const GLenum bufs[] = {GL_BACK};
-    const GLsizei count = base::size(bufs);
+    const GLsizei count = std::size(bufs);
     cmd.Init(count, bufs);
 
     EXPECT_CALL(*gl_, DrawBuffersARB(count, Pointee(GL_BACK)))
@@ -3268,12 +3841,12 @@ TEST_P(GLES2DecoderTest, DrawBuffersEXTMainFramebuffer) {
   }
   {
     const GLenum bufs[] = {GL_BACK, GL_NONE};
-    const GLsizei count = base::size(bufs);
+    const GLsizei count = std::size(bufs);
     cmd.Init(count, bufs);
 
     EXPECT_CALL(*gl_, DrawBuffersARB(_, _)).Times(0).RetiresOnSaturation();
     EXPECT_EQ(error::kNoError, ExecuteImmediateCmd(cmd, sizeof(bufs)));
-    EXPECT_EQ(GL_INVALID_VALUE, GetGLError());
+    EXPECT_EQ(GL_INVALID_OPERATION, GetGLError());
   }
 }
 
@@ -3290,41 +3863,6 @@ TEST_P(GLES2DecoderManualInitTest, InvalidateFramebufferBinding) {
   EXPECT_TRUE(
       gl::MockGLInterface::GetGLProcAddress("glInvalidateFramebuffer") !=
       gl::MockGLInterface::GetGLProcAddress("glDiscardFramebufferEXT"));
-}
-
-TEST_P(GLES2DecoderTest, ClearBackbufferBitsOnFlipSwap) {
-  surface_->set_buffers_flipped(true);
-
-  EXPECT_EQ(0u, GetAndClearBackbufferClearBitsForTest());
-
-  auto& cmd = *GetImmediateAs<cmds::SwapBuffers>();
-  cmd.Init(1, 0);
-  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-  EXPECT_EQ(GL_NO_ERROR, GetGLError());
-  EXPECT_EQ(static_cast<uint32_t>(GL_COLOR_BUFFER_BIT),
-            GetAndClearBackbufferClearBitsForTest());
-
-  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-  EXPECT_EQ(GL_NO_ERROR, GetGLError());
-  EXPECT_EQ(0u, GetAndClearBackbufferClearBitsForTest());
-
-  EXPECT_CALL(*gl_, Finish()).Times(AnyNumber());
-  auto& resize_cmd = *GetImmediateAs<cmds::ResizeCHROMIUM>();
-  resize_cmd.Init(1, 1, 1.0f, GL_TRUE, 0, 0, 0);
-  EXPECT_EQ(error::kNoError, ExecuteCmd(resize_cmd));
-  EXPECT_EQ(GL_NO_ERROR, GetGLError());
-  EXPECT_EQ(static_cast<uint32_t>(GL_COLOR_BUFFER_BIT),
-            GetAndClearBackbufferClearBitsForTest());
-
-  cmd.Init(1, 0);
-  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-  EXPECT_EQ(GL_NO_ERROR, GetGLError());
-  EXPECT_EQ(static_cast<uint32_t>(GL_COLOR_BUFFER_BIT),
-            GetAndClearBackbufferClearBitsForTest());
-
-  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-  EXPECT_EQ(GL_NO_ERROR, GetGLError());
-  EXPECT_EQ(0u, GetAndClearBackbufferClearBitsForTest());
 }
 
 TEST_P(GLES2DecoderManualInitTest, DiscardFramebufferEXT) {
@@ -3369,6 +3907,83 @@ TEST_P(GLES2DecoderManualInitTest, DiscardFramebufferEXT) {
   EXPECT_FALSE(framebuffer->IsCleared());
 }
 
+TEST_P(GLES2DecoderManualInitTest,
+       InvalidateFramebufferIncompleteFBOMarkUncleared) {
+  InitState init;
+  init.gl_version = "OpenGL ES 3.0";
+  init.context_type = CONTEXT_TYPE_OPENGLES3;
+
+  gpu::GpuDriverBugWorkarounds workarounds;
+  workarounds.dont_invalidate_incomplete_fbos = true;
+  InitDecoderWithWorkarounds(init, workarounds);
+
+  const GLenum target = GL_FRAMEBUFFER;
+  const GLsizei count = 1;
+  const GLenum attachments[] = {GL_COLOR_ATTACHMENT0};
+
+  // Setup texture 1 (1x1)
+  SetupTexture();
+
+  // Setup texture 2 (2x2)
+  const GLuint kAnotherClientTextureId = 200;
+  const GLuint kAnotherServiceTextureId = 201;
+  EXPECT_CALL(*gl_, GenTextures(1, _))
+      .WillOnce(SetArgPointee<1>(kAnotherServiceTextureId))
+      .RetiresOnSaturation();
+  GenHelper<cmds::GenTexturesImmediate>(kAnotherClientTextureId);
+
+  DoBindTexture(GL_TEXTURE_2D, kAnotherClientTextureId,
+                kAnotherServiceTextureId);
+  DoTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+               shared_memory_id_, kSharedMemoryOffset);
+
+  DoBindFramebuffer(GL_FRAMEBUFFER, client_framebuffer_id_,
+                    kServiceFramebufferId);
+
+  // Attach 1x1 to COLOR_ATTACHMENT0
+  DoFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                         client_texture_id_, kServiceTextureId, 0, GL_NO_ERROR);
+  // Attach 2x2 to COLOR_ATTACHMENT1 -> makes it incomplete
+  // (INCOMPLETE_DIMENSIONS)
+  DoFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D,
+                         kAnotherClientTextureId, kAnotherServiceTextureId, 0,
+                         GL_NO_ERROR);
+
+  FramebufferManager* framebuffer_manager = GetFramebufferManager();
+  Framebuffer* framebuffer =
+      framebuffer_manager->GetFramebuffer(client_framebuffer_id_);
+  ASSERT_TRUE(framebuffer != nullptr);
+
+  // Ensure it is incomplete
+  EXPECT_EQ(static_cast<GLenum>(GL_FRAMEBUFFER_INCOMPLETE_DIMENSIONS),
+            DoCheckFramebufferStatus(GL_FRAMEBUFFER));
+
+  // Mark attachments as cleared initially
+  GetFramebufferManager()->MarkAttachmentsAsCleared(
+      framebuffer, group().renderbuffer_manager(), group().texture_manager());
+  EXPECT_TRUE(framebuffer->IsCleared());
+
+  // We expect the driver call to be skipped (Times(0)) because FBO is
+  // incomplete
+  EXPECT_CALL(*gl_, InvalidateFramebuffer(target, count, _)).Times(0);
+
+  auto& cmd = *GetImmediateAs<cmds::InvalidateFramebufferImmediate>();
+  cmd.Init(target, count, attachments);
+
+  EXPECT_EQ(error::kNoError, ExecuteImmediateCmd(cmd, sizeof(attachments)));
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
+
+  // BUT we expect the attachment to be marked as uncleared!
+  EXPECT_FALSE(framebuffer->IsCleared());
+  const Framebuffer::Attachment* attachment =
+      framebuffer->GetAttachment(GL_COLOR_ATTACHMENT0);
+  ASSERT_TRUE(attachment != nullptr);
+  EXPECT_FALSE(attachment->cleared());
+
+  // Clean up texture 2
+  DoDeleteTexture(kAnotherClientTextureId, kAnotherServiceTextureId);
+}
+
 TEST_P(GLES2DecoderManualInitTest, ClearBackbufferBitsOnDiscardFramebufferEXT) {
   InitState init;
   init.extensions = "GL_EXT_discard_framebuffer";
@@ -3385,9 +4000,8 @@ TEST_P(GLES2DecoderManualInitTest, ClearBackbufferBitsOnDiscardFramebufferEXT) {
   const GLsizei count = 1;
   GLenum attachments[] = {GL_COLOR_EXT};
 
-  EXPECT_CALL(*gl_, DiscardFramebufferEXT(target, count, _))
-      .Times(1)
-      .RetiresOnSaturation();
+  // We skip driver's DiscardFramebuffer call on default fbo.
+  EXPECT_CALL(*gl_, DiscardFramebufferEXT(target, count, _)).Times(0);
   auto& cmd = *GetImmediateAs<cmds::DiscardFramebufferEXTImmediate>();
   cmd.Init(target, count, attachments);
   EXPECT_EQ(error::kNoError, ExecuteImmediateCmd(cmd, sizeof(attachments)));
@@ -3396,9 +4010,7 @@ TEST_P(GLES2DecoderManualInitTest, ClearBackbufferBitsOnDiscardFramebufferEXT) {
             GetAndClearBackbufferClearBitsForTest());
 
   attachments[0] = GL_DEPTH_EXT;
-  EXPECT_CALL(*gl_, DiscardFramebufferEXT(target, count, _))
-      .Times(1)
-      .RetiresOnSaturation();
+  EXPECT_CALL(*gl_, DiscardFramebufferEXT(target, count, _)).Times(0);
   cmd.Init(target, count, attachments);
   EXPECT_EQ(error::kNoError, ExecuteImmediateCmd(cmd, sizeof(attachments)));
   EXPECT_EQ(GL_NO_ERROR, GetGLError());
@@ -3406,9 +4018,7 @@ TEST_P(GLES2DecoderManualInitTest, ClearBackbufferBitsOnDiscardFramebufferEXT) {
             GetAndClearBackbufferClearBitsForTest());
 
   attachments[0] = GL_STENCIL_EXT;
-  EXPECT_CALL(*gl_, DiscardFramebufferEXT(target, count, _))
-      .Times(1)
-      .RetiresOnSaturation();
+  EXPECT_CALL(*gl_, DiscardFramebufferEXT(target, count, _)).Times(0);
   cmd.Init(target, count, attachments);
   EXPECT_EQ(error::kNoError, ExecuteImmediateCmd(cmd, sizeof(attachments)));
   EXPECT_EQ(GL_NO_ERROR, GetGLError());
@@ -3417,9 +4027,7 @@ TEST_P(GLES2DecoderManualInitTest, ClearBackbufferBitsOnDiscardFramebufferEXT) {
 
   const GLsizei count0 = 3;
   const GLenum attachments0[] = {GL_COLOR_EXT, GL_DEPTH_EXT, GL_STENCIL_EXT};
-  EXPECT_CALL(*gl_, DiscardFramebufferEXT(target, count0, _))
-      .Times(1)
-      .RetiresOnSaturation();
+  EXPECT_CALL(*gl_, DiscardFramebufferEXT(target, count0, _)).Times(0);
   cmd.Init(target, count0, attachments0);
   EXPECT_EQ(error::kNoError, ExecuteImmediateCmd(cmd, sizeof(attachments0)));
   EXPECT_EQ(GL_NO_ERROR, GetGLError());
@@ -3427,6 +4035,63 @@ TEST_P(GLES2DecoderManualInitTest, ClearBackbufferBitsOnDiscardFramebufferEXT) {
                                   GL_DEPTH_BUFFER_BIT |
                                   GL_STENCIL_BUFFER_BIT),
             GetAndClearBackbufferClearBitsForTest());
+}
+
+TEST_P(GLES3DecoderTest,
+       InvalidatedDefaultReadFramebufferClearedBeforeCopyTexImage2D) {
+  // Invalidate the color buffer of the default framebuffer.
+  const GLsizei count = 1;
+  GLenum attachments[] = {GL_COLOR_EXT};
+  // We skip driver's InvalidateFramebuffer call on default fbo.
+  EXPECT_CALL(*gl_, InvalidateFramebuffer(GL_FRAMEBUFFER, count, _)).Times(0);
+  auto& invalidate_cmd =
+      *GetImmediateAs<cmds::InvalidateFramebufferImmediate>();
+  invalidate_cmd.Init(GL_FRAMEBUFFER, count, attachments);
+  EXPECT_EQ(error::kNoError,
+            ExecuteImmediateCmd(invalidate_cmd, sizeof(attachments)));
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
+
+  // Bind a client framebuffer as the draw framebuffer; the default
+  // framebuffer remains bound as the read framebuffer.
+  DoBindFramebuffer(GL_DRAW_FRAMEBUFFER, client_framebuffer_id_,
+                    kServiceFramebufferId);
+
+  DoBindTexture(GL_TEXTURE_2D, client_texture_id_, kServiceTextureId);
+
+  // CopyTexImage2D reads from the default framebuffer. The decoder must
+  // bind it to GL_DRAW_FRAMEBUFFER while clearing it after invalidation
+  // and restore the client draw framebuffer afterwards.
+  EXPECT_CALL(*gl_, BindFramebufferEXT(GL_DRAW_FRAMEBUFFER, 0))
+      .Times(1)
+      .RetiresOnSaturation();
+  EXPECT_CALL(*gl_, ClearColor(0, 0, 0, 1.0f)).Times(1).RetiresOnSaturation();
+  SetupExpectationsForColorMask(true, true, true, true);
+  EXPECT_CALL(*gl_, ClearStencil(0)).Times(1).RetiresOnSaturation();
+  SetupExpectationsForStencilMask(GLES2Decoder::kDefaultStencilMask,
+                                  GLES2Decoder::kDefaultStencilMask);
+  EXPECT_CALL(*gl_, ClearDepth(1.0f)).Times(1).RetiresOnSaturation();
+  SetupExpectationsForDepthMask(true);
+  SetupExpectationsForEnableDisable(GL_SCISSOR_TEST, false);
+  EXPECT_CALL(*gl_, Clear(GL_COLOR_BUFFER_BIT)).Times(1).RetiresOnSaturation();
+  SetupExpectationsForRestoreClearState(0.0f, 0.0f, 0.0f, 0.0f, 0, 1.0f, false,
+                                        0, 0, kBackBufferWidth,
+                                        kBackBufferHeight);
+  EXPECT_CALL(*gl_,
+              BindFramebufferEXT(GL_DRAW_FRAMEBUFFER, kServiceFramebufferId))
+      .Times(1)
+      .RetiresOnSaturation();
+
+  EXPECT_CALL(*gl_, CopyTexImage2D(GL_TEXTURE_2D, 0, _, 0, 0, 1, 1, 0))
+      .Times(1)
+      .RetiresOnSaturation();
+  EXPECT_CALL(*gl_, GetError())
+      .WillOnce(Return(GL_NO_ERROR))
+      .WillOnce(Return(GL_NO_ERROR))
+      .RetiresOnSaturation();
+  cmds::CopyTexImage2D copy_cmd;
+  copy_cmd.Init(GL_TEXTURE_2D, 0, GL_RGB, 0, 0, 1, 1);
+  EXPECT_EQ(error::kNoError, ExecuteCmd(copy_cmd));
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
 }
 
 TEST_P(GLES2DecoderTest, DiscardFramebufferEXTUnsupported) {
@@ -3486,31 +4151,34 @@ TEST_P(GLES3DecoderTest, DiscardFramebufferEXTUseCorrectTarget) {
                          0,
                          GL_NO_ERROR);
 
+  GLuint draw_fbo = client_framebuffer_id_ + 1;
+  GLuint draw_fbo_service = kServiceFramebufferId + 1;
   EXPECT_CALL(*gl_, GenFramebuffersEXT(_, _))
       .WillOnce(SetArgPointee<1>(kServiceFramebufferId + 1))
       .RetiresOnSaturation();
-  DoBindFramebuffer(GL_DRAW_FRAMEBUFFER, client_framebuffer_id_ + 1,
-                    kServiceFramebufferId + 1);
+  GenHelper<cmds::GenFramebuffersImmediate>(draw_fbo);
+  DoBindFramebuffer(GL_DRAW_FRAMEBUFFER, draw_fbo, draw_fbo_service);
+
+  GLuint other_texture_id_client = client_texture_id_ + 1;
+  GLuint other_texture_id_service = kServiceTextureId + 1;
   EXPECT_CALL(*gl_, GenTextures(_, _))
-      .WillOnce(SetArgPointee<1>(kServiceTextureId + 1))
+      .WillOnce(SetArgPointee<1>(other_texture_id_service))
       .RetiresOnSaturation();
-  DoBindTexture(GL_TEXTURE_2D, client_texture_id_ + 1, kServiceTextureId + 1);
+  GenHelper<cmds::GenTexturesImmediate>(other_texture_id_client);
+  DoBindTexture(GL_TEXTURE_2D, other_texture_id_client,
+                other_texture_id_service);
   DoTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE,
                shared_memory_id_, kSharedMemoryOffset);
-  DoFramebufferTexture2D(GL_DRAW_FRAMEBUFFER,
-                         GL_COLOR_ATTACHMENT0,
-                         GL_TEXTURE_2D,
-                         client_texture_id_ + 1,
-                         kServiceTextureId + 1,
-                         0,
-                         GL_NO_ERROR);
+  DoFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                         GL_TEXTURE_2D, other_texture_id_client,
+                         other_texture_id_service, 0, GL_NO_ERROR);
 
   FramebufferManager* framebuffer_manager = GetFramebufferManager();
   Framebuffer* framebuffer =
       framebuffer_manager->GetFramebuffer(client_framebuffer_id_);
   EXPECT_TRUE(framebuffer->IsCleared());
   Framebuffer* other_framebuffer =
-      framebuffer_manager->GetFramebuffer(client_framebuffer_id_ + 1);
+      framebuffer_manager->GetFramebuffer(draw_fbo);
   EXPECT_TRUE(other_framebuffer->IsCleared());
 
   EXPECT_CALL(*gl_, InvalidateFramebuffer(target, count, _))
@@ -3531,7 +4199,7 @@ TEST_P(GLES2DecoderManualInitTest,
   init.extensions = "GL_EXT_discard_framebuffer";
   init.gl_version = "OpenGL ES 2.0";
   init.has_alpha = true;
-  init.bind_generates_resource = true;
+  init.request_alpha = true;
   InitDecoder(init);
 
   const GLuint kFBOClientTextureId = 4100;
@@ -3618,7 +4286,7 @@ TEST_P(GLES2DecoderManualInitTest,
   EXPECT_FALSE(framebuffer_manager->IsComplete(framebuffer));
 }
 
-TEST_P(GLES2DecoderTest, ImplementationReadColorFormatAndType) {
+TEST_P(GLES3DecoderTest, ImplementationReadColorFormatAndType) {
   ClearSharedMemory();
   DoBindTexture(GL_TEXTURE_2D, client_texture_id_, kServiceTextureId);
   DoTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE,
@@ -3642,6 +4310,9 @@ TEST_P(GLES2DecoderTest, ImplementationReadColorFormatAndType) {
       .WillOnce(Return(GL_NO_ERROR))
       .WillOnce(Return(GL_NO_ERROR))
       .RetiresOnSaturation();
+  EXPECT_CALL(*gl_, GetIntegerv(GL_IMPLEMENTATION_COLOR_READ_FORMAT, _))
+      .WillOnce(SetArgPointee<1>(GL_RGBA))
+      .RetiresOnSaturation();
   cmd.Init(GL_IMPLEMENTATION_COLOR_READ_FORMAT,
            shared_memory_id_,
            shared_memory_offset_);
@@ -3653,6 +4324,9 @@ TEST_P(GLES2DecoderTest, ImplementationReadColorFormatAndType) {
   EXPECT_CALL(*gl_, GetError())
       .WillOnce(Return(GL_NO_ERROR))
       .WillOnce(Return(GL_NO_ERROR))
+      .RetiresOnSaturation();
+  EXPECT_CALL(*gl_, GetIntegerv(GL_IMPLEMENTATION_COLOR_READ_TYPE, _))
+      .WillOnce(SetArgPointee<1>(GL_UNSIGNED_BYTE))
       .RetiresOnSaturation();
   cmd.Init(GL_IMPLEMENTATION_COLOR_READ_TYPE,
            shared_memory_id_,
@@ -3723,9 +4397,8 @@ TEST_P(GLES3DecoderTest, InvalidateFramebufferDepthStencilAttachment) {
       GL_FRAMEBUFFER, client_framebuffer_id_, kServiceFramebufferId);
   DoBindRenderbuffer(
       GL_RENDERBUFFER, client_renderbuffer_id_, kServiceRenderbufferId);
-  DoRenderbufferStorage(
-      GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, GL_DEPTH24_STENCIL8,
-      1, 1, GL_NO_ERROR);
+  DoRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, 1, 1,
+                        GL_NO_ERROR);
   DoFramebufferRenderbuffer(
       GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER,
       client_renderbuffer_id_, kServiceRenderbufferId, GL_NO_ERROR);
@@ -3797,7 +4470,7 @@ TEST_P(GLES3DecoderTest, BlitFramebufferDisabledReadBuffer) {
                     kServiceFramebufferId);
   DoBindRenderbuffer(GL_RENDERBUFFER, client_renderbuffer_id_,
                      kServiceRenderbufferId);
-  DoRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, GL_RGBA8, 1, 1, GL_NO_ERROR);
+  DoRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 1, 1, GL_NO_ERROR);
   DoFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                             GL_RENDERBUFFER, client_renderbuffer_id_,
                             kServiceRenderbufferId, GL_NO_ERROR);
@@ -3806,14 +4479,13 @@ TEST_P(GLES3DecoderTest, BlitFramebufferDisabledReadBuffer) {
       .WillOnce(SetArgPointee<1>(kNewServiceId))
       .RetiresOnSaturation();
   GLuint read_fbo = client_framebuffer_id_ + 1;
+  GenHelper<cmds::GenFramebuffersImmediate>(read_fbo);
   DoBindFramebuffer(GL_READ_FRAMEBUFFER, read_fbo, kNewServiceId);
   DoFramebufferRenderbuffer(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                             GL_RENDERBUFFER, client_renderbuffer_id_,
                             kServiceRenderbufferId, GL_NO_ERROR);
   {
-    EXPECT_CALL(*gl_, ReadBuffer(GL_NONE))
-        .Times(1)
-        .RetiresOnSaturation();
+    EXPECT_CALL(*gl_, ReadBuffer(GL_NONE)).Times(1).RetiresOnSaturation();
     cmds::ReadBuffer cmd;
     cmd.Init(GL_NONE);
     EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
@@ -3845,16 +4517,18 @@ TEST_P(GLES3DecoderTest, BlitFramebufferMissingDepthOrStencil) {
   // INVALID_OPERATION.
   DoBindRenderbuffer(GL_RENDERBUFFER, client_renderbuffer_id_,
                      kServiceRenderbufferId);
-  DoRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8,
-                        GL_DEPTH24_STENCIL8, 1, 1, GL_NO_ERROR);
+  DoRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, 1, 1,
+                        GL_NO_ERROR);
+
   GLuint color_renderbuffer = client_renderbuffer_id_ + 1;
   GLuint color_renderbuffer_service = kServiceRenderbufferId + 1;
   EXPECT_CALL(*gl_, GenRenderbuffersEXT(1, _))
       .WillOnce(SetArgPointee<1>(color_renderbuffer_service))
       .RetiresOnSaturation();
+  GenHelper<cmds::GenRenderbuffersImmediate>(color_renderbuffer);
   DoBindRenderbuffer(GL_RENDERBUFFER, color_renderbuffer,
                      color_renderbuffer_service);
-  DoRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, GL_RGBA8, 1, 1, GL_NO_ERROR);
+  DoRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 1, 1, GL_NO_ERROR);
   DoBindFramebuffer(GL_DRAW_FRAMEBUFFER, client_framebuffer_id_,
                     kServiceFramebufferId);
   DoFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
@@ -3871,6 +4545,7 @@ TEST_P(GLES3DecoderTest, BlitFramebufferMissingDepthOrStencil) {
       .WillOnce(SetArgPointee<1>(kNewServiceId))
       .RetiresOnSaturation();
   GLuint color_fbo = client_framebuffer_id_ + 1;
+  GenHelper<cmds::GenFramebuffersImmediate>(color_fbo);
   DoBindFramebuffer(GL_READ_FRAMEBUFFER, color_fbo, kNewServiceId);
   DoFramebufferRenderbuffer(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                             GL_RENDERBUFFER, color_renderbuffer,
@@ -3915,105 +4590,139 @@ TEST_P(GLES3DecoderTest, BlitFramebufferMissingDepthOrStencil) {
   }
 }
 
-class GLES2DecoderTestWithDrawRectangle : public GLES2DecoderTest {
-  void SetUp() override {
-    surface_supports_draw_rectangle_ = true;
-    GLES2DecoderTest::SetUp();
-  }
-};
+TEST_P(GLES3DecoderTest, ClearDepthStencilRenderbufferAttachedAtDepthOnly) {
+  // A DEPTH24_STENCIL8 renderbuffer attached at GL_DEPTH_ATTACHMENT only must
+  // have both its depth and stencil components cleared before being marked as
+  // cleared.
+  DoBindRenderbuffer(GL_RENDERBUFFER, client_renderbuffer_id_,
+                     kServiceRenderbufferId);
+  DoRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, 1, 1,
+                        GL_NO_ERROR);
 
-// Test that the draw offset is correctly honored when SetDrawRectangle is
-// supported.
-TEST_P(GLES2DecoderTestWithDrawRectangle, FramebufferDrawRectangleClear) {
-  EXPECT_CALL(*gl_, Scissor(101, 202, 3, 4)).Times(1).RetiresOnSaturation();
-  cmds::Scissor scissor_cmd;
-  scissor_cmd.Init(1, 2, 3, 4);
-  EXPECT_EQ(error::kNoError, ExecuteCmd(scissor_cmd));
+  GLuint color_renderbuffer = client_renderbuffer_id_ + 1;
+  GLuint color_renderbuffer_service = kServiceRenderbufferId + 1;
+  EXPECT_CALL(*gl_, GenRenderbuffersEXT(1, _))
+      .WillOnce(SetArgPointee<1>(color_renderbuffer_service))
+      .RetiresOnSaturation();
+  GenHelper<cmds::GenRenderbuffersImmediate>(color_renderbuffer);
+  DoBindRenderbuffer(GL_RENDERBUFFER, color_renderbuffer,
+                     color_renderbuffer_service);
+  DoRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 1, 1, GL_NO_ERROR);
 
-  // Scissor and Viewport should be restored to (0,0) offset on when clearing
-  // a framebuffer.
-  {
-    const GLuint kFBOClientTextureId = 4100;
-    const GLuint kFBOServiceTextureId = 4101;
+  DoBindFramebuffer(GL_FRAMEBUFFER, client_framebuffer_id_,
+                    kServiceFramebufferId);
+  DoFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                            GL_RENDERBUFFER, color_renderbuffer,
+                            color_renderbuffer_service, GL_NO_ERROR);
+  DoFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                            GL_RENDERBUFFER, client_renderbuffer_id_,
+                            kServiceRenderbufferId, GL_NO_ERROR);
 
-    // Register a texture id.
-    EXPECT_CALL(*gl_, GenTextures(_, _))
-        .WillOnce(SetArgPointee<1>(kFBOServiceTextureId))
-        .RetiresOnSaturation();
-    GenHelper<cmds::GenTexturesImmediate>(kFBOClientTextureId);
+  // The packed renderbuffer is bound at the stencil point for the duration of
+  // the implicit clear so that glClear writes both components.
+  EXPECT_CALL(*gl_, FramebufferRenderbufferEXT(
+                        GL_DRAW_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
+                        GL_RENDERBUFFER, kServiceRenderbufferId))
+      .Times(1)
+      .RetiresOnSaturation();
+  EXPECT_CALL(
+      *gl_, FramebufferRenderbufferEXT(
+                GL_DRAW_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, 0))
+      .Times(1)
+      .RetiresOnSaturation();
+  SetupExpectationsForFramebufferClearing(
+      GL_DRAW_FRAMEBUFFER,  // target
+      GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
+          GL_STENCIL_BUFFER_BIT,  // clear bits
+      0, 0, 0, 0,                 // color
+      0,                          // stencil
+      1.0f,                       // depth
+      false,                      // scissor test
+      0, 0, 128, 64);
+  SetupExpectationsForApplyingDirtyState(false,   // Framebuffer is RGB
+                                         true,    // Framebuffer has depth
+                                         false,   // Framebuffer has stencil
+                                         0x1111,  // color bits
+                                         true,    // depth mask
+                                         false,   // depth enabled
+                                         0,       // front stencil mask
+                                         0,       // back stencil mask
+                                         false);  // stencil enabled
+  EXPECT_CALL(*gl_, DrawBuffersARB(_, _)).Times(1).RetiresOnSaturation();
+  EXPECT_CALL(*gl_, Clear(GL_COLOR_BUFFER_BIT)).Times(1).RetiresOnSaturation();
 
-    // Setup "render to" texture.
-    DoBindTexture(GL_TEXTURE_2D, kFBOClientTextureId, kFBOServiceTextureId);
-    DoTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE,
-                 0, 0);
-    DoBindFramebuffer(GL_FRAMEBUFFER, client_framebuffer_id_,
-                      kServiceFramebufferId);
-    DoFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                           kFBOClientTextureId, kFBOServiceTextureId, 0,
-                           GL_NO_ERROR);
-    // Set scissor rect and enable GL_SCISSOR_TEST to make sure we re-enable it
-    // and restore the rect again after the clear.
-    DoEnableDisable(GL_SCISSOR_TEST, true);
-    EXPECT_CALL(*gl_, Viewport(0, 0, 128, 64)).Times(1).RetiresOnSaturation();
-    EXPECT_CALL(*gl_, Scissor(1, 2, 3, 4)).Times(1).RetiresOnSaturation();
-
-    // Setup "render from" texture.
-    SetupTexture();
-
-    SetupExpectationsForFramebufferClearing(GL_FRAMEBUFFER,       // target
-                                            GL_COLOR_BUFFER_BIT,  // clear bits
-                                            0, 0, 0,
-                                            0,     // color
-                                            0,     // stencil
-                                            1.0f,  // depth
-                                            true,  // scissor test
-                                            1, 2, 3, 4);
-    SetupExpectationsForApplyingDirtyState(false,   // Framebuffer is RGB
-                                           false,   // Framebuffer has depth
-                                           false,   // Framebuffer has stencil
-                                           0x1111,  // color bits
-                                           false,   // depth mask
-                                           false,   // depth enabled
-                                           0,       // front stencil mask
-                                           0,       // back stencil mask
-                                           false);  // stencil enabled
-
-    EXPECT_CALL(*gl_, Clear(GL_COLOR_BUFFER_BIT))
-        .Times(1)
-        .RetiresOnSaturation();
-
-    cmds::Clear cmd;
-    cmd.Init(GL_COLOR_BUFFER_BIT);
-    EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-    EXPECT_EQ(GL_NO_ERROR, GetGLError());
-  }
-
-  // Check that the draw offset is used when switching to the default
-  // framebuffer and clearing it.
-  {
-    DoBindFramebuffer(GL_FRAMEBUFFER, 0, 0);
-    EXPECT_CALL(*gl_, Clear(GL_COLOR_BUFFER_BIT))
-        .Times(1)
-        .RetiresOnSaturation();
-    SetupExpectationsForColorMask(true, true, true, true);
-    SetupExpectationsForDepthMask(true);
-    SetupExpectationsForStencilMask(0, 0);
-    SetupExpectationsForEnableDisable(GL_DEPTH_TEST, false);
-    SetupExpectationsForEnableDisable(GL_STENCIL_TEST, false);
-    EXPECT_CALL(*gl_, Viewport(100, 200, 128, 64))
-        .Times(1)
-        .RetiresOnSaturation();
-    EXPECT_CALL(*gl_, Scissor(101, 202, 3, 4)).Times(1).RetiresOnSaturation();
-    cmds::Clear cmd;
-    cmd.Init(GL_COLOR_BUFFER_BIT);
-    EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-    EXPECT_EQ(GL_NO_ERROR, GetGLError());
-  }
+  cmds::Clear cmd;
+  cmd.Init(GL_COLOR_BUFFER_BIT);
+  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
 }
 
-INSTANTIATE_TEST_SUITE_P(Service,
-                         GLES2DecoderTestWithDrawRectangle,
-                         ::testing::Bool());
+TEST_P(GLES3DecoderTest, ClearDepthStencilRenderbufferAttachedAtStencilOnly) {
+  // A DEPTH24_STENCIL8 renderbuffer attached at GL_STENCIL_ATTACHMENT only
+  // must have both its depth and stencil components cleared before being
+  // marked as cleared.
+  DoBindRenderbuffer(GL_RENDERBUFFER, client_renderbuffer_id_,
+                     kServiceRenderbufferId);
+  DoRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, 1, 1,
+                        GL_NO_ERROR);
+
+  GLuint color_renderbuffer = client_renderbuffer_id_ + 1;
+  GLuint color_renderbuffer_service = kServiceRenderbufferId + 1;
+  EXPECT_CALL(*gl_, GenRenderbuffersEXT(1, _))
+      .WillOnce(SetArgPointee<1>(color_renderbuffer_service))
+      .RetiresOnSaturation();
+  GenHelper<cmds::GenRenderbuffersImmediate>(color_renderbuffer);
+  DoBindRenderbuffer(GL_RENDERBUFFER, color_renderbuffer,
+                     color_renderbuffer_service);
+  DoRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 1, 1, GL_NO_ERROR);
+
+  DoBindFramebuffer(GL_FRAMEBUFFER, client_framebuffer_id_,
+                    kServiceFramebufferId);
+  DoFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                            GL_RENDERBUFFER, color_renderbuffer,
+                            color_renderbuffer_service, GL_NO_ERROR);
+  DoFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
+                            GL_RENDERBUFFER, client_renderbuffer_id_,
+                            kServiceRenderbufferId, GL_NO_ERROR);
+
+  // The packed renderbuffer is bound at the depth point for the duration of
+  // the implicit clear so that glClear writes both components.
+  EXPECT_CALL(
+      *gl_, FramebufferRenderbufferEXT(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                       GL_RENDERBUFFER, kServiceRenderbufferId))
+      .Times(1)
+      .RetiresOnSaturation();
+  EXPECT_CALL(
+      *gl_, FramebufferRenderbufferEXT(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                       GL_RENDERBUFFER, 0))
+      .Times(1)
+      .RetiresOnSaturation();
+  SetupExpectationsForFramebufferClearing(
+      GL_DRAW_FRAMEBUFFER,  // target
+      GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
+          GL_STENCIL_BUFFER_BIT,  // clear bits
+      0, 0, 0, 0,                 // color
+      0,                          // stencil
+      1.0f,                       // depth
+      false,                      // scissor test
+      0, 0, 128, 64);
+  SetupExpectationsForApplyingDirtyState(false,   // Framebuffer is RGB
+                                         false,   // Framebuffer has depth
+                                         true,    // Framebuffer has stencil
+                                         0x1111,  // color bits
+                                         false,   // depth mask
+                                         false,   // depth enabled
+                                         0xFFFFFFFFU,  // front stencil mask
+                                         0xFFFFFFFFU,  // back stencil mask
+                                         false);       // stencil enabled
+  EXPECT_CALL(*gl_, DrawBuffersARB(_, _)).Times(1).RetiresOnSaturation();
+  EXPECT_CALL(*gl_, Clear(GL_COLOR_BUFFER_BIT)).Times(1).RetiresOnSaturation();
+
+  cmds::Clear cmd;
+  cmd.Init(GL_COLOR_BUFFER_BIT);
+  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
+}
 
 TEST_P(GLES2DecoderManualInitTest, MESAFramebufferFlipYExtensionEnabled) {
   InitState init;
@@ -4025,7 +4734,7 @@ TEST_P(GLES2DecoderManualInitTest, MESAFramebufferFlipYExtensionEnabled) {
   EXPECT_TRUE(feature_info()->validators()->framebuffer_parameter.IsValid(
       GL_FRAMEBUFFER_FLIP_Y_MESA));
 
-  EXPECT_CALL(*gl_, FramebufferParameteri(_, _, _))
+  EXPECT_CALL(*gl_, FramebufferParameteriMESA(_, _, _))
       .Times(1)
       .RetiresOnSaturation();
 
@@ -4046,7 +4755,7 @@ TEST_P(GLES2DecoderManualInitTest, MESAFramebufferFlipYExtensionDisabled) {
   EXPECT_FALSE(feature_info()->validators()->framebuffer_parameter.IsValid(
       GL_FRAMEBUFFER_FLIP_Y_MESA));
 
-  EXPECT_CALL(*gl_, FramebufferParameteri(_, _, _))
+  EXPECT_CALL(*gl_, FramebufferParameteriMESA(_, _, _))
       .Times(0)
       .RetiresOnSaturation();
 
@@ -4058,9 +4767,423 @@ TEST_P(GLES2DecoderManualInitTest, MESAFramebufferFlipYExtensionDisabled) {
   EXPECT_EQ(GL_NO_ERROR, GetGLError());
 }
 
-// TODO(gman): PixelStorei
+TEST_P(GLES3DecoderManualInitTest,
+       FinishBeforeBlitFramebufferMultiAttachmentWorkaround) {
+  InitState init;
+  init.gl_version = "OpenGL ES 3.0";
+  init.context_type = CONTEXT_TYPE_OPENGLES3;
+  GpuDriverBugWorkarounds workarounds;
+  workarounds.finish_before_blit_framebuffer_multi_attachment = true;
+  InitDecoderWithWorkarounds(init, workarounds);
 
-// TODO(gman): SwapBuffers
+  const GLuint kTex0Client = client_texture_id_;
+  const GLuint kTex0Service = kServiceTextureId;
+  const GLuint kTex1Client = client_texture_id_ + 1;
+  const GLuint kTex1Service = kServiceTextureId + 1;
+  const GLuint kReadTexClient = client_texture_id_ + 2;
+  const GLuint kReadTexService = kServiceTextureId + 2;
+
+  const GLuint kDrawFboClient = client_framebuffer_id_;
+  const GLuint kDrawFboService = kServiceFramebufferId;
+  const GLuint kReadFboClient = client_framebuffer_id_ + 1;
+  const GLuint kReadFboService = kServiceFramebufferId + 1;
+
+  // Create Tex0 (16x16 RGBA8)
+  DoBindTexture(GL_TEXTURE_2D, kTex0Client, kTex0Service);
+  DoTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+               shared_memory_id_, kSharedMemoryOffset);
+
+  // Create Tex1 (16x16 RGBA8)
+  EXPECT_CALL(*gl_, GenTextures(1, _))
+      .WillOnce(SetArgPointee<1>(kTex1Service))
+      .RetiresOnSaturation();
+  GenHelper<cmds::GenTexturesImmediate>(kTex1Client);
+  DoBindTexture(GL_TEXTURE_2D, kTex1Client, kTex1Service);
+  DoTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+               shared_memory_id_, kSharedMemoryOffset);
+
+  // Create ReadTex (16x16 RGBA8)
+  EXPECT_CALL(*gl_, GenTextures(1, _))
+      .WillOnce(SetArgPointee<1>(kReadTexService))
+      .RetiresOnSaturation();
+  GenHelper<cmds::GenTexturesImmediate>(kReadTexClient);
+  DoBindTexture(GL_TEXTURE_2D, kReadTexClient, kReadTexService);
+  DoTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+               shared_memory_id_, kSharedMemoryOffset);
+
+  // Setup Draw FBO with 2 color attachments: COLOR_ATTACHMENT0 and
+  // COLOR_ATTACHMENT1
+  DoBindFramebuffer(GL_DRAW_FRAMEBUFFER, kDrawFboClient, kDrawFboService);
+  DoFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                         GL_TEXTURE_2D, kTex0Client, kTex0Service, 0,
+                         GL_NO_ERROR);
+  DoFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
+                         GL_TEXTURE_2D, kTex1Client, kTex1Service, 0,
+                         GL_NO_ERROR);
+
+  // Setup Read FBO with COLOR_ATTACHMENT0
+  EXPECT_CALL(*gl_, GenFramebuffersEXT(1, _))
+      .WillOnce(SetArgPointee<1>(kReadFboService))
+      .RetiresOnSaturation();
+  GenHelper<cmds::GenFramebuffersImmediate>(kReadFboClient);
+  DoBindFramebuffer(GL_READ_FRAMEBUFFER, kReadFboClient, kReadFboService);
+  DoFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                         GL_TEXTURE_2D, kReadTexClient, kReadTexService, 0,
+                         GL_NO_ERROR);
+
+  EXPECT_CALL(*gl_, CheckFramebufferStatusEXT(GL_DRAW_FRAMEBUFFER))
+      .WillRepeatedly(Return(GL_FRAMEBUFFER_COMPLETE));
+  EXPECT_CALL(*gl_, CheckFramebufferStatusEXT(GL_READ_FRAMEBUFFER))
+      .WillRepeatedly(Return(GL_FRAMEBUFFER_COMPLETE));
+
+  // Mark all attachments as cleared so framebuffer is complete
+  FramebufferManager* framebuffer_manager = GetFramebufferManager();
+  Framebuffer* draw_fbo = framebuffer_manager->GetFramebuffer(kDrawFboClient);
+  ASSERT_TRUE(draw_fbo != nullptr);
+  framebuffer_manager->MarkAttachmentsAsCleared(
+      draw_fbo, group().renderbuffer_manager(), group().texture_manager());
+  EXPECT_TRUE(draw_fbo->IsCleared());
+
+  Framebuffer* read_fbo = framebuffer_manager->GetFramebuffer(kReadFboClient);
+  ASSERT_TRUE(read_fbo != nullptr);
+  framebuffer_manager->MarkAttachmentsAsCleared(
+      read_fbo, group().renderbuffer_manager(), group().texture_manager());
+  EXPECT_TRUE(read_fbo->IsCleared());
+
+  // 1) Blit with 2 color attachments on draw FBO: should trigger glFinish
+  // before glBlitFramebuffer.
+  {
+    ::testing::InSequence sequence;
+    EXPECT_CALL(*gl_, Finish()).Times(1).RetiresOnSaturation();
+    EXPECT_CALL(*gl_, BlitFramebuffer(0, 0, 16, 16, 0, 0, 16, 16,
+                                      GL_COLOR_BUFFER_BIT, GL_NEAREST))
+        .Times(1)
+        .RetiresOnSaturation();
+
+    cmds::BlitFramebufferCHROMIUM cmd;
+    cmd.Init(0, 0, 16, 16, 0, 0, 16, 16, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+    EXPECT_EQ(GL_NO_ERROR, GetGLError());
+  }
+
+  // 2) Detach COLOR_ATTACHMENT1, so draw FBO has only 1 color attachment
+  // (COLOR_ATTACHMENT0) with base_level == 0. No glFinish should be called.
+  DoFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
+                         GL_TEXTURE_2D, 0, 0, 0, GL_NO_ERROR);
+  {
+    EXPECT_CALL(*gl_, Finish()).Times(0);
+    EXPECT_CALL(*gl_, BlitFramebuffer(0, 0, 16, 16, 0, 0, 16, 16,
+                                      GL_COLOR_BUFFER_BIT, GL_NEAREST))
+        .Times(1)
+        .RetiresOnSaturation();
+
+    cmds::BlitFramebufferCHROMIUM cmd;
+    cmd.Init(0, 0, 16, 16, 0, 0, 16, 16, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+    EXPECT_EQ(GL_NO_ERROR, GetGLError());
+  }
+
+  // 3) Set base_level = 1 on Tex0 (COLOR_ATTACHMENT0).
+  // Draw FBO has 1 color attachment, but its texture has base_level > 0.
+  // Should trigger glFinish before glBlitFramebuffer.
+  DoBindTexture(GL_TEXTURE_2D, kTex0Client, kTex0Service);
+  DoTexImage2D(GL_TEXTURE_2D, 1, GL_RGBA8, 8, 8, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+               shared_memory_id_, kSharedMemoryOffset);
+  framebuffer_manager->MarkAttachmentsAsCleared(
+      draw_fbo, group().renderbuffer_manager(), group().texture_manager());
+  cmds::TexParameteri param_cmd;
+  param_cmd.Init(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 1);
+  EXPECT_CALL(*gl_, TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 1))
+      .Times(1)
+      .RetiresOnSaturation();
+  EXPECT_EQ(error::kNoError, ExecuteCmd(param_cmd));
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
+
+  {
+    ::testing::InSequence sequence;
+    EXPECT_CALL(*gl_, Finish()).Times(1).RetiresOnSaturation();
+    EXPECT_CALL(*gl_, BlitFramebuffer(0, 0, 16, 16, 0, 0, 16, 16,
+                                      GL_COLOR_BUFFER_BIT, GL_NEAREST))
+        .Times(1)
+        .RetiresOnSaturation();
+
+    cmds::BlitFramebufferCHROMIUM cmd;
+    cmd.Init(0, 0, 16, 16, 0, 0, 16, 16, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+    EXPECT_EQ(GL_NO_ERROR, GetGLError());
+  }
+}
+
+TEST_P(GLES3DecoderManualInitTest,
+       ScopedBufferReattacherRestoresEmulatedBackbuffer) {
+  InitState init;
+  init.gl_version = "OpenGL ES 3.0";
+  init.context_type = CONTEXT_TYPE_OPENGLES3;
+  GpuDriverBugWorkarounds workarounds;
+  workarounds.reattach_fbo_depth_stencil_on_reallocation = true;
+  InitDecoderWithWorkarounds(init, workarounds);
+
+  const GLuint kEmulatedBackbufferServiceId = 7;
+  scoped_refptr<GLSurfaceMock> other_surface(new GLSurfaceMock);
+  EXPECT_CALL(*other_surface.get(), GetBackingFramebufferObject())
+      .WillRepeatedly(Return(kEmulatedBackbufferServiceId));
+  EXPECT_CALL(*other_surface.get(), GetSize())
+      .WillRepeatedly(Return(gfx::Size(kBackBufferWidth, kBackBufferHeight)));
+  EXPECT_CALL(*gl_, BindFramebufferEXT(GL_READ_FRAMEBUFFER,
+                                       kEmulatedBackbufferServiceId))
+      .Times(1)
+      .RetiresOnSaturation();
+  EXPECT_CALL(*gl_, BindFramebufferEXT(GL_DRAW_FRAMEBUFFER,
+                                       kEmulatedBackbufferServiceId))
+      .Times(1)
+      .RetiresOnSaturation();
+  decoder_->SetSurface(other_surface);
+
+  // Attach depth texture to an FBO, then bind client FBO 0 (emulated
+  // backbuffer).
+  DoBindTexture(GL_TEXTURE_2D, client_texture_id_, kServiceTextureId);
+  DoTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT16, 4, 4, 0,
+               GL_DEPTH_COMPONENT, GL_UNSIGNED_SHORT, 0, 0);
+  DoBindFramebuffer(GL_FRAMEBUFFER, client_framebuffer_id_,
+                    kServiceFramebufferId);
+  DoFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D,
+                         client_texture_id_, kServiceTextureId, 0, GL_NO_ERROR);
+  DoBindFramebuffer(GL_FRAMEBUFFER, 0, kEmulatedBackbufferServiceId);
+
+  // Case 1: Both read and draw FBOs are tracked-null (client FBO 0).
+  // Reallocating the depth texture must restore kEmulatedBackbufferServiceId
+  // (not raw FBO 0) in both Initialize() and ~ScopedBufferReattacher().
+  // This is testing the implementation of cmds::TexImage2D.
+  {
+    ::testing::InSequence sequence;
+    // Initialize() detaches from kServiceFramebufferId and restores backbuffer.
+    EXPECT_CALL(*gl_, BindFramebufferEXT(GL_FRAMEBUFFER, kServiceFramebufferId))
+        .Times(1)
+        .RetiresOnSaturation();
+    EXPECT_CALL(*gl_,
+                FramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                        GL_TEXTURE_2D, 0, 0))
+        .Times(1)
+        .RetiresOnSaturation();
+    EXPECT_CALL(
+        *gl_, BindFramebufferEXT(GL_FRAMEBUFFER, kEmulatedBackbufferServiceId))
+        .Times(1)
+        .RetiresOnSaturation();
+
+    // TexImage2D executes.
+    EXPECT_CALL(*gl_, GetError())
+        .WillOnce(Return(GL_NO_ERROR))
+        .RetiresOnSaturation();
+    EXPECT_CALL(*gl_, TexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT16, 8, 8,
+                                 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_SHORT, _))
+        .Times(1)
+        .RetiresOnSaturation();
+    EXPECT_CALL(*gl_, GetError())
+        .WillOnce(Return(GL_NO_ERROR))
+        .RetiresOnSaturation();
+
+    // ~ScopedBufferReattacher() reattaches and restores backbuffer.
+    EXPECT_CALL(*gl_, BindFramebufferEXT(GL_FRAMEBUFFER, kServiceFramebufferId))
+        .Times(1)
+        .RetiresOnSaturation();
+    EXPECT_CALL(*gl_,
+                FramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                        GL_TEXTURE_2D, kServiceTextureId, 0))
+        .Times(1)
+        .RetiresOnSaturation();
+    EXPECT_CALL(
+        *gl_, BindFramebufferEXT(GL_FRAMEBUFFER, kEmulatedBackbufferServiceId))
+        .Times(1)
+        .RetiresOnSaturation();
+
+    cmds::TexImage2D cmd;
+    cmd.Init(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT16, 8, 8, GL_DEPTH_COMPONENT,
+             GL_UNSIGNED_SHORT, 0, 0);
+    EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+    EXPECT_EQ(GL_NO_ERROR, GetGLError());
+  }
+
+  // Case 2: Separate read and draw bindings (read = client FBO 0, draw = user
+  // FBO). Must restore GL_READ_FRAMEBUFFER to kEmulatedBackbufferServiceId and
+  // GL_DRAW_FRAMEBUFFER to kServiceFramebufferId.
+  // This is testing the implementation of cmds::TexImage2D.
+  DoBindFramebuffer(GL_DRAW_FRAMEBUFFER, client_framebuffer_id_,
+                    kServiceFramebufferId);
+  {
+    ::testing::InSequence sequence;
+    EXPECT_CALL(*gl_, BindFramebufferEXT(GL_FRAMEBUFFER, kServiceFramebufferId))
+        .Times(1)
+        .RetiresOnSaturation();
+    EXPECT_CALL(*gl_,
+                FramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                        GL_TEXTURE_2D, 0, 0))
+        .Times(1)
+        .RetiresOnSaturation();
+    EXPECT_CALL(*gl_, BindFramebufferEXT(GL_READ_FRAMEBUFFER,
+                                         kEmulatedBackbufferServiceId))
+        .Times(1)
+        .RetiresOnSaturation();
+    EXPECT_CALL(*gl_,
+                BindFramebufferEXT(GL_DRAW_FRAMEBUFFER, kServiceFramebufferId))
+        .Times(1)
+        .RetiresOnSaturation();
+
+    EXPECT_CALL(*gl_, GetError())
+        .WillOnce(Return(GL_NO_ERROR))
+        .RetiresOnSaturation();
+    EXPECT_CALL(*gl_, TexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT16, 4, 4,
+                                 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_SHORT, _))
+        .Times(1)
+        .RetiresOnSaturation();
+    EXPECT_CALL(*gl_, GetError())
+        .WillOnce(Return(GL_NO_ERROR))
+        .RetiresOnSaturation();
+
+    EXPECT_CALL(*gl_, BindFramebufferEXT(GL_FRAMEBUFFER, kServiceFramebufferId))
+        .Times(1)
+        .RetiresOnSaturation();
+    EXPECT_CALL(*gl_,
+                FramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                        GL_TEXTURE_2D, kServiceTextureId, 0))
+        .Times(1)
+        .RetiresOnSaturation();
+    EXPECT_CALL(*gl_, BindFramebufferEXT(GL_READ_FRAMEBUFFER,
+                                         kEmulatedBackbufferServiceId))
+        .Times(1)
+        .RetiresOnSaturation();
+    EXPECT_CALL(*gl_,
+                BindFramebufferEXT(GL_DRAW_FRAMEBUFFER, kServiceFramebufferId))
+        .Times(1)
+        .RetiresOnSaturation();
+
+    cmds::TexImage2D cmd;
+    cmd.Init(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT16, 4, 4, GL_DEPTH_COMPONENT,
+             GL_UNSIGNED_SHORT, 0, 0);
+    EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+    EXPECT_EQ(GL_NO_ERROR, GetGLError());
+  }
+}
+
+TEST_P(GLES3DecoderManualInitTest,
+       ScopedBufferReattacherCopyTexImage2DPreservesBackbufferBinding) {
+  InitState init;
+  init.gl_version = "OpenGL ES 3.0";
+  init.context_type = CONTEXT_TYPE_OPENGLES3;
+  init.has_alpha = true;
+  GpuDriverBugWorkarounds workarounds;
+  workarounds.reattach_texture_to_fbo_after_layer_increase = true;
+  InitDecoderWithWorkarounds(init, workarounds);
+
+  const GLuint kEmulatedBackbufferServiceId = 7;
+  scoped_refptr<GLSurfaceMock> other_surface(new GLSurfaceMock);
+  EXPECT_CALL(*other_surface.get(), GetBackingFramebufferObject())
+      .WillRepeatedly(Return(kEmulatedBackbufferServiceId));
+  EXPECT_CALL(*other_surface.get(), GetSize())
+      .WillRepeatedly(Return(gfx::Size(kBackBufferWidth, kBackBufferHeight)));
+  EXPECT_CALL(*gl_, BindFramebufferEXT(GL_READ_FRAMEBUFFER,
+                                       kEmulatedBackbufferServiceId))
+      .Times(1)
+      .RetiresOnSaturation();
+  EXPECT_CALL(*gl_, BindFramebufferEXT(GL_DRAW_FRAMEBUFFER,
+                                       kEmulatedBackbufferServiceId))
+      .Times(1)
+      .RetiresOnSaturation();
+  decoder_->SetSurface(other_surface);
+
+  // Attach a cube map texture face to an unbound FBO.
+  DoBindTexture(GL_TEXTURE_CUBE_MAP, client_texture_id_, kServiceTextureId);
+  DoTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X, 0, GL_RGBA, 4, 4, 0, GL_RGBA,
+               GL_UNSIGNED_BYTE, 0, 0);
+  DoBindFramebuffer(GL_FRAMEBUFFER, client_framebuffer_id_,
+                    kServiceFramebufferId);
+  DoFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                         GL_TEXTURE_CUBE_MAP_POSITIVE_X, client_texture_id_,
+                         kServiceTextureId, 0, GL_NO_ERROR);
+  DoBindFramebuffer(GL_FRAMEBUFFER, 0, kEmulatedBackbufferServiceId);
+
+  // Invalidate client FBO 0 so that backbuffer_needs_clear_bits_ is armed.
+  const GLsizei count = 1;
+  GLenum attachments[] = {GL_COLOR_EXT};
+  EXPECT_CALL(*gl_, InvalidateFramebuffer(GL_FRAMEBUFFER, count, _)).Times(0);
+  auto& invalidate_cmd =
+      *GetImmediateAs<cmds::InvalidateFramebufferImmediate>();
+  invalidate_cmd.Init(GL_FRAMEBUFFER, count, attachments);
+  EXPECT_EQ(error::kNoError,
+            ExecuteImmediateCmd(invalidate_cmd, sizeof(attachments)));
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
+
+  // Calling CopyTexImage2D on the cube map face triggers ScopedBufferReattacher
+  // in Initialize(). It must restore kEmulatedBackbufferServiceId before
+  // CheckBoundReadFramebufferValid runs the lazy backbuffer security clear.
+  {
+    ::testing::InSequence sequence;
+    // 1. Initialize() detaches from kServiceFramebufferId and restores
+    // kEmulatedBackbufferServiceId.
+    EXPECT_CALL(*gl_, BindFramebufferEXT(GL_FRAMEBUFFER, kServiceFramebufferId))
+        .Times(1)
+        .RetiresOnSaturation();
+    EXPECT_CALL(*gl_,
+                FramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                        GL_TEXTURE_CUBE_MAP_POSITIVE_X, 0, 0))
+        .Times(1)
+        .RetiresOnSaturation();
+    EXPECT_CALL(
+        *gl_, BindFramebufferEXT(GL_FRAMEBUFFER, kEmulatedBackbufferServiceId))
+        .Times(1)
+        .RetiresOnSaturation();
+
+    // 2. CheckBoundReadFramebufferValid performs the lazy backbuffer clear
+    // (while kEmulatedBackbufferServiceId is bound).
+    EXPECT_CALL(*gl_, ClearColor(0, 0, 0, 1.0f)).Times(1).RetiresOnSaturation();
+    SetupExpectationsForColorMask(true, true, true, true);
+    EXPECT_CALL(*gl_, ClearStencil(0)).Times(1).RetiresOnSaturation();
+    SetupExpectationsForStencilMask(GLES2Decoder::kDefaultStencilMask,
+                                    GLES2Decoder::kDefaultStencilMask);
+    EXPECT_CALL(*gl_, ClearDepth(1.0f)).Times(1).RetiresOnSaturation();
+    SetupExpectationsForDepthMask(true);
+    SetupExpectationsForEnableDisable(GL_SCISSOR_TEST, false);
+    EXPECT_CALL(*gl_, Clear(GL_COLOR_BUFFER_BIT))
+        .Times(1)
+        .RetiresOnSaturation();
+    SetupExpectationsForRestoreClearState(0.0f, 0.0f, 0.0f, 0.0f, 0, 1.0f,
+                                          false, 0, 0, kBackBufferWidth,
+                                          kBackBufferHeight);
+
+    // 3. CopyTexImage2D executes against the backbuffer.
+    EXPECT_CALL(*gl_, GetError())
+        .WillOnce(Return(GL_NO_ERROR))
+        .RetiresOnSaturation();
+    EXPECT_CALL(*gl_, CopyTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X, 0,
+                                     GL_RGBA8, 0, 0, 4, 4, 0))
+        .Times(1)
+        .RetiresOnSaturation();
+    EXPECT_CALL(*gl_, GetError())
+        .WillOnce(Return(GL_NO_ERROR))
+        .RetiresOnSaturation();
+
+    // 4. ~ScopedBufferReattacher() reattaches and restores
+    // kEmulatedBackbufferServiceId.
+    EXPECT_CALL(*gl_, BindFramebufferEXT(GL_FRAMEBUFFER, kServiceFramebufferId))
+        .Times(1)
+        .RetiresOnSaturation();
+    EXPECT_CALL(*gl_, FramebufferTexture2DEXT(
+                          GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                          GL_TEXTURE_CUBE_MAP_POSITIVE_X, kServiceTextureId, 0))
+        .Times(1)
+        .RetiresOnSaturation();
+    EXPECT_CALL(
+        *gl_, BindFramebufferEXT(GL_FRAMEBUFFER, kEmulatedBackbufferServiceId))
+        .Times(1)
+        .RetiresOnSaturation();
+
+    cmds::CopyTexImage2D cmd;
+    cmd.Init(GL_TEXTURE_CUBE_MAP_POSITIVE_X, 0, GL_RGBA, 0, 0, 4, 4);
+    EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+    EXPECT_EQ(GL_NO_ERROR, GetGLError());
+  }
+}
+
+// TODO(gman): PixelStorei
 
 }  // namespace gles2
 }  // namespace gpu

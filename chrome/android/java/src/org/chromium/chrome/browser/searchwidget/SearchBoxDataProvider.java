@@ -1,41 +1,57 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.searchwidget;
 
-import android.content.res.Resources;
+import android.content.Context;
 
 import androidx.annotation.ColorInt;
 import androidx.annotation.ColorRes;
 
-import org.chromium.base.library_loader.LibraryLoader;
+import org.chromium.base.supplier.NonNullObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider.ControlsPosition;
+import org.chromium.chrome.browser.omnibox.FuseboxSessionState;
 import org.chromium.chrome.browser.omnibox.LocationBarDataProvider;
 import org.chromium.chrome.browser.omnibox.NewTabPageDelegate;
 import org.chromium.chrome.browser.omnibox.UrlBarData;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityPreferencesManager;
 import org.chromium.components.browser_ui.styles.ChromeColors;
-import org.chromium.components.metrics.OmniboxEventProtos.OmniboxEventProto.PageClassification;
+import org.chromium.components.metrics.OmniboxEventProtosIntDef.PageClassification;
+import org.chromium.components.security_state.ConnectionMaliciousContentStatus;
 import org.chromium.components.security_state.ConnectionSecurityLevel;
+import org.chromium.url.GURL;
 
-class SearchBoxDataProvider implements LocationBarDataProvider {
-    private final @ColorInt int mPrimaryColor;
-    private Tab mTab;
+@NullMarked
+public class SearchBoxDataProvider implements LocationBarDataProvider {
+    private final NonNullObservableSupplier<@ControlsPosition Integer> mToolbarPosition =
+            ObservableSuppliers.createNonNull(ControlsPosition.TOP);
+    private final FuseboxSessionState mFuseboxSessionState = new FuseboxSessionState();
+
+    private @PageClassification int mPageClassification;
+    private @ColorInt int mPrimaryColor;
+    private @Nullable GURL mGurl;
+    private boolean mIsIncognito;
 
     /**
-     * @param resources The {@link Resources} for accessing colors.
+     * Initialize this instance of the SearchBoxDataProvider.
+     *
+     * <p>Note: this is called only once during the lifetime of the SearchActivity, and is not
+     * invoked when SearchActivity receives a new Intent.
+     *
+     * @param context current context
      */
-    SearchBoxDataProvider(Resources resources) {
-        mPrimaryColor = ChromeColors.getPrimaryBackgroundColor(resources, isIncognito());
+    public void initialize(Context context, boolean isIncognito) {
+        mPrimaryColor = ChromeColors.getPrimaryBackgroundColor(context, isIncognito);
+        mIsIncognito = isIncognito;
     }
 
-    /**
-     * Called when native library is loaded and a tab has been initialized.
-     * @param tab The tab to use.
-     */
-    public void onNativeLibraryReady(Tab tab) {
-        assert LibraryLoader.getInstance().isInitialized();
-        mTab = tab;
+    public void destroy() {
+        mFuseboxSessionState.destroy();
     }
 
     @Override
@@ -45,12 +61,16 @@ class SearchBoxDataProvider implements LocationBarDataProvider {
 
     @Override
     public boolean isIncognito() {
-        if (mTab == null) return false;
-        return mTab.isIncognito();
+        return mIsIncognito;
     }
 
     @Override
-    public boolean isInOverviewAndShowingOmnibox() {
+    public boolean isIncognitoBranded() {
+        return mIsIncognito;
+    }
+
+    @Override
+    public boolean isOffTheRecord() {
         return false;
     }
 
@@ -65,13 +85,18 @@ class SearchBoxDataProvider implements LocationBarDataProvider {
     }
 
     @Override
-    public Tab getTab() {
-        return mTab;
+    public @Nullable Tab getTab() {
+        return null;
     }
 
     @Override
     public boolean hasTab() {
-        return mTab != null;
+        return false;
+    }
+
+    @Override
+    public FuseboxSessionState getFuseboxSessionState() {
+        return mFuseboxSessionState;
     }
 
     @Override
@@ -96,8 +121,12 @@ class SearchBoxDataProvider implements LocationBarDataProvider {
     public void removeObserver(Observer observer) {}
 
     @Override
-    public String getCurrentUrl() {
-        return SearchWidgetProvider.getDefaultSearchEngineUrl();
+    public GURL getCurrentGurl() {
+        if (GURL.isEmptyOrInvalid(mGurl)) {
+            mGurl = SearchActivityPreferencesManager.getCurrent().searchEngineUrl;
+        }
+
+        return mGurl;
     }
 
     @Override
@@ -111,8 +140,13 @@ class SearchBoxDataProvider implements LocationBarDataProvider {
     }
 
     @Override
-    public int getPageClassification(boolean isFocusedFromFakebox) {
-        return PageClassification.ANDROID_SEARCH_WIDGET_VALUE;
+    public @ConnectionMaliciousContentStatus int getMaliciousContentStatus() {
+        return ConnectionMaliciousContentStatus.NONE;
+    }
+
+    @Override
+    public @PageClassification int getPageClassification(boolean prefetch) {
+        return mPageClassification;
     }
 
     @Override
@@ -128,5 +162,22 @@ class SearchBoxDataProvider implements LocationBarDataProvider {
     @Override
     public int getSecurityIconContentDescriptionResourceId() {
         return 0;
+    }
+
+    public void setPageClassification(@PageClassification int pageClassification) {
+        mPageClassification = pageClassification;
+    }
+
+    void setCurrentUrl(@Nullable GURL url) {
+        mGurl = url;
+    }
+
+    void setIsIncognitoForTesting(boolean isIncognito) {
+        mIsIncognito = isIncognito;
+    }
+
+    @Override
+    public NonNullObservableSupplier<@ControlsPosition Integer> getToolbarPositionSupplier() {
+        return mToolbarPosition;
     }
 }

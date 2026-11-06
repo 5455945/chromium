@@ -1,22 +1,25 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_POLICY_CORE_BROWSER_POLICY_CONVERSIONS_CLIENT_H_
 #define COMPONENTS_POLICY_CORE_BROWSER_POLICY_CONVERSIONS_CLIENT_H_
 
+#include <memory>
+#include <optional>
 #include <set>
 #include <string>
+#include <vector>
 
+#include "base/containers/flat_map.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/values.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/policy/core/browser/policy_conversions.h"
 #include "components/policy/core/common/schema.h"
 #include "components/policy/policy_export.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "components/policy/resources/webui/mojom/policy.mojom-forward.h"
 
 namespace policy {
 
@@ -58,40 +61,56 @@ class POLICY_EXPORT PolicyConversionsClient {
   // Set to get all user scope policies.
   // Enabled by default.
   void EnableUserPolicies(bool enabled);
+  // Set to drop the policies of which value is a default one set by the policy
+  // provider. Disabled by default.
+  void SetDropDefaultValues(bool enabled);
+  // Set to show policy values set by machine scope sources including CBCM or
+  // GPO. When set to false, policies are still included, but values and errors
+  // will be hidden. Used when caller don't have permission to view those
+  // values. Enabled by default.
+  void EnableShowMachineValues(bool enabled);
 
-#if defined(OS_WIN) && BUILDFLAG(GOOGLE_CHROME_BRANDING)
-  // Sets the updater policies.
-  void SetUpdaterPolicies(std::unique_ptr<PolicyMap> policies);
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+  base::DictValue ConvertUpdaterPolicies(
+      PolicyMap updater_policies,
+      std::optional<PolicyConversions::PolicyToSchemaMap>
+          updater_policy_schemas);
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 
-  // Returns true if this client is able to return information on the updater's
-  // policies.
-  bool HasUpdaterPolicies() const;
-  base::Value GetUpdaterPolicies();
-
-  // Sets the updater policy schemas.
-  void SetUpdaterPolicySchemas(PolicyConversions::PolicyToSchemaMap schemas);
-#endif  // defined(OS_WIN) && BUILDFLAG(GOOGLE_CHROME_BRANDING)
-
-  // Converts the given |value| to JSON, respecting the configuration
+  // Converts the given `value` to JSON, respecting the configuration
   // preferences that were set on this client.
   std::string ConvertValueToJSON(const base::Value& value) const;
 
-  // Returns policies for Chrome browser.  Must only be called if
-  // |HasUserPolicies()| returns true.
-  base::Value GetChromePolicies();
+  // Returns policies for Chrome browser. Must only be called if
+  // `HasUserPolicies()` returns true.
+  base::DictValue GetChromePolicies();
+  // Mojo equivalent of `GetChromePolicies()`, keyed by policy name. See
+  // `GetPolicyMojo()` for how the output differs from the `base::Value` one.
+  base::flat_map<std::string, mojom::PolicyPtr> GetChromePoliciesMojo();
+
+  // Returns precedence-related policies for Chrome browser. Must only be called
+  // if `HasUserPolicies()` returns true.
+  base::DictValue GetPrecedencePolicies();
+  // Mojo equivalent of `GetPrecedencePolicies()`, keyed by policy name.
+  base::flat_map<std::string, mojom::PolicyPtr> GetPrecedencePoliciesMojo();
+
+  // Returns an array containing the ordered precedence strings.
+  base::ListValue GetPrecedenceOrder();
+  // Mojo equivalent of `GetPrecedenceOrder()`.
+  std::vector<std::string> GetPrecedenceOrderMojo();
 
   // Returns true if this client is able to return information on user
   // policies.
   virtual bool HasUserPolicies() const = 0;
 
-  // Returns policies for Chrome extensions.
-  virtual base::Value GetExtensionPolicies(PolicyDomain policy_domain) = 0;
+  // Returns policies for Chrome extensions in a list of base::DictValue.
+  virtual base::ListValue GetExtensionPolicies(PolicyDomain policy_domain) = 0;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Returns policies for ChromeOS device.
-  virtual base::Value GetDeviceLocalAccountPolicies() = 0;
+  virtual base::ListValue GetDeviceLocalAccountPolicies() = 0;
   // Returns device specific information if this device is enterprise managed.
-  virtual base::Value GetIdentityFields() = 0;
+  virtual base::DictValue GetIdentityFields() = 0;
 #endif
 
   // Returns the embedder's PolicyService.
@@ -103,53 +122,6 @@ class POLICY_EXPORT PolicyConversionsClient {
   // Returns the embedder's ConfigurationPolicyHandlerList.
   virtual const ConfigurationPolicyHandlerList* GetHandlerList() const = 0;
 
- protected:
-  // Returns a copy of |value|. If necessary (which is specified by
-  // |convert_values_enabled_|), converts some values to a representation that
-  // i18n_template.js will display.
-  base::Value CopyAndMaybeConvert(const base::Value& value,
-                                  const absl::optional<Schema>& schema) const;
-
-  // Creates a description of the policy |policy_name| using |policy| and the
-  // optional errors in |errors| to determine the status of each policy.
-  // |known_policy_schemas| contains |Schema|s for known policies in the same
-  // policy namespace of |map|. |deprecated_policies| holds deprecated policies.
-  // |future_policies| holds unreleased policies. A policy without an entry in
-  // |known_policy_schemas| is an unknown policy.
-  base::Value GetPolicyValue(
-      const std::string& policy_name,
-      const PolicyMap::Entry& policy,
-      const PoliciesSet& deprecated_policies,
-      const PoliciesSet& future_policies,
-      PolicyErrorMap* errors,
-      const absl::optional<PolicyConversions::PolicyToSchemaMap>&
-          known_policy_schemas) const;
-
-  // Returns a description of each policy in |map| as Value, using the
-  // optional errors in |errors| to determine the status of each policy.
-  // |known_policy_schemas| contains |Schema|s for known policies in the same
-  // policy namespace of |map|. |deprecated_policies| holds deprecated policies.
-  // |future_policies| holds unreleased policies. A policy in |map| but without
-  // an entry |known_policy_schemas| is an unknown policy.
-  base::Value GetPolicyValues(
-      const PolicyMap& map,
-      PolicyErrorMap* errors,
-      const PoliciesSet& deprecated_policies,
-      const PoliciesSet& future_policies,
-      const absl::optional<PolicyConversions::PolicyToSchemaMap>&
-          known_policy_schemas) const;
-
-  // Returns the Schema for |policy_name| if that policy is known. If the policy
-  // is unknown, returns |absl::nullopt|.
-  absl::optional<Schema> GetKnownPolicySchema(
-      const absl::optional<PolicyConversions::PolicyToSchemaMap>&
-          known_policy_schemas,
-      const std::string& policy_name) const;
-
-  absl::optional<PolicyConversions::PolicyToSchemaMap> GetKnownPolicies(
-      const scoped_refptr<SchemaMap> schema_map,
-      const PolicyNamespace& policy_namespace) const;
-
   // Returns whether this client was configured to get device local account
   // policies on ChromeOS.
   bool GetDeviceLocalAccountPoliciesEnabled() const;
@@ -159,11 +131,123 @@ class POLICY_EXPORT PolicyConversionsClient {
   // Returns whether this client was configured to get all user scope policies.
   bool GetUserPoliciesEnabled() const;
 
+ protected:
+  // Returns a copy of `value` with sensitive values masked according to
+  // `schema`. Returns `kSensitiveValueMask` instead if `scope` is machine and
+  // machine values are hidden (see `EnableShowMachineValues()`).
+  base::Value CopyAndMask(const base::Value& value,
+                          const std::optional<Schema>& schema,
+                          PolicyScope scope) const;
+
+  // Returns a copy of `value`. If necessary (which is specified by
+  // `convert_values_enabled_`), converts some values to a representation that
+  // i18n_template.js will display.
+  base::Value CopyAndMaybeConvert(const base::Value& value,
+                                  const std::optional<Schema>& schema,
+                                  PolicyScope scope) const;
+
+  // Creates a description of the policy `policy_name` using `policy` and the
+  // optional errors in `errors` to determine the status of each policy.
+  // `known_policy_schemas` contains `Schema`s for known policies in the same
+  // policy namespace of `map`. `deprecated_policies` holds deprecated policies.
+  // `future_policies` holds unreleased policies. A policy without an entry in
+  // `known_policy_schemas` is an unknown policy.
+  base::DictValue GetPolicyValue(
+      const std::string& policy_name,
+      const PolicyMap::Entry& policy,
+      const PoliciesSet& deprecated_policies,
+      const PoliciesSet& future_policies,
+      PolicyErrorMap* errors,
+      const std::optional<PolicyConversions::PolicyToSchemaMap>&
+          known_policy_schemas) const;
+
+  // Returns a description of each policy in `map` as Value, using the
+  // optional errors in `errors` to determine the status of each policy.
+  // `known_policy_schemas` contains `Schema`s for known policies in the same
+  // policy namespace of `map`. `deprecated_policies` holds deprecated policies.
+  // `future_policies` holds unreleased policies. A policy in `map` but without
+  // an entry `known_policy_schemas` is an unknown policy.
+  base::DictValue GetPolicyValues(
+      const PolicyMap& map,
+      PolicyErrorMap* errors,
+      const PoliciesSet& deprecated_policies,
+      const PoliciesSet& future_policies,
+      const std::optional<PolicyConversions::PolicyToSchemaMap>&
+          known_policy_schemas) const;
+
+  // Mojo equivalent of `GetPolicyValue()`. Unlike the `base::Value` version,
+  // the output is strongly typed and therefore independent of some of the
+  // formatting options set on this client:
+  // - `level` and `scope` are always mojo enums, regardless of
+  //   `EnableConvertTypes()`. `source` is always the source name string.
+  // - `value` is never converted to JSON strings, regardless of
+  //   `EnableConvertValues()`; it is only masked (sensitive values and, if
+  //   `EnableShowMachineValues(false)`, machine values). The UI is responsible
+  //   for formatting it.
+  // - Conflicting values are described by `mojom::Conflict`, which only holds
+  //   their level, scope, source and value.
+  mojom::PolicyPtr GetPolicyMojo(
+      const std::string& policy_name,
+      const PolicyMap::Entry& policy,
+      const PoliciesSet& deprecated_policies,
+      const PoliciesSet& future_policies,
+      PolicyErrorMap* errors,
+      const std::optional<PolicyConversions::PolicyToSchemaMap>&
+          known_policy_schemas) const;
+
+  // Mojo equivalent of `GetPolicyValues()`, keyed by policy name.
+  base::flat_map<std::string, mojom::PolicyPtr> GetPolicyValuesMojo(
+      const PolicyMap& map,
+      PolicyErrorMap* errors,
+      const PoliciesSet& deprecated_policies,
+      const PoliciesSet& future_policies,
+      const std::optional<PolicyConversions::PolicyToSchemaMap>&
+          known_policy_schemas) const;
+
+  // Returns the Schema for `policy_name` if that policy is known. If the policy
+  // is unknown, returns `std::nullopt`.
+  std::optional<Schema> GetKnownPolicySchema(
+      const std::optional<PolicyConversions::PolicyToSchemaMap>&
+          known_policy_schemas,
+      const std::string& policy_name) const;
+
+  std::optional<PolicyConversions::PolicyToSchemaMap> GetKnownPolicies(
+      const scoped_refptr<SchemaMap> schema_map,
+      const PolicyNamespace& policy_namespace) const;
+
  private:
-#if defined(OS_WIN) && BUILDFLAG(GOOGLE_CHROME_BRANDING)
-  std::unique_ptr<PolicyMap> updater_policies_;
-  absl::optional<PolicyConversions::PolicyToSchemaMap> updater_policy_schemas_;
-#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING) && defined(OS_WIN)
+  friend class PolicyConversionsClientTest;
+
+  // Chrome policies along with the data needed to describe them, see
+  // `GetChromePoliciesForDisplay()`.
+  struct ChromePoliciesForDisplay {
+    PolicyMap map;
+    std::unique_ptr<PolicyErrorMap> errors;
+    PoliciesSet deprecated_policies;
+    PoliciesSet future_policies;
+    std::optional<PolicyConversions::PolicyToSchemaMap> known_policy_schemas;
+  };
+
+  // Returns the Chrome policies prepared for display, or `std::nullopt` if
+  // there is no schema registry.
+  std::optional<ChromePoliciesForDisplay> GetChromePoliciesForDisplay();
+
+  // Returns the ordered precedence string ids.
+  std::vector<int> GetPrecedenceOrderIds() const;
+
+  std::u16string GetPolicyMessage(
+      const std::string& policy_name,
+      const PolicyMap::Entry& policy,
+      PolicyMap::MessageType message_type,
+      PolicyErrorMap* errors,
+      std::optional<Schema> known_policy_schema) const;
+
+  // Returns true if `policy` has changed since startup and doesn't support
+  // dynamic refresh, i.e. a restart is required for the change to apply.
+  bool IsRestartRequired(
+      const std::string& policy_name,
+      const PolicyMap::Entry& policy,
+      const std::optional<Schema>& known_policy_schema) const;
 
   bool convert_types_enabled_ = true;
   bool convert_values_enabled_ = false;
@@ -171,6 +255,8 @@ class POLICY_EXPORT PolicyConversionsClient {
   bool device_info_enabled_ = false;
   bool pretty_print_enabled_ = true;
   bool user_policies_enabled_ = true;
+  bool drop_default_values_enabled_ = false;
+  bool show_machine_values_ = true;
 };
 
 }  // namespace policy

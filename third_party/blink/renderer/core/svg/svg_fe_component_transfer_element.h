@@ -22,7 +22,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_SVG_SVG_FE_COMPONENT_TRANSFER_ELEMENT_H_
 
 #include "third_party/blink/renderer/core/svg/svg_filter_primitive_standard_attributes.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -32,6 +32,9 @@ class SVGFEComponentTransferElement final
 
  public:
   explicit SVGFEComponentTransferElement(Document&);
+  ElementType GetElementType() const final {
+    return ElementType::kSVGFEComponentTransferElement;
+  }
 
   SVGAnimatedString* in1() { return in1_.Get(); }
 
@@ -41,6 +44,10 @@ class SVGFEComponentTransferElement final
   void SvgAttributeChanged(const SvgAttributeChangedParams&) override;
   FilterEffect* Build(SVGFilterBuilder*, Filter*) override;
   bool TaintsOrigin() const override { return false; }
+
+  SVGAnimatedPropertyBase* PropertyFromAttribute(
+      const QualifiedName& attribute_name) const override;
+  void SynchronizeAllSVGAttributes() const override;
 
   Member<SVGAnimatedString> in1_;
 };

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,54 +10,40 @@
 #include "base/run_loop.h"
 #include "base/strings/string_tokenizer.h"
 #include "base/test/test_discardable_memory_allocator.h"
+#include "base/test/test_suite_helper.h"
 #include "build/build_config.h"
 #include "content/common/content_switches_internal.h"
 #include "content/public/common/content_switches.h"
-#include "content/public/common/user_agent.h"
+#include "content/public/test/content_test_suite_base.h"
 #include "content/public/test/test_content_client_initializer.h"
 #include "content/test/test_blink_web_unit_test_support.h"
+#include "mojo/core/embedder/embedder.h"
 #include "third_party/blink/public/platform/web_cache.h"
 #include "third_party/blink/public/platform/web_runtime_features.h"
 #include "third_party/blink/public/web/blink.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "ui/display/win/dpi.h"
 #endif
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 #include "base/test/mock_chrome_application_mac.h"
 #endif
 
 namespace content {
 
-namespace {
+BlinkTestEnvironment::BlinkTestEnvironment() = default;
+BlinkTestEnvironment::~BlinkTestEnvironment() {
+  // If exit() is called inside a test, which can be the case in fuzz tests,
+  // this destructor will be called, but the ScopedFeatureList instance inside
+  // test_suite.cc, which was was created after BlinkTestEnvironment, will still
+  // be active. We need to reset here, else the ScopedFeatureLists will be
+  // destroyed in an incorrect order (triggering a CHECK).
+  base::TestSuite::ResetScopedFeatureListInstance();
+}
 
-class TestEnvironment {
- public:
-  TestEnvironment()
-      : blink_test_support_(
-            TestBlinkWebUnitTestSupport::SchedulerType::kRealScheduler) {
-    base::DiscardableMemoryAllocator::SetInstance(
-        &discardable_memory_allocator_);
-  }
-
-  ~TestEnvironment() {}
-
-  // This returns when both the main thread and the TaskSchedules queues are
-  // empty.
-  void RunUntilIdle() { base::RunLoop().RunUntilIdle(); }
-
- private:
-  TestBlinkWebUnitTestSupport blink_test_support_;
-  TestContentClientInitializer content_initializer_;
-  base::TestDiscardableMemoryAllocator discardable_memory_allocator_;
-};
-
-TestEnvironment* test_environment;
-
-}  // namespace
-
-void SetUpBlinkTestEnvironment() {
+void BlinkTestEnvironment::SetUp() {
+  base::test::InitScopedFeatureListForTesting(scoped_feature_list_);
   blink::WebRuntimeFeatures::EnableExperimentalFeatures(true);
   blink::WebRuntimeFeatures::EnableTestOnlyFeatures(true);
 
@@ -72,24 +58,54 @@ void SetUpBlinkTestEnvironment() {
     blink::WebRuntimeFeatures::EnableFeatureFromString(feature, false);
   }
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   mock_cr_app::RegisterMockCrApp();
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   display::win::SetDefaultDeviceScaleFactor(1.0f);
 #endif
 
-  test_environment = new TestEnvironment;
+  content_initializer_.emplace();
+
+  base::DiscardableMemoryAllocator::SetInstance(&discardable_memory_allocator_);
+  content::ContentTestSuiteBase::InitializeResourceBundle();
+
+  // TestBlinkWebUnitTestSupport construction needs Mojo to be initialized
+  // first.
+  mojo::core::Init(mojo::core::Configuration{.is_broker_process = true});
+
+  InitializeBlinkTestSupport();
 }
 
-void TearDownBlinkTestEnvironment() {
-  // Flush any remaining messages before we kill ourselves.
-  // http://code.google.com/p/chromium/issues/detail?id=9500
-  test_environment->RunUntilIdle();
+void BlinkTestEnvironment::InitializeBlinkTestSupport() {
+  // Depends on resource bundle initialization so has to happen after.
+  blink_test_support_ = std::make_unique<content::TestBlinkWebUnitTestSupport>(
+      content::TestBlinkWebUnitTestSupport::SchedulerType::kMockScheduler);
+}
 
-  delete test_environment;
-  test_environment = nullptr;
+void BlinkTestEnvironment::TearDown() {
+  blink_test_support_.reset();
+  content_initializer_.reset();
+  scoped_feature_list_.Reset();
+}
+
+void BlinkTestEnvironmentWithIsolate::TearDown() {
+  // Flush any remaining messages before we kill ourselves. Unlike
+  // BlinkTestEnvironment, this is needed here because kRealScheduler is used
+  // for TestBlinkWebUnitTestSupport, which instantiates a
+  // MainThreadSchedulerImpl and doesn't automatically flushes tasks.
+  // http://code.google.com/p/chromium/issues/detail?id=9500
+  base::RunLoop().RunUntilIdle();
+
+  BlinkTestEnvironment::TearDown();
+}
+
+void BlinkTestEnvironmentWithIsolate::InitializeBlinkTestSupport() {
+  // Depends on resource bundle initialization so has to happen after.
+  blink_test_support_ = std::make_unique<content::TestBlinkWebUnitTestSupport>(
+      content::TestBlinkWebUnitTestSupport::SchedulerType::kRealScheduler);
+  isolate_ = blink::CreateMainThreadIsolate();
 }
 
 }  // namespace content

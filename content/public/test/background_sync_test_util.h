@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,10 +17,7 @@ void SetIgnoreNetworkChanges(bool ignore);
 
 // Puts background sync manager into online or offline mode for tests.
 //
-// This eventually (asynchronously) runs on the service worker core thread.
-// However you can start performing background sync operations without waiting
-// for the core thread task to complete, since those background sync operations
-// also run on the core thread.
+// Must be called on the UI thread.
 void SetOnline(WebContents* web_contents, bool online);
 
 }  // namespace background_sync_test_util

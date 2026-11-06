@@ -23,8 +23,8 @@
 
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/platform/graphics/color.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
-#include "third_party/blink/renderer/platform/weborigin/security_origin.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
@@ -36,12 +36,15 @@ class CORE_EXPORT MimeClassInfo final : public GarbageCollected<MimeClassInfo> {
  public:
   void Trace(Visitor*) const;
 
-  MimeClassInfo(const String& type, const String& desc, PluginInfo&);
+  MimeClassInfo(const String& type,
+                const String& description,
+                PluginInfo& plugin,
+                const Vector<String> extensions);
 
   const String& Type() const { return type_; }
   const String& Description() const { return description_; }
   const Vector<String>& Extensions() const { return extensions_; }
-  const PluginInfo* Plugin() const { return plugin_; }
+  const PluginInfo* Plugin() const { return plugin_.Get(); }
 
  private:
   friend class PluginData;
@@ -97,22 +100,17 @@ class CORE_EXPORT PluginData final : public GarbageCollected<PluginData> {
 
   const HeapVector<Member<PluginInfo>>& Plugins() const { return plugins_; }
   const HeapVector<Member<MimeClassInfo>>& Mimes() const { return mimes_; }
-  const SecurityOrigin* Origin() const { return main_frame_origin_.get(); }
-  void UpdatePluginList(const SecurityOrigin* main_frame_origin);
+  void UpdatePluginList();
   void ResetPluginData();
 
   bool SupportsMimeType(const String& mime_type) const;
   Color PluginBackgroundColorForMimeType(const String& mime_type) const;
   bool IsExternalPluginMimeType(const String& mime_type) const;
 
-  // refreshBrowserSidePluginCache doesn't update existent instances of
-  // PluginData.
-  static void RefreshBrowserSidePluginCache();
-
  private:
   HeapVector<Member<PluginInfo>> plugins_;
   HeapVector<Member<MimeClassInfo>> mimes_;
-  scoped_refptr<const SecurityOrigin> main_frame_origin_;
+  bool updated_ = false;
 };
 
 }  // namespace blink

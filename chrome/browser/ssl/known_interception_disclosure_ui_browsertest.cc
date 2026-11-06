@@ -1,9 +1,10 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/security_interstitials/content/urls.h"
@@ -19,12 +20,12 @@ IN_PROC_BROWSER_TEST_F(KnownInterceptionDisclosureUITest, PageDisplaysStrings) {
   constexpr char16_t kTabTitle[] = u"Monitoring Detected";
   constexpr char16_t kBodyText[] = u"Your activity on the web";
 
-  ui_test_utils::NavigateToURL(
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(),
       content::GetWebUIURL(
-          security_interstitials::kChromeUIConnectionMonitoringDetectedHost));
+          security_interstitials::kChromeUIConnectionMonitoringDetectedHost)));
   content::WebContents* contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
 
   EXPECT_EQ(kTabTitle, contents->GetTitle());
   EXPECT_GE(ui_test_utils::FindInPage(contents, kBodyText, true, true, nullptr,

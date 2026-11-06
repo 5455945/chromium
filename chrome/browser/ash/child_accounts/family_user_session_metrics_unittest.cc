@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,16 +6,17 @@
 
 #include <memory>
 
+#include "ash/constants/ash_pref_names.h"
 #include "base/logging.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/metrics/user_action_tester.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/dbus/power/fake_power_manager_client.h"
 #include "chromeos/dbus/power_manager/idle.pb.h"
 #include "chromeos/dbus/power_manager/suspend.pb.h"
 #include "components/prefs/testing_pref_service.h"
+#include "components/session_manager/core/fake_session_manager_delegate.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/session_manager/session_manager_types.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -24,23 +25,24 @@ namespace ash {
 
 namespace {
 
-constexpr base::TimeDelta kTenMinutes = base::TimeDelta::FromMinutes(10);
-constexpr base::TimeDelta kOneHour = base::TimeDelta::FromHours(1);
-constexpr base::TimeDelta kOneDay = base::TimeDelta::FromDays(1);
+constexpr base::TimeDelta kTenMinutes = base::Minutes(10);
+constexpr base::TimeDelta kOneHour = base::Hours(1);
+constexpr base::TimeDelta kOneDay = base::Days(1);
 
 void SetScreenOff(bool is_screen_off) {
   power_manager::ScreenIdleState screen_idle_state;
   screen_idle_state.set_off(is_screen_off);
-  FakePowerManagerClient::Get()->SendScreenIdleStateChanged(screen_idle_state);
+  chromeos::FakePowerManagerClient::Get()->SendScreenIdleStateChanged(
+      screen_idle_state);
 }
 
 void SetSuspendImminent() {
-  FakePowerManagerClient::Get()->SendSuspendImminent(
+  chromeos::FakePowerManagerClient::Get()->SendSuspendImminent(
       power_manager::SuspendImminent_Reason_OTHER);
 }
 
 void CancelSuspend() {
-  FakePowerManagerClient::Get()->SendSuspendDone();
+  chromeos::FakePowerManagerClient::Get()->SendSuspendDone();
 }
 
 }  // namespace
@@ -51,14 +53,14 @@ class FamilyUserSessionMetricsTest : public testing::Test {
   ~FamilyUserSessionMetricsTest() override = default;
 
   void SetUp() override {
-    PowerManagerClient::InitializeFake();
+    chromeos::PowerManagerClient::InitializeFake();
     InitiateFamilyUserSessionMetrics();
     FamilyUserSessionMetrics::RegisterProfilePrefs(pref_service_.registry());
   }
 
   void TearDown() override {
     DestructFamilyUserSessionMetrics();
-    PowerManagerClient::Shutdown();
+    chromeos::PowerManagerClient::Shutdown();
   }
 
   void DestructFamilyUserSessionMetrics() {
@@ -98,7 +100,8 @@ class FamilyUserSessionMetricsTest : public testing::Test {
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
 
  private:
-  session_manager::SessionManager session_manager_;
+  session_manager::SessionManager session_manager_{
+      std::make_unique<session_manager::FakeSessionManagerDelegate>()};
   TestingPrefServiceSimple pref_service_;
   std::unique_ptr<FamilyUserSessionMetrics> family_user_session_metrics_;
 };
@@ -158,8 +161,9 @@ TEST_F(FamilyUserSessionMetricsTest, SessionStateChange) {
   histogram_tester.ExpectUniqueTimeSample(
       FamilyUserSessionMetrics::kSessionEngagementDurationHistogramName,
       kTenMinutes, 1);
-  EXPECT_EQ(kOneHour, pref_service()->GetTimeDelta(
-                          prefs::kFamilyUserMetricsSessionEngagementDuration));
+  EXPECT_EQ(kOneHour,
+            pref_service()->GetTimeDelta(
+                ash::prefs::kFamilyUserMetricsSessionEngagementDuration));
 }
 
 TEST_F(FamilyUserSessionMetricsTest, ScreenStateChange) {
@@ -195,12 +199,12 @@ TEST_F(FamilyUserSessionMetricsTest, ScreenStateChange) {
       kOneHour, 1);
   EXPECT_EQ(base::TimeDelta(),
             pref_service()->GetTimeDelta(
-                prefs::kFamilyUserMetricsSessionEngagementDuration));
+                ash::prefs::kFamilyUserMetricsSessionEngagementDuration));
 
   // Test screen on on 4 Jan 2020 0:10:00.
   SetScreenOff(false);
 
-  task_environment_.FastForwardBy(base::TimeDelta::FromHours(25));
+  task_environment_.FastForwardBy(base::Hours(25));
   // Test screen off on 5 Jan 2020 1:10:00.
   SetScreenOff(true);
 
@@ -255,7 +259,7 @@ TEST_F(FamilyUserSessionMetricsTest, ScreenStateChange) {
       FamilyUserSessionMetrics::kSessionEngagementDurationHistogramName, 2);
   EXPECT_EQ(base::TimeDelta(),
             pref_service()->GetTimeDelta(
-                prefs::kFamilyUserMetricsSessionEngagementDuration));
+                ash::prefs::kFamilyUserMetricsSessionEngagementDuration));
 }
 
 TEST_F(FamilyUserSessionMetricsTest, SuspendStateChange) {
@@ -297,9 +301,9 @@ TEST_F(FamilyUserSessionMetricsTest, SuspendStateChange) {
   // Duration metric result:
   histogram_tester.ExpectTotalCount(
       FamilyUserSessionMetrics::kSessionEngagementDurationHistogramName, 0);
-  EXPECT_EQ(base::TimeDelta::FromMinutes(20),
+  EXPECT_EQ(base::Minutes(20),
             pref_service()->GetTimeDelta(
-                prefs::kFamilyUserMetricsSessionEngagementDuration));
+                ash::prefs::kFamilyUserMetricsSessionEngagementDuration));
 }
 
 TEST_F(FamilyUserSessionMetricsTest, ClockBackward) {
@@ -337,7 +341,7 @@ TEST_F(FamilyUserSessionMetricsTest, ClockBackward) {
       FamilyUserSessionMetrics::kSessionEngagementDurationHistogramName, 0);
   EXPECT_EQ(base::TimeDelta(),
             pref_service()->GetTimeDelta(
-                prefs::kFamilyUserMetricsSessionEngagementDuration));
+                ash::prefs::kFamilyUserMetricsSessionEngagementDuration));
 }
 
 // Tests destroying FamilyUserSessionMetrics without invoking
@@ -367,10 +371,10 @@ TEST_F(FamilyUserSessionMetricsTest,
 
   // Duration metric result:
   histogram_tester.ExpectTotalCount(
-      prefs::kFamilyUserMetricsSessionEngagementDuration, 0);
+      ash::prefs::kFamilyUserMetricsSessionEngagementDuration, 0);
   EXPECT_EQ(kTenMinutes,
             pref_service()->GetTimeDelta(
-                prefs::kFamilyUserMetricsSessionEngagementDuration));
+                ash::prefs::kFamilyUserMetricsSessionEngagementDuration));
 
   // Test restart.
   InitiateFamilyUserSessionMetrics();
@@ -393,10 +397,10 @@ TEST_F(FamilyUserSessionMetricsTest,
 
   // Duration metric result:
   histogram_tester.ExpectTotalCount(
-      prefs::kFamilyUserMetricsSessionEngagementDuration, 0);
-  EXPECT_EQ(base::TimeDelta::FromMinutes(20),
+      ash::prefs::kFamilyUserMetricsSessionEngagementDuration, 0);
+  EXPECT_EQ(base::Minutes(20),
             pref_service()->GetTimeDelta(
-                prefs::kFamilyUserMetricsSessionEngagementDuration));
+                ash::prefs::kFamilyUserMetricsSessionEngagementDuration));
 }
 
 }  // namespace ash

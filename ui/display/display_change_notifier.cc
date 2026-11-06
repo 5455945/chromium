@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,31 +6,20 @@
 
 #include <stdint.h>
 
+#include <algorithm>
+
+#include "base/numerics/ranges.h"
+#include "base/observer_list.h"
+#include "build/buildflag.h"
 #include "ui/display/display.h"
 #include "ui/display/display_observer.h"
+#include "ui/gfx/display_color_spaces.h"
 
 namespace display {
 
-namespace {
+DisplayChangeNotifier::DisplayChangeNotifier() = default;
 
-class DisplayComparator {
- public:
-  explicit DisplayComparator(const Display& display)
-      : display_id_(display.id()) {}
-
-  bool operator()(const Display& display) const {
-    return display.id() == display_id_;
-  }
-
- private:
-  int64_t display_id_;
-};
-
-}  // anonymous namespace
-
-DisplayChangeNotifier::DisplayChangeNotifier() {}
-
-DisplayChangeNotifier::~DisplayChangeNotifier() {}
+DisplayChangeNotifier::~DisplayChangeNotifier() = default;
 
 void DisplayChangeNotifier::AddObserver(DisplayObserver* obs) {
   observer_list_.AddObserver(obs);
@@ -43,64 +32,76 @@ void DisplayChangeNotifier::RemoveObserver(DisplayObserver* obs) {
 void DisplayChangeNotifier::NotifyDisplaysChanged(
     const std::vector<Display>& old_displays,
     const std::vector<Display>& new_displays) {
-  bool did_remove_displays = false;
+  std::vector<Display> removed_displays;
   // Display present in old_displays but not in new_displays has been removed.
-  auto old_it = old_displays.begin();
-  for (; old_it != old_displays.end(); ++old_it) {
-    if (std::find_if(new_displays.begin(), new_displays.end(),
-                     DisplayComparator(*old_it)) == new_displays.end()) {
-      did_remove_displays = true;
-      for (DisplayObserver& observer : observer_list_)
-        observer.OnDisplayRemoved(*old_it);
+  for (const auto& old_display : old_displays) {
+    if (!std::ranges::contains(new_displays, old_display.id(), &Display::id)) {
+      removed_displays.push_back(old_display);
     }
   }
 
-  if (did_remove_displays) {
-    for (DisplayObserver& observer : observer_list_)
-      observer.OnDidRemoveDisplays();
+  if (!removed_displays.empty()) {
+    observer_list_.Notify(&DisplayObserver::OnDisplaysRemoved,
+                          removed_displays);
   }
 
   // Display present in new_displays but not in old_displays has been added.
   // Display present in both might have been modified.
-  for (auto new_it = new_displays.begin(); new_it != new_displays.end();
-       ++new_it) {
-    auto old_it = std::find_if(old_displays.begin(), old_displays.end(),
-                               DisplayComparator(*new_it));
+  for (const auto& new_display : new_displays) {
+    auto old_it =
+        std::ranges::find(old_displays, new_display.id(), &Display::id);
 
     if (old_it == old_displays.end()) {
-      for (DisplayObserver& observer : observer_list_)
-        observer.OnDisplayAdded(*new_it);
+      observer_list_.Notify(&DisplayObserver::OnDisplayAdded, new_display);
       continue;
     }
 
     uint32_t metrics = DisplayObserver::DISPLAY_METRIC_NONE;
 
-    if (new_it->bounds() != old_it->bounds())
+    if (new_display.bounds() != old_it->bounds()) {
       metrics |= DisplayObserver::DISPLAY_METRIC_BOUNDS;
+    }
 
-    if (new_it->rotation() != old_it->rotation())
+    if (new_display.rotation() != old_it->rotation()) {
       metrics |= DisplayObserver::DISPLAY_METRIC_ROTATION;
+    }
 
-    if (new_it->work_area() != old_it->work_area())
+    if (new_display.work_area() != old_it->work_area()) {
       metrics |= DisplayObserver::DISPLAY_METRIC_WORK_AREA;
+    }
 
-    if (new_it->device_scale_factor() != old_it->device_scale_factor())
+    if (new_display.device_scale_factor() != old_it->device_scale_factor()) {
       metrics |= DisplayObserver::DISPLAY_METRIC_DEVICE_SCALE_FACTOR;
+    }
 
-    if (new_it->color_spaces() != old_it->color_spaces())
+    if (new_display.GetColorSpaces() != old_it->GetColorSpaces()) {
       metrics |= DisplayObserver::DISPLAY_METRIC_COLOR_SPACE;
+    }
+
+#if BUILDFLAG(IS_MAC)
+    if (!base::IsApproximatelyEqual(new_display.display_frequency(),
+                                    old_it->display_frequency(),
+                                    Display::kRefreshRateEpsilon)) {
+      metrics |= DisplayObserver::DISPLAY_METRIC_REFRESH_RATE;
+    }
+#endif
 
     if (metrics != DisplayObserver::DISPLAY_METRIC_NONE) {
-      for (DisplayObserver& observer : observer_list_)
-        observer.OnDisplayMetricsChanged(*new_it, metrics);
+      observer_list_.Notify(&DisplayObserver::OnDisplayMetricsChanged,
+                            new_display, metrics);
     }
   }
 }
 
 void DisplayChangeNotifier::NotifyCurrentWorkspaceChanged(
     const std::string& workspace) {
-  for (DisplayObserver& observer : observer_list_)
-    observer.OnCurrentWorkspaceChanged(workspace);
+  observer_list_.Notify(&DisplayObserver::OnCurrentWorkspaceChanged, workspace);
 }
+
+#if BUILDFLAG(IS_MAC)
+void DisplayChangeNotifier::NotifyPrimaryDisplayChanged() {
+  observer_list_.Notify(&DisplayObserver::OnPrimaryDisplayChanged);
+}
+#endif
 
 }  // namespace display

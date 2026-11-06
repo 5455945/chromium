@@ -24,7 +24,6 @@
  */
 
 // https://w3c.github.io/deviceorientation/spec-source-orientation.html#deviceorientation
-
 [
     Exposed=Window, SecureContext
 ] interface DeviceOrientationEvent : Event {
@@ -33,4 +32,6 @@
     readonly attribute double? beta;
     readonly attribute double? gamma;
     readonly attribute boolean absolute;
+
+    [RuntimeEnabled=DeviceOrientationRequestPermission, CallWith=ScriptState, MeasureAs=DeviceOrientationPermissionRequested] static Promise<PermissionState> requestPermission();
 };

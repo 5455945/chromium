@@ -1,15 +1,15 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/mojo_binder_policy_applier.h"
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
 #include "content/browser/mojo_binder_policy_map_impl.h"
-#include "content/test/test_mojo_binder_policy_applier_unittest.mojom.h"
+#include "content/public/test/mojo_capability_control_test_interfaces.mojom.h"
 #include "mojo/public/cpp/bindings/generic_pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -108,6 +108,10 @@ class MojoBinderPolicyApplierTest : public testing::Test,
     return policy_applier_.deferred_binders_;
   }
 
+  std::vector<base::OnceClosure>& deferred_sync_binders() {
+    return policy_applier_.deferred_sync_binders_;
+  }
+
   // Calls MojoBinderPolicyApplier::GrantAll() inside a Mojo message dispatch
   // stack.
   void RunGrantAll() {
@@ -118,11 +122,14 @@ class MojoBinderPolicyApplierTest : public testing::Test,
   }
 
   const MojoBinderPolicyMapImpl policy_map_{
-      {{"content.mojom.TestInterfaceForDefer", MojoBinderPolicy::kDefer},
-       {"content.mojom.TestInterfaceForGrant", MojoBinderPolicy::kGrant},
-       {"content.mojom.TestInterfaceForCancel", MojoBinderPolicy::kCancel},
+      {{"content.mojom.TestInterfaceForDefer",
+        MojoBinderNonAssociatedPolicy::kDefer},
+       {"content.mojom.TestInterfaceForGrant",
+        MojoBinderNonAssociatedPolicy::kGrant},
+       {"content.mojom.TestInterfaceForCancel",
+        MojoBinderNonAssociatedPolicy::kCancel},
        {"content.mojom.TestInterfaceForUnexpected",
-        MojoBinderPolicy::kUnexpected}}};
+        MojoBinderNonAssociatedPolicy::kUnexpected}}};
   TestReceiverCollector collector_{};
   MojoBinderPolicyApplier policy_applier_{
       &policy_map_, base::BindOnce(&TestReceiverCollector::Cancel,
@@ -145,7 +152,7 @@ TEST_F(MojoBinderPolicyApplierTest, GrantInEnforce) {
   const std::string interface_name = grant_receiver.interface_name().value();
   EXPECT_FALSE(collector_.IsCancelled());
   EXPECT_FALSE(collector_.IsGrantReceiverBound());
-  policy_applier_.ApplyPolicyToBinder(
+  policy_applier_.ApplyPolicyToNonAssociatedBinder(
       interface_name,
       base::BindOnce(&TestReceiverCollector::BindGrantInterface,
                      base::Unretained(&collector_),
@@ -165,7 +172,7 @@ TEST_F(MojoBinderPolicyApplierTest, DeferInEnforce) {
   // Delay binding the interface until GrantAll() is called.
   const std::string interface_name = defer_receiver.interface_name().value();
   EXPECT_FALSE(collector_.IsCancelled());
-  policy_applier_.ApplyPolicyToBinder(
+  policy_applier_.ApplyPolicyToNonAssociatedBinder(
       interface_name,
       base::BindOnce(&TestReceiverCollector::BindDeferInterface,
                      base::Unretained(&collector_),
@@ -190,7 +197,7 @@ TEST_F(MojoBinderPolicyApplierTest, CancelInEnforce) {
   const std::string interface_name = cancel_receiver.interface_name().value();
   EXPECT_FALSE(collector_.IsCancelled());
   EXPECT_FALSE(collector_.IsCancelReceiverBound());
-  policy_applier_.ApplyPolicyToBinder(
+  policy_applier_.ApplyPolicyToNonAssociatedBinder(
       interface_name,
       base::BindOnce(&TestReceiverCollector::BindCancelInterface,
                      base::Unretained(&collector_),
@@ -212,7 +219,7 @@ TEST_F(MojoBinderPolicyApplierTest, GrantInPrepareToGrantAll) {
   policy_applier_.PrepareToGrantAll();
   const std::string grant_interface_name =
       grant_receiver.interface_name().value();
-  policy_applier_.ApplyPolicyToBinder(
+  policy_applier_.ApplyPolicyToNonAssociatedBinder(
       grant_interface_name,
       base::BindOnce(&TestReceiverCollector::BindGrantInterface,
                      base::Unretained(&collector_),
@@ -231,7 +238,7 @@ TEST_F(MojoBinderPolicyApplierTest, DeferInPrepareToGrantAll) {
   policy_applier_.PrepareToGrantAll();
   const std::string defer_interface_name =
       defer_receiver.interface_name().value();
-  policy_applier_.ApplyPolicyToBinder(
+  policy_applier_.ApplyPolicyToNonAssociatedBinder(
       defer_interface_name,
       base::BindOnce(&TestReceiverCollector::BindDeferInterface,
                      base::Unretained(&collector_),
@@ -256,7 +263,7 @@ TEST_F(MojoBinderPolicyApplierTest, CancelInPrepareToGrantAll) {
   policy_applier_.PrepareToGrantAll();
   const std::string cancel_interface_name =
       cancel_receiver.interface_name().value();
-  policy_applier_.ApplyPolicyToBinder(
+  policy_applier_.ApplyPolicyToNonAssociatedBinder(
       cancel_interface_name,
       base::BindOnce(&TestReceiverCollector::BindCancelInterface,
                      base::Unretained(&collector_),
@@ -274,7 +281,7 @@ TEST_F(MojoBinderPolicyApplierTest, UnexpectedInPrepareToGrantAll) {
   policy_applier_.PrepareToGrantAll();
   const std::string interface_name =
       unexpected_receiver.interface_name().value();
-  policy_applier_.ApplyPolicyToBinder(
+  policy_applier_.ApplyPolicyToNonAssociatedBinder(
       interface_name,
       base::BindOnce(
           &TestReceiverCollector::BindUnexpectedInterface,
@@ -317,22 +324,22 @@ TEST_F(MojoBinderPolicyApplierTest, BindInterfacesAfterResolving) {
   EXPECT_FALSE(collector_.IsDeferReceiverBound());
   EXPECT_FALSE(collector_.IsCancelReceiverBound());
   EXPECT_FALSE(collector_.IsUnexpectedReceiverBound());
-  policy_applier_.ApplyPolicyToBinder(
+  policy_applier_.ApplyPolicyToNonAssociatedBinder(
       defer_interface_name,
       base::BindOnce(&TestReceiverCollector::BindDeferInterface,
                      base::Unretained(&collector_),
                      defer_receiver.As<mojom::TestInterfaceForDefer>()));
-  policy_applier_.ApplyPolicyToBinder(
+  policy_applier_.ApplyPolicyToNonAssociatedBinder(
       grant_interface_name,
       base::BindOnce(&TestReceiverCollector::BindGrantInterface,
                      base::Unretained(&collector_),
                      grant_receiver.As<mojom::TestInterfaceForGrant>()));
-  policy_applier_.ApplyPolicyToBinder(
+  policy_applier_.ApplyPolicyToNonAssociatedBinder(
       cancel_interface_name,
       base::BindOnce(&TestReceiverCollector::BindCancelInterface,
                      base::Unretained(&collector_),
                      cancel_receiver.As<mojom::TestInterfaceForCancel>()));
-  policy_applier_.ApplyPolicyToBinder(
+  policy_applier_.ApplyPolicyToNonAssociatedBinder(
       unexpected_interface_name,
       base::BindOnce(
           &TestReceiverCollector::BindUnexpectedInterface,
@@ -346,7 +353,8 @@ TEST_F(MojoBinderPolicyApplierTest, BindInterfacesAfterResolving) {
   EXPECT_EQ(0U, deferred_binders().size());
 }
 
-// Verifies that DropDeferredBinders() deletes all deferred binders.
+// Verifies that DropDeferredBinders() deletes all deferred binders, including
+// deferred sync binders.
 TEST_F(MojoBinderPolicyApplierTest, DropDeferredBinders) {
   // Initialize Mojo interfaces.
   mojo::Remote<mojom::TestInterfaceForDefer> defer_remote;
@@ -355,15 +363,28 @@ TEST_F(MojoBinderPolicyApplierTest, DropDeferredBinders) {
 
   const std::string interface_name = defer_receiver.interface_name().value();
   EXPECT_FALSE(collector_.IsCancelled());
-  policy_applier_.ApplyPolicyToBinder(
+  policy_applier_.ApplyPolicyToNonAssociatedBinder(
       interface_name,
       base::BindOnce(&TestReceiverCollector::BindDeferInterface,
                      base::Unretained(&collector_),
                      defer_receiver.As<mojom::TestInterfaceForDefer>()));
+
+  bool sync_binder_called = false;
+  policy_applier_.ApplyPolicyToNonAssociatedBinder(
+      "blink.mojom.NotificationService",
+      base::BindLambdaForTesting([&]() { sync_binder_called = true; }));
+
   EXPECT_FALSE(collector_.IsDeferReceiverBound());
+  EXPECT_FALSE(sync_binder_called);
   EXPECT_EQ(1U, deferred_binders().size());
+  EXPECT_EQ(1U, deferred_sync_binders().size());
+
   policy_applier_.DropDeferredBinders();
   EXPECT_EQ(0U, deferred_binders().size());
+  EXPECT_EQ(0U, deferred_sync_binders().size());
+
+  policy_applier_.PrepareToGrantAll();
+  EXPECT_FALSE(sync_binder_called);
   RunGrantAll();
   EXPECT_FALSE(collector_.IsDeferReceiverBound());
 }

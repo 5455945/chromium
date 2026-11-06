@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,10 +10,10 @@
 #include <vector>
 
 #include "printing/backend/cups_connection.h"
-#include "printing/backend/cups_deleters.h"
+#include "printing/backend/cups_ipp_helper.h"
 #include "printing/backend/cups_printer.h"
+#include "printing/mojom/print.mojom.h"
 #include "printing/printing_context.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace printing {
 
@@ -22,9 +22,11 @@ class COMPONENT_EXPORT(PRINTING) PrintingContextChromeos
  public:
   static std::unique_ptr<PrintingContextChromeos> CreateForTesting(
       Delegate* delegate,
+      OutOfProcessBehavior out_of_process_behavior,
       std::unique_ptr<CupsConnection> connection);
 
-  explicit PrintingContextChromeos(Delegate* delegate);
+  PrintingContextChromeos(Delegate* delegate,
+                          OutOfProcessBehavior out_of_process_behavior);
   PrintingContextChromeos(const PrintingContextChromeos&) = delete;
   PrintingContextChromeos& operator=(const PrintingContextChromeos&) = delete;
   ~PrintingContextChromeos() override;
@@ -34,41 +36,40 @@ class COMPONENT_EXPORT(PRINTING) PrintingContextChromeos
                           bool has_selection,
                           bool is_scripted,
                           PrintSettingsCallback callback) override;
-  Result UseDefaultSettings() override;
+  mojom::ResultCode UseDefaultSettings() override;
   gfx::Size GetPdfPaperSizeDeviceUnits() override;
-  Result UpdatePrinterSettings(bool external_preview,
-                               bool show_system_dialog,
-                               int page_count) override;
-  Result NewDocument(const std::u16string& document_name) override;
-  Result NewPage() override;
-  Result PageDone() override;
-  Result DocumentDone() override;
+  mojom::ResultCode UpdatePrinterSettings(
+      const PrinterSettings& printer_settings) override;
+  mojom::ResultCode NewDocument(const std::u16string& document_name) override;
+  mojom::ResultCode PrintDocument(const MetafilePlayer& metafile,
+                                  const PrintSettings& settings,
+                                  uint32_t num_pages) override;
+  mojom::ResultCode DocumentDone() override;
   void Cancel() override;
   void ReleaseContext() override;
   printing::NativeDrawingContext context() const override;
 
-  Result StreamData(const std::vector<char>& buffer);
+  mojom::ResultCode StreamData(const std::vector<char>& buffer);
 
  private:
   // For testing. Use CreateForTesting() to create.
   PrintingContextChromeos(Delegate* delegate,
+                          OutOfProcessBehavior out_of_process_behavior,
                           std::unique_ptr<CupsConnection> connection);
 
   // Lazily initializes `printer_`.
-  Result InitializeDevice(const std::string& device);
+  mojom::ResultCode InitializeDevice(const std::string& device);
 
   const std::unique_ptr<CupsConnection> connection_;
   std::unique_ptr<CupsPrinter> printer_;
-  std::vector<ScopedCupsOption> cups_options_;
+  ScopedIppPtr ipp_options_;
   bool send_user_info_ = false;
   std::string username_;
 };
 
-// This has the side effect of recording UMA for advanced attributes usage,
-// so only call once per job.
 COMPONENT_EXPORT(PRINTING)
-std::vector<ScopedCupsOption> SettingsToCupsOptions(
-    const PrintSettings& settings);
+ScopedIppPtr SettingsToIPPOptions(const PrintSettings& settings,
+                                  gfx::Rect printable_area_um);
 
 }  // namespace printing
 

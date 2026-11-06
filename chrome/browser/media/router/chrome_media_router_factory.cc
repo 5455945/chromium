@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,13 @@
 
 #include "build/build_config.h"
 #include "chrome/browser/media/router/media_router_feature.h"
-#include "chrome/browser/profiles/incognito_helpers.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_selections.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "components/media_router/browser/media_router_dialog_controller.h"
 #include "content/public/browser/browser_context.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/media/android/router/chrome_media_router_client.h"
 #include "components/media_router/browser/android/media_router_android.h"
 #include "components/media_router/browser/android/media_router_dialog_controller_android.h"
@@ -37,14 +38,14 @@ ChromeMediaRouterFactory* ChromeMediaRouterFactory::GetInstance() {
 
 // static
 void ChromeMediaRouterFactory::DoPlatformInit() {
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   InitChromeMediaRouterJavaClient();
 
   // The desktop (Views) version of this is in ChromeBrowserMainExtraPartsViews
   // because we can't reach into Views from this directory.
   media_router::MediaRouterDialogController::SetGetOrCreate(
       base::BindRepeating([](content::WebContents* web_contents) {
-        DCHECK(web_contents);
+        CHECK(web_contents, base::NotFatalUntil::M161);
         MediaRouterDialogController* controller = nullptr;
         // This call does nothing if the controller already exists.
         MediaRouterDialogControllerAndroid::CreateForWebContents(web_contents);
@@ -61,36 +62,31 @@ ChromeMediaRouterFactory::~ChromeMediaRouterFactory() = default;
 
 content::BrowserContext* ChromeMediaRouterFactory::GetBrowserContextToUse(
     content::BrowserContext* context) const {
-  return chrome::GetBrowserContextRedirectedInIncognito(context);
+  ProfileSelections profile_selections =
+      ProfileSelections::Builder()
+          .WithRegular(ProfileSelection::kOwnInstance)
+          .WithGuest(ProfileSelection::kOwnInstance)
+          .WithSystem(ProfileSelection::kNone)
+          // TODO(crbug.com/41488885): Check if this service is needed for
+          // Ash Internals.
+          .WithAshInternals(ProfileSelection::kOwnInstance)
+          .Build();
+  return profile_selections.ApplyProfileSelection(
+      Profile::FromBrowserContext(context));
 }
 
-KeyedService* ChromeMediaRouterFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+ChromeMediaRouterFactory::BuildServiceInstanceForBrowserContext(
     BrowserContext* context) const {
-  if (!MediaRouterEnabled(context)) {
-    NOTREACHED();
-    return nullptr;
-  }
-  MediaRouterBase* media_router = nullptr;
-#if defined(OS_ANDROID)
-  media_router = new MediaRouterAndroid();
+  CHECK(MediaRouterEnabled(context));
+  std::unique_ptr<MediaRouterBase> media_router = nullptr;
+#if BUILDFLAG(IS_ANDROID)
+  media_router = std::make_unique<MediaRouterAndroid>();
 #else
-  media_router = new MediaRouterDesktop(context);
-#endif
+  media_router = std::make_unique<MediaRouterDesktop>(context);
+#endif  // BUILDFLAG(IS_ANDROID)
   media_router->Initialize();
   return media_router;
-}
-
-void ChromeMediaRouterFactory::BrowserContextShutdown(
-    content::BrowserContext* context) {
-  // Notify the MediaRouter (which uses the normal/base proflie) of incognito
-  // profile shutdown.
-  if (context->IsOffTheRecord()) {
-    MediaRouter* router =
-        static_cast<MediaRouter*>(GetServiceForBrowserContext(context, false));
-    if (router)
-      router->OnIncognitoProfileShutdown();
-  }
-  BrowserContextKeyedServiceFactory::BrowserContextShutdown(context);
 }
 
 }  // namespace media_router

@@ -1,108 +1,64 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "device/fido/mac/touch_id_context.h"
 
-#import <CoreFoundation/CoreFoundation.h>
-#import <Security/Security.h>
+#include <CoreFoundation/CoreFoundation.h>
+#import <Foundation/Foundation.h>
+#include <Security/Security.h>
 
-#include "base/bind.h"
+#include "base/apple/bridging.h"
+#include "base/apple/foundation_util.h"
+#include "base/apple/scoped_cftyperef.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/mac/foundation_util.h"
-#include "base/mac/scoped_cftyperef.h"
 #include "base/memory/ptr_util.h"
-#include "base/sequenced_task_runner.h"
 #include "base/strings/sys_string_conversions.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
-#include "base/threading/sequenced_task_runner_handle.h"
 #include "components/device_event_log/device_event_log.h"
+#include "crypto/apple/keychain_util.h"
+#include "crypto/apple/keychain_v2.h"
 #include "device/fido/mac/authenticator_config.h"
-#include "device/fido/mac/keychain.h"
 
-namespace device {
-namespace fido {
-namespace mac {
+using base::apple::CFToNSPtrCast;
+using base::apple::NSToCFPtrCast;
+
+namespace device::fido::mac {
 
 namespace {
 
-API_AVAILABLE(macosx(10.12.2))
-base::ScopedCFTypeRef<SecAccessControlRef> DefaultAccessControl() {
-  // The default access control policy used for WebAuthn credentials stored by
-  // the Touch ID platform authenticator.
-  return base::ScopedCFTypeRef<SecAccessControlRef>(
-      SecAccessControlCreateWithFlags(
-          kCFAllocatorDefault, kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-          kSecAccessControlPrivateKeyUsage | kSecAccessControlUserPresence,
-          nullptr));
-}
-
-// Returns whether the current binary is signed with a keychain-access-groups
-// entitlement that contains |keychain_access_group|. This is required for the
-// TouchIdAuthenticator to access key material stored in the Touch ID secure
-// enclave.
-bool BinaryHasKeychainAccessGroupEntitlementBlocking(
-    const std::string& keychain_access_group) {
-  // This method makes call into the macOS Security Framework, which may block.
-  base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
-                                                base::BlockingType::MAY_BLOCK);
-
-  base::ScopedCFTypeRef<SecCodeRef> code;
-  if (SecCodeCopySelf(kSecCSDefaultFlags, code.InitializeInto()) !=
-      errSecSuccess) {
-    return false;
-  }
-  base::ScopedCFTypeRef<CFDictionaryRef> signing_info;
-  if (SecCodeCopySigningInformation(code, kSecCSDefaultFlags,
-                                    signing_info.InitializeInto()) !=
-      errSecSuccess) {
-    return false;
-  }
-  CFDictionaryRef entitlements =
-      base::mac::GetValueFromDictionary<CFDictionaryRef>(
-          signing_info, kSecCodeInfoEntitlementsDict);
-  if (!entitlements) {
-    return false;
-  }
-  CFArrayRef keychain_access_groups =
-      base::mac::GetValueFromDictionary<CFArrayRef>(
-          entitlements,
-          base::ScopedCFTypeRef<CFStringRef>(
-              base::SysUTF8ToCFStringRef("keychain-access-groups")));
-  if (!keychain_access_groups) {
-    return false;
-  }
-  return CFArrayContainsValue(
-      keychain_access_groups,
-      CFRangeMake(0, CFArrayGetCount(keychain_access_groups)),
-      base::ScopedCFTypeRef<CFStringRef>(
-          base::SysUTF8ToCFStringRef(keychain_access_group)));
-}
-
 // Returns whether creating a key pair in the secure enclave succeeds. Keys are
 // not persisted to the keychain.
-API_AVAILABLE(macosx(10.12.2))
 bool CanCreateSecureEnclaveKeyPairBlocking() {
   base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
                                                 base::BlockingType::MAY_BLOCK);
 
-  base::ScopedCFTypeRef<CFMutableDictionaryRef> params(
-      CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
-                                &kCFTypeDictionaryKeyCallBacks,
-                                &kCFTypeDictionaryValueCallBacks));
-  CFDictionarySetValue(params, kSecAttrKeyType,
-                       kSecAttrKeyTypeECSECPrimeRandom);
-  CFDictionarySetValue(params, kSecAttrKeySizeInBits, @256);
-  CFDictionarySetValue(params, kSecAttrTokenID, kSecAttrTokenIDSecureEnclave);
-  CFDictionarySetValue(params, kSecAttrIsPermanent, @NO);
+  NSDictionary* params = @{
+    CFToNSPtrCast(kSecAttrKeyType) :
+        CFToNSPtrCast(kSecAttrKeyTypeECSECPrimeRandom),
+    CFToNSPtrCast(kSecAttrKeySizeInBits) : @256,
+    CFToNSPtrCast(kSecAttrTokenID) :
+        CFToNSPtrCast(kSecAttrTokenIDSecureEnclave),
+    CFToNSPtrCast(kSecAttrIsPermanent) : @NO,
+  };
 
-  base::ScopedCFTypeRef<CFErrorRef> cferr;
-  base::ScopedCFTypeRef<SecKeyRef> private_key(
-      Keychain::GetInstance().KeyCreateRandomKey(params,
-                                                 cferr.InitializeInto()));
+  base::apple::ScopedCFTypeRef<CFErrorRef> cferr;
+  base::apple::ScopedCFTypeRef<SecKeyRef> private_key(
+      crypto::apple::KeychainV2::GetInstance().KeyCreateRandomKey(
+          NSToCFPtrCast(params), cferr.InitializeInto()));
   return !!private_key;
+}
+
+base::apple::ScopedCFTypeRef<SecAccessControlRef> CreateDefaultAccessControl() {
+  return base::apple::ScopedCFTypeRef<SecAccessControlRef>(
+      SecAccessControlCreateWithFlags(
+          kCFAllocatorDefault, kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+          kSecAccessControlPrivateKeyUsage | kSecAccessControlUserPresence,
+          nullptr));
 }
 
 }  // namespace
@@ -123,12 +79,12 @@ std::unique_ptr<TouchIdContext> TouchIdContext::Create() {
 }
 
 // static
-bool TouchIdContext::TouchIdAvailableImplBlocking(AuthenticatorConfig config) {
-  // Ensure that the binary is signed with the keychain-access-group
+bool TouchIdContext::TouchIdAvailableImpl(AuthenticatorConfig config) {
+  // Ensure that the main executable is signed with the keychain-access-group
   // entitlement that is configured by the embedder; that user authentication
   // with biometry, watch, or device passcode possible; and that the device has
   // a secure enclave.
-  if (!BinaryHasKeychainAccessGroupEntitlementBlocking(
+  if (!crypto::apple::ExecutableHasKeychainAccessGroupEntitlement(
           config.keychain_access_group)) {
     FIDO_LOG(ERROR)
         << "Touch ID authenticator unavailable because keychain-access-group "
@@ -137,7 +93,7 @@ bool TouchIdContext::TouchIdAvailableImplBlocking(AuthenticatorConfig config) {
     return false;
   }
 
-  base::scoped_nsobject<LAContext> context([[LAContext alloc] init]);
+  LAContext* context = [[LAContext alloc] init];
   NSError* nserr;
   if (![context canEvaluatePolicy:LAPolicyDeviceOwnerAuthentication
                             error:&nserr]) {
@@ -154,7 +110,7 @@ bool TouchIdContext::TouchIdAvailableImplBlocking(AuthenticatorConfig config) {
 
 // Testing seam to allow faking Touch ID in tests.
 TouchIdContext::TouchIdAvailableFuncPtr TouchIdContext::g_touch_id_available_ =
-    &TouchIdContext::TouchIdAvailableImplBlocking;
+    &TouchIdContext::TouchIdAvailableImpl;
 
 // static
 void TouchIdContext::TouchIdAvailable(
@@ -168,11 +124,7 @@ void TouchIdContext::TouchIdAvailable(
       std::move(callback));
 }
 
-TouchIdContext::TouchIdContext()
-    : context_([[LAContext alloc] init]),
-      access_control_(DefaultAccessControl()),
-      callback_(),
-      weak_ptr_factory_(this) {}
+TouchIdContext::TouchIdContext() : context_([[LAContext alloc] init]) {}
 
 TouchIdContext::~TouchIdContext() {
   // Invalidating the LAContext will dismiss any pending UI dialog (e.g. if the
@@ -185,13 +137,16 @@ void TouchIdContext::PromptTouchId(const std::u16string& reason,
                                    Callback callback) {
   callback_ = std::move(callback);
   scoped_refptr<base::SequencedTaskRunner> runner =
-      base::SequencedTaskRunnerHandle::Get();
+      base::SequencedTaskRunner::GetCurrentDefault();
   auto weak_self = weak_ptr_factory_.GetWeakPtr();
-  // If evaluation succeeds (i.e. user provides a fingerprint), |context_| can
-  // be used for one signing operation. N.B. even in |MakeCredentialOperation|,
-  // we need to perform a signature for the attestation statement, so we need
-  // the sign bit there.
-  [context_ evaluateAccessControl:access_control_
+  // Generate a SecAccessControl that can be used for obtaining signatures.
+  // For current credentials we can actually obtain signatures without the
+  // SecAccessControl, but for older credentials we used kSecAttrAccessControl
+  // attribute to ensure the keychain would only produce signatures in exchange
+  // for biometrics or device password.
+  base::apple::ScopedCFTypeRef<SecAccessControlRef> access_control =
+      CreateDefaultAccessControl();
+  [context_ evaluateAccessControl:access_control.get()
                         operation:LAAccessControlOperationUseKeySign
                   localizedReason:base::SysUTF16ToNSString(reason)
                             reply:^(BOOL success, NSError* error) {
@@ -206,12 +161,10 @@ void TouchIdContext::PromptTouchId(const std::u16string& reason,
                                 // |error| is autoreleased in this block. It
                                 // is not currently passed onto the other
                                 // thread running the callback; but if it
-                                // were, it would have to be retained first
-                                // (and probably captured in a
-                                // scoped_nsobject<NSError>).
+                                // were, it would have to be retained first.
                                 DCHECK(error != nil);
                                 DVLOG(1) << "Touch ID prompt failed: "
-                                         << base::mac::NSToCFCast(error);
+                                         << base::apple::NSToCFPtrCast(error);
                               }
                               runner->PostTask(
                                   FROM_HERE,
@@ -224,6 +177,4 @@ void TouchIdContext::RunCallback(bool success) {
   std::move(callback_).Run(success);
 }
 
-}  // namespace mac
-}  // namespace fido
-}  // namespace device
+}  // namespace device::fido::mac

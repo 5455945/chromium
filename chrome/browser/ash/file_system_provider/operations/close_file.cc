@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,23 +6,20 @@
 
 #include <string>
 
-#include "chrome/common/extensions/api/file_system_provider.h"
-#include "chrome/common/extensions/api/file_system_provider_internal.h"
+#include "chromeos/ash/experiences/extensions/common/api/file_system_provider.h"
+#include "chromeos/ash/experiences/extensions/common/api/file_system_provider_internal.h"
 
-namespace ash {
-namespace file_system_provider {
-namespace operations {
+namespace ash::file_system_provider::operations {
 
-CloseFile::CloseFile(extensions::EventRouter* event_router,
+CloseFile::CloseFile(RequestDispatcher* dispatcher,
                      const ProvidedFileSystemInfo& file_system_info,
                      int open_request_id,
                      storage::AsyncFileUtil::StatusCallback callback)
-    : Operation(event_router, file_system_info),
+    : Operation(dispatcher, file_system_info),
       open_request_id_(open_request_id),
       callback_(std::move(callback)) {}
 
-CloseFile::~CloseFile() {
-}
+CloseFile::~CloseFile() = default;
 
 bool CloseFile::Execute(int request_id) {
   using extensions::api::file_system_provider::CloseFileRequestedOptions;
@@ -32,26 +29,26 @@ bool CloseFile::Execute(int request_id) {
   options.request_id = request_id;
   options.open_request_id = open_request_id_;
 
+  auto event_args = base::MakeRefCounted<extensions::EventArgs>(
+      extensions::api::file_system_provider::OnCloseFileRequested::Create(
+          options));
   return SendEvent(
       request_id,
       extensions::events::FILE_SYSTEM_PROVIDER_ON_CLOSE_FILE_REQUESTED,
       extensions::api::file_system_provider::OnCloseFileRequested::kEventName,
-      extensions::api::file_system_provider::OnCloseFileRequested::Create(
-          options));
+      std::move(event_args));
 }
 
-void CloseFile::OnSuccess(int /* request_id */,
-                          std::unique_ptr<RequestValue> result,
+void CloseFile::OnSuccess(/*request_id=*/int,
+                          const RequestValue& result,
                           bool has_more) {
   std::move(callback_).Run(base::File::FILE_OK);
 }
 
-void CloseFile::OnError(int /* request_id */,
-                        std::unique_ptr<RequestValue> /* result */,
+void CloseFile::OnError(/*request_id=*/int,
+                        /*result=*/const RequestValue&,
                         base::File::Error error) {
   std::move(callback_).Run(error);
 }
 
-}  // namespace operations
-}  // namespace file_system_provider
-}  // namespace ash
+}  // namespace ash::file_system_provider::operations

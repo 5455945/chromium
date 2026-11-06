@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,25 +6,22 @@
 
 #include <string>
 
-#include "chrome/common/extensions/api/file_system_provider.h"
-#include "chrome/common/extensions/api/file_system_provider_internal.h"
+#include "chromeos/ash/experiences/extensions/common/api/file_system_provider.h"
+#include "chromeos/ash/experiences/extensions/common/api/file_system_provider_internal.h"
 
-namespace ash {
-namespace file_system_provider {
-namespace operations {
+namespace ash::file_system_provider::operations {
 
-RemoveWatcher::RemoveWatcher(extensions::EventRouter* event_router,
+RemoveWatcher::RemoveWatcher(RequestDispatcher* dispatcher,
                              const ProvidedFileSystemInfo& file_system_info,
                              const base::FilePath& entry_path,
                              bool recursive,
                              storage::AsyncFileUtil::StatusCallback callback)
-    : Operation(event_router, file_system_info),
+    : Operation(dispatcher, file_system_info),
       entry_path_(entry_path),
       recursive_(recursive),
       callback_(std::move(callback)) {}
 
-RemoveWatcher::~RemoveWatcher() {
-}
+RemoveWatcher::~RemoveWatcher() = default;
 
 bool RemoveWatcher::Execute(int request_id) {
   using extensions::api::file_system_provider::RemoveWatcherRequestedOptions;
@@ -35,29 +32,29 @@ bool RemoveWatcher::Execute(int request_id) {
   options.entry_path = entry_path_.AsUTF8Unsafe();
   options.recursive = recursive_;
 
+  auto event_args = base::MakeRefCounted<extensions::EventArgs>(
+      extensions::api::file_system_provider::OnRemoveWatcherRequested::Create(
+          options));
   return SendEvent(
       request_id,
       extensions::events::FILE_SYSTEM_PROVIDER_ON_REMOVE_WATCHER_REQUESTED,
       extensions::api::file_system_provider::OnRemoveWatcherRequested::
           kEventName,
-      extensions::api::file_system_provider::OnRemoveWatcherRequested::Create(
-          options));
+      std::move(event_args));
 }
 
-void RemoveWatcher::OnSuccess(int /* request_id */,
-                              std::unique_ptr<RequestValue> /* result */,
+void RemoveWatcher::OnSuccess(/*request_id=*/int,
+                              /*result=*/const RequestValue&,
                               bool has_more) {
-  DCHECK(callback_);
+  CHECK(callback_, base::NotFatalUntil::M160);
   std::move(callback_).Run(base::File::FILE_OK);
 }
 
-void RemoveWatcher::OnError(int /* request_id */,
-                            std::unique_ptr<RequestValue> /* result */,
+void RemoveWatcher::OnError(/*request_id=*/int,
+                            /*result=*/const RequestValue&,
                             base::File::Error error) {
-  DCHECK(callback_);
+  CHECK(callback_, base::NotFatalUntil::M160);
   std::move(callback_).Run(error);
 }
 
-}  // namespace operations
-}  // namespace file_system_provider
-}  // namespace ash
+}  // namespace ash::file_system_provider::operations

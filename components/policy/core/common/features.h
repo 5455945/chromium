@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,37 +7,124 @@
 
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/policy/policy_export.h"
 
-namespace policy {
-namespace features {
+namespace policy::features {
 
-// Feature that controls whether the browser registers for FCM invalidations for
-// Machine Level Policies. If enabled, |kCBCMServiceAccounts| must also be
-// enabled.
-POLICY_EXPORT extern const base::Feature kCBCMPolicyInvalidations;
+// Enable the PolicyBlocklistThrottle optimization to hide the DEFER latency
+// on WillStartRequest and WillRedirectRequest. See https://crbug.com/349964973.
+// This is launched, but the feature flag will be kept in 2025 for monitoring.
+POLICY_EXPORT BASE_DECLARE_FEATURE(kPolicyBlocklistProceedUntilResponse);
 
-// Feature that controls if remote commands are enabled in CBCM. If enabled,
-// the browser will register for remote commands FCM invalidations, and fetch
-// remote commands when fetching policies.
-POLICY_EXPORT extern const base::Feature kCBCMRemoteCommands;
+// Enables the fact that the ProfileSeparationDomainExceptionList retroactively
+// signs out accounts that require a new profile. This is used as a kill switch.
+POLICY_EXPORT BASE_DECLARE_FEATURE(
+    kProfileSeparationDomainExceptionListRetroactive);
 
-// PolicyBlocklistThrottle defers navigations until policies are loaded.
-POLICY_EXPORT extern const base::Feature
-    kPolicyBlocklistThrottleRequiresPoliciesLoaded;
+// Enables the addition of new security fields for SecOps.
+POLICY_EXPORT BASE_DECLARE_FEATURE(kEnhancedSecurityEventFields);
 
-// Max time to defer the navigation while waiting for policies to load.
+// Returns true if `kEnhancedSecurityEventFields` is enabled and supported on
+// the current platform. On Windows 11 24H2+, this returns false due to hangs
+// during synchronous WLAN API queries.
+// TODO(crbug.com/577109904): Re-enable once network name query is asynchronous.
+POLICY_EXPORT bool IsEnhancedSecurityEventFieldsEnabled();
+
+// Controls if we can use the cec flag in PolicyData.
+POLICY_EXPORT BASE_DECLARE_FEATURE(kUseCECFlagInPolicyData);
+
+// When enabled, increases the maximum cloud policy cache size limit read from
+// disk (for both user and machine level caches) from 1 MB to 2 MB to
+// accommodate large enterprise policy sets.
+POLICY_EXPORT BASE_DECLARE_FEATURE(kUserPolicyCacheSizeLimit2MB);
+
+#if BUILDFLAG(IS_ANDROID)
+// Enables policy initialization for signed-in users in new entry points.
+POLICY_EXPORT BASE_DECLARE_FEATURE(
+    kInitializePoliciesForSignedInUserInNewEntryPoints);
+#endif
+
+// Enables a configurable delay for policy registration.
+POLICY_EXPORT BASE_DECLARE_FEATURE(kCustomPolicyRegistrationDelay);
 POLICY_EXPORT extern const base::FeatureParam<base::TimeDelta>
-    kPolicyBlocklistThrottlePolicyLoadTimeout;
+    kPolicyRegistrationDelay;
 
-// Update browser device identifier during enrollment and fetching policies.
-POLICY_EXPORT extern const base::Feature kUploadBrowserDeviceIdentifier;
+// A blocklist of policies supported on Desktop Android.
+POLICY_EXPORT BASE_DECLARE_FEATURE(kDesktopAndroidPolicy);
+POLICY_EXPORT extern const base::FeatureParam<std::string>
+    kDesktopAndroidPolicyBlocklist;
 
-// Enable Chrome Remote Desktop for Managed Guest Sessions and affiliated users.
-POLICY_EXPORT extern const base::Feature kCRDForManagedUserSessions;
+// Used to add a captive portal check in SafeSitesNavigationThrottle.
+POLICY_EXPORT BASE_DECLARE_FEATURE(kSafeSitesCaptivePortalCheck);
 
-}  // namespace features
-}  // namespace policy
+// Used to enable extension install policy support.
+POLICY_EXPORT BASE_DECLARE_FEATURE(kEnableExtensionInstallPolicyFetching);
+
+// When enabled, uses ManagementService to determine whether to honor sensitive
+// policies. When disabled, falls back to the original ShouldHonorPolicies()
+// behavior. This flag allows reverting if the new approach causes issues.
+// Note: Only has an effect on Mac and Windows where ShouldHonorPolicies()
+// performs platform-specific checks.
+POLICY_EXPORT BASE_DECLARE_FEATURE(kUseManagementServiceForSensitivePolicies);
+
+// When enabled, AzureActiveDirectoryDeviceStatusProvider only returns
+// CLOUD_DOMAIN for device-joined Azure AD accounts. When disabled (kill
+// switch), it falls back to the behavior of AzureActiveDirectoryStatusProvider,
+// returning CLOUD_DOMAIN for all Azure AD joined accounts (including
+// workplace-joined).
+POLICY_EXPORT BASE_DECLARE_FEATURE(
+    kFilterSensitivePoliciesOnWorkplaceJoinedDevices);
+
+// Modifies behavior of policies utilizing URLBlocklistManager.
+// When enabled, bypasses the wildcard "*" in the blocklist for internal
+// chrome:// URLs such as chrome://ntp, chrome://bookmarks, etc.
+// This feature serves as a killswitch to allow for immediate revert via Finch
+// if regressions are detected.
+POLICY_EXPORT BASE_DECLARE_FEATURE(
+    kBypassURLBlocklistWildcardForInternalChromeUrls);
+
+// Modifies behavior of policies utilizing URLBlocklistManager.
+// When enabled, downgrades the match level to neutral if the URL is allowed by
+// the wildcard '*' in the allowlist.
+POLICY_EXPORT BASE_DECLARE_FEATURE(kDowngradeURLAllowlistWildcardToNeutral);
+
+// Enables the mojo version of the page handler for chrome://policy.
+POLICY_EXPORT BASE_DECLARE_FEATURE(kPolicyPageMojoMigration);
+
+// If enabled, device signals collection disclaimer will be shown during signin
+// for profiles created before the profile flow with disclaimer was released.
+POLICY_EXPORT BASE_DECLARE_FEATURE(kDeviceSignalsBackfillDisclaimer);
+POLICY_EXPORT extern const base::FeatureParam<bool>
+    kClearDeviceSignalsPermissionOnStartup;
+
+// When enabled, URLs in the general blocklist are still blocked in incognito
+// even if they are in the incognito allowlist.
+POLICY_EXPORT BASE_DECLARE_FEATURE(kURLBlocklistOverridesIncognitoAllowlist);
+
+// Enables the export of platform policies as JSON on the chrome://policy page.
+POLICY_EXPORT BASE_DECLARE_FEATURE(kExportPlatformPoliciesJson);
+
+// When enabled, migrates user cloud management status and sign-in interception
+// policy fetching from the legacy SecureConnect endpoint to Device Management
+// Server.
+POLICY_EXPORT BASE_DECLARE_FEATURE(kMigrateSecureConnectApiToDmServer);
+POLICY_EXPORT extern const base::FeatureParam<base::TimeDelta>
+    kMigrateSecureConnectApiToDmServerFetchTimeout;
+
+// Returns true if `kMigrateSecureConnectApiToDmServer` is enabled.
+POLICY_EXPORT bool IsMigrateSecureConnectApiToDmServerEnabled();
+
+// When enabled, UserInfoFetcher will use
+// CredentialsMode::kOmitBug_775438_Workaround instead of CredentialsMode::kOmit
+// for user info requests.
+POLICY_EXPORT BASE_DECLARE_FEATURE(kPolicyUserInfoFetcherUseOmitBugWorkaround);
+
+// When enabled, CBCM unenrollment on HTTP 410 requires an explicit
+// `DeviceManagementErrorDetail` in the response body.
+POLICY_EXPORT BASE_DECLARE_FEATURE(kCbcmRequireErrorDetailForUnenrollment);
+
+}  // namespace policy::features
 
 #endif  // COMPONENTS_POLICY_CORE_COMMON_FEATURES_H_

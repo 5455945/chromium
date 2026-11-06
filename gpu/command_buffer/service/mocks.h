@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,10 +14,15 @@
 #include <stdint.h>
 
 #include <string>
+#include <string_view>
 #include <vector>
 
+#include "base/compiler_specific.h"
+#include "base/memory/raw_ptr.h"
 #include "gpu/command_buffer/common/cmd_buffer_common.h"
 #include "gpu/command_buffer/service/async_api_interface.h"
+#include "gpu/command_buffer/service/decoder_client.h"
+#include "gpu/command_buffer/service/isolation_key_provider.h"
 #include "gpu/command_buffer/service/memory_tracking.h"
 #include "gpu/command_buffer/service/program_cache.h"
 #include "gpu/command_buffer/service/shader_translator.h"
@@ -25,12 +30,14 @@
 
 namespace gpu {
 
+class CommandBufferDirect;
 class CommandBufferServiceBase;
 
 // Mocks an AsyncAPIInterface, using GMock.
 class AsyncAPIMock : public AsyncAPIInterface {
  public:
   explicit AsyncAPIMock(bool default_do_commands,
+                        CommandBufferDirect* command_buffer,
                         CommandBufferServiceBase* command_buffer_service);
   ~AsyncAPIMock() override;
 
@@ -48,17 +55,21 @@ class AsyncAPIMock : public AsyncAPIInterface {
               const_cast<volatile void*>(args))) {}
 
     bool operator()(const volatile void* _args) const {
-      const volatile CommandBufferEntry* args =
-          static_cast<const volatile CommandBufferEntry*>(_args) + 1;
+      const volatile CommandBufferEntry* args = UNSAFE_TODO(
+          static_cast<const volatile CommandBufferEntry*>(_args) + 1);
       for (unsigned int i = 0; i < arg_count_; ++i) {
-        if (args[i].value_uint32 != args_[i].value_uint32) return false;
+        if (UNSAFE_TODO(args[i]).value_uint32 !=
+            UNSAFE_TODO(args_[i]).value_uint32) {
+          return false;
+        }
       }
       return true;
     }
 
    private:
     unsigned int arg_count_;
-    volatile CommandBufferEntry* args_;
+    raw_ptr<volatile CommandBufferEntry, DanglingUntriaged | AllowPtrArithmetic>
+        args_;
   };
 
   void BeginDecoding() override {}
@@ -75,7 +86,7 @@ class AsyncAPIMock : public AsyncAPIInterface {
                             int num_entries,
                             int* entries_processed));
 
-  base::StringPiece GetLogPrefix() override { return "None"; }
+  std::string_view GetLogPrefix() override { return "None"; }
 
   // Forwards the SetToken commands to the engine.
   void SetToken(unsigned int command,
@@ -83,7 +94,39 @@ class AsyncAPIMock : public AsyncAPIInterface {
                 const volatile void* _args);
 
  private:
-  CommandBufferServiceBase* command_buffer_service_;
+  raw_ptr<CommandBufferDirect> command_buffer_;
+  raw_ptr<CommandBufferServiceBase, DanglingUntriaged> command_buffer_service_;
+};
+
+class MockDecoderClient : public DecoderClient {
+ public:
+  MockDecoderClient();
+  ~MockDecoderClient() override;
+
+  MOCK_METHOD(void, OnConsoleMessage, (int32_t id, const std::string& message));
+  MOCK_METHOD(void,
+              CacheBlob,
+              (gpu::GpuDiskCacheType type,
+               const std::string& key,
+               const std::string& shader));
+  MOCK_METHOD(void, OnFenceSyncRelease, (uint64_t release));
+  MOCK_METHOD(void, OnDescheduleUntilFinished, ());
+  MOCK_METHOD(void, OnRescheduleAfterFinished, ());
+  MOCK_METHOD(void, ScheduleGrContextCleanup, ());
+  MOCK_METHOD(void, SetActiveURL, (GURL url));
+  MOCK_METHOD(void, HandleReturnData, (base::span<const uint8_t> data));
+};
+
+class MockIsolationKeyProvider : public IsolationKeyProvider {
+ public:
+  MockIsolationKeyProvider();
+  ~MockIsolationKeyProvider() override;
+
+  MOCK_METHOD(void,
+              GetIsolationKey,
+              (const blink::WebGPUExecutionContextToken& token,
+               GetIsolationKeyCallback cb),
+              (override));
 };
 
 namespace gles2 {
@@ -97,7 +140,7 @@ class MockShaderTranslator : public ShaderTranslatorInterface {
                     ShShaderSpec shader_spec,
                     const ShBuiltInResources* resources,
                     ShShaderOutput shader_output_language,
-                    ShCompileOptions driver_bug_workarounds,
+                    const ShCompileOptions& driver_bug_workarounds,
                     bool gl_shader_interm_output));
   MOCK_CONST_METHOD9(Translate,
                      bool(const std::string& shader_source,
@@ -149,13 +192,15 @@ class MockProgramCache : public ProgramCache {
 class MockMemoryTracker : public MemoryTracker {
  public:
   MockMemoryTracker();
-  ~MockMemoryTracker() override;
 
   MOCK_METHOD1(TrackMemoryAllocatedChange, void(int64_t delta));
   uint64_t GetSize() const override { return 0; }
   MOCK_CONST_METHOD0(ClientTracingId, uint64_t());
   MOCK_CONST_METHOD0(ClientId, int());
   MOCK_CONST_METHOD0(ContextGroupTracingId, uint64_t());
+
+ protected:
+  ~MockMemoryTracker() override;
 };
 
 }  // namespace gles2

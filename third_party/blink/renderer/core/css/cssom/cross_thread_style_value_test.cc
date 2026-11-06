@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,9 @@
 #include <memory>
 #include <utility>
 
-#include "base/single_thread_task_runner.h"
+#include "base/memory/values_equivalent.h"
 #include "base/synchronization/waitable_event.h"
+#include "base/task/single_thread_task_runner.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/core/css/cssom/cross_thread_color_value.h"
 #include "third_party/blink/renderer/core/css/cssom/cross_thread_keyword_value.h"
@@ -20,9 +21,10 @@
 #include "third_party/blink/renderer/core/css/cssom/css_unit_value.h"
 #include "third_party/blink/renderer/core/css/cssom/css_unparsed_value.h"
 #include "third_party/blink/renderer/core/css/cssom/css_unsupported_color.h"
+#include "third_party/blink/renderer/platform/scheduler/public/non_main_thread.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
-#include "third_party/blink/renderer/platform/scheduler/public/thread.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
+#include "third_party/blink/renderer/platform/wtf/wtf.h"
 
 namespace blink {
 
@@ -68,6 +70,31 @@ class CrossThreadStyleValueTest : public testing::Test {
     waitable_event->Signal();
   }
 
+  void CheckUnparsedValueToString(base::WaitableEvent* waitable_event) {
+    DCHECK(!IsMainThread());
+
+    EXPECT_EQ(CrossThreadUnparsedValue("").ToCSSStyleValue()->toString(), "");
+    EXPECT_EQ(
+        CrossThreadUnparsedValue("Unparsed").ToCSSStyleValue()->toString(),
+        "Unparsed");
+    EXPECT_EQ(CrossThreadUnparsedValue("if(supports(selector(div)): 10px)")
+                  .ToCSSStyleValue()
+                  ->toString(),
+              "if(supports(selector(div)): 10px)");
+    EXPECT_EQ(CrossThreadUnparsedValue("if(supports(selector(x >)): 1px)")
+                  .ToCSSStyleValue()
+                  ->toString(),
+              "if(supports(selector(x >)): 1px)");
+    EXPECT_EQ(
+        CrossThreadUnparsedValue("if(supports(list-style-type: disc): 10px)")
+            .ToCSSStyleValue()
+            ->toString(),
+        "if(supports(list-style-type: disc): 10px)");
+    EXPECT_EQ(CrossThreadUnparsedValue("var()").ToCSSStyleValue()->toString(),
+              "var()");
+    waitable_event->Signal();
+  }
+
   void CheckUnitValue(base::WaitableEvent* waitable_event,
                       std::unique_ptr<CrossThreadUnitValue> value) {
     DCHECK(!IsMainThread());
@@ -86,7 +113,7 @@ class CrossThreadStyleValueTest : public testing::Test {
   }
 
  protected:
-  std::unique_ptr<blink::Thread> thread_;
+  std::unique_ptr<blink::NonMainThread> thread_;
 };
 
 // Ensure that a CrossThreadUnsupportedValue can be safely passed cross
@@ -97,7 +124,7 @@ TEST_F(CrossThreadStyleValueTest, PassUnsupportedValueCrossThread) {
   DCHECK(value);
 
   // Use a Thread to emulate worklet thread.
-  thread_ = blink::Thread::CreateThread(
+  thread_ = blink::NonMainThread::CreateThread(
       ThreadCreationParams(ThreadType::kTestThread).SetSupportsGC(true));
   base::WaitableEvent waitable_event;
   PostCrossThreadTask(
@@ -128,7 +155,7 @@ TEST_F(CrossThreadStyleValueTest, PassUnparsedValueCrossThread) {
   DCHECK(value);
 
   // Use a Thread to emulate worklet thread.
-  thread_ = blink::Thread::CreateThread(
+  thread_ = blink::NonMainThread::CreateThread(
       ThreadCreationParams(ThreadType::kTestThread).SetSupportsGC(true));
   base::WaitableEvent waitable_event;
   PostCrossThreadTask(
@@ -142,6 +169,20 @@ TEST_F(CrossThreadStyleValueTest, PassUnparsedValueCrossThread) {
   ShutDownThread();
 }
 
+TEST_F(CrossThreadStyleValueTest, UnparsedValueToStringCrossThread) {
+  thread_ = blink::NonMainThread::CreateThread(
+      ThreadCreationParams(ThreadType::kTestThread).SetSupportsGC(true));
+  base::WaitableEvent waitable_event;
+  PostCrossThreadTask(
+      *thread_->GetTaskRunner(), FROM_HERE,
+      CrossThreadBindOnce(
+          &CrossThreadStyleValueTest::CheckUnparsedValueToString,
+          CrossThreadUnretained(this), CrossThreadUnretained(&waitable_event)));
+  waitable_event.Wait();
+
+  ShutDownThread();
+}
+
 TEST_F(CrossThreadStyleValueTest, CrossThreadUnparsedValueToCSSStyleValue) {
   std::unique_ptr<CrossThreadUnparsedValue> value =
       std::make_unique<CrossThreadUnparsedValue>("Unparsed");
@@ -150,8 +191,18 @@ TEST_F(CrossThreadStyleValueTest, CrossThreadUnparsedValueToCSSStyleValue) {
   CSSStyleValue* style_value = value->ToCSSStyleValue();
   EXPECT_EQ(style_value->GetType(),
             CSSStyleValue::StyleValueType::kUnparsedType);
-  EXPECT_EQ(static_cast<CSSUnparsedValue*>(style_value)->ToString(),
-            "Unparsed");
+  EXPECT_EQ(style_value->toString(), "Unparsed");
+  EXPECT_TRUE(To<CSSUnparsedValue>(style_value)->IsValidDeclarationValue());
+  EXPECT_EQ(style_value->ToCSSValue()->CssText(), "Unparsed");
+
+  CSSUnparsedValue* empty_value = CSSUnparsedValue::FromString("");
+  EXPECT_EQ(empty_value->toString(), "");
+  EXPECT_TRUE(empty_value->IsValidDeclarationValue());
+  EXPECT_EQ(empty_value->ToCSSValue()->CssText(), "");
+
+  CSSUnparsedValue* invalid_value = CSSUnparsedValue::FromString("var()");
+  EXPECT_EQ(invalid_value->toString(), "var()");
+  EXPECT_FALSE(invalid_value->IsValidDeclarationValue());
 }
 
 TEST_F(CrossThreadStyleValueTest, PassKeywordValueCrossThread) {
@@ -160,7 +211,7 @@ TEST_F(CrossThreadStyleValueTest, PassKeywordValueCrossThread) {
   DCHECK(value);
 
   // Use a Thread to emulate worklet thread.
-  thread_ = blink::Thread::CreateThread(
+  thread_ = blink::NonMainThread::CreateThread(
       ThreadCreationParams(ThreadType::kTestThread).SetSupportsGC(true));
   base::WaitableEvent waitable_event;
   PostCrossThreadTask(
@@ -192,7 +243,7 @@ TEST_F(CrossThreadStyleValueTest, PassUnitValueCrossThread) {
   DCHECK(value);
 
   // Use a Thread to emulate worklet thread.
-  thread_ = blink::Thread::CreateThread(
+  thread_ = blink::NonMainThread::CreateThread(
       ThreadCreationParams(ThreadType::kTestThread).SetSupportsGC(true));
   base::WaitableEvent waitable_event;
   PostCrossThreadTask(
@@ -224,7 +275,7 @@ TEST_F(CrossThreadStyleValueTest, PassColorValueCrossThread) {
   DCHECK(value);
 
   // Use a Thread to emulate worklet thread.
-  thread_ = blink::Thread::CreateThread(
+  thread_ = blink::NonMainThread::CreateThread(
       ThreadCreationParams(ThreadType::kTestThread).SetSupportsGC(true));
   base::WaitableEvent waitable_event;
   PostCrossThreadTask(
@@ -254,7 +305,7 @@ TEST_F(CrossThreadStyleValueTest, ComparingNullValues) {
   // Two null values are equal to each other.
   std::unique_ptr<CrossThreadStyleValue> null_value1(nullptr);
   std::unique_ptr<CrossThreadStyleValue> null_value2(nullptr);
-  EXPECT_TRUE(DataEquivalent(null_value1, null_value2));
+  EXPECT_TRUE(base::ValuesEquivalent(null_value1, null_value2));
 
   // If one argument is null and the other isn't they are never equal.
   std::unique_ptr<CrossThreadStyleValue> keyword_value(
@@ -264,12 +315,12 @@ TEST_F(CrossThreadStyleValueTest, ComparingNullValues) {
   std::unique_ptr<CrossThreadStyleValue> unsupported_value(
       new CrossThreadUnsupportedValue("unsupported"));
 
-  EXPECT_FALSE(DataEquivalent(null_value1, keyword_value));
-  EXPECT_FALSE(DataEquivalent(null_value1, unit_value));
-  EXPECT_FALSE(DataEquivalent(null_value1, unsupported_value));
-  EXPECT_FALSE(DataEquivalent(keyword_value, null_value1));
-  EXPECT_FALSE(DataEquivalent(unit_value, null_value1));
-  EXPECT_FALSE(DataEquivalent(unsupported_value, null_value1));
+  EXPECT_FALSE(base::ValuesEquivalent(null_value1, keyword_value));
+  EXPECT_FALSE(base::ValuesEquivalent(null_value1, unit_value));
+  EXPECT_FALSE(base::ValuesEquivalent(null_value1, unsupported_value));
+  EXPECT_FALSE(base::ValuesEquivalent(keyword_value, null_value1));
+  EXPECT_FALSE(base::ValuesEquivalent(unit_value, null_value1));
+  EXPECT_FALSE(base::ValuesEquivalent(unsupported_value, null_value1));
 }
 
 TEST_F(CrossThreadStyleValueTest, ComparingDifferentTypes) {
@@ -281,12 +332,12 @@ TEST_F(CrossThreadStyleValueTest, ComparingDifferentTypes) {
   std::unique_ptr<CrossThreadStyleValue> unsupported_value(
       new CrossThreadUnsupportedValue("unsupported"));
 
-  EXPECT_FALSE(DataEquivalent(keyword_value, unit_value));
-  EXPECT_FALSE(DataEquivalent(keyword_value, unsupported_value));
-  EXPECT_FALSE(DataEquivalent(unit_value, unsupported_value));
-  EXPECT_FALSE(DataEquivalent(unit_value, keyword_value));
-  EXPECT_FALSE(DataEquivalent(unsupported_value, keyword_value));
-  EXPECT_FALSE(DataEquivalent(unsupported_value, unit_value));
+  EXPECT_FALSE(base::ValuesEquivalent(keyword_value, unit_value));
+  EXPECT_FALSE(base::ValuesEquivalent(keyword_value, unsupported_value));
+  EXPECT_FALSE(base::ValuesEquivalent(unit_value, unsupported_value));
+  EXPECT_FALSE(base::ValuesEquivalent(unit_value, keyword_value));
+  EXPECT_FALSE(base::ValuesEquivalent(unsupported_value, keyword_value));
+  EXPECT_FALSE(base::ValuesEquivalent(unsupported_value, unit_value));
 }
 
 TEST_F(CrossThreadStyleValueTest, ComparingCrossThreadKeywordValue) {
@@ -299,8 +350,8 @@ TEST_F(CrossThreadStyleValueTest, ComparingCrossThreadKeywordValue) {
   std::unique_ptr<CrossThreadStyleValue> keyword_value_3(
       new CrossThreadKeywordValue("different"));
 
-  EXPECT_TRUE(DataEquivalent(keyword_value_1, keyword_value_2));
-  EXPECT_FALSE(DataEquivalent(keyword_value_1, keyword_value_3));
+  EXPECT_TRUE(base::ValuesEquivalent(keyword_value_1, keyword_value_2));
+  EXPECT_FALSE(base::ValuesEquivalent(keyword_value_1, keyword_value_3));
 }
 
 TEST_F(CrossThreadStyleValueTest, ComparingCrossThreadUnitValue) {
@@ -312,17 +363,17 @@ TEST_F(CrossThreadStyleValueTest, ComparingCrossThreadUnitValue) {
   // Same value, same unit.
   std::unique_ptr<CrossThreadStyleValue> unit_value_2(
       new CrossThreadUnitValue(1, CSSPrimitiveValue::UnitType::kDegrees));
-  EXPECT_TRUE(DataEquivalent(unit_value_1, unit_value_2));
+  EXPECT_TRUE(base::ValuesEquivalent(unit_value_1, unit_value_2));
 
   // Same value, different unit.
   std::unique_ptr<CrossThreadStyleValue> unit_value_3(
       new CrossThreadUnitValue(1, CSSPrimitiveValue::UnitType::kPoints));
-  EXPECT_FALSE(DataEquivalent(unit_value_1, unit_value_3));
+  EXPECT_FALSE(base::ValuesEquivalent(unit_value_1, unit_value_3));
 
   // Different value, same unit.
   std::unique_ptr<CrossThreadStyleValue> unit_value_4(
       new CrossThreadUnitValue(2, CSSPrimitiveValue::UnitType::kDegrees));
-  EXPECT_FALSE(DataEquivalent(unit_value_1, unit_value_4));
+  EXPECT_FALSE(base::ValuesEquivalent(unit_value_1, unit_value_4));
 }
 
 TEST_F(CrossThreadStyleValueTest, ComparingCrossThreadColorValue) {
@@ -335,8 +386,8 @@ TEST_F(CrossThreadStyleValueTest, ComparingCrossThreadColorValue) {
   std::unique_ptr<CrossThreadStyleValue> color_value_3(
       new CrossThreadColorValue(Color(0, 255, 0)));
 
-  EXPECT_TRUE(DataEquivalent(color_value_1, color_value_2));
-  EXPECT_FALSE(DataEquivalent(color_value_1, color_value_3));
+  EXPECT_TRUE(base::ValuesEquivalent(color_value_1, color_value_2));
+  EXPECT_FALSE(base::ValuesEquivalent(color_value_1, color_value_3));
 }
 
 TEST_F(CrossThreadStyleValueTest, ComparingCrossThreadUnsupportedValue) {
@@ -349,8 +400,9 @@ TEST_F(CrossThreadStyleValueTest, ComparingCrossThreadUnsupportedValue) {
   std::unique_ptr<CrossThreadStyleValue> unsupported_value_3(
       new CrossThreadUnsupportedValue("different"));
 
-  EXPECT_TRUE(DataEquivalent(unsupported_value_1, unsupported_value_2));
-  EXPECT_FALSE(DataEquivalent(unsupported_value_1, unsupported_value_3));
+  EXPECT_TRUE(base::ValuesEquivalent(unsupported_value_1, unsupported_value_2));
+  EXPECT_FALSE(
+      base::ValuesEquivalent(unsupported_value_1, unsupported_value_3));
 }
 
 }  // namespace blink

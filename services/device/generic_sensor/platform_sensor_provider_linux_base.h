@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,10 +11,9 @@ namespace device {
 
 class PlatformSensorProviderLinuxBase : public PlatformSensorProvider {
  protected:
-  static bool IsFusionSensorType(mojom::SensorType type);
+  virtual bool IsFusionSensorType(mojom::SensorType type) const;
 
   void CreateFusionSensor(mojom::SensorType type,
-                          SensorReadingSharedBuffer* reading_buffer,
                           CreateSensorCallback callback);
 
   virtual bool IsSensorTypeAvailable(mojom::SensorType type) const = 0;

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,20 @@
 #define COMPONENTS_SERVICES_STORAGE_PUBLIC_CPP_FILESYSTEM_FILESYSTEM_PROXY_H_
 
 #include <memory>
+#include <optional>
 #include <vector>
 
+#include "base/byte_size.h"
 #include "base/component_export.h"
+#include "base/files/file_error_or.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/sequenced_task_runner.h"
-#include "base/types/pass_key.h"
-#include "components/services/storage/public/cpp/filesystem/file_error_or.h"
+#include "base/system/sys_info.h"
+#include "base/task/sequenced_task_runner.h"
 #include "components/services/storage/public/mojom/filesystem/directory.mojom.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/shared_remote.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace storage {
 
@@ -80,18 +82,14 @@ class COMPONENT_EXPORT(STORAGE_SERVICE_FILESYSTEM_SUPPORT) FilesystemProxy {
     kFilesOnly,
     kFilesAndDirectories,
   };
-  FileErrorOr<std::vector<base::FilePath>> GetDirectoryEntries(
+  base::FileErrorOr<std::vector<base::FilePath>> GetDirectoryEntries(
       const base::FilePath& path,
       DirectoryEntryType type);
 
   // Opens a file at |path| with the given |flags|. If successful, the newly
   // opened file is returned. |flags| may be any bitwise union of
   // base::File::Flags values.
-  FileErrorOr<base::File> OpenFile(const base::FilePath& path, int flags);
-
-  // Writes a file atomically using the ImportantFileWriter.
-  bool WriteFileAtomically(const base::FilePath& path,
-                           const std::string& contents);
+  base::FileErrorOr<base::File> OpenFile(const base::FilePath& path, int flags);
 
   // Creates a new directory at |path|. Any needed parent directories above
   // |path| are also created if they don't already exist.
@@ -102,13 +100,22 @@ class COMPONENT_EXPORT(STORAGE_SERVICE_FILESYSTEM_SUPPORT) FilesystemProxy {
   // will return true if |path| does not exist.
   bool DeleteFile(const base::FilePath& path);
 
-  // Recursively deletes the directory at |path| if it exists and returns true
-  // iff successful.  This will return true if |path| does not exist.
-  bool DeletePathRecursively(const base::FilePath& path);
-
   // Retrieves information about a file or directory at |path|. Returns a valid
   // base::File::Info value on success, or null on failure.
-  absl::optional<base::File::Info> GetFileInfo(const base::FilePath& path);
+  std::optional<base::File::Info> GetFileInfo(const base::FilePath& path);
+
+  // Return the total and available disk space on the volume containing `path`,
+  // or nullopt on failure.
+  using GetDiskSpaceInfoCallback =
+      base::OnceCallback<void(std::optional<base::SysInfo::DiskSpaceInfo>)>;
+  void GetDiskSpaceInfo(const base::FilePath& path,
+                        GetDiskSpaceInfoCallback callback);
+
+  // Returns the total number of bytes used by all the files under `path`.
+  // If the path does not exist the function returns 0.
+  void ComputeDirectorySize(
+      const base::FilePath& path,
+      mojom::Directory::ComputeDirectorySizeCallback callback);
 
   // Retrieves information about access rights for a path in the filesystem.
   // Returns a valid PathAccessInfo on success, or null on failure.
@@ -116,11 +123,7 @@ class COMPONENT_EXPORT(STORAGE_SERVICE_FILESYSTEM_SUPPORT) FilesystemProxy {
     bool can_read = false;
     bool can_write = false;
   };
-  absl::optional<PathAccessInfo> GetPathAccess(const base::FilePath& path);
-
-  // Returns the maximum length of path component on the volume containing the
-  // directory |path|, in the number of FilePath::CharType, or -1 on failure.
-  absl::optional<int> GetMaximumPathComponentLength(const base::FilePath& path);
+  std::optional<PathAccessInfo> GetPathAccess(const base::FilePath& path);
 
   // Renames a file from |old_path| to |new_path|. Must be atomic.
   base::File::Error RenameFile(const base::FilePath& old_path,
@@ -139,14 +142,12 @@ class COMPONENT_EXPORT(STORAGE_SERVICE_FILESYSTEM_SUPPORT) FilesystemProxy {
     // no-op.
     virtual base::File::Error Release() = 0;
   };
-  FileErrorOr<std::unique_ptr<FileLock>> LockFile(const base::FilePath& path);
-
-  // Sets the length of the given file to |length| bytes.
-  bool SetOpenedFileLength(base::File* file, uint64_t length);
-
-  // Returns the total number of bytes used by all the files under |path|.
-  // If the path does not exist the function returns 0.
-  int64_t ComputeDirectorySize(const base::FilePath& path);
+  // `same_process_failure`, if non-null, will be set to true iff acquiring the
+  // lock failed due to the lookup in `LockTable()`. TODO(crbug.com/340398745):
+  // remove this parameter.
+  base::FileErrorOr<std::unique_ptr<FileLock>> LockFile(
+      const base::FilePath& path,
+      bool* same_process_failure = nullptr);
 
  private:
   // For restricted FilesystemProxy instances, this returns a FilePath
@@ -165,7 +166,6 @@ class COMPONENT_EXPORT(STORAGE_SERVICE_FILESYSTEM_SUPPORT) FilesystemProxy {
   base::FilePath MaybeMakeAbsolute(const base::FilePath& path) const;
 
   const base::FilePath root_;
-  const size_t num_root_components_ = 0;
 
   // If |remote_directory_| is set this is a restricted proxy, otherwise
   // it is unrestricted and will perform filesystem operations directly.

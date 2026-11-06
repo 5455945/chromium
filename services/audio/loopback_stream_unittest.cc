@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,13 @@
 #include <cstdint>
 #include <memory>
 
-#include "base/bind.h"
 #include "base/containers/unique_ptr_adapters.h"
+#include "base/functional/bind.h"
+#include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/test/task_environment.h"
+#include "base/time/time.h"
 #include "base/unguessable_token.h"
 #include "media/base/audio_parameters.h"
 #include "media/base/audio_timestamp_helper.h"
@@ -22,7 +25,7 @@
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/audio/loopback_coordinator.h"
-#include "services/audio/loopback_group_member.h"
+#include "services/audio/loopback_source.h"
 #include "services/audio/test/fake_consumer.h"
 #include "services/audio/test/fake_loopback_group_member.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -45,23 +48,20 @@ constexpr double kMiddleAFreq = 440;
 constexpr double kMiddleCFreq = 261.626;
 
 // Audio buffer duration.
-constexpr base::TimeDelta kBufferDuration =
-    base::TimeDelta::FromMilliseconds(10);
+constexpr base::TimeDelta kBufferDuration = base::Milliseconds(10);
 
 // Local audio output delay.
-constexpr base::TimeDelta kDelayUntilOutput =
-    base::TimeDelta::FromMilliseconds(20);
+constexpr base::TimeDelta kDelayUntilOutput = base::Milliseconds(20);
 
 // The amount of audio signal to record each time PumpAudioAndTakeNewRecording()
 // is called.
-constexpr base::TimeDelta kTestRecordingDuration =
-    base::TimeDelta::FromMilliseconds(250);
+constexpr base::TimeDelta kTestRecordingDuration = base::Milliseconds(250);
 
 const media::AudioParameters& GetLoopbackStreamParams() {
   // 48 kHz, 2-channel audio, with 10 ms buffers.
   static const media::AudioParameters params(
       media::AudioParameters::AUDIO_PCM_LOW_LATENCY,
-      media::CHANNEL_LAYOUT_STEREO, 48000, 480);
+      media::ChannelLayoutConfig::Stereo(), 48000, 480);
   return params;
 }
 
@@ -109,8 +109,8 @@ class FakeSyncWriter : public FakeConsumer, public InputController::SyncWriter {
   // media::AudioInputController::SyncWriter implementation.
   void Write(const media::AudioBus* data,
              double volume,
-             bool key_pressed,
-             base::TimeTicks capture_time) final {
+             base::TimeTicks capture_time,
+             const media::AudioGlitchInfo& audio_glitch_info) final {
     FakeConsumer::Consume(*data);
 
     // Capture times should be monotonically increasing.
@@ -129,13 +129,16 @@ class LoopbackStreamTest : public testing::Test {
  public:
   LoopbackStreamTest() : group_id_(base::UnguessableToken::Create()) {}
 
+  LoopbackStreamTest(const LoopbackStreamTest&) = delete;
+  LoopbackStreamTest& operator=(const LoopbackStreamTest&) = delete;
+
   ~LoopbackStreamTest() override = default;
 
   void TearDown() override {
     stream_ = nullptr;
 
     for (const auto& source : sources_) {
-      coordinator_.UnregisterMember(group_id_, source.get());
+      coordinator_.RemoveMember(source.get());
     }
     sources_.clear();
 
@@ -149,19 +152,20 @@ class LoopbackStreamTest : public testing::Test {
   void RunMojoTasks() { task_environment_.RunUntilIdle(); }
 
   FakeLoopbackGroupMember* AddSource(int channels, int sample_rate) {
-    sources_.emplace_back(std::make_unique<FakeLoopbackGroupMember>(
-        media::AudioParameters(media::AudioParameters::AUDIO_PCM_LOW_LATENCY,
-                               media::GuessChannelLayout(channels), sample_rate,
-                               (sample_rate * kBufferDuration).InSeconds())));
-    coordinator_.RegisterMember(group_id_, sources_.back().get());
+    sources_.emplace_back(
+        std::make_unique<FakeLoopbackGroupMember>(media::AudioParameters(
+            media::AudioParameters::AUDIO_PCM_LOW_LATENCY,
+            media::ChannelLayoutConfig::Guess(channels), sample_rate,
+            (sample_rate * kBufferDuration).InSeconds())));
+    coordinator_.AddMember(group_id_, sources_.back().get());
     return sources_.back().get();
   }
 
   void RemoveSource(FakeLoopbackGroupMember* source) {
-    const auto it = std::find_if(sources_.begin(), sources_.end(),
-                                 base::MatchesUniquePtr(source));
+    const auto it =
+        std::ranges::find_if(sources_, base::MatchesUniquePtr(source));
     if (it != sources_.end()) {
-      coordinator_.UnregisterMember(group_id_, source);
+      coordinator_.RemoveMember(source);
       sources_.erase(it);
     }
   }
@@ -175,7 +179,7 @@ class LoopbackStreamTest : public testing::Test {
                  observer.InitWithNewPipeAndPassReceiver());
 
     stream_ = std::make_unique<LoopbackStream>(
-        base::BindOnce([](media::mojom::ReadOnlyAudioDataPipePtr pipe) {
+        base::BindOnce([](media::mojom::ReadWriteAudioDataPipePtr pipe) {
           EXPECT_TRUE(pipe->shared_memory.IsValid());
           EXPECT_TRUE(pipe->socket.is_valid());
         }),
@@ -257,11 +261,10 @@ class LoopbackStreamTest : public testing::Test {
   std::vector<std::unique_ptr<FakeLoopbackGroupMember>> sources_;
   NiceMock<MockClientAndObserver> client_;
   std::unique_ptr<LoopbackStream> stream_;
-  FakeSyncWriter* consumer_ = nullptr;  // Owned by |stream_|.
+  raw_ptr<FakeSyncWriter, AcrossTasksDanglingUntriaged> consumer_ =
+      nullptr;  // Owned by |stream_|.
 
   mojo::Remote<media::mojom::AudioInputStream> remote_input_stream_;
-
-  DISALLOW_COPY_AND_ASSIGN(LoopbackStreamTest);
 };
 
 TEST_F(LoopbackStreamTest, ShutsDownStreamWhenInterfacePtrIsClosed) {

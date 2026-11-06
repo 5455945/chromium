@@ -1,22 +1,24 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "device/fido/hid/fido_hid_device.h"
 
+#include <algorithm>
 #include <limits>
+#include <string_view>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
 #include "base/containers/fixed_flat_set.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/strings/stringprintf.h"
+#include "base/task/single_thread_task_runner.h"
 #include "components/device_event_log/device_event_log.h"
 #include "crypto/random.h"
 #include "device/fido/hid/fido_hid_message.h"
@@ -104,7 +106,7 @@ void FidoHidDevice::Cancel(CancelToken token) {
   }
 }
 
-void FidoHidDevice::Transition(absl::optional<State> next_state) {
+void FidoHidDevice::Transition(std::optional<State> next_state) {
   if (next_state) {
     state_ = *next_state;
   }
@@ -128,7 +130,7 @@ void FidoHidDevice::Transition(absl::optional<State> next_state) {
         DeviceCallback pending_cb =
             std::move(pending_transactions_.front().callback);
         pending_transactions_.pop_front();
-        std::move(pending_cb).Run(absl::nullopt);
+        std::move(pending_cb).Run(std::nullopt);
         break;
       }
 
@@ -158,7 +160,7 @@ void FidoHidDevice::Transition(absl::optional<State> next_state) {
         DeviceCallback pending_cb =
             std::move(pending_transactions_.front().callback);
         pending_transactions_.pop_front();
-        std::move(pending_cb).Run(absl::nullopt);
+        std::move(pending_cb).Run(std::nullopt);
       }
       break;
   }
@@ -182,7 +184,8 @@ void FidoHidDevice::Connect(
   hid_manager_->Connect(device_info_->guid,
                         /*connection_client=*/mojo::NullRemote(),
                         /*watcher=*/mojo::NullRemote(),
-                        /*allow_protected_reports=*/true, std::move(callback));
+                        /*allow_protected_reports=*/true,
+                        /*allow_fido_reports=*/true, std::move(callback));
 }
 
 void FidoHidDevice::OnConnect(
@@ -197,8 +200,7 @@ void FidoHidDevice::OnConnect(
   connection_ = base::MakeRefCounted<RefCountedHidConnection>(
       mojo::Remote<mojom::HidConnection>(std::move(connection)));
   // Send random nonce to device to verify received message.
-  std::vector<uint8_t> nonce(8);
-  crypto::RandBytes(nonce.data(), nonce.size());
+  std::vector<uint8_t> nonce = crypto::RandBytesAsVector(8);
 
   DCHECK_EQ(State::kConnecting, state_);
   ArmTimeout();
@@ -230,7 +232,7 @@ void FidoHidDevice::OnInitWriteComplete(std::vector<uint8_t> nonce,
 
 // ParseInitReply parses a potential reply to a U2FHID_INIT message. If the
 // reply matches the given nonce then the assigned channel ID is returned.
-absl::optional<uint32_t> FidoHidDevice::ParseInitReply(
+std::optional<uint32_t> FidoHidDevice::ParseInitReply(
     const std::vector<uint8_t>& nonce,
     const std::vector<uint8_t>& buf) {
   auto message = FidoHidMessage::CreateFromSerializedData(buf);
@@ -240,7 +242,7 @@ absl::optional<uint32_t> FidoHidDevice::ParseInitReply(
       // Init replies must fit in a single frame.
       !message->MessageComplete() ||
       message->cmd() != FidoHidDeviceCommand::kInit) {
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   auto payload = message->GetMessagePayload();
@@ -253,8 +255,9 @@ absl::optional<uint32_t> FidoHidDevice::ParseInitReply(
   // 15: Build device version
   // 16: Capabilities
   DCHECK_EQ(8u, nonce.size());
-  if (payload.size() != 17 || memcmp(nonce.data(), payload.data(), 8) != 0) {
-    return absl::nullopt;
+  if (payload.size() != 17 ||
+      UNSAFE_TODO(memcmp(nonce.data(), payload.data(), 8)) != 0) {
+    return std::nullopt;
   }
 
   capabilities_ = payload[16];
@@ -269,7 +272,7 @@ void FidoHidDevice::OnPotentialInitReply(
     std::vector<uint8_t> nonce,
     bool success,
     uint8_t report_id,
-    const absl::optional<std::vector<uint8_t>>& buf) {
+    const std::optional<std::vector<uint8_t>>& buf) {
   if (state_ == State::kDeviceError) {
     return;
   }
@@ -280,7 +283,7 @@ void FidoHidDevice::OnPotentialInitReply(
   }
   DCHECK(buf);
 
-  absl::optional<uint32_t> maybe_channel_id = ParseInitReply(nonce, *buf);
+  std::optional<uint32_t> maybe_channel_id = ParseInitReply(nonce, *buf);
   if (!maybe_channel_id) {
     // This instance of Chromium may not be the only process communicating with
     // this HID device, but all processes will see all the messages from the
@@ -348,7 +351,7 @@ void FidoHidDevice::ReadMessage() {
 
 void FidoHidDevice::OnRead(bool success,
                            uint8_t report_id,
-                           const absl::optional<std::vector<uint8_t>>& buf) {
+                           const std::optional<std::vector<uint8_t>>& buf) {
   if (state_ == State::kDeviceError) {
     return;
   }
@@ -408,7 +411,7 @@ void FidoHidDevice::OnReadContinuation(
     FidoHidMessage message,
     bool success,
     uint8_t report_id,
-    const absl::optional<std::vector<uint8_t>>& buf) {
+    const std::optional<std::vector<uint8_t>>& buf) {
   if (state_ == State::kDeviceError) {
     return;
   }
@@ -448,9 +451,9 @@ void FidoHidDevice::MessageReceived(FidoHidMessage message) {
   constexpr FidoHidDeviceCommand kValidCommands[] = {
       FidoHidDeviceCommand::kMsg, FidoHidDeviceCommand::kCbor,
       FidoHidDeviceCommand::kWink, FidoHidDeviceCommand::kError};
-  if (!base::Contains(kValidCommands, cmd)) {
+  if (!std::ranges::contains(kValidCommands, cmd)) {
     FIDO_LOG(ERROR) << "Unknown CTAPHID command: " << static_cast<int>(cmd)
-                    << " " << base::HexEncode(response.data(), response.size());
+                    << " " << base::HexEncode(response);
     Transition(State::kDeviceError);
     return;
   }
@@ -458,7 +461,7 @@ void FidoHidDevice::MessageReceived(FidoHidMessage message) {
   if (cmd == FidoHidDeviceCommand::kError) {
     if (response.size() != 1) {
       FIDO_LOG(ERROR) << "Invalid CTAPHID_ERROR payload: "
-                      << base::HexEncode(response.data(), response.size());
+                      << base::HexEncode(response);
       Transition(State::kDeviceError);
       return;
     }
@@ -487,11 +490,11 @@ void FidoHidDevice::MessageReceived(FidoHidMessage message) {
         // Retry the pending transaction after a short delay. |state_| is still
         // |State::kBusy|, so no other transaction will run in the meantime.
         DCHECK_EQ(State::kBusy, state_);
-        base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+        base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
             FROM_HERE,
             base::BindOnce(&FidoHidDevice::RetryAfterChannelBusy,
                            weak_factory_.GetWeakPtr()),
-            base::TimeDelta::FromMilliseconds(100));
+            base::Milliseconds(100));
         break;
       default:
         FIDO_LOG(DEBUG) << "Invalid CTAPHID_ERROR "
@@ -531,7 +534,7 @@ void FidoHidDevice::TryWink(base::OnceClosure callback) {
   pending_transactions_.emplace_back(
       FidoHidDeviceCommand::kWink, std::vector<uint8_t>(),
       base::BindOnce(
-          [](base::OnceClosure cb, absl::optional<std::vector<uint8_t>> data) {
+          [](base::OnceClosure cb, std::optional<std::vector<uint8_t>> data) {
             std::move(cb).Run();
           },
           std::move(callback)),
@@ -544,7 +547,7 @@ void FidoHidDevice::ArmTimeout() {
   timeout_callback_.Reset(
       base::BindOnce(&FidoHidDevice::OnTimeout, weak_factory_.GetWeakPtr()));
   // Setup timeout task for 3 seconds.
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE, timeout_callback_.callback(), kDeviceTimeout);
 }
 
@@ -593,12 +596,8 @@ static std::string VidPidToString(const mojom::HidDeviceInfoPtr& device_info) {
                 "vendor_id must be uint16_t");
   static_assert(sizeof(device_info->product_id) == 2,
                 "product_id must be uint16_t");
-  uint16_t vendor_id = ((device_info->vendor_id & 0xff) << 8) |
-                       ((device_info->vendor_id & 0xff00) >> 8);
-  uint16_t product_id = ((device_info->product_id & 0xff) << 8) |
-                        ((device_info->product_id & 0xff00) >> 8);
-  return base::ToLowerASCII(base::HexEncode(&vendor_id, 2) + ":" +
-                            base::HexEncode(&product_id, 2));
+  return base::StringPrintf("%02x:%02x", device_info->vendor_id,
+                            device_info->product_id);
 }
 
 std::string FidoHidDevice::GetDisplayName() const {
@@ -617,12 +616,12 @@ void FidoHidDevice::DiscoverSupportedProtocolAndDeviceInfo(
     base::OnceClosure done) {
   // The following devices cannot handle GetInfo messages.
   static constexpr auto kForceU2fCompatibilitySet =
-      base::MakeFixedFlatSet<base::StringPiece>({
+      base::MakeFixedFlatSet<std::string_view>({
           "10c4:8acf",  // U2F Zero
           "20a0:4287",  // Nitrokey FIDO U2F
       });
 
-  if (base::Contains(kForceU2fCompatibilitySet, VidPidToString(device_info_))) {
+  if (kForceU2fCompatibilitySet.contains(VidPidToString(device_info_))) {
     supported_protocol_ = ProtocolVersion::kU2f;
     DCHECK(SupportedProtocolIsInitialized());
     std::move(done).Run();

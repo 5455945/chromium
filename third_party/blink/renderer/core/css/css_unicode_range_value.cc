@@ -25,15 +25,17 @@
 
 #include "third_party/blink/renderer/core/css/css_unicode_range_value.h"
 
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
 namespace cssvalue {
 
 String CSSUnicodeRangeValue::CustomCSSText() const {
-  if (from_ == to_)
-    return String::Format("U+%X", from_);
-  return String::Format("U+%X-%X", from_, to_);
+  if (from_ == to_) {
+    return Format("U+{:X}", from_);
+  }
+  return Format("U+{:X}-{:X}", from_, to_);
 }
 
 bool CSSUnicodeRangeValue::Equals(const CSSUnicodeRangeValue& other) const {

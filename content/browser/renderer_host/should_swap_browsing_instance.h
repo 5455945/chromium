@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,7 @@ namespace content {
 // This is the enumeration of the reasons why we might not swap the
 // BrowsingInstance for navigations.
 // This enum is used for histograms and should not be renumbered.
-// TODO(crbug.com/1026101): Remove after the investigations are complete.
+// TODO(crbug.com/40108107): Remove after the investigations are complete.
 enum class ShouldSwapBrowsingInstance {
   kYes_ForceSwap = 0,
   kNo_ProactiveSwapDisabled = 1,
@@ -18,9 +18,13 @@ enum class ShouldSwapBrowsingInstance {
   kNo_HasRelatedActiveContents = 3,
   kNo_DoesNotHaveSite = 4,
   kNo_SourceURLSchemeIsNotHTTPOrHTTPS = 5,
-  kNo_DestinationURLSchemeIsNotHTTPOrHTTPS = 6,
+  // 6: kNo_DestinationURLSchemeIsNotHTTPOrHTTPS was removed as the scheme of
+  // the destination URL should not affect back-forward cache eligibility, so
+  // we don't need to avoid doing a proactive BrowsingInstance swap due to it.
   kNo_SameSiteNavigation = 7,
-  kNo_ReloadingErrorPage = 8,
+  // 8: kNo_ReloadingErrorPage was removed as the special case that forced
+  // reusing a SiteInstance for auto-reload was fixed. (see
+  // https://crbug.com/1045524).
   kNo_AlreadyHasMatchingBrowsingInstance = 9,
   kNo_RendererDebugURL = 10,
   kNo_NotNeededForBackForwardCache = 11,
@@ -32,9 +36,13 @@ enum class ShouldSwapBrowsingInstance {
   kNo_Reload = 17,
   kNo_Guest = 18,
   kNo_HasNotComittedAnyNavigation = 19,
-  kNo_UnloadHandlerExistsOnSameSiteNavigation = 20,
+  // 20: kNo_UnloadHandlerExistsOnSameSiteNavigation was removed as it's not
+  // triggering BrowsingInstance swap anymore. See
+  // https://groups.google.com/a/google.com/g/chrome-bfcache/c/L-ZreZDY4n0
+  kNo_NotPrimaryMainFrame = 21,
+  kNo_InitiatorRequestedNoProactiveSwap = 22,
 
-  kMaxValue = kNo_UnloadHandlerExistsOnSameSiteNavigation
+  kMaxValue = kNo_InitiatorRequestedNoProactiveSwap
 };
 
 }  // namespace content

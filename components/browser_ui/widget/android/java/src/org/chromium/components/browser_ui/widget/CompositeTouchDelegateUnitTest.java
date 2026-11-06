@@ -1,48 +1,43 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.browser_ui.widget;
 
+import android.app.Activity;
 import android.view.MotionEvent;
 import android.view.TouchDelegate;
 import android.view.View;
 
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.Mockito;
-import org.mockito.MockitoAnnotations;
-import org.robolectric.annotation.Config;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
+import org.robolectric.Robolectric;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 
-/**
- * Tests for CompositeTouchDelegate.
- */
+/** Tests for CompositeTouchDelegate. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public final class CompositeTouchDelegateUnitTest {
     CompositeTouchDelegate mCompositeTouchDelegate;
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
-    @Mock
-    View mMockAncestorView;
+    @Mock TouchDelegate mMockTouchDelegate;
 
-    @Mock
-    TouchDelegate mMockTouchDelegate;
+    @Mock TouchDelegate mMockOtherTouchDelegate;
 
-    @Mock
-    TouchDelegate mMockOtherTouchDelegate;
-
-    @Mock
-    MotionEvent mMockMotionEvent;
+    @Mock MotionEvent mMockMotionEvent;
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
-        mCompositeTouchDelegate = new CompositeTouchDelegate(mMockAncestorView);
+        View view = new View(Robolectric.buildActivity(Activity.class).setup().get());
+        mCompositeTouchDelegate = new CompositeTouchDelegate(view);
         mCompositeTouchDelegate.addDelegateForDescendantView(mMockTouchDelegate);
         mCompositeTouchDelegate.addDelegateForDescendantView(mMockOtherTouchDelegate);
     }

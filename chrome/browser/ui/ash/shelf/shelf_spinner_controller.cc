@@ -1,21 +1,22 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/ash/shelf/shelf_spinner_controller.h"
 
+#include <algorithm>
 #include <vector>
 
 #include "ash/public/cpp/shelf_model.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/numerics/ranges.h"
-#include "base/threading/thread_task_runner_handle.h"
-#include "chrome/browser/ash/crostini/crostini_shelf_utils.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
+#include "base/memory/raw_ptr.h"
+#include "base/task/single_thread_task_runner.h"
+#include "chrome/browser/ash/guest_os/guest_os_shelf_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chrome/browser/ui/ash/shelf/shelf_spinner_item_controller.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "components/user_manager/user_manager.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/image/canvas_image_source.h"
@@ -26,13 +27,10 @@ namespace {
 
 constexpr int kUpdateIconIntervalMs = 40;  // 40ms for 25 frames per second.
 
-// Controls the spinner animation. See crbug.com/922977 for details.
-constexpr base::TimeDelta kFadeInDuration =
-    base::TimeDelta::FromMilliseconds(200);
-constexpr base::TimeDelta kFadeOutDuration =
-    base::TimeDelta::FromMilliseconds(200);
-constexpr base::TimeDelta kMinimumShowDuration =
-    base::TimeDelta::FromMilliseconds(200);
+// Controls the spinner animation. See crbug.com/41436174 for details.
+constexpr base::TimeDelta kFadeInDuration = base::Milliseconds(200);
+constexpr base::TimeDelta kFadeOutDuration = base::Milliseconds(200);
+constexpr base::TimeDelta kMinimumShowDuration = base::Milliseconds(200);
 
 constexpr int kSpinningGapPercent = 25;
 constexpr color_utils::HSL kInactiveHslShift = {-1, 0, 0.25};
@@ -43,7 +41,7 @@ constexpr double kInactiveTransparency = 0.5;
 double TimeProportionSince(const base::Time& t1,
                            const base::Time& t2,
                            const base::TimeDelta& d) {
-  return base::ClampToRange((t2 - t1) / d, 0.0, 1.0);
+  return std::clamp((t2 - t1) / d, 0.0, 1.0);
 }
 
 }  // namespace
@@ -92,7 +90,7 @@ class ShelfSpinnerController::ShelfSpinnerData {
   base::Time removal_time() const { return removal_time_; }
 
  private:
-  ShelfSpinnerItemController* controller_;
+  raw_ptr<ShelfSpinnerItemController, DanglingUntriaged> controller_;
   base::Time creation_time_;
   base::Time removal_time_;
 };
@@ -115,6 +113,9 @@ class SpinningEffectSource : public gfx::CanvasImageSource {
                                                             kInactiveHslShift),
             kInactiveTransparency)) {}
 
+  SpinningEffectSource(const SpinningEffectSource&) = delete;
+  SpinningEffectSource& operator=(const SpinningEffectSource&) = delete;
+
   ~SpinningEffectSource() override {}
 
   // gfx::CanvasImageSource override.
@@ -127,11 +128,13 @@ class SpinningEffectSource : public gfx::CanvasImageSource {
                          0, 0);
 
     const int gap = kSpinningGapPercent * inactive_image_.width() / 100;
+    constexpr SkColor kThrobberColor = SK_ColorWHITE;
     gfx::PaintThrobberSpinning(
         canvas,
         gfx::Rect(gap, gap, inactive_image_.width() - 2 * gap,
                   inactive_image_.height() - 2 * gap),
-        SkColorSetA(SK_ColorWHITE, 0xFF * (1.0 - std::abs(animation_lirp))),
+        SkColorSetA(kThrobberColor, SkColorGetA(kThrobberColor) *
+                                        (1.0 - std::abs(animation_lirp))),
         now - data_.creation_time());
   }
 
@@ -144,16 +147,14 @@ class SpinningEffectSource : public gfx::CanvasImageSource {
     if (data_.IsFadingIn()) {
       return 1.0 -
              TimeProportionSince(data_.creation_time(), now, kFadeInDuration);
-    } else {
-      return TimeProportionSince(data_.removal_time(), now, kFadeOutDuration);
     }
+
+    return TimeProportionSince(data_.removal_time(), now, kFadeOutDuration);
   }
 
   ShelfSpinnerController::ShelfSpinnerData data_;
   const gfx::ImageSkia active_image_;
   const gfx::ImageSkia inactive_image_;
-
-  DISALLOW_COPY_AND_ASSIGN(SpinningEffectSource);
 };
 
 }  // namespace
@@ -162,10 +163,11 @@ ShelfSpinnerController::ShelfSpinnerController(ChromeShelfController* owner)
     : owner_(owner) {
   owner->shelf_model()->AddObserver(this);
   if (user_manager::UserManager::IsInitialized()) {
-    if (auto* active_user = user_manager::UserManager::Get()->GetActiveUser())
+    if (auto* active_user = user_manager::UserManager::Get()->GetActiveUser()) {
       current_account_id_ = active_user->GetAccountId();
-    else
+    } else {
       LOG(ERROR) << "Failed to get active user, UserManager returned null";
+    }
   } else {
     LOG(ERROR) << "Failed to get active user, UserManager is not initialized";
   }
@@ -177,10 +179,11 @@ ShelfSpinnerController::~ShelfSpinnerController() {
 
 void ShelfSpinnerController::MaybeApplySpinningEffect(const std::string& app_id,
                                                       gfx::ImageSkia* image) {
-  DCHECK(image);
+  CHECK(image, base::NotFatalUntil::M162);
   auto it = app_controller_map_.find(app_id);
-  if (it == app_controller_map_.end())
+  if (it == app_controller_map_.end()) {
     return;
+  }
 
   *image = gfx::ImageSkia(std::make_unique<SpinningEffectSource>(
                               it->second, *image, owner_->IsAppPinned(app_id)),
@@ -188,8 +191,9 @@ void ShelfSpinnerController::MaybeApplySpinningEffect(const std::string& app_id,
 }
 
 void ShelfSpinnerController::HideSpinner(const std::string& app_id) {
-  if (!RemoveSpinnerFromControllerMap(app_id))
+  if (!RemoveSpinnerFromControllerMap(app_id)) {
     return;
+  }
 
   const ash::ShelfID shelf_id(app_id);
 
@@ -210,24 +214,27 @@ void ShelfSpinnerController::HideSpinner(const std::string& app_id) {
 }
 
 void ShelfSpinnerController::CloseSpinner(const std::string& app_id) {
-  if (!RemoveSpinnerFromControllerMap(app_id))
+  if (!RemoveSpinnerFromControllerMap(app_id)) {
     return;
+  }
 
-  owner_->CloseItem(ash::ShelfID(app_id));
+  owner_->ReplaceWithAppShortcutOrRemove(ash::ShelfID(app_id));
   UpdateShelfItemIcon(app_id);
 }
 
 bool ShelfSpinnerController::RemoveSpinnerFromControllerMap(
     const std::string& app_id) {
   AppControllerMap::const_iterator it = app_controller_map_.find(app_id);
-  if (it == app_controller_map_.end())
+  if (it == app_controller_map_.end()) {
     return false;
+  }
 
   const ash::ShelfID shelf_id(app_id);
-  DCHECK_EQ(it->second.controller(),
-            it->second.IsKilled()
-                ? nullptr
-                : owner_->shelf_model()->GetShelfItemDelegate(shelf_id));
+  CHECK_EQ(it->second.controller(),
+           it->second.IsKilled()
+               ? nullptr
+               : owner_->shelf_model()->GetShelfItemDelegate(shelf_id),
+           base::NotFatalUntil::M162);
   app_controller_map_.erase(it);
 
   return true;
@@ -235,15 +242,17 @@ bool ShelfSpinnerController::RemoveSpinnerFromControllerMap(
 
 void ShelfSpinnerController::CloseCrostiniSpinners() {
   std::vector<std::string> app_ids_to_close;
-  const Profile* profile =
-      chromeos::ProfileHelper::Get()->GetProfileByAccountId(
-          current_account_id_);
+  const Profile* profile = Profile::FromBrowserContext(
+      ash::BrowserContextHelper::Get()->GetBrowserContextByAccountId(
+          current_account_id_));
   for (const auto& app_id_controller_pair : app_controller_map_) {
-    if (crostini::IsCrostiniShelfAppId(profile, app_id_controller_pair.first))
+    if (guest_os::IsCrostiniShelfAppId(profile, app_id_controller_pair.first)) {
       app_ids_to_close.push_back(app_id_controller_pair.first);
+    }
   }
-  for (const auto& app_id : app_ids_to_close)
+  for (const auto& app_id : app_ids_to_close) {
     CloseSpinner(app_id);
+  }
 }
 
 bool ShelfSpinnerController::HasApp(const std::string& app_id) const {
@@ -254,8 +263,9 @@ bool ShelfSpinnerController::HasApp(const std::string& app_id) const {
 base::TimeDelta ShelfSpinnerController::GetActiveTime(
     const std::string& app_id) const {
   AppControllerMap::const_iterator it = app_controller_map_.find(app_id);
-  if (it == app_controller_map_.end())
+  if (it == app_controller_map_.end()) {
     return base::TimeDelta();
+  }
 
   return base::Time::Now() - it->second.creation_time();
 }
@@ -285,8 +295,9 @@ void ShelfSpinnerController::ActiveUserChanged(const AccountId& account_id) {
       std::pair<std::string, std::unique_ptr<ShelfSpinnerItemController>>>
       to_show;
 
-  for (const auto& app_id : app_controller_map_)
+  for (const auto& app_id : app_controller_map_) {
     to_hide.push_back(app_id.first);
+  }
   for (auto it = hidden_app_controller_map_.lower_bound(account_id);
        it != hidden_app_controller_map_.upper_bound(account_id); it++) {
     to_show.push_back(std::move(it->second));
@@ -296,8 +307,9 @@ void ShelfSpinnerController::ActiveUserChanged(const AccountId& account_id) {
       hidden_app_controller_map_.lower_bound(account_id),
       hidden_app_controller_map_.upper_bound(account_id));
 
-  for (const auto& app_id : to_hide)
+  for (const auto& app_id : to_hide) {
     HideSpinner(app_id);
+  }
 
   for (auto& app_id_delegate_pair : to_show) {
     AddSpinnerToShelf(app_id_delegate_pair.first,
@@ -312,28 +324,31 @@ void ShelfSpinnerController::UpdateShelfItemIcon(const std::string& app_id) {
 }
 
 void ShelfSpinnerController::UpdateApps() {
-  if (app_controller_map_.empty())
+  if (app_controller_map_.empty()) {
     return;
+  }
 
   RegisterNextUpdate();
   std::vector<std::string> app_ids_to_close;
   for (const auto& pair : app_controller_map_) {
     UpdateShelfItemIcon(pair.first);
-    if (pair.second.IsFinished())
+    if (pair.second.IsFinished()) {
       app_ids_to_close.emplace_back(pair.first);
+    }
   }
   for (const auto& app_id : app_ids_to_close) {
-    if (RemoveSpinnerFromControllerMap(app_id))
+    if (RemoveSpinnerFromControllerMap(app_id)) {
       UpdateShelfItemIcon(app_id);
+    }
   }
 }
 
 void ShelfSpinnerController::RegisterNextUpdate() {
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE,
       base::BindOnce(&ShelfSpinnerController::UpdateApps,
                      weak_ptr_factory_.GetWeakPtr()),
-      base::TimeDelta::FromMilliseconds(kUpdateIconIntervalMs));
+      base::Milliseconds(kUpdateIconIntervalMs));
 }
 
 void ShelfSpinnerController::AddSpinnerToShelf(
@@ -343,21 +358,24 @@ void ShelfSpinnerController::AddSpinnerToShelf(
 
   // We should only apply the spinner controller only over non-active items.
   const ash::ShelfItem* item = owner_->GetItem(shelf_id);
-  if (item && item->status != ash::STATUS_CLOSED)
+  if (item && item->status != ash::STATUS_CLOSED) {
     return;
+  }
 
   controller->SetHost(weak_ptr_factory_.GetWeakPtr());
   ShelfSpinnerItemController* item_controller = controller.get();
   if (!item) {
-    owner_->CreateAppItem(std::move(controller), ash::STATUS_RUNNING);
+    owner_->CreateAppItem(std::move(controller), ash::STATUS_RUNNING,
+                          /*pinned=*/false);
   } else {
-    owner_->shelf_model()->SetShelfItemDelegate(shelf_id,
-                                                std::move(controller));
+    owner_->shelf_model()->ReplaceShelfItemDelegate(shelf_id,
+                                                    std::move(controller));
     owner_->SetItemStatus(shelf_id, ash::STATUS_RUNNING);
   }
 
-  if (app_controller_map_.empty())
+  if (app_controller_map_.empty()) {
     RegisterNextUpdate();
+  }
 
   app_controller_map_.emplace(app_id, ShelfSpinnerData(item_controller));
 }

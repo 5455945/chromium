@@ -1,13 +1,15 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/browser/app_window/app_window_registry.h"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
-#include "base/containers/contains.h"
+#include "base/no_destructor.h"
+#include "base/observer_list.h"
 #include "base/strings/stringprintf.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "content/public/browser/browser_context.h"
@@ -78,7 +80,7 @@ void AppWindowRegistry::AppWindowShown(AppWindow* app_window, bool was_hidden) {
 
 void AppWindowRegistry::RemoveAppWindow(AppWindow* app_window) {
   const AppWindowList::iterator it =
-      std::find(app_windows_.begin(), app_windows_.end(), app_window);
+      std::ranges::find(app_windows_, app_window);
   if (it != app_windows_.end())
     app_windows_.erase(it);
   for (auto& observer : observers_)
@@ -123,12 +125,12 @@ AppWindow* AppWindowRegistry::GetAppWindowForNativeWindow(
       return *i;
   }
 
-  return NULL;
+  return nullptr;
 }
 
 AppWindow* AppWindowRegistry::GetCurrentAppWindowForApp(
     const std::string& app_id) const {
-  AppWindow* result = NULL;
+  AppWindow* result = nullptr;
   for (auto i = app_windows_.cbegin(); i != app_windows_.cend(); ++i) {
     if ((*i)->extension_id() == app_id) {
       result = *i;
@@ -143,7 +145,7 @@ AppWindow* AppWindowRegistry::GetCurrentAppWindowForApp(
 AppWindow* AppWindowRegistry::GetAppWindowForAppAndKey(
     const std::string& app_id,
     const std::string& window_key) const {
-  AppWindow* result = NULL;
+  AppWindow* result = nullptr;
   for (auto i = app_windows_.cbegin(); i != app_windows_.cend(); ++i) {
     if ((*i)->extension_id() == app_id && (*i)->window_key() == window_key) {
       result = *i;
@@ -157,7 +159,7 @@ AppWindow* AppWindowRegistry::GetAppWindowForAppAndKey(
 bool AppWindowRegistry::HadDevToolsAttached(
     content::WebContents* web_contents) const {
   std::string key = GetWindowKeyForWebContents(web_contents);
-  return key.empty() ? false : inspected_windows_.count(key) != 0;
+  return key.empty() ? false : inspected_windows_.contains(key);
 }
 
 void AppWindowRegistry::DevToolsAgentHostAttached(
@@ -175,14 +177,14 @@ void AppWindowRegistry::DevToolsAgentHostDetached(
 }
 
 void AppWindowRegistry::AddAppWindowToList(AppWindow* app_window) {
-  if (base::Contains(app_windows_, app_window))
+  if (std::ranges::contains(app_windows_, app_window))
     return;
   app_windows_.push_back(app_window);
 }
 
 void AppWindowRegistry::BringToFront(AppWindow* app_window) {
   const AppWindowList::iterator it =
-      std::find(app_windows_.begin(), app_windows_.end(), app_window);
+      std::ranges::find(app_windows_, app_window);
   if (it != app_windows_.end())
     app_windows_.erase(it);
   app_windows_.push_front(app_window);
@@ -221,7 +223,8 @@ AppWindowRegistry* AppWindowRegistry::Factory::GetForBrowserContext(
 }
 
 AppWindowRegistry::Factory* AppWindowRegistry::Factory::GetInstance() {
-  return base::Singleton<AppWindowRegistry::Factory>::get();
+  static base::NoDestructor<AppWindowRegistry::Factory> instance;
+  return instance.get();
 }
 
 AppWindowRegistry::Factory::Factory()
@@ -229,11 +232,12 @@ AppWindowRegistry::Factory::Factory()
           "AppWindowRegistry",
           BrowserContextDependencyManager::GetInstance()) {}
 
-AppWindowRegistry::Factory::~Factory() {}
+AppWindowRegistry::Factory::~Factory() = default;
 
-KeyedService* AppWindowRegistry::Factory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+AppWindowRegistry::Factory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  return new AppWindowRegistry(context);
+  return std::make_unique<AppWindowRegistry>(context);
 }
 
 bool AppWindowRegistry::Factory::ServiceIsCreatedWithBrowserContext() const {
@@ -242,7 +246,8 @@ bool AppWindowRegistry::Factory::ServiceIsCreatedWithBrowserContext() const {
 
 content::BrowserContext* AppWindowRegistry::Factory::GetBrowserContextToUse(
     content::BrowserContext* context) const {
-  return ExtensionsBrowserClient::Get()->GetOriginalContext(context);
+  return ExtensionsBrowserClient::Get()->GetContextRedirectedToOriginal(
+      context);
 }
 
 }  // namespace extensions

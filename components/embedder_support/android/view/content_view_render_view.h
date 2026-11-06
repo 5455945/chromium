@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,48 +7,48 @@
 
 #include <memory>
 
+#include "base/android/jni_android.h"
 #include "base/android/jni_weak_ref.h"
-#include "base/macros.h"
-#include "base/memory/weak_ptr.h"
 #include "content/public/browser/android/compositor_client.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace content {
 class Compositor;
 }  // namespace content
+   //
 
 namespace embedder_support {
 
 class ContentViewRenderView : public content::CompositorClient {
  public:
   ContentViewRenderView(JNIEnv* env,
-                        jobject obj,
+                        const base::android::JavaRef<jobject>& obj,
                         gfx::NativeWindow root_window);
 
+  ContentViewRenderView(const ContentViewRenderView&) = delete;
+  ContentViewRenderView& operator=(const ContentViewRenderView&) = delete;
+
+  ~ContentViewRenderView() override;
+
   // Methods called from Java via JNI -----------------------------------------
-  void Destroy(JNIEnv* env, const base::android::JavaParamRef<jobject>& obj);
   void SetCurrentWebContents(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj,
-      const base::android::JavaParamRef<jobject>& jweb_contents);
+      const base::android::JavaRef<jobject>& jweb_contents);
   void OnPhysicalBackingSizeChanged(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj,
-      const base::android::JavaParamRef<jobject>& jweb_contents,
-      jint width,
-      jint height);
-  void SurfaceCreated(JNIEnv* env,
-                      const base::android::JavaParamRef<jobject>& obj);
-  void SurfaceDestroyed(JNIEnv* env,
-                        const base::android::JavaParamRef<jobject>& obj);
-  void SurfaceChanged(JNIEnv* env,
-                      const base::android::JavaParamRef<jobject>& obj,
-                      jint format,
-                      jint width,
-                      jint height,
-                      const base::android::JavaParamRef<jobject>& surface);
+      const base::android::JavaRef<jobject>& jweb_contents,
+      int32_t width,
+      int32_t height);
+  void SurfaceCreated(JNIEnv* env);
+  void SurfaceDestroyed(JNIEnv* env);
+  std::optional<int> SurfaceChanged(
+      JNIEnv* env,
+      int32_t format,
+      int32_t width,
+      int32_t height,
+      const base::android::JavaRef<jobject>& surface,
+      const base::android::JavaRef<jobject>& browser_input_token);
   void SetOverlayVideoMode(JNIEnv* env,
-                           const base::android::JavaParamRef<jobject>& obj,
                            bool enabled);
 
   // CompositorClient implementation
@@ -56,8 +56,6 @@ class ContentViewRenderView : public content::CompositorClient {
   void DidSwapFrame(int pending_frames) override;
 
  private:
-  ~ContentViewRenderView() override;
-
   void InitCompositor();
 
   base::android::ScopedJavaGlobalRef<jobject> java_obj_;
@@ -66,8 +64,6 @@ class ContentViewRenderView : public content::CompositorClient {
 
   gfx::NativeWindow root_window_;
   int current_surface_format_;
-
-  DISALLOW_COPY_AND_ASSIGN(ContentViewRenderView);
 };
 
 }  // namespace embedder_support

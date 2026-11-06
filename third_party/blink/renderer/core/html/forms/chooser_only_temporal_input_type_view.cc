@@ -34,7 +34,8 @@
 #include "third_party/blink/renderer/core/page/chrome_client.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
@@ -63,19 +64,35 @@ void ChooserOnlyTemporalInputTypeView::HandleDOMActivateEvent(Event& event) {
 
   if (date_time_chooser_)
     return;
-  if (!document.IsActive())
-    return;
-  DateTimeChooserParameters parameters;
-  if (!GetElement().SetupDateTimeChooserParameters(parameters))
+  // SetupDateTimeChooserParameters() in OpenPopupView() early-outs if we
+  // don't have a View, so do the same here just to avoid adding to the
+  // use counter.
+  if (!document.IsActive() || !document.View())
     return;
   UseCounter::Count(
-      document,
-      (event.UnderlyingEvent() && event.UnderlyingEvent()->isTrusted())
-          ? WebFeature::kTemporalInputTypeChooserByTrustedClick
-          : WebFeature::kTemporalInputTypeChooserByUntrustedClick);
-  date_time_chooser_ =
-      document.GetPage()->GetChromeClient().OpenDateTimeChooser(
-          document.GetFrame(), this, parameters);
+      document, event.IsFullyTrusted()
+                    ? WebFeature::kTemporalInputTypeChooserByTrustedClick
+                    : WebFeature::kTemporalInputTypeChooserByUntrustedClick);
+  OpenPopupView();
+}
+
+AppearanceValue ChooserOnlyTemporalInputTypeView::AutoAppearance() const {
+  return AppearanceValue::kMenulist;
+}
+
+void ChooserOnlyTemporalInputTypeView::OpenPopupView() {
+  DateTimeChooserParameters parameters;
+  if (GetElement().SetupDateTimeChooserParameters(parameters)) {
+    Document& document = GetElement().GetDocument();
+    date_time_chooser_ =
+        document.GetPage()->GetChromeClient().OpenDateTimeChooser(
+            document.GetFrame(), this, parameters);
+  }
+  GetElement().PseudoStateChanged(CSSSelector::kPseudoOpen);
+}
+
+bool ChooserOnlyTemporalInputTypeView::IsPickerVisible() const {
+  return date_time_chooser_ && date_time_chooser_->IsPickerVisible();
 }
 
 void ChooserOnlyTemporalInputTypeView::CreateShadowSubtree() {
@@ -90,7 +107,7 @@ void ChooserOnlyTemporalInputTypeView::CreateShadowSubtree() {
 }
 
 void ChooserOnlyTemporalInputTypeView::UpdateView() {
-  Node* node = GetElement().UserAgentShadowRoot()->firstChild();
+  Node* node = GetElement().EnsureShadowSubtree()->firstChild();
   auto* html_element = DynamicTo<HTMLElement>(node);
   if (!html_element)
     return;
@@ -99,7 +116,7 @@ void ChooserOnlyTemporalInputTypeView::UpdateView() {
     display_value = GetElement().SuggestedValue();
   else
     display_value = input_type_->VisibleValue();
-  if (display_value.IsEmpty()) {
+  if (display_value.empty()) {
     // Need to put something to keep text baseline.
     display_value = " ";
   }
@@ -128,8 +145,9 @@ Element& ChooserOnlyTemporalInputTypeView::OwnerElement() const {
 void ChooserOnlyTemporalInputTypeView::DidChooseValue(const String& value) {
   if (will_be_destroyed_)
     return;
-  GetElement().setValue(value,
+  GetElement().SetValue(value,
                         TextFieldEventBehavior::kDispatchInputAndChangeEvent);
+  GetElement().PseudoStateChanged(CSSSelector::kPseudoOpen);
 }
 
 void ChooserOnlyTemporalInputTypeView::DidChooseValue(double value) {
@@ -137,26 +155,36 @@ void ChooserOnlyTemporalInputTypeView::DidChooseValue(double value) {
     return;
   DCHECK(std::isfinite(value) || std::isnan(value));
   if (std::isnan(value)) {
-    GetElement().setValue(g_empty_string,
+    GetElement().SetValue(g_empty_string,
                           TextFieldEventBehavior::kDispatchInputAndChangeEvent);
   } else {
     GetElement().setValueAsNumber(
         value, ASSERT_NO_EXCEPTION,
         TextFieldEventBehavior::kDispatchInputAndChangeEvent);
   }
+  GetElement().PseudoStateChanged(CSSSelector::kPseudoOpen);
 }
 
 void ChooserOnlyTemporalInputTypeView::DidEndChooser() {
   date_time_chooser_.Clear();
+  GetElement().PseudoStateChanged(CSSSelector::kPseudoOpen);
 }
 
 void ChooserOnlyTemporalInputTypeView::CloseDateTimeChooser() {
   if (date_time_chooser_)
     date_time_chooser_->EndChooser();
+  GetElement().PseudoStateChanged(CSSSelector::kPseudoOpen);
 }
 
 void ChooserOnlyTemporalInputTypeView::Blur() {
+  const bool host_was_focused =
+      GetElement().GetDocument().FocusedElement() == &GetElement();
   ClosePopupView();
+  if (RuntimeEnabledFeatures::TemporalInputHostBlurEnabled() &&
+      host_was_focused &&
+      GetElement().GetDocument().FocusedElement() == &GetElement()) {
+    GetElement().DefaultBlur();
+  }
 }
 
 }  // namespace blink

@@ -1,19 +1,24 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "build/build_config.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "content/public/test/browser_test.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/test/extension_test_message_listener.h"
 
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
 namespace extensions {
+
+using SharedModuleTest = ExtensionApiTest;
 
 // NB: We use LoadExtension instead of InstallExtension for shared modules so
 // the public-keys in their manifests are used to generate the extension ID, so
 // it can be imported correctly.  We use InstallExtension otherwise so the loads
 // happen through the CRX installer which validates imports.
-
-IN_PROC_BROWSER_TEST_F(ExtensionApiTest, SharedModule) {
+IN_PROC_BROWSER_TEST_F(SharedModuleTest, SharedModule) {
   // import_pass depends on this shared module.
   ASSERT_TRUE(LoadExtension(
       test_data_dir_.AppendASCII("shared_module").AppendASCII("shared")));
@@ -28,17 +33,17 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, SharedModule) {
           .AppendASCII("import_non_existent"), 0));
 }
 
-IN_PROC_BROWSER_TEST_F(ExtensionApiTest, SharedModuleAllowlist) {
+IN_PROC_BROWSER_TEST_F(SharedModuleTest, SharedModuleAllowlist) {
   ASSERT_TRUE(LoadExtension(test_data_dir_.AppendASCII("shared_module")
-                                .AppendASCII("shared_whitelist")));
+                                .AppendASCII("shared_allowlist")));
 
   EXPECT_FALSE(InstallExtension(test_data_dir_.AppendASCII("shared_module")
-                                    .AppendASCII("import_not_in_whitelist"),
+                                    .AppendASCII("import_not_in_allowlist"),
                                 0));
 }
 
-IN_PROC_BROWSER_TEST_F(ExtensionApiTest, SharedModuleInstallEvent) {
-  ExtensionTestMessageListener listener1("ready", false);
+IN_PROC_BROWSER_TEST_F(SharedModuleTest, SharedModuleInstallEvent) {
+  ExtensionTestMessageListener listener1("ready");
 
   const Extension* extension = LoadExtension(
       test_data_dir_.AppendASCII("shared_module").AppendASCII("shared"));
@@ -48,7 +53,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, SharedModuleInstallEvent) {
       1));
 }
 
-IN_PROC_BROWSER_TEST_F(ExtensionApiTest, SharedModuleLocale) {
+IN_PROC_BROWSER_TEST_F(SharedModuleTest, SharedModuleLocale) {
   const Extension* extension = LoadExtension(
       test_data_dir_.AppendASCII("shared_module").AppendASCII("shared"));
   ASSERT_TRUE(extension);

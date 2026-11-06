@@ -1,14 +1,14 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.browser_ui.widget;
 
 import android.app.Activity;
-import android.app.Dialog;
 
 import org.chromium.base.ActivityState;
 import org.chromium.base.ApplicationStatus;
+import org.chromium.build.annotations.NullMarked;
 
 /**
  * Dialog subclass that ensures that dismiss() is called, even if the dialog is implicitly dismissed
@@ -16,10 +16,12 @@ import org.chromium.base.ApplicationStatus;
  * references to memory or performs other crucial cleanup. See http://crbug.com/507748.
  * DialogFragments ensure that dismiss() is called as well.
  */
-public class AlwaysDismissedDialog
-        extends Dialog implements ApplicationStatus.ActivityStateListener {
-    public AlwaysDismissedDialog(Activity ownerActivity, int theme) {
-        super(ownerActivity, theme);
+@NullMarked
+public class AlwaysDismissedDialog extends ChromeDialog
+        implements ApplicationStatus.ActivityStateListener {
+    public AlwaysDismissedDialog(
+            Activity ownerActivity, int theme, boolean shouldPadForWindowInsets) {
+        super(ownerActivity, theme, shouldPadForWindowInsets);
         ApplicationStatus.registerStateListenerForActivity(this, ownerActivity);
 
         setOwnerActivity(ownerActivity);

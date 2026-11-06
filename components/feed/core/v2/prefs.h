@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -33,11 +33,9 @@ void SetLastRequestTime(base::Time request_time, PrefService& pref_service);
 DebugStreamData GetDebugStreamData(PrefService& pref_service);
 void SetDebugStreamData(const DebugStreamData& data, PrefService& pref_service);
 
-void SetRequestSchedule(RefreshTaskId task_id,
-                        const RequestSchedule& schedule,
+void SetRequestSchedule(const RequestSchedule& schedule,
                         PrefService& pref_service);
-RequestSchedule GetRequestSchedule(RefreshTaskId task_id,
-                                   PrefService& pref_service);
+RequestSchedule GetRequestSchedule(PrefService& pref_service);
 
 PersistentMetricsData GetPersistentMetricsData(PrefService& pref_service);
 void SetPersistentMetricsData(const PersistentMetricsData& data,
@@ -45,9 +43,6 @@ void SetPersistentMetricsData(const PersistentMetricsData& data,
 
 std::string GetClientInstanceId(PrefService& pref_service);
 void ClearClientInstanceId(PrefService& pref_service);
-
-void SetExperiments(const Experiments& experiments, PrefService& pref_service);
-Experiments GetExperiments(PrefService& pref_service);
 
 }  // namespace prefs
 }  // namespace feed

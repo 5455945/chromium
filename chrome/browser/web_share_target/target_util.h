@@ -1,15 +1,19 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_WEB_SHARE_TARGET_TARGET_UTIL_H_
 #define CHROME_BROWSER_WEB_SHARE_TARGET_TARGET_UTIL_H_
 
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "base/memory/scoped_refptr.h"
-#include "services/network/public/cpp/resource_request_body.h"
+
+namespace network {
+class ResourceRequestBody;
+}
 
 namespace web_share_target {
 

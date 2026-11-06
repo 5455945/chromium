@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,14 @@
 
 #include <algorithm>
 #include <iterator>
+#include <map>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 #include "base/containers/circular_deque.h"
-#include "base/containers/cxx20_erase.h"
-#include "base/strings/string_piece.h"
+#include "base/memory/raw_ptr.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
 namespace {
 
@@ -19,27 +23,27 @@ namespace {
 // enclosing the string in quotation marks, and escaping any quotation marks
 // found with backslashes.
 // [1] http://www.graphviz.org/content/dot-language
-std::string Escape(base::StringPiece id) {
+std::string Escape(std::string_view id) {
   std::string result = "\"";
   result.reserve(id.size() + 2);  // +2 for the enclosing quotes.
   size_t after_last_quot = 0;
   size_t next_quot = id.find('"');
-  while (next_quot != base::StringPiece::npos) {
-    result.append(id.data() + after_last_quot, next_quot - after_last_quot);
+  while (next_quot != std::string_view::npos) {
+    result.append(id.substr(after_last_quot, next_quot - after_last_quot));
     result.append("\"");
     after_last_quot = next_quot + 1;
     next_quot = id.find('"', after_last_quot);
   }
-  result.append(id.data() + after_last_quot, id.size() - after_last_quot);
+  result.append(id.substr(after_last_quot, id.size() - after_last_quot));
   result.append("\"");
   return result;
 }
 
 }  // namespace
 
-DependencyGraph::DependencyGraph() {}
+DependencyGraph::DependencyGraph() = default;
 
-DependencyGraph::~DependencyGraph() {}
+DependencyGraph::~DependencyGraph() = default;
 
 void DependencyGraph::AddNode(DependencyNode* node) {
   all_nodes_.push_back(node);
@@ -47,17 +51,11 @@ void DependencyGraph::AddNode(DependencyNode* node) {
 }
 
 void DependencyGraph::RemoveNode(DependencyNode* node) {
-  base::Erase(all_nodes_, node);
+  std::erase(all_nodes_, node);
 
-  // Remove all dependency edges that contain this node.
-  auto it = edges_.begin();
-  while (it != edges_.end()) {
-    auto temp = it;
-    ++it;
-
-    if (temp->first == node || temp->second == node)
-      edges_.erase(temp);
-  }
+  std::erase_if(edges_, [node](const auto& edge) {
+    return edge.first == node || edge.second == node;
+  });
 
   construction_order_.clear();
 }
@@ -69,7 +67,7 @@ void DependencyGraph::AddEdge(DependencyNode* depended,
 }
 
 bool DependencyGraph::GetConstructionOrder(
-    std::vector<DependencyNode*>* order) {
+    std::vector<raw_ptr<DependencyNode, VectorExperimental>>* order) {
   if (construction_order_.empty() && !BuildConstructionOrder())
     return false;
 
@@ -77,61 +75,56 @@ bool DependencyGraph::GetConstructionOrder(
   return true;
 }
 
-bool DependencyGraph::GetDestructionOrder(std::vector<DependencyNode*>* order) {
+bool DependencyGraph::GetDestructionOrder(
+    std::vector<raw_ptr<DependencyNode, VectorExperimental>>* order) {
   if (construction_order_.empty() && !BuildConstructionOrder())
     return false;
 
-  *order = construction_order_;
-
   // Destroy nodes in reverse order.
-  std::reverse(order->begin(), order->end());
-
+  *order = {construction_order_.rbegin(), construction_order_.rend()};
   return true;
 }
 
 bool DependencyGraph::BuildConstructionOrder() {
   // Step 1: Build a set of nodes with no incoming edges.
-  base::circular_deque<DependencyNode*> queue(all_nodes_.begin(),
-                                              all_nodes_.end());
-  for (const auto& pair : edges_)
-    base::Erase(queue, pair.second);
+  absl::flat_hash_map<DependencyNode*, size_t> incoming_edge_count;
+  incoming_edge_count.reserve(all_nodes_.size());
+  for (const auto& pair : edges_) {
+    ++incoming_edge_count[pair.second];
+  }
+
+  base::circular_deque<DependencyNode*> queue;
+  for (DependencyNode* node : all_nodes_) {
+    if (!incoming_edge_count.contains(node)) {
+      queue.push_back(node);
+    }
+  }
 
   // Step 2: Do the Kahn topological sort.
-  std::vector<DependencyNode*> output;
-  EdgeMap edges(edges_);
+  std::vector<raw_ptr<DependencyNode, VectorExperimental>> output;
+  output.reserve(all_nodes_.size());
+  size_t remaining_edges = edges_.size();
   while (!queue.empty()) {
     DependencyNode* node = queue.front();
     queue.pop_front();
     output.push_back(node);
 
-    std::pair<EdgeMap::iterator, EdgeMap::iterator> range =
-        edges.equal_range(node);
-    auto it = range.first;
-    while (it != range.second) {
+    auto [first, last] = edges_.equal_range(node);
+    for (auto it = first; it != last; ++it) {
       DependencyNode* dest = it->second;
-      auto temp = it;
-      it++;
-      edges.erase(temp);
-
-      bool has_incoming_edges = false;
-      for (auto jt = edges.begin(); jt != edges.end(); ++jt) {
-        if (jt->second == dest) {
-          has_incoming_edges = true;
-          break;
-        }
-      }
-
-      if (!has_incoming_edges)
+      --remaining_edges;
+      if (--incoming_edge_count[dest] == 0) {
         queue.push_back(dest);
+      }
     }
   }
 
-  if (!edges.empty()) {
+  if (remaining_edges != 0) {
     // Dependency graph has a cycle.
     return false;
   }
 
-  construction_order_ = output;
+  construction_order_ = std::move(output);
   return true;
 }
 
@@ -143,8 +136,7 @@ std::string DependencyGraph::DumpAsGraphviz(
   std::string escaped_toplevel_name = Escape(toplevel_name);
 
   // Make a copy of all nodes.
-  base::circular_deque<DependencyNode*> nodes(all_nodes_.begin(),
-                                              all_nodes_.end());
+  base::circular_deque<DependencyNode*> nodes(std::from_range, all_nodes_);
 
   // State all dependencies and remove |second| so we don't generate an
   // implicit dependency on the top level node.

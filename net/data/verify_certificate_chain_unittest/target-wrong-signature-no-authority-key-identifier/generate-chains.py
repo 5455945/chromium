@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2019 The Chromium Authors. All rights reserved.
+# Copyright 2019 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -11,6 +11,7 @@ intermediate's subjectKeyIdentifier.
 """
 
 import sys
+
 sys.path += ['../..']
 
 import gencerts
@@ -33,8 +34,9 @@ target = gencerts.create_end_entity_certificate('Target', intermediate)
 target.get_extensions().set_property('subjectAltName', 'DNS:test.example')
 
 # Intermediate certificate issued by root, but which did not sign target.
-bogus_intermediate = gencerts.create_intermediate_certificate('Intermediate',
-                                                              root)
+bogus_intermediate = gencerts.create_intermediate_certificate(
+  'Intermediate', root
+)
 
 chain = [target, bogus_intermediate, root]
 gencerts.write_chain(__doc__, chain, 'chain.pem')

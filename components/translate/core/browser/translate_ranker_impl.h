@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,21 +10,17 @@
 #include <vector>
 
 #include "base/feature_list.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
-#include "base/sequenced_task_runner.h"
-#include "components/assist_ranker/ranker_model_loader.h"
+#include "base/task/sequenced_task_runner.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/translate/core/browser/ranker_model_loader.h"
 #include "components/translate/core/browser/translate_ranker.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "url/gurl.h"
 
 class GURL;
-
-namespace assist_ranker {
-class RankerModel;
-}  // namespace assist_ranker
 
 namespace base {
 class FilePath;
@@ -46,9 +42,8 @@ extern const char kDefaultTranslateRankerModelURL[];
 
 // Features used to enable ranker query, enforcement and logging. Note that
 // enabling enforcement implies (forces) enabling queries.
-extern const base::Feature kTranslateRankerQuery;
-extern const base::Feature kTranslateRankerEnforcement;
-extern const base::Feature kTranslateRankerPreviousLanguageMatchesOverride;
+BASE_DECLARE_FEATURE(kTranslateRankerQuery);
+BASE_DECLARE_FEATURE(kTranslateRankerEnforcement);
 
 struct TranslateRankerFeatures {
   TranslateRankerFeatures();
@@ -90,6 +85,10 @@ class TranslateRankerImpl : public TranslateRanker {
   TranslateRankerImpl(const base::FilePath& model_path,
                       const GURL& model_url,
                       ukm::UkmRecorder* ukm_recorder);
+
+  TranslateRankerImpl(const TranslateRankerImpl&) = delete;
+  TranslateRankerImpl& operator=(const TranslateRankerImpl&) = delete;
+
   ~TranslateRankerImpl() override;
 
   // Get the file path of the translate ranker model, by default with a fixed
@@ -112,11 +111,8 @@ class TranslateRankerImpl : public TranslateRanker {
       int event_type,
       ukm::SourceId ukm_source_id,
       metrics::TranslateEventProto* translate_event) override;
-  bool ShouldOverrideMatchesPreviousLanguageDecision(
-      ukm::SourceId ukm_source_id,
-      metrics::TranslateEventProto* translate_event) override;
 
-  void OnModelAvailable(std::unique_ptr<assist_ranker::RankerModel> model);
+  void OnModelAvailable(std::unique_ptr<RankerModel> model);
 
   // Get the model decision on whether we should show the translate
   // UI or not given |translate_event|.
@@ -135,16 +131,16 @@ class TranslateRankerImpl : public TranslateRanker {
                          ukm::SourceId ukm_source_id);
 
   // Used to log URL-keyed metrics. This pointer will outlive |this|.
-  ukm::UkmRecorder* ukm_recorder_;
+  raw_ptr<ukm::UkmRecorder> ukm_recorder_;
 
   // Used to sanity check the threading of this ranker.
-  base::SequenceChecker sequence_checker_;
+  SEQUENCE_CHECKER(sequence_checker_);
 
   // A helper to load the translate ranker model from disk cache or a URL.
-  std::unique_ptr<assist_ranker::RankerModelLoader> model_loader_;
+  std::unique_ptr<RankerModelLoader> model_loader_;
 
   // The translation ranker model.
-  std::unique_ptr<assist_ranker::RankerModel> model_;
+  std::unique_ptr<RankerModel> model_;
 
   // Tracks whether or not translate event logging is enabled.
   bool is_uma_logging_enabled_ = true;
@@ -156,16 +152,10 @@ class TranslateRankerImpl : public TranslateRanker {
   // that also enables the code paths for translate ranker querying.
   bool is_enforcement_enabled_ = true;
 
-  // When set to true, overrides UI suppression when previous language
-  // matches current language in bubble UI.
-  bool is_previous_language_matches_override_enabled_ = false;
-
   // Saved cache of translate event protos.
   std::vector<metrics::TranslateEventProto> event_cache_;
 
   base::WeakPtrFactory<TranslateRankerImpl> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(TranslateRankerImpl);
 };
 
 }  // namespace translate

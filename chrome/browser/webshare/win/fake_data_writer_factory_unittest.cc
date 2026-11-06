@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,8 @@
 #include <wrl/event.h>
 #include <wrl/implements.h>
 
+#include "base/compiler_specific.h"
+#include "base/debug/stack_trace.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "chrome/browser/webshare/win/fake_buffer.h"
@@ -29,6 +31,8 @@ using Microsoft::WRL::Make;
 namespace webshare {
 
 TEST(FakeDataWriterFactoryTest, RacingStoreAsync) {
+  base::debug::OverrideStackTraceOutputForTesting suppress_stacks(
+      base::debug::OverrideStackTraceOutputForTesting::Mode::kSuppressOutput);
   base::test::SingleThreadTaskEnvironment task_environment;
 
   auto writer_factory = Make<FakeDataWriterFactory>();
@@ -77,6 +81,8 @@ TEST(FakeDataWriterFactoryTest, RacingStoreAsync) {
 }
 
 TEST(FakeDataWriterFactoryTest, UnstoredBytes) {
+  base::debug::OverrideStackTraceOutputForTesting suppress_stacks(
+      base::debug::OverrideStackTraceOutputForTesting::Mode::kSuppressOutput);
   auto writer_factory = Make<FakeDataWriterFactory>();
   auto stream = Make<FakeRandomAccessStream>();
 
@@ -92,11 +98,17 @@ TEST(FakeDataWriterFactoryTest, UnstoredBytes) {
       ASSERT_HRESULT_FAILED(data_writer->FlushAsync(&flush_operation)),
       "FlushAsync");
 
-  // Expect failures from the destructor from not storing the data and not
-  // flushing the data
-  EXPECT_NONFATAL_FAILURE(
-      EXPECT_NONFATAL_FAILURE(data_writer.Reset(), "pending storage"),
-      "FlushAsync");
+  {
+    ::testing::TestPartResultArray gtest_failures;
+    ::testing::ScopedFakeTestPartResultReporter gtest_reporter(
+        ::testing::ScopedFakeTestPartResultReporter::
+            INTERCEPT_ONLY_CURRENT_THREAD,
+        &gtest_failures);
+    // Expect failures from the destructor from not storing the data and not
+    // flushing the data
+    data_writer.Reset();
+    EXPECT_EQ(gtest_failures.size(), 2) << "pending storage";
+  }
 
   // Cleanup
   ASSERT_HRESULT_SUCCEEDED(stream->Close());
@@ -209,13 +221,13 @@ TEST(FakeDataWriterFactoryTest, WriteBytes) {
   byte* raw_buffer;
   ASSERT_HRESULT_SUCCEEDED(buffer->Buffer(&raw_buffer));
   ASSERT_EQ(raw_buffer[0], 'h');
-  ASSERT_EQ(raw_buffer[1], 'i');
-  ASSERT_EQ(raw_buffer[2], ' ');
-  ASSERT_EQ(raw_buffer[3], 't');
-  ASSERT_EQ(raw_buffer[4], 'h');
-  ASSERT_EQ(raw_buffer[5], 'e');
-  ASSERT_EQ(raw_buffer[6], 'r');
-  ASSERT_EQ(raw_buffer[7], 'e');
+  ASSERT_EQ(UNSAFE_TODO(raw_buffer[1]), 'i');
+  ASSERT_EQ(UNSAFE_TODO(raw_buffer[2]), ' ');
+  ASSERT_EQ(UNSAFE_TODO(raw_buffer[3]), 't');
+  ASSERT_EQ(UNSAFE_TODO(raw_buffer[4]), 'h');
+  ASSERT_EQ(UNSAFE_TODO(raw_buffer[5]), 'e');
+  ASSERT_EQ(UNSAFE_TODO(raw_buffer[6]), 'r');
+  ASSERT_EQ(UNSAFE_TODO(raw_buffer[7]), 'e');
 
   // Cleanup
   ASSERT_HRESULT_SUCCEEDED(stream->Close());

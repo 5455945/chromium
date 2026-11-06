@@ -1,4 +1,4 @@
-// Copyright (c) 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,9 +11,11 @@
 #include "content/common/content_export.h"
 #include "ui/accessibility/platform/inspect/ax_tree_formatter_base.h"
 
-namespace content {
-
+namespace ui {
 class BrowserAccessibility;
+}
+
+namespace content {
 
 class CONTENT_EXPORT AccessibilityTreeFormatterBlink
     : public ui::AXTreeFormatterBase {
@@ -21,11 +23,10 @@ class CONTENT_EXPORT AccessibilityTreeFormatterBlink
   explicit AccessibilityTreeFormatterBlink();
   ~AccessibilityTreeFormatterBlink() override;
 
-  base::Value BuildTree(ui::AXPlatformNodeDelegate* root) const override;
-  base::Value BuildTreeForWindow(gfx::AcceleratedWidget widget) const override;
-  base::Value BuildTreeForSelector(
+  base::DictValue BuildTree(ui::AXPlatformNodeDelegate* root) const override;
+  base::DictValue BuildTreeForSelector(
       const AXTreeSelector& selector) const override;
-  base::Value BuildTreeForNode(ui::AXNode* node) const override;
+  base::DictValue BuildTreeForNode(ui::AXNode* node) const override;
   std::string DumpInternalAccessibilityTree(
       ui::AXTreeID tree_id,
       const std::vector<AXPropertyFilter>& property_filters) override;
@@ -35,20 +36,19 @@ class CONTENT_EXPORT AccessibilityTreeFormatterBlink
       std::vector<AXPropertyFilter>* property_filters) override;
 
  private:
-  void RecursiveBuildTree(const BrowserAccessibility& node,
-                          base::Value* dict) const;
+  void RecursiveBuildTree(const ui::BrowserAccessibility& node,
+                          base::DictValue* dict) const;
 
-  void RecursiveBuildTree(const ui::AXNode& node, base::Value* dict) const;
+  void RecursiveBuildTree(const ui::AXNode& node, base::DictValue* dict) const;
 
-  base::Value BuildNode(ui::AXPlatformNodeDelegate* node) const override;
+  base::DictValue BuildNode(ui::AXPlatformNodeDelegate* node) const override;
 
-  void AddProperties(const BrowserAccessibility& node,
-                     base::DictionaryValue* dict) const;
+  void AddProperties(const ui::BrowserAccessibility& node,
+                     base::DictValue* dict) const;
 
-  void AddProperties(const ui::AXNode& node, base::DictionaryValue* dict) const;
+  void AddProperties(const ui::AXNode& node, base::DictValue* dict) const;
 
-  std::string ProcessTreeForOutput(
-      const base::DictionaryValue& node) const override;
+  std::string ProcessTreeForOutput(const base::DictValue& node) const override;
 };
 
 }  // namespace content

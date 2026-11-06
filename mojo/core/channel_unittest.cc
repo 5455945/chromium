@@ -1,32 +1,53 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "mojo/core/channel.h"
 
+#include <algorithm>
 #include <atomic>
+#include <optional>
+#include <tuple>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/containers/heap_array.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/page_size.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/weak_ptr.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/process/process_handle.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/threading/thread.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
+#include "mojo/core/embedder/features.h"
+#include "mojo/core/ipcz_driver/envelope.h"
 #include "mojo/core/platform_handle_utils.h"
 #include "mojo/public/cpp/platform/platform_channel.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
-namespace mojo {
-namespace core {
-namespace {
+#if BUILDFLAG(IS_WIN)
+#include "base/process/current_process.h"
+#include "base/process/current_process_test.h"
+#include "base/test/metrics/histogram_tester.h"
+#include "base/test/run_until.h"
+#include "base/test/test_future.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
+#endif
+
+#if BUILDFLAG(IS_MAC)
+#include "base/mac/process_requirement.h"
+#endif
+
+namespace mojo::core {
 
 class TestChannel : public Channel {
  public:
@@ -41,17 +62,20 @@ class TestChannel : public Channel {
     return OnReadComplete(bytes_read, next_read_size_hint);
   }
 
-  MOCK_METHOD7(GetReadPlatformHandles,
-               bool(const void* payload,
-                    size_t payload_size,
-                    size_t num_handles,
-                    const void* extra_header,
-                    size_t extra_header_size,
-                    std::vector<PlatformHandle>* handles,
-                    bool* deferred));
-  MOCK_METHOD0(Start, void());
-  MOCK_METHOD0(ShutDownImpl, void());
-  MOCK_METHOD0(LeakHandle, void());
+  MOCK_METHOD(bool,
+              GetReadPlatformHandles,
+              (const void* payload,
+               size_t payload_size,
+               size_t num_handles,
+               const void* extra_header,
+               size_t extra_header_size,
+               std::vector<PlatformHandle>* handles));
+  MOCK_METHOD(bool,
+              GetReadPlatformHandlesForIpcz,
+              (size_t, std::vector<PlatformHandle>&));
+  MOCK_METHOD(void, Start, ());
+  MOCK_METHOD(void, ShutDownImpl, ());
+  MOCK_METHOD(void, LeakHandle, ());
 
   void Write(MessagePtr message) override {}
 
@@ -64,26 +88,185 @@ class MockChannelDelegate : public Channel::Delegate {
  public:
   MockChannelDelegate() = default;
 
-  size_t GetReceivedPayloadSize() const { return payload_size_; }
+  size_t GetReceivedPayloadSize() const { return payload_.size(); }
 
-  const void* GetReceivedPayload() const { return payload_.get(); }
+  const void* GetReceivedPayload() const { return payload_.data(); }
 
  protected:
-  void OnChannelMessage(const void* payload,
-                        size_t payload_size,
-                        std::vector<PlatformHandle> handles) override {
-    payload_.reset(new char[payload_size]);
-    memcpy(payload_.get(), payload, payload_size);
-    payload_size_ = payload_size;
+  void OnChannelMessage(
+      const void* payload,
+      size_t payload_size,
+      std::vector<PlatformHandle> handles,
+      scoped_refptr<ipcz_driver::Envelope> envelope) override {
+    auto payload_span = UNSAFE_TODO(
+        base::span(static_cast<const char*>(payload), payload_size));
+    payload_ = base::HeapArray<char>::CopiedFrom(payload_span);
   }
 
   // Notify that an error has occured and the Channel will cease operation.
   void OnChannelError(Channel::Error error) override {}
 
  private:
-  size_t payload_size_ = 0;
-  std::unique_ptr<char[]> payload_;
+  base::HeapArray<char> payload_;
 };
+
+#if BUILDFLAG(IS_WIN)
+constexpr char kPeakOpenChannelsHistogram[] =
+    "Stability.Mojo.Channel.Win.PeakOpenChannels.Renderer";
+
+class ChannelWinOpenChannelsMetricsTest : public testing::Test {
+ protected:
+  void SetUp() override {
+    base::CurrentProcess::GetInstance().SetProcessType(
+        base::CurrentProcessType::PROCESS_RENDERER);
+    ASSERT_TRUE(io_thread_.StartWithOptions(
+        base::Thread::Options(base::MessagePumpType::IO, 0)));
+  }
+
+  void TearDown() override {
+    RemoveChannels(channels_.size());
+    io_thread_.Stop();
+    base::CurrentProcess::GetInstance().SetProcessType(original_process_type_);
+  }
+
+  void FlushIO(scoped_refptr<base::SingleThreadTaskRunner> runner) {
+    base::test::TestFuture<void> future;
+    ASSERT_TRUE(runner->PostTask(FROM_HERE, future.GetSequenceBoundCallback()));
+    ASSERT_TRUE(future.Wait());
+  }
+
+  void AddChannels(size_t count,
+                   scoped_refptr<base::SingleThreadTaskRunner> runner) {
+    for (size_t i = 0; i < count; ++i) {
+      PlatformChannel pipe;
+      channels_.push_back(
+          Channel::Create(nullptr, ConnectionParams(pipe.TakeLocalEndpoint()),
+                          Channel::HandlePolicy::kAcceptHandles, runner));
+      peers_.push_back(pipe.TakeRemoteEndpoint());
+      channels_.back()->Start();
+    }
+    FlushIO(std::move(runner));
+  }
+
+  void RemoveChannels(size_t count) {
+    std::vector<scoped_refptr<Channel>> removed;
+    for (size_t i = 0; i < count; ++i) {
+      removed.push_back(std::move(channels_.back()));
+      channels_.pop_back();
+      removed.back()->ShutDown();
+    }
+    WaitForCompletions(removed);
+  }
+
+  void WaitForCompletions(const std::vector<scoped_refptr<Channel>>& channels) {
+    // Native completions on the I/O threads do not wake this test's run loop.
+    base::RepeatingTimer wakeup;
+    wakeup.Start(FROM_HERE, base::Milliseconds(1), base::DoNothing());
+    EXPECT_TRUE(base::test::RunUntil([&] {
+      return std::ranges::all_of(
+          channels, [](const auto& channel) { return channel->HasOneRef(); });
+    }));
+  }
+
+  const base::CurrentProcessType original_process_type_ =
+      base::test::CurrentProcessForTest::GetType();
+  base::test::SingleThreadTaskEnvironment task_environment_;
+  base::Thread io_thread_{"Open channel metrics"};
+  base::HistogramTester histograms_;
+  std::vector<scoped_refptr<Channel>> channels_;
+  std::vector<PlatformChannelEndpoint> peers_;
+};
+
+TEST_F(ChannelWinOpenChannelsMetricsTest, CountsConcurrencyRatherThanChurn) {
+  AddChannels(32, io_thread_.task_runner());
+  histograms_.ExpectBucketCount(kPeakOpenChannelsHistogram, 1, 1);
+  histograms_.ExpectBucketCount(kPeakOpenChannelsHistogram, 31, 1);
+  histograms_.ExpectBucketCount(kPeakOpenChannelsHistogram, 32, 1);
+  histograms_.ExpectTotalCount(kPeakOpenChannelsHistogram, 32);
+
+  RemoveChannels(16);
+  AddChannels(16, io_thread_.task_runner());
+  histograms_.ExpectTotalCount(kPeakOpenChannelsHistogram, 32);
+
+  AddChannels(1, io_thread_.task_runner());
+  histograms_.ExpectBucketCount(kPeakOpenChannelsHistogram, 33, 1);
+  histograms_.ExpectTotalCount(kPeakOpenChannelsHistogram, 33);
+}
+
+TEST_F(ChannelWinOpenChannelsMetricsTest, ReadFailureCountsUntilHandleCloses) {
+  PlatformChannelEndpoint endpoint;
+  {
+    PlatformChannel pipe;
+    endpoint = pipe.TakeLocalEndpoint();
+  }
+  channels_.push_back(Channel::Create(
+      nullptr, ConnectionParams(std::move(endpoint)),
+      Channel::HandlePolicy::kAcceptHandles, io_thread_.task_runner()));
+  channels_.back()->Start();
+  FlushIO(io_thread_.task_runner());
+  histograms_.ExpectUniqueSample(kPeakOpenChannelsHistogram, 1, 1);
+
+  RemoveChannels(1);
+  AddChannels(1, io_thread_.task_runner());
+  histograms_.ExpectUniqueSample(kPeakOpenChannelsHistogram, 1, 1);
+}
+
+TEST_F(ChannelWinOpenChannelsMetricsTest,
+       ShutdownReleasesCountBeforeObjectDestruction) {
+  AddChannels(1, io_thread_.task_runner());
+  auto closed_channels = std::move(channels_);
+  channels_.clear();
+  closed_channels.front()->ShutDown();
+  FlushIO(io_thread_.task_runner());
+
+  AddChannels(1, io_thread_.task_runner());
+  histograms_.ExpectUniqueSample(kPeakOpenChannelsHistogram, 1, 1);
+  WaitForCompletions(closed_channels);
+}
+
+TEST_F(ChannelWinOpenChannelsMetricsTest, CountsIOThreadsIndependently) {
+  base::Thread other_thread("Other open channels");
+  ASSERT_TRUE(other_thread.StartWithOptions(
+      base::Thread::Options(base::MessagePumpType::IO, 0)));
+  AddChannels(16, io_thread_.task_runner());
+  AddChannels(16, other_thread.task_runner());
+  histograms_.ExpectBucketCount(kPeakOpenChannelsHistogram, 1, 2);
+  histograms_.ExpectBucketCount(kPeakOpenChannelsHistogram, 16, 2);
+  histograms_.ExpectBucketCount(kPeakOpenChannelsHistogram, 32, 0);
+  histograms_.ExpectTotalCount(kPeakOpenChannelsHistogram, 32);
+  RemoveChannels(channels_.size());
+}
+
+TEST_F(ChannelWinOpenChannelsMetricsTest, RecordsOverflowOnlyOnce) {
+  AddChannels(105, io_thread_.task_runner());
+  histograms_.ExpectBucketCount(kPeakOpenChannelsHistogram, 100, 1);
+  histograms_.ExpectBucketCount(kPeakOpenChannelsHistogram, 101, 1);
+  histograms_.ExpectTotalCount(kPeakOpenChannelsHistogram, 101);
+}
+
+class ChannelWinOpenChannelsMetricsProcessTest
+    : public ChannelWinOpenChannelsMetricsTest,
+      public testing::WithParamInterface<base::CurrentProcessType> {};
+
+TEST_P(ChannelWinOpenChannelsMetricsProcessTest, RecordsOnlyRenderers) {
+  base::CurrentProcess::GetInstance().SetProcessType(GetParam());
+  AddChannels(2, io_thread_.task_runner());
+  const bool is_renderer =
+      GetParam() == base::CurrentProcessType::PROCESS_RENDERER ||
+      GetParam() == base::CurrentProcessType::PROCESS_RENDERER_EXTENSION ||
+      GetParam() == base::CurrentProcessType::PROCESS_RENDERER_TOP_WEBUI;
+  histograms_.ExpectTotalCount(kPeakOpenChannelsHistogram, is_renderer ? 2 : 0);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ProcessType,
+    ChannelWinOpenChannelsMetricsProcessTest,
+    testing::Values(base::CurrentProcessType::PROCESS_RENDERER,
+                    base::CurrentProcessType::PROCESS_RENDERER_EXTENSION,
+                    base::CurrentProcessType::PROCESS_RENDERER_TOP_WEBUI,
+                    base::CurrentProcessType::PROCESS_BROWSER,
+                    base::CurrentProcessType::PROCESS_UTILITY));
+#endif  // BUILDFLAG(IS_WIN)
 
 Channel::MessagePtr CreateDefaultMessage(bool legacy_message) {
   const size_t payload_size = 100;
@@ -93,7 +276,7 @@ Channel::MessagePtr CreateDefaultMessage(bool legacy_message) {
                      : Channel::Message::MessageType::NORMAL);
   char* payload = static_cast<char*>(message->mutable_payload());
   for (size_t i = 0; i < payload_size; i++) {
-    payload[i] = static_cast<char>(i);
+    UNSAFE_TODO(payload[i]) = static_cast<char>(i);
   }
   return message;
 }
@@ -107,7 +290,7 @@ void TestMemoryEqual(const void* data1,
   const unsigned char* data2_char = static_cast<const unsigned char*>(data2);
   for (size_t i = 0; i < data1_size; i++) {
     // ASSERT so we don't log tons of errors if the data is different.
-    ASSERT_EQ(data1_char[i], data2_char[i]);
+    UNSAFE_TODO(ASSERT_EQ(data1_char[i], data2_char[i]));
   }
 }
 
@@ -125,8 +308,9 @@ void TestMessagesAreEqual(Channel::Message* message1,
   TestMemoryEqual(message1->payload(), message1->payload_size(),
                   message2->payload(), message2->payload_size());
 
-  if (legacy_messages)
+  if (legacy_messages) {
     return;
+  }
 
   ASSERT_EQ(message1->extra_header_size(), message2->extra_header_size());
   TestMemoryEqual(message1->extra_header(), message1->extra_header_size(),
@@ -162,7 +346,7 @@ TEST(ChannelTest, OnReadLegacyMessage) {
   ASSERT_LT(message->data_num_bytes(),
             buffer_size);  // Bad test. Increase buffer
                            // size.
-  memcpy(read_buffer, message->data(), message->data_num_bytes());
+  UNSAFE_TODO(memcpy(read_buffer, message->data(), message->data_num_bytes()));
 
   size_t next_read_size_hint = 0;
   EXPECT_TRUE(channel->OnReadCompleteTest(message->data_num_bytes(),
@@ -184,7 +368,7 @@ TEST(ChannelTest, OnReadNonLegacyMessage) {
   ASSERT_LT(message->data_num_bytes(),
             buffer_size);  // Bad test. Increase buffer
                            // size.
-  memcpy(read_buffer, message->data(), message->data_num_bytes());
+  UNSAFE_TODO(memcpy(read_buffer, message->data(), message->data_num_bytes()));
 
   size_t next_read_size_hint = 0;
   EXPECT_TRUE(channel->OnReadCompleteTest(message->data_num_bytes(),
@@ -214,9 +398,11 @@ class ChannelTestShutdownAndWriteDelegate : public Channel::Delegate {
   ~ChannelTestShutdownAndWriteDelegate() override { channel_->ShutDown(); }
 
   // Channel::Delegate implementation
-  void OnChannelMessage(const void* payload,
-                        size_t payload_size,
-                        std::vector<PlatformHandle> handles) override {
+  void OnChannelMessage(
+      const void* payload,
+      size_t payload_size,
+      std::vector<PlatformHandle> handles,
+      scoped_refptr<ipcz_driver::Envelope> envelope) override {
     ++message_count_;
 
     // If |client_channel_| exists then close it and its thread.
@@ -282,7 +468,8 @@ TEST(ChannelTest, PeerShutdownDuringRead) {
   // is received.
   base::RunLoop run_loop;
   ChannelTestShutdownAndWriteDelegate server_delegate(
-      channel.TakeLocalEndpoint(), base::ThreadTaskRunnerHandle::Get(),
+      channel.TakeLocalEndpoint(),
+      base::SingleThreadTaskRunner::GetCurrentDefault(),
       std::move(client_channel), std::move(client_thread),
       run_loop.QuitClosure());
 
@@ -293,30 +480,28 @@ class RejectHandlesDelegate : public Channel::Delegate {
  public:
   RejectHandlesDelegate() = default;
 
+  RejectHandlesDelegate(const RejectHandlesDelegate&) = delete;
+  RejectHandlesDelegate& operator=(const RejectHandlesDelegate&) = delete;
+
   size_t num_messages() const { return num_messages_; }
 
   // Channel::Delegate:
-  void OnChannelMessage(const void* payload,
-                        size_t payload_size,
-                        std::vector<PlatformHandle> handles) override {
+  void OnChannelMessage(
+      const void* payload,
+      size_t payload_size,
+      std::vector<PlatformHandle> handles,
+      scoped_refptr<ipcz_driver::Envelope> envelope) override {
     ++num_messages_;
   }
 
-  void OnChannelError(Channel::Error error) override {
-    if (wait_for_error_loop_)
-      wait_for_error_loop_->Quit();
-  }
+  void OnChannelError(Channel::Error error) override { quit_on_error_.Run(); }
 
-  void WaitForError() {
-    wait_for_error_loop_.emplace();
-    wait_for_error_loop_->Run();
-  }
+  void WaitForError() { wait_for_error_loop_.Run(); }
 
  private:
   size_t num_messages_ = 0;
-  absl::optional<base::RunLoop> wait_for_error_loop_;
-
-  DISALLOW_COPY_AND_ASSIGN(RejectHandlesDelegate);
+  base::RunLoop wait_for_error_loop_;
+  base::RepeatingClosure quit_on_error_ = wait_for_error_loop_.QuitClosure();
 };
 
 TEST(ChannelTest, RejectHandles) {
@@ -329,14 +514,14 @@ TEST(ChannelTest, RejectHandles) {
       Channel::Create(&receiver_delegate,
                       ConnectionParams(platform_channel.TakeLocalEndpoint()),
                       Channel::HandlePolicy::kRejectHandles,
-                      base::ThreadTaskRunnerHandle::Get());
+                      base::SingleThreadTaskRunner::GetCurrentDefault());
   receiver->Start();
 
   RejectHandlesDelegate sender_delegate;
   scoped_refptr<Channel> sender = Channel::Create(
       &sender_delegate, ConnectionParams(platform_channel.TakeRemoteEndpoint()),
       Channel::HandlePolicy::kRejectHandles,
-      base::ThreadTaskRunnerHandle::Get());
+      base::SingleThreadTaskRunner::GetCurrentDefault());
   sender->Start();
 
   // Create another platform channel just to stuff one of its endpoint handles
@@ -364,7 +549,7 @@ TEST(ChannelTest, DeserializeMessage_BadExtraHeaderSize) {
   constexpr uint32_t kEmptyPayloadSize = 8;
   constexpr uint32_t kMessageSize = kTotalHeaderSize + kEmptyPayloadSize;
   char message[kMessageSize];
-  memset(message, 0, kMessageSize);
+  UNSAFE_TODO(memset(message, 0, kMessageSize));
 
   Channel::Message::Header* header =
       reinterpret_cast<Channel::Message::Header*>(&message[0]);
@@ -378,7 +563,8 @@ TEST(ChannelTest, DeserializeMessage_BadExtraHeaderSize) {
                                           base::kNullProcessHandle));
 }
 
-#if !defined(OS_WIN) && !defined(OS_APPLE) && !defined(OS_FUCHSIA)
+// This test is only enabled for Linux-based platforms.
+#if !BUILDFLAG(IS_WIN) && !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_FUCHSIA)
 TEST(ChannelTest, DeserializeMessage_NonZeroExtraHeaderSize) {
   // Verifies that a message payload is rejected when the extra header chunk
   // size anything but zero on Linux, even if it's aligned.
@@ -387,7 +573,7 @@ TEST(ChannelTest, DeserializeMessage_NonZeroExtraHeaderSize) {
   constexpr uint32_t kEmptyPayloadSize = 8;
   constexpr uint32_t kMessageSize = kTotalHeaderSize + kEmptyPayloadSize;
   char message[kMessageSize];
-  memset(message, 0, kMessageSize);
+  UNSAFE_TODO(memset(message, 0, kMessageSize));
 
   Channel::Message::Header* header =
       reinterpret_cast<Channel::Message::Header*>(&message[0]);
@@ -404,13 +590,18 @@ TEST(ChannelTest, DeserializeMessage_NonZeroExtraHeaderSize) {
 
 class CountingChannelDelegate : public Channel::Delegate {
  public:
-  explicit CountingChannelDelegate(base::OnceClosure on_final_message)
-      : on_final_message_(std::move(on_final_message)) {}
+  explicit CountingChannelDelegate(
+      base::OnceClosure on_final_message,
+      base::RepeatingClosure on_error = base::DoNothing())
+      : on_final_message_(std::move(on_final_message)),
+        on_error_(std::move(on_error)) {}
   ~CountingChannelDelegate() override = default;
 
-  void OnChannelMessage(const void* payload,
-                        size_t payload_size,
-                        std::vector<PlatformHandle> handles) override {
+  void OnChannelMessage(
+      const void* payload,
+      size_t payload_size,
+      std::vector<PlatformHandle> handles,
+      scoped_refptr<ipcz_driver::Envelope> envelope) override {
     // If this is the special "final message", run the closure.
     if (payload_size == 1) {
       auto* payload_str = reinterpret_cast<const char*>(payload);
@@ -423,13 +614,17 @@ class CountingChannelDelegate : public Channel::Delegate {
     ++message_count_;
   }
 
-  void OnChannelError(Channel::Error error) override { ++error_count_; }
+  void OnChannelError(Channel::Error error) override {
+    ++error_count_;
+    on_error_.Run();
+  }
 
   size_t message_count_ = 0;
   size_t error_count_ = 0;
 
  private:
   base::OnceClosure on_final_message_;
+  base::RepeatingClosure on_error_;
 };
 
 TEST(ChannelTest, PeerStressTest) {
@@ -467,7 +662,7 @@ TEST(ChannelTest, PeerStressTest) {
   scoped_refptr<Channel> channel_a = Channel::Create(
       &delegate_a, ConnectionParams(platform_channel.TakeLocalEndpoint()),
       Channel::HandlePolicy::kRejectHandles,
-      base::ThreadTaskRunnerHandle::Get());
+      base::SingleThreadTaskRunner::GetCurrentDefault());
 
   CountingChannelDelegate delegate_b(
       quit_when_both_channels_received_final_message);
@@ -494,11 +689,11 @@ TEST(ChannelTest, PeerStressTest) {
   send_lots_of_messages(channel_a);
   send_lots_of_messages(channel_b);
 
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(send_lots_of_messages, channel_a));
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(send_lots_of_messages, channel_a));
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(send_final_message, channel_a));
 
   peer_thread.task_runner()->PostTask(
@@ -521,24 +716,33 @@ TEST(ChannelTest, PeerStressTest) {
   EXPECT_EQ(kLotsOfMessages * 3, delegate_a.message_count_);
   EXPECT_EQ(kLotsOfMessages * 3, delegate_b.message_count_);
 
+  // `channel_a` shuts down first, so its delegate definitely shouldn't observe
+  // an error. Note that `delegate_b` can correctly observe an error in this
+  // test for some Channel implementations, so we don't enforce expectations.
   EXPECT_EQ(0u, delegate_a.error_count_);
-  EXPECT_EQ(0u, delegate_b.error_count_);
 }
 
 class CallbackChannelDelegate : public Channel::Delegate {
  public:
   CallbackChannelDelegate() = default;
 
-  void OnChannelMessage(const void* payload,
-                        size_t payload_size,
-                        std::vector<PlatformHandle> handles) override {
-    if (on_message_)
+  CallbackChannelDelegate(const CallbackChannelDelegate&) = delete;
+  CallbackChannelDelegate& operator=(const CallbackChannelDelegate&) = delete;
+
+  void OnChannelMessage(
+      const void* payload,
+      size_t payload_size,
+      std::vector<PlatformHandle> handles,
+      scoped_refptr<ipcz_driver::Envelope> envelope) override {
+    if (on_message_) {
       std::move(on_message_).Run();
+    }
   }
 
   void OnChannelError(Channel::Error error) override {
-    if (on_error_)
+    if (on_error_) {
       std::move(on_error_).Run();
+    }
   }
 
   void set_on_message(base::OnceClosure on_message) {
@@ -552,7 +756,6 @@ class CallbackChannelDelegate : public Channel::Delegate {
  private:
   base::OnceClosure on_message_;
   base::OnceClosure on_error_;
-  DISALLOW_COPY_AND_ASSIGN(CallbackChannelDelegate);
 };
 
 TEST(ChannelTest, MessageSizeTest) {
@@ -565,36 +768,37 @@ TEST(ChannelTest, MessageSizeTest) {
       Channel::Create(&receiver_delegate,
                       ConnectionParams(platform_channel.TakeLocalEndpoint()),
                       Channel::HandlePolicy::kAcceptHandles,
-                      base::ThreadTaskRunnerHandle::Get());
+                      base::SingleThreadTaskRunner::GetCurrentDefault());
   receiver->Start();
 
   MockChannelDelegate sender_delegate;
   scoped_refptr<Channel> sender = Channel::Create(
       &sender_delegate, ConnectionParams(platform_channel.TakeRemoteEndpoint()),
       Channel::HandlePolicy::kAcceptHandles,
-      base::ThreadTaskRunnerHandle::Get());
+      base::SingleThreadTaskRunner::GetCurrentDefault());
   sender->Start();
 
   for (uint32_t i = 0; i < base::GetPageSize() * 4; ++i) {
     SCOPED_TRACE(base::StringPrintf("message size %d", i));
 
-    auto message = Channel::Message::CreateMessage(i, 0);
-    memset(message->mutable_payload(), 0xAB, i);
-    sender->Write(std::move(message));
-
     bool got_message = false, got_error = false;
-
     base::RunLoop loop;
+    auto quit = loop.QuitClosure();
     receiver_delegate.set_on_message(
-        base::BindLambdaForTesting([&got_message, &loop]() {
+        base::BindLambdaForTesting([&got_message, &quit]() {
           got_message = true;
-          loop.Quit();
+          quit.Run();
         }));
     receiver_delegate.set_on_error(
-        base::BindLambdaForTesting([&got_error, &loop]() {
+        base::BindLambdaForTesting([&got_error, &quit]() {
           got_error = true;
-          loop.Quit();
+          quit.Run();
         }));
+
+    auto message = Channel::Message::CreateMessage(i, 0);
+    UNSAFE_TODO(memset(message->mutable_payload(), 0xAB, i));
+    sender->Write(std::move(message));
+
     loop.Run();
 
     EXPECT_TRUE(got_message);
@@ -602,7 +806,7 @@ TEST(ChannelTest, MessageSizeTest) {
   }
 }
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 TEST(ChannelTest, SendToDeadMachPortName) {
   base::test::SingleThreadTaskEnvironment task_environment(
       base::test::TaskEnvironment::MainThreadType::IO);
@@ -642,14 +846,14 @@ TEST(ChannelTest, SendToDeadMachPortName) {
   get_send_name_refs();
   EXPECT_EQ(2u, send);
   EXPECT_EQ(0u, dead);
-  base::mac::ScopedMachSendRight extra_send(send_name);
+  base::apple::ScopedMachSendRight extra_send(send_name);
 
   // Channel A gets created with the Mach send right from |platform_channel|.
   CallbackChannelDelegate delegate_a;
   scoped_refptr<Channel> channel_a = Channel::Create(
       &delegate_a, ConnectionParams(platform_channel.TakeLocalEndpoint()),
       Channel::HandlePolicy::kAcceptHandles,
-      base::ThreadTaskRunnerHandle::Get());
+      base::SingleThreadTaskRunner::GetCurrentDefault());
   channel_a->Start();
 
   // Channel B gets the receive right.
@@ -706,8 +910,476 @@ TEST(ChannelTest, SendToDeadMachPortName) {
   EXPECT_EQ(0u, send);
   EXPECT_EQ(1u, dead);
 }
-#endif  // defined(OS_MAC)
+
+// Starts a pair of connected channels where `client_endpoint` (the send-right
+// end) and `server_endpoint` (the receive-right end) may carry a peer process
+// requirement. Returns whether the server's message was dispatched to the
+// client without the client's channel reporting an error.
+namespace {
+
+enum class RequirementResult { kMessageDispatched, kChannelError };
+
+RequirementResult RunPeerRequirementExchange(
+    PlatformChannelEndpoint client_endpoint,
+    PlatformChannelEndpoint server_endpoint) {
+  CallbackChannelDelegate client_delegate;
+  scoped_refptr<Channel> client = Channel::Create(
+      &client_delegate, ConnectionParams(std::move(client_endpoint)),
+      Channel::HandlePolicy::kAcceptHandles,
+      base::SingleThreadTaskRunner::GetCurrentDefault());
+  client->Start();
+
+  CallbackChannelDelegate server_delegate;
+  scoped_refptr<Channel> server = Channel::Create(
+      &server_delegate, ConnectionParams(std::move(server_endpoint)),
+      Channel::HandlePolicy::kAcceptHandles,
+      base::SingleThreadTaskRunner::GetCurrentDefault());
+  server->Start();
+
+  // The receive-right (server) end validates the send-right (client) end during
+  // the handshake, so watch both ends for an error.
+  bool got_message = false;
+  bool got_error = false;
+  base::RunLoop loop;
+  auto quit = loop.QuitClosure();
+  client_delegate.set_on_message(base::BindLambdaForTesting([&]() {
+    got_message = true;
+    quit.Run();
+  }));
+  client_delegate.set_on_error(base::BindLambdaForTesting([&]() {
+    got_error = true;
+    quit.Run();
+  }));
+  server_delegate.set_on_error(base::BindLambdaForTesting([&]() {
+    got_error = true;
+    quit.Run();
+  }));
+
+  server->Write(Channel::Message::CreateMessage(0, 0));
+  loop.Run();
+
+  client->ShutDown();
+  server->ShutDown();
+  base::RunLoop().RunUntilIdle();
+
+  if (got_error) {
+    return RequirementResult::kChannelError;
+  }
+  CHECK(got_message);
+  return RequirementResult::kMessageDispatched;
+}
 
 }  // namespace
-}  // namespace core
-}  // namespace mojo
+
+TEST(ChannelTest, PeerProcessRequirementMet) {
+  base::test::SingleThreadTaskEnvironment task_environment(
+      base::test::TaskEnvironment::MainThreadType::IO);
+  PlatformChannel platform_channel;
+
+  PlatformChannelEndpoint client_endpoint =
+      platform_channel.TakeLocalEndpoint();
+  client_endpoint.set_peer_process_requirement(
+      base::mac::ProcessRequirement::AlwaysMatchesForTesting());
+
+  EXPECT_EQ(RequirementResult::kMessageDispatched,
+            RunPeerRequirementExchange(std::move(client_endpoint),
+                                       platform_channel.TakeRemoteEndpoint()));
+}
+
+TEST(ChannelTest, PeerProcessRequirementUnmetOnSendRight) {
+  base::test::SingleThreadTaskEnvironment task_environment(
+      base::test::TaskEnvironment::MainThreadType::IO);
+  PlatformChannel platform_channel;
+
+  PlatformChannelEndpoint client_endpoint =
+      platform_channel.TakeLocalEndpoint();
+  client_endpoint.set_peer_process_requirement(
+      base::mac::ProcessRequirement::NeverMatchesForTesting());
+
+  EXPECT_EQ(RequirementResult::kChannelError,
+            RunPeerRequirementExchange(std::move(client_endpoint),
+                                       platform_channel.TakeRemoteEndpoint()));
+}
+
+TEST(ChannelTest, PeerProcessRequirementUnmetOnReceiveRight) {
+  base::test::SingleThreadTaskEnvironment task_environment(
+      base::test::TaskEnvironment::MainThreadType::IO);
+  PlatformChannel platform_channel;
+
+  PlatformChannelEndpoint server_endpoint =
+      platform_channel.TakeRemoteEndpoint();
+  server_endpoint.set_peer_process_requirement(
+      base::mac::ProcessRequirement::NeverMatchesForTesting());
+
+  EXPECT_EQ(RequirementResult::kChannelError,
+            RunPeerRequirementExchange(platform_channel.TakeLocalEndpoint(),
+                                       std::move(server_endpoint)));
+}
+
+// Mirror of PeerProcessRequirementMet for the receive-right end: when the
+// endpoint that receives the handshake carries a requirement the handshake
+// sender satisfies, the exchange succeeds. This is the symmetric accept path
+// to PeerProcessRequirementUnmetOnReceiveRight.
+TEST(ChannelTest, PeerProcessRequirementMetOnReceiveRight) {
+  base::test::SingleThreadTaskEnvironment task_environment(
+      base::test::TaskEnvironment::MainThreadType::IO);
+  PlatformChannel platform_channel;
+
+  PlatformChannelEndpoint server_endpoint =
+      platform_channel.TakeRemoteEndpoint();
+  server_endpoint.set_peer_process_requirement(
+      base::mac::ProcessRequirement::AlwaysMatchesForTesting());
+
+  EXPECT_EQ(RequirementResult::kMessageDispatched,
+            RunPeerRequirementExchange(platform_channel.TakeLocalEndpoint(),
+                                       std::move(server_endpoint)));
+}
+
+// A peer that completes the channel handshake but never sends a message that
+// satisfies the requirement (for example, a process squatting the bootstrap
+// name that stalls on purpose) must not hold the channel open indefinitely.
+// After kPeerValidationTimeout (see channel_mac.cc) the client fails closed.
+TEST(ChannelTest, PeerProcessRequirementTimesOutWhenPeerSilent) {
+  base::test::SingleThreadTaskEnvironment task_environment(
+      base::test::TaskEnvironment::MainThreadType::IO,
+      base::test::TaskEnvironment::TimeSource::MOCK_TIME);
+  PlatformChannel platform_channel;
+
+  PlatformChannelEndpoint client_endpoint =
+      platform_channel.TakeLocalEndpoint();
+  client_endpoint.set_peer_process_requirement(
+      base::mac::ProcessRequirement::AlwaysMatchesForTesting());
+
+  CallbackChannelDelegate client_delegate;
+  scoped_refptr<Channel> client = Channel::Create(
+      &client_delegate, ConnectionParams(std::move(client_endpoint)),
+      Channel::HandlePolicy::kAcceptHandles,
+      base::SingleThreadTaskRunner::GetCurrentDefault());
+  client->Start();
+
+  // Keep the receive-right end alive but never create a channel on it, so the
+  // peer stays silent and is never authenticated. Holding the endpoint keeps
+  // the client's send right from going dead (which would error via a different
+  // path), isolating the validation-timeout behavior under test.
+  PlatformChannelEndpoint server_endpoint =
+      platform_channel.TakeRemoteEndpoint();
+
+  bool got_error = false;
+  client_delegate.set_on_error(
+      base::BindLambdaForTesting([&]() { got_error = true; }));
+
+  // Advance past the validation deadline; the client should fail closed.
+  task_environment.FastForwardBy(base::Seconds(15));
+
+  EXPECT_TRUE(got_error);
+
+  client->ShutDown();
+  base::RunLoop().RunUntilIdle();
+}
+#endif  // BUILDFLAG(IS_MAC)
+
+TEST(ChannelTest, ShutDownStress) {
+  base::test::SingleThreadTaskEnvironment task_environment(
+      base::test::TaskEnvironment::MainThreadType::IO);
+
+  // Create a second IO thread for Channel B.
+  base::Thread peer_thread("channel_b_io");
+  peer_thread.StartWithOptions(
+      base::Thread::Options(base::MessagePumpType::IO, 0));
+
+  // Create two channels, A and B, which run on different threads.
+  PlatformChannel platform_channel;
+
+  CallbackChannelDelegate delegate_a;
+  scoped_refptr<Channel> channel_a = Channel::Create(
+      &delegate_a, ConnectionParams(platform_channel.TakeLocalEndpoint()),
+      Channel::HandlePolicy::kRejectHandles,
+      task_environment.GetMainThreadTaskRunner());
+  channel_a->Start();
+
+  scoped_refptr<Channel> channel_b = Channel::Create(
+      nullptr, ConnectionParams(platform_channel.TakeRemoteEndpoint()),
+      Channel::HandlePolicy::kRejectHandles, peer_thread.task_runner());
+  channel_b->Start();
+
+  base::WaitableEvent go_event;
+
+  // Warm up the channel to ensure that A and B are connected, then quit.
+  {
+    base::RunLoop run_loop;
+    delegate_a.set_on_message(run_loop.QuitClosure());
+    channel_b->Write(Channel::Message::CreateMessage(0, 0));
+    run_loop.Run();
+  }
+
+  // Block the peer thread while some tasks are queued up from the test main
+  // thread.
+  peer_thread.task_runner()->PostTask(FROM_HERE,
+                                      go_event.GetWaitCallbackForTesting());
+
+  // First, write some messages for Channel B.
+  for (int i = 0; i < 500; ++i) {
+    channel_b->Write(Channel::Message::CreateMessage(0, 0));
+  }
+
+  // Then shut down channel B.
+  channel_b->ShutDown();
+
+  // Un-block the peer thread.
+  go_event.Signal();
+
+  // And then flood the channel with messages. This will suss out data races
+  // during Channel B's shutdown, since Writes can happen across threads
+  // without a PostTask.
+  for (int i = 0; i < 1000; ++i) {
+    channel_b->Write(Channel::Message::CreateMessage(0, 0));
+  }
+
+  // Explicitly join the thread to wait for pending tasks, which may reference
+  // stack variables, to complete.
+  peer_thread.Stop();
+}
+
+class CallbackIpczChannelDelegate : public Channel::Delegate {
+ public:
+  using OnMessageCallback =
+      base::OnceCallback<void(const void* payload,
+                              size_t payload_size,
+                              scoped_refptr<ipcz_driver::Envelope> envelope)>;
+  CallbackIpczChannelDelegate() = default;
+
+  CallbackIpczChannelDelegate(const CallbackChannelDelegate&) = delete;
+  CallbackIpczChannelDelegate& operator=(const CallbackChannelDelegate&) =
+      delete;
+
+  bool IsIpczTransport() const override { return true; }
+
+  void OnChannelMessage(
+      const void* payload,
+      size_t payload_size,
+      std::vector<PlatformHandle> handles,
+      scoped_refptr<ipcz_driver::Envelope> envelope) override {
+    if (on_message_) {
+      std::move(on_message_).Run(payload, payload_size, std::move(envelope));
+    }
+  }
+
+  void OnChannelError(Channel::Error error) override { has_error_ = true; }
+
+  void set_on_message(OnMessageCallback on_message) {
+    on_message_ = std::move(on_message);
+  }
+
+  bool has_error() const { return has_error_; }
+
+ private:
+  OnMessageCallback on_message_;
+  bool has_error_ = false;
+};
+
+// For a few ipcz message header sizes checks that sending the message results
+// in OnChannelMessage() getting called on the delegate at the receiver side.
+// Note: While this test emulates sending behavior of old clients, it does not
+// emulate old receiving behaviors.
+TEST(ChannelTest, IpczHeaderCompatibilityTest) {
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
+  base::test::ScopedFeatureList scoped_feature_list;
+  if (Channel::SupportsMultipleNotifiers()) {
+    // The test constructs messages as if the feature is enabled. Enable the
+    // feature to match behavior on the receiving side.
+    scoped_feature_list.InitAndEnableFeature(mojo::core::kMojoUseEventFd);
+  }
+#endif
+
+  // The delegate is created before the task environment, because it will be
+  // notified when the channel is destructed, which happens when the task
+  // environment is shut down.
+  CallbackIpczChannelDelegate receiver_delegate;
+  base::test::SingleThreadTaskEnvironment task_environment(
+      base::test::TaskEnvironment::MainThreadType::IO);
+  PlatformChannel platform_channel;
+
+  scoped_refptr<Channel> channel =
+      Channel::Create(&receiver_delegate,
+                      ConnectionParams(platform_channel.TakeRemoteEndpoint()),
+                      Channel::HandlePolicy::kAcceptHandles,
+                      base::SingleThreadTaskRunner::GetCurrentDefault());
+  channel->Start();
+
+  // There can be a discrepancy between the header version in the sender and the
+  // receiver. However, header size is required to be strictly increasing at
+  // each change, so we test 3 cases here:
+  // - The header is smaller than the current one: the sender is outdated
+  // - Sender and receiver versions match
+  // - The sender is ahead of the receiver
+  //
+  // In all cases, the message should be correctly received, and not corrupted.
+  [[maybe_unused]] uint32_t channel_sequence_number = 0;
+  for (size_t actual_header_size :
+       {Channel::Message::kMinIpczHeaderSize,
+        sizeof(Channel::Message::IpczHeader),
+        sizeof(Channel::Message::IpczHeader) + 12}) {
+    bool got_message = false;
+    size_t size_hint = 0;
+    std::vector<char> message(actual_header_size + 100, 'a');
+    auto* header = UNSAFE_TODO(
+        reinterpret_cast<Channel::Message::IpczHeader*>(message.data()));
+
+    header->size = actual_header_size;
+    header->num_handles = 0;
+    header->num_bytes = static_cast<uint32_t>(message.size());
+    if (Channel::Message::IsAtLeastV2(*header)) {
+      header->v2.creation_timeticks_us =
+          (base::TimeTicks::Now() - base::TimeTicks()).InMicroseconds();
+    }
+
+    if (Channel::Message::IsExperimentalV3(*header)) {
+      Channel::Message::SetType(*header, Channel::Message::MessageType::NORMAL);
+      Channel::Message::SetChannelSequenceNumber(*header,
+                                                 ++channel_sequence_number);
+    }
+
+    auto on_message = [&](const void* payload, size_t payload_size,
+                          scoped_refptr<ipcz_driver::Envelope> envelope) {
+      got_message = true;
+      EXPECT_EQ(100u, payload_size);
+      UNSAFE_TODO(EXPECT_EQ(
+          0,
+          memcmp(payload, message.data() + actual_header_size, payload_size)));
+    };
+    receiver_delegate.set_on_message(base::BindLambdaForTesting(on_message));
+
+    EXPECT_EQ(Channel::DispatchResult::kOK,
+              channel->TryDispatchMessage(base::span<const char>(message),
+                                          &size_hint));
+    EXPECT_TRUE(got_message);
+    EXPECT_FALSE(receiver_delegate.has_error());
+    if (receiver_delegate.has_error()) {
+      break;
+    }
+  }
+
+  channel->ShutDown();
+}
+
+namespace {
+
+class TestEnvelope : public ipcz_driver::Envelope {
+ public:
+  TestEnvelope() = default;
+
+  base::WeakPtr<TestEnvelope> GetWeakPtr() {
+    return weak_factory_.GetWeakPtr();
+  }
+
+ protected:
+  ~TestEnvelope() override = default;
+
+ private:
+  base::WeakPtrFactory<TestEnvelope> weak_factory_{this};
+};
+
+}  // namespace
+
+// Sends an ipcz message (in the oldest format) and expects OnChannelMessage()
+// to be called on the delegate at the receiver side.
+TEST(ChannelTest, TryDispatchMessageWithEnvelope) {
+  // The delegate is created before the task environment, because it will be
+  // notified when the channel is destructed, which happens when the task
+  // environment is shut down.
+  CallbackIpczChannelDelegate receiver_delegate;
+  base::test::SingleThreadTaskEnvironment task_environment(
+      base::test::TaskEnvironment::MainThreadType::IO);
+  PlatformChannel platform_channel;
+
+  scoped_refptr<Channel> channel =
+      Channel::Create(&receiver_delegate,
+                      ConnectionParams(platform_channel.TakeRemoteEndpoint()),
+                      Channel::HandlePolicy::kAcceptHandles,
+                      base::SingleThreadTaskRunner::GetCurrentDefault());
+  channel->Start();
+
+  {
+    bool got_message = false;
+    size_t size_hint = 0;
+    std::vector<char> message(Channel::Message::kMinIpczHeaderSize + 100, 'a');
+    auto* header = UNSAFE_TODO(
+        reinterpret_cast<Channel::Message::IpczHeader*>(message.data()));
+
+    header->size = Channel::Message::kMinIpczHeaderSize;
+    header->num_handles = 0;
+    header->num_bytes = static_cast<uint32_t>(message.size());
+
+    scoped_refptr<TestEnvelope> test_envelope =
+        base::MakeRefCounted<TestEnvelope>();
+    base::WeakPtr<TestEnvelope> weak_envelope = test_envelope->GetWeakPtr();
+    auto on_message = [&](const void* payload, size_t payload_size,
+                          scoped_refptr<ipcz_driver::Envelope> envelope) {
+      got_message = true;
+      EXPECT_EQ(100u, payload_size);
+      UNSAFE_TODO(EXPECT_EQ(
+          0,
+          memcmp(payload, message.data() + Channel::Message::kMinIpczHeaderSize,
+                 payload_size)));
+      EXPECT_EQ(envelope.get(), weak_envelope.get());
+    };
+    receiver_delegate.set_on_message(base::BindLambdaForTesting(on_message));
+
+    EXPECT_EQ(Channel::DispatchResult::kOK,
+              channel->TryDispatchMessage(
+                  base::span<const char>(message), std::nullopt,
+                  std::move(test_envelope), &size_hint));
+    EXPECT_TRUE(got_message);
+    EXPECT_FALSE(receiver_delegate.has_error());
+  }
+
+  channel->ShutDown();
+}
+
+#if BUILDFLAG(IS_WIN)
+// Exercises ChannelWin's delayed-write path: a Write() before Start() is queued
+// and issued from StartOnIOThread(). When the peer is already gone that write
+// fails synchronously; ChannelWin must then set reject_writes_ so later
+// messages are dropped rather than queued behind the failed one, and let the
+// initial ReadMore() report the disconnect exactly once. Other platforms issue
+// the write immediately and report errors through different paths, so the
+// single-error expectation is only meaningful on Windows.
+TEST(ChannelTest, WriteBeforeStartOnDisconnectedChannelReportsSingleError) {
+  base::test::SingleThreadTaskEnvironment task_environment(
+      base::test::TaskEnvironment::MainThreadType::IO);
+  PlatformChannel platform_channel;
+
+  // Close the remote endpoint before starting the channel so that both the
+  // delayed write and initial read in StartOnIOThread() see a disconnected
+  // peer.
+  std::ignore = platform_channel.TakeRemoteEndpoint();
+
+  base::RunLoop error_loop;
+  CountingChannelDelegate delegate(base::DoNothing(), error_loop.QuitClosure());
+  scoped_refptr<Channel> channel = Channel::Create(
+      &delegate, ConnectionParams(platform_channel.TakeLocalEndpoint()),
+      Channel::HandlePolicy::kRejectHandles,
+      base::SingleThreadTaskRunner::GetCurrentDefault());
+
+  channel->Write(CreateDefaultMessage(false));
+  channel->Start();
+  error_loop.Run();
+
+  // Subsequent writes after the initial write failure should be rejected
+  // without reporting additional channel errors. Note that this only guards
+  // against a second OnChannelError(); whether the message was dropped or
+  // merely queued behind the failed one is not observable through the public
+  // Channel interface.
+  channel->Write(CreateDefaultMessage(false));
+  channel->ShutDown();
+
+  base::RunLoop shutdown_loop;
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, shutdown_loop.QuitClosure());
+  shutdown_loop.Run();
+
+  EXPECT_EQ(1u, delegate.error_count_);
+}
+#endif  // BUILDFLAG(IS_WIN)
+
+}  // namespace mojo::core

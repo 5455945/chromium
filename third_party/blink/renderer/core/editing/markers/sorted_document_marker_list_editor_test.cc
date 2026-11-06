@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,7 @@ namespace blink {
 
 class SortedDocumentMarkerListEditorTest : public testing::Test {
  protected:
-  DocumentMarker* CreateMarker(unsigned startOffset, unsigned endOffset) {
+  DocumentMarker* CreateMarker(wtf_size_t startOffset, wtf_size_t endOffset) {
     return MakeGarbageCollected<TextMatchMarker>(
         startOffset, endOffset, TextMatchMarker::MatchStatus::kInactive);
   }

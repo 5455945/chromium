@@ -1,67 +1,56 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/login/screens/signin_fatal_error_screen.h"
 
-#include "base/stl_util.h"
 #include "base/values.h"
-#include "chrome/browser/ash/login/ui/login_display_host.h"
-#include "chrome/browser/ui/webui/chromeos/login/signin_fatal_error_screen_handler.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "chrome/browser/ui/ash/login/login_display_host.h"
+#include "chrome/browser/ui/webui/ash/login/signin_fatal_error_screen_handler.h"
+#include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
 
 namespace ash {
 namespace {
 
 constexpr char kUserActionScreenDismissed[] = "screen-dismissed";
+constexpr char kUserActionRestartAndPowerwash[] = "restart-and-powerwash";
 constexpr char kUserActionLearnMore[] = "learn-more";
 
 }  // namespace
 
 SignInFatalErrorScreen::SignInFatalErrorScreen(
-    SignInFatalErrorView* view,
+    base::WeakPtr<SignInFatalErrorView> view,
     const base::RepeatingClosure& exit_callback)
     : BaseScreen(SignInFatalErrorView::kScreenId, OobeScreenPriority::DEFAULT),
-      view_(view),
+      view_(std::move(view)),
       exit_callback_(exit_callback) {
-  DCHECK(view_);
-  view_->Bind(this);
+  CHECK(view_, base::NotFatalUntil::M161);
 }
 
-SignInFatalErrorScreen::~SignInFatalErrorScreen() {
-  if (view_)
-    view_->Unbind();
-}
-
-void SignInFatalErrorScreen::OnViewDestroyed(SignInFatalErrorView* view) {
-  if (view_ == view)
-    view_ = nullptr;
-}
+SignInFatalErrorScreen::~SignInFatalErrorScreen() = default;
 
 void SignInFatalErrorScreen::SetErrorState(Error error,
-                                           const base::Value* params) {
+                                           base::DictValue params) {
   error_state_ = error;
-  extra_error_info_ = params ? absl::make_optional<base::Value>(params->Clone())
-                             : absl::nullopt;
+  extra_error_info_ = std::move(params);
 }
 
 void SignInFatalErrorScreen::SetCustomError(const std::string& error_text,
                                             const std::string& keyboard_hint,
                                             const std::string& details,
                                             const std::string& help_link_text) {
-  error_state_ = Error::CUSTOM;
-  extra_error_info_ =
-      absl::make_optional<base::Value>(base::Value::Type::DICTIONARY);
-  DCHECK(!error_text.empty());
-  extra_error_info_->SetStringKey("errorText", error_text);
+  error_state_ = Error::kCustom;
+  extra_error_info_ = base::DictValue();
+  CHECK(!error_text.empty(), base::NotFatalUntil::M161);
+  extra_error_info_.Set("errorText", error_text);
   if (!keyboard_hint.empty()) {
-    extra_error_info_->SetStringKey("keyboardHint", keyboard_hint);
+    extra_error_info_.Set("keyboardHint", keyboard_hint);
   }
   if (!details.empty()) {
-    extra_error_info_->SetStringKey("details", details);
+    extra_error_info_.Set("details", details);
   }
   if (!help_link_text.empty()) {
-    extra_error_info_->SetStringKey("helpLinkText", help_link_text);
+    extra_error_info_.Set("helpLinkText", help_link_text);
   }
 }
 
@@ -69,14 +58,18 @@ void SignInFatalErrorScreen::ShowImpl() {
   if (!view_)
     return;
 
-  view_->Show(error_state_, base::OptionalOrNullptr(extra_error_info_));
+  view_->Show(error_state_, extra_error_info_);
 }
 
 void SignInFatalErrorScreen::HideImpl() {}
 
-void SignInFatalErrorScreen::OnUserAction(const std::string& action_id) {
+void SignInFatalErrorScreen::OnUserAction(const base::ListValue& args) {
+  const std::string& action_id = args[0].GetString();
   if (action_id == kUserActionScreenDismissed) {
     exit_callback_.Run();
+  } else if (action_id == kUserActionRestartAndPowerwash) {
+    CHECK(error_state_ == Error::kOobeCompletionSkipped);
+    SessionManagerClient::Get()->StartDeviceWipe(base::DoNothing());
   } else if (action_id == kUserActionLearnMore) {
     if (!help_app_.get()) {
       help_app_ = new HelpAppLauncher(
@@ -84,7 +77,7 @@ void SignInFatalErrorScreen::OnUserAction(const std::string& action_id) {
     }
     help_app_->ShowHelpTopic(HelpAppLauncher::HELP_CANT_ACCESS_ACCOUNT);
   } else {
-    BaseScreen::OnUserAction(action_id);
+    BaseScreen::OnUserAction(args);
   }
 }
 

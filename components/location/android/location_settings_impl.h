@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,20 @@
 
 #include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/macros.h"
 #include "components/location/android/location_settings.h"
 
 class LocationSettingsImpl : public LocationSettings {
  public:
   LocationSettingsImpl();
+
+  LocationSettingsImpl(const LocationSettingsImpl&) = delete;
+  LocationSettingsImpl& operator=(const LocationSettingsImpl&) = delete;
+
   ~LocationSettingsImpl() override;
 
   // LocationSettings implementation:
   bool HasAndroidLocationPermission() override;
+  bool HasAndroidFineLocationPermission() override;
   bool CanPromptForAndroidLocationPermission(
       ui::WindowAndroid* window) override;
   bool IsSystemLocationSettingEnabled() override;
@@ -25,9 +29,6 @@ class LocationSettingsImpl : public LocationSettings {
       const LocationSettingsDialogContext prompt_context,
       ui::WindowAndroid* window,
       LocationSettingsDialogOutcomeCallback callback) override;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(LocationSettingsImpl);
 };
 
 #endif  // COMPONENTS_LOCATION_ANDROID_LOCATION_SETTINGS_IMPL_H_

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,8 +17,10 @@
 #include "third_party/blink/renderer/core/xml/xsl_style_sheet.h"
 #include "third_party/blink/renderer/core/xml/xslt_processor.h"
 #include "third_party/blink/renderer/platform/bindings/dom_wrapper_world.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
@@ -30,7 +32,6 @@ class DOMContentLoadedListener final
       : processing_instruction_(pi) {}
 
   void Invoke(ExecutionContext* execution_context, Event* event) override {
-    DCHECK(RuntimeEnabledFeatures::XSLTEnabled());
     DCHECK_EQ(event->type(), "DOMContentLoaded");
 
     Document& document = *To<LocalDOMWindow>(execution_context)->document();
@@ -72,8 +73,9 @@ DocumentXSLT::DocumentXSLT(Document& document)
 void DocumentXSLT::ApplyXSLTransform(Document& document,
                                      ProcessingInstruction* pi) {
   DCHECK(!pi->IsLoading());
-  UseCounter::Count(document, WebFeature::kXSLProcessingInstruction);
-  XSLTProcessor* processor = XSLTProcessor::Create(document);
+  CHECK(XSLTProcessor::IsXSLTEnabled(document.GetExecutionContext()));
+  XSLTProcessor* processor = XSLTProcessor::Create(
+      document, ASSERT_NO_EXCEPTION, WebFeature::kXSLProcessingInstruction);
   processor->SetXSLStyleSheet(To<XSLStyleSheet>(pi->sheet()));
   String result_mime_type;
   String new_source;
@@ -108,7 +110,7 @@ bool DocumentXSLT::ProcessingInstructionInsertedIntoDocument(
   if (!pi->IsXSL())
     return false;
 
-  if (!RuntimeEnabledFeatures::XSLTEnabled() || !document.GetFrame())
+  if (!document.GetFrame())
     return true;
 
   auto* listener = MakeGarbageCollected<DOMContentLoadedListener>(pi);
@@ -128,7 +130,6 @@ bool DocumentXSLT::ProcessingInstructionRemovedFromDocument(
   if (!pi->EventListenerForXSLT())
     return true;
 
-  DCHECK(RuntimeEnabledFeatures::XSLTEnabled());
   document.removeEventListener(event_type_names::kDOMContentLoaded,
                                pi->EventListenerForXSLT(), false);
   pi->ClearEventListenerForXSLT();
@@ -139,8 +140,8 @@ bool DocumentXSLT::SheetLoaded(Document& document, ProcessingInstruction* pi) {
   if (!pi->IsXSL())
     return false;
 
-  if (RuntimeEnabledFeatures::XSLTEnabled() && !document.Parsing() &&
-      !pi->IsLoading() && !DocumentXSLT::HasTransformSourceDocument(document)) {
+  if (!document.Parsing() && !pi->IsLoading() &&
+      !DocumentXSLT::HasTransformSourceDocument(document)) {
     if (FindXSLStyleSheet(document) == pi)
       ApplyXSLTransform(document, pi);
   }

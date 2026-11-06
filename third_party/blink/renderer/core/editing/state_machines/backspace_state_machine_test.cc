@@ -1,11 +1,13 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/editing/state_machines/backspace_state_machine.h"
 
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/unicode.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
 
@@ -192,6 +194,7 @@ TEST(BackspaceStateMachineTest, EmojiModifier) {
   const UChar kNotEmojiModifierBaseLead = 0xD83C;
   const UChar kNotEmojiModifierBaseTrail = 0xDCCF;
   const UChar kVs16 = 0xFE0F;
+  const UChar kOther = 'a';
 
   // EMOJI_MODIFIER_BASE + EMOJI_MODIFIER
   machine.Reset();
@@ -199,7 +202,9 @@ TEST(BackspaceStateMachineTest, EmojiModifier) {
             machine.FeedPrecedingCodeUnit(kEmojiModifierTrail));
   EXPECT_EQ(kNeedMoreCodeUnit,
             machine.FeedPrecedingCodeUnit(kEmojiModifierLead));
-  EXPECT_EQ(kFinished, machine.FeedPrecedingCodeUnit(kEmojiModifierBase));
+  EXPECT_EQ(kNeedMoreCodeUnit,
+            machine.FeedPrecedingCodeUnit(kEmojiModifierBase));
+  EXPECT_EQ(kFinished, machine.FeedPrecedingCodeUnit(kOther));
   EXPECT_EQ(-3, machine.FinalizeAndGetBoundaryOffset());
   EXPECT_EQ(-3, machine.FinalizeAndGetBoundaryOffset());
 
@@ -211,7 +216,9 @@ TEST(BackspaceStateMachineTest, EmojiModifier) {
             machine.FeedPrecedingCodeUnit(kEmojiModifierLead));
   EXPECT_EQ(kNeedMoreCodeUnit,
             machine.FeedPrecedingCodeUnit(kEmojiModifierBaseTrail));
-  EXPECT_EQ(kFinished, machine.FeedPrecedingCodeUnit(kEmojiModifierBaseLead));
+  EXPECT_EQ(kNeedMoreCodeUnit,
+          machine.FeedPrecedingCodeUnit(kEmojiModifierBaseLead));
+  EXPECT_EQ(kFinished, machine.FeedPrecedingCodeUnit(kOther));
   EXPECT_EQ(-4, machine.FinalizeAndGetBoundaryOffset());
   EXPECT_EQ(-4, machine.FinalizeAndGetBoundaryOffset());
 
@@ -235,7 +242,8 @@ TEST(BackspaceStateMachineTest, EmojiModifier) {
   EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kVs16));
   EXPECT_EQ(kNeedMoreCodeUnit,
             machine.FeedPrecedingCodeUnit(kEmojiModifierBaseTrail));
-  EXPECT_EQ(kFinished, machine.FeedPrecedingCodeUnit(kEmojiModifierBaseLead));
+  EXPECT_EQ(kFinished,
+            machine.FeedPrecedingCodeUnit(kEmojiModifierBaseLead));
   EXPECT_EQ(-5, machine.FinalizeAndGetBoundaryOffset());
   EXPECT_EQ(-5, machine.FinalizeAndGetBoundaryOffset());
 
@@ -662,8 +670,12 @@ TEST(BackspaceStateMachineTest, ZWJSequence) {
   const UChar kBoyTrail = 0xDC66;
   const UChar kHeart = 0x2764;
   const UChar kKissLead = 0xD83D;
-  const UChar kKillTrail = 0xDC8B;
+  const UChar kKissTrail = 0xDC8B;
   const UChar kVs16 = 0xFE0F;
+  const UChar kLightSkinToneLead = 0xD83C;
+  const UChar kLightSkinToneTrail = 0xDFFB;
+  const UChar kDarkSkinToneLead = 0xD83C;
+  const UChar kDarkSkinToneTrail = 0xDFFF;
   const UChar kOther = 'a';
   const UChar kOtherLead = 0xD83C;
   const UChar kOtherTrail = 0xDCCF;
@@ -726,6 +738,34 @@ TEST(BackspaceStateMachineTest, ZWJSequence) {
   EXPECT_EQ(kFinished, machine.FeedPrecedingCodeUnit(kOther));
   EXPECT_EQ(-7, machine.FinalizeAndGetBoundaryOffset());
   EXPECT_EQ(-7, machine.FinalizeAndGetBoundaryOffset());
+
+  // others + EMOJI_MODIFIER_BASE + EMOJI_MODIFIER + ZWJ
+  // + EMOJI_MODIFIER_BASE + EMOJI_MODIFIER + ZWJ + ...
+  // As an example, use MAN + LIGHT_SKIN_TONE + ZWJ + heart + vs16
+  // + ZWJ + kiss + ZWJ + MAN + DARK_SKIN_TONE
+  machine.Reset();
+  EXPECT_EQ(kNeedMoreCodeUnit,
+            machine.FeedPrecedingCodeUnit(kDarkSkinToneTrail));
+  EXPECT_EQ(kNeedMoreCodeUnit,
+            machine.FeedPrecedingCodeUnit(kDarkSkinToneLead));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kManTrail));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kManLead));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kZwj));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kKissTrail));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kKissLead));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kZwj));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kVs16));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kHeart));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kZwj));
+  EXPECT_EQ(kNeedMoreCodeUnit,
+            machine.FeedPrecedingCodeUnit(kLightSkinToneTrail));
+  EXPECT_EQ(kNeedMoreCodeUnit,
+            machine.FeedPrecedingCodeUnit(kLightSkinToneLead));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kManTrail));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kManLead));
+  EXPECT_EQ(kFinished, machine.FeedPrecedingCodeUnit(kOther));
+  EXPECT_EQ(-15, machine.FinalizeAndGetBoundaryOffset());
+  EXPECT_EQ(-15, machine.FinalizeAndGetBoundaryOffset());
 
   // others(surrogate pairs) + ZWJ_EMOJI + ZWJ + ZWJ_EMOJI + ZWJ + ZWJ_EMOJI
   // As an example, use MAN + ZWJ + heart + ZWJ + MAN
@@ -863,7 +903,7 @@ TEST(BackspaceStateMachineTest, ZWJSequence) {
   EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kManTrail));
   EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kManLead));
   EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kZwj));
-  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kKillTrail));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kKissTrail));
   EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kKissLead));
   EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kZwj));
   EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kVs16));
@@ -882,7 +922,7 @@ TEST(BackspaceStateMachineTest, ZWJSequence) {
   EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kManTrail));
   EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kManLead));
   EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kZwj));
-  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kKillTrail));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kKissTrail));
   EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kKissLead));
   EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kZwj));
   EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kVs16));
@@ -901,7 +941,7 @@ TEST(BackspaceStateMachineTest, ZWJSequence) {
   EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kManTrail));
   EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kManLead));
   EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kZwj));
-  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kKillTrail));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kKissTrail));
   EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kKissLead));
   EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kZwj));
   EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kVs16));
@@ -929,7 +969,8 @@ TEST(BackspaceStateMachineTest, ZWJSequence) {
   EXPECT_EQ(kNeedMoreCodeUnit,
             machine.FeedPrecedingCodeUnit(kEmojiModifierLead));
   EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kWomanTrail));
-  EXPECT_EQ(kFinished, machine.FeedPrecedingCodeUnit(kWomanLead));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kWomanLead));
+  EXPECT_EQ(kFinished, machine.FeedPrecedingCodeUnit(kOther));
   EXPECT_EQ(-7, machine.FinalizeAndGetBoundaryOffset());
   EXPECT_EQ(-7, machine.FinalizeAndGetBoundaryOffset());
 
@@ -986,6 +1027,202 @@ TEST(BackspaceStateMachineTest, ZWJSequence) {
   machine.Reset();
   EXPECT_EQ(kFinished, machine.FeedPrecedingCodeUnit(kZwj));
   EXPECT_EQ(-1, machine.FinalizeAndGetBoundaryOffset());
+}
+
+TEST(BackspaceStateMachineTest, EmojiUnicode17) {
+  BackspaceStateMachine machine;
+  const String text =
+      u"\U0001F468\U0001F3FB"  // Man with EMOJI MODIFIER FITZPATRICK TYPE-1-2
+      "\u200D"                 // ZWJ
+      "\U0001FAEF"             // Unicode 17 Emoji
+      "\u200D"                 // ZWJ
+      "\U0001F468\U0001F3FB";  // Man with EMOJI MODIFIER FITZPATRICK TYPE-1-2
+  for (wtf_size_t i = text.length(); i;) {
+    const UChar code_unit = text[--i];
+    EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(code_unit))
+        << Format("{}: {:04X}", i, code_unit);
+  }
+  EXPECT_EQ(-text.length(), machine.FinalizeAndGetBoundaryOffset());
+}
+
+TEST(BackspaceStateMachineTest, EmojiTagSequence) {
+  BackspaceStateMachine machine;
+
+  // Emoji tag sequence: BLACK FLAG + tag characters + CANCEL TAG.
+  // These are used for subdivision flags like England, Scotland, Wales.
+  // 🏴󠁧󠁢󠁥󠁮󠁧󠁿 (England flag) =
+  //   U+1F3F4 BLACK FLAG + U+E0067 (g) + U+E0062 (b) + U+E0065 (e) +
+  //   U+E006E (n) + U+E0067 (g) + U+E007F CANCEL TAG
+
+  // Surrogates for U+1F3F4 BLACK FLAG
+  const UChar kBlackFlagLead = 0xD83C;
+  const UChar kBlackFlagTrail = 0xDFF4;
+
+  // Surrogates for U+E0067 TAG LATIN SMALL LETTER G
+  const UChar kTagGLead = 0xDB40;
+  const UChar kTagGTrail = 0xDC67;
+
+  // Surrogates for U+E0062 TAG LATIN SMALL LETTER B
+  const UChar kTagBLead = 0xDB40;
+  const UChar kTagBTrail = 0xDC62;
+
+  // Surrogates for U+E0065 TAG LATIN SMALL LETTER E
+  const UChar kTagELead = 0xDB40;
+  const UChar kTagETrail = 0xDC65;
+
+  // Surrogates for U+E006E TAG LATIN SMALL LETTER N
+  const UChar kTagNLead = 0xDB40;
+  const UChar kTagNTrail = 0xDC6E;
+
+  // Surrogates for U+E007F CANCEL TAG
+  const UChar kCancelTagLead = 0xDB40;
+  const UChar kCancelTagTrail = 0xDC7F;
+
+  // England flag: 🏴󠁧󠁢󠁥󠁮󠁧󠁿
+  // Should delete entire flag sequence (14 code units: 2 for each of 7
+  // supplementary characters)
+  machine.Reset();
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kCancelTagTrail));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kCancelTagLead));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kTagGTrail));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kTagGLead));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kTagNTrail));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kTagNLead));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kTagETrail));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kTagELead));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kTagBTrail));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kTagBLead));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kTagGTrail));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kTagGLead));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kBlackFlagTrail));
+  EXPECT_EQ(kFinished, machine.FeedPrecedingCodeUnit(kBlackFlagLead));
+  EXPECT_EQ(-14, machine.FinalizeAndGetBoundaryOffset());
+
+  // Two consecutive flag sequences: delete only the last one.
+  // 🏴󠁧󠁢󠁥󠁮󠁧󠁿🏴󠁧󠁢󠁳󠁣󠁴󠁿 (England +
+  // Scotland) We feed the Scotland flag and should delete only that (14 code
+  // units).
+
+  // Surrogates for U+E0073 TAG LATIN SMALL LETTER S
+  const UChar kTagSLead = 0xDB40;
+  const UChar kTagSTrail = 0xDC73;
+
+  // Surrogates for U+E0063 TAG LATIN SMALL LETTER C
+  const UChar kTagCLead = 0xDB40;
+  const UChar kTagCTrail = 0xDC63;
+
+  // Surrogates for U+E0074 TAG LATIN SMALL LETTER T
+  const UChar kTagTLead = 0xDB40;
+  const UChar kTagTTrail = 0xDC74;
+
+  machine.Reset();
+  // Feed Scotland flag sequence: 🏴󠁧󠁢󠁳󠁣󠁴󠁿
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kCancelTagTrail));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kCancelTagLead));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kTagTTrail));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kTagTLead));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kTagCTrail));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kTagCLead));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kTagSTrail));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kTagSLead));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kTagBTrail));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kTagBLead));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kTagGTrail));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kTagGLead));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kBlackFlagTrail));
+  EXPECT_EQ(kFinished, machine.FeedPrecedingCodeUnit(kBlackFlagLead));
+  EXPECT_EQ(-14, machine.FinalizeAndGetBoundaryOffset());
+
+  // Edge case: CANCEL TAG alone (should just delete the cancel tag)
+  machine.Reset();
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kCancelTagTrail));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kCancelTagLead));
+  EXPECT_EQ(kFinished, machine.FeedPrecedingCodeUnit('a'));
+  EXPECT_EQ(-2, machine.FinalizeAndGetBoundaryOffset());
+
+  // Edge case: CANCEL TAG at start of text
+  machine.Reset();
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kCancelTagTrail));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kCancelTagLead));
+  EXPECT_EQ(-2, machine.FinalizeAndGetBoundaryOffset());
+
+  // Edge case: Tag sequence without black flag should still be deleted
+  // (tag chars + cancel tag only)
+  machine.Reset();
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kCancelTagTrail));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kCancelTagLead));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kTagGTrail));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kTagGLead));
+  EXPECT_EQ(kFinished, machine.FeedPrecedingCodeUnit('a'));
+  EXPECT_EQ(-4, machine.FinalizeAndGetBoundaryOffset());
+
+  // Per UTS #51 ED-14a, tag_base can also be emoji_modifier_sequence or
+  // emoji_presentation_sequence, not just emoji_character.
+  // https://unicode.org/reports/tr51/#def_emoji_tag_sequence
+
+  // Test: emoji_modifier_sequence as tag_base
+  // Example: 👍🏽 (thumbs up + medium skin tone) + tag_spec + cancel_tag
+  // Surrogates for U+1F44D THUMBS UP SIGN
+  const UChar kThumbsUpLead = 0xD83D;
+  const UChar kThumbsUpTrail = 0xDC4D;
+
+  // Surrogates for U+1F3FD EMOJI MODIFIER FITZPATRICK TYPE-4
+  const UChar kSkinToneLead = 0xD83C;
+  const UChar kSkinToneTrail = 0xDFFD;
+
+  machine.Reset();
+  // Sequence: 👍🏽 + tag 'a' + cancel_tag = 8 code units
+  // (2 for thumbs up + 2 for skin tone + 2 for tag 'a' + 2 for cancel tag)
+  // Surrogates for U+E0061 TAG LATIN SMALL LETTER A
+  const UChar kTagALead = 0xDB40;
+  const UChar kTagATrail = 0xDC61;
+
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kCancelTagTrail));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kCancelTagLead));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kTagATrail));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kTagALead));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kSkinToneTrail));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kSkinToneLead));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kThumbsUpTrail));
+  EXPECT_EQ(kFinished, machine.FeedPrecedingCodeUnit(kThumbsUpLead));
+  EXPECT_EQ(-8, machine.FinalizeAndGetBoundaryOffset());
+
+  // Test: emoji_presentation_sequence as tag_base
+  // Example: ❤️ (heart + VS16) + tag_spec + cancel_tag
+  // U+2764 HEAVY BLACK HEART
+  const UChar kHeart = 0x2764;
+
+  // U+FE0F VARIATION SELECTOR-16
+  const UChar kVs16 = 0xFE0F;
+
+  machine.Reset();
+  // Sequence: ❤️ + tag 'a' + cancel_tag = 6 code units
+  // (1 for heart + 1 for VS16 + 2 for tag 'a' + 2 for cancel tag)
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kCancelTagTrail));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kCancelTagLead));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kTagATrail));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kTagALead));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kVs16));
+  EXPECT_EQ(kFinished, machine.FeedPrecedingCodeUnit(kHeart));
+  EXPECT_EQ(-6, machine.FinalizeAndGetBoundaryOffset());
+
+  // Test: emoji_presentation_sequence with surrogate pair base as tag_base
+  // Example: 🖤️ (black heart U+1F5A4 + VS16) + tag_spec + cancel_tag
+  // Surrogates for U+1F5A4 BLACK HEART
+  const UChar kBlackHeartLead = 0xD83D;
+  const UChar kBlackHeartTrail = 0xDDA4;
+
+  machine.Reset();
+  // Sequence: 🖤️ + tag 'a' + cancel_tag = 7 code units
+  // (2 for black heart + 1 for VS16 + 2 for tag 'a' + 2 for cancel tag)
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kCancelTagTrail));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kCancelTagLead));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kTagATrail));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kTagALead));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kVs16));
+  EXPECT_EQ(kNeedMoreCodeUnit, machine.FeedPrecedingCodeUnit(kBlackHeartTrail));
+  EXPECT_EQ(kFinished, machine.FeedPrecedingCodeUnit(kBlackHeartLead));
+  EXPECT_EQ(-7, machine.FinalizeAndGetBoundaryOffset());
 }
 
 }  // namespace backspace_state_machine_test

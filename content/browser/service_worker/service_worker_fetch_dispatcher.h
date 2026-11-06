@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,7 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
@@ -18,7 +17,6 @@
 #include "content/public/browser/web_contents.h"
 #include "mojo/public/cpp/system/data_pipe.h"
 #include "services/network/public/mojom/fetch_api.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/service_worker/service_worker_status_code.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_response.mojom.h"
@@ -29,6 +27,7 @@
 
 namespace content {
 
+class ServiceWorkerClient;
 class ServiceWorkerContextWrapper;
 class ServiceWorkerVersion;
 
@@ -36,11 +35,14 @@ class ServiceWorkerVersion;
 class CONTENT_EXPORT ServiceWorkerFetchDispatcher {
  public:
   // Indicates how the service worker handled a fetch event.
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
   enum class FetchEventResult {
     // Browser should fallback to native fetch.
-    kShouldFallback,
+    kShouldFallback = 0,
     // Service worker provided a ServiceWorkerResponse.
-    kGotResponse
+    kGotResponse = 1,
+    kMaxValue = kGotResponse,
   };
 
   using FetchCallback =
@@ -49,24 +51,32 @@ class CONTENT_EXPORT ServiceWorkerFetchDispatcher {
                               blink::mojom::FetchAPIResponsePtr,
                               blink::mojom::ServiceWorkerStreamHandlePtr,
                               blink::mojom::ServiceWorkerFetchEventTimingPtr,
+                              blink::mojom::ServiceWorkerFetchHandlerErrorsPtr,
                               scoped_refptr<ServiceWorkerVersion>)>;
   using WebContentsGetter = base::RepeatingCallback<WebContents*()>;
 
   ServiceWorkerFetchDispatcher(blink::mojom::FetchAPIRequestPtr request,
                                network::mojom::RequestDestination destination,
                                const std::string& client_id,
+                               const std::string& resulting_client_id,
                                scoped_refptr<ServiceWorkerVersion> version,
                                base::OnceClosure prepare_callback,
-                               FetchCallback fetch_callback,
-                               bool is_offline_capability_check);
+                               FetchCallback fetch_callback);
+
+  ServiceWorkerFetchDispatcher(const ServiceWorkerFetchDispatcher&) = delete;
+  ServiceWorkerFetchDispatcher& operator=(const ServiceWorkerFetchDispatcher&) =
+      delete;
+
   ~ServiceWorkerFetchDispatcher();
+
+  static const char* FetchEventResultToSuffix(FetchEventResult result);
 
   // If appropriate, starts the navigation preload request and creates
   // |preload_handle_|. Returns true if it started navigation preload.
   bool MaybeStartNavigationPreload(
       const network::ResourceRequest& original_request,
       scoped_refptr<ServiceWorkerContextWrapper> context_wrapper,
-      int frame_tree_node_id);
+      base::WeakPtr<ServiceWorkerClient> service_worker_client);
 
   // Dispatches a fetch event to the |version| given in ctor, and fires
   // |fetch_callback_| (also given in ctor) once a response is received from the
@@ -75,6 +85,22 @@ class CONTENT_EXPORT ServiceWorkerFetchDispatcher {
   void Run();
 
   bool FetchCallbackIsNull() { return fetch_callback_.is_null(); }
+
+  static void ForceDisableHighPriorityFetchResponseCallbackForTesting(
+      bool force_disable);
+
+  static std::unique_ptr<network::mojom::URLLoaderClient>
+  CreateDelegatingURLLoaderClientForTesting(
+      mojo::PendingRemote<network::mojom::URLLoaderClient> client,
+      const network::ResourceRequest& request);
+
+  void set_race_network_request_token(base::UnguessableToken token) {
+    race_network_request_token_ = token;
+  }
+  void set_race_network_request_loader_factory(
+      mojo::PendingRemote<network::mojom::URLLoaderFactory> factory) {
+    race_network_request_loader_factory_ = std::move(factory);
+  }
 
  private:
   class ResponseCallback;
@@ -91,12 +117,14 @@ class CONTENT_EXPORT ServiceWorkerFetchDispatcher {
                  FetchEventResult fetch_result,
                  blink::mojom::FetchAPIResponsePtr response,
                  blink::mojom::ServiceWorkerStreamHandlePtr body_as_stream,
-                 blink::mojom::ServiceWorkerFetchEventTimingPtr timing);
+                 blink::mojom::ServiceWorkerFetchEventTimingPtr timing,
+                 blink::mojom::ServiceWorkerFetchHandlerErrorsPtr errors);
   void RunCallback(blink::ServiceWorkerStatusCode status,
                    FetchEventResult fetch_result,
                    blink::mojom::FetchAPIResponsePtr response,
                    blink::mojom::ServiceWorkerStreamHandlePtr body_as_stream,
-                   blink::mojom::ServiceWorkerFetchEventTimingPtr timing);
+                   blink::mojom::ServiceWorkerFetchEventTimingPtr timing,
+                   blink::mojom::ServiceWorkerFetchHandlerErrorsPtr errors);
 
   // The fetch event stays open until all respondWith() and waitUntil() promises
   // are settled. This function is called once the renderer signals that
@@ -115,6 +143,7 @@ class CONTENT_EXPORT ServiceWorkerFetchDispatcher {
 
   blink::mojom::FetchAPIRequestPtr request_;
   std::string client_id_;
+  std::string resulting_client_id_;
   scoped_refptr<ServiceWorkerVersion> version_;
   const network::mojom::RequestDestination destination_;
   base::OnceClosure prepare_callback_;
@@ -122,19 +151,19 @@ class CONTENT_EXPORT ServiceWorkerFetchDispatcher {
 
   scoped_refptr<URLLoaderAssets> url_loader_assets_;
 
-  // |preload_handle_| holds the URLLoader and URLLoaderClient for the service
-  // worker to receive the navigation preload response. It's passed to the
-  // service worker along with the fetch event.
-  blink::mojom::FetchEventPreloadHandlePtr preload_handle_;
+  // Holds the URLLoaderClient for the service worker to receive the navigation
+  // preload response. It's passed to the service worker along with the fetch
+  // event.
+  mojo::PendingReceiver<network::mojom::URLLoaderClient>
+      preload_url_loader_client_receiver_;
 
-  // Whether to dispatch an offline-capability-check fetch event.
-  const bool is_offline_capability_check_ = false;
+  base::UnguessableToken race_network_request_token_;
+  mojo::PendingRemote<network::mojom::URLLoaderFactory>
+      race_network_request_loader_factory_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 
   base::WeakPtrFactory<ServiceWorkerFetchDispatcher> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ServiceWorkerFetchDispatcher);
 };
 
 }  // namespace content

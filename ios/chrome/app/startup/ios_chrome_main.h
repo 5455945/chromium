@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,17 @@
 #define IOS_CHROME_APP_STARTUP_IOS_CHROME_MAIN_H_
 
 #include <memory>
+#include <optional>
 
 #include "ios/chrome/app/startup/ios_chrome_main_delegate.h"
 
 namespace base {
-class TimeTicks;
+class ElapsedNoSleepTimer;
+class TimeDelta;
 }
 
 namespace web {
-class WebMainRunner;
+class WebMain;
 }
 
 // Encapsulates any setup and initialization that is needed by common
@@ -29,13 +31,18 @@ class IOSChromeMain {
   // The time main() starts.  Only call from main().
   static void InitStartTime();
 
-  // Returns the time that main() started.  Used for performance tests.
-  // InitStartTime() must has been called before.
-  static const base::TimeTicks& StartTime();
+  // Returns a timer that started when main() started.
+  // InitStartTime() must have been called before.
+  static base::ElapsedNoSleepTimer StartTimer();
+
+  // Returns the duration between process creation and the call to main().
+  // Returns std::nullopt if process creation time is unavailable or
+  // invalid. InitStartTime() must have been called before.
+  static std::optional<base::TimeDelta> PreMainDuration();
 
  private:
   IOSChromeMainDelegate main_delegate_;
-  std::unique_ptr<web::WebMainRunner> web_main_runner_;
+  std::unique_ptr<web::WebMain> web_main_;
 };
 
 #endif  // IOS_CHROME_APP_STARTUP_IOS_CHROME_MAIN_H_

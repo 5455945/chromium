@@ -1,19 +1,25 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/common/api/declarative_net_request/dnr_manifest_data.h"
 
+#include <string_view>
 #include <utility>
 
 #include "base/check_op.h"
-#include "base/no_destructor.h"
+#include "base/containers/map_util.h"
+#include "base/containers/span.h"
 #include "extensions/common/api/declarative_net_request.h"
 
 namespace extensions {
 
 namespace dnr_api = api::declarative_net_request;
 namespace declarative_net_request {
+
+// static
+const char* DNRManifestData::kManifestDataKey =
+    dnr_api::ManifestKeys::kDeclarativeNetRequest;
 
 DNRManifestData::RulesetInfo::RulesetInfo() = default;
 DNRManifestData::RulesetInfo::~RulesetInfo() = default;
@@ -22,53 +28,46 @@ DNRManifestData::RulesetInfo& DNRManifestData::RulesetInfo::operator=(
     RulesetInfo&&) = default;
 
 DNRManifestData::DNRManifestData(std::vector<RulesetInfo> rulesets)
-    : rulesets(std::move(rulesets)) {
-  for (const RulesetInfo& info : this->rulesets)
-    manifest_id_to_ruleset_map.emplace(info.manifest_id, &info);
+    : rulesets_(std::move(rulesets)) {
+  for (const RulesetInfo& info : rulesets_) {
+    manifest_id_to_ruleset_map_.emplace(info.manifest_id, &info);
+  }
 }
 
 DNRManifestData::~DNRManifestData() = default;
 
 // static
-const std::vector<DNRManifestData::RulesetInfo>& DNRManifestData::GetRulesets(
+base::span<const DNRManifestData::RulesetInfo> DNRManifestData::GetRulesets(
     const Extension& extension) {
-  // Since we return a reference, use a function local static for the case where
-  // the extension didn't specify any rulesets.
-  static const base::NoDestructor<std::vector<DNRManifestData::RulesetInfo>>
-      empty_vector;
+  const auto* data = extension.GetManifestData<DNRManifestData>();
+  if (!data) {
+    return {};
+  }
 
-  Extension::ManifestData* data =
-      extension.GetManifestData(dnr_api::ManifestKeys::kDeclarativeNetRequest);
-  if (!data)
-    return *empty_vector;
-
-  return static_cast<DNRManifestData*>(data)->rulesets;
+  return data->rulesets_;
 }
 
-const DNRManifestData::ManifestIDToRulesetMap&
-DNRManifestData::GetManifestIDToRulesetMap(const Extension& extension) {
-  // Since we return a reference, use a function local static for the case where
-  // the extension didn't specify any rulesets.
-  static const base::NoDestructor<ManifestIDToRulesetMap> empty_map;
+const DNRManifestData::RulesetInfo* DNRManifestData::FindRulesetByManifestID(
+    std::string_view manifest_id) const {
+  return base::FindPtrOrNull(manifest_id_to_ruleset_map_, manifest_id);
+}
 
-  Extension::ManifestData* data =
-      extension.GetManifestData(dnr_api::ManifestKeys::kDeclarativeNetRequest);
-  if (!data)
-    return *empty_map;
-
-  return static_cast<DNRManifestData*>(data)->manifest_id_to_ruleset_map;
+// static
+const DNRManifestData::RulesetInfo* DNRManifestData::FindRulesetByManifestID(
+    const Extension& extension,
+    std::string_view manifest_id) {
+  const auto* data = extension.GetManifestData<DNRManifestData>();
+  return data ? data->FindRulesetByManifestID(manifest_id) : nullptr;
 }
 
 // static
 const DNRManifestData::RulesetInfo& DNRManifestData::GetRuleset(
     const Extension& extension,
     RulesetID ruleset_id) {
-  Extension::ManifestData* data =
-      extension.GetManifestData(dnr_api::ManifestKeys::kDeclarativeNetRequest);
+  const auto* data = extension.GetManifestData<DNRManifestData>();
   DCHECK(data);
 
-  const std::vector<DNRManifestData::RulesetInfo>& rulesets =
-      static_cast<DNRManifestData*>(data)->rulesets;
+  const std::vector<DNRManifestData::RulesetInfo>& rulesets = data->rulesets_;
 
   int index = ruleset_id.value() - kMinValidStaticRulesetID.value();
   CHECK_GE(index, 0);

@@ -1,47 +1,45 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/vr/ui_host/vr_ui_host_impl.h"
 
+#include <algorithm>
 #include <memory>
 
-#include "base/task/post_task.h"
+#include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
 #include "chrome/browser/media/webrtc/media_stream_capture_indicator.h"
-#include "chrome/browser/permissions/permission_manager_factory.h"
-#include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/usb/usb_tab_helper.h"
+#include "chrome/browser/vr/vr_browser_renderer_thread.h"
 #include "chrome/browser/vr/vr_tab_helper.h"
-#include "chrome/browser/vr/win/vr_browser_renderer_thread_win.h"
 #include "components/content_settings/browser/page_specific_content_settings.h"
-#include "components/permissions/permission_manager.h"
-#include "components/permissions/permission_result.h"
+#include "components/permissions/permission_util.h"
+#include "content/public/browser/browser_context.h"
 #include "content/public/browser/device_service.h"
 #include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/permission_controller.h"
+#include "content/public/browser/permission_descriptor_util.h"
 #include "content/public/browser/xr_runtime_manager.h"
 #include "device/base/features.h"
 #include "device/vr/public/mojom/vr_service.mojom.h"
+#include "third_party/blink/public/common/permissions/permission_utils.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace vr {
 
 namespace {
-static constexpr base::TimeDelta kPermissionPromptTimeout =
-    base::TimeDelta::FromSeconds(5);
+static constexpr base::TimeDelta kPermissionPromptTimeout = base::Seconds(5);
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 // Some runtimes on Windows have quite lengthy lengthy startup animations that
 // may cause indicators/permissions to not be visible during the normal timeout.
 static constexpr base::TimeDelta kFirstWindowsPermissionPromptTimeout =
-    base::TimeDelta::FromSeconds(10);
+    base::Seconds(10);
 #endif
 
 base::TimeDelta GetPermissionPromptTimeout(bool first_time) {
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   if (first_time)
     return kFirstWindowsPermissionPromptTimeout;
 #endif
@@ -49,7 +47,7 @@ base::TimeDelta GetPermissionPromptTimeout(bool first_time) {
 }
 
 static constexpr base::TimeDelta kPollCapturingStateInterval =
-    base::TimeDelta::FromSecondsD(0.2);
+    base::Seconds(0.2);
 
 const CapturingStateModel g_default_capturing_state;
 }  // namespace
@@ -127,186 +125,88 @@ void VRUiHostImpl::CapturingStateModelTransience::
 }
 
 VRUiHostImpl::VRUiHostImpl(
-    device::mojom::XRDeviceId device_id,
-    mojo::PendingRemote<device::mojom::XRCompositorHost> compositor)
-    : compositor_(std::move(compositor)),
-      main_thread_task_runner_(base::ThreadTaskRunnerHandle::Get()),
+    content::WebContents& contents,
+    const std::vector<device::mojom::XRViewPtr>& views,
+    mojo::PendingRemote<device::mojom::ImmersiveOverlay> overlay)
+    : web_contents_(contents.GetWeakPtr()),
+      main_thread_task_runner_(
+          base::SingleThreadTaskRunner::GetCurrentDefault()),
       triggered_capturing_transience_(&triggered_capturing_state_model_) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DVLOG(1) << __func__;
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  CHECK(std::ranges::contains(views, device::mojom::XREye::kLeft,
+                              &device::mojom::XRView::eye));
+  CHECK(std::ranges::contains(views, device::mojom::XREye::kRight,
+                              &device::mojom::XRView::eye));
 
-  auto* runtime_manager = content::XRRuntimeManager::GetInstanceIfCreated();
-  DCHECK(runtime_manager != nullptr);
-  content::BrowserXRRuntime* runtime = runtime_manager->GetRuntime(device_id);
-  if (runtime) {
-    runtime->AddObserver(this);
+  DesktopMediaPickerManager::Get()->AddObserver(this);
+
+  VrTabHelper::SetIsContentDisplayedInHeadset(&contents, true);
+
+  ui_rendering_thread_ =
+      std::make_unique<VRBrowserRendererThread>(std::move(overlay), views);
+
+  InitCapturingStates();
+  PollCapturingState();
+
+  permissions::PermissionRequestManager::CreateForWebContents(&contents);
+  raw_ptr<permissions::PermissionRequestManager> permission_request_manager =
+      permissions::PermissionRequestManager::FromWebContents(&contents);
+  // Attaching a permission request manager to WebContents can fail, so a
+  // DCHECK would be inappropriate here. If it fails, the user won't get
+  // notified about permission prompts in the headset, but other than that the
+  // session would work normally.
+  if (permission_request_manager) {
+    permission_request_manager->AddObserver(this);
+
+    // There might already be a visible permission bubble from before
+    // we registered the observer, show the HMD message now in that case.
+    if (permission_request_manager->IsRequestInProgress()) {
+      OnPromptAdded();
+    }
   }
-
-  content::GetDeviceService().BindGeolocationConfig(
-      geolocation_config_.BindNewPipeAndPassReceiver());
 }
 
 VRUiHostImpl::~VRUiHostImpl() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DVLOG(1) << __func__;
+  // Ensure that we unregister pre-existing observers, if any.
+  // It's safe to try to remove a nonexistent observer.
+  DesktopMediaPickerManager::Get()->RemoveObserver(this);
+  poll_capturing_state_task_.Cancel();
 
-  // We don't call BrowserXRRuntime::RemoveObserver, because if we are being
-  // destroyed, it means the corresponding device has been removed from
-  // XRRuntimeManager, and the BrowserXRRuntime has been destroyed.
-  if (web_contents_)
-    SetWebXRWebContents(nullptr);
-}
+  ui_rendering_thread_.reset();
 
-bool IsValidInfo(device::mojom::VRDisplayInfoPtr& info) {
-  // Numeric properties are validated elsewhere, but we expect a stereo headset.
-  if (!info) {
-    return false;
-  }
-
-  return base::Contains(info->views, device::mojom::XREye::kLeft,
-                        &device::mojom::XRView::eye) &&
-         base::Contains(info->views, device::mojom::XREye::kRight,
-                        &device::mojom::XRView::eye);
-}
-
-void VRUiHostImpl::SetWebXRWebContents(content::WebContents* contents) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-
-  if (!IsValidInfo(info_)) {
-    content::XRRuntimeManager::ExitImmersivePresentation();
+  // Even though we think we should have a WebContents, we only hold onto it
+  // as a WeakPtr, so it may have been destroyed. So check here before we do
+  // any cleanup.
+  if (!web_contents_) {
     return;
   }
 
-  // Eventually the contents will be used to poll for permissions, or determine
-  // what overlays should show.
+  VrTabHelper::SetIsContentDisplayedInHeadset(web_contents_.get(), false);
 
-  // permission_request_manager_ is an unowned pointer; it's owned by
-  // WebContents. If the WebContents change, make sure we unregister any
-  // pre-existing observers. We only have a non-null permission_request_manager_
-  // if we successfully added an observer.
-  if (permission_request_manager_) {
-    permission_request_manager_->RemoveObserver(this);
-    permission_request_manager_ = nullptr;
-  }
-
-  if (web_contents_ != contents) {
-    if (web_contents_) {
-      DesktopMediaPickerManager::Get()->RemoveObserver(this);
-    }
-    if (contents) {
-      DesktopMediaPickerManager::Get()->AddObserver(this);
-    }
-  }
-
-  if (web_contents_)
-    VrTabHelper::SetIsContentDisplayedInHeadset(web_contents_, false);
-  if (contents)
-    VrTabHelper::SetIsContentDisplayedInHeadset(contents, true);
-
-  web_contents_ = contents;
-  if (contents) {
-    StartUiRendering();
-    InitCapturingStates();
-    ui_rendering_thread_->SetWebXrPresenting(true);
-    ui_rendering_thread_->SetFramesThrottled(frames_throttled_);
-
-    PollCapturingState();
-
-    permissions::PermissionRequestManager::CreateForWebContents(contents);
-    permission_request_manager_ =
-        permissions::PermissionRequestManager::FromWebContents(contents);
-    // Attaching a permission request manager to WebContents can fail, so a
-    // DCHECK would be inappropriate here. If it fails, the user won't get
-    // notified about permission prompts, but other than that the session would
-    // work normally.
-    if (permission_request_manager_) {
-      permission_request_manager_->AddObserver(this);
-
-      // There might already be a visible permission bubble from before
-      // we registered the observer, show the HMD message now in that case.
-      if (permission_request_manager_->IsRequestInProgress())
-        OnBubbleAdded();
-    } else {
-      DVLOG(1) << __func__ << ": No PermissionRequestManager";
-    }
-  } else {
-    poll_capturing_state_task_.Cancel();
-
-    if (ui_rendering_thread_)
-      ui_rendering_thread_->SetWebXrPresenting(false);
-    StopUiRendering();
+  raw_ptr<permissions::PermissionRequestManager> permission_manager =
+      permissions::PermissionRequestManager::FromWebContents(
+          web_contents_.get());
+  if (permission_manager) {
+    permission_manager->RemoveObserver(this);
   }
 }
 
-void VRUiHostImpl::SetFramesThrottled(bool throttled) {
-  frames_throttled_ = throttled;
-
-  if (!ui_rendering_thread_) {
-    DVLOG(1) << __func__ << ": no ui_rendering_thread_";
-    return;
-  }
-
-  ui_rendering_thread_->SetFramesThrottled(frames_throttled_);
+void VRUiHostImpl::WebXRFramesThrottledChanged(bool throttled) {
+  ui_rendering_thread_->SetFramesThrottled(throttled);
 }
 
-void VRUiHostImpl::SetVRDisplayInfo(
-    device::mojom::VRDisplayInfoPtr display_info) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  // On Windows this is getting logged every frame, so set to 3.
-  DVLOG(3) << __func__;
-
-  if (!IsValidInfo(display_info)) {
-    content::XRRuntimeManager::ExitImmersivePresentation();
-    return;
-  }
-
-  info_ = std::move(display_info);
-  if (ui_rendering_thread_) {
-    ui_rendering_thread_->SetVRDisplayInfo(info_.Clone());
-  }
-}
-
-void VRUiHostImpl::StartUiRendering() {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  DVLOG(1) << __func__;
-
-  DCHECK(info_);
-  ui_rendering_thread_ =
-      std::make_unique<VRBrowserRendererThreadWin>(compositor_.get());
-  ui_rendering_thread_->SetVRDisplayInfo(info_.Clone());
-}
-
-void VRUiHostImpl::StopUiRendering() {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  DVLOG(1) << __func__;
-
-  ui_rendering_thread_ = nullptr;
-}
-
-void VRUiHostImpl::SetLocationInfoOnUi() {
-  GURL gurl;
-  if (web_contents_) {
-    content::NavigationEntry* entry =
-        web_contents_->GetController().GetVisibleEntry();
-    if (entry) {
-      gurl = entry->GetVirtualURL();
-    }
-  }
-  // TODO(https://crbug.com/905375): The below call should eventually be
-  // rewritten to take a LocationBarState and not just GURL. See
-  // VRBrowserRendererThreadWin::StartOverlay() also.
-  ui_rendering_thread_->SetLocationInfo(gurl);
-}
-
-void VRUiHostImpl::OnBubbleAdded() {
+void VRUiHostImpl::OnPromptAdded() {
   ShowExternalNotificationPrompt();
 }
 
-void VRUiHostImpl::OnBubbleRemoved() {
+void VRUiHostImpl::OnPromptRemoved() {
   RemoveHeadsetNotificationPrompt();
 }
 
-void VRUiHostImpl::OnDialogOpened() {
+void VRUiHostImpl::OnDialogOpened(const DesktopMediaPicker::Params&) {
   ShowExternalNotificationPrompt();
 }
 
@@ -315,13 +215,6 @@ void VRUiHostImpl::OnDialogClosed() {
 }
 
 void VRUiHostImpl::ShowExternalNotificationPrompt() {
-  if (!ui_rendering_thread_) {
-    DVLOG(1) << __func__ << ": no ui_rendering_thread_";
-    return;
-  }
-
-  SetLocationInfoOnUi();
-
   if (indicators_visible_) {
     indicators_visible_ = false;
     ui_rendering_thread_->SetIndicatorsVisible(false);
@@ -356,32 +249,37 @@ void VRUiHostImpl::InitCapturingStates() {
   active_capturing_ = g_default_capturing_state;
   potential_capturing_ = g_default_capturing_state;
 
-  DCHECK(web_contents_);
-  permissions::PermissionManager* permission_manager =
-      PermissionManagerFactory::GetForProfile(
-          Profile::FromBrowserContext(web_contents_->GetBrowserContext()));
-  const GURL& origin = web_contents_->GetLastCommittedURL();
-  content::RenderFrameHost* rfh = web_contents_->GetMainFrame();
+  CHECK(web_contents_);
+  content::PermissionController* permission_controller =
+      web_contents_->GetBrowserContext()->GetPermissionController();
   potential_capturing_.audio_capture_enabled =
-      permission_manager
-          ->GetPermissionStatusForFrame(ContentSettingsType::MEDIASTREAM_MIC,
-                                        rfh, origin)
-          .content_setting == CONTENT_SETTING_ALLOW;
+      permission_controller->GetPermissionStatusForCurrentDocument(
+          content::PermissionDescriptorUtil::
+              CreatePermissionDescriptorForPermissionType(
+                  blink::PermissionType::AUDIO_CAPTURE),
+          web_contents_->GetPrimaryMainFrame()) ==
+      blink::mojom::PermissionStatus::GRANTED;
   potential_capturing_.video_capture_enabled =
-      permission_manager
-          ->GetPermissionStatusForFrame(ContentSettingsType::MEDIASTREAM_CAMERA,
-                                        rfh, origin)
-          .content_setting == CONTENT_SETTING_ALLOW;
+      permission_controller->GetPermissionStatusForCurrentDocument(
+          content::PermissionDescriptorUtil::
+              CreatePermissionDescriptorForPermissionType(
+                  blink::PermissionType::VIDEO_CAPTURE),
+          web_contents_->GetPrimaryMainFrame()) ==
+      blink::mojom::PermissionStatus::GRANTED;
   potential_capturing_.location_access_enabled =
-      permission_manager
-          ->GetPermissionStatusForFrame(ContentSettingsType::GEOLOCATION, rfh,
-                                        origin)
-          .content_setting == CONTENT_SETTING_ALLOW;
+      permission_controller->GetPermissionStatusForCurrentDocument(
+          content::PermissionDescriptorUtil::
+              CreatePermissionDescriptorForPermissionType(
+                  blink::PermissionType::GEOLOCATION),
+          web_contents_->GetPrimaryMainFrame()) ==
+      blink::mojom::PermissionStatus::GRANTED;
   potential_capturing_.midi_connected =
-      permission_manager
-          ->GetPermissionStatusForFrame(ContentSettingsType::MIDI_SYSEX, rfh,
-                                        origin)
-          .content_setting == CONTENT_SETTING_ALLOW;
+      permission_controller->GetPermissionStatusForCurrentDocument(
+          content::PermissionDescriptorUtil::
+              CreatePermissionDescriptorForPermissionType(
+                  blink::PermissionType::MIDI_SYSEX),
+          web_contents_->GetPrimaryMainFrame()) ==
+      blink::mojom::PermissionStatus::GRANTED;
 
   indicators_shown_start_time_ = base::Time::Now();
   indicators_visible_ = false;
@@ -398,50 +296,52 @@ void VRUiHostImpl::PollCapturingState() {
 
   // location, microphone, camera, midi.
   CapturingStateModel active_capturing = active_capturing_;
-  // TODO(https://crbug.com/1103176): Plumb the actual frame reference here (we
+  // TODO(crbug.com/40139135): Plumb the actual frame reference here (we
   // should get a RFH from VRServiceImpl instead of WebContents)
-  content_settings::PageSpecificContentSettings* settings =
-      content_settings::PageSpecificContentSettings::GetForFrame(
-          web_contents_->GetMainFrame());
+  if (web_contents_) {
+    content_settings::PageSpecificContentSettings* settings =
+        content_settings::PageSpecificContentSettings::GetForFrame(
+            web_contents_->GetPrimaryMainFrame());
 
-  if (settings) {
-    active_capturing.location_access_enabled =
-        settings->IsContentAllowed(ContentSettingsType::GEOLOCATION);
+    if (settings) {
+      active_capturing.location_access_enabled = settings->IsContentAllowed(
+          permissions::PermissionUtil::GetGeolocationType());
 
-    active_capturing.audio_capture_enabled =
-        (settings->GetMicrophoneCameraState() &
-         content_settings::PageSpecificContentSettings::MICROPHONE_ACCESSED) &&
-        !(settings->GetMicrophoneCameraState() &
-          content_settings::PageSpecificContentSettings::MICROPHONE_BLOCKED);
+      active_capturing.audio_capture_enabled =
+          settings->GetMicrophoneCameraState().Has(
+              content_settings::PageSpecificContentSettings::
+                  kMicrophoneAccessed) &&
+          !settings->GetMicrophoneCameraState().Has(
+              content_settings::PageSpecificContentSettings::
+                  kMicrophoneBlocked);
 
-    active_capturing.video_capture_enabled =
-        (settings->GetMicrophoneCameraState() &
-         content_settings::PageSpecificContentSettings::CAMERA_ACCESSED) &
-        !(settings->GetMicrophoneCameraState() &
-          content_settings::PageSpecificContentSettings::CAMERA_BLOCKED);
+      active_capturing.video_capture_enabled =
+          settings->GetMicrophoneCameraState().Has(
+              content_settings::PageSpecificContentSettings::kCameraAccessed) &&
+          !settings->GetMicrophoneCameraState().Has(
+              content_settings::PageSpecificContentSettings::kCameraBlocked);
 
-    active_capturing.midi_connected =
-        settings->IsContentAllowed(ContentSettingsType::MIDI_SYSEX);
+      active_capturing.midi_connected =
+          settings->IsContentAllowed(ContentSettingsType::MIDI_SYSEX);
+    }
+
+    // Screen capture.
+    scoped_refptr<MediaStreamCaptureIndicator> indicator =
+        MediaCaptureDevicesDispatcher::GetInstance()
+            ->GetMediaStreamCaptureIndicator();
+    active_capturing.screen_capture_enabled =
+        indicator->IsBeingMirrored(web_contents_.get()) ||
+        indicator->IsCapturingWindow(web_contents_.get()) ||
+        indicator->IsCapturingDisplay(web_contents_.get());
+
+    // Bluetooth.
+    active_capturing.bluetooth_connected = web_contents_->IsCapabilityActive(
+        content::WebContentsCapabilityType::kBluetoothConnected);
+
+    // USB.
+    active_capturing.usb_connected = web_contents_->IsCapabilityActive(
+        content::WebContentsCapabilityType::kUSB);
   }
-
-  // Screen capture.
-  scoped_refptr<MediaStreamCaptureIndicator> indicator =
-      MediaCaptureDevicesDispatcher::GetInstance()
-          ->GetMediaStreamCaptureIndicator();
-  active_capturing.screen_capture_enabled =
-      indicator->IsBeingMirrored(web_contents_) ||
-      indicator->IsCapturingWindow(web_contents_) ||
-      indicator->IsCapturingDisplay(web_contents_);
-
-  // Bluetooth.
-  active_capturing.bluetooth_connected =
-      web_contents_->IsConnectedToBluetoothDevice();
-
-  // USB.
-  UsbTabHelper* usb_tab_helper =
-      UsbTabHelper::GetOrCreateForWebContents(web_contents_);
-  DCHECK(usb_tab_helper != nullptr);
-  active_capturing.usb_connected = usb_tab_helper->IsDeviceConnected();
 
   auto capturing_switched_on =
       active_capturing.NewlyUpdatedPermissions(active_capturing_);

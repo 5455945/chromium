@@ -1,38 +1,51 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.merchant_viewer;
 
+import android.content.Context;
 import android.view.View;
 
-import org.chromium.base.supplier.Supplier;
-import org.chromium.chrome.tab_ui.R;
+import androidx.annotation.StringRes;
+
+import org.chromium.base.supplier.NonNullObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetType;
+
+import java.util.function.Supplier;
 
 /**
  * An implementation of {@link BottomSheetContent} for the merchant trust bottom sheet experience.
  */
+@NullMarked
 public class MerchantTrustBottomSheetContent implements BottomSheetContent {
+    private static final BottomSheetType BOTTOM_SHEET_TYPE =
+            new BottomSheetType.Builder().setUserInitiated(true).build();
+
     /** Ratio of the height when in half mode. */
     private static final float HALF_HEIGHT_RATIO = 0.6f;
+
     /** Ratio of the height when in full mode. Used in half-open variation. */
     public static final float FULL_HEIGHT_RATIO = 0.9f;
 
     private final View mToolbarView;
     private final View mContentView;
     private final Supplier<Integer> mVerticalScrollOffset;
-    private final Supplier<Boolean> mBackPressHandler;
+    private final Runnable mBackPressCallback;
 
-    /**
-     * Creates a new instance.
-     */
-    public MerchantTrustBottomSheetContent(View toolbarView, View contentView,
-            Supplier<Integer> verticalScrollOffset, Supplier<Boolean> backPressHandler) {
+    /** Creates a new instance. */
+    public MerchantTrustBottomSheetContent(
+            View toolbarView,
+            View contentView,
+            Supplier<Integer> verticalScrollOffset,
+            Runnable backPressHandler) {
         mToolbarView = toolbarView;
         mContentView = contentView;
         mVerticalScrollOffset = verticalScrollOffset;
-        mBackPressHandler = backPressHandler;
+        mBackPressCallback = backPressHandler;
     }
 
     @Override
@@ -54,6 +67,11 @@ public class MerchantTrustBottomSheetContent implements BottomSheetContent {
     public void destroy() {}
 
     @Override
+    public BottomSheetType getSheetType() {
+        return BOTTOM_SHEET_TYPE;
+    }
+
+    @Override
     public int getPriority() {
         return ContentPriority.HIGH;
     }
@@ -61,11 +79,6 @@ public class MerchantTrustBottomSheetContent implements BottomSheetContent {
     @Override
     public boolean swipeToDismissEnabled() {
         return true;
-    }
-
-    @Override
-    public int getPeekHeight() {
-        return HeightMode.DISABLED;
     }
 
     @Override
@@ -80,26 +93,37 @@ public class MerchantTrustBottomSheetContent implements BottomSheetContent {
 
     @Override
     public boolean handleBackPress() {
-        return mBackPressHandler.get();
+        mBackPressCallback.run();
+        return true;
     }
 
     @Override
-    public int getSheetContentDescriptionStringId() {
-        return R.string.merchant_viewer_preview_sheet_title;
+    public NonNullObservableSupplier<Boolean> getBackPressStateChangedSupplier() {
+        return ObservableSuppliers.alwaysTrue();
     }
 
     @Override
-    public int getSheetHalfHeightAccessibilityStringId() {
-        return R.string.merchant_viewer_preview_sheet_title;
+    public void onBackPressed() {
+        mBackPressCallback.run();
     }
 
     @Override
-    public int getSheetFullHeightAccessibilityStringId() {
-        return R.string.merchant_viewer_preview_sheet_title;
+    public String getSheetContentDescription(Context context) {
+        return context.getString(R.string.merchant_viewer_preview_sheet_description);
     }
 
     @Override
-    public int getSheetClosedAccessibilityStringId() {
-        return R.string.merchant_viewer_preview_sheet_title;
+    public @StringRes int getSheetHalfHeightAccessibilityStringId() {
+        return R.string.merchant_viewer_preview_sheet_opened_half;
+    }
+
+    @Override
+    public @StringRes int getSheetFullHeightAccessibilityStringId() {
+        return R.string.merchant_viewer_preview_sheet_opened_full;
+    }
+
+    @Override
+    public @StringRes int getSheetClosedAccessibilityStringId() {
+        return R.string.merchant_viewer_preview_sheet_closed;
     }
 }

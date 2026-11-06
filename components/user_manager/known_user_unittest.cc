@@ -1,35 +1,42 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/user_manager/known_user.h"
 
 #include <memory>
+#include <optional>
 #include <utility>
 
+#include "base/json/values_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/task_environment.h"
-#include "base/util/values/values_util.h"
 #include "base/values.h"
 #include "components/account_id/account_id.h"
+#include "components/account_id/account_id_literal.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/prefs/testing_pref_service.h"
-#include "components/user_manager/fake_user_manager.h"
-#include "components/user_manager/scoped_user_manager.h"
-#include "components/user_manager/user_manager_base.h"
+#include "components/session_manager/test/user_session_test_environment.h"
+#include "components/user_manager/user_manager.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace user_manager {
 namespace {
-absl::optional<std::string> GetStringPrefValue(KnownUser* known_user,
-                                               const AccountId& account_id,
-                                               const char* pref_name) {
-  std::string value;
-  if (!known_user->GetStringPref(account_id, pref_name, &value)) {
-    return {};
+
+constexpr AccountId::Literal kDefaultAccountId =
+    AccountId::Literal::FromUserEmailGaiaId("default_account@gmail.com",
+                                            GaiaId::Literal("fake-gaia-id"));
+
+std::optional<std::string> GetStringPrefValue(KnownUser* known_user,
+                                              const AccountId& account_id,
+                                              const char* pref_name) {
+  if (const std::string* value =
+          known_user->FindStringPath(account_id, pref_name)) {
+    return *value;
   }
-  return value;
+  return std::nullopt;
 }
 }  // namespace
 
@@ -38,47 +45,39 @@ absl::optional<std::string> GetStringPrefValue(KnownUser* known_user,
 // local_state.
 class KnownUserTest : public testing::Test {
  public:
-  KnownUserTest() {
-    auto fake_user_manager = std::make_unique<FakeUserManager>();
-    fake_user_manager_ = fake_user_manager.get();
-    scoped_user_manager_ =
-        std::make_unique<ScopedUserManager>(std::move(fake_user_manager));
-
-    UserManagerBase::RegisterPrefs(local_state_.registry());
-  }
+  KnownUserTest() = default;
   ~KnownUserTest() override = default;
 
   KnownUserTest(const KnownUserTest& other) = delete;
   KnownUserTest& operator=(const KnownUserTest& other) = delete;
 
+  void SetUp() override {
+    ash::test::UserSessionTestEnvironment::RegisterLocalStatePrefs(
+        local_state_.registry());
+    user_session_test_environment_ =
+        std::make_unique<ash::test::UserSessionTestEnvironment>(&local_state_);
+  }
+
+  void TearDown() override { user_session_test_environment_.reset(); }
+
  protected:
-  const AccountId kDefaultAccountId =
-      AccountId::FromUserEmailGaiaId("default_account@gmail.com",
-                                     "fake-gaia-id");
-  const AccountId kDefaultAccountId2 =
-      AccountId::FromUserEmailGaiaId("default_account_2@gmail.com",
-                                     "fake-gaia-id-2");
-
-  FakeUserManager* fake_user_manager() { return fake_user_manager_; }
-
   PrefService* local_state() { return &local_state_; }
+
+  const base::DictValue* FindPrefs(const AccountId& account_id) {
+    return KnownUser(local_state()).FindPrefs(account_id);
+  }
 
  private:
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::MainThreadType::UI};
 
-  // Owned by |scoped_user_manager_|.
-  FakeUserManager* fake_user_manager_ = nullptr;
-  std::unique_ptr<ScopedUserManager> scoped_user_manager_;
   TestingPrefServiceSimple local_state_;
+  std::unique_ptr<ash::test::UserSessionTestEnvironment>
+      user_session_test_environment_;
 };
 
 TEST_F(KnownUserTest, FindPrefsNonExisting) {
-  KnownUser known_user(local_state());
-  const base::DictionaryValue* value = nullptr;
-  bool read_success = known_user.FindPrefs(kDefaultAccountId, &value);
-  EXPECT_FALSE(read_success);
-  EXPECT_FALSE(value);
+  EXPECT_FALSE(FindPrefs(kDefaultAccountId));
 }
 
 TEST_F(KnownUserTest, FindPrefsExisting) {
@@ -86,44 +85,34 @@ TEST_F(KnownUserTest, FindPrefsExisting) {
   const std::string kCustomPrefName = "custom_pref";
   known_user.SetStringPref(kDefaultAccountId, kCustomPrefName, "value");
 
-  const base::DictionaryValue* value = nullptr;
-  bool read_success = known_user.FindPrefs(kDefaultAccountId, &value);
-  EXPECT_TRUE(read_success);
+  const base::DictValue* value = FindPrefs(kDefaultAccountId);
   ASSERT_TRUE(value);
 
-  const std::string* pref_value = value->FindStringKey(kCustomPrefName);
+  const std::string* pref_value = value->FindString(kCustomPrefName);
   ASSERT_TRUE(pref_value);
   EXPECT_EQ(*pref_value, "value");
 }
 
 TEST_F(KnownUserTest, FindPrefsIgnoresEphemeralGaiaUsers) {
   KnownUser known_user(local_state());
+  const AccountId kAccountIdNonEphemeralGaia =
+      AccountId::FromUserEmailGaiaId("account1@gmail.com", GaiaId("gaia_id_1"));
   const AccountId kAccountIdEphemeralGaia =
-      AccountId::FromUserEmailGaiaId("account2@gmail.com", "gaia_id_2");
-  const AccountId kAccountIdEphemeralAd =
-      AccountId::AdFromUserEmailObjGuid("account4@gmail.com", "guid_4");
-  fake_user_manager()->SetUserNonCryptohomeDataEphemeral(
-      kAccountIdEphemeralGaia,
-      /*is_ephemeral=*/true);
-  fake_user_manager()->SetUserNonCryptohomeDataEphemeral(kAccountIdEphemeralAd,
-                                                         /*is_ephemeral=*/true);
+      AccountId::FromUserEmailGaiaId("account2@gmail.com", GaiaId("gaia_id_2"));
+  UserManager::Get()->SetEphemeralModeConfig(UserManager::EphemeralModeConfig(
+      /*included_by_default=*/false, {kAccountIdEphemeralGaia},
+      /*exclude_list=*/{}));
+  UserManager::Get()->SetOwnerId(kAccountIdNonEphemeralGaia);
+  ASSERT_TRUE(UserManager::Get()->IsUserNonCryptohomeDataEphemeral(
+      kAccountIdEphemeralGaia));
+
   const std::string kCustomPrefName = "custom_pref";
+  known_user.SetStringPref(kAccountIdNonEphemeralGaia, kCustomPrefName,
+                           "value");
   known_user.SetStringPref(kAccountIdEphemeralGaia, kCustomPrefName, "value");
-  known_user.SetStringPref(kAccountIdEphemeralAd, kCustomPrefName, "value");
 
-  {
-    const base::DictionaryValue* value = nullptr;
-    bool read_success = known_user.FindPrefs(kAccountIdEphemeralGaia, &value);
-    EXPECT_FALSE(read_success);
-    EXPECT_FALSE(value);
-  }
-
-  {
-    const base::DictionaryValue* value = nullptr;
-    bool read_success = known_user.FindPrefs(kAccountIdEphemeralAd, &value);
-    EXPECT_TRUE(read_success);
-    EXPECT_TRUE(value);
-  }
+  EXPECT_TRUE(FindPrefs(kAccountIdNonEphemeralGaia));
+  EXPECT_FALSE(FindPrefs(kAccountIdEphemeralGaia));
 }
 
 TEST_F(KnownUserTest, FindPrefsMatchForUnknownAccountType) {
@@ -132,94 +121,39 @@ TEST_F(KnownUserTest, FindPrefsMatchForUnknownAccountType) {
   const AccountId kAccountIdUnknown =
       AccountId::FromUserEmail("account1@gmail.com");
   const AccountId kAccountIdGaia =
-      AccountId::FromUserEmailGaiaId("account1@gmail.com", "gaia_id_2");
-  const AccountId kAccountIdAd =
-      AccountId::AdFromUserEmailObjGuid("account1@gmail.com", "guid");
+      AccountId::FromUserEmailGaiaId("account1@gmail.com", GaiaId("gaia_id_2"));
 
   known_user.SetStringPref(kAccountIdUnknown, "some_pref", "some_value");
 
-  // Looking it up by AccountId always succeeds, no matter which AccountType is
-  // used for the lookup.
-  const base::DictionaryValue* value = nullptr;
-  EXPECT_TRUE(known_user.FindPrefs(kAccountIdUnknown, &value));
-  EXPECT_TRUE(known_user.FindPrefs(kAccountIdGaia, &value));
-  EXPECT_TRUE(known_user.FindPrefs(kAccountIdAd, &value));
+  EXPECT_TRUE(FindPrefs(kAccountIdUnknown));
+  EXPECT_TRUE(FindPrefs(kAccountIdGaia));
 }
 
 TEST_F(KnownUserTest, FindPrefsMatchForGaiaAccountWithEmail) {
   KnownUser known_user(local_state());
   const char* kEmailA = "a@gmail.com";
   const char* kEmailB = "b@gmail.com";
-  const char* kGaiaIdA = "a";
-  const char* kGaiaIdB = "b";
+  const GaiaId kGaiaIdA("a");
+  const GaiaId kGaiaIdB("b");
 
   known_user.SaveKnownUser(AccountId::FromUserEmailGaiaId(kEmailA, kGaiaIdA));
 
-  const base::DictionaryValue* value = nullptr;
-
   // Finding by itself should work
-  EXPECT_TRUE(known_user.FindPrefs(
-      AccountId::FromUserEmailGaiaId(kEmailA, kGaiaIdA), &value));
+  EXPECT_TRUE(FindPrefs(AccountId::FromUserEmailGaiaId(kEmailA, kGaiaIdA)));
   // Finding by gaia id should also work even if the e-mail doesn't match.
-  EXPECT_TRUE(known_user.FindPrefs(
-      AccountId::FromUserEmailGaiaId(kEmailB, kGaiaIdA), &value));
+  EXPECT_TRUE(FindPrefs(AccountId::FromUserEmailGaiaId(kEmailB, kGaiaIdA)));
   // Finding by e-mail should also work even if the gaia id doesn't match.
   // TODO(https://crbug.com/1190902): This should likely be EXPECT_FALSE going
   // forward.
-  EXPECT_TRUE(known_user.FindPrefs(
-      AccountId::FromUserEmailGaiaId(kEmailA, kGaiaIdB), &value));
-  // Finding by just gaia id without any e-mail doesn't work (because the
-  // resulting AccountId is not considered valid).
-  EXPECT_FALSE(known_user.FindPrefs(AccountId::FromGaiaId(kGaiaIdA), &value));
+  EXPECT_TRUE(FindPrefs(AccountId::FromUserEmailGaiaId(kEmailA, kGaiaIdB)));
 
   // An unrelated gaia AccountId with the same Account Type doesn't find
   // anything.
-  EXPECT_FALSE(known_user.FindPrefs(
-      AccountId::FromUserEmailGaiaId(kEmailB, kGaiaIdB), &value));
+  EXPECT_FALSE(FindPrefs(AccountId::FromUserEmailGaiaId(kEmailB, kGaiaIdB)));
 
   // Looking up an AccountId stored as gaia by an unknown-type AccountId with
   // the same e-mail address succeeds.
-  EXPECT_TRUE(known_user.FindPrefs(AccountId::FromUserEmail(kEmailA), &value));
-
-  // Looking up an AccountId stored as gaia by an AccountId with type Ad fails.
-  EXPECT_FALSE(known_user.FindPrefs(
-      AccountId::AdFromUserEmailObjGuid(kEmailA, "guid"), &value));
-}
-
-TEST_F(KnownUserTest, FindPrefsMatchForAdAccountWithEmail) {
-  KnownUser known_user(local_state());
-  const std::string kEmailA = "a@gmail.com";
-  const std::string kEmailB = "b@gmail.com";
-
-  known_user.SaveKnownUser(AccountId::AdFromUserEmailObjGuid(kEmailA, "a"));
-
-  const base::DictionaryValue* value = nullptr;
-
-  // Finding by itself should work
-  EXPECT_TRUE(known_user.FindPrefs(
-      AccountId::AdFromUserEmailObjGuid(kEmailA, "a"), &value));
-  // Finding by guid should also work even if the e-mail doesn't match.
-  EXPECT_TRUE(known_user.FindPrefs(
-      AccountId::AdFromUserEmailObjGuid(kEmailB, "a"), &value));
-  // Finding by e-mail should also work even if the guid doesn't match.
-  EXPECT_TRUE(known_user.FindPrefs(
-      AccountId::AdFromUserEmailObjGuid(kEmailA, "b"), &value));
-  // Finding by just AD guid  without any e-mail doesn't work (because the
-  // resulting AccountId is not considered valid).
-  EXPECT_FALSE(known_user.FindPrefs(AccountId::AdFromObjGuid("a"), &value));
-
-  // An unrelated AD AccountId with the same Account Type doesn't find
-  // anything.
-  EXPECT_FALSE(known_user.FindPrefs(
-      AccountId::AdFromUserEmailObjGuid(kEmailB, "b"), &value));
-
-  // Looking up an AccountId stored as AD by an unknown-type AccountId with
-  // the same e-mail address succeeds.
-  EXPECT_TRUE(known_user.FindPrefs(AccountId::FromUserEmail(kEmailA), &value));
-
-  // Looking up an AccountId stored as AD by an AccountId with type gaia fails.
-  EXPECT_FALSE(known_user.FindPrefs(
-      AccountId::FromUserEmailGaiaId(kEmailA, "gaia_id"), &value));
+  EXPECT_TRUE(FindPrefs(AccountId::FromUserEmail(kEmailA)));
 }
 
 TEST_F(KnownUserTest, UpdatePrefsWithoutClear) {
@@ -227,27 +161,18 @@ TEST_F(KnownUserTest, UpdatePrefsWithoutClear) {
   constexpr char kPrefName1[] = "pref1";
   constexpr char kPrefName2[] = "pref2";
 
-  {
-    base::DictionaryValue update;
-    update.SetKey(kPrefName1, base::Value("pref1_value1"));
-    known_user.UpdatePrefs(kDefaultAccountId, update, /*clear=*/false);
-  }
+  known_user.SetPath(kDefaultAccountId, kPrefName1,
+                     base::Value("pref1_value1"));
 
-  {
-    base::DictionaryValue update;
-    update.SetKey(kPrefName1, base::Value("pref1_value2"));
-    known_user.UpdatePrefs(kDefaultAccountId, update, /*clear=*/false);
-  }
+  known_user.SetPath(kDefaultAccountId, kPrefName1,
+                     base::Value("pref1_value2"));
 
-  {
-    base::DictionaryValue update;
-    update.SetKey(kPrefName2, base::Value("pref2_value1"));
-    known_user.UpdatePrefs(kDefaultAccountId, update, /*clear=*/false);
-  }
+  known_user.SetPath(kDefaultAccountId, kPrefName2,
+                     base::Value("pref2_value1"));
 
-  EXPECT_EQ(absl::make_optional(std::string("pref1_value2")),
+  EXPECT_EQ(std::make_optional(std::string("pref1_value2")),
             GetStringPrefValue(&known_user, kDefaultAccountId, kPrefName1));
-  EXPECT_EQ(absl::make_optional(std::string("pref2_value1")),
+  EXPECT_EQ(std::make_optional(std::string("pref2_value1")),
             GetStringPrefValue(&known_user, kDefaultAccountId, kPrefName2));
 }
 
@@ -256,21 +181,17 @@ TEST_F(KnownUserTest, UpdatePrefsWithClear) {
   constexpr char kPrefName1[] = "pref1";
   constexpr char kPrefName2[] = "pref2";
 
-  {
-    base::DictionaryValue update;
-    update.SetKey(kPrefName1, base::Value("pref1_value1"));
-    known_user.UpdatePrefs(kDefaultAccountId, update, /*clear=*/false);
-  }
+  known_user.SetPath(kDefaultAccountId, kPrefName1,
+                     base::Value("pref1_value1"));
 
-  {
-    base::DictionaryValue update;
-    update.SetKey(kPrefName2, base::Value("pref2_value1"));
-    known_user.UpdatePrefs(kDefaultAccountId, update, /*clear=*/true);
-  }
+  known_user.SetPath(kDefaultAccountId, kPrefName2,
+                     base::Value("pref2_value1"));
 
-  EXPECT_EQ(absl::nullopt,
+  known_user.SetPath(kDefaultAccountId, kPrefName1, std::nullopt);
+
+  EXPECT_EQ(std::nullopt,
             GetStringPrefValue(&known_user, kDefaultAccountId, kPrefName1));
-  EXPECT_EQ(absl::make_optional(std::string("pref2_value1")),
+  EXPECT_EQ(std::make_optional(std::string("pref2_value1")),
             GetStringPrefValue(&known_user, kDefaultAccountId, kPrefName2));
 }
 
@@ -282,15 +203,11 @@ TEST_F(KnownUserTest, GetKnownAccountIdsNoAccounts) {
 TEST_F(KnownUserTest, GetKnownAccountIdsWithAccounts) {
   KnownUser known_user(local_state());
   const AccountId kAccountIdGaia =
-      AccountId::FromUserEmailGaiaId("account2@gmail.com", "gaia_id");
-  const AccountId kAccountIdAd =
-      AccountId::AdFromUserEmailObjGuid("account3@gmail.com", "obj_guid");
-
+      AccountId::FromUserEmailGaiaId("account2@gmail.com", GaiaId("gaia_id"));
   known_user.SaveKnownUser(kAccountIdGaia);
-  known_user.SaveKnownUser(kAccountIdAd);
 
   EXPECT_THAT(known_user.GetKnownAccountIds(),
-              testing::UnorderedElementsAre(kAccountIdGaia, kAccountIdAd));
+              testing::UnorderedElementsAre(kAccountIdGaia));
 }
 
 TEST_F(KnownUserTest, SaveKnownUserIgnoresUnknownType) {
@@ -306,29 +223,22 @@ TEST_F(KnownUserTest, SaveKnownUserIgnoresUnknownType) {
 TEST_F(KnownUserTest, SaveKnownUserIgnoresEphemeralGaiaUsers) {
   KnownUser known_user(local_state());
   const AccountId kAccountIdNonEphemeralGaia =
-      AccountId::FromUserEmailGaiaId("account1@gmail.com", "gaia_id_1");
+      AccountId::FromUserEmailGaiaId("account1@gmail.com", GaiaId("gaia_id_1"));
   const AccountId kAccountIdEphemeralGaia =
-      AccountId::FromUserEmailGaiaId("account2@gmail.com", "gaia_id_2");
-  const AccountId kAccountIdNonEphemeralAd =
-      AccountId::AdFromUserEmailObjGuid("account3@gmail.com", "guid_3");
-  const AccountId kAccountIdEphemeralAd =
-      AccountId::AdFromUserEmailObjGuid("account4@gmail.com", "guid_4");
+      AccountId::FromUserEmailGaiaId("account2@gmail.com", GaiaId("gaia_id_2"));
 
-  fake_user_manager()->SetUserNonCryptohomeDataEphemeral(
-      kAccountIdEphemeralGaia,
-      /*is_ephemeral=*/true);
-  fake_user_manager()->SetUserNonCryptohomeDataEphemeral(kAccountIdEphemeralAd,
-                                                         /*is_ephemeral=*/true);
+  UserManager::Get()->SetEphemeralModeConfig(UserManager::EphemeralModeConfig(
+      /*included_by_default=*/false, {kAccountIdEphemeralGaia},
+      /*exclude_list=*/{}));
+  UserManager::Get()->SetOwnerId(kAccountIdNonEphemeralGaia);
+  ASSERT_TRUE(UserManager::Get()->IsUserNonCryptohomeDataEphemeral(
+      kAccountIdEphemeralGaia));
 
   known_user.SaveKnownUser(kAccountIdNonEphemeralGaia);
   known_user.SaveKnownUser(kAccountIdEphemeralGaia);
-  known_user.SaveKnownUser(kAccountIdNonEphemeralAd);
-  known_user.SaveKnownUser(kAccountIdEphemeralAd);
 
   EXPECT_THAT(known_user.GetKnownAccountIds(),
-              testing::UnorderedElementsAre(kAccountIdNonEphemeralGaia,
-                                            kAccountIdNonEphemeralAd,
-                                            kAccountIdEphemeralAd));
+              testing::UnorderedElementsAre(kAccountIdNonEphemeralGaia));
 }
 
 TEST_F(KnownUserTest, UpdateIdForGaiaAccount) {
@@ -340,95 +250,44 @@ TEST_F(KnownUserTest, UpdateIdForGaiaAccount) {
               testing::UnorderedElementsAre(kAccountIdUnknown));
 
   const AccountId kAccountIdGaia =
-      AccountId::FromUserEmailGaiaId("account1@gmail.com", "gaia_id");
+      AccountId::FromUserEmailGaiaId("account1@gmail.com", GaiaId("gaia_id"));
   known_user.UpdateId(kAccountIdGaia);
   EXPECT_THAT(known_user.GetKnownAccountIds(),
               testing::UnorderedElementsAre(kAccountIdGaia));
 }
 
-TEST_F(KnownUserTest, UpdateIdForAdAccount) {
-  KnownUser known_user(local_state());
-  const AccountId kAccountIdUnknown =
-      AccountId::FromUserEmail("account1@gmail.com");
-  known_user.SetStringPref(kAccountIdUnknown, "some_pref", "some_value");
-  EXPECT_THAT(known_user.GetKnownAccountIds(),
-              testing::UnorderedElementsAre(kAccountIdUnknown));
-
-  const AccountId kAccountIdAd =
-      AccountId::AdFromUserEmailObjGuid("account1@gmail.com", "guid");
-  known_user.UpdateId(kAccountIdAd);
-  EXPECT_THAT(known_user.GetKnownAccountIds(),
-              testing::UnorderedElementsAre(kAccountIdAd));
-}
-
 TEST_F(KnownUserTest, FindGaiaIdForGaiaAccount) {
   KnownUser known_user(local_state());
   const AccountId kAccountIdGaia =
-      AccountId::FromUserEmailGaiaId("account1@gmail.com", "gaia_id");
+      AccountId::FromUserEmailGaiaId("account1@gmail.com", GaiaId("gaia_id"));
   known_user.SaveKnownUser(kAccountIdGaia);
 
-  std::string gaia_id;
-  EXPECT_TRUE(known_user.FindGaiaID(kAccountIdGaia, &gaia_id));
-  EXPECT_EQ(gaia_id, "gaia_id");
+  const std::string* gaia_id = known_user.FindGaiaID(kAccountIdGaia);
+  ASSERT_TRUE(gaia_id);
+  EXPECT_EQ(*gaia_id, "gaia_id");
 }
 
-TEST_F(KnownUserTest, FindGaiaIdForAdAccount) {
-  KnownUser known_user(local_state());
-  const AccountId kAccountIdAd =
-      AccountId::AdFromUserEmailObjGuid("account1@gmail.com", "guid");
-  known_user.SaveKnownUser(kAccountIdAd);
-
-  std::string gaia_id;
-  EXPECT_FALSE(known_user.FindGaiaID(kAccountIdAd, &gaia_id));
-}
-
-// TODO(https://crbug.com/1148457): Add tests for GetAccountId.
+// TODO(crbug.com/40731309): Add tests for GetAccountId.
 
 TEST_F(KnownUserTest, RemovePrefOnCustomPref) {
   KnownUser known_user(local_state());
   const std::string kCustomPrefName = "custom_pref";
 
   known_user.SetStringPref(kDefaultAccountId, kCustomPrefName, "value");
-  {
-    std::string read_value;
-    EXPECT_TRUE(known_user.GetStringPref(kDefaultAccountId, kCustomPrefName,
-                                         &read_value));
-  }
+  EXPECT_TRUE(known_user.FindStringPath(kDefaultAccountId, kCustomPrefName));
 
   known_user.RemovePref(kDefaultAccountId, kCustomPrefName);
-  {
-    std::string read_value;
-    EXPECT_FALSE(known_user.GetStringPref(kDefaultAccountId, kCustomPrefName,
-                                          &read_value));
-  }
+  EXPECT_FALSE(known_user.FindStringPath(kDefaultAccountId, kCustomPrefName));
 }
 
-// Test failing on linux-chromeos-chrome (crbug.com/1198519)
-TEST_F(KnownUserTest, DISABLED_RemovePrefOnReservedPref) {
+TEST_F(KnownUserTest, RemovePrefOnReservedPref) {
   KnownUser known_user(local_state());
   const std::string kReservedPrefName = "device_id";
 
   known_user.SetStringPref(kDefaultAccountId, kReservedPrefName, "value");
-  ASSERT_DEATH(known_user.RemovePref(kDefaultAccountId, kReservedPrefName),
-               ".*Check failed.*");
-}
-
-TEST_F(KnownUserTest, GaiaIdMigrationStatus) {
-  KnownUser known_user(local_state());
-  const std::string kSubsystem1 = "subsystem1";
-  const std::string kSubsystem2 = "subsystem2";
-
-  EXPECT_FALSE(
-      known_user.GetGaiaIdMigrationStatus(kDefaultAccountId, kSubsystem1));
-  EXPECT_FALSE(
-      known_user.GetGaiaIdMigrationStatus(kDefaultAccountId, kSubsystem2));
-
-  known_user.SetGaiaIdMigrationStatusDone(kDefaultAccountId, kSubsystem1);
-
-  EXPECT_TRUE(
-      known_user.GetGaiaIdMigrationStatus(kDefaultAccountId, kSubsystem1));
-  EXPECT_FALSE(
-      known_user.GetGaiaIdMigrationStatus(kDefaultAccountId, kSubsystem2));
+  // Don't verify the message because on some builds CHECK failures do not print
+  // debug messages (https://crbug.com/1198519).
+  ASSERT_DEATH(known_user.RemovePref(kDefaultAccountId, kReservedPrefName), "");
 }
 
 TEST_F(KnownUserTest, DeviceId) {
@@ -488,25 +347,18 @@ TEST_F(KnownUserTest, ProfileRequiresPolicy) {
 
 TEST_F(KnownUserTest, ReauthReason) {
   KnownUser known_user(local_state());
-  {
-    int auth_reason;
-    EXPECT_FALSE(known_user.FindReauthReason(kDefaultAccountId, &auth_reason));
-  }
+  EXPECT_FALSE(known_user.FindReauthReason(kDefaultAccountId).has_value());
 
   known_user.UpdateReauthReason(kDefaultAccountId, 3);
-  {
-    int auth_reason;
-    EXPECT_TRUE(known_user.FindReauthReason(kDefaultAccountId, &auth_reason));
-    EXPECT_EQ(auth_reason, 3);
-  }
+  EXPECT_EQ(known_user.FindReauthReason(kDefaultAccountId), 3);
 }
 
 TEST_F(KnownUserTest, ChallengeResponseKeys) {
   KnownUser known_user(local_state());
-  EXPECT_TRUE(known_user.GetChallengeResponseKeys(kDefaultAccountId).is_none());
+  EXPECT_TRUE(known_user.GetChallengeResponseKeys(kDefaultAccountId).empty());
 
-  base::Value challenge_response_keys(base::Value::Type::LIST);
-  challenge_response_keys.Append(base::Value("key1"));
+  base::ListValue challenge_response_keys;
+  challenge_response_keys.Append("key1");
   known_user.SetChallengeResponseKeys(kDefaultAccountId,
                                       challenge_response_keys.Clone());
 
@@ -529,7 +381,7 @@ TEST_F(KnownUserTest, OfflineSigninLimit) {
   KnownUser known_user(local_state());
   EXPECT_FALSE(known_user.GetOfflineSigninLimit(kDefaultAccountId).has_value());
 
-  base::TimeDelta offline_signin_limit = base::TimeDelta::FromMinutes(80);
+  base::TimeDelta offline_signin_limit = base::Minutes(80);
   known_user.SetOfflineSigninLimit(kDefaultAccountId, offline_signin_limit);
 
   EXPECT_EQ(known_user.GetOfflineSigninLimit(kDefaultAccountId).value(),
@@ -547,36 +399,20 @@ TEST_F(KnownUserTest, IsEnterpriseManaged) {
 
 TEST_F(KnownUserTest, AccountManager) {
   KnownUser known_user(local_state());
-  {
-    std::string account_manager;
-    EXPECT_FALSE(
-        known_user.GetAccountManager(kDefaultAccountId, &account_manager));
-  }
+  EXPECT_FALSE(known_user.GetAccountManager(kDefaultAccountId));
 
   known_user.SetAccountManager(kDefaultAccountId, "test");
 
-  {
-    std::string account_manager;
-    EXPECT_TRUE(
-        known_user.GetAccountManager(kDefaultAccountId, &account_manager));
-  }
+  EXPECT_TRUE(known_user.GetAccountManager(kDefaultAccountId));
 }
 
-TEST_F(KnownUserTest, UserLastLoginInputMethod) {
+TEST_F(KnownUserTest, UserLastLoginInputMethodId) {
   KnownUser known_user(local_state());
-  {
-    std::string user_last_input_method;
-    EXPECT_FALSE(known_user.GetUserLastInputMethod(kDefaultAccountId,
-                                                   &user_last_input_method));
-  }
+  EXPECT_FALSE(known_user.GetUserLastInputMethodId(kDefaultAccountId));
 
-  known_user.SetUserLastLoginInputMethod(kDefaultAccountId, "test");
+  known_user.SetUserLastLoginInputMethodId(kDefaultAccountId, "test");
 
-  {
-    std::string user_last_input_method;
-    EXPECT_TRUE(known_user.GetUserLastInputMethod(kDefaultAccountId,
-                                                  &user_last_input_method));
-  }
+  EXPECT_TRUE(known_user.GetUserLastInputMethodId(kDefaultAccountId));
 }
 
 TEST_F(KnownUserTest, UserPinLength) {
@@ -604,43 +440,11 @@ TEST_F(KnownUserTest, PinAutosubmitBackfillNeeded) {
 
 TEST_F(KnownUserTest, PasswordSyncToken) {
   KnownUser known_user(local_state());
-  EXPECT_EQ(known_user.GetPasswordSyncToken(kDefaultAccountId), std::string());
+  EXPECT_FALSE(known_user.GetPasswordSyncToken(kDefaultAccountId));
 
   known_user.SetPasswordSyncToken(kDefaultAccountId, "test");
 
-  EXPECT_EQ(known_user.GetPasswordSyncToken(kDefaultAccountId), "test");
-}
-
-TEST_F(KnownUserTest, CleanEphemeralUsersRemovesEphemeralAdOnly) {
-  KnownUser known_user(local_state());
-  const AccountId kAccountIdNonEphemeralGaia =
-      AccountId::FromUserEmailGaiaId("account1@gmail.com", "gaia_id_1");
-  const AccountId kAccountIdEphemeralGaia =
-      AccountId::FromUserEmailGaiaId("account2@gmail.com", "gaia_id_2");
-  const AccountId kAccountIdNonEphemeralAd =
-      AccountId::AdFromUserEmailObjGuid("account3@gmail.com", "guid_3");
-  const AccountId kAccountIdEphemeralAd =
-      AccountId::AdFromUserEmailObjGuid("account4@gmail.com", "guid_4");
-
-  known_user.SaveKnownUser(kAccountIdNonEphemeralGaia);
-  known_user.SaveKnownUser(kAccountIdEphemeralGaia);
-  known_user.SaveKnownUser(kAccountIdNonEphemeralAd);
-  known_user.SaveKnownUser(kAccountIdEphemeralAd);
-  known_user.SetIsEphemeralUser(kAccountIdEphemeralGaia,
-                                /*is_ephemeral=*/true);
-  known_user.SetIsEphemeralUser(kAccountIdEphemeralAd, /*is_ephemeral=*/true);
-
-  EXPECT_THAT(known_user.GetKnownAccountIds(),
-              testing::UnorderedElementsAre(
-                  kAccountIdNonEphemeralGaia, kAccountIdEphemeralGaia,
-                  kAccountIdNonEphemeralAd, kAccountIdEphemeralAd));
-
-  known_user.CleanEphemeralUsers();
-
-  EXPECT_THAT(known_user.GetKnownAccountIds(),
-              testing::UnorderedElementsAre(kAccountIdNonEphemeralGaia,
-                                            kAccountIdEphemeralGaia,
-                                            kAccountIdNonEphemeralAd));
+  EXPECT_EQ(*known_user.GetPasswordSyncToken(kDefaultAccountId), "test");
 }
 
 TEST_F(KnownUserTest, CleanObsoletePrefs) {
@@ -658,66 +462,25 @@ TEST_F(KnownUserTest, CleanObsoletePrefs) {
   known_user.CleanObsoletePrefs();
 
   // Verify that only the obsolete pref has been removed.
-  EXPECT_FALSE(known_user.GetBooleanPref(kDefaultAccountId, kObsoletePrefName,
-                                         /*out_value=*/nullptr));
+  EXPECT_FALSE(known_user.FindBoolPath(kDefaultAccountId, kObsoletePrefName)
+                   .has_value());
 
-  bool custom_pref_value = false;
-  EXPECT_TRUE(known_user.GetBooleanPref(kDefaultAccountId, kCustomPrefName,
-                                        &custom_pref_value));
-  EXPECT_TRUE(custom_pref_value);
+  std::optional<bool> custom_pref_value =
+      known_user.FindBoolPath(kDefaultAccountId, kCustomPrefName);
+
+  EXPECT_TRUE(custom_pref_value.has_value());
+  EXPECT_TRUE(custom_pref_value.value());
 
   EXPECT_TRUE(known_user.GetIsEnterpriseManaged(kDefaultAccountId));
 }
 
-TEST_F(KnownUserTest, MigrateOfflineSigninLimit) {
-  KnownUser known_user(local_state());
-  const std::string kDeprecatedPrefName = "offline_signin_limit";
-  const std::string kNewPrefName = "offline_signin_limit2";
-
-  // Set a deprecated pref. base::TimeDelta() meant that value is not set.
-  known_user.SetPref(kDefaultAccountId, kDeprecatedPrefName,
-                     util::TimeDeltaToValue(base::TimeDelta()));
-
-  // Imitate that user is forced to online signin.
-  const char kUserForceOnlineSignin[] = "UserForceOnlineSignin";
-  {
-    DictionaryPrefUpdate force_online_update(local_state(),
-                                             kUserForceOnlineSignin);
-    force_online_update->SetKey(kDefaultAccountId.GetUserEmail(),
-                                base::Value(true));
-  }
-
-  const base::TimeDelta kLegitValue = base::TimeDelta::FromDays(14);
-  known_user.SetPref(kDefaultAccountId2, kDeprecatedPrefName,
-                     util::TimeDeltaToValue(kLegitValue));
-
-  known_user.CleanObsoletePrefs();
-
-  const base::Value* out_value = nullptr;
-  // Verify that the deprecated pref has been removed.
-  EXPECT_FALSE(
-      known_user.GetPref(kDefaultAccountId, kDeprecatedPrefName, &out_value));
-  EXPECT_FALSE(
-      known_user.GetPref(kDefaultAccountId2, kDeprecatedPrefName, &out_value));
-
-  EXPECT_FALSE(known_user.GetPref(kDefaultAccountId, kNewPrefName, &out_value));
-
-  EXPECT_TRUE(known_user.GetPref(kDefaultAccountId2, kNewPrefName, &out_value));
-  EXPECT_EQ(kLegitValue, util::ValueToTimeDelta(*out_value));
-
-  // Verify that user is not forced to online signin anymore.
-  const base::DictionaryValue* prefs_force_online =
-      local_state()->GetDictionary(kUserForceOnlineSignin);
-  EXPECT_FALSE(prefs_force_online->FindBoolKey(kDefaultAccountId.GetUserEmail())
-                   .value());
-}
-
 //
 // =============================================================================
-// Type-parametrized unittests for Set{String,Boolean,Integer,}Pref and
-// Get{String,Boolean,Integer,}Pref.
-// For every type (string, boolean, integer, raw base::Value) a PrefTypeInfo
-// struct is declared which is then referenced in the generic test code.
+// Type-parametrized unittests for Set{String,Boolean,Integer,Double,}Pref and
+// Get{String,Boolean,Integer,Double}Pref.
+// For every type (string, boolean, integer, double, raw base::Value) a
+// PrefTypeInfo struct is declared which is then referenced in the generic test
+// code.
 
 // Test type holder for known_user string prefs.
 struct PrefTypeInfoString {
@@ -725,7 +488,7 @@ struct PrefTypeInfoString {
   using PrefTypeForReading = std::string;
 
   static constexpr auto SetFunc = &KnownUser::SetStringPref;
-  static constexpr auto GetFunc = &KnownUser::GetStringPref;
+  static constexpr auto GetFunc = &KnownUser::GetStringPrefForTest;
 
   static PrefType CreatePrefValue() { return std::string("test"); }
   static bool CheckPrefValue(PrefTypeForReading read_value) {
@@ -742,7 +505,7 @@ struct PrefTypeInfoInteger {
   using PrefTypeForReading = int;
 
   static constexpr auto SetFunc = &KnownUser::SetIntegerPref;
-  static constexpr auto GetFunc = &KnownUser::GetIntegerPref;
+  static constexpr auto GetFunc = &KnownUser::GetIntegerPrefForTest;
 
   static PrefType CreatePrefValue() { return 7; }
   static bool CheckPrefValue(PrefTypeForReading read_value) {
@@ -753,13 +516,30 @@ struct PrefTypeInfoInteger {
   }
 };
 
+// Test type holder for known_user double prefs.
+struct PrefTypeInfoDouble {
+  using PrefType = double;
+  using PrefTypeForReading = double;
+
+  static constexpr auto SetFunc = &KnownUser::SetDoublePref;
+  static constexpr auto GetFunc = &KnownUser::GetDoublePrefForTest;
+
+  static PrefType CreatePrefValue() { return 5.25; }
+  static bool CheckPrefValue(PrefTypeForReading read_value) {
+    return read_value == 5.25;
+  }
+  static bool CheckPrefValueAsBaseValue(const base::Value& read_value) {
+    return read_value.is_double() && read_value.GetDouble() == 5.25;
+  }
+};
+
 // Test type holder for known_user boolean prefs.
 struct PrefTypeInfoBoolean {
   using PrefType = bool;
   using PrefTypeForReading = bool;
 
   static constexpr auto SetFunc = &KnownUser::SetBooleanPref;
-  static constexpr auto GetFunc = &KnownUser::GetBooleanPref;
+  static constexpr auto GetFunc = &KnownUser::GetBooleanPrefForTest;
 
   static PrefType CreatePrefValue() { return true; }
   static bool CheckPrefValue(PrefTypeForReading read_value) {
@@ -775,8 +555,8 @@ struct PrefTypeInfoValue {
   using PrefType = base::Value;
   using PrefTypeForReading = const base::Value*;
 
-  static constexpr auto SetFunc = &KnownUser::SetPref;
-  static constexpr auto GetFunc = &KnownUser::GetPref;
+  static constexpr auto SetFunc = &KnownUser::SetPath;
+  static constexpr auto GetFunc = &KnownUser::GetPrefForTest;
 
   static PrefType CreatePrefValue() { return base::Value("test"); }
   static bool CheckPrefValue(PrefTypeForReading read_value) {
@@ -794,9 +574,19 @@ class KnownUserWithPrefTypeTest : public KnownUserTest {
   ~KnownUserWithPrefTypeTest() = default;
 };
 
-TYPED_TEST_SUITE_P(KnownUserWithPrefTypeTest);
+// This must be an alias because the preprocessor does not understand <> so if
+// it was directly embedded in the TYPED_TEST_SUITE macro the preprocessor
+// would be confused on the comma.
+using AllTypeInfos = testing::Types<PrefTypeInfoString,
+                                    PrefTypeInfoInteger,
+                                    PrefTypeInfoDouble,
+                                    PrefTypeInfoBoolean,
+                                    PrefTypeInfoValue>;
 
-TYPED_TEST_P(KnownUserWithPrefTypeTest, ReadOnNonExistingUser) {
+// TYPED_TEST_SUITE_P would declare a global with an exit-time destructor.
+TYPED_TEST_SUITE(KnownUserWithPrefTypeTest, AllTypeInfos);
+
+TYPED_TEST(KnownUserWithPrefTypeTest, ReadOnNonExistingUser) {
   KnownUser known_user(KnownUserTest::local_state());
 
   constexpr char kPrefName[] = "some_pref";
@@ -809,7 +599,7 @@ TYPED_TEST_P(KnownUserWithPrefTypeTest, ReadOnNonExistingUser) {
   EXPECT_FALSE(read_success);
 }
 
-TYPED_TEST_P(KnownUserWithPrefTypeTest, ReadMissingPrefOnExistingUser) {
+TYPED_TEST(KnownUserWithPrefTypeTest, ReadMissingPrefOnExistingUser) {
   KnownUser known_user(KnownUserTest::local_state());
 
   constexpr char kPrefName[] = "some_pref";
@@ -822,7 +612,7 @@ TYPED_TEST_P(KnownUserWithPrefTypeTest, ReadMissingPrefOnExistingUser) {
   EXPECT_FALSE(read_success);
 }
 
-TYPED_TEST_P(KnownUserWithPrefTypeTest, ReadExistingPref) {
+TYPED_TEST(KnownUserWithPrefTypeTest, ReadExistingPref) {
   KnownUser known_user(KnownUserTest::local_state());
 
   constexpr char kPrefName[] = "some_pref";
@@ -836,10 +626,10 @@ TYPED_TEST_P(KnownUserWithPrefTypeTest, ReadExistingPref) {
   bool read_success =
       (known_user.*TypeParam::GetFunc)(kUser, kPrefName, &read_result);
   EXPECT_TRUE(read_success);
-  TypeParam::CheckPrefValue(read_result);
+  EXPECT_TRUE(TypeParam::CheckPrefValue(read_result));
 }
 
-TYPED_TEST_P(KnownUserWithPrefTypeTest, ReadExistingPrefAsValue) {
+TYPED_TEST(KnownUserWithPrefTypeTest, ReadExistingPrefAsValue) {
   KnownUser known_user(KnownUserTest::local_state());
 
   constexpr char kPrefName[] = "some_pref";
@@ -850,29 +640,10 @@ TYPED_TEST_P(KnownUserWithPrefTypeTest, ReadExistingPrefAsValue) {
                                    TypeParam::CreatePrefValue());
 
   const base::Value* read_result;
-  bool read_success = known_user.GetPref(kUser, kPrefName, &read_result);
+  bool read_success = known_user.GetPrefForTest(kUser, kPrefName, &read_result);
   EXPECT_TRUE(read_success);
   ASSERT_TRUE(read_result);
-  TypeParam::CheckPrefValueAsBaseValue(*read_result);
+  EXPECT_TRUE(TypeParam::CheckPrefValueAsBaseValue(*read_result));
 }
-
-REGISTER_TYPED_TEST_SUITE_P(KnownUserWithPrefTypeTest,
-                            // All test functions must be listed:
-                            ReadOnNonExistingUser,
-                            ReadMissingPrefOnExistingUser,
-                            ReadExistingPref,
-                            ReadExistingPrefAsValue);
-
-// This must be an alias because the preprocessor does not understand <> so if
-// it was directly embedded in the INSTANTIATE_TYPED_TEST_SUITE_P macro the
-// prepocessor would be confused on the comma.
-using AllTypeInfos = testing::Types<PrefTypeInfoString,
-                                    PrefTypeInfoInteger,
-                                    PrefTypeInfoBoolean,
-                                    PrefTypeInfoValue>;
-
-INSTANTIATE_TYPED_TEST_SUITE_P(AllTypes,
-                               KnownUserWithPrefTypeTest,
-                               AllTypeInfos);
 
 }  // namespace user_manager

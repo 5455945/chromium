@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,6 +19,7 @@ std::unique_ptr<AlgorithmImplementation> CreateAesCbcImplementation();
 std::unique_ptr<AlgorithmImplementation> CreateAesCtrImplementation();
 std::unique_ptr<AlgorithmImplementation> CreateAesGcmImplementation();
 std::unique_ptr<AlgorithmImplementation> CreateAesKwImplementation();
+std::unique_ptr<AlgorithmImplementation> CreateChaCha20Poly1305Implementation();
 std::unique_ptr<AlgorithmImplementation> CreateHmacImplementation();
 std::unique_ptr<AlgorithmImplementation> CreateRsaOaepImplementation();
 std::unique_ptr<AlgorithmImplementation> CreateRsaSsaImplementation();
@@ -29,6 +30,9 @@ std::unique_ptr<AlgorithmImplementation> CreateHkdfImplementation();
 std::unique_ptr<AlgorithmImplementation> CreatePbkdf2Implementation();
 std::unique_ptr<AlgorithmImplementation> CreateEd25519Implementation();
 std::unique_ptr<AlgorithmImplementation> CreateX25519Implementation();
+std::unique_ptr<AlgorithmImplementation> CreateMlDsaImplementation();
+std::unique_ptr<AlgorithmImplementation> CreateMlKemImplementation();
+std::unique_ptr<AlgorithmImplementation> CreateMlKem768X25519Implementation();
 
 }  // namespace webcrypto
 

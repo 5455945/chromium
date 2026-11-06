@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,22 +6,23 @@
 #define CHROME_BROWSER_UI_VIEWS_FRAME_BROWSER_DESKTOP_WINDOW_TREE_HOST_WIN_H_
 
 #include <shobjidl.h>
+
 #include <wrl/client.h>
 
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/win/scoped_gdi_object.h"
 #include "chrome/browser/profiles/profile_attributes_storage.h"
 #include "chrome/browser/ui/views/frame/browser_desktop_window_tree_host.h"
-#include "chrome/browser/ui/views/frame/minimize_button_metrics_win.h"
+#include "ui/base/mojom/window_show_state.mojom-forward.h"
 #include "ui/views/widget/desktop_aura/desktop_window_tree_host_win.h"
 
-class BrowserFrame;
+class BrowserWidget;
 class BrowserView;
 class BrowserWindowPropertyManager;
 class VirtualDesktopHelper;
@@ -29,7 +30,7 @@ class VirtualDesktopHelper;
 namespace views {
 class DesktopNativeWidgetAura;
 class NativeMenuWin;
-}
+}  // namespace views
 
 class BrowserDesktopWindowTreeHostWin
     : public BrowserDesktopWindowTreeHost,
@@ -40,7 +41,7 @@ class BrowserDesktopWindowTreeHostWin
       views::internal::NativeWidgetDelegate* native_widget_delegate,
       views::DesktopNativeWidgetAura* desktop_native_widget_aura,
       BrowserView* browser_view,
-      BrowserFrame* browser_frame);
+      BrowserWidget* browser_widget);
   BrowserDesktopWindowTreeHostWin(const BrowserDesktopWindowTreeHostWin&) =
       delete;
   BrowserDesktopWindowTreeHostWin& operator=(
@@ -52,22 +53,20 @@ class BrowserDesktopWindowTreeHostWin
 
   // Overridden from BrowserDesktopWindowTreeHost:
   DesktopWindowTreeHost* AsDesktopWindowTreeHost() override;
-  int GetMinimizeButtonOffset() const override;
+  void ShowCustomSystemMenu(const gfx::Point& screen_point) override;
   bool UsesNativeSystemMenu() const override;
 
   // Overridden from DesktopWindowTreeHostWin:
   void Init(const views::Widget::InitParams& params) override;
-  void Show(ui::WindowShowState show_state,
+  void Show(ui::mojom::WindowShowState show_state,
             const gfx::Rect& restore_bounds) override;
   std::string GetWorkspace() const override;
   int GetInitialShowState() const override;
   bool GetClientAreaInsets(gfx::Insets* insets,
-                           HMONITOR monitor) const override;
+                           int frame_thickness) const override;
   bool GetDwmFrameInsetsInPixels(gfx::Insets* insets) const override;
   void HandleCreate() override;
   void HandleDestroying() override;
-  void HandleFrameChanged() override;
-  void HandleWindowScaleFactorChanged(float window_scale_factor) override;
   bool PreHandleMSG(UINT message,
                     WPARAM w_param,
                     LPARAM l_param,
@@ -76,6 +75,8 @@ class BrowserDesktopWindowTreeHostWin
   views::FrameMode GetFrameMode() const override;
   bool ShouldUseNativeFrame() const override;
   bool ShouldWindowContentsBeTransparent() const override;
+  void HandleWindowMinimizedOrRestored(bool restored) override;
+  void ClientDestroyedWidget() override;
 
   // ProfileAttributesStorage::Observer:
   void OnProfileAvatarChanged(const base::FilePath& profile_path) override;
@@ -87,14 +88,13 @@ class BrowserDesktopWindowTreeHostWin
   // WindowTreeHost of its value.
   void UpdateWorkspace();
 
-  bool IsOpaqueHostedAppFrame() const;
-
   void SetWindowIcon(bool badged);
 
-  BrowserView* browser_view_;
-  BrowserFrame* browser_frame_;
+  // Shows the custom Views system menu at the default location (top left).
+  void ShowViewsSystemMenuAtDefaultLocation();
 
-  MinimizeButtonMetrics minimize_button_metrics_;
+  raw_ptr<BrowserView> browser_view_;
+  raw_ptr<BrowserWidget> browser_widget_;
 
   std::unique_ptr<BrowserWindowPropertyManager>
       browser_window_property_manager_;
@@ -108,7 +108,9 @@ class BrowserDesktopWindowTreeHostWin
                           ProfileAttributesStorage::Observer>
       profile_observation_{this};
 
-  base::win::ScopedHICON icon_handle_;
+  // The badged window icon, which this window created and owns. Empty while
+  // the window shows the shared app icon, which must never be destroyed.
+  base::win::ScopedGDIObject<HICON> badged_icon_;
 
   // This will be null pre Win10.
   scoped_refptr<VirtualDesktopHelper> virtual_desktop_helper_;

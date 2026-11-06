@@ -1,17 +1,19 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "mojo/public/cpp/bindings/generic_pending_receiver.h"
 
-#include "base/strings/string_piece.h"
+#include <string_view>
+
+#include "base/trace_event/trace_event.h"
 
 namespace mojo {
 
 GenericPendingReceiver::GenericPendingReceiver() = default;
 
 GenericPendingReceiver::GenericPendingReceiver(
-    base::StringPiece interface_name,
+    std::string_view interface_name,
     mojo::ScopedMessagePipeHandle receiving_pipe)
     : interface_name_(std::string(interface_name)),
       pipe_(std::move(receiving_pipe)) {}
@@ -38,9 +40,15 @@ mojo::ScopedMessagePipeHandle GenericPendingReceiver::PassPipe() {
 mojo::ScopedMessagePipeHandle GenericPendingReceiver::PassPipeIfNameIs(
     const char* interface_name) {
   DCHECK(is_valid());
-  if (interface_name_ == interface_name)
+  if (interface_name_ == interface_name) {
     return PassPipe();
+  }
   return mojo::ScopedMessagePipeHandle();
+}
+
+void GenericPendingReceiver::WriteIntoTrace(perfetto::TracedValue ctx) const {
+  auto dict = std::move(ctx).WriteDictionary();
+  dict.Add("interface_name", interface_name_);
 }
 
 }  // namespace mojo

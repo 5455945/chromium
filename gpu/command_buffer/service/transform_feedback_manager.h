@@ -1,4 +1,4 @@
-// Copyright (c) 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,8 @@
 #include <unordered_map>
 #include <vector>
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "gpu/command_buffer/service/gl_utils.h"
 #include "gpu/command_buffer/service/indexed_buffer_binding_host.h"
 #include "gpu/gpu_gles2_export.h"
@@ -17,6 +18,7 @@ namespace gpu {
 namespace gles2 {
 
 class Buffer;
+class Program;
 class TransformFeedbackManager;
 
 // Info about TransformFeedbacks currently in the system.
@@ -57,6 +59,13 @@ class GPU_GLES2_EXPORT TransformFeedback : public IndexedBufferBindingHost {
     return paused_;
   }
 
+  bool AttachedBuffersAreLocked() const override;
+
+  void SetActiveProgram(Program* program);
+  void ClearActiveProgram();
+
+  Program* active_program() const { return active_program_.get(); }
+
   GLenum primitive_mode() const {
     return primitive_mode_;
   }
@@ -83,7 +92,7 @@ class GPU_GLES2_EXPORT TransformFeedback : public IndexedBufferBindingHost {
   ~TransformFeedback() override;
 
   // The manager that owns this Buffer.
-  TransformFeedbackManager* manager_;
+  raw_ptr<TransformFeedbackManager> manager_;
 
   GLuint client_id_;
   GLuint service_id_;
@@ -95,6 +104,24 @@ class GPU_GLES2_EXPORT TransformFeedback : public IndexedBufferBindingHost {
 
   GLenum primitive_mode_;
   GLsizei vertices_drawn_;
+
+  scoped_refptr<Program> active_program_;
+};
+
+class GPU_GLES2_EXPORT ScopedPauseResumeTransformFeedback {
+ public:
+  explicit ScopedPauseResumeTransformFeedback(
+      TransformFeedback* transform_feedback);
+
+  ScopedPauseResumeTransformFeedback(
+      const ScopedPauseResumeTransformFeedback&) = delete;
+  ScopedPauseResumeTransformFeedback& operator=(
+      const ScopedPauseResumeTransformFeedback&) = delete;
+
+  ~ScopedPauseResumeTransformFeedback();
+
+ private:
+  raw_ptr<TransformFeedback> transform_feedback_;
 };
 
 // This class keeps tracks of the transform feedbacks and their states.
@@ -105,6 +132,10 @@ class GPU_GLES2_EXPORT TransformFeedbackManager {
   // out-of-bounds buffer accesses.
   TransformFeedbackManager(GLuint max_transform_feedback_separate_attribs,
                            bool needs_emulation);
+
+  TransformFeedbackManager(const TransformFeedbackManager&) = delete;
+  TransformFeedbackManager& operator=(const TransformFeedbackManager&) = delete;
+
   ~TransformFeedbackManager();
 
   void MarkContextLost() {
@@ -145,8 +176,6 @@ class GPU_GLES2_EXPORT TransformFeedbackManager {
 
   bool needs_emulation_;
   bool lost_context_;
-
-  DISALLOW_COPY_AND_ASSIGN(TransformFeedbackManager);
 };
 
 }  // namespace gles2

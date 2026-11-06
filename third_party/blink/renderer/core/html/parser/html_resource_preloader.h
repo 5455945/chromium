@@ -28,9 +28,10 @@
 
 #include <memory>
 
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/html/parser/preload_request.h"
 #include "third_party/blink/renderer/core/html/parser/resource_preloader.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/text/text_position.h"
 
 namespace blink {
@@ -48,6 +49,16 @@ class CORE_EXPORT HTMLResourcePreloader
   HTMLResourcePreloader& operator=(const HTMLResourcePreloader&) = delete;
 
   void Trace(Visitor*) const;
+
+  // Centralized logic to determine if a preload request should be
+  // initiated. This is used by the parser to avoid queueing and by
+  // the preloader to filter requests, primarily for experiments
+  // like `kLightweightNoStatePrefetch`.
+  static bool ShouldPreload(const Document* document,
+                            ResourceType type,
+                            bool is_preconnect,
+                            FetchParameters::DeferOption defer_option,
+                            mojom::blink::FetchPriorityHint priority_hint);
 
  protected:
   void Preload(std::unique_ptr<PreloadRequest>) override;

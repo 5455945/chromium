@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,6 +21,10 @@ namespace {
 class KeyEventDelegate : public aura::test::TestWindowDelegate {
  public:
   KeyEventDelegate() = default;
+
+  KeyEventDelegate(const KeyEventDelegate&) = delete;
+  KeyEventDelegate& operator=(const KeyEventDelegate&) = delete;
+
   ~KeyEventDelegate() override = default;
 
   // ui::EventHandler overrides:
@@ -34,8 +38,6 @@ class KeyEventDelegate : public aura::test::TestWindowDelegate {
 
  private:
   std::unique_ptr<ui::KeyEvent> key_event;
-
-  DISALLOW_COPY_AND_ASSIGN(KeyEventDelegate);
 };
 
 }  // namespace
@@ -44,8 +46,8 @@ using MagnifierKeyScrollerTest = AshTestBase;
 
 TEST_F(MagnifierKeyScrollerTest, Basic) {
   KeyEventDelegate delegate;
-  std::unique_ptr<aura::Window> window(CreateTestWindowInShellWithDelegate(
-      &delegate, 0, gfx::Rect(10, 10, 100, 100)));
+  std::unique_ptr<aura::Window> window(CreateTestWindowInShell(
+      {.delegate = &delegate, .bounds = {10, 10, 100, 100}, .window_id = 0}));
   wm::ActivateWindow(window.get());
 
   MagnifierKeyScroller::ScopedEnablerForTest scoped;
@@ -65,7 +67,7 @@ TEST_F(MagnifierKeyScrollerTest, Basic) {
   EXPECT_EQ("200,150", controller->GetWindowPosition().ToString());
   base::RunLoop().RunUntilIdle();
   ASSERT_TRUE(delegate.event());
-  EXPECT_EQ(ui::ET_KEY_PRESSED, delegate.event()->type());
+  EXPECT_EQ(ui::EventType::kKeyPressed, delegate.event()->type());
   delegate.reset();
 
   // Click and hold scrolls the magnifier screen.
@@ -86,27 +88,27 @@ TEST_F(MagnifierKeyScrollerTest, Basic) {
 
   generator->PressKey(ui::VKEY_DOWN, ui::EF_SHIFT_DOWN);
   ASSERT_TRUE(delegate.event());
-  EXPECT_EQ(ui::ET_KEY_PRESSED, delegate.event()->type());
+  EXPECT_EQ(ui::EventType::kKeyPressed, delegate.event()->type());
   delegate.reset();
 
   generator->ReleaseKey(ui::VKEY_DOWN, 0);
   ASSERT_TRUE(delegate.event());
-  EXPECT_EQ(ui::ET_KEY_RELEASED, delegate.event()->type());
+  EXPECT_EQ(ui::EventType::kKeyReleased, delegate.event()->type());
   delegate.reset();
 
   generator->PressKey(ui::VKEY_DOWN, ui::EF_SHIFT_DOWN);
   ASSERT_TRUE(delegate.event());
-  EXPECT_EQ(ui::ET_KEY_PRESSED, delegate.event()->type());
+  EXPECT_EQ(ui::EventType::kKeyPressed, delegate.event()->type());
   delegate.reset();
 
   generator->PressKey(ui::VKEY_DOWN, ui::EF_SHIFT_DOWN);
   ASSERT_TRUE(delegate.event());
-  EXPECT_EQ(ui::ET_KEY_PRESSED, delegate.event()->type());
+  EXPECT_EQ(ui::EventType::kKeyPressed, delegate.event()->type());
   delegate.reset();
 
   generator->ReleaseKey(ui::VKEY_DOWN, 0);
   ASSERT_TRUE(delegate.event());
-  EXPECT_EQ(ui::ET_KEY_RELEASED, delegate.event()->type());
+  EXPECT_EQ(ui::EventType::kKeyReleased, delegate.event()->type());
   delegate.reset();
 }
 

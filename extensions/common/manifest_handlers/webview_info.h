@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,8 @@
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/extension_id.h"
 #include "extensions/common/manifest_handler.h"
 
 namespace extensions {
@@ -22,41 +22,47 @@ class PartitionItem;
 // "webview" key.
 class WebviewInfo : public Extension::ManifestData {
  public:
-  // Returns true if |extension|'s resource at |relative_path| is accessible
-  // from the WebView partition with ID |partition_id|.
+  static const char* kManifestDataKey;
+
+  // Returns true if `extension`'s resource at `relative_path` is accessible
+  // from the WebView partition with ID `partition_id`.
   static bool IsResourceWebviewAccessible(const Extension* extension,
                                           const std::string& partition_id,
                                           const std::string& relative_path);
-  // Returns true if the given |extension| has any webview accessible
-  // resources in the given |partition_id|.
+  // Returns true if the given `extension` has any webview accessible
+  // resources in the given `partition_id`.
   static bool HasWebviewAccessibleResources(const Extension& extension,
                                             const std::string& partition_id);
 
   // Define out of line constructor/destructor to please Clang.
-  explicit WebviewInfo(const std::string& extension_id);
+  explicit WebviewInfo(const ExtensionId& extension_id);
+
+  WebviewInfo(const WebviewInfo&) = delete;
+  WebviewInfo& operator=(const WebviewInfo&) = delete;
+
   ~WebviewInfo() override;
 
   void AddPartitionItem(std::unique_ptr<PartitionItem> item);
 
  private:
-  std::string extension_id_;
+  ExtensionId extension_id_;
   std::vector<std::unique_ptr<PartitionItem>> partition_items_;
-
-  DISALLOW_COPY_AND_ASSIGN(WebviewInfo);
 };
 
 // Parses the "webview" manifest key.
 class WebviewHandler : public ManifestHandler {
  public:
   WebviewHandler();
+
+  WebviewHandler(const WebviewHandler&) = delete;
+  WebviewHandler& operator=(const WebviewHandler&) = delete;
+
   ~WebviewHandler() override;
 
   bool Parse(Extension* extension, std::u16string* error) override;
 
  private:
   base::span<const char* const> Keys() const override;
-
-  DISALLOW_COPY_AND_ASSIGN(WebviewHandler);
 };
 
 }  // namespace extensions

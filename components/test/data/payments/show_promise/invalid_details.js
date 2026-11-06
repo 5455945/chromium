@@ -1,22 +1,22 @@
 /*
- * Copyright 2019 The Chromium Authors. All rights reserved.
+ * Copyright 2019 The Chromium Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
 
 /**
- * Launch PaymentRequest with a show promise that resolve with invalid details.
- * @param {boolean} useUrlPaymentMethod - Whether URL payment method should be
- * used. Useful for payment handlers, which cannot use basic-card payment
- * method. By default, basic-card payment method is used.
+ * Launch PaymentRequest with a show promise that resolve with invalid details
+ * (a negative total amount).
+ * @param {string} supportedMethods The payment method identifier.
+ * @return {string} - The error message, if any.
  */
-function buy(useUrlPaymentMethod) { // eslint-disable-line no-unused-vars
+async function buy(supportedMethods) {
+  if (!supportedMethods) {
+    print('supportedMethods required');
+    return 'supportedMethods required';
+  }
   try {
-    let supportedMethods = 'basic-card';
-    if (useUrlPaymentMethod) {
-      supportedMethods = window.location.href;
-    }
-    new PaymentRequest([{supportedMethods}], {
+    await new PaymentRequest([{supportedMethods}], {
       total: {
         label: 'PENDING TOTAL',
         amount: {currency: 'USD', value: '99.99'},
@@ -26,14 +26,14 @@ function buy(useUrlPaymentMethod) { // eslint-disable-line no-unused-vars
           resolve({
             total: {
               label: 'Total',
-              amount: {currency: 'USD', value: '-1.00'},
+              amount: {currency: 'USD', value: '-1.00'}, // -1.00 is not valid.
             },
           });
-        }))
-        .catch(function(error) {
-          print(error);
-        });
+        }));
   } catch (error) {
-    print(error.message);
+    // Error is both printed and returned as the Java test reads it from the
+    // page and the C++ browser test reads the return value.
+    print(error);
+    return error.toString();
   }
 }

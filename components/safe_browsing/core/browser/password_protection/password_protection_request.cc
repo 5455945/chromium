@@ -1,26 +1,34 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/safe_browsing/core/browser/password_protection/password_protection_request.h"
 
 #include <cstddef>
+#include <optional>
+#include <string>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/strings/escape.h"
 #include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/sequenced_task_runner.h"
+#include "build/build_config.h"
 #include "components/safe_browsing/core/browser/db/allowlist_checker_client.h"
 #include "components/safe_browsing/core/browser/db/database_manager.h"
 #include "components/safe_browsing/core/browser/password_protection/password_protection_service_base.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/safebrowsing_constants.h"
+#include "components/safe_browsing/core/common/utils.h"
 #include "components/url_formatter/url_formatter.h"
-#include "net/base/escape.h"
 #include "net/base/load_flags.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_status_code.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
+#include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/simple_url_loader.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 #include "ui/gfx/geometry/size.h"
 #include "url/gurl.h"
 
@@ -45,12 +53,12 @@ std::vector<std::string> GetMatchingDomains(
     // to be special handing and should use affiliation information instead of
     // the signon_realm.
     std::string domain = base::UTF16ToUTF8(url_formatter::FormatUrl(
-        GURL(credential.signon_realm),
+        credential.url,
         url_formatter::kFormatUrlOmitDefaults |
             url_formatter::kFormatUrlOmitHTTPS |
             url_formatter::kFormatUrlOmitTrivialSubdomains |
             url_formatter::kFormatUrlTrimAfterHost,
-        net::UnescapeRule::SPACES, nullptr, nullptr, nullptr));
+        base::UnescapeRule::SPACES, nullptr, nullptr, nullptr));
     matching_domains.push_back(std::move(domain));
   }
   return base::flat_set<std::string>(std::move(matching_domains)).extract();
@@ -72,7 +80,8 @@ PasswordProtectionRequest::PasswordProtectionRequest(
     LoginReputationClientRequest::TriggerType type,
     bool password_field_exists,
     PasswordProtectionServiceBase* pps,
-    int request_timeout_in_ms)
+    int request_timeout_in_ms,
+    std::optional<OtpPhishingVerdictCallback> otp_phishing_verdict_callback)
     : base::RefCountedDeleteOnSequence<PasswordProtectionRequest>(
           std::move(ui_task_runner)),
       request_proto_(std::make_unique<LoginReputationClientRequest>()),
@@ -89,11 +98,14 @@ PasswordProtectionRequest::PasswordProtectionRequest(
       password_field_exists_(password_field_exists),
       password_protection_service_(pps),
       request_timeout_in_ms_(request_timeout_in_ms),
-      is_modal_warning_showing_(false) {
+      is_modal_warning_showing_(false),
+      otp_phishing_verdict_callback_(std::move(otp_phishing_verdict_callback)) {
   DCHECK(this->ui_task_runner()->RunsTasksInCurrentSequence());
 
   DCHECK(trigger_type_ == LoginReputationClientRequest::UNFAMILIAR_LOGIN_PAGE ||
-         trigger_type_ == LoginReputationClientRequest::PASSWORD_REUSE_EVENT);
+         trigger_type_ == LoginReputationClientRequest::PASSWORD_REUSE_EVENT ||
+         trigger_type_ ==
+             LoginReputationClientRequest::ONE_TIME_PASSWORD_FIELD_DETECTED);
   DCHECK(trigger_type_ != LoginReputationClientRequest::PASSWORD_REUSE_EVENT ||
          password_type_ != PasswordType::SAVED_PASSWORD ||
          !matching_reused_credentials_.empty());
@@ -120,28 +132,16 @@ void PasswordProtectionRequest::CheckAllowlist() {
     return;
   }
 
-  // Start a task on the IO thread to check the allowlist. It may
-  // callback immediately on the IO thread or take some time if a full-hash-
+  // Start a task on the UI thread to check the allowlist. It may
+  // callback immediately on the UI thread or take some time if a full-hash-
   // check is required.
-  auto result_callback =
-      base::BindOnce(&OnAllowlistCheckDoneOnIO, ui_task_runner(), AsWeakPtr());
+  auto result_callback = base::BindOnce(
+      &PasswordProtectionRequest::OnAllowlistCheckDone, AsWeakPtr());
   tracker_.PostTask(
-      io_task_runner_.get(), FROM_HERE,
+      ui_task_runner().get(), FROM_HERE,
       base::BindOnce(&AllowlistCheckerClient::StartCheckCsdAllowlist,
                      password_protection_service_->database_manager(),
                      main_frame_url_, std::move(result_callback)));
-}
-
-// static
-void PasswordProtectionRequest::OnAllowlistCheckDoneOnIO(
-    scoped_refptr<base::SequencedTaskRunner> ui_task_runner,
-    base::WeakPtr<PasswordProtectionRequest> weak_request,
-    bool match_allowlist) {
-  // Don't access weak_request on IO thread. Move it back to UI thread first.
-  ui_task_runner->PostTask(
-      FROM_HERE,
-      base::BindOnce(&PasswordProtectionRequest::OnAllowlistCheckDone,
-                     weak_request, match_allowlist));
 }
 
 void PasswordProtectionRequest::OnAllowlistCheckDone(bool match_allowlist) {
@@ -212,7 +212,9 @@ void PasswordProtectionRequest::FillRequestProto(bool is_sampled_ping) {
     request_proto_->set_report_type(LoginReputationClientRequest::FULL_REPORT);
   }
 
-  password_protection_service_->FillUserPopulation(request_proto_.get());
+  password_protection_service_->FillUserPopulation(main_frame_url_,
+                                                   request_proto_.get());
+
   request_proto_->set_stored_verdict_cnt(
       password_protection_service_->GetStoredVerdictCount(trigger_type_));
 
@@ -220,7 +222,7 @@ void PasswordProtectionRequest::FillRequestProto(bool is_sampled_ping) {
       password_protection_service_->UserClickedThroughSBInterstitial(this);
   request_proto_->set_clicked_through_interstitial(
       clicked_through_interstitial);
-  request_proto_->set_content_type(mime_type_);
+  request_proto_->set_content_type(*mime_type_);
 
 #if BUILDFLAG(FULL_SAFE_BROWSING)
   if (password_protection_service_->IsExtendedReporting() &&
@@ -232,11 +234,15 @@ void PasswordProtectionRequest::FillRequestProto(bool is_sampled_ping) {
   }
 #endif  // BUILDFLAG(FULL_SAFE_BROWSING)
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   SetReferringAppInfo();
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
 
   switch (trigger_type_) {
+    case LoginReputationClientRequest::ONE_TIME_PASSWORD_FIELD_DETECTED: {
+      // No additional fields need to be set.
+      break;
+    }
     case LoginReputationClientRequest::UNFAMILIAR_LOGIN_PAGE: {
       LoginReputationClientRequest::Frame::Form* password_form;
       if (password_form_frame_url_ == main_frame_url_) {
@@ -256,36 +262,27 @@ void PasswordProtectionRequest::FillRequestProto(bool is_sampled_ping) {
       main_frame->set_has_password_field(password_field_exists_);
       LoginReputationClientRequest::PasswordReuseEvent* reuse_event =
           request_proto_->mutable_password_reuse_event();
-      bool matches_signin_password =
-          password_type_ == PasswordType::PRIMARY_ACCOUNT_PASSWORD;
-      reuse_event->set_is_chrome_signin_password(matches_signin_password);
       reuse_event->set_reused_password_type(
           password_protection_service_->GetPasswordProtectionReusedPasswordType(
               password_type_));
-      if (matches_signin_password) {
-        reuse_event->set_sync_account_type(
-            password_protection_service_->GetSyncAccountType());
-        LogSyncAccountType(reuse_event->sync_account_type());
-      }
 
       if (password_protection_service_->IsExtendedReporting() &&
           !password_protection_service_->IsIncognito()) {
         for (const auto& domain : matching_domains_) {
           reuse_event->add_domains_matching_password(domain);
           if (reuse_event->domains_matching_password_size() >=
-              kMaxReusedDomains)
+              kMaxReusedDomains) {
             break;
+          }
         }
       }
-      if (base::FeatureList::IsEnabled(
-              safe_browsing::kPasswordProtectionForSignedInUsers)) {
-        ReusedPasswordAccountType password_account_type_to_add =
-            password_protection_service_
-                ->GetPasswordProtectionReusedPasswordAccountType(password_type_,
-                                                                 username_);
-        *reuse_event->mutable_reused_password_account_type() =
-            password_account_type_to_add;
-      }
+      ReusedPasswordAccountType password_account_type_to_add =
+          password_protection_service_
+              ->GetPasswordProtectionReusedPasswordAccountType(password_type_,
+                                                               username_);
+      *reuse_event->mutable_reused_password_account_type() =
+          password_account_type_to_add;
+      LogReusedPasswordAccountType(password_account_type_to_add);
       break;
     }
     default:
@@ -294,7 +291,7 @@ void PasswordProtectionRequest::FillRequestProto(bool is_sampled_ping) {
 
 #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
   if (IsClientSideDetectionEnabled()) {
-    GetDomFeatures();
+    AddDebuggingMetadata();
   } else if (IsVisualFeaturesEnabled()) {
     MaybeCollectVisualFeatures();
   } else {
@@ -319,9 +316,8 @@ void PasswordProtectionRequest::SendRequest() {
   DCHECK(ui_task_runner()->RunsTasksInCurrentSequence());
   if (password_protection_service_->CanGetAccessToken() &&
       password_protection_service_->token_fetcher()) {
-    password_protection_service_->token_fetcher()->Start(
-        base::BindOnce(&PasswordProtectionRequest::SendRequestWithToken,
-                       weak_factory_.GetWeakPtr()));
+    password_protection_service_->token_fetcher()->Start(base::BindOnce(
+        &PasswordProtectionRequest::SendRequestWithToken, AsWeakPtr()));
     return;
   }
   std::string empty_access_token;
@@ -335,7 +331,7 @@ void PasswordProtectionRequest::SendRequestWithToken(
   MaybeAddPingToWebUI(access_token);
 
   std::string serialized_request;
-  // TODO(crbug.com/1158582): Return early if request serialization fails.
+  // TODO(crbug.com/40054172): Return early if request serialization fails.
   request_proto_->SerializeToString(&serialized_request);
 
   net::NetworkTrafficAnnotationTag traffic_annotation =
@@ -349,7 +345,9 @@ void PasswordProtectionRequest::SendRequestWithToken(
             "phishing."
           trigger:
             "When a user focuses on a password field on a page that they "
-            "haven't visited before and that isn't popular or known to be safe."
+            "haven't visited before and that isn't popular or known to be "
+            "safe, or when a user re-uses their password on a site that isn't "
+            "popular or known to be safe."
           data:
             "URL and referrer of the current page, password form action, and "
             "iframe structure."
@@ -374,9 +372,7 @@ void PasswordProtectionRequest::SendRequestWithToken(
   bool has_access_token = !access_token.empty();
   LogPasswordProtectionRequestTokenHistogram(trigger_type_, has_access_token);
   if (has_access_token) {
-    resource_request->headers.SetHeader(
-        net::HttpRequestHeaders::kAuthorization,
-        base::StrCat({kAuthHeaderBearer, access_token}));
+    SetAccessToken(resource_request.get(), access_token);
   }
   resource_request->url =
       PasswordProtectionServiceBase::GetPasswordProtectionRequestUrl();
@@ -387,10 +383,12 @@ void PasswordProtectionRequest::SendRequestWithToken(
   url_loader_->AttachStringForUpload(serialized_request,
                                      "application/octet-stream");
   request_start_time_ = base::TimeTicks::Now();
-  url_loader_->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
-      password_protection_service_->url_loader_factory().get(),
-      base::BindOnce(&PasswordProtectionRequest::OnURLLoaderComplete,
-                     AsWeakPtr()));
+  if (!prevent_initiating_url_loader_for_testing_) {
+    url_loader_->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
+        password_protection_service_->url_loader_factory().get(),
+        base::BindOnce(&PasswordProtectionRequest::OnURLLoaderComplete,
+                       AsWeakPtr()));
+  }
 }
 
 void PasswordProtectionRequest::StartTimeout() {
@@ -403,21 +401,21 @@ void PasswordProtectionRequest::StartTimeout() {
   ui_task_runner()->PostDelayedTask(
       FROM_HERE,
       base::BindOnce(&PasswordProtectionRequest::Cancel, AsWeakPtr(), true),
-      base::TimeDelta::FromMilliseconds(request_timeout_in_ms_));
+      base::Milliseconds(request_timeout_in_ms_));
 }
 
 void PasswordProtectionRequest::OnURLLoaderComplete(
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   DCHECK(ui_task_runner()->RunsTasksInCurrentSequence());
   int response_code = 0;
-  if (url_loader_->ResponseInfo() && url_loader_->ResponseInfo()->headers)
+  if (url_loader_->ResponseInfo() && url_loader_->ResponseInfo()->headers) {
     response_code = url_loader_->ResponseInfo()->headers->response_code();
+  }
 
   const bool is_success = url_loader_->NetError() == net::OK;
 
   LogPasswordProtectionNetworkResponseAndDuration(
-      is_success ? response_code : url_loader_->NetError(),
-      request_start_time_);
+      response_code, url_loader_->NetError(), request_start_time_);
 
   if (!is_success || net::HTTP_OK != response_code) {
     Finish(RequestOutcome::FETCH_FAILED, nullptr);
@@ -452,6 +450,9 @@ void PasswordProtectionRequest::Finish(
                                                              username_);
     if (trigger_type_ == LoginReputationClientRequest::UNFAMILIAR_LOGIN_PAGE) {
       LogPasswordOnFocusRequestOutcome(outcome);
+    } else if (trigger_type_ ==
+               LoginReputationClientRequest::ONE_TIME_PASSWORD_FIELD_DETECTED) {
+      LogOneTimePasswordFieldDetectedRequestOutcome(outcome);
     } else {
       LogPasswordEntryRequestOutcome(outcome, password_account_type);
 

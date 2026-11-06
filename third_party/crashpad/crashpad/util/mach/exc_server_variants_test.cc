@@ -1,4 +1,4 @@
-// Copyright 2014 The Crashpad Authors. All rights reserved.
+// Copyright 2014 The Crashpad Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,7 +19,8 @@
 #include <string.h>
 #include <sys/types.h>
 
-#include "base/cxx17_backports.h"
+#include <iterator>
+
 #include "base/strings/stringprintf.h"
 #include "build/build_config.h"
 #include "gmock/gmock.h"
@@ -31,9 +32,9 @@
 #include "util/mach/mach_message.h"
 #include "util/misc/implicit_cast.h"
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 #include "test/mac/mach_multiprocess.h"
-#endif  // OS_MAC
+#endif  // BUILDFLAG(IS_MAC)
 
 namespace crashpad {
 namespace test {
@@ -224,6 +225,9 @@ struct __attribute__((packed, aligned(4))) ExceptionRaiseStateReply {
       case EXCEPTION_STATE_IDENTITY | kMachExceptionCodes:
         EXPECT_EQ(Head.msgh_id, 2507);
         break;
+      case EXCEPTION_STATE_IDENTITY_PROTECTED | kMachExceptionCodes:
+        EXPECT_EQ(Head.msgh_id, 2510);
+        break;
       default:
         ADD_FAILURE() << "behavior " << behavior << ", Head.msgh_id "
                       << Head.msgh_id;
@@ -232,7 +236,7 @@ struct __attribute__((packed, aligned(4))) ExceptionRaiseStateReply {
     EXPECT_EQ(memcmp(&NDR, &NDR_record, sizeof(NDR)), 0);
     EXPECT_EQ(RetCode, KERN_SUCCESS);
     EXPECT_EQ(flavor, kThreadStateFlavor);
-    EXPECT_EQ(new_stateCnt, base::size(new_state));
+    EXPECT_EQ(new_stateCnt, std::size(new_state));
   }
 
   mach_msg_header_t Head;
@@ -371,8 +375,8 @@ struct __attribute__((packed, aligned(4))) MachExceptionRaiseStateRequest {
 // are identical.
 using MachExceptionRaiseStateReply = ExceptionRaiseStateReply;
 
-struct __attribute__((packed,
-                      aligned(4))) MachExceptionRaiseStateIdentityRequest {
+struct __attribute__((packed, aligned(4)))
+MachExceptionRaiseStateIdentityRequest {
   MachExceptionRaiseStateIdentityRequest() {
     memset(this, 0xa5, sizeof(*this));
     Head.msgh_bits =
@@ -421,6 +425,58 @@ struct __attribute__((packed,
 // The reply messages for exception_raise_state_identity and
 // mach_exception_raise_state_identity are identical.
 using MachExceptionRaiseStateIdentityReply = ExceptionRaiseStateIdentityReply;
+
+struct __attribute__((packed, aligned(4)))
+MachExceptionRaiseStateIdentityProtectedRequest {
+  MachExceptionRaiseStateIdentityProtectedRequest() {
+    memset(this, 0xa5, sizeof(*this));
+    Head.msgh_bits =
+        MACH_MSGH_BITS(MACH_MSG_TYPE_PORT_SEND_ONCE, MACH_MSG_TYPE_PORT_SEND) |
+        MACH_MSGH_BITS_COMPLEX;
+    Head.msgh_size = sizeof(*this) - sizeof(trailer);
+    Head.msgh_remote_port = kClientRemotePort;
+    Head.msgh_local_port = kServerLocalPort;
+    Head.msgh_id = 2410;
+    msgh_body.msgh_descriptor_count = 1;
+    thread_id = 0;
+    InitializeMachMsgPortDescriptor(&task_id_token_t, kExceptionTaskPort);
+    NDR = NDR_record;
+    exception = kExceptionType;
+    codeCnt = 2;
+    code[0] = kTestMachExceptionCodes[0];
+    code[1] = kTestMachExceptionCodes[1];
+    flavor = kThreadStateFlavor;
+    old_stateCnt = kThreadStateFlavorCount;
+
+    // Adjust the message size for the data that it’s actually carrying, which
+    // may be smaller than the maximum that it can carry.
+    Head.msgh_size += sizeof(old_state[0]) * old_stateCnt - sizeof(old_state);
+  }
+
+  // Because the message size has been adjusted, the trailer may not appear in
+  // its home member variable. This computes the actual address of the trailer.
+  const mach_msg_trailer_t* Trailer() const {
+    return MachMessageTrailerFromHeader(&Head);
+  }
+
+  mach_msg_header_t Head;
+  mach_msg_body_t msgh_body;
+  mach_msg_port_descriptor_t task_id_token_t;
+  NDR_record_t NDR;
+  int64_t thread_id;
+  exception_type_t exception;
+  mach_msg_type_number_t codeCnt;
+  int64_t code[2];
+  int flavor;
+  mach_msg_type_number_t old_stateCnt;
+  natural_t old_state[THREAD_STATE_MAX];
+  mach_msg_trailer_t trailer;
+};
+
+// The reply messages for mach_exception_raise_state_identity_protected and
+// mach_exception_raise_state_identity are identical.
+using MachExceptionRaiseStateIdentityProtectedReply =
+    MachExceptionRaiseStateIdentityReply;
 
 // InvalidRequest and BadIDErrorReply are used to test that
 // UniversalMachExcServer deals appropriately with messages that it does not
@@ -509,17 +565,18 @@ class MockUniversalMachExcServer : public UniversalMachExcServer::Interface {
                                   trailer);
   }
 
-  MOCK_METHOD10(MockCatchMachException,
-                kern_return_t(exception_behavior_t behavior,
-                              exception_handler_t exception_port,
-                              thread_t thread,
-                              task_t task,
-                              exception_type_t exception,
-                              const ConstExceptionCodes* exception_codes,
-                              thread_state_flavor_t* flavor,
-                              const ConstThreadStateAndCount* old_thread_state,
-                              ThreadStateAndCount* new_thread_state,
-                              const mach_msg_trailer_t* trailer));
+  MOCK_METHOD(kern_return_t,
+              MockCatchMachException,
+              (exception_behavior_t behavior,
+               exception_handler_t exception_port,
+               thread_t thread,
+               task_t task,
+               exception_type_t exception,
+               const ConstExceptionCodes* exception_codes,
+               thread_state_flavor_t* flavor,
+               const ConstThreadStateAndCount* old_thread_state,
+               ThreadStateAndCount* new_thread_state,
+               const mach_msg_trailer_t* trailer));
 };
 
 // Matcher for ConstExceptionCodes, testing that it carries 2 codes matching
@@ -632,6 +689,53 @@ TEST(ExcServerVariants, MockExceptionRaise) {
   reply.Verify(kExceptionBehavior);
 }
 
+TEST(ExcServerVariants, MockMachExceptionRaiseStateIdentityProtected) {
+  ScopedDefaultValue<kern_return_t> default_kern_return_t(KERN_FAILURE);
+
+  MockUniversalMachExcServer server;
+  UniversalMachExcServer universal_mach_exc_server(&server);
+
+  std::set<mach_msg_id_t> ids =
+      universal_mach_exc_server.MachMessageServerRequestIDs();
+  EXPECT_NE(ids.find(2410), ids.end());  // There is no constant for this.
+
+  MachExceptionRaiseStateIdentityProtectedRequest request;  // Protected
+  EXPECT_LE(request.Head.msgh_size,
+            universal_mach_exc_server.MachMessageServerRequestSize());
+
+  MachExceptionRaiseStateIdentityProtectedReply reply;
+  EXPECT_LE(sizeof(reply),
+            universal_mach_exc_server.MachMessageServerReplySize());
+
+  constexpr exception_behavior_t kExceptionBehavior =
+      EXCEPTION_STATE_IDENTITY_PROTECTED | MACH_EXCEPTION_CODES;
+
+  EXPECT_CALL(
+      server,
+      MockCatchMachException(kExceptionBehavior,
+                             kServerLocalPort,
+                             0,  // kExceptionThreadPort,
+                             0,  // kExceptionTaskPort,
+                             kExceptionType,
+                             AreExceptionCodes(kTestMachExceptionCodes[0],
+                                               kTestMachExceptionCodes[1]),
+                             Pointee(Eq(kThreadStateFlavor)),
+                             IsThreadStateAndCount(kThreadStateFlavorCount),
+                             IsThreadStateAndCount(std::size(reply.new_state)),
+                             Eq(request.Trailer())))
+      .WillOnce(Return(KERN_SUCCESS))
+      .RetiresOnSaturation();
+
+  bool destroy_complex_request = false;
+  EXPECT_TRUE(universal_mach_exc_server.MachMessageServerFunction(
+      reinterpret_cast<mach_msg_header_t*>(&request),
+      reinterpret_cast<mach_msg_header_t*>(&reply),
+      &destroy_complex_request));
+  EXPECT_TRUE(destroy_complex_request);
+
+  reply.Verify(kExceptionBehavior);
+}
+
 TEST(ExcServerVariants, MockExceptionRaiseState) {
   ScopedDefaultValue<kern_return_t> default_kern_return_t(KERN_FAILURE);
 
@@ -663,7 +767,7 @@ TEST(ExcServerVariants, MockExceptionRaiseState) {
           AreExceptionCodes(kTestExceptonCodes[0], kTestExceptonCodes[1]),
           Pointee(Eq(kThreadStateFlavor)),
           IsThreadStateAndCount(kThreadStateFlavorCount),
-          IsThreadStateAndCount(base::size(reply.new_state)),
+          IsThreadStateAndCount(std::size(reply.new_state)),
           Eq(request.Trailer())))
       .WillOnce(Return(KERN_SUCCESS))
       .RetiresOnSaturation();
@@ -712,7 +816,7 @@ TEST(ExcServerVariants, MockExceptionRaiseStateIdentity) {
           AreExceptionCodes(kTestExceptonCodes[0], kTestExceptonCodes[1]),
           Pointee(Eq(kThreadStateFlavor)),
           IsThreadStateAndCount(kThreadStateFlavorCount),
-          IsThreadStateAndCount(base::size(reply.new_state)),
+          IsThreadStateAndCount(std::size(reply.new_state)),
           Eq(request.Trailer())))
       .WillOnce(Return(KERN_SUCCESS))
       .RetiresOnSaturation();
@@ -806,7 +910,7 @@ TEST(ExcServerVariants, MockMachExceptionRaiseState) {
                                                kTestMachExceptionCodes[1]),
                              Pointee(Eq(kThreadStateFlavor)),
                              IsThreadStateAndCount(kThreadStateFlavorCount),
-                             IsThreadStateAndCount(base::size(reply.new_state)),
+                             IsThreadStateAndCount(std::size(reply.new_state)),
                              Eq(request.Trailer())))
       .WillOnce(Return(KERN_SUCCESS))
       .RetiresOnSaturation();
@@ -856,7 +960,7 @@ TEST(ExcServerVariants, MockMachExceptionRaiseStateIdentity) {
                                                kTestMachExceptionCodes[1]),
                              Pointee(Eq(kThreadStateFlavor)),
                              IsThreadStateAndCount(kThreadStateFlavorCount),
-                             IsThreadStateAndCount(base::size(reply.new_state)),
+                             IsThreadStateAndCount(std::size(reply.new_state)),
                              Eq(request.Trailer())))
       .WillOnce(Return(KERN_SUCCESS))
       .RetiresOnSaturation();
@@ -896,7 +1000,8 @@ TEST(ExcServerVariants, MockUnknownID) {
       // Invalid IDs right around valid ones.
       2400,
       2404,
-      2408,
+      2409,
+      2411,
 
       // Valid and invalid IDs in the range used for replies, not requests.
       2500,
@@ -908,9 +1013,12 @@ TEST(ExcServerVariants, MockUnknownID) {
       2506,
       2507,
       2508,
+      2509,
+      2510,
+      2511,
   };
 
-  for (size_t index = 0; index < base::size(unknown_ids); ++index) {
+  for (size_t index = 0; index < std::size(unknown_ids); ++index) {
     mach_msg_id_t id = unknown_ids[index];
 
     SCOPED_TRACE(base::StringPrintf("unknown id %d", id));
@@ -953,6 +1061,8 @@ TEST(ExcServerVariants, MachMessageServerRequestIDs) {
   expect_request_ids.insert(2405);
   expect_request_ids.insert(2406);
   expect_request_ids.insert(2407);
+  expect_request_ids.insert(2408);
+  expect_request_ids.insert(2410);
 
   MockUniversalMachExcServer server;
   UniversalMachExcServer universal_mach_exc_server(&server);
@@ -961,7 +1071,7 @@ TEST(ExcServerVariants, MachMessageServerRequestIDs) {
             expect_request_ids);
 }
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 
 class TestExcServerVariants : public MachMultiprocess,
                               public UniversalMachExcServer::Interface {
@@ -977,6 +1087,9 @@ class TestExcServerVariants : public MachMultiprocess,
         handled_(false) {
     SetExpectedChildTerminationBuiltinTrap();
   }
+
+  TestExcServerVariants(const TestExcServerVariants&) = delete;
+  TestExcServerVariants& operator=(const TestExcServerVariants&) = delete;
 
   // UniversalMachExcServer::Interface:
 
@@ -1088,8 +1201,6 @@ class TestExcServerVariants : public MachMultiprocess,
 
   static const mach_msg_option_t kMachMessageOptions =
       MACH_RCV_TRAILER_TYPE(MACH_MSG_TRAILER_FORMAT_0);
-
-  DISALLOW_COPY_AND_ASSIGN(TestExcServerVariants);
 };
 
 TEST(ExcServerVariants, ExceptionRaise) {
@@ -1188,7 +1299,7 @@ TEST(ExcServerVariants, ThreadStates) {
 #endif
   };
 
-  for (size_t index = 0; index < base::size(test_data); ++index) {
+  for (size_t index = 0; index < std::size(test_data); ++index) {
     const auto& test = test_data[index];
     SCOPED_TRACE(
         base::StringPrintf("index %zu, flavor %d", index, test.flavor));
@@ -1201,10 +1312,10 @@ TEST(ExcServerVariants, ThreadStates) {
   }
 }
 
-#endif  // OS_MAC
+#endif  // BUILDFLAG(IS_MAC)
 
 TEST(ExcServerVariants, ExcServerSuccessfulReturnValue) {
-#if defined(OS_IOS)
+#if BUILDFLAG(IS_IOS)
   // iOS 9 ≅ OS X 10.11.
   const kern_return_t prefer_not_set_thread_state = KERN_SUCCESS;
 #else
@@ -1268,7 +1379,7 @@ TEST(ExcServerVariants, ExcServerSuccessfulReturnValue) {
        KERN_SUCCESS},
   };
 
-  for (size_t index = 0; index < base::size(kTestData); ++index) {
+  for (size_t index = 0; index < std::size(kTestData); ++index) {
     const auto& test_data = kTestData[index];
     SCOPED_TRACE(
         base::StringPrintf("index %zu, behavior %d, set_thread_state %s",
@@ -1287,8 +1398,8 @@ TEST(ExcServerVariants, ExcServerCopyState) {
   static constexpr natural_t old_state[] = {1, 2, 3, 4, 5};
   natural_t new_state[10] = {};
 
-  constexpr mach_msg_type_number_t old_state_count = base::size(old_state);
-  mach_msg_type_number_t new_state_count = base::size(new_state);
+  constexpr mach_msg_type_number_t old_state_count = std::size(old_state);
+  mach_msg_type_number_t new_state_count = std::size(new_state);
 
   // EXCEPTION_DEFAULT (with or without MACH_EXCEPTION_CODES) is not
   // state-carrying. new_state and new_state_count should be untouched.
@@ -1297,8 +1408,8 @@ TEST(ExcServerVariants, ExcServerCopyState) {
                      old_state_count,
                      new_state,
                      &new_state_count);
-  EXPECT_EQ(new_state_count, base::size(new_state));
-  for (size_t i = 0; i < base::size(new_state); ++i) {
+  EXPECT_EQ(new_state_count, std::size(new_state));
+  for (size_t i = 0; i < std::size(new_state); ++i) {
     EXPECT_EQ(new_state[i], 0u) << "i " << i;
   }
 
@@ -1307,8 +1418,8 @@ TEST(ExcServerVariants, ExcServerCopyState) {
                      old_state_count,
                      new_state,
                      &new_state_count);
-  EXPECT_EQ(new_state_count, base::size(new_state));
-  for (size_t i = 0; i < base::size(new_state); ++i) {
+  EXPECT_EQ(new_state_count, std::size(new_state));
+  for (size_t i = 0; i < std::size(new_state); ++i) {
     EXPECT_EQ(new_state[i], 0u) << "i " << i;
   }
 
@@ -1320,7 +1431,7 @@ TEST(ExcServerVariants, ExcServerCopyState) {
   for (size_t i = 0; i < copy_limit; ++i) {
     EXPECT_EQ(new_state[i], old_state[i]) << "i " << i;
   }
-  for (size_t i = copy_limit; i < base::size(new_state); ++i) {
+  for (size_t i = copy_limit; i < std::size(new_state); ++i) {
     EXPECT_EQ(new_state[i], 0u) << "i " << i;
   }
 
@@ -1336,23 +1447,23 @@ TEST(ExcServerVariants, ExcServerCopyState) {
   for (size_t i = 0; i < copy_limit; ++i) {
     EXPECT_EQ(new_state[i], old_state[i]) << "i " << i;
   }
-  for (size_t i = copy_limit; i < base::size(new_state); ++i) {
+  for (size_t i = copy_limit; i < std::size(new_state); ++i) {
     EXPECT_EQ(new_state[i], 0u) << "i " << i;
   }
 
   // This is a state-carrying exception where all of old_state is copied to
   // new_state, which is large enough to receive it and then some.
-  new_state_count = base::size(new_state);
+  new_state_count = std::size(new_state);
   ExcServerCopyState(MACH_EXCEPTION_CODES | EXCEPTION_STATE_IDENTITY,
                      old_state,
                      old_state_count,
                      new_state,
                      &new_state_count);
   EXPECT_EQ(new_state_count, old_state_count);
-  for (size_t i = 0; i < base::size(old_state); ++i) {
+  for (size_t i = 0; i < std::size(old_state); ++i) {
     EXPECT_EQ(new_state[i], old_state[i]) << "i " << i;
   }
-  for (size_t i = base::size(old_state); i < base::size(new_state); ++i) {
+  for (size_t i = std::size(old_state); i < std::size(new_state); ++i) {
     EXPECT_EQ(new_state[i], 0u) << "i " << i;
   }
 }

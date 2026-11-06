@@ -1,4 +1,4 @@
-// Copyright (c) 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,15 +9,13 @@
 
 #include <string>
 
+#include "base/apple/scoped_cftyperef.h"
 #include "base/files/file_path.h"
-#include "base/mac/scoped_cftyperef.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
 #include "chrome/browser/safe_browsing/incident_reporting/binary_integrity_incident.h"
 
 namespace safe_browsing {
 
-// Wraps the OS X SecStaticCode API, to evaluate a given file object
+// Wraps the macOS SecStaticCode API, to evaluate a given file object
 // with a given code requirement, and produce a list of incident reports
 // for files that fail code signature validity checks.
 class MacSignatureEvaluator {
@@ -28,6 +26,9 @@ class MacSignatureEvaluator {
   // string, which describes the identity of the signer.
   MacSignatureEvaluator(const base::FilePath& signed_object_path,
                         const std::string& requirement);
+
+  MacSignatureEvaluator(const MacSignatureEvaluator&) = delete;
+  MacSignatureEvaluator& operator=(const MacSignatureEvaluator&) = delete;
 
   ~MacSignatureEvaluator();
 
@@ -58,12 +59,10 @@ class MacSignatureEvaluator {
   bool has_requirement_;
 
   // The static code object constructed from the code object on disk.
-  base::ScopedCFTypeRef<SecStaticCodeRef> code_;
+  base::apple::ScopedCFTypeRef<SecStaticCodeRef> code_;
 
   // The requirement object constructed from the requirement string.
-  base::ScopedCFTypeRef<SecRequirementRef> requirement_;
-
-  DISALLOW_COPY_AND_ASSIGN(MacSignatureEvaluator);
+  base::apple::ScopedCFTypeRef<SecRequirementRef> requirement_;
 };
 
 }  // namespace safe_browsing

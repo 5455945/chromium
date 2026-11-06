@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,14 @@
 
 namespace blink {
 
-SpellingMarker::SpellingMarker(unsigned start_offset,
-                               unsigned end_offset,
-                               const String& description)
-    : SpellCheckMarker(start_offset, end_offset, description) {
+SpellingMarker::SpellingMarker(wtf_size_t start_offset,
+                               wtf_size_t end_offset,
+                               const String& description,
+                               bool should_hide_suggestion_menu)
+    : SpellCheckMarker(start_offset,
+                       end_offset,
+                       description,
+                       should_hide_suggestion_menu) {
   DCHECK_LT(start_offset, end_offset);
 }
 

@@ -1,6 +1,8 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "chrome/browser/notifications/scheduler/public/notification_schedule_service.h"
 
 #include <memory>
 #include <set>
@@ -8,20 +10,22 @@
 #include <utility>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/notifications/scheduler/notification_background_task_scheduler_impl.h"
 #include "chrome/browser/notifications/scheduler/public/display_agent.h"
 #include "chrome/browser/notifications/scheduler/public/features.h"
+#include "chrome/browser/notifications/scheduler/public/finds_agent.h"
 #include "chrome/browser/notifications/scheduler/public/notification_params.h"
-#include "chrome/browser/notifications/scheduler/public/notification_schedule_service.h"
 #include "chrome/browser/notifications/scheduler/public/notification_scheduler_client.h"
 #include "chrome/browser/notifications/scheduler/public/notification_scheduler_client_registrar.h"
+#include "chrome/browser/notifications/scheduler/public/tips_agent.h"
 #include "chrome/browser/notifications/scheduler/schedule_service_factory_helper.h"
 #include "chrome/browser/notifications/scheduler/test/mock_notification_background_task_scheduler.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/storage_partition.h"
@@ -37,7 +41,7 @@ const base::FilePath::CharType kTestDir[] =
 
 class TestClient : public NotificationSchedulerClient {
  public:
-  TestClient() {}
+  TestClient() = default;
   TestClient(const TestClient&) = delete;
   TestClient& operator=(const TestClient&) = delete;
   ~TestClient() override = default;
@@ -55,6 +59,9 @@ class TestClient : public NotificationSchedulerClient {
       shown_notification_data_.emplace_back(*notification_data);
     std::move(callback).Run(std::move(notification_data));
   }
+
+  void OnShowNotification(
+      std::unique_ptr<NotificationData> notification_data) override {}
 
   void OnSchedulerInitialized(bool success,
                               std::set<std::string> guids) override {
@@ -128,7 +135,7 @@ class NotificationScheduleServiceTest : public InProcessBrowserTest {
   NotificationScheduleServiceTest& operator=(
       const NotificationScheduleServiceTest&) = delete;
 
-  ~NotificationScheduleServiceTest() override {}
+  ~NotificationScheduleServiceTest() override = default;
 
  protected:
   void SetUpOnMainThread() override {
@@ -137,13 +144,16 @@ class NotificationScheduleServiceTest : public InProcessBrowserTest {
   }
 
   void TearDownOnMainThread() override {
+    task_scheduler_ = nullptr;
+    clients_.clear();
+    service_.reset();
     InProcessBrowserTest::TearDownOnMainThread();
     ASSERT_TRUE(tmp_dir_.Delete());
   }
 
   // Initializes |service_|. Injects database test data before this call.
   void Init() {
-    auto* profile = browser()->profile();
+    auto* profile = browser()->GetProfile();
     auto client = std::make_unique<TestClient>();
     clients_[SchedulerClientType::kTest1] = client.get();
     auto client_registrar =
@@ -154,21 +164,23 @@ class NotificationScheduleServiceTest : public InProcessBrowserTest {
     auto display_agent = notifications::DisplayAgent::Create();
     auto background_task_scheduler =
         std::make_unique<TestBackgroundTaskScheduler>();
+    auto tips_agent = notifications::TipsAgent::Create();
+    auto finds_agent = notifications::FindsAgent::Create();
     task_scheduler_ = background_task_scheduler.get();
     auto* db_provider =
         profile->GetDefaultStoragePartition()->GetProtoDatabaseProvider();
     service_ = CreateNotificationScheduleService(
         std::move(client_registrar), std::move(background_task_scheduler),
-        std::move(display_agent), db_provider,
-        tmp_dir_.GetPath().Append(kTestDir), profile->IsOffTheRecord());
+        std::move(display_agent), std::move(tips_agent), std::move(finds_agent),
+        db_provider, tmp_dir_.GetPath().Append(kTestDir),
+        profile->IsOffTheRecord(), profile->GetPrefs());
   }
 
   // Helper function to schedule a notification immediately to show.
   void ScheduleNotification() {
     ScheduleParams schedule_params;
     schedule_params.deliver_time_start = base::Time::Now();
-    schedule_params.deliver_time_end =
-        base::Time::Now() + base::TimeDelta::FromMinutes(5);
+    schedule_params.deliver_time_end = base::Time::Now() + base::Minutes(5);
     NotificationData data;
     data.title = u"title";
     data.message = u"message";
@@ -209,8 +221,8 @@ class NotificationScheduleServiceTest : public InProcessBrowserTest {
   base::test::ScopedFeatureList scoped_feature_list_;
   base::ScopedTempDir tmp_dir_;
   std::unique_ptr<KeyedService> service_;
-  TestBackgroundTaskScheduler* task_scheduler_;
-  std::map<SchedulerClientType, TestClient*> clients_;
+  raw_ptr<TestBackgroundTaskScheduler> task_scheduler_;
+  std::map<SchedulerClientType, raw_ptr<TestClient, CtnExperimental>> clients_;
 };
 
 // Test to schedule a notification.

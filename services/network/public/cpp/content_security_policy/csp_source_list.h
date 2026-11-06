@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,29 +9,30 @@
 #include <vector>
 
 #include "base/component_export.h"
+#include "services/network/public/cpp/content_security_policy/content_security_policy.h"
 #include "services/network/public/mojom/content_security_policy.mojom-forward.h"
 
 class GURL;
 
 namespace network {
 
-COMPONENT_EXPORT(NETWORK_CPP)
+COMPONENT_EXPORT(NETWORK_CPP_WEB_PLATFORM)
 std::string ToString(const mojom::CSPSourceListPtr& source_list);
 
-// Return true when at least one source in the |source_list| matches the
-// |url|.
-COMPONENT_EXPORT(NETWORK_CPP)
-bool CheckCSPSourceList(mojom::CSPDirectiveName directive_name,
-                        const mojom::CSPSourceList& source_list,
-                        const GURL& url,
-                        const mojom::CSPSource& self_source,
-                        bool has_followed_redirect = false,
-                        bool is_response_check = false);
+// Return a CSPCheckResult that allows when at least one source in the
+// |source_list| matches the |url|.
+COMPONENT_EXPORT(NETWORK_CPP_WEB_PLATFORM)
+CSPCheckResult CheckCSPSourceList(mojom::CSPDirectiveName directive_name,
+                                  const mojom::CSPSourceList& source_list,
+                                  const GURL& url,
+                                  const mojom::CSPSource& self_source,
+                                  bool has_followed_redirect = false,
+                                  bool is_opaque_fenced_frame = false);
 
 // Check if |source_list_a| subsumes |source_list_b| with origin |origin_b| for
 // directive |directive| according to
 // https://w3c.github.io/webappsec-cspee/#subsume-source-list
-COMPONENT_EXPORT(NETWORK_CPP)
+COMPONENT_EXPORT(NETWORK_CPP_WEB_PLATFORM)
 bool CSPSourceListSubsumes(
     const mojom::CSPSourceList& source_list_a,
     const std::vector<const mojom::CSPSourceList*>& source_list_b,

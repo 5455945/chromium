@@ -1,8 +1,9 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/common/mojom/permission_set_mojom_traits.h"
+#include "base/memory/ptr_util.h"
 #include "extensions/common/manifest_handler.h"
 #include "extensions/common/permissions/permissions_info.h"
 
@@ -24,7 +25,7 @@ bool StructTraits<extensions::mojom::APIPermissionDataView,
   std::unique_ptr<extensions::APIPermission> api_permission =
       permission_info->CreateAPIPermission();
 
-  absl::optional<base::Value> value;
+  std::optional<base::Value> value;
   if (!data.ReadValue(&value))
     return false;
 
@@ -67,7 +68,7 @@ bool StructTraits<extensions::mojom::ManifestPermissionDataView,
   if (!permission)
     return false;
 
-  absl::optional<base::Value> value;
+  std::optional<base::Value> value;
   if (!data.ReadValue(&value))
     return false;
 

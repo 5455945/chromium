@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include <tuple>
 #include <utility>
 
-#include "base/numerics/ranges.h"
 #include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
 #include "ui/gfx/geometry/insets.h"
@@ -29,18 +28,6 @@ void NormalizedPoint::SetPoint(int main, int cross) {
 void NormalizedPoint::Offset(int delta_main, int delta_cross) {
   main_ += delta_main;
   cross_ += delta_cross;
-}
-
-bool NormalizedPoint::operator==(const NormalizedPoint& other) const {
-  return std::tie(main_, cross_) == std::tie(other.main_, other.cross_);
-}
-
-bool NormalizedPoint::operator!=(const NormalizedPoint& other) const {
-  return !(*this == other);
-}
-
-bool NormalizedPoint::operator<(const NormalizedPoint& other) const {
-  return std::tie(main_, cross_) < std::tie(other.main_, other.cross_);
 }
 
 std::string NormalizedPoint::ToString() const {
@@ -65,8 +52,8 @@ void NormalizedSize::SetToMax(int main, int cross) {
 }
 
 void NormalizedSize::SetToMin(int main, int cross) {
-  main_ = base::ClampToRange(main, 0, main_);
-  cross_ = base::ClampToRange(cross, 0, cross_);
+  main_ = std::clamp(main, 0, main_);
+  cross_ = std::clamp(cross, 0, cross_);
 }
 
 void NormalizedSize::SetToMax(const NormalizedSize& other) {
@@ -77,35 +64,11 @@ void NormalizedSize::SetToMin(const NormalizedSize& other) {
   SetToMin(other.main(), other.cross());
 }
 
-bool NormalizedSize::operator==(const NormalizedSize& other) const {
-  return std::tie(main_, cross_) == std::tie(other.main_, other.cross_);
-}
-
-bool NormalizedSize::operator!=(const NormalizedSize& other) const {
-  return !(*this == other);
-}
-
-bool NormalizedSize::operator<(const NormalizedSize& other) const {
-  return std::tie(main_, cross_) < std::tie(other.main_, other.cross_);
-}
-
 std::string NormalizedSize::ToString() const {
   return base::StringPrintf("%d x %d", main(), cross());
 }
 
 // NormalizedInsets ------------------------------------------------------------
-
-bool NormalizedInsets::operator==(const NormalizedInsets& other) const {
-  return std::tie(main_, cross_) == std::tie(other.main_, other.cross_);
-}
-
-bool NormalizedInsets::operator!=(const NormalizedInsets& other) const {
-  return !(*this == other);
-}
-
-bool NormalizedInsets::operator<(const NormalizedInsets& other) const {
-  return std::tie(main_, cross_) < std::tie(other.main_, other.cross_);
-}
 
 std::string NormalizedInsets::ToString() const {
   return base::StrCat(
@@ -132,14 +95,6 @@ void NormalizedSizeBounds::Expand(int main, int cross) {
 
 void NormalizedSizeBounds::Inset(const NormalizedInsets& insets) {
   Expand(-insets.main_size(), -insets.cross_size());
-}
-
-bool NormalizedSizeBounds::operator==(const NormalizedSizeBounds& other) const {
-  return std::tie(main_, cross_) == std::tie(other.main_, other.cross_);
-}
-
-bool NormalizedSizeBounds::operator!=(const NormalizedSizeBounds& other) const {
-  return !(*this == other);
 }
 
 bool NormalizedSizeBounds::operator<(const NormalizedSizeBounds& other) const {
@@ -225,18 +180,6 @@ void NormalizedRect::Offset(int main, int cross) {
   origin_.Offset(main, cross);
 }
 
-bool NormalizedRect::operator==(const NormalizedRect& other) const {
-  return std::tie(origin_, size_) == std::tie(other.origin_, other.size_);
-}
-
-bool NormalizedRect::operator!=(const NormalizedRect& other) const {
-  return !(*this == other);
-}
-
-bool NormalizedRect::operator<(const NormalizedRect& other) const {
-  return std::tie(origin_, size_) < std::tie(other.origin_, other.size_);
-}
-
 std::string NormalizedRect::ToString() const {
   return base::StrCat({"(", origin_.ToString(), ") [", size_.ToString(), "]"});
 }
@@ -318,11 +261,11 @@ gfx::Insets Denormalize(LayoutOrientation orientation,
                         const NormalizedInsets& insets) {
   switch (orientation) {
     case LayoutOrientation::kHorizontal:
-      return gfx::Insets(insets.cross_leading(), insets.main_leading(),
-                         insets.cross_trailing(), insets.main_trailing());
+      return gfx::Insets::TLBR(insets.cross_leading(), insets.main_leading(),
+                               insets.cross_trailing(), insets.main_trailing());
     case LayoutOrientation::kVertical:
-      return gfx::Insets(insets.main_leading(), insets.cross_leading(),
-                         insets.main_trailing(), insets.cross_trailing());
+      return gfx::Insets::TLBR(insets.main_leading(), insets.cross_leading(),
+                               insets.main_trailing(), insets.cross_trailing());
   }
 }
 

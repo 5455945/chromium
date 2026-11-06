@@ -1,18 +1,23 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef BASE_CONTAINERS_FLAT_MAP_H_
 #define BASE_CONTAINERS_FLAT_MAP_H_
 
+#include <concepts>
 #include <functional>
+#include <initializer_list>
+#include <iterator>
+#include <ranges>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "base/check.h"
+#include "base/compiler_specific.h"
 #include "base/containers/flat_tree.h"
-#include "base/template_util.h"
 
 namespace base {
 
@@ -71,6 +76,9 @@ struct GetFirst {
 //   flat_map(flat_map&&);
 //   flat_map(InputIterator first, InputIterator last,
 //            const Compare& compare = Compare());
+//   flat_map(std::from_range_t,
+//            Range&& range,
+//            const Compare& comp = Compare());
 //   flat_map(const container_type& items,
 //            const Compare& compare = Compare());
 //   flat_map(container_type&& items,
@@ -82,6 +90,10 @@ struct GetFirst {
 //   flat_map(sorted_unique_t,
 //            InputIterator first, InputIterator last,
 //            const Compare& compare = Compare());
+//   flat_map(std::from_range_t,
+//            sorted_unique_t,
+//            Range&& range,
+//            const Compare& comp = Compare());
 //   flat_map(sorted_unique_t,
 //            const container_type& items,
 //            const Compare& compare = Compare());
@@ -123,8 +135,8 @@ struct GetFirst {
 //   const_reverse_iterator crend() const;
 //
 // Insert and accessor functions:
-//   mapped_type&         operator[](const key_type&);
-//   mapped_type&         operator[](key_type&&);
+//   mapped_type&         operator[](const K&);
+//   mapped_type&         operator[](K&&);
 //   mapped_type&         at(const K&);
 //   const mapped_type&   at(const K&) const;
 //   pair<iterator, bool> insert(const value_type&);
@@ -132,11 +144,15 @@ struct GetFirst {
 //   iterator             insert(const_iterator hint, const value_type&);
 //   iterator             insert(const_iterator hint, value_type&&);
 //   void                 insert(InputIterator first, InputIterator last);
+//   pair<iterator, bool> insert_or_assign(const K&, M&&);
 //   pair<iterator, bool> insert_or_assign(K&&, M&&);
+//   iterator             insert_or_assign(const_iterator hint, const K&, M&&);
 //   iterator             insert_or_assign(const_iterator hint, K&&, M&&);
 //   pair<iterator, bool> emplace(Args&&...);
 //   iterator             emplace_hint(const_iterator, Args&&...);
+//   pair<iterator, bool> try_emplace(const K&, Args&&...);
 //   pair<iterator, bool> try_emplace(K&&, Args&&...);
+//   iterator             try_emplace(const_iterator hint, const K&, Args&&...);
 //   iterator             try_emplace(const_iterator hint, K&&, Args&&...);
 
 // Underlying type functions:
@@ -185,6 +201,10 @@ class flat_map : public ::base::internal::
   using tree = typename ::base::internal::
       flat_tree<Key, internal::GetFirst, Compare, Container>;
 
+  // Alias supporting heterogeneous lookup if `Compare` is transparent.
+  template <typename K>
+  using KeyT = typename tree::template KeyT<K>;
+
  public:
   using key_type = typename tree::key_type;
   using mapped_type = Mapped;
@@ -212,10 +232,10 @@ class flat_map : public ::base::internal::
   using tree::operator=;
 
   // Out-of-bound calls to at() will CHECK.
-  template <class K>
-  mapped_type& at(const K& key);
-  template <class K>
-  const mapped_type& at(const K& key) const;
+  template <class K = Key>
+  constexpr mapped_type& at(const KeyT<K>& key);
+  template <class K = Key>
+  constexpr const mapped_type& at(const KeyT<K>& key) const;
 
   // --------------------------------------------------------------------------
   // Map-specific insert operations.
@@ -225,29 +245,49 @@ class flat_map : public ::base::internal::
   // Assume that every operation invalidates iterators and references.
   // Insertion of one element can take O(size).
 
-  mapped_type& operator[](const key_type& key);
-  mapped_type& operator[](key_type&& key);
+  template <class K = Key>
+  constexpr mapped_type& operator[](const KeyT<K>& key);
+  template <class K = Key>
+    requires(std::same_as<K, std::remove_cvref_t<K>>)
+  constexpr mapped_type& operator[](KeyT<K>&& key);
 
-  template <class K, class M>
-  std::pair<iterator, bool> insert_or_assign(K&& key, M&& obj);
-  template <class K, class M>
-  iterator insert_or_assign(const_iterator hint, K&& key, M&& obj);
+  template <class K = Key, class M>
+  std::pair<iterator, bool> insert_or_assign(const KeyT<K>& key, M&& obj);
+  template <class K = Key, class M>
+    requires(std::same_as<K, std::remove_cvref_t<K>>)
+  std::pair<iterator, bool> insert_or_assign(KeyT<K>&& key, M&& obj);
+  template <class K = Key, class M>
+  iterator insert_or_assign(const_iterator hint, const KeyT<K>& key, M&& obj);
+  template <class K = Key, class M>
+    requires(std::same_as<K, std::remove_cvref_t<K>>)
+  iterator insert_or_assign(const_iterator hint, KeyT<K>&& key, M&& obj);
 
-  template <class K, class... Args>
-  std::enable_if_t<std::is_constructible<key_type, K&&>::value,
-                   std::pair<iterator, bool>>
-  try_emplace(K&& key, Args&&... args);
+  template <class K = Key, class... Args>
+    requires(!std::convertible_to<K, const_iterator>)
+  constexpr std::pair<iterator, bool> try_emplace(const KeyT<K>& key,
+                                                  Args&&... args);
+  template <class K = Key, class... Args>
+    requires(std::same_as<K, std::remove_cvref_t<K>> &&
+             !std::convertible_to<K, const_iterator>)
+  constexpr std::pair<iterator, bool> try_emplace(KeyT<K>&& key,
+                                                  Args&&... args);
 
-  template <class K, class... Args>
-  std::enable_if_t<std::is_constructible<key_type, K&&>::value, iterator>
-  try_emplace(const_iterator hint, K&& key, Args&&... args);
+  template <class K = Key, class... Args>
+  constexpr iterator try_emplace(const_iterator hint,
+                                 const KeyT<K>& key,
+                                 Args&&... args);
+  template <class K = Key, class... Args>
+    requires(std::same_as<K, std::remove_cvref_t<K>>)
+  constexpr iterator try_emplace(const_iterator hint,
+                                 KeyT<K>&& key,
+                                 Args&&... args);
 
   // --------------------------------------------------------------------------
   // General operations.
   //
   // Assume that swap invalidates iterators and references.
 
-  void swap(flat_map& other) noexcept;
+  REINITIALIZES_AFTER_MOVE void swap(flat_map& other) noexcept;
 
   friend void swap(flat_map& lhs, flat_map& rhs) noexcept { lhs.swap(rhs); }
 };
@@ -257,7 +297,7 @@ class flat_map : public ::base::internal::
 
 template <class Key, class Mapped, class Compare, class Container>
 template <class K>
-auto flat_map<Key, Mapped, Compare, Container>::at(const K& key)
+constexpr auto flat_map<Key, Mapped, Compare, Container>::at(const KeyT<K>& key)
     -> mapped_type& {
   iterator found = tree::find(key);
   CHECK(found != tree::end());
@@ -266,8 +306,8 @@ auto flat_map<Key, Mapped, Compare, Container>::at(const K& key)
 
 template <class Key, class Mapped, class Compare, class Container>
 template <class K>
-auto flat_map<Key, Mapped, Compare, Container>::at(const K& key) const
-    -> const mapped_type& {
+constexpr auto flat_map<Key, Mapped, Compare, Container>::at(
+    const KeyT<K>& key) const -> const mapped_type& {
   const_iterator found = tree::find(key);
   CHECK(found != tree::cend());
   return found->second;
@@ -277,32 +317,51 @@ auto flat_map<Key, Mapped, Compare, Container>::at(const K& key) const
 // Insert operations.
 
 template <class Key, class Mapped, class Compare, class Container>
-auto flat_map<Key, Mapped, Compare, Container>::operator[](const key_type& key)
-    -> mapped_type& {
+template <class K>
+constexpr auto flat_map<Key, Mapped, Compare, Container>::operator[](
+    const KeyT<K>& key) -> mapped_type& {
   iterator found = tree::lower_bound(key);
-  if (found == tree::end() || tree::key_comp()(key, found->first))
+  if (found == tree::end() || tree::key_comp()(key, found->first)) {
     found = tree::unsafe_emplace(found, key, mapped_type());
+  }
   return found->second;
 }
 
 template <class Key, class Mapped, class Compare, class Container>
-auto flat_map<Key, Mapped, Compare, Container>::operator[](key_type&& key)
-    -> mapped_type& {
+template <class K>
+  requires(std::same_as<K, std::remove_cvref_t<K>>)
+constexpr auto flat_map<Key, Mapped, Compare, Container>::operator[](
+    KeyT<K>&& key) -> mapped_type& {
   iterator found = tree::lower_bound(key);
-  if (found == tree::end() || tree::key_comp()(key, found->first))
+  if (found == tree::end() || tree::key_comp()(key, found->first)) {
     found = tree::unsafe_emplace(found, std::move(key), mapped_type());
+  }
   return found->second;
 }
 
 template <class Key, class Mapped, class Compare, class Container>
 template <class K, class M>
-auto flat_map<Key, Mapped, Compare, Container>::insert_or_assign(K&& key,
+auto flat_map<Key, Mapped, Compare, Container>::insert_or_assign(
+    const KeyT<K>& key,
+    M&& obj) -> std::pair<iterator, bool> {
+  auto result = tree::emplace_key_args(key, key, std::forward<M>(obj));
+  if (!result.second) {
+    result.first->second = std::forward<M>(obj);
+  }
+  return result;
+}
+
+template <class Key, class Mapped, class Compare, class Container>
+template <class K, class M>
+  requires(std::same_as<K, std::remove_cvref_t<K>>)
+auto flat_map<Key, Mapped, Compare, Container>::insert_or_assign(KeyT<K>&& key,
                                                                  M&& obj)
     -> std::pair<iterator, bool> {
   auto result =
-      tree::emplace_key_args(key, std::forward<K>(key), std::forward<M>(obj));
-  if (!result.second)
+      tree::emplace_key_args(key, std::move(key), std::forward<M>(obj));
+  if (!result.second) {
     result.first->second = std::forward<M>(obj);
+  }
   return result;
 }
 
@@ -310,36 +369,81 @@ template <class Key, class Mapped, class Compare, class Container>
 template <class K, class M>
 auto flat_map<Key, Mapped, Compare, Container>::insert_or_assign(
     const_iterator hint,
-    K&& key,
+    const KeyT<K>& key,
     M&& obj) -> iterator {
-  auto result = tree::emplace_hint_key_args(hint, key, std::forward<K>(key),
-                                            std::forward<M>(obj));
-  if (!result.second)
+  auto result =
+      tree::emplace_hint_key_args(hint, key, key, std::forward<M>(obj));
+  if (!result.second) {
     result.first->second = std::forward<M>(obj);
+  }
+  return result.first;
+}
+
+template <class Key, class Mapped, class Compare, class Container>
+template <class K, class M>
+  requires(std::same_as<K, std::remove_cvref_t<K>>)
+auto flat_map<Key, Mapped, Compare, Container>::insert_or_assign(
+    const_iterator hint,
+    KeyT<K>&& key,
+    M&& obj) -> iterator {
+  auto result = tree::emplace_hint_key_args(hint, key, std::move(key),
+                                            std::forward<M>(obj));
+  if (!result.second) {
+    result.first->second = std::forward<M>(obj);
+  }
   return result.first;
 }
 
 template <class Key, class Mapped, class Compare, class Container>
 template <class K, class... Args>
-auto flat_map<Key, Mapped, Compare, Container>::try_emplace(K&& key,
-                                                            Args&&... args)
-    -> std::enable_if_t<std::is_constructible<key_type, K&&>::value,
-                        std::pair<iterator, bool>> {
+  requires(!std::convertible_to<
+           K,
+           typename flat_map<Key, Mapped, Compare, Container>::const_iterator>)
+constexpr auto flat_map<Key, Mapped, Compare, Container>::try_emplace(
+    const KeyT<K>& key,
+    Args&&... args) -> std::pair<iterator, bool> {
   return tree::emplace_key_args(
-      key, std::piecewise_construct,
-      std::forward_as_tuple(std::forward<K>(key)),
+      key, std::piecewise_construct, std::forward_as_tuple(key),
       std::forward_as_tuple(std::forward<Args>(args)...));
 }
 
 template <class Key, class Mapped, class Compare, class Container>
 template <class K, class... Args>
-auto flat_map<Key, Mapped, Compare, Container>::try_emplace(const_iterator hint,
-                                                            K&& key,
-                                                            Args&&... args)
-    -> std::enable_if_t<std::is_constructible<key_type, K&&>::value, iterator> {
+  requires(
+      std::same_as<K, std::remove_cvref_t<K>> &&
+      !std::convertible_to<
+          K,
+          typename flat_map<Key, Mapped, Compare, Container>::const_iterator>)
+constexpr auto flat_map<Key, Mapped, Compare, Container>::try_emplace(
+    KeyT<K>&& key,
+    Args&&... args) -> std::pair<iterator, bool> {
+  return tree::emplace_key_args(
+      key, std::piecewise_construct, std::forward_as_tuple(std::move(key)),
+      std::forward_as_tuple(std::forward<Args>(args)...));
+}
+
+template <class Key, class Mapped, class Compare, class Container>
+template <class K, class... Args>
+constexpr auto flat_map<Key, Mapped, Compare, Container>::try_emplace(
+    const_iterator hint,
+    const KeyT<K>& key,
+    Args&&... args) -> iterator {
+  return tree::emplace_hint_key_args(
+             hint, key, std::piecewise_construct, std::forward_as_tuple(key),
+             std::forward_as_tuple(std::forward<Args>(args)...))
+      .first;
+}
+
+template <class Key, class Mapped, class Compare, class Container>
+template <class K, class... Args>
+  requires(std::same_as<K, std::remove_cvref_t<K>>)
+constexpr auto flat_map<Key, Mapped, Compare, Container>::try_emplace(
+    const_iterator hint,
+    KeyT<K>&& key,
+    Args&&... args) -> iterator {
   return tree::emplace_hint_key_args(
              hint, key, std::piecewise_construct,
-             std::forward_as_tuple(std::forward<K>(key)),
+             std::forward_as_tuple(std::move(key)),
              std::forward_as_tuple(std::forward<Args>(args)...))
       .first;
 }
@@ -351,6 +455,146 @@ template <class Key, class Mapped, class Compare, class Container>
 void flat_map<Key, Mapped, Compare, Container>::swap(flat_map& other) noexcept {
   tree::swap(other);
 }
+
+// ----------------------------------------------------------------------------
+// Utility functions.
+
+// Utility function to simplify constructing a flat_set from a fixed list of
+// keys and values. The key/value pairs are obtained by applying |proj| to the
+// |unprojected_elements|. The map's keys are sorted by |comp|.
+//
+// Example usage (creates a set {{16, "4"}, {9, "3"}, {4, "2"}, {1, "1"}}):
+//   auto map = base::MakeFlatMap<int, std::string>(
+//       std::vector<int>{1, 2, 3, 4},
+//       [](int i, int j) { return i > j; },
+//       [](int i) { return std::make_pair(i * i, base::NumberToString(i)); });
+template <class Key,
+          class Mapped,
+          class KeyCompare = std::less<>,
+          class Container = std::vector<std::pair<Key, Mapped>>,
+          class InputContainer,
+          class Projection = std::identity>
+constexpr flat_map<Key, Mapped, KeyCompare, Container> MakeFlatMap(
+    const InputContainer& unprojected_elements,
+    const KeyCompare& comp = KeyCompare(),
+    const Projection& proj = Projection()) {
+  Container elements;
+  internal::ReserveIfSupported(elements, unprojected_elements);
+  std::ranges::transform(unprojected_elements, std::back_inserter(elements),
+                         proj);
+  return flat_map<Key, Mapped, KeyCompare, Container>(std::move(elements),
+                                                      comp);
+}
+
+namespace flat_map_internal {
+
+// Helpers for the iterator and range deduction guides below, named after the
+// exposition-only aliases of `std::flat_map`'s deduction guides, see
+// https://en.cppreference.com/cpp/container/flat_map/deduction_guides. The key
+// drops `const`, so e.g. `std::map` iterators deduce a `flat_map<Key, Mapped>`.
+// Unlike the standard's, `IterValT` uses `std::iter_value_t`, since the guides
+// accept any C++20 `std::input_iterator`, not just Cpp17 input iterators.
+template <class InputIterator>
+using IterValT = std::iter_value_t<InputIterator>;
+
+template <class InputIterator>
+using IterKeyT =
+    std::remove_const_t<std::tuple_element_t<0, IterValT<InputIterator>>>;
+
+template <class InputIterator>
+using IterMappedT = std::tuple_element_t<1, IterValT<InputIterator>>;
+
+template <class Range>
+using RangeKeyT =
+    std::remove_const_t<typename std::ranges::range_value_t<Range>::first_type>;
+
+template <class Range>
+using RangeMappedT = typename std::ranges::range_value_t<Range>::second_type;
+
+}  // namespace flat_map_internal
+
+// Deduction guides for `flat_map`. They are modeled after the guides for
+// `std::flat_map`, but take a single container of pairs and default to
+// `std::less<>` like `flat_map` itself. As for `std::flat_map`, a const key in
+// the input's pair type (e.g. from `std::map` iterators) is dropped.
+//
+// Example usage:
+//   std::vector<std::pair<int, std::string>> v = ...;
+//   base::flat_map m1(v);                    // flat_map<int, std::string>
+//   base::flat_map m2(v.begin(), v.end());   // flat_map<int, std::string>
+//   base::flat_map m3(std::from_range, v);   // flat_map<int, std::string>
+//   base::flat_map m4 = {std::pair(1, 'a')}; // flat_map<int, char>
+//
+// Construction from a container, an iterator pair, a range or an initializer
+// list does not require sorted or unique input; duplicate keys are discarded,
+// keeping only the first. The container guides reject views such as
+// `base::span`, so that CTAD never silently deduces a `flat_map` that doesn't
+// own its elements.
+//
+// As for `flat_set`, the container guides return the container as
+// `std::type_identity_t<Container>`. This changes nothing for `flat_map`
+// itself, but keeps CTAD working through alias templates whose container
+// defaults to one built from the key and mapped types (see flat_set.h).
+template <class Container, class Compare = std::less<>>
+  requires(std::ranges::input_range<Container> &&
+           !std::ranges::view<Container> &&
+           std::invocable<const Compare&,
+                          const typename Container::value_type::first_type&,
+                          const typename Container::value_type::first_type&>)
+flat_map(Container, Compare = Compare())
+    -> flat_map<typename Container::value_type::first_type,
+                typename Container::value_type::second_type,
+                Compare,
+                std::type_identity_t<Container>>;
+
+template <class Container, class Compare = std::less<>>
+  requires(std::ranges::input_range<Container> &&
+           !std::ranges::view<Container> &&
+           std::invocable<const Compare&,
+                          const typename Container::value_type::first_type&,
+                          const typename Container::value_type::first_type&>)
+flat_map(sorted_unique_t, Container, Compare = Compare())
+    -> flat_map<typename Container::value_type::first_type,
+                typename Container::value_type::second_type,
+                Compare,
+                std::type_identity_t<Container>>;
+
+template <class InputIterator, class Compare = std::less<>>
+  requires(std::input_iterator<InputIterator>)
+flat_map(InputIterator, InputIterator, Compare = Compare())
+    -> flat_map<flat_map_internal::IterKeyT<InputIterator>,
+                flat_map_internal::IterMappedT<InputIterator>,
+                Compare>;
+
+template <class InputIterator, class Compare = std::less<>>
+  requires(std::input_iterator<InputIterator>)
+flat_map(sorted_unique_t, InputIterator, InputIterator, Compare = Compare())
+    -> flat_map<flat_map_internal::IterKeyT<InputIterator>,
+                flat_map_internal::IterMappedT<InputIterator>,
+                Compare>;
+
+template <class Range, class Compare = std::less<>>
+  requires(std::ranges::input_range<Range>)
+flat_map(std::from_range_t, Range&&, Compare = Compare())
+    -> flat_map<flat_map_internal::RangeKeyT<Range>,
+                flat_map_internal::RangeMappedT<Range>,
+                Compare>;
+
+template <class Range, class Compare = std::less<>>
+  requires(std::ranges::input_range<Range>)
+flat_map(std::from_range_t, sorted_unique_t, Range&&, Compare = Compare())
+    -> flat_map<flat_map_internal::RangeKeyT<Range>,
+                flat_map_internal::RangeMappedT<Range>,
+                Compare>;
+
+template <class Key, class Mapped, class Compare = std::less<>>
+flat_map(std::initializer_list<std::pair<Key, Mapped>>, Compare = Compare())
+    -> flat_map<Key, Mapped, Compare>;
+
+template <class Key, class Mapped, class Compare = std::less<>>
+flat_map(sorted_unique_t,
+         std::initializer_list<std::pair<Key, Mapped>>,
+         Compare = Compare()) -> flat_map<Key, Mapped, Compare>;
 
 }  // namespace base
 

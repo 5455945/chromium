@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,8 @@
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/lifetime/application_lifetime_desktop.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -32,6 +32,11 @@ const char kSuccessfulOperationPrefix[] = "ok - ";
 class BackgroundSyncBrowserTest : public InProcessBrowserTest {
  public:
   BackgroundSyncBrowserTest() = default;
+
+  BackgroundSyncBrowserTest(const BackgroundSyncBrowserTest&) = delete;
+  BackgroundSyncBrowserTest& operator=(const BackgroundSyncBrowserTest&) =
+      delete;
+
   ~BackgroundSyncBrowserTest() override = default;
 
   void SetUpOnMainThread() override {
@@ -45,9 +50,10 @@ class BackgroundSyncBrowserTest : public InProcessBrowserTest {
     SetUpBrowser(browser());
   }
 
-  void SetUpBrowser(Browser* browser) {
+  void SetUpBrowser(BrowserWindowInterface* browser) {
     // Load the helper page that helps drive these tests.
-    ui_test_utils::NavigateToURL(browser, https_server_->GetURL(kHelperPage));
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(
+        browser, https_server_->GetURL(kHelperPage)));
 
     // Register the Service Worker that's required for Background Sync. The
     // behaviour without an activated worker is covered by layout tests.
@@ -63,15 +69,19 @@ class BackgroundSyncBrowserTest : public InProcessBrowserTest {
 
   // Runs the |script| in the current tab and writes the output to |*result|.
   bool RunScript(const std::string& script, std::string* result) {
-    return content::ExecuteScriptAndExtractString(
-        browser()->tab_strip_model()->GetActiveWebContents()->GetMainFrame(),
-        script, result);
+    *result = content::EvalJs(browser()
+                                  ->GetTabStripModel()
+                                  ->GetActiveWebContents()
+                                  ->GetPrimaryMainFrame(),
+                              script)
+                  .ExtractString();
+    return true;
   }
 
   // Intercepts all requests.
   std::unique_ptr<net::test_server::HttpResponse> HandleRequest(
       const net::test_server::HttpRequest& request) {
-    if (request.GetURL().query() == "syncreceived") {
+    if (request.GetURL().GetQuery() == "syncreceived") {
       time_when_sync_event_received_ = base::Time::Now();
     }
 
@@ -101,7 +111,6 @@ class BackgroundSyncBrowserTest : public InProcessBrowserTest {
 
  private:
   std::unique_ptr<net::EmbeddedTestServer> https_server_;
-  DISALLOW_COPY_AND_ASSIGN(BackgroundSyncBrowserTest);
 };
 
 IN_PROC_BROWSER_TEST_F(BackgroundSyncBrowserTest, VerifyShutdownBehavior) {

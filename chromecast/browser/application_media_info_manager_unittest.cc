@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,9 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/task/sequenced_task_runner.h"
+#include "chromecast/browser/cast_session_id_map.h"
 #include "content/public/test/test_content_client_initializer.h"
 #include "content/public/test/test_renderer_host.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -18,7 +20,6 @@ namespace chromecast {
 namespace media {
 
 using ::testing::_;
-using ::testing::Invoke;
 
 namespace {
 
@@ -36,11 +37,13 @@ class ApplicationMediaInfoManagerTest
   void SetUp() override {
     initializer_ = std::make_unique<content::TestContentClientInitializer>();
     content::RenderViewHostTestHarness::SetUp();
+    shell::CastSessionIdMap::GetInstance(
+        base::SequencedTaskRunner::GetCurrentDefault().get());
     application_media_info_manager_ =
-        std::make_unique<ApplicationMediaInfoManager>(
-            main_rfh(),
-            application_media_info_manager_remote_.BindNewPipeAndPassReceiver(),
-            kSessionId, kMixedAudioEnabled);
+        &ApplicationMediaInfoManager::CreateForTesting(
+            *main_rfh(), kSessionId, kMixedAudioEnabled,
+            application_media_info_manager_remote_
+                .BindNewPipeAndPassReceiver());
   }
 
   void OnCastApplicationMediaInfo(
@@ -53,7 +56,9 @@ class ApplicationMediaInfoManagerTest
   mojo::Remote<::media::mojom::CastApplicationMediaInfoManager>
       application_media_info_manager_remote_;
   std::unique_ptr<content::TestContentClientInitializer> initializer_;
-  std::unique_ptr<ApplicationMediaInfoManager> application_media_info_manager_;
+  // `ApplicationMediaInfoManager` is a `DocumentService` and manages its
+  // own lifetime.
+  ApplicationMediaInfoManager* application_media_info_manager_;
   bool started_;
 };
 

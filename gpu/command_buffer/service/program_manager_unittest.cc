@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,16 @@
 #include <stdint.h>
 
 #include <algorithm>
+#include <array>
 #include <memory>
 
 #include "base/command_line.h"
-#include "base/cxx17_backports.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/strings/string_view_util.h"
 #include "gpu/command_buffer/common/gles2_cmd_format.h"
 #include "gpu/command_buffer/common/gles2_cmd_utils.h"
 #include "gpu/command_buffer/service/common_decoder.h"
@@ -27,7 +31,6 @@
 #include "gpu/config/gpu_preferences.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gl/gl_mock.h"
-#include "ui/gl/gl_version_info.h"
 
 using ::testing::_;
 using ::testing::DoAll;
@@ -78,7 +81,7 @@ class ProgramManagerTestBase : public GpuServiceTest, public DecoderClient {
   }
   void SetUp() override {
     // Parameters same as GpuServiceTest::SetUp
-    SetUpBase("2.0", "GL_EXT_framebuffer_object");
+    SetUpBase("OpenGL ES 2.0", "GL_EXT_framebuffer_object");
   }
   void TearDown() override {
     manager_->Destroy(false);
@@ -88,12 +91,12 @@ class ProgramManagerTestBase : public GpuServiceTest, public DecoderClient {
   }
 
   void OnConsoleMessage(int32_t id, const std::string& message) override {}
-  void CacheShader(const std::string& key, const std::string& shader) override {
-  }
+  void CacheBlob(gpu::GpuDiskCacheType type,
+                 const std::string& key,
+                 const std::string& blob) override {}
   void OnFenceSyncRelease(uint64_t release) override {}
   void OnDescheduleUntilFinished() override {}
   void OnRescheduleAfterFinished() override {}
-  void OnSwapBuffers(uint64_t swap_id, uint32_t flags) override {}
   void ScheduleGrContextCleanup() override {}
   void HandleReturnData(base::span<const uint8_t> data) override {}
 
@@ -118,6 +121,39 @@ TEST_F(ProgramManagerTest, Basic) {
   EXPECT_EQ(kClient1Id, client_id);
   // Check we get nothing for a non-existent program.
   EXPECT_TRUE(manager_->GetProgram(kClient2Id) == nullptr);
+}
+
+// Regression test: GL_SAMPLER_EXTERNAL_2D_Y2Y_EXT must be recognised as a
+// sampler. The UniformInfo constructor accepts it (sets accepts_api_type =
+// kUniform1i), so IsSampler() must also return true; otherwise the
+// SetSamplers() texture-unit range check is skipped and an attacker-supplied
+// out-of-range unit index is forwarded to the native driver via glUniform1i.
+TEST(ProgramManagerUniformInfoTest, SamplerExternal2DY2YIsSampler) {
+  std::vector<GLint> locs = {0};
+
+  // Control: GL_SAMPLER_EXTERNAL_OES is correctly handled.
+  Program::UniformInfo oes("s_oes", 0, GL_SAMPLER_EXTERNAL_OES, false, locs);
+  EXPECT_EQ(UniformApiType::kUniform1i, oes.accepts_api_type);
+  EXPECT_TRUE(oes.IsSampler());
+  EXPECT_EQ(1u, oes.texture_units.size());
+
+  // Bug: GL_SAMPLER_EXTERNAL_2D_Y2Y_EXT is accepted as a kUniform1i target
+  // (program_manager.cc:371) but IsSampler() returns false
+  // (program_manager.h:103-126 omits it). texture_units is therefore empty,
+  // the uniform is excluded from sampler_indices_, and Program::SetSamplers()
+  // skips the `value[ii] < num_texture_units` bounds check at
+  // program_manager.cc:1433.
+  Program::UniformInfo y2y("s_y2y", 0, GL_SAMPLER_EXTERNAL_2D_Y2Y_EXT, false,
+                           locs);
+  EXPECT_EQ(UniformApiType::kUniform1i, y2y.accepts_api_type)
+      << "Y2Y sampler accepts glUniform1i (program_manager.cc:371)";
+  EXPECT_TRUE(y2y.IsSampler())
+      << "GL_SAMPLER_EXTERNAL_2D_Y2Y_EXT missing from "
+         "UniformInfo::IsSampler() switch -- SetSamplers() texture-unit "
+         "bounds check is bypassed";
+  EXPECT_EQ(1u, y2y.texture_units.size())
+      << "texture_units sized to 0 because IsSampler() returned false; "
+         "uniform excluded from sampler_indices_";
 }
 
 TEST_F(ProgramManagerTest, Destroy) {
@@ -242,7 +278,7 @@ class ProgramManagerWithShaderTest : public ProgramManagerTestBase {
   static const GLint kBadUniformIndex = 1000;
 
   static const char* kOutputVariable1Name;
-  static const GLint kOutputVariable1Size = 1;
+  static const GLint kOutputVariable1Size = 0;
   static const GLenum kOutputVariable1Precision = GL_MEDIUM_FLOAT;
   static const bool kOutputVariable1StaticUse = true;
   static const GLint kOutputVariable1Location = -1;
@@ -256,6 +292,7 @@ class ProgramManagerWithShaderTest : public ProgramManagerTestBase {
  protected:
   typedef TestHelper::AttribInfo AttribInfo;
   typedef TestHelper::UniformInfo UniformInfo;
+  typedef TestHelper::ProgramOutputInfo ProgramOutputInfo;
 
   typedef enum {
     kVarUniform,
@@ -274,13 +311,13 @@ class ProgramManagerWithShaderTest : public ProgramManagerTestBase {
   } VarInfo;
 
   void SetUp() override {
-    // Need to be at leat 3.1 for UniformBlock related GL APIs.
-    SetUpBase("3.1", "");
+    // Need to be at least ES3 for UniformBlock related GL APIs.
+    SetUpBase("OpenGL ES 3.0", "");
   }
 
   Program* SetupDefaultProgram() {
-    SetupShaderExpectations(kAttribs, kNumAttribs, kUniforms, kNumUniforms,
-                            kServiceProgramId);
+    SetupShaderExpectations(kAttribs.data(), kNumAttribs, kUniforms.data(),
+                            kNumUniforms, {}, kServiceProgramId);
 
     Shader* vertex_shader = shader_manager_.CreateShader(
         kVertexShaderClientId, kVertexShaderServiceId, GL_VERTEX_SHADER);
@@ -299,85 +336,75 @@ class ProgramManagerWithShaderTest : public ProgramManagerTestBase {
 
     program->AttachShader(&shader_manager_, vertex_shader);
     program->AttachShader(&shader_manager_, fragment_shader);
-    program->Link(nullptr, Program::kCountOnlyStaticallyUsed, this);
+    program->Link(nullptr, this);
     return program;
   }
 
-  void SetupShaderExpectations(AttribInfo* attribs,
-                               size_t num_attribs,
-                               UniformInfo* uniforms,
-                               size_t num_uniforms,
-                               GLuint service_id) {
-    TestHelper::SetupShaderExpectations(gl_.get(), feature_info_.get(), attribs,
-                                        num_attribs, uniforms, num_uniforms,
-                                        service_id);
-  }
-
-  void SetupExpectationsForClearingUniforms(
-      UniformInfo* uniforms, size_t num_uniforms) {
-    TestHelper::SetupExpectationsForClearingUniforms(
-        gl_.get(), uniforms, num_uniforms);
+  void SetupShaderExpectations(
+      AttribInfo* attribs,
+      size_t num_attribs,
+      UniformInfo* uniforms,
+      size_t num_uniforms,
+      base::span<ProgramOutputInfo> program_outputs,
+      GLuint service_id) {
+    TestHelper::SetupShaderExpectationsWithVaryings(
+        gl_.get(), feature_info_.get(), attribs, num_attribs, uniforms,
+        num_uniforms, nullptr, 0, program_outputs, service_id);
   }
 
   // Return true if link status matches expected_link_status
   bool LinkAsExpected(Program* program,
-                      bool expected_link_status) {
+                      bool expected_link_status,
+                      base::span<ProgramOutputInfo> program_outputs = {}) {
     GLuint service_id = program->service_id();
     if (expected_link_status) {
-      SetupShaderExpectations(kAttribs, kNumAttribs, kUniforms, kNumUniforms,
-                              service_id);
+      SetupShaderExpectations(kAttribs.data(), kNumAttribs, kUniforms.data(),
+                              kNumUniforms, program_outputs, service_id);
     }
-    program->Link(nullptr, Program::kCountOnlyStaticallyUsed, this);
+    program->Link(nullptr, this);
     GLint link_status;
     program->GetProgramiv(GL_LINK_STATUS, &link_status);
     return (static_cast<bool>(link_status) == expected_link_status);
   }
 
-  Program* SetupProgramForVariables(const VarInfo* vertex_variables,
-                                    size_t vertex_variable_size,
-                                    const VarInfo* fragment_variables,
-                                    size_t fragment_variable_size,
-                                    const int* const shader_version = nullptr) {
+  Program* SetupProgramForVariables(
+      base::span<const VarInfo> vertex_variables,
+      base::span<const VarInfo> fragment_variables,
+      const int* const shader_version = nullptr) {
     // Set up shader
     AttributeMap vertex_attrib_map;
     UniformMap vertex_uniform_map;
     VaryingMap vertex_varying_map;
     OutputVariableList vertex_output_variable_list;
-    for (size_t ii = 0; ii < vertex_variable_size; ++ii) {
-      switch (vertex_variables[ii].category) {
+    for (const auto& vertex_variable : vertex_variables) {
+      switch (vertex_variable.category) {
         case kVarAttribute:
-          vertex_attrib_map[vertex_variables[ii].name] =
+          vertex_attrib_map[vertex_variable.name] =
               TestHelper::ConstructAttribute(
-                  vertex_variables[ii].type,
-                  vertex_variables[ii].size,
-                  vertex_variables[ii].precision,
-                  vertex_variables[ii].static_use,
-                  vertex_variables[ii].name);
+                  vertex_variable.type, vertex_variable.size,
+                  vertex_variable.precision, vertex_variable.static_use,
+                  vertex_variable.name);
           break;
         case kVarUniform:
-          vertex_uniform_map[vertex_variables[ii].name] =
+          vertex_uniform_map[vertex_variable.name] =
               TestHelper::ConstructUniform(
-                  vertex_variables[ii].type,
-                  vertex_variables[ii].size,
-                  vertex_variables[ii].precision,
-                  vertex_variables[ii].static_use,
-                  vertex_variables[ii].name);
+                  vertex_variable.type, vertex_variable.size,
+                  vertex_variable.precision, vertex_variable.static_use,
+                  vertex_variable.name);
           break;
         case kVarVarying:
-          vertex_varying_map[vertex_variables[ii].name] =
+          vertex_varying_map[vertex_variable.name] =
               TestHelper::ConstructVarying(
-                  vertex_variables[ii].type,
-                  vertex_variables[ii].size,
-                  vertex_variables[ii].precision,
-                  vertex_variables[ii].static_use,
-                  vertex_variables[ii].name);
+                  vertex_variable.type, vertex_variable.size,
+                  vertex_variable.precision, vertex_variable.static_use,
+                  vertex_variable.name);
           break;
         case kVarOutput:
           vertex_output_variable_list.push_back(
               TestHelper::ConstructOutputVariable(
-                  vertex_variables[ii].type, vertex_variables[ii].size,
-                  vertex_variables[ii].precision,
-                  vertex_variables[ii].static_use, vertex_variables[ii].name));
+                  vertex_variable.type, vertex_variable.size,
+                  vertex_variable.precision, vertex_variable.static_use,
+                  vertex_variable.name));
           break;
         default:
           NOTREACHED();
@@ -388,42 +415,35 @@ class ProgramManagerWithShaderTest : public ProgramManagerTestBase {
     UniformMap frag_uniform_map;
     VaryingMap frag_varying_map;
     OutputVariableList frag_output_variable_list;
-    for (size_t ii = 0; ii < fragment_variable_size; ++ii) {
-      switch (fragment_variables[ii].category) {
+    for (const auto& fragment_variable : fragment_variables) {
+      switch (fragment_variable.category) {
         case kVarAttribute:
-          frag_attrib_map[fragment_variables[ii].name] =
+          frag_attrib_map[fragment_variable.name] =
               TestHelper::ConstructAttribute(
-                  fragment_variables[ii].type,
-                  fragment_variables[ii].size,
-                  fragment_variables[ii].precision,
-                  fragment_variables[ii].static_use,
-                  fragment_variables[ii].name);
+                  fragment_variable.type, fragment_variable.size,
+                  fragment_variable.precision, fragment_variable.static_use,
+                  fragment_variable.name);
           break;
         case kVarUniform:
-          frag_uniform_map[fragment_variables[ii].name] =
+          frag_uniform_map[fragment_variable.name] =
               TestHelper::ConstructUniform(
-                  fragment_variables[ii].type,
-                  fragment_variables[ii].size,
-                  fragment_variables[ii].precision,
-                  fragment_variables[ii].static_use,
-                  fragment_variables[ii].name);
+                  fragment_variable.type, fragment_variable.size,
+                  fragment_variable.precision, fragment_variable.static_use,
+                  fragment_variable.name);
           break;
         case kVarVarying:
-          frag_varying_map[fragment_variables[ii].name] =
+          frag_varying_map[fragment_variable.name] =
               TestHelper::ConstructVarying(
-                  fragment_variables[ii].type,
-                  fragment_variables[ii].size,
-                  fragment_variables[ii].precision,
-                  fragment_variables[ii].static_use,
-                  fragment_variables[ii].name);
+                  fragment_variable.type, fragment_variable.size,
+                  fragment_variable.precision, fragment_variable.static_use,
+                  fragment_variable.name);
           break;
         case kVarOutput:
           frag_output_variable_list.push_back(
               TestHelper::ConstructOutputVariable(
-                  fragment_variables[ii].type, fragment_variables[ii].size,
-                  fragment_variables[ii].precision,
-                  fragment_variables[ii].static_use,
-                  fragment_variables[ii].name));
+                  fragment_variable.type, fragment_variable.size,
+                  fragment_variable.precision, fragment_variable.static_use,
+                  fragment_variable.name));
           break;
         default:
           NOTREACHED();
@@ -461,26 +481,38 @@ class ProgramManagerWithShaderTest : public ProgramManagerTestBase {
     ProgramManagerTestBase::TearDown();
   }
 
-  static AttribInfo kAttribs[];
-  static UniformInfo kUniforms[];
+  static std::array<AttribInfo, 4> kAttribs;
+  static std::array<UniformInfo, 3> kUniforms;
   ShaderManager shader_manager_;
 };
 
-ProgramManagerWithShaderTest::AttribInfo
-    ProgramManagerWithShaderTest::kAttribs[] = {
+std::array<ProgramManagerWithShaderTest::AttribInfo, 4>
+    ProgramManagerWithShaderTest::kAttribs = {{
         {
-            kAttrib1Name, kAttrib1Size, kAttrib1Type, kAttrib1Location,
+            kAttrib1Name,
+            kAttrib1Size,
+            kAttrib1Type,
+            kAttrib1Location,
         },
         {
-            kAttrib2Name, kAttrib2Size, kAttrib2Type, kAttrib2Location,
+            kAttrib2Name,
+            kAttrib2Size,
+            kAttrib2Type,
+            kAttrib2Location,
         },
         {
-            kAttrib3Name, kAttrib3Size, kAttrib3Type, kAttrib3Location,
+            kAttrib3Name,
+            kAttrib3Size,
+            kAttrib3Type,
+            kAttrib3Location,
         },
         {
-            kAttrib4Name, kAttrib4Size, kAttrib4Type, kAttrib4Location,
+            kAttrib4Name,
+            kAttrib4Size,
+            kAttrib4Type,
+            kAttrib4Location,
         },
-};
+    }};
 
 // GCC requires these declarations, but MSVC requires they not be present
 #ifndef COMPILER_MSVC
@@ -525,38 +557,41 @@ const GLint ProgramManagerWithShaderTest::kBadUniformIndex;
 #endif
 
 const size_t ProgramManagerWithShaderTest::kNumAttribs =
-    base::size(ProgramManagerWithShaderTest::kAttribs);
+    std::size(ProgramManagerWithShaderTest::kAttribs);
 
-ProgramManagerWithShaderTest::UniformInfo
-    ProgramManagerWithShaderTest::kUniforms[] = {
-  { kUniform1Name,
-    kUniform1Size,
-    kUniform1Type,
-    kUniform1FakeLocation,
-    kUniform1RealLocation,
-    kUniform1DesiredLocation,
-    kUniform1Name,
-  },
-  { kUniform2Name,
-    kUniform2Size,
-    kUniform2Type,
-    kUniform2FakeLocation,
-    kUniform2RealLocation,
-    kUniform2DesiredLocation,
-    kUniform2NameWithArrayIndex,
-  },
-  { kUniform3Name,
-    kUniform3Size,
-    kUniform3Type,
-    kUniform3FakeLocation,
-    kUniform3RealLocation,
-    kUniform3DesiredLocation,
-    kUniform3NameWithArrayIndex,
-  },
-};
+std::array<ProgramManagerWithShaderTest::UniformInfo, 3>
+    ProgramManagerWithShaderTest::kUniforms = {{
+        {
+            kUniform1Name,
+            kUniform1Size,
+            kUniform1Type,
+            kUniform1FakeLocation,
+            kUniform1RealLocation,
+            kUniform1DesiredLocation,
+            kUniform1Name,
+        },
+        {
+            kUniform2Name,
+            kUniform2Size,
+            kUniform2Type,
+            kUniform2FakeLocation,
+            kUniform2RealLocation,
+            kUniform2DesiredLocation,
+            kUniform2NameWithArrayIndex,
+        },
+        {
+            kUniform3Name,
+            kUniform3Size,
+            kUniform3Type,
+            kUniform3FakeLocation,
+            kUniform3RealLocation,
+            kUniform3DesiredLocation,
+            kUniform3NameWithArrayIndex,
+        },
+    }};
 
 const size_t ProgramManagerWithShaderTest::kNumUniforms =
-    base::size(ProgramManagerWithShaderTest::kUniforms);
+    std::size(ProgramManagerWithShaderTest::kUniforms);
 
 const char* ProgramManagerWithShaderTest::kAttrib1Name = "attrib1";
 const char* ProgramManagerWithShaderTest::kAttrib2Name = "attrib2";
@@ -819,9 +854,9 @@ TEST_F(ProgramManagerWithShaderTest, GLDriverReturnsGLUnderscoreUniform) {
        kUniform3NameWithArrayIndex,
       },
   };
-  const size_t kNumUniforms = base::size(kUniforms);
-  SetupShaderExpectations(kAttribs, kNumAttribs, kUniforms, kNumUniforms,
-                          kServiceProgramId);
+  const size_t kNumUniforms = std::size(kUniforms);
+  SetupShaderExpectations(kAttribs.data(), kNumAttribs, kUniforms, kNumUniforms,
+                          {}, kServiceProgramId);
   Shader* vshader = shader_manager_.CreateShader(
       kVertexShaderClientId, kVertexShaderServiceId, GL_VERTEX_SHADER);
   ASSERT_TRUE(vshader != nullptr);
@@ -835,7 +870,7 @@ TEST_F(ProgramManagerWithShaderTest, GLDriverReturnsGLUnderscoreUniform) {
   ASSERT_TRUE(program != nullptr);
   EXPECT_TRUE(program->AttachShader(&shader_manager_, vshader));
   EXPECT_TRUE(program->AttachShader(&shader_manager_, fshader));
-  program->Link(nullptr, Program::kCountOnlyStaticallyUsed, this);
+  program->Link(nullptr, this);
   GLint value = 0;
   program->GetProgramiv(GL_ACTIVE_ATTRIBUTES, &value);
   EXPECT_EQ(4, value);
@@ -883,9 +918,9 @@ TEST_F(ProgramManagerWithShaderTest, SimilarArrayNames) {
       kUniform3Name,
     },
   };
-  const size_t kNumUniforms = base::size(kUniforms);
-  SetupShaderExpectations(kAttribs, kNumAttribs, kUniforms, kNumUniforms,
-                          kServiceProgramId);
+  const size_t kNumUniforms = std::size(kUniforms);
+  SetupShaderExpectations(kAttribs.data(), kNumAttribs, kUniforms, kNumUniforms,
+                          {}, kServiceProgramId);
   Shader* vshader = shader_manager_.CreateShader(
       kVertexShaderClientId, kVertexShaderServiceId, GL_VERTEX_SHADER);
   ASSERT_TRUE(vshader != nullptr);
@@ -899,7 +934,7 @@ TEST_F(ProgramManagerWithShaderTest, SimilarArrayNames) {
   ASSERT_TRUE(program != nullptr);
   EXPECT_TRUE(program->AttachShader(&shader_manager_, vshader));
   EXPECT_TRUE(program->AttachShader(&shader_manager_, fshader));
-  program->Link(nullptr, Program::kCountOnlyStaticallyUsed, this);
+  program->Link(nullptr, this);
 
   // Check that we get the correct locations.
   EXPECT_EQ(kUniform2FakeLocation,
@@ -984,16 +1019,23 @@ TEST_F(ProgramManagerWithShaderTest, GLDriverReturnsWrongTypeInfo) {
       kUniform3NameWithArrayIndex,
     },
   };
-  const size_t kNumAttribs = base::size(kAttribs);
-  const size_t kNumUniforms = base::size(kUniforms);
+  static ProgramManagerWithShaderTest::ProgramOutputInfo kProgramOutputs[] = {
+      {
+          kOutputVariable1Name, kOutputVariable1Size, kOutputVariable1Type,
+          7,  // color_name
+          0,  // index
+      },
+  };
+  const size_t kNumAttribs = std::size(kAttribs);
+  const size_t kNumUniforms = std::size(kUniforms);
   SetupShaderExpectations(kAttribs, kNumAttribs, kUniforms, kNumUniforms,
-                          kServiceProgramId);
+                          kProgramOutputs, kServiceProgramId);
   Program* program =
       manager_->CreateProgram(kClientProgramId, kServiceProgramId);
   ASSERT_TRUE(program != nullptr);
   EXPECT_TRUE(program->AttachShader(&shader_manager_, vshader));
   EXPECT_TRUE(program->AttachShader(&shader_manager_, fshader));
-  program->Link(nullptr, Program::kCountOnlyStaticallyUsed, this);
+  program->Link(nullptr, this);
   // Check that we got the good type, not the bad.
   // Check Attribs
   for (unsigned index = 0; index < kNumAttribs; ++index) {
@@ -1083,6 +1125,25 @@ TEST_F(ProgramManagerWithShaderTest, ProgramInfoUseCount) {
   EXPECT_FALSE(fshader->InUse());
 }
 
+TEST_F(ProgramManagerWithShaderTest, ProgramInfoActiveTransformFeedbackCount) {
+  Program* program =
+      manager_->CreateProgram(kClientProgramId, kServiceProgramId);
+  ASSERT_TRUE(program != nullptr);
+  EXPECT_FALSE(program->IsActiveForTransformFeedback());
+
+  program->IncrementActiveTransformFeedbackCount();
+  EXPECT_TRUE(program->IsActiveForTransformFeedback());
+
+  program->IncrementActiveTransformFeedbackCount();
+  EXPECT_TRUE(program->IsActiveForTransformFeedback());
+
+  program->DecrementActiveTransformFeedbackCount();
+  EXPECT_TRUE(program->IsActiveForTransformFeedback());
+
+  program->DecrementActiveTransformFeedbackCount();
+  EXPECT_FALSE(program->IsActiveForTransformFeedback());
+}
+
 TEST_F(ProgramManagerWithShaderTest, ProgramInfoUseCount2) {
   Program* program =
       manager_->CreateProgram(kClientProgramId, kServiceProgramId);
@@ -1131,55 +1192,47 @@ TEST_F(ProgramManagerWithShaderTest, ProgramInfoGetProgramInfo) {
   const Program* program = SetupDefaultProgram();
   ASSERT_TRUE(program != nullptr);
   program->GetProgramInfo(manager_.get(), &bucket);
-  ProgramInfoHeader* header =
-      bucket.GetDataAs<ProgramInfoHeader*>(0, sizeof(ProgramInfoHeader));
-  ASSERT_TRUE(header != nullptr);
-  EXPECT_EQ(1u, header->link_status);
-  EXPECT_EQ(base::size(kAttribs), header->num_attribs);
-  EXPECT_EQ(base::size(kUniforms), header->num_uniforms);
-  const ProgramInput* inputs = bucket.GetDataAs<const ProgramInput*>(
-      sizeof(*header),
-      sizeof(ProgramInput) * (header->num_attribs + header->num_uniforms));
-  ASSERT_TRUE(inputs != nullptr);
-  const ProgramInput* input = inputs;
+  ProgramInfoHeader& header = bucket.GetDataAsSpan<ProgramInfoHeader>(0, 1u)[0];
+  EXPECT_EQ(1u, header.link_status);
+  EXPECT_EQ(std::size(kAttribs), header.num_attribs);
+  EXPECT_EQ(std::size(kUniforms), header.num_uniforms);
+  const uint32_t num_inputs = header.num_attribs + header.num_uniforms;
+  base::span<ProgramInput> inputs =
+      bucket.GetDataAsSpan<ProgramInput>(sizeof(header), num_inputs);
+  ASSERT_EQ(num_inputs, inputs.size());
+  size_t input_index = 0;
   // TODO(gman): Don't assume these are in order.
-  for (uint32_t ii = 0; ii < header->num_attribs; ++ii) {
+  for (uint32_t ii = 0; ii < header.num_attribs; ++ii) {
     const AttribInfo& expected = kAttribs[ii];
-    EXPECT_EQ(expected.size, input->size);
-    EXPECT_EQ(expected.type, input->type);
-    const int32_t* location = bucket.GetDataAs<const int32_t*>(
-        input->location_offset, sizeof(int32_t));
-    ASSERT_TRUE(location != nullptr);
-    EXPECT_EQ(expected.location, *location);
-    const char* name_buf = bucket.GetDataAs<const char*>(
-        input->name_offset, input->name_length);
-    ASSERT_TRUE(name_buf != nullptr);
-    std::string name(name_buf, input->name_length);
+    const ProgramInput& input = inputs[input_index++];
+    EXPECT_EQ(expected.size, input.size);
+    EXPECT_EQ(expected.type, input.type);
+    base::span<int32_t> location =
+        bucket.GetDataAsSpan<int32_t>(input.location_offset, 1u);
+    ASSERT_EQ(1u, location.size());
+    EXPECT_EQ(expected.location, location[0]);
+    std::string name(base::as_string_view(
+        bucket.GetDataAsByteSpan(input.name_offset, input.name_length)));
     EXPECT_STREQ(expected.name, name.c_str());
-    ++input;
   }
   // TODO(gman): Don't assume these are in order.
-  for (uint32_t ii = 0; ii < header->num_uniforms; ++ii) {
+  for (uint32_t ii = 0; ii < header.num_uniforms; ++ii) {
     const UniformInfo& expected = kUniforms[ii];
-    EXPECT_EQ(expected.size, input->size);
-    EXPECT_EQ(expected.type, input->type);
-    const int32_t* locations = bucket.GetDataAs<const int32_t*>(
-        input->location_offset, sizeof(int32_t) * input->size);
-    ASSERT_TRUE(locations != nullptr);
-    for (int32_t jj = 0; jj < input->size; ++jj) {
-      EXPECT_EQ(
-          ProgramManager::MakeFakeLocation(expected.fake_location, jj),
-          locations[jj]);
+    const ProgramInput& input = inputs[input_index++];
+    EXPECT_EQ(expected.size, input.size);
+    EXPECT_EQ(expected.type, input.type);
+    base::span<int32_t> locations = bucket.GetDataAsSpan<int32_t>(
+        input.location_offset, static_cast<size_t>(input.size));
+    ASSERT_EQ(static_cast<size_t>(input.size), locations.size());
+    for (int32_t jj = 0; jj < input.size; ++jj) {
+      EXPECT_EQ(ProgramManager::MakeFakeLocation(expected.fake_location, jj),
+                locations[jj]);
     }
-    const char* name_buf = bucket.GetDataAs<const char*>(
-        input->name_offset, input->name_length);
-    ASSERT_TRUE(name_buf != nullptr);
-    std::string name(name_buf, input->name_length);
+    std::string name(base::as_string_view(
+        bucket.GetDataAsByteSpan(input.name_offset, input.name_length)));
     EXPECT_STREQ(expected.good_name, name.c_str());
-    ++input;
   }
-  EXPECT_EQ(header->num_attribs + header->num_uniforms,
-            static_cast<uint32_t>(input - inputs));
+  EXPECT_EQ(num_inputs, input_index);
 }
 
 TEST_F(ProgramManagerWithShaderTest, ProgramInfoGetUniformBlocksNone) {
@@ -1193,10 +1246,9 @@ TEST_F(ProgramManagerWithShaderTest, ProgramInfoGetUniformBlocksNone) {
       .RetiresOnSaturation();
   EXPECT_TRUE(program->GetUniformBlocks(&bucket));
   EXPECT_EQ(sizeof(UniformBlocksHeader), bucket.size());
-  UniformBlocksHeader* header =
-      bucket.GetDataAs<UniformBlocksHeader*>(0, sizeof(UniformBlocksHeader));
-  EXPECT_TRUE(header != nullptr);
-  EXPECT_EQ(0u, header->num_uniform_blocks);
+  EXPECT_EQ(
+      0u,
+      bucket.GetDataAsSpan<UniformBlocksHeader>(0, 1u)[0].num_uniform_blocks);
   // Zero uniform blocks.
   EXPECT_CALL(*(gl_.get()),
               GetProgramiv(kServiceProgramId, GL_LINK_STATUS, _))
@@ -1208,10 +1260,9 @@ TEST_F(ProgramManagerWithShaderTest, ProgramInfoGetUniformBlocksNone) {
       .RetiresOnSaturation();
   EXPECT_TRUE(program->GetUniformBlocks(&bucket));
   EXPECT_EQ(sizeof(UniformBlocksHeader), bucket.size());
-  header =
-      bucket.GetDataAs<UniformBlocksHeader*>(0, sizeof(UniformBlocksHeader));
-  EXPECT_TRUE(header != nullptr);
-  EXPECT_EQ(0u, header->num_uniform_blocks);
+  EXPECT_EQ(
+      0u,
+      bucket.GetDataAsSpan<UniformBlocksHeader>(0, 1u)[0].num_uniform_blocks);
 }
 
 TEST_F(ProgramManagerWithShaderTest, ProgramInfoGetUniformBlocksValid) {
@@ -1220,40 +1271,44 @@ TEST_F(ProgramManagerWithShaderTest, ProgramInfoGetUniformBlocksValid) {
   ASSERT_TRUE(program != nullptr);
   struct Data {
     UniformBlocksHeader header;
-    UniformBlockInfo entry[2];
-    char name0[4];
+    std::array<UniformBlockInfo, 2> entry;
+    std::array<char, 4> name0;
     uint32_t indices0[2];
-    char name1[8];
+    std::array<char, 8> name1;
     uint32_t indices1[1];
   };
   Data data;
   // The names needs to be of size 4*k-1 to avoid padding in the struct Data.
   // This is a testing only problem.
-  const char* kName[] = { "cow", "chicken" };
+  auto kName = std::to_array<base::span<const char>>({
+      base::span_with_nul_from_cstring("cow"),
+      base::span_with_nul_from_cstring("chicken"),
+  });
   const uint32_t kIndices0[] = { 1, 2 };
   const uint32_t kIndices1[] = { 3 };
-  const uint32_t* kIndices[] = { kIndices0, kIndices1 };
+  auto kIndices =
+      std::to_array<base::span<const uint32_t>>({kIndices0, kIndices1});
   data.header.num_uniform_blocks = 2;
   data.entry[0].binding = 0;
   data.entry[0].data_size = 8;
-  data.entry[0].name_offset = ComputeOffset(&data, data.name0);
-  data.entry[0].name_length = base::size(data.name0);
-  data.entry[0].active_uniforms = base::size(data.indices0);
+  data.entry[0].name_offset = ComputeOffset(&data, data.name0.data());
+  data.entry[0].name_length = data.name0.size();
+  data.entry[0].active_uniforms = std::size(data.indices0);
   data.entry[0].active_uniform_offset = ComputeOffset(&data, data.indices0);
   data.entry[0].referenced_by_vertex_shader = static_cast<uint32_t>(true);
   data.entry[0].referenced_by_fragment_shader = static_cast<uint32_t>(false);
   data.entry[1].binding = 1;
   data.entry[1].data_size = 4;
-  data.entry[1].name_offset = ComputeOffset(&data, data.name1);
-  data.entry[1].name_length = base::size(data.name1);
-  data.entry[1].active_uniforms = base::size(data.indices1);
+  data.entry[1].name_offset = ComputeOffset(&data, data.name1.data());
+  data.entry[1].name_length = data.name1.size();
+  data.entry[1].active_uniforms = std::size(data.indices1);
   data.entry[1].active_uniform_offset = ComputeOffset(&data, data.indices1);
   data.entry[1].referenced_by_vertex_shader = static_cast<uint32_t>(false);
   data.entry[1].referenced_by_fragment_shader = static_cast<uint32_t>(true);
-  memcpy(data.name0, kName[0], base::size(data.name0));
+  base::span(data.name0).copy_from(kName[0]);
   data.indices0[0] = kIndices[0][0];
   data.indices0[1] = kIndices[0][1];
-  memcpy(data.name1, kName[1], base::size(data.name1));
+  base::span(data.name1).copy_from(kName[1]);
   data.indices1[0] = kIndices[1][0];
 
   EXPECT_CALL(*(gl_.get()),
@@ -1268,7 +1323,7 @@ TEST_F(ProgramManagerWithShaderTest, ProgramInfoGetUniformBlocksValid) {
               GetProgramiv(kServiceProgramId,
                            GL_ACTIVE_UNIFORM_BLOCK_MAX_NAME_LENGTH, _))
       .WillOnce(SetArgPointee<2>(
-          1 + std::max(strlen(kName[0]), strlen(kName[1]))))
+          1 + std::max(strlen(kName[0].data()), strlen(kName[1].data()))))
       .RetiresOnSaturation();
   for (uint32_t ii = 0; ii < data.header.num_uniform_blocks; ++ii) {
     EXPECT_CALL(*(gl_.get()),
@@ -1287,13 +1342,12 @@ TEST_F(ProgramManagerWithShaderTest, ProgramInfoGetUniformBlocksValid) {
         .WillOnce(SetArgPointee<3>(data.entry[ii].name_length))
         .RetiresOnSaturation();
     EXPECT_CALL(*(gl_.get()),
-                GetActiveUniformBlockName(
-                    kServiceProgramId, ii, data.entry[ii].name_length, _, _))
-          .WillOnce(DoAll(
-              SetArgPointee<3>(strlen(kName[ii])),
-              SetArrayArgument<4>(
-                  kName[ii], kName[ii] + data.entry[ii].name_length)))
-          .RetiresOnSaturation();
+                GetActiveUniformBlockName(kServiceProgramId, ii,
+                                          data.entry[ii].name_length, _, _))
+        .WillOnce(
+            DoAll(SetArgPointee<3>(strlen(kName[ii].data())),
+                  SetArrayArgument<4>(kName[ii].begin(), kName[ii].end())))
+        .RetiresOnSaturation();
     EXPECT_CALL(*(gl_.get()),
                 GetActiveUniformBlockiv(
                     kServiceProgramId, ii, GL_UNIFORM_BLOCK_ACTIVE_UNIFORMS, _))
@@ -1314,19 +1368,16 @@ TEST_F(ProgramManagerWithShaderTest, ProgramInfoGetUniformBlocksValid) {
         .RetiresOnSaturation();
   }
   for (uint32_t ii = 0; ii < data.header.num_uniform_blocks; ++ii) {
-    EXPECT_CALL(*(gl_.get()),
-                GetActiveUniformBlockiv(
-                    kServiceProgramId, ii,
-                    GL_UNIFORM_BLOCK_ACTIVE_UNIFORM_INDICES, _))
-        .WillOnce(SetArrayArgument<3>(
-            kIndices[ii], kIndices[ii] + data.entry[ii].active_uniforms))
+    EXPECT_CALL(*(gl_.get()), GetActiveUniformBlockiv(
+                                  kServiceProgramId, ii,
+                                  GL_UNIFORM_BLOCK_ACTIVE_UNIFORM_INDICES, _))
+        .WillOnce(SetArrayArgument<3>(kIndices[ii].begin(), kIndices[ii].end()))
         .RetiresOnSaturation();
   }
   program->GetUniformBlocks(&bucket);
   EXPECT_EQ(sizeof(Data), bucket.size());
-  Data* bucket_data = bucket.GetDataAs<Data*>(0, sizeof(Data));
-  EXPECT_TRUE(bucket_data != nullptr);
-  EXPECT_EQ(0, memcmp(&data, bucket_data, sizeof(Data)));
+  EXPECT_EQ(bucket.GetDataAsByteSpan(0, sizeof(Data)),
+            base::byte_span_from_ref(data));
 }
 
 TEST_F(ProgramManagerWithShaderTest,
@@ -1347,13 +1398,13 @@ TEST_F(ProgramManagerWithShaderTest,
       .RetiresOnSaturation();
   EXPECT_TRUE(program->GetTransformFeedbackVaryings(&bucket));
   EXPECT_EQ(sizeof(TransformFeedbackVaryingsHeader), bucket.size());
-  TransformFeedbackVaryingsHeader* header =
-      bucket.GetDataAs<TransformFeedbackVaryingsHeader*>(
-          0, sizeof(TransformFeedbackVaryingsHeader));
-  EXPECT_TRUE(header != nullptr);
-  EXPECT_EQ(0u, header->num_transform_feedback_varyings);
-  EXPECT_EQ(static_cast<uint32_t>(GL_INTERLEAVED_ATTRIBS),
-            header->transform_feedback_buffer_mode);
+  {
+    TransformFeedbackVaryingsHeader& header =
+        bucket.GetDataAsSpan<TransformFeedbackVaryingsHeader>(0, 1u)[0];
+    EXPECT_EQ(0u, header.num_transform_feedback_varyings);
+    EXPECT_EQ(static_cast<uint32_t>(GL_INTERLEAVED_ATTRIBS),
+              header.transform_feedback_buffer_mode);
+  }
   // Zero transform feedback blocks.
   EXPECT_CALL(*(gl_.get()),
               GetProgramiv(kServiceProgramId,
@@ -1372,12 +1423,13 @@ TEST_F(ProgramManagerWithShaderTest,
       .RetiresOnSaturation();
   EXPECT_TRUE(program->GetTransformFeedbackVaryings(&bucket));
   EXPECT_EQ(sizeof(TransformFeedbackVaryingsHeader), bucket.size());
-  header = bucket.GetDataAs<TransformFeedbackVaryingsHeader*>(
-      0, sizeof(TransformFeedbackVaryingsHeader));
-  EXPECT_TRUE(header != nullptr);
-  EXPECT_EQ(static_cast<uint32_t>(GL_SEPARATE_ATTRIBS),
-            header->transform_feedback_buffer_mode);
-  EXPECT_EQ(0u, header->num_transform_feedback_varyings);
+  {
+    TransformFeedbackVaryingsHeader& header =
+        bucket.GetDataAsSpan<TransformFeedbackVaryingsHeader>(0, 1u)[0];
+    EXPECT_EQ(static_cast<uint32_t>(GL_SEPARATE_ATTRIBS),
+              header.transform_feedback_buffer_mode);
+    EXPECT_EQ(0u, header.num_transform_feedback_varyings);
+  }
 }
 
 TEST_F(ProgramManagerWithShaderTest,
@@ -1387,26 +1439,29 @@ TEST_F(ProgramManagerWithShaderTest,
   ASSERT_TRUE(program != nullptr);
   struct Data {
     TransformFeedbackVaryingsHeader header;
-    TransformFeedbackVaryingInfo entry[2];
-    char name0[4];
-    char name1[8];
+    std::array<TransformFeedbackVaryingInfo, 2> entry;
+    std::array<char, 4> name0;
+    std::array<char, 8> name1;
   };
   Data data;
   // The names needs to be of size 4*k-1 to avoid padding in the struct Data.
   // This is a testing only problem.
-  const char* kName[] = { "cow", "chicken" };
+  auto kName = std::to_array<base::span<const char>>({
+      base::span_with_nul_from_cstring("cow"),
+      base::span_with_nul_from_cstring("chicken"),
+  });
   data.header.transform_feedback_buffer_mode = GL_INTERLEAVED_ATTRIBS;
   data.header.num_transform_feedback_varyings = 2;
   data.entry[0].size = 1;
   data.entry[0].type = GL_FLOAT_VEC2;
-  data.entry[0].name_offset = ComputeOffset(&data, data.name0);
-  data.entry[0].name_length = base::size(data.name0);
+  data.entry[0].name_offset = ComputeOffset(&data, data.name0.data());
+  data.entry[0].name_length = data.name0.size();
   data.entry[1].size = 2;
   data.entry[1].type = GL_FLOAT;
-  data.entry[1].name_offset = ComputeOffset(&data, data.name1);
-  data.entry[1].name_length = base::size(data.name1);
-  memcpy(data.name0, kName[0], base::size(data.name0));
-  memcpy(data.name1, kName[1], base::size(data.name1));
+  data.entry[1].name_offset = ComputeOffset(&data, data.name1.data());
+  data.entry[1].name_length = data.name1.size();
+  base::span(data.name0).copy_from(kName[0]);
+  base::span(data.name1).copy_from(kName[1]);
 
   EXPECT_CALL(*(gl_.get()),
               GetProgramiv(kServiceProgramId,
@@ -1423,7 +1478,8 @@ TEST_F(ProgramManagerWithShaderTest,
                   kServiceProgramId, GL_TRANSFORM_FEEDBACK_VARYINGS, _))
       .WillOnce(SetArgPointee<2>(data.header.num_transform_feedback_varyings))
       .RetiresOnSaturation();
-  GLsizei max_length = 1 + std::max(strlen(kName[0]), strlen(kName[1]));
+  GLsizei max_length =
+      1 + std::max(strlen(kName[0].data()), strlen(kName[1].data()));
   EXPECT_CALL(*(gl_.get()),
               GetProgramiv(kServiceProgramId,
                            GL_TRANSFORM_FEEDBACK_VARYING_MAX_LENGTH, _))
@@ -1432,21 +1488,19 @@ TEST_F(ProgramManagerWithShaderTest,
   for (uint32_t ii = 0; ii < data.header.num_transform_feedback_varyings;
        ++ii) {
     EXPECT_CALL(*(gl_.get()),
-                GetTransformFeedbackVarying(
-                    kServiceProgramId, ii, max_length, _, _, _, _))
-        .WillOnce(DoAll(
-            SetArgPointee<3>(data.entry[ii].name_length - 1),
-            SetArgPointee<4>(data.entry[ii].size),
-            SetArgPointee<5>(data.entry[ii].type),
-            SetArrayArgument<6>(
-                kName[ii], kName[ii] + data.entry[ii].name_length)))
+                GetTransformFeedbackVarying(kServiceProgramId, ii, max_length,
+                                            _, _, _, _))
+        .WillOnce(
+            DoAll(SetArgPointee<3>(data.entry[ii].name_length - 1),
+                  SetArgPointee<4>(data.entry[ii].size),
+                  SetArgPointee<5>(data.entry[ii].type),
+                  SetArrayArgument<6>(kName[ii].begin(), kName[ii].end())))
         .RetiresOnSaturation();
   }
   program->GetTransformFeedbackVaryings(&bucket);
   EXPECT_EQ(sizeof(Data), bucket.size());
-  Data* bucket_data = bucket.GetDataAs<Data*>(0, sizeof(Data));
-  EXPECT_TRUE(bucket_data != nullptr);
-  EXPECT_EQ(0, memcmp(&data, bucket_data, sizeof(Data)));
+  EXPECT_EQ(bucket.GetDataAsByteSpan(0, sizeof(Data)),
+            base::byte_span_from_ref(data));
 }
 
 TEST_F(ProgramManagerWithShaderTest, ProgramInfoGetUniformsES3None) {
@@ -1460,10 +1514,7 @@ TEST_F(ProgramManagerWithShaderTest, ProgramInfoGetUniformsES3None) {
       .RetiresOnSaturation();
   EXPECT_TRUE(program->GetUniformsES3(&bucket));
   EXPECT_EQ(sizeof(UniformsES3Header), bucket.size());
-  UniformsES3Header* header =
-      bucket.GetDataAs<UniformsES3Header*>(0, sizeof(UniformsES3Header));
-  EXPECT_TRUE(header != nullptr);
-  EXPECT_EQ(0u, header->num_uniforms);
+  EXPECT_EQ(0u, bucket.GetDataAsSpan<UniformsES3Header>(0, 1u)[0].num_uniforms);
   // Zero uniform blocks.
   EXPECT_CALL(*(gl_.get()),
               GetProgramiv(kServiceProgramId, GL_LINK_STATUS, _))
@@ -1475,10 +1526,7 @@ TEST_F(ProgramManagerWithShaderTest, ProgramInfoGetUniformsES3None) {
       .RetiresOnSaturation();
   EXPECT_TRUE(program->GetUniformsES3(&bucket));
   EXPECT_EQ(sizeof(UniformsES3Header), bucket.size());
-  header =
-      bucket.GetDataAs<UniformsES3Header*>(0, sizeof(UniformsES3Header));
-  EXPECT_TRUE(header != nullptr);
-  EXPECT_EQ(0u, header->num_uniforms);
+  EXPECT_EQ(0u, bucket.GetDataAsSpan<UniformsES3Header>(0, 1u)[0].num_uniforms);
 }
 
 TEST_F(ProgramManagerWithShaderTest, ProgramInfoGetUniformsES3Valid) {
@@ -1487,14 +1535,14 @@ TEST_F(ProgramManagerWithShaderTest, ProgramInfoGetUniformsES3Valid) {
   ASSERT_TRUE(program != nullptr);
   struct Data {
     UniformsES3Header header;
-    UniformES3Info entry[2];
+    std::array<UniformES3Info, 2> entry;
   };
   Data data;
-  const GLint kBlockIndex[] = { -1, 2 };
-  const GLint kOffset[] = { 3, 4 };
-  const GLint kArrayStride[] = { 7, 8 };
-  const GLint kMatrixStride[] = { 9, 10 };
-  const GLint kIsRowMajor[] = { 0, 1 };
+  constexpr std::array<GLint, 2> kBlockIndex = {-1, 2};
+  constexpr std::array<GLint, 2> kOffset = {3, 4};
+  constexpr std::array<GLint, 2> kArrayStride = {7, 8};
+  constexpr std::array<GLint, 2> kMatrixStride = {9, 10};
+  constexpr std::array<GLint, 2> kIsRowMajor = {0, 1};
   data.header.num_uniforms = 2;
   for (uint32_t ii = 0; ii < data.header.num_uniforms; ++ii) {
     data.entry[ii].block_index = kBlockIndex[ii];
@@ -1513,36 +1561,34 @@ TEST_F(ProgramManagerWithShaderTest, ProgramInfoGetUniformsES3Valid) {
       .WillOnce(SetArgPointee<2>(data.header.num_uniforms))
       .RetiresOnSaturation();
 
-  const GLenum kPname[] = {
-    GL_UNIFORM_BLOCK_INDEX,
-    GL_UNIFORM_OFFSET,
-    GL_UNIFORM_ARRAY_STRIDE,
-    GL_UNIFORM_MATRIX_STRIDE,
-    GL_UNIFORM_IS_ROW_MAJOR,
-  };
-  const GLint* kParams[] = {
-    kBlockIndex,
-    kOffset,
-    kArrayStride,
-    kMatrixStride,
-    kIsRowMajor,
-  };
-  const size_t kNumIterations = base::size(kPname);
+  const auto kPname = std::to_array<GLenum>({
+      GL_UNIFORM_BLOCK_INDEX,
+      GL_UNIFORM_OFFSET,
+      GL_UNIFORM_ARRAY_STRIDE,
+      GL_UNIFORM_MATRIX_STRIDE,
+      GL_UNIFORM_IS_ROW_MAJOR,
+  });
+  auto kParams = std::to_array<const GLint*>({
+      kBlockIndex.data(),
+      kOffset.data(),
+      kArrayStride.data(),
+      kMatrixStride.data(),
+      kIsRowMajor.data(),
+  });
+  const size_t kNumIterations = kPname.size();
   for (size_t ii = 0; ii < kNumIterations; ++ii) {
     EXPECT_CALL(*(gl_.get()),
-                GetActiveUniformsiv(
-                    kServiceProgramId, data.header.num_uniforms, _,
-                    kPname[ii], _))
-      .WillOnce(SetArrayArgument<4>(
-          kParams[ii], kParams[ii] + data.header.num_uniforms))
-      .RetiresOnSaturation();
+                GetActiveUniformsiv(kServiceProgramId, data.header.num_uniforms,
+                                    _, kPname[ii], _))
+        .WillOnce(SetArrayArgument<4>(
+            kParams[ii], UNSAFE_TODO(kParams[ii] + data.header.num_uniforms)))
+        .RetiresOnSaturation();
   }
 
   program->GetUniformsES3(&bucket);
   EXPECT_EQ(sizeof(Data), bucket.size());
-  Data* bucket_data = bucket.GetDataAs<Data*>(0, sizeof(Data));
-  EXPECT_TRUE(bucket_data != nullptr);
-  EXPECT_EQ(0, memcmp(&data, bucket_data, sizeof(Data)));
+  EXPECT_EQ(bucket.GetDataAsByteSpan(0, sizeof(Data)),
+            base::byte_span_from_ref(data));
 }
 
 // Some drivers optimize out unused uniform array elements, so their
@@ -1553,7 +1599,7 @@ TEST_F(ProgramManagerWithShaderTest, UnusedUniformArrayElements) {
   ASSERT_TRUE(program != nullptr);
   // Emulate the situation that only the first element has a valid location.
   // TODO(zmo): Don't assume these are in order.
-  for (size_t ii = 0; ii < base::size(kUniforms); ++ii) {
+  for (size_t ii = 0; ii < std::size(kUniforms); ++ii) {
     Program::UniformInfo* uniform = const_cast<Program::UniformInfo*>(
         program->GetUniformInfo(ii));
     ASSERT_TRUE(uniform != nullptr);
@@ -1563,29 +1609,26 @@ TEST_F(ProgramManagerWithShaderTest, UnusedUniformArrayElements) {
       uniform->element_locations[jj] = -1;
   }
   program->GetProgramInfo(manager_.get(), &bucket);
-  ProgramInfoHeader* header =
-      bucket.GetDataAs<ProgramInfoHeader*>(0, sizeof(ProgramInfoHeader));
-  ASSERT_TRUE(header != nullptr);
-  EXPECT_EQ(1u, header->link_status);
-  EXPECT_EQ(base::size(kAttribs), header->num_attribs);
-  EXPECT_EQ(base::size(kUniforms), header->num_uniforms);
-  const ProgramInput* inputs = bucket.GetDataAs<const ProgramInput*>(
-      sizeof(*header),
-      sizeof(ProgramInput) * (header->num_attribs + header->num_uniforms));
-  ASSERT_TRUE(inputs != nullptr);
-  const ProgramInput* input = inputs + header->num_attribs;
-  for (uint32_t ii = 0; ii < header->num_uniforms; ++ii) {
+  ProgramInfoHeader& header = bucket.GetDataAsSpan<ProgramInfoHeader>(0, 1u)[0];
+  EXPECT_EQ(1u, header.link_status);
+  EXPECT_EQ(std::size(kAttribs), header.num_attribs);
+  EXPECT_EQ(std::size(kUniforms), header.num_uniforms);
+  base::span<ProgramInput> inputs = bucket.GetDataAsSpan<ProgramInput>(
+      sizeof(header), header.num_attribs + header.num_uniforms);
+  ASSERT_EQ(header.num_attribs + header.num_uniforms, inputs.size());
+  base::span<ProgramInput> uniform_inputs = inputs.subspan(header.num_attribs);
+  for (uint32_t ii = 0; ii < header.num_uniforms; ++ii) {
     const UniformInfo& expected = kUniforms[ii];
-    EXPECT_EQ(expected.size, input->size);
-    const int32_t* locations = bucket.GetDataAs<const int32_t*>(
-        input->location_offset, sizeof(int32_t) * input->size);
-    ASSERT_TRUE(locations != nullptr);
-    EXPECT_EQ(
-        ProgramManager::MakeFakeLocation(expected.fake_location, 0),
-        locations[0]);
-    for (int32_t jj = 1; jj < input->size; ++jj)
+    const ProgramInput& input = uniform_inputs[ii];
+    EXPECT_EQ(expected.size, input.size);
+    base::span<int32_t> locations = bucket.GetDataAsSpan<int32_t>(
+        input.location_offset, static_cast<size_t>(input.size));
+    ASSERT_EQ(static_cast<size_t>(input.size), locations.size());
+    EXPECT_EQ(ProgramManager::MakeFakeLocation(expected.fake_location, 0),
+              locations[0]);
+    for (int32_t jj = 1; jj < input.size; ++jj) {
       EXPECT_EQ(-1, locations[jj]);
-    ++input;
+    }
   }
 }
 
@@ -1593,12 +1636,10 @@ TEST_F(ProgramManagerWithShaderTest, BindAttribLocationConflicts) {
   // Set up shader
   AttributeMap attrib_map;
   for (uint32_t ii = 0; ii < kNumAttribs; ++ii) {
-    attrib_map[kAttribs[ii].name] = TestHelper::ConstructAttribute(
-        kAttribs[ii].type,
-        kAttribs[ii].size,
-        GL_MEDIUM_FLOAT,
-        kAttribStaticUse,
-        kAttribs[ii].name);
+    const AttribInfo& attrib = kAttribs[ii];
+    attrib_map[attrib.name] = TestHelper::ConstructAttribute(
+        attrib.type, attrib.size, GL_MEDIUM_FLOAT, kAttribStaticUse,
+        attrib.name);
   }
   const char kAttribMatName[] = "matAttrib";
   attrib_map[kAttribMatName] = TestHelper::ConstructAttribute(
@@ -1727,7 +1768,8 @@ TEST_F(ProgramManagerWithShaderTest, VaryingTypeMismatch) {
   const VarInfo kFragmentVarying =
       { GL_FLOAT_VEC4, 1, GL_MEDIUM_FLOAT, true, "a", kVarVarying };
   Program* program =
-      SetupProgramForVariables(&kVertexVarying, 1, &kFragmentVarying, 1);
+      SetupProgramForVariables(base::span_from_ref(kVertexVarying),
+                               base::span_from_ref(kFragmentVarying));
 
   std::string conflicting_name;
 
@@ -1744,7 +1786,8 @@ TEST_F(ProgramManagerWithShaderTest, VaryingArraySizeMismatch) {
   const VarInfo kFragmentVarying =
       { GL_FLOAT, 3, GL_MEDIUM_FLOAT, true, "a", kVarVarying };
   Program* program =
-      SetupProgramForVariables(&kVertexVarying, 1, &kFragmentVarying, 1);
+      SetupProgramForVariables(base::span_from_ref(kVertexVarying),
+                               base::span_from_ref(kFragmentVarying));
 
   std::string conflicting_name;
 
@@ -1761,7 +1804,8 @@ TEST_F(ProgramManagerWithShaderTest, VaryingPrecisionMismatch) {
   const VarInfo kFragmentVarying =
       { GL_FLOAT, 2, GL_MEDIUM_FLOAT, true, "a", kVarVarying };
   Program* program =
-      SetupProgramForVariables(&kVertexVarying, 1, &kFragmentVarying, 1);
+      SetupProgramForVariables(base::span_from_ref(kVertexVarying),
+                               base::span_from_ref(kFragmentVarying));
 
   std::string conflicting_name;
 
@@ -1775,7 +1819,8 @@ TEST_F(ProgramManagerWithShaderTest, VaryingPrecisionMismatch) {
 TEST_F(ProgramManagerWithShaderTest, VaryingMissing) {
   const VarInfo kFragmentVarying =
       { GL_FLOAT, 3, GL_MEDIUM_FLOAT, true, "a", kVarVarying };
-  Program* program = SetupProgramForVariables(nullptr, 0, &kFragmentVarying, 1);
+  Program* program =
+      SetupProgramForVariables({}, base::span_from_ref(kFragmentVarying));
 
   std::string conflicting_name;
 
@@ -1790,7 +1835,8 @@ TEST_F(ProgramManagerWithShaderTest, VaryingMissing) {
 TEST_F(ProgramManagerWithShaderTest, InactiveVarying) {
   const VarInfo kFragmentVarying =
       { GL_FLOAT, 3, GL_MEDIUM_FLOAT, false, "a", kVarVarying };
-  Program* program = SetupProgramForVariables(nullptr, 0, &kFragmentVarying, 1);
+  Program* program =
+      SetupProgramForVariables({}, base::span_from_ref(kFragmentVarying));
 
   std::string conflicting_name;
 
@@ -1808,7 +1854,8 @@ TEST_F(ProgramManagerWithShaderTest, AttribUniformNameConflict) {
   const VarInfo kFragmentUniform =
       { GL_FLOAT_VEC4, 1, GL_MEDIUM_FLOAT, true, "a", kVarUniform };
   Program* program =
-      SetupProgramForVariables(&kVertexAttribute, 1, &kFragmentUniform, 1);
+      SetupProgramForVariables(base::span_from_ref(kVertexAttribute),
+                               base::span_from_ref(kFragmentUniform));
 
   std::string conflicting_name;
 
@@ -1889,6 +1936,13 @@ TEST_F(ProgramManagerWithShaderTest, FragmentOutputTypes) {
   }
 
   {  // Single user defined output.
+    static ProgramOutputInfo kProgramOutputs[] = {{
+        "myOutput",            // name
+        0,                     // size
+        GL_UNSIGNED_INT_VEC4,  // type
+        7,                     // color_name
+        0,                     // index
+    }};
     OutputVariableList fragment_outputs;
     sh::OutputVariable var = TestHelper::ConstructOutputVariable(
         GL_UNSIGNED_INT_VEC4, 0, GL_MEDIUM_INT, true, "myOutput");
@@ -1897,12 +1951,19 @@ TEST_F(ProgramManagerWithShaderTest, FragmentOutputTypes) {
     TestHelper::SetShaderStates(gl_.get(), fshader, true, nullptr, nullptr,
                                 nullptr, nullptr, nullptr, nullptr, nullptr,
                                 &fragment_outputs, nullptr);
-    EXPECT_TRUE(LinkAsExpected(program, true));
+    EXPECT_TRUE(LinkAsExpected(program, true, kProgramOutputs));
     EXPECT_EQ(0x2u, program->fragment_output_type_mask());
     EXPECT_EQ(0x3u, program->fragment_output_written_mask());
   }
 
   {  // Single user defined output - no static use.
+    static ProgramOutputInfo kProgramOutputs[] = {{
+        "myOutput",            // name
+        0,                     // size
+        GL_UNSIGNED_INT_VEC4,  // type
+        7,                     // color_name
+        0,                     // index
+    }};
     OutputVariableList fragment_outputs;
     sh::OutputVariable var = TestHelper::ConstructOutputVariable(
         GL_UNSIGNED_INT_VEC4, 0, GL_MEDIUM_INT, false, "myOutput");
@@ -1911,27 +1972,43 @@ TEST_F(ProgramManagerWithShaderTest, FragmentOutputTypes) {
     TestHelper::SetShaderStates(gl_.get(), fshader, true, nullptr, nullptr,
                                 nullptr, nullptr, nullptr, nullptr, nullptr,
                                 &fragment_outputs, nullptr);
-    EXPECT_TRUE(LinkAsExpected(program, true));
+    EXPECT_TRUE(LinkAsExpected(program, true, kProgramOutputs));
     EXPECT_EQ(0x2u, program->fragment_output_type_mask());
     EXPECT_EQ(0x3u, program->fragment_output_written_mask());
   }
 
   {  // Multiple user defined outputs.
+    static ProgramOutputInfo program_outputs[] = {
+        {
+            "myOutput",            // name
+            0,                     // size
+            GL_UNSIGNED_INT_VEC4,  // type
+            7,                     // color_name
+            0,                     // index
+        },
+        {
+            "myOutput1",    // name
+            0,              // size
+            GL_FLOAT_VEC4,  // type
+            7,              // color_name
+            0,              // index
+        },
+    };
     OutputVariableList fragment_outputs;
     sh::OutputVariable var = TestHelper::ConstructOutputVariable(
         GL_INT_VEC4, 0, GL_MEDIUM_INT, true, "myOutput");
     var.location = 0;
     fragment_outputs.push_back(var);
-    var = TestHelper::ConstructOutputVariable(
-        GL_FLOAT_VEC4, 2, GL_MEDIUM_FLOAT, true, "myOutputArray");
+    var = TestHelper::ConstructOutputVariable(GL_FLOAT_VEC4, 0, GL_MEDIUM_FLOAT,
+                                              true, "myOutput1");
     var.location = 2;
     fragment_outputs.push_back(var);
     TestHelper::SetShaderStates(gl_.get(), fshader, true, nullptr, nullptr,
                                 nullptr, nullptr, nullptr, nullptr, nullptr,
                                 &fragment_outputs, nullptr);
-    EXPECT_TRUE(LinkAsExpected(program, true));
-    EXPECT_EQ(0xF1u, program->fragment_output_type_mask());
-    EXPECT_EQ(0xF3u, program->fragment_output_written_mask());
+    EXPECT_TRUE(LinkAsExpected(program, true, program_outputs));
+    EXPECT_EQ(0x31u, program->fragment_output_type_mask());
+    EXPECT_EQ(0x33u, program->fragment_output_written_mask());
   }
 }
 
@@ -1946,10 +2023,9 @@ TEST_F(ProgramManagerWithShaderTest, TooManyVaryings) {
       { GL_FLOAT_VEC4, 5, GL_MEDIUM_FLOAT, true, "b", kVarVarying }
   };
   Program* program =
-      SetupProgramForVariables(kVertexVaryings, 2, kFragmentVaryings, 2);
+      SetupProgramForVariables(kVertexVaryings, kFragmentVaryings);
 
-  EXPECT_FALSE(
-      program->CheckVaryingsPacking(Program::kCountOnlyStaticallyUsed));
+  EXPECT_FALSE(program->CheckVaryingsPacking());
   EXPECT_TRUE(LinkAsExpected(program, false));
 }
 
@@ -1964,93 +2040,10 @@ TEST_F(ProgramManagerWithShaderTest, TooManyInactiveVaryings) {
       { GL_FLOAT_VEC4, 5, GL_MEDIUM_FLOAT, true, "b", kVarVarying }
   };
   Program* program =
-      SetupProgramForVariables(kVertexVaryings, 2, kFragmentVaryings, 2);
+      SetupProgramForVariables(kVertexVaryings, kFragmentVaryings);
 
-  EXPECT_TRUE(
-      program->CheckVaryingsPacking(Program::kCountOnlyStaticallyUsed));
+  EXPECT_TRUE(program->CheckVaryingsPacking());
   EXPECT_TRUE(LinkAsExpected(program, true));
-}
-
-// Varyings go over 8 rows but some are inactive.
-// However, we still fail the check if kCountAll option is used.
-TEST_F(ProgramManagerWithShaderTest, CountAllVaryingsInPacking) {
-  const VarInfo kVertexVaryings[] = {
-      { GL_FLOAT_VEC4, 4, GL_MEDIUM_FLOAT, true, "a", kVarVarying },
-      { GL_FLOAT_VEC4, 5, GL_MEDIUM_FLOAT, true, "b", kVarVarying }
-  };
-  const VarInfo kFragmentVaryings[] = {
-      { GL_FLOAT_VEC4, 4, GL_MEDIUM_FLOAT, false, "a", kVarVarying },
-      { GL_FLOAT_VEC4, 5, GL_MEDIUM_FLOAT, true, "b", kVarVarying }
-  };
-  Program* program =
-      SetupProgramForVariables(kVertexVaryings, 2, kFragmentVaryings, 2);
-
-  EXPECT_FALSE(program->CheckVaryingsPacking(Program::kCountAll));
-}
-
-TEST_F(ProgramManagerWithShaderTest, ClearWithSamplerTypes) {
-  Shader* vshader = shader_manager_.CreateShader(
-      kVertexShaderClientId, kVertexShaderServiceId, GL_VERTEX_SHADER);
-  ASSERT_TRUE(vshader != nullptr);
-  TestHelper::SetShaderStates(gl_.get(), vshader, true);
-  Shader* fshader = shader_manager_.CreateShader(
-      kFragmentShaderClientId, kFragmentShaderServiceId, GL_FRAGMENT_SHADER);
-  ASSERT_TRUE(fshader != nullptr);
-  TestHelper::SetShaderStates(gl_.get(), fshader, true);
-  Program* program =
-      manager_->CreateProgram(kClientProgramId, kServiceProgramId);
-  ASSERT_TRUE(program != nullptr);
-  EXPECT_TRUE(program->AttachShader(&shader_manager_, vshader));
-  EXPECT_TRUE(program->AttachShader(&shader_manager_, fshader));
-
-  static const GLenum kSamplerTypes[] = {
-    GL_SAMPLER_2D,
-    GL_SAMPLER_CUBE,
-    GL_SAMPLER_EXTERNAL_OES,
-    GL_SAMPLER_3D_OES,
-    GL_SAMPLER_2D_RECT_ARB,
-  };
-  const size_t kNumSamplerTypes = base::size(kSamplerTypes);
-  for (size_t ii = 0; ii < kNumSamplerTypes; ++ii) {
-    static ProgramManagerWithShaderTest::AttribInfo kAttribs[] = {
-      { kAttrib1Name, kAttrib1Size, kAttrib1Type, kAttrib1Location, },
-      { kAttrib2Name, kAttrib2Size, kAttrib2Type, kAttrib2Location, },
-      { kAttrib3Name, kAttrib3Size, kAttrib3Type, kAttrib3Location, },
-    };
-    ProgramManagerWithShaderTest::UniformInfo kUniforms[] = {
-      { kUniform1Name,
-        kUniform1Size,
-        kUniform1Type,
-        kUniform1FakeLocation,
-        kUniform1RealLocation,
-        kUniform1DesiredLocation,
-        kUniform1Name,
-      },
-      { kUniform2Name,
-        kUniform2Size,
-        kSamplerTypes[ii],
-        kUniform2FakeLocation,
-        kUniform2RealLocation,
-        kUniform2DesiredLocation,
-        kUniform2NameWithArrayIndex,
-      },
-      { kUniform3Name,
-        kUniform3Size,
-        kUniform3Type,
-        kUniform3FakeLocation,
-        kUniform3RealLocation,
-        kUniform3DesiredLocation,
-        kUniform3NameWithArrayIndex,
-      },
-    };
-    const size_t kNumAttribs = base::size(kAttribs);
-    const size_t kNumUniforms = base::size(kUniforms);
-    SetupShaderExpectations(kAttribs, kNumAttribs, kUniforms, kNumUniforms,
-                            kServiceProgramId);
-    program->Link(nullptr, Program::kCountOnlyStaticallyUsed, this);
-    SetupExpectationsForClearingUniforms(kUniforms, kNumUniforms);
-    manager_->ClearUniforms(program);
-  }
 }
 
 TEST_F(ProgramManagerWithShaderTest, BindUniformLocation) {
@@ -2108,11 +2101,11 @@ TEST_F(ProgramManagerWithShaderTest, BindUniformLocation) {
     },
   };
 
-  const size_t kNumAttribs = base::size(kAttribs);
-  const size_t kNumUniforms = base::size(kUniforms);
-  SetupShaderExpectations(kAttribs, kNumAttribs, kUniforms, kNumUniforms,
+  const size_t kNumAttribs = std::size(kAttribs);
+  const size_t kNumUniforms = std::size(kUniforms);
+  SetupShaderExpectations(kAttribs, kNumAttribs, kUniforms, kNumUniforms, {},
                           kServiceProgramId);
-  program->Link(nullptr, Program::kCountOnlyStaticallyUsed, this);
+  program->Link(nullptr, this);
 
   EXPECT_EQ(kUniform1DesiredLocation,
             program->GetUniformFakeLocation(kUniform1Name));
@@ -2130,10 +2123,10 @@ TEST_F(ProgramManagerWithShaderTest, ZeroSizeUniformMarkedInvalid) {
           kUniform1DesiredLocation, kUniform1Name,
       },
   };
-  const size_t kNumInvalidUniforms = base::size(kInvalidUniforms);
+  const size_t kNumInvalidUniforms = std::size(kInvalidUniforms);
 
-  SetupShaderExpectations(kAttribs, kNumAttribs, kInvalidUniforms,
-                          kNumInvalidUniforms, kServiceProgramId);
+  SetupShaderExpectations(kAttribs.data(), kNumAttribs, kInvalidUniforms,
+                          kNumInvalidUniforms, {}, kServiceProgramId);
 
   Shader* vertex_shader = shader_manager_.CreateShader(
       kVertexShaderClientId, kVertexShaderServiceId, GL_VERTEX_SHADER);
@@ -2149,7 +2142,7 @@ TEST_F(ProgramManagerWithShaderTest, ZeroSizeUniformMarkedInvalid) {
   ASSERT_TRUE(program != nullptr);
   program->AttachShader(&shader_manager_, vertex_shader);
   program->AttachShader(&shader_manager_, fragment_shader);
-  program->Link(nullptr, Program::kCountOnlyStaticallyUsed, this);
+  program->Link(nullptr, this);
 
   EXPECT_FALSE(program->IsValid());
 }
@@ -2198,7 +2191,11 @@ class ProgramManagerWithCacheTest : public ProgramManagerTestBase {
   }
 
   void TearDown() override {
+    vertex_shader_ = nullptr;
+    fragment_shader_ = nullptr;
     shader_manager_.Destroy(false);
+
+    program_ = nullptr;
     ProgramManagerTestBase::TearDown();
   }
 
@@ -2288,18 +2285,19 @@ class ProgramManagerWithCacheTest : public ProgramManagerTestBase {
   }
 
   void SetExpectationsForProgramLoadSuccess(GLuint service_program_id) {
-    TestHelper::SetupProgramSuccessExpectations(
-        gl_.get(), feature_info_.get(), nullptr, 0, nullptr, 0, nullptr, 0,
-        nullptr, 0, service_program_id);
+    TestHelper::SetupProgramSuccessExpectations(gl_.get(), feature_info_.get(),
+                                                nullptr, 0, nullptr, 0, nullptr,
+                                                0, {}, service_program_id);
   }
 
   void SetExpectationsForProgramNotLoaded() {
-    EXPECT_CALL(*cache_.get(),
-                LoadLinkedProgram(
-                    program_->service_id(), vertex_shader_, fragment_shader_,
-                    &program_->bind_attrib_location_map(),
-                    program_->effective_transform_feedback_varyings(),
-                    program_->effective_transform_feedback_buffer_mode(), _))
+    EXPECT_CALL(
+        *cache_.get(),
+        LoadLinkedProgram(
+            program_->service_id(), vertex_shader_.get(),
+            fragment_shader_.get(), &program_->bind_attrib_location_map(),
+            program_->effective_transform_feedback_varyings(),
+            program_->effective_transform_feedback_buffer_mode(), _))
         .Times(Exactly(0));
   }
 
@@ -2310,11 +2308,11 @@ class ProgramManagerWithCacheTest : public ProgramManagerTestBase {
   void SetExpectationsForProgramLink(GLuint service_program_id) {
     TestHelper::SetupShaderExpectations(gl_.get(), feature_info_.get(), nullptr,
                                         0, nullptr, 0, service_program_id);
-    if (gl::g_current_gl_driver->ext.b_GL_ARB_get_program_binary) {
-      EXPECT_CALL(*gl_.get(),
-                  ProgramParameteri(service_program_id,
-                                    PROGRAM_BINARY_RETRIEVABLE_HINT,
-                                    GL_TRUE)).Times(1);
+    if (gl::g_current_gl_driver->ext.b_GL_OES_get_program_binary) {
+      EXPECT_CALL(*gl_.get(), ProgramParameteri(
+                                  service_program_id,
+                                  GL_PROGRAM_BINARY_RETRIEVABLE_HINT, GL_TRUE))
+          .Times(1);
     }
   }
 
@@ -2355,9 +2353,11 @@ class ProgramManagerWithCacheTest : public ProgramManagerTestBase {
 
   std::unique_ptr<MockProgramCache> cache_;
 
-  Shader* vertex_shader_;
-  Shader* fragment_shader_;
-  Program* program_;
+  // These shaders are owned by |shader_manager_|.
+  raw_ptr<Shader> vertex_shader_;
+  raw_ptr<Shader> fragment_shader_;
+  // This program is owned by |manager_|.
+  raw_ptr<Program> program_;
   ShaderManager shader_manager_;
 };
 
@@ -2375,7 +2375,7 @@ TEST_F(ProgramManagerWithCacheTest, CacheProgramOnSuccessfulLink) {
   SetShadersCompiled();
   SetExpectationsForProgramLink();
   SetExpectationsForProgramCached();
-  EXPECT_TRUE(program_->Link(nullptr, Program::kCountOnlyStaticallyUsed, this));
+  EXPECT_TRUE(program_->Link(nullptr, this));
 }
 
 TEST_F(ProgramManagerWithCacheTest, LoadProgramOnProgramCacheHit) {
@@ -2388,7 +2388,7 @@ TEST_F(ProgramManagerWithCacheTest, LoadProgramOnProgramCacheHit) {
   SetExpectationsForNotCachingProgram();
   SetExpectationsForProgramLoadSuccess();
 
-  EXPECT_TRUE(program_->Link(nullptr, Program::kCountOnlyStaticallyUsed, this));
+  EXPECT_TRUE(program_->Link(nullptr, this));
 }
 
 TEST_F(ProgramManagerWithCacheTest, RelinkOnChangedCompileOptions) {
@@ -2399,7 +2399,7 @@ TEST_F(ProgramManagerWithCacheTest, RelinkOnChangedCompileOptions) {
   SetShadersCompiled("b");
   SetExpectationsForProgramLink();
   SetExpectationsForProgramNotLoaded();
-  EXPECT_TRUE(program_->Link(nullptr, Program::kCountOnlyStaticallyUsed, this));
+  EXPECT_TRUE(program_->Link(nullptr, this));
 }
 
 // For some compilers, using make_tuple("a", "bb") would end up
@@ -2443,20 +2443,7 @@ TEST_P(ProgramManagerDualSourceBlendingES2Test, UseSecondaryFragCoord) {
 
   int shader_version = 100;
   Program* program =
-      SetupProgramForVariables(nullptr, 0, kFragmentVaryings,
-                               base::size(kFragmentVaryings), &shader_version);
-
-  const gl::GLVersionInfo& gl_version = feature_info_->gl_version_info();
-  if (!gl_version.is_es) {
-    // The call is expected only for OpenGL. OpenGL ES expects to
-    // output GLES SL 1.00, which does not bind.
-    EXPECT_CALL(*(gl_.get()),
-                BindFragDataLocationIndexed(kServiceProgramId, 0, 1,
-                                            StrEq("angle_SecondaryFragColor")))
-        .Times(1)
-        .RetiresOnSaturation();
-  }
-
+      SetupProgramForVariables({}, kFragmentVaryings, &shader_version);
   EXPECT_TRUE(LinkAsExpected(program, true));
 }
 
@@ -2470,20 +2457,7 @@ TEST_P(ProgramManagerDualSourceBlendingES2Test, UseSecondaryFragData) {
 
   int shader_version = 100;
   Program* program =
-      SetupProgramForVariables(nullptr, 0, kFragmentVaryings,
-                               base::size(kFragmentVaryings), &shader_version);
-
-  const gl::GLVersionInfo& gl_version = feature_info_->gl_version_info();
-  if (!gl_version.is_es) {
-    // The call is expected only for OpenGL. OpenGL ES expects to
-    // output GLES SL 1.00, which does not bind.
-    EXPECT_CALL(*(gl_.get()),
-                BindFragDataLocationIndexed(kServiceProgramId, 0, 1,
-                                            StrEq("angle_SecondaryFragData")))
-        .Times(1)
-        .RetiresOnSaturation();
-  }
-
+      SetupProgramForVariables({}, kFragmentVaryings, &shader_version);
   EXPECT_TRUE(LinkAsExpected(program, true));
 }
 
@@ -2491,9 +2465,6 @@ INSTANTIATE_TEST_SUITE_P(
     SupportedContexts,
     ProgramManagerDualSourceBlendingES2Test,
     testing::Values(
-        make_gl_ext_tuple("3.2",
-                          "GL_ARB_draw_buffers GL_ARB_blend_func_extended "
-                          "GL_ARB_program_interface_query"),
         make_gl_ext_tuple("OpenGL ES 3.1",
                           "GL_EXT_draw_buffers GL_EXT_blend_func_extended")));
 

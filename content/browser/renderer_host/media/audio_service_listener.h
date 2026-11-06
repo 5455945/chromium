@@ -1,31 +1,34 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_BROWSER_RENDERER_HOST_MEDIA_AUDIO_SERVICE_LISTENER_H_
 #define CONTENT_BROWSER_RENDERER_HOST_MEDIA_AUDIO_SERVICE_LISTENER_H_
 
-#include <memory>
-#include <vector>
-
 #include "base/gtest_prod_util.h"
-#include "base/process/process_handle.h"
+#include "base/process/process.h"
+#include "base/sequence_checker.h"
 #include "content/common/content_export.h"
-#include "content/public/browser/service_process_host.h"
+#include "content/public/browser/audio_service.h"
 #include "content/public/browser/service_process_info.h"
-#include "mojo/public/cpp/bindings/receiver.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace content {
 
 // Tracks the system's active audio service instance, if any exists.
-class CONTENT_EXPORT AudioServiceListener
-    : public ServiceProcessHost::Observer {
+class CONTENT_EXPORT AudioServiceListener : public AudioServiceProcessObserver {
  public:
   AudioServiceListener();
+
+  AudioServiceListener(const AudioServiceListener&) = delete;
+  AudioServiceListener& operator=(const AudioServiceListener&) = delete;
+
   ~AudioServiceListener() override;
 
-  base::ProcessId GetProcessId() const;
+  base::Process GetProcess() const;
+
+  // Clears cached process state and rebinds the sequence checker.
+  // Called by ResetAudioServiceForTesting().
+  void ResetForTesting();
 
  private:
   FRIEND_TEST_ALL_PREFIXES(AudioServiceListenerTest,
@@ -36,23 +39,19 @@ class CONTENT_EXPORT AudioServiceListener
                            OnAudioServiceCreated_ProcessIdNotNull);
   FRIEND_TEST_ALL_PREFIXES(AudioServiceListenerTest,
                            StartService_LogStartStatus);
+  FRIEND_TEST_ALL_PREFIXES(AudioServiceListenerTest,
+                           OnServiceTerminatedNormally);
+  FRIEND_TEST_ALL_PREFIXES(AudioServiceListenerTest, OnServiceCrashed);
 
-  // Called by the constructor, or by tests to inject fake process info.
-  void Init(std::vector<ServiceProcessInfo> running_service_processes);
-
-  // ServiceProcessHost::Observer implementation:
-  void OnServiceProcessLaunched(const ServiceProcessInfo& info) override;
-  void OnServiceProcessTerminatedNormally(
-      const ServiceProcessInfo& info) override;
-  void OnServiceProcessCrashed(const ServiceProcessInfo& info) override;
+  void OnServiceLaunched(const ServiceProcessInfo& info) override;
+  void OnServiceTerminatedNormally(const ServiceProcessInfo& info) override;
+  void OnServiceCrashed(const ServiceProcessInfo& info) override;
 
   void MaybeSetLogFactory();
 
-  base::ProcessId process_id_ = base::kNullProcessId;
+  base::Process audio_process_;
   bool log_factory_is_set_ = false;
   SEQUENCE_CHECKER(owning_sequence_);
-
-  DISALLOW_COPY_AND_ASSIGN(AudioServiceListener);
 };
 
 }  // namespace content

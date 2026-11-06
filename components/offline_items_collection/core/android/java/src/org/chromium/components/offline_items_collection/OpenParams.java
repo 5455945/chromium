@@ -1,10 +1,13 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.offline_items_collection;
 
+import org.chromium.build.annotations.NullMarked;
+
 /** Represents various params used for opening the {@link OfflineItem}. */
+@NullMarked
 public class OpenParams {
     /** The location at which the opened item will be displayed. */
     public final @LaunchLocation int location;

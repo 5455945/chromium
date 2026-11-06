@@ -85,7 +85,7 @@ bool DOMFileSystemBase::IsValidType(mojom::blink::FileSystemType type) {
 KURL DOMFileSystemBase::CreateFileSystemRootURL(
     const String& origin,
     mojom::blink::FileSystemType type) {
-  String type_string;
+  StringView type_string;
   if (type == mojom::blink::FileSystemType::kTemporary)
     type_string = kTemporaryPathPrefix;
   else if (type == mojom::blink::FileSystemType::kPersistent)
@@ -95,7 +95,7 @@ KURL DOMFileSystemBase::CreateFileSystemRootURL(
   else
     return KURL();
 
-  String result = "filesystem:" + origin + "/" + type_string + "/";
+  String result = StrCat({"filesystem:", origin, "/", type_string, "/"});
   return KURL(result);
 }
 
@@ -111,6 +111,10 @@ KURL DOMFileSystemBase::CreateFileSystemURL(const EntryBase* entry) const {
 KURL DOMFileSystemBase::CreateFileSystemURL(const String& full_path) const {
   DCHECK(DOMFilePath::IsAbsolute(full_path));
 
+  // Remove the extra leading slash and URI encode.
+  String encoded_full_path =
+      EncodeWithUrlEscapeSequences(StringView(full_path, 1));
+
   if (GetType() == mojom::blink::FileSystemType::kExternal) {
     // For external filesystem originString could be different from what we have
     // in m_filesystemRootURL.
@@ -120,9 +124,8 @@ KURL DOMFileSystemBase::CreateFileSystemURL(const String& full_path) const {
     result.Append('/');
     result.Append(kExternalPathPrefix);
     result.Append(filesystem_root_url_.GetPath());
-    // Remove the extra leading slash.
-    result.Append(EncodeWithURLEscapeSequences(full_path.Substring(1)));
-    return KURL(result.ToString());
+    result.Append(encoded_full_path);
+    return KURL(result.ReleaseString());
   }
 
   // For regular types we can just append the entry's fullPath to the
@@ -130,9 +133,7 @@ KURL DOMFileSystemBase::CreateFileSystemURL(const String& full_path) const {
   // 'filesystem:<origin>/<typePrefix>'.
   DCHECK(!filesystem_root_url_.IsEmpty());
   KURL url = filesystem_root_url_;
-  // Remove the extra leading slash.
-  url.SetPath(url.GetPath() +
-              EncodeWithURLEscapeSequences(full_path.Substring(1)));
+  url.SetPath(StrCat({url.GetPath(), encoded_full_path}));
   return url;
 }
 
@@ -172,10 +173,14 @@ bool DOMFileSystemBase::PathPrefixToFileSystemType(
   return false;
 }
 
-File* DOMFileSystemBase::CreateFile(const FileMetadata& metadata,
-                                    const KURL& file_system_url,
-                                    mojom::blink::FileSystemType type,
-                                    const String name) {
+File* DOMFileSystemBase::CreateFile(
+    ExecutionContext* context,
+    const FileMetadata& metadata,
+    const KURL& file_system_url,
+    mojom::blink::FileSystemType type,
+    const String name,
+    mojo::PendingRemote<mojom::blink::SnapshotPermissionToken>
+        snapshot_permission_token) {
   // For regular filesystem types (temporary or persistent), we should not cache
   // file metadata as it could change File semantics.  For other filesystem
   // types (which could be platform-specific ones), there's a chance that the
@@ -185,25 +190,28 @@ File* DOMFileSystemBase::CreateFile(const FileMetadata& metadata,
   // storage location based on the url.
   // FIXME: We should use the snapshot metadata for all files.
   // https://www.w3.org/Bugs/Public/show_bug.cgi?id=17746
-  if (!metadata.platform_path.IsEmpty() &&
+  if (!metadata.platform_path.empty() &&
       (type == mojom::blink::FileSystemType::kTemporary ||
-       type == mojom::blink::FileSystemType::kPersistent))
-    return File::CreateForFileSystemFile(metadata.platform_path, name);
+       type == mojom::blink::FileSystemType::kPersistent)) {
+    return File::CreateForFileSystemFile(metadata.platform_path, name,
+                                         std::move(snapshot_permission_token));
+  }
 
   const File::UserVisibility user_visibility =
       (type == mojom::blink::FileSystemType::kExternal)
           ? File::kIsUserVisible
           : File::kIsNotUserVisible;
 
-  if (!metadata.platform_path.IsEmpty()) {
+  if (!metadata.platform_path.empty()) {
     // If the platformPath in the returned metadata is given, we create a File
     // object for the snapshot path.
-    return File::CreateForFileSystemFile(name, metadata, user_visibility);
-  } else {
-    // Otherwise we create a File object for the fileSystemURL.
-    return File::CreateForFileSystemFile(file_system_url, metadata,
-                                         user_visibility);
+    return File::CreateForFileSystemFile(context, name, metadata,
+                                         user_visibility,
+                                         std::move(snapshot_permission_token));
   }
+  // Otherwise we create a File object for the fileSystemURL.
+  return File::CreateForFileSystemFile(*context, file_system_url, metadata,
+                                       user_visibility);
 }
 
 void DOMFileSystemBase::GetMetadata(
@@ -232,7 +240,7 @@ static bool VerifyAndGetDestinationPathForCopyOrMove(const EntryBase* source,
   if (!parent || !parent->isDirectory())
     return false;
 
-  if (!new_name.IsEmpty() && !DOMFilePath::IsValidName(new_name))
+  if (!new_name.empty() && !DOMFilePath::IsValidName(new_name))
     return false;
 
   const bool is_same_file_system =
@@ -246,13 +254,12 @@ static bool VerifyAndGetDestinationPathForCopyOrMove(const EntryBase* source,
 
   // It is an error to copy or move an entry into its parent if a name different
   // from its current one isn't provided.
-  if (is_same_file_system &&
-      (new_name.IsEmpty() || source->name() == new_name) &&
+  if (is_same_file_system && (new_name.empty() || source->name() == new_name) &&
       DOMFilePath::GetDirectory(source->fullPath()) == parent->fullPath())
     return false;
 
   destination_path = parent->fullPath();
-  if (!new_name.IsEmpty())
+  if (!new_name.empty())
     destination_path = DOMFilePath::Append(destination_path, new_name);
   else
     destination_path = DOMFilePath::Append(destination_path, source->name());

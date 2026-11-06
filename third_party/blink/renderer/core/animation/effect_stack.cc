@@ -34,7 +34,6 @@
 #include "third_party/blink/renderer/core/animation/compositor_animations.h"
 #include "third_party/blink/renderer/core/animation/css/css_animations.h"
 #include "third_party/blink/renderer/core/animation/invalidatable_interpolation.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
@@ -42,31 +41,24 @@ namespace {
 
 void CopyToActiveInterpolationsMap(
     const HeapVector<Member<Interpolation>>& source,
-    EffectStack::PropertyHandleFilter property_handle_filter,
     ActiveInterpolationsMap& target) {
   for (const auto& interpolation : source) {
     PropertyHandle property = interpolation->GetProperty();
-    if (property_handle_filter && !property_handle_filter(property))
-      continue;
-
     ActiveInterpolationsMap::AddResult entry =
         target.insert(property, MakeGarbageCollected<ActiveInterpolations>());
     ActiveInterpolations* active_interpolations = entry.stored_value->value;
 
-    // Assuming stacked effects are enabled, interpolations that depend on
-    // underlying values (e.g. have a non-replace composite mode) should be
-    // added onto the 'stack' of active interpolations. However any 'replace'
-    // effect erases everything that came before it, so we must clear the stack
-    // when that happens.
-    const bool allow_stacked_effects =
-        RuntimeEnabledFeatures::WebAnimationsAPIEnabled() ||
-        !property.IsCSSProperty() || property.IsPresentationAttribute();
+    // Interpolations that depend on underlying values (e.g. have a non-replace
+    // composite mode) should be added onto the 'stack' of active
+    // interpolations. However any 'replace' effect erases everything that came
+    // before it, so we must clear the stack when that happens.
     const bool effect_depends_on_underlying_value =
         interpolation->IsInvalidatableInterpolation() &&
         To<InvalidatableInterpolation>(*interpolation.Get())
             .DependsOnUnderlyingValue();
-    if (!allow_stacked_effects || !effect_depends_on_underlying_value)
+    if (!effect_depends_on_underlying_value) {
       active_interpolations->clear();
+    }
     active_interpolations->push_back(interpolation);
   }
 }
@@ -74,14 +66,32 @@ void CopyToActiveInterpolationsMap(
 
 void CopyNewAnimationsToActiveInterpolationsMap(
     const HeapVector<Member<const InertEffect>>& new_animations,
-    EffectStack::PropertyHandleFilter property_handle_filter,
     ActiveInterpolationsMap& result) {
   for (const auto& new_animation : new_animations) {
     HeapVector<Member<Interpolation>> sample;
     new_animation->Sample(sample);
-    if (!sample.IsEmpty())
-      CopyToActiveInterpolationsMap(sample, property_handle_filter, result);
+    if (!sample.empty())
+      CopyToActiveInterpolationsMap(sample, result);
   }
+}
+
+// Returns true if `sampled_effect` has a higher composite order than the
+// animation associated with `cutoff`. This mirrors the ordering used by
+// EffectStack::CompareSampledEffects.
+bool IsAbovePartialEffectStackCutoff(const SampledEffect& sampled_effect,
+                                     const KeyframeEffect& cutoff) {
+  const Animation* cutoff_animation = cutoff.GetAnimation();
+  if (!cutoff_animation) {
+    return false;
+  }
+  const KeyframeEffect* effect = sampled_effect.Effect();
+  const Animation* animation = effect ? effect->GetAnimation() : nullptr;
+  if (animation) {
+    return Animation::HasLowerCompositeOrdering(
+        cutoff_animation, animation,
+        Animation::CompareAnimationsOrdering::kPointerOrder);
+  }
+  return sampled_effect.SequenceNumber() > cutoff_animation->SequenceNumber();
 }
 
 }  // namespace
@@ -108,8 +118,9 @@ bool EffectStack::HasActiveAnimationsOnCompositor(
   for (const auto& sampled_effect : sampled_effects_) {
     if (sampled_effect->Effect() &&
         sampled_effect->Effect()->HasPlayingAnimation() &&
-        sampled_effect->Effect()->HasActiveAnimationsOnCompositor(property))
+        sampled_effect->Effect()->HasActiveAnimationsOnCompositor(property)) {
       return true;
+    }
   }
   return false;
 }
@@ -131,13 +142,28 @@ bool EffectStack::AffectsProperties(const CSSBitset& bitset,
       continue;
     for (const auto& interpolation : sampled_effect->Interpolations()) {
       const PropertyHandle& property = interpolation->GetProperty();
-      if (property.IsCSSCustomProperty() || !property.IsCSSProperty())
+      if (property.IsCSSCustomProperty()) {
         continue;
+      }
       if (bitset.Has(property.GetCSSProperty().PropertyID()))
         return true;
     }
   }
   return false;
+}
+
+HashSet<PropertyHandle> EffectStack::AffectedProperties(
+    KeyframeEffect::Priority priority) const {
+  HashSet<PropertyHandle> affected;
+
+  for (const auto& sampled_effect : sampled_effects_) {
+    if (sampled_effect->GetPriority() != priority)
+      continue;
+    for (const auto& interpolation : sampled_effect->Interpolations())
+      affected.insert(interpolation->GetProperty());
+  }
+
+  return affected;
 }
 
 bool EffectStack::HasRevert() const {
@@ -153,23 +179,31 @@ ActiveInterpolationsMap EffectStack::ActiveInterpolations(
     const HeapVector<Member<const InertEffect>>* new_animations,
     const HeapHashSet<Member<const Animation>>* suppressed_animations,
     KeyframeEffect::Priority priority,
-    PropertyHandleFilter property_handle_filter,
     KeyframeEffect* partial_effect_stack_cutoff) {
   ActiveInterpolationsMap result;
 
   if (effect_stack) {
     HeapVector<Member<SampledEffect>>& sampled_effects =
         effect_stack->sampled_effects_;
-    effect_stack->RemoveRedundantSampledEffects();
     std::sort(sampled_effects.begin(), sampled_effects.end(),
               CompareSampledEffects);
+    effect_stack->RemoveRedundantSampledEffects();
     bool reached_cuttoff = false;
     for (const auto& sampled_effect : sampled_effects) {
       if (reached_cuttoff)
         break;
-      if (partial_effect_stack_cutoff &&
-          sampled_effect->Effect() == partial_effect_stack_cutoff)
-        reached_cuttoff = true;
+      if (partial_effect_stack_cutoff) {
+        if (sampled_effect->Effect() == partial_effect_stack_cutoff) {
+          reached_cuttoff = true;
+        } else if (IsAbovePartialEffectStackCutoff(
+                       *sampled_effect, *partial_effect_stack_cutoff)) {
+          // The cutoff effect is not necessarily part of the effect stack (e.g.
+          // if it is not in effect), so we cannot rely on reaching it. Effects
+          // with a higher composite order than the cutoff never contribute to
+          // the partial effect stack.
+          break;
+        }
+      }
 
       if (sampled_effect->GetPriority() != priority ||
           // TODO(majidvp): Instead of accessing the effect's animation move the
@@ -178,14 +212,12 @@ ActiveInterpolationsMap EffectStack::ActiveInterpolations(
            suppressed_animations->Contains(
                sampled_effect->Effect()->GetAnimation())))
         continue;
-      CopyToActiveInterpolationsMap(sampled_effect->Interpolations(),
-                                    property_handle_filter, result);
+      CopyToActiveInterpolationsMap(sampled_effect->Interpolations(), result);
     }
   }
 
   if (new_animations) {
-    CopyNewAnimationsToActiveInterpolationsMap(*new_animations,
-                                               property_handle_filter, result);
+    CopyNewAnimationsToActiveInterpolationsMap(*new_animations, result);
   }
   return result;
 }
@@ -202,7 +234,7 @@ void EffectStack::RemoveRedundantSampledEffects() {
 
   wtf_size_t new_size = 0;
   for (auto& sampled_effect : sampled_effects_) {
-    if (!sampled_effect->Interpolations().IsEmpty())
+    if (!sampled_effect->Interpolations().empty())
       sampled_effects_[new_size++].Swap(sampled_effect);
     else if (sampled_effect->Effect())
       sampled_effect->Effect()->NotifySampledEffectRemovedFromEffectStack();

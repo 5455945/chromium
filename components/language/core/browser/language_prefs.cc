@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,20 @@
 
 #include <algorithm>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
+#include "base/feature_list.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "components/language/core/browser/incognito_language_list_map.h"
 #include "components/language/core/browser/pref_names.h"
+#include "components/language/core/common/language_experiments.h"
 #include "components/language/core/common/language_util.h"
 #include "components/language/core/common/locale_util.h"
 #include "components/pref_registry/pref_registry_syncable.h"
@@ -27,8 +29,6 @@
 #include "ui/base/l10n/l10n_util.h"
 
 namespace language {
-
-const char kFallbackInputMethodLocale[] = "en-US";
 
 void LanguagePrefs::RegisterProfilePrefs(
     user_prefs::PrefRegistrySyncable* registry) {
@@ -41,7 +41,7 @@ void LanguagePrefs::RegisterProfilePrefs(
                                user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
 
   registry->RegisterListPref(language::prefs::kForcedLanguages);
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   registry->RegisterStringPref(language::prefs::kPreferredLanguages,
                                kFallbackInputMethodLocale);
 
@@ -49,18 +49,15 @@ void LanguagePrefs::RegisterProfilePrefs(
       language::prefs::kPreferredLanguagesSyncable, "",
       user_prefs::PrefRegistrySyncable::SYNCABLE_OS_PREF);
 #endif
-  registry->RegisterListPref(language::prefs::kFluentLanguages,
-                             LanguagePrefs::GetDefaultFluentLanguages(),
-                             user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   registry->RegisterBooleanPref(
       language::prefs::kAppLanguagePromptShown, false,
       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  registry->RegisterListPref(language::prefs::kULPLanguages);
 #endif
 }
 
 LanguagePrefs::LanguagePrefs(PrefService* user_prefs) : prefs_(user_prefs) {
-  ResetEmptyFluentLanguagesToDefault();
   InitializeSelectedLanguagesPref();
   UpdateAcceptLanguagesPref();
   base::RepeatingClosure callback = base::BindRepeating(
@@ -74,64 +71,11 @@ LanguagePrefs::~LanguagePrefs() {
   pref_change_registrar_.RemoveAll();
 }
 
-bool LanguagePrefs::IsFluent(base::StringPiece language) const {
-  std::string canonical_lang(language);
-  language::ToTranslateLanguageSynonym(&canonical_lang);
-  const base::Value* fluents =
-      prefs_->GetList(language::prefs::kFluentLanguages);
-  return base::Contains(fluents->GetList(),
-                        base::Value(std::move(canonical_lang)));
-}
-
-void LanguagePrefs::SetFluent(base::StringPiece language) {
-  if (IsFluent(language))
-    return;
-  std::string canonical_lang(language);
-  language::ToTranslateLanguageSynonym(&canonical_lang);
-  ListPrefUpdate update(prefs_, language::prefs::kFluentLanguages);
-  update->Append(std::move(canonical_lang));
-}
-
-void LanguagePrefs::ClearFluent(base::StringPiece language) {
-  if (NumFluentLanguages() <= 1)  // Never remove last fluent language.
-    return;
-  std::string canonical_lang(language);
-  language::ToTranslateLanguageSynonym(&canonical_lang);
-  ListPrefUpdate update(prefs_, language::prefs::kFluentLanguages);
-  update->EraseListValue(base::Value(std::move(canonical_lang)));
-}
-
-void LanguagePrefs::ResetFluentLanguagesToDefaults() {
-  // Reset pref to defaults.
-  prefs_->ClearPref(language::prefs::kFluentLanguages);
-}
-
-std::vector<std::string> LanguagePrefs::GetFluentLanguages() const {
-  const base::Value* fluent_languages_value =
-      prefs_->GetList(language::prefs::kFluentLanguages);
-  if (!fluent_languages_value) {
-    NOTREACHED() << "Fluent languages pref is unregistered";
-  }
-
-  std::vector<std::string> languages;
-  for (const auto& language : fluent_languages_value->GetList()) {
-    std::string chrome_language(language.GetString());
-    language::ToChromeLanguageSynonym(&chrome_language);
-    languages.push_back(chrome_language);
-  }
-  return languages;
-}
-
-void LanguagePrefs::ResetEmptyFluentLanguagesToDefault() {
-  if (NumFluentLanguages() == 0)
-    ResetFluentLanguagesToDefaults();
-}
-
 void LanguagePrefs::GetAcceptLanguagesList(
     std::vector<std::string>* languages) const {
   DCHECK(languages);
   DCHECK(languages->empty());
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   const std::string& key = language::prefs::kPreferredLanguages;
 #else
   const std::string& key = language::prefs::kAcceptLanguages;
@@ -152,9 +96,11 @@ void LanguagePrefs::GetUserSelectedLanguagesList(
 
 void LanguagePrefs::SetUserSelectedLanguagesList(
     const std::vector<std::string>& languages) {
-  std::string languages_str = base::JoinString(languages, ",");
+  std::vector<std::string> filtered_languages =
+      l10n_util::KeepAcceptedLanguages(languages);
+  std::string languages_str = base::JoinString(filtered_languages, ",");
   prefs_->SetString(language::prefs::kSelectedLanguages, languages_str);
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   prefs_->SetString(language::prefs::kPreferredLanguages, languages_str);
 #endif
 }
@@ -166,7 +112,7 @@ void LanguagePrefs::GetDeduplicatedUserLanguages(
 
   // Add policy languages.
   for (const auto& language :
-       prefs_->GetList(language::prefs::kForcedLanguages)->GetList()) {
+       prefs_->GetList(language::prefs::kForcedLanguages)) {
     if (forced_languages_set_.find(language.GetString()) ==
         forced_languages_set_.end()) {
       deduplicated_languages.emplace_back(language.GetString());
@@ -194,7 +140,27 @@ void LanguagePrefs::UpdateAcceptLanguagesPref() {
                       deduplicated_languages_string);
 }
 
-bool LanguagePrefs::IsForcedLanguage(const std::string& language) {
+#if BUILDFLAG(IS_ANDROID)
+std::vector<std::string> LanguagePrefs::GetULPLanguages() {
+  std::vector<std::string> ulp_languages;
+  for (const auto& language : prefs_->GetList(language::prefs::kULPLanguages)) {
+    ulp_languages.push_back(language.GetString());
+  }
+  return ulp_languages;
+}
+
+void LanguagePrefs::SetULPLanguages(
+    std::vector<base::i18n::LanguageTag> ulp_languages) {
+  base::ListValue ulp_pref_list;
+  ulp_pref_list.reserve(ulp_languages.size());
+  for (const auto& language : ulp_languages) {
+    ulp_pref_list.Append(std::string(language.tag_string()));
+  }
+  prefs_->SetList(language::prefs::kULPLanguages, std::move(ulp_pref_list));
+}
+#endif
+
+bool LanguagePrefs::IsForcedLanguage(std::string_view language) {
   return forced_languages_set_.find(language) != forced_languages_set_.end();
 }
 
@@ -207,66 +173,74 @@ void LanguagePrefs::InitializeSelectedLanguagesPref() {
   }
 }
 
-// static
-base::Value LanguagePrefs::GetDefaultFluentLanguages() {
-  typename base::Value::ListStorage languages;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  // Preferred languages.
-  std::string language = language::kFallbackInputMethodLocale;
-  language::ToTranslateLanguageSynonym(&language);
-  languages.push_back(base::Value(std::move(language)));
-#else
-  // Accept languages.
-#pragma GCC diagnostic push
-// See comment above the |break;| in the loop just below for why.
-#pragma GCC diagnostic ignored "-Wunreachable-code"
-  for (std::string& language :
-       base::SplitString(l10n_util::GetStringUTF8(IDS_ACCEPT_LANGUAGES), ",",
-                         base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL)) {
-    language::ToTranslateLanguageSynonym(&language);
-    languages.push_back(base::Value(std::move(language)));
-
-    // crbug.com/958348: The default value for Accept-Language *should* be the
-    // same as the one for Fluent Languages. However, Accept-Language contains
-    // English (and more) in addition to the local language in most locales due
-    // to historical reasons. Exiting early from this loop is a temporary fix
-    // that allows Fluent Languages to be at least populated with the UI
-    // language while still allowing Translate to trigger on other languages,
-    // most importantly English.
-    // Once the change to remove English from Accept-Language defaults lands,
-    // this break should be removed to enable the Fluent Language List and the
-    // Accept-Language list to be initialized to the same values.
-    break;
-#pragma GCC diagnostic pop
-  }
-#endif
-
-  std::sort(languages.begin(), languages.end());
-  languages.erase(std::unique(languages.begin(), languages.end()),
-                  languages.end());
-
-  return base::Value(std::move(languages));
-}
-
-size_t LanguagePrefs::NumFluentLanguages() const {
-  const base::Value* fluents =
-      prefs_->GetList(language::prefs::kFluentLanguages);
-  return fluents->GetList().size();
-}
-
 void ResetLanguagePrefs(PrefService* prefs) {
   prefs->ClearPref(language::prefs::kSelectedLanguages);
   prefs->ClearPref(language::prefs::kAcceptLanguages);
-  prefs->ClearPref(language::prefs::kFluentLanguages);
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   prefs->ClearPref(language::prefs::kPreferredLanguages);
   prefs->ClearPref(language::prefs::kPreferredLanguagesSyncable);
 #endif
+#if BUILDFLAG(IS_ANDROID)
+  prefs->ClearPref(language::prefs::kULPLanguages);
+#endif
 }
 
-std::string GetFirstLanguage(base::StringPiece language_list) {
+std::string GetFirstLanguage(std::string_view language_list) {
   auto end = language_list.find(",");
   return std::string(language_list.substr(0, end));
+}
+
+std::string GetLanguagesWithMaxCount(std::string_view language_list) {
+  if (base::FeatureList::IsEnabled(kReduceAcceptLanguageCount)) {
+    std::vector<std::string_view> languages = base::SplitStringPiece(
+        language_list, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
+    base::UmaHistogramCounts100("LanguageUsage.AcceptLanguage.Count2",
+                                languages.size());
+
+    size_t max_language_count = kMaxAcceptLanguage.Get();
+    if (max_language_count > 0 && languages.size() > max_language_count) {
+      languages.resize(max_language_count);
+      return base::JoinString(languages, ",");
+    }
+  }
+  return std::string(language_list);
+}
+
+namespace {
+
+// Ensure at compile time that our fallback key exists in the generated map.
+constexpr bool IncognitoMapContainsFallback() {
+  return std::ranges::any_of(kIncognitoLanguageListMap, [](const auto& e) {
+    return e.first == kFallbackInputMethodLocale;
+  });
+}
+static_assert(
+    IncognitoMapContainsFallback(),
+    "kFallbackInputMethodLocale must exist in kIncognitoLanguageListMap");
+
+}  // namespace
+
+std::string GetIncognitoLanguageList(std::string_view language_list) {
+  auto comma_pos = language_list.find(',');
+  // <2 values suggests a user actively deleted other languages from their
+  // settings, so prioritize keeping that user preference over the normal logic.
+  if (comma_pos == std::string_view::npos) {
+    return std::string(language_list);
+  }
+
+  std::string_view first_language = language_list.substr(0, comma_pos);
+
+  // Look up in the generated map.
+  auto it = kIncognitoLanguageListMap.find(first_language);
+  if (it != kIncognitoLanguageListMap.end()) {
+    return std::string(it->second);
+  }
+
+  // Fallback for simple (no regional subtags) or unrecognized languages, just
+  // prepend the first language to global default (i.e., "en-US,en").
+  return base::StrCat(
+      {first_language, ",",
+       kIncognitoLanguageListMap.at(kFallbackInputMethodLocale)});
 }
 
 }  // namespace language

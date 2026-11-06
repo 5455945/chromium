@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,6 +21,7 @@ class Task : public base::RefCountedThreadSafe<Task> {
   Task() = default;
   Task(const Task&) = delete;
   Task& operator=(const Task&) = delete;
+
   virtual void Run() = 0;
 
   // Does a best effort attempt to make a task release its resources and stop
@@ -29,7 +30,9 @@ class Task : public base::RefCountedThreadSafe<Task> {
   virtual void Cancel() = 0;
 
   // Returns the ids corresponding to the CRXs associated with this update task.
-  virtual std::vector<std::string> GetIds() const = 0;
+  virtual std::vector<std::string> ids() const = 0;
+
+  virtual std::string name() const = 0;
 
  protected:
   friend class base::RefCountedThreadSafe<Task>;

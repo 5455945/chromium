@@ -25,20 +25,28 @@
 
 #include "third_party/blink/renderer/core/html/forms/color_chooser_popup_ui_controller.h"
 
+#include "base/notreached.h"
+#include "base/strings/string_view_util.h"
 #include "build/build_config.h"
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/strings/grit/blink_strings.h"
+#include "third_party/blink/renderer/core/css/parser/css_parser.h"
+#include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/html/forms/chooser_resource_loader.h"
 #include "third_party/blink/renderer/core/html/forms/color_chooser_client.h"
+#include "third_party/blink/renderer/core/html/forms/html_form_control_element.h"
 #include "third_party/blink/renderer/core/page/chrome_client.h"
 #include "third_party/blink/renderer/core/page/color_page_popup_controller.h"
+#include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/page/page_popup.h"
-#include "third_party/blink/renderer/platform/geometry/int_rect.h"
+#include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
 #include "ui/base/ui_base_features.h"
+#include "ui/gfx/geometry/rect.h"
+#include "ui/strings/grit/ax_strings.h"
 
 namespace blink {
 
@@ -66,6 +74,7 @@ void ColorChooserPopupUIController::Trace(Visitor* visitor) const {
   visitor->Trace(chrome_client_);
   visitor->Trace(eye_dropper_chooser_);
   ColorChooserUIController::Trace(visitor);
+  PagePopupClient::Trace(visitor);
 }
 
 void ColorChooserPopupUIController::OpenUI() {
@@ -77,11 +86,15 @@ void ColorChooserPopupUIController::EndChooser() {
   CancelPopup();
 }
 
-AXObject* ColorChooserPopupUIController::RootAXObject() {
-  return popup_ ? popup_->RootAXObject() : nullptr;
+AXObject* ColorChooserPopupUIController::RootAXObject(Element* popup_owner) {
+  return popup_ ? popup_->RootAXObject(popup_owner) : nullptr;
 }
 
-void ColorChooserPopupUIController::WriteDocument(SharedBuffer* data) {
+bool ColorChooserPopupUIController::IsPickerVisible() const {
+  return popup_;
+}
+
+void ColorChooserPopupUIController::WriteDocument(SegmentedBuffer& data) {
   if (client_->ShouldShowSuggestions()) {
     WriteColorSuggestionPickerDocument(data);
   } else {
@@ -90,38 +103,45 @@ void ColorChooserPopupUIController::WriteDocument(SharedBuffer* data) {
 }
 
 void ColorChooserPopupUIController::WriteColorPickerDocument(
-    SharedBuffer* data) {
-  IntRect anchor_rect_in_screen = chrome_client_->ViewportToScreen(
-      client_->ElementRectRelativeToViewport(), frame_->View());
+    SegmentedBuffer& data) {
+#if BUILDFLAG(IS_ANDROID)
+  // We don't create PagePopups on Android.
+  NOTREACHED() << "We should never reach PagePopupClient code on Android";
+#else
+  gfx::Rect anchor_rect_in_screen = chrome_client_->LocalRootToScreenDIPs(
+      client_->ElementRectRelativeToLocalRoot(), frame_->View());
 
-  PagePopupClient::AddString(
+  PagePopupClient::AddLiteral(
       "<!DOCTYPE html><head><meta charset='UTF-8'><meta name='color-scheme' "
       "content='light dark'><style>\n",
       data);
-  data->Append(ChooserResourceLoader::GetPickerCommonStyleSheet());
-  data->Append(ChooserResourceLoader::GetColorPickerStyleSheet());
-  PagePopupClient::AddString(
+  data.Append(ChooserResourceLoader::GetPickerCommonStyleSheet());
+  data.Append(ChooserResourceLoader::GetColorPickerStyleSheet());
+  PagePopupClient::AddLiteral(
       "</style></head><body>\n"
       "<div id='main'>Loading...</div><script>\n"
       "window.dialogArguments = {\n",
       data);
+  Color selected_color = client_->CurrentColor();
   PagePopupClient::AddProperty("selectedColor",
-                               client_->CurrentColor().Serialized(), data);
+                               Color::FromRGBA32(selected_color.Rgb())
+                                   .MakeOpaque()
+                                   .SerializeAsCanvasColor(),
+                               data);
+  AddProperty("selectedColorAlpha", selected_color.Alpha(), data);
+  AddProperty("shouldShowAlpha", client_->ShouldShowAlpha(), data);
   AddProperty("anchorRectInScreen", anchor_rect_in_screen, data);
   AddProperty("zoomFactor", ScaledZoomFactor(), data);
   AddProperty("shouldShowColorSuggestionPicker", false, data);
-  AddProperty("isEyeDropperEnabled", features::IsEyeDropperEnabled(), data);
-#if defined(OS_MAC)
+  AddProperty("isEyeDropperEnabled", ::features::IsEyeDropperEnabled(), data);
+#if BUILDFLAG(IS_MAC)
   AddProperty("isBorderTransparent", true, data);
 #endif
-  // We don't create PagePopups on Android, so these strings are excluded
-  // from blink_strings.grd on Android to save binary size.  We have to
-  // exclude them here as well to avoid an Android build break.
-#if !defined(OS_ANDROID)
   AddLocalizedProperty("axColorWellLabel", IDS_AX_COLOR_WELL, data);
   AddLocalizedProperty("axColorWellRoleDescription",
                        IDS_AX_COLOR_WELL_ROLEDESCRIPTION, data);
   AddLocalizedProperty("axHueSliderLabel", IDS_AX_COLOR_HUE_SLIDER, data);
+  AddLocalizedProperty("axAlphaChannelLabel", IDS_AX_COLOR_ALPHA_SLIDER, data);
   AddLocalizedProperty("axHexadecimalEditLabel", IDS_AX_COLOR_EDIT_HEXADECIMAL,
                        data);
   AddLocalizedProperty("axRedEditLabel", IDS_AX_COLOR_EDIT_RED, data);
@@ -135,34 +155,36 @@ void ColorChooserPopupUIController::WriteColorPickerDocument(
   AddLocalizedProperty("axFormatTogglerLabel", IDS_AX_COLOR_FORMAT_TOGGLER,
                        data);
   AddLocalizedProperty("axEyedropperLabel", IDS_AX_COLOR_EYEDROPPER, data);
-#else
-  CHECK(false) << "We should never reach PagePopupClient code on Android";
+  PagePopupClient::AddLiteral("};\n", data);
+  data.Append(ChooserResourceLoader::GetPickerCommonJS());
+  data.Append(ChooserResourceLoader::GetColorPickerJS());
+  data.Append(ChooserResourceLoader::GetColorPickerCommonJS());
+  PagePopupClient::AddLiteral("</script></body>\n", data);
 #endif
-  PagePopupClient::AddString("};\n", data);
-  data->Append(ChooserResourceLoader::GetPickerCommonJS());
-  data->Append(ChooserResourceLoader::GetColorPickerJS());
-  data->Append(ChooserResourceLoader::GetColorPickerCommonJS());
-  PagePopupClient::AddString("</script></body>\n", data);
 }
 
 void ColorChooserPopupUIController::WriteColorSuggestionPickerDocument(
-    SharedBuffer* data) {
+    SegmentedBuffer& data) {
   DCHECK(client_->ShouldShowSuggestions());
 
   Vector<String> suggestion_values;
-  for (auto& suggestion : client_->Suggestions())
-    suggestion_values.push_back(Color(suggestion->color).Serialized());
-  IntRect anchor_rect_in_screen = chrome_client_->ViewportToScreen(
-      client_->ElementRectRelativeToViewport(), frame_->View());
+  for (auto& suggestion : client_->Suggestions()) {
+    // TODO(https://crbug.com/1351544): ColorSuggestions be sent as Color or
+    // SkColor4f and should be serialized as CSS colors.
+    suggestion_values.push_back(
+        Color::FromRGBA32(suggestion->color).SerializeAsCanvasColor());
+  }
+  gfx::Rect anchor_rect_in_screen = chrome_client_->LocalRootToScreenDIPs(
+      client_->ElementRectRelativeToLocalRoot(), frame_->View());
 
-  PagePopupClient::AddString(
+  PagePopupClient::AddLiteral(
       "<!DOCTYPE html><head><meta charset='UTF-8'><meta name='color-scheme' "
       "content='light dark'><style>\n",
       data);
-  data->Append(ChooserResourceLoader::GetPickerCommonStyleSheet());
-  data->Append(ChooserResourceLoader::GetColorSuggestionPickerStyleSheet());
-  data->Append(ChooserResourceLoader::GetColorPickerStyleSheet());
-  PagePopupClient::AddString(
+  data.Append(ChooserResourceLoader::GetPickerCommonStyleSheet());
+  data.Append(ChooserResourceLoader::GetColorSuggestionPickerStyleSheet());
+  data.Append(ChooserResourceLoader::GetColorPickerStyleSheet());
+  PagePopupClient::AddLiteral(
       "</style></head><body>\n"
       "<div id='main'>Loading...</div><script>\n"
       "window.dialogArguments = {\n",
@@ -170,30 +192,40 @@ void ColorChooserPopupUIController::WriteColorSuggestionPickerDocument(
   PagePopupClient::AddProperty("values", suggestion_values, data);
   PagePopupClient::AddLocalizedProperty("otherColorLabel",
                                         IDS_FORM_OTHER_COLOR_LABEL, data);
+  Color selected_color = client_->CurrentColor();
   PagePopupClient::AddProperty("selectedColor",
-                               client_->CurrentColor().Serialized(), data);
+                               Color::FromRGBA32(selected_color.Rgb())
+                                   .MakeOpaque()
+                                   .SerializeAsCanvasColor(),
+                               data);
+  AddProperty("selectedColorAlpha", selected_color.Alpha(), data);
+  AddProperty("shouldShowAlpha", client_->ShouldShowAlpha(), data);
   AddProperty("anchorRectInScreen", anchor_rect_in_screen, data);
   AddProperty("zoomFactor", ScaledZoomFactor(), data);
   AddProperty("shouldShowColorSuggestionPicker", true, data);
-  AddProperty("isEyeDropperEnabled", features::IsEyeDropperEnabled(), data);
-#if defined(OS_MAC)
+  AddProperty("isEyeDropperEnabled", ::features::IsEyeDropperEnabled(), data);
+#if BUILDFLAG(IS_MAC)
   AddProperty("isBorderTransparent", true, data);
 #endif
-  PagePopupClient::AddString("};\n", data);
-  data->Append(ChooserResourceLoader::GetPickerCommonJS());
-  data->Append(ChooserResourceLoader::GetColorSuggestionPickerJS());
-  data->Append(ChooserResourceLoader::GetColorPickerJS());
-  data->Append(ChooserResourceLoader::GetColorPickerCommonJS());
-  PagePopupClient::AddString("</script></body>\n", data);
+#if !BUILDFLAG(IS_ANDROID)
+  AddLocalizedProperty("axAlphaChannelLabel", IDS_AX_COLOR_ALPHA_SLIDER, data);
+#endif
+  PagePopupClient::AddLiteral("};\n", data);
+  data.Append(ChooserResourceLoader::GetPickerCommonJS());
+  data.Append(ChooserResourceLoader::GetColorSuggestionPickerJS());
+  data.Append(ChooserResourceLoader::GetColorPickerJS());
+  data.Append(ChooserResourceLoader::GetColorPickerCommonJS());
+  PagePopupClient::AddLiteral("</script></body>\n", data);
 }
 
 Locale& ColorChooserPopupUIController::GetLocale() {
-  return locale_;
+  return *locale_;
 }
 
 void ColorChooserPopupUIController::SetValueAndClosePopup(
     int num_value,
-    const String& string_value) {
+    const String& string_value,
+    bool is_keyboard_event) {
   DCHECK(popup_);
   DCHECK(client_);
   if (num_value == kColorPickerPopupActionSetValue)
@@ -204,14 +236,27 @@ void ColorChooserPopupUIController::SetValueAndClosePopup(
 void ColorChooserPopupUIController::SetValue(const String& value) {
   DCHECK(client_);
   Color color;
-  bool success = color.SetFromString(value);
+  bool success = CSSParser::ParseColor(color, value);
   DCHECK(success);
   client_->DidChooseColor(color);
 }
 
 void ColorChooserPopupUIController::DidClosePopup() {
   popup_ = nullptr;
-  eye_dropper_chooser_.reset();
+  To<HTMLFormControlElement>(OwnerElement()).SetFreezeHoverForOpenPopup(false);
+
+  if (frame_ && frame_->GetPage() &&
+      frame_->GetPage()
+          ->GetRendererPreferences()
+          .system_color_chooser_is_modal) {
+    if (eye_dropper_chooser_.is_bound()) {
+      // The eye dropper is a system dialog that stole focus, causing the popup
+      // to close. Don't end the chooser yet!
+      return;
+    }
+  } else {
+    eye_dropper_chooser_.reset();
+  }
 
   if (!chooser_)
     EndChooser();
@@ -228,6 +273,9 @@ ChromeClient& ColorChooserPopupUIController::GetChromeClient() {
 void ColorChooserPopupUIController::OpenPopup() {
   DCHECK(!popup_);
   popup_ = chrome_client_->OpenPagePopup(this);
+  if (popup_) {
+    To<HTMLFormControlElement>(OwnerElement()).SetFreezeHoverForOpenPopup(true);
+  }
 }
 
 void ColorChooserPopupUIController::CancelPopup() {
@@ -246,15 +294,28 @@ void ColorChooserPopupUIController::EyeDropperResponseHandler(bool success,
                                                               uint32_t color) {
   eye_dropper_chooser_.reset();
 
-  if (!popup_)
+  if (!popup_) {
+    if (success) {
+      client_->DidChooseColor(Color::FromRGBA32(color));
+    }
+    if (!chooser_) {
+      EndChooser();
+    }
     return;
+  }
   // Notify the popup that there is a response from the eye dropper.
-  scoped_refptr<SharedBuffer> data = SharedBuffer::Create();
-  PagePopupClient::AddString("window.updateData = {\n", data.get());
-  AddProperty("success", success, data.get());
-  AddProperty("color", Color(color).Serialized(), data.get());
-  PagePopupClient::AddString("}\n", data.get());
-  popup_->PostMessageToPopup(String::FromUTF8(data->Data(), data->size()));
+  SegmentedBuffer data;
+  PagePopupClient::AddLiteral("window.updateData = {\n", data);
+  AddProperty("success", success, data);
+  // TODO(https://crbug.com/1351544): The EyeDropper should use Color or
+  // SkColor4f.
+  AddProperty("color",
+              Color::FromRGBA32(color).MakeOpaque().SerializeAsCSSColor(),
+              data);
+  PagePopupClient::AddLiteral("}\n", data);
+  Vector<char> flatten_data = std::move(data).CopyAs<Vector<char>>();
+  popup_->PostMessageToPopup(
+      String::FromUtf8(base::as_string_view(flatten_data)));
 }
 
 void ColorChooserPopupUIController::OpenEyeDropper() {
@@ -267,11 +328,15 @@ void ColorChooserPopupUIController::OpenEyeDropper() {
   frame_->GetBrowserInterfaceBroker().GetInterface(
       eye_dropper_chooser_.BindNewPipeAndPassReceiver(
           frame_->GetTaskRunner(TaskType::kUserInteraction)));
-  eye_dropper_chooser_.set_disconnect_handler(WTF::Bind(
+  eye_dropper_chooser_.set_disconnect_handler(BindOnce(
       &ColorChooserPopupUIController::EndChooser, WrapWeakPersistent(this)));
   eye_dropper_chooser_->Choose(
-      WTF::Bind(&ColorChooserPopupUIController::EyeDropperResponseHandler,
-                WrapWeakPersistent(this)));
+      BindOnce(&ColorChooserPopupUIController::EyeDropperResponseHandler,
+               WrapWeakPersistent(this)));
+}
+
+void ColorChooserPopupUIController::AdjustSettings(Settings& popup_settings) {
+  AdjustSettingsFromOwnerColorScheme(popup_settings);
 }
 
 }  // namespace blink

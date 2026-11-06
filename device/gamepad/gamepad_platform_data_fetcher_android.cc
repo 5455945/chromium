@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,23 +6,30 @@
 
 #include <stddef.h>
 
-#include "base/android/build_info.h"
+#include "base/android/android_info.h"
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
+#include "base/check.h"
+#include "base/check_op.h"
 #include "base/containers/flat_map.h"
+#include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/trace_event/trace_event.h"
 #include "device/gamepad/gamepad_id_list.h"
+#include "device/gamepad/haptic_gamepad_android.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "device/gamepad/jni_headers/GamepadList_jni.h"
 
 using base::android::AttachCurrentThread;
 using base::android::CheckException;
 using base::android::ClearException;
 using base::android::ConvertJavaStringToUTF8;
-using base::android::JavaParamRef;
+using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
 
 namespace device {
@@ -40,41 +47,49 @@ bool HasStandardMappingOnAndroid(GamepadId gamepad_id,
   // represent gamepads that have been manually tested and are known to
   // work correctly on recent versions of Android. The key is a GamepadId to
   // identify the gamepad and the value is the earliest
-  // base::android::SdkVersion where the gamepad is known to be mapped
-  // correctly.
-  const base::flat_map<GamepadId, base::android::SdkVersion>
+  // base::android::android_info::SdkVersion where the gamepad is known to be
+  // mapped correctly.
+  const base::flat_map<GamepadId, base::android::android_info::SdkVersion>
       kManualAssessmentResult = {
           // Stadia Controller USB
           {GamepadId::kGoogleProduct9400,
-           base::android::SdkVersion::SDK_VERSION_OREO},
+           base::android::android_info::SDK_VERSION_OREO},
           // Xbox 360 wireless
           {GamepadId::kMicrosoftProduct02a1,
-           base::android::SdkVersion::SDK_VERSION_R},
+           base::android::android_info::SDK_VERSION_R},
           // Xbox One USB (2015 firmware)
           {GamepadId::kMicrosoftProduct02dd,
-           base::android::SdkVersion::SDK_VERSION_R},
+           base::android::android_info::SDK_VERSION_R},
           // Xbox One S USB
           {GamepadId::kMicrosoftProduct02ea,
-           base::android::SdkVersion::SDK_VERSION_Q},
+           base::android::android_info::SDK_VERSION_Q},
           // Xbox One S Bluetooth
           {GamepadId::kMicrosoftProduct02fd,
-           base::android::SdkVersion::SDK_VERSION_R},
+           base::android::android_info::SDK_VERSION_R},
           // Xbox Series X USB
           {GamepadId::kMicrosoftProduct0b12,
-           base::android::SdkVersion::SDK_VERSION_R},
+           base::android::android_info::SDK_VERSION_R},
           // Xbox Series X Bluetooth
           {GamepadId::kMicrosoftProduct0b13,
-           base::android::SdkVersion::SDK_VERSION_Q},
+           base::android::android_info::SDK_VERSION_Q},
+          // Xbox One S Bluetooth (2021 firmware)
+          {GamepadId::kMicrosoftProduct0b20,
+           base::android::android_info::SDK_VERSION_Q},
+          // Xbox Adaptive (2021 firmware)
+          {GamepadId::kMicrosoftProduct0b21,
+           base::android::android_info::SDK_VERSION_Q},
+          // Xbox Elite Series 2 (2021 firmware)
+          {GamepadId::kMicrosoftProduct0b22,
+           base::android::android_info::SDK_VERSION_Q},
           // Switch Pro Controller
           {GamepadId::kNintendoProduct2009,
-           base::android::SdkVersion::SDK_VERSION_R},
+           base::android::android_info::SDK_VERSION_R},
       };
 
   auto find_it = kManualAssessmentResult.find(gamepad_id);
 
   if (find_it != kManualAssessmentResult.end()) {
-    return find_it->second <=
-           base::android::BuildInfo::GetInstance()->sdk_int();
+    return find_it->second <= base::android::android_info::sdk_int();
   }
   // Assume XInput gamepads are always correctly mapped.
   return x_input_type == kXInputTypeXbox360 ||
@@ -88,6 +103,9 @@ GamepadPlatformDataFetcherAndroid::GamepadPlatformDataFetcherAndroid() =
 
 GamepadPlatformDataFetcherAndroid::~GamepadPlatformDataFetcherAndroid() {
   PauseHint(true);
+  for (const auto& pair : vibration_actuators_) {
+    pair.second->Shutdown();
+  }
 }
 
 GamepadSource GamepadPlatformDataFetcherAndroid::source() {
@@ -96,6 +114,34 @@ GamepadSource GamepadPlatformDataFetcherAndroid::source() {
 
 void GamepadPlatformDataFetcherAndroid::OnAddedToProvider() {
   PauseHint(false);
+}
+
+void GamepadPlatformDataFetcherAndroid::SetDualRumbleVibrationActuator(
+    int source_id) {
+  DCHECK(!vibration_actuators_.contains(source_id));
+  vibration_actuators_.emplace(
+      source_id, std::make_unique<HapticGamepadAndroid>(source_id));
+}
+
+void GamepadPlatformDataFetcherAndroid::TryShutdownDualRumbleVibrationActuator(
+    int source_id) {
+  auto find_it = vibration_actuators_.find(source_id);
+  if (find_it != vibration_actuators_.end()) {
+    find_it->second->Shutdown();
+    vibration_actuators_.erase(find_it);
+  }
+}
+
+void GamepadPlatformDataFetcherAndroid::SetVibration(int device_index,
+                                                     double strong_magnitude,
+                                                     double weak_magnitude) {
+  Java_GamepadList_setVibration(base::android::AttachCurrentThread(),
+                                device_index, strong_magnitude, weak_magnitude);
+}
+
+void GamepadPlatformDataFetcherAndroid::SetZeroVibration(int device_index) {
+  Java_GamepadList_setZeroVibration(base::android::AttachCurrentThread(),
+                                    device_index);
 }
 
 void GamepadPlatformDataFetcherAndroid::GetGamepadData(
@@ -117,20 +163,55 @@ void GamepadPlatformDataFetcherAndroid::PauseHint(bool paused) {
   Java_GamepadList_setGamepadAPIActive(env, !paused);
 }
 
-static void JNI_GamepadList_SetGamepadData(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& obj,
-    jlong data_fetcher,
-    jint index,
-    jboolean mapping,
-    jboolean connected,
-    const JavaParamRef<jstring>& devicename,
-    jint vendor_id,
-    jint product_id,
-    jlong timestamp,
-    const JavaParamRef<jfloatArray>& jaxes,
-    const JavaParamRef<jfloatArray>& jbuttons,
-    jint buttons_length) {
+void GamepadPlatformDataFetcherAndroid::PlayEffect(
+    int source_id,
+    mojom::GamepadHapticEffectType type,
+    mojom::GamepadEffectParametersPtr params,
+    mojom::GamepadHapticsManager::PlayVibrationEffectOnceCallback callback,
+    scoped_refptr<base::SequencedTaskRunner> callback_runner) {
+  auto find_it = vibration_actuators_.find(source_id);
+  if (find_it == vibration_actuators_.end()) {
+    LOG(ERROR) << "Failed to play vibration effect on a gamepad with no "
+                  "vibration actuator";
+    RunVibrationCallback(
+        std::move(callback), std::move(callback_runner),
+        mojom::GamepadHapticsResult::GamepadHapticsResultError);
+    return;
+  }
+  find_it->second->PlayEffect(type, std::move(params), std::move(callback),
+                              std::move(callback_runner));
+}
+
+void GamepadPlatformDataFetcherAndroid::ResetVibration(
+    int source_id,
+    mojom::GamepadHapticsManager::ResetVibrationActuatorCallback callback,
+    scoped_refptr<base::SequencedTaskRunner> callback_runner) {
+  auto find_it = vibration_actuators_.find(source_id);
+  if (find_it == vibration_actuators_.end()) {
+    LOG(ERROR) << "Failed to reset vibration effect on a gamepad with no "
+                  "vibration actuator";
+    RunVibrationCallback(
+        std::move(callback), std::move(callback_runner),
+        mojom::GamepadHapticsResult::GamepadHapticsResultError);
+    return;
+  }
+  find_it->second->ResetVibration(std::move(callback),
+                                  std::move(callback_runner));
+}
+
+static void JNI_GamepadList_SetGamepadData(JNIEnv* env,
+                                           int64_t data_fetcher,
+                                           int32_t index,
+                                           bool mapping,
+                                           bool connected,
+                                           const JavaRef<jstring>& devicename,
+                                           int32_t vendor_id,
+                                           int32_t product_id,
+                                           int64_t timestamp,
+                                           const JavaRef<jfloatArray>& jaxes,
+                                           const JavaRef<jfloatArray>& jbuttons,
+                                           int32_t buttons_length,
+                                           bool supports_dual_rumble) {
   DCHECK(data_fetcher);
   GamepadPlatformDataFetcherAndroid* fetcher =
       reinterpret_cast<GamepadPlatformDataFetcherAndroid*>(data_fetcher);
@@ -138,8 +219,10 @@ static void JNI_GamepadList_SetGamepadData(
 
   // Do not set gamepad parameters for all the gamepad devices that are not
   // attached.
-  if (!connected)
+  if (!connected) {
+    fetcher->TryShutdownDualRumbleVibrationActuator(index);
     return;
+  }
 
   PadState* state = fetcher->GetPadState(index);
 
@@ -166,6 +249,11 @@ static void JNI_GamepadList_SetGamepadData(
     }
     GamepadDataFetcher::UpdateGamepadStrings(product_name, vendor_id,
                                              product_id, mapping, pad);
+    pad.vibration_actuator.type = GamepadHapticActuatorType::kDualRumble;
+    pad.vibration_actuator.not_null = supports_dual_rumble;
+    if (supports_dual_rumble) {
+      fetcher->SetDualRumbleVibrationActuator(state->source_id);
+    }
   }
 
   pad.connected = true;
@@ -197,6 +285,7 @@ static void JNI_GamepadList_SetGamepadData(
 
   // Copy buttons state to the Gamepad buttons[].
   for (unsigned int j = 0; j < pad.buttons_length; j++) {
+    pad.buttons[j].used = true;
     pad.buttons[j].pressed =
         buttons[j] > GamepadButton::kDefaultButtonPressedThreshold;
     pad.buttons[j].touched = buttons[j] > 0.0f;
@@ -205,3 +294,5 @@ static void JNI_GamepadList_SetGamepadData(
 }
 
 }  // namespace device
+
+DEFINE_JNI(GamepadList)

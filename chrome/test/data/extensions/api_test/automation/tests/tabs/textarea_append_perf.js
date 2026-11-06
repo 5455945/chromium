@@ -1,24 +1,23 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-var allTests = [
+const allTests = [
   function testTextareaAppend() {
-    let runButton = rootNode.find({ role: 'button'});
+    const runButton = rootNode.find({role: 'button'});
     assertEq('button', runButton.role);
 
-    let doneLink = rootNode.find({ role: 'link'});
+    const doneLink = rootNode.find({role: 'link'});
     assertEq('link', doneLink.role);
 
-    rootNode.addEventListener('childrenChanged', (evt) => {
-    });
+    rootNode.addEventListener('childrenChanged', (evt) => {});
 
     doneLink.addEventListener('focus', () => {
       chrome.test.succeed();
     });
 
     runButton.doDefault();
-  }
+  },
 ];
 
-setUpAndRunTests(allTests, 'textarea_append.html');
+setUpAndRunTabsTests(allTests, 'textarea_append.html');

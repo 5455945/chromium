@@ -1,22 +1,42 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/platform/peerconnection/webrtc_audio_sink.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <limits>
+#include <string>
+#include <utility>
 
-#include "base/callback_helpers.h"
+#include "base/check.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/logging.h"
+#include "base/memory/aligned_memory.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/to_string.h"
+#include "base/synchronization/lock.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/threading/thread_checker.h"
+#include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
+#include "media/base/audio_bus.h"
+#include "media/base/audio_parameters.h"
+#include "media/base/audio_sample_types.h"
 #include "media/base/audio_timestamp_helper.h"
 #include "third_party/blink/public/platform/modules/webrtc/webrtc_logging.h"
+#include "third_party/blink/renderer/platform/mediastream/media_stream_audio_level_calculator.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
+#include "third_party/webrtc/api/media_stream_interface.h"
+#include "third_party/webrtc/api/media_stream_track.h"
+#include "third_party/webrtc/api/scoped_refptr.h"
 #include "third_party/webrtc/rtc_base/ref_counted_object.h"
 
 namespace {
@@ -27,24 +47,6 @@ void SendLogMessage(const std::string& message) {
 
 }  // namespace
 
-namespace WTF {
-
-template <>
-struct CrossThreadCopier<scoped_refptr<webrtc::AudioProcessorInterface>>
-    : public CrossThreadCopierPassThrough<
-          scoped_refptr<webrtc::AudioProcessorInterface>> {
-  STATIC_ONLY(CrossThreadCopier);
-};
-
-template <>
-struct CrossThreadCopier<scoped_refptr<blink::WebRtcAudioSink::Adapter>>
-    : public CrossThreadCopierPassThrough<
-          scoped_refptr<blink::WebRtcAudioSink::Adapter>> {
-  STATIC_ONLY(CrossThreadCopier);
-};
-
-}  // namespace WTF
-
 namespace blink {
 
 WebRtcAudioSink::WebRtcAudioSink(
@@ -52,11 +54,11 @@ WebRtcAudioSink::WebRtcAudioSink(
     scoped_refptr<webrtc::AudioSourceInterface> track_source,
     scoped_refptr<base::SingleThreadTaskRunner> signaling_task_runner,
     scoped_refptr<base::SingleThreadTaskRunner> main_task_runner)
-    : adapter_(
-          new rtc::RefCountedObject<Adapter>(label,
-                                             std::move(track_source),
-                                             std::move(signaling_task_runner),
-                                             std::move(main_task_runner))),
+    : adapter_(new webrtc::RefCountedObject<Adapter>(
+          label,
+          std::move(track_source),
+          std::move(signaling_task_runner),
+          std::move(main_task_runner))),
       fifo_(ConvertToBaseRepeatingCallback(
           CrossThreadBindRepeating(&WebRtcAudioSink::DeliverRebufferedAudio,
                                    CrossThreadUnretained(this)))),
@@ -89,7 +91,7 @@ void WebRtcAudioSink::OnEnabledChanged(bool enabled) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   SendLogMessage(base::StringPrintf("OnEnabledChanged([label=%s] {enabled=%s})",
                                     adapter_->label().c_str(),
-                                    (enabled ? "true" : "false")));
+                                    base::ToString(enabled).c_str()));
   PostCrossThreadTask(
       *adapter_->signaling_task_runner(), FROM_HERE,
       CrossThreadBindOnce(
@@ -112,15 +114,13 @@ void WebRtcAudioSink::OnData(const media::AudioBus& audio_bus,
   // will be a joint effort, and should be carefully carried out.
   last_estimated_capture_time_ = estimated_capture_time;
 
-  adapter_->UpdateTimestampAligner(estimated_capture_time);
-
   // The following will result in zero, one, or multiple synchronous calls to
   // DeliverRebufferedAudio().
   fifo_.Push(audio_bus);
 }
 
 void WebRtcAudioSink::OnSetFormat(const media::AudioParameters& params) {
-  DCHECK(params.IsValid());
+  CHECK(params.IsValid());
   SendLogMessage(base::StringPrintf("OnSetFormat([label=%s] {params=[%s]})",
                                     adapter_->label().c_str(),
                                     params.AsHumanReadableString().c_str()));
@@ -130,7 +130,9 @@ void WebRtcAudioSink::OnSetFormat(const media::AudioParameters& params) {
   fifo_.Reset(params_.frames_per_buffer());
   const int num_pcm16_data_elements =
       params_.frames_per_buffer() * params_.channels();
-  interleaved_data_.reset(new int16_t[num_pcm16_data_elements]);
+
+  interleaved_data_ = base::AlignedUninit<int16_t>(
+      num_pcm16_data_elements, media::AudioBus::kChannelAlignment);
 }
 
 void WebRtcAudioSink::DeliverRebufferedAudio(const media::AudioBus& audio_bus,
@@ -139,29 +141,30 @@ void WebRtcAudioSink::DeliverRebufferedAudio(const media::AudioBus& audio_bus,
   TRACE_EVENT1("audio", "WebRtcAudioSink::DeliverRebufferedAudio", "frames",
                audio_bus.frames());
 
-  // TODO(miu): Why doesn't a WebRTC sink care about reference time passed to
-  // OnData(), and the |frame_delay| here?  How is AV sync achieved otherwise?
-
   // TODO(henrika): Remove this conversion once the interface in libjingle
   // supports float vectors.
   static_assert(sizeof(interleaved_data_[0]) == 2,
                 "ToInterleaved expects 2 bytes.");
   audio_bus.ToInterleaved<media::SignedInt16SampleTypeTraits>(
-      audio_bus.frames(), interleaved_data_.get());
+      interleaved_data_);
 
   const base::TimeTicks estimated_capture_time =
       last_estimated_capture_time_ + media::AudioTimestampHelper::FramesToTime(
                                          frame_delay, params_.sample_rate());
 
   num_preferred_channels_ = adapter_->DeliverPCMToWebRtcSinks(
-      interleaved_data_.get(), params_.sample_rate(), audio_bus.channels(),
+      interleaved_data_.data(), params_.sample_rate(), audio_bus.channels(),
       audio_bus.frames(), estimated_capture_time);
 }
 
 namespace {
-// TODO(miu): MediaStreamAudioProcessor destructor requires this nonsense.
 void DereferenceOnMainThread(
-    const scoped_refptr<webrtc::AudioProcessorInterface>& processor) {}
+    scoped_refptr<webrtc::AudioProcessorInterface> processor) {
+  // The ref count was artificially increased before posting the task. Decrease
+  // it again to ensure that the processor is destroyed when the scoped_refptr
+  // goes out of scope.
+  processor->Release();
+}
 }  // namespace
 
 WebRtcAudioSink::Adapter::Adapter(
@@ -184,9 +187,22 @@ WebRtcAudioSink::Adapter::~Adapter() {
   SendLogMessage(
       base::StringPrintf("Adapter::~Adapter([label=%s])", label_.c_str()));
   if (audio_processor_) {
-    PostCrossThreadTask(*main_task_runner_.get(), FROM_HERE,
-                        CrossThreadBindOnce(&DereferenceOnMainThread,
-                                            std::move(audio_processor_)));
+    // Artificially increase the ref count of audio_processor_ before posting it
+    // to the main thread to be destroyed. If the post succeeds, it will be
+    // destroyed on the main thread as intended. If the post fails, the ref
+    // count will remain at 1, leaking the processor. This is preferred to
+    // destroying it on the wrong thread, which causes a crash.
+    audio_processor_->AddRef();
+    auto* possible_leak = audio_processor_.get();
+    if (!PostCrossThreadTask(
+            *main_task_runner_.get(), FROM_HERE,
+            CrossThreadBindOnce(&DereferenceOnMainThread,
+                                std::move(audio_processor_)))) {
+      DVLOG(1) << __func__
+               << " Intentionally leaking audio_processor_ due to failed "
+                  "PostCrossThreadTask: "
+               << possible_leak;
+    }
   }
 }
 
@@ -198,17 +214,13 @@ int WebRtcAudioSink::Adapter::DeliverPCMToWebRtcSinks(
     base::TimeTicks estimated_capture_time) {
   base::AutoLock auto_lock(lock_);
 
-  // This use |timestamp_aligner_| to transform |estimated_capture_timestamp| to
-  // rtc::TimeMicros(). See the comment at UpdateTimestampAligner() for more
-  // details.
-  const int64_t capture_timestamp_us = timestamp_aligner_.TranslateTimestamp(
-      estimated_capture_time.since_origin().InMicroseconds());
+  int64_t capture_timestamp_ms =
+      estimated_capture_time.since_origin().InMilliseconds();
 
   int num_preferred_channels = -1;
   for (webrtc::AudioTrackSinkInterface* sink : sinks_) {
     sink->OnData(audio_data, sizeof(int16_t) * 8, sample_rate,
-                 number_of_channels, number_of_frames,
-                 capture_timestamp_us / rtc::kNumMicrosecsPerMillisec);
+                 number_of_channels, number_of_frames, capture_timestamp_ms);
     num_preferred_channels =
         std::max(num_preferred_channels, sink->NumPreferredChannels());
   }
@@ -224,7 +236,7 @@ bool WebRtcAudioSink::Adapter::set_enabled(bool enable) {
          signaling_task_runner_->RunsTasksInCurrentSequence());
   SendLogMessage(
       base::StringPrintf("Adapter::set_enabled([label=%s] {enable=%s})",
-                         label_.c_str(), (enable ? "true" : "false")));
+                         label_.c_str(), base::ToString(enable).c_str()));
   return webrtc::MediaStreamTrack<webrtc::AudioTrackInterface>::set_enabled(
       enable);
 }
@@ -236,7 +248,7 @@ void WebRtcAudioSink::Adapter::AddSink(webrtc::AudioTrackSinkInterface* sink) {
   SendLogMessage(
       base::StringPrintf("Adapter::AddSink({label=%s})", label_.c_str()));
   base::AutoLock auto_lock(lock_);
-  DCHECK(!base::Contains(sinks_, sink));
+  DCHECK(!std::ranges::contains(sinks_, sink));
   sinks_.push_back(sink);
 }
 
@@ -247,7 +259,7 @@ void WebRtcAudioSink::Adapter::RemoveSink(
   SendLogMessage(
       base::StringPrintf("Adapter::RemoveSink([label=%s])", label_.c_str()));
   base::AutoLock auto_lock(lock_);
-  const auto it = std::find(sinks_.begin(), sinks_.end(), sink);
+  auto it = std::ranges::find(sinks_, sink);
   if (it != sinks_.end())
     sinks_.erase(it);
 }
@@ -271,29 +283,18 @@ bool WebRtcAudioSink::Adapter::GetSignalLevel(int* level) {
   return true;
 }
 
-rtc::scoped_refptr<webrtc::AudioProcessorInterface>
+webrtc::scoped_refptr<webrtc::AudioProcessorInterface>
 WebRtcAudioSink::Adapter::GetAudioProcessor() {
   DCHECK(!signaling_task_runner_ ||
          signaling_task_runner_->RunsTasksInCurrentSequence());
-  return audio_processor_.get();
+  return webrtc::scoped_refptr<webrtc::AudioProcessorInterface>(
+      audio_processor_.get());
 }
 
 webrtc::AudioSourceInterface* WebRtcAudioSink::Adapter::GetSource() const {
   DCHECK(!signaling_task_runner_ ||
          signaling_task_runner_->RunsTasksInCurrentSequence());
   return source_.get();
-}
-
-void WebRtcAudioSink::Adapter::UpdateTimestampAligner(
-    base::TimeTicks capture_time) {
-  // The |timestamp_aligner_| stamps an audio frame as if it is captured 'now',
-  // taking rtc::TimeMicros as the reference clock. It does not provide the time
-  // that the frame was originally captured, Using |timestamp_aligner_| rather
-  // than calling rtc::TimeMicros is to take the advantage that it aligns its
-  // output timestamps such that the time spacing in the |capture_time| is
-  // maintained.
-  timestamp_aligner_.TranslateTimestamp(
-      capture_time.since_origin().InMicroseconds(), rtc::TimeMicros());
 }
 
 }  // namespace blink

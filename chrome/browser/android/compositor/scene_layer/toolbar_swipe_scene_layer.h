@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,8 @@
 
 #include <jni.h>
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "chrome/browser/ui/android/layouts/scene_layer.h"
 #include "third_party/skia/include/core/SkColor.h"
 
@@ -24,18 +25,16 @@ class ToolbarSwipeSceneLayer : public SceneLayer {
   ~ToolbarSwipeSceneLayer() override;
 
   void UpdateLayer(JNIEnv* env,
-                   const base::android::JavaParamRef<jobject>& jobj,
-                   jint id,
-                   jboolean left_tab,
-                   jboolean can_use_live_layer,
-                   jint default_background_color,
-                   jfloat x,
-                   jfloat y);
+                   int32_t id,
+                   bool left_tab,
+                   bool can_use_live_layer,
+                   int32_t default_background_color,
+                   float x,
+                   float y);
 
   void SetTabContentManager(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& jobj,
-      const base::android::JavaParamRef<jobject>& jtab_content_manager);
+      const base::android::JavaRef<jobject>& jtab_content_manager);
 
   bool ShouldShowBackground() override;
 
@@ -45,7 +44,7 @@ class ToolbarSwipeSceneLayer : public SceneLayer {
   scoped_refptr<android::ContentLayer> left_content_layer_;
   scoped_refptr<android::ContentLayer> right_content_layer_;
 
-  TabContentManager* tab_content_manager_;
+  raw_ptr<TabContentManager> tab_content_manager_;
 
   SkColor background_color_;
 };

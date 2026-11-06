@@ -1,63 +1,68 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ASH_SHELF_WINDOW_SCALE_ANIMATION_H_
 #define ASH_SHELF_WINDOW_SCALE_ANIMATION_H_
 
-#include "base/callback.h"
-#include "base/callback_helpers.h"
-#include "base/macros.h"
-#include "base/scoped_observation.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "ui/aura/window.h"
-#include "ui/aura/window_observer.h"
-#include "ui/compositor/layer_animation_observer.h"
+#include <memory>
+#include <vector>
 
-namespace gfx {
-class Transform;
-}
+#include "ash/ash_export.h"
+#include "base/auto_reset.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
+#include "base/scoped_observation.h"
+#include "ui/aura/window.h"
 
 namespace ash {
 
 enum class BackdropWindowMode;
 
-// The class the does the dragged window scale-down animation to shelf or
-// scale-up to restore to its original bounds after drag ends. The window will
-// be minimized after animation complete if we're heading to the shelf.
-class WindowScaleAnimation : public ui::ImplicitAnimationObserver,
-                             public aura::WindowObserver {
+// The class which does the scale-down animation to shelf or scale-up to restore
+// to its original bounds for all windows in the transient tree of |window_|
+// after drag ends. Window(s) will be minimized with the descending order
+// in the transient tree after animation completes if we're scaling down to
+// shelf.
+class ASH_EXPORT WindowScaleAnimation {
  public:
   enum class WindowScaleType {
     kScaleDownToShelf,
     kScaleUpToRestore,
   };
 
-  WindowScaleAnimation(aura::Window* window,
-                       WindowScaleType scale_type,
+  WindowScaleAnimation(WindowScaleType scale_type,
                        base::OnceClosure opt_callback);
-  ~WindowScaleAnimation() override;
 
-  // ui::ImplicitAnimationObserver:
-  void OnImplicitAnimationsCompleted() override;
+  WindowScaleAnimation(const WindowScaleAnimation&) = delete;
+  WindowScaleAnimation& operator=(const WindowScaleAnimation&) = delete;
 
-  // aura::WindowObserver:
-  void OnWindowDestroying(aura::Window* window) override;
+  ~WindowScaleAnimation();
+
+  // Starts animating and creating animation observers for all window(s) in the
+  // transient tree of `window` in a descending order,
+  void Start(aura::Window* window);
+
+  // For tests only:
+  static base::AutoReset<bool>
+  EnableScopedFastAnimationForTransientChildForTest();
 
  private:
-  // Returns the transform that should be applied to the dragged window if we
-  // should head to shelf after dragging.
-  gfx::Transform GetWindowTransformToShelf();
+  class AnimationObserver;
 
-  aura::Window* window_;
+  void DestroyWindowAnimationObserver(
+      WindowScaleAnimation::AnimationObserver* animation_observer);
+
+  // `window` is the last window in the transient tree to complete its
+  // animation.
+  void OnScaleWindowsOnAnimationsCompleted(aura::Window* window);
+
   base::OnceClosure opt_callback_;
 
   const WindowScaleType scale_type_;
 
-  base::ScopedObservation<aura::Window, aura::WindowObserver>
-      window_observation_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(WindowScaleAnimation);
+  // Each window in the transient tree has its own `WindowAnimationObserver`.
+  std::vector<std::unique_ptr<AnimationObserver>> window_animation_observers_;
 };
 
 }  // namespace ash

@@ -1,21 +1,20 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/smb_client/discovery/netbios_host_locator.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/test/simple_test_tick_clock.h"
 #include "base/test/test_mock_time_task_runner.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/ash/smb_client/discovery/fake_netbios_client.h"
 #include "chrome/browser/ash/smb_client/smb_constants.h"
-#include "chromeos/dbus/fake_smb_provider_client.h"
+#include "chromeos/ash/components/dbus/smbprovider/fake_smb_provider_client.h"
 #include "net/base/ip_endpoint.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace ash {
-namespace smb_client {
+namespace ash::smb_client {
 namespace {
 
 // Helper method to create a NetworkInterface for testing.
@@ -91,6 +90,9 @@ class NetBiosHostLocatorTest : public testing::Test {
         &NetBiosHostLocatorTest::SetTrueOnReturned, base::Unretained(this));
   }
 
+  NetBiosHostLocatorTest(const NetBiosHostLocatorTest&) = delete;
+  NetBiosHostLocatorTest& operator=(const NetBiosHostLocatorTest&) = delete;
+
   ~NetBiosHostLocatorTest() override = default;
 
  protected:
@@ -152,8 +154,6 @@ class NetBiosHostLocatorTest : public testing::Test {
   // Each entry in the map represents an IP, packet pair that should be returned
   // by that NetBiosClient.
   std::vector<std::map<net::IPEndPoint, Packet>> clients_data_;
-
-  DISALLOW_COPY_AND_ASSIGN(NetBiosHostLocatorTest);
 };
 
 // Calculate broadcast address correctly calculates the broadcast address
@@ -176,15 +176,21 @@ TEST_F(NetBiosHostLocatorTest, ShouldUseWifiAndEthernetInterfaces) {
 
   const net::NetworkInterface interface_ethernet = CreateNetworkInterface(
       net::IPAddress::IPv4Localhost(), 24 /* prefix_length */,
-      net::NetworkChangeNotifier::CONNECTION_WIFI);
+      net::NetworkChangeNotifier::CONNECTION_ETHERNET);
 
   const net::NetworkInterface interface_bluetooth = CreateNetworkInterface(
       net::IPAddress::IPv4Localhost(), 24 /* prefix_length */,
       net::NetworkChangeNotifier::CONNECTION_BLUETOOTH);
 
+  // For IPv4 the max length should be 32 bits.
+  const net::NetworkInterface invalid_length = CreateNetworkInterface(
+      net::IPAddress::IPv4Localhost(), 40 /* prefix_length */,
+      net::NetworkChangeNotifier::CONNECTION_ETHERNET);
+
   EXPECT_TRUE(ShouldUseInterface(interface_wifi));
   EXPECT_TRUE(ShouldUseInterface(interface_ethernet));
   EXPECT_FALSE(ShouldUseInterface(interface_bluetooth));
+  EXPECT_FALSE(ShouldUseInterface(invalid_length));
 }
 
 // ShouldUseInterface returns true for IPv4 interfaces but false for IPv6
@@ -212,8 +218,7 @@ TEST_F(NetBiosHostLocatorTest, OneInterfaceNoResults) {
       std::move(timer_));
 
   host_locator_->FindHosts(base::BindOnce(&ExpectNoResults));
-  task_runner_->FastForwardBy(
-      base::TimeDelta::FromSeconds(kNetBiosDiscoveryTimeoutSeconds));
+  task_runner_->FastForwardBy(base::Seconds(kNetBiosDiscoveryTimeoutSeconds));
 }
 
 // Two interfaces that receive no responses properly return no results.
@@ -229,11 +234,10 @@ TEST_F(NetBiosHostLocatorTest, MultipleInterfacesNoResults) {
   host_locator_->FindHosts(base::BindOnce(&ExpectNoResults));
 
   // Fast forward timer so that callback fires.
-  task_runner_->FastForwardBy(
-      base::TimeDelta::FromSeconds(kNetBiosDiscoveryTimeoutSeconds));
+  task_runner_->FastForwardBy(base::Seconds(kNetBiosDiscoveryTimeoutSeconds));
 }
 
-// One interface that recieves responses from two different ip addresses
+// One interface that receives responses from two different ip addresses
 // returns the correct results.
 TEST_F(NetBiosHostLocatorTest, OneInterfaceWithResults) {
   // Build data for a NetBiosClient
@@ -262,8 +266,7 @@ TEST_F(NetBiosHostLocatorTest, OneInterfaceWithResults) {
 
   host_locator_->FindHosts(
       base::BindOnce(&ExpectResultsEqual, expected_results));
-  task_runner_->FastForwardBy(
-      base::TimeDelta::FromSeconds(kNetBiosDiscoveryTimeoutSeconds));
+  task_runner_->FastForwardBy(base::Seconds(kNetBiosDiscoveryTimeoutSeconds));
 }
 
 // Two interfaces that each receive responses from multiple ip addresses
@@ -309,8 +312,7 @@ TEST_F(NetBiosHostLocatorTest, MultipleInterfacesWithResults) {
 
   host_locator_->FindHosts(
       base::BindOnce(&ExpectResultsEqual, expected_results));
-  task_runner_->FastForwardBy(
-      base::TimeDelta::FromSeconds(kNetBiosDiscoveryTimeoutSeconds));
+  task_runner_->FastForwardBy(base::Seconds(kNetBiosDiscoveryTimeoutSeconds));
 }
 
 // Results are not duplicated when multiple interfaces receive the same response
@@ -327,7 +329,7 @@ TEST_F(NetBiosHostLocatorTest, MultipleInterfacesWithDuplicateResults) {
   netbios_client_1[source_ip_1] = hostnames_1;
   netbios_client_1[source_ip_2] = hostnames_2;
 
-  // Build data for the second NetBiosClient which also recieves the response
+  // Build data for the second NetBiosClient which also receives the response
   // from |source_ip_2|.
   const net::IPEndPoint source_ip_4(net::IPAddress(2, 4, 8, 16), 137);
   const Hostnames hostnames_4 = {"hOsTnAmE-5"};
@@ -353,8 +355,7 @@ TEST_F(NetBiosHostLocatorTest, MultipleInterfacesWithDuplicateResults) {
 
   host_locator_->FindHosts(
       base::BindOnce(&ExpectResultsEqual, expected_results));
-  task_runner_->FastForwardBy(
-      base::TimeDelta::FromSeconds(kNetBiosDiscoveryTimeoutSeconds));
+  task_runner_->FastForwardBy(base::Seconds(kNetBiosDiscoveryTimeoutSeconds));
 }
 
 TEST_F(NetBiosHostLocatorTest, ResultsNotReturnedUntilTimer) {
@@ -383,11 +384,10 @@ TEST_F(NetBiosHostLocatorTest, ResultsNotReturnedUntilTimer) {
       std::move(timer_));
 
   host_locator_->FindHosts(std::move(set_true_on_returned_callback_));
-  task_runner_->FastForwardBy(
-      base::TimeDelta::FromSeconds(kNetBiosDiscoveryTimeoutSeconds) -
-      base::TimeDelta::FromMilliseconds(1));
+  task_runner_->FastForwardBy(base::Seconds(kNetBiosDiscoveryTimeoutSeconds) -
+                              base::Milliseconds(1));
   EXPECT_FALSE(has_returned_);
-  task_runner_->FastForwardBy(base::TimeDelta::FromMilliseconds(1));
+  task_runner_->FastForwardBy(base::Milliseconds(1));
   EXPECT_TRUE(has_returned_);
 }
 
@@ -412,7 +412,7 @@ TEST_F(NetBiosHostLocatorTest, SecondIPUsedForResults) {
   std::map<net::IPEndPoint, Hostnames> netbios_client_1;
   netbios_client_1[source_ip_1] = hostnames_1;
 
-  // Build data for the second NetBiosClient which also recieves the response
+  // Build data for the second NetBiosClient which also receives the response
   // from |source_ip_2|.
   const net::IPEndPoint source_ip_2(net::IPAddress(2, 4, 8, 16), 137);
   const Hostnames hostnames_2 = {duplicate_hostname};
@@ -434,9 +434,7 @@ TEST_F(NetBiosHostLocatorTest, SecondIPUsedForResults) {
 
   host_locator_->FindHosts(
       base::BindOnce(&ExpectResultsEqual, expected_results));
-  task_runner_->FastForwardBy(
-      base::TimeDelta::FromSeconds(kNetBiosDiscoveryTimeoutSeconds));
+  task_runner_->FastForwardBy(base::Seconds(kNetBiosDiscoveryTimeoutSeconds));
 }
 
-}  // namespace smb_client
-}  // namespace ash
+}  // namespace ash::smb_client

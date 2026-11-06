@@ -51,22 +51,28 @@ class JSONGeneratorTest(unittest.TestCase):
         self._fixable_count = 0
 
     def test_strip_json_wrapper(self):
-        json = "['contents']"
+        json = b"['contents']"
         self.assertEqual(
-            json_results_generator.
-            strip_json_wrapper(json_results_generator._JSON_PREFIX + json +
-                               json_results_generator._JSON_SUFFIX), json)
+            json_results_generator.strip_json_wrapper(
+                json_results_generator._JSON_PREFIX
+                + json
+                + json_results_generator._JSON_SUFFIX
+            ),
+            json,
+        )
         self.assertEqual(json_results_generator.strip_json_wrapper(json), json)
 
     def test_test_timings_trie(self):
         individual_test_timings = []
         individual_test_timings.append(
             json_results_generator.TestResult(
-                'foo/bar/baz.html', elapsed_time=1.2))
+                'foo/bar/baz.html', elapsed_time=1.2
+            )
+        )
         individual_test_timings.append(
-            json_results_generator.TestResult('bar.html', elapsed_time=0.0001))
-        trie = json_results_generator.test_timings_trie(
-            individual_test_timings)
+            json_results_generator.TestResult('bar.html', elapsed_time=0.0001)
+        )
+        trie = json_results_generator.test_timings_trie(individual_test_timings)
 
         expected_trie = {
             'bar.html': 0,
@@ -74,7 +80,10 @@ class JSONGeneratorTest(unittest.TestCase):
                 'bar': {
                     'baz.html': 1200,
                 }
-            }
+            },
         }
 
-        self.assertEqual(json.dumps(trie), json.dumps(expected_trie))
+        self.assertEqual(
+            json.dumps(sorted(trie.keys())),
+            json.dumps(sorted(expected_trie.keys())),
+        )

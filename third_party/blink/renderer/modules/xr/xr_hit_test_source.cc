@@ -1,26 +1,22 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/xr/xr_hit_test_source.h"
 
+#include "device/vr/public/mojom/hit_test_subscription_id.h"
 #include "device/vr/public/mojom/vr_service.mojom-blink.h"
 #include "third_party/blink/renderer/modules/xr/xr_hit_test_result.h"
 #include "third_party/blink/renderer/modules/xr/xr_session.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 
-namespace {
-const char kCannotCancelHitTestSource[] =
-    "Hit test source could not be canceled! Ensure that it was not already "
-    "canceled.";
-}
-
 namespace blink {
 
-XRHitTestSource::XRHitTestSource(uint64_t id, XRSession* xr_session)
+XRHitTestSource::XRHitTestSource(const device::HitTestSubscriptionId& id,
+                                 XRSession* xr_session)
     : id_(id), xr_session_(xr_session) {}
 
-uint64_t XRHitTestSource::id() const {
+device::HitTestSubscriptionId XRHitTestSource::id() const {
   return id_;
 }
 
@@ -29,7 +25,7 @@ void XRHitTestSource::cancel(ExceptionState& exception_state) {
 
   if (!xr_session_->RemoveHitTestSource(this)) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
-                                      kCannotCancelHitTestSource);
+                                      XRSession::kCannotCancelHitTestSource);
   }
 }
 
@@ -53,7 +49,8 @@ void XRHitTestSource::Update(
              << result->mojo_from_result.position().ToString()
              << ", orientation="
              << result->mojo_from_result.orientation().ToString()
-             << ", plane_id=" << result->plane_id;
+             << ", plane_id="
+             << result->plane_id.value_or(device::kInvalidPlaneId);
     last_frame_results_.emplace_back(result->Clone());
   }
 }

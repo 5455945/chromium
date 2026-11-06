@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 
 #include <string>
 
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/controls/textfield/textfield_controller.h"
 #include "ui/views/view.h"
@@ -22,9 +22,9 @@ class Textfield;
 // AuthenticatorClientPinEntrySheetModel.
 class AuthenticatorClientPinEntryView : public views::View,
                                         public views::TextfieldController {
- public:
-  METADATA_HEADER(AuthenticatorClientPinEntryView);
+  METADATA_HEADER(AuthenticatorClientPinEntryView, views::View)
 
+ public:
   class Delegate {
    public:
     virtual void OnPincodeChanged(std::u16string pin_code) = 0;
@@ -49,9 +49,9 @@ class AuthenticatorClientPinEntryView : public views::View,
   bool HandleKeyEvent(views::Textfield* sender,
                       const ui::KeyEvent& key_event) override;
 
-  Delegate* const delegate_;
-  views::Textfield* pin_text_field_ = nullptr;
-  views::Textfield* confirmation_text_field_ = nullptr;
+  const raw_ptr<Delegate> delegate_;
+  raw_ptr<views::Textfield> pin_text_field_ = nullptr;
+  raw_ptr<views::Textfield> confirmation_text_field_ = nullptr;
   const bool show_confirmation_text_field_;
 };
 

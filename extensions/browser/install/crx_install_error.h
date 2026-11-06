@@ -1,13 +1,12 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef EXTENSIONS_BROWSER_INSTALL_CRX_INSTALL_ERROR_H_
 #define EXTENSIONS_BROWSER_INSTALL_CRX_INSTALL_ERROR_H_
 
+#include <optional>
 #include <string>
-
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace extensions {
 
@@ -28,13 +27,9 @@ enum class CrxInstallErrorType {
 };
 
 // Extended error code that may help explain the error type.
-// Do not change the order of the entries or remove entries in this list.
-// 1) Don't forget to update enums.xml when adding new entries.
-// 2) Don't forget to update device_management_backend.proto (name:
-// ExtensionInstallReportLogEvent::CrxInstallErrorDetail) when adding new
-// entries.
-// 3) Don't forget to update ConvertCrxInstallErrorDetailToProto method in
-// ExtensionInstallEventLogCollector.
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// LINT.IfChange(CrxInstallErrorDetail)
 enum class CrxInstallErrorDetail {
   NONE,                                     // 0
   CONVERT_USER_SCRIPT_TO_EXTENSION_FAILED,  // 1
@@ -61,11 +56,14 @@ enum class CrxInstallErrorDetail {
   USER_CANCELED,                            // 22
   USER_ABORTED,                             // 23
   UPDATE_NON_EXISTING_EXTENSION,            // 24
+  PROFILE_SHUTTING_DOWN,                    // 25
+  MANIFEST_MISMATCH_AFTER_INSTALL,          // 26
 
   // Magic constant used by the histogram macros.
   // Always update it to the max value.
-  kMaxValue = UPDATE_NON_EXISTING_EXTENSION,
+  kMaxValue = MANIFEST_MISMATCH_AFTER_INSTALL,
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/extensions/enums.xml:ExtensionInstallationCrxInstallError,//components/policy/proto/device_management_backend.proto:CrxInstallErrorDetail)
 
 // Simple error class for CrxInstaller.
 class CrxInstallError {
@@ -93,7 +91,7 @@ class CrxInstallError {
  private:
   CrxInstallErrorType type_;
   CrxInstallErrorDetail detail_;
-  absl::optional<SandboxedUnpackerFailureReason> sandbox_failure_detail_;
+  std::optional<SandboxedUnpackerFailureReason> sandbox_failure_detail_;
   std::u16string message_;
 };
 

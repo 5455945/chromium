@@ -46,11 +46,11 @@ class PLATFORM_EXPORT FEMorphology final : public FilterEffect {
   float RadiusY() const;
   bool SetRadiusY(float);
 
-  WTF::TextStream& ExternalRepresentation(WTF::TextStream&,
-                                          int indention) const override;
+  StringBuilder& ExternalRepresentation(StringBuilder&,
+                                        wtf_size_t indent) const override;
 
  private:
-  FloatRect MapEffect(const FloatRect&) const override;
+  gfx::RectF MapEffect(const gfx::RectF&) const override;
 
   sk_sp<PaintFilter> CreateImageFilter() override;
 

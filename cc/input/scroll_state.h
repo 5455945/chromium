@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,7 @@
 
 #include "cc/cc_export.h"
 #include "cc/input/scroll_state_data.h"
-#include "ui/gfx/geometry/point.h"
-#include "ui/gfx/geometry/scroll_offset.h"
-#include "ui/gfx/geometry/vector2d.h"
+#include "ui/gfx/geometry/vector2d_f.h"
 
 namespace cc {
 
@@ -28,6 +26,10 @@ class CC_EXPORT ScrollState {
   // Positive when scrolling down.
   double delta_y() const { return data_.delta_y; }
   // Positive when scrolling right.
+  double delta_x_unconstrained() const { return data_.delta_x_unconstrained; }
+  // Positive when scrolling down.
+  double delta_y_unconstrained() const { return data_.delta_y_unconstrained; }
+  // Positive when scrolling right.
   double delta_x_hint() const { return data_.delta_x_hint; }
   // Positive when scrolling down.
   double delta_y_hint() const { return data_.delta_y_hint; }
@@ -35,9 +37,6 @@ class CC_EXPORT ScrollState {
   // position of the finger. For mouse, the location of the cursor.
   int position_x() const { return data_.position_x; }
   int position_y() const { return data_.position_y; }
-
-  double velocity_x() const { return data_.velocity_x; }
-  double velocity_y() const { return data_.velocity_y; }
 
   bool is_beginning() const { return data_.is_beginning; }
   void set_is_beginning(bool is_beginning) {
@@ -89,14 +88,14 @@ class CC_EXPORT ScrollState {
 
   // Returns a the delta hints if this is a scroll begin or the real delta if
   // it's a scroll update
-  gfx::ScrollOffset DeltaOrHint() const;
+  gfx::Vector2dF DeltaOrHint() const;
 
   ElementId target_element_id() const {
     return data_.current_native_scrolling_element();
   }
 
-  bool is_main_thread_hit_tested() const {
-    return data_.is_main_thread_hit_tested;
+  MainThreadHitTestReasons main_thread_hit_tested_reasons() const {
+    return data_.main_thread_hit_tested_reasons;
   }
 
   ScrollStateData* data() { return &data_; }

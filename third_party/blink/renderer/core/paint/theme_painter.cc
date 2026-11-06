@@ -21,10 +21,15 @@
 
 #include "third_party/blink/renderer/core/paint/theme_painter.h"
 
+#include <algorithm>
+#include <cmath>
+
 #include "build/build_config.h"
+#include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-shared.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
+#include "third_party/blink/renderer/core/html/forms/html_button_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_data_list_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_data_list_options_collection.h"
 #include "third_party/blink/renderer/core/html/forms/html_input_element.h"
@@ -35,26 +40,49 @@
 #include "third_party/blink/renderer/core/input_type_names.h"
 #include "third_party/blink/renderer/core/layout/layout_theme.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
+#include "third_party/blink/renderer/core/paint/paint_auto_dark_mode.h"
 #include "third_party/blink/renderer/core/paint/paint_info.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_context_state_saver.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_canvas.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/text/writing_mode.h"
 #include "ui/base/ui_base_features.h"
+#include "ui/gfx/geometry/point_conversions.h"
+#include "ui/gfx/geometry/rect_conversions.h"
+#include "ui/gfx/geometry/size_conversions.h"
 #include "ui/native_theme/native_theme.h"
 
 // The methods in this file are shared by all themes on every platform.
 
 namespace blink {
 
+using mojom::blink::FormControlType;
+
+gfx::Rect ThemePainter::SnapRectForPaint(const PhysicalRect& paint_rect,
+                                         AppearanceValue appearance) {
+  if (RuntimeEnabledFeatures::ConsistentFormControlPaintSnappingEnabled() &&
+      (appearance == AppearanceValue::kCheckbox ||
+       appearance == AppearanceValue::kRadio)) {
+    // Rounding the size on its own, rather than snapping both edges, keeps
+    // the painted size independent of the sub-pixel position.
+    const gfx::RectF rect(paint_rect);
+    return gfx::Rect(gfx::ToRoundedPoint(rect.origin()),
+                     gfx::ToRoundedSize(rect.size()));
+  }
+  return ToPixelSnappedRect(paint_rect);
+}
+
 namespace {
 
-bool IsMultipleFieldsTemporalInput(const AtomicString& type) {
-#if !defined(OS_ANDROID)
-  return type == input_type_names::kDate ||
-         type == input_type_names::kDatetimeLocal ||
-         type == input_type_names::kMonth || type == input_type_names::kTime ||
-         type == input_type_names::kWeek;
+bool IsMultipleFieldsTemporalInput(FormControlType type) {
+#if !BUILDFLAG(IS_ANDROID)
+  return type == FormControlType::kInputDate ||
+         type == FormControlType::kInputDatetimeLocal ||
+         type == FormControlType::kInputMonth ||
+         type == FormControlType::kInputTime ||
+         type == FormControlType::kInputWeek;
 #else
   return false;
 #endif
@@ -69,8 +97,8 @@ ThemePainter::ThemePainter() = default;
 
 void CountAppearanceTextFieldPart(const Element& element) {
   if (auto* input = DynamicTo<HTMLInputElement>(element)) {
-    const AtomicString& type = input->type();
-    if (type == input_type_names::kSearch) {
+    FormControlType type = input->FormControlType();
+    if (type == FormControlType::kInputSearch) {
       UseCounter::Count(element.GetDocument(),
                         WebFeature::kCSSValueAppearanceTextFieldForSearch);
     } else if (input->IsTextField()) {
@@ -87,105 +115,109 @@ void CountAppearanceTextFieldPart(const Element& element) {
 // Returns true; Needs CSS painting and/or PaintBorderOnly().
 bool ThemePainter::Paint(const LayoutObject& o,
                          const PaintInfo& paint_info,
-                         const IntRect& r) {
+                         const gfx::Rect& r) {
   Document& doc = o.GetDocument();
-  const ComputedStyle& style = o.StyleRef();
-  ControlPart part = o.StyleRef().EffectiveAppearance();
+  const ComputedStyle& style = o.Style();
+  AppearanceValue appearance = o.Style().EffectiveAppearance();
   // LayoutTheme::AdjustAppearanceWithElementType() ensures |node| is a
   // non-null Element.
   DCHECK(o.GetNode());
-  DCHECK_NE(part, kNoControlPart);
+  DCHECK_NE(appearance, AppearanceValue::kNone);
   const Element& element = *To<Element>(o.GetNode());
 
-  if (part == kButtonPart) {
+  if (appearance == AppearanceValue::kButton) {
     if (IsA<HTMLButtonElement>(element)) {
       UseCounter::Count(doc, WebFeature::kCSSValueAppearanceButtonForButton);
-    } else if (IsA<HTMLInputElement>(element) &&
-               To<HTMLInputElement>(element).IsTextButton()) {
+    } else if (auto* input_element = DynamicTo<HTMLInputElement>(element);
+               input_element && input_element->IsTextButton()) {
       // Text buttons (type=button, reset, submit) has
       // -webkit-appearance:push-button by default.
       UseCounter::Count(doc,
                         WebFeature::kCSSValueAppearanceButtonForOtherButtons);
-    } else if (IsA<HTMLInputElement>(element) &&
-               To<HTMLInputElement>(element).type() ==
-                   input_type_names::kColor) {
-      //  'button' for input[type=color], of which default appearance is
-      // 'square-button', is not deprecated.
     }
+    //  'button' for input[type=color], of which default appearance is
+    // 'square-button', is not deprecated or for ::scroll-button.
   }
 
   // Call the appropriate paint method based off the appearance value.
-  switch (part) {
-    case kCheckboxPart: {
+  switch (appearance) {
+    case AppearanceValue::kCheckbox: {
       COUNT_APPEARANCE(doc, Checkbox);
       return PaintCheckbox(element, o.GetDocument(), style, paint_info, r);
     }
-    case kRadioPart: {
+    case AppearanceValue::kRadio: {
       COUNT_APPEARANCE(doc, Radio);
       return PaintRadio(element, o.GetDocument(), style, paint_info, r);
     }
-    case kPushButtonPart: {
+    case AppearanceValue::kPushButton: {
       COUNT_APPEARANCE(doc, PushButton);
       return PaintButton(element, o.GetDocument(), style, paint_info, r);
     }
-    case kSquareButtonPart: {
+    case AppearanceValue::kSquareButton: {
       COUNT_APPEARANCE(doc, SquareButton);
       return PaintButton(element, o.GetDocument(), style, paint_info, r);
     }
-    case kButtonPart:
+    case AppearanceValue::kButton:
       // UseCounter for this is handled at the beginning of the function.
       return PaintButton(element, o.GetDocument(), style, paint_info, r);
-    case kInnerSpinButtonPart: {
+    case AppearanceValue::kInnerSpinButton: {
       COUNT_APPEARANCE(doc, InnerSpinButton);
       return PaintInnerSpinButton(element, style, paint_info, r);
     }
-    case kMenulistPart:
+    case AppearanceValue::kMenulist:
       COUNT_APPEARANCE(doc, MenuList);
       return PaintMenuList(element, o.GetDocument(), style, paint_info, r);
-    case kMeterPart:
+    case AppearanceValue::kMeter:
       return true;
-    case kProgressBarPart:
+    case AppearanceValue::kProgressBar:
       COUNT_APPEARANCE(doc, ProgressBar);
       // Note that |-webkit-appearance: progress-bar| works only for <progress>.
       return PaintProgressBar(element, o, paint_info, r, style);
-    case kSliderHorizontalPart: {
+    case AppearanceValue::kSliderHorizontal: {
       COUNT_APPEARANCE(doc, SliderHorizontal);
       return PaintSliderTrack(element, o, paint_info, r, style);
     }
-    case kSliderVerticalPart: {
+    case AppearanceValue::kSliderVertical: {
       COUNT_APPEARANCE(doc, SliderVertical);
       return PaintSliderTrack(element, o, paint_info, r, style);
     }
-    case kSliderThumbHorizontalPart: {
+    case AppearanceValue::kSliderThumbHorizontal: {
       COUNT_APPEARANCE(doc, SliderThumbHorizontal);
       return PaintSliderThumb(element, style, paint_info, r);
     }
-    case kSliderThumbVerticalPart: {
+    case AppearanceValue::kSliderThumbVertical: {
       COUNT_APPEARANCE(doc, SliderThumbVertical);
       return PaintSliderThumb(element, style, paint_info, r);
     }
-    case kMediaSliderPart:
-    case kMediaSliderThumbPart:
-    case kMediaVolumeSliderPart:
-    case kMediaVolumeSliderThumbPart:
+    case AppearanceValue::kMediaSlider:
+      COUNT_APPEARANCE(doc, MediaSlider);
       return true;
-    case kMenulistButtonPart:
+    case AppearanceValue::kMediaSliderThumb:
+      COUNT_APPEARANCE(doc, MediaSliderThumb);
       return true;
-    case kTextFieldPart:
+    case AppearanceValue::kMediaVolumeSlider:
+      COUNT_APPEARANCE(doc, MediaVolumeSlider);
+      return true;
+    case AppearanceValue::kMediaVolumeSliderThumb:
+      COUNT_APPEARANCE(doc, MediaVolumeSliderThumb);
+      return true;
+    case AppearanceValue::kMenulistButton:
+      return true;
+    case AppearanceValue::kTextField:
       CountAppearanceTextFieldPart(element);
       return PaintTextField(element, style, paint_info, r);
-    case kTextAreaPart:
+    case AppearanceValue::kTextArea:
       COUNT_APPEARANCE(doc, TextArea);
       return PaintTextArea(element, style, paint_info, r);
-    case kSearchFieldPart: {
+    case AppearanceValue::kSearchField: {
       COUNT_APPEARANCE(doc, SearchField);
       return PaintSearchField(element, style, paint_info, r);
     }
-    case kSearchFieldCancelButtonPart: {
+    case AppearanceValue::kSearchFieldCancelButton: {
       COUNT_APPEARANCE(doc, SearchCancel);
       return PaintSearchFieldCancelButton(o, paint_info, r);
     }
-    case kListboxPart:
+    case AppearanceValue::kListbox:
       return true;
     default:
       break;
@@ -199,35 +231,51 @@ bool ThemePainter::Paint(const LayoutObject& o,
 bool ThemePainter::PaintBorderOnly(const Node* node,
                                    const ComputedStyle& style,
                                    const PaintInfo& paint_info,
-                                   const IntRect& r) {
+                                   const gfx::Rect& r) {
   DCHECK(style.HasEffectiveAppearance());
   DCHECK(node);
   const Element& element = *To<Element>(node);
   // Call the appropriate paint method based off the appearance value.
   switch (style.EffectiveAppearance()) {
-    case kTextFieldPart:
-    case kTextAreaPart:
+    case AppearanceValue::kTextField:
+    case AppearanceValue::kTextArea:
       return false;
-    case kMenulistButtonPart:
-    case kSearchFieldPart:
-    case kListboxPart:
+    case AppearanceValue::kMenulistButton:
+    case AppearanceValue::kSearchField:
+    case AppearanceValue::kListbox:
       return true;
-    case kButtonPart:
-    case kCheckboxPart:
-    case kInnerSpinButtonPart:
-    case kMenulistPart:
-    case kProgressBarPart:
-    case kPushButtonPart:
-    case kRadioPart:
-    case kSearchFieldCancelButtonPart:
-    case kSliderHorizontalPart:
-    case kSliderThumbHorizontalPart:
-    case kSliderThumbVerticalPart:
-    case kSliderVerticalPart:
-    case kSquareButtonPart:
+    case AppearanceValue::kButton:
+    case AppearanceValue::kCheckbox:
+    case AppearanceValue::kInnerSpinButton:
+    case AppearanceValue::kMenulist:
+    case AppearanceValue::kProgressBar:
+    case AppearanceValue::kPushButton:
+    case AppearanceValue::kRadio:
+    case AppearanceValue::kSearchFieldCancelButton:
+    case AppearanceValue::kSliderHorizontal:
+    case AppearanceValue::kSliderThumbHorizontal:
+    case AppearanceValue::kSliderThumbVertical:
+    case AppearanceValue::kSliderVertical:
+    case AppearanceValue::kSquareButton:
       // Supported appearance values don't need CSS border painting.
       return false;
-    default:
+    case AppearanceValue::kBaseSelect:
+    case AppearanceValue::kBase:
+      return true;
+    case AppearanceValue::kNone:
+    case AppearanceValue::kAuto:
+      // AppearanceValue::kNone isn't possible because callers should only
+      // call this function when HasEffectiveAppearance is true. kAutoPart isn't
+      // possible because it can't be an effective appearance.
+      NOTREACHED();
+    // TODO(dbaron): The following values were previously covered by a
+    // default: case and should be classified correctly:
+    case AppearanceValue::kMediaControl:
+    case AppearanceValue::kMeter:
+    case AppearanceValue::kMediaSlider:
+    case AppearanceValue::kMediaSliderThumb:
+    case AppearanceValue::kMediaVolumeSlider:
+    case AppearanceValue::kMediaVolumeSliderThumb:
       UseCounter::Count(
           element.GetDocument(),
           WebFeature::kCSSValueAppearanceNoImplementationSkipBorder);
@@ -241,30 +289,30 @@ bool ThemePainter::PaintDecorations(const Node* node,
                                     const Document& document,
                                     const ComputedStyle& style,
                                     const PaintInfo& paint_info,
-                                    const IntRect& r) {
+                                    const gfx::Rect& r) {
   DCHECK(node);
   // Call the appropriate paint method based off the appearance value.
   switch (style.EffectiveAppearance()) {
-    case kMenulistButtonPart:
+    case AppearanceValue::kMenulistButton:
       COUNT_APPEARANCE(document, MenuListButton);
       return PaintMenuListButton(*To<Element>(node), document, style,
                                  paint_info, r);
-    case kTextFieldPart:
-    case kTextAreaPart:
-    case kCheckboxPart:
-    case kRadioPart:
-    case kPushButtonPart:
-    case kSquareButtonPart:
-    case kButtonPart:
-    case kMenulistPart:
-    case kMeterPart:
-    case kProgressBarPart:
-    case kSliderHorizontalPart:
-    case kSliderVerticalPart:
-    case kSliderThumbHorizontalPart:
-    case kSliderThumbVerticalPart:
-    case kSearchFieldPart:
-    case kSearchFieldCancelButtonPart:
+    case AppearanceValue::kTextField:
+    case AppearanceValue::kTextArea:
+    case AppearanceValue::kCheckbox:
+    case AppearanceValue::kRadio:
+    case AppearanceValue::kPushButton:
+    case AppearanceValue::kSquareButton:
+    case AppearanceValue::kButton:
+    case AppearanceValue::kMenulist:
+    case AppearanceValue::kMeter:
+    case AppearanceValue::kProgressBar:
+    case AppearanceValue::kSliderHorizontal:
+    case AppearanceValue::kSliderVertical:
+    case AppearanceValue::kSliderThumbHorizontal:
+    case AppearanceValue::kSliderThumbVertical:
+    case AppearanceValue::kSearchField:
+    case AppearanceValue::kSearchFieldCancelButton:
     default:
       break;
   }
@@ -274,16 +322,22 @@ bool ThemePainter::PaintDecorations(const Node* node,
 
 #undef COUNT_APPEARANCE
 
+// These values must match the -webkit-slider-container rule in html.css.
+static constexpr float kSliderTickInlineSize = 1;
+static constexpr float kSliderTickBlockSize = 4;
+static constexpr float kSliderTickOffset = 7;
+
 void ThemePainter::PaintSliderTicks(const LayoutObject& o,
                                     const PaintInfo& paint_info,
-                                    const IntRect& rect) {
+                                    const gfx::Rect& rect) {
   auto* input = DynamicTo<HTMLInputElement>(o.GetNode());
   if (!input)
     return;
 
-  if (input->type() != input_type_names::kRange ||
-      !input->UserAgentShadowRoot()->HasChildren())
+  if (input->FormControlType() != FormControlType::kInputRange ||
+      !input->UserAgentShadowRoot()->HasChildren()) {
     return;
+  }
 
   HTMLDataListElement* data_list = input->DataList();
   if (!data_list)
@@ -291,81 +345,108 @@ void ThemePainter::PaintSliderTicks(const LayoutObject& o,
 
   double min = input->Minimum();
   double max = input->Maximum();
-  ControlPart part = o.StyleRef().EffectiveAppearance();
-  // We don't support ticks on alternate sliders like MediaVolumeSliders.
-  if (part != kSliderHorizontalPart && part != kSliderVerticalPart)
+  if (min >= max)
     return;
-  bool is_horizontal = part == kSliderHorizontalPart;
 
-  IntSize thumb_size;
+  const ComputedStyle& style = o.Style();
+  AppearanceValue appearance = style.EffectiveAppearance();
+  // We don't support ticks on alternate sliders like MediaVolumeSliders.
+  bool is_slider_vertical =
+      RuntimeEnabledFeatures::
+          NonStandardAppearanceValueSliderVerticalEnabled() &&
+      appearance == AppearanceValue::kSliderVertical;
+  bool is_writing_mode_vertical = !style.IsHorizontalWritingMode();
+  if (!(appearance == AppearanceValue::kSliderHorizontal ||
+        is_slider_vertical)) {
+    return;
+  }
+  bool is_horizontal = !is_writing_mode_vertical && !is_slider_vertical;
+
+  gfx::Size thumb_size;
   LayoutObject* thumb_layout_object =
       input->UserAgentShadowRoot()
           ->getElementById(shadow_element_names::kIdSliderThumb)
           ->GetLayoutObject();
-  if (thumb_layout_object && thumb_layout_object->IsBox())
-    thumb_size = FlooredIntSize(To<LayoutBox>(thumb_layout_object)->Size());
+  if (thumb_layout_object && thumb_layout_object->IsBox()) {
+    thumb_size =
+        ToFlooredSize(To<LayoutBox>(thumb_layout_object)->StitchedSize());
+  }
 
-  IntSize tick_size = LayoutTheme::GetTheme().SliderTickSize();
-  float zoom_factor = o.StyleRef().EffectiveZoom();
-  FloatRect tick_rect;
+  float zoom_factor = style.EffectiveZoom();
+  gfx::RectF tick_rect;
   int tick_region_side_margin = 0;
   int tick_region_width = 0;
-  IntRect track_bounds;
+  gfx::Rect track_bounds;
   LayoutObject* track_layout_object =
       input->UserAgentShadowRoot()
           ->getElementById(shadow_element_names::kIdSliderTrack)
           ->GetLayoutObject();
   if (track_layout_object && track_layout_object->IsBox()) {
-    track_bounds = IntRect(
-        CeiledIntPoint(track_layout_object->FirstFragment().PaintOffset()),
-        FlooredIntSize(To<LayoutBox>(track_layout_object)->Size()));
+    track_bounds = gfx::Rect(
+        ToCeiledPoint(track_layout_object->FirstFragment().PaintOffset()),
+        ToFlooredSize(To<LayoutBox>(track_layout_object)->StitchedSize()));
   }
 
+  const float tick_inline_size = kSliderTickInlineSize * zoom_factor;
+  const float tick_block_size = kSliderTickBlockSize * zoom_factor;
+  const float tick_offset_from_center = kSliderTickOffset * zoom_factor;
+  // The painted size is floored to whole pixels to keep the ticks crisp, but it
+  // has to stay at least one pixel. kSliderTickInlineSize is 1, so any zoom
+  // factor below 1 (e.g. 90% page zoom on a 1x display) would otherwise floor
+  // to zero and no ticks would be painted at all.
+  const float snapped_tick_inline_size =
+      std::max(1.0f, std::floor(tick_inline_size));
+  const float snapped_tick_block_size =
+      std::max(1.0f, std::floor(tick_block_size));
+  const auto writing_direction = style.GetWritingDirection();
   if (is_horizontal) {
-    tick_rect.SetWidth(floor(tick_size.Width() * zoom_factor));
-    tick_rect.SetHeight(floor(tick_size.Height() * zoom_factor));
-    tick_rect.SetY(
-        floor(rect.Y() + rect.Height() / 2.0 +
-              LayoutTheme::GetTheme().SliderTickOffsetFromTrackCenter() *
-                  zoom_factor));
+    tick_rect.set_size({snapped_tick_inline_size, snapped_tick_block_size});
+    tick_rect.set_y(
+        floor(rect.y() + rect.height() / 2.0 + tick_offset_from_center));
     tick_region_side_margin =
-        track_bounds.X() +
-        (thumb_size.Width() - tick_size.Width() * zoom_factor) / 2.0;
-    tick_region_width = track_bounds.Width() - thumb_size.Width();
+        track_bounds.x() + (thumb_size.width() - tick_inline_size) / 2.0;
+    tick_region_width = track_bounds.width() - thumb_size.width();
   } else {
-    tick_rect.SetWidth(floor(tick_size.Height() * zoom_factor));
-    tick_rect.SetHeight(floor(tick_size.Width() * zoom_factor));
-    tick_rect.SetX(
-        floor(rect.X() + rect.Width() / 2.0 +
-              LayoutTheme::GetTheme().SliderTickOffsetFromTrackCenter() *
-                  zoom_factor));
+    tick_rect.set_size({snapped_tick_block_size, snapped_tick_inline_size});
+    const float slider_center = rect.x() + rect.width() / 2.0;
+    const float tick_x =
+        (style.IsHorizontalTypographicMode() &&
+         writing_direction.LineUnder() == PhysicalDirection::kLeft)
+            ? (slider_center - tick_offset_from_center - tick_block_size)
+            : (slider_center + tick_offset_from_center);
+    tick_rect.set_x(floor(tick_x));
     tick_region_side_margin =
-        track_bounds.Y() +
-        (thumb_size.Height() - tick_size.Width() * zoom_factor) / 2.0;
-    tick_region_width = track_bounds.Height() - thumb_size.Height();
+        track_bounds.y() + (thumb_size.height() - tick_inline_size) / 2.0;
+    tick_region_width = track_bounds.height() - thumb_size.height();
   }
   HTMLDataListOptionsCollection* options = data_list->options();
+  bool flip_tick_direction = true;
+  if (is_horizontal || is_writing_mode_vertical) {
+    PhysicalDirection inline_end = writing_direction.InlineEnd();
+    flip_tick_direction = inline_end == PhysicalDirection::kLeft ||
+                          inline_end == PhysicalDirection::kUp;
+  }
   for (unsigned i = 0; HTMLOptionElement* option_element = options->Item(i);
        i++) {
     String value = option_element->value();
-    if (option_element->IsDisabledFormControl() || value.IsEmpty())
+    if (option_element->IsDisabledFormControl() || value.empty())
       continue;
     if (!input->IsValidValue(value))
       continue;
     double parsed_value =
         ParseToDoubleForNumberType(input->SanitizeValue(value));
     double tick_fraction = (parsed_value - min) / (max - min);
-    double tick_ratio = is_horizontal && o.StyleRef().IsLeftToRightDirection()
-                            ? tick_fraction
-                            : 1.0 - tick_fraction;
+    double tick_ratio =
+        flip_tick_direction ? 1.0 - tick_fraction : tick_fraction;
     double tick_position =
         round(tick_region_side_margin + tick_region_width * tick_ratio);
     if (is_horizontal)
-      tick_rect.SetX(tick_position);
+      tick_rect.set_x(tick_position);
     else
-      tick_rect.SetY(tick_position);
-    paint_info.context.FillRect(tick_rect,
-                                o.ResolveColor(GetCSSPropertyColor()));
+      tick_rect.set_y(tick_position);
+    paint_info.context.FillRect(
+        tick_rect, o.ResolveColor(GetCSSPropertyColor()),
+        PaintAutoDarkMode(style, DarkModeFilter::ElementRole::kBackground));
   }
 }
 

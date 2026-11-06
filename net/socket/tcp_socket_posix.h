@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +8,15 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 
-#include "base/callback.h"
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "build/build_config.h"
 #include "net/base/address_family.h"
 #include "net/base/completion_once_callback.h"
+#include "net/base/ip_endpoint.h"
 #include "net/base/net_export.h"
+#include "net/base/network_handle.h"
 #include "net/log/net_log_with_source.h"
 #include "net/socket/socket_descriptor.h"
 #include "net/socket/socket_performance_watcher.h"
@@ -29,7 +31,6 @@ namespace net {
 
 class AddressList;
 class IOBuffer;
-class IPEndPoint;
 class SocketPosix;
 class NetLog;
 struct NetLogSource;
@@ -39,10 +40,17 @@ class NET_EXPORT TCPSocketPosix {
  public:
   // |socket_performance_watcher| is notified of the performance metrics related
   // to this socket. |socket_performance_watcher| may be null.
-  TCPSocketPosix(
+  static std::unique_ptr<TCPSocketPosix> Create(
       std::unique_ptr<SocketPerformanceWatcher> socket_performance_watcher,
       NetLog* net_log,
       const NetLogSource& source);
+  static std::unique_ptr<TCPSocketPosix> Create(
+      std::unique_ptr<SocketPerformanceWatcher> socket_performance_watcher,
+      NetLogWithSource net_log_source);
+
+  TCPSocketPosix(const TCPSocketPosix&) = delete;
+  TCPSocketPosix& operator=(const TCPSocketPosix&) = delete;
+
   virtual ~TCPSocketPosix();
 
   // Opens the socket.
@@ -117,11 +125,11 @@ class NET_EXPORT TCPSocketPosix {
   int SetSendBufferSize(int32_t size);
   bool SetKeepAlive(bool enable, int delay);
   bool SetNoDelay(bool no_delay);
+  int SetIPv6Only(bool ipv6_only);
 
   // Gets the estimated RTT. Returns false if the RTT is
   // unavailable. May also return false when estimated RTT is 0.
-  bool GetEstimatedRoundTripTime(base::TimeDelta* out_rtt) const
-      WARN_UNUSED_RESULT;
+  [[nodiscard]] bool GetEstimatedRoundTripTime(base::TimeDelta* out_rtt) const;
 
   // Closes the socket.
   void Close();
@@ -165,7 +173,22 @@ class NET_EXPORT TCPSocketPosix {
     return socket_performance_watcher_.get();
   }
 
+  // Binds this socket to `network`. All data traffic on the socket will be sent
+  // and received via `network`. Must be called after Open() but before
+  // Connect() and/or Bind(). This call will fail if `network` has disconnected.
+  // Communication using this socket will fail if `network` disconnects.
+  // Returns a net error code.
+  int BindToNetwork(handles::NetworkHandle network);
+
  private:
+  TCPSocketPosix(
+      std::unique_ptr<SocketPerformanceWatcher> socket_performance_watcher,
+      NetLog* net_log,
+      const NetLogSource& source);
+  TCPSocketPosix(
+      std::unique_ptr<SocketPerformanceWatcher> socket_performance_watcher,
+      NetLogWithSource net_log_source);
+
   void AcceptCompleted(std::unique_ptr<TCPSocketPosix>* tcp_socket,
                        IPEndPoint* address,
                        CompletionOnceCallback callback,
@@ -204,7 +227,7 @@ class NET_EXPORT TCPSocketPosix {
   // |socket_performance_watcher_|. May be nullptr.
   std::unique_ptr<SocketPerformanceWatcher> socket_performance_watcher_;
 
-  bool logging_multiple_connect_attempts_;
+  bool logging_multiple_connect_attempts_ = false;
 
   NetLogWithSource net_log_;
 
@@ -212,7 +235,15 @@ class NET_EXPORT TCPSocketPosix {
   // |socket_| is opened.
   SocketTag tag_;
 
-  DISALLOW_COPY_AND_ASSIGN(TCPSocketPosix);
+#if BUILDFLAG(IS_MAC)
+  struct PortRandomizationData {
+    IPEndPoint peer_address;
+    uint16_t local_port;
+  };
+  std::optional<PortRandomizationData> port_randomization_data_;
+#endif  // BUILDFLAG(IS_MAC)
+
+  handles::NetworkHandle bound_network_ = handles::kInvalidNetworkHandle;
 };
 
 }  // namespace net

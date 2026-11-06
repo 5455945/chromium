@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,27 +7,28 @@
 #include <stdint.h>
 
 #include <algorithm>
+#include <array>
+#include <functional>
+#include <optional>
 #include <string>
 
-#include "base/bind.h"
 #include "base/build_time.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
-#include "base/cxx17_backports.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
-#include "base/sequenced_task_runner.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/clock.h"
 #include "base/time/default_clock.h"
 #include "base/time/default_tick_clock.h"
 #include "base/time/tick_clock.h"
 #include "base/time/time.h"
-#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/buildflags.h"
+#include "chrome/browser/enterprise/browser_management/management_service_factory.h"
 #include "chrome/browser/google/google_brand.h"
 #include "chrome/browser/obsolete_system/obsolete_system.h"
 #include "chrome/browser/upgrade_detector/build_state.h"
@@ -39,46 +40,52 @@
 #include "components/version_info/version_info.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
-#if defined(OS_WIN)
-#include "base/enterprise_util.h"
+#if BUILDFLAG(IS_WIN)
 #include "chrome/installer/util/google_update_settings.h"
-#include "components/enterprise/browser/controller/browser_dm_token_storage.h"
-#elif defined(OS_MAC)
-#include "chrome/browser/mac/keystone_glue.h"
 #endif
 
 namespace {
 
 // The default thresholds for reaching annoyance levels.
-constexpr auto kDefaultVeryLowThreshold = base::TimeDelta::FromHours(1);
-constexpr auto kDefaultLowThreshold = base::TimeDelta::FromDays(2);
-constexpr auto kDefaultElevatedThreshold = base::TimeDelta::FromDays(4);
-constexpr auto kDefaultHighThreshold = base::TimeDelta::FromDays(7);
-constexpr auto kDefaultGraceThreshold =
-    kDefaultHighThreshold - base::TimeDelta::FromHours(1);
+constexpr auto kDefaultVeryLowThreshold = base::Hours(1);
+constexpr auto kDefaultLowThreshold = base::Days(2);
+constexpr auto kDefaultElevatedThreshold = base::Days(4);
+constexpr auto kDefaultHighThreshold = base::Days(7);
+constexpr auto kDefaultGraceThreshold = kDefaultHighThreshold - base::Hours(1);
 
 // How long to wait (each cycle) before checking which severity level we should
 // be at. Once we reach the highest severity, the timer will stop.
-constexpr auto kNotifyCycleTime = base::TimeDelta::FromMinutes(20);
+constexpr auto kNotifyCycleTime = base::Minutes(20);
 
 // Same as kNotifyCycleTimeMs but only used during testing.
-constexpr auto kNotifyCycleTimeForTesting =
-    base::TimeDelta::FromMilliseconds(500);
+constexpr auto kNotifyCycleTimeForTesting = base::Milliseconds(500);
 
 // How often to check to see if the build has become outdated.
-constexpr auto kOutdatedBuildDetectorPeriod = base::TimeDelta::FromDays(1);
+constexpr auto kOutdatedBuildDetectorPeriod = base::Days(1);
 
 // The number of days after which we identify a build/install as outdated.
-constexpr auto kOutdatedBuildAge = base::TimeDelta::FromDays(7) * 12;
+constexpr auto kOutdatedBuildAge = base::Days(7) * 8;
 
-constexpr bool ShouldDetectOutdatedBuilds() {
-#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+bool ShouldDetectOutdatedBuilds() {
+#if BUILDFLAG(ENABLE_UPDATE_NOTIFICATIONS) && !BUILDFLAG(IS_CHROMEOS)
+  // Don't show the bubble if we have a brand code that is NOT organic
+  std::string brand;
+  if (google_brand::GetBrand(&brand) && !google_brand::IsOrganic(brand)) {
+    return false;
+  }
+
+  // Don't show the bubble for Enterprise users.
+  if (policy::ManagementServiceFactory::GetForPlatform()->IsManaged()) {
+    return false;
+  }
+
   return true;
-#else   // BUILDFLAG(GOOGLE_CHROME_BRANDING)
+#else
+  // Outdated build detection is not relevant on ChromeOS platforms where
+  // updates are handled differently than on other desktop platforms.
   return false;
-#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
+#endif
 }
 
 // Check if one of the outdated simulation switches was present on the command
@@ -108,15 +115,18 @@ UpgradeDetectorImpl::UpgradeDetectorImpl(const base::Clock* clock,
       is_auto_update_enabled_(true),
       simulating_outdated_(SimulatingOutdated()),
       is_testing_(simulating_outdated_ || IsTesting()),
-      build_date_(base::GetBuildTime()) {}
+      build_date_(base::GetBuildTime()) {
+  // A BEST_EFFORT task runner has been measured as beneficial for performance.
+  // Use the default task runner in unit tests where BrowserThread::UI doesn't
+  // exist.
+  if (content::BrowserThread::IsThreadInitialized(content::BrowserThread::UI)) {
+    upgrade_notification_timer_.SetTaskRunner(
+        content::GetUIThreadTaskRunner({base::TaskPriority::BEST_EFFORT}));
+  }
+}
 
 UpgradeDetectorImpl::~UpgradeDetectorImpl() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-}
-
-// static
-base::Version UpgradeDetectorImpl::GetCurrentlyInstalledVersion() {
-  return GetInstalledVersion().installed_version;
 }
 
 void UpgradeDetectorImpl::StartUpgradeNotificationTimer() {
@@ -138,7 +148,7 @@ void UpgradeDetectorImpl::StartUpgradeNotificationTimer() {
 
 void UpgradeDetectorImpl::CalculateThresholds() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(!upgrade_detected_time().is_null());
+  CHECK(!upgrade_detected_time().is_null(), base::NotFatalUntil::M163);
 
   DoCalculateThresholds();
 
@@ -147,7 +157,7 @@ void UpgradeDetectorImpl::CalculateThresholds() {
   for (std::array<base::TimeDelta, kNumStages>::iterator scan =
            stages_.begin() + 1;
        scan != stages_.end(); ++scan) {
-    DCHECK_GE(*(scan - 1), *scan);
+    CHECK_GE(*(scan - 1), *scan, base::NotFatalUntil::M163);
   }
 #endif  // DCHECK_IS_ON()
 }
@@ -156,10 +166,11 @@ void UpgradeDetectorImpl::DoCalculateThresholds() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   base::TimeDelta notification_period = GetRelaunchNotificationPeriod();
-  const absl::optional<RelaunchWindow> relaunch_window =
+  const std::optional<RelaunchWindow> relaunch_window =
       GetRelaunchWindowPolicyValue();
+  bool fast_relaunch = ShouldRelaunchFast();
 
-  if (notification_period.is_zero() && !relaunch_window) {
+  if (notification_period.is_zero() && !relaunch_window && !fast_relaunch) {
     // Use the default values when no override is set and we don't expect to
     // adjust the levels according to the relaunch time interval.
     stages_[kStagesIndexHigh] = kDefaultHighThreshold;
@@ -172,13 +183,18 @@ void UpgradeDetectorImpl::DoCalculateThresholds() {
     // fall within the relaunch time interval. The adjusted "high" level is
     // divided evenly to set the 'low' and 'elevated' levels.
     base::TimeDelta effective_notification_period = notification_period;
-    if (notification_period.is_zero())
+    if (notification_period.is_zero()) {
       effective_notification_period = kDefaultHighThreshold;
+    }
+    if (fast_relaunch) {
+      effective_notification_period =
+          std::min(effective_notification_period, base::Hours(2));
+    }
 
     const RelaunchWindow effective_relaunch_window =
         relaunch_window.value_or(GetDefaultRelaunchWindow());
 
-    DCHECK(!upgrade_detected_time().is_null());
+    CHECK(!upgrade_detected_time().is_null(), base::NotFatalUntil::M163);
     const base::Time adjusted_deadline =
         AdjustDeadline(upgrade_detected_time() + effective_notification_period,
                        effective_relaunch_window);
@@ -198,8 +214,7 @@ void UpgradeDetectorImpl::DoCalculateThresholds() {
 
   // When testing, scale everything back so that a day passes in ten seconds.
   if (is_testing_ && !relaunch_window) {
-    constexpr int64_t scale_factor =
-        base::TimeDelta::FromDays(1) / base::TimeDelta::FromSeconds(10);
+    constexpr int64_t scale_factor = base::Days(1) / base::Seconds(10);
     for (auto& stage : stages_)
       stage /= scale_factor;
   }
@@ -207,8 +222,7 @@ void UpgradeDetectorImpl::DoCalculateThresholds() {
 
 void UpgradeDetectorImpl::StartOutdatedBuildDetector() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  static constexpr base::Feature kOutdatedBuildDetector = {
-      "OutdatedBuildDetector", base::FEATURE_ENABLED_BY_DEFAULT};
+  static BASE_FEATURE(kOutdatedBuildDetector, base::FEATURE_ENABLED_BY_DEFAULT);
 
   if (!base::FeatureList::IsEnabled(kOutdatedBuildDetector))
     return;
@@ -220,26 +234,13 @@ void UpgradeDetectorImpl::StartOutdatedBuildDetector() {
     return;
   }
 
-  // Don't show the bubble if we have a brand code that is NOT organic, unless
-  // an outdated build is being simulated by command line switches.
+  // Don't show the bubble for certain conditions unless an outdated build is
+  // being simulated by command line switches.
   if (!simulating_outdated_) {
-    std::string brand;
-    if (google_brand::GetBrand(&brand) && !google_brand::IsOrganic(brand))
-      return;
-
-#if defined(OS_WIN)
-    // TODO(crbug/1027107): Replace with a more generic CBCM check.
-    // Don't show the update bubbles to enterprise users.
-    if (base::IsMachineExternallyManaged() ||
-        policy::BrowserDMTokenStorage::Get()->RetrieveDMToken().is_valid()) {
-      return;
-    }
-#endif
-
     if (!ShouldDetectOutdatedBuilds())
       return;
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
     // Only check to if autoupdates are enabled if the user has not already been
     // asked about re-enabling them.
     if (!g_browser_process->local_state() ||
@@ -255,23 +256,18 @@ void UpgradeDetectorImpl::StartOutdatedBuildDetector() {
 
 void UpgradeDetectorImpl::DetectOutdatedInstall() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  base::Time network_time;
-  base::TimeDelta uncertainty;
-  if (g_browser_process->network_time_tracker()->GetNetworkTime(&network_time,
-                                                                &uncertainty) !=
-      network_time::NetworkTimeTracker::NETWORK_TIME_AVAILABLE) {
-    // When network time has not been initialized yet, simply rely on the
-    // machine's current time.
-    network_time = base::Time::Now();
-  }
+  base::Time current_time;
+  bool is_network_time = GetNetworkTimeWithFallback(current_time);
 
-  if (network_time.is_null() || build_date_.is_null() ||
-      build_date_ > network_time) {
-    NOTREACHED();
+  CHECK(!build_date_.is_null());
+
+  if (!simulating_outdated_ && is_network_time && build_date_ > current_time) {
+    // Sometimes unexpected things happen with clocks; ignore these edge cases.
+    // See https://crbug.com/40062693 for related discussions.
     return;
   }
 
-  if (network_time - build_date_ > kOutdatedBuildAge) {
+  if (current_time - build_date_ > kOutdatedBuildAge) {
     UpgradeDetected(is_auto_update_enabled_
                         ? UPGRADE_NEEDED_OUTDATED_INSTALL
                         : UPGRADE_NEEDED_OUTDATED_INSTALL_NO_AU);
@@ -292,6 +288,11 @@ void UpgradeDetectorImpl::UpgradeDetected(UpgradeAvailable upgrade_available) {
   if (upgrade_available != UPGRADE_AVAILABLE_NONE ||
       critical_experiment_updates_available()) {
     StartUpgradeNotificationTimer();
+    if (ShouldFetchLastServedDate()) {
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(&UpgradeDetectorImpl::FetchLastServedDate,
+                                    weak_factory_.GetWeakPtr()));
+    }
   } else {
     // There is no longer anything to notify the user about, so stop the timer
     // and reset state.
@@ -326,10 +327,7 @@ void UpgradeDetectorImpl::NotifyOnUpgradeWithTimePassed(
   } else {
     // |stages_| must be sorted by decreasing TimeDelta.
     std::array<base::TimeDelta, kNumStages>::iterator it =
-        std::find_if(stages_.begin(), stages_.end(),
-                     [time_passed](const base::TimeDelta& delta) {
-                       return time_passed >= delta;
-                     });
+        std::ranges::lower_bound(stages_, time_passed, std::ranges::greater());
     if (it != stages_.end())
       new_stage = StageIndexToAnnoyanceLevel(it - stages_.begin());
     if (it != stages_.begin())
@@ -350,9 +348,6 @@ void UpgradeDetectorImpl::NotifyOnUpgradeWithTimePassed(
     // the RelaunchNotificationPeriod) that brought the instance up to or above
     // the "high" annoyance level.
     upgrade_notification_timer_.Stop();
-    // Reset the threshold deltas as we are no longer announcing changes to the
-    // annoyance level.
-    stages_.fill(base::TimeDelta());
   }
 
   // Issue a notification if the stage is above "none" or if it's dropped down
@@ -366,7 +361,7 @@ void UpgradeDetectorImpl::NotifyOnUpgradeWithTimePassed(
 base::TimeDelta UpgradeDetectorImpl::GetThresholdForLevel(
     UpgradeNotificationAnnoyanceLevel level) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(!stages_[0].is_zero());
+  CHECK(!stages_[0].is_zero(), base::NotFatalUntil::M163);
   return stages_[AnnoyanceLevelToStagesIndex(level)];
 }
 
@@ -390,25 +385,27 @@ UpgradeDetectorImpl::AnnoyanceLevelToStagesIndex(
     case UPGRADE_ANNOYANCE_CRITICAL:
       break;  // Invalid input.
   }
-  DCHECK_EQ(level, UPGRADE_ANNOYANCE_HIGH);
+  CHECK_EQ(level, UPGRADE_ANNOYANCE_HIGH, base::NotFatalUntil::M163);
   return kStagesIndexHigh;
 }
 
 // static
 UpgradeDetector::UpgradeNotificationAnnoyanceLevel
 UpgradeDetectorImpl::StageIndexToAnnoyanceLevel(size_t index) {
-  static constexpr UpgradeNotificationAnnoyanceLevel kIndexToLevel[] = {
-      UpgradeDetector::UPGRADE_ANNOYANCE_HIGH,
-      UpgradeDetector::UPGRADE_ANNOYANCE_GRACE,
-      UpgradeDetector::UPGRADE_ANNOYANCE_ELEVATED,
-      UpgradeDetector::UPGRADE_ANNOYANCE_LOW,
-      UpgradeDetector::UPGRADE_ANNOYANCE_VERY_LOW};
-  static_assert(base::size(kIndexToLevel) == kNumStages, "mismatch");
-  DCHECK_LT(index, base::size(kIndexToLevel));
+  constexpr static const auto kIndexToLevel =
+      std::to_array<UpgradeNotificationAnnoyanceLevel>({
+          UpgradeDetector::UPGRADE_ANNOYANCE_HIGH,
+          UpgradeDetector::UPGRADE_ANNOYANCE_GRACE,
+          UpgradeDetector::UPGRADE_ANNOYANCE_ELEVATED,
+          UpgradeDetector::UPGRADE_ANNOYANCE_LOW,
+          UpgradeDetector::UPGRADE_ANNOYANCE_VERY_LOW,
+      });
+  static_assert(std::size(kIndexToLevel) == kNumStages, "mismatch");
+  CHECK_LT(index, std::size(kIndexToLevel), base::NotFatalUntil::M163);
   return kIndexToLevel[index];
 }
 
-void UpgradeDetectorImpl::OnMonitoredPrefsChanged() {
+void UpgradeDetectorImpl::RecomputeSchedule() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   // Broadcast the appropriate notification if an upgrade has been detected.
@@ -485,24 +482,9 @@ void UpgradeDetectorImpl::Init() {
     variations_service->AddObserver(this);
   }
 
-  // On Windows, only enable upgrade notifications for Google Chrome builds.
-  // Chromium does not use an auto-updater.
-#if !defined(OS_WIN) || BUILDFLAG(GOOGLE_CHROME_BRANDING) || \
-    BUILDFLAG(ENABLE_CHROMIUM_UPDATER)
-
-  // On macOS, only enable upgrade notifications if the updater (Keystone) is
-  // present.
-#if defined(OS_MAC)
-  if (!keystone_glue::KeystoneEnabled())
-    return;
-#endif
-
-  // On non-macOS non-Windows, always enable upgrade notifications regardless
-  // of branding.
-
+#if BUILDFLAG(ENABLE_UPDATE_NOTIFICATIONS)
   // Start checking for outdated builds sometime after startup completes.
-  content::GetUIThreadTaskRunner({base::TaskPriority::BEST_EFFORT,
-                                  base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN})
+  content::GetUIThreadTaskRunner({base::TaskPriority::BEST_EFFORT})
       ->PostTask(
           FROM_HERE,
           base::BindOnce(&UpgradeDetectorImpl::StartOutdatedBuildDetector,
@@ -511,7 +493,7 @@ void UpgradeDetectorImpl::Init() {
   auto* const build_state = g_browser_process->GetBuildState();
   build_state->AddObserver(this);
   installed_version_poller_.emplace(build_state);
-#endif
+#endif  // BUILDFLAG(ENABLE_UPDATE_NOTIFICATIONS)
 }
 
 void UpgradeDetectorImpl::Shutdown() {
@@ -529,17 +511,26 @@ void UpgradeDetectorImpl::Shutdown() {
   UpgradeDetector::Shutdown();
 }
 
-base::TimeDelta UpgradeDetectorImpl::GetHighAnnoyanceLevelDelta() {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  return stages_[kStagesIndexHigh] - stages_[kStagesIndexElevated];
-}
-
-base::Time UpgradeDetectorImpl::GetHighAnnoyanceDeadline() {
+base::Time UpgradeDetectorImpl::GetAnnoyanceLevelDeadline(
+    UpgradeNotificationAnnoyanceLevel level) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   const base::Time detected_time = upgrade_detected_time();
   if (detected_time.is_null())
     return detected_time;
-  return detected_time + stages_[kStagesIndexHigh];
+  switch (level) {
+    case UpgradeDetector::UPGRADE_ANNOYANCE_NONE:
+      return detected_time;
+    case UpgradeDetector::UPGRADE_ANNOYANCE_VERY_LOW:
+    case UpgradeDetector::UPGRADE_ANNOYANCE_LOW:
+    case UpgradeDetector::UPGRADE_ANNOYANCE_ELEVATED:
+    case UpgradeDetector::UPGRADE_ANNOYANCE_GRACE:
+    case UpgradeDetector::UPGRADE_ANNOYANCE_HIGH:
+      return detected_time + GetThresholdForLevel(level);
+    case UpgradeDetector::UPGRADE_ANNOYANCE_CRITICAL:
+      return upgrade_notification_stage() == UPGRADE_ANNOYANCE_CRITICAL
+                 ? detected_time
+                 : base::Time();
+  }
 }
 
 void UpgradeDetectorImpl::OnUpdate(const BuildState* build_state) {
@@ -583,6 +574,5 @@ base::TimeDelta UpgradeDetector::GetDefaultElevatedAnnoyanceThreshold() {
 // static
 UpgradeDetector::RelaunchWindow UpgradeDetector::GetDefaultRelaunchWindow() {
   // Relaunch window is the whole day and any time is within the window.
-  return RelaunchWindow(/*start_hour=*/0, /*start_minute=*/0,
-                        base::TimeDelta::FromHours(24));
+  return RelaunchWindow(/*start_hour=*/0, /*start_minute=*/0, base::Hours(24));
 }

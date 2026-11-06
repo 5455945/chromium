@@ -1,42 +1,51 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/login/saml/in_session_password_change_manager.h"
 
+#include <algorithm>
+#include <memory>
+#include <string>
+#include <utility>
+
 #include "ash/constants/ash_features.h"
-#include "ash/public/cpp/session/session_activation_observer.h"
+#include "ash/constants/ash_login_pref_names.h"
 #include "ash/public/cpp/session/session_controller.h"
-#include "base/feature_list.h"
+#include "base/check.h"
+#include "base/check_deref.h"
+#include "base/check_op.h"
+#include "base/functional/bind.h"
+#include "base/location.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/task/post_task.h"
 #include "base/task/task_traits.h"
-#include "chrome/browser/ash/login/auth/chrome_cryptohome_authenticator.h"
-#include "chrome/browser/ash/login/login_pref_names.h"
+#include "base/time/time.h"
 #include "chrome/browser/ash/login/saml/password_change_success_notification.h"
 #include "chrome/browser/ash/login/saml/password_expiry_notification.h"
+#include "chrome/browser/ash/login/saml/password_sync_token_fetcher.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_platform_part_chromeos.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/webui/chromeos/in_session_password_change/password_change_dialogs.h"
-#include "chrome/common/chrome_features.h"
-#include "chromeos/login/auth/user_context.h"
+#include "chrome/browser/ui/webui/ash/in_session_password_change/password_change_dialogs.h"
+#include "chromeos/ash/components/login/auth/auth_session_authenticator.h"
+#include "chromeos/ash/components/login/auth/public/authentication_error.h"
+#include "chromeos/ash/components/login/auth/public/key.h"
+#include "chromeos/ash/components/login/auth/public/saml_password_attributes.h"
+#include "chromeos/ash/components/login/auth/public/user_context.h"
 #include "components/prefs/pref_service.h"
 #include "components/user_manager/known_user.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 
-namespace chromeos {
-
+namespace ash {
 namespace {
 
 using PasswordSource = InSessionPasswordChangeManager::PasswordSource;
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused. This must be kept in sync with
-// SamlInSessionPasswordChangeEvent in tools/metrics/histogram/enums.xml
+// SamlInSessionPasswordChangeEvent in tools/metrics/histograms/enums.xml
 enum class InSessionPasswordChangeEvent {
   kManagerCreated = 0,
   kNotified = 1,
@@ -101,22 +110,21 @@ void RecordCryptohomePasswordChangeFailure(PasswordSource password_source) {
   }
 }
 
-InSessionPasswordChangeManager* g_test_instance = nullptr;
+InSessionPasswordChangeManager* g_instance = nullptr;
 
 // Traits for running RecheckPasswordExpiryTask.
 // Runs from the UI thread to show notification.
-const base::TaskTraits kRecheckTaskTraits = {
-    content::BrowserThread::UI, base::TaskPriority::BEST_EFFORT,
-    base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN};
+const content::BrowserTaskTraits kRecheckUITaskTraits = {
+    base::TaskPriority::BEST_EFFORT};
 
 // A time delta of length one hour.
-const base::TimeDelta kOneHour = base::TimeDelta::FromHours(1);
+const base::TimeDelta kOneHour = base::Hours(1);
 
 // A time delta of length one day.
-const base::TimeDelta kOneDay = base::TimeDelta::FromDays(1);
+const base::TimeDelta kOneDay = base::Days(1);
 
 // A time delta with length of a half day.
-const base::TimeDelta kHalfDay = base::TimeDelta::FromHours(12);
+const base::TimeDelta kHalfDay = base::Hours(12);
 
 // A time delta with length zero.
 const base::TimeDelta kZeroTime = base::TimeDelta();
@@ -145,7 +153,8 @@ void RecheckPasswordExpiryTask::Recheck() {
 
 void RecheckPasswordExpiryTask::RecheckAfter(base::TimeDelta delay) {
   CancelPendingRecheck();
-  base::PostDelayedTask(FROM_HERE, kRecheckTaskTraits,
+  content::GetUIThreadTaskRunner(kRecheckUITaskTraits)
+      ->PostDelayedTask(FROM_HERE,
                         base::BindOnce(&RecheckPasswordExpiryTask::Recheck,
                                        weak_ptr_factory_.GetWeakPtr()),
                         std::max(delay, kOneHour));
@@ -159,12 +168,15 @@ void RecheckPasswordExpiryTask::CancelPendingRecheck() {
 
 // static
 std::unique_ptr<InSessionPasswordChangeManager>
-InSessionPasswordChangeManager::CreateIfEnabled(Profile* primary_profile) {
-  if (base::FeatureList::IsEnabled(::features::kInSessionPasswordChange) &&
-      primary_profile->GetPrefs()->GetBoolean(
+InSessionPasswordChangeManager::CreateIfEnabled(
+    PrefService* local_state,
+    Profile* primary_profile,
+    signin::IdentityManager* identity_manager) {
+  if (primary_profile->GetPrefs()->GetBoolean(
           prefs::kSamlInSessionPasswordChangeEnabled)) {
     std::unique_ptr<InSessionPasswordChangeManager> manager =
-        std::make_unique<InSessionPasswordChangeManager>(primary_profile);
+        std::make_unique<InSessionPasswordChangeManager>(
+            local_state, primary_profile, identity_manager);
     manager->MaybeShowExpiryNotification();
     RecordEvent(InSessionPasswordChangeEvent::kManagerCreated);
     return manager;
@@ -177,59 +189,72 @@ InSessionPasswordChangeManager::CreateIfEnabled(Profile* primary_profile) {
 
 // static
 bool InSessionPasswordChangeManager::IsInitialized() {
-  return GetNullable();
+  return g_instance != nullptr;
 }
 
 // static
 InSessionPasswordChangeManager* InSessionPasswordChangeManager::Get() {
-  InSessionPasswordChangeManager* result = GetNullable();
-  CHECK(result);
-  return result;
+  CHECK(g_instance);
+  return g_instance;
 }
 
 InSessionPasswordChangeManager::InSessionPasswordChangeManager(
-    Profile* primary_profile)
-    : primary_profile_(primary_profile),
+    PrefService* local_state,
+    Profile* primary_profile,
+    signin::IdentityManager* identity_manager)
+    : local_state_(CHECK_DEREF(local_state)),
+      primary_profile_(primary_profile),
       primary_user_(ProfileHelper::Get()->GetUserByProfile(primary_profile)),
-      authenticator_(new ChromeCryptohomeAuthenticator(this)),
+      identity_manager_(CHECK_DEREF(identity_manager)),
       urgent_warning_days_(kUrgentWarningDays) {
-  DCHECK(primary_user_);
+  CHECK(primary_user_, base::NotFatalUntil::M160);
 
   // Add `this` as a SessionActivationObserver to see when the screen is locked.
-  auto* session_controller = ash::SessionController::Get();
+  auto* session_controller = SessionController::Get();
   if (session_controller) {
     session_controller->AddSessionActivationObserverForAccountId(
         primary_user_->GetAccountId(), this);
   }
+
+  CHECK(!g_instance);
+  g_instance = this;
 }
 
 InSessionPasswordChangeManager::~InSessionPasswordChangeManager() {
+  CHECK_EQ(g_instance, this);
+  g_instance = nullptr;
+
   // Remove `this` as a SessionActivationObserver.
-  auto* session_controller = ash::SessionController::Get();
+  auto* session_controller = SessionController::Get();
   if (session_controller) {
     session_controller->RemoveSessionActivationObserverForAccountId(
         primary_user_->GetAccountId(), this);
   }
 }
 
-// static
-void InSessionPasswordChangeManager::SetForTesting(
-    InSessionPasswordChangeManager* instance) {
-  CHECK(!g_test_instance);
-  g_test_instance = instance;
-}
-
-// static
-void InSessionPasswordChangeManager::ResetForTesting() {
-  g_test_instance = nullptr;
-}
-
 void InSessionPasswordChangeManager::MaybeShowExpiryNotification() {
   // We are checking password expiry now, and this function will decide if we
   // want to check again in the future, so for now, make sure there are no other
-  // pending tasks to check aggain.
+  // pending tasks to check again.
   recheck_task_.CancelPendingRecheck();
 
+  if (ash::features::IsManagedLocalPinAndPasswordEnabled()) {
+    auth_factor_helper_.CheckHasOnlinePasswordAndContinue(
+        primary_user_->GetAccountId(),
+        /*on_has_online_password=*/
+        base::BindOnce(&InSessionPasswordChangeManager::
+                           MaybeShowExpiryNotificationInternal,
+                       weak_ptr_factory_.GetWeakPtr()),
+        /*on_no_online_password=*/
+        base::BindOnce(
+            &InSessionPasswordChangeManager::DismissExpiryNotification,
+            weak_ptr_factory_.GetWeakPtr()));
+  } else {
+    MaybeShowExpiryNotificationInternal();
+  }
+}
+
+void InSessionPasswordChangeManager::MaybeShowExpiryNotificationInternal() {
   PrefService* prefs = primary_profile_->GetPrefs();
   if (!prefs->GetBoolean(prefs::kSamlInSessionPasswordChangeEnabled)) {
     DismissExpiryNotification();
@@ -275,7 +300,7 @@ void InSessionPasswordChangeManager::MaybeShowExpiryNotification() {
     // We have not yet reached the advance warning threshold. Check again
     // once we have arrived at expiry_time minus advance_warning_days...
     base::TimeDelta recheck_delay =
-        time_until_expiry - base::TimeDelta::FromDays(advance_warning_days);
+        time_until_expiry - base::Days(advance_warning_days);
     // But, wait an extra hour so that when this code is next run, it is clear
     // we are now inside advance_warning_days (and not right on the boundary).
     recheck_delay += kOneHour;
@@ -287,7 +312,7 @@ void InSessionPasswordChangeManager::ShowStandardExpiryNotification(
     base::TimeDelta time_until_expiry) {
   // Show a notification, and reshow it each time the screen is unlocked.
   renotify_on_unlock_ = true;
-  PasswordExpiryNotification::Show(primary_profile_, time_until_expiry);
+  PasswordExpiryNotification::Show(*primary_user_, time_until_expiry);
   UrgentPasswordExpiryNotificationDialog::Dismiss();
 }
 
@@ -295,12 +320,12 @@ void InSessionPasswordChangeManager::ShowUrgentExpiryNotification() {
   // Show a notification, and reshow it each time the screen is unlocked.
   renotify_on_unlock_ = true;
   UrgentPasswordExpiryNotificationDialog::Show();
-  PasswordExpiryNotification::Dismiss(primary_profile_);
+  PasswordExpiryNotification::Dismiss(*primary_user_);
 }
 
 void InSessionPasswordChangeManager::DismissExpiryNotification() {
   UrgentPasswordExpiryNotificationDialog::Dismiss();
-  PasswordExpiryNotification::Dismiss(primary_profile_);
+  PasswordExpiryNotification::Dismiss(*primary_user_);
 }
 
 void InSessionPasswordChangeManager::OnExpiryNotificationDismissedByUser() {
@@ -365,9 +390,16 @@ void InSessionPasswordChangeManager::ChangePassword(
 
   password_source_ = password_source;
   NotifyObservers(Event::START_CRYPTOHOME_PASSWORD_CHANGE);
-  UserContext user_context(*primary_user_);
-  user_context.SetKey(Key(new_password));
-  authenticator_->MigrateKey(user_context, old_password);
+  auto user_context = std::make_unique<UserContext>(*primary_user_);
+  // TODO(b/258638651): Consider getting rid of `Key` usage here, and passing
+  // the new password to `password_update_flow_` directly.
+  user_context->SetKey(Key(new_password));
+  password_update_flow_.Start(
+      std::move(user_context), old_password,
+      base::BindOnce(&InSessionPasswordChangeManager::OnPasswordUpdateSuccess,
+                     weak_ptr_factory_.GetWeakPtr()),
+      base::BindOnce(&InSessionPasswordChangeManager::OnPasswordUpdateFailure,
+                     weak_ptr_factory_.GetWeakPtr()));
 }
 
 void InSessionPasswordChangeManager::AddObserver(Observer* observer) {
@@ -378,27 +410,24 @@ void InSessionPasswordChangeManager::RemoveObserver(Observer* observer) {
   observer_list_.RemoveObserver(observer);
 }
 
-void InSessionPasswordChangeManager::OnAuthFailure(const AuthFailure& error) {
-  VLOG(1) << "Failed to change cryptohome password: " << error.GetErrorString();
+void InSessionPasswordChangeManager::OnPasswordUpdateFailure(
+    std::unique_ptr<UserContext> /*user_context*/,
+    AuthenticationError error) {
+  VLOG(1) << "Failed to change cryptohome password: "
+          << error.get_cryptohome_error();
   RecordCryptohomePasswordChangeFailure(password_source_);
   NotifyObservers(Event::CRYPTOHOME_PASSWORD_CHANGE_FAILURE);
 }
 
-void InSessionPasswordChangeManager::OnPasswordChangeDetected(
-    const UserContext& user_context) {
-  VLOG(1) << "Failed to change cryptohome password: PasswordChangeDetected";
-  RecordCryptohomePasswordChangeFailure(password_source_);
-  NotifyObservers(Event::CRYPTOHOME_PASSWORD_CHANGE_FAILURE);
-}
-
-void InSessionPasswordChangeManager::OnAuthSuccess(
-    const UserContext& user_context) {
+void InSessionPasswordChangeManager::OnPasswordUpdateSuccess(
+    std::unique_ptr<UserContext> user_context) {
+  CHECK(user_context, base::NotFatalUntil::M160);
   VLOG(3) << "Cryptohome password is changed.";
   RecordCryptohomePasswordChangeSuccess(password_source_);
   NotifyObservers(Event::CRYPTOHOME_PASSWORD_CHANGED);
 
   user_manager::UserManager::Get()->SaveForceOnlineSignin(
-      user_context.GetAccountId(), false);
+      user_context->GetAccountId(), false);
 
   // Clear expiration time from prefs so that we don't keep nagging the user to
   // change password (until the SAML provider tells us a new expiration time).
@@ -412,9 +441,8 @@ void InSessionPasswordChangeManager::OnAuthSuccess(
   DismissExpiryNotification();
   PasswordChangeDialog::Dismiss();
   ConfirmPasswordChangeDialog::Dismiss();
-  if (ash::features::IsSamlNotificationOnPasswordChangeSuccessEnabled()) {
-    PasswordChangeSuccessNotification::Show(primary_profile_);
-  }
+  PasswordChangeSuccessNotification::Show(*primary_user_);
+
   // We request a new sync token. It will be updated locally and signal the fact
   // of password change to other devices owned by the user.
   CreateTokenAsync();
@@ -433,13 +461,9 @@ void InSessionPasswordChangeManager::OnLockStateChanged(bool locked) {
 
 void InSessionPasswordChangeManager::OnTokenCreated(
     const std::string& sync_token) {
-  PrefService* prefs = primary_profile_->GetPrefs();
-
-  // Set token value in prefs for in-session operations and ephemeral users and
-  // local settings for login screen sync.
-  prefs->SetString(prefs::kSamlPasswordSyncToken, sync_token);
-  user_manager::known_user::SetPasswordSyncToken(primary_user_->GetAccountId(),
-                                                 sync_token);
+  // Set token value in local state.
+  user_manager::KnownUser known_user(&local_state_.get());
+  known_user.SetPasswordSyncToken(primary_user_->GetAccountId(), sync_token);
 }
 
 void InSessionPasswordChangeManager::OnTokenFetched(
@@ -453,22 +477,15 @@ void InSessionPasswordChangeManager::OnTokenVerified(bool is_valid) {
 
 void InSessionPasswordChangeManager::OnApiCallFailed(
     PasswordSyncTokenFetcher::ErrorType error_type) {
-  // TODO(crbug.com/1112896): Error types will be tracked by UMA histograms.
+  // TODO(crbug.com/40143230): Error types will be tracked by UMA histograms.
   // Going forward we should also consider re-trying token creation depending on
   // the error_type.
 }
 
 void InSessionPasswordChangeManager::CreateTokenAsync() {
   password_sync_token_fetcher_ = std::make_unique<PasswordSyncTokenFetcher>(
-      primary_profile_->GetURLLoaderFactory(), primary_profile_, this);
+      primary_profile_->GetURLLoaderFactory(), &identity_manager_.get(), this);
   password_sync_token_fetcher_->StartTokenCreate();
-}
-
-// static
-InSessionPasswordChangeManager* InSessionPasswordChangeManager::GetNullable() {
-  return g_test_instance ? g_test_instance
-                         : g_browser_process->platform_part()
-                               ->in_session_password_change_manager();
 }
 
 void InSessionPasswordChangeManager::NotifyObservers(Event event) {
@@ -477,4 +494,4 @@ void InSessionPasswordChangeManager::NotifyObservers(Event event) {
   }
 }
 
-}  // namespace chromeos
+}  // namespace ash

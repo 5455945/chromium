@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,12 @@
 
 #include <string.h>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "chromeos/dbus/biod/biod_client.h"
+#include <utility>
+
+#include "base/containers/to_vector.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "chromeos/ash/components/dbus/biod/biod_client.h"
 #include "dbus/object_path.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
@@ -19,8 +22,8 @@ namespace device {
 
 namespace {
 
-chromeos::BiodClient* GetBiodClient() {
-  return chromeos::BiodClient::Get();
+ash::BiodClient* GetBiodClient() {
+  return ash::BiodClient::Get();
 }
 
 // Helper functions to convert between dbus and mojo types. The dbus type comes
@@ -34,11 +37,9 @@ device::mojom::BiometricType ToMojom(biod::BiometricType type) {
       return device::mojom::BiometricType::UNKNOWN;
     case biod::BIOMETRIC_TYPE_FINGERPRINT:
       return device::mojom::BiometricType::FINGERPRINT;
-    case biod::BIOMETRIC_TYPE_MAX:
-      return device::mojom::BiometricType::kMaxValue;
+    default:
+      NOTREACHED();
   }
-  NOTREACHED();
-  return device::mojom::BiometricType::UNKNOWN;
 }
 device::mojom::ScanResult ToMojom(biod::ScanResult type) {
   switch (type) {
@@ -56,11 +57,44 @@ device::mojom::ScanResult ToMojom(biod::ScanResult type) {
       return device::mojom::ScanResult::TOO_FAST;
     case biod::SCAN_RESULT_IMMOBILE:
       return device::mojom::ScanResult::IMMOBILE;
-    case biod::SCAN_RESULT_MAX:
-      return device::mojom::ScanResult::kMaxValue;
+    case biod::SCAN_RESULT_NO_MATCH:
+      return device::mojom::ScanResult::NO_MATCH;
+    default:
+      NOTREACHED();
   }
-  NOTREACHED();
-  return device::mojom::ScanResult::INSUFFICIENT;
+}
+
+device::mojom::FingerprintError ToMojom(biod::FingerprintError type) {
+  switch (type) {
+    case biod::ERROR_HW_UNAVAILABLE:
+      return device::mojom::FingerprintError::HW_UNAVAILABLE;
+    case biod::ERROR_UNABLE_TO_PROCESS:
+      return device::mojom::FingerprintError::UNABLE_TO_PROCESS;
+    case biod::ERROR_TIMEOUT:
+      return device::mojom::FingerprintError::TIMEOUT;
+    case biod::ERROR_NO_SPACE:
+      return device::mojom::FingerprintError::NO_SPACE;
+    case biod::ERROR_CANCELED:
+      return device::mojom::FingerprintError::CANCELED;
+    case biod::ERROR_UNABLE_TO_REMOVE:
+      return device::mojom::FingerprintError::UNABLE_TO_REMOVE;
+    case biod::ERROR_LOCKOUT:
+      return device::mojom::FingerprintError::LOCKOUT;
+    case biod::ERROR_NO_TEMPLATES:
+      return device::mojom::FingerprintError::NO_TEMPLATES;
+    default:
+      NOTREACHED();
+  }
+}
+
+device::mojom::BiometricsManagerStatus ToMojom(
+    biod::BiometricsManagerStatus status) {
+  switch (status) {
+    case biod::BiometricsManagerStatus::INITIALIZED:
+      return device::mojom::BiometricsManagerStatus::INITIALIZED;
+    default:
+      NOTREACHED();
+  }
 }
 
 }  // namespace
@@ -217,6 +251,14 @@ void FingerprintChromeOS::BiodServiceRestarted() {
     observer->OnRestarted();
 }
 
+void FingerprintChromeOS::BiodServiceStatusChanged(
+    biod::BiometricsManagerStatus status) {
+  opened_session_ = FingerprintSession::NONE;
+  for (auto& observer : observers_) {
+    observer->OnStatusChanged(ToMojom(status));
+  }
+}
+
 void FingerprintChromeOS::BiodEnrollScanDoneReceived(
     biod::ScanResult scan_result,
     bool enroll_session_complete,
@@ -231,26 +273,38 @@ void FingerprintChromeOS::BiodEnrollScanDoneReceived(
 }
 
 void FingerprintChromeOS::BiodAuthScanDoneReceived(
-    biod::ScanResult scan_result,
-    const chromeos::AuthScanMatches& matches) {
+    const biod::FingerprintMessage& msg,
+    const ash::AuthScanMatches& matches) {
   // Convert ObjectPath to string, since mojom doesn't know definition of
   // dbus ObjectPath.
   std::vector<std::pair<std::string, std::vector<std::string>>> entries;
-  for (auto& item : matches) {
-    std::vector<std::string> paths;
-    for (auto& object_path : item.second) {
-      paths.push_back(object_path.value());
-    }
-    entries.emplace_back(std::move(item.first), std::move(paths));
+  for (const auto& item : matches) {
+    entries.emplace_back(std::move(item.first),
+                         base::ToVector(item.second, &dbus::ObjectPath::value));
+  }
+  base::flat_map<std::string, std::vector<std::string>> entry_map(
+      std::move(entries));
+
+  device::mojom::FingerprintMessagePtr converted_msg;
+
+  switch (msg.msg_case()) {
+    case biod::FingerprintMessage::MsgCase::kScanResult:
+      converted_msg = device::mojom::FingerprintMessage::NewScanResult(
+          ToMojom(msg.scan_result()));
+      CHECK(device::mojom::IsKnownEnumValue(converted_msg->get_scan_result()));
+      break;
+    case biod::FingerprintMessage::MsgCase::kError:
+      converted_msg = device::mojom::FingerprintMessage::NewFingerprintError(
+          ToMojom(msg.error()));
+      CHECK(device::mojom::IsKnownEnumValue(
+          converted_msg->get_fingerprint_error()));
+      break;
+    default:
+      NOTREACHED() << "Unsupported fingerprint message received";
   }
 
-  auto casted_scan_result = static_cast<device::mojom::ScanResult>(scan_result);
-  CHECK(device::mojom::IsKnownEnumValue(casted_scan_result));
-
   for (auto& observer : observers_) {
-    observer->OnAuthScanDone(
-        casted_scan_result,
-        base::flat_map<std::string, std::vector<std::string>>(entries));
+    observer->OnAuthScanDone(converted_msg.Clone(), entry_map);
   }
 }
 
@@ -287,9 +341,11 @@ void FingerprintChromeOS::OnStartAuthSession(
 
 void FingerprintChromeOS::OnGetRecordsForUser(
     GetRecordsForUserCallback callback,
-    const std::vector<dbus::ObjectPath>& records) {
-  if (records.size() == 0) {
-    std::move(callback).Run({base::flat_map<std::string, std::string>()});
+    const std::vector<dbus::ObjectPath>& records,
+    bool success) {
+  if (records.size() == 0 || success == false) {
+    std::move(callback).Run({base::flat_map<std::string, std::string>()},
+                            success);
     StartNextRequest();
     return;
   }
@@ -312,7 +368,7 @@ void FingerprintChromeOS::OnGetLabelFromRecordPath(
   records_path_to_label_[record_path.value()] = label;
   if (records_path_to_label_.size() == num_records) {
     DCHECK(on_get_records_);
-    std::move(on_get_records_).Run(records_path_to_label_);
+    std::move(on_get_records_).Run(records_path_to_label_, true);
     StartNextRequest();
   }
 }

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,22 +7,29 @@
 
 #include "ash/ash_export.h"
 #include "ash/drag_drop/drag_drop_controller.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 
 namespace ash {
 
 class DragDropControllerTestApi {
  public:
-  DragDropControllerTestApi(DragDropController* controller)
+  explicit DragDropControllerTestApi(DragDropController* controller)
       : controller_(controller) {}
+
+  DragDropControllerTestApi(const DragDropControllerTestApi&) = delete;
+  DragDropControllerTestApi& operator=(const DragDropControllerTestApi&) =
+      delete;
+
   ~DragDropControllerTestApi() = default;
 
   bool enabled() const { return controller_->enabled_; }
 
- private:
-  DragDropController* controller_;
+  views::Widget* drag_image_widget() {
+    return controller_->drag_image_widget_.get();
+  }
 
-  DISALLOW_COPY_AND_ASSIGN(DragDropControllerTestApi);
+ private:
+  raw_ptr<DragDropController> controller_;
 };
 
 }  // namespace ash

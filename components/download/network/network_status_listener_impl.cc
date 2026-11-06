@@ -1,10 +1,10 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/download/network/network_status_listener_impl.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 
 namespace download {
 
@@ -18,10 +18,12 @@ void NetworkStatusListenerImpl::Start(
     NetworkStatusListener::Observer* observer) {
   NetworkStatusListener::Start(observer);
   network_connection_tracker_->AddNetworkConnectionObserver(this);
-  network_connection_tracker_->GetConnectionType(
+  bool sync = network_connection_tracker_->GetConnectionType(
       &connection_type_,
-      base::BindOnce(&NetworkStatusListenerImpl::OnConnectionChanged,
-                     base::Unretained(this)));
+      base::BindOnce(&NetworkStatusListenerImpl::OnNetworkStatusReady,
+                     weak_ptr_factory_.GetWeakPtr()));
+  if (sync)
+    observer_->OnNetworkStatusReady(connection_type_);
 }
 
 void NetworkStatusListenerImpl::Stop() {
@@ -29,15 +31,23 @@ void NetworkStatusListenerImpl::Stop() {
   NetworkStatusListener::Stop();
 }
 
-network::mojom::ConnectionType NetworkStatusListenerImpl::GetConnectionType() {
+net::NetworkChangeNotifier::ConnectionType
+NetworkStatusListenerImpl::GetConnectionType() {
   return connection_type_;
 }
 
 void NetworkStatusListenerImpl::OnConnectionChanged(
-    network::mojom::ConnectionType type) {
+    net::NetworkChangeNotifier::ConnectionType type) {
   DCHECK(observer_);
   connection_type_ = type;
   observer_->OnNetworkChanged(type);
+}
+
+void NetworkStatusListenerImpl::OnNetworkStatusReady(
+    net::NetworkChangeNotifier::ConnectionType type) {
+  DCHECK(observer_);
+  connection_type_ = type;
+  observer_->OnNetworkStatusReady(type);
 }
 
 }  // namespace download

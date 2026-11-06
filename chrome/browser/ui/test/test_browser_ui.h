@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,22 +6,50 @@
 #define CHROME_BROWSER_UI_TEST_TEST_BROWSER_UI_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/macros.h"
-#include "build/chromeos_buildflags.h"
+#include "build/build_config.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "ui/base/interaction/interaction_test_util.h"
+#include "ui/base/test/skia_gold_matching_algorithm.h"
+#include "ui/gfx/geometry/rect.h"
+
+namespace ui {
+class TrackedElement;
+}
 
 namespace views {
 class Widget;
 class View;
 }  // namespace views
 
-namespace ui {
-namespace test {
-class SkiaGoldMatchingAlgorithm;
-}  // namespace test
-}  // namespace ui
+// How to handle focus on the view when taking the screenshot.
+enum class ScreenshotFocusMode {
+  // Clear focus before taking the screenshot to reduce flakiness. This is the
+  // default to reduce flakiness. See VerifyPixelUi() implementation for more
+  // details.
+  kClearFocus,
+  // Leave focus where it is.
+  kLeaveFocusWhereItIs,
+};
+
+// Options for taking a screenshot.
+struct ScreenshotOptions {
+  // The region of the view to take a screenshot of. If std::nullopt, the entire
+  // view is captured.
+  std::optional<gfx::Rect> region;
+  // How to handle focus on the view when taking the screenshot. Defaults to
+  // kClearFocus which will clear focus before taking the screenshot to reduce
+  // flakiness. See VerifyPixelUi() implementation for more details.
+  ScreenshotFocusMode focus = ScreenshotFocusMode::kClearFocus;
+  // Snapshots from the root window of the view's widget instead of the
+  // widget's own native window, with the region converted to root coordinates.
+  // This also captures other widgets that are siblings of the view's widget
+  // in the same root, such as child-modal dialogs on Desktop Aura. Only
+  // supported on Aura.
+  bool capture_root_window = false;
+};
 
 // TestBrowserUi provides a way to register an InProcessBrowserTest testing
 // harness with a framework that invokes Chrome browser UI in a consistent way.
@@ -77,6 +105,10 @@ class SkiaGoldMatchingAlgorithm;
 //   browser_tests --gtest_filter=BrowserUiTest.Invoke
 //       --test-launcher-interactive --ui=FooUiTest.InvokeUi_name
 class TestBrowserUi {
+ public:
+  TestBrowserUi(const TestBrowserUi&) = delete;
+  TestBrowserUi& operator=(const TestBrowserUi&) = delete;
+
  protected:
   TestBrowserUi();
   virtual ~TestBrowserUi();
@@ -93,18 +125,34 @@ class TestBrowserUi {
   // successfully shown.
   virtual bool VerifyUi() = 0;
 
-// TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
-// of lacros-chrome is complete.
-#if defined(OS_WIN) || (defined(OS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS))
-  // Can be called by VerifyUi() to ensure pixel correctness.
-  bool VerifyPixelUi(views::Widget* widget,
-                     const std::string& screenshot_prefix,
-                     const std::string& screenshot_name);
+  // Returns ActionResult::Succeeded if the screenshot matches the golden image.
+  // Returns ActionResult::kFailed if the matching fails.
+  // Returns ActionResult::kKnownIncompatible if pixel tests are unsupported.
+  ui::test::ActionResult VerifyPixelUi(views::Widget* widget,
+                                       const std::string& screenshot_prefix,
+                                       const std::string& screenshot_name);
 
   // Can be called by VerifyUi() to ensure pixel correctness.
-  bool VerifyPixelUi(views::View* view,
-                     const std::string& screenshot_prefix,
-                     const std::string& screenshot_name);
+  ui::test::ActionResult VerifyPixelUi(views::View* view,
+                                       const std::string& screenshot_prefix,
+                                       const std::string& screenshot_name);
+
+  // Verifies a region within a View. For example, verify an element within
+  // web content.
+  ui::test::ActionResult VerifyPixelUi(views::View* view,
+                                       const ScreenshotOptions& options,
+                                       const std::string& screenshot_prefix,
+                                       const std::string& screenshot_name);
+
+  // Can be called by VerifyUi() to ensure pixel correctness for a tracked
+  // element (e.g. Views or WebUI element).
+  ui::test::ActionResult VerifyPixelUi(ui::TrackedElement* element,
+                                       const std::string& screenshot_prefix,
+                                       const std::string& screenshot_name);
+  ui::test::ActionResult VerifyPixelUi(ui::TrackedElement* element,
+                                       const ScreenshotOptions& options,
+                                       const std::string& screenshot_prefix,
+                                       const std::string& screenshot_name);
 
   // Own |algorithm|.
   void SetPixelMatchAlgorithm(
@@ -112,7 +160,6 @@ class TestBrowserUi {
   ui::test::SkiaGoldMatchingAlgorithm* GetPixelMatchAlgorithm() {
     return algorithm_.get();
   }
-#endif
 
   // Called by ShowAndVerifyUi() after VerifyUi(), in the case where the test is
   // interactive.  This should block until the UI has been dismissed.
@@ -128,27 +175,30 @@ class TestBrowserUi {
   // with no other code.
   void ShowAndVerifyUi();
 
- private:
-// TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
-// of lacros-chrome is complete.
-#if defined(OS_WIN) || defined(OS_MAC) || \
-    (defined(OS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS))
-  std::unique_ptr<ui::test::SkiaGoldMatchingAlgorithm> algorithm_;
-#endif
+  // Returns whether or not the test was invoked with the interactive ui flag.
+  // This is useful for some SetUp() calls that may be interested in that state.
+  bool IsInteractiveUi() const;
 
-  DISALLOW_COPY_AND_ASSIGN(TestBrowserUi);
+  // Extracts the |name| argument for ShowUi() from the current test case name.
+  // E.g. for InvokeUi_name, DISABLED_InvokeUi_name, or parameterized test
+  // InvokeUi_name/value all return "name".
+  static std::string NameFromTestCase();
+
+ private:
+  std::unique_ptr<ui::test::SkiaGoldMatchingAlgorithm> algorithm_;
 };
 
 // Helper to mix in a TestBrowserUi to an existing test harness. |Base| must be
 // a descendant of InProcessBrowserTest.
 template <class Base, class TestUi>
 class SupportsTestUi : public Base, public TestUi {
+ public:
+  SupportsTestUi(const SupportsTestUi&) = delete;
+  SupportsTestUi& operator=(const SupportsTestUi&) = delete;
+
  protected:
   template <class... Args>
   explicit SupportsTestUi(Args&&... args) : Base(std::forward<Args>(args)...) {}
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(SupportsTestUi);
 };
 
 using UiBrowserTest = SupportsTestUi<InProcessBrowserTest, TestBrowserUi>;

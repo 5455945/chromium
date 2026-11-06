@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,8 @@
 #include "ash/constants/ash_features.h"
 #include "base/memory/ptr_util.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
-#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
-#include "base/threading/sequenced_task_runner_handle.h"
 #include "chromeos/dbus/power/fake_power_manager_client.h"
 #include "chromeos/dbus/power_manager/backlight.pb.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -23,12 +21,16 @@ namespace {
 
 class TestObserver : public BrightnessMonitor::Observer {
  public:
-  TestObserver() {}
+  TestObserver() = default;
+
+  TestObserver(const TestObserver&) = delete;
+  TestObserver& operator=(const TestObserver&) = delete;
+
   ~TestObserver() override = default;
 
   // BrightnessMonitor::Observer overrides:
   void OnBrightnessMonitorInitialized(bool success) override {
-    status_ = absl::optional<BrightnessMonitor::Status>(
+    status_ = std::optional<BrightnessMonitor::Status>(
         success ? BrightnessMonitor::Status::kSuccess
                 : BrightnessMonitor::Status::kDisabled);
   }
@@ -61,9 +63,7 @@ class TestObserver : public BrightnessMonitor::Observer {
   double new_brightness_percent_ = -1;
   int num_brightness_changes_ = 0;
   int num_user_brightness_change_requested_ = 0;
-  absl::optional<BrightnessMonitor::Status> status_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestObserver);
+  std::optional<BrightnessMonitor::Status> status_;
 };
 }  // namespace
 
@@ -72,15 +72,19 @@ class BrightnessMonitorImplTest : public testing::Test {
   BrightnessMonitorImplTest()
       : task_environment_(base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
 
-  ~BrightnessMonitorImplTest() override {}
+  BrightnessMonitorImplTest(const BrightnessMonitorImplTest&) = delete;
+  BrightnessMonitorImplTest& operator=(const BrightnessMonitorImplTest&) =
+      delete;
+
+  ~BrightnessMonitorImplTest() override = default;
 
   // testing::Test:
-  void SetUp() override { PowerManagerClient::InitializeFake(); }
+  void SetUp() override { chromeos::PowerManagerClient::InitializeFake(); }
 
   void TearDown() override {
     test_observer_.reset();
     monitor_.reset();
-    PowerManagerClient::Shutdown();
+    chromeos::PowerManagerClient::Shutdown();
     base::ThreadPoolInstance::Get()->FlushForTesting();
   }
 
@@ -92,7 +96,7 @@ class BrightnessMonitorImplTest : public testing::Test {
     if (init_brightness >= 0) {
       power_manager::SetBacklightBrightnessRequest request;
       request.set_percent(init_brightness);
-      PowerManagerClient::Get()->SetScreenBrightness(request);
+      chromeos::PowerManagerClient::Get()->SetScreenBrightness(request);
     }
 
     if (!params.empty()) {
@@ -114,41 +118,18 @@ class BrightnessMonitorImplTest : public testing::Test {
     power_manager::BacklightBrightnessChange change;
     change.set_percent(level);
     change.set_cause(cause);
-    static_cast<FakePowerManagerClient*>(PowerManagerClient::Get())
+    static_cast<chromeos::FakePowerManagerClient*>(
+        chromeos::PowerManagerClient::Get())
         ->SendScreenBrightnessChanged(change);
     task_environment_.RunUntilIdle();
   }
 
   base::test::TaskEnvironment task_environment_;
-  base::HistogramTester histogram_tester_;
   std::unique_ptr<BrightnessMonitorImpl> monitor_;
   std::unique_ptr<TestObserver> test_observer_;
   base::test::ScopedFeatureList scoped_feature_list_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(BrightnessMonitorImplTest);
 };
 
-TEST_F(BrightnessMonitorImplTest, ReportSuccess) {
-  SetUpBrightnessMonitor(10);
-  task_environment_.FastForwardUntilNoTasksRemain();
-
-  histogram_tester_.ExpectUniqueSample(
-      "AutoScreenBrightness.BrightnessMonitorStatus",
-      static_cast<int>(BrightnessMonitor::Status::kSuccess), 1);
-}
-
-TEST_F(BrightnessMonitorImplTest, ReportDisabled) {
-  SetUpBrightnessMonitor(-1);
-  task_environment_.FastForwardUntilNoTasksRemain();
-
-  histogram_tester_.ExpectUniqueSample(
-      "AutoScreenBrightness.BrightnessMonitorStatus",
-      static_cast<int>(BrightnessMonitor::Status::kDisabled), 1);
-}
-
-// PowerManagerClient is not set up to return initial brightness, hence
-// Status is kDisabled.
 TEST_F(BrightnessMonitorImplTest, PowerManagerClientBrightnessUnset) {
   // Do not set initial brightess in FakePowerManagerClient.
   SetUpBrightnessMonitor(-1);

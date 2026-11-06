@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 
 #import <Foundation/Foundation.h>
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "components/image_fetcher/core/image_data_fetcher.h"
 #include "components/image_fetcher/core/image_fetcher_types.h"
 #include "net/url_request/referrer_policy.h"
@@ -25,13 +25,17 @@ class IOSImageDataFetcherWrapper {
   // The TaskRunner is used to decode the image if it is WebP-encoded.
   explicit IOSImageDataFetcherWrapper(
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
+
+  IOSImageDataFetcherWrapper(const IOSImageDataFetcherWrapper&) = delete;
+  IOSImageDataFetcherWrapper& operator=(const IOSImageDataFetcherWrapper&) =
+      delete;
+
   virtual ~IOSImageDataFetcherWrapper();
 
   // Helper to start downloading and possibly decoding the image without a
   // referrer.
   void FetchImageDataWebpDecoded(const GURL& image_url,
-                                 ImageDataFetcherBlock callback,
-                                 bool send_cookies = false);
+                                 ImageDataFetcherBlock callback);
 
   // Start downloading the image at the given |image_url|. The |callback| will
   // be called with the downloaded image, or nil if any error happened. If the
@@ -42,8 +46,7 @@ class IOSImageDataFetcherWrapper {
   void FetchImageDataWebpDecoded(const GURL& image_url,
                                  ImageDataFetcherBlock callback,
                                  const std::string& referrer,
-                                 net::ReferrerPolicy referrer_policy,
-                                 bool send_cookies = false);
+                                 net::ReferrerPolicy referrer_policy);
 
   // Test-only accessor for underlying ImageDataFetcher.
   ImageDataFetcher* AccessImageDataFetcherForTesting() {
@@ -55,8 +58,6 @@ class IOSImageDataFetcherWrapper {
       ImageDataFetcherBlock callback);
 
   ImageDataFetcher image_data_fetcher_;
-
-  DISALLOW_COPY_AND_ASSIGN(IOSImageDataFetcherWrapper);
 };
 
 }  // namespace image_fetcher

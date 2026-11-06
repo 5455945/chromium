@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include <memory>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/viz/service/display_embedder/skia_output_device.h"
 
@@ -27,36 +27,32 @@ class SkiaOutputDeviceWebView : public SkiaOutputDevice {
   SkiaOutputDeviceWebView(
       gpu::SharedContextState* context_state,
       scoped_refptr<gl::GLSurface> gl_surface,
-      gpu::MemoryTracker* memory_tracker,
+      scoped_refptr<gpu::MemoryTracker> memory_tracker,
       DidSwapBufferCompleteCallback did_swap_buffer_complete_callback);
   SkiaOutputDeviceWebView(const SkiaOutputDeviceWebView&) = delete;
   SkiaOutputDeviceWebView& operator=(const SkiaOutputDeviceWebView&) = delete;
   ~SkiaOutputDeviceWebView() override;
 
   // SkiaOutputDevice implementation:
-  bool Reshape(const gfx::Size& size,
-               float device_scale_factor,
-               const gfx::ColorSpace& color_space,
-               gfx::BufferFormat format,
-               gfx::OverlayTransform transform) override;
-  void SwapBuffers(BufferPresentedCallback feedback,
-                   OutputSurfaceFrame frame) override;
+  bool Reshape(const ReshapeParams& params) override;
+  void Present(const std::optional<gfx::Rect>& update_rect,
+               BufferPresentedCallback feedback,
+               OutputSurfaceFrame frame) override;
 
   SkSurface* BeginPaint(
-      bool allocate_frame_buffer,
       std::vector<GrBackendSemaphore>* end_semaphores) override;
   void EndPaint() override;
 
  private:
   void InitSkiaSurface(unsigned int fbo);
 
-  gpu::SharedContextState* const context_state_;
+  const raw_ptr<gpu::SharedContextState> context_state_;
   scoped_refptr<gl::GLSurface> gl_surface_;
 
   sk_sp<SkSurface> sk_surface_;
 
   gfx::Size size_;
-  gfx::ColorSpace color_space_;
+  sk_sp<SkColorSpace> sk_color_space_;
   unsigned int last_frame_buffer_object_ = -1;
 
   base::WeakPtrFactory<SkiaOutputDeviceWebView> weak_ptr_factory_{this};

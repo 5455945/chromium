@@ -1,20 +1,25 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 #ifndef CHROME_BROWSER_EXTENSIONS_EXTENSION_MANAGEMENT_INTERNAL_H_
 #define CHROME_BROWSER_EXTENSIONS_EXTENSION_MANAGEMENT_INTERNAL_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
-#include "chrome/browser/extensions/extension_management.h"
+#include "base/values.h"
+#include "chrome/browser/extensions/managed_toolbar_pin_mode.h"
+#include "extensions/browser/managed_installation_mode.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/manifest.h"
 #include "extensions/common/permissions/api_permission_set.h"
+#include "extensions/common/url_pattern_set.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace base {
-class DictionaryValue;
 class Version;
 }  // namespace base
 
@@ -26,7 +31,7 @@ namespace internal {
 
 // Class to hold extension management settings for one or a group of
 // extensions. Settings can be applied to an individual extension identified
-// by an ID, a group of extensions with specific |update_url| or all
+// by an ID, a group of extensions with specific `update_url` or all
 // extensions at once.
 // The settings applied to all extensions are the default settings and can be
 // overridden by per-extension or per-update-url settings.
@@ -36,7 +41,7 @@ namespace internal {
 // Since update URL is not directly associated to extension ID, per-extension
 // and per-update-url settings might be enforced at the same time, see per-field
 // comments below for details.
-// Some features do not support per-update-url setttings.
+// Some features do not support per-update-url settings.
 struct IndividualSettings {
   enum ParsingScope {
     // Parses the default settings.
@@ -50,23 +55,27 @@ struct IndividualSettings {
 
   IndividualSettings();
   explicit IndividualSettings(const IndividualSettings* default_settings);
+
+  IndividualSettings(const IndividualSettings&) = delete;
+  IndividualSettings& operator=(const IndividualSettings&) = delete;
+
   ~IndividualSettings();
 
   void Reset();
 
-  // Parses the individual settings. |dict| is a sub-dictionary in extension
-  // management preference and |scope| represents the applicable range of the
+  // Parses the individual settings. `dict` is a sub-dictionary in extension
+  // management preference and `scope` represents the applicable range of the
   // settings, a single extension, a group of extensions or default settings.
-  // Note that in case of parsing errors, |this| will NOT be left untouched.
+  // Note that in case of parsing errors, `this` will NOT be left untouched.
   // This method is required to be called for SCOPE_DEFAULT first, then
   // for SCOPE_INDIVIDUAL and SCOPE_UPDATE_URL.
-  bool Parse(const base::DictionaryValue* dict, ParsingScope scope);
+  bool Parse(const base::DictValue& dict, ParsingScope scope);
 
   // Extension installation mode. Setting this to INSTALLATION_FORCED or
   // INSTALLATION_RECOMMENDED will enable extension auto-loading (only
-  // applicable to single extension), and in this case the |update_url| must
+  // applicable to single extension), and in this case the `update_url` must
   // be specified, containing the update URL for this extension.
-  // Note that |update_url| will be ignored for INSTALLATION_ALLOWED and
+  // Note that `update_url` will be ignored for INSTALLATION_ALLOWED and
   // INSTALLATION_BLOCKED installation mode.
   // This setting will NOT merge from the default settings. Any settings from
   // the default settings that should be applied to an individual extension
@@ -74,12 +83,12 @@ struct IndividualSettings {
   // In case this setting is specified in both per-extensions and
   // per-update-url settings, per-extension settings will override
   // per-update-url settings.
-  ExtensionManagement::InstallationMode installation_mode;
+  ManagedInstallationMode installation_mode;
   std::string update_url;
 
   // Boolean to indicate whether the update URL of the extension/app is
   // overridden by the policy or not. It can be true only for extensions/apps
-  // which are marked as |force_installed|.
+  // which are marked as `force_installed`.
   bool override_update_url{false};
 
   // Permissions block list for extensions. This setting won't grant permissions
@@ -140,34 +149,43 @@ struct IndividualSettings {
   std::string blocked_install_message;
 
   // Allows admins to control whether the extension icon should be pinned to
-  // the toolbar next to the omnibar. If it is pinned, the icon is visible at
-  // all times.
-  ExtensionManagement::ToolbarPinMode toolbar_pin =
-      ExtensionManagement::ToolbarPinMode::kDefaultUnpinned;
+  // the toolbar next to the omnibar. By default, this is kNotSet which means
+  // that the pinning behavior will be determined by the
+  // kExtensionsPinnedByDefault feature flag.
+  ManagedToolbarPinMode toolbar_pin = ManagedToolbarPinMode::kNotSet;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(IndividualSettings);
+  // Boolean to indicate whether the extension can navigate to file URLs.
+  bool file_url_navigation_allowed{false};
 };
 
 // Global extension management settings, applicable to all extensions.
 struct GlobalSettings {
+  enum class UnpublishedAvailability {
+    kAllowUnpublished = 0,
+    kDisableUnpublished = 1,
+  };
+
   GlobalSettings();
+
+  GlobalSettings(const GlobalSettings&) = delete;
+  GlobalSettings& operator=(const GlobalSettings&) = delete;
+
   ~GlobalSettings();
 
-  void Reset();
-
   // Settings specifying which URLs are allowed to install extensions, will be
-  // enforced only if |has_restricted_install_sources| is set to true.
-  URLPatternSet install_sources;
-  bool has_restricted_install_sources;
+  // enforced only if `has_restricted_install_sources` is set to true.
+  std::optional<URLPatternSet> install_sources;
 
   // Settings specifying all allowed app/extension types, will be enforced
-  // only of |has_restricted_allowed_types| is set to true.
-  std::vector<Manifest::Type> allowed_types;
-  bool has_restricted_allowed_types;
+  // only of `has_restricted_allowed_types` is set to true.
+  std::optional<std::vector<Manifest::Type>> allowed_types;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(GlobalSettings);
+  UnpublishedAvailability unpublished_availability_setting =
+      UnpublishedAvailability::kAllowUnpublished;
+
+  // Cached value of the
+  // ExtensionForceInstallWithSearchOrNewTabOverridesEnabled enterprise policy.
+  bool allow_low_trust_dse_ntp_overrides = false;
 };
 
 }  // namespace internal

@@ -1,11 +1,10 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/web_package/signed_exchange_signature_verifier.h"
 
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
 #include "base/path_service.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "content/browser/web_package/signed_exchange_certificate_chain.h"
@@ -24,7 +23,7 @@ const uint64_t kSignatureHeaderExpires = 1517895941;
 
 // See content/test/data/sxg/README on how to generate these data.
 // clang-format off
-constexpr char kSignatureHeaderECDSAP256[] = R"(label;cert-sha256=*4gNFIZRsc0QyiaUY/ekUZU6h3q/1mtQafd53/yaF5Ms=*;cert-url="https://example.com/cert.msg";date=1517892341;expires=1517895941;integrity="digest/mi-sha256-03";sig=*MEYCIQDLap5Ns9tI0JmCr1nc58GTHqzyfWJmTiZ+AIPt0OBE6gIhAJ8uHk3RyxX0/pnMmmKKdr63T0XHqyz00aaxuECJ4Ez/*;validity-url="https://test.example.org/resource.validity.msg")";
+constexpr char kSignatureHeaderECDSAP256[] = R"(label;cert-sha256=*MRAnh0DT/s6wG0Rp6rsFzrCjZWbmePEv0Bhk6QUIM+Q=*;cert-url="https://example.com/cert.msg";date=1517892341;expires=1517895941;integrity="digest/mi-sha256-03";sig=*MEUCIQCnTvS8lBsi/Jjj4WgNQE027LQgUmg08RG1s7hRIbPBYAIgR4V3Gdzd2awuPfzdPdq/JIBrwbWYt+H+xTKqSHj19Hg=*;validity-url="https://test.example.org/resource.validity.msg")";
 constexpr uint8_t kCborHeadersECDSAP256[] = {
   0xa4, 0x46, 0x64, 0x69, 0x67, 0x65, 0x73, 0x74, 0x58, 0x39, 0x6d, 0x69,
   0x2d, 0x73, 0x68, 0x61, 0x32, 0x35, 0x36, 0x2d, 0x30, 0x33, 0x3d, 0x77,
@@ -40,7 +39,7 @@ constexpr uint8_t kCborHeadersECDSAP256[] = {
   0x69, 0x6e, 0x67, 0x4c, 0x6d, 0x69, 0x2d, 0x73, 0x68, 0x61, 0x32, 0x35,
   0x36, 0x2d, 0x30, 0x33
 };
-constexpr char kSignatureHeaderECDSAP384[] = R"(label;cert-sha256=*KrfLZg1xcHbdKYZ1nb8cnUjp/6iaEo6LeQrRSV6StKw=*;cert-url="https://example.com/cert.msg";date=1517892341;expires=1517895941;integrity="digest/mi-sha256-03";sig=*MGUCMBTSH0TpKGv5JSspWU+7hYeSDwaoRzYDzxxQaDQ2kV/IQS+3bQd4SFm0dPvsPzJH7AIxAPT1MXZoEiDhu45Ssr+ubU8n68QZZ92eI7TvtsEF1LEAXtx2YYC2UARu6ok9UxtrZQ==*;validity-url="https://test.example.org/resource.validity.msg")";
+constexpr char kSignatureHeaderECDSAP384[] = R"(label;cert-sha256=*wqpfiC+RvHwLNXLt7g4gSGD+UeHyX6IQDJduAQeFk9w=*;cert-url="https://example.com/cert.msg";date=1517892341;expires=1517895941;integrity="digest/mi-sha256-03";sig=*MGYCMQC8xV4IJ3OEIxYuSmPambZkPcq+CQYWX1tu/hSUlZcT2szJrUCFFOAlE8o3vhpcFi0CMQDPs1/KkPS/IuTsZ9SYEvHVZVdduVEZJ49hqiFG6z2x9UAdD5v9j1/20tXfYgbGjA4=*;validity-url="https://test.example.org/resource.validity.msg")";
 // clang-format on
 
 // |expires| (1518497142) is more than 7 days (604800 seconds) after |date|
@@ -78,8 +77,7 @@ class SignedExchangeSignatureVerifierTest
   SignedExchangeSignatureVerifierTest() {}
 
   const base::Time VerificationTime() {
-    return base::Time::UnixEpoch() +
-           base::TimeDelta::FromSeconds(kSignatureHeaderDate);
+    return base::Time::UnixEpoch() + base::Seconds(kSignatureHeaderDate);
   }
 
   void TestVerifierGivenValidInput(
@@ -103,13 +101,13 @@ class SignedExchangeSignatureVerifierTest
     }
     {
       base::HistogramTester histogram_tester;
-      EXPECT_EQ(SignedExchangeSignatureVerifier::Result::kErrFutureDate,
-                SignedExchangeSignatureVerifier::Verify(
-                    GetParam(), envelope, &cert_chain,
-                    base::Time::UnixEpoch() +
-                        base::TimeDelta::FromSeconds(kSignatureHeaderDate - 1),
-                    nullptr /* devtools_proxy */
-                    ));
+      EXPECT_EQ(
+          SignedExchangeSignatureVerifier::Result::kErrFutureDate,
+          SignedExchangeSignatureVerifier::Verify(
+              GetParam(), envelope, &cert_chain,
+              base::Time::UnixEpoch() + base::Seconds(kSignatureHeaderDate - 1),
+              nullptr /* devtools_proxy */
+              ));
       histogram_tester.ExpectTotalCount("SignedExchange.TimeUntilExpiration",
                                         0);
       histogram_tester.ExpectUniqueSample(
@@ -120,13 +118,13 @@ class SignedExchangeSignatureVerifierTest
 
     {
       base::HistogramTester histogram_tester;
-      EXPECT_EQ(SignedExchangeSignatureVerifier::Result::kSuccess,
-                SignedExchangeSignatureVerifier::Verify(
-                    GetParam(), envelope, &cert_chain,
-                    base::Time::UnixEpoch() +
-                        base::TimeDelta::FromSeconds(kSignatureHeaderExpires),
-                    nullptr /* devtools_proxy */
-                    ));
+      EXPECT_EQ(
+          SignedExchangeSignatureVerifier::Result::kSuccess,
+          SignedExchangeSignatureVerifier::Verify(
+              GetParam(), envelope, &cert_chain,
+              base::Time::UnixEpoch() + base::Seconds(kSignatureHeaderExpires),
+              nullptr /* devtools_proxy */
+              ));
       histogram_tester.ExpectUniqueSample("SignedExchange.TimeUntilExpiration",
                                           0, 1);
       histogram_tester.ExpectTotalCount(
@@ -139,8 +137,8 @@ class SignedExchangeSignatureVerifierTest
       EXPECT_EQ(SignedExchangeSignatureVerifier::Result::kErrExpired,
                 SignedExchangeSignatureVerifier::Verify(
                     GetParam(), envelope, &cert_chain,
-                    base::Time::UnixEpoch() + base::TimeDelta::FromSeconds(
-                                                  kSignatureHeaderExpires + 1),
+                    base::Time::UnixEpoch() +
+                        base::Seconds(kSignatureHeaderExpires + 1),
                     nullptr /* devtools_proxy */
                     ));
       histogram_tester.ExpectTotalCount("SignedExchange.TimeUntilExpiration",
@@ -190,7 +188,7 @@ class SignedExchangeSignatureVerifierTest
     SignedExchangeEnvelope badsigsha256_envelope(envelope);
     SignedExchangeSignatureHeaderField::Signature badsigsha256 =
         envelope.signature();
-    badsigsha256.cert_sha256->data[0]++;
+    (*badsigsha256.cert_sha256)[0]++;
     badsigsha256_envelope.SetSignatureForTesting(badsigsha256);
     EXPECT_EQ(
         SignedExchangeSignatureVerifier::Result::kErrCertificateSHA256Mismatch,
@@ -218,7 +216,7 @@ TEST_P(SignedExchangeSignatureVerifierTest, VerifyECDSAP256) {
   envelope.AddResponseHeader("content-encoding", "mi-sha256-03");
   envelope.AddResponseHeader(
       "digest", "mi-sha256-03=wmp4dRMYgxP3tSMCwV/I0CWOCiHZpAihKZk19bsN9RI=");
-  envelope.set_cbor_header(base::make_span(kCborHeadersECDSAP256));
+  envelope.set_cbor_header(base::span(kCborHeadersECDSAP256));
 
   envelope.SetSignatureForTesting((*signature)[0]);
 

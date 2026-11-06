@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,58 +6,56 @@
 #define COMPONENTS_VIZ_SERVICE_DISPLAY_EMBEDDER_SKIA_OUTPUT_DEVICE_VULKAN_H_
 
 #include <memory>
+#include <optional>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/types/pass_key.h"
 #include "build/build_config.h"
 #include "components/viz/service/display_embedder/skia_output_device.h"
 #include "gpu/ipc/common/surface_handle.h"
 #include "gpu/vulkan/vulkan_swap_chain.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace gpu {
 class VulkanSurface;
+class VulkanContextProvider;
 }
 
 namespace viz {
-
-class VulkanContextProvider;
 
 class SkiaOutputDeviceVulkan final : public SkiaOutputDevice {
  public:
   SkiaOutputDeviceVulkan(
       base::PassKey<SkiaOutputDeviceVulkan>,
-      VulkanContextProvider* context_provider,
+      gpu::VulkanContextProvider* context_provider,
       gpu::SurfaceHandle surface_handle,
       gpu::MemoryTracker* memory_tracker,
       DidSwapBufferCompleteCallback did_swap_buffer_complete_callback);
+
+  SkiaOutputDeviceVulkan(const SkiaOutputDeviceVulkan&) = delete;
+  SkiaOutputDeviceVulkan& operator=(const SkiaOutputDeviceVulkan&) = delete;
+
   ~SkiaOutputDeviceVulkan() override;
 
   static std::unique_ptr<SkiaOutputDeviceVulkan> Create(
-      VulkanContextProvider* context_provider,
+      gpu::VulkanContextProvider* context_provider,
       gpu::SurfaceHandle surface_handle,
       gpu::MemoryTracker* memory_tracker,
       DidSwapBufferCompleteCallback did_swap_buffer_complete_callback);
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   gpu::SurfaceHandle GetChildSurfaceHandle();
 #endif
   // SkiaOutputDevice implementation:
-  void Submit(bool sync_cpu, base::OnceClosure callback) override;
-  bool Reshape(const gfx::Size& size,
-               float device_scale_factor,
-               const gfx::ColorSpace& color_space,
-               gfx::BufferFormat format,
-               gfx::OverlayTransform transform) override;
-  void SwapBuffers(BufferPresentedCallback feedback,
-                   OutputSurfaceFrame frame) override;
-  void PostSubBuffer(const gfx::Rect& rect,
-                     BufferPresentedCallback feedback,
-                     OutputSurfaceFrame frame) override;
+  void Submit(scoped_refptr<gpu::SharedContextState> context_state,
+              bool sync_cpu,
+              base::OnceClosure callback) override;
+  bool Reshape(const ReshapeParams& params) override;
+  void Present(const std::optional<gfx::Rect>& update_rect,
+               BufferPresentedCallback feedback,
+               OutputSurfaceFrame frame) override;
   SkSurface* BeginPaint(
-      bool allocate_frame_buffer,
       std::vector<GrBackendSemaphore>* end_semaphores) override;
   void EndPaint() override;
 
@@ -72,18 +70,17 @@ class SkiaOutputDeviceVulkan final : public SkiaOutputDevice {
   };
 
   bool Initialize();
-  bool RecreateSwapChain(const gfx::Size& size,
-                         sk_sp<SkColorSpace> color_space,
+  bool RecreateSwapChain(const SkImageInfo& image_info,
                          gfx::OverlayTransform transform);
   void OnPostSubBufferFinished(OutputSurfaceFrame frame,
                                gfx::SwapResult result);
 
-  VulkanContextProvider* const context_provider_;
+  const raw_ptr<gpu::VulkanContextProvider> context_provider_;
 
   const gpu::SurfaceHandle surface_handle_;
   std::unique_ptr<gpu::VulkanSurface> vulkan_surface_;
 
-  absl::optional<gpu::VulkanSwapChain::ScopedWrite> scoped_write_;
+  std::optional<gpu::VulkanSwapChain::ScopedWrite> scoped_write_;
 
 #if DCHECK_IS_ON()
   bool image_modified_ = false;
@@ -92,6 +89,7 @@ class SkiaOutputDeviceVulkan final : public SkiaOutputDevice {
   // SkSurfaces for swap chain images.
   std::vector<SkSurfaceSizePair> sk_surface_size_pairs_;
 
+  SkColorType color_type_ = kUnknown_SkColorType;
   sk_sp<SkColorSpace> color_space_;
 
   // The swapchain is new created without a frame which convers the whole area
@@ -101,8 +99,6 @@ class SkiaOutputDeviceVulkan final : public SkiaOutputDevice {
   std::vector<gfx::Rect> damage_of_images_;
 
   base::WeakPtrFactory<SkiaOutputDeviceVulkan> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(SkiaOutputDeviceVulkan);
 };
 
 }  // namespace viz

@@ -1,12 +1,11 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/system_logs/iwlwifi_dump_log_source.h"
 
-#include "base/bind.h"
 #include "base/files/file_util.h"
-#include "base/task/post_task.h"
+#include "base/functional/bind.h"
 #include "base/task/thread_pool.h"
 #include "chrome/grit/generated_resources.h"
 #include "content/public/browser/browser_thread.h"
@@ -44,13 +43,12 @@ IwlwifiDumpChecker::IwlwifiDumpChecker()
 IwlwifiDumpChecker::~IwlwifiDumpChecker() = default;
 
 void IwlwifiDumpChecker::Fetch(SysLogsSourceCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(!callback.is_null());
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(!callback.is_null(), base::NotFatalUntil::M160);
 
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
-      base::BindOnce(&CheckExistenceOnBlockingTaskRunner),
-      base::BindOnce(std::move(callback)));
+      base::BindOnce(&CheckExistenceOnBlockingTaskRunner), std::move(callback));
 }
 
 IwlwifiDumpLogSource::IwlwifiDumpLogSource()
@@ -59,13 +57,12 @@ IwlwifiDumpLogSource::IwlwifiDumpLogSource()
 IwlwifiDumpLogSource::~IwlwifiDumpLogSource() = default;
 
 void IwlwifiDumpLogSource::Fetch(SysLogsSourceCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(!callback.is_null());
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(!callback.is_null(), base::NotFatalUntil::M160);
 
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
-      base::BindOnce(&ReadDumpOnBlockingTaskRunner),
-      base::BindOnce(std::move(callback)));
+      base::BindOnce(&ReadDumpOnBlockingTaskRunner), std::move(callback));
 }
 
 bool ContainsIwlwifiLogs(const FeedbackCommon::SystemLogsMap* sys_logs) {

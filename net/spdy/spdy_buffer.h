@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,8 @@
 #include <memory>
 #include <vector>
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
+#include "base/containers/span.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/ref_counted.h"
 #include "net/base/net_export.h"
 
@@ -52,16 +52,18 @@ class NET_EXPORT_PRIVATE SpdyBuffer {
   // owned by |frame| or outlives it.
   explicit SpdyBuffer(std::unique_ptr<spdy::SpdySerializedFrame> frame);
 
-  // Construct with a copy of the given raw data. |data| must be
-  // non-NULL and |size| must be non-zero.
-  SpdyBuffer(const char* data, size_t size);
+  // Construct with a copy of the given raw data. `data` must be non-empty.
+  explicit SpdyBuffer(base::span<const uint8_t> data);
+
+  SpdyBuffer(const SpdyBuffer&) = delete;
+  SpdyBuffer& operator=(const SpdyBuffer&) = delete;
 
   // If there are bytes remaining in the buffer, triggers a call to
   // any consume callbacks with a DISCARD source.
   ~SpdyBuffer();
 
   // Returns the remaining (unconsumed) data.
-  const char* GetRemainingData() const;
+  base::span<const uint8_t> GetRemaining() const;
 
   // Returns the number of remaining (unconsumed) bytes.
   size_t GetRemainingSize() const;
@@ -98,9 +100,7 @@ class NET_EXPORT_PRIVATE SpdyBuffer {
 
   const scoped_refptr<SharedFrame> shared_frame_;
   std::vector<ConsumeCallback> consume_callbacks_;
-  size_t offset_;
-
-  DISALLOW_COPY_AND_ASSIGN(SpdyBuffer);
+  size_t offset_ = 0;
 };
 
 }  // namespace net

@@ -28,31 +28,26 @@
 #include <cmath>
 
 #include "base/compiler_specific.h"
+#include "base/numerics/safe_conversions.h"
 #include "build/build_config.h"
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 #include "third_party/blink/renderer/platform/audio/mac/vector_math_mac.h"
 #elif defined(CPU_ARM_NEON)
 #include "third_party/blink/renderer/platform/audio/cpu/arm/vector_math_neon.h"
-#elif defined(HAVE_MIPS_MSA_INTRINSICS)
-#include "third_party/blink/renderer/platform/audio/cpu/mips/vector_math_msa.h"
 #elif defined(ARCH_CPU_X86_FAMILY)
 #include "third_party/blink/renderer/platform/audio/cpu/x86/vector_math_x86.h"
 #else
 #include "third_party/blink/renderer/platform/audio/vector_math_scalar.h"
 #endif
 
-namespace blink {
-
-namespace vector_math {
+namespace blink::vector_math {
 
 namespace {
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 namespace impl = mac;
 #elif defined(CPU_ARM_NEON)
 namespace impl = neon;
-#elif defined(HAVE_MIPS_MSA_INTRINSICS)
-namespace impl = msa;
 #elif defined(ARCH_CPU_X86_FAMILY)
 namespace impl = x86;
 #else
@@ -60,226 +55,88 @@ namespace impl = scalar;
 #endif
 }  // namespace
 
-void PrepareFilterForConv(const float* filter_p,
-                          int filter_stride,
-                          size_t filter_size,
-                          AudioFloatArray* prepared_filter) {
+void PrepareFilterForConv(base::span<const float> filter,
+                          AudioFloatArray& prepared_filter) {
   // Only contiguous convolution is implemented by all implementations.
-  // Correlation (positive |filter_stride|) and support for non-contiguous
-  // vectors are not implemented by all implementations.
-  DCHECK_EQ(-1, filter_stride);
-  DCHECK(prepared_filter);
-#if defined(ARCH_CPU_X86_FAMILY) && !defined(OS_MAC)
-  x86::PrepareFilterForConv(filter_p, filter_stride, filter_size,
-                            prepared_filter);
+#if defined(ARCH_CPU_X86_FAMILY) && !BUILDFLAG(IS_MAC)
+  x86::PrepareFilterForConv(filter, &prepared_filter);
 #endif
 }
 
-void Conv(const float* source_p,
-          int source_stride,
-          const float* filter_p,
-          int filter_stride,
-          float* dest_p,
-          int dest_stride,
-          uint32_t frames_to_process,
-          size_t filter_size,
-          const AudioFloatArray* prepared_filter) {
+void Conv(base::span<const float> source,
+          base::span<const float> filter,
+          base::span<float> dest,
+          const AudioFloatArray& prepared_filter) {
   // Only contiguous convolution is implemented by all implementations.
-  // Correlation (positive |filter_stride|) and support for non-contiguous
-  // vectors are not implemented by all implementations.
-  DCHECK_EQ(1, source_stride);
-  DCHECK_EQ(-1, filter_stride);
-  DCHECK_EQ(1, dest_stride);
-  impl::Conv(source_p, source_stride, filter_p, filter_stride, dest_p,
-             dest_stride, frames_to_process, filter_size, prepared_filter);
+  impl::Conv(source, filter, dest, prepared_filter.as_span());
 }
 
-void Vadd(const float* source1p,
-          int source_stride1,
-          const float* source2p,
-          int source_stride2,
-          float* dest_p,
-          int dest_stride,
-          uint32_t frames_to_process) {
-  impl::Vadd(source1p, source_stride1, source2p, source_stride2, dest_p,
-             dest_stride, frames_to_process);
+void Vadd(base::span<const float> source1,
+          base::span<const float> source2,
+          base::span<float> dest) {
+  impl::Vadd(source1, source2, dest);
 }
 
-void Vsub(const float* source1p,
-          int source_stride1,
-          const float* source2p,
-          int source_stride2,
-          float* dest_p,
-          int dest_stride,
-          uint32_t frames_to_process) {
-  impl::Vsub(source1p, source_stride1, source2p, source_stride2, dest_p,
-             dest_stride, frames_to_process);
+void Vsub(base::span<const float> source1,
+          base::span<const float> source2,
+          base::span<float> dest) {
+  impl::Vsub(source1, source2, dest);
 }
 
-void Vclip(const float* source_p,
-           int source_stride,
-           const float* low_threshold_p,
-           const float* high_threshold_p,
-           float* dest_p,
-           int dest_stride,
-           uint32_t frames_to_process) {
-  float low_threshold = *low_threshold_p;
-  float high_threshold = *high_threshold_p;
-
+void Vclip(base::span<const float> source,
+           float low_threshold,
+           float high_threshold,
+           base::span<float> dest) {
 #if DCHECK_IS_ON()
-  // Do the same DCHECKs that |clampTo| would do so that optimization paths do
+  // Do the same DCHECKs that |ClampTo| would do so that optimization paths do
   // not have to do them.
-  for (size_t i = 0u; i < frames_to_process; ++i)
-    DCHECK(!std::isnan(source_p[i]));
+  for (float sample : source) {
+    DCHECK(!std::isnan(sample));
+  }
   // This also ensures that thresholds are not NaNs.
   DCHECK_LE(low_threshold, high_threshold);
 #endif
 
-  impl::Vclip(source_p, source_stride, &low_threshold, &high_threshold, dest_p,
-              dest_stride, frames_to_process);
+  impl::Vclip(source, low_threshold, high_threshold, dest);
 }
 
-void Vclip(const float* source_p,
-           int source_stride,
-           float low_threshold_p,
-           float high_threshold_p,
-           float* dest_p,
-           int dest_stride,
-           uint32_t frames_to_process) {
-  float low_threshold = low_threshold_p;
-  float high_threshold = high_threshold_p;
-
-#if DCHECK_IS_ON()
-  // Do the same DCHECKs that |clampTo| would do so that optimization paths do
-  // not have to do them.
-  for (size_t i = 0u; i < frames_to_process; ++i)
-    DCHECK(!std::isnan(source_p[i]));
-  // This also ensures that thresholds are not NaNs.
-  DCHECK_LE(low_threshold, high_threshold);
-#endif
-
-  impl::Vclip(source_p, source_stride, &low_threshold, &high_threshold, dest_p,
-              dest_stride, frames_to_process);
+float Vmaxmgv(base::span<const float> source) {
+  return impl::Vmaxmgv(source);
 }
 
-void Vmaxmgv(const float* source_p,
-             int source_stride,
-             float* max_p,
-             uint32_t frames_to_process) {
-  float max = 0;
-
-  impl::Vmaxmgv(source_p, source_stride, &max, frames_to_process);
-
-  DCHECK(max_p);
-  *max_p = max;
+void Vmul(base::span<const float> source1,
+          base::span<const float> source2,
+          base::span<float> dest) {
+  impl::Vmul(source1, source2, dest);
 }
 
-void Vmul(const float* source1p,
-          int source_stride1,
-          const float* source2p,
-          int source_stride2,
-          float* dest_p,
-          int dest_stride,
-          uint32_t frames_to_process) {
-  impl::Vmul(source1p, source_stride1, source2p, source_stride2, dest_p,
-             dest_stride, frames_to_process);
+void Vsma(base::span<const float> source, float scale, base::span<float> dest) {
+  impl::Vsma(source, scale, dest);
 }
 
-void Vsma(const float* source_p,
-          int source_stride,
-          const float* scale,
-          float* dest_p,
-          int dest_stride,
-          uint32_t frames_to_process) {
-  const float k = *scale;
-
-  impl::Vsma(source_p, source_stride, &k, dest_p, dest_stride,
-             frames_to_process);
-}
-
-void Vsma(const float* source_p,
-          int source_stride,
-          float scale,
-          float* dest_p,
-          int dest_stride,
-          uint32_t frames_to_process) {
-  const float k = scale;
-
-  impl::Vsma(source_p, source_stride, &k, dest_p, dest_stride,
-             frames_to_process);
-}
-
-void Vsmul(const float* source_p,
-           int source_stride,
-           const float* scale,
-           float* dest_p,
-           int dest_stride,
-           uint32_t frames_to_process) {
-  const float k = *scale;
-
-  impl::Vsmul(source_p, source_stride, &k, dest_p, dest_stride,
-              frames_to_process);
-}
-
-void Vsmul(const float* source_p,
-           int source_stride,
+void Vsmul(base::span<const float> source,
            float scale,
-           float* dest_p,
-           int dest_stride,
-           uint32_t frames_to_process) {
-  const float k = scale;
-
-  impl::Vsmul(source_p, source_stride, &k, dest_p, dest_stride,
-              frames_to_process);
+           base::span<float> dest) {
+  impl::Vsmul(source, scale, dest);
 }
 
-void Vsadd(const float* source_p,
-           int source_stride,
-           const float* addend,
-           float* dest_p,
-           int dest_stride,
-           uint32_t frames_to_process) {
-  const float k = *addend;
-
-  impl::Vsadd(source_p, source_stride, &k, dest_p, dest_stride,
-              frames_to_process);
-}
-
-void Vsadd(const float* source_p,
-           int source_stride,
+void Vsadd(base::span<const float> source,
            float addend,
-           float* dest_p,
-           int dest_stride,
-           uint32_t frames_to_process) {
-  const float k = addend;
-
-  impl::Vsadd(source_p, source_stride, &k, dest_p, dest_stride,
-              frames_to_process);
+           base::span<float> dest) {
+  impl::Vsadd(source, addend, dest);
 }
 
-void Vsvesq(const float* source_p,
-            int source_stride,
-            float* sum_p,
-            uint32_t frames_to_process) {
-  float sum = 0;
-
-  impl::Vsvesq(source_p, source_stride, &sum, frames_to_process);
-
-  DCHECK(sum_p);
-  *sum_p = sum;
+float Vsvesq(base::span<const float> source) {
+  return impl::Vsvesq(source);
 }
 
-void Zvmul(const float* real1p,
-           const float* imag1p,
-           const float* real2p,
-           const float* imag2p,
-           float* real_dest_p,
-           float* imag_dest_p,
-           uint32_t frames_to_process) {
-  impl::Zvmul(real1p, imag1p, real2p, imag2p, real_dest_p, imag_dest_p,
-              frames_to_process);
+void Zvmul(base::span<const float> real1,
+           base::span<const float> imag1,
+           base::span<const float> real2,
+           base::span<const float> imag2,
+           base::span<float> real_dest,
+           base::span<float> imag_dest) {
+  impl::Zvmul(real1, imag1, real2, imag2, real_dest, imag_dest);
 }
 
-}  // namespace vector_math
-
-}  // namespace blink
+}  // namespace blink::vector_math

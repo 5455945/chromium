@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,21 +6,24 @@
 #define CHROME_BROWSER_ASH_LOGIN_SAML_FAKE_SAML_IDP_MIXIN_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "base/files/file_path.h"
-#include "chromeos/dbus/dbus_method_call_status.h"
-#include "net/test/embedded_test_server/embedded_test_server.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-
+#include "base/memory/raw_ptr.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
+#include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
 #include "url/gurl.h"
 
-namespace chromeos {
-
 class FakeGaiaMixin;
+
+namespace base {
+class CommandLine;
+}
+
+namespace ash {
 
 class FakeSamlIdpMixin final : public InProcessBrowserTestMixin {
  public:
@@ -42,14 +45,41 @@ class FakeSamlIdpMixin final : public InProcessBrowserTestMixin {
   void SetCookieValue(const std::string& cookie_value);
   void SetRequireHttpBasicAuth(bool require_http_basic_auth);
   void SetSamlResponseFile(const std::string& xml_file);
-  bool IsLastChallengeResponseExists() const;
+  bool DeviceTrustHeaderRecieved() const;
+  int GetChallengeResponseCount() const;
   void AssertChallengeResponseMatchesTpmResponse() const;
+
+  // Returns true if a successful challenge response was captured.
+  bool IsLastChallengeResponseExists() const;
+
+  // Returns true if a failed challenge response was captured.
+  bool IsLastChallengeResponseError() const;
 
   std::string GetIdpHost() const;
   std::string GetIdpDomain() const;
+  std::string GetIdpSsoProfile() const;
   GURL GetSamlPageUrl() const;
   GURL GetHttpSamlPageUrl() const;
   GURL GetSamlWithDeviceAttestationUrl() const;
+  GURL GetSamlWithDeviceTrustUrl() const;
+  GURL GetLinkedPageUrl() const;
+
+  // Returns a config to allow the SAML IdP EmbeddedTestServer to have a valid
+  // SSL certificate.
+  static net::EmbeddedTestServer::ServerCertificateConfig GetServerCertConfig();
+
+  // For callers who want to delay starting the SAML test servers (HTTPS and
+  // HTTP), customize their configuration, and explicitly start them.
+  bool is_auto_start_saml_servers() const { return auto_start_saml_servers_; }
+  void set_auto_start_saml_servers(bool should_start) {
+    auto_start_saml_servers_ = should_start;
+  }
+  // HTTPS test server.
+  net::EmbeddedTestServer* saml_server() { return &saml_server_; }
+  // HTTP test server.
+  net::EmbeddedTestServer* saml_http_server() { return &saml_http_server_; }
+  // Returns whether both test servers started successfully.
+  [[nodiscard]] bool StartSamlServersNow();
 
  private:
   GURL GetSamlAuthPageUrl() const;
@@ -64,7 +94,9 @@ class FakeSamlIdpMixin final : public InProcessBrowserTestMixin {
     kLogin,
     kLoginAuth,
     kLoginWithDeviceAttestation,
-    kLoginCheckDeviceAnswer
+    kLoginCheckDeviceAnswer,
+    kLoginWithDeviceTrust,
+    kLinkedPage
   };
 
   // Returns the RequestType that corresponds to `url`, or RequestType::Unknown
@@ -82,19 +114,29 @@ class FakeSamlIdpMixin final : public InProcessBrowserTestMixin {
       const net::test_server::HttpRequest& request,
       const GURL& request_url) const;
   std::unique_ptr<net::test_server::HttpResponse>
+  BuildResponseForLoginWithDeviceTrust(
+      const net::test_server::HttpRequest& request,
+      const GURL& request_url);
+  std::unique_ptr<net::test_server::HttpResponse>
   BuildResponseForCheckDeviceAnswer(
       const net::test_server::HttpRequest& request,
       const GURL& request_url);
+  std::unique_ptr<net::test_server::HttpResponse> BuildResponseForLinkedPage(
+      const net::test_server::HttpRequest& request,
+      const GURL& request_url) const;
 
   std::unique_ptr<net::test_server::HttpResponse> BuildHTMLResponse(
       const std::string& html_template,
       const std::string& relay_state,
       const std::string& next_path) const;
 
+  std::unique_ptr<net::test_server::HttpResponse> BuildHTMLResponse(
+      const std::string& response_html) const;
+
   void SaveChallengeResponse(const std::string& response);
   void ClearChallengeResponse();
 
-  FakeGaiaMixin* const gaia_mixin_;
+  const raw_ptr<FakeGaiaMixin> gaia_mixin_;
   net::EmbeddedTestServer saml_server_{net::EmbeddedTestServer::TYPE_HTTPS};
   net::EmbeddedTestServer saml_http_server_{net::EmbeddedTestServer::TYPE_HTTP};
 
@@ -107,10 +149,14 @@ class FakeSamlIdpMixin final : public InProcessBrowserTestMixin {
   std::string saml_response_{"fake_response"};
 
   bool require_http_basic_auth_ = false;
+  bool auto_start_saml_servers_ = true;
 
-  absl::optional<std::string> challenge_response_;
+  bool device_trust_header_recieved_ = false;
+  int challenge_response_count_ = 0;
+  std::optional<std::string> challenge_response_;
+  std::optional<std::string> error_challenge_response_;
 };
 
-}  // namespace chromeos
+}  // namespace ash
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_SAML_FAKE_SAML_IDP_MIXIN_H_

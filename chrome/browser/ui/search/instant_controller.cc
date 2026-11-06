@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,8 @@
 
 #include <stddef.h>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search/instant_service.h"
 #include "chrome/browser/search/instant_service_factory.h"
@@ -15,6 +15,7 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/navigation_details.h"
+#include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -25,6 +26,10 @@ class InstantController::TabObserver : public content::WebContentsObserver {
               base::RepeatingClosure callback)
       : content::WebContentsObserver(web_contents),
         callback_(std::move(callback)) {}
+
+  TabObserver(const TabObserver&) = delete;
+  TabObserver& operator=(const TabObserver&) = delete;
+
   ~TabObserver() override = default;
 
  private:
@@ -37,8 +42,6 @@ class InstantController::TabObserver : public content::WebContentsObserver {
   }
 
   base::RepeatingClosure callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(TabObserver);
 };
 
 InstantController::InstantController(Profile* profile,
@@ -53,14 +56,17 @@ void InstantController::OnTabStripModelChanged(
     TabStripModel* tab_strip_model,
     const TabStripModelChange& change,
     const TabStripSelectionChange& selection) {
-  if (tab_strip_model->empty() || !selection.active_tab_changed())
+  if (tab_strip_model->empty() || !selection.active_tab_changed()) {
     return;
+  }
 
-  if (selection.old_contents)
+  if (selection.old_contents) {
     StopWatchingTab(selection.old_contents);
+  }
 
-  if (selection.new_contents)
+  if (selection.new_contents) {
     StartWatchingTab(selection.new_contents);
+  }
 }
 
 void InstantController::StartWatchingTab(content::WebContents* web_contents) {

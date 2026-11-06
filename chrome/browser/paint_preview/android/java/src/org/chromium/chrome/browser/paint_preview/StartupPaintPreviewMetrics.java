@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,19 +11,30 @@ import androidx.annotation.IntDef;
 import org.chromium.base.ObserverList;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.metrics.RecordUserAction;
-import org.chromium.base.supplier.Supplier;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.components.paintpreview.player.CompositorStatus;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.function.Supplier;
 
 /** Helper class for recording metrics related to TabbedPaintPreview. */
+@NullMarked
 public class StartupPaintPreviewMetrics {
     /** Used for recording the cause for exiting the Paint Preview player. */
-    @IntDef({ExitCause.PULL_TO_REFRESH, ExitCause.SNACK_BAR_ACTION, ExitCause.COMPOSITOR_FAILURE,
-            ExitCause.TAB_FINISHED_LOADING, ExitCause.LINK_CLICKED, ExitCause.NAVIGATION_STARTED,
-            ExitCause.TAB_DESTROYED, ExitCause.TAB_HIDDEN, ExitCause.OFFLINE_AVAILABLE,
-            ExitCause.ACCESSIBILITY_NOT_SUPPORTED})
+    @IntDef({
+        ExitCause.PULL_TO_REFRESH,
+        ExitCause.SNACK_BAR_ACTION,
+        ExitCause.COMPOSITOR_FAILURE,
+        ExitCause.TAB_FINISHED_LOADING,
+        ExitCause.LINK_CLICKED,
+        ExitCause.NAVIGATION_STARTED,
+        ExitCause.TAB_DESTROYED,
+        ExitCause.TAB_HIDDEN,
+        ExitCause.OFFLINE_AVAILABLE,
+        ExitCause.ACCESSIBILITY_NOT_SUPPORTED
+    })
     @interface ExitCause {
         int PULL_TO_REFRESH = 0;
         int SNACK_BAR_ACTION = 1;
@@ -38,50 +49,66 @@ public class StartupPaintPreviewMetrics {
         int COUNT = 10;
     }
 
-    /**
-     * An interface to get notified of various paint preview metric events
-     */
+    /** An interface to get notified of various paint preview metric events */
     public interface PaintPreviewMetricsObserver {
         /**
          * Called on the first paint of a paint preview
          * @param durationMs duration from activity creation to first paint. Reported in millis.
          */
         void onFirstPaint(long durationMs);
+
+        /**
+         * Called on the first paint of a paint preview in the case where the first paint was not
+         * recorded. Added to aid in investigating crbug.com/40806757.
+         */
+        void onUnrecordedFirstPaint();
     }
 
     private static final Map<Integer, String> UPTIME_HISTOGRAM_MAP = new HashMap<>();
+
     static {
-        UPTIME_HISTOGRAM_MAP.put(ExitCause.PULL_TO_REFRESH,
+        UPTIME_HISTOGRAM_MAP.put(
+                ExitCause.PULL_TO_REFRESH,
                 "Browser.PaintPreview.TabbedPlayer.UpTime.RemovedByPullToRefresh");
-        UPTIME_HISTOGRAM_MAP.put(ExitCause.SNACK_BAR_ACTION,
+        UPTIME_HISTOGRAM_MAP.put(
+                ExitCause.SNACK_BAR_ACTION,
                 "Browser.PaintPreview.TabbedPlayer.UpTime.RemovedBySnackBar");
-        UPTIME_HISTOGRAM_MAP.put(ExitCause.COMPOSITOR_FAILURE,
+        UPTIME_HISTOGRAM_MAP.put(
+                ExitCause.COMPOSITOR_FAILURE,
                 "Browser.PaintPreview.TabbedPlayer.UpTime.RemovedByCompositorFailure");
-        UPTIME_HISTOGRAM_MAP.put(ExitCause.TAB_FINISHED_LOADING,
+        UPTIME_HISTOGRAM_MAP.put(
+                ExitCause.TAB_FINISHED_LOADING,
                 "Browser.PaintPreview.TabbedPlayer.UpTime.RemovedOnLoad");
-        UPTIME_HISTOGRAM_MAP.put(ExitCause.LINK_CLICKED,
+        UPTIME_HISTOGRAM_MAP.put(
+                ExitCause.LINK_CLICKED,
                 "Browser.PaintPreview.TabbedPlayer.UpTime.RemovedByLinkClick");
-        UPTIME_HISTOGRAM_MAP.put(ExitCause.NAVIGATION_STARTED,
+        UPTIME_HISTOGRAM_MAP.put(
+                ExitCause.NAVIGATION_STARTED,
                 "Browser.PaintPreview.TabbedPlayer.UpTime.RemovedByNavigation");
-        UPTIME_HISTOGRAM_MAP.put(ExitCause.TAB_DESTROYED,
+        UPTIME_HISTOGRAM_MAP.put(
+                ExitCause.TAB_DESTROYED,
                 "Browser.PaintPreview.TabbedPlayer.UpTime.RemovedOnTabDestroy");
-        UPTIME_HISTOGRAM_MAP.put(ExitCause.TAB_HIDDEN,
+        UPTIME_HISTOGRAM_MAP.put(
+                ExitCause.TAB_HIDDEN,
                 "Browser.PaintPreview.TabbedPlayer.UpTime.RemovedOnTabHidden");
-        UPTIME_HISTOGRAM_MAP.put(ExitCause.OFFLINE_AVAILABLE,
+        UPTIME_HISTOGRAM_MAP.put(
+                ExitCause.OFFLINE_AVAILABLE,
                 "Browser.PaintPreview.TabbedPlayer.UpTime.RemovedOnOfflineAvailable");
-        UPTIME_HISTOGRAM_MAP.put(ExitCause.ACCESSIBILITY_NOT_SUPPORTED,
+        UPTIME_HISTOGRAM_MAP.put(
+                ExitCause.ACCESSIBILITY_NOT_SUPPORTED,
                 "Browser.PaintPreview.TabbedPlayer.UpTime.RemovedOnAccessibilityNotSupported");
     }
 
+    private final ObserverList<PaintPreviewMetricsObserver> mObservers = new ObserverList<>();
     private long mShownTime;
     private boolean mFirstPaintHappened;
-    private final ObserverList<PaintPreviewMetricsObserver> mObservers = new ObserverList<>();
 
     void onShown() {
         mShownTime = System.currentTimeMillis();
     }
 
-    void onFirstPaint(long activityOnCreateTimestamp, Supplier<Boolean> shouldRecordFirstPaint) {
+    void onFirstPaint(
+            long activityOnCreateTimestamp, @Nullable Supplier<Boolean> shouldRecordFirstPaint) {
         mFirstPaintHappened = true;
         if (shouldRecordFirstPaint != null && shouldRecordFirstPaint.get()) {
             long durationMs = SystemClock.elapsedRealtime() - activityOnCreateTimestamp;
@@ -89,6 +116,10 @@ public class StartupPaintPreviewMetrics {
                     "Browser.PaintPreview.TabbedPlayer.TimeToFirstBitmap", durationMs);
             for (PaintPreviewMetricsObserver observer : mObservers) {
                 observer.onFirstPaint(durationMs);
+            }
+        } else if (shouldRecordFirstPaint != null) {
+            for (PaintPreviewMetricsObserver observer : mObservers) {
+                observer.onUnrecordedFirstPaint();
             }
         }
     }
@@ -100,7 +131,8 @@ public class StartupPaintPreviewMetrics {
 
     void onCompositorFailure(@CompositorStatus int status) {
         RecordHistogram.recordEnumeratedHistogram(
-                "Browser.PaintPreview.TabbedPlayer.CompositorFailureReason", status,
+                "Browser.PaintPreview.TabbedPlayer.CompositorFailureReason",
+                status,
                 CompositorStatus.COUNT);
     }
 
@@ -115,7 +147,7 @@ public class StartupPaintPreviewMetrics {
         }
 
         RecordUserAction.record("PaintPreview.TabbedPlayer.Removed");
-        RecordHistogram.recordCountHistogram(
+        RecordHistogram.recordCount1MHistogram(
                 "Browser.PaintPreview.TabbedPlayer.SnackbarCount", snackbarShownCount);
         RecordHistogram.recordEnumeratedHistogram(
                 "Browser.PaintPreview.TabbedPlayer.ExitCause", exitCause, ExitCause.COUNT);

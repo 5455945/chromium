@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,23 +6,20 @@
 #define COMPONENTS_CAPTIVE_PORTAL_CORE_CAPTIVE_PORTAL_DETECTOR_H_
 
 #include <memory>
+#include <optional>
+#include <string>
 
-#include "base/callback.h"
 #include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
-#include "build/chromeos_buildflags.h"
 #include "components/captive_portal/core/captive_portal_export.h"
 #include "components/captive_portal/core/captive_portal_types.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "base/memory/weak_ptr.h"
-#endif
+#include "url/gurl.h"
 
 class GURL;
 
@@ -30,12 +27,17 @@ namespace captive_portal {
 
 class CAPTIVE_PORTAL_EXPORT CaptivePortalDetector {
  public:
+  enum class State { kUnknown, kInit, kProbe, kCompleted, kCancelled };
+
   struct Results {
     captive_portal::CaptivePortalResult result =
         captive_portal::RESULT_NO_RESPONSE;
     int response_code = 0;
     base::TimeDelta retry_after_delta;
     GURL landing_url;
+    // The content_length is the size of the response body. If there is no
+    // response body, this will be std::nullopt.
+    std::optional<size_t> content_length;
   };
 
   typedef base::OnceCallback<void(const Results& results)> DetectionCallback;
@@ -45,14 +47,21 @@ class CAPTIVE_PORTAL_EXPORT CaptivePortalDetector {
   // requests for this URL should get an HTTP redirect or a login
   // page.  When neither is true, no server should respond to requests
   // for this URL.
-  static const char kDefaultURL[];
+  static const std::string_view GetDefaultUrl();
 
   explicit CaptivePortalDetector(
       network::mojom::URLLoaderFactory* loader_factory);
+
+  CaptivePortalDetector(const CaptivePortalDetector&) = delete;
+  CaptivePortalDetector& operator=(const CaptivePortalDetector&) = delete;
+
   ~CaptivePortalDetector();
 
   // Triggers a check for a captive portal. After completion, runs the
-  // |callback|.
+  // |callback|. Only one detection attempt is expected to be in progress.
+  // If called again before |callback| is invoked, Cancel() should be called
+  // first, otherwise the first request and callback will be implicitly
+  // cancelled and an ERROR will be logged.
   void DetectCaptivePortal(
       const GURL& url,
       DetectionCallback callback,
@@ -64,10 +73,11 @@ class CAPTIVE_PORTAL_EXPORT CaptivePortalDetector {
  private:
   friend class CaptivePortalDetectorTestBase;
 
-  void OnSimpleLoaderComplete(std::unique_ptr<std::string> response_body);
+  void OnSimpleLoaderComplete(std::optional<std::string> response_body);
 
   void OnSimpleLoaderCompleteInternal(int net_error,
                                       int response_code,
+                                      std::optional<size_t> content_length,
                                       const GURL& url,
                                       net::HttpResponseHeaders* headers);
 
@@ -77,6 +87,7 @@ class CAPTIVE_PORTAL_EXPORT CaptivePortalDetector {
   // base::TimeDelta().
   void GetCaptivePortalResultFromResponse(int net_error,
                                           int response_code,
+                                          std::optional<size_t> content_length,
                                           const GURL& url,
                                           net::HttpResponseHeaders* headers,
                                           Results* results) const;
@@ -104,7 +115,7 @@ class CAPTIVE_PORTAL_EXPORT CaptivePortalDetector {
 
   DetectionCallback detection_callback_;
 
-  network::mojom::URLLoaderFactory* loader_factory_ = nullptr;
+  raw_ptr<network::mojom::URLLoaderFactory> loader_factory_ = nullptr;
   std::unique_ptr<network::SimpleURLLoader> simple_loader_;
 
   // Test time used by unit tests.
@@ -113,13 +124,9 @@ class CAPTIVE_PORTAL_EXPORT CaptivePortalDetector {
   // Probe URL accessed by tests.
   GURL probe_url_;
 
+  State state_ = State::kInit;
+
   SEQUENCE_CHECKER(sequence_checker_);
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  base::WeakPtrFactory<CaptivePortalDetector> weak_factory_;
-#endif
-
-  DISALLOW_COPY_AND_ASSIGN(CaptivePortalDetector);
 };
 
 }  // namespace captive_portal

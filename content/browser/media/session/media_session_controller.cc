@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,7 +24,7 @@ MediaSessionController::MediaSessionController(const MediaPlayerId& id,
     : id_(id),
       web_contents_(web_contents),
       media_session_(MediaSessionImpl::Get(web_contents)) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 }
 
 MediaSessionController::~MediaSessionController() {
@@ -38,6 +38,7 @@ void MediaSessionController::SetMetadata(
   has_audio_ = has_audio;
   has_video_ = has_video;
   media_content_type_ = media_content_type;
+
   AddOrRemovePlayer();
 }
 
@@ -47,25 +48,23 @@ bool MediaSessionController::OnPlaybackStarted() {
   return AddOrRemovePlayer();
 }
 
-void MediaSessionController::OnSuspend(int player_id) {
-  DCHECK_EQ(player_id_, player_id);
-  // TODO(crbug.com/953645): Set triggered_by_user to true ONLY if that action
-  // was actually triggered by user as this will activate the frame.
+void MediaSessionController::OnSuspend(int player_id, bool triggered_by_user) {
+  CHECK_EQ(player_id_, player_id, base::NotFatalUntil::M160);
   web_contents_->media_web_contents_observer()
       ->GetMediaPlayerRemote(id_)
-      ->RequestPause(/*triggered_by_user=*/true);
+      ->RequestPause(triggered_by_user);
 }
 
-void MediaSessionController::OnResume(int player_id) {
-  DCHECK_EQ(player_id_, player_id);
+void MediaSessionController::OnResume(int player_id, bool triggered_by_user) {
+  CHECK_EQ(player_id_, player_id, base::NotFatalUntil::M160);
   web_contents_->media_web_contents_observer()
       ->GetMediaPlayerRemote(id_)
-      ->RequestPlay();
+      ->RequestPlay(triggered_by_user);
 }
 
 void MediaSessionController::OnSeekForward(int player_id,
                                            base::TimeDelta seek_time) {
-  DCHECK_EQ(player_id_, player_id);
+  CHECK_EQ(player_id_, player_id, base::NotFatalUntil::M160);
   web_contents_->media_web_contents_observer()
       ->GetMediaPlayerRemote(id_)
       ->RequestSeekForward(seek_time);
@@ -73,7 +72,7 @@ void MediaSessionController::OnSeekForward(int player_id,
 
 void MediaSessionController::OnSeekBackward(int player_id,
                                             base::TimeDelta seek_time) {
-  DCHECK_EQ(player_id_, player_id);
+  CHECK_EQ(player_id_, player_id, base::NotFatalUntil::M160);
   web_contents_->media_web_contents_observer()
       ->GetMediaPlayerRemote(id_)
       ->RequestSeekBackward(seek_time);
@@ -81,7 +80,7 @@ void MediaSessionController::OnSeekBackward(int player_id,
 
 void MediaSessionController::OnSeekTo(int player_id,
                                       base::TimeDelta seek_time) {
-  DCHECK_EQ(player_id_, player_id);
+  CHECK_EQ(player_id_, player_id, base::NotFatalUntil::M160);
   web_contents_->media_web_contents_observer()
       ->GetMediaPlayerRemote(id_)
       ->RequestSeekTo(seek_time);
@@ -89,7 +88,7 @@ void MediaSessionController::OnSeekTo(int player_id,
 
 void MediaSessionController::OnSetVolumeMultiplier(int player_id,
                                                    double volume_multiplier) {
-  DCHECK_EQ(player_id_, player_id);
+  CHECK_EQ(player_id_, player_id, base::NotFatalUntil::M160);
 
   auto* observer = web_contents_->media_web_contents_observer();
   // The MediaPlayer mojo interface may not be available in tests.
@@ -98,62 +97,110 @@ void MediaSessionController::OnSetVolumeMultiplier(int player_id,
   observer->GetMediaPlayerRemote(id_)->SetVolumeMultiplier(volume_multiplier);
 }
 
-void MediaSessionController::OnEnterPictureInPicture(int player_id) {
-  DCHECK_EQ(player_id_, player_id);
+void MediaSessionController::OnEnterPictureInPicture(
+    int player_id,
+    const std::optional<gfx::Size>& min_size) {
+  CHECK_EQ(player_id_, player_id, base::NotFatalUntil::M160);
 
   web_contents_->media_web_contents_observer()
       ->GetMediaPlayerRemote(id_)
-      ->RequestEnterPictureInPicture();
+      ->RequestEnterPictureInPicture(min_size);
 }
 
-void MediaSessionController::OnExitPictureInPicture(int player_id) {
-  DCHECK_EQ(player_id_, player_id);
+void MediaSessionController::OnSaveVideoFrame(int player_id) {
+  CHECK_EQ(player_id_, player_id, base::NotFatalUntil::M160);
 
   web_contents_->media_web_contents_observer()
       ->GetMediaPlayerRemote(id_)
-      ->RequestExitPictureInPicture();
+      ->RequestSaveVideoFrame();
 }
 
 void MediaSessionController::OnSetAudioSinkId(
     int player_id,
     const std::string& raw_device_id) {
-  DCHECK_EQ(player_id_, player_id);
+  CHECK_EQ(player_id_, player_id, base::NotFatalUntil::M160);
 
   auto* render_frame_host = RenderFrameHost::FromID(id_.frame_routing_id);
   if (!render_frame_host)
     return;
 
-  // The sink id needs to be hashed before it is suitable for use in the
-  // renderer process.
-  auto salt_and_origin = content::GetMediaDeviceSaltAndOrigin(
-      render_frame_host->GetProcess()->GetID(),
-      render_frame_host->GetRoutingID());
+  GetHMACFromRawDeviceId(
+      render_frame_host->GetGlobalId(), raw_device_id,
+      base::BindOnce(&MediaSessionController::OnHashedSinkIdReceived,
+                     weak_factory_.GetWeakPtr()));
+}
 
-  std::string hashed_sink_id = GetHMACForMediaDeviceID(
-      salt_and_origin.device_id_salt, salt_and_origin.origin, raw_device_id);
-
+void MediaSessionController::OnHashedSinkIdReceived(
+    const std::string& hashed_sink_id) {
   // Grant the renderer the permission to use this audio output device.
-  static_cast<RenderFrameHostImpl*>(render_frame_host)
-      ->SetAudioOutputDeviceIdForGlobalMediaControls(hashed_sink_id);
+  auto* render_frame_host_impl =
+      RenderFrameHostImpl::FromID(id_.frame_routing_id);
+  if (!render_frame_host_impl) {
+    return;
+  }
+  render_frame_host_impl->SetAudioOutputDeviceIdForGlobalMediaControls(
+      hashed_sink_id);
 
   web_contents_->media_web_contents_observer()
       ->GetMediaPlayerRemote(id_)
       ->SetAudioSinkId(hashed_sink_id);
 }
 
+void MediaSessionController::OnSetMute(int player_id, bool mute) {
+  CHECK_EQ(player_id_, player_id, base::NotFatalUntil::M160);
+
+  web_contents_->media_web_contents_observer()
+      ->GetMediaPlayerRemote(id_)
+      ->RequestMute(mute);
+}
+
+void MediaSessionController::OnRequestMediaRemoting(int player_id) {
+  CHECK_EQ(player_id_, player_id, base::NotFatalUntil::M160);
+
+  // Media Remoting can't start if the media is paused. So we should start
+  // playing before requesting Media Remoting.
+  if (is_paused_) {
+    web_contents_->media_web_contents_observer()
+        ->GetMediaPlayerRemote(id_)
+        ->RequestPlay(/*triggered_by_user=*/true);
+  }
+  web_contents_->media_web_contents_observer()
+      ->GetMediaPlayerRemote(id_)
+      ->RequestMediaRemoting();
+}
+
+void MediaSessionController::OnRequestVisibility(
+    int player_id,
+    RequestVisibilityCallback request_visibility_callback) {
+  CHECK_EQ(player_id_, player_id, base::NotFatalUntil::M160);
+  web_contents_->media_web_contents_observer()
+      ->GetMediaPlayerRemote(id_)
+      ->RequestVisibility(std::move(request_visibility_callback));
+}
+
 RenderFrameHost* MediaSessionController::render_frame_host() const {
   return RenderFrameHost::FromID(id_.frame_routing_id);
 }
 
-absl::optional<media_session::MediaPosition>
-MediaSessionController::GetPosition(int player_id) const {
-  DCHECK_EQ(player_id_, player_id);
+std::optional<media_session::MediaPosition> MediaSessionController::GetPosition(
+    int player_id) const {
+  CHECK_EQ(player_id_, player_id, base::NotFatalUntil::M160);
   return position_;
 }
 
 bool MediaSessionController::IsPictureInPictureAvailable(int player_id) const {
-  DCHECK_EQ(player_id_, player_id);
+  CHECK_EQ(player_id_, player_id, base::NotFatalUntil::M160);
   return is_picture_in_picture_available_;
+}
+
+bool MediaSessionController::IsVideoFrameAvailable(int player_id) const {
+  CHECK_EQ(player_id_, player_id, base::NotFatalUntil::M160);
+  return is_video_frame_available_;
+}
+
+bool MediaSessionController::HasSufficientlyVisibleVideo(int player_id) const {
+  CHECK_EQ(player_id_, player_id, base::NotFatalUntil::M160);
+  return has_sufficiently_visible_video_;
 }
 
 void MediaSessionController::OnPlaybackPaused(bool reached_end_of_stream) {
@@ -172,6 +219,7 @@ void MediaSessionController::OnPlaybackPaused(bool reached_end_of_stream) {
 
 void MediaSessionController::PictureInPictureStateChanged(
     bool is_picture_in_picture) {
+  is_in_picture_in_picture_ = is_picture_in_picture;
   AddOrRemovePlayer();
 }
 
@@ -183,6 +231,10 @@ void MediaSessionController::OnMediaPositionStateChanged(
     const media_session::MediaPosition& position) {
   position_ = position;
   media_session_->RebuildAndNotifyMediaPositionChanged();
+}
+
+void MediaSessionController::OnMediaMutedStatusChanged(bool mute) {
+  media_session_->OnMediaMutedStatusChanged(mute);
 }
 
 void MediaSessionController::OnPictureInPictureAvailabilityChanged(
@@ -202,12 +254,39 @@ void MediaSessionController::OnAudioOutputSinkChangingDisabled() {
   media_session_->OnAudioOutputSinkChangingDisabled();
 }
 
+void MediaSessionController::OnRemotePlaybackMetadataChanged(
+    media_session::mojom::RemotePlaybackMetadataPtr metadata) {
+  media_session_->SetRemotePlaybackMetadata(std::move(metadata));
+  AddOrRemovePlayer();
+}
+
+void MediaSessionController::OnVideoVisibilityChanged(
+    bool meets_visibility_threshold) {
+  has_sufficiently_visible_video_ = meets_visibility_threshold;
+  media_session_->OnVideoVisibilityChanged();
+}
+
+void MediaSessionController::OnVideoFrameAvailabilityChanged(bool available) {
+  is_video_frame_available_ = available;
+  media_session_->OnVideoFrameAvailabilityChanged();
+}
+
 bool MediaSessionController::IsMediaSessionNeeded() const {
-  if (web_contents_->HasPictureInPictureVideo())
+  if (is_in_picture_in_picture_) {
     return true;
+  }
 
   if (!is_playback_in_progress_)
     return false;
+
+  // If the media content has an associated Remote Playback session started, we
+  // should request audio focus regardless of whether the tab is muted.
+  media_session::mojom::MediaSessionInfoPtr session_info =
+      media_session_->GetMediaSessionInfoSync();
+  if (session_info && session_info->remote_playback_metadata &&
+      session_info->remote_playback_metadata->remote_playback_started) {
+    return true;
+  }
 
   // We want to make sure we do not request audio focus on a muted tab as it
   // would break user expectations by pausing/ducking other playbacks.
@@ -221,9 +300,9 @@ bool MediaSessionController::AddOrRemovePlayer() {
     // Attempt to add a session even if we already have one.  MediaSession
     // expects AddPlayer() to be called after OnPlaybackPaused() to reactivate
     // the session.
-    if (!media_session_->AddPlayer(this, player_id_, media_content_type_)) {
+    if (!media_session_->AddPlayer(this, player_id_)) {
       // If a session can't be created, force a pause immediately.
-      OnSuspend(player_id_);
+      OnSuspend(player_id_, /*triggered_by_user=*/false);
       return false;
     }
 
@@ -240,24 +319,48 @@ bool MediaSessionController::AddOrRemovePlayer() {
 }
 
 bool MediaSessionController::HasAudio(int player_id) const {
-  DCHECK_EQ(player_id_, player_id);
+  CHECK_EQ(player_id_, player_id, base::NotFatalUntil::M160);
   return has_audio_;
 }
 
 bool MediaSessionController::HasVideo(int player_id) const {
-  DCHECK_EQ(player_id_, player_id);
+  CHECK_EQ(player_id_, player_id, base::NotFatalUntil::M160);
   return has_video_;
 }
 
+bool MediaSessionController::IsPaused(int player_id) const {
+  CHECK_EQ(player_id_, player_id, base::NotFatalUntil::M160);
+  return is_paused_;
+}
+
 std::string MediaSessionController::GetAudioOutputSinkId(int player_id) const {
-  DCHECK_EQ(player_id_, player_id);
+  CHECK_EQ(player_id_, player_id, base::NotFatalUntil::M160);
   return audio_output_sink_id_;
 }
 
 bool MediaSessionController::SupportsAudioOutputDeviceSwitching(
     int player_id) const {
-  DCHECK_EQ(player_id_, player_id);
+  CHECK_EQ(player_id_, player_id, base::NotFatalUntil::M160);
   return supports_audio_output_device_switching_;
+}
+
+media::MediaContentType MediaSessionController::GetMediaContentType() const {
+  return media_content_type_;
+}
+
+void MediaSessionController::OnAutoPictureInPictureInfoChanged(
+    int player_id,
+    const media::PictureInPictureEventsInfo::AutoPipInfo&
+        auto_picture_in_picture_info) {
+  CHECK_EQ(player_id_, player_id, base::NotFatalUntil::M160);
+
+  auto* observer = web_contents_->media_web_contents_observer();
+  if (!observer->IsMediaPlayerRemoteAvailable(id_)) {
+    return;
+  }
+
+  observer->GetMediaPlayerRemote(id_)->RecordAutoPictureInPictureInfo(
+      auto_picture_in_picture_info);
 }
 
 }  // namespace content

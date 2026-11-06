@@ -25,12 +25,12 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_OPENTYPE_OPEN_TYPE_VERTICAL_DATA_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_OPENTYPE_OPEN_TYPE_VERTICAL_DATA_H_
 
-#include "base/memory/scoped_refptr.h"
+#include "base/containers/span.h"
 #include "third_party/blink/renderer/platform/fonts/glyph.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
-#include "third_party/blink/renderer/platform/wtf/ref_counted.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
 #include "third_party/skia/include/core/SkTypeface.h"
@@ -40,44 +40,36 @@ class SkFont;
 namespace blink {
 
 class PLATFORM_EXPORT OpenTypeVerticalData
-    : public RefCounted<OpenTypeVerticalData> {
-  USING_FAST_MALLOC(OpenTypeVerticalData);
-
+    : public GarbageCollected<OpenTypeVerticalData> {
  public:
-  static scoped_refptr<OpenTypeVerticalData> CreateUnscaled(
-      sk_sp<SkTypeface> typeface) {
-    return base::AdoptRef(new OpenTypeVerticalData(typeface));
-  }
+  explicit OpenTypeVerticalData(sk_sp<SkTypeface>);
+
+  void Trace(Visitor*) const {}
 
   void SetScaleAndFallbackMetrics(float size_per_unit,
                                   float ascent,
                                   int height);
 
-  bool IsOpenType() const { return !advance_widths_.IsEmpty(); }
-  bool HasVerticalMetrics() const { return !advance_heights_.IsEmpty(); }
   float AdvanceHeight(Glyph) const;
 
   void GetVerticalTranslationsForGlyphs(const SkFont&,
-                                        const Glyph*,
-                                        size_t,
-                                        float* out_xy_array) const;
+                                        base::span<const Glyph> glyphs,
+                                        base::span<float> out_xy_array) const;
 
  private:
-  explicit OpenTypeVerticalData(sk_sp<SkTypeface>);
-
   void LoadMetrics(sk_sp<SkTypeface>);
-  bool HasVORG() const { return !vert_origin_y_.IsEmpty(); }
+  bool HasVorg() const { return !vert_origin_y_.empty(); }
 
   HashMap<Glyph, Glyph> vertical_glyph_map_;
   Vector<uint16_t> advance_widths_;
   Vector<uint16_t> advance_heights_;
   Vector<int16_t> top_side_bearings_;
-  int16_t default_vert_origin_y_;
+  int16_t default_vert_origin_y_ = 0;
   HashMap<Glyph, int16_t> vert_origin_y_;
 
-  float size_per_unit_;
-  float ascent_fallback_;
-  int height_fallback_;
+  float size_per_unit_ = 0;
+  float ascent_fallback_ = 0;
+  int height_fallback_ = 0;
 };
 
 }  // namespace blink

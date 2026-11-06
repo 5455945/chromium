@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,25 +7,27 @@
 
 #include <string>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "chromeos/dbus/services/cros_dbus_service.h"
+#include "chromeos/ash/components/dbus/services/cros_dbus_service.h"
 #include "dbus/exported_object.h"
-#include "mojo/public/cpp/system/core.h"
+#include "mojo/public/cpp/platform/platform_handle.h"
 
 namespace dbus {
 class MethodCall;
-}
+}  // namespace dbus
 
-namespace chromeos {
+namespace ash {
 
 // This class exports a D-Bus method that libvda will call to establish a
 // mojo pipe to the VideoAcceleratorFactory interface.
 class LibvdaServiceProvider : public CrosDBusService::ServiceProviderInterface {
  public:
   LibvdaServiceProvider();
+
+  LibvdaServiceProvider(const LibvdaServiceProvider&) = delete;
+  LibvdaServiceProvider& operator=(const LibvdaServiceProvider&) = delete;
+
   ~LibvdaServiceProvider() override;
 
   // CrosDBusService::ServiceProviderInterface overrides:
@@ -46,16 +48,14 @@ class LibvdaServiceProvider : public CrosDBusService::ServiceProviderInterface {
   void OnBootstrapVideoAcceleratorFactoryCallback(
       dbus::MethodCall* method_call,
       dbus::ExportedObject::ResponseSender response_sender,
-      mojo::ScopedHandle handle,
+      mojo::PlatformHandle handle,
       const std::string& s);
 
   // Keep this last so that all weak pointers will be invalidated at the
   // beginning of destruction.
   base::WeakPtrFactory<LibvdaServiceProvider> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(LibvdaServiceProvider);
 };
 
-}  // namespace chromeos
+}  // namespace ash
 
 #endif  // CHROME_BROWSER_ASH_DBUS_LIBVDA_SERVICE_PROVIDER_H_

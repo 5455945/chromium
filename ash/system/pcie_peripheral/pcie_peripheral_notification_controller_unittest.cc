@@ -1,13 +1,14 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/system/pcie_peripheral/pcie_peripheral_notification_controller.h"
 
 #include <memory>
+#include <optional>
 #include <vector>
 
-#include "ash/public/cpp/ash_pref_names.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/public/cpp/test/test_new_window_delegate.h"
 #include "ash/public/cpp/test/test_system_tray_client.h"
 #include "ash/session/session_controller_impl.h"
@@ -15,7 +16,6 @@
 #include "ash/test/ash_test_base.h"
 #include "components/prefs/pref_service.h"
 #include "testing/gmock/include/gmock/gmock.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/message_center/fake_message_center.h"
 #include "ui/message_center/message_center.h"
 #include "ui/message_center/public/cpp/notification.h"
@@ -42,8 +42,8 @@ class MockNewWindowDelegate : public testing::NiceMock<TestNewWindowDelegate> {
  public:
   // TestNewWindowDelegate:
   MOCK_METHOD(void,
-              NewTabWithUrl,
-              (const GURL& url, bool from_user_interaction),
+              OpenUrl,
+              (const GURL& url, OpenUrlFrom from, Disposition disposition),
               (override));
 };
 
@@ -51,12 +51,7 @@ class MockNewWindowDelegate : public testing::NiceMock<TestNewWindowDelegate> {
 
 class PciePeripheralNotificationControllerTest : public AshTestBase {
  public:
-  PciePeripheralNotificationControllerTest() {
-    auto delegate = std::make_unique<MockNewWindowDelegate>();
-    new_window_delegate_ = delegate.get();
-    delegate_provider_ =
-        std::make_unique<TestNewWindowDelegateProvider>(std::move(delegate));
-  }
+  PciePeripheralNotificationControllerTest() = default;
   PciePeripheralNotificationControllerTest(
       const PciePeripheralNotificationControllerTest&) = delete;
   PciePeripheralNotificationControllerTest& operator=(
@@ -67,7 +62,7 @@ class PciePeripheralNotificationControllerTest : public AshTestBase {
     return Shell::Get()->pcie_peripheral_notification_controller();
   }
 
-  MockNewWindowDelegate& new_window_delegate() { return *new_window_delegate_; }
+  MockNewWindowDelegate& new_window_delegate() { return new_window_delegate_; }
 
   message_center::Notification* GetLimitedPerformanceNotification() {
     return MessageCenter::Get()->FindVisibleNotificationById(
@@ -100,20 +95,20 @@ class PciePeripheralNotificationControllerTest : public AshTestBase {
         prefs::kPciePeripheralDisplayNotificationRemaining);
   }
 
-  void ClickLimitedNotificationButton(absl::optional<int> button_index) {
+  void ClickLimitedNotificationButton(std::optional<int> button_index) {
     // No button index means the notification body was clicked.
     if (!button_index.has_value()) {
       message_center::Notification* notification =
           MessageCenter::Get()->FindVisibleNotificationById(
               kPciePeripheralLimitedPerformanceNotificationId);
-      notification->delegate()->Click(absl::nullopt, absl::nullopt);
+      notification->delegate()->Click(std::nullopt, std::nullopt);
       return;
     }
 
     message_center::Notification* notification =
         MessageCenter::Get()->FindVisibleNotificationById(
             kPciePeripheralLimitedPerformanceNotificationId);
-    notification->delegate()->Click(button_index, absl::nullopt);
+    notification->delegate()->Click(button_index, std::nullopt);
   }
 
   void ClickGuestNotification(bool is_thunderbolt_only) {
@@ -133,8 +128,7 @@ class PciePeripheralNotificationControllerTest : public AshTestBase {
   }
 
  private:
-  MockNewWindowDelegate* new_window_delegate_;
-  std::unique_ptr<TestNewWindowDelegateProvider> delegate_provider_;
+  MockNewWindowDelegate new_window_delegate_;
 };
 
 TEST_F(PciePeripheralNotificationControllerTest, GuestNotificationTbtOnly) {
@@ -153,12 +147,11 @@ TEST_F(PciePeripheralNotificationControllerTest, GuestNotificationTbtOnly) {
   controller()->NotifyGuestModeNotification(/*is_thunderbolt_only=*/true);
   EXPECT_EQ(1u, MessageCenter::Get()->NotificationCount());
 
-  // Click on the notification and expect the Learn More page to page to appear.
-  EXPECT_CALL(new_window_delegate(), NewTabWithUrl)
-      .WillOnce([](const GURL& url, bool from_user_interaction) {
-        EXPECT_EQ(GURL(kLearnMoreHelpUrl), url);
-        EXPECT_TRUE(from_user_interaction);
-      });
+  // Click on the notification and expect the Learn More page to appear.
+  EXPECT_CALL(new_window_delegate(),
+              OpenUrl(GURL(kLearnMoreHelpUrl),
+                      NewWindowDelegate::OpenUrlFrom::kUserInteraction,
+                      NewWindowDelegate::Disposition::kNewForegroundTab));
   ClickGuestNotification(/*is_thunderbolt_only=*/true);
   EXPECT_EQ(0u, MessageCenter::Get()->NotificationCount());
 }
@@ -179,12 +172,11 @@ TEST_F(PciePeripheralNotificationControllerTest, GuestNotificationTbtAltMode) {
   controller()->NotifyGuestModeNotification(/*is_thunderbolt_only=*/false);
   EXPECT_EQ(1u, MessageCenter::Get()->NotificationCount());
 
-  // Click on the notification and expect the Learn More page to page to appear.
-  EXPECT_CALL(new_window_delegate(), NewTabWithUrl)
-      .WillOnce([](const GURL& url, bool from_user_interaction) {
-        EXPECT_EQ(GURL(kLearnMoreHelpUrl), url);
-        EXPECT_TRUE(from_user_interaction);
-      });
+  // Click on the notification and expect the Learn More page to appear.
+  EXPECT_CALL(new_window_delegate(),
+              OpenUrl(GURL(kLearnMoreHelpUrl),
+                      NewWindowDelegate::OpenUrlFrom::kUserInteraction,
+                      NewWindowDelegate::Disposition::kNewForegroundTab));
   ClickGuestNotification(/*is_thunderbolt_only=*/false);
   EXPECT_EQ(0u, MessageCenter::Get()->NotificationCount());
 }
@@ -203,16 +195,17 @@ TEST_F(PciePeripheralNotificationControllerTest,
   // This notification has no buttons.
   EXPECT_EQ(0u, notification->buttons().size());
 
-  // Click on the notification and expect the Learn More page to page to appear.
-  EXPECT_CALL(new_window_delegate(), NewTabWithUrl)
-      .WillOnce([](const GURL& url, bool from_user_interaction) {
-        EXPECT_EQ(GURL(kLearnMoreHelpUrl), url);
-        EXPECT_TRUE(from_user_interaction);
-      });
+  // Click on the notification and expect the Learn More page to appear.
+  EXPECT_CALL(new_window_delegate(),
+              OpenUrl(GURL(kLearnMoreHelpUrl),
+                      NewWindowDelegate::OpenUrlFrom::kUserInteraction,
+                      NewWindowDelegate::Disposition::kNewForegroundTab));
   MessageCenter::Get()->ClickOnNotification(
       kPciePeripheralDeviceBlockedNotificationId);
   EXPECT_EQ(0u, MessageCenter::Get()->NotificationCount());
 }
+
+
 
 TEST_F(PciePeripheralNotificationControllerTest,
        LimitedPerformanceNotificationLearnMoreClick) {
@@ -229,31 +222,28 @@ TEST_F(PciePeripheralNotificationControllerTest,
   // Ensure this notification has the two correct buttons.
   EXPECT_EQ(2u, notification->buttons().size());
 
-  EXPECT_CALL(new_window_delegate(), NewTabWithUrl)
-      .WillOnce([](const GURL& url, bool from_user_interaction) {
-        EXPECT_EQ(GURL(kLearnMoreHelpUrl), url);
-        EXPECT_TRUE(from_user_interaction);
-      });
+  EXPECT_CALL(new_window_delegate(),
+              OpenUrl(GURL(kLearnMoreHelpUrl),
+                      NewWindowDelegate::OpenUrlFrom::kUserInteraction,
+                      NewWindowDelegate::Disposition::kNewForegroundTab));
   // Click the learn more link.
   ClickLimitedNotificationButton(/*button_index=*/1);
   EXPECT_EQ(2, GetPrefNotificationCount());
   EXPECT_EQ(0u, MessageCenter::Get()->NotificationCount());
 
-  EXPECT_CALL(new_window_delegate(), NewTabWithUrl)
-      .WillOnce([](const GURL& url, bool from_user_interaction) {
-        EXPECT_EQ(GURL(kLearnMoreHelpUrl), url);
-        EXPECT_TRUE(from_user_interaction);
-      });
+  EXPECT_CALL(new_window_delegate(),
+              OpenUrl(GURL(kLearnMoreHelpUrl),
+                      NewWindowDelegate::OpenUrlFrom::kUserInteraction,
+                      NewWindowDelegate::Disposition::kNewForegroundTab));
   controller()->NotifyLimitedPerformance();
   ClickLimitedNotificationButton(/*button_index=*/1);
   EXPECT_EQ(1, GetPrefNotificationCount());
   EXPECT_EQ(0u, MessageCenter::Get()->NotificationCount());
 
-  EXPECT_CALL(new_window_delegate(), NewTabWithUrl)
-      .WillOnce([](const GURL& url, bool from_user_interaction) {
-        EXPECT_EQ(GURL(kLearnMoreHelpUrl), url);
-        EXPECT_TRUE(from_user_interaction);
-      });
+  EXPECT_CALL(new_window_delegate(),
+              OpenUrl(GURL(kLearnMoreHelpUrl),
+                      NewWindowDelegate::OpenUrlFrom::kUserInteraction,
+                      NewWindowDelegate::Disposition::kNewForegroundTab));
   controller()->NotifyLimitedPerformance();
   ClickLimitedNotificationButton(/*button_index=*/1);
   EXPECT_EQ(0, GetPrefNotificationCount());
@@ -282,7 +272,7 @@ TEST_F(PciePeripheralNotificationControllerTest,
   EXPECT_EQ(2u, notification->buttons().size());
 
   // Click the notification body.
-  ClickLimitedNotificationButton(absl::nullopt);
+  ClickLimitedNotificationButton(std::nullopt);
   EXPECT_EQ(0, GetPrefNotificationCount());
   EXPECT_EQ(0u, MessageCenter::Get()->NotificationCount());
   EXPECT_EQ(1, GetNumOsPrivacySettingsOpened());
@@ -337,11 +327,10 @@ TEST_F(PciePeripheralNotificationControllerTest,
 
   // We will always show guest notifications, expect that the pref did not
   // decrement.
-  EXPECT_CALL(new_window_delegate(), NewTabWithUrl)
-      .WillOnce([](const GURL& url, bool from_user_interaction) {
-        EXPECT_EQ(GURL(kLearnMoreHelpUrl), url);
-        EXPECT_TRUE(from_user_interaction);
-      });
+  EXPECT_CALL(new_window_delegate(),
+              OpenUrl(GURL(kLearnMoreHelpUrl),
+                      NewWindowDelegate::OpenUrlFrom::kUserInteraction,
+                      NewWindowDelegate::Disposition::kNewForegroundTab));
   ClickGuestNotification(/*is_thunderbolt_only=*/true);
   EXPECT_EQ(3, GetPrefNotificationCount());
   EXPECT_EQ(0u, MessageCenter::Get()->NotificationCount());
@@ -367,11 +356,10 @@ TEST_F(PciePeripheralNotificationControllerTest,
 
   // We will always show guest notifications, expect that the pref did not
   // decrement.
-  EXPECT_CALL(new_window_delegate(), NewTabWithUrl)
-      .WillOnce([](const GURL& url, bool from_user_interaction) {
-        EXPECT_EQ(GURL(kLearnMoreHelpUrl), url);
-        EXPECT_TRUE(from_user_interaction);
-      });
+  EXPECT_CALL(new_window_delegate(),
+              OpenUrl(GURL(kLearnMoreHelpUrl),
+                      NewWindowDelegate::OpenUrlFrom::kUserInteraction,
+                      NewWindowDelegate::Disposition::kNewForegroundTab));
   ClickGuestNotification(/*is_thunderbolt_only=*/false);
   EXPECT_EQ(3, GetPrefNotificationCount());
   EXPECT_EQ(0u, MessageCenter::Get()->NotificationCount());

@@ -1,44 +1,96 @@
-// Copyright 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "sandbox/win/src/process_mitigations.h"
 
-#include <ktmw32.h>
 #include <windows.h>
 
-#include "base/files/file_util.h"
+#include <excpt.h>
+#include <ktmw32.h>
+#include <ntstatus.h>
+
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/files/file.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/path_service.h"
 #include "base/process/kill.h"
 #include "base/scoped_native_library.h"
+#include "base/strings/string_number_conversions_win.h"
 #include "base/test/test_timeouts.h"
 #include "base/win/scoped_handle.h"
 #include "base/win/windows_version.h"
 #include "sandbox/win/src/nt_internals.h"
+#include "sandbox/win/src/process_mitigations_unittest.h"
+#include "sandbox/win/src/sandbox_factory.h"
+#include "sandbox/win/src/sandbox_nt_util.h"
 #include "sandbox/win/src/target_services.h"
 #include "sandbox/win/tests/common/controller.h"
 #include "sandbox/win/tests/integration_tests/hooking_dll.h"
 #include "sandbox/win/tests/integration_tests/integration_tests_common.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+namespace sandbox {
+
 namespace {
 
-//------------------------------------------------------------------------------
-// Internal Defines & Functions
-//------------------------------------------------------------------------------
+// This test attempts a non-system font load.
+//
+// Arg1: Full path to font file to try loading.
+SBOX_TEST_COMMAND(CheckWin10FontLoad) {
+  if (args.size() < 1) {
+    return SBOX_TEST_INVALID_PARAMETER;
+  }
 
-// API defined in winbase.h.
-using GetProcessDEPPolicyFunction = decltype(&GetProcessDEPPolicy);
+  // When the test is run with SetTestState(EVERY_STATE), the return value
+  // is ignored for the first two states (before InitCalled and before
+  // RevertedToSelf).
+  if (!SandboxFactory::GetTargetServices()->GetState()->InitCalled()) {
+    return 0;
+  } else if (!SandboxFactory::GetTargetServices()
+                  ->GetState()
+                  ->RevertedToSelf()) {
+    // Need to warm up gdi32.dll for the test.
+    CHECK(::LoadLibrary(L"gdi32.dll"));
 
-// API defined in processthreadsapi.h.
-using GetProcessMitigationPolicyFunction =
-    decltype(&GetProcessMitigationPolicy);
-GetProcessMitigationPolicyFunction get_process_mitigation_policy;
+    // Need to warm up random for this test.
+    sandbox::WarmupRandomnessInfrastructure();
+    return 0;
+  }
 
-// APIs defined in wingdi.h.
-using AddFontMemResourceExFunction = decltype(&AddFontMemResourceEx);
-using RemoveFontMemResourceExFunction = decltype(&RemoveFontMemResourceEx);
+  // Open font file passed in as an argument.
+  base::File file(base::FilePath(args[0]),
+                  base::File::FLAG_OPEN | base::File::FLAG_READ);
+  if (!file.IsValid()) {
+    // Failed to open the font file passed in.
+    return SBOX_TEST_NOT_FOUND;
+  }
+
+  std::vector<char> font_data;
+  int64_t len = file.GetLength();
+  if (len < 0) {
+    return SBOX_TEST_NOT_FOUND;
+  }
+  font_data.resize(len);
+
+  if (!file.ReadAndCheck(0, base::as_writable_byte_span(font_data))) {
+    return SBOX_TEST_NOT_FOUND;
+  }
+  file.Close();
+
+  DWORD font_count = 0;
+  HANDLE font_handle = ::AddFontMemResourceEx(
+      &font_data[0], static_cast<DWORD>(font_data.size()), nullptr,
+      &font_count);
+
+  if (font_handle) {
+    ::RemoveFontMemResourceEx(font_handle);
+    return SBOX_TEST_SUCCEEDED;
+  }
+
+  return SBOX_TEST_FAILED;
+}
 
 //------------------------------------------------------------------------------
 // NonSystemFont test helper function.
@@ -52,100 +104,26 @@ void TestWin10NonSystemFont(bool is_success_test) {
   // Arial font should always be available
   font_path = font_path.Append(L"arial.ttf");
 
-  sandbox::TestRunner runner;
-  EXPECT_TRUE(runner.AddFsRule(sandbox::TargetPolicy::FILES_ALLOW_READONLY,
-                               font_path.value().c_str()));
+  CheckWin10FontLoadTestRunner runner;
+  EXPECT_TRUE(runner.AllowFileAccess(sandbox::FileSemantics::kAllowReadonly,
+                                     font_path.value().c_str()));
 
   if (!is_success_test) {
     sandbox::TargetPolicy* policy = runner.GetPolicy();
     // Turn on the non-system font disable mitigation.
-    EXPECT_EQ(policy->SetProcessMitigations(
+    EXPECT_EQ(policy->GetConfig()->SetProcessMitigations(
                   sandbox::MITIGATION_NONSYSTEM_FONT_DISABLE),
               sandbox::SBOX_ALL_OK);
   }
 
-  std::wstring test_command = L"CheckWin10FontLoad \"";
-  test_command += font_path.value().c_str();
-  test_command += L"\"";
+  runner.SetTestState(sandbox::EVERY_STATE);
 
   EXPECT_EQ((is_success_test ? sandbox::SBOX_TEST_SUCCEEDED
                              : sandbox::SBOX_TEST_FAILED),
-            runner.RunTest(test_command.c_str()));
-}
-
-//------------------------------------------------------------------------------
-// ForceMsSigned test helper function.
-// - LoadLibrary fails with ERROR_INVALID_IMAGE_HASH if this mitigation is
-//   enabled and the target is not appropriately signed.
-// - Acquire the global g_hooking_dll_mutex mutex before calling
-//   (as we meddle with a shared system resource).
-// - Note: Do not use ASSERTs in this function, as a global mutex is held.
-//
-// Trigger test child process (with or without mitigation enabled).
-//------------------------------------------------------------------------------
-void TestWin10MsSigned(int expected,
-                       bool enable_mitigation,
-                       bool delayed,
-                       bool use_ms_signed_binary,
-                       bool add_dll_permission,
-                       bool add_directory_permission) {
-  sandbox::TestRunner runner;
-  sandbox::TargetPolicy* policy = runner.GetPolicy();
-
-  if (enable_mitigation) {
-    // Enable the ForceMsSigned mitigation.
-    if (delayed) {
-      EXPECT_EQ(policy->SetDelayedProcessMitigations(
-                    sandbox::MITIGATION_FORCE_MS_SIGNED_BINS),
-                sandbox::SBOX_ALL_OK);
-    } else {
-      EXPECT_EQ(policy->SetProcessMitigations(
-                    sandbox::MITIGATION_FORCE_MS_SIGNED_BINS),
-                sandbox::SBOX_ALL_OK);
-    }
-  }
-
-  // Choose the appropriate DLL and make sure the sandbox allows access to it.
-  base::FilePath dll_path;
-  if (use_ms_signed_binary) {
-    EXPECT_TRUE(base::PathService::Get(base::DIR_SYSTEM, &dll_path));
-    dll_path = dll_path.Append(L"gdi32.dll");
-  } else {
-    EXPECT_TRUE(base::PathService::Get(base::DIR_EXE, &dll_path));
-    dll_path = dll_path.Append(hooking_dll::g_hook_dll_file);
-
-    if (add_dll_permission) {
-      EXPECT_EQ(sandbox::SBOX_ALL_OK,
-                policy->AddRule(sandbox::TargetPolicy::SUBSYS_SIGNED_BINARY,
-                                sandbox::TargetPolicy::SIGNED_ALLOW_LOAD,
-                                dll_path.value().c_str()));
-    }
-    if (add_directory_permission) {
-      base::FilePath exe_path;
-      EXPECT_TRUE(base::PathService::Get(base::DIR_EXE, &exe_path));
-      EXPECT_EQ(sandbox::SBOX_ALL_OK,
-                policy->AddRule(
-                    sandbox::TargetPolicy::SUBSYS_SIGNED_BINARY,
-                    sandbox::TargetPolicy::SIGNED_ALLOW_LOAD,
-                    exe_path.DirName().AppendASCII("*.dll").value().c_str()));
-    }
-  }
-  EXPECT_TRUE(runner.AddFsRule(sandbox::TargetPolicy::FILES_ALLOW_READONLY,
-                               dll_path.value().c_str()));
-  // Set up test string.
-  std::wstring test = L"TestDllLoad \"";
-  test += dll_path.value().c_str();
-  test += L"\"";
-
-  // Note: ERROR_INVALID_IMAGE_HASH is being displayed in a system pop-up when
-  //       the DLL load is attempted for delayed mitigations, but the value
-  //       returned from the test process itself is SBOX_TEST_FAILED.
-  EXPECT_EQ(expected, runner.RunTest(test.c_str()));
+            runner.RunTest(font_path.value()));
 }
 
 }  // namespace
-
-namespace sandbox {
 
 //------------------------------------------------------------------------------
 // Exported functions called by child test processes.
@@ -156,18 +134,14 @@ namespace sandbox {
 // - Use enum TestPolicy defined in integration_tests_common.h to specify which
 //   policy to check - passed as arg1.
 //------------------------------------------------------------------------------
-SBOX_TESTS_COMMAND int CheckPolicy(int argc, wchar_t** argv) {
-  if (argc < 1)
+SBOX_TEST_DEFINE_COMMAND(CheckPolicy) {
+  if (args.size() < 1) {
     return SBOX_TEST_INVALID_PARAMETER;
-  int test = ::_wtoi(argv[0]);
-  if (!test)
+  }
+  int test;
+  if (!base::StringToInt(args[0], &test)) {
     return SBOX_TEST_INVALID_PARAMETER;
-
-  get_process_mitigation_policy =
-      reinterpret_cast<GetProcessMitigationPolicyFunction>(::GetProcAddress(
-          ::GetModuleHandleW(L"kernel32.dll"), "GetProcessMitigationPolicy"));
-  if (!get_process_mitigation_policy)
-    return SBOX_TEST_NOT_FOUND;
+  }
 
   switch (test) {
     //--------------------------------------------------
@@ -178,9 +152,8 @@ SBOX_TESTS_COMMAND int CheckPolicy(int argc, wchar_t** argv) {
 #if !defined(_WIN64)
       // DEP - always enabled on 64-bit.
       PROCESS_MITIGATION_DEP_POLICY policy = {};
-      if (!get_process_mitigation_policy(::GetCurrentProcess(),
-                                         ProcessDEPPolicy, &policy,
-                                         sizeof(policy))) {
+      if (!::GetProcessMitigationPolicy(::GetCurrentProcess(), ProcessDEPPolicy,
+                                        &policy, sizeof(policy))) {
         return SBOX_TEST_NOT_FOUND;
       }
       if (!policy.Enable || !policy.Permanent)
@@ -194,9 +167,9 @@ SBOX_TESTS_COMMAND int CheckPolicy(int argc, wchar_t** argv) {
     //--------------------------------------------------
     case (TESTPOLICY_ASLR): {
       PROCESS_MITIGATION_ASLR_POLICY policy = {};
-      if (!get_process_mitigation_policy(::GetCurrentProcess(),
-                                         ProcessASLRPolicy, &policy,
-                                         sizeof(policy))) {
+      if (!::GetProcessMitigationPolicy(::GetCurrentProcess(),
+                                        ProcessASLRPolicy, &policy,
+                                        sizeof(policy))) {
         return SBOX_TEST_NOT_FOUND;
       }
       if (!policy.EnableForceRelocateImages || !policy.DisallowStrippedImages)
@@ -209,9 +182,9 @@ SBOX_TESTS_COMMAND int CheckPolicy(int argc, wchar_t** argv) {
     //--------------------------------------------------
     case (TESTPOLICY_STRICTHANDLE): {
       PROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY policy = {};
-      if (!get_process_mitigation_policy(::GetCurrentProcess(),
-                                         ProcessStrictHandleCheckPolicy,
-                                         &policy, sizeof(policy))) {
+      if (!::GetProcessMitigationPolicy(::GetCurrentProcess(),
+                                        ProcessStrictHandleCheckPolicy, &policy,
+                                        sizeof(policy))) {
         return SBOX_TEST_NOT_FOUND;
       }
       if (!policy.RaiseExceptionOnInvalidHandleReference ||
@@ -225,10 +198,23 @@ SBOX_TESTS_COMMAND int CheckPolicy(int argc, wchar_t** argv) {
     // MITIGATION_WIN32K_DISABLE
     //--------------------------------------------------
     case (TESTPOLICY_WIN32K): {
+      // When the test is run with SetTestState(EVERY_STATE), the return value
+      // is ignored for the first two states (before InitCalled and before
+      // RevertedToSelf).
+      if (!SandboxFactory::GetTargetServices()->GetState()->InitCalled()) {
+        return 0;
+      } else if (!SandboxFactory::GetTargetServices()
+                      ->GetState()
+                      ->RevertedToSelf()) {
+        // Need to warm up user32.dll for the test.
+        CHECK(::LoadLibrary(L"user32.dll"));
+        return 0;
+      }
+
       PROCESS_MITIGATION_SYSTEM_CALL_DISABLE_POLICY policy = {};
-      if (!get_process_mitigation_policy(::GetCurrentProcess(),
-                                         ProcessSystemCallDisablePolicy,
-                                         &policy, sizeof(policy))) {
+      if (!::GetProcessMitigationPolicy(::GetCurrentProcess(),
+                                        ProcessSystemCallDisablePolicy, &policy,
+                                        sizeof(policy))) {
         return SBOX_TEST_NOT_FOUND;
       }
       if (!policy.DisallowWin32kSystemCalls)
@@ -241,13 +227,34 @@ SBOX_TESTS_COMMAND int CheckPolicy(int argc, wchar_t** argv) {
       break;
     }
     //--------------------------------------------------
+    // MITIGATION_WIN32K_DISABLE
+    //--------------------------------------------------
+    case (TESTPOLICY_WIN32K_NOFAKEGDI): {
+      PROCESS_MITIGATION_SYSTEM_CALL_DISABLE_POLICY policy = {};
+      if (!::GetProcessMitigationPolicy(::GetCurrentProcess(),
+                                        ProcessSystemCallDisablePolicy, &policy,
+                                        sizeof(policy))) {
+        return SBOX_TEST_NOT_FOUND;
+      }
+      if (!policy.DisallowWin32kSystemCalls) {
+        return SBOX_TEST_FIRST_ERROR;
+      }
+
+      // Check if we can load gdi32.dll. Fail if it succeeds.
+      if (::LoadLibrary(L"gdi32.dll")) {
+        return SBOX_TEST_SECOND_ERROR;
+      }
+
+      break;
+    }
+    //--------------------------------------------------
     // MITIGATION_EXTENSION_POINT_DISABLE
     //--------------------------------------------------
     case (TESTPOLICY_EXTENSIONPOINT): {
       PROCESS_MITIGATION_EXTENSION_POINT_DISABLE_POLICY policy = {};
-      if (!get_process_mitigation_policy(::GetCurrentProcess(),
-                                         ProcessExtensionPointDisablePolicy,
-                                         &policy, sizeof(policy))) {
+      if (!::GetProcessMitigationPolicy(::GetCurrentProcess(),
+                                        ProcessExtensionPointDisablePolicy,
+                                        &policy, sizeof(policy))) {
         return SBOX_TEST_NOT_FOUND;
       }
       if (!policy.DisableExtensionPoints)
@@ -260,9 +267,9 @@ SBOX_TESTS_COMMAND int CheckPolicy(int argc, wchar_t** argv) {
     //--------------------------------------------------
     case (TESTPOLICY_DYNAMICCODE): {
       PROCESS_MITIGATION_DYNAMIC_CODE_POLICY policy = {};
-      if (!get_process_mitigation_policy(::GetCurrentProcess(),
-                                         ProcessDynamicCodePolicy, &policy,
-                                         sizeof(policy))) {
+      if (!::GetProcessMitigationPolicy(::GetCurrentProcess(),
+                                        ProcessDynamicCodePolicy, &policy,
+                                        sizeof(policy))) {
         return SBOX_TEST_NOT_FOUND;
       }
       if (!policy.ProhibitDynamicCode)
@@ -275,9 +282,9 @@ SBOX_TESTS_COMMAND int CheckPolicy(int argc, wchar_t** argv) {
     //--------------------------------------------------
     case (TESTPOLICY_NONSYSFONT): {
       PROCESS_MITIGATION_FONT_DISABLE_POLICY policy = {};
-      if (!get_process_mitigation_policy(::GetCurrentProcess(),
-                                         ProcessFontDisablePolicy, &policy,
-                                         sizeof(policy))) {
+      if (!::GetProcessMitigationPolicy(::GetCurrentProcess(),
+                                        ProcessFontDisablePolicy, &policy,
+                                        sizeof(policy))) {
         return SBOX_TEST_NOT_FOUND;
       }
       if (!policy.DisableNonSystemFonts)
@@ -290,9 +297,9 @@ SBOX_TESTS_COMMAND int CheckPolicy(int argc, wchar_t** argv) {
     //--------------------------------------------------
     case (TESTPOLICY_MSSIGNED): {
       PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY policy = {};
-      if (!get_process_mitigation_policy(::GetCurrentProcess(),
-                                         ProcessSignaturePolicy, &policy,
-                                         sizeof(policy))) {
+      if (!::GetProcessMitigationPolicy(::GetCurrentProcess(),
+                                        ProcessSignaturePolicy, &policy,
+                                        sizeof(policy))) {
         return SBOX_TEST_NOT_FOUND;
       }
       if (!policy.MicrosoftSignedOnly)
@@ -305,9 +312,9 @@ SBOX_TESTS_COMMAND int CheckPolicy(int argc, wchar_t** argv) {
     //--------------------------------------------------
     case (TESTPOLICY_LOADNOREMOTE): {
       PROCESS_MITIGATION_IMAGE_LOAD_POLICY policy = {};
-      if (!get_process_mitigation_policy(::GetCurrentProcess(),
-                                         ProcessImageLoadPolicy, &policy,
-                                         sizeof(policy))) {
+      if (!::GetProcessMitigationPolicy(::GetCurrentProcess(),
+                                        ProcessImageLoadPolicy, &policy,
+                                        sizeof(policy))) {
         return SBOX_TEST_NOT_FOUND;
       }
       if (!policy.NoRemoteImages)
@@ -320,9 +327,9 @@ SBOX_TESTS_COMMAND int CheckPolicy(int argc, wchar_t** argv) {
     //--------------------------------------------------
     case (TESTPOLICY_LOADNOLOW): {
       PROCESS_MITIGATION_IMAGE_LOAD_POLICY policy = {};
-      if (!get_process_mitigation_policy(::GetCurrentProcess(),
-                                         ProcessImageLoadPolicy, &policy,
-                                         sizeof(policy))) {
+      if (!::GetProcessMitigationPolicy(::GetCurrentProcess(),
+                                        ProcessImageLoadPolicy, &policy,
+                                        sizeof(policy))) {
         return SBOX_TEST_NOT_FOUND;
       }
       if (!policy.NoLowMandatoryLabelImages)
@@ -335,9 +342,9 @@ SBOX_TESTS_COMMAND int CheckPolicy(int argc, wchar_t** argv) {
     //--------------------------------------------------
     case (TESTPOLICY_DYNAMICCODEOPTOUT): {
       PROCESS_MITIGATION_DYNAMIC_CODE_POLICY policy = {};
-      if (!get_process_mitigation_policy(::GetCurrentProcess(),
-                                         ProcessDynamicCodePolicy, &policy,
-                                         sizeof(policy))) {
+      if (!::GetProcessMitigationPolicy(::GetCurrentProcess(),
+                                        ProcessDynamicCodePolicy, &policy,
+                                        sizeof(policy))) {
         return SBOX_TEST_NOT_FOUND;
       }
       if (!policy.ProhibitDynamicCode || !policy.AllowThreadOptOut)
@@ -350,9 +357,9 @@ SBOX_TESTS_COMMAND int CheckPolicy(int argc, wchar_t** argv) {
     //--------------------------------------------------
     case (TESTPOLICY_LOADPREFERSYS32): {
       PROCESS_MITIGATION_IMAGE_LOAD_POLICY policy = {};
-      if (!get_process_mitigation_policy(::GetCurrentProcess(),
-                                         ProcessImageLoadPolicy, &policy,
-                                         sizeof(policy))) {
+      if (!::GetProcessMitigationPolicy(::GetCurrentProcess(),
+                                        ProcessImageLoadPolicy, &policy,
+                                        sizeof(policy))) {
         return SBOX_TEST_NOT_FOUND;
       }
       if (!policy.PreferSystem32Images)
@@ -371,19 +378,70 @@ SBOX_TESTS_COMMAND int CheckPolicy(int argc, wchar_t** argv) {
       break;
     }
     //--------------------------------------------------
+    // MITIGATION_MODULE_TAMPERING_PROTECTION
+    //--------------------------------------------------
+    case (TESTPOLICY_MODULETAMPERINGPROTECTION): {
+      // No GetProcessMitigationPolicy() surface is available in the current
+      // SDK used by Chromium. If this process started, the creation-time
+      // mitigation was accepted by UpdateProcThreadAttribute().
+      break;
+    }
+    //--------------------------------------------------
     // MITIGATION_CET_DISABLED
     //--------------------------------------------------
     case (TESTPOLICY_CETDISABLED): {
       PROCESS_MITIGATION_USER_SHADOW_STACK_POLICY policy = {};
-      if (!get_process_mitigation_policy(::GetCurrentProcess(),
-                                         ProcessUserShadowStackPolicy, &policy,
-                                         sizeof(policy))) {
+      if (!::GetProcessMitigationPolicy(::GetCurrentProcess(),
+                                        ProcessUserShadowStackPolicy, &policy,
+                                        sizeof(policy))) {
         return SBOX_TEST_NOT_FOUND;
       }
       // We wish to disable the policy.
       if (policy.EnableUserShadowStack)
         return SBOX_TEST_FAILED;
 
+      break;
+    }
+    //--------------------------------------------------
+    // MITIGATION_CET_ALLOW_DYNAMIC_APIS
+    //--------------------------------------------------
+    case (TESTPOLICY_CETDYNAMICAPIS): {
+      PROCESS_MITIGATION_USER_SHADOW_STACK_POLICY policy = {};
+      if (!::GetProcessMitigationPolicy(::GetCurrentProcess(),
+                                        ProcessUserShadowStackPolicy, &policy,
+                                        sizeof(policy))) {
+        return SBOX_TEST_NOT_FOUND;
+      }
+
+      // CET should be enabled (we only run this test if CET is available).
+      if (!policy.EnableUserShadowStack) {
+        return SBOX_TEST_FIRST_RESULT;
+      }
+      // We wish to disable the setting.
+      if (policy.CetDynamicApisOutOfProcOnly) {
+        return SBOX_TEST_FAILED;
+      }
+      break;
+    }
+    //--------------------------------------------------
+    // MITIGATION_CET_STRICT_MODE
+    //--------------------------------------------------
+    case (TESTPOLICY_CETSTRICT): {
+      PROCESS_MITIGATION_USER_SHADOW_STACK_POLICY policy = {};
+      if (!::GetProcessMitigationPolicy(::GetCurrentProcess(),
+                                        ProcessUserShadowStackPolicy, &policy,
+                                        sizeof(policy))) {
+        return SBOX_TEST_NOT_FOUND;
+      }
+
+      // CET should be enabled (we only run this test if CET is available).
+      if (!policy.EnableUserShadowStack) {
+        return SBOX_TEST_FIRST_ERROR;
+      }
+      // We wish to enable the setting.
+      if (!policy.EnableUserShadowStackStrictMode) {
+        return SBOX_TEST_FAILED;
+      }
       break;
     }
     //--------------------------------------------------
@@ -399,8 +457,73 @@ SBOX_TESTS_COMMAND int CheckPolicy(int argc, wchar_t** argv) {
       ktm.Set(CreateTransactionManager(&tm_attributes, nullptr,
                                        TRANSACTION_MANAGER_VOLATILE,
                                        TRANSACTION_MANAGER_COMMIT_DEFAULT));
-      if (ktm.IsValid() || ::GetLastError() != ERROR_ACCESS_DENIED)
+      if (ktm.is_valid() || ::GetLastError() != ERROR_ACCESS_DENIED) {
         return SBOX_TEST_FAILED;
+      }
+
+      break;
+    }
+
+    case (TESTPOLICY_PREANDPOSTSTARTUP): {
+      // Both policies should be set now.
+      PROCESS_MITIGATION_IMAGE_LOAD_POLICY policy = {};
+      if (!::GetProcessMitigationPolicy(::GetCurrentProcess(),
+                                        ProcessImageLoadPolicy, &policy,
+                                        sizeof(policy))) {
+        return SBOX_TEST_NOT_FOUND;
+      }
+      if (!policy.NoLowMandatoryLabelImages)
+        return SBOX_TEST_FAILED;
+
+      if (!policy.PreferSystem32Images)
+        return SBOX_TEST_FAILED;
+
+      break;
+    }
+    //--------------------------------------------------
+    // MITIGATION_FSCTL_DISABLED
+    //--------------------------------------------------
+    case (TESTPOLICY_FSCTLDISABLED): {
+      PROCESS_MITIGATION_SYSTEM_CALL_DISABLE_POLICY policy = {};
+      if (!::GetProcessMitigationPolicy(::GetCurrentProcess(),
+                                        ProcessSystemCallDisablePolicy, &policy,
+                                        sizeof(policy))) {
+        return SBOX_TEST_NOT_FOUND;
+      }
+      // We wish to disable the policy.
+      if (!policy.DisallowFsctlSystemCalls) {
+        return SBOX_TEST_FAILED;
+      }
+
+      break;
+    }
+
+    //--------------------------------------------------
+    // MITIGATION_RESTRICT_CORE_SHARING
+    //--------------------------------------------------
+    case (TESTPOLICY_RESTRICTCORESHARING): {
+      PROCESS_MITIGATION_SIDE_CHANNEL_ISOLATION_POLICY policy = {};
+      if (!::GetProcessMitigationPolicy(::GetCurrentProcess(),
+                                        ProcessSideChannelIsolationPolicy,
+                                        &policy, sizeof(policy))) {
+        return SBOX_TEST_NOT_FOUND;
+      }
+
+      if (!(policy.RestrictCoreSharing)) {
+        // ERROR_NOT_SUPPORTED is returned if the OS doesn't support this
+        // mitigation policy.
+        // If SetProcessMitigationPolicy was able to set the policy then the
+        // test is marked failure since this test sets
+        // |MITIGATION_RESTRICT_CORE_SHARING| which should have enabled the
+        // policy.
+        policy.RestrictCoreSharing = true;
+        bool is_core_sharing_set_successful = ::SetProcessMitigationPolicy(
+            ProcessSideChannelIsolationPolicy, &policy, sizeof(policy));
+        if (is_core_sharing_set_successful ||
+            ::GetLastError() != ERROR_NOT_SUPPORTED) {
+          return SBOX_TEST_FAILED;
+        }
+      }
 
       break;
     }
@@ -410,124 +533,6 @@ SBOX_TESTS_COMMAND int CheckPolicy(int argc, wchar_t** argv) {
   }
 
   return SBOX_TEST_SUCCEEDED;
-}
-
-SBOX_TESTS_COMMAND int CheckDep(int argc, wchar_t** argv) {
-  GetProcessDEPPolicyFunction get_process_dep_policy =
-      reinterpret_cast<GetProcessDEPPolicyFunction>(::GetProcAddress(
-          ::GetModuleHandleW(L"kernel32.dll"), "GetProcessDEPPolicy"));
-  if (get_process_dep_policy) {
-    BOOL is_permanent = false;
-    DWORD dep_flags = 0;
-
-    if (!get_process_dep_policy(::GetCurrentProcess(), &dep_flags,
-                                &is_permanent)) {
-      return SBOX_TEST_FIRST_ERROR;
-    }
-
-    if (!(dep_flags & PROCESS_DEP_ENABLE) || !is_permanent)
-      return SBOX_TEST_SECOND_ERROR;
-
-  } else {
-    NtQueryInformationProcessFunction query_information_process = nullptr;
-    ResolveNTFunctionPtr("NtQueryInformationProcess",
-                         &query_information_process);
-    if (!query_information_process)
-      return SBOX_TEST_NOT_FOUND;
-
-    ULONG size = 0;
-    ULONG dep_flags = 0;
-    if (!SUCCEEDED(query_information_process(::GetCurrentProcess(),
-                                             ProcessExecuteFlags, &dep_flags,
-                                             sizeof(dep_flags), &size))) {
-      return SBOX_TEST_THIRD_ERROR;
-    }
-
-    static const int MEM_EXECUTE_OPTION_DISABLE = 2;
-    static const int MEM_EXECUTE_OPTION_PERMANENT = 8;
-    dep_flags &= 0xff;
-
-    if (dep_flags !=
-        (MEM_EXECUTE_OPTION_DISABLE | MEM_EXECUTE_OPTION_PERMANENT)) {
-      return SBOX_TEST_FOURTH_ERROR;
-    }
-  }
-
-  return SBOX_TEST_SUCCEEDED;
-}
-
-// ForceMsSigned tests:
-// Try to load the DLL given in arg1.
-SBOX_TESTS_COMMAND int TestDllLoad(int argc, wchar_t** argv) {
-  if (argc < 1 || !argv[0])
-    return SBOX_TEST_INVALID_PARAMETER;
-
-  std::wstring dll = argv[0];
-  base::ScopedNativeLibrary test_dll((base::FilePath(dll)));
-  if (test_dll.is_valid())
-    return SBOX_TEST_SUCCEEDED;
-
-  // Note: GetLastError() does not get an accurate failure code
-  //       at this point.
-  return SBOX_TEST_FAILED;
-}
-
-// This test attempts a non-system font load.
-//
-// 1) Load gdi32.dll for required font APIs.
-// 2) Load file contents of font file passed in arg1 into memory.
-// 3) Call API to try loading a non-system font.
-//
-// Arg1: Full path to font file to try loading.
-SBOX_TESTS_COMMAND int CheckWin10FontLoad(int argc, wchar_t** argv) {
-  if (argc < 1)
-    return SBOX_TEST_INVALID_PARAMETER;
-
-  HMODULE gdi_module = ::LoadLibraryW(L"gdi32.dll");
-  if (!gdi_module)
-    return SBOX_TEST_NOT_FOUND;
-
-  AddFontMemResourceExFunction add_font_mem_resource =
-      reinterpret_cast<AddFontMemResourceExFunction>(
-          ::GetProcAddress(gdi_module, "AddFontMemResourceEx"));
-
-  RemoveFontMemResourceExFunction rem_font_mem_resource =
-      reinterpret_cast<RemoveFontMemResourceExFunction>(
-          ::GetProcAddress(gdi_module, "RemoveFontMemResourceEx"));
-
-  if (!add_font_mem_resource || !rem_font_mem_resource)
-    return SBOX_TEST_NOT_FOUND;
-
-  // Open font file passed in as an argument.
-  base::File file(base::FilePath(argv[0]),
-                  base::File::FLAG_OPEN | base::File::FLAG_READ);
-  if (!file.IsValid())
-    // Failed to open the font file passed in.
-    return SBOX_TEST_NOT_FOUND;
-
-  std::vector<char> font_data;
-  int64_t len = file.GetLength();
-  if (len < 0)
-    return SBOX_TEST_NOT_FOUND;
-  font_data.resize(len);
-
-  int read = file.Read(0, &font_data[0], base::checked_cast<int>(len));
-  file.Close();
-
-  if (read != len)
-    return SBOX_TEST_NOT_FOUND;
-
-  DWORD font_count = 0;
-  HANDLE font_handle =
-      add_font_mem_resource(&font_data[0], static_cast<DWORD>(font_data.size()),
-                            nullptr, &font_count);
-
-  if (font_handle) {
-    rem_font_mem_resource(font_handle);
-    return SBOX_TEST_SUCCEEDED;
-  }
-
-  return SBOX_TEST_FAILED;
 }
 
 // Common helper test for CreateProcess.
@@ -544,21 +549,24 @@ SBOX_TESTS_COMMAND int CheckWin10FontLoad(int argc, wchar_t** argv) {
 // sandbox::TargetPolicy::SetJobLevel(),
 // sandbox::TargetPolicy::SetTokenLevel(),
 // and TestRunner::SetDisableCsrss().
-SBOX_TESTS_COMMAND int TestChildProcess(int argc, wchar_t** argv) {
-  if (argc < 2 || argc > 3)
+SBOX_TEST_DEFINE_COMMAND(TestChildProcess) {
+  if (args.size() < 2 || args.size() > 3) {
     return SBOX_TEST_INVALID_PARAMETER;
-
-  bool process_finishes = true;
-  std::wstring arg2 = argv[1];
-  if (arg2.compare(L"false") == 0)
-    process_finishes = false;
-
-  int desired_exit_code = 0;
-  if (argc == 3) {
-    desired_exit_code = wcstoul(argv[2], nullptr, 0);
   }
 
-  std::wstring cmd = argv[0];
+  bool process_finishes = true;
+  if (args[1] == L"false") {
+    process_finishes = false;
+  }
+
+  int desired_exit_code = 0;
+  if (args.size() == 3) {
+    if (!base::StringToInt(args[2], &desired_exit_code)) {
+      return SBOX_TEST_INVALID_PARAMETER;
+    }
+  }
+
+  std::wstring cmd = args[0];
   base::LaunchOptions options = base::LaunchOptionsForTest();
   base::Process setup_proc = base::LaunchProcess(cmd.c_str(), options);
 
@@ -572,8 +580,9 @@ SBOX_TESTS_COMMAND int TestChildProcess(int argc, wchar_t** argv) {
         setup_proc.Terminate(0, false);
         return SBOX_TEST_TIMED_OUT;
       }
-      if (exit_code != desired_exit_code)
+      if (exit_code != desired_exit_code) {
         return SBOX_TEST_FAILED;
+      }
       return SBOX_TEST_SUCCEEDED;
     } else {
       // Terminate process with requested exit code.
@@ -583,34 +592,23 @@ SBOX_TESTS_COMMAND int TestChildProcess(int argc, wchar_t** argv) {
   }
   // Process failed to be created.
   // Note: GetLastError from CreateProcess returns 5, "ERROR_ACCESS_DENIED".
-  return SBOX_TEST_FAILED;
+  // Validate the NoChildProcessCreation policy is applied.
+  PROCESS_MITIGATION_CHILD_PROCESS_POLICY policy = {};
+  if (!::GetProcessMitigationPolicy(::GetCurrentProcess(),
+                                    ProcessChildProcessPolicy, &policy,
+                                    sizeof(policy))) {
+    return SBOX_TEST_NOT_FOUND;
+  }
+  if (!policy.NoChildProcessCreation) {
+    return SBOX_TEST_FIRST_ERROR;
+  } else {
+    return SBOX_TEST_SECOND_ERROR;
+  }
 }
 
 //------------------------------------------------------------------------------
 // Exported Mitigation Tests
 //------------------------------------------------------------------------------
-
-//------------------------------------------------------------------------------
-// DEP (MITIGATION_DEP and MITIGATION_DEP_NO_ATL_THUNK)
-// Win7 x86
-//------------------------------------------------------------------------------
-
-#if !defined(_WIN64)
-// DEP is always enabled on 64-bit.  Only test on x86.
-TEST(ProcessMitigationsTest, CheckDepWin7) {
-  if (base::win::GetVersion() > base::win::Version::WIN7)
-    return;
-
-  TestRunner runner;
-  sandbox::TargetPolicy* policy = runner.GetPolicy();
-
-  EXPECT_EQ(policy->SetProcessMitigations(MITIGATION_DEP |
-                                          MITIGATION_DEP_NO_ATL_THUNK |
-                                          MITIGATION_SEHOP),
-            SBOX_ALL_OK);
-  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(L"CheckDep"));
-}
-#endif  // !defined(_WIN64)
 
 //------------------------------------------------------------------------------
 // DEP (MITIGATION_DEP and MITIGATION_DEP_NO_ATL_THUNK)
@@ -623,33 +621,35 @@ TEST(ProcessMitigationsTest, CheckDepWin7) {
 // This test validates that setting the MITIGATION_DEP*
 // mitigations enables the setting on a process.
 TEST(ProcessMitigationsTest, CheckDepWin8PolicySuccess) {
-  if (base::win::GetVersion() < base::win::Version::WIN8)
+  DWORD flags;
+  BOOL permanent;
+  ASSERT_TRUE(::GetProcessDEPPolicy(::GetCurrentProcess(), &flags, &permanent));
+  // If DEP is enabled permanently these tests are meaningless. Just ignore them
+  // for this system.
+  if (permanent)
     return;
-
-  std::wstring test_command = L"CheckPolicy ";
-  test_command += std::to_wstring(TESTPOLICY_DEP);
 
   //---------------------------------
   // 1) Test setting pre-startup.
   //---------------------------------
-  TestRunner runner;
-  sandbox::TargetPolicy* policy = runner.GetPolicy();
+  CheckPolicyTestRunner runner;
+  sandbox::TargetConfig* config = runner.GetConfig();
 
-  EXPECT_EQ(policy->SetProcessMitigations(MITIGATION_DEP |
+  EXPECT_EQ(config->SetProcessMitigations(MITIGATION_DEP |
                                           MITIGATION_DEP_NO_ATL_THUNK),
             SBOX_ALL_OK);
-  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(test_command.c_str()));
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(TESTPOLICY_DEP));
 
   //---------------------------------
   // 2) Test setting post-startup.
   //---------------------------------
-  TestRunner runner2;
-  sandbox::TargetPolicy* policy2 = runner2.GetPolicy();
+  CheckPolicyTestRunner runner2;
+  sandbox::TargetConfig* config2 = runner2.GetConfig();
 
-  EXPECT_EQ(policy2->SetDelayedProcessMitigations(MITIGATION_DEP |
+  EXPECT_EQ(config2->SetDelayedProcessMitigations(MITIGATION_DEP |
                                                   MITIGATION_DEP_NO_ATL_THUNK),
             SBOX_ALL_OK);
-  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner2.RunTest(test_command.c_str()));
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner2.RunTest(TESTPOLICY_DEP));
 }
 
 #endif  // !defined(_WIN64)
@@ -664,25 +664,19 @@ TEST(ProcessMitigationsTest, CheckDepWin8PolicySuccess) {
 //------------------------------------------------------------------------------
 
 TEST(ProcessMitigationsTest, CheckWin8AslrPolicySuccess) {
-  if (base::win::GetVersion() < base::win::Version::WIN8)
-    return;
-
-  std::wstring test_command = L"CheckPolicy ";
-  test_command += std::to_wstring(TESTPOLICY_ASLR);
-
 //---------------------------------------------
 // Only test in release for now.
 // TODO(pennymac): overhaul ASLR, crbug/834907.
 //---------------------------------------------
 #if defined(NDEBUG)
-  TestRunner runner;
-  sandbox::TargetPolicy* policy = runner.GetPolicy();
+  CheckPolicyTestRunner runner;
+  sandbox::TargetConfig* config = runner.GetConfig();
 
-  EXPECT_EQ(policy->SetProcessMitigations(
+  EXPECT_EQ(config->SetProcessMitigations(
                 MITIGATION_RELOCATE_IMAGE | MITIGATION_RELOCATE_IMAGE_REQUIRED |
                 MITIGATION_BOTTOM_UP_ASLR | MITIGATION_HIGH_ENTROPY_ASLR),
             SBOX_ALL_OK);
-  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(test_command.c_str()));
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(TESTPOLICY_ASLR));
 #endif  // defined(NDEBUG)
 }
 
@@ -692,23 +686,17 @@ TEST(ProcessMitigationsTest, CheckWin8AslrPolicySuccess) {
 //------------------------------------------------------------------------------
 
 TEST(ProcessMitigationsTest, CheckWin8StrictHandlePolicySuccess) {
-  if (base::win::GetVersion() < base::win::Version::WIN8)
-    return;
-
-  std::wstring test_command = L"CheckPolicy ";
-  test_command += std::to_wstring(TESTPOLICY_STRICTHANDLE);
-
   //---------------------------------
   // 1) Test setting post-startup.
   // ** Can only be set post-startup.
   //---------------------------------
-  TestRunner runner;
-  sandbox::TargetPolicy* policy = runner.GetPolicy();
+  CheckPolicyTestRunner runner;
+  sandbox::TargetConfig* config = runner.GetConfig();
 
   EXPECT_EQ(
-      policy->SetDelayedProcessMitigations(MITIGATION_STRICT_HANDLE_CHECKS),
+      config->SetDelayedProcessMitigations(MITIGATION_STRICT_HANDLE_CHECKS),
       SBOX_ALL_OK);
-  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(test_command.c_str()));
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(TESTPOLICY_STRICTHANDLE));
 }
 
 //------------------------------------------------------------------------------
@@ -719,49 +707,37 @@ TEST(ProcessMitigationsTest, CheckWin8StrictHandlePolicySuccess) {
 // This test validates that setting the MITIGATION_NON_SYSTEM_FONTS_DISABLE
 // mitigation enables the setting on a process.
 TEST(ProcessMitigationsTest, CheckWin10NonSystemFontLockDownPolicySuccess) {
-  if (base::win::GetVersion() < base::win::Version::WIN10)
-    return;
-
-  std::wstring test_command = L"CheckPolicy ";
-  test_command += std::to_wstring(TESTPOLICY_NONSYSFONT);
-
   //---------------------------------
   // 1) Test setting pre-startup.
   //---------------------------------
-  TestRunner runner;
-  sandbox::TargetPolicy* policy = runner.GetPolicy();
+  CheckPolicyTestRunner runner;
+  sandbox::TargetConfig* config = runner.GetConfig();
 
-  EXPECT_EQ(policy->SetProcessMitigations(MITIGATION_NONSYSTEM_FONT_DISABLE),
+  EXPECT_EQ(config->SetProcessMitigations(MITIGATION_NONSYSTEM_FONT_DISABLE),
             SBOX_ALL_OK);
-  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(test_command.c_str()));
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(TESTPOLICY_NONSYSFONT));
 
   //---------------------------------
   // 2) Test setting post-startup.
   //---------------------------------
-  TestRunner runner2;
-  sandbox::TargetPolicy* policy2 = runner2.GetPolicy();
+  CheckPolicyTestRunner runner2;
+  sandbox::TargetConfig* config2 = runner2.GetConfig();
 
   EXPECT_EQ(
-      policy2->SetDelayedProcessMitigations(MITIGATION_NONSYSTEM_FONT_DISABLE),
+      config2->SetDelayedProcessMitigations(MITIGATION_NONSYSTEM_FONT_DISABLE),
       SBOX_ALL_OK);
-  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner2.RunTest(test_command.c_str()));
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner2.RunTest(TESTPOLICY_NONSYSFONT));
 }
 
 // This test validates that we can load a non-system font if the
 // MITIGATION_NON_SYSTEM_FONTS_DISABLE mitigation is NOT set.
 TEST(ProcessMitigationsTest, CheckWin10NonSystemFontLockDownLoadSuccess) {
-  if (base::win::GetVersion() < base::win::Version::WIN10)
-    return;
-
   TestWin10NonSystemFont(true /* is_success_test */);
 }
 
 // This test validates that setting the MITIGATION_NON_SYSTEM_FONTS_DISABLE
 // mitigation prevents the loading of a non-system font.
 TEST(ProcessMitigationsTest, CheckWin10NonSystemFontLockDownLoadFailure) {
-  if (base::win::GetVersion() < base::win::Version::WIN10)
-    return;
-
   TestWin10NonSystemFont(false /* is_success_test */);
 }
 
@@ -779,9 +755,6 @@ TEST(ProcessMitigationsTest, CheckWin10MsSignedPolicySuccessDelayed) {
   if (base::win::GetVersion() < base::win::Version::WIN10_TH2)
     return;
 
-  std::wstring test_command = L"CheckPolicy ";
-  test_command += std::to_wstring(TESTPOLICY_MSSIGNED);
-
 //---------------------------------
 // 1) Test setting post-startup.
 // **Only test if NOT component build, otherwise component DLLs are not signed
@@ -790,26 +763,24 @@ TEST(ProcessMitigationsTest, CheckWin10MsSignedPolicySuccessDelayed) {
 //   on DLLs that are not signed by MS and they prevent process startup.
 //---------------------------------
 #if !defined(COMPONENT_BUILD)
-  TestRunner runner2;
-  sandbox::TargetPolicy* policy2 = runner2.GetPolicy();
+  CheckPolicyTestRunner runner2;
+  sandbox::TargetConfig* config2 = runner2.GetConfig();
 
   EXPECT_EQ(
-      policy2->SetDelayedProcessMitigations(MITIGATION_FORCE_MS_SIGNED_BINS),
+      config2->SetDelayedProcessMitigations(MITIGATION_FORCE_MS_SIGNED_BINS),
       SBOX_ALL_OK);
-  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner2.RunTest(test_command.c_str()));
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner2.RunTest(TESTPOLICY_MSSIGNED));
 #endif  // !defined(COMPONENT_BUILD)
 }
 
 // This test validates that setting the MITIGATION_FORCE_MS_SIGNED_BINS
 // mitigation enables the setting on a process when non-delayed.
-
-// Disabled due to crbug.com/1081080
-TEST(ProcessMitigationsTest, DISABLED_CheckWin10MsSignedPolicySuccess) {
+TEST(ProcessMitigationsTest, CheckWin10MsSignedPolicySuccess) {
+  // AllowExtraDlls shims may run before ASAN has a chance to initialize its
+  // internal state, namely __asan_shadow_memory_dynamic_address.
+#if !defined(ADDRESS_SANITIZER) && !defined(COMPONENT_BUILD)
   if (base::win::GetVersion() < base::win::Version::WIN10_TH2)
     return;
-
-  std::wstring test_command = L"CheckPolicy ";
-  test_command += std::to_wstring(TESTPOLICY_MSSIGNED);
 
   //---------------------------------
   // 1) Test setting post-startup.
@@ -818,219 +789,169 @@ TEST(ProcessMitigationsTest, DISABLED_CheckWin10MsSignedPolicySuccess) {
   // **Only test post-startup, otherwise this test executable has dependencies
   //   on DLLs that are not signed by MS and they prevent process startup.
   //---------------------------------
-  TestRunner runner2;
-  sandbox::TargetPolicy* policy = runner2.GetPolicy();
+  CheckPolicyTestRunner runner2;
+  sandbox::TargetConfig* config2 = runner2.GetConfig();
 
-  EXPECT_EQ(policy->SetProcessMitigations(MITIGATION_FORCE_MS_SIGNED_BINS),
+  EXPECT_EQ(config2->SetProcessMitigations(MITIGATION_FORCE_MS_SIGNED_BINS),
             SBOX_ALL_OK);
-  // In a component build, the DLLs must be allowed to load.
-#if defined(COMPONENT_BUILD)
+
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner2.RunTest(TESTPOLICY_MSSIGNED));
+#endif  // !defined(ADDRESS_SANITIZER) && !defined(COMPONENT_BUILD)
+}
+
+// This test attempts to load an unsigned dll, which should succeed only if
+// allowed by the CIG shims, and validate that the MicrosoftSignedOnly CIG
+// mitigation is applied.
+SBOX_TEST_COMMAND(TestMsSignedLoadUnsignedDll) {
+  PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY policy = {};
+  if (!::GetProcessMitigationPolicy(::GetCurrentProcess(),
+                                    ProcessSignaturePolicy, &policy,
+                                    sizeof(policy))) {
+    return SBOX_TEST_NOT_FOUND;
+  }
+  if (!policy.MicrosoftSignedOnly) {
+    return SBOX_TEST_FIRST_ERROR;
+  }
+
+  base::FilePath hook_dll_path(hooking_dll::g_hook_dll_file);
+  base::ScopedNativeLibrary dll(hook_dll_path);
+  if (!dll.is_valid()) {
+    return SBOX_TEST_SECOND_ERROR;
+  }
+
+  return SBOX_TEST_SUCCEEDED;
+}
+
+// This test validates that setting the MITIGATION_FORCE_MS_SIGNED_BINS
+// mitigation enables the setting on a process when non-delayed, and that
+// process fails load a dll not signed by Microsoft.
+TEST(ProcessMitigationsTest, CheckWin10MsSignedPolicyAndDllLoadFailure) {
+  // AllowExtraDll shims may run before ASAN has a chance to initialize its
+  // internal state, namely __asan_shadow_memory_dynamic_address.
+  // With component build we would have to allow all DLLs to load, which
+  // invalidates the test.
+#if !defined(ADDRESS_SANITIZER) && !defined(COMPONENT_BUILD)
+  if (base::win::GetVersion() < base::win::Version::WIN10_TH2) {
+    return;
+  }
+
+  TestMsSignedLoadUnsignedDllTestRunner runner;
+  // After the sandbox is applied, the sandbox will prevent DLL loads. CIG
+  // should prevent the DLL load as well.
+  runner.SetTestState(BEFORE_REVERT);
+  sandbox::TargetConfig* config = runner.GetConfig();
+
+  EXPECT_EQ(config->SetProcessMitigations(MITIGATION_FORCE_MS_SIGNED_BINS),
+            SBOX_ALL_OK);
+
+  EXPECT_EQ(SBOX_TEST_SECOND_ERROR, runner.RunTest());
+#endif  // !defined(ADDRESS_SANITIZER) && !defined(COMPONENT_BUILD)
+}
+
+// This test validates that setting the MITIGATION_FORCE_MS_SIGNED_BINS
+// mitigation enables the setting on a process when non-delayed, and that
+// process can load a dll.
+TEST(ProcessMitigationsTest, CheckWin10MsSignedPolicyAndDllLoadSuccess) {
+  // AllowExtraDll shims may run before ASAN has a chance to initialize its
+  // internal state, namely __asan_shadow_memory_dynamic_address.
+#if !defined(ADDRESS_SANITIZER) && !defined(COMPONENT_BUILD)
+  if (base::win::GetVersion() < base::win::Version::WIN10_TH2) {
+    return;
+  }
+
+  TestMsSignedLoadUnsignedDllTestRunner runner;
+  // After the sandbox is applied, the sandbox will prevent DLL loads. Validate
+  // we can load a DLL specified in AllowExtraDll before sandbox is applied.
+  runner.SetTestState(BEFORE_REVERT);
+  sandbox::TargetConfig* config = runner.GetConfig();
+
+  EXPECT_EQ(config->SetProcessMitigations(MITIGATION_FORCE_MS_SIGNED_BINS),
+            SBOX_ALL_OK);
+  // Specify the name of the hooking dll that the test tries to load.
   base::FilePath exe_path;
   EXPECT_TRUE(base::PathService::Get(base::DIR_EXE, &exe_path));
-  // Allow all *.dll in current directory to load.
-  EXPECT_EQ(
-      sandbox::SBOX_ALL_OK,
-      policy->AddRule(sandbox::TargetPolicy::SUBSYS_SIGNED_BINARY,
-                      sandbox::TargetPolicy::SIGNED_ALLOW_LOAD,
-                      exe_path.DirName().AppendASCII("*.dll").value().c_str()));
-#endif  // defined(COMPONENT_BUILD)
+  EXPECT_EQ(sandbox::SBOX_ALL_OK,
+            config->AllowExtraDll(
+                exe_path.Append(hooking_dll::g_hook_dll_file).value()));
 
-  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner2.RunTest(test_command.c_str()));
-}
-// This test validates that we can load an unsigned DLL if the
-// MITIGATION_FORCE_MS_SIGNED_BINS mitigation is NOT set.
-TEST(ProcessMitigationsTest, CheckWin10MsSigned_Success) {
-  if (base::win::GetVersion() < base::win::Version::WIN10_TH2)
-    return;
-
-  ScopedTestMutex mutex(hooking_dll::g_hooking_dll_mutex);
-
-  TestWin10MsSigned(sandbox::SBOX_TEST_SUCCEEDED /* expected */,
-                    false /* enable_mitigation */,
-                    false /* delayed */,
-                    false /* use_ms_signed_binary */,
-                    false /* add_dll_permission */,
-                    false /* add_directory_permission */);
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest());
+#endif  // !defined(ADDRESS_SANITIZER) && !defined(COMPONENT_BUILD)
 }
 
-// This test validates that setting the MITIGATION_FORCE_MS_SIGNED_BINS
-// mitigation prevents the loading of an unsigned DLL.
-TEST(ProcessMitigationsTest, CheckWin10MsSigned_Failure) {
-  if (base::win::GetVersion() < base::win::Version::WIN10_TH2)
+// This test validates that AllowExtraDll can be called twice on the same DLL.
+TEST(ProcessMitigationsTest, CheckWin10MsSignedPolicyMultipleLoads) {
+  if (base::win::GetVersion() < base::win::Version::WIN10_TH2) {
     return;
+  }
 
-  ScopedTestMutex mutex(hooking_dll::g_hooking_dll_mutex);
-
-  TestWin10MsSigned(sandbox::SBOX_TEST_FAILED /* expected */,
-                    true /* enable_mitigation */,
-                    true /* delayed */,
-                    false /* use_ms_signed_binary */,
-                    false /* add_dll_permission */,
-                    false /* add_directory_permission */);
-}
-
-// ASAN doesn't initialize early enough for the intercepts in NtCreateSection to
-// be able to use std::unique_ptr, so disable pre-launch CIG on ASAN builds.
-#if !defined(ADDRESS_SANITIZER)
-#define MAYBE_CheckWin10MsSignedWithIntercept_Success \
-  CheckWin10MsSignedWithIntercept_Success
-#define MAYBE_CheckWin10MsSigned_FailurePreSpawn \
-  CheckWin10MsSigned_FailurePreSpawn
-#else
-#define MAYBE_CheckWin10MsSignedWithIntercept_Success \
-  DISABLED_CheckWin10MsSignedWithIntercept_Success
-#define MAYBE_CheckWin10MsSigned_FailurePreSpawn \
-  DISABLED_CheckWin10MsSigned_FailurePreSpawn
-#endif
-
-// This test validates that setting the MITIGATION_FORCE_MS_SIGNED_BINS
-// mitigation allows the loading of an unsigned DLL if intercept in place.
-
-// Disabled due to crbug.com/1081080. This test was previously disabled on ASAN
-// builds, so if re-enabling remember to test that behaviour.
-TEST(ProcessMitigationsTest, DISABLED_CheckWin10MsSignedWithIntercept_Success) {
-  if (base::win::GetVersion() < base::win::Version::WIN10_TH2)
-    return;
-
-  ScopedTestMutex mutex(hooking_dll::g_hooking_dll_mutex);
-
-  // Expect success; Enable mitigation; Use non MS-signed binary.
-#if defined(COMPONENT_BUILD)
-  // In a component build, add the directory to the allowed list.
-  TestWin10MsSigned(sandbox::SBOX_TEST_SUCCEEDED /* expected */,
-                    true /* enable_mitigation */,
-                    false /* delayed */,
-                    false /* use_ms_signed_binary */,
-                    true /* add_dll_permission */,
-                    true /* add_directory_permission */);
-#else
-  TestWin10MsSigned(sandbox::SBOX_TEST_SUCCEEDED /* expected */,
-                    true /* enable_mitigation */,
-                    false /* delayed */,
-                    false /* use_ms_signed_binary */,
-                    true /* add_dll_permission */,
-                    false /* add_directory_permission */);
-#endif  // defined(COMPONENT_BUILD)
-}
-
-// This test validates that setting the MITIGATION_FORCE_MS_SIGNED_BINS
-// mitigation pre-load prevents the loading of an unsigned DLL.
-TEST(ProcessMitigationsTest, MAYBE_CheckWin10MsSigned_FailurePreSpawn) {
-  if (base::win::GetVersion() < base::win::Version::WIN10_TH2)
-    return;
-
-  ScopedTestMutex mutex(hooking_dll::g_hooking_dll_mutex);
-
-  // Other code in base/process relies on this invariant.
-  static_assert(
-      base::win::kStatusInvalidImageHashExitCode == STATUS_INVALID_IMAGE_HASH,
-      "Invalid hash exit code does not match between base and sandbox.");
-
-#if defined(COMPONENT_BUILD)
-  // In a component build, the executable will fail to start-up because
-  // imports e.g. base.dll cannot be resolved.
-  int expected = STATUS_INVALID_IMAGE_HASH;
-#else
-  // In a non-component build, the process will start, but the unsigned
-  // DLL will fail to load inside the test itself.
-  int expected = sandbox::SBOX_TEST_FAILED;
-#endif
-
-  TestWin10MsSigned(expected /* expected */,
-                    true /* enable_mitigation */,
-                    false /* delayed */,
-                    false /* use_ms_signed_binary */,
-                    false /* add_dll_permission */,
-                    false /* add_directory_permission */);
-}
-
-// This test validates that we can load a signed Microsoft DLL if the
-// MITIGATION_FORCE_MS_SIGNED_BINS mitigation is NOT set.  Very basic
-// sanity test.
-TEST(ProcessMitigationsTest, CheckWin10MsSigned_MsBaseline) {
-  if (base::win::GetVersion() < base::win::Version::WIN10_TH2)
-    return;
-
-  ScopedTestMutex mutex(hooking_dll::g_hooking_dll_mutex);
-
-  TestWin10MsSigned(sandbox::SBOX_TEST_SUCCEEDED /* expected */,
-                    false /* enable_mitigation */,
-                    false /* delayed */,
-                    true /* use_ms_signed_binary */,
-                    false /* add_dll_permission */,
-                    false /* add_directory_permission */);
-}
-
-// This test validates that setting the MITIGATION_FORCE_MS_SIGNED_BINS
-// mitigation still allows the load of an MS-signed DLL.
-TEST(ProcessMitigationsTest, CheckWin10MsSigned_MsSuccess) {
-  if (base::win::GetVersion() < base::win::Version::WIN10_TH2)
-    return;
-
-  ScopedTestMutex mutex(hooking_dll::g_hooking_dll_mutex);
-
-  TestWin10MsSigned(sandbox::SBOX_TEST_SUCCEEDED /* expected */,
-                    true /* enable_mitigation */,
-                    true /* delayed */,
-                    true /* use_ms_signed_binary */,
-                    false /* add_dll_permission */,
-                    false /* add_directory_permission */);
+  base::FilePath exe_path;
+  ASSERT_TRUE(base::PathService::Get(base::DIR_EXE, &exe_path));
+  std::wstring path = exe_path.Append(hooking_dll::g_hook_dll_file).value();
+  CheckPolicyTestRunner runner;
+  sandbox::TargetConfig* config = runner.GetConfig();
+  EXPECT_EQ(config->SetProcessMitigations(MITIGATION_FORCE_MS_SIGNED_BINS),
+            SBOX_ALL_OK);
+  EXPECT_EQ(sandbox::SBOX_ALL_OK, config->AllowExtraDll(path));
+  CheckPolicyTestRunner runner2;
+  config = runner2.GetConfig();
+  EXPECT_EQ(config->SetProcessMitigations(MITIGATION_FORCE_MS_SIGNED_BINS),
+            SBOX_ALL_OK);
+  EXPECT_EQ(sandbox::SBOX_ALL_OK, config->AllowExtraDll(path));
 }
 
 //------------------------------------------------------------------------------
 // Disable child process creation.
-// - JobLevel <= JOB_LIMITED_USER (on < WIN10_TH2).
-// - JobLevel <= JOB_LIMITED_USER which also triggers setting
+// - JobLevel <= JobLevel::kLimitedUser (on < WIN10_TH2).
+// - JobLevel <= JobLevel::kLimitedUser which also triggers setting
 //   PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY to
 //   PROCESS_CREATION_CHILD_PROCESS_RESTRICTED in
-//   BrokerServicesBase::SpawnTarget (on >= WIN10_TH2).
+//   BrokerServicesBase::SpawnTargetAsync (on >= WIN10_TH2).
 //------------------------------------------------------------------------------
 
 // This test validates that we can spawn a child process if
 // MITIGATION_CHILD_PROCESS_CREATION_RESTRICTED mitigation is
 // not set.
 TEST(ProcessMitigationsTest, CheckChildProcessSuccess) {
-  TestRunner runner;
-  sandbox::TargetPolicy* policy = runner.GetPolicy();
+  TestChildProcessTestRunner runner;
+  sandbox::TargetConfig* config = runner.GetConfig();
 
   // Set a policy that would normally allow for process creation.
-  policy->SetJobLevel(JOB_INTERACTIVE, 0);
-  policy->SetTokenLevel(USER_UNPROTECTED, USER_UNPROTECTED);
+  EXPECT_EQ(SBOX_ALL_OK, config->SetJobLevel(JobLevel::kInteractive, 0));
+  EXPECT_EQ(SBOX_ALL_OK,
+            config->SetTokenLevel(USER_UNPROTECTED, USER_UNPROTECTED));
   runner.SetDisableCsrss(false);
 
   base::FilePath cmd;
   EXPECT_TRUE(base::PathService::Get(base::DIR_SYSTEM, &cmd));
   cmd = cmd.Append(L"calc.exe");
 
-  std::wstring test_command = L"TestChildProcess \"";
-  test_command += cmd.value().c_str();
-  test_command += L"\" false";
-
-  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(test_command.c_str()));
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(cmd.value(), L"false"));
 }
 
 // This test validates that setting the
 // MITIGATION_CHILD_PROCESS_CREATION_RESTRICTED mitigation prevents
 // the spawning of child processes.
 TEST(ProcessMitigationsTest, CheckChildProcessFailure) {
-  TestRunner runner;
-  sandbox::TargetPolicy* policy = runner.GetPolicy();
+  TestChildProcessTestRunner runner;
+  sandbox::TargetConfig* config = runner.GetConfig();
 
-  // Now set the job level to be <= JOB_LIMITED_USER
+  // Now set the job level to be <= JobLevel::kLimitedUser
   // and ensure we can no longer create a child process.
-  policy->SetJobLevel(JOB_LIMITED_USER, 0);
-  policy->SetTokenLevel(USER_UNPROTECTED, USER_UNPROTECTED);
+  EXPECT_EQ(SBOX_ALL_OK, config->SetJobLevel(JobLevel::kLimitedUser, 0));
+  EXPECT_EQ(SBOX_ALL_OK,
+            config->SetTokenLevel(USER_UNPROTECTED, USER_UNPROTECTED));
   runner.SetDisableCsrss(false);
 
   base::FilePath cmd;
   EXPECT_TRUE(base::PathService::Get(base::DIR_SYSTEM, &cmd));
   cmd = cmd.Append(L"calc.exe");
 
-  std::wstring test_command = L"TestChildProcess \"";
-  test_command += cmd.value().c_str();
-  test_command += L"\" false";
-
-  EXPECT_EQ(SBOX_TEST_FAILED, runner.RunTest(test_command.c_str()));
+  // ProcessChildProcessPolicy introduced in RS3.
+  if (base::win::GetVersion() >= base::win::Version::WIN10_RS3) {
+    EXPECT_EQ(SBOX_TEST_SECOND_ERROR, runner.RunTest(cmd.value(), L"false"));
+  } else {
+    EXPECT_EQ(SBOX_TEST_NOT_FOUND, runner.RunTest(cmd.value(), L"false"));
+  }
 }
 
 // This test validates that when the sandboxed target within a job spawns a
@@ -1040,24 +961,22 @@ TEST(ProcessMitigationsTest, CheckChildProcessFailure) {
 // very similar to the above CheckChildProcess* tests, this test is here rather
 // than elsewhere closer to the other Job tests.
 TEST(ProcessMitigationsTest, CheckChildProcessAbnormalExit) {
-  TestRunner runner;
-  sandbox::TargetPolicy* policy = runner.GetPolicy();
+  TestChildProcessTestRunner runner;
+  sandbox::TargetConfig* config = runner.GetConfig();
 
   // Set a policy that would normally allow for process creation.
-  policy->SetJobLevel(JOB_INTERACTIVE, 0);
-  policy->SetTokenLevel(USER_UNPROTECTED, USER_UNPROTECTED);
+  EXPECT_EQ(SBOX_ALL_OK, config->SetJobLevel(JobLevel::kInteractive, 0));
+  EXPECT_EQ(SBOX_ALL_OK,
+            config->SetTokenLevel(USER_UNPROTECTED, USER_UNPROTECTED));
   runner.SetDisableCsrss(false);
 
   base::FilePath cmd;
   EXPECT_TRUE(base::PathService::Get(base::DIR_SYSTEM, &cmd));
   cmd = cmd.Append(L"calc.exe");
 
-  std::wstring test_command = L"TestChildProcess \"";
-  test_command += cmd.value().c_str();
-  test_command += L"\" false ";
-  test_command += std::to_wstring(STATUS_ACCESS_VIOLATION);
-
-  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(test_command.c_str()));
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED,
+            runner.RunTest(cmd.value(), L"false",
+                           static_cast<int>(STATUS_ACCESS_VIOLATION)));
 }
 
 //------------------------------------------------------------------------------
@@ -1074,25 +993,58 @@ TEST(ProcessMitigationsTest,
   if (base::win::GetVersion() < base::win::Version::WIN10_RS3)
     return;
 
-  std::wstring test_command = L"CheckPolicy ";
-  test_command += std::to_wstring(TESTPOLICY_RESTRICTINDIRECTBRANCHPREDICTION);
-
   //---------------------------------
   // 1) Test setting pre-startup.
   //---------------------------------
-  TestRunner runner;
-  sandbox::TargetPolicy* policy = runner.GetPolicy();
+  CheckPolicyTestRunner runner;
+  sandbox::TargetConfig* config = runner.GetConfig();
 
-  EXPECT_EQ(policy->SetProcessMitigations(
+  EXPECT_EQ(config->SetProcessMitigations(
                 MITIGATION_RESTRICT_INDIRECT_BRANCH_PREDICTION),
             SBOX_ALL_OK);
-  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(test_command.c_str()));
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED,
+            runner.RunTest(TESTPOLICY_RESTRICTINDIRECTBRANCHPREDICTION));
 
   //---------------------------------
   // 2) Test setting post-startup.
   //    ** Post-startup not supported.  Must be enabled on creation.
   //---------------------------------
 }
+
+//------------------------------------------------------------------------------
+// Module tampering protection
+// (MITIGATION_MODULE_TAMPERING_PROTECTION)
+// >= Win10 RS3
+//------------------------------------------------------------------------------
+
+// Parameterized test: true = mitigation enabled, false = disabled.
+class ModuleTamperingProtectionTest
+    : public ::testing::TestWithParam<bool> {};
+
+TEST_P(ModuleTamperingProtectionTest, ChildProcessStartsSuccessfully) {
+  if (base::win::GetVersion() < base::win::Version::WIN10_RS3) {
+    return;
+  }
+
+  CheckPolicyTestRunner runner;
+  sandbox::TargetConfig* config = runner.GetConfig();
+
+  if (GetParam()) {
+    EXPECT_EQ(
+        config->SetProcessMitigations(MITIGATION_MODULE_TAMPERING_PROTECTION),
+        SBOX_ALL_OK);
+  }
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED,
+            runner.RunTest(TESTPOLICY_MODULETAMPERINGPROTECTION));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ProcessMitigationsTest,
+    ModuleTamperingProtectionTest,
+    ::testing::Bool(),
+    [](const ::testing::TestParamInfo<bool>& info) {
+      return info.param ? "Enabled" : "Disabled";
+    });
 
 //------------------------------------------------------------------------------
 // Hardware shadow stack / Control(flow) Enforcement Technology / CETCOMPAT
@@ -1110,32 +1062,97 @@ TEST(ProcessMitigationsTest, CetDisablePolicy) {
 
   // Verify policy is available and set for this process (i.e. CET is
   // enabled via IFEO or through the CETCOMPAT bit on the executable).
-  auto get_process_mitigation_policy =
-      reinterpret_cast<decltype(&GetProcessMitigationPolicy)>(::GetProcAddress(
-          ::GetModuleHandleA("kernel32.dll"), "GetProcessMitigationPolicy"));
-
   PROCESS_MITIGATION_USER_SHADOW_STACK_POLICY uss_policy;
-  if (!get_process_mitigation_policy(GetCurrentProcess(),
-                                     ProcessUserShadowStackPolicy, &uss_policy,
-                                     sizeof(uss_policy))) {
+  if (!::GetProcessMitigationPolicy(GetCurrentProcess(),
+                                    ProcessUserShadowStackPolicy, &uss_policy,
+                                    sizeof(uss_policy))) {
     return;
   }
 
   if (!uss_policy.EnableUserShadowStack)
     return;
 
-  std::wstring test_command = L"CheckPolicy ";
-  test_command += std::to_wstring(TESTPOLICY_CETDISABLED);
+  //---------------------------------
+  // 1) Test setting pre-startup.
+  //---------------------------------
+  CheckPolicyTestRunner runner;
+  sandbox::TargetConfig* config = runner.GetConfig();
+
+  EXPECT_EQ(config->SetProcessMitigations(MITIGATION_CET_DISABLED),
+            SBOX_ALL_OK);
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(TESTPOLICY_CETDISABLED));
+
+  //---------------------------------
+  // 2) Test setting post-startup.
+  //    ** Post-startup not supported.  Must be enabled on creation.
+  //---------------------------------
+}
+
+// This test validates that setting the
+// MITIGATION_CET_ALLOW_DYNAMIC_APIS enables CET with in-process dynamic apis
+// allowed for the child process. The test only makes sense where the parent was
+// launched with CET enabled, hence we bail out early on systems that do not
+// support CET.
+TEST(ProcessMitigationsTest, CetAllowDynamicApis) {
+  if (base::win::GetVersion() < base::win::Version::WIN10_20H1)
+    return;
+
+  // Verify policy is available and set for this process (i.e. CET is
+  // enabled via IFEO or through the CETCOMPAT bit on the executable).
+  PROCESS_MITIGATION_USER_SHADOW_STACK_POLICY uss_policy;
+  if (!::GetProcessMitigationPolicy(GetCurrentProcess(),
+                                    ProcessUserShadowStackPolicy, &uss_policy,
+                                    sizeof(uss_policy))) {
+    return;
+  }
+
+  if (!uss_policy.EnableUserShadowStack)
+    return;
 
   //---------------------------------
   // 1) Test setting pre-startup.
   //---------------------------------
-  TestRunner runner;
-  sandbox::TargetPolicy* policy = runner.GetPolicy();
+  CheckPolicyTestRunner runner;
+  sandbox::TargetConfig* config = runner.GetConfig();
 
-  EXPECT_EQ(policy->SetProcessMitigations(MITIGATION_CET_DISABLED),
+  EXPECT_EQ(config->SetProcessMitigations(MITIGATION_CET_ALLOW_DYNAMIC_APIS),
             SBOX_ALL_OK);
-  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(test_command.c_str()));
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(TESTPOLICY_CETDYNAMICAPIS));
+
+  //---------------------------------
+  // 2) Test setting post-startup.
+  //    ** Post-startup not supported.  Must be enabled on creation.
+  //---------------------------------
+}
+
+// This test validates that setting the MITIGATION_CET_STRICT_MODE enables CET
+// in strict mode. The test only makes sense where the parent was launched with
+// CET enabled, hence we bail out early on systems that do not support CET.
+TEST(ProcessMitigationsTest, CetStrictMode) {
+  if (base::win::GetVersion() < base::win::Version::WIN10_20H1)
+    return;
+
+  // Verify policy is available and set for this process (i.e. CET is
+  // enabled via IFEO or through the CETCOMPAT bit on the executable).
+  PROCESS_MITIGATION_USER_SHADOW_STACK_POLICY uss_policy;
+  if (!::GetProcessMitigationPolicy(GetCurrentProcess(),
+                                    ProcessUserShadowStackPolicy, &uss_policy,
+                                    sizeof(uss_policy))) {
+    return;
+  }
+
+  if (!uss_policy.EnableUserShadowStack)
+    return;
+
+  //---------------------------------
+  // 1) Test setting pre-startup.
+  //---------------------------------
+  CheckPolicyTestRunner runner;
+  sandbox::TargetConfig* config = runner.GetConfig();
+
+  EXPECT_EQ(config->SetProcessMitigations(MITIGATION_CET_STRICT_MODE),
+            SBOX_ALL_OK);
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(TESTPOLICY_CETSTRICT));
 
   //---------------------------------
   // 2) Test setting post-startup.
@@ -1145,16 +1162,227 @@ TEST(ProcessMitigationsTest, CetDisablePolicy) {
 
 TEST(ProcessMitigationsTest, CheckWin10KernelTransactionManagerMitigation) {
   const auto& ver = base::win::OSInfo::GetInstance()->version_number();
-  // TODO(wfh): Determine exactly which release/build this is enabled in.
-  if (ver.build < 20287)
+
+  // This feature is enabled starting in KB5005101
+  if (ver.build < 19041 || (ver.build < 19044 && ver.patch < 1202))
     return;
-  std::wstring test_policy_command = L"CheckPolicy ";
-  test_policy_command += std::to_wstring(TESTPOLICY_KTMCOMPONENTFILTER);
-  TestRunner runner;
-  sandbox::TargetPolicy* policy = runner.GetPolicy();
-  EXPECT_EQ(policy->SetProcessMitigations(MITIGATION_KTM_COMPONENT),
+
+  CheckPolicyTestRunner runner;
+  sandbox::TargetConfig* config = runner.GetConfig();
+  EXPECT_EQ(config->SetProcessMitigations(MITIGATION_KTM_COMPONENT),
             SBOX_ALL_OK);
-  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(test_policy_command.c_str()));
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(TESTPOLICY_KTMCOMPONENTFILTER));
+}
+
+TEST(ProcessMitigationsTest, CheckWin10ImageLoadNoRemotePolicySuccess) {
+  if (base::win::GetVersion() < base::win::Version::WIN10_TH2)
+    return;
+
+  //---------------------------------
+  // 1) Test setting pre-startup.
+  //---------------------------------
+  CheckPolicyTestRunner runner;
+  sandbox::TargetConfig* config = runner.GetConfig();
+
+  EXPECT_EQ(config->SetProcessMitigations(MITIGATION_IMAGE_LOAD_NO_REMOTE),
+            SBOX_ALL_OK);
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(TESTPOLICY_LOADNOREMOTE));
+
+  //---------------------------------
+  // 2) Test setting post-startup.
+  //---------------------------------
+  CheckPolicyTestRunner runner2;
+  sandbox::TargetConfig* config2 = runner2.GetConfig();
+
+  EXPECT_EQ(
+      config2->SetDelayedProcessMitigations(MITIGATION_IMAGE_LOAD_NO_REMOTE),
+      SBOX_ALL_OK);
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner2.RunTest(TESTPOLICY_LOADNOREMOTE));
+}
+
+//---------------
+// This test validates that setting the MITIGATION_IMAGE_LOAD_NO_LOW_LABEL
+// mitigation enables the setting on a process.
+TEST(ProcessMitigationsTest, CheckWin10ImageLoadNoLowLabelPolicySuccess) {
+  if (base::win::GetVersion() < base::win::Version::WIN10_TH2)
+    return;
+
+  //---------------------------------
+  // 1) Test setting pre-startup.
+  //---------------------------------
+  CheckPolicyTestRunner runner;
+  sandbox::TargetConfig* config = runner.GetConfig();
+
+  EXPECT_EQ(config->SetProcessMitigations(MITIGATION_IMAGE_LOAD_NO_LOW_LABEL),
+            SBOX_ALL_OK);
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(TESTPOLICY_LOADNOLOW));
+
+  //---------------------------------
+  // 2) Test setting post-startup.
+  //---------------------------------
+  CheckPolicyTestRunner runner2;
+  sandbox::TargetConfig* config2 = runner2.GetConfig();
+
+  EXPECT_EQ(
+      config2->SetDelayedProcessMitigations(MITIGATION_IMAGE_LOAD_NO_LOW_LABEL),
+      SBOX_ALL_OK);
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner2.RunTest(TESTPOLICY_LOADNOLOW));
+}
+
+// This test validates that setting the MITIGATION_IMAGE_LOAD_PREFER_SYS32
+// mitigation enables the setting on a process.
+TEST(ProcessMitigationsTest, CheckWin10ImageLoadPreferSys32PolicySuccess) {
+  if (base::win::GetVersion() < base::win::Version::WIN10_RS1)
+    return;
+
+  //---------------------------------
+  // 1) Test setting pre-startup.
+  //   ** Currently disabled.  All PreferSys32 tests start to explode on
+  //   >= Win10 1703/RS2 when this mitigation is set pre-startup.
+  //   Child process creation works fine, but when ::ResumeThread() is called,
+  //   there is a fatal error: "Entry point ucnv_convertEx_60 could not be
+  //   located in the DLL ... sbox_integration_tests.exe."
+  //   This is a character conversion function in a ucnv (unicode) DLL.
+  //   Potentially the loader is finding a different version of this DLL that
+  //   we have a dependency on in System32... but it doesn't match up with
+  //   what we build against???!
+  //---------------------------------
+
+  //---------------------------------
+  // 2) Test setting post-startup.
+  //---------------------------------
+  CheckPolicyTestRunner runner2;
+  sandbox::TargetConfig* config2 = runner2.GetConfig();
+
+  EXPECT_EQ(
+      config2->SetDelayedProcessMitigations(MITIGATION_IMAGE_LOAD_PREFER_SYS32),
+      SBOX_ALL_OK);
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner2.RunTest(TESTPOLICY_LOADPREFERSYS32));
+}
+
+// This test validates setting a pre-startup mitigation and a post startup
+// mitigation on the same windows policy works in release and crashes in debug.
+TEST(ProcessMitigationsTest, SetPreAndPostStartupSamePolicy_ImageLoad) {
+  if (base::win::GetVersion() < base::win::Version::WIN10_RS1)
+    return;
+
+  CheckPolicyTestRunner runner;
+  sandbox::TargetConfig* config = runner.GetConfig();
+
+  //---------------------------------
+  // 1) Test setting pre-startup.
+  EXPECT_EQ(config->SetProcessMitigations(MITIGATION_IMAGE_LOAD_NO_LOW_LABEL),
+            SBOX_ALL_OK);
+
+  //---------------------------------
+  // 2) Test setting post-startup.
+  //---------------------------------
+  EXPECT_EQ(
+      config->SetDelayedProcessMitigations(MITIGATION_IMAGE_LOAD_PREFER_SYS32),
+      SBOX_ALL_OK);
+
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(TESTPOLICY_PREANDPOSTSTARTUP));
+}
+
+// This test validates setting a pre-startup mitigation and a post startup
+// mitigation on the same windows policy works in release and crashes in debug.
+TEST(ProcessMitigationsTest, SetPreAndPostStartupSamePolicy_ProcessDep) {
+  CheckPolicyTestRunner runner;
+  sandbox::TargetConfig* config = runner.GetConfig();
+
+  //---------------------------------
+  // 1) Test setting pre-startup.
+  EXPECT_EQ(config->SetProcessMitigations(MITIGATION_DEP), SBOX_ALL_OK);
+
+  //---------------------------------
+  // 2) Test setting post-startup.
+  //---------------------------------
+  EXPECT_EQ(config->SetDelayedProcessMitigations(MITIGATION_DEP_NO_ATL_THUNK),
+            SBOX_ALL_OK);
+
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(TESTPOLICY_DEP));
+}
+
+// This test validates setting a pre-startup mitigation and a post startup
+// mitigation on the same windows policy works in release and crashes in debug.
+TEST(ProcessMitigationsTest, SetPreAndPostStartupSamePolicy_ASLR) {
+  CheckPolicyTestRunner runner;
+  sandbox::TargetConfig* config = runner.GetConfig();
+
+  //---------------------------------
+  // 1) Test setting pre-startup.
+  EXPECT_EQ(config->SetProcessMitigations(MITIGATION_BOTTOM_UP_ASLR |
+                                          MITIGATION_HIGH_ENTROPY_ASLR),
+            SBOX_ALL_OK);
+
+  //---------------------------------
+  // 2) Test setting post-startup.
+  //---------------------------------
+  EXPECT_EQ(config->SetDelayedProcessMitigations(
+                MITIGATION_RELOCATE_IMAGE | MITIGATION_RELOCATE_IMAGE_REQUIRED),
+            SBOX_ALL_OK);
+
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(TESTPOLICY_ASLR));
+}
+
+// This test validates that setting MITIGATION_FSCTL_DISABLED applies the
+// FSCTL syscall mitigation to the child process.
+TEST(ProcessMitigationsTest, FsctlDisabled) {
+  // TODO: update version check when the planned OS servicing is done for Win10
+  // 22H2 & later.
+  if (base::win::GetVersion() <= base::win::Version::WIN11_22H2) {
+    return;
+  }
+
+  //---------------------------------
+  // 1) Test setting pre-startup.
+  //---------------------------------
+  CheckPolicyTestRunner runner;
+  sandbox::TargetConfig* config = runner.GetConfig();
+
+  EXPECT_EQ(config->SetProcessMitigations(MITIGATION_FSCTL_DISABLED),
+            SBOX_ALL_OK);
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(TESTPOLICY_FSCTLDISABLED));
+}
+
+// This test validates setting restrict_core_sharing policy which will
+// make sure process threads never share a core with threads outside it's
+// security domain.
+// The policy setting can fail on device which doesn't have the right scheduler
+// as described in
+// https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-process_
+// mitigation_side_channel_isolation_policy
+// This test passes if we are able to set the policy or the policy set fails
+// with ERROR_NOT_SUPPORTED due to incorrect scheduler type.
+TEST(ProcessMitigationsTest, RestrictCoreSharing) {
+  if (base::win::GetVersion() < base::win::Version::WIN11_24H2) {
+    return;
+  }
+
+  CheckPolicyTestRunner runner;
+  sandbox::TargetConfig* config = runner.GetConfig();
+
+  EXPECT_EQ(config->SetProcessMitigations(MITIGATION_RESTRICT_CORE_SHARING),
+            SBOX_ALL_OK);
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED,
+            runner.RunTest(TESTPOLICY_RESTRICTCORESHARING));
+}
+
+TEST(ProcessMitigationsTest, NoAllowExtraDllWildcards) {
+  // AllowExtraDll() is not supported on very first Win10 version.
+  if (base::win::GetVersion() < base::win::Version::WIN10_TH2) {
+    return;
+  }
+
+  CheckPolicyTestRunner runner;
+  sandbox::TargetConfig* config = runner.GetConfig();
+  EXPECT_EQ(config->SetProcessMitigations(MITIGATION_FORCE_MS_SIGNED_BINS),
+            SBOX_ALL_OK);
+  // Validate that wildcards are rejected.
+  base::FilePath exe_path;
+  EXPECT_TRUE(base::PathService::Get(base::DIR_EXE, &exe_path));
+  EXPECT_EQ(sandbox::SBOX_ERROR_BAD_PARAMS,
+            config->AllowExtraDll(exe_path.Append(L"*.dll").value()));
 }
 
 }  // namespace sandbox

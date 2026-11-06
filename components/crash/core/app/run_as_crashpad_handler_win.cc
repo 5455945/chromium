@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,17 +7,21 @@
 #include <algorithm>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/command_line.h"
-#include "base/containers/cxx20_erase.h"
+#include "base/containers/heap_array.h"
 #include "base/files/file_path.h"
+#include "base/logging.h"
 #include "base/process/memory.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/platform_thread.h"
-#include "components/browser_watcher/activity_report_user_stream_data_source.h"
+#include "components/crash/core/app/shared_memory_user_stream_args.h"
+#include "components/crash/core/app/shared_memory_user_stream_data_source.h"
 #include "components/gwp_asan/buildflags/buildflags.h"
+#include "components/stability_report/user_stream_data_source_win.h"
 #include "third_party/crashpad/crashpad/client/crashpad_info.h"
 #include "third_party/crashpad/crashpad/client/simple_string_dictionary.h"
 #include "third_party/crashpad/crashpad/handler/handler_main.h"
@@ -36,6 +40,7 @@ int RunAsCrashpadHandler(const base::CommandLine& command_line,
   // Make sure this process terminates on OOM in the same mode as other Chrome
   // processes.
   base::EnableTerminationOnOutOfMemory();
+  logging::RegisterAbslAbortHook();
 
   base::PlatformThread::SetName("CrashpadMainThread");
 
@@ -61,7 +66,7 @@ int RunAsCrashpadHandler(const base::CommandLine& command_line,
       L"--" + base::UTF8ToWide(process_type_switch) + L"=";
   const std::wstring user_data_dir_arg_prefix =
       L"--" + base::UTF8ToWide(user_data_dir_switch) + L"=";
-  base::EraseIf(argv, [&process_type_arg_prefix,
+  std::erase_if(argv, [&process_type_arg_prefix,
                        &user_data_dir_arg_prefix](const std::wstring& str) {
     return base::StartsWith(str, process_type_arg_prefix,
                             base::CompareCase::SENSITIVE) ||
@@ -70,7 +75,8 @@ int RunAsCrashpadHandler(const base::CommandLine& command_line,
            (!str.empty() && str[0] == L'/');
   });
 
-  std::unique_ptr<char* []> argv_as_utf8(new char*[argv.size() + 1]);
+  base::HeapArray<char*> argv_as_utf8 =
+      base::HeapArray<char*>::Uninit(argv.size() + 1);
   std::vector<std::string> storage;
   storage.reserve(argv.size());
   for (size_t i = 0; i < argv.size(); ++i) {
@@ -78,26 +84,32 @@ int RunAsCrashpadHandler(const base::CommandLine& command_line,
     argv_as_utf8[i] = &storage[i][0];
   }
   argv_as_utf8[argv.size()] = nullptr;
+  int argc = static_cast<int>(storage.size());
   argv.clear();
 
+  // Extract shared memory user stream regions from the command line and create
+  // data sources for them.
   crashpad::UserStreamDataSources user_stream_data_sources;
-  // Interpret an empty user data directory as a missing value.
-  if (!user_data_dir.empty()) {
-    // Register an extension to collect stability information. The extension
-    // will be invoked for any registered process' crashes, but information only
-    // exists for instrumented browser processes.
-    user_stream_data_sources.push_back(
-        std::make_unique<browser_watcher::ActivityReportUserStreamDataSource>(
-            user_data_dir));
+  std::vector<base::ReadOnlySharedMemoryRegion> regions =
+      crash_reporter::internal::ExtractSharedMemoryUserStreamArgs(
+          &argc, argv_as_utf8.data());
+  crashpad::UserStreamDataSources shared_memory_sources =
+      crash_reporter::internal::CreateSharedMemoryUserStreamDataSources(
+          std::move(regions));
+  for (auto& source : shared_memory_sources) {
+    user_stream_data_sources.push_back(std::move(source));
   }
+
+  user_stream_data_sources.push_back(
+      std::make_unique<stability_report::UserStreamDataSourceWin>());
 
 #if BUILDFLAG(ENABLE_GWP_ASAN)
   user_stream_data_sources.push_back(
       std::make_unique<gwp_asan::UserStreamDataSource>());
 #endif
 
-  return crashpad::HandlerMain(static_cast<int>(storage.size()),
-                               argv_as_utf8.get(), &user_stream_data_sources);
+  return crashpad::HandlerMain(argc, argv_as_utf8.data(),
+                               &user_stream_data_sources);
 }
 
 }  // namespace crash_reporter

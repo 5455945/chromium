@@ -1,10 +1,26 @@
-// Copyright (c) 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/peerconnection/thermal_resource.h"
 
+#include <cstddef>
+#include <string>
+#include <utility>
+
+#include "base/check.h"
+#include "base/feature_list.h"
+#include "base/location.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/synchronization/lock.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
+#include "third_party/blink/public/mojom/peerconnection/peer_connection_tracker.mojom-blink-forward.h"
+#include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
+#include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
+#include "third_party/webrtc/api/adaptation/resource.h"
+#include "third_party/webrtc/api/scoped_refptr.h"
 #include "third_party/webrtc/rtc_base/ref_counted_object.h"
 
 namespace blink {
@@ -15,19 +31,18 @@ const int kReportIntervalSeconds = 10;
 
 }  // namespace
 
-const base::Feature kWebRtcThermalResource {
-  "WebRtcThermalResource",
-#if defined(OS_MAC) || defined(OS_CHROMEOS)
-      base::FEATURE_ENABLED_BY_DEFAULT
+BASE_FEATURE(kWebRtcThermalResource,
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
+             base::FEATURE_ENABLED_BY_DEFAULT
 #else
-      base::FEATURE_DISABLED_BY_DEFAULT
+             base::FEATURE_DISABLED_BY_DEFAULT
 #endif
-};
+);
 
 // static
 scoped_refptr<ThermalResource> ThermalResource::Create(
     scoped_refptr<base::SequencedTaskRunner> task_runner) {
-  return new rtc::RefCountedObject<ThermalResource>(std::move(task_runner));
+  return new webrtc::RefCountedObject<ThermalResource>(std::move(task_runner));
 }
 
 ThermalResource::ThermalResource(
@@ -73,21 +88,24 @@ void ThermalResource::ReportMeasurementWhileHoldingLock(size_t measurement_id) {
     case mojom::blink::DeviceThermalState::kNominal:
     case mojom::blink::DeviceThermalState::kFair:
       listener_->OnResourceUsageStateMeasured(
-          this, webrtc::ResourceUsageState::kUnderuse);
+          webrtc::scoped_refptr<Resource>(this),
+          webrtc::ResourceUsageState::kUnderuse);
       break;
     case mojom::blink::DeviceThermalState::kSerious:
     case mojom::blink::DeviceThermalState::kCritical:
       listener_->OnResourceUsageStateMeasured(
-          this, webrtc::ResourceUsageState::kOveruse);
+          webrtc::scoped_refptr<Resource>(this),
+          webrtc::ResourceUsageState::kOveruse);
       break;
   }
   // Repeat the reporting every 10 seconds until a new measurement is made or
   // the listener is unregistered.
-  task_runner_->PostDelayedTask(
-      FROM_HERE,
-      base::BindOnce(&ThermalResource::ReportMeasurement,
-                     scoped_refptr<ThermalResource>(this), measurement_id),
-      base::TimeDelta::FromSeconds(kReportIntervalSeconds));
+  PostDelayedCrossThreadTask(
+      *task_runner_, FROM_HERE,
+      CrossThreadBindOnce(&ThermalResource::ReportMeasurement,
+                          webrtc::scoped_refptr<ThermalResource>(this),
+                          measurement_id),
+      base::Seconds(kReportIntervalSeconds));
 }
 
 }  // namespace blink

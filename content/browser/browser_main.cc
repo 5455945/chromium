@@ -1,52 +1,55 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/browser_main.h"
 
 #include <memory>
+#include <optional>
 
+#include "base/debug/alias.h"
+#include "base/process/current_process.h"
+#include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "content/browser/browser_main_runner_impl.h"
 #include "content/common/content_constants_internal.h"
+#include "content/public/common/result_codes.h"
 
 namespace content {
 
-namespace {
-
-// Generates a pair of BrowserMain async events. We don't use the TRACE_EVENT0
-// macro because the tracing infrastructure doesn't expect synchronous events
-// around the main loop of a thread.
-class ScopedBrowserMainEvent {
- public:
-  ScopedBrowserMainEvent() {
-    TRACE_EVENT_ASYNC_BEGIN0("startup", "BrowserMain", 0);
-  }
-  ~ScopedBrowserMainEvent() {
-    TRACE_EVENT_ASYNC_END0("startup", "BrowserMain", 0);
-  }
-};
-
-}  // namespace
-
 // Main routine for running as the Browser process.
-int BrowserMain(const MainFunctionParams& parameters) {
-  ScopedBrowserMainEvent scoped_browser_main_event;
+int BrowserMain(MainFunctionParams parameters) {
+  TRACE_EVENT_INSTANT("startup", "BrowserMain");
 
-  base::trace_event::TraceLog::GetInstance()->set_process_name("Browser");
-  base::trace_event::TraceLog::GetInstance()->SetProcessSortIndex(
-      kTraceEventBrowserProcessSortIndex);
+  base::CurrentProcess::GetInstance().SetProcessType(
+      base::CurrentProcessType::PROCESS_BROWSER);
 
   std::unique_ptr<BrowserMainRunnerImpl> main_runner(
       BrowserMainRunnerImpl::Create());
 
-  int exit_code = main_runner->Initialize(parameters);
+  int exit_code = main_runner->Initialize(std::move(parameters));
   if (exit_code >= 0)
     return exit_code;
 
   exit_code = main_runner->Run();
 
+  // Record the time shutdown started in convenient units. This can be compared
+  // to times stored in places like ReportThreadHang() and
+  // TaskAnnotator::RunTaskImpl() when analyzing hangs.
+  const int64_t shutdown_time =
+      base::TimeTicks::Now().since_origin().InSeconds();
+  base::debug::Alias(&shutdown_time);
+
   main_runner->Shutdown();
+
+  // If the browser process completed normally, allow an embedder override to
+  // specify a custom exit code (e.g. to communicate a relaunch to a parent
+  // stub).
+  if (exit_code == RESULT_CODE_NORMAL_EXIT) {
+    if (auto override_code = BrowserMainRunnerImpl::GetOverrideResultCode()) {
+      return *override_code;
+    }
+  }
 
   return exit_code;
 }

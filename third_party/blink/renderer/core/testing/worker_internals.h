@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,6 +11,8 @@
 namespace blink {
 
 class ExceptionState;
+class CanvasImageSource;
+class CanvasRenderingContext;
 class OriginTrialsTest;
 class ScriptState;
 
@@ -26,6 +28,11 @@ class WorkerInternals final : public ScriptWrappable {
   void countDeprecation(ScriptState*, uint32_t feature, ExceptionState&);
 
   void collectGarbage(ScriptState*);
+
+  void forceLoseCanvasContext(CanvasRenderingContext* ctx);
+  bool isCanvasImageSourceAccelerated(const CanvasImageSource*) const;
+
+  String getCanvasNoiseToken(ScriptState* script_state);
 };
 
 }  // namespace blink

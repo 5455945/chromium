@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,9 +13,12 @@
 #include "ash/login/ui/pin_request_widget.h"
 #include "ash/login/ui/views_utils.h"
 #include "ash/public/cpp/child_accounts/parent_access_controller.h"
-#include "base/bind.h"
 #include "base/dcheck_is_on.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
+#include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/time/time.h"
 #include "components/account_id/account_id.h"
 #include "components/session_manager/session_manager_types.h"
 #include "ui/events/base_event_utils.h"
@@ -33,6 +36,12 @@ AccountId GetChildAccountId() {
 }
 
 class ParentAccessControllerImplTest : public LoginTestBase {
+ public:
+  ParentAccessControllerImplTest(const ParentAccessControllerImplTest&) =
+      delete;
+  ParentAccessControllerImplTest& operator=(
+      const ParentAccessControllerImplTest&) = delete;
+
  protected:
   ParentAccessControllerImplTest() : account_id_(GetChildAccountId()) {}
   ~ParentAccessControllerImplTest() override = default;
@@ -44,18 +53,17 @@ class ParentAccessControllerImplTest : public LoginTestBase {
   }
 
   void TearDown() override {
-    LoginTestBase::TearDown();
-
     // If the test did not explicitly dismissed the widget, destroy it now.
     PinRequestWidget* pin_request_widget = PinRequestWidget::Get();
     if (pin_request_widget)
       pin_request_widget->Close(false /* validation success */);
+    LoginTestBase::TearDown();
   }
 
   // Simulates mouse press event on a |button|.
   void SimulateButtonPress(views::Button* button) {
-    ui::MouseEvent event(ui::ET_MOUSE_PRESSED, gfx::Point(), gfx::Point(),
-                         ui::EventTimeForNow(), 0, 0);
+    ui::MouseEvent event(ui::EventType::kMousePressed, gfx::Point(),
+                         gfx::Point(), ui::EventTimeForNow(), 0, 0);
     views::test::ButtonTestApi(button).NotifyClick(event);
   }
 
@@ -88,8 +96,15 @@ class ParentAccessControllerImplTest : public LoginTestBase {
         base::BindOnce(&ParentAccessControllerImplTest::OnFinished,
                        base::Unretained(this)),
         action, false, validation_time_);
-    view_ =
-        PinRequestWidget::TestApi(PinRequestWidget::Get()).pin_request_view();
+  }
+
+  PinRequestView* view() {
+    PinRequestWidget* widget = PinRequestWidget::Get();
+    if (widget) {
+      return PinRequestWidget::TestApi(PinRequestWidget::Get())
+          .pin_request_view();
+    }
+    return nullptr;
   }
 
   // Verifies expectation that UMA |action| was logged.
@@ -119,7 +134,7 @@ class ParentAccessControllerImplTest : public LoginTestBase {
 
     const std::string all_results_histogram =
         ParentAccessControllerImpl::GetUMAParentCodeValidationResultHistorgam(
-            absl::nullopt);
+            std::nullopt);
 
     histogram_tester_.ExpectBucketCount(all_results_histogram, result,
                                         bucket_count);
@@ -130,16 +145,20 @@ class ParentAccessControllerImplTest : public LoginTestBase {
   // accepted.
   void SimulateValidation(ParentCodeValidationResult result) {
     login_client_->set_validate_parent_access_code_result(result);
+    base::RunLoop validation_run_loop;
     EXPECT_CALL(*login_client_, ValidateParentAccessCode_(account_id_, "012345",
                                                           validation_time_))
-        .Times(1);
+        .WillOnce([&](const AccountId&, const std::string&, base::Time) {
+          validation_run_loop.Quit();
+          return result;
+        });
 
     ui::test::EventGenerator* generator = GetEventGenerator();
     for (int i = 0; i < 6; ++i) {
       generator->PressKey(ui::KeyboardCode(ui::KeyboardCode::VKEY_0 + i),
                           ui::EF_NONE);
-      base::RunLoop().RunUntilIdle();
     }
+    validation_run_loop.Run();
   }
 
   const AccountId account_id_;
@@ -156,10 +175,6 @@ class ParentAccessControllerImplTest : public LoginTestBase {
 
   base::HistogramTester histogram_tester_;
 
-  PinRequestView* view_ = nullptr;  // Owned by test widget view hierarchy.
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ParentAccessControllerImplTest);
 };
 
 // Tests parent access dialog showing/hiding and focus behavior for parent
@@ -168,7 +183,7 @@ TEST_F(ParentAccessControllerImplTest, ParentAccessDialogFocus) {
   EXPECT_FALSE(PinRequestWidget::Get());
 
   StartParentAccess();
-  PinRequestView::TestApi view_test_api = PinRequestView::TestApi(view_);
+  PinRequestView::TestApi view_test_api = PinRequestView::TestApi(view());
 
   ASSERT_TRUE(PinRequestWidget::Get());
   EXPECT_TRUE(login_views_utils::HasFocusInAnyChildView(
@@ -187,7 +202,7 @@ TEST_F(ParentAccessControllerImplTest, ParentAccessUMARecording) {
   histogram_tester_.ExpectBucketCount(
       ParentAccessControllerImpl::kUMAParentAccessCodeUsage,
       ParentAccessControllerImpl::UMAUsage::kTimeLimits, 1);
-  SimulateButtonPress(PinRequestView::TestApi(view_).back_button());
+  SimulateButtonPress(PinRequestView::TestApi(view()).back_button());
   ExpectUMAActionReported(
       ParentAccessControllerImpl::UMAAction::kCanceledByUser, 1, 1);
 
@@ -197,7 +212,7 @@ TEST_F(ParentAccessControllerImplTest, ParentAccessUMARecording) {
   histogram_tester_.ExpectBucketCount(
       ParentAccessControllerImpl::kUMAParentAccessCodeUsage,
       ParentAccessControllerImpl::UMAUsage::kTimezoneChange, 1);
-  SimulateButtonPress(PinRequestView::TestApi(view_).back_button());
+  SimulateButtonPress(PinRequestView::TestApi(view()).back_button());
   ExpectUMAActionReported(
       ParentAccessControllerImpl::UMAAction::kCanceledByUser, 2, 2);
 
@@ -207,7 +222,7 @@ TEST_F(ParentAccessControllerImplTest, ParentAccessUMARecording) {
   histogram_tester_.ExpectBucketCount(
       ParentAccessControllerImpl::kUMAParentAccessCodeUsage,
       ParentAccessControllerImpl::UMAUsage::kTimeChangeInSession, 1);
-  SimulateButtonPress(PinRequestView::TestApi(view_).back_button());
+  SimulateButtonPress(PinRequestView::TestApi(view()).back_button());
   ExpectUMAActionReported(
       ParentAccessControllerImpl::UMAAction::kCanceledByUser, 3, 3);
 
@@ -217,7 +232,7 @@ TEST_F(ParentAccessControllerImplTest, ParentAccessUMARecording) {
   histogram_tester_.ExpectBucketCount(
       ParentAccessControllerImpl::kUMAParentAccessCodeUsage,
       ParentAccessControllerImpl::UMAUsage::kTimeChangeLoginScreen, 1);
-  SimulateButtonPress(PinRequestView::TestApi(view_).back_button());
+  SimulateButtonPress(PinRequestView::TestApi(view()).back_button());
   ExpectUMAActionReported(
       ParentAccessControllerImpl::UMAAction::kCanceledByUser, 4, 4);
 
@@ -227,19 +242,9 @@ TEST_F(ParentAccessControllerImplTest, ParentAccessUMARecording) {
   histogram_tester_.ExpectBucketCount(
       ParentAccessControllerImpl::kUMAParentAccessCodeUsage,
       ParentAccessControllerImpl::UMAUsage::kTimeChangeInSession, 2);
-  SimulateButtonPress(PinRequestView::TestApi(view_).back_button());
+  SimulateButtonPress(PinRequestView::TestApi(view()).back_button());
   ExpectUMAActionReported(
       ParentAccessControllerImpl::UMAAction::kCanceledByUser, 5, 5);
-
-  GetSessionControllerClient()->SetSessionState(
-      session_manager::SessionState::LOGIN_PRIMARY);
-  StartParentAccess(EmptyAccountId(), SupervisedAction::kReauth);
-  histogram_tester_.ExpectBucketCount(
-      ParentAccessControllerImpl::kUMAParentAccessCodeUsage,
-      ParentAccessControllerImpl::UMAUsage::kReauhLoginScreen, 1);
-  SimulateButtonPress(PinRequestView::TestApi(view_).back_button());
-  ExpectUMAActionReported(
-      ParentAccessControllerImpl::UMAAction::kCanceledByUser, 6, 6);
 
   GetSessionControllerClient()->SetSessionState(
       session_manager::SessionState::LOGIN_PRIMARY);
@@ -247,13 +252,13 @@ TEST_F(ParentAccessControllerImplTest, ParentAccessUMARecording) {
   histogram_tester_.ExpectBucketCount(
       ParentAccessControllerImpl::kUMAParentAccessCodeUsage,
       ParentAccessControllerImpl::UMAUsage::kAddUserLoginScreen, 1);
-  SimulateButtonPress(PinRequestView::TestApi(view_).back_button());
+  SimulateButtonPress(PinRequestView::TestApi(view()).back_button());
   ExpectUMAActionReported(
-      ParentAccessControllerImpl::UMAAction::kCanceledByUser, 7, 7);
+      ParentAccessControllerImpl::UMAAction::kCanceledByUser, 6, 6);
 
   histogram_tester_.ExpectTotalCount(
-      ParentAccessControllerImpl::kUMAParentAccessCodeUsage, 7);
-  EXPECT_EQ(7, back_action_);
+      ParentAccessControllerImpl::kUMAParentAccessCodeUsage, 6);
+  EXPECT_EQ(6, back_action_);
 }
 
 // Tests successful parent access validation flow.
@@ -282,11 +287,11 @@ TEST_F(ParentAccessControllerImplTest, ParentAccessUnsuccessfulValidation) {
       SupervisedAction::kUnlockTimeLimits, 1, 1);
 
   EXPECT_CALL(*login_client_, ShowParentAccessHelpApp()).Times(1);
-  SimulateButtonPress(PinRequestView::TestApi(view_).help_button());
+  SimulateButtonPress(PinRequestView::TestApi(view()).help_button());
   ExpectUMAActionReported(ParentAccessControllerImpl::UMAAction::kGetHelp, 1,
                           2);
 
-  SimulateButtonPress(PinRequestView::TestApi(view_).back_button());
+  SimulateButtonPress(PinRequestView::TestApi(view()).back_button());
   ExpectUMAActionReported(
       ParentAccessControllerImpl::UMAAction::kCanceledByUser, 1, 3);
 }
@@ -316,11 +321,6 @@ TEST_F(ParentAccessControllerImplTest, ParentAccessInternalError) {
 #if DCHECK_IS_ON()
 // Tests that on login screen we check parent access code against all accounts.
 TEST_F(ParentAccessControllerImplTest, EnforceNoAccountSpecifiedOnLogin) {
-  GetSessionControllerClient()->SetSessionState(
-      session_manager::SessionState::LOGIN_PRIMARY);
-  EXPECT_DEATH_IF_SUPPORTED(
-      StartParentAccess(GetChildAccountId(), SupervisedAction::kReauth), "");
-
   GetSessionControllerClient()->SetSessionState(
       session_manager::SessionState::LOGIN_PRIMARY);
   EXPECT_DEATH_IF_SUPPORTED(

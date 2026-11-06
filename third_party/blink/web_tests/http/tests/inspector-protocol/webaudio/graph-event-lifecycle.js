@@ -1,4 +1,4 @@
-(async function(testRunner) {
+(async function(/** @type {import('test_runner').TestRunner} */ testRunner) {
   // Data structure for the comprehensive testing. Each AudioNode can have
   // an unique constructor pattern and also can have a different set of
   // AudioParams. Each data entry has:
@@ -57,7 +57,8 @@
     },
     {
       nodeName: 'IIRFilterNode',
-      ctorString: `new IIRFilterNode(context, {feedforward: [1], feedback: [1, -0.99]});`,
+      ctorString:
+          `new IIRFilterNode(context, {feedforward: [1], feedback: [1, -0.99]});`,
     },
     {
       nodeName: 'MediaElementAudioSourceNode',
@@ -73,8 +74,9 @@
     {
       nodeName: 'MediaStreamAudioSourceNode',
       ctorString: `
-        navigator.mediaDevices.getUserMedia({audio: true})
-            .then(stream => new MediaStreamAudioSourceNode(context, {mediaStream: stream}));
+        const generator = new MediaStreamTrackGenerator({kind: 'audio'});
+        const stream = new MediaStream([generator]);
+        new MediaStreamAudioSourceNode(context, {mediaStream: stream});
       `,
     },
     {
@@ -83,7 +85,10 @@
     },
     {
       nodeName: 'PannerNode',
-      audioParams: ['positionX', 'positionY', 'positionZ', 'orientationX', 'orientationY', 'orientationZ'],
+      audioParams: [
+        'positionX', 'positionY', 'positionZ', 'orientationX', 'orientationY',
+        'orientationZ'
+      ],
     },
     {
       nodeName: 'ScriptProcessorNode',
@@ -98,7 +103,8 @@
     },
   ];
 
-  const {_, session, dp} = await testRunner.startBlank(`Test graph events for the object lifecycle.`);
+  const {_, session, dp} = await testRunner.startBlank(
+      `Test graph events for the object lifecycle.`);
 
   await dp.WebAudio.enable();
 

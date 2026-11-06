@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,13 +14,20 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 
+#include <tuple>
 #include <utility>
 
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file_util.h"
+#include "base/files/platform_file.h"
 #include "base/linux_util.h"
 #include "base/logging.h"
-#include "base/macros.h"
+#include "base/logging/logging_settings.h"
+#include "base/metrics/histogram_shared_memory.h"
+#include "base/notreached.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/pickle.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/posix/global_descriptors.h"
@@ -29,11 +36,9 @@
 #include "base/process/launch.h"
 #include "base/process/process.h"
 #include "base/process/process_handle.h"
+#include "base/process/set_process_title.h"
 #include "base/time/time.h"
-#include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
-#include "content/common/set_process_title.h"
 #include "content/common/zygote/zygote_commands_linux.h"
 #include "content/public/common/content_descriptors.h"
 #include "content/public/common/content_switches.h"
@@ -104,8 +109,7 @@ bool Zygote::ProcessRequests() {
 
   // We need to accept SIGCHLD, even though our handler is a no-op because
   // otherwise we cannot wait on children. (According to POSIX 2001.)
-  struct sigaction action;
-  memset(&action, 0, sizeof(action));
+  struct sigaction action = {};
   action.sa_handler = &SIGCHLDHandler;
   PCHECK(sigaction(SIGCHLD, &action, nullptr) == 0);
 
@@ -121,9 +125,9 @@ bool Zygote::ProcessRequests() {
     // The receiving code is in
     // content/browser/zygote_host/zygote_host_impl_linux.cc.
     bool r = base::UnixDomainSocket::SendMsg(
-        kZygoteSocketPairFd, kZygoteHelloMessage, sizeof(kZygoteHelloMessage),
+        kZygoteSocketPairFd, base::as_byte_span(kZygoteHelloMessage),
         std::vector<int>());
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     LOG_IF(WARNING, !r) << "Sending zygote magic failed";
     // Exit normally on chromeos because session manager may send SIGTERM
     // right after the process starts and it may fail to send zygote magic
@@ -131,7 +135,7 @@ bool Zygote::ProcessRequests() {
     if (!r)
       _exit(RESULT_CODE_NORMAL_EXIT);
 #else
-    CHECK(r) << "Sending zygote magic failed";
+    PCHECK(r) << "Sending zygote magic failed";
 #endif
   }
 
@@ -163,7 +167,6 @@ bool Zygote::ProcessRequests() {
   }
   // The loop should not be exited unless a request was successfully processed.
   NOTREACHED();
-  return false;
 }
 
 bool Zygote::ReapChild(const base::TimeTicks& now, ZygoteProcessInfo* child) {
@@ -224,9 +227,8 @@ bool Zygote::UsingNSSandbox() const {
 
 bool Zygote::HandleRequestFromBrowser(int fd) {
   std::vector<base::ScopedFD> fds;
-  char buf[kZygoteMaxMessageLength];
-  const ssize_t len =
-      base::UnixDomainSocket::RecvMsg(fd, buf, sizeof(buf), &fds);
+  uint8_t buf[kZygoteMaxMessageLength];
+  const ssize_t len = base::UnixDomainSocket::RecvMsg(fd, buf, &fds);
 
   if (len == 0 || (len == -1 && errno == ECONNRESET)) {
     // EOF from the browser. We should die.
@@ -234,7 +236,6 @@ bool Zygote::HandleRequestFromBrowser(int fd) {
     // coverage for the Zygote. Currently it's not possible because of
     // confusion over who is responsible for closing the file descriptor.
     _exit(0);
-    return false;
   }
 
   if (len == -1) {
@@ -242,8 +243,8 @@ bool Zygote::HandleRequestFromBrowser(int fd) {
     return false;
   }
 
-  base::Pickle pickle(buf, len);
-  base::PickleIterator iter(pickle);
+  base::PickleIterator iter = base::PickleIterator::WithData(
+      base::span(buf).first(base::checked_cast<size_t>(len)));
 
   int kind;
   if (iter.ReadInt(&kind)) {
@@ -269,12 +270,12 @@ bool Zygote::HandleRequestFromBrowser(int fd) {
         // This shouldn't happen in practice, but some failure paths in
         // HandleForkRequest (e.g., if ReadArgsAndFork fails during depickling)
         // could leave this command pending on the socket.
-        LOG(ERROR) << "Unexpected real PID message from browser";
-        NOTREACHED();
+        NOTREACHED() << "Unexpected real PID message from browser";
+      case kZygoteCommandReinitializeLogging:
+        HandleReinitializeLoggingRequest(iter, std::move(fds));
         return false;
       default:
         NOTREACHED();
-        break;
     }
   }
 
@@ -292,9 +293,7 @@ void Zygote::HandleReapRequest(int fd, base::PickleIterator iter) {
 
   ZygoteProcessInfo child_info;
   if (!GetProcessInfo(child, &child_info)) {
-    LOG(ERROR) << "Child not found!";
-    NOTREACHED();
-    return;
+    NOTREACHED() << "Child not found!";
   }
   child_info.time_of_reap_request = base::TimeTicks::Now();
 
@@ -320,9 +319,7 @@ bool Zygote::GetTerminationStatus(base::ProcessHandle real_pid,
                                   int* exit_code) {
   ZygoteProcessInfo child_info;
   if (!GetProcessInfo(real_pid, &child_info)) {
-    LOG(ERROR) << "Zygote::GetTerminationStatus for unknown PID " << real_pid;
-    NOTREACHED();
-    return false;
+    NOTREACHED() << "Zygote::GetTerminationStatus for unknown PID " << real_pid;
   }
   // We know about |real_pid|.
   const base::ProcessHandle child = child_info.internal_pid;
@@ -374,11 +371,7 @@ void Zygote::HandleGetTerminationStatus(int fd, base::PickleIterator iter) {
   bool got_termination_status =
       GetTerminationStatus(child_requested, known_dead, &status, &exit_code);
   if (!got_termination_status) {
-    // Assume that if we can't find the child in the sandbox, then
-    // it terminated normally.
     NOTREACHED();
-    status = base::TERMINATION_STATUS_NORMAL_TERMINATION;
-    exit_code = RESULT_CODE_NORMAL_EXIT;
   }
 
   base::Pickle write_pickle;
@@ -391,6 +384,7 @@ void Zygote::HandleGetTerminationStatus(int fd, base::PickleIterator iter) {
 }
 
 int Zygote::ForkWithRealPid(const std::string& process_type,
+                            const std::vector<std::string>& args,
                             const base::GlobalDescriptors::Mapping& fd_mapping,
                             base::ScopedFD pid_oracle,
                             std::string* uma_name,
@@ -412,10 +406,19 @@ int Zygote::ForkWithRealPid(const std::string& process_type,
       DLOG(ERROR) << "Failed to find kMojoIPCChannel in FD mapping";
       return -1;
     }
+    int field_trial_fd = LookUpFd(fd_mapping, kFieldTrialDescriptor);
+    int histograms_fd = LookUpFd(fd_mapping, kHistogramSharedMemoryDescriptor);
     std::vector<int> fds;
+    fds.reserve(ZygoteForkDelegate::kNumPassedFDs);
     fds.push_back(mojo_channel_fd);   // kBrowserFDIndex
     fds.push_back(pid_oracle.get());  // kPIDOracleFDIndex
-    pid = helper->Fork(process_type, fds, /*channel_id=*/std::string());
+    fds.push_back(field_trial_fd);    // kFieldTrialFDIndex
+    if (histograms_fd != -1) {
+      // TODO(crbug.com/40109064): pass unconditionally once the metrics shared
+      // memory region is always passed on startup.
+      fds.push_back(histograms_fd);  // kHistogramFDIndex
+    }
+    pid = helper->Fork(process_type, args, fds, /*channel_id=*/std::string());
 
     // Helpers should never return in the child process.
     CHECK_NE(pid, 0);
@@ -451,8 +454,9 @@ int Zygote::ForkWithRealPid(const std::string& process_type,
 
     // Now read back our real PID from the zygote.
     base::ProcessId real_pid;
-    if (!base::ReadFromFD(read_pipe.get(), reinterpret_cast<char*>(&real_pid),
-                          sizeof(real_pid))) {
+    if (!base::ReadFromFD(
+            read_pipe.get(),
+            base::as_writable_chars(base::span_from_ref(real_pid)))) {
       LOG(FATAL) << "Failed to synchronise with parent zygote process";
     }
     if (real_pid <= 0) {
@@ -461,10 +465,6 @@ int Zygote::ForkWithRealPid(const std::string& process_type,
     // Sandboxed processes need to send the global, non-namespaced PID when
     // setting up an IPC channel to their parent.
     IPC::Channel::SetGlobalPid(real_pid);
-    // Force the real PID so chrome event data have a PID that corresponds
-    // to system trace event data.
-    base::trace_event::TraceLog::GetInstance()->SetProcessID(
-        static_cast<int>(real_pid));
     base::InitUniqueIdForProcessInPidNamespace(real_pid);
     return 0;
   }
@@ -483,15 +483,15 @@ int Zygote::ForkWithRealPid(const std::string& process_type,
   base::ProcessId real_pid = -1;
   {
     std::vector<base::ScopedFD> recv_fds;
-    char buf[kZygoteMaxMessageLength];
-    const ssize_t len = base::UnixDomainSocket::RecvMsg(
-        kZygoteSocketPairFd, buf, sizeof(buf), &recv_fds);
+    uint8_t buf[kZygoteMaxMessageLength];
+    const ssize_t len =
+        base::UnixDomainSocket::RecvMsg(kZygoteSocketPairFd, buf, &recv_fds);
 
     if (len > 0) {
       CHECK(recv_fds.empty());
 
-      base::Pickle pickle(buf, len);
-      base::PickleIterator iter(pickle);
+      base::PickleIterator iter = base::PickleIterator::WithData(
+          base::span(buf).first(base::checked_cast<size_t>(len)));
 
       int kind;
       CHECK(iter.ReadInt(&kind));
@@ -518,9 +518,8 @@ int Zygote::ForkWithRealPid(const std::string& process_type,
   }
 
   // Now set-up this process to be tracked by the Zygote.
-  if (process_info_map_.find(real_pid) != process_info_map_.end()) {
-    LOG(ERROR) << "Already tracking PID " << real_pid;
-    NOTREACHED();
+  if (process_info_map_.contains(real_pid)) {
+    NOTREACHED() << "Already tracking PID " << real_pid;
   }
   process_info_map_[real_pid].internal_pid = pid;
   process_info_map_[real_pid].started_from_helper = helper;
@@ -580,10 +579,14 @@ base::ProcessId Zygote::ReadArgsAndFork(base::PickleIterator iter,
 
   mapping.push_back(ipc_backchannel_);
 
-  // Returns twice, once per process.
+  // Returns at most twice: once with a valid PID (in the parent process,
+  // returning the PID of the new child); and optionally once with a zero PID
+  // in the forked child process. Note that a delegate may spawn the child
+  // process without actually forking the calling process directly, so the
+  // second return path is not guanteed.
   base::ProcessId child_pid =
-      ForkWithRealPid(process_type, mapping, std::move(pid_oracle), uma_name,
-                      uma_sample, uma_boundary_value);
+      ForkWithRealPid(process_type, args, mapping, std::move(pid_oracle),
+                      uma_name, uma_sample, uma_boundary_value);
   if (!child_pid) {
     // This is the child process.
 
@@ -592,7 +595,7 @@ base::ProcessId Zygote::ReadArgsAndFork(base::PickleIterator iter,
 
     // Pass ownership of file descriptors from fds to GlobalDescriptors.
     for (base::ScopedFD& fd : fds)
-      ignore_result(fd.release());
+      std::ignore = fd.release();
     base::GlobalDescriptors::GetInstance()->Reset(mapping);
 
     // Reset the process-wide command line to our new command line.
@@ -603,7 +606,19 @@ base::ProcessId Zygote::ReadArgsAndFork(base::PickleIterator iter,
     // Update the process title. The argv was already cached by the call to
     // SetProcessTitleFromCommandLine in ChromeMain, so we can pass NULL here
     // (we don't have the original argv at this point).
-    SetProcessTitleFromCommandLine(nullptr);
+    base::SetProcessTitleFromCommandLine(nullptr);
+
+    // Linux-specific hack: Avoid taking the ~10-50ms jank penalty that a
+    // multithreaded process has to take when expanding its file descriptor
+    // table:
+    //  - from 64 to 128 entries
+    //  - from 128 to 256 entries
+    //  - from 256 to 512 entries
+    // by allocating an fd table with at least 512 entries right away, while
+    // we're still single-threaded.
+    // No error checks - if this fails, it's not a problem, this is just a
+    // performance hack.
+    base::ScopedFD fdtable_alloc_fd(fcntl(0, F_DUPFD, 256));
   } else if (child_pid < 0) {
     LOG(ERROR) << "Zygote could not fork: process_type " << process_type
                << " numfds " << numfds << " child_pid " << child_pid;
@@ -648,6 +663,47 @@ bool Zygote::HandleGetSandboxStatus(int fd, base::PickleIterator iter) {
   }
 
   return false;
+}
+
+void Zygote::HandleReinitializeLoggingRequest(base::PickleIterator iter,
+                                              std::vector<base::ScopedFD> fds) {
+#if BUILDFLAG(IS_CHROMEOS)
+  uint32_t logging_dest;
+  if (!iter.ReadUInt32(&logging_dest)) {
+    LOG(ERROR) << "Missing logging_dest parameter";
+    return;
+  }
+
+  if (fds.size() != 1) {
+    LOG(ERROR) << "Wrong number of log fds was passed";
+    return;
+  }
+  base::ScopedFD log_fd(std::move(fds.front()));
+
+  if (logging_dest & logging::LOG_TO_STDERR) {
+    int fd = dup2(log_fd.get(), STDERR_FILENO);
+    if (fd == base::kInvalidPlatformFile)
+      PLOG(ERROR) << "Unable to redirect stderr logging";
+  }
+
+  if (logging_dest & logging::LOG_TO_FILE) {
+    logging::LoggingSettings logging_settings;
+    logging_settings.logging_dest = logging_dest;
+    logging_settings.log_file = fdopen(log_fd.get(), "a");
+    if (!logging_settings.log_file) {
+      PLOG(ERROR) << "Failed to open new log file handle";
+      return;
+    }
+    if (!logging::InitLogging(logging_settings)) {
+      LOG(ERROR) << "Unable to reinitialize logging";
+      return;
+    }
+    std::ignore = log_fd.release();
+  }
+#else
+  // This method should only be used in ChromeOS.
+  NOTREACHED();
+#endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
 }  // namespace content

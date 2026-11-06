@@ -31,34 +31,47 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_HTML_FORMS_EMAIL_INPUT_TYPE_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_FORMS_EMAIL_INPUT_TYPE_H_
 
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/html/forms/base_text_input_type.h"
 
 namespace blink {
+
+class HTMLInputElement;
 
 class EmailInputType final : public BaseTextInputType {
  public:
   explicit EmailInputType(HTMLInputElement&);
 
   // They are public for unit testing.
-  CORE_EXPORT static String ConvertEmailAddressToASCII(const ScriptRegexp&,
-                                                       const String&);
+  CORE_EXPORT static String ConvertEmailAddressToAscii(const ScriptRegexp&,
+                                                       const StringView&);
   CORE_EXPORT static bool IsValidEmailAddress(const ScriptRegexp&,
-                                              const String&);
-  CORE_EXPORT static ScriptRegexp* CreateEmailRegexp();
+                                              const StringView&);
+  CORE_EXPORT static ScriptRegexp* CreateEmailRegexp(v8::Isolate* isolate);
+
+  static Vector<StringView> ParseMultipleValues(const StringView& value);
+
+  bool TypeMismatchFor(const String&) const;
 
  private:
   void CountUsage() override;
-  const AtomicString& FormControlType() const override;
-  bool TypeMismatchFor(const String&) const override;
   bool TypeMismatch() const override;
   String TypeMismatchText() const override;
   bool SupportsSelectionAPI() const override;
   String SanitizeValue(const String&) const override;
   String ConvertFromVisibleValue(const String&) const override;
   String VisibleValue() const override;
+  void MultipleAttributeChanged() override;
 
   String ConvertEmailAddressToUnicode(const String&) const;
   String FindInvalidAddress(const String&) const;
+};
+
+template <>
+struct DowncastTraits<EmailInputType> {
+  static bool AllowFrom(const InputType& type) {
+    return type.IsEmailInputType();
+  }
 };
 
 }  // namespace blink

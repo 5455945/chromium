@@ -1,14 +1,15 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_SAFE_BROWSING_CONTENT_BROWSER_TRIGGERS_SUSPICIOUS_SITE_TRIGGER_H_
 #define COMPONENTS_SAFE_BROWSING_CONTENT_BROWSER_TRIGGERS_SUSPICIOUS_SITE_TRIGGER_H_
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "content/public/browser/web_contents_observer.h"
-#include "content/public/browser/web_contents_user_data.h"
+#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 
 class PrefService;
 
@@ -20,6 +21,10 @@ namespace network {
 class SharedURLLoaderFactory;
 }  // namespace network
 
+namespace tabs {
+class TabInterface;
+}  // namespace tabs
+
 namespace safe_browsing {
 class ReferrerChainProvider;
 class TriggerManager;
@@ -27,13 +32,13 @@ class TriggerManager;
 // Metric for tracking what the Suspicious Site trigger does on each event.
 extern const char kSuspiciousSiteTriggerEventMetricName[];
 
-// Metric for tracking how often reports from this trigger are rejected by the
-// trigger manager, and for what reason.
-extern const char kSuspiciousSiteTriggerReportRejectionMetricName[];
+// Local metric for tracking how often reports from this trigger are rejected
+// by the trigger manager, and for what reason.
+extern const char kSuspiciousSiteTriggerReportRejectionTestMetricName[];
 
-// Metric for tracking the state of the trigger when the report delay timer
-// fires.
-extern const char kSuspiciousSiteTriggerReportDelayStateMetricName[];
+// Local metric for tracking the state of the trigger when the report delay
+// timer fires.
+extern const char kSuspiciousSiteTriggerReportDelayStateTestMetricName[];
 
 // Tracks events this trigger listens for or actions it performs. These values
 // are written to logs. New enum values can be added, but existing enums must
@@ -82,10 +87,10 @@ void NotifySuspiciousSiteTriggerDetected(
 // indicate there was a hit on the suspicious site list. This trigger is
 // repsonsible for creating reports about the page at the right time, based on
 // the sequence of such events.
-class SuspiciousSiteTrigger
-    : public content::WebContentsObserver,
-      public content::WebContentsUserData<SuspiciousSiteTrigger> {
+class SuspiciousSiteTrigger : public content::WebContentsObserver {
  public:
+  DECLARE_USER_DATA(SuspiciousSiteTrigger);
+
   // The different states the trigger could be in.
   // These values are written to logs. New enum values can be added, but
   // existing enums must never be renumbered or deleted and reused.
@@ -108,7 +113,24 @@ class SuspiciousSiteTrigger
     kMaxValue = MONITOR_MODE
   };
 
+  SuspiciousSiteTrigger(
+      tabs::TabInterface& tab,
+      content::WebContents* web_contents,
+      TriggerManager* trigger_manager,
+      PrefService* prefs,
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+      history::HistoryService* history_service,
+      ReferrerChainProvider* referrer_chain_provider,
+      bool monitor_mode);
+
+  SuspiciousSiteTrigger(const SuspiciousSiteTrigger&) = delete;
+  SuspiciousSiteTrigger& operator=(const SuspiciousSiteTrigger&) = delete;
+
   ~SuspiciousSiteTrigger() override;
+
+  static SuspiciousSiteTrigger* From(tabs::TabInterface* tab);
+  static SuspiciousSiteTrigger* FromWebContents(
+      content::WebContents* web_contents);
 
   // content::WebContentsObserver implementations.
   void DidStartLoading() override;
@@ -119,17 +141,7 @@ class SuspiciousSiteTrigger
   void SuspiciousSiteDetected();
 
  private:
-  friend class content::WebContentsUserData<SuspiciousSiteTrigger>;
   friend class SuspiciousSiteTriggerTest;
-
-  SuspiciousSiteTrigger(
-      content::WebContents* web_contents,
-      TriggerManager* trigger_manager,
-      PrefService* prefs,
-      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-      history::HistoryService* history_service,
-      ReferrerChainProvider* referrer_chain_provider,
-      bool monitor_mode);
 
   // Tries to start a report. Returns whether a report started successfully.
   // If a report is started, a delayed callback will also begin to notify
@@ -150,7 +162,7 @@ class SuspiciousSiteTrigger
 
   // Sets a task runner to use for tests.
   void SetTaskRunnerForTest(
-      scoped_refptr<base::SingleThreadTaskRunner> task_runner);
+      scoped_refptr<base::SequencedTaskRunner> task_runner);
 
   // The delay (in milliseconds) to wait before finishing a report. Can be
   // overwritten for tests.
@@ -163,22 +175,20 @@ class SuspiciousSiteTrigger
 
   // TriggerManager gets called if this trigger detects a suspicious site and
   // wants to collect data abou tit. Not owned.
-  TriggerManager* trigger_manager_;
+  raw_ptr<TriggerManager> trigger_manager_;
 
-  PrefService* prefs_;
+  raw_ptr<PrefService> prefs_;
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
-  history::HistoryService* history_service_;
-  ReferrerChainProvider* referrer_chain_provider_;
+  raw_ptr<history::HistoryService> history_service_;
+  raw_ptr<ReferrerChainProvider> referrer_chain_provider_;
 
   // Task runner for posting delayed tasks. Normally set to the runner for the
   // UI thread, but can be overwritten for tests.
-  scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
+  scoped_refptr<base::SequencedTaskRunner> task_runner_;
+
+  ui::ScopedUnownedUserData<SuspiciousSiteTrigger> scoped_unowned_user_data_;
 
   base::WeakPtrFactory<SuspiciousSiteTrigger> weak_ptr_factory_{this};
-
-  WEB_CONTENTS_USER_DATA_KEY_DECL();
-
-  DISALLOW_COPY_AND_ASSIGN(SuspiciousSiteTrigger);
 };
 
 }  // namespace safe_browsing

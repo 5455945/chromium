@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,26 +15,25 @@ function testServiceEvents() {
   chrome.test.succeed();
 }
 
-var serviceId0 = 'service_id0';
-var serviceId1 = 'service_id1';
+const serviceId0 = 'service_id0';
+const serviceId1 = 'service_id1';
 
-var addedServices = {}
-var changedServices = {}
-var removedServices = {}
+const addedServices = {};
+const changedServices = {};
+const removedServices = {};
 
-chrome.bluetoothLowEnergy.onServiceAdded.addListener(function (service) {
+chrome.bluetoothLowEnergy.onServiceAdded.addListener(function(service) {
   addedServices[service.instanceId] = service;
 });
 
-chrome.bluetoothLowEnergy.onServiceChanged.addListener(function (service) {
+chrome.bluetoothLowEnergy.onServiceChanged.addListener(function(service) {
   changedServices[service.instanceId] = service;
 });
 
-chrome.bluetoothLowEnergy.onServiceRemoved.addListener(function (service) {
+chrome.bluetoothLowEnergy.onServiceRemoved.addListener(function(service) {
   removedServices[service.instanceId] = service;
 });
 
 chrome.test.sendMessage('ready', function(message) {
   chrome.test.runTests([testServiceEvents]);
 });
-

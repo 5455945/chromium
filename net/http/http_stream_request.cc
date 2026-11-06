@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,8 @@
 
 #include <utility>
 
-#include "base/callback.h"
 #include "base/check.h"
+#include "base/functional/callback.h"
 #include "net/http/bidirectional_stream_impl.h"
 #include "net/log/net_log_event_type.h"
 #include "net/spdy/bidirectional_stream_spdy_impl.h"
@@ -17,39 +17,27 @@
 namespace net {
 
 HttpStreamRequest::HttpStreamRequest(
-    const GURL& url,
     Helper* helper,
-    HttpStreamRequest::Delegate* delegate,
     WebSocketHandshakeStreamBase::CreateHelper*
         websocket_handshake_stream_create_helper,
     const NetLogWithSource& net_log,
     StreamType stream_type)
-    : url_(url),
-      helper_(helper),
+    : helper_(helper),
       websocket_handshake_stream_create_helper_(
           websocket_handshake_stream_create_helper),
       net_log_(net_log),
-      completed_(false),
-      was_alpn_negotiated_(false),
-      negotiated_protocol_(kProtoUnknown),
-      using_spdy_(false),
       stream_type_(stream_type) {
   net_log_.BeginEvent(NetLogEventType::HTTP_STREAM_REQUEST);
 }
 
 HttpStreamRequest::~HttpStreamRequest() {
   net_log_.EndEvent(NetLogEventType::HTTP_STREAM_REQUEST);
-  helper_->OnRequestComplete();
+  helper_.ExtractAsDangling()->OnRequestComplete();  // May delete `*helper_`;
 }
 
-void HttpStreamRequest::Complete(bool was_alpn_negotiated,
-                                 NextProto negotiated_protocol,
-                                 bool using_spdy) {
-  DCHECK(!completed_);
-  completed_ = true;
-  was_alpn_negotiated_ = was_alpn_negotiated;
-  negotiated_protocol_ = negotiated_protocol;
-  using_spdy_ = using_spdy;
+void HttpStreamRequest::Complete(CompletionDetails details) {
+  DCHECK(!completion_details_.has_value());
+  completion_details_ = std::move(details);
 }
 
 int HttpStreamRequest::RestartTunnelWithProxyAuth() {
@@ -64,19 +52,14 @@ LoadState HttpStreamRequest::GetLoadState() const {
   return helper_->GetLoadState();
 }
 
-bool HttpStreamRequest::was_alpn_negotiated() const {
-  DCHECK(completed_);
-  return was_alpn_negotiated_;
-}
-
 NextProto HttpStreamRequest::negotiated_protocol() const {
-  DCHECK(completed_);
-  return negotiated_protocol_;
+  DCHECK(completion_details_.has_value());
+  return completion_details_->negotiated_protocol;
 }
 
-bool HttpStreamRequest::using_spdy() const {
-  DCHECK(completed_);
-  return using_spdy_;
+AlternateProtocolUsage HttpStreamRequest::alternate_protocol_usage() const {
+  DCHECK(completion_details_.has_value());
+  return completion_details_->alternate_protocol_usage;
 }
 
 const ConnectionAttempts& HttpStreamRequest::connection_attempts() const {
@@ -85,13 +68,34 @@ const ConnectionAttempts& HttpStreamRequest::connection_attempts() const {
 
 void HttpStreamRequest::AddConnectionAttempts(
     const ConnectionAttempts& attempts) {
-  for (const auto& attempt : attempts)
+  for (const auto& attempt : attempts) {
     connection_attempts_.push_back(attempt);
+  }
 }
 
 WebSocketHandshakeStreamBase::CreateHelper*
 HttpStreamRequest::websocket_handshake_stream_create_helper() const {
   return websocket_handshake_stream_create_helper_;
+}
+
+void HttpStreamRequest::SetDnsResolutionTimeOverrides(
+    base::TimeTicks dns_resolution_start_time_override,
+    base::TimeTicks dns_resolution_end_time_override) {
+  CHECK(!dns_resolution_start_time_override.is_null());
+  CHECK(!dns_resolution_end_time_override.is_null());
+  if (dns_resolution_start_time_override_.is_null() ||
+      (dns_resolution_start_time_override <
+       dns_resolution_start_time_override_)) {
+    dns_resolution_start_time_override_ = dns_resolution_start_time_override;
+  }
+  if (dns_resolution_end_time_override_.is_null() ||
+      (dns_resolution_end_time_override < dns_resolution_end_time_override_)) {
+    dns_resolution_end_time_override_ = dns_resolution_end_time_override;
+  }
+}
+
+void HttpStreamRequest::SetHelperForSwitchingToPool(Helper* helper) {
+  helper_ = helper;
 }
 
 }  // namespace net

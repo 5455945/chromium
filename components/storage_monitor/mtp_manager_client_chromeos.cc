@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,7 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/storage_monitor/storage_info.h"
 #include "components/storage_monitor/storage_info_utils.h"
@@ -24,7 +23,7 @@ MtpManagerClientChromeOS::MtpManagerClientChromeOS(
                      weak_ptr_factory_.GetWeakPtr()));
 }
 
-MtpManagerClientChromeOS::~MtpManagerClientChromeOS() {}
+MtpManagerClientChromeOS::~MtpManagerClientChromeOS() = default;
 
 bool MtpManagerClientChromeOS::GetStorageInfoForPath(
     const base::FilePath& path,
@@ -34,8 +33,8 @@ bool MtpManagerClientChromeOS::GetStorageInfoForPath(
   if (!path.IsAbsolute())
     return false;
 
-  std::vector<base::FilePath::StringType> path_components;
-  path.GetComponents(&path_components);
+  std::vector<base::FilePath::StringType> path_components =
+      path.GetComponents();
   if (path_components.size() < 2)
     return false;
 
@@ -84,7 +83,7 @@ void MtpManagerClientChromeOS::StorageAttached(
   if (device_id.empty() || storage_label.empty())
     return;
 
-  DCHECK(!base::Contains(storage_map_, location));
+  DCHECK(!storage_map_.contains(location));
 
   StorageInfo storage_info(device_id, location, storage_label, vendor_name,
                            product_name, 0);

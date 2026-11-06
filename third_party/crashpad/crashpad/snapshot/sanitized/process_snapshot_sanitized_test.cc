@@ -1,4 +1,4 @@
-// Copyright 2018 The Crashpad Authors. All rights reserved.
+// Copyright 2018 The Crashpad Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,17 +16,21 @@
 
 #include <string.h>
 
-#include "base/cxx17_backports.h"
-#include "base/macros.h"
+#include <iterator>
+
 #include "base/notreached.h"
 #include "build/build_config.h"
+#include "client/annotation.h"
+#include "client/crashpad_info.h"
 #include "gtest/gtest.h"
 #include "test/multiprocess_exec.h"
 #include "util/file/file_io.h"
 #include "util/misc/address_sanitizer.h"
 #include "util/numeric/safe_assignment.h"
+#include "util/synchronization/semaphore.h"
+#include "util/thread/thread.h"
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_ANDROID)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
 #include <sys/syscall.h>
 
 #include "snapshot/linux/process_snapshot_linux.h"
@@ -39,8 +43,37 @@ namespace crashpad {
 namespace test {
 namespace {
 
+class BackgroundThread : public Thread {
+ public:
+  BackgroundThread() : ready_(0), exit_(0) {}
+
+  BackgroundThread(const BackgroundThread&) = delete;
+  BackgroundThread& operator=(const BackgroundThread&) = delete;
+
+  ~BackgroundThread() override {
+    // Normally unreachable since ChildTestFunction() intentionally terminates
+    // abnormally via __builtin_trap() without unwinding the stack.
+    exit_.Signal();
+    Join();
+  }
+
+  void WaitUntilReady() { ready_.Wait(); }
+
+ private:
+  void ThreadMain() override {
+    ready_.Signal();
+    exit_.Wait();
+  }
+
+  Semaphore ready_;
+  Semaphore exit_;
+};
+
 class ExceptionGenerator {
  public:
+  ExceptionGenerator(const ExceptionGenerator&) = delete;
+  ExceptionGenerator& operator=(const ExceptionGenerator&) = delete;
+
   static ExceptionGenerator* Get() {
     static ExceptionGenerator* instance = new ExceptionGenerator();
     return instance;
@@ -73,11 +106,11 @@ class ExceptionGenerator {
 
   FileHandle in_;
   FileHandle out_;
-
-  DISALLOW_COPY_AND_ASSIGN(ExceptionGenerator);
 };
 
 constexpr char kAllowedAnnotationName[] = "name_of_allowed_anno";
+constexpr char kAllowedAnnotationNamePattern[] = "name_of_another_*";
+constexpr char kAllowedAnnotationNamePatternActual[] = "name_of_another_anno";
 constexpr char kAllowedAnnotationValue[] = "some_value";
 constexpr char kNonAllowedAnnotationName[] = "non_allowed_anno";
 constexpr char kNonAllowedAnnotationValue[] = "private_annotation";
@@ -95,13 +128,20 @@ void ChildTestFunction() {
   FileHandle in = StdioFileHandle(StdioStream::kStandardInput);
   FileHandle out = StdioFileHandle(StdioStream::kStandardOutput);
 
+  CrashpadInfo::GetCrashpadInfo()->set_gather_indirectly_referenced_memory(
+      TriState::kEnabled, 32 * 1024);
+
   static StringAnnotation<32> allowed_annotation(kAllowedAnnotationName);
   allowed_annotation.Set(kAllowedAnnotationValue);
+
+  static StringAnnotation<32> allowed_matched_annotation(
+      kAllowedAnnotationNamePatternActual);
+  allowed_matched_annotation.Set(kAllowedAnnotationValue);
 
   static StringAnnotation<32> non_allowed_annotation(kNonAllowedAnnotationName);
   non_allowed_annotation.Set(kNonAllowedAnnotationValue);
 
-  char string_data[base::size(kSensitiveStackData)];
+  char string_data[std::size(kSensitiveStackData)];
   strcpy(string_data, kSensitiveStackData);
 
   void (*code_pointer)(void) = ChildTestFunction;
@@ -117,22 +157,31 @@ void ChildTestFunction() {
   auto gen = ExceptionGenerator::Get();
   ASSERT_TRUE(gen->Initialize(in, out));
 
+  BackgroundThread background_thread;
+  background_thread.Start();
+  background_thread.WaitUntilReady();
+
   __builtin_trap();
 }
 
 CRASHPAD_CHILD_TEST_MAIN(ChildToBeSanitized) {
   ChildTestFunction();
+
+  // This isn't reachable unless assertions inside ChildTestFunction fail.
   NOTREACHED();
-  return EXIT_SUCCESS;
 }
 
 void ExpectAnnotations(ProcessSnapshot* snapshot, bool sanitized) {
   bool found_allowed = false;
+  bool found_matched_allowed = false;
   bool found_non_allowed = false;
   for (auto module : snapshot->Modules()) {
     for (const auto& anno : module->AnnotationObjects()) {
       if (anno.name == kAllowedAnnotationName) {
         found_allowed = true;
+      }
+      if (anno.name == kAllowedAnnotationNamePatternActual) {
+        found_matched_allowed = true;
       } else if (anno.name == kNonAllowedAnnotationName) {
         found_non_allowed = true;
       }
@@ -140,10 +189,30 @@ void ExpectAnnotations(ProcessSnapshot* snapshot, bool sanitized) {
   }
 
   EXPECT_TRUE(found_allowed);
+  EXPECT_TRUE(found_matched_allowed);
   if (sanitized) {
     EXPECT_FALSE(found_non_allowed);
   } else {
     EXPECT_TRUE(found_non_allowed);
+  }
+}
+
+void ExpectExtraMemory(ProcessSnapshot* snapshot, bool sanitized) {
+  ASSERT_TRUE(snapshot->Exception());
+  bool found_thread_extra_memory = false;
+  for (const ThreadSnapshot* thread : snapshot->Threads()) {
+    if (!thread->ExtraMemory().empty()) {
+      found_thread_extra_memory = true;
+      break;
+    }
+  }
+
+  if (sanitized) {
+    EXPECT_TRUE(snapshot->Exception()->ExtraMemory().empty());
+    EXPECT_FALSE(found_thread_extra_memory);
+  } else {
+    EXPECT_FALSE(snapshot->Exception()->ExtraMemory().empty());
+    EXPECT_TRUE(found_thread_extra_memory);
   }
 }
 
@@ -248,6 +317,9 @@ class SanitizeTest : public MultiprocessExec {
     SetExpectedChildTerminationBuiltinTrap();
   }
 
+  SanitizeTest(const SanitizeTest&) = delete;
+  SanitizeTest& operator=(const SanitizeTest&) = delete;
+
   ~SanitizeTest() = default;
 
  private:
@@ -269,12 +341,14 @@ class SanitizeTest : public MultiprocessExec {
 
     ExpectAnnotations(&snapshot, /* sanitized= */ false);
     ExpectStackData(&snapshot, addrs, /* sanitized= */ false);
+    ExpectExtraMemory(&snapshot, /* sanitized= */ false);
     ExpectProcessMemory(&snapshot,
                         addrs.string_address,
                         /* sanitized= */ false);
 
     auto allowed_annotations = std::make_unique<std::vector<std::string>>();
     allowed_annotations->push_back(kAllowedAnnotationName);
+    allowed_annotations->push_back(kAllowedAnnotationNamePattern);
 
     auto allowed_memory_ranges =
         std::make_unique<std::vector<std::pair<VMAddress, VMAddress>>>();
@@ -290,6 +364,7 @@ class SanitizeTest : public MultiprocessExec {
 
     ExpectAnnotations(&sanitized, /* sanitized= */ true);
     ExpectStackData(&sanitized, addrs, /* sanitized= */ true);
+    ExpectExtraMemory(&sanitized, /* sanitized= */ true);
     ExpectProcessMemory(&sanitized,
                         addrs.string_address,
                         /* sanitized= */ true);
@@ -298,8 +373,6 @@ class SanitizeTest : public MultiprocessExec {
     EXPECT_FALSE(screened_snapshot.Initialize(
         &snapshot, nullptr, nullptr, addrs.non_module_address, false));
   }
-
-  DISALLOW_COPY_AND_ASSIGN(SanitizeTest);
 };
 
 TEST(ProcessSnapshotSanitized, Sanitize) {

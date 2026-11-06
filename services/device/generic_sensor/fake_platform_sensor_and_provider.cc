@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,30 +6,42 @@
 
 #include <utility>
 
+namespace {
+
 using ::testing::_;
-using ::testing::Invoke;
+using ::testing::NiceMock;
 using ::testing::Return;
+
+}  // namespace
 
 namespace device {
 
 FakePlatformSensor::FakePlatformSensor(
     mojom::SensorType type,
     SensorReadingSharedBuffer* reading_buffer,
-    PlatformSensorProvider* provider)
-    : PlatformSensor(type, reading_buffer, provider) {
+    base::WeakPtr<PlatformSensorProvider> provider)
+    : PlatformSensor(type, reading_buffer, std::move(provider)) {
   ON_CALL(*this, StartSensor(_))
-      .WillByDefault(
-          Invoke([this](const PlatformSensorConfiguration& configuration) {
-            SensorReading reading;
-            // Only mocking the shared memory update for AMBIENT_LIGHT type is
-            // enough.
-            if (GetType() == mojom::SensorType::AMBIENT_LIGHT) {
-              // Set the shared buffer value as frequency for testing purpose.
-              reading.als.value = configuration.frequency();
-              UpdateSharedBufferAndNotifyClients(reading);
-            }
-            return true;
-          }));
+      .WillByDefault([this](const PlatformSensorConfiguration& configuration) {
+        SensorReading reading;
+        // Only mocking the shared memory update for AMBIENT_LIGHT and
+        // ACCELEROMETER types is enough.
+        // Set the shared buffer value as frequency for testing purpose.
+        switch (GetType()) {
+          case mojom::SensorType::AMBIENT_LIGHT:
+            reading.als.value = configuration.frequency();
+            AddNewReading(reading);
+            break;
+          case mojom::SensorType::ACCELEROMETER:
+            reading.accel.x = reading.accel.y = reading.accel.z =
+                configuration.frequency();
+            AddNewReading(reading);
+            break;
+          default:
+            break;
+        }
+        return true;
+      });
 }
 
 FakePlatformSensor::~FakePlatformSensor() = default;
@@ -58,33 +70,34 @@ double FakePlatformSensor::GetMinimumSupportedFrequency() {
   return 1.0;
 }
 
+void FakePlatformSensor::AddNewReading(const SensorReading& reading) {
+  UpdateSharedBufferAndNotifyClients(reading);
+}
+
 FakePlatformSensorProvider::FakePlatformSensorProvider() {
-  ON_CALL(*this, DoCreateSensorInternal(_, _, _))
+  ON_CALL(*this, CreateSensorInternal)
       .WillByDefault(
-          Invoke([](mojom::SensorType, scoped_refptr<PlatformSensor> sensor,
-                    PlatformSensorProvider::CreateSensorCallback callback) {
-            std::move(callback).Run(std::move(sensor));
-          }));
+          [this](mojom::SensorType type,
+                 PlatformSensorProvider::CreateSensorCallback callback) {
+            DCHECK(type >= mojom::SensorType::kMinValue &&
+                   type <= mojom::SensorType::kMaxValue);
+            std::move(callback).Run(
+                base::MakeRefCounted<NiceMock<FakePlatformSensor>>(
+                    type, GetSensorReadingBuffer(type), AsWeakPtr()));
+          });
 }
 
 FakePlatformSensorProvider::~FakePlatformSensorProvider() = default;
+
+base::WeakPtr<PlatformSensorProvider> FakePlatformSensorProvider::AsWeakPtr() {
+  return weak_factory_.GetWeakPtr();
+}
 
 SensorReadingSharedBuffer* FakePlatformSensorProvider::GetSensorReadingBuffer(
     mojom::SensorType type) {
   return CreateSharedBufferIfNeeded()
              ? GetSensorReadingSharedBufferForType(type)
              : nullptr;
-}
-
-void FakePlatformSensorProvider::CreateSensorInternal(
-    mojom::SensorType type,
-    SensorReadingSharedBuffer* reading_buffer,
-    CreateSensorCallback callback) {
-  DCHECK(type >= mojom::SensorType::kMinValue &&
-         type <= mojom::SensorType::kMaxValue);
-  auto sensor =
-      base::MakeRefCounted<FakePlatformSensor>(type, reading_buffer, this);
-  DoCreateSensorInternal(type, std::move(sensor), std::move(callback));
 }
 
 MockPlatformSensorClient::MockPlatformSensorClient() {

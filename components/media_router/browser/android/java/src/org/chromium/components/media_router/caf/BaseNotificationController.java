@@ -1,27 +1,33 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.media_router.caf;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.content.Intent;
 
 import com.google.android.gms.cast.CastDevice;
+import com.google.android.gms.cast.MediaInfo;
 import com.google.android.gms.cast.MediaStatus;
 import com.google.android.gms.cast.framework.media.RemoteMediaClient;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.build.annotations.RequiresNonNull;
 import org.chromium.components.browser_ui.media.MediaNotificationInfo;
 import org.chromium.components.browser_ui.media.MediaNotificationListener;
 import org.chromium.components.browser_ui.media.MediaNotificationManager;
-import org.chromium.components.media_router.MediaRouteUmaRecorder;
 import org.chromium.components.media_router.MediaRouterClient;
 import org.chromium.components.media_router.R;
 import org.chromium.services.media_session.MediaMetadata;
 
 /** Base controller for updating media notification for Casting and MediaFling. */
+@NullMarked
 public abstract class BaseNotificationController
         implements MediaNotificationListener, BaseSessionController.Callback {
-    private MediaNotificationInfo.Builder mNotificationBuilder;
+    private MediaNotificationInfo.@Nullable Builder mNotificationBuilder;
     private final BaseSessionController mSessionController;
 
     public BaseNotificationController(BaseSessionController sessionController) {
@@ -34,7 +40,7 @@ public abstract class BaseNotificationController
         mNotificationBuilder =
                 new MediaNotificationInfo.Builder()
                         .setPaused(false)
-                        .setOrigin(mSessionController.getRouteCreationInfo().origin)
+                        .setOrigin(assumeNonNull(mSessionController.getRouteCreationInfo()).origin)
                         // TODO(zqzhang): the same session might have more than one tab id. Should
                         // we track the last foreground alive tab and update the notification with
                         // it?
@@ -43,17 +49,17 @@ public abstract class BaseNotificationController
                         .setActions(MediaNotificationInfo.ACTION_STOP)
                         .setContentIntent(createContentIntent())
                         .setNotificationSmallIcon(R.drawable.ic_notification_media_route)
-                        .setDefaultNotificationLargeIcon(R.drawable.cast_playing_square)
                         .setId(getNotificationId())
                         .setListener(this);
 
         updateNotificationMetadata();
+        assumeNonNull(MediaRouterClient.getInstance());
         MediaRouterClient.getInstance().showNotification(mNotificationBuilder.build());
     }
 
     @Override
     public void onSessionEnded() {
-        MediaNotificationManager.clear(getNotificationId());
+        MediaNotificationManager.hideForAllTabs(getNotificationId());
         mNotificationBuilder = null;
     }
 
@@ -62,6 +68,7 @@ public abstract class BaseNotificationController
     public void onStatusUpdated() {
         if (mNotificationBuilder == null) return;
         if (!mSessionController.isConnected()) return;
+        assumeNonNull(mSessionController.getRemoteMediaClient());
 
         MediaStatus mediaStatus = mSessionController.getRemoteMediaClient().getMediaStatus();
         if (mediaStatus == null) return;
@@ -75,6 +82,7 @@ public abstract class BaseNotificationController
         } else {
             mNotificationBuilder.setActions(MediaNotificationInfo.ACTION_STOP);
         }
+        assumeNonNull(MediaRouterClient.getInstance());
         MediaRouterClient.getInstance().showNotification(mNotificationBuilder.build());
     }
 
@@ -83,28 +91,39 @@ public abstract class BaseNotificationController
     public void onMetadataUpdated() {
         if (mNotificationBuilder == null) return;
         updateNotificationMetadata();
+        assumeNonNull(MediaRouterClient.getInstance());
         MediaRouterClient.getInstance().showNotification(mNotificationBuilder.build());
     }
 
+    @RequiresNonNull("mNotificationBuilder")
     private void updateNotificationMetadata() {
-        MediaMetadata notificationMetadata = new MediaMetadata("", "", "");
+        // We use a placeholder title here to comply with the requirement for non-empty
+        // notification titles. See crbug.com/1445673 for more details.
+        MediaMetadata notificationMetadata = new MediaMetadata("Chromecast", "", "");
         mNotificationBuilder.setMetadata(notificationMetadata);
 
         if (!mSessionController.isConnected()) return;
+        assumeNonNull(mSessionController.getSession());
 
         CastDevice castDevice = mSessionController.getSession().getCastDevice();
-        if (castDevice != null) notificationMetadata.setTitle(castDevice.getFriendlyName());
+        if (castDevice != null) {
+            String friendlyName = castDevice.getFriendlyName();
+            if (friendlyName != null && !friendlyName.isEmpty()) {
+                notificationMetadata.setTitle(friendlyName);
+            }
+        }
 
         RemoteMediaClient remoteMediaClient = mSessionController.getRemoteMediaClient();
+        assumeNonNull(remoteMediaClient);
 
-        com.google.android.gms.cast.MediaInfo info = remoteMediaClient.getMediaInfo();
+        MediaInfo info = remoteMediaClient.getMediaInfo();
         if (info == null) return;
 
         com.google.android.gms.cast.MediaMetadata metadata = info.getMetadata();
         if (metadata == null) return;
 
         String title = metadata.getString(com.google.android.gms.cast.MediaMetadata.KEY_TITLE);
-        if (title != null) notificationMetadata.setTitle(title);
+        if (title != null && !title.isEmpty()) notificationMetadata.setTitle(title);
 
         String artist = metadata.getString(com.google.android.gms.cast.MediaMetadata.KEY_ARTIST);
         if (artist == null) {
@@ -123,19 +142,17 @@ public abstract class BaseNotificationController
     @Override
     public void onPlay(int actionSource) {
         if (!mSessionController.isConnected()) return;
+        assumeNonNull(mSessionController.getRemoteMediaClient());
 
         mSessionController.getRemoteMediaClient().play();
-        MediaRouteUmaRecorder.recordCastNotificationControlsAction(
-                MediaRouteUmaRecorder.CastNotificationControls.RESUME);
     }
 
     @Override
     public void onPause(int actionSource) {
         if (!mSessionController.isConnected()) return;
+        assumeNonNull(mSessionController.getRemoteMediaClient());
 
         mSessionController.getRemoteMediaClient().pause();
-        MediaRouteUmaRecorder.recordCastNotificationControlsAction(
-                MediaRouteUmaRecorder.CastNotificationControls.PAUSE);
     }
 
     @Override
@@ -143,8 +160,6 @@ public abstract class BaseNotificationController
         if (!mSessionController.isConnected()) return;
 
         mSessionController.endSession();
-        MediaRouteUmaRecorder.recordCastNotificationControlsAction(
-                MediaRouteUmaRecorder.CastNotificationControls.STOP);
     }
 
     @Override
@@ -153,13 +168,12 @@ public abstract class BaseNotificationController
     @Override
     public void onMediaSessionSeekTo(long pos) {}
 
-    protected Intent createBringTabToFrontIntent() {
-        return MediaRouterClient.getInstance().createBringTabToFrontIntent(
-                mSessionController.getRouteCreationInfo().tabId);
+    private Intent createContentIntent() {
+        return assumeNonNull(MediaRouterClient.getInstance())
+                .createBringTabToFrontIntent(
+                        assumeNonNull(mSessionController.getRouteCreationInfo()).tabId);
     }
 
     // Abstract methods to be implemented by children.
-    public abstract Intent createContentIntent();
-
     public abstract int getNotificationId();
 }

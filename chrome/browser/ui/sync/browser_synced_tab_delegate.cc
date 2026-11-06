@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,28 @@
 
 #include "chrome/browser/sync/sessions/sync_sessions_router_tab_helper.h"
 #include "components/sessions/content/session_tab_helper.h"
+#include "components/sessions/core/session_id.h"
+#include "components/tabs/public/tab_interface.h"
+
+DEFINE_USER_DATA(BrowserSyncedTabDelegate);
 
 BrowserSyncedTabDelegate::BrowserSyncedTabDelegate(
-    content::WebContents* web_contents) {
-  SetWebContents(web_contents);
+    tabs::TabInterface& tab,
+    content::WebContents* web_contents,
+    tasks::TaskTabHelper* task_tab_helper,
+    SupervisedUserNavigationObserver* supervised_user_navigation_observer)
+    : scoped_unowned_user_data_(tab.GetUnownedUserDataHost(), *this) {
+  SetWebContents(web_contents, task_tab_helper,
+                 supervised_user_navigation_observer);
 }
 
-BrowserSyncedTabDelegate::~BrowserSyncedTabDelegate() {}
+// static
+BrowserSyncedTabDelegate* BrowserSyncedTabDelegate::From(
+    tabs::TabInterface* tab) {
+  return Get(tab->GetUnownedUserDataHost());
+}
+
+BrowserSyncedTabDelegate::~BrowserSyncedTabDelegate() = default;
 
 SessionID BrowserSyncedTabDelegate::GetWindowId() const {
   return sessions::SessionTabHelper::FromWebContents(web_contents())
@@ -28,4 +43,10 @@ bool BrowserSyncedTabDelegate::IsPlaceholderTab() const {
   return false;
 }
 
-WEB_CONTENTS_USER_DATA_KEY_IMPL(BrowserSyncedTabDelegate)
+std::unique_ptr<sync_sessions::SyncedTabDelegate>
+BrowserSyncedTabDelegate::ReadPlaceholderTabSnapshotIfItShouldSync(
+    sync_sessions::SyncSessionsClient* sessions_client) {
+  NOTREACHED()
+      << "ReadPlaceholderTabSnapshotIfItShouldSync is not supported on "
+         "desktop platforms.";
+}

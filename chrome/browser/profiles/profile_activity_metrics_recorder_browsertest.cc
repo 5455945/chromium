@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,7 @@
 // BrowserProcess shutdown. The test fixture destructor gets called
 // after shutdown, so we call it there.
 //
-// Regression test for crbug.com/1094407 where these calls lead to a
+// Regression test for crbug.com/40135406 where these calls lead to a
 // use-after-free.
 class ProfileActivityMetricsRecorderLogAfterQuitTest
     : public InProcessBrowserTest {

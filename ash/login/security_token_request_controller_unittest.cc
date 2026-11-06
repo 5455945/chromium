@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,8 @@
 #include "ash/login/ui/pin_request_view.h"
 #include "ash/login/ui/pin_request_widget.h"
 #include "ash/public/cpp/login_types.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/event.h"
@@ -44,8 +45,8 @@ class SecurityTokenRequestControllerTest : public LoginTestBase {
 
   // Simulates mouse press event on a |button|.
   void SimulateButtonPress(views::Button* button) {
-    ui::MouseEvent event(ui::ET_MOUSE_PRESSED, gfx::Point(), gfx::Point(),
-                         ui::EventTimeForNow(), 0, 0);
+    ui::MouseEvent event(ui::EventType::kMousePressed, gfx::Point(),
+                         gfx::Point(), ui::EventTimeForNow(), 0, 0);
     views::test::ButtonTestApi(button).NotifyClick(event);
   }
 
@@ -72,8 +73,14 @@ class SecurityTokenRequestControllerTest : public LoginTestBase {
       generator->PressKey(ui::KeyboardCode(ui::KeyboardCode::VKEY_0 + i),
                           ui::EF_NONE);
     }
-    if (PinRequestView::TestApi(view_).submit_button()->GetEnabled())
+    if (PinRequestView::TestApi(view_).submit_button()->GetEnabled()) {
       SimulateButtonPress(PinRequestView::TestApi(view_).submit_button());
+    }
+  }
+
+  void ClosePinUi() {
+    view_ = nullptr;
+    controller_->ClosePinUi();
   }
 
   std::unique_ptr<SecurityTokenRequestController> controller_;
@@ -84,7 +91,8 @@ class SecurityTokenRequestControllerTest : public LoginTestBase {
   // Number of times the UI was closed.
   int ui_closed_by_user_calls_ = 0;
 
-  PinRequestView* view_ = nullptr;  // Owned by test widget view hierarchy.
+  raw_ptr<PinRequestView> view_ =
+      nullptr;  // Owned by test widget view hierarchy.
 
  private:
   void OnPinEntered(const std::string& user_input) { ++pin_entered_calls_; }
@@ -96,7 +104,7 @@ TEST_F(SecurityTokenRequestControllerTest, SecurityTokenSuccessfulValidation) {
   StartRequest();
   SimulateValidation();
   EXPECT_EQ(1, pin_entered_calls_);
-  controller_->ClosePinUi();
+  ClosePinUi();
   EXPECT_FALSE(PinRequestWidget::Get());
 }
 
@@ -121,8 +129,11 @@ TEST_F(SecurityTokenRequestControllerTest,
   EXPECT_EQ(2, pin_entered_calls_);
   EXPECT_TRUE(PinRequestWidget::Get());
 
+  // release pointer for closing view
+  PinRequestView::TestApi test_api(view_);
+  view_ = nullptr;
   // User should still be able to close the PIN widget.
-  SimulateButtonPress(PinRequestView::TestApi(view_).back_button());
+  SimulateButtonPress(test_api.back_button());
   EXPECT_EQ(1, ui_closed_by_user_calls_);
   EXPECT_FALSE(PinRequestWidget::Get());
 }

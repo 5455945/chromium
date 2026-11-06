@@ -1,11 +1,11 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/sync_file_system/local/root_delete_helper.h"
 
-#include "base/bind.h"
-#include "base/sequenced_task_runner.h"
+#include "base/functional/bind.h"
+#include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/sync_file_system/local/local_file_change_tracker.h"
 #include "chrome/browser/sync_file_system/local/local_file_sync_status.h"
 #include "chrome/browser/sync_file_system/local/sync_file_system_backend.h"
@@ -23,12 +23,13 @@ namespace {
 // This runs on FileSystemContext's default_file_task_runner.
 void ResetFileChangeTracker(storage::FileSystemContext* file_system_context,
                             const storage::FileSystemURL& url) {
-  DCHECK(file_system_context->default_file_task_runner()->
-             RunsTasksInCurrentSequence());
+  CHECK(file_system_context->default_file_task_runner()
+            ->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M162);
   SyncFileSystemBackend* backend =
       SyncFileSystemBackend::GetBackend(file_system_context);
-  DCHECK(backend);
-  DCHECK(backend->change_tracker());
+  CHECK(backend, base::NotFatalUntil::M162);
+  CHECK(backend->change_tracker(), base::NotFatalUntil::M162);
   backend->change_tracker()->ResetForFileSystem(url.origin().GetURL(),
                                                 url.type());
 }
@@ -44,24 +45,25 @@ RootDeleteHelper::RootDeleteHelper(
       url_(url),
       callback_(std::move(callback)),
       sync_status_(sync_status) {
-  DCHECK(file_system_context_.get());
-  DCHECK(url_.is_valid());
-  DCHECK(!callback_.is_null());
-  DCHECK(sync_status_);
+  CHECK(file_system_context_.get(), base::NotFatalUntil::M162);
+  CHECK(url_.is_valid(), base::NotFatalUntil::M162);
+  CHECK(!callback_.is_null(), base::NotFatalUntil::M162);
+  CHECK(sync_status_, base::NotFatalUntil::M162);
   // This is expected to run on the filesystem root.
-  DCHECK(storage::VirtualPath::IsRootPath(url.path()));
+  CHECK(storage::VirtualPath::IsRootPath(url.path()),
+        base::NotFatalUntil::M162);
 }
 
-RootDeleteHelper::~RootDeleteHelper() {
-}
+RootDeleteHelper::~RootDeleteHelper() = default;
 
 void RootDeleteHelper::Run() {
-  util::Log(logging::LOG_VERBOSE, FROM_HERE,
+  util::Log(logging::LOGGING_VERBOSE, FROM_HERE,
             "Deleting the entire local filesystem for remote root deletion: "
-            "%s", url_.DebugString().c_str());
+            "%s",
+            url_.DebugString().c_str());
 
   file_system_context_->DeleteFileSystem(
-      url_.origin(), url_.type(),
+      url_.storage_key(), url_.type(),
       base::BindOnce(&RootDeleteHelper::DidDeleteFileSystem,
                      weak_factory_.GetWeakPtr()));
 }
@@ -69,8 +71,8 @@ void RootDeleteHelper::Run() {
 void RootDeleteHelper::DidDeleteFileSystem(base::File::Error error) {
   // Ignore errors, no idea how to deal with it.
 
-  DCHECK(!sync_status_->IsWritable(url_));
-  DCHECK(!sync_status_->IsWriting(url_));
+  CHECK(!sync_status_->IsWritable(url_), base::NotFatalUntil::M162);
+  CHECK(!sync_status_->IsWriting(url_), base::NotFatalUntil::M162);
 
   // All writes to the entire file system must be now blocked, so we have
   // to be able to safely reset the local changes and sync statuses for it.
@@ -85,12 +87,12 @@ void RootDeleteHelper::DidDeleteFileSystem(base::File::Error error) {
 }
 
 void RootDeleteHelper::DidResetFileChangeTracker() {
-  DCHECK(!sync_status_->IsWritable(url_));
-  DCHECK(!sync_status_->IsWriting(url_));
+  CHECK(!sync_status_->IsWritable(url_), base::NotFatalUntil::M162);
+  CHECK(!sync_status_->IsWriting(url_), base::NotFatalUntil::M162);
 
   // Reopening the filesystem.
   file_system_context_->sandbox_delegate()->OpenFileSystem(
-      url_.origin(), url_.type(),
+      url_.GetBucket(), url_.type(),
       storage::OPEN_FILE_SYSTEM_CREATE_IF_NONEXISTENT,
       base::BindOnce(&RootDeleteHelper::DidOpenFileSystem,
                      weak_factory_.GetWeakPtr()),

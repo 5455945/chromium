@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,17 +6,18 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/threading/thread_restrictions.h"
+#include "base/functional/bind.h"
+#include "base/json/json_writer.h"
+#include "base/notreached.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/test/integration/sync_datatype_helper.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
-#include "chrome/common/chrome_constants.h"
 #include "components/pref_registry/pref_registry_syncable.h"
-#include "components/prefs/persistent_pref_store.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
+#include "components/sync/base/data_type.h"
+#include "components/sync/protocol/sync_entity.pb.h"
 
 using sync_datatype_helper::test;
 
@@ -57,26 +58,7 @@ void ClearPref(int index, const char* pref_name) {
 void ChangeListPref(int index,
                     const char* pref_name,
                     const base::ListValue& new_value) {
-  ListPrefUpdate update(GetPrefs(index), pref_name);
-  base::ListValue* list = update.Get();
-  for (const auto& it : new_value.GetList()) {
-    list->Append(it.Clone());
-  }
-}
-
-scoped_refptr<PrefStore> BuildPrefStoreFromPrefsFile(Profile* profile) {
-  base::RunLoop run_loop;
-  profile->GetPrefs()->CommitPendingWrite(run_loop.QuitClosure());
-  run_loop.Run();
-
-  auto pref_store = base::MakeRefCounted<JsonPrefStore>(
-      profile->GetPath().Append(chrome::kPreferencesFilename));
-  base::ScopedAllowBlockingForTesting allow_blocking;
-  if (pref_store->ReadPrefs() != PersistentPrefStore::PREF_READ_ERROR_NONE) {
-    ADD_FAILURE() << " Failed reading the prefs file into the store.";
-  }
-
-  return pref_store;
+  GetPrefs(index)->SetList(pref_name, new_value.Clone());
 }
 
 bool BooleanPrefMatches(const char* pref_name) {
@@ -127,9 +109,9 @@ bool ClearedPrefMatches(const char* pref_name) {
 }
 
 bool ListPrefMatches(const char* pref_name) {
-  const base::ListValue* reference_value = GetPrefs(0)->GetList(pref_name);
+  const base::ListValue& reference_value = GetPrefs(0)->GetList(pref_name);
   for (int i = 1; i < test()->num_clients(); ++i) {
-    if (*reference_value != *GetPrefs(i)->GetList(pref_name)) {
+    if (reference_value != GetPrefs(i)->GetList(pref_name)) {
       DVLOG(1) << "List preference " << pref_name << " mismatched in"
                << " profile " << i << ".";
       return false;
@@ -138,20 +120,63 @@ bool ListPrefMatches(const char* pref_name) {
   return true;
 }
 
-absl::optional<sync_pb::PreferenceSpecifics> GetPreferenceInFakeServer(
+const sync_pb::PreferenceSpecifics& GetPreferenceFromEntity(
+    syncer::DataType data_type,
+    const sync_pb::SyncEntity& entity) {
+  switch (data_type) {
+    case syncer::PREFERENCES:
+      return entity.specifics().preference();
+    case syncer::PRIORITY_PREFERENCES:
+      return entity.specifics().priority_preference().preference();
+    case syncer::OS_PREFERENCES:
+      return entity.specifics().os_preference().preference();
+    case syncer::OS_PRIORITY_PREFERENCES:
+      return entity.specifics().os_priority_preference().preference();
+    default:
+      NOTREACHED();
+  }
+}
+
+std::optional<sync_pb::PreferenceSpecifics> GetPreferenceInFakeServer(
+    syncer::DataType data_type,
     const std::string& pref_name,
     fake_server::FakeServer* fake_server) {
   for (const sync_pb::SyncEntity& entity :
-       fake_server->GetSyncEntitiesByModelType(syncer::PREFERENCES)) {
-    if (entity.specifics().preference().name() == pref_name) {
-      return entity.specifics().preference();
+       fake_server->GetSyncEntitiesByDataType(data_type)) {
+    const sync_pb::PreferenceSpecifics& preference =
+        GetPreferenceFromEntity(data_type, entity);
+    if (preference.name() == pref_name) {
+      return preference;
     }
   }
 
-  return absl::nullopt;
+  return std::nullopt;
+}
+
+std::string ConvertPrefValueToValueInSpecifics(const base::Value& value) {
+  return base::WriteJson(value).value();
 }
 
 }  // namespace preferences_helper
+
+PrefValueChecker::PrefValueChecker(PrefService* pref_service,
+                                   const char* path,
+                                   base::Value expected_value)
+    : path_(path),
+      expected_value_(std::move(expected_value)),
+      pref_service_(pref_service) {
+  pref_change_registrar_.Init(pref_service_);
+  pref_change_registrar_.Add(
+      path_, base::BindRepeating(&PrefValueChecker::CheckExitCondition,
+                                 base::Unretained(this)));
+}
+
+PrefValueChecker::~PrefValueChecker() = default;
+
+bool PrefValueChecker::IsExitConditionSatisfied(std::ostream* os) {
+  *os << "Waiting for pref '" << path_ << "' to be " << expected_value_;
+  return pref_service_->GetValue(path_) == expected_value_;
+}
 
 PrefMatchChecker::PrefMatchChecker(const char* path) : path_(path) {
   for (int i = 0; i < test()->num_clients(); ++i) {
@@ -215,14 +240,24 @@ bool ClearedPrefMatchChecker::IsExitConditionSatisfied(std::ostream* os) {
 }
 
 FakeServerPrefMatchesValueChecker::FakeServerPrefMatchesValueChecker(
+    syncer::DataType data_type,
     const std::string& pref_name,
     const std::string& expected_value)
-    : pref_name_(pref_name), expected_value_(expected_value) {}
+    : data_type_(data_type),
+      pref_name_(pref_name),
+      expected_value_(expected_value) {
+  CHECK(data_type_ == syncer::DataType::PREFERENCES ||
+            data_type_ == syncer::DataType::PRIORITY_PREFERENCES ||
+            data_type_ == syncer::DataType::OS_PREFERENCES ||
+            data_type_ == syncer::DataType::OS_PRIORITY_PREFERENCES,
+        base::NotFatalUntil::M163);
+}
 
 bool FakeServerPrefMatchesValueChecker::IsExitConditionSatisfied(
     std::ostream* os) {
-  const absl::optional<sync_pb::PreferenceSpecifics> actual_specifics =
-      preferences_helper::GetPreferenceInFakeServer(pref_name_, fake_server());
+  const std::optional<sync_pb::PreferenceSpecifics> actual_specifics =
+      preferences_helper::GetPreferenceInFakeServer(data_type_, pref_name_,
+                                                    fake_server());
   if (!actual_specifics.has_value()) {
     *os << "No sync entity in FakeServer for pref " << pref_name_;
     return false;

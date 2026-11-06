@@ -1,40 +1,45 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "android_webview/browser/aw_http_auth_handler.h"
 
+#include <optional>
 #include <utility>
 
 #include "android_webview/browser/aw_contents.h"
-#include "android_webview/browser_jni_headers/AwHttpAuthHandler_jni.h"
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
 #include "net/base/auth.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "third_party/jni_zero/jni_zero.h"
 
-using base::android::ConvertJavaStringToUTF16;
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "android_webview/browser_jni_headers/AwHttpAuthHandler_jni.h"
+
+using base::android::JavaRef;
 using content::BrowserThread;
 
 namespace android_webview {
 
-AwHttpAuthHandler::AwHttpAuthHandler(const net::AuthChallengeInfo& auth_info,
-                                     content::WebContents* web_contents,
-                                     bool first_auth_attempt,
-                                     LoginAuthRequiredCallback callback)
-    : WebContentsObserver(web_contents),
-      host_(auth_info.challenger.host()),
+AwHttpAuthHandler::AwHttpAuthHandler(
+    const net::AuthChallengeInfo& auth_info,
+    content::WebContents* web_contents,
+    bool first_auth_attempt,
+    content::LoginDelegate::LoginAuthRequiredCallback callback)
+    : host_(auth_info.challenger.host()),
       realm_(auth_info.realm),
       callback_(std::move(callback)) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  if (web_contents) {
+    web_contents_ = web_contents->GetWeakPtr();
+  }
   JNIEnv* env = base::android::AttachCurrentThread();
   http_auth_handler_.Reset(Java_AwHttpAuthHandler_create(
-      env, reinterpret_cast<intptr_t>(this), first_auth_attempt));
+      env, jni_zero::MakeRaw(this), first_auth_attempt));
 
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE,
@@ -47,40 +52,39 @@ AwHttpAuthHandler::~AwHttpAuthHandler() {
                                           http_auth_handler_);
 }
 
-void AwHttpAuthHandler::Proceed(JNIEnv* env,
-                                const JavaParamRef<jobject>& obj,
-                                const JavaParamRef<jstring>& user,
-                                const JavaParamRef<jstring>& password) {
+void AwHttpAuthHandler::Proceed(const std::u16string& user,
+                                const std::u16string& password) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   if (callback_) {
-    std::move(callback_).Run(
-        net::AuthCredentials(ConvertJavaStringToUTF16(env, user),
-                             ConvertJavaStringToUTF16(env, password)));
+    std::move(callback_).Run(net::AuthCredentials(user, password));
   }
 }
 
-void AwHttpAuthHandler::Cancel(JNIEnv* env, const JavaParamRef<jobject>& obj) {
+void AwHttpAuthHandler::Cancel() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   if (callback_) {
-    std::move(callback_).Run(absl::nullopt);
+    std::move(callback_).Run(std::nullopt);
   }
 }
 
 void AwHttpAuthHandler::Start() {
-  DCHECK(web_contents());
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
-  // The WebContents may have been destroyed during the PostTask.
-  if (!web_contents()) {
-    std::move(callback_).Run(absl::nullopt);
+  // The WebContents may have been destroyed during the PostTask. There may also
+  // be no WebContents if the http auth request is from a service worker. This
+  // feature is currently unsupported by Android Webview.
+  if (!web_contents_) {
+    std::move(callback_).Run(std::nullopt);
     return;
   }
 
-  AwContents* aw_contents = AwContents::FromWebContents(web_contents());
+  AwContents* aw_contents = AwContents::FromWebContents(web_contents_.get());
   if (!aw_contents->OnReceivedHttpAuthRequest(http_auth_handler_, host_,
                                               realm_)) {
-    std::move(callback_).Run(absl::nullopt);
+    std::move(callback_).Run(std::nullopt);
   }
 }
 
 }  // namespace android_webview
+
+DEFINE_JNI(AwHttpAuthHandler)

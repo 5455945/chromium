@@ -1,4 +1,7 @@
-CONSOLE MESSAGE: Blink Test Plugin: initializing
+Plugin received event: MouseEnter
+Plugin received event: MouseMove
+Plugin received event: MouseDown
+Plugin received event: MouseUp
 
 
 PASSED

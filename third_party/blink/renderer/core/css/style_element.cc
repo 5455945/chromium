@@ -20,6 +20,7 @@
 
 #include "third_party/blink/renderer/core/css/style_element.h"
 
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_controller.h"
 #include "third_party/blink/renderer/core/css/media_list.h"
 #include "third_party/blink/renderer/core/css/media_query_evaluator.h"
@@ -29,27 +30,50 @@
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/scriptable_document_parser.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
+#include "third_party/blink/renderer/core/fileapi/blob.h"
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
+#include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
+#include "third_party/blink/renderer/core/html/blocking_attribute.h"
 #include "third_party/blink/renderer/core/html/html_style_element.h"
+#include "third_party/blink/renderer/core/inspector/console_message.h"
+#include "third_party/blink/renderer/core/loader/modulescript/module_script_creation_params.h"
 #include "third_party/blink/renderer/core/probe/core_probes.h"
+#include "third_party/blink/renderer/core/script/import_map.h"
+#include "third_party/blink/renderer/core/script/import_map_error.h"
+#include "third_party/blink/renderer/core/script/modulator.h"
+#include "third_party/blink/renderer/core/script/value_wrapper_synthetic_module_script.h"
 #include "third_party/blink/renderer/core/svg/svg_style_element.h"
+#include "third_party/blink/renderer/core/url/url.h"
+#include "third_party/blink/renderer/platform/bindings/script_forbidden_scope.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/json/json_values.h"
+#include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_utf8_adaptor.h"
 
 namespace blink {
 
-static bool IsCSS(const Element& element, const AtomicString& type) {
-  return type.IsEmpty() ||
-         (element.IsHTMLElement() ? EqualIgnoringASCIICase(type, "text/css")
-                                  : (type == "text/css"));
+namespace {
+bool IsCSS(const AtomicString& type) {
+  return type.empty() || EqualIgnoringAsciiCase(type, keywords::kTextCss);
 }
 
+bool IsCSSModule(const AtomicString& type) {
+  return EqualIgnoringAsciiCase(type, keywords::kModule);
+}
+}  // namespace
+
 StyleElement::StyleElement(Document* document, bool created_by_parser)
-    : created_by_parser_(created_by_parser),
+    : has_finished_parsing_children_(!created_by_parser),
       loading_(false),
       registered_as_candidate_(false),
-      start_position_(TextPosition::BelowRangePosition()) {
+      created_by_parser_(created_by_parser),
+      start_position_(TextPosition::BelowRangePosition()),
+      pending_sheet_type_(PendingSheetType::kNone),
+      render_blocking_behavior_(RenderBlockingBehavior::kUnset) {
   if (created_by_parser && document &&
       document->GetScriptableDocumentParser() &&
       !document->IsInDocumentWrite()) {
@@ -66,18 +90,43 @@ StyleElement::ProcessingResult StyleElement::ProcessStyleSheet(
   TRACE_EVENT0("blink", "StyleElement::processStyleSheet");
   DCHECK(element.isConnected());
 
-  registered_as_candidate_ = true;
-  document.GetStyleEngine().AddStyleSheetCandidateNode(element);
-  if (created_by_parser_)
-    return kProcessingSuccessful;
+  // Module type is static based upon when it's first connected.
+  // TODO(crbug.com/448174611): Confirm this with the WHATWG and update behavior
+  // according to WHATWG resolutions.
+  if (RuntimeEnabledFeatures::DeclarativeCSSModulesStyleTagEnabled(
+          document.GetExecutionContext())) {
+    if ((element_type_ == StyleType::kPending) && element.isConnected()) {
+      // TODO(crbug.com/448174611): For consistency with Import Maps, should we
+      // mimic passing "Already Started" state when cloneNode is called? This
+      // would involve passing `element_type_` to the clone.
+      if (IsCSSModule(this->type())) {
+        element_type_ = StyleType::kModule;
+      } else {
+        element_type_ = StyleType::kClassic;
+      }
+    }
 
+    // Sheet should always be empty for modules.
+    DCHECK(!IsModule(document) || !sheet_);
+  }
+  // Classic <style> tags may have an associated stylesheet and need to added as
+  // a candidate node.
+  if (!IsModule(document)) {
+    DCHECK(!sheet_);
+    registered_as_candidate_ = true;
+    document.GetStyleEngine().AddStyleSheetCandidateNode(element);
+  }
+  if (!has_finished_parsing_children_) {
+    return kProcessingSuccessful;
+  }
   return Process(element);
 }
 
 void StyleElement::RemovedFrom(Element& element,
                                ContainerNode& insertion_point) {
-  if (!insertion_point.isConnected())
+  if (!insertion_point.isConnected()) {
     return;
+  }
 
   Document& document = element.GetDocument();
   if (registered_as_candidate_) {
@@ -86,13 +135,20 @@ void StyleElement::RemovedFrom(Element& element,
     registered_as_candidate_ = false;
   }
 
-  if (sheet_)
+  if (sheet_) {
     ClearSheet(element);
+  }
 }
 
 StyleElement::ProcessingResult StyleElement::ChildrenChanged(Element& element) {
-  if (created_by_parser_)
+  if (!has_finished_parsing_children_) {
     return kProcessingSuccessful;
+  }
+  // CSS module content is static at parse time. Content changes should not
+  // re-process on the new content.
+  if (IsModule(element.GetDocument())) {
+    return kProcessingSuccessful;
+  }
   probe::WillChangeStyleElement(&element);
   return Process(element);
 }
@@ -100,22 +156,27 @@ StyleElement::ProcessingResult StyleElement::ChildrenChanged(Element& element) {
 StyleElement::ProcessingResult StyleElement::FinishParsingChildren(
     Element& element) {
   ProcessingResult result = Process(element);
-  created_by_parser_ = false;
+  has_finished_parsing_children_ = true;
   return result;
 }
 
 StyleElement::ProcessingResult StyleElement::Process(Element& element) {
-  if (!element.isConnected())
+  if (!element.isConnected()) {
     return kProcessingSuccessful;
-  return CreateSheet(element, element.TextFromChildren());
+  }
+  return CreateSheetOrModule(element, element.TextFromChildren());
 }
 
 void StyleElement::ClearSheet(Element& owner_element) {
   DCHECK(sheet_);
 
   if (sheet_->IsLoading()) {
-    owner_element.GetDocument().GetStyleEngine().RemovePendingSheet(
-        owner_element, style_engine_context_);
+    DCHECK(IsSameObject(owner_element));
+    if (pending_sheet_type_ != PendingSheetType::kNonBlocking) {
+      owner_element.GetDocument().GetStyleEngine().RemovePendingBlockingSheet(
+          owner_element, pending_sheet_type_);
+    }
+    pending_sheet_type_ = PendingSheetType::kNone;
   }
 
   sheet_.Release()->ClearOwnerNode();
@@ -126,9 +187,11 @@ static bool IsInUserAgentShadowDOM(const Element& element) {
   return root && root->IsUserAgent();
 }
 
-StyleElement::ProcessingResult StyleElement::CreateSheet(Element& element,
-                                                         const String& text) {
+StyleElement::ProcessingResult StyleElement::CreateSheetOrModule(
+    Element& element,
+    const String& text) {
   DCHECK(element.isConnected());
+  DCHECK(IsSameObject(element));
   Document& document = element.GetDocument();
 
   ContentSecurityPolicy* csp =
@@ -137,65 +200,258 @@ StyleElement::ProcessingResult StyleElement::CreateSheet(Element& element,
                 ->GetContentSecurityPolicyForCurrentWorld()
           : nullptr;
 
+  ReportingDisposition reporting_disposition =
+      document.IsDOMParserDocument() ? ReportingDisposition::kSuppressReporting
+                                     : ReportingDisposition::kReport;
+
   // CSP is bypassed for style elements in user agent shadow DOM.
-  bool passes_content_security_policy_checks =
+  const bool passes_style_csp =
       IsInUserAgentShadowDOM(element) ||
       (csp && csp->AllowInline(ContentSecurityPolicy::InlineType::kStyle,
                                &element, text, element.nonce(), document.Url(),
-                               start_position_.line_));
+                               start_position_, reporting_disposition));
 
-  // Clearing the current sheet may remove the cache entry so create the new
-  // sheet first
+  // Declarative CSS Modules impact the module map, so they must also respect
+  // `script-src` CSP. The strictest union applies: the module is blocked if
+  // either `style-src` or `script-src` denies it.
+  const bool passes_script_csp =
+      !IsModule(document) || IsInUserAgentShadowDOM(element) ||
+      (csp && csp->AllowInline(ContentSecurityPolicy::InlineType::kScript,
+                               &element, text, element.nonce(), document.Url(),
+                               start_position_));
+
+  const bool passes_content_security_policy_checks =
+      passes_style_csp && passes_script_csp;
+
+  if (passes_content_security_policy_checks && IsModule(document)) {
+    CHECK(RuntimeEnabledFeatures::DeclarativeCSSModulesStyleTagEnabled(
+        document.GetExecutionContext()));
+    UseCounter::Count(document, WebFeature::kStyleTypeModule);
+    AddImportMapEntry(element, text);
+
+    // Return early, since we explicitly *don't* want to create a CSSStyleSheet
+    // for CSS modules.
+    // TODO(crbug.com/448174611): Should this fire `load` and `error` events to
+    // match the behavior of classic <style> tags?
+    return kProcessingSuccessful;
+  }
+
+  // Use a strong reference to keep the cache entry (which is a weak reference)
+  // alive after ClearSheet().
+  Persistent<CSSStyleSheet> old_sheet = sheet_;
+  if (old_sheet) {
+    ClearSheet(element);
+  }
+
   CSSStyleSheet* new_sheet = nullptr;
 
   // If type is empty or CSS, this is a CSS style sheet.
   const AtomicString& type = this->type();
-  if (IsCSS(element, type) && passes_content_security_policy_checks) {
-    scoped_refptr<MediaQuerySet> media_queries;
+  if (IsCSS(type) && passes_content_security_policy_checks) {
+    MediaQuerySet* media_queries = nullptr;
     const AtomicString& media_string = media();
-    if (!media_string.IsEmpty()) {
+    bool media_query_matches = true;
+    if (!media_string.empty()) {
       media_queries =
           MediaQuerySet::Create(media_string, element.GetExecutionContext());
+      if (LocalFrame* frame = document.GetFrame()) {
+        MediaQueryEvaluator* evaluator =
+            MakeGarbageCollected<MediaQueryEvaluator>(frame);
+        media_query_matches = evaluator->Eval(*media_queries);
+      }
     }
+    auto type_and_behavior = ComputePendingSheetTypeAndRenderBlockingBehavior(
+        element, media_query_matches, created_by_parser_);
+    pending_sheet_type_ = type_and_behavior.first;
+    render_blocking_behavior_ = type_and_behavior.second;
+
     loading_ = true;
     TextPosition start_position =
         start_position_ == TextPosition::BelowRangePosition()
             ? TextPosition::MinimumPosition()
             : start_position_;
     new_sheet = document.GetStyleEngine().CreateSheet(
-        element, text, start_position, style_engine_context_);
+        element, text, start_position, pending_sheet_type_,
+        render_blocking_behavior_);
     new_sheet->SetMediaQueries(media_queries);
     loading_ = false;
   }
 
-  if (sheet_)
-    ClearSheet(element);
-
   sheet_ = new_sheet;
-  if (sheet_)
+  if (sheet_) {
     sheet_->Contents()->CheckLoaded();
+  }
 
   return passes_content_security_policy_checks ? kProcessingSuccessful
                                                : kProcessingFatalError;
 }
 
-bool StyleElement::IsLoading() const {
-  if (loading_)
+void StyleElement::AddImportMapEntry(Element& element, const String& text) {
+  CHECK(!sheet_);
+
+  // A `specifier` attribute is required to register the module under a name
+  // that other code can import. Without it the element is effectively a
+  // no-op, so warn the developer.
+  if (!element.hasAttribute(html_names::kSpecifierAttr)) {
+    element.GetDocument().AddConsoleMessage(
+        MakeGarbageCollected<ConsoleMessage>(
+            mojom::blink::ConsoleMessageSource::kOther,
+            mojom::blink::ConsoleMessageLevel::kWarning,
+            "<style type=module> has no `specifier` value"));
+    return;
+  }
+
+  // Create an Import Map JSON string in the following format:
+  // "imports": {
+  //   "<specifier attribute value>": "<generated URL>"
+  // }
+  //
+  // ...where <generated URL> can be either a Blob or a dataURI, depending on
+  // whether features::kDeclarativeCSSModulesUseDataURI is set.
+  // TODO(crbug.com/448174611) - finalize which approach to use with the WHATWG
+  // and remove the other option.
+  // TODO(crbug.com/448174611) - add links to each step from the spec once the
+  // PR is merged.
+  // TODO(crbug.com/364917757) - Use PendingImportMap here to reduce code (if
+  // the dependency on the <script> element can be removed from
+  // PendingImportMap).
+  String url_string;
+  ExecutionContext* context = element.GetExecutionContext();
+  const bool use_data_uri =
+      base::FeatureList::IsEnabled(features::kDeclarativeCSSModulesUseDataURI);
+  if (use_data_uri) {
+    // TODO(crbug.com/448174611) - consider encoding in base64 to decrease
+    // string size in memory (at the expense of decoding on the CPU).
+    url_string = StrCat({"data:text/css,", EncodeWithUrlEscapeSequences(text)});
+  } else {
+    StringUtf8Adaptor utf8(text, Utf8ConversionMode::kLenient);
+    auto* blob = Blob::Create(base::as_byte_span(utf8), "text/css");
+    CHECK(blob);
+    url_string = URL::CreatePublicURL(context, blob);
+  }
+  KURL url(url_string);
+  CHECK(url.IsValid());
+
+  // The inner JSON object needs to be on the heap because
+  // JSONObject::SetObject only accepts a unique_ptr.
+  auto import_map_inner_json = std::make_unique<JSONObject>();
+  import_map_inner_json->SetString(
+      element.getAttribute(html_names::kSpecifierAttr), url_string);
+
+  JSONObject import_map_outer_json;
+  import_map_outer_json.SetObject("imports", std::move(import_map_inner_json));
+
+  std::optional<ImportMapError> error_to_rethrow;
+  ScriptForbiddenScope::AllowUserAgentScript allow_script;
+
+  // Even though ImportMap is garbage collected (and thus managed by Oilpan), we
+  // don't need to store it as a Member because MergeExistingAndNewImportMaps
+  // will copy-by-value the local import map strings into the global import map.
+  ImportMap* import_map = ImportMap::Parse(import_map_outer_json.ToJSONString(),
+                                           element.GetDocument().BaseURL(),
+                                           *context, &error_to_rethrow);
+  CHECK(import_map);
+  CHECK(!error_to_rethrow.has_value());
+
+  Modulator* modulator = Modulator::From(
+      ToScriptStateForMainWorld(To<LocalDOMWindow>(context)->GetFrame()));
+  modulator->MergeExistingAndNewImportMaps(import_map);
+
+  // For Blob URL's, create a CSS module script and add it to the module map so
+  // it can be accessed immediately. We don't need to do this for DataURI's
+  // because they must be fetched later, so setting it now wouldn't accomplish
+  // anything.
+  // TODO(crbug.com/448174611) - add this part to the spec and add links to spec
+  // here.
+  // TODO(crbug.com/448174611) - should this be checking
+  // (!module_script->HasParseError() && !module_script->HasErrorToRethrow())
+  // before inserting into the module map? I don't see these being set for
+  // invalid CSS or @import statements, but it seems like they should.
+  if (!use_data_uri) {
+    ModuleScriptCreationParams params(
+        /*source_url=*/url, /*base_url=*/url, ScriptSourceLocationType::kInline,
+        ResolvedModuleType::kCSS, ParkableString(text.Impl()),
+        /*cache_handler=*/nullptr, network::mojom::ReferrerPolicy::kDefault,
+        /*source_map_url=*/String());
+    ValueWrapperSyntheticModuleScript* module_script =
+        ValueWrapperSyntheticModuleScript::
+            CreateCSSWrapperSyntheticModuleScript(params, modulator);
+    CHECK(module_script);
+    modulator->AddEntryToModuleMap(url, ModuleType::kCSS, module_script);
+  }
+}
+
+bool StyleElement::IsLoading(const Document& document) const {
+  DCHECK(!IsModule(document));
+  if (loading_) {
     return true;
-  return sheet_ ? sheet_->IsLoading() : false;
+  }
+  return sheet_ && sheet_->IsLoading();
+}
+
+bool StyleElement::IsModule(const Document& document) const {
+  // It's only possible to set the type to module when the flag is enabled.
+  DCHECK(element_type_ != StyleType::kModule ||
+         RuntimeEnabledFeatures::DeclarativeCSSModulesStyleTagEnabled(
+             document.GetExecutionContext()));
+  return element_type_ == StyleType::kModule;
 }
 
 bool StyleElement::SheetLoaded(Document& document) {
-  if (IsLoading())
+  DCHECK(!IsModule(document));
+  if (IsLoading(document)) {
     return false;
+  }
 
-  document.GetStyleEngine().RemovePendingSheet(*sheet_->ownerNode(),
-                                               style_engine_context_);
+  DCHECK(IsSameObject(*sheet_->ownerNode()));
+  if (pending_sheet_type_ != PendingSheetType::kNonBlocking) {
+    document.GetStyleEngine().RemovePendingBlockingSheet(*sheet_->ownerNode(),
+                                                         pending_sheet_type_);
+  }
+  document.GetStyleEngine().SetNeedsActiveStyleUpdate(
+      sheet_->ownerNode()->GetTreeScope());
+  pending_sheet_type_ = PendingSheetType::kNone;
   return true;
 }
 
-void StyleElement::StartLoadingDynamicSheet(Document& document) {
-  document.GetStyleEngine().AddPendingSheet(style_engine_context_);
+void StyleElement::SetToPendingState(Document& document, Element& element) {
+  DCHECK(!IsModule(document));
+  DCHECK(IsSameObject(element));
+  DCHECK_LT(pending_sheet_type_, PendingSheetType::kBlocking);
+  pending_sheet_type_ = PendingSheetType::kBlocking;
+  document.GetStyleEngine().AddPendingBlockingSheet(element,
+                                                    pending_sheet_type_);
+}
+
+void StyleElement::MediaAttributeChanged(Element& element,
+                                         const AtomicString& new_value) {
+  DCHECK(IsSameObject(element));
+  if (!sheet_ || !element.isConnected() ||
+      !element.GetDocument().IsActive()) {
+    return;
+  }
+  sheet_->SetMediaQueries(
+      MediaQuerySet::Create(new_value, element.GetExecutionContext()));
+  element.GetDocument().GetStyleEngine().SetNeedsActiveStyleUpdate(
+      element.GetTreeScope());
+}
+
+void StyleElement::BlockingAttributeChanged(Element& element) {
+  // If this is a dynamically inserted style element, and the `blocking`
+  // has changed so that the element is no longer render-blocking, then unblock
+  // rendering on this element. Note that Parser-inserted stylesheets are
+  // render-blocking by default, so removing `blocking=render` does not unblock
+  // rendering.
+  if (pending_sheet_type_ != PendingSheetType::kDynamicRenderBlocking) {
+    return;
+  }
+  if (const auto* html_element = DynamicTo<HTMLElement>(element);
+      !html_element || html_element->IsPotentiallyRenderBlocking()) {
+    return;
+  }
+  element.GetDocument().GetStyleEngine().RemovePendingBlockingSheet(
+      element, pending_sheet_type_);
+  pending_sheet_type_ = PendingSheetType::kNonBlocking;
 }
 
 void StyleElement::Trace(Visitor* visitor) const {

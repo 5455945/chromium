@@ -1,4 +1,5 @@
-# Copyright 2018 The Chromium Authors. All rights reserved.
+#!/usr/bin/env vpython3
+# Copyright 2018 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """Creates a zip file that can be used by manual testers.
@@ -46,16 +47,18 @@ import zipfile
 THIS_DIR = os.path.abspath(os.path.dirname(os.path.abspath(__file__)))
 SRC_DIR = os.path.join(THIS_DIR, '..', '..', '..')
 SELENIUM_PATH = os.path.abspath(
-    os.path.join(SRC_DIR, r'third_party', 'webdriver', 'pylib'))
+    os.path.join(SRC_DIR, 'third_party', 'webdriver', 'pylib')
+)
 TYP_PATH = os.path.abspath(
-    os.path.join(SRC_DIR, r'third_party', 'catapult', 'third_party', 'typ'))
-BLACKLIST = ['', '.pyc', '.gn', '.gni', '.txt', '.bat']
+    os.path.join(SRC_DIR, 'third_party', 'catapult', 'third_party', 'typ')
+)
+BLOCKLIST = ['', '.pyc', '.gn', '.gni', '.txt', '.bat']
 
 
 def ArchiveDirectory(path, zipf):
     """Archive an entire directory and subdirectories.
 
-    This will skip files that have an extension in BLACKLIST.
+    This will skip files that have an extension in BLOCKLIST.
 
     Args:
         path: The path to the current directory.
@@ -64,7 +67,7 @@ def ArchiveDirectory(path, zipf):
     logging.debug('Archiving %s', path)
     for c_path in [os.path.join(path, name) for name in os.listdir(path)]:
         if os.path.isfile(c_path):
-            if os.path.splitext(c_path)[-1] in BLACKLIST:
+            if os.path.splitext(c_path)[-1] in BLOCKLIST:
                 continue
             logging.debug('Adding %s', os.path.relpath(c_path, SRC_DIR))
             zipf.write(c_path, os.path.relpath(c_path, SRC_DIR))
@@ -76,38 +79,46 @@ def main():
     logging.basicConfig(
         format='[%(asctime)s:%(filename)s(%(lineno)d)] %(message)s',
         datefmt='%m%d/%H%M%S',
-        level=logging.INFO)
+        level=logging.INFO,
+    )
 
     parser = argparse.ArgumentParser(
         description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--output-path',
-                        default='installer_tests.zip',
-                        help='The path to write the zip file to')
-    parser.add_argument('--installer-path',
-                        default='',
-                        help='The path to the current installer. This is '
-                        'optional. If passed it will be zipped as '
-                        'mini_installer.exe')
-    parser.add_argument('--previous-version-installer-path',
-                        default='',
-                        help='The path to the previous installer. This is '
-                        'optional. If passed it will be zipped as '
-                        'previous_version_mini_installer.exe')
-    parser.add_argument('--chromedriver-path',
-                        default='',
-                        help='The path to chromedriver.exe. This is '
-                        'optional.')
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        '--output-path',
+        default='installer_tests.zip',
+        help='The path to write the zip file to',
+    )
+    parser.add_argument(
+        '--installer-path',
+        default='',
+        help='The path to the current installer. This is '
+        'optional. If passed it will be zipped as '
+        'mini_installer.exe',
+    )
+    parser.add_argument(
+        '--previous-version-installer-path',
+        default='',
+        help='The path to the previous installer. This is '
+        'optional. If passed it will be zipped as '
+        'previous_version_mini_installer.exe',
+    )
+    parser.add_argument(
+        '--chromedriver-path',
+        default='',
+        help='The path to chromedriver.exe. This is optional.',
+    )
     args = parser.parse_args()
 
     with zipfile.ZipFile(args.output_path, 'w') as zipf:
-
         # Setup chrome\test\mini_installer as importable in Python
         zipf.writestr(os.path.join('chrome', '__init__.py'), '')
         zipf.writestr(os.path.join('chrome', 'test', '__init__.py'), '')
         zipf.writestr(
-            os.path.join('chrome', 'test', 'mini_installer', '__init__.py'),
-            '')
+            os.path.join('chrome', 'test', 'mini_installer', '__init__.py'), ''
+        )
 
         run_args = []
         # Add any of the executables
@@ -119,12 +130,17 @@ def main():
 
         if args.previous_version_installer_path:
             previous_version_installer_name = os.path.split(
-                args.previous_version_installer_path)[-1]
-            run_args.append('--previous-version-installer-path=' +
-                            previous_version_installer_name)
+                args.previous_version_installer_path
+            )[-1]
+            run_args.append(
+                '--previous-version-installer-path='
+                + previous_version_installer_name
+            )
             logging.debug('Archiving: %s', previous_version_installer_name)
-            zipf.write(args.previous_version_installer_path,
-                       previous_version_installer_name)
+            zipf.write(
+                args.previous_version_installer_path,
+                previous_version_installer_name,
+            )
 
         if args.chromedriver_path:
             chromedriver_name = os.path.split(args.chromedriver_path)[-1]
@@ -137,8 +153,10 @@ def main():
             text = rh.read().format(run_args=' '.join(run_args))
             text = re.sub("\r(?!\n)|(?<!\r)\n", "\r\n", text)
             zipf.writestr('zip_test_runner.bat', text)
-        zipf.write(os.path.join(THIS_DIR, 'ZIP_README.txt'),
-                   os.path.split('README.txt')[-1])
+        zipf.write(
+            os.path.join(THIS_DIR, 'ZIP_README.txt'),
+            os.path.split('README.txt')[-1],
+        )
 
         # Archive this, chromedriver, and typ.
         logging.debug('Zipping chrome/test/mini_installer')

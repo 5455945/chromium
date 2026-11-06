@@ -30,11 +30,14 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_STYLE_SHAPE_VALUE_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_STYLE_SHAPE_VALUE_H_
 
-#include "base/memory/scoped_refptr.h"
+#include "base/check_op.h"
+#include "base/memory/values_equivalent.h"
+#include "base/notreached.h"
 #include "third_party/blink/renderer/core/style/basic_shapes.h"
 #include "third_party/blink/renderer/core/style/computed_style_constants.h"
-#include "third_party/blink/renderer/core/style/data_equivalency.h"
 #include "third_party/blink/renderer/core/style/style_image.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
+#include "third_party/blink/renderer/platform/heap/visitor.h"
 
 namespace blink {
 
@@ -47,52 +50,53 @@ class ShapeValue final : public GarbageCollected<ShapeValue> {
     kImage
   };
 
-  ShapeValue(scoped_refptr<BasicShape> shape, CSSBoxType css_box)
-      : type_(kShape), shape_(std::move(shape)), css_box_(css_box) {}
-  ShapeValue(ShapeValueType type)
-      : type_(type), css_box_(CSSBoxType::kMissing) {}
-  ShapeValue(StyleImage* image)
-      : type_(kImage), image_(image), css_box_(CSSBoxType::kContent) {}
-  ShapeValue(CSSBoxType css_box) : type_(kBox), css_box_(css_box) {}
+  explicit ShapeValue(StyleImage* image)
+      : type_(kImage), image_(image), box_(ShapeBox::kContentBox) {}
+  explicit ShapeValue(ShapeBox shape_box) : type_(kBox), box_(shape_box) {}
+  ShapeValue(const BasicShape& shape, ShapeBox shape_box)
+      : type_(kShape), shape_(shape), box_(shape_box) {}
 
   ShapeValueType GetType() const { return type_; }
-  BasicShape* Shape() const { return shape_.get(); }
+  const BasicShape& Shape() const { return *shape_; }
 
   StyleImage* GetImage() const { return image_.Get(); }
   void SetImage(StyleImage* image) {
     DCHECK_EQ(GetType(), kImage);
-    if (image_ != image)
+    if (image_ != image) {
       image_ = image;
+    }
   }
-  CSSBoxType CssBox() const { return css_box_; }
+  ShapeBox CssBox() const { return box_; }
 
   bool operator==(const ShapeValue& other) const;
 
-  virtual void Trace(Visitor* visitor) const { visitor->Trace(image_); }
+  void Trace(Visitor* visitor) const {
+    visitor->Trace(shape_);
+    visitor->Trace(image_);
+  }
 
  private:
   ShapeValueType type_;
-  scoped_refptr<BasicShape> shape_;
+  Member<const BasicShape> shape_;
   Member<StyleImage> image_;
-  CSSBoxType css_box_;
+  ShapeBox box_;
 };
 
 inline bool ShapeValue::operator==(const ShapeValue& other) const {
-  if (GetType() != other.GetType())
+  if (GetType() != other.GetType()) {
     return false;
+  }
 
   switch (GetType()) {
     case kShape:
-      return DataEquivalent(Shape(), other.Shape()) &&
-             CssBox() == other.CssBox();
+      return CssBox() == other.CssBox() && Shape() == other.Shape();
     case kBox:
       return CssBox() == other.CssBox();
     case kImage:
-      return DataEquivalent(GetImage(), other.GetImage());
+      return base::ValuesEquivalent(GetImage(), other.GetImage());
   }
 
   NOTREACHED();
-  return false;
 }
 
 }  // namespace blink

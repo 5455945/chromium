@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,20 +11,22 @@ namespace blink {
 
 class StubImage : public Image {
  public:
-  StubImage() = default;
+  StubImage()
+      : Image(/*observer=*/nullptr,
+              /*is_multipart=*/false,
+              /*is_cors_same_origin=*/true) {}
 
-  bool CurrentFrameKnownToBeOpaque() override { return false; }
-  IntSize SizeWithConfig(SizeConfig) const override { return IntSize(10, 10); }
+  bool IsOpaque() override { return false; }
+  gfx::Size SizeWithConfig(SizeConfig) const override {
+    return gfx::Size(10, 10);
+  }
   void DestroyDecodedData() override {}
   PaintImage PaintImageForCurrentFrame() override { return PaintImage(); }
   void Draw(cc::PaintCanvas*,
             const cc::PaintFlags&,
-            const FloatRect& dst_rect,
-            const FloatRect& src_rect,
-            const SkSamplingOptions&,
-            RespectImageOrientationEnum,
-            ImageClampingMode,
-            ImageDecodingMode) override {}
+            const gfx::RectF& dst_rect,
+            const gfx::RectF& src_rect,
+            const ImageDrawOptions&) override {}
 };
 
 }  // namespace blink

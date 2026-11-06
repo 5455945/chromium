@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 #define SERVICES_NETWORK_PUBLIC_CPP_DATA_PIPE_TO_SOURCE_STREAM_H_
 
 #include "base/component_export.h"
+#include "base/task/sequenced_task_runner.h"
 #include "mojo/public/cpp/system/data_pipe.h"
 #include "mojo/public/cpp/system/simple_watcher.h"
 #include "net/base/completion_once_callback.h"
@@ -16,7 +17,14 @@ namespace network {
 class COMPONENT_EXPORT(NETWORK_CPP) DataPipeToSourceStream final
     : public net::SourceStream {
  public:
-  explicit DataPipeToSourceStream(mojo::ScopedDataPipeConsumerHandle body);
+  explicit DataPipeToSourceStream(
+      mojo::ScopedDataPipeConsumerHandle body,
+      scoped_refptr<base::SequencedTaskRunner> task_runner =
+          base::SequencedTaskRunner::GetCurrentDefault());
+
+  DataPipeToSourceStream(const DataPipeToSourceStream&) = delete;
+  DataPipeToSourceStream& operator=(const DataPipeToSourceStream&) = delete;
+
   ~DataPipeToSourceStream() override;
 
   // net::SourceStream implementation.
@@ -39,8 +47,6 @@ class COMPONENT_EXPORT(NETWORK_CPP) DataPipeToSourceStream final
   scoped_refptr<net::IOBuffer> output_buf_;
   int output_buf_size_ = 0;
   net::CompletionOnceCallback pending_callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(DataPipeToSourceStream);
 };
 
 }  // namespace network

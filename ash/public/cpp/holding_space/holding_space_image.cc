@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,16 @@
 
 #include <algorithm>
 #include <map>
+#include <set>
 
-#include "ash/public/cpp/file_icon_util.h"
 #include "ash/public/cpp/holding_space/holding_space_constants.h"
 #include "ash/public/cpp/image_util.h"
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
+#include "chromeos/ui/base/file_icon_util.h"
 #include "ui/gfx/image/image_skia_operations.h"
+#include "ui/gfx/image/image_skia_rep.h"
 #include "ui/gfx/image/image_skia_source.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/gfx/skia_util.h"
@@ -75,8 +77,8 @@ HoldingSpaceImage::HoldingSpaceImage(
       async_bitmap_resolver_(async_bitmap_resolver),
       placeholder_image_skia_resolver_(placeholder_image_skia_resolver) {
   placeholder_ = placeholder_image_skia_resolver_.Run(
-      backing_file_path_, max_size_, /*dark_background=*/absl::nullopt,
-      /*is_folder=*/absl::nullopt);
+      backing_file_path_, max_size_, /*dark_background=*/std::nullopt,
+      /*is_folder=*/std::nullopt);
   CreateImageSkia();
 }
 
@@ -89,8 +91,8 @@ HoldingSpaceImage::CreateDefaultPlaceholderImageSkiaResolver(
   return base::BindRepeating(
       [](bool use_light_mode_as_default,
          const base::FilePath& backing_file_path, const gfx::Size& size,
-         const absl::optional<bool>& dark_background,
-         const absl::optional<bool>& is_folder) {
+         const std::optional<bool>& dark_background,
+         const std::optional<bool>& is_folder) {
         // The requested image `size` should be >= `kFileTypeIconSize` to
         // give the `file_type_icon` generated below enough space to fully
         // paint.
@@ -99,10 +101,10 @@ HoldingSpaceImage::CreateDefaultPlaceholderImageSkiaResolver(
 
         const gfx::ImageSkia file_type_icon =
             is_folder.value_or(false)
-                ? GetIconFromType(
-                      IconType::kFolder,
+                ? chromeos::GetIconFromType(
+                      chromeos::IconType::kFolder,
                       dark_background.value_or(!use_light_mode_as_default))
-                : GetIconForPath(
+                : chromeos::GetIconForPath(
                       backing_file_path,
                       dark_background.value_or(!use_light_mode_as_default));
 
@@ -143,7 +145,7 @@ void HoldingSpaceImage::OnBitmapLoaded(const base::FilePath& file_path,
       // Retry load if the backing file path has changed while the image load
       // was in progress.
       LoadBitmap(scale);
-    } else if (async_bitmap_resolver_error_ != error) {
+    } else {
       // A new `error` may mean a better file type image can be displayed. The
       // `error`, for example, may indicate that the file is in fact a folder in
       // which case there is a more appropriate icon that can be shown. Notify
@@ -174,7 +176,7 @@ void HoldingSpaceImage::OnBitmapLoaded(const base::FilePath& file_path,
 }
 
 gfx::ImageSkia HoldingSpaceImage::GetImageSkia(
-    const absl::optional<gfx::Size>& opt_size,
+    const std::optional<gfx::Size>& opt_size,
     bool dark_background) const {
   const gfx::Size size = opt_size.value_or(max_size_);
 
@@ -196,22 +198,7 @@ gfx::ImageSkia HoldingSpaceImage::GetImageSkia(
   if (image_skia_.size() == size)
     return image_skia_;
 
-  gfx::ImageSkia image_skia(image_skia_);
-
-  // Resize.
-  const float scale_x = size.width() / static_cast<float>(image_skia.width());
-  const float scale_y = size.height() / static_cast<float>(image_skia.height());
-  const float scale = std::max(scale_x, scale_y);
-  DCHECK_LE(scale, 1.f);  // Upscaling would result in pixelation.
-  gfx::Size scaled_size = gfx::ScaleToCeiledSize(image_skia.size(), scale);
-  image_skia = gfx::ImageSkiaOperations::CreateResizedImage(
-      image_skia, skia::ImageOperations::ResizeMethod::RESIZE_BEST,
-      scaled_size);
-
-  // Crop.
-  gfx::Rect cropped_bounds(image_skia.size());
-  cropped_bounds.ClampToCenteredSize(size);
-  return gfx::ImageSkiaOperations::ExtractSubset(image_skia, cropped_bounds);
+  return image_util::ResizeAndCropImage(image_skia_, size);
 }
 
 void HoldingSpaceImage::Invalidate() {
@@ -225,13 +212,18 @@ void HoldingSpaceImage::Invalidate() {
   invalidate_timer_.Start(FROM_HERE,
                           g_use_zero_invalidation_delay_for_testing
                               ? base::TimeDelta()
-                              : base::TimeDelta::FromMilliseconds(250),
+                              : base::Milliseconds(250),
                           base::BindOnce(&HoldingSpaceImage::OnInvalidateTimer,
                                          base::Unretained(this)));
 }
 
 void HoldingSpaceImage::UpdateBackingFilePath(const base::FilePath& file_path) {
   backing_file_path_ = file_path;
+}
+
+bool HoldingSpaceImage::UsingPlaceholder() const {
+  return !async_bitmap_resolver_error_ ||
+         *async_bitmap_resolver_error_ != base::File::FILE_OK;
 }
 
 bool HoldingSpaceImage::FireInvalidateTimerForTesting() {
@@ -243,12 +235,36 @@ bool HoldingSpaceImage::FireInvalidateTimerForTesting() {
 
 void HoldingSpaceImage::OnInvalidateTimer() {
   // Invalidate the existing pointers to:
-  // *   Invalidate previous `image_skia_`'s host pointer, and prevent it from
-  //     requesting bitmap loads.
+  // *   Invalidate the previous `image_skia_`'s host pointer, and prevent it
+  //     from requesting bitmap loads.
   // *   Prevent pending bitmap request callbacks from running.
   weak_factory_.InvalidateWeakPtrs();
+
+  // Cache scales for which the previous `image_skia_` has reps.
+  std::set<float> scales;
+  for (const gfx::ImageSkiaRep& image_rep : image_skia_.image_reps())
+    scales.insert(image_rep.scale());
+
+  // Create a new `image_skia_`.
   CreateImageSkia();
-  callback_list_.Notify();
+
+  // If the `async_bitmap_resolver_` has not previously failed, notify
+  // subscribers that the `image_skia_` has been invalidated. A new bitmap will
+  // be asynchronously resolved at the next `GetImageSkia()` invocation.
+  if (!async_bitmap_resolver_error_ ||
+      async_bitmap_resolver_error_ == base::File::FILE_OK) {
+    callback_list_.Notify();
+    return;
+  }
+
+  // If the `async_bitmap_resolver_` failed previously, force asynchronous
+  // resolution of new bitmaps. Failure to do so would cause `GetImageSkia()`
+  // invocations to continue returning placeholders. Note that subscribers will
+  // be notified of `image_skia_` invalidation when the `async_bitmap_resolver_`
+  // returns.
+  DCHECK(!scales.empty());
+  for (const float& scale : scales)
+    image_skia_.GetRepresentation(scale);
 }
 
 void HoldingSpaceImage::CreateImageSkia() {

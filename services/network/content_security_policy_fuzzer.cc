@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -39,7 +39,7 @@ int LLVMFuzzerInitialize(int* argc, char*** argv) {
 
 int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   ParseContentSecurityPolicies(
-      std::string(reinterpret_cast<const char*>(data), size),
+      {reinterpret_cast<const char*>(data), size},
       network::mojom::ContentSecurityPolicyType::kEnforce,
       network::mojom::ContentSecurityPolicySource::kHTTP,
       GURL("https://example.com/"));

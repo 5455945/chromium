@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,11 @@
 
 #include <memory>
 
+#include "base/containers/span.h"
 #include "base/time/time.h"
-#include "chrome/browser/send_tab_to_self/desktop_notification_handler.h"
-#include "chrome/browser/send_tab_to_self/receiving_ui_handler.h"
-#include "components/send_tab_to_self/test_send_tab_to_self_model.h"
+#include "components/send_tab_to_self/fake_send_tab_to_self_model.h"
+#include "components/send_tab_to_self/page_context.h"
+#include "components/send_tab_to_self/receiving_ui_handler.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
@@ -22,14 +23,14 @@ namespace {
 class TestReceivingUiHandler : public ReceivingUiHandler {
  public:
   TestReceivingUiHandler() = default;
-  ~TestReceivingUiHandler() override {}
+  ~TestReceivingUiHandler() override = default;
 
   void DisplayNewEntries(
-      const std::vector<const SendTabToSelfEntry*>& new_entries) override {
+      base::span<const SendTabToSelfEntry* const> new_entries) override {
     number_displayed_entries_ = number_displayed_entries_ + new_entries.size();
   }
 
-  void DismissEntries(const std::vector<std::string>& guids) override {}
+  void DismissEntries(base::span<const std::string> guids) override {}
 
   size_t number_displayed_entries() const { return number_displayed_entries_; }
 
@@ -37,59 +38,26 @@ class TestReceivingUiHandler : public ReceivingUiHandler {
   size_t number_displayed_entries_ = 0;
 };
 
-// A test SendTabToSelfClientService that exposes the TestReceivingUiHandler.
-class TestSendTabToSelfClientService : public SendTabToSelfClientService {
- public:
-  explicit TestSendTabToSelfClientService(SendTabToSelfModel* model)
-      : SendTabToSelfClientService(nullptr, model) {}
-
-  ~TestSendTabToSelfClientService() override = default;
-
-  void SetupHandlerRegistry(Profile* profile) override {}
-
-  TestReceivingUiHandler* SetupTestHandler() {
-    test_handlers_.clear();
-    std::unique_ptr<TestReceivingUiHandler> handler =
-        std::make_unique<TestReceivingUiHandler>();
-    TestReceivingUiHandler* handler_ptr = handler.get();
-    test_handlers_.push_back(std::move(handler));
-    return handler_ptr;
-  }
-
-  // This copies the SendTabToSelfClientService implementation without a cast to
-  // DesktopNotificationHandler on desktop platforms. See notes in that file.
-  void EntriesAddedRemotely(
-      const std::vector<const SendTabToSelfEntry*>& new_entries) override {
-    for (const std::unique_ptr<ReceivingUiHandler>& handler : GetHandlers()) {
-      handler->DisplayNewEntries(new_entries);
-    }
-  }
-
-  const std::vector<std::unique_ptr<ReceivingUiHandler>>& GetHandlers()
-      const override {
-    return test_handlers_;
-  }
-
- protected:
-  std::vector<std::unique_ptr<ReceivingUiHandler>> test_handlers_;
-};
-
 // Tests that the UI handlers gets notified of each entries that were added
 // remotely.
 TEST(SendTabToSelfClientServiceTest, MultipleEntriesAdded) {
   // Set up the test objects.
-  TestSendTabToSelfModel test_model_;
-  TestSendTabToSelfClientService client_service(&test_model_);
-  TestReceivingUiHandler* test_handler = client_service.SetupTestHandler();
+  FakeSendTabToSelfModel test_model;
+  auto test_handler = std::make_unique<TestReceivingUiHandler>();
+  TestReceivingUiHandler* test_handler_ptr = test_handler.get();
+  SendTabToSelfClientService client_service(std::move(test_handler),
+                                            &test_model);
 
   // Create 2 entries and simulated that they were both added remotely.
   SendTabToSelfEntry entry1("a", GURL("http://www.example-a.com"), "a site",
-                            base::Time(), base::Time(), "device a", "device b");
+                            base::Time(), "device a", "device b", PageContext(),
+                            NavigationHistory());
   SendTabToSelfEntry entry2("b", GURL("http://www.example-b.com"), "b site",
-                            base::Time(), base::Time(), "device b", "device a");
-  client_service.EntriesAddedRemotely({&entry1, &entry2});
+                            base::Time(), "device b", "device a", PageContext(),
+                            NavigationHistory());
+  client_service.OnEntriesAddedRemotely({&entry1, &entry2});
 
-  EXPECT_EQ(2u, test_handler->number_displayed_entries());
+  EXPECT_EQ(2u, test_handler_ptr->number_displayed_entries());
 }
 
 }  // namespace

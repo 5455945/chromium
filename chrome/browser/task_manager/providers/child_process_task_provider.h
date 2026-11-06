@@ -1,18 +1,16 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_TASK_MANAGER_PROVIDERS_CHILD_PROCESS_TASK_PROVIDER_H_
 #define CHROME_BROWSER_TASK_MANAGER_PROVIDERS_CHILD_PROCESS_TASK_PROVIDER_H_
 
-#include <map>
 #include <memory>
-#include <vector>
 
 #include "base/containers/flat_map.h"
-#include "base/memory/weak_ptr.h"
 #include "chrome/browser/task_manager/providers/task_provider.h"
 #include "content/public/browser/browser_child_process_observer.h"
+#include "content/public/common/child_process_id.h"
 
 namespace content {
 struct ChildProcessData;
@@ -38,7 +36,8 @@ class ChildProcessTaskProvider
 
   // content::BrowserChildProcessObserver:
   void BrowserChildProcessLaunchedAndConnected(
-      const content::ChildProcessData& data) override;
+      const content::ChildProcessData& data,
+      const base::Process& process) override;
   void BrowserChildProcessHostDisconnected(
       const content::ChildProcessData& data) override;
 
@@ -49,35 +48,18 @@ class ChildProcessTaskProvider
   void StartUpdating() override;
   void StopUpdating() override;
 
-  // The pre-existing child processes data will be collected on the IO thread.
-  // When that is done, we will be notified on the UI thread by receiving a call
-  // to this method.
-  void ChildProcessDataCollected(
-      std::unique_ptr<const std::vector<content::ChildProcessData>>
-          child_processes);
-
   // Creates a ChildProcessTask from the given |data| and notifies the observer
   // of its addition.
-  void CreateTask(const content::ChildProcessData& data);
+  void CreateTask(const content::ChildProcessData& data,
+                  const base::Process& process);
 
-  // Deletes a ChildProcessTask whose |handle| is provided after notifying the
-  // observer of its deletion.
-  void DeleteTask(base::ProcessHandle handle);
+  // Deletes a ChildProcessTask whose `child_process_id` is provided after
+  // notifying the observer of its deletion.
+  void DeleteTask(content::ChildProcessId child_process_id);
 
-  // A map to track ChildProcessTasks by their handles.
-  //
-  // This uses pids instead of handles because on windows (where pids and
-  // handles differ), there may be multiple different handles to the same
-  // process.
-  std::map<base::ProcessId, std::unique_ptr<ChildProcessTask>>
-      tasks_by_processid_;
-
-  // A map to track ChildProcessTask's by their child process unique ids.
-  base::flat_map<int, ChildProcessTask*> tasks_by_child_id_;
-
-  // Always keep this the last member of this class to make sure it's the
-  // first thing to be destructed.
-  base::WeakPtrFactory<ChildProcessTaskProvider> weak_ptr_factory_{this};
+  // A map to track ChildProcessTasks by their unique child process id.
+  base::flat_map<content::ChildProcessId, std::unique_ptr<ChildProcessTask>>
+      tasks_by_child_id_;
 };
 
 }  // namespace task_manager

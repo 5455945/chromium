@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,14 +8,16 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
-#include "base/containers/contains.h"
+#include "base/logging.h"
+#include "base/notimplemented.h"
+#include "base/uuid.h"
 #include "device/bluetooth/bluetooth_adapter_android.h"
 #include "device/bluetooth/bluetooth_device_android.h"
 #include "device/bluetooth/bluetooth_remote_gatt_characteristic_android.h"
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "device/bluetooth/jni_headers/ChromeBluetoothRemoteGattService_jni.h"
 
 using base::android::AttachCurrentThread;
-using base::android::JavaParamRef;
 using base::android::JavaRef;
 
 namespace device {
@@ -61,18 +63,18 @@ BluetoothRemoteGattServiceAndroid::GetGattErrorCode(int bluetooth_gatt_code) {
   // android values not yet represented. http://crbug.com/548498
   switch (bluetooth_gatt_code) {  // android.bluetooth.BluetoothGatt values:
     case 0x00000101:              // GATT_FAILURE
-      return GATT_ERROR_FAILED;
+      return GattErrorCode::kFailed;
     case 0x0000000d:  // GATT_INVALID_ATTRIBUTE_LENGTH
-      return GATT_ERROR_INVALID_LENGTH;
+      return GattErrorCode::kInvalidLength;
     case 0x00000002:  // GATT_READ_NOT_PERMITTED
-      return GATT_ERROR_NOT_PERMITTED;
+      return GattErrorCode::kNotPermitted;
     case 0x00000006:  // GATT_REQUEST_NOT_SUPPORTED
-      return GATT_ERROR_NOT_SUPPORTED;
+      return GattErrorCode::kNotSupported;
     case 0x00000003:  // GATT_WRITE_NOT_PERMITTED
-      return GATT_ERROR_NOT_PERMITTED;
+      return GattErrorCode::kNotPermitted;
     default:
       DVLOG(1) << "Unhandled status: " << bluetooth_gatt_code;
-      return BluetoothGattService::GATT_ERROR_UNKNOWN;
+      return BluetoothGattService::GattErrorCode::kUnknown;
   }
 }
 
@@ -82,27 +84,27 @@ int BluetoothRemoteGattServiceAndroid::GetAndroidErrorCode(
   // TODO(scheib) Create new BluetoothGattService::GattErrorCode enums for
   // android values not yet represented. http://crbug.com/548498
   switch (error_code) {  // Return values from android.bluetooth.BluetoothGatt:
-    case GATT_ERROR_UNKNOWN:
+    case GattErrorCode::kUnknown:
       return 0x00000101;  // GATT_FAILURE. No good match.
-    case GATT_ERROR_FAILED:
+    case GattErrorCode::kFailed:
       return 0x00000101;  // GATT_FAILURE
-    case GATT_ERROR_IN_PROGRESS:
+    case GattErrorCode::kInProgress:
       return 0x00000101;  // GATT_FAILURE. No good match.
-    case GATT_ERROR_INVALID_LENGTH:
+    case GattErrorCode::kInvalidLength:
       return 0x0000000d;  // GATT_INVALID_ATTRIBUTE_LENGTH
-    case GATT_ERROR_NOT_PERMITTED:
+    case GattErrorCode::kNotPermitted:
       // Can't distinguish between:
       // 0x00000002:  // GATT_READ_NOT_PERMITTED
       // 0x00000003:  // GATT_WRITE_NOT_PERMITTED
       return 0x00000101;  // GATT_FAILURE. No good match.
-    case GATT_ERROR_NOT_AUTHORIZED:
+    case GattErrorCode::kNotAuthorized:
       return 0x00000101;  // GATT_FAILURE. No good match.
-    case GATT_ERROR_NOT_PAIRED:
+    case GattErrorCode::kNotPaired:
       return 0x00000101;  // GATT_FAILURE. No good match.
-    case GATT_ERROR_NOT_SUPPORTED:
+    case GattErrorCode::kNotSupported:
       return 0x00000006;  // GATT_REQUEST_NOT_SUPPORTED
   }
-  DVLOG(1) << "Unhandled error_code: " << error_code;
+  DVLOG(1) << "Unhandled error_code: " << static_cast<int>(error_code);
   return 0x00000101;  // GATT_FAILURE. No good match.
 }
 
@@ -111,9 +113,8 @@ std::string BluetoothRemoteGattServiceAndroid::GetIdentifier() const {
 }
 
 device::BluetoothUUID BluetoothRemoteGattServiceAndroid::GetUUID() const {
-  return device::BluetoothUUID(
-      ConvertJavaStringToUTF8(Java_ChromeBluetoothRemoteGattService_getUUID(
-          AttachCurrentThread(), j_service_)));
+  return device::BluetoothUUID(Java_ChromeBluetoothRemoteGattService_getUUID(
+      AttachCurrentThread(), j_service_));
 }
 
 bool BluetoothRemoteGattServiceAndroid::IsPrimary() const {
@@ -167,16 +168,15 @@ void BluetoothRemoteGattServiceAndroid::SetDiscoveryComplete(bool complete) {
 
 void BluetoothRemoteGattServiceAndroid::CreateGattRemoteCharacteristic(
     JNIEnv* env,
-    const JavaParamRef<jobject>& caller,
-    const JavaParamRef<jstring>& instance_id,
-    const JavaParamRef<jobject>& /* BluetoothGattCharacteristicWrapper */
+    const JavaRef<jstring>& instance_id,
+    const JavaRef<jobject>& /* BluetoothGattCharacteristicWrapper */
         bluetooth_gatt_characteristic_wrapper,
-    const JavaParamRef<jobject>& /* ChromeBluetoothDevice */
+    const JavaRef<jobject>& /* ChromeBluetoothDevice */
         chrome_bluetooth_device) {
   std::string instance_id_string =
       base::android::ConvertJavaStringToUTF8(env, instance_id);
 
-  DCHECK(!base::Contains(characteristics_, instance_id_string));
+  DCHECK(!characteristics_.contains(instance_id_string));
   AddCharacteristic(BluetoothRemoteGattCharacteristicAndroid::Create(
       adapter_, this, instance_id_string, bluetooth_gatt_characteristic_wrapper,
       chrome_bluetooth_device));
@@ -198,3 +198,5 @@ void BluetoothRemoteGattServiceAndroid::EnsureCharacteristicsCreated() const {
 }
 
 }  // namespace device
+
+DEFINE_JNI(ChromeBluetoothRemoteGattService)

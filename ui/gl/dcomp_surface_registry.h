@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 
 #include "base/containers/flat_map.h"
 #include "base/no_destructor.h"
+#include "base/synchronization/lock.h"
 #include "base/unguessable_token.h"
 #include "base/win/scoped_handle.h"
 #include "ui/gl/gl_export.h"
@@ -20,10 +21,16 @@ class GL_EXPORT DCOMPSurfaceRegistry {
  public:
   static DCOMPSurfaceRegistry* GetInstance();
 
-  // `GpuServiceImpl` calls this when it receives the corresponding call from
-  // Browser process.
+  // Registers a surface handle and return the associated token, which will be
+  // sent to `MediaFoundationRendererClient` and then to `DCOMPTexture` to take
+  // the handle for direct composition rendering.
   base::UnguessableToken RegisterDCOMPSurfaceHandle(
       base::win::ScopedHandle surface);
+
+  // Unregisters the surface handle associated with `token`. Called when the
+  // `MediaFoundationRendererWrapper` with a registered handle is destructed.
+  // No-op if the handle has already been taken by `DCOMPTexture`.
+  void UnregisterDCOMPSurfaceHandle(const base::UnguessableToken& token);
 
   // `DCOMPTexture` calls this to take the ownership of the DCOMP surface handle
   // when it receives a token from the `MediaFoundationRendererClient` in the
@@ -38,7 +45,9 @@ class GL_EXPORT DCOMPSurfaceRegistry {
   ~DCOMPSurfaceRegistry();
 
   base::flat_map<base::UnguessableToken, base::win::ScopedHandle>
-      surface_handle_map_;
+      surface_handle_map_ GUARDED_BY(lock_);
+
+  base::Lock lock_;
 };
 
 }  // namespace gl

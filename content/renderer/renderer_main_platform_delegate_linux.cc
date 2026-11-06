@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,10 +10,11 @@
 #include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/files/file_util.h"
+#include "base/process/process_metrics.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
-#include "content/public/common/sandbox_init.h"
 #include "sandbox/policy/sandbox.h"
+#include "sandbox/policy/sandbox_type.h"
 
 namespace content {
 
@@ -30,6 +31,12 @@ void RendererMainPlatformDelegate::PlatformUninitialize() {
 }
 
 bool RendererMainPlatformDelegate::EnableSandbox() {
+  // With MappableSI, renderer processes hold FDs to GMBs in addition to the GPU
+  // process, which can exhaust the default 2048 FD limit on ChromeOS when many
+  // video decoders are active. So increasing the limit to 4096.
+  // See https://crbug.com/404365358 and https://crbug.com/563801582.
+  base::IncreaseFdLimitTo(4096);
+
   // The setuid sandbox is started in the zygote process: zygote_main_linux.cc
   // https://chromium.googlesource.com/chromium/src/+/main/docs/linux/suid_sandbox.md
   //

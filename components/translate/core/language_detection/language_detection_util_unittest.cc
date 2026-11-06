@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,31 @@
 
 #include <string>
 
+#include "base/i18n/tag_converters.h"
+#include "base/logging.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "components/translate/core/common/translate_constants.h"
+#include "components/language_detection/core/constants.h"
+#include "components/translate/core/common/translate_language_matcher.h"
+#include "components/translate/core/common/translate_metrics.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-typedef testing::Test LanguageDetectionUtilTest;
+namespace translate {
+namespace {
+
+// Text long enough for a reliable detection, in Chinese (Traditional) and in
+// Chinese (Simplified).
+constexpr char16_t kTraditionalChineseContents[] =
+    u"網頁瀏覽器是一種用於檢索並展示全球資訊網資訊資源的應用程式。這些資訊資源"
+    u"可為網頁、圖片、影音或其他內容，它們由統一資源標誌符標誌。資訊資源中的超"
+    u"連結可使使用者方便地瀏覽相關資訊。";
+constexpr char16_t kSimplifiedChineseContents[] =
+    u"网页浏览器是一种用于检索并展示万维网信息资源的应用程序。这些信息资源可为"
+    u"网页、图片、影音或其他内容，它们由统一资源标志符标志。信息资源中的超链接"
+    u"可使用户方便地浏览相关信息。";
 
 // Tests that well-known language code typos are fixed.
-TEST_F(LanguageDetectionUtilTest, LanguageCodeTypoCorrection) {
+TEST(LanguageDetectionUtilTest, LanguageCodeTypoCorrection) {
   std::string language;
 
   // Strip the second and later codes.
@@ -34,7 +50,7 @@ TEST_F(LanguageDetectionUtilTest, LanguageCodeTypoCorrection) {
 }
 
 // Tests if the language codes' format is invalid.
-TEST_F(LanguageDetectionUtilTest, IsValidLanguageCode) {
+TEST(LanguageDetectionUtilTest, IsValidLanguageCode) {
   std::string language;
 
   language = std::string("ja");
@@ -62,30 +78,9 @@ TEST_F(LanguageDetectionUtilTest, IsValidLanguageCode) {
   EXPECT_FALSE(translate::IsValidLanguageCode(language));
 }
 
-// Tests that similar language table works.
-TEST_F(LanguageDetectionUtilTest, SimilarLanguageCode) {
-  EXPECT_TRUE(translate::IsSameOrSimilarLanguages("en", "en"));
-  EXPECT_FALSE(translate::IsSameOrSimilarLanguages("en", "ja"));
-
-  // Language codes are same if the main parts are same. The synonyms should be
-  // took into account (ex: 'iw' and 'he').
-  EXPECT_TRUE(translate::IsSameOrSimilarLanguages("sr-ME", "sr"));
-  EXPECT_TRUE(translate::IsSameOrSimilarLanguages("sr", "sr-ME"));
-  EXPECT_TRUE(translate::IsSameOrSimilarLanguages("he", "he-IL"));
-  EXPECT_TRUE(translate::IsSameOrSimilarLanguages("eng", "eng-US"));
-  EXPECT_TRUE(translate::IsSameOrSimilarLanguages("eng-US", "eng"));
-  EXPECT_FALSE(translate::IsSameOrSimilarLanguages("eng", "enm"));
-
-  // Even though the main parts are different, some special language pairs are
-  // recognized as same languages.
-  EXPECT_TRUE(translate::IsSameOrSimilarLanguages("bs", "hr"));
-  EXPECT_TRUE(translate::IsSameOrSimilarLanguages("ne", "hi"));
-  EXPECT_FALSE(translate::IsSameOrSimilarLanguages("bs", "hi"));
-}
-
 // Tests that well-known languages which often have wrong server configuration
 // are handles.
-TEST_F(LanguageDetectionUtilTest, WellKnownWrongConfiguration) {
+TEST(LanguageDetectionUtilTest, WellKnownWrongConfiguration) {
   EXPECT_TRUE(translate::MaybeServerWrongConfiguration("en", "ja"));
   EXPECT_TRUE(translate::MaybeServerWrongConfiguration("en-US", "ja"));
   EXPECT_TRUE(translate::MaybeServerWrongConfiguration("en", "zh-CN"));
@@ -95,7 +90,7 @@ TEST_F(LanguageDetectionUtilTest, WellKnownWrongConfiguration) {
 
 // Tests that the language meta tag providing wrong information is ignored by
 // LanguageDetectionUtil due to disagreement between meta tag and CLD.
-TEST_F(LanguageDetectionUtilTest, CLDDisagreeWithWrongLanguageCode) {
+TEST(LanguageDetectionUtilTest, CLDDisagreeWithWrongLanguageCode) {
   base::HistogramTester histogram_tester;
   std::u16string contents =
       u"<html><head><meta http-equiv='Content-Language' content='ja'></head>"
@@ -108,17 +103,15 @@ TEST_F(LanguageDetectionUtilTest, CLDDisagreeWithWrongLanguageCode) {
   std::string language = translate::DeterminePageLanguage(
       std::string("ja"), std::string(), contents, &model_detected_language,
       &is_model_reliable, model_reliability_score);
-  EXPECT_EQ(translate::kUnknownLanguageCode, language);
+  EXPECT_EQ(language_detection::kUnknownLanguageCode, language);
   EXPECT_EQ("en", model_detected_language);
   EXPECT_TRUE(is_model_reliable);
   EXPECT_GT(model_reliability_score, 0.5);
-  histogram_tester.ExpectTotalCount(
-      "Translate.CLD3.TopLanguageEvaluationDuration", 1);
 }
 
 // Tests that the language meta tag providing "en-US" style information is
 // agreed by CLD.
-TEST_F(LanguageDetectionUtilTest, CLDAgreeWithLanguageCodeHavingCountryCode) {
+TEST(LanguageDetectionUtilTest, CLDAgreeWithLanguageCodeHavingCountryCode) {
   base::HistogramTester histogram_tester;
   std::u16string contents =
       u"<html><head><meta http-equiv='Content-Language' content='en-US'></head>"
@@ -135,14 +128,12 @@ TEST_F(LanguageDetectionUtilTest, CLDAgreeWithLanguageCodeHavingCountryCode) {
   EXPECT_EQ("en", model_detected_language);
   EXPECT_TRUE(is_model_reliable);
   EXPECT_GT(model_reliability_score, 0.5);
-  histogram_tester.ExpectTotalCount(
-      "Translate.CLD3.TopLanguageEvaluationDuration", 1);
 }
 
 // Tests that the language meta tag providing wrong information is ignored and
 // CLD's language will be adopted by LanguageDetectionUtil due to an invalid
 // meta tag.
-TEST_F(LanguageDetectionUtilTest, InvalidLanguageMetaTagProviding) {
+TEST(LanguageDetectionUtilTest, InvalidLanguageMetaTagProviding) {
   base::HistogramTester histogram_tester;
   std::u16string contents =
       u"<html><head><meta http-equiv='Content-Language' content='utf-8'></head>"
@@ -159,13 +150,11 @@ TEST_F(LanguageDetectionUtilTest, InvalidLanguageMetaTagProviding) {
   EXPECT_EQ("en", model_detected_language);
   EXPECT_TRUE(is_model_reliable);
   EXPECT_GT(model_reliability_score, 0.5);
-  histogram_tester.ExpectTotalCount(
-      "Translate.CLD3.TopLanguageEvaluationDuration", 1);
 }
 
 // Tests that the language meta tag providing wrong information is ignored
 // because of valid html lang attribute.
-TEST_F(LanguageDetectionUtilTest, AdoptHtmlLang) {
+TEST(LanguageDetectionUtilTest, AdoptHtmlLang) {
   base::HistogramTester histogram_tester;
   std::u16string contents =
       u"<html lang='en'><head><meta http-equiv='Content-Language' content='ja'>"
@@ -182,14 +171,12 @@ TEST_F(LanguageDetectionUtilTest, AdoptHtmlLang) {
   EXPECT_EQ("en", model_detected_language);
   EXPECT_TRUE(is_model_reliable);
   EXPECT_GT(model_reliability_score, 0.5);
-  histogram_tester.ExpectTotalCount(
-      "Translate.CLD3.TopLanguageEvaluationDuration", 1);
 }
 
 // Tests that languages that often have the wrong server configuration are
 // correctly identified. All incorrect language codes should be checked to
 // make sure the binary_search is correct.
-TEST_F(LanguageDetectionUtilTest, IsServerWrongConfigurationLanguage) {
+TEST(LanguageDetectionUtilTest, IsServerWrongConfigurationLanguage) {
   // These languages should all be identified as having the wrong server
   // configuration.
   const char* const wrong_languages[] = {"es", "pt",    "ja",    "ru",
@@ -206,3 +193,126 @@ TEST_F(LanguageDetectionUtilTest, IsServerWrongConfigurationLanguage) {
     EXPECT_FALSE(translate::IsServerWrongConfigurationLanguage(language));
   }
 }
+
+TEST(LanguageDetectionUtilTest, ShortContentHttpLanguage) {
+  std::string model_detected_language;
+  bool is_model_reliable = false;
+  float model_reliability_score = 0.0;
+  std::string language = translate::DeterminePageLanguage(
+      "fr", "", u"123456", &model_detected_language, &is_model_reliable,
+      model_reliability_score);
+  EXPECT_EQ("fr", language);
+  EXPECT_EQ("und", model_detected_language);
+}
+
+// Tests that the model determines whether a page declaring a generic Chinese
+// language ("zh") is in Chinese (Simplified) or Chinese (Traditional).
+TEST(LanguageDetectionUtilTest, ModelComplementsGenericChinese) {
+  base::HistogramTester histogram_tester;
+
+  // From the html lang attribute.
+  EXPECT_EQ("zh-TW", translate::DeterminePageLanguage(
+                         /*code=*/"", /*html_lang=*/"zh",
+                         /*model_detected_language=*/"zh-TW",
+                         /*is_model_reliable=*/true));
+  EXPECT_EQ("zh-CN", translate::DeterminePageLanguage(
+                         /*code=*/"", /*html_lang=*/"zh",
+                         /*model_detected_language=*/"zh-CN",
+                         /*is_model_reliable=*/true));
+
+  // From the Content-Language.
+  EXPECT_EQ("zh-TW", translate::DeterminePageLanguage(
+                         /*code=*/"zh", /*html_lang=*/"",
+                         /*model_detected_language=*/"zh-TW",
+                         /*is_model_reliable=*/true));
+  EXPECT_EQ("zh-CN", translate::DeterminePageLanguage(
+                         /*code=*/"zh", /*html_lang=*/"",
+                         /*model_detected_language=*/"zh-CN",
+                         /*is_model_reliable=*/true));
+
+  histogram_tester.ExpectUniqueSample(
+      "Translate.LanguageDetection.LanguageVerification",
+      translate::LanguageVerificationType::kModelComplementsCountry, 4);
+}
+
+// Tests that a generic Chinese language ("zh") declared by the page is kept
+// when there is no model language, instead of being resolved to a script.
+TEST(LanguageDetectionUtilTest, GenericChineseWithoutModelLanguage) {
+  EXPECT_EQ("zh", translate::DeterminePageLanguage(
+                      /*code=*/"", /*html_lang=*/"zh",
+                      language_detection::kUnknownLanguageCode,
+                      /*is_model_reliable=*/false));
+  EXPECT_EQ("zh", translate::DeterminePageLanguage(
+                      /*code=*/"zh", /*html_lang=*/"",
+                      language_detection::kUnknownLanguageCode,
+                      /*is_model_reliable=*/false));
+  EXPECT_EQ("zh", translate::DeterminePageLanguageNoModel(
+                      /*content_lang=*/"", /*html_lang=*/"zh",
+                      translate::LanguageVerificationType::kNoPageContent));
+  EXPECT_EQ("zh", translate::DeterminePageLanguageNoModel(
+                      /*content_lang=*/"zh", /*html_lang=*/"",
+                      translate::LanguageVerificationType::kNoPageContent));
+}
+
+// Tests that Chinese with a script or a region declared by the page is matched
+// to a Translate language, and that it is preferred over the model language.
+TEST(LanguageDetectionUtilTest, ChineseWithScriptOrRegion) {
+  struct {
+    const char* html_lang;
+    const char* expected_language;
+  } kTestCases[] = {
+      {"zh-TW", "zh-TW"}, {"zh-HK", "zh-TW"}, {"zh-Hant", "zh-TW"},
+      {"zh-CN", "zh-CN"}, {"zh-SG", "zh-CN"}, {"zh-Hans", "zh-CN"},
+  };
+  for (const auto& test_case : kTestCases) {
+    SCOPED_TRACE(test_case.html_lang);
+    EXPECT_EQ(test_case.expected_language,
+              translate::DeterminePageLanguage(
+                  /*code=*/"", test_case.html_lang,
+                  language_detection::kUnknownLanguageCode,
+                  /*is_model_reliable=*/false));
+  }
+
+  EXPECT_EQ("zh-CN", translate::DeterminePageLanguage(
+                         /*code=*/"", /*html_lang=*/"zh-CN",
+                         /*model_detected_language=*/"zh-TW",
+                         /*is_model_reliable=*/true));
+  EXPECT_EQ("zh-TW", translate::DeterminePageLanguage(
+                         /*code=*/"", /*html_lang=*/"zh-TW",
+                         /*model_detected_language=*/"zh-CN",
+                         /*is_model_reliable=*/true));
+}
+
+// Tests that the page contents determine whether a page declaring a generic
+// Chinese language ("zh") is in Chinese (Simplified) or Chinese (Traditional),
+// and that "zh" is kept when the contents are too short for a reliable
+// detection.
+TEST(LanguageDetectionUtilTest, GenericChineseHtmlLangWithContents) {
+  std::string model_detected_language;
+  bool is_model_reliable = false;
+  float model_reliability_score = 0.0;
+
+  std::string language = translate::DeterminePageLanguage(
+      /*code=*/"", /*html_lang=*/"zh", kTraditionalChineseContents,
+      &model_detected_language, &is_model_reliable, model_reliability_score);
+  EXPECT_TRUE(is_model_reliable);
+  EXPECT_EQ("zh-TW", model_detected_language);
+  EXPECT_EQ("zh-TW", language);
+
+  language = translate::DeterminePageLanguage(
+      /*code=*/"", /*html_lang=*/"zh", kSimplifiedChineseContents,
+      &model_detected_language, &is_model_reliable, model_reliability_score);
+  EXPECT_TRUE(is_model_reliable);
+  EXPECT_EQ("zh-CN", model_detected_language);
+  EXPECT_EQ("zh-CN", language);
+
+  language = translate::DeterminePageLanguage(
+      /*code=*/"", /*html_lang=*/"zh", u"歡迎", &model_detected_language,
+      &is_model_reliable, model_reliability_score);
+  EXPECT_FALSE(is_model_reliable);
+  EXPECT_EQ("und", model_detected_language);
+  EXPECT_EQ("zh", language);
+}
+
+}  // namespace
+}  // namespace translate

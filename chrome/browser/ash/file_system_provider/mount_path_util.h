@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +8,12 @@
 #include <string>
 
 #include "base/files/file_path.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "storage/browser/file_system/file_system_url.h"
 
 class Profile;
 
-namespace ash {
-namespace file_system_provider {
+namespace ash::file_system_provider {
 
 class ProvidedFileSystemInterface;
 class ProviderId;
@@ -35,6 +34,10 @@ bool IsFileSystemProviderLocalPath(const base::FilePath& local_path);
 class FileSystemURLParser {
  public:
   explicit FileSystemURLParser(const storage::FileSystemURL& url);
+
+  FileSystemURLParser(const FileSystemURLParser&) = delete;
+  FileSystemURLParser& operator=(const FileSystemURLParser&) = delete;
+
   virtual ~FileSystemURLParser();
 
   // Parses the |url| passed to the constructor. If parsing succeeds, then
@@ -46,10 +49,8 @@ class FileSystemURLParser {
 
  private:
   storage::FileSystemURL url_;
-  ProvidedFileSystemInterface* file_system_;
+  raw_ptr<ProvidedFileSystemInterface> file_system_;
   base::FilePath file_path_;
-
-  DISALLOW_COPY_AND_ASSIGN(FileSystemURLParser);
 };
 
 // Finds a file system, which is responsible for handling the specified
@@ -58,6 +59,10 @@ class FileSystemURLParser {
 class LocalPathParser {
  public:
   LocalPathParser(Profile* profile, const base::FilePath& local_path);
+
+  LocalPathParser(const LocalPathParser&) = delete;
+  LocalPathParser& operator=(const LocalPathParser&) = delete;
+
   virtual ~LocalPathParser();
 
   // Parses the |local_path| passed to the constructor. If parsing succeeds,
@@ -68,25 +73,13 @@ class LocalPathParser {
   const base::FilePath& file_path() const { return file_path_; }
 
  private:
-  Profile* profile_;
+  raw_ptr<Profile> profile_;
   base::FilePath local_path_;
-  ProvidedFileSystemInterface* file_system_;
+  raw_ptr<ProvidedFileSystemInterface> file_system_;
   base::FilePath file_path_;
-
-  DISALLOW_COPY_AND_ASSIGN(LocalPathParser);
 };
 
 }  // namespace util
-}  // namespace file_system_provider
-}  // namespace ash
-
-// TODO(https://crbug.com/1164001): remove when ChromeOS code migration is done.
-namespace chromeos {
-namespace file_system_provider {
-namespace util {
-using ::ash::file_system_provider::util::GetMountPath;
-}  // namespace util
-}  // namespace file_system_provider
-}  // namespace chromeos
+}  // namespace ash::file_system_provider
 
 #endif  // CHROME_BROWSER_ASH_FILE_SYSTEM_PROVIDER_MOUNT_PATH_UTIL_H_

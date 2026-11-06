@@ -1,9 +1,10 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/views/apps/app_dialog/app_block_dialog_view.h"
 
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/grit/generated_resources.h"
@@ -20,9 +21,9 @@ AppBlockDialogView* g_app_block_dialog_view = nullptr;
 namespace apps {
 
 // static
-void AppServiceProxyChromeOs::CreateBlockDialog(const std::string& app_name,
-                                                const gfx::ImageSkia& image,
-                                                Profile* profile) {
+void AppServiceProxy::CreateBlockDialog(const std::string& app_name,
+                                        const gfx::ImageSkia& image,
+                                        Profile* profile) {
   views::DialogDelegate::CreateDialogWidget(
       new AppBlockDialogView(app_name, image, profile), nullptr, nullptr)
       ->Show();
@@ -33,16 +34,17 @@ void AppServiceProxyChromeOs::CreateBlockDialog(const std::string& app_name,
 AppBlockDialogView::AppBlockDialogView(const std::string& app_name,
                                        const gfx::ImageSkia& image,
                                        Profile* profile)
-    : AppDialogView(image) {
-  SetTitle(l10n_util::GetStringFUTF16(IDS_APP_BLOCK_PROMPT_TITLE,
+    : AppDialogView(ui::ImageModel::FromImageSkia(image)) {
+  InitializeView();
+  AddTitle(l10n_util::GetStringFUTF16(IDS_APP_BLOCK_PROMPT_TITLE,
                                       base::UTF8ToUTF16(app_name)));
 
-  std::u16string heading_text = l10n_util::GetStringFUTF16(
+  std::u16string subtitle_text = l10n_util::GetStringFUTF16(
       profile->IsChild() ? IDS_APP_BLOCK_HEADING_FOR_CHILD
                          : IDS_APP_BLOCK_HEADING,
       base::UTF8ToUTF16(app_name));
 
-  InitializeView(heading_text);
+  AddSubtitle(subtitle_text);
 
   g_app_block_dialog_view = this;
 }

@@ -1,25 +1,27 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/test/embedded_test_server/http_request.h"
 
 #include <algorithm>
+#include <string_view>
 #include <utility>
 
 #include "base/logging.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
+#include "net/base/host_port_pair.h"
 #include "net/http/http_chunked_decoder.h"
 #include "url/gurl.h"
 
-namespace net {
-namespace test_server {
+namespace net::test_server {
 
 namespace {
 
-size_t kRequestSizeLimit = 64 * 1024 * 1024;  // 64 mb.
+constexpr size_t kRequestSizeLimit = 64 * 1024 * 1024;  // 64 mb.
 
 // Helper function used to trim tokens in http request headers.
 std::string Trim(const std::string& value) {
@@ -30,9 +32,7 @@ std::string Trim(const std::string& value) {
 
 }  // namespace
 
-HttpRequest::HttpRequest() : method(METHOD_UNKNOWN),
-                             has_content(false) {
-}
+HttpRequest::HttpRequest() = default;
 
 HttpRequest::HttpRequest(const HttpRequest& other) = default;
 
@@ -45,15 +45,12 @@ GURL HttpRequest::GetURL() const {
 }
 
 HttpRequestParser::HttpRequestParser()
-    : http_request_(std::make_unique<HttpRequest>()),
-      buffer_position_(0),
-      state_(STATE_HEADERS),
-      declared_content_length_(0) {}
+    : http_request_(std::make_unique<HttpRequest>()) {}
 
 HttpRequestParser::~HttpRequestParser() = default;
 
-void HttpRequestParser::ProcessChunk(const base::StringPiece& data) {
-  buffer_.append(data.data(), data.size());
+void HttpRequestParser::ProcessChunk(std::string_view data) {
+  buffer_.append(data);
   DCHECK_LE(buffer_.size() + data.size(), kRequestSizeLimit) <<
       "The HTTP request is too large.";
 }
@@ -100,18 +97,35 @@ HttpRequestParser::ParseResult HttpRequestParser::ParseHeaders() {
     DCHECK_EQ(3u, header_line_tokens.size());
     // Method.
     http_request_->method_string = header_line_tokens[0];
-    http_request_->method =
-        GetMethodType(base::ToLowerASCII(header_line_tokens[0]));
-    // Address.
-    // Don't build an absolute URL as the parser does not know (should not
-    // know) anything about the server address.
-    GURL url(header_line_tokens[1]);
-    if (url.is_valid()) {
-      http_request_->relative_url = url.PathForRequest();
-    } else if (header_line_tokens[1][0] == '/') {
+    http_request_->method = GetMethodType(http_request_->method_string);
+    // Target resource. See
+    // https://www.rfc-editor.org/rfc/rfc9112#name-request-line
+    // https://www.rfc-editor.org/rfc/rfc9110#name-determining-the-target-reso
+    if (http_request_->method == METHOD_CONNECT) {
+      // CONNECT uses a special authority-form. Just report the value as
+      // `relative_url`.
+      // https://www.rfc-editor.org/rfc/rfc9112#section-3.2.3
+      CHECK(!HostPortPair::FromString(header_line_tokens[1]).IsEmpty());
       http_request_->relative_url = header_line_tokens[1];
+    } else if (http_request_->method == METHOD_OPTIONS &&
+               header_line_tokens[1] == "*") {
+      // OPTIONS allows a special asterisk-form for the request target.
+      // https://www.rfc-editor.org/rfc/rfc9112#section-3.2.4
+      http_request_->relative_url = "*";
     } else {
-      http_request_->relative_url = "/" + header_line_tokens[1];
+      // The request target should be origin-form, unless connecting through a
+      // proxy, in which case it is absolute-form.
+      // https://www.rfc-editor.org/rfc/rfc9112#name-origin-form
+      // https://www.rfc-editor.org/rfc/rfc9112#name-absolute-form
+      if (!header_line_tokens[1].empty() &&
+          header_line_tokens[1].front() == '/') {
+        http_request_->relative_url = header_line_tokens[1];
+      } else {
+        GURL url(header_line_tokens[1]);
+        CHECK(url.is_valid());
+        // TODO(crbug.com/40242862): This should retain the entire URL.
+        http_request_->relative_url = url.PathForRequest();
+      }
     }
 
     // Protocol.
@@ -159,7 +173,8 @@ HttpRequestParser::ParseResult HttpRequestParser::ParseHeaders() {
       LOG(WARNING) << "Malformed Content-Length header's value.";
     }
   } else if (http_request_->headers.count("Transfer-Encoding") > 0) {
-    if (http_request_->headers["Transfer-Encoding"] == "chunked") {
+    if (base::EqualsCaseInsensitiveASCII(
+            http_request_->headers["Transfer-Encoding"], "chunked")) {
       http_request_->has_content = true;
       chunked_decoder_ = std::make_unique<HttpChunkedDecoder>();
       state_ = STATE_CONTENT;
@@ -181,10 +196,14 @@ HttpRequestParser::ParseResult HttpRequestParser::ParseHeaders() {
 HttpRequestParser::ParseResult HttpRequestParser::ParseContent() {
   const size_t available_bytes = buffer_.size() - buffer_position_;
   if (chunked_decoder_.get()) {
-    int bytes_written = chunked_decoder_->FilterBuf(
-        const_cast<char*>(buffer_.data()) + buffer_position_, available_bytes);
-    http_request_->content.append(buffer_.data() + buffer_position_,
-                                  bytes_written);
+    base::span<uint8_t> available_data =
+        base::as_writable_byte_span(buffer_).subspan(buffer_position_,
+                                                     available_bytes);
+    int bytes_written = chunked_decoder_->FilterBuf(available_data);
+    base::span<const char> extracted_chunk = base::as_chars(
+        available_data.first(base::checked_cast<size_t>(bytes_written)));
+    http_request_->content.append(extracted_chunk.begin(),
+                                  extracted_chunk.end());
 
     if (chunked_decoder_->reached_eof()) {
       buffer_ =
@@ -202,8 +221,9 @@ HttpRequestParser::ParseResult HttpRequestParser::ParseContent() {
   const size_t fetch_bytes = std::min(
       available_bytes,
       declared_content_length_ - http_request_->content.size());
-  http_request_->content.append(buffer_.data() + buffer_position_,
-                                fetch_bytes);
+  base::span<char> payload_portion =
+      base::span(buffer_).subspan(buffer_position_, fetch_bytes);
+  http_request_->content.append(payload_portion.begin(), payload_portion.end());
   buffer_position_ += fetch_bytes;
 
   if (declared_content_length_ == http_request_->content.size()) {
@@ -229,27 +249,27 @@ std::unique_ptr<HttpRequest> HttpRequestParser::GetRequest() {
   return result;
 }
 
-HttpMethod HttpRequestParser::GetMethodType(const std::string& token) const {
-  if (token == "get") {
+// static
+HttpMethod HttpRequestParser::GetMethodType(std::string_view token) {
+  if (token == "GET") {
     return METHOD_GET;
-  } else if (token == "head") {
+  } else if (token == "HEAD") {
     return METHOD_HEAD;
-  } else if (token == "post") {
+  } else if (token == "POST") {
     return METHOD_POST;
-  } else if (token == "put") {
+  } else if (token == "PUT") {
     return METHOD_PUT;
-  } else if (token == "delete") {
+  } else if (token == "DELETE") {
     return METHOD_DELETE;
-  } else if (token == "patch") {
+  } else if (token == "PATCH") {
     return METHOD_PATCH;
-  } else if (token == "connect") {
+  } else if (token == "CONNECT") {
     return METHOD_CONNECT;
-  } else if (token == "options") {
+  } else if (token == "OPTIONS") {
     return METHOD_OPTIONS;
   }
   LOG(WARNING) << "Method not implemented: " << token;
-  return METHOD_GET;
+  return METHOD_UNKNOWN;
 }
 
-}  // namespace test_server
-}  // namespace net
+}  // namespace net::test_server

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,14 +16,13 @@ bool LocationBarModelDelegate::ShouldDisplayURL() const {
   return true;
 }
 
-bool LocationBarModelDelegate::ShouldUseUpdatedConnectionSecurityIndicators()
-    const {
-  return false;
-}
-
 security_state::SecurityLevel LocationBarModelDelegate::GetSecurityLevel()
     const {
   return security_state::NONE;
+}
+
+net::CertStatus LocationBarModelDelegate::GetCertStatus() const {
+  return 0;
 }
 
 std::unique_ptr<security_state::VisibleSecurityState>
@@ -54,6 +53,14 @@ bool LocationBarModelDelegate::IsNewTabPageURL(const GURL& url) const {
 
 bool LocationBarModelDelegate::IsHomePage(const GURL& url) const {
   return false;
+}
+
+bool LocationBarModelDelegate::IsContextualTasksPage() const {
+  return false;
+}
+
+GURL LocationBarModelDelegate::GetContextualTasksInnerFrameURL() const {
+  return GURL();
 }
 
 AutocompleteClassifier* LocationBarModelDelegate::GetAutocompleteClassifier() {

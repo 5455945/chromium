@@ -24,14 +24,11 @@
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_TEXT_UNICODE_H_
 
 #include <unicode/uchar.h>
-#include <unicode/ustring.h>
 
-// Define platform neutral 8 bit character type (L is for Latin-1).
-typedef unsigned char LChar;
-static_assert(sizeof(UChar) == 2, "UChar should be two bytes");
+#include "third_party/blink/renderer/platform/wtf/text/ascii_ctype.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_uchar.h"
 
-namespace WTF {
-namespace unicode {
+namespace blink::unicode {
 
 enum CharDirection {
   kLeftToRight = U_LEFT_TO_RIGHT,
@@ -121,30 +118,6 @@ inline UChar32 FoldCase(UChar32 c) {
   return u_foldCase(c, U_FOLD_CASE_DEFAULT);
 }
 
-inline int FoldCase(UChar* result,
-                    int result_length,
-                    const UChar* src,
-                    int src_length,
-                    bool* error) {
-  UErrorCode status = U_ZERO_ERROR;
-  int real_length = u_strFoldCase(result, result_length, src, src_length,
-                                  U_FOLD_CASE_DEFAULT, &status);
-  *error = !U_SUCCESS(status);
-  return real_length;
-}
-
-inline int ToLower(UChar* result,
-                   int result_length,
-                   const UChar* src,
-                   int src_length,
-                   bool* error) {
-  UErrorCode status = U_ZERO_ERROR;
-  int real_length =
-      u_strToLower(result, result_length, src, src_length, "", &status);
-  *error = !!U_FAILURE(status);
-  return real_length;
-}
-
 inline UChar32 ToLower(UChar32 c) {
   return u_tolower(c);
 }
@@ -153,32 +126,12 @@ inline UChar32 ToUpper(UChar32 c) {
   return u_toupper(c);
 }
 
-inline int ToUpper(UChar* result,
-                   int result_length,
-                   const UChar* src,
-                   int src_length,
-                   bool* error) {
-  UErrorCode status = U_ZERO_ERROR;
-  int real_length =
-      u_strToUpper(result, result_length, src, src_length, "", &status);
-  *error = !!U_FAILURE(status);
-  return real_length;
-}
-
 inline UChar32 ToTitleCase(UChar32 c) {
   return u_totitle(c);
 }
 
-inline bool IsArabicChar(UChar32 c) {
-  return ublock_getCode(c) == UBLOCK_ARABIC;
-}
-
 inline bool IsAlphanumeric(UChar32 c) {
   return !!u_isalnum(c);
-}
-
-inline bool IsSeparatorSpace(UChar32 c) {
-  return u_charType(c) == U_SPACE_SEPARATOR;
 }
 
 inline bool IsPrintableChar(UChar32 c) {
@@ -193,12 +146,14 @@ inline bool HasLineBreakingPropertyComplexContext(UChar32 c) {
   return u_getIntPropertyValue(c, UCHAR_LINE_BREAK) == U_LB_COMPLEX_CONTEXT;
 }
 
-inline UChar32 MirroredChar(UChar32 c) {
-  return u_charMirror(c);
-}
-
 inline CharCategory Category(UChar32 c) {
   return static_cast<CharCategory>(U_GET_GC_MASK(c));
+}
+
+inline bool IsSymbol(UChar32 c) {
+  CharCategory char_category = Category(c);
+  return char_category == kSymbol_Math || char_category == kSymbol_Currency ||
+         char_category == kSymbol_Modifier || char_category == kSymbol_Other;
 }
 
 inline CharDirection Direction(UChar32 c) {
@@ -213,20 +168,17 @@ inline bool IsUpper(UChar32 c) {
   return !!u_isupper(c);
 }
 
-inline uint8_t CombiningClass(UChar32 c) {
-  return u_getCombiningClass(c);
-}
-
 inline CharDecompositionType DecompositionType(UChar32 c) {
   return static_cast<CharDecompositionType>(
       u_getIntPropertyValue(c, UCHAR_DECOMPOSITION_TYPE));
 }
 
-inline int Umemcasecmp(const UChar* a, const UChar* b, int len) {
-  return u_memcasecmp(a, b, len, U_FOLD_CASE_DEFAULT);
+inline bool IsSpaceOrNewline(UChar c) {
+  // Use IsAsciiSpace() for basic Latin-1.
+  // This will include newlines, which aren't included in Unicode DirWS.
+  return c <= 0x7F ? IsAsciiSpace(c) : Direction(c) == kWhiteSpaceNeutral;
 }
 
-}  // namespace unicode
-}  // namespace WTF
+}  // namespace blink::unicode
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_TEXT_UNICODE_H_

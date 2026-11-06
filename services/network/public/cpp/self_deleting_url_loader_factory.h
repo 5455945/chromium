@@ -1,15 +1,17 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef SERVICES_NETWORK_PUBLIC_CPP_SELF_DELETING_URL_LOADER_FACTORY_H_
 #define SERVICES_NETWORK_PUBLIC_CPP_SELF_DELETING_URL_LOADER_FACTORY_H_
 
+#include <string_view>
+
+#include "base/compiler_specific.h"
 #include "base/component_export.h"
-#include "base/macros.h"
+#include "base/memory/self_deleting.h"
 #include "base/threading/thread_checker.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
-#include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
 
@@ -19,13 +21,20 @@ namespace network {
 // managing the lifetime of the URLLoaderFactory implementation
 // which should be owned by the set of its receivers.
 class COMPONENT_EXPORT(NETWORK_CPP) SelfDeletingURLLoaderFactory
-    : public mojom::URLLoaderFactory {
+    : public mojom::URLLoaderFactory,
+      public base::SelfDeleting {
+ public:
+  SelfDeletingURLLoaderFactory(const SelfDeletingURLLoaderFactory&) = delete;
+  SelfDeletingURLLoaderFactory& operator=(const SelfDeletingURLLoaderFactory&) =
+      delete;
+
  protected:
   // Constructs SelfDeletingURLLoaderFactory object that will self-delete
   // once all receivers disconnect (including |factory_receiver| below as well
   // as receivers that connect via the Clone method).
-  explicit SelfDeletingURLLoaderFactory(
-      mojo::PendingReceiver<mojom::URLLoaderFactory> factory_receiver);
+  SelfDeletingURLLoaderFactory(
+      mojo::PendingReceiver<mojom::URLLoaderFactory> factory_receiver,
+      base::SelfDeletingPassKey key);
 
   ~SelfDeletingURLLoaderFactory() override;
 
@@ -45,14 +54,19 @@ class COMPONENT_EXPORT(NETWORK_CPP) SelfDeletingURLLoaderFactory
   // CreateLoaderAndStart.
   void DisconnectReceiversAndDestroy();
 
+  // Reports the currently dispatching Message as bad and closes+removes the
+  // receiver which received the message. Prefer this over the global
+  // `mojo::ReportBadMessage()` function, since calling this method promptly
+  // disconnects the receiver, preventing further (potentially bad) messages
+  // from being processed.
+  NOT_TAIL_CALLED void ReportBadMessage(std::string_view message);
+
   THREAD_CHECKER(thread_checker_);
 
  private:
   void OnDisconnect();
 
   mojo::ReceiverSet<mojom::URLLoaderFactory> receivers_;
-
-  DISALLOW_COPY_AND_ASSIGN(SelfDeletingURLLoaderFactory);
 };
 
 }  // namespace network

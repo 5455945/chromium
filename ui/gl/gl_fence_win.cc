@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -92,21 +92,21 @@ std::unique_ptr<GLFenceWin> GLFenceWin::CreateForGpuFence(
   }
 
   gfx::GpuFenceHandle gpu_fence_handle;
-  gpu_fence_handle.owned_handle = std::move(scoped_handle);
+  gpu_fence_handle.Adopt(std::move(scoped_handle));
   return std::make_unique<GLFenceWin>(std::move(d3d11_fence),
                                       std::move(gpu_fence_handle));
 }
 
-std::unique_ptr<GLFenceWin> GLFenceWin::CreateFromGpuFence(
-    const gfx::GpuFence& gpu_fence) {
+std::unique_ptr<GLFenceWin> GLFenceWin::CreateFromGpuFenceHandle(
+    gfx::GpuFenceHandle gpu_fence) {
   Microsoft::WRL::ComPtr<ID3D11Device> d3d11_device =
       gl::QueryD3D11DeviceObjectFromANGLE();
-  return CreateFromGpuFence(d3d11_device.Get(), gpu_fence);
+  return CreateFromGpuFenceHandle(d3d11_device.Get(), std::move(gpu_fence));
 }
 
-std::unique_ptr<GLFenceWin> GLFenceWin::CreateFromGpuFence(
+std::unique_ptr<GLFenceWin> GLFenceWin::CreateFromGpuFenceHandle(
     ID3D11Device* d3d11_device,
-    const gfx::GpuFence& gpu_fence) {
+    gfx::GpuFenceHandle gpu_fence_handle) {
   Microsoft::WRL::ComPtr<ID3D11Device5> d3d11_device5;
   HRESULT hr = d3d11_device->QueryInterface(IID_PPV_ARGS(&d3d11_device5));
   if (FAILED(hr)) {
@@ -115,9 +115,8 @@ std::unique_ptr<GLFenceWin> GLFenceWin::CreateFromGpuFence(
     return nullptr;
   }
 
-  gfx::GpuFenceHandle gpu_fence_handle = gpu_fence.GetGpuFenceHandle().Clone();
   Microsoft::WRL::ComPtr<ID3D11Fence> d3d11_fence;
-  hr = d3d11_device5->OpenSharedFence(gpu_fence_handle.owned_handle.Get(),
+  hr = d3d11_device5->OpenSharedFence(gpu_fence_handle.Peek(),
                                       IID_PPV_ARGS(&d3d11_fence));
   if (FAILED(hr)) {
     DLOG(ERROR) << "Unable to open a shared fence "
@@ -138,7 +137,6 @@ GLFenceWin::~GLFenceWin() = default;
 
 bool GLFenceWin::HasCompleted() {
   NOTREACHED();
-  return false;
 }
 
 void GLFenceWin::ClientWait() {
@@ -168,8 +166,8 @@ void GLFenceWin::ServerWait() {
   }
 }
 
-std::unique_ptr<gfx::GpuFence> GLFenceWin::GetGpuFence() {
-  return std::make_unique<gfx::GpuFence>(gpu_fence_handle_.Clone());
+gfx::GpuFenceHandle GLFenceWin::GetGpuFenceHandle() {
+  return gpu_fence_handle_.Clone();
 }
 
 }  // namespace gl

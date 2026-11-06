@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,9 +20,9 @@ extern "C" {
 // clang-format on
 
 #include <string>
-#include <string>
 #include <vector>
 
+#include "base/gtest_prod_util.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/win/scoped_handle.h"
@@ -118,6 +118,9 @@ class HidServiceWin : public HidService, public DeviceMonitorWin::Observer {
     // https://docs.microsoft.com/en-us/windows-hardware/drivers/ddi/hidpi/ns-hidpi-_hidp_caps
     virtual const HIDP_CAPS& GetCaps() const = 0;
 
+    // Returns the type of the top-level collection.
+    virtual uint32_t GetCollectionType() const = 0;
+
     // Returns a vector of ReportItems describing the fields that make up
     // reports of type |report_type|.
     virtual std::vector<ReportItem> GetReportItems(
@@ -131,10 +134,17 @@ class HidServiceWin : public HidService, public DeviceMonitorWin::Observer {
 
   void Connect(const std::string& device_id,
                bool allow_protected_reports,
+               bool allow_fido_reports,
                ConnectCallback callback) override;
   base::WeakPtr<HidService> GetWeakPtr() override;
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(HidServiceWinTest, TestOpenDeviceThroughGcpw);
+  FRIEND_TEST_ALL_PREFIXES(HidServiceWinTest,
+                           TestOpenDeviceThroughGcpw_NoHandle);
+
+  static HANDLE OpenDeviceThroughGcpw(std::wstring_view device_path);
+  static uint16_t GetUsagePage(HANDLE device_handle);
   static void EnumerateBlocking(
       base::WeakPtr<HidServiceWin> service,
       scoped_refptr<base::SequencedTaskRunner> task_runner);

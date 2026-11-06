@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,6 @@
 
 #include <memory>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 
@@ -19,6 +17,9 @@ class LocalInputMonitor;
 
 class HostWindow {
  public:
+  HostWindow(const HostWindow&) = delete;
+  HostWindow& operator=(const HostWindow&) = delete;
+
   virtual ~HostWindow();
 
   // Creates a platform-specific instance of the continue window.
@@ -31,6 +32,12 @@ class HostWindow {
   // after a period of inactivity on the local desktop and shows the window when
   // local input is observed.
   static std::unique_ptr<HostWindow> CreateAutoHidingDisconnectWindow(
+      std::unique_ptr<LocalInputMonitor> local_input_monitor);
+
+  // Creates a platform-specific instance of the privacy overlay which covers
+  // all local displays during a remote session while excluding itself from
+  // screen capture, and reveals a disconnect button on local input.
+  static std::unique_ptr<HostWindow> CreatePrivacyOverlay(
       std::unique_ptr<LocalInputMonitor> local_input_monitor);
 
   // Starts the UI state machine. |client_session_control| will be used to
@@ -46,9 +53,6 @@ class HostWindow {
   HostWindow() {}
 
   SEQUENCE_CHECKER(sequence_checker_);
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(HostWindow);
 };
 
 }  // namespace remoting

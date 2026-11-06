@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -32,19 +32,19 @@ class ExplicitlyAllowedNetworkPortsBrowserTest : public policy::PolicyTest {
 
   network::mojom::NetworkContext* network_context() {
     return browser()
-        ->profile()
+        ->GetProfile()
         ->GetDefaultStoragePartition()
         ->GetNetworkContext();
   }
 
   void EnablePort79ByPolicy() {
     PolicyMap policies;
-    base::Value list(base::Value::Type::LIST);
+    base::ListValue list;
     // Port 25 is just ignored, because it is not on the allowable ports list.
-    list.Append(base::Value("25"));
-    list.Append(base::Value("79"));
+    list.Append("25");
+    list.Append("79");
     SetPolicy(&policies, policy::key::kExplicitlyAllowedNetworkPorts,
-              std::move(list));
+              base::Value(std::move(list)));
     UpdateProviderPolicy(policies);
   }
 
@@ -80,9 +80,9 @@ class ExplicitlyAllowedNetworkPortsBackgroundFetchBrowserTest
     auto handle = embedded_test_server()->StartAndReturnHandle();
     // We don't actually use the functions on this page, we just need a URL
     // that is in the right scope for the service worker.
-    ui_test_utils::NavigateToURL(
+    EXPECT_TRUE(ui_test_utils::NavigateToURL(
         browser(), embedded_test_server()->GetURL(
-                       "/background_fetch/background_fetch.html"));
+                       "/background_fetch/background_fetch.html")));
 
     return EvalJs(chrome_test_utils::GetActiveWebContents(this), R"(
 (async () => {

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,40 +8,43 @@
 #include "components/security_interstitials/core/controller_client.h"
 #include "content/public/renderer/render_frame.h"
 #include "gin/converter.h"
-#include "gin/handle.h"
 #include "gin/object_template_builder.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
-#include "third_party/blink/public/web/blink.h"
+#include "third_party/blink/public/platform/scheduler/web_agent_group_scheduler.h"
 #include "third_party/blink/public/web/web_local_frame.h"
+#include "v8/include/v8-context.h"
+#include "v8/include/v8-cppgc.h"
+#include "v8/include/v8-microtask-queue.h"
+#include "v8/include/cppgc/allocation.h"
 
 namespace security_interstitials {
 
-gin::WrapperInfo SecurityInterstitialPageController::kWrapperInfo = {
-    gin::kEmbedderNativeGin};
-
 void SecurityInterstitialPageController::Install(
     content::RenderFrame* render_frame) {
-  v8::Isolate* isolate = blink::MainThreadIsolate();
+  blink::WebLocalFrame* web_frame = render_frame->GetWebFrame();
+  v8::Isolate* isolate = web_frame->GetAgentGroupScheduler()->Isolate();
   v8::HandleScope handle_scope(isolate);
-  v8::MicrotasksScope microtasks_scope(
-      isolate, v8::MicrotasksScope::kDoNotRunMicrotasks);
-  v8::Local<v8::Context> context =
-      render_frame->GetWebFrame()->MainWorldScriptContext();
-  if (context.IsEmpty())
+  v8::Local<v8::Context> context = web_frame->MainWorldScriptContext();
+  if (context.IsEmpty()) {
     return;
+  }
 
+  v8::MicrotasksScope microtasks_scope(
+      isolate, context->GetMicrotaskQueue(),
+      v8::MicrotasksScope::kDoNotRunMicrotasks);
   v8::Context::Scope context_scope(context);
 
-  gin::Handle<SecurityInterstitialPageController> controller =
-      gin::CreateHandle(isolate,
-                        new SecurityInterstitialPageController(render_frame));
-  if (controller.IsEmpty())
+  auto* controller = cppgc::MakeGarbageCollected<SecurityInterstitialPageController>(
+      isolate->GetCppHeap()->GetAllocationHandle(), render_frame);
+  v8::Local<v8::Object> wrapper;
+  if (!controller->GetWrapper(isolate).ToLocal(&wrapper)) {
     return;
+  }
 
   v8::Local<v8::Object> global = context->Global();
   global
       ->Set(context, gin::StringToV8(isolate, "certificateErrorPageController"),
-            controller.ToV8())
+            wrapper)
       .Check();
 }
 
@@ -49,7 +52,12 @@ SecurityInterstitialPageController::SecurityInterstitialPageController(
     content::RenderFrame* render_frame)
     : RenderFrameObserver(render_frame) {}
 
-SecurityInterstitialPageController::~SecurityInterstitialPageController() {}
+SecurityInterstitialPageController::~SecurityInterstitialPageController() =
+    default;
+
+void SecurityInterstitialPageController::Dispose() {
+  RenderFrameObserver::Dispose();
+}
 
 void SecurityInterstitialPageController::DontProceed() {
   SendCommand(
@@ -119,10 +127,50 @@ void SecurityInterstitialPageController::OpenEnhancedProtectionSettings() {
                   CMD_OPEN_ENHANCED_PROTECTION_SETTINGS);
 }
 
+#if BUILDFLAG(IS_ANDROID)
+void SecurityInterstitialPageController::OpenAdvancedProtectionSettings() {
+  SendCommand(security_interstitials::SecurityInterstitialCommand::
+                  CMD_OPEN_ANDROID_ADVANCED_PROTECTION_SETTINGS);
+}
+#endif  // BUILDFLAG(IS_ANDROID)
+
+void SecurityInterstitialPageController::OpenHelpCenterInNewTab() {
+  SendCommand(security_interstitials::SecurityInterstitialCommand::
+                  CMD_OPEN_HELP_CENTER_IN_NEW_TAB);
+}
+
+void SecurityInterstitialPageController::OpenDiagnosticInNewTab() {
+  SendCommand(security_interstitials::SecurityInterstitialCommand::
+                  CMD_OPEN_DIAGNOSTIC_IN_NEW_TAB);
+}
+
+void SecurityInterstitialPageController::OpenReportingPrivacyInNewTab() {
+  SendCommand(security_interstitials::SecurityInterstitialCommand::
+                  CMD_OPEN_REPORTING_PRIVACY_IN_NEW_TAB);
+}
+
+void SecurityInterstitialPageController::OpenWhitepaperInNewTab() {
+  SendCommand(security_interstitials::SecurityInterstitialCommand::
+                  CMD_OPEN_WHITEPAPER_IN_NEW_TAB);
+}
+
+void SecurityInterstitialPageController::ReportPhishingErrorInNewTab() {
+  SendCommand(security_interstitials::SecurityInterstitialCommand::
+                  CMD_REPORT_PHISHING_ERROR_IN_NEW_TAB);
+}
+
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+void SecurityInterstitialPageController::ShowCertificateViewer() {
+  SendCommand(security_interstitials::SecurityInterstitialCommand::
+                  CMD_SHOW_CERTIFICATE_VIEWER);
+}
+#endif
+
 void SecurityInterstitialPageController::SendCommand(
     security_interstitials::SecurityInterstitialCommand command) {
-  if (!render_frame() || !active_)
+  if (!render_frame() || !active_) {
     return;
+  }
 
   mojo::AssociatedRemote<security_interstitials::mojom::InterstitialCommands>
       interface;
@@ -171,7 +219,36 @@ void SecurityInterstitialPageController::SendCommand(
     case security_interstitials::CMD_OPEN_ENHANCED_PROTECTION_SETTINGS:
       interface->OpenEnhancedProtectionSettings();
       break;
-    default:
+    case security_interstitials::CMD_OPEN_ANDROID_ADVANCED_PROTECTION_SETTINGS:
+#if BUILDFLAG(IS_ANDROID)
+      interface->OpenAndroidAdvancedProtectionSettings();
+#endif  // BUILDFLAG(IS_ANDROID)
+      break;
+    case security_interstitials::CMD_OPEN_HELP_CENTER_IN_NEW_TAB:
+      interface->OpenHelpCenterInNewTab();
+      break;
+    case security_interstitials::CMD_OPEN_DIAGNOSTIC_IN_NEW_TAB:
+      interface->OpenDiagnosticInNewTab();
+      break;
+    case security_interstitials::CMD_OPEN_REPORTING_PRIVACY_IN_NEW_TAB:
+      interface->OpenReportingPrivacyInNewTab();
+      break;
+    case security_interstitials::CMD_OPEN_WHITEPAPER_IN_NEW_TAB:
+      interface->OpenWhitepaperInNewTab();
+      break;
+    case security_interstitials::CMD_REPORT_PHISHING_ERROR_IN_NEW_TAB:
+      interface->ReportPhishingErrorInNewTab();
+      break;
+    case security_interstitials::CMD_SHOW_CERTIFICATE_VIEWER:
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+      interface->ShowCertificateViewer();
+#endif
+      break;
+    case security_interstitials::CMD_TEXT_FOUND:
+    case security_interstitials::CMD_TEXT_NOT_FOUND:
+    case security_interstitials::CMD_ERROR:
+    case security_interstitials::CMD_REQUEST_SITE_ACCESS_PERMISSION:
+    case security_interstitials::CMD_CLOSE_INTERSTITIAL_WITHOUT_UI:
       // Other values in the enum are only used by tests so this
       // method should not be called with them.
       NOTREACHED();
@@ -183,32 +260,62 @@ SecurityInterstitialPageController::GetObjectTemplateBuilder(
     v8::Isolate* isolate) {
   return gin::Wrappable<SecurityInterstitialPageController>::
       GetObjectTemplateBuilder(isolate)
-          .SetMethod("dontProceed",
-                     &SecurityInterstitialPageController::DontProceed)
-          .SetMethod("proceed", &SecurityInterstitialPageController::Proceed)
-          .SetMethod("showMoreSection",
-                     &SecurityInterstitialPageController::ShowMoreSection)
-          .SetMethod("openHelpCenter",
-                     &SecurityInterstitialPageController::OpenHelpCenter)
-          .SetMethod("openDiagnostic",
-                     &SecurityInterstitialPageController::OpenDiagnostic)
-          .SetMethod("reload", &SecurityInterstitialPageController::Reload)
-          .SetMethod("openDateSettings",
-                     &SecurityInterstitialPageController::OpenDateSettings)
-          .SetMethod("openLogin",
-                     &SecurityInterstitialPageController::OpenLogin)
-          .SetMethod("doReport", &SecurityInterstitialPageController::DoReport)
-          .SetMethod("dontReport",
-                     &SecurityInterstitialPageController::DontReport)
-          .SetMethod("openReportingPrivacy",
-                     &SecurityInterstitialPageController::OpenReportingPrivacy)
-          .SetMethod("openWhitepaper",
-                     &SecurityInterstitialPageController::OpenWhitepaper)
-          .SetMethod("reportPhishingError",
-                     &SecurityInterstitialPageController::ReportPhishingError)
-          .SetMethod("openEnhancedProtectionSettings",
-                     &SecurityInterstitialPageController::
-                         OpenEnhancedProtectionSettings);
+          .SetMethod<&SecurityInterstitialPageController::DontProceed>(
+              "dontProceed")
+          .SetMethod<&SecurityInterstitialPageController::Proceed>("proceed")
+          .SetMethod<&SecurityInterstitialPageController::ShowMoreSection>(
+              "showMoreSection")
+          .SetMethod<&SecurityInterstitialPageController::OpenHelpCenter>(
+              "openHelpCenter")
+          .SetMethod<&SecurityInterstitialPageController::OpenDiagnostic>(
+              "openDiagnostic")
+          .SetMethod<&SecurityInterstitialPageController::Reload>("reload")
+          .SetMethod<&SecurityInterstitialPageController::OpenDateSettings>(
+              "openDateSettings")
+          .SetMethod<&SecurityInterstitialPageController::OpenLogin>(
+              "openLogin")
+          .SetMethod<&SecurityInterstitialPageController::DoReport>("doReport")
+          .SetMethod<&SecurityInterstitialPageController::DontReport>(
+              "dontReport")
+          .SetMethod<&SecurityInterstitialPageController::OpenReportingPrivacy>(
+              "openReportingPrivacy")
+          .SetMethod<&SecurityInterstitialPageController::OpenWhitepaper>(
+              "openWhitepaper")
+          .SetMethod<&SecurityInterstitialPageController::ReportPhishingError>(
+              "reportPhishingError")
+          .SetMethod<&SecurityInterstitialPageController::
+                         OpenEnhancedProtectionSettings>(
+              "openEnhancedProtectionSettings")
+#if BUILDFLAG(IS_ANDROID)
+          .SetMethod<&SecurityInterstitialPageController::
+                         OpenAdvancedProtectionSettings>(
+              "openAndroidAdvancedProtectionSettings")
+#endif  // BUILDFLAG(IS_ANDROID)
+          .SetMethod<
+              &SecurityInterstitialPageController::OpenHelpCenterInNewTab>(
+              "openHelpCenterInNewTab")
+          .SetMethod<
+              &SecurityInterstitialPageController::OpenDiagnosticInNewTab>(
+              "openDiagnosticInNewTab")
+          .SetMethod<&SecurityInterstitialPageController::
+                         OpenReportingPrivacyInNewTab>(
+              "openReportingPrivacyInNewTab")
+          .SetMethod<
+              &SecurityInterstitialPageController::OpenWhitepaperInNewTab>(
+              "openWhitepaperInNewTab")
+          .SetMethod<
+              &SecurityInterstitialPageController::ReportPhishingErrorInNewTab>(
+              "reportPhishingErrorInNewTab")
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+          .SetMethod<
+              &SecurityInterstitialPageController::ShowCertificateViewer>(
+              "showCertificateViewer")
+#endif
+      ;
+}
+
+const gin::WrapperInfo* SecurityInterstitialPageController::wrapper_info() const {
+  return &kWrapperInfo;
 }
 
 void SecurityInterstitialPageController::OnDestruct() {}

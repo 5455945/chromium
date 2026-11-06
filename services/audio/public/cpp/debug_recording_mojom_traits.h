@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,8 +15,8 @@ struct EnumTraits<audio::mojom::DebugRecordingStreamType,
                   media::AudioDebugRecordingStreamType> {
   static audio::mojom::DebugRecordingStreamType ToMojom(
       media::AudioDebugRecordingStreamType stream_type);
-  static bool FromMojom(audio::mojom::DebugRecordingStreamType type,
-                        media::AudioDebugRecordingStreamType* output);
+  static media::AudioDebugRecordingStreamType FromMojom(
+      audio::mojom::DebugRecordingStreamType type);
 };
 
 }  // namespace mojo

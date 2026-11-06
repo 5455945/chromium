@@ -1,9 +1,9 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
-#include "base/win/windows_version.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/views/test/view_event_test_base.h"
 #include "chrome/test/base/testing_profile.h"
@@ -11,9 +11,9 @@
 #include "ui/aura/test/env_test_helper.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_tree_host.h"
-#include "ui/base/models/simple_menu_model.h"
 #include "ui/base/test/ui_controls.h"
 #include "ui/events/gestures/gesture_recognizer_impl.h"
+#include "ui/menus/simple_menu_model.h"
 #include "ui/views/controls/menu/menu_runner.h"
 
 namespace {
@@ -27,7 +27,10 @@ class TouchEventHandler : public ui::EventHandler {
         num_pointers_down_(0),
         recursion_enabled_(false) {}
 
-  ~TouchEventHandler() override {}
+  TouchEventHandler(const TouchEventHandler&) = delete;
+  TouchEventHandler& operator=(const TouchEventHandler&) = delete;
+
+  ~TouchEventHandler() override = default;
 
   // OnTouchEvent will simulate a second touch event (at |touch_point|) to force
   // recursion in event handling.
@@ -59,19 +62,20 @@ class TouchEventHandler : public ui::EventHandler {
   void OnTouchEvent(ui::TouchEvent* event) override {
     max_call_depth_ = std::max(++call_depth_, max_call_depth_);
 
-    if (recursion_enabled_ && (event->type() == ui::ET_TOUCH_RELEASED)) {
+    if (recursion_enabled_ &&
+        (event->type() == ui::EventType::kTouchReleased)) {
       recursion_enabled_ = false;
-      ui_controls::SendTouchEvents(ui_controls::PRESS | ui_controls::PRESS, 1,
+      ui_controls::SendTouchEvents(ui_controls::kTouchPress, 1,
                                    touch_point_.x(), touch_point_.y());
       WaitForIdle();
     }
 
     switch (event->type()) {
-      case ui::ET_TOUCH_PRESSED:
+      case ui::EventType::kTouchPressed:
         num_touch_presses_++;
         num_pointers_down_++;
         break;
-      case ui::ET_TOUCH_RELEASED:
+      case ui::EventType::kTouchReleased:
         num_pointers_down_--;
         if (!quit_closure_.is_null() && num_pointers_down_ == 0) {
           quit_closure_.Run();
@@ -90,12 +94,15 @@ class TouchEventHandler : public ui::EventHandler {
   base::RepeatingClosure quit_closure_;
   bool recursion_enabled_;
   gfx::Point touch_point_;
-  DISALLOW_COPY_AND_ASSIGN(TouchEventHandler);
 };
 
 class TestingGestureRecognizer : public ui::GestureRecognizerImpl {
  public:
   TestingGestureRecognizer() = default;
+
+  TestingGestureRecognizer(const TestingGestureRecognizer&) = delete;
+  TestingGestureRecognizer& operator=(const TestingGestureRecognizer&) = delete;
+
   ~TestingGestureRecognizer() override = default;
 
   int num_touch_press_events() const { return num_touch_press_events_; }
@@ -106,10 +113,10 @@ class TestingGestureRecognizer : public ui::GestureRecognizerImpl {
   bool ProcessTouchEventPreDispatch(ui::TouchEvent* event,
                                     ui::GestureConsumer* consumer) override {
     switch (event->type()) {
-      case ui::ET_TOUCH_PRESSED:
+      case ui::EventType::kTouchPressed:
         num_touch_press_events_++;
         break;
-      case ui::ET_TOUCH_RELEASED:
+      case ui::EventType::kTouchReleased:
         num_touch_release_events_++;
         break;
       default:
@@ -123,7 +130,6 @@ class TestingGestureRecognizer : public ui::GestureRecognizerImpl {
  private:
   int num_touch_press_events_ = 0;
   int num_touch_release_events_ = 0;
-  DISALLOW_COPY_AND_ASSIGN(TestingGestureRecognizer);
 };
 
 }  // namespace
@@ -131,6 +137,9 @@ class TestingGestureRecognizer : public ui::GestureRecognizerImpl {
 class TouchEventsViewTest : public ViewEventTestBase {
  public:
   TouchEventsViewTest() = default;
+
+  TouchEventsViewTest(const TouchEventsViewTest&) = delete;
+  TouchEventsViewTest& operator=(const TouchEventsViewTest&) = delete;
 
   // ViewEventTestBase:
   void SetUp() override {
@@ -153,13 +162,6 @@ class TouchEventsViewTest : public ViewEventTestBase {
   }
 
   void DoTestOnMessageLoop() override {
-    // ui_controls::SendTouchEvents which uses InjectTouchInput API only works
-    // on Windows 8 and up.
-    if (base::win::GetVersion() <= base::win::Version::WIN7) {
-      Done();
-      return;
-    }
-
     const int touch_pointer_count = 3;
     TouchEventHandler touch_event_handler;
     window()->GetNativeWindow()->GetHost()->window()->AddPreTargetHandler(
@@ -167,7 +169,7 @@ class TouchEventsViewTest : public ViewEventTestBase {
     gfx::Point in_content(touch_view_->width() / 2, touch_view_->height() / 2);
     views::View::ConvertPointToScreen(touch_view_, &in_content);
 
-    ASSERT_TRUE(ui_controls::SendTouchEvents(ui_controls::PRESS,
+    ASSERT_TRUE(ui_controls::SendTouchEvents(ui_controls::kTouchPress,
                                              touch_pointer_count,
                                              in_content.x(), in_content.y()));
     touch_event_handler.WaitForIdle();
@@ -186,15 +188,13 @@ class TouchEventsViewTest : public ViewEventTestBase {
   }
 
  protected:
-  views::View* touch_view_ = nullptr;
-  TestingGestureRecognizer* gesture_recognizer_ = nullptr;
-  ui::GestureRecognizer* initial_gr_ = nullptr;
-
-  DISALLOW_COPY_AND_ASSIGN(TouchEventsViewTest);
+  raw_ptr<views::View> touch_view_ = nullptr;
+  raw_ptr<TestingGestureRecognizer> gesture_recognizer_ = nullptr;
+  raw_ptr<ui::GestureRecognizer> initial_gr_ = nullptr;
 };
 
-#if defined(OS_WIN)  // Fails on latest versions of Windows.
-                     // https://crbug.com/1108551.
+#if BUILDFLAG(IS_WIN)  // Fails on latest versions of Windows.
+                       // https://crbug.com/40141353.
 #define MAYBE_CheckWindowsNativeMessageForTouchEvents \
   DISABLED_CheckWindowsNativeMessageForTouchEvents
 #else
@@ -205,16 +205,13 @@ VIEW_TEST(TouchEventsViewTest, MAYBE_CheckWindowsNativeMessageForTouchEvents)
 
 class TouchEventsRecursiveViewTest : public TouchEventsViewTest {
  public:
-  TouchEventsRecursiveViewTest() {}
+  TouchEventsRecursiveViewTest() = default;
+
+  TouchEventsRecursiveViewTest(const TouchEventsRecursiveViewTest&) = delete;
+  TouchEventsRecursiveViewTest& operator=(const TouchEventsRecursiveViewTest&) =
+      delete;
 
   void DoTestOnMessageLoop() override {
-    // ui_controls::SendTouchEvents which uses InjectTouchInput API only works
-    // on Windows 8 and up.
-    if (base::win::GetVersion() <= base::win::Version::WIN7) {
-      Done();
-      return;
-    }
-
     const int touch_pointer_count = 1;
     TouchEventHandler touch_event_handler;
     window()->GetNativeWindow()->GetHost()->window()->AddPreTargetHandler(
@@ -223,7 +220,7 @@ class TouchEventsRecursiveViewTest : public TouchEventsViewTest {
     views::View::ConvertPointToScreen(touch_view_, &in_content);
     touch_event_handler.ForceRecursionInEventHandler(in_content);
 
-    ASSERT_TRUE(ui_controls::SendTouchEvents(ui_controls::PRESS,
+    ASSERT_TRUE(ui_controls::SendTouchEvents(ui_controls::kTouchPress,
                                              touch_pointer_count,
                                              in_content.x(), in_content.y()));
     touch_event_handler.WaitForEvents();
@@ -235,13 +232,10 @@ class TouchEventsRecursiveViewTest : public TouchEventsViewTest {
         &touch_event_handler);
     Done();
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(TouchEventsRecursiveViewTest);
 };
 
-#if defined(OS_WIN)  // Fails on latest versions of Windows.
-                     // https://crbug.com/1108551.
+#if BUILDFLAG(IS_WIN)  // Fails on latest versions of Windows.
+                       // https://crbug.com/40141353.
 #define MAYBE_CheckWindowsRecursiveHandler DISABLED_CheckWindowsRecursiveHandler
 #else
 #define MAYBE_CheckWindowsRecursiveHandler CheckWindowsRecursiveHandler

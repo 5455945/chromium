@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,13 @@
 
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/task_environment.h"
+#include "base/time/time.h"
 #include "components/autofill/core/common/unique_ids.h"
+#include "components/password_manager/core/browser/features/password_features.h"
+#include "components/password_manager/core/browser/password_manager_constants.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using base::Time;
-using base::TimeDelta;
 
 namespace password_manager {
 
@@ -25,66 +27,25 @@ class IsPossibleUsernameValidTest : public testing::Test {
   PossibleUsernameData possible_username_data_{
       "https://example.com/" /* submitted_signon_realm */,
       autofill::FieldRendererId(1u),
-      u"username_field" /* field name */,
       kUser /* value */,
       base::Time::Now() /* last_change */,
-      10 /* driver_id */};
+      DriverId(10),
+      /*autocomplete_attribute_has_username=*/false,
+      /*is_likely_otp=*/false};
 };
 
-TEST_F(IsPossibleUsernameValidTest, Valid) {
-  EXPECT_TRUE(IsPossibleUsernameValid(
-      possible_username_data_, possible_username_data_.signon_realm, {kUser}));
-}
+// Checks that `possible_username_data_` becomes stale over some time.
+TEST_F(IsPossibleUsernameValidTest, IsPossibleUsernameStale) {
+  EXPECT_FALSE(possible_username_data_.IsStale());
 
-// Check that if time delta between last change and submission is more than 60
-// seconds, than data is invalid.
-TEST_F(IsPossibleUsernameValidTest, TimeDeltaBeforeLastChangeAndSubmission) {
-  task_environment_.FastForwardBy(kMaxDelayBetweenTypingUsernameAndSubmission);
-  EXPECT_TRUE(IsPossibleUsernameValid(
-      possible_username_data_, possible_username_data_.signon_realm, {kUser}));
-  task_environment_.FastForwardBy(TimeDelta::FromSeconds(1));
-  EXPECT_FALSE(IsPossibleUsernameValid(
-      possible_username_data_, possible_username_data_.signon_realm, {kUser}));
-}
+  // Fast forward for a little less than expiration time, but not
+  // exactly to not flake the test.
+  task_environment_.FastForwardBy(kSingleUsernameTimeToLive);
+  EXPECT_FALSE(possible_username_data_.IsStale());
 
-TEST_F(IsPossibleUsernameValidTest, SignonRealm) {
-  EXPECT_FALSE(IsPossibleUsernameValid(possible_username_data_,
-                                       "https://m.example.com/", {kUser}));
-
-  EXPECT_FALSE(IsPossibleUsernameValid(possible_username_data_,
-                                       "https://google.com/", {kUser}));
-}
-
-TEST_F(IsPossibleUsernameValidTest, PossibleUsernameValue) {
-  // Different capitalization is okay.
-  EXPECT_TRUE(IsPossibleUsernameValid(possible_username_data_,
-                                      possible_username_data_.signon_realm,
-                                      {u"USER"}));
-  // Different email hosts are okay.
-  EXPECT_TRUE(IsPossibleUsernameValid(possible_username_data_,
-                                      possible_username_data_.signon_realm,
-                                      {u"user@gmail.com"}));
-
-  // Other usernames are okay.
-  EXPECT_TRUE(IsPossibleUsernameValid(possible_username_data_,
-                                      possible_username_data_.signon_realm,
-                                      {kUser, u"alice"}));
-
-  // No usernames are not okay.
-  EXPECT_FALSE(IsPossibleUsernameValid(
-      possible_username_data_, possible_username_data_.signon_realm, {}));
-
-  // Completely different usernames are not okay.
-  EXPECT_FALSE(IsPossibleUsernameValid(possible_username_data_,
-                                       possible_username_data_.signon_realm,
-                                       {u"alice", u"bob"}));
-
-  // Empty usernames are not okay, even if credentials with empty usernames
-  // exist.
-  possible_username_data_.value = u"";
-  EXPECT_FALSE(IsPossibleUsernameValid(possible_username_data_,
-                                       possible_username_data_.signon_realm,
-                                       {u"alice", u""}));
+  // Fast forward more until the data becomes stale.
+  task_environment_.FastForwardBy(base::Seconds(5));
+  EXPECT_TRUE(possible_username_data_.IsStale());
 }
 
 }  // namespace

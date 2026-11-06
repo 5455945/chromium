@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,7 @@ namespace subresource_filter {
 
 ActivationList GetListForThreatTypeAndMetadata(
     safe_browsing::SBThreatType threat_type,
-    const safe_browsing::ThreatMetadata& threat_type_metadata,
+    const safe_browsing::SubresourceFilterMatch& subresource_filter_match,
     bool* warning);
 
 }  // namespace subresource_filter

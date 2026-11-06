@@ -1,4 +1,4 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,11 @@
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/lazy_instance.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/no_destructor.h"
 #include "base/observer_list_threadsafe.h"
 #include "base/sequence_checker.h"
-#include "base/task/post_task.h"
+#include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/media/router/discovery/discovery_network_info.h"
 #include "net/base/ip_address.h"
 #include "services/network/public/cpp/network_connection_tracker.h"
@@ -25,11 +24,12 @@ namespace media_router {
 // DiscoveryNetworkMonitor::Observer is called with the instance of the monitor.
 // Only one instance of this will be created per browser process.
 //
-// This class is not thread-safe, except for adding and removing observers.
-// Most of the work done by the monitor is done on the IO thread, which includes
-// updating the current network ID.  Therefore |GetNetworkId| should only be
-// called from the IO thread.  All observers will be notified of network changes
-// on the thread from which they registered.
+// Network interface enumeration runs on a private ThreadPool sequence, not on
+// any BrowserThread.  GetNetworkId() and Refresh() may be called from any
+// sequence: each posts to that sequence and replies on the caller's sequence.
+// Adding and removing observers is likewise safe from any sequence, and all
+// observers are notified of network changes on the sequence from which they
+// registered.
 class DiscoveryNetworkMonitor
     : public network::NetworkConnectionTracker::NetworkConnectionObserver {
  public:
@@ -55,6 +55,9 @@ class DiscoveryNetworkMonitor
   static std::unique_ptr<DiscoveryNetworkMonitor> CreateInstanceForTest(
       NetworkInfoFunction strategy);
 
+  DiscoveryNetworkMonitor(const DiscoveryNetworkMonitor&) = delete;
+  DiscoveryNetworkMonitor& operator=(const DiscoveryNetworkMonitor&) = delete;
+
   void AddObserver(Observer* const observer);
   void RemoveObserver(Observer* const observer);
 
@@ -71,8 +74,9 @@ class DiscoveryNetworkMonitor
  private:
   friend class CastMediaSinkServiceImplTest;
   friend class DiscoveryNetworkMonitorTest;
+  friend class AccessCodeCastSinkServiceTest;
   friend struct std::default_delete<DiscoveryNetworkMonitor>;
-  friend struct base::LazyInstanceTraitsBase<DiscoveryNetworkMonitor>;
+  friend class base::NoDestructor<DiscoveryNetworkMonitor>;
 
   DiscoveryNetworkMonitor();
   explicit DiscoveryNetworkMonitor(NetworkInfoFunction strategy);
@@ -81,7 +85,8 @@ class DiscoveryNetworkMonitor
   void SetNetworkInfoFunctionForTest(NetworkInfoFunction strategy);
 
   // network::NetworkConnectionTracker::NetworkConnectionObserver overrides.
-  void OnConnectionChanged(network::mojom::ConnectionType type) override;
+  void OnConnectionChanged(
+      net::NetworkChangeNotifier::ConnectionType type) override;
 
   std::string GetNetworkIdOnSequence() const;
   std::string UpdateNetworkInfo();
@@ -106,8 +111,6 @@ class DiscoveryNetworkMonitor
 
   // SequenceChecker for |task_runner_|.
   SEQUENCE_CHECKER(sequence_checker_);
-
-  DISALLOW_COPY_AND_ASSIGN(DiscoveryNetworkMonitor);
 };
 
 }  // namespace media_router

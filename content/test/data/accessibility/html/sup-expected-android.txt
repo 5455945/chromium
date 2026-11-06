@@ -1,2 +1,5 @@
-android.webkit.WebView focusable focused scrollable
-++android.view.View name='This text containssuperscripttext.'
+android.webkit.WebView focusable focused
+++android.view.View
+++++android.widget.TextView interesting name='This text contains'
+++++android.view.View interesting name='superscript'
+++++android.widget.TextView interesting name='text.'

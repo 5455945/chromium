@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,34 +7,25 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <sstream>
-
 namespace mojo {
 namespace internal {
 
-std::string MakeMessageWithArrayIndex(const char* message,
-                                      size_t size,
-                                      size_t index) {
-  std::ostringstream stream;
-  stream << message << ": array size - " << size << "; index - " << index;
-  return stream.str();
+ArrayIndexError MakeMessageWithArrayIndex(const char* message,
+                                          size_t size,
+                                          size_t index) {
+  return {message, size, index};
 }
 
-std::string MakeMessageWithExpectedArraySize(const char* message,
-                                             size_t size,
-                                             size_t expected_size) {
-  std::ostringstream stream;
-  stream << message << ": array size - " << size << "; expected size - "
-         << expected_size;
-  return stream.str();
+ArrayExpectedSizeError MakeMessageWithExpectedArraySize(const char* message,
+                                                        size_t size,
+                                                        size_t expected_size) {
+  return {message, size, expected_size};
 }
 
-ArrayDataTraits<bool>::BitRef::~BitRef() {
-}
+ArrayDataTraits<bool>::BitRef::~BitRef() {}
 
 ArrayDataTraits<bool>::BitRef::BitRef(uint8_t* storage, uint8_t mask)
-    : storage_(storage), mask_(mask) {
-}
+    : storage_(storage), mask_(mask) {}
 
 ArrayDataTraits<bool>::BitRef& ArrayDataTraits<bool>::BitRef::operator=(
     bool value) {

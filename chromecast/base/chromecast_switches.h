@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,11 +16,22 @@ namespace switches {
 extern const char kSwitchValueTrue[];
 extern const char kSwitchValueFalse[];
 
-// Url to upload crash data to.
+// Switches for crash_uploader
 extern const char kCrashServerUrl[];
+extern const char kCrashUploaderDaemon[];
+extern const char kCrashReportProductName[];
 
 // Disable Crash Reporting
 extern const char kDisableCrashReporter[];
+
+// Path to dumpstate binary to be used for crash reporting.
+// This gives Chromium's crash reporter the flexibility to switch
+// between multiple implementations of dumpstate tool.
+extern const char kDumpstateBinPath[];
+
+// Switch to dumpstate log retrieval utility. utility must take no arguments as
+// dumpstate does not forward args.
+extern const char kDumpstateLogRetrievalUtilityPath[];
 
 // Content-implementation switches
 extern const char kEnableLocalFileAccesses[];
@@ -35,32 +46,8 @@ extern const char kRequireWlan[];
 extern const char kLastLaunchedApp[];
 extern const char kPreviousApp[];
 
-// Cast Receiver switches
-extern const char kAcceptResourceProvider[];
-
-// ALSA-based CMA switches. (Only valid for audio products.)
-// TODO(sergeyu): kAlsaEnableUpsampling and kAlsaCheckCloseTimeout are
-// implemented in StreamMixer, which is not ALSA-specific - it's also used on
-// Fuchsia. Rename these flags.
-extern const char kAlsaAmpDeviceName[];
-extern const char kAlsaAmpElementName[];
-extern const char kAlsaCheckCloseTimeout[];
-extern const char kAlsaEnableUpsampling[];
-extern const char kAlsaFixedOutputSampleRate[];
-extern const char kAlsaMuteDeviceName[];
-extern const char kAlsaMuteElementName[];
-extern const char kAlsaOutputAvailMin[];
-extern const char kAlsaOutputBufferSize[];
-extern const char kAlsaOutputPeriodSize[];
-extern const char kAlsaOutputStartThreshold[];
-extern const char kAlsaVolumeDeviceName[];
-extern const char kAlsaVolumeElementName[];
+// Audio output switches.
 extern const char kAudioOutputChannels[];
-extern const char kAudioOutputSampleRate[];
-extern const char kMaxOutputVolumeDba1m[];
-extern const char kMixerEnableDynamicChannelCount[];
-extern const char kMixerSourceAudioReadyThresholdMs[];
-extern const char kMixerSourceInputQueueMs[];
 
 // Memory pressure switches
 extern const char kMemPressureSystemReservedKb[];
@@ -73,33 +60,33 @@ extern const char kVSyncInterval[];
 
 // Graphics switches
 extern const char kDesktopWindow1080p[];
-extern const char kForceMediaResolutionHeight[];
-extern const char kForceMediaResolutionWidth[];
 
 // UI switches
-extern const char kEnableInput[];
 extern const char kSystemGestureStartWidth[];
 extern const char kSystemGestureStartHeight[];
 extern const char kBottomSystemGestureStartHeight[];
 extern const char kBackGestureHorizontalThreshold[];
 extern const char kEnableTopDragGesture[];
-extern const char kEnableRoundedWindowCorners[];
+extern const char kManagedMode[];
 
 // Background color used when Chromium hasn't rendered anything yet.
 extern const char kCastAppBackgroundColor[];
-
-extern const char kMixerServiceEndpoint[];
-extern const char kMixerServicePort[];
 
 extern const char kCastMemoryPressureCriticalFraction[];
 extern const char kCastMemoryPressureModerateFraction[];
 
 extern const char kDisableMojoRenderer[];
+extern const char kForceMojoRenderer[];
 
 // OTA update related switches.
 extern const char kForceUpdateRemoteUrl[];
 
 extern const char kSysInfoFilePath[];
+
+// Allows specifying the base::ASSETS dir for Cast via commandline.
+extern const char kCastAssetsDir[];
+
+extern const char kHomeEnvOverride[];
 
 }  // namespace switches
 

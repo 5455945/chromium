@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <deque>
 
 #include "base/component_export.h"
+#include "base/time/time.h"
 #include "ui/base/prediction/input_predictor.h"
 
 namespace ui {
@@ -22,6 +23,10 @@ class COMPONENT_EXPORT(UI_BASE_PREDICTION) LinearResampling
     : public InputPredictor {
  public:
   explicit LinearResampling();
+
+  LinearResampling(const LinearResampling&) = delete;
+  LinearResampling& operator=(const LinearResampling&) = delete;
+
   ~LinearResampling() override;
 
   const char* GetName() const override;
@@ -44,11 +49,16 @@ class COMPONENT_EXPORT(UI_BASE_PREDICTION) LinearResampling
   // Return the average time delta in the event queue.
   base::TimeDelta TimeInterval() const override;
 
+  base::TimeDelta ResampleLatency(
+      base::TimeDelta frame_interval) const override;
+
+  bool AppliesResampleLatencyInternally() const override;
+
  private:
   // Class to cache the Resample Latency to avoid its recalculation each frame.
   class LatencyCalculator {
    public:
-    base::TimeDelta GetResampleLatency(base::TimeDelta frame_interval);
+    base::TimeDelta GetResampleLatencyInternal(base::TimeDelta frame_interval);
 
    private:
     base::TimeDelta CalculateLatency();
@@ -64,9 +74,7 @@ class COMPONENT_EXPORT(UI_BASE_PREDICTION) LinearResampling
   // Store the current delta time between the last 2 events
   base::TimeDelta events_dt_;
 
-  LatencyCalculator latency_calculator_;
-
-  DISALLOW_COPY_AND_ASSIGN(LinearResampling);
+  mutable LatencyCalculator latency_calculator_;
 };
 
 }  // namespace ui

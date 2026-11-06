@@ -1,28 +1,27 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <memory>
+#import <memory>
+#import <optional>
+#import <string>
 
-#include "base/run_loop.h"
-#include "base/test/bind.h"
-#include "ios/web/public/test/fakes/fake_browser_state.h"
+#import "base/run_loop.h"
+#import "base/test/bind.h"
+#import "ios/web/public/test/fakes/fake_browser_state.h"
 #import "ios/web/public/test/web_test.h"
 #import "ios/web/public/web_client.h"
-#include "net/test/embedded_test_server/embedded_test_server.h"
-#include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
-#include "services/network/public/cpp/resource_request.h"
-#include "services/network/public/cpp/simple_url_loader.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "net/test/embedded_test_server/embedded_test_server.h"
+#import "net/traffic_annotation/network_traffic_annotation_test_helper.h"
+#import "services/network/public/cpp/resource_request.h"
+#import "services/network/public/cpp/simple_url_loader.h"
+#import "services/network/public/mojom/url_response_head.mojom.h"
 
 namespace web {
 
 class URLLoaderTest : public WebTest {
  protected:
-  URLLoaderTest() : WebTest(WebTaskEnvironment::Options::IO_MAINLOOP) {}
+  URLLoaderTest() : WebTest(WebTaskEnvironment::MainThreadType::IO) {}
 
  protected:
   net::EmbeddedTestServer server_;
@@ -38,7 +37,7 @@ TEST_F(URLLoaderTest, Basic) {
   request->url = server_.GetURL("/echo");
   // Adds kCorsExemptHeaderName into the cors_exempt_headers, that use should be
   // allowed by FakeBrowserState. If BrowserState implementation does not
-  // permit to use this header in |cors_exempt_headers| explicitly, the request
+  // permit to use this header in `cors_exempt_headers` explicitly, the request
   // fails with net::ERR_INVALID_ARGUMENT.
   request->cors_exempt_headers.SetHeader(
       FakeBrowserState::kCorsExemptTestHeaderName, "Test");
@@ -48,12 +47,12 @@ TEST_F(URLLoaderTest, Basic) {
   base::RunLoop run_loop;
   loader->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
       GetBrowserState()->GetURLLoaderFactory(),
-      base::BindLambdaForTesting(
-          [&](std::unique_ptr<std::string> response_body) {
-            if (response_body)
-              result = *response_body;
-            run_loop.Quit();
-          }));
+      base::BindLambdaForTesting([&](std::optional<std::string> response_body) {
+        if (response_body) {
+          result = std::move(response_body).value();
+        }
+        run_loop.Quit();
+      }));
   run_loop.Run();
 
   EXPECT_EQ(0, loader->NetError());

@@ -1,4 +1,4 @@
-// Copyright (c) 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,11 +9,10 @@
 #include <set>
 #include <string>
 
+#include "base/values.h"
+#include "content/common/content_export.h"
 #include "content/common/input/synthetic_pointer_action_list_params.h"
-
-namespace base {
-class Value;
-}  // namespace base
+#include "content/common/input/synthetic_smooth_scroll_gesture_params.h"
 
 namespace content {
 
@@ -44,41 +43,66 @@ namespace content {
 class CONTENT_EXPORT ActionsParser {
  public:
   explicit ActionsParser(base::Value value);
+
+  ActionsParser(const ActionsParser&) = delete;
+  ActionsParser& operator=(const ActionsParser&) = delete;
+
   ~ActionsParser();
   bool Parse();
   const std::string& error_message() const { return error_message_; }
-  const SyntheticGestureParams& gesture_params() const {
-    return *gesture_params_.get();
+
+  SyntheticGestureParams::GestureType parsed_gesture_type() const {
+    CHECK(gesture_params_);
+    return gesture_params_->GetGestureType();
+  }
+
+  const SyntheticPointerActionListParams& pointer_action_params() const {
+    CHECK_EQ(parsed_gesture_type(),
+             SyntheticGestureParams::POINTER_ACTION_LIST);
+    return static_cast<const SyntheticPointerActionListParams&>(
+        *gesture_params_.get());
+  }
+
+  const SyntheticSmoothScrollGestureParams& smooth_scroll_params() const {
+    CHECK_EQ(parsed_gesture_type(),
+             SyntheticGestureParams::SMOOTH_SCROLL_GESTURE);
+    return static_cast<const SyntheticSmoothScrollGestureParams&>(
+        *gesture_params_.get());
   }
 
  private:
-  bool ActionsDictionaryUsesTestDriverApi(const base::Value& action_sequence);
+  bool ActionsDictionaryUsesTestDriverApi(
+      const base::DictValue& action_sequence);
   // For testdriver actions JSON format, please refer to Webdriver spec
   // https://www.w3.org/TR/webdriver/#actions.
-  bool ParseTestDriverActionSequence(const base::Value& action_sequence);
-  bool ParseGpuBenchmarkingActionSequence(const base::Value& action_sequence);
-  bool ParseActionItemList(const base::Value& actions, std::string source_type);
-  bool ParseAction(const base::Value& action,
+  bool ParseTestDriverActionSequence(const base::DictValue& action_sequence);
+  bool ParseGpuBenchmarkingActionSequence(
+      const base::DictValue& action_sequence);
+  bool ParseActionItemList(const base::ListValue& actions,
+                           std::string source_type);
+  bool ParseAction(const base::DictValue& action,
                    SyntheticPointerActionListParams::ParamList& param_list,
                    std::string source_type);
-  bool ParsePointerParameters(const base::Value& action_sequence);
-  bool ParseWheelAction(const base::Value& action, std::string subtype);
+  bool ParsePointerParameters(const base::DictValue& action_sequence);
+  bool ParseWheelAction(const base::DictValue& action, std::string subtype);
   bool ParsePointerAction(
-      const base::Value& action,
+      const base::DictValue& action,
       std::string subtype,
       SyntheticPointerActionListParams::ParamList& param_list);
-  bool ParseNullAction(const base::Value& action,
+  bool ParseNullAction(const base::DictValue& action,
                        std::string subtype,
                        SyntheticPointerActionListParams::ParamList& param_list);
-  bool GetPosition(const base::Value& action,
+  bool GetPosition(const base::DictValue& action,
                    double& position_x,
                    double& position_y);
-  bool GetScrollDelta(const base::Value& action, int& delta_x, int& delta_y);
-  bool GetPauseDuration(const base::Value& action, int& duration);
+  bool GetScrollDelta(const base::DictValue& action,
+                      int& delta_x,
+                      int& delta_y);
+  bool GetPauseDuration(const base::DictValue& action, int& duration);
 
   std::unique_ptr<SyntheticGestureParams> gesture_params_;
-  // This is a list of action sequence lists, which have all the actions for all
-  // pointers.
+  // This is a list of action sequence lists, which have all the actions for
+  // all pointers.
   std::vector<SyntheticPointerActionListParams::ParamList>
       pointer_actions_lists_;
   size_t longest_action_sequence_ = 0;
@@ -106,8 +130,6 @@ class CONTENT_EXPORT ActionsParser {
 
   base::Value action_sequence_list_;
   std::set<std::string> pointer_name_set_;
-
-  DISALLOW_COPY_AND_ASSIGN(ActionsParser);
 };
 
 }  // namespace content

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,6 +25,11 @@ void ChangeActivePointerGrabCursor(scoped_refptr<ui::X11Cursor> cursor);
 
 // Ungrabs the pointer.
 COMPONENT_EXPORT(UI_BASE_X) void UngrabPointer();
+
+// Returns true if this client currently holds an active pointer grab
+// established via GrabPointer().  While a grab is active, pointer events are
+// delivered to this client regardless of which window the pointer is over.
+COMPONENT_EXPORT(UI_BASE_X) bool HasActivePointerGrab();
 
 }  // namespace ui
 

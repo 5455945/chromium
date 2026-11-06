@@ -1,15 +1,19 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_EXTENSIONS_API_TABS_TABS_API_H_
 #define CHROME_BROWSER_EXTENSIONS_API_TABS_TABS_API_H_
 
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/compiler_specific.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/time/time.h"
+#include "base/types/expected.h"
+#include "base/values.h"
 #include "chrome/browser/extensions/chrome_extension_function_details.h"
 #include "chrome/common/extensions/api/tabs.h"
 #include "components/translate/core/browser/translate_driver.h"
@@ -18,13 +22,17 @@
 #include "extensions/browser/api/execute_code_function.h"
 #include "extensions/browser/api/web_contents_capture_client.h"
 #include "extensions/browser/extension_function.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_resource.h"
 #include "extensions/common/user_script.h"
 #include "url/gurl.h"
 
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
+class BrowserWindowInterface;
 class GURL;
 class SkBitmap;
-class TabStripModel;
+class TabListInterface;
 
 namespace base {
 class TaskRunner;
@@ -34,8 +42,8 @@ namespace content {
 class WebContents;
 }
 
-namespace ui {
-class ListSelectionModel;
+namespace tabs {
+class TabInterface;
 }
 
 namespace user_prefs {
@@ -48,98 +56,94 @@ namespace extensions {
 void ZoomModeToZoomSettings(zoom::ZoomController::ZoomMode zoom_mode,
                             api::tabs::ZoomSettings* zoom_settings);
 
-// Windows
-class WindowsGetFunction : public ExtensionFunction {
-  ~WindowsGetFunction() override {}
-  ResponseAction Run() override;
-  DECLARE_EXTENSION_FUNCTION("windows.get", WINDOWS_GET)
-};
-class WindowsGetCurrentFunction : public ExtensionFunction {
-  ~WindowsGetCurrentFunction() override {}
-  ResponseAction Run() override;
-  DECLARE_EXTENSION_FUNCTION("windows.getCurrent", WINDOWS_GETCURRENT)
-};
-class WindowsGetLastFocusedFunction : public ExtensionFunction {
-  ~WindowsGetLastFocusedFunction() override {}
-  ResponseAction Run() override;
-  DECLARE_EXTENSION_FUNCTION("windows.getLastFocused", WINDOWS_GETLASTFOCUSED)
-};
-class WindowsGetAllFunction : public ExtensionFunction {
-  ~WindowsGetAllFunction() override {}
-  ResponseAction Run() override;
-  DECLARE_EXTENSION_FUNCTION("windows.getAll", WINDOWS_GETALL)
-};
-class WindowsCreateFunction : public ExtensionFunction {
-  ~WindowsCreateFunction() override {}
-  ResponseAction Run() override;
-  // Returns whether the window should be created in incognito mode.
-  // |create_data| are the options passed by the extension. It may be NULL.
-  // |urls| is the list of urls to open. If we are creating an incognito window,
-  // the function will remove these urls which may not be opened in incognito
-  // mode.  If window creation leads the browser into an erroneous state,
-  // |is_error| is set to true (also, error_ member variable is assigned
-  // the proper error message).
-  bool ShouldOpenIncognitoWindow(
-      const api::windows::Create::Params::CreateData* create_data,
-      std::vector<GURL>* urls,
-      std::string* error);
-  DECLARE_EXTENSION_FUNCTION("windows.create", WINDOWS_CREATE)
-};
-class WindowsUpdateFunction : public ExtensionFunction {
-  ~WindowsUpdateFunction() override {}
-  ResponseAction Run() override;
-  DECLARE_EXTENSION_FUNCTION("windows.update", WINDOWS_UPDATE)
-};
-class WindowsRemoveFunction : public ExtensionFunction {
-  ~WindowsRemoveFunction() override {}
-  ResponseAction Run() override;
-  DECLARE_EXTENSION_FUNCTION("windows.remove", WINDOWS_REMOVE)
-};
-
 // Tabs
 class TabsGetFunction : public ExtensionFunction {
-  ~TabsGetFunction() override {}
+  ~TabsGetFunction() override = default;
   ResponseAction Run() override;
   DECLARE_EXTENSION_FUNCTION("tabs.get", TABS_GET)
 };
 class TabsGetCurrentFunction : public ExtensionFunction {
-  ~TabsGetCurrentFunction() override {}
+  ~TabsGetCurrentFunction() override = default;
   ResponseAction Run() override;
   DECLARE_EXTENSION_FUNCTION("tabs.getCurrent", TABS_GETCURRENT)
 };
 class TabsGetSelectedFunction : public ExtensionFunction {
-  ~TabsGetSelectedFunction() override {}
+  ~TabsGetSelectedFunction() override = default;
   ResponseAction Run() override;
   DECLARE_EXTENSION_FUNCTION("tabs.getSelected", TABS_GETSELECTED)
 };
 class TabsGetAllInWindowFunction : public ExtensionFunction {
-  ~TabsGetAllInWindowFunction() override {}
+  ~TabsGetAllInWindowFunction() override = default;
   ResponseAction Run() override;
   DECLARE_EXTENSION_FUNCTION("tabs.getAllInWindow", TABS_GETALLINWINDOW)
 };
 class TabsQueryFunction : public ExtensionFunction {
-  ~TabsQueryFunction() override {}
+ public:
   ResponseAction Run() override;
   DECLARE_EXTENSION_FUNCTION("tabs.query", TABS_QUERY)
+
+ private:
+  ~TabsQueryFunction() override = default;
+
+  // Builds the list of tab objects to return.
+  base::ListValue BuildTabList(BrowserWindowInterface* current_browser,
+                               BrowserWindowInterface* last_active_browser,
+                               const URLPatternSet& url_patterns,
+                               const std::string& window_type,
+                               int window_id,
+                               int tab_index);
+
+  bool MatchesWindow(BrowserWindowInterface* candidate_browser,
+                     BrowserWindowInterface* current_browser,
+                     BrowserWindowInterface* last_active_browser,
+                     const std::string& target_window_type,
+                     int target_window_id);
+
+  bool MatchesTab(tabs::TabInterface* candidate_tab,
+                  const URLPatternSet& target_url_patterns);
+
+  // The query parameters passed by the extension.
+  api::tabs::Query::Params::QueryInfo query_info_;
 };
 class TabsCreateFunction : public ExtensionFunction {
-  ~TabsCreateFunction() override {}
+ public:
+  TabsCreateFunction();
+
+ private:
+  ~TabsCreateFunction() override;
+
   ResponseAction Run() override;
   DECLARE_EXTENSION_FUNCTION("tabs.create", TABS_CREATE)
+
+  // Called after a new browser window has been created.
+  void OnBrowserWindowCreated(base::TimeTicks creation_time,
+                              BrowserWindowInterface* browser);
+
+  // Opens a new tab in the given `browser`. If non-null, sets its opener to
+  // `opener_tab`.
+  void OpenTabInBrowser(BrowserWindowInterface& browser,
+                        content::WebContents* opener_tab);
+
+  // Stashed properties, since the browser window to use may be created
+  // asynchronously.
+  std::optional<int> opener_tab_id_;
+  std::optional<std::string> original_url_;
+  std::optional<bool> active_;
+  std::optional<bool> pinned_;
+  std::optional<int> index_;
+  std::optional<int> split_with_tab_id_;
+
+  // The validated URL to open.
+  GURL validated_url_;
 };
 class TabsDuplicateFunction : public ExtensionFunction {
-  ~TabsDuplicateFunction() override {}
+  ~TabsDuplicateFunction() override = default;
   ResponseAction Run() override;
   DECLARE_EXTENSION_FUNCTION("tabs.duplicate", TABS_DUPLICATE)
 };
 class TabsHighlightFunction : public ExtensionFunction {
-  ~TabsHighlightFunction() override {}
+  ~TabsHighlightFunction() override = default;
   ResponseAction Run() override;
-  bool HighlightTab(TabStripModel* tabstrip,
-                    ui::ListSelectionModel* selection,
-                    int* active_index,
-                    int index,
-                    std::string* error);
   DECLARE_EXTENSION_FUNCTION("tabs.highlight", TABS_HIGHLIGHT)
 };
 class TabsUpdateFunction : public ExtensionFunction {
@@ -147,34 +151,53 @@ class TabsUpdateFunction : public ExtensionFunction {
   TabsUpdateFunction();
 
  protected:
-  ~TabsUpdateFunction() override {}
-  bool UpdateURL(const std::string& url,
+  ~TabsUpdateFunction() override = default;
+  bool UpdateURL(content::WebContents* web_contents,
+                 const std::string& url,
                  int tab_id,
                  std::string* error);
-  ResponseValue GetResult();
-
-  content::WebContents* web_contents_;
+  ResponseValue GetResult(content::WebContents* web_contents);
 
  private:
   ResponseAction Run() override;
-  void OnExecuteCodeFinished(const std::string& error,
-                             const GURL& on_url,
-                             const base::ListValue& script_result);
+
+  // Returns true on success. Out parameters are the ID of the default tab to
+  // update and its web contents, or an error string.
+  bool ComputeDefaultTabId(int& tab_id,
+                           content::WebContents*& contents,
+                           std::string& error);
+
+  // Updates the active or selected tab. Returns true on success or if there was
+  // nothing to do. Returns false on failure with an error message.
+  bool UpdateActiveTab(const api::tabs::Update::Params& params,
+                       Profile& profile,
+                       BrowserWindowInterface& browser,
+                       TabListInterface& tab_list,
+                       int tab_index,
+                       std::string& error);
+
+  // Updates the highlight state of the given tab. Returns true on success or if
+  // there was nothing to do. Returns false on failure with an error.
+  bool UpdateHighlightedTab(const api::tabs::Update::Params& params,
+                            Profile& profile,
+                            TabListInterface& tab_list,
+                            ::tabs::TabInterface& target_tab,
+                            std::string& error);
 
   DECLARE_EXTENSION_FUNCTION("tabs.update", TABS_UPDATE)
 };
 class TabsMoveFunction : public ExtensionFunction {
-  ~TabsMoveFunction() override {}
+  ~TabsMoveFunction() override = default;
   ResponseAction Run() override;
   bool MoveTab(int tab_id,
                int* new_index,
-               base::ListValue* tab_values,
-               int* window_id,
+               base::ListValue& tab_values,
+               const std::optional<int>& window_id,
                std::string* error);
   DECLARE_EXTENSION_FUNCTION("tabs.move", TABS_MOVE)
 };
 class TabsReloadFunction : public ExtensionFunction {
-  ~TabsReloadFunction() override {}
+  ~TabsReloadFunction() override = default;
   ResponseAction Run() override;
   DECLARE_EXTENSION_FUNCTION("tabs.reload", TABS_RELOAD)
 };
@@ -184,15 +207,17 @@ class TabsRemoveFunction : public ExtensionFunction {
   void TabDestroyed();
 
  private:
-  class WebContentsDestroyedObserver;
   ~TabsRemoveFunction() override;
   ResponseAction Run() override;
   bool RemoveTab(int tab_id, std::string* error);
 
   int remaining_tabs_count_ = 0;
   bool triggered_all_tab_removals_ = false;
+
+  class WebContentsDestroyedObserver;
   std::vector<std::unique_ptr<WebContentsDestroyedObserver>>
       web_contents_destroyed_observers_;
+
   DECLARE_EXTENSION_FUNCTION("tabs.remove", TABS_REMOVE)
 };
 class TabsGroupFunction : public ExtensionFunction {
@@ -206,13 +231,28 @@ class TabsUngroupFunction : public ExtensionFunction {
   bool UngroupTab(int tab_id, std::string* error);
   DECLARE_EXTENSION_FUNCTION("tabs.ungroup", TABS_UNGROUP)
 };
+class TabsCreateSplitFunction : public ExtensionFunction {
+ private:
+  ~TabsCreateSplitFunction() override;
+  ResponseAction Run() override;
+  DECLARE_EXTENSION_FUNCTION("tabs.createSplit", TABS_CREATESPLIT)
+};
+class TabsUnsplitFunction : public ExtensionFunction {
+ private:
+  ~TabsUnsplitFunction() override;
+  ResponseAction Run() override;
+  DECLARE_EXTENSION_FUNCTION("tabs.unsplit", TABS_UNSPLIT)
+};
 class TabsDetectLanguageFunction
     : public ExtensionFunction,
       public content::WebContentsObserver,
       public translate::TranslateDriver::LanguageDetectionObserver {
  private:
-  ~TabsDetectLanguageFunction() override {}
+  ~TabsDetectLanguageFunction() override = default;
   ResponseAction Run() override;
+
+  // Starts the language detection process, which is asynchronous.
+  ResponseAction StartLanguageDetection(content::WebContents* contents);
 
   // content::WebContentsObserver:
   void NavigationEntryCommitted(
@@ -220,10 +260,11 @@ class TabsDetectLanguageFunction
   void WebContentsDestroyed() override;
 
   // translate::TranslateDriver::LanguageDetectionObserver:
+  void OnTranslateDriverDestroyed(translate::TranslateDriver* driver) override;
   void OnLanguageDetermined(
       const translate::LanguageDetectionDetails& details) override;
 
-  // Resolves the API call with the detected |language|.
+  // Resolves the API call with the detected `language`.
   void RespondWithLanguage(const std::string& language);
 
   // Indicates if this instance is observing the tabs' WebContents and the
@@ -238,7 +279,10 @@ class TabsCaptureVisibleTabFunction
       public ExtensionFunction {
  public:
   TabsCaptureVisibleTabFunction();
-  static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
+
+  TabsCaptureVisibleTabFunction(const TabsCaptureVisibleTabFunction&) = delete;
+  TabsCaptureVisibleTabFunction& operator=(
+      const TabsCaptureVisibleTabFunction&) = delete;
 
   static void set_disable_throttling_for_tests(
       bool disable_throttling_for_test) {
@@ -251,7 +295,7 @@ class TabsCaptureVisibleTabFunction
   bool ShouldSkipQuotaLimiting() const override;
 
  protected:
-  ~TabsCaptureVisibleTabFunction() override {}
+  ~TabsCaptureVisibleTabFunction() override = default;
 
  private:
   ChromeExtensionFunctionDetails chrome_details_;
@@ -259,7 +303,7 @@ class TabsCaptureVisibleTabFunction
   content::WebContents* GetWebContentsForID(int window_id, std::string* error);
 
   // extensions::WebContentsCaptureClient:
-  ScreenshotAccess GetScreenshotAccess(
+  base::expected<void, extensions::ScreenshotAccessError> GetScreenshotAccess(
       content::WebContents* web_contents) const override;
   bool ClientAllowsTransparency() override;
   void OnCaptureSuccess(const SkBitmap& bitmap) override;
@@ -268,7 +312,7 @@ class TabsCaptureVisibleTabFunction
   void EncodeBitmapOnWorkerThread(
       scoped_refptr<base::TaskRunner> reply_task_runner,
       const SkBitmap& bitmap);
-  void OnBitmapEncodedOnUIThread(bool success, std::string base64_result);
+  void OnBitmapEncodedOnUIThread(std::optional<std::string> base64_result);
 
  private:
   DECLARE_EXTENSION_FUNCTION("tabs.captureVisibleTab", TABS_CAPTUREVISIBLETAB)
@@ -276,8 +320,6 @@ class TabsCaptureVisibleTabFunction
   static std::string CaptureResultToErrorMessage(CaptureResult result);
 
   static bool disable_throttling_for_test_;
-
-  DISALLOW_COPY_AND_ASSIGN(TabsCaptureVisibleTabFunction);
 };
 
 // Implement API calls tabs.executeScript, tabs.insertCSS, and tabs.removeCSS.
@@ -288,32 +330,33 @@ class ExecuteCodeInTabFunction : public ExecuteCodeFunction {
  protected:
   ~ExecuteCodeInTabFunction() override;
 
-  // Initializes |execute_tab_id_| and |details_|.
+  // Initializes `execute_tab_id_` and `details_`.
   InitResult Init() override;
   bool ShouldInsertCSS() const override;
   bool ShouldRemoveCSS() const override;
   bool CanExecuteScriptOnPage(std::string* error) override;
   ScriptExecutor* GetScriptExecutor(std::string* error) override;
   bool IsWebView() const override;
+  int GetRootFrameId() const override;
   const GURL& GetWebViewSrc() const override;
 
  private:
-  const ChromeExtensionFunctionDetails chrome_details_;
+  const ChromeExtensionFunctionDetails chrome_details_{this};
 
   // Id of tab which executes code.
-  int execute_tab_id_;
+  int execute_tab_id_ = -1;
 };
 
 class TabsExecuteScriptFunction : public ExecuteCodeInTabFunction {
  private:
-  ~TabsExecuteScriptFunction() override {}
+  ~TabsExecuteScriptFunction() override = default;
 
   DECLARE_EXTENSION_FUNCTION("tabs.executeScript", TABS_EXECUTESCRIPT)
 };
 
 class TabsInsertCSSFunction : public ExecuteCodeInTabFunction {
  private:
-  ~TabsInsertCSSFunction() override {}
+  ~TabsInsertCSSFunction() override = default;
 
   bool ShouldInsertCSS() const override;
 
@@ -330,7 +373,7 @@ class TabsInsertCSSFunction : public ExecuteCodeInTabFunction {
 // ... hence, it could just go straight to the ScriptExecutor.
 class TabsRemoveCSSFunction : public ExecuteCodeInTabFunction {
  private:
-  ~TabsRemoveCSSFunction() override {}
+  ~TabsRemoveCSSFunction() override = default;
 
   bool ShouldRemoveCSS() const override;
 
@@ -339,7 +382,7 @@ class TabsRemoveCSSFunction : public ExecuteCodeInTabFunction {
 
 class TabsSetZoomFunction : public ExtensionFunction {
  private:
-  ~TabsSetZoomFunction() override {}
+  ~TabsSetZoomFunction() override = default;
 
   ResponseAction Run() override;
 
@@ -348,7 +391,7 @@ class TabsSetZoomFunction : public ExtensionFunction {
 
 class TabsGetZoomFunction : public ExtensionFunction {
  private:
-  ~TabsGetZoomFunction() override {}
+  ~TabsGetZoomFunction() override = default;
 
   ResponseAction Run() override;
 
@@ -357,7 +400,7 @@ class TabsGetZoomFunction : public ExtensionFunction {
 
 class TabsSetZoomSettingsFunction : public ExtensionFunction {
  private:
-  ~TabsSetZoomSettingsFunction() override {}
+  ~TabsSetZoomSettingsFunction() override = default;
 
   ResponseAction Run() override;
 
@@ -366,7 +409,7 @@ class TabsSetZoomSettingsFunction : public ExtensionFunction {
 
 class TabsGetZoomSettingsFunction : public ExtensionFunction {
  private:
-  ~TabsGetZoomSettingsFunction() override {}
+  ~TabsGetZoomSettingsFunction() override = default;
 
   ResponseAction Run() override;
 
@@ -379,43 +422,46 @@ class TabsDiscardFunction : public ExtensionFunction {
 
   TabsDiscardFunction();
 
+  TabsDiscardFunction(const TabsDiscardFunction&) = delete;
+  TabsDiscardFunction& operator=(const TabsDiscardFunction&) = delete;
+
  private:
   ~TabsDiscardFunction() override;
 
   // ExtensionFunction:
   ExtensionFunction::ResponseAction Run() override;
-
-  DISALLOW_COPY_AND_ASSIGN(TabsDiscardFunction);
 };
 
 class TabsGoForwardFunction : public ExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("tabs.goForward", TABS_GOFORWARD)
 
-  TabsGoForwardFunction() {}
+  TabsGoForwardFunction() = default;
+
+  TabsGoForwardFunction(const TabsGoForwardFunction&) = delete;
+  TabsGoForwardFunction& operator=(const TabsGoForwardFunction&) = delete;
 
  private:
-  ~TabsGoForwardFunction() override {}
+  ~TabsGoForwardFunction() override = default;
 
   // ExtensionFunction:
   ExtensionFunction::ResponseAction Run() override;
-
-  DISALLOW_COPY_AND_ASSIGN(TabsGoForwardFunction);
 };
 
 class TabsGoBackFunction : public ExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("tabs.goBack", TABS_GOBACK)
 
-  TabsGoBackFunction() {}
+  TabsGoBackFunction() = default;
+
+  TabsGoBackFunction(const TabsGoBackFunction&) = delete;
+  TabsGoBackFunction& operator=(const TabsGoBackFunction&) = delete;
 
  private:
-  ~TabsGoBackFunction() override {}
+  ~TabsGoBackFunction() override = default;
 
   // ExtensionFunction:
   ExtensionFunction::ResponseAction Run() override;
-
-  DISALLOW_COPY_AND_ASSIGN(TabsGoBackFunction);
 };
 
 }  // namespace extensions

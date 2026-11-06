@@ -1,4 +1,4 @@
-// Copyright (c) 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,10 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/single_thread_task_runner.h"
-#include "base/sys_byteorder.h"
-#include "base/threading/thread_task_runner_handle.h"
-#include "jingle/glue/utils.h"
+#include "base/task/single_thread_task_runner.h"
+#include "components/webrtc/net_address_utils.h"
 #include "net/base/ip_address.h"
 #include "net/base/network_change_notifier.h"
 #include "net/base/network_interfaces.h"
@@ -23,22 +21,22 @@ namespace sharing {
 
 namespace {
 
-rtc::AdapterType ConvertConnectionTypeToAdapterType(
+webrtc::AdapterType ConvertConnectionTypeToAdapterType(
     net::NetworkChangeNotifier::ConnectionType type) {
   switch (type) {
     case net::NetworkChangeNotifier::CONNECTION_UNKNOWN:
-      return rtc::ADAPTER_TYPE_UNKNOWN;
+      return webrtc::ADAPTER_TYPE_UNKNOWN;
     case net::NetworkChangeNotifier::CONNECTION_ETHERNET:
-      return rtc::ADAPTER_TYPE_ETHERNET;
+      return webrtc::ADAPTER_TYPE_ETHERNET;
     case net::NetworkChangeNotifier::CONNECTION_WIFI:
-      return rtc::ADAPTER_TYPE_WIFI;
+      return webrtc::ADAPTER_TYPE_WIFI;
     case net::NetworkChangeNotifier::CONNECTION_2G:
     case net::NetworkChangeNotifier::CONNECTION_3G:
     case net::NetworkChangeNotifier::CONNECTION_4G:
     case net::NetworkChangeNotifier::CONNECTION_5G:
-      return rtc::ADAPTER_TYPE_CELLULAR;
+      return webrtc::ADAPTER_TYPE_CELLULAR;
     default:
-      return rtc::ADAPTER_TYPE_UNKNOWN;
+      return webrtc::ADAPTER_TYPE_UNKNOWN;
   }
 }
 
@@ -61,7 +59,7 @@ IpcNetworkManager::~IpcNetworkManager() {
 void IpcNetworkManager::StartUpdating() {
   if (network_list_received_) {
     // Post a task to avoid reentrancy.
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&IpcNetworkManager::SendNetworksChangedSignal,
                                   weak_factory_.GetWeakPtr()));
   } else {
@@ -92,67 +90,69 @@ void IpcNetworkManager::NetworkListChanged(
   bool use_default_ipv4_address = false;
   bool use_default_ipv6_address = false;
 
-  // rtc::Network uses these prefix_length to compare network
+  // webrtc::Network uses these prefix_length to compare network
   // interfaces discovered.
-  std::vector<rtc::Network*> networks;
+  std::vector<std::unique_ptr<webrtc::Network>> networks;
   for (auto it = list.begin(); it != list.end(); it++) {
-    rtc::IPAddress ip_address =
-        jingle_glue::NetIPAddressToRtcIPAddress(it->address);
+    webrtc::IPAddress ip_address =
+        webrtc::NetIPAddressToRtcIPAddress(it->address);
     DCHECK(!ip_address.IsNil());
 
-    rtc::IPAddress prefix = rtc::TruncateIP(ip_address, it->prefix_length);
-    rtc::AdapterType adapter_type =
+    webrtc::IPAddress prefix =
+        webrtc::TruncateIP(ip_address, it->prefix_length);
+    webrtc::AdapterType adapter_type =
         ConvertConnectionTypeToAdapterType(it->type);
     // If the adapter type is unknown, try to guess it using WebRTC's string
     // matching rules.
-    if (adapter_type == rtc::ADAPTER_TYPE_UNKNOWN) {
-      adapter_type = rtc::GetAdapterTypeFromName(it->name.c_str());
+    if (adapter_type == webrtc::ADAPTER_TYPE_UNKNOWN) {
+      adapter_type = webrtc::GetAdapterTypeFromName(it->name.c_str());
     }
-    std::unique_ptr<rtc::Network> network(new rtc::Network(
-        it->name, it->name, prefix, it->prefix_length, adapter_type));
+    auto network = CreateNetwork(it->name, it->name, prefix, it->prefix_length,
+                                 adapter_type);
     network->set_default_local_address_provider(this);
     network->set_mdns_responder_provider(this);
 
-    rtc::InterfaceAddress iface_addr;
+    webrtc::InterfaceAddress iface_addr;
     if (it->address.IsIPv4()) {
       use_default_ipv4_address |= (default_ipv4_local_address == it->address);
-      iface_addr = rtc::InterfaceAddress(ip_address);
+      iface_addr = webrtc::InterfaceAddress(ip_address);
     } else {
       DCHECK(it->address.IsIPv6());
-      iface_addr = rtc::InterfaceAddress(ip_address, it->ip_address_attributes);
+      iface_addr =
+          webrtc::InterfaceAddress(ip_address, it->ip_address_attributes);
 
-      // Only allow non-private, non-deprecated IPv6 addresses which don't
-      // contain MAC.
-      if (rtc::IPIsMacBased(iface_addr) ||
+      // Only allow non-link-local, non-loopback, non-deprecated IPv6 addresses
+      // which don't contain MAC.
+      if (webrtc::IPIsMacBased(iface_addr) ||
           (it->ip_address_attributes & net::IP_ADDRESS_ATTRIBUTE_DEPRECATED) ||
-          rtc::IPIsPrivate(iface_addr)) {
+          webrtc::IPIsLinkLocal(iface_addr) ||
+          webrtc::IPIsLoopback(iface_addr)) {
         continue;
       }
 
       use_default_ipv6_address |= (default_ipv6_local_address == it->address);
     }
     network->AddIP(iface_addr);
-    networks.push_back(network.release());
+    networks.push_back(std::move(network));
   }
 
   // Update the default local addresses.
-  rtc::IPAddress ipv4_default;
-  rtc::IPAddress ipv6_default;
+  webrtc::IPAddress ipv4_default;
+  webrtc::IPAddress ipv6_default;
   if (use_default_ipv4_address) {
     ipv4_default =
-        jingle_glue::NetIPAddressToRtcIPAddress(default_ipv4_local_address);
+        webrtc::NetIPAddressToRtcIPAddress(default_ipv4_local_address);
   }
   if (use_default_ipv6_address) {
     ipv6_default =
-        jingle_glue::NetIPAddressToRtcIPAddress(default_ipv6_local_address);
+        webrtc::NetIPAddressToRtcIPAddress(default_ipv6_local_address);
   }
   set_default_local_addresses(ipv4_default, ipv6_default);
 
   bool changed = false;
-  NetworkManager::Stats stats;
-  MergeNetworkList(networks, &changed, &stats);
+  MergeNetworkList(std::move(networks), &changed);
   if (changed)
-    SignalNetworksChanged();
+    NotifyNetworksChanged();
 }
 
 webrtc::MdnsResponderInterface* IpcNetworkManager::GetMdnsResponder() const {
@@ -160,7 +160,7 @@ webrtc::MdnsResponderInterface* IpcNetworkManager::GetMdnsResponder() const {
 }
 
 void IpcNetworkManager::SendNetworksChangedSignal() {
-  SignalNetworksChanged();
+  NotifyNetworksChanged();
 }
 
 }  // namespace sharing

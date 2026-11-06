@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,24 +6,26 @@
 
 #include <stddef.h>
 
+#include <string_view>
 #include <utility>
 
 #include "base/command_line.h"
-#include "base/macros.h"
 #include "base/strings/string_number_conversions.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/buildflags.h"
 #include "chrome/browser/defaults.h"
-#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sessions/session_service_base.h"
 #include "chrome/browser/sessions/session_service_lookup.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_init_state.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
+#include "chrome/browser/ui/window_feature_controller/window_feature_controller.h"
 #include "chrome/browser/ui/window_sizer/window_sizer.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
+#include "components/sessions/core/session_id.h"
+#include "ui/base/mojom/window_show_state.mojom.h"
 
 namespace chrome {
 namespace {
@@ -32,145 +34,131 @@ namespace {
 bool ParseCommaSeparatedIntegers(const std::string& str,
                                  int* ret_num1,
                                  int* ret_num2) {
-  size_t num1_size = str.find_first_of(',');
-  if (num1_size == std::string::npos)
+  const size_t comma = str.find(',');
+  if (comma == std::string::npos) {
     return false;
-
-  size_t num2_pos = num1_size + 1;
-  size_t num2_size = str.size() - num2_pos;
-  int num1 = 0;
-  int num2 = 0;
-  if (!base::StringToInt(str.substr(0, num1_size), &num1) ||
-      !base::StringToInt(str.substr(num2_pos, num2_size), &num2))
-    return false;
-
-  *ret_num1 = num1;
-  *ret_num2 = num2;
-  return true;
-}
-
-class WindowPlacementPrefUpdate : public DictionaryPrefUpdate {
- public:
-  WindowPlacementPrefUpdate(PrefService* service,
-                            const std::string& window_name)
-      : DictionaryPrefUpdate(service, prefs::kAppWindowPlacement),
-        window_name_(window_name) {}
-
-  ~WindowPlacementPrefUpdate() override {}
-
-  base::DictionaryValue* Get() override {
-    base::DictionaryValue* all_apps_dict = DictionaryPrefUpdate::Get();
-    base::DictionaryValue* this_app_dict_weak = nullptr;
-    if (!all_apps_dict->GetDictionary(window_name_, &this_app_dict_weak)) {
-      auto this_app_dict = std::make_unique<base::DictionaryValue>();
-      this_app_dict_weak = this_app_dict.get();
-      all_apps_dict->Set(window_name_, std::move(this_app_dict));
-    }
-    return this_app_dict_weak;
   }
-
- private:
-  const std::string window_name_;
-
-  DISALLOW_COPY_AND_ASSIGN(WindowPlacementPrefUpdate);
-};
+  auto view = std::string_view(str);
+  return base::StringToInt(view.substr(0, comma), ret_num1) &&
+         base::StringToInt(view.substr(comma + 1), ret_num2);
+}
 
 }  // namespace
 
-std::string GetWindowName(const Browser* browser) {
-  switch (browser->type()) {
-    case Browser::TYPE_NORMAL:
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-    case Browser::TYPE_CUSTOM_TAB:
-#endif
+std::string GetWindowName(const BrowserWindowInterface* browser) {
+  switch (browser->GetType()) {
+    case BrowserWindowInterface::Type::TYPE_NORMAL:
       return prefs::kBrowserWindowPlacement;
-    case Browser::TYPE_POPUP:
+    case BrowserWindowInterface::Type::TYPE_POPUP:
+    case BrowserWindowInterface::Type::TYPE_FLOATING:
       return prefs::kBrowserWindowPlacementPopup;
-    case Browser::TYPE_APP:
-    case Browser::TYPE_DEVTOOLS:
-      return browser->app_name();
-    case Browser::TYPE_APP_POPUP:
-      return browser->app_name() + "_popup";
+    case BrowserWindowInterface::Type::TYPE_APP:
+    case BrowserWindowInterface::Type::TYPE_DEVTOOLS:
+      return BrowserInitState::From(browser)->create_params().app_name;
+    case BrowserWindowInterface::Type::TYPE_APP_POPUP:
+      return BrowserInitState::From(browser)->create_params().app_name +
+             "_popup";
   }
 }
 
-std::unique_ptr<DictionaryPrefUpdate> GetWindowPlacementDictionaryReadWrite(
+base::DictValue& GetWindowPlacementDictionaryReadWrite(
     const std::string& window_name,
-    PrefService* prefs) {
-  DCHECK(!window_name.empty());
-  // A normal DictionaryPrefUpdate will suffice for non-app windows.
+    PrefService* prefs,
+    std::unique_ptr<ScopedDictPrefUpdate>& scoped_update) {
+  CHECK(!window_name.empty(), base::NotFatalUntil::M162);
+  // Non-app window placements each use their own per-window-name dictionary
+  // preference, so can make a ScopedDictPrefUpdate for the relevant preference,
+  // and return its dictionary directly.
   if (prefs->FindPreference(window_name)) {
-    return std::make_unique<DictionaryPrefUpdate>(prefs, window_name);
+    scoped_update = std::make_unique<ScopedDictPrefUpdate>(prefs, window_name);
+    return scoped_update->Get();
   }
-  return std::unique_ptr<DictionaryPrefUpdate>(
-      new WindowPlacementPrefUpdate(prefs, window_name));
+
+  // The window placements for all apps are stored in a single dictionary
+  // preference, with per-window-name nested dictionaries, so need to make
+  // ScopedDictPrefUpdate and then find the relevant dictionary within it, based
+  // on window name.
+  scoped_update =
+      std::make_unique<ScopedDictPrefUpdate>(prefs, prefs::kAppWindowPlacement);
+  base::DictValue* this_app_dict =
+      (*scoped_update)->FindDictByDottedPath(window_name);
+  if (this_app_dict) {
+    return *this_app_dict;
+  }
+  return (*scoped_update)
+      ->SetByDottedPath(window_name, base::DictValue())
+      ->GetDict();
 }
 
-const base::DictionaryValue* GetWindowPlacementDictionaryReadOnly(
+const base::DictValue* GetWindowPlacementDictionaryReadOnly(
     const std::string& window_name,
     PrefService* prefs) {
-  DCHECK(!window_name.empty());
-  if (prefs->FindPreference(window_name))
-    return prefs->GetDictionary(window_name);
+  CHECK(!window_name.empty(), base::NotFatalUntil::M162);
+  if (prefs->FindPreference(window_name)) {
+    return &prefs->GetDict(window_name);
+  }
 
-  const base::DictionaryValue* app_windows =
-      prefs->GetDictionary(prefs::kAppWindowPlacement);
-  if (!app_windows)
-    return nullptr;
-  const base::DictionaryValue* to_return = nullptr;
-  app_windows->GetDictionary(window_name, &to_return);
-  return to_return;
+  const base::DictValue& app_windows =
+      prefs->GetDict(prefs::kAppWindowPlacement);
+  return app_windows.FindDict(window_name);
 }
 
-bool ShouldSaveWindowPlacement(const Browser* browser) {
-  // Never track app popup windows that do not have a trusted source (i.e.
-  // popup windows spawned by an app).  See similar code in
-  // SessionService::ShouldTrackBrowser().
-  return !browser->deprecated_is_app() || browser->is_trusted_source();
+bool ShouldSaveWindowPlacement(const BrowserWindowInterface* browser) {
+  // Never track app windows that do not have a trusted source (i.e. windows
+  // spawned by an app).  See similar code in
+  // SessionServiceBase::ShouldTrackBrowser().
+  return !(browser->GetType() == BrowserWindowInterface::Type::TYPE_APP ||
+           browser->GetType() ==
+               BrowserWindowInterface::Type::TYPE_APP_POPUP) ||
+         WindowFeatureController::From(browser)->IsTrustedSource();
 }
 
-bool SavedBoundsAreContentBounds(const Browser* browser) {
+bool SavedBoundsAreContentBounds(const BrowserWindowInterface* browser) {
   // Applications other than web apps (such as devtools) save their window size.
   // Web apps, on the other hand, have the same behavior as popups, and save
   // their content bounds.
-  return !browser->is_type_normal() && !browser->is_type_devtools() &&
-         !browser->is_trusted_source();
+  return browser->GetType() != BrowserWindowInterface::Type::TYPE_NORMAL &&
+         browser->GetType() != BrowserWindowInterface::Type::TYPE_DEVTOOLS &&
+         !WindowFeatureController::From(browser)->IsTrustedSource();
 }
 
-void SaveWindowPlacement(const Browser* browser,
+void SaveWindowPlacement(BrowserWindowInterface* browser,
                          const gfx::Rect& bounds,
-                         ui::WindowShowState show_state) {
+                         ui::mojom::WindowShowState show_state) {
   // Save to the session storage service, used when reloading a past session.
   // Note that we don't want to be the ones who cause lazy initialization of
   // the session service. This function gets called during initial window
   // showing, and we don't want to bring in the session service this early.
   SessionServiceBase* service = GetAppropriateSessionServiceIfExisting(browser);
-  if (service)
-    service->SetWindowBounds(browser->session_id(), bounds, show_state);
+  if (service) {
+    service->SetWindowBounds(browser->GetSessionID(), bounds, show_state);
+  }
 }
 
-void SaveWindowWorkspace(const Browser* browser, const std::string& workspace) {
+void SaveWindowWorkspace(BrowserWindowInterface* browser,
+                         const std::string& workspace) {
   SessionServiceBase* service = GetAppropriateSessionServiceIfExisting(browser);
-  if (service)
-    service->SetWindowWorkspace(browser->session_id(), workspace);
+  if (service) {
+    service->SetWindowWorkspace(browser->GetSessionID(), workspace);
+  }
 }
 
-void SaveWindowVisibleOnAllWorkspaces(const Browser* browser,
+void SaveWindowVisibleOnAllWorkspaces(BrowserWindowInterface* browser,
                                       bool visible_on_all_workspaces) {
   SessionServiceBase* service = GetAppropriateSessionServiceIfExisting(browser);
   if (service) {
-    service->SetWindowVisibleOnAllWorkspaces(browser->session_id(),
+    service->SetWindowVisibleOnAllWorkspaces(browser->GetSessionID(),
                                              visible_on_all_workspaces);
   }
 }
 
-void GetSavedWindowBoundsAndShowState(const Browser* browser,
+void GetSavedWindowBoundsAndShowState(BrowserWindowInterface* browser,
                                       gfx::Rect* bounds,
-                                      ui::WindowShowState* show_state) {
-  DCHECK(browser);
-  DCHECK(bounds);
-  DCHECK(show_state);
-  *bounds = browser->override_bounds();
+                                      ui::mojom::WindowShowState* show_state) {
+  CHECK(browser, base::NotFatalUntil::M162);
+  CHECK(bounds, base::NotFatalUntil::M162);
+  CHECK(show_state, base::NotFatalUntil::M162);
+  *bounds = BrowserInitState::From(browser)->override_bounds();
   WindowSizer::GetBrowserWindowBoundsAndShowState(*bounds, browser, bounds,
                                                   show_state);
 
@@ -186,7 +174,7 @@ namespace internal {
 void UpdateWindowBoundsAndShowStateFromCommandLine(
     const base::CommandLine& command_line,
     gfx::Rect* bounds,
-    ui::WindowShowState* show_state) {
+    ui::mojom::WindowShowState* show_state) {
   // Allow command-line flags to override the window size and position. If
   // either of these is specified then set the show state to NORMAL so that
   // they are immediately respected.
@@ -195,7 +183,7 @@ void UpdateWindowBoundsAndShowStateFromCommandLine(
     int width, height;
     if (ParseCommaSeparatedIntegers(str, &width, &height)) {
       bounds->set_size(gfx::Size(width, height));
-      *show_state = ui::SHOW_STATE_NORMAL;
+      *show_state = ui::mojom::WindowShowState::kNormal;
     }
   }
   if (command_line.HasSwitch(switches::kWindowPosition)) {
@@ -204,7 +192,7 @@ void UpdateWindowBoundsAndShowStateFromCommandLine(
     int x, y;
     if (ParseCommaSeparatedIntegers(str, &x, &y)) {
       bounds->set_origin(gfx::Point(x, y));
-      *show_state = ui::SHOW_STATE_NORMAL;
+      *show_state = ui::mojom::WindowShowState::kNormal;
     }
   }
 }

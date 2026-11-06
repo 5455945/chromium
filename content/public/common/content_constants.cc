@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,17 +8,11 @@
 
 #include "base/strings/string_util.h"
 #include "build/branding_buildflags.h"
+#include "build/build_config.h"
 
 namespace content {
 
-const base::FilePath::CharType kAppCacheDirname[] =
-    FILE_PATH_LITERAL("Application Cache");
-const base::FilePath::CharType kPepperDataDirname[] =
-    FILE_PATH_LITERAL("Pepper Data");
-
 const char kBrowserPluginMimeType[] = "application/browser-plugin";
-
-const char kFlashPluginName[] = "Shockwave Flash";
 
 const size_t kMaxURLDisplayChars = 32 * 1024;
 
@@ -40,8 +34,6 @@ const int kHistogramSynchronizerReservedSequenceNumber = 0;
 // same resource (see bugs 46104 and 31014).
 const int kDefaultDetachableCancelDelayMs = 30000;
 
-const char kCorsExemptPurposeHeaderName[] = "Purpose";
-
 std::string GetCorsExemptRequestedWithHeaderName() {
   std::vector<std::string> pieces;
   pieces.push_back("X");
@@ -50,7 +42,7 @@ std::string GetCorsExemptRequestedWithHeaderName() {
   return base::JoinString(pieces, "-");
 }
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 const int kLowestRendererOomScore = 300;
 const int kHighestRendererOomScore = 1000;
 
@@ -69,5 +61,12 @@ const int kPluginOomScore = kMiscOomScore - kOomScoreBump;
 static_assert(kMiscOomScore > 0, "kMiscOomScore should be greater than 0");
 static_assert(kPluginOomScore > 0, "kPluginOomScore should be greater than 0");
 #endif
+
+#if BUILDFLAG(IS_ANDROID)
+const int kAndroidMinimumTabletWidthDp = 600;
+#endif
+
+const base::FilePath::CharType kDevToolsActivePortFileName[] =
+    FILE_PATH_LITERAL("DevToolsActivePort");
 
 }  // namespace content

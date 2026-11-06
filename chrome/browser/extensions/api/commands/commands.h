@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,12 @@
 #define CHROME_BROWSER_EXTENSIONS_API_COMMANDS_COMMANDS_H_
 
 #include "extensions/browser/extension_function.h"
+#include "extensions/buildflags/buildflags.h"
 
-class GetAllCommandsFunction : public ExtensionFunction {
-  ~GetAllCommandsFunction() override {}
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
+class CommandsGetAllFunction : public ExtensionFunction {
+  ~CommandsGetAllFunction() override = default;
   ResponseAction Run() override;
   DECLARE_EXTENSION_FUNCTION("commands.getAll", COMMANDS_GETALL)
 };

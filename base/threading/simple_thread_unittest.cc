@@ -1,15 +1,17 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "base/threading/simple_thread.h"
 
 #include <memory>
 
 #include "base/atomic_sequence_num.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/test/gtest_util.h"
-#include "base/threading/simple_thread.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace base {
@@ -18,16 +20,18 @@ namespace {
 
 class SetIntRunner : public DelegateSimpleThread::Delegate {
  public:
-  SetIntRunner(int* ptr, int val) : ptr_(ptr), val_(val) { }
+  SetIntRunner(int* ptr, int val) : ptr_(ptr), val_(val) {}
+
+  SetIntRunner(const SetIntRunner&) = delete;
+  SetIntRunner& operator=(const SetIntRunner&) = delete;
+
   ~SetIntRunner() override = default;
 
  private:
   void Run() override { *ptr_ = val_; }
 
-  int* ptr_;
+  raw_ptr<int> ptr_;
   int val_;
-
-  DISALLOW_COPY_AND_ASSIGN(SetIntRunner);
 };
 
 // Signals |started_| when Run() is invoked and waits until |released_| is
@@ -42,6 +46,9 @@ class ControlledRunner : public DelegateSimpleThread::Delegate {
                   WaitableEvent::InitialState::NOT_SIGNALED),
         done_(WaitableEvent::ResetPolicy::MANUAL,
               WaitableEvent::InitialState::NOT_SIGNALED) {}
+
+  ControlledRunner(const ControlledRunner&) = delete;
+  ControlledRunner& operator=(const ControlledRunner&) = delete;
 
   ~ControlledRunner() override { ReleaseAndWaitUntilDone(); }
 
@@ -62,13 +69,15 @@ class ControlledRunner : public DelegateSimpleThread::Delegate {
   WaitableEvent started_;
   WaitableEvent released_;
   WaitableEvent done_;
-
-  DISALLOW_COPY_AND_ASSIGN(ControlledRunner);
 };
 
 class WaitEventRunner : public DelegateSimpleThread::Delegate {
  public:
-  explicit WaitEventRunner(WaitableEvent* event) : event_(event) { }
+  explicit WaitEventRunner(WaitableEvent* event) : event_(event) {}
+
+  WaitEventRunner(const WaitEventRunner&) = delete;
+  WaitEventRunner& operator=(const WaitEventRunner&) = delete;
+
   ~WaitEventRunner() override = default;
 
  private:
@@ -78,21 +87,20 @@ class WaitEventRunner : public DelegateSimpleThread::Delegate {
     EXPECT_TRUE(event_->IsSignaled());
   }
 
-  WaitableEvent* event_;
-
-  DISALLOW_COPY_AND_ASSIGN(WaitEventRunner);
+  raw_ptr<WaitableEvent> event_;
 };
 
 class SeqRunner : public DelegateSimpleThread::Delegate {
  public:
-  explicit SeqRunner(AtomicSequenceNumber* seq) : seq_(seq) { }
+  explicit SeqRunner(AtomicSequenceNumber* seq) : seq_(seq) {}
+
+  SeqRunner(const SeqRunner&) = delete;
+  SeqRunner& operator=(const SeqRunner&) = delete;
 
  private:
   void Run() override { seq_->GetNext(); }
 
-  AtomicSequenceNumber* seq_;
-
-  DISALLOW_COPY_AND_ASSIGN(SeqRunner);
+  raw_ptr<AtomicSequenceNumber> seq_;
 };
 
 // We count up on a sequence number, firing on the event when we've hit our
@@ -100,9 +108,11 @@ class SeqRunner : public DelegateSimpleThread::Delegate {
 // have all threads outstanding until we hit our expected thread pool size.
 class VerifyPoolRunner : public DelegateSimpleThread::Delegate {
  public:
-  VerifyPoolRunner(AtomicSequenceNumber* seq,
-                   int total, WaitableEvent* event)
-      : seq_(seq), total_(total), event_(event) { }
+  VerifyPoolRunner(AtomicSequenceNumber* seq, int total, WaitableEvent* event)
+      : seq_(seq), total_(total), event_(event) {}
+
+  VerifyPoolRunner(const VerifyPoolRunner&) = delete;
+  VerifyPoolRunner& operator=(const VerifyPoolRunner&) = delete;
 
  private:
   void Run() override {
@@ -113,11 +123,9 @@ class VerifyPoolRunner : public DelegateSimpleThread::Delegate {
     }
   }
 
-  AtomicSequenceNumber* seq_;
+  raw_ptr<AtomicSequenceNumber> seq_;
   int total_;
-  WaitableEvent* event_;
-
-  DISALLOW_COPY_AND_ASSIGN(VerifyPoolRunner);
+  raw_ptr<WaitableEvent> event_;
 };
 
 }  // namespace

@@ -19,6 +19,7 @@
 #include <sys/types.h>
 
 #include <cstddef>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -63,12 +64,23 @@ TEST(WrapUniqueTest, WrapUnique) {
   }
   EXPECT_EQ(0, DestructorVerifier::instance_count());
 }
-TEST(MakeUniqueTest, Basic) {
-  std::unique_ptr<std::string> p = absl::make_unique<std::string>();
-  EXPECT_EQ("", *p);
-  p = absl::make_unique<std::string>("hi");
-  EXPECT_EQ("hi", *p);
+
+TEST(MakeUniqueForOverwriteTest, Basic) {
+  std::unique_ptr<int> p = absl::make_unique_for_overwrite<int>();
+  p = absl::make_unique_for_overwrite<int>();
 }
+
+// The initialization tests needs to suppress dead-store elimination, otherwise
+// memset is optimized away, and lifetime is assumed begin after new, triggering
+// uninitalized variable warnings. Various tricks to prevent memset from being
+// optimized away still result in uninitialized variable warnings.  Once we move
+// to a C++20 floor we can delegate to std::make_unique_for_overwrite and avoid
+// testing absl::make_unique_for_overwrite.
+// https://github.com/gcc-mirror/gcc/blob/be1da01067c898a3e3979bfb1edd05f115ab2e3e/libstdc%2B%2B-v3/testsuite/20_util/unique_ptr/creation/for_overwrite.cc#L1
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC push_options
+#pragma GCC optimize("O0")
+#endif
 
 // InitializationVerifier fills in a pattern when allocated so we can
 // distinguish between its default and value initialized states (without
@@ -93,64 +105,31 @@ struct InitializationVerifier {
   int b;
 };
 
-TEST(Initialization, MakeUnique) {
-  auto p = absl::make_unique<InitializationVerifier>();
+TEST(Initialization, MakeUniqueForOverwrite) {
+  auto p = absl::make_unique_for_overwrite<InitializationVerifier>();
 
-  EXPECT_EQ(0, p->a);
-  EXPECT_EQ(0, p->b);
+  int pattern;
+  memset(&pattern, InitializationVerifier::kDefaultScalar, sizeof(pattern));
+
+  EXPECT_EQ(pattern, p->a);
+  EXPECT_EQ(pattern, p->b);
 }
 
-TEST(Initialization, MakeUniqueArray) {
-  auto p = absl::make_unique<InitializationVerifier[]>(2);
+TEST(Initialization, MakeUniqueForOverwriteArray) {
+  auto p = absl::make_unique_for_overwrite<InitializationVerifier[]>(2);
 
-  EXPECT_EQ(0, p[0].a);
-  EXPECT_EQ(0, p[0].b);
-  EXPECT_EQ(0, p[1].a);
-  EXPECT_EQ(0, p[1].b);
+  int pattern;
+  memset(&pattern, InitializationVerifier::kDefaultArray, sizeof(pattern));
+
+  EXPECT_EQ(pattern, p[0].a);
+  EXPECT_EQ(pattern, p[0].b);
+  EXPECT_EQ(pattern, p[1].a);
+  EXPECT_EQ(pattern, p[1].b);
 }
 
-struct MoveOnly {
-  MoveOnly() = default;
-  explicit MoveOnly(int i1) : ip1{new int{i1}} {}
-  MoveOnly(int i1, int i2) : ip1{new int{i1}}, ip2{new int{i2}} {}
-  std::unique_ptr<int> ip1;
-  std::unique_ptr<int> ip2;
-};
-
-struct AcceptMoveOnly {
-  explicit AcceptMoveOnly(MoveOnly m) : m_(std::move(m)) {}
-  MoveOnly m_;
-};
-
-TEST(MakeUniqueTest, MoveOnlyTypeAndValue) {
-  using ExpectedType = std::unique_ptr<MoveOnly>;
-  {
-    auto p = absl::make_unique<MoveOnly>();
-    static_assert(std::is_same<decltype(p), ExpectedType>::value,
-                  "unexpected return type");
-    EXPECT_TRUE(!p->ip1);
-    EXPECT_TRUE(!p->ip2);
-  }
-  {
-    auto p = absl::make_unique<MoveOnly>(1);
-    static_assert(std::is_same<decltype(p), ExpectedType>::value,
-                  "unexpected return type");
-    EXPECT_TRUE(p->ip1 && *p->ip1 == 1);
-    EXPECT_TRUE(!p->ip2);
-  }
-  {
-    auto p = absl::make_unique<MoveOnly>(1, 2);
-    static_assert(std::is_same<decltype(p), ExpectedType>::value,
-                  "unexpected return type");
-    EXPECT_TRUE(p->ip1 && *p->ip1 == 1);
-    EXPECT_TRUE(p->ip2 && *p->ip2 == 2);
-  }
-}
-
-TEST(MakeUniqueTest, AcceptMoveOnly) {
-  auto p = absl::make_unique<AcceptMoveOnly>(MoveOnly());
-  p = std::unique_ptr<AcceptMoveOnly>(new AcceptMoveOnly(MoveOnly()));
-}
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC pop_options
+#endif
 
 struct ArrayWatch {
   void* operator new[](size_t n) {
@@ -164,37 +143,16 @@ struct ArrayWatch {
   }
 };
 
-TEST(Make_UniqueTest, Array) {
+TEST(MakeUniqueForOverwriteTest, Array) {
   // Ensure state is clean before we start so that these tests
   // are order-agnostic.
   ArrayWatch::allocs().clear();
 
-  auto p = absl::make_unique<ArrayWatch[]>(5);
-  static_assert(std::is_same<decltype(p), std::unique_ptr<ArrayWatch[]>>::value,
+  auto p = absl::make_unique_for_overwrite<ArrayWatch[]>(5);
+  static_assert(std::is_same_v<decltype(p), std::unique_ptr<ArrayWatch[]>>,
                 "unexpected return type");
   EXPECT_THAT(ArrayWatch::allocs(), ElementsAre(5 * sizeof(ArrayWatch)));
 }
-
-TEST(Make_UniqueTest, NotAmbiguousWithStdMakeUnique) {
-  // Ensure that absl::make_unique is not ambiguous with std::make_unique.
-  // In C++14 mode, the below call to make_unique has both types as candidates.
-  struct TakesStdType {
-    explicit TakesStdType(const std::vector<int>& vec) {}
-  };
-  using absl::make_unique;
-  (void)make_unique<TakesStdType>(std::vector<int>());
-}
-
-#if 0
-// These tests shouldn't compile.
-TEST(MakeUniqueTestNC, AcceptMoveOnlyLvalue) {
-  auto m = MoveOnly();
-  auto p = absl::make_unique<AcceptMoveOnly>(m);
-}
-TEST(MakeUniqueTestNC, KnownBoundArray) {
-  auto p = absl::make_unique<ArrayWatch[5]>();
-}
-#endif
 
 TEST(RawPtrTest, RawPointer) {
   int i = 5;
@@ -237,24 +195,24 @@ TEST(RawPtrTest, NullValuedSmartPointer) {
 
 TEST(RawPtrTest, Nullptr) {
   auto p = absl::RawPtr(nullptr);
-  EXPECT_TRUE((std::is_same<std::nullptr_t, decltype(p)>::value));
+  EXPECT_TRUE((std::is_same_v<std::nullptr_t, decltype(p)>));
   EXPECT_EQ(nullptr, p);
 }
 
 TEST(RawPtrTest, Null) {
   auto p = absl::RawPtr(nullptr);
-  EXPECT_TRUE((std::is_same<std::nullptr_t, decltype(p)>::value));
+  EXPECT_TRUE((std::is_same_v<std::nullptr_t, decltype(p)>));
   EXPECT_EQ(nullptr, p);
 }
 
 TEST(RawPtrTest, Zero) {
   auto p = absl::RawPtr(nullptr);
-  EXPECT_TRUE((std::is_same<std::nullptr_t, decltype(p)>::value));
+  EXPECT_TRUE((std::is_same_v<std::nullptr_t, decltype(p)>));
   EXPECT_EQ(nullptr, p);
 }
 
 TEST(ShareUniquePtrTest, Share) {
-  auto up = absl::make_unique<int>();
+  auto up = std::make_unique<int>();
   int* rp = up.get();
   auto sp = absl::ShareUniquePtr(std::move(up));
   EXPECT_EQ(sp.get(), rp);
@@ -286,337 +244,6 @@ TEST(RawPtrTest, NotAPointer) {
   absl::RawPtr(1.5);
 }
 */
-
-template <typename T>
-struct SmartPointer {
-  using difference_type = char;
-};
-
-struct PointerWith {
-  using element_type = int32_t;
-  using difference_type = int16_t;
-  template <typename U>
-  using rebind = SmartPointer<U>;
-
-  static PointerWith pointer_to(
-      element_type& r) {  // NOLINT(runtime/references)
-    return PointerWith{&r};
-  }
-
-  element_type* ptr;
-};
-
-template <typename... Args>
-struct PointerWithout {};
-
-TEST(PointerTraits, Types) {
-  using TraitsWith = absl::pointer_traits<PointerWith>;
-  EXPECT_TRUE((std::is_same<TraitsWith::pointer, PointerWith>::value));
-  EXPECT_TRUE((std::is_same<TraitsWith::element_type, int32_t>::value));
-  EXPECT_TRUE((std::is_same<TraitsWith::difference_type, int16_t>::value));
-  EXPECT_TRUE((
-      std::is_same<TraitsWith::rebind<int64_t>, SmartPointer<int64_t>>::value));
-
-  using TraitsWithout = absl::pointer_traits<PointerWithout<double, int>>;
-  EXPECT_TRUE((std::is_same<TraitsWithout::pointer,
-                            PointerWithout<double, int>>::value));
-  EXPECT_TRUE((std::is_same<TraitsWithout::element_type, double>::value));
-  EXPECT_TRUE(
-      (std::is_same<TraitsWithout ::difference_type, std::ptrdiff_t>::value));
-  EXPECT_TRUE((std::is_same<TraitsWithout::rebind<int64_t>,
-                            PointerWithout<int64_t, int>>::value));
-
-  using TraitsRawPtr = absl::pointer_traits<char*>;
-  EXPECT_TRUE((std::is_same<TraitsRawPtr::pointer, char*>::value));
-  EXPECT_TRUE((std::is_same<TraitsRawPtr::element_type, char>::value));
-  EXPECT_TRUE(
-      (std::is_same<TraitsRawPtr::difference_type, std::ptrdiff_t>::value));
-  EXPECT_TRUE((std::is_same<TraitsRawPtr::rebind<int64_t>, int64_t*>::value));
-}
-
-TEST(PointerTraits, Functions) {
-  int i;
-  EXPECT_EQ(&i, absl::pointer_traits<PointerWith>::pointer_to(i).ptr);
-  EXPECT_EQ(&i, absl::pointer_traits<int*>::pointer_to(i));
-}
-
-TEST(AllocatorTraits, Typedefs) {
-  struct A {
-    struct value_type {};
-  };
-  EXPECT_TRUE((
-      std::is_same<A,
-                   typename absl::allocator_traits<A>::allocator_type>::value));
-  EXPECT_TRUE(
-      (std::is_same<A::value_type,
-                    typename absl::allocator_traits<A>::value_type>::value));
-
-  struct X {};
-  struct HasPointer {
-    using value_type = X;
-    using pointer = SmartPointer<X>;
-  };
-  EXPECT_TRUE((std::is_same<SmartPointer<X>, typename absl::allocator_traits<
-                                                 HasPointer>::pointer>::value));
-  EXPECT_TRUE(
-      (std::is_same<A::value_type*,
-                    typename absl::allocator_traits<A>::pointer>::value));
-
-  EXPECT_TRUE(
-      (std::is_same<
-          SmartPointer<const X>,
-          typename absl::allocator_traits<HasPointer>::const_pointer>::value));
-  EXPECT_TRUE(
-      (std::is_same<const A::value_type*,
-                    typename absl::allocator_traits<A>::const_pointer>::value));
-
-  struct HasVoidPointer {
-    using value_type = X;
-    struct void_pointer {};
-  };
-
-  EXPECT_TRUE((std::is_same<HasVoidPointer::void_pointer,
-                            typename absl::allocator_traits<
-                                HasVoidPointer>::void_pointer>::value));
-  EXPECT_TRUE(
-      (std::is_same<SmartPointer<void>, typename absl::allocator_traits<
-                                            HasPointer>::void_pointer>::value));
-
-  struct HasConstVoidPointer {
-    using value_type = X;
-    struct const_void_pointer {};
-  };
-
-  EXPECT_TRUE(
-      (std::is_same<HasConstVoidPointer::const_void_pointer,
-                    typename absl::allocator_traits<
-                        HasConstVoidPointer>::const_void_pointer>::value));
-  EXPECT_TRUE((std::is_same<SmartPointer<const void>,
-                            typename absl::allocator_traits<
-                                HasPointer>::const_void_pointer>::value));
-
-  struct HasDifferenceType {
-    using value_type = X;
-    using difference_type = int;
-  };
-  EXPECT_TRUE(
-      (std::is_same<int, typename absl::allocator_traits<
-                             HasDifferenceType>::difference_type>::value));
-  EXPECT_TRUE((std::is_same<char, typename absl::allocator_traits<
-                                      HasPointer>::difference_type>::value));
-
-  struct HasSizeType {
-    using value_type = X;
-    using size_type = unsigned int;
-  };
-  EXPECT_TRUE((std::is_same<unsigned int, typename absl::allocator_traits<
-                                              HasSizeType>::size_type>::value));
-  EXPECT_TRUE((std::is_same<unsigned char, typename absl::allocator_traits<
-                                               HasPointer>::size_type>::value));
-
-  struct HasPropagateOnCopy {
-    using value_type = X;
-    struct propagate_on_container_copy_assignment {};
-  };
-
-  EXPECT_TRUE(
-      (std::is_same<HasPropagateOnCopy::propagate_on_container_copy_assignment,
-                    typename absl::allocator_traits<HasPropagateOnCopy>::
-                        propagate_on_container_copy_assignment>::value));
-  EXPECT_TRUE(
-      (std::is_same<std::false_type,
-                    typename absl::allocator_traits<
-                        A>::propagate_on_container_copy_assignment>::value));
-
-  struct HasPropagateOnMove {
-    using value_type = X;
-    struct propagate_on_container_move_assignment {};
-  };
-
-  EXPECT_TRUE(
-      (std::is_same<HasPropagateOnMove::propagate_on_container_move_assignment,
-                    typename absl::allocator_traits<HasPropagateOnMove>::
-                        propagate_on_container_move_assignment>::value));
-  EXPECT_TRUE(
-      (std::is_same<std::false_type,
-                    typename absl::allocator_traits<
-                        A>::propagate_on_container_move_assignment>::value));
-
-  struct HasPropagateOnSwap {
-    using value_type = X;
-    struct propagate_on_container_swap {};
-  };
-
-  EXPECT_TRUE(
-      (std::is_same<HasPropagateOnSwap::propagate_on_container_swap,
-                    typename absl::allocator_traits<HasPropagateOnSwap>::
-                        propagate_on_container_swap>::value));
-  EXPECT_TRUE(
-      (std::is_same<std::false_type, typename absl::allocator_traits<A>::
-                                         propagate_on_container_swap>::value));
-
-  struct HasIsAlwaysEqual {
-    using value_type = X;
-    struct is_always_equal {};
-  };
-
-  EXPECT_TRUE((std::is_same<HasIsAlwaysEqual::is_always_equal,
-                            typename absl::allocator_traits<
-                                HasIsAlwaysEqual>::is_always_equal>::value));
-  EXPECT_TRUE((std::is_same<std::true_type, typename absl::allocator_traits<
-                                                A>::is_always_equal>::value));
-  struct NonEmpty {
-    using value_type = X;
-    int i;
-  };
-  EXPECT_TRUE(
-      (std::is_same<std::false_type,
-                    absl::allocator_traits<NonEmpty>::is_always_equal>::value));
-}
-
-template <typename T>
-struct AllocWithPrivateInheritance : private std::allocator<T> {
-  using value_type = T;
-};
-
-TEST(AllocatorTraits, RebindWithPrivateInheritance) {
-  // Regression test for some versions of gcc that do not like the sfinae we
-  // used in combination with private inheritance.
-  EXPECT_TRUE(
-      (std::is_same<AllocWithPrivateInheritance<int>,
-                    absl::allocator_traits<AllocWithPrivateInheritance<char>>::
-                        rebind_alloc<int>>::value));
-}
-
-template <typename T>
-struct Rebound {};
-
-struct AllocWithRebind {
-  using value_type = int;
-  template <typename T>
-  struct rebind {
-    using other = Rebound<T>;
-  };
-};
-
-template <typename T, typename U>
-struct AllocWithoutRebind {
-  using value_type = int;
-};
-
-TEST(AllocatorTraits, Rebind) {
-  EXPECT_TRUE(
-      (std::is_same<Rebound<int>,
-                    typename absl::allocator_traits<
-                        AllocWithRebind>::template rebind_alloc<int>>::value));
-  EXPECT_TRUE(
-      (std::is_same<absl::allocator_traits<Rebound<int>>,
-                    typename absl::allocator_traits<
-                        AllocWithRebind>::template rebind_traits<int>>::value));
-
-  EXPECT_TRUE(
-      (std::is_same<AllocWithoutRebind<double, char>,
-                    typename absl::allocator_traits<AllocWithoutRebind<
-                        int, char>>::template rebind_alloc<double>>::value));
-  EXPECT_TRUE(
-      (std::is_same<absl::allocator_traits<AllocWithoutRebind<double, char>>,
-                    typename absl::allocator_traits<AllocWithoutRebind<
-                        int, char>>::template rebind_traits<double>>::value));
-}
-
-struct TestValue {
-  TestValue() {}
-  explicit TestValue(int* trace) : trace(trace) { ++*trace; }
-  ~TestValue() {
-    if (trace) --*trace;
-  }
-  int* trace = nullptr;
-};
-
-struct MinimalMockAllocator {
-  MinimalMockAllocator() : value(0) {}
-  explicit MinimalMockAllocator(int value) : value(value) {}
-  MinimalMockAllocator(const MinimalMockAllocator& other)
-      : value(other.value) {}
-  using value_type = TestValue;
-  MOCK_METHOD(value_type*, allocate, (size_t));
-  MOCK_METHOD(void, deallocate, (value_type*, size_t));
-
-  int value;
-};
-
-TEST(AllocatorTraits, FunctionsMinimal) {
-  int trace = 0;
-  int hint;
-  TestValue x(&trace);
-  MinimalMockAllocator mock;
-  using Traits = absl::allocator_traits<MinimalMockAllocator>;
-  EXPECT_CALL(mock, allocate(7)).WillRepeatedly(Return(&x));
-  EXPECT_CALL(mock, deallocate(&x, 7));
-
-  EXPECT_EQ(&x, Traits::allocate(mock, 7));
-  static_cast<void>(Traits::allocate(mock, 7, static_cast<const void*>(&hint)));
-  EXPECT_EQ(&x, Traits::allocate(mock, 7, static_cast<const void*>(&hint)));
-  Traits::deallocate(mock, &x, 7);
-
-  EXPECT_EQ(1, trace);
-  Traits::construct(mock, &x, &trace);
-  EXPECT_EQ(2, trace);
-  Traits::destroy(mock, &x);
-  EXPECT_EQ(1, trace);
-
-  EXPECT_EQ(std::numeric_limits<size_t>::max() / sizeof(TestValue),
-            Traits::max_size(mock));
-
-  EXPECT_EQ(0, mock.value);
-  EXPECT_EQ(0, Traits::select_on_container_copy_construction(mock).value);
-}
-
-struct FullMockAllocator {
-  FullMockAllocator() : value(0) {}
-  explicit FullMockAllocator(int value) : value(value) {}
-  FullMockAllocator(const FullMockAllocator& other) : value(other.value) {}
-  using value_type = TestValue;
-  MOCK_METHOD(value_type*, allocate, (size_t));
-  MOCK_METHOD(value_type*, allocate, (size_t, const void*));
-  MOCK_METHOD(void, construct, (value_type*, int*));
-  MOCK_METHOD(void, destroy, (value_type*));
-  MOCK_METHOD(size_t, max_size, (),
-              (const));
-  MOCK_METHOD(FullMockAllocator, select_on_container_copy_construction, (),
-              (const));
-
-  int value;
-};
-
-TEST(AllocatorTraits, FunctionsFull) {
-  int trace = 0;
-  int hint;
-  TestValue x(&trace), y;
-  FullMockAllocator mock;
-  using Traits = absl::allocator_traits<FullMockAllocator>;
-  EXPECT_CALL(mock, allocate(7)).WillRepeatedly(Return(&x));
-  EXPECT_CALL(mock, allocate(13, &hint)).WillRepeatedly(Return(&y));
-  EXPECT_CALL(mock, construct(&x, &trace));
-  EXPECT_CALL(mock, destroy(&x));
-  EXPECT_CALL(mock, max_size()).WillRepeatedly(Return(17));
-  EXPECT_CALL(mock, select_on_container_copy_construction())
-      .WillRepeatedly(Return(FullMockAllocator(23)));
-
-  EXPECT_EQ(&x, Traits::allocate(mock, 7));
-  EXPECT_EQ(&y, Traits::allocate(mock, 13, static_cast<const void*>(&hint)));
-
-  EXPECT_EQ(1, trace);
-  Traits::construct(mock, &x, &trace);
-  EXPECT_EQ(1, trace);
-  Traits::destroy(mock, &x);
-  EXPECT_EQ(1, trace);
-
-  EXPECT_EQ(17, Traits::max_size(mock));
-
-  EXPECT_EQ(0, mock.value);
-  EXPECT_EQ(23, Traits::select_on_container_copy_construction(mock).value);
-}
 
 TEST(AllocatorNoThrowTest, DefaultAllocator) {
 #if defined(ABSL_ALLOCATOR_NOTHROW) && ABSL_ALLOCATOR_NOTHROW

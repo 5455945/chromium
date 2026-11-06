@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,23 +6,38 @@
 #define EXTENSIONS_COMMON_FEATURES_PERMISSION_FEATURE_H_
 
 #include "extensions/common/features/simple_feature.h"
+#include "extensions/common/mojom/context_type.mojom-forward.h"
 
 namespace extensions {
 
+class ComplexFeature;
+
 class PermissionFeature : public SimpleFeature {
  public:
-  PermissionFeature();
-  ~PermissionFeature() override;
+  constexpr explicit PermissionFeature(
+      StaticFeatureData<SimpleFeatureData> data)
+      : SimpleFeature(data) {}
+  ~PermissionFeature() override = default;
 
-  // TODO(crbug.com/1078984): This should also override IsAvailableToManifest so
-  // that a permission or manifest feature can declare dependency on other
+  // TODO(crbug.com/40689631): This should also override IsAvailableToManifest
+  // so that a permission or manifest feature can declare dependency on other
   // permission features.
 
-  Feature::Availability IsAvailableToContext(
+  Feature::Availability IsAvailableToContextImpl(
       const Extension* extension,
-      Feature::Context context,
+      mojom::ContextType context,
       const GURL& url,
-      Feature::Platform platform) const override;
+      Feature::Platform platform,
+      int context_id,
+      bool check_developer_mode,
+      const ContextData& context_data,
+      DelegatedAvailabilityCheckHandler delegated_handler) const override;
+
+ private:
+  friend class ComplexFeature;
+
+  constexpr explicit PermissionFeature(const SimpleFeatureData* data)
+      : SimpleFeature(data) {}
 };
 
 }  // namespace extensions

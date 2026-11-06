@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """Unit tests for dependency_analysis.generate_json_dependency_graph."""
@@ -27,88 +27,115 @@ GN_DESC_OUTPUT = """
 
 class TestHelperFunctions(unittest.TestCase):
     """Unit tests for module-level helper functions."""
+
     def test_class_is_interesting(self):
         """Tests that the helper identifies a valid Chromium class name."""
         self.assertTrue(
             generate_json_dependency_graph.class_is_interesting(
-                'org.chromium.chrome.browser.Foo'))
+                'org.chromium.chrome.browser.Foo', prefixes=('org.chromium.',)
+            )
+        )
 
     def test_class_is_interesting_longer(self):
         """Tests that the helper identifies a valid Chromium class name."""
         self.assertTrue(
             generate_json_dependency_graph.class_is_interesting(
-                'org.chromium.chrome.browser.foo.Bar'))
+                'org.chromium.chrome.browser.foo.Bar',
+                prefixes=('org.chromium.',),
+            )
+        )
 
     def test_class_is_interesting_negative(self):
         """Tests that the helper ignores a non-Chromium class name."""
         self.assertFalse(
             generate_json_dependency_graph.class_is_interesting(
-                'org.notchromium.chrome.browser.Foo'))
+                'org.notchromium.chrome.browser.Foo',
+                prefixes=('org.chromium.',),
+            )
+        )
 
     def test_class_is_interesting_not_interesting(self):
         """Tests that the helper ignores a builtin class name."""
         self.assertFalse(
             generate_json_dependency_graph.class_is_interesting(
-                'java.lang.Object'))
+                'java.lang.Object', prefixes=('org.chromium.',)
+            )
+        )
 
-    def test_list_original_targets_and_jars_legacy(self):
-        result = generate_json_dependency_graph.list_original_targets_and_jars(
-            GN_DESC_OUTPUT, 'out/Test', 761559)
-        # Before crrev.com/c/2161205, *.javac.jar were in gen/
+    def test_class_is_interesting_everything_interesting(self):
+        """Tests that the helper allows anything when no prefixes are passed."""
+        self.assertTrue(
+            generate_json_dependency_graph.class_is_interesting(
+                'java.lang.Object', prefixes=tuple()
+            )
+        )
+
+    def test_parse_original_targets_and_jars_legacy(self):
+        result = generate_json_dependency_graph.parse_original_targets_and_jars(
+            GN_DESC_OUTPUT, pathlib.Path('out/Test'), 761559
+        )
         self.assertEqual(len(result), 3)
         self.assertEqual(
-            result[0],
-            ('//path/to/dep1:java',
-             pathlib.Path('out/Test/gen/path/to/dep1/java.javac.jar')))
-        self.assertEqual(
-            result[1],
-            ('//path/to/dep2:java',
-             pathlib.Path('out/Test/gen/path/to/dep2/java.javac.jar')))
-        self.assertEqual(
-            result[2],
-            ('//path/to/root:java',
-             pathlib.Path('out/Test/gen/path/to/root/java.javac.jar')))
+            result,
+            {
+                '//path/to/dep1:java': pathlib.Path(
+                    'out/Test/gen/path/to/dep1/java.javac.jar'
+                ),
+                '//path/to/dep2:java': pathlib.Path(
+                    'out/Test/gen/path/to/dep2/java.javac.jar'
+                ),
+                '//path/to/root:java': pathlib.Path(
+                    'out/Test/gen/path/to/root/java.javac.jar'
+                ),
+            },
+        )
 
-    def test_list_original_targets_and_jars_current(self):
+    def test_parse_original_targets_and_jars_current(self):
         # After crrev.com/c/2161205, *.javac.jar are in obj/
-        result = generate_json_dependency_graph.list_original_targets_and_jars(
-            GN_DESC_OUTPUT, 'out/Test', 761560)
+        result = generate_json_dependency_graph.parse_original_targets_and_jars(
+            GN_DESC_OUTPUT, pathlib.Path('out/Test'), 761560
+        )
         self.assertEqual(len(result), 3)
         self.assertEqual(
-            result[0],
-            ('//path/to/dep1:java',
-             pathlib.Path('out/Test/obj/path/to/dep1/java.javac.jar')))
-        self.assertEqual(
-            result[1],
-            ('//path/to/dep2:java',
-             pathlib.Path('out/Test/obj/path/to/dep2/java.javac.jar')))
-        self.assertEqual(
-            result[2],
-            ('//path/to/root:java',
-             pathlib.Path('out/Test/obj/path/to/root/java.javac.jar')))
+            result,
+            {
+                '//path/to/dep1:java': pathlib.Path(
+                    'out/Test/obj/path/to/dep1/java.javac.jar'
+                ),
+                '//path/to/dep2:java': pathlib.Path(
+                    'out/Test/obj/path/to/dep2/java.javac.jar'
+                ),
+                '//path/to/root:java': pathlib.Path(
+                    'out/Test/obj/path/to/root/java.javac.jar'
+                ),
+            },
+        )
 
-    def test_list_original_targets_and_jars_branch(self):
+    def test_parse_original_targets_and_jars_branch(self):
         # A branch without Commit-Cr-Position should be considered modern
-        result = generate_json_dependency_graph.list_original_targets_and_jars(
-            GN_DESC_OUTPUT, 'out/Test', 0)
+        result = generate_json_dependency_graph.parse_original_targets_and_jars(
+            GN_DESC_OUTPUT, pathlib.Path('out/Test'), 0
+        )
         self.assertEqual(len(result), 3)
         self.assertEqual(
-            result[0],
-            ('//path/to/dep1:java',
-             pathlib.Path('out/Test/obj/path/to/dep1/java.javac.jar')))
-        self.assertEqual(
-            result[1],
-            ('//path/to/dep2:java',
-             pathlib.Path('out/Test/obj/path/to/dep2/java.javac.jar')))
-        self.assertEqual(
-            result[2],
-            ('//path/to/root:java',
-             pathlib.Path('out/Test/obj/path/to/root/java.javac.jar')))
+            result,
+            {
+                '//path/to/dep1:java': pathlib.Path(
+                    'out/Test/obj/path/to/dep1/java.javac.jar'
+                ),
+                '//path/to/dep2:java': pathlib.Path(
+                    'out/Test/obj/path/to/dep2/java.javac.jar'
+                ),
+                '//path/to/root:java': pathlib.Path(
+                    'out/Test/obj/path/to/root/java.javac.jar'
+                ),
+            },
+        )
 
 
 class TestJavaClassJdepsParser(unittest.TestCase):
     """Unit tests for
-        dependency_analysis.class_dependency.JavaClassJdepsParser.
+    dependency_analysis.class_dependency.JavaClassJdepsParser.
     """
 
     BUILD_TARGET = '//build/target:1'
@@ -120,14 +147,14 @@ class TestJavaClassJdepsParser(unittest.TestCase):
     def test_parse_line(self):
         """Tests that new nodes + edges are added after a successful parse."""
         self.parser.parse_line(
-            self.BUILD_TARGET,
-            'org.chromium.a -> org.chromium.b org.chromium.c')
+            self.BUILD_TARGET, 'org.chromium.a -> org.chromium.b org.chromium.c'
+        )
         self.assertEqual(self.parser.graph.num_nodes, 2)
         self.assertEqual(self.parser.graph.num_edges, 1)
 
     def test_parse_line_not_interesting(self):
         """Tests that a dependency on an uninteresting class adds a node only
-            for the origin class."""
+        for the origin class."""
         self.parser.parse_line(self.BUILD_TARGET, 'org.chromium.a -> b c')
         self.assertEqual(self.parser.graph.num_nodes, 1)
         self.assertEqual(self.parser.graph.num_edges, 0)
@@ -140,10 +167,9 @@ class TestJavaClassJdepsParser(unittest.TestCase):
 
     def test_parse_line_not_found(self):
         """Tests that nothing is changed if the line contains `not found`
-            as the second class.
+        as the second class.
         """
-        self.parser.parse_line(self.BUILD_TARGET,
-                               'org.chromium.a -> not found')
+        self.parser.parse_line(self.BUILD_TARGET, 'org.chromium.a -> not found')
         self.assertEqual(self.parser.graph.num_nodes, 0)
         self.assertEqual(self.parser.graph.num_edges, 0)
 

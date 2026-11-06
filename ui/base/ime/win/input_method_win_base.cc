@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,18 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <cwctype>
+
+#include <array>
+#include <memory>
+#include <vector>
 
 #include "base/auto_reset.h"
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
+#include "base/containers/heap_array.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
+#include "base/strings/string_util.h"
 #include "base/win/windows_version.h"
 #include "ui/base/ime/text_input_client.h"
 #include "ui/base/ime/win/on_screen_keyboard_display_manager_input_pane.h"
@@ -32,16 +38,14 @@ namespace {
 constexpr size_t kExtraNumberOfChars = 20;
 
 std::unique_ptr<VirtualKeyboardController> CreateKeyboardController(
-    HWND toplevel_window_handle) {
-  if (base::FeatureList::IsEnabled(features::kInputPaneOnScreenKeyboard) &&
-      base::win::GetVersion() >= base::win::Version::WIN10_RS4) {
+    HWND attached_window_handle) {
+  if (base::win::GetVersion() >= base::win::Version::WIN10_RS4) {
     return std::make_unique<OnScreenKeyboardDisplayManagerInputPane>(
-        toplevel_window_handle);
-  } else if (base::win::GetVersion() >= base::win::Version::WIN8) {
+        attached_window_handle);
+  } else {
     return std::make_unique<OnScreenKeyboardDisplayManagerTabTip>(
-        toplevel_window_handle);
+        attached_window_handle);
   }
-  return nullptr;
 }
 
 // Checks if a given primary language ID is a RTL language.
@@ -81,8 +85,8 @@ bool IsRTLKeyboardLayoutInstalled() {
 
   // Retrieve the keyboard layouts in an array and check if there is an RTL
   // layout in it.
-  std::unique_ptr<HKL[]> layouts(new HKL[size]);
-  ::GetKeyboardLayoutList(size, layouts.get());
+  auto layouts = base::HeapArray<HKL>::Uninit(size);
+  ::GetKeyboardLayoutList(size, layouts.data());
   for (int i = 0; i < size; ++i) {
     if (IsRTLPrimaryLangID(
             PRIMARYLANGID(reinterpret_cast<uintptr_t>(layouts[i])))) {
@@ -100,9 +104,10 @@ bool IsRTLKeyboardLayoutInstalled() {
 // Returns true if only a Ctrl key and a Shift key are down. The desired text
 // direction will be stored in |*direction|.
 bool IsCtrlShiftPressed(base::i18n::TextDirection* direction) {
-  uint8_t keystate[256];
-  if (!::GetKeyboardState(&keystate[0]))
+  std::array<uint8_t, 256> keystate;
+  if (!::GetKeyboardState(keystate.data())) {
     return false;
+  }
 
   // To check if a user is pressing only a control key and a right-shift key
   // (or a left-shift key), we use the steps below:
@@ -113,8 +118,9 @@ bool IsCtrlShiftPressed(base::i18n::TextDirection* direction) {
   //    To ignore the keys checked in 1, we set their status to 0 before
   //    checking the key status.
   const int kKeyDownMask = 0x80;
-  if ((keystate[VK_CONTROL] & kKeyDownMask) == 0)
+  if ((keystate[VK_CONTROL] & kKeyDownMask) == 0) {
     return false;
+  }
 
   if (keystate[VK_RSHIFT] & kKeyDownMask) {
     keystate[VK_RSHIFT] = 0;
@@ -141,8 +147,9 @@ bool IsCtrlShiftPressed(base::i18n::TextDirection* direction) {
   // defect is limited to my keyboard driver, but ignoring F22 should be okay.
   keystate[VK_F22] = 0;
   for (int i = 0; i <= VK_PACKET; ++i) {
-    if (keystate[i] & kKeyDownMask)
+    if (keystate[i] & kKeyDownMask) {
       return false;
+    }
   }
   return true;
 }
@@ -155,11 +162,12 @@ ui::EventDispatchDetails DispatcherDestroyedDetails() {
 
 }  // namespace
 
-InputMethodWinBase::InputMethodWinBase(internal::InputMethodDelegate* delegate,
-                                       HWND toplevel_window_handle)
-    : InputMethodBase(delegate,
-                      CreateKeyboardController(toplevel_window_handle)),
-      toplevel_window_handle_(toplevel_window_handle),
+InputMethodWinBase::InputMethodWinBase(
+    ImeKeyEventDispatcher* ime_key_event_dispatcher,
+    HWND attached_window_handle)
+    : InputMethodBase(ime_key_event_dispatcher,
+                      CreateKeyboardController(attached_window_handle)),
+      attached_window_handle_(attached_window_handle),
       pending_requested_direction_(base::i18n::UNKNOWN_DIRECTION) {}
 
 InputMethodWinBase::~InputMethodWinBase() {}
@@ -173,7 +181,7 @@ void InputMethodWinBase::OnDidChangeFocusedClient(
 
 ui::EventDispatchDetails InputMethodWinBase::DispatchKeyEvent(
     ui::KeyEvent* event) {
-  MSG native_key_event = MSGFromKeyEvent(event);
+  CHROME_MSG native_key_event = MSGFromKeyEvent(event);
   if (native_key_event.message == WM_CHAR) {
     auto ref = weak_ptr_factory_.GetWeakPtr();
     BOOL handled = FALSE;
@@ -187,7 +195,7 @@ ui::EventDispatchDetails InputMethodWinBase::DispatchKeyEvent(
     return ui::EventDispatchDetails();
   }
 
-  std::vector<MSG> char_msgs;
+  std::vector<CHROME_MSG> char_msgs;
   // Combines the WM_KEY* and WM_CHAR messages in the event processing flow
   // which is necessary to let Chrome IME extension to process the key event
   // and perform corresponding IME actions.
@@ -209,7 +217,7 @@ ui::EventDispatchDetails InputMethodWinBase::DispatchKeyEvent(
   // Handles ctrl-shift key to change text direction and layout alignment.
   if (IsRTLKeyboardLayoutInstalled() && !IsTextInputTypeNone()) {
     ui::KeyboardCode code = event->key_code();
-    if (event->type() == ui::ET_KEY_PRESSED) {
+    if (event->type() == ui::EventType::kKeyPressed) {
       if (code == ui::VKEY_SHIFT) {
         base::i18n::TextDirection dir;
         if (IsCtrlShiftPressed(&dir))
@@ -217,7 +225,7 @@ ui::EventDispatchDetails InputMethodWinBase::DispatchKeyEvent(
       } else if (code != ui::VKEY_CONTROL) {
         pending_requested_direction_ = base::i18n::UNKNOWN_DIRECTION;
       }
-    } else if (event->type() == ui::ET_KEY_RELEASED &&
+    } else if (event->type() == ui::EventType::kKeyReleased &&
                (code == ui::VKEY_SHIFT || code == ui::VKEY_CONTROL) &&
                pending_requested_direction_ != base::i18n::UNKNOWN_DIRECTION) {
       GetTextInputClient()->ChangeTextDirectionAndLayoutAlignment(
@@ -227,9 +235,9 @@ ui::EventDispatchDetails InputMethodWinBase::DispatchKeyEvent(
   }
 
   // If only 1 WM_CHAR per the key event, set it as the character of it.
-  if (char_msgs.size() == 1 &&
-      !std::iswcntrl(static_cast<wint_t>(char_msgs[0].wParam)))
+  if (char_msgs.size() == 1 && !base::IsAsciiControl(char_msgs[0].wParam)) {
     event->set_character(static_cast<char16_t>(char_msgs[0].wParam));
+  }
 
   return ProcessUnhandledKeyEvent(event, &char_msgs);
 }
@@ -237,12 +245,13 @@ ui::EventDispatchDetails InputMethodWinBase::DispatchKeyEvent(
 bool InputMethodWinBase::HandlePeekMessage(HWND hwnd,
                                            UINT msg_filter_min,
                                            UINT msg_filter_max,
-                                           std::vector<MSG>* char_msgs) {
+                                           std::vector<CHROME_MSG>* char_msgs) {
   auto ref = weak_ptr_factory_.GetWeakPtr();
   while (true) {
-    MSG msg_found;
-    const bool result = !!::PeekMessage(&msg_found, hwnd, msg_filter_min,
-                                        msg_filter_max, PM_REMOVE);
+    CHROME_MSG msg_found;
+    const bool result =
+        !!::PeekMessage(ChromeToWindowsType(&msg_found), hwnd, msg_filter_min,
+                        msg_filter_max, PM_REMOVE);
     // PeekMessage may result in WM_NCDESTROY which will cause deletion of
     // |this|. We should use WeakPtr to check whether |this| is destroyed.
     if (!ref)
@@ -257,20 +266,24 @@ bool InputMethodWinBase::HandlePeekMessage(HWND hwnd,
 bool InputMethodWinBase::IsWindowFocused(const TextInputClient* client) const {
   if (!client)
     return false;
-  // When Aura is enabled, |attached_window_handle| should always be a top-level
-  // window. So we can safely assume that |attached_window_handle| is ready for
-  // receiving keyboard input as long as it is an active window. This works well
-  // even when the |attached_window_handle| becomes active but has not received
-  // WM_FOCUS yet.
-  return toplevel_window_handle_ &&
-         GetActiveWindow() == toplevel_window_handle_;
+  // The reason why we check |GetActiveWindow()| here was to take care of
+  // situations when this method gets called as a response to WM_NCACTIVATE as
+  // discussed at crbug.com/287620.  This approach works if and only if
+  // |attached_window_handle_| is a top-level window, which is assumed to be
+  // true for Chromium-based browser products at least.
+  // We need to relax this condition by checking |GetFocus()| so this works fine
+  // for embedded Chromium windows.
+  // TODO(crbug.com/40815890): Check if this can be replaced with |GetFocus()|.
+  return attached_window_handle_ &&
+         (GetActiveWindow() == attached_window_handle_ ||
+          GetFocus() == attached_window_handle_);
 }
 
 LRESULT InputMethodWinBase::OnChar(HWND window_handle,
                                    UINT message,
                                    WPARAM wparam,
                                    LPARAM lparam,
-                                   const MSG& event,
+                                   const CHROME_MSG& event,
                                    BOOL* handled) {
   *handled = TRUE;
 
@@ -366,7 +379,7 @@ LRESULT InputMethodWinBase::OnDocumentFeed(RECONVERTSTRING* reconv) {
   std::u16string text;
   if (!GetTextInputClient()->GetTextFromRange(text_range, &text))
     return 0;
-  DCHECK_EQ(text_range.length(), text.length());
+  CHECK_EQ(text_range.length(), text.length(), base::NotFatalUntil::M163);
 
   reconv->dwVersion = 0;
   reconv->dwStrLen = len;
@@ -378,8 +391,8 @@ LRESULT InputMethodWinBase::OnDocumentFeed(RECONVERTSTRING* reconv) {
   reconv->dwTargetStrLen = target_range.length();
   reconv->dwTargetStrOffset = reconv->dwCompStrOffset;
 
-  memcpy((char*)reconv + sizeof(RECONVERTSTRING), text.c_str(),
-         len * sizeof(WCHAR));
+  UNSAFE_TODO(memcpy((char*)reconv + sizeof(RECONVERTSTRING), text.c_str(),
+                     len * sizeof(WCHAR)));
 
   // According to Microsoft API document, IMR_RECONVERTSTRING and
   // IMR_DOCUMENTFEED should return reconv, but some applications return
@@ -406,7 +419,7 @@ LRESULT InputMethodWinBase::OnReconvertString(RECONVERTSTRING* reconv) {
     return 0;
   }
 
-  DCHECK(text_range.Contains(selection_range));
+  CHECK(text_range.Contains(selection_range), base::NotFatalUntil::M163);
 
   size_t len = selection_range.length();
   size_t need_size = sizeof(RECONVERTSTRING) + len * sizeof(WCHAR);
@@ -422,7 +435,7 @@ LRESULT InputMethodWinBase::OnReconvertString(RECONVERTSTRING* reconv) {
   std::u16string text;
   if (!GetTextInputClient()->GetTextFromRange(selection_range, &text))
     return 0;
-  DCHECK_EQ(selection_range.length(), text.length());
+  CHECK_EQ(selection_range.length(), text.length(), base::NotFatalUntil::M163);
 
   reconv->dwVersion = 0;
   reconv->dwStrLen = len;
@@ -432,8 +445,8 @@ LRESULT InputMethodWinBase::OnReconvertString(RECONVERTSTRING* reconv) {
   reconv->dwTargetStrLen = len;
   reconv->dwTargetStrOffset = 0;
 
-  memcpy(reinterpret_cast<char*>(reconv) + sizeof(RECONVERTSTRING),
-         text.c_str(), len * sizeof(WCHAR));
+  UNSAFE_TODO(memcpy(reinterpret_cast<char*>(reconv) + sizeof(RECONVERTSTRING),
+                     text.c_str(), len * sizeof(WCHAR)));
 
   // According to Microsoft API document, IMR_RECONVERTSTRING and
   // IMR_DOCUMENTFEED should return reconv, but some applications return
@@ -468,8 +481,8 @@ LRESULT InputMethodWinBase::OnQueryCharPosition(IMECHARPOSITION* char_positon) {
       return 0;
     dip_rect = client->GetCaretBounds();
   }
-  const gfx::Rect rect = display::win::ScreenWin::DIPToScreenRect(
-      toplevel_window_handle_, dip_rect);
+  const gfx::Rect rect = display::win::GetScreenWin()->DIPToScreenRect(
+      attached_window_handle_, dip_rect);
 
   char_positon->pt.x = rect.x();
   char_positon->pt.y = rect.y();
@@ -477,9 +490,10 @@ LRESULT InputMethodWinBase::OnQueryCharPosition(IMECHARPOSITION* char_positon) {
   return 1;  // returns non-zero value when succeeded.
 }
 
-void InputMethodWinBase::ProcessKeyEventDone(ui::KeyEvent* event,
-                                             const std::vector<MSG>* char_msgs,
-                                             bool is_handled) {
+void InputMethodWinBase::ProcessKeyEventDone(
+    ui::KeyEvent* event,
+    const std::vector<CHROME_MSG>* char_msgs,
+    bool is_handled) {
   if (is_handled)
     return;
   ProcessUnhandledKeyEvent(event, char_msgs);
@@ -487,8 +501,8 @@ void InputMethodWinBase::ProcessKeyEventDone(ui::KeyEvent* event,
 
 ui::EventDispatchDetails InputMethodWinBase::ProcessUnhandledKeyEvent(
     ui::KeyEvent* event,
-    const std::vector<MSG>* char_msgs) {
-  DCHECK(event);
+    const std::vector<CHROME_MSG>* char_msgs) {
+  CHECK(event, base::NotFatalUntil::M163);
   ui::EventDispatchDetails details = DispatchKeyEventPostIME(event);
   if (details.dispatcher_destroyed || details.target_destroyed ||
       event->stopped_propagation()) {

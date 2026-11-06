@@ -1,17 +1,19 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef PRINTING_BACKEND_MOJOM_PRINT_BACKEND_MOJOM_TRAITS_H_
 #define PRINTING_BACKEND_MOJOM_PRINT_BACKEND_MOJOM_TRAITS_H_
 
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "build/chromeos_buildflags.h"
+#include "build/build_config.h"
 #include "printing/backend/mojom/print_backend.mojom-shared.h"
 #include "printing/backend/print_backend.h"
 #include "printing/mojom/print.mojom.h"
+#include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 
 namespace mojo {
@@ -29,12 +31,6 @@ struct StructTraits<printing::mojom::PrinterBasicInfoDataView,
       const printing::PrinterBasicInfo& i) {
     return i.printer_description;
   }
-  static int printer_status(const printing::PrinterBasicInfo& i) {
-    return i.printer_status;
-  }
-  static bool is_default(const printing::PrinterBasicInfo& i) {
-    return i.is_default;
-  }
   static const printing::PrinterBasicInfoOptions& options(
       const printing::PrinterBasicInfo& i) {
     return i.options;
@@ -44,34 +40,90 @@ struct StructTraits<printing::mojom::PrinterBasicInfoDataView,
                    printing::PrinterBasicInfo* out);
 };
 
+#if BUILDFLAG(IS_CHROMEOS)
+template <>
+struct StructTraits<printing::mojom::PaperMarginsDataView,
+                    printing::PaperMargins> {
+  static int32_t top_margin_um(const printing::PaperMargins& m) {
+    return m.top_margin_um;
+  }
+  static int32_t right_margin_um(const printing::PaperMargins& m) {
+    return m.right_margin_um;
+  }
+  static int32_t bottom_margin_um(const printing::PaperMargins& m) {
+    return m.bottom_margin_um;
+  }
+  static int32_t left_margin_um(const printing::PaperMargins& m) {
+    return m.left_margin_um;
+  }
+
+  static bool Read(printing::mojom::PaperMarginsDataView data,
+                   printing::PaperMargins* out);
+};
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
 template <>
 struct StructTraits<printing::mojom::PaperDataView,
                     printing::PrinterSemanticCapsAndDefaults::Paper> {
   static const std::string& display_name(
       const printing::PrinterSemanticCapsAndDefaults::Paper& p) {
-    return p.display_name;
+    return p.display_name();
   }
   static const std::string& vendor_id(
       const printing::PrinterSemanticCapsAndDefaults::Paper& p) {
-    return p.vendor_id;
+    return p.vendor_id();
   }
   static const gfx::Size& size_um(
       const printing::PrinterSemanticCapsAndDefaults::Paper& p) {
-    return p.size_um;
+    return p.size_um();
   }
+  static const gfx::Rect& printable_area_um(
+      const printing::PrinterSemanticCapsAndDefaults::Paper& p) {
+    return p.printable_area_um();
+  }
+  static int max_height_um(
+      const printing::PrinterSemanticCapsAndDefaults::Paper& p) {
+    return p.max_height_um();
+  }
+  static bool has_borderless_variant(
+      const printing::PrinterSemanticCapsAndDefaults::Paper& p) {
+    return p.has_borderless_variant();
+  }
+#if BUILDFLAG(IS_CHROMEOS)
+  static const std::optional<printing::PaperMargins>& supported_margins_um(
+      const printing::PrinterSemanticCapsAndDefaults::Paper& p) {
+    return p.supported_margins_um();
+  }
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   static bool Read(printing::mojom::PaperDataView data,
                    printing::PrinterSemanticCapsAndDefaults::Paper* out);
 };
 
-#if defined(OS_CHROMEOS)
+template <>
+struct StructTraits<printing::mojom::MediaTypeDataView,
+                    printing::PrinterSemanticCapsAndDefaults::MediaType> {
+  static const std::string& display_name(
+      const printing::PrinterSemanticCapsAndDefaults::MediaType& p) {
+    return p.display_name;
+  }
+  static const std::string& vendor_id(
+      const printing::PrinterSemanticCapsAndDefaults::MediaType& p) {
+    return p.vendor_id;
+  }
+
+  static bool Read(printing::mojom::MediaTypeDataView data,
+                   printing::PrinterSemanticCapsAndDefaults::MediaType* out);
+};
+
+#if BUILDFLAG(IS_CHROMEOS)
 template <>
 struct EnumTraits<printing::mojom::AdvancedCapabilityType,
                   ::printing::AdvancedCapability::Type> {
   static printing::mojom::AdvancedCapabilityType ToMojom(
       ::printing::AdvancedCapability::Type input);
-  static bool FromMojom(printing::mojom::AdvancedCapabilityType input,
-                        ::printing::AdvancedCapability::Type* output);
+  static ::printing::AdvancedCapability::Type FromMojom(
+      printing::mojom::AdvancedCapabilityType input);
 };
 
 template <>
@@ -115,7 +167,7 @@ struct StructTraits<printing::mojom::AdvancedCapabilityDataView,
   static bool Read(printing::mojom::AdvancedCapabilityDataView data,
                    ::printing::AdvancedCapability* out);
 };
-#endif  // defined(OS_CHROMEOS)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 template <>
 struct StructTraits<printing::mojom::PrinterSemanticCapsAndDefaultsDataView,
@@ -166,6 +218,14 @@ struct StructTraits<printing::mojom::PrinterSemanticCapsAndDefaultsDataView,
       const printing::PrinterSemanticCapsAndDefaults& p) {
     return p.default_paper;
   }
+  static const std::vector<printing::PrinterSemanticCapsAndDefaults::MediaType>&
+  media_types(const printing::PrinterSemanticCapsAndDefaults& p) {
+    return p.media_types;
+  }
+  static const printing::PrinterSemanticCapsAndDefaults::MediaType&
+  default_media_type(const printing::PrinterSemanticCapsAndDefaults& p) {
+    return p.default_media_type;
+  }
   static const std::vector<gfx::Size>& dpis(
       const printing::PrinterSemanticCapsAndDefaults& p) {
     return p.dpis;
@@ -175,7 +235,7 @@ struct StructTraits<printing::mojom::PrinterSemanticCapsAndDefaultsDataView,
     return p.default_dpi;
   }
 
-#if defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS)
   static bool pin_supported(const printing::PrinterSemanticCapsAndDefaults& p) {
     return p.pin_supported;
   }
@@ -183,7 +243,15 @@ struct StructTraits<printing::mojom::PrinterSemanticCapsAndDefaultsDataView,
       const printing::PrinterSemanticCapsAndDefaults& p) {
     return p.advanced_capabilities;
   }
-#endif  // defined(OS_CHROMEOS)
+  static const std::vector<printing::mojom::PrintScalingType>&
+  print_scaling_types(const printing::PrinterSemanticCapsAndDefaults& p) {
+    return p.print_scaling_types;
+  }
+  static printing::mojom::PrintScalingType print_scaling_type_default(
+      const printing::PrinterSemanticCapsAndDefaults& p) {
+    return p.print_scaling_type_default;
+  }
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   static bool Read(printing::mojom::PrinterSemanticCapsAndDefaultsDataView data,
                    printing::PrinterSemanticCapsAndDefaults* out);

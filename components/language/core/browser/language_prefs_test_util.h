@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,9 @@
 #define COMPONENTS_LANGUAGE_CORE_BROWSER_LANGUAGE_PREFS_TEST_UTIL_H_
 
 #include <string>
+#include <vector>
 
-#include "base/macros.h"
-#include "base/strings/string_piece.h"
+#include "base/memory/raw_ptr.h"
 
 class PrefService;
 
@@ -54,7 +54,7 @@ class LanguagePrefTester {
   void SetForcedLanguagePrefs(std::vector<std::string>&& languages);
 
  private:
-  PrefService* prefs_;
+  raw_ptr<PrefService> prefs_;
 };
 
 }  // namespace test

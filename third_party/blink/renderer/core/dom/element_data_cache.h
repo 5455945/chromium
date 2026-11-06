@@ -27,28 +27,48 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_DOM_ELEMENT_DATA_CACHE_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_DOM_ELEMENT_DATA_CACHE_H_
 
-#include "third_party/blink/renderer/platform/heap/handle.h"
-#include "third_party/blink/renderer/platform/wtf/hash_map.h"
-#include "third_party/blink/renderer/platform/wtf/text/string_hash.h"
+#include "third_party/blink/renderer/core/dom/attribute.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
 
-class Attribute;
 class ShareableElementData;
 
-class ElementDataCache final : public GarbageCollected<ElementDataCache> {
+class CORE_EXPORT ElementDataCache final
+    : public GarbageCollected<ElementDataCache> {
  public:
   ElementDataCache();
 
+  // NOTE: Since the presentation attribute depends on the tag name,
+  // and that is part of ShareableElementData, we need to include
+  // tag_name in the cache key.
   ShareableElementData* CachedShareableElementDataWithAttributes(
-      const Vector<Attribute>&);
+      const StringImpl* tag_name,
+      const Vector<Attribute, kAttributePrealloc>&);
+
+  // This is the same as CachedShareableElementDataWithoutAttributes, but uses
+  // the provided hash instead of generating one from the arguments.
+  ShareableElementData* CachedElementDataWithHashForTesting(
+      const StringImpl* tag_name,
+      const Vector<Attribute, kAttributePrealloc>& attributes,
+      unsigned hash) {
+    return CachedElementData(tag_name, attributes, hash);
+  }
 
   void Trace(Visitor*) const;
 
  private:
-  typedef HeapHashMap<unsigned, Member<ShareableElementData>, AlreadyHashed>
-      ShareableElementDataCache;
+  ShareableElementData* CachedElementData(
+      const StringImpl* tag_name,
+      const Vector<Attribute, kAttributePrealloc>&,
+      uint32_t hash);
+
+  using ShareableElementDataCache =
+      HeapHashMap<uint32_t,
+                  std::pair<const StringImpl*, Member<ShareableElementData>>,
+                  AlreadyHashedTraits>;
   ShareableElementDataCache shareable_element_data_cache_;
 };
 

@@ -1,12 +1,13 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ASH_SYSTEM_UNIFIED_USER_CHOOSER_DETAILED_VIEW_CONTROLLER_H_
 #define ASH_SYSTEM_UNIFIED_USER_CHOOSER_DETAILED_VIEW_CONTROLLER_H_
 
+#include "ash/ash_export.h"
 #include "ash/system/unified/detailed_view_controller.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 
 namespace ash {
 
@@ -14,10 +15,17 @@ class UnifiedSystemTrayController;
 
 // Controller of the user chooser detailed view (used for multi-user sign-in) in
 // UnifiedSystemTray.
-class UserChooserDetailedViewController : public DetailedViewController {
+class ASH_EXPORT UserChooserDetailedViewController
+    : public DetailedViewController {
  public:
   explicit UserChooserDetailedViewController(
       UnifiedSystemTrayController* tray_controller);
+
+  UserChooserDetailedViewController(const UserChooserDetailedViewController&) =
+      delete;
+  UserChooserDetailedViewController& operator=(
+      const UserChooserDetailedViewController&) = delete;
+
   ~UserChooserDetailedViewController() override;
 
   // Return true if user chooser is enabled. Called from the view.
@@ -33,13 +41,11 @@ class UserChooserDetailedViewController : public DetailedViewController {
   void HandleAddUserAction();
 
   // DetailedViewController:
-  views::View* CreateView() override;
+  std::unique_ptr<views::View> CreateView() override;
   std::u16string GetAccessibleName() const override;
 
  private:
-  UnifiedSystemTrayController* tray_controller_;
-
-  DISALLOW_COPY_AND_ASSIGN(UserChooserDetailedViewController);
+  raw_ptr<UnifiedSystemTrayController> tray_controller_;
 };
 
 }  // namespace ash

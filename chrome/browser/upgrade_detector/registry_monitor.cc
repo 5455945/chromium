@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,10 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
-#include "base/sequenced_task_runner.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/win/registry.h"
 #include "chrome/browser/upgrade_detector/installed_version_monitor.h"
 #include "chrome/install_static/install_util.h"
@@ -34,8 +33,8 @@ RegistryMonitor::RegistryMonitor(base::win::RegKey key)
 RegistryMonitor::~RegistryMonitor() = default;
 
 void RegistryMonitor::Start(Callback on_change_callback) {
-  DCHECK(on_change_callback);
-  DCHECK(!on_change_callback_);
+  CHECK(on_change_callback, base::NotFatalUntil::M163);
+  CHECK(!on_change_callback_, base::NotFatalUntil::M163);
   on_change_callback_ = std::move(on_change_callback);
   StartWatching();
 }
@@ -49,7 +48,7 @@ void RegistryMonitor::StartWatching() {
           &RegistryMonitor::OnClientsKeyChanged, base::Unretained(this)))) {
     // Starting the watch failed. Report this back to the poller via a delayed
     // task.
-    base::SequencedTaskRunnerHandle::Get()->PostTask(
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(on_change_callback_, /*error=*/true));
   }
 }

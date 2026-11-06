@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,7 @@
 #include <memory>
 #include <vector>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/sync/test/integration/multi_client_status_change_checker.h"
 
 namespace syncer {
@@ -25,7 +24,13 @@ class SyncServiceImpl;
 class QuiesceStatusChangeChecker : public MultiClientStatusChangeChecker {
  public:
   explicit QuiesceStatusChangeChecker(
-      std::vector<syncer::SyncServiceImpl*> services);
+      std::vector<raw_ptr<syncer::SyncServiceImpl, VectorExperimental>>
+          services);
+
+  QuiesceStatusChangeChecker(const QuiesceStatusChangeChecker&) = delete;
+  QuiesceStatusChangeChecker& operator=(const QuiesceStatusChangeChecker&) =
+      delete;
+
   ~QuiesceStatusChangeChecker() override;
 
   // Implementation of StatusChangeChecker.
@@ -34,8 +39,6 @@ class QuiesceStatusChangeChecker : public MultiClientStatusChangeChecker {
  private:
   class NestedUpdatedProgressMarkerChecker;
   std::vector<std::unique_ptr<NestedUpdatedProgressMarkerChecker>> checkers_;
-
-  DISALLOW_COPY_AND_ASSIGN(QuiesceStatusChangeChecker);
 };
 
 #endif  // CHROME_BROWSER_SYNC_TEST_INTEGRATION_QUIESCE_STATUS_CHANGE_CHECKER_H_

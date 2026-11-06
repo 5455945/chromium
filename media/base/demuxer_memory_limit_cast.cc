@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 
 namespace media {
 
-size_t GetDemuxerStreamAudioMemoryLimit(
+base::ByteSize GetDemuxerStreamAudioMemoryLimit(
     const AudioDecoderConfig* audio_config) {
   if (!audio_config) {
     return internal::kDemuxerStreamAudioMemoryLimitLow;
@@ -17,10 +17,14 @@ size_t GetDemuxerStreamAudioMemoryLimit(
 
   DCHECK(audio_config->IsValidConfig());
   switch (audio_config->codec()) {
-    case kCodecEAC3:
-    case kCodecAC3:
+    case AudioCodec::kEAC3:
+    case AudioCodec::kAC3:
+    case AudioCodec::kDTS:
+    case AudioCodec::kDTSXP2:
+    case AudioCodec::kDTSE:
+    case AudioCodec::kMpegHAudio:
       return internal::kDemuxerStreamAudioMemoryLimitMedium;
-    case kCodecAAC:
+    case AudioCodec::kAAC:
       if (ChannelLayoutToChannelCount(audio_config->channel_layout()) >= 5) {
         return internal::kDemuxerStreamAudioMemoryLimitMedium;
       }
@@ -30,31 +34,31 @@ size_t GetDemuxerStreamAudioMemoryLimit(
   }
 }
 
-size_t GetDemuxerStreamVideoMemoryLimit(
-    Demuxer::DemuxerTypes demuxer_type,
+base::ByteSize GetDemuxerStreamVideoMemoryLimit(
+    DemuxerType demuxer_type,
     const VideoDecoderConfig* video_config) {
   switch (demuxer_type) {
-    case Demuxer::DemuxerTypes::kFFmpegDemuxer:
+    case DemuxerType::kFFmpegDemuxer:
       return internal::kDemuxerStreamVideoMemoryLimitDefault;
-    case Demuxer::DemuxerTypes::kChunkDemuxer:
+    case DemuxerType::kChunkDemuxer:
       if (!video_config) {
         return internal::kDemuxerStreamVideoMemoryLimitLow;
       }
       DCHECK(video_config->IsValidConfig());
       switch (video_config->codec()) {
-        case kCodecVP9:
-        case kCodecHEVC:
-        case kCodecDolbyVision:
+        case VideoCodec::kVP9:
+        case VideoCodec::kHEVC:
+        case VideoCodec::kDolbyVision:
           return internal::kDemuxerStreamVideoMemoryLimitMedium;
         default:
           return internal::kDemuxerStreamVideoMemoryLimitLow;
       }
-    case Demuxer::DemuxerTypes::kMediaUrlDemuxer:
+    default:
       return internal::kDemuxerStreamVideoMemoryLimitLow;
   }
 }
 
-size_t GetDemuxerMemoryLimit(Demuxer::DemuxerTypes demuxer_type) {
+base::ByteSize GetDemuxerMemoryLimit(DemuxerType demuxer_type) {
   return GetDemuxerStreamAudioMemoryLimit(nullptr) +
          GetDemuxerStreamVideoMemoryLimit(demuxer_type, nullptr);
 }

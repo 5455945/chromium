@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,25 +6,34 @@
 #define CHROME_BROWSER_SAFE_BROWSING_DOWNLOAD_PROTECTION_DOWNLOAD_REQUEST_MAKER_H_
 
 #include <memory>
+#include <optional>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/safe_browsing/download_protection/file_analyzer.h"
-#include "chrome/browser/safe_browsing/safe_browsing_navigation_observer_manager.h"
 #include "components/download/public/common/download_item.h"
 #include "components/history/core/browser/history_service.h"
+#include "components/safe_browsing/content/browser/navigation_observer/safe_browsing_navigation_observer_manager.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
 #include "content/public/browser/file_system_access_write_item.h"
 
 namespace safe_browsing {
 
-class DownloadProtectionService;
-
 // This class encapsulate the process of populating all the fields in a Safe
 // Browsing download ping.
 class DownloadRequestMaker {
  public:
+  // Details about a DownloadRequestMaker run, to pass back to the caller.
+  struct RequestCreationDetails {
+    // What type of file inspection was performed.
+    DownloadFileType::InspectionType inspection_type = DownloadFileType::NONE;
+  };
+
   using Callback =
       base::OnceCallback<void(std::unique_ptr<ClientDownloadRequest>)>;
+  using CallbackWithDetails =
+      base::OnceCallback<void(RequestCreationDetails,
+                              std::unique_ptr<ClientDownloadRequest>)>;
 
   // URL and referrer of the window the download was started from.
   struct TabUrls {
@@ -34,30 +43,44 @@ class DownloadRequestMaker {
 
   static std::unique_ptr<DownloadRequestMaker> CreateFromDownloadItem(
       scoped_refptr<BinaryFeatureExtractor> binary_feature_extractor,
-      download::DownloadItem* item);
+      download::DownloadItem* item,
+      base::optional_ref<const std::string> password = std::nullopt,
+      bool is_obfuscated = false);
 
   static std::unique_ptr<DownloadRequestMaker> CreateFromFileSystemAccess(
       scoped_refptr<BinaryFeatureExtractor> binary_feature_extractor,
-      DownloadProtectionService* service,
-      const content::FileSystemAccessWriteItem& item);
+      const content::FileSystemAccessWriteItem& item,
+      bool is_obfuscated = false);
 
   DownloadRequestMaker(
       scoped_refptr<BinaryFeatureExtractor> binary_feature_extractor,
       content::BrowserContext* browser_context,
       TabUrls tab_urls,
-      base::FilePath target_file_path,
+      base::FilePath target_file_name,
       base::FilePath full_path,
       GURL source_url,
       std::string sha256_hash,
       int64_t length,
       const std::vector<ClientDownloadRequest::Resource>& resources,
       bool is_user_initiated,
-      ReferrerChainData* referrer_chain_data);
+      ReferrerChainData* referrer_chain_data,
+      base::optional_ref<const std::string> password,
+      const std::string& previous_token,
+      base::OnceCallback<void(const FileAnalyzer::Results&)>
+          on_results_callback,
+      bool is_obfuscated = false);
+
+  DownloadRequestMaker(const DownloadRequestMaker&) = delete;
+  DownloadRequestMaker& operator=(const DownloadRequestMaker&) = delete;
+
   ~DownloadRequestMaker();
 
   // Starts filling in fields in the download ping. Will run the callback with
   // the fully-populated ping.
   void Start(Callback callback);
+
+  // Same as above but also returns a RequestCreationDetails to the caller.
+  void Start(CallbackWithDetails callback);
 
  private:
   // Callback when |file_analyzer_| is done analyzing the download.
@@ -69,28 +92,49 @@ class DownloadRequestMaker {
   // Callback when the history service has retrieved the tab redirects.
   void OnGotTabRedirects(history::RedirectList redirect_list);
 
-  content::BrowserContext* browser_context_;
+  // Populates the tailored info field for tailored warnings.
+  void PopulateTailoredInfo();
+
+  // Extracts and analyzes the download.
+  void StartFileAnalysis();
+
+#if BUILDFLAG(IS_WIN)
+  // Populates the antivirus product field.
+  void OnGotAntivirusProducts();
+#endif
+
+  raw_ptr<content::BrowserContext> browser_context_;
   std::unique_ptr<ClientDownloadRequest> request_;
   const scoped_refptr<BinaryFeatureExtractor> binary_feature_extractor_;
-  const std::unique_ptr<FileAnalyzer> file_analyzer_ =
-      std::make_unique<FileAnalyzer>(binary_feature_extractor_);
+  const std::unique_ptr<FileAnalyzer> file_analyzer_;
   base::CancelableTaskTracker request_tracker_;  // For HistoryService lookup.
 
   // The current URL for the WebContents that initiated the download, and its
   // referrer.
   TabUrls tab_urls_;
 
-  // The ultimate destination for the download.
-  const base::FilePath target_file_path_;
+  // The ultimate destination/filename for the download. This is used to
+  // determine the filetype and populate request fields requiring a
+  // human-readable filename. On platforms where the target file *path* does not
+  // contain file name but is instead a different identifier (e.g. a content-URI
+  // on Android), this should be populated with the file *name* i.e. a display
+  // name for the download.
+  const base::FilePath target_file_name_;
 
   // The current path to the file contents.
   const base::FilePath full_path_;
 
-  Callback callback_;
+  const std::optional<std::string> password_;
+
+  // Callback used for handling behavior specific to download items of file
+  // system accesses.
+  base::OnceCallback<void(const FileAnalyzer::Results&)> on_results_callback_;
+
+  CallbackWithDetails callback_;
+
+  RequestCreationDetails details_;
 
   base::WeakPtrFactory<DownloadRequestMaker> weakptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(DownloadRequestMaker);
 };
 
 }  // namespace safe_browsing

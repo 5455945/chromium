@@ -1,10 +1,11 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_CONTENT_SETTINGS_FAKE_OWNER_H_
 #define CHROME_BROWSER_UI_CONTENT_SETTINGS_FAKE_OWNER_H_
 
+#include "base/memory/raw_ref.h"
 #include "chrome/browser/ui/content_settings/content_setting_bubble_model.h"
 
 class FakeOwner : public ContentSettingBubbleModel::Owner {
@@ -25,12 +26,16 @@ class FakeOwner : public ContentSettingBubbleModel::Owner {
 
   void SetSelectedRadioOptionAndCommit(int option) {
     selected_radio_option_ = option;
-    model_.CommitChanges();
+    model_->CommitChanges();
   }
 
+  void CloseBubble() override;
+  bool was_closed() const { return was_closed_; }
+
  private:
-  ContentSettingBubbleModel& model_;
+  const raw_ref<ContentSettingBubbleModel> model_;
   int selected_radio_option_;
+  bool was_closed_ = false;
 };
 
 #endif  // CHROME_BROWSER_UI_CONTENT_SETTINGS_FAKE_OWNER_H_

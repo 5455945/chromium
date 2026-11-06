@@ -1,4 +1,4 @@
-(async function(testRunner) {
+(async function(/** @type {import('test_runner').TestRunner} */ testRunner) {
   const {page, session, dp} = await testRunner.startBlank(
       'Tests that Page.setInterceptFileChooserDialog works as expected');
 
@@ -63,6 +63,63 @@
         await new Promise(x => picker.oninput = x);
         LOG('selected files: ' + getSelectedFiles(picker));
       });
+    },
+
+    async function testShowPickerAPI() {
+      dp.Page.onceFileChooserOpened(event => {
+        testRunner.log('file chooser mode: ' + event.params.mode);
+        setInputFiles(event.params.backendNodeId, ['path1']);
+        return true;
+      });
+      await session.evaluateAsyncWithUserGesture(async () => {
+        const picker = document.createElement('input');
+        picker.type = 'file';
+        picker.showPicker();
+        await new Promise(x => picker.oninput = x);
+        LOG('selected files: ' + getSelectedFiles(picker));
+      });
+    },
+
+    async function testOpenFilePickerAPI() {
+      const [event] = await Promise.all([
+        dp.Page.onceFileChooserOpened(),
+        session.evaluateAsyncWithUserGesture(async () => {
+          try {
+            await window.showOpenFilePicker();
+          }
+          catch (e) {
+            LOG(e.message);
+          }
+        }),
+      ]);
+    },
+
+    async function testSaveFilePickerAPI() {
+      const [event] = await Promise.all([
+        dp.Page.onceFileChooserOpened(),
+        session.evaluateAsyncWithUserGesture(async () => {
+          try {
+            await window.showSaveFilePicker();
+          }
+          catch (e) {
+            LOG(e.message);
+          }
+        }),
+      ]);
+    },
+
+    async function testDirectoryPickerAPI() {
+      const [event] = await Promise.all([
+        dp.Page.onceFileChooserOpened(),
+        session.evaluateAsyncWithUserGesture(async () => {
+          try {
+            await window.showDirectoryPicker();
+          }
+          catch (e) {
+            LOG(e.message);
+          }
+        }),
+      ]);
     },
 
     async function testErrors() {

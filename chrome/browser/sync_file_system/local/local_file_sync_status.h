@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,9 +11,7 @@
 #include <set>
 #include <utility>
 
-#include "base/compiler_specific.h"
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
 #include "base/observer_list.h"
 #include "storage/browser/file_system/file_system_url.h"
 
@@ -38,16 +36,21 @@ class LocalFileSyncStatus {
 
   class Observer {
    public:
-    Observer() {}
-    virtual ~Observer() {}
+    Observer() = default;
+
+    Observer(const Observer&) = delete;
+    Observer& operator=(const Observer&) = delete;
+
+    virtual ~Observer() = default;
     virtual void OnSyncEnabled(const storage::FileSystemURL& url) = 0;
     virtual void OnWriteEnabled(const storage::FileSystemURL& url) = 0;
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(Observer);
   };
 
   LocalFileSyncStatus();
+
+  LocalFileSyncStatus(const LocalFileSyncStatus&) = delete;
+  LocalFileSyncStatus& operator=(const LocalFileSyncStatus&) = delete;
+
   ~LocalFileSyncStatus();
 
   // Increment writing counter for |url|.
@@ -96,9 +99,7 @@ class LocalFileSyncStatus {
   // If this flag is set sync process is running on the file.
   URLSet syncing_;
 
-  base::ObserverList<Observer>::Unchecked observer_list_;
-
-  DISALLOW_COPY_AND_ASSIGN(LocalFileSyncStatus);
+  base::ObserverList<Observer>::UncheckedAndDanglingUntriaged observer_list_;
 };
 
 }  // namespace sync_file_system

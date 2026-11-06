@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,14 +10,16 @@
 #include <algorithm>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/posix/eintr_wrapper.h"
+#include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/device_event_log/device_event_log.h"
+#include "services/device/public/cpp/device_features.h"
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #include <asm-generic/ioctls.h>
 #include <linux/serial.h>
 
@@ -36,9 +38,9 @@ struct termios2 {
 };
 }
 
-#endif  // defined(OS_LINUX) || defined(OS_CHROMEOS)
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 #include <IOKit/serial/ioss.h>
 #endif
 
@@ -68,7 +70,7 @@ bool BitrateToSpeedConstant(int bitrate, speed_t* speed) {
     BITRATE_TO_SPEED_CASE(9600)
     BITRATE_TO_SPEED_CASE(19200)
     BITRATE_TO_SPEED_CASE(38400)
-#if !defined(OS_MAC)
+#if !BUILDFLAG(IS_MAC)
     BITRATE_TO_SPEED_CASE(57600)
     BITRATE_TO_SPEED_CASE(115200)
     BITRATE_TO_SPEED_CASE(230400)
@@ -82,7 +84,7 @@ bool BitrateToSpeedConstant(int bitrate, speed_t* speed) {
 #undef BITRATE_TO_SPEED_CASE
 }
 
-#if !defined(OS_LINUX) && !defined(OS_CHROMEOS)
+#if !BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS)
 // Convert a known nominal speed into an integral bitrate. Returns |true|
 // if the conversion was successful and |false| otherwise.
 bool SpeedConstantToBitrate(speed_t speed, int* bitrate) {
@@ -129,26 +131,16 @@ void SerialIoHandlerPosix::ReadImpl() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(IsReadPending());
 
-  if (!file().IsValid()) {
-    QueueReadCompleted(0, mojom::SerialReceiveError::DISCONNECTED);
-    return;
-  }
-
   // Try to read immediately. This is needed because on some platforms
   // (e.g., OSX) there may not be a notification from the message loop
   // when the fd is ready to read immediately after it is opened. There
   // is no danger of blocking because the fd is opened with async flag.
-  AttemptRead(true);
+  AttemptRead();
 }
 
 void SerialIoHandlerPosix::WriteImpl() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(IsWritePending());
-
-  if (!file().IsValid()) {
-    QueueWriteCompleted(0, mojom::SerialSendError::DISCONNECTED);
-    return;
-  }
 
   EnsureWatchingWrites();
 }
@@ -156,17 +148,17 @@ void SerialIoHandlerPosix::WriteImpl() {
 void SerialIoHandlerPosix::CancelReadImpl() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   StopWatchingFileRead();
-  QueueReadCompleted(0, read_cancel_reason());
+  ReadCompleted(0, read_cancel_reason());
 }
 
 void SerialIoHandlerPosix::CancelWriteImpl() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   StopWatchingFileWrite();
-  QueueWriteCompleted(0, write_cancel_reason());
+  WriteCompleted(0, write_cancel_reason());
 }
 
 bool SerialIoHandlerPosix::ConfigurePortImpl() {
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   struct termios2 config;
   if (ioctl(file().GetPlatformFile(), TCGETS2, &config) < 0) {
 #else
@@ -183,17 +175,25 @@ bool SerialIoHandlerPosix::ConfigurePortImpl() {
   config.c_iflag |= PARMRK;
   config.c_oflag &= ~OPOST;
 
+  // Do not inherit non-canonical read semantics from the previous opener of
+  // this tty. With VMIN=0/VTIME=0 (as left behind by pyserial and others),
+  // Linux returns 0 from read() when no data is available even on a
+  // non-blocking fd, and AttemptRead() would misreport that as DEVICE_LOST.
+  // With VMIN=1 a non-blocking read returns EAGAIN instead.
+  config.c_cc[VMIN] = 1;
+  config.c_cc[VTIME] = 0;
+
   // CLOCAL causes the system to disregard the DCD signal state.
   // CREAD enables reading from the port.
   config.c_cflag |= (CLOCAL | CREAD);
 
   DCHECK(options().bitrate);
   speed_t bitrate_opt = B0;
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   bool need_iossiospeed = false;
 #endif
   if (BitrateToSpeedConstant(options().bitrate, &bitrate_opt)) {
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
     config.c_cflag &= ~CBAUD;
     config.c_cflag |= bitrate_opt;
 #else
@@ -202,11 +202,11 @@ bool SerialIoHandlerPosix::ConfigurePortImpl() {
 #endif
   } else {
     // Attempt to set a custom speed.
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
     config.c_cflag &= ~CBAUD;
     config.c_cflag |= CBAUDEX;
     config.c_ispeed = config.c_ospeed = options().bitrate;
-#elif defined(OS_MAC)
+#elif BUILDFLAG(IS_MAC)
     // cfsetispeed and cfsetospeed sometimes work for custom baud rates on OS
     // X but the IOSSIOSPEED ioctl is more reliable but has to be done after
     // the rest of the port parameters are set or else it will be overwritten.
@@ -274,7 +274,7 @@ bool SerialIoHandlerPosix::ConfigurePortImpl() {
     config.c_cflag &= ~CRTSCTS;
   }
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   if (ioctl(file().GetPlatformFile(), TCSETS2, &config) < 0) {
 #else
   if (tcsetattr(file().GetPlatformFile(), TCSANOW, &config) != 0) {
@@ -283,7 +283,7 @@ bool SerialIoHandlerPosix::ConfigurePortImpl() {
     return false;
   }
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   if (need_iossiospeed) {
     speed_t bitrate = options().bitrate;
     if (ioctl(file().GetPlatformFile(), IOSSIOSPEED, &bitrate) == -1) {
@@ -297,7 +297,15 @@ bool SerialIoHandlerPosix::ConfigurePortImpl() {
 }
 
 bool SerialIoHandlerPosix::PostOpen() {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+  // The base::File::FLAG_WIN_EXCLUSIVE_READ and
+  // base::File::FLAG_WIN_EXCLUSIVE_WRITE flags do nothing on POSIX-based
+  // systems. Request exclusive access to the terminal device here.
+  if (HANDLE_EINTR(ioctl(file().GetPlatformFile(), TIOCEXCL)) == -1) {
+    SERIAL_PLOG(DEBUG) << "Failed to put terminal in exclusive mode";
+    return false;
+  }
+
+#if BUILDFLAG(IS_CHROMEOS)
   // The Chrome OS permission broker does not open devices in async mode.
   return base::SetNonBlocking(file().GetPlatformFile());
 #else
@@ -317,7 +325,7 @@ SerialIoHandlerPosix::SerialIoHandlerPosix(
 
 SerialIoHandlerPosix::~SerialIoHandlerPosix() = default;
 
-void SerialIoHandlerPosix::AttemptRead(bool within_read) {
+void SerialIoHandlerPosix::AttemptRead() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (IsReadPending()) {
     int bytes_read = HANDLE_EINTR(read(file().GetPlatformFile(),
@@ -328,53 +336,34 @@ void SerialIoHandlerPosix::AttemptRead(bool within_read) {
         // The fd does not have data to read yet so continue waiting.
         EnsureWatchingReads();
       } else if (errno == ENXIO) {
-        RunReadCompleted(within_read, 0,
-                         mojom::SerialReceiveError::DEVICE_LOST);
         StopWatchingFileRead();
+        ReadCompleted(0, mojom::SerialReceiveError::DEVICE_LOST);
       } else {
         SERIAL_PLOG(DEBUG) << "Read failed";
-        RunReadCompleted(within_read, 0,
-                         mojom::SerialReceiveError::SYSTEM_ERROR);
+        ReadCompleted(0, mojom::SerialReceiveError::SYSTEM_ERROR);
       }
     } else if (bytes_read == 0) {
-      RunReadCompleted(within_read, 0, mojom::SerialReceiveError::DEVICE_LOST);
       StopWatchingFileRead();
+      ReadCompleted(0, mojom::SerialReceiveError::DEVICE_LOST);
     } else {
       bool break_detected = false;
       bool parity_error_detected = false;
-      int new_bytes_read =
+      size_t new_bytes_read =
           CheckReceiveError(pending_read_buffer(), bytes_read, break_detected,
                             parity_error_detected);
 
       if (break_detected) {
-        RunReadCompleted(within_read, new_bytes_read,
-                         mojom::SerialReceiveError::BREAK);
+        ReadCompleted(new_bytes_read, mojom::SerialReceiveError::BREAK);
       } else if (parity_error_detected) {
-        RunReadCompleted(within_read, new_bytes_read,
-                         mojom::SerialReceiveError::PARITY_ERROR);
+        ReadCompleted(new_bytes_read, mojom::SerialReceiveError::PARITY_ERROR);
       } else {
-        RunReadCompleted(within_read, new_bytes_read,
-                         mojom::SerialReceiveError::NONE);
+        ReadCompleted(new_bytes_read, mojom::SerialReceiveError::NONE);
       }
     }
   } else {
     // Stop watching the fd if we get notifications with no pending
     // reads or writes to avoid starving the message loop.
     StopWatchingFileRead();
-  }
-}
-
-void SerialIoHandlerPosix::RunReadCompleted(bool within_read,
-                                            int bytes_read,
-                                            mojom::SerialReceiveError error) {
-  if (within_read) {
-    // Stop watching the fd to avoid more reads until the queued ReadCompleted()
-    // completes and releases the pending_read_buffer.
-    StopWatchingFileRead();
-
-    QueueReadCompleted(bytes_read, error);
-  } else {
-    ReadCompleted(bytes_read, error);
   }
 }
 
@@ -385,9 +374,9 @@ void SerialIoHandlerPosix::OnFileCanWriteWithoutBlocking() {
                                            pending_write_buffer().data(),
                                            pending_write_buffer().size()));
     if (bytes_written < 0) {
-      if (errno == ENXIO) {
-        WriteCompleted(0, mojom::SerialSendError::DISCONNECTED);
+      if (errno == EIO || errno == ENXIO) {
         StopWatchingFileWrite();
+        WriteCompleted(0, mojom::SerialSendError::DISCONNECTED);
       } else {
         SERIAL_PLOG(DEBUG) << "Write failed";
         WriteCompleted(0, mojom::SerialSendError::SYSTEM_ERROR);
@@ -409,7 +398,7 @@ void SerialIoHandlerPosix::EnsureWatchingReads() {
     file_read_watcher_ = base::FileDescriptorWatcher::WatchReadable(
         file().GetPlatformFile(),
         base::BindRepeating(&SerialIoHandlerPosix::AttemptRead,
-                            base::Unretained(this), false));
+                            base::Unretained(this)));
   }
 }
 
@@ -486,34 +475,67 @@ mojom::SerialPortControlSignalsPtr SerialIoHandlerPosix::GetControlSignals()
 
 bool SerialIoHandlerPosix::SetControlSignals(
     const mojom::SerialHostControlSignals& signals) {
-  // Collect signals that need to be set or cleared on the port.
-  int set = 0;
-  int clear = 0;
-
-  if (signals.has_dtr) {
-    if (signals.dtr) {
-      set |= TIOCM_DTR;
-    } else {
-      clear |= TIOCM_DTR;
+  if (base::FeatureList::IsEnabled(features::kSerialSplitDtrAndRts)) {
+    // The order these signals are set is defined by
+    // https://wicg.github.io/serial/#dom-serialport-setsignals.
+    if (signals.has_dtr) {
+      const int dtr = TIOCM_DTR;
+      if (signals.dtr) {
+        if (ioctl(file().GetPlatformFile(), TIOCMBIS, &dtr) != 0) {
+          SERIAL_PLOG(DEBUG) << "Failed to set dataTerminalReady";
+          return false;
+        }
+      } else {
+        if (ioctl(file().GetPlatformFile(), TIOCMBIC, &dtr) != 0) {
+          SERIAL_PLOG(DEBUG) << "Failed to clear dataTerminalReady";
+          return false;
+        }
+      }
     }
-  }
-
-  if (signals.has_rts) {
-    if (signals.rts) {
-      set |= TIOCM_RTS;
-    } else {
-      clear |= TIOCM_RTS;
+    if (signals.has_rts) {
+      const int rts = TIOCM_RTS;
+      if (signals.rts) {
+        if (ioctl(file().GetPlatformFile(), TIOCMBIS, &rts) != 0) {
+          SERIAL_PLOG(DEBUG) << "Failed to set requestToSend";
+          return false;
+        }
+      } else {
+        if (ioctl(file().GetPlatformFile(), TIOCMBIC, &rts) != 0) {
+          SERIAL_PLOG(DEBUG) << "Failed to clear requestToSend";
+          return false;
+        }
+      }
     }
-  }
+  } else {
+    // Collect signals that need to be set or cleared on the port.
+    int set = 0;
+    int clear = 0;
 
-  if (set && ioctl(file().GetPlatformFile(), TIOCMBIS, &set) != 0) {
-    SERIAL_PLOG(DEBUG) << "Failed to set port control signals";
-    return false;
-  }
+    if (signals.has_dtr) {
+      if (signals.dtr) {
+        set |= TIOCM_DTR;
+      } else {
+        clear |= TIOCM_DTR;
+      }
+    }
 
-  if (clear && ioctl(file().GetPlatformFile(), TIOCMBIC, &clear) != 0) {
-    SERIAL_PLOG(DEBUG) << "Failed to clear port control signals";
-    return false;
+    if (signals.has_rts) {
+      if (signals.rts) {
+        set |= TIOCM_RTS;
+      } else {
+        clear |= TIOCM_RTS;
+      }
+    }
+
+    if (set && ioctl(file().GetPlatformFile(), TIOCMBIS, &set) != 0) {
+      SERIAL_PLOG(DEBUG) << "Failed to set port control signals";
+      return false;
+    }
+
+    if (clear && ioctl(file().GetPlatformFile(), TIOCMBIC, &clear) != 0) {
+      SERIAL_PLOG(DEBUG) << "Failed to clear port control signals";
+      return false;
+    }
   }
 
   if (signals.has_brk) {
@@ -534,7 +556,7 @@ bool SerialIoHandlerPosix::SetControlSignals(
 }
 
 mojom::SerialConnectionInfoPtr SerialIoHandlerPosix::GetPortInfo() const {
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   struct termios2 config;
   if (ioctl(file().GetPlatformFile(), TCGETS2, &config) < 0) {
 #else
@@ -546,7 +568,7 @@ mojom::SerialConnectionInfoPtr SerialIoHandlerPosix::GetPortInfo() const {
   }
 
   auto info = mojom::SerialConnectionInfo::New();
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   // Linux forces c_ospeed to contain the correct value, which is nice.
   info->bitrate = config.c_ospeed;
 #else
@@ -593,14 +615,14 @@ mojom::SerialConnectionInfoPtr SerialIoHandlerPosix::GetPortInfo() const {
 //
 // break/parity error sequences are removed from the byte stream
 // '\377' '\377' sequence is replaced with '\377'
-int SerialIoHandlerPosix::CheckReceiveError(base::span<uint8_t> buffer,
-                                            int bytes_read,
-                                            bool& break_detected,
-                                            bool& parity_error_detected) {
-  int new_bytes_read = num_chars_stashed_;
-  DCHECK_LE(new_bytes_read, 2);
+size_t SerialIoHandlerPosix::CheckReceiveError(base::span<uint8_t> buffer,
+                                               size_t bytes_read,
+                                               bool& break_detected,
+                                               bool& parity_error_detected) {
+  size_t new_bytes_read = num_chars_stashed_;
+  DCHECK_LE(new_bytes_read, 2u);
 
-  for (int i = 0; i < bytes_read; ++i) {
+  for (size_t i = 0; i < bytes_read; ++i) {
     uint8_t ch = buffer[i];
     if (new_bytes_read == 0) {
       chars_stashed_[0] = ch;
@@ -617,7 +639,7 @@ int SerialIoHandlerPosix::CheckReceiveError(base::span<uint8_t> buffer,
         }
         break;
       case ErrorDetectState::MARK_377_SEEN:
-        DCHECK_GE(new_bytes_read, 2);
+        DCHECK_GE(new_bytes_read, 2u);
         if (ch == 0) {
           error_detect_state_ = ErrorDetectState::MARK_0_SEEN;
         } else {
@@ -633,7 +655,7 @@ int SerialIoHandlerPosix::CheckReceiveError(base::span<uint8_t> buffer,
         }
         break;
       case ErrorDetectState::MARK_0_SEEN:
-        DCHECK_GE(new_bytes_read, 3);
+        DCHECK_GE(new_bytes_read, 3u);
         if (ch == 0) {
           break_detected = true;
           new_bytes_read -= 3;
@@ -665,7 +687,7 @@ int SerialIoHandlerPosix::CheckReceiveError(base::span<uint8_t> buffer,
       new_bytes_read - buffer.size() == 2) {
     // need to stash the last two characters
     if (new_bytes_read == 2) {
-      memcpy(tmp, chars_stashed_, new_bytes_read);
+      UNSAFE_TODO(memcpy(tmp, chars_stashed_.data(), new_bytes_read));
     } else {
       if (new_bytes_read == 3) {
         tmp[0] = chars_stashed_[1];
@@ -689,10 +711,11 @@ int SerialIoHandlerPosix::CheckReceiveError(base::span<uint8_t> buffer,
   new_bytes_read -= num_chars_stashed_;
   if (new_bytes_read > 2) {
     // right shift two bytes to store bytes from chars_stashed_[]
-    memmove(&buffer[2], &buffer[0], new_bytes_read - 2);
+    UNSAFE_TODO(memmove(&buffer[2], &buffer[0], new_bytes_read - 2));
   }
-  memcpy(&buffer[0], chars_stashed_, std::min(new_bytes_read, 2));
-  memcpy(chars_stashed_, tmp, num_chars_stashed_);
+  UNSAFE_TODO(memcpy(&buffer[0], chars_stashed_.data(),
+                     std::min<size_t>(new_bytes_read, 2)));
+  UNSAFE_TODO(memcpy(chars_stashed_.data(), tmp, num_chars_stashed_));
   return new_bytes_read;
 }
 

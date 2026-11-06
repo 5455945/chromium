@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,30 +7,69 @@
 
 #include <array>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
+#include <variant>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/containers/flat_set.h"
 #include "base/time/time.h"
-#include "components/sync/base/model_type.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-
-namespace base {
-class DictionaryValue;
-}
-
-namespace sync_pb {
-enum SharingSpecificFields_EnabledFeatures : int;
-enum SyncEnums_DeviceType : int;
-}  // namespace sync_pb
+#include "base/types/strong_alias.h"
+#include "components/desktop_to_mobile_promos/features.h"
+#include "components/sync/base/data_type.h"
 
 namespace syncer {
 
 // A class that holds information regarding the properties of a device.
 class DeviceInfo {
  public:
+  // Deprecated device type enum. New code should prefer OsType + FormFactor.
+  // Maps to sync_pb::SyncEnums::DeviceType.
+  // LINT.IfChange(DeviceType)
+  enum class DeviceType {
+    kUnset,
+    kWindows,
+    kMac,
+    kLinux,
+    kChromeOS,
+    kOther,
+    kPhone,
+    kTablet,
+  };
+  // LINT.ThenChange(/components/sync/protocol/sync_enums.proto:DeviceType)
+
+  // Type of message sent to the receiving device for the send tab to self
+  // feature. Maps to sync_pb::SyncEnums::SendTabReceivingType.
+  // LINT.IfChange(SendTabReceivingType)
+  enum class SendTabReceivingType {
+    // Send tab notification can be received as an in-app message. This is the
+    // default value.
+    kChromeOrUnspecified,
+    // Send tab notification can be received as a push notification and/or
+    // in-app message.
+    kChromeAndPushNotification,
+  };
+  // LINT.ThenChange(/components/sync/protocol/sync_enums.proto:SendTabReceivingType)
+
+  // Features that can be enabled for sharing on a device.
+  // Maps to sync_pb::SharingSpecificFields::EnabledFeatures.
+  // WARNING: Do not renumber these values. They are persisted to prefs
+  // (see SharingSyncPreference) and must remain stable.
+  // LINT.IfChange(SharingFeature)
+  enum class SharingFeature {
+    kUnknown = 0,
+    kSmsFetcher = 3,
+    kRemoteCopy = 4,
+    // kClickToCallV2 = 7,  // Deprecated, do not reuse.
+    // kSharedClipboardV2 = 8,  // Deprecated, do not reuse.
+    kOptimizationGuidePushNotification = 9,
+    kOneTimeTokenBackendNotification = 10,
+    kGlicExperimentalTriggering = 11,
+    kBrowserActuator = 12,
+  };
+  // LINT.ThenChange(/components/sync/protocol/device_info_specifics.proto:EnabledFeatures)
+
   // A struct that holds information regarding to FCM web push.
   struct SharingTargetInfo {
     // FCM registration token of device.
@@ -47,29 +86,35 @@ class DeviceInfo {
 
   // A struct that holds information regarding to Sharing features.
   struct SharingInfo {
-    SharingInfo(SharingTargetInfo vapid_target_info,
-                SharingTargetInfo sharing_target_info,
-                std::set<sync_pb::SharingSpecificFields_EnabledFeatures>
-                    enabled_features);
+    SharingInfo(SharingTargetInfo sharing_target_info,
+                std::string chime_representative_target_id,
+                std::set<SharingFeature> enabled_features);
     SharingInfo(const SharingInfo& other);
     SharingInfo(SharingInfo&& other);
     SharingInfo& operator=(const SharingInfo& other);
     ~SharingInfo();
 
-    // Target info using VAPID key.
-    // TODO(crbug.com/1012226): Deprecate when VAPID migration is over.
-    SharingTargetInfo vapid_target_info;
-
     // Target info using Sharing sender ID.
     SharingTargetInfo sender_id_target_info;
 
+    // Identifier used to send messages to a specific device through Chime.
+    std::string chime_representative_target_id;
+
     // Set of Sharing features enabled on the device.
-    std::set<sync_pb::SharingSpecificFields_EnabledFeatures> enabled_features;
+    std::set<SharingFeature> enabled_features;
 
     bool operator==(const SharingInfo& other) const;
   };
 
   struct PhoneAsASecurityKeyInfo {
+    // NotReady indicates that more time is needed to calculate the
+    // PhoneAsASecurityKeyInfo.
+    using NotReady = base::StrongAlias<class NotReadyTag, std::monostate>;
+    // NoSupport indicates that phone-as-a-security-key cannot be supported.
+    using NoSupport = base::StrongAlias<class NoSupportTag, std::monostate>;
+    using StatusOrInfo =
+        std::variant<NotReady, NoSupport, PhoneAsASecurityKeyInfo>;
+
     PhoneAsASecurityKeyInfo();
     PhoneAsASecurityKeyInfo(const PhoneAsASecurityKeyInfo& other);
     PhoneAsASecurityKeyInfo(PhoneAsASecurityKeyInfo&& other);
@@ -97,23 +142,110 @@ class DeviceInfo {
     std::array<uint8_t, 65> peer_public_key_x962;
   };
 
-  DeviceInfo(const std::string& guid,
-             const std::string& client_name,
-             const std::string& chrome_version,
-             const std::string& sync_user_agent,
-             const sync_pb::SyncEnums_DeviceType device_type,
-             const std::string& signin_scoped_device_id,
-             const std::string& manufacturer_name,
-             const std::string& model_name,
-             const std::string& full_hardware_class,
-             base::Time last_updated_timestamp,
-             base::TimeDelta pulse_interval,
-             bool send_tab_to_self_receiving_enabled,
-             const absl::optional<SharingInfo>& sharing_info,
-             const absl::optional<PhoneAsASecurityKeyInfo>& paask_info,
-             const std::string& fcm_registration_token,
-             const ModelTypeSet& interested_data_types);
+  // Holds the device's public key used for Personal Context HPKE payload
+  // encryption.
+  struct PersonalContextInfo {
+    // NotReady indicates that more time is needed to calculate the
+    // PersonalContextInfo.
+    using NotReady =
+        base::StrongAlias<class PersonalContextNotReadyTag, std::monostate>;
+    // NotEligible indicates that the device/profile is not eligible for
+    // Personal Context encryption.
+    using NotEligible =
+        base::StrongAlias<class PersonalContextNotEligibleTag, std::monostate>;
+    using StatusOrInfo =
+        std::variant<NotReady, NotEligible, PersonalContextInfo>;
+
+    // Serialized proto bytes of tink.Keyset.
+    std::vector<uint8_t> serialized_tink_keyset;
+
+    // Whether the device supports any SPII entity types (e.g. passport or
+    // driver's license).
+    bool eligible_for_spii = false;
+
+    friend bool operator==(const PersonalContextInfo&,
+                           const PersonalContextInfo&) = default;
+  };
+
+  //
+  // A Java counterpart will be generated for this enum.
+  // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.sync_device_info
+  //
+  enum class OsType {
+    kUnknown = 0,
+    kWindows = 1,
+    kMac = 2,
+    kLinux = 3,
+    kChromeOsAsh = 4,
+    kAndroid = 5,
+    kIOS = 6,
+    kChromeOsLacros = 7,
+    kFuchsia = 8
+  };
+
+  //
+  // A Java counterpart will be generated for this enum.
+  // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.sync_device_info
+  //
+  enum class FormFactor {
+    kUnknown = 0,
+    kDesktop = 1,
+    kPhone = 2,
+    kTablet = 3,
+    kAutomotive = 4,
+    kWearable = 5,
+    kTv = 6,
+  };
+
+  // Tracks the per-device user opt-in and readiness state for the Glic
+  // experimental triggering feature.
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  // LINT.IfChange(GlicExperimentalTriggeringState)
+  enum class GlicExperimentalTriggeringState {
+    kUnavailable = 0,
+    kNeedsOptIn = 1,
+    kReady = 2,
+    kMaxValue = kReady,
+  };
+  // LINT.ThenChange(//components/sync/protocol/sync_enums.proto:GlicExperimentalTriggeringState,
+  // //tools/metrics/histograms/metadata/glic/enums.xml:GlicExperimentalTriggeringState)
+
+  DeviceInfo(
+      const std::string& guid,
+      const std::string& client_name,
+      const std::string& chrome_version,
+      const std::string& sync_user_agent,
+      DeviceType device_type,
+      OsType os_type,
+      FormFactor form_factor,
+      const std::string& signin_scoped_device_id,
+      const std::string& manufacturer_name,
+      const std::string& model_name,
+      std::optional<std::string> server_determined_model_name,
+      const std::string& full_hardware_class,
+      base::Time last_updated_timestamp,
+      base::TimeDelta pulse_interval,
+      SendTabReceivingType send_tab_to_self_receiving_type,
+      const std::optional<SharingInfo>& sharing_info,
+      const std::optional<PhoneAsASecurityKeyInfo>& paask_info,
+      const std::string& fcm_registration_token,
+      const DataTypeSet& interested_data_types,
+      std::optional<base::Time> auto_sign_out_last_signin_timestamp,
+      bool desktop_to_ios_promo_receiving_enabled,
+      const MobilePromoOnDesktopPromoTypeSet&
+          desktop_to_ios_promo_receiving_types,
+      GlicExperimentalTriggeringState glic_experimental_triggering_state,
+      std::optional<int> glic_experimental_triggering_version,
+      base::flat_set<std::string> glic_experimental_triggering_capabilities,
+      std::optional<std::string> android_os_build_fingerprint_prefix,
+      std::optional<PersonalContextInfo> personal_context_info);
+
+  DeviceInfo& operator=(const DeviceInfo&) = delete;
+
   ~DeviceInfo();
+
+  std::unique_ptr<DeviceInfo> DeepCopyForTesting() const;
 
   // Sync specific unique identifier for the device. Note if a device
   // is wiped and sync is set up again this id WILL be different.
@@ -136,7 +268,13 @@ class DeviceInfo {
   const std::string& public_id() const;
 
   // Device Type.
-  sync_pb::SyncEnums_DeviceType device_type() const;
+  DeviceType device_type() const;
+
+  // Returns the OS of this device.
+  OsType os_type() const;
+
+  // Returns the device type (form-factor).
+  FormFactor form_factor() const;
 
   // Device_id that is stable until user signs out. This device_id is used for
   // annotating login scoped refresh token.
@@ -153,6 +291,9 @@ class DeviceInfo {
   // when UMA is disabled.
   const std::string& full_hardware_class() const;
 
+  // Prefix of the android.os.Build.FINGERPRINT. Populated on Android.
+  const std::optional<std::string>& android_os_build_fingerprint_prefix() const;
+
   // Returns the time at which this device was last updated to the sync servers.
   base::Time last_updated_timestamp() const;
 
@@ -161,25 +302,45 @@ class DeviceInfo {
   // apps on Android).
   base::TimeDelta pulse_interval() const;
 
-  // Whether the receiving side of the SendTabToSelf feature is enabled.
-  bool send_tab_to_self_receiving_enabled() const;
+  // Enabled message types for the receiving side of the SendTabToSelf feature.
+  // If not set, the in-app message type will be assumed.
+  SendTabReceivingType send_tab_to_self_receiving_type() const;
 
   // Returns Sharing related info of the device.
-  const absl::optional<SharingInfo>& sharing_info() const;
+  const std::optional<SharingInfo>& sharing_info() const;
 
-  const absl::optional<PhoneAsASecurityKeyInfo>& paask_info() const;
+  const std::optional<PhoneAsASecurityKeyInfo>& paask_info() const;
+
+  const std::optional<PersonalContextInfo>& personal_context_info() const;
 
   // Returns the FCM registration token for sync invalidations.
   const std::string& fcm_registration_token() const;
 
   // Returns the data types for which this device receives invalidations.
-  const ModelTypeSet& interested_data_types() const;
+  const DataTypeSet& interested_data_types() const;
 
-  // Gets the OS in string form.
-  std::string GetOSString() const;
+  // Returns the time at which this device was last signed into the device.
+  std::optional<base::Time> auto_sign_out_last_signin_timestamp() const;
 
-  // Gets the device type in string form.
-  std::string GetDeviceTypeString() const;
+  // Whether the receiving side of the Desktop to iOS Promo feature is enabled.
+  // TODO(crbug.com/438769954): Remove these fields once kMobilePromoOnDesktop
+  // is cleaned up.
+  bool desktop_to_ios_promo_receiving_enabled() const;
+  const MobilePromoOnDesktopPromoTypeSet& desktop_to_ios_promo_receiving_types()
+      const;
+
+  // Returns the experimental triggering state for Glic.
+  GlicExperimentalTriggeringState glic_experimental_triggering_state() const;
+
+  // Returns the capability version of the experimental triggering protocol for
+  // Glic, or std::nullopt if unavailable.
+  std::optional<int> glic_experimental_triggering_version() const;
+
+  // Returns the capabilities supported for Glic experimental triggering.
+  const base::flat_set<std::string>& glic_experimental_triggering_capabilities()
+      const;
+
+  const std::optional<std::string>& server_determined_model_name() const;
 
   // Apps can set ids for a device that is meaningful to them but
   // not unique enough so the user can be tracked. Exposing |guid|
@@ -189,23 +350,43 @@ class DeviceInfo {
 
   void set_full_hardware_class(const std::string& full_hardware_class);
 
-  void set_send_tab_to_self_receiving_enabled(bool new_value);
+  void set_send_tab_to_self_receiving_type(SendTabReceivingType new_value);
 
-  void set_sharing_info(const absl::optional<SharingInfo>& sharing_info);
+  void set_sharing_info(const std::optional<SharingInfo>& sharing_info);
 
-  void set_paask_info(PhoneAsASecurityKeyInfo&& paask_info);
+  void set_paask_info(std::optional<PhoneAsASecurityKeyInfo>&& paask_info);
+
+  void set_personal_context_info(
+      std::optional<PersonalContextInfo> personal_context_info);
 
   void set_client_name(const std::string& client_name);
 
   void set_fcm_registration_token(const std::string& fcm_token);
 
-  void set_interested_data_types(const ModelTypeSet& data_types);
+  void set_interested_data_types(const DataTypeSet& data_types);
 
-  // Converts the |DeviceInfo| values to a JS friendly DictionaryValue,
-  // which extension APIs can expose to third party apps.
-  std::unique_ptr<base::DictionaryValue> ToValue() const;
+  void set_auto_sign_out_last_signin_timestamp(std::optional<base::Time> time);
+
+  void set_desktop_to_ios_promo_receiving_enabled(bool new_value);
+  void set_desktop_to_ios_promo_receiving_types(
+      const MobilePromoOnDesktopPromoTypeSet& new_types);
+
+  // Sets the experimental triggering state for Glic.
+  void set_glic_experimental_triggering_state(
+      GlicExperimentalTriggeringState state);
+
+  // Sets the capability version of the experimental triggering protocol for
+  // Glic. Pass std::nullopt if unavailable.
+  void set_glic_experimental_triggering_version(std::optional<int> version);
+
+  // Sets the capabilities supported for Glic experimental triggering.
+  void set_glic_experimental_triggering_capabilities(
+      const base::flat_set<std::string>& capabilities);
 
  private:
+  // Used by DeepCopyForTesting().
+  DeviceInfo(const DeviceInfo& other);
+
   const std::string guid_;
 
   std::string client_name_;
@@ -214,7 +395,11 @@ class DeviceInfo {
 
   const std::string sync_user_agent_;
 
-  const sync_pb::SyncEnums_DeviceType device_type_;
+  const DeviceType device_type_;
+
+  const OsType os_type_;
+
+  const FormFactor form_factor_;
 
   const std::string signin_scoped_device_id_;
 
@@ -228,29 +413,58 @@ class DeviceInfo {
 
   const std::string model_name_;
 
+  const std::optional<std::string> server_determined_model_name_;
+
   std::string full_hardware_class_;
+
+  const std::optional<std::string> android_os_build_fingerprint_prefix_;
 
   const base::Time last_updated_timestamp_;
 
   const base::TimeDelta pulse_interval_;
 
-  bool send_tab_to_self_receiving_enabled_;
+  SendTabReceivingType send_tab_to_self_receiving_type_;
 
-  absl::optional<SharingInfo> sharing_info_;
+  std::optional<SharingInfo> sharing_info_;
 
-  absl::optional<PhoneAsASecurityKeyInfo> paask_info_;
+  std::optional<PhoneAsASecurityKeyInfo> paask_info_;
 
   // An FCM registration token obtained by sync invalidations service.
   std::string fcm_registration_token_;
 
   // Data types for which this device receives invalidations.
-  ModelTypeSet interested_data_types_;
+  DataTypeSet interested_data_types_;
+
+  std::optional<base::Time> auto_sign_out_last_signin_timestamp_;
+
+  // Tracks whether the Desktop to iOS Promo feature is enabled on the device.
+  // `desktop_to_ios_promo_receiving_enabled_` is maintained for backwards
+  // compatibility with older iOS clients that do not yet support granular
+  // promo types. It now acts as a legacy fallback representing the original
+  // promos: kAllPromos, kAutofillPromo (Passwords), and kESBPromo.
+  // `desktop_to_ios_promo_receiving_types_` specifies the exact
+  // types of promos the device is eligible to receive.
+  // TODO(crbug.com/438769954): Remove the boolean field once the granular
+  // promo types feature is fully launched.
+  bool desktop_to_ios_promo_receiving_enabled_;
+  MobilePromoOnDesktopPromoTypeSet desktop_to_ios_promo_receiving_types_;
+
+  // The opt-in state of Glic experimental triggering for the device.
+  GlicExperimentalTriggeringState glic_experimental_triggering_state_;
+
+  // The version of the Glic experimental triggering protocol supported by the
+  // device.
+  std::optional<int> glic_experimental_triggering_version_;
+
+  // The capabilities supported for Glic experimental triggering.
+  base::flat_set<std::string> glic_experimental_triggering_capabilities_;
+
+  std::optional<PersonalContextInfo> personal_context_info_;
 
   // NOTE: when adding a member, don't forget to update
-  // |StoredDeviceInfoStillAccurate| in device_info_sync_bridge.cc or else
-  // changes in that member might not trigger uploads of updated DeviceInfos.
-
-  DISALLOW_COPY_AND_ASSIGN(DeviceInfo);
+  // |IsStoredLocalDeviceInfoStillAccurate| in device_info_sync_bridge.cc or
+  // else changes in that member might not trigger uploads of updated
+  // DeviceInfos.
 };
 
 }  // namespace syncer

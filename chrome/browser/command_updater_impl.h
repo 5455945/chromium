@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,14 @@
 #define CHROME_BROWSER_COMMAND_UPDATER_IMPL_H_
 
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/command_updater.h"
-#include "base/macros.h"
-#include "ui/base/window_open_disposition.h"
+#include "ui/actions/actions.h"
+#include "ui/base/mojom/window_open_disposition.mojom-forward.h"
 
 class CommandObserver;
 class CommandUpdaterDelegate;
@@ -29,42 +31,42 @@ class CommandUpdaterImpl : public CommandUpdater {
   // Create a CommandUpdaterImpl with |delegate| to handle the execution of
   // specific commands.
   explicit CommandUpdaterImpl(CommandUpdaterDelegate* delegate);
+
+  CommandUpdaterImpl(const CommandUpdaterImpl&) = delete;
+  CommandUpdaterImpl& operator=(const CommandUpdaterImpl&) = delete;
+
   ~CommandUpdaterImpl() override;
 
   // Overriden from CommandUpdater:
   bool SupportsCommand(int id) const override;
   bool IsCommandEnabled(int id) const override;
-  bool ExecuteCommand(
-      int id,
-      base::TimeTicks time_stamp = base::TimeTicks::Now()) override;
-  bool ExecuteCommandWithDisposition(
-      int id,
-      WindowOpenDisposition disposition,
-      base::TimeTicks time_stamp = base::TimeTicks::Now()) override;
   void AddCommandObserver(int id, CommandObserver* observer) override;
   void RemoveCommandObserver(int id, CommandObserver* observer) override;
   void RemoveCommandObserver(CommandObserver* observer) override;
   bool UpdateCommandEnabled(int id, bool state) override;
-
-  void DisableAllCommands();
-  std::vector<int> GetAllIds();
+  void DisableAllCommands() override;
+  std::vector<int> GetAllIds() const override;
 
  private:
   // A piece of data about a command - whether or not it is enabled, and a list
   // of objects that observe the enabled state of this command.
-  class Command;
+  struct Command;
+
+  bool ExecuteCommandWithDispositionAndContext(
+      int id,
+      ui::mojom::WindowOpenDisposition disposition,
+      std::optional<actions::ActionInvocationContext> context,
+      base::TimeTicks time_stamp) override;
 
   // Get a Command node for a given command ID, creating an entry if it doesn't
   // exist if desired.
   Command* GetCommand(int id, bool create);
 
   // The delegate is responsible for executing commands.
-  CommandUpdaterDelegate* delegate_;
+  raw_ptr<CommandUpdaterDelegate> delegate_;
 
   // This is a map of command IDs to states and observer lists
   std::unordered_map<int, std::unique_ptr<Command>> commands_;
-
-  DISALLOW_COPY_AND_ASSIGN(CommandUpdaterImpl);
 };
 
 #endif  // CHROME_BROWSER_COMMAND_UPDATER_IMPL_H_

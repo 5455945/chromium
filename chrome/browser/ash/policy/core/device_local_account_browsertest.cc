@@ -1,121 +1,129 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ash/policy/core/device_local_account.h"
+
 #include <stddef.h>
 
+#include <array>
 #include <map>
 #include <memory>
 #include <set>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "ash/constants/ash_paths.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
+#include "ash/display/display_prefs.h"
+#include "ash/display/screen_orientation_controller_test_api.h"
 #include "ash/public/cpp/login_screen_test_api.h"
 #include "ash/shell.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "ash/system/session/logout_confirmation_controller.h"
 #include "ash/system/session/logout_confirmation_dialog.h"
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/check_deref.h"
 #include "base/command_line.h"
-#include "base/cxx17_backports.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
-#include "base/json/json_reader.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/i18n/legacy_language_tag_helpers.h"
 #include "base/json/json_writer.h"
 #include "base/location.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/scoped_observation.h"
-#include "base/sequenced_task_runner.h"
-#include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
-#include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/lock.h"
+#include "base/test/gtest_tags.h"
+#include "base/test/scoped_feature_list.h"
+#include "base/test/simple_test_clock.h"
+#include "base/test/test_future.h"
 #include "base/threading/thread_restrictions.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/time/time.h"
 #include "base/values.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
+#include "chrome/browser/apps/app_service/chrome_app_deprecation/chrome_app_deprecation.h"
 #include "chrome/browser/apps/app_service/launch_utils.h"
+#include "chrome/browser/ash/extensions/external_cache.h"
 #include "chrome/browser/ash/login/existing_user_controller.h"
+#include "chrome/browser/ash/login/helper.h"
 #include "chrome/browser/ash/login/screens/base_screen.h"
-#include "chrome/browser/ash/login/screens/terms_of_service_screen.h"
+#include "chrome/browser/ash/login/session/chrome_session_manager.h"
+#include "chrome/browser/ash/login/session/session_length_limiter.h"
 #include "chrome/browser/ash/login/session/user_session_manager.h"
 #include "chrome/browser/ash/login/session/user_session_manager_test_api.h"
 #include "chrome/browser/ash/login/signin_specifics.h"
 #include "chrome/browser/ash/login/test/js_checker.h"
-#include "chrome/browser/ash/login/test/local_policy_test_server_mixin.h"
+#include "chrome/browser/ash/login/test/login_or_lock_screen_visible_waiter.h"
 #include "chrome/browser/ash/login/test/oobe_base_test.h"
 #include "chrome/browser/ash/login/test/oobe_screen_waiter.h"
+#include "chrome/browser/ash/login/test/oobe_screens_utils.h"
+#include "chrome/browser/ash/login/test/profile_prepared_waiter.h"
 #include "chrome/browser/ash/login/test/session_manager_state_waiter.h"
 #include "chrome/browser/ash/login/test/test_predicate_waiter.h"
 #include "chrome/browser/ash/login/test/webview_content_extractor.h"
-#include "chrome/browser/ash/login/ui/login_display_host.h"
-#include "chrome/browser/ash/login/ui/webui_login_view.h"
-#include "chrome/browser/ash/login/users/avatar/user_image_manager.h"
-#include "chrome/browser/ash/login/users/avatar/user_image_manager_impl.h"
 #include "chrome/browser/ash/login/users/avatar/user_image_manager_test_util.h"
-#include "chrome/browser/ash/login/users/chrome_user_manager.h"
-#include "chrome/browser/ash/login/users/chrome_user_manager_impl.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
-#include "chrome/browser/ash/policy/core/browser_policy_connector_chromeos.h"
-#include "chrome/browser/ash/policy/core/device_local_account.h"
+#include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
+#include "chrome/browser/ash/policy/core/device_local_account_policy_broker.h"
 #include "chrome/browser/ash/policy/core/device_local_account_policy_service.h"
 #include "chrome/browser/ash/policy/core/device_policy_cros_browser_test.h"
+#include "chrome/browser/ash/policy/external_data/cloud_external_data_manager_base_test_util.h"
+#include "chrome/browser/ash/policy/test_support/embedded_policy_test_server_mixin.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/ash/system/timezone_util.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
-#include "chrome/browser/chrome_notification_types.h"
-#include "chrome/browser/chromeos/extensions/device_local_account_external_policy_loader.h"
-#include "chrome/browser/chromeos/extensions/external_cache.h"
-#include "chrome/browser/chromeos/policy/external_data/cloud_external_data_manager_base_test_util.h"
-#include "chrome/browser/chromeos/policy/networking/device_network_configuration_updater.h"
-#include "chrome/browser/extensions/crx_installer.h"
+#include "chrome/browser/chromeos/extensions/external_loader/device_local_account_external_policy_loader.h"
 #include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/extensions/scoped_test_mv2_enabler.h"
 #include "chrome/browser/extensions/updater/chromeos_extension_cache_delegate.h"
 #include "chrome/browser/extensions/updater/extension_cache_impl.h"
 #include "chrome/browser/extensions/updater/local_extension_cache.h"
-#include "chrome/browser/lifetime/application_lifetime.h"
+#include "chrome/browser/metrics/chrome_metrics_service_accessor.h"
 #include "chrome/browser/net/profile_network_context_service.h"
 #include "chrome/browser/net/profile_network_context_service_test_utils.h"
+#include "chrome/browser/policy/networking/device_network_configuration_updater_ash.h"
+#include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/prefs/session_startup_pref.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_manager_observer.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/browser_list_observer.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/webui/chromeos/login/gaia_screen_handler.h"
-#include "chrome/browser/ui/webui/chromeos/login/oobe_ui.h"
-#include "chrome/browser/ui/webui/chromeos/login/signin_screen_handler.h"
-#include "chrome/browser/ui/webui/chromeos/login/terms_of_service_screen_handler.h"
+#include "chrome/browser/ui/webui/ash/login/oobe_ui.h"
+#include "chrome/browser/ui/webui/ash/login/terms_of_service_screen_handler.h"
+#include "chrome/browser/unified_consent/unified_consent_service_factory.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/common/extensions/extension_constants.h"
-#include "chrome/common/pref_names.h"
-#include "chrome/grit/chromium_strings.h"
-#include "chrome/grit/generated_resources.h"
-#include "chromeos/dbus/session_manager/fake_session_manager_client.h"
-#include "chromeos/login/auth/mock_auth_status_consumer.h"
-#include "chromeos/login/auth/user_context.h"
-#include "chromeos/network/policy_certificate_provider.h"
-#include "chromeos/settings/timezone_settings.h"
+#include "chrome/test/base/ui_test_utils.h"
+#include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
+#include "chromeos/ash/components/login/auth/public/user_context.h"
+#include "chromeos/ash/components/network/policy_certificate_provider.h"
+#include "chromeos/ash/components/policy/device_local_account/device_local_account_type.h"
+#include "chromeos/ash/components/settings/timezone_settings.h"
+#include "chromeos/ash/components/timezone/timezone_util.h"
+#include "chromeos/components/mgs/managed_guest_session_utils.h"
 #include "components/crx_file/crx_verifier.h"
+#include "components/metrics_services_manager/metrics_services_manager.h"
+#include "components/policy/core/common/cloud/cloud_policy_client.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/cloud_policy_core.h"
 #include "components/policy/core/common/cloud/cloud_policy_store.h"
@@ -124,93 +132,84 @@
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/policy_namespace.h"
 #include "components/policy/core/common/policy_service.h"
-#include "components/policy/core/common/policy_switches.h"
+#include "components/policy/core/common/policy_types.h"
 #include "components/policy/policy_constants.h"
 #include "components/policy/proto/chrome_device_policy.pb.h"
-#include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_service.h"
+#include "components/prefs/scoped_user_pref_update.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/ukm/ukm_test_helper.h"
+#include "components/unified_consent/unified_consent_service.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
 #include "components/user_manager/user_type.h"
-#include "content/public/browser/notification_details.h"
-#include "content/public/browser/notification_service.h"
-#include "content/public/browser/notification_source.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/browser/web_ui.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_utils.h"
-#include "crypto/rsa_private_key.h"
 #include "extensions/browser/app_window/app_window.h"
 #include "extensions/browser/app_window/app_window_registry.h"
 #include "extensions/browser/app_window/native_app_window.h"
+#include "extensions/browser/crx_installer.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
-#include "extensions/browser/install/crx_install_error.h"
 #include "extensions/browser/management_policy.h"
-#include "extensions/browser/notification_types.h"
 #include "extensions/browser/sandboxed_unpacker.h"
-#include "extensions/browser/test_extension_registry_observer.h"
-#include "extensions/common/constants.h"
+#include "extensions/browser/updater/extension_downloader_test_helper.h"
 #include "extensions/common/extension.h"
-#include "extensions/common/extension_builder.h"
 #include "net/base/url_util.h"
 #include "net/http/http_status_code.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
-#include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/icu/source/common/unicode/locid.h"
-#include "ui/base/ime/chromeos/extension_ime_util.h"
-#include "ui/base/ime/chromeos/input_method_descriptor.h"
-#include "ui/base/ime/chromeos/input_method_manager.h"
-#include "ui/base/ime/chromeos/input_method_util.h"
+#include "third_party/metrics_proto/ukm/entry.pb.h"
+#include "third_party/metrics_proto/ukm/report.pb.h"
+#include "ui/aura/test/window_destroyed_waiter.h"
+#include "ui/base/ime/ash/extension_ime_util.h"
+#include "ui/base/ime/ash/input_method_descriptor.h"
+#include "ui/base/ime/ash/input_method_manager.h"
+#include "ui/base/ime/ash/input_method_util.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/window_open_disposition.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
 #include "ui/display/display.h"
+#include "ui/display/manager/display_manager.h"
+#include "ui/display/manager/managed_display_info.h"
 #include "ui/display/screen.h"
+#include "ui/display/test/display_manager_test_api.h"
+#include "ui/display/types/display_constants.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/views/widget/widget.h"
 #include "url/gurl.h"
 
-namespace em = enterprise_management;
-
-using chromeos::test::GetOobeElementPath;
-using testing::_;
-using testing::InvokeWithoutArgs;
-using testing::Return;
+using base::test::TestFuture;
+using extensions::CrxInstallError;
 
 namespace policy {
 
 namespace {
+
+namespace em = ::enterprise_management;
+
+using ::ash::test::GetOobeElementPath;
 
 const char16_t kDomain[] = u"example.com";
 const char kAccountId1[] = "dla1@example.com";
 const char kAccountId2[] = "dla2@example.com";
 const char kDisplayName1[] = "display name 1";
 const char kDisplayName2[] = "display name 2";
-const char* const kStartupURLs[] = {
+constexpr auto kStartupURLs = std::to_array<std::string_view>({
     "chrome://policy",
     "chrome://about",
-};
+});
 const char kExistentTermsOfServicePath[] = "chromeos/enterprise/tos.txt";
 const char kNonexistentTermsOfServicePath[] = "chromeos/enterprise/tos404.txt";
 const char kRelativeUpdateURL[] = "/service/update2/crx";
-const char kUpdateManifestHeader[] =
-    "<?xml version='1.0' encoding='UTF-8'?>\n"
-    "<gupdate xmlns='http://www.google.com/update2/response' protocol='2.0'>\n";
-const char kUpdateManifestTemplate[] =
-    "  <app appid='%s'>\n"
-    "    <updatecheck codebase='%s' version='%s' />\n"
-    "  </app>\n";
-const char kUpdateManifestFooter[] = "</gupdate>\n";
 const char kHostedAppID[] = "kbmnembihfiondgfjekmnmcbddelicoi";
 const char kHostedAppCRXPath[] = "extensions/hosted_app.crx";
 const char kHostedAppVersion[] = "1.0.0.0";
 const char kGoodExtensionID[] = "ldnnhddmnhbkjipkidpdiheffobcpfmf";
-const char16_t kGoodExtensionID16[] = u"ldnnhddmnhbkjipkidpdiheffobcpfmf";
 const char kGoodExtensionCRXPath[] = "extensions/good.crx";
 const char kGoodExtensionVersion[] = "1.0";
 const char kPackagedAppCRXPath[] = "extensions/platform_apps/app_window_2.crx";
@@ -221,21 +220,21 @@ const char kShowManagedStorageVersion[] = "1.0";
 const char kExternalData[] = "External data";
 const char kExternalDataPath[] = "/external";
 
-const char* const kSingleRecommendedLocale[] = {
+constexpr auto kSingleRecommendedLocale = std::to_array<std::string_view>({
     "el",
-};
-const char* const kRecommendedLocales1[] = {
+});
+constexpr auto kRecommendedLocales1 = std::to_array<std::string_view>({
     "pl",
     "et",
     "en-US",
-};
-const char* const kRecommendedLocales2[] = {
+});
+constexpr auto kRecommendedLocales2 = std::to_array<std::string_view>({
     "fr",
     "nl",
-};
-const char* const kInvalidRecommendedLocale[] = {
+});
+constexpr auto kInvalidRecommendedLocale = std::to_array<std::string_view>({
     "xx",
-};
+});
 const char kPublicSessionLocale[] = "de";
 const char kPublicSessionInputMethodIDTemplate[] = "_comp_ime_%sxkb:de:neo:ger";
 
@@ -306,6 +305,10 @@ class TestingUpdateManifestProvider
   };
   typedef std::map<std::string, Update> UpdateMap;
 
+  TestingUpdateManifestProvider(const TestingUpdateManifestProvider&) = delete;
+  TestingUpdateManifestProvider& operator=(
+      const TestingUpdateManifestProvider&) = delete;
+
   ~TestingUpdateManifestProvider();
   friend class RefCountedThreadSafe<TestingUpdateManifestProvider>;
 
@@ -315,15 +318,13 @@ class TestingUpdateManifestProvider
 
   std::string relative_update_url_;
   UpdateMap updates_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestingUpdateManifestProvider);
 };
 
 TestingUpdateManifestProvider::Update::Update(const std::string& version,
                                               const GURL& crx_url)
     : version(version), crx_url(crx_url) {}
 
-TestingUpdateManifestProvider::Update::Update() {}
+TestingUpdateManifestProvider::Update::Update() = default;
 
 TestingUpdateManifestProvider::TestingUpdateManifestProvider(
     const std::string& relative_update_url)
@@ -341,13 +342,15 @@ TestingUpdateManifestProvider::HandleRequest(
     const net::test_server::HttpRequest& request) {
   base::AutoLock auto_lock(lock_);
   const GURL url("http://localhost" + request.relative_url);
-  if (url.path() != relative_update_url_)
+  if (url.GetPath() != relative_update_url_) {
     return nullptr;
+  }
 
-  std::string content = kUpdateManifestHeader;
+  std::vector<extensions::UpdateManifestItem> update_manifest;
   for (net::QueryIterator it(url); !it.IsAtEnd(); it.Advance()) {
-    if (it.GetKey() != "x")
+    if (it.GetKey() != "x") {
       continue;
+    }
     // Extract the extension id from the subquery. Since GetValueForKeyInQuery()
     // expects a complete URL, dummy scheme and host must be prepended.
     std::string id;
@@ -355,12 +358,15 @@ TestingUpdateManifestProvider::HandleRequest(
                                "id", &id);
     UpdateMap::const_iterator entry = updates_.find(id);
     if (entry != updates_.end()) {
-      content += base::StringPrintf(kUpdateManifestTemplate, id.c_str(),
-                                    entry->second.crx_url.spec().c_str(),
-                                    entry->second.version.c_str());
+      update_manifest.emplace_back(extensions::UpdateManifestItem(id)
+                                       .version(entry->second.version)
+                                       .codebase(entry->second.crx_url.spec()));
     }
   }
-  content += kUpdateManifestFooter;
+
+  std::string content =
+      extensions::CreateUpdateManifest(std::move(update_manifest));
+
   std::unique_ptr<net::test_server::BasicHttpResponse> http_response(
       new net::test_server::BasicHttpResponse);
   http_response->set_code(net::HTTP_OK);
@@ -369,55 +375,87 @@ TestingUpdateManifestProvider::HandleRequest(
   return std::move(http_response);
 }
 
-TestingUpdateManifestProvider::~TestingUpdateManifestProvider() {}
-
-bool DoesInstallFailureReferToId(const std::u16string& id,
-                                 const content::NotificationSource& source,
-                                 const content::NotificationDetails& details) {
-  return content::Details<const extensions::CrxInstallError>(details)
-             ->message()
-             .find(id) != std::u16string::npos;
-}
+TestingUpdateManifestProvider::~TestingUpdateManifestProvider() = default;
 
 bool IsSessionStarted() {
   return session_manager::SessionManager::Get()->IsSessionStarted();
 }
 
-void PolicyChangedCallback(base::OnceClosure callback,
-                           const base::Value* old_value,
-                           const base::Value* new_value) {
-  std::move(callback).Run();
+const base::Value* RefreshAndWaitForPolicies(
+    policy::PolicyService* policy_service,
+    const policy::PolicyNamespace& ns) {
+  PolicyChangeRegistrar policy_registrar(policy_service, ns);
+  TestFuture<const base::Value*, const base::Value*> future;
+  policy_registrar.Observe("string", future.GetRepeatingCallback());
+  policy_service->RefreshPolicies(base::OnceClosure(),
+                                  PolicyFetchReason::kTest);
+  return std::get<1>(future.Take());
+}
+
+DeviceLocalAccountPolicyBroker* GetDeviceLocalAccountPolicyBroker(
+    AccountId account) {
+  return g_browser_process->platform_part()
+      ->browser_policy_connector_ash()
+      ->GetDeviceLocalAccountPolicyService()
+      ->GetBrokerForUser(account.GetUserEmail());
+}
+
+bool IsFullManagementDisclosureNeeded(AccountId account) {
+  auto* broker = GetDeviceLocalAccountPolicyBroker(account);
+  return ash::login::IsFullManagementDisclosureNeeded(
+      CHECK_DEREF(g_browser_process->local_state()), broker);
+}
+
+ukm::UkmService* GetUkmService() {
+  return g_browser_process->GetMetricsServicesManager()->GetUkmService();
+}
+
+void EnableUrlKeyedAnonymizedDataCollection(Profile* profile) {
+  unified_consent::UnifiedConsentService* consent_service =
+      UnifiedConsentServiceFactory::GetForProfile(profile);
+  if (consent_service) {
+    consent_service->SetUrlKeyedAnonymizedDataCollectionEnabled(true);
+    g_browser_process->GetMetricsServicesManager()->UpdateUploadPermissions();
+  }
 }
 
 }  // namespace
 
 class DeviceLocalAccountTest : public DevicePolicyCrosBrowserTest,
                                public user_manager::UserManager::Observer,
-                               public BrowserListObserver,
                                public extensions::AppWindowRegistry::Observer {
+ public:
+  DeviceLocalAccountTest(const DeviceLocalAccountTest&) = delete;
+  DeviceLocalAccountTest& operator=(const DeviceLocalAccountTest&) = delete;
+
  protected:
+  static constexpr char kDisplayNameTag[] =
+      "screenplay-6fef6eb9-1132-4d67-9ff7-f7d68b34fc3c";
+  static constexpr char kExtensionsCachedTag[] =
+      "screenplay-ac6c2f45-b38f-46b2-b107-36546701bcb2";
+  static constexpr char kExtensionsUncachedTag[] =
+      "screenplay-0834405c-3800-4c41-b5d5-cc57c9bfd472";
+  static constexpr char kUserAvatarImageTag[] =
+      "screenplay-91d50c4f-f526-4fad-a04d-5c9e1a90fb2b";
+  static constexpr char kSessionLengthLimitTag[] =
+      "screenplay-a91d99d7-8ea0-4ec7-9c64-bc614a759d02";
+  static constexpr char kDisplayPrefsTag[] =
+      "screenplay-5476f7ac-a3c2-47ad-865f-62ff31374865";
+
   DeviceLocalAccountTest()
       : public_session_input_method_id_(
             base::StringPrintf(kPublicSessionInputMethodIDTemplate,
-                               chromeos::extension_ime_util::kXkbExtensionId)),
-        contents_(NULL),
-        verifier_format_override_(crx_file::VerifierFormat::CRX3) {
+                               ash::extension_ime_util::kXkbExtensionId)) {
     set_exit_when_last_browser_closes(false);
   }
 
-  ~DeviceLocalAccountTest() override {}
-
-  void SetUp() override {
-    BrowserList::AddObserver(this);
-
-    DevicePolicyCrosBrowserTest::SetUp();
-  }
+  ~DeviceLocalAccountTest() override = default;
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
     DevicePolicyCrosBrowserTest::SetUpCommandLine(command_line);
-    command_line->AppendSwitch(chromeos::switches::kLoginManager);
-    command_line->AppendSwitch(chromeos::switches::kForceLoginManagerInTests);
-    command_line->AppendSwitchASCII(chromeos::switches::kLoginProfile, "user");
+    command_line->AppendSwitch(ash::switches::kLoginManager);
+    command_line->AppendSwitch(ash::switches::kForceLoginManagerInTests);
+    command_line->AppendSwitchASCII(ash::switches::kLoginProfile, "user");
   }
 
   void SetUpInProcessBrowserTestFixture() override {
@@ -438,68 +476,65 @@ class DeviceLocalAccountTest : public DevicePolicyCrosBrowserTest,
     DevicePolicyCrosBrowserTest::SetUpOnMainThread();
 
     initial_locale_ = g_browser_process->GetApplicationLocale();
-    initial_language_ = l10n_util::GetLanguage(initial_locale_);
+    initial_language_ =
+        base::i18n::GetLanguageSubtagUsingLanguageTag(initial_locale_);
 
-    content::WindowedNotificationObserver(
-        chrome::NOTIFICATION_LOGIN_OR_LOCK_WEBUI_VISIBLE,
-        content::NotificationService::AllSources())
-        .Wait();
+    ash::LoginOrLockScreenVisibleWaiter().Wait();
 
     auto* host = ash::LoginDisplayHost::default_host();
-    contents_ = host->GetOobeWebContents();
-    ASSERT_TRUE(contents_);
+    ASSERT_TRUE(host->GetOobeWebContents());
 
     // Wait for the login UI to be ready.
-    chromeos::OobeUI* oobe_ui = host->GetOobeUI();
+    ash::OobeUI* oobe_ui = host->GetOobeUI();
     ASSERT_TRUE(oobe_ui);
     base::RunLoop run_loop;
     const bool oobe_ui_ready = oobe_ui->IsJSReady(run_loop.QuitClosure());
-    if (!oobe_ui_ready)
+    if (!oobe_ui_ready) {
       run_loop.Run();
+    }
 
     // Skip to the login screen.
-    chromeos::OobeScreenWaiter(chromeos::OobeBaseTest::GetFirstSigninScreen())
-        .Wait();
+    ash::OobeScreenWaiter(ash::OobeBaseTest::GetFirstSigninScreen()).Wait();
 
     ash::test::UserSessionManagerTestApi session_manager_test_api(
         ash::UserSessionManager::GetInstance());
     session_manager_test_api.SetShouldObtainTokenHandleInTests(false);
   }
 
-  void TearDownOnMainThread() override {
-    BrowserList::RemoveObserver(this);
-    DevicePolicyCrosBrowserTest::TearDownOnMainThread();
-  }
-
   // user_manager::UserManager::Observer:
   void LocalStateChanged(user_manager::UserManager* user_manager) override {
-    if (local_state_changed_run_loop_)
+    if (local_state_changed_run_loop_) {
       local_state_changed_run_loop_->Quit();
+    }
   }
 
-  // BrowserListObserver:
-  void OnBrowserRemoved(Browser* browser) override {
-    if (run_loop_)
-      run_loop_->Quit();
+  // Closes the Browser and waits for it to be destroyed.
+  void CloseBrowserAndVerifyDestruction(BrowserWindowInterface* browser) {
+    ui_test_utils::BrowserDestroyedObserver observer(browser);
+    aura::test::WindowDestroyedWaiter waiter(
+        browser->GetWindow()->GetNativeWindow());
+    browser->GetWindow()->Close();
+    observer.Wait();
+    waiter.Wait();
   }
 
   // extensions::AppWindowRegistry::Observer:
   void OnAppWindowAdded(extensions::AppWindow* app_window) override {
-    if (run_loop_)
+    if (run_loop_) {
       run_loop_->Quit();
+    }
   }
 
   void OnAppWindowRemoved(extensions::AppWindow* app_window) override {
-    if (run_loop_)
+    if (run_loop_) {
       run_loop_->Quit();
+    }
   }
 
   void InitializePolicy() {
     device_policy()->policy_data().set_public_key_version(1);
     DeviceLocalAccountTestHelper::SetupDeviceLocalAccount(
         &device_local_account_policy_, kAccountId1, kDisplayName1);
-    // Don't enable new managed sessions, use old public sessions.
-    SetManagedSessionsEnabled(/* managed_sessions_enabled */ false);
   }
 
   void BuildDeviceLocalAccountPolicy() {
@@ -509,9 +544,9 @@ class DeviceLocalAccountTest : public DevicePolicyCrosBrowserTest,
 
   void UploadDeviceLocalAccountPolicy() {
     BuildDeviceLocalAccountPolicy();
-    ASSERT_TRUE(local_policy_mixin_.server()->UpdatePolicy(
+    policy_test_server_mixin_.UpdatePolicy(
         dm_protocol::kChromePublicAccountPolicyType, kAccountId1,
-        device_local_account_policy_.payload().SerializeAsString()));
+        device_local_account_policy_.payload().SerializeAsString());
   }
 
   void UploadAndInstallDeviceLocalAccountPolicy() {
@@ -520,23 +555,22 @@ class DeviceLocalAccountTest : public DevicePolicyCrosBrowserTest,
         kAccountId1, device_local_account_policy_.GetBlob());
   }
 
-  void SetRecommendedLocales(const char* const recommended_locales[],
-                             size_t array_size) {
+  void SetRecommendedLocales(
+      base::span<const std::string_view> recommended_locales) {
     em::StringListPolicyProto* session_locales_proto =
         device_local_account_policy_.payload().mutable_sessionlocales();
     session_locales_proto->mutable_policy_options()->set_mode(
         em::PolicyOptions_PolicyMode_RECOMMENDED);
     session_locales_proto->mutable_value()->Clear();
-    for (size_t i = 0; i < array_size; ++i) {
-      session_locales_proto->mutable_value()->add_entries(
-          recommended_locales[i]);
+    for (std::string_view locale : recommended_locales) {
+      session_locales_proto->mutable_value()->add_entries(locale);
     }
   }
 
   void WaitForPublicSessionLocalesChange(const AccountId& account_id) {
     std::vector<ash::LocaleItem> locales =
         ash::LoginScreenTestApi::GetPublicSessionLocales(account_id);
-    chromeos::test::TestPredicateWaiter(
+    ash::test::TestPredicateWaiter(
         base::BindRepeating(
             [](const std::vector<ash::LocaleItem>& locales,
                const AccountId& account_id) {
@@ -552,14 +586,7 @@ class DeviceLocalAccountTest : public DevicePolicyCrosBrowserTest,
     em::ChromeDeviceSettingsProto& proto(device_policy()->payload());
     DeviceLocalAccountTestHelper::AddPublicSession(&proto, username);
     RefreshDevicePolicy();
-    ASSERT_TRUE(local_policy_mixin_.UpdateDevicePolicy(proto));
-  }
-
-  void SetManagedSessionsEnabled(bool managed_sessions_enabled) {
-    device_local_account_policy_.payload()
-        .mutable_devicelocalaccountmanagedsessionenabled()
-        ->set_value(managed_sessions_enabled);
-    UploadDeviceLocalAccountPolicy();
+    policy_test_server_mixin_.UpdateDevicePolicy(proto);
   }
 
   void EnableAutoLogin() {
@@ -569,7 +596,7 @@ class DeviceLocalAccountTest : public DevicePolicyCrosBrowserTest,
     device_local_accounts->set_auto_login_id(kAccountId1);
     device_local_accounts->set_auto_login_delay(0);
     RefreshDevicePolicy();
-    ASSERT_TRUE(local_policy_mixin_.UpdateDevicePolicy(proto));
+    policy_test_server_mixin_.UpdateDevicePolicy(proto);
   }
 
   void CheckPublicSessionPresent(const AccountId& account_id) {
@@ -578,7 +605,7 @@ class DeviceLocalAccountTest : public DevicePolicyCrosBrowserTest,
     ASSERT_TRUE(user) << " account " << account_id.GetUserEmail()
                       << " not found";
     EXPECT_EQ(account_id, user->GetAccountId());
-    EXPECT_EQ(user_manager::USER_TYPE_PUBLIC_ACCOUNT, user->GetType());
+    EXPECT_EQ(user_manager::UserType::kPublicAccount, user->GetType());
   }
 
   void SetSystemTimezoneAutomaticDetectionPolicy(
@@ -587,21 +614,20 @@ class DeviceLocalAccountTest : public DevicePolicyCrosBrowserTest,
     proto.mutable_system_timezone()->set_timezone_detection_type(policy);
     RefreshDevicePolicy();
 
-    LocalStateValueWaiter(prefs::kSystemTimezoneAutomaticDetectionPolicy,
+    LocalStateValueWaiter(ash::prefs::kSystemTimezoneAutomaticDetectionPolicy,
                           base::Value(policy))
         .Wait();
-    ASSERT_TRUE(local_policy_mixin_.UpdateDevicePolicy(proto));
+    policy_test_server_mixin_.UpdateDevicePolicy(proto);
   }
 
   base::FilePath GetExtensionCacheDirectoryForAccountID(
       const std::string& account_id) {
     base::FilePath extension_cache_root_dir;
-    if (!base::PathService::Get(chromeos::DIR_DEVICE_LOCAL_ACCOUNT_EXTENSIONS,
+    if (!base::PathService::Get(ash::DIR_DEVICE_LOCAL_ACCOUNT_EXTENSIONS,
                                 &extension_cache_root_dir)) {
       ADD_FAILURE();
     }
-    return extension_cache_root_dir.Append(
-        base::HexEncode(account_id.c_str(), account_id.size()));
+    return extension_cache_root_dir.Append(base::HexEncode(account_id));
   }
 
   base::FilePath GetCacheCRXFilePath(const std::string& id,
@@ -663,22 +689,25 @@ class DeviceLocalAccountTest : public DevicePolicyCrosBrowserTest,
     auto* host = ash::LoginDisplayHost::default_host();
     ASSERT_TRUE(host);
     host->StartSignInScreen();
-    chromeos::ExistingUserController* controller =
-        chromeos::ExistingUserController::current_controller();
+    auto* controller = ash::ExistingUserController::current_controller();
     ASSERT_TRUE(controller);
 
-    chromeos::UserContext user_context(user_manager::USER_TYPE_PUBLIC_ACCOUNT,
-                                       account_id_1_);
+    ash::UserContext user_context(user_manager::UserType::kPublicAccount,
+                                  account_id_1_);
     user_context.SetPublicSessionLocale(locale);
     user_context.SetPublicSessionInputMethod(input_method);
-    controller->Login(user_context, chromeos::SigninSpecifics());
+    controller->Login(user_context, ash::SigninSpecifics());
   }
 
   void WaitForSessionStart() {
-    if (IsSessionStarted())
+    if (IsSessionStarted()) {
       return;
-    ash::WizardController::SkipPostLoginScreensForTesting();
-    chromeos::test::WaitForPrimaryUserSessionStart();
+    }
+    if (ash::WizardController::default_controller()) {
+      ash::WizardController::default_controller()
+          ->SkipPostLoginScreensForTesting();
+    }
+    ash::test::WaitForPrimaryUserSessionStart();
   }
 
   void WaitUntilLocalStateChanged() {
@@ -689,22 +718,21 @@ class DeviceLocalAccountTest : public DevicePolicyCrosBrowserTest,
   }
 
   static std::string GetDefaultKeyboardIdFromLanguageCode(
-      const std::string& language_code) {
-    chromeos::input_method::InputMethodManager* input_method_manager =
-        chromeos::input_method::InputMethodManager::Get();
+      std::string_view language_code) {
+    auto* input_method_manager = ash::input_method::InputMethodManager::Get();
     std::vector<std::string> layouts_from_locale;
     input_method_manager->GetInputMethodUtil()
         ->GetInputMethodIdsFromLanguageCode(
-            language_code, chromeos::input_method::kKeyboardLayoutsOnly,
+            language_code, ash::input_method::kKeyboardLayoutsOnly,
             &layouts_from_locale);
     EXPECT_FALSE(layouts_from_locale.empty());
-    if (layouts_from_locale.empty())
+    if (layouts_from_locale.empty()) {
       return std::string();
+    }
     return layouts_from_locale.front();
   }
   void VerifyKeyboardLayoutMatchesLocale() {
-    chromeos::input_method::InputMethodManager* input_method_manager =
-        chromeos::input_method::InputMethodManager::Get();
+    auto* input_method_manager = ash::input_method::InputMethodManager::Get();
     EXPECT_EQ(GetDefaultKeyboardIdFromLanguageCode(
                   g_browser_process->GetApplicationLocale()),
               input_method_manager->GetActiveIMEState()
@@ -712,9 +740,8 @@ class DeviceLocalAccountTest : public DevicePolicyCrosBrowserTest,
                   .id());
   }
 
-  void RunWithRecommendedLocale(const char* const locales[],
-                                size_t locales_size) {
-    SetRecommendedLocales(locales, locales_size);
+  void RunWithRecommendedLocale(base::span<const std::string_view> locales) {
+    SetRecommendedLocales(locales);
     UploadAndInstallDeviceLocalAccountPolicy();
     AddPublicSessionToDevicePolicy(kAccountId1);
     EnableAutoLogin();
@@ -724,19 +751,26 @@ class DeviceLocalAccountTest : public DevicePolicyCrosBrowserTest,
     WaitForSessionStart();
 
     EXPECT_EQ(locales[0], g_browser_process->GetApplicationLocale());
-    EXPECT_EQ(l10n_util::GetLanguage(locales[0]),
+    EXPECT_EQ(base::i18n::GetLanguageSubtagUsingLanguageTag(locales[0]),
               icu::Locale::getDefault().getLanguage());
     VerifyKeyboardLayoutMatchesLocale();
   }
 
-  const AccountId account_id_1_ =
-      AccountId::FromUserEmail(GenerateDeviceLocalAccountUserId(
-          kAccountId1,
-          DeviceLocalAccount::TYPE_PUBLIC_SESSION));
-  const AccountId account_id_2_ =
-      AccountId::FromUserEmail(GenerateDeviceLocalAccountUserId(
-          kAccountId2,
-          DeviceLocalAccount::TYPE_PUBLIC_SESSION));
+  void SetSessionLengthLimitPolicy(int limit) {
+    device_local_account_policy_.payload()
+        .mutable_sessionlengthlimit()
+        ->set_value(limit);
+    UploadAndInstallDeviceLocalAccountPolicy();
+    AddPublicSessionToDevicePolicy(kAccountId1);
+    WaitForPolicy();
+  }
+
+  const AccountId account_id_1_ = AccountId::FromUserEmail(
+      GenerateDeviceLocalAccountUserId(kAccountId1,
+                                       DeviceLocalAccountType::kPublicSession));
+  const AccountId account_id_2_ = AccountId::FromUserEmail(
+      GenerateDeviceLocalAccountUserId(kAccountId2,
+                                       DeviceLocalAccountType::kPublicSession));
   const std::string public_session_input_method_id_;
 
   std::string initial_locale_;
@@ -749,9 +783,7 @@ class DeviceLocalAccountTest : public DevicePolicyCrosBrowserTest,
   std::unique_ptr<base::RunLoop> local_state_changed_run_loop_;
 
   UserPolicyBuilder device_local_account_policy_;
-  chromeos::LocalPolicyTestServerMixin local_policy_mixin_{&mixin_host_};
-
-  content::WebContents* contents_;
+  ash::EmbeddedPolicyTestServerMixin policy_test_server_mixin_{&mixin_host_};
 
   // These are member variables so they're guaranteed that the destructors
   // (which may delete a directory) run in a scope where file IO is allowed.
@@ -760,8 +792,7 @@ class DeviceLocalAccountTest : public DevicePolicyCrosBrowserTest,
 
  private:
   extensions::SandboxedUnpacker::ScopedVerifierFormatOverrideForTest
-      verifier_format_override_;
-  DISALLOW_COPY_AND_ASSIGN(DeviceLocalAccountTest);
+      verifier_format_override_{crx_file::VerifierFormat::CRX3};
 };
 
 static bool IsKnownUser(const AccountId& account_id) {
@@ -779,15 +810,20 @@ class ExtensionInstallObserver : public ProfileManagerObserver,
     profile_manager_observer_.Observe(g_browser_process->profile_manager());
   }
 
+  ExtensionInstallObserver(const ExtensionInstallObserver&) = delete;
+  ExtensionInstallObserver& operator=(const ExtensionInstallObserver&) = delete;
+
   ~ExtensionInstallObserver() override {
-    if (registry_ != nullptr)
+    if (registry_ != nullptr) {
       registry_->RemoveObserver(this);
+    }
   }
 
   // Wait until an extension with |extension_id| is installed.
   void Wait() {
-    if (!observed_)
+    if (!observed_) {
       run_loop_.Run();
+    }
   }
 
  private:
@@ -804,9 +840,6 @@ class ExtensionInstallObserver : public ProfileManagerObserver,
 
   // ProfileManagerObserver:
   void OnProfileAdded(Profile* profile) override {
-    // Ignore lock screen apps profile.
-    if (chromeos::ProfileHelper::IsLockScreenAppProfile(profile))
-      return;
     registry_ = extensions::ExtensionRegistry::Get(profile);
     profile_manager_observer_.Reset();
 
@@ -821,14 +854,32 @@ class ExtensionInstallObserver : public ProfileManagerObserver,
     registry_->AddObserver(this);
   }
 
-  extensions::ExtensionRegistry* registry_;
+  raw_ptr<extensions::ExtensionRegistry> registry_;
   base::RunLoop run_loop_;
   base::ScopedObservation<ProfileManager, ProfileManagerObserver>
       profile_manager_observer_{this};
   std::string waiting_extension_id_;
   bool observed_;
+};
 
-  DISALLOW_COPY_AND_ASSIGN(ExtensionInstallObserver);
+class TestSessionManagerObserver
+    : public session_manager::SessionManagerObserver {
+ public:
+  explicit TestSessionManagerObserver(
+      session_manager::SessionManager* session_manager) {
+    observation_.Observe(session_manager);
+  }
+  ~TestSessionManagerObserver() override = default;
+
+  void OnSignOutRequested() override { ++sign_out_requested_count_; }
+
+  size_t sign_out_requested_count() const { return sign_out_requested_count_; }
+
+ private:
+  base::ScopedObservation<session_manager::SessionManager,
+                          session_manager::SessionManagerObserver>
+      observation_{this};
+  size_t sign_out_requested_count_ = 0;
 };
 
 // Tests that the data associated with a device local account is removed when
@@ -842,18 +893,17 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, PRE_DataIsRemoved) {
 
   // Data for the account is normally added after successful authentication.
   // Shortcut that here.
-  DictionaryPrefUpdate given_name_update(g_browser_process->local_state(),
+  ScopedDictPrefUpdate given_name_update(g_browser_process->local_state(),
                                          "UserGivenName");
-  given_name_update->SetKey(account_id_1_.GetUserEmail(),
-                            base::Value("Elaine"));
+  given_name_update->Set(account_id_1_.GetUserEmail(), "Elaine");
 
   // Add some arbitrary data to make sure the "UserGivenName" dictionary isn't
   // cleaning up itself.
-  given_name_update->SetKey("sanity.check@example.com", base::Value("Anne"));
+  given_name_update->Set("sanity.check@example.com", "Anne");
 }
 
 // Disabled on ASan and LSAn builds due to a consistent failure. See
-// crbug.com/1004228
+// crbug.com/40647624
 #if defined(ADDRESS_SANITIZER) || defined(LEAK_SANITIZER)
 #define MAYBE_DataIsRemoved DISABLED_DataIsRemoved
 #else
@@ -862,18 +912,19 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, PRE_DataIsRemoved) {
 IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, MAYBE_DataIsRemoved) {
   // The device local account should have been removed.
   EXPECT_FALSE(g_browser_process->local_state()
-                   ->GetDictionary("UserGivenName")
-                   ->FindKey(account_id_1_.GetUserEmail()));
+                   ->GetDict("UserGivenName")
+                   .Find(account_id_1_.GetUserEmail()));
 
   // The arbitrary data remains.
   const std::string* value = g_browser_process->local_state()
-                                 ->GetDictionary("UserGivenName")
-                                 ->FindStringKey("sanity.check@example.com");
+                                 ->GetDict("UserGivenName")
+                                 .FindString("sanity.check@example.com");
   ASSERT_TRUE(value);
   EXPECT_EQ("Anne", *value);
 }
 
-IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, LoginScreen) {
+// Test is flaky: https://crbug.com/1334470
+IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, DISABLED_LoginScreen) {
   AddPublicSessionToDevicePolicy(kAccountId1);
   AddPublicSessionToDevicePolicy(kAccountId2);
 
@@ -896,6 +947,8 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, LoginScreen) {
 }
 
 IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, DisplayName) {
+  base::AddFeatureIdTagToTestResult(DeviceLocalAccountTest::kDisplayNameTag);
+
   UploadAndInstallDeviceLocalAccountPolicy();
   AddPublicSessionToDevicePolicy(kAccountId1);
 
@@ -911,13 +964,10 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, DisplayName) {
   device_local_account_policy_.payload().mutable_userdisplayname()->set_value(
       kDisplayName2);
   UploadAndInstallDeviceLocalAccountPolicy();
-  policy::BrowserPolicyConnectorChromeOS* connector =
-      g_browser_process->platform_part()->browser_policy_connector_chromeos();
   DeviceLocalAccountPolicyBroker* broker =
-      connector->GetDeviceLocalAccountPolicyService()->GetBrokerForUser(
-          account_id_1_.GetUserEmail());
+      GetDeviceLocalAccountPolicyBroker(account_id_1_);
   ASSERT_TRUE(broker);
-  broker->core()->client()->FetchPolicy();
+  broker->core()->client()->FetchPolicy(PolicyFetchReason::kTest);
   WaitForDisplayName(account_id_1_.GetUserEmail(), kDisplayName2);
 
   // Verify that the new display name is shown in the UI.
@@ -934,11 +984,10 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, CachedDisplayName) {
   AddPublicSessionToDevicePolicy(kAccountId1);
 
   WaitForDisplayName(account_id_1_.GetUserEmail(), kDisplayName1);
-  auto* dict = g_browser_process->local_state()->GetDictionary(
-      policy::key::kUserDisplayName);
-  ASSERT_TRUE(dict);
-  ASSERT_TRUE(dict->HasKey(account_id_1_.GetUserEmail()));
-  EXPECT_EQ(kDisplayName1, *dict->FindStringKey(account_id_1_.GetUserEmail()));
+  const auto& dict =
+      g_browser_process->local_state()->GetDict(key::kUserDisplayName);
+  ASSERT_TRUE(dict.Find(account_id_1_.GetUserEmail()) != nullptr);
+  EXPECT_EQ(kDisplayName1, *dict.FindString(account_id_1_.GetUserEmail()));
 }
 
 IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, PolicyDownload) {
@@ -974,11 +1023,12 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, AccountListChange) {
   account1->set_type(
       em::DeviceLocalAccountInfoProto::ACCOUNT_TYPE_PUBLIC_SESSION);
 
-  local_policy_mixin_.UpdateDevicePolicy(policy);
-  g_browser_process->policy_service()->RefreshPolicies(base::OnceClosure());
+  policy_test_server_mixin_.UpdateDevicePolicy(policy);
+  g_browser_process->policy_service()->RefreshPolicies(
+      base::OnceClosure(), PolicyFetchReason::kTest);
 
   // Make sure the second device-local account disappears.
-  WaitUntilLocalStateChanged();
+  base::RunLoop().RunUntilIdle();
   EXPECT_FALSE(IsKnownUser(account_id_2_));
 }
 
@@ -988,8 +1038,9 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, StartSession) {
       SessionStartupPref::kPrefValueURLs);
   em::StringListPolicyProto* startup_urls_proto =
       device_local_account_policy_.payload().mutable_restoreonstartupurls();
-  for (size_t i = 0; i < base::size(kStartupURLs); ++i)
-    startup_urls_proto->mutable_value()->add_entries(kStartupURLs[i]);
+  for (std::string_view url : kStartupURLs) {
+    startup_urls_proto->mutable_value()->add_entries(url);
+  }
   UploadAndInstallDeviceLocalAccountPolicy();
   AddPublicSessionToDevicePolicy(kAccountId1);
 
@@ -999,14 +1050,14 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, StartSession) {
   WaitForSessionStart();
 
   // Check that the startup pages specified in policy were opened.
-  BrowserList* browser_list = BrowserList::GetInstance();
-  EXPECT_EQ(1U, browser_list->size());
-  Browser* browser = browser_list->get(0);
+  EXPECT_EQ(1U, GlobalBrowserCollection::GetInstance()->GetSize());
+  BrowserWindowInterface* const browser =
+      GetLastActiveBrowserWindowInterfaceWithAnyProfile();
   ASSERT_TRUE(browser);
 
-  TabStripModel* tabs = browser->tab_strip_model();
+  TabStripModel* const tabs = browser->GetTabStripModel();
   ASSERT_TRUE(tabs);
-  int expected_tab_count = static_cast<int>(base::size(kStartupURLs));
+  int expected_tab_count = static_cast<int>(kStartupURLs.size());
   EXPECT_EQ(expected_tab_count, tabs->count());
   for (int i = 0; i < expected_tab_count && i < tabs->count(); ++i) {
     EXPECT_EQ(GURL(kStartupURLs[i]),
@@ -1031,11 +1082,11 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, FullscreenAllowed) {
   ASSERT_NO_FATAL_FAILURE(StartLogin(std::string(), std::string()));
   WaitForSessionStart();
 
-  BrowserList* browser_list = BrowserList::GetInstance();
-  EXPECT_EQ(1U, browser_list->size());
-  Browser* browser = browser_list->get(0);
+  EXPECT_EQ(1U, GlobalBrowserCollection::GetInstance()->GetSize());
+  BrowserWindowInterface* const browser =
+      GetLastActiveBrowserWindowInterfaceWithAnyProfile();
   ASSERT_TRUE(browser);
-  BrowserWindow* browser_window = browser->window();
+  ui::BaseWindow* const browser_window = browser->GetWindow();
   ASSERT_TRUE(browser_window);
 
   // Verify that an attempt to enter fullscreen mode is allowed.
@@ -1045,6 +1096,12 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, FullscreenAllowed) {
 }
 
 IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, ExtensionsUncached) {
+  // TODO(https://crbug.com/40804030): Remove this when updated to use MV3.
+  extensions::ScopedTestMV2Enabler mv2_enabler;
+
+  base::AddFeatureIdTagToTestResult(
+      DeviceLocalAccountTest::kExtensionsUncachedTag);
+
   // Make it possible to force-install a hosted app and an extension.
   ASSERT_TRUE(embedded_test_server()->InitializeAndListen());
   scoped_refptr<TestingUpdateManifestProvider> testing_update_manifest_provider(
@@ -1077,51 +1134,42 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, ExtensionsUncached) {
   WaitForPolicy();
 
   // Start listening for app/extension installation results.
-  ExtensionInstallObserver install_observer(kHostedAppID);
-  content::WindowedNotificationObserver extension_observer(
-      extensions::NOTIFICATION_EXTENSION_INSTALL_ERROR,
-      base::BindRepeating(DoesInstallFailureReferToId, kGoodExtensionID16));
+  ExtensionInstallObserver hosted_app_install_observer(kHostedAppID);
+  ExtensionInstallObserver extension_install_observer(kGoodExtensionID);
   ASSERT_NO_FATAL_FAILURE(StartLogin(std::string(), std::string()));
 
-  // Wait for the hosted app installation to succeed and the extension
-  // installation to fail (because hosted apps are whitelisted for use in
-  // device-local accounts and extensions are not).
-  install_observer.Wait();
-  extension_observer.Wait();
+  // Wait for the hosted app & extension installations to succeed.
+  hosted_app_install_observer.Wait();
+  extension_install_observer.Wait();
 
-  // Verify that the hosted app was installed.
+  // Verify that the hosted app & extension were installed.
   Profile* profile = GetProfileForTest();
   ASSERT_TRUE(profile);
   extensions::ExtensionRegistry* extension_registry =
       extensions::ExtensionRegistry::Get(profile);
   EXPECT_TRUE(extension_registry->enabled_extensions().GetByID(kHostedAppID));
+  EXPECT_TRUE(
+      extension_registry->enabled_extensions().GetByID(kGoodExtensionID));
 
-  // Verify that the extension was not installed.
-  EXPECT_FALSE(extension_registry->GetExtensionById(
-      kGoodExtensionID, extensions::ExtensionRegistry::EVERYTHING));
-
-  // Verify that the app was downloaded to the account's extension cache.
+  // Verify that the hosted app & extension were downloaded to the account's
+  // extension cache.
   base::FilePath test_dir;
   ASSERT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &test_dir));
   EXPECT_TRUE(ContentsEqual(
       GetCacheCRXFile(kAccountId1, kHostedAppID, kHostedAppVersion),
       test_dir.Append(kHostedAppCRXPath)));
-
-  // Verify that the extension was removed from the account's extension cache
-  // after the installation failure.
-  DeviceLocalAccountPolicyBroker* broker =
-      g_browser_process->platform_part()
-          ->browser_policy_connector_chromeos()
-          ->GetDeviceLocalAccountPolicyService()
-          ->GetBrokerForUser(account_id_1_.GetUserEmail());
-  ASSERT_TRUE(broker);
-  chromeos::ExternalCache* cache =
-      broker->extension_loader()->GetExternalCacheForTesting();
-  ASSERT_TRUE(cache);
-  EXPECT_FALSE(cache->GetExtension(kGoodExtensionID, NULL, NULL));
+  EXPECT_TRUE(ContentsEqual(
+      GetCacheCRXFile(kAccountId1, kGoodExtensionID, kGoodExtensionVersion),
+      test_dir.Append(kGoodExtensionCRXPath)));
 }
 
 IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, ExtensionsCached) {
+  // TODO(https://crbug.com/40804030): Remove this when updated to use MV3.
+  extensions::ScopedTestMV2Enabler mv2_enabler;
+
+  base::AddFeatureIdTagToTestResult(
+      DeviceLocalAccountTest::kExtensionsCachedTag);
+
   ASSERT_TRUE(embedded_test_server()->Start());
 
   // Pre-populate the device local account's extension cache with a hosted app
@@ -1135,16 +1183,17 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, ExtensionsCached) {
   ASSERT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &test_dir));
   const base::FilePath cached_hosted_app =
       GetCacheCRXFile(kAccountId1, kHostedAppID, kHostedAppVersion);
+  const base::FilePath cached_extension =
+      GetCacheCRXFile(kAccountId1, kGoodExtensionID, kGoodExtensionVersion);
   {
     base::ScopedAllowBlockingForTesting allow_blocking;
     EXPECT_TRUE(
         CopyFile(test_dir.Append(kHostedAppCRXPath), cached_hosted_app));
-    EXPECT_TRUE(CopyFile(
-        test_dir.Append(kGoodExtensionCRXPath),
-        GetCacheCRXFile(kAccountId1, kGoodExtensionID, kGoodExtensionVersion)));
+    EXPECT_TRUE(
+        CopyFile(test_dir.Append(kGoodExtensionCRXPath), cached_extension));
   }
 
-  // Specify policy to force-install the hosted app.
+  // Specify policy to force-install the hosted app & the extension.
   em::StringList* forcelist = device_local_account_policy_.payload()
                                   .mutable_extensioninstallforcelist()
                                   ->mutable_value();
@@ -1161,46 +1210,35 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, ExtensionsCached) {
   WaitForPolicy();
 
   // Start listening for app/extension installation results.
-  ExtensionInstallObserver install_observer(kHostedAppID);
-  content::WindowedNotificationObserver extension_observer(
-      extensions::NOTIFICATION_EXTENSION_INSTALL_ERROR,
-      base::BindRepeating(DoesInstallFailureReferToId, kGoodExtensionID16));
+  ExtensionInstallObserver hosted_app_install_observer(kHostedAppID);
+  ExtensionInstallObserver extension_install_observer(kGoodExtensionID);
 
   ASSERT_NO_FATAL_FAILURE(StartLogin(std::string(), std::string()));
 
-  // Wait for the hosted app installation to succeed and the extension
-  // installation to fail.
-  install_observer.Wait();
-  extension_observer.Wait();
+  // Wait for the hosted app & extension installations to succeed.
+  hosted_app_install_observer.Wait();
+  extension_install_observer.Wait();
 
-  // Verify that the hosted app was installed.
+  // Verify that the hosted app & extension were installed.
   Profile* profile = GetProfileForTest();
   ASSERT_TRUE(profile);
   extensions::ExtensionRegistry* extension_registry =
       extensions::ExtensionRegistry::Get(profile);
   EXPECT_TRUE(extension_registry->enabled_extensions().GetByID(kHostedAppID));
+  EXPECT_TRUE(
+      extension_registry->enabled_extensions().GetByID(kGoodExtensionID));
 
-  // Verify that the extension was not installed.
-  EXPECT_FALSE(extension_registry->GetExtensionById(
-      kGoodExtensionID, extensions::ExtensionRegistry::EVERYTHING));
-
-  // Verify that the app is still in the account's extension cache.
+  // Verify that the hosted app is still in the account's extension cache.
   {
     base::ScopedAllowBlockingForTesting allow_blocking;
     EXPECT_TRUE(PathExists(cached_hosted_app));
   }
 
-  // Verify that the extension was removed from the account's extension cache.
-  DeviceLocalAccountPolicyBroker* broker =
-      g_browser_process->platform_part()
-          ->browser_policy_connector_chromeos()
-          ->GetDeviceLocalAccountPolicyService()
-          ->GetBrokerForUser(account_id_1_.GetUserEmail());
-  ASSERT_TRUE(broker);
-  chromeos::ExternalCache* cache =
-      broker->extension_loader()->GetExternalCacheForTesting();
-  ASSERT_TRUE(cache);
-  EXPECT_FALSE(cache->GetExtension(kGoodExtensionID, NULL, NULL));
+  // Verify that the extension is still in the account's extension cache.
+  {
+    base::ScopedAllowBlockingForTesting allow_blocking;
+    EXPECT_TRUE(PathExists(cached_extension));
+  }
 }
 
 static void OnPutExtension(std::unique_ptr<base::RunLoop>* run_loop,
@@ -1226,6 +1264,9 @@ static void CreateFile(const base::FilePath& file,
 }
 
 IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, ExtensionCacheImplTest) {
+  // TODO(https://crbug.com/40804030): Remove this when updated to use MV3.
+  extensions::ScopedTestMV2Enabler mv2_enabler;
+
   // Make it possible to force-install a hosted app and an extension.
   ASSERT_TRUE(embedded_test_server()->InitializeAndListen());
   scoped_refptr<TestingUpdateManifestProvider> testing_update_manifest_provider(
@@ -1306,21 +1347,18 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, ExtensionCacheImplTest) {
   WaitForPolicy();
 
   // Start listening for app/extension installation results.
-  ExtensionInstallObserver install_observer(kHostedAppID);
-  content::WindowedNotificationObserver extension_observer(
-      extensions::NOTIFICATION_EXTENSION_INSTALL_ERROR,
-      base::BindRepeating(DoesInstallFailureReferToId, kGoodExtensionID16));
+  ExtensionInstallObserver hosted_app_install_observer(kHostedAppID);
+  ExtensionInstallObserver extension_install_observer(kGoodExtensionID);
 
   ASSERT_NO_FATAL_FAILURE(StartLogin(std::string(), std::string()));
 
-  // Wait for the hosted app installation to succeed and the extension
-  // installation to fail (because hosted apps are whitelisted for use in
-  // device-local accounts and extensions are not).
-  install_observer.Wait();
-  extension_observer.Wait();
+  // Wait for the hosted app & extension installations to succeed.
+  hosted_app_install_observer.Wait();
+  extension_install_observer.Wait();
 
   // Verify that the extension was kept in the local cache.
-  EXPECT_TRUE(cache_impl.GetExtension(kGoodExtensionID, hash, NULL, NULL));
+  EXPECT_TRUE(
+      cache_impl.GetExtension(kGoodExtensionID, hash, nullptr, nullptr));
 
   {
     base::ScopedAllowBlockingForTesting allow_blocking;
@@ -1335,8 +1373,9 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, ExternalData) {
   // verify that the underlying policy subsystem will start a fetch
   // without this request as well, the user_manager::UserManager must be
   // prevented from seeing the policy change.
-  static_cast<ash::ChromeUserManagerImpl*>(user_manager::UserManager::Get())
-      ->StopPolicyObserverForTesting();
+  g_browser_process->platform_part()
+      ->browser_policy_connector_ash()
+      ->OnUserManagerShutdown();
 
   UploadDeviceLocalAccountPolicy();
   AddPublicSessionToDevicePolicy(kAccountId1);
@@ -1350,8 +1389,9 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, ExternalData) {
       [](const base::RepeatingClosure& quit_closure,
          const net::test_server::HttpRequest& request)
           -> std::unique_ptr<net::test_server::HttpResponse> {
-        if (request.relative_url != kExternalDataPath)
+        if (request.relative_url != kExternalDataPath) {
           return nullptr;
+        }
 
         auto response = std::make_unique<net::test_server::BasicHttpResponse>();
         response->set_content(kExternalData);
@@ -1363,20 +1403,14 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, ExternalData) {
   embedded_test_server()->StartAcceptingConnections();
 
   // Specify an external data reference for the key::kUserAvatarImage policy.
-  std::unique_ptr<base::DictionaryValue> metadata =
-      test::ConstructExternalDataReference(
-          embedded_test_server()->GetURL(kExternalDataPath).spec(),
-          kExternalData);
-  std::string policy;
-  base::JSONWriter::Write(*metadata, &policy);
+  base::DictValue metadata = test::ConstructExternalDataReference(
+      embedded_test_server()->GetURL(kExternalDataPath).spec(), kExternalData);
+  std::string policy = base::WriteJson(metadata).value_or("");
   device_local_account_policy_.payload().mutable_useravatarimage()->set_value(
       policy);
   UploadAndInstallDeviceLocalAccountPolicy();
-  policy::BrowserPolicyConnectorChromeOS* connector =
-      g_browser_process->platform_part()->browser_policy_connector_chromeos();
   DeviceLocalAccountPolicyBroker* broker =
-      connector->GetDeviceLocalAccountPolicyService()->GetBrokerForUser(
-          account_id_1_.GetUserEmail());
+      GetDeviceLocalAccountPolicyBroker(account_id_1_);
   ASSERT_TRUE(broker);
   broker->core()->store()->Load();
 
@@ -1394,16 +1428,14 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, ExternalData) {
 
   // Retrieve the external data. Although the data is no longer being served,
   // the retrieval should succeed because the data has been cached.
-  run_loop = std::make_unique<base::RunLoop>();
-  std::unique_ptr<std::string> fetched_external_data;
-  base::FilePath file_path;
-  policy_entry->external_data_fetcher->Fetch(
-      base::BindOnce(&test::ExternalDataFetchCallback, &fetched_external_data,
-                     &file_path, run_loop->QuitClosure()));
-  run_loop->Run();
-
-  ASSERT_TRUE(fetched_external_data);
-  EXPECT_EQ(kExternalData, *fetched_external_data);
+  {
+    base::test::TestFuture<std::unique_ptr<std::string>, const base::FilePath&>
+        fetch_data_future;
+    policy_entry->external_data_fetcher->Fetch(fetch_data_future.GetCallback());
+    ASSERT_TRUE(fetch_data_future.Get<std::unique_ptr<std::string>>());
+    EXPECT_EQ(kExternalData,
+              *fetch_data_future.Get<std::unique_ptr<std::string>>());
+  }
 
   ASSERT_NO_FATAL_FAILURE(StartLogin(std::string(), std::string()));
   WaitForSessionStart();
@@ -1417,23 +1449,26 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, ExternalData) {
       PolicyNamespace(POLICY_DOMAIN_CHROME, std::string()));
   policy_entry = policies.Get(key::kUserAvatarImage);
   ASSERT_TRUE(policy_entry);
-  EXPECT_EQ(*metadata, *policy_entry->value());
+  ASSERT_TRUE(policy_entry->value(base::Value::Type::DICT));
+  EXPECT_EQ(metadata, policy_entry->value(base::Value::Type::DICT)->GetDict());
   ASSERT_TRUE(policy_entry->external_data_fetcher);
 
   // Retrieve the external data via the ProfilePolicyConnector. The retrieval
   // should succeed because the data has been cached.
-  run_loop = std::make_unique<base::RunLoop>();
-  fetched_external_data.reset();
-  policy_entry->external_data_fetcher->Fetch(
-      base::BindOnce(&test::ExternalDataFetchCallback, &fetched_external_data,
-                     &file_path, run_loop->QuitClosure()));
-  run_loop->Run();
-
-  ASSERT_TRUE(fetched_external_data);
-  EXPECT_EQ(kExternalData, *fetched_external_data);
+  {
+    base::test::TestFuture<std::unique_ptr<std::string>, const base::FilePath&>
+        fetch_data_future;
+    policy_entry->external_data_fetcher->Fetch(fetch_data_future.GetCallback());
+    ASSERT_TRUE(fetch_data_future.Get<std::unique_ptr<std::string>>());
+    EXPECT_EQ(kExternalData,
+              *fetch_data_future.Get<std::unique_ptr<std::string>>());
+  }
 }
 
 IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, UserAvatarImage) {
+  base::AddFeatureIdTagToTestResult(
+      DeviceLocalAccountTest::kUserAvatarImageTag);
+
   ASSERT_TRUE(embedded_test_server()->Start());
 
   UploadDeviceLocalAccountPolicy();
@@ -1451,23 +1486,17 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, UserAvatarImage) {
         &image_data));
   }
 
-  std::string policy;
-  base::JSONWriter::Write(
-      *test::ConstructExternalDataReference(
-          embedded_test_server()
-              ->GetURL(std::string("/") +
-                       ash::test::kUserAvatarImage1RelativePath)
-              .spec(),
-          image_data),
-      &policy);
+  std::string path =
+      std::string("/") + ash::test::kUserAvatarImage1RelativePath;
+  std::string url = embedded_test_server()->GetURL(path).spec();
+  std::string policy =
+      base::WriteJson(test::ConstructExternalDataReference(url, image_data))
+          .value_or("");
   device_local_account_policy_.payload().mutable_useravatarimage()->set_value(
       policy);
   UploadAndInstallDeviceLocalAccountPolicy();
-  policy::BrowserPolicyConnectorChromeOS* connector =
-      g_browser_process->platform_part()->browser_policy_connector_chromeos();
   DeviceLocalAccountPolicyBroker* broker =
-      connector->GetDeviceLocalAccountPolicyService()->GetBrokerForUser(
-          account_id_1_.GetUserEmail());
+      GetDeviceLocalAccountPolicyBroker(account_id_1_);
   ASSERT_TRUE(broker);
 
   broker->core()->store()->Load();
@@ -1488,21 +1517,19 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, UserAvatarImage) {
   const base::FilePath saved_image_path =
       user_data_dir.Append(account_id_1_.GetUserEmail()).AddExtension("jpg");
 
-  EXPECT_FALSE(user->HasDefaultImage());
-  EXPECT_EQ(user_manager::User::USER_IMAGE_EXTERNAL, user->image_index());
+  EXPECT_EQ(user_manager::UserImage::Type::kExternal, user->image_index());
   EXPECT_TRUE(ash::test::AreImagesEqual(policy_image, user->GetImage()));
-  const base::DictionaryValue* images_pref =
-      g_browser_process->local_state()->GetDictionary("user_image_info");
-  ASSERT_TRUE(images_pref);
-  const base::DictionaryValue* image_properties;
-  ASSERT_TRUE(images_pref->GetDictionaryWithoutPathExpansion(
-      account_id_1_.GetUserEmail(), &image_properties));
-  int image_index;
-  std::string image_path;
-  ASSERT_TRUE(image_properties->GetInteger("index", &image_index));
-  ASSERT_TRUE(image_properties->GetString("path", &image_path));
-  EXPECT_EQ(user_manager::User::USER_IMAGE_EXTERNAL, image_index);
-  EXPECT_EQ(saved_image_path.value(), image_path);
+  const base::DictValue& images_pref =
+      g_browser_process->local_state()->GetDict("user_image_info");
+  const base::DictValue* image_properties =
+      images_pref.FindDict(account_id_1_.GetUserEmail());
+  ASSERT_TRUE(image_properties);
+  std::optional<int> image_index = image_properties->FindInt("index");
+  const std::string* image_path = image_properties->FindString("path");
+  ASSERT_TRUE(image_index.has_value());
+  ASSERT_TRUE(image_path);
+  EXPECT_EQ(user_manager::UserImage::Type::kExternal, image_index.value());
+  EXPECT_EQ(saved_image_path.value(), *image_path);
 
   gfx::ImageSkia saved_image = ash::test::ImageLoader(saved_image_path).Load();
   ASSERT_FALSE(saved_image.isNull());
@@ -1530,7 +1557,7 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, LastWindowClosedLogoutReminder) {
   // Verify that the logout confirmation dialog is not showing.
   EXPECT_FALSE(IsLogoutConfirmationDialogShowing());
 
-  // Remove policy that allows only explicitly whitelisted apps to be installed
+  // Remove policy that allows only explicitly allowlisted apps to be installed
   // in a public session.
   extensions::ExtensionSystem* extension_system =
       extensions::ExtensionSystem::Get(profile);
@@ -1539,60 +1566,56 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, LastWindowClosedLogoutReminder) {
 
   // Install and a platform app.
   scoped_refptr<extensions::CrxInstaller> installer =
-      extensions::CrxInstaller::CreateSilent(
-          extension_system->extension_service());
+      extensions::CrxInstaller::CreateSilent(profile);
   installer->set_allow_silent_install(true);
-  installer->set_install_cause(extension_misc::INSTALL_CAUSE_USER_DOWNLOAD);
   installer->set_creation_flags(extensions::Extension::FROM_WEBSTORE);
-  content::WindowedNotificationObserver app_install_observer(
-      extensions::NOTIFICATION_CRX_INSTALLER_DONE,
-      content::NotificationService::AllSources());
-  base::FilePath test_dir;
-  ASSERT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &test_dir));
-  installer->InstallCrx(test_dir.Append(kPackagedAppCRXPath));
-  app_install_observer.Wait();
-  const extensions::Extension* app =
-      content::Details<const extensions::Extension>(
-          app_install_observer.details())
-          .ptr();
+
+  {
+    TestFuture<const std::optional<CrxInstallError>&> installer_done_future;
+    installer->AddInstallerCallback(installer_done_future.GetCallback());
+
+    base::FilePath test_dir;
+    ASSERT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &test_dir));
+    installer->InstallCrx(test_dir.Append(kPackagedAppCRXPath));
+
+    const std::optional<CrxInstallError>& error = installer_done_future.Get();
+    EXPECT_THAT(error, testing::Eq(std::nullopt));
+  }
+
+  const extensions::Extension* app = installer->extension();
+
+  apps::chrome_app_deprecation::ScopedAddAppToAllowlistForTesting allowlist(
+      app->id());
 
   // Start the platform app, causing it to open a window.
   run_loop_ = std::make_unique<base::RunLoop>();
   auto* proxy = apps::AppServiceProxyFactory::GetForProfile(profile);
-  proxy->FlushMojoCallsForTesting();
   proxy->Launch(
       app->id(),
-      apps::GetEventFlags(apps::mojom::LaunchContainer::kLaunchContainerWindow,
-                          WindowOpenDisposition::NEW_WINDOW,
+      apps::GetEventFlags(ui::mojom::WindowOpenDisposition::kNewWindow,
                           false /* preferred_containner */),
-      apps::mojom::LaunchSource::kFromChromeInternal,
-      apps::MakeWindowInfo(
-          display::Screen::GetScreen()->GetPrimaryDisplay().id()));
-  proxy->FlushMojoCallsForTesting();
+      apps::LaunchSource::kFromChromeInternal,
+      std::make_unique<apps::WindowInfo>(
+          display::Screen::Get()->GetPrimaryDisplay().id()));
   run_loop_->Run();
   EXPECT_EQ(1U, app_window_registry->app_windows().size());
 
   // Close the only open browser window.
-  BrowserList* browser_list = BrowserList::GetInstance();
-  EXPECT_EQ(1U, browser_list->size());
-  Browser* browser = browser_list->get(0);
+  EXPECT_EQ(1U, GlobalBrowserCollection::GetInstance()->GetSize());
+  BrowserWindowInterface* browser =
+      GetLastActiveBrowserWindowInterfaceWithAnyProfile();
   ASSERT_TRUE(browser);
-  BrowserWindow* browser_window = browser->window();
-  ASSERT_TRUE(browser_window);
-  run_loop_ = std::make_unique<base::RunLoop>();
-  browser_window->Close();
-  browser_window = NULL;
-  run_loop_->Run();
-  browser = NULL;
-  EXPECT_TRUE(browser_list->empty());
+  CloseBrowserAndVerifyDestruction(browser);
+  browser = nullptr;
+  EXPECT_FALSE(GetLastActiveBrowserWindowInterfaceWithAnyProfile());
 
   // Verify that the logout confirmation dialog is not showing because an app
   // window is still open.
   EXPECT_FALSE(IsLogoutConfirmationDialogShowing());
 
   // Open a browser window.
-  Browser* first_browser = CreateBrowser(profile);
-  EXPECT_EQ(1U, browser_list->size());
+  BrowserWindowInterface* first_browser = CreateBrowser(profile);
+  EXPECT_EQ(1U, GlobalBrowserCollection::GetInstance()->GetSize());
 
   // Close the app window.
   run_loop_ = std::make_unique<base::RunLoop>();
@@ -1606,32 +1629,22 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, LastWindowClosedLogoutReminder) {
   EXPECT_FALSE(IsLogoutConfirmationDialogShowing());
 
   // Open a second browser window.
-  Browser* second_browser = CreateBrowser(profile);
-  EXPECT_EQ(2U, browser_list->size());
+  BrowserWindowInterface* second_browser = CreateBrowser(profile);
+  EXPECT_EQ(2U, GlobalBrowserCollection::GetInstance()->GetSize());
 
   // Close the first browser window.
-  browser_window = first_browser->window();
-  ASSERT_TRUE(browser_window);
-  run_loop_ = std::make_unique<base::RunLoop>();
-  browser_window->Close();
-  browser_window = NULL;
-  run_loop_->Run();
-  first_browser = NULL;
-  EXPECT_EQ(1U, browser_list->size());
+  CloseBrowserAndVerifyDestruction(first_browser);
+  first_browser = nullptr;
+  EXPECT_EQ(1U, GlobalBrowserCollection::GetInstance()->GetSize());
 
   // Verify that the logout confirmation dialog is not showing because a browser
   // window is still open.
   EXPECT_FALSE(IsLogoutConfirmationDialogShowing());
 
   // Close the second browser window.
-  browser_window = second_browser->window();
-  ASSERT_TRUE(browser_window);
-  run_loop_ = std::make_unique<base::RunLoop>();
-  browser_window->Close();
-  browser_window = NULL;
-  run_loop_->Run();
-  second_browser = NULL;
-  EXPECT_TRUE(browser_list->empty());
+  CloseBrowserAndVerifyDestruction(second_browser);
+  second_browser = nullptr;
+  EXPECT_FALSE(GetLastActiveBrowserWindowInterfaceWithAnyProfile());
 
   // Verify that the logout confirmation dialog is showing.
   EXPECT_TRUE(IsLogoutConfirmationDialogShowing());
@@ -1644,17 +1657,12 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, LastWindowClosedLogoutReminder) {
 
   // Open a browser window.
   browser = CreateBrowser(profile);
-  EXPECT_EQ(1U, browser_list->size());
+  EXPECT_EQ(1U, GlobalBrowserCollection::GetInstance()->GetSize());
 
   // Close the browser window.
-  browser_window = browser->window();
-  ASSERT_TRUE(browser_window);
-  run_loop_ = std::make_unique<base::RunLoop>();
-  browser_window->Close();
-  browser_window = NULL;
-  run_loop_->Run();
-  browser = NULL;
-  EXPECT_TRUE(browser_list->empty());
+  CloseBrowserAndVerifyDestruction(browser);
+  browser = nullptr;
+  EXPECT_FALSE(GetLastActiveBrowserWindowInterfaceWithAnyProfile());
 
   // Verify that the logout confirmation dialog is showing again.
   EXPECT_TRUE(IsLogoutConfirmationDialogShowing());
@@ -1712,10 +1720,10 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, NoRecommendedLocaleSwitch) {
 
   // Verify that the locale and keyboard layout have been applied.
   EXPECT_EQ(kPublicSessionLocale, g_browser_process->GetApplicationLocale());
-  EXPECT_EQ(l10n_util::GetLanguage(kPublicSessionLocale),
+  EXPECT_EQ(base::i18n::GetLanguageSubtagUsingLanguageTag(kPublicSessionLocale),
             icu::Locale::getDefault().getLanguage());
   EXPECT_EQ(public_session_input_method_id_,
-            chromeos::input_method::InputMethodManager::Get()
+            ash::input_method::InputMethodManager::Get()
                 ->GetActiveIMEState()
                 ->GetCurrentInputMethod()
                 .id());
@@ -1725,7 +1733,9 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, NoRecommendedLocaleSwitch) {
 // timezone, which should be possible iff the timezone automatic detection
 // policy is set to either DISABLED or USERS_DECIDE.
 IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, ManagedSessionTimezoneChange) {
-  SetManagedSessionsEnabled(true);
+  const PrefService& local_state =
+      CHECK_DEREF(g_browser_process->local_state());
+
   UploadAndInstallDeviceLocalAccountPolicy();
   AddPublicSessionToDevicePolicy(kAccountId1);
   EnableAutoLogin();
@@ -1739,48 +1749,47 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, ManagedSessionTimezoneChange) {
   const user_manager::User* user =
       user_manager::UserManager::Get()->FindUser(account_id_1_);
   ASSERT_TRUE(user);
-  ASSERT_EQ(user->GetType(), user_manager::USER_TYPE_PUBLIC_ACCOUNT);
+  ASSERT_EQ(user->GetType(), user_manager::UserType::kPublicAccount);
 
   std::u16string timezone_id1(u"America/Los_Angeles");
   std::string timezone_id2("Europe/Berlin");
   std::u16string timezone_id2_utf16(u"Europe/Berlin");
 
-  chromeos::system::TimezoneSettings* timezone_settings =
-      chromeos::system::TimezoneSettings::GetInstance();
+  ash::system::TimezoneSettings* timezone_settings =
+      ash::system::TimezoneSettings::GetInstance();
 
   timezone_settings->SetTimezoneFromID(timezone_id1);
   SetSystemTimezoneAutomaticDetectionPolicy(em::SystemTimezoneProto::DISABLED);
-  chromeos::system::SetSystemTimezone(user, timezone_id2);
+  ash::system::SetSystemTimezone(local_state, user, timezone_id2);
   EXPECT_EQ(timezone_settings->GetCurrentTimezoneID(), timezone_id2_utf16);
 
   timezone_settings->SetTimezoneFromID(timezone_id1);
   SetSystemTimezoneAutomaticDetectionPolicy(
       em::SystemTimezoneProto::USERS_DECIDE);
-  chromeos::system::SetSystemTimezone(user, timezone_id2);
+  ash::system::SetSystemTimezone(local_state, user, timezone_id2);
   EXPECT_EQ(timezone_settings->GetCurrentTimezoneID(), timezone_id2_utf16);
 
   timezone_settings->SetTimezoneFromID(timezone_id1);
   SetSystemTimezoneAutomaticDetectionPolicy(em::SystemTimezoneProto::IP_ONLY);
-  chromeos::system::SetSystemTimezone(user, timezone_id2);
+  ash::system::SetSystemTimezone(local_state, user, timezone_id2);
   EXPECT_NE(timezone_settings->GetCurrentTimezoneID(), timezone_id2_utf16);
 
   timezone_settings->SetTimezoneFromID(timezone_id1);
   SetSystemTimezoneAutomaticDetectionPolicy(
       em::SystemTimezoneProto::SEND_WIFI_ACCESS_POINTS);
-  chromeos::system::SetSystemTimezone(user, timezone_id2);
+  ash::system::SetSystemTimezone(local_state, user, timezone_id2);
   EXPECT_NE(timezone_settings->GetCurrentTimezoneID(), timezone_id2_utf16);
 
   timezone_settings->SetTimezoneFromID(timezone_id1);
   SetSystemTimezoneAutomaticDetectionPolicy(
       em::SystemTimezoneProto::SEND_ALL_LOCATION_INFO);
-  chromeos::system::SetSystemTimezone(user, timezone_id2);
+  ash::system::SetSystemTimezone(local_state, user, timezone_id2);
   EXPECT_NE(timezone_settings->GetCurrentTimezoneID(), timezone_id2_utf16);
 }
 
 IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, OneRecommendedLocale) {
   // Specify a recommended locale.
-  SetRecommendedLocales(kSingleRecommendedLocale,
-                        base::size(kSingleRecommendedLocale));
+  SetRecommendedLocales(kSingleRecommendedLocale);
   UploadAndInstallDeviceLocalAccountPolicy();
   AddPublicSessionToDevicePolicy(kAccountId1);
 
@@ -1799,14 +1808,15 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, OneRecommendedLocale) {
   // layout applicable to the locale was chosen.
   EXPECT_EQ(kSingleRecommendedLocale[0],
             g_browser_process->GetApplicationLocale());
-  EXPECT_EQ(l10n_util::GetLanguage(kSingleRecommendedLocale[0]),
+  EXPECT_EQ(base::i18n::GetLanguageSubtagUsingLanguageTag(
+                kSingleRecommendedLocale[0]),
             icu::Locale::getDefault().getLanguage());
   VerifyKeyboardLayoutMatchesLocale();
 }
 
 IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, MultipleRecommendedLocales) {
   // Specify recommended locales.
-  SetRecommendedLocales(kRecommendedLocales1, base::size(kRecommendedLocales1));
+  SetRecommendedLocales(kRecommendedLocales1);
   UploadAndInstallDeviceLocalAccountPolicy();
   AddPublicSessionToDevicePolicy(kAccountId1);
   AddPublicSessionToDevicePolicy(kAccountId2);
@@ -1819,19 +1829,20 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, MultipleRecommendedLocales) {
   // ones, followed by others.
   std::vector<ash::LocaleItem> locales =
       ash::LoginScreenTestApi::GetExpandedPublicSessionLocales();
-  EXPECT_LT(base::size(kRecommendedLocales1), locales.size());
+  EXPECT_LT(kRecommendedLocales1.size(), locales.size());
 
   // Verify that the list starts with the recommended locales, in correct order.
-  for (size_t i = 0; i < base::size(kRecommendedLocales1); ++i) {
+  for (size_t i = 0; i < kRecommendedLocales1.size(); ++i) {
     EXPECT_EQ(kRecommendedLocales1[i], locales[i].language_code);
   }
 
   // Verify that the recommended locales do not appear again in the remainder of
   // the list.
   std::set<std::string> recommended_locales;
-  for (size_t i = 0; i < base::size(kRecommendedLocales1); ++i)
-    recommended_locales.insert(kRecommendedLocales1[i]);
-  for (size_t i = base::size(kRecommendedLocales1); i < locales.size(); ++i) {
+  for (std::string_view locale : kRecommendedLocales1) {
+    recommended_locales.insert(std::string(locale));
+  }
+  for (size_t i = kRecommendedLocales1.size(); i < locales.size(); ++i) {
     const std::string& locale = locales[i].language_code;
     EXPECT_EQ(recommended_locales.end(), recommended_locales.find(locale));
   }
@@ -1843,22 +1854,19 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, MultipleRecommendedLocales) {
   EXPECT_EQ(kRecommendedLocales1[0], selected_locale);
 
   // Change the list of recommended locales.
-  SetRecommendedLocales(kRecommendedLocales2, base::size(kRecommendedLocales2));
+  SetRecommendedLocales(kRecommendedLocales2);
 
   UploadAndInstallDeviceLocalAccountPolicy();
-  policy::BrowserPolicyConnectorChromeOS* connector =
-      g_browser_process->platform_part()->browser_policy_connector_chromeos();
   DeviceLocalAccountPolicyBroker* broker =
-      connector->GetDeviceLocalAccountPolicyService()->GetBrokerForUser(
-          account_id_1_.GetUserEmail());
+      GetDeviceLocalAccountPolicyBroker(account_id_1_);
   ASSERT_TRUE(broker);
-  broker->core()->client()->FetchPolicy();
+  broker->core()->client()->FetchPolicy(PolicyFetchReason::kTest);
   WaitForPublicSessionLocalesChange(account_id_1_);
 
   // Verify that the new list of locales is shown in the UI.
   locales = ash::LoginScreenTestApi::GetExpandedPublicSessionLocales();
-  EXPECT_LT(base::size(kRecommendedLocales2), locales.size());
-  for (size_t i = 0; i < base::size(kRecommendedLocales2); ++i) {
+  EXPECT_LT(kRecommendedLocales2.size(), locales.size());
+  for (size_t i = 0; i < kRecommendedLocales2.size(); ++i) {
     const std::string& locale = locales[i].language_code;
     EXPECT_EQ(kRecommendedLocales2[i], locale);
   }
@@ -1872,10 +1880,10 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, MultipleRecommendedLocales) {
   ash::LoginScreenTestApi::SetPublicSessionLocale(kPublicSessionLocale);
 
   // Change the list of recommended locales.
-  SetRecommendedLocales(kRecommendedLocales1, base::size(kRecommendedLocales1));
+  SetRecommendedLocales(kRecommendedLocales1);
 
   UploadAndInstallDeviceLocalAccountPolicy();
-  broker->core()->client()->FetchPolicy();
+  broker->core()->client()->FetchPolicy(PolicyFetchReason::kTest);
   WaitForPublicSessionLocalesChange(account_id_1_);
 
   // Verify that the manually selected locale is still selected.
@@ -1924,10 +1932,10 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, MultipleRecommendedLocales) {
 
   // Verify that the locale and keyboard layout have been applied.
   EXPECT_EQ(kPublicSessionLocale, g_browser_process->GetApplicationLocale());
-  EXPECT_EQ(l10n_util::GetLanguage(kPublicSessionLocale),
+  EXPECT_EQ(base::i18n::GetLanguageSubtagUsingLanguageTag(kPublicSessionLocale),
             icu::Locale::getDefault().getLanguage());
   EXPECT_EQ(public_session_input_method_id_,
-            chromeos::input_method::InputMethodManager::Get()
+            ash::input_method::InputMethodManager::Get()
                 ->GetActiveIMEState()
                 ->GetCurrentInputMethod()
                 .id());
@@ -1935,8 +1943,7 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, MultipleRecommendedLocales) {
 
 IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, InvalidRecommendedLocale) {
   // Specify an invalid recommended locale.
-  SetRecommendedLocales(kInvalidRecommendedLocale,
-                        base::size(kInvalidRecommendedLocale));
+  SetRecommendedLocales(kInvalidRecommendedLocale);
   UploadAndInstallDeviceLocalAccountPolicy();
   AddPublicSessionToDevicePolicy(kAccountId1);
 
@@ -1952,32 +1959,65 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, InvalidRecommendedLocale) {
   // Verify that since the recommended locale was invalid, the locale has not
   // changed and the first keyboard layout applicable to the locale was chosen.
   EXPECT_EQ(initial_locale_, g_browser_process->GetApplicationLocale());
-  EXPECT_EQ(l10n_util::GetLanguage(initial_locale_),
+  EXPECT_EQ(base::i18n::GetLanguageSubtagUsingLanguageTag(initial_locale_),
             icu::Locale::getDefault().getLanguage());
   VerifyKeyboardLayoutMatchesLocale();
 }
 
 IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, LocaleWithIME) {
   // Specify a locale that has real IMEs in addition to a keyboard layout one.
-  const char* const kSingleLocaleWithIME[] = {"ja"};
-  RunWithRecommendedLocale(kSingleLocaleWithIME,
-                           base::size(kSingleLocaleWithIME));
+  constexpr auto kSingleLocaleWithIME = std::to_array<std::string_view>({"ja"});
+  RunWithRecommendedLocale(kSingleLocaleWithIME);
 
-  EXPECT_GT(chromeos::input_method::InputMethodManager::Get()
+  EXPECT_GT(ash::input_method::InputMethodManager::Get()
                 ->GetActiveIMEState()
-                ->GetNumActiveInputMethods(),
+                ->GetNumEnabledInputMethods(),
             1u);
 }
 
 IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, LocaleWithNoIME) {
   // Specify a locale that has only keyboard layout.
-  const char* const kSingleLocaleWithNoIME[] = {"de"};
-  RunWithRecommendedLocale(kSingleLocaleWithNoIME,
-                           base::size(kSingleLocaleWithNoIME));
+  constexpr auto kSingleLocaleWithNoIME =
+      std::to_array<std::string_view>({"de"});
+  RunWithRecommendedLocale(kSingleLocaleWithNoIME);
 
-  EXPECT_EQ(1u, chromeos::input_method::InputMethodManager::Get()
+  EXPECT_EQ(1u, ash::input_method::InputMethodManager::Get()
                     ->GetActiveIMEState()
-                    ->GetNumActiveInputMethods());
+                    ->GetNumEnabledInputMethods());
+}
+
+IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, LocaleWithNoKeyboardLayout) {
+  // Specify a locale ("hi") that has only non-keyboard-layout IMEs and no XKB
+  // keyboard layout.
+  constexpr auto kSingleLocaleWithNoKeyboardLayout =
+      std::to_array<std::string_view>({"hi"});
+  auto* input_method_manager = ash::input_method::InputMethodManager::Get();
+  std::vector<std::string> layouts_from_locale;
+  input_method_manager->GetInputMethodUtil()->GetInputMethodIdsFromLanguageCode(
+      kSingleLocaleWithNoKeyboardLayout[0],
+      ash::input_method::kKeyboardLayoutsOnly, &layouts_from_locale);
+  ASSERT_TRUE(layouts_from_locale.empty());
+
+  SetRecommendedLocales(kSingleLocaleWithNoKeyboardLayout);
+  UploadAndInstallDeviceLocalAccountPolicy();
+  AddPublicSessionToDevicePolicy(kAccountId1);
+  EnableAutoLogin();
+
+  WaitForPolicy();
+
+  WaitForSessionStart();
+
+  EXPECT_EQ(kSingleLocaleWithNoKeyboardLayout[0],
+            g_browser_process->GetApplicationLocale());
+  EXPECT_EQ(base::i18n::GetLanguageSubtagUsingLanguageTag(
+                kSingleLocaleWithNoKeyboardLayout[0]),
+            icu::Locale::getDefault().getLanguage());
+  EXPECT_EQ(
+      input_method_manager->GetInputMethodUtil()->GetHardwareInputMethodIds()[0],
+      input_method_manager->GetActiveIMEState()->GetCurrentInputMethod().id());
+  EXPECT_GT(
+      input_method_manager->GetActiveIMEState()->GetNumEnabledInputMethods(),
+      1u);
 }
 
 IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest,
@@ -2000,7 +2040,7 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest,
 IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest,
                        AutoLoginWithRecommendedLocales) {
   // Specify recommended locales.
-  SetRecommendedLocales(kRecommendedLocales1, base::size(kRecommendedLocales1));
+  SetRecommendedLocales(kRecommendedLocales1);
   UploadAndInstallDeviceLocalAccountPolicy();
   AddPublicSessionToDevicePolicy(kAccountId1);
   EnableAutoLogin();
@@ -2012,12 +2052,15 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest,
   // Verify that the first recommended locale has been applied and the first
   // keyboard layout applicable to the locale was chosen.
   EXPECT_EQ(kRecommendedLocales1[0], g_browser_process->GetApplicationLocale());
-  EXPECT_EQ(l10n_util::GetLanguage(kRecommendedLocales1[0]),
-            icu::Locale::getDefault().getLanguage());
+  EXPECT_EQ(
+      base::i18n::GetLanguageSubtagUsingLanguageTag(kRecommendedLocales1[0]),
+      icu::Locale::getDefault().getLanguage());
   VerifyKeyboardLayoutMatchesLocale();
 }
 
-IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, TermsOfServiceWithLocaleSwitch) {
+// TODO(crbug.com/40923043): Flaky.
+IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest,
+                       DISABLED_TermsOfServiceWithLocaleSwitch) {
   // Specify Terms of Service URL.
   ASSERT_TRUE(embedded_test_server()->Start());
   device_local_account_policy_.payload().mutable_termsofserviceurl()->set_value(
@@ -2026,8 +2069,13 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, TermsOfServiceWithLocaleSwitch) {
           .spec());
   UploadAndInstallDeviceLocalAccountPolicy();
   AddPublicSessionToDevicePolicy(kAccountId1);
-
   WaitForPolicy();
+
+  // Prevent browser start in user session so that we do not need to wait
+  // for its initialization.
+  ash::test::UserSessionManagerTestApi(ash::UserSessionManager::GetInstance())
+      .SetShouldLaunchBrowserInTests(false);
+
   ExpandPublicSessionPod(false);
 
   // Select a different locale.
@@ -2037,65 +2085,48 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, TermsOfServiceWithLocaleSwitch) {
   // point. Wait for the constructions of this list to finish.
   WaitForGetKeyboardLayoutsForLocaleToFinish();
 
-  // Set up an observer that will quit the message loop when login has succeeded
-  // and the first wizard screen, if any, is being shown.
-  base::RunLoop login_wait_run_loop;
-  chromeos::MockAuthStatusConsumer login_status_consumer(
-      login_wait_run_loop.QuitClosure());
-  EXPECT_CALL(login_status_consumer, OnAuthSuccess(_))
-      .Times(1)
-      .WillOnce(InvokeWithoutArgs(&login_wait_run_loop, &base::RunLoop::Quit));
-  chromeos::ExistingUserController* controller =
-      chromeos::ExistingUserController::current_controller();
-  ASSERT_TRUE(controller);
-  controller->AddLoginStatusConsumer(&login_status_consumer);
-
+  ash::test::ProfilePreparedWaiter profile_prepared(account_id_1_);
   // Manually select a different keyboard layout and click the enter button to
   // start the session.
   ash::LoginScreenTestApi::SetPublicSessionKeyboard(
       public_session_input_method_id_);
   ash::LoginScreenTestApi::ClickPublicExpandedSubmitButton();
-
-  // Spin the loop until the login observer fires. Then, unregister the
-  // observer.
-  login_wait_run_loop.Run();
-  controller->RemoveLoginStatusConsumer(&login_status_consumer);
+  profile_prepared.Wait();
 
   // Wait for the Terms of Service screen is being shown.
-  chromeos::OobeScreenWaiter(chromeos::TermsOfServiceScreenView::kScreenId)
-      .Wait();
+  ash::OobeScreenWaiter(ash::TermsOfServiceScreenView::kScreenId).Wait();
 
   // Wait for the Terms of Service to finish downloading.
-  chromeos::test::OobeJS()
-      .CreateWaiter(GetOobeElementPath({"terms-of-service"}) + ".isLoaded_()")
+  ash::test::OobeJS()
+      .CreateVisibilityWaiter(true, {"terms-of-service", "step-loaded"})
       ->Wait();
 
   // Verify that the locale and keyboard layout have been applied.
   EXPECT_EQ(kPublicSessionLocale, g_browser_process->GetApplicationLocale());
-  EXPECT_EQ(l10n_util::GetLanguage(kPublicSessionLocale),
+  EXPECT_EQ(base::i18n::GetLanguageSubtagUsingLanguageTag(kPublicSessionLocale),
             icu::Locale::getDefault().getLanguage());
   EXPECT_EQ(public_session_input_method_id_,
-            chromeos::input_method::InputMethodManager::Get()
+            ash::input_method::InputMethodManager::Get()
                 ->GetActiveIMEState()
                 ->GetCurrentInputMethod()
                 .id());
 
   // Wait for 'tos-accept-button' to become enabled.
-  chromeos::test::OobeJS()
+  ash::test::OobeJS()
       .CreateEnabledWaiter(true, {"terms-of-service", "acceptButton"})
       ->Wait();
 
   // Click the accept button.
-  chromeos::test::OobeJS().ClickOnPath({"terms-of-service", "acceptButton"});
+  ash::test::OobeJS().ClickOnPath({"terms-of-service", "acceptButton"});
 
   WaitForSessionStart();
 
   // Verify that the locale and keyboard layout are still in force.
   EXPECT_EQ(kPublicSessionLocale, g_browser_process->GetApplicationLocale());
-  EXPECT_EQ(l10n_util::GetLanguage(kPublicSessionLocale),
+  EXPECT_EQ(base::i18n::GetLanguageSubtagUsingLanguageTag(kPublicSessionLocale),
             icu::Locale::getDefault().getLanguage());
   EXPECT_EQ(public_session_input_method_id_,
-            chromeos::input_method::InputMethodManager::Get()
+            ash::input_method::InputMethodManager::Get()
                 ->GetActiveIMEState()
                 ->GetCurrentInputMethod()
                 .id());
@@ -2119,11 +2150,107 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, PublicSessionWithLocaleSwitch) {
 
   // Verify that the locale.
   EXPECT_EQ(kPublicSessionLocale, g_browser_process->GetApplicationLocale());
-  EXPECT_EQ(l10n_util::GetLanguage(kPublicSessionLocale),
+  EXPECT_EQ(base::i18n::GetLanguageSubtagUsingLanguageTag(kPublicSessionLocale),
             icu::Locale::getDefault().getLanguage());
 }
 
-IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, PolicyForExtensions) {
+IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, LoginWarningShown) {
+  UploadAndInstallDeviceLocalAccountPolicy();
+  AddPublicSessionToDevicePolicy(kAccountId1);
+
+  WaitForPolicy();
+
+  ExpandPublicSessionPod(false);
+
+  // Click the link that switches the pod to its advanced form. Verify that the
+  // pod switches from basic to advanced.
+  ash::LoginScreenTestApi::ClickPublicExpandedAdvancedViewButton();
+  ASSERT_TRUE(ash::LoginScreenTestApi::IsExpandedPublicSessionAdvanced());
+  ASSERT_TRUE(ash::LoginScreenTestApi::IsPublicSessionWarningShown());
+}
+
+IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, SessionLengthLimit) {
+  base::AddFeatureIdTagToTestResult(
+      DeviceLocalAccountTest::kSessionLengthLimitTag);
+  constexpr int kThreeHoursInMs = 3 * 60 * 60 * 1000;
+  constexpr int kTwoHoursInMs = 2 * 60 * 60 * 1000;
+
+  PolicyTestAppTerminationObserver observer;
+
+  TestSessionManagerObserver session_manager_observer(
+      session_manager::SessionManager::Get());
+
+  // Install and refresh the device policy now. This will also fetch the initial
+  // user policy for the device-local account now.
+  SetSessionLengthLimitPolicy(kThreeHoursInMs);
+
+  ASSERT_NO_FATAL_FAILURE(StartLogin(std::string(), std::string()));
+  WaitForSessionStart();
+
+  // Setup a fake delegate to advance clock.
+  base::SimpleTestClock clock;
+  clock.SetNow(base::Time::Now());
+  auto clock_resetter = g_browser_process->platform_part()
+                            ->chrome_session_manager()
+                            ->GetSessionLengthLimiterForTesting()
+                            ->SetClockForTesting(&clock);
+
+  // Ensure the SessionLengthLimit is updated.
+  LocalStateValueWaiter(ash::prefs::kSessionLengthLimit,
+                        base::Value(kThreeHoursInMs))
+      .Wait();
+
+  // The session is not terminated.
+  EXPECT_FALSE(observer.WasAppTerminated());
+  EXPECT_EQ(0u, session_manager_observer.sign_out_requested_count());
+
+  // Advance the clock by 3 hours.
+  clock.Advance(base::Hours(3));
+
+  // Update the SessionLengthLimit policy to limit the session by two hours.
+  // The session is expected to be terminated asap, because the current time is
+  // later than the max session length.
+  SetSessionLengthLimitPolicy(kTwoHoursInMs);
+
+  // Fetch the policy update.
+  {
+    DeviceLocalAccountPolicyBroker* broker =
+        GetDeviceLocalAccountPolicyBroker(account_id_1_);
+    ASSERT_TRUE(broker);
+    broker->core()->client()->FetchPolicy(PolicyFetchReason::kTest);
+  }
+  // Ensure the SessionLengthLimit is updated.
+  LocalStateValueWaiter(ash::prefs::kSessionLengthLimit,
+                        base::Value(kTwoHoursInMs))
+      .Wait();
+
+  // The session is terminated.
+  EXPECT_TRUE(observer.WasAppTerminated());
+  EXPECT_EQ(1u, session_manager_observer.sign_out_requested_count());
+}
+
+struct FeaturesTestParam {
+  std::vector<base::test::FeatureRef> enabled_features;
+  std::vector<base::test::FeatureRef> disabled_features;
+};
+class DeviceLocalAccountPolicyFetchSha256Test
+    : public DeviceLocalAccountTest,
+      public ::testing::WithParamInterface<FeaturesTestParam> {
+ public:
+  DeviceLocalAccountPolicyFetchSha256Test() {
+    const FeaturesTestParam& features_test_param = GetParam();
+    scoped_feature_list_.InitWithFeatures(
+        features_test_param.enabled_features,
+        features_test_param.disabled_features);
+  }
+  ~DeviceLocalAccountPolicyFetchSha256Test() override = default;
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_P(DeviceLocalAccountPolicyFetchSha256Test,
+                       PolicyForExtensions) {
   // Set up a test update server for the Show Managed Storage app.
   ASSERT_TRUE(embedded_test_server()->InitializeAndListen());
   scoped_refptr<TestingUpdateManifestProvider> testing_update_manifest_provider(
@@ -2138,7 +2265,7 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, PolicyForExtensions) {
   embedded_test_server()->StartAcceptingConnections();
 
   // Force-install the Show Managed Storage app. This app can be installed in
-  // public sessions because it's whitelisted for testing purposes.
+  // public sessions because it's allowlisted for testing purposes.
   em::StringList* forcelist = device_local_account_policy_.payload()
                                   .mutable_extensioninstallforcelist()
                                   ->mutable_value();
@@ -2150,13 +2277,13 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, PolicyForExtensions) {
   // Note that the policy for the device-local account will be fetched before
   // the session is started, so the policy for the app must be installed before
   // the first device policy fetch.
-  ASSERT_TRUE(local_policy_mixin_.server()->UpdatePolicyData(
+  policy_test_server_mixin_.UpdateExternalPolicy(
       dm_protocol::kChromeExtensionPolicyType, kShowManagedStorageID,
       "{"
       "  \"string\": {"
       "    \"Value\": \"policy test value one\""
       "  }"
-      "}"));
+      "}");
 
   // Install and refresh the device policy now. This will also fetch the initial
   // user policy for the device-local account now.
@@ -2185,59 +2312,38 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, PolicyForExtensions) {
   ASSERT_TRUE(policy_service);
   const PolicyNamespace ns(POLICY_DOMAIN_EXTENSIONS, kShowManagedStorageID);
   if (policy_service->GetPolicies(ns).Get("string") == nullptr) {
-    PolicyChangeRegistrar policy_registrar(policy_service, ns);
-    base::RunLoop run_loop;
-    policy_registrar.Observe(
-        "string",
-        base::BindRepeating(&PolicyChangedCallback, run_loop.QuitClosure()));
-    run_loop.Run();
+    RefreshAndWaitForPolicies(policy_service, ns);
   }
 
   // Verify that the app policy was set.
   base::Value expected_value("policy test value one");
-  EXPECT_EQ(expected_value,
-            *policy_service->GetPolicies(ns).GetValue("string"));
+  EXPECT_EQ(expected_value, *policy_service->GetPolicies(ns).GetValue(
+                                "string", base::Value::Type::STRING));
 
   // Now update the policy at the server.
-  ASSERT_TRUE(local_policy_mixin_.server()->UpdatePolicyData(
+  policy_test_server_mixin_.UpdateExternalPolicy(
       dm_protocol::kChromeExtensionPolicyType, kShowManagedStorageID,
       "{"
       "  \"string\": {"
       "    \"Value\": \"policy test value two\""
       "  }"
-      "}"));
+      "}");
 
   // And issue a policy refresh.
-  {
-    PolicyChangeRegistrar policy_registrar(policy_service, ns);
-    base::RunLoop run_loop;
-    policy_registrar.Observe(
-        "string",
-        base::BindRepeating(&PolicyChangedCallback, run_loop.QuitClosure()));
-    policy_service->RefreshPolicies(base::OnceClosure());
-    run_loop.Run();
-  }
+  const base::Value* new_value = RefreshAndWaitForPolicies(policy_service, ns);
 
   // Verify that the app policy was updated.
   base::Value expected_new_value("policy test value two");
-  EXPECT_EQ(expected_new_value,
-            *policy_service->GetPolicies(ns).GetValue("string"));
+  EXPECT_EQ(expected_new_value, *new_value);
 }
 
-IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, LoginWarningShown) {
-  UploadAndInstallDeviceLocalAccountPolicy();
-  AddPublicSessionToDevicePolicy(kAccountId1);
-
-  WaitForPolicy();
-
-  ExpandPublicSessionPod(false);
-
-  // Click the link that switches the pod to its advanced form. Verify that the
-  // pod switches from basic to advanced.
-  ash::LoginScreenTestApi::ClickPublicExpandedAdvancedViewButton();
-  ASSERT_TRUE(ash::LoginScreenTestApi::IsExpandedPublicSessionAdvanced());
-  ASSERT_TRUE(ash::LoginScreenTestApi::IsPublicSessionWarningShown());
-}
+INSTANTIATE_TEST_SUITE_P(
+    DeviceLocalAccountPolicyFetchSha256Test,
+    DeviceLocalAccountPolicyFetchSha256Test,
+    ::testing::Values(
+        FeaturesTestParam{.enabled_features = {policy::kPolicyFetchWithSha256}},
+        FeaturesTestParam{
+            .disabled_features = {policy::kPolicyFetchWithSha256}}));
 
 class DeviceLocalAccountWarnings : public DeviceLocalAccountTest {
   void SetUpInProcessBrowserTestFixture() override {
@@ -2251,7 +2357,7 @@ class DeviceLocalAccountWarnings : public DeviceLocalAccountTest {
         proto.mutable_managed_guest_session_privacy_warnings();
     managed_sessions_warnings->set_enabled(false);
     RefreshDevicePolicy();
-    ASSERT_TRUE(local_policy_mixin_.UpdateDevicePolicy(proto));
+    policy_test_server_mixin_.UpdateDevicePolicy(proto);
   }
 };
 
@@ -2272,7 +2378,7 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountWarnings, NoLoginWarningShown) {
 
 class ManagedSessionsTest : public DeviceLocalAccountTest {
  protected:
-  class CertsObserver : public chromeos::PolicyCertificateProvider::Observer {
+  class CertsObserver : public ash::PolicyCertificateProvider::Observer {
    public:
     explicit CertsObserver(base::OnceClosure on_change)
         : on_change_(std::move(on_change)) {}
@@ -2307,13 +2413,6 @@ class ManagedSessionsTest : public DeviceLocalAccountTest {
     embedded_test_server()->StartAcceptingConnections();
   }
 
-  DeviceLocalAccountPolicyBroker* GetDeviceLocalAccountPolicyBroker() {
-    return g_browser_process->platform_part()
-        ->browser_policy_connector_chromeos()
-        ->GetDeviceLocalAccountPolicyService()
-        ->GetBrokerForUser(account_id_1_.GetUserEmail());
-  }
-
   void AddExtension(const char* extension_id) {
     // Specify policy to install an extension.
     em::StringList* forcelist = device_local_account_policy_.payload()
@@ -2334,14 +2433,14 @@ class ManagedSessionsTest : public DeviceLocalAccountTest {
     AddExtension(kGoodExtensionID);
   }
 
-  void AddForceInstalledWhitelistedExtension() {
+  void AddForceInstalledAllowlistedExtension() {
     AddExtension(kShowManagedStorageID);
   }
 
   void WaitForCertificateUpdate() {
-    policy::DeviceNetworkConfigurationUpdater* updater =
+    DeviceNetworkConfigurationUpdaterAsh* updater =
         g_browser_process->platform_part()
-            ->browser_policy_connector_chromeos()
+            ->browser_policy_connector_ash()
             ->GetDeviceNetworkConfigurationUpdater();
     base::RunLoop run_loop;
     auto observer = std::make_unique<CertsObserver>(run_loop.QuitClosure());
@@ -2359,34 +2458,7 @@ class ManagedSessionsTest : public DeviceLocalAccountTest {
   }
 };
 
-IN_PROC_BROWSER_TEST_F(ManagedSessionsTest, ManagedSessionsDisabled) {
-  SetManagedSessionsEnabled(/* managed_sessions_enabled */ false);
-
-  // Install and refresh the device policy now. This will also fetch the initial
-  // user policy for the device-local account now.
-  UploadAndInstallDeviceLocalAccountPolicy();
-  AddPublicSessionToDevicePolicy(kAccountId1);
-  WaitForPolicy();
-
-  const user_manager::User* user =
-      user_manager::UserManager::Get()->FindUser(account_id_1_);
-  ASSERT_TRUE(user);
-  auto* broker = GetDeviceLocalAccountPolicyBroker();
-  ASSERT_TRUE(broker);
-
-  // Check that managed sessions mode is disabled.
-  EXPECT_FALSE(
-      ash::ChromeUserManager::Get()->IsManagedSessionEnabledForUser(*user));
-
-  // Check that disabled managed sessions mode hides full management disclosure
-  // warning.
-  EXPECT_FALSE(
-      ash::ChromeUserManager::Get()->IsFullManagementDisclosureNeeded(broker));
-}
-
 IN_PROC_BROWSER_TEST_F(ManagedSessionsTest, ManagedSessionsEnabledNonRisky) {
-  SetManagedSessionsEnabled(/* managed_sessions_enabled */ true);
-
   // Install and refresh the device policy now. This will also fetch the initial
   // user policy for the device-local account now.
   UploadAndInstallDeviceLocalAccountPolicy();
@@ -2396,17 +2468,10 @@ IN_PROC_BROWSER_TEST_F(ManagedSessionsTest, ManagedSessionsEnabledNonRisky) {
   const user_manager::User* user =
       user_manager::UserManager::Get()->FindUser(account_id_1_);
   ASSERT_TRUE(user);
-  auto* broker = GetDeviceLocalAccountPolicyBroker();
-  ASSERT_TRUE(broker);
-
-  // Check that managed sessions mode is enabled.
-  ASSERT_TRUE(
-      ash::ChromeUserManager::Get()->IsManagedSessionEnabledForUser(*user));
 
   // Management disclosure warning is shown in the beginning, because
   // kManagedSessionUseFullLoginWarning pref is set to true in the beginning.
-  ASSERT_TRUE(
-      ash::ChromeUserManager::Get()->IsFullManagementDisclosureNeeded(broker));
+  EXPECT_TRUE(IsFullManagementDisclosureNeeded(account_id_1_));
 
   ASSERT_NO_FATAL_FAILURE(StartLogin(std::string(), std::string()));
   WaitForSessionStart();
@@ -2414,12 +2479,10 @@ IN_PROC_BROWSER_TEST_F(ManagedSessionsTest, ManagedSessionsEnabledNonRisky) {
   // After the login, kManagedSessionUseFullLoginWarning pref is updated.
   // Check that management disclosure warning is not shown when managed sessions
   // are enabled, but policy settings are not risky.
-  ASSERT_FALSE(
-      ash::ChromeUserManager::Get()->IsFullManagementDisclosureNeeded(broker));
+  ASSERT_FALSE(IsFullManagementDisclosureNeeded(account_id_1_));
 }
 
 IN_PROC_BROWSER_TEST_F(ManagedSessionsTest, ForceInstalledSafeExtension) {
-  SetManagedSessionsEnabled(/* managed_sessions_enabled */ true);
   StartTestExtensionsServer();
   AddForceInstalledSafeExtension();
 
@@ -2432,18 +2495,10 @@ IN_PROC_BROWSER_TEST_F(ManagedSessionsTest, ForceInstalledSafeExtension) {
   const user_manager::User* user =
       user_manager::UserManager::Get()->FindUser(account_id_1_);
   ASSERT_TRUE(user);
-  auto* broker = GetDeviceLocalAccountPolicyBroker();
-  ASSERT_TRUE(broker);
-
-  // Check that 'DeviceLocalAccountManagedSessionEnabled' policy was applied
-  // correctly.
-  EXPECT_TRUE(
-      ash::ChromeUserManager::Get()->IsManagedSessionEnabledForUser(*user));
 
   // Management disclosure warning is shown in the beginning, because
   // kManagedSessionUseFullLoginWarning pref is set to true in the beginning.
-  ASSERT_TRUE(
-      ash::ChromeUserManager::Get()->IsFullManagementDisclosureNeeded(broker));
+  ASSERT_TRUE(IsFullManagementDisclosureNeeded(account_id_1_));
 
   ExtensionInstallObserver install_observer(kHostedAppID);
 
@@ -2455,12 +2510,13 @@ IN_PROC_BROWSER_TEST_F(ManagedSessionsTest, ForceInstalledSafeExtension) {
   // After the login, kManagedSessionUseFullLoginWarning pref is updated.
   // Check that force-installed extension activates managed session mode for
   // device-local users.
-  EXPECT_FALSE(
-      ash::ChromeUserManager::Get()->IsFullManagementDisclosureNeeded(broker));
+  EXPECT_FALSE(IsFullManagementDisclosureNeeded(account_id_1_));
 }
 
 IN_PROC_BROWSER_TEST_F(ManagedSessionsTest, ForceInstalledUnsafeExtension) {
-  SetManagedSessionsEnabled(/* managed_sessions_enabled */ true);
+  // TODO(https://crbug.com/40804030): Remove this when updated to use MV3.
+  extensions::ScopedTestMV2Enabler mv2_enabler;
+
   StartTestExtensionsServer();
   AddForceInstalledUnsafeExtension();
 
@@ -2473,18 +2529,10 @@ IN_PROC_BROWSER_TEST_F(ManagedSessionsTest, ForceInstalledUnsafeExtension) {
   const user_manager::User* user =
       user_manager::UserManager::Get()->FindUser(account_id_1_);
   ASSERT_TRUE(user);
-  auto* broker = GetDeviceLocalAccountPolicyBroker();
-  ASSERT_TRUE(broker);
-
-  // Check that 'DeviceLocalAccountManagedSessionEnabled' policy was applied
-  // correctly.
-  EXPECT_TRUE(
-      ash::ChromeUserManager::Get()->IsManagedSessionEnabledForUser(*user));
 
   // Management disclosure warning is shown in the beginning, because
   // kManagedSessionUseFullLoginWarning pref is set to true in the beginning.
-  ASSERT_TRUE(
-      ash::ChromeUserManager::Get()->IsFullManagementDisclosureNeeded(broker));
+  ASSERT_TRUE(IsFullManagementDisclosureNeeded(account_id_1_));
 
   ExtensionInstallObserver install_observer(kGoodExtensionID);
 
@@ -2496,14 +2544,12 @@ IN_PROC_BROWSER_TEST_F(ManagedSessionsTest, ForceInstalledUnsafeExtension) {
   // After the login, kManagedSessionUseFullLoginWarning pref is updated.
   // Check that force-installed extension activates managed session mode for
   // device-local users.
-  EXPECT_TRUE(
-      ash::ChromeUserManager::Get()->IsFullManagementDisclosureNeeded(broker));
+  EXPECT_TRUE(IsFullManagementDisclosureNeeded(account_id_1_));
 }
 
-IN_PROC_BROWSER_TEST_F(ManagedSessionsTest, WhitelistedExtension) {
-  SetManagedSessionsEnabled(/* managed_sessions_enabled */ true);
+IN_PROC_BROWSER_TEST_F(ManagedSessionsTest, AllowlistedExtension) {
   StartTestExtensionsServer();
-  AddForceInstalledWhitelistedExtension();
+  AddForceInstalledAllowlistedExtension();
 
   // Install and refresh the device policy now. This will also fetch the initial
   // user policy for the device-local account now.
@@ -2514,18 +2560,10 @@ IN_PROC_BROWSER_TEST_F(ManagedSessionsTest, WhitelistedExtension) {
   const user_manager::User* user =
       user_manager::UserManager::Get()->FindUser(account_id_1_);
   ASSERT_TRUE(user);
-  auto* broker = GetDeviceLocalAccountPolicyBroker();
-  ASSERT_TRUE(broker);
-
-  // Check that 'DeviceLocalAccountManagedSessionEnabled' policy was applied
-  // correctly.
-  EXPECT_TRUE(
-      ash::ChromeUserManager::Get()->IsManagedSessionEnabledForUser(*user));
 
   // Management disclosure warning is shown in the beginning, because
   // kManagedSessionUseFullLoginWarning pref is set to true in the beginning.
-  ASSERT_TRUE(
-      ash::ChromeUserManager::Get()->IsFullManagementDisclosureNeeded(broker));
+  ASSERT_TRUE(IsFullManagementDisclosureNeeded(account_id_1_));
 
   ExtensionInstallObserver install_observer(kShowManagedStorageID);
 
@@ -2537,13 +2575,10 @@ IN_PROC_BROWSER_TEST_F(ManagedSessionsTest, WhitelistedExtension) {
   // After the login, kManagedSessionUseFullLoginWarning pref is updated.
   // Check that white-listed extension is not considered risky and doesn't
   // activate managed session mode.
-  EXPECT_FALSE(
-      ash::ChromeUserManager::Get()->IsFullManagementDisclosureNeeded(broker));
+  EXPECT_FALSE(IsFullManagementDisclosureNeeded(account_id_1_));
 }
 
 IN_PROC_BROWSER_TEST_F(ManagedSessionsTest, NetworkCertificate) {
-  SetManagedSessionsEnabled(/* managed_sessions_enabled */ true);
-
   device_local_account_policy_.payload()
       .mutable_opennetworkconfiguration()
       ->set_value(kFakeOncWithCertificate);
@@ -2556,23 +2591,13 @@ IN_PROC_BROWSER_TEST_F(ManagedSessionsTest, NetworkCertificate) {
   const user_manager::User* user =
       user_manager::UserManager::Get()->FindUser(account_id_1_);
   ASSERT_TRUE(user);
-  auto* broker = GetDeviceLocalAccountPolicyBroker();
-  ASSERT_TRUE(broker);
-
-  // Check that 'DeviceLocalAccountManagedSessionEnabled' policy was applied
-  // correctly.
-  EXPECT_TRUE(
-      ash::ChromeUserManager::Get()->IsManagedSessionEnabledForUser(*user));
 
   // Check that network certificate pushed via policy activates managed sessions
   // mode.
-  EXPECT_TRUE(
-      ash::ChromeUserManager::Get()->IsFullManagementDisclosureNeeded(broker));
+  EXPECT_TRUE(IsFullManagementDisclosureNeeded(account_id_1_));
 }
 
 IN_PROC_BROWSER_TEST_F(ManagedSessionsTest, AllowCrossOriginAuthPrompt) {
-  SetManagedSessionsEnabled(/* managed_sessions_enabled */ true);
-
   device_local_account_policy_.payload()
       .mutable_allowcrossoriginauthprompt()
       ->set_value(true);
@@ -2586,32 +2611,33 @@ IN_PROC_BROWSER_TEST_F(ManagedSessionsTest, AllowCrossOriginAuthPrompt) {
   const user_manager::User* user =
       user_manager::UserManager::Get()->FindUser(account_id_1_);
   ASSERT_TRUE(user);
-  auto* broker = GetDeviceLocalAccountPolicyBroker();
-  ASSERT_TRUE(broker);
-
-  // Check that 'DeviceLocalAccountManagedSessionEnabled' policy was applied
-  // correctly.
-  ASSERT_TRUE(
-      ash::ChromeUserManager::Get()->IsManagedSessionEnabledForUser(*user));
 
   // Check that setting a value to 'AllowCrossOriginAuthPrompt' activates
   // managed sessions mode.
-  ASSERT_TRUE(
-      ash::ChromeUserManager::Get()->IsFullManagementDisclosureNeeded(broker));
+  ASSERT_TRUE(IsFullManagementDisclosureNeeded(account_id_1_));
 }
 
 class TermsOfServiceDownloadTest : public DeviceLocalAccountTest,
-                                   public testing::WithParamInterface<bool> {};
+                                   public testing::WithParamInterface<bool> {
+ public:
+  void SetUpOnMainThread() override {
+    DeviceLocalAccountTest::SetUpOnMainThread();
+
+    // Prevent browser start in user session so that we do not need to wait
+    // for its initialization.
+    ash::test::UserSessionManagerTestApi(ash::UserSessionManager::GetInstance())
+        .SetShouldLaunchBrowserInTests(false);
+  }
+
+  bool UseValidURL() const { return GetParam(); }
+};
 
 IN_PROC_BROWSER_TEST_P(TermsOfServiceDownloadTest, TermsOfServiceScreen) {
-  // Parameterization for using valid and invalid URLs.
-  const bool use_valid_url = GetParam();
-
   // Specify Terms of Service URL.
   ASSERT_TRUE(embedded_test_server()->Start());
   device_local_account_policy_.payload().mutable_termsofserviceurl()->set_value(
       embedded_test_server()
-          ->GetURL(std::string("/") + (use_valid_url
+          ->GetURL(std::string("/") + (UseValidURL()
                                            ? kExistentTermsOfServicePath
                                            : kNonexistentTermsOfServicePath))
           .spec());
@@ -2620,60 +2646,37 @@ IN_PROC_BROWSER_TEST_P(TermsOfServiceDownloadTest, TermsOfServiceScreen) {
 
   WaitForPolicy();
 
+  ash::test::ProfilePreparedWaiter profile_prepared(account_id_1_);
   ASSERT_NO_FATAL_FAILURE(StartLogin(std::string(), std::string()));
-
-  // Set up an observer that will quit the message loop when login has succeeded
-  // and the first wizard screen, if any, is being shown.
-  base::RunLoop login_wait_run_loop;
-  chromeos::MockAuthStatusConsumer login_status_consumer(
-      login_wait_run_loop.QuitClosure());
-  EXPECT_CALL(login_status_consumer, OnAuthSuccess(_))
-      .Times(1)
-      .WillOnce(InvokeWithoutArgs(&login_wait_run_loop, &base::RunLoop::Quit));
-
-  // Spin the loop until the observer fires. Then, unregister the observer.
-  chromeos::ExistingUserController* controller =
-      chromeos::ExistingUserController::current_controller();
-  ASSERT_TRUE(controller);
-  controller->AddLoginStatusConsumer(&login_status_consumer);
-  login_wait_run_loop.Run();
-  controller->RemoveLoginStatusConsumer(&login_status_consumer);
+  profile_prepared.Wait();
 
   // Verify that the Terms of Service screen is being shown.
-  auto* wizard_controller = ash::WizardController::default_controller();
-  ASSERT_TRUE(wizard_controller);
-  ASSERT_TRUE(wizard_controller->current_screen());
-  EXPECT_EQ(chromeos::TermsOfServiceScreenView::kScreenId.AsId(),
-            wizard_controller->current_screen()->screen_id());
+  ash::OobeScreenWaiter(ash::TermsOfServiceScreenView::kScreenId).Wait();
 
   // Wait for the Terms of Service to finish loading.
 
-  if (!use_valid_url) {
+  if (!UseValidURL()) {
     // The Terms of Service URL was invalid. Verify that the screen is showing
     // an error and the accept button is disabled.
-    chromeos::test::OobeJS()
-        .CreateVisibilityWaiter(
-            true, {"terms-of-service", "termsOfServiceErrorDialog"})
+    ash::test::OobeJS()
+        .CreateVisibilityWaiter(true, {"terms-of-service", "step-error"})
         ->Wait();
 
-    chromeos::test::OobeJS().ExpectTrue(
-        GetOobeElementPath({"terms-of-service"}) + ".hasError_()");
-
-    chromeos::test::OobeJS().ExpectDisabledPath(
+    ash::test::OobeJS().ExpectDisabledPath(
         {"terms-of-service", "acceptButton"});
     return;
   }
 
-  chromeos::test::OobeJS()
-      .CreateWaiter(GetOobeElementPath({"terms-of-service"}) + ".isLoaded_()")
+  ash::test::OobeJS()
+      .CreateVisibilityWaiter(true, {"terms-of-service", "step-loaded"})
       ->Wait();
 
-  chromeos::test::OobeJS()
+  ash::test::OobeJS()
       .CreateVisibilityWaiter(true, {"terms-of-service", "termsOfServiceFrame"})
       ->Wait();
 
   // Get the Terms Of Service from the webview.
-  const std::string content = chromeos::test::GetWebViewContents(
+  const std::string content = ash::test::GetWebViewContents(
       {"terms-of-service", "termsOfServiceFrame"});
 
   // Get the expected values for heading and subheading.
@@ -2683,10 +2686,10 @@ IN_PROC_BROWSER_TEST_P(TermsOfServiceDownloadTest, TermsOfServiceScreen) {
       IDS_TERMS_OF_SERVICE_SCREEN_SUBHEADING, kDomain);
 
   // Compare heading and subheading
-  chromeos::test::OobeJS().ExpectEQ(
+  ash::test::OobeJS().ExpectEQ(
       GetOobeElementPath({"terms-of-service", "tosHeading"}) + ".textContent",
       expected_heading);
-  chromeos::test::OobeJS().ExpectEQ(
+  ash::test::OobeJS().ExpectEQ(
       GetOobeElementPath({"terms-of-service", "tosSubheading"}) +
           ".textContent",
       expected_subheading);
@@ -2703,14 +2706,14 @@ IN_PROC_BROWSER_TEST_P(TermsOfServiceDownloadTest, TermsOfServiceScreen) {
   }
   EXPECT_EQ(terms_of_service, content);
 
-  chromeos::test::OobeJS().ExpectFalse(
-      GetOobeElementPath({"terms-of-service"}) + ".hasError_()");
+  ash::test::OobeJS()
+      .CreateVisibilityWaiter(false, {"terms-of-service", "step-error"})
+      ->Wait();
 
-  chromeos::test::OobeJS().ExpectEnabledPath(
-      {"terms-of-service", "acceptButton"});
+  ash::test::OobeJS().ExpectEnabledPath({"terms-of-service", "acceptButton"});
 
   // Click the accept button.
-  chromeos::test::OobeJS().ClickOnPath({"terms-of-service", "acceptButton"});
+  ash::test::OobeJS().ClickOnPath({"terms-of-service", "acceptButton"});
 
   WaitForSessionStart();
 }
@@ -2720,7 +2723,7 @@ IN_PROC_BROWSER_TEST_P(TermsOfServiceDownloadTest, DeclineTermsOfService) {
   ASSERT_TRUE(embedded_test_server()->Start());
   device_local_account_policy_.payload().mutable_termsofserviceurl()->set_value(
       embedded_test_server()
-          ->GetURL(std::string("/") + (GetParam()
+          ->GetURL(std::string("/") + (UseValidURL()
                                            ? kExistentTermsOfServicePath
                                            : kNonexistentTermsOfServicePath))
           .spec());
@@ -2729,35 +2732,26 @@ IN_PROC_BROWSER_TEST_P(TermsOfServiceDownloadTest, DeclineTermsOfService) {
 
   WaitForPolicy();
 
+  ash::test::ProfilePreparedWaiter profile_prepared(account_id_1_);
   ASSERT_NO_FATAL_FAILURE(StartLogin(std::string(), std::string()));
-
-  // Set up an observer that will quit the message loop when login has succeeded
-  // and the first wizard screen, if any, is being shown.
-  base::RunLoop login_wait_run_loop;
-  chromeos::MockAuthStatusConsumer login_status_consumer(
-      login_wait_run_loop.QuitClosure());
-  EXPECT_CALL(login_status_consumer, OnAuthSuccess(_))
-      .Times(1)
-      .WillOnce(InvokeWithoutArgs(&login_wait_run_loop, &base::RunLoop::Quit));
-
-  // Spin the loop until the observer fires. Then, unregister the observer.
-  chromeos::ExistingUserController* controller =
-      chromeos::ExistingUserController::current_controller();
-  ASSERT_TRUE(controller);
-  controller->AddLoginStatusConsumer(&login_status_consumer);
-  login_wait_run_loop.Run();
-  controller->RemoveLoginStatusConsumer(&login_status_consumer);
+  profile_prepared.Wait();
 
   // Verify that the Terms of Service screen is being shown.
-  auto* wizard_controller = ash::WizardController::default_controller();
-  ASSERT_TRUE(wizard_controller);
-  ASSERT_TRUE(wizard_controller->current_screen());
-  EXPECT_EQ(chromeos::TermsOfServiceScreenView::kScreenId.AsId(),
-            wizard_controller->current_screen()->screen_id());
+  ash::OobeScreenWaiter(ash::TermsOfServiceScreenView::kScreenId).Wait();
 
-  // Click the back button.
-  chromeos::test::OobeJS().ClickOnPath({"terms-of-service", "backButton"});
-
+  if (!UseValidURL()) {
+    ash::test::OobeJS()
+        .CreateVisibilityWaiter(true, {"terms-of-service", "step-error"})
+        ->Wait();
+    ash::test::TapOnPathAndWaitForOobeToBeDestroyed(
+        {"terms-of-service", "errorBackButton"});
+  } else {
+    ash::test::OobeJS()
+        .CreateVisibilityWaiter(true, {"terms-of-service", "step-loaded"})
+        ->Wait();
+    ash::test::TapOnPathAndWaitForOobeToBeDestroyed(
+        {"terms-of-service", "backButton"});
+  }
   EXPECT_TRUE(session_manager_client()->session_stopped());
 }
 
@@ -2765,25 +2759,240 @@ INSTANTIATE_TEST_SUITE_P(TermsOfServiceDownloadTestInstance,
                          TermsOfServiceDownloadTest,
                          testing::Bool());
 
+// Tests that display prefs are updated in MGS when enabled by
+// DeviceAllowMGSToStoreDisplayProperties policy.
+class MgsDisplayPrefsTest : public DeviceLocalAccountTest,
+                            public testing::WithParamInterface<bool> {
+ protected:
+  void SetUpOnMainThread() override {
+    DeviceLocalAccountTest::SetUpOnMainThread();
+    local_state_ = g_browser_process->local_state();
+    ASSERT_TRUE(local_state_);
+  }
+
+  void TearDownOnMainThread() override {
+    DeviceLocalAccountTest::TearDownOnMainThread();
+    local_state_ = nullptr;
+  }
+
+  void SetUpAndWaitForSessionStart() {
+    UploadAndInstallDeviceLocalAccountPolicy();
+    AddPublicSessionToDevicePolicy(kAccountId1);
+    WaitForPolicy();
+
+    ASSERT_NO_FATAL_FAILURE(StartLogin(std::string(), std::string()));
+    WaitForSessionStart();
+  }
+
+  void SetAllowMgsToStoreDisplayProperties(bool allowed) {
+    local_state_->SetBoolean(ash::prefs::kAllowMGSToStoreDisplayProperties,
+                             allowed);
+  }
+
+  bool IsMgsAllowedToStoreDisplayProperties() { return GetParam(); }
+
+  const base::DictValue* GetDisplayProperties() {
+    const base::DictValue& display_properties =
+        local_state_->GetDict(ash::prefs::kDisplayProperties);
+    return display_properties.FindDict(
+        base::NumberToString(GetPrimaryDisplay().id()));
+  }
+
+  void UpdateDisplayProperties(base::DictValue properties) {
+    ScopedDictPrefUpdate update(local_state_, ash::prefs::kDisplayProperties);
+    update->Set(base::NumberToString(GetPrimaryDisplay().id()),
+                std::move(properties));
+  }
+
+  static void UpdateDisplay(const std::string& display_specs) {
+    display::test::DisplayManagerTestApi(GetDisplayManager())
+        .UpdateDisplay(display_specs);
+    ash::ScreenOrientationControllerTestApi(
+        ash::Shell::Get()->screen_orientation_controller())
+        .UpdateNaturalOrientation();
+  }
+
+  static const display::Display& GetPrimaryDisplay() {
+    return GetDisplayManager()->GetPrimaryDisplayCandidate();
+  }
+
+  static const display::ManagedDisplayMode GetManagedDisplayMode() {
+    display::ManagedDisplayMode display_mode;
+    GetDisplayManager()->GetSelectedModeForDisplayId(GetPrimaryDisplay().id(),
+                                                     &display_mode);
+    return display_mode;
+  }
+
+  static ash::DisplayPrefs* GetDisplayPrefs() {
+    return ash::Shell::Get()->display_prefs();
+  }
+
+  static display::DisplayManager* GetDisplayManager() {
+    return ash::Shell::Get()->display_manager();
+  }
+
+ private:
+  raw_ptr<PrefService> local_state_;
+};
+
+IN_PROC_BROWSER_TEST_P(MgsDisplayPrefsTest,
+                       PRE_DisplayPropertiesPersistWhenEnabledByPolicy) {
+  // Set initial values for the display which will be loaded from `local_state`
+  // by `display_prefs`.
+  SetAllowMgsToStoreDisplayProperties(true);
+  // This adds one display with maximum resolution 1960x1000 and two display
+  // modes with resolution 1960x1000 and 1000x600.
+  UpdateDisplay("1960x1000#1960x1000*1|1000x600*2");
+  UpdateDisplayProperties(
+      base::DictValue()
+          .Set("rotation", display::Display::Rotation::ROTATE_0)
+          .Set("width", 1960)
+          .Set("height", 1000));
+  GetDisplayPrefs()->LoadDisplayPrefsForTest();
+
+  SetUpAndWaitForSessionStart();
+
+  // Verify initial display pref values.
+  EXPECT_EQ(display::Display::Rotation::ROTATE_0,
+            GetPrimaryDisplay().rotation());
+  EXPECT_EQ(GetManagedDisplayMode().size(), gfx::Size(1960, 1000));
+  EXPECT_EQ(GetManagedDisplayMode().device_scale_factor(), 1.0f);
+
+  SetAllowMgsToStoreDisplayProperties(IsMgsAllowedToStoreDisplayProperties());
+
+  EXPECT_TRUE(display::test::SetDisplayResolution(
+      GetDisplayManager(), GetPrimaryDisplay().id(), gfx::Size(1000, 600)));
+  GetDisplayManager()->SetDisplayRotation(
+      GetPrimaryDisplay().id(), display::Display::Rotation::ROTATE_270,
+      display::Display::RotationSource::USER);
+}
+
+IN_PROC_BROWSER_TEST_P(MgsDisplayPrefsTest,
+                       DisplayPropertiesPersistWhenEnabledByPolicy) {
+  base::AddFeatureIdTagToTestResult(DeviceLocalAccountTest::kDisplayPrefsTag);
+
+  GetDisplayPrefs()->LoadDisplayPrefsForTest();
+
+  if (IsMgsAllowedToStoreDisplayProperties()) {
+    EXPECT_EQ(GetPrimaryDisplay().rotation(),
+              display::Display::Rotation::ROTATE_270);
+    EXPECT_EQ(GetManagedDisplayMode().size(), gfx::Size(1000, 600));
+    EXPECT_EQ(GetManagedDisplayMode().device_scale_factor(), 2.0f);
+  } else {
+    EXPECT_EQ(GetPrimaryDisplay().rotation(),
+              display::Display::Rotation::ROTATE_0);
+    EXPECT_EQ(GetManagedDisplayMode().size(), gfx::Size(1960, 1000));
+    EXPECT_EQ(GetManagedDisplayMode().device_scale_factor(), 1.0f);
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(MgsDisplayPrefsTestInstance,
+                         MgsDisplayPrefsTest,
+                         testing::Bool());
+
 IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, WebAppsInPublicSession) {
   UploadAndInstallDeviceLocalAccountPolicy();
-  // Add an account with DeviceLocalAccount::Type::TYPE_PUBLIC_SESSION.
+  // Add an account with DeviceLocalAccountType::kPublicSession.
   AddPublicSessionToDevicePolicy(kAccountId1);
   WaitForPolicy();
 
   StartLogin(std::string(), std::string());
   WaitForSessionStart();
 
-  // WebAppProvider should be enabled for TYPE_PUBLIC_SESSION user account.
+  // WebAppProvider should be enabled for kPublicSession user account.
   Profile* profile = GetProfileForTest();
   ASSERT_TRUE(profile);
-  EXPECT_TRUE(web_app::WebAppProvider::Get(profile));
+  EXPECT_TRUE(web_app::WebAppProvider::GetForTest(profile));
 }
 
-}  // namespace policy
+// TODO(b/307518336): move UKM tests to
+// chrome/browser/metrics/ukm_browsertest.cc.
+class DeviceLocalAccountUkmTest : public DeviceLocalAccountTest {
+ public:
+  void SetChromeMetricsEnabled(bool value) {
+    chrome_metrics_enabled_ = value;
+    ChromeMetricsServiceAccessor::SetMetricsAndCrashReportingForTesting(
+        &chrome_metrics_enabled_);
+  }
+
+ private:
+  bool chrome_metrics_enabled_;
+};
+
+IN_PROC_BROWSER_TEST_F(DeviceLocalAccountUkmTest, PRE_ReportUkmOnShutdown) {
+  ukm::UkmTestHelper ukm_test_helper(GetUkmService());
+  SetChromeMetricsEnabled(true);
+
+  // Setup managed guest session.
+  AddPublicSessionToDevicePolicy(kAccountId1);
+  UploadAndInstallDeviceLocalAccountPolicy();
+  WaitForPolicy();
+  ASSERT_NO_FATAL_FAILURE(StartLogin(std::string(), std::string()));
+  WaitForSessionStart();
+  ASSERT_TRUE(chromeos::IsManagedGuestSession());
+
+  EnableUrlKeyedAnonymizedDataCollection(GetProfileForTest());
+  EXPECT_TRUE(ukm_test_helper.IsRecordingEnabled());
+
+  // A browser is opened by default in MGS.
+  EXPECT_EQ(1U, GlobalBrowserCollection::GetInstance()->GetSize());
+
+  // Delete all UKM to check metrics reported during the shutdown.
+  ukm_test_helper.PurgeData();
+  EXPECT_FALSE(ukm_test_helper.HasUnsentLogs());
+}
+
+IN_PROC_BROWSER_TEST_F(DeviceLocalAccountUkmTest, ReportUkmOnShutdown) {
+  ukm::UkmTestHelper ukm_test_helper(GetUkmService());
+  SetChromeMetricsEnabled(true);
+
+  // Check metrics from the previous managed guest session.
+  ASSERT_TRUE(ukm_test_helper.HasUnsentLogs());
+  std::unique_ptr<ukm::Report> report = ukm_test_helper.GetUkmReport();
+  ASSERT_EQ(1, report->sources_size());
+  EXPECT_EQ(ukm::SourceType::APP_ID, report->sources().Get(0).type());
+}
+
+IN_PROC_BROWSER_TEST_F(
+    DeviceLocalAccountTest,
+    ManagedGuestSession_AllowedInputMethods_PreservesActive) {
+  em::StringListPolicyProto* allowed_input_methods =
+      device_local_account_policy_.payload().mutable_allowedinputmethods();
+  allowed_input_methods->mutable_value()->add_entries("xkb:fr::fra");
+  allowed_input_methods->mutable_value()->add_entries("xkb:us::eng");
+
+  UploadAndInstallDeviceLocalAccountPolicy();
+  AddPublicSessionToDevicePolicy(kAccountId1);
+
+  WaitForPolicy();
+
+  ash::input_method::InputMethodManager::Get()
+      ->GetActiveIMEState()
+      ->EnableInputMethod(
+          ash::extension_ime_util::GetInputMethodIDByEngineID("xkb:fr::fra"));
+  ash::input_method::InputMethodManager::Get()
+      ->GetActiveIMEState()
+      ->ChangeInputMethod(
+          ash::extension_ime_util::GetInputMethodIDByEngineID("xkb:fr::fra"),
+          false /* show_message */);
+
+  ASSERT_NO_FATAL_FAILURE(StartLogin(
+      std::string(),
+      ash::extension_ime_util::GetInputMethodIDByEngineID("xkb:us::eng")));
+  WaitForSessionStart();
+
+  Profile* profile = GetProfileForTest();
+  ASSERT_TRUE(profile);
+  PrefService* prefs = profile->GetPrefs();
+
+  EXPECT_EQ(ash::extension_ime_util::GetInputMethodIDByEngineID("xkb:us::eng"),
+            prefs->GetString(ash::prefs::kLanguageCurrentInputMethod));
+  EXPECT_EQ(ash::extension_ime_util::GetInputMethodIDByEngineID("xkb:fr::fra"),
+            prefs->GetString(ash::prefs::kLanguagePreviousInputMethod));
+}
 
 class AmbientAuthenticationManagedGuestSessionTest
-    : public policy::DeviceLocalAccountTest,
+    : public DeviceLocalAccountTest,
       public testing::WithParamInterface<net::AmbientAuthAllowedProfileTypes> {
  public:
   void SetAmbientAuthPolicy(net::AmbientAuthAllowedProfileTypes value) {
@@ -2797,8 +3006,10 @@ class AmbientAuthenticationManagedGuestSessionTest
     int policy_value = device_local_account_policy_.payload()
                            .ambientauthenticationinprivatemodesenabled()
                            .value();
-    Profile* regular_profile = GetCurrentBrowser()->profile();
-    Profile* incognito_profile =
+    EXPECT_EQ(1U, GlobalBrowserCollection::GetInstance()->GetSize());
+    Profile* const regular_profile =
+        GetLastActiveBrowserWindowInterfaceWithAnyProfile()->GetProfile();
+    Profile* const incognito_profile =
         regular_profile->GetPrimaryOTRProfile(/*create_if_needed=*/true);
 
     EXPECT_TRUE(AmbientAuthenticationTestHelper::IsAmbientAuthAllowedForProfile(
@@ -2808,23 +3019,14 @@ class AmbientAuthenticationManagedGuestSessionTest
               AmbientAuthenticationTestHelper::IsIncognitoAllowedInPolicy(
                   policy_value));
   }
-
-  Browser* GetCurrentBrowser() {
-    BrowserList* browser_list = BrowserList::GetInstance();
-    EXPECT_EQ(1U, browser_list->size());
-    Browser* browser = browser_list->get(0);
-    DCHECK(browser);
-    return browser;
-  }
 };
 
 IN_PROC_BROWSER_TEST_P(AmbientAuthenticationManagedGuestSessionTest,
                        AmbientAuthenticationInPrivateModesEnabledPolicy) {
-  SetManagedSessionsEnabled(true);
   SetAmbientAuthPolicy(GetParam());
 
   UploadAndInstallDeviceLocalAccountPolicy();
-  AddPublicSessionToDevicePolicy(policy::kAccountId1);
+  AddPublicSessionToDevicePolicy(kAccountId1);
   EnableAutoLogin();
 
   WaitForPolicy();
@@ -2836,10 +3038,12 @@ IN_PROC_BROWSER_TEST_P(AmbientAuthenticationManagedGuestSessionTest,
   IsAmbientAuthAllowedForProfilesTest();
 }
 
-INSTANTIATE_TEST_CASE_P(
+INSTANTIATE_TEST_SUITE_P(
     AmbientAuthAllPolicyValuesTest,
     AmbientAuthenticationManagedGuestSessionTest,
-    testing::Values(net::AmbientAuthAllowedProfileTypes::REGULAR_ONLY,
-                    net::AmbientAuthAllowedProfileTypes::INCOGNITO_AND_REGULAR,
-                    net::AmbientAuthAllowedProfileTypes::GUEST_AND_REGULAR,
-                    net::AmbientAuthAllowedProfileTypes::ALL));
+    testing::Values(net::AmbientAuthAllowedProfileTypes::kRegularOnly,
+                    net::AmbientAuthAllowedProfileTypes::kIncognitoAndRegular,
+                    net::AmbientAuthAllowedProfileTypes::kGuestAndRegular,
+                    net::AmbientAuthAllowedProfileTypes::kAll));
+
+}  // namespace policy

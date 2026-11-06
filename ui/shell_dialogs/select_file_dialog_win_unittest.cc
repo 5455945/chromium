@@ -1,6 +1,8 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "ui/shell_dialogs/select_file_dialog_win.h"
 
 #include <stddef.h>
 
@@ -8,12 +10,10 @@
 #include <string>
 #include <vector>
 
-#include "base/cxx17_backports.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/logging.h"
-#include "base/macros.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
@@ -23,9 +23,10 @@
 #include "base/win/scoped_com_initializer.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/shell_dialogs/safe_accept_file_dialog_event_handler_win.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
-#include "ui/shell_dialogs/select_file_dialog_win.h"
 #include "ui/shell_dialogs/select_file_policy.h"
+#include "ui/shell_dialogs/selected_file_info.h"
 #include "ui/strings/grit/ui_strings.h"
 
 namespace {
@@ -38,7 +39,7 @@ constexpr wchar_t kSaveFileDefaultTitle[] = L"Save As";
 // Returns the title of |window|.
 std::wstring GetWindowTitle(HWND window) {
   wchar_t buffer[256];
-  UINT count = ::GetWindowText(window, buffer, base::size(buffer));
+  UINT count = ::GetWindowText(window, buffer, std::size(buffer));
   return std::wstring(buffer, count);
 }
 
@@ -50,7 +51,7 @@ HWND WaitForDialogWindow(const std::wstring& dialog_title) {
 
   HWND result = nullptr;
   base::TimeDelta max_wait_time = TestTimeouts::action_timeout();
-  base::TimeDelta retry_interval = base::TimeDelta::FromMilliseconds(20);
+  base::TimeDelta retry_interval = base::Milliseconds(20);
   while (!result && (max_wait_time.InMilliseconds() > 0)) {
     result = ::FindWindow(kDialogClassName, dialog_title.c_str());
     base::PlatformThread::Sleep(retry_interval);
@@ -104,7 +105,7 @@ HWND WaitForDialogPrompt(HWND owner) {
   // whose owner is the file dialog.
   EnumWindowsParam param = {owner, nullptr};
   base::TimeDelta max_wait_time = TestTimeouts::action_timeout();
-  base::TimeDelta retry_interval = base::TimeDelta::FromMilliseconds(20);
+  base::TimeDelta retry_interval = base::Milliseconds(20);
   while (!param.result && (max_wait_time.InMilliseconds() > 0)) {
     ::EnumWindows(&EnumWindowsCallback, reinterpret_cast<LPARAM>(&param));
     base::PlatformThread::Sleep(retry_interval);
@@ -123,7 +124,7 @@ std::wstring GetDialogItemText(HWND window, int dialog_item_id) {
 
   wchar_t buffer[256];
   UINT count =
-      ::GetDlgItemText(window, dialog_item_id, buffer, base::size(buffer));
+      ::GetDlgItemText(window, dialog_item_id, buffer, std::size(buffer));
   return std::wstring(buffer, count);
 }
 
@@ -134,7 +135,7 @@ void SendCommand(HWND window, int id) {
   // Make sure the window is visible first or the WM_COMMAND may not have any
   // effect.
   base::TimeDelta max_wait_time = TestTimeouts::action_timeout();
-  base::TimeDelta retry_interval = base::TimeDelta::FromMilliseconds(20);
+  base::TimeDelta retry_interval = base::Milliseconds(20);
   while (!::IsWindowVisible(window) && (max_wait_time.InMilliseconds() > 0)) {
     base::PlatformThread::Sleep(retry_interval);
     max_wait_time -= retry_interval;
@@ -151,19 +152,21 @@ class SelectFileDialogWinTest : public ::testing::Test,
                                 public ui::SelectFileDialog::Listener {
  public:
   SelectFileDialogWinTest() = default;
+
+  SelectFileDialogWinTest(const SelectFileDialogWinTest&) = delete;
+  SelectFileDialogWinTest& operator=(const SelectFileDialogWinTest&) = delete;
+
   ~SelectFileDialogWinTest() override = default;
 
   // ui::SelectFileDialog::Listener:
-  void FileSelected(const base::FilePath& path,
-                    int index,
-                    void* params) override {
-    selected_paths_.push_back(path);
+  void FileSelected(const ui::SelectedFileInfo& file, int index) override {
+    selected_paths_.push_back(file.path());
   }
-  void MultiFilesSelected(const std::vector<base::FilePath>& files,
-                          void* params) override {
-    selected_paths_ = files;
+  void MultiFilesSelected(
+      const std::vector<ui::SelectedFileInfo>& files) override {
+    selected_paths_ = ui::SelectedFileInfoListToFilePathList(files);
   }
-  void FileSelectionCanceled(void* params) override { was_cancelled_ = true; }
+  void FileSelectionCanceled() override { was_cancelled_ = true; }
 
   // Runs the scheduler until no tasks are executing anymore.
   void RunUntilIdle() { task_environment_.RunUntilIdle(); }
@@ -192,8 +195,6 @@ class SelectFileDialogWinTest : public ::testing::Test,
 
   std::vector<base::FilePath> selected_paths_;
   bool was_cancelled_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(SelectFileDialogWinTest);
 };
 
 TEST_F(SelectFileDialogWinTest, CancelAllDialogs) {
@@ -220,10 +221,8 @@ TEST_F(SelectFileDialogWinTest, CancelAllDialogs) {
           ui::SelectFileDialog::SELECT_OPEN_MULTI_FILE, kSelectFileDefaultTitle,
       }};
 
-  for (size_t i = 0; i < base::size(kTestCases); ++i) {
-    SCOPED_TRACE(base::StringPrintf("i=%zu", i));
-
-    const auto& test_case = kTestCases[i];
+  for (size_t i = 0; const auto& test_case : kTestCases) {
+    SCOPED_TRACE(base::StringPrintf("i=%zu", i++));
 
     scoped_refptr<ui::SelectFileDialog> dialog =
         ui::SelectFileDialog::Create(this, nullptr);
@@ -240,8 +239,7 @@ TEST_F(SelectFileDialogWinTest, CancelAllDialogs) {
 
     dialog->SelectFile(test_case.dialog_type, std::u16string(),
                        base::FilePath(), file_type_info.get(),
-                       file_type_info_index, std::wstring(), native_window(),
-                       nullptr);
+                       file_type_info_index, std::wstring(), native_window());
 
     // Accept the default value.
     HWND window = WaitForDialogWindow(test_case.dialog_title);
@@ -267,7 +265,7 @@ TEST_F(SelectFileDialogWinTest, UploadFolderCheckStrings) {
       ui::SelectFileDialog::Create(this, nullptr);
   dialog->SelectFile(ui::SelectFileDialog::SELECT_UPLOAD_FOLDER,
                      std::u16string(), default_path, nullptr, 0, L"",
-                     native_window(), nullptr);
+                     native_window());
 
   // Wait for the window to open and make sure the window title was changed from
   // the default title for a regular select folder operation.
@@ -287,7 +285,11 @@ TEST_F(SelectFileDialogWinTest, UploadFolderCheckStrings) {
 
   EXPECT_FALSE(was_cancelled());
   ASSERT_EQ(1u, selected_paths().size());
-  EXPECT_EQ(selected_paths()[0], default_path);
+  // On some machines GetSystemDirectory returns C:\WINDOWS which is then
+  // normalized to C:\Windows by the file dialog, leading to spurious failures
+  // if a case-sensitive comparison is used.
+  EXPECT_TRUE(base::FilePath::CompareEqualIgnoreCase(
+      selected_paths()[0].value(), default_path.value()));
 }
 
 // Specifying the title when opening a dialog to select a file, select multiple
@@ -307,11 +309,11 @@ TEST_F(SelectFileDialogWinTest, SpecifyTitle) {
   scoped_refptr<ui::SelectFileDialog> dialog =
       ui::SelectFileDialog::Create(this, nullptr);
   dialog->SelectFile(ui::SelectFileDialog::SELECT_OPEN_FILE, kTitle,
-                     default_path, nullptr, 0, L"", native_window(), nullptr);
+                     default_path, nullptr, 0, L"", native_window());
 
-  // Wait for the window to open. The title is unchanged. Note that if this
-  // hangs, it possibly is because the title changed.
-  HWND window = WaitForDialogWindow(kSelectFileDefaultTitle);
+  // Wait for the window to open. The title should be `kTitle`. Note that if
+  // this hangs, it possibly is because the title changed.
+  HWND window = WaitForDialogWindow(base::UTF16ToWide(kTitle));
 
   // Close the dialog and the result doesn't matter.
   SendCommand(window, IDCANCEL);
@@ -335,7 +337,7 @@ TEST_F(SelectFileDialogWinTest, TestSelectFile) {
   scoped_refptr<ui::SelectFileDialog> dialog =
       ui::SelectFileDialog::Create(this, nullptr);
   dialog->SelectFile(ui::SelectFileDialog::SELECT_OPEN_FILE, std::u16string(),
-                     default_path, nullptr, 0, L"", native_window(), nullptr);
+                     default_path, nullptr, 0, L"", native_window());
 
   // Wait for the window to open
   HWND window = WaitForDialogWindow(kSelectFileDefaultTitle);
@@ -345,7 +347,11 @@ TEST_F(SelectFileDialogWinTest, TestSelectFile) {
 
   EXPECT_FALSE(was_cancelled());
   ASSERT_EQ(1u, selected_paths().size());
-  EXPECT_EQ(selected_paths()[0], default_path);
+  // On some machines GetSystemDirectory returns C:\WINDOWS which is then
+  // normalized to C:\Windows by the file dialog, leading to spurious failures
+  // if a case-sensitive comparison is used.
+  EXPECT_TRUE(base::FilePath::CompareEqualIgnoreCase(
+      selected_paths()[0].value(), default_path.value()));
 }
 
 // Tests that the file extension is automatically added.
@@ -362,8 +368,7 @@ TEST_F(SelectFileDialogWinTest, TestSaveFile) {
   scoped_refptr<ui::SelectFileDialog> dialog =
       ui::SelectFileDialog::Create(this, nullptr);
   dialog->SelectFile(ui::SelectFileDialog::SELECT_SAVEAS_FILE, std::u16string(),
-                     default_path, &file_type_info, 1, L"", native_window(),
-                     nullptr);
+                     default_path, &file_type_info, 1, L"", native_window());
 
   // Wait for the window to open
   HWND window = WaitForDialogWindow(kSaveFileDefaultTitle);
@@ -373,7 +378,11 @@ TEST_F(SelectFileDialogWinTest, TestSaveFile) {
 
   EXPECT_FALSE(was_cancelled());
   ASSERT_EQ(1u, selected_paths().size());
-  EXPECT_EQ(selected_paths()[0], default_path.AddExtension(L"html"));
+  // On some machines GetSystemDirectory returns C:\WINDOWS which is then
+  // normalized to C:\Windows by the file dialog, leading to spurious failures
+  // if a case-sensitive comparison is used.
+  EXPECT_TRUE(base::FilePath::CompareEqualIgnoreCase(
+      selected_paths()[0].value(), default_path.AddExtension(L"html").value()));
 }
 
 // Tests that only specifying a basename as the default path works.
@@ -386,8 +395,7 @@ TEST_F(SelectFileDialogWinTest, OnlyBasename) {
   scoped_refptr<ui::SelectFileDialog> dialog =
       ui::SelectFileDialog::Create(this, nullptr);
   dialog->SelectFile(ui::SelectFileDialog::SELECT_SAVEAS_FILE, std::u16string(),
-                     default_path, &file_type_info, 1, L"", native_window(),
-                     nullptr);
+                     default_path, &file_type_info, 1, L"", native_window());
 
   // Wait for the window to open
   HWND window = WaitForDialogWindow(kSaveFileDefaultTitle);
@@ -413,8 +421,8 @@ TEST_F(SelectFileDialogWinTest, SaveAsDifferentExtension) {
   scoped_refptr<ui::SelectFileDialog> dialog =
       ui::SelectFileDialog::Create(this, nullptr);
   dialog->SelectFile(ui::SelectFileDialog::SELECT_SAVEAS_FILE, std::u16string(),
-                     default_path, &file_type_info, 1, L"html", native_window(),
-                     nullptr);
+                     default_path, &file_type_info, 1, L"html",
+                     native_window());
 
   HWND window = WaitForDialogWindow(kSaveFileDefaultTitle);
   SendCommand(window, IDOK);
@@ -422,7 +430,11 @@ TEST_F(SelectFileDialogWinTest, SaveAsDifferentExtension) {
   RunUntilIdle();
 
   EXPECT_FALSE(was_cancelled());
-  EXPECT_EQ(selected_paths()[0], default_path);
+  // On some machines GetSystemDirectory returns C:\WINDOWS which is then
+  // normalized to C:\Windows by the file dialog, leading to spurious failures
+  // if a case-sensitive comparison is used.
+  EXPECT_TRUE(base::FilePath::CompareEqualIgnoreCase(
+      selected_paths()[0].value(), default_path.value()));
 }
 
 TEST_F(SelectFileDialogWinTest, OpenFileDifferentExtension) {
@@ -440,8 +452,8 @@ TEST_F(SelectFileDialogWinTest, OpenFileDifferentExtension) {
   scoped_refptr<ui::SelectFileDialog> dialog =
       ui::SelectFileDialog::Create(this, nullptr);
   dialog->SelectFile(ui::SelectFileDialog::SELECT_OPEN_FILE, std::u16string(),
-                     default_path, &file_type_info, 1, L"html", native_window(),
-                     nullptr);
+                     default_path, &file_type_info, 1, L"html",
+                     native_window());
 
   HWND window = WaitForDialogWindow(kSelectFileDefaultTitle);
   SendCommand(window, IDOK);
@@ -449,7 +461,11 @@ TEST_F(SelectFileDialogWinTest, OpenFileDifferentExtension) {
   RunUntilIdle();
 
   EXPECT_FALSE(was_cancelled());
-  EXPECT_EQ(selected_paths()[0], default_path);
+  // On some machines GetSystemDirectory returns C:\WINDOWS which is then
+  // normalized to C:\Windows by the file dialog, leading to spurious failures
+  // if a case-sensitive comparison is used.
+  EXPECT_TRUE(base::FilePath::CompareEqualIgnoreCase(
+      selected_paths()[0].value(), default_path.value()));
 }
 
 TEST_F(SelectFileDialogWinTest, SelectNonExistingFile) {
@@ -463,7 +479,7 @@ TEST_F(SelectFileDialogWinTest, SelectNonExistingFile) {
   scoped_refptr<ui::SelectFileDialog> dialog =
       ui::SelectFileDialog::Create(this, nullptr);
   dialog->SelectFile(ui::SelectFileDialog::SELECT_OPEN_FILE, std::u16string(),
-                     default_path, nullptr, 0, L"", native_window(), nullptr);
+                     default_path, nullptr, 0, L"", native_window());
 
   HWND window = WaitForDialogWindow(kSelectFileDefaultTitle);
   SendCommand(window, IDOK);
@@ -499,8 +515,7 @@ TEST_F(SelectFileDialogWinTest, SaveFileOverwritePrompt) {
   scoped_refptr<ui::SelectFileDialog> dialog =
       ui::SelectFileDialog::Create(this, nullptr);
   dialog->SelectFile(ui::SelectFileDialog::SELECT_SAVEAS_FILE, std::u16string(),
-                     default_path, &file_type_info, 1, L"", native_window(),
-                     nullptr);
+                     default_path, &file_type_info, 1, L"", native_window());
 
   HWND window = WaitForDialogWindow(kSaveFileDefaultTitle);
   SendCommand(window, IDOK);
@@ -517,4 +532,86 @@ TEST_F(SelectFileDialogWinTest, SaveFileOverwritePrompt) {
 
   EXPECT_TRUE(was_cancelled());
   EXPECT_TRUE(selected_paths().empty());
+}
+
+class SafeAcceptFileDialogEventHandlerTest : public testing::Test {
+ public:
+  SafeAcceptFileDialogEventHandlerTest()
+      : task_environment_(base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
+
+  void CreateHandler() {
+    handler_ = Microsoft::WRL::Make<ui::SafeAcceptFileDialogEventHandler>();
+  }
+
+  void InitializeHandler(bool enter_down) {
+    handler_->InitializeForTesting(enter_down);
+  }
+
+  void SetKeyState(bool is_down) { handler_->SetKeyStateForTesting(is_down); }
+
+  void ReleaseEnterKey() { handler_->OnEnterKeyboardReleased(); }
+
+  HRESULT CallOnFileOk(IFileDialog* dialog = nullptr) {
+    return handler_->OnFileOk(dialog);
+  }
+
+ protected:
+  base::test::TaskEnvironment task_environment_;
+  Microsoft::WRL::ComPtr<ui::SafeAcceptFileDialogEventHandler> handler_;
+};
+
+// Standalone tests validating the logical UI exploit time-delay and keyjacking
+// policies.
+
+TEST_F(SafeAcceptFileDialogEventHandlerTest, MinimumDisplayDuration) {
+  CreateHandler();
+  InitializeHandler(/*enter_down=*/false);
+
+  // User presses Enter to accept the dialog.
+  SetKeyState(/*is_down=*/true);
+
+  // Immediately after initialization, acceptance is vetoed (must display for at
+  // least 500ms).
+  EXPECT_EQ(CallOnFileOk(), S_FALSE);
+
+  // Advance time by 500ms.
+  task_environment_.FastForwardBy(base::Milliseconds(500));
+
+  // Acceptance now succeeds.
+  EXPECT_EQ(CallOnFileOk(), S_OK);
+}
+
+TEST_F(SafeAcceptFileDialogEventHandlerTest, VetoesHeldEnterKeyjacking) {
+  CreateHandler();
+
+  // Simulate that Enter was actively being held down when the dialog opened.
+  InitializeHandler(/*enter_down=*/true);
+
+  // User is still holding Enter down (e.g. keyboard auto-repeat firing).
+  SetKeyState(/*is_down=*/true);
+
+  // Advance time beyond the minimum display duration (500ms).
+  task_environment_.FastForwardBy(base::Milliseconds(600));
+
+  // Acceptance is still vetoed because the initial Enter press was never
+  // released.
+  EXPECT_EQ(CallOnFileOk(), S_FALSE);
+
+  // Simulate physical release of the Enter key.
+  ReleaseEnterKey();
+
+  // Subsequent Enter key press succeeds.
+  EXPECT_EQ(CallOnFileOk(), S_OK);
+}
+
+TEST_F(SafeAcceptFileDialogEventHandlerTest, MouseClickAcceptance) {
+  CreateHandler();
+  InitializeHandler(/*enter_down=*/false);
+
+  // Enter key is NOT down (e.g. mouse click or automated test bot).
+  SetKeyState(/*is_down=*/false);
+
+  // Mouse click acceptance succeeds immediately (0ms) without waiting for
+  // 500ms.
+  EXPECT_EQ(CallOnFileOk(), S_OK);
 }

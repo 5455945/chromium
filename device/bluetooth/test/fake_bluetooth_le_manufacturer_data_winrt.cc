@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "base/containers/span.h"
 #include "base/win/winrt_storage_util.h"
 
 namespace device {
@@ -24,8 +25,7 @@ FakeBluetoothLEManufacturerData::FakeBluetoothLEManufacturerData(
     uint16_t company_id,
     std::vector<uint8_t> data)
     : company_id_(company_id) {
-  base::win::CreateIBufferFromData(data.data(),
-                                   static_cast<uint32_t>(data.size()), &data_);
+  base::win::CreateIBufferFromData(data, &data_);
 }
 
 FakeBluetoothLEManufacturerData::FakeBluetoothLEManufacturerData(

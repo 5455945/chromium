@@ -11,22 +11,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <algorithm>
+#include <ctime>
+#include <string>
+
+#include "absl/time/civil_time.h"
+#include "absl/time/clock.h"
+#include "absl/time/internal/test_util.h"
 #include "absl/time/time.h"
+#include "benchmark/benchmark.h"
 
 #if !defined(_WIN32)
 #include <sys/time.h>
 #endif  // _WIN32
-#include <algorithm>
-#include <cmath>
-#include <cstddef>
-#include <cstring>
-#include <ctime>
-#include <memory>
-#include <string>
-
-#include "absl/time/clock.h"
-#include "absl/time/internal/test_util.h"
-#include "benchmark/benchmark.h"
 
 namespace {
 
@@ -185,9 +182,11 @@ void BM_Time_FromCivil_Absl(benchmark::State& state) {
   int i = 0;
   while (state.KeepRunning()) {
     if ((i & 1) == 0) {
-      absl::FromCivil(absl::CivilSecond(2014, 12, 18, 20, 16, 18), tz);
+      benchmark::DoNotOptimize(
+          absl::FromCivil(absl::CivilSecond(2014, 12, 18, 20, 16, 18), tz));
     } else {
-      absl::FromCivil(absl::CivilSecond(2013, 11, 15, 18, 30, 27), tz);
+      benchmark::DoNotOptimize(
+          absl::FromCivil(absl::CivilSecond(2013, 11, 15, 18, 30, 27), tz));
     }
     ++i;
   }
@@ -224,7 +223,8 @@ BENCHMARK(BM_Time_FromCivil_Libc);
 void BM_Time_FromCivilUTC_Absl(benchmark::State& state) {
   const absl::TimeZone tz = absl::UTCTimeZone();
   while (state.KeepRunning()) {
-    absl::FromCivil(absl::CivilSecond(2014, 12, 18, 20, 16, 18), tz);
+    benchmark::DoNotOptimize(
+        absl::FromCivil(absl::CivilSecond(2014, 12, 18, 20, 16, 18), tz));
   }
 }
 BENCHMARK(BM_Time_FromCivilUTC_Absl);
@@ -235,9 +235,11 @@ void BM_Time_FromCivilDay0_Absl(benchmark::State& state) {
   int i = 0;
   while (state.KeepRunning()) {
     if ((i & 1) == 0) {
-      absl::FromCivil(absl::CivilSecond(2014, 12, 0, 20, 16, 18), tz);
+      benchmark::DoNotOptimize(
+          absl::FromCivil(absl::CivilSecond(2014, 12, 0, 20, 16, 18), tz));
     } else {
-      absl::FromCivil(absl::CivilSecond(2013, 11, 0, 18, 30, 27), tz);
+      benchmark::DoNotOptimize(
+          absl::FromCivil(absl::CivilSecond(2013, 11, 0, 18, 30, 27), tz));
     }
     ++i;
   }

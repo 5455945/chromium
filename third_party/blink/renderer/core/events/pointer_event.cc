@@ -1,10 +1,10 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/events/pointer_event.h"
 
-#include "third_party/blink/public/mojom/web_feature/web_feature.mojom-blink.h"
+#include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_pointer_event_init.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/events/event_dispatcher.h"
@@ -20,7 +20,8 @@ PointerEvent::PointerEvent(const AtomicString& type,
                            const PointerEventInit* initializer,
                            base::TimeTicks platform_time_stamp,
                            MouseEvent::SyntheticEventType synthetic_event_type,
-                           WebMenuSourceType menu_source_type)
+                           ui::mojom::blink::MenuSourceType menu_source_type,
+                           bool prevent_counting_as_interaction)
     : MouseEvent(type,
                  initializer,
                  platform_time_stamp,
@@ -33,12 +34,12 @@ PointerEvent::PointerEvent(const AtomicString& type,
       tilt_x_(0),
       tilt_y_(0),
       azimuth_angle_(0),
-      altitude_angle_(kPiDouble / 2),
+      altitude_angle_(kPiOverTwoDouble),
       tangential_pressure_(0),
       twist_(0),
       is_primary_(false),
-      coalesced_events_targets_dirty_(false),
-      predicted_events_targets_dirty_(false) {
+      persistent_device_id_(0),
+      prevent_counting_as_interaction_(prevent_counting_as_interaction) {
   if (initializer->hasPointerId())
     pointer_id_ = initializer->pointerId();
   if (initializer->hasWidth())
@@ -60,12 +61,14 @@ PointerEvent::PointerEvent(const AtomicString& type,
   if (initializer->hasIsPrimary())
     is_primary_ = initializer->isPrimary();
   if (initializer->hasCoalescedEvents()) {
-    for (auto coalesced_event : initializer->coalescedEvents())
+    for (const auto& coalesced_event : initializer->coalescedEvents()) {
       coalesced_events_.push_back(coalesced_event);
+    }
   }
   if (initializer->hasPredictedEvents()) {
-    for (auto predicted_event : initializer->predictedEvents())
+    for (const auto& predicted_event : initializer->predictedEvents()) {
       predicted_events_.push_back(predicted_event);
+    }
   }
   if (initializer->hasAzimuthAngle())
     azimuth_angle_ = initializer->azimuthAngle();
@@ -89,13 +92,15 @@ PointerEvent::PointerEvent(const AtomicString& type,
         PointerEventUtil::TransformToAzimuthInValidRange(azimuth_angle_),
         PointerEventUtil::TransformToAltitudeInValidRange(altitude_angle_));
   }
+  if (initializer->hasPersistentDeviceId()) {
+    persistent_device_id_ = initializer->persistentDeviceId();
+  }
 }
 
 bool PointerEvent::IsMouseEvent() const {
-  if (RuntimeEnabledFeatures::ClickPointerEventEnabled() &&
-      (type() == event_type_names::kClick ||
-       type() == event_type_names::kAuxclick ||
-       type() == event_type_names::kContextmenu)) {
+  if (type() == event_type_names::kClick ||
+      type() == event_type_names::kAuxclick ||
+      type() == event_type_names::kContextmenu) {
     return true;
   }
 
@@ -122,7 +127,7 @@ double PointerEvent::offsetX() const {
     return 0;
   if (!has_cached_relative_position_)
     const_cast<PointerEvent*>(this)->ComputeRelativePosition();
-  return offset_location_.X();
+  return offset_x_;
 }
 
 double PointerEvent::offsetY() const {
@@ -132,12 +137,10 @@ double PointerEvent::offsetY() const {
     return 0;
   if (!has_cached_relative_position_)
     const_cast<PointerEvent*>(this)->ComputeRelativePosition();
-  return offset_location_.Y();
+  return offset_y_;
 }
 
 void PointerEvent::ReceivedTarget() {
-  coalesced_events_targets_dirty_ = true;
-  predicted_events_targets_dirty_ = true;
   MouseEvent::ReceivedTarget();
 }
 
@@ -150,20 +153,10 @@ Node* PointerEvent::fromElement() const {
 }
 
 HeapVector<Member<PointerEvent>> PointerEvent::getCoalescedEvents() {
-  if (coalesced_events_targets_dirty_) {
-    for (auto coalesced_event : coalesced_events_)
-      coalesced_event->SetTarget(target());
-    coalesced_events_targets_dirty_ = false;
-  }
   return coalesced_events_;
 }
 
 HeapVector<Member<PointerEvent>> PointerEvent::getPredictedEvents() {
-  if (predicted_events_targets_dirty_) {
-    for (auto predicted_event : predicted_events_)
-      predicted_event->SetTarget(target());
-    predicted_events_targets_dirty_ = false;
-  }
   return predicted_events_;
 }
 
@@ -182,27 +175,40 @@ void PointerEvent::Trace(Visitor* visitor) const {
 }
 
 DispatchEventResult PointerEvent::DispatchEvent(EventDispatcher& dispatcher) {
-  if (type().IsEmpty())
+  if (type().empty())
     return DispatchEventResult::kNotCanceled;  // Shouldn't happen.
 
-  if (RuntimeEnabledFeatures::ClickPointerEventEnabled() &&
-      type() == event_type_names::kClick) {
-    // The MouseEvent::DispatchEvent will take care of sending dblclick event if
-    // needed.
+  if (isTrusted()) {
+    for (const auto& coalesced_event : coalesced_events_) {
+      coalesced_event->SetTarget(&dispatcher.GetNode());
+    }
+    for (const auto& predicted_event : predicted_events_) {
+      predicted_event->SetTarget(&dispatcher.GetNode());
+    }
+  }
+
+  if (type() == event_type_names::kClick) {
     return MouseEvent::DispatchEvent(dispatcher);
   }
 
-  DCHECK(!target() || target() != relatedTarget());
+  DCHECK(!RawTarget() || RawTarget() != relatedTarget());
 
+  CheckCrossOriginRelatedTarget(dispatcher.GetNode(), related_target_);
   GetEventPath().AdjustForRelatedTarget(dispatcher.GetNode(), relatedTarget());
 
   return dispatcher.Dispatch();
 }
 
 PointerId PointerEvent::pointerIdForBindings() const {
-  if (auto* local_dom_window = DynamicTo<LocalDOMWindow>(view()))
-    UseCounter::Count(local_dom_window->document(), WebFeature::kPointerId);
+  if (auto* document = GetDocument())
+    UseCounter::Count(document, WebFeature::kPointerId);
   return pointerId();
+}
+
+Document* PointerEvent::GetDocument() const {
+  if (auto* local_dom_window = DynamicTo<LocalDOMWindow>(view()))
+    return local_dom_window->document();
+  return nullptr;
 }
 
 }  // namespace blink

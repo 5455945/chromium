@@ -26,7 +26,11 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_LOADER_FETCH_RESOURCE_CLIENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_LOADER_FETCH_RESOURCE_CLIENT_H_
 
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "base/containers/span.h"
+#include "base/gtest_prod_util.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
+#include "third_party/blink/renderer/platform/heap/prefinalizer.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
@@ -40,7 +44,8 @@ namespace blink {
 class Resource;
 
 class PLATFORM_EXPORT ResourceClient : public GarbageCollectedMixin {
-  USING_PRE_FINALIZER(ResourceClient, ClearResource);
+  USING_PRE_FINALIZER(ResourceClient, Prefinalize);
+
  public:
   ResourceClient() = default;
   virtual ~ResourceClient() = default;
@@ -53,16 +58,14 @@ class PLATFORM_EXPORT ResourceClient : public GarbageCollectedMixin {
   // Some RawResourceClients depends on receiving all bytes via DataReceived(),
   // but RawResources forbid revalidation attempts, so they still are guaranteed
   // to get all data via DataReceived().
-  virtual void DataReceived(Resource*,
-                            const char* /* data */,
-                            size_t /* length */) {}
+  virtual void DataReceived(Resource*, base::span<const char> /*data*/) {}
   virtual void NotifyFinished(Resource*) {}
 
   virtual bool IsFontResourceClient() const { return false; }
 
   virtual bool IsRawResourceClient() const { return false; }
 
-  Resource* GetResource() const { return resource_; }
+  Resource* GetResource() const { return resource_.Get(); }
 
   bool FinishedFromMemoryCache() const { return finished_from_memory_cache_; }
   void SetHasFinishedFromMemoryCache() { finished_from_memory_cache_ = true; }
@@ -85,8 +88,12 @@ class PLATFORM_EXPORT ResourceClient : public GarbageCollectedMixin {
   // additional clients.
   friend class CSSFontFaceSrcValue;
 
+  FRIEND_TEST_ALL_PREFIXES(ResourceTest, GarbageCollection);
+
   void SetResource(Resource* new_resource,
                    base::SingleThreadTaskRunner* task_runner);
+
+  void Prefinalize();
 
   Member<Resource> resource_;
 

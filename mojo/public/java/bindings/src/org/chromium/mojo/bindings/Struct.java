@@ -1,30 +1,25 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.mojo.bindings;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.mojo.system.Core;
 
 import java.nio.ByteBuffer;
 
-/**
- * Base class for all mojo structs.
- */
+/** Base class for all mojo structs. */
+@NullMarked
 public abstract class Struct {
-    /**
-     * The base size of the encoded struct.
-     */
+    /** The base size of the encoded struct. */
     private final int mEncodedBaseSize;
 
-    /**
-     * The version of the struct.
-     */
+    /** The version of the struct. */
     private final int mVersion;
 
-    /**
-     * Constructor.
-     */
+    /** Constructor. */
     protected Struct(int encodedBaseSize, int version) {
         mEncodedBaseSize = encodedBaseSize;
         mVersion = version;
@@ -44,7 +39,7 @@ public abstract class Struct {
      * @param core the |Core| implementation used to generate handles. Only used if the data
      *            structure being encoded contains interfaces, can be |null| otherwise.
      */
-    public Message serialize(Core core) {
+    public Message serialize(@Nullable Core core) {
         Encoder encoder = new Encoder(core, mEncodedBaseSize);
         encode(encoder);
         return encoder.getMessage();
@@ -61,8 +56,9 @@ public abstract class Struct {
         // UnsupportedOperationException.
         Message message = serialize(null);
 
-        if (!message.getHandles().isEmpty())
+        if (!message.getHandles().isEmpty()) {
             throw new UnsupportedOperationException("Handles are discarded.");
+        }
 
         return message.getData();
     }
@@ -72,17 +68,28 @@ public abstract class Struct {
      *
      * @param header the header to prepend to the returned message.
      * @param core the |Core| implementation used to generate handles. Only used if the |Struct|
-     *            being encoded contains interfaces, can be |null| otherwise.
+     *     being encoded contains interfaces, can be |null| otherwise.
      */
-    public ServiceMessage serializeWithHeader(Core core, MessageHeader header) {
+    public ServiceMessage serializeWithHeader(@Nullable Core core, MessageHeader header) {
         Encoder encoder = new Encoder(core, mEncodedBaseSize + header.getSize());
         header.encode(encoder);
         encode(encoder);
-        return new ServiceMessage(encoder.getMessage(), header);
+        try {
+            return new ServiceMessage(encoder.getMessage(), header);
+        } catch (DeserializationException e) {
+            // This should never happen, as the header was just encoded above.
+            throw new IllegalArgumentException(e);
+        }
     }
 
     /**
-     * Use the given encoder to serialize this data structure.
+     * Use the given encoder to serialize this data structure. Structs with multiple versions
+     * override this to encode their latest version.
      */
-    protected abstract void encode(Encoder encoder);
+    protected void encode(Encoder encoder) {
+        encodeFields(encoder.getEncoderAtDataOffset(mEncodedBaseSize, 0));
+    }
+
+    /** Use the given encoder (positioned after the struct header) to serialize the fields. */
+    protected abstract void encodeFields(Encoder encoder);
 }

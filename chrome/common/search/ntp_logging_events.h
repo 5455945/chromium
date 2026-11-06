@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -41,21 +41,17 @@ enum NTPLoggingEventType {
   // Deleted: NTP_VOICE_ERROR_LANGUAGE_NOT_SUPPORTED = 27,
   // Deleted: NTP_VOICE_ERROR_NO_MATCH = 28,
   // Deleted: NTP_VOICE_ERROR_OTHER = 29,
+  // Deleted: NTP_STATIC_LOGO_SHOWN_FRESH = 31,
+  // Deleted: NTP_CTA_LOGO_SHOWN_FROM_CACHE = 32,
+  // Deleted: NTP_CTA_LOGO_SHOWN_FRESH = 33,
+  // Deleted: NTP_CTA_LOGO_CLICKED = 35,
   // Deleted: NTP_MODULES_SHOWN = 83,
 
   // A static Doodle was shown, coming from cache.
   NTP_STATIC_LOGO_SHOWN_FROM_CACHE = 30,
-  // A static Doodle was shown, coming from the network.
-  NTP_STATIC_LOGO_SHOWN_FRESH = 31,
-  // A call-to-action Doodle image was shown, coming from cache.
-  NTP_CTA_LOGO_SHOWN_FROM_CACHE = 32,
-  // A call-to-action Doodle image was shown, coming from the network.
-  NTP_CTA_LOGO_SHOWN_FRESH = 33,
 
   // A static Doodle was clicked.
   NTP_STATIC_LOGO_CLICKED = 34,
-  // A call-to-action Doodle was clicked.
-  NTP_CTA_LOGO_CLICKED = 35,
   // An animated Doodle was clicked.
   NTP_ANIMATED_LOGO_CLICKED = 36,
 
@@ -67,20 +63,13 @@ enum NTPLoggingEventType {
   // Shortcuts have been customized on the NTP.
   NTP_SHORTCUT_CUSTOMIZED = 39,
 
-  // The 'Chrome backgrounds' menu item was clicked.
-  NTP_CUSTOMIZE_CHROME_BACKGROUNDS_CLICKED = 40,
-  // The 'Upload an image' menu item was clicked.
-  NTP_CUSTOMIZE_LOCAL_IMAGE_CLICKED = 41,
-  // The 'Restore default background' menu item was clicked.
-  NTP_CUSTOMIZE_RESTORE_BACKGROUND_CLICKED = 42,
-  // The attribution link on a customized background image was clicked.
-  NTP_CUSTOMIZE_ATTRIBUTION_CLICKED = 43,
-  // The 'Add shortcut' link was clicked.
-  NTP_CUSTOMIZE_ADD_SHORTCUT_CLICKED = 44,
-  // The 'Edit shortcut' link was clicked.
-  NTP_CUSTOMIZE_EDIT_SHORTCUT_CLICKED = 45,
-  // The 'Restore default shortcuts' menu item was clicked.
-  NTP_CUSTOMIZE_RESTORE_SHORTCUTS_CLICKED = 46,
+  // Deleted: NTP_CUSTOMIZE_CHROME_BACKGROUNDS_CLICKED = 40,
+  // Deleted: NTP_CUSTOMIZE_LOCAL_IMAGE_CLICKED = 41,
+  // Deleted: NTP_CUSTOMIZE_RESTORE_BACKGROUND_CLICKED = 42,
+  // Deleted: NTP_CUSTOMIZE_ATTRIBUTION_CLICKED = 43,
+  // Deleted: NTP_CUSTOMIZE_ADD_SHORTCUT_CLICKED = 44,
+  // Deleted: NTP_CUSTOMIZE_EDIT_SHORTCUT_CLICKED = 45,
+  // Deleted: NTP_CUSTOMIZE_RESTORE_SHORTCUTS_CLICKED = 46,
 
   // A collection was selected in the 'Chrome backgrounds' dialog.
   NTP_CUSTOMIZE_CHROME_BACKGROUND_SELECT_COLLECTION = 47,
@@ -164,19 +153,29 @@ enum NTPLoggingEventType {
   // The NTP <ntp-app> element was created and ready() was called.
   NTP_APP_RENDERED = 84,
 
-  NTP_EVENT_TYPE_LAST = NTP_APP_RENDERED
-};
+  // The visibility of personal shortcuts was changed.
+  NTP_CUSTOMIZE_PERSONAL_SHORTCUT_TOGGLE_VISIBILITY = 85,
 
-// The different types of events that are logged for NTP search suggestions,
-// such as number of chips shown and the index of chips that are clicked. This
-// enum is used to transfer information from the NTP javascript to the renderer
-// and is *not* used as a UMA enum histogram's logged value. These events may be
-// logged by javascript served from GWS, see
-// google3/java/com/google/gws/plugins/newtab/suggestions.js.
-enum class NTPSuggestionsLoggingEventType {
-  kShownCount = 0,
-  kIndexClicked = 1,
-  kMaxValue = kIndexClicked,
+  // An enterprise shortcut was removed.
+  NTP_CUSTOMIZE_ENTERPRISE_SHORTCUT_REMOVE = 86,
+  // An enterprise shortcut action was undone.
+  NTP_CUSTOMIZE_ENTERPRISE_SHORTCUT_UNDO = 87,
+  // All enterprise shortcuts were restored.
+  NTP_CUSTOMIZE_ENTERPRISE_SHORTCUT_RESTORE_ALL = 88,
+  // An enterprise shortcut was updated.
+  NTP_CUSTOMIZE_ENTERPRISE_SHORTCUT_UPDATE = 89,
+  // The visibility of enterprise shortcuts was changed.
+  NTP_CUSTOMIZE_ENTERPRISE_SHORTCUT_TOGGLE_VISIBILITY = 90,
+
+  // Shortcuts were automatically removed due to inactivity.
+  NTP_SHORTCUTS_AUTO_REMOVE = 91,
+  // Auto-removal of shortcuts was undone.
+  NTP_SHORTCUTS_AUTO_REMOVE_UNDO = 92,
+
+  // An animated Doodle was shown, coming from cache.
+  NTP_ANIMATED_LOGO_SHOWN_FROM_CACHE = 93,
+
+  NTP_EVENT_TYPE_LAST = NTP_ANIMATED_LOGO_SHOWN_FROM_CACHE
 };
 
 #endif  // CHROME_COMMON_SEARCH_NTP_LOGGING_EVENTS_H_

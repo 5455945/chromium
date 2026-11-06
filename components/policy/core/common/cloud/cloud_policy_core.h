@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,8 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/observer_list.h"
 #include "components/policy/core/common/cloud/policy_invalidation_scope.h"
 #include "components/policy/policy_export.h"
@@ -24,6 +24,7 @@ class SequencedTaskRunner;
 
 namespace policy {
 
+enum class PolicyFetchReason;
 class CloudPolicyClient;
 class CloudPolicyRefreshScheduler;
 class CloudPolicyService;
@@ -56,6 +57,9 @@ class POLICY_EXPORT CloudPolicyCore {
     // Called after the remote commands service is started. Defaults to be
     // empty.
     virtual void OnRemoteCommandsServiceStarted(CloudPolicyCore* core);
+
+    // Called upon core destruction. Defaults to be empty.
+    virtual void OnCoreDestruction(CloudPolicyCore* core);
   };
 
   // |task_runner| is the runner for policy refresh tasks.
@@ -65,6 +69,8 @@ class POLICY_EXPORT CloudPolicyCore {
                   const scoped_refptr<base::SequencedTaskRunner>& task_runner,
                   network::NetworkConnectionTrackerGetter
                       network_connection_tracker_getter);
+  CloudPolicyCore(const CloudPolicyCore&) = delete;
+  CloudPolicyCore& operator=(const CloudPolicyCore&) = delete;
   ~CloudPolicyCore();
 
   CloudPolicyClient* client() { return client_.get(); }
@@ -96,6 +102,8 @@ class POLICY_EXPORT CloudPolicyCore {
   // Shuts down the cloud connection.
   void Disconnect();
 
+  bool IsConnected() const { return client() && service(); }
+
   // Starts a remote commands service, with the provided factory. Will attempt
   // to fetch commands immediately, thus requiring the cloud policy client to
   // be registered.
@@ -103,9 +111,12 @@ class POLICY_EXPORT CloudPolicyCore {
       std::unique_ptr<RemoteCommandsFactory> factory,
       PolicyInvalidationScope scope);
 
-  // Requests a policy refresh to be performed soon. This may apply throttling,
-  // and the request may not be immediately sent.
-  void RefreshSoon();
+  // Requests a policy refresh to be performed immediately by the `scheduler_`.
+  // This is a no-op if the `scheduler_` is not initialized yet.
+  //
+  // The |reason| parameter will be used to tag the request to DMServer. This
+  // will allow for more targeted monitoring and alerting.
+  void RefreshSoon(PolicyFetchReason reason);
 
   // Starts a refresh scheduler in case none is running yet.
   void StartRefreshScheduler();
@@ -125,13 +136,20 @@ class POLICY_EXPORT CloudPolicyCore {
   void ConnectForTesting(std::unique_ptr<CloudPolicyService> service,
                          std::unique_ptr<CloudPolicyClient> client);
 
+  scoped_refptr<base::SequencedTaskRunner> GetTaskRunner() {
+    return task_runner_;
+  }
+
+  const std::string& policy_type() const { return policy_type_; }
+  const std::string& settings_entity_id() const { return settings_entity_id_; }
+
  private:
   // Updates the refresh scheduler on refresh delay changes.
   void UpdateRefreshDelayFromPref();
 
   std::string policy_type_;
   std::string settings_entity_id_;
-  CloudPolicyStore* store_;
+  raw_ptr<CloudPolicyStore> store_;
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
   network::NetworkConnectionTrackerGetter network_connection_tracker_getter_;
   std::unique_ptr<CloudPolicyClient> client_;
@@ -140,8 +158,6 @@ class POLICY_EXPORT CloudPolicyCore {
   std::unique_ptr<RemoteCommandsService> remote_commands_service_;
   std::unique_ptr<IntegerPrefMember> refresh_delay_;
   base::ObserverList<Observer, true>::Unchecked observers_;
-
-  DISALLOW_COPY_AND_ASSIGN(CloudPolicyCore);
 };
 
 }  // namespace policy

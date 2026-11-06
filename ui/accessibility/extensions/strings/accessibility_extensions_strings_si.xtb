@@ -9,6 +9,7 @@
 <translation id="1591070050619849194">සියලුම රූප වල සජීවීකරණය අබල කරන්න.</translation>
 <translation id="1703735871906654364">කර්සර බ්‍රවුස් කිරීම</translation>
 <translation id="1791496371305830581">සියලුම සජීවිකරණ රූප ඉඩ දෙන්න.</translation>
+<translation id="1974060860693918893">උසස් කළ</translation>
 <translation id="1996252509865389616">සබල කරන්නද?</translation>
 <translation id="2079545284768500474">පසුගමනය</translation>
 <translation id="2179565792157161713">දිග විස්තරය නව පටිත්තක විවෘත කරන්න</translation>
@@ -26,6 +27,7 @@
 <translation id="3812541808639806898">Image Alt Text දර්ශකය</translation>
 <translation id="381767806621926835">දිගු විස්තරයන් සඳහා  "longdesc" හෝ "aria-describedat" උපලක්ෂණය ඇති කුමක් හෝ මත දකුණු ක්ලික් කරන්න.</translation>
 <translation id="4023902424053835668">ඊතල යතුරු භාවිතා කරමින්, වෙබ් පිටුවල පෙල බ්‍රවුස් කරන්න.</translation>
+<translation id="4384008284958619421">නවීන තිර කියවන යෙදුම් සහ Google Chrome දැන් ප්‍රවේශ විය හැකි ්ංශ පිළිබද විස්තර සහ ARIA ප්‍රමිතීන්ට සහාය දක්වයි.</translation>
 <translation id="4388820049312272371">ඉක්මනින් කර්සර ස්ථානය උද්දීපනය කරන්න.</translation>
 <translation id="4394049700291259645">අක්‍රිය කරන්න</translation>
 <translation id="4769065380738716500">පින්තූර ඒවායේ අමතර පෙළ මගින් යළි පිහිටුවී ඇත.</translation>
@@ -51,6 +53,7 @@
 <translation id="6170146920149900756">වර්ණ විකාසකය</translation>
 <translation id="633394792577263429">වචන මගින් ගෙන යාමට &lt;span class='key'&gt;පාලකය&lt;/span&gt; ඔබා සිටින්න.</translation>
 <translation id="6550675742724504774">අභිප්‍රේත</translation>
+<translation id="6699630355767768222">පියවර 3: නිවැරදි කිරීම සඳහා වර්ණ අක්ෂය අභිබවා යන්න.</translation>
 <translation id="6838518108677880446">පිහිටුවන්න:</translation>
 <translation id="690628312087070417">කර්සරය විශාල දුරකට පැන ඇති විට:</translation>
 <translation id="6965382102122355670">හරි</translation>
@@ -61,9 +64,11 @@
 <translation id="7658239707568436148">අවලංගු කරන්න</translation>
 <translation id="786423340267544509">aria-describedat හෝ longdesc උපලක්ෂණ සහිත මූලිකාංග වෙත රාමුවක් එක් කරන්න.</translation>
 <translation id="7942349550061667556">රතු</translation>
+<translation id="8081200409424070383">දිගු විස්තර 2026 නොවැම්බර් 20 වන දින නොසලකා හරිනු ලැබේ.</translation>
 <translation id="8260673944985561857">කර්සර බ්‍රවුස් කිරීමේ විකල්ප</translation>
 <translation id="8321034316479930120">සජීවනය ප්‍රතිපත්තිය</translation>
 <translation id="8480209185614411573">ඉහළ වෙනස</translation>
 <translation id="8609925175482059018">කර්සර බ්‍රවුසර කිරීම සක්‍රිය කිරීමට &lt;span class='key'&gt;F7&lt;/span&gt; ඔබන්න. එය අක්‍රිය කිරීමට නැවත එය ඔබන්න.</translation>
+<translation id="8798099450830957504">පෙරනිමි</translation>
 <translation id="894241283505723656">සන්දර්භ මෙනුවේ දිග විස්තර කිරීම්</translation>
 </translationbundle>

@@ -1,34 +1,39 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/metrics/chrome_metrics_service_accessor.h"
 
-#include "base/macros.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/test/base/scoped_testing_local_state.h"
 #include "chrome/test/base/testing_browser_process.h"
+#include "components/metrics/metrics_features.h"
 #include "components/metrics/metrics_pref_names.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 class ChromeMetricsServiceAccessorTest : public testing::Test {
  public:
-  ChromeMetricsServiceAccessorTest()
-      : testing_local_state_(TestingBrowserProcess::GetGlobal()) {
-  }
+  ChromeMetricsServiceAccessorTest() = default;
+
+  ChromeMetricsServiceAccessorTest(const ChromeMetricsServiceAccessorTest&) =
+      delete;
+  ChromeMetricsServiceAccessorTest& operator=(
+      const ChromeMetricsServiceAccessorTest&) = delete;
 
   PrefService* GetLocalState() {
-    return testing_local_state_.Get();
+    return TestingBrowserProcess::GetGlobal()->local_state();
+  }
+
+  void TearDown() override {
+    task_environment_.RunUntilIdle();
   }
 
  private:
   content::BrowserTaskEnvironment task_environment_;
-  ScopedTestingLocalState testing_local_state_;
-
-  DISALLOW_COPY_AND_ASSIGN(ChromeMetricsServiceAccessorTest);
 };
 
 TEST_F(ChromeMetricsServiceAccessorTest, MetricsReportingEnabled) {

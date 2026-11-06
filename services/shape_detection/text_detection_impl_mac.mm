@@ -1,10 +1,10 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/shape_detection/text_detection_impl_mac.h"
 
-#include "base/mac/scoped_cftyperef.h"
+#include "base/apple/scoped_cftyperef.h"
 #include "base/strings/sys_string_conversions.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
@@ -22,16 +22,16 @@ void TextDetectionImpl::Create(
 
 TextDetectionImplMac::TextDetectionImplMac() {
   NSDictionary* const opts = @{CIDetectorAccuracy : CIDetectorAccuracyHigh};
-  detector_.reset(
-      [[CIDetector detectorOfType:CIDetectorTypeText context:nil options:opts]
-          retain]);
+  detector_ = [CIDetector detectorOfType:CIDetectorTypeText
+                                 context:nil
+                                 options:opts];
 }
 
-TextDetectionImplMac::~TextDetectionImplMac() {}
+TextDetectionImplMac::~TextDetectionImplMac() = default;
 
 void TextDetectionImplMac::Detect(const SkBitmap& bitmap,
                                   DetectCallback callback) {
-  base::scoped_nsobject<CIImage> ci_image = CreateCIImageFromSkBitmap(bitmap);
+  CIImage* ci_image = CIImageFromSkBitmap(bitmap);
   if (!ci_image) {
     std::move(callback).Run({});
     return;
@@ -57,6 +57,15 @@ void TextDetectionImplMac::Detect(const SkBitmap& bitmap,
     results.push_back(std::move(result));
   }
   std::move(callback).Run(std::move(results));
+}
+
+void TextDetectionImplMac::EnsureReady(
+    mojom::TextDetection::EnsureReadyCallback callback) {
+  // Currently only checks whether the native framework OCR engine is available.
+  // TODO(crbug.com/568093888): Deprecate the native platform implementation
+  // once the in-browser OCR engine backend is enabled for the Text Detection
+  // API.
+  std::move(callback).Run(detector_ != nil);
 }
 
 }  // namespace shape_detection

@@ -30,7 +30,6 @@
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_AUDIO_AUDIO_SOURCE_PROVIDER_H_
 
 #include <cstddef>
-#include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
 namespace blink {
@@ -39,23 +38,22 @@ class AudioBus;
 class AudioSourceProviderClient;
 
 // Abstract base-class for a pull-model client.
-class PLATFORM_EXPORT AudioSourceProvider {
+class AudioSourceProvider {
   USING_FAST_MALLOC(AudioSourceProvider);
 
  public:
   AudioSourceProvider() = default;
   AudioSourceProvider(const AudioSourceProvider&) = delete;
   AudioSourceProvider& operator=(const AudioSourceProvider&) = delete;
+  virtual ~AudioSourceProvider() = default;
 
   // provideInput() gets called repeatedly to render time-slices of a continuous
   // audio stream.
-  virtual void ProvideInput(AudioBus* bus, uint32_t frames_to_process) = 0;
+  virtual void ProvideInput(AudioBus* bus, int frames_to_process) = 0;
 
   // If a client is set, we call it back when the audio format is available or
   // changes.
-  virtual void SetClient(AudioSourceProviderClient*) {}
-
-  virtual ~AudioSourceProvider() = default;
+  virtual void SetClient(AudioSourceProviderClient*) = 0;
 };
 
 }  // namespace blink

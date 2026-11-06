@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,60 +7,26 @@
 
 #include <string>
 
-#if defined(OS_WIN)
-#include <windows.h>
-#endif
-
-#include "base/callback.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/process/process_metrics.h"
-#include "base/single_thread_task_runner.h"
 #include "base/task/single_thread_task_executor.h"
+#include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
-#include "ipc/ipc_channel.h"
+#include "ipc/ipc_channel_proxy.h"
 #include "ipc/ipc_listener.h"
-#include "ipc/ipc_message.h"
-#include "ipc/ipc_sender.h"
-#include "ipc/ipc_test.mojom.h"
+#include "ipc/ipc_test.test-mojom.h"
 #include "mojo/public/cpp/bindings/receiver.h"
-#include "mojo/public/cpp/system/core.h"
+#include "mojo/public/cpp/system/message_pipe.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include <windows.h>
 #endif
 
 namespace IPC {
 
 scoped_refptr<base::SingleThreadTaskRunner> GetIOThreadTaskRunner();
-
-// This channel listener just replies to all messages with the exact same
-// message. It assumes each message has one string parameter. When the string
-// "quit" is sent, it will exit.
-class ChannelReflectorListener : public Listener {
- public:
-  ChannelReflectorListener();
-
-  ~ChannelReflectorListener() override;
-
-  void Init(Sender* channel, base::OnceClosure quit_closure);
-
-  bool OnMessageReceived(const Message& message) override;
-
-  void OnHello();
-
-  void OnPing(const std::string& payload);
-
-  void OnSyncPing(const std::string& payload, std::string* response);
-
-  void OnQuit();
-
-  void Send(IPC::Message* message);
-
- private:
-  Sender* channel_;
-  base::OnceClosure quit_closure_;
-};
 
 // This class locks the current thread to a particular CPU core. This is
 // important because otherwise the different threads and processes of these
@@ -71,17 +37,18 @@ class LockThreadAffinity {
  public:
   explicit LockThreadAffinity(int cpu_number);
 
+  LockThreadAffinity(const LockThreadAffinity&) = delete;
+  LockThreadAffinity& operator=(const LockThreadAffinity&) = delete;
+
   ~LockThreadAffinity();
 
  private:
   bool affinity_set_ok_;
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   DWORD_PTR old_affinity_;
-#elif defined(OS_LINUX) || defined(OS_CHROMEOS)
+#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   cpu_set_t old_cpuset_;
 #endif
-
-  DISALLOW_COPY_AND_ASSIGN(LockThreadAffinity);
 };
 
 // Avoid core 0 due to conflicts with Intel's Power Gadget.
@@ -98,7 +65,6 @@ class MojoPerfTestClient {
 
  private:
   base::SingleThreadTaskExecutor main_task_executor_;
-  std::unique_ptr<ChannelReflectorListener> listener_;
   std::unique_ptr<Channel> channel_;
   mojo::ScopedMessagePipeHandle handle_;
 };

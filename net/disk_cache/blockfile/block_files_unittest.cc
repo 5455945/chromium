@@ -1,11 +1,16 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "net/disk_cache/blockfile/block_files.h"
+
+#include <algorithm>
+#include <array>
+
+#include "base/containers/span.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
-#include "build/chromeos_buildflags.h"
-#include "net/disk_cache/blockfile/block_files.h"
+#include "build/build_config.h"
 #include "net/disk_cache/disk_cache.h"
 #include "net/disk_cache/disk_cache_test_base.h"
 #include "net/disk_cache/disk_cache_test_util.h"
@@ -30,8 +35,8 @@ int NumberOfFiles(const base::FilePath& path) {
 
 namespace disk_cache {
 
+#if BUILDFLAG(IS_CHROMEOS)
 // Flaky on ChromeOS: https://crbug.com/1156795
-#if BUILDFLAG(IS_CHROMEOS_ASH)
 #define MAYBE_BlockFiles_Grow DISABLED_BlockFiles_Grow
 #else
 #define MAYBE_BlockFiles_Grow BlockFiles_Grow
@@ -43,14 +48,21 @@ TEST_F(DiskCacheTest, MAYBE_BlockFiles_Grow) {
   BlockFiles files(cache_path_);
   ASSERT_TRUE(files.Init(true));
 
+#if BUILDFLAG(IS_FUCHSIA)
+  // Too slow on Fuchsia: https://crbug.com/1354793
+  const int kMaxSize = 3500;
+  const int kNumberOfFiles = 4;
+#else
   const int kMaxSize = 35000;
-  Addr address[kMaxSize];
+  const int kNumberOfFiles = 6;
+#endif
+  std::array<Addr, kMaxSize> address;
 
   // Fill up the 32-byte block file (use three files).
-  for (int i = 0; i < kMaxSize; i++) {
-    EXPECT_TRUE(files.CreateBlock(RANKINGS, 4, &address[i]));
+  for (auto& addr : address) {
+    EXPECT_TRUE(files.CreateBlock(RANKINGS, 4, &addr));
   }
-  EXPECT_EQ(6, NumberOfFiles(cache_path_));
+  EXPECT_EQ(kNumberOfFiles, NumberOfFiles(cache_path_));
 
   // Make sure we don't keep adding files.
   for (int i = 0; i < kMaxSize * 4; i += 2) {
@@ -58,7 +70,7 @@ TEST_F(DiskCacheTest, MAYBE_BlockFiles_Grow) {
     files.DeleteBlock(address[target], false);
     EXPECT_TRUE(files.CreateBlock(RANKINGS, 4, &address[target]));
   }
-  EXPECT_EQ(6, NumberOfFiles(cache_path_));
+  EXPECT_EQ(kNumberOfFiles, NumberOfFiles(cache_path_));
 }
 
 // We should be able to delete empty block files.
@@ -73,13 +85,13 @@ TEST_F(DiskCacheTest, BlockFiles_Shrink) {
   Addr address[kMaxSize];
 
   // Fill up the 32-byte block file (use three files).
-  for (int i = 0; i < kMaxSize; i++) {
-    EXPECT_TRUE(files.CreateBlock(RANKINGS, 4, &address[i]));
+  for (auto& addr : address) {
+    EXPECT_TRUE(files.CreateBlock(RANKINGS, 4, &addr));
   }
 
   // Now delete all the blocks, so that we can delete the two extra files.
-  for (int i = 0; i < kMaxSize; i++) {
-    files.DeleteBlock(address[i], false);
+  for (const auto& addr : address) {
+    files.DeleteBlock(addr, false);
   }
   EXPECT_EQ(4, NumberOfFiles(cache_path_));
 }
@@ -93,15 +105,15 @@ TEST_F(DiskCacheTest, BlockFiles_Recover) {
   ASSERT_TRUE(files.Init(true));
 
   const int kNumEntries = 2000;
-  CacheAddr entries[kNumEntries];
+  std::array<CacheAddr, kNumEntries> entries;
 
   int seed = static_cast<int>(Time::Now().ToInternalValue());
   srand(seed);
-  for (int i = 0; i < kNumEntries; i++) {
+  for (auto& entry : entries) {
     Addr address(0);
     int size = (rand() % 4) + 1;
     EXPECT_TRUE(files.CreateBlock(RANKINGS, size, &address));
-    entries[i] = address.value();
+    entry = address.value();
   }
 
   for (int i = 0; i < kNumEntries; i++) {
@@ -173,7 +185,7 @@ TEST_F(DiskCacheTest, BlockFiles_ZeroSizeFile) {
   files.CloseFiles();
   // Truncate one of the files.
   {
-    scoped_refptr<File> file(new File);
+    auto file = base::MakeRefCounted<File>();
     ASSERT_TRUE(file->Init(filename));
     EXPECT_TRUE(file->SetLength(0));
   }
@@ -196,7 +208,7 @@ TEST_F(DiskCacheTest, BlockFiles_TruncatedFile) {
   files.CloseFiles();
   // Truncate one of the files.
   {
-    scoped_refptr<File> file(new File);
+    auto file = base::MakeRefCounted<File>();
     ASSERT_TRUE(file->Init(filename));
     EXPECT_TRUE(file->SetLength(15000));
   }
@@ -274,10 +286,9 @@ TEST_F(DiskCacheTest, BlockFiles_InvalidFile) {
 
   // Let's create an invalid file.
   base::FilePath filename(files.Name(5));
-  char header[kBlockHeaderSize];
-  memset(header, 'a', kBlockHeaderSize);
-  EXPECT_EQ(kBlockHeaderSize,
-            base::WriteFile(filename, header, kBlockHeaderSize));
+  std::array<uint8_t, kBlockHeaderSize> header;
+  std::ranges::fill(header, 'a');
+  EXPECT_TRUE(base::WriteFile(filename, header));
 
   EXPECT_TRUE(nullptr == files.GetFile(addr));
 
@@ -295,7 +306,7 @@ TEST_F(DiskCacheTest, AllocationMap) {
 
   // Create a bunch of entries.
   const int kSize = 100;
-  Addr address[kSize];
+  std::array<Addr, kSize> address;
   for (int i = 0; i < kSize; i++) {
     SCOPED_TRACE(i);
     int block_size = i % 4 + 1;
@@ -315,8 +326,8 @@ TEST_F(DiskCacheTest, AllocationMap) {
   // 10 bits per each four entries, so 250 bits total.
   BlockFileHeader* header =
       reinterpret_cast<BlockFileHeader*>(files.GetFile(address[0])->buffer());
-  uint8_t* buffer = reinterpret_cast<uint8_t*>(&header->allocation_map);
-  for (int i =0; i < 29; i++) {
+  auto buffer = base::as_byte_span(header->allocation_map);
+  for (int i = 0; i < 29; i++) {
     SCOPED_TRACE(i);
     EXPECT_EQ(0xff, buffer[i]);
   }
@@ -327,7 +338,7 @@ TEST_F(DiskCacheTest, AllocationMap) {
   }
 
   // The allocation map should be empty.
-  for (int i =0; i < 50; i++) {
+  for (int i = 0; i < 50; i++) {
     SCOPED_TRACE(i);
     EXPECT_EQ(0, buffer[i]);
   }

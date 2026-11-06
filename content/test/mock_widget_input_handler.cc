@@ -1,17 +1,18 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/test/mock_widget_input_handler.h"
 
 #include "base/run_loop.h"
+#include "build/build_config.h"
+#include "cc/input/browser_controls_offset_tag_modifications.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/input/web_gesture_event.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
 #include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
 #include "third_party/blink/public/common/input/web_touch_event.h"
 
-using base::TimeDelta;
 using blink::WebGestureEvent;
 using blink::WebInputEvent;
 using blink::WebMouseEvent;
@@ -35,9 +36,9 @@ MockWidgetInputHandler::~MockWidgetInputHandler() {
   receiver_.reset();
 }
 
-void MockWidgetInputHandler::SetFocus(bool focused) {
-  dispatched_messages_.emplace_back(
-      std::make_unique<DispatchedFocusMessage>(focused));
+void MockWidgetInputHandler::SetFocus(blink::mojom::FocusState focus_state) {
+  dispatched_messages_.emplace_back(std::make_unique<DispatchedFocusMessage>(
+      focus_state == blink::mojom::FocusState::kFocused));
 }
 
 void MockWidgetInputHandler::MouseCaptureLost() {
@@ -61,9 +62,16 @@ void MockWidgetInputHandler::ImeSetComposition(
     const std::vector<ui::ImeTextSpan>& ime_text_spans,
     const gfx::Range& range,
     int32_t start,
-    int32_t end) {
+    int32_t end,
+    blink::mojom::ImeState ime_state,
+    const blink::DOMNodeIdType& target_dom_node_id,
+    ImeSetCompositionCallback callback) {
   dispatched_messages_.emplace_back(std::make_unique<DispatchedIMEMessage>(
-      "SetComposition", text, ime_text_spans, range, start, end));
+      "SetComposition", text, ime_text_spans, range, start, end, ime_state,
+      target_dom_node_id));
+  if (callback) {
+    std::move(callback).Run(gfx::Range::InvalidRange());
+  }
 }
 
 void MockWidgetInputHandler::ImeCommitText(
@@ -71,12 +79,21 @@ void MockWidgetInputHandler::ImeCommitText(
     const std::vector<ui::ImeTextSpan>& ime_text_spans,
     const gfx::Range& range,
     int32_t relative_cursor_position,
+    const blink::DOMNodeIdType& target_dom_node_id,
     ImeCommitTextCallback callback) {
   dispatched_messages_.emplace_back(std::make_unique<DispatchedIMEMessage>(
       "CommitText", text, ime_text_spans, range, relative_cursor_position,
-      relative_cursor_position));
+      relative_cursor_position, blink::mojom::ImeState::kNone,
+      target_dom_node_id));
   if (callback)
     std::move(callback).Run();
+}
+
+void MockWidgetInputHandler::PasteIntoNode(
+    const std::u16string& text,
+    const blink::DOMNodeIdType& target_dom_node_id) {
+  dispatched_messages_.emplace_back(
+      std::make_unique<DispatchedMessage>("PasteIntoNode"));
 }
 
 void MockWidgetInputHandler::ImeFinishComposingText(bool keep_selection) {
@@ -98,6 +115,8 @@ void MockWidgetInputHandler::RequestCompositionUpdates(bool immediate_request,
 
 void MockWidgetInputHandler::DispatchEvent(
     std::unique_ptr<blink::WebCoalescedInputEvent> event,
+    std::optional<std::unique_ptr<blink::WebCoalescedInputEvent>>
+        original_event_for_gesture,
     DispatchEventCallback callback) {
   dispatched_messages_.emplace_back(std::make_unique<DispatchedEventMessage>(
       std::move(event), std::move(callback)));
@@ -114,6 +133,8 @@ void MockWidgetInputHandler::WaitForInputProcessed(
   NOTREACHED();
 }
 
+void MockWidgetInputHandler::PingMainThread(PingMainThreadCallback callback) {}
+
 MockWidgetInputHandler::MessageVector
 MockWidgetInputHandler::GetAndResetDispatchedMessages() {
   MessageVector dispatched_events;
@@ -121,7 +142,7 @@ MockWidgetInputHandler::GetAndResetDispatchedMessages() {
   return dispatched_events;
 }
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 void MockWidgetInputHandler::AttachSynchronousCompositor(
     mojo::PendingRemote<blink::mojom::SynchronousCompositorControlHost>
         control_host,
@@ -133,6 +154,18 @@ void MockWidgetInputHandler::AttachSynchronousCompositor(
 void MockWidgetInputHandler::GetFrameWidgetInputHandler(
     mojo::PendingAssociatedReceiver<blink::mojom::FrameWidgetInputHandler>
         interface_request) {}
+
+void MockWidgetInputHandler::UpdateBrowserControlsState(
+    cc::BrowserControlsState constraints,
+    cc::BrowserControlsState current,
+    bool animate,
+    const std::optional<cc::BrowserControlsOffsetTagModifications>&
+        offset_tag_modifications) {}
+
+void MockWidgetInputHandler::FlushReceiverForTesting() {
+  DCHECK(receiver_.is_bound());
+  receiver_.FlushForTesting();
+}
 
 MockWidgetInputHandler::DispatchedMessage::DispatchedMessage(
     const std::string& name)
@@ -173,13 +206,17 @@ MockWidgetInputHandler::DispatchedIMEMessage::DispatchedIMEMessage(
     const std::vector<ui::ImeTextSpan>& text_spans,
     const gfx::Range& range,
     int32_t start,
-    int32_t end)
+    int32_t end,
+    blink::mojom::ImeState ime_state,
+    blink::DOMNodeIdType target_dom_node_id)
     : DispatchedMessage(name),
       text_(text),
       text_spans_(text_spans),
       range_(range),
       start_(start),
-      end_(end) {}
+      end_(end),
+      ime_state_(ime_state),
+      target_dom_node_id_(target_dom_node_id) {}
 
 MockWidgetInputHandler::DispatchedIMEMessage::~DispatchedIMEMessage() {}
 
@@ -193,9 +230,12 @@ bool MockWidgetInputHandler::DispatchedIMEMessage::Matches(
     const std::vector<ui::ImeTextSpan>& ime_text_spans,
     const gfx::Range& range,
     int32_t start,
-    int32_t end) const {
+    int32_t end,
+    blink::mojom::ImeState ime_state,
+    blink::DOMNodeIdType target_dom_node_id) const {
   return text_ == text && text_spans_ == ime_text_spans && range_ == range &&
-         start_ == start && end_ == end;
+         start_ == start && end_ == end && ime_state_ == ime_state &&
+         target_dom_node_id_ == target_dom_node_id;
 }
 
 MockWidgetInputHandler::DispatchedEditCommandMessage::

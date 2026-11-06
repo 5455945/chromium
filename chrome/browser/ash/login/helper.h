@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -9,13 +9,14 @@
 
 #include <string>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
-#include "chromeos/network/network_handler_callbacks.h"
+#include "ash/public/cpp/login_screen_model.h"
+#include "base/memory/scoped_refptr.h"
+#include "chromeos/ash/components/login/auth/public/session_auth_factors.h"
+#include "chromeos/ash/components/network/network_handler_callbacks.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/views/view.h"
 
+class PrefService;
 class Profile;
 class UserContext;
 
@@ -26,16 +27,24 @@ class Size;
 
 namespace content {
 class StoragePartition;
-}
+}  // namespace content
 
 namespace network {
 namespace mojom {
 class NetworkContext;
-}
+}  // namespace mojom
 class SharedURLLoaderFactory;
-}
+}  // namespace network
 
-namespace chromeos {
+namespace policy {
+class DeviceLocalAccountPolicyBroker;
+}  // namespace policy
+
+namespace password_manager {
+class PasswordReuseManager;
+}  // namespace password_manager
+
+namespace ash {
 
 // Returns bounds of the screen to use for login wizard.
 // The rect is centered within the default monitor and sized accordingly if
@@ -51,7 +60,7 @@ namespace login {
 
 // Maximum size of user image, in which it should be saved to be properly
 // displayed under all possible DPI values.
-const int kMaxUserImageSize = 512;
+inline constexpr int kMaxUserImageSize = 512;
 
 // Returns true if lock/login should scroll user pods into view itself when
 // virtual keyboard is shown and disable vk overscroll.
@@ -61,6 +70,10 @@ bool LoginScrollIntoViewEnabled();
 class NetworkStateHelper {
  public:
   NetworkStateHelper();
+
+  NetworkStateHelper(const NetworkStateHelper&) = delete;
+  NetworkStateHelper& operator=(const NetworkStateHelper&) = delete;
+
   virtual ~NetworkStateHelper();
 
   // Returns name of the currently connected network.
@@ -73,6 +86,9 @@ class NetworkStateHelper {
   // Returns true if the default network is in connected state.
   virtual bool IsConnected() const;
 
+  // Returns true if the ethernet network is in connected state.
+  virtual bool IsConnectedToEthernet() const;
+
   // Returns true if the default network is in connecting state.
   virtual bool IsConnecting() const;
 
@@ -81,8 +97,6 @@ class NetworkStateHelper {
                              network_handler::ErrorCallback error_callback,
                              const std::string& service_path,
                              const std::string& guid) const;
-
-  DISALLOW_COPY_AND_ASSIGN(NetworkStateHelper);
 };
 
 //
@@ -93,6 +107,10 @@ class NetworkStateHelper {
 // returns nullptr if the sign-in partition is not available yet, or if sign-in
 // webui is torn down.
 content::StoragePartition* GetSigninPartition();
+
+// Returns the storage partition for the lock screen webview. Can return nullptr
+// if the lock screen partition is not available.
+content::StoragePartition* GetLockScreenPartition();
 
 // Returns the network context for the sign-in webview. Note the function
 // returns nullptr if the sign-in partition is not available yet, or if sign-in
@@ -107,22 +125,30 @@ scoped_refptr<network::SharedURLLoaderFactory> GetSigninURLLoaderFactory();
 
 // Saves sync password hash and salt to profile prefs. These will be used to
 // detect Gaia password reuses.
-void SaveSyncPasswordDataToProfile(const UserContext& user_context,
-                                   Profile* profile);
+void SaveSyncPasswordDataToProfile(
+    const UserContext& user_context,
+    password_manager::PasswordReuseManager* reuse_manager);
 
 // Returns time remaining to the next online login. The value can be negative
 // which means that online login should have been already happened in the past.
 base::TimeDelta TimeToOnlineSignIn(base::Time last_online_signin,
                                    base::TimeDelta offline_signin_limit);
 
+// Checks whether full management disclosure is needed for the public/managed
+// session login screen UI. Full disclosure is needed if the session is
+// managed and any risky extensions or network certificates are forced
+// through the policies.
+bool IsFullManagementDisclosureNeeded(
+    const PrefService& local_state,
+    policy::DeviceLocalAccountPolicyBroker* broker);
+
+// Sets the available auth factors for the user on the login & lock screen.
+void SetAuthFactorsForUser(const AccountId& user,
+                           const SessionAuthFactors& auth_factors,
+                           bool is_pin_disabled_by_policy,
+                           LoginScreenModel* login_screen);
+
 }  // namespace login
-
-}  // namespace chromeos
-
-// TODO(https://crbug.com/1164001): remove when the migration is finished.
-namespace ash {
-namespace login = ::chromeos::login;
-using ::chromeos::GetCurrentUserImageSize;
 }  // namespace ash
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_HELPER_H_

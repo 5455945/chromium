@@ -1,29 +1,43 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/performance_manager/performance_manager_tab_helper.h"
 
+#include <optional>
 #include <set>
 #include <utility>
 
-#include "base/containers/contains.h"
-#include "base/run_loop.h"
-#include "base/test/bind.h"
+#include "base/test/scoped_feature_list.h"
+#include "base/test/simple_test_tick_clock.h"
+#include "base/time/time.h"
 #include "components/performance_manager/graph/frame_node_impl.h"
-#include "components/performance_manager/graph/graph_impl_operations.h"
+#include "components/performance_manager/graph/graph_impl.h"
 #include "components/performance_manager/graph/page_node_impl.h"
+#include "components/performance_manager/graph/process_node_impl.h"
 #include "components/performance_manager/performance_manager_impl.h"
+#include "components/performance_manager/public/features.h"
+#include "components/performance_manager/public/graph/graph.h"
+#include "components/performance_manager/public/graph/graph_operations.h"
 #include "components/performance_manager/public/graph/page_node.h"
 #include "components/performance_manager/render_process_user_data.h"
+#include "components/performance_manager/test_support/graph/mock_page_node_observer.h"
 #include "components/performance_manager/test_support/performance_manager_test_harness.h"
+#include "content/public/browser/browser_context.h"
+#include "content/public/browser/permission_descriptor_util.h"
+#include "content/public/browser/permission_result.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/common/content_features.h"
+#include "content/public/common/process_type.h"
+#include "content/public/test/mock_permission_controller.h"
 #include "content/public/test/navigation_simulator.h"
+#include "content/public/test/permissions_test_utils.h"
 #include "content/public/test/render_frame_host_test_support.h"
 #include "content/public/test/web_contents_tester.h"
+#include "net/base/net_errors.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/permissions/permission_utils.h"
 #include "third_party/blink/public/mojom/favicon/favicon_url.mojom.h"
 
 namespace performance_manager {
@@ -63,23 +77,19 @@ class PerformanceManagerTabHelperTest : public PerformanceManagerTestHarness {
          !it.IsAtEnd(); it.Advance()) {
       ++num_hosts;
     }
+    return num_hosts;
+  }
 
+  static size_t CountAllRenderProcessNodes(Graph* graph) {
+    size_t num_hosts = 0;
+    for (const ProcessNode* process_node : graph->GetAllProcessNodes()) {
+      if (process_node->GetProcessType() == content::PROCESS_TYPE_RENDERER) {
+        ++num_hosts;
+      }
+    }
     return num_hosts;
   }
 };
-
-void CallOnGraphSync(PerformanceManagerImpl::GraphImplCallback callback) {
-  base::RunLoop run_loop;
-
-  PerformanceManagerImpl::CallOnGraphImpl(
-      FROM_HERE,
-      base::BindLambdaForTesting([&run_loop, &callback](GraphImpl* graph) {
-        std::move(callback).Run(graph);
-        run_loop.Quit();
-      }));
-
-  run_loop.Run();
-}
 
 void PerformanceManagerTabHelperTest::CheckGraphTopology(
     const std::set<content::RenderProcessHost*>& hosts,
@@ -92,7 +102,7 @@ void PerformanceManagerTabHelperTest::CheckGraphTopology(
   EXPECT_NE(0u, hosts.size());
 
   // Convert the RPHs to ProcessNodeImpls so we can check they match.
-  std::set<ProcessNodeImpl*> process_nodes;
+  std::set<const ProcessNode*> process_nodes;
   for (auto* host : hosts) {
     auto* data = RenderProcessUserData::GetForRenderProcessHost(host);
     EXPECT_TRUE(data);
@@ -101,49 +111,48 @@ void PerformanceManagerTabHelperTest::CheckGraphTopology(
   EXPECT_EQ(process_nodes.size(), hosts.size());
 
   // Check out the graph itself.
-  CallOnGraphSync(base::BindLambdaForTesting(
-      [&process_nodes, num_hosts, grandchild_url](GraphImpl* graph) {
-        EXPECT_GE(num_hosts, graph->GetAllProcessNodeImpls().size());
-        EXPECT_EQ(4u, graph->GetAllFrameNodeImpls().size());
+  auto* graph = PerformanceManager::GetGraph();
 
-        // Expect all frame nodes to be current. This fails if our
-        // implementation of RenderFrameHostChanged is borked.
-        for (auto* frame : graph->GetAllFrameNodeImpls())
-          EXPECT_TRUE(frame->is_current());
+  EXPECT_GE(num_hosts, CountAllRenderProcessNodes(graph));
+  EXPECT_EQ(4u, graph->GetAllFrameNodes().size());
 
-        ASSERT_EQ(1u, graph->GetAllPageNodeImpls().size());
-        auto* page = graph->GetAllPageNodeImpls()[0];
+  // Expect all frame nodes to be active. This fails if our
+  // implementation of RenderFrameHostChanged is borked.
+  for (auto* frame : graph->GetAllFrameNodes()) {
+    EXPECT_TRUE(frame->IsActive());
+  }
 
-        // Extra RPHs can and most definitely do exist.
-        auto associated_process_nodes =
-            GraphImplOperations::GetAssociatedProcessNodes(page);
-        EXPECT_GE(graph->GetAllProcessNodeImpls().size(),
-                  associated_process_nodes.size());
-        EXPECT_GE(num_hosts, associated_process_nodes.size());
+  ASSERT_EQ(1u, graph->GetAllPageNodes().size());
+  auto* page = graph->GetAllPageNodes().AsVector()[0];
 
-        for (auto* process_node : associated_process_nodes)
-          EXPECT_TRUE(base::Contains(process_nodes, process_node));
+  // Extra RPHs can and most definitely do exist.
+  auto associated_process_nodes =
+      GraphOperations::GetAssociatedProcessNodes(page);
+  EXPECT_GE(CountAllRenderProcessNodes(graph), associated_process_nodes.size());
+  EXPECT_GE(num_hosts, associated_process_nodes.size());
 
-        EXPECT_EQ(4u, GraphImplOperations::GetFrameNodes(page).size());
-        ASSERT_EQ(1u, page->main_frame_nodes().size());
+  for (const ProcessNode* process_node : associated_process_nodes) {
+    EXPECT_TRUE(process_nodes.contains(process_node));
+  }
 
-        auto* main_frame = page->GetMainFrameNodeImpl();
-        EXPECT_EQ(kParentUrl, main_frame->url().spec());
-        EXPECT_EQ(2u, main_frame->child_frame_nodes().size());
+  EXPECT_EQ(4u, GraphOperations::GetFrameNodes(page).size());
+  ASSERT_EQ(1u, page->GetMainFrameNodes().size());
 
-        for (auto* child_frame : main_frame->child_frame_nodes()) {
-          if (child_frame->url().spec() == kChild1Url) {
-            ASSERT_EQ(1u, child_frame->child_frame_nodes().size());
-            auto* grandchild_frame =
-                *(child_frame->child_frame_nodes().begin());
-            EXPECT_EQ(grandchild_url, grandchild_frame->url().spec());
-          } else if (child_frame->url().spec() == kChild2Url) {
-            EXPECT_TRUE(child_frame->child_frame_nodes().empty());
-          } else {
-            FAIL() << "Unexpected child frame: " << child_frame->url().spec();
-          }
-        }
-      }));
+  auto* main_frame = page->GetPrimaryMainFrameNode();
+  EXPECT_EQ(kParentUrl, main_frame->GetURL().spec());
+  EXPECT_EQ(2u, main_frame->GetChildFrameNodes().size());
+
+  for (const FrameNode* child_frame : main_frame->GetChildFrameNodes()) {
+    if (child_frame->GetURL().spec() == kChild1Url) {
+      ASSERT_EQ(1u, child_frame->GetChildFrameNodes().size());
+      auto* grandchild_frame = *child_frame->GetChildFrameNodes().begin();
+      EXPECT_EQ(grandchild_url, grandchild_frame->GetURL().spec());
+    } else if (child_frame->GetURL().spec() == kChild2Url) {
+      EXPECT_TRUE(child_frame->GetChildFrameNodes().empty());
+    } else {
+      FAIL() << "Unexpected child frame: " << child_frame->GetURL().spec();
+    }
+  }
 }
 
 }  // namespace
@@ -199,25 +208,30 @@ TEST_F(PerformanceManagerTabHelperTest, FrameHierarchyReflectsToGraph) {
 
   size_t num_hosts = CountAllRenderProcessHosts();
 
-  PerformanceManagerImpl::CallOnGraphImpl(
-      FROM_HERE, base::BindLambdaForTesting([num_hosts](GraphImpl* graph) {
-        EXPECT_GE(num_hosts, graph->GetAllProcessNodeImpls().size());
-        EXPECT_EQ(0u, graph->GetAllFrameNodeImpls().size());
-        ASSERT_EQ(0u, graph->GetAllPageNodeImpls().size());
-      }));
-
-  task_environment()->RunUntilIdle();
+  auto* graph = PerformanceManager::GetGraph();
+  EXPECT_GE(num_hosts, CountAllRenderProcessNodes(graph));
+  EXPECT_EQ(0u, graph->GetAllFrameNodes().size());
+  ASSERT_EQ(0u, graph->GetAllPageNodes().size());
 }
 
 namespace {
 
 void ExpectPageIsAudible(bool is_audible) {
-  CallOnGraphSync(base::BindLambdaForTesting([&](GraphImpl* graph) {
-    ASSERT_EQ(1u, graph->GetAllPageNodeImpls().size());
-    auto* page = graph->GetAllPageNodeImpls()[0];
-    EXPECT_EQ(is_audible, page->is_audible());
-  }));
+  auto* graph = PerformanceManager::GetGraph();
+  ASSERT_EQ(1u, graph->GetAllPageNodes().size());
+  auto* page = graph->GetAllPageNodes().AsVector()[0];
+  EXPECT_EQ(is_audible, page->IsAudible());
 }
+
+#if !BUILDFLAG(IS_ANDROID)
+void ExpectNotificationPermissionStatus(
+    std::optional<blink::mojom::PermissionStatus> status) {
+  auto* graph = PerformanceManager::GetGraph();
+  ASSERT_EQ(1u, graph->GetAllPageNodes().size());
+  auto* page = graph->GetAllPageNodes().AsVector()[0];
+  EXPECT_EQ(status, page->GetNotificationPermissionStatus());
+}
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 }  // namespace
 
@@ -231,6 +245,103 @@ TEST_F(PerformanceManagerTabHelperTest, PageIsAudible) {
   ExpectPageIsAudible(false);
 }
 
+#if !BUILDFLAG(IS_ANDROID)
+TEST_F(PerformanceManagerTabHelperTest, NotificationPermission) {
+  auto owned_permission_controller =
+      std::make_unique<testing::NiceMock<content::MockPermissionController>>();
+  auto* permission_controller = owned_permission_controller.get();
+  GetBrowserContext()->SetPermissionControllerForTesting(
+      std::move(owned_permission_controller));
+  content::PermissionController::SubscriptionId::Generator
+      subscription_id_generator;
+  const auto kFirstSubscriptionId = subscription_id_generator.GenerateNextId();
+  const auto kSecondSubscriptionId = subscription_id_generator.GenerateNextId();
+
+  SetContents(CreateTestWebContents());
+  ExpectNotificationPermissionStatus(std::nullopt);
+
+  // Navigate to an origin with `PermissionStatus::ASK`.
+  {
+    content::RenderFrameHost* rfh_arg = nullptr;
+    content::RenderFrameHost* rfh_arg_2 = nullptr;
+    blink::mojom::PermissionDescriptorPtr descriptor;
+
+    EXPECT_CALL(*permission_controller, GetPermissionStatusForCurrentDocument)
+        .WillOnce([&](const blink::mojom::PermissionDescriptorPtr&
+                          permission_descriptor,
+                      content::RenderFrameHost* render_frame_host) {
+          descriptor = permission_descriptor->Clone();
+          rfh_arg = render_frame_host;
+          return blink::mojom::PermissionStatus::ASK;
+        });
+    EXPECT_CALL(*permission_controller,
+                SubscribeToPermissionResultChange(
+                    PermissionDescriptorToPermissionTypeMatcher(
+                        blink::PermissionType::NOTIFICATIONS),
+                    testing::_, testing::_, testing::_, testing::_, testing::_))
+        .WillOnce(testing::DoAll(testing::SaveArg<2>(&rfh_arg_2),
+                                 testing::Return(testing::ByMove(
+                                     permission_controller->CreateSubscription(
+                                         kFirstSubscriptionId)))));
+
+    content::NavigationSimulator::NavigateAndCommitFromBrowser(
+        web_contents(), GURL(kParentUrl));
+    testing::Mock::VerifyAndClear(permission_controller);
+    EXPECT_EQ(blink::PermissionDescriptorToPermissionType(descriptor),
+              blink::PermissionType::NOTIFICATIONS);
+    EXPECT_EQ(rfh_arg, web_contents()->GetPrimaryMainFrame());
+    ExpectNotificationPermissionStatus(blink::mojom::PermissionStatus::ASK);
+  }
+
+  base::RepeatingCallback<void(content::PermissionResult)> callback_arg;
+
+  // Navigate to an origin with `PermissionStatus::GRANTED`.
+  {
+    content::RenderFrameHost* rfh_arg = nullptr;
+    content::RenderProcessHost* rph_arg = nullptr;
+    blink::mojom::PermissionDescriptorPtr descriptor;
+
+    EXPECT_CALL(*permission_controller, GetPermissionStatusForCurrentDocument)
+        .WillOnce([&](const blink::mojom::PermissionDescriptorPtr&
+                          permission_descriptor,
+                      content::RenderFrameHost* render_frame_host) {
+          descriptor = permission_descriptor->Clone();
+          rfh_arg = render_frame_host;
+          return blink::mojom::PermissionStatus::GRANTED;
+        });
+    EXPECT_CALL(*permission_controller,
+                UnsubscribeFromPermissionResultChange(kFirstSubscriptionId));
+    EXPECT_CALL(*permission_controller,
+                SubscribeToPermissionResultChange(
+                    PermissionDescriptorToPermissionTypeMatcher(
+                        blink::PermissionType::NOTIFICATIONS),
+                    testing::_, testing::_, testing::_, testing::_, testing::_))
+        .WillOnce(testing::DoAll(
+            testing::SaveArg<1>(&rph_arg), testing::SaveArg<5>(&callback_arg),
+            testing::Return(
+                testing::ByMove(permission_controller->CreateSubscription(
+                    kSecondSubscriptionId)))));
+
+    content::NavigationSimulator::NavigateAndCommitFromBrowser(
+        web_contents(), GURL(kCousinFreddyUrl));
+    testing::Mock::VerifyAndClear(permission_controller);
+    EXPECT_EQ(blink::PermissionDescriptorToPermissionType(descriptor),
+              blink::PermissionType::NOTIFICATIONS);
+    EXPECT_EQ(rfh_arg, web_contents()->GetPrimaryMainFrame());
+    ExpectNotificationPermissionStatus(blink::mojom::PermissionStatus::GRANTED);
+  }
+
+  // Simulate a change of permission status independent from navigation.
+  callback_arg.Run(
+      content::PermissionResult(blink::mojom::PermissionStatus::DENIED));
+  ExpectNotificationPermissionStatus(blink::mojom::PermissionStatus::DENIED);
+
+  // The last subscription is removed when the tab helper is deleted.
+  EXPECT_CALL(*permission_controller,
+              UnsubscribeFromPermissionResultChange(kSecondSubscriptionId));
+}
+#endif  // BUILDFLAG(IS_ANDROID)
+
 TEST_F(PerformanceManagerTabHelperTest, GetFrameNode) {
   SetContents(CreateTestWebContents());
 
@@ -240,7 +351,7 @@ TEST_F(PerformanceManagerTabHelperTest, GetFrameNode) {
 
   // GetFrameNode() can return nullptr. In this test, it is achieved by using an
   // empty RenderFrameHost.
-  auto* empty_frame = web_contents()->GetMainFrame();
+  auto* empty_frame = web_contents()->GetPrimaryMainFrame();
   DCHECK(empty_frame);
 
   auto* empty_frame_node = tab_helper->GetFrameNode(empty_frame);
@@ -255,90 +366,279 @@ TEST_F(PerformanceManagerTabHelperTest, GetFrameNode) {
   EXPECT_TRUE(new_frame_node);
 }
 
-namespace {
-
-class LenientMockPageNodeObserver : public PageNode::ObserverDefaultImpl {
- public:
-  LenientMockPageNodeObserver() = default;
-  ~LenientMockPageNodeObserver() override = default;
-  LenientMockPageNodeObserver(const LenientMockPageNodeObserver& other) =
-      delete;
-  LenientMockPageNodeObserver& operator=(const LenientMockPageNodeObserver&) =
-      delete;
-
-  MOCK_METHOD1(OnFaviconUpdated, void(const PageNode*));
-};
-using MockPageNodeObserver = ::testing::StrictMock<LenientMockPageNodeObserver>;
-
-}  // namespace
-
 TEST_F(PerformanceManagerTabHelperTest,
        NotificationsFromInactiveFrameTreeAreIgnored) {
+  // When this feature is enabled, PerformanceManagerTabHelper does not ignore
+  // the first favicon/title update.
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      features::kUseLoadingStateToDetectBackgroundTitleOrFaviconUpdate);
+
   SetContents(CreateTestWebContents());
 
   content::NavigationSimulator::NavigateAndCommitFromBrowser(web_contents(),
                                                              GURL(kParentUrl));
-  auto* first_nav_main_rfh = web_contents()->GetMainFrame();
+  auto* first_nav_main_rfh = web_contents()->GetPrimaryMainFrame();
 
   content::LeaveInPendingDeletionState(first_nav_main_rfh);
 
   content::NavigationSimulator::NavigateAndCommitFromBrowser(
       web_contents(), GURL(kCousinFreddyUrl));
-  EXPECT_NE(web_contents()->GetMainFrame(), first_nav_main_rfh);
+  EXPECT_NE(web_contents()->GetPrimaryMainFrame(), first_nav_main_rfh);
 
-  // Mock observer, this can only be used from the PM sequence.
+  // Mock observer.
+  Graph* graph = PerformanceManager::GetGraph();
+
   MockPageNodeObserver observer;
-  {
-    base::RunLoop run_loop;
-    auto quit_closure = run_loop.QuitClosure();
-    PerformanceManager::CallOnGraph(
-        FROM_HERE, base::BindLambdaForTesting([&](Graph* graph) {
-          graph->AddPageNodeObserver(&observer);
-          std::move(quit_closure).Run();
-        }));
-    run_loop.Run();
-  }
+  graph->AddPageNodeObserver(&observer);
 
   auto* tab_helper =
       PerformanceManagerTabHelper::FromWebContents(web_contents());
   ASSERT_TRUE(tab_helper);
 
-  // The first favicon change is always ignored, call DidUpdateFaviconURL twice
-  // to ensure that the test doesn't pass simply because of that.
-  tab_helper->DidUpdateFaviconURL(first_nav_main_rfh, {});
-  tab_helper->DidUpdateFaviconURL(first_nav_main_rfh, {});
+  tab_helper->DidUpdateFaviconURL(
+      first_nav_main_rfh, {},
+      blink::mojom::FaviconUpdateReason::kLinkElementChange);
 
-  {
-    base::RunLoop run_loop;
-    auto quit_closure = run_loop.QuitClosure();
-    PerformanceManager::CallOnGraph(
-        FROM_HERE, base::BindLambdaForTesting([&]() {
-          // The observer shouldn't have been called at this point.
-          testing::Mock::VerifyAndClear(&observer);
-          std::move(quit_closure).Run();
-          // Set the expectation for the next check.
-          EXPECT_CALL(observer, OnFaviconUpdated(::testing::_));
-        }));
-    run_loop.Run();
-  }
+  // The observer shouldn't have been called at this point.
+  testing::Mock::VerifyAndClear(&observer);
+  // Set the expectation for the next check.
+  EXPECT_CALL(observer, OnFaviconUpdated(::testing::_, ::testing::_));
 
   // Sanity check to ensure that notification sent to the active main frame are
-  // forwarded. DidUpdateFaviconURL needs to be called twice as the first
-  // favicon change is always ignored.
-  tab_helper->DidUpdateFaviconURL(web_contents()->GetMainFrame(), {});
-  tab_helper->DidUpdateFaviconURL(web_contents()->GetMainFrame(), {});
+  // forwarded.
+  tab_helper->DidUpdateFaviconURL(
+      web_contents()->GetPrimaryMainFrame(), {},
+      blink::mojom::FaviconUpdateReason::kLinkElementChange);
 
-  {
-    base::RunLoop run_loop;
-    auto quit_closure = run_loop.QuitClosure();
-    PerformanceManager::CallOnGraph(
-        FROM_HERE, base::BindLambdaForTesting([&](Graph* graph) {
-          testing::Mock::VerifyAndClear(&observer);
-          graph->RemovePageNodeObserver(&observer);
-          std::move(quit_closure).Run();
-        }));
-    run_loop.Run();
+  testing::Mock::VerifyAndClear(&observer);
+  graph->RemovePageNodeObserver(&observer);
+}
+
+namespace {
+
+bool IsUserOrBrowserInitiatedLoad(content::WebContents* web_contents) {
+  base::WeakPtr<PageNode> page_node =
+      PerformanceManager::GetPrimaryPageNodeForWebContents(web_contents);
+  CHECK(page_node);
+  return page_node->IsUserOrBrowserInitiatedLoad();
+}
+
+// Longer than the window during which a renderer-initiated navigation is
+// treated as a client redirect of the current document.
+constexpr base::TimeDelta kLongerThanClientRedirectWindow = base::Seconds(11);
+
+// Shorter than that window.
+constexpr base::TimeDelta kShorterThanClientRedirectWindow = base::Seconds(5);
+
+class PerformanceManagerTabHelperUserOrBrowserInitiatedLoadTest
+    : public PerformanceManagerTabHelperTest {
+ protected:
+  void SetUp() override {
+    PerformanceManagerTabHelperTest::SetUp();
+    SetContents(CreateTestWebContents());
+    PerformanceManagerTabHelper::FromWebContents(web_contents())
+        ->SetTickClockForTesting(&tick_clock_);
   }
+
+  base::SimpleTestTickClock tick_clock_;
+};
+
+}  // namespace
+
+TEST_F(PerformanceManagerTabHelperUserOrBrowserInitiatedLoadTest,
+       UserOrBrowserInitiatedLoad) {
+  content::NavigationSimulator::NavigateAndCommitFromBrowser(web_contents(),
+                                                             GURL(kParentUrl));
+  EXPECT_TRUE(IsUserOrBrowserInitiatedLoad(web_contents()));
+  tick_clock_.Advance(kLongerThanClientRedirectWindow);
+
+  // A renderer-initiated navigation without user activation is not
+  // user-initiated, as soon as it starts.
+  auto navigation = content::NavigationSimulator::CreateRendererInitiated(
+      GURL(kChild1Url), main_rfh());
+  navigation->SetHasUserGesture(false);
+  navigation->Start();
+  EXPECT_FALSE(IsUserOrBrowserInitiatedLoad(web_contents()));
+  navigation->Commit();
+  EXPECT_FALSE(IsUserOrBrowserInitiatedLoad(web_contents()));
+
+  // A renderer-initiated navigation with user activation is user-initiated.
+  navigation = content::NavigationSimulator::CreateRendererInitiated(
+      GURL(kChild2Url), main_rfh());
+  navigation->SetHasUserGesture(true);
+  navigation->Start();
+  EXPECT_TRUE(IsUserOrBrowserInitiatedLoad(web_contents()));
+  navigation->Commit();
+  EXPECT_TRUE(IsUserOrBrowserInitiatedLoad(web_contents()));
+
+  // A browser-initiated navigation is user-initiated, even without a gesture.
+  tick_clock_.Advance(kLongerThanClientRedirectWindow);
+  navigation = content::NavigationSimulator::CreateRendererInitiated(
+      GURL(kGrandchildUrl), main_rfh());
+  navigation->SetHasUserGesture(false);
+  navigation->Commit();
+  EXPECT_FALSE(IsUserOrBrowserInitiatedLoad(web_contents()));
+  navigation = content::NavigationSimulator::CreateBrowserInitiated(
+      GURL(kCousinFreddyUrl), web_contents());
+  navigation->SetHasUserGesture(false);
+  navigation->Commit();
+  EXPECT_TRUE(IsUserOrBrowserInitiatedLoad(web_contents()));
+}
+
+TEST_F(PerformanceManagerTabHelperUserOrBrowserInitiatedLoadTest,
+       UserOrBrowserInitiatedLoadRevertsOnAbort) {
+  content::NavigationSimulator::NavigateAndCommitFromBrowser(web_contents(),
+                                                             GURL(kParentUrl));
+  EXPECT_TRUE(IsUserOrBrowserInitiatedLoad(web_contents()));
+  tick_clock_.Advance(kLongerThanClientRedirectWindow);
+
+  // An aborted navigation restores the value of the current document.
+  auto navigation = content::NavigationSimulator::CreateRendererInitiated(
+      GURL(kChild1Url), main_rfh());
+  navigation->SetHasUserGesture(false);
+  navigation->Start();
+  EXPECT_FALSE(IsUserOrBrowserInitiatedLoad(web_contents()));
+  navigation->AbortFromRenderer();
+  EXPECT_TRUE(IsUserOrBrowserInitiatedLoad(web_contents()));
+}
+
+// Tests that when navigations overlap, the page follows the most recently
+// started one, even if an older one commits in the meantime.
+TEST_F(PerformanceManagerTabHelperUserOrBrowserInitiatedLoadTest,
+       UserOrBrowserInitiatedLoadFollowsLatestNavigation) {
+  content::NavigationSimulator::NavigateAndCommitFromBrowser(web_contents(),
+                                                             GURL(kParentUrl));
+  EXPECT_TRUE(IsUserOrBrowserInitiatedLoad(web_contents()));
+  tick_clock_.Advance(kLongerThanClientRedirectWindow);
+
+  // An unsolicited renderer-initiated navigation gets ready to commit.
+  auto older_navigation = content::NavigationSimulator::CreateRendererInitiated(
+      GURL(kChild1Url), main_rfh());
+  older_navigation->SetHasUserGesture(false);
+  older_navigation->ReadyToCommit();
+  EXPECT_FALSE(IsUserOrBrowserInitiatedLoad(web_contents()));
+
+  // A browser-initiated navigation starts before the older one commits.
+  auto newer_navigation = content::NavigationSimulator::CreateBrowserInitiated(
+      GURL(kChild2Url), web_contents());
+  newer_navigation->Start();
+  EXPECT_TRUE(IsUserOrBrowserInitiatedLoad(web_contents()));
+
+  // The older navigation committing doesn't affect the newer navigation's
+  // value.
+  older_navigation->Commit();
+  EXPECT_TRUE(IsUserOrBrowserInitiatedLoad(web_contents()));
+
+  // When the newer navigation doesn't commit, the page reverts to the value of
+  // the document committed by the older navigation.
+  newer_navigation->Fail(net::ERR_ABORTED);
+  EXPECT_FALSE(IsUserOrBrowserInitiatedLoad(web_contents()));
+}
+
+// Tests that when the newest of overlapping navigations fails while an older
+// one is still pending, the page follows the older one.
+TEST_F(PerformanceManagerTabHelperUserOrBrowserInitiatedLoadTest,
+       UserOrBrowserInitiatedLoadFallsBackToOlderPendingNavigation) {
+  content::NavigationSimulator::NavigateAndCommitFromBrowser(web_contents(),
+                                                             GURL(kParentUrl));
+  EXPECT_TRUE(IsUserOrBrowserInitiatedLoad(web_contents()));
+  tick_clock_.Advance(kLongerThanClientRedirectWindow);
+
+  // An unsolicited renderer-initiated navigation gets ready to commit.
+  auto older_navigation = content::NavigationSimulator::CreateRendererInitiated(
+      GURL(kChild1Url), main_rfh());
+  older_navigation->SetHasUserGesture(false);
+  older_navigation->ReadyToCommit();
+  EXPECT_FALSE(IsUserOrBrowserInitiatedLoad(web_contents()));
+
+  // A browser-initiated navigation starts, then fails while the older one is
+  // still pending.
+  auto newer_navigation = content::NavigationSimulator::CreateBrowserInitiated(
+      GURL(kChild2Url), web_contents());
+  newer_navigation->Start();
+  EXPECT_TRUE(IsUserOrBrowserInitiatedLoad(web_contents()));
+  newer_navigation->Fail(net::ERR_ABORTED);
+  EXPECT_FALSE(IsUserOrBrowserInitiatedLoad(web_contents()));
+
+  older_navigation->Commit();
+  EXPECT_FALSE(IsUserOrBrowserInitiatedLoad(web_contents()));
+}
+
+TEST_F(PerformanceManagerTabHelperUserOrBrowserInitiatedLoadTest,
+       UserOrBrowserInitiatedLoadIgnoresSameDocumentAndSubframes) {
+  content::NavigationSimulator::NavigateAndCommitFromBrowser(web_contents(),
+                                                             GURL(kParentUrl));
+  EXPECT_TRUE(IsUserOrBrowserInitiatedLoad(web_contents()));
+  tick_clock_.Advance(kLongerThanClientRedirectWindow);
+
+  // A same-document navigation without user activation doesn't load a page.
+  auto navigation = content::NavigationSimulator::CreateRendererInitiated(
+      GURL(std::string(kParentUrl) + "#ref"), main_rfh());
+  navigation->SetHasUserGesture(false);
+  navigation->CommitSameDocument();
+  EXPECT_TRUE(IsUserOrBrowserInitiatedLoad(web_contents()));
+
+  // Neither does a subframe navigation.
+  content::RenderFrameHost* child =
+      content::RenderFrameHostTester::For(main_rfh())->AppendChild("child");
+  navigation = content::NavigationSimulator::CreateRendererInitiated(
+      GURL(kChild1Url), child);
+  navigation->SetHasUserGesture(false);
+  navigation->Commit();
+  EXPECT_TRUE(IsUserOrBrowserInitiatedLoad(web_contents()));
+}
+
+// Tests that a renderer-initiated navigation without user activation that
+// starts shortly after a user- or browser-initiated document committed is
+// treated as a client redirect, and inherits that document's value. This also
+// applies to each hop of a chain of client redirects.
+TEST_F(PerformanceManagerTabHelperUserOrBrowserInitiatedLoadTest,
+       UserOrBrowserInitiatedLoadInheritedByClientRedirects) {
+  content::NavigationSimulator::NavigateAndCommitFromBrowser(web_contents(),
+                                                             GURL(kParentUrl));
+  EXPECT_TRUE(IsUserOrBrowserInitiatedLoad(web_contents()));
+
+  // First hop.
+  tick_clock_.Advance(kShorterThanClientRedirectWindow);
+  auto navigation = content::NavigationSimulator::CreateRendererInitiated(
+      GURL(kChild1Url), main_rfh());
+  navigation->SetHasUserGesture(false);
+  navigation->Start();
+  EXPECT_TRUE(IsUserOrBrowserInitiatedLoad(web_contents()));
+  navigation->Commit();
+  EXPECT_TRUE(IsUserOrBrowserInitiatedLoad(web_contents()));
+
+  // Second hop. The window restarts when each hop commits.
+  tick_clock_.Advance(kShorterThanClientRedirectWindow);
+  navigation = content::NavigationSimulator::CreateRendererInitiated(
+      GURL(kChild2Url), main_rfh());
+  navigation->SetHasUserGesture(false);
+  navigation->Start();
+  EXPECT_TRUE(IsUserOrBrowserInitiatedLoad(web_contents()));
+  navigation->Commit();
+  EXPECT_TRUE(IsUserOrBrowserInitiatedLoad(web_contents()));
+
+  // A navigation that starts after the window isn't a client redirect.
+  tick_clock_.Advance(kLongerThanClientRedirectWindow);
+  navigation = content::NavigationSimulator::CreateRendererInitiated(
+      GURL(kGrandchildUrl), main_rfh());
+  navigation->SetHasUserGesture(false);
+  navigation->Start();
+  EXPECT_FALSE(IsUserOrBrowserInitiatedLoad(web_contents()));
+  navigation->Commit();
+  EXPECT_FALSE(IsUserOrBrowserInitiatedLoad(web_contents()));
+
+  // A client redirect of a document that wasn't user- or browser-initiated
+  // inherits that document's value.
+  tick_clock_.Advance(kShorterThanClientRedirectWindow);
+  navigation = content::NavigationSimulator::CreateRendererInitiated(
+      GURL(kCousinFreddyUrl), main_rfh());
+  navigation->SetHasUserGesture(false);
+  navigation->Start();
+  EXPECT_FALSE(IsUserOrBrowserInitiatedLoad(web_contents()));
+  navigation->Commit();
+  EXPECT_FALSE(IsUserOrBrowserInitiatedLoad(web_contents()));
 }
 
 }  // namespace performance_manager

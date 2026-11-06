@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <string>
 
 #include "chrome/browser/task_manager/providers/task.h"
+#include "content/public/common/child_process_id.h"
 
 namespace task_manager {
 
@@ -25,7 +26,7 @@ class VmProcessTask : public Task {
 
   // task_manager::Task:
   bool IsKillable() override;
-  int GetChildProcessUniqueID() const override;
+  content::ChildProcessId GetChildProcessUniqueID() const override;
 
  protected:
   std::string owner_id_;

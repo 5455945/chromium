@@ -1,20 +1,16 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_VIEWS_CONTROLS_NATIVE_NATIVE_VIEW_HOST_MAC_H_
 #define UI_VIEWS_CONTROLS_NATIVE_NATIVE_VIEW_HOST_MAC_H_
 
-#include <memory>
-
-#include "base/mac/scoped_nsobject.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/base/cocoa/views_hostable.h"
 #include "ui/views/controls/native/native_view_host_wrapper.h"
 #include "ui/views/views_export.h"
 
 namespace ui {
-class LayerOwner;
 class ViewsHostableView;
 }  // namespace ui
 
@@ -32,6 +28,10 @@ class NativeViewHostMac : public NativeViewHostWrapper,
                           public ui::ViewsHostableView::Host {
  public:
   explicit NativeViewHostMac(NativeViewHost* host);
+
+  NativeViewHostMac(const NativeViewHostMac&) = delete;
+  NativeViewHostMac& operator=(const NativeViewHostMac&) = delete;
+
   ~NativeViewHostMac() override;
 
   // ViewsHostableView::Host:
@@ -39,46 +39,48 @@ class NativeViewHostMac : public NativeViewHostWrapper,
   remote_cocoa::mojom::Application* GetRemoteCocoaApplication() const override;
   uint64_t GetNSViewId() const override;
   void OnHostableViewDestroying() override;
+  [[nodiscard]] base::ScopedClosureRunner CreateVideoCaptureLock() override;
 
   // NativeViewHostWrapper:
   void AttachNativeView() override;
   void NativeViewDetaching(bool destroyed) override;
   void AddedToWidget() override;
   void RemovedFromWidget() override;
-  bool SetCornerRadii(const gfx::RoundedCornersF& corner_radii) override;
-  bool SetCustomMask(std::unique_ptr<ui::LayerOwner> mask) override;
-  void SetHitTestTopInset(int top_inset) override;
-  int GetHitTestTopInset() const override;
+  bool SetNativeViewCornerRadii(
+      const gfx::RoundedCornersF& corner_radii) override;
+  gfx::RoundedCornersF GetNativeViewCornerRadii() const override;
+  gfx::Rect GetNativeViewClipRect() const override;
+
   void InstallClip(int x, int y, int w, int h) override;
   bool HasInstalledClip() override;
   void UninstallClip() override;
+  bool SetNativeViewClipRect(const gfx::Rect& clip_rect) override;
   void ShowWidget(int x, int y, int w, int h, int native_w, int native_h)
       override;
   void HideWidget() override;
   void SetFocus() override;
   gfx::NativeView GetNativeViewContainer() const override;
   gfx::NativeViewAccessible GetNativeViewAccessible() override;
-  gfx::NativeCursor GetCursor(int x, int y) override;
+  ui::Cursor GetCursor(int x, int y) override;
   void SetVisible(bool visible) override;
   void SetParentAccessible(gfx::NativeViewAccessible) override;
   gfx::NativeViewAccessible GetParentAccessible() override;
+  ui::Layer* GetUILayer() override;
 
  private:
   // Return the NativeWidgetMacNSWindowHost for this hosted view.
   NativeWidgetMacNSWindowHost* GetNSWindowHost() const;
 
   // Our associated NativeViewHost. Owns this.
-  NativeViewHost* host_;
+  raw_ptr<NativeViewHost> host_;
 
   // Retain the native view as it may be destroyed at an unpredictable time.
-  base::scoped_nsobject<NSView> native_view_;
+  NSView* __strong native_view_;
 
   // If |native_view| supports the ViewsHostable protocol, then this is the
   // the corresponding ViewsHostableView interface (which is implemeted only
   // by WebContents and tests).
-  ui::ViewsHostableView* native_view_hostable_ = nullptr;
-
-  DISALLOW_COPY_AND_ASSIGN(NativeViewHostMac);
+  raw_ptr<ui::ViewsHostableView> native_view_hostable_ = nullptr;
 };
 
 }  // namespace views

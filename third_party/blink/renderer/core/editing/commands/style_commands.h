@@ -25,7 +25,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -33,6 +33,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_EDITING_COMMANDS_STYLE_COMMANDS_H_
 
 #include "mojo/public/mojom/base/text_direction.mojom-blink-forward.h"
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/events/input_event.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
@@ -49,7 +50,7 @@ enum class EditingTriState;
 enum class EditorCommandSource;
 
 // This class provides static functions about commands related to style.
-class StyleCommands {
+class CORE_EXPORT StyleCommands {
   STATIC_ONLY(StyleCommands);
 
  public:
@@ -114,11 +115,11 @@ class StyleCommands {
                                                          Event*,
                                                          EditorCommandSource,
                                                          const String&);
-  static bool ExecuteStyleWithCSS(LocalFrame&,
+  static bool ExecuteStyleWithCss(LocalFrame&,
                                   Event*,
                                   EditorCommandSource,
                                   const String&);
-  static bool ExecuteUseCSS(LocalFrame&,
+  static bool ExecuteUseCss(LocalFrame&,
                             Event*,
                             EditorCommandSource,
                             const String&);
@@ -128,7 +129,7 @@ class StyleCommands {
   static EditingTriState StateBold(LocalFrame&, Event*);
   static EditingTriState StateItalic(LocalFrame&, Event*);
   static EditingTriState StateStrikethrough(LocalFrame&, Event*);
-  static EditingTriState StateStyleWithCSS(LocalFrame&, Event*);
+  static EditingTriState StateStyleWithCss(LocalFrame&, Event*);
   static EditingTriState StateSubscript(LocalFrame&, Event*);
   static EditingTriState StateSuperscript(LocalFrame&, Event*);
   static EditingTriState StateTextWritingDirectionLeftToRight(LocalFrame&,
@@ -154,6 +155,7 @@ class StyleCommands {
   static String ValueFontSizeDelta(const EditorInternalCommand&,
                                    LocalFrame&,
                                    Event*);
+  static String ValueJustify(const EditorInternalCommand&, LocalFrame&, Event*);
 
  private:
   static void ApplyStyle(LocalFrame&,
@@ -197,12 +199,12 @@ class StyleCommands {
                                          CSSPropertyID,
                                          const CSSValue&);
   static bool SelectionStartHasStyle(LocalFrame&, CSSPropertyID, const String&);
-  static String SelectionStartCSSPropertyValue(LocalFrame&, CSSPropertyID);
+  static String SelectionStartCssPropertyValue(LocalFrame&, CSSPropertyID);
   static String ValueStyle(LocalFrame&, CSSPropertyID);
   static bool IsUnicodeBidiNestedOrMultipleEmbeddings(CSSValueID);
 
-  // TODO(editing-dev): We should make |textDirectionForSelection()| to take
-  // |selectionInDOMTree|.
+  // TODO(editing-dev): We should make |TextDirectionForSelection()| to take
+  // |SelectionInDomTree|.
   static mojo_base::mojom::blink::TextDirection
   TextDirectionForSelection(const VisibleSelection&, EditingStyle*, bool&);
   static EditingTriState StateTextWritingDirection(

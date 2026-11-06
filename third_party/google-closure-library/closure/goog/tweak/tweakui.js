@@ -1,16 +1,8 @@
-// Copyright 2009 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 /**
  * @fileoverview A UI for editing tweak settings / clicking tweak actions.
@@ -39,6 +31,7 @@ goog.require('goog.tweak.NumericSetting');
 goog.require('goog.tweak.StringSetting');
 goog.require('goog.ui.Zippy');
 goog.require('goog.userAgent');
+goog.requireType('goog.tweak.Registry');
 
 
 
@@ -50,6 +43,7 @@ goog.require('goog.userAgent');
  * @final
  */
 goog.tweak.TweakUi = function(registry, opt_domHelper) {
+  'use strict';
   /**
    * The registry to create a UI from.
    * @type {!goog.tweak.Registry}
@@ -124,6 +118,7 @@ goog.tweak.TweakUi.STYLE_SHEET_INSTALLED_MARKER_ = '__closure_tweak_installed_';
  * @private
  */
 goog.tweak.TweakUi.CSS_STYLES_ = (function() {
+  'use strict';
   var MOBILE = goog.userAgent.MOBILE;
   var IE = goog.userAgent.IE;
   var ROOT_PANEL_CLASS = '.' + goog.tweak.TweakUi.ROOT_PANEL_CLASS_;
@@ -152,6 +147,7 @@ goog.tweak.TweakUi.CSS_STYLES_ = (function() {
  *     not enabled.
  */
 goog.tweak.TweakUi.create = function(opt_domHelper) {
+  'use strict';
   var registry = goog.tweak.getRegistry();
   if (registry) {
     var ui = new goog.tweak.TweakUi(registry, opt_domHelper);
@@ -168,19 +164,19 @@ goog.tweak.TweakUi.create = function(opt_domHelper) {
  *     not enabled.
  */
 goog.tweak.TweakUi.createCollapsible = function(opt_domHelper) {
+  'use strict';
   var registry = goog.tweak.getRegistry();
   if (registry) {
     var dh = opt_domHelper || goog.dom.getDomHelper();
 
     // The following strings are for internal debugging only.  No translation
     // necessary.  Do NOT wrap goog.getMsg() around these strings.
-    var showLink =
-        dh.createDom(goog.dom.TagName.A, {href: 'javascript:;'}, 'Show Tweaks');
-    var hideLink =
-        dh.createDom(goog.dom.TagName.A, {href: 'javascript:;'}, 'Hide Tweaks');
+    var showLink = dh.createDom(goog.dom.TagName.A, {href: '#'}, 'Show Tweaks');
+    var hideLink = dh.createDom(goog.dom.TagName.A, {href: '#'}, 'Hide Tweaks');
     var ret = dh.createDom(goog.dom.TagName.DIV, null, showLink);
 
     var lazyCreate = function() {
+      'use strict';
       // Lazily render the UI.
       var ui = new goog.tweak.TweakUi(
           /** @type {!goog.tweak.Registry} */ (registry), dh);
@@ -208,6 +204,7 @@ goog.tweak.TweakUi.createCollapsible = function(opt_domHelper) {
  * @private
  */
 goog.tweak.TweakUi.entryCompare_ = function(a, b) {
+  'use strict';
   return (
       goog.array.defaultCompare(
           a instanceof goog.tweak.NamespaceEntry_,
@@ -229,6 +226,7 @@ goog.tweak.TweakUi.entryCompare_ = function(a, b) {
  * @private
  */
 goog.tweak.TweakUi.isGroupEntry_ = function(entry) {
+  'use strict';
   return entry instanceof goog.tweak.NamespaceEntry_ ||
       entry instanceof goog.tweak.BooleanGroup;
 };
@@ -241,6 +239,7 @@ goog.tweak.TweakUi.isGroupEntry_ = function(entry) {
  * @private
  */
 goog.tweak.TweakUi.extractBooleanGroupEntries_ = function(group) {
+  'use strict';
   var ret = goog.object.getValues(group.getChildEntries());
   ret.sort(goog.tweak.TweakUi.entryCompare_);
   return ret;
@@ -254,6 +253,7 @@ goog.tweak.TweakUi.extractBooleanGroupEntries_ = function(group) {
  * @private
  */
 goog.tweak.TweakUi.extractNamespace_ = function(entry) {
+  'use strict';
   var namespaceMatch = /.+(?=\.)/.exec(entry.getId());
   return namespaceMatch ? namespaceMatch[0] : '';
 };
@@ -266,9 +266,10 @@ goog.tweak.TweakUi.extractNamespace_ = function(entry) {
  * @private
  */
 goog.tweak.TweakUi.getNamespacedLabel_ = function(entry) {
+  'use strict';
   var label = entry.label;
   if (label == entry.getId()) {
-    label = label.substr(label.lastIndexOf('.') + 1);
+    label = label.slice(label.lastIndexOf('.') + 1);
   }
   return label;
 };
@@ -278,6 +279,7 @@ goog.tweak.TweakUi.getNamespacedLabel_ = function(entry) {
  * @return {!Element} The root element. Must not be called before render().
  */
 goog.tweak.TweakUi.prototype.getRootElement = function() {
+  'use strict';
   goog.asserts.assert(
       this.entriesPanel_, 'TweakUi.getRootElement called before render().');
   return this.entriesPanel_.getRootElement();
@@ -289,6 +291,7 @@ goog.tweak.TweakUi.prototype.getRootElement = function() {
  * @private
  */
 goog.tweak.TweakUi.prototype.restartWithAppliedTweaks_ = function() {
+  'use strict';
   var queryString = this.registry_.makeUrlQuery();
   var wnd = this.domHelper_.getWindow();
   if (queryString != wnd.location.search) {
@@ -304,6 +307,7 @@ goog.tweak.TweakUi.prototype.restartWithAppliedTweaks_ = function() {
  * @private
  */
 goog.tweak.TweakUi.prototype.installStyles_ = function() {
+  'use strict';
   // Use an marker to install the styles only once per document.
   // Styles are injected via JS instead of in a separate style sheet so that
   // they are automatically excluded when tweaks are stripped out.
@@ -320,6 +324,7 @@ goog.tweak.TweakUi.prototype.installStyles_ = function() {
  * @return {!Element} The root element.
  */
 goog.tweak.TweakUi.prototype.render = function() {
+  'use strict';
   this.installStyles_();
   var dh = this.domHelper_;
   // The submit button
@@ -348,6 +353,7 @@ goog.tweak.TweakUi.prototype.render = function() {
  * @private
  */
 goog.tweak.TweakUi.prototype.onNewRegisteredEntry_ = function(entry) {
+  'use strict';
   if (this.entriesPanel_) {
     this.insertEntry_(entry);
   }
@@ -360,6 +366,7 @@ goog.tweak.TweakUi.prototype.onNewRegisteredEntry_ = function(entry) {
  * @private
  */
 goog.tweak.TweakUi.prototype.insertEntry_ = function(entry) {
+  'use strict';
   var panel = this.entriesPanel_;
   var namespace = goog.tweak.TweakUi.extractNamespace_(entry);
 
@@ -394,6 +401,7 @@ goog.tweak.TweakUi.prototype.insertEntry_ = function(entry) {
  * @final
  */
 goog.tweak.EntriesPanel = function(entries, opt_domHelper) {
+  'use strict';
   /**
    * The entries to show in the panel.
    * @type {!Array<!goog.tweak.BaseEntry>} entries
@@ -408,6 +416,7 @@ goog.tweak.EntriesPanel = function(entries, opt_domHelper) {
    * @private
    */
   this.boundHelpOnClickHandler_ = function() {
+    'use strict';
     self.onHelpClick_(this.parentNode);
   };
 
@@ -453,6 +462,7 @@ goog.tweak.EntriesPanel = function(entries, opt_domHelper) {
  *     render().
  */
 goog.tweak.EntriesPanel.prototype.getRootElement = function() {
+  'use strict';
   goog.asserts.assert(
       this.rootElem_, 'EntriesPanel.getRootElement called before render().');
   return /** @type {!Element} */ (this.rootElem_);
@@ -476,15 +486,14 @@ goog.tweak.EntriesPanel.prototype.getRootElement = function() {
  * @return {!Element} The root element for the panel.
  */
 goog.tweak.EntriesPanel.prototype.render = function(opt_endElement) {
+  'use strict';
   var dh = this.domHelper_;
   var entries = this.entries_;
   var ret = dh.createDom(goog.dom.TagName.DIV);
 
   var showAllDescriptionsLink = dh.createDom(
-      goog.dom.TagName.A, {
-        href: 'javascript:;',
-        onclick: goog.bind(this.toggleAllDescriptions, this)
-      },
+      goog.dom.TagName.A,
+      {href: '#', onclick: goog.bind(this.toggleAllDescriptions, this)},
       'Toggle all Descriptions');
   ret.appendChild(showAllDescriptionsLink);
 
@@ -509,6 +518,7 @@ goog.tweak.EntriesPanel.prototype.render = function(opt_endElement) {
  * @param {!goog.tweak.BaseEntry} entry The entry to insert.
  */
 goog.tweak.EntriesPanel.prototype.insertEntry = function(entry) {
+  'use strict';
   var insertIndex =
       -goog.array.binarySearch(
           this.entries_, entry, goog.tweak.TweakUi.entryCompare_) -
@@ -530,6 +540,7 @@ goog.tweak.EntriesPanel.prototype.insertEntry = function(entry) {
  * @private
  */
 goog.tweak.EntriesPanel.prototype.createEntryElem_ = function(entry) {
+  'use strict';
   var dh = this.domHelper_;
   var isGroupEntry = goog.tweak.TweakUi.isGroupEntry_(entry);
   var classes = isGroupEntry ? goog.tweak.TweakUi.ENTRY_GROUP_CSS_CLASSES_ :
@@ -557,8 +568,10 @@ goog.tweak.EntriesPanel.prototype.createEntryElem_ = function(entry) {
  * Click handler for the help link.
  * @param {Node} entryDiv The div that contains the tweak.
  * @private
+ * @suppress {strictMissingProperties} Added to tighten compiler checks
  */
 goog.tweak.EntriesPanel.prototype.onHelpClick_ = function(entryDiv) {
+  'use strict';
   this.showDescription_(entryDiv, !entryDiv.style.display);
 };
 
@@ -570,8 +583,10 @@ goog.tweak.EntriesPanel.prototype.onHelpClick_ = function(entryDiv) {
  * @private
  */
 goog.tweak.EntriesPanel.prototype.showDescription_ = function(entryDiv, show) {
+  'use strict';
   var descriptionElem = entryDiv.lastChild.lastChild;
   goog.style.setElementShown(/** @type {Element} */ (descriptionElem), show);
+  /** @suppress {strictMissingProperties} Added to tighten compiler checks */
   entryDiv.style.display = show ? 'block' : '';
 };
 
@@ -583,6 +598,7 @@ goog.tweak.EntriesPanel.prototype.showDescription_ = function(entryDiv, show) {
  * @private
  */
 goog.tweak.EntriesPanel.prototype.createHelpElem_ = function(entry) {
+  'use strict';
   // The markup looks like:
   // <span onclick=...><b>?</b><span>{description}</span></span>
   var ret = this.domHelper_.createElement(goog.dom.TagName.SPAN);
@@ -617,6 +633,7 @@ goog.tweak.EntriesPanel.prototype.createHelpElem_ = function(entry) {
  * Show all entry descriptions (has the same effect as clicking on all ?'s).
  */
 goog.tweak.EntriesPanel.prototype.toggleAllDescriptions = function() {
+  'use strict';
   var show = !this.showAllDescriptionsState_;
   this.showAllDescriptionsState_ = show;
   var entryDivs = this.domHelper_.getElementsByTagNameAndClass(
@@ -639,6 +656,7 @@ goog.tweak.EntriesPanel.prototype.toggleAllDescriptions = function() {
  */
 goog.tweak.EntriesPanel.prototype.createComboBoxDom_ = function(
     tweak, label, onchangeFunc) {
+  'use strict';
   // The markup looks like:
   // Label: <select><option></option></select>
   var dh = this.domHelper_;
@@ -660,6 +678,7 @@ goog.tweak.EntriesPanel.prototype.createComboBoxDom_ = function(
   selectElem.value = String(tweak.getNewValue());
   selectElem.onchange = onchangeFunc;
   tweak.addCallback(function() {
+    'use strict';
     selectElem.value = String(tweak.getNewValue());
   });
   return ret;
@@ -675,6 +694,7 @@ goog.tweak.EntriesPanel.prototype.createComboBoxDom_ = function(
  */
 goog.tweak.EntriesPanel.prototype.createBooleanSettingDom_ = function(
     tweak, label) {
+  'use strict';
   var dh = this.domHelper_;
   var ret = dh.getDocument().createDocumentFragment();
   var checkbox = dh.createDom(goog.dom.TagName.INPUT, {type: 'checkbox'});
@@ -686,8 +706,14 @@ goog.tweak.EntriesPanel.prototype.createBooleanSettingDom_ = function(
   checkbox.defaultChecked = tweak.getNewValue();
 
   checkbox.checked = tweak.getNewValue();
-  checkbox.onchange = function() { tweak.setValue(checkbox.checked); };
-  tweak.addCallback(function() { checkbox.checked = tweak.getNewValue(); });
+  checkbox.onchange = function() {
+    'use strict';
+    tweak.setValue(checkbox.checked);
+  };
+  tweak.addCallback(function() {
+    'use strict';
+    checkbox.checked = tweak.getNewValue();
+  });
   return ret;
 };
 
@@ -703,11 +729,12 @@ goog.tweak.EntriesPanel.prototype.createBooleanSettingDom_ = function(
  */
 goog.tweak.EntriesPanel.prototype.createSubPanelDom_ = function(
     entry, label, childEntries) {
+  'use strict';
   var dh = this.domHelper_;
   var toggleLink =
-      dh.createDom(goog.dom.TagName.A, {href: 'javascript:;'}, label + ' \xBB');
+      dh.createDom(goog.dom.TagName.A, {href: '#'}, label + ' \xBB');
   var toggleLink2 =
-      dh.createDom(goog.dom.TagName.A, {href: 'javascript:;'}, '\xAB ' + label);
+      dh.createDom(goog.dom.TagName.A, {href: '#'}, '\xAB ' + label);
   toggleLink2.style.marginRight = '10px';
 
   var innerUi = new goog.tweak.EntriesPanel(childEntries, dh);
@@ -743,6 +770,7 @@ goog.tweak.EntriesPanel.prototype.createSubPanelDom_ = function(
  */
 goog.tweak.EntriesPanel.prototype.createTextBoxDom_ = function(
     tweak, label, onchangeFunc) {
+  'use strict';
   var dh = this.domHelper_;
   var ret = dh.getDocument().createDocumentFragment();
   ret.appendChild(dh.createTextNode(label + ': '));
@@ -754,6 +782,7 @@ goog.tweak.EntriesPanel.prototype.createTextBoxDom_ = function(
   });
   ret.appendChild(textBox);
   tweak.addCallback(function() {
+    'use strict';
     textBox.value = String(tweak.getNewValue());
   });
   return ret;
@@ -769,6 +798,7 @@ goog.tweak.EntriesPanel.prototype.createTextBoxDom_ = function(
  */
 goog.tweak.EntriesPanel.prototype.createButtonActionDom_ = function(
     tweak, label) {
+  'use strict';
   return this.domHelper_.createDom(
       goog.dom.TagName.BUTTON, {onclick: goog.bind(tweak.fireCallbacks, tweak)},
       label);
@@ -782,6 +812,7 @@ goog.tweak.EntriesPanel.prototype.createButtonActionDom_ = function(
  * @private
  */
 goog.tweak.EntriesPanel.prototype.createTweakEntryDom_ = function(entry) {
+  'use strict';
   var label = goog.tweak.TweakUi.getNamespacedLabel_(entry);
   if (entry instanceof goog.tweak.BooleanSetting) {
     return this.createBooleanSettingDom_(entry, label);
@@ -789,16 +820,29 @@ goog.tweak.EntriesPanel.prototype.createTweakEntryDom_ = function(entry) {
     var childEntries = goog.tweak.TweakUi.extractBooleanGroupEntries_(entry);
     return this.createSubPanelDom_(entry, label, childEntries);
   } else if (entry instanceof goog.tweak.StringSetting) {
-    /** @this {Element} */
-    var setValueFunc = function() { entry.setValue(this.value); };
+    /**
+     * @this {Element}
+     * @suppress {strictMissingProperties} Added to tighten compiler checks
+     */
+    var setValueFunc = function() {
+      'use strict';
+      entry.setValue(this.value);
+    };
     return entry.getValidValues() ?
         this.createComboBoxDom_(entry, label, setValueFunc) :
         this.createTextBoxDom_(entry, label, setValueFunc);
   } else if (entry instanceof goog.tweak.NumericSetting) {
-    /** @this {Element} */
+    /**
+     * @this {Element}
+     * @suppress {strictMissingProperties} Added to tighten compiler checks
+     */
     setValueFunc = function() {
+      'use strict';
       // Reset the value if it's not a number.
       if (isNaN(this.value)) {
+        /**
+         * @suppress {strictMissingProperties} Added to tighten compiler checks
+         */
         this.value = entry.getNewValue();
       } else {
         entry.setValue(+this.value);
@@ -829,6 +873,7 @@ goog.tweak.EntriesPanel.prototype.createTweakEntryDom_ = function(entry) {
  * @private
  */
 goog.tweak.NamespaceEntry_ = function(namespace, entries) {
+  'use strict';
   goog.tweak.BaseEntry.call(
       this, goog.tweak.NamespaceEntry_.ID_PREFIX + namespace,
       'Tweaks within the ' + namespace + ' namespace.');

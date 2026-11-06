@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -53,12 +53,13 @@ class TestChromeWebUIControllerFactoryTest : public InProcessBrowserTest {
             test_factory_.get(), ChromeWebUIControllerFactory::GetInstance());
 
     test_factory_->AddFactoryOverride(
-        GURL(kChromeTestChromeWebUIControllerFactory).host(), &mock_provider_);
+        GURL(kChromeTestChromeWebUIControllerFactory).GetHost(),
+        &mock_provider_);
   }
 
   void TearDownOnMainThread() override {
     test_factory_->RemoveFactoryOverride(
-        GURL(kChromeTestChromeWebUIControllerFactory).host());
+        GURL(kChromeTestChromeWebUIControllerFactory).GetHost());
   }
 
  protected:
@@ -78,6 +79,6 @@ IN_PROC_BROWSER_TEST_F(TestChromeWebUIControllerFactoryTest,
   EXPECT_CALL(mock_provider_,
               NewWebUI(_, Eq(kChromeTestChromeWebUIControllerFactoryURL)))
       .WillOnce(ReturnNewWebUI());
-  ui_test_utils::NavigateToURL(browser(),
-                               kChromeTestChromeWebUIControllerFactoryURL);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), kChromeTestChromeWebUIControllerFactoryURL));
 }

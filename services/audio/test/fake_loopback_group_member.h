@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,11 @@
 #include <memory>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "base/unguessable_token.h"
 #include "media/base/audio_parameters.h"
-#include "services/audio/loopback_group_member.h"
+#include "services/audio/loopback_source.h"
 
 namespace media {
 class AudioBus;
@@ -26,9 +26,12 @@ namespace audio {
 //
 // This class is not thread-safe. The caller must guarantee method calls are not
 // being made simultaneously in multithreaded tests.
-class FakeLoopbackGroupMember : public LoopbackGroupMember {
+class FakeLoopbackGroupMember : public LoopbackSource {
  public:
   explicit FakeLoopbackGroupMember(const media::AudioParameters& params);
+
+  FakeLoopbackGroupMember(const FakeLoopbackGroupMember&) = delete;
+  FakeLoopbackGroupMember& operator=(const FakeLoopbackGroupMember&) = delete;
 
   ~FakeLoopbackGroupMember() override;
 
@@ -47,7 +50,7 @@ class FakeLoopbackGroupMember : public LoopbackGroupMember {
   // AudioBus being delivered to the Snooper.
   void RenderMoreAudio(base::TimeTicks output_timestamp);
 
-  // LoopbackGroupMember implementation.
+  // LoopbackSource implementation.
   const media::AudioParameters& GetAudioParameters() const override;
   void StartSnooping(Snooper* snooper) override;
   void StopSnooping(Snooper* snooper) override;
@@ -65,9 +68,7 @@ class FakeLoopbackGroupMember : public LoopbackGroupMember {
 
   int64_t at_frame_ = 0;
 
-  Snooper* snooper_ = nullptr;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeLoopbackGroupMember);
+  raw_ptr<Snooper> snooper_ = nullptr;
 };
 
 }  // namespace audio

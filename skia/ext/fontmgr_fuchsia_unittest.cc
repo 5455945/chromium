@@ -1,29 +1,26 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <fuchsia/fonts/cpp/fidl.h>
-#include <lib/fidl/cpp/binding.h>
 
 #include "skia/ext/test_fonts_fuchsia.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkFontMgr.h"
 #include "third_party/skia/include/core/SkTypeface.h"
 #include "third_party/skia/include/ports/SkFontMgr_fuchsia.h"
+#include "third_party/skia/include/ports/SkFontScanner_Fontations.h"
 
 namespace skia {
 
 // Tests for SkFontMgr_Fuchsia in Skia.
 class FuchsiaFontManagerTest : public testing::Test {
  public:
-  FuchsiaFontManagerTest() {
-    font_manager_ = SkFontMgr_New_Fuchsia(
-        RunTestProviderWithTestFonts(&font_provider_controller_));
-  }
+  FuchsiaFontManagerTest()
+      : font_manager_(SkFontMgr_New_Fuchsia(GetTestFontsProvider().BindSync(),
+                                            SkFontScanner_Make_Fontations())) {}
 
  protected:
-  fidl::InterfaceHandle<fuchsia::sys::ComponentController>
-      font_provider_controller_;
   sk_sp<SkFontMgr> font_manager_;
 };
 

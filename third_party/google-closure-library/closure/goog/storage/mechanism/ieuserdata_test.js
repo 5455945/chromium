@@ -1,39 +1,39 @@
-// Copyright 2011 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 goog.module('goog.storage.mechanism.IEUserDataTest');
 goog.setTestOnly();
 
 const IEUserData = goog.require('goog.storage.mechanism.IEUserData');
-/** @suppress {extraRequire} */
-const mechanismSeparationTester = goog.require('goog.storage.mechanism.mechanismSeparationTester');
-/** @suppress {extraRequire} */
-const mechanismSharingTester = goog.require('goog.storage.mechanism.mechanismSharingTester');
-/** @suppress {extraRequire} */
-const mechanismTestDefinition = goog.require('goog.storage.mechanism.mechanismTestDefinition');
+const iterableMechanismTests = goog.require('goog.storage.mechanism.iterableMechanismTests');
+const mechanismSeparationTests = goog.require('goog.storage.mechanism.mechanismSeparationTests');
+const mechanismSharingTests = goog.require('goog.storage.mechanism.mechanismSharingTests');
+const mechanismTests = goog.require('goog.storage.mechanism.mechanismTests');
 const testSuite = goog.require('goog.testing.testSuite');
 const userAgent = goog.require('goog.userAgent');
 
+let mechanism;
+let minimumQuota;
+let mechanismShared;
+let mechanismSeparate;
+
 testSuite({
+
+  shouldRunTests() {
+    return userAgent.IE && !userAgent.isDocumentModeOrHigher(9);
+  },
+
   setUp() {
     const ieUserData = new IEUserData('test');
     if (ieUserData.isAvailable()) {
       mechanism = ieUserData;
       // There should be at least 32 KiB.
       minimumQuota = 32 * 1024;
-      mechanism_shared = new IEUserData('test');
-      mechanism_separate = new IEUserData('test2');
+      mechanismShared = new IEUserData('test');
+      mechanismSeparate = new IEUserData('test2');
     }
   },
 
@@ -42,28 +42,31 @@ testSuite({
       mechanism.clear();
       mechanism = null;
     }
-    if (!!mechanism_shared) {
-      mechanism_shared.clear();
-      mechanism_shared = null;
+    if (!!mechanismShared) {
+      mechanismShared.clear();
+      mechanismShared = null;
     }
-    if (!!mechanism_separate) {
-      mechanism_separate.clear();
-      mechanism_separate = null;
+    if (!!mechanismSeparate) {
+      mechanismSeparate.clear();
+      mechanismSeparate = null;
     }
   },
 
+  /**
+     @suppress {strictMissingProperties} suppression added to enable type
+     checking
+   */
   testAvailability() {
-    if (userAgent.IE && !userAgent.isDocumentModeOrHigher(9)) {
-      assertNotNull(mechanism);
-      assertTrue(mechanism.isAvailable());
-      assertNotNull(mechanism_shared);
-      assertTrue(mechanism_shared.isAvailable());
-      assertNotNull(mechanism_separate);
-      assertTrue(mechanism_separate.isAvailable());
-    }
+    assertNotNull(mechanism);
+    assertTrue(mechanism.isAvailable());
+    assertNotNull(mechanismShared);
+    assertTrue(mechanismShared.isAvailable());
+    assertNotNull(mechanismSeparate);
+    assertTrue(mechanismSeparate.isAvailable());
   },
 
   testEncoding() {
+    /** @suppress {visibility} suppression added to enable type checking */
     function assertEncodingPair(cleartext, encoded) {
       assertEquals(encoded, IEUserData.encodeKey_(cleartext));
       assertEquals(cleartext, IEUserData.decodeKey_(encoded));
@@ -72,4 +75,38 @@ testSuite({
     assertEncodingPair(
         'aa.bb%cc!\0$\u4e00.', '_aa.2Ebb.25cc.21.00.24.E4.B8.80.2E');
   },
+
+
+  ...mechanismTests.register({
+    getMechanism: function() {
+      return mechanism;
+    },
+    getMinimumQuota: function() {
+      return minimumQuota;
+    },
+  }),
+
+  ...iterableMechanismTests.register({
+    getMechanism: function() {
+      return mechanism;
+    },
+  }),
+
+  ...mechanismSharingTests.register({
+    getMechanism: function() {
+      return mechanism;
+    },
+    getMechanismShared: function() {
+      return mechanismShared;
+    },
+  }),
+
+  ...mechanismSeparationTests.register({
+    getMechanism: function() {
+      return mechanism;
+    },
+    getMechanismSeparate: function() {
+      return mechanismSeparate;
+    },
+  }),
 });

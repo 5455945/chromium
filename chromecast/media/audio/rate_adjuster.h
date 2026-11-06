@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 
 #include <cstdint>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/time/time.h"
 #include "chromecast/base/statistics/weighted_moving_linear_regression.h"
 
@@ -24,10 +24,10 @@ class RateAdjuster {
  public:
   struct Config {
     // The minimum interval between clock rate changes.
-    base::TimeDelta rate_change_interval = base::TimeDelta::FromSeconds(1);
+    base::TimeDelta rate_change_interval = base::Seconds(1);
 
     // How long to make the linear regression window for smoothing errors.
-    base::TimeDelta linear_regression_window = base::TimeDelta::FromSeconds(10);
+    base::TimeDelta linear_regression_window = base::Seconds(10);
 
     // The maximum current error to ignore, in microseconds.
     int64_t max_ignored_current_error = 0;

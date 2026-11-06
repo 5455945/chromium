@@ -1,11 +1,15 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+import {TestRunner} from 'test_runner';
+import {SourcesTestRunner} from 'sources_test_runner';
+
+import * as SourcesModule from 'devtools/panels/sources/sources.js';
 
 (async function() {
   TestRunner.addResult(
       `Tests that object's [[Prototype]] property is present in object properties section when script is paused on a breakpoint.Bug 41214\n`);
-  await TestRunner.loadModule('sources'); await TestRunner.loadTestModule('sources_test_runner');
   await TestRunner.showPanel('sources');
   await TestRunner.evaluateInPagePromise(`
       function C()
@@ -16,10 +20,16 @@
           m: function() { }
       }
 
+      class D1 {}
+      class D2 extends D1 {}
+      class D3 extends D2 {}
+      class D4 extends D3 {}
+      class D5 extends D4 {}
+
       function testFunction()
       {
           var o = new C();
-          var d = document.documentElement;
+          var d = new D5();
           debugger;
       }
   `);
@@ -28,7 +38,7 @@
 
   function step1() {
     TestRunner.addSniffer(
-        Sources.ScopeChainSidebarPane.prototype, '_sidebarPaneUpdatedForTest', onSidebarRendered, true);
+        SourcesModule.ScopeChainSidebarPane.ScopeChainSidebarPane.prototype, 'sidebarPaneUpdatedForTest', onSidebarRendered, true);
     SourcesTestRunner.runTestFunctionAndWaitUntilPaused(() => {});
   }
 

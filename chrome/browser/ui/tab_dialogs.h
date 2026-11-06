@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,34 +6,42 @@
 #define CHROME_BROWSER_UI_TAB_DIALOGS_H_
 
 #include <memory>
-#include <string>
+#include <set>
 
-#include "base/callback_forward.h"
-#include "base/supports_user_data.h"
-#include "ui/gfx/native_widget_types.h"
-
-class Browser;
+#include "base/functional/callback_forward.h"
+#include "extensions/common/extension_id.h"
+#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
+#include "ui/base/unowned_user_data/unowned_user_data_host.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace content {
 class RenderWidgetHost;
 class WebContents;
 }  // namespace content
 
+namespace tabs {
+class TabInterface;
+}  // namespace tabs
+
 namespace ui {
 class ProfileSigninConfirmationDelegate;
 }
 
 // A cross-platform interface for invoking various tab modal dialogs/bubbles.
-class TabDialogs : public base::SupportsUserData::Data {
+class TabDialogs {
  public:
-  ~TabDialogs() override {}
+  DECLARE_USER_DATA(TabDialogs);
 
-  // Creates a platform specific instance, and attaches it to |contents|.
-  // If an instance is already attached, does nothing.
-  static void CreateForWebContents(content::WebContents* contents);
+  explicit TabDialogs(tabs::TabInterface& tab);
+  virtual ~TabDialogs();
 
-  // Returns the instance that was attached to |contents|.
-  // If no instance was attached, returns NULL.
+  // Creates a platform-specific instance for `tab` and `contents`.
+  static std::unique_ptr<TabDialogs> Create(tabs::TabInterface& tab,
+                                            content::WebContents* contents);
+
+  // Returns the instance associated with `tab` or `contents`, or nullptr if
+  // none exists.
+  static TabDialogs* From(tabs::TabInterface* tab);
   static TabDialogs* FromWebContents(content::WebContents* contents);
 
   // Returns the parent view to use when showing a tab modal dialog.
@@ -50,20 +58,29 @@ class TabDialogs : public base::SupportsUserData::Data {
       content::RenderWidgetHost* render_widget_host) = 0;
   virtual bool IsShowingHungRendererDialog() = 0;
 
-  // Shows a dialog asking the user to confirm linking to a managed account.
-  virtual void ShowProfileSigninConfirmation(
-      Browser* browser,
-      const std::string& username,
-      bool prompt_for_new_profile,
-      std::unique_ptr<ui::ProfileSigninConfirmationDelegate> delegate) = 0;
+  // Shows the deprecated app dialog.
+  virtual void ShowDeprecatedAppsDialog(
+      const extensions::ExtensionId& optional_launched_extension_id,
+      const std::set<extensions::ExtensionId>& deprecated_app_ids,
+      content::WebContents* web_contents) = 0;
+
+  // Shows the force installed and deprecated app dialog.
+  virtual void ShowForceInstalledDeprecatedAppsDialog(
+      const extensions::ExtensionId& app_id,
+      content::WebContents* web_contents) = 0;
+
+  // Shows the force installed and deprecated app dialog.
+  virtual void ShowForceInstalledPreinstalledDeprecatedAppDialog(
+      const extensions::ExtensionId& extension_id,
+      content::WebContents* web_contents) = 0;
 
   // Shows or hides the ManagePasswords bubble.
   // Pass true for |user_action| if this is a user initiated action.
   virtual void ShowManagePasswordsBubble(bool user_action) = 0;
   virtual void HideManagePasswordsBubble() = 0;
 
- protected:
-  static const void* UserDataKey();
+ private:
+  ui::ScopedUnownedUserData<TabDialogs> scoped_unowned_user_data_;
 };
 
 #endif  // CHROME_BROWSER_UI_TAB_DIALOGS_H_

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -40,16 +40,13 @@ void NotificationHelperCrashReporterClient::
   crash_reporter::SetCrashReporterClient(instance);
 
   std::wstring user_data_dir;
-  install_static::GetUserDataDirectory(&user_data_dir, nullptr);
+  install_static::GetUserDataDirectory(&user_data_dir,
+                                       /*invalid_user_data_directory=*/nullptr,
+                                       /*policy_set=*/nullptr);
 
   crash_reporter::InitializeCrashpadWithEmbeddedHandler(
       true, "notification-helper", install_static::WideToUTF8(user_data_dir),
       exe_path);
-}
-
-bool NotificationHelperCrashReporterClient::ShouldCreatePipeName(
-    const std::wstring& process_type) {
-  return true;
 }
 
 bool NotificationHelperCrashReporterClient::GetAlternativeCrashDumpLocation(
@@ -81,33 +78,9 @@ void NotificationHelperCrashReporterClient::GetProductNameAndVersion(
       install_static::GetChromeChannelName(/*with_extended_stable=*/true);
 }
 
-bool NotificationHelperCrashReporterClient::ShouldShowRestartDialog(
-    std::wstring* title,
-    std::wstring* message,
-    bool* is_rtl_locale) {
-  // There is no UX associated with notification_helper, so no dialog should be
-  // shown.
-  return false;
-}
-
-bool NotificationHelperCrashReporterClient::AboutToRestart() {
-  // The notification_helper should never be restarted after a crash.
-  return false;
-}
-
-bool NotificationHelperCrashReporterClient::GetIsPerUserInstall() {
-  return !install_static::IsSystemInstall();
-}
-
 bool NotificationHelperCrashReporterClient::GetShouldDumpLargerDumps() {
   // Use large dumps for all but the stable channel.
   return install_static::GetChromeChannel() != version_info::Channel::STABLE;
-}
-
-int NotificationHelperCrashReporterClient::GetResultCodeRespawnFailed() {
-  // The restart dialog is never shown for the notification_helper.
-  NOTREACHED();
-  return 0;
 }
 
 bool NotificationHelperCrashReporterClient::GetCrashDumpLocation(
@@ -118,7 +91,8 @@ bool NotificationHelperCrashReporterClient::GetCrashDumpLocation(
 
 bool NotificationHelperCrashReporterClient::GetCrashMetricsLocation(
     std::wstring* metrics_dir) {
-  install_static::GetUserDataDirectory(metrics_dir, nullptr);
+  install_static::GetUserDataDirectory(metrics_dir, nullptr,
+                                       /*policy_set=*/nullptr);
   return !metrics_dir->empty();
 }
 
@@ -150,5 +124,4 @@ bool NotificationHelperCrashReporterClient::EnableBreakpadForProcess(
     const std::string& process_type) {
   // This is not used by Crashpad (at least on Windows).
   NOTREACHED();
-  return true;
 }

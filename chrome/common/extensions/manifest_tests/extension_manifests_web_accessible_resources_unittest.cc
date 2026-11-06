@@ -1,15 +1,20 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/strings/stringprintf.h"
-#include "base/test/values_test_util.h"
+#include "base/test/scoped_feature_list.h"
 #include "chrome/common/extensions/manifest_tests/chrome_manifest_test.h"
+#include "content/public/test/browser_test_utils.h"
+#include "extensions/buildflags/buildflags.h"
+#include "extensions/common/extension_features.h"
 #include "extensions/common/manifest_handlers/web_accessible_resources_info.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-using extensions::Extension;
-using extensions::WebAccessibleResourcesInfo;
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
+namespace extensions {
+namespace {
 
 class WebAccessibleResourcesManifestTest : public ChromeManifestTest {
  protected:
@@ -22,15 +27,14 @@ class WebAccessibleResourcesManifestTest : public ChromeManifestTest {
             "manifest_version": %d,
             "web_accessible_resources": %s
         })";
-    base::Value manifest_value = base::test::ParseJson(base::StringPrintf(
+    return ManifestData::FromJSON(base::StringPrintf(
         kManifestStub, manifest_version, web_accessible_resources.c_str()));
-    EXPECT_EQ(base::Value::Type::DICTIONARY, manifest_value.type());
-    return ManifestData(std::move(manifest_value), "test");
   }
 };
 
 TEST_F(WebAccessibleResourcesManifestTest, WebAccessibleResources) {
-  auto example_origin = url::Origin::Create(GURL("https://example.com/test"));
+  const auto example_origin =
+      url::Origin::Create(GURL("https://example.com/test"));
 
   // No web_accessible_resources.
   scoped_refptr<Extension> none(
@@ -38,7 +42,7 @@ TEST_F(WebAccessibleResourcesManifestTest, WebAccessibleResources) {
   EXPECT_FALSE(
       WebAccessibleResourcesInfo::HasWebAccessibleResources(none.get()));
   EXPECT_FALSE(WebAccessibleResourcesInfo::IsResourceWebAccessible(
-      none.get(), "test", example_origin));
+      none.get(), "test", &example_origin));
 
   // web_accessible_resources: ["test"].
   scoped_refptr<Extension> single(
@@ -46,9 +50,9 @@ TEST_F(WebAccessibleResourcesManifestTest, WebAccessibleResources) {
   EXPECT_TRUE(
       WebAccessibleResourcesInfo::HasWebAccessibleResources(single.get()));
   EXPECT_TRUE(WebAccessibleResourcesInfo::IsResourceWebAccessible(
-      single.get(), "test", example_origin));
+      single.get(), "test", &example_origin));
   EXPECT_FALSE(WebAccessibleResourcesInfo::IsResourceWebAccessible(
-      single.get(), "other", example_origin));
+      single.get(), "other", &example_origin));
 
   // web_accessible_resources: ["*"].
   scoped_refptr<Extension> wildcard(
@@ -56,9 +60,9 @@ TEST_F(WebAccessibleResourcesManifestTest, WebAccessibleResources) {
   EXPECT_TRUE(
       WebAccessibleResourcesInfo::HasWebAccessibleResources(wildcard.get()));
   EXPECT_TRUE(WebAccessibleResourcesInfo::IsResourceWebAccessible(
-      wildcard.get(), "anything", example_origin));
+      wildcard.get(), "anything", &example_origin));
   EXPECT_TRUE(WebAccessibleResourcesInfo::IsResourceWebAccessible(
-      wildcard.get(), "path/anything", example_origin));
+      wildcard.get(), "path/anything", &example_origin));
 
   // web_accessible_resources: ["path/*.ext"].
   scoped_refptr<Extension> pattern(
@@ -66,11 +70,11 @@ TEST_F(WebAccessibleResourcesManifestTest, WebAccessibleResources) {
   EXPECT_TRUE(
       WebAccessibleResourcesInfo::HasWebAccessibleResources(pattern.get()));
   EXPECT_TRUE(WebAccessibleResourcesInfo::IsResourceWebAccessible(
-      pattern.get(), "path/anything.ext", example_origin));
+      pattern.get(), "path/anything.ext", &example_origin));
   EXPECT_FALSE(WebAccessibleResourcesInfo::IsResourceWebAccessible(
-      pattern.get(), "anything.ext", example_origin));
+      pattern.get(), "anything.ext", &example_origin));
   EXPECT_FALSE(WebAccessibleResourcesInfo::IsResourceWebAccessible(
-      pattern.get(), "path/anything.badext", example_origin));
+      pattern.get(), "path/anything.badext", &example_origin));
 }
 
 // Tests valid configurations of the web_accessible_resources key in manifest
@@ -227,8 +231,28 @@ TEST_F(WebAccessibleResourcesManifestTest, WebAccessibleResourcesV3Invalid) {
               ]
             }
         ])",
-       "Invalid value for 'web_accessible_resources[0]'. Invalid "
-       "match pattern."},
+       "Invalid value for 'web_accessible_resources[0]'. Invalid match pattern"
+       "."},
+      {"Only one wildcard is allowed.",
+       R"([
+         {
+           "resources": ["test"],
+           "matches": ["<all_urls>"],
+           "extension_ids": ["*", "*"]
+         }
+       ])",
+       "Invalid value for 'web_accessible_resources[0]'. If a wildcard entry "
+       "is present, it must be the only entry."},
+      {"A wildcard with an extension id is invalid.",
+       R"([
+         {
+           "resources": ["test"],
+           "matches": ["<all_urls>"],
+           "extension_ids": ["abcdefghijlkmnopabcdefghijklmnop", "*"]
+         }
+       ])",
+       "Invalid value for 'web_accessible_resources[0]'. If a wildcard entry "
+       "is present, it must be the only entry."},
   };
   for (const auto& test_case : test_cases) {
     SCOPED_TRACE(base::StringPrintf("Error: '%s'", test_case.title));
@@ -249,14 +273,16 @@ TEST_F(WebAccessibleResourcesManifestTest,
     ])")));
   EXPECT_TRUE(
       WebAccessibleResourcesInfo::HasWebAccessibleResources(extension.get()));
+  const auto allowed_origin =
+      url::Origin::Create(GURL("https://allowed.example"));
   EXPECT_TRUE(WebAccessibleResourcesInfo::IsResourceWebAccessible(
-      extension.get(), "test",
-      url::Origin::Create(GURL("https://allowed.example"))));
+      extension.get(), "test", &allowed_origin));
+  const auto error_origin = url::Origin::Create(GURL("http://error.example"));
   EXPECT_FALSE(WebAccessibleResourcesInfo::IsResourceWebAccessible(
-      extension.get(), "test",
-      url::Origin::Create(GURL("http://error.example"))));
+      extension.get(), "test", &error_origin));
+  const auto empty_origin = url::Origin::Create(GURL());
   EXPECT_FALSE(WebAccessibleResourcesInfo::IsResourceWebAccessible(
-      extension.get(), "test", url::Origin::Create(GURL())));
+      extension.get(), "test", &empty_origin));
 }
 
 // Error if V2 uses is keyed to anything other than array of string.
@@ -300,45 +326,60 @@ TEST_F(WebAccessibleResourcesManifestTest,
                 }
               ]
           })";
-    base::Value manifest_value = base::test::ParseJson(
+    return ManifestData::FromJSON(
         base::StringPrintf(kManifestStub, extension_id.c_str()));
-    EXPECT_EQ(base::Value::Type::DICTIONARY, manifest_value.type());
-    return ManifestData(std::move(manifest_value), "test");
   };
-  scoped_refptr<const Extension> extension1 =
+  scoped_refptr<const Extension> extension_callee =
       LoadAndExpectSuccess(get_manifest_data());
-  scoped_refptr<const Extension> extension2 =
-      LoadAndExpectSuccess(get_manifest_data(extension1->id()));
-  auto initiator_origin = url::Origin::Create(extension2->url());
+  scoped_refptr<const Extension> extension_caller =
+      LoadAndExpectSuccess(get_manifest_data(extension_callee->id()));
+  const auto caller_origin = url::Origin::Create(extension_caller->url());
   EXPECT_TRUE(WebAccessibleResourcesInfo::IsResourceWebAccessible(
-      extension2.get(), "test", initiator_origin));
+      extension_caller.get(), "test", &caller_origin));
   EXPECT_FALSE(WebAccessibleResourcesInfo::IsResourceWebAccessible(
-      extension2.get(), "inaccessible", initiator_origin));
+      extension_caller.get(), "inaccessible", &caller_origin));
+  EXPECT_TRUE(WebAccessibleResourcesInfo::IsResourceWebAccessible(
+      extension_callee.get(), "test", &caller_origin));
+
+  // Test web accessible resource access by specifying an extension wildcard.
+  scoped_refptr<const Extension> wildcard_extension =
+      LoadAndExpectSuccess(get_manifest_data("*"));
+  EXPECT_TRUE(WebAccessibleResourcesInfo::IsResourceWebAccessible(
+      wildcard_extension.get(), "test", &caller_origin));
+  const auto web_origin = url::Origin::Create(GURL("http://example.com"));
   EXPECT_FALSE(WebAccessibleResourcesInfo::IsResourceWebAccessible(
-      extension1.get(), "test", initiator_origin));
+      wildcard_extension.get(), "test", &web_origin));
+  EXPECT_FALSE(WebAccessibleResourcesInfo::IsResourceWebAccessible(
+      wildcard_extension.get(), "inaccessible", &caller_origin));
 }
 
-// Tests wildcards
+// Tests wildcards of matches.
 TEST_F(WebAccessibleResourcesManifestTest, WebAccessibleResourcesWildcard) {
   struct {
     const char* title;
     const char* web_accessible_resources;
   } test_cases[] = {
-      {"Succeed if text based wildcard is used.",
-       R"([
-            {
-              "resources": ["test"],
-              "matches": ["<all_urls>"]
-            }
-       ])"},
-      {"Succeed if asterisk based wildcard is used.",
-       R"([
-            {
-              "resources": ["test"],
-              "matches": ["*://*/*"]
-            }
-       ])"},
+      // clang-format off
+    {"Succeed if text based wildcard is used.",
+      R"([
+        {
+          "resources": ["test"],
+          "matches": ["<all_urls>"]
+        }
+      ])"
+    },
+    {"Succeed if asterisk based wildcard is used.",
+      R"([
+        {
+          "resources": ["test"],
+          "matches": ["*://*/*"]
+        }
+      ])"
+    }
+      // clang-format on
   };
+  const auto allowed_origin =
+      url::Origin::Create(GURL("https://allowed.example"));
   for (const auto& test_case : test_cases) {
     SCOPED_TRACE(base::StringPrintf("Error: '%s'", test_case.title));
     scoped_refptr<Extension> extension(LoadAndExpectSuccess(
@@ -346,7 +387,219 @@ TEST_F(WebAccessibleResourcesManifestTest, WebAccessibleResourcesWildcard) {
     EXPECT_TRUE(
         WebAccessibleResourcesInfo::HasWebAccessibleResources(extension.get()));
     EXPECT_TRUE(WebAccessibleResourcesInfo::IsResourceWebAccessible(
-        extension.get(), "test",
-        url::Origin::Create(GURL("https://allowed.example"))));
+        extension.get(), "test", &allowed_origin));
   }
 }
+
+// Verify behavior of web accessible resources with subdomains and ports.
+TEST_F(WebAccessibleResourcesManifestTest, MatchFromInitiator) {
+  auto test_match_from_initiator = [&](const char* match,
+                                       const char* initiator_string,
+                                       bool expected_accessible) {
+    // Install extension.
+    auto manifest = content::JsReplace(R"([{
+          "resources": ["web_accessible_resource.html"],
+          "matches": [$1]
+        }])",
+                                       match);
+    scoped_refptr<Extension> extension(
+        LoadAndExpectSuccess(GetManifestData(manifest)));
+    EXPECT_TRUE(
+        WebAccessibleResourcesInfo::HasWebAccessibleResources(extension.get()));
+
+    // Verify behavior of web accessible resources.
+    const auto origin = url::Origin::Create(GURL(initiator_string));
+    EXPECT_EQ(expected_accessible,
+              WebAccessibleResourcesInfo::IsResourceWebAccessible(
+                  extension.get(), "web_accessible_resource.html", &origin));
+  };
+
+  struct {
+    const char* match;
+    const char* origin;
+    bool expected_accessible;
+  } test_cases[] = {
+      // Subdomain
+      {"https://a.example.com/*", "https://a.example.com/test", true},
+      {"https://a.example.com/*", "https://b.example.com/test", false},
+      {"https://a.example.com/*", "https://a.example.com:8080/test", true},
+      {"https://a.example.com:8080/*", "https://a.example.com/test", false},
+
+      // Wildcard subdomain
+      {"https://*.example.com/*", "https://a.example.com/test", true},
+      // Wildcard port
+      {"https://a.example.com:*/*", "https://a.example.com:8080", true},
+      // Mismatched port when port explicitly specified in both
+      {"https://a.example.com:8888/*", "https://a.example.com:8080", false},
+  };
+  for (const auto& test_case : test_cases) {
+    test_match_from_initiator(test_case.match, test_case.origin,
+                              test_case.expected_accessible);
+  }
+}
+
+// Verify whether dynamic url should be used.
+TEST_F(WebAccessibleResourcesManifestTest, ShouldUseDynamicUrl) {
+  // Common uses of web accessible resources.
+  auto test_should_use_dynamic_url = [&](bool use_dynamic_url,
+                                         const char* resource,
+                                         bool expected_use_dynamic_url) {
+    auto manifest = content::JsReplace(
+        // clang-format off
+      R"([{
+        "resources": ["web_accessible_resource.html"],
+        "matches": ["<all_urls>"],
+        "use_dynamic_url": $1
+      }])",
+        // clang-format on
+        use_dynamic_url);
+    scoped_refptr<Extension> extension(
+        LoadAndExpectSuccess(GetManifestData(manifest)));
+    EXPECT_EQ(expected_use_dynamic_url,
+              WebAccessibleResourcesInfo::ShouldUseDynamicUrl(extension.get(),
+                                                              resource));
+  };
+  struct {
+    bool use_dynamic_url;
+    const char* resource;
+    bool expected_use_dynamic_url;
+  } test_cases[] = {
+      {true, "web_accessible_resource.html", true},
+      {false, "web_accessible_resource.html", false},
+      {true, "undefined.html", false},
+      {false, "undefined.html", false},
+  };
+  for (const auto& test_case : test_cases) {
+    test_should_use_dynamic_url(test_case.use_dynamic_url, test_case.resource,
+                                test_case.expected_use_dynamic_url);
+  }
+
+  // Web accessible rexources undefined.
+  constexpr char kManifestStub[] =
+      R"({
+        "name": "Test",
+        "version": "1.0",
+        "manifest_version": 3
+    })";
+  scoped_refptr<Extension> extension =
+      LoadAndExpectSuccess(ManifestData::FromJSON(kManifestStub));
+  EXPECT_EQ(false, WebAccessibleResourcesInfo::ShouldUseDynamicUrl(
+                       extension.get(), "resource.html"));
+}
+
+// Tests that generated paths like _favicon are not matched by blanket
+// wildcards and must be explicitly specified in web_accessible_resources.
+TEST_F(WebAccessibleResourcesManifestTest, GeneratedPaths) {
+  base::test::ScopedFeatureList feature_list(
+      extensions_features::kRestrictGeneratedPathsInWebAccessibleResources);
+
+  constexpr char kWildcardManifest[] =
+      R"([{
+        "resources": ["*"],
+        "matches": ["<all_urls>"]
+      }])";
+  scoped_refptr<Extension> wildcard_extension =
+      LoadAndExpectSuccess(GetManifestData(kWildcardManifest));
+
+  const auto web_origin = url::Origin::Create(GURL("http://example.com"));
+
+  // Normal resources match the wildcard.
+  EXPECT_TRUE(WebAccessibleResourcesInfo::IsResourceWebAccessible(
+      wildcard_extension.get(), "test.html", &web_origin));
+
+  // Generated paths do not match the wildcard.
+  EXPECT_FALSE(WebAccessibleResourcesInfo::IsResourceWebAccessible(
+      wildcard_extension.get(), "_favicon", &web_origin));
+  EXPECT_FALSE(WebAccessibleResourcesInfo::IsResourceWebAccessible(
+      wildcard_extension.get(), "_favicon/", &web_origin));
+  EXPECT_FALSE(WebAccessibleResourcesInfo::IsResourceWebAccessible(
+      wildcard_extension.get(), "_generated_background_page.html",
+      &web_origin));
+
+  // Explicitly declared _favicon/* is accessible.
+  constexpr char kExplicitFaviconManifest[] =
+      R"([{
+        "resources": ["_favicon/*"],
+        "matches": ["http://example.com/*"]
+      }])";
+  scoped_refptr<Extension> favicon_extension =
+      LoadAndExpectSuccess(GetManifestData(kExplicitFaviconManifest));
+
+  EXPECT_TRUE(WebAccessibleResourcesInfo::IsResourceWebAccessible(
+      favicon_extension.get(), "_favicon", &web_origin));
+  EXPECT_TRUE(WebAccessibleResourcesInfo::IsResourceWebAccessible(
+      favicon_extension.get(), "_favicon/", &web_origin));
+
+  // Non-matching web origin is rejected.
+  const auto other_web_origin =
+      url::Origin::Create(GURL("http://not-matching.com"));
+  EXPECT_FALSE(WebAccessibleResourcesInfo::IsResourceWebAccessible(
+      favicon_extension.get(), "_favicon", &other_web_origin));
+
+  // Generated paths are excluded from wildcard `use_dynamic_url` entries.
+  constexpr char kDynamicWildcardManifest[] =
+      R"([{
+        "resources": ["*"],
+        "matches": ["<all_urls>"],
+        "use_dynamic_url": true
+      }])";
+  scoped_refptr<Extension> dynamic_wildcard_extension =
+      LoadAndExpectSuccess(GetManifestData(kDynamicWildcardManifest));
+  EXPECT_TRUE(WebAccessibleResourcesInfo::ShouldUseDynamicUrl(
+      dynamic_wildcard_extension.get(), "test.html"));
+  EXPECT_FALSE(WebAccessibleResourcesInfo::ShouldUseDynamicUrl(
+      dynamic_wildcard_extension.get(), "_favicon/"));
+  EXPECT_FALSE(WebAccessibleResourcesInfo::ShouldUseDynamicUrl(
+      dynamic_wildcard_extension.get(), "_generated_background_page.html"));
+
+  // Explicitly declared _favicon/* honors `use_dynamic_url`.
+  constexpr char kDynamicFaviconManifest[] =
+      R"([{
+        "resources": ["_favicon/*"],
+        "matches": ["<all_urls>"],
+        "use_dynamic_url": true
+      }])";
+  scoped_refptr<Extension> dynamic_favicon_extension =
+      LoadAndExpectSuccess(GetManifestData(kDynamicFaviconManifest));
+  EXPECT_TRUE(WebAccessibleResourcesInfo::ShouldUseDynamicUrl(
+      dynamic_favicon_extension.get(), "_favicon/"));
+}
+
+// Tests that generated paths match blanket wildcards when the
+// kRestrictGeneratedPathsInWebAccessibleResources feature flag is disabled.
+TEST_F(WebAccessibleResourcesManifestTest, GeneratedPathsFeatureDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      extensions_features::kRestrictGeneratedPathsInWebAccessibleResources);
+
+  constexpr char kWildcardManifest[] =
+      R"([{
+        "resources": ["*"],
+        "matches": ["<all_urls>"]
+      }])";
+  scoped_refptr<Extension> wildcard_extension =
+      LoadAndExpectSuccess(GetManifestData(kWildcardManifest));
+
+  const auto web_origin = url::Origin::Create(GURL("http://example.com"));
+  EXPECT_TRUE(WebAccessibleResourcesInfo::IsResourceWebAccessible(
+      wildcard_extension.get(), "_favicon/", &web_origin));
+  EXPECT_TRUE(WebAccessibleResourcesInfo::IsResourceWebAccessible(
+      wildcard_extension.get(), "_generated_background_page.html",
+      &web_origin));
+
+  constexpr char kDynamicWildcardManifest[] =
+      R"([{
+        "resources": ["*"],
+        "matches": ["<all_urls>"],
+        "use_dynamic_url": true
+      }])";
+  scoped_refptr<Extension> dynamic_wildcard_extension =
+      LoadAndExpectSuccess(GetManifestData(kDynamicWildcardManifest));
+  EXPECT_TRUE(WebAccessibleResourcesInfo::ShouldUseDynamicUrl(
+      dynamic_wildcard_extension.get(), "_favicon/"));
+  EXPECT_TRUE(WebAccessibleResourcesInfo::ShouldUseDynamicUrl(
+      dynamic_wildcard_extension.get(), "_generated_background_page.html"));
+}
+
+}  // namespace
+}  // namespace extensions

@@ -1,13 +1,15 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/hash/legacy_hash.h"
 
+#include <cstdint>
+
+#include "base/containers/span.h"
 #include "base/third_party/cityhash_v103/src/city_v103.h"
 
-namespace base {
-namespace legacy {
+namespace base::legacy {
 
 uint64_t CityHash64(base::span<const uint8_t> data) {
   return internal::cityhash_v103::CityHash64(
@@ -19,5 +21,4 @@ uint64_t CityHash64WithSeed(base::span<const uint8_t> data, uint64_t seed) {
       reinterpret_cast<const char*>(data.data()), data.size(), seed);
 }
 
-}  // namespace legacy
-}  // namespace base
+}  // namespace base::legacy

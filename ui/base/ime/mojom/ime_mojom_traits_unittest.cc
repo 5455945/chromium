@@ -1,17 +1,16 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ui/base/ime/mojom/ime_types_mojom_traits.h"
-
+#include <array>
 #include <utility>
 
-#include "base/cxx17_backports.h"
 #include "base/test/task_environment.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/ime/mojom/ime_mojom_traits_test.mojom.h"
+#include "ui/base/ime/mojom/ime_types_mojom_traits.h"
 
 namespace ui {
 
@@ -21,6 +20,9 @@ class IMEStructTraitsTest : public testing::Test,
                             public mojom::IMEStructTraitsTest {
  public:
   IMEStructTraitsTest() {}
+
+  IMEStructTraitsTest(const IMEStructTraitsTest&) = delete;
+  IMEStructTraitsTest& operator=(const IMEStructTraitsTest&) = delete;
 
  protected:
   mojo::Remote<mojom::IMEStructTraitsTest> GetTraitsTestRemote() {
@@ -39,14 +41,12 @@ class IMEStructTraitsTest : public testing::Test,
   base::test::TaskEnvironment task_environment_;  // A MessageLoop is needed for
                                                   // Mojo IPC to work.
   mojo::ReceiverSet<mojom::IMEStructTraitsTest> traits_test_receivers_;
-
-  DISALLOW_COPY_AND_ASSIGN(IMEStructTraitsTest);
 };
 
 }  // namespace
 
 TEST_F(IMEStructTraitsTest, TextInputType) {
-  const ui::TextInputType kTextInputTypes[] = {
+  const auto kTextInputTypes = std::to_array<ui::TextInputType>({
       ui::TEXT_INPUT_TYPE_NONE,
       ui::TEXT_INPUT_TYPE_TEXT,
       ui::TEXT_INPUT_TYPE_PASSWORD,
@@ -64,10 +64,10 @@ TEST_F(IMEStructTraitsTest, TextInputType) {
       ui::TEXT_INPUT_TYPE_TEXT_AREA,
       ui::TEXT_INPUT_TYPE_CONTENT_EDITABLE,
       ui::TEXT_INPUT_TYPE_DATE_TIME_FIELD,
-  };
+  });
 
   mojo::Remote<mojom::IMEStructTraitsTest> remote = GetTraitsTestRemote();
-  for (size_t i = 0; i < base::size(kTextInputTypes); i++) {
+  for (size_t i = 0; i < std::size(kTextInputTypes); i++) {
     ui::TextInputType type_out;
     ASSERT_TRUE(remote->EchoTextInputType(kTextInputTypes[i], &type_out));
     EXPECT_EQ(kTextInputTypes[i], type_out);

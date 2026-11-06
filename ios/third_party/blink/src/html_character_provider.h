@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 
 #include <stddef.h>
 
-#include "base/macros.h"
 #include "ios/third_party/blink/src/html_tokenizer_adapter.h"
 
 namespace WebCore {
@@ -15,7 +14,7 @@ namespace WebCore {
 const LChar kEndOfFileMarker = 0;
 
 // CharacterProvider provides input characters to WebCore::HTMLTokenizer.
-// It replaces WebCore::SegmentedString (which sits ontop of WTF::String).
+// It replaces WebCore::SegmentedString (which sits on top of blink::String).
 class CharacterProvider {
 public:
     CharacterProvider()
@@ -26,6 +25,9 @@ public:
         , _littleEndian(false)
     {
     }
+
+    CharacterProvider(const CharacterProvider&) = delete;
+    CharacterProvider& operator=(const CharacterProvider&) = delete;
 
     void setContents(const LChar* str, size_t numberOfBytes)
     {
@@ -160,8 +162,6 @@ private:
     const LChar* _singleBytePtr;
     const UChar* _doubleBytePtr;
     bool _littleEndian;
-
-    DISALLOW_COPY_AND_ASSIGN(CharacterProvider);
 };
 
 }

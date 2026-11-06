@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 #define UI_ANDROID_RESOURCES_RESOURCE_MANAGER_H_
 
 #include "base/android/jni_android.h"
+#include "base/memory/weak_ptr.h"
 #include "cc/resources/scoped_ui_resource.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/android/resources/resource.h"
@@ -41,9 +42,29 @@ class UI_ANDROID_EXPORT ResourceManager {
   virtual Resource* GetResource(AndroidResourceType res_type, int res_id) = 0;
 
   // Return a handle to a static resource specified by |res_id| that has a tint
-  // of |tint_color| applied to it.
+  // of |tint_color| applied to it. Does not retain the alpha of the tint color.
   virtual Resource* GetStaticResourceWithTint(int res_id,
                                               SkColor tint_color) = 0;
+
+  // Return a handle to a static resource specified by |res_id| that has a tint
+  // of |tint_color| applied to it.
+  virtual Resource* GetStaticResourceWithTint(int res_id,
+                                              SkColor tint_color,
+                                              bool preserve_color_alpha) = 0;
+
+  // Return a handle to the resource specified by |res_id| that has a tint of
+  // |tint_color| applied to it, and tell the resource manager to keep the
+  // tinted resource in the cache until ReleaseStaticResource is called with the
+  // same |res_id|. This can be used for resources used by layers that aren't
+  // processed every frame (because they don't usually change) and are likely to
+  // have the same tint in future frames. Once you call this function again for
+  // the same resource but with a different tint color, the previous tint might
+  // get removed from the cache.
+  virtual Resource* GetAndRetainStaticResourceWithTint(int res_id,
+                                                       SkColor tint_color) = 0;
+
+  // Stop keeping a static resource in the cache.
+  virtual void ReleaseStaticResource(int res_id) = 0;
 
   // Trigger asynchronous loading of the resource specified by |res_type| and
   // |res_id|, if it has not yet been loaded.
@@ -59,8 +80,10 @@ class UI_ANDROID_EXPORT ResourceManager {
   // A notification that all updates have finished for the current frame.
   virtual void OnFrameUpdatesFinished() = 0;
 
+  virtual base::WeakPtr<ResourceManager> GetWeakPtr() = 0;
+
  protected:
-  virtual ~ResourceManager() {}
+  virtual ~ResourceManager() = default;
 };
 
 }  // namespace ui

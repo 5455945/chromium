@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,9 +12,9 @@
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
 #include "base/files/file_path.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/time/time.h"
@@ -33,10 +33,11 @@ class PrefRegistrySyncable;
 }
 
 typedef uint64_t MediaGalleryPrefId;
-const MediaGalleryPrefId kInvalidMediaGalleryPrefId = 0;
+inline constexpr MediaGalleryPrefId kInvalidMediaGalleryPrefId = 0;
 
-const char kMediaGalleriesPrefsVersionKey[] = "preferencesVersion";
-const char kMediaGalleriesDefaultGalleryTypeKey[] = "defaultGalleryType";
+inline constexpr char kMediaGalleriesPrefsVersionKey[] = "preferencesVersion";
+inline constexpr char kMediaGalleriesDefaultGalleryTypeKey[] =
+    "defaultGalleryType";
 
 struct MediaGalleryPermission {
   MediaGalleryPrefId pref_id;
@@ -47,7 +48,7 @@ struct MediaGalleryPrefInfo {
   enum Type {
     kUserAdded,     // Explicitly added by the user.
     kAutoDetected,  // Auto added to the list of galleries.
-    kBlackListed,   // Auto added but then removed by the user.
+    kBlockListed,   // Auto added but then removed by the user.
     kScanResult,    // Discovered by a disk scan.
     kRemovedScan,   // Discovered by a disk scan but then removed by the user.
     kInvalidType,
@@ -68,8 +69,8 @@ struct MediaGalleryPrefInfo {
   base::FilePath AbsolutePath() const;
 
   // True if the gallery should not be displayed to the user
-  // i.e. kBlackListed || kRemovedScan.
-  bool IsBlackListedType() const;
+  // i.e. kBlockListed || kRemovedScan.
+  bool IsBlockListedType() const;
 
   // The ID that identifies this gallery in this Profile.
   MediaGalleryPrefId pref_id;
@@ -177,6 +178,11 @@ class MediaGalleriesPreferences
   };
 
   explicit MediaGalleriesPreferences(Profile* profile);
+
+  MediaGalleriesPreferences(const MediaGalleriesPreferences&) = delete;
+  MediaGalleriesPreferences& operator=(const MediaGalleriesPreferences&) =
+      delete;
+
   ~MediaGalleriesPreferences() override;
 
   // Ensures that the preferences is initialized. The provided callback, if
@@ -185,8 +191,8 @@ class MediaGalleriesPreferences
   // Before the callback is run, other calls may not return the correct results.
   // Should be invoked on the UI thread; callbacks will be run on the UI thread.
   // This call also ensures that the StorageMonitor is initialized.
-  // Note for unit tests: This requires an active TaskEnvironment and
-  // EnsureMediaDirectoriesExists instance to complete reliably.
+  // Note for unit tests: This requires an active TaskEnvironment to complete
+  // reliably.
   void EnsureInitialized(base::OnceClosure callback);
 
   // Return true if the storage monitor has already been initialized.
@@ -219,7 +225,7 @@ class MediaGalleriesPreferences
       bool include_unpermitted_galleries);
 
   // Teaches the registry about a new gallery. If the gallery is in a
-  // blacklisted state, it is unblacklisted. |type| should not be a blacklisted
+  // blocklisted state, it is unblocklisted. |type| should not be a blocklisted
   // type. Returns the gallery's pref id.
   MediaGalleryPrefId AddGallery(const std::string& device_id,
                                 const base::FilePath& relative_path,
@@ -234,14 +240,14 @@ class MediaGalleriesPreferences
                                 int video_count);
 
   // Teach the registry about a gallery simply from the path. If the gallery is
-  // in a blacklisted state, it is unblacklisted. |type| should not be a
-  // blacklisted type. Returns the gallery's pref id.
+  // in a blocklisted state, it is unblocklisted. |type| should not be a
+  // blocklisted type. Returns the gallery's pref id.
   MediaGalleryPrefId AddGalleryByPath(const base::FilePath& path,
                                       MediaGalleryPrefInfo::Type type);
 
   // Logically removes the gallery identified by |id| from the store. For
   // auto added or scan result galleries, this means moving them into a
-  // blacklisted state, otherwise they may come back when they are detected
+  // blocklisted state, otherwise they may come back when they are detected
   // again.
   void ForgetGalleryById(MediaGalleryPrefId id);
 
@@ -310,7 +316,7 @@ class MediaGalleriesPreferences
       int prefs_version,
       MediaGalleryPrefInfo::DefaultGalleryType default_gallery_type);
 
-  void EraseOrBlacklistGalleryById(MediaGalleryPrefId id, bool erase);
+  void EraseOrBlocklistGalleryById(MediaGalleryPrefId id, bool erase);
 
   // Updates the default galleries: finds the previously default galleries
   // and updates their device IDs (i.e., their paths) inplace if they have
@@ -350,12 +356,13 @@ class MediaGalleriesPreferences
   std::vector<base::OnceClosure> on_initialize_callbacks_;
 
   // The profile that owns |this|.
-  Profile* profile_;
+  raw_ptr<Profile> profile_;
 
   // The ExtensionPrefs used in a testing environment, where KeyedServices
   // aren't used. This will be nullptr unless it is set with
   // SetExtensionPrefsForTesting().
-  extensions::ExtensionPrefs* extension_prefs_for_testing_;
+  raw_ptr<extensions::ExtensionPrefs, DanglingUntriaged>
+      extension_prefs_for_testing_;
 
   // An in-memory cache of known galleries.
   MediaGalleriesPrefInfoMap known_galleries_;
@@ -364,12 +371,10 @@ class MediaGalleriesPreferences
   // All pref ids in |device_map_| are also in |known_galleries_|.
   DeviceIdPrefIdsMap device_map_;
 
-  base::ObserverList<GalleryChangeObserver>::Unchecked
+  base::ObserverList<GalleryChangeObserver>::UncheckedAndDanglingUntriaged
       gallery_change_observers_;
 
   base::WeakPtrFactory<MediaGalleriesPreferences> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(MediaGalleriesPreferences);
 };
 
 #endif  // CHROME_BROWSER_MEDIA_GALLERIES_MEDIA_GALLERIES_PREFERENCES_H_

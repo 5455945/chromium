@@ -1,15 +1,19 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "media/base/video_frame_pool.h"
+
 #include <stddef.h>
 #include <stdint.h>
+
 #include <memory>
 #include <tuple>
 
 #include "base/bits.h"
+#include "base/compiler_specific.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/test/simple_test_tick_clock.h"
-#include "media/base/video_frame_pool.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 namespace media {
@@ -20,7 +24,7 @@ class VideoFramePoolTest
   VideoFramePoolTest() : pool_(new VideoFramePool()) {
     // Seed test clock with some dummy non-zero value to avoid confusion with
     // empty base::TimeTicks values.
-    test_clock_.Advance(base::TimeDelta::FromSeconds(1234));
+    test_clock_.Advance(base::Seconds(1234));
     pool_->SetTickClockForTesting(&test_clock_);
   }
 
@@ -31,17 +35,18 @@ class VideoFramePoolTest
     gfx::Size natural_size(coded_size);
 
     scoped_refptr<VideoFrame> frame =
-        pool_->CreateFrame(
-            format, coded_size, visible_rect, natural_size,
-            base::TimeDelta::FromMilliseconds(timestamp_ms));
+        pool_->CreateFrame(format, coded_size, visible_rect, natural_size,
+                           base::Milliseconds(timestamp_ms));
     EXPECT_EQ(format, frame->format());
-    EXPECT_EQ(base::TimeDelta::FromMilliseconds(timestamp_ms),
-              frame->timestamp());
+    EXPECT_EQ(base::Milliseconds(timestamp_ms), frame->timestamp());
     if (format == PIXEL_FORMAT_ARGB) {
       EXPECT_EQ(coded_size, frame->coded_size());
     } else {
-      const gfx::Size adjusted(base::bits::AlignUp(coded_size.width(), 2),
-                               base::bits::AlignUp(coded_size.height(), 2));
+      const gfx::Size adjusted(
+          base::bits::AlignUp<size_t>(
+              base::checked_cast<size_t>(coded_size.width()), 2),
+          base::bits::AlignUp<size_t>(
+              base::checked_cast<size_t>(coded_size.height()), 2));
       EXPECT_EQ(adjusted, frame->coded_size());
     }
     EXPECT_EQ(visible_rect, frame->visible_rect());
@@ -71,7 +76,7 @@ TEST_P(VideoFramePoolTest, FrameInitializedAndZeroed) {
 TEST_P(VideoFramePoolTest, FrameReuse) {
   scoped_refptr<VideoFrame> frame =
       CreateFrame(std::get<0>(GetParam()), std::get<1>(GetParam()), 10);
-  const uint8_t* old_y_data = frame->data(VideoFrame::kYPlane);
+  const uint8_t* old_y_data = frame->data(VideoFrame::Plane::kY);
 
   // Clear frame reference to return the frame to the pool.
   frame.reset();
@@ -79,7 +84,7 @@ TEST_P(VideoFramePoolTest, FrameReuse) {
   // Verify that the next frame from the pool uses the same memory.
   scoped_refptr<VideoFrame> new_frame =
       CreateFrame(std::get<0>(GetParam()), std::get<1>(GetParam()), 20);
-  EXPECT_EQ(old_y_data, new_frame->data(VideoFrame::kYPlane));
+  EXPECT_EQ(old_y_data, new_frame->data(VideoFrame::Plane::kY));
 }
 
 INSTANTIATE_TEST_SUITE_P(All,
@@ -122,8 +127,9 @@ TEST_F(VideoFramePoolTest, FrameValidAfterPoolDestruction) {
 
   // Write to the Y plane. The memory tools should detect a
   // use-after-free if the storage was actually removed by pool destruction.
-  memset(frame->data(VideoFrame::kYPlane), 0xff,
-         frame->rows(VideoFrame::kYPlane) * frame->stride(VideoFrame::kYPlane));
+  UNSAFE_TODO(memset(frame->writable_data(VideoFrame::Plane::kY), 0xff,
+                     frame->rows(VideoFrame::Plane::kY) *
+                         frame->stride(VideoFrame::Plane::kY)));
 }
 
 TEST_F(VideoFramePoolTest, StaleFramesAreExpired) {
@@ -140,7 +146,7 @@ TEST_F(VideoFramePoolTest, StaleFramesAreExpired) {
 
   // Advance clock far enough to hit stale timer; ensure only frame_1 has its
   // resources released.
-  test_clock_.Advance(base::TimeDelta::FromMinutes(1));
+  test_clock_.Advance(base::Minutes(1));
   frame_2 = nullptr;
   CheckPoolSize(1u);
 }

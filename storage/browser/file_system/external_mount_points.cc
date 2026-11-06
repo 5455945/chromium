@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,14 @@
 #include <utility>
 
 #include "base/files/file_path.h"
+#include "base/functional/callback.h"
 #include "base/lazy_instance.h"
-#include "base/macros.h"
-#include "build/chromeos_buildflags.h"
+#include "base/strings/strcat.h"
+#include "build/build_config.h"
 #include "storage/browser/file_system/file_system_url.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
+
+class GURL;
 
 namespace storage {
 
@@ -68,6 +72,10 @@ class ExternalMountPoints::Instance {
       : type_(type),
         path_(path.StripTrailingSeparators()),
         mount_option_(mount_option) {}
+
+  Instance(const Instance&) = delete;
+  Instance& operator=(const Instance&) = delete;
+
   ~Instance() = default;
 
   FileSystemType type() const { return type_; }
@@ -78,8 +86,6 @@ class ExternalMountPoints::Instance {
   const FileSystemType type_;
   const base::FilePath path_;
   const FileSystemMountOption mount_option_;
-
-  DISALLOW_COPY_AND_ASSIGN(Instance);
 };
 
 //--------------------------------------------------------------------------
@@ -92,6 +98,32 @@ ExternalMountPoints* ExternalMountPoints::GetSystemInstance() {
 // static
 scoped_refptr<ExternalMountPoints> ExternalMountPoints::CreateRefCounted() {
   return new ExternalMountPoints();
+}
+
+// static
+void ExternalMountPoints::GetDebugJSONForKey(
+    std::string_view key,
+    base::OnceCallback<void(std::pair<std::string_view, base::Value>)>
+        callback) {
+  const ExternalMountPoints* system_instance =
+      ExternalMountPoints::GetSystemInstance();
+  if (!system_instance) {
+    std::move(callback).Run(std::make_pair(key, base::Value()));
+    return;
+  }
+
+  base::DictValue dict;
+  {
+    base::AutoLock locker(system_instance->lock_);
+    for (const auto& pair : system_instance->instance_map_) {
+      const Instance* instance = pair.second.get();
+      dict.Set(
+          pair.first,
+          base::Value(base::StrCat({GetFileSystemTypeString(instance->type()),
+                                    " ", instance->path().AsUTF8Unsafe()})));
+    }
+  }
+  std::move(callback).Run(std::make_pair(key, base::Value(std::move(dict))));
 }
 
 bool ExternalMountPoints::RegisterFileSystem(
@@ -156,8 +188,8 @@ bool ExternalMountPoints::CrackVirtualPath(
     return false;
 
   // The virtual_path should comprise of <mount_name> and <relative_path> parts.
-  std::vector<base::FilePath::StringType> components;
-  virtual_path.GetComponents(&components);
+  std::vector<base::FilePath::StringType> components =
+      virtual_path.GetComponents();
   if (components.size() < 1)
     return false;
 
@@ -186,18 +218,20 @@ bool ExternalMountPoints::CrackVirtualPath(
   return true;
 }
 
-FileSystemURL ExternalMountPoints::CrackURL(const GURL& url) const {
-  FileSystemURL filesystem_url = FileSystemURL(url);
+FileSystemURL ExternalMountPoints::CrackURL(
+    const GURL& url,
+    const blink::StorageKey& storage_key) const {
+  FileSystemURL filesystem_url = FileSystemURL(url, storage_key);
   if (!filesystem_url.is_valid())
     return FileSystemURL();
   return CrackFileSystemURL(filesystem_url);
 }
 
 FileSystemURL ExternalMountPoints::CreateCrackedFileSystemURL(
-    const url::Origin& origin,
+    const blink::StorageKey& storage_key,
     FileSystemType type,
     const base::FilePath& virtual_path) const {
-  return CrackFileSystemURL(FileSystemURL(origin, type, virtual_path));
+  return CrackFileSystemURL(FileSystemURL(storage_key, type, virtual_path));
 }
 
 void ExternalMountPoints::AddMountPointInfosTo(
@@ -233,11 +267,11 @@ base::FilePath ExternalMountPoints::CreateVirtualRootPath(
 }
 
 FileSystemURL ExternalMountPoints::CreateExternalFileSystemURL(
-    const url::Origin& origin,
+    const blink::StorageKey& storage_key,
     const std::string& mount_name,
     const base::FilePath& path) const {
   return CreateCrackedFileSystemURL(
-      origin, kFileSystemTypeExternal,
+      storage_key, kFileSystemTypeExternal,
       // Avoid using FilePath::Append as path may be an absolute path.
       base::FilePath(CreateVirtualRootPath(mount_name).value() +
                      base::FilePath::kSeparators[0] + path.value()));
@@ -265,15 +299,16 @@ FileSystemURL ExternalMountPoints::CrackFileSystemURL(
 
   base::FilePath virtual_path = url.path();
   if (url.type() == kFileSystemTypeLocalForPlatformApp) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-    // On Chrome OS, find a mount point and virtual path for the external fs.
+#if BUILDFLAG(IS_CHROMEOS)
+    // On ChromeOS, find a mount point and virtual path for the external fs.
     if (!GetVirtualPath(url.path(), &virtual_path))
       return FileSystemURL();
 #else
     // On other OS, it is simply a native local path.
-    return FileSystemURL(url.origin(), url.mount_type(), url.virtual_path(),
-                         url.mount_filesystem_id(), kFileSystemTypeLocal,
-                         url.path(), url.filesystem_id(), url.mount_option());
+    return FileSystemURL(url.storage_key(), url.mount_type(),
+                         url.virtual_path(), url.mount_filesystem_id(),
+                         kFileSystemTypeLocal, url.path(), url.filesystem_id(),
+                         url.mount_option());
 #endif
   }
 
@@ -289,7 +324,7 @@ FileSystemURL ExternalMountPoints::CrackFileSystemURL(
   }
 
   return FileSystemURL(
-      url.origin(), url.mount_type(), url.virtual_path(),
+      url.storage_key(), url.mount_type(), url.virtual_path(),
       !url.filesystem_id().empty() ? url.filesystem_id() : mount_name,
       cracked_type, cracked_path, cracked_id.empty() ? mount_name : cracked_id,
       cracked_mount_option);

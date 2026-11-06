@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,19 @@
 #define COMPONENTS_PAGE_LOAD_METRICS_BROWSER_OBSERVERS_AD_METRICS_ADS_PAGE_LOAD_METRICS_OBSERVER_H_
 
 #include <bitset>
-#include <list>
 #include <map>
 #include <memory>
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
+#include "base/byte_size.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/metrics/field_trial_params.h"
 #include "base/scoped_observation.h"
 #include "base/time/tick_clock.h"
+#include "base/unguessable_token.h"
 #include "build/build_config.h"
 #include "components/blocklist/opt_out_blocklist/opt_out_blocklist_data.h"
+#include "components/history/core/browser/history_service.h"
 #include "components/page_load_metrics/browser/observers/ad_metrics/aggregate_frame_data.h"
 #include "components/page_load_metrics/browser/observers/ad_metrics/frame_data_utils.h"
 #include "components/page_load_metrics/browser/observers/ad_metrics/frame_tree_data.h"
@@ -27,6 +28,8 @@
 #include "components/subresource_filter/content/browser/subresource_filter_observer.h"
 #include "components/subresource_filter/content/browser/subresource_filter_observer_manager.h"
 #include "components/subresource_filter/core/common/load_policy.h"
+#include "content/public/browser/frame_tree_node_id.h"
+#include "content/public/browser/global_routing_id.h"
 #include "net/http/http_response_info.h"
 #include "services/metrics/public/cpp/ukm_source.h"
 
@@ -37,20 +40,31 @@ class HeavyAdService;
 
 namespace page_load_metrics {
 
-namespace features {
-extern const base::Feature kRestrictedNavigationAdTagging;
-}
-
 // This observer labels each sub-frame as an ad or not, and keeps track of
 // relevant per-frame and whole-page byte statistics.
 class AdsPageLoadMetricsObserver
     : public PageLoadMetricsObserver,
       public subresource_filter::SubresourceFilterObserver {
  public:
+  static const char kObserverName[];
+
   using AggregateFrameData = page_load_metrics::AggregateFrameData;
   using FrameTreeData = page_load_metrics::FrameTreeData;
   using ResourceMimeType = page_load_metrics::ResourceMimeType;
   using ApplicationLocaleGetter = base::RepeatingCallback<std::string()>;
+
+  // A snapshot of the current ad frame statistics, to be serialized and
+  // reported by the DevTools Ads domain.
+  struct AdFrameLiveStats {
+    // The initial origin of the frame.
+    url::Origin initial_origin;
+
+    // The network bytes used by the frame.
+    int64_t network_bytes;
+
+    // The CPU time used by the frame.
+    base::TimeDelta cpu_time;
+  };
 
   // Helper class that generates a random amount of noise to apply to thresholds
   // for heavy ads. A different noise should be generated for each frame.
@@ -65,11 +79,12 @@ class AdsPageLoadMetricsObserver
     // Gets a random amount of noise to add to a threshold. The generated noise
     // is uniform random over the range 0 to kMaxThresholdNoiseBytes. Virtual
     // for testing.
-    virtual int GetNetworkThresholdNoiseForFrame() const;
+    virtual base::ByteSize GetNetworkThresholdNoiseForFrame() const;
 
     // Maximum amount of additive noise to add to the network threshold to
     // obscure cross origin resource sizes: 1303 KB.
-    static const int kMaxNetworkThresholdNoiseBytes = 1303 * 1024;
+    static constexpr base::ByteSize kMaxNetworkThresholdNoiseBytes =
+        base::KiB(1303);
 
    private:
     // Whether to use noise.
@@ -81,28 +96,42 @@ class AdsPageLoadMetricsObserver
   static std::unique_ptr<AdsPageLoadMetricsObserver> CreateIfNeeded(
       content::WebContents* web_contents,
       heavy_ad_intervention::HeavyAdService* heavy_ad_service,
-      const ApplicationLocaleGetter& application_local_getter);
+      history::HistoryService* history_service,
+      const ApplicationLocaleGetter& application_local_getter,
+      bool is_in_foreground);
 
-  // For a given subframe, returns whether or not the subframe's url would be
-  // considering same origin to the main frame's url.
-  static bool IsSubframeSameOriginToMainFrame(
+  // For a given frame, returns whether or not the frame's url would be
+  // considered same origin to the outermost main frame's url.
+  static bool IsFrameSameOriginToOutermostMainFrame(
       content::RenderFrameHost* sub_host);
 
   // |clock| and |blocklist| should be set only by tests. In particular,
   // |blocklist| should be set only if |heavy_ad_service| is null.
   explicit AdsPageLoadMetricsObserver(
       heavy_ad_intervention::HeavyAdService* heavy_ad_service,
+      history::HistoryService* history_service,
       const ApplicationLocaleGetter& application_local_getter,
+      bool is_in_foreground,
       base::TickClock* clock = nullptr,
       heavy_ad_intervention::HeavyAdBlocklist* blocklist = nullptr);
+
+  AdsPageLoadMetricsObserver(const AdsPageLoadMetricsObserver&) = delete;
+  AdsPageLoadMetricsObserver& operator=(const AdsPageLoadMetricsObserver&) =
+      delete;
+
   ~AdsPageLoadMetricsObserver() override;
 
   // PageLoadMetricsObserver
+  const char* GetObserverName() const override;
   ObservePolicy OnStart(content::NavigationHandle* navigation_handle,
                         const GURL& currently_committed_url,
                         bool started_in_foreground) override;
-  ObservePolicy OnCommit(content::NavigationHandle* navigation_handle,
-                         ukm::SourceId source_id) override;
+  ObservePolicy OnPrerenderStart(content::NavigationHandle* navigation_handle,
+                                 const GURL& currently_committed_url) override;
+  ObservePolicy OnFencedFramesStart(
+      content::NavigationHandle* navigation_handle,
+      const GURL& currently_committed_url) override;
+  ObservePolicy OnCommit(content::NavigationHandle* navigation_handle) override;
   void OnTimingUpdate(content::RenderFrameHost* subframe_rfh,
                       const mojom::PageLoadTiming& timing) override;
   void OnCpuTimingUpdate(content::RenderFrameHost* subframe_rfh,
@@ -111,6 +140,8 @@ class AdsPageLoadMetricsObserver
       content::NavigationHandle* navigation_handle) override;
   void OnDidFinishSubFrameNavigation(
       content::NavigationHandle* navigation_handle) override;
+  ObservePolicy OnHidden(const mojom::PageLoadTiming& timing) override;
+  ObservePolicy OnShown() override;
   ObservePolicy FlushMetricsOnAppEnterBackground(
       const mojom::PageLoadTiming& timing) override;
   void OnComplete(const mojom::PageLoadTiming& timing) override;
@@ -125,25 +156,46 @@ class AdsPageLoadMetricsObserver
   void MediaStartedPlaying(
       const content::WebContentsObserver::MediaPlayerInfo& video_type,
       content::RenderFrameHost* render_frame_host) override;
-  void OnFrameIntersectionUpdate(
-      content::RenderFrameHost* render_frame_host,
-      const mojom::FrameIntersectionUpdate& intersection_update) override;
-  void OnFrameDeleted(int frame_tree_node_id) override;
+  void OnMainFrameRectChanged(const gfx::Rect& main_frame_rect) override;
+  void OnMainFrameViewportRectChanged(
+      const gfx::Rect& main_frame_viewport_rect) override;
+  void OnMainFrameAdRectsChanged(
+      const base::flat_map<int, gfx::Rect>& main_frame_ad_rects) override;
+  void OnSubFrameDeleted(content::FrameTreeNodeId frame_tree_node_id) override;
+  base::TimeDelta GetTotalAdCpuTime() const;
+  int64_t GetTotalAdNetworkBytes() const;
+
+  // Returns a snapshot of the current ad frame statistics, keyed by the
+  // DevTools frame token.
+  [[nodiscard]] base::flat_map<base::UnguessableToken, AdFrameLiveStats>
+  GetAdFrameLiveStats() const;
+
+  PageAdDensityTracker::LiveStats GetAdDensityLiveStats() {
+    return page_ad_density_tracker_.GetLiveStats();
+  }
+
+  base::WeakPtr<AdsPageLoadMetricsObserver> GetWeakPtr() {
+    return ads_weak_factory_.GetWeakPtr();
+  }
 
   void SetHeavyAdThresholdNoiseProviderForTesting(
       std::unique_ptr<HeavyAdThresholdNoiseProvider> noise_provider) {
     heavy_ad_threshold_noise_provider_ = std::move(noise_provider);
   }
 
-  void OnV8MemoryChanged(
-      const std::vector<MemoryUpdate>& memory_updates) override;
-
-  void UpdateAggregateMemoryUsage(int64_t bytes, FrameVisibility visibility);
-
-  void CleanupDeletedFrame(FrameTreeNodeId id,
+  void CleanupDeletedFrame(content::FrameTreeNodeId id,
                            FrameTreeData* frame_data,
                            bool update_density_tracker,
                            bool record_metrics);
+
+  // Query `history_service` for `ad_url` and log a UMA metric for the frequency
+  // at which `ad_url` appears in history.
+  static void QueryAdUrlFrequencyInHistory(
+      history::HistoryService* history_service,
+      const GURL& ad_url,
+      base::CancelableTaskTracker* query_ad_url_cancelable_task_tracker,
+      base::CancelableTaskTracker*
+          query_ad_url_etld_plus_one_cancelable_task_tracker);
 
  private:
   // Object which maps to a FrameTreeData object. This can either own the
@@ -168,12 +220,19 @@ class AdsPageLoadMetricsObserver
 
     // Returns underlying pointer from |owned_frame_data_| if it exists.
     FrameTreeData* GetOwnedFrame();
+    const FrameTreeData* GetOwnedFrame() const;
+
+    base::TimeTicks navigation_start() const { return navigation_start_; }
+    void set_navigation_start(base::TimeTicks navigation_start) {
+      navigation_start_ = navigation_start;
+    }
 
    private:
     // Only |owned_frame_data_| or |unowned_frame_data_| can be set at one time.
     // Both can be nullptr.
     std::unique_ptr<FrameTreeData> owned_frame_data_;
     base::WeakPtr<FrameTreeData> unowned_frame_data_;
+    base::TimeTicks navigation_start_;
   };
 
   // Checks the current page ad density by height for an better ads standard
@@ -188,18 +247,18 @@ class AdsPageLoadMetricsObserver
       const subresource_filter::mojom::ActivationState& activation_state)
       override;
 
-  void UpdateAdFrameData(FrameTreeNodeId ad_id,
+  void UpdateAdFrameData(content::NavigationHandle* navigation_handle,
                          bool is_adframe,
-                         bool should_ignored_detected_ad,
-                         content::RenderFrameHost* ad_host);
+                         bool should_ignore_detected_ad);
 
   // Gets the number of bytes that we may have not attributed to ad
   // resources due to the resource being reported as an ad late.
-  int GetUnaccountedAdBytes(int process_id,
-                            const mojom::ResourceDataUpdatePtr& resource) const;
+  base::ByteSize GetUnaccountedAdBytes(
+      int process_id,
+      const mojom::ResourceDataUpdatePtr& resource) const;
 
   // Updates page level counters for resource loads.
-  void ProcessResourceForPage(int process_id,
+  void ProcessResourceForPage(content::RenderFrameHost* render_frame_host,
                               const mojom::ResourceDataUpdatePtr& resource);
   void ProcessResourceForFrame(content::RenderFrameHost* render_frame_host,
                                const mojom::ResourceDataUpdatePtr& resource);
@@ -218,20 +277,14 @@ class AdsPageLoadMetricsObserver
   void RecordPerFrameHistogramsForHeavyAds(const FrameTreeData& ad_frame_data);
 
   // Checks to see if a resource is waiting for a navigation in the given
-  // RenderFrameHost to commit before it can be processed. If so, call
+  // frame to commit before it can be processed. If so, call
   // OnResourceDataUpdate for the delayed resource.
-  void ProcessOngoingNavigationResource(content::RenderFrameHost* rfh);
-
-  // Records whether an ad frame was ignored by the Restricted Navigation
-  // AdTagging feature. For frames that are ignored, this is recorded when a
-  // FrameTreeData object would have been created for them, or when their
-  // FrameTreeData is deleted. For non-ignored frames, this is recorded when it
-  // is logged to metrics.
-  void RecordAdFrameIgnoredByRestrictedAdTagging(bool ignored);
+  void ProcessOngoingNavigationResource(
+      content::NavigationHandle* navigation_handle);
 
   // Find the FrameTreeData object associated with a given FrameTreeNodeId in
   // |ad_frames_data_storage_|.
-  FrameTreeData* FindFrameData(FrameTreeNodeId id);
+  FrameTreeData* FindFrameData(content::FrameTreeNodeId id);
 
   // When a page has reached its limit of heavy ads interventions, will trigger
   // ads interventions for all ads on the page if appropriate.
@@ -240,10 +293,17 @@ class AdsPageLoadMetricsObserver
   // Triggers the heavy ad intervention page in the target frame if it is safe
   // to do so on this origin, and the frame meets the criteria to be considered
   // a heavy ad. This first sends an intervention report to every affected
-  // frame then loads an error page in the root ad frame.
+  // frame then loads an error page in the root ad frame. The intervention is
+  // carried out asynchronously via TriggerHeavyAdIntervention.
   void MaybeTriggerHeavyAdIntervention(
       content::RenderFrameHost* render_frame_host,
       FrameTreeData* frame_data);
+
+  // Carries out the heavy ad intervention posted asynchronously by
+  // MaybeTriggerHeavyAdIntervention.
+  void TriggerHeavyAdIntervention(
+      content::GlobalRenderFrameHostId render_frame_host_id,
+      base::WeakPtr<FrameTreeData> frame_data);
 
   bool IsBlocklisted(bool report);
   heavy_ad_intervention::HeavyAdBlocklist* GetHeavyAdBlocklist();
@@ -253,7 +313,7 @@ class AdsPageLoadMetricsObserver
   // the top-most frame labeled as an ad in the frame's ancestry, which may be
   // itself. If the frame is not an ad, the id will point to a FrameInstance
   // where FrameInstance::Get() returns nullptr..
-  std::map<FrameTreeNodeId, FrameInstance> ad_frames_data_;
+  std::map<content::FrameTreeNodeId, FrameInstance> ad_frames_data_;
 
   int64_t navigation_id_ = -1;
   bool subresource_filter_is_enabled_ = false;
@@ -261,12 +321,8 @@ class AdsPageLoadMetricsObserver
   // When the observer receives report of a document resource loading for a
   // sub-frame before the sub-frame commit occurs, hold onto the resource
   // request info (delay it) until the sub-frame commits.
-  std::map<FrameTreeNodeId, mojom::ResourceDataUpdatePtr>
+  std::map<content::FrameTreeNodeId, mojom::ResourceDataUpdatePtr>
       ongoing_navigation_resources_;
-
-  // Per-frame memory usage by V8 in bytes. Memory data is stored for each frame
-  // on the page during the navigation.
-  std::unordered_map<FrameTreeNodeId, uint64_t> v8_current_memory_usage_map_;
 
   // Tracks page-level information for the navigation.
   std::unique_ptr<AggregateFrameData> aggregate_frame_data_;
@@ -281,37 +337,38 @@ class AdsPageLoadMetricsObserver
       subresource_observation_{this};
 
   // The tick clock used to get the current time. Can be replaced by tests.
-  const base::TickClock* clock_;
+  raw_ptr<const base::TickClock> clock_;
 
   // Whether the page load currently being observed is a reload of a previous
   // page.
   bool page_load_is_reload_ = false;
 
-  // Whether the restricted navigation ad tagging feature is enabled on this
-  // page load.
-  const bool restricted_navigation_ad_tagging_enabled_;
-
   // Stores whether the heavy ad intervention is blocklisted or not for the user
   // on the URL of this page. Incognito Profiles will cause this to be set to
   // true. Used as a cache to avoid checking the blocklist once the page is
   // blocklisted. Once blocklisted, a page load cannot be unblocklisted.
-  absl::optional<blocklist::BlocklistReason> heavy_ads_blocklist_reason_;
+  std::optional<blocklist::BlocklistReason> heavy_ads_blocklist_reason_;
 
   // Pointer to the HeavyAdService from which the heavy ad blocklist is obtained
   // in production.
-  heavy_ad_intervention::HeavyAdService* heavy_ad_service_;
+  raw_ptr<heavy_ad_intervention::HeavyAdService> heavy_ad_service_;
+
+  // Pointer to HistoryService, which records history of pages visited.
+  // This pointer is owned by HistoryServiceFactory singleton.
+  raw_ptr<history::HistoryService> history_service_;
+
+  // Trackers for the async tasks querying `history_service_` for ad URL.
+  base::CancelableTaskTracker query_ad_url_history_task_tracker_;
+  base::CancelableTaskTracker query_ad_url_etld_plus_one_history_task_tracker_;
 
   ApplicationLocaleGetter application_locale_getter_;
 
   // Pointer to the blocklist used to throttle the heavy ad intervention. Can
   // be replaced by tests.
-  heavy_ad_intervention::HeavyAdBlocklist* heavy_ad_blocklist_;
+  raw_ptr<heavy_ad_intervention::HeavyAdBlocklist> heavy_ad_blocklist_;
 
   // Whether the heavy ad privacy mitigations feature is enabled.
   const bool heavy_ad_privacy_mitigations_enabled_;
-
-  // Whether there was a heavy ad on the page at some point.
-  bool heavy_ad_on_page_ = false;
 
   // Whether or not the metrics for this observer have already been recorded.
   // This can occur if the Chrome app is backgrounded.  If so, we continue to
@@ -324,10 +381,7 @@ class AdsPageLoadMetricsObserver
   // The maximum ad density measurements for the page during its lifecycle.
   PageAdDensityTracker page_ad_density_tracker_;
 
-  // Tracks number of memory updates received.
-  int memory_update_count_ = 0;
-
-  DISALLOW_COPY_AND_ASSIGN(AdsPageLoadMetricsObserver);
+  base::WeakPtrFactory<AdsPageLoadMetricsObserver> ads_weak_factory_{this};
 };
 
 }  // namespace page_load_metrics

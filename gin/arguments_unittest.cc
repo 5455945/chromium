@@ -1,15 +1,24 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "gin/arguments.h"
 
-#include "base/bind.h"
+#include <string_view>
+
+#include "base/functional/bind.h"
 #include "gin/converter.h"
 #include "gin/object_template_builder.h"
 #include "gin/public/isolate_holder.h"
 #include "gin/test/v8_test.h"
-#include "v8/include/v8.h"
+#include "v8/include/v8-context.h"
+#include "v8/include/v8-forward.h"
+#include "v8/include/v8-function.h"
+#include "v8/include/v8-isolate.h"
+#include "v8/include/v8-object.h"
+#include "v8/include/v8-primitive.h"
+#include "v8/include/v8-script.h"
+#include "v8/include/v8-template.h"
 
 namespace gin {
 
@@ -51,7 +60,7 @@ TEST_F(ArgumentsTest, TestArgumentsHolderCreationContext) {
     ASSERT_TRUE(ConvertFromV8(isolate, script->Run(context).ToLocalChecked(),
                               &function));
     v8::Local<v8::Value> args[] = {object};
-    function->Call(context, v8::Undefined(isolate), base::size(args), args)
+    function->Call(context, v8::Undefined(isolate), std::size(args), args)
         .ToLocalChecked();
   };
 
@@ -67,26 +76,66 @@ TEST_F(ArgumentsTest, TestArgumentsHolderCreationContext) {
   }
 }
 
+TEST_F(ArgumentsTest, TestIsolate) {
+  v8::Isolate* isolate = instance_->isolate();
+  v8::HandleScope handle_scope(isolate);
+  v8::Local<v8::Context> context = context_.Get(isolate);
+
+  EXPECT_EQ(nullptr, Arguments().isolate());
+
+  auto is_current_isolate = [](gin::Arguments* arguments) {
+    return arguments->isolate() == v8::Isolate::GetCurrent();
+  };
+  v8::Local<v8::ObjectTemplate> object_template =
+      ObjectTemplateBuilder(isolate)
+          .SetMethod("fromFunction", base::BindRepeating(is_current_isolate))
+          .SetLazyDataProperty("fromProperty", is_current_isolate)
+          .Build();
+  v8::Local<v8::Object> object =
+      object_template->NewInstance(context).ToLocalChecked();
+
+  auto evaluate = [&](const char* source) {
+    v8::Local<v8::Script> script =
+        v8::Script::Compile(context, StringToV8(isolate, source))
+            .ToLocalChecked();
+    v8::Local<v8::Function> function;
+    EXPECT_TRUE(ConvertFromV8(isolate, script->Run(context).ToLocalChecked(),
+                              &function));
+    v8::Local<v8::Value> args[] = {object};
+    bool result = false;
+    EXPECT_TRUE(ConvertFromV8(
+        isolate,
+        function->Call(context, v8::Undefined(isolate), std::size(args), args)
+            .ToLocalChecked(),
+        &result));
+    return result;
+  };
+  EXPECT_TRUE(evaluate("(function(o) { return o.fromFunction(); })"));
+  EXPECT_TRUE(evaluate("(function(o) { return o.fromProperty; })"));
+}
+
 TEST_F(ArgumentsTest, TestGetAll) {
   v8::Isolate* isolate = instance_->isolate();
   v8::HandleScope handle_scope(isolate);
   v8::Local<v8::Context> context = context_.Get(instance_->isolate());
 
-  using V8List = std::vector<v8::Local<v8::Value>>;
+  using V8List = v8::LocalVector<v8::Value>;
 
-  V8List list1 = {
-      gin::ConvertToV8(isolate, 1), gin::StringToV8(isolate, "some string"),
-      gin::ConvertToV8(isolate, std::vector<double>({2.0, 3.0})),
-  };
+  V8List list1(isolate,
+               {
+                   gin::ConvertToV8(isolate, 1),
+                   gin::StringToV8(isolate, "some string"),
+                   gin::ConvertToV8(isolate, std::vector<double>({2.0, 3.0})),
+               });
   bool called1 = false;
 
-  V8List list2 = {
-      gin::StringToV8(isolate, "some other string"),
-      gin::ConvertToV8(isolate, 42),
-  };
+  V8List list2(isolate, {
+                            gin::StringToV8(isolate, "some other string"),
+                            gin::ConvertToV8(isolate, 42),
+                        });
   bool called2 = false;
 
-  V8List list3;  // Empty list.
+  V8List list3(isolate);  // Empty list.
   bool called3 = false;
 
   auto check_arguments = [](V8List* expected, bool* called,
@@ -113,11 +162,11 @@ TEST_F(ArgumentsTest, TestGetAll) {
   v8::Local<v8::Object> object =
       object_template->NewInstance(context).ToLocalChecked();
 
-  auto do_check = [object, context](V8List& args, base::StringPiece key) {
+  auto do_check = [object, context, isolate](V8List& args,
+                                             std::string_view key) {
     v8::Local<v8::Value> val;
     ASSERT_TRUE(
-        object->Get(context, gin::StringToSymbol(context->GetIsolate(), key))
-            .ToLocal(&val));
+        object->Get(context, gin::StringToSymbol(isolate, key)).ToLocal(&val));
     ASSERT_TRUE(val->IsFunction());
     val.As<v8::Function>()
         ->Call(context, object, static_cast<int>(args.size()), args.data())

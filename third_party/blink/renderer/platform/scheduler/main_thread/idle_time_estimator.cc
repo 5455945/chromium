@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -37,7 +37,6 @@ void IdleTimeEstimator::DidCommitFrameToCompositor() {
 
 void IdleTimeEstimator::Clear() {
   task_start_time_ = base::TimeTicks();
-  prev_commit_time_ = base::TimeTicks();
   cumulative_compositor_runtime_ = base::TimeDelta();
   per_frame_compositor_task_runtime_.Clear();
   did_commit_ = false;
@@ -68,12 +67,12 @@ void IdleTimeEstimator::DidProcessTask(const base::PendingTask& pending_task) {
 
 void IdleTimeEstimator::AddCompositorTaskQueue(
     scoped_refptr<MainThreadTaskQueue> compositor_task_queue) {
-  compositor_task_queue->GetTaskQueue()->AddTaskObserver(this);
+  compositor_task_queue->AddTaskObserver(this);
 }
 
 void IdleTimeEstimator::RemoveCompositorTaskQueue(
     scoped_refptr<MainThreadTaskQueue> compositor_task_queue) {
-  compositor_task_queue->GetTaskQueue()->RemoveTaskObserver(this);
+  compositor_task_queue->RemoveTaskObserver(this);
 }
 
 }  // namespace scheduler

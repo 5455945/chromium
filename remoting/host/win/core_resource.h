@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,9 +10,11 @@
 // Used by host_service.rc
 //
 
-// N.B. Values of |IDS_DISPLAY_SERVICE_NAME|, |IDS_SERVICE_DESCRIPTION| are
-//      hardcoded in remoting/host/install/chromoting.wxs. Make sure the values
-//      below and in the installation script match.
+// N.B. Values of |IDI_CHROME_REMOTE_DESKTOP|, |IDS_DISPLAY_SERVICE_NAME|,
+//      |IDS_SERVICE_DESCRIPTION|, |IDS_URL_FORWARDER_NAME|,
+//      |IDS_URL_FORWARDER_DESCRIPTION| are hardcoded in
+//      remoting/host/install/chromoting.wxs. Make sure the values below and in
+//      the installation script match.
 #define IDS_DISPLAY_SERVICE_NAME         101
 #define IDS_SERVICE_DESCRIPTION          102
 #define IDD_DISCONNECT                   110
@@ -24,13 +26,22 @@
 #define IDS_SHARE_CONFIRM_DIALOG_CONFIRM 116
 #define IDS_SHARE_CONFIRM_DIALOG_DECLINE 117
 #define IDS_DOWNLOAD_FILE_DIALOG_TITLE   118
+#define IDS_URL_FORWARDER_NAME           119
+#define IDS_URL_FORWARDER_DESCRIPTION    120
+#define IDS_SET_UP_URL_FORWARDER_MESSAGE 121
+#define IDS_OPEN_DEFAULT_APPS_SETTINGS_BUTTON 122
+#define IDS_CANCEL                       123
+#define IDS_URL_FORWARDER_INCORRECTLY_CONFIGURED 124
+#define IDS_MOVE_TO_TOP_BUTTON           125
+#define IDS_MOVE_TO_BOTTOM_BUTTON        126
 
 #define IDC_DISCONNECT                  1001
 #define IDC_DISCONNECT_SHARINGWITH      1002
 #define IDC_DISCONNECT_USERNAME         1003
 #define IDC_CONTINUE_MESSAGE            1004
-#define IDC_CONTINUE_DEFAULT            1005
+#define IDC_CONTINUE_BUTTON             1005
 #define IDC_CONTINUE_CANCEL             1007
+#define IDC_TOGGLE_ALIGNMENT            1008
 
 // Next default values for new objects
 //

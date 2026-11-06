@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,8 +21,6 @@ class FakeUriRuntimeClassFactory;
 // ShareOperation.
 class ScopedShareOperationFakeComponents final {
  public:
-  static bool IsSupportedEnvironment();
-
   ScopedShareOperationFakeComponents();
   ScopedShareOperationFakeComponents(
       const ScopedShareOperationFakeComponents&) = delete;
@@ -36,6 +34,7 @@ class ScopedShareOperationFakeComponents final {
   void SetUp();
 
   FakeDataTransferManagerInterop& fake_data_transfer_manager_interop();
+  FakeDataWriterFactory& fake_data_writer_factory();
 
  private:
   Microsoft::WRL::ComPtr<FakeDataWriterFactory> fake_data_writer_factory_;

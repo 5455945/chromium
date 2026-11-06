@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 
+namespace ui {
 namespace {
 constexpr char kMaxDifferentPixels[] = "fuzzy_max_different_pixels";
 constexpr char kPixelDeltaThreshold[] = "fuzzy_pixel_delta_threshold";
@@ -16,8 +17,10 @@ constexpr char kEdgeThreshold[] = "sobel_edge_threshold";
 constexpr char kIgnoredBorderThickness[] = "fuzzy_ignored_border_thickness";
 }  // namespace
 
-namespace ui {
 namespace test {
+
+// SkiaGoldMatchingAlgorithm ---------------------------------------------------
+
 SkiaGoldMatchingAlgorithm::SkiaGoldMatchingAlgorithm() = default;
 
 SkiaGoldMatchingAlgorithm::~SkiaGoldMatchingAlgorithm() = default;
@@ -29,6 +32,8 @@ void SkiaGoldMatchingAlgorithm::AppendAlgorithmToCmdline(
       base::JoinString({"image_matching_algorithm", GetCommandLineSwitchName()},
                        ":"));
 }
+
+// ExactSkiaGoldMatchingAlgorithm ----------------------------------------------
 
 ExactSkiaGoldMatchingAlgorithm::ExactSkiaGoldMatchingAlgorithm() = default;
 
@@ -44,6 +49,8 @@ void ExactSkiaGoldMatchingAlgorithm::AppendAlgorithmToCmdline(
   // Nothing to append.
 }
 
+// FuzzySkiaGoldMatchingAlgorithm ----------------------------------------------
+
 FuzzySkiaGoldMatchingAlgorithm::~FuzzySkiaGoldMatchingAlgorithm() = default;
 
 std::string FuzzySkiaGoldMatchingAlgorithm::GetCommandLineSwitchName() const {
@@ -57,10 +64,10 @@ FuzzySkiaGoldMatchingAlgorithm::FuzzySkiaGoldMatchingAlgorithm(
     : max_different_pixels_(max_different_pixels),
       pixel_delta_threshold_(pixel_delta_threshold),
       ignored_border_thickness_(ignored_border_thickness) {
-  DCHECK_GT(max_different_pixels, 0);
-  DCHECK_GT(pixel_delta_threshold, 0);
-  DCHECK_LE(pixel_delta_threshold, 255 * 4);
-  DCHECK_GE(ignored_border_thickness, 0);
+  CHECK_GT(max_different_pixels, 0, base::NotFatalUntil::M163);
+  CHECK_GT(pixel_delta_threshold, 0, base::NotFatalUntil::M163);
+  CHECK_LE(pixel_delta_threshold, 255 * 4, base::NotFatalUntil::M163);
+  CHECK_GE(ignored_border_thickness, 0, base::NotFatalUntil::M163);
 }
 
 void FuzzySkiaGoldMatchingAlgorithm::AppendAlgorithmToCmdline(
@@ -85,6 +92,8 @@ void FuzzySkiaGoldMatchingAlgorithm::AppendAlgorithmToCmdline(
                          ":"));
 }
 
+// SobelSkiaGoldMatchingAlgorithm ----------------------------------------------
+
 SobelSkiaGoldMatchingAlgorithm::~SobelSkiaGoldMatchingAlgorithm() = default;
 
 std::string SobelSkiaGoldMatchingAlgorithm::GetCommandLineSwitchName() const {
@@ -100,8 +109,8 @@ SobelSkiaGoldMatchingAlgorithm::SobelSkiaGoldMatchingAlgorithm(
                                      pixel_delta_threshold,
                                      ignored_border_thickness),
       edge_threshold_(edge_threshold) {
-  DCHECK_GE(edge_threshold, 0);
-  DCHECK_LE(edge_threshold, 255);
+  CHECK_GE(edge_threshold, 0, base::NotFatalUntil::M163);
+  CHECK_LE(edge_threshold, 255, base::NotFatalUntil::M163);
 }
 
 void SobelSkiaGoldMatchingAlgorithm::AppendAlgorithmToCmdline(
@@ -111,6 +120,24 @@ void SobelSkiaGoldMatchingAlgorithm::AppendAlgorithmToCmdline(
       "add-test-optional-key",
       base::JoinString({kEdgeThreshold, base::NumberToString(edge_threshold_)},
                        ":"));
+}
+
+// PositiveIfOnlyImageAlgorithm ------------------------------------------------
+
+PositiveIfOnlyImageAlgorithm::PositiveIfOnlyImageAlgorithm() = default;
+
+PositiveIfOnlyImageAlgorithm::~PositiveIfOnlyImageAlgorithm() = default;
+
+void PositiveIfOnlyImageAlgorithm::AppendAlgorithmToCmdline(
+    base::CommandLine& cmd) const {
+  SkiaGoldMatchingAlgorithm::AppendAlgorithmToCmdline(cmd);
+
+  // Disallow the user from triaging images.
+  cmd.AppendSwitchASCII("add-test-optional-key", "disallow_triaging:true");
+}
+
+std::string PositiveIfOnlyImageAlgorithm::GetCommandLineSwitchName() const {
+  return "positive_if_only_image";
 }
 
 }  // namespace test

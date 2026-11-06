@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,8 +16,9 @@ constexpr float kDefaultAcceleration = -1500.0f;  // in pixels per second^2
 // Assumes that d0 == 0.0f
 float GetPosition(float v0, float a, float t) {
   float max_t = -v0 / a;
-  if (t > max_t)
+  if (t > max_t) {
     t = max_t;
+  }
   return t * (v0 + 0.5f * a * t);
 }
 
@@ -30,13 +31,8 @@ float GetDelta(float v0, float a, float t1, float t2) {
 namespace views {
 
 ScrollAnimator::ScrollAnimator(ScrollDelegate* delegate)
-    : delegate_(delegate),
-      velocity_x_(0.0f),
-      velocity_y_(0.0f),
-      last_t_(0.0f),
-      duration_(0.0f),
-      acceleration_(kDefaultAcceleration) {
-  DCHECK(delegate);
+    : delegate_(delegate), acceleration_(kDefaultAcceleration) {
+  CHECK(delegate, base::NotFatalUntil::M163);
 }
 
 ScrollAnimator::~ScrollAnimator() {
@@ -44,15 +40,16 @@ ScrollAnimator::~ScrollAnimator() {
 }
 
 void ScrollAnimator::Start(float velocity_x, float velocity_y) {
-  if (acceleration_ >= 0.0f)
+  if (acceleration_ >= 0.0f) {
     acceleration_ = kDefaultAcceleration;
+  }
   float v = std::max(fabs(velocity_x), fabs(velocity_y));
   last_t_ = 0.0f;
-  velocity_x_ = velocity_x;
-  velocity_y_ = velocity_y;
+  velocity_x_ = velocity_x * velocity_multiplier_;
+  velocity_y_ = velocity_y * velocity_multiplier_;
   duration_ = -v / acceleration_;  // in seconds
   animation_ = std::make_unique<gfx::SlideAnimation>(this);
-  animation_->SetSlideDuration(base::TimeDelta::FromSecondsD(duration_));
+  animation_->SetSlideDuration(base::Seconds(duration_));
   animation_->Show();
 }
 

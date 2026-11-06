@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,8 +10,8 @@
 #include <utility>
 #include <vector>
 
-#include "base/callback_helpers.h"
-#include "base/guid.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "chrome/browser/notifications/proto/icon.pb.h"
@@ -21,7 +21,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 using ::testing::_;
-using ::testing::Invoke;
+
 namespace notifications {
 namespace {
 
@@ -80,12 +80,12 @@ class IconStoreTest : public testing::Test {
 
   void LoadIcons(std::vector<std::string> keys) {
     EXPECT_CALL(*icon_converter(), ConvertStringToIcon(_, _))
-        .WillOnce(Invoke([&](std::vector<std::string> encoded_icons,
-                             IconConverter::DecodeCallback callback) {
+        .WillOnce([&](std::vector<std::string> encoded_icons,
+                      IconConverter::DecodeCallback callback) {
           std::vector<SkBitmap> icons(encoded_icons.size());
           std::move(callback).Run(
               std::make_unique<DecodeResult>(true, std::move(icons)));
-        }));
+        });
     store()->LoadIcons(
         std::move(keys),
         base::BindOnce(&IconStoreTest::OnIconsLoaded, base::Unretained(this)));
@@ -95,12 +95,12 @@ class IconStoreTest : public testing::Test {
     auto add_icons_callback =
         base::BindOnce(&IconStoreTest::OnIconsAdded, base::Unretained(this));
     EXPECT_CALL(*icon_converter(), ConvertIconToString(_, _))
-        .WillOnce(Invoke([&](std::vector<SkBitmap> icons,
-                             IconConverter::EncodeCallback callback) {
+        .WillOnce([&](std::vector<SkBitmap> icons,
+                      IconConverter::EncodeCallback callback) {
           std::vector<std::string> encoded_icons(icons.size());
           std::move(callback).Run(
               std::make_unique<EncodeResult>(true, std::move(encoded_icons)));
-        }));
+        });
     store()->AddIcons(std::move(input), std::move(add_icons_callback));
   }
 
@@ -139,8 +139,8 @@ class IconStoreTest : public testing::Test {
   IconStore::IconTypeUuidMap icons_uuid_map_;
   std::unique_ptr<IconStore> store_;
   std::map<std::string, proto::Icon> db_entries_;
-  leveldb_proto::test::FakeDB<proto::Icon, IconEntry>* db_;
-  MockIconConverter* icon_converter_;
+  raw_ptr<leveldb_proto::test::FakeDB<proto::Icon, IconEntry>> db_;
+  raw_ptr<MockIconConverter> icon_converter_;
 };
 
 TEST_F(IconStoreTest, Init) {

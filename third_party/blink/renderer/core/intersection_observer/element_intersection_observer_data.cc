@@ -1,9 +1,10 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/intersection_observer/element_intersection_observer_data.h"
 
+#include "base/time/time.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/intersection_observer/intersection_observation.h"
 #include "third_party/blink/renderer/core/intersection_observer/intersection_observer.h"
@@ -18,7 +19,7 @@ IntersectionObservation* ElementIntersectionObserverData::GetObservationFor(
   auto i = observations_.find(&observer);
   if (i == observations_.end())
     return nullptr;
-  return i->value;
+  return i->value.Get();
 }
 
 void ElementIntersectionObserverData::AddObservation(
@@ -50,25 +51,6 @@ void ElementIntersectionObserverData::TrackWithController(
     controller.AddTrackedObserver(*observer);
 }
 
-void ElementIntersectionObserverData::StopTrackingWithController(
-    IntersectionObserverController& controller) {
-  for (auto& entry : observations_)
-    controller.RemoveTrackedObservation(*entry.value);
-  for (auto& observer : observers_)
-    controller.RemoveTrackedObserver(*observer);
-}
-
-bool ElementIntersectionObserverData::ComputeIntersectionsForTarget(
-    unsigned flags) {
-  bool needs_occlusion_tracking = false;
-  absl::optional<base::TimeTicks> monotonic_time;
-  for (auto& entry : observations_) {
-    needs_occlusion_tracking |= entry.key->NeedsOcclusionTracking();
-    entry.value->ComputeIntersection(flags, monotonic_time);
-  }
-  return needs_occlusion_tracking;
-}
-
 bool ElementIntersectionObserverData::NeedsOcclusionTracking() const {
   for (auto& entry : observations_) {
     if (entry.key->trackVisibility())
@@ -77,16 +59,10 @@ bool ElementIntersectionObserverData::NeedsOcclusionTracking() const {
   return false;
 }
 
-void ElementIntersectionObserverData::InvalidateCachedRects() {
-  for (auto& observer : observers_)
-    observer->InvalidateCachedRects();
-  for (auto& entry : observations_)
-    entry.value->InvalidateCachedRects();
-}
-
 void ElementIntersectionObserverData::Trace(Visitor* visitor) const {
   visitor->Trace(observations_);
   visitor->Trace(observers_);
+  NodeRareDataField::Trace(visitor);
 }
 
 }  // namespace blink

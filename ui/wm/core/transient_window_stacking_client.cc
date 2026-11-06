@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -33,10 +33,10 @@ bool GetAllTransientAncestors(Window* window, Window::Windows* ancestors) {
 // are still siblings (have a common transient parent).  |window1| and |window2|
 // are not modified if such ancestors cannot be found.
 void FindCommonTransientAncestor(Window** window1, Window** window2) {
-  DCHECK(window1);
-  DCHECK(window2);
-  DCHECK(*window1);
-  DCHECK(*window2);
+  CHECK(window1, base::NotFatalUntil::M163);
+  CHECK(window2, base::NotFatalUntil::M163);
+  CHECK(*window1, base::NotFatalUntil::M163);
+  CHECK(*window2, base::NotFatalUntil::M163);
   // Assemble chains of ancestors of both windows.
   Window::Windows ancestors1;
   Window::Windows ancestors2;
@@ -88,8 +88,7 @@ bool TransientWindowStackingClient::AdjustStacking(
   if (*direction == Window::STACK_ABOVE &&
       !HasTransientAncestor(*child, *target)) {
     const Window::Windows& siblings((*child)->parent()->children());
-    size_t target_i =
-        std::find(siblings.begin(), siblings.end(), *target) - siblings.begin();
+    size_t target_i = std::ranges::find(siblings, *target) - siblings.begin();
     while (target_i + 1 < siblings.size() &&
            HasTransientAncestor(siblings[target_i + 1], *target)) {
       ++target_i;

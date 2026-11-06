@@ -1,31 +1,25 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_VIEWS_BOOKMARKS_BOOKMARK_MENU_CONTROLLER_VIEWS_H_
 #define CHROME_BROWSER_UI_VIEWS_BOOKMARKS_BOOKMARK_MENU_CONTROLLER_VIEWS_H_
 
+#include <memory>
 #include <set>
 
-#include "base/callback.h"
-#include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "components/bookmarks/browser/base_bookmark_model_observer.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "chrome/browser/bookmarks/bookmark_merged_surface_service_observer.h"
+#include "chrome/browser/bookmarks/bookmark_parent_folder.h"
 #include "components/bookmarks/browser/bookmark_node_data.h"
+#include "ui/base/mojom/menu_source_type.mojom-forward.h"
 #include "ui/views/controls/menu/menu_delegate.h"
 
 class BookmarkBarView;
+class BookmarkBarMenuDelegate;
 class BookmarkMenuControllerObserver;
-class BookmarkMenuDelegate;
-class Browser;
-
-namespace bookmarks {
-class BookmarkNode;
-}
-
-namespace content {
-class PageNavigator;
-}
+class BrowserWindowInterface;
 
 namespace ui {
 class OSExchangeData;
@@ -36,24 +30,25 @@ class MenuButton;
 class MenuItemView;
 class MenuRunner;
 class Widget;
-}
+}  // namespace views
 
 // BookmarkMenuController is responsible for showing a menu of bookmarks,
 // each item in the menu represents a bookmark.
 // BookmarkMenuController deletes itself as necessary, although the menu can
 // be explicitly hidden by way of the Cancel method.
-class BookmarkMenuController : public bookmarks::BaseBookmarkModelObserver,
+class BookmarkMenuController : public BookmarkMergedSurfaceServiceObserver,
                                public views::MenuDelegate {
  public:
-  // Creates a BookmarkMenuController showing the children of |node| starting
-  // at |start_child_index|.
-  BookmarkMenuController(
-      Browser* browser,
-      base::RepeatingCallback<content::PageNavigator*()> get_navigator,
-      views::Widget* parent,
-      const bookmarks::BookmarkNode* node,
-      size_t start_child_index,
-      bool for_drop);
+  // Creates a BookmarkMenuController showing the children of `folder` starting
+  // at `start_child_index`.
+  BookmarkMenuController(BrowserWindowInterface* browser,
+                         views::Widget* parent,
+                         const BookmarkParentFolder& folder,
+                         size_t start_child_index,
+                         bool for_drop);
+
+  BookmarkMenuController(const BookmarkMenuController&) = delete;
+  BookmarkMenuController& operator=(const BookmarkMenuController&) = delete;
 
   void RunMenuAt(BookmarkBarView* bookmark_bar);
 
@@ -63,7 +58,7 @@ class BookmarkMenuController : public bookmarks::BaseBookmarkModelObserver,
   void Cancel();
 
   // Returns the node the menu is showing for.
-  const bookmarks::BookmarkNode* node() const { return node_; }
+  const BookmarkParentFolder& folder() const { return folder_; }
 
   // Returns the menu.
   views::MenuItemView* menu() const;
@@ -91,18 +86,19 @@ class BookmarkMenuController : public bookmarks::BaseBookmarkModelObserver,
   ui::mojom::DragOperation GetDropOperation(views::MenuItemView* item,
                                             const ui::DropTargetEvent& event,
                                             DropPosition* position) override;
-  ui::mojom::DragOperation OnPerformDrop(
+  views::View::DropCallback GetDropCallback(
       views::MenuItemView* menu,
       DropPosition position,
       const ui::DropTargetEvent& event) override;
   bool ShowContextMenu(views::MenuItemView* source,
                        int id,
                        const gfx::Point& p,
-                       ui::MenuSourceType source_type) override;
+                       ui::mojom::MenuSourceType source_type) override;
   bool CanDrag(views::MenuItemView* menu) override;
   void WriteDragData(views::MenuItemView* sender,
                      ui::OSExchangeData* data) override;
   int GetDragOperations(views::MenuItemView* sender) override;
+  bool ShouldCloseOnDragDropCompleted() override;
   void OnMenuClosed(views::MenuItemView* menu) override;
   views::MenuItemView* GetSiblingMenu(views::MenuItemView* menu,
                                       const gfx::Point& screen_point,
@@ -113,35 +109,54 @@ class BookmarkMenuController : public bookmarks::BaseBookmarkModelObserver,
   void WillShowMenu(views::MenuItemView* menu) override;
   bool ShouldTryPositioningBesideAnchor() const override;
 
-  // bookmarks::BaseBookmarkModelObserver:
-  void BookmarkModelChanged() override;
+  // BookmarkMergedSurfaceServiceObserver:
+  void BookmarkMergedSurfaceServiceLoaded() override;
+  void BookmarkMergedSurfaceServiceBeingDeleted() override;
+  void BookmarkNodeAdded(const BookmarkParentFolder& parent,
+                         size_t index) override;
+  void BookmarkNodesRemoved(
+      const BookmarkParentFolder& parent,
+      const base::flat_set<const bookmarks::BookmarkNode*>& nodes) override;
+  void BookmarkNodeMoved(const BookmarkParentFolder& old_parent,
+                         size_t old_index,
+                         const BookmarkParentFolder& new_parent,
+                         size_t new_index) override;
+  void BookmarkNodeChanged(const bookmarks::BookmarkNode* node) override;
+  void BookmarkNodeFaviconChanged(
+      const bookmarks::BookmarkNode* node) override {}
+  void BookmarkParentFolderChildrenReordered(
+      const BookmarkParentFolder& folder) override;
+  void BookmarkAllUserNodesRemoved() override;
+
+  void BookmarkStartIndexChanged(const BookmarkParentFolder& folder,
+                                 size_t new_start_index);
 
  private:
   // BookmarkMenuController deletes itself as necessary.
   ~BookmarkMenuController() override;
 
+  void BookmarkMergedSurfaceServiceChanged();
+
   std::unique_ptr<views::MenuRunner> menu_runner_;
 
-  std::unique_ptr<BookmarkMenuDelegate> menu_delegate_;
+  std::unique_ptr<BookmarkBarMenuDelegate> menu_delegate_;
 
-  // The node we're showing the contents of.
-  const bookmarks::BookmarkNode* node_;
+  // The folder we're showing the contents of.
+  const BookmarkParentFolder folder_;
 
   // Data for the drop.
   bookmarks::BookmarkNodeData drop_data_;
 
   // The observer, may be null.
-  BookmarkMenuControllerObserver* observer_;
+  raw_ptr<BookmarkMenuControllerObserver> observer_;
 
   // Is the menu being shown for a drop?
   bool for_drop_;
 
-  // The bookmark bar. This is only non-null if we're showing a menu item for a
-  // folder on the bookmark bar and not for drop, or if the BookmarkBarView has
-  // been destroyed before the menu.
-  BookmarkBarView* bookmark_bar_;
-
-  DISALLOW_COPY_AND_ASSIGN(BookmarkMenuController);
+  // The bookmark bar. This is only non-null if we're showing a menu item for
+  // a folder on the bookmark bar and not for drop, or if the BookmarkBarView
+  // has been destroyed before the menu.
+  raw_ptr<BookmarkBarView> bookmark_bar_;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_BOOKMARKS_BOOKMARK_MENU_CONTROLLER_VIEWS_H_

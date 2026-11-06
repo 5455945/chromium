@@ -1,13 +1,16 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef SAFE_BROWSING_IPC_PROTOBUF_MESSAGE_TEST_MESSAGES_H_
-#define SAFE_BROWSING_IPC_PROTOBUF_MESSAGE_TEST_MESSAGES_H_
+#ifndef CHROME_COMMON_SAFE_BROWSING_IPC_PROTOBUF_MESSAGE_TEST_MESSAGES_H_
+#define CHROME_COMMON_SAFE_BROWSING_IPC_PROTOBUF_MESSAGE_TEST_MESSAGES_H_
 
-#include "ipc/ipc_message_macros.h"
-#include "ipc/ipc_message_protobuf_utils.h"
 #include "chrome/common/safe_browsing/ipc_protobuf_message_macros.h"
+#include "ipc/param_traits_macros.h"
+#include "ipc/param_traits_protobuf_utils.h"
+
+#undef IPC_MESSAGE_EXPORT
+#define IPC_MESSAGE_EXPORT
 
 IPC_PROTOBUF_MESSAGE_TRAITS_BEGIN(SubMessage)
   IPC_PROTOBUF_MESSAGE_TRAITS_OPTIONAL_FUNDAMENTAL_MEMBER(foo)
@@ -21,4 +24,4 @@ IPC_PROTOBUF_MESSAGE_TRAITS_BEGIN(TestMessage)
   IPC_PROTOBUF_MESSAGE_TRAITS_REPEATED_COMPLEX_MEMBER(rep_comp_sub)
 IPC_PROTOBUF_MESSAGE_TRAITS_END()
 
-#endif  // SAFE_BROWSING_IPC_PROTOBUF_MESSAGE_TEST_MESSAGES_H_
+#endif  // CHROME_COMMON_SAFE_BROWSING_IPC_PROTOBUF_MESSAGE_TEST_MESSAGES_H_

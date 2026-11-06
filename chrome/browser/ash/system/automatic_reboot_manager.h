@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,26 +6,29 @@
 #define CHROME_BROWSER_ASH_SYSTEM_AUTOMATIC_REBOOT_MANAGER_H_
 
 #include <memory>
+#include <optional>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/callback_list.h"
+#include "base/check_deref.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/scoped_observation.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
+#include "base/timer/wall_clock_timer.h"
 #include "chrome/browser/ash/system/automatic_reboot_manager_observer.h"
+#include "chromeos/ash/components/dbus/update_engine/update_engine_client.h"
+#include "chromeos/ash/components/login/session/session_termination_manager.h"
 #include "chromeos/dbus/power/power_manager_client.h"
-#include "chromeos/dbus/update_engine_client.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/session_manager/core/session_manager_observer.h"
-#include "content/public/browser/notification_observer.h"
-#include "content/public/browser/notification_registrar.h"
 #include "ui/base/user_activity/user_activity_observer.h"
 
 class PrefRegistrySimple;
+class PrefService;
 
 namespace base {
 class TickClock;
@@ -74,13 +77,20 @@ struct SystemEventTimes;
 // applying an update is stored in /var/run/chrome/update_reboot_needed_uptime,
 // making it persist across browser restarts and crashes. Placing the file under
 // /var/run ensures that it gets cleared automatically on every boot.
-class AutomaticRebootManager : public PowerManagerClient::Observer,
+class AutomaticRebootManager : public chromeos::PowerManagerClient::Observer,
                                public UpdateEngineClient::Observer,
                                public ui::UserActivityObserver,
                                public session_manager::SessionManagerObserver,
-                               public content::NotificationObserver {
+                               public ash::SessionTerminationManager::Observer {
  public:
-  explicit AutomaticRebootManager(const base::TickClock* clock);
+  // `local_state` must be non-null, and must outlive `this`.
+  AutomaticRebootManager(PrefService* local_state,
+                         const base::Clock* clock,
+                         const base::TickClock* tick_clock);
+
+  AutomaticRebootManager(const AutomaticRebootManager&) = delete;
+  AutomaticRebootManager& operator=(const AutomaticRebootManager&) = delete;
+
   ~AutomaticRebootManager() override;
 
   AutomaticRebootManagerObserver::Reason reboot_reason() const {
@@ -107,10 +117,8 @@ class AutomaticRebootManager : public PowerManagerClient::Observer,
   // session_manager::SessionManagerObserver:
   void OnUserSessionStarted(bool is_primary_user) override;
 
-  // content::NotificationObserver:
-  void Observe(int type,
-               const content::NotificationSource& source,
-               const content::NotificationDetails& details) override;
+  // ash::SessionTerminationManager::Observer:
+  void OnAppTerminating() override;
 
   static void RegisterPrefs(PrefRegistrySimple* registry);
 
@@ -142,23 +150,25 @@ class AutomaticRebootManager : public PowerManagerClient::Observer,
       base::WaitableEvent::ResetPolicy::MANUAL,
       base::WaitableEvent::InitialState::NOT_SIGNALED};
 
-  // A clock that can be mocked in tests to fast-forward time.
-  const base::TickClock* const clock_;
+  // Clocks that can be mocked in tests to fast-forward time.
+  const raw_ptr<const base::Clock> clock_;
+  const raw_ptr<const base::TickClock> tick_clock_;
 
+  const raw_ref<PrefService> local_state_;
   PrefChangeRegistrar local_state_registrar_;
 
-  content::NotificationRegistrar notification_registrar_;
+  base::CallbackListSubscription on_app_terminating_subscription_;
 
   // Fires when the user has been idle on the login screen for a set amount of
   // time.
   std::unique_ptr<base::OneShotTimer> login_screen_idle_timer_;
 
-  // The time at which the device was booted, in |clock_| ticks.
-  absl::optional<base::TimeTicks> boot_time_;
+  // The time at which the device was booted, in |tick_clock_| ticks.
+  std::optional<base::TimeTicks> boot_time_;
 
   // The time at which an update was applied and a reboot became necessary to
-  // complete the update process, in |clock_| ticks.
-  absl::optional<base::TimeTicks> update_reboot_needed_time_;
+  // complete the update process, in |tick_clock_| ticks.
+  std::optional<base::TimeTicks> update_reboot_needed_time_;
 
   // The reason for the reboot request. Updated whenever a reboot is scheduled.
   AutomaticRebootManagerObserver::Reason reboot_reason_ =
@@ -168,8 +178,8 @@ class AutomaticRebootManager : public PowerManagerClient::Observer,
   bool reboot_requested_ = false;
 
   // Timers that start and end the grace period.
-  std::unique_ptr<base::OneShotTimer> grace_start_timer_;
-  std::unique_ptr<base::OneShotTimer> grace_end_timer_;
+  std::unique_ptr<base::WallClockTimer> grace_start_timer_;
+  std::unique_ptr<base::WallClockTimer> grace_end_timer_;
 
   base::ObserverList<AutomaticRebootManagerObserver, true>::Unchecked
       observers_;
@@ -178,9 +188,11 @@ class AutomaticRebootManager : public PowerManagerClient::Observer,
                           session_manager::SessionManagerObserver>
       session_manager_observation_{this};
 
-  base::WeakPtrFactory<AutomaticRebootManager> weak_ptr_factory_{this};
+  base::ScopedObservation<ash::SessionTerminationManager,
+                          ash::SessionTerminationManager::Observer>
+      session_termination_observation_{this};
 
-  DISALLOW_COPY_AND_ASSIGN(AutomaticRebootManager);
+  base::WeakPtrFactory<AutomaticRebootManager> weak_ptr_factory_{this};
 };
 
 }  // namespace system

@@ -1,12 +1,13 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ASH_PUBLIC_CPP_AMBIENT_AMBIENT_UI_MODEL_H_
 #define ASH_PUBLIC_CPP_AMBIENT_AMBIENT_UI_MODEL_H_
 
+#include <optional>
+
 #include "ash/public/cpp/ash_public_export.h"
-#include "base/macros.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
 #include "base/time/time.h"
@@ -15,9 +16,15 @@ namespace ash {
 
 // Enumeration of UI visibility states.
 enum class AmbientUiVisibility {
-  kShown,
-  kHidden,
-  kClosed,
+  kShouldShow,  // Screen saver should be shown. May not be visible yet due to
+                // delay while preparing media (images/video).
+  kPreview,     // Same as kShouldShow, but do not lock screen or acquire wake
+                // lock. kPreview state is used to show a preview of the screen
+                // saver. Users should be able to exit from the preview mode
+                // directly. Hence, no need to lock the screen or acquire wake
+                // lock.
+  kHidden,      // Screen saver is closed; start inactivity timer to restart it.
+  kClosed,  // Screen saver is closed; all observers and timers are cancelled.
 };
 
 // Enumeration of ambient UI modes. This is used for metrics reporting and
@@ -28,17 +35,47 @@ enum class AmbientUiMode {
   kMaxValue = kInSessionUi,
 };
 
+// Controls movement of views like media text and clock to prevent screen burn
+// in.
+struct AmbientJitterConfig {
+  static constexpr int kDefaultStepSize = 2;
+  static constexpr int kDefaultMaxAbsTranslation = 10;
+
+  int step_size = kDefaultStepSize;
+  // Largest the UI can be globally displaced from its original position in
+  // both x and y directions. Bounds are inclusive. Requirements:
+  // * Range (max_translation - min_translation) must be >= the |step_size|.
+  // * Range must include 0 (the original unshifted position),
+  int x_min_translation = -kDefaultMaxAbsTranslation;
+  int x_max_translation = kDefaultMaxAbsTranslation;
+  int y_min_translation = -kDefaultMaxAbsTranslation;
+  int y_max_translation = kDefaultMaxAbsTranslation;
+};
+
 // The default time before starting Ambient mode on lock screen.
-constexpr base::TimeDelta kLockScreenInactivityTimeout =
-    base::TimeDelta::FromSeconds(7);
+constexpr base::TimeDelta kLockScreenInactivityTimeout = base::Seconds(7);
 
 // The default time to lock screen in the background after Ambient mode begins.
-constexpr base::TimeDelta kLockScreenBackgroundTimeout =
-    base::TimeDelta::FromSeconds(5);
+constexpr base::TimeDelta kLockScreenBackgroundTimeout = base::Seconds(5);
 
 // The default interval to refresh photos.
-constexpr base::TimeDelta kPhotoRefreshInterval =
-    base::TimeDelta::FromSeconds(60);
+constexpr base::TimeDelta kPhotoRefreshInterval = base::Seconds(60);
+
+// The default animation playback speed. Not used in slideshow mode.
+constexpr float kAnimationPlaybackSpeed = 1.f;
+
+// The default time before starting the managed screensaver. Must match with the
+// default value declared in the DeviceScreensaverLoginScreenIdleTimeoutSeconds
+// and ScreensaverLockScreenIdleTimeoutSeconds policies.
+constexpr base::TimeDelta kManagedScreensaverInactivityTimeout =
+    base::Seconds(7);
+
+// The default interval to refresh images in the managed screensaver. Must match
+// with the default value declared in the
+// DeviceScreensaverImageDisplayIntervalSeconds and
+// ScreensaverImageDisplayIntervalSeconds policies.
+constexpr base::TimeDelta kManagedScreensaverImageRefreshInterval =
+    base::Seconds(60);
 
 // A checked observer which receives notification of changes to the Ambient Mode
 // UI model.
@@ -88,6 +125,23 @@ class ASH_PUBLIC_EXPORT AmbientUiModel {
     return photo_refresh_interval_;
   }
 
+  void set_animation_playback_speed(float animation_playback_speed) {
+    animation_playback_speed_ = animation_playback_speed;
+  }
+
+  float animation_playback_speed() const { return animation_playback_speed_; }
+
+  AmbientJitterConfig GetSlideshowPeripheralUiJitterConfig();
+
+  AmbientJitterConfig GetAnimationJitterConfig();
+
+  // Does not modify jitter calculators that have already been created. All
+  // jitter calculators created after this, such as if ambient is stopped and
+  // restarted, will have the new config.
+  void set_jitter_config_for_testing(const AmbientJitterConfig& jitter_config) {
+    jitter_config_for_testing_ = jitter_config;
+  }
+
  private:
   void NotifyAmbientUiVisibilityChanged();
 
@@ -108,7 +162,12 @@ class ASH_PUBLIC_EXPORT AmbientUiModel {
   // The interval to refresh photos.
   base::TimeDelta photo_refresh_interval_ = kPhotoRefreshInterval;
 
-  base::ObserverList<AmbientUiModelObserver> observers_;
+  // Animation playback speed. Not used in slideshow mode.
+  float animation_playback_speed_ = kAnimationPlaybackSpeed;
+
+  std::optional<AmbientJitterConfig> jitter_config_for_testing_;
+
+  base::ReentrantObserverList<AmbientUiModelObserver> observers_;
 };
 
 ASH_PUBLIC_EXPORT std::ostream& operator<<(std::ostream& out,

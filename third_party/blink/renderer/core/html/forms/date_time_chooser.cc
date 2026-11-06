@@ -30,7 +30,14 @@
 
 #include "third_party/blink/renderer/core/html/forms/date_time_chooser.h"
 
+#include "build/build_config.h"
 #include "third_party/blink/public/mojom/choosers/date_time_chooser.mojom-blink.h"
+#include "third_party/blink/renderer/core/frame/local_frame.h"
+#include "third_party/blink/renderer/core/frame/settings.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/device_info.h"
+#endif
 
 namespace blink {
 
@@ -39,5 +46,23 @@ DateTimeChooserParameters::DateTimeChooserParameters() = default;
 DateTimeChooserParameters::~DateTimeChooserParameters() = default;
 
 DateTimeChooser::~DateTimeChooser() = default;
+
+// static
+bool DateTimeChooser::ShouldSubfieldsBeFocusable(LocalFrame* frame) {
+  if (frame && frame->GetSettings() &&
+      frame->GetSettings()
+          ->DateTimeSubfieldsFocusableForTesting()
+          .has_value()) {
+    return *frame->GetSettings()->DateTimeSubfieldsFocusableForTesting();
+  }
+#if BUILDFLAG(IS_ANDROID)
+  // Ideally we would look at something like the pointer type, but that didn't
+  // work out because some mobile devices were reporting unexpected pointer
+  // types. See http://crbug.com/567232773
+  return base::android::device_info::is_desktop();
+#else
+  return true;
+#endif
+}
 
 }  // namespace blink

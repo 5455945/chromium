@@ -31,7 +31,7 @@
 #include "third_party/blink/renderer/core/editing/forward.h"
 #include "third_party/blink/renderer/core/editing/iterators/text_iterator.h"
 #include "third_party/blink/renderer/core/editing/iterators/text_iterator_behavior.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -50,13 +50,12 @@ class CharacterIteratorAlgorithm {
       const EphemeralRangeTemplate<Strategy>&,
       const TextIteratorBehavior& = TextIteratorBehavior());
 
-  void Advance(int num_characters);
+  void Advance(wtf_size_t num_characters);
 
-  bool AtBreak() const { return at_break_; }
   bool AtEnd() const { return text_iterator_.AtEnd(); }
 
-  int length() const { return text_iterator_.length() - run_offset_; }
-  UChar CharacterAt(unsigned index) const {
+  wtf_size_t length() const { return text_iterator_.length() - run_offset_; }
+  UChar CharacterAt(wtf_size_t index) const {
     return text_iterator_.CharacterAt(run_offset_ + index);
   }
 
@@ -64,8 +63,8 @@ class CharacterIteratorAlgorithm {
 
   const Document& OwnerDocument() const;
   const Node& CurrentContainer() const;
-  int StartOffset() const;
-  int EndOffset() const;
+  wtf_size_t StartOffset() const;
+  wtf_size_t EndOffset() const;
 
   PositionTemplate<Strategy> GetPositionBefore() const;
   PositionTemplate<Strategy> GetPositionAfter() const;
@@ -83,15 +82,15 @@ class CharacterIteratorAlgorithm {
   // avoid using |EditingPositionOf()|.
   PositionTemplate<Strategy> EndPosition() const;
 
-  EphemeralRangeTemplate<Strategy> CalculateCharacterSubrange(int offset,
-                                                              int length);
+  EphemeralRangeTemplate<Strategy> CalculateCharacterSubrange(
+      wtf_size_t offset,
+      wtf_size_t length);
 
  private:
   void Initialize();
 
-  int offset_;
-  int run_offset_;
-  bool at_break_;
+  wtf_size_t offset_ = 0;
+  wtf_size_t run_offset_ = 0;
 
   TextIteratorAlgorithm<Strategy> text_iterator_;
 };
@@ -105,9 +104,10 @@ extern template class CORE_EXTERN_TEMPLATE_EXPORT
 using CharacterIteratorInFlatTree =
     CharacterIteratorAlgorithm<EditingInFlatTreeStrategy>;
 
-CORE_EXPORT EphemeralRange CalculateCharacterSubrange(const EphemeralRange&,
-                                                      int character_offset,
-                                                      int character_count);
+CORE_EXPORT EphemeralRange
+CalculateCharacterSubrange(const EphemeralRange&,
+                           wtf_size_t character_offset,
+                           wtf_size_t character_count);
 
 }  // namespace blink
 

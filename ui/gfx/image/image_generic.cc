@@ -1,15 +1,17 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
-#include "ui/gfx/image/image_platform.h"
 
 #include <memory>
 #include <set>
 #include <utility>
 
 #include "base/logging.h"
+#include "base/memory/ref_counted_memory.h"
+#include "base/memory/scoped_refptr.h"
 #include "ui/gfx/codec/png_codec.h"
+#include "ui/gfx/image/image_platform.h"
+#include "ui/gfx/image/image_skia_rep.h"
 #include "ui/gfx/image/image_skia_source.h"
 
 namespace gfx {
@@ -28,6 +30,10 @@ ImageSkia GetErrorImageSkia() {
 class PNGImageSource : public ImageSkiaSource {
  public:
   PNGImageSource() {}
+
+  PNGImageSource(const PNGImageSource&) = delete;
+  PNGImageSource& operator=(const PNGImageSource&) = delete;
+
   ~PNGImageSource() override {}
 
   ImageSkiaRep GetImageForScale(float scale) override {
@@ -38,14 +44,16 @@ class PNGImageSource : public ImageSkiaSource {
     // gfx::ImageSkia passes one of the resource scale factors. The source
     // should return:
     // 1) The ImageSkiaRep with the highest scale if all available
-    // scales are smaller than |scale|.
+    //    scales are smaller than |scale|.
     // 2) The ImageSkiaRep with the smallest one that is larger than |scale|.
-    for (auto iter = image_skia_reps_.begin(); iter != image_skia_reps_.end();
-         ++iter) {
-      if ((*iter).scale() == scale)
-        return (*iter);
-      if (!rep || rep->scale() < (*iter).scale())
-        rep = &(*iter);
+    // TODO(crbug.com/329953472): Use a predefined threshold.
+    for (const auto& image_skia_rep : image_skia_reps_) {
+      if (image_skia_rep.scale() == scale) {
+        return image_skia_rep;
+      }
+      if (!rep || rep->scale() < image_skia_rep.scale()) {
+        rep = &image_skia_rep;
+      }
       if (rep->scale() >= scale)
         break;
     }
@@ -67,8 +75,8 @@ class PNGImageSource : public ImageSkiaSource {
   static ImageSkiaRep ToImageSkiaRep(const ImagePNGRep& png_rep) {
     scoped_refptr<base::RefCountedMemory> raw_data = png_rep.raw_data;
     CHECK(raw_data.get());
-    SkBitmap bitmap;
-    if (!PNGCodec::Decode(raw_data->front(), raw_data->size(), &bitmap)) {
+    SkBitmap bitmap = PNGCodec::Decode(*raw_data);
+    if (bitmap.isNull()) {
       LOG(ERROR) << "Unable to decode PNG for " << png_rep.scale << ".";
       return ImageSkiaRep();
     }
@@ -85,8 +93,6 @@ class PNGImageSource : public ImageSkiaSource {
   typedef std::set<ImageSkiaRep, Compare> ImageSkiaRepSet;
   ImageSkiaRepSet image_skia_reps_;
   gfx::Size size_;
-
-  DISALLOW_COPY_AND_ASSIGN(PNGImageSource);
 };
 
 }  // namespace
@@ -96,9 +102,10 @@ ImageSkia ImageSkiaFromPNG(const std::vector<ImagePNGRep>& image_png_reps) {
     return GetErrorImageSkia();
   std::unique_ptr<PNGImageSource> image_source(new PNGImageSource);
 
-  for (size_t i = 0; i < image_png_reps.size(); ++i) {
-    if (!image_source->AddPNGData(image_png_reps[i]))
+  for (const auto& image_png_rep : image_png_reps) {
+    if (!image_source->AddPNGData(image_png_rep)) {
       return GetErrorImageSkia();
+    }
   }
   const gfx::Size& size = image_source->size();
   DCHECK(!size.IsEmpty());
@@ -110,14 +117,17 @@ ImageSkia ImageSkiaFromPNG(const std::vector<ImagePNGRep>& image_png_reps) {
 scoped_refptr<base::RefCountedMemory> Get1xPNGBytesFromImageSkia(
     const ImageSkia* image_skia) {
   ImageSkiaRep image_skia_rep = image_skia->GetRepresentation(1.0f);
-
-  scoped_refptr<base::RefCountedBytes> png_bytes(new base::RefCountedBytes());
-  if (image_skia_rep.scale() != 1.0f ||
-      !PNGCodec::EncodeBGRASkBitmap(image_skia_rep.GetBitmap(), false,
-                                    &png_bytes->data())) {
+  if (image_skia_rep.scale() != 1.0f) {
     return nullptr;
   }
-  return png_bytes;
+
+  std::optional<std::vector<uint8_t>> result = PNGCodec::EncodeBGRASkBitmap(
+      image_skia_rep.GetBitmap(), /*discard_transparency=*/false);
+  if (!result) {
+    return nullptr;
+  }
+
+  return base::MakeRefCounted<base::RefCountedBytes>(std::move(result.value()));
 }
 
 }  // namespace internal

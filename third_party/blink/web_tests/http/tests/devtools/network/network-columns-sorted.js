@@ -1,10 +1,15 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+import {NetworkTestRunner} from 'network_test_runner';
+
+import * as DataGrid from 'devtools/ui/legacy/components/data_grid/data_grid.js';
+import * as Network from 'devtools/panels/network/network.js';
+
 (async function() {
   TestRunner.addResult(`Tests network columns are sortable.\n`);
-  await TestRunner.loadTestModule('network_test_runner');
   await TestRunner.showPanel('network');
 
   NetworkTestRunner.recordNetwork();
@@ -24,16 +29,16 @@
   function ensureAllResources() {
     if (++resourceCount < totalResourceCount)
       return;
-    UI.panels.network._networkLogView._refresh();
+    Network.NetworkPanel.NetworkPanel.instance().networkLogView.refresh();
     sortGrid();
     TestRunner.completeTest();
   }
 
   function sortGrid() {
-    var logView = UI.panels.network._networkLogView;
-    var dataGrid = logView._dataGrid;
-    var columnsView = logView._columns;
-    TestRunner.addSniffer(columnsView, '_dataGridSortedForTest', dataGridSorted.bind(null, logView), true);
+    var logView = Network.NetworkPanel.NetworkPanel.instance().networkLogView;
+    var dataGrid = logView.dataGrid;
+    var columnsView = logView.columns();
+    TestRunner.addSniffer(columnsView, 'dataGridSortedForTest', dataGridSorted.bind(null, logView), true);
 
     dataGrid.markColumnAsSortedBy('name', DataGrid.DataGrid.Order.Ascending);
     columnsView.sortByCurrentColumn();
@@ -42,8 +47,8 @@
   }
 
   function dataGridSorted(logView) {
-    var nodes = logView._dataGrid.rootNode().flatChildren();
-    TestRunner.addResult('Sorted by: ' + logView._dataGrid.sortColumnId());
+    var nodes = logView.dataGrid.rootNode().flatChildren();
+    TestRunner.addResult('Sorted by: ' + logView.dataGrid.sortColumnId());
     for (var node of nodes)
       TestRunner.addResult('    ' + node.request().name());
     TestRunner.addResult('');

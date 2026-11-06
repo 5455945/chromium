@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,9 +9,9 @@
 
 #include <string>
 
-#include "base/macros.h"
 #include "ui/base/page_transition_types.h"
 
+@class DownloadNativeTaskBridge;
 class GURL;
 
 namespace web {
@@ -58,19 +58,20 @@ class WebState;
 // Resuming unfinished downloads after application relaunch example:
 // @interface MyAppDelegate : UIResponder <UIApplicationDelegate>
 // @end
-// @implementation AppDelegate
+// @implementation MyAppDelegate
 // - (void)application:(UIApplication *)application
 //     handleEventsForBackgroundURLSession:(NSString *)identifier
 //                       completionHandler:(void (^)())completionHandler {
 //   MyDownloadInfo* info = [self storedDownloadInfoForIdentifier:identifier];
-//   DownloadController::FromBrowserState(self.state)->CreateDownloadTask(
+//   DownloadController::FromBrowserState(self.state)->CreateNativeDownloadTask(
 //       [self webStateAtIndex:info.webStateIndex],
 //       identifier,
 //       info.originalURL,
 //       info.originalHTTPMethod,
 //       info.contentDisposition,
 //       info.totalBytes,
-//       info.MIMEType);
+//       info.MIMEType,
+//       [self downloadNativeTaskBridge]);
 //   );
 // }
 // - (void)applicationWillTerminate:(UIApplication *)application {
@@ -82,28 +83,32 @@ class WebState;
 //
 class DownloadController {
  public:
-  // Returns DownloadController for the given |browser_state|. |browser_state|
+  // Returns DownloadController for the given `browser_state`. `browser_state`
   // must not be null.
   static DownloadController* FromBrowserState(BrowserState* browser_state);
 
-  // Creates a new download task. Clients may call this method to resume the
-  // download after the application relaunch or start a new download. Clients
-  // must not call this method to initiate a renderer-initiated download (those
-  // downloads are created automatically).
-  // In order to resume the download after the application relaunch clients have
-  // to pass |identifier| obtained from
-  // application:handleEventsForBackgroundURLSession:completionHandler:
-  // UIApplicationDelegate callback. The rest of arguments should be taken
-  // from DownloadTask, which was suspended when the application has been
-  // terminated. In order to resume the download, clients must persist all
-  // DownloadTask data for each unfinished download on disk.
-  virtual void CreateDownloadTask(WebState* web_state,
-                                  NSString* identifier,
-                                  const GURL& original_url,
-                                  NSString* http_method,
-                                  const std::string& content_disposition,
-                                  int64_t total_bytes,
-                                  const std::string& mime_type) = 0;
+  // Creates a new native download task. This method uses `download` which
+  // is used to perform downloads using WKDownload instead of NSURLSession.
+  // Clients may call this method to resume the download after the application
+  // relaunch or start a new download. Clients must not call this method to
+  // initiate a renderer-initiated download (those downloads are created
+  // automatically).
+  virtual void CreateNativeDownloadTask(WebState* web_state,
+                                        NSString* identifier,
+                                        const GURL& original_url,
+                                        NSString* originating_host,
+                                        NSString* http_method,
+                                        const std::string& content_disposition,
+                                        int64_t total_bytes,
+                                        const std::string& mime_type,
+                                        DownloadNativeTaskBridge* download) = 0;
+
+  // Creates a new download task to download the document that is currently
+  // displayed by the `web_state`. This is mainly intended to download documents
+  // (like PDFs).
+  virtual void CreateWebStateDownloadTask(WebState* web_state,
+                                          NSString* identifier,
+                                          int64_t total_bytes) = 0;
 
   // Sets DownloadControllerDelegate. Clients must set the delegate to null in
   // DownloadControllerDelegate::OnDownloadControllerDestroyed().
@@ -113,10 +118,11 @@ class DownloadController {
   virtual DownloadControllerDelegate* GetDelegate() const = 0;
 
   DownloadController() = default;
-  virtual ~DownloadController() = default;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(DownloadController);
+  DownloadController(const DownloadController&) = delete;
+  DownloadController& operator=(const DownloadController&) = delete;
+
+  virtual ~DownloadController() = default;
 };
 
 }  // namespace web

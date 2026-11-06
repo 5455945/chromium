@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,15 +17,6 @@ struct TabSizeInfo {
   // The width of a standard tab, which is the largest size active or inactive
   // tabs ever have.
   int standard_width;
-};
-
-// Sizing info global to the tabstrip.
-struct TabLayoutConstants {
-  // The height of tabs.
-  int tab_height;
-
-  // The amount adjacent tabs overlap each other.
-  int tab_overlap;
 };
 
 // Inactive tabs have a smaller minimum width than the active tab. Layout has

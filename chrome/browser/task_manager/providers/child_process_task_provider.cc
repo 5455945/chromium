@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,13 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/process/process.h"
 #include "chrome/browser/task_manager/providers/child_process_task.h"
 #include "content/public/browser/browser_child_process_host_iterator.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/child_process_data.h"
-#include "content/public/common/content_features.h"
 
 using content::BrowserChildProcessHostIterator;
 using content::BrowserThread;
@@ -21,85 +20,60 @@ using content::ChildProcessData;
 
 namespace task_manager {
 
-namespace {
+ChildProcessTaskProvider::ChildProcessTaskProvider() = default;
 
-// Collects and returns the child processes data on the IO thread to get all the
-// pre-existing child process before we start observing
-// |BrowserChildProcessObserver|.
-std::unique_ptr<std::vector<ChildProcessData>> CollectChildProcessData() {
-  // The |BrowserChildProcessHostIterator| must only be used on the IO thread.
-  DCHECK_CURRENTLY_ON(base::FeatureList::IsEnabled(features::kProcessHostOnUI)
-                          ? content::BrowserThread::UI
-                          : content::BrowserThread::IO);
-
-  std::unique_ptr<std::vector<ChildProcessData>> child_processes(
-      new std::vector<ChildProcessData>());
-  for (BrowserChildProcessHostIterator itr; !itr.Done(); ++itr) {
-    const ChildProcessData& process_data = itr.GetData();
-
-    // Only add processes that have already started, i.e. with valid handles.
-    if (!process_data.GetProcess().IsValid())
-      continue;
-
-    child_processes->push_back(process_data.Duplicate());
-  }
-
-  return child_processes;
-}
-
-}  // namespace
-
-ChildProcessTaskProvider::ChildProcessTaskProvider() {}
-
-ChildProcessTaskProvider::~ChildProcessTaskProvider() {
-}
+ChildProcessTaskProvider::~ChildProcessTaskProvider() = default;
 
 Task* ChildProcessTaskProvider::GetTaskOfUrlRequest(int child_id,
                                                     int route_id) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  auto itr = tasks_by_child_id_.find(child_id);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
+  auto itr = tasks_by_child_id_.find(content::ChildProcessId(child_id));
   if (itr == tasks_by_child_id_.end())
     return nullptr;
 
-  return itr->second;
+  return itr->second.get();
 }
 
 void ChildProcessTaskProvider::BrowserChildProcessLaunchedAndConnected(
-    const content::ChildProcessData& data) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  if (!data.GetProcess().IsValid())
+    const content::ChildProcessData& data,
+    const base::Process& process) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
+  if (!process.IsValid()) {
     return;
+  }
 
-  CreateTask(data);
+  CreateTask(data, process);
 }
 
 void ChildProcessTaskProvider::BrowserChildProcessHostDisconnected(
     const content::ChildProcessData& data) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DeleteTask(data.GetProcess().Handle());
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
+  DeleteTask(data.GetChildProcessId());
 }
 
 void ChildProcessTaskProvider::StartUpdating() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(tasks_by_processid_.empty());
-  DCHECK(tasks_by_child_id_.empty());
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
+  CHECK(tasks_by_child_id_.empty(), base::NotFatalUntil::M162);
 
   // First, get the pre-existing child processes data.
-  auto task_runner = base::FeatureList::IsEnabled(features::kProcessHostOnUI)
-                         ? content::GetUIThreadTaskRunner({})
-                         : content::GetIOThreadTaskRunner({});
-  task_runner->PostTaskAndReplyWithResult(
-      FROM_HERE, base::BindOnce(&CollectChildProcessData),
-      base::BindOnce(&ChildProcessTaskProvider::ChildProcessDataCollected,
-                     weak_ptr_factory_.GetWeakPtr()));
+  for (BrowserChildProcessHostIterator itr; !itr.Done(); ++itr) {
+    const ChildProcessData& process_data = itr.GetData();
+    const base::Process& process = itr.GetProcess();
+
+    // Only add processes that have already started, i.e. with valid handles.
+    if (!process.IsValid()) {
+      continue;
+    }
+
+    CreateTask(process_data, process);
+  }
+
+  // Now start observing.
+  BrowserChildProcessObserver::Add(this);
 }
 
 void ChildProcessTaskProvider::StopUpdating() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-
-  // ChildProcessDataCollected() should never be called after this, and hence
-  // we must invalidate the weak pointers.
-  weak_ptr_factory_.InvalidateWeakPtrs();
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
 
   // First, stop observing.
   BrowserChildProcessObserver::Remove(this);
@@ -108,27 +82,14 @@ void ChildProcessTaskProvider::StopUpdating() {
   // StopUpdating() is called after the observer has been cleared.
 
   // Then delete all tasks (if any).
-  tasks_by_processid_.clear();
   tasks_by_child_id_.clear();
 }
 
-void ChildProcessTaskProvider::ChildProcessDataCollected(
-    std::unique_ptr<const std::vector<content::ChildProcessData>>
-        child_processes) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-
-  for (const auto& process_data : *child_processes)
-    CreateTask(process_data);
-
-  // Now start observing.
-  BrowserChildProcessObserver::Add(this);
-}
-
-void ChildProcessTaskProvider::CreateTask(
-    const content::ChildProcessData& data) {
-  std::unique_ptr<ChildProcessTask>& task =
-      tasks_by_processid_[data.GetProcess().Pid()];
-  if (task) {
+void ChildProcessTaskProvider::CreateTask(const content::ChildProcessData& data,
+                                          const base::Process& process) {
+  auto [itr, inserted] =
+      tasks_by_child_id_.try_emplace(data.GetChildProcessId(), nullptr);
+  if (!inserted) {
     // This task is already known to us. This case can happen when some of the
     // child process data we collect upon StartUpdating() might be of
     // BrowserChildProcessHosts whose process hadn't launched yet. So we just
@@ -137,21 +98,20 @@ void ChildProcessTaskProvider::CreateTask(
   }
 
   // Create the task and notify the observer.
-  task = std::make_unique<ChildProcessTask>(
-      data, ChildProcessTask::ProcessSubtype::kNoSubtype);
-  tasks_by_child_id_[task->GetChildProcessUniqueID()] = task.get();
-  NotifyObserverTaskAdded(task.get());
+  itr->second = std::make_unique<ChildProcessTask>(data, process);
+  NotifyObserverTaskAdded(itr->second.get());
 }
 
-void ChildProcessTaskProvider::DeleteTask(base::ProcessHandle handle) {
-  auto itr = tasks_by_processid_.find(base::GetProcId(handle));
+void ChildProcessTaskProvider::DeleteTask(
+    content::ChildProcessId child_process_id) {
+  auto itr = tasks_by_child_id_.find(child_process_id);
 
   // The following case should never happen since we start observing
   // |BrowserChildProcessObserver| only after we collect all pre-existing child
   // processes and are notified (on the UI thread) that the collection is
   // completed at |ChildProcessDataCollected()|.
-  if (itr == tasks_by_processid_.end()) {
-    // BUG(crbug.com/611067): Temporarily removing due to test flakes. The
+  if (itr == tasks_by_child_id_.end()) {
+    // BUG(crbug.com/40468872): Temporarily removing due to test flakes. The
     // reason why this happens is well understood (see bug), but there's no
     // quick and easy fix.
     // NOTREACHED();
@@ -160,11 +120,8 @@ void ChildProcessTaskProvider::DeleteTask(base::ProcessHandle handle) {
 
   NotifyObserverTaskRemoved(itr->second.get());
 
-  // Clear from the child_id index.
-  tasks_by_child_id_.erase(itr->second->GetChildProcessUniqueID());
-
   // Finally delete the task.
-  tasks_by_processid_.erase(itr);
+  tasks_by_child_id_.erase(itr);
 }
 
 }  // namespace task_manager

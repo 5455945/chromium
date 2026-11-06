@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,11 @@
 
 #include <string>
 
-#include "base/memory/weak_ptr.h"
 #include "ui/message_center/public/cpp/notification_delegate.h"
 
-class Profile;
+namespace user_manager {
+class User;
+}  // namespace user_manager
 
 namespace ash {
 namespace kerberos_ticket_expiry_notification {
@@ -20,12 +21,12 @@ using ClickCallback =
 
 // Shows the ticket expiry notification for the given |principal_name|.
 // |click_callback| is called when the user clicks on the notification.
-void Show(Profile* profile,
+void Show(const user_manager::User& user,
           const std::string& principal_name,
           ClickCallback click_callback);
 
 // Closes the ticket expiry notification.
-void Close(Profile* profile);
+void Close(const user_manager::User& user);
 
 }  // namespace kerberos_ticket_expiry_notification
 }  // namespace ash

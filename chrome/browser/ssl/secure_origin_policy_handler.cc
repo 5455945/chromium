@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,15 +20,20 @@ SecureOriginPolicyHandler::SecureOriginPolicyHandler(const char* policy_name,
     : SchemaValidatingPolicyHandler(policy_name,
                                     schema.GetKnownProperty(policy_name),
                                     SCHEMA_ALLOW_UNKNOWN) {
-  DCHECK(policy_name == key::kUnsafelyTreatInsecureOriginAsSecure ||
-         policy_name == key::kOverrideSecurityRestrictionsOnInsecureOrigin);
+  CHECK(
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
+      policy_name == key::kUnsafelyTreatInsecureOriginAsSecure ||
+#endif
+          policy_name == key::kOverrideSecurityRestrictionsOnInsecureOrigin,
+      base::NotFatalUntil::M163);
 }
 
 SecureOriginPolicyHandler::~SecureOriginPolicyHandler() = default;
 
 void SecureOriginPolicyHandler::ApplyPolicySettings(const PolicyMap& policies,
                                                     PrefValueMap* prefs) {
-  const base::Value* value = policies.GetValue(policy_name());
+  const base::Value* value =
+      policies.GetValue(policy_name(), base::Value::Type::LIST);
   if (!value)
     return;
 

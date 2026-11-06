@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,13 @@ package org.chromium.components.minidump_uploader.util;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 
+import org.chromium.build.annotations.NullMarked;
+
 /**
  * A container for determining whether it's ok to upload crash reports over the currently active
  * network.
  */
+@NullMarked
 public class NetworkPermissionUtil {
     public static boolean isNetworkUnmetered(ConnectivityManager connectivityManager) {
         NetworkInfo networkInfo = connectivityManager.getActiveNetworkInfo();

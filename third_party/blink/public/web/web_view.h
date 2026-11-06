@@ -31,24 +31,27 @@
 #ifndef THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_VIEW_H_
 #define THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_VIEW_H_
 
-#include "base/time/time.h"
+#include <optional>
+
 #include "third_party/blink/public/common/dom_storage/session_storage_namespace_id.h"
-#include "third_party/blink/public/common/page/drag_operation.h"
+#include "third_party/blink/public/common/fenced_frame/redacted_fenced_frame_config.h"
+#include "third_party/blink/public/common/fingerprinting_protection/noise_token.h"
 #include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
 #include "third_party/blink/public/common/web_preferences/web_preferences.h"
 #include "third_party/blink/public/mojom/frame/frame.mojom-shared.h"
-#include "third_party/blink/public/mojom/input/focus_type.mojom-shared.h"
 #include "third_party/blink/public/mojom/page/page.mojom-shared.h"
 #include "third_party/blink/public/mojom/page/page_visibility_state.mojom-shared.h"
+#include "third_party/blink/public/mojom/page/prerender_page_param.mojom-forward.h"
 #include "third_party/blink/public/mojom/renderer_preference_watcher.mojom-shared.h"
 #include "third_party/blink/public/platform/cross_variant_mojo_util.h"
 #include "third_party/blink/public/platform/scheduler/web_agent_group_scheduler.h"
-#include "third_party/blink/public/platform/web_string.h"
-#include "third_party/blink/public/platform/web_url.h"
-#include "third_party/blink/public/web/web_settings.h"
+#include "third_party/blink/public/platform/web_common.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/display/mojom/screen_orientation.mojom-shared.h"
-#include "ui/gfx/geometry/size.h"
+
+namespace base {
+class TimeDelta;
+}
 
 namespace cc {
 class PaintCanvas;
@@ -56,17 +59,17 @@ class PaintCanvas;
 
 namespace gfx {
 class ColorSpace;
-class Point;
 class PointF;
 class Rect;
+class Size;
 class SizeF;
-}
+}  // namespace gfx
 
 namespace blink {
+struct ColorProviderColorMaps;
 class PageScheduler;
 class WebFrame;
 class WebFrameWidget;
-class WebHitTestResult;
 class WebLocalFrame;
 class WebNoStatePrefetchClient;
 class WebPagePopup;
@@ -78,11 +81,11 @@ class WebWidget;
 struct DeviceEmulationParams;
 struct WebWindowFeatures;
 
-class WebView {
+class BLINK_EXPORT WebView {
  public:
-  BLINK_EXPORT static const double kTextSizeMultiplierRatio;
-  BLINK_EXPORT static const double kMinTextSizeMultiplier;
-  BLINK_EXPORT static const double kMaxTextSizeMultiplier;
+  static const double kTextSizeMultiplierRatio;
+  static const double kMinTextSizeMultiplier;
+  static const double kMaxTextSizeMultiplier;
 
   enum StyleInjectionTarget {
     kInjectStyleInAllFrames,
@@ -96,9 +99,17 @@ class WebView {
   // as appropriate. It is legal to modify settings before completing
   // initialization.
   //
+  // The WebView is kept alive as long as the `page_handle` mojo interface
+  // is alive. The WebView will be destroyed when that interface closes, if
+  // a client wishes to close the WebView synchronously it can call `Close`
+  // directly.
+  //
   // clients may be null, but should both be null or not together.
   // |is_hidden| defines the initial visibility of the page.
-  // [is_inside_portal] defines whether the page is inside_portal.
+  // |prerender_param| defines a set of parameters for prerendering views. It is
+  // set iff the view is created for a prerendering page. (see
+  // content/browser/preloading/prerender/README.md).
+  // [is_fenced_frame] defines whether the page is for a fenced frame.
   // |compositing_enabled| dictates whether accelerated compositing should be
   // enabled for the page. It must be false if no clients are provided, or if a
   // LayerTreeView will not be set for the WebWidget.
@@ -118,10 +129,17 @@ class WebView {
   // frame. Set on create to avoid races. Passing in nullopt indicates the
   // default base background color should be used.
   // TODO(yuzus): Remove |is_hidden| and start using |PageVisibilityState|.
-  BLINK_EXPORT static WebView* Create(
+  // |color_provider_colors| is used to create color providers that live in the
+  // Page. Passing in nullptr indicates the default color maps should be used.
+  // |history_index| and |history_length| are information about the frame tree's
+  // history list at the point when this view was created. These values are
+  // updated again at navigation commit time.
+  static WebView* Create(
       WebViewClient*,
       bool is_hidden,
-      bool is_inside_portal,
+      blink::mojom::PrerenderParamPtr prerender_param,
+      std::optional<blink::FencedFrame::DeprecatedFencedFrameMode>
+          fenced_frame_mode,
       bool compositing_enabled,
       bool widgets_never_composited,
       WebView* opener,
@@ -129,9 +147,13 @@ class WebView {
           page_handle,
       scheduler::WebAgentGroupScheduler& agent_group_scheduler,
       const SessionStorageNamespaceId& session_storage_namespace_id,
-      absl::optional<SkColor> page_base_background_color);
+      std::optional<SkColor> page_base_background_color,
+      const base::UnguessableToken& browsing_context_group_token,
+      const ColorProviderColorMaps* color_provider_colors,
+      int32_t history_index,
+      int32_t history_length);
 
-  // Destroys the WebView.
+  // Destroys the WebView synchronously.
   virtual void Close() = 0;
 
   // Called to inform WebViewImpl that a local main frame has been attached.
@@ -205,20 +227,6 @@ class WebView {
   // previous element in the tab sequence (if reverse is true).
   virtual void AdvanceFocus(bool reverse) {}
 
-  // Zoom ----------------------------------------------------------------
-
-  // Returns the current zoom level.  0 is "original size", and each increment
-  // above or below represents zooming 20% larger or smaller to default limits
-  // of 300% and 50% of original size, respectively.  Only plugins use
-  // non whole-numbers, since they might choose to have specific zoom level so
-  // that fixed-width content is fit-to-page-width, for example.
-  virtual double ZoomLevel() = 0;
-
-  // Changes the zoom level to the specified level, clamping at the limits
-  // noted above, and returns the current zoom level after applying the
-  // change.
-  virtual double SetZoomLevel(double) = 0;
-
   // Gets the scale factor of the page, where 1.0 is the normal size, > 1.0
   // is scaled up, < 1.0 is scaled down.
   virtual float PageScaleFactor() const = 0;
@@ -273,24 +281,30 @@ class WebView {
   // Indicates that view's preferred size changes will be sent to the browser.
   virtual void EnablePreferredSizeChangedMode() = 0;
 
-  // Sets the ratio as computed by computePageScaleConstraints.
-  // TODO(oshima): Remove this once the device scale factor implementation is
-  // fully migrated to use zooming mechanism.
-  virtual void SetDeviceScaleFactor(float) = 0;
+  // Sets the additional zoom factor used for device scale factor, as well as
+  // what portion (if any) of the device scale factor is due to text scaling.
+  // If no text scaling contributed to the device scale factor,
+  // text_scale_multiplier should be 1.0.
+  //
+  // The device_scale_factor is used to scale the content without affecting
+  // zoom level. The text_scale_multiplier is used for sites that are handling
+  // their own text scaling, to remove this portion from the overall
+  // device_scale_factor.
+  virtual void SetZoomFactorForDeviceScaleFactor(
+      float device_scale_factor,
+      float text_scale_multiplier) = 0;
 
-  // Sets the additional zoom factor used for device scale factor. This is used
-  // to scale the content by the device scale factor, without affecting zoom
-  // level.
-  virtual void SetZoomFactorForDeviceScaleFactor(float) = 0;
+  // Gets the device scale zoom that will be factored into the viewport layout
+  // width.
+  virtual float ZoomFactorForViewportLayout() = 0;
 
-  virtual float ZoomFactorForDeviceScaleFactor() = 0;
+  // Gets the device scale zoom that will be factored into the viewport layout
+  // width, but with any text scale multiplier removed.
+  virtual float ZoomFactorForViewportLayoutWithoutTextScale() = 0;
 
   // Override the screen orientation override.
   virtual void SetScreenOrientationOverrideForTesting(
-      absl::optional<display::mojom::ScreenOrientation> orientation) = 0;
-
-  // Enable/Disable synchronous resize mode that is used for web tests.
-  virtual void UseSynchronousResizeModeForTesting(bool enable) = 0;
+      std::optional<display::mojom::ScreenOrientation> orientation) = 0;
 
   // Set the window rect synchronously for testing. The normal flow is an
   // asynchronous request to the browser.
@@ -309,13 +323,6 @@ class WebView {
   // Disable auto resize.
   virtual void DisableAutoResizeForTesting(const gfx::Size& new_size) = 0;
 
-  // Data exchange -------------------------------------------------------
-
-  // Do a hit test equivalent to what would be done for a GestureTap event
-  // that has width/height corresponding to the supplied |tapArea|.
-  virtual WebHitTestResult HitTestResultForTap(const gfx::Point& tap_point,
-                                               const gfx::Size& tap_area) = 0;
-
   // Developer tools -----------------------------------------------------
 
   // Enables device emulation as specified in params.
@@ -333,9 +340,6 @@ class WebView {
 
   // Popup menu ----------------------------------------------------------
 
-  // Sets whether select popup menus should be rendered by the browser.
-  BLINK_EXPORT static void SetUseExternalPopupMenus(bool);
-
   // Cancels and hides the current popup (datetime, select...) if any.
   virtual void CancelPagePopup() = 0;
 
@@ -346,14 +350,13 @@ class WebView {
 
   // Tells all WebView instances to update the visited link state for the
   // specified hash.
-  BLINK_EXPORT static void UpdateVisitedLinkState(uint64_t hash);
+  static void UpdateVisitedLinkState(uint64_t hash);
 
   // Tells all WebView instances to update the visited state for all
   // their links. Use invalidateVisitedLinkHashes to inform that the visitedlink
   // table was changed and the salt was changed too. And all cached visitedlink
   // hashes need to be recalculated.
-  BLINK_EXPORT static void ResetVisitedLinkState(
-      bool invalidate_visited_link_hashes);
+  static void ResetVisitedLinkState(bool invalidate_visited_link_hashes);
 
   // Custom colors -------------------------------------------------------
 
@@ -398,7 +401,7 @@ class WebView {
   // third_party/blink/public/platform/autoplay.mojom
   virtual void AddAutoplayFlags(int32_t flags) = 0;
   virtual void ClearAutoplayFlags() = 0;
-  virtual int32_t AutoplayFlagsForTest() = 0;
+  virtual int32_t AutoplayFlagsForTest() const = 0;
   virtual gfx::Size GetPreferredSizeForTest() = 0;
 
   // Non-composited support -----------------------------------------------
@@ -437,9 +440,8 @@ class WebView {
   // Web preferences ---------------------------------------------------
 
   // Applies blink related preferences to this view.
-  BLINK_EXPORT static void ApplyWebPreferences(
-      const web_pref::WebPreferences& prefs,
-      WebView* web_view);
+  static void ApplyWebPreferences(const web_pref::WebPreferences& prefs,
+                                  WebView* web_view);
 
   virtual void SetWebPreferences(
       const web_pref::WebPreferences& preferences) = 0;
@@ -451,8 +453,8 @@ class WebView {
 
   // History list ---------------------------------------------------------
   virtual void SetHistoryListFromNavigation(
-      int32_t history_offset,
-      absl::optional<int32_t> history_length) = 0;
+      int32_t history_index,
+      std::optional<int32_t> history_length) = 0;
   virtual void IncreaseHistoryListFromNavigation() = 0;
 
   // Session history -----------------------------------------------------
@@ -461,10 +463,13 @@ class WebView {
   virtual int32_t HistoryBackListCount() const = 0;
   virtual int32_t HistoryForwardListCount() const = 0;
 
+  // Returns whether this WebView represents a fenced frame root or not.
+  virtual bool IsFencedFrameRoot() const = 0;
+
   // Misc -------------------------------------------------------------
 
   // Returns the number of live WebView instances in this process.
-  BLINK_EXPORT static size_t GetWebViewCount();
+  static size_t GetWebViewCount();
 
  protected:
   ~WebView() = default;

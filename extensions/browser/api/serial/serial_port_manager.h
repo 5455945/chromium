@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,12 +9,14 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/threading/thread_checker.h"
 #include "content/public/browser/browser_thread.h"
 #include "extensions/browser/api/api_resource_manager.h"
 #include "extensions/browser/browser_context_keyed_api_factory.h"
 #include "extensions/common/api/serial.h"
+#include "extensions/common/extension_id.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/device/public/mojom/serial.mojom.h"
@@ -41,6 +43,10 @@ class SerialPortManager : public BrowserContextKeyedAPI {
   static BrowserContextKeyedAPIFactory<SerialPortManager>* GetFactoryInstance();
 
   explicit SerialPortManager(content::BrowserContext* context);
+
+  SerialPortManager(const SerialPortManager&) = delete;
+  SerialPortManager& operator=(const SerialPortManager&) = delete;
+
   ~SerialPortManager() override;
 
   void GetDevices(
@@ -51,7 +57,7 @@ class SerialPortManager : public BrowserContextKeyedAPI {
                 OpenPortCallback callback);
 
   // Start the poilling process for the connection.
-  void StartConnectionPolling(const std::string& extension_id,
+  void StartConnectionPolling(const ExtensionId& extension_id,
                               int connection_id);
 
   // Allows tests to override how this class binds SerialPortManager receivers.
@@ -60,7 +66,7 @@ class SerialPortManager : public BrowserContextKeyedAPI {
   static void OverrideBinderForTesting(Binder binder);
 
  private:
-  typedef ApiResourceManager<SerialConnection>::ApiResourceData ConnectionData;
+  using ConnectionData = ApiResourceManager<SerialConnection>::ApiResourceData;
   friend class BrowserContextKeyedAPIFactory<SerialPortManager>;
 
   // BrowserContextKeyedAPI implementation.
@@ -73,8 +79,8 @@ class SerialPortManager : public BrowserContextKeyedAPI {
     ReceiveParams(const ReceiveParams& other);
     ~ReceiveParams();
 
-    void* browser_context_id;
-    std::string extension_id;
+    raw_ptr<void> browser_context_id;
+    ExtensionId extension_id;
     scoped_refptr<ConnectionData> connections;
     int connection_id;
   };
@@ -97,15 +103,17 @@ class SerialPortManager : public BrowserContextKeyedAPI {
   mojo::Remote<device::mojom::SerialPortManager> port_manager_;
   content::BrowserThread::ID thread_id_;
   scoped_refptr<ConnectionData> connections_;
-  content::BrowserContext* const context_;
+  const raw_ptr<content::BrowserContext> context_;
 
   THREAD_CHECKER(thread_checker_);
   base::WeakPtrFactory<SerialPortManager> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(SerialPortManager);
 };
 
 }  // namespace api
+
+template <>
+bool BrowserContextKeyedAPIFactory<
+    api::SerialPortManager>::ServiceIsCreatedWithBrowserContext() const;
 
 }  // namespace extensions
 

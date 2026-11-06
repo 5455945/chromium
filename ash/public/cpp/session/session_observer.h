@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,9 @@
 #define ASH_PUBLIC_CPP_SESSION_SESSION_OBSERVER_H_
 
 #include "ash/public/cpp/ash_public_export.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list_types.h"
+#include "base/scoped_observation.h"
 #include "components/session_manager/session_manager_types.h"
 
 class AccountId;
@@ -16,6 +17,7 @@ class PrefService;
 namespace ash {
 
 enum class LoginStatus;
+class SessionController;
 
 class ASH_PUBLIC_EXPORT SessionObserver : public base::CheckedObserver {
  public:
@@ -25,14 +27,32 @@ class ASH_PUBLIC_EXPORT SessionObserver : public base::CheckedObserver {
   // Called when a user session gets added to the existing session.
   virtual void OnUserSessionAdded(const AccountId& account_id) {}
 
-  // Called once the first time a user session starts.
+  // Called when the first user session starts. Note this is called before the
+  // first user session is fully initialized. Post login works might still be
+  // pending.
   virtual void OnFirstSessionStarted() {}
 
-  // Called when a user session is updated, such as avatar change.
-  virtual void OnUserSessionUpdated(const AccountId& account_id) {}
+  // Called when the first user session finishes post login works.
+  virtual void OnFirstSessionReady() {}
 
   // Called when the session state is changed.
   virtual void OnSessionStateChanged(session_manager::SessionState state) {}
+
+  // Called when the Kiosk user session starts. This happens during Kiosk sign
+  // in before the profile is ready, quite early during Kiosk launch.
+  //
+  // This signal complements `OnSessionStateChanged` because `SessionState`
+  // remains `LOGIN_PRIMARY` during most of the Kiosk launch process.
+  //
+  // The expected ordering of events is:
+  // * `OnSessionStateChanged(LOGIN_PRIMARY)` -> Device is in the login screen.
+  // * User launches a Kiosk app from the apps menu, or an app is auto launched.
+  // * `OnAppModeSessionStarted()` -> Kiosk launch started.
+  // * `KioskLaunchController` loads the user profile and installs the app.
+  // * `OnSessionStateChanged(LOGGED_IN_NOT_ACTIVE)` -> Kiosk is ready to
+  //   launch the app.
+  // * `OnSessionStateChanged(ACTIVE)` -> The Kiosk app has launched.
+  virtual void OnAppModeSessionStarted() {}
 
   // Called when the login status is changed. |login_status| is the new status.
   virtual void OnLoginStatusChanged(LoginStatus login_status) {}
@@ -56,8 +76,11 @@ class ASH_PUBLIC_EXPORT SessionObserver : public base::CheckedObserver {
   // initialized. Never called with null.
   virtual void OnActiveUserPrefServiceChanged(PrefService* pref_service) {}
 
+  // Called when the user is going to be removed soon.
+  virtual void OnUserToBeRemoved(const AccountId& account_id) {}
+
  protected:
-  ~SessionObserver() override {}
+  ~SessionObserver() override = default;
 };
 
 // A class to attach / detach an object as a session state observer.
@@ -67,12 +90,18 @@ class ASH_PUBLIC_EXPORT SessionObserver : public base::CheckedObserver {
 class ASH_PUBLIC_EXPORT ScopedSessionObserver {
  public:
   explicit ScopedSessionObserver(SessionObserver* observer);
+
+  ScopedSessionObserver(const ScopedSessionObserver&) = delete;
+  ScopedSessionObserver& operator=(const ScopedSessionObserver&) = delete;
+
   virtual ~ScopedSessionObserver();
 
  private:
-  SessionObserver* const observer_;
-
-  DISALLOW_COPY_AND_ASSIGN(ScopedSessionObserver);
+  // TODO(crbug.com/498581945): remove when the ScopedSessionObserver is
+  // no longer outliving the SessionController it observes.
+  base::ScopedObservation<SessionController,
+                          SessionObserver>::LeakedDanglingUntriaged
+      observation_;
 };
 
 }  // namespace ash

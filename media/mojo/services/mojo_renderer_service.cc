@@ -1,26 +1,27 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/mojo/services/mojo_renderer_service.h"
 
 #include <memory>
+#include <optional>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
+#include "base/time/time.h"
 #include "media/base/cdm_context.h"
-#include "media/base/media_url_demuxer.h"
 #include "media/base/renderer.h"
 #include "media/mojo/common/media_type_converters.h"
 #include "media/mojo/services/media_resource_shim.h"
 #include "media/mojo/services/mojo_cdm_service_context.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "mojo/public/cpp/bindings/message.h"
 
 namespace media {
 
 // Time interval to update media time.
-const int kTimeUpdateIntervalMs = 50;
+constexpr auto kTimeUpdateInterval = base::Milliseconds(125);
 
 // static
 mojo::SelfOwnedReceiverRef<mojom::Renderer> MojoRendererService::Create(
@@ -45,7 +46,7 @@ MojoRendererService::MojoRendererService(
       playback_rate_(0),
       renderer_(std::move(renderer)) {
   DVLOG(1) << __func__;
-  DCHECK(renderer_);
+  CHECK(renderer_, base::NotFatalUntil::M163);
 
   weak_this_ = weak_factory_.GetWeakPtr();
 }
@@ -54,39 +55,35 @@ MojoRendererService::~MojoRendererService() = default;
 
 void MojoRendererService::Initialize(
     mojo::PendingAssociatedRemote<mojom::RendererClient> client,
-    absl::optional<std::vector<mojo::PendingRemote<mojom::DemuxerStream>>>
+    std::optional<std::vector<mojo::PendingRemote<mojom::DemuxerStream>>>
         streams,
-    mojom::MediaUrlParamsPtr media_url_params,
     InitializeCallback callback) {
   DVLOG(1) << __func__;
-  DCHECK_EQ(state_, STATE_UNINITIALIZED);
+  if (state_ != STATE_UNINITIALIZED) {
+    std::move(callback).Run(false);
+    mojo::ReportBadMessage("MojoRendererService is already initialized");
+    return;
+  }
 
   client_.Bind(std::move(client));
   state_ = STATE_INITIALIZING;
 
-  if (!media_url_params) {
-    DCHECK(streams.has_value());
-    media_resource_ = std::make_unique<MediaResourceShim>(
-        std::move(*streams),
-        base::BindOnce(&MojoRendererService::OnAllStreamsReady, weak_this_,
-                       std::move(callback)));
-    return;
-  }
-
-  DCHECK(!media_url_params->media_url.is_empty());
-  media_resource_ = std::make_unique<MediaUrlDemuxer>(
-      nullptr, media_url_params->media_url, media_url_params->site_for_cookies,
-      media_url_params->top_frame_origin, media_url_params->allow_credentials,
-      media_url_params->is_hls);
-  renderer_->Initialize(
-      media_resource_.get(), this,
-      base::BindOnce(&MojoRendererService::OnRendererInitializeDone, weak_this_,
+  CHECK(streams.has_value(), base::NotFatalUntil::M163);
+  media_resource_ = std::make_unique<MediaResourceShim>(
+      std::move(*streams),
+      base::BindOnce(&MojoRendererService::OnAllStreamsReady, weak_this_,
                      std::move(callback)));
 }
 
 void MojoRendererService::Flush(FlushCallback callback) {
   DVLOG(2) << __func__;
-  DCHECK_EQ(state_, STATE_PLAYING);
+  CHECK(state_ == STATE_PLAYING || state_ == STATE_ERROR,
+        base::NotFatalUntil::M163);
+
+  if (state_ == STATE_ERROR) {
+    std::move(callback).Run();
+    return;
+  }
 
   state_ = STATE_FLUSHING;
   CancelPeriodicMediaTimeUpdates();
@@ -102,7 +99,8 @@ void MojoRendererService::StartPlayingFrom(base::TimeDelta time_delta) {
 
 void MojoRendererService::SetPlaybackRate(double playback_rate) {
   DVLOG(2) << __func__ << ": " << playback_rate;
-  DCHECK(state_ == STATE_PLAYING || state_ == STATE_ERROR);
+  CHECK(state_ == STATE_PLAYING || state_ == STATE_ERROR,
+        base::NotFatalUntil::M163);
   playback_rate_ = playback_rate;
   renderer_->SetPlaybackRate(playback_rate);
 }
@@ -112,7 +110,7 @@ void MojoRendererService::SetVolume(float volume) {
 }
 
 void MojoRendererService::SetCdm(
-    const absl::optional<base::UnguessableToken>& cdm_id,
+    const std::optional<base::UnguessableToken>& cdm_id,
     SetCdmCallback callback) {
   if (cdm_context_ref_) {
     DVLOG(1) << "Switching CDM not supported";
@@ -144,19 +142,32 @@ void MojoRendererService::SetCdm(
   // |renderer_|.
   cdm_context_ref_ = std::move(cdm_context_ref);
   auto* cdm_context = cdm_context_ref_->GetCdmContext();
-  DCHECK(cdm_context);
+  CHECK(cdm_context, base::NotFatalUntil::M163);
 
   renderer_->SetCdm(cdm_context,
                     base::BindOnce(&MojoRendererService::OnCdmAttached,
                                    weak_this_, std::move(callback)));
 }
 
+void MojoRendererService::SetLatencyHint(
+    std::optional<base::TimeDelta> latency_hint) {
+  if (latency_hint.has_value() && latency_hint->is_negative()) {
+    CHECK(mojo::IsInMessageDispatch());
+    mojo::ReportBadMessage("Latency hint should be non-negative");
+    return;
+  }
+  renderer_->SetLatencyHint(latency_hint);
+}
+
 void MojoRendererService::OnError(PipelineStatus error) {
   DVLOG(1) << __func__ << "(" << error << ")";
   state_ = STATE_ERROR;
-  StatusCode status_code = PipelineStatusToStatusCode(error);
-  auto status = Status(status_code, PipelineStatusToString(error));
-  client_->OnError(status);
+  CancelPeriodicMediaTimeUpdates();
+  client_->OnError(std::move(error));
+}
+
+void MojoRendererService::OnFallback(PipelineStatus error) {
+  NOTREACHED();
 }
 
 void MojoRendererService::OnEnded() {
@@ -204,14 +215,14 @@ void MojoRendererService::OnVideoOpacityChange(bool opaque) {
   client_->OnVideoOpacityChange(opaque);
 }
 
-void MojoRendererService::OnVideoFrameRateChange(absl::optional<int> fps) {
+void MojoRendererService::OnVideoFrameRateChange(std::optional<int> fps) {
   DVLOG(2) << __func__ << "(" << (fps ? *fps : -1) << ")";
   // TODO(liberato): plumb to |client_|.
 }
 
 void MojoRendererService::OnAllStreamsReady(
     base::OnceCallback<void(bool)> callback) {
-  DCHECK_EQ(state_, STATE_INITIALIZING);
+  CHECK_EQ(state_, STATE_INITIALIZING, base::NotFatalUntil::M163);
 
   renderer_->Initialize(
       media_resource_.get(), this,
@@ -223,7 +234,7 @@ void MojoRendererService::OnRendererInitializeDone(
     base::OnceCallback<void(bool)> callback,
     PipelineStatus status) {
   DVLOG(1) << __func__;
-  DCHECK_EQ(state_, STATE_INITIALIZING);
+  CHECK_EQ(state_, STATE_INITIALIZING, base::NotFatalUntil::M163);
 
   if (status != PIPELINE_OK) {
     state_ = STATE_ERROR;
@@ -242,8 +253,10 @@ void MojoRendererService::UpdateMediaTime(bool force) {
 
   base::TimeDelta max_time = media_time;
   // Allow some slop to account for delays in scheduling time update tasks.
+  // Scale it by the playback rate so that it covers two update intervals of
+  // wall clock time, regardless of how fast media time advances.
   if (time_update_timer_.IsRunning() && (playback_rate_ > 0))
-    max_time += base::TimeDelta::FromMilliseconds(2 * kTimeUpdateIntervalMs);
+    max_time += 2 * playback_rate_ * kTimeUpdateInterval;
 
   client_->OnTimeUpdate(media_time, max_time, base::TimeTicks::Now());
   last_media_time_ = media_time;
@@ -253,23 +266,27 @@ void MojoRendererService::CancelPeriodicMediaTimeUpdates() {
   DVLOG(2) << __func__;
 
   time_update_timer_.Stop();
-  UpdateMediaTime(false);
+  UpdateMediaTime(/*force=*/false);
 }
 
 void MojoRendererService::SchedulePeriodicMediaTimeUpdates() {
   DVLOG(2) << __func__;
 
-  UpdateMediaTime(true);
+  UpdateMediaTime(/*force=*/true);
   time_update_timer_.Start(
-      FROM_HERE, base::TimeDelta::FromMilliseconds(kTimeUpdateIntervalMs),
+      FROM_HERE, kTimeUpdateInterval,
       base::BindRepeating(&MojoRendererService::UpdateMediaTime, weak_this_,
-                          false));
+                          /*force=*/false));
 }
 
 void MojoRendererService::OnFlushCompleted(FlushCallback callback) {
   DVLOG(1) << __func__;
-  DCHECK_EQ(state_, STATE_FLUSHING);
-  state_ = STATE_PLAYING;
+  CHECK(state_ == STATE_FLUSHING || state_ == STATE_ERROR,
+        base::NotFatalUntil::M163);
+
+  if (state_ == STATE_FLUSHING)
+    state_ = STATE_PLAYING;
+
   std::move(callback).Run();
 }
 

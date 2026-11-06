@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -32,10 +32,6 @@ bool PaymentItem::operator==(const PaymentItem& other) const {
          pending == other.pending;
 }
 
-bool PaymentItem::operator!=(const PaymentItem& other) const {
-  return !(*this == other);
-}
-
 PaymentItem& PaymentItem::operator=(const PaymentItem& other) {
   label = other.label;
   if (other.amount) {
@@ -47,32 +43,33 @@ PaymentItem& PaymentItem::operator=(const PaymentItem& other) {
   return *this;
 }
 
-bool PaymentItem::FromDictionaryValue(const base::DictionaryValue& value) {
-  if (!value.GetString(kPaymentItemLabel, &label)) {
+bool PaymentItem::FromValueDict(const base::DictValue& dict) {
+  const std::string* label_val = dict.FindString(kPaymentItemLabel);
+  if (!label_val) {
     return false;
   }
+  label = *label_val;
 
-  const base::DictionaryValue* amount_dict = nullptr;
-  if (!value.GetDictionary(kPaymentItemAmount, &amount_dict)) {
+  const base::DictValue* amount_dict = dict.FindDict(kPaymentItemAmount);
+  if (!amount_dict) {
     return false;
   }
   amount = mojom::PaymentCurrencyAmount::New();
-  if (!PaymentCurrencyAmountFromDictionaryValue(*amount_dict, amount.get())) {
+  if (!PaymentCurrencyAmountFromValueDict(*amount_dict, amount.get())) {
     return false;
   }
 
   // Pending is optional.
-  value.GetBoolean(kPaymentItemPending, &pending);
+  pending = dict.FindBool(kPaymentItemPending).value_or(pending);
 
   return true;
 }
 
-std::unique_ptr<base::DictionaryValue> PaymentItem::ToDictionaryValue() const {
-  auto result = std::make_unique<base::DictionaryValue>();
-  result->SetString(kPaymentItemLabel, label);
-  result->SetDictionary(kPaymentItemAmount,
-                        PaymentCurrencyAmountToDictionaryValue(*amount));
-  result->SetBoolean(kPaymentItemPending, pending);
+base::DictValue PaymentItem::ToValueDict() const {
+  base::DictValue result;
+  result.Set(kPaymentItemLabel, label);
+  result.Set(kPaymentItemAmount, PaymentCurrencyAmountToValueDict(*amount));
+  result.Set(kPaymentItemPending, pending);
 
   return result;
 }

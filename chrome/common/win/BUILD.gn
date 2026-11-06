@@ -1,4 +1,4 @@
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -8,8 +8,8 @@ import("//chrome/process_version_rc_template.gni")
 
 message_compiler("eventlog_messages") {
   visibility = [
-    "//chrome/common",
     ":eventlog_provider",
+    "//chrome/common:common_lib",
   ]
 
   sources = [ "eventlog_messages.mc" ]
@@ -34,8 +34,44 @@ shared_library("eventlog_provider") {
     ldflags = [ "/NOENTRY" ]
   }
 
+  deps = [ ":eventlog_provider_dll_version" ]
+  public_deps = [ ":eventlog_messages" ]
+}
+
+# The delay load hook must be a source_set to ensure that it has external
+# linkage and will correctly emplace over the correct symbols in delayimp.lib at
+# link time.
+source_set("delay_load_hooks") {
+  sources = [
+    "delay_load_failure_hook.cc",
+    "delay_load_notify_hook.cc",
+    "delay_load_notify_hook.h",
+  ]
   deps = [
-    ":eventlog_messages",
-    ":eventlog_provider_dll_version",
+    ":delay_load_failure_support",
+    "//base",
+  ]
+}
+
+source_set("delay_load_failure_support") {
+  sources = [
+    "delay_load_failure_support.cc",
+    "delay_load_failure_support.h",
+  ]
+  deps = [ "//base" ]
+}
+
+source_set("unit_tests") {
+  testonly = true
+  sources = [
+    "delay_load_failure_hook_unittest.cc",
+    "delay_load_notify_hook_unittest.cc",
+  ]
+  deps = [
+    ":delay_load_hooks",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+    "//third_party/abseil-cpp:absl",
   ]
 }

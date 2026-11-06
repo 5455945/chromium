@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,24 +6,24 @@
 #define CHROME_BROWSER_DEVTOOLS_SERIALIZE_HOST_DESCRIPTIONS_H_
 
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/strings/string_piece.h"
 #include "base/values.h"
 
 // DevToolsAgentHost description to be serialized by SerializeHostDescriptions.
 struct HostDescriptionNode {
   std::string name;
   std::string parent_name;
-  base::DictionaryValue representation;
+  base::Value representation;
 };
 
 // A helper function taking a HostDescriptionNode representation of hosts and
-// producing a ListValue representation. The representation contains a list of
-// DictionaryValue for each rooti host, and has DictionaryValues of children
-// injected into a ListValue keyed |child_key| in the parent's DictionaryValue.
+// producing a list of representations. The representation contains a list of
+// dictionaries for each root in host, and has dictionaries of children
+// injected into a list keyed |child_key| in the parent's dictionary.
 base::ListValue SerializeHostDescriptions(
     std::vector<HostDescriptionNode> hosts,
-    base::StringPiece child_key);
+    std::string_view child_key);
 
 #endif  // CHROME_BROWSER_DEVTOOLS_SERIALIZE_HOST_DESCRIPTIONS_H_

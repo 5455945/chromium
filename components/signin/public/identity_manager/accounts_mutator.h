@@ -1,46 +1,58 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_SIGNIN_PUBLIC_IDENTITY_MANAGER_ACCOUNTS_MUTATOR_H_
 #define COMPONENTS_SIGNIN_PUBLIC_IDENTITY_MANAGER_ACCOUNTS_MUTATOR_H_
 
+#include <optional>
 #include <string>
+#include <vector>
 
-#include "base/macros.h"
-#include "build/chromeos_buildflags.h"
 #include "components/signin/public/base/signin_buildflags.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "components/signin/public/base/signin_metrics.h"
+#include "components/signin/public/identity_manager/token_binding_info.h"
 
 namespace signin_metrics {
 enum class SourceForRefreshTokenOperation;
 }
 
 struct CoreAccountId;
+class GaiaId;
 
 namespace signin {
+
+enum class Tribool;
 
 // AccountsMutator is the interface to support seeding of account info and
 // mutation of refresh tokens for the user's Gaia accounts.
 class AccountsMutator {
  public:
   AccountsMutator() = default;
+
+  AccountsMutator(const AccountsMutator&) = delete;
+  AccountsMutator& operator=(const AccountsMutator&) = delete;
+
   virtual ~AccountsMutator() = default;
 
   // Updates the information of the account associated with |gaia_id|, first
   // adding that account to the system if it is not known.
+  // Passing `std::nullopt` for `access_point` will not update the access point,
+  // and in particular will not clear it if it was previously set.
   virtual CoreAccountId AddOrUpdateAccount(
-      const std::string& gaia_id,
+      const GaiaId& gaia_id,
       const std::string& email,
       const std::string& refresh_token,
       bool is_under_advanced_protection,
-      signin_metrics::SourceForRefreshTokenOperation source) = 0;
+      std::optional<signin_metrics::AccessPoint> access_point,
+      signin_metrics::SourceForRefreshTokenOperation source,
+      const TokenBindingInfo& info = {}) = 0;
 
   // Updates the information about account identified by |account_id|.
-  virtual void UpdateAccountInfo(
-      const CoreAccountId& account_id,
-      absl::optional<bool> is_child_account,
-      absl::optional<bool> is_under_advanced_protection) = 0;
+  // If kUnknown is passed, the attribute is not updated.
+  virtual void UpdateAccountInfo(const CoreAccountId& account_id,
+                                 Tribool is_child_account,
+                                 Tribool is_under_advanced_protection) = 0;
 
   // Removes the account given by |account_id|. Also revokes the token
   // server-side if needed.
@@ -69,17 +81,14 @@ class AccountsMutator {
                            const CoreAccountId& account_id) = 0;
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Seeds account into AccountTrackerService. Used by UserSessionManager to
   // manually seed the primary account before credentials are loaded.
-  // TODO(https://crbug.com/1195359): Remove after adding an account cache to
+  // TODO(crbug.com/40176006): Remove after adding an account cache to
   // AccountManagerFacade.
-  virtual CoreAccountId SeedAccountInfo(const std::string& gaia,
+  virtual CoreAccountId SeedAccountInfo(const GaiaId& gaia,
                                         const std::string& email) = 0;
 #endif
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(AccountsMutator);
 };
 
 }  // namespace signin

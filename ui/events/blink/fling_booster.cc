@@ -1,11 +1,10 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/events/blink/fling_booster.h"
 
 #include "base/trace_event/trace_event.h"
-#include "ui/events/blink/blink_features.h"
 
 using blink::WebGestureEvent;
 using blink::WebInputEvent;
@@ -23,32 +22,25 @@ const double kMinBoostTouchScrollSpeedSquare = 150 * 150.;
 // ticks, scrolls or flings of sufficient velocity relative to the current fling
 // are received. The default value on Android native views is 40ms, but we use a
 // slightly increased value to accomodate small IPC message delays.
-constexpr base::TimeDelta kFlingBoostTimeoutDelay =
-    base::TimeDelta::FromSecondsD(0.05);
+constexpr base::TimeDelta kFlingBoostTimeoutDelay = base::Seconds(0.05);
 }  // namespace
 
 namespace ui {
 
 gfx::Vector2dF FlingBooster::GetVelocityForFlingStart(
     const blink::WebGestureEvent& fling_start) {
-  DCHECK_EQ(blink::WebInputEvent::Type::kGestureFlingStart,
-            fling_start.GetType());
+  CHECK_EQ(blink::WebInputEvent::Type::kGestureFlingStart,
+           fling_start.GetType(), base::NotFatalUntil::M163);
   gfx::Vector2dF velocity(fling_start.data.fling_start.velocity_x,
                           fling_start.data.fling_start.velocity_y);
 
-  static const bool reduce_horizontal_fling_velocity =
-      base::FeatureList::IsEnabled(features::kReduceHorizontalFlingVelocity);
-  if (reduce_horizontal_fling_velocity) {
-    // Reduce the horizontal velocity of flings.
-    velocity.Scale(0.2f, 1.0f);
-  }
   TRACE_EVENT2("input", "FlingBooster::GetVelocityForFlingStart", "vx",
                velocity.x(), "vy", velocity.y());
 
   if (ShouldBoostFling(fling_start)) {
     velocity += previous_fling_starting_velocity_;
-    TRACE_EVENT_INSTANT2("input", "Boosted", TRACE_EVENT_SCOPE_THREAD, "vx",
-                         velocity.x(), "vy", velocity.y());
+    TRACE_EVENT_INSTANT("input", "Boosted", "vx", velocity.x(), "vy",
+                        velocity.y());
   }
 
   Reset();
@@ -71,7 +63,7 @@ void FlingBooster::ObserveGestureEvent(const WebGestureEvent& gesture_event) {
   // it, reset the booster since we're not going to boost the current gesture.
   if (!cutoff_time_for_boost_.is_null() &&
       gesture_event.TimeStamp() > cutoff_time_for_boost_) {
-    TRACE_EVENT_INSTANT0("input", "Timeout", TRACE_EVENT_SCOPE_THREAD);
+    TRACE_EVENT_INSTANT("input", "Timeout");
     Reset();
     return;
   }
@@ -102,7 +94,7 @@ void FlingBooster::ObserveGestureEvent(const WebGestureEvent& gesture_event) {
       gfx::Vector2dF delta(gesture_event.data.scroll_update.delta_x,
                            gesture_event.data.scroll_update.delta_y);
       if (gfx::DotProduct(previous_fling_starting_velocity_, delta) <= 0) {
-        TRACE_EVENT_INSTANT0("input", "Direction", TRACE_EVENT_SCOPE_THREAD);
+        TRACE_EVENT_INSTANT("input", "Direction");
         Reset();
         return;
       }
@@ -120,7 +112,7 @@ void FlingBooster::ObserveGestureEvent(const WebGestureEvent& gesture_event) {
               gfx::ScaleVector2d(delta, 1. / time_since_last_boost_event);
           if (scroll_velocity.LengthSquared() <
               kMinBoostTouchScrollSpeedSquare) {
-            TRACE_EVENT_INSTANT0("input", "Velocity", TRACE_EVENT_SCOPE_THREAD);
+            TRACE_EVENT_INSTANT("input", "Velocity");
             Reset();
             return;
           }
@@ -138,8 +130,7 @@ void FlingBooster::ObserveGestureEvent(const WebGestureEvent& gesture_event) {
     }
     case WebInputEvent::Type::kGestureFlingCancel: {
       if (gesture_event.data.fling_cancel.prevent_boosting) {
-        TRACE_EVENT_INSTANT0("input", "GFC PreventBoosting",
-                             TRACE_EVENT_SCOPE_THREAD);
+        TRACE_EVENT_INSTANT("input", "GFC PreventBoosting");
         Reset();
         return;
       }
@@ -164,35 +155,30 @@ void FlingBooster::ObserveProgressFling(
 }
 
 bool FlingBooster::ShouldBoostFling(const WebGestureEvent& fling_start_event) {
-  DCHECK_EQ(WebInputEvent::Type::kGestureFlingStart,
-            fling_start_event.GetType());
+  CHECK_EQ(WebInputEvent::Type::kGestureFlingStart, fling_start_event.GetType(),
+           base::NotFatalUntil::M163);
   if (previous_fling_starting_velocity_.IsZero()) {
-    TRACE_EVENT_INSTANT0("input", "No Boost - NoActiveFling",
-                         TRACE_EVENT_SCOPE_THREAD);
+    TRACE_EVENT_INSTANT("input", "No Boost - NoActiveFling");
     return false;
   }
 
   if (source_device_ != fling_start_event.SourceDevice()) {
-    TRACE_EVENT_INSTANT0("input", "No Boost - SourceDevice",
-                         TRACE_EVENT_SCOPE_THREAD);
+    TRACE_EVENT_INSTANT("input", "No Boost - SourceDevice");
     return false;
   }
 
   if (modifiers_ != fling_start_event.GetModifiers()) {
-    TRACE_EVENT_INSTANT0("input", "No Boost - Modifiers",
-                         TRACE_EVENT_SCOPE_THREAD);
+    TRACE_EVENT_INSTANT("input", "No Boost - Modifiers");
     return false;
   }
 
   if (cutoff_time_for_boost_.is_null()) {
-    TRACE_EVENT_INSTANT0("input", "No Boost - CutoffTimeUnset",
-                         TRACE_EVENT_SCOPE_THREAD);
+    TRACE_EVENT_INSTANT("input", "No Boost - CutoffTimeUnset");
     return false;
   }
 
   if (fling_start_event.TimeStamp() > cutoff_time_for_boost_) {
-    TRACE_EVENT_INSTANT0("input", "No Boost - Timeout",
-                         TRACE_EVENT_SCOPE_THREAD);
+    TRACE_EVENT_INSTANT("input", "No Boost - Timeout");
     return false;
   }
 
@@ -202,20 +188,17 @@ bool FlingBooster::ShouldBoostFling(const WebGestureEvent& fling_start_event) {
 
   if (gfx::DotProduct(previous_fling_starting_velocity_, new_fling_velocity) <=
       0) {
-    TRACE_EVENT_INSTANT0("input", "No Boost - Direction",
-                         TRACE_EVENT_SCOPE_THREAD);
+    TRACE_EVENT_INSTANT("input", "No Boost - Direction");
     return false;
   }
 
   if (current_fling_velocity_.LengthSquared() < kMinBoostFlingSpeedSquare) {
-    TRACE_EVENT_INSTANT0("input", "No Boost - CurrentVelocity",
-                         TRACE_EVENT_SCOPE_THREAD);
+    TRACE_EVENT_INSTANT("input", "No Boost - CurrentVelocity");
     return false;
   }
 
   if (new_fling_velocity.LengthSquared() < kMinBoostFlingSpeedSquare) {
-    TRACE_EVENT_INSTANT0("input", "No Boost - NewVelocity",
-                         TRACE_EVENT_SCOPE_THREAD);
+    TRACE_EVENT_INSTANT("input", "No Boost - NewVelocity");
     return false;
   }
 

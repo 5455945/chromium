@@ -29,6 +29,8 @@
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/html/canvas/canvas_rendering_context.h"
 #include "third_party/blink/renderer/core/html/canvas/html_canvas_element.h"
+#include "third_party/blink/renderer/core/layout/layout_object_inlines.h"
+#include "third_party/blink/renderer/core/layout/layout_replaced.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/paint/html_canvas_painter.h"
@@ -36,31 +38,30 @@
 namespace blink {
 
 LayoutHTMLCanvas::LayoutHTMLCanvas(HTMLCanvasElement* element)
-    : LayoutReplaced(element, LayoutSize(element->Size())) {
+    : LayoutReplaced(element), natural_size_(PhysicalSize(element->Size())) {
   View()->GetFrameView()->SetIsVisuallyNonEmpty();
-}
-
-PaintLayerType LayoutHTMLCanvas::LayerTypeRequired() const {
-  NOT_DESTROYED();
-  return kNormalPaintLayer;
 }
 
 void LayoutHTMLCanvas::PaintReplaced(const PaintInfo& paint_info,
                                      const PhysicalOffset& paint_offset) const {
   NOT_DESTROYED();
+  if (ChildPaintBlockedByDisplayLock()) {
+    return;
+  }
   HTMLCanvasPainter(*this).PaintReplaced(paint_info, paint_offset);
 }
 
 void LayoutHTMLCanvas::CanvasSizeChanged() {
   NOT_DESTROYED();
-  IntSize canvas_size = To<HTMLCanvasElement>(GetNode())->Size();
-  LayoutSize zoomed_size(canvas_size.Width() * StyleRef().EffectiveZoom(),
-                         canvas_size.Height() * StyleRef().EffectiveZoom());
+  gfx::Size canvas_size = To<HTMLCanvasElement>(GetNode())->Size();
+  PhysicalSize zoomed_size = PhysicalSize(canvas_size);
+  zoomed_size.Scale(Style().EffectiveZoom());
 
-  if (zoomed_size == IntrinsicSize())
+  if (zoomed_size == natural_size_) {
     return;
+  }
 
-  SetIntrinsicSize(zoomed_size);
+  natural_size_ = zoomed_size;
 
   if (!Parent())
     return;
@@ -69,51 +70,96 @@ void LayoutHTMLCanvas::CanvasSizeChanged() {
   SetNeedsLayout(layout_invalidation_reason::kSizeChanged);
 }
 
+PhysicalNaturalSizingInfo LayoutHTMLCanvas::GetNaturalDimensions() const {
+  NOT_DESTROYED();
+  return PhysicalNaturalSizingInfo::MakeFixed(natural_size_);
+}
+
 bool LayoutHTMLCanvas::DrawsBackgroundOntoContentLayer() const {
+  NOT_DESTROYED();
   auto* canvas = To<HTMLCanvasElement>(GetNode());
+  if (canvas->IsInCanvasSubtree() && canvas->IsContentDrawable()) {
+    return false;
+  }
   if (canvas->SurfaceLayerBridge())
     return false;
   CanvasRenderingContext* context = canvas->RenderingContext();
   if (!context || !context->IsComposited() || !context->CcLayer())
     return false;
-  if (StyleRef().HasBoxDecorations() || StyleRef().HasBackgroundImage())
+  if (Style().HasBoxDecorations() || Style().HasBackgroundImage()) {
     return false;
+  }
   // If there is no background, there is nothing to support.
-  if (!StyleRef().HasBackground())
+  if (!Style().HasBackground()) {
     return true;
+  }
   // Simple background that is contained within the contents rect.
   return ReplacedContentRect().Contains(
-      PhysicalBackgroundRect(kBackgroundClipRect));
+      PhysicalBackgroundRect(kBackgroundPaintedExtent));
 }
 
 void LayoutHTMLCanvas::InvalidatePaint(
     const PaintInvalidatorContext& context) const {
   NOT_DESTROYED();
   auto* element = To<HTMLCanvasElement>(GetNode());
-  if (element->IsDirty())
-    element->DoDeferredPaintInvalidation();
+  if (element->IsDirty()) {
+    if (element->DoDeferredPaintInvalidation() &&
+        !element->ShouldSkipPaintInvalidation()) {
+      GetMutableForPainting().SetShouldDoFullPaintInvalidation(
+          PaintInvalidationReason::kLayout);
+    }
+  }
 
   LayoutReplaced::InvalidatePaint(context);
 }
 
-CompositingReasons LayoutHTMLCanvas::AdditionalCompositingReasons() const {
+void LayoutHTMLCanvas::StyleDidChange(
+    StyleDifference diff,
+    const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
+    const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
-  if (To<HTMLCanvasElement>(GetNode())->ShouldBeDirectComposited())
-    return CompositingReason::kCanvas;
-  return CompositingReason::kNone;
+  LayoutReplaced::StyleDidChange(diff, old_style, new_style,
+                                 style_change_context);
+  To<HTMLCanvasElement>(GetNode())->StyleDidChange(old_style, new_style);
 }
 
-void LayoutHTMLCanvas::StyleDidChange(StyleDifference diff,
-                                      const ComputedStyle* old_style) {
+void LayoutHTMLCanvas::WillBeDestroyed(const ComputedStyle* style) {
   NOT_DESTROYED();
-  LayoutReplaced::StyleDidChange(diff, old_style);
-  To<HTMLCanvasElement>(GetNode())->StyleDidChange(old_style, StyleRef());
-}
-
-void LayoutHTMLCanvas::WillBeDestroyed() {
-  NOT_DESTROYED();
-  LayoutReplaced::WillBeDestroyed();
+  LayoutReplaced::WillBeDestroyed(style);
   To<HTMLCanvasElement>(GetNode())->LayoutObjectDestroyed();
+}
+
+void LayoutHTMLCanvas::Trace(Visitor* visitor) const {
+  visitor->Trace(children_);
+  LayoutReplaced::Trace(visitor);
+}
+
+bool LayoutHTMLCanvas::IsChildAllowed(LayoutObject* child,
+                                      const ComputedStyle& style) const {
+  NOT_DESTROYED();
+  const auto* canvas = To<HTMLCanvasElement>(GetNode());
+  if (!canvas->IsContentDrawable()) {
+    return false;
+  }
+
+  // <canvas> supports laying out children as in-flow block level boxes, all
+  // sized by the <canvas> box. The StyleAdjuster will blockify and force static
+  // positioning on children as necessary.
+  //
+  // Text boxes, their anonymous inline wrappers, or elements which cannot be
+  // blockified are rejected below.
+  //
+  // TODO(crbug.com/564820084): Support pseudo-element children (e.g.,
+  // `::before`/`::after` on the canvas or on `display: contents` children) so
+  // their generated content is exposed in the accessibility tree.
+  auto* child_element = DynamicTo<Element>(child->GetNode());
+  if (!child->IsBox() || !child_element || child_element->IsPseudoElement()) {
+    return false;
+  }
+
+  CHECK(!style.IsDisplayInlineType());
+  return true;
 }
 
 }  // namespace blink

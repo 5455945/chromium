@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,16 +6,21 @@
 #define CHROME_BROWSER_PDF_PDF_EXTENSION_UTIL_H_
 
 #include <string>
+#include <vector>
 
-#include "build/chromeos_buildflags.h"
+#include "base/values.h"
 #include "pdf/buildflags.h"
+#include "ui/base/webui/resource_path.h"
 
 #if !BUILDFLAG(ENABLE_PDF)
 #error "PDF must be enabled"
 #endif
 
-namespace base {
-class Value;
+class GURL;
+
+namespace content {
+class RenderFrameHost;
+class WebContents;
 }
 
 namespace pdf_extension_util {
@@ -32,13 +37,33 @@ enum class PdfViewerContext {
   kAll,
 };
 
-// Adds all strings used by the PDF Viewer depending on the provided `context`.
-void AddStrings(PdfViewerContext context, base::Value* dict);
+// Gets all strings used by the PDF Viewer depending on the provided `context`.
+base::DictValue GetStrings(PdfViewerContext context);
 
-// Adds additional data used by the PDF Viewer UI in `dict`, for example
-// whether certain features are enabled/disabled.
-// `enable_annotations` only applies on platforms that supports annotations.
-void AddAdditionalData(bool enable_annotations, base::Value* dict);
+// Gets additional data used by the PDF Viewer UI. e.g. whether certain features
+// are enabled/disabled.
+base::DictValue GetAdditionalData(content::WebContents* web_contents);
+
+// Returns the entries in `resources` that are relevant to `context`.
+// `context` must be `PdfViewerContext::kPdfViewer` or
+// `PdfViewerContext::kPrintPreview`.
+std::vector<webui::ResourcePath> GetResources(PdfViewerContext context);
+
+// For OOPIF PDF viewer only. Returns true if successfully sends a save event to
+// the PDF viewer, or false otherwise. Only successful if the PDF plugin should
+// handle the save event.
+bool MaybeDispatchSaveEvent(content::RenderFrameHost* embedder_host);
+
+// Dispatches an extension event to the PDF viewer containing an updated PDF URL
+// that was intended to be navigated to so the viewer can update its viewport
+// based on the fragment of that URL. Only the PDF viewer embedded in
+// `embedder_host` handles the event. Does nothing if `embedder_host` does not
+// embed a PDF viewer.
+void DispatchShouldUpdateViewportEvent(content::RenderFrameHost* embedder_host,
+                                       const GURL& new_pdf_url);
+
+// Returns true if the glic summarize button should be shown.
+bool ShouldShowGlicSummarizeButton(content::WebContents* web_contents);
 
 }  // namespace pdf_extension_util
 

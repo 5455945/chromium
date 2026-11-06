@@ -1,16 +1,22 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "android_webview/browser/gfx/root_frame_sink.h"
 
+#include <algorithm>
+
 #include "android_webview/browser/gfx/child_frame.h"
 #include "android_webview/browser/gfx/display_scheduler_webview.h"
 #include "android_webview/browser/gfx/viz_compositor_thread_runner_webview.h"
+#include "base/memory/raw_ptr.h"
 #include "base/trace_event/trace_event.h"
+#include "components/viz/common/features.h"
 #include "components/viz/common/surfaces/frame_sink_id_allocator.h"
 #include "components/viz/service/frame_sinks/compositor_frame_sink_support.h"
 #include "components/viz/service/frame_sinks/frame_sink_manager_impl.h"
+#include "components/viz/service/surfaces/frame_index_constants.h"
+#include "components/viz/service/surfaces/surface.h"
 
 namespace android_webview {
 
@@ -23,6 +29,8 @@ viz::FrameSinkId AllocateParentSinkId() {
 
 }  // namespace
 
+// Lifetime: WebView
+// Instance owned by RootFrameSink
 class RootFrameSink::ChildCompositorFrameSink
     : public viz::mojom::CompositorFrameSinkClient {
  public:
@@ -45,14 +53,19 @@ class RootFrameSink::ChildCompositorFrameSink
     ReclaimResources(std::move(resources));
   }
   void OnBeginFrame(const viz::BeginFrameArgs& args,
-                    const viz::FrameTimingDetailsMap& feedbacks) override {}
+                    const viz::FrameTimingDetailsMap& feedbacks,
+                    std::vector<viz::ReturnedResource> resources) override {}
   void OnBeginFramePausedChanged(bool paused) override {}
   void ReclaimResources(std::vector<viz::ReturnedResource> resources) override {
     owner_->ReturnResources(frame_sink_id_, layer_tree_frame_sink_id_,
                             std::move(resources));
   }
   void OnCompositorFrameTransitionDirectiveProcessed(
-      uint32_t sequence_id) override {}
+      uint32_t sequence_id) override {
+    owner_->OnCompositorFrameTransitionDirectiveProcessed(
+        frame_sink_id_, layer_tree_frame_sink_id_, sequence_id);
+  }
+  void OnSurfaceEvicted(const viz::LocalSurfaceId& local_surface_id) override {}
 
   const viz::FrameSinkId frame_sink_id() { return frame_sink_id_; }
 
@@ -64,7 +77,7 @@ class RootFrameSink::ChildCompositorFrameSink
   void SubmitCompositorFrame(
       const viz::LocalSurfaceId& local_surface_id,
       viz::CompositorFrame frame,
-      absl::optional<viz::HitTestRegionList> hit_test_region_list) {
+      std::optional<viz::HitTestRegionList> hit_test_region_list) {
     size_ = frame.size_in_pixels();
     support()->SubmitCompositorFrame(local_surface_id, std::move(frame),
                                      std::move(hit_test_region_list));
@@ -76,7 +89,7 @@ class RootFrameSink::ChildCompositorFrameSink
   }
 
  private:
-  RootFrameSink* const owner_;
+  const raw_ptr<RootFrameSink> owner_;
   const uint32_t layer_tree_frame_sink_id_;
   const viz::FrameSinkId frame_sink_id_;
   std::unique_ptr<viz::CompositorFrameSinkSupport> support_;
@@ -93,6 +106,8 @@ RootFrameSink::RootFrameSink(RootFrameSinkClient* client)
   begin_frame_source_ = std::make_unique<viz::ExternalBeginFrameSource>(this);
   GetFrameSinkManager()->RegisterBeginFrameSource(begin_frame_source_.get(),
                                                   root_frame_sink_id_);
+
+  support_->SetBeginFrameSource(nullptr);
 }
 
 RootFrameSink::~RootFrameSink() {
@@ -100,7 +115,7 @@ RootFrameSink::~RootFrameSink() {
   GetFrameSinkManager()->UnregisterBeginFrameSource(begin_frame_source_.get());
   begin_frame_source_.reset();
   support_.reset();
-  GetFrameSinkManager()->InvalidateFrameSinkId(root_frame_sink_id_);
+  GetFrameSinkManager()->InvalidateFrameSinkId(root_frame_sink_id_, {});
 }
 
 viz::FrameSinkManagerImpl* RootFrameSink::GetFrameSinkManager() {
@@ -158,12 +173,16 @@ void RootFrameSink::ReclaimResources(
 
 void RootFrameSink::OnNeedsBeginFrames(bool needs_begin_frames) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  TRACE_EVENT_INSTANT1("android_webview", "RootFrameSink::OnNeedsBeginFrames",
-                       TRACE_EVENT_SCOPE_THREAD, "needs_begin_frames",
-                       needs_begin_frames);
-  needs_begin_frames_ = needs_begin_frames;
-  if (client_)
-    client_->SetNeedsBeginFrames(needs_begin_frames);
+  TRACE_EVENT_INSTANT("android_webview", "RootFrameSink::OnNeedsBeginFrames",
+                      "needs_begin_frames", needs_begin_frames);
+  clients_need_begin_frames_ = needs_begin_frames;
+
+  // Make sure that we subscribed to BF if client needs them. We don't
+  // unsubscribe from BF here to make sure that we invalidated for the latest
+  // frames in necessary. We will stop observing them later in BeginFrame()
+  // once we are done.
+  if (clients_need_begin_frames_)
+    UpdateNeedsBeginFrames(true);
 }
 
 void RootFrameSink::AddChildFrameSinkId(const viz::FrameSinkId& frame_sink_id) {
@@ -181,20 +200,116 @@ void RootFrameSink::RemoveChildFrameSinkId(
                                                       frame_sink_id);
 }
 
+void RootFrameSink::SetContainedSurfaces(
+    const base::flat_set<viz::SurfaceId>& ids) {
+  contained_surfaces_ = ids;
+  for (auto it = last_invalidated_frame_index_.begin();
+       it != last_invalidated_frame_index_.end();) {
+    if (!contained_surfaces_.contains(it->first))
+      it = last_invalidated_frame_index_.erase(it);
+    else
+      ++it;
+  }
+}
+
+void RootFrameSink::UpdateNeedsBeginFrames(bool needs_begin_frames) {
+  if (needs_begin_frames_ != needs_begin_frames) {
+    needs_begin_frames_ = needs_begin_frames;
+    if (client_)
+      client_->SetNeedsBeginFrames(needs_begin_frames_);
+  }
+}
+
+bool RootFrameSink::HasPendingDependency(const viz::SurfaceId& surface_id) {
+  auto* surface =
+      GetFrameSinkManager()->surface_manager()->GetSurfaceForId(surface_id);
+
+  if (!surface || !surface->HasActiveFrame())
+    return true;
+
+  for (auto& range : surface->GetActiveFrame().metadata.referenced_surfaces) {
+    if (HasPendingDependency(range.end()))
+      return true;
+  }
+  return false;
+}
+
+bool RootFrameSink::ProcessVisibleSurfacesInvalidation() {
+  bool invalidate = false;
+
+  // There are few possible cases:
+  // * viz::Surface is visible (i.e was embedded last frame and any scheduled
+  // draws don't change that). In this case surface is in `contained_surfaces`
+  // and we need to invalidate for any CompositorFrame that we haven't
+  // invalidated yet. This is a steady state.
+  // * viz::Surface is visible, but there are scheduled draws that remove it. In
+  // this case surface is in `contained_surfaces`, but technically there is no
+  // need to invalidate it. We can't know that it will disappear, so we
+  // invalidate anyway.
+  // * viz::Surface is visible, but has pending dependencies (embedded surfaces
+  // without active frame). In this case surface is in `contained_surfaces`, but
+  // the dependents aren't. Invalidate in this case pessimistically assuming
+  // there are uncommitted frames that can be activated on commit in dependent
+  // frames.
+  // * viz::Surface is not visible yet, but there is a pending draw that will
+  // embed it. In this case the surface is not in `contained_surfaces` yet, so
+  // we can't process it here. After the draw will happen it's possible that
+  // there are uncommitted frames that are already scheduled to draw, but have
+  // not been processed here. This can cause extra invalidation.
+  // * viz::Surface is not visible and there is no pending draw. This shouldn't
+  // be possible because the only way to embed a child surface is for the root
+  // renderer to submit a compositor frame and invalidation of it is handled
+  // separately.
+
+  // If there is pending dependency, invalidate.
+  if (root_local_surface_id_allocator_.HasValidLocalSurfaceId()) {
+    auto surface_id = viz::SurfaceId(
+        root_frame_sink_id(),
+        root_local_surface_id_allocator_.GetCurrentLocalSurfaceId());
+    invalidate = invalidate || HasPendingDependency(surface_id);
+  }
+
+  for (auto& surface_id : contained_surfaces_) {
+    auto* surface =
+        GetFrameSinkManager()->surface_manager()->GetSurfaceForId(surface_id);
+    if (surface) {
+      // Track last frame_index that we invalidated for. Note, that this doesn't
+      // take into account what current frame is or what display compositor will
+      // draw. The intent here is to invalidate once for each CompositorFrame in
+      // the Surface we see.
+      auto& last_invalidated_index = last_invalidated_frame_index_[surface_id];
+      auto uncommited_frame_index =
+          last_invalidated_index > viz::kInvalidFrameIndex
+              ? surface->GetUncommitedFrameIndexNewerThan(
+                    last_invalidated_index)
+              : surface->GetFirstUncommitedFrameIndex();
+      if (uncommited_frame_index.has_value()) {
+        invalidate = true;
+        last_invalidated_index = uncommited_frame_index.value();
+      }
+    }
+  }
+
+  return invalidate;
+}
+
 bool RootFrameSink::BeginFrame(const viz::BeginFrameArgs& args,
                                bool had_input_event) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
-  // This handles only invalidation of sub clients, root client invalidation is
-  // handled by Invalidate() from cc to |SynchronousLayerTreeFrameSink|. So we
-  // return false unless we already have damage.
-  bool invalidate = had_input_event || needs_draw_;
+  // We call ProcessVisibleSurfacesInvalidation() to make sure heuristic updated
+  // it's state (e.g last invalidated begin frame args).
+  bool invalidate = ProcessVisibleSurfacesInvalidation() || had_input_event;
 
-  TRACE_EVENT_INSTANT1("android_webview", "RootFrameSink::BeginFrame",
-                       TRACE_EVENT_SCOPE_THREAD, "invalidate", invalidate);
+  TRACE_EVENT_INSTANT("android_webview", "RootFrameSink::BeginFrame",
+                      "invalidate", invalidate);
 
-  if (needs_begin_frames_) {
+  if (clients_need_begin_frames_) {
     begin_frame_source_->OnBeginFrame(args);
+  } else if (!invalidate) {
+    // Client don't need begin frames and we didn't invalidate, so we don't
+    // need them either.
+    UpdateNeedsBeginFrames(false);
   }
 
   return invalidate;
@@ -205,15 +320,10 @@ void RootFrameSink::SetBeginFrameSourcePaused(bool paused) {
   begin_frame_source_->OnSetBeginFrameSourcePaused(paused);
 }
 
-void RootFrameSink::SetNeedsDraw(bool needs_draw) {
-  needs_draw_ = needs_draw;
-
-  // It's possible that client submitted last frame and unsubscribed from
-  // BeginFrames, but we haven't draw it yet.
-  if (!needs_begin_frames_ && needs_draw) {
-    if (client_)
-      client_->Invalidate();
-  }
+void RootFrameSink::OnNewUncommittedFrame(const viz::SurfaceId& surface_id) {
+  // If there is new uncommitted frame in the surface that affects display, make
+  // sure we request a begin frame to check if we need to invalidate next frame.
+  UpdateNeedsBeginFrames(true);
 }
 
 bool RootFrameSink::IsChildSurface(const viz::FrameSinkId& frame_sink_id) {
@@ -227,6 +337,16 @@ void RootFrameSink::ReturnResources(
   if (client_)
     client_->ReturnResources(frame_sink_id, layer_tree_frame_sink_id,
                              std::move(resources));
+}
+
+void RootFrameSink::OnCompositorFrameTransitionDirectiveProcessed(
+    viz::FrameSinkId frame_sink_id,
+    uint32_t layer_tree_frame_sink_id,
+    uint32_t sequence_id) {
+  if (client_) {
+    client_->OnCompositorFrameTransitionDirectiveProcessed(
+        frame_sink_id, layer_tree_frame_sink_id, sequence_id);
+  }
 }
 
 void RootFrameSink::DettachClient() {
@@ -245,6 +365,31 @@ void RootFrameSink::SubmitChildCompositorFrame(ChildFrame* child_frame) {
     child_sink_support_ = std::make_unique<ChildCompositorFrameSink>(
         this, child_frame->layer_tree_frame_sink_id,
         child_frame->frame_sink_id);
+    child_frame_renderer_threads_ = {};
+  }
+  if (child_frame_renderer_threads_ != child_frame->renderer_threads) {
+    child_frame_renderer_threads_ = child_frame->renderer_threads;
+    // Thread IDs from a sandboxed renderer process, thus untrusted and
+    // require verification.
+    // child_frame_renderer_threads_ are used only to avoid unnessary
+    // reverification, they shouldn't be used a source of truth in
+    // GetChildFrameRendererThreadIds.
+    child_sink_support_->support()->SetThreads(
+        /*from_untrusted_client=*/true, child_frame->renderer_threads);
+  }
+
+  // Root renderer frame MUST be presented synchronously with UI, so we can't
+  // delay activation. Note, it's not part of invalidation heuristic, but for
+  // safety we update deadline only on the new path, on the old path there are
+  // almost no embedded surfaces anyway.
+  if (features::UsePerDependencyDeadlines()) {
+    for (auto& dep : child_frame->frame->metadata.activation_dependencies) {
+      dep.deadline_in_frames = 0u;
+    }
+  } else {
+    // TODO(crbug.com/540877772): Remove once kPerDependencyDeadlines is
+    // launched.
+    child_frame->frame->metadata.deadline = viz::FrameDeadline::MakeZero();
   }
 
   child_sink_support_->SubmitCompositorFrame(
@@ -254,6 +399,10 @@ void RootFrameSink::SubmitChildCompositorFrame(ChildFrame* child_frame) {
 }
 
 viz::FrameTimingDetailsMap RootFrameSink::TakeChildFrameTimingDetailsMap() {
+  // Take timing for root CompositorFrameSinkSupport to avoid them accumulating.
+  // We don't use them anyhow.
+  std::ignore = support_->TakeFrameTimingDetailsMap();
+
   if (child_sink_support_)
     return child_sink_support_->support()->TakeFrameTimingDetailsMap();
   return viz::FrameTimingDetailsMap();
@@ -267,9 +416,39 @@ gfx::Size RootFrameSink::GetChildFrameSize() {
   return gfx::Size();
 }
 
+base::flat_set<base::PlatformThreadId>
+RootFrameSink::GetChildFrameRendererThreadIds() {
+  if (child_sink_support_) {
+    base::flat_set<base::PlatformThreadId> thread_ids;
+    std::vector<viz::Thread> support_threads =
+        child_sink_support_->support()->GetThreads();
+    for (const auto& thread : support_threads) {
+      thread_ids.insert(thread.id);
+    }
+    return thread_ids;
+  }
+  return {};
+}
+
 void RootFrameSink::EvictChildSurface(const viz::SurfaceId& surface_id) {
   DCHECK(child_sink_support_);
   child_sink_support_->EvictSurface(surface_id);
+}
+
+void RootFrameSink::OnCaptureStarted(const viz::FrameSinkId& frame_sink_id) {
+  if (!std::ranges::contains(contained_surfaces_, frame_sink_id,
+                             &viz::SurfaceId::frame_sink_id)) {
+    return;
+  }
+  // When a capture is started we need to force an invalidate.
+  if (client_)
+    client_->Invalidate();
+}
+
+void RootFrameSink::InvalidateForOverlays() {
+  if (client_) {
+    client_->Invalidate();
+  }
 }
 
 }  // namespace android_webview

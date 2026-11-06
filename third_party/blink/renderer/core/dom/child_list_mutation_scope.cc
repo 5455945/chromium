@@ -33,6 +33,7 @@
 #include "third_party/blink/renderer/core/dom/mutation_observer_interest_group.h"
 #include "third_party/blink/renderer/core/dom/mutation_record.h"
 #include "third_party/blink/renderer/core/dom/static_node_list.h"
+#include "third_party/blink/renderer/platform/heap/disallow_new_wrapper.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 
@@ -46,9 +47,10 @@ typedef HeapHashMap<Member<Node>, Member<ChildListMutationAccumulator>>
     AccumulatorMap;
 
 static AccumulatorMap& GetAccumulatorMap() {
-  DEFINE_STATIC_LOCAL(Persistent<AccumulatorMap>, map,
-                      (MakeGarbageCollected<AccumulatorMap>()));
-  return *map;
+  using AccumulatorMapHolder = DisallowNewWrapper<AccumulatorMap>;
+  DEFINE_STATIC_LOCAL(Persistent<AccumulatorMapHolder>, holder,
+                      (MakeGarbageCollected<AccumulatorMapHolder>()));
+  return holder->Value();
 }
 
 ChildListMutationAccumulator::ChildListMutationAccumulator(
@@ -57,7 +59,9 @@ ChildListMutationAccumulator::ChildListMutationAccumulator(
     : target_(target),
       last_added_(nullptr),
       observers_(observers),
-      mutation_scopes_(0) {}
+      mutation_scopes_(0) {
+  DCHECK(observers_);
+}
 
 void ChildListMutationAccumulator::LeaveMutationScope() {
   DCHECK_GT(mutation_scopes_, 0u);
@@ -70,17 +74,25 @@ void ChildListMutationAccumulator::LeaveMutationScope() {
 
 ChildListMutationAccumulator* ChildListMutationAccumulator::GetOrCreate(
     Node& target) {
-  AccumulatorMap::AddResult result =
-      GetAccumulatorMap().insert(&target, nullptr);
-  ChildListMutationAccumulator* accumulator;
-  if (!result.is_new_entry) {
-    accumulator = result.stored_value->value;
-  } else {
-    accumulator = MakeGarbageCollected<ChildListMutationAccumulator>(
-        &target,
-        MutationObserverInterestGroup::CreateForChildListMutation(target));
-    result.stored_value->value = accumulator;
+  AccumulatorMap& map = GetAccumulatorMap();
+  // The map only has entries while a ChildListMutationScope for a node with
+  // interested observers is on the stack, so it is almost always empty.
+  if (!map.empty()) {
+    auto it = map.find(&target);
+    if (it != map.end()) {
+      return it->value.Get();
+    }
   }
+  // Usually nothing observes |target| (e.g. a detached subtree that is being
+  // built); only set up an accumulator when there is somebody to deliver to.
+  MutationObserverInterestGroup* observers =
+      MutationObserverInterestGroup::CreateForChildListMutation(target);
+  if (!observers) {
+    return nullptr;
+  }
+  auto* accumulator =
+      MakeGarbageCollected<ChildListMutationAccumulator>(&target, observers);
+  map.insert(&target, accumulator);
   return accumulator;
 }
 
@@ -90,8 +102,7 @@ inline bool ChildListMutationAccumulator::IsAddedNodeInOrder(Node& child) {
 }
 
 void ChildListMutationAccumulator::ChildAdded(Node& child) {
-  DCHECK(HasObservers());
-
+  DCHECK(observers_);
   if (!IsAddedNodeInOrder(child))
     EnqueueMutationRecord();
 
@@ -109,9 +120,8 @@ inline bool ChildListMutationAccumulator::IsRemovedNodeInOrder(Node& child) {
 }
 
 void ChildListMutationAccumulator::WillRemoveChild(Node& child) {
-  DCHECK(HasObservers());
-
-  if (!added_nodes_.IsEmpty() || !IsRemovedNodeInOrder(child))
+  DCHECK(observers_);
+  if (!added_nodes_.empty() || !IsRemovedNodeInOrder(child))
     EnqueueMutationRecord();
 
   if (IsEmpty()) {
@@ -126,7 +136,7 @@ void ChildListMutationAccumulator::WillRemoveChild(Node& child) {
 }
 
 void ChildListMutationAccumulator::EnqueueMutationRecord() {
-  DCHECK(HasObservers());
+  DCHECK(observers_);
   DCHECK(!IsEmpty());
 
   StaticNodeList* added_nodes = StaticNodeList::Adopt(added_nodes_);
@@ -140,7 +150,7 @@ void ChildListMutationAccumulator::EnqueueMutationRecord() {
 }
 
 bool ChildListMutationAccumulator::IsEmpty() {
-  bool result = removed_nodes_.IsEmpty() && added_nodes_.IsEmpty();
+  bool result = removed_nodes_.empty() && added_nodes_.empty();
 #if DCHECK_IS_ON()
   if (result) {
     DCHECK(!previous_sibling_);

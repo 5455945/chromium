@@ -1,11 +1,8 @@
-# Copyright (c) 2012 The Chromium Authors. All rights reserved.
+# Copyright 2012 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-'''The 'grit sdiff' tool.
-'''
-
-from __future__ import print_function
+'''The 'grit sdiff' tool.'''
 
 import os
 import getopt
@@ -50,8 +47,9 @@ class DiffStructures(interface.Tool):
     return 'View differences without regard for translateable portions.'
 
   def Run(self, global_opts, args):
-    (opts, args) = getopt.getopt(args, 's:e:t:',
-                                 ('help', 'left_encoding=', 'right_encoding='))
+    (opts, args) = getopt.getopt(
+      args, 's:e:t:', ('help', 'left_encoding=', 'right_encoding=')
+    )
     for key, val in opts:
       if key == '-s':
         self.section = val
@@ -104,16 +102,17 @@ class DiffStructures(interface.Tool):
     Return:
       'c:\\temp\\werlkjsdf334.tmp'
     """
-    original = structure._GATHERERS[self.structure_type](original_filename,
-                                                         extkey=self.section,
-                                                         encoding=encoding)
+    original = structure._GATHERERS[self.structure_type](
+      original_filename, extkey=self.section, encoding=encoding
+    )
     original.Parse()
     translated = original.Translate(constants.CONSTANT_LANGUAGE, False)
 
     fname = tempfile.mktemp()
     with util.WrapOutputStream(open(fname, 'wb')) as writer:
-      writer.write("Original filename: %s\n=============\n\n"
-                       % original_filename)
+      writer.write(
+        "Original filename: %s\n=============\n\n" % original_filename
+      )
       writer.write(translated)  # write in UTF-8
 
     return fname

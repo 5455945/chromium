@@ -1,17 +1,19 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/test/base/interactive_test_utils.h"
 
+#include <windows.h>
+
 #include <Psapi.h>
 
 #include <memory>
 
-#include "base/bind.h"
 #include "base/command_line.h"
-#include "base/cxx17_backports.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/process/process_handle.h"
@@ -19,10 +21,9 @@
 #include "base/threading/platform_thread.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/test/base/interactive_test_utils_aura.h"
 #include "chrome/test/base/process_lineage_win.h"
-#include "chrome/test/base/save_desktop_snapshot_win.h"
+#include "chrome/test/base/save_desktop_snapshot.h"
 #include "chrome/test/base/window_contents_as_string_win.h"
 #include "ui/aura/window_tree_host.h"
 #include "ui/base/test/ui_controls.h"
@@ -32,20 +33,13 @@
 namespace ui_test_utils {
 
 void HideNativeWindow(gfx::NativeWindow window) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  HideNativeWindowAura(window);
-#else
   HWND hwnd = window->GetHost()->GetAcceleratedWidget();
   ::ShowWindow(hwnd, SW_HIDE);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 }
 
 bool ShowAndFocusNativeWindow(gfx::NativeWindow window) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  ShowAndFocusNativeWindowAura(window);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
   window->Show();
-  // Always make sure the window hosting ash is visible and focused.
+  // Always make sure the window is visible and focused.
   HWND hwnd = window->GetHost()->GetAcceleratedWidget();
 
   ::ShowWindow(hwnd, SW_SHOW);
@@ -69,7 +63,7 @@ bool ShowAndFocusNativeWindow(gfx::NativeWindow window) {
     // Emit some diagnostic information about the foreground window and its
     // owning process.
     wchar_t window_title[256];
-    GetWindowText(foreground_window, window_title, base::size(window_title));
+    GetWindowText(foreground_window, window_title, std::size(window_title));
 
     std::wstring lineage_str;
     std::wstring window_contents;
@@ -132,8 +126,10 @@ bool ShowAndFocusNativeWindow(gfx::NativeWindow window) {
         base::BindRepeating(
             [](HWND foreground_window,
                const base::RepeatingClosure& quit_closure, int* polls) {
-              if (!*polls-- || ::GetForegroundWindow() != foreground_window)
+              if (UNSAFE_TODO(!*polls--) ||
+                  ::GetForegroundWindow() != foreground_window) {
                 quit_closure.Run();
+              }
             },
             foreground_window, run_loop.QuitClosure(),
             base::Owned(std::make_unique<int>(

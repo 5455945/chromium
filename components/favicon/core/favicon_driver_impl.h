@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include <memory>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "components/favicon/core/favicon_driver.h"
 #include "components/favicon/core/favicon_handler.h"
 
@@ -29,6 +29,9 @@ struct FaviconURL;
 class FaviconDriverImpl : public FaviconDriver,
                           public FaviconHandler::Delegate {
  public:
+  FaviconDriverImpl(const FaviconDriverImpl&) = delete;
+  FaviconDriverImpl& operator=(const FaviconDriverImpl&) = delete;
+
   // FaviconDriver implementation.
   void FetchFavicon(const GURL& page_url, bool is_same_document) override;
 
@@ -37,14 +40,19 @@ class FaviconDriverImpl : public FaviconDriver,
   bool HasPendingTasksForTest();
 
  protected:
-  // |favicon_service| may be null, which means favicons are not saved.
+  // `favicon_service` may be null, which means favicons are not saved.
   explicit FaviconDriverImpl(CoreFaviconService* favicon_service);
   ~FaviconDriverImpl() override;
 
-  // Informs CoreFaviconService that the favicon for |url| is out of date. If
-  // |force_reload| is true, then discard information about favicon download
+  // Informs CoreFaviconService that the favicon for `url` is out of date. If
+  // `force_reload` is true, then discard information about favicon download
   // failures.
   void SetFaviconOutOfDateForPage(const GURL& url, bool force_reload);
+
+  // Cancels pending favicon work for all handlers and clears their page URLs.
+  // Call for committed navigations that do not call FetchFavicon(), such as
+  // error pages.
+  void CancelPendingFaviconRequests();
 
   // Broadcasts new favicon URL candidates to FaviconHandlers.
   void OnUpdateCandidates(const GURL& page_url,
@@ -58,12 +66,10 @@ class FaviconDriverImpl : public FaviconDriver,
 
   // KeyedService used by FaviconDriverImpl. It may be null during testing,
   // but if it is defined, it must outlive the FaviconDriverImpl.
-  CoreFaviconService* favicon_service_;
+  raw_ptr<CoreFaviconService> favicon_service_;
 
   // FaviconHandlers used to download the different kind of favicons.
   std::vector<std::unique_ptr<FaviconHandler>> handlers_;
-
-  DISALLOW_COPY_AND_ASSIGN(FaviconDriverImpl);
 };
 
 }  // namespace favicon

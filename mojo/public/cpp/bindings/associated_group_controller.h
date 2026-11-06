@@ -1,18 +1,20 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef MOJO_PUBLIC_CPP_BINDINGS_ASSOCIATED_GROUP_CONTROLLER_H_
 #define MOJO_PUBLIC_CPP_BINDINGS_ASSOCIATED_GROUP_CONTROLLER_H_
 
+#include <optional>
+
 #include "base/component_export.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
 #include "mojo/public/cpp/bindings/disconnect_reason.h"
 #include "mojo/public/cpp/bindings/interface_id.h"
 #include "mojo/public/cpp/bindings/scoped_interface_endpoint_handle.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace mojo {
 
@@ -21,9 +23,23 @@ class InterfaceEndpointController;
 
 // An internal interface used to manage endpoints within an associated group,
 // which corresponds to one end of a message pipe.
+//
+// Subclasses are bound to a specific sequence. Release() is overridden so that
+// off-sequence ref-count decrements are posted to the bound sequence instead
+// of running immediately. This ensures destruction always occurs on the bound
+// sequence, preventing races between destruction and sequence-affine callbacks
+// (e.g., Connector's pipe error handler).
 class COMPONENT_EXPORT(MOJO_CPP_BINDINGS_BASE) AssociatedGroupController
     : public base::RefCountedThreadSafe<AssociatedGroupController> {
  public:
+  AssociatedGroupController() = delete;
+
+  // Hides the base class's Release() to ensure ref-count decrements always
+  // happen on the bound sequence. If we're off-sequence, the Release is posted
+  // rather than run immediately, so that destruction and sequence-affine
+  // teardown are properly serialized.
+  void Release() const;
+
   // Associates an interface with this AssociatedGroupController's message pipe.
   // It takes ownership of |handle_to_send| and returns an interface ID that
   // could be sent by any endpoints within the same associated group.
@@ -47,7 +63,14 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS_BASE) AssociatedGroupController
   // Closes an interface endpoint handle.
   virtual void CloseEndpointHandle(
       InterfaceId id,
-      const absl::optional<DisconnectReason>& reason) = 0;
+      const std::optional<DisconnectReason>& reason) = 0;
+
+  // Notifies the controller that the peer of interface `id` has been closed.
+  // Normally this notification comes from a remote client on the underlying
+  // pipe, but in some cases the remote client may never have been made aware of
+  // the new associated interface and will not be able to send such a
+  // notification.
+  virtual void NotifyLocalEndpointOfPeerClosure(InterfaceId id) = 0;
 
   // Attaches a client to the specified endpoint to send and receive messages.
   // The returned object is still owned by the controller. It must only be used
@@ -67,12 +90,16 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS_BASE) AssociatedGroupController
   // and notifies all interfaces running on this pipe.
   virtual void RaiseError() = 0;
 
-  // Indicates whether or this endpoint prefers to accept outgoing messages in
-  // serializaed form only.
-  virtual bool PrefersSerializedMessages() = 0;
-
  protected:
   friend class base::RefCountedThreadSafe<AssociatedGroupController>;
+
+  explicit AssociatedGroupController(
+      scoped_refptr<base::SequencedTaskRunner> task_runner);
+
+  // Returns the task runner for the sequence this controller is bound to.
+  const scoped_refptr<base::SequencedTaskRunner>& task_runner() const {
+    return bound_task_runner_;
+  }
 
   // Creates a new ScopedInterfaceEndpointHandle within this associated group.
   ScopedInterfaceEndpointHandle CreateScopedInterfaceEndpointHandle(
@@ -88,6 +115,11 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS_BASE) AssociatedGroupController
                          InterfaceId id);
 
   virtual ~AssociatedGroupController();
+
+ private:
+  // The task runner for the sequence this controller is bound to. Used by
+  // Release() to post the final ref-count decrement to the correct sequence.
+  scoped_refptr<base::SequencedTaskRunner> bound_task_runner_;
 };
 
 }  // namespace mojo

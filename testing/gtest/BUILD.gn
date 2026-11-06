@@ -1,4 +1,4 @@
-# Copyright 2014 The Chromium Authors. All rights reserved.
+# Copyright 2014 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -68,6 +68,10 @@ static_library("gtest") {
   if (is_ios && gtest_include_ios_coverage) {
     public_deps += [ ":ios_coverage_utils" ]
   }
+
+  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+  # enable the diagnostic by removing this line.
+  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 # The file/directory layout of Google Test is not yet considered stable. Until
@@ -76,6 +80,15 @@ static_library("gtest") {
 source_set("gtest_main") {
   testonly = true
   deps = [ "//third_party/googletest:gtest_main" ]
+}
+
+if (is_apple && gtest_include_objc_support) {
+  # Tests for gtest_mac.h. Linked into //chrome/test:unit_tests on Mac.
+  source_set("unit_tests") {
+    testonly = true
+    sources = [ "../gtest_mac_unittest.mm" ]
+    deps = [ ":gtest" ]
+  }
 }
 
 if (is_ios) {

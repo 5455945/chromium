@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,34 +6,42 @@
 
 #include <memory>
 
+#include "base/feature_list.h"
 #include "base/logging.h"
 #include "base/memory/platform_shared_memory_region.h"
 #include "base/memory/ptr_util.h"
+#include "base/notreached.h"
 #include "build/build_config.h"
 #include "media/capture/video/video_capture_buffer_handle.h"
+#include "media/capture/video/video_capture_buffer_pool_util.h"
 #include "media/capture/video/video_capture_buffer_tracker.h"
 #include "media/capture/video/video_capture_buffer_tracker_factory_impl.h"
-#include "ui/gfx/buffer_format_util.h"
-
-#if defined(OS_WIN)
-#include "media/capture/video/win/video_capture_buffer_tracker_factory_win.h"
-#endif  // defined(OS_WIN)
+#include "media/capture/video/video_capture_device_client.h"
 
 namespace media {
 
 VideoCaptureBufferPoolImpl::VideoCaptureBufferPoolImpl(
+    VideoCaptureBufferType buffer_type)
+    : VideoCaptureBufferPoolImpl(
+          buffer_type,
+          kVideoCaptureDefaultMaxBufferPoolSize,
+          std::make_unique<media::VideoCaptureBufferTrackerFactoryImpl>()) {}
+
+VideoCaptureBufferPoolImpl::VideoCaptureBufferPoolImpl(
     VideoCaptureBufferType buffer_type,
     int count)
+    : VideoCaptureBufferPoolImpl(
+          buffer_type,
+          count,
+          std::make_unique<media::VideoCaptureBufferTrackerFactoryImpl>()) {}
+
+VideoCaptureBufferPoolImpl::VideoCaptureBufferPoolImpl(
+    VideoCaptureBufferType buffer_type,
+    int count,
+    std::unique_ptr<VideoCaptureBufferTrackerFactory> buffer_tracker_factory)
     : buffer_type_(buffer_type),
       count_(count),
-#if defined(OS_WIN)
-      buffer_tracker_factory_(
-          std::make_unique<media::VideoCaptureBufferTrackerFactoryWin>())
-#else
-      buffer_tracker_factory_(
-          std::make_unique<media::VideoCaptureBufferTrackerFactoryImpl>())
-#endif
-{
+      buffer_tracker_factory_(std::move(buffer_tracker_factory)) {
   DCHECK_GT(count, 0);
 }
 
@@ -46,54 +54,8 @@ VideoCaptureBufferPoolImpl::DuplicateAsUnsafeRegion(int buffer_id) {
   VideoCaptureBufferTracker* tracker = GetTracker(buffer_id);
   if (!tracker) {
     NOTREACHED() << "Invalid buffer_id.";
-    return {};
   }
   return tracker->DuplicateAsUnsafeRegion();
-}
-
-mojo::ScopedSharedBufferHandle
-VideoCaptureBufferPoolImpl::DuplicateAsMojoBuffer(int buffer_id) {
-  base::AutoLock lock(lock_);
-
-  VideoCaptureBufferTracker* tracker = GetTracker(buffer_id);
-  if (!tracker) {
-    NOTREACHED() << "Invalid buffer_id.";
-    return mojo::ScopedSharedBufferHandle();
-  }
-  return tracker->DuplicateAsMojoBuffer();
-}
-
-mojom::SharedMemoryViaRawFileDescriptorPtr
-VideoCaptureBufferPoolImpl::CreateSharedMemoryViaRawFileDescriptorStruct(
-    int buffer_id) {
-// This requires platforms where base::SharedMemoryHandle is backed by a
-// file descriptor.
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
-  base::AutoLock lock(lock_);
-
-  VideoCaptureBufferTracker* tracker = GetTracker(buffer_id);
-  if (!tracker) {
-    NOTREACHED() << "Invalid buffer_id.";
-    return 0u;
-  }
-
-  // Convert the mojo::ScopedSharedBufferHandle to a PlatformSharedMemoryRegion
-  // in order to extract the platform file descriptor.
-  base::subtle::PlatformSharedMemoryRegion platform_region =
-      mojo::UnwrapPlatformSharedMemoryRegion(tracker->DuplicateAsMojoBuffer());
-  if (!platform_region.IsValid()) {
-    NOTREACHED();
-    return 0u;
-  }
-  base::subtle::ScopedFDPair fds = platform_region.PassPlatformHandle();
-  auto result = mojom::SharedMemoryViaRawFileDescriptor::New();
-  result->file_descriptor_handle = mojo::PlatformHandle(std::move(fds.fd));
-  result->shared_memory_size_in_bytes = tracker->GetMemorySizeInBytes();
-  return result;
-#else
-  NOTREACHED();
-  return mojom::SharedMemoryViaRawFileDescriptorPtr();
-#endif
 }
 
 std::unique_ptr<VideoCaptureBufferHandle>
@@ -103,7 +65,6 @@ VideoCaptureBufferPoolImpl::GetHandleForInProcessAccess(int buffer_id) {
   VideoCaptureBufferTracker* tracker = GetTracker(buffer_id);
   if (!tracker) {
     NOTREACHED() << "Invalid buffer_id.";
-    return nullptr;
   }
 
   return tracker->GetMemoryMappedAccess();
@@ -112,14 +73,35 @@ VideoCaptureBufferPoolImpl::GetHandleForInProcessAccess(int buffer_id) {
 gfx::GpuMemoryBufferHandle VideoCaptureBufferPoolImpl::GetGpuMemoryBufferHandle(
     int buffer_id) {
   base::AutoLock lock(lock_);
-
   VideoCaptureBufferTracker* tracker = GetTracker(buffer_id);
   if (!tracker) {
     NOTREACHED() << "Invalid buffer_id.";
-    return gfx::GpuMemoryBufferHandle();
   }
 
   return tracker->GetGpuMemoryBufferHandle();
+}
+
+media::mojom::VideoBufferHandlePtr
+VideoCaptureBufferPoolImpl::GetVideoBufferHandle(int buffer_id) {
+  base::AutoLock lock(lock_);
+  VideoCaptureBufferTracker* tracker = GetTracker(buffer_id);
+  if (!tracker) {
+    NOTREACHED() << "Invalid buffer_id.";
+  }
+
+  return tracker->GetVideoBufferHandle();
+}
+
+VideoCaptureBufferType VideoCaptureBufferPoolImpl::GetBufferType(
+    int buffer_id) {
+  base::AutoLock lock(lock_);
+
+  VideoCaptureBufferTracker* tracker = GetTracker(buffer_id);
+  if (!tracker) {
+    NOTREACHED() << "Unrecognized buffer id, buffer_id=" << buffer_id;
+  }
+
+  return tracker->GetBufferType();
 }
 
 VideoCaptureDevice::Client::ReserveResult
@@ -129,11 +111,12 @@ VideoCaptureBufferPoolImpl::ReserveForProducer(
     const mojom::PlaneStridesPtr& strides,
     int frame_feedback_id,
     int* buffer_id,
-    int* buffer_id_to_drop) {
+    int* buffer_id_to_drop,
+    const gfx::ColorSpace& color_space) {
   base::AutoLock lock(lock_);
   return ReserveForProducerInternal(dimensions, format, strides,
                                     frame_feedback_id, buffer_id,
-                                    buffer_id_to_drop);
+                                    buffer_id_to_drop, color_space);
 }
 
 void VideoCaptureBufferPoolImpl::RelinquishProducerReservation(int buffer_id) {
@@ -141,28 +124,37 @@ void VideoCaptureBufferPoolImpl::RelinquishProducerReservation(int buffer_id) {
   VideoCaptureBufferTracker* tracker = GetTracker(buffer_id);
   if (!tracker) {
     NOTREACHED() << "Invalid buffer_id.";
-    return;
   }
   tracker->SetHeldByProducer(false);
 }
 
-int VideoCaptureBufferPoolImpl::ReserveIdForExternalBuffer(
-    const gfx::GpuMemoryBufferHandle& handle,
-    int* buffer_id_to_drop) {
+VideoCaptureDevice::Client::ReserveResult
+VideoCaptureBufferPoolImpl::ReserveIdForExternalBuffer(
+    CapturedExternalVideoBuffer buffer,
+    const gfx::Size& dimensions,
+    int* buffer_id_to_drop,
+    int* buffer_id) {
+  DCHECK(buffer_id);
+  DCHECK(buffer_id_to_drop);
   base::AutoLock lock(lock_);
 
   // Look for a tracker that matches this buffer and is not in use. While
   // iterating, find the least recently used tracker.
   *buffer_id_to_drop = kInvalidId;
+  *buffer_id = kInvalidId;
   auto lru_tracker_it = trackers_.end();
   for (auto it = trackers_.begin(); it != trackers_.end(); ++it) {
     VideoCaptureBufferTracker* const tracker = it->second.get();
-    if (tracker->IsHeldByProducerOrConsumer())
+    if (tracker->IsHeldByProducerOrConsumer()) {
       continue;
+    }
 
-    if (tracker->IsSameGpuMemoryBuffer(handle)) {
+    if (it->first > last_invalidated_id_ &&
+        tracker->IsSameGpuMemoryBuffer(buffer.handle)) {
       tracker->SetHeldByProducer(true);
-      return it->first;
+      tracker->UpdateExternalData(std::move(buffer));
+      *buffer_id = it->first;
+      return VideoCaptureDevice::Client::ReserveResult::kSucceeded;
     }
 
     if (lru_tracker_it == trackers_.end() ||
@@ -172,20 +164,51 @@ int VideoCaptureBufferPoolImpl::ReserveIdForExternalBuffer(
     }
   }
 
-  // Free the least recently used tracker, if needed.
-  if (trackers_.size() >= static_cast<size_t>(count_) &&
-      lru_tracker_it != trackers_.end()) {
+  // Preferably grow the pool by creating a new tracker. If we're at maximum
+  // size, reallocate by deleting an existing one.
+  if (trackers_.size() == static_cast<size_t>(count_)) {
+    if (lru_tracker_it == trackers_.end()) {
+      // We're out of space, and can't find an unused tracker to reallocate.
+      DLOG(ERROR) << __func__
+                  << " max buffer count exceeded count_ = " << count_;
+      return VideoCaptureDevice::Client::ReserveResult::kMaxBufferCountExceeded;
+    }
     *buffer_id_to_drop = lru_tracker_it->first;
     trackers_.erase(lru_tracker_it);
   }
 
   // Create the new tracker.
-  const int new_buffer_id = next_buffer_id_++;
-  auto tracker =
-      buffer_tracker_factory_->CreateTrackerForExternalGpuMemoryBuffer(handle);
+  std::unique_ptr<VideoCaptureBufferTracker> tracker;
+  if (buffer.client_shared_image) {
+    tracker = buffer_tracker_factory_->CreateTrackerForExternalBuffer(
+        std::move(buffer));
+  } else {
+    // We need to keep |buffer| alive for UpdateExternalData(), so we move only
+    // the necessary parts for tracker creation.
+    CapturedExternalVideoBuffer factory_buffer = CapturedExternalVideoBuffer(
+        std::move(buffer.handle), buffer.format, buffer.color_space);
+    tracker = buffer_tracker_factory_->CreateTrackerForExternalBuffer(
+        std::move(factory_buffer));
+
+#if BUILDFLAG(IS_WIN)
+    // Windows needs to create buffer from external handle, but mac doesn't.
+    if (tracker &&
+        tracker->Init(dimensions, buffer.format.pixel_format, nullptr)) {
+      tracker->UpdateExternalData(std::move(buffer));
+    }
+#endif
+  }
+
+  if (!tracker) {
+    DLOG(ERROR) << "Error initializing VideoCaptureBufferTracker";
+    return VideoCaptureDevice::Client::ReserveResult::kAllocationFailed;
+  }
+
   tracker->SetHeldByProducer(true);
+  const int new_buffer_id = next_buffer_id_++;
   trackers_[new_buffer_id] = std::move(tracker);
-  return new_buffer_id;
+  *buffer_id = new_buffer_id;
+  return VideoCaptureDevice::Client::ReserveResult::kSucceeded;
 }
 
 void VideoCaptureBufferPoolImpl::HoldForConsumers(int buffer_id,
@@ -194,7 +217,6 @@ void VideoCaptureBufferPoolImpl::HoldForConsumers(int buffer_id,
   VideoCaptureBufferTracker* tracker = GetTracker(buffer_id);
   if (!tracker) {
     NOTREACHED() << "Invalid buffer_id.";
-    return;
   }
   tracker->AddConsumerHolds(num_clients);
   // Note: The buffer will stay held by the producer until
@@ -208,7 +230,6 @@ void VideoCaptureBufferPoolImpl::RelinquishConsumerHold(int buffer_id,
   VideoCaptureBufferTracker* tracker = GetTracker(buffer_id);
   if (!tracker) {
     NOTREACHED() << "Invalid buffer_id.";
-    return;
   }
   tracker->RemoveConsumerHolds(num_clients);
 }
@@ -224,6 +245,11 @@ double VideoCaptureBufferPoolImpl::GetBufferPoolUtilization() const {
   return static_cast<double>(num_buffers_held) / count_;
 }
 
+void VideoCaptureBufferPoolImpl::InvalidateBuffers() {
+  base::AutoLock lock(lock_);
+  last_invalidated_id_ = next_buffer_id_ - 1;
+}
+
 VideoCaptureDevice::Client::ReserveResult
 VideoCaptureBufferPoolImpl::ReserveForProducerInternal(
     const gfx::Size& dimensions,
@@ -231,18 +257,22 @@ VideoCaptureBufferPoolImpl::ReserveForProducerInternal(
     const mojom::PlaneStridesPtr& strides,
     int frame_feedback_id,
     int* buffer_id,
-    int* buffer_id_to_drop) {
+    int* buffer_id_to_drop,
+    const gfx::ColorSpace& color_space) {
   lock_.AssertAcquired();
 
   // Look for a tracker that's allocated, big enough, and not in use. Track the
   // largest one that's not big enough, in case we have to reallocate a tracker.
   *buffer_id_to_drop = kInvalidId;
+  *buffer_id = kInvalidId;
   uint32_t largest_memory_size_in_bytes = 0;
   auto tracker_to_drop = trackers_.end();
   for (auto it = trackers_.begin(); it != trackers_.end(); ++it) {
     VideoCaptureBufferTracker* const tracker = it->second.get();
     if (!tracker->IsHeldByProducerOrConsumer()) {
-      if (tracker->IsReusableForFormat(dimensions, pixel_format, strides)) {
+      if (it->first > last_invalidated_id_ &&
+          tracker->IsReusableForFormat(dimensions, pixel_format, strides,
+                                       color_space)) {
         // Reuse this buffer
         tracker->SetHeldByProducer(true);
         tracker->set_frame_feedback_id(frame_feedback_id);
@@ -261,7 +291,6 @@ VideoCaptureBufferPoolImpl::ReserveForProducerInternal(
   if (trackers_.size() == static_cast<size_t>(count_)) {
     if (tracker_to_drop == trackers_.end()) {
       // We're out of space, and can't find an unused tracker to reallocate.
-      *buffer_id = kInvalidId;
       DLOG(ERROR) << __func__
                   << " max buffer count exceeded count_ = " << count_;
       return VideoCaptureDevice::Client::ReserveResult::kMaxBufferCountExceeded;
@@ -271,20 +300,34 @@ VideoCaptureBufferPoolImpl::ReserveForProducerInternal(
   }
 
   // Create the new tracker.
-  const int new_buffer_id = next_buffer_id_++;
-
+  VideoCaptureBufferType buffer_type = buffer_type_;
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+  // If MediaFoundationD3D11VideoCapture or VideoCaptureDeviceAVFoundation fails
+  // to produce NV12 as is expected on these platforms when the target buffer
+  // type is `kGpuMemoryBuffer`, a shared memory buffer may be sent instead. The
+  // same applies to `kSharedImage` pools, whose trackers only support NV12.
+  if ((buffer_type == VideoCaptureBufferType::kGpuMemoryBuffer ||
+       buffer_type == VideoCaptureBufferType::kSharedImage) &&
+      pixel_format != PIXEL_FORMAT_NV12
+#if BUILDFLAG(IS_MAC)
+      && base::FeatureList::IsEnabled(kFallbackToSharedMemoryIfNotNv12OnMac)
+#endif
+  ) {
+    buffer_type = VideoCaptureBufferType::kSharedMemory;
+  }
+#endif
   std::unique_ptr<VideoCaptureBufferTracker> tracker =
-      buffer_tracker_factory_->CreateTracker(buffer_type_);
-  if (!tracker || !tracker->Init(dimensions, pixel_format, strides)) {
+      buffer_tracker_factory_->CreateTracker(buffer_type);
+  if (!tracker ||
+      !tracker->Init(dimensions, pixel_format, strides, color_space)) {
     DLOG(ERROR) << "Error initializing VideoCaptureBufferTracker";
-    *buffer_id = kInvalidId;
     return VideoCaptureDevice::Client::ReserveResult::kAllocationFailed;
   }
 
   tracker->SetHeldByProducer(true);
   tracker->set_frame_feedback_id(frame_feedback_id);
+  const int new_buffer_id = next_buffer_id_++;
   trackers_[new_buffer_id] = std::move(tracker);
-
   *buffer_id = new_buffer_id;
   return VideoCaptureDevice::Client::ReserveResult::kSucceeded;
 }
@@ -294,5 +337,4 @@ VideoCaptureBufferTracker* VideoCaptureBufferPoolImpl::GetTracker(
   auto it = trackers_.find(buffer_id);
   return (it == trackers_.end()) ? nullptr : it->second.get();
 }
-
 }  // namespace media

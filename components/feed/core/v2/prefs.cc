@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,22 +16,11 @@
 
 namespace feed {
 namespace prefs {
-namespace {
 
-const char* RequestSchedulePrefName(RefreshTaskId task_id) {
-  switch (task_id) {
-    case feed::RefreshTaskId::kRefreshForYouFeed:
-      return kRequestSchedule;
-    case feed::RefreshTaskId::kRefreshWebFeed:
-      return kWebFeedsRequestSchedule;
-  }
-}
-
-}  // namespace
 std::vector<int> GetThrottlerRequestCounts(PrefService& pref_service) {
   std::vector<int> result;
   const auto& value_list =
-      pref_service.GetList(kThrottlerRequestCountListPrefName)->GetList();
+      pref_service.GetList(kThrottlerRequestCountListPrefName);
   for (const base::Value& value : value_list) {
     result.push_back(value.is_int() ? value.GetInt() : 0);
   }
@@ -40,13 +29,13 @@ std::vector<int> GetThrottlerRequestCounts(PrefService& pref_service) {
 
 void SetThrottlerRequestCounts(std::vector<int> request_counts,
                                PrefService& pref_service) {
-  std::vector<base::Value> value_list;
+  base::ListValue value_list;
   for (int count : request_counts) {
-    value_list.push_back(base::Value(count));
+    value_list.Append(count);
   }
 
-  pref_service.Set(kThrottlerRequestCountListPrefName,
-                   base::Value(std::move(value_list)));
+  pref_service.SetList(kThrottlerRequestCountListPrefName,
+                       std::move(value_list));
 }
 
 base::Time GetLastRequestTime(PrefService& pref_service) {
@@ -67,26 +56,22 @@ void SetDebugStreamData(const DebugStreamData& data,
   pref_service.SetString(kDebugStreamData, SerializeDebugStreamData(data));
 }
 
-void SetRequestSchedule(RefreshTaskId task_id,
-                        const RequestSchedule& schedule,
+void SetRequestSchedule(const RequestSchedule& schedule,
                         PrefService& pref_service) {
-  pref_service.Set(RequestSchedulePrefName(task_id),
-                   RequestScheduleToValue(schedule));
+  pref_service.SetDict(kRequestSchedule, RequestScheduleToDict(schedule));
 }
 
-RequestSchedule GetRequestSchedule(RefreshTaskId task_id,
-                                   PrefService& pref_service) {
-  return RequestScheduleFromValue(
-      *pref_service.Get(RequestSchedulePrefName(task_id)));
+RequestSchedule GetRequestSchedule(PrefService& pref_service) {
+  return RequestScheduleFromDict(pref_service.GetDict(kRequestSchedule));
 }
 
 void SetPersistentMetricsData(const PersistentMetricsData& data,
                               PrefService& pref_service) {
-  pref_service.Set(kMetricsData, PersistentMetricsDataToValue(data));
+  pref_service.SetDict(kMetricsData, PersistentMetricsDataToDict(data));
 }
 
 PersistentMetricsData GetPersistentMetricsData(PrefService& pref_service) {
-  return PersistentMetricsDataFromValue(*pref_service.Get(kMetricsData));
+  return PersistentMetricsDataFromDict(pref_service.GetDict(kMetricsData));
 }
 
 std::string GetClientInstanceId(PrefService& pref_service) {
@@ -101,26 +86,6 @@ std::string GetClientInstanceId(PrefService& pref_service) {
 void ClearClientInstanceId(PrefService& pref_service) {
   pref_service.ClearPref(feed::prefs::kClientInstanceId);
 }
-
-void SetExperiments(const Experiments& experiments, PrefService& pref_service) {
-  base::Value value(base::Value::Type::DICTIONARY);
-  for (const auto& exp : experiments) {
-    value.SetStringKey(exp.first, exp.second);
-  }
-  pref_service.Set(kExperiments, value);
-}
-
-Experiments GetExperiments(PrefService& pref_service) {
-  auto* value = pref_service.Get(kExperiments);
-  Experiments experiments;
-  if (!value->is_dict())
-    return experiments;
-  for (auto kv : value->DictItems()) {
-    experiments[kv.first] = kv.second.GetString();
-  }
-  return experiments;
-}
-
 }  // namespace prefs
 
 }  // namespace feed

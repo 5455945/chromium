@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,16 +6,31 @@ package org.chromium.chrome.browser.webapps;
 
 import androidx.browser.trusted.sharing.ShareData;
 
-import org.chromium.base.annotations.NativeMethods;
+import org.jni_zero.JniType;
+import org.jni_zero.NativeMethods;
+
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.browserservices.intents.WebApkShareTarget;
 import org.chromium.content_public.browser.WebContents;
+import org.chromium.url.GURL;
 
-/**
- * Perform navigation for share target with POST request.
- */
+/** Perform navigation for share target with POST request. */
+@NullMarked
 public class WebApkPostShareTargetNavigator {
-    public boolean navigateIfPostShareTarget(
-            String url, WebApkShareTarget target, ShareData data, WebContents webContents) {
+    /**
+     * Navigates {@code webContents} to the POST share target {@code url}.
+     *
+     * @param bootstrapUrl The web app's start URL. If no service worker is registered for {@code
+     *     url} (e.g. the app has never been launched), this URL is loaded first so that the app can
+     *     register its service worker, and the POST is sent once that service worker is activated.
+     *     If empty or invalid, the POST is sent immediately.
+     */
+    public static boolean navigateIfPostShareTarget(
+            String url,
+            GURL bootstrapUrl,
+            WebApkShareTarget target,
+            ShareData data,
+            WebContents webContents) {
         WebApkShareTargetUtil.PostData postData =
                 WebApkShareTargetUtil.computePostData(target, data);
         if (postData == null) {
@@ -27,18 +42,31 @@ public class WebApkPostShareTargetNavigator {
             isValueFileUris[i] = postData.isValueFileUri.get(i);
         }
 
-        WebApkPostShareTargetNavigatorJni.get().nativeLoadViewForShareTargetPost(
-                postData.isMultipartEncoding, postData.names.toArray(new String[0]),
-                postData.values.toArray(new String[0]), isValueFileUris,
-                postData.filenames.toArray(new String[0]), postData.types.toArray(new String[0]),
-                url, webContents);
+        WebApkPostShareTargetNavigatorJni.get()
+                .nativeLoadViewForShareTargetPost(
+                        postData.isMultipartEncoding,
+                        postData.names.toArray(new String[0]),
+                        postData.values.toArray(new String[0]),
+                        isValueFileUris,
+                        postData.filenames.toArray(new String[0]),
+                        postData.types.toArray(new String[0]),
+                        url,
+                        bootstrapUrl,
+                        webContents);
         return true;
     }
 
     @NativeMethods
     public interface Natives {
-        void nativeLoadViewForShareTargetPost(boolean isMultipartEncoding,
-                String[] names, String[] values, boolean[] isValueFileUris, String[] filenames,
-                String[] types, String startUrl, WebContents webContents);
+        void nativeLoadViewForShareTargetPost(
+                boolean isMultipartEncoding,
+                @JniType("std::vector<std::string>") String[] names,
+                @JniType("std::vector<std::string>") String[] values,
+                boolean[] isValueFileUris,
+                @JniType("std::vector<std::string>") String[] filenames,
+                @JniType("std::vector<std::string>") String[] types,
+                @JniType("std::string") String startUrl,
+                @JniType("GURL") GURL bootstrapUrl,
+                WebContents webContents);
     }
 }

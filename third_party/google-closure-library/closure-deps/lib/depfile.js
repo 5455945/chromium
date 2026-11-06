@@ -18,6 +18,8 @@
 const depGraph = require('./depgraph');
 const path = require('path');
 
+const {normalizePath} = require('./normalize');
+
 /**
  * Gets the text of a dependency file for the given dependencies.
  *
@@ -32,24 +34,19 @@ const getDepFileText = exports.getDepFileText = (
     moduleResolver = new depGraph.PathModuleResolver()) => {
   const lines = [];
   for (const dep of dependencies) {
-    if (dep.type == depGraph.DependencyType.SCRIPT) continue;
     const args = [];
 
-    args.push(`'${path.relative(pathToClosure, dep.path)}'`);
+    args.push(`'${normalizePath(path.relative(pathToClosure, dep.path))}'`);
     args.push(`[${dep.closureSymbols.map(s => `'${s}'`).join(', ')}]`);
     const requires = [];
     for (const imported of dep.imports) {
       if (imported.isGoogRequire()) {
-        // 'goog' is an implicit require. base.js shouldn't try to load
-        // itself (which it would if 'goog' was a transitive dependency)!
-        if (imported.symOrPath != 'goog') {
-          requires.push(imported.symOrPath);
-        }
+        requires.push(imported.symOrPath);
       } else {
         const requiredFilePath =
             moduleResolver.resolve(dep.path, imported.symOrPath);
         const relativePath = path.relative(pathToClosure, requiredFilePath);
-        requires.push(relativePath);
+        requires.push(normalizePath(relativePath));
       }
     }
     args.push(`[${requires.map(s => `'${s}'`).join(', ')}]`);
@@ -68,7 +65,9 @@ const getDepFileText = exports.getDepFileText = (
       default:
         // nothing
     }
-    args.push(`{${loadFlags.join(', ')}}`);
+    if (loadFlags.length > 0) {
+      args.push(`{${loadFlags.join(', ')}}`);
+    }
 
     lines.push(`goog.addDependency(${args.join(', ')});`);
   }

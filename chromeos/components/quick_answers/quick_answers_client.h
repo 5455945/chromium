@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,19 +8,20 @@
 #include <memory>
 #include <string>
 
+#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/time/time.h"
 #include "chromeos/components/quick_answers/result_loader.h"
 #include "chromeos/components/quick_answers/understanding/intent_generator.h"
 
 namespace network {
-namespace mojom {
-class URLLoaderFactory;
-}  // namespace mojom
+class SharedURLLoaderFactory;
 }  // namespace network
 
-namespace chromeos {
 namespace quick_answers {
 
-struct QuickAnswer;
+class SpellChecker;
 struct QuickAnswersRequest;
 struct IntentInfo;
 enum class IntentType;
@@ -32,10 +33,11 @@ class QuickAnswersDelegate {
   QuickAnswersDelegate(const QuickAnswersDelegate&) = delete;
   QuickAnswersDelegate& operator=(const QuickAnswersDelegate&) = delete;
 
-  // Invoked when the |quick_answer| is received. Note that |quick_answer| may
-  // be |nullptr| if no answer found for the selected content.
+  // Invoked when the `quick_answers_session` is received. Note that
+  // `quick_answers_session` may be `nullptr` if no answer found for the
+  // selected content.
   virtual void OnQuickAnswerReceived(
-      std::unique_ptr<QuickAnswer> quick_answer) {}
+      std::unique_ptr<QuickAnswersSession> quick_answers_session) {}
 
   // Invoked when the query is rewritten.
   virtual void OnRequestPreprocessFinished(
@@ -62,8 +64,9 @@ class QuickAnswersClient : public ResultLoader::ResultLoaderDelegate {
   using IntentGeneratorFactoryCallback =
       base::RepeatingCallback<std::unique_ptr<IntentGenerator>()>;
 
-  QuickAnswersClient(network::mojom::URLLoaderFactory* url_loader_factory,
-                     QuickAnswersDelegate* delegate);
+  QuickAnswersClient(
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+      QuickAnswersDelegate* delegate);
 
   QuickAnswersClient(const QuickAnswersClient&) = delete;
   QuickAnswersClient& operator=(const QuickAnswersClient&) = delete;
@@ -73,10 +76,10 @@ class QuickAnswersClient : public ResultLoader::ResultLoaderDelegate {
   // ResultLoaderDelegate:
   void OnNetworkError() override;
   void OnQuickAnswerReceived(
-      std::unique_ptr<QuickAnswer> quick_answer) override;
+      std::unique_ptr<QuickAnswersSession> quick_answers_session) override;
 
   // Send a quick answer request for preprocessing only.
-  void SendRequestForPreprocessing(
+  virtual void SendRequestForPreprocessing(
       const QuickAnswersRequest& quick_answers_request);
   // Fetch quick answers result from the server.
   void FetchQuickAnswers(const QuickAnswersRequest& processed_request);
@@ -122,8 +125,9 @@ class QuickAnswersClient : public ResultLoader::ResultLoaderDelegate {
                                const IntentInfo& intent_info);
   base::TimeDelta GetImpressionDuration() const;
 
-  network::mojom::URLLoaderFactory* url_loader_factory_ = nullptr;
-  QuickAnswersDelegate* delegate_ = nullptr;
+  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
+  raw_ptr<QuickAnswersDelegate> delegate_ = nullptr;
+  std::unique_ptr<SpellChecker> spell_checker_;
   std::unique_ptr<ResultLoader> result_loader_;
   std::unique_ptr<IntentGenerator> intent_generator_;
   // Time when the quick answer is received.
@@ -133,5 +137,5 @@ class QuickAnswersClient : public ResultLoader::ResultLoaderDelegate {
 };
 
 }  // namespace quick_answers
-}  // namespace chromeos
+
 #endif  // CHROMEOS_COMPONENTS_QUICK_ANSWERS_QUICK_ANSWERS_CLIENT_H_

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,37 +22,29 @@ class ASH_PUBLIC_EXPORT TestNewWindowDelegate : public NewWindowDelegate {
  private:
   // NewWindowDelegate:
   void NewTab() override;
-  void NewTabWithUrl(const GURL& url, bool from_user_interaction) override;
-  void NewWindow(bool incognito) override;
+  void NewWindow(bool incognito, bool should_trigger_session_restore) override;
+  void NewWindowForDetachingTab(
+      aura::Window* source_window,
+      const ui::OSExchangeData& drop_data,
+      NewWindowForDetachingTabCallback closure) override;
+  void OpenUrl(const GURL& url,
+               OpenUrlFrom from,
+               Disposition disposition) override;
   void OpenCalculator() override;
   void OpenFileManager() override;
   void OpenDownloadsFolder() override;
   void OpenCrosh() override;
   void OpenDiagnostics() override;
   void OpenGetHelp() override;
-  void RestoreTab() override;
-  void ShowKeyboardShortcutViewer() override;
-  void ShowTaskManager() override;
-  void OpenFeedbackPage(bool from_assistant) override;
-};
-
-// NewWindowDelegateProvider implementation to provide TestNewWindowDelegate.
-class ASH_PUBLIC_EXPORT TestNewWindowDelegateProvider
-    : public NewWindowDelegateProvider {
- public:
-  explicit TestNewWindowDelegateProvider(
-      std::unique_ptr<TestNewWindowDelegate> delegate);
-  TestNewWindowDelegateProvider(const TestNewWindowDelegateProvider&) = delete;
-  TestNewWindowDelegateProvider& operator=(
-      const TestNewWindowDelegateProvider&) = delete;
-  ~TestNewWindowDelegateProvider() override;
-
-  // NewWindowDelegateProvider:
-  NewWindowDelegate* GetInstance() override;
-  NewWindowDelegate* GetPrimary() override;
-
- private:
-  std::unique_ptr<TestNewWindowDelegate> delegate_;
+  void RestoreTab(const AccountId& account_id) override;
+  void ShowShortcutCustomizationApp() override;
+  void ShowTaskManager(bool from_context_menu) override;
+  void OpenFeedbackPage(FeedbackSource source,
+                        const std::string& description_template) override;
+  void OpenPersonalizationHub() override;
+  void OpenCaptivePortalSignin(const GURL& url) override;
+  void OpenFile(const base::FilePath& file_path) override;
+  void ToggleGeminiApp() override;
 };
 
 }  // namespace ash

@@ -1,4 +1,4 @@
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 
 luci.project(
     name = "chromium",
+    config_dir = "luci",
     dev = True,
     buildbucket = "cr-buildbucket-dev.appspot.com",
     logdog = "luci-logdog-dev.appspot.com",
@@ -31,6 +32,21 @@ luci.project(
             groups = "project-chromium-admins",
         ),
     ],
+    bindings = [
+        # Roles for LUCI Analysis.
+        luci.binding(
+            roles = "role/analysis.reader",
+            groups = "all",
+        ),
+        luci.binding(
+            roles = "role/analysis.queryUser",
+            groups = "authenticated-users",
+        ),
+        luci.binding(
+            roles = "role/analysis.editor",
+            groups = ["project-chromium-committers", "googlers"],
+        ),
+    ],
 )
 
 luci.logdog(
@@ -53,18 +69,67 @@ luci.realm(
             roles = "role/resultdb.invocationCreator",
             groups = "luci-resultdb-access",
         ),
+        # Allow everyone to view Turbo CI workflows
+        luci.binding(
+            roles = "role/turboci.externalReader",
+            groups = "all",
+        ),
         # Other roles are inherited from @root which grants them to group:all.
     ],
 )
 
-luci.builder.defaults.experiments.set({
-    # Launch Swarming tasks in "realms-aware mode", crbug.com/1136313.
-    "luci.use_realms": 100,
-    # Enable resultsink for dev swarming tasks.
-    "chromium.resultdb.result_sink": 100,
-})
+luci.realm(
+    name = "try",
+    bindings = [
+        # Allow everyone to view Turbo CI workflows
+        luci.binding(
+            roles = "role/turboci.externalReader",
+            groups = "all",
+        ),
+    ],
+)
+
+# @project realm.
+luci.realm(
+    name = "@project",
+    bindings = [
+        # Allow everyone (including non-logged-in users) to see chromium tree status.
+        luci.binding(
+            roles = "role/treestatus.limitedReader",
+            groups = [
+                "all",
+            ],
+        ),
+        # Only allow Googlers to see PII.
+        luci.binding(
+            roles = "role/treestatus.reader",
+            groups = [
+                "googlers",
+            ],
+            users = [
+                "luci-notify-dev@appspot.gserviceaccount.com",
+            ],
+        ),
+        # Only allow Googlers and service accounts.
+        luci.binding(
+            roles = "role/treestatus.writer",
+            groups = [
+                "googlers",
+            ],
+            users = [
+                "luci-notify-dev@appspot.gserviceaccount.com",
+            ],
+        ),
+    ],
+)
+
 luci.builder.defaults.test_presentation.set(resultdb.test_presentation(grouping_keys = ["status", "v.test_suite"]))
 
 exec("//dev/swarming.star")
+
+exec("//recipes.star")
+exec("//gn_args/gn_args.star")
+
+exec("@chromium-targets//declarations.star")
 
 exec("//dev/subprojects/chromium/subproject.star")

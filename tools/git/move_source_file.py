@@ -1,5 +1,5 @@
-#!/usr/bin/env python
-# Copyright (c) 2012 The Chromium Authors. All rights reserved.
+#!/usr/bin/env python3
+# Copyright 2012 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -8,7 +8,8 @@ to them, and re-ordering headers as needed.  If multiple source files are
 specified, the destination must be a directory.  Updates include guards in
 moved header files.  Assumes Chromium coding style.
 
-Attempts to update and reorder paths used in .gyp(i) files.
+Attempts to update and reorder paths used in .gn/.gni files, as well as legacy
+.gyp/.gypi files, using a heuristic.
 
 Updates full-path references to files in // comments in source files.
 
@@ -27,10 +28,9 @@ import sys
 import mffr
 
 if __name__ == '__main__':
-  # Need to add the directory containing sort-headers.py to the Python
+  # Need to add the directory containing sort_sources.py to the Python
   # classpath.
   sys.path.append(os.path.abspath(os.path.join(sys.path[0], '..')))
-sort_headers = __import__('sort-headers')
 import sort_sources
 
 
@@ -48,9 +48,10 @@ def MakeDestinationPath(from_path, to_path):
   Also does basic sanity checks.
   """
   if not IsHandledFile(from_path):
-    raise Exception('Only intended to move individual source files '
-                    '(%s does not have a recognized extension).' %
-                    from_path)
+    raise Exception(
+      'Only intended to move individual source files '
+      '(%s does not have a recognized extension).' % from_path
+    )
 
   # Remove '.', '..', etc.
   to_path = os.path.normpath(to_path)
@@ -60,67 +61,39 @@ def MakeDestinationPath(from_path, to_path):
   else:
     dest_extension = os.path.splitext(to_path)[1]
     if dest_extension not in HANDLED_EXTENSIONS:
-      raise Exception('Destination must be either a full path with '
-                      'a recognized extension or a directory.')
+      raise Exception(
+        'Destination must be either a full path with '
+        'a recognized extension or a directory.'
+      )
   return to_path
 
 
-def UpdateIncludePathForBlink(path):
-  """Updates |path| as it would be when used in an include statement in Blink.
-
-  As Blink has its 'public' and 'Source' folders in the include search path,
-  these prefixes of file paths are not included in include statements. For
-  example, if |path| is 'public/foo/bar.h', the matching include statement
-  is '#include "foo/bar.h"'.
-  """
-  for prefix in ('public/', 'Source/'):
-    if path.startswith(prefix):
-      return path[len(prefix):]
-
-  return path
-
-
 def MoveFile(from_path, to_path):
-  """Performs a git mv command to move a file from |from_path| to |to_path|.
-  """
+  """Performs a git mv command to move a file from |from_path| to |to_path|."""
   if not os.system('git mv %s %s' % (from_path, to_path)) == 0:
     raise Exception('Fatal: Failed to run git mv command.')
 
 
-def UpdateIncludes(from_path, to_path, in_blink):
+def UpdateIncludes(from_path, to_path):
   """Updates any includes of |from_path| to |to_path|. Paths supplied to this
   function have been mapped to forward slashes.
   """
-  from_include_path = from_path
-  to_include_path = to_path
-  if in_blink:
-    from_include_path = UpdateIncludePathForBlink(from_include_path)
-    to_include_path = UpdateIncludePathForBlink(to_include_path)
-
   # This handles three types of include/imports:
   # . C++ includes.
   # . Object-C imports
   # . Imports in mojom files.
   files_with_changed_includes = mffr.MultiFileFindReplace(
-      r'(#?(include|import)\s*["<])%s([>"]);?' % re.escape(from_include_path),
-      r'\1%s\3' % to_include_path,
-      ['*.cc', '*.h', '*.m', '*.mm', '*.cpp', '*.mojom'])
-
-  # Reorder headers in files that changed.
-  for changed_file in files_with_changed_includes:
-
-    def AlwaysConfirm(a, b):
-      return True
-
-    sort_headers.FixFileWithConfirmFunction(changed_file, AlwaysConfirm, True,
-                                            in_blink)
+    r'(#?(include|import)\s*["<])%s([>"])' % re.escape(from_path),
+    r'\1%s\3' % to_path,
+    ['*.cc', '*.h', '*.m', '*.mm', '*.cpp', '*.mojom'],
+  )
 
 
-def UpdatePostMove(from_path, to_path, in_blink):
+def UpdatePostMove(from_path, to_path):
   """Given a file that has moved from |from_path| to |to_path|,
   updates the moved file's include guard to match the new path and
   updates all references to the file in other source files. Also tries
-  to update references in .gyp(i) files using a heuristic.
+  to update references in .gn/.gni/.gyp/.gypi files using a heuristic.
   """
   # Include paths always use forward slashes.
   from_path = from_path.replace('\\', '/')
@@ -128,13 +101,13 @@ def UpdatePostMove(from_path, to_path, in_blink):
   extension = os.path.splitext(from_path)[1]
 
   if extension in ['.h', '.hh', '.mojom']:
-    UpdateIncludes(from_path, to_path, in_blink)
+    UpdateIncludes(from_path, to_path)
     if extension == '.mojom':
       # For mojom files, update includes of generated headers.
-      UpdateIncludes(from_path + '.h', to_path + '.h', in_blink)
-      UpdateIncludes(from_path + '-blink.h', to_path + '-blink.h', in_blink)
-      UpdateIncludes(from_path + '-shared.h', to_path + '-shared.h', in_blink)
-      UpdateIncludes(from_path + '-forward.h', to_path + '-forward.h', in_blink)
+      UpdateIncludes(from_path + '.h', to_path + '.h')
+      UpdateIncludes(from_path + '-blink.h', to_path + '-blink.h')
+      UpdateIncludes(from_path + '-shared.h', to_path + '-shared.h')
+      UpdateIncludes(from_path + '-forward.h', to_path + '-forward.h')
     else:
       UpdateIncludeGuard(from_path, to_path)
 
@@ -145,16 +118,16 @@ def UpdatePostMove(from_path, to_path, in_blink):
   # slow, one good way to speed it up is to make the comment handling
   # optional under a flag.
   mffr.MultiFileFindReplace(
-      r'(//.*)%s' % re.escape(from_path),
-      r'\1%s' % to_path,
-      ['*.cc', '*.h', '*.m', '*.mm', '*.cpp'])
+    r'(//.*)%s' % re.escape(from_path),
+    r'\1%s' % to_path,
+    ['*.cc', '*.h', '*.m', '*.mm', '*.cpp'],
+  )
 
   # Update references in GYP and BUILD.gn files.
   #
-  # GYP files are mostly located under the first level directory (ex.
-  # chrome/chrome_browser.gypi), but sometimes they are located in
-  # directories at a deeper level (ex. extensions/shell/app_shell.gypi). On
-  # the other hand, BUILD.gn files can be placed in any directories.
+  # GYP files are mostly located under the first level directory, but sometimes
+  # they are located in directories at a deeper level. BUILD.gn files can be
+  # placed in any directory.
   #
   # Paths in a GYP or BUILD.gn file are relative to the directory where the
   # file is placed.
@@ -172,10 +145,10 @@ def UpdatePostMove(from_path, to_path, in_blink):
   # should be fixed manually.
   def SplitByFirstComponent(path):
     """'foo/bar/baz' -> ('foo', 'bar/baz')
-       'bar' -> ('bar', '')
-       '' -> ('', '')
+    'bar' -> ('bar', '')
+    '' -> ('', '')
     """
-    parts = re.split(r"[/\\]", path, 1)
+    parts = re.split(r"[/\\]", path, maxsplit=1)
     if len(parts) == 2:
       return (parts[0], parts[1])
     else:
@@ -186,10 +159,13 @@ def UpdatePostMove(from_path, to_path, in_blink):
   to_rest = to_path
   while True:
     files_with_changed_sources = mffr.MultiFileFindReplace(
-        r'([\'"])%s([\'"])' % from_rest,
-        r'\1%s\2' % to_rest,
-        [os.path.join(visiting_directory, 'BUILD.gn'),
-         os.path.join(visiting_directory, '*.gyp*')])
+      r'([\'"])%s([\'"])' % from_rest,
+      r'\1%s\2' % to_rest,
+      [
+        os.path.join(visiting_directory, 'BUILD.gn'),
+        os.path.join(visiting_directory, '*.gyp*'),
+      ],
+    )
     for changed_file in files_with_changed_sources:
       sort_sources.ProcessFile(changed_file, should_confirm=False)
     from_first, from_rest = SplitByFirstComponent(from_rest)
@@ -225,44 +201,50 @@ def UpdateIncludeGuard(old_path, new_path):
   # The file should now have three instances of the new guard: two at the top
   # of the file plus one at the bottom for the comment on the #endif.
   if new_contents.count(new_guard) != 3:
-    print('WARNING: Could not successfully update include guard; perhaps '
-          'old guard is not per style guide? You will have to update the '
-          'include guard manually. (%s)' % new_path)
+    print(
+      'WARNING: Could not successfully update include guard; perhaps '
+      'old guard is not per style guide? You will have to update the '
+      'include guard manually. (%s)' % new_path
+    )
 
-  with open(new_path, 'w') as f:
+  with open(new_path, 'w', newline='\n') as f:
     f.write(new_contents)
+
 
 def main():
   # We use "git rev-parse" to check if the script is run from a git checkout. It
   # returns 0 even when run in the .git directory. We don't want people running
   # this in the .git directory.
-  if (os.system('git rev-parse') != 0 or
-      os.path.basename(os.getcwd()) == '.git'):
+  if os.system('git rev-parse') != 0 or os.path.basename(os.getcwd()) == '.git':
     print('Fatal: You must run in a git checkout.')
     return 1
 
   cwd = os.getcwd()
   parent = os.path.dirname(cwd)
-  in_blink = (os.path.basename(parent) == 'third_party' and
-              os.path.basename(cwd) == 'WebKit')
 
   parser = optparse.OptionParser(usage='%prog FROM_PATH... TO_PATH')
-  parser.add_option('--already_moved', action='store_true',
-                    dest='already_moved',
-                    help='Causes the script to skip moving the file.')
-  parser.add_option('--no_error_for_non_source_file', action='store_false',
-                    default='True',
-                    dest='error_for_non_source_file',
-                    help='Causes the script to simply print a warning on '
-                    'encountering a non-source file rather than raising an '
-                    'error.')
+  parser.add_option(
+    '--already_moved',
+    action='store_true',
+    dest='already_moved',
+    help='Causes the script to skip moving the file.',
+  )
+  parser.add_option(
+    '--no_error_for_non_source_file',
+    action='store_false',
+    default='True',
+    dest='error_for_non_source_file',
+    help='Causes the script to simply print a warning on '
+    'encountering a non-source file rather than raising an '
+    'error.',
+  )
   opts, args = parser.parse_args()
 
   if len(args) < 2:
     parser.print_help()
     return 1
 
-  from_paths = args[:len(args)-1]
+  from_paths = args[: len(args) - 1]
   orig_to_path = args[-1]
 
   if len(from_paths) > 1 and not os.path.isdir(orig_to_path):
@@ -278,7 +260,7 @@ def main():
     to_path = MakeDestinationPath(from_path, orig_to_path)
     if not opts.already_moved:
       MoveFile(from_path, to_path)
-    UpdatePostMove(from_path, to_path, in_blink)
+    UpdatePostMove(from_path, to_path)
   return 0
 
 

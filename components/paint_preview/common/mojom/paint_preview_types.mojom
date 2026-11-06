@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,6 +12,16 @@ import "mojo/public/mojom/base/file.mojom";
 enum RecordingPersistence {
   kFileSystem,
   kMemoryBuffer,
+};
+
+// Choices of renderer-computed coordinates, for use during capture.
+enum ClipCoordOverride {
+  // Not overridden.
+  kNone,
+  // A coordinate centered around the scroll offset (given `clip_rect`'s size).
+  kCenterOnScrollOffset,
+  // A coordinate placed at the scroll offset.
+  kScrollOffset,
 };
 
 // Corresponds to |paint_preview::SerializedRecording| in

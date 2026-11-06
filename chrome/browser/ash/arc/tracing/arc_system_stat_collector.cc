@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,35 +8,40 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include "base/bind.h"
-#include "base/cpu.h"
+#include <array>
+#include <utility>
+
+#include "base/compiler_specific.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_file.h"
+#include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
-#include "base/system/sys_info.h"
-#include "base/task/post_task.h"
 #include "base/task/thread_pool.h"
-#include "base/task_runner_util.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "base/threading/thread_restrictions.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/ash/arc/tracing/arc_system_model.h"
 #include "chrome/browser/ash/arc/tracing/arc_value_event_trimmer.h"
+
+// Enable VLOG level 1.
+#undef ENABLED_VLOG_LEVEL
+#define ENABLED_VLOG_LEVEL 1
 
 namespace arc {
 
 namespace {
 
 // Interval to update system stats.
-constexpr base::TimeDelta kSystemStatUpdateInterval =
-    base::TimeDelta::FromMilliseconds(10);
+constexpr base::TimeDelta kSystemStatUpdateInterval = base::Milliseconds(10);
 
 const base::FilePath::CharType kZramPath[] =
     FILE_PATH_LITERAL("/sys/block/zram0/stat");
@@ -54,7 +59,8 @@ const base::FilePath::CharType kCpuFrequencyPath[] =
 
 const base::FilePath::CharType kPowercapPath[] =
     FILE_PATH_LITERAL("/sys/class/powercap");
-const base::FilePath::CharType kIntelRaplQuery[] = FILE_PATH_LITERAL("intel-rapl:*");
+const base::FilePath::CharType kIntelRaplQuery[] =
+    FILE_PATH_LITERAL("intel-rapl:*");
 const base::FilePath::CharType kEnergyPath[] = FILE_PATH_LITERAL("energy_uj");
 const base::FilePath::CharType kLongTermConstraintPath[] =
     FILE_PATH_LITERAL("constraint_0_power_limit_uw");
@@ -77,11 +83,16 @@ bool IsEnd(char c) {
   return IsWhitespace(c) || c == 0;
 }
 
-// Detects path to stat file that contains temperature for CPU Core 0 that is
-// used as temperature for CPU. Not all cores may be covered by this statistics.
-// Detected path is stored |path_|
+// Detects path to stat file that contains temperature for CPU package that is
+// used as temperature for CPU.
+// Prefer package temperature if available. Otherwise, fall back on CPU
+// core 0. Not all cores may be covered by CPU core 0.
+// Package temperature is the weighted average of the different cores according
+// to:
+//   www.intel.com/content/www/us/en/support/articles/000058845/processors.html
 class CpuTemperaturePathDetector {
  public:
+  // Detected path is stored |path_|
   CpuTemperaturePathDetector() {
     base::FileEnumerator hwmon_enumerator(
         base::FilePath(FILE_PATH_LITERAL("/sys/class/hwmon/")),
@@ -95,34 +106,50 @@ class CpuTemperaturePathDetector {
            !temperature_label_path.empty();
            temperature_label_path = enumerator.Next()) {
         std::string label;
-        if (!base::ReadFileToString(temperature_label_path, &label))
+        if (!base::ReadFileToString(temperature_label_path, &label)) {
           continue;
+        }
         base::TrimWhitespaceASCII(label, base::TRIM_TRAILING, &label);
-        if (label != "Core 0" && label != "Physical id 0")
+        bool package_temp = label == "Package id 0";
+        if (label != "Core 0" && label != "Physical id 0" && !package_temp) {
           continue;
+        }
         std::string temperature_input_path_string =
             temperature_label_path.value();
         base::ReplaceSubstringsAfterOffset(&temperature_input_path_string, 0,
                                            "label", "input");
         const base::FilePath temperature_input_path =
             base::FilePath(temperature_input_path_string);
-        if (!base::PathExists(temperature_input_path))
+        if (!base::PathExists(temperature_input_path)) {
           continue;
+        }
         path_ = temperature_input_path;
         VLOG(1) << "Detected path to read CPU temperature (" << label
                 << "): " << temperature_input_path;
+
+        // If we already found the ideal temperature source, no need to continue
+        // iterating. Using Core 0 would require running all iterations of this
+        // loop.
+        if (package_temp) {
+          return;
+        }
+      }
+
+      if (!path_.empty()) {
         return;
       }
     }
     LOG(WARNING) << "Not detected path to read CPU temperature.";
   }
 
+  CpuTemperaturePathDetector(const CpuTemperaturePathDetector&) = delete;
+  CpuTemperaturePathDetector& operator=(const CpuTemperaturePathDetector&) =
+      delete;
+
   const base::FilePath& path() const { return path_; }
 
  private:
   base::FilePath path_;
-
-  DISALLOW_COPY_AND_ASSIGN(CpuTemperaturePathDetector);
 };
 
 const base::FilePath& GetCpuTemperaturePathOnFileThread() {
@@ -130,14 +157,14 @@ const base::FilePath& GetCpuTemperaturePathOnFileThread() {
   return instance->path();
 }
 
-bool ReadNonNegativeInt(const base::Value& root,
+bool ReadNonNegativeInt(const base::DictValue& root,
                         const std::string& key,
                         int* out) {
-  const base::Value* value =
-      root.FindKeyOfType(key, base::Value::Type::INTEGER);
-  if (!value || value->GetInt() < 0)
+  std::optional<int> value = root.FindInt(key);
+  if (!value || *value < 0) {
     return false;
-  *out = value->GetInt();
+  }
+  *out = *value;
   return true;
 }
 
@@ -194,9 +221,8 @@ struct ArcSystemStatCollector::Sample {
 
 struct OneValueReaderInfo {
   SystemReader reader = SystemReader::kTotal;
-  int64_t* value = nullptr;
+  raw_ptr<int64_t> value = nullptr;
   int64_t default_value = 0;
-  bool error_reported = false;
 };
 
 struct ArcSystemStatCollector::SystemReadersContext {
@@ -281,29 +307,22 @@ struct ArcSystemStatCollector::SystemReadersContext {
       LOG(ERROR) << "Failed to open mem info file: " << kMemoryInfoPath;
     }
 
-    // Reading i915_gem_objects on Intel platform with kernel 5.4 is slow and is
-    // prohibited. Also it changes reporting format.
-    // TODO(b/170397975): Update if i915_gem_objects reading time is improved.
-    const bool is_newer_kernel =
-        base::StartsWith(base::SysInfo::KernelVersion(), "5.");
-    const bool is_intel_cpu = base::CPU().vendor_name() == "GenuineIntel";
-
-    if (!is_newer_kernel || !is_intel_cpu) {
-      context->system_readers[SystemReader::kGemInfo].reset(
-          open(kGemInfoPath, O_RDONLY));
-      if (!context->system_readers[SystemReader::kGemInfo].is_valid()) {
-        LOG(ERROR) << "Failed to open gem info file: " << kGemInfoPath;
-      }
-    } else {
-      LOG(ERROR) << "Reading gem info from: " << kGemInfoPath
-                 << " is disabled.";
+#if defined(ARCH_CPU_ARM_FAMILY)
+    context->system_readers[SystemReader::kGemInfo].reset(
+        open(kGemInfoPath, O_RDONLY));
+    if (!context->system_readers[SystemReader::kGemInfo].is_valid()) {
+      LOG(ERROR) << "Failed to open gem info file: " << kGemInfoPath;
     }
+#else
+    LOG(ERROR) << "Reading gem info from: " << kGemInfoPath << " is disabled.";
+#endif
 
     const base::FilePath& cpu_temp_path = GetCpuTemperaturePathOnFileThread();
     context->system_readers[SystemReader::kCpuTemperature].reset(
         open(cpu_temp_path.value().c_str(), O_RDONLY));
     if (!context->system_readers[SystemReader::kCpuTemperature].is_valid()) {
-      LOG(ERROR) << "Failed to open cpu temperature file: " << cpu_temp_path.value();
+      LOG(ERROR) << "Failed to open cpu temperature file: "
+                 << cpu_temp_path.value();
     }
 
     context->system_readers[SystemReader::kCpuFrequency].reset(
@@ -320,11 +339,11 @@ struct ArcSystemStatCollector::SystemReadersContext {
   // Releases |context|. Must be called on background thread.
   static void FreeOnBackgroundThread(
       std::unique_ptr<ArcSystemStatCollector::SystemReadersContext> context) {
-    DCHECK(context);
+    CHECK(context, base::NotFatalUntil::M160);
     context.reset();
   }
 
-  base::ScopedFD system_readers[SystemReader::kTotal];
+  std::array<base::ScopedFD, SystemReader::kTotal> system_readers;
   RuntimeFrame current_frame;
 };
 
@@ -340,7 +359,7 @@ constexpr int ArcSystemStatCollector::kGemInfoColumns[];
 // static
 constexpr int ArcSystemStatCollector::kOneValueColumns[];
 
-ArcSystemStatCollector::ArcSystemStatCollector() {}
+ArcSystemStatCollector::ArcSystemStatCollector() = default;
 
 ArcSystemStatCollector::~ArcSystemStatCollector() {
   FreeSystemReadersContext();
@@ -359,9 +378,8 @@ void ArcSystemStatCollector::Start(const base::TimeDelta& max_interval) {
   background_task_runner_ = base::ThreadPool::CreateSequencedTaskRunner(
       {base::MayBlock(), base::TaskPriority::USER_VISIBLE});
 
-  base::PostTaskAndReplyWithResult(
-      background_task_runner_.get(), FROM_HERE,
-      base::BindOnce(&SystemReadersContext::InitOnBackgroundThread),
+  background_task_runner_->PostTaskAndReplyWithResult(
+      FROM_HERE, base::BindOnce(&SystemReadersContext::InitOnBackgroundThread),
       base::BindOnce(&ArcSystemStatCollector::OnInitOnUiThread,
                      weak_ptr_factory_.GetWeakPtr()));
 }
@@ -376,7 +394,7 @@ void ArcSystemStatCollector::Stop() {
 void ArcSystemStatCollector::Flush(const base::TimeTicks& min_timestamp,
                                    const base::TimeTicks& max_timestamp,
                                    ArcSystemModel* system_model) {
-  DCHECK(!timer_.IsRunning());
+  CHECK(!timer_.IsRunning(), base::NotFatalUntil::M160);
   size_t sample_index =
       write_index_ >= samples_.size() ? write_index_ - samples_.size() : 0;
   ArcValueEventTrimmer mem_total(&system_model->memory_events(),
@@ -410,10 +428,12 @@ void ArcSystemStatCollector::Flush(const base::TimeTicks& min_timestamp,
   while (sample_index < write_index_) {
     const Sample& sample = samples_[sample_index % samples_.size()];
     ++sample_index;
-    if (sample.timestamp > max_timestamp)
+    if (sample.timestamp > max_timestamp) {
       break;
-    if (sample.timestamp < min_timestamp)
+    }
+    if (sample.timestamp < min_timestamp) {
       continue;
+    }
     const int64_t timestamp =
         (sample.timestamp - base::TimeTicks()).InMicroseconds();
     mem_total.MaybeAdd(timestamp, sample.mem_total_kb);
@@ -423,20 +443,25 @@ void ArcSystemStatCollector::Flush(const base::TimeTicks& min_timestamp,
     swap_read.MaybeAdd(timestamp, sample.swap_sectors_read);
     swap_write.MaybeAdd(timestamp, sample.swap_sectors_write);
     swap_wait.MaybeAdd(timestamp, sample.swap_waiting_time_ms);
-    if (sample.cpu_temperature > std::numeric_limits<int>::min())
+    if (sample.cpu_temperature > std::numeric_limits<int>::min()) {
       cpu_temperature.MaybeAdd(timestamp, sample.cpu_temperature);
-    if (sample.cpu_frequency > 0)
+    }
+    if (sample.cpu_frequency > 0) {
       cpu_frequency.MaybeAdd(timestamp, sample.cpu_frequency);
+    }
     if (sample.package_power_constraint > 0) {
       package_power_constraint.MaybeAdd(timestamp,
                                         sample.package_power_constraint);
     }
-    if (sample.cpu_power > 0)
+    if (sample.cpu_power > 0) {
       cpu_power.MaybeAdd(timestamp, sample.cpu_power);
-    if (sample.gpu_power > 0)
+    }
+    if (sample.gpu_power > 0) {
       gpu_power.MaybeAdd(timestamp, sample.gpu_power);
-    if (sample.memory_power > 0)
+    }
+    if (sample.memory_power > 0) {
       memory_power.MaybeAdd(timestamp, sample.memory_power);
+    }
   }
 
   // These are optional. Keep it if non-zero value is detected.
@@ -457,51 +482,45 @@ void ArcSystemStatCollector::Flush(const base::TimeTicks& min_timestamp,
 // Serializes the model to |base::Value|, this can be passed to
 // javascript for rendering.
 std::unique_ptr<base::Value> ArcSystemStatCollector::Serialize() const {
-  std::unique_ptr<base::Value> root =
-      std::make_unique<base::Value>(base::Value::Type::DICTIONARY);
+  base::DictValue root;
 
-  root->SetKey(
-      kKeyMaxInterval,
-      base::Value(base::NumberToString(max_interval_.InMicroseconds())));
+  root.Set(kKeyMaxInterval,
+           base::NumberToString(max_interval_.InMicroseconds()));
 
   // Samples
   base::ListValue sample_list;
-  for (auto& sample : samples_) {
-    base::Value sample_value(base::Value::Type::DICTIONARY);
+  for (const auto& sample : samples_) {
+    base::DictValue sample_value;
 
-    sample_value.SetKey(
+    sample_value.Set(
         kKeyTimestamp,
-        base::Value(base::NumberToString(
-            (sample.timestamp - base::TimeTicks()).InMicroseconds())));
-    sample_value.SetKey(kKeySwapSectorsRead,
-                        base::Value(sample.swap_sectors_read));
-    sample_value.SetKey(kKeySwapSectorsWrite,
-                        base::Value(sample.swap_sectors_write));
-    sample_value.SetKey(kKeySwapWaitingTimeMs,
-                        base::Value(sample.swap_waiting_time_ms));
-    sample_value.SetKey(kKeyMemTotalKb, base::Value(sample.mem_total_kb));
-    sample_value.SetKey(kKeyMemUsedKb, base::Value(sample.mem_used_kb));
-    sample_value.SetKey(kKeyGemObjects, base::Value(sample.gem_objects));
-    sample_value.SetKey(kKeyGemSizeKb, base::Value(sample.gem_size_kb));
-    sample_value.SetKey(kKeyCpuTemperature,
-                        base::Value(sample.cpu_temperature));
-    sample_value.SetKey(kKeyCpuFrequency, base::Value(sample.cpu_frequency));
-    sample_value.SetKey(kKeyCpuPower, base::Value(sample.cpu_power));
-    sample_value.SetKey(kKeyGpuPower, base::Value(sample.gpu_power));
-    sample_value.SetKey(kKeyMemoryPower, base::Value(sample.memory_power));
-    sample_value.SetKey(kKeyPackagePowerConstraint,
-                        base::Value(sample.package_power_constraint));
+        base::NumberToString(
+            (sample.timestamp - base::TimeTicks()).InMicroseconds()));
+    sample_value.Set(kKeySwapSectorsRead, sample.swap_sectors_read);
+    sample_value.Set(kKeySwapSectorsWrite, sample.swap_sectors_write);
+    sample_value.Set(kKeySwapWaitingTimeMs, sample.swap_waiting_time_ms);
+    sample_value.Set(kKeyMemTotalKb, sample.mem_total_kb);
+    sample_value.Set(kKeyMemUsedKb, sample.mem_used_kb);
+    sample_value.Set(kKeyGemObjects, sample.gem_objects);
+    sample_value.Set(kKeyGemSizeKb, sample.gem_size_kb);
+    sample_value.Set(kKeyCpuTemperature, sample.cpu_temperature);
+    sample_value.Set(kKeyCpuFrequency, sample.cpu_frequency);
+    sample_value.Set(kKeyCpuPower, sample.cpu_power);
+    sample_value.Set(kKeyGpuPower, sample.gpu_power);
+    sample_value.Set(kKeyMemoryPower, sample.memory_power);
+    sample_value.Set(kKeyPackagePowerConstraint,
+                     sample.package_power_constraint);
 
     sample_list.Append(std::move(sample_value));
   }
-  root->SetKey(kKeySamples, std::move(sample_list));
+  root.Set(kKeySamples, std::move(sample_list));
 
-  return root;
+  return std::make_unique<base::Value>(std::move(root));
 }
 
 std::string ArcSystemStatCollector::SerializeToJson() const {
   std::unique_ptr<base::Value> root = Serialize();
-  DCHECK(root);
+  CHECK(root, base::NotFatalUntil::M160);
   std::string output;
   if (!base::JSONWriter::WriteWithOptions(
           *root, base::JSONWriter::OPTIONS_PRETTY_PRINT, &output)) {
@@ -511,66 +530,71 @@ std::string ArcSystemStatCollector::SerializeToJson() const {
 }
 
 bool ArcSystemStatCollector::LoadFromJson(const std::string& json_data) {
-  const absl::optional<base::Value> root = base::JSONReader::Read(json_data);
-  if (!root)
+  const std::optional<base::Value> root =
+      base::JSONReader::Read(json_data, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!root) {
     return false;
+  }
   return LoadFromValue(*root);
 }
 
 bool ArcSystemStatCollector::LoadFromValue(const base::Value& root) {
   samples_.clear();
+  const base::DictValue& root_dict = root.GetDict();
 
   int64_t max_interval_mcs;
-  const base::Value* max_interval =
-      root.FindKeyOfType(kKeyMaxInterval, base::Value::Type::STRING);
-  if (!max_interval ||
-      !base::StringToInt64(max_interval->GetString(), &max_interval_mcs)) {
+  const std::string* max_interval = root_dict.FindString(kKeyMaxInterval);
+  if (!max_interval || !base::StringToInt64(*max_interval, &max_interval_mcs)) {
     return false;
   }
 
-  max_interval_ = base::TimeDelta::FromMicroseconds(max_interval_mcs);
+  max_interval_ = base::Microseconds(max_interval_mcs);
 
-  const base::Value* sample_list =
-      root.FindKeyOfType(kKeySamples, base::Value::Type::LIST);
-  if (!sample_list)
+  const base::ListValue* sample_list = root_dict.FindList(kKeySamples);
+  if (!sample_list) {
     return false;
+  }
 
-  for (const auto& sample_entry : sample_list->GetList()) {
-    if (!sample_entry.is_dict())
+  for (const auto& sample_entry : *sample_list) {
+    const base::DictValue* sample_entry_dict = sample_entry.GetIfDict();
+    if (!sample_entry_dict) {
       return false;
+    }
 
     Sample sample;
     int64_t timestamp_mcs;
-    const base::Value* timestamp =
-        sample_entry.FindKeyOfType(kKeyTimestamp, base::Value::Type::STRING);
-    if (!timestamp ||
-        !base::StringToInt64(timestamp->GetString(), &timestamp_mcs))
+    const std::string* timestamp = sample_entry_dict->FindString(kKeyTimestamp);
+    if (!timestamp || !base::StringToInt64(*timestamp, &timestamp_mcs)) {
       return false;
+    }
 
-    sample.timestamp =
-        base::TimeTicks() + base::TimeDelta::FromMicroseconds(timestamp_mcs);
+    sample.timestamp = base::TimeTicks() + base::Microseconds(timestamp_mcs);
 
-    if (!ReadNonNegativeInt(sample_entry, kKeySwapSectorsRead,
+    if (!ReadNonNegativeInt(*sample_entry_dict, kKeySwapSectorsRead,
                             &sample.swap_sectors_read) ||
-        !ReadNonNegativeInt(sample_entry, kKeySwapSectorsWrite,
+        !ReadNonNegativeInt(*sample_entry_dict, kKeySwapSectorsWrite,
                             &sample.swap_sectors_write) ||
-        !ReadNonNegativeInt(sample_entry, kKeySwapWaitingTimeMs,
+        !ReadNonNegativeInt(*sample_entry_dict, kKeySwapWaitingTimeMs,
                             &sample.swap_waiting_time_ms) ||
-        !ReadNonNegativeInt(sample_entry, kKeyMemTotalKb,
+        !ReadNonNegativeInt(*sample_entry_dict, kKeyMemTotalKb,
                             &sample.mem_total_kb) ||
-        !ReadNonNegativeInt(sample_entry, kKeyMemUsedKb, &sample.mem_used_kb) ||
-        !ReadNonNegativeInt(sample_entry, kKeyGemObjects,
+        !ReadNonNegativeInt(*sample_entry_dict, kKeyMemUsedKb,
+                            &sample.mem_used_kb) ||
+        !ReadNonNegativeInt(*sample_entry_dict, kKeyGemObjects,
                             &sample.gem_objects) ||
-        !ReadNonNegativeInt(sample_entry, kKeyGemSizeKb, &sample.gem_size_kb) ||
-        !ReadNonNegativeInt(sample_entry, kKeyCpuTemperature,
+        !ReadNonNegativeInt(*sample_entry_dict, kKeyGemSizeKb,
+                            &sample.gem_size_kb) ||
+        !ReadNonNegativeInt(*sample_entry_dict, kKeyCpuTemperature,
                             &sample.cpu_temperature) ||
-        !ReadNonNegativeInt(sample_entry, kKeyCpuFrequency,
+        !ReadNonNegativeInt(*sample_entry_dict, kKeyCpuFrequency,
                             &sample.cpu_frequency) ||
-        !ReadNonNegativeInt(sample_entry, kKeyCpuPower, &sample.cpu_power) ||
-        !ReadNonNegativeInt(sample_entry, kKeyGpuPower, &sample.gpu_power) ||
-        !ReadNonNegativeInt(sample_entry, kKeyMemoryPower,
+        !ReadNonNegativeInt(*sample_entry_dict, kKeyCpuPower,
+                            &sample.cpu_power) ||
+        !ReadNonNegativeInt(*sample_entry_dict, kKeyGpuPower,
+                            &sample.gpu_power) ||
+        !ReadNonNegativeInt(*sample_entry_dict, kKeyMemoryPower,
                             &sample.memory_power) ||
-        !ReadNonNegativeInt(sample_entry, kKeyPackagePowerConstraint,
+        !ReadNonNegativeInt(*sample_entry_dict, kKeyPackagePowerConstraint,
                             &sample.package_power_constraint)) {
       return false;
     }
@@ -582,12 +606,13 @@ bool ArcSystemStatCollector::LoadFromValue(const base::Value& root) {
 
 void ArcSystemStatCollector::ScheduleSystemStatUpdate() {
   if (!context_) {
-    if (missed_update_warning_left_-- > 0)
+    if (missed_update_warning_left_-- > 0) {
       LOG(WARNING) << "Dropping update, already pending";
+    }
     return;
   }
-  base::PostTaskAndReplyWithResult(
-      background_task_runner_.get(), FROM_HERE,
+  background_task_runner_->PostTaskAndReplyWithResult(
+      FROM_HERE,
       base::BindOnce(&ArcSystemStatCollector::ReadSystemStatOnBackgroundThread,
                      std::move(context_)),
       base::BindOnce(&ArcSystemStatCollector::UpdateSystemStatOnUiThread,
@@ -595,8 +620,9 @@ void ArcSystemStatCollector::ScheduleSystemStatUpdate() {
 }
 
 void ArcSystemStatCollector::FreeSystemReadersContext() {
-  if (!context_)
+  if (!context_) {
     return;
+  }
   base::ThreadPool::PostTask(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
       base::BindOnce(&SystemReadersContext::FreeOnBackgroundThread,
@@ -605,7 +631,7 @@ void ArcSystemStatCollector::FreeSystemReadersContext() {
 
 void ArcSystemStatCollector::OnInitOnUiThread(
     std::unique_ptr<ArcSystemStatCollector::SystemReadersContext> context) {
-  DCHECK(!context_ && context);
+  CHECK(!context_ && context, base::NotFatalUntil::M160);
   context_ = std::move(context);
 
   timer_.Start(
@@ -618,13 +644,13 @@ void ArcSystemStatCollector::OnInitOnUiThread(
 std::unique_ptr<ArcSystemStatCollector::SystemReadersContext>
 ArcSystemStatCollector::ReadSystemStatOnBackgroundThread(
     std::unique_ptr<SystemReadersContext> context) {
-  DCHECK(context);
+  CHECK(context, base::NotFatalUntil::M160);
   context->current_frame.timestamp = base::TimeTicks::Now();
   if (!context->system_readers[SystemReader::kZram].is_valid() ||
       !ParseStatFile(context->system_readers[SystemReader::kZram].get(),
                      kZramStatColumns, context->current_frame.zram_stat)) {
-    memset(context->current_frame.zram_stat, 0,
-           sizeof(context->current_frame.zram_stat));
+    UNSAFE_TODO(memset(context->current_frame.zram_stat, 0,
+                       sizeof(context->current_frame.zram_stat)));
     static bool error_reported = false;
     if (!error_reported) {
       LOG(ERROR) << "Failed to read zram stat file: " << kZramPath;
@@ -635,8 +661,8 @@ ArcSystemStatCollector::ReadSystemStatOnBackgroundThread(
   if (!context->system_readers[SystemReader::kMemoryInfo].is_valid() ||
       !ParseStatFile(context->system_readers[SystemReader::kMemoryInfo].get(),
                      kMemInfoColumns, context->current_frame.mem_info)) {
-    memset(context->current_frame.mem_info, 0,
-           sizeof(context->current_frame.mem_info));
+    UNSAFE_TODO(memset(context->current_frame.mem_info, 0,
+                       sizeof(context->current_frame.mem_info)));
     static bool error_reported = false;
     if (!error_reported) {
       LOG(ERROR) << "Failed to read mem info file: " << kMemoryInfoPath;
@@ -647,8 +673,8 @@ ArcSystemStatCollector::ReadSystemStatOnBackgroundThread(
   if (!context->system_readers[SystemReader::kGemInfo].is_valid() ||
       !ParseStatFile(context->system_readers[SystemReader::kGemInfo].get(),
                      kGemInfoColumns, context->current_frame.gem_info)) {
-    memset(context->current_frame.gem_info, 0,
-           sizeof(context->current_frame.gem_info));
+    UNSAFE_TODO(memset(context->current_frame.gem_info, 0,
+                       sizeof(context->current_frame.gem_info)));
     static bool error_reported = false;
     if (!error_reported) {
       LOG(ERROR) << "Failed to read gem info file: " << kGemInfoPath;
@@ -656,30 +682,32 @@ ArcSystemStatCollector::ReadSystemStatOnBackgroundThread(
     }
   }
 
-  OneValueReaderInfo one_value_readers[] = {
+  const auto one_value_readers = std::to_array<OneValueReaderInfo>({
       {SystemReader::kCpuTemperature, &context->current_frame.cpu_temperature,
-       std::numeric_limits<int>::min(), false},
-      {SystemReader::kCpuFrequency, &context->current_frame.cpu_frequency, 0,
-       false},
+       std::numeric_limits<int>::min()},
+      {SystemReader::kCpuFrequency, &context->current_frame.cpu_frequency, 0},
       {SystemReader::kPackagePowerConstraint,
-       &context->current_frame.package_power_constraint, 0, false},
-      {SystemReader::kCpuEnergy, &context->current_frame.cpu_energy, 0, false},
-      {SystemReader::kGpuEnergy, &context->current_frame.gpu_energy, 0, false},
-      {SystemReader::kMemoryEnergy, &context->current_frame.memory_energy, 0,
-       false},
-  };
+       &context->current_frame.package_power_constraint, 0},
+      {SystemReader::kCpuEnergy, &context->current_frame.cpu_energy, 0},
+      {SystemReader::kGpuEnergy, &context->current_frame.gpu_energy, 0},
+      {SystemReader::kMemoryEnergy, &context->current_frame.memory_energy, 0},
+  });
 
-  for (size_t i = 0; i < base::size(one_value_readers); ++i) {
+  static std::array<bool, one_value_readers.size()>
+      one_value_readers_error_reported = {};
+
+  for (size_t i = 0; i < one_value_readers.size(); ++i) {
     if (!context->system_readers[one_value_readers[i].reader].is_valid() ||
         !ParseStatFile(
             context->system_readers[one_value_readers[i].reader].get(),
             kOneValueColumns, one_value_readers[i].value)) {
       *one_value_readers[i].value = one_value_readers[i].default_value;
-      if (one_value_readers[i].error_reported)
+      if (one_value_readers_error_reported[i]) {
         continue;
+      }
       LOG(ERROR) << "Failed to read one value system stat: "
                  << one_value_readers[i].reader;
-      one_value_readers[i].error_reported = true;
+      one_value_readers_error_reported[i] = true;
     }
   }
 
@@ -688,8 +716,8 @@ ArcSystemStatCollector::ReadSystemStatOnBackgroundThread(
 
 void ArcSystemStatCollector::UpdateSystemStatOnUiThread(
     std::unique_ptr<SystemReadersContext> context) {
-  DCHECK(!context_ && context);
-  DCHECK(!samples_.empty());
+  CHECK(!context_ && context, base::NotFatalUntil::M160);
+  CHECK(!samples_.empty(), base::NotFatalUntil::M160);
   Sample& current_sample = samples_[write_index_ % samples_.size()];
   current_sample.timestamp = context->current_frame.timestamp;
   current_sample.mem_total_kb = context->current_frame.mem_info[0];
@@ -701,7 +729,8 @@ void ArcSystemStatCollector::UpdateSystemStatOnUiThread(
 
   // We calculate delta, so ignore first update.
   if (write_index_) {
-    DCHECK_GT(context->current_frame.timestamp, previous_frame_.timestamp);
+    CHECK_GT(context->current_frame.timestamp, previous_frame_.timestamp,
+             base::NotFatalUntil::M160);
     const double to_milli_watts_scale =
         0.001 / (context->current_frame.timestamp - previous_frame_.timestamp)
                     .InSecondsF();
@@ -722,21 +751,22 @@ void ArcSystemStatCollector::UpdateSystemStatOnUiThread(
     current_sample.memory_power = static_cast<int>(
         (context->current_frame.memory_energy - previous_frame_.memory_energy) *
         to_milli_watts_scale);
-    DCHECK_GE(current_sample.cpu_power, 0);
-    DCHECK_GE(current_sample.gpu_power, 0);
-    DCHECK_GE(current_sample.memory_power, 0);
+    CHECK_GE(current_sample.cpu_power, 0, base::NotFatalUntil::M160);
+    CHECK_GE(current_sample.gpu_power, 0, base::NotFatalUntil::M160);
+    CHECK_GE(current_sample.memory_power, 0, base::NotFatalUntil::M160);
   }
   current_sample.cpu_temperature = context->current_frame.cpu_temperature;
   current_sample.cpu_frequency = context->current_frame.cpu_frequency;
   current_sample.package_power_constraint =
       static_cast<int>(context->current_frame.package_power_constraint *
                        0.001 /* micro-watts to milli-watts */);
-  DCHECK_GE(current_sample.package_power_constraint, 0);
-  DCHECK_GE(current_sample.swap_sectors_read, 0);
-  DCHECK_GE(current_sample.swap_sectors_write, 0);
-  DCHECK_GE(current_sample.swap_waiting_time_ms, 0);
-  DCHECK_GE(current_sample.mem_total_kb, 0);
-  DCHECK_GE(current_sample.mem_used_kb, 0);
+  CHECK_GE(current_sample.package_power_constraint, 0,
+           base::NotFatalUntil::M160);
+  CHECK_GE(current_sample.swap_sectors_read, 0, base::NotFatalUntil::M160);
+  CHECK_GE(current_sample.swap_sectors_write, 0, base::NotFatalUntil::M160);
+  CHECK_GE(current_sample.swap_waiting_time_ms, 0, base::NotFatalUntil::M160);
+  CHECK_GE(current_sample.mem_total_kb, 0, base::NotFatalUntil::M160);
+  CHECK_GE(current_sample.mem_used_kb, 0, base::NotFatalUntil::M160);
   previous_frame_ = context->current_frame;
   ++write_index_;
 
@@ -746,36 +776,42 @@ void ArcSystemStatCollector::UpdateSystemStatOnUiThread(
 ArcSystemStatCollector::RuntimeFrame::RuntimeFrame() = default;
 
 bool ParseStatFile(int fd, const int* columns, int64_t* output) {
-  char buffer[128];
-  if (lseek(fd, 0, SEEK_SET))
+  std::array<char, 128> buffer;
+  if (lseek(fd, 0, SEEK_SET)) {
     return false;
-  const int read_bytes = read(fd, buffer, sizeof(buffer) - 1);
-  if (read_bytes < 0)
+  }
+  const int read_bytes = read(fd, buffer.data(), buffer.size() - 1);
+  if (read_bytes < 0) {
     return false;
+  }
   buffer[read_bytes] = 0;
   int column_index = 0;
-  const char* scan = buffer;
+  const char* scan = buffer.data();
   while (true) {
     // Skip whitespace.
-    while (IsWhitespace(*scan))
-      ++scan;
+    while (IsWhitespace(*scan)) {
+      UNSAFE_TODO(++scan);
+    }
     if (*columns != column_index) {
       // Just skip this entry. It may be digits or text.
-      while (!IsWhitespace(*scan))
-        ++scan;
+      while (!IsWhitespace(*scan)) {
+        UNSAFE_TODO(++scan);
+      }
     } else {
       int64_t value = 0;
       while (IsDigit(*scan)) {
         value = 10 * value + *scan - '0';
-        ++scan;
+        UNSAFE_TODO(++scan);
       }
-      *output++ = value;
-      ++columns;
-      if (*columns < 0)
+      UNSAFE_TODO(*output++) = value;
+      UNSAFE_TODO(++columns);
+      if (*columns < 0) {
         return IsEnd(*scan);  // All columns are read.
+      }
     }
-    if (!IsWhitespace(*scan))
+    if (!IsWhitespace(*scan)) {
       return false;
+    }
     ++column_index;
   }
 }

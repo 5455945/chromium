@@ -1,31 +1,28 @@
+# Unless you want a specific reviewer's expertise, send to the email below.
+chrome-dev-infra-reviewers@google.com
 # This is reserved for people that are comfortable with Chromium builders
 # and understand the implications of changing their configurations.
-
-set noparent
-
-# Troopers
 bpastene@chromium.org
-estaab@chromium.org
 gatong@chromium.org
-gbeaty@chromium.org
 hypan@google.com
-kimstephanie@google.com
-martiniss@chromium.org
-mmoss@chromium.org
+sshrimp@google.com
 
-# Other folks who understand the infrastructure well.
-dpranke@google.com
-hans@chromium.org
-kbr@chromium.org
-thakis@chromium.org
-tikuta@chromium.org
+# For Mac bot related changes.
+wyeager@google.com
+yueshe@google.com  # Emeritus. Prefer wyeager@ for reviews.
+
+# For GPU bot related changes.
+bsheedy@chromium.org
 ynovikov@chromium.org
 
-# For code coverage and PGO related.
-liaoyuke@chromium.org
+# For Clang ToT bot related changes.
+hans@chromium.org
+thakis@chromium.org
+
+# For reclient/siso bot related changes.
+jwata@google.com
+tikuta@chromium.org
 
 # Specific OWNERS to review changes to the non-inclusive terms PRESUBMIT checks
-per-file inclusive_language_presubmit_exempt_dirs.txt=efoo@chromium.org
-per-file inclusive_language_presubmit_exempt_dirs.txt=nawei@chromium.org
+per-file inclusive_language_presubmit_exempt_dirs.txt=*
 per-file update_inclusive_language_presubmit_exempt_dirs.sh=efoo@chromium.org
-per-file update_inclusive_language_presubmit_exempt_dirs.sh=seanmccullough@chromium.org

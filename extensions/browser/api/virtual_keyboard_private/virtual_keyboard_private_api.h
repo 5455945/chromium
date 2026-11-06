@@ -1,16 +1,22 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef EXTENSIONS_BROWSER_API_VIRTUAL_KEYBOARD_PRIVATE_VIRTUAL_KEYBOARD_PRIVATE_API_H_
 #define EXTENSIONS_BROWSER_API_VIRTUAL_KEYBOARD_PRIVATE_VIRTUAL_KEYBOARD_PRIVATE_API_H_
 
-#include "base/compiler_specific.h"
+#include <memory>
+#include <optional>
+#include <vector>
+
+#include "base/memory/raw_ptr.h"
+#include "base/values.h"
 #include "extensions/browser/browser_context_keyed_api_factory.h"
 #include "extensions/browser/extension_function.h"
+#include "extensions/common/api/virtual_keyboard_private.h"
 
-namespace base {
-class DictionaryValue;
+namespace ash {
+class ClipboardHistoryItem;
 }
 
 namespace content {
@@ -27,10 +33,10 @@ class VirtualKeyboardPrivateFunction : public ExtensionFunction {
 
  protected:
   VirtualKeyboardDelegate* delegate() { return delegate_; }
-  ~VirtualKeyboardPrivateFunction() override;
+  ~VirtualKeyboardPrivateFunction() override = default;
 
  private:
-  VirtualKeyboardDelegate* delegate_ = nullptr;
+  raw_ptr<VirtualKeyboardDelegate> delegate_ = nullptr;
 };
 
 class VirtualKeyboardPrivateInsertTextFunction
@@ -40,7 +46,7 @@ class VirtualKeyboardPrivateInsertTextFunction
                              VIRTUALKEYBOARDPRIVATE_INSERTTEXT)
 
  protected:
-  ~VirtualKeyboardPrivateInsertTextFunction() override {}
+  ~VirtualKeyboardPrivateInsertTextFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
@@ -53,7 +59,7 @@ class VirtualKeyboardPrivateSendKeyEventFunction
                              VIRTUALKEYBOARDPRIVATE_SENDKEYEVENT)
 
  protected:
-  ~VirtualKeyboardPrivateSendKeyEventFunction() override {}
+  ~VirtualKeyboardPrivateSendKeyEventFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
@@ -66,7 +72,7 @@ class VirtualKeyboardPrivateHideKeyboardFunction
                              VIRTUALKEYBOARDPRIVATE_HIDEKEYBOARD)
 
  protected:
-  ~VirtualKeyboardPrivateHideKeyboardFunction() override {}
+  ~VirtualKeyboardPrivateHideKeyboardFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
@@ -79,7 +85,7 @@ class VirtualKeyboardPrivateSetHotrodKeyboardFunction
                              VIRTUALKEYBOARDPRIVATE_SETHOTRODKEYBOARD)
 
  protected:
-  ~VirtualKeyboardPrivateSetHotrodKeyboardFunction() override {}
+  ~VirtualKeyboardPrivateSetHotrodKeyboardFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
@@ -92,7 +98,7 @@ class VirtualKeyboardPrivateLockKeyboardFunction
                              VIRTUALKEYBOARDPRIVATE_LOCKKEYBOARD)
 
  protected:
-  ~VirtualKeyboardPrivateLockKeyboardFunction() override {}
+  ~VirtualKeyboardPrivateLockKeyboardFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
@@ -105,7 +111,7 @@ class VirtualKeyboardPrivateKeyboardLoadedFunction
                              VIRTUALKEYBOARDPRIVATE_KEYBOARDLOADED)
 
  protected:
-  ~VirtualKeyboardPrivateKeyboardLoadedFunction() override {}
+  ~VirtualKeyboardPrivateKeyboardLoadedFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
@@ -118,13 +124,13 @@ class VirtualKeyboardPrivateGetKeyboardConfigFunction
                              VIRTUALKEYBOARDPRIVATE_GETKEYBOARDCONFIG)
 
  protected:
-  ~VirtualKeyboardPrivateGetKeyboardConfigFunction() override {}
+  ~VirtualKeyboardPrivateGetKeyboardConfigFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
 
  private:
-  void OnKeyboardConfig(std::unique_ptr<base::DictionaryValue> results);
+  void OnKeyboardConfig(std::optional<base::DictValue> results);
 };
 
 class VirtualKeyboardPrivateOpenSettingsFunction
@@ -134,7 +140,7 @@ class VirtualKeyboardPrivateOpenSettingsFunction
                              VIRTUALKEYBOARDPRIVATE_OPENSETTINGS)
 
  protected:
-  ~VirtualKeyboardPrivateOpenSettingsFunction() override {}
+  ~VirtualKeyboardPrivateOpenSettingsFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
@@ -176,7 +182,7 @@ class VirtualKeyboardPrivateSetDraggableAreaFunction
                              VIRTUALKEYBOARDPRIVATE_SETDRAGGABLEAREA)
 
  protected:
-  ~VirtualKeyboardPrivateSetDraggableAreaFunction() override {}
+  ~VirtualKeyboardPrivateSetDraggableAreaFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
@@ -189,7 +195,7 @@ class VirtualKeyboardPrivateSetKeyboardStateFunction
                              VIRTUALKEYBOARDPRIVATE_SETKEYBOARDSTATE)
 
  protected:
-  ~VirtualKeyboardPrivateSetKeyboardStateFunction() override {}
+  ~VirtualKeyboardPrivateSetKeyboardStateFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
@@ -202,7 +208,7 @@ class VirtualKeyboardPrivateSetOccludedBoundsFunction
                              VIRTUALKEYBOARDPRIVATE_SETOCCLUDEDBOUNDS)
 
  protected:
-  ~VirtualKeyboardPrivateSetOccludedBoundsFunction() override {}
+  ~VirtualKeyboardPrivateSetOccludedBoundsFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
@@ -215,7 +221,7 @@ class VirtualKeyboardPrivateSetHitTestBoundsFunction
                              VIRTUALKEYBOARDPRIVATE_SETHITTESTBOUNDS)
 
  protected:
-  ~VirtualKeyboardPrivateSetHitTestBoundsFunction() override {}
+  ~VirtualKeyboardPrivateSetHitTestBoundsFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
@@ -228,7 +234,7 @@ class VirtualKeyboardPrivateSetAreaToRemainOnScreenFunction
                              VIRTUALKEYBOARDPRIVATE_SETAREATOREMAINONSCREEN)
 
  protected:
-  ~VirtualKeyboardPrivateSetAreaToRemainOnScreenFunction() override {}
+  ~VirtualKeyboardPrivateSetAreaToRemainOnScreenFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
@@ -260,7 +266,12 @@ class VirtualKeyboardPrivateGetClipboardHistoryFunction
   ResponseAction Run() override;
 
  private:
-  void OnGetClipboardHistory(base::Value results);
+  void OnGetClipboardHistory(
+      std::vector<ash::ClipboardHistoryItem> history_items);
+
+  using ClipboardItems =
+      std::vector<extensions::api::virtual_keyboard_private::ClipboardItem>;
+  void OnClipboardHistoryItemsConverted(std::unique_ptr<ClipboardItems> items);
 };
 
 class VirtualKeyboardPrivatePasteClipboardItemFunction

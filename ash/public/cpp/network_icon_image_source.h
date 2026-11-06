@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 #define ASH_PUBLIC_CPP_NETWORK_ICON_IMAGE_SOURCE_H_
 
 #include "ash/public/cpp/ash_public_export.h"
+#include "base/memory/raw_ptr.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/color_palette.h"
@@ -33,15 +34,19 @@ struct Badge {
   }
   bool operator!=(const Badge& other) const { return !(other == *this); }
 
-  const gfx::VectorIcon* icon = nullptr;
+  raw_ptr<const gfx::VectorIcon> icon = nullptr;
   SkColor color = gfx::kPlaceholderColor;
 };
 
 // Struct to pass a collection of badges to NetworkIconImageSource.
-struct Badges {
+struct ASH_PUBLIC_EXPORT Badges {
+  Badges();
+  ~Badges();
+  Badges(const Badges&);
+  Badges& operator=(const Badges&);
+
   Badge top_left;
   Badge center;
-  Badge center_left;
   Badge bottom_left;
   Badge bottom_right;
 };
@@ -52,6 +57,10 @@ class ASH_PUBLIC_EXPORT NetworkIconImageSource : public gfx::CanvasImageSource {
   NetworkIconImageSource(const gfx::Size& size,
                          const gfx::ImageSkia& icon,
                          const Badges& badges);
+
+  NetworkIconImageSource(const NetworkIconImageSource&) = delete;
+  NetworkIconImageSource& operator=(const NetworkIconImageSource&) = delete;
+
   ~NetworkIconImageSource() override;
 
   // gfx::CanvasImageSource:
@@ -61,8 +70,6 @@ class ASH_PUBLIC_EXPORT NetworkIconImageSource : public gfx::CanvasImageSource {
  private:
   const gfx::ImageSkia icon_;
   const Badges badges_;
-
-  DISALLOW_COPY_AND_ASSIGN(NetworkIconImageSource);
 };
 
 // Provides an image source for wireless signal strength icons.
@@ -74,6 +81,10 @@ class ASH_PUBLIC_EXPORT SignalStrengthImageSource
                             const gfx::Size& size,
                             int signal_strength,
                             int padding = 2);
+
+  SignalStrengthImageSource(const SignalStrengthImageSource&) = delete;
+  SignalStrengthImageSource& operator=(const SignalStrengthImageSource&) =
+      delete;
 
   ~SignalStrengthImageSource() override;
 
@@ -94,8 +105,6 @@ class ASH_PUBLIC_EXPORT SignalStrengthImageSource
   // Padding between outside of icon and edge of the canvas, in dp. This value
   // stays the same regardless of the canvas size.
   const int padding_;
-
-  DISALLOW_COPY_AND_ASSIGN(SignalStrengthImageSource);
 };
 
 // Returns the sized full strength unbadged image for a Wi-Fi network. Used

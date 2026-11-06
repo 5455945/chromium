@@ -1,8 +1,10 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/test/render_widget_host_visibility_observer.h"
+
+#include "content/browser/renderer_host/render_widget_host_impl.h"
 
 namespace content {
 
@@ -13,7 +15,7 @@ RenderWidgetHostVisibilityObserver::RenderWidgetHostVisibilityObserver(
       was_observed_(false),
       did_fail_(false),
       render_widget_(rwhi) {
-  observation_.Observe(render_widget_);
+  observation_.Observe(render_widget_.get());
 }
 
 RenderWidgetHostVisibilityObserver::~RenderWidgetHostVisibilityObserver() =

@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,9 @@ package org.chromium.android_webview.test;
 
 import static org.chromium.android_webview.test.AwActivityTestRule.SCALED_WAIT_TIMEOUT_MS;
 
-import android.support.test.InstrumentationRegistry;
 import android.util.Pair;
 
+import androidx.test.InstrumentationRegistry;
 import androidx.test.filters.MediumTest;
 
 import org.junit.Assert;
@@ -16,12 +16,16 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
+import org.junit.runners.Parameterized.UseParametersRunnerFactory;
 
 import org.chromium.android_webview.AwContents;
+import org.chromium.android_webview.AwWebResourceError;
+import org.chromium.android_webview.AwWebResourceRequest;
+import org.chromium.android_webview.test.TestAwContentsClient.OnReceivedErrorHelper;
 import org.chromium.android_webview.test.util.CommonResources;
 import org.chromium.android_webview.test.util.JSUtils;
 import org.chromium.base.test.util.Feature;
-import org.chromium.base.test.util.FlakyTest;
 import org.chromium.content_public.browser.test.util.TestCallbackHelperContainer;
 import org.chromium.content_public.common.ContentUrlConstants;
 import org.chromium.net.test.util.TestWebServer;
@@ -30,16 +34,18 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 
-/**
- * Tests for the ContentViewClient.onPageFinished() method.
- */
-@RunWith(AwJUnit4ClassRunner.class)
-public class ClientOnPageFinishedTest {
-    @Rule
-    public AwActivityTestRule mActivityTestRule = new AwActivityTestRule();
+/** Tests for the ContentViewClient.onPageFinished() method. */
+@RunWith(Parameterized.class)
+@UseParametersRunnerFactory(AwJUnit4ClassRunnerWithParameters.Factory.class)
+public class ClientOnPageFinishedTest extends AwParameterizedTest {
+    @Rule public AwActivityTestRule mActivityTestRule;
 
     private TestAwContentsClient mContentsClient;
     private AwContents mAwContents;
+
+    public ClientOnPageFinishedTest(AwSettingsMutation param) {
+        this.mActivityTestRule = new AwActivityTestRule(param.getMutation());
+    }
 
     @Before
     public void setUp() {
@@ -71,7 +77,6 @@ public class ClientOnPageFinishedTest {
     @Test
     @MediumTest
     @Feature({"AndroidWebView"})
-    @FlakyTest(message = "crbug.com/652577")
     public void testCalledAfterError() throws Throwable {
         class LocalTestClient extends TestAwContentsClient {
             private boolean mIsOnReceivedErrorCalled;
@@ -79,14 +84,17 @@ public class ClientOnPageFinishedTest {
             private boolean mAllowAboutBlank;
 
             @Override
-            public void onReceivedError(int errorCode, String description, String failingUrl) {
-                Assert.assertEquals("onReceivedError called twice for " + failingUrl, false,
+            public void onReceivedError(AwWebResourceRequest request, AwWebResourceError error) {
+                Assert.assertEquals(
+                        "onReceivedError called twice for " + request.getUrl(),
+                        false,
                         mIsOnReceivedErrorCalled);
                 mIsOnReceivedErrorCalled = true;
                 Assert.assertEquals(
-                        "onPageFinished called before onReceivedError for " + failingUrl, false,
+                        "onPageFinished called before onReceivedError for " + request.getUrl(),
+                        false,
                         mIsOnPageFinishedCalled);
-                super.onReceivedError(errorCode, description, failingUrl);
+                super.onReceivedError(request, error);
             }
 
             @Override
@@ -98,8 +106,10 @@ public class ClientOnPageFinishedTest {
                 Assert.assertEquals(
                         "onPageFinished called twice for " + url, false, mIsOnPageFinishedCalled);
                 mIsOnPageFinishedCalled = true;
-                Assert.assertEquals("onReceivedError not called before onPageFinished for " + url,
-                        true, mIsOnReceivedErrorCalled);
+                Assert.assertEquals(
+                        "onReceivedError not called before onPageFinished for " + url,
+                        true,
+                        mIsOnReceivedErrorCalled);
                 super.onPageFinished(url);
             }
 
@@ -110,15 +120,14 @@ public class ClientOnPageFinishedTest {
         LocalTestClient testContentsClient = new LocalTestClient();
         setTestAwContentsClient(testContentsClient);
 
-        TestCallbackHelperContainer.OnReceivedErrorHelper onReceivedErrorHelper =
-                mContentsClient.getOnReceivedErrorHelper();
+        OnReceivedErrorHelper onReceivedErrorHelper = mContentsClient.getOnReceivedErrorHelper();
         TestCallbackHelperContainer.OnPageFinishedHelper onPageFinishedHelper =
                 mContentsClient.getOnPageFinishedHelper();
 
         String invalidUrl = "http://localhost:7/non_existent";
         mActivityTestRule.loadUrlSync(mAwContents, onPageFinishedHelper, invalidUrl);
 
-        Assert.assertEquals(invalidUrl, onReceivedErrorHelper.getFailingUrl());
+        Assert.assertEquals(invalidUrl, onReceivedErrorHelper.getRequest().getUrl());
         Assert.assertEquals(invalidUrl, onPageFinishedHelper.getUrl());
 
         // Rather than wait a fixed time to see that another onPageFinished callback isn't issued
@@ -146,8 +155,9 @@ public class ClientOnPageFinishedTest {
         TestWebServer webServer = TestWebServer.start();
         try {
             final String redirectTargetPath = "/redirect_target.html";
-            final String redirectTargetUrl = webServer.setResponse(redirectTargetPath,
-                    "<html><body>hello world</body></html>", null);
+            final String redirectTargetUrl =
+                    webServer.setResponse(
+                            redirectTargetPath, "<html><body>hello world</body></html>", null);
             final String redirectUrl = webServer.setRedirect("/302.html", redirectTargetUrl);
 
             final TestAwContentsClient.ShouldOverrideUrlLoadingHelper urlOverrideHelper =
@@ -187,8 +197,11 @@ public class ClientOnPageFinishedTest {
 
             Assert.assertEquals(0, onPageFinishedHelper.getCallCount());
             final int pageWithSubresourcesCallCount = onPageFinishedHelper.getCallCount();
-            mActivityTestRule.loadDataAsync(mAwContents,
-                    "<html><iframe src=\"" + testUrl + "\" /></html>", "text/html", false);
+            mActivityTestRule.loadDataAsync(
+                    mAwContents,
+                    "<html><iframe src=\"" + testUrl + "\" /></html>",
+                    "text/html",
+                    false);
 
             onPageFinishedHelper.waitForCallback(pageWithSubresourcesCallCount);
 
@@ -232,7 +245,9 @@ public class ClientOnPageFinishedTest {
             Assert.assertEquals(0, onPageFinishedHelper.getCallCount());
             mActivityTestRule.loadUrlSync(mAwContents, onPageFinishedHelper, testUrl);
 
-            mActivityTestRule.executeJavaScriptAndWaitForResult(mAwContents, mContentsClient,
+            mActivityTestRule.executeJavaScriptAndWaitForResult(
+                    mAwContents,
+                    mContentsClient,
                     "history.pushState(null, null, '" + historyUrl + "');");
 
             // Rather than wait a fixed time to see that an onPageFinished callback isn't issued
@@ -277,14 +292,21 @@ public class ClientOnPageFinishedTest {
 
         TestWebServer webServer = TestWebServer.start();
         try {
-            final String testHtml = CommonResources.makeHtmlPageFrom("",
-                    "<a href=\"#anchor\" id=\"link\">anchor</a>");
+            final String testHtml =
+                    CommonResources.makeHtmlPageFrom(
+                            "", "<a href=\"#anchor\" id=\"link\">anchor</a>");
             final String testPath = "/test.html";
             final String testUrl = webServer.setResponse(testPath, testHtml, null);
 
             if (useBaseUrl) {
-                mActivityTestRule.loadDataWithBaseUrlSync(mAwContents, onPageFinishedHelper,
-                        testHtml, "text/html", false, webServer.getBaseUrl(), null);
+                mActivityTestRule.loadDataWithBaseUrlSync(
+                        mAwContents,
+                        onPageFinishedHelper,
+                        testHtml,
+                        "text/html",
+                        false,
+                        webServer.getBaseUrl(),
+                        null);
             } else {
                 mActivityTestRule.loadUrlSync(mAwContents, onPageFinishedHelper, testUrl);
             }
@@ -292,8 +314,11 @@ public class ClientOnPageFinishedTest {
             int onPageFinishedCallCount = onPageFinishedHelper.getCallCount();
             int onPageStartedCallCount = onPageStartedHelper.getCallCount();
 
-            JSUtils.clickOnLinkUsingJs(InstrumentationRegistry.getInstrumentation(), mAwContents,
-                    mContentsClient.getOnEvaluateJavaScriptResultHelper(), "link");
+            JSUtils.clickOnLinkUsingJs(
+                    InstrumentationRegistry.getInstrumentation(),
+                    mAwContents,
+                    mContentsClient.getOnEvaluateJavaScriptResultHelper(),
+                    "link");
 
             onPageFinishedHelper.waitForCallback(onPageFinishedCallCount);
             Assert.assertEquals(onPageStartedCallCount, onPageStartedHelper.getCallCount());
@@ -347,21 +372,27 @@ public class ClientOnPageFinishedTest {
         TestWebServer webServer = TestWebServer.start();
         try {
             final CountDownLatch latch = new CountDownLatch(1);
-            final String url = webServer.setResponseWithRunnableAction(
-                    "/about.html", CommonResources.ABOUT_HTML, null,
-                    () -> {
-                        try {
-                            Assert.assertTrue(latch.await(SCALED_WAIT_TIMEOUT_MS,
-                                    java.util.concurrent.TimeUnit.MILLISECONDS));
-                        } catch (InterruptedException e) {
-                            Assert.fail("Caught InterruptedException " + e);
-                        }
-                    });
+            final String url =
+                    webServer.setResponseWithRunnableAction(
+                            "/about.html",
+                            CommonResources.ABOUT_HTML,
+                            null,
+                            () -> {
+                                try {
+                                    Assert.assertTrue(
+                                            latch.await(
+                                                    SCALED_WAIT_TIMEOUT_MS,
+                                                    java.util.concurrent.TimeUnit.MILLISECONDS));
+                                } catch (InterruptedException e) {
+                                    Assert.fail("Caught InterruptedException " + e);
+                                }
+                            });
             TestCallbackHelperContainer.OnPageFinishedHelper onPageFinishedHelper =
                     mContentsClient.getOnPageFinishedHelper();
             final int onPageFinishedCallCount = onPageFinishedHelper.getCallCount();
             mActivityTestRule.loadUrlAsync(mAwContents, url);
-            mActivityTestRule.loadUrlAsync(mAwContents,
+            mActivityTestRule.loadUrlAsync(
+                    mAwContents,
                     "javascript:(function(){document.body.innerHTML='Hello,%20World!';})()");
             mActivityTestRule.stopLoading(mAwContents);
             // We now have 3 possible outcomes:
@@ -375,7 +406,7 @@ public class ClientOnPageFinishedTest {
             onPageFinishedHelper.waitForCallback(onPageFinishedCallCount);
             Assert.assertEquals(url, onPageFinishedHelper.getUrl());
             Assert.assertEquals(onPageFinishedCallCount + 1, onPageFinishedHelper.getCallCount());
-            latch.countDown();  // Release the server.
+            latch.countDown(); // Release the server.
             final String syncUrl = webServer.setResponse("/sync.html", "", null);
             mActivityTestRule.loadUrlAsync(mAwContents, syncUrl);
             onPageFinishedHelper.waitForCallback(onPageFinishedCallCount + 1);
@@ -408,8 +439,12 @@ public class ClientOnPageFinishedTest {
     public void testNotCalledOnDomModificationAfterLoadData() throws Throwable {
         TestWebServer webServer = TestWebServer.start();
         try {
-            mActivityTestRule.loadDataSync(mAwContents, mContentsClient.getOnPageFinishedHelper(),
-                    CommonResources.ABOUT_HTML, "text/html", false);
+            mActivityTestRule.loadDataSync(
+                    mAwContents,
+                    mContentsClient.getOnPageFinishedHelper(),
+                    CommonResources.ABOUT_HTML,
+                    "text/html",
+                    false);
             doTestOnPageFinishedNotCalledOnDomMutation(webServer, null);
         } finally {
             webServer.shutdown();
@@ -478,9 +513,7 @@ public class ClientOnPageFinishedTest {
         }
     }
 
-    /**
-     * Ensure onPageFinished is called when a provisional load is cancelled.
-     */
+    /** Ensure onPageFinished is called when a provisional load is cancelled. */
     @Test
     @MediumTest
     @Feature({"AndroidWebView"})
@@ -488,17 +521,23 @@ public class ClientOnPageFinishedTest {
         TestWebServer webServer = TestWebServer.start();
         final CountDownLatch firstUrlLatch = new CountDownLatch(1);
         try {
-            final String url = webServer.setResponseWithRunnableAction(
-                    "/slow_page.html", "", null /* headers */, () -> {
-                        try {
-                            // Delay the server response so that we guarantee stopLoading() comes
-                            // before the server response.
-                            Assert.assertTrue(firstUrlLatch.await(SCALED_WAIT_TIMEOUT_MS,
-                                    java.util.concurrent.TimeUnit.MILLISECONDS));
-                        } catch (InterruptedException e) {
-                            Assert.fail("Caught InterruptedException " + e);
-                        }
-                    });
+            final String url =
+                    webServer.setResponseWithRunnableAction(
+                            "/slow_page.html",
+                            "",
+                            /* responseHeaders= */ null,
+                            () -> {
+                                try {
+                                    // Delay the server response so that we guarantee stopLoading()
+                                    // comes before the server response.
+                                    Assert.assertTrue(
+                                            firstUrlLatch.await(
+                                                    SCALED_WAIT_TIMEOUT_MS,
+                                                    java.util.concurrent.TimeUnit.MILLISECONDS));
+                                } catch (InterruptedException e) {
+                                    Assert.fail("Caught InterruptedException " + e);
+                                }
+                            });
             TestCallbackHelperContainer.OnPageFinishedHelper onPageFinishedHelper =
                     mContentsClient.getOnPageFinishedHelper();
             int initialCallCount = onPageFinishedHelper.getCallCount();
@@ -512,7 +551,8 @@ public class ClientOnPageFinishedTest {
             firstUrlLatch.countDown();
 
             // Load another page to ensure onPageFinished isn't called several times.
-            final String syncUrl = webServer.setResponse("/sync.html", "", null /* headers */);
+            final String syncUrl =
+                    webServer.setResponse("/sync.html", "", /* responseHeaders= */ null);
             mActivityTestRule.loadUrlSync(mAwContents, onPageFinishedHelper, syncUrl);
             Assert.assertEquals(syncUrl, onPageFinishedHelper.getUrl());
             final int finalCallCount = onPageFinishedHelper.getCallCount();
@@ -523,12 +563,11 @@ public class ClientOnPageFinishedTest {
         }
     }
 
-    /**
-     * Ensure onPageFinished is called when a committed load is cancelled.
-     */
+    /** Ensure onPageFinished is called when a committed load is cancelled. */
     @Test
     @MediumTest
     @Feature({"AndroidWebView"})
+    @SkipMutations(reason = "This test depends on AwSettings.setImagesEnabled(true)")
     public void testCalledOnCancelingCommittedLoad() throws Throwable {
         TestCallbackHelperContainer.OnPageFinishedHelper onPageFinishedHelper =
                 mContentsClient.getOnPageFinishedHelper();
@@ -537,16 +576,22 @@ public class ClientOnPageFinishedTest {
         final CountDownLatch serverImageUrlLatch = new CountDownLatch(1);
         final CountDownLatch testDoneLatch = new CountDownLatch(1);
         try {
-            final String stallingImageUrl = webServer.setResponseWithRunnableAction(
-                    "/stallingImage.html", "", null /* headers */, () -> {
-                        serverImageUrlLatch.countDown();
-                        try {
-                            Assert.assertTrue(testDoneLatch.await(SCALED_WAIT_TIMEOUT_MS,
-                                    java.util.concurrent.TimeUnit.MILLISECONDS));
-                        } catch (InterruptedException e) {
-                            Assert.fail("Caught InterruptedException " + e);
-                        }
-                    });
+            final String stallingImageUrl =
+                    webServer.setResponseWithRunnableAction(
+                            "/stallingImage.html",
+                            "",
+                            /* responseHeaders= */ null,
+                            () -> {
+                                serverImageUrlLatch.countDown();
+                                try {
+                                    Assert.assertTrue(
+                                            testDoneLatch.await(
+                                                    SCALED_WAIT_TIMEOUT_MS,
+                                                    java.util.concurrent.TimeUnit.MILLISECONDS));
+                                } catch (InterruptedException e) {
+                                    Assert.fail("Caught InterruptedException " + e);
+                                }
+                            });
 
             final String mainPageHtml =
                     CommonResources.makeHtmlPageFrom("", "<img src=" + stallingImageUrl + ">");
@@ -555,8 +600,9 @@ public class ClientOnPageFinishedTest {
             Assert.assertEquals(0, onPageFinishedHelper.getCallCount());
             mActivityTestRule.loadUrlAsync(mAwContents, mainPageUrl);
 
-            Assert.assertTrue(serverImageUrlLatch.await(
-                    SCALED_WAIT_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS));
+            Assert.assertTrue(
+                    serverImageUrlLatch.await(
+                            SCALED_WAIT_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS));
             Assert.assertEquals(0, onPageFinishedHelper.getCallCount());
             // Our load isn't done since we haven't loaded the image - now cancel the load.
             mActivityTestRule.stopLoading(mAwContents);
@@ -612,6 +658,45 @@ public class ClientOnPageFinishedTest {
             mActivityTestRule.loadUrlAsync(mAwContents, redirectUrl);
             mActivityTestRule.waitForVisualStateCallback(mAwContents);
             Assert.assertEquals(webpageNotAvailable, mAwContents.getTitle());
+        } finally {
+            webServer.shutdown();
+        }
+    }
+
+    /** Fragment navigation triggered by history APIs can trigger onPageFinished. */
+    @Test
+    @MediumTest
+    @Feature({"AndroidWebView"})
+    public void testCalledForHistoryApiFragmentNavigation() throws Throwable {
+        TestCallbackHelperContainer.OnPageFinishedHelper onPageFinishedHelper =
+                mContentsClient.getOnPageFinishedHelper();
+        AwActivityTestRule.enableJavaScriptOnUiThread(mAwContents);
+        TestWebServer webServer = TestWebServer.start();
+        try {
+            final String testHtml = "<html><head>Header</head><body>Body</body></html>";
+            final String testPath = "/test.html";
+            final String fragmentPath = "/test.html#fragment";
+
+            final String testUrl = webServer.setResponse(testPath, testHtml, null);
+            final String fragmentUrl = webServer.getResponseUrl(fragmentPath);
+
+            int currentCallCount = onPageFinishedHelper.getCallCount();
+            mActivityTestRule.loadUrlSync(mAwContents, onPageFinishedHelper, testUrl);
+            onPageFinishedHelper.waitForCallback(currentCallCount);
+            Assert.assertEquals(testUrl, onPageFinishedHelper.getUrl());
+            Assert.assertEquals(1, onPageFinishedHelper.getCallCount());
+
+            currentCallCount = onPageFinishedHelper.getCallCount();
+            // History APIs can trigger fragment navigation, and this fragment navigation will
+            // trigger onPageFinished, the parameter url carried by onPageFinished will be the
+            // parameter url carried by history API.
+            mActivityTestRule.executeJavaScriptAndWaitForResult(
+                    mAwContents,
+                    mContentsClient,
+                    "history.pushState(null, null, '" + fragmentPath + "');");
+            onPageFinishedHelper.waitForCallback(currentCallCount);
+            Assert.assertEquals(fragmentUrl, onPageFinishedHelper.getUrl());
+            Assert.assertEquals(2, onPageFinishedHelper.getCallCount());
         } finally {
             webServer.shutdown();
         }

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,11 +19,10 @@ extern "C" {
 // When the perf data is visualized by the performance dashboard, data with
 // different |sub_test_name|s (but the same |test_name|) are depicted as
 // different traces on the same chart.
-void MojoTestSupportLogPerfResult(
-    const char* test_name,
-    const char* sub_test_name,
-    double value,
-    const char* units);
+void MojoTestSupportLogPerfResult(const char* test_name,
+                                  const char* sub_test_name,
+                                  double value,
+                                  const char* units);
 
 // Opens a "/"-delimited file path relative to the source root.
 FILE* MojoTestSupportOpenSourceRootRelativeFile(

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,14 +11,18 @@
 #include "ash/public/cpp/keyboard/keyboard_controller.h"
 #include "ash/public/cpp/keyboard/keyboard_controller_observer.h"
 #include "ash/shell.h"
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "chrome/browser/profiles/profile.h"
 
 class ChromeKeyboardControllerClientTestHelper::FakeKeyboardController
     : public ash::KeyboardController {
  public:
   FakeKeyboardController() = default;
+
+  FakeKeyboardController(const FakeKeyboardController&) = delete;
+  FakeKeyboardController& operator=(const FakeKeyboardController&) = delete;
+
   ~FakeKeyboardController() override = default;
 
   // ash::KeyboardController:
@@ -32,13 +36,15 @@ class ChromeKeyboardControllerClientTestHelper::FakeKeyboardController
   bool IsKeyboardEnabled() override { return enabled_; }
   void SetEnableFlag(keyboard::KeyboardEnableFlag flag) override {
     keyboard_enable_flags_.insert(flag);
-    for (auto& observer : observers_)
+    for (auto& observer : observers_) {
       observer.OnKeyboardEnableFlagsChanged(keyboard_enable_flags_);
+    }
   }
   void ClearEnableFlag(keyboard::KeyboardEnableFlag flag) override {
     keyboard_enable_flags_.erase(flag);
-    for (auto& observer : observers_)
+    for (auto& observer : observers_) {
       observer.OnKeyboardEnableFlagsChanged(keyboard_enable_flags_);
+    }
   }
   const std::set<keyboard::KeyboardEnableFlag>& GetEnableFlags() override {
     return keyboard_enable_flags_;
@@ -71,10 +77,12 @@ class ChromeKeyboardControllerClientTestHelper::FakeKeyboardController
   void RemoveObserver(ash::KeyboardControllerObserver* observer) override {
     observers_.RemoveObserver(observer);
   }
-  ash::KeyRepeatSettings GetKeyRepeatSettings() override {
-    return ash::KeyRepeatSettings{true, base::TimeDelta::FromMilliseconds(1000),
-                                  base::TimeDelta::FromMilliseconds(1000)};
+  std::optional<ash::KeyRepeatSettings> GetKeyRepeatSettings() override {
+    return ash::KeyRepeatSettings{true, base::Milliseconds(1000),
+                                  base::Milliseconds(1000)};
   }
+  bool AreTopRowKeysFunctionKeys() override { return false; }
+  void SetSmartVisibilityEnabled(bool enabled) override {}
 
  private:
   keyboard::KeyboardConfig keyboard_config_;
@@ -82,8 +90,6 @@ class ChromeKeyboardControllerClientTestHelper::FakeKeyboardController
   bool enabled_ = false;
   bool visible_ = false;
   base::ObserverList<ash::KeyboardControllerObserver>::Unchecked observers_;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeKeyboardController);
 };
 
 // static

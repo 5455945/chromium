@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Copyright 2019 The Chromium Authors. All rights reserved.
-     Use of this source code is governed by a BSD-style license that can be
-     found in the LICENSE file. -->
+<!--
+Copyright 2019 The Chromium Authors
+Use of this source code is governed by a BSD-style license that can be
+found in the LICENSE file.
+-->
 
 <resources>
     <declare-styleable name="BoundedLinearLayout">
@@ -21,12 +23,6 @@
         </attr>
         <attr name="dualControlLayoutVerticalPadding" format="dimension"/>
         <attr name="dualControlLayoutHorizontalPadding" format="dimension"/>
-    </declare-styleable>
-
-    <declare-styleable name="ListMenuButton">
-        <attr name="menuMaxWidth" format="reference|dimension" />
-        <attr name="menuVerticalOverlapAnchor" format="boolean" />
-        <attr name="menuHorizontalOverlapAnchor" format="boolean" />
     </declare-styleable>
 
     <declare-styleable name="AsyncImageView">
@@ -53,6 +49,8 @@
     <declare-styleable name="RadioButtonWithDescription">
         <attr name="primaryText" format="string" />
         <attr name="descriptionText" format="string" />
+        <attr name="primaryTextAppearance" format="reference" />
+        <attr name="descriptionTextAppearance" format="reference" />
         <attr name="iconSrc" format="reference" />
     </declare-styleable>
 
@@ -80,4 +78,73 @@
         <attr name="horizontalSpacing" format="dimension" />
         <attr name="verticalSpacing" format="dimension" />
     </declare-styleable>
+
+    <declare-styleable name="ChipView">
+        <attr name="allowMultipleLines" format="boolean"/>
+        <attr name="textArrangement" format="enum">
+            <enum name="horizontal" value="0"/>
+            <enum name="vertical" value="1"/>
+        </attr>
+        <attr name="solidColorChip" format="boolean"/>
+        <attr name="textAlignStart" format="boolean"/>
+        <attr name="chipColor" format="color"/>
+        <attr name="chipStartPadding" format="reference|dimension"/>
+        <attr name="chipTopPadding" format="reference|dimension"/>
+        <attr name="chipEndPadding" format="reference|dimension"/>
+        <attr name="chipBottomPadding" format="reference|dimension"/>
+        <attr name="chipStateLayerColor" format="color"/>
+        <attr name="chipStrokeColor" format="color"/>
+        <attr name="chipStyle" format="reference"/>
+        <attr name="cornerRadius" format="dimension"/>
+        <attr name="iconWidth" format="reference|dimension"/>
+        <attr name="iconHeight" format="reference|dimension"/>
+        <attr name="useRoundedIcon" format="boolean"/>
+        <attr name="primaryTextAppearance" format="reference"/>
+        <attr name="primaryTextStartPadding" format="reference|dimension"/>
+        <attr name="endIconWidth" format="reference|dimension"/>
+        <attr name="endIconHeight" format="reference|dimension"/>
+        <attr name="endIconMarginStart" format="reference|dimension"/>
+        <attr name="endIconMarginEnd" format="reference|dimension"/>
+        <attr name="loadingViewSize" format="reference|dimension"/>
+        <attr name="multiLineVerticalPadding" format="reference|dimension"/>
+        <attr name="secondaryTextAppearance" format="reference"/>
+        <attr name="rippleColor"/>
+        <attr name="verticalInset"/>
+        <attr name="horizontalInset"/>
+        <attr name="android:text"/>
+        <attr name="icon" format="reference"/>
+        <attr name="iconTint" format="color"/>
+    </declare-styleable>
+
+    <declare-styleable name="MaterialCardViewNoShadow">
+        <attr name="cornerRadius" format="dimension"/>
+        <attr name="cardBackgroundColor" format="color"/>
+    </declare-styleable>
+
+    <declare-styleable name="FadingEdgeScrollView">
+        <attr name="topEdgeVisibility" format="enum">
+            <enum name="none" value="0" />
+            <enum name="fading" value="1" />
+            <enum name="hard" value="2" />
+        </attr>
+        <attr name="bottomEdgeVisibility" format="enum">
+            <enum name="none" value="0" />
+            <enum name="fading" value="1" />
+            <enum name="hard" value="2" />
+        </attr>
+    </declare-styleable>
+
+    <declare-styleable name="ContainmentItem">
+        <!-- LINT.IfChange-->
+        <!-- The background style for the preference -->
+        <attr name="backgroundStyle" format="enum">
+            <enum name="standard" value="0" />
+            <enum name="card" value="1" />
+            <enum name="none" value="2" />
+        </attr>
+        <!-- LINT.ThenChange(//components/browser_ui/widget/android/java/src/org/chromium/components/browser_ui/widget/containment/ContainmentItem.java) -->
+        <!-- The background color for the preference. -->
+        <attr name="backgroundColor" format="color|reference" />
+    </declare-styleable>
+
 </resources>

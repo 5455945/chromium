@@ -1,4 +1,4 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,20 +10,21 @@
 #include <unordered_map>
 #include <utility>
 
-#include "base/callback.h"
 #include "base/files/file_path.h"
-#include "base/lazy_instance.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
-#include "base/sequenced_task_runner.h"
+#include "base/no_destructor.h"
 #include "base/synchronization/lock.h"
-#include "base/task/post_task.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
 
 namespace disk_cache {
 
 namespace {
 
-using TrackerMap = std::unordered_map<base::FilePath, BackendCleanupTracker*>;
+using TrackerMap =
+    std::unordered_map<base::FilePath,
+                       raw_ptr<BackendCleanupTracker, CtnExperimental>>;
 struct AllBackendCleanupTrackers {
   TrackerMap map;
 
@@ -35,7 +36,10 @@ struct AllBackendCleanupTrackers {
   base::Lock lock;
 };
 
-static base::LazyInstance<AllBackendCleanupTrackers>::Leaky g_all_trackers;
+AllBackendCleanupTrackers& GetAllTrackers() {
+  static base::NoDestructor<AllBackendCleanupTrackers> all_trackers;
+  return *all_trackers;
+}
 
 }  // namespace.
 
@@ -43,15 +47,15 @@ static base::LazyInstance<AllBackendCleanupTrackers>::Leaky g_all_trackers;
 scoped_refptr<BackendCleanupTracker> BackendCleanupTracker::TryCreate(
     const base::FilePath& path,
     base::OnceClosure retry_closure) {
-  AllBackendCleanupTrackers* all_trackers = g_all_trackers.Pointer();
-  base::AutoLock lock(all_trackers->lock);
+  AllBackendCleanupTrackers& all_trackers = GetAllTrackers();
+  base::AutoLock lock(all_trackers.lock);
 
-  std::pair<TrackerMap::iterator, bool> insert_result =
-      all_trackers->map.insert(
-          std::pair<base::FilePath, BackendCleanupTracker*>(path, nullptr));
+  std::pair<TrackerMap::iterator, bool> insert_result = all_trackers.map.insert(
+      std::pair<base::FilePath, BackendCleanupTracker*>(path, nullptr));
   if (insert_result.second) {
-    insert_result.first->second = new BackendCleanupTracker(path);
-    return insert_result.first->second;
+    auto tracker = base::WrapRefCounted(new BackendCleanupTracker(path));
+    insert_result.first->second = tracker.get();
+    return tracker;
   } else {
     insert_result.first->second->AddPostCleanupCallbackImpl(
         std::move(retry_closure));
@@ -63,13 +67,13 @@ void BackendCleanupTracker::AddPostCleanupCallback(base::OnceClosure cb) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(seq_checker_);
   // Despite the sequencing requirement we need to grab the table lock since
   // this may otherwise race against TryMakeContext.
-  base::AutoLock lock(g_all_trackers.Get().lock);
+  base::AutoLock lock(GetAllTrackers().lock);
   AddPostCleanupCallbackImpl(std::move(cb));
 }
 
 void BackendCleanupTracker::AddPostCleanupCallbackImpl(base::OnceClosure cb) {
-  post_cleanup_cbs_.push_back(
-      std::make_pair(base::SequencedTaskRunnerHandle::Get(), std::move(cb)));
+  post_cleanup_cbs_.emplace_back(base::SequencedTaskRunner::GetCurrentDefault(),
+                                 std::move(cb));
 }
 
 BackendCleanupTracker::BackendCleanupTracker(const base::FilePath& path)
@@ -79,9 +83,9 @@ BackendCleanupTracker::~BackendCleanupTracker() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(seq_checker_);
 
   {
-    AllBackendCleanupTrackers* all_trackers = g_all_trackers.Pointer();
-    base::AutoLock lock(all_trackers->lock);
-    int rv = all_trackers->map.erase(path_);
+    AllBackendCleanupTrackers& all_trackers = GetAllTrackers();
+    base::AutoLock lock(all_trackers.lock);
+    int rv = all_trackers.map.erase(path_);
     DCHECK_EQ(1, rv);
   }
 

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,37 +12,21 @@
 
 namespace blink {
 
-namespace {
-
-void LogPerPolicyApplied(NavigationDownloadType type) {
-  UMA_HISTOGRAM_ENUMERATION("Navigation.DownloadPolicy.LogPerPolicyApplied",
-                            type);
-}
-
-void LogArbitraryPolicyPerDownload(NavigationDownloadType type) {
-  UMA_HISTOGRAM_ENUMERATION(
-      "Navigation.DownloadPolicy.LogArbitraryPolicyPerDownload", type);
-}
-}  // namespace
-
 NavigationDownloadPolicy::NavigationDownloadPolicy() = default;
 NavigationDownloadPolicy::~NavigationDownloadPolicy() = default;
 NavigationDownloadPolicy::NavigationDownloadPolicy(
     const NavigationDownloadPolicy&) = default;
 
 void NavigationDownloadPolicy::SetAllowed(NavigationDownloadType type) {
-  DCHECK(type != NavigationDownloadType::kDefaultAllow);
   observed_types.set(static_cast<size_t>(type));
 }
 
 void NavigationDownloadPolicy::SetDisallowed(NavigationDownloadType type) {
-  DCHECK(type != NavigationDownloadType::kDefaultAllow);
   observed_types.set(static_cast<size_t>(type));
   disallowed_types.set(static_cast<size_t>(type));
 }
 
 bool NavigationDownloadPolicy::IsType(NavigationDownloadType type) const {
-  DCHECK(type != NavigationDownloadType::kDefaultAllow);
   return observed_types.test(static_cast<size_t>(type));
 }
 
@@ -66,66 +50,36 @@ bool NavigationDownloadPolicy::IsDownloadAllowed() const {
   return disallowed_types.none();
 }
 
-void NavigationDownloadPolicy::RecordHistogram() const {
-  if (observed_types.none()) {
-    LogPerPolicyApplied(NavigationDownloadType::kDefaultAllow);
-    LogArbitraryPolicyPerDownload(NavigationDownloadType::kDefaultAllow);
-    return;
-  }
-
-  bool first_type_seen = false;
-  for (size_t i = 0; i < observed_types.size(); ++i) {
-    if (observed_types.test(i)) {
-      NavigationDownloadType policy = static_cast<NavigationDownloadType>(i);
-      DCHECK(policy != NavigationDownloadType::kDefaultAllow);
-      LogPerPolicyApplied(policy);
-      if (!first_type_seen) {
-        LogArbitraryPolicyPerDownload(policy);
-        first_type_seen = true;
-      }
-    }
-  }
-  DCHECK(first_type_seen);
-}
-
 void NavigationDownloadPolicy::ApplyDownloadFramePolicy(
     bool is_opener_navigation,
     bool has_gesture,
-    bool can_access_current_origin,
+    bool openee_can_access_opener_origin,
     bool has_download_sandbox_flag,
-    bool is_blocking_downloads_in_sandbox_enabled,
-    bool from_ad) {
+    bool from_ad_frame,
+    bool is_ad_script_in_stack) {
   if (!has_gesture)
     SetAllowed(NavigationDownloadType::kNoGesture);
 
   // Disallow downloads on an opener if the requestor is cross origin.
   // See crbug.com/632514.
-  if (is_opener_navigation && !can_access_current_origin) {
+  if (is_opener_navigation && !openee_can_access_opener_origin) {
     SetDisallowed(NavigationDownloadType::kOpenerCrossOrigin);
   }
 
   if (has_download_sandbox_flag) {
-    if (is_blocking_downloads_in_sandbox_enabled) {
-      SetDisallowed(NavigationDownloadType::kSandbox);
-    } else {
-      SetAllowed(NavigationDownloadType::kSandbox);
-    }
+    SetDisallowed(NavigationDownloadType::kSandbox);
   }
 
-  if (from_ad) {
+  if (from_ad_frame) {
     SetAllowed(NavigationDownloadType::kAdFrame);
     if (!has_gesture) {
-      if (base::FeatureList::IsEnabled(
-              features::kBlockingDownloadsInAdFrameWithoutUserActivation)) {
-        SetDisallowed(NavigationDownloadType::kAdFrameNoGesture);
-      } else {
-        SetAllowed(NavigationDownloadType::kAdFrameNoGesture);
-      }
+      SetDisallowed(NavigationDownloadType::kAdFrameNoGesture);
     }
   }
 
-  blocking_downloads_in_sandbox_enabled =
-      is_blocking_downloads_in_sandbox_enabled;
+  if (is_ad_script_in_stack) {
+    SetAllowed(NavigationDownloadType::kAdScript);
+  }
 }
 
 }  // namespace blink

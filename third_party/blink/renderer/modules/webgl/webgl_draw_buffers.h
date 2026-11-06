@@ -26,10 +26,12 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_WEBGL_WEBGL_DRAW_BUFFERS_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_WEBGL_WEBGL_DRAW_BUFFERS_H_
 
-#include "base/memory/scoped_refptr.h"
+#include "third_party/angle/include/GLES2/gl2.h"
 #include "third_party/blink/renderer/modules/webgl/webgl_extension.h"
 
 namespace blink {
+
+class ExecutionContext;
 
 class WebGLDrawBuffers final : public WebGLExtension {
   DEFINE_WRAPPERTYPEINFO();
@@ -38,7 +40,7 @@ class WebGLDrawBuffers final : public WebGLExtension {
   static bool Supported(WebGLRenderingContextBase*);
   static const char* ExtensionName();
 
-  explicit WebGLDrawBuffers(WebGLRenderingContextBase*);
+  WebGLDrawBuffers(WebGLRenderingContextBase*, ExecutionContext*);
 
   WebGLExtensionName GetName() const override;
 

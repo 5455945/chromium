@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,9 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
 #include "base/time/time.h"
 #include "base/values.h"
-#include "components/sync/base/model_type.h"
+#include "components/sync/base/data_type.h"
 #include "components/sync/engine/events/protocol_event.h"
 #include "components/sync/protocol/sync.pb.h"
 
@@ -23,8 +22,12 @@ class CommitRequestEvent : public ProtocolEvent {
  public:
   CommitRequestEvent(base::Time timestamp,
                      size_t num_items,
-                     ModelTypeSet contributing_types,
+                     DataTypeSet contributing_types,
                      const sync_pb::ClientToServerMessage& request);
+
+  CommitRequestEvent(const CommitRequestEvent&) = delete;
+  CommitRequestEvent& operator=(const CommitRequestEvent&) = delete;
+
   ~CommitRequestEvent() override;
 
   std::unique_ptr<ProtocolEvent> Clone() const override;
@@ -33,15 +36,11 @@ class CommitRequestEvent : public ProtocolEvent {
   base::Time GetTimestamp() const override;
   std::string GetType() const override;
   std::string GetDetails() const override;
-  std::unique_ptr<base::DictionaryValue> GetProtoMessage(
-      bool include_specifics) const override;
-
+  base::DictValue GetProtoMessage(bool include_specifics) const override;
   const base::Time timestamp_;
   const size_t num_items_;
-  const ModelTypeSet contributing_types_;
+  const DataTypeSet contributing_types_;
   const sync_pb::ClientToServerMessage request_;
-
-  DISALLOW_COPY_AND_ASSIGN(CommitRequestEvent);
 };
 
 }  // namespace syncer

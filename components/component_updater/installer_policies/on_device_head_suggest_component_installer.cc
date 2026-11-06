@@ -1,18 +1,22 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/component_updater/installer_policies/on_device_head_suggest_component_installer.h"
 
-#include <cstdint>
+#include <stdint.h>
+
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "base/files/file_util.h"
+#include "base/functional/callback.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/path_service.h"
 #include "base/strings/string_util.h"
+#include "base/values.h"
 #include "components/component_updater/component_installer.h"
 #include "components/component_updater/component_updater_service.h"
 #include "components/omnibox/browser/omnibox_field_trial.h"
@@ -22,7 +26,7 @@ namespace component_updater {
 
 namespace {
 // CRX hash. The extension id is: obedbbhbpmojnkanicioggnmelmoomoc.
-const uint8_t kOnDeviceHeadSuggestPublicKeySHA256[32] = {
+constexpr uint8_t kOnDeviceHeadSuggestPublicKeySHA256[32] = {
     0xe1, 0x43, 0x11, 0x71, 0xfc, 0xe9, 0xda, 0x0d, 0x82, 0x8e, 0x66,
     0xdc, 0x4b, 0xce, 0xec, 0xe2, 0xa3, 0xb0, 0x47, 0x00, 0x3d, 0xb8,
     0xcf, 0x8e, 0x0f, 0x4a, 0x73, 0xa1, 0x89, 0x1f, 0x5f, 0x38};
@@ -35,22 +39,23 @@ std::string GetNormalizedLocale(const std::string& raw_locale) {
   std::string locale, locale_constraint;
   // Both incognito and non-incognito will use a same model so it's okay to
   // fetch the param from either feature.
-  if (OmniboxFieldTrial::IsOnDeviceHeadSuggestEnabledForIncognito())
+  if (OmniboxFieldTrial::IsOnDeviceHeadSuggestEnabledForIncognito()) {
     locale_constraint =
         OmniboxFieldTrial::OnDeviceHeadModelLocaleConstraint(true);
-  else if (OmniboxFieldTrial::IsOnDeviceHeadSuggestEnabledForNonIncognito())
+  } else if (OmniboxFieldTrial::IsOnDeviceHeadSuggestEnabledForNonIncognito()) {
     locale_constraint =
         OmniboxFieldTrial::OnDeviceHeadModelLocaleConstraint(false);
+  }
 
   locale = raw_locale;
-  for (const auto c : "-_")
-    locale.erase(std::remove(locale.begin(), locale.end(), c), locale.end());
+  std::erase_if(locale, [](const char c) { return c == '-' || c == '_'; });
 
-  std::transform(locale.begin(), locale.end(), locale.begin(),
-                 [](char c) -> char { return base::ToUpperASCII(c); });
+  std::ranges::transform(locale, locale.begin(),
+                         [](char c) { return base::ToUpperASCII(c); });
 
-  if (!locale_constraint.empty())
+  if (!locale_constraint.empty()) {
     locale += locale_constraint;
+  }
 
   VLOG(1) << "On Device Head Component will fetch model for locale: " << locale;
 
@@ -67,12 +72,13 @@ OnDeviceHeadSuggestInstallerPolicy::~OnDeviceHeadSuggestInstallerPolicy() =
     default;
 
 bool OnDeviceHeadSuggestInstallerPolicy::VerifyInstallation(
-    const base::DictionaryValue& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) const {
-  const std::string* name = manifest.FindStringPath("name");
+  const std::string* name = manifest.FindString("name");
 
-  if (!name || *name != ("OnDeviceHeadSuggest" + accept_locale_))
+  if (!name || *name != ("OnDeviceHeadSuggest" + accept_locale_)) {
     return false;
+  }
 
   bool is_successful = base::PathExists(install_dir);
   VLOG(1) << "On Device head model "
@@ -84,7 +90,7 @@ bool OnDeviceHeadSuggestInstallerPolicy::VerifyInstallation(
 
 bool OnDeviceHeadSuggestInstallerPolicy::
     SupportsGroupPolicyEnabledComponentUpdates() const {
-  return false;
+  return true;
 }
 
 bool OnDeviceHeadSuggestInstallerPolicy::RequiresNetworkEncryption() const {
@@ -93,7 +99,7 @@ bool OnDeviceHeadSuggestInstallerPolicy::RequiresNetworkEncryption() const {
 
 update_client::CrxInstaller::Result
 OnDeviceHeadSuggestInstallerPolicy::OnCustomInstall(
-    const base::DictionaryValue& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) {
   return update_client::CrxInstaller::Result(0);  // Nothing custom here.
 }
@@ -103,10 +109,11 @@ void OnDeviceHeadSuggestInstallerPolicy::OnCustomUninstall() {}
 void OnDeviceHeadSuggestInstallerPolicy::ComponentReady(
     const base::Version& version,
     const base::FilePath& install_dir,
-    std::unique_ptr<base::DictionaryValue> manifest) {
+    base::DictValue manifest) {
   auto* listener = OnDeviceModelUpdateListener::GetInstance();
-  if (listener)
-    listener->OnModelUpdate(install_dir);
+  if (listener) {
+    listener->OnHeadModelUpdate(install_dir);
+  }
 }
 
 base::FilePath OnDeviceHeadSuggestInstallerPolicy::GetRelativeInstallDir()
@@ -116,8 +123,7 @@ base::FilePath OnDeviceHeadSuggestInstallerPolicy::GetRelativeInstallDir()
 
 void OnDeviceHeadSuggestInstallerPolicy::GetHash(
     std::vector<uint8_t>* hash) const {
-  hash->assign(std::begin(kOnDeviceHeadSuggestPublicKeySHA256),
-               std::end(kOnDeviceHeadSuggestPublicKeySHA256));
+  hash->assign_range(kOnDeviceHeadSuggestPublicKeySHA256);
 }
 
 std::string OnDeviceHeadSuggestInstallerPolicy::GetName() const {
@@ -134,7 +140,7 @@ void RegisterOnDeviceHeadSuggestComponent(ComponentUpdateService* cus,
   // Ideally we should only check if the feature is enabled for non-incognito or
   // incognito, but whether the browser is currently on incognito or not is not
   // available yet during component registration on iOS platform.
-  if (OmniboxFieldTrial::IsOnDeviceHeadSuggestEnabledForAnyMode()) {
+  if (OmniboxFieldTrial::IsOnDeviceHeadSuggestEnabledForLocale(locale)) {
     auto installer = base::MakeRefCounted<ComponentInstaller>(
         std::make_unique<OnDeviceHeadSuggestInstallerPolicy>(locale));
     installer->Register(cus, base::OnceClosure());

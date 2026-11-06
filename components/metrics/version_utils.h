@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -26,6 +26,9 @@ SystemProfileProto::Channel AsProtobufChannel(version_info::Channel channel);
 // Gets Chrome's package name in Android Chrome, or an empty string on other
 // platforms.
 std::string GetAppPackageName();
+
+// Gets the operating system name.
+std::string GetOperatingSystemName();
 
 }  // namespace metrics
 

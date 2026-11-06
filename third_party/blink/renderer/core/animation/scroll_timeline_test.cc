@@ -1,71 +1,70 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/animation/scroll_timeline.h"
 
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_animation_play_state.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_scroll_timeline_options.h"
-#include "third_party/blink/renderer/bindings/core/v8/v8_union_csskeywordvalue_cssnumericvalue_scrolltimelineelementbasedoffset_string.h"
-#include "third_party/blink/renderer/bindings/core/v8/v8_union_double_scrolltimelineautokeyword.h"
+#include "third_party/blink/renderer/core/animation/animation_clock.h"
 #include "third_party/blink/renderer/core/animation/animation_test_helpers.h"
 #include "third_party/blink/renderer/core/animation/document_animations.h"
+#include "third_party/blink/renderer/core/animation/element_animations.h"
 #include "third_party/blink/renderer/core/animation/keyframe_effect.h"
 #include "third_party/blink/renderer/core/animation/keyframe_effect_model.h"
+#include "third_party/blink/renderer/core/animation/pending_animations.h"
+#include "third_party/blink/renderer/core/animation/timing_calculations.h"
+#include "third_party/blink/renderer/core/animation/view_timeline.h"
 #include "third_party/blink/renderer/core/css/css_numeric_literal_value.h"
+#include "third_party/blink/renderer/core/css/resolver/style_resolver.h"
 #include "third_party/blink/renderer/core/dom/dom_token_list.h"
 #include "third_party/blink/renderer/core/dom/events/native_event_listener.h"
+#include "third_party/blink/renderer/core/dom/pseudo_element.h"
+#include "third_party/blink/renderer/core/html/forms/html_select_element.h"
+#include "third_party/blink/renderer/core/html/forms/html_text_area_element.h"
+#include "third_party/blink/renderer/core/page/page_animator.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
 #include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
 #include "third_party/blink/renderer/core/testing/core_unit_test_helper.h"
 #include "third_party/blink/renderer/core/testing/dummy_page_holder.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/heap/thread_state.h"
 
 namespace blink {
 
 namespace {
 
-// Only expect precision up to 1 microsecond with an additional epsilon to
-// account for float conversion error (mainly due to timeline time getting
-// converted between float and base::TimeDelta).
-static constexpr double time_error_ms = 0.001 + 1e-13;
+static constexpr double percent_precision = 0.01;
 
-#define EXPECT_TIME_NEAR(expected, value) \
-  EXPECT_NEAR(expected, value, time_error_ms)
-
-void ExpectVectorDoubleEqual(const WTF::Vector<double>& expected,
-                             const WTF::Vector<double>& value) {
-  EXPECT_EQ(expected.size(), value.size());
-  for (unsigned int i = 0; i < expected.size(); i++)
-    EXPECT_DOUBLE_EQ(expected[i], value[i]);
-}
-
-HeapVector<Member<ScrollTimelineOffset>> CreateScrollOffsets(
-    ScrollTimelineOffset* start_scroll_offset =
-        MakeGarbageCollected<ScrollTimelineOffset>(
-            CSSNumericLiteralValue::Create(
-                10.0,
-                CSSPrimitiveValue::UnitType::kPixels)),
-    ScrollTimelineOffset* end_scroll_offset =
-        MakeGarbageCollected<ScrollTimelineOffset>(
-            CSSNumericLiteralValue::Create(
-                90.0,
-                CSSPrimitiveValue::UnitType::kPixels))) {
-  HeapVector<Member<ScrollTimelineOffset>> scroll_offsets;
-  scroll_offsets.push_back(start_scroll_offset);
-  scroll_offsets.push_back(end_scroll_offset);
-  return scroll_offsets;
-}
+#define EXPECT_CURRENT_TIME_AS_PERCENT_NEAR(expected, animation)          \
+  EXPECT_NEAR(expected,                                                   \
+              (animation->CurrentTimeInternal()->InMillisecondsF() /      \
+               animation->timeline()->GetDuration()->InMillisecondsF()) * \
+                  100,                                                    \
+              percent_precision);
 
 Animation* CreateTestAnimation(AnimationTimeline* timeline) {
   Timing timing;
-  timing.iteration_duration = AnimationTimeDelta::FromSecondsD(0.1);
+  timing.iteration_duration = ANIMATION_TIME_DELTA_FROM_SECONDS(0.1);
   return Animation::Create(MakeGarbageCollected<KeyframeEffect>(
                                nullptr,
                                MakeGarbageCollected<StringKeyframeEffectModel>(
                                    StringKeyframeVector()),
                                timing),
                            timeline, ASSERT_NO_EXCEPTION);
+}
+
+Animation* CreateCompositableTestAnimation(Element* target,
+                                           AnimationTimeline* timeline) {
+  KeyframeEffect* effect =
+      animation_test_helpers::CreateSimpleKeyframeEffectForTest(
+          target, CSSPropertyID::kTranslate, "50px", "100px");
+  effect->Model()->SnapshotAllCompositorKeyframesIfNecessary(
+      *target, target->GetDocument().GetStyleResolver().InitialStyle(),
+      /* parent_style */ nullptr);
+  return MakeGarbageCollected<Animation>(
+      timeline->GetDocument()->GetExecutionContext(), timeline, effect);
 }
 
 }  // namespace
@@ -76,12 +75,27 @@ class ScrollTimelineTest : public RenderingTest {
     RenderingTest::SetUp();
   }
 
+  void ServiceScriptedAnimations() {
+    // Advance time by 100 ms.
+    auto new_time = GetAnimationClock().CurrentTime() + base::Milliseconds(100);
+    GetPage().Animator().ServiceScriptedAnimations(new_time);
+  }
+
  public:
   void SimulateFrame() {
-    // Advance time by 100 ms.
-    auto new_time = GetAnimationClock().CurrentTime() +
-                    base::TimeDelta::FromMilliseconds(100);
-    GetPage().Animator().ServiceScriptedAnimations(new_time);
+    ServiceScriptedAnimations();
+    if (RuntimeEnabledFeatures::RunSnapshotPostLayoutStateStepsEnabled()) {
+      UpdateAllLifecyclePhasesForTest();
+      // Needed to dispatch events in the next frame.
+      ServiceScriptedAnimations();
+    }
+  }
+
+  wtf_size_t TimelinesCount() const {
+    return GetDocument()
+        .GetDocumentAnimations()
+        .GetTimelinesForTesting()
+        .size();
   }
 
   wtf_size_t AnimationsCount() const {
@@ -92,40 +106,66 @@ class ScrollTimelineTest : public RenderingTest {
     }
     return count;
   }
-
-  V8ScrollTimelineOffset* OffsetFromString(const String& value) {
-    return animation_test_helpers::OffsetFromString(GetDocument(), value);
-  }
 };
 
 class TestScrollTimeline : public ScrollTimeline {
  public:
-  TestScrollTimeline(Document* document,
-                     Element* scroll_source,
-                     HeapVector<Member<ScrollTimelineOffset>> scroll_offsets =
-                         CreateScrollOffsets())
+  TestScrollTimeline(Document* document, Element* source, bool snapshot = true)
       : ScrollTimeline(document,
-                       scroll_source,
-                       ScrollTimeline::Vertical,
-                       std::move(scroll_offsets),
-                       100.0),
-        next_service_scheduled_(false) {}
-
-  void ScheduleServiceOnNextFrame() override {
-    ScrollTimeline::ScheduleServiceOnNextFrame();
-    next_service_scheduled_ = true;
+                       ScrollTimeline::ReferenceType::kSource,
+                       source,
+                       ScrollAxis::kY,
+                       /*tree_scope=*/nullptr) {
+    if (snapshot) {
+      UpdateSnapshot();
+    }
   }
+
   void Trace(Visitor* visitor) const override {
     ScrollTimeline::Trace(visitor);
   }
-  bool NextServiceScheduled() const { return next_service_scheduled_; }
-  void ResetNextServiceScheduled() { next_service_scheduled_ = false; }
 
- private:
-  bool next_service_scheduled_;
+  // UpdateSnapshot has 'protected' visibility.
+  void UpdateSnapshotForTesting() { UpdateSnapshot(); }
+
+  AnimationTimeDelta CalculateIntrinsicIterationDurationForTest(
+      const std::optional<TimelineOffset>& range_start,
+      const std::optional<TimelineOffset>& range_end) {
+    Timing timing;
+    timing.iteration_count = 1;
+    TimelineRange timeline_range = GetTimelineRange();
+    return CalculateIntrinsicIterationDuration(timeline_range, range_start,
+                                               range_end, timing);
+  }
 };
 
-TEST_F(ScrollTimelineTest, CurrentTimeIsNullIfScrollSourceIsNotScrollable) {
+class TestViewTimeline : public ViewTimeline {
+ public:
+  TestViewTimeline(Document* document, Element* subject, bool snapshot = true)
+      : ViewTimeline(document,
+                     subject,
+                     ScrollAxis::kY,
+                     TimelineInset(),
+                     /*tree_scope=*/nullptr) {
+    if (snapshot) {
+      UpdateSnapshot();
+    }
+  }
+
+  void UpdateSnapshotForTesting() { UpdateSnapshot(); }
+};
+
+class TestDeferredTimeline : public DeferredTimeline {
+ public:
+  explicit TestDeferredTimeline(Document* document, bool snapshot = true)
+      : DeferredTimeline(document) {
+    if (snapshot) {
+      UpdateSnapshot();
+    }
+  }
+};
+
+TEST_F(ScrollTimelineTest, CurrentTimeIsNullIfSourceIsNotScrollable) {
   SetBodyInnerHTML(R"HTML(
     <style>#scroller { width: 100px; height: 100px; }</style>
     <div id='scroller'></div>
@@ -136,182 +176,12 @@ TEST_F(ScrollTimelineTest, CurrentTimeIsNullIfScrollSourceIsNotScrollable) {
   ASSERT_TRUE(scroller);
 
   ScrollTimelineOptions* options = ScrollTimelineOptions::Create();
-  auto* time_range =
-      MakeGarbageCollected<V8UnionDoubleOrScrollTimelineAutoKeyword>(100);
-  options->setTimeRange(time_range);
-  options->setScrollSource(GetElementById("scroller"));
+  options->setSource(GetElementById("scroller"));
   ScrollTimeline* scroll_timeline =
       ScrollTimeline::Create(GetDocument(), options, ASSERT_NO_EXCEPTION);
 
-  EXPECT_FALSE(scroll_timeline->CurrentTimeMilliseconds().has_value());
+  EXPECT_FALSE(scroll_timeline->CurrentTimeSeconds().has_value());
   EXPECT_FALSE(scroll_timeline->IsActive());
-}
-
-TEST_F(ScrollTimelineTest,
-       CurrentTimeIsNullIfScrollOffsetIsBeyondStartAndEndScrollOffset) {
-  SetBodyInnerHTML(R"HTML(
-    <style>
-      #scroller { overflow: scroll; width: 100px; height: 100px; }
-      #spacer { height: 1000px; }
-    </style>
-    <div id='scroller'>
-      <div id ='spacer'></div>
-    </div>
-  )HTML");
-
-  auto* scroller =
-      To<LayoutBoxModelObject>(GetLayoutObjectByElementId("scroller"));
-  ASSERT_TRUE(scroller);
-  ASSERT_TRUE(scroller->IsScrollContainer());
-  PaintLayerScrollableArea* scrollable_area = scroller->GetScrollableArea();
-  ASSERT_TRUE(scrollable_area);
-  ScrollTimelineOptions* options = ScrollTimelineOptions::Create();
-  auto* time_range =
-      MakeGarbageCollected<V8UnionDoubleOrScrollTimelineAutoKeyword>(100);
-  options->setTimeRange(time_range);
-  options->setScrollSource(GetElementById("scroller"));
-  options->setScrollOffsets(
-      {OffsetFromString("10px"), OffsetFromString("90px")});
-  ScrollTimeline* scroll_timeline =
-      ScrollTimeline::Create(GetDocument(), options, ASSERT_NO_EXCEPTION);
-
-  scrollable_area->SetScrollOffset(ScrollOffset(0, 5),
-                                   mojom::blink::ScrollType::kProgrammatic);
-  // Simulate a new animation frame  which allows the timeline to compute new
-  // current time.
-  SimulateFrame();
-  EXPECT_EQ(scroll_timeline->CurrentTimeMilliseconds(), 0);
-  EXPECT_EQ("before", scroll_timeline->phase());
-
-  scrollable_area->SetScrollOffset(ScrollOffset(0, 10),
-                                   mojom::blink::ScrollType::kProgrammatic);
-  SimulateFrame();
-  EXPECT_EQ(scroll_timeline->CurrentTimeMilliseconds(), 0);
-  EXPECT_EQ("active", scroll_timeline->phase());
-
-  scrollable_area->SetScrollOffset(ScrollOffset(0, 50),
-                                   mojom::blink::ScrollType::kProgrammatic);
-  SimulateFrame();
-  EXPECT_EQ(scroll_timeline->CurrentTimeMilliseconds(), 50);
-  EXPECT_EQ("active", scroll_timeline->phase());
-
-  scrollable_area->SetScrollOffset(ScrollOffset(0, 90),
-                                   mojom::blink::ScrollType::kProgrammatic);
-  SimulateFrame();
-  EXPECT_EQ(scroll_timeline->CurrentTimeMilliseconds(),
-            time_range->GetAsDouble());
-  EXPECT_EQ("after", scroll_timeline->phase());
-
-  scrollable_area->SetScrollOffset(ScrollOffset(0, 100),
-                                   mojom::blink::ScrollType::kProgrammatic);
-  SimulateFrame();
-  EXPECT_EQ(scroll_timeline->CurrentTimeMilliseconds(),
-            time_range->GetAsDouble());
-  EXPECT_EQ("after", scroll_timeline->phase());
-  EXPECT_TRUE(scroll_timeline->IsActive());
-}
-
-TEST_F(ScrollTimelineTest,
-       CurrentTimeIsNullIfEndScrollOffsetIsLessThanStartScrollOffset) {
-  SetBodyInnerHTML(R"HTML(
-    <style>
-      #scroller { overflow: scroll; width: 100px; height: 100px; }
-      #spacer { height: 1000px; }
-    </style>
-    <div id='scroller'>
-      <div id ='spacer'></div>
-    </div>
-  )HTML");
-
-  auto* scroller =
-      To<LayoutBoxModelObject>(GetLayoutObjectByElementId("scroller"));
-  ASSERT_TRUE(scroller);
-  ASSERT_TRUE(scroller->IsScrollContainer());
-  PaintLayerScrollableArea* scrollable_area = scroller->GetScrollableArea();
-  ASSERT_TRUE(scrollable_area);
-  ScrollTimelineOptions* options = ScrollTimelineOptions::Create();
-  auto* time_range =
-      MakeGarbageCollected<V8UnionDoubleOrScrollTimelineAutoKeyword>(100);
-  options->setTimeRange(time_range);
-  options->setScrollSource(GetElementById("scroller"));
-  options->setScrollOffsets(
-      {OffsetFromString("80px"), OffsetFromString("40px")});
-  ScrollTimeline* scroll_timeline =
-      ScrollTimeline::Create(GetDocument(), options, ASSERT_NO_EXCEPTION);
-
-  scrollable_area->SetScrollOffset(ScrollOffset(0, 20),
-                                   mojom::blink::ScrollType::kProgrammatic);
-  // Simulate a new animation frame  which allows the timeline to compute new
-  // current time.
-  SimulateFrame();
-  EXPECT_EQ(0, scroll_timeline->CurrentTimeMilliseconds());
-  EXPECT_EQ("before", scroll_timeline->phase());
-
-  scrollable_area->SetScrollOffset(ScrollOffset(0, 60),
-                                   mojom::blink::ScrollType::kProgrammatic);
-  SimulateFrame();
-  EXPECT_EQ(0, scroll_timeline->CurrentTimeMilliseconds());
-  EXPECT_EQ("before", scroll_timeline->phase());
-
-  scrollable_area->SetScrollOffset(ScrollOffset(0, 100),
-                                   mojom::blink::ScrollType::kProgrammatic);
-  SimulateFrame();
-  EXPECT_EQ(time_range->GetAsDouble(),
-            scroll_timeline->CurrentTimeMilliseconds());
-  EXPECT_EQ("after", scroll_timeline->phase());
-  EXPECT_TRUE(scroll_timeline->IsActive());
-}
-
-TEST_F(ScrollTimelineTest, PhasesAreCorrectWhenUsingOffsets) {
-  SetBodyInnerHTML(R"HTML(
-    <style>
-      #scroller { overflow: scroll; width: 100px; height: 100px; }
-      #spacer { height: 1000px; }
-    </style>
-    <div id='scroller'>
-      <div id ='spacer'></div>
-    </div>
-  )HTML");
-
-  auto* scroller =
-      To<LayoutBoxModelObject>(GetLayoutObjectByElementId("scroller"));
-  ASSERT_TRUE(scroller);
-  ASSERT_TRUE(scroller->IsScrollContainer());
-  PaintLayerScrollableArea* scrollable_area = scroller->GetScrollableArea();
-  ASSERT_TRUE(scrollable_area);
-  ScrollTimelineOptions* options = ScrollTimelineOptions::Create();
-  auto* time_range =
-      MakeGarbageCollected<V8UnionDoubleOrScrollTimelineAutoKeyword>(100);
-  options->setTimeRange(time_range);
-  options->setScrollSource(GetElementById("scroller"));
-  options->setScrollOffsets(
-      {OffsetFromString("10px"), OffsetFromString("90px")});
-  ScrollTimeline* scroll_timeline =
-      ScrollTimeline::Create(GetDocument(), options, ASSERT_NO_EXCEPTION);
-
-  EXPECT_EQ(scroll_timeline->phase(), "before");
-
-  scrollable_area->SetScrollOffset(ScrollOffset(0, 10),
-                                   mojom::blink::ScrollType::kProgrammatic);
-  // Simulate a new animation frame  which allows the timeline to compute new
-  // current phase and time.
-  SimulateFrame();
-  EXPECT_EQ(scroll_timeline->phase(), "active");
-
-  scrollable_area->SetScrollOffset(ScrollOffset(0, 50),
-                                   mojom::blink::ScrollType::kProgrammatic);
-  SimulateFrame();
-  EXPECT_EQ(scroll_timeline->phase(), "active");
-
-  scrollable_area->SetScrollOffset(ScrollOffset(0, 90),
-                                   mojom::blink::ScrollType::kProgrammatic);
-  SimulateFrame();
-  EXPECT_EQ(scroll_timeline->phase(), "after");
-
-  scrollable_area->SetScrollOffset(ScrollOffset(0, 100),
-                                   mojom::blink::ScrollType::kProgrammatic);
-  SimulateFrame();
-  EXPECT_EQ(scroll_timeline->phase(), "after");
 }
 
 TEST_F(ScrollTimelineTest,
@@ -327,13 +197,10 @@ TEST_F(ScrollTimelineTest,
   // Create the ScrollTimeline with Document.scrollingElement() as source. The
   // resolved scroll source should be the Document.
   ScrollTimelineOptions* options = ScrollTimelineOptions::Create();
-  auto* time_range =
-      MakeGarbageCollected<V8UnionDoubleOrScrollTimelineAutoKeyword>(100);
-  options->setTimeRange(time_range);
-  options->setScrollSource(GetDocument().scrollingElement());
+  options->setSource(GetDocument().scrollingElement());
   ScrollTimeline* scroll_timeline =
       ScrollTimeline::Create(GetDocument(), options, ASSERT_NO_EXCEPTION);
-  EXPECT_EQ(&GetDocument(), scroll_timeline->ResolvedScrollSource());
+  EXPECT_EQ(&GetDocument(), scroll_timeline->ResolvedSource());
 }
 
 TEST_F(ScrollTimelineTest,
@@ -353,13 +220,10 @@ TEST_F(ScrollTimelineTest,
   // Create the ScrollTimeline with Document.scrollingElement() as source. The
   // resolved scroll source should be the Document.
   ScrollTimelineOptions* options = ScrollTimelineOptions::Create();
-  auto* time_range =
-      MakeGarbageCollected<V8UnionDoubleOrScrollTimelineAutoKeyword>(100);
-  options->setTimeRange(time_range);
-  options->setScrollSource(GetDocument().scrollingElement());
+  options->setSource(GetDocument().scrollingElement());
   ScrollTimeline* scroll_timeline =
       ScrollTimeline::Create(GetDocument(), options, ASSERT_NO_EXCEPTION);
-  EXPECT_EQ(&GetDocument(), scroll_timeline->ResolvedScrollSource());
+  EXPECT_EQ(&GetDocument(), scroll_timeline->ResolvedSource());
 
   // Now change the Document.scrollingElement(). In NoQuirksMode, the
   // documentElement is the scrolling element and not the body.
@@ -371,26 +235,24 @@ TEST_F(ScrollTimelineTest,
   // scroll source. Note that at this point the scroll timeline's scroll source
   // is still body element which is no longer the scrolling element. So if we
   // were to re-resolve the scroll source, it would not map to Document.
-  EXPECT_EQ(&GetDocument(), scroll_timeline->ResolvedScrollSource());
+  EXPECT_EQ(&GetDocument(), scroll_timeline->ResolvedSource());
 }
 
-TEST_F(ScrollTimelineTest, AttachOrDetachAnimationWithNullScrollSource) {
+TEST_F(ScrollTimelineTest, AttachOrDetachAnimationWithNullSource) {
   // Directly call the constructor to make it easier to pass a null
-  // scrollSource. The alternative approach would require us to remove the
+  // source. The alternative approach would require us to remove the
   // documentElement from the document.
   Element* scroll_source = nullptr;
-  Persistent<ScrollTimeline> scroll_timeline =
-      MakeGarbageCollected<ScrollTimeline>(&GetDocument(), scroll_source,
-                                           ScrollTimeline::Block,
-                                           CreateScrollOffsets(), 100);
+  Persistent<ScrollTimeline> scroll_timeline = ScrollTimeline::Create(
+      &GetDocument(), scroll_source, ScrollTimeline::ScrollAxis::kBlock);
 
   // Sanity checks.
-  ASSERT_EQ(scroll_timeline->scrollSource(), nullptr);
-  ASSERT_EQ(scroll_timeline->ResolvedScrollSource(), nullptr);
+  ASSERT_EQ(scroll_timeline->source(), nullptr);
+  ASSERT_EQ(scroll_timeline->ResolvedSource(), nullptr);
 
   NonThrowableExceptionState exception_state;
   Timing timing;
-  timing.iteration_duration = AnimationTimeDelta::FromSecondsD(30);
+  timing.iteration_duration = ANIMATION_TIME_DELTA_FROM_SECONDS(30);
   Animation* animation =
       Animation::Create(MakeGarbageCollected<KeyframeEffect>(
                             nullptr,
@@ -423,7 +285,7 @@ TEST_F(ScrollTimelineTest, AnimationIsGarbageCollectedWhenScrollerIsRemoved) {
                                                GetElementById("scroller"));
   NonThrowableExceptionState exception_state;
   Timing timing;
-  timing.iteration_duration = AnimationTimeDelta::FromSecondsD(30);
+  timing.iteration_duration = ANIMATION_TIME_DELTA_FROM_SECONDS(30);
   Animation* animation =
       Animation::Create(MakeGarbageCollected<KeyframeEffect>(
                             nullptr,
@@ -467,13 +329,15 @@ TEST_F(ScrollTimelineTest, AnimationPersistsWhenFinished) {
                                                GetElementById("scroller"));
   Animation* animation = CreateTestAnimation(scroll_timeline);
   animation->play();
+  animation->SetDeferredStartTimeForTesting();
   SimulateFrame();
 
   // Scroll to finished:
-  scrollable_area->SetScrollOffset(ScrollOffset(0, 91),
-                                   mojom::blink::ScrollType::kProgrammatic);
+  scrollable_area->SetScrollOffset(ScrollOffset(0, 100),
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   SimulateFrame();
-  EXPECT_EQ("finished", animation->playState());
+  EXPECT_EQ(V8AnimationPlayState::Enum::kFinished, animation->playState());
 
   // Animation should still persist after GC.
   animation = nullptr;
@@ -485,12 +349,11 @@ TEST_F(ScrollTimelineTest, AnimationPersistsWhenFinished) {
   // previously in a finished state.
   ScrollOffset offset(0, 50);  // 10 + (90 - 10) * 0.5 = 50
   scrollable_area->SetScrollOffset(offset,
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   SimulateFrame();
-  EXPECT_EQ("running", animation->playState());
-  EXPECT_TIME_NEAR(50.0, animation->CurrentTimeInternal()
-                             .value_or(AnimationTimeDelta())
-                             .InMillisecondsF());
+  EXPECT_EQ(V8AnimationPlayState::Enum::kRunning, animation->playState());
+  EXPECT_CURRENT_TIME_AS_PERCENT_NEAR(50.0, animation);
 }
 
 TEST_F(ScrollTimelineTest, AnimationPersistsWhenSourceBecomesNonScrollable) {
@@ -512,20 +375,20 @@ TEST_F(ScrollTimelineTest, AnimationPersistsWhenSourceBecomesNonScrollable) {
                                                GetElementById("scroller"));
   Animation* animation = CreateTestAnimation(scroll_timeline);
   animation->play();
+  animation->SetDeferredStartTimeForTesting();
   SimulateFrame();
 
   // Scroll to 50%:
   ASSERT_TRUE(scroller->GetScrollableArea());
-  ScrollOffset offset_50(0, 50);  // 10 + (90 - 10) * 0.5 = 50
+  ScrollOffset offset_50(0, 50);
   scroller->GetScrollableArea()->SetScrollOffset(
-      offset_50, mojom::blink::ScrollType::kProgrammatic);
+      offset_50, mojom::blink::ScrollType::kProgrammatic,
+      cc::ScrollSourceType::kNone);
   SimulateFrame();
-  EXPECT_TIME_NEAR(50.0, animation->CurrentTimeInternal()
-                             .value_or(AnimationTimeDelta())
-                             .InMillisecondsF());
+  EXPECT_CURRENT_TIME_AS_PERCENT_NEAR(50.0, animation);
 
   // Make #scroller non-scrollable.
-  GetElementById("scroller")->classList().Remove("scroll");
+  GetElementById("scroller")->classList().Remove(AtomicString("scroll"));
   UpdateAllLifecyclePhasesForTest();
   scroller = To<LayoutBoxModelObject>(GetLayoutObjectByElementId("scroller"));
   ASSERT_TRUE(scroller);
@@ -533,7 +396,7 @@ TEST_F(ScrollTimelineTest, AnimationPersistsWhenSourceBecomesNonScrollable) {
 
   // ScrollTimeline should now have an unresolved current time.
   SimulateFrame();
-  EXPECT_FALSE(scroll_timeline->CurrentTimeMilliseconds().has_value());
+  EXPECT_FALSE(scroll_timeline->CurrentTimeSeconds().has_value());
 
   // Animation should still persist after GC.
   animation = nullptr;
@@ -542,20 +405,19 @@ TEST_F(ScrollTimelineTest, AnimationPersistsWhenSourceBecomesNonScrollable) {
   animation = *scroll_timeline->GetAnimations().begin();
 
   // Make #scroller scrollable again.
-  GetElementById("scroller")->classList().Add("scroll");
+  GetElementById("scroller")->classList().Add(AtomicString("scroll"));
   UpdateAllLifecyclePhasesForTest();
   scroller = To<LayoutBoxModelObject>(GetLayoutObjectByElementId("scroller"));
   ASSERT_TRUE(scroller);
   ASSERT_TRUE(scroller->GetScrollableArea());
 
   // Scroll to 40%:
-  ScrollOffset offset_42(0, 42);  // 10 + (90 - 10) * 0.4 = 42
+  ScrollOffset offset_40(0, 40);
   scroller->GetScrollableArea()->SetScrollOffset(
-      offset_42, mojom::blink::ScrollType::kProgrammatic);
+      offset_40, mojom::blink::ScrollType::kProgrammatic,
+      cc::ScrollSourceType::kNone);
   SimulateFrame();
-  EXPECT_TIME_NEAR(40.0, animation->CurrentTimeInternal()
-                             .value_or(AnimationTimeDelta())
-                             .InMillisecondsF());
+  EXPECT_CURRENT_TIME_AS_PERCENT_NEAR(40.0, animation);
 }
 
 TEST_F(ScrollTimelineTest, ScheduleFrameOnlyWhenScrollOffsetChanges) {
@@ -573,7 +435,8 @@ TEST_F(ScrollTimelineTest, ScheduleFrameOnlyWhenScrollOffsetChanges) {
       To<LayoutBoxModelObject>(GetLayoutObjectByElementId("scroller"));
   PaintLayerScrollableArea* scrollable_area = scroller->GetScrollableArea();
   scrollable_area->SetScrollOffset(ScrollOffset(0, 20),
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
 
   Element* scroller_element = GetElementById("scroller");
   TestScrollTimeline* scroll_timeline =
@@ -582,7 +445,7 @@ TEST_F(ScrollTimelineTest, ScheduleFrameOnlyWhenScrollOffsetChanges) {
 
   NonThrowableExceptionState exception_state;
   Timing timing;
-  timing.iteration_duration = AnimationTimeDelta::FromSecondsD(30);
+  timing.iteration_duration = ANIMATION_TIME_DELTA_FROM_SECONDS(30);
   Animation* scroll_animation =
       Animation::Create(MakeGarbageCollected<KeyframeEffect>(
                             nullptr,
@@ -594,16 +457,17 @@ TEST_F(ScrollTimelineTest, ScheduleFrameOnlyWhenScrollOffsetChanges) {
   UpdateAllLifecyclePhasesForTest();
 
   // Validate that no frame is scheduled when there is no scroll change.
-  scroll_timeline->ResetNextServiceScheduled();
-  scroll_timeline->ScheduleNextService();
-  EXPECT_FALSE(scroll_timeline->NextServiceScheduled());
+  GetChromeClient().UnsetAnimationScheduled();
+  GetFrame().ScheduleNextServiceForPostLayoutSnapshotClients();
+  EXPECT_FALSE(GetChromeClient().AnimationScheduled());
 
   // Validate that frame is scheduled when scroll changes.
-  scroll_timeline->ResetNextServiceScheduled();
+  GetChromeClient().UnsetAnimationScheduled();
   scrollable_area->SetScrollOffset(ScrollOffset(0, 30),
-                                   mojom::blink::ScrollType::kProgrammatic);
-  scroll_timeline->ScheduleNextService();
-  EXPECT_TRUE(scroll_timeline->NextServiceScheduled());
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
+  GetFrame().ScheduleNextServiceForPostLayoutSnapshotClients();
+  EXPECT_TRUE(GetChromeClient().AnimationScheduled());
 }
 
 // This test verifies scenario when scroll timeline is updated as a result of
@@ -624,18 +488,17 @@ TEST_F(ScrollTimelineTest, ScheduleFrameWhenScrollerLayoutChanges) {
       To<LayoutBoxModelObject>(GetLayoutObjectByElementId("scroller"));
   PaintLayerScrollableArea* scrollable_area = scroller->GetScrollableArea();
   scrollable_area->SetScrollOffset(ScrollOffset(0, 20),
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   Element* scroller_element = GetElementById("scroller");
 
   // Use empty offsets as 'auto'.
   TestScrollTimeline* scroll_timeline =
-      MakeGarbageCollected<TestScrollTimeline>(
-          &GetDocument(), scroller_element,
-          CreateScrollOffsets(MakeGarbageCollected<ScrollTimelineOffset>(),
-                              MakeGarbageCollected<ScrollTimelineOffset>()));
+      MakeGarbageCollected<TestScrollTimeline>(&GetDocument(),
+                                               scroller_element);
   NonThrowableExceptionState exception_state;
   Timing timing;
-  timing.iteration_duration = AnimationTimeDelta::FromSecondsD(30);
+  timing.iteration_duration = ANIMATION_TIME_DELTA_FROM_SECONDS(30);
   Animation* scroll_animation =
       Animation::Create(MakeGarbageCollected<KeyframeEffect>(
                             nullptr,
@@ -649,10 +512,18 @@ TEST_F(ScrollTimelineTest, ScheduleFrameWhenScrollerLayoutChanges) {
   // current time to change. Here we change the scroller max offset which
   // affects current time because endScrollOffset is 'auto'.
   Element* spacer_element = GetElementById("spacer");
-  spacer_element->setAttribute(html_names::kStyleAttr, "height:1000px;");
-  scroll_timeline->ResetNextServiceScheduled();
+  spacer_element->setAttribute(html_names::kStyleAttr,
+                               AtomicString("height:1000px;"));
+  GetChromeClient().UnsetAnimationScheduled();
   UpdateAllLifecyclePhasesForTest();
-  EXPECT_TRUE(scroll_timeline->NextServiceScheduled());
+  EXPECT_TRUE(GetChromeClient().AnimationScheduled());
+
+  // Also test changing the scroller height, which also affect the max offset.
+  GetElementById("scroller")
+      ->setAttribute(html_names::kStyleAttr, AtomicString("height: 200px"));
+  GetChromeClient().UnsetAnimationScheduled();
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_TRUE(GetChromeClient().AnimationScheduled());
 }
 
 TEST_F(ScrollTimelineTest,
@@ -670,18 +541,17 @@ TEST_F(ScrollTimelineTest,
       To<LayoutBoxModelObject>(GetLayoutObjectByElementId("scroller"));
   PaintLayerScrollableArea* scrollable_area = scroller->GetScrollableArea();
   scrollable_area->SetScrollOffset(ScrollOffset(0, 20),
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   Element* scroller_element = GetElementById("scroller");
 
   // Use empty offsets as 'auto'.
   TestScrollTimeline* scroll_timeline =
-      MakeGarbageCollected<TestScrollTimeline>(
-          &GetDocument(), scroller_element,
-          CreateScrollOffsets(MakeGarbageCollected<ScrollTimelineOffset>(),
-                              MakeGarbageCollected<ScrollTimelineOffset>()));
+      MakeGarbageCollected<TestScrollTimeline>(&GetDocument(),
+                                               scroller_element);
   NonThrowableExceptionState exception_state;
   Timing timing;
-  timing.iteration_duration = AnimationTimeDelta::FromSecondsD(30);
+  timing.iteration_duration = ANIMATION_TIME_DELTA_FROM_SECONDS(30);
   Animation* scroll_animation =
       Animation::Create(MakeGarbageCollected<KeyframeEffect>(
                             nullptr,
@@ -692,10 +562,11 @@ TEST_F(ScrollTimelineTest,
   scroll_animation->play();
   UpdateAllLifecyclePhasesForTest();
 
-  scroller_element->setAttribute(html_names::kStyleAttr, "display:table-cell;");
-  scroll_timeline->ResetNextServiceScheduled();
+  scroller_element->setAttribute(html_names::kStyleAttr,
+                                 AtomicString("display:table-cell;"));
+  GetChromeClient().UnsetAnimationScheduled();
   UpdateAllLifecyclePhasesForTest();
-  EXPECT_TRUE(scroll_timeline->NextServiceScheduled());
+  EXPECT_TRUE(GetChromeClient().AnimationScheduled());
 }
 
 // Verify that scroll timeline current time is updated once upon construction
@@ -718,31 +589,30 @@ TEST_F(ScrollTimelineTest, CurrentTimeUpdateAfterNewAnimationFrame) {
   PaintLayerScrollableArea* scrollable_area = scroller->GetScrollableArea();
   ASSERT_TRUE(scrollable_area);
   ScrollTimelineOptions* options = ScrollTimelineOptions::Create();
-  auto* time_range =
-      MakeGarbageCollected<V8UnionDoubleOrScrollTimelineAutoKeyword>(100);
-  options->setTimeRange(time_range);
-  options->setScrollSource(GetElementById("scroller"));
+  options->setSource(GetElementById("scroller"));
 
   scrollable_area->SetScrollOffset(ScrollOffset(0, 5),
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
 
   ScrollTimeline* scroll_timeline =
       ScrollTimeline::Create(GetDocument(), options, ASSERT_NO_EXCEPTION);
 
-  double time_before = scroll_timeline->CurrentTimeMilliseconds().value();
+  double time_before = scroll_timeline->CurrentTimeSeconds().value();
 
   scrollable_area->SetScrollOffset(ScrollOffset(0, 10),
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   // Verify that the current time didn't change before there is a new animation
   // frame.
-  EXPECT_EQ(time_before, scroll_timeline->CurrentTimeMilliseconds().value());
+  EXPECT_EQ(time_before, scroll_timeline->CurrentTimeSeconds().value());
 
   // Simulate a new animation frame  which allows the timeline to compute a new
   // current time.
   SimulateFrame();
 
   // Verify that current time did change in the new animation frame.
-  EXPECT_NE(time_before, scroll_timeline->CurrentTimeMilliseconds().value());
+  EXPECT_NE(time_before, scroll_timeline->CurrentTimeSeconds().value());
 }
 
 TEST_F(ScrollTimelineTest, FinishedAnimationPlaysOnReversedScrolling) {
@@ -764,7 +634,7 @@ TEST_F(ScrollTimelineTest, FinishedAnimationPlaysOnReversedScrolling) {
                                                scroller_element);
   NonThrowableExceptionState exception_state;
   Timing timing;
-  timing.iteration_duration = AnimationTimeDelta::FromSecondsD(0.1);
+  timing.iteration_duration = ANIMATION_TIME_DELTA_FROM_SECONDS(0.1);
   Animation* scroll_animation =
       Animation::Create(MakeGarbageCollected<KeyframeEffect>(
                             nullptr,
@@ -774,23 +644,28 @@ TEST_F(ScrollTimelineTest, FinishedAnimationPlaysOnReversedScrolling) {
                         scroll_timeline, exception_state);
   scroll_animation->play();
   UpdateAllLifecyclePhasesForTest();
+
   // Scroll to finished state.
-  scrollable_area->SetScrollOffset(ScrollOffset(0, 91),
-                                   mojom::blink::ScrollType::kProgrammatic);
+  scrollable_area->SetScrollOffset(ScrollOffset(0, 100),
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   // Simulate a new animation frame  which allows the timeline to compute a new
   // current time.
   SimulateFrame();
-  ASSERT_EQ("finished", scroll_animation->playState());
+  ASSERT_EQ(V8AnimationPlayState::Enum::kFinished,
+            scroll_animation->playState());
   // Verify that the animation was not removed from animations needing update
   // list.
   EXPECT_EQ(1u, scroll_timeline->AnimationsNeedingUpdateCount());
 
   // Scroll back.
-  scrollable_area->SetScrollOffset(ScrollOffset(0, 80),
-                                   mojom::blink::ScrollType::kProgrammatic);
+  scrollable_area->SetScrollOffset(ScrollOffset(0, 50),
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   SimulateFrame();
   // Verify that the animation as back to running.
-  EXPECT_EQ("running", scroll_animation->playState());
+  EXPECT_EQ(V8AnimationPlayState::Enum::kRunning,
+            scroll_animation->playState());
 }
 
 TEST_F(ScrollTimelineTest, CancelledAnimationDetachedFromTimeline) {
@@ -808,7 +683,7 @@ TEST_F(ScrollTimelineTest, CancelledAnimationDetachedFromTimeline) {
                                                GetElementById("scroller"));
   NonThrowableExceptionState exception_state;
   Timing timing;
-  timing.iteration_duration = AnimationTimeDelta::FromSecondsD(0.1);
+  timing.iteration_duration = ANIMATION_TIME_DELTA_FROM_SECONDS(0.1);
   Animation* scroll_animation =
       Animation::Create(MakeGarbageCollected<KeyframeEffect>(
                             nullptr,
@@ -824,7 +699,7 @@ TEST_F(ScrollTimelineTest, CancelledAnimationDetachedFromTimeline) {
   // Simulate a new animation frame  which allows the timeline to compute a new
   // current time.
   SimulateFrame();
-  ASSERT_EQ("idle", scroll_animation->playState());
+  ASSERT_EQ(V8AnimationPlayState::Enum::kIdle, scroll_animation->playState());
   // Verify that the animation is removed from animations needing update
   // list.
   EXPECT_EQ(0u, scroll_timeline->AnimationsNeedingUpdateCount());
@@ -861,7 +736,7 @@ TEST_F(ScrollTimelineTest,
                                                GetElementById("scroller"));
   NonThrowableExceptionState exception_state;
   Timing timing;
-  timing.iteration_duration = AnimationTimeDelta::FromSecondsD(0.1);
+  timing.iteration_duration = ANIMATION_TIME_DELTA_FROM_SECONDS(0.1);
   Animation* scroll_animation =
       Animation::Create(MakeGarbageCollected<KeyframeEffect>(
                             nullptr,
@@ -875,8 +750,9 @@ TEST_F(ScrollTimelineTest,
   scroll_animation->play();
   UpdateAllLifecyclePhasesForTest();
   // Scroll to finished state.
-  scrollable_area->SetScrollOffset(ScrollOffset(0, 91),
-                                   mojom::blink::ScrollType::kProgrammatic);
+  scrollable_area->SetScrollOffset(ScrollOffset(0, 100),
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   // Simulate a new animation frame  which allows the timeline to compute a new
   // current time.
   SimulateFrame();
@@ -889,249 +765,27 @@ TEST_F(ScrollTimelineTest,
 
   // Scroll back.
   scrollable_area->SetScrollOffset(ScrollOffset(0, 80),
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   SimulateFrame();
   // Verify finished event is not fired on reverse scroll from finished state.
   EXPECT_FALSE(event_listener->EventReceived());
 
   // Scroll forward to finished state.
-  scrollable_area->SetScrollOffset(ScrollOffset(0, 91),
-                                   mojom::blink::ScrollType::kProgrammatic);
+  scrollable_area->SetScrollOffset(ScrollOffset(0, 100),
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   SimulateFrame();
   // Verify animation finished event is fired.
   EXPECT_TRUE(event_listener->EventReceived());
   event_listener->ResetEventReceived();
 
   scrollable_area->SetScrollOffset(ScrollOffset(0, 95),
-                                   mojom::blink::ScrollType::kProgrammatic);
+                                   mojom::blink::ScrollType::kProgrammatic,
+                                   cc::ScrollSourceType::kNone);
   SimulateFrame();
   // Verify animation finished event is fired only once in finished state.
   EXPECT_FALSE(event_listener->EventReceived());
-}
-
-TEST_F(ScrollTimelineTest, ResolveScrollOffsets) {
-  SetBodyInnerHTML(R"HTML(
-    <style>
-      #scroller { overflow: scroll; width: 100px; height: 100px; }
-      #spacer { height: 1000px; }
-    </style>
-    <div id='scroller'>
-      <div id ='spacer'></div>
-    </div>
-  )HTML");
-
-  auto* scroller =
-      To<LayoutBoxModelObject>(GetLayoutObjectByElementId("scroller"));
-  ASSERT_TRUE(scroller);
-  PaintLayerScrollableArea* scrollable_area = scroller->GetScrollableArea();
-  ASSERT_TRUE(scrollable_area);
-  double time_range = 100.0;
-  ScrollTimelineOptions* options = ScrollTimelineOptions::Create();
-  options->setTimeRange(
-      MakeGarbageCollected<V8UnionDoubleOrScrollTimelineAutoKeyword>(
-          time_range));
-  options->setScrollSource(GetElementById("scroller"));
-  // Empty scroll offsets resolve into [0, 100%].
-  HeapVector<Member<V8ScrollTimelineOffset>> scroll_offsets = {};
-  options->setScrollOffsets(scroll_offsets);
-
-  ScrollTimeline* scroll_timeline =
-      ScrollTimeline::Create(GetDocument(), options, ASSERT_NO_EXCEPTION);
-
-  WTF::Vector<double> resolved_offsets;
-  WTF::Vector<double> expected_offsets = {0, 900.0};
-  scroll_timeline->ResolveScrollOffsets(resolved_offsets);
-  ExpectVectorDoubleEqual(expected_offsets, resolved_offsets);
-
-  // Single 'auto' offset resolve into [0, 100%].
-  scroll_offsets = {OffsetFromString("auto")};
-  options->setScrollOffsets(scroll_offsets);
-  scroll_timeline =
-      ScrollTimeline::Create(GetDocument(), options, ASSERT_NO_EXCEPTION);
-  resolved_offsets.clear();
-  scroll_timeline->ResolveScrollOffsets(resolved_offsets);
-  expected_offsets = {0, 900.0};
-  ExpectVectorDoubleEqual(expected_offsets, resolved_offsets);
-
-  // Start and end 'auto' offsets resolve into [0, 100%].
-  scroll_offsets = {OffsetFromString("auto"), OffsetFromString("auto")};
-  options->setScrollOffsets(scroll_offsets);
-  scroll_timeline =
-      ScrollTimeline::Create(GetDocument(), options, ASSERT_NO_EXCEPTION);
-  resolved_offsets.clear();
-  scroll_timeline->ResolveScrollOffsets(resolved_offsets);
-  expected_offsets = {0, 900.0};
-  ExpectVectorDoubleEqual(expected_offsets, resolved_offsets);
-
-  // Three offsets, start and end are 'auto' resolve into [0, middle offset,
-  // 100%].
-  scroll_offsets = {OffsetFromString("auto"), OffsetFromString("500px"),
-                    OffsetFromString("auto")};
-  options->setScrollOffsets(scroll_offsets);
-  scroll_timeline =
-      ScrollTimeline::Create(GetDocument(), options, ASSERT_NO_EXCEPTION);
-  resolved_offsets.clear();
-  scroll_timeline->ResolveScrollOffsets(resolved_offsets);
-  expected_offsets = {0, 500.0, 900.0};
-  ExpectVectorDoubleEqual(expected_offsets, resolved_offsets);
-}
-
-TEST_F(ScrollTimelineTest, MultipleScrollOffsetsCurrentTimeCalculations) {
-  SetBodyInnerHTML(R"HTML(
-    <style>
-      #scroller { overflow: scroll; width: 100px; height: 100px; }
-      #spacer { height: 1000px; }
-    </style>
-    <div id='scroller'>
-      <div id ='spacer'></div>
-    </div>
-  )HTML");
-
-  auto* scroller =
-      To<LayoutBoxModelObject>(GetLayoutObjectByElementId("scroller"));
-  ASSERT_TRUE(scroller);
-  ASSERT_TRUE(scroller->IsScrollContainer());
-  PaintLayerScrollableArea* scrollable_area = scroller->GetScrollableArea();
-  ASSERT_TRUE(scrollable_area);
-  double time_range = 100.0;
-  ScrollTimelineOptions* options = ScrollTimelineOptions::Create();
-  options->setTimeRange(
-      MakeGarbageCollected<V8UnionDoubleOrScrollTimelineAutoKeyword>(
-          time_range));
-  options->setScrollSource(GetElementById("scroller"));
-  HeapVector<Member<V8ScrollTimelineOffset>> scroll_offsets;
-  scroll_offsets.push_back(OffsetFromString("10px"));
-  scroll_offsets.push_back(OffsetFromString("20px"));
-  scroll_offsets.push_back(OffsetFromString("40px"));
-  scroll_offsets.push_back(OffsetFromString("90px"));
-  options->setScrollOffsets(scroll_offsets);
-
-  ScrollTimeline* scroll_timeline =
-      ScrollTimeline::Create(GetDocument(), options, ASSERT_NO_EXCEPTION);
-
-  EXPECT_EQ(scroll_timeline->CurrentTimeMilliseconds(), 0);
-
-  scrollable_area->SetScrollOffset(ScrollOffset(0, 10),
-                                   mojom::blink::ScrollType::kProgrammatic);
-  // Simulate a new animation frame  which allows the timeline to compute new
-  // current phase and time.
-  SimulateFrame();
-  EXPECT_EQ(0, scroll_timeline->CurrentTimeMilliseconds().value());
-
-  scrollable_area->SetScrollOffset(ScrollOffset(0, 12),
-                                   mojom::blink::ScrollType::kProgrammatic);
-  SimulateFrame();
-
-  unsigned int offset = 0;
-  double w = 1.0 / 3.0;                      // offset weight
-  double p = (12.0 - 10.0) / (20.0 - 10.0);  // progress within the offset
-  EXPECT_TIME_NEAR((offset + p) * w * time_range,
-                   scroll_timeline->CurrentTimeMilliseconds().value());
-
-  scrollable_area->SetScrollOffset(ScrollOffset(0, 20),
-                                   mojom::blink::ScrollType::kProgrammatic);
-  SimulateFrame();
-  offset = 1;
-  p = 0;
-  EXPECT_TIME_NEAR((offset + p) * w * time_range,
-                   scroll_timeline->CurrentTimeMilliseconds().value());
-
-  scrollable_area->SetScrollOffset(ScrollOffset(0, 30),
-                                   mojom::blink::ScrollType::kProgrammatic);
-  SimulateFrame();
-  p = (30.0 - 20.0) / (40.0 - 20.0);
-  EXPECT_TIME_NEAR((offset + p) * w * time_range,
-                   scroll_timeline->CurrentTimeMilliseconds().value());
-
-  scrollable_area->SetScrollOffset(ScrollOffset(0, 40),
-                                   mojom::blink::ScrollType::kProgrammatic);
-  SimulateFrame();
-  offset = 2;
-  p = 0;
-  EXPECT_TIME_NEAR((offset + p) * w * time_range,
-                   scroll_timeline->CurrentTimeMilliseconds().value());
-
-  scrollable_area->SetScrollOffset(ScrollOffset(0, 80),
-                                   mojom::blink::ScrollType::kProgrammatic);
-  SimulateFrame();
-  p = (80.0 - 40.0) / (90.0 - 40.0);
-  EXPECT_TIME_NEAR((offset + p) * w * time_range,
-                   scroll_timeline->CurrentTimeMilliseconds().value());
-
-  scrollable_area->SetScrollOffset(ScrollOffset(0, 90),
-                                   mojom::blink::ScrollType::kProgrammatic);
-  SimulateFrame();
-  EXPECT_EQ(100, scroll_timeline->CurrentTimeMilliseconds().value());
-
-  scrollable_area->SetScrollOffset(ScrollOffset(0, 100),
-                                   mojom::blink::ScrollType::kProgrammatic);
-  SimulateFrame();
-  EXPECT_EQ(100, scroll_timeline->CurrentTimeMilliseconds().value());
-}
-
-TEST_F(ScrollTimelineTest, OverlappingScrollOffsets) {
-  SetBodyInnerHTML(R"HTML(
-    <style>
-      #scroller { overflow: scroll; width: 100px; height: 100px; }
-      #spacer { height: 1000px; }
-    </style>
-    <div id='scroller'>
-      <div id ='spacer'></div>
-    </div>
-  )HTML");
-
-  auto* scroller =
-      To<LayoutBoxModelObject>(GetLayoutObjectByElementId("scroller"));
-  ASSERT_TRUE(scroller);
-  PaintLayerScrollableArea* scrollable_area = scroller->GetScrollableArea();
-  ASSERT_TRUE(scrollable_area);
-  double time_range = 100.0;
-  ScrollTimelineOptions* options = ScrollTimelineOptions::Create();
-  options->setTimeRange(
-      MakeGarbageCollected<V8UnionDoubleOrScrollTimelineAutoKeyword>(
-          time_range));
-  options->setScrollSource(GetElementById("scroller"));
-  HeapVector<Member<V8ScrollTimelineOffset>> scroll_offsets = {
-      OffsetFromString("90px"), OffsetFromString("40px"),
-      OffsetFromString("10px")};
-  options->setScrollOffsets(scroll_offsets);
-
-  ScrollTimeline* scroll_timeline =
-      ScrollTimeline::Create(GetDocument(), options, ASSERT_NO_EXCEPTION);
-
-  scrollable_area->SetScrollOffset(ScrollOffset(0, 80),
-                                   mojom::blink::ScrollType::kProgrammatic);
-  SimulateFrame();
-  EXPECT_EQ(0, scroll_timeline->CurrentTimeMilliseconds().value());
-
-  scrollable_area->SetScrollOffset(ScrollOffset(0, 95),
-                                   mojom::blink::ScrollType::kProgrammatic);
-  SimulateFrame();
-  EXPECT_EQ(100, scroll_timeline->CurrentTimeMilliseconds().value());
-
-  scroll_offsets = {OffsetFromString("0px"), OffsetFromString("100px"),
-                    OffsetFromString("50px")};
-  options->setScrollOffsets(scroll_offsets);
-
-  scroll_timeline =
-      ScrollTimeline::Create(GetDocument(), options, ASSERT_NO_EXCEPTION);
-
-  scrollable_area->SetScrollOffset(ScrollOffset(0, 40),
-                                   mojom::blink::ScrollType::kProgrammatic);
-  SimulateFrame();
-  EXPECT_EQ(20, scroll_timeline->CurrentTimeMilliseconds().value());
-
-  scroll_offsets = {OffsetFromString("50px"), OffsetFromString("0px"),
-                    OffsetFromString("100px")};
-  options->setScrollOffsets(scroll_offsets);
-
-  scroll_timeline =
-      ScrollTimeline::Create(GetDocument(), options, ASSERT_NO_EXCEPTION);
-
-  scrollable_area->SetScrollOffset(ScrollOffset(0, 60),
-                                   mojom::blink::ScrollType::kProgrammatic);
-  SimulateFrame();
-  EXPECT_EQ(80, scroll_timeline->CurrentTimeMilliseconds().value());
 }
 
 TEST_F(ScrollTimelineTest, WeakReferences) {
@@ -1179,6 +833,446 @@ TEST_F(ScrollTimelineTest, WeakReferences) {
 
   ThreadState::Current()->CollectAllGarbageForTesting();
   EXPECT_EQ(0u, scroll_timeline->GetAnimations().size());
+}
+
+TEST_F(ScrollTimelineTest, WeakViewTimelines) {
+  SetBodyInnerHTML(R"HTML(
+    <div id='scroller'>
+      <div></div>
+      <div></div>
+      <div></div>
+      <div></div>
+      <div></div>
+      <div></div>
+      <div></div>
+      <div></div>
+      <div></div>
+      <div></div>
+    </div>
+  )HTML");
+
+  wtf_size_t base_count = TimelinesCount();
+
+  StaticElementList* list =
+      GetDocument().QuerySelectorAll(AtomicString("#scroller > div"));
+  ASSERT_TRUE(list);
+  EXPECT_EQ(10u, list->length());
+
+  HeapVector<Member<Animation>> animations;
+
+  for (wtf_size_t i = 0; i < list->length(); ++i) {
+    Element* element = list->item(i);
+    Animation* animation = CreateTestAnimation(
+        MakeGarbageCollected<TestViewTimeline>(&GetDocument(), element));
+    animation->play();
+    animations.push_back(animation);
+  }
+
+  SimulateFrame();
+  UpdateAllLifecyclePhasesForTest();
+
+  EXPECT_EQ(base_count + 10u, TimelinesCount());
+
+  // With all animations canceled, there should be no reason for the timelines
+  // to persist anymore.
+  for (const Member<Animation>& animation : animations) {
+    animation->cancel();
+  }
+  animations.clear();
+
+  // SimulateFrame needed to lose all strong references the animations,
+  // see ScrollTimelineTest.WeakReferences.
+  SimulateFrame();
+  UpdateAllLifecyclePhasesForTest();
+
+  ThreadState::Current()->CollectAllGarbageForTesting();
+
+  EXPECT_EQ(base_count, TimelinesCount());
+}
+
+TEST_F(ScrollTimelineTest, ScrollTimelineOffsetZoom) {
+  using ScrollOffsets = cc::ScrollTimeline::ScrollOffsets;
+
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      #scroller {
+        overflow-y: auto;
+        width: 100px;
+        height: 100px;
+        border: 20px solid black;
+      }
+      .spacer {
+        height: 200px;
+      }
+    }
+    </style>
+    <div id='scroller'>
+      <div class='spacer'></div>
+    </div>
+  )HTML");
+
+  // zoom = 1
+  {
+    auto* timeline = MakeGarbageCollected<TestScrollTimeline>(
+        &GetDocument(), GetElementById("scroller"));
+    std::optional<ScrollOffsets> scroll_offsets =
+        timeline->GetResolvedScrollOffsets();
+    ASSERT_TRUE(scroll_offsets.has_value());
+    EXPECT_EQ(0.0, scroll_offsets->start);
+    EXPECT_EQ(100.0, scroll_offsets->end);
+  }
+
+  // zoom = 2
+  GetFrame().SetLayoutZoomFactor(2.0f);
+  UpdateAllLifecyclePhasesForTest();
+
+  {
+    auto* timeline = MakeGarbageCollected<TestScrollTimeline>(
+        &GetDocument(), GetElementById("scroller"));
+    std::optional<ScrollOffsets> scroll_offsets =
+        timeline->GetResolvedScrollOffsets();
+    ASSERT_TRUE(scroll_offsets.has_value());
+    EXPECT_EQ(0.0, scroll_offsets->start);
+    EXPECT_EQ(200.0, scroll_offsets->end);
+  }
+}
+
+TEST_F(ScrollTimelineTest, ViewTimelineOffsetZoom) {
+  using ScrollOffsets = cc::ScrollTimeline::ScrollOffsets;
+
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      #scroller {
+        overflow-y: auto;
+        width: 100px;
+        height: 100px;
+        border: 20px solid black;
+      }
+      .spacer {
+        height: 200px;
+      }
+      #subject {
+        height: 100px;
+      }
+    }
+    </style>
+    <div id='scroller'>
+      <div class='spacer'></div>
+      <div id='subject'></div>
+      <div class='spacer'></div>
+    </div>
+  )HTML");
+
+  // zoom = 1
+  {
+    auto* timeline = MakeGarbageCollected<TestViewTimeline>(
+        &GetDocument(), GetElementById("subject"));
+    std::optional<ScrollOffsets> scroll_offsets =
+        timeline->GetResolvedScrollOffsets();
+    ASSERT_TRUE(scroll_offsets.has_value());
+    EXPECT_EQ(100.0, scroll_offsets->start);
+    EXPECT_EQ(300.0, scroll_offsets->end);
+
+    ASSERT_TRUE(timeline->startOffset());
+    EXPECT_EQ("100px", timeline->startOffset()->toString());
+    ASSERT_TRUE(timeline->endOffset());
+    EXPECT_EQ("300px", timeline->endOffset()->toString());
+  }
+
+  // zoom = 2
+  GetFrame().SetLayoutZoomFactor(2.0f);
+  UpdateAllLifecyclePhasesForTest();
+
+  {
+    auto* timeline = MakeGarbageCollected<TestViewTimeline>(
+        &GetDocument(), GetElementById("subject"));
+    std::optional<ScrollOffsets> scroll_offsets =
+        timeline->GetResolvedScrollOffsets();
+    ASSERT_TRUE(scroll_offsets.has_value());
+    EXPECT_EQ(200.0, scroll_offsets->start);
+    EXPECT_EQ(600.0, scroll_offsets->end);
+
+    // Web-facing APIs should still report unzoomed values.
+    ASSERT_TRUE(timeline->startOffset());
+    EXPECT_EQ("100px", timeline->startOffset()->toString());
+    ASSERT_TRUE(timeline->endOffset());
+    EXPECT_EQ("300px", timeline->endOffset()->toString());
+  }
+}
+
+TEST_F(ScrollTimelineTest, ScrollTimelineGetTimelineRange) {
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      #scroller {
+        overflow-y: auto;
+        width: 100px;
+        height: 100px;
+      }
+      .spacer {
+        height: 400px;
+      }
+    }
+    </style>
+    <div id='scroller'>
+      <div class='spacer'></div>
+    </div>
+  )HTML");
+
+  auto* timeline = MakeGarbageCollected<TestScrollTimeline>(
+      &GetDocument(), GetElementById("scroller"), /* snapshot */ false);
+
+  // GetTimelineRange before taking a snapshot.
+  EXPECT_TRUE(timeline->GetTimelineRange().IsEmpty());
+
+  timeline->UpdateSnapshotForTesting();
+  EXPECT_EQ(TimelineRange(TimelineRange::ScrollOffsets(0, 300),
+                          TimelineRange::ScrollOffsets(0, 300),
+                          TimelineRange::ViewOffsets(0, 0)),
+            timeline->GetTimelineRange());
+}
+
+TEST_F(ScrollTimelineTest, ViewTimelineGetTimelineRange) {
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      #scroller {
+        overflow-y: auto;
+        width: 100px;
+        height: 100px;
+        border: 20px solid black;
+      }
+      .spacer {
+        height: 200px;
+      }
+      #subject {
+        height: 100px;
+      }
+    }
+    </style>
+    <div id='scroller'>
+      <div class='spacer'></div>
+      <div id='subject'></div>
+      <div class='spacer'></div>
+    </div>
+  )HTML");
+
+  auto* timeline = MakeGarbageCollected<TestViewTimeline>(
+      &GetDocument(), GetElementById("subject"), /* snapshot */ false);
+
+  // GetTimelineRange before taking a snapshot.
+  EXPECT_TRUE(timeline->GetTimelineRange().IsEmpty());
+
+  timeline->UpdateSnapshotForTesting();
+  EXPECT_EQ(TimelineRange(TimelineRange::ScrollOffsets(0, 400),
+                          TimelineRange::ScrollOffsets(100, 300),
+                          TimelineRange::ViewOffsets(100, 100)),
+            timeline->GetTimelineRange());
+}
+
+TEST_F(ScrollTimelineTest, ScrollTimelineCalculateIntrinsicIterationDuration) {
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      #scroller {
+        overflow-y: auto;
+        width: 100px;
+        height: 100px;
+      }
+      .spacer {
+        height: 400px;
+      }
+    }
+    </style>
+    <div id='scroller'>
+      <div class='spacer'></div>
+    </div>
+  )HTML");
+
+  auto* timeline = MakeGarbageCollected<TestScrollTimeline>(
+      &GetDocument(), GetElementById("scroller"));
+
+  AnimationTimeDelta duration = timeline->GetDuration().value();
+
+  using NamedRange = TimelineOffset::NamedRange;
+
+  // [0, 300]
+  EXPECT_TRUE(TimingCalculations::IsWithinAnimationTimeTolerance(
+      duration, timeline->CalculateIntrinsicIterationDurationForTest(
+                    /* range_start */ std::optional<TimelineOffset>(),
+                    /* range_end */ std::optional<TimelineOffset>())));
+
+  // [0, 300] (explicit)
+  EXPECT_TRUE(TimingCalculations::IsWithinAnimationTimeTolerance(
+      duration,
+      timeline->CalculateIntrinsicIterationDurationForTest(
+          /* range_start */ TimelineOffset(NamedRange::kNone, Length::Fixed(0)),
+          /* range_end */ TimelineOffset(NamedRange::kNone,
+                                         Length::Fixed(300)))));
+
+  // [50, 200]
+  EXPECT_TRUE(TimingCalculations::IsWithinAnimationTimeTolerance(
+      duration / 2.0, timeline->CalculateIntrinsicIterationDurationForTest(
+                          /* range_start */
+                          TimelineOffset(NamedRange::kNone, Length::Fixed(50)),
+                          /* range_end */ TimelineOffset(NamedRange::kNone,
+                                                         Length::Fixed(200)))));
+
+  // [50, 200] (kEntry)
+  // The name part of the TimelineOffset is ignored.
+  EXPECT_TRUE(TimingCalculations::IsWithinAnimationTimeTolerance(
+      duration / 2.0,
+      timeline->CalculateIntrinsicIterationDurationForTest(
+          /* range_start */
+          TimelineOffset(NamedRange::kEntry, Length::Fixed(50)),
+          /* range_end */
+          TimelineOffset(NamedRange::kEntry, Length::Fixed(200)))));
+
+  // [50, 50]
+  EXPECT_TRUE(TimingCalculations::IsWithinAnimationTimeTolerance(
+      AnimationTimeDelta(),
+      timeline->CalculateIntrinsicIterationDurationForTest(
+          /* range_start */
+          TimelineOffset(NamedRange::kNone, Length::Fixed(50)),
+          /* range_end */ TimelineOffset(NamedRange::kNone,
+                                         Length::Fixed(50)))));
+}
+
+TEST_F(ScrollTimelineTest, CompositedDeferredTimelineReattachment) {
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      #scroller {
+        overflow: scroll;
+        width: 100px;
+        height: 100px;
+        will-change: transform;
+        background-color: white;
+      }
+      #target {
+        width: 50px;
+        height: 50px;
+        will-change: transform;
+        background-color: green;
+      }
+      #spacer { width: 200px; height: 200px; }
+    </style>
+    <div id='target'></div>
+    <div id='scroller'>
+      <div id ='spacer'></div>
+    </div>
+  )HTML");
+
+  TestScrollTimeline* scroll_timeline =
+      MakeGarbageCollected<TestScrollTimeline>(&GetDocument(),
+                                               GetElementById("scroller"));
+  TestDeferredTimeline* deferred_timeline =
+      MakeGarbageCollected<TestDeferredTimeline>(&GetDocument());
+
+  deferred_timeline->AttachTimeline(scroll_timeline);
+
+  Animation* animation = CreateCompositableTestAnimation(
+      GetElementById("target"), deferred_timeline);
+
+  animation->SetDeferredStartTimeForTesting();
+  animation->play();
+  UpdateAllLifecyclePhasesForTest();
+
+  EXPECT_EQ(animation->CheckCanStartAnimationOnCompositor(
+                nullptr, StartOnCompositorReason::kGeneric),
+            CompositorAnimations::kNoFailure);
+
+  EXPECT_FALSE(animation->CompositorPending());
+  EXPECT_TRUE(deferred_timeline->CompositorTimeline());
+
+  // Change timeline attachment for deferred timeline.
+  deferred_timeline->DetachTimeline(scroll_timeline);
+  deferred_timeline->AttachTimeline(MakeGarbageCollected<TestScrollTimeline>(
+      &GetDocument(), GetElementById("scroller")));
+
+  // Changing attachment should mark animations compositor pending,
+  // and clear the compositor timeline.
+  EXPECT_TRUE(animation->CompositorPending());
+  EXPECT_FALSE(deferred_timeline->CompositorTimeline());
+}
+
+TEST_F(ScrollTimelineTest, AutofillPreviewPausesTimeline) {
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      #textarea { width: 100px; height: 50px; }
+    </style>
+    <textarea id='textarea'></textarea>
+  )HTML");
+
+  auto* textarea = To<HTMLTextAreaElement>(GetElementById("textarea"));
+  textarea->SetValue("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight");
+  UpdateAllLifecyclePhasesForTest();
+
+  auto* timeline =
+      MakeGarbageCollected<TestScrollTimeline>(&GetDocument(), textarea);
+  textarea->setScrollTop(10);
+  UpdateAllLifecyclePhasesForTest();
+  timeline->UpdateSnapshotForTesting();
+
+  ASSERT_TRUE(timeline->IsActive());
+  std::optional<double> paused_time = timeline->CurrentTimeSeconds();
+  ASSERT_TRUE(paused_time.has_value());
+  EXPECT_GT(*paused_time, 0);
+
+  // The preview must not be sampled, but the timeline stays active so that its
+  // animations remain in effect.
+  textarea->SetSuggestedValue("a\nmuch\nlonger\nsuggested\nvalue\ngoes\nhere");
+  UpdateAllLifecyclePhasesForTest();
+  timeline->UpdateSnapshotForTesting();
+  EXPECT_TRUE(timeline->IsActive());
+  EXPECT_EQ(timeline->CurrentTimeSeconds(), paused_time);
+
+  // Scrolling while the preview is showing must not advance the timeline.
+  textarea->setScrollTop(40);
+  UpdateAllLifecyclePhasesForTest();
+  timeline->UpdateSnapshotForTesting();
+  EXPECT_EQ(timeline->CurrentTimeSeconds(), paused_time);
+
+  // Clearing the preview resumes sampling.
+  textarea->SetSuggestedValue(String());
+  UpdateAllLifecyclePhasesForTest();
+  timeline->UpdateSnapshotForTesting();
+  EXPECT_TRUE(timeline->IsActive());
+  EXPECT_NE(timeline->CurrentTimeSeconds(), paused_time);
+}
+
+TEST_F(ScrollTimelineTest, AutofillPreviewBlocksPseudoElementScroller) {
+  // A <select> is one of the few form controls allowed to generate
+  // pseudo-elements, so its scroller may be a pseudo-element rather than the
+  // control itself. See CanHaveGeneratedChildren(). A timeline first sampled
+  // during a preview has no earlier value to retain, so it stays inactive.
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      #select::before {
+        content: 'a\A b\A c\A d\A e\A f\A g\A h';
+        white-space: pre;
+        display: block;
+        overflow: scroll;
+        width: 50px;
+        height: 20px;
+      }
+    </style>
+    <select id='select' size='4'>
+      <option value='one'>one</option>
+      <option value='two'>two</option>
+    </select>
+  )HTML");
+
+  auto* select = To<HTMLSelectElement>(GetElementById("select"));
+  select->SetSuggestedValue("two");
+  UpdateAllLifecyclePhasesForTest();
+  ASSERT_TRUE(select->IsPreviewed());
+
+  PseudoElement* before = select->GetPseudoElement(kPseudoIdBefore);
+  ASSERT_TRUE(before);
+  ASSERT_TRUE(before->GetLayoutBoxForScrolling());
+
+  auto* timeline =
+      MakeGarbageCollected<TestScrollTimeline>(&GetDocument(), before);
+  timeline->UpdateSnapshotForTesting();
+
+  EXPECT_FALSE(timeline->IsActive());
 }
 
 }  //  namespace blink

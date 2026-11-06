@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,7 +25,8 @@ enum {
   ERR_STORAGE_ERROR = -12,
   ERR_INVALID_MASK = -13,
   ERR_CACHE_DOOMED = -14,   // Not really an error condition.
-  ERR_CACHE_CREATED = -15   // Not really an error condition.
+  ERR_CACHE_CREATED = -15,  // Not really an error condition.
+  ERR_PREVIOUS_CORRUPTION = -16,
 };
 
 }  // namespace disk_cache

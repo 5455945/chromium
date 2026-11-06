@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,7 +25,7 @@ enum { kFrameDelayForFullscreenLayout = 15 };
 // there's plenty of state that we don't know about (e.g., power efficiency,
 // memory pressure => cancelling an old overlay, etc.).  We just let the chooser
 // retry every once in a while for those things.
-constexpr base::TimeDelta RetryChooserTimeout = base::TimeDelta::FromSeconds(5);
+constexpr base::TimeDelta RetryChooserTimeout = base::Seconds(5);
 
 }  // namespace
 
@@ -100,7 +100,7 @@ void SurfaceChooserHelper::SetIsPersistentVideo(bool is_persistent_video) {
 }
 
 void SurfaceChooserHelper::UpdateChooserState(
-    absl::optional<AndroidOverlayFactoryCB> new_factory) {
+    std::optional<AndroidOverlayFactoryCB> new_factory) {
   surface_chooser_->UpdateState(std::move(new_factory), surface_chooser_state_);
 }
 
@@ -144,28 +144,8 @@ void SurfaceChooserHelper::NotifyPromotionHintAndUpdateChooser(
 
   if (update_state) {
     most_recent_chooser_retry_ = now;
-    UpdateChooserState(absl::optional<AndroidOverlayFactoryCB>());
+    UpdateChooserState(std::optional<AndroidOverlayFactoryCB>());
   }
-}
-
-SurfaceChooserHelper::FrameInformation
-SurfaceChooserHelper::ComputeFrameInformation(bool is_using_overlay) {
-  if (!is_using_overlay) {
-    // Not an overlay.
-    return surface_chooser_state_.is_secure
-               ? FrameInformation::NON_OVERLAY_L3
-               : FrameInformation::NON_OVERLAY_INSECURE;
-  }
-
-  // Overlay.
-  if (surface_chooser_state_.is_secure) {
-    return surface_chooser_state_.is_required ? FrameInformation::OVERLAY_L1
-                                              : FrameInformation::OVERLAY_L3;
-  }
-
-  return surface_chooser_state_.is_fullscreen
-             ? FrameInformation::OVERLAY_INSECURE_PLAYER_ELEMENT_FULLSCREEN
-             : FrameInformation::OVERLAY_INSECURE_NON_PLAYER_ELEMENT_FULLSCREEN;
 }
 
 }  // namespace media

@@ -1,19 +1,17 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UPGRADE_DETECTOR_UPGRADE_DETECTOR_CHROMEOS_H_
 #define CHROME_BROWSER_UPGRADE_DETECTOR_UPGRADE_DETECTOR_CHROMEOS_H_
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
 #include "base/no_destructor.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/upgrade_detector/build_state_observer.h"
 #include "chrome/browser/upgrade_detector/installed_version_updater_chromeos.h"
 #include "chrome/browser/upgrade_detector/upgrade_detector.h"
-#include "chromeos/dbus/update_engine_client.h"
+#include "chromeos/ash/components/dbus/update_engine/update_engine_client.h"
 
 class PrefRegistrySimple;
 namespace base {
@@ -23,8 +21,11 @@ class TickClock;
 
 class UpgradeDetectorChromeos : public UpgradeDetector,
                                 public BuildStateObserver,
-                                public chromeos::UpdateEngineClient::Observer {
+                                public ash::UpdateEngineClient::Observer {
  public:
+  UpgradeDetectorChromeos(const UpgradeDetectorChromeos&) = delete;
+  UpgradeDetectorChromeos& operator=(const UpgradeDetectorChromeos&) = delete;
+
   ~UpgradeDetectorChromeos() override;
 
   // Register ChromeOS specific Prefs.
@@ -35,8 +36,8 @@ class UpgradeDetectorChromeos : public UpgradeDetector,
   // UpgradeDetector:
   void Init() override;
   void Shutdown() override;
-  base::TimeDelta GetHighAnnoyanceLevelDelta() override;
-  base::Time GetHighAnnoyanceDeadline() override;
+  base::Time GetAnnoyanceLevelDeadline(
+      UpgradeNotificationAnnoyanceLevel level) override;
   void OverrideHighAnnoyanceDeadline(base::Time deadline) override;
   void ResetOverriddenDeadline() override;
 
@@ -62,9 +63,9 @@ class UpgradeDetectorChromeos : public UpgradeDetector,
   void CalculateDeadlines();
 
   // UpgradeDetector:
-  void OnMonitoredPrefsChanged() override;
+  void RecomputeSchedule() override;
 
-  // chromeos::UpdateEngineClient::Observer implementation.
+  // ash::UpdateEngineClient::Observer implementation.
   void UpdateStatusChanged(const update_engine::StatusResult& status) override;
   void OnUpdateOverCellularOneTimePermissionGranted() override;
 
@@ -73,7 +74,12 @@ class UpgradeDetectorChromeos : public UpgradeDetector,
   // user that a new version is available.
   void NotifyOnUpgrade();
 
-  absl::optional<InstalledVersionUpdater> installed_version_updater_;
+  // The function that sends out a notification (after a certain time has
+  // elapsed) that lets the rest of the UI know we should start notifying the
+  // user that an update is available but deferred.
+  void NotifyOnDeferredUpgrade();
+
+  std::optional<InstalledVersionUpdater> installed_version_updater_;
 
   // The time when elevated annoyance deadline is reached.
   base::Time elevated_deadline_;
@@ -97,13 +103,10 @@ class UpgradeDetectorChromeos : public UpgradeDetector,
   base::OneShotTimer upgrade_notification_timer_;
   bool initialized_;
 
-  // Indicates whether the flag status has been sent to update engine.
-  bool toggled_update_flag_;
-
   // Indicates whether there is an update in progress.
   bool update_in_progress_;
 
-  DISALLOW_COPY_AND_ASSIGN(UpgradeDetectorChromeos);
+  base::WeakPtrFactory<UpgradeDetectorChromeos> weak_factory_{this};
 };
 
 #endif  // CHROME_BROWSER_UPGRADE_DETECTOR_UPGRADE_DETECTOR_CHROMEOS_H_

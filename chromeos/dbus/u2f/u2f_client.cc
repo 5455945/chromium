@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,13 @@
 
 #include <google/protobuf/message_lite.h>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "chromeos/dbus/tpm_manager/tpm_manager.pb.h"
+#include "chromeos/dbus/tpm_manager/tpm_manager_client.h"
 #include "chromeos/dbus/u2f/fake_u2f_client.h"
 #include "dbus/bus.h"
 #include "dbus/message.h"
@@ -34,12 +35,36 @@ constexpr char kGetAssertionStatusHistogram[] =
 
 // Some methods trigger an OS modal dialog that needs to be completed or
 // dismissed before the method returns. These methods are cancelled explicitly
-// once original WebAuthn request times out. Hence, they are invoked with
-// infinite DBus timeouts.
-const int kU2FInfiniteTimeout = dbus::ObjectProxy::TIMEOUT_INFINITE;
+// once original WebAuthn request times out.
+//
+// W3C spec recommends 5 min timeout:
+// https://w3c.github.io/webauthn/#sctn-timeout-recommended-range
+//
+// Chrome since M120 can support up to 20 hours:
+// https://lists.w3.org/Archives/Public/public-webauthn/2023Oct/0151.html
+//
+// In practice, `TIMEOUT_MAX` (1 hour) should be long enough.
+const int kU2FMaxTimeout = dbus::ObjectProxy::TIMEOUT_MAX;
 
-// Timeout for all other methods.
+// Timeout for methods which don't take time proportional to the number of total
+// credentials.
 constexpr int kU2FShortTimeout = 3000;
+// Timeout for methods which take time proportional to the number of total
+// credentials.
+constexpr int kU2FMediumTimeout = 10000;
+
+template <typename ResponseProto>
+std::optional<ResponseProto> ConvertResponse(dbus::Response* dbus_response) {
+  if (!dbus_response) {
+    return std::nullopt;
+  }
+  dbus::MessageReader reader(dbus_response);
+  ResponseProto response_proto;
+  if (!reader.PopArrayOfBytesAsProto(&response_proto)) {
+    return std::nullopt;
+  }
+  return response_proto;
+}
 
 class U2FClientImpl : public U2FClient {
  public:
@@ -58,12 +83,11 @@ class U2FClientImpl : public U2FClient {
                       dbus::Response* response);
 
   // U2FClient:
-  void WaitForServiceToBeAvailable(
-      WaitForServiceToBeAvailableCallback callback) override;
   void IsUvpaa(const u2f::IsUvpaaRequest& request,
                DBusMethodCallback<u2f::IsUvpaaResponse> callback) override;
-  void IsU2FEnabled(const u2f::IsUvpaaRequest& request,
-                    DBusMethodCallback<u2f::IsUvpaaResponse> callback) override;
+  void IsU2FEnabled(
+      const u2f::IsU2fEnabledRequest& request,
+      DBusMethodCallback<u2f::IsU2fEnabledResponse> callback) override;
   void MakeCredential(
       const u2f::MakeCredentialRequest& request,
       DBusMethodCallback<u2f::MakeCredentialResponse> callback) override;
@@ -76,12 +100,26 @@ class U2FClientImpl : public U2FClient {
   void HasLegacyU2FCredentials(
       const u2f::HasCredentialsRequest& request,
       DBusMethodCallback<u2f::HasCredentialsResponse> callback) override;
+  void CountCredentials(
+      const u2f::CountCredentialsInTimeRangeRequest& request,
+      DBusMethodCallback<u2f::CountCredentialsInTimeRangeResponse> callback)
+      override;
+  void DeleteCredentials(
+      const u2f::DeleteCredentialsInTimeRangeRequest& request,
+      DBusMethodCallback<u2f::DeleteCredentialsInTimeRangeResponse> callback)
+      override;
   void CancelWebAuthnFlow(
       const u2f::CancelWebAuthnFlowRequest& request,
       DBusMethodCallback<u2f::CancelWebAuthnFlowResponse> callback) override;
+  void GetAlgorithms(
+      const u2f::GetAlgorithmsRequest& request,
+      DBusMethodCallback<u2f::GetAlgorithmsResponse> callback) override;
+  void GetSupportedFeatures(
+      const u2f::GetSupportedFeaturesRequest& request,
+      DBusMethodCallback<u2f::GetSupportedFeaturesResponse> callback) override;
 
  private:
-  dbus::ObjectProxy* proxy_ = nullptr;
+  raw_ptr<dbus::ObjectProxy, LeakedDanglingUntriaged> proxy_ = nullptr;
 
   base::WeakPtrFactory<U2FClientImpl> weak_factory_{this};
 };
@@ -89,22 +127,7 @@ class U2FClientImpl : public U2FClient {
 template <typename ResponseProto>
 void U2FClientImpl::HandleResponse(DBusMethodCallback<ResponseProto> callback,
                                    dbus::Response* response) {
-  if (!response) {
-    std::move(callback).Run(absl::nullopt);
-    return;
-  }
-  dbus::MessageReader reader(response);
-  ResponseProto response_proto;
-  if (!reader.PopArrayOfBytesAsProto(&response_proto)) {
-    std::move(callback).Run(absl::nullopt);
-    return;
-  }
-  std::move(callback).Run(std::move(response_proto));
-}
-
-void U2FClientImpl::WaitForServiceToBeAvailable(
-    WaitForServiceToBeAvailableCallback callback) {
-  proxy_->WaitForServiceToBeAvailable(std::move(callback));
+  std::move(callback).Run(ConvertResponse<ResponseProto>(response));
 }
 
 void U2FClientImpl::IsUvpaa(const u2f::IsUvpaaRequest& request,
@@ -114,20 +137,32 @@ void U2FClientImpl::IsUvpaa(const u2f::IsUvpaaRequest& request,
   writer.AppendProtoAsArrayOfBytes(request);
   proxy_->CallMethod(
       &method_call, kU2FShortTimeout,
-      base::BindOnce(&U2FClientImpl::HandleResponse<u2f::IsUvpaaResponse>,
-                     weak_factory_.GetWeakPtr(), std::move(callback)));
+      base::BindOnce(
+          [](DBusMethodCallback<u2f::IsUvpaaResponse> callback,
+             dbus::Response* dbus_response) {
+            std::optional<u2f::IsUvpaaResponse> response =
+                ConvertResponse<u2f::IsUvpaaResponse>(dbus_response);
+            std::move(callback).Run(std::move(response));
+          },
+          std::move(callback)));
 }
 
 void U2FClientImpl::IsU2FEnabled(
-    const u2f::IsUvpaaRequest& request,
-    DBusMethodCallback<u2f::IsUvpaaResponse> callback) {
+    const u2f::IsU2fEnabledRequest& request,
+    DBusMethodCallback<u2f::IsU2fEnabledResponse> callback) {
   dbus::MethodCall method_call(u2f::kU2FInterface, u2f::kU2FIsU2fEnabled);
   dbus::MessageWriter writer(&method_call);
   writer.AppendProtoAsArrayOfBytes(request);
   proxy_->CallMethod(
       &method_call, kU2FShortTimeout,
-      base::BindOnce(&U2FClientImpl::HandleResponse<u2f::IsUvpaaResponse>,
-                     weak_factory_.GetWeakPtr(), std::move(callback)));
+      base::BindOnce(
+          [](DBusMethodCallback<u2f::IsU2fEnabledResponse> callback,
+             dbus::Response* dbus_response) {
+            std::optional<u2f::IsU2fEnabledResponse> response =
+                ConvertResponse<u2f::IsU2fEnabledResponse>(dbus_response);
+            std::move(callback).Run(std::move(response));
+          },
+          std::move(callback)));
 }
 
 void U2FClientImpl::MakeCredential(
@@ -136,23 +171,24 @@ void U2FClientImpl::MakeCredential(
   dbus::MethodCall method_call(u2f::kU2FInterface, u2f::kU2FMakeCredential);
   dbus::MessageWriter writer(&method_call);
   writer.AppendProtoAsArrayOfBytes(request);
-  auto uma_callback_wrapper = base::BindOnce(
-      [](DBusMethodCallback<u2f::MakeCredentialResponse> callback,
-         absl::optional<u2f::MakeCredentialResponse> response) {
-        if (response) {
-          base::UmaHistogramEnumeration(
-              kMakeCredentialStatusHistogram, response->status(),
-              static_cast<u2f::MakeCredentialResponse::MakeCredentialStatus>(
-                  u2f::MakeCredentialResponse::MakeCredentialStatus_ARRAYSIZE));
-        }
-        std::move(callback).Run(response);
-      },
-      std::move(callback));
   proxy_->CallMethod(
-      &method_call, kU2FInfiniteTimeout,
+      &method_call, kU2FMaxTimeout,
       base::BindOnce(
-          &U2FClientImpl::HandleResponse<u2f::MakeCredentialResponse>,
-          weak_factory_.GetWeakPtr(), std::move(uma_callback_wrapper)));
+          [](DBusMethodCallback<u2f::MakeCredentialResponse> callback,
+             dbus::Response* dbus_response) {
+            std::optional<u2f::MakeCredentialResponse> response =
+                ConvertResponse<u2f::MakeCredentialResponse>(dbus_response);
+            if (response) {
+              base::UmaHistogramEnumeration(
+                  kMakeCredentialStatusHistogram, response->status(),
+                  static_cast<
+                      u2f::MakeCredentialResponse::MakeCredentialStatus>(
+                      u2f::MakeCredentialResponse::
+                          MakeCredentialStatus_ARRAYSIZE));
+            }
+            std::move(callback).Run(std::move(response));
+          },
+          std::move(callback)));
 }
 
 void U2FClientImpl::GetAssertion(
@@ -163,7 +199,7 @@ void U2FClientImpl::GetAssertion(
   writer.AppendProtoAsArrayOfBytes(request);
   auto uma_callback_wrapper = base::BindOnce(
       [](DBusMethodCallback<u2f::GetAssertionResponse> callback,
-         absl::optional<u2f::GetAssertionResponse> response) {
+         std::optional<u2f::GetAssertionResponse> response) {
         if (response) {
           base::UmaHistogramEnumeration(
               kGetAssertionStatusHistogram, response->status(),
@@ -174,7 +210,7 @@ void U2FClientImpl::GetAssertion(
       },
       std::move(callback));
   proxy_->CallMethod(
-      &method_call, kU2FInfiniteTimeout,
+      &method_call, kU2FMaxTimeout,
       base::BindOnce(&U2FClientImpl::HandleResponse<u2f::GetAssertionResponse>,
                      weak_factory_.GetWeakPtr(),
                      std::move(uma_callback_wrapper)));
@@ -187,7 +223,7 @@ void U2FClientImpl::HasCredentials(
   dbus::MessageWriter writer(&method_call);
   writer.AppendProtoAsArrayOfBytes(request);
   proxy_->CallMethod(
-      &method_call, kU2FShortTimeout,
+      &method_call, kU2FMediumTimeout,
       base::BindOnce(
           &U2FClientImpl::HandleResponse<u2f::HasCredentialsResponse>,
           weak_factory_.GetWeakPtr(), std::move(callback)));
@@ -201,10 +237,38 @@ void U2FClientImpl::HasLegacyU2FCredentials(
   dbus::MessageWriter writer(&method_call);
   writer.AppendProtoAsArrayOfBytes(request);
   proxy_->CallMethod(
-      &method_call, kU2FShortTimeout,
+      &method_call, kU2FMediumTimeout,
       base::BindOnce(
           &U2FClientImpl::HandleResponse<u2f::HasCredentialsResponse>,
           weak_factory_.GetWeakPtr(), std::move(callback)));
+}
+
+void U2FClientImpl::CountCredentials(
+    const u2f::CountCredentialsInTimeRangeRequest& request,
+    DBusMethodCallback<u2f::CountCredentialsInTimeRangeResponse> callback) {
+  dbus::MethodCall method_call(u2f::kU2FInterface,
+                               u2f::kU2FCountCredentialsInTimeRange);
+  dbus::MessageWriter writer(&method_call);
+  writer.AppendProtoAsArrayOfBytes(request);
+  proxy_->CallMethod(
+      &method_call, kU2FMediumTimeout,
+      base::BindOnce(&U2FClientImpl::HandleResponse<
+                         u2f::CountCredentialsInTimeRangeResponse>,
+                     weak_factory_.GetWeakPtr(), std::move(callback)));
+}
+
+void U2FClientImpl::DeleteCredentials(
+    const u2f::DeleteCredentialsInTimeRangeRequest& request,
+    DBusMethodCallback<u2f::DeleteCredentialsInTimeRangeResponse> callback) {
+  dbus::MethodCall method_call(u2f::kU2FInterface,
+                               u2f::kU2FDeleteCredentialsInTimeRange);
+  dbus::MessageWriter writer(&method_call);
+  writer.AppendProtoAsArrayOfBytes(request);
+  proxy_->CallMethod(
+      &method_call, kU2FMediumTimeout,
+      base::BindOnce(&U2FClientImpl::HandleResponse<
+                         u2f::DeleteCredentialsInTimeRangeResponse>,
+                     weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void U2FClientImpl::CancelWebAuthnFlow(
@@ -217,6 +281,32 @@ void U2FClientImpl::CancelWebAuthnFlow(
       &method_call, kU2FShortTimeout,
       base::BindOnce(
           &U2FClientImpl::HandleResponse<u2f::CancelWebAuthnFlowResponse>,
+          weak_factory_.GetWeakPtr(), std::move(callback)));
+}
+
+void U2FClientImpl::GetAlgorithms(
+    const u2f::GetAlgorithmsRequest& request,
+    DBusMethodCallback<u2f::GetAlgorithmsResponse> callback) {
+  dbus::MethodCall method_call(u2f::kU2FInterface, u2f::kU2FGetAlgorithms);
+  dbus::MessageWriter writer(&method_call);
+  writer.AppendProtoAsArrayOfBytes(request);
+  proxy_->CallMethod(
+      &method_call, kU2FShortTimeout,
+      base::BindOnce(&U2FClientImpl::HandleResponse<u2f::GetAlgorithmsResponse>,
+                     weak_factory_.GetWeakPtr(), std::move(callback)));
+}
+
+void U2FClientImpl::GetSupportedFeatures(
+    const u2f::GetSupportedFeaturesRequest& request,
+    DBusMethodCallback<u2f::GetSupportedFeaturesResponse> callback) {
+  dbus::MethodCall method_call(u2f::kU2FInterface,
+                               u2f::kU2FGetSupportedFeatures);
+  dbus::MessageWriter writer(&method_call);
+  writer.AppendProtoAsArrayOfBytes(request);
+  proxy_->CallMethod(
+      &method_call, kU2FShortTimeout,
+      base::BindOnce(
+          &U2FClientImpl::HandleResponse<u2f::GetSupportedFeaturesResponse>,
           weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
@@ -255,6 +345,24 @@ void U2FClient::Shutdown() {
 U2FClient* U2FClient::Get() {
   CHECK(g_instance);
   return g_instance;
+}
+
+// static
+void U2FClient::IsU2FServiceAvailable(
+    base::OnceCallback<void(bool is_supported)> callback) {
+  auto* tpm_manager_client = chromeos::TpmManagerClient::Get();
+  if (!tpm_manager_client) {
+    std::move(callback).Run(false);
+    return;
+  }
+  tpm_manager_client->GetSupportedFeatures(
+      tpm_manager::GetSupportedFeaturesRequest(),
+      base::BindOnce(
+          [](base::OnceCallback<void(bool is_available)> callback,
+             const ::tpm_manager::GetSupportedFeaturesReply& reply) {
+            std::move(callback).Run(reply.support_u2f());
+          },
+          std::move(callback)));
 }
 
 }  // namespace chromeos

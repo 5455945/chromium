@@ -1,4 +1,4 @@
-# Copyright 2014 The Chromium Authors. All rights reserved.
+# Copyright 2014 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -6,11 +6,9 @@ import("//chrome/common/features.gni")
 import("//components/safe_browsing/buildflags.gni")
 import("//third_party/protobuf/proto_library.gni")
 
-proto_library("proto") {
-  sources = [ "crx_info.proto" ]
-}
+assert(!is_fuchsia, "Fuchsia shouldn't use anything in //chrome")
 
-if (safe_browsing_mode == 1) {
+if (safe_browsing_mode != 0) {
   source_set("archive_analyzer_results") {
     sources = [
       "archive_analyzer_results.cc",
@@ -21,13 +19,16 @@ if (safe_browsing_mode == 1) {
       ":download_type_util",
       "//base",
       "//base:i18n",
-      "//components/safe_browsing/content/common:file_type_policies",
+      "//components/safe_browsing/content/common/file_type_policies",
       "//crypto",
     ]
     if (is_mac) {
       deps += [ ":disk_image_type_sniffer_mac" ]
     }
-    public_deps = [ "//components/safe_browsing/core/common/proto:csd_proto" ]
+    public_deps = [
+      "//components/safe_browsing/content/common/file_type_policies/proto:download_file_types_proto",
+      "//components/safe_browsing/core/common/proto:csd_proto",
+    ]
   }
 
   source_set("download_type_util") {
@@ -37,42 +38,9 @@ if (safe_browsing_mode == 1) {
     ]
     deps = [
       "//base",
-      "//components/safe_browsing/content/common:file_type_policies",
+      "//components/safe_browsing/content/common/file_type_policies",
       "//components/safe_browsing/core/common",
     ]
-    public_deps = [ "//components/safe_browsing/core/common/proto:csd_proto" ]
-  }
-
-  source_set("rar_analyzer") {
-    sources = [
-      "rar_analyzer.cc",
-      "rar_analyzer.h",
-    ]
-
-    deps = [
-      ":archive_analyzer_results",
-      ":download_type_util",
-      "//base",
-      "//base:i18n",
-      "//components/safe_browsing/content/common:file_type_policies",
-      "//components/safe_browsing/core/common",
-      "//third_party/unrar:unrar",
-    ]
-
-    defines = [
-      "_FILE_OFFSET_BITS=64",
-      "LARGEFILE_SOURCE",
-      "RAR_SMP",
-      "SILENT",
-
-      # The following is set to disable certain macro definitions in the unrar
-      # source code.
-      "CHROMIUM_UNRAR",
-
-      # Disables exceptions in unrar, replaces them with process termination.
-      "UNRAR_NO_EXCEPTIONS",
-    ]
-
     public_deps = [ "//components/safe_browsing/core/common/proto:csd_proto" ]
   }
 
@@ -82,7 +50,6 @@ if (safe_browsing_mode == 1) {
         "disk_image_type_sniffer_mac.cc",
         "disk_image_type_sniffer_mac.h",
       ]
-
       deps = [ "//base" ]
     }
   }
@@ -92,24 +59,25 @@ if (safe_browsing_mode == 1) {
       "binary_feature_extractor.cc",
       "binary_feature_extractor.h",
     ]
+    public_deps = [
+      "//base",
+      "//components/safe_browsing/core/common/proto:csd_proto",
+      "//crypto",
+    ]
     if (is_mac) {
       sources += [
         "binary_feature_extractor_mac.cc",
         "mach_o_image_reader_mac.cc",
         "mach_o_image_reader_mac.h",
       ]
+      deps = [ "//components/safe_browsing/core/common:features" ]
+      public_deps += [ "//chrome/utility/safe_browsing/mac:dmg_ffi_bridge" ]
     } else if (is_win) {
       sources += [ "binary_feature_extractor_win.cc" ]
     }
     if (is_posix) {
       sources += [ "binary_feature_extractor_posix.cc" ]
     }
-
-    public_deps = [
-      "//base",
-      "//components/safe_browsing/core/common/proto:csd_proto",
-      "//crypto",
-    ]
   }
 
   source_set("mock_binary_feature_extractor") {
@@ -131,36 +99,98 @@ source_set("safe_browsing") {
   deps = []
 
   if (safe_browsing_mode != 0) {
-    deps += [ "//components/safe_browsing/content/common:file_type_policies" ]
+    deps += [
+      ":archive_analyzer_results",
+      ":binary_feature_extractor",
+      ":download_type_util",
+      "//components/safe_browsing/content/common/file_type_policies",
+    ]
   }
 
   if (safe_browsing_mode == 1) {
     sources = [
       "ipc_protobuf_message_macros.h",
       "ipc_protobuf_message_null_macros.h",
-      "protobuf_message_log_macros.h",
       "protobuf_message_read_macros.h",
       "protobuf_message_write_macros.h",
-      "zip_analyzer.cc",
-      "zip_analyzer.h",
     ]
 
     deps += [
-      ":archive_analyzer_results",
-      ":binary_feature_extractor",
-      ":download_type_util",
-      ":rar_analyzer",
+      "//base",
+      "//base:i18n",
+      "//components/safe_browsing/content/common/file_type_policies",
       "//components/safe_browsing/core/common",
+      "//third_party/lzma_sdk/google:seven_zip_reader",
     ]
 
+    if (safe_browsing_use_unrar) {
+      deps += [ "//third_party/unrar" ]
+    }
+
     public_deps = [
-      ":proto",
       "//base:i18n",
       "//chrome/common:mojo_bindings",
+      "//components/safe_browsing/core/common/proto:crx_info_proto",
       "//components/safe_browsing/core/common/proto:csd_proto",
       "//crypto",
       "//ipc",
       "//third_party/zlib/google:zip",
     ]
+  }
+}
+
+if (safe_browsing_mode != 0) {
+  source_set("unit_tests") {
+    testonly = true
+    sources = [
+      "binary_feature_extractor_unittest.cc",
+      "download_type_util_unittest.cc",
+    ]
+    deps = [
+      ":binary_feature_extractor",
+      ":download_type_util",
+      ":mock_binary_feature_extractor",
+      "//base/test:test_support",
+      "//components/safe_browsing/core/common:features",
+      "//testing/gtest",
+    ]
+
+    if (safe_browsing_mode == 1) {
+      # TODO(sgurun): enable tests for safe_browsing==2.
+      sources += [
+        "ipc_protobuf_message_test_messages.h",
+        "ipc_protobuf_message_unittest.cc",
+      ]
+      deps += [
+        ":safe_browsing",
+        ":test_proto",
+        "//ipc:protobuf_support",
+      ]
+
+      if (is_mac) {
+        sources += [
+          "binary_feature_extractor_mac_unittest.cc",
+          "disk_image_type_sniffer_mac_unittest.cc",
+          "mach_o_image_reader_mac_unittest.cc",
+        ]
+        deps += [
+          ":disk_image_type_sniffer_mac",
+          "//chrome/common:constants",
+          "//content/test:test_support",
+        ]
+      }
+
+      if (is_win) {
+        sources += [ "binary_feature_extractor_win_unittest.cc" ]
+        deps += [ "//chrome/common:constants" ]
+      }
+    }
+  }
+}
+
+if (safe_browsing_mode == 1) {
+  proto_library("test_proto") {
+    testonly = true
+    sources = [ "ipc_protobuf_message_test.proto" ]
   }
 }

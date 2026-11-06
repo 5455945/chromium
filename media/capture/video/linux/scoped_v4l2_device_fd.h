@@ -1,13 +1,15 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef MEDIA_CAPTURE_VIDEO_LINUX_SCOPED_V4L2_DEVICE_FD_H_
 #define MEDIA_CAPTURE_VIDEO_LINUX_SCOPED_V4L2_DEVICE_FD_H_
 
-#include "media/capture/video/linux/v4l2_capture_device.h"
+#include "base/memory/raw_ptr.h"
 
 namespace media {
+
+class V4L2CaptureDevice;
 
 class ScopedV4L2DeviceFD {
  public:
@@ -21,7 +23,7 @@ class ScopedV4L2DeviceFD {
 
  private:
   int device_fd_;
-  V4L2CaptureDevice* const v4l2_;
+  const raw_ptr<V4L2CaptureDevice> v4l2_;
 };
 
 }  // namespace media

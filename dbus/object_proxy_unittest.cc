@@ -1,10 +1,12 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "dbus/object_proxy.h"
 
-#include "base/bind.h"
+#include <utility>
+
+#include "base/functional/bind.h"
 #include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
@@ -23,7 +25,7 @@ class ObjectProxyTest : public testing::Test {
     Bus::Options bus_options;
     bus_options.bus_type = Bus::SESSION;
     bus_options.connection_type = Bus::PRIVATE;
-    bus_ = new Bus(bus_options);
+    bus_ = new Bus(std::move(bus_options));
   }
 
   void TearDown() override { bus_->ShutdownAndBlock(); }

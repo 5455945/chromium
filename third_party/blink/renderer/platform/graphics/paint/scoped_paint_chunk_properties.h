@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,8 +24,8 @@ class ScopedPaintChunkProperties {
                              DisplayItem::Type type)
       : paint_controller_(paint_controller),
         previous_properties_(paint_controller.CurrentPaintChunkProperties()) {
-    PaintChunk::Id id(client, type);
-    paint_controller_.UpdateCurrentPaintChunkProperties(&id, properties);
+    PaintChunk::Id id(client.Id(), type);
+    paint_controller_.UpdateCurrentPaintChunkProperties(id, client, properties);
   }
 
   // Use new transform state, and keep the current other properties.
@@ -71,8 +71,7 @@ class ScopedPaintChunkProperties {
     // ScopedPaintChunkProperties. The painter should create another scope of
     // paint properties with new id, or the new chunk will use the id of the
     // first display item as its id.
-    paint_controller_.UpdateCurrentPaintChunkProperties(nullptr,
-                                                        previous_properties_);
+    paint_controller_.UpdateCurrentPaintChunkProperties(previous_properties_);
   }
 
  private:

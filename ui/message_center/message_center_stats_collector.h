@@ -1,14 +1,15 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_MESSAGE_CENTER_MESSAGE_CENTER_STATS_COLLECTOR_H_
 #define UI_MESSAGE_CENTER_MESSAGE_CENTER_STATS_COLLECTOR_H_
 
+#include <array>
 #include <set>
 #include <string>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/message_center/message_center.h"
 #include "ui/message_center/message_center_observer.h"
 #include "ui/message_center/message_center_types.h"
@@ -32,13 +33,20 @@ class MessageCenterStatsCollector : public MessageCenterObserver {
     NOTIFICATION_ACTION_DISPLAY,
     NOTIFICATION_ACTION_CLOSE_BY_USER,
     NOTIFICATION_ACTION_CLOSE_BY_SYSTEM,
+    NOTIFICATION_ACTION_OPEN_SETTINGS_BUTTON_CLICK,
     // NOTE: Add new action types only immediately above this line. Also,
-    // make sure the enum list in tools/histogram/histograms.xml is
-    // updated with any change in here.
+    // make sure the enum list in
+    // tools/metrics/histograms/metadata/notifications/enums.xml is updated
+    // with any change in here.
     NOTIFICATION_ACTION_COUNT
   };
 
   explicit MessageCenterStatsCollector(MessageCenter* message_center);
+
+  MessageCenterStatsCollector(const MessageCenterStatsCollector&) = delete;
+  MessageCenterStatsCollector& operator=(const MessageCenterStatsCollector&) =
+      delete;
+
   ~MessageCenterStatsCollector() override;
 
  private:
@@ -59,7 +67,7 @@ class MessageCenterStatsCollector : public MessageCenterObserver {
 
    private:
     std::string id_;
-    bool actions_[NOTIFICATION_ACTION_COUNT];
+    std::array<bool, NOTIFICATION_ACTION_COUNT> actions_;
   };
 
   // Sends notifier type to UMA. Called when a notification is added.
@@ -72,8 +80,8 @@ class MessageCenterStatsCollector : public MessageCenterObserver {
   void OnNotificationUpdated(const std::string& notification_id) override;
   void OnNotificationClicked(
       const std::string& notification_id,
-      const absl::optional<int>& button_index,
-      const absl::optional<std::u16string>& reply) override;
+      const std::optional<int>& button_index,
+      const std::optional<std::u16string>& reply) override;
   void OnNotificationSettingsClicked(bool handled) override;
   void OnNotificationDisplayed(const std::string& notification_id,
                                const DisplaySource source) override;
@@ -81,12 +89,10 @@ class MessageCenterStatsCollector : public MessageCenterObserver {
   void OnQuietModeChanged(bool in_quiet_mode) override;
 
   // Weak, global.
-  MessageCenter* message_center_;
+  raw_ptr<MessageCenter> message_center_;
 
   typedef std::map<std::string, NotificationStats> StatsCollection;
   StatsCollection stats_;
-
-  DISALLOW_COPY_AND_ASSIGN(MessageCenterStatsCollector);
 };
 
 }  // namespace message_center

@@ -1,20 +1,19 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/smb_client/smb_url.h"
 
+#include <string_view>
 #include <vector>
 
 #include "base/strings/strcat.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "chrome/browser/ash/smb_client/smb_constants.h"
 #include "url/url_canon_stdstring.h"
 
-namespace ash {
-namespace smb_client {
+namespace ash::smb_client {
 
 namespace {
 
@@ -31,7 +30,7 @@ bool ShouldProcessUrl(const std::string& url) {
 
 // Adds "smb://" to the beginning of |url| if not present.
 std::string AddSmbSchemeIfMissing(const std::string& url) {
-  DCHECK(ShouldProcessUrl(url));
+  CHECK(ShouldProcessUrl(url), base::NotFatalUntil::M160);
 
   if (base::StartsWith(url, kSmbSchemePrefix,
                        base::CompareCase::INSENSITIVE_ASCII)) {
@@ -51,10 +50,10 @@ bool ContainsUnnecessaryComponents(const url::Parsed& parsed) {
 // Parses |url| into |parsed|. Returns true if the URL does not contain
 // unnecessary components.
 bool ParseAndValidateUrl(const std::string& url, url::Parsed* parsed) {
-  DCHECK(parsed);
-  DCHECK(ShouldProcessUrl(url));
+  CHECK(parsed, base::NotFatalUntil::M160);
+  CHECK(ShouldProcessUrl(url), base::NotFatalUntil::M160);
 
-  url::ParseStandardURL(url.c_str(), url.size(), parsed);
+  *parsed = url::ParseStandardUrl(url);
   return !ContainsUnnecessaryComponents(*parsed);
 }
 
@@ -79,46 +78,52 @@ SmbUrl::SmbUrl(const SmbUrl& smb_url) = default;
 SmbUrl& SmbUrl::operator=(const SmbUrl& smb_url) = default;
 
 std::string SmbUrl::GetHost() const {
-  DCHECK(IsValid());
+  CHECK(IsValid(), base::NotFatalUntil::M160);
 
   return url_.substr(host_.begin, host_.len);
 }
 
 std::string SmbUrl::GetShare() const {
-  DCHECK(IsValid());
+  CHECK(IsValid(), base::NotFatalUntil::M160);
 
   return share_;
 }
 
 const std::string& SmbUrl::ToString() const {
+  // TODO(crbug.com/573534393): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK(IsValid());
 
   return url_;
 }
 
 SmbUrl SmbUrl::ReplaceHost(const std::string& new_host) const {
-  DCHECK(IsValid());
+  CHECK(IsValid(), base::NotFatalUntil::M160);
 
   std::string temp = url_;
   temp.replace(host_.begin, host_.len, new_host);
   SmbUrl new_url(temp);
-  DCHECK(new_url.IsValid());
+  CHECK(new_url.IsValid(), base::NotFatalUntil::M160);
   return new_url;
 }
 
 bool SmbUrl::IsValid() const {
+  // The URL is valid as long as it has a host, but some users (eg.
+  // SmbService) may also require that the share_ is defined.
   return !url_.empty() && host_.is_valid();
 }
 
 std::string SmbUrl::GetWindowsUNCString() const {
+  // TODO(crbug.com/571528520): CHECK-exclusion: Convert to a CHECK once we
+  // are confident it won't be triggered.
   DCHECK(IsValid());
 
   return windows_unc_;
 }
 
 void SmbUrl::CanonicalizeSmbUrl(const std::string& url) {
-  DCHECK(!IsValid());
-  DCHECK(ShouldProcessUrl(url));
+  CHECK(!IsValid(), base::NotFatalUntil::M160);
+  CHECK(ShouldProcessUrl(url), base::NotFatalUntil::M160);
 
   // Get the initial parse of |url| and ensure that it does not contain
   // unnecessary components.
@@ -127,10 +132,12 @@ void SmbUrl::CanonicalizeSmbUrl(const std::string& url) {
     return;
   }
 
+  // Try to canonicalize the input URL into |url_|. IsValid() returns
+  // false if this is unsuccessful.
   url::StdStringCanonOutput canonical_output(&url_);
 
   url::Component scheme;
-  if (!url::CanonicalizeScheme(url.c_str(), initial_parsed.scheme,
+  if (!url::CanonicalizeScheme(initial_parsed.scheme.AsViewOn(url),
                                &canonical_output, &scheme)) {
     Reset();
     return;
@@ -140,9 +147,9 @@ void SmbUrl::CanonicalizeSmbUrl(const std::string& url) {
   canonical_output.push_back('/');
 
   url::Component path;
-  if (!(url::CanonicalizeHost(url.c_str(), initial_parsed.host,
-                              &canonical_output, &host_) &&
-        url::CanonicalizePath(url.c_str(), initial_parsed.path,
+  if (!(url::CanonicalizeHost(url, initial_parsed.host, &canonical_output,
+                              &host_) &&
+        url::CanonicalizePath(initial_parsed.path.MaybeAsViewOn(url),
                               &canonical_output, &path))) {
     Reset();
     return;
@@ -157,22 +164,29 @@ void SmbUrl::CanonicalizeSmbUrl(const std::string& url) {
 
   canonical_output.Complete();
 
+  // |url_| is now valid, parse out any (optional) share and path component.
   if (path.is_nonempty()) {
     // Extract share name, which is the first path element.
     // Paths always start with '/', but extra '/'s are not removed.
     // So both "smb://foo" and "smb://foo//bar/" have the share name "", but
     // "smb://foo/bar/" has the share name "bar".
     std::string path_str = url_.substr(path.begin, path.len);
-    std::vector<base::StringPiece> split_path = base::SplitStringPiece(
+    std::vector<std::string_view> split_path = base::SplitStringPiece(
         path_str, "/", base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL);
     if (split_path.size() >= 2) {
-      DCHECK_EQ(split_path[0], "");
+      CHECK_EQ(split_path[0], "", base::NotFatalUntil::M160);
       share_ = std::string(split_path[1]);
     }
   }
 
-  DCHECK(host_.is_nonempty());
-  DCHECK_EQ(url_.substr(scheme.begin, scheme.len), kSmbScheme);
+  // Valid SmbUrls never have trailing slashes.
+  while (url_.size() && url_.back() == '/') {
+    url_.pop_back();
+  }
+
+  CHECK(host_.is_nonempty(), base::NotFatalUntil::M160);
+  CHECK_EQ(url_.substr(scheme.begin, scheme.len), kSmbScheme,
+           base::NotFatalUntil::M160);
 }
 
 void SmbUrl::CreateWindowsUnc(const std::string& url) {
@@ -195,5 +209,4 @@ void SmbUrl::Reset() {
   url_.clear();
 }
 
-}  // namespace smb_client
-}  // namespace ash
+}  // namespace ash::smb_client

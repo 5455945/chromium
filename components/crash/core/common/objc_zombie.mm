@@ -1,17 +1,20 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 
 #import "components/crash/core/common/objc_zombie.h"
 
 #include <AvailabilityMacros.h>
-#include <string.h>
-
 #include <execinfo.h>
 #import <objc/runtime.h>
+#include <string.h>
 
 #include <algorithm>
+#include <tuple>
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/debug/stack_trace.h"
 #include "base/logging.h"
 #include "base/notreached.h"
@@ -51,9 +54,6 @@ namespace {
 // the amount of memory required to track zombies, so should be kept as
 // small as is useful.  Unfortunately, too small and it won't poke through
 // deep autorelease and event loop stacks.
-// NOTE(shess): Breakpad currently restricts values to 255 bytes.  The
-// trace is hex-encoded with "0x" prefix and " " separators, meaning
-// the maximum number of 32-bit items which can be encoded is 23.
 const size_t kBacktraceDepth = 20;
 
 // The original implementation for |-[NSObject dealloc]|.
@@ -130,7 +130,7 @@ void ZombieDealloc(id self, SEL _cmd) {
   // class without C++ destructors or associative references, so it
   // won't hurt anything.
   objc_destructInstance(self);
-  memset(self, '!', size);
+  UNSAFE_TODO(memset(self, '!', size));
 
   // If the instance is big enough, make it into a fat zombie and have
   // it remember the old |isa|.  Otherwise make it a regular zombie.
@@ -163,7 +163,7 @@ void ZombieDealloc(id self, SEL _cmd) {
     if (g_zombieCount > 0) {
       // Put the current object on the treadmill and keep the previous
       // occupant.
-      std::swap(zombieToFree, g_zombies[g_zombieIndex]);
+      std::swap(zombieToFree, UNSAFE_TODO(g_zombies[g_zombieIndex]));
 
       // Bump the index forward.
       g_zombieIndex = (g_zombieIndex + 1) % g_zombieCount;
@@ -182,8 +182,8 @@ BOOL GetZombieRecord(id object, ZombieRecord* record) {
   // the process is going to crash presently anyhow.
   base::AutoLock pin(GetLock());
   for (size_t i = 0; i < g_zombieCount; ++i) {
-    if (g_zombies[i].object == object) {
-      *record = g_zombies[i];
+    if (UNSAFE_TODO(g_zombies[i].object) == object) {
+      *record = UNSAFE_TODO(g_zombies[i]);
       return YES;
     }
   }
@@ -192,11 +192,11 @@ BOOL GetZombieRecord(id object, ZombieRecord* record) {
 
 // Dump the symbols.  This is pulled out into a function to make it
 // easy to use DCHECK to dump only in debug builds.
-BOOL DumpDeallocTrace(const void* const* array, int size) {
+BOOL DumpDeallocTrace(base::span<const void* const> frames) {
   // Async-signal safe version of fputs, consistent with StackTrace::Print().
   const char message[] = "Backtrace from -dealloc:\n";
-  ignore_result(HANDLE_EINTR(write(STDERR_FILENO, message, strlen(message))));
-  base::debug::StackTrace(array, size).Print();
+  std::ignore = HANDLE_EINTR(write(STDERR_FILENO, message, strlen(message)));
+  base::debug::StackTrace(frames).Print();
 
   return YES;
 }
@@ -227,23 +227,24 @@ void ZombieObjectCrash(id object, SEL aSelector, SEL viaSelector) {
     base::StringAppendF(&aString, " (via -%s)", viaName);
   }
 
-  // Set a value for breakpad to report.
+  // Set a value for Crashpad to report.
   static crash_reporter::CrashKeyString<256> zombie_key("zombie");
   zombie_key.Set(aString);
 
-  // Encode trace into a breakpad key.
+  // Encode trace into a crash key.
   static crash_reporter::CrashKeyString<1024> zombie_trace_key(
       "zombie_dealloc_bt");
   if (found) {
     crash_reporter::SetCrashKeyStringToStackTrace(
-        &zombie_trace_key,
-        base::debug::StackTrace(record.trace, record.traceDepth));
+        &zombie_trace_key, base::debug::StackTrace(UNSAFE_TODO(
+                               base::span(record.trace, record.traceDepth))));
   }
 
   // Log -dealloc backtrace in debug builds then crash with a useful
   // stack trace.
   if (found && record.traceDepth) {
-    DCHECK(DumpDeallocTrace(record.trace, record.traceDepth));
+    DCHECK(DumpDeallocTrace(
+        UNSAFE_TODO(base::span(record.trace, record.traceDepth))));
   } else {
     DLOG(WARNING) << "Unable to generate backtrace from -dealloc.";
   }
@@ -383,11 +384,6 @@ bool ZombieEnable(bool zombieAllObjects,
           static_cast<ZombieRecord*>(calloc(g_zombieCount, sizeof(*g_zombies)));
       if (!g_zombies) {
         NOTREACHED();
-        g_zombies = oldZombies;
-        g_zombieCount = oldCount;
-        g_zombieIndex = oldIndex;
-        ZombieDisable();
-        return false;
       }
     }
 
@@ -401,7 +397,8 @@ bool ZombieEnable(bool zombieAllObjects,
       for (; g_zombieIndex < sharedCount; ++ g_zombieIndex) {
         DCHECK_LT(g_zombieIndex, g_zombieCount);
         DCHECK_LT(oldIndex, oldCount);
-        std::swap(g_zombies[g_zombieIndex], oldZombies[oldIndex]);
+        std::swap(UNSAFE_TODO(g_zombies[g_zombieIndex]),
+                  UNSAFE_TODO(oldZombies[oldIndex]));
         oldIndex = (oldIndex + 1) % oldCount;
       }
       g_zombieIndex %= g_zombieCount;
@@ -411,8 +408,9 @@ bool ZombieEnable(bool zombieAllObjects,
   // Free the old treadmill and any remaining zombies.
   if (oldZombies) {
     for (size_t i = 0; i < oldCount; ++i) {
-      if (oldZombies[i].object)
-        object_dispose(oldZombies[i].object);
+      if (UNSAFE_TODO(oldZombies[i].object)) {
+        object_dispose(UNSAFE_TODO(oldZombies[i].object));
+      }
     }
     free(oldZombies);
   }
@@ -447,8 +445,9 @@ void ZombieDisable() {
   // Free any remaining zombies.
   if (oldZombies) {
     for (size_t i = 0; i < oldCount; ++i) {
-      if (oldZombies[i].object)
-        object_dispose(oldZombies[i].object);
+      if (UNSAFE_TODO(oldZombies[i].object)) {
+        object_dispose(UNSAFE_TODO(oldZombies[i].object));
+      }
     }
     free(oldZombies);
   }

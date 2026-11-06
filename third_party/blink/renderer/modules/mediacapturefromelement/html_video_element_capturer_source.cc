@@ -1,13 +1,14 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/mediacapturefromelement/html_video_element_capturer_source.h"
 
-#include "base/bind.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/memory/ptr_util.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/trace_event.h"
 #include "media/base/limits.h"
 #include "third_party/blink/public/platform/web_media_player.h"
@@ -19,6 +20,10 @@
 
 namespace {
 constexpr float kMinFramesPerSecond = 1.0;
+
+BASE_FEATURE(kUseVideoFrameRateForCaptureRate,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
 }  // anonymous namespace
 
 namespace blink {
@@ -57,44 +62,50 @@ media::VideoCaptureFormats
 HtmlVideoElementCapturerSource::GetPreferredFormats() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
+  double capture_rate = blink::MediaStreamVideoSource::kDefaultFrameRate;
+  if (base::FeatureList::IsEnabled(kUseVideoFrameRateForCaptureRate)) {
+    if (auto metadata =
+            web_media_player_->GetVideoFramePresentationMetadata()) {
+      if (metadata->average_frame_duration.is_positive()) {
+        capture_rate = 1.0 / metadata->average_frame_duration.InSecondsF();
+      }
+    }
+  }
+
   // WebMediaPlayer has a setRate() but can't be read back.
   // TODO(mcasas): Add getRate() to WMPlayer and/or fix the spec to allow users
   // to specify it.
-  const media::VideoCaptureFormat format(
-      gfx::Size(web_media_player_->NaturalSize()),
-      blink::MediaStreamVideoSource::kDefaultFrameRate,
-      media::PIXEL_FORMAT_I420);
-  media::VideoCaptureFormats formats;
-  formats.push_back(format);
-  return formats;
+  return {media::VideoCaptureFormat(gfx::Size(web_media_player_->NaturalSize()),
+                                    capture_rate, media::PIXEL_FORMAT_I420)};
 }
 
 void HtmlVideoElementCapturerSource::StartCapture(
     const media::VideoCaptureParams& params,
-    const VideoCaptureDeliverFrameCB& new_frame_callback,
-    const RunningCallback& running_callback) {
+    VideoCaptureCallbacks video_capture_callbacks,
+    VideoCaptureRunningCallbackCB running_callback) {
   DVLOG(2) << __func__ << " requested "
            << media::VideoCaptureFormat::ToString(params.requested_format);
   DCHECK(params.requested_format.IsValid());
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
-  running_callback_ = running_callback;
+  running_callback_ = std::move(running_callback);
   if (!web_media_player_ || !web_media_player_->HasVideo()) {
-    running_callback_.Run(false);
+    running_callback_.Run(VideoCaptureRunState::kStopped);
     return;
   }
 
-  new_frame_callback_ = new_frame_callback;
+  new_frame_callback_ = std::move(video_capture_callbacks.deliver_frame_cb);
+
   // Force |capture_frame_rate_| to be in between k{Min,Max}FramesPerSecond.
   capture_frame_rate_ =
       std::max(kMinFramesPerSecond,
                std::min(static_cast<float>(media::limits::kMaxFramesPerSecond),
                         params.requested_format.frame_rate));
 
-  running_callback_.Run(true);
+  running_callback_.Run(VideoCaptureRunState::kRunning);
   task_runner_->PostTask(
-      FROM_HERE, WTF::Bind(&HtmlVideoElementCapturerSource::sendNewFrame,
-                           weak_factory_.GetWeakPtr()));
+      FROM_HERE, blink::BindOnce(&HtmlVideoElementCapturerSource::sendNewFrame,
+                                 weak_factory_.GetWeakPtr()));
 }
 
 void HtmlVideoElementCapturerSource::StopCapture() {
@@ -119,7 +130,7 @@ void HtmlVideoElementCapturerSource::sendNewFrame() {
   if (start_capture_time_.is_null())
     start_capture_time_ = current_time;
 
-  if (auto frame = web_media_player_->GetCurrentFrame()) {
+  if (auto frame = web_media_player_->GetCurrentFrameThenUpdate()) {
     auto new_frame = media::VideoFrame::WrapVideoFrame(
         frame, frame->format(), frame->visible_rect(), frame->natural_size());
     new_frame->set_timestamp(current_time - start_capture_time_);
@@ -130,13 +141,12 @@ void HtmlVideoElementCapturerSource::sendNewFrame() {
     PostCrossThreadTask(
         *io_task_runner_, FROM_HERE,
         CrossThreadBindOnce(new_frame_callback_, std::move(new_frame),
-                            std::vector<scoped_refptr<media::VideoFrame>>(),
                             current_time));
   }
 
   // Calculate the time in the future where the next frame should be created.
   const base::TimeDelta frame_interval =
-      base::TimeDelta::FromMicroseconds(1E6 / capture_frame_rate_);
+      base::Microseconds(1E6 / capture_frame_rate_);
   if (next_capture_time_.is_null()) {
     next_capture_time_ = current_time + frame_interval;
   } else {

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,18 +12,19 @@
 #include "third_party/blink/renderer/core/html/media/html_video_element.h"
 #include "third_party/blink/renderer/core/html/media/media_controls.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
+#include "third_party/blink/renderer/core/layout/layout_object_inlines.h"
 #include "third_party/blink/renderer/core/resize_observer/resize_observer.h"
 #include "third_party/blink/renderer/core/resize_observer/resize_observer_entry.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/text/platform_locale.h"
 
 namespace {
 
 constexpr base::TimeDelta kPictureInPictureStyleChangeTransitionDuration =
-    base::TimeDelta::FromMilliseconds(200);
+    base::Milliseconds(200);
 constexpr base::TimeDelta kPictureInPictureHiddenAnimationSeconds =
-    base::TimeDelta::FromMilliseconds(300);
+    base::Milliseconds(300);
 
 }  // namespace
 
@@ -80,10 +81,8 @@ PictureInPictureInterstitial::PictureInPictureInterstitial(
   message_element_ = MakeGarbageCollected<HTMLDivElement>(GetDocument());
   message_element_->SetShadowPseudoId(
       AtomicString("-internal-picture-in-picture-interstitial-message"));
-  message_element_->setInnerText(
-      GetVideoElement().GetLocale().QueryString(
-          IDS_MEDIA_PICTURE_IN_PICTURE_INTERSTITIAL_TEXT),
-      ASSERT_NO_EXCEPTION);
+  message_element_->setInnerText(GetVideoElement().GetLocale().QueryString(
+      IDS_MEDIA_PICTURE_IN_PICTURE_INTERSTITIAL_TEXT));
   ParserAppendChild(message_element_);
 
   resize_observer_->observe(video_element_);
@@ -135,20 +134,23 @@ Node::InsertionNotificationRequest PictureInPictureInterstitial::InsertedInto(
   return HTMLDivElement::InsertedInto(root);
 }
 
-void PictureInPictureInterstitial::RemovedFrom(ContainerNode&) {
+void PictureInPictureInterstitial::RemovedFrom(ContainerNode& insertion_point) {
   DCHECK(!GetVideoElement().isConnected());
 
   if (resize_observer_) {
     resize_observer_->disconnect();
     resize_observer_.Clear();
   }
+
+  HTMLDivElement::RemovedFrom(insertion_point);
 }
 
 void PictureInPictureInterstitial::NotifyElementSizeChanged(
     const DOMRectReadOnly& new_size) {
   message_element_->setAttribute(
-      "class", MediaControls::GetSizingCSSClass(
-                   MediaControls::GetSizingClass(new_size.width())));
+      html_names::kClassAttr,
+      MediaControls::GetSizingCSSClass(
+          MediaControls::GetSizingClass(new_size.width())));
 
   // Force a layout since |LayoutMedia::UpdateLayout()| will sometimes miss a
   // layout otherwise.

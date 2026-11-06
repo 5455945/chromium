@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,8 +11,9 @@
 #include <set>
 #include <vector>
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
 #include "components/download/public/common/download_interrupt_reasons.h"
 #include "components/download/public/common/download_item.h"
@@ -30,6 +31,10 @@ class DownloadUpdatedObserver : public download::DownloadItem::Observer {
   // The filter passed may be called multiple times, even after it
   // returns true.
   DownloadUpdatedObserver(download::DownloadItem* item, EventFilter filter);
+
+  DownloadUpdatedObserver(const DownloadUpdatedObserver&) = delete;
+  DownloadUpdatedObserver& operator=(const DownloadUpdatedObserver&) = delete;
+
   ~DownloadUpdatedObserver() override;
 
   // Returns when either the event has been seen (at least once since
@@ -43,12 +48,11 @@ class DownloadUpdatedObserver : public download::DownloadItem::Observer {
   void OnDownloadUpdated(download::DownloadItem* item) override;
   void OnDownloadDestroyed(download::DownloadItem* item) override;
 
-  download::DownloadItem* item_;
+  raw_ptr<download::DownloadItem> item_;
   EventFilter filter_;
   bool waiting_;
   bool event_seen_;
-
-  DISALLOW_COPY_AND_ASSIGN(DownloadUpdatedObserver);
+  base::RunLoop loop_;
 };
 
 // Detects changes to the downloads after construction.
@@ -76,6 +80,9 @@ class DownloadTestObserver : public DownloadManager::Observer,
   DownloadTestObserver(DownloadManager* download_manager,
                        size_t wait_count,
                        DangerousDownloadAction dangerous_download_action);
+
+  DownloadTestObserver(const DownloadTestObserver&) = delete;
+  DownloadTestObserver& operator=(const DownloadTestObserver&) = delete;
 
   ~DownloadTestObserver() override;
 
@@ -107,7 +114,8 @@ class DownloadTestObserver : public DownloadManager::Observer,
   virtual bool IsDownloadInFinalState(download::DownloadItem* download) = 0;
 
  private:
-  typedef std::set<download::DownloadItem*> DownloadSet;
+  typedef std::set<raw_ptr<download::DownloadItem, SetExperimental>>
+      DownloadSet;
 
   // Maps states to the number of times they have been encountered
   typedef std::map<download::DownloadItem::DownloadState, size_t> StateMap;
@@ -127,7 +135,7 @@ class DownloadTestObserver : public DownloadManager::Observer,
   void DenyDangerousDownload(uint32_t download_id);
 
   // The observed download manager.
-  DownloadManager* download_manager_;
+  raw_ptr<DownloadManager> download_manager_;
 
   // The set of download::DownloadItem's that have transitioned to their
   // finished state since construction of this object.  When the size of this
@@ -167,9 +175,9 @@ class DownloadTestObserver : public DownloadManager::Observer,
   // Holds the download ids which were dangerous.
   std::set<uint32_t> dangerous_downloads_seen_;
 
-  base::WeakPtrFactory<DownloadTestObserver> weak_factory_{this};
+  base::RunLoop loop_{base::RunLoop::Type::kNestableTasksAllowed};
 
-  DISALLOW_COPY_AND_ASSIGN(DownloadTestObserver);
+  base::WeakPtrFactory<DownloadTestObserver> weak_factory_{this};
 };
 
 class DownloadTestObserverTerminal : public DownloadTestObserver {
@@ -182,12 +190,14 @@ class DownloadTestObserverTerminal : public DownloadTestObserver {
       size_t wait_count,
       DangerousDownloadAction dangerous_download_action);
 
+  DownloadTestObserverTerminal(const DownloadTestObserverTerminal&) = delete;
+  DownloadTestObserverTerminal& operator=(const DownloadTestObserverTerminal&) =
+      delete;
+
   ~DownloadTestObserverTerminal() override;
 
  private:
   bool IsDownloadInFinalState(download::DownloadItem* download) override;
-
-  DISALLOW_COPY_AND_ASSIGN(DownloadTestObserverTerminal);
 };
 
 // Detects changes to the downloads after construction.
@@ -202,12 +212,15 @@ class DownloadTestObserverInProgress : public DownloadTestObserver {
   DownloadTestObserverInProgress(
       DownloadManager* download_manager, size_t wait_count);
 
+  DownloadTestObserverInProgress(const DownloadTestObserverInProgress&) =
+      delete;
+  DownloadTestObserverInProgress& operator=(
+      const DownloadTestObserverInProgress&) = delete;
+
   ~DownloadTestObserverInProgress() override;
 
  private:
   bool IsDownloadInFinalState(download::DownloadItem* download) override;
-
-  DISALLOW_COPY_AND_ASSIGN(DownloadTestObserverInProgress);
 };
 
 class DownloadTestObserverInterrupted : public DownloadTestObserver {
@@ -219,12 +232,15 @@ class DownloadTestObserverInterrupted : public DownloadTestObserver {
       size_t wait_count,
       DangerousDownloadAction dangerous_download_action);
 
+  DownloadTestObserverInterrupted(const DownloadTestObserverInterrupted&) =
+      delete;
+  DownloadTestObserverInterrupted& operator=(
+      const DownloadTestObserverInterrupted&) = delete;
+
   ~DownloadTestObserverInterrupted() override;
 
  private:
   bool IsDownloadInFinalState(download::DownloadItem* download) override;
-
-  DISALLOW_COPY_AND_ASSIGN(DownloadTestObserverInterrupted);
 };
 
 // The WaitForFlush() method on this class returns after:
@@ -238,6 +254,11 @@ class DownloadTestFlushObserver : public DownloadManager::Observer,
                                   public download::DownloadItem::Observer {
  public:
   explicit DownloadTestFlushObserver(DownloadManager* download_manager);
+
+  DownloadTestFlushObserver(const DownloadTestFlushObserver&) = delete;
+  DownloadTestFlushObserver& operator=(const DownloadTestFlushObserver&) =
+      delete;
+
   ~DownloadTestFlushObserver() override;
 
   void WaitForFlush();
@@ -252,19 +273,18 @@ class DownloadTestFlushObserver : public DownloadManager::Observer,
   void OnDownloadDestroyed(download::DownloadItem* download) override;
 
  private:
-  typedef std::set<download::DownloadItem*> DownloadSet;
+  typedef std::set<raw_ptr<download::DownloadItem, SetExperimental>>
+      DownloadSet;
 
   // If we're waiting for that flush point, check the number
   // of downloads in the IN_PROGRESS state and take appropriate
   // action.  If requested, also observes all downloads while iterating.
   void CheckDownloadsInProgress(bool observe_downloads);
 
-  DownloadManager* download_manager_;
+  raw_ptr<DownloadManager> download_manager_;
   DownloadSet downloads_observed_;
   bool waiting_for_zero_inprogress_;
   base::RunLoop run_loop_;
-
-  DISALLOW_COPY_AND_ASSIGN(DownloadTestFlushObserver);
 };
 
 // Waits for a callback indicating that the download::DownloadItem is about to
@@ -273,6 +293,11 @@ class DownloadTestItemCreationObserver
     : public base::RefCountedThreadSafe<DownloadTestItemCreationObserver> {
  public:
   DownloadTestItemCreationObserver();
+
+  DownloadTestItemCreationObserver(const DownloadTestItemCreationObserver&) =
+      delete;
+  DownloadTestItemCreationObserver& operator=(
+      const DownloadTestItemCreationObserver&) = delete;
 
   void WaitForDownloadItemCreation();
 
@@ -307,15 +332,23 @@ class DownloadTestItemCreationObserver
   // We are in the message loop.
   bool waiting_;
 
-  DISALLOW_COPY_AND_ASSIGN(DownloadTestItemCreationObserver);
+  base::RunLoop loop_;
 };
 
 // Class for mornitoring whether a save package download finishes.
 class SavePackageFinishedObserver : public download::DownloadItem::Observer,
                                     public DownloadManager::Observer {
  public:
-  SavePackageFinishedObserver(DownloadManager* manager,
-                              base::OnceClosure callback);
+  SavePackageFinishedObserver(
+      DownloadManager* manager,
+      base::OnceClosure callback,
+      std::set<download::DownloadItem::DownloadState> final_states = {
+          download::DownloadItem::COMPLETE, download::DownloadItem::CANCELLED});
+
+  SavePackageFinishedObserver(const SavePackageFinishedObserver&) = delete;
+  SavePackageFinishedObserver& operator=(const SavePackageFinishedObserver&) =
+      delete;
+
   ~SavePackageFinishedObserver() override;
 
   // download::DownloadItem::Observer:
@@ -328,11 +361,10 @@ class SavePackageFinishedObserver : public download::DownloadItem::Observer,
   void ManagerGoingDown(DownloadManager* manager) override;
 
  private:
-  DownloadManager* download_manager_;
-  download::DownloadItem* download_;
+  raw_ptr<DownloadManager> download_manager_;
+  raw_ptr<download::DownloadItem> download_;
   base::OnceClosure callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(SavePackageFinishedObserver);
+  std::set<download::DownloadItem::DownloadState> final_states_;
 };
 
 }  // namespace content`

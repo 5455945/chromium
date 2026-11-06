@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,19 +6,27 @@
 #define CONTENT_PUBLIC_GPU_CONTENT_GPU_CLIENT_H_
 
 #include "base/metrics/field_trial.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
+#include "build/buildflag.h"
+#include "content/common/content_export.h"
 #include "content/public/common/content_client.h"
-#include "mojo/public/cpp/bindings/binder_map.h"
+#include "gpu/command_buffer/service/shared_context_state.h"
 
 namespace gpu {
 struct GpuPreferences;
 class GpuDriverBugWorkarounds;
+class Scheduler;
 class SharedImageManager;
 class SyncPointManager;
 }
 
+namespace mojo {
+class BinderMap;
+}
+
 namespace viz {
 class VizCompositorThreadRunner;
+class GpuServiceImpl;
 }
 
 namespace content {
@@ -35,21 +43,31 @@ class CONTENT_EXPORT ContentGpuClient {
   // the browser. Binders registered here will never run until the GPU process
   // has received a |CreateGpuService()| call from the browser.
   virtual void ExposeInterfacesToBrowser(
+      viz::GpuServiceImpl* gpu_service,
       const gpu::GpuPreferences& gpu_preferences,
       const gpu::GpuDriverBugWorkarounds& gpu_workarounds,
       mojo::BinderMap* binders) {}
 
+  // Called immediately after the sandbox is initialized on the main thread.
+  virtual void PostSandboxInitialized() {}
   // Called right after the IO/compositor thread is created.
   virtual void PostIOThreadCreated(
       base::SingleThreadTaskRunner* io_task_runner) {}
   virtual void PostCompositorThreadCreated(
       base::SingleThreadTaskRunner* task_runner) {}
+  virtual void PostDisplayCompositorGpuThreadCreated(
+      base::SingleThreadTaskRunner* task_runner) {}
 
+#if BUILDFLAG(IS_ANDROID)
   // Allows client to supply these object instances instead of having content
   // internally create one.
   virtual gpu::SyncPointManager* GetSyncPointManager();
   virtual gpu::SharedImageManager* GetSharedImageManager();
+  virtual gpu::Scheduler* GetScheduler();
   virtual viz::VizCompositorThreadRunner* GetVizCompositorThreadRunner();
+  virtual const gpu::SharedContextState::GrContextOptionsProvider*
+  GetGrContextOptionsProvider();
+#endif
 };
 
 }  // namespace content

@@ -19,7 +19,6 @@ builds **on Linux**.
 *   Video and Audio codecs (may vary by distribution)
     *   **H.264**, AV1, VP8, and VP9 video codecs.
     *   **AAC**, MP3, Opus, Theora, Vorbis, FLAC, and WAV audio codecs.
-*   Sandboxed PPAPI (non-free) Flash plugin included in release
 *   Code is tested by Chrome developers
 *   Sandbox is always on
 *   Single deb/rpm package
@@ -37,8 +36,6 @@ builds **on Linux**.
 *   Video and Audio codecs (may vary by distribution)
     *   AV1, VP8, and VP9 video codecs.
     *   MP3, Opus, Theora, Vorbis, FLAC, and WAV audio codecs.
-*   Supports NPAPI (unsandboxed) Flash plugins, including the one from Adobe in
-    Chrome 34 and below
 *   Code may be modified by distributions
 *   Sandbox depends on the distribution (navigate to about:sandbox to confirm)
 *   Packaging depends on the distribution
@@ -46,7 +43,8 @@ builds **on Linux**.
 *   Cache is kept in `~/.cache/chromium`
 *   New release testing depends on the distribution
     *   Distributions are encouraged to track stable channel releases: see
-        http://googlechromereleases.blogspot.com/, http://omahaproxy.appspot.com/
-        and http://gsdview.appspot.com/chromium-browser-official/
+        https://chromereleases.googleblog.com/,
+        https://chromiumdash.appspot.com/releases?platform=Linux
+        and https://gsdview.appspot.com/chromium-browser-official/
 *   Google API keys depend on the distribution
     *   See https://www.chromium.org/developers/how-tos/api-keys

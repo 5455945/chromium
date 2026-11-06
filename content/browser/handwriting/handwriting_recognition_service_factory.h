@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,9 +10,12 @@
 
 namespace content {
 
+class RenderFrameHost;
+
 // A simple API used by browser interface broker. The main motivation is to
 // expose an identical `Create()` interface over different platforms.
 void CreateHandwritingRecognitionService(
+    RenderFrameHost* host,
     mojo::PendingReceiver<handwriting::mojom::HandwritingRecognitionService>);
 
 }  // namespace content

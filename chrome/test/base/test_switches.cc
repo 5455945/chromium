@@ -1,10 +1,8 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/test/base/test_switches.h"
-#include "build/build_config.h"
-#include "ppapi/buildflags/buildflags.h"
 
 namespace switches {
 
@@ -15,14 +13,18 @@ const char kAlsoEmitSuccessLogs[] = "also-emit-success-logs";
 // in selected browser tests.
 const char kDevtoolsCodeCoverage[] = "devtools-code-coverage";
 
+// Makes browser tests create the omnibox popups' WebUI content as production
+// does, instead of only when it is needed. Used to compare test runtimes and as
+// a kill switch for the on-demand creation. Must be passed on the test launcher
+// command line: `InProcessBrowserTest` reads it in its constructor, so
+// appending it in `SetUpCommandLine()` has no effect. To change this for one
+// fixture, use `omnibox::SetCreatePopupWebUIOnDemandForTesting()` instead.
+const char kDisableOmniboxPopupOnDemandCreation[] =
+    "disable-omnibox-popup-on-demand-creation";
+
 // Show the mean value of histograms that native performance tests
 // are monitoring. Note that this is only applicable for PerformanceTest
 // subclasses.
 const char kPerfTestPrintUmaMeans[] = "perf-test-print-uma-means";
-
-#if defined(OS_WIN)
-// If enabled, tests will run with high DPI support enabled.
-const char kEnableHighDpiSupport[] = "enable-high-dpi-support-for-testing";
-#endif
 
 }  // namespace switches

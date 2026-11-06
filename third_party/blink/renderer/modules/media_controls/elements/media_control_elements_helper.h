@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,11 @@
 
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/forward.h"
 
 namespace gfx {
 class Size;
 }  // namespace gfx
-
-namespace WTF {
-class AtomicString;
-}  // namespace WTF
 
 namespace blink {
 
@@ -45,16 +42,17 @@ class MediaControlElementsHelper final {
 
   // Utility function for quickly creating div elements with a predefined shadow
   // ID.
-  static HTMLDivElement* CreateDiv(const WTF::AtomicString& id,
+  static HTMLDivElement* CreateDiv(const AtomicString& id,
                                    ContainerNode* parent);
 
   // Utility function for getting the size in pixels of an element. If the
   // element has not been laid out then returns the supplied default.
-  static gfx::Size GetSizeOrDefault(const Element&, const gfx::Size&);
+  MODULES_EXPORT static gfx::Size GetSizeOrDefault(const Element&,
+                                                   const gfx::Size&);
 
   // Utility function for quickly creating div elements with a predefined
   // element ID.
-  static HTMLDivElement* CreateDivWithId(const WTF::AtomicString& id,
+  static HTMLDivElement* CreateDivWithId(const AtomicString& id,
                                          ContainerNode* parent);
 
   // Utility function that notifies the media controls in which the element is

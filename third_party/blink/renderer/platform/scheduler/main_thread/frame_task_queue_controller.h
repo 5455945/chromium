@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,12 @@
 #include <memory>
 #include <utility>
 
-#include "base/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/scheduler/main_thread/main_thread_task_queue.h"
 #include "third_party/blink/renderer/platform/scheduler/public/web_scheduling_priority.h"
+#include "third_party/blink/renderer/platform/scheduler/public/web_scheduling_queue_type.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
@@ -73,11 +74,12 @@ class PLATFORM_EXPORT FrameTaskQueueController {
   scoped_refptr<MainThreadTaskQueue> GetTaskQueue(
       MainThreadTaskQueue::QueueTraits);
 
-  scoped_refptr<MainThreadTaskQueue> NewResourceLoadingTaskQueue();
-
   scoped_refptr<MainThreadTaskQueue> NewWebSchedulingTaskQueue(
       MainThreadTaskQueue::QueueTraits,
+      WebSchedulingQueueType,
       WebSchedulingPriority);
+
+  void RemoveWebSchedulingTaskQueue(MainThreadTaskQueue*);
 
   // Get the list of all task queue and voter pairs.
   const Vector<TaskQueueAndEnabledVoterPair>& GetAllTaskQueuesAndVoters() const;
@@ -85,15 +87,6 @@ class PLATFORM_EXPORT FrameTaskQueueController {
   // Gets the associated QueueEnabledVoter for the given task queue, or nullptr
   // if one doesn't exist.
   base::sequence_manager::TaskQueue::QueueEnabledVoter* GetQueueEnabledVoter(
-      const scoped_refptr<MainThreadTaskQueue>&);
-
-  // Remove a resource loading task queue that FrameTaskQueueController created,
-  // along with its QueueEnabledVoter, if one exists. Returns true if the task
-  // queue was found and erased and false otherwise.
-  //
-  // Removes are linear in the total number of task queues since
-  // |all_task_queues_and_voters_| needs to be updated.
-  bool RemoveResourceLoadingTaskQueue(
       const scoped_refptr<MainThreadTaskQueue>&);
 
   void WriteIntoTrace(perfetto::TracedValue context) const;
@@ -105,33 +98,34 @@ class PLATFORM_EXPORT FrameTaskQueueController {
 
   void TaskQueueCreated(const scoped_refptr<MainThreadTaskQueue>&);
 
+  // Removes a queue from |all_task_queues_and_voters_| and
+  // |task_queue_enabled_voters_|. This method enforces that the queue is in the
+  // collection before removal. Removes are linear in the total number of task
+  // queues.
+  void RemoveTaskQueueAndVoter(MainThreadTaskQueue*);
+
   // Map a set of QueueTraits to a QueueType.
   // TODO(crbug.com/877245): Consider creating a new queue type kFrameNonLoading
   // and use it instead of this for new queue types.
   static MainThreadTaskQueue::QueueType QueueTypeFromQueueTraits(
       MainThreadTaskQueue::QueueTraits);
 
-  MainThreadSchedulerImpl* const main_thread_scheduler_impl_;
-  FrameSchedulerImpl* const frame_scheduler_impl_;
-  Delegate* const delegate_;
+  const raw_ptr<MainThreadSchedulerImpl, DanglingUntriaged>
+      main_thread_scheduler_impl_;
+  const raw_ptr<FrameSchedulerImpl> frame_scheduler_impl_;
+  const raw_ptr<Delegate> delegate_;
 
-  using TaskQueueMap =
-      WTF::HashMap<MainThreadTaskQueue::QueueTraitsKeyType,
-                   scoped_refptr<MainThreadTaskQueue>>;
+  using TaskQueueMap = HashMap<MainThreadTaskQueue::QueueTraitsKeyType,
+                               scoped_refptr<MainThreadTaskQueue>>;
 
   // Map of all TaskQueues, indexed by QueueTraits.
   TaskQueueMap task_queues_;
 
-  // Set of all resource loading task queues.
-  WTF::HashSet<scoped_refptr<MainThreadTaskQueue>>
-      resource_loading_task_queues_;
-
-  using TaskQueueEnabledVoterMap = WTF::HashMap<
+  using TaskQueueEnabledVoterMap = HashMap<
       scoped_refptr<MainThreadTaskQueue>,
       std::unique_ptr<base::sequence_manager::TaskQueue::QueueEnabledVoter>>;
 
-  // QueueEnabledVoters for the task queues we've created. Note: Some task
-  // queues do not have an associated voter.
+  // QueueEnabledVoters for the task queues we've created.
   TaskQueueEnabledVoterMap task_queue_enabled_voters_;
 
   // The list of all task queue and voter pairs for all QueueTypeInternal queue

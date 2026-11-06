@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,9 +12,6 @@
 
 namespace blink {
 class WebURLResponse;
-}
-
-namespace media {
 
 // Reasons that a cached WebURLResponse will *not* prevent a future request to
 // the server.  Reported via UMA, so don't change/reuse previously-existing
@@ -34,15 +31,14 @@ enum UncacheableReason {
 // Return the logical OR of the reasons "response" cannot be used for a future
 // request (using the disk cache), or 0 if it might be useful.
 PLATFORM_EXPORT uint32_t
-GetReasonsForUncacheability(const blink::WebURLResponse& response);
+GetReasonsForUncacheability(const WebURLResponse& response);
 
 // Returns when we should evict data from this response from our
 // memory cache. Note that we may still cache data longer if
 // a audio/video tag is currently using it. Returns a TimeDelta
 // which is should be added to base::Time::Now() or base::TimeTicks::Now().
-PLATFORM_EXPORT base::TimeDelta GetCacheValidUntil(
-    const blink::WebURLResponse& response);
+base::TimeDelta GetCacheValidUntil(const WebURLResponse& response);
 
-}  // namespace media
+}  // namespace blink
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_MEDIA_CACHE_UTIL_H_

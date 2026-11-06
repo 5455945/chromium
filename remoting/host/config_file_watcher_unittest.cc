@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
-#include "base/macros.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
@@ -28,13 +27,15 @@ namespace {
 class ConfigFileWatcherDelegate : public ConfigFileWatcher::Delegate {
  public:
   ConfigFileWatcherDelegate() = default;
+
+  ConfigFileWatcherDelegate(const ConfigFileWatcherDelegate&) = delete;
+  ConfigFileWatcherDelegate& operator=(const ConfigFileWatcherDelegate&) =
+      delete;
+
   ~ConfigFileWatcherDelegate() override = default;
 
-  MOCK_METHOD1(OnConfigUpdated, void(const std::string&));
-  MOCK_METHOD0(OnConfigWatcherError, void());
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ConfigFileWatcherDelegate);
+  MOCK_METHOD(void, OnConfigUpdated, (const std::string&), (override));
+  MOCK_METHOD(void, OnConfigWatcherError, (), (override));
 };
 
 }  // namespace
@@ -91,21 +92,20 @@ void ConfigFileWatcherTest::SetUp() {
 
 void ConfigFileWatcherTest::TearDown() {
   // Delete the test file.
-  if (!config_file_.empty())
+  if (!config_file_.empty()) {
     base::DeleteFile(config_file_);
+  }
 }
 
 // Verifies that the initial notification is delivered.
 TEST_F(ConfigFileWatcherTest, Basic) {
   std::string data("test");
-  EXPECT_NE(base::WriteFile(config_file_, data.c_str(),
-                                 static_cast<int>(data.size())), -1);
+  EXPECT_TRUE(base::WriteFile(config_file_, data));
 
   EXPECT_CALL(delegate_, OnConfigUpdated(_))
       .Times(1)
       .WillOnce(InvokeWithoutArgs(this, &ConfigFileWatcherTest::StopWatcher));
-  EXPECT_CALL(delegate_, OnConfigWatcherError())
-      .Times(0);
+  EXPECT_CALL(delegate_, OnConfigWatcherError()).Times(0);
 
   watcher_->Watch(&delegate_);
   run_loop_.Run();
@@ -120,15 +120,13 @@ TEST_F(ConfigFileWatcherTest, Update) {
   EXPECT_CALL(delegate_, OnConfigUpdated(EqualsString("test")))
       .Times(1)
       .WillOnce(InvokeWithoutArgs(this, &ConfigFileWatcherTest::StopWatcher));
-  EXPECT_CALL(delegate_, OnConfigWatcherError())
-      .Times(0);
+  EXPECT_CALL(delegate_, OnConfigWatcherError()).Times(0);
 
   watcher_->Watch(&delegate_);
 
   // Modify the watched file.
   std::string data("test");
-  EXPECT_NE(base::WriteFile(config_file_, data.c_str(),
-                                 static_cast<int>(data.size())), -1);
+  EXPECT_TRUE(base::WriteFile(config_file_, data));
 
   run_loop_.Run();
 }

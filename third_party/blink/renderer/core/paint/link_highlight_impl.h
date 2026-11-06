@@ -28,15 +28,16 @@
 
 #include <memory>
 
+#include "base/time/time.h"
 #include "cc/layers/content_layer_client.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/node.h"
 #include "third_party/blink/renderer/platform/animation/compositor_animation.h"
 #include "third_party/blink/renderer/platform/animation/compositor_animation_client.h"
 #include "third_party/blink/renderer/platform/animation/compositor_animation_delegate.h"
+#include "third_party/blink/renderer/platform/geometry/path.h"
 #include "third_party/blink/renderer/platform/graphics/color.h"
 #include "third_party/blink/renderer/platform/graphics/compositor_element_id.h"
-#include "third_party/blink/renderer/platform/graphics/path.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 
@@ -49,19 +50,25 @@ namespace blink {
 
 class EffectPaintPropertyNode;
 class GraphicsContext;
+class PaintArtifactCompositor;
 
 class CORE_EXPORT LinkHighlightImpl final : public CompositorAnimationDelegate,
                                             public CompositorAnimationClient {
+  USING_FAST_MALLOC(LinkHighlightImpl);
+
  public:
   explicit LinkHighlightImpl(Node*);
   ~LinkHighlightImpl() override;
 
-  void StartHighlightAnimationIfNeeded();
+  void UpdateOpacityAndRequestAnimation();
 
   // CompositorAnimationDelegate implementation.
-  void NotifyAnimationStarted(double monotonic_time, int group) override {}
-  void NotifyAnimationFinished(double monotonic_time, int group) override;
-  void NotifyAnimationAborted(double monotonic_time, int group) override {}
+  void NotifyAnimationStarted(base::TimeDelta monotonic_time,
+                              int group) override {}
+  void NotifyAnimationFinished(base::TimeDelta monotonic_time,
+                               int group) override;
+  void NotifyAnimationAborted(base::TimeDelta monotonic_time,
+                              int group) override {}
 
   // CompositorAnimationClient implementation.
   CompositorAnimation* GetCompositorAnimation() const override;
@@ -77,19 +84,23 @@ class CORE_EXPORT LinkHighlightImpl final : public CompositorAnimationDelegate,
   void UpdateBeforePrePaint();
   void UpdateAfterPrePaint();
   void Paint(GraphicsContext&);
+  void UpdateAfterPaint(
+      const PaintArtifactCompositor* paint_artifact_compositor);
 
   wtf_size_t FragmentCountForTesting() const { return fragments_.size(); }
-  cc::PictureLayer* LayerForTesting(size_t index) const {
-    return fragments_[index].Layer();
+  cc::PictureLayer* LayerForTesting(wtf_size_t index) const {
+    return fragments_[index]->Layer();
   }
 
  private:
   void ReleaseResources();
 
+  void StartCompositorAnimation();
+  void StopCompositorAnimation();
   void SetNeedsRepaintAndCompositingUpdate();
   void UpdateOpacity(float opacity);
 
-  class LinkHighlightFragment : private cc::ContentLayerClient {
+  class LinkHighlightFragment : public cc::ContentLayerClient {
    public:
     LinkHighlightFragment();
     ~LinkHighlightFragment() override;
@@ -101,7 +112,6 @@ class CORE_EXPORT LinkHighlightImpl final : public CompositorAnimationDelegate,
 
    private:
     // cc::ContentLayerClient implementation.
-    gfx::Rect PaintableRegion() const override;
     scoped_refptr<cc::DisplayItemList> PaintContentsToDisplayList() override;
     bool FillsBoundsCompletely() const override { return false; }
 
@@ -109,13 +119,16 @@ class CORE_EXPORT LinkHighlightImpl final : public CompositorAnimationDelegate,
     Path path_;
     Color color_;
   };
-  Vector<LinkHighlightFragment> fragments_;
+  Vector<std::unique_ptr<LinkHighlightFragment>> fragments_;
 
   WeakPersistent<Node> node_;
   std::unique_ptr<CompositorAnimation> compositor_animation_;
-  scoped_refptr<EffectPaintPropertyNode> effect_;
+  Persistent<EffectPaintPropertyNode> effect_;
 
-  bool is_animating_;
+  // True if an animation has been requested.
+  bool start_compositor_animation_ = false;
+  bool is_animating_on_compositor_ = false;
+  int compositor_keyframe_model_id_ = 0;
   base::TimeTicks start_time_;
   CompositorElementId element_id_;
 };

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,25 +10,41 @@
 #include "ash/shelf/shelf_background_animator.h"
 #include "ash/shelf/shelf_background_animator_observer.h"
 #include "ash/shell.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 
+namespace gfx {
+class Point;
+}  // namespace gfx
+
 namespace views {
+class MenuItemView;
 class View;
 }  // namespace views
 
 namespace ash {
 
 // A base class for all shelf tooltip bubbles.
-class ASH_EXPORT ShelfBubble : public views::BubbleDialogDelegateView,
-                               public ShelfBackgroundAnimatorObserver {
+class ASH_EXPORT ShelfBubble : public views::BubbleDialogDelegateView {
+  METADATA_HEADER(ShelfBubble, views::BubbleDialogDelegateView)
+
  public:
   ShelfBubble(views::View* anchor,
               ShelfAlignment alignment,
-              SkColor background_color);
+              bool for_tooltip,
+              std::optional<views::BubbleBorder::Arrow> arrow_position);
+
+  ShelfBubble(const ShelfBubble&) = delete;
+  ShelfBubble& operator=(const ShelfBubble&) = delete;
+
   ~ShelfBubble() override;
 
-  // views::BubbleDialogDelegateView
-  ax::mojom::Role GetAccessibleWindowRole() override;
+  // Returns the bubble arrow position for a bubble anchored to `anchor` inside
+  // a shelf application menu, placing the bubble horizontally beside the menu
+  // toward the center of the display (`LEFT_CENTER` when the menu is on the
+  // left half of the screen, or `RIGHT_CENTER` when on the right half).
+  static views::BubbleBorder::Arrow GetArrowForMenuItem(
+      views::MenuItemView* anchor);
 
   // Returns true if we should close when we get a press down event within our
   // bounds.
@@ -38,6 +54,10 @@ class ASH_EXPORT ShelfBubble : public views::BubbleDialogDelegateView,
   // bounds.
   virtual bool ShouldCloseOnMouseExit() = 0;
 
+  // Returns true if `screen_point` is within the bubble's bounds in screen
+  // coordinates.
+  bool IsPointOverBubble(const gfx::Point& screen_point) const;
+
  protected:
   void set_border_radius(int radius) { border_radius_ = radius; }
 
@@ -45,14 +65,9 @@ class ASH_EXPORT ShelfBubble : public views::BubbleDialogDelegateView,
   void CreateBubble();
 
  private:
-  // ShelfBackgroundAnimatorObserver:
-  void UpdateShelfBackground(SkColor color) override;
-
   int border_radius_ = 0;
 
-  ShelfBackgroundAnimator background_animator_;
-
-  DISALLOW_COPY_AND_ASSIGN(ShelfBubble);
+  const bool for_tooltip_;
 };
 
 }  // namespace ash

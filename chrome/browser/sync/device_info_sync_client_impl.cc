@@ -1,29 +1,35 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/sync/device_info_sync_client_impl.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
+#include "base/feature_list.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "chrome/browser/glic/glic_pref_names.h"
+#include "chrome/browser/glic/public/glic_enabling.h"
+#include "chrome/browser/glic/public/glic_keyed_service.h"
 #include "chrome/browser/metrics/chrome_metrics_service_accessor.h"
+#include "chrome/browser/personal_context/personal_context_eligibility_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/sharing/sharing_sync_preference.h"
 #include "chrome/browser/signin/chrome_device_id_helper.h"
 #include "chrome/browser/sync/sync_invalidations_service_factory.h"
-#include "components/send_tab_to_self/features.h"
-#include "components/sync/base/sync_prefs.h"
+#include "components/personal_context/core/personal_context_features.h"
+#include "components/personal_context/core/personal_context_key_manager.h"
+#include "components/sharing_message/sharing_sync_preference.h"
 #include "components/sync/invalidations/sync_invalidations_service.h"
+#include "components/sync/service/sync_prefs.h"
+#include "components/sync_device_info/device_info_proto_enum_util.h"
+#include "device/fido/public/features.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/webauthn/android/cable_module_android.h"
 #endif
-
-namespace browser_sync {
 
 DeviceInfoSyncClientImpl::DeviceInfoSyncClientImpl(Profile* profile)
     : profile_(profile) {}
@@ -34,76 +40,107 @@ DeviceInfoSyncClientImpl::~DeviceInfoSyncClientImpl() = default;
 std::string DeviceInfoSyncClientImpl::GetSigninScopedDeviceId() const {
 // Since the local sync backend is currently only supported on Windows, Mac and
 // Linux don't even check the pref on other os-es.
-// TODO(crbug.com/1052397): Reassess whether the next block needs to be included
-// in lacros-chrome once build flag switch of lacros-chrome is
-// complete.
-#if defined(OS_WIN) || defined(OS_MAC) || \
-    (defined(OS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS))
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
   syncer::SyncPrefs prefs(profile_->GetPrefs());
   if (prefs.IsLocalSyncEnabled()) {
     return "local_device";
   }
-#endif  // defined(OS_WIN) || defined(OS_MAC) || (defined(OS_LINUX) ||
-        // BUILDFLAG(IS_CHROMEOS_LACROS))
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
   return GetSigninScopedDeviceIdForProfile(profile_);
 }
 
 // syncer::DeviceInfoSyncClient:
-bool DeviceInfoSyncClientImpl::GetSendTabToSelfReceivingEnabled() const {
-  return send_tab_to_self::IsReceivingEnabledByUserOnThisDevice(
-      profile_->GetPrefs());
+syncer::DeviceInfo::SendTabReceivingType
+DeviceInfoSyncClientImpl::GetSendTabToSelfReceivingType() const {
+  return syncer::DeviceInfo::SendTabReceivingType::kChromeOrUnspecified;
 }
 
 // syncer::DeviceInfoSyncClient:
-absl::optional<syncer::DeviceInfo::SharingInfo>
+std::optional<syncer::DeviceInfo::SharingInfo>
 DeviceInfoSyncClientImpl::GetLocalSharingInfo() const {
   return SharingSyncPreference::GetLocalSharingInfoForSync(
       profile_->GetPrefs());
 }
 
 // syncer::DeviceInfoSyncClient:
-absl::optional<std::string> DeviceInfoSyncClientImpl::GetFCMRegistrationToken()
+std::optional<std::string> DeviceInfoSyncClientImpl::GetFCMRegistrationToken()
     const {
-  syncer::SyncInvalidationsService* service =
-      SyncInvalidationsServiceFactory::GetForProfile(profile_);
-  if (service) {
-    return service->GetFCMRegistrationToken();
-  }
-  // If the service is not enabled, then the registration token must be empty,
-  // not unknown (absl::nullopt). This is needed to reset previous token if
-  // the invalidations have been turned off.
-  return std::string();
+  return SyncInvalidationsServiceFactory::GetForProfile(profile_)
+      ->GetFCMRegistrationToken();
 }
 
 // syncer::DeviceInfoSyncClient:
-absl::optional<syncer::ModelTypeSet>
+std::optional<syncer::DataTypeSet>
 DeviceInfoSyncClientImpl::GetInterestedDataTypes() const {
-  syncer::SyncInvalidationsService* service =
-      SyncInvalidationsServiceFactory::GetForProfile(profile_);
-  if (service) {
-    return service->GetInterestedDataTypes();
-  }
-  // If the service is not enabled, then the list of types must be empty, not
-  // unknown (absl::nullopt). This is needed to reset previous types if the
-  // invalidations have been turned off.
-  return syncer::ModelTypeSet();
+  return SyncInvalidationsServiceFactory::GetForProfile(profile_)
+      ->GetInterestedDataTypes();
 }
 
-absl::optional<syncer::DeviceInfo::PhoneAsASecurityKeyInfo>
+syncer::DeviceInfo::PhoneAsASecurityKeyInfo::StatusOrInfo
 DeviceInfoSyncClientImpl::GetPhoneAsASecurityKeyInfo() const {
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
+  if (!base::FeatureList::IsEnabled(device::kWebAuthnPublishPrelinkingInfo)) {
+    return syncer::DeviceInfo::PhoneAsASecurityKeyInfo::NoSupport();
+  }
   return webauthn::authenticator::GetSyncDataIfRegistered();
 #else
-  return absl::nullopt;
+  return syncer::DeviceInfo::PhoneAsASecurityKeyInfo::NoSupport();
 #endif
 }
 
 bool DeviceInfoSyncClientImpl::IsUmaEnabledOnCrOSDevice() const {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   return ChromeMetricsServiceAccessor::IsMetricsAndCrashReportingEnabled();
 #else
   return false;
 #endif
 }
-}  // namespace browser_sync
+
+bool DeviceInfoSyncClientImpl::GetDesktopToIOSPromoReceivingEnabled() const {
+  return false;
+}
+
+MobilePromoOnDesktopPromoTypeSet
+DeviceInfoSyncClientImpl::GetDesktopToIOSPromoReceivingTypes() const {
+  // This is only required on iOS.
+  return {};
+}
+
+syncer::DeviceInfo::GlicExperimentalTriggeringState
+DeviceInfoSyncClientImpl::GetGlicExperimentalTriggeringState() const {
+  auto* service = glic::GlicKeyedService::Get(profile_);
+  if (!service) {
+    return syncer::DeviceInfo::GlicExperimentalTriggeringState::kUnavailable;
+  }
+  return service->enabling().GetExperimentalTriggeringState();
+}
+
+std::optional<int>
+DeviceInfoSyncClientImpl::GetGlicExperimentalTriggeringVersion() const {
+  auto* service = glic::GlicKeyedService::Get(profile_);
+  if (!service) {
+    return std::nullopt;
+  }
+  return service->enabling().GetExperimentalTriggeringVersion();
+}
+
+base::flat_set<std::string>
+DeviceInfoSyncClientImpl::GetGlicExperimentalTriggeringCapabilities() const {
+  auto* service = glic::GlicKeyedService::Get(profile_);
+  if (!service) {
+    return {};
+  }
+  return service->enabling().GetExperimentalTriggeringCapabilities();
+}
+
+syncer::DeviceInfo::PersonalContextInfo::StatusOrInfo
+DeviceInfoSyncClientImpl::GetLocalPersonalContextInfo() const {
+  const personal_context::PersonalContextEligibilityService*
+      eligibility_service =
+          PersonalContextEligibilityServiceFactory::GetForProfile(profile_);
+  CHECK(eligibility_service);
+
+  return personal_context::PersonalContextKeyManager::
+      GetLocalPersonalContextInfo(profile_->GetPrefs(), eligibility_service);
+}

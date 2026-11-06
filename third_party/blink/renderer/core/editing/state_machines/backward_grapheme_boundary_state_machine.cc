@@ -1,10 +1,12 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/editing/state_machines/backward_grapheme_boundary_state_machine.h"
 
-#include <ostream>  // NOLINT
+#include <array>
+#include <ostream>
+
 #include "third_party/blink/renderer/core/editing/state_machines/state_machine_util.h"
 #include "third_party/blink/renderer/core/editing/state_machines/text_segmentation_machine_state.h"
 #include "third_party/blink/renderer/platform/text/character.h"
@@ -14,7 +16,7 @@
 namespace blink {
 
 namespace {
-const UChar32 kInvalidCodePoint = WTF::unicode::kMaxCodepoint + 1;
+const UChar32 kInvalidCodePoint = uchar::kMaxCodepoint + 1;
 }  // namespace
 
 #define FOR_EACH_BACKWARD_GRAPHEME_BOUNDARY_STATE(V)                         \
@@ -42,15 +44,13 @@ enum class BackwardGraphemeBoundaryStateMachine::InternalState {
 std::ostream& operator<<(
     std::ostream& os,
     BackwardGraphemeBoundaryStateMachine::InternalState state) {
-  static const char* const kTexts[] = {
+  static const auto kTexts = std::to_array<const char*>({
 #define V(name) #name,
       FOR_EACH_BACKWARD_GRAPHEME_BOUNDARY_STATE(V)
 #undef V
-  };
-  auto* const* const it = std::begin(kTexts) + static_cast<size_t>(state);
-  DCHECK_GE(it, std::begin(kTexts)) << "Unknown state value";
-  DCHECK_LT(it, std::end(kTexts)) << "Unknown state value";
-  return os << *it;
+  });
+  DCHECK_LT(static_cast<size_t>(state), kTexts.size()) << "Unknown state value";
+  return os << kTexts[static_cast<size_t>(state)];
 }
 
 BackwardGraphemeBoundaryStateMachine::BackwardGraphemeBoundaryStateMachine()
@@ -119,8 +119,8 @@ BackwardGraphemeBoundaryStateMachine::FeedPrecedingCodeUnit(UChar code_unit) {
         const UChar32 code_point =
             U16_GET_SUPPLEMENTARY(code_unit, trail_surrogate_);
         trail_surrogate_ = 0;
-        if (Character::IsRegionalIndicator(next_code_point_) &&
-            Character::IsRegionalIndicator(code_point)) {
+        if (unicode::IsRegionalIndicator(next_code_point_) &&
+            unicode::IsRegionalIndicator(code_point)) {
           preceding_ris_count_ = 1;
           return MoveToNextState(InternalState::kCountRIS);
         }
@@ -132,7 +132,7 @@ BackwardGraphemeBoundaryStateMachine::FeedPrecedingCodeUnit(UChar code_unit) {
       }
     case InternalState::kCountRIS:
       DCHECK_EQ(trail_surrogate_, 0);
-      DCHECK(Character::IsRegionalIndicator(next_code_point_));
+      DCHECK(unicode::IsRegionalIndicator(next_code_point_));
       DCHECK_LT(boundary_offset_, 0);
       DCHECK_GT(preceding_ris_count_, 0);
       if (U16_IS_TRAIL(code_unit)) {
@@ -145,7 +145,7 @@ BackwardGraphemeBoundaryStateMachine::FeedPrecedingCodeUnit(UChar code_unit) {
       return Finish();
     case InternalState::kCountRISWaitLeadSurrogate:
       DCHECK_NE(trail_surrogate_, 0);
-      DCHECK(Character::IsRegionalIndicator(next_code_point_));
+      DCHECK(unicode::IsRegionalIndicator(next_code_point_));
       DCHECK_LT(boundary_offset_, 0);
       DCHECK_GT(preceding_ris_count_, 0);
       if (U16_IS_LEAD(code_unit)) {
@@ -153,7 +153,7 @@ BackwardGraphemeBoundaryStateMachine::FeedPrecedingCodeUnit(UChar code_unit) {
         const UChar32 code_point =
             U16_GET_SUPPLEMENTARY(code_unit, trail_surrogate_);
         trail_surrogate_ = 0;
-        if (Character::IsRegionalIndicator(code_point)) {
+        if (unicode::IsRegionalIndicator(code_point)) {
           ++preceding_ris_count_;
           return MoveToNextState(InternalState::kCountRIS);
         }
@@ -165,7 +165,6 @@ BackwardGraphemeBoundaryStateMachine::FeedPrecedingCodeUnit(UChar code_unit) {
       NOTREACHED() << "Do not call feedPrecedingCodeUnit() once it finishes.";
   }
   NOTREACHED() << "Unhandled state: " << internal_state_;
-  return Finish();
 }
 
 TextSegmentationMachineState
@@ -193,13 +192,11 @@ BackwardGraphemeBoundaryStateMachine::TellEndOfPrecedingText() {
       NOTREACHED() << "Do not call tellEndOfPrecedingText() once it finishes.";
   }
   NOTREACHED() << "Unhandled state: " << internal_state_;
-  return Finish();
 }
 
 TextSegmentationMachineState
 BackwardGraphemeBoundaryStateMachine::FeedFollowingCodeUnit(UChar code_unit) {
   NOTREACHED();
-  return TextSegmentationMachineState::kInvalid;
 }
 
 int BackwardGraphemeBoundaryStateMachine::FinalizeAndGetBoundaryOffset() {

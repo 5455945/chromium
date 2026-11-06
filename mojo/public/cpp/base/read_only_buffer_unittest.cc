@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,7 +18,7 @@ TEST(ReadOnlyBufferTest, ReadOnlyBufferEmptySpan) {
 
   ASSERT_TRUE(
       mojo::test::SerializeAndDeserialize<mojom::ReadOnlyBuffer>(in, out));
-  EXPECT_TRUE(std::equal(in.begin(), in.end(), out.begin(), out.end()));
+  EXPECT_TRUE(std::ranges::equal(in, out));
 }
 
 TEST(ReadOnlyBufferTest, ReadOnlyBufferNonEmptySpan) {
@@ -32,7 +32,7 @@ TEST(ReadOnlyBufferTest, ReadOnlyBufferNonEmptySpan) {
   std::vector<uint8_t> data = mojom::ReadOnlyBuffer::Serialize(&in);
 
   EXPECT_TRUE(mojom::ReadOnlyBuffer::Deserialize(std::move(data), &out));
-  EXPECT_TRUE(std::equal(in.begin(), in.end(), out.begin(), out.end()));
+  EXPECT_TRUE(std::ranges::equal(in, out));
 }
 
 }  // namespace read_only_buffer_unittest

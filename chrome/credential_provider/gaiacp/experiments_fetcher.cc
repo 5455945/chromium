@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,9 @@
 
 #include <windows.h>
 
-#include "base/bind.h"
+#include "base/containers/span.h"
 #include "base/files/file.h"
+#include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
@@ -27,11 +28,10 @@ const char16_t kGcpwServiceFetchExperimentsPath[] = u"/v1/experiments";
 
 // Default timeout when trying to make requests to the GCPW service.
 const base::TimeDelta kDefaultFetchExperimentsRequestTimeout =
-    base::TimeDelta::FromMilliseconds(5000);
+    base::Milliseconds(5000);
 
 // The period of refreshing experiments.
-const base::TimeDelta kExperimentsRefreshExecutionPeriod =
-    base::TimeDelta::FromHours(3);
+const base::TimeDelta kExperimentsRefreshExecutionPeriod = base::Hours(3);
 
 // Maximum number of retries if a HTTP call to the backend fails.
 constexpr unsigned int kMaxNumHttpRetries = 1;
@@ -89,11 +89,11 @@ class ExperimentsFetchTask : public extension::Task {
 // Builds the request dictionary to fetch experiments from the backend. If
 // |dm_token| is empty, it isn't added into request. If user id isn't found for
 // the given |sid|, returns an empty dictionary.
-std::unique_ptr<base::DictionaryValue> GetExperimentsRequestDict(
+std::unique_ptr<base::DictValue> GetExperimentsRequestDict(
     const std::wstring& sid,
     const std::wstring& device_resource_id,
     const std::wstring& dm_token) {
-  std::unique_ptr<base::DictionaryValue> dict(new base::DictionaryValue);
+  std::unique_ptr<base::DictValue> dict(new base::DictValue);
 
   std::wstring user_id;
 
@@ -103,19 +103,18 @@ std::unique_ptr<base::DictionaryValue> GetExperimentsRequestDict(
     return nullptr;
   }
 
-  dict->SetString(kObfuscatedUserIdKey, base::WideToUTF8(user_id));
+  dict->Set(kObfuscatedUserIdKey, base::WideToUTF8(user_id));
 
   if (!dm_token.empty()) {
-    dict->SetString(kDmTokenKey, base::WideToUTF8(dm_token));
+    dict->Set(kDmTokenKey, base::WideToUTF8(dm_token));
   }
-  dict->SetString(kDeviceResourceIdKey, base::WideToUTF8(device_resource_id));
+  dict->Set(kDeviceResourceIdKey, base::WideToUTF8(device_resource_id));
 
-  dict->SetString(kGcpwVersionKey,
-                  base::WideToUTF8(TEXT(CHROME_VERSION_STRING)));
+  dict->Set(kGcpwVersionKey, base::WideToUTF8(TEXT(CHROME_VERSION_STRING)));
 
-  auto keys = std::make_unique<base::ListValue>();
+  base::ListValue keys;
   for (auto& experiment : ExperimentsManager::Get()->GetExperimentsList())
-    keys->AppendString(experiment);
+    keys.Append(experiment);
 
   dict->Set(kFeaturesKey, std::move(keys));
 
@@ -146,7 +145,7 @@ extension::TaskCreator ExperimentsFetcher::GetFetchExperimentsTaskCreator() {
   return base::BindRepeating(&ExperimentsFetchTask::Create);
 }
 
-ExperimentsFetcher::ExperimentsFetcher() {}
+ExperimentsFetcher::ExperimentsFetcher() = default;
 
 ExperimentsFetcher::~ExperimentsFetcher() = default;
 
@@ -171,16 +170,16 @@ HRESULT ExperimentsFetcher::FetchAndStoreExperiments(
 HRESULT ExperimentsFetcher::FetchAndStoreExperimentsInternal(
     const std::wstring& sid,
     const std::string& access_token,
-    std::unique_ptr<base::DictionaryValue> request_dict) {
+    std::unique_ptr<base::DictValue> request_dict) {
   if (!request_dict) {
     LOGFN(ERROR) << "Request dictionary is null";
     return E_FAIL;
   }
 
   // Make the fetch experiments HTTP request.
-  absl::optional<base::Value> request_result;
+  std::optional<base::DictValue> request_result;
   HRESULT hr = WinHttpUrlFetcher::BuildRequestAndFetchResultFromHttpService(
-      GetExperimentsUrl(), access_token, {}, *request_dict.get(),
+      GetExperimentsUrl(), access_token, {}, *request_dict,
       kDefaultFetchExperimentsRequestTimeout, kMaxNumHttpRetries,
       &request_result);
 
@@ -191,7 +190,7 @@ HRESULT ExperimentsFetcher::FetchAndStoreExperimentsInternal(
   }
 
   std::string experiments_data;
-  if (request_result && request_result->is_dict()) {
+  if (request_result) {
     if (!base::JSONWriter::Write(*request_result, &experiments_data)) {
       LOGFN(ERROR) << "base::JSONWriter::Write failed";
       return E_FAIL;
@@ -203,7 +202,7 @@ HRESULT ExperimentsFetcher::FetchAndStoreExperimentsInternal(
 
   uint32_t open_flags = base::File::FLAG_CREATE_ALWAYS |
                         base::File::FLAG_WRITE |
-                        base::File::FLAG_EXCLUSIVE_WRITE;
+                        base::File::FLAG_WIN_EXCLUSIVE_WRITE;
   std::unique_ptr<base::File> experiments_file = GetOpenedFileForUser(
       sid, open_flags, kGcpwExperimentsDirectory, kGcpwUserExperimentsFileName);
   if (!experiments_file) {
@@ -212,17 +211,13 @@ HRESULT ExperimentsFetcher::FetchAndStoreExperimentsInternal(
     return E_FAIL;
   }
 
-  int num_bytes_written = experiments_file->Write(0, experiments_data.c_str(),
-                                                  experiments_data.size());
-
-  experiments_file.reset();
-
-  if (size_t(num_bytes_written) != experiments_data.size()) {
-    LOGFN(ERROR) << "Failed writing experiments data to file! Only "
-                 << num_bytes_written << " bytes written out of "
-                 << experiments_data.size();
+  if (!experiments_file->WriteAndCheck(0,
+                                       base::as_byte_span(experiments_data))) {
+    LOGFN(ERROR) << "Failed writing experiments data to file!";
     return E_FAIL;
   }
+
+  experiments_file.reset();
 
   base::Time fetch_time = base::Time::Now();
   std::wstring fetch_time_millis = base::NumberToWString(

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,46 +8,104 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/files/file_path.h"
-#include "base/single_thread_task_runner.h"
+#include "base/functional/bind.h"
+#include "base/logging.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/grit/chromium_strings.h"
-#include "components/crash/core/app/breakpad_linux.h"
-#include "components/crash/core/app/crashpad.h"
-#include "components/metrics/metrics_service.h"
-#include "content/public/browser/browser_task_traits.h"
+#include "chrome/browser/lifetime/application_lifetime_desktop.h"
+#include "chrome/common/chrome_features.h"
+#include "components/password_manager/core/browser/password_manager_switches.h"
+#include "content/public/browser/browser_thread.h"
 #include "device/bluetooth/dbus/bluez_dbus_manager.h"
-#include "device/bluetooth/dbus/bluez_dbus_thread_manager.h"
 #include "ui/base/l10n/l10n_util.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_LINUX)
+#include "base/containers/to_vector.h"
+#include "chrome/browser/profiles/profile_attributes_entry.h"
+#include "chrome/browser/profiles/profile_attributes_storage.h"
+#include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/shell_integration_linux.h"
+#include "chrome/browser/ui/ui_features.h"
+#include "ui/ozone/public/ozone_platform.h"
+#if BUILDFLAG(USE_DBUS)
+#include "components/dbus/thread_linux/dbus_thread_linux.h"
+#endif  // BUILDFLAG(USE_DBUS)
+#endif  // BUILDFLAG(IS_LINUX)
+
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/installer/util/google_update_settings.h"
+#include "components/metrics/call_stacks/stack_sampling_recorder.h"
 #endif
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
-#include "base/command_line.h"
+#if BUILDFLAG(USE_DBUS) && !BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/dbus_memory_pressure_evaluator_linux.h"
+#include "chrome/browser/lifetime/session_end_listener_linux.h"
+#endif
+
+#if !BUILDFLAG(IS_CHROMEOS)
 #include "base/linux_util.h"
 #include "chrome/common/chrome_paths_internal.h"
 #include "chrome/common/chrome_switches.h"
-#include "components/os_crypt/key_storage_config_linux.h"
-#include "components/os_crypt/os_crypt.h"
-#include "content/public/browser/browser_thread.h"
 #endif
 
 ChromeBrowserMainPartsLinux::ChromeBrowserMainPartsLinux(
-    const content::MainFunctionParams& parameters,
+    bool is_integration_test,
     StartupData* startup_data)
-    : ChromeBrowserMainPartsPosix(parameters, startup_data) {}
+    : ChromeBrowserMainPartsPosix(is_integration_test, startup_data) {}
 
-ChromeBrowserMainPartsLinux::~ChromeBrowserMainPartsLinux() {
+ChromeBrowserMainPartsLinux::~ChromeBrowserMainPartsLinux() = default;
+
+#if !BUILDFLAG(IS_CHROMEOS) && BUILDFLAG(USE_DBUS)
+void ChromeBrowserMainPartsLinux::PreCreateMainMessageLoop() {
+  // Before content creates the PowerMonitor, which takes the system bus. Not
+  // torn down at browser shutdown; see PostDestroyThreads(). A lost bus (the
+  // session ending, or dbus restarted underneath us) ends the session the way
+  // a lost display server connection does in ChromeBrowserMainExtraPartsOzone.
+  dbus_thread_linux::Initialize(base::BindRepeating([] {
+    chrome::SessionEnding();
+    LOG(FATAL) << "Browser failed to shutdown.";
+  }));
+  ChromeBrowserMainPartsPosix::PreCreateMainMessageLoop();
+}
+#endif  // !BUILDFLAG(IS_CHROMEOS) && BUILDFLAG(USE_DBUS)
+
+void ChromeBrowserMainPartsLinux::PostCreateMainMessageLoop() {
+#if BUILDFLAG(IS_CHROMEOS)
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          metrics::kRecordStackSamplingDataSwitch)) {
+    stack_sampling_recorder_ =
+        base::MakeRefCounted<metrics::StackSamplingRecorder>();
+    stack_sampling_recorder_->Start();
+  }
+  // Don't initialize DBus here. Bluetooth DBusManager initialization depends on
+  // FeatureList, and is done elsewhere.
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+#if !BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(USE_DBUS)
+  bluez::BluezDBusManager::Initialize(
+      dbus_thread_linux::GetSharedSystemBus().get());
+  session_end_listener_ = SessionEndListenerLinux::Create();
+#endif  // BUILDFLAG(USE_DBUS)
+#endif  // !BUILDFLAG(IS_CHROMEOS)
+
+  ChromeBrowserMainPartsPosix::PostCreateMainMessageLoop();
 }
 
+#if BUILDFLAG(IS_LINUX)
+void ChromeBrowserMainPartsLinux::PostMainMessageLoopRun() {
+  ChromeBrowserMainPartsPosix::PostMainMessageLoopRun();
+  ui::OzonePlatform::GetInstance()->PostMainMessageLoopRun();
+}
+#endif
+
 void ChromeBrowserMainPartsLinux::PreProfileInit() {
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS)
   // Needs to be called after we have chrome::DIR_USER_DATA and
   // g_browser_process.  This happens in PreCreateThreads.
   // base::GetLinuxDistro() will initialize its value if needed.
@@ -56,40 +114,50 @@ void ChromeBrowserMainPartsLinux::PreProfileInit() {
       base::BindOnce(base::IgnoreResult(&base::GetLinuxDistro)));
 #endif
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
-  // Set up crypt config. This should be kept in sync with the OSCrypt parts of
-  // SystemNetworkContextManager::OnNetworkServiceCreated.
-  std::unique_ptr<os_crypt::Config> config(new os_crypt::Config());
-  // Forward to os_crypt the flag to use a specific password store.
-  config->store =
-      parsed_command_line().GetSwitchValueASCII(switches::kPasswordStore);
-  // Forward the product name
-  config->product_name = l10n_util::GetStringUTF8(IDS_PRODUCT_NAME);
-  // OSCrypt may target keyring, which requires calls from the main thread.
-  config->main_thread_runner = content::GetUIThreadTaskRunner({});
-  // OSCrypt can be disabled in a special settings file.
-  config->should_use_preference =
-      parsed_command_line().HasSwitch(switches::kEnableEncryptionSelection);
-  chrome::GetDefaultUserDataDirectory(&config->user_data_path);
-  OSCrypt::SetConfig(std::move(config));
+#if BUILDFLAG(IS_LINUX)
+  // Browser windows pick their WM_CLASS / app_id when they are created, so
+  // find out which profiles have a per-profile desktop entry before the first
+  // window is opened. This is a handful of stat() calls for profiles other
+  // than the default profile.
+  if (base::FeatureList::IsEnabled(features::kLinuxPerProfileAppId)) {
+    shell_integration_linux::DetectInstalledPerProfileDesktopEntries(
+        base::ToVector(g_browser_process->profile_manager()
+                           ->GetProfileAttributesStorage()
+                           .GetAllProfilesAttributes(),
+                       &ProfileAttributesEntry::GetPath));
+  }
 #endif
 
   ChromeBrowserMainPartsPosix::PreProfileInit();
 }
 
-void ChromeBrowserMainPartsLinux::PostCreateMainMessageLoop() {
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
-  bluez::BluezDBusManager::Initialize(nullptr /* system_bus */);
-#endif
-
-  ChromeBrowserMainPartsPosix::PostCreateMainMessageLoop();
+#if BUILDFLAG(USE_DBUS) && !BUILDFLAG(IS_CHROMEOS)
+void ChromeBrowserMainPartsLinux::PostBrowserStart() {
+  auto* monitor = memory_pressure::MultiSourceMemoryPressureMonitor::Get();
+  if (monitor &&
+      base::FeatureList::IsEnabled(features::kLinuxLowMemoryMonitor)) {
+    monitor->SetSystemEvaluator(
+        std::make_unique<DbusMemoryPressureEvaluatorLinux>(
+            monitor->CreateVoter()));
+  }
+  ChromeBrowserMainPartsPosix::PostBrowserStart();
 }
+#endif  // BUILDFLAG(USE_DBUS) && !BUILDFLAG(IS_CHROMEOS)
 
 void ChromeBrowserMainPartsLinux::PostDestroyThreads() {
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
-  bluez::BluezDBusManager::Shutdown();
-  bluez::BluezDBusThreadManager::Shutdown();
+#if BUILDFLAG(IS_CHROMEOS)
+  // No-op; per PostBrowserStart() comment, this is done elsewhere.
+#else
+#if BUILDFLAG(USE_DBUS)
+  session_end_listener_.reset();
 #endif
+  bluez::BluezDBusManager::Shutdown();
+  // TODO(shelley.vohr): Call dbus_thread_linux::Shutdown() here. It cannot run
+  // yet because the in-process device service (battery, wifi, wake lock) is
+  // destroyed after this last BrowserMainParts hook and still dereferences
+  // bus-owned dbus::ObjectProxy objects, so the buses are released at process
+  // exit instead.
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   ChromeBrowserMainPartsPosix::PostDestroyThreads();
 }

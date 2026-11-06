@@ -1,40 +1,72 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "mojo/public/cpp/bindings/receiver_set.h"
 
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "mojo/public/cpp/bindings/associated_receiver_set.h"
-#include "mojo/public/cpp/bindings/receiver_set.h"
+#include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/tests/bindings_test_base.h"
 #include "mojo/public/cpp/bindings/unique_receiver_set.h"
 #include "mojo/public/cpp/system/functions.h"
-#include "mojo/public/interfaces/bindings/tests/ping_service.mojom.h"
-#include "mojo/public/interfaces/bindings/tests/test_associated_interfaces.mojom.h"
+#include "mojo/public/interfaces/bindings/tests/ping_service.test-mojom.h"
+#include "mojo/public/interfaces/bindings/tests/test_associated_interfaces.test-mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace mojo {
 namespace test {
+
+class ReceiverSetStaticAssertTests {
+  // The receiver entry in a receiver set with no context should be the same
+  // size as a regular receiver + one machine word for the vtable.
+  static_assert(sizeof(Receiver<PingService>) + sizeof(void*) ==
+                sizeof(ReceiverSet<PingService>::ReceiverEntry));
+};
+
 namespace {
 
 using ReceiverSetTest = BindingsTestBase;
 
 template <typename ReceiverSetType, typename ContextType>
-void ExpectContextHelper(ReceiverSetType* receiver_set,
+void ExpectContextHelper(const ReceiverSetType* receiver_set,
                          ContextType expected_context) {
   EXPECT_EQ(expected_context, receiver_set->current_context());
 }
 
 template <typename ReceiverSetType, typename ContextType>
-base::RepeatingClosure ExpectContext(ReceiverSetType* receiver_set,
+base::RepeatingClosure ExpectContext(const ReceiverSetType* receiver_set,
                                      ContextType expected_context) {
   return base::BindRepeating(&ExpectContextHelper<ReceiverSetType, ContextType>,
                              receiver_set, expected_context);
+}
+
+template <typename ReceiverSetType, typename ContextType>
+void ExpectMutableContextHelper(ReceiverSetType* receiver_set,
+                                ContextType expected_context,
+                                ContextType new_context) {
+  {
+    ContextType& context = receiver_set->current_context();
+    EXPECT_EQ(context, expected_context);
+    context = new_context;
+  }
+
+  ExpectContextHelper(receiver_set, new_context);
+}
+
+template <typename ReceiverSetType, typename ContextType>
+base::RepeatingClosure ExpectMutableContext(ReceiverSetType* receiver_set,
+                                            ContextType expected_context,
+                                            ContextType new_context) {
+  return base::BindRepeating(
+      &ExpectMutableContextHelper<ReceiverSetType, ContextType>, receiver_set,
+      expected_context, new_context);
 }
 
 template <typename ReceiverSetType>
@@ -99,15 +131,16 @@ class PingImpl : public PingService {
  private:
   // PingService:
   void Ping(PingCallback callback) override {
-    if (!ping_handler_.is_null())
+    if (!ping_handler_.is_null()) {
       ping_handler_.Run();
+    }
     std::move(callback).Run();
   }
 
   base::RepeatingClosure ping_handler_;
 };
 
-TEST_P(ReceiverSetTest, ReceiverSetContext) {
+TEST_F(ReceiverSetTest, ReceiverSetContext) {
   PingImpl impl;
 
   ReceiverSet<PingService, int> receivers;
@@ -148,7 +181,61 @@ TEST_P(ReceiverSetTest, ReceiverSetContext) {
   EXPECT_TRUE(receivers.empty());
 }
 
-TEST_P(ReceiverSetTest, ReceiverSetDispatchReceiver) {
+TEST_F(ReceiverSetTest, ReceiverSetMutableContext) {
+  PingImpl impl;
+
+  ReceiverSet<PingService, int> receivers;
+  Remote<PingService> ping_a, ping_b;
+  receivers.Add(&impl, ping_a.BindNewPipeAndPassReceiver(), 1);
+  receivers.Add(&impl, ping_b.BindNewPipeAndPassReceiver(), 2);
+
+  {
+    impl.set_ping_handler(ExpectMutableContext(&receivers, 1, 3));
+    base::RunLoop loop;
+    ping_a->Ping(loop.QuitClosure());
+    loop.Run();
+  }
+
+  {
+    impl.set_ping_handler(ExpectMutableContext(&receivers, 2, 4));
+    base::RunLoop loop;
+    ping_b->Ping(loop.QuitClosure());
+    loop.Run();
+  }
+}
+
+TEST_F(ReceiverSetTest, ReceiverSetGetContext) {
+  PingImpl impl;
+
+  ReceiverSet<PingService, int> receivers;
+  Remote<PingService> ping_a, ping_b;
+  ReceiverId receiver_a =
+      receivers.Add(&impl, ping_a.BindNewPipeAndPassReceiver(), 1);
+  ReceiverId receiver_b =
+      receivers.Add(&impl, ping_b.BindNewPipeAndPassReceiver(), 2);
+
+  EXPECT_EQ(1, *receivers.GetContext(receiver_a));
+  EXPECT_EQ(2, *receivers.GetContext(receiver_b));
+  EXPECT_EQ(nullptr, receivers.GetContext(receiver_b + 1));
+}
+
+TEST_F(ReceiverSetTest, ReceiverSetGetAllContexts) {
+  PingImpl impl;
+
+  ReceiverSet<PingService, int> receivers;
+  Remote<PingService> ping_a, ping_b;
+  ReceiverId receiver_a =
+      receivers.Add(&impl, ping_a.BindNewPipeAndPassReceiver(), 1);
+  ReceiverId receiver_b =
+      receivers.Add(&impl, ping_b.BindNewPipeAndPassReceiver(), 2);
+
+  std::map<ReceiverId, int*> contexts = receivers.GetAllContexts();
+  EXPECT_EQ(2u, contexts.size());
+  EXPECT_EQ(1, *contexts[receiver_a]);
+  EXPECT_EQ(2, *contexts[receiver_b]);
+}
+
+TEST_F(ReceiverSetTest, ReceiverSetDispatchReceiver) {
   PingImpl impl;
 
   ReceiverSet<PingService, int> receivers;
@@ -191,7 +278,7 @@ TEST_P(ReceiverSetTest, ReceiverSetDispatchReceiver) {
   EXPECT_TRUE(receivers.empty());
 }
 
-TEST_P(ReceiverSetTest, ReceiverSetConnectionErrorWithReason) {
+TEST_F(ReceiverSetTest, ReceiverSetConnectionErrorWithReason) {
   PingImpl impl;
   Remote<PingService> remote;
   ReceiverSet<PingService> receivers;
@@ -208,7 +295,7 @@ TEST_P(ReceiverSetTest, ReceiverSetConnectionErrorWithReason) {
   remote.ResetWithReason(1024u, "bye");
 }
 
-TEST_P(ReceiverSetTest, ReceiverSetReportBadMessage) {
+TEST_F(ReceiverSetTest, ReceiverSetReportBadMessage) {
   PingImpl impl;
 
   std::string last_received_error;
@@ -245,7 +332,7 @@ TEST_P(ReceiverSetTest, ReceiverSetReportBadMessage) {
   SetDefaultProcessErrorHandler(base::NullCallback());
 }
 
-TEST_P(ReceiverSetTest, ReceiverSetGetBadMessageCallback) {
+TEST_F(ReceiverSetTest, ReceiverSetGetBadMessageCallback) {
   PingImpl impl;
 
   std::string last_received_error;
@@ -295,7 +382,7 @@ TEST_P(ReceiverSetTest, ReceiverSetGetBadMessageCallback) {
   SetDefaultProcessErrorHandler(base::NullCallback());
 }
 
-TEST_P(ReceiverSetTest, ReceiverSetGetBadMessageCallbackOutlivesReceiverSet) {
+TEST_F(ReceiverSetTest, ReceiverSetGetBadMessageCallbackOutlivesReceiverSet) {
   PingImpl impl;
 
   std::string last_received_error;
@@ -346,14 +433,16 @@ class PingProviderImpl : public AssociatedPingProvider, public PingService {
   // AssociatedPingProvider:
   void GetPing(PendingAssociatedReceiver<PingService> receiver) override {
     ping_receivers_.Add(this, std::move(receiver), new_ping_context_);
-    if (!new_ping_handler_.is_null())
+    if (!new_ping_handler_.is_null()) {
       new_ping_handler_.Run();
+    }
   }
 
   // PingService:
   void Ping(PingCallback callback) override {
-    if (!ping_handler_.is_null())
+    if (!ping_handler_.is_null()) {
       ping_handler_.Run();
+    }
     std::move(callback).Run();
   }
 
@@ -363,7 +452,7 @@ class PingProviderImpl : public AssociatedPingProvider, public PingService {
   base::RepeatingClosure new_ping_handler_;
 };
 
-TEST_P(ReceiverSetTest, AssociatedReceiverSetContext) {
+TEST_F(ReceiverSetTest, AssociatedReceiverSetContext) {
   Remote<AssociatedPingProvider> provider;
   PingProviderImpl impl;
   Receiver<AssociatedPingProvider> receiver(
@@ -420,7 +509,7 @@ TEST_P(ReceiverSetTest, AssociatedReceiverSetContext) {
   EXPECT_TRUE(impl.ping_receivers().empty());
 }
 
-TEST_P(ReceiverSetTest, PrimaryInterfaceReceiverSetContext) {
+TEST_F(ReceiverSetTest, PrimaryInterfaceReceiverSetContext) {
   Remote<AssociatedPingProvider> provider_a, provider_b;
   PingProviderImpl impl;
   ReceiverSet<AssociatedPingProvider, int> receivers;
@@ -465,7 +554,7 @@ TEST_P(ReceiverSetTest, PrimaryInterfaceReceiverSetContext) {
   EXPECT_TRUE(receivers.empty());
 }
 
-TEST_P(ReceiverSetTest, PrimaryInterfaceReceiverSetDispatchReceiver) {
+TEST_F(ReceiverSetTest, PrimaryInterfaceReceiverSetDispatchReceiver) {
   Remote<AssociatedPingProvider> provider_a, provider_b;
   PingProviderImpl impl;
   ReceiverSet<AssociatedPingProvider, int> receivers;
@@ -512,7 +601,7 @@ TEST_P(ReceiverSetTest, PrimaryInterfaceReceiverSetDispatchReceiver) {
   EXPECT_TRUE(receivers.empty());
 }
 
-TEST_P(ReceiverSetTest, AssociatedReceiverSetConnectionErrorWithReason) {
+TEST_F(ReceiverSetTest, AssociatedReceiverSetConnectionErrorWithReason) {
   Remote<AssociatedPingProvider> remote_primary;
   PingProviderImpl primary_impl;
   Receiver<AssociatedPingProvider> primary_receiver(
@@ -546,7 +635,7 @@ class PingInstanceCounter : public PingService {
 };
 int PingInstanceCounter::instance_count = 0;
 
-TEST_P(ReceiverSetTest, UniqueReceiverSetDestruction) {
+TEST_F(ReceiverSetTest, UniqueReceiverSetDestruction) {
   Remote<PingService> ping_a, ping_b;
   auto receivers = std::make_unique<UniqueReceiverSet<PingService>>();
 
@@ -562,7 +651,7 @@ TEST_P(ReceiverSetTest, UniqueReceiverSetDestruction) {
   EXPECT_EQ(0, PingInstanceCounter::instance_count);
 }
 
-TEST_P(ReceiverSetTest, UniqueReceiverSetDisconnect) {
+TEST_F(ReceiverSetTest, UniqueReceiverSetDisconnect) {
   Remote<PingService> ping_a, ping_b;
   UniqueReceiverSet<PingService> receivers;
   receivers.Add(std::make_unique<PingInstanceCounter>(),
@@ -580,7 +669,7 @@ TEST_P(ReceiverSetTest, UniqueReceiverSetDisconnect) {
   EXPECT_EQ(0, PingInstanceCounter::instance_count);
 }
 
-TEST_P(ReceiverSetTest, UniqueReceiverSetRemoveEntry) {
+TEST_F(ReceiverSetTest, UniqueReceiverSetRemoveEntry) {
   Remote<PingService> ping_a, ping_b;
   UniqueReceiverSet<PingService> receivers;
   ReceiverId receiver_id_a =
@@ -597,8 +686,6 @@ TEST_P(ReceiverSetTest, UniqueReceiverSetRemoveEntry) {
   EXPECT_TRUE(receivers.Remove(receiver_id_b));
   EXPECT_EQ(0, PingInstanceCounter::instance_count);
 }
-
-INSTANTIATE_MOJO_BINDINGS_TEST_SUITE_P(ReceiverSetTest);
 
 }  // namespace
 }  // namespace test

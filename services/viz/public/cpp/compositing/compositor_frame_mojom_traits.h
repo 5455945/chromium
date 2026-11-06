@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,9 @@
 #include <vector>
 
 #include "base/debug/dump_without_crashing.h"
+#include "base/types/expected.h"
 #include "components/viz/common/quads/compositor_frame.h"
+#include "mojo/public/cpp/bindings/deserialization_error.h"
 #include "services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.h"
 #include "services/viz/public/cpp/compositing/compositor_render_pass_mojom_traits.h"
 #include "services/viz/public/cpp/compositing/transferable_resource_mojom_traits.h"
@@ -42,8 +44,9 @@ struct StructTraits<viz::mojom::CompositorFrameDataView, viz::CompositorFrame> {
     return input.render_pass_list;
   }
 
-  static bool Read(viz::mojom::CompositorFrameDataView data,
-                   viz::CompositorFrame* out);
+  static base::expected<void, DeserializationError> Read(
+      viz::mojom::CompositorFrameDataView data,
+      viz::CompositorFrame* out);
 };
 
 }  // namespace mojo

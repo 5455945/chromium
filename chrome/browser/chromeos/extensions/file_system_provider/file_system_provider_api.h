@@ -1,61 +1,76 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_CHROMEOS_EXTENSIONS_FILE_SYSTEM_PROVIDER_FILE_SYSTEM_PROVIDER_API_H_
 #define CHROME_BROWSER_CHROMEOS_EXTENSIONS_FILE_SYSTEM_PROVIDER_FILE_SYSTEM_PROVIDER_API_H_
 
-#include "chrome/browser/chromeos/extensions/file_system_provider/provider_function.h"
+#include <variant>
+
+#include "base/files/file.h"
+#include "base/values.h"
+#include "chromeos/ash/experiences/extensions/common/api/file_system_provider_internal.h"
 #include "extensions/browser/extension_function.h"
+
+namespace ash::file_system_provider {
+class RequestValue;
+}  // namespace ash::file_system_provider
 
 namespace extensions {
 
-class FileSystemProviderMountFunction : public ExtensionFunction {
+class FileSystemProviderBase : public ExtensionFunction {
+ protected:
+  ~FileSystemProviderBase() override = default;
+  std::string GetProviderId() const;
+  void RespondWithError(const std::string& error);
+};
+
+class FileSystemProviderMountFunction : public FileSystemProviderBase {
  public:
   DECLARE_EXTENSION_FUNCTION("fileSystemProvider.mount",
                              FILESYSTEMPROVIDER_MOUNT)
 
  protected:
-  ~FileSystemProviderMountFunction() override {}
+  ~FileSystemProviderMountFunction() override = default;
   ResponseAction Run() override;
 };
 
-class FileSystemProviderUnmountFunction : public ExtensionFunction {
+class FileSystemProviderUnmountFunction : public FileSystemProviderBase {
  public:
   DECLARE_EXTENSION_FUNCTION("fileSystemProvider.unmount",
                              FILESYSTEMPROVIDER_UNMOUNT)
 
  protected:
-  ~FileSystemProviderUnmountFunction() override {}
+  ~FileSystemProviderUnmountFunction() override = default;
   ResponseAction Run() override;
 };
 
-class FileSystemProviderGetAllFunction : public ExtensionFunction {
+class FileSystemProviderGetAllFunction : public FileSystemProviderBase {
  public:
   DECLARE_EXTENSION_FUNCTION("fileSystemProvider.getAll",
                              FILESYSTEMPROVIDER_GETALL)
 
  protected:
-  ~FileSystemProviderGetAllFunction() override {}
+  ~FileSystemProviderGetAllFunction() override = default;
   ResponseAction Run() override;
 };
 
-class FileSystemProviderGetFunction : public ExtensionFunction {
+class FileSystemProviderGetFunction : public FileSystemProviderBase {
  public:
   DECLARE_EXTENSION_FUNCTION("fileSystemProvider.get", FILESYSTEMPROVIDER_GET)
 
  protected:
-  ~FileSystemProviderGetFunction() override {}
+  ~FileSystemProviderGetFunction() override = default;
   ResponseAction Run() override;
 };
 
-class FileSystemProviderNotifyFunction : public ExtensionFunction {
+class FileSystemProviderNotifyFunction : public FileSystemProviderBase {
  public:
   DECLARE_EXTENSION_FUNCTION("fileSystemProvider.notify",
                              FILESYSTEMPROVIDER_NOTIFY)
 
  protected:
-  ~FileSystemProviderNotifyFunction() override {}
+  ~FileSystemProviderNotifyFunction() override = default;
   ResponseAction Run() override;
 
  private:
@@ -63,87 +78,130 @@ class FileSystemProviderNotifyFunction : public ExtensionFunction {
   void OnNotifyCompleted(base::File::Error result);
 };
 
+class FileSystemProviderInternal : public FileSystemProviderBase {
+ protected:
+  ~FileSystemProviderInternal() override = default;
+
+  // Forwards the result of the operation to the file system provider service.
+  ResponseAction ForwardOperationResult(
+      const std::string& file_system_id,
+      int64_t request_id,
+      const ash::file_system_provider::RequestValue& value,
+      std::variant<bool /*has_more*/, base::File::Error /*error*/> arg);
+};
+
+class FileSystemProviderInternalRespondToMountRequestFunction
+    : public FileSystemProviderInternal {
+ public:
+  DECLARE_EXTENSION_FUNCTION("fileSystemProviderInternal.respondToMountRequest",
+                             FILESYSTEMPROVIDERINTERNAL_RESPONDTOMOUNTREQUEST)
+
+ protected:
+  ~FileSystemProviderInternalRespondToMountRequestFunction() override = default;
+  ResponseAction Run() override;
+};
+
 class FileSystemProviderInternalUnmountRequestedSuccessFunction
-    : public FileSystemProviderInternalFunction {
+    : public FileSystemProviderInternal {
  public:
   DECLARE_EXTENSION_FUNCTION(
       "fileSystemProviderInternal.unmountRequestedSuccess",
       FILESYSTEMPROVIDERINTERNAL_UNMOUNTREQUESTEDSUCCESS)
 
  protected:
-  ~FileSystemProviderInternalUnmountRequestedSuccessFunction() override {}
+  ~FileSystemProviderInternalUnmountRequestedSuccessFunction() override =
+      default;
   ResponseAction Run() override;
 };
 
 class FileSystemProviderInternalGetMetadataRequestedSuccessFunction
-    : public FileSystemProviderInternalFunction {
+    : public FileSystemProviderInternal {
  public:
   DECLARE_EXTENSION_FUNCTION(
       "fileSystemProviderInternal.getMetadataRequestedSuccess",
       FILESYSTEMPROVIDERINTERNAL_GETMETADATAREQUESTEDSUCCESS)
 
  protected:
-  ~FileSystemProviderInternalGetMetadataRequestedSuccessFunction() override {}
+  ~FileSystemProviderInternalGetMetadataRequestedSuccessFunction() override =
+      default;
   ResponseAction Run() override;
 };
 
 class FileSystemProviderInternalGetActionsRequestedSuccessFunction
-    : public FileSystemProviderInternalFunction {
+    : public FileSystemProviderInternal {
  public:
   DECLARE_EXTENSION_FUNCTION(
       "fileSystemProviderInternal.getActionsRequestedSuccess",
       FILESYSTEMPROVIDERINTERNAL_GETACTIONSREQUESTEDSUCCESS)
 
  protected:
-  ~FileSystemProviderInternalGetActionsRequestedSuccessFunction() override {}
+  ~FileSystemProviderInternalGetActionsRequestedSuccessFunction() override =
+      default;
   ResponseAction Run() override;
 };
 
 class FileSystemProviderInternalReadDirectoryRequestedSuccessFunction
-    : public FileSystemProviderInternalFunction {
+    : public FileSystemProviderInternal {
  public:
   DECLARE_EXTENSION_FUNCTION(
       "fileSystemProviderInternal.readDirectoryRequestedSuccess",
       FILESYSTEMPROVIDERINTERNAL_READDIRECTORYREQUESTEDSUCCESS)
 
  protected:
-  ~FileSystemProviderInternalReadDirectoryRequestedSuccessFunction() override {}
+  ~FileSystemProviderInternalReadDirectoryRequestedSuccessFunction() override =
+      default;
   ResponseAction Run() override;
 };
 
 class FileSystemProviderInternalReadFileRequestedSuccessFunction
-    : public FileSystemProviderInternalFunction {
+    : public FileSystemProviderInternal {
  public:
   DECLARE_EXTENSION_FUNCTION(
       "fileSystemProviderInternal.readFileRequestedSuccess",
       FILESYSTEMPROVIDERINTERNAL_READFILEREQUESTEDSUCCESS)
 
  protected:
-  ~FileSystemProviderInternalReadFileRequestedSuccessFunction() override {}
+  ~FileSystemProviderInternalReadFileRequestedSuccessFunction() override =
+      default;
+  ResponseAction Run() override;
+};
+
+class FileSystemProviderInternalOpenFileRequestedSuccessFunction
+    : public FileSystemProviderInternal {
+ public:
+  DECLARE_EXTENSION_FUNCTION(
+      "fileSystemProviderInternal.openFileRequestedSuccess",
+      FILESYSTEMPROVIDERINTERNAL_OPENFILEREQUESTEDSUCCESS)
+
+ protected:
+  ~FileSystemProviderInternalOpenFileRequestedSuccessFunction() override =
+      default;
   ResponseAction Run() override;
 };
 
 class FileSystemProviderInternalOperationRequestedSuccessFunction
-    : public FileSystemProviderInternalFunction {
+    : public FileSystemProviderInternal {
  public:
   DECLARE_EXTENSION_FUNCTION(
       "fileSystemProviderInternal.operationRequestedSuccess",
       FILESYSTEMPROVIDERINTERNAL_OPERATIONREQUESTEDSUCCESS)
 
  protected:
-  ~FileSystemProviderInternalOperationRequestedSuccessFunction() override {}
+  ~FileSystemProviderInternalOperationRequestedSuccessFunction() override =
+      default;
   ResponseAction Run() override;
 };
 
 class FileSystemProviderInternalOperationRequestedErrorFunction
-    : public FileSystemProviderInternalFunction {
+    : public FileSystemProviderInternal {
  public:
   DECLARE_EXTENSION_FUNCTION(
       "fileSystemProviderInternal.operationRequestedError",
       FILESYSTEMPROVIDERINTERNAL_OPERATIONREQUESTEDERROR)
 
  protected:
-  ~FileSystemProviderInternalOperationRequestedErrorFunction() override {}
+  ~FileSystemProviderInternalOperationRequestedErrorFunction() override =
+      default;
   ResponseAction Run() override;
 };
 

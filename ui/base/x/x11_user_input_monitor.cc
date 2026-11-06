@@ -1,10 +1,12 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/base/x/x11_user_input_monitor.h"
 
+#include "base/containers/span.h"
 #include "base/logging.h"
+#include "base/task/single_thread_task_runner.h"
 #include "ui/events/devices/x11/xinput_util.h"
 #include "ui/events/keycodes/keyboard_code_conversion_x.h"
 #include "ui/gfx/x/future.h"
@@ -16,17 +18,17 @@ XUserInputMonitor::XUserInputMonitor(
     : io_task_runner_(io_task_runner) {}
 
 XUserInputMonitor::~XUserInputMonitor() {
-  DCHECK(!connection_);
+  CHECK(!connection_, base::NotFatalUntil::M163);
 }
 
 void XUserInputMonitor::WillDestroyCurrentMessageLoop() {
-  DCHECK(io_task_runner_->BelongsToCurrentThread());
+  CHECK(io_task_runner_->BelongsToCurrentThread(), base::NotFatalUntil::M163);
   StopMonitor();
 }
 
 void XUserInputMonitor::OnEvent(const x11::Event& event) {
-  DCHECK(io_task_runner_->BelongsToCurrentThread());
-  DCHECK(write_key_press_callback_);
+  CHECK(io_task_runner_->BelongsToCurrentThread(), base::NotFatalUntil::M163);
+  CHECK(write_key_press_callback_, base::NotFatalUntil::M163);
 
   auto* raw = event.As<x11::Input::RawDeviceEvent>();
   if (!raw || (raw->opcode != x11::Input::RawDeviceEvent::RawKeyPress &&
@@ -35,8 +37,8 @@ void XUserInputMonitor::OnEvent(const x11::Event& event) {
   }
 
   EventType type = raw->opcode == x11::Input::RawDeviceEvent::RawKeyPress
-                       ? ET_KEY_PRESSED
-                       : ET_KEY_RELEASED;
+                       ? EventType::kKeyPressed
+                       : EventType::kKeyReleased;
 
   auto key_sym =
       connection_->KeycodeToKeysym(static_cast<x11::KeyCode>(raw->detail), 0);
@@ -55,13 +57,13 @@ uint32_t XUserInputMonitor::GetKeyPressCount() const {
 }
 
 void XUserInputMonitor::StartMonitor(WriteKeyPressCallback& callback) {
-  DCHECK(io_task_runner_->BelongsToCurrentThread());
+  CHECK(io_task_runner_->BelongsToCurrentThread(), base::NotFatalUntil::M163);
   write_key_press_callback_ = callback;
 
   if (!connection_) {
     // TODO(jamiewalch): We should pass the connection in.
     if (auto* connection = x11::Connection::Get()) {
-      connection_ = x11::Connection::Get()->Clone();
+      connection_ = connection->Clone();
     } else {
       LOG(ERROR) << "Couldn't open X connection";
       StopMonitor();
@@ -75,13 +77,12 @@ void XUserInputMonitor::StartMonitor(WriteKeyPressCallback& callback) {
     StopMonitor();
     return;
   }
-  // Let the server know the client XInput version.
-  connection_->xinput().XIQueryVersion(
-      {x11::Input::major_version, x11::Input::minor_version});
 
   x11::Input::XIEventMask mask{};
-  SetXinputMask(&mask, x11::Input::RawDeviceEvent::RawKeyPress);
-  SetXinputMask(&mask, x11::Input::RawDeviceEvent::RawKeyRelease);
+  SetXinputMask(base::byte_span_from_ref(mask),
+                x11::Input::RawDeviceEvent::RawKeyPress);
+  SetXinputMask(base::byte_span_from_ref(mask),
+                x11::Input::RawDeviceEvent::RawKeyRelease);
   connection_->xinput().XISelectEvents(
       {connection_->default_root(),
        {{x11::Input::DeviceId::AllMaster, {mask}}}});
@@ -111,7 +112,7 @@ void XUserInputMonitor::StartMonitorWithMapping(
 }
 
 void XUserInputMonitor::StopMonitor() {
-  DCHECK(io_task_runner_->BelongsToCurrentThread());
+  CHECK(io_task_runner_->BelongsToCurrentThread(), base::NotFatalUntil::M163);
 
   watch_controller_.reset();
   connection_.reset();
@@ -122,7 +123,7 @@ void XUserInputMonitor::StopMonitor() {
 }
 
 void XUserInputMonitor::OnConnectionData() {
-  DCHECK(io_task_runner_->BelongsToCurrentThread());
+  CHECK(io_task_runner_->BelongsToCurrentThread(), base::NotFatalUntil::M163);
   connection_->DispatchAll();
 }
 

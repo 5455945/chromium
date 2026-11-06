@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,12 @@
 #define ASH_METRICS_DESKTOP_TASK_SWITCH_METRIC_RECORDER_H_
 
 #include "ash/ash_export.h"
-#include "base/macros.h"
+#include "base/memory/weak_ptr.h"
 #include "ui/wm/public/activation_change_observer.h"
+
+namespace aura {
+class Window;
+}  // namespace aura
 
 namespace ash {
 
@@ -17,6 +21,12 @@ class ASH_EXPORT DesktopTaskSwitchMetricRecorder
     : public ::wm::ActivationChangeObserver {
  public:
   DesktopTaskSwitchMetricRecorder();
+
+  DesktopTaskSwitchMetricRecorder(const DesktopTaskSwitchMetricRecorder&) =
+      delete;
+  DesktopTaskSwitchMetricRecorder& operator=(
+      const DesktopTaskSwitchMetricRecorder&) = delete;
+
   ~DesktopTaskSwitchMetricRecorder() override;
 
   // wm::ActivationChangeObserver:
@@ -27,9 +37,7 @@ class ASH_EXPORT DesktopTaskSwitchMetricRecorder
 
  private:
   // Tracks the last active task window.
-  aura::Window* last_active_task_window_;
-
-  DISALLOW_COPY_AND_ASSIGN(DesktopTaskSwitchMetricRecorder);
+  base::WeakPtr<aura::Window> last_active_task_window_;
 };
 
 }  // namespace ash

@@ -1,19 +1,21 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/mac/launchd.h"
 
+#include <errno.h>
+
 #include "base/logging.h"
 #include "base/mac/scoped_launch_data.h"
+#include "base/numerics/safe_conversions.h"
 
 // This file is written in terms of launch_data_t, which is deprecated but has
 // no replacement. Ignore the deprecation warnings for now.
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 
-namespace base {
-namespace mac {
+namespace base::mac {
 
 // MessageForJob sends a single message to launchd with a simple dictionary
 // mapping |operation| to |job_label|, and returns the result of calling
@@ -40,23 +42,44 @@ launch_data_t MessageForJob(const std::string& job_label,
 
   if (!launch_data_dict_insert(message.get(), job_label_launchd.release(),
                                operation)) {
+    LOG(ERROR) << "launch_data_dict_insert";
     return NULL;
   }
 
-  return launch_msg(message.get());
+  launch_data_t result = launch_msg(message.get());
+  if (!result) {
+    LOG(ERROR) << "launch_msg";
+  }
+  return result;
 }
 
 pid_t PIDForJob(const std::string& job_label) {
+  pid_t pid = PIDForJobIfLoaded(job_label);
+  if (pid == -2) {
+    // For consistency with the older behavior of this function, match the
+    // format of the error message produced by PIDForJobIfLoaded
+    LOG(ERROR) << "PIDForJob: error " << ESRCH;
+    return -1;
+  }
+  return pid;
+}
+
+pid_t PIDForJobIfLoaded(const std::string& job_label) {
   ScopedLaunchData response(MessageForJob(job_label, LAUNCH_KEY_GETJOB));
   if (!response.is_valid()) {
+    // MessageForJob has already logged the error.
     return -1;
   }
 
   launch_data_type_t response_type = launch_data_get_type(response.get());
   if (response_type != LAUNCH_DATA_DICTIONARY) {
     if (response_type == LAUNCH_DATA_ERRNO) {
-      LOG(ERROR) << "PIDForJob: error "
-                 << launch_data_get_errno(response.get());
+      int err = launch_data_get_errno(response.get());
+      if (err == ESRCH) {
+        return -2;
+      } else {
+        LOG(ERROR) << "PIDForJob: error " << err;
+      }
     } else {
       LOG(ERROR) << "PIDForJob: expected dictionary, got " << response_type;
     }
@@ -65,18 +88,18 @@ pid_t PIDForJob(const std::string& job_label) {
 
   launch_data_t pid_data =
       launch_data_dict_lookup(response.get(), LAUNCH_JOBKEY_PID);
-  if (!pid_data)
+  if (!pid_data) {
     return 0;
+  }
 
   if (launch_data_get_type(pid_data) != LAUNCH_DATA_INTEGER) {
     LOG(ERROR) << "PIDForJob: expected integer";
     return -1;
   }
 
-  return launch_data_get_integer(pid_data);
+  return checked_cast<pid_t>(launch_data_get_integer(pid_data));
 }
 
-}  // namespace mac
-}  // namespace base
+}  // namespace base::mac
 
 #pragma clang diagnostic pop

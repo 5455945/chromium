@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,17 +18,22 @@ class WebThemeEngineMac : public WebThemeEngineDefault {
              WebThemeEngine::State state,
              const gfx::Rect& rect,
              const WebThemeEngine::ExtraParams* extra_params,
-             mojom::ColorScheme color_scheme,
-             const absl::optional<SkColor>& accent_color) override;
+             bool forced_colors,
+             mojom::blink::ColorScheme color_scheme,
+             mojom::blink::PreferredContrast contrast,
+             const ui::ColorProvider* color_provider,
+             const std::optional<SkColor>& accent_color) override;
 
   static bool IsScrollbarPart(WebThemeEngine::Part part);
   static void PaintMacScrollBarParts(
       cc::PaintCanvas* canvas,
+      const ui::ColorProvider* color_provider,
       WebThemeEngine::Part part,
       WebThemeEngine::State state,
       const gfx::Rect& rect,
       const WebThemeEngine::ExtraParams* extra_params,
-      mojom::ColorScheme color_scheme);
+      bool forced_colors,
+      mojom::blink::ColorScheme color_scheme);
 };
 
 }  // namespace blink

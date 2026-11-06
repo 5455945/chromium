@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,26 +15,27 @@ import android.widget.TextView;
 
 import androidx.annotation.ColorInt;
 
-import org.chromium.base.ApiCompatibilityUtils;
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.omnibox.ChromeAutocompleteSchemeClassifier;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.ui.theme.ChromeSemanticColorUtils;
 import org.chromium.components.browser_ui.widget.TintedDrawable;
 import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.components.omnibox.OmniboxUrlEmphasizer;
 import org.chromium.ui.util.ColorUtils;
 
 /** This class represents a bar to display at the top of the payment request UI. */
+@NullMarked
 public class PaymentRequestHeader extends FrameLayout {
     private final @ColorInt int mBackgroundColor;
-    private Context mContext;
+    private final Context mContext;
 
     /** Constructor for when the PaymentRequestHeader is inflated from XML. */
     public PaymentRequestHeader(Context context, AttributeSet attrs) {
         super(context, attrs);
         mContext = context;
-        mBackgroundColor =
-                ApiCompatibilityUtils.getColor(getResources(), R.color.payment_request_bg);
+        mBackgroundColor = ChromeSemanticColorUtils.getPaymentRequestBg(context);
     }
 
     @Override
@@ -63,15 +64,19 @@ public class PaymentRequestHeader extends FrameLayout {
     public void setTitleAndOrigin(String title, String origin, int securityLevel, Profile profile) {
         ((TextView) findViewById(R.id.page_title)).setText(title);
 
-        TextView hostName = (TextView) findViewById(R.id.hostname);
+        TextView hostName = findViewById(R.id.hostname);
         Spannable url = new SpannableStringBuilder(origin);
         final boolean useDarkColors =
                 !ColorUtils.shouldUseLightForegroundOnBackground(mBackgroundColor);
         ChromeAutocompleteSchemeClassifier chromeAutocompleteSchemeClassifier =
                 new ChromeAutocompleteSchemeClassifier(profile);
-        OmniboxUrlEmphasizer.emphasizeUrl(url, mContext.getResources(),
-                chromeAutocompleteSchemeClassifier, securityLevel, false /* isInternalPage */,
-                useDarkColors, true /* emphasizeHttpsScheme */);
+        OmniboxUrlEmphasizer.emphasizeUrl(
+                url,
+                mContext,
+                chromeAutocompleteSchemeClassifier,
+                securityLevel,
+                useDarkColors,
+                /* emphasizeScheme= */ true);
         chromeAutocompleteSchemeClassifier.destroy();
         hostName.setText(url);
 
@@ -79,8 +84,10 @@ public class PaymentRequestHeader extends FrameLayout {
             // Add a lock icon.
             hostName.setCompoundDrawablesRelativeWithIntrinsicBounds(
                     TintedDrawable.constructTintedDrawable(
-                            mContext, R.drawable.omnibox_https_valid, R.color.default_green),
-                    null, null, null);
+                            mContext, R.drawable.omnibox_https_valid_lock, R.color.default_green),
+                    null,
+                    null,
+                    null);
 
             // Remove left padding to align left compound drawable with the title. Note that the
             // left compound drawable has transparent boundary.

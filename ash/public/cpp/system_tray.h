@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,25 +6,27 @@
 #define ASH_PUBLIC_CPP_SYSTEM_TRAY_H_
 
 #include <string>
+#include <vector>
 
-#include "ash/public/cpp/ash_public_export.h"
-
-namespace chromeos {
-namespace phonehub {
-class PhoneHubManager;
-}  // namespace phonehub
-}  // namespace chromeos
+#include "ash/ash_export.h"
+#include "base/memory/raw_ptr.h"
 
 namespace ash {
 
-struct LocaleInfo;
 class SystemTrayClient;
+enum class DeferredUpdateState;
 enum class NotificationStyle;
 enum class UpdateSeverity;
-enum class UpdateType;
+struct DeviceEnterpriseInfo;
+struct LocaleInfo;
+struct RelaunchNotificationState;
+
+namespace phonehub {
+class PhoneHubManager;
+}
 
 // Public interface to control the system tray bubble in ash.
-class ASH_PUBLIC_EXPORT SystemTray {
+class ASH_EXPORT SystemTray {
  public:
   static SystemTray* Get();
 
@@ -43,15 +45,15 @@ class ASH_PUBLIC_EXPORT SystemTray {
   virtual void SetUse24HourClock(bool use_24_hour) = 0;
 
   // Creates or updates an item in the system tray menu with information about
-  // enterprise management. |enterprise_domain_manager| and
+  // enterprise management.
+  virtual void SetDeviceEnterpriseInfo(
+      const DeviceEnterpriseInfo& device_enterprise_info) = 0;
+
+  // Creates or updates an item in the system tray menu with information about
+  // enterprise management.
   // |account_domain_manager| may be either a domain name (foo.com) or an email
   // address (user@foo.com). These strings will not be sanitized and so must
   // come from a trusted location.
-  // The item appears if |enterprise_domain_manager| is not empty or
-  // |active_directory_managed| is true.
-  virtual void SetEnterpriseDomainInfo(
-      const std::string& enterprise_domain_manager,
-      bool active_directory_managed) = 0;
   virtual void SetEnterpriseAccountDomainInfo(
       const std::string& account_domain_manager) = 0;
 
@@ -78,28 +80,24 @@ class ASH_PUBLIC_EXPORT SystemTray {
   // tooltip or the notification.
   virtual void ShowUpdateIcon(UpdateSeverity severity,
                               bool factory_reset_required,
-                              bool rollback,
-                              UpdateType update_type) = 0;
+                              bool rollback) = 0;
 
-  // Sets new strings for update notification in the unified system menu,
+  // Changes the update notification in the unified system menu,
   // according to different policies, when there is an update available
   // (it may be recommended or required, from Relaunch Notification policy,
   // for example).
-  // Providing these strings allows the update countdown logic to remain in
-  // //chrome/browser, where it is shared with other platforms.
-  // |style| specifies the type of notification, according to the policy
-  // (default, recommended or required).
-  // |notification_title| the title of the notification, which overwrites
-  // the default.
-  // |notification_body| the new notification body which overwrites the default.
-  virtual void SetUpdateNotificationState(
-      NotificationStyle style,
-      const std::u16string& notification_title,
-      const std::u16string& notification_body) = 0;
+  // Providing the `RelaunchNotificationState` allows the update countdown logic
+  // to remain in //chrome/browser, where it is shared with other platforms.
+  virtual void SetRelaunchNotificationState(
+      const RelaunchNotificationState& relaunch_notification_state) = 0;
 
   // Resets update state to hide the update icon and notification. It is called
   // when a new update starts before the current update is applied.
   virtual void ResetUpdateState() = 0;
+
+  // Set deferred update state to be either showing a dialog or showing an icon
+  // in the system tray to indicate that a update is downloaded but deferred.
+  virtual void SetUpdateDeferred(DeferredUpdateState state) = 0;
 
   // If |visible| is true, shows an icon in the system tray which indicates that
   // a software update is available but user's agreement is required as current
@@ -107,6 +105,13 @@ class ASH_PUBLIC_EXPORT SystemTray {
   // user's one time permission on update over cellular connection has been
   // granted.
   virtual void SetUpdateOverCellularAvailableIconVisible(bool visible) = 0;
+
+  // Sets whether end of life notice should be shown in quick settings.
+  virtual void SetShowEolNotice(bool show) = 0;
+
+  // Sets whether the extended updates support notice should be shown
+  // in quick settings.
+  virtual void SetShowExtendedUpdatesNotice(bool show) = 0;
 
   // Shows the volume slider bubble shown at the right bottom of screen.
   virtual void ShowVolumeSliderBubble() = 0;
@@ -117,11 +122,11 @@ class ASH_PUBLIC_EXPORT SystemTray {
 
   // Provides Phone Hub functionality to the system tray.
   virtual void SetPhoneHubManager(
-      chromeos::phonehub::PhoneHubManager* phone_hub_manager) = 0;
+      phonehub::PhoneHubManager* phone_hub_manager) = 0;
 
  protected:
-  SystemTray();
-  virtual ~SystemTray();
+  SystemTray() = default;
+  virtual ~SystemTray() = default;
 };
 
 }  // namespace ash

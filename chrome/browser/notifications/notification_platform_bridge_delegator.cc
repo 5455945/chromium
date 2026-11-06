@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,12 +9,11 @@
 #include <vector>
 
 #include "base/barrier_closure.h"
-#include "base/bind.h"
 #include "base/check.h"
+#include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/notifications/notification_display_service_impl.h"
 #include "chrome/browser/profiles/profile.h"
@@ -27,7 +26,7 @@
 #include "chrome/browser/notifications/notification_platform_bridge_message_center.h"
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "chrome/browser/notifications/notification_platform_bridge_win.h"
 #endif
 
@@ -51,28 +50,23 @@ namespace {
 // Please try to keep this comment up to date when changing behaviour on one of
 // the platforms supported by the browser.
 bool SystemNotificationsEnabled(Profile* profile) {
-#if BUILDFLAG(ENABLE_SYSTEM_NOTIFICATIONS)
-#if defined(OS_CHROMEOS) || defined(OS_ANDROID)
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
   return true;
-#elif defined(OS_WIN)
+#elif BUILDFLAG(IS_WIN)
   return NotificationPlatformBridgeWin::SystemNotificationEnabled();
 #else
-#if defined(OS_LINUX)
+#if BUILDFLAG(IS_LINUX)
   if (profile) {
     // Prefs take precedence over flags.
     PrefService* prefs = profile->GetPrefs();
-    if (!prefs->GetBoolean(prefs::kAllowNativeNotifications) ||
-        !prefs->GetBoolean(prefs::kAllowSystemNotifications)) {
+    if (!prefs->GetBoolean(prefs::kAllowSystemNotifications)) {
       return false;
     }
   }
-#endif  // defined(OS_LINUX)
+#endif  // BUILDFLAG(IS_LINUX)
   return base::FeatureList::IsEnabled(features::kNativeNotifications) &&
          base::FeatureList::IsEnabled(features::kSystemNotifications);
-#endif  // defined(OS_CHROMEOS) || defined(OS_ANDROID)
-#else
-  return false;
-#endif  // BUILDFLAG(ENABLE_SYSTEM_NOTIFICATIONS)
+#endif  // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
 }
 
 NotificationPlatformBridge* GetSystemNotificationPlatformBridge(
@@ -123,7 +117,7 @@ void NotificationPlatformBridgeDelegator::Display(
     const message_center::Notification& notification,
     std::unique_ptr<NotificationCommon::Metadata> metadata) {
   NotificationPlatformBridge* bridge = GetBridgeForType(notification_type);
-  DCHECK(bridge);
+  CHECK(bridge, base::NotFatalUntil::M161);
   bridge->Display(notification_type, profile_, notification,
                   std::move(metadata));
 }
@@ -132,17 +126,31 @@ void NotificationPlatformBridgeDelegator::Close(
     NotificationHandler::Type notification_type,
     const std::string& notification_id) {
   NotificationPlatformBridge* bridge = GetBridgeForType(notification_type);
-  DCHECK(bridge);
+  CHECK(bridge, base::NotFatalUntil::M161);
   bridge->Close(profile_, notification_id);
 }
 
 void NotificationPlatformBridgeDelegator::GetDisplayed(
     GetDisplayedNotificationsCallback callback) const {
-  // TODO(knollr): Query both bridges to get all notifications.
+  // TODO(crbug.com/40788519): We currently only query one of the bridges for
+  // displayed notifications which may not return TRANSIENT style ones. Ideally
+  // there would be only one bridge to query from.
   NotificationPlatformBridge* bridge =
-      system_bridge_ ? system_bridge_ : message_center_bridge_;
-  DCHECK(bridge);
+      system_bridge_ ? system_bridge_.get() : message_center_bridge_.get();
+  CHECK(bridge, base::NotFatalUntil::M161);
   bridge->GetDisplayed(profile_, std::move(callback));
+}
+
+void NotificationPlatformBridgeDelegator::GetDisplayedForOrigin(
+    const GURL& origin,
+    GetDisplayedNotificationsCallback callback) const {
+  // TODO(crbug.com/40788519): We currently only query one of the bridges for
+  // displayed notifications which may not return TRANSIENT style ones. Ideally
+  // there would be only one bridge to query from.
+  NotificationPlatformBridge* bridge =
+      system_bridge_ ? system_bridge_.get() : message_center_bridge_.get();
+  CHECK(bridge, base::NotFatalUntil::M161);
+  bridge->GetDisplayedForOrigin(profile_, origin, std::move(callback));
 }
 
 void NotificationPlatformBridgeDelegator::DisplayServiceShutDown() {
@@ -155,11 +163,9 @@ void NotificationPlatformBridgeDelegator::DisplayServiceShutDown() {
 NotificationPlatformBridge*
 NotificationPlatformBridgeDelegator::GetBridgeForType(
     NotificationHandler::Type type) {
-#if BUILDFLAG(ENABLE_SYSTEM_NOTIFICATIONS)
   // Prefer the system bridge if available and it can handle |type|.
   if (system_bridge_ && NotificationPlatformBridge::CanHandleType(type))
     return system_bridge_;
-#endif  // BUILDFLAG(ENABLE_SYSTEM_NOTIFICATIONS)
   return message_center_bridge_;
 }
 
@@ -168,7 +174,7 @@ void NotificationPlatformBridgeDelegator::
   if (!success) {
     // Fall back to the message center if initialization failed. Initialization
     // must always succeed on platforms where the message center is unavailable.
-    DCHECK(message_center_bridge_);
+    CHECK(message_center_bridge_, base::NotFatalUntil::M161);
     system_bridge_ = nullptr;
   }
 

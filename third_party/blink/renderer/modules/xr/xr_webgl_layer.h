@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,23 +10,24 @@
 #include "third_party/blink/renderer/bindings/modules/v8/v8_xr_webgl_layer_init.h"
 #include "third_party/blink/renderer/modules/webgl/webgl2_rendering_context.h"
 #include "third_party/blink/renderer/modules/webgl/webgl_rendering_context.h"
+#include "third_party/blink/renderer/modules/webgl/webgl_unowned_texture.h"
 #include "third_party/blink/renderer/modules/xr/xr_layer.h"
+#include "third_party/blink/renderer/modules/xr/xr_layer_client.h"
 #include "third_party/blink/renderer/modules/xr/xr_utils.h"
 #include "third_party/blink/renderer/modules/xr/xr_view.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
+#include "third_party/blink/renderer/platform/graphics/gpu/xr_frame_transport_delegate.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/xr_webgl_drawing_buffer.h"
-#include "third_party/blink/renderer/platform/wtf/ref_counted.h"
+#include "third_party/blink/renderer/platform/graphics/gpu/xr_webgl_frame_transport_delegate.h"
 
 namespace blink {
 
-class ExceptionState;
-class HTMLCanvasElement;
 class WebGLFramebuffer;
 class WebGLRenderingContextBase;
 class XRSession;
 class XRViewport;
 
-class XRWebGLLayer final : public XRLayer {
+class XRWebGLLayer final : public XRLayer, public XrLayerClient {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
@@ -43,9 +44,13 @@ class XRWebGLLayer final : public XRLayer {
                               const XRWebGLLayerInit*,
                               ExceptionState&);
 
-  WebGLRenderingContextBase* context() const { return webgl_context_; }
+  // XrLayerClient overrides.
+  XRSession* session() const override;
+  std::unique_ptr<SharedImageHolder> TransferToSharedImageHolder() override;
+  XRFrameTransportDelegate* GetTransportDelegate() override;
+  std::unique_ptr<SharedImageHolder> DoneWithSharedBuffer() override;
 
-  WebGLFramebuffer* framebuffer() const { return framebuffer_; }
+  WebGLFramebuffer* framebuffer() const { return framebuffer_.Get(); }
   uint32_t framebufferWidth() const;
   uint32_t framebufferHeight() const;
 
@@ -61,30 +66,24 @@ class XRWebGLLayer final : public XRLayer {
   void UpdateViewports();
 
   HTMLCanvasElement* output_canvas() const;
-  uint32_t CameraImageTextureId() const;
-  absl::optional<gpu::MailboxHolder> CameraImageMailboxHolder() const;
 
-  void OnFrameStart(
-      const absl::optional<gpu::MailboxHolder>& buffer_mailbox_holder,
-      const absl::optional<gpu::MailboxHolder>& camera_image_mailbox_holder);
-  void OnFrameEnd();
-  void OnResize();
+  void OnFrameStart() override;
+  void OnFrameEnd() override;
+  void OnResize() override;
 
-  // Called from XRSession::OnFrame handler. Params are background texture
-  // mailbox holder and its size respectively.
-  void HandleBackgroundImage(const gpu::MailboxHolder&, const IntSize&) {}
+  XRLayerType LayerType() const override;
 
-  scoped_refptr<StaticBitmapImage> TransferToStaticBitmapImage();
+  XrLayerClient* LayerClient() override;
+
+  WebGLRenderingContextBase* GetWebGLContext() { return webgl_context_; }
 
   void Trace(Visitor*) const override;
 
+ protected:
+  device::mojom::blink::XRCompositionLayerDataPtr CreateLayerData()
+      const override;
+
  private:
-  uint32_t GetBufferTextureId(
-      const absl::optional<gpu::MailboxHolder>& buffer_mailbox_holder);
-
-  void BindBufferTexture(
-      const absl::optional<gpu::MailboxHolder>& buffer_mailbox_holder);
-
   Member<XRViewport> left_viewport_;
   Member<XRViewport> right_viewport_;
 
@@ -99,8 +98,7 @@ class XRWebGLLayer final : public XRLayer {
 
   uint32_t clean_frame_count = 0;
 
-  uint32_t camera_image_texture_id_;
-  absl::optional<gpu::MailboxHolder> camera_image_mailbox_holder_;
+  Member<XRWebGLFrameTransportDelegate> transport_delegate_;
 };
 
 }  // namespace blink

@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,22 +6,29 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
-#include "chrome/browser/policy/android/jni_headers/CloudManagementSharedPreferences_jni.h"
+
+// Must come after headers that provide symbols used by @JniType.
+#include "chrome/browser/policy/android/util_jni/CloudManagementSharedPreferences_jni.h"
 
 namespace policy {
 namespace android {
 
 void SaveDmTokenInSharedPreferences(const std::string& dm_token) {
   JNIEnv* env = base::android::AttachCurrentThread();
-  Java_CloudManagementSharedPreferences_saveDmToken(
-      env, base::android::ConvertUTF8ToJavaString(env, dm_token));
+  Java_CloudManagementSharedPreferences_saveDmToken(env, dm_token);
+}
+
+void DeleteDmTokenFromSharedPreferences() {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_CloudManagementSharedPreferences_deleteDmToken(env);
 }
 
 std::string ReadDmTokenFromSharedPreferences() {
   JNIEnv* env = base::android::AttachCurrentThread();
-  return base::android::ConvertJavaStringToUTF8(
-      env, Java_CloudManagementSharedPreferences_readDmToken(env));
+  return Java_CloudManagementSharedPreferences_readDmToken(env);
 }
 
 }  // namespace android
 }  // namespace policy
+
+DEFINE_JNI(CloudManagementSharedPreferences)

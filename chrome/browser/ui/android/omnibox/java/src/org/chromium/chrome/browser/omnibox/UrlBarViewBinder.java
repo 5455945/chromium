@@ -1,89 +1,148 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.omnibox;
 
-import android.content.res.Resources;
-import android.text.Editable;
-import android.text.Selection;
+import static org.chromium.build.NullUtil.assumeNonNull;
+
+import android.graphics.drawable.Drawable;
 import android.text.TextUtils;
 import android.view.ActionMode;
 
 import androidx.annotation.ColorInt;
+import androidx.constraintlayout.widget.ConstraintLayout;
+import androidx.constraintlayout.widget.ConstraintLayout.LayoutParams;
 
-import org.chromium.base.ApiCompatibilityUtils;
-import org.chromium.base.Callback;
+import com.google.android.material.color.MaterialColors;
+
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.omnibox.UrlBarProperties.AutocompleteText;
 import org.chromium.chrome.browser.omnibox.UrlBarProperties.UrlBarTextState;
+import org.chromium.components.omnibox.TextSelection;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
 
-/**
- * Handles translating the UrlBar model data to the view state.
- */
+/** Handles translating the UrlBar model data to the view state. */
+@NullMarked
 class UrlBarViewBinder {
     /**
-     * @see
-     * PropertyModelChangeProcessor.ViewBinder#bind(Object,
-     * Object, Object)
+     * @see PropertyModelChangeProcessor.ViewBinder#bind(Object, Object, Object)
      */
     public static void bind(PropertyModel model, UrlBar view, PropertyKey propertyKey) {
-        if (UrlBarProperties.ACTION_MODE_CALLBACK.equals(propertyKey)) {
+        if (propertyKey == UrlBarProperties.ACCESSIBILITY_WARNING) {
+            view.setAccessibilityWarning(model.get(UrlBarProperties.ACCESSIBILITY_WARNING));
+        } else if (propertyKey == UrlBarProperties.ACTION_MODE_CALLBACK) {
             ActionMode.Callback callback = model.get(UrlBarProperties.ACTION_MODE_CALLBACK);
             if (callback == null && view.getCustomSelectionActionModeCallback() == null) return;
             view.setCustomSelectionActionModeCallback(callback);
-        } else if (UrlBarProperties.ALLOW_FOCUS.equals(propertyKey)) {
+        } else if (propertyKey == UrlBarProperties.AI_MODE_PREF_ENABLED) {
+            view.setShowAiMode(model.get(UrlBarProperties.AI_MODE_PREF_ENABLED));
+        } else if (propertyKey == UrlBarProperties.AI_MODE_PREF_LABEL) {
+            view.setShowAiModeLabel(model.get(UrlBarProperties.AI_MODE_PREF_LABEL));
+        } else if (propertyKey == UrlBarProperties.AI_MODE_PREF_TOGGLE_CALLBACK) {
+            view.setShowAiModeCallback(model.get(UrlBarProperties.AI_MODE_PREF_TOGGLE_CALLBACK));
+        } else if (propertyKey == UrlBarProperties.ALLOW_FOCUS) {
             view.setAllowFocus(model.get(UrlBarProperties.ALLOW_FOCUS));
-        } else if (UrlBarProperties.AUTOCOMPLETE_TEXT.equals(propertyKey)) {
+        } else if (propertyKey == UrlBarProperties.ALLOW_MULTILINE_INPUT) {
+            view.setAllowMultilineInput(model.get(UrlBarProperties.ALLOW_MULTILINE_INPUT));
+        } else if (propertyKey == UrlBarProperties.AUTOCOMPLETE_TEXT) {
             AutocompleteText autocomplete = model.get(UrlBarProperties.AUTOCOMPLETE_TEXT);
-            if (view.shouldAutocomplete()) {
-                view.setAutocompleteText(autocomplete.userText, autocomplete.autocompleteText);
-            }
-        } else if (UrlBarProperties.DELEGATE.equals(propertyKey)) {
+            boolean shouldAutocomplete = view.shouldAutocomplete();
+            view.setAutocompleteText(
+                    autocomplete.userText,
+                    shouldAutocomplete ? autocomplete.autocompleteText : null,
+                    shouldAutocomplete && !TextUtils.isEmpty(autocomplete.additionalText)
+                            ? autocomplete.additionalText
+                            : null,
+                    autocomplete.siteSearchLabel);
+        } else if (propertyKey == UrlBarProperties.DELEGATE) {
             view.setDelegate(model.get(UrlBarProperties.DELEGATE));
-        } else if (UrlBarProperties.FOCUS_CHANGE_CALLBACK.equals(propertyKey)) {
-            final Callback<Boolean> focusChangeCallback =
-                    model.get(UrlBarProperties.FOCUS_CHANGE_CALLBACK);
-            view.setOnFocusChangeListener((v, focused) -> {
-                if (focused) view.setIgnoreTextChangesForAutocomplete(false);
-                focusChangeCallback.onResult(focused);
-            });
-        } else if (UrlBarProperties.SHOW_CURSOR.equals(propertyKey)) {
-            view.setCursorVisible(model.get(UrlBarProperties.SHOW_CURSOR));
-        } else if (UrlBarProperties.TEXT_CONTEXT_MENU_DELEGATE.equals(propertyKey)) {
+        } else if (propertyKey == UrlBarProperties.FOCUS_CHANGE_CALLBACK) {
+            view.setFocusChangeCallback(model.get(UrlBarProperties.FOCUS_CHANGE_CALLBACK));
+        } else if (propertyKey == UrlBarProperties.HAS_URL_SUGGESTIONS) {
+            view.setHandwritingBoundsExtendBelow(model.get(UrlBarProperties.HAS_URL_SUGGESTIONS));
+        } else if (propertyKey == UrlBarProperties.HINT_TEXT) {
+            view.setHint(getHintForModelState(model));
+        } else if (propertyKey == UrlBarProperties.HINT_TEXT_COLOR) {
+            view.setHintTextColor(model.get(UrlBarProperties.HINT_TEXT_COLOR));
+        } else if (propertyKey == UrlBarProperties.INCOGNITO_COLORS_ENABLED) {
+            final boolean incognitoColorsEnabled =
+                    model.get(UrlBarProperties.INCOGNITO_COLORS_ENABLED);
+            updateHighlightColor(view, incognitoColorsEnabled);
+            updateCursorAndSelectHandleColor(view, incognitoColorsEnabled);
+        } else if (propertyKey == UrlBarProperties.KEY_DOWN_LISTENER) {
+            view.setKeyDownListener(model.get(UrlBarProperties.KEY_DOWN_LISTENER));
+        } else if (propertyKey == UrlBarProperties.LONG_CLICK_LISTENER) {
+            view.setOnLongClickListener(model.get(UrlBarProperties.LONG_CLICK_LISTENER));
+        } else if (propertyKey == UrlBarProperties.MANAGE_SEARCH_ENGINES_CALLBACK) {
+            view.setManageSearchEnginesCallback(
+                    model.get(UrlBarProperties.MANAGE_SEARCH_ENGINES_CALLBACK));
+        } else if (propertyKey == UrlBarProperties.RICH_TEXT_CHANGE_LISTENER) {
+            view.setRichTextChangeListener(model.get(UrlBarProperties.RICH_TEXT_CHANGE_LISTENER));
+        } else if (propertyKey == UrlBarProperties.SELECT_ALL_ON_FOCUS) {
+            view.setSelectAllOnFocus(model.get(UrlBarProperties.SELECT_ALL_ON_FOCUS));
+        } else if (propertyKey == UrlBarProperties.SHOW_HINT_TEXT) {
+            view.setHint(getHintForModelState(model));
+        } else if (propertyKey == UrlBarProperties.TEXT_CHANGE_LISTENER) {
+            view.setTextChangeListener(model.get(UrlBarProperties.TEXT_CHANGE_LISTENER));
+        } else if (propertyKey == UrlBarProperties.TEXT_COLOR) {
+            view.setTextColor(model.get(UrlBarProperties.TEXT_COLOR));
+        } else if (propertyKey == UrlBarProperties.TEXT_CONTEXT_MENU_DELEGATE) {
             view.setTextContextMenuDelegate(model.get(UrlBarProperties.TEXT_CONTEXT_MENU_DELEGATE));
-        } else if (UrlBarProperties.TEXT_STATE.equals(propertyKey)) {
+        } else if (propertyKey == UrlBarProperties.TEXT_STATE) {
             UrlBarTextState state = model.get(UrlBarProperties.TEXT_STATE);
             view.setIgnoreTextChangesForAutocomplete(true);
-            view.setText(state.text);
+            view.setTextWithTruncation(state.text, state.scrollType, state.scrollToIndex);
             view.setTextForAutofillServices(state.textForAutofillServices);
-            view.setScrollState(state.scrollType, state.scrollToIndex);
+            view.setScrollState(state.scrollType, state.scrollToIndex, state.originChanged);
             view.setIgnoreTextChangesForAutocomplete(false);
-
             if (view.hasFocus()) {
-                if (state.selectionState == UrlBarCoordinator.SelectionState.SELECT_ALL) {
-                    view.selectAll();
-                } else if (state.selectionState == UrlBarCoordinator.SelectionState.SELECT_END) {
-                    view.setSelection(view.getText().length());
-                }
+                // NOTE: Selection applied from here MAY be overridden by the OS if the focus came
+                // from the user (and not from software, i.e. requestFocus()).
+                //
+                // When the user focuses the editable field, the OS forcibly takes one of the two
+                // actions:
+                // 1. forcibly places the cursor at the point of click, or
+                // 2. selecting all content (if selectAllOnFocus is set to true)
+                // in both cases overriding the selection supplied by software.
+                //
+                // Be careful when extending selection to override OS settings - Android 12 is
+                // particularly sensitive here.
+                int textLength = view.getText().length();
+                TextSelection selection = state.selection.trimTo(textLength);
+                view.setSelection(selection.from, selection.to);
+                view.requestAccessibilityFocus();
             }
-        } else if (UrlBarProperties.USE_DARK_TEXT_COLORS.equals(propertyKey)) {
-            updateTextColors(view, model.get(UrlBarProperties.USE_DARK_TEXT_COLORS));
-        } else if (UrlBarProperties.URL_DIRECTION_LISTENER.equals(propertyKey)) {
+        } else if (propertyKey == UrlBarProperties.TEXT_WRAPPED_CALLBACK) {
+            view.setUrlTextWrappingChangeListener(
+                    model.get(UrlBarProperties.TEXT_WRAPPED_CALLBACK));
+        } else if (propertyKey == UrlBarProperties.URL_DIRECTION_LISTENER) {
             view.setUrlDirectionListener(model.get(UrlBarProperties.URL_DIRECTION_LISTENER));
-        } else if (UrlBarProperties.URL_TEXT_CHANGE_LISTENER.equals(propertyKey)) {
-            view.setUrlTextChangeListener(model.get(UrlBarProperties.URL_TEXT_CHANGE_LISTENER));
-        } else if (UrlBarProperties.TEXT_CHANGED_LISTENER.equals(propertyKey)) {
-            view.setTextChangedListener(model.get(UrlBarProperties.TEXT_CHANGED_LISTENER));
-        } else if (UrlBarProperties.WINDOW_DELEGATE.equals(propertyKey)) {
-            view.setWindowDelegate(model.get(UrlBarProperties.WINDOW_DELEGATE));
+        } else if (propertyKey == UrlBarProperties.USE_SMALL_TEXT) {
+            boolean useSmallText = model.get(UrlBarProperties.USE_SMALL_TEXT);
+            // Small text mode is used in a state where available vertical space is much lower and
+            // there is no location bar "pill" that we must draw inside. Removing the padding avoids
+            // over-constraining the text size to the point of illegibility.
+            int verticalPadding =
+                    useSmallText
+                            ? 0
+                            : view.getResources()
+                                    .getDimensionPixelSize(R.dimen.url_bar_vertical_padding);
+            view.setPaddingRelative(
+                    view.getPaddingStart(), verticalPadding, view.getPaddingEnd(), verticalPadding);
+            view.setUseSmallTextHeight(useSmallText);
+            view.setHint(getHintForModelState(model));
+            ConstraintLayout.LayoutParams layoutParams =
+                    (ConstraintLayout.LayoutParams) view.getLayoutParams();
+            layoutParams.width =
+                    useSmallText ? LayoutParams.WRAP_CONTENT : LayoutParams.MATCH_CONSTRAINT;
         }
     }
 
-    private static void updateTextColors(UrlBar view, boolean useDarkTextColors) {
-        @ColorInt
-        int originalHighlightColor;
+    private static void updateHighlightColor(UrlBar view, boolean useIncognitoColors) {
+        @ColorInt int originalHighlightColor;
         Object highlightColorObj = view.getTag(R.id.highlight_color);
         if (highlightColorObj == null || !(highlightColorObj instanceof Integer)) {
             originalHighlightColor = view.getHighlightColor();
@@ -92,56 +151,45 @@ class UrlBarViewBinder {
             originalHighlightColor = (Integer) highlightColorObj;
         }
 
-        Resources resources = view.getResources();
-        @ColorInt
-        int textColor;
-        @ColorInt
-        int hintColor;
-        @ColorInt
         int highlightColor;
-        if (useDarkTextColors) {
-            textColor = ApiCompatibilityUtils.getColor(resources, R.color.default_text_color_dark);
-            hintColor =
-                    ApiCompatibilityUtils.getColor(resources, R.color.locationbar_dark_hint_text);
-            highlightColor = originalHighlightColor;
+        if (useIncognitoColors) {
+            highlightColor = view.getContext().getColor(R.color.text_highlight_color_incognito);
         } else {
-            textColor = ApiCompatibilityUtils.getColor(resources, R.color.default_text_color_light);
-            hintColor =
-                    ApiCompatibilityUtils.getColor(resources, R.color.locationbar_light_hint_text);
-            highlightColor = ApiCompatibilityUtils.getColor(
-                    resources, R.color.highlight_color_on_light_text);
+            highlightColor = originalHighlightColor;
         }
 
-        view.setTextColor(textColor);
-        setHintTextColor(view, hintColor);
         view.setHighlightColor(highlightColor);
     }
 
-    private static void setHintTextColor(UrlBar view, @ColorInt int textColor) {
-        // Note: Setting the hint text color only takes effect if there is no text in the URL bar.
-        //       To get around this, set the URL to empty before setting the hint color and revert
-        //       back to the previous text after.
-        Editable text = view.getText();
-        if (TextUtils.isEmpty(text)) {
-            view.setHintTextColor(textColor);
-            return;
-        }
+    private static void updateCursorAndSelectHandleColor(UrlBar view, boolean useIncognitoColors) {
+        // These get* methods may fail on some devices, so we're calling all of them before
+        // applying tint to any of the drawables. See https://crbug.com/40800314.
+        final Drawable textCursor = assumeNonNull(view.getTextCursorDrawable());
+        final Drawable textSelectHandle = assumeNonNull(view.getTextSelectHandle());
+        final Drawable textSelectHandleLeft = assumeNonNull(view.getTextSelectHandleLeft());
+        final Drawable textSelectHandleRight = assumeNonNull(view.getTextSelectHandleRight());
 
-        int selectionStart = view.getSelectionStart();
-        int selectionEnd = view.getSelectionEnd();
+        final @ColorInt int color =
+                useIncognitoColors
+                        ? view.getContext().getColor(R.color.default_control_color_active_dark)
+                        : MaterialColors.getColor(view, R.attr.colorPrimary);
+        textCursor.mutate().setTint(color);
+        textSelectHandle.mutate().setTint(color);
+        textSelectHandleLeft.mutate().setTint(color);
+        textSelectHandleRight.mutate().setTint(color);
+    }
 
-        // Make sure the setText in this block does not affect the suggestions.
-        view.setIgnoreTextChangesForAutocomplete(true);
-        view.setText("");
-        view.setHintTextColor(textColor);
-        view.setText(text);
-
-        // Restore the previous selection, if there was one.
-        if (selectionStart >= 0 && selectionEnd >= 0 && view.hasFocus()) {
-            Selection.setSelection(view.getText(), selectionStart, selectionEnd);
-        }
-
-        view.setIgnoreTextChangesForAutocomplete(false);
+    private static @Nullable CharSequence getHintForModelState(PropertyModel model) {
+        // Android TextViews set a desired size based on the max of the hint text size and the
+        // "regular" size. In small text mode, where we don't intend to show the hint, we set it to
+        // null to avoid over-allocating space for text that will never be shown.
+        // Similarly, we set SHOW_HINT_TEXT to false in other cases when we don't intend to show the
+        // hint and wish to avoid over-allocating space, e.g. when entering text in the focused
+        // state where the hint could cause premature wrapping to another line.
+        return model.get(UrlBarProperties.USE_SMALL_TEXT)
+                        || !model.get(UrlBarProperties.SHOW_HINT_TEXT)
+                ? null
+                : model.get(UrlBarProperties.HINT_TEXT);
     }
 
     private UrlBarViewBinder() {}

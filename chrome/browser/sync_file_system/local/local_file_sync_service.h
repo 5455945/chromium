@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,9 +11,9 @@
 #include <memory>
 #include <set>
 
-#include "base/callback.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "chrome/browser/sync_file_system/local/local_origin_change_observer.h"
@@ -45,27 +45,26 @@ struct LocalFileSyncInfo;
 
 // Maintains local file change tracker and sync status.
 // Owned by SyncFileSystemService (which is a per-profile object).
-class LocalFileSyncService
-    : public RemoteChangeProcessor,
-      public LocalOriginChangeObserver,
-      public base::SupportsWeakPtr<LocalFileSyncService> {
+class LocalFileSyncService final : public RemoteChangeProcessor,
+                                   public LocalOriginChangeObserver {
  public:
   typedef base::RepeatingCallback<LocalChangeProcessor*(const GURL& origin)>
       GetLocalChangeProcessorCallback;
 
   class Observer {
    public:
-    Observer() {}
-    virtual ~Observer() {}
+    Observer() = default;
+
+    Observer(const Observer&) = delete;
+    Observer& operator=(const Observer&) = delete;
+
+    virtual ~Observer() = default;
 
     // This is called when there're one or more local changes available.
     // |pending_changes_hint| indicates the pending queue length to help sync
     // scheduling but the value may not be accurately reflect the real-time
     // value.
     virtual void OnLocalChangeAvailable(int64_t pending_changes_hint) = 0;
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(Observer);
   };
 
   typedef base::OnceCallback<void(SyncStatusCode status,
@@ -76,6 +75,10 @@ class LocalFileSyncService
   static std::unique_ptr<LocalFileSyncService> CreateForTesting(
       Profile* profile,
       leveldb::Env* env_override);
+
+  LocalFileSyncService(const LocalFileSyncService&) = delete;
+  LocalFileSyncService& operator=(const LocalFileSyncService&) = delete;
+
   ~LocalFileSyncService() override;
 
   void Shutdown();
@@ -115,7 +118,7 @@ class LocalFileSyncService
   // ProcessLocalChange().
   //
   // TODO(kinuko): Remove this method once we stop using multiple backends
-  // (crbug.com/324215), or deprecate the other if we keep doing so.
+  // (crbug.com/41077438), or deprecate the other if we keep doing so.
   void SetLocalChangeProcessorCallback(
       GetLocalChangeProcessorCallback get_local_change_processor);
 
@@ -127,8 +130,8 @@ class LocalFileSyncService
   void PromoteDemotedChanges(base::RepeatingClosure callback);
 
   // Returns the metadata of a remote file pointed by |url|.
-  virtual void GetLocalFileMetadata(const storage::FileSystemURL& url,
-                                    SyncFileMetadataCallback callback);
+  void GetLocalFileMetadata(const storage::FileSystemURL& url,
+                            SyncFileMetadataCallback callback);
 
   // RemoteChangeProcessor overrides.
   void PrepareForProcessRemoteChange(const storage::FileSystemURL& url,
@@ -153,7 +156,8 @@ class LocalFileSyncService
   void SetOriginEnabled(const GURL& origin, bool enabled);
 
  private:
-  typedef std::map<GURL, storage::FileSystemContext*> OriginToContext;
+  typedef std::map<GURL, raw_ptr<storage::FileSystemContext, CtnExperimental>>
+      OriginToContext;
   friend class OriginChangeMapTest;
 
   class OriginChangeMap {
@@ -216,7 +220,7 @@ class LocalFileSyncService
   LocalChangeProcessor* GetLocalChangeProcessor(
       const storage::FileSystemURL& url);
 
-  Profile* profile_;
+  raw_ptr<Profile> profile_;
 
   scoped_refptr<LocalFileSyncContext> sync_context_;
 
@@ -231,12 +235,11 @@ class LocalFileSyncService
 
   OriginChangeMap origin_change_map_;
 
-  LocalChangeProcessor* local_change_processor_;
+  raw_ptr<LocalChangeProcessor> local_change_processor_;
   GetLocalChangeProcessorCallback get_local_change_processor_;
 
-  base::ObserverList<Observer>::Unchecked change_observers_;
-
-  DISALLOW_COPY_AND_ASSIGN(LocalFileSyncService);
+  base::ObserverList<Observer>::UncheckedAndDanglingUntriaged change_observers_;
+  base::WeakPtrFactory<LocalFileSyncService> weak_ptr_factory_{this};
 };
 
 }  // namespace sync_file_system

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,25 +7,38 @@
 
 #include <stdint.h>
 
-#include "base/macros.h"
 #include "base/memory/ref_counted.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
 
 class ImporterBridge;
 
-namespace importer {
+namespace user_data_importer {
 struct SourceProfile;
-}
+namespace mojom {
+class BookmarkHtmlParser;
+}  // namespace mojom
+}  // namespace user_data_importer
 
 // The base class of all importers.
 class Importer : public base::RefCountedThreadSafe<Importer> {
  public:
+  Importer(const Importer&) = delete;
+  Importer& operator=(const Importer&) = delete;
+
   // All importers should implement this method by adding their import logic.
   // And it will be run in file thread by ImporterHost. Since we do async
   // import, the importer should invoke ImporterHost::NotifyImportEnded() to
   // notify its host that import stuff have been finished.
-  virtual void StartImport(const importer::SourceProfile& source_profile,
-                           uint16_t items,
-                           ImporterBridge* bridge) = 0;
+  virtual void StartImport(
+      const user_data_importer::SourceProfile& source_profile,
+      uint16_t items,
+      ImporterBridge* bridge) = 0;
+
+  // Provides a remote to a BookmarkHtmlParser running in another process. Must
+  // be called before StartImport().
+  virtual void SetBookmarkHtmlParser(
+      mojo::PendingRemote<user_data_importer::mojom::BookmarkHtmlParser>
+          parser);
 
   // Cancels the import process.
   virtual void Cancel();
@@ -43,8 +56,6 @@ class Importer : public base::RefCountedThreadSafe<Importer> {
  private:
   // True if the caller cancels the import process.
   bool cancelled_;
-
-  DISALLOW_COPY_AND_ASSIGN(Importer);
 };
 
 #endif  // CHROME_UTILITY_IMPORTER_IMPORTER_H_

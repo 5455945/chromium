@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 
 #include "base/check_op.h"
 #include "chrome/installer/util/callback_work_item.h"
-#include "chrome/installer/util/conditional_work_item_list.h"
+#include "chrome/installer/util/conditional_work_item.h"
 #include "chrome/installer/util/copy_tree_work_item.h"
 #include "chrome/installer/util/create_dir_work_item.h"
 #include "chrome/installer/util/create_reg_key_work_item.h"
@@ -31,11 +31,8 @@ CallbackWorkItem* WorkItem::CreateCallbackWorkItem(
 CopyTreeWorkItem* WorkItem::CreateCopyTreeWorkItem(
     const base::FilePath& source_path,
     const base::FilePath& dest_path,
-    const base::FilePath& temp_path,
-    CopyOverWriteOption overwrite_option,
-    const base::FilePath& alternative_path) {
-  return new CopyTreeWorkItem(source_path, dest_path, temp_path,
-                              overwrite_option, alternative_path);
+    const base::FilePath& temp_path) {
+  return new CopyTreeWorkItem(source_path, dest_path, temp_path);
 }
 
 CreateDirWorkItem* WorkItem::CreateCreateDirWorkItem(
@@ -76,9 +73,8 @@ MoveTreeWorkItem* WorkItem::CreateMoveTreeWorkItem(
     const base::FilePath& source_path,
     const base::FilePath& dest_path,
     const base::FilePath& temp_path,
-    MoveTreeOption duplicate_option) {
-  return new MoveTreeWorkItem(source_path, dest_path, temp_path,
-                              duplicate_option);
+    MoveTreeOptions options) {
+  return new MoveTreeWorkItem(source_path, dest_path, temp_path, options);
 }
 
 SetRegValueWorkItem* WorkItem::CreateSetRegValueWorkItem(
@@ -128,15 +124,19 @@ WorkItemList* WorkItem::CreateWorkItemList() {
   return new WorkItemList();
 }
 
-WorkItemList* WorkItem::CreateConditionalWorkItemList(Condition* condition) {
-  return new ConditionalWorkItemList(condition);
+WorkItem* WorkItem::CreateConditionalWorkItem(
+    std::unique_ptr<Condition> condition,
+    std::unique_ptr<WorkItem> if_item,
+    std::unique_ptr<WorkItem> else_item) {
+  return new ConditionalWorkItem(std::move(condition), std::move(if_item),
+                                 std::move(else_item));
 }
 
 bool WorkItem::Do() {
   DCHECK_EQ(BEFORE_DO, state_);
-  const bool success = DoImpl();
+  succeeded_ = DoImpl();
   state_ = AFTER_DO;
-  return best_effort() ? true : success;
+  return best_effort() ? true : succeeded_;
 }
 
 void WorkItem::Rollback() {
@@ -144,6 +144,11 @@ void WorkItem::Rollback() {
   if (rollback_enabled())
     RollbackImpl();
   state_ = AFTER_ROLLBACK;
+}
+
+bool WorkItem::Succeeded() const {
+  DCHECK_NE(BEFORE_DO, state_);
+  return succeeded_;
 }
 
 void WorkItem::set_best_effort(bool best_effort) {

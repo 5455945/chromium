@@ -1,14 +1,14 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/shelf/home_to_overview_nudge_controller.h"
 
 #include "ash/constants/ash_features.h"
-#include "ash/public/cpp/ash_pref_names.h"
+#include "ash/constants/ash_pref_names.h"
+#include "ash/controls/contextual_nudge.h"
+#include "ash/controls/contextual_tooltip.h"
 #include "ash/session/session_controller_impl.h"
-#include "ash/shelf/contextual_nudge.h"
-#include "ash/shelf/contextual_tooltip.h"
 #include "ash/shelf/hotseat_widget.h"
 #include "ash/shelf/shelf.h"
 #include "ash/shelf/shelf_layout_manager.h"
@@ -18,52 +18,42 @@
 #include "ash/wm/overview/overview_controller.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller_test_api.h"
 #include "ash/wm/window_state.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/memory/weak_ptr.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_clock.h"
 #include "ui/compositor/layer.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
+#include "ui/compositor/layer_animator.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/rect_f.h"
-#include "ui/gfx/transform.h"
+#include "ui/gfx/geometry/transform.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/views/widget/widget.h"
-#include "ui/views/widget/widget_observer.h"
 #include "ui/wm/core/window_util.h"
 
 namespace ash {
 
-class WidgetCloseObserver : public views::WidgetObserver {
+class WidgetCloseObserver {
  public:
-  WidgetCloseObserver(views::Widget* widget) : widget_(widget) {
-    if (widget_)
-      widget_->AddObserver(this);
-  }
+  explicit WidgetCloseObserver(views::Widget* widget)
+      : widget_(widget->GetWeakPtr()) {}
 
-  ~WidgetCloseObserver() override { CleanupWidget(); }
+  ~WidgetCloseObserver() = default;
 
-  bool WidgetClosed() const { return !widget_; }
-
-  // views::WidgetObserver:
-  void OnWidgetClosing(views::Widget* widget) override { CleanupWidget(); }
-
-  void CleanupWidget() {
-    if (widget_) {
-      widget_->RemoveObserver(this);
-      widget_ = nullptr;
-    }
-  }
+  bool WidgetClosed() const { return !widget_ || widget_->IsClosed(); }
 
  private:
-  views::Widget* widget_;
+  base::WeakPtr<views::Widget> widget_;
 };
 
-class HomeToOverviewNudgeControllerWithNudgesDisabledTest : public AshTestBase {
+class HomeToOverviewNudgeControllerWithNudgesDisabledTest
+    : public NoSessionAshTestBase {
  public:
   HomeToOverviewNudgeControllerWithNudgesDisabledTest() {
     scoped_feature_list_.InitAndDisableFeature(
-        ash::features::kContextualNudges);
+        features::kHideShelfControlsInTabletMode);
   }
   ~HomeToOverviewNudgeControllerWithNudgesDisabledTest() override = default;
 
@@ -78,12 +68,11 @@ class HomeToOverviewNudgeControllerWithNudgesDisabledTest : public AshTestBase {
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-class HomeToOverviewNudgeControllerTest : public AshTestBase {
+class HomeToOverviewNudgeControllerTest : public NoSessionAshTestBase {
  public:
   HomeToOverviewNudgeControllerTest() {
-    scoped_feature_list_.InitWithFeatures(
-        {features::kContextualNudges, features::kHideShelfControlsInTabletMode},
-        {});
+    scoped_feature_list_.InitAndEnableFeature(
+        features::kHideShelfControlsInTabletMode);
   }
   ~HomeToOverviewNudgeControllerTest() override = default;
 
@@ -94,15 +83,15 @@ class HomeToOverviewNudgeControllerTest : public AshTestBase {
 
   // AshTestBase:
   void SetUp() override {
-    AshTestBase::SetUp();
+    NoSessionAshTestBase::SetUp();
     GetSessionControllerClient()->SetSessionState(
         session_manager::SessionState::LOGIN_PRIMARY);
-    test_clock_.Advance(base::TimeDelta::FromHours(2));
+    test_clock_.Advance(base::Hours(2));
     contextual_tooltip::OverrideClockForTesting(&test_clock_);
   }
   void TearDown() override {
     contextual_tooltip::ClearClockOverrideForTesting();
-    AshTestBase::TearDown();
+    NoSessionAshTestBase::TearDown();
   }
 
   HomeToOverviewNudgeController* GetNudgeController() {
@@ -128,7 +117,7 @@ class HomeToOverviewNudgeControllerTest : public AshTestBase {
 
     for (int i = 0; i < count; ++i) {
       std::unique_ptr<aura::Window> window =
-          CreateTestWindow(gfx::Rect(0, 0, 400, 400));
+          CreateWindowWithAppType(chromeos::AppType::NON_APP, {400, 400});
       WindowState::Get(window.get())->Minimize();
       windows.push_back(std::move(window));
     }
@@ -141,16 +130,14 @@ class HomeToOverviewNudgeControllerTest : public AshTestBase {
     ASSERT_TRUE(nudge_widget);
     EXPECT_TRUE(nudge_widget->IsVisible());
 
-    gfx::RectF nudge_bounds_f(
-        nudge_widget->GetNativeWindow()->GetTargetBounds());
-    nudge_widget->GetLayer()->transform().TransformRect(&nudge_bounds_f);
-    const gfx::Rect nudge_bounds = gfx::ToEnclosingRect(nudge_bounds_f);
+    const gfx::Rect nudge_bounds =
+        nudge_widget->GetLayer()->transform().MapRect(
+            nudge_widget->GetNativeWindow()->GetTargetBounds());
 
     HotseatWidget* const hotseat = GetHotseatWidget();
-    gfx::RectF hotseat_bounds_f(hotseat->GetNativeWindow()->GetTargetBounds());
-    hotseat->GetLayerForNudgeAnimation()->transform().TransformRect(
-        &hotseat_bounds_f);
-    const gfx::Rect hotseat_bounds = gfx::ToEnclosingRect(hotseat_bounds_f);
+    const gfx::Rect hotseat_bounds =
+        hotseat->GetLayerForNudgeAnimation()->transform().MapRect(
+            hotseat->GetNativeWindow()->GetTargetBounds());
 
     // Nudge and hotseat should have the same transform.
     EXPECT_EQ(hotseat->GetLayerForNudgeAnimation()->transform(),
@@ -200,13 +187,13 @@ TEST_F(HomeToOverviewNudgeControllerWithNudgesDisabledTest,
                    ->shelf_layout_manager()
                    ->home_to_overview_nudge_controller_for_testing());
   TabletModeControllerTestApi().EnterTabletMode();
-  CreateUserSessions(1);
+  SimulateUserLogin(kRegularUserLoginInfo);
 
   std::unique_ptr<aura::Window> window_1 =
-      CreateTestWindow(gfx::Rect(0, 0, 400, 400));
+      CreateWindowWithAppType(chromeos::AppType::NON_APP, {400, 400});
   WindowState::Get(window_1.get())->Minimize();
   std::unique_ptr<aura::Window> window_2 =
-      CreateTestWindow(gfx::Rect(0, 0, 400, 400));
+      CreateWindowWithAppType(chromeos::AppType::NON_APP, {400, 400});
   WindowState::Get(window_2.get())->Minimize();
 
   EXPECT_FALSE(GetPrimaryShelf()
@@ -219,7 +206,7 @@ TEST_F(HomeToOverviewNudgeControllerTest, NoNudgeBeforeLogin) {
   TabletModeControllerTestApi().EnterTabletMode();
   EXPECT_FALSE(GetNudgeController());
 
-  CreateUserSessions(1);
+  SimulateUserLogin(kRegularUserLoginInfo);
   EXPECT_TRUE(GetNudgeController());
 }
 
@@ -228,7 +215,7 @@ TEST_F(HomeToOverviewNudgeControllerTest, NoNudgeBeforeLogin) {
 // subsequent shows, the nudge should be hidden after a timeout.
 TEST_F(HomeToOverviewNudgeControllerTest, ShownOnHomeScreen) {
   base::HistogramTester histogram_tester;
-  CreateUserSessions(1);
+  SimulateUserLogin(kRegularUserLoginInfo);
 
   // The nudge should not be shown in clamshell.
   EXPECT_FALSE(GetNudgeController());
@@ -268,14 +255,14 @@ TEST_F(HomeToOverviewNudgeControllerTest, ShownOnHomeScreen) {
             GetHotseatWidget()->GetLayerForNudgeAnimation()->transform());
 
   // Advance time for more than a day (which should enable the nudge again).
-  test_clock_.Advance(base::TimeDelta::FromHours(25));
+  test_clock_.Advance(base::Hours(25));
 
   // The nudge should not show up unless the user actually transitions to home.
   EXPECT_FALSE(GetNudgeController()->nudge_for_testing());
 
   // Create and minimize another test window to force a transition to home.
   std::unique_ptr<aura::Window> window =
-      CreateTestWindow(gfx::Rect(0, 0, 400, 400));
+      CreateWindowWithAppType(chromeos::AppType::NON_APP, {400, 400});
   wm::ActivateWindow(window.get());
   WindowState::Get(window.get())->Minimize();
 
@@ -295,15 +282,12 @@ TEST_F(HomeToOverviewNudgeControllerTest, ShownOnHomeScreen) {
   EXPECT_FALSE(GetNudgeController()->nudge_for_testing());
   EXPECT_EQ(gfx::Transform(),
             GetHotseatWidget()->GetLayerForNudgeAnimation()->transform());
-  histogram_tester.ExpectBucketCount(
-      "Ash.ContextualNudgeDismissContext.HomeToOverview",
-      contextual_tooltip::DismissNudgeReason::kTimeout, 1);
 }
 
 // Tests that the nudge eventually stops showing.
 TEST_F(HomeToOverviewNudgeControllerTest, ShownLimitedNumberOfTimes) {
   TabletModeControllerTestApi().EnterTabletMode();
-  CreateUserSessions(1);
+  SimulateUserLogin(kRegularUserLoginInfo);
   ScopedWindowList extra_windows = CreateAndMinimizeWindows(2);
   ASSERT_TRUE(GetNudgeController());
 
@@ -317,9 +301,9 @@ TEST_F(HomeToOverviewNudgeControllerTest, ShownLimitedNumberOfTimes) {
     ASSERT_TRUE(GetNudgeController()->nudge_for_testing());
 
     std::unique_ptr<aura::Window> window =
-        CreateTestWindow(gfx::Rect(0, 0, 400, 400));
+        CreateWindowWithAppType(chromeos::AppType::NON_APP, {400, 400});
     wm::ActivateWindow(window.get());
-    test_clock_.Advance(base::TimeDelta::FromHours(25));
+    test_clock_.Advance(base::Hours(25));
     WindowState::Get(window.get())->Minimize();
   }
 
@@ -334,7 +318,7 @@ TEST_F(HomeToOverviewNudgeControllerTest, ShownLimitedNumberOfTimes) {
 TEST_F(HomeToOverviewNudgeControllerTest, HiddenOnTabletModeExit) {
   base::HistogramTester histogram_tester;
   TabletModeControllerTestApi().EnterTabletMode();
-  CreateUserSessions(1);
+  SimulateUserLogin(kRegularUserLoginInfo);
   ScopedWindowList extra_windows = CreateAndMinimizeWindows(2);
 
   ASSERT_TRUE(GetNudgeController());
@@ -347,16 +331,12 @@ TEST_F(HomeToOverviewNudgeControllerTest, HiddenOnTabletModeExit) {
   EXPECT_EQ(
       gfx::Transform(),
       GetHotseatWidget()->GetLayerForNudgeAnimation()->GetTargetTransform());
-
-  histogram_tester.ExpectBucketCount(
-      "Ash.ContextualNudgeDismissContext.HomeToOverview",
-      contextual_tooltip::DismissNudgeReason::kOther, 1);
 }
 
 // Tests that the nudge show is canceled when tablet mode exits.
 TEST_F(HomeToOverviewNudgeControllerTest, ShowCanceledOnTabletModeExit) {
   TabletModeControllerTestApi().EnterTabletMode();
-  CreateUserSessions(1);
+  SimulateUserLogin(kRegularUserLoginInfo);
   ScopedWindowList extra_windows = CreateAndMinimizeWindows(2);
 
   ASSERT_TRUE(GetNudgeController());
@@ -375,15 +355,15 @@ TEST_F(HomeToOverviewNudgeControllerTest, ShowCanceledOnTabletModeExit) {
 TEST_F(HomeToOverviewNudgeControllerTest,
        ShowAnimationCanceledOnTabletModeExit) {
   TabletModeControllerTestApi().EnterTabletMode();
-  CreateUserSessions(1);
+  SimulateUserLogin(kRegularUserLoginInfo);
   ScopedWindowList extra_windows = CreateAndMinimizeWindows(2);
 
   ASSERT_TRUE(GetNudgeController());
   EXPECT_FALSE(GetNudgeController()->nudge_for_testing());
   ASSERT_TRUE(GetNudgeController()->HasShowTimerForTesting());
 
-  ui::ScopedAnimationDurationScaleMode test_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode test_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   GetNudgeController()->FireShowTimerForTesting();
   ASSERT_TRUE(GetNudgeWidget()->GetLayer()->GetAnimator()->is_animating());
@@ -399,7 +379,7 @@ TEST_F(HomeToOverviewNudgeControllerTest,
 // Tests that the nudge is hidden when the screen is locked.
 TEST_F(HomeToOverviewNudgeControllerTest, HiddenOnScreenLock) {
   TabletModeControllerTestApi().EnterTabletMode();
-  CreateUserSessions(1);
+  SimulateUserLogin(kRegularUserLoginInfo);
   ScopedWindowList extra_windows = CreateAndMinimizeWindows(2);
 
   ASSERT_TRUE(GetNudgeController());
@@ -416,7 +396,7 @@ TEST_F(HomeToOverviewNudgeControllerTest, HiddenOnScreenLock) {
 
   // Nudge should not be shown if a window is shown and hidden behind a lock
   // screen.
-  test_clock_.Advance(base::TimeDelta::FromHours(25));
+  test_clock_.Advance(base::Hours(25));
   ScopedWindowList locked_session_window = CreateAndMinimizeWindows(1);
   EXPECT_FALSE(GetNudgeController()->HasShowTimerForTesting());
 }
@@ -425,7 +405,7 @@ TEST_F(HomeToOverviewNudgeControllerTest, HiddenOnScreenLock) {
 // show timer runs.
 TEST_F(HomeToOverviewNudgeControllerTest, InAppShelfShownBeforeShowTimer) {
   TabletModeControllerTestApi().EnterTabletMode();
-  CreateUserSessions(1);
+  SimulateUserLogin(kRegularUserLoginInfo);
   ScopedWindowList extra_windows = CreateAndMinimizeWindows(2);
 
   ASSERT_TRUE(GetNudgeController());
@@ -434,7 +414,7 @@ TEST_F(HomeToOverviewNudgeControllerTest, InAppShelfShownBeforeShowTimer) {
   EXPECT_TRUE(GetNudgeController()->HasShowTimerForTesting());
 
   std::unique_ptr<aura::Window> window =
-      CreateTestWindow(gfx::Rect(0, 0, 400, 400));
+      CreateWindowWithAppType(chromeos::AppType::NON_APP, {400, 400});
   wm::ActivateWindow(window.get());
 
   EXPECT_FALSE(GetNudgeController()->nudge_for_testing());
@@ -454,14 +434,14 @@ TEST_F(HomeToOverviewNudgeControllerTest, InAppShelfShownBeforeShowTimer) {
 // animation to show the nudge.
 TEST_F(HomeToOverviewNudgeControllerTest, NudgeHiddenDuringShowAnimation) {
   TabletModeControllerTestApi().EnterTabletMode();
-  CreateUserSessions(1);
+  SimulateUserLogin(kRegularUserLoginInfo);
   ScopedWindowList extra_windows = CreateAndMinimizeWindows(2);
 
   ASSERT_TRUE(GetNudgeController());
   ASSERT_TRUE(GetNudgeController()->HasShowTimerForTesting());
 
-  ui::ScopedAnimationDurationScaleMode test_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode test_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   GetNudgeController()->FireShowTimerForTesting();
   ASSERT_TRUE(GetNudgeWidget()->GetLayer()->GetAnimator()->is_animating());
@@ -473,7 +453,7 @@ TEST_F(HomeToOverviewNudgeControllerTest, NudgeHiddenDuringShowAnimation) {
   WidgetCloseObserver widget_close_observer(nudge_widget);
 
   std::unique_ptr<aura::Window> window =
-      CreateTestWindow(gfx::Rect(0, 0, 400, 400));
+      CreateWindowWithAppType(chromeos::AppType::NON_APP, {400, 400});
   wm::ActivateWindow(window.get());
 
   EXPECT_FALSE(GetNudgeWidget());
@@ -493,7 +473,7 @@ TEST_F(HomeToOverviewNudgeControllerTest, NudgeHiddenDuringShowAnimation) {
       GetHotseatWidget()->GetLayerForNudgeAnimation()->GetTargetTransform());
 
   // When the nudge is shown again, it should be hidden after a timeout.
-  test_clock_.Advance(base::TimeDelta::FromHours(25));
+  test_clock_.Advance(base::Hours(25));
   WindowState::Get(window.get())->Minimize();
   ASSERT_TRUE(GetNudgeController()->HasShowTimerForTesting());
   GetNudgeController()->FireShowTimerForTesting();
@@ -505,7 +485,7 @@ TEST_F(HomeToOverviewNudgeControllerTest, NudgeHiddenDuringShowAnimation) {
 // Tests that there is no crash if the nudge widget gets closed unexpectedly.
 TEST_F(HomeToOverviewNudgeControllerTest, NoCrashIfNudgeWidgetGetsClosed) {
   TabletModeControllerTestApi().EnterTabletMode();
-  CreateUserSessions(1);
+  SimulateUserLogin(kRegularUserLoginInfo);
   ScopedWindowList windows = CreateAndMinimizeWindows(2);
 
   ASSERT_TRUE(GetNudgeController());
@@ -516,7 +496,7 @@ TEST_F(HomeToOverviewNudgeControllerTest, NoCrashIfNudgeWidgetGetsClosed) {
   EXPECT_FALSE(GetNudgeController()->nudge_for_testing());
 
   std::unique_ptr<aura::Window> window =
-      CreateTestWindow(gfx::Rect(0, 0, 400, 400));
+      CreateWindowWithAppType(chromeos::AppType::NON_APP, {400, 400});
   wm::ActivateWindow(window.get());
   EXPECT_FALSE(GetNudgeController()->nudge_for_testing());
 }
@@ -525,7 +505,7 @@ TEST_F(HomeToOverviewNudgeControllerTest, NoCrashIfNudgeWidgetGetsClosed) {
 TEST_F(HomeToOverviewNudgeControllerTest, TapOnTheNudgeClosesTheNudge) {
   base::HistogramTester histogram_tester;
   TabletModeControllerTestApi().EnterTabletMode();
-  CreateUserSessions(1);
+  SimulateUserLogin(kRegularUserLoginInfo);
   ScopedWindowList windows = CreateAndMinimizeWindows(2);
 
   ASSERT_TRUE(GetNudgeController());
@@ -546,22 +526,18 @@ TEST_F(HomeToOverviewNudgeControllerTest, TapOnTheNudgeClosesTheNudge) {
   EXPECT_EQ(
       gfx::Transform(),
       GetHotseatWidget()->GetLayerForNudgeAnimation()->GetTargetTransform());
-
-  histogram_tester.ExpectBucketCount(
-      "Ash.ContextualNudgeDismissContext.HomeToOverview",
-      contextual_tooltip::DismissNudgeReason::kTap, 1);
 }
 
 TEST_F(HomeToOverviewNudgeControllerTest, TapOnTheNudgeDuringShowAnimation) {
   TabletModeControllerTestApi().EnterTabletMode();
-  CreateUserSessions(1);
+  SimulateUserLogin(kRegularUserLoginInfo);
   ScopedWindowList extra_windows = CreateAndMinimizeWindows(2);
 
   ASSERT_TRUE(GetNudgeController());
   ASSERT_TRUE(GetNudgeController()->HasShowTimerForTesting());
 
-  ui::ScopedAnimationDurationScaleMode test_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode test_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   GetNudgeController()->FireShowTimerForTesting();
   ASSERT_TRUE(GetNudgeWidget()->GetLayer()->GetAnimator()->is_animating());
@@ -608,7 +584,7 @@ TEST_F(HomeToOverviewNudgeControllerTest, TapOnTheNudgeDuringShowAnimation) {
 // times.
 TEST_F(HomeToOverviewNudgeControllerTest, NoNudgeAfterSuccessfulGestures) {
   TabletModeControllerTestApi().EnterTabletMode();
-  CreateUserSessions(1);
+  SimulateUserLogin(kRegularUserLoginInfo);
   ScopedWindowList windows = CreateAndMinimizeWindows(2);
 
   EXPECT_FALSE(GetNudgeController()->nudge_for_testing());
@@ -631,13 +607,13 @@ TEST_F(HomeToOverviewNudgeControllerTest, NoNudgeAfterSuccessfulGestures) {
                                  ->GetWindowBoundsInScreen()
                                  .CenterPoint();
     GetEventGenerator()->GestureScrollSequenceWithCallback(
-        start, start + gfx::Vector2d(0, -100),
-        base::TimeDelta::FromMilliseconds(50),
+        start, start + gfx::Vector2d(0, -100), base::Milliseconds(50),
         /*num_steps = */ 12,
         base::BindRepeating(
             [](ui::EventType type, const gfx::Vector2dF& offset) {
-              if (type != ui::ET_GESTURE_SCROLL_UPDATE)
+              if (type != ui::EventType::kGestureScrollUpdate) {
                 return;
+              }
 
               // If the swipe home to overview controller started the timer to
               // transition to overview (which happens after swipe moves far
@@ -659,7 +635,7 @@ TEST_F(HomeToOverviewNudgeControllerTest, NoNudgeAfterSuccessfulGestures) {
   }
 
   // The nudge should not be shown next time the user transitions to home.
-  test_clock_.Advance(base::TimeDelta::FromHours(25));
+  test_clock_.Advance(base::Hours(25));
   ScopedWindowList extra_window = CreateAndMinimizeWindows(1);
 
   EXPECT_FALSE(GetNudgeController()->nudge_for_testing());
@@ -673,7 +649,7 @@ TEST_F(HomeToOverviewNudgeControllerTest, NoNudgeAfterSuccessfulGestures) {
 // widget works - i.e. that home still transitions to overview.
 TEST_F(HomeToOverviewNudgeControllerTest, HomeToOverviewGestureFromNudge) {
   TabletModeControllerTestApi().EnterTabletMode();
-  CreateUserSessions(1);
+  SimulateUserLogin(kRegularUserLoginInfo);
   ScopedWindowList windows = CreateAndMinimizeWindows(2);
 
   EXPECT_FALSE(GetNudgeController()->nudge_for_testing());
@@ -685,12 +661,12 @@ TEST_F(HomeToOverviewNudgeControllerTest, HomeToOverviewGestureFromNudge) {
   const gfx::Point start =
       GetNudgeWidget()->GetWindowBoundsInScreen().CenterPoint();
   GetEventGenerator()->GestureScrollSequenceWithCallback(
-      start, start + gfx::Vector2d(0, -100),
-      base::TimeDelta::FromMilliseconds(50),
+      start, start + gfx::Vector2d(0, -100), base::Milliseconds(50),
       /*num_steps = */ 12,
       base::BindRepeating([](ui::EventType type, const gfx::Vector2dF& offset) {
-        if (type != ui::ET_GESTURE_SCROLL_UPDATE)
+        if (type != ui::EventType::kGestureScrollUpdate) {
           return;
+        }
 
         // If the swipe home to overview controller started the timer to
         // transition to overview (which happens after swipe moves far
@@ -716,7 +692,7 @@ TEST_F(HomeToOverviewNudgeControllerTest,
        NudgeBoundsUpdatedOnDisplayBoundsChange) {
   UpdateDisplay("768x1200");
   TabletModeControllerTestApi().EnterTabletMode();
-  CreateUserSessions(1);
+  SimulateUserLogin(kRegularUserLoginInfo);
   ScopedWindowList windows = CreateAndMinimizeWindows(2);
 
   ASSERT_TRUE(GetNudgeController());
@@ -736,7 +712,25 @@ TEST_F(HomeToOverviewNudgeControllerTest,
   }
 }
 
+// Home to Overview Nudge should not be shown when shelf controls are enabled
+// after user login. Only Spoken Feedback is synced between OOBE and new user
+// profile.
+TEST_F(HomeToOverviewNudgeControllerTest, DisableNudgesForShelfControls) {
+  // Enabling accessibility shelf controls should disable the nudge.
+  Shell::Get()->session_controller()->GetActivePrefService()->SetBoolean(
+      prefs::kAccessibilitySpokenFeedbackEnabled, true);
+
+  // Enters tablet mode and sets up two minimized windows. This should not
+  // trigger the nudge show timer because shelf controls are on.
+  TabletModeControllerTestApi().EnterTabletMode();
+  SimulateNewUserFirstLogin("test@gmail.com");
+  ScopedWindowList windows = CreateAndMinimizeWindows(2);
+
+  EXPECT_FALSE(GetNudgeController());
+}
+
 // Home to Overview Nudge should be hidden when shelf controls are enabled.
+// See ShelfConfig::ShelfControlsForcedShownForAccessibility.
 TEST_P(HomeToOverviewNudgeControllerTestWithA11yPrefs,
        HideNudgesForShelfControls) {
   SCOPED_TRACE(testing::Message() << "Pref=" << GetParam());
@@ -744,7 +738,7 @@ TEST_P(HomeToOverviewNudgeControllerTestWithA11yPrefs,
   // Enters tablet mode and sets up two minimized windows. This will create the
   // show nudge timer.
   TabletModeControllerTestApi().EnterTabletMode();
-  CreateUserSessions(1);
+  SimulateUserLogin(kRegularUserLoginInfo);
   ScopedWindowList windows = CreateAndMinimizeWindows(2);
   ASSERT_TRUE(GetNudgeController());
   EXPECT_TRUE(GetNudgeController()->HasShowTimerForTesting());
@@ -759,24 +753,5 @@ TEST_P(HomeToOverviewNudgeControllerTestWithA11yPrefs,
       ->GetLastActiveUserPrefService()
       ->SetBoolean(GetParam(), true);
   EXPECT_FALSE(GetNudgeController()->nudge_for_testing());
-}
-
-// Home to Overview Nudge should not be shown when shelf controls are enabled.
-TEST_P(HomeToOverviewNudgeControllerTestWithA11yPrefs,
-       DisableNudgesForShelfControls) {
-  SCOPED_TRACE(testing::Message() << "Pref=" << GetParam());
-  // Enabling accessibility shelf controls should disable the nudge.
-  Shell::Get()
-      ->session_controller()
-      ->GetLastActiveUserPrefService()
-      ->SetBoolean(GetParam(), true);
-
-  // Enters tablet mode and sets up two minimized windows. This should not
-  // trigger the nudge show timer because shelf controls are on.
-  TabletModeControllerTestApi().EnterTabletMode();
-  CreateUserSessions(1);
-  ScopedWindowList windows = CreateAndMinimizeWindows(2);
-
-  EXPECT_FALSE(GetNudgeController());
 }
 }  // namespace ash

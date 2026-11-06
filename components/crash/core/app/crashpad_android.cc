@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,19 +11,23 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <set>
+#include <string_view>
 
-#include "base/android/build_info.h"
+#include "base/android/android_info.h"
+#include "base/android/apk_info.h"
+#include "base/android/device_info.h"
 #include "base/android/java_exception_reporter.h"
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
 #include "base/android/path_utils.h"
-#include "base/cxx17_backports.h"
+#include "base/compiler_specific.h"
 #include "base/environment.h"
+#include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_file.h"
 #include "base/logging.h"
-#include "base/macros.h"
 #include "base/no_destructor.h"
 #include "base/path_service.h"
 #include "base/posix/eintr_wrapper.h"
@@ -33,13 +37,16 @@
 #include "base/synchronization/lock.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
-#include "components/crash/android/jni_headers/PackagePaths_jni.h"
 #include "components/crash/core/app/crash_reporter_client.h"
+#include "components/crash/core/app/shared_memory_user_stream_args.h"
 #include "content/public/common/content_descriptors.h"
+#include "partition_alloc/buildflags.h"
+#include "partition_alloc/tagging.h"
 #include "sandbox/linux/services/syscall_wrappers.h"
 #include "third_party/crashpad/crashpad/client/annotation.h"
 #include "third_party/crashpad/crashpad/client/client_argv_handling.h"
 #include "third_party/crashpad/crashpad/client/crashpad_client.h"
+#include "third_party/crashpad/crashpad/client/crashpad_info.h"
 #include "third_party/crashpad/crashpad/client/simulate_crash_linux.h"
 #include "third_party/crashpad/crashpad/snapshot/sanitized/sanitization_information.h"
 #include "third_party/crashpad/crashpad/util/linux/exception_handler_client.h"
@@ -48,6 +55,9 @@
 #include "third_party/crashpad/crashpad/util/linux/scoped_pr_set_dumpable.h"
 #include "third_party/crashpad/crashpad/util/misc/from_pointer_cast.h"
 #include "third_party/crashpad/crashpad/util/posix/signals.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/crash/android/package_paths_jni/PackagePaths_jni.h"
 
 namespace crashpad {
 namespace {
@@ -58,6 +68,9 @@ class AllowedMemoryRanges {
     allowed_memory_ranges_.entries = 0;
     allowed_memory_ranges_.size = 0;
   }
+
+  AllowedMemoryRanges(const AllowedMemoryRanges&) = delete;
+  AllowedMemoryRanges& operator=(const AllowedMemoryRanges&) = delete;
 
   void AddEntry(VMAddress base, VMSize length) {
     SanitizationAllowedMemoryRanges::Range new_entry;
@@ -86,8 +99,6 @@ class AllowedMemoryRanges {
   base::Lock lock_;
   SanitizationAllowedMemoryRanges allowed_memory_ranges_;
   std::vector<SanitizationAllowedMemoryRanges::Range> array_;
-
-  DISALLOW_COPY_AND_ASSIGN(AllowedMemoryRanges);
 };
 
 bool SetSanitizationInfo(crash_reporter::CrashReporterClient* client,
@@ -137,6 +148,9 @@ class SandboxedHandler {
     return instance;
   }
 
+  SandboxedHandler(const SandboxedHandler&) = delete;
+  SandboxedHandler& operator=(const SandboxedHandler&) = delete;
+
   bool Initialize(bool dump_at_crash) {
     request_dump_ = dump_at_crash ? 1 : 0;
 
@@ -147,13 +161,11 @@ class SandboxedHandler {
     // Android's debuggerd handler on JB MR2 until OREO displays a dialog which
     // is a bad user experience for child process crashes. Disable the debuggerd
     // handler for user builds. crbug.com/273706
-    base::android::BuildInfo* build_info =
-        base::android::BuildInfo::GetInstance();
     restore_previous_handler_ =
-        build_info->sdk_int() < base::android::SDK_VERSION_JELLY_BEAN_MR2 ||
-        build_info->sdk_int() >= base::android::SDK_VERSION_OREO ||
-        strcmp(build_info->build_type(), "eng") == 0 ||
-        strcmp(build_info->build_type(), "userdebug") == 0;
+        base::android::android_info::sdk_int() >=
+            base::android::android_info::SDK_VERSION_OREO ||
+        base::android::android_info::build_type() == "eng" ||
+        base::android::android_info::build_type() == "userdebug";
 
     bool signal_stack_initialized =
         CrashpadClient::InitializeSignalStackForThread();
@@ -178,6 +190,11 @@ class SandboxedHandler {
       handler_client.SetCanSetPtracer(false);
       handler_client.RequestCrashDump(info);
     }
+  }
+
+  using CrashHandlerFunc = bool (*)(int, siginfo_t*, ucontext_t*);
+  void SetLastChanceExceptionHandler(CrashHandlerFunc handler) {
+    last_chance_handler_ = handler;
   }
 
  private:
@@ -208,7 +225,7 @@ class SandboxedHandler {
     msg.msg_name = nullptr;
     msg.msg_namelen = 0;
     msg.msg_iov = iov;
-    msg.msg_iovlen = base::size(iov);
+    msg.msg_iovlen = std::size(iov);
 
     char cmsg_buf[CMSG_SPACE(sizeof(int))];
     msg.msg_control = cmsg_buf;
@@ -218,7 +235,8 @@ class SandboxedHandler {
     cmsg->cmsg_level = SOL_SOCKET;
     cmsg->cmsg_type = SCM_RIGHTS;
     cmsg->cmsg_len = CMSG_LEN(sizeof(int));
-    *reinterpret_cast<int*>(CMSG_DATA(cmsg)) = handlers_socket.get();
+    *reinterpret_cast<int*>(UNSAFE_TODO(CMSG_DATA(cmsg))) =
+        handlers_socket.get();
 
     if (HANDLE_EINTR(sendmsg(server_fd_, &msg, MSG_NOSIGNAL)) < 0) {
       return errno;
@@ -231,6 +249,11 @@ class SandboxedHandler {
   static void HandleCrash(int signo, siginfo_t* siginfo, void* context) {
     SandboxedHandler* state = Get();
     state->HandleCrashNonFatal(signo, siginfo, context);
+    if (state->last_chance_handler_ &&
+        state->last_chance_handler_(signo, siginfo,
+                                    static_cast<ucontext_t*>(context))) {
+      return;
+    }
     Signals::RestoreHandlerAndReraiseSignalOnReturn(
         siginfo, state->restore_previous_handler_
                      ? state->old_actions_.ActionForSignal(signo)
@@ -241,12 +264,11 @@ class SandboxedHandler {
   SanitizationInformation sanitization_;
   int server_fd_;
   unsigned char request_dump_;
+  CrashHandlerFunc last_chance_handler_;
 
   // true if the previously installed signal handler is restored after
   // handling a crash. Otherwise SIG_DFL is restored.
   bool restore_previous_handler_;
-
-  DISALLOW_COPY_AND_ASSIGN(SandboxedHandler);
 };
 
 }  // namespace
@@ -265,62 +287,26 @@ void SetJavaExceptionInfo(const char* info_string) {
 }
 
 void SetBuildInfoAnnotations(std::map<std::string, std::string>* annotations) {
-  base::android::BuildInfo* info = base::android::BuildInfo::GetInstance();
+  (*annotations)["android_build_id"] =
+      base::android::android_info::android_build_id();
+  (*annotations)["android_build_fp"] =
+      base::android::android_info::android_build_fp();
+  (*annotations)["sdk"] =
+      base::StringPrintf("%d", base::android::android_info::sdk_int());
+  (*annotations)["device"] = base::android::android_info::device();
+  (*annotations)["model"] = base::android::android_info::model();
+  (*annotations)["brand"] = base::android::android_info::brand();
+  (*annotations)["board"] = base::android::android_info::board();
+  (*annotations)["installer_package_name"] =
+      base::android::apk_info::installer_package_name();
+  (*annotations)["abi_name"] = base::android::android_info::abi_name();
+  (*annotations)["gms_core_version"] =
+      base::android::device_info::gms_version_code();
 
-  (*annotations)["android_build_id"] = info->android_build_id();
-  (*annotations)["android_build_fp"] = info->android_build_fp();
-  (*annotations)["sdk"] = base::StringPrintf("%d", info->sdk_int());
-  (*annotations)["device"] = info->device();
-  (*annotations)["model"] = info->model();
-  (*annotations)["brand"] = info->brand();
-  (*annotations)["board"] = info->board();
-  (*annotations)["installer_package_name"] = info->installer_package_name();
-  (*annotations)["abi_name"] = info->abi_name();
-  (*annotations)["custom_themes"] = info->custom_themes();
-  (*annotations)["resources_version"] = info->resources_version();
-  (*annotations)["gms_core_version"] = info->gms_version_code();
-
-  if (info->firebase_app_id()[0] != '\0') {
-    (*annotations)["package"] = std::string(info->firebase_app_id()) + " v" +
-                                info->package_version_code() + " (" +
-                                info->package_version_name() + ")";
-  }
-}
-
-// Constructs paths to a handler trampoline executable and a library exporting
-// the symbol `CrashpadHandlerMain()`. This requires this function to be built
-// into the same object exporting this symbol and the handler trampoline is
-// adjacent to it.
-bool GetHandlerTrampoline(std::string* handler_trampoline,
-                          std::string* handler_library) {
-  // The linker doesn't support loading executables passed on its command
-  // line until Q.
-  if (base::android::BuildInfo::GetInstance()->sdk_int() <
-      base::android::SDK_VERSION_Q) {
-    return false;
-  }
-
-  Dl_info info;
-  if (dladdr(reinterpret_cast<void*>(&GetHandlerTrampoline), &info) == 0 ||
-      dlsym(dlopen(info.dli_fname, RTLD_NOLOAD | RTLD_LAZY),
-            "CrashpadHandlerMain") == nullptr) {
-    return false;
-  }
-
-  std::string local_handler_library(info.dli_fname);
-
-  size_t libdir_end = local_handler_library.rfind('/');
-  if (libdir_end == std::string::npos) {
-    return false;
-  }
-
-  std::string local_handler_trampoline(local_handler_library, 0,
-                                       libdir_end + 1);
-  local_handler_trampoline += "libcrashpad_handler_trampoline.so";
-
-  handler_trampoline->swap(local_handler_trampoline);
-  handler_library->swap(local_handler_library);
-  return true;
+  (*annotations)["package"] =
+      std::string(base::android::apk_info::package_name()) + " v" +
+      base::android::apk_info::package_version_code() + " (" +
+      base::android::apk_info::package_version_name() + ")";
 }
 
 #if defined(__arm__) && defined(__ARM_ARCH_7A__)
@@ -335,6 +321,8 @@ bool GetHandlerTrampoline(std::string* handler_trampoline,
 #define CURRENT_ABI "x86_64"
 #elif defined(__aarch64__)
 #define CURRENT_ABI "arm64-v8a"
+#elif defined(__riscv) && (__riscv_xlen == 64)
+#define CURRENT_ABI "riscv64"
 #else
 #error "Unsupported target abi"
 #endif
@@ -344,7 +332,7 @@ void MakePackagePaths(std::string* classpath, std::string* libpath) {
 
   base::android::ScopedJavaLocalRef<jstring> arch =
       base::android::ConvertUTF8ToJavaString(env,
-                                             base::StringPiece(CURRENT_ABI));
+                                             std::string_view(CURRENT_ABI));
   base::android::ScopedJavaLocalRef<jobjectArray> paths =
       Java_PackagePaths_makePackagePaths(env, arch);
 
@@ -355,51 +343,6 @@ void MakePackagePaths(std::string* classpath, std::string* libpath) {
       env, static_cast<jstring>(env->GetObjectArrayElement(paths.obj(), 1)),
       libpath);
 }
-
-// Copies and extends the current environment with CLASSPATH and LD_LIBRARY_PATH
-// set to library paths in the APK.
-bool BuildEnvironmentWithApk(bool use_64_bit,
-                             std::vector<std::string>* result) {
-  DCHECK(result->empty());
-
-  std::string classpath;
-  std::string library_path;
-  MakePackagePaths(&classpath, &library_path);
-
-  std::unique_ptr<base::Environment> env(base::Environment::Create());
-  static constexpr char kClasspathVar[] = "CLASSPATH";
-  std::string current_classpath;
-  env->GetVar(kClasspathVar, &current_classpath);
-  classpath += ":" + current_classpath;
-
-  static constexpr char kLdLibraryPathVar[] = "LD_LIBRARY_PATH";
-  std::string current_library_path;
-  env->GetVar(kLdLibraryPathVar, &current_library_path);
-  library_path += ":" + current_library_path;
-
-  static constexpr char kRuntimeRootVar[] = "ANDROID_RUNTIME_ROOT";
-  std::string runtime_root;
-  if (env->GetVar(kRuntimeRootVar, &runtime_root)) {
-    library_path += ":" + runtime_root + (use_64_bit ? "/lib64" : "/lib");
-  }
-
-  result->push_back("CLASSPATH=" + classpath);
-  result->push_back("LD_LIBRARY_PATH=" + library_path);
-  for (char** envp = environ; *envp != nullptr; ++envp) {
-    if ((strncmp(*envp, kClasspathVar, strlen(kClasspathVar)) == 0 &&
-         (*envp)[strlen(kClasspathVar)] == '=') ||
-        (strncmp(*envp, kLdLibraryPathVar, strlen(kLdLibraryPathVar)) == 0 &&
-         (*envp)[strlen(kLdLibraryPathVar)] == '=')) {
-      continue;
-    }
-    result->push_back(*envp);
-  }
-
-  return true;
-}
-
-const char kCrashpadJavaMain[] =
-    "org.chromium.components.crash.browser.CrashpadMain";
 
 void BuildHandlerArgs(CrashReporterClient* crash_reporter_client,
                       base::FilePath* database_path,
@@ -413,16 +356,14 @@ void BuildHandlerArgs(CrashReporterClient* crash_reporter_client,
   // TODO(jperaza): Set URL for Android when Crashpad takes over report upload.
   *url = std::string();
 
-  std::string product_name;
-  std::string product_version;
-  std::string channel;
-  crash_reporter_client->GetProductNameAndVersion(&product_name,
-                                                  &product_version, &channel);
-  (*process_annotations)["prod"] = product_name;
-  (*process_annotations)["ver"] = product_version;
+  ProductInfo product_info;
+  crash_reporter_client->GetProductInfo(&product_info);
+  (*process_annotations)["prod"] = std::string(product_info.product_name());
+  (*process_annotations)["ver"] = std::string(product_info.version());
 
   SetBuildInfoAnnotations(process_annotations);
 
+  std::string_view channel = product_info.channel();
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   // Empty means stable.
   const bool allow_empty_channel = true;
@@ -430,52 +371,26 @@ void BuildHandlerArgs(CrashReporterClient* crash_reporter_client,
   const bool allow_empty_channel = false;
 #endif
   if (allow_empty_channel || !channel.empty()) {
-    (*process_annotations)["channel"] = channel;
+    (*process_annotations)["channel"] = std::string(channel);
   }
 
   (*process_annotations)["plat"] = std::string("Android");
+  for (auto& [key, value] :
+       crash_reporter_client->GetExtraProcessAnnotations()) {
+    (*process_annotations)[key] = std::move(value);
+  }
 }
 
 bool ShouldHandleCrashAndUpdateArguments(bool write_minidump_to_database,
                                          bool write_minidump_to_log,
                                          std::vector<std::string>* arguments) {
-  if (!write_minidump_to_database)
+  if (!write_minidump_to_database) {
     arguments->push_back("--no-write-minidump-to-database");
-  if (write_minidump_to_log)
+  }
+  if (write_minidump_to_log) {
     arguments->push_back("--write-minidump-to-log");
+  }
   return write_minidump_to_database || write_minidump_to_log;
-}
-
-bool GetHandlerPath(base::FilePath* exe_dir, base::FilePath* handler_path) {
-  // There is not any normal way to package native executables in an Android
-  // APK. The Crashpad handler is packaged like a loadable module, which
-  // Android's APK installer expects to be named like a shared library, but it
-  // is in fact a standalone executable.
-  if (!base::PathService::Get(base::DIR_MODULE, exe_dir)) {
-    return false;
-  }
-  *handler_path = exe_dir->Append("libchrome_crashpad_handler.so");
-  return true;
-}
-
-bool SetLdLibraryPath(const base::FilePath& lib_path) {
-#if defined(COMPONENT_BUILD)
-  std::string library_path(lib_path.value());
-
-  static constexpr char kLibraryPathVar[] = "LD_LIBRARY_PATH";
-  std::unique_ptr<base::Environment> env(base::Environment::Create());
-  std::string old_path;
-  if (env->GetVar(kLibraryPathVar, &old_path)) {
-    library_path.push_back(':');
-    library_path.append(old_path);
-  }
-
-  if (!env->SetVar(kLibraryPathVar, library_path)) {
-    return false;
-  }
-#endif
-
-  return true;
 }
 
 class HandlerStarter {
@@ -496,6 +411,9 @@ class HandlerStarter {
     return instance;
   }
 
+  HandlerStarter(const HandlerStarter&) = delete;
+  HandlerStarter& operator=(const HandlerStarter&) = delete;
+
   base::FilePath Initialize(bool dump_at_crash) {
     base::FilePath database_path;
     base::FilePath metrics_path;
@@ -504,12 +422,6 @@ class HandlerStarter {
     std::vector<std::string> arguments;
     BuildHandlerArgs(GetCrashReporterClient(), &database_path, &metrics_path,
                      &url, &process_annotations, &arguments);
-
-    base::FilePath exe_dir;
-    base::FilePath handler_path;
-    if (!GetHandlerPath(&exe_dir, &handler_path)) {
-      return database_path;
-    }
 
     if (crashpad::SetSanitizationInfo(GetCrashReporterClient(),
                                       &browser_sanitization_info_)) {
@@ -527,9 +439,17 @@ class HandlerStarter {
     // (e.g. by a WebView app) we don't want to treat this as a crash.
     GetCrashpadClient().SetUnhandledSignals({SIGQUIT});
 
-    if (!base::PathExists(handler_path)) {
-      use_java_handler_ =
-          !GetHandlerTrampoline(&handler_trampoline_, &handler_library_);
+    internal::GetHandlerTrampoline(&handler_trampoline_, &handler_library_);
+
+    user_streams_ =
+        GetCrashReporterClient()->GetUserStreamSharedMemoryRegions();
+    for (const auto& region : user_streams_) {
+      if (region.IsValid()) {
+        // Those handles are kept open in the browser process throughout its
+        // lifetime and passed to the handler. Set `close-on-exec` to avoid
+        // passing them to other child processes.
+        base::SetCloseOnExec(region.GetPlatformHandle());
+      }
     }
 
     if (!ShouldHandleCrashAndUpdateArguments(
@@ -538,32 +458,23 @@ class HandlerStarter {
       return database_path;
     }
 
-    if (use_java_handler_ || !handler_trampoline_.empty()) {
+    if (!handler_trampoline_.empty()) {
       std::vector<std::string> env;
-      if (!BuildEnvironmentWithApk(kUse64Bit, &env)) {
+      if (!internal::BuildEnvironmentWithApk(kUse64Bit, &env)) {
         return database_path;
       }
 
-      bool result = use_java_handler_
-                        ? GetCrashpadClient().StartJavaHandlerAtCrash(
-                              kCrashpadJavaMain, &env, database_path,
-                              metrics_path, url, process_annotations, arguments)
-                        : GetCrashpadClient().StartHandlerWithLinkerAtCrash(
-                              handler_trampoline_, handler_library_, kUse64Bit,
-                              &env, database_path, metrics_path, url,
-                              process_annotations, arguments);
+      std::set<crashpad::FileHandle> preserve_handles;
+      internal::AppendSharedMemoryUserStreamArgs(user_streams_, &arguments,
+                                                 &preserve_handles);
+
+      bool result = GetCrashpadClient().StartHandlerWithLinkerAtCrash(
+          handler_trampoline_, handler_library_, kUse64Bit, &env, database_path,
+          metrics_path, url, process_annotations, arguments, preserve_handles);
       DCHECK(result);
       return database_path;
     }
 
-    if (!SetLdLibraryPath(exe_dir)) {
-      return database_path;
-    }
-
-    bool result = GetCrashpadClient().StartHandlerAtCrash(
-        handler_path, database_path, metrics_path, url, process_annotations,
-        arguments);
-    DCHECK(result);
     return database_path;
   }
 
@@ -578,43 +489,29 @@ class HandlerStarter {
     BuildHandlerArgs(client, &database_path, &metrics_path, &url,
                      &process_annotations, &arguments);
 
-    base::FilePath exe_dir;
-    base::FilePath handler_path;
-    if (!GetHandlerPath(&exe_dir, &handler_path)) {
-      return false;
-    }
-
     if (!ShouldHandleCrashAndUpdateArguments(write_minidump_to_database,
                                              client->ShouldWriteMinidumpToLog(),
                                              &arguments)) {
       return true;
     }
 
-    if (use_java_handler_ || !handler_trampoline_.empty()) {
+    if (!handler_trampoline_.empty()) {
       std::vector<std::string> env;
-      if (!BuildEnvironmentWithApk(kUse64Bit, &env)) {
+      if (!internal::BuildEnvironmentWithApk(kUse64Bit, &env)) {
         return false;
       }
 
-      bool result =
-          use_java_handler_
-              ? GetCrashpadClient().StartJavaHandlerForClient(
-                    kCrashpadJavaMain, &env, database_path, metrics_path, url,
-                    process_annotations, arguments, fd)
-              : GetCrashpadClient().StartHandlerWithLinkerForClient(
-                    handler_trampoline_, handler_library_, kUse64Bit, &env,
-                    database_path, metrics_path, url, process_annotations,
-                    arguments, fd);
-      return result;
+      std::set<crashpad::FileHandle> preserve_handles;
+      internal::AppendSharedMemoryUserStreamArgs(user_streams_, &arguments,
+                                                 &preserve_handles);
+
+      return GetCrashpadClient().StartHandlerWithLinkerForClient(
+          handler_trampoline_, handler_library_, kUse64Bit, &env, database_path,
+          metrics_path, url, process_annotations, arguments, fd,
+          preserve_handles);
     }
 
-    if (!SetLdLibraryPath(exe_dir)) {
-      return false;
-    }
-
-    return GetCrashpadClient().StartHandlerForClient(
-        handler_path, database_path, metrics_path, url, process_annotations,
-        arguments, fd);
+    return false;
   }
 
  private:
@@ -624,29 +521,8 @@ class HandlerStarter {
   crashpad::SanitizationInformation browser_sanitization_info_;
   std::string handler_trampoline_;
   std::string handler_library_;
-  bool use_java_handler_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(HandlerStarter);
+  std::vector<base::ReadOnlySharedMemoryRegion> user_streams_;
 };
-
-bool ConnectToHandler(CrashReporterClient* client, base::ScopedFD* connection) {
-  int fds[2];
-  if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) != 0) {
-    PLOG(ERROR) << "socketpair";
-    return false;
-  }
-  base::ScopedFD local_connection(fds[0]);
-  base::ScopedFD handlers_socket(fds[1]);
-
-  if (!HandlerStarter::Get()->StartHandlerForClient(
-          client, handlers_socket.get(),
-          true /* write_minidump_to_database */)) {
-    return false;
-  }
-
-  *connection = std::move(local_connection);
-  return true;
-}
 
 bool g_is_browser = false;
 
@@ -672,35 +548,6 @@ void DumpWithoutCrashing() {
   }
 }
 
-bool DumpWithoutCrashingForClient(CrashReporterClient* client) {
-  base::ScopedFD connection;
-  if (!ConnectToHandler(client, &connection)) {
-    return false;
-  }
-
-  siginfo_t siginfo;
-  siginfo.si_signo = crashpad::Signals::kSimulatedSigno;
-  siginfo.si_errno = 0;
-  siginfo.si_code = 0;
-
-  ucontext_t context;
-  crashpad::CaptureContext(&context);
-
-  crashpad::SanitizationInformation sanitization;
-  crashpad::SetSanitizationInfo(client, &sanitization);
-
-  crashpad::ExceptionInformation exception;
-  crashpad::SetExceptionInformation(&siginfo, &context, &exception);
-
-  crashpad::ExceptionHandlerProtocol::ClientInformation info;
-  crashpad::SetClientInformation(&exception, &sanitization, &info);
-
-  crashpad::ScopedPrSetDumpable set_dumpable(/* may_log= */ false);
-
-  crashpad::ExceptionHandlerClient handler_client(connection.get(), false);
-  return handler_client.RequestCrashDump(info) == 0;
-}
-
 void AllowMemoryRange(void* begin, size_t length) {
   crashpad::AllowedMemoryRanges::Singleton()->AddEntry(
       crashpad::FromPointerCast<crashpad::VMAddress>(begin),
@@ -709,20 +556,97 @@ void AllowMemoryRange(void* begin, size_t length) {
 
 namespace internal {
 
+bool GetHandlerTrampoline(std::string* handler_trampoline,
+                          std::string* handler_library) {
+  Dl_info info;
+  CHECK(dladdr(reinterpret_cast<void*>(&GetHandlerTrampoline), &info));
+  std::string local_handler_library(info.dli_fname);
+
+  // We'll just fail when launching the handler if this fails, but nicer to
+  // catch it early when DCHECK_IS_ON().
+#if DCHECK_IS_ON()
+  void* handle = dlopen(info.dli_fname, RTLD_NOLOAD | RTLD_LAZY);
+  bool has_main = dlsym(handle, "CrashpadHandlerMain") != nullptr;
+  dlclose(handle);
+  if (!has_main) {
+    NOTREACHED() << local_handler_library << " is missing CrashpadHandlerMain";
+  }
+#endif
+
+  base::FilePath handler_library_path(info.dli_fname);
+  base::FilePath libdir = handler_library_path.DirName();
+  base::FilePath handler_trampoline_path =
+      libdir.AppendASCII("libcrashpad_handler_trampoline.so");
+
+  *handler_trampoline = handler_trampoline_path.value();
+  *handler_library = handler_library_path.value();
+  return true;
+}
+
+bool BuildEnvironmentWithApk(bool use_64_bit,
+                             std::vector<std::string>* result) {
+  DCHECK(result->empty());
+
+  std::string classpath;
+  std::string library_path;
+  // CLASSPATH can just inherit existing values once Trichrome is removed.
+  MakePackagePaths(&classpath, &library_path);
+
+  std::unique_ptr<base::Environment> env(base::Environment::Create());
+  static constexpr char kClasspathVar[] = "CLASSPATH";
+  std::optional<std::string> current_classpath = env->GetVar(kClasspathVar);
+  if (current_classpath.has_value()) {
+    classpath += ":" + current_classpath.value();
+  }
+
+  static constexpr char kLdLibraryPathVar[] = "LD_LIBRARY_PATH";
+  std::optional<std::string> current_library_path =
+      env->GetVar(kLdLibraryPathVar);
+  if (current_library_path.has_value()) {
+    library_path += ":" + current_library_path.value();
+  }
+
+  static constexpr char kRuntimeRootVar[] = "ANDROID_RUNTIME_ROOT";
+  std::optional<std::string> runtime_root = env->GetVar(kRuntimeRootVar);
+  if (runtime_root.has_value()) {
+    library_path +=
+        ":" + runtime_root.value() + (use_64_bit ? "/lib64" : "/lib");
+  }
+
+  result->push_back("CLASSPATH=" + classpath);
+  result->push_back("LD_LIBRARY_PATH=" + library_path);
+  for (char** envp = environ; *envp != nullptr; UNSAFE_TODO(++envp)) {
+    if ((UNSAFE_TODO(strncmp(*envp, kClasspathVar, strlen(kClasspathVar))) ==
+             0 &&
+         UNSAFE_TODO((*envp)[strlen(kClasspathVar)]) == '=') ||
+        (UNSAFE_TODO(strncmp(*envp, kLdLibraryPathVar,
+                             strlen(kLdLibraryPathVar))) == 0 &&
+         UNSAFE_TODO((*envp)[strlen(kLdLibraryPathVar)]) == '=')) {
+      continue;
+    }
+    result->push_back(*envp);
+  }
+
+  return true;
+}
+
 bool StartHandlerForClient(int fd, bool write_minidump_to_database) {
   return HandlerStarter::Get()->StartHandlerForClient(
       GetCrashReporterClient(), fd, write_minidump_to_database);
 }
 
-base::FilePath PlatformCrashpadInitialization(
+bool PlatformCrashpadInitialization(
     bool initial_client,
     bool browser_process,
     bool embedded_handler,
     const std::string& user_data_dir,
     const base::FilePath& exe_path,
-    const std::vector<std::string>& initial_arguments) {
+    const std::vector<std::string>& initial_arguments,
+    const std::vector<base::FilePath>& attachments,
+    base::FilePath* database_path) {
   DCHECK_EQ(initial_client, browser_process);
   DCHECK(initial_arguments.empty());
+  DCHECK(attachments.empty());
 
   // Not used on Android.
   DCHECK(!embedded_handler);
@@ -730,28 +654,55 @@ base::FilePath PlatformCrashpadInitialization(
 
   g_is_browser = browser_process;
 
-  bool dump_at_crash = true;
   base::android::SetJavaExceptionCallback(SetJavaExceptionInfo);
 
+  CrashReporterClient* crash_reporter_client = GetCrashReporterClient();
+  bool dump_at_crash = true;
   unsigned int dump_percentage =
-      GetCrashReporterClient()->GetCrashDumpPercentage();
-  if (dump_percentage < 100 &&
-      static_cast<unsigned int>(base::RandInt(0, 99)) >= dump_percentage) {
+      crash_reporter_client->GetCrashDumpPercentage();
+  if (dump_percentage < 100 && static_cast<unsigned int>(base::RandIntInclusive(
+                                   0, 99)) >= dump_percentage) {
     dump_at_crash = false;
   }
 
+  // In the not-large-dumps case, record enough extra memory to be able to save
+  // dereferenced memory from all registers on the crashing thread. Crashpad may
+  // save 512-bytes per register, and the largest register set (not including
+  // stack pointers) is ARM64 with 32 registers. Hence, 16 KiB.
+  const uint32_t indirect_memory_limit =
+      crash_reporter_client->GetShouldDumpLargerDumps() ? 4 * 1024 * 1024
+                                                        : 16 * 1024;
+  crashpad::CrashpadInfo::GetCrashpadInfo()
+      ->set_gather_indirectly_referenced_memory(crashpad::TriState::kEnabled,
+                                                indirect_memory_limit);
+
   if (browser_process) {
     HandlerStarter* starter = HandlerStarter::Get();
-    return starter->Initialize(dump_at_crash);
+    *database_path = starter->Initialize(dump_at_crash);
+#if PA_BUILDFLAG(HAS_MEMORY_TAGGING)
+    // Handler gets called in SignalHandler::HandleOrReraiseSignal() after
+    // reporting the crash.
+    crashpad::CrashpadClient::SetLastChanceExceptionHandler(
+        partition_alloc::PermissiveMte::HandleCrash);
+#endif  // PA_BUILDFLAG(HAS_MEMORY_TAGGING)
+    return true;
   }
 
   crashpad::SandboxedHandler* handler = crashpad::SandboxedHandler::Get();
   bool result = handler->Initialize(dump_at_crash);
   DCHECK(result);
 
-  return base::FilePath();
+#if PA_BUILDFLAG(HAS_MEMORY_TAGGING)
+  handler->SetLastChanceExceptionHandler(
+      partition_alloc::PermissiveMte::HandleCrash);
+#endif  // PA_BUILDFLAG(HAS_MEMORY_TAGGING)
+
+  *database_path = base::FilePath();
+  return true;
 }
 
 }  // namespace internal
 
 }  // namespace crash_reporter
+
+DEFINE_JNI(PackagePaths)

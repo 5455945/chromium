@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,40 +9,33 @@
 #include <string>
 #include <vector>
 
-#include "base/compiler_specific.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/sync/test/integration/status_change_checker.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
-#include "content/public/browser/notification_observer.h"
-#include "content/public/browser/notification_registrar.h"
 #include "extensions/browser/extension_registry_observer.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
 
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
 class Profile;
-class SyncedExtensionInstaller;
 
 namespace extensions_helper {
 
 // Returns true iff profiles with indices |index1| and |index2| have the same
 // extensions.
-bool HasSameExtensions(int index1, int index2) WARN_UNUSED_RESULT;
-
-// Returns true iff the profile with index |index| has the same extensions
-// as the verifier.
-bool HasSameExtensionsAsVerifier(int index) WARN_UNUSED_RESULT;
-
-// Returns true iff all existing profiles have the same extensions
-// as the verifier.
-bool AllProfilesHaveSameExtensionsAsVerifier() WARN_UNUSED_RESULT;
+[[nodiscard]] bool HasSameExtensions(int index1, int index2);
 
 // Returns true iff all existing profiles have the same extensions.
-bool AllProfilesHaveSameExtensions() WARN_UNUSED_RESULT;
+[[nodiscard]] bool AllProfilesHaveSameExtensions();
 
 // Installs the extension for the given index to |profile|, and returns the
 // extension ID of the new extension.
 std::string InstallExtension(Profile* profile, int index);
 
-// Installs the extension for the given index to all profiles (including the
-// verifier), and returns the extension ID of the new extension.
+// Installs the extension for the given index to all profiles, and returns the
+// extension ID of the new extension.
 std::string InstallExtensionForAllProfiles(int index);
 
 // Uninstalls the extension for the given index from |profile|. Assumes that
@@ -79,19 +72,21 @@ bool IsIncognitoEnabled(Profile* profile, int index);
 // on timeout.
 bool AwaitAllProfilesHaveSameExtensions();
 
+// Returns the extension ID of the extension with the given `index`.
+extensions::ExtensionId GetExtensionId(int index);
+
 }  // namespace extensions_helper
 
 // A helper class to implement waiting for a set of profiles to have matching
-// extensions lists. It waits for calls on both interfaces:
-// ExtensionRegistryObserver and NotificationObserver. Observing
-// NOTIFICATION_EXTENSION_UPDATING_STARTED notification is needed for tests
-// against local server because in such tests extensions are not installed and
-// ExtensionRegistryObserver methods are not called.
+// extensions lists.
 class ExtensionsMatchChecker : public StatusChangeChecker,
-                               public extensions::ExtensionRegistryObserver,
-                               public content::NotificationObserver {
+                               public extensions::ExtensionRegistryObserver {
  public:
   ExtensionsMatchChecker();
+
+  ExtensionsMatchChecker(const ExtensionsMatchChecker&) = delete;
+  ExtensionsMatchChecker& operator=(const ExtensionsMatchChecker&) = delete;
+
   ~ExtensionsMatchChecker() override;
 
   // StatusChangeChecker implementation.
@@ -110,18 +105,12 @@ class ExtensionsMatchChecker : public StatusChangeChecker,
                               const extensions::Extension* extension,
                               extensions::UninstallReason reason) override;
 
-  // content::NotificationObserver implementation.
-  void Observe(int type,
-               const content::NotificationSource& source,
-               const content::NotificationDetails& details) override;
-
  private:
-  std::vector<Profile*> profiles_;
-  std::vector<std::unique_ptr<SyncedExtensionInstaller>>
-      synced_extension_installers_;
-  content::NotificationRegistrar registrar_;
+  void OnExtensionUpdatingStarted(Profile* profile);
 
-  DISALLOW_COPY_AND_ASSIGN(ExtensionsMatchChecker);
+  std::vector<raw_ptr<Profile, VectorExperimental>> profiles_;
+
+  base::WeakPtrFactory<ExtensionsMatchChecker> weak_ptr_factory_{this};
 };
 
 #endif  // CHROME_BROWSER_SYNC_TEST_INTEGRATION_EXTENSIONS_HELPER_H_

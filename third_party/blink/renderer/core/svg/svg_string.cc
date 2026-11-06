@@ -19,9 +19,11 @@
 
 #include "third_party/blink/renderer/core/svg/svg_string.h"
 
+#include "base/notreached.h"
+
 namespace blink {
 
-void SVGString::Add(const SVGPropertyBase*, const SVGElement*) {
+bool SVGString::Add(const SVGPropertyBase*, const SVGElement*) {
   NOTREACHED();
 }
 

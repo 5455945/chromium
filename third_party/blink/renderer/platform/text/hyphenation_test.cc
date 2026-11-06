@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,7 +13,7 @@
 using testing::ElementsAre;
 using testing::ElementsAreArray;
 
-#if defined(USE_MINIKIN_HYPHENATION) && defined(OS_FUCHSIA)
+#if defined(USE_MINIKIN_HYPHENATION) && BUILDFLAG(IS_FUCHSIA)
 // Fuchsia doesn't include |blink_platform_unittests_data|.
 #undef USE_MINIKIN_HYPHENATION
 #endif
@@ -37,7 +37,7 @@ class HyphenationTest : public testing::Test {
  protected:
   void TearDown() override { LayoutLocale::ClearForTesting(); }
 
-#if defined(USE_MINIKIN_HYPHENATION) || defined(OS_MAC)
+#if defined(USE_MINIKIN_HYPHENATION) || BUILDFLAG(IS_APPLE)
   // Get a |Hyphenation| instance for the specified locale for testing.
   scoped_refptr<Hyphenation> GetHyphenation(const AtomicString& locale) {
 #if defined(USE_MINIKIN_HYPHENATION)
@@ -45,7 +45,7 @@ class HyphenationTest : public testing::Test {
     // accessible from the unit test, open the dictionary file directly for
     // testing.
     std::string filename = "hyph-" + locale.Ascii() + ".hyb";
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
     base::FilePath path("/system/usr/hyphen-data");
 #else
     base::FilePath path = test::HyphenationDictionaryDir();
@@ -60,13 +60,32 @@ class HyphenationTest : public testing::Test {
 #endif
     return nullptr;
   }
+
+  Vector<wtf_size_t> FirstHyphenLocations(
+      StringView word,
+      const Hyphenation& hyphenation) const {
+    Vector<wtf_size_t> indexes;
+    const wtf_size_t word_len = word.length();
+    for (wtf_size_t i = 0; i < word_len; ++i)
+      indexes.push_back(hyphenation.FirstHyphenLocation(word, i));
+    return indexes;
+  }
+
+  Vector<wtf_size_t> LastHyphenLocations(StringView word,
+                                         const Hyphenation& hyphenation) const {
+    Vector<wtf_size_t> indexes;
+    const wtf_size_t word_len = word.length();
+    for (wtf_size_t i = 0; i < word_len; ++i)
+      indexes.push_back(hyphenation.LastHyphenLocation(word, i));
+    return indexes;
+  }
 #endif
 
 #if defined(USE_MINIKIN_HYPHENATION)
   void TestWordToHyphenate(StringView text,
                            StringView expected,
-                           unsigned expected_num_leading_chars) {
-    unsigned num_leading_chars;
+                           wtf_size_t expected_num_leading_chars) {
+    wtf_size_t num_leading_chars;
     const StringView result =
         HyphenationMinikin::WordToHyphenate(text, &num_leading_chars);
     EXPECT_EQ(result, expected);
@@ -92,29 +111,33 @@ class HyphenationTest : public testing::Test {
 
 TEST_F(HyphenationTest, Get) {
   scoped_refptr<Hyphenation> hyphenation = base::AdoptRef(new NoHyphenation);
-  LayoutLocale::SetHyphenationForTesting("en-US", hyphenation);
-  EXPECT_EQ(hyphenation.get(), LayoutLocale::Get("en-US")->GetHyphenation());
-
-  LayoutLocale::SetHyphenationForTesting("en-UK", nullptr);
-  EXPECT_EQ(nullptr, LayoutLocale::Get("en-UK")->GetHyphenation());
+  AtomicString local_en_us("en-US");
+  LayoutLocale::SetHyphenationForTesting(local_en_us, hyphenation);
+  EXPECT_EQ(hyphenation.get(),
+            LayoutLocale::Get(local_en_us)->GetHyphenation());
+  AtomicString local_en_uk("en-UK");
+  LayoutLocale::SetHyphenationForTesting(local_en_uk, nullptr);
+  EXPECT_EQ(nullptr, LayoutLocale::Get(local_en_uk)->GetHyphenation());
 }
 
 #if defined(USE_MINIKIN_HYPHENATION)
 TEST_F(HyphenationTest, MapLocale) {
-  EXPECT_EQ(HyphenationMinikin::MapLocale("de-de"), "de-1996");
-  EXPECT_EQ(HyphenationMinikin::MapLocale("de-de-xyz"), "de-1996");
-  EXPECT_EQ(HyphenationMinikin::MapLocale("de-li"), "de-1996");
-  EXPECT_EQ(HyphenationMinikin::MapLocale("de-li-1901"), "de-ch-1901");
-  EXPECT_EQ(HyphenationMinikin::MapLocale("en"), "en-us");
-  EXPECT_EQ(HyphenationMinikin::MapLocale("en-gu"), "en-us");
-  EXPECT_EQ(HyphenationMinikin::MapLocale("en-gu-xyz"), "en-us");
-  EXPECT_EQ(HyphenationMinikin::MapLocale("en-xyz"), "en-gb");
-  EXPECT_EQ(HyphenationMinikin::MapLocale("en-xyz-xyz"), "en-gb");
-  EXPECT_EQ(HyphenationMinikin::MapLocale("fr-ca"), "fr");
-  EXPECT_EQ(HyphenationMinikin::MapLocale("fr-fr"), "fr");
-  EXPECT_EQ(HyphenationMinikin::MapLocale("fr-fr-xyz"), "fr");
-  EXPECT_EQ(HyphenationMinikin::MapLocale("mn-xyz"), "mn-cyrl");
-  EXPECT_EQ(HyphenationMinikin::MapLocale("und-Deva-xyz"), "hi");
+  EXPECT_EQ(HyphenationMinikin::MapLocale(AtomicString("de-de")), "de-1996");
+  EXPECT_EQ(HyphenationMinikin::MapLocale(AtomicString("de-de-xyz")),
+            "de-1996");
+  EXPECT_EQ(HyphenationMinikin::MapLocale(AtomicString("de-li")), "de-1996");
+  EXPECT_EQ(HyphenationMinikin::MapLocale(AtomicString("de-li-1901")),
+            "de-ch-1901");
+  EXPECT_EQ(HyphenationMinikin::MapLocale(AtomicString("en")), "en-us");
+  EXPECT_EQ(HyphenationMinikin::MapLocale(AtomicString("en-gu")), "en-us");
+  EXPECT_EQ(HyphenationMinikin::MapLocale(AtomicString("en-gu-xyz")), "en-us");
+  EXPECT_EQ(HyphenationMinikin::MapLocale(AtomicString("en-xyz")), "en-gb");
+  EXPECT_EQ(HyphenationMinikin::MapLocale(AtomicString("en-xyz-xyz")), "en-gb");
+  EXPECT_EQ(HyphenationMinikin::MapLocale(AtomicString("fr-ca")), "fr");
+  EXPECT_EQ(HyphenationMinikin::MapLocale(AtomicString("fr-fr")), "fr");
+  EXPECT_EQ(HyphenationMinikin::MapLocale(AtomicString("fr-fr-xyz")), "fr");
+  EXPECT_EQ(HyphenationMinikin::MapLocale(AtomicString("mn-xyz")), "mn-cyrl");
+  EXPECT_EQ(HyphenationMinikin::MapLocale(AtomicString("und-Deva-xyz")), "hi");
 
   const char* no_map_locales[] = {"en-us", "fr"};
   for (const char* locale_str : no_map_locales) {
@@ -126,10 +149,11 @@ TEST_F(HyphenationTest, MapLocale) {
 }
 #endif
 
-#if defined(USE_MINIKIN_HYPHENATION) || defined(OS_MAC)
+#if defined(USE_MINIKIN_HYPHENATION) || BUILDFLAG(IS_APPLE)
 TEST_F(HyphenationTest, HyphenLocations) {
-  scoped_refptr<Hyphenation> hyphenation = GetHyphenation("en-us");
-#if defined(OS_ANDROID)
+  scoped_refptr<Hyphenation> hyphenation =
+      GetHyphenation(AtomicString("en-us"));
+#if BUILDFLAG(IS_ANDROID)
   // Hyphenation is available only for Android M MR1 or later.
   if (!hyphenation)
     return;
@@ -181,8 +205,9 @@ TEST_F(HyphenationTest, WordToHyphenate) {
 #endif
 
 TEST_F(HyphenationTest, LeadingSpaces) {
-  scoped_refptr<Hyphenation> hyphenation = GetHyphenation("en-us");
-#if defined(OS_ANDROID)
+  scoped_refptr<Hyphenation> hyphenation =
+      GetHyphenation(AtomicString("en-us"));
+#if BUILDFLAG(IS_ANDROID)
   // Hyphenation is available only for Android M MR1 or later.
   if (!hyphenation)
     return;
@@ -204,9 +229,28 @@ TEST_F(HyphenationTest, LeadingSpaces) {
   EXPECT_EQ(0u, hyphenation->LastHyphenLocation(only_spaces, 3));
 }
 
+TEST_F(HyphenationTest, NonLetters) {
+  scoped_refptr<Hyphenation> hyphenation =
+      GetHyphenation(AtomicString("en-us"));
+#if BUILDFLAG(IS_ANDROID)
+  // Hyphenation is available only for Android M MR1 or later.
+  if (!hyphenation)
+    return;
+#endif
+
+  String non_letters("**********");
+  EXPECT_EQ(0u,
+            hyphenation->LastHyphenLocation(non_letters, non_letters.length()));
+
+  non_letters.Ensure16Bit();
+  EXPECT_EQ(0u,
+            hyphenation->LastHyphenLocation(non_letters, non_letters.length()));
+}
+
 TEST_F(HyphenationTest, English) {
-  scoped_refptr<Hyphenation> hyphenation = GetHyphenation("en-us");
-#if defined(OS_ANDROID)
+  scoped_refptr<Hyphenation> hyphenation =
+      GetHyphenation(AtomicString("en-us"));
+#if BUILDFLAG(IS_ANDROID)
   // Hyphenation is available only for Android M MR1 or later.
   if (!hyphenation)
     return;
@@ -216,15 +260,12 @@ TEST_F(HyphenationTest, English) {
   Vector<wtf_size_t, 8> locations = hyphenation->HyphenLocations("hyphenation");
   EXPECT_THAT(locations, testing::AnyOf(ElementsAreArray({6, 2}),
                                         ElementsAreArray({7, 6, 2})));
-
-  // Avoid hyphenating capitalized words.
-  locations = hyphenation->HyphenLocations("Hyphenation");
-  EXPECT_EQ(locations.size(), 0u);
 }
 
 TEST_F(HyphenationTest, German) {
-  scoped_refptr<Hyphenation> hyphenation = GetHyphenation("de-1996");
-#if defined(OS_ANDROID)
+  scoped_refptr<Hyphenation> hyphenation =
+      GetHyphenation(AtomicString("de-1996"));
+#if BUILDFLAG(IS_ANDROID)
   // Hyphenation is available only for Android M MR1 or later.
   if (!hyphenation)
     return;
@@ -233,11 +274,11 @@ TEST_F(HyphenationTest, German) {
 
   Vector<wtf_size_t, 8> locations =
       hyphenation->HyphenLocations("konsonantien");
+#if BUILDFLAG(IS_APPLE)
+  EXPECT_THAT(locations, ElementsAreArray({10, 8, 5, 3}));
+#else
   EXPECT_THAT(locations, ElementsAreArray({8, 5, 3}));
-
-  // Hyphenate capitalized words if German.
-  locations = hyphenation->HyphenLocations("Konsonantien");
-  EXPECT_THAT(locations, ElementsAreArray({8, 5, 3}));
+#endif
 
   // Test words with non-ASCII (> U+0080) characters.
   locations = hyphenation->HyphenLocations(
@@ -247,5 +288,129 @@ TEST_F(HyphenationTest, German) {
   EXPECT_THAT(locations, ElementsAreArray({4}));
 }
 #endif
+
+#if defined(USE_MINIKIN_HYPHENATION) || BUILDFLAG(IS_APPLE)
+TEST_F(HyphenationTest, CapitalizedWords) {
+  // Avoid hyphenating capitalized words for "en".
+  if (scoped_refptr<Hyphenation> en = GetHyphenation(AtomicString("en-us"))) {
+    Vector<wtf_size_t, 8> locations = en->HyphenLocations("Hyphenation");
+    EXPECT_EQ(locations.size(), 0u);
+  }
+
+  // Hyphenate capitalized words if German.
+  if (scoped_refptr<Hyphenation> de = GetHyphenation(AtomicString("de-1996"))) {
+    Vector<wtf_size_t, 8> locations = de->HyphenLocations("Konsonantien");
+    EXPECT_NE(locations.size(), 0u);
+  }
+}
+
+// Test the used values of the `hyphenate-limit-chars` property.
+// https://w3c.github.io/csswg-drafts/css-text-4/#propdef-hyphenate-limit-chars
+TEST_F(HyphenationTest, SetLimits) {
+  scoped_refptr<Hyphenation> en = GetHyphenation(AtomicString("en-us"));
+  if (!en)
+    return;
+
+  en->SetLimits(0, 0, 0);
+  EXPECT_THAT(en->MinPrefixLength(), Hyphenation::kDefaultMinPrefixLength);
+  EXPECT_THAT(en->MinSuffixLength(), Hyphenation::kDefaultMinSuffixLength);
+  EXPECT_THAT(en->MinWordLength(), Hyphenation::kDefaultMinWordLength);
+
+  const wtf_size_t word = Hyphenation::kDefaultMinWordLength + 1;
+  en->SetLimits(0, 0, word);
+  EXPECT_THAT(en->MinPrefixLength(), Hyphenation::kDefaultMinPrefixLength);
+  EXPECT_THAT(en->MinSuffixLength(), Hyphenation::kDefaultMinSuffixLength);
+  EXPECT_THAT(en->MinWordLength(), word);
+
+  const wtf_size_t prefix = Hyphenation::kDefaultMinPrefixLength + 1;
+  const wtf_size_t suffix = Hyphenation::kDefaultMinSuffixLength + 10;
+  en->SetLimits(prefix, suffix, 0);
+  EXPECT_THAT(en->MinPrefixLength(), prefix);
+  EXPECT_THAT(en->MinSuffixLength(), suffix);
+  EXPECT_THAT(en->MinWordLength(),
+              std::max(prefix + suffix, Hyphenation::kDefaultMinWordLength));
+
+  // If the `suffix` is missing, it is the same as the `prefix`.
+  en->SetLimits(prefix, 0, 0);
+  EXPECT_THAT(en->MinPrefixLength(), prefix);
+  EXPECT_THAT(en->MinSuffixLength(), prefix);
+  EXPECT_THAT(en->MinWordLength(),
+              std::max(prefix + prefix, Hyphenation::kDefaultMinWordLength));
+
+  // If the `prefix` is missing, it is `auto`.
+  en->SetLimits(0, suffix, 0);
+  EXPECT_THAT(en->MinPrefixLength(), Hyphenation::kDefaultMinPrefixLength);
+  EXPECT_THAT(en->MinSuffixLength(), suffix);
+  EXPECT_THAT(en->MinWordLength(),
+              std::max(Hyphenation::kDefaultMinPrefixLength + suffix,
+                       Hyphenation::kDefaultMinWordLength));
+
+  en->ResetLimits();
+}
+
+// Test the limitation with all the 3 public APIs.
+TEST_F(HyphenationTest, Limits) {
+  scoped_refptr<Hyphenation> en = GetHyphenation(AtomicString("en-us"));
+  if (!en)
+    return;
+
+  // "example" hyphenates to "ex-am-ple".
+  EXPECT_THAT(en->HyphenLocations("example"), ElementsAre(4, 2));
+  EXPECT_THAT(FirstHyphenLocations("example", *en),
+              ElementsAre(2, 2, 4, 4, 0, 0, 0));
+  EXPECT_THAT(LastHyphenLocations("example", *en),
+              ElementsAre(0, 0, 0, 2, 2, 4, 4));
+
+  // Limiting prefix >= 2 and suffix >= 3 doesn't affect results.
+  en->SetLimits(2, 3, 0);
+  EXPECT_THAT(en->HyphenLocations("example"), ElementsAre(4, 2));
+  EXPECT_THAT(FirstHyphenLocations("example", *en),
+              ElementsAre(2, 2, 4, 4, 0, 0, 0));
+  EXPECT_THAT(LastHyphenLocations("example", *en),
+              ElementsAre(0, 0, 0, 2, 2, 4, 4));
+
+  // Limiting the prefix >= 3 disables the first hyphenation point.
+  en->SetLimits(3, 0, 0);
+  EXPECT_THAT(en->HyphenLocations("example"), ElementsAre(4));
+  EXPECT_THAT(FirstHyphenLocations("example", *en),
+              ElementsAre(4, 4, 4, 4, 0, 0, 0));
+  EXPECT_THAT(LastHyphenLocations("example", *en),
+              ElementsAre(0, 0, 0, 0, 0, 4, 4));
+
+  // Limiting the suffix >= 4 disables the last hyphenation point.
+  en->SetLimits(0, 4, 0);
+  EXPECT_THAT(en->HyphenLocations("example"), ElementsAre(2));
+  EXPECT_THAT(FirstHyphenLocations("example", *en),
+              ElementsAre(2, 2, 0, 0, 0, 0, 0));
+  EXPECT_THAT(LastHyphenLocations("example", *en),
+              ElementsAre(0, 0, 0, 2, 2, 2, 2));
+
+  // Applying both limitations results in no hyphenation points.
+  en->SetLimits(3, 4, 0);
+  EXPECT_THAT(en->HyphenLocations("example"), ElementsAre());
+  EXPECT_THAT(FirstHyphenLocations("example", *en),
+              ElementsAre(0, 0, 0, 0, 0, 0, 0));
+  EXPECT_THAT(LastHyphenLocations("example", *en),
+              ElementsAre(0, 0, 0, 0, 0, 0, 0));
+
+  // Limiting the word length >= 7 doesn't affect the results.
+  en->SetLimits(0, 0, 7);
+  EXPECT_THAT(en->HyphenLocations("example"), ElementsAre(4, 2));
+  EXPECT_THAT(FirstHyphenLocations("example", *en),
+              ElementsAre(2, 2, 4, 4, 0, 0, 0));
+  EXPECT_THAT(LastHyphenLocations("example", *en),
+              ElementsAre(0, 0, 0, 2, 2, 4, 4));
+
+  // Limiting the word length >= 8 disables hyphenating "example".
+  en->SetLimits(0, 0, 8);
+  EXPECT_THAT(en->HyphenLocations("example"), ElementsAre());
+  EXPECT_THAT(FirstHyphenLocations("example", *en),
+              ElementsAre(0, 0, 0, 0, 0, 0, 0));
+  EXPECT_THAT(LastHyphenLocations("example", *en),
+              ElementsAre(0, 0, 0, 0, 0, 0, 0));
+
+  en->ResetLimits();
+}
+#endif  // defined(USE_MINIKIN_HYPHENATION) || BUILDFLAG(IS_APPLE)
 
 }  // namespace blink

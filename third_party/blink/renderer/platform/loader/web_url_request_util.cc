@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,9 +9,13 @@
 
 #include <limits>
 
+#include "base/atomic_sequence_num.h"
 #include "base/check.h"
 #include "base/notreached.h"
+#include "base/rand_util.h"
+#include "base/time/time.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
+#include "mojo/public/cpp/bindings/remote.h"
 #include "services/network/public/mojom/data_pipe_getter.mojom-blink.h"
 #include "third_party/blink/public/mojom/blob/blob.mojom-blink.h"
 #include "third_party/blink/public/mojom/blob/blob_registry.mojom-blink.h"
@@ -46,10 +50,11 @@ class HeaderFlattener : public WebHTTPHeaderVisitor {
 
     // Skip over referrer headers found in the header map because we already
     // pulled it out as a separate parameter.
-    if (EqualIgnoringASCIICase(wtf_name, "referer"))
+    if (EqualIgnoringAsciiCase(wtf_name, "referer")) {
       return;
+    }
 
-    if (!buffer_.IsEmpty())
+    if (!buffer_.empty())
       buffer_.Append("\r\n");
     buffer_.Append(wtf_name);
     buffer_.Append(": ");
@@ -61,6 +66,21 @@ class HeaderFlattener : public WebHTTPHeaderVisitor {
  private:
   StringBuilder buffer_;
 };
+
+int GetInitialRequestID() {
+  // Starting with a random number speculatively avoids RDH_INVALID_REQUEST_ID
+  // which are assumed to have been caused by restarting RequestID at 0 when
+  // restarting a renderer after a crash - this would cause collisions if
+  // requests from the previously crashed renderer are still active.  See
+  // https://crbug.com/614281#c61 for more details about this hypothesis.
+  //
+  // To avoid increasing the likelihood of overflowing the range of available
+  // RequestIDs, kMax is set to a relatively low value of 2^20 (rather than
+  // to something higher like 2^31).
+  const int kMin = 0;
+  const int kMax = 1 << 20;
+  return base::RandIntInclusive(kMin, kMax);
+}
 
 }  // namespace
 
@@ -80,13 +100,12 @@ WebHTTPBody GetWebHTTPBodyForRequestBody(
     switch (element.type()) {
       case network::DataElement::Tag::kBytes: {
         const auto& bytes = element.As<network::DataElementBytes>().bytes();
-        http_body.AppendData(
-            WebData(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+        http_body.AppendData(WebData(bytes));
         break;
       }
       case network::DataElement::Tag::kFile: {
         const auto& file = element.As<network::DataElementFile>();
-        absl::optional<base::Time> modification_time;
+        std::optional<base::Time> modification_time;
         if (!file.expected_modification_time().is_null())
           modification_time = file.expected_modification_time();
         http_body.AppendFileRange(
@@ -104,7 +123,6 @@ WebHTTPBody GetWebHTTPBodyForRequestBody(
       }
       case network::DataElement::Tag::kChunkedDataPipe:
         NOTREACHED();
-        break;
     }
   }
   return http_body;
@@ -126,15 +144,15 @@ scoped_refptr<network::ResourceRequestBody> GetRequestBodyForWebURLRequest(
 }
 
 scoped_refptr<network::ResourceRequestBody> GetRequestBodyForWebHTTPBody(
-    const WebHTTPBody& httpBody) {
+    const WebHTTPBody& http_body) {
   scoped_refptr<network::ResourceRequestBody> request_body =
       new network::ResourceRequestBody();
   size_t i = 0;
   WebHTTPBody::Element element;
-  while (httpBody.ElementAt(i++, element)) {
+  while (http_body.ElementAt(i++, element)) {
     switch (element.type) {
       case HTTPBodyElementType::kTypeData:
-        request_body->AppendBytes(element.data.Copy().ReleaseVector());
+        request_body->AppendBytes(element.data.Copy());
         break;
       case HTTPBodyElementType::kTypeFile:
         if (element.file_length == -1) {
@@ -181,8 +199,8 @@ scoped_refptr<network::ResourceRequestBody> GetRequestBodyForWebHTTPBody(
       }
     }
   }
-  request_body->set_identifier(httpBody.Identifier());
-  request_body->set_contains_sensitive_info(httpBody.ContainsPasswordData());
+  request_body->set_identifier(http_body.Identifier());
+  request_body->set_contains_sensitive_info(http_body.ContainsPasswordData());
   return request_body;
 }
 
@@ -202,6 +220,12 @@ mojom::blink::MixedContentContextType
 GetMixedContentContextTypeForWebURLRequest(const WebURLRequest& request) {
   return MixedContent::ContextTypeFromRequestContext(
       request.GetRequestContext(), MixedContent::CheckModeForPlugin::kLax);
+}
+
+int GenerateRequestId() {
+  static const int kInitialRequestID = GetInitialRequestID();
+  static base::AtomicSequenceNumber sequence;
+  return kInitialRequestID + sequence.GetNext();
 }
 
 }  // namespace blink

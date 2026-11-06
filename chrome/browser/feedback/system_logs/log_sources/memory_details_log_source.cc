@@ -1,10 +1,9 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/feedback/system_logs/log_sources/memory_details_log_source.h"
 
-#include "base/macros.h"
 #include "chrome/browser/memory_details.h"
 #include "components/feedback/feedback_report.h"
 #include "content/public/browser/browser_thread.h"
@@ -17,36 +16,36 @@ class SystemLogsMemoryHandler : public MemoryDetails {
   explicit SystemLogsMemoryHandler(SysLogsSourceCallback callback)
       : callback_(std::move(callback)) {}
 
+  SystemLogsMemoryHandler(const SystemLogsMemoryHandler&) = delete;
+  SystemLogsMemoryHandler& operator=(const SystemLogsMemoryHandler&) = delete;
+
   // Sends the data to the callback.
   // MemoryDetails override.
   void OnDetailsAvailable() override {
-    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
     auto response = std::make_unique<SystemLogsResponse>();
     (*response)["mem_usage"] = ToLogString(/*include_tab_title=*/false);
     (*response)[feedback::FeedbackReport::kMemUsageWithTabTitlesKey] =
         ToLogString(/*include_tab_title=*/true);
-    DCHECK(!callback_.is_null());
+    CHECK(!callback_.is_null(), base::NotFatalUntil::M161);
     std::move(callback_).Run(std::move(response));
   }
 
  private:
-  ~SystemLogsMemoryHandler() override {}
+  ~SystemLogsMemoryHandler() override = default;
   SysLogsSourceCallback callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(SystemLogsMemoryHandler);
 };
 
 MemoryDetailsLogSource::MemoryDetailsLogSource()
     : SystemLogsSource("MemoryDetails") {
 }
 
-MemoryDetailsLogSource::~MemoryDetailsLogSource() {
-}
+MemoryDetailsLogSource::~MemoryDetailsLogSource() = default;
 
 void MemoryDetailsLogSource::Fetch(SysLogsSourceCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(!callback.is_null());
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
+  CHECK(!callback.is_null(), base::NotFatalUntil::M161);
 
   scoped_refptr<SystemLogsMemoryHandler> handler(
       new SystemLogsMemoryHandler(std::move(callback)));

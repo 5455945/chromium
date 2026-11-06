@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,17 @@
 
 #include <memory>
 
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
+#include "base/scoped_observation.h"
+#include "base/time/time.h"
+#include "chrome/browser/profiles/profile_observer.h"
+#include "components/session_manager/core/session_manager.h"
 #include "components/session_manager/core/session_manager_observer.h"
 #include "components/user_manager/user.h"
 
-class ClipboardImageModelFactoryImpl;
+class PrefService;
 class Profile;
 
 namespace user_manager {
@@ -19,7 +26,10 @@ class User;
 
 namespace ash {
 
-class UserSessionInitializer : public session_manager::SessionManagerObserver {
+class CrosSafetyService;
+
+class UserSessionInitializer : public session_manager::SessionManagerObserver,
+                               public ProfileObserver {
  public:
   // Parameters to use when initializing the RLZ library.  These fields need
   // to be retrieved from a blocking task and this structure is used to pass
@@ -33,7 +43,10 @@ class UserSessionInitializer : public session_manager::SessionManagerObserver {
     base::TimeDelta time_since_oobe_completion;
   };
 
-  UserSessionInitializer();
+  // `local_state` and `session_manager` must not be nullptr, and it must
+  // outlive this instance.
+  UserSessionInitializer(PrefService* local_state,
+                         session_manager::SessionManager* session_manager);
   UserSessionInitializer(const UserSessionInitializer&) = delete;
   UserSessionInitializer& operator=(const UserSessionInitializer&) = delete;
   ~UserSessionInitializer() override;
@@ -44,9 +57,13 @@ class UserSessionInitializer : public session_manager::SessionManagerObserver {
   // session_manager::SessionManagerObserver:
   void OnUserProfileLoaded(const AccountId& account_id) override;
   void OnUserSessionStarted(bool is_primary_user) override;
+  void OnUserSessionStartUpTaskCompleted() override;
+
+  // ProfileObserver:
+  void OnProfileWillBeDestroyed(Profile* profile) override;
 
   // Called before a session begins loading.
-  void PreStartSession();
+  void PreStartSession(bool is_primary_session);
 
   // Initialize child user profile services that depend on the policy.
   void InitializeChildUserServices(Profile* profile);
@@ -65,13 +82,6 @@ class UserSessionInitializer : public session_manager::SessionManagerObserver {
   // and start certificate loader with it.
   void InitializeCerts(Profile* profile);
 
-  // Starts loading CRL set.
-  void InitializeCRLSetFetcher();
-
-  // Initializes Certificate Transparency-related components.
-  void InitializeCertificateTransparencyComponents(
-      const user_manager::User* user);
-
   // Initialize all services that need the primary profile.
   void InitializePrimaryProfileServices(Profile* profile,
                                         const user_manager::User* user);
@@ -79,14 +89,20 @@ class UserSessionInitializer : public session_manager::SessionManagerObserver {
   // Initializes RLZ. If `disabled` is true, RLZ pings are disabled.
   void InitRlzImpl(Profile* profile, const RlzInitParams& params);
 
-  Profile* primary_profile_ = nullptr;
+  const raw_ref<PrefService> local_state_;
+
+  base::ScopedObservation<session_manager::SessionManager,
+                          session_manager::SessionManagerObserver>
+      session_manager_observation_{this};
+
+  raw_ptr<Profile> primary_profile_ = nullptr;
+  base::ScopedObservation<Profile, ProfileObserver> primary_profile_observer_{
+      this};
+
+  std::unique_ptr<CrosSafetyService> cros_safety_service_;
 
   bool inited_for_testing_ = false;
   base::OnceClosure init_rlz_impl_closure_for_testing_;
-
-  // Clipboard html image generator for the primary user.
-  std::unique_ptr<ClipboardImageModelFactoryImpl>
-      clipboard_image_model_factory_impl_;
 
   base::WeakPtrFactory<UserSessionInitializer> weak_factory_{this};
 };

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,12 @@
 #include <memory>
 #include <utility>
 
-#include "ash/ambient/ui/ambient_view_delegate.h"
+#include "ash/ambient/ambient_ui_settings.h"
+#include "ash/ambient/metrics/ambient_metrics.h"
+#include "ash/ambient/resources/ambient_animation_static_resources.h"
+#include "ash/ambient/ui/ambient_animation_view.h"
 #include "ash/ambient/ui/ambient_view_ids.h"
-#include "ash/ambient/ui/photo_view.h"
-#include "ash/ambient/util/ambient_util.h"
-#include "ash/public/cpp/shell_window_ids.h"
-#include "ui/aura/window.h"
+#include "base/check.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/views/background.h"
 #include "ui/views/layout/fill_layout.h"
@@ -21,25 +21,24 @@
 
 namespace ash {
 
-AmbientContainerView::AmbientContainerView(AmbientViewDelegate* delegate)
-    : delegate_(delegate) {
-  SetID(AmbientViewID::kAmbientContainerView);
-  Init();
+AmbientContainerView::AmbientContainerView(
+    AmbientUiSettings ui_settings,
+    std::unique_ptr<views::View> main_rendering_view) {
+  CHECK(main_rendering_view);
+  InitializeCommonSettings();
+  AddChildView(std::move(main_rendering_view));
 }
 
 AmbientContainerView::~AmbientContainerView() = default;
 
-void AmbientContainerView::Init() {
+void AmbientContainerView::InitializeCommonSettings() {
+  SetID(AmbientViewID::kAmbientContainerView);
   // TODO(b/139954108): Choose a better dark mode theme color.
   SetBackground(views::CreateSolidBackground(SK_ColorBLACK));
-  // Updates focus behavior to receive key press events.
-  SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
   SetLayoutManager(std::make_unique<views::FillLayout>());
-
-  photo_view_ = AddChildView(std::make_unique<PhotoView>(delegate_));
 }
 
-BEGIN_METADATA(AmbientContainerView, views::View)
+BEGIN_METADATA(AmbientContainerView)
 END_METADATA
 
 }  // namespace ash

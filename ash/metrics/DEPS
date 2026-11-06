@@ -1,3 +1,5 @@
 include_rules = [
-  "+chromeos/login/login_state",
+  "+cc/metrics",
+  "+chromeos/ash/components/login/login_state",
+  "+chromeos/ash/components/metrics",
 ]

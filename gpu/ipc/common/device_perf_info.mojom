@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@ module gpu.mojom;
 
 // Corresponds to D3D_FEATURE_LEVEL in <d3dcommon.h>
 enum Direct3DFeatureLevel {
+  k1_0_Generic,
   k1_0_Core,
   k9_1,
   k9_2,
@@ -16,6 +17,7 @@ enum Direct3DFeatureLevel {
   k11_1,
   k12_0,
   k12_1,
+  k12_2,
 };
 
 // Corresponds to |gpu::HasDisceretGpu| in "gpu/config/device_perf_info.h"

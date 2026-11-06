@@ -1,112 +1,58 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.price_tracking;
 
-import android.annotation.TargetApi;
 import android.app.Notification;
 import android.app.NotificationChannel;
-import android.app.NotificationManager;
-import android.content.Context;
 import android.content.Intent;
-import android.net.Uri;
-import android.os.Build;
-import android.provider.Browser;
-import android.provider.Settings;
 
-import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 
-import org.chromium.base.ContextUtils;
-import org.chromium.base.IntentUtils;
-import org.chromium.chrome.browser.browserservices.intents.WebappConstants;
-import org.chromium.chrome.browser.document.ChromeLauncherActivity;
-import org.chromium.chrome.browser.notifications.NotificationIntentInterceptor;
+import org.chromium.base.Callback;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.notifications.NotificationUmaTracker;
-import org.chromium.chrome.browser.notifications.channels.ChromeChannelDefinitions;
-import org.chromium.chrome.browser.subscriptions.CommerceSubscription;
-import org.chromium.chrome.browser.subscriptions.CommerceSubscription.CommerceSubscriptionType;
-import org.chromium.chrome.browser.subscriptions.CommerceSubscription.SubscriptionManagementType;
-import org.chromium.chrome.browser.subscriptions.CommerceSubscription.TrackingIdType;
-import org.chromium.chrome.browser.subscriptions.CommerceSubscriptionsServiceFactory;
-import org.chromium.chrome.browser.subscriptions.SubscriptionsManagerImpl;
-import org.chromium.chrome.browser.tasks.tab_management.PriceTrackingUtilities;
-import org.chromium.components.browser_ui.notifications.NotificationManagerProxy;
-import org.chromium.components.browser_ui.notifications.NotificationManagerProxyImpl;
-import org.chromium.components.browser_ui.notifications.channels.ChannelsInitializer;
+import org.chromium.chrome.browser.notifications.NotificationUmaTracker.SystemNotificationType;
 
-/**
- * Manage price drop notifications.
- */
-public class PriceDropNotificationManager {
-    private static final String ACTION_APP_NOTIFICATION_SETTINGS =
-            "android.settings.APP_NOTIFICATION_SETTINGS";
-    private static final String EXTRA_APP_PACKAGE = "app_package";
-    private static final String EXTRA_APP_UID = "app_uid";
-    // The action ids should be the same as defined in the server, see {@link
-    // HandleProductUpdateEventsProducerModule}.
-    private static final String ACTION_ID_VISIT_SITE = "visit_site";
-    private static final String ACTION_ID_TURN_OFF_ALERT = "turn_off_alert";
-
-    private static NotificationManagerProxy sNotificationManagerForTesting;
-
-    private final Context mContext;
-    private final NotificationManagerProxy mNotificationManager;
-
-    public PriceDropNotificationManager() {
-        mContext = ContextUtils.getApplicationContext();
-        mNotificationManager = new NotificationManagerProxyImpl(mContext);
-    }
-
+/** Manage price drop notifications. */
+@NullMarked
+public interface PriceDropNotificationManager {
     /**
      * @return Whether the price drop notification type is enabled. For now it is used in downstream
-     *         which could influence the Chime registration.
+     *     which could influence the Chime registration.
      */
-    public boolean isEnabled() {
-        return PriceTrackingUtilities.ENABLE_PRICE_NOTIFICATION.getValue();
-    }
+    boolean isEnabled();
 
     /**
-     * @return Whether price drop notifications can be posted.
+     * Check whether price drop notifications can be posted.
+     *
+     * @param callback Callback to be invoked on whether notification can be posted.
      */
-    public boolean canPostNotification() {
-        if (!areAppNotificationsEnabled()
-                || !PriceTrackingUtilities.isPriceDropNotificationEligible()) {
-            return false;
-        }
+    void canPostNotification(Callback<Boolean> callback);
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = getNotificationChannel();
-            if (channel == null || channel.getImportance() == NotificationManager.IMPORTANCE_NONE) {
-                return false;
-            }
-        }
-
-        return true;
-    }
+    /**
+     * Check whether price drop notifications can be posted and record user opt-in metrics.
+     *
+     * @param callback Callback to be invoked on the result of the check.
+     */
+    void canPostNotificationWithMetricsRecorded(Callback<Boolean> callback);
 
     /**
      * Record UMAs after posting price drop notifications.
      *
      * @param notification that has been posted.
      */
-    public void onNotificationPosted(@Nullable Notification notification) {
-        NotificationUmaTracker.getInstance().onNotificationShown(
-                NotificationUmaTracker.SystemNotificationType.PRICE_DROP_ALERTS, notification);
-    }
+    void onNotificationPosted(@Nullable Notification notification);
 
     /**
      * When user clicks the notification, they will be sent to the tab with price drop which
-     * triggered the notification.
+     * triggered the notification. Only Chime notification code path should use this.
      *
      * @param url of the tab which triggered the notification.
      */
-    public void onNotificationClicked(String url) {
-        NotificationUmaTracker.getInstance().onNotificationContentClick(
-                NotificationUmaTracker.SystemNotificationType.PRICE_DROP_ALERTS,
-                NotificationIntentInterceptor.INVALID_CREATE_TIME);
-    }
+    void onNotificationClicked(String url);
 
     /**
      * Handles the notification action click events.
@@ -114,149 +60,106 @@ public class PriceDropNotificationManager {
      * @param actionId the id used to identify certain action.
      * @param url of the tab which triggered the notification.
      * @param offerId the id of the offer associated with this notification.
+     * @param recordMetrics Whether to record metrics using {@link NotificationUmaTracker}. Only
+     *         Chime notification code path should set this to true.
      */
-    public void onNotificationActionClicked(String actionId, String url, @Nullable String offerId) {
-        if (actionId.equals(ACTION_ID_VISIT_SITE)) {
-            NotificationUmaTracker.getInstance().onNotificationActionClick(
-                    NotificationUmaTracker.ActionType.PRICE_DROP_VISIT_SITE,
-                    NotificationUmaTracker.SystemNotificationType.PRICE_DROP_ALERTS,
-                    NotificationIntentInterceptor.INVALID_CREATE_TIME);
-        } else if (actionId.equals(ACTION_ID_TURN_OFF_ALERT)) {
-            if (offerId == null) return;
-            // TODO(xingliu): Ensure native is loaded. Or it may crash.
-            SubscriptionsManagerImpl subscriptionsManager =
-                    (new CommerceSubscriptionsServiceFactory())
-                            .getForLastUsedProfile()
-                            .getSubscriptionsManager();
-            subscriptionsManager.unsubscribe(
-                    new CommerceSubscription(CommerceSubscriptionType.PRICE_TRACK, offerId,
-                            SubscriptionManagementType.CHROME_MANAGED, TrackingIdType.OFFER_ID),
-                    (didSucceed) -> { assert didSucceed : "Failed to remove subscriptions."; });
-            NotificationUmaTracker.getInstance().onNotificationActionClick(
-                    NotificationUmaTracker.ActionType.PRICE_DROP_TURN_OFF_ALERT,
-                    NotificationUmaTracker.SystemNotificationType.PRICE_DROP_ALERTS,
-                    NotificationIntentInterceptor.INVALID_CREATE_TIME);
-        }
-    }
+    void onNotificationActionClicked(
+            String actionId, String url, @Nullable String offerId, boolean recordMetrics);
+
+    /**
+     * Handles the notification action click events.
+     *
+     * @param actionId the id used to identify certain action.
+     * @param url of the tab which triggered the notification.
+     * @param offerId the id of the offer associated with this notification.
+     * @param clusterId The id of the cluster associated with the product notification.
+     * @param recordMetrics Whether to record metrics using {@link NotificationUmaTracker}. Only
+     *     Chime notification code path should set this to true.
+     */
+    void onNotificationActionClicked(
+            String actionId,
+            String url,
+            String offerId,
+            @Nullable String clusterId,
+            boolean recordMetrics);
+
+    @Deprecated
+    Intent getNotificationClickIntent(String url);
 
     /**
      * @return The intent that we will use to send users to the tab which triggered the
      *         notification.
      *
      * @param url of the tab which triggered the notification.
+     * @param notificationId the notification id.
      */
-    public Intent getNotificationClickIntent(String url) {
-        Intent intent =
-                new Intent()
-                        .setAction(Intent.ACTION_VIEW)
-                        .setData(Uri.parse(url))
-                        .setClass(mContext, ChromeLauncherActivity.class)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NEW_DOCUMENT)
-                        .putExtra(Browser.EXTRA_APPLICATION_ID, mContext.getPackageName())
-                        .putExtra(WebappConstants.REUSE_URL_MATCHING_TAB_ELSE_NEW_TAB, true);
-        IntentUtils.addTrustedIntentExtras(intent);
-        return intent;
-    }
+    Intent getNotificationClickIntent(String url, int notificationId);
+
+    @Deprecated
+    Intent getNotificationActionClickIntent(String actionId, String url, String offerId);
+
+    @Deprecated
+    Intent getNotificationActionClickIntent(
+            String actionId, String url, String offerId, String clusterId);
 
     /**
      * Gets the notification action click intents.
      *
      * @param actionId the id used to identify certain action.
      * @param url of the tab which triggered the notification.
+     * @param offerId The offer id of the product.
+     * @param clusterId The cluster id of the product.
+     * @param notificationId the notification id.
      */
-    public Intent getNotificationActionClickIntent(String actionId, String url) {
-        return actionId.equals(ACTION_ID_VISIT_SITE) ? getNotificationClickIntent(url) : null;
-    }
+    Intent getNotificationActionClickIntent(
+            String actionId,
+            String url,
+            String offerId,
+            @Nullable String clusterId,
+            int notificationId);
 
     /**
      * @return Whether app notifications are enabled.
      */
-    public boolean areAppNotificationsEnabled() {
-        if (sNotificationManagerForTesting != null) {
-            return sNotificationManagerForTesting.areNotificationsEnabled();
-        }
-        return mNotificationManager.areNotificationsEnabled();
-    }
+    boolean areAppNotificationsEnabled();
 
-    /**
-     * Create the notification channel for price drop notifications.
-     */
-    @TargetApi(Build.VERSION_CODES.O)
-    public void createNotificationChannel() {
-        NotificationChannel channel = getNotificationChannel();
-        if (channel != null) return;
-        new ChannelsInitializer(mNotificationManager, ChromeChannelDefinitions.getInstance(),
-                mContext.getResources())
-                .ensureInitialized(ChromeChannelDefinitions.ChannelId.PRICE_DROP);
-    }
+    /** Create the notification channel for price drop notifications. */
+    void createNotificationChannel();
 
-    /**
-     * Send users to notification settings so they can manage price drop notifications.
-     */
-    public void launchNotificationSettings() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            // Make sure the channel is initialized before sending users to the settings.
-            createNotificationChannel();
-        }
-        mContext.startActivity(getNotificationSettingsIntent());
-        // Disable PriceAlertsMessageCard after the first time we send users to notification
-        // settings.
-        PriceTrackingUtilities.disablePriceAlertsMessageCard();
-    }
+    /** Send users to notification settings so they can manage price drop notifications. */
+    void launchNotificationSettings();
 
     /**
      * @return The intent that we will use to send users to notification settings.
      */
     @VisibleForTesting
-    public Intent getNotificationSettingsIntent() {
-        Intent intent = new Intent();
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            if (areAppNotificationsEnabled()) {
-                intent.setAction(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS);
-                intent.putExtra(Settings.EXTRA_APP_PACKAGE, mContext.getPackageName());
-                intent.putExtra(
-                        Settings.EXTRA_CHANNEL_ID, ChromeChannelDefinitions.ChannelId.PRICE_DROP);
-            } else {
-                intent.setAction(Settings.ACTION_APP_NOTIFICATION_SETTINGS);
-                intent.putExtra(Settings.EXTRA_APP_PACKAGE, mContext.getPackageName());
-            }
-        } else {
-            intent.setAction(ACTION_APP_NOTIFICATION_SETTINGS);
-            intent.putExtra(EXTRA_APP_PACKAGE, mContext.getPackageName());
-            intent.putExtra(EXTRA_APP_UID, mContext.getApplicationInfo().uid);
-        }
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        return intent;
-    }
+    Intent getNotificationSettingsIntent();
 
     /**
-     * @return The price drop notification channel.
-     */
-    @VisibleForTesting
-    @TargetApi(Build.VERSION_CODES.O)
-    public NotificationChannel getNotificationChannel() {
-        return mNotificationManager.getNotificationChannel(
-                ChromeChannelDefinitions.ChannelId.PRICE_DROP);
-    }
-
-    /**
-     * Set notificationManager for testing.
+     * Gets the price drop notification channel.
      *
-     * @param notificationManager that will be set.
+     * @param callback Callback to be invoked with the notification channel if available, or null
+     *     otherwise.
      */
     @VisibleForTesting
-    public static void setNotificationManagerForTesting(
-            NotificationManagerProxy notificationManager) {
-        sNotificationManagerForTesting = notificationManager;
-    }
+    void getNotificationChannel(Callback<NotificationChannel> callback);
+
+    /** Delete price drop notification channel for testing. */
+    void deleteChannelForTesting();
+
+    /** Record how many notifications are shown in the given window per management type. */
+    void recordMetricsForNotificationCounts();
+
+    /** Check if the shown notifications in given window have reached the max allowed number. */
+    boolean hasReachedMaxAllowedNotificationNumber(@SystemNotificationType int type);
 
     /**
-     * Delete price drop notification channel for testing.
+     * Update the stored notification timestamps. Outdated timestamps are removed and current
+     * timestamp could be attached.
+     *
+     * @param type The notification UMA type.
+     * @param attachCurrentTime Whether to store current timestamp.
+     * @return the number of stored timestamps after update.
      */
-    @VisibleForTesting
-    @TargetApi(Build.VERSION_CODES.O)
-    public void deleteChannelForTesting() {
-        mNotificationManager.deleteNotificationChannel(
-                ChromeChannelDefinitions.ChannelId.PRICE_DROP);
-    }
+    int updateNotificationTimestamps(@SystemNotificationType int type, boolean attachCurrentTime);
 }

@@ -1,12 +1,14 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "chromecast/media/audio/interleaved_channel_mixer.h"
 
 #include <cmath>
 #include <string>
 #include <tuple>
 
-#include "chromecast/media/audio/interleaved_channel_mixer.h"
+#include "base/compiler_specific.h"
 #include "media/base/audio_bus.h"
 #include "media/base/audio_sample_types.h"
 #include "media/base/channel_layout.h"
@@ -25,12 +27,6 @@ using TestParams = std::tuple<::media::ChannelLayout /* input layout */,
                               ::media::ChannelLayout /* output layout */>;
 
 class InterleavedChannelMixerTest : public testing::TestWithParam<TestParams> {
- public:
-  InterleavedChannelMixerTest() = default;
-  ~InterleavedChannelMixerTest() override = default;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(InterleavedChannelMixerTest);
 };
 
 TEST_P(InterleavedChannelMixerTest, Transform) {
@@ -44,9 +40,10 @@ TEST_P(InterleavedChannelMixerTest, Transform) {
 
   auto original = ::media::AudioBus::Create(num_input_channels, kNumFrames);
   for (int c = 0; c < num_input_channels; ++c) {
+    auto channel = original->channel(c);
     for (int f = 0; f < kNumFrames; ++f) {
-      original->channel(c)[f] = std::pow(-1, f + c) * 0.01 +
-                                c / static_cast<float>(num_input_channels * 10);
+      channel[f] = std::pow(-1, f + c) * 0.01 +
+                   c / static_cast<float>(num_input_channels * 10);
     }
   }
 
@@ -55,12 +52,14 @@ TEST_P(InterleavedChannelMixerTest, Transform) {
 
   // Check that the output of upstream ChannelMixer + interleave is the same
   // as the output of interleave + InterleavedChannelMixer.
-  ::media::ChannelMixer channel_mixer(input_layout, output_layout);
+  ::media::ChannelMixer channel_mixer(
+      ::media::ChannelLayoutConfig(input_layout, num_input_channels),
+      ::media::ChannelLayoutConfig(output_layout, num_output_channels));
   channel_mixer.Transform(original.get(), transformed.get());
 
   std::vector<float> original_interleaved(num_input_channels * kNumFrames);
   original->ToInterleaved<::media::Float32SampleTypeTraits>(
-      kNumFrames, original_interleaved.data());
+      original_interleaved);
 
   InterleavedChannelMixer interleaved_mixer(input_layout, num_input_channels,
                                             output_layout, num_output_channels,
@@ -70,12 +69,13 @@ TEST_P(InterleavedChannelMixerTest, Transform) {
 
   std::vector<float> transformed_interleaved(num_output_channels * kNumFrames);
   transformed->ToInterleaved<::media::Float32SampleTypeTraits>(
-      kNumFrames, transformed_interleaved.data());
+      transformed_interleaved);
 
   for (int f = 0; f < kNumFrames; ++f) {
     for (int c = 0; c < num_output_channels; ++c) {
-      EXPECT_FLOAT_EQ(interleaved_mixed[f * num_output_channels + c],
-                      transformed_interleaved[f * num_output_channels + c])
+      UNSAFE_TODO(
+          EXPECT_FLOAT_EQ(interleaved_mixed[f * num_output_channels + c],
+                          transformed_interleaved[f * num_output_channels + c]))
           << "at frame " << f << ", channel " << c;
     }
   }

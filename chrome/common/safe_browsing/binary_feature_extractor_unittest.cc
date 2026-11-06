@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,17 +7,48 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <algorithm>
+#include <cstdint>
 #include <memory>
+#include <string_view>
 
 #include "base/base_paths.h"
+#include "base/containers/heap_array.h"
+#include "base/containers/span.h"
 #include "base/files/file.h"
+#include "base/files/file_enumerator.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/path_service.h"
+#include "base/test/scoped_path_override.h"
+#include "build/build_config.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
 #include "crypto/sha2.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace safe_browsing {
+
+using ::testing::_;
+
+namespace {
+
+// A mock BinaryFeatureExtractor that mocks only `ExtractImageFeaturesFromData`
+// so that we can test `ExtractImageFeatures`.
+class MockBinaryFeatureExtractor : public BinaryFeatureExtractor {
+ public:
+  MOCK_METHOD(bool,
+              ExtractImageFeaturesFromData,
+              (base::span<const uint8_t>,
+               ExtractHeadersOption,
+               ClientDownloadRequest_ImageHeaders*,
+               google::protobuf::RepeatedPtrField<std::string>*));
+
+ protected:
+  ~MockBinaryFeatureExtractor() override = default;
+};
+
+}  // namespace
 
 class BinaryFeatureExtractorTest : public testing::Test {
  protected:
@@ -28,11 +59,13 @@ class BinaryFeatureExtractorTest : public testing::Test {
     path_ = temp_dir_.GetPath().Append(FILE_PATH_LITERAL("file.dll"));
   }
 
-  // Writes |size| bytes from |data| to |path_|.
-  void WriteFileToHash(const char* data, int size) {
+  // Writes |buffer| to |path_|.
+  void WriteFileToHash(base::span<const uint8_t> buffer) {
     base::File file(path_, base::File::FLAG_CREATE | base::File::FLAG_WRITE);
     ASSERT_TRUE(file.IsValid());
-    ASSERT_EQ(size, file.WriteAtCurrentPos(data, size));
+    std::optional<size_t> result = file.WriteAtCurrentPos(buffer);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_EQ(buffer.size(), result.value());
   }
 
   // Verifies that |path_| hashes to |digest|.
@@ -64,43 +97,154 @@ TEST_F(BinaryFeatureExtractorTest, ExtractDigestNoFile) {
 
 // Hash a file that is less than 1 4k block.
 TEST_F(BinaryFeatureExtractorTest, ExtractSmallDigest) {
-  static const uint8_t kDigest[] = {
+  constexpr uint8_t kDigest[] = {
       0x70, 0x27, 0x7b, 0xad, 0xfc, 0xb9, 0x97, 0x6b, 0x24, 0xf9, 0x80,
       0x22, 0x26, 0x2c, 0x31, 0xea, 0x8f, 0xb2, 0x1f, 0x54, 0x93, 0x6b,
       0x69, 0x8b, 0x5d, 0x54, 0xd4, 0xd4, 0x21, 0x0b, 0x98, 0xb7};
 
-  static const char kFileData[] = {"The mountains are robotic."};
-  static const int kDataLen = sizeof(kFileData) - 1;
-  WriteFileToHash(kFileData, kDataLen);
+  constexpr char kFileData[] = "The mountains are robotic.";
+  // Trip through `string_view` to avoid grabbing the null terminator.
+  WriteFileToHash(base::as_byte_span(std::string_view(kFileData)));
   ExpectFileDigestEq(kDigest);
 }
 
 // Hash a file that is exactly 1 4k block.
 TEST_F(BinaryFeatureExtractorTest, ExtractOneBlockDigest) {
-  static const uint8_t kDigest[] = {
+  constexpr uint8_t kDigest[] = {
       0x4f, 0x93, 0x6e, 0xee, 0x89, 0x55, 0xa5, 0xe7, 0x46, 0xd0, 0x61,
       0x43, 0x54, 0x5f, 0x33, 0x7b, 0xdc, 0x30, 0x3a, 0x4b, 0x18, 0xb4,
       0x82, 0x20, 0xe3, 0x93, 0x4c, 0x65, 0xe0, 0xc1, 0xc0, 0x19};
 
   const int kDataLen = kBlockSize;
-  std::unique_ptr<char[]> data(new char[kDataLen]);
-  memset(data.get(), 71, kDataLen);
-  WriteFileToHash(data.get(), kDataLen);
+  auto data = base::HeapArray<uint8_t>::Uninit(kDataLen);
+  std::ranges::fill(data, 71);
+  WriteFileToHash(data);
   ExpectFileDigestEq(kDigest);
 }
 
 // Hash a file that is larger than 1 4k block.
 TEST_F(BinaryFeatureExtractorTest, ExtractBigBlockDigest) {
-  static const uint8_t kDigest[] = {
+  constexpr uint8_t kDigest[] = {
       0xda, 0xae, 0xa0, 0xd5, 0x3b, 0xce, 0x0b, 0x4e, 0x5f, 0x5d, 0x0b,
       0xc7, 0x6a, 0x69, 0x0e, 0xf1, 0x8b, 0x2d, 0x20, 0xcd, 0xf2, 0x6d,
       0x33, 0xa7, 0x70, 0xf3, 0x6b, 0x85, 0xbf, 0xce, 0x9d, 0x5c};
 
   const int kDataLen = kBlockSize + 1;
-  std::unique_ptr<char[]> data(new char[kDataLen]);
-  memset(data.get(), 71, kDataLen);
-  WriteFileToHash(data.get(), kDataLen);
+  auto data = base::HeapArray<uint8_t>::Uninit(kDataLen);
+  std::ranges::fill(data, 71);
+  WriteFileToHash(data);
   ExpectFileDigestEq(kDigest);
+}
+
+#if BUILDFLAG(IS_WIN)
+// Platform sanity check for https://crbug.com/545877431: verifies that
+// Windows allows base::Move() to succeed on a file while another handle
+// opened with FLAG_WIN_SHARE_DELETE (the flag ExtractImageFeatures and
+// ExtractDigest now pass when opening a download for scanning) is still open
+// on it, instead of failing with a sharing violation. This does not assert
+// that ExtractDigest/ExtractImageFeatures hold such a handle open
+// concurrently with the move: both functions open, read, and close their
+// file handle synchronously before returning, so there is no seam in the
+// current implementation to observe or race a move against that in-progress
+// read. The calls below only confirm that both functions still work
+// correctly on the file once it has been renamed.
+TEST_F(BinaryFeatureExtractorTest, ShareDeleteAllowsRenameOfOpenFile) {
+  constexpr char kTestData[] = "some file content";
+  WriteFileToHash(base::as_byte_span(std::string_view(kTestData)));
+
+  base::File open_handle(path_, base::File::FLAG_OPEN | base::File::FLAG_READ |
+                                    base::File::FLAG_WIN_SHARE_DELETE);
+  ASSERT_TRUE(open_handle.IsValid());
+
+  base::FilePath renamed_path =
+      temp_dir_.GetPath().Append(FILE_PATH_LITERAL("renamed.dll"));
+  EXPECT_TRUE(base::Move(path_, renamed_path));
+
+  // Verify that ExtractDigest and ExtractImageFeatures execute successfully
+  // on the renamed file while an open handle is held.
+  ClientDownloadRequest_Digests digests;
+  extractor_->ExtractDigest(renamed_path, &digests);
+  EXPECT_TRUE(digests.has_sha256());
+
+  auto mock_extractor = base::MakeRefCounted<MockBinaryFeatureExtractor>();
+  EXPECT_CALL(*mock_extractor, ExtractImageFeaturesFromData(_, _, _, _))
+      .WillOnce(testing::Return(true));
+  ClientDownloadRequest_ImageHeaders image_headers;
+  EXPECT_TRUE(mock_extractor->ExtractImageFeatures(
+      renamed_path, BinaryFeatureExtractor::kDefaultOptions, &image_headers,
+      nullptr));
+}
+#endif  // BUILDFLAG(IS_WIN)
+
+TEST_F(BinaryFeatureExtractorTest, CanRemoveFileDuringExecution) {
+  // mmap fails if the length parameter is 0, so we need a non-empty file.
+  char data = ' ';
+  WriteFileToHash(base::byte_span_from_ref(data));
+
+  scoped_refptr<MockBinaryFeatureExtractor> mock_extractor(
+      new MockBinaryFeatureExtractor());
+  EXPECT_CALL(*mock_extractor, ExtractImageFeaturesFromData(_, _, _, _))
+      .WillOnce(
+          [&](base::span<const uint8_t> data,
+              BinaryFeatureExtractor::ExtractHeadersOption options,
+              ClientDownloadRequest_ImageHeaders* image_headers,
+              google::protobuf::RepeatedPtrField<std::string>* signed_data) {
+            EXPECT_TRUE(base::DeleteFile(path_));
+            return true;
+          });
+
+  ClientDownloadRequest_ImageHeaders image_headers;
+  mock_extractor->ExtractImageFeatures(
+      path_, BinaryFeatureExtractor::kDefaultOptions, &image_headers, nullptr);
+}
+
+TEST_F(BinaryFeatureExtractorTest, ExtractImageFeaturesContentMatch) {
+  constexpr char kTestData[] = "Safe copy of interesting binary content";
+  WriteFileToHash(base::as_byte_span(std::string_view(kTestData)));
+
+  scoped_refptr<MockBinaryFeatureExtractor> mock_extractor(
+      new MockBinaryFeatureExtractor());
+  EXPECT_CALL(*mock_extractor, ExtractImageFeaturesFromData(_, _, _, _))
+      .WillOnce(
+          [&](base::span<const uint8_t> data,
+              BinaryFeatureExtractor::ExtractHeadersOption options,
+              ClientDownloadRequest_ImageHeaders* image_headers,
+              google::protobuf::RepeatedPtrField<std::string>* signed_data) {
+            EXPECT_EQ(std::string_view(kTestData),
+                      std::string_view(reinterpret_cast<const char*>(data.data()),
+                                       data.size()));
+            return true;
+          });
+
+  ClientDownloadRequest_ImageHeaders image_headers;
+  EXPECT_TRUE(mock_extractor->ExtractImageFeatures(
+      path_, BinaryFeatureExtractor::kDefaultOptions, &image_headers, nullptr));
+}
+
+TEST_F(BinaryFeatureExtractorTest, TempFileDeletedOnSuccess) {
+  base::ScopedPathOverride path_override(base::DIR_TEMP, temp_dir_.GetPath());
+
+  constexpr char kTestData[] = "Temp file deletion test";
+  WriteFileToHash(base::as_byte_span(std::string_view(kTestData)));
+
+  scoped_refptr<MockBinaryFeatureExtractor> mock_extractor(
+      new MockBinaryFeatureExtractor());
+  EXPECT_CALL(*mock_extractor, ExtractImageFeaturesFromData(_, _, _, _))
+      .WillOnce(testing::Return(true));
+
+  ClientDownloadRequest_ImageHeaders image_headers;
+  EXPECT_TRUE(mock_extractor->ExtractImageFeatures(
+      path_, BinaryFeatureExtractor::kDefaultOptions, &image_headers, nullptr));
+
+  base::FileEnumerator enumerator(temp_dir_.GetPath(), false,
+                                  base::FileEnumerator::FILES);
+  int file_count = 0;
+  for (base::FilePath name = enumerator.Next(); !name.empty();
+       name = enumerator.Next()) {
+    EXPECT_EQ(name.BaseName(), path_.BaseName());
+    file_count++;
+  }
+  EXPECT_EQ(1, file_count);
 }
 
 }  // namespace safe_browsing

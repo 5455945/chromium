@@ -1,42 +1,38 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "ios/chrome/test/earl_grey/chrome_actions.h"
 
-#import "base/mac/foundation_util.h"
+#import "base/apple/foundation_util.h"
 #import "ios/chrome/test/earl_grey/chrome_actions_app_interface.h"
+#import "ios/chrome/test/earl_grey/chrome_earl_grey.h"
 #import "ios/testing/earl_grey/earl_grey_test.h"
 #import "ios/web/public/test/element_selector.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
-
-GREY_STUB_CLASS_IN_APP_MAIN_QUEUE(ChromeActionsAppInterface)
 
 namespace chrome_test_util {
 
 id<GREYAction> LongPressElementForContextMenu(ElementSelector* selector,
                                               bool triggers_context_menu) {
-  return [ChromeActionsAppInterface longPressElement:selector
-                                  triggerContextMenu:triggers_context_menu];
+  return [ChromeActionsAppInterface
+      longPressElementOnWebView:selector
+             triggerContextMenu:triggers_context_menu];
 }
 
 id<GREYAction> ScrollElementToVisible(ElementSelector* selector) {
   return [ChromeActionsAppInterface scrollElementToVisible:selector];
 }
 
-id<GREYAction> TurnSettingsSwitchOn(BOOL on) {
-  return [ChromeActionsAppInterface turnSettingsSwitchOn:on];
-}
-
-id<GREYAction> TurnSyncSwitchOn(BOOL on) {
-  return [ChromeActionsAppInterface turnSyncSwitchOn:on];
+id<GREYAction> TurnTableViewSwitchOn(BOOL on) {
+  return [ChromeActionsAppInterface turnTableViewSwitchOn:on];
 }
 
 id<GREYAction> TapWebElement(ElementSelector* selector) {
   return [ChromeActionsAppInterface tapWebElement:selector];
+}
+
+id<GREYAction> TapWebElementUnverified(ElementSelector* selector) {
+  return [ChromeActionsAppInterface tapWebElementUnverified:selector];
 }
 
 id<GREYAction> TapWebElementWithId(const std::string& element_id) {
@@ -51,6 +47,10 @@ id<GREYAction> TapWebElementWithIdInFrame(const std::string& element_id,
                                           inFrameWithIndex:frame_index]];
 }
 
+id<GREYAction> LongPressOnHiddenElement() {
+  return [ChromeActionsAppInterface longPressOnHiddenElement];
+}
+
 id<GREYAction> ScrollToTop() {
   return [ChromeActionsAppInterface scrollToTop];
 }
@@ -60,6 +60,22 @@ id<GREYAction> TapAtPointPercentage(CGFloat xOriginStartPercentage,
   return [ChromeActionsAppInterface
       tapAtPointAtxOriginStartPercentage:xOriginStartPercentage
                   yOriginStartPercentage:yOriginStartPercentage];
+}
+
+id<GREYAction> SwipeToShowDeleteButton() {
+  return [ChromeActionsAppInterface swipeToShowDeleteButton];
+}
+
+id<GREYAction> AccessibilitySwipeRight() {
+  return [ChromeActionsAppInterface accessibilitySwipeRight];
+}
+
+id<GREYAction> OverscrollSwipe(GREYDirection direction) {
+  return [ChromeActionsAppInterface overscrollSwipe:direction];
+}
+
+id<GREYAction> NotifyChangeTextInRange(NSString* text) {
+  return [ChromeActionsAppInterface notifyChangeTextInRange:text];
 }
 
 }  // namespace chrome_test_util

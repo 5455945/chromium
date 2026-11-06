@@ -1,10 +1,10 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/libaddressinput/chromium/chrome_storage_impl.h"
 
-#include <memory>
+#include <optional>
 #include <utility>
 
 #include "base/values.h"
@@ -20,12 +20,9 @@ ChromeStorageImpl::ChromeStorageImpl(WriteablePrefStore* store)
 
 ChromeStorageImpl::~ChromeStorageImpl() {}
 
-void ChromeStorageImpl::Put(const std::string& key, std::string* data) {
-  DCHECK(data);
-  std::unique_ptr<std::string> owned_data(data);
-  backing_store_->SetValue(
-      key, std::make_unique<base::Value>(std::move(*owned_data)),
-      WriteablePrefStore::DEFAULT_PREF_WRITE_FLAGS);
+void ChromeStorageImpl::Put(const std::string& key, std::string data) {
+  backing_store_->SetValue(key, base::Value(std::move(data)),
+                           WriteablePrefStore::DEFAULT_PREF_WRITE_FLAGS);
 }
 
 void ChromeStorageImpl::Get(const std::string& key,
@@ -33,8 +30,6 @@ void ChromeStorageImpl::Get(const std::string& key,
   // |Get()| should not be const, so this is just a thunk that fixes that.
   const_cast<ChromeStorageImpl*>(this)->DoGet(key, data_ready);
 }
-
-void ChromeStorageImpl::OnPrefValueChanged(const std::string& key) {}
 
 void ChromeStorageImpl::OnInitializationCompleted(bool succeeded) {
   for (const auto& request : outstanding_requests_)
@@ -50,14 +45,15 @@ void ChromeStorageImpl::DoGet(const std::string& key,
     return;
   }
 
-  const base::Value* value = NULL;
-  std::unique_ptr<std::string> data(new std::string);
-  if (backing_store_->GetValue(key, &value) && value->GetAsString(data.get())) {
-    data_ready(true, key, data.release());
-  } else if (FallbackDataStore::Get(key, data.get())) {
-    data_ready(true, key, data.release());
+  const base::Value* value = nullptr;
+  std::string data;
+  if (backing_store_->GetValue(key, &value) && value->is_string()) {
+    data = value->GetString();
+    data_ready(true, key, std::move(data));
+  } else if (FallbackDataStore::Get(key, &data)) {
+    data_ready(true, key, std::move(data));
   } else {
-    data_ready(false, key, NULL);
+    data_ready(false, key, std::nullopt);
   }
 }
 

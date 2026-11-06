@@ -1,20 +1,24 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/metrics/field_trials_provider.h"
 
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/strings/string_piece.h"
+#include "base/check.h"
+#include "base/time/time.h"
 #include "components/variations/active_field_trials.h"
 #include "components/variations/synthetic_trial_registry.h"
 #include "third_party/metrics_proto/system_profile.pb.h"
 
 namespace variations {
-
 namespace {
+
+std::optional<bool> g_seed_has_active_limited_layer;
 
 void WriteFieldTrials(const std::vector<ActiveGroupId>& field_trial_ids,
                       metrics::SystemProfileProto* system_profile) {
@@ -29,14 +33,20 @@ void WriteFieldTrials(const std::vector<ActiveGroupId>& field_trial_ids,
 }  // namespace
 
 FieldTrialsProvider::FieldTrialsProvider(SyntheticTrialRegistry* registry,
-                                         base::StringPiece suffix)
+                                         std::string_view suffix)
     : registry_(registry), suffix_(suffix) {}
 FieldTrialsProvider::~FieldTrialsProvider() = default;
 
-void FieldTrialsProvider::GetFieldTrialIds(
-    std::vector<ActiveGroupId>* field_trial_ids) const {
-  // We use the default field trial suffixing (no suffix).
-  variations::GetFieldTrialActiveGroupIds(suffix_, field_trial_ids);
+// static
+void FieldTrialsProvider::UpdateAppliedSeedHasActiveLimitedLayer(
+    bool has_limited_layer) {
+  CHECK(!g_seed_has_active_limited_layer.has_value());
+  g_seed_has_active_limited_layer = has_limited_layer;
+}
+
+// static
+void FieldTrialsProvider::ClearSeedHasActiveLimitedLayerForTesting() {
+  g_seed_has_active_limited_layer = std::nullopt;
 }
 
 void FieldTrialsProvider::ProvideSystemProfileMetrics(
@@ -48,17 +58,23 @@ void FieldTrialsProvider::ProvideSystemProfileMetrics(
 void FieldTrialsProvider::ProvideSystemProfileMetricsWithLogCreationTime(
     base::TimeTicks log_creation_time,
     metrics::SystemProfileProto* system_profile_proto) {
-  // TODO(crbug/1090497): Maybe call ProvideCurrentSessionData() instead from
-  // places in which ProvideSystemProfileMetricsWithLogCreationTime() is called,
-  // e.g. startup_data.cc and background_tracing_metrics_provider.cc.
+  // TODO(crbug.com/40697205): Maybe call ProvideCurrentSessionData() instead
+  // from places in which ProvideSystemProfileMetricsWithLogCreationTime() is
+  // called, e.g. startup_data.cc and background_tracing_metrics_provider.cc.
 
   log_creation_time_ = log_creation_time;
 
   const std::string& version = variations::GetSeedVersion();
-  if (!version.empty())
+  if (!version.empty()) {
     system_profile_proto->set_variations_seed_version(version);
+  }
 
-  // TODO(crbug/1090098): Determine whether this can be deleted.
+  if (g_seed_has_active_limited_layer.has_value()) {
+    system_profile_proto->set_seed_has_active_limited_layer(
+        *g_seed_has_active_limited_layer);
+  }
+
+  // TODO(crbug.com/40133600): Determine whether this can be deleted.
   GetAndWriteFieldTrials(system_profile_proto);
 }
 
@@ -77,6 +93,14 @@ void FieldTrialsProvider::SetLogCreationTimeForTesting(base::TimeTicks time) {
   log_creation_time_ = time;
 }
 
+void FieldTrialsProvider::GetFieldTrialIds(
+    std::vector<ActiveGroupId>* field_trial_ids) const {
+  // As the trial groups are included in metrics reports, we must not include
+  // the low anonymity trials.
+  variations::GetFieldTrialActiveGroupIds(suffix_, field_trial_ids,
+                                          /*include_runtime_overrides=*/true);
+}
+
 void FieldTrialsProvider::GetAndWriteFieldTrials(
     metrics::SystemProfileProto* system_profile_proto) const {
   system_profile_proto->clear_field_trial();
@@ -85,10 +109,11 @@ void FieldTrialsProvider::GetAndWriteFieldTrials(
   GetFieldTrialIds(&field_trials);
   WriteFieldTrials(field_trials, system_profile_proto);
 
+  // May be null in tests.
   if (registry_) {
     std::vector<ActiveGroupId> synthetic_trials;
     registry_->GetSyntheticFieldTrialsOlderThan(log_creation_time_,
-                                                &synthetic_trials);
+                                                &synthetic_trials, suffix_);
     WriteFieldTrials(synthetic_trials, system_profile_proto);
   }
 }

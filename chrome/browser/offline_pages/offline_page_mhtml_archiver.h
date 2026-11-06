@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,12 @@
 
 #include <stdint.h>
 
-#include <map>
 #include <string>
 
-#include "base/callback.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "components/offline_pages/core/offline_page_archiver.h"
-#include "content/public/browser/mhtml_generation_result.h"
 
 namespace base {
 class FilePath;
@@ -43,10 +39,14 @@ namespace offline_pages {
 //     model->SavePage(url, std::move(archiver), callback);
 //   }
 //
-// TODO(https://crbug.com/849424): turn this into a singleton.
+// TODO(crbug.com/41392683): turn this into a singleton.
 class OfflinePageMHTMLArchiver : public OfflinePageArchiver {
  public:
   OfflinePageMHTMLArchiver();
+
+  OfflinePageMHTMLArchiver(const OfflinePageMHTMLArchiver&) = delete;
+  OfflinePageMHTMLArchiver& operator=(const OfflinePageMHTMLArchiver&) = delete;
+
   ~OfflinePageMHTMLArchiver() override;
 
   // OfflinePageArchiver implementation:
@@ -68,7 +68,7 @@ class OfflinePageMHTMLArchiver : public OfflinePageArchiver {
                            const std::u16string& title,
                            const std::string& name_space,
                            base::Time mhtml_start_time,
-                           const content::MHTMLGenerationResult& result);
+                           int64_t file_size);
   void OnComputeDigestDone(const GURL& url,
                            const base::FilePath& file_path,
                            const std::u16string& title,
@@ -87,8 +87,6 @@ class OfflinePageMHTMLArchiver : public OfflinePageArchiver {
   CreateArchiveCallback callback_;
 
   base::WeakPtrFactory<OfflinePageMHTMLArchiver> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(OfflinePageMHTMLArchiver);
 };
 
 }  // namespace offline_pages

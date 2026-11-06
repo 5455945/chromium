@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,9 @@
 #include <stddef.h>
 
 #include "base/base_export.h"
-#include "base/check_op.h"
-#include "base/macros.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/dcheck_is_on.h"
 #include "base/memory/shared_memory_mapping.h"
 #include "base/memory/unsafe_shared_memory_region.h"
 #include "base/threading/thread_collision_warner.h"
@@ -27,7 +28,7 @@
 // and Android to indicate that this type of behavior can be expected on
 // those platforms. Note that madvise() will still be used on other POSIX
 // platforms but doesn't provide the zero-fill-on-demand pages guarantee.
-#if defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_ANDROID)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
 #define DISCARDABLE_SHARED_MEMORY_ZERO_FILL_ON_DEMAND_PAGES_AFTER_PURGE
 #endif
 
@@ -52,6 +53,9 @@ class BASE_EXPORT DiscardableSharedMemory {
   // memory file. Memory must be locked.
   explicit DiscardableSharedMemory(UnsafeSharedMemoryRegion region);
 
+  DiscardableSharedMemory(const DiscardableSharedMemory&) = delete;
+  DiscardableSharedMemory& operator=(const DiscardableSharedMemory&) = delete;
+
   // Closes any open files.
   virtual ~DiscardableSharedMemory();
 
@@ -69,8 +73,15 @@ class BASE_EXPORT DiscardableSharedMemory {
   // not mapped.
   bool Unmap();
 
-  // The actual size of the mapped memory (may be larger than requested).
-  size_t mapped_size() const { return mapped_size_; }
+  // The actual size of the mapped memory (may be larger than requested). It is
+  // 0 when the memory has not been mapped via `Map()`.
+  size_t mapped_size() const {
+    if (shared_memory_mapping_.IsValid()) {
+      return mapped_memory().size();
+    } else {
+      return 0u;
+    }
+  }
 
   // Returns a duplicated shared memory region for this DiscardableSharedMemory
   // object.
@@ -81,7 +92,7 @@ class BASE_EXPORT DiscardableSharedMemory {
   // Returns an ID for the shared memory region. This is ID of the mapped region
   // consistent across all processes and is valid as long as the region is not
   // unmapped.
-  const UnguessableToken& mapped_id() const {
+  const UnguessableToken& mapped_id() const LIFETIME_BOUND {
     return shared_memory_mapping_.guid();
   }
 
@@ -107,21 +118,20 @@ class BASE_EXPORT DiscardableSharedMemory {
   // Passing 0 for |length| means "everything onward".
   void Unlock(size_t offset, size_t length);
 
-  // Gets a pointer to the opened discardable memory space. Discardable memory
+  // Gets a span over the opened discardable memory space. Discardable memory
   // must have been mapped via Map().
-  void* memory() const;
+  //
+  // This gives the logical memory region, matching the size of what was
+  // requested. The actual mapped memory may be larger due to system alignment
+  // requirements. See `SharedMemoryMapping::size()` vs
+  // `SharedMemoryMapping::mapped_size()`.
+  span<uint8_t> memory();
+  span<const uint8_t> memory() const;
 
   // Returns the last known usage time for DiscardableSharedMemory object. This
   // may be earlier than the "true" usage time when memory has been used by a
   // different process. Returns NULL time if purged.
   Time last_known_usage() const { return last_known_usage_; }
-
-  // Releases any allocated pages in the specified range, if supported by the
-  // platform. Address space in the specified range continues to be reserved.
-  // The memory is not guaranteed to be released immediately.
-  // |offset| and |length| are both in bytes. |offset| and |length| must both be
-  // page aligned.
-  void ReleaseMemoryIfPossible(size_t offset, size_t length);
 
   // This returns true and sets |last_known_usage_| to 0 if
   // DiscardableSharedMemory object was successfully purged. Purging can fail
@@ -157,13 +167,20 @@ class BASE_EXPORT DiscardableSharedMemory {
       trace_event::ProcessMemoryDump* pmd,
       bool is_owned) const;
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   // Returns true if the Ashmem device is supported on this system.
   // Only use this for unit-testing.
   static bool IsAshmemDeviceSupportedForTesting();
 #endif
 
  private:
+  // Returns the full mapped memory region after the internal bookkeeping
+  // header. This may be larger than the region exposed through `memory()` due
+  // to platform alignment requirements. Discardable memory must have been
+  // mapped via Map().
+  span<uint8_t> mapped_memory();
+  span<const uint8_t> mapped_memory() const;
+
   // LockPages/UnlockPages are platform-native discardable page management
   // helper functions. Both expect |offset| to be specified relative to the
   // base address at which |memory| is mapped, and that |offset| and |length|
@@ -177,13 +194,9 @@ class BASE_EXPORT DiscardableSharedMemory {
                           size_t offset,
                           size_t length);
 
-  // Virtual for tests.
-  virtual Time Now() const;
-
   UnsafeSharedMemoryRegion shared_memory_region_;
   WritableSharedMemoryMapping shared_memory_mapping_;
-  size_t mapped_size_;
-  size_t locked_page_count_;
+  size_t locked_page_count_ = 0u;
 #if DCHECK_IS_ON()
   std::set<size_t> locked_pages_;
 #endif
@@ -191,8 +204,6 @@ class BASE_EXPORT DiscardableSharedMemory {
   // synchronized somehow. Use a collision warner to detect incorrect usage.
   DFAKE_MUTEX(thread_collision_warner_);
   Time last_known_usage_;
-
-  DISALLOW_COPY_AND_ASSIGN(DiscardableSharedMemory);
 };
 
 }  // namespace base

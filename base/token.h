@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,15 @@
 
 #include <stdint.h>
 
+#include <array>
+#include <compare>
+#include <optional>
 #include <string>
-#include <tuple>
+#include <string_view>
+#include <utility>
 
 #include "base/base_export.h"
-#include "base/hash/hash.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/containers/span.h"
 
 namespace base {
 
@@ -28,7 +31,7 @@ class BASE_EXPORT Token {
   constexpr Token() = default;
 
   // Constructs a Token with |high| and |low| as its contents.
-  constexpr Token(uint64_t high, uint64_t low) : high_(high), low_(low) {}
+  constexpr Token(uint64_t high, uint64_t low) : words_{high, low} {}
 
   constexpr Token(const Token&) = default;
   constexpr Token& operator=(const Token&) = default;
@@ -36,43 +39,47 @@ class BASE_EXPORT Token {
   constexpr Token& operator=(Token&&) = default;
 
   // Constructs a new Token with random |high| and |low| values taken from a
-  // cryptographically strong random source.
+  // cryptographically strong random source. The result's |is_zero()| is
+  // guaranteed to be false.
   static Token CreateRandom();
 
   // The high and low 64 bits of this Token.
-  constexpr uint64_t high() const { return high_; }
-  constexpr uint64_t low() const { return low_; }
+  constexpr uint64_t high() const { return words_[0]; }
+  constexpr uint64_t low() const { return words_[1]; }
 
-  constexpr bool is_zero() const { return high_ == 0 && low_ == 0; }
+  constexpr bool is_zero() const { return words_[0] == 0 && words_[1] == 0; }
 
-  constexpr bool operator==(const Token& other) const {
-    return high_ == other.high_ && low_ == other.low_;
-  }
+  span<const uint8_t, 16> AsBytes() const;
 
-  constexpr bool operator!=(const Token& other) const {
-    return !(*this == other);
-  }
+  friend constexpr auto operator<=>(const Token& lhs,
+                                    const Token& rhs) = default;
+  friend constexpr bool operator==(const Token& lhs,
+                                   const Token& rhs) = default;
 
-  constexpr bool operator<(const Token& other) const {
-    return std::tie(high_, low_) < std::tie(other.high_, other.low_);
+  template <typename H>
+  friend H AbslHashValue(H h, const Token& token) {
+    return H::combine(std::move(h), token.words_);
   }
 
   // Generates a string representation of this Token useful for e.g. logging.
   std::string ToString() const;
 
+  // FromString is the opposite of ToString. It returns std::nullopt if the
+  // |string_representation| is invalid.
+  static std::optional<Token> FromString(
+      std::string_view string_representation);
+
  private:
   // Note: Two uint64_t are used instead of uint8_t[16] in order to have a
-  // simpler implementation, paricularly for |ToString()|, |is_zero()|, and
+  // simpler implementation, particularly for |ToString()|, |is_zero()|, and
   // constexpr value construction.
-  uint64_t high_ = 0;
-  uint64_t low_ = 0;
+
+  std::array<uint64_t, 2> words_ = {0, 0};
 };
 
 // For use in std::unordered_map.
-struct TokenHash {
-  size_t operator()(const base::Token& token) const {
-    return base::HashInts64(token.high(), token.low());
-  }
+struct BASE_EXPORT TokenHash {
+  static size_t operator()(const Token& token);
 };
 
 class Pickle;
@@ -80,7 +87,7 @@ class PickleIterator;
 
 // For serializing and deserializing Token values.
 BASE_EXPORT void WriteTokenToPickle(Pickle* pickle, const Token& token);
-BASE_EXPORT absl::optional<Token> ReadTokenFromPickle(
+BASE_EXPORT std::optional<Token> ReadTokenFromPickle(
     PickleIterator* pickle_iterator);
 
 }  // namespace base

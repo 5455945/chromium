@@ -1,25 +1,30 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/dbus/vm/vm_permission_service_provider.h"
 
+#include <algorithm>
 #include <memory>
+#include <ranges>
 #include <utility>
 #include <vector>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/chrome_pref_names.h"
+#include "base/check.h"
+#include "base/check_deref.h"
 #include "base/feature_list.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_pref_names.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/common/pref_names.h"
-#include "chromeos/dbus/vm_permission_service/vm_permission_service.pb.h"
+#include "chrome/browser/ash/borealis/borealis_prefs.h"
+#include "chrome/browser/ash/bruschetta/bruschetta_pref_names.h"
+#include "chromeos/ash/components/dbus/vm_permission_service/vm_permission_service.pb.h"
 #include "components/prefs/pref_service.h"
+#include "components/session_manager/core/session.h"
+#include "components/session_manager/core/session_manager.h"
+#include "components/user_manager/user.h"
+#include "components/user_manager/user_manager.h"
 #include "dbus/message.h"
 #include "media/capture/video/chromeos/camera_hal_dispatcher_impl.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
@@ -38,19 +43,24 @@ base::UnguessableToken TokenFromString(const std::string& str) {
 
   uint64_t high = 0, low = 0;
   int count = 0;
-  std::for_each(std::rbegin(bytes), std::rend(bytes), [&](auto byte) {
+  std::ranges::for_each(std::views::reverse(bytes), [&](auto byte) {
     auto* p = count < kBytesPerUint64 ? &low : &high;
     int pos = count < kBytesPerUint64 ? count : count - kBytesPerUint64;
     *p += static_cast<uint64_t>(byte) << (pos * 8);
     count++;
   });
 
-  return base::UnguessableToken::Deserialize(high, low);
+  std::optional<base::UnguessableToken> token =
+      base::UnguessableToken::Deserialize(high, low);
+  if (!token.has_value()) {
+    return base::UnguessableToken();
+  }
+  return token.value();
 }
 
 }  // namespace
 
-namespace chromeos {
+namespace ash {
 
 VmPermissionServiceProvider::VmInfo::VmInfo(std::string vm_owner_id,
                                             std::string vm_name,
@@ -61,14 +71,14 @@ VmPermissionServiceProvider::VmInfo::VmInfo(std::string vm_owner_id,
 
 VmPermissionServiceProvider::VmInfo::~VmInfo() = default;
 
-VmPermissionServiceProvider::VmPermissionServiceProvider() {}
+VmPermissionServiceProvider::VmPermissionServiceProvider() = default;
 
 VmPermissionServiceProvider::~VmPermissionServiceProvider() = default;
 
 VmPermissionServiceProvider::VmMap::iterator
 VmPermissionServiceProvider::FindVm(const std::string& owner_id,
                                     const std::string& name) {
-  return std::find_if(vms_.begin(), vms_.end(), [&](const auto& vm) {
+  return std::ranges::find_if(vms_, [&](const auto& vm) {
     return vm.second->owner_id == owner_id && vm.second->name == name;
   });
 }
@@ -76,25 +86,29 @@ VmPermissionServiceProvider::FindVm(const std::string& owner_id,
 void VmPermissionServiceProvider::Start(
     scoped_refptr<dbus::ExportedObject> exported_object) {
   exported_object->ExportMethod(
-      kVmPermissionServiceInterface, kVmPermissionServiceRegisterVmMethod,
+      chromeos::kVmPermissionServiceInterface,
+      chromeos::kVmPermissionServiceRegisterVmMethod,
       base::BindRepeating(&VmPermissionServiceProvider::RegisterVm,
                           weak_ptr_factory_.GetWeakPtr()),
       base::BindOnce(&VmPermissionServiceProvider::OnExported,
                      weak_ptr_factory_.GetWeakPtr()));
   exported_object->ExportMethod(
-      kVmPermissionServiceInterface, kVmPermissionServiceUnregisterVmMethod,
+      chromeos::kVmPermissionServiceInterface,
+      chromeos::kVmPermissionServiceUnregisterVmMethod,
       base::BindRepeating(&VmPermissionServiceProvider::UnregisterVm,
                           weak_ptr_factory_.GetWeakPtr()),
       base::BindOnce(&VmPermissionServiceProvider::OnExported,
                      weak_ptr_factory_.GetWeakPtr()));
   exported_object->ExportMethod(
-      kVmPermissionServiceInterface, kVmPermissionServiceGetPermissionsMethod,
+      chromeos::kVmPermissionServiceInterface,
+      chromeos::kVmPermissionServiceGetPermissionsMethod,
       base::BindRepeating(&VmPermissionServiceProvider::GetPermissions,
                           weak_ptr_factory_.GetWeakPtr()),
       base::BindOnce(&VmPermissionServiceProvider::OnExported,
                      weak_ptr_factory_.GetWeakPtr()));
   exported_object->ExportMethod(
-      kVmPermissionServiceInterface, kVmPermissionServiceSetPermissionsMethod,
+      chromeos::kVmPermissionServiceInterface,
+      chromeos::kVmPermissionServiceSetPermissionsMethod,
       base::BindRepeating(&VmPermissionServiceProvider::SetPermissions,
                           weak_ptr_factory_.GetWeakPtr()),
       base::BindOnce(&VmPermissionServiceProvider::OnExported,
@@ -136,8 +150,11 @@ void VmPermissionServiceProvider::RegisterVm(
   }
 
   VmInfo::VmType vm_type;
-  if (request.type() == vm_permission_service::RegisterVmRequest::PLUGIN_VM) {
-    vm_type = VmInfo::VmType::PluginVm;
+  if (request.type() == vm_permission_service::RegisterVmRequest::BOREALIS) {
+    vm_type = VmInfo::VmType::Borealis;
+  } else if (request.type() ==
+             vm_permission_service::RegisterVmRequest::BRUSCHETTA) {
+    vm_type = VmInfo::VmType::Bruschetta;
   } else {
     LOG(ERROR) << "Unsupported VM " << request.owner_id() << "/"
                << request.name() << " type: " << request.type();
@@ -157,7 +174,8 @@ void VmPermissionServiceProvider::RegisterVm(
 
   const base::UnguessableToken token(base::UnguessableToken::Create());
 
-  media::CameraHalDispatcherImpl::GetInstance()->RegisterPluginVmToken(token);
+  SetCameraPermission(token,
+                      vm->permission_to_enabled_map[VmInfo::PermissionCamera]);
 
   vms_[token] = std::move(vm);
 
@@ -197,8 +215,7 @@ void VmPermissionServiceProvider::UnregisterVm(
     return;
   }
 
-  media::CameraHalDispatcherImpl::GetInstance()->UnregisterPluginVmToken(
-      iter->first);
+  SetCameraPermission(iter->first, false);
 
   vms_.erase(iter);
 
@@ -255,6 +272,9 @@ void VmPermissionServiceProvider::SetPermissions(
 
   // Commit final version of permissions.
   iter->second->permission_to_enabled_map = std::move(new_permissions);
+  SetCameraPermission(
+      iter->first,
+      iter->second->permission_to_enabled_map[VmInfo::PermissionCamera]);
 
   std::move(response_sender).Run(std::move(response));
 }
@@ -317,31 +337,62 @@ void VmPermissionServiceProvider::GetPermissions(
 void VmPermissionServiceProvider::UpdateVmPermissions(VmInfo* vm) {
   vm->permission_to_enabled_map.clear();
   switch (vm->type) {
-    case VmInfo::PluginVm:
-      UpdatePluginVmPermissions(vm);
+    case VmInfo::Borealis:
+      UpdateBorealisPermissions(vm);
+      break;
+    case VmInfo::Bruschetta:
+      UpdateBruschettaPermissions(vm);
       break;
     case VmInfo::CrostiniVm:
       NOTREACHED();
   }
 }
 
-void VmPermissionServiceProvider::UpdatePluginVmPermissions(VmInfo* vm) {
-  Profile* profile = ProfileManager::GetPrimaryUserProfile();
-  if (!profile || chromeos::ProfileHelper::GetUserIdHashFromProfile(profile) !=
-                      vm->owner_id) {
+void VmPermissionServiceProvider::UpdateBorealisPermissions(VmInfo* vm) {
+  const session_manager::Session* primary_session =
+      session_manager::SessionManager::Get()->GetPrimarySession();
+  CHECK(primary_session);
+  const user_manager::User& primary_user =
+      CHECK_DEREF(user_manager::UserManager::Get()->FindUser(
+          primary_session->account_id()));
+  if (primary_user.username_hash() != vm->owner_id) {
     return;
   }
 
-  const PrefService* prefs = profile->GetPrefs();
-  if (prefs->GetBoolean(prefs::kVideoCaptureAllowed)) {
-    vm->permission_to_enabled_map[VmInfo::PermissionCamera] =
-        prefs->GetBoolean(plugin_vm::prefs::kPluginVmCameraAllowed);
-  }
-
-  if (prefs->GetBoolean(prefs::kAudioCaptureAllowed)) {
+  const PrefService& prefs = CHECK_DEREF(primary_user.GetProfilePrefs());
+  if (prefs.GetBoolean(ash::chrome_prefs::kAudioCaptureAllowed)) {
     vm->permission_to_enabled_map[VmInfo::PermissionMicrophone] =
-        prefs->GetBoolean(plugin_vm::prefs::kPluginVmMicAllowed);
+        prefs.GetBoolean(borealis::prefs::kBorealisMicAllowed);
   }
 }
 
-}  // namespace chromeos
+void VmPermissionServiceProvider::UpdateBruschettaPermissions(VmInfo* vm) {
+  const session_manager::Session* primary_session =
+      session_manager::SessionManager::Get()->GetPrimarySession();
+  CHECK(primary_session);
+  const user_manager::User& primary_user =
+      CHECK_DEREF(user_manager::UserManager::Get()->FindUser(
+          primary_session->account_id()));
+  if (primary_user.username_hash() != vm->owner_id) {
+    return;
+  }
+
+  const PrefService& prefs = CHECK_DEREF(primary_user.GetProfilePrefs());
+  if (prefs.GetBoolean(ash::chrome_prefs::kAudioCaptureAllowed)) {
+    vm->permission_to_enabled_map[VmInfo::PermissionMicrophone] =
+        prefs.GetBoolean(bruschetta::prefs::kBruschettaMicAllowed);
+  }
+}
+
+void VmPermissionServiceProvider::SetCameraPermission(
+    base::UnguessableToken token,
+    bool enabled) {
+  if (enabled) {
+    media::CameraHalDispatcherImpl::GetInstance()->RegisterPluginVmToken(token);
+  } else {
+    media::CameraHalDispatcherImpl::GetInstance()->UnregisterPluginVmToken(
+        token);
+  }
+}
+
+}  // namespace ash

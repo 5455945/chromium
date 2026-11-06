@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,52 +17,52 @@ ZwpPrimarySelectionDevice::ZwpPrimarySelectionDevice(
     WaylandConnection* connection,
     zwp_primary_selection_device_v1* data_device)
     : WaylandDataDeviceBase(connection), data_device_(data_device) {
-  static const struct zwp_primary_selection_device_v1_listener kListener = {
-      ZwpPrimarySelectionDevice::OnDataOffer,
-      ZwpPrimarySelectionDevice::OnSelection};
-  zwp_primary_selection_device_v1_add_listener(data_device_.get(), &kListener,
-                                               this);
+  static constexpr zwp_primary_selection_device_v1_listener
+      kPrimarySelectionListener = {.data_offer = &OnDataOffer,
+                                   .selection = &OnSelection};
+  zwp_primary_selection_device_v1_add_listener(
+      data_device_.get(), &kPrimarySelectionListener, this);
 }
 
 ZwpPrimarySelectionDevice::~ZwpPrimarySelectionDevice() = default;
 
 void ZwpPrimarySelectionDevice::SetSelectionSource(
-    ZwpPrimarySelectionSource* source) {
+    ZwpPrimarySelectionSource* source,
+    uint32_t serial) {
   auto* data_source = source ? source->data_source() : nullptr;
   zwp_primary_selection_device_v1_set_selection(data_device_.get(), data_source,
-                                                connection()->serial());
-  connection()->ScheduleFlush();
+                                                serial);
+  connection()->Flush();
 }
 
 // static
 void ZwpPrimarySelectionDevice::OnDataOffer(
     void* data,
-    zwp_primary_selection_device_v1* data_device,
+    zwp_primary_selection_device_v1* selection_device,
     zwp_primary_selection_offer_v1* offer) {
   auto* self = static_cast<ZwpPrimarySelectionDevice*>(data);
-  DCHECK(self);
+  CHECK(self, base::NotFatalUntil::M163);
   self->set_data_offer(std::make_unique<ZwpPrimarySelectionOffer>(offer));
 }
 
 // static
 void ZwpPrimarySelectionDevice::OnSelection(
     void* data,
-    zwp_primary_selection_device_v1* data_device,
+    zwp_primary_selection_device_v1* selection_device,
     zwp_primary_selection_offer_v1* offer) {
   auto* self = static_cast<ZwpPrimarySelectionDevice*>(data);
-  DCHECK(self);
+  CHECK(self, base::NotFatalUntil::M163);
 
   // 'offer' will be null to indicate that the selection is no longer valid,
   // i.e. there is no longer selection data available to be fetched.
   if (!offer) {
     self->ResetDataOffer();
   } else {
-    DCHECK(self->data_offer());
+    CHECK(self->data_offer(), base::NotFatalUntil::M163);
     self->data_offer()->EnsureTextMimeTypeIfNeeded();
   }
 
-  if (self->selection_delegate())
-    self->selection_delegate()->OnSelectionOffer(self->data_offer());
+  self->NotifySelectionOffer(self->data_offer());
 }
 
 }  // namespace ui

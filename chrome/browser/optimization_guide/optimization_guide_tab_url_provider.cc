@@ -1,17 +1,18 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/optimization_guide/optimization_guide_tab_url_provider.h"
 
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/web_contents.h"
 #include "url/gurl.h"
 
-#if !defined(OS_ANDROID)
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck crbug.com/40147906
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"  // nogncheck crbug.com/40147906
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #endif
 
@@ -22,7 +23,7 @@ bool IsWebContentsCandidateForRefresh(
     content::WebContents* web_contents,
     const base::TimeDelta& duration_since_last_shown) {
   return web_contents &&
-         (base::TimeTicks::Now() - web_contents->GetLastActiveTime()) <
+         (base::TimeTicks::Now() - web_contents->GetLastActiveTimeTicks()) <
              duration_since_last_shown;
 }
 
@@ -44,7 +45,7 @@ const std::vector<GURL> OptimizationGuideTabUrlProvider::GetUrlsOfActiveTabs(
                                          duration_since_last_shown)) {
       urls_and_active_time.emplace_back(
           std::make_pair(web_contents->GetLastCommittedURL(),
-                         web_contents->GetLastActiveTime()));
+                         web_contents->GetLastActiveTimeTicks()));
     }
   }
   std::sort(urls_and_active_time.begin(), urls_and_active_time.end(),
@@ -63,23 +64,26 @@ const std::vector<GURL> OptimizationGuideTabUrlProvider::GetUrlsOfActiveTabs(
 
 const std::vector<content::WebContents*>
 OptimizationGuideTabUrlProvider::GetAllWebContentsForProfile(Profile* profile) {
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   NOTREACHED();
-  return {};
 #else
   std::vector<content::WebContents*> web_contents_list;
-  for (Browser* browser : *BrowserList::GetInstance()) {
-    if (!browser || browser->profile() != profile)
-      continue;
+  GlobalBrowserCollection::GetInstance()->ForEach(
+      [profile, &web_contents_list](BrowserWindowInterface* browser) {
+        if (browser->GetProfile() != profile) {
+          return true;
+        }
 
-    TabStripModel* tab_strip_model = browser->tab_strip_model();
-    int tab_count = tab_strip_model->count();
-    for (int i = 0; i < tab_count; i++) {
-      content::WebContents* web_contents = tab_strip_model->GetWebContentsAt(i);
-      if (web_contents)
-        web_contents_list.push_back(web_contents);
-    }
-  }
+        TabStripModel* const tab_strip_model = browser->GetTabStripModel();
+        const int tab_count = tab_strip_model->count();
+        for (int i = 0; i < tab_count; i++) {
+          if (content::WebContents* const web_contents =
+                  tab_strip_model->GetWebContentsAt(i)) {
+            web_contents_list.push_back(web_contents);
+          }
+        }
+        return true;
+      });
   return web_contents_list;
 #endif
 }

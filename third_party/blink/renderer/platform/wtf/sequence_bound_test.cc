@@ -1,16 +1,15 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/platform/wtf/sequence_bound.h"
 
-#include "base/single_thread_task_runner.h"
-#include "base/task/post_task.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/test/task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace WTF {
+namespace blink {
 namespace {
 
 constexpr int kTestValue = 42;
@@ -39,8 +38,7 @@ TEST_F(SequenceBoundTest, CanInstantiate) {
       base::ThreadPool::CreateSingleThreadTaskRunner({}));
 
   sequence_bound.AsyncCall(&Foo::Bar).WithArgs(5);
-  sequence_bound.PostTaskWithThisObject(FROM_HERE,
-                                        CrossThreadBindOnce([](Foo* foo) {}));
+  sequence_bound.PostTaskWithThisObject(CrossThreadBindOnce([](Foo* foo) {}));
 
   int test_value = -1;
   base::RunLoop run_loop;
@@ -51,4 +49,4 @@ TEST_F(SequenceBoundTest, CanInstantiate) {
   EXPECT_EQ(test_value, kTestValue);
 }
 
-}  // namespace WTF
+}  // namespace blink

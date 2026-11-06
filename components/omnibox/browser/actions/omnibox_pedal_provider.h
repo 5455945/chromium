@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,13 @@
 #define COMPONENTS_OMNIBOX_BROWSER_ACTIONS_OMNIBOX_PEDAL_PROVIDER_H_
 
 #include <unordered_map>
-#include <vector>
 
+#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/strings/utf_offset_string_conversions.h"
 #include "base/values.h"
 #include "components/omnibox/browser/actions/omnibox_pedal.h"
-#include "components/omnibox/browser/actions/omnibox_pedal_implementations.h"
 #include "components/omnibox/browser/autocomplete_provider.h"
 
 class OmniboxPedal;
@@ -24,8 +24,9 @@ class AutocompleteProviderClient;
 // providers (search in particular).
 class OmniboxPedalProvider {
  public:
-  // |with_branding| specifies whether to include Google Chrome branded Pedals.
-  OmniboxPedalProvider(AutocompleteProviderClient& client, bool with_branding);
+  OmniboxPedalProvider(
+      AutocompleteProviderClient& client,
+      std::unordered_map<OmniboxPedalId, scoped_refptr<OmniboxPedal>> pedals);
   ~OmniboxPedalProvider();
   OmniboxPedalProvider(const OmniboxPedalProvider&) = delete;
   OmniboxPedalProvider& operator=(const OmniboxPedalProvider&) = delete;
@@ -39,27 +40,24 @@ class OmniboxPedalProvider {
   OmniboxPedal* FindReadyPedalMatch(const AutocompleteInput& input,
                                     const std::u16string& match_text);
 
-  // "Fake" implementation of AutocompleteProvider AddProviderInfo, though this
-  // class is not a true subclass of AutocompleteProvider. This is used
-  // for logging and reporting for our field trial.
-  void AddProviderInfo(ProvidersInfo* provider_info) const;
-
-  // "Fake" implementation of AutocompleteProvider::ResetSession. Resets the
-  // field trial flags.
-  void ResetSession();
-
-  void set_field_trial_triggered(bool triggered) {
-    field_trial_triggered_ = triggered;
-  }
-
   // Estimates memory usage for this and all contained Pedals.
   size_t EstimateMemoryUsage() const;
 
  protected:
+  // Befriending this test base class prevents duplication of a long exhaustive
+  // unit test (specifically the TestLiteralConceptExpressions method).
+  friend class OmniboxPedalImplementationsTest;
+  FRIEND_TEST_ALL_PREFIXES(OmniboxPedalProviderTest, QueriesTriggerPedals);
   FRIEND_TEST_ALL_PREFIXES(OmniboxPedalImplementationsTest,
                            ProviderFiltersPedalUpdateChrome);
+  FRIEND_TEST_ALL_PREFIXES(
+      OmniboxPedalImplementationsWithoutTranslationConsoleTest,
+      ProviderFiltersPedalUpdateChrome);
   FRIEND_TEST_ALL_PREFIXES(OmniboxPedalImplementationsTest,
                            UnorderedSynonymExpressionsAreConceptMatches);
+  FRIEND_TEST_ALL_PREFIXES(
+      OmniboxPedalImplementationsWithoutTranslationConsoleTest,
+      UnorderedSynonymExpressionsAreConceptMatches);
 
   // Generate a token sequence for text using internal dictionary & delimiters.
   // Outputs empty sequence if any delimited part of text is not in dictionary.
@@ -71,11 +69,9 @@ class OmniboxPedalProvider {
   void TokenizeAndExpandDictionary(OmniboxPedal::TokenSequence& out_tokens,
                                    const std::u16string& token_sequence_string);
 
+  // Loads all pedals groups, building the dictionary as needed from
+  // translation strings.
   void LoadPedalConcepts();
-
-  // Load a synonym group from a JSON sourced Value.
-  OmniboxPedal::SynonymGroup LoadSynonymGroupValue(
-      const base::Value& group_value) const;
 
   // Load a synonym group from a localization sourced string with comma
   // separated synonyms.
@@ -84,7 +80,7 @@ class OmniboxPedalProvider {
       bool match_once,
       std::u16string synonyms_csv);
 
-  AutocompleteProviderClient& client_;
+  const raw_ref<AutocompleteProviderClient> client_;
 
   // Contains mapping from well-known identifier to Pedal implementation.
   // Note: since the set is small, we use one map here for simplicity; but if
@@ -110,13 +106,9 @@ class OmniboxPedalProvider {
   // This holds the tokens currently being matched against.
   OmniboxPedal::TokenSequence match_tokens_;
 
-  // This serves as an upper bound on the number of tokens we will accept from
-  // text before giving up and treating it as non-match for all Pedals.
-  size_t max_tokens_ = 0;
-
-  // Whether a field trial has triggered for this query and this session
-  bool field_trial_triggered_ = false;
-  bool field_trial_triggered_in_session_ = false;
+  // Whether `LoadPedalConcepts()` has populated `dictionary_`, `ignore_group_`,
+  // and pedal synonym groups.
+  bool concepts_loaded_ = false;
 };
 
 #endif  // COMPONENTS_OMNIBOX_BROWSER_ACTIONS_OMNIBOX_PEDAL_PROVIDER_H_

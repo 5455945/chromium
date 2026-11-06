@@ -1,14 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Copyright 2020 The Chromium Authors. All rights reserved.
-     Use of this source code is governed by a BSD-style license that can be
-     found in the LICENSE file.
+<!--
+Copyright 2020 The Chromium Authors
+Use of this source code is governed by a BSD-style license that can be
+found in the LICENSE file.
 -->
 
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
-    style="@style/AppMenuItem"
+    style="@style/OverflowMenuItem"
     android:layout_width="match_parent"
-    android:layout_height="?android:attr/listPreferredItemHeightSmall"
+    android:layout_height="wrap_content"
     android:gravity="center_vertical"
     android:orientation="horizontal" >
 
@@ -17,17 +18,30 @@
         style="@style/AppMenuItemTextViewWithCompoundDrawables"
         android:layout_weight="1"
         android:layout_width="wrap_content"
-        android:layout_height="match_parent" />
+        android:layout_height="wrap_content"
+        android:minHeight="?attr/listItemHeight"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:textAlignment="viewStart"
+        android:gravity="start|center_vertical" />
 
-    <org.chromium.ui.widget.ChromeImageView
+    <ImageView
         android:id="@+id/trailing_icon"
         android:layout_weight="0"
-        android:layout_width="wrap_content"
-        android:layout_height="match_parent"
+        android:layout_width="?attr/listItemIconSize"
+        android:layout_height="?attr/listItemIconSize"
         android:gravity="center_vertical"
         android:importantForAccessibility="no"
-        android:tint="@color/default_icon_color_secondary"
+        android:tint="@macro/default_icon_color_secondary"
         android:visibility="gone" />
 
-
+    <TextView
+        android:id="@+id/menu_item_shortcut"
+        android:textAppearance="@style/TextAppearance.TextMedium.Secondary"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:maxLines="1"
+        android:paddingStart="@dimen/menu_item_shortcut_with_text_end_padding_start"
+        android:duplicateParentState="true"
+        android:visibility="gone" />
 </LinearLayout>

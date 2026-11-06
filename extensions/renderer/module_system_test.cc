@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,18 +11,20 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/lazy_instance.h"
+#include "base/memory/raw_ptr.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
-#include "base/strings/string_piece.h"
+#include "base/values.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/extension_paths.h"
-#include "extensions/common/value_builder.h"
+#include "extensions/common/mojom/context_type.mojom.h"
+#include "extensions/common/utils/extension_utils.h"
 #include "extensions/renderer/ipc_message_sender.h"
 #include "extensions/renderer/logging_native_handler.h"
 #include "extensions/renderer/native_extension_bindings_system.h"
@@ -30,10 +32,16 @@
 #include "extensions/renderer/safe_builtins.h"
 #include "extensions/renderer/script_context_set.h"
 #include "extensions/renderer/string_source_map.h"
-#include "extensions/renderer/test_v8_extension_configuration.h"
 #include "extensions/renderer/utils_native_handler.h"
 #include "gin/converter.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "v8/include/v8-context.h"
+#include "v8/include/v8-function-callback.h"
+#include "v8/include/v8-isolate.h"
+#include "v8/include/v8-microtask-queue.h"
+#include "v8/include/v8-object.h"
+#include "v8/include/v8-primitive.h"
+#include "v8/include/v8-statistics.h"
 
 namespace extensions {
 namespace {
@@ -53,6 +61,10 @@ class GetAPINatives : public ObjectBackedNativeHandler {
       : ObjectBackedNativeHandler(context), bindings_system_(bindings_system) {
     DCHECK(bindings_system_);
   }
+
+  GetAPINatives(const GetAPINatives&) = delete;
+  GetAPINatives& operator=(const GetAPINatives&) = delete;
+
   ~GetAPINatives() override {}
 
   // ObjectBackedNativeHandler:
@@ -88,9 +100,7 @@ class GetAPINatives : public ObjectBackedNativeHandler {
   }
 
  private:
-  NativeExtensionBindingsSystem* bindings_system_ = nullptr;
-
-  DISALLOW_COPY_AND_ASSIGN(GetAPINatives);
+  raw_ptr<NativeExtensionBindingsSystem> bindings_system_ = nullptr;
 };
 
 }  // namespace
@@ -139,20 +149,21 @@ ModuleSystemTestEnvironment::ModuleSystemTestEnvironment(
     ScriptContextSet* context_set,
     scoped_refptr<const Extension> extension)
     : isolate_(isolate),
-      context_holder_(new gin::ContextHolder(isolate_)),
       handle_scope_(isolate_),
+      context_holder_(std::make_unique<gin::ContextHolder>(isolate_)),
       extension_(extension),
       context_set_(context_set),
-      source_map_(new StringSourceMap()) {
-  context_holder_->SetContext(v8::Context::New(
-      isolate, TestV8ExtensionConfiguration::GetConfiguration()));
+      source_map_(std::make_unique<StringSourceMap>()) {
+  context_holder_->SetContext(v8::Context::New(isolate));
 
   {
     auto context = std::make_unique<ScriptContext>(
         context_holder_->context(),
         nullptr,  // WebFrame
-        extension_.get(), Feature::BLESSED_EXTENSION_CONTEXT, extension_.get(),
-        Feature::BLESSED_EXTENSION_CONTEXT);
+        GenerateHostIdFromExtensionId(extension_->id()), extension_.get(),
+        /*blink_isolated_world_id=*/std::nullopt,
+        mojom::ContextType::kPrivilegedExtension, extension_.get(),
+        mojom::ContextType::kPrivilegedExtension);
     context_ = context.get();
     context_set_->AddForTesting(std::move(context));
   }
@@ -160,7 +171,8 @@ ModuleSystemTestEnvironment::ModuleSystemTestEnvironment(
   context_->v8_context()->Enter();
   assert_natives_ = new AssertNatives(context_);
 
-  bindings_system_ = std::make_unique<NativeExtensionBindingsSystem>(nullptr);
+  bindings_system_ = std::make_unique<NativeExtensionBindingsSystem>(
+      /*delegate=*/nullptr, /*ipc_message_sender=*/nullptr);
 
   {
     std::unique_ptr<ModuleSystem> module_system(
@@ -171,16 +183,14 @@ ModuleSystemTestEnvironment::ModuleSystemTestEnvironment(
   module_system->RegisterNativeHandler(
       "assert", std::unique_ptr<NativeHandler>(assert_natives_));
   module_system->RegisterNativeHandler(
-      "logging",
-      std::unique_ptr<NativeHandler>(new LoggingNativeHandler(context_)));
+      "logging", std::make_unique<LoggingNativeHandler>(context_));
   module_system->RegisterNativeHandler(
-      "utils",
-      std::unique_ptr<NativeHandler>(new UtilsNativeHandler(context_)));
+      "utils", std::make_unique<UtilsNativeHandler>(context_));
   module_system->RegisterNativeHandler(
       "apiGetter",
       std::make_unique<GetAPINatives>(context_, bindings_system_.get()));
   module_system->SetExceptionHandlerForTest(
-      std::unique_ptr<ModuleSystem::ExceptionHandler>(new FailsOnException));
+      std::make_unique<FailsOnException>());
 
   bindings_system_->DidCreateScriptContext(context_);
   bindings_system_->UpdateBindingsForContext(context_);
@@ -231,15 +241,15 @@ void ModuleSystemTestEnvironment::ShutdownModuleSystem() {
   CHECK(context_->is_valid());
   context_->v8_context()->Exit();
   context_set_->Remove(context_);
-  base::RunLoop().RunUntilIdle();
   context_ = nullptr;
   assert_natives_ = nullptr;
+  base::RunLoop().RunUntilIdle();
 }
 
 v8::Local<v8::Object> ModuleSystemTestEnvironment::CreateGlobal(
     const std::string& name) {
   v8::EscapableHandleScope handle_scope(isolate_);
-  v8::MicrotasksScope microtasks(isolate_,
+  v8::MicrotasksScope microtasks(isolate_->GetCurrentContext(),
                                  v8::MicrotasksScope::kDoNotRunMicrotasks);
   v8::Local<v8::Object> object = v8::Object::New(isolate_);
   isolate_->GetCurrentContext()
@@ -253,8 +263,18 @@ v8::Local<v8::Object> ModuleSystemTestEnvironment::CreateGlobal(
   return handle_scope.Escape(object);
 }
 
+void ModuleSystemTestEnvironment::SetLazyField(
+    v8::Local<v8::Object> object,
+    const std::string& field,
+    const std::string& module_name,
+    const std::string& module_field) {
+  module_system()->SetLazyField(object, field, module_name, module_field);
+}
+
 ModuleSystemTest::ModuleSystemTest()
-    : isolate_(v8::Isolate::GetCurrent()),
+    : isolate_holder_(task_environment_.GetMainThreadTaskRunner(),
+                      gin::IsolateHolder::IsolateType::kTest),
+      isolate_(isolate_holder_.isolate()),
       context_set_(&extension_ids_),
       should_assertions_be_made_(true) {}
 
@@ -262,6 +282,7 @@ ModuleSystemTest::~ModuleSystemTest() {
 }
 
 void ModuleSystemTest::SetUp() {
+  isolate_->Enter();
   extension_ = CreateExtension();
   env_ = CreateEnvironment();
   base::CommandLine::ForCurrentProcess()->AppendSwitch("test-type");
@@ -288,15 +309,14 @@ void ModuleSystemTest::TearDown() {
         v8::Isolate::kFullGarbageCollection);
     isolate_->GetHeapStatistics(&stats);
   }
+  isolate_->Exit();
 }
 
 scoped_refptr<const Extension> ModuleSystemTest::CreateExtension() {
-  std::unique_ptr<base::DictionaryValue> manifest =
-      DictionaryBuilder()
-          .Set("name", "test")
-          .Set("version", "1.0")
-          .Set("manifest_version", 2)
-          .Build();
+  base::DictValue manifest = base::DictValue()
+                                 .Set("name", "test")
+                                 .Set("version", "1.0")
+                                 .Set("manifest_version", 2);
   return ExtensionBuilder().SetManifest(std::move(manifest)).Build();
 }
 

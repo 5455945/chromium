@@ -1,29 +1,25 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/browser_switcher/browser_switcher_service.h"
-
 #include <string.h>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/thread_restrictions.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
+#include "chrome/browser/browser_switcher/browser_switcher_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
@@ -33,6 +29,7 @@
 #include "components/prefs/pref_service.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/mojom/window_open_disposition.mojom.h"
 #include "url/gurl.h"
 
 namespace browser_switcher {
@@ -43,7 +40,7 @@ namespace {
 const char kTestUrl[] = "http://example.com/foobar";
 const char kTestUrlWithSpaces[] = "http://example.com/foobar baz";
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 // Only referenced on Windows.
 const char kTestUrlWithQuotes[] = "http://example.com/?q='world'";
 #endif
@@ -53,13 +50,13 @@ const char kOtherUrl[] = "http://google.com/";
 
 // |echo| adds a newline at the end of the file. CRLF on Windows, but just LF on
 // POSIX systems.
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 const char kTestUrlWithLineEnding[] = "http://example.com/foobar\r\n";
 #else
 const char kTestUrlWithLineEnding[] = "http://example.com/foobar\n";
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 std::string NativeToUTF8(const std::wstring& native) {
   return base::WideToUTF8(native);
 }
@@ -89,15 +86,16 @@ void InitPolicies(policy::MockConfigurationPolicyProvider* provider,
   SetPolicy(&map, policy::key::kAlternativeBrowserPath,
             base::Value(cmd_line.GetProgram().MaybeAsASCII()));
 
-  base::Value params(base::Value::Type::LIST);
+  base::ListValue params;
   for (size_t i = 1; i < cmd_line.argv().size(); i++)
     params.Append(NativeToUTF8(cmd_line.argv()[i]));
   SetPolicy(&map, policy::key::kAlternativeBrowserParameters,
-            std::move(params));
+            base::Value(std::move(params)));
 
-  base::Value sitelist(base::Value::Type::LIST);
+  base::ListValue sitelist;
   sitelist.Append("example.com");
-  SetPolicy(&map, policy::key::kBrowserSwitcherUrlList, std::move(sitelist));
+  SetPolicy(&map, policy::key::kBrowserSwitcherUrlList,
+            base::Value(std::move(sitelist)));
 
   provider->UpdateChromePolicy(map);
   base::RunLoop().RunUntilIdle();
@@ -107,7 +105,7 @@ void InitPolicies(policy::MockConfigurationPolicyProvider* provider,
 // the navigation URL and |output_file| don't contain any special characters or
 // whitespace.
 base::CommandLine GenerateEchoCommandLine(const base::FilePath& output_file) {
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   // cmd.exe /C echo ${url} > "output_file"
   std::vector<std::wstring> args = {
       L"cmd.exe", L"/C", L"echo", L"${url}>", output_file.value().c_str(),
@@ -137,10 +135,9 @@ class BrowserSwitcherBrowserTest : public InProcessBrowserTest {
   }
 
   void SetUpInProcessBrowserTestFixture() override {
-    ON_CALL(provider_, IsInitializationComplete(testing::_))
-        .WillByDefault(testing::Return(true));
-    ON_CALL(provider_, IsFirstPolicyLoadComplete(testing::_))
-        .WillByDefault(testing::Return(true));
+    provider_.SetDefaultReturns(
+        /*is_initialization_complete_return=*/true,
+        /*is_first_policy_load_complete_return=*/true);
     policy::BrowserPolicyConnector::SetPolicyProviderForTesting(&provider_);
   }
 
@@ -162,11 +159,12 @@ IN_PROC_BROWSER_TEST_F(BrowserSwitcherBrowserTest, RunsExternalCommand) {
   // We open a new tab, because closing the last tab in the browser
   // causes the whole browser to close.
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GURL(kTestUrl), WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_NONE);
+      browser(), GURL(kTestUrl),
+      ui::mojom::WindowOpenDisposition::kNewForegroundTab,
+      ui_test_utils::BROWSER_TEST_NO_WAIT);
 
   base::RunLoop run_loop;
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE, run_loop.QuitClosure(), TestTimeouts::action_timeout());
   run_loop.Run();
 
@@ -188,11 +186,11 @@ IN_PROC_BROWSER_TEST_F(BrowserSwitcherBrowserTest, DoesNotKeepSpaces) {
   // causes the whole browser to close.
   ui_test_utils::NavigateToURLWithDisposition(
       browser(), GURL(kTestUrlWithSpaces),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_NONE);
+      ui::mojom::WindowOpenDisposition::kNewForegroundTab,
+      ui_test_utils::BROWSER_TEST_NO_WAIT);
 
   base::RunLoop run_loop;
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE, run_loop.QuitClosure(), TestTimeouts::action_timeout());
   run_loop.Run();
 
@@ -200,11 +198,11 @@ IN_PROC_BROWSER_TEST_F(BrowserSwitcherBrowserTest, DoesNotKeepSpaces) {
   base::ScopedAllowBlockingForTesting allow_blocking;
   std::string output;
   ASSERT_TRUE(base::ReadFileToString(temp_file, &output));
-  EXPECT_FALSE(base::Contains(output, ' '));
-  EXPECT_TRUE(base::Contains(output, "%20"));
+  EXPECT_FALSE(output.contains(' '));
+  EXPECT_TRUE(output.contains("%20"));
 }
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 // IE has some quirks with quote characters. Make sure IE doesn't receive them
 // percent-encoded.
 IN_PROC_BROWSER_TEST_F(BrowserSwitcherBrowserTest, UnencodesSingleQUotes) {
@@ -218,11 +216,11 @@ IN_PROC_BROWSER_TEST_F(BrowserSwitcherBrowserTest, UnencodesSingleQUotes) {
   // causes the whole browser to close.
   ui_test_utils::NavigateToURLWithDisposition(
       browser(), GURL(kTestUrlWithQuotes),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_NONE);
+      ui::mojom::WindowOpenDisposition::kNewForegroundTab,
+      ui_test_utils::BROWSER_TEST_NO_WAIT);
 
   base::RunLoop run_loop;
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE, run_loop.QuitClosure(), TestTimeouts::action_timeout());
   run_loop.Run();
 
@@ -244,11 +242,12 @@ IN_PROC_BROWSER_TEST_F(BrowserSwitcherBrowserTest, DoesNotRunOnRandomUrls) {
   // We open a new tab, because closing the last tab in the browser
   // causes the whole browser to close.
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GURL(kOtherUrl), WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_NONE);
+      browser(), GURL(kOtherUrl),
+      ui::mojom::WindowOpenDisposition::kNewForegroundTab,
+      ui_test_utils::BROWSER_TEST_NO_WAIT);
 
   base::RunLoop run_loop;
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE, run_loop.QuitClosure(), TestTimeouts::action_timeout());
   run_loop.Run();
 

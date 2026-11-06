@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,8 +11,6 @@
 #include <memory>
 #include <string>
 #include <vector>
-
-#include "base/macros.h"
 
 namespace sync_file_system {
 namespace drive_backend {
@@ -35,8 +33,14 @@ bool operator<(const ParentIDAndTitle& left, const ParentIDAndTitle& right);
 // Interface class to maintain indexes of MetadataDatabase.
 class MetadataDatabaseIndexInterface {
  public:
-  MetadataDatabaseIndexInterface() {}
-  virtual ~MetadataDatabaseIndexInterface() {}
+  MetadataDatabaseIndexInterface() = default;
+
+  MetadataDatabaseIndexInterface(const MetadataDatabaseIndexInterface&) =
+      delete;
+  MetadataDatabaseIndexInterface& operator=(
+      const MetadataDatabaseIndexInterface&) = delete;
+
+  virtual ~MetadataDatabaseIndexInterface() = default;
 
   // Removes unreachable items.
   virtual void RemoveUnreachableItems() = 0;
@@ -96,7 +100,6 @@ class MetadataDatabaseIndexInterface {
   virtual void DemoteDirtyTracker(int64_t tracker_id) = 0;
 
   virtual bool HasDemotedDirtyTracker() const = 0;
-  virtual bool IsDemotedDirtyTracker(int64_t tracker_id) const = 0;
 
   // Promotes single demoted dirty tracker to a normal dirty tracker.
   virtual void PromoteDemotedDirtyTracker(int64_t tracker_id) = 0;
@@ -118,11 +121,6 @@ class MetadataDatabaseIndexInterface {
   virtual int64_t GetLargestChangeID() const = 0;
   virtual int64_t GetNextTrackerID() const = 0;
   virtual std::vector<std::string> GetRegisteredAppIDs() const = 0;
-  virtual std::vector<int64_t> GetAllTrackerIDs() const = 0;
-  virtual std::vector<std::string> GetAllMetadataIDs() const = 0;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(MetadataDatabaseIndexInterface);
 };
 
 }  // namespace drive_backend

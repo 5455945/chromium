@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,9 @@
 
 #include <memory>
 
-#include "base/callback.h"
+#include "base/containers/span.h"
 #include "base/files/file.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/threading/thread.h"
 #include "remoting/host/security_key/security_key_message.h"
@@ -26,6 +26,11 @@ namespace remoting {
 class SecurityKeyMessageReaderImpl : public SecurityKeyMessageReader {
  public:
   explicit SecurityKeyMessageReaderImpl(base::File input_file);
+
+  SecurityKeyMessageReaderImpl(const SecurityKeyMessageReaderImpl&) = delete;
+  SecurityKeyMessageReaderImpl& operator=(const SecurityKeyMessageReaderImpl&) =
+      delete;
+
   ~SecurityKeyMessageReaderImpl() override;
 
   // SecurityKeyMessageReader interface.
@@ -37,9 +42,9 @@ class SecurityKeyMessageReaderImpl : public SecurityKeyMessageReader {
   // |message_callback_| on the originating thread. Run on |read_task_runner_|.
   void ReadMessage();
 
-  // Reads the nubmer of bytes indicated by |bytes_to_read| into |buffer| from
-  // |read_stream_|.  Returns true if all bytes were retrieved successfully.
-  bool ReadFromStream(char* buffer, size_t bytes_to_read);
+  // Reads into `buffer` from `read_stream_`. Returns true if all bytes were
+  // retrieved successfully.
+  bool ReadFromStream(base::span<uint8_t> buffer);
 
   // Callback run on |read_task_runner_| when an error occurs or EOF is reached.
   void NotifyError();
@@ -62,8 +67,6 @@ class SecurityKeyMessageReaderImpl : public SecurityKeyMessageReader {
 
   base::WeakPtr<SecurityKeyMessageReaderImpl> reader_;
   base::WeakPtrFactory<SecurityKeyMessageReaderImpl> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(SecurityKeyMessageReaderImpl);
 };
 
 }  // namespace remoting

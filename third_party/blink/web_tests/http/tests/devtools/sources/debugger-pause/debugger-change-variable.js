@@ -1,11 +1,15 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+import {ConsoleTestRunner} from 'console_test_runner';
+import {SourcesTestRunner} from 'sources_test_runner';
+
+import * as SourcesModule from 'devtools/panels/sources/sources.js';
+
 (async function() {
   TestRunner.addResult(`Tests that modifying local variables works fine.\n`);
-  await TestRunner.loadModule('console'); await TestRunner.loadTestModule('console_test_runner');
-  await TestRunner.loadModule('sources'); await TestRunner.loadTestModule('sources_test_runner');
   await TestRunner.showPanel('sources');
   await TestRunner.evaluateInPagePromise(`
       function slave(x)
@@ -32,20 +36,19 @@
   }
 
   function localScopeObject() {
-    var localsSection = SourcesTestRunner.scopeChainSections()[0];
-    return localsSection._object;
+    return TestRunner.debuggerModel.debuggerPausedDetails().callFrames[1].scopeChain()[0].object();
   }
 
   function step1() {
     SourcesTestRunner.runTestFunctionAndWaitUntilPaused();
     TestRunner.addSniffer(
-              Sources.CallStackSidebarPane.prototype, '_updatedForTest', step2);
+              SourcesModule.CallStackSidebarPane.CallStackSidebarPane.prototype, 'updatedForTest', step2);
   }
 
   function step2(callFrames) {
-    var pane = Sources.CallStackSidebarPane.instance();
-    pane._selectNextCallFrameOnStack();
-    TestRunner.deprecatedRunAfterPendingDispatches(step3);
+    var pane = SourcesModule.CallStackSidebarPane.CallStackSidebarPane.instance();
+    pane.selectNextCallFrameOnStack();
+    step3();
   }
 
   function step3() {

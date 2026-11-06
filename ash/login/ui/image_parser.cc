@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,8 @@
 
 #include "ash/shell.h"
 #include "ash/shell_delegate.h"
-#include "base/bind.h"
-#include "ipc/ipc_channel.h"
+#include "base/functional/bind.h"
+#include "ipc/constants.mojom.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/data_decoder/public/cpp/decode_image.h"
 
@@ -17,7 +17,7 @@ namespace ash {
 namespace {
 
 const int64_t kMaxImageSizeInBytes =
-    static_cast<int64_t>(IPC::Channel::kMaximumMessageSize);
+    static_cast<int64_t>(IPC::mojom::kChannelMaximumMessageSize);
 
 void ConvertToAnimationFrame(
     OnDecoded callback,

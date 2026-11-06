@@ -1,20 +1,18 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/spdy/spdy_stream_test_util.h"
 
 #include <cstddef>
+#include <string_view>
 #include <utility>
 
-#include "base/stl_util.h"
-#include "base/strings/string_piece.h"
+#include "base/containers/span.h"
 #include "net/spdy/spdy_stream.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace net {
-
-namespace test {
+namespace net::test {
 
 ClosingDelegate::ClosingDelegate(
     const base::WeakPtr<SpdyStream>& stream) : stream_(stream) {
@@ -26,17 +24,16 @@ ClosingDelegate::~ClosingDelegate() = default;
 void ClosingDelegate::OnHeadersSent() {}
 
 void ClosingDelegate::OnEarlyHintsReceived(
-    const spdy::Http2HeaderBlock& headers) {}
+    const quiche::HttpHeaderBlock& headers) {}
 
 void ClosingDelegate::OnHeadersReceived(
-    const spdy::Http2HeaderBlock& response_headers,
-    const spdy::Http2HeaderBlock* pushed_request_headers) {}
+    const quiche::HttpHeaderBlock& response_headers) {}
 
 void ClosingDelegate::OnDataReceived(std::unique_ptr<SpdyBuffer> buffer) {}
 
 void ClosingDelegate::OnDataSent() {}
 
-void ClosingDelegate::OnTrailers(const spdy::Http2HeaderBlock& trailers) {}
+void ClosingDelegate::OnTrailers(const quiche::HttpHeaderBlock& trailers) {}
 
 void ClosingDelegate::OnClose(int status) {
   DCHECK(stream_);
@@ -52,12 +49,8 @@ NetLogSource ClosingDelegate::source_dependency() const {
   return NetLogSource();
 }
 
-StreamDelegateBase::StreamDelegateBase(
-    const base::WeakPtr<SpdyStream>& stream)
-    : stream_(stream),
-      stream_id_(0),
-      send_headers_completed_(false) {
-}
+StreamDelegateBase::StreamDelegateBase(const base::WeakPtr<SpdyStream>& stream)
+    : stream_(stream) {}
 
 StreamDelegateBase::~StreamDelegateBase() = default;
 
@@ -68,15 +61,14 @@ void StreamDelegateBase::OnHeadersSent() {
 }
 
 void StreamDelegateBase::OnEarlyHintsReceived(
-    const spdy::Http2HeaderBlock& headers) {
-  EXPECT_EQ(stream_->type() != SPDY_PUSH_STREAM, send_headers_completed_);
+    const quiche::HttpHeaderBlock& headers) {
+  EXPECT_TRUE(send_headers_completed_);
   early_hints_.push_back(headers.Clone());
 }
 
 void StreamDelegateBase::OnHeadersReceived(
-    const spdy::Http2HeaderBlock& response_headers,
-    const spdy::Http2HeaderBlock* pushed_request_headers) {
-  EXPECT_EQ(stream_->type() != SPDY_PUSH_STREAM, send_headers_completed_);
+    const quiche::HttpHeaderBlock& response_headers) {
+  EXPECT_TRUE(send_headers_completed_);
   response_headers_ = response_headers.Clone();
 }
 
@@ -87,7 +79,7 @@ void StreamDelegateBase::OnDataReceived(std::unique_ptr<SpdyBuffer> buffer) {
 
 void StreamDelegateBase::OnDataSent() {}
 
-void StreamDelegateBase::OnTrailers(const spdy::Http2HeaderBlock& trailers) {}
+void StreamDelegateBase::OnTrailers(const quiche::HttpHeaderBlock& trailers) {}
 
 void StreamDelegateBase::OnClose(int status) {
   if (!stream_.get())
@@ -116,15 +108,16 @@ std::string StreamDelegateBase::TakeReceivedData() {
   size_t len = received_data_queue_.GetTotalSize();
   std::string received_data(len, '\0');
   if (len > 0) {
-    EXPECT_EQ(len,
-              received_data_queue_.Dequeue(base::data(received_data), len));
+    EXPECT_EQ(received_data_queue_.Dequeue(
+                  base::as_writable_byte_span(received_data)),
+              len);
   }
   return received_data;
 }
 
 std::string StreamDelegateBase::GetResponseHeaderValue(
     const std::string& name) const {
-  spdy::Http2HeaderBlock::const_iterator it = response_headers_.find(name);
+  quiche::HttpHeaderBlock::const_iterator it = response_headers_.find(name);
   return (it == response_headers_.end()) ? std::string()
                                          : std::string(it->second);
 }
@@ -140,18 +133,27 @@ StreamDelegateDoNothing::StreamDelegateDoNothing(
 
 StreamDelegateDoNothing::~StreamDelegateDoNothing() = default;
 
+StreamDelegateConsumeData::StreamDelegateConsumeData(
+    const base::WeakPtr<SpdyStream>& stream)
+    : StreamDelegateBase(stream) {}
+
+StreamDelegateConsumeData::~StreamDelegateConsumeData() = default;
+
+void StreamDelegateConsumeData::OnDataReceived(
+    std::unique_ptr<SpdyBuffer> buffer) {
+  buffer->Consume(buffer->GetRemainingSize());
+}
+
 StreamDelegateSendImmediate::StreamDelegateSendImmediate(
     const base::WeakPtr<SpdyStream>& stream,
-    base::StringPiece data)
+    std::string_view data)
     : StreamDelegateBase(stream), data_(data) {}
 
 StreamDelegateSendImmediate::~StreamDelegateSendImmediate() = default;
 
 void StreamDelegateSendImmediate::OnHeadersReceived(
-    const spdy::Http2HeaderBlock& response_headers,
-    const spdy::Http2HeaderBlock* pushed_request_headers) {
-  StreamDelegateBase::OnHeadersReceived(response_headers,
-                                        pushed_request_headers);
+    const quiche::HttpHeaderBlock& response_headers) {
+  StreamDelegateBase::OnHeadersReceived(response_headers);
   if (data_.data()) {
     scoped_refptr<StringIOBuffer> buf =
         base::MakeRefCounted<StringIOBuffer>(std::string(data_));
@@ -161,7 +163,7 @@ void StreamDelegateSendImmediate::OnHeadersReceived(
 
 StreamDelegateWithBody::StreamDelegateWithBody(
     const base::WeakPtr<SpdyStream>& stream,
-    base::StringPiece data)
+    std::string_view data)
     : StreamDelegateBase(stream),
       buf_(base::MakeRefCounted<StringIOBuffer>(std::string(data))) {}
 
@@ -180,8 +182,7 @@ StreamDelegateCloseOnHeaders::StreamDelegateCloseOnHeaders(
 StreamDelegateCloseOnHeaders::~StreamDelegateCloseOnHeaders() = default;
 
 void StreamDelegateCloseOnHeaders::OnHeadersReceived(
-    const spdy::Http2HeaderBlock& response_headers,
-    const spdy::Http2HeaderBlock* pushed_request_headers) {
+    const quiche::HttpHeaderBlock& response_headers) {
   stream()->Cancel(ERR_ABORTED);
 }
 
@@ -197,6 +198,4 @@ void StreamDelegateDetectEOF::OnDataReceived(
     eof_detected_ = true;
 }
 
-}  // namespace test
-
-}  // namespace net
+}  // namespace net::test

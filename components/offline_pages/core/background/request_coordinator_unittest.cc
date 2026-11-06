@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,16 +9,17 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/containers/circular_deque.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
+#include "base/memory/raw_ptr.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/system/sys_info.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/test_mock_time_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "components/offline_items_collection/core/pending_state.h"
 #include "components/offline_pages/core/background/device_conditions.h"
@@ -50,7 +51,6 @@ const int kRequestId1(1);
 const int kRequestId2(2);
 const long kTestTimeBudgetSeconds = 200;
 const int kBatteryPercentageHigh = 75;
-const int kMaxCompletedTries = 3;
 const bool kPowerRequired = true;
 const bool kUserRequested = true;
 const int kAttemptCount = 1;
@@ -142,7 +142,7 @@ class ObserverStub : public RequestCoordinator::Observer {
 
 class ActiveTabInfoStub : public RequestCoordinator::ActiveTabInfo {
  public:
-  ~ActiveTabInfoStub() override {}
+  ~ActiveTabInfoStub() override = default;
   bool DoesActiveTabMatch(const GURL&) override {
     return does_active_tab_match_;
   }
@@ -284,10 +284,11 @@ class RequestCoordinatorTest : public testing::Test {
 
   void CallRequestNotPicked(bool non_user_requested_tasks_remaining,
                             bool disabled_tasks_remaining) {
-    if (disabled_tasks_remaining)
+    if (disabled_tasks_remaining) {
       coordinator()->disabled_requests_.insert(kRequestId1);
-    else
+    } else {
       coordinator()->disabled_requests_.clear();
+    }
 
     coordinator()->RequestNotPicked(non_user_requested_tasks_remaining, false,
                                     base::Time());
@@ -390,17 +391,19 @@ class RequestCoordinatorTest : public testing::Test {
   }
 
  protected:
-  ActiveTabInfoStub* active_tab_info_ = nullptr;
+  raw_ptr<ActiveTabInfoStub, DanglingUntriaged> active_tab_info_ = nullptr;
 
  private:
   GetRequestsResult last_get_requests_result_;
   MultipleItemStatuses last_remove_results_;
   std::vector<std::unique_ptr<SavePageRequest>> last_requests_;
   scoped_refptr<base::TestMockTimeTaskRunner> task_runner_;
-  base::ThreadTaskRunnerHandle task_runner_handle_;
-  network::NetworkQualityTracker* network_quality_tracker_;
+  base::SingleThreadTaskRunner::CurrentDefaultHandle
+      task_runner_current_default_handle_;
+  raw_ptr<network::NetworkQualityTracker, DanglingUntriaged>
+      network_quality_tracker_;
   std::unique_ptr<RequestCoordinatorStubTaco> coordinator_taco_;
-  OfflinerStub* offliner_;
+  raw_ptr<OfflinerStub, DanglingUntriaged> offliner_;
   base::WaitableEvent waiter_;
   ObserverStub observer_;
   AddRequestResult expected_add_request_result_;
@@ -416,7 +419,7 @@ class RequestCoordinatorTest : public testing::Test {
 RequestCoordinatorTest::RequestCoordinatorTest()
     : last_get_requests_result_(GetRequestsResult::STORE_FAILURE),
       task_runner_(new base::TestMockTimeTaskRunner),
-      task_runner_handle_(task_runner_),
+      task_runner_current_default_handle_(task_runner_),
       offliner_(nullptr),
       waiter_(base::WaitableEvent::ResetPolicy::MANUAL,
               base::WaitableEvent::InitialState::NOT_SIGNALED),
@@ -428,7 +431,7 @@ RequestCoordinatorTest::RequestCoordinatorTest()
                          kBatteryPercentageHigh,
                          net::NetworkChangeNotifier::CONNECTION_3G) {}
 
-RequestCoordinatorTest::~RequestCoordinatorTest() {}
+RequestCoordinatorTest::~RequestCoordinatorTest() = default;
 
 void RequestCoordinatorTest::SetUp() {
   coordinator_taco_ = std::make_unique<RequestCoordinatorStubTaco>();
@@ -539,16 +542,6 @@ TEST_F(RequestCoordinatorTest, StartScheduledProcessingWithNoRequests) {
   PumpLoop();
 
   EXPECT_TRUE(processing_callback_called());
-
-  // Verify queue depth UMA for starting scheduled processing on empty queue.
-  if (base::SysInfo::IsLowEndDevice()) {
-    histograms().ExpectBucketCount(
-        "OfflinePages.Background.ScheduledStart.AvailableRequestCount.Svelte",
-        0, 1);
-  } else {
-    histograms().ExpectBucketCount(
-        "OfflinePages.Background.ScheduledStart.AvailableRequestCount", 0, 1);
-  }
 }
 
 TEST_F(RequestCoordinatorTest, NetworkProgressCallback) {
@@ -585,9 +578,6 @@ TEST_F(RequestCoordinatorTest, StartImmediateProcessingWithNoRequests) {
   PumpLoop();
 
   EXPECT_TRUE(processing_callback_called());
-
-  histograms().ExpectBucketCount("OfflinePages.Background.ImmediateStartStatus",
-                                 0 /* STARTED */, 1);
 }
 
 TEST_F(RequestCoordinatorTest, StartImmediateProcessingOnSvelte) {
@@ -595,8 +585,6 @@ TEST_F(RequestCoordinatorTest, StartImmediateProcessingOnSvelte) {
   SetIsLowEndDeviceForTest(true);
 
   EXPECT_FALSE(coordinator()->StartImmediateProcessing(processing_callback()));
-  histograms().ExpectBucketCount("OfflinePages.Background.ImmediateStartStatus",
-                                 5 /* NOT_STARTED_ON_SVELTE */, 1);
 }
 
 TEST_F(RequestCoordinatorTest, StartImmediateProcessingWhenDisconnected) {
@@ -605,8 +593,6 @@ TEST_F(RequestCoordinatorTest, StartImmediateProcessingWhenDisconnected) {
       net::NetworkChangeNotifier::CONNECTION_NONE);
   SetDeviceConditionsForTest(disconnected_conditions);
   EXPECT_FALSE(coordinator()->StartImmediateProcessing(processing_callback()));
-  histograms().ExpectBucketCount("OfflinePages.Background.ImmediateStartStatus",
-                                 3 /* NO_CONNECTION */, 1);
 }
 
 TEST_F(RequestCoordinatorTest, StartImmediateProcessingWithRequestInProgress) {
@@ -626,9 +612,6 @@ TEST_F(RequestCoordinatorTest, StartImmediateProcessingWithRequestInProgress) {
 
   // Now trying to start processing should return false since already busy.
   EXPECT_FALSE(coordinator()->StartImmediateProcessing(processing_callback()));
-
-  histograms().ExpectBucketCount("OfflinePages.Background.ImmediateStartStatus",
-                                 1 /* BUSY */, 1);
 }
 
 TEST_F(RequestCoordinatorTest, SavePageLater) {
@@ -679,10 +662,6 @@ TEST_F(RequestCoordinatorTest, SavePageLater) {
 
   // Check that the observer got the notification that a page is available
   EXPECT_TRUE(observer().added_called());
-
-  // Verify queue depth UMA for starting immediate processing.
-  histograms().ExpectBucketCount(
-      "OfflinePages.Background.ImmediateStart.AvailableRequestCount", 1, 1);
 }
 
 TEST_F(RequestCoordinatorTest, SavePageLaterFailed) {
@@ -755,9 +734,6 @@ TEST_F(RequestCoordinatorTest, OfflinerDoneRequestSucceeded) {
   // Check that the observer got the notification that we succeeded, and that
   // the request got removed from the queue.
   EXPECT_TRUE(observer().completed_called());
-  histograms().ExpectBucketCount(
-      "OfflinePages.Background.FinalSavePageResult.bookmark", 0 /* SUCCESS */,
-      1);
   EXPECT_EQ(RequestCoordinator::BackgroundSavePageResult::SUCCESS,
             observer().last_status());
 }
@@ -829,9 +805,6 @@ TEST_F(RequestCoordinatorTest, OfflinerDoneRequestFailed) {
   // subsequent notification that the request was removed) since we exceeded
   // retry count.
   EXPECT_TRUE(observer().completed_called());
-  histograms().ExpectBucketCount(
-      "OfflinePages.Background.FinalSavePageResult.bookmark",
-      6 /* RETRY_COUNT_EXCEEDED */, 1);
   EXPECT_EQ(RequestCoordinator::BackgroundSavePageResult::RETRY_COUNT_EXCEEDED,
             observer().last_status());
 }
@@ -872,12 +845,6 @@ TEST_F(RequestCoordinatorTest, OfflinerDoneRequestFailedNoRetryFailure) {
   EXPECT_TRUE(observer().completed_called());
   EXPECT_EQ(RequestCoordinator::BackgroundSavePageResult::LOADING_FAILURE,
             observer().last_status());
-  // We should have a histogram entry for the effective network conditions
-  // when this failed request began.
-  histograms().ExpectBucketCount(
-      "OfflinePages.Background.EffectiveConnectionType.OffliningStartType."
-      "bookmark",
-      net::NetworkChangeNotifier::CONNECTION_UNKNOWN, 1);
 }
 
 TEST_F(RequestCoordinatorTest, OfflinerDoneRequestFailedNoNextFailure) {
@@ -1257,7 +1224,7 @@ TEST_F(RequestCoordinatorTest, RemoveInflightRequestAndAddAnother) {
   AddRequest1();
   PumpLoop();
   // Test a different ordering of tasks, by delaying the offliner cancellation.
-  offliner()->set_cancel_delay(base::TimeDelta::FromSeconds(1));
+  offliner()->set_cancel_delay(base::Seconds(1));
   // Ensure the start processing request stops before the completion callback.
   EnableOfflinerCallback(false);
 
@@ -1281,7 +1248,7 @@ TEST_F(RequestCoordinatorTest, RemoveInflightRequestAndAddAnother) {
       request_ids, base::BindOnce(&RequestCoordinatorTest::RemoveRequestsDone,
                                   base::Unretained(this)));
 
-  AdvanceClockBy(base::TimeDelta::FromSeconds(2));
+  AdvanceClockBy(base::Seconds(2));
 
   // Since offliner was started, it will have seen cancel call.
   EXPECT_TRUE(OfflinerWasCanceled());
@@ -1366,7 +1333,7 @@ TEST_F(RequestCoordinatorTest,
   PumpLoop();
 
   // Advance the mock clock far enough to cause a watchdog timeout
-  AdvanceClockBy(base::TimeDelta::FromSeconds(
+  AdvanceClockBy(base::Seconds(
       coordinator()
           ->policy()
           ->GetSinglePageTimeLimitWhenBackgroundScheduledInSeconds() +
@@ -1397,11 +1364,11 @@ TEST_F(RequestCoordinatorTest,
   EXPECT_TRUE(state() == RequestCoordinatorState::OFFLINING);
 
   // Advance the mock clock 1 second before the watchdog timeout.
-  AdvanceClockBy(base::TimeDelta::FromSeconds(
-      coordinator()
-          ->policy()
-          ->GetSinglePageTimeLimitForImmediateLoadInSeconds() -
-      1));
+  AdvanceClockBy(
+      base::Seconds(coordinator()
+                        ->policy()
+                        ->GetSinglePageTimeLimitForImmediateLoadInSeconds() -
+                    1));
   PumpLoop();
 
   // Verify still busy.
@@ -1409,7 +1376,7 @@ TEST_F(RequestCoordinatorTest,
   EXPECT_FALSE(OfflinerWasCanceled());
 
   // Advance the mock clock past the watchdog timeout now.
-  AdvanceClockBy(base::TimeDelta::FromSeconds(2));
+  AdvanceClockBy(base::Seconds(2));
   PumpLoop();
 
   // Verify the request timed out.
@@ -1436,7 +1403,7 @@ TEST_F(RequestCoordinatorTest, TimeBudgetExceeded) {
   // Advance the mock clock far enough to exceed our time budget.
   // The first request will time out, and because we are over time budget,
   // the second request will not be started.
-  AdvanceClockBy(base::TimeDelta::FromSeconds(kTestTimeBudgetSeconds));
+  AdvanceClockBy(base::Seconds(kTestTimeBudgetSeconds));
   PumpLoop();
 
   // TryNextRequest should decide that there is no more work to be done,
@@ -1728,7 +1695,7 @@ TEST_F(RequestCoordinatorTest, SnapshotOnLastTryForScheduledProcessing) {
   PumpLoop();
 
   // Advance the mock clock far enough to cause a watchdog timeout
-  AdvanceClockBy(base::TimeDelta::FromSeconds(
+  AdvanceClockBy(base::Seconds(
       coordinator()
           ->policy()
           ->GetSinglePageTimeLimitWhenBackgroundScheduledInSeconds() +
@@ -1768,11 +1735,11 @@ TEST_F(RequestCoordinatorTest, SnapshotOnLastTryForImmediateProcessing) {
     EXPECT_TRUE(state() == RequestCoordinatorState::OFFLINING);
 
     // Advance the mock clock 1 second more than the watchdog timeout.
-    AdvanceClockBy(base::TimeDelta::FromSeconds(
-        coordinator()
-            ->policy()
-            ->GetSinglePageTimeLimitForImmediateLoadInSeconds() +
-        1));
+    AdvanceClockBy(
+        base::Seconds(coordinator()
+                          ->policy()
+                          ->GetSinglePageTimeLimitForImmediateLoadInSeconds() +
+                      1));
     PumpLoop();
 
     // Verify the request timed out.
@@ -1787,11 +1754,11 @@ TEST_F(RequestCoordinatorTest, SnapshotOnLastTryForImmediateProcessing) {
   EnableSnapshotOnLastRetry();
 
   // Advance the mock clock 1 second more than the watchdog timeout.
-  AdvanceClockBy(base::TimeDelta::FromSeconds(
-      coordinator()
-          ->policy()
-          ->GetSinglePageTimeLimitForImmediateLoadInSeconds() +
-      1));
+  AdvanceClockBy(
+      base::Seconds(coordinator()
+                        ->policy()
+                        ->GetSinglePageTimeLimitForImmediateLoadInSeconds() +
+                    1));
   PumpLoop();
 
   // The last time would trigger the snapshot on last retry and succeed.

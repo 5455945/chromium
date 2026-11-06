@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,6 +11,8 @@
 #include <vector>
 
 #include "base/files/file_path.h"
+#include "base/memory/raw_ptr.h"
+#include "base/test/test_discardable_memory_allocator.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -21,7 +23,7 @@ class PDFiumPage;
 class TestClient;
 class TestDocumentLoader;
 
-class PDFiumTestBase : public testing::Test {
+class PDFiumTestBase : public testing::TestWithParam<bool> {
  public:
   PDFiumTestBase();
   PDFiumTestBase(const PDFiumTestBase&) = delete;
@@ -39,11 +41,14 @@ class PDFiumTestBase : public testing::Test {
     InitializeEngineResult& operator=(InitializeEngineResult&& other) noexcept;
     ~InitializeEngineResult();
 
+    // Completes loading the document.
+    void FinishLoading();
+
     // Initialized engine.
     std::unique_ptr<PDFiumEngine> engine;
 
     // Corresponding test document loader.
-    TestDocumentLoader* document_loader;
+    raw_ptr<TestDocumentLoader> document_loader;
   };
 
   // testing::Test:
@@ -56,6 +61,12 @@ class PDFiumTestBase : public testing::Test {
       TestClient* client,
       const base::FilePath::CharType* pdf_name);
 
+  // Initializes a PDFiumEngine for use in testing with `client`. Loads PDF data
+  // directly.
+  std::unique_ptr<PDFiumEngine> InitializeEngineFromData(
+      TestClient* client,
+      std::vector<uint8_t> pdf_data);
+
   // Initializes a PDFiumEngine as with InitializeEngine(), but defers loading
   // until the test calls SimulateLoadData() on the returned TestDocumentLoader.
   InitializeEngineResult InitializeEngineWithoutLoading(
@@ -64,15 +75,24 @@ class PDFiumTestBase : public testing::Test {
 
   // Returns the `PDFiumPage` for the page index. The page index must be valid
   // (less than `engine.GetNumberOfPages()`).
-  static const PDFiumPage& GetPDFiumPageForTest(const PDFiumEngine& engine,
-                                                size_t page_index);
-  static PDFiumPage& GetPDFiumPageForTest(PDFiumEngine& engine,
-                                          size_t page_index);
+  static const PDFiumPage& GetPDFiumPage(const PDFiumEngine& engine,
+                                         size_t page_index);
+  static PDFiumPage& GetPDFiumPage(PDFiumEngine& engine, size_t page_index);
 
  private:
-  void InitializePDFium();
+  void InitializePDFiumSDK();
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+  InitializeEngineResult InitializeEngineWithoutLoadingImpl(
+      TestClient* client,
+      std::unique_ptr<PDFiumEngine> engine,
+      std::unique_ptr<TestDocumentLoader> document_loader);
+  std::unique_ptr<PDFiumEngine> CreateEngine(TestClient* client);
+  void SimulateLoading(PDFiumEngine* engine,
+                       TestDocumentLoader* document_loader);
+
+  base::TestDiscardableMemoryAllocator discardable_memory_allocator_;
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   base::FilePath test_fonts_path_;
 #endif
 

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,14 +10,17 @@
 #include <memory>
 #include <ostream>
 #include <string>
+#include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/location.h"
 #include "base/metrics/histogram.h"
 #include "base/metrics/histogram_base.h"
-#include "base/strings/string_piece.h"
 #include "base/time/time.h"
+#include "testing/gmock/include/gmock/gmock.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
 namespace base {
 
@@ -33,85 +36,142 @@ class HistogramSamples;
 // histogram data between the renderer and browser processes. If it is in a
 // content browser test, then content::FetchHistogramsFromChildProcesses()
 // should be used to achieve that.
+// To test histograms in Java tests, use HistogramWatcher.
+// To wait for a histogram to be recorded in C++ tests, use
+// StatisticsRecorder::ScopedHistogramSampleObserver or
+// StatisticsRecorder::HistogramWaiter.
 class HistogramTester {
  public:
-  using CountsMap = std::map<std::string, HistogramBase::Count, std::less<>>;
+  using CountsMap = std::map<std::string, HistogramBase::Count32, std::less<>>;
 
   // Takes a snapshot of all current histograms counts.
   HistogramTester();
+
+  HistogramTester(const HistogramTester&) = delete;
+  HistogramTester& operator=(const HistogramTester&) = delete;
+
   ~HistogramTester();
 
-  // We know the exact number of samples in a bucket, and that no other bucket
-  // should have samples. Measures the diff from the snapshot taken when this
-  // object was constructed.
-  void ExpectUniqueSample(StringPiece name,
-                          HistogramBase::Sample sample,
-                          HistogramBase::Count expected_bucket_count) const;
+  // EXPECTs that the number of samples in bucket |sample| of histogram |name|
+  // grew by |expected_bucket_count| since the HistogramTester was created and
+  // that no other bucket of the histogram gained any extra samples.
+  // If a bucket had samples before the HistogramTester was created, these
+  // samples are completely ignored.
+  void ExpectUniqueSample(std::string_view name,
+                          HistogramBase::Sample32 sample,
+                          HistogramBase::Count32 expected_bucket_count,
+                          const Location& location = FROM_HERE) const;
   template <typename T>
-  void ExpectUniqueSample(StringPiece name,
+  void ExpectUniqueSample(std::string_view name,
                           T sample,
-                          HistogramBase::Count expected_bucket_count) const {
-    ExpectUniqueSample(name, static_cast<HistogramBase::Sample>(sample),
-                       expected_bucket_count);
+                          HistogramBase::Count32 expected_bucket_count,
+                          const Location& location = FROM_HERE) const {
+    ExpectUniqueSample(name, static_cast<HistogramBase::Sample32>(sample),
+                       expected_bucket_count, location);
   }
-  void ExpectUniqueTimeSample(StringPiece name,
+  void ExpectUniqueTimeSample(std::string_view name,
                               TimeDelta sample,
-                              HistogramBase::Count expected_bucket_count) const;
+                              HistogramBase::Count32 expected_bucket_count,
+                              const Location& location = FROM_HERE) const;
 
-  // We know the exact number of samples in a bucket, but other buckets may
-  // have samples as well. Measures the diff from the snapshot taken when this
-  // object was constructed.
-  void ExpectBucketCount(StringPiece name,
-                         HistogramBase::Sample sample,
-                         HistogramBase::Count expected_count) const;
+  // EXPECTs that the number of samples in bucket |sample| of histogram |name|
+  // grew by |expected_count| since the HistogramTester was created. Samples in
+  // other buckets are ignored.
+  void ExpectBucketCount(std::string_view name,
+                         HistogramBase::Sample32 sample,
+                         HistogramBase::Count32 expected_count,
+                         const Location& location = FROM_HERE) const;
   template <typename T>
-  void ExpectBucketCount(StringPiece name,
+  void ExpectBucketCount(std::string_view name,
                          T sample,
-                         HistogramBase::Count expected_count) const {
-    ExpectBucketCount(name, static_cast<HistogramBase::Sample>(sample),
-                      expected_count);
+                         HistogramBase::Count32 expected_count,
+                         const Location& location = FROM_HERE) const {
+    ExpectBucketCount(name, static_cast<HistogramBase::Sample32>(sample),
+                      expected_count, location);
   }
-
-  // We don't know the values of the samples, but we know how many there are.
-  // This measures the diff from the snapshot taken when this object was
-  // constructed.
-  void ExpectTotalCount(StringPiece name, HistogramBase::Count count) const;
-
-  // We know exact number of samples for buckets corresponding to a time
-  // interval. Other intervals may have samples too.
-  void ExpectTimeBucketCount(StringPiece name,
+  void ExpectTimeBucketCount(std::string_view name,
                              TimeDelta sample,
-                             HistogramBase::Count count) const;
+                             HistogramBase::Count32 expected_count,
+                             const Location& location = FROM_HERE) const;
 
-  // We don't know the values of the samples, but we know their sum.
-  // This returns the diff from the snapshot taken when this object was
-  // constructed.
-  int64_t GetTotalSum(StringPiece name) const;
+  // EXPECTs that the total number of samples in histogram |name|
+  // grew by |expected_count| since the HistogramTester was created.
+  void ExpectTotalCount(std::string_view name,
+                        HistogramBase::Count32 expected_count,
+                        const Location& location = FROM_HERE) const;
+
+  // Returns the sum of all samples recorded for a given histogram `name` since
+  // the HistogramTester was created.
+  int64_t GetTotalSum(std::string_view name) const;
+
+  // Returns the sum of all samples recorded for all histograms since the
+  // HistogramTester was created.
+  int64_t GetTotalSum() const;
+
+  // Returns the sum of all samples recorded for all histograms whose names
+  // start with `prefix` since the HistogramTester was created.
+  int64_t GetTotalSumForPrefix(std::string_view prefix) const;
 
   // Returns a list of all of the buckets recorded since creation of this
   // object, as vector<Bucket>, where the Bucket represents the min boundary of
   // the bucket and the count of samples recorded to that bucket since creation.
   //
+  // Note: The histogram defines the bucket boundaries. If you test a histogram
+  // with exponential bucket sizes, this function may not be particularly useful
+  // because you would need to guess the bucket boundaries.
+  //
   // Example usage, using gMock:
   //   EXPECT_THAT(histogram_tester.GetAllSamples("HistogramName"),
   //               ElementsAre(Bucket(1, 5), Bucket(2, 10), Bucket(3, 5)));
   //
-  // If you build the expected list programmatically, you can use ContainerEq:
+  // If you want make empty bucket explicit, use the BucketsAre() matcher
+  // defined below:
   //   EXPECT_THAT(histogram_tester.GetAllSamples("HistogramName"),
-  //               ContainerEq(expected_buckets));
+  //               BucketsAre(Bucket(1, 0), Bucket(2, 10), Bucket(3, 5)));
   //
-  // or EXPECT_EQ if you prefer not to depend on gMock, at the expense of a
-  // slightly less helpful failure message:
+  // If you want to test a superset relation, prefer BucketsInclude() over
+  // IsSupersetOf() because the former handles empty buckets as expected:
+  //   EXPECT_THAT(histogram_tester.GetAllSamples("HistogramName"),
+  //               BucketsInclude(Bucket(1, 0), Bucket(2, 10), Bucket(3, 5)));
+  // With IsSupersetOf(), this expectation would always fail because
+  // GetAllSamples() does not contain empty buckets.
+  //
+  // If you build the expected list programmatically, you can use the matchers
+  // ElementsAreArray(), BucketsAreArray(), BucketsIncludeArray().
+  //
+  // If you prefer not to depend on gMock at the expense of a slightly less
+  // helpful failure message, use EXPECT_EQ:
   //   EXPECT_EQ(expected_buckets,
   //             histogram_tester.GetAllSamples("HistogramName"));
-  std::vector<Bucket> GetAllSamples(StringPiece name) const;
+  std::vector<Bucket> GetAllSamples(std::string_view name) const;
+
+  // Similar to `GetAllSamples`, but returns all of the buckets for all
+  // histograms whose names start with `prefix`, recorded since creation of this
+  // object.
+  //
+  // This is useful to ensure ensure that only the expected histograms are
+  // recorded and none others are. This is better than negative assertions like
+  // `EXPECT_THAT(h.GetAllSamples("HistogramName.Unexpected"), IsEmpty())`
+  // because if there was a typo in "HistogramName.Unexpected", the assertion
+  // would always succeed.
+  //
+  // Example usage:
+  //   EXPECT_THAT(
+  //     histogram_tester.GetAllSamplesForPrefix("HistogramName"),
+  //     UnorderedElementsAre(
+  //         Pair("HistogramName.Foo",
+  //              BucketsAre(Bucket(1, 5), Bucket(2, 10))),
+  //         Pair("HistogramName.Bar",
+  //              BucketsAre(Bucket(1, 0), Bucket(3, 5)))));
+  absl::flat_hash_map<std::string, std::vector<Bucket>> GetAllSamplesForPrefix(
+      std::string_view prefix) const;
 
   // Returns the value of the |sample| bucket for ths histogram |name|.
-  HistogramBase::Count GetBucketCount(StringPiece name,
-                                      HistogramBase::Sample sample) const;
+  HistogramBase::Count32 GetBucketCount(std::string_view name,
+                                      HistogramBase::Sample32 sample) const;
   template <typename T>
-  HistogramBase::Count GetBucketCount(StringPiece name, T sample) const {
-    return GetBucketCount(name, static_cast<HistogramBase::Sample>(sample));
+  HistogramBase::Count32 GetBucketCount(std::string_view name, T sample) const {
+    return GetBucketCount(name, static_cast<HistogramBase::Sample32>(sample));
   }
 
   // Finds histograms whose names start with |prefix|, and returns them along
@@ -132,12 +192,17 @@ class HistogramTester {
   //   expected_counts["MyMetric.B"] = 1;
   //   EXPECT_THAT(histogram_tester.GetTotalCountsForPrefix("MyMetric."),
   //               testing::ContainerEq(expected_counts));
-  CountsMap GetTotalCountsForPrefix(StringPiece prefix) const;
+  CountsMap GetTotalCountsForPrefix(std::string_view prefix) const;
 
-  // Access a modified HistogramSamples containing only what has been logged
-  // to the histogram since the creation of this object.
+  // Returns the total count recorded for all histograms whose names start with
+  // `prefix` since the HistogramTester was created. This is similar to
+  // `GetTotalCountsForPrefix`, but returns the sum of counts instead of a map.
+  HistogramBase::Count32 GetTotalCountForPrefix(std::string_view prefix) const;
+
+  // Returns the HistogramSamples recorded since the creation of the
+  // HistogramTester.
   std::unique_ptr<HistogramSamples> GetHistogramSamplesSinceCreation(
-      StringPiece histogram_name) const;
+      std::string_view histogram_name) const;
 
   // Dumps all histograms that have had new samples added to them into a string,
   // for debugging purposes. Note: this will dump the entire contents of any
@@ -145,54 +210,123 @@ class HistogramTester {
   std::string GetAllHistogramsRecorded() const;
 
  private:
-  // Verifies and asserts that value in the |sample| bucket matches the
-  // |expected_count|. The bucket's current value is determined from |samples|
-  // and is modified based on the snapshot stored for histogram |name|.
-  void CheckBucketCount(StringPiece name,
-                        HistogramBase::Sample sample,
-                        Histogram::Count expected_count,
-                        const HistogramSamples& samples) const;
+  // Returns the total number of values recorded for |histogram| since the
+  // HistogramTester was created.
+  int GetTotalCountForSamples(const HistogramBase& histogram) const;
 
-  // Returns the total number of values recorded for histogram |name|. This
-  // is calculated as the number from |samples| minus the snapshot that was
-  // taken for |name|.
-  int GetTotalCountForSamples(StringPiece name,
-                              const HistogramSamples& samples) const;
+  // Sets |*sample_count| to number of samples by which bucket |sample| bucket
+  // grew since the HistogramTester was created. If |total_count| is non-null,
+  // sets |*total_count| to the number of samples recorded for |histogram|
+  // since the HistogramTester was created.
+  void GetBucketCountForSamples(const HistogramBase& histogram,
+                                HistogramBase::Sample32 sample,
+                                HistogramBase::Count32* sample_count,
+                                HistogramBase::Count32* total_count) const;
 
-  // Verifies that the total number of values recorded for the histogram |name|
-  // is |expected_count|. This is checked against |samples| minus the snapshot
-  // that was taken for |name|.
-  void CheckTotalCount(StringPiece name,
-                       Histogram::Count expected_count,
-                       const HistogramSamples& samples) const;
+  // Returns the deltas for |histogram| since the HistogramTester was created
+  // as an ASCII art histogram for debugging purposes.
+  std::string SnapshotToString(const HistogramBase& histogram) const;
 
-  // Sets the value for |count| to be the value in the |sample| bucket. The
-  // bucket's current value is determined from |samples| and is modified based
-  // on the snapshot stored for histogram |name|.
-  void GetBucketCountForSamples(StringPiece name,
-                                HistogramBase::Sample sample,
-                                const HistogramSamples& samples,
-                                HistogramBase::Count* count) const;
-
+  // Snapshot of all histograms recorded before the HistogramTester was created.
   // Used to determine the histogram changes made during this instance's
   // lifecycle.
   std::map<std::string, std::unique_ptr<HistogramSamples>, std::less<>>
       histograms_snapshot_;
-
-  DISALLOW_COPY_AND_ASSIGN(HistogramTester);
 };
 
 struct Bucket {
-  Bucket(HistogramBase::Sample min, HistogramBase::Count count)
+  Bucket(HistogramBase::Sample32 min, HistogramBase::Count32 count)
       : min(min), count(count) {}
 
-  bool operator==(const Bucket& other) const;
+  // A variant of the above constructor that accepts an `EnumType` for the `min`
+  // value. Typically, this `EnumType` is the C++ enum (class) that is
+  // associated with the metric this bucket is referring to.
+  //
+  // The constructor forwards to the above non-templated constructor. Therefore,
+  // `EnumType` must be implicitly convertible to `HistogramBase::Sample32`.
+  template <typename MetricEnum>
+    requires(std::is_enum_v<MetricEnum>)
+  Bucket(MetricEnum min, HistogramBase::Count32 count)
+      : Bucket(static_cast<std::underlying_type_t<MetricEnum>>(min), count) {}
 
-  HistogramBase::Sample min;
-  HistogramBase::Count count;
+  friend bool operator==(const Bucket&, const Bucket&) = default;
+
+  HistogramBase::Sample32 min;
+  HistogramBase::Count32 count;
 };
 
 void PrintTo(const Bucket& value, std::ostream* os);
+
+// The BucketsAre[Array]() and BucketsInclude[Array]() matchers are intended to
+// match GetAllSamples().
+//
+// Unlike the standard matchers UnorderedElementsAreArray() and IsSupersetOf(),
+// they explicitly support empty buckets (`Bucket::Count32 == 0`). Empty buckets
+// need special handling because GetAllSamples() doesn't contain empty ones.
+
+// BucketsAre() and BucketsAreArray() match a container that contains exactly
+// the non-empty `buckets`.
+//
+// For example,
+//   EXPECT_THAT(histogram_tester.GetAllSamples("HistogramName"),
+//               BucketsAre(Bucket(Enum::A, 0),
+//                          Bucket(Enum::B, 1),
+//                          Bucket(Enum::C, 2)));
+// - matches the actual value `{Bucket(B, 1), Bucket(C, 2)}`;
+// - does not match `{Bucket(A, n), Bucket(B, 1), Bucket(C, 2)}` for any `n`
+//   (including `n == 0`).
+template <typename BucketArray>
+auto BucketsAreArray(BucketArray buckets) {
+  auto non_empty_buckets = buckets;
+  std::erase_if(non_empty_buckets, [](Bucket b) { return b.count == 0; });
+  return ::testing::UnorderedElementsAreArray(non_empty_buckets);
+}
+
+template <typename... BucketTypes>
+auto BucketsAre(BucketTypes... buckets) {
+  return BucketsAreArray(std::vector<Bucket>{buckets...});
+}
+
+// BucketsInclude() and BucketsIncludeArray() are empty-bucket-friendly
+// replacements of IsSupersetOf[Array](): they match a container that contains
+// all non-empty `buckets` and none of the empty `buckets`.
+//
+// For example,
+//   EXPECT_THAT(histogram_tester.GetAllSamples("HistogramName"),
+//               BucketsInclude(Bucket(Enum::A, 0),
+//                              Bucket(Enum::B, 1),
+//                              Bucket(Enum::C, 2)));
+// - matches `{Bucket(B, 1), Bucket(C, 2), Bucket(D, 3)}`;
+// - not match `{Bucket(A, n), Bucket(B, 1), Bucket(C, 2), Bucket(D, 3)}` for
+//   any `n` (including `n == 0`).
+template <typename BucketArray>
+auto BucketsIncludeArray(const BucketArray& buckets) {
+  // The `empty_buckets` have `count == 0`, so the `HistogramBase::Sample32`
+  // suffices.
+  std::vector<HistogramBase::Sample32> empty_buckets;
+  std::vector<Bucket> non_empty_buckets;
+  for (const Bucket& b : buckets) {
+    if (b.count == 0) {
+      empty_buckets.push_back(b.min);
+    } else {
+      non_empty_buckets.push_back(b);
+    }
+  }
+  using ::testing::AllOf;
+  using ::testing::AnyOfArray;
+  using ::testing::Each;
+  using ::testing::Field;
+  using ::testing::IsSupersetOf;
+  using ::testing::Not;
+  return AllOf(
+      IsSupersetOf(non_empty_buckets),
+      Each(Field("Bucket::min", &Bucket::min, Not(AnyOfArray(empty_buckets)))));
+}
+
+template <typename... BucketTypes>
+auto BucketsInclude(BucketTypes... buckets) {
+  return BucketsIncludeArray(std::vector<Bucket>{buckets...});
+}
 
 }  // namespace base
 

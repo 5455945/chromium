@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,8 +22,6 @@ struct MEDIA_EXPORT PipelineMetadata {
   // out-of-line copy constructor.
   PipelineMetadata(const PipelineMetadata&);
 
-  // On Android, when using the MediaPlayerRenderer, |has_video| and |has_audio|
-  // will be true, but the respective configs will be empty.
   // Do not make any assumptions on the validity of configs based off of the
   // presence of audio/video.
   bool has_audio;

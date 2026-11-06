@@ -1,29 +1,71 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_CANVAS_CANVAS2D_CANVAS_RENDERING_CONTEXT_2D_STATE_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_CANVAS_CANVAS2D_CANVAS_RENDERING_CONTEXT_2D_STATE_H_
 
-#include "base/macros.h"
+#include "base/check.h"
+#include "base/compiler_specific.h"
+#include "cc/paint/paint_flags.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_canvas_text_align.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_canvas_text_baseline.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_canvas_direction.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_canvas_font_stretch.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_canvas_text_rendering.h"
+#include "third_party/blink/renderer/core/css/css_primitive_value.h"
+#include "third_party/blink/renderer/modules/canvas/canvas2d/canvas_pattern.h"
+#include "third_party/blink/renderer/modules/canvas/canvas2d/canvas_style.h"
 #include "third_party/blink/renderer/modules/canvas/canvas2d/clip_list.h"
+#include "third_party/blink/renderer/modules/modules_export.h"
+#include "third_party/blink/renderer/platform/bindings/trace_wrapper_v8_reference.h"
 #include "third_party/blink/renderer/platform/fonts/font.h"
+#include "third_party/blink/renderer/platform/fonts/font_description.h"
 #include "third_party/blink/renderer/platform/fonts/font_selector_client.h"
+#include "third_party/blink/renderer/platform/geometry/path_types.h"
+#include "third_party/blink/renderer/platform/graphics/color.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_filter.h"
-#include "third_party/blink/renderer/platform/graphics/paint/paint_flags.h"
-#include "third_party/blink/renderer/platform/transforms/transformation_matrix.h"
+#include "third_party/blink/renderer/platform/graphics/pattern.h"
+#include "third_party/blink/renderer/platform/heap/forward.h"  // IWYU pragma: keep (blink::Visitor)
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
+#include "third_party/blink/renderer/platform/transforms/affine_transform.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
+#include "third_party/skia/include/core/SkBlendMode.h"
+#include "third_party/skia/include/core/SkPath.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
+#include "ui/gfx/geometry/vector2d_f.h"
+
+// IWYU pragma: no_include "third_party/blink/renderer/platform/heap/visitor.h"
+
+namespace cc {
+class DrawLooper;
+class PaintCanvas;
+}  // namespace cc
+namespace gfx {
+class Size;
+}  // namespace gfx
+
+namespace v8 {
+class Isolate;
+template <class T>
+class Local;
+class String;
+}  // namespace v8
 
 namespace blink {
 
-class BaseRenderingContext2D;
-class CanvasRenderingContext2D;
-class CanvasFilter;
-class CanvasStyle;
+class Canvas2DRecorderContext;
 class CSSValue;
+class CanvasFilter;
+class CanvasGradient;
+class CanvasRenderingContext2D;
 class Element;
+enum class FontInvalidationReason;
+class UniqueFontSelector;
+class V8ImageSmoothingQuality;
 
 enum ShadowMode {
   kDrawShadowAndForeground,
@@ -31,19 +73,33 @@ enum ShadowMode {
   kDrawForegroundOnly
 };
 
-class CanvasRenderingContext2DState final
+class MODULES_EXPORT CanvasRenderingContext2DState final
     : public GarbageCollected<CanvasRenderingContext2DState>,
       public FontSelectorClient {
  public:
   enum ClipListCopyMode { kCopyClipList, kDontCopyClipList };
   // SaveType indicates whether the state was pushed to the state stack by Save
-  // or by BeginLayer. By default, it is set to kSaveRestore.
-  enum class SaveType { kSaveRestore, kBeginEndLayer };
+  // or by BeginLayer. The first state on the state stack, which is created in
+  // the canvas constructor and not by Save or BeginLayer, has SaveType
+  // kInitial. In some circumpstances we have to split an endlayer into two
+  // 'states', we use the kExtraState for that.
+  enum class SaveType {
+    kSaveRestore,
+    kBeginEndLayerOneSave,
+    kBeginEndLayerTwoSaves,
+    kBeginEndLayerThreeSaves,
+    kInitial
+  };
 
   CanvasRenderingContext2DState();
   CanvasRenderingContext2DState(const CanvasRenderingContext2DState&,
                                 ClipListCopyMode,
                                 SaveType);
+
+  CanvasRenderingContext2DState(const CanvasRenderingContext2DState&) = delete;
+  CanvasRenderingContext2DState& operator=(
+      const CanvasRenderingContext2DState&) = delete;
+
   ~CanvasRenderingContext2DState() override;
 
   void Trace(Visitor*) const override;
@@ -53,6 +109,8 @@ class CanvasRenderingContext2DState final
     kStrokePaintType,
     kImagePaintType,
   };
+
+  enum ImageType { kNoImage, kOpaqueImage, kNonOpaqueImage };
 
   // FontSelectorClient implementation
   void FontsNeedUpdate(FontSelector*, FontInvalidationReason) override;
@@ -66,10 +124,9 @@ class CanvasRenderingContext2DState final
   void SetLineDashOffset(double);
   double LineDashOffset() const { return line_dash_offset_; }
 
-  void SetTransform(const TransformationMatrix&);
+  void SetTransform(const AffineTransform&);
   void ResetTransform();
-  TransformationMatrix GetTransform() const { return transform_; }
-  AffineTransform GetAffineTransform() const;
+  const AffineTransform& GetTransform() const { return transform_; }
   bool IsTransformInvertible() const { return is_transform_invertible_; }
 
   void ClipPath(const SkPath&, AntiAliasingMode);
@@ -82,14 +139,17 @@ class CanvasRenderingContext2DState final
     return clip_list_.IntersectPathWithClip(path);
   }
 
-  void SetFont(const FontDescription&, FontSelector*);
-  const Font& GetFont() const;
+  void SetFont(const FontDescription& passed_font_description,
+               UniqueFontSelector* selector);
+  bool IsFontDirtyForFilter() const;
+  const Font* GetFont() const;
   const FontDescription& GetFontDescription() const;
   inline bool HasRealizedFont() const { return realized_font_; }
+  inline bool LangIsDirty() const { return lang_is_dirty_; }
   void SetUnparsedFont(const String& font) { unparsed_font_ = font; }
   const String& UnparsedFont() const { return unparsed_font_; }
 
-  void SetFontForFilter(const Font& font) { font_for_filter_ = font; }
+  void SetFontForFilter(const Font* font) { font_for_filter_ = font; }
 
   void SetCSSFilter(const CSSValue*);
   void SetUnparsedCSSFilter(const String& filter_string) {
@@ -97,177 +157,258 @@ class CanvasRenderingContext2DState final
   }
   const String& UnparsedCSSFilter() const { return unparsed_css_filter_; }
   void SetCanvasFilter(CanvasFilter* filter_value);
-  CanvasFilter* GetCanvasFilter() const { return canvas_filter_; }
+  CanvasFilter* GetCanvasFilter() const { return canvas_filter_.Get(); }
   sk_sp<PaintFilter> GetFilter(Element*,
-                               IntSize canvas_size,
+                               gfx::Size canvas_size,
                                CanvasRenderingContext2D*);
-  sk_sp<PaintFilter> GetFilterForOffscreenCanvas(IntSize canvas_size,
-                                                 BaseRenderingContext2D*);
-  bool HasFilterForOffscreenCanvas(IntSize canvas_size,
-                                   BaseRenderingContext2D*);
-  bool HasFilter(Element*, IntSize canvas_size, CanvasRenderingContext2D*);
+  sk_sp<PaintFilter> GetFilterForOffscreenCanvas(gfx::Size canvas_size,
+                                                 Canvas2DRecorderContext*);
   ALWAYS_INLINE bool IsFilterUnresolved() const {
     return filter_state_ == FilterState::kUnresolved;
+  }
+  ALWAYS_INLINE bool IsFilterResolved() const {
+    return filter_state_ == FilterState::kResolved;
+  }
+  ALWAYS_INLINE sk_sp<PaintFilter> GetResolvedFilter() const {
+    return resolved_filter_;
+  }
+  ALWAYS_INLINE bool HasCSSFilterWithUrl() const {
+    return css_filter_value_ && css_filter_value_->MayContainUrl();
   }
 
   void ClearResolvedFilter();
   void ValidateFilterState() const;
 
-  void SetStrokeStyle(CanvasStyle*);
-  CanvasStyle* StrokeStyle() const { return stroke_style_.Get(); }
+  void SetStrokeColor(Color color) {
+    if (stroke_style_.SetColor(color)) {
+      stroke_style_.ApplyColorToFlags(stroke_flags_, global_alpha_);
+    }
+  }
+  void SetStrokePattern(CanvasPattern* pattern) {
+    stroke_style_.SetPattern(pattern);
+  }
+  void SetStrokeGradient(CanvasGradient* gradient) {
+    stroke_style_.SetGradient(gradient);
+  }
+  const CanvasStyle& StrokeStyle() const { return stroke_style_; }
 
-  void SetFillStyle(CanvasStyle*);
-  CanvasStyle* FillStyle() const { return fill_style_.Get(); }
+  void SetFillColor(Color color) {
+    if (fill_style_.SetColor(color)) {
+      fill_style_.ApplyColorToFlags(fill_flags_, global_alpha_);
+    }
+  }
+  void SetFillPattern(CanvasPattern* pattern) {
+    fill_style_.SetPattern(pattern);
+  }
+  void SetFillGradient(CanvasGradient* gradient) {
+    fill_style_.SetGradient(gradient);
+  }
+  const CanvasStyle& FillStyle() const { return fill_style_; }
 
   // Prefer to use Style() over StrokeStyle() and FillStyle()
   // if properties of CanvasStyle are concerned
-  CanvasStyle* Style(PaintType) const;
+  const CanvasStyle& Style(PaintType type) const {
+    // Using DCHECK below because this is a critical hotspot.
+    DCHECK(type != kImagePaintType);
+    return type == kStrokePaintType ? stroke_style_ : fill_style_;
+  }
 
   // Check the pattern in StrokeStyle or FillStyle depending on the PaintType
-  bool HasPattern(PaintType) const;
+  bool HasPattern(PaintType type) const {
+    CanvasPattern* pattern = Style(type).GetCanvasPattern();
+    return pattern != nullptr && pattern->GetPattern() != nullptr;
+  }
 
   // Only to be used if the CanvasRenderingContext2DState has Pattern
   // Pattern is in either StrokeStyle or FillStyle depending on the PaintType
-  bool PatternIsAccelerated(PaintType) const;
+  bool PatternIsAccelerated(PaintType type) const {
+    // Using DCHECK here because condition is somewhat tautological and
+    // provides little added value to Release builds
+    DCHECK(HasPattern(type));
+    return Style(type).GetCanvasPattern()->GetPattern()->IsTextureBacked();
+  }
 
-  enum Direction { kDirectionInherit, kDirectionRTL, kDirectionLTR };
+  void SetLang(const String& lang);
+  String GetLang() const { return lang_; }
 
-  void SetDirection(Direction direction) { direction_ = direction; }
-  Direction GetDirection() const { return direction_; }
+  void SetDirection(V8CanvasDirection::Enum direction) {
+    direction_ = direction;
+  }
+  V8CanvasDirection::Enum GetDirection() const { return direction_; }
 
-  void SetTextAlign(TextAlign align) { text_align_ = align; }
-  TextAlign GetTextAlign() const { return text_align_; }
+  void SetTextAlign(V8CanvasTextAlign::Enum align) { text_align_ = align; }
+  V8CanvasTextAlign::Enum GetTextAlign() const { return text_align_; }
 
-  void SetTextBaseline(TextBaseline baseline) { text_baseline_ = baseline; }
-  TextBaseline GetTextBaseline() const { return text_baseline_; }
+  void SetTextBaseline(V8CanvasTextBaseline::Enum baseline) {
+    text_baseline_ = baseline;
+  }
+  V8CanvasTextBaseline::Enum GetTextBaseline() const { return text_baseline_; }
 
-  void SetTextLetterSpacing(float letter_space, FontSelector* selector);
-  float GetTextLetterSpacing() const { return letter_spacing_; }
+  void SetLetterSpacing(const String& letter_spacing,
+                        UniqueFontSelector* selector);
+  String GetLetterSpacing() const { return parsed_letter_spacing_; }
 
-  void SetTextWordSpacing(float word_space, FontSelector* selector);
-  float GetTextWordSpacing() const { return word_spacing_; }
+  void SetWordSpacing(const String& word_spacing, UniqueFontSelector* selector);
+  String GetWordSpacing() const { return parsed_word_spacing_; }
 
-  void SetTextRendering(TextRenderingMode text_rendering,
-                        FontSelector* selector);
-  TextRenderingMode GetTextRendering() const { return text_rendering_mode_; }
+  void SetTextRendering(V8CanvasTextRendering::Enum text_rendering,
+                        UniqueFontSelector* selector);
+  V8CanvasTextRendering::Enum GetTextRendering() const {
+    return text_rendering_mode_;
+  }
 
   void SetFontKerning(FontDescription::Kerning font_kerning,
-                      FontSelector* selector);
+                      UniqueFontSelector* selector);
   FontDescription::Kerning GetFontKerning() const { return font_kerning_; }
 
-  void SetFontStretch(FontSelectionValue font_stretch, FontSelector* selector);
-  FontSelectionValue GetFontStretch() const { return font_stretch_; }
+  void SetFontStretch(V8CanvasFontStretch::Enum font_stretch,
+                      UniqueFontSelector* selector);
+  V8CanvasFontStretch::Enum GetFontStretch() const { return font_stretch_; }
 
   void SetFontVariantCaps(FontDescription::FontVariantCaps font_kerning,
-                          FontSelector* selector);
+                          UniqueFontSelector* selector);
   FontDescription::FontVariantCaps GetFontVariantCaps() const {
     return font_variant_caps_;
   }
 
   void SetLineWidth(double line_width) {
-    stroke_flags_.setStrokeWidth(clampTo<float>(line_width));
+    stroke_flags_.setStrokeWidth(ClampTo<float>(line_width));
   }
   double LineWidth() const { return stroke_flags_.getStrokeWidth(); }
 
   void SetLineCap(LineCap line_cap) {
-    stroke_flags_.setStrokeCap(static_cast<PaintFlags::Cap>(line_cap));
+    stroke_flags_.setStrokeCap(static_cast<cc::PaintFlags::Cap>(line_cap));
   }
   LineCap GetLineCap() const {
     return static_cast<LineCap>(stroke_flags_.getStrokeCap());
   }
 
   void SetLineJoin(LineJoin line_join) {
-    stroke_flags_.setStrokeJoin(static_cast<PaintFlags::Join>(line_join));
+    stroke_flags_.setStrokeJoin(static_cast<cc::PaintFlags::Join>(line_join));
   }
   LineJoin GetLineJoin() const {
     return static_cast<LineJoin>(stroke_flags_.getStrokeJoin());
   }
 
   void SetMiterLimit(double miter_limit) {
-    stroke_flags_.setStrokeMiter(clampTo<float>(miter_limit));
+    stroke_flags_.setStrokeMiter(ClampTo<float>(miter_limit));
   }
   double MiterLimit() const { return stroke_flags_.getStrokeMiter(); }
 
   void SetShadowOffsetX(double);
   void SetShadowOffsetY(double);
-  const FloatSize& ShadowOffset() const { return shadow_offset_; }
+  const gfx::Vector2dF& ShadowOffset() const { return shadow_offset_; }
 
   void SetShadowBlur(double);
   double ShadowBlur() const { return shadow_blur_; }
 
-  void SetShadowColor(SkColor);
-  SkColor ShadowColor() const { return shadow_color_; }
+  void SetShadowColor(Color);
+  Color ShadowColor() const { return shadow_color_; }
 
   void SetGlobalAlpha(double);
   double GlobalAlpha() const { return global_alpha_; }
+
+  void SetGlobalHDRHeadroom(double);
+  double GlobalHDRHeadroom() const { return global_hdr_headroom_; }
 
   void SetGlobalComposite(SkBlendMode);
   SkBlendMode GlobalComposite() const;
 
   void SetImageSmoothingEnabled(bool);
   bool ImageSmoothingEnabled() const;
-  void SetImageSmoothingQuality(const String&);
-  String ImageSmoothingQuality() const;
+  void SetImageSmoothingQuality(const V8ImageSmoothingQuality&);
+  V8ImageSmoothingQuality ImageSmoothingQuality() const;
 
-  void SetUnparsedStrokeColor(const String& color) {
-    unparsed_stroke_color_ = color;
+  bool IsUnparsedStrokeColor(v8::Local<v8::String> string) const {
+    return unparsed_stroke_color_ == string;
   }
-  const String& UnparsedStrokeColor() const { return unparsed_stroke_color_; }
+  void SetUnparsedStrokeColor(v8::Isolate* isolate,
+                              v8::Local<v8::String> color) {
+    unparsed_stroke_color_.Reset(isolate, color);
+  }
+  void ClearUnparsedStrokeColor() { unparsed_stroke_color_.Reset(); }
 
-  void SetUnparsedFillColor(const String& color) {
-    unparsed_fill_color_ = color;
+  bool IsUnparsedFillColor(v8::Local<v8::String> string) const {
+    return unparsed_fill_color_ == string;
   }
-  const String& UnparsedFillColor() const { return unparsed_fill_color_; }
+  void SetUnparsedFillColor(v8::Isolate* isolate, v8::Local<v8::String> color) {
+    unparsed_fill_color_.Reset(isolate, color);
+  }
+  void ClearUnparsedFillColor() { unparsed_fill_color_.Reset(); }
 
   bool ShouldDrawShadows() const;
 
-  enum ImageType { kNoImage, kOpaqueImage, kNonOpaqueImage };
-
   // If paint will not be used for painting a bitmap, set bitmapOpacity to
   // Opaque.
-  const PaintFlags* GetFlags(PaintType, ShadowMode, ImageType = kNoImage) const;
+  const cc::PaintFlags* GetFlags(PaintType,
+                                 ShadowMode,
+                                 ImageType = kNoImage) const;
 
+  static_assert(static_cast<int>(SaveType::kBeginEndLayerOneSave) + 1 ==
+                static_cast<int>(SaveType::kBeginEndLayerTwoSaves));
+  static_assert(static_cast<int>(SaveType::kBeginEndLayerTwoSaves) + 1 ==
+                static_cast<int>(SaveType::kBeginEndLayerThreeSaves));
   SaveType GetSaveType() const { return save_type_; }
+  bool IsLayerSaveType() const {
+    return save_type_ >= SaveType::kBeginEndLayerOneSave &&
+           save_type_ <= SaveType::kBeginEndLayerThreeSaves;
+  }
+  int LayerSaveCount() {
+    if (!IsLayerSaveType()) {
+      return 0;
+    }
+    return static_cast<int>(save_type_) -
+           static_cast<int>(SaveType::kBeginEndLayerOneSave) + 1;
+  }
+  static SaveType LayerSaveCountToSaveType(int save_count) {
+    CHECK(1 <= save_count && save_count <= 3);
+    return static_cast<SaveType>(
+        static_cast<int>(SaveType::kBeginEndLayerOneSave) + save_count - 1);
+  }
 
- private:
-  void UpdateLineDash() const;
-  void UpdateStrokeStyle() const;
-  void UpdateFillStyle() const;
-  void UpdateFilterQuality() const;
-  void UpdateFilterQualityWithSkFilterQuality(const SkFilterQuality&) const;
-  void ShadowParameterChanged();
-  sk_sp<SkDrawLooper>& EmptyDrawLooper() const;
-  sk_sp<SkDrawLooper>& ShadowOnlyDrawLooper() const;
-  sk_sp<SkDrawLooper>& ShadowAndForegroundDrawLooper() const;
   sk_sp<PaintFilter>& ShadowOnlyImageFilter() const;
   sk_sp<PaintFilter>& ShadowAndForegroundImageFilter() const;
 
-  String unparsed_stroke_color_;
-  String unparsed_fill_color_;
-  Member<CanvasStyle> stroke_style_;
-  Member<CanvasStyle> fill_style_;
+ private:
+  void UpdateLineDash() const;
+  void UpdateFilterQuality() const;
+  void UpdateFilterQuality(cc::PaintFlags::FilterQuality) const;
+  void ShadowParameterChanged();
+  void SetFontInternal(const FontDescription&, UniqueFontSelector* selector);
+  sk_sp<cc::DrawLooper>& EmptyDrawLooper() const;
+  sk_sp<cc::DrawLooper>& ShadowOnlyDrawLooper() const;
+  sk_sp<cc::DrawLooper>& ShadowAndForegroundDrawLooper() const;
+  float ShadowBlurAsSigma() const;
 
-  mutable PaintFlags stroke_flags_;
-  mutable PaintFlags fill_flags_;
-  mutable PaintFlags image_flags_;
+  TraceWrapperV8Reference<v8::String> unparsed_stroke_color_;
+  TraceWrapperV8Reference<v8::String> unparsed_fill_color_;
+  CanvasStyle stroke_style_;
+  CanvasStyle fill_style_;
 
-  FloatSize shadow_offset_;
+  mutable cc::PaintFlags stroke_flags_;
+  mutable cc::PaintFlags fill_flags_;
+  mutable cc::PaintFlags image_flags_;
+
+  gfx::Vector2dF shadow_offset_;
   double shadow_blur_;
-  SkColor shadow_color_;
-  mutable sk_sp<SkDrawLooper> empty_draw_looper_;
-  mutable sk_sp<SkDrawLooper> shadow_only_draw_looper_;
-  mutable sk_sp<SkDrawLooper> shadow_and_foreground_draw_looper_;
+  Color shadow_color_;
+  mutable sk_sp<cc::DrawLooper> empty_draw_looper_;
+  mutable sk_sp<cc::DrawLooper> shadow_only_draw_looper_;
+  mutable sk_sp<cc::DrawLooper> shadow_and_foreground_draw_looper_;
   mutable sk_sp<PaintFilter> shadow_only_image_filter_;
   mutable sk_sp<PaintFilter> shadow_and_foreground_image_filter_;
 
-  double global_alpha_;
-  TransformationMatrix transform_;
+  double global_alpha_ = 1.f;
+  // The default behavior of a 2D canvas is to tone map to SDR (HDR headroom
+  // zero).
+  double global_hdr_headroom_ = 0.f;
+  AffineTransform transform_;
   Vector<double> line_dash_;
   double line_dash_offset_;
 
   String unparsed_font_;
-  Font font_;
-  Font font_for_filter_;
+  Member<const Font> font_;
+  Member<const Font> font_for_filter_;
 
   enum class FilterState {
     kNone,
@@ -282,14 +423,24 @@ class CanvasRenderingContext2DState final
   sk_sp<PaintFilter> resolved_filter_;
 
   // Text state.
-  TextAlign text_align_;
-  TextBaseline text_baseline_{kAlphabeticTextBaseline};
-  Direction direction_{kDirectionInherit};
+  String lang_ = "inherit";
+  V8CanvasTextAlign::Enum text_align_{V8CanvasTextAlign::Enum::kStart};
+  V8CanvasTextBaseline::Enum text_baseline_{
+      V8CanvasTextBaseline::Enum::kAlphabetic};
+  V8CanvasDirection::Enum direction_{V8CanvasDirection::Enum::kInherit};
   float letter_spacing_{0};
+  CSSPrimitiveValue::UnitType letter_spacing_unit_{
+      CSSPrimitiveValue::UnitType::kPixels};
+  String parsed_letter_spacing_;
+
   float word_spacing_{0};
-  TextRenderingMode text_rendering_mode_{TextRenderingMode::kAutoTextRendering};
+  CSSPrimitiveValue::UnitType word_spacing_unit_{
+      CSSPrimitiveValue::UnitType::kPixels};
+  String parsed_word_spacing_;
+  V8CanvasTextRendering::Enum text_rendering_mode_{
+      V8CanvasTextRendering::Enum::kAuto};
   FontDescription::Kerning font_kerning_{FontDescription::kAutoKerning};
-  FontSelectionValue font_stretch_{NormalWidthValue()};
+  V8CanvasFontStretch::Enum font_stretch_{V8CanvasFontStretch::Enum::kNormal};
   FontDescription::FontVariantCaps font_variant_caps_{
       FontDescription::kCapsNormal};
 
@@ -297,19 +448,23 @@ class CanvasRenderingContext2DState final
   bool is_transform_invertible_ : 1;
   bool has_clip_ : 1;
   bool has_complex_clip_ : 1;
-  mutable bool fill_style_dirty_ : 1;
-  mutable bool stroke_style_dirty_ : 1;
+  bool letter_spacing_is_set_ : 1;
+  bool word_spacing_is_set_ : 1;
+  bool lang_is_dirty_ : 1;
   mutable bool line_dash_dirty_ : 1;
 
   bool image_smoothing_enabled_;
-  SkFilterQuality image_smoothing_quality_;
+  cc::PaintFlags::FilterQuality image_smoothing_quality_;
 
   ClipList clip_list_;
 
-  const SaveType save_type_ = SaveType::kSaveRestore;
-
-  DISALLOW_COPY_AND_ASSIGN(CanvasRenderingContext2DState);
+  const SaveType save_type_ = SaveType::kInitial;
 };
+
+ALWAYS_INLINE bool CanvasRenderingContext2DState::ShouldDrawShadows() const {
+  return (!shadow_color_.IsFullyTransparent()) &&
+         (shadow_blur_ || !shadow_offset_.IsZero());
+}
 
 }  // namespace blink
 

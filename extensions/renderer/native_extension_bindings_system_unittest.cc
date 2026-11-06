@@ -1,28 +1,38 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "extensions/renderer/native_extension_bindings_system_test_base.h"
+#include "extensions/renderer/native_extension_bindings_system.h"
 
-#include "base/cxx17_backports.h"
-#include "base/macros.h"
+#include <string_view>
+
+#include "base/command_line.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/bind.h"
+#include "base/test/scoped_feature_list.h"
+#include "base/values.h"
+#include "build/build_config.h"
 #include "components/crx_file/id_util.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_api.h"
 #include "extensions/common/extension_builder.h"
-#include "extensions/common/extension_messages.h"
+#include "extensions/common/extension_features.h"
 #include "extensions/common/manifest.h"
+#include "extensions/common/mojom/context_type.mojom.h"
+#include "extensions/common/mojom/event_dispatcher.mojom.h"
+#include "extensions/common/mojom/frame.mojom.h"
 #include "extensions/common/permissions/permissions_data.h"
-#include "extensions/common/value_builder.h"
+#include "extensions/common/switches.h"
+#include "extensions/renderer/api/messaging/message_target.h"
 #include "extensions/renderer/bindings/api_binding_test_util.h"
 #include "extensions/renderer/bindings/api_invocation_errors.h"
 #include "extensions/renderer/bindings/api_response_validator.h"
 #include "extensions/renderer/bindings/test_js_runner.h"
-#include "extensions/renderer/message_target.h"
-#include "extensions/renderer/native_extension_bindings_system.h"
+#include "extensions/renderer/native_extension_bindings_system_test_base.h"
 #include "extensions/renderer/script_context.h"
 #include "extensions/renderer/script_context_set.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -30,8 +40,7 @@ namespace {
 
 // Returns true if the value specified by |property| exists in the given
 // context.
-bool PropertyExists(v8::Local<v8::Context> context,
-                    base::StringPiece property) {
+bool PropertyExists(v8::Local<v8::Context> context, std::string_view property) {
   v8::Local<v8::Value> value = V8ValueFromScriptSource(context, property);
   EXPECT_FALSE(value.IsEmpty());
   return !value->IsUndefined();
@@ -42,7 +51,7 @@ bool PropertyExists(v8::Local<v8::Context> context,
 TEST_F(NativeExtensionBindingsSystemUnittest, Basic) {
   scoped_refptr<const Extension> extension =
       ExtensionBuilder("foo")
-          .AddPermissions({"idle", "power", "webRequest"})
+          .AddAPIPermissions({"idle", "power", "webRequest"})
           .Build();
   RegisterExtension(extension);
 
@@ -50,7 +59,7 @@ TEST_F(NativeExtensionBindingsSystemUnittest, Basic) {
   v8::Local<v8::Context> context = MainContext();
 
   ScriptContext* script_context = CreateScriptContext(
-      context, extension.get(), Feature::BLESSED_EXTENSION_CONTEXT);
+      context, extension.get(), mojom::ContextType::kPrivilegedExtension);
   script_context->set_url(extension->url());
 
   bindings_system()->UpdateBindingsForContext(script_context);
@@ -90,10 +99,10 @@ TEST_F(NativeExtensionBindingsSystemUnittest, Basic) {
     RunFunctionAndExpectError(
         function, context, 0, nullptr,
         "Uncaught TypeError: " +
-            api_errors::InvocationError(
-                "idle.queryState",
-                "integer detectionIntervalInSeconds, function callback",
-                api_errors::NoMatchingSignature()));
+            api_errors::InvocationError("idle.queryState",
+                                        "integer detectionIntervalInSeconds, "
+                                        "optional function callback",
+                                        api_errors::NoMatchingSignature()));
   }
 
   {
@@ -115,12 +124,11 @@ TEST_F(NativeExtensionBindingsSystemUnittest, Basic) {
   EXPECT_EQ("idle.queryState", last_params().name);
   EXPECT_EQ(extension->url(), last_params().source_url);
   EXPECT_TRUE(last_params().has_callback);
-  EXPECT_TRUE(
-      last_params().arguments.Equals(ListValueFromString("[30]").get()));
+  EXPECT_EQ(last_params().arguments, ListValueFromString("[30]"));
 
   // Respond and validate.
   bindings_system()->HandleResponse(last_params().request_id, true,
-                                    *ListValueFromString("['active']"),
+                                    ListValueFromString("['active']"),
                                     std::string());
 
   std::unique_ptr<base::Value> result_value = GetBaseValuePropertyFromObject(
@@ -150,14 +158,14 @@ TEST_F(NativeExtensionBindingsSystemUnittest, Basic) {
 
 TEST_F(NativeExtensionBindingsSystemUnittest, Events) {
   scoped_refptr<const Extension> extension =
-      ExtensionBuilder("foo").AddPermissions({"idle", "power"}).Build();
+      ExtensionBuilder("foo").AddAPIPermissions({"idle", "power"}).Build();
   RegisterExtension(extension);
 
   v8::HandleScope handle_scope(isolate());
   v8::Local<v8::Context> context = MainContext();
 
   ScriptContext* script_context = CreateScriptContext(
-      context, extension.get(), Feature::BLESSED_EXTENSION_CONTEXT);
+      context, extension.get(), mojom::ContextType::kPrivilegedExtension);
   script_context->set_url(extension->url());
 
   bindings_system()->UpdateBindingsForContext(script_context);
@@ -181,9 +189,9 @@ TEST_F(NativeExtensionBindingsSystemUnittest, Events) {
 
   {
     TestJSRunner::AllowErrors allow_errors;
-    bindings_system()->DispatchEventInContext(
-        "idle.onStateChanged", ListValueFromString("['idle']").get(), nullptr,
-        script_context);
+    base::ListValue value = ListValueFromString("['idle']");
+    bindings_system()->DispatchEventInContext("idle.onStateChanged", value,
+                                              nullptr, script_context);
   }
 
   EXPECT_EQ("\"idle\"", GetStringPropertyFromObject(context->Global(), context,
@@ -196,14 +204,14 @@ TEST_F(NativeExtensionBindingsSystemUnittest, Events) {
 // i.e. chrome.foo === chrome.foo.
 TEST_F(NativeExtensionBindingsSystemUnittest, APIObjectsAreEqual) {
   scoped_refptr<const Extension> extension =
-      ExtensionBuilder("foo").AddPermission("idle").Build();
+      ExtensionBuilder("foo").AddAPIPermission("idle").Build();
   RegisterExtension(extension);
 
   v8::HandleScope handle_scope(isolate());
   v8::Local<v8::Context> context = MainContext();
 
   ScriptContext* script_context = CreateScriptContext(
-      context, extension.get(), Feature::BLESSED_EXTENSION_CONTEXT);
+      context, extension.get(), mojom::ContextType::kPrivilegedExtension);
   script_context->set_url(extension->url());
 
   bindings_system()->UpdateBindingsForContext(script_context);
@@ -223,7 +231,7 @@ TEST_F(NativeExtensionBindingsSystemUnittest, APIObjectsAreEqual) {
 TEST_F(NativeExtensionBindingsSystemUnittest,
        ReferencingAPIAfterDisposingContext) {
   scoped_refptr<const Extension> extension =
-      ExtensionBuilder("foo").AddPermissions({"idle", "power"}).Build();
+      ExtensionBuilder("foo").AddAPIPermissions({"idle", "power"}).Build();
 
   RegisterExtension(extension);
 
@@ -231,7 +239,7 @@ TEST_F(NativeExtensionBindingsSystemUnittest,
   v8::Local<v8::Context> context = MainContext();
 
   ScriptContext* script_context = CreateScriptContext(
-      context, extension.get(), Feature::BLESSED_EXTENSION_CONTEXT);
+      context, extension.get(), mojom::ContextType::kPrivilegedExtension);
   script_context->set_url(extension->url());
 
   bindings_system()->UpdateBindingsForContext(script_context);
@@ -283,14 +291,14 @@ TEST_F(NativeExtensionBindingsSystemUnittest, TestBridgingToJSCustomBindings) {
   source_map()->RegisterModule("idle", kCustomBinding);
 
   scoped_refptr<const Extension> extension =
-      ExtensionBuilder("foo").AddPermission("idle").Build();
+      ExtensionBuilder("foo").AddAPIPermission("idle").Build();
   RegisterExtension(extension);
 
   v8::HandleScope handle_scope(isolate());
   v8::Local<v8::Context> context = MainContext();
 
   ScriptContext* script_context = CreateScriptContext(
-      context, extension.get(), Feature::BLESSED_EXTENSION_CONTEXT);
+      context, extension.get(), mojom::ContextType::kPrivilegedExtension);
   script_context->set_url(extension->url());
 
   bindings_system()->UpdateBindingsForContext(script_context);
@@ -354,8 +362,7 @@ TEST_F(NativeExtensionBindingsSystemUnittest, TestBridgingToJSCustomBindings) {
   EXPECT_EQ("idle.setDetectionInterval", last_params().name);
   EXPECT_EQ(extension->url(), last_params().source_url);
   EXPECT_FALSE(last_params().has_callback);
-  EXPECT_TRUE(
-      last_params().arguments.Equals(ListValueFromString("[50]").get()));
+  EXPECT_EQ(last_params().arguments, ListValueFromString("[50]"));
 }
 
 TEST_F(NativeExtensionBindingsSystemUnittest, TestSendRequestHook) {
@@ -373,14 +380,14 @@ TEST_F(NativeExtensionBindingsSystemUnittest, TestSendRequestHook) {
   source_map()->RegisterModule("idle", kCustomBinding);
 
   scoped_refptr<const Extension> extension =
-      ExtensionBuilder("foo").AddPermission("idle").Build();
+      ExtensionBuilder("foo").AddAPIPermission("idle").Build();
   RegisterExtension(extension);
 
   v8::HandleScope handle_scope(isolate());
   v8::Local<v8::Context> context = MainContext();
 
   ScriptContext* script_context = CreateScriptContext(
-      context, extension.get(), Feature::BLESSED_EXTENSION_CONTEXT);
+      context, extension.get(), mojom::ContextType::kPrivilegedExtension);
   script_context->set_url(extension->url());
 
   bindings_system()->UpdateBindingsForContext(script_context);
@@ -398,8 +405,7 @@ TEST_F(NativeExtensionBindingsSystemUnittest, TestSendRequestHook) {
   EXPECT_EQ("idle.queryState", last_params().name);
   EXPECT_EQ(extension->url(), last_params().source_url);
   EXPECT_TRUE(last_params().has_callback);
-  EXPECT_TRUE(
-      last_params().arguments.Equals(ListValueFromString("[30]").get()));
+  EXPECT_EQ(last_params().arguments, ListValueFromString("[30]"));
 }
 
 // Tests that we can notify the browser as event listeners are added or removed.
@@ -407,7 +413,7 @@ TEST_F(NativeExtensionBindingsSystemUnittest, TestSendRequestHook) {
 // unittests.
 TEST_F(NativeExtensionBindingsSystemUnittest, TestEventRegistration) {
   scoped_refptr<const Extension> extension =
-      ExtensionBuilder("foo").AddPermissions({"idle", "power"}).Build();
+      ExtensionBuilder("foo").AddAPIPermissions({"idle", "power"}).Build();
 
   RegisterExtension(extension);
 
@@ -415,7 +421,7 @@ TEST_F(NativeExtensionBindingsSystemUnittest, TestEventRegistration) {
   v8::Local<v8::Context> context = MainContext();
 
   ScriptContext* script_context = CreateScriptContext(
-      context, extension.get(), Feature::BLESSED_EXTENSION_CONTEXT);
+      context, extension.get(), mojom::ContextType::kPrivilegedExtension);
   script_context->set_url(extension->url());
 
   bindings_system()->UpdateBindingsForContext(script_context);
@@ -434,7 +440,7 @@ TEST_F(NativeExtensionBindingsSystemUnittest, TestEventRegistration) {
               SendAddUnfilteredEventListenerIPC(script_context, kEventName))
       .Times(1);
   v8::Local<v8::Value> argv[] = {listener};
-  RunFunction(add_listener, context, base::size(argv), argv);
+  RunFunction(add_listener, context, std::size(argv), argv);
   ::testing::Mock::VerifyAndClearExpectations(ipc_message_sender());
   EXPECT_TRUE(bindings_system()->HasEventListenerInContext(
       "idle.onStateChanged", script_context));
@@ -449,12 +455,13 @@ TEST_F(NativeExtensionBindingsSystemUnittest, TestEventRegistration) {
       .Times(1);
   v8::Local<v8::Function> remove_listener =
       FunctionFromString(context, kRemoveListener);
-  RunFunction(remove_listener, context, base::size(argv), argv);
+  RunFunction(remove_listener, context, std::size(argv), argv);
   ::testing::Mock::VerifyAndClearExpectations(ipc_message_sender());
   EXPECT_FALSE(bindings_system()->HasEventListenerInContext(
       "idle.onStateChanged", script_context));
 }
 
+#if BUILDFLAG(ENABLE_PLATFORM_APPS)
 TEST_F(NativeExtensionBindingsSystemUnittest,
        TestPrefixedApiEventsAndAppBinding) {
   scoped_refptr<const Extension> app =
@@ -466,16 +473,15 @@ TEST_F(NativeExtensionBindingsSystemUnittest,
   v8::Local<v8::Context> context = MainContext();
 
   ScriptContext* script_context = CreateScriptContext(
-      context, app.get(), Feature::BLESSED_EXTENSION_CONTEXT);
+      context, app.get(), mojom::ContextType::kPrivilegedExtension);
   script_context->set_url(app->url());
 
   bindings_system()->UpdateBindingsForContext(script_context);
 
   // The 'chrome.app' object should have 'runtime' and 'window' entries, but
   // not the internal 'currentWindowInternal' object.
-  v8::Local<v8::Value> app_binding_keys =
-      V8ValueFromScriptSource(context,
-                              "JSON.stringify(Object.keys(chrome.app));");
+  v8::Local<v8::Value> app_binding_keys = V8ValueFromScriptSource(
+      context, "JSON.stringify(Object.keys(chrome.app));");
   ASSERT_FALSE(app_binding_keys.IsEmpty());
   ASSERT_TRUE(app_binding_keys->IsString());
   EXPECT_EQ("[\"runtime\",\"window\"]",
@@ -494,18 +500,19 @@ TEST_F(NativeExtensionBindingsSystemUnittest,
   RunFunctionOnGlobal(use_app_runtime, context, 0, nullptr);
   ::testing::Mock::VerifyAndClearExpectations(ipc_message_sender());
 }
+#endif  // BUILDFLAG(ENABLE_PLATFORM_APPS)
 
 TEST_F(NativeExtensionBindingsSystemUnittest,
        TestPrefixedApiMethodsAndSystemBinding) {
   scoped_refptr<const Extension> extension =
-      ExtensionBuilder("foo").AddPermission("system.cpu").Build();
+      ExtensionBuilder("foo").AddAPIPermission("system.cpu").Build();
   RegisterExtension(extension);
 
   v8::HandleScope handle_scope(isolate());
   v8::Local<v8::Context> context = MainContext();
 
   ScriptContext* script_context = CreateScriptContext(
-      context, extension.get(), Feature::BLESSED_EXTENSION_CONTEXT);
+      context, extension.get(), mojom::ContextType::kPrivilegedExtension);
   script_context->set_url(extension->url());
 
   bindings_system()->UpdateBindingsForContext(script_context);
@@ -538,14 +545,14 @@ TEST_F(NativeExtensionBindingsSystemUnittest,
 
 TEST_F(NativeExtensionBindingsSystemUnittest, TestLastError) {
   scoped_refptr<const Extension> extension =
-      ExtensionBuilder("foo").AddPermissions({"idle", "power"}).Build();
+      ExtensionBuilder("foo").AddAPIPermissions({"idle", "power"}).Build();
   RegisterExtension(extension);
 
   v8::HandleScope handle_scope(isolate());
   v8::Local<v8::Context> context = MainContext();
 
   ScriptContext* script_context = CreateScriptContext(
-      context, extension.get(), Feature::BLESSED_EXTENSION_CONTEXT);
+      context, extension.get(), mojom::ContextType::kPrivilegedExtension);
   script_context->set_url(extension->url());
 
   bindings_system()->UpdateBindingsForContext(script_context);
@@ -588,14 +595,14 @@ TEST_F(NativeExtensionBindingsSystemUnittest, TestLastError) {
 
 TEST_F(NativeExtensionBindingsSystemUnittest, TestCustomProperties) {
   scoped_refptr<const Extension> extension =
-      ExtensionBuilder("storage extension").AddPermission("storage").Build();
+      ExtensionBuilder("storage extension").AddAPIPermission("storage").Build();
   RegisterExtension(extension);
 
   v8::HandleScope handle_scope(isolate());
   v8::Local<v8::Context> context = MainContext();
 
   ScriptContext* script_context = CreateScriptContext(
-      context, extension.get(), Feature::BLESSED_EXTENSION_CONTEXT);
+      context, extension.get(), mojom::ContextType::kPrivilegedExtension);
   script_context->set_url(extension->url());
 
   bindings_system()->UpdateBindingsForContext(script_context);
@@ -624,7 +631,7 @@ TEST_F(NativeExtensionBindingsSystemUnittest, TestCustomProperties) {
 TEST_F(NativeExtensionBindingsSystemUnittest,
        CheckDifferentContextsHaveDifferentAPIObjects) {
   scoped_refptr<const Extension> extension =
-      ExtensionBuilder("extension").AddPermission("idle").Build();
+      ExtensionBuilder("extension").AddAPIPermission("idle").Build();
   RegisterExtension(extension);
 
   v8::HandleScope handle_scope(isolate());
@@ -632,18 +639,18 @@ TEST_F(NativeExtensionBindingsSystemUnittest,
   v8::Local<v8::Context> context_b = AddContext();
 
   ScriptContext* script_context_a = CreateScriptContext(
-      context_a, extension.get(), Feature::BLESSED_EXTENSION_CONTEXT);
+      context_a, extension.get(), mojom::ContextType::kPrivilegedExtension);
   script_context_a->set_url(extension->url());
   bindings_system()->UpdateBindingsForContext(script_context_a);
 
   ScriptContext* script_context_b = CreateScriptContext(
-      context_b, extension.get(), Feature::BLESSED_EXTENSION_CONTEXT);
+      context_b, extension.get(), mojom::ContextType::kPrivilegedExtension);
   script_context_b->set_url(extension->url());
   bindings_system()->UpdateBindingsForContext(script_context_b);
 
   auto check_properties_inequal = [](v8::Local<v8::Context> context_a,
                                      v8::Local<v8::Context> context_b,
-                                     base::StringPiece property) {
+                                     std::string_view property) {
     v8::Local<v8::Value> value_a = V8ValueFromScriptSource(context_a, property);
     v8::Local<v8::Value> value_b = V8ValueFromScriptSource(context_b, property);
     EXPECT_FALSE(value_a.IsEmpty()) << property;
@@ -654,77 +661,6 @@ TEST_F(NativeExtensionBindingsSystemUnittest,
   check_properties_inequal(context_a, context_b, "chrome");
   check_properties_inequal(context_a, context_b, "chrome.idle");
   check_properties_inequal(context_a, context_b, "chrome.idle.onStateChanged");
-}
-
-// Tests that API methods and events that are conditionally available based on
-// context are properly present or absent from the API object.
-TEST_F(NativeExtensionBindingsSystemUnittest,
-       CheckRestrictedFeaturesBasedOnContext) {
-  scoped_refptr<const Extension> connectable_extension;
-  {
-    DictionaryBuilder manifest;
-    manifest.Set("name", "connectable")
-        .Set("manifest_version", 2)
-        .Set("version", "0.1")
-        .Set("description", "test extension");
-    DictionaryBuilder connectable;
-    connectable.Set("matches",
-                    ListBuilder().Append("*://example.com/*").Build());
-    manifest.Set("externally_connectable", connectable.Build());
-    connectable_extension =
-        ExtensionBuilder()
-            .SetManifest(manifest.Build())
-            .SetLocation(mojom::ManifestLocation::kInternal)
-            .SetID(crx_file::id_util::GenerateId("connectable"))
-            .Build();
-  }
-
-  RegisterExtension(connectable_extension);
-
-  v8::HandleScope handle_scope(isolate());
-  v8::Local<v8::Context> blessed_context = MainContext();
-  v8::Local<v8::Context> connectable_webpage_context = AddContext();
-  v8::Local<v8::Context> nonconnectable_webpage_context = AddContext();
-
-  // Create two contexts - a blessed extension context and a normal web page
-  // context.
-  ScriptContext* blessed_script_context =
-      CreateScriptContext(blessed_context, connectable_extension.get(),
-                          Feature::BLESSED_EXTENSION_CONTEXT);
-  blessed_script_context->set_url(connectable_extension->url());
-  bindings_system()->UpdateBindingsForContext(blessed_script_context);
-
-  ScriptContext* connectable_webpage_script_context = CreateScriptContext(
-      connectable_webpage_context, nullptr, Feature::WEB_PAGE_CONTEXT);
-  connectable_webpage_script_context->set_url(GURL("http://example.com"));
-  bindings_system()->UpdateBindingsForContext(
-      connectable_webpage_script_context);
-
-  ScriptContext* nonconnectable_webpage_script_context = CreateScriptContext(
-      nonconnectable_webpage_context, nullptr, Feature::WEB_PAGE_CONTEXT);
-  nonconnectable_webpage_script_context->set_url(GURL("http://notexample.com"));
-  bindings_system()->UpdateBindingsForContext(
-      nonconnectable_webpage_script_context);
-
-  // Check that properties are correctly restricted. The blessed context should
-  // have access to the whole runtime API, the connectable webpage should only
-  // have access to sendMessage, and the nonconnectable webpage should not have
-  // access to any of the API.
-  const char kRuntime[] = "chrome.runtime";
-  const char kSendMessage[] = "chrome.runtime.sendMessage";
-  const char kGetUrl[] = "chrome.runtime.getURL";
-  const char kOnMessage[] = "chrome.runtime.onMessage";
-  ASSERT_TRUE(PropertyExists(blessed_context, kRuntime));
-  EXPECT_TRUE(PropertyExists(blessed_context, kSendMessage));
-  EXPECT_TRUE(PropertyExists(blessed_context, kGetUrl));
-  EXPECT_TRUE(PropertyExists(blessed_context, kOnMessage));
-
-  ASSERT_TRUE(PropertyExists(connectable_webpage_context, kRuntime));
-  EXPECT_TRUE(PropertyExists(connectable_webpage_context, kSendMessage));
-  EXPECT_FALSE(PropertyExists(connectable_webpage_context, kGetUrl));
-  EXPECT_FALSE(PropertyExists(connectable_webpage_context, kOnMessage));
-
-  EXPECT_FALSE(PropertyExists(nonconnectable_webpage_context, kRuntime));
 }
 
 // Tests behavior when script sets window.chrome to be various things.
@@ -738,10 +674,10 @@ TEST_F(NativeExtensionBindingsSystemUnittest, TestUsingOtherChromeObjects) {
   v8::Local<v8::Context> context_b = AddContext();
 
   ScriptContext* script_context_a = CreateScriptContext(
-      context_a, extension.get(), Feature::BLESSED_EXTENSION_CONTEXT);
+      context_a, extension.get(), mojom::ContextType::kPrivilegedExtension);
   script_context_a->set_url(extension->url());
   ScriptContext* script_context_b = CreateScriptContext(
-      context_b, extension.get(), Feature::BLESSED_EXTENSION_CONTEXT);
+      context_b, extension.get(), mojom::ContextType::kPrivilegedExtension);
   script_context_b->set_url(extension->url());
 
   auto check_runtime = [this, context_a, context_b, script_context_a,
@@ -763,7 +699,7 @@ TEST_F(NativeExtensionBindingsSystemUnittest, TestUsingOtherChromeObjects) {
   {
     v8::Context::Scope scope(context_a);
     v8::Local<v8::Object> fake_chrome = v8::Object::New(isolate());
-    EXPECT_EQ(context_a, fake_chrome->CreationContext());
+    EXPECT_EQ(context_a, fake_chrome->GetCreationContextChecked(isolate()));
     context_b->Global()
         ->Set(context_b, gin::StringToSymbol(isolate(), "chrome"), fake_chrome)
         .ToChecked();
@@ -776,7 +712,7 @@ TEST_F(NativeExtensionBindingsSystemUnittest, TestUsingOtherChromeObjects) {
   {
     v8::Context::Scope scope(context_b);
     v8::Local<v8::Object> fake_chrome = v8::Object::New(isolate());
-    EXPECT_EQ(context_b, fake_chrome->CreationContext());
+    EXPECT_EQ(context_b, fake_chrome->GetCreationContextChecked(isolate()));
     context_b->Global()
         ->Set(context_b, gin::StringToSymbol(isolate(), "chrome"), fake_chrome)
         .ToChecked();
@@ -794,19 +730,96 @@ TEST_F(NativeExtensionBindingsSystemUnittest, TestUsingOtherChromeObjects) {
   }
   // A non-object chrome shouldn't be used.
   check_runtime(false);
+
+  {
+    v8::Context::Scope scope(context_b);
+    context_b->Global()
+        ->Set(context_b, gin::StringToSymbol(isolate(), "chrome"),
+              v8::Undefined(isolate()))
+        .ToChecked();
+  }
+  // If chrome is undefined, a new object should be created and used.
+  check_runtime(true);
+}
+
+// Regression test for crbug.com/560339053.
+// Tests that setting window.chrome or window.browser to an accessor property
+// does not execute script (e.g. getters) when initializing bindings.
+TEST_F(NativeExtensionBindingsSystemUnittest, ChromeGetterIsNotInvoked) {
+  scoped_refptr<const Extension> extension =
+      ExtensionBuilder("extension").Build();
+  RegisterExtension(extension);
+
+  v8::HandleScope handle_scope(isolate());
+  v8::Local<v8::Context> context = MainContext();
+
+  ScriptContext* script_context = CreateScriptContext(
+      context, extension.get(), mojom::ContextType::kPrivilegedExtension);
+  script_context->set_url(extension->url());
+
+  // First, test setting a getter on `browser` while `chrome` is unmodified.
+  // This verifies that binding initialization reaches and checks `browser`
+  // without invoking its getter.
+  const char kSetBrowserGetterScript[] =
+      R"(var browserGetterCalled = false;
+         Object.defineProperty(globalThis, 'browser', {
+           get() {
+             browserGetterCalled = true;
+             return {};
+           },
+           configurable: true
+         });)";
+  v8::Local<v8::Value> initial_result =
+      V8ValueFromScriptSource(context, kSetBrowserGetterScript);
+  ASSERT_FALSE(initial_result.IsEmpty());
+
+  // Initializing the bindings should not invoke getters on either namespace.
+  // Blink runs with scoped microtasks policy, so ensure binding initialization
+  // succeeds under `kScoped` without triggering microtask scope DCHECKs.
+  isolate()->SetMicrotasksPolicy(v8::MicrotasksPolicy::kScoped);
+  bindings_system()->UpdateBindingsForContext(script_context);
+  isolate()->SetMicrotasksPolicy(v8::MicrotasksPolicy::kAuto);
+
+  v8::Local<v8::Value> browser_getter_called =
+      V8ValueFromScriptSource(context, "browserGetterCalled;");
+  ASSERT_FALSE(browser_getter_called.IsEmpty());
+  EXPECT_FALSE(browser_getter_called->BooleanValue(isolate()));
+
+  // Next, set a getter on `chrome` as well and verify its getter is not
+  // invoked.
+  const char kSetChromeGetterScript[] =
+      R"(var chromeGetterCalled = false;
+         Object.defineProperty(globalThis, 'chrome', {
+           get() {
+             chromeGetterCalled = true;
+             return {};
+           },
+           configurable: true
+         });)";
+  initial_result = V8ValueFromScriptSource(context, kSetChromeGetterScript);
+  ASSERT_FALSE(initial_result.IsEmpty());
+
+  isolate()->SetMicrotasksPolicy(v8::MicrotasksPolicy::kScoped);
+  bindings_system()->UpdateBindingsForContext(script_context);
+  isolate()->SetMicrotasksPolicy(v8::MicrotasksPolicy::kAuto);
+
+  v8::Local<v8::Value> chrome_getter_called =
+      V8ValueFromScriptSource(context, "chromeGetterCalled;");
+  ASSERT_FALSE(chrome_getter_called.IsEmpty());
+  EXPECT_FALSE(chrome_getter_called->BooleanValue(isolate()));
 }
 
 // Tests updating a context's bindings after adding or removing permissions.
 TEST_F(NativeExtensionBindingsSystemUnittest, TestUpdatingPermissions) {
   scoped_refptr<const Extension> extension =
-      ExtensionBuilder("extension").AddPermission("idle").Build();
+      ExtensionBuilder("extension").AddAPIPermission("idle").Build();
 
   RegisterExtension(extension);
 
   v8::HandleScope handle_scope(isolate());
   v8::Local<v8::Context> context = MainContext();
   ScriptContext* script_context = CreateScriptContext(
-      context, extension.get(), Feature::BLESSED_EXTENSION_CONTEXT);
+      context, extension.get(), mojom::ContextType::kPrivilegedExtension);
   script_context->set_url(extension->url());
   bindings_system()->UpdateBindingsForContext(script_context);
 
@@ -855,7 +868,7 @@ TEST_F(NativeExtensionBindingsSystemUnittest, TestUpdatingPermissions) {
     // Trying to run a chrome.idle function should fail.
     v8::Local<v8::Value> args[] = {initial_idle};
     RunFunctionAndExpectError(
-        run_idle, context, base::size(args), args,
+        run_idle, context, std::size(args), args,
         "Uncaught Error: 'idle.queryState' is not available in this context.");
     EXPECT_FALSE(has_last_params());
   }
@@ -889,7 +902,7 @@ TEST_F(NativeExtensionBindingsSystemUnittest, TestUpdatingPermissions) {
   {
     // Trying to run a chrome.idle function should now succeed.
     v8::Local<v8::Value> args[] = {initial_idle};
-    RunFunction(run_idle, context, base::size(args), args);
+    RunFunction(run_idle, context, std::size(args), args);
     EXPECT_EQ("idle.queryState", last_params().name);
   }
 }
@@ -903,7 +916,7 @@ TEST_F(NativeExtensionBindingsSystemUnittest, UnmanagedEvents) {
   v8::HandleScope handle_scope(isolate());
   v8::Local<v8::Context> context = MainContext();
   ScriptContext* script_context = CreateScriptContext(
-      context, extension.get(), Feature::BLESSED_EXTENSION_CONTEXT);
+      context, extension.get(), mojom::ContextType::kPrivilegedExtension);
   script_context->set_url(extension->url());
 
   bindings_system()->UpdateBindingsForContext(script_context);
@@ -923,15 +936,17 @@ TEST_F(NativeExtensionBindingsSystemUnittest, UnmanagedEvents) {
   ::testing::Mock::VerifyAndClearExpectations(ipc_message_sender());
 }
 
+#if !BUILDFLAG(IS_ANDROID)
 // Tests that a context having access to an aliased API (like networking.onc)
 // does not allow for accessing the source API (networkingPrivate) directly.
+// Android does not support networking.onc, nor any other aliased API.
 TEST_F(NativeExtensionBindingsSystemUnittest,
        AccessToAliasSourceDoesntGiveAliasAccess) {
-  const char kWhitelistedId[] = "pkedcjkdefgpdelpbcmbmeomcjbeemfm";
+  const char kAllowlistedId[] = "jlgegmdnodfhciolbdjciihnlaljdbjo";
   scoped_refptr<const Extension> extension =
       ExtensionBuilder("extension")
-          .SetID(kWhitelistedId)
-          .AddPermission("networkingPrivate")
+          .SetID(kAllowlistedId)
+          .AddAPIPermission("networkingPrivate")
           .Build();
 
   RegisterExtension(extension);
@@ -939,7 +954,7 @@ TEST_F(NativeExtensionBindingsSystemUnittest,
   v8::HandleScope handle_scope(isolate());
   v8::Local<v8::Context> context = MainContext();
   ScriptContext* script_context = CreateScriptContext(
-      context, extension.get(), Feature::BLESSED_EXTENSION_CONTEXT);
+      context, extension.get(), mojom::ContextType::kPrivilegedExtension);
 
   bindings_system()->UpdateBindingsForContext(script_context);
 
@@ -959,18 +974,18 @@ TEST_F(NativeExtensionBindingsSystemUnittest,
 // allow for accessing the alias.
 TEST_F(NativeExtensionBindingsSystemUnittest,
        AccessToAliasDoesntGiveAliasSourceAccess) {
-  const char kWhitelistedId[] = "pkedcjkdefgpdelpbcmbmeomcjbeemfm";
+  const char kAllowlistedId[] = "jlgegmdnodfhciolbdjciihnlaljdbjo";
   scoped_refptr<const Extension> extension =
       ExtensionBuilder("extension")
-          .SetID(kWhitelistedId)
-          .AddPermission("networking.onc")
+          .SetID(kAllowlistedId)
+          .AddAPIPermission("networking.onc")
           .Build();
   RegisterExtension(extension);
 
   v8::HandleScope handle_scope(isolate());
   v8::Local<v8::Context> context = MainContext();
   ScriptContext* script_context = CreateScriptContext(
-      context, extension.get(), Feature::BLESSED_EXTENSION_CONTEXT);
+      context, extension.get(), mojom::ContextType::kPrivilegedExtension);
 
   bindings_system()->UpdateBindingsForContext(script_context);
 
@@ -989,18 +1004,18 @@ TEST_F(NativeExtensionBindingsSystemUnittest,
 // Test that if an extension has access to both an alias and an alias source,
 // the objects on the API are different.
 TEST_F(NativeExtensionBindingsSystemUnittest, AliasedAPIsAreDifferentObjects) {
-  const char kWhitelistedId[] = "pkedcjkdefgpdelpbcmbmeomcjbeemfm";
+  const char kAllowlistedId[] = "jlgegmdnodfhciolbdjciihnlaljdbjo";
   scoped_refptr<const Extension> extension =
       ExtensionBuilder("extension")
-          .SetID(kWhitelistedId)
-          .AddPermissions({"networkingPrivate", "networking.onc"})
+          .SetID(kAllowlistedId)
+          .AddAPIPermissions({"networkingPrivate", "networking.onc"})
           .Build();
   RegisterExtension(extension);
 
   v8::HandleScope handle_scope(isolate());
   v8::Local<v8::Context> context = MainContext();
   ScriptContext* script_context = CreateScriptContext(
-      context, extension.get(), Feature::BLESSED_EXTENSION_CONTEXT);
+      context, extension.get(), mojom::ContextType::kPrivilegedExtension);
 
   bindings_system()->UpdateBindingsForContext(script_context);
 
@@ -1023,6 +1038,7 @@ TEST_F(NativeExtensionBindingsSystemUnittest, AliasedAPIsAreDifferentObjects) {
       &equal));
   EXPECT_FALSE(equal);
 }
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 // Tests that script can overwrite the value of an API.
 TEST_F(NativeExtensionBindingsSystemUnittest, CanOverwriteAPIs) {
@@ -1034,7 +1050,7 @@ TEST_F(NativeExtensionBindingsSystemUnittest, CanOverwriteAPIs) {
   v8::HandleScope handle_scope(isolate());
   v8::Local<v8::Context> context = MainContext();
   ScriptContext* script_context = CreateScriptContext(
-      context, extension.get(), Feature::BLESSED_EXTENSION_CONTEXT);
+      context, extension.get(), mojom::ContextType::kPrivilegedExtension);
   script_context->set_url(extension->url());
 
   bindings_system()->UpdateBindingsForContext(script_context);
@@ -1058,7 +1074,7 @@ TEST_F(NativeExtensionBindingsSystemUnittest, CanDeleteAPIs) {
   v8::HandleScope handle_scope(isolate());
   v8::Local<v8::Context> context = MainContext();
   ScriptContext* script_context = CreateScriptContext(
-      context, extension.get(), Feature::BLESSED_EXTENSION_CONTEXT);
+      context, extension.get(), mojom::ContextType::kPrivilegedExtension);
   script_context->set_url(extension->url());
 
   bindings_system()->UpdateBindingsForContext(script_context);
@@ -1098,14 +1114,14 @@ TEST_F(NativeExtensionBindingsSystemUnittest, APIIsInitializedByOwningContext) {
   source_map()->RegisterModule("idle", kCustomBinding);
 
   scoped_refptr<const Extension> extension =
-      ExtensionBuilder("foo").AddPermission("idle").Build();
+      ExtensionBuilder("foo").AddAPIPermission("idle").Build();
   RegisterExtension(extension);
 
   v8::HandleScope handle_scope(isolate());
   v8::Local<v8::Context> context = MainContext();
 
   ScriptContext* script_context = CreateScriptContext(
-      context, extension.get(), Feature::BLESSED_EXTENSION_CONTEXT);
+      context, extension.get(), mojom::ContextType::kPrivilegedExtension);
   script_context->set_url(extension->url());
 
   bindings_system()->UpdateBindingsForContext(script_context);
@@ -1126,7 +1142,7 @@ TEST_F(NativeExtensionBindingsSystemUnittest, APIIsInitializedByOwningContext) {
 
     v8::Context::Scope context_scope(second_context);
     v8::Local<v8::Value> args[] = {chrome};
-    RunFunction(get_idle, second_context, base::size(args), args);
+    RunFunction(get_idle, second_context, std::size(args), args);
   }
 
   // The apiBridge should have been created in the owning (original) context,
@@ -1136,15 +1152,22 @@ TEST_F(NativeExtensionBindingsSystemUnittest, APIIsInitializedByOwningContext) {
           ->Get(context, gin::StringToV8(isolate(), "apiBridge"))
           .ToLocalChecked();
   ASSERT_TRUE(api_bridge->IsObject());
-  EXPECT_EQ(context, api_bridge.As<v8::Object>()->CreationContext());
+  EXPECT_EQ(context, api_bridge.As<v8::Object>()->GetCreationContextChecked());
 }
 
-class ResponseValidationNativeExtensionBindingsSystemUnittest
+class SignatureValidationNativeExtensionBindingsSystemUnittest
     : public NativeExtensionBindingsSystemUnittest,
       public testing::WithParamInterface<bool> {
  public:
-  ResponseValidationNativeExtensionBindingsSystemUnittest() = default;
-  ~ResponseValidationNativeExtensionBindingsSystemUnittest() override = default;
+  SignatureValidationNativeExtensionBindingsSystemUnittest() = default;
+
+  SignatureValidationNativeExtensionBindingsSystemUnittest(
+      const SignatureValidationNativeExtensionBindingsSystemUnittest&) = delete;
+  SignatureValidationNativeExtensionBindingsSystemUnittest& operator=(
+      const SignatureValidationNativeExtensionBindingsSystemUnittest&) = delete;
+
+  ~SignatureValidationNativeExtensionBindingsSystemUnittest() override =
+      default;
 
   void SetUp() override {
     response_validation_override_ =
@@ -1159,12 +1182,9 @@ class ResponseValidationNativeExtensionBindingsSystemUnittest
 
  private:
   std::unique_ptr<base::AutoReset<bool>> response_validation_override_;
-
-  DISALLOW_COPY_AND_ASSIGN(
-      ResponseValidationNativeExtensionBindingsSystemUnittest);
 };
 
-TEST_P(ResponseValidationNativeExtensionBindingsSystemUnittest,
+TEST_P(SignatureValidationNativeExtensionBindingsSystemUnittest,
        ResponseValidation) {
   // The APIResponseValidator should only be used if response validation is
   // enabled. Otherwise, it should be null.
@@ -1173,8 +1193,8 @@ TEST_P(ResponseValidationNativeExtensionBindingsSystemUnittest,
                             ->request_handler()
                             ->has_response_validator_for_testing());
 
-  absl::optional<std::string> validation_failure_method_name;
-  absl::optional<std::string> validation_failure_error;
+  std::optional<std::string> validation_failure_method_name;
+  std::optional<std::string> validation_failure_error;
 
   auto on_validation_failure =
       [&validation_failure_method_name, &validation_failure_error](
@@ -1187,7 +1207,7 @@ TEST_P(ResponseValidationNativeExtensionBindingsSystemUnittest,
 
   scoped_refptr<const Extension> extension =
       ExtensionBuilder("foo")
-          .AddPermissions({"idle", "power", "webRequest"})
+          .AddAPIPermissions({"idle", "power", "webRequest"})
           .Build();
   RegisterExtension(extension);
 
@@ -1195,7 +1215,7 @@ TEST_P(ResponseValidationNativeExtensionBindingsSystemUnittest,
   v8::Local<v8::Context> context = MainContext();
 
   ScriptContext* script_context = CreateScriptContext(
-      context, extension.get(), Feature::BLESSED_EXTENSION_CONTEXT);
+      context, extension.get(), mojom::ContextType::kPrivilegedExtension);
   script_context->set_url(extension->url());
 
   bindings_system()->UpdateBindingsForContext(script_context);
@@ -1213,7 +1233,7 @@ TEST_P(ResponseValidationNativeExtensionBindingsSystemUnittest,
   // Respond with a valid value. Validation should not fail.
   ASSERT_TRUE(has_last_params());
   bindings_system()->HandleResponse(last_params().request_id, true,
-                                    *ListValueFromString("['active']"),
+                                    ListValueFromString("['active']"),
                                     std::string());
 
   EXPECT_FALSE(validation_failure_method_name);
@@ -1223,7 +1243,7 @@ TEST_P(ResponseValidationNativeExtensionBindingsSystemUnittest,
   RunFunctionOnGlobal(call_idle_query_state, context, 0, nullptr);
   ASSERT_TRUE(has_last_params());
   bindings_system()->HandleResponse(last_params().request_id, true,
-                                    *ListValueFromString("['bad enum']"),
+                                    ListValueFromString("['bad enum']"),
                                     std::string());
 
   // Validation should fail iff response validation is enabled.
@@ -1240,9 +1260,269 @@ TEST_P(ResponseValidationNativeExtensionBindingsSystemUnittest,
   }
 }
 
+TEST_P(SignatureValidationNativeExtensionBindingsSystemUnittest,
+       EventArgumentValidation) {
+  // The APIResponseValidator should only be used if response validation is
+  // enabled. Otherwise, it should be null.
+  EXPECT_EQ(GetParam(), bindings_system()
+                            ->api_system()
+                            ->request_handler()
+                            ->has_response_validator_for_testing());
+
+  std::optional<std::string> validation_failure_method_name;
+  std::optional<std::string> validation_failure_error;
+
+  auto on_validation_failure =
+      [&validation_failure_method_name, &validation_failure_error](
+          const std::string& method_name, const std::string& error) {
+        validation_failure_method_name = method_name;
+        validation_failure_error = error;
+      };
+  APIResponseValidator::TestHandler test_validation_failure_handler(
+      base::BindLambdaForTesting(on_validation_failure));
+
+  scoped_refptr<const Extension> extension =
+      ExtensionBuilder("foo").AddAPIPermission("idle").Build();
+  RegisterExtension(extension);
+
+  v8::HandleScope handle_scope(isolate());
+  v8::Local<v8::Context> context = MainContext();
+
+  ScriptContext* script_context = CreateScriptContext(
+      context, extension.get(), mojom::ContextType::kPrivilegedExtension);
+  script_context->set_url(extension->url());
+
+  bindings_system()->UpdateBindingsForContext(script_context);
+
+  const char kAddListenerFunction[] =
+      R"((function() {
+            chrome.idle.onStateChanged.addListener((state) => {
+              this.returnedState = state;
+            });
+          });)";
+  v8::Local<v8::Function> add_listener_function =
+      FunctionFromString(context, kAddListenerFunction);
+  RunFunctionOnGlobal(add_listener_function, context, 0, nullptr);
+
+  EXPECT_TRUE(bindings_system()->HasEventListenerInContext(
+      "idle.onStateChanged", script_context));
+
+  // Dispatch an event with an argument that matches the expected schema.
+  {
+    auto event_args = base::ListValue().Append("active");
+    bindings_system()->DispatchEventInContext("idle.onStateChanged", event_args,
+                                              nullptr, script_context);
+  }
+
+  // Validation should have succeeded.
+  std::string returned_state =
+      GetStringPropertyFromObject(context->Global(), context, "returnedState");
+  EXPECT_FALSE(validation_failure_method_name);
+  EXPECT_FALSE(validation_failure_error);
+  EXPECT_EQ(R"("active")", returned_state);
+
+  // Now, dispatch the event with an invalid argument.
+  {
+    base::ListValue event_args;
+    event_args.Append("bad enum");
+    bindings_system()->DispatchEventInContext("idle.onStateChanged", event_args,
+                                              nullptr, script_context);
+  }
+
+  // Event validation should have failed.
+  returned_state =
+      GetStringPropertyFromObject(context->Global(), context, "returnedState");
+
+  if (GetParam()) {
+    EXPECT_EQ(validation_failure_method_name, "idle.onStateChanged");
+    EXPECT_EQ(api_errors::ArgumentError(
+                  "newState",
+                  api_errors::InvalidEnumValue({"active", "idle", "locked"})),
+              validation_failure_error.value_or("no value"));
+  } else {
+    EXPECT_FALSE(validation_failure_method_name);
+    EXPECT_FALSE(validation_failure_error);
+  }
+
+  // Even though validation failed, we still dispatch the event.
+  EXPECT_EQ(R"("bad enum")", returned_state);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     All,
-    ResponseValidationNativeExtensionBindingsSystemUnittest,
+    SignatureValidationNativeExtensionBindingsSystemUnittest,
     testing::Bool());
+
+class FeatureAvailabilityNativeExtensionBindingsSystemUnittest
+    : public NativeExtensionBindingsSystemUnittest,
+      public testing::WithParamInterface<bool> {
+ public:
+  FeatureAvailabilityNativeExtensionBindingsSystemUnittest() = default;
+
+  FeatureAvailabilityNativeExtensionBindingsSystemUnittest(
+      const FeatureAvailabilityNativeExtensionBindingsSystemUnittest&) = delete;
+  FeatureAvailabilityNativeExtensionBindingsSystemUnittest& operator=(
+      const FeatureAvailabilityNativeExtensionBindingsSystemUnittest&) = delete;
+
+  ~FeatureAvailabilityNativeExtensionBindingsSystemUnittest() override =
+      default;
+
+  void SetUp() override {
+    if (TestApiExposedOnWebPages()) {
+      base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+      command_line->AppendSwitch(switches::kExtensionTestApiOnWebPages);
+    }
+    NativeExtensionBindingsSystemUnittest::SetUp();
+  }
+
+  bool TestApiExposedOnWebPages() { return GetParam(); }
+};
+
+// Tests that API methods and events that are conditionally available based on
+// context are properly present or absent from the API object.
+TEST_P(FeatureAvailabilityNativeExtensionBindingsSystemUnittest,
+       CheckRestrictedFeaturesBasedOnContext) {
+  scoped_refptr<const Extension> connectable_extension;
+  {
+    auto manifest = base::DictValue()
+                        .Set("name", "connectable")
+                        .Set("manifest_version", 2)
+                        .Set("version", "0.1")
+                        .Set("description", "test extension");
+    base::DictValue connectable;
+    connectable.Set("matches", base::ListValue().Append("*://example.com/*"));
+    manifest.Set("externally_connectable", std::move(connectable));
+    connectable_extension =
+        ExtensionBuilder()
+            .SetManifest(std::move(manifest))
+            .SetLocation(mojom::ManifestLocation::kInternal)
+            .SetID(crx_file::id_util::GenerateId("connectable"))
+            .Build();
+  }
+
+  RegisterExtension(connectable_extension);
+
+  v8::HandleScope handle_scope(isolate());
+  v8::Local<v8::Context> privileged_context = MainContext();
+  v8::Local<v8::Context> connectable_webpage_context = AddContext();
+  v8::Local<v8::Context> nonconnectable_webpage_context = AddContext();
+
+  // Create three contexts - a privileged extension context, an externally
+  // connectable web page context and a normal non-connectable web page context.
+  ScriptContext* privileged_script_context =
+      CreateScriptContext(privileged_context, connectable_extension.get(),
+                          mojom::ContextType::kPrivilegedExtension);
+  privileged_script_context->set_url(connectable_extension->url());
+  bindings_system()->UpdateBindingsForContext(privileged_script_context);
+
+  ScriptContext* connectable_webpage_script_context = CreateScriptContext(
+      connectable_webpage_context, nullptr, mojom::ContextType::kWebPage);
+  connectable_webpage_script_context->set_url(GURL("http://example.com"));
+  bindings_system()->UpdateBindingsForContext(
+      connectable_webpage_script_context);
+
+  ScriptContext* nonconnectable_webpage_script_context = CreateScriptContext(
+      nonconnectable_webpage_context, nullptr, mojom::ContextType::kWebPage);
+  nonconnectable_webpage_script_context->set_url(GURL("http://notexample.com"));
+  bindings_system()->UpdateBindingsForContext(
+      nonconnectable_webpage_script_context);
+
+  // Check that properties are correctly restricted. The privileged context
+  // should have access to the whole runtime API, the connectable webpage should
+  // only have access to sendMessage in runtime, and the non-connectable webpage
+  // should only have access to runtime if it gets it from also having access to
+  // the test API. The test API should be available to all the webpage contexts
+  // (not the privileged evetension context), but only if the associated
+  // commandline flag has been set.
+  const char kRuntime[] = "chrome.runtime";
+  const char kSendMessage[] = "chrome.runtime.sendMessage";
+  const char kGetUrl[] = "chrome.runtime.getURL";
+  const char kOnMessage[] = "chrome.runtime.onMessage";
+  const char kTest[] = "chrome.test";
+
+  ASSERT_TRUE(PropertyExists(privileged_context, kRuntime));
+  EXPECT_TRUE(PropertyExists(privileged_context, kSendMessage));
+  EXPECT_TRUE(PropertyExists(privileged_context, kGetUrl));
+  EXPECT_TRUE(PropertyExists(privileged_context, kOnMessage));
+  EXPECT_FALSE(PropertyExists(privileged_context, kTest));
+
+  ASSERT_TRUE(PropertyExists(connectable_webpage_context, kRuntime));
+  EXPECT_TRUE(PropertyExists(connectable_webpage_context, kSendMessage));
+  EXPECT_FALSE(PropertyExists(connectable_webpage_context, kGetUrl));
+  EXPECT_FALSE(PropertyExists(connectable_webpage_context, kOnMessage));
+  EXPECT_EQ(TestApiExposedOnWebPages(),
+            PropertyExists(connectable_webpage_context, kTest));
+
+  EXPECT_EQ(TestApiExposedOnWebPages(),
+            PropertyExists(nonconnectable_webpage_context, kRuntime));
+  // If runtime was exposed to the page because of the test API, it will only
+  // get access to sendMessage, as that is the only one exposed to web page
+  // contexts.
+  if (TestApiExposedOnWebPages()) {
+    EXPECT_TRUE(PropertyExists(nonconnectable_webpage_context, kSendMessage));
+    EXPECT_FALSE(PropertyExists(nonconnectable_webpage_context, kGetUrl));
+    EXPECT_FALSE(PropertyExists(nonconnectable_webpage_context, kOnMessage));
+  }
+  EXPECT_EQ(TestApiExposedOnWebPages(),
+            PropertyExists(nonconnectable_webpage_context, kTest));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    FeatureAvailabilityNativeExtensionBindingsSystemUnittest,
+    testing::Bool());
+
+class NativeExtensionBindingsSystemBrowserUnittest
+    : public NativeExtensionBindingsSystemUnittest {
+ protected:
+  void Verify(const scoped_refptr<const Extension>& extension) {
+    RegisterExtension(extension);
+
+    v8::HandleScope handle_scope(isolate());
+    v8::Local<v8::Context> context = MainContext();
+
+    ScriptContext* script_context = CreateScriptContext(
+        context, extension.get(), mojom::ContextType::kPrivilegedExtension);
+    script_context->set_url(extension->url());
+
+    // Set `window.browser` to a non-object (string).
+    v8::Local<v8::String> browser_str = gin::StringToV8(isolate(), "a string");
+    context->Global()
+        ->Set(context, gin::StringToSymbol(isolate(), "browser"), browser_str)
+        .Check();
+
+    // This should not crash.
+    bindings_system()->UpdateBindingsForContext(script_context);
+  }
+};
+
+// Tests that updating bindings does not crash if the global "browser" property
+// is defined but is not an object. Regression test for crbug.com/459049475.
+TEST_F(NativeExtensionBindingsSystemBrowserUnittest,
+       TestWindowBrowserCrashNonRestricted) {
+  scoped_refptr<const Extension> extension = ExtensionBuilder("foo").Build();
+  Verify(extension);
+}
+
+// Same regression test as above but for restricted APIs.
+// Note: Although we set `window.browser` to a non-object here, this doesn't
+// actually test the restricted API setup logic. This is because the standard
+// API setup (used for APIs like `runtime`) runs first and aborts if
+// `window.browser` is invalid (before the restricted API setup can run). So
+// restricted API setup is currently unreachable if `window.browser` is invalid.
+// However, we still include this test to guard against future changes where the
+// order might flip or standard APIs (like `runtime`) might not be present.
+TEST_F(NativeExtensionBindingsSystemBrowserUnittest,
+       TestWindowBrowserCrashRestricted) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      extensions_features::kDebuggerAPIRestrictedToDevMode);
+
+  scoped_refptr<const Extension> extension = ExtensionBuilder("foo")
+                                                 .SetManifestVersion(3)
+                                                 .AddAPIPermission("debugger")
+                                                 .Build();
+  Verify(extension);
+}
 
 }  // namespace extensions

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,11 +15,7 @@
 #endif  // defined(MOJO_TEST_IMPLEMENTATION)
 
 #else  // defined(WIN32)
-#if defined(MOJO_TEST_IMPLEMENTATION)
 #define MOJO_TEST_EXPORT __attribute__((visibility("default")))
-#else
-#define MOJO_TEST_EXPORT
-#endif
 #endif
 
 #else  // defined(COMPONENT_BUILD)

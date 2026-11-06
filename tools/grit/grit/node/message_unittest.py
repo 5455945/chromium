@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-# Copyright (c) 2012 The Chromium Authors. All rights reserved.
+# Copyright 2012 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 '''Unit tests for grit.node.message'''
-
-from __future__ import print_function
 
 import os
 import sys
@@ -14,10 +12,12 @@ import unittest
 if __name__ == '__main__':
   sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
 
+from grit import constants
 from grit import exception
 from grit import tclib
 from grit import util
 from grit.node import message
+
 
 class MessageUnittest(unittest.TestCase):
   def testMessage(self):
@@ -28,10 +28,10 @@ class MessageUnittest(unittest.TestCase):
         Hello <ph name="USERNAME">%s<ex>Joi</ex></ph>, how are you doing today?
         </message>
         </messages>''')
-    msg, = root.GetChildrenOfType(message.MessageNode)
+    (msg,) = root.GetChildrenOfType(message.MessageNode)
     cliques = msg.GetCliques()
     content = cliques[0].GetMessage().GetPresentableContent()
-    self.failUnless(content == 'Hello USERNAME, how are you doing today?')
+    self.assertTrue(content == 'Hello USERNAME, how are you doing today?')
 
   def testMessageWithWhitespace(self):
     root = util.ParseGrdForUnittest("""\
@@ -40,30 +40,34 @@ class MessageUnittest(unittest.TestCase):
         '''  Hello there <ph name="USERNAME">%s</ph>   '''
         </message>
         </messages>""")
-    msg, = root.GetChildrenOfType(message.MessageNode)
+    (msg,) = root.GetChildrenOfType(message.MessageNode)
     content = msg.GetCliques()[0].GetMessage().GetPresentableContent()
-    self.failUnless(content == 'Hello there USERNAME')
-    self.failUnless(msg.ws_at_start == '  ')
-    self.failUnless(msg.ws_at_end == '   ')
+    self.assertTrue(content == 'Hello there USERNAME')
+    self.assertTrue(msg.ws_at_start == '  ')
+    self.assertTrue(msg.ws_at_end == '   ')
 
   def testConstruct(self):
-    msg = tclib.Message(text="   Hello USERNAME, how are you?   BINGO\t\t",
-                        placeholders=[tclib.Placeholder('USERNAME', '%s', 'Joi'),
-                                      tclib.Placeholder('BINGO', '%d', '11')])
+    msg = tclib.Message(
+      text="   Hello USERNAME, how are you?   BINGO\t\t",
+      placeholders=[
+        tclib.Placeholder('USERNAME', '%s', 'Joi'),
+        tclib.Placeholder('BINGO', '%d', '11'),
+      ],
+    )
     msg_node = message.MessageNode.Construct(None, msg, 'BINGOBONGO')
-    self.failUnless(msg_node.children[0].name == 'ph')
-    self.failUnless(msg_node.children[0].children[0].name == 'ex')
-    self.failUnless(msg_node.children[0].children[0].GetCdata() == 'Joi')
-    self.failUnless(msg_node.children[1].children[0].GetCdata() == '11')
-    self.failUnless(msg_node.ws_at_start == '   ')
-    self.failUnless(msg_node.ws_at_end == '\t\t')
+    self.assertTrue(msg_node.children[0].name == 'ph')
+    self.assertTrue(msg_node.children[0].children[0].name == 'ex')
+    self.assertTrue(msg_node.children[0].children[0].GetCdata() == 'Joi')
+    self.assertTrue(msg_node.children[1].children[0].GetCdata() == '11')
+    self.assertTrue(msg_node.ws_at_start == '   ')
+    self.assertTrue(msg_node.ws_at_end == '\t\t')
 
   def testUnicodeConstruct(self):
-    text = u'Howdie \u00fe'
+    text = 'Howdie \u00fe'
     msg = tclib.Message(text=text)
     msg_node = message.MessageNode.Construct(None, msg, 'BINGOBONGO')
     msg_from_node = msg_node.GetCdata()
-    self.failUnless(msg_from_node == text)
+    self.assertTrue(msg_from_node == text)
 
   def testFormatterData(self):
     root = util.ParseGrdForUnittest("""\
@@ -72,19 +76,14 @@ class MessageUnittest(unittest.TestCase):
           Text
         </message>
         </messages>""")
-    msg, = root.GetChildrenOfType(message.MessageNode)
-    expected_formatter_data = {
-        'foo': '123',
-        'bar': '',
-        'qux': 'low'}
+    (msg,) = root.GetChildrenOfType(message.MessageNode)
+    expected_formatter_data = {'foo': '123', 'bar': '', 'qux': 'low'}
 
     # Can't use assertDictEqual, not available in Python 2.6, so do it
     # by hand.
-    self.failUnlessEqual(len(expected_formatter_data),
-                         len(msg.formatter_data))
+    self.assertEqual(len(expected_formatter_data), len(msg.formatter_data))
     for key in expected_formatter_data:
-      self.failUnlessEqual(expected_formatter_data[key],
-                           msg.formatter_data[key])
+      self.assertEqual(expected_formatter_data[key], msg.formatter_data[key])
 
   def testReplaceEllipsis(self):
     root = util.ParseGrdForUnittest('''
@@ -93,21 +92,21 @@ class MessageUnittest(unittest.TestCase):
         A...B.... <ph name="PH">%s<ex>A</ex></ph>... B... C...
         </message>
         </messages>''')
-    msg, = root.GetChildrenOfType(message.MessageNode)
+    (msg,) = root.GetChildrenOfType(message.MessageNode)
     msg.SetReplaceEllipsis(True)
-    content = msg.Translate('en')
-    self.failUnlessEqual(u'A...B.... %s\u2026 B\u2026 C\u2026', content)
+    content = msg.Translate('en', constants.DEFAULT_GENDER)
+    self.assertEqual('A...B.... %s\u2026 B\u2026 C\u2026', content)
 
   def testRemoveByteOrderMark(self):
-    root = util.ParseGrdForUnittest(u'''
+    root = util.ParseGrdForUnittest('''
         <messages>
         <message name="IDS_HAS_BOM" desc="">
-        \uFEFFThis\uFEFF i\uFEFFs OK\uFEFF
+        \ufeffThis\ufeff i\ufeffs OK\ufeff
         </message>
         </messages>''')
-    msg, = root.GetChildrenOfType(message.MessageNode)
-    content = msg.Translate('en')
-    self.failUnlessEqual(u'This is OK', content)
+    (msg,) = root.GetChildrenOfType(message.MessageNode)
+    content = msg.Translate('en', constants.DEFAULT_GENDER)
+    self.assertEqual('This is OK', content)
 
   def testPlaceholderHasTooManyExamples(self):
     try:
@@ -247,10 +246,10 @@ class MessageUnittest(unittest.TestCase):
         <ph name="ERROR_COUNT">%1$d<ex>1</ex></ph> error, <ph name="WARNING_COUNT">%2$d<ex>1</ex></ph> warning
       </message>
       </messages>""")
-    msg, = root.GetChildrenOfType(message.MessageNode)
+    (msg,) = root.GetChildrenOfType(message.MessageNode)
     cliques = msg.GetCliques()
     content = cliques[0].GetMessage().GetPresentableContent()
-    self.failUnless(content == 'ERROR_COUNT error, WARNING_COUNT warning')
+    self.assertTrue(content == 'ERROR_COUNT error, WARNING_COUNT warning')
 
   def testMultipleFormattersAreInsidePhNodes(self):
     failed = True

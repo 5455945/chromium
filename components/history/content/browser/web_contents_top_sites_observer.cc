@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,31 +15,21 @@ namespace history {
 WebContentsTopSitesObserver::WebContentsTopSitesObserver(
     content::WebContents* web_contents,
     TopSites* top_sites)
-    : content::WebContentsObserver(web_contents), top_sites_(top_sites) {
-}
+    : content::WebContentsObserver(web_contents), top_sites_(top_sites) {}
 
-WebContentsTopSitesObserver::~WebContentsTopSitesObserver() {
-}
+WebContentsTopSitesObserver::~WebContentsTopSitesObserver() = default;
 
 void WebContentsTopSitesObserver::NavigationEntryCommitted(
     const content::LoadCommittedDetails& load_details) {
   DCHECK(load_details.entry);
 
-  // Frame-wise, we only care about navigating the main frame.
-  // Type-wise, we only care about navigating to a new page, or renavigating to
-  // an existing navigation entry.
-  if (top_sites_ && load_details.is_main_frame &&
-      (load_details.type ==
-           content::NavigationType::NAVIGATION_TYPE_NEW_ENTRY ||
-       load_details.type ==
-           content::NavigationType::NAVIGATION_TYPE_EXISTING_ENTRY)) {
+  // We only care about navigating the main frame.
+  if (top_sites_ && load_details.is_main_frame) {
     // Only report the Virtual URL. The virtual URL, when it differs from the
     // actual URL that is loaded in the renderer, is the one meant to be shown
     // to the user in all UI.
     top_sites_->OnNavigationCommitted(load_details.entry->GetVirtualURL());
   }
 }
-
-WEB_CONTENTS_USER_DATA_KEY_IMPL(WebContentsTopSitesObserver)
 
 }  // namespace history

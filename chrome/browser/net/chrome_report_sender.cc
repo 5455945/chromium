@@ -1,11 +1,15 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/net/chrome_report_sender.h"
 
-#include "base/bind.h"
-#include "net/url_request/report_sender.h"
+#include <optional>
+#include <string>
+
+#include "base/functional/bind.h"
+#include "net/base/load_flags.h"
+#include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
@@ -51,7 +55,7 @@ class SimpleURLLoaderOwner {
     OnDone(&response_head, net::OK);
   }
 
-  void OnURLLoaderComplete(std::unique_ptr<std::string> response_body) {
+  void OnURLLoaderComplete(std::optional<std::string> response_body) {
     OnDone(loader_->ResponseInfo(), loader_->NetError());
   }
 
@@ -87,7 +91,8 @@ void SendReport(
   auto resource_request = std::make_unique<network::ResourceRequest>();
   resource_request->url = report_uri;
   resource_request->method = "POST";
-  resource_request->load_flags = net::ReportSender::kLoadFlags;
+  resource_request->load_flags =
+      net::LOAD_BYPASS_CACHE | net::LOAD_DISABLE_CACHE;
   resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
 
   auto loader = network::SimpleURLLoader::Create(std::move(resource_request),

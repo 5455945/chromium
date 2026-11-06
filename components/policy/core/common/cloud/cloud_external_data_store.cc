@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,21 +7,22 @@
 #include <set>
 
 #include "base/check.h"
-#include "base/sequenced_task_runner.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_view_util.h"
+#include "base/task/sequenced_task_runner.h"
 #include "components/policy/core/common/cloud/resource_cache.h"
-#include "crypto/sha2.h"
+#include "crypto/hash.h"
 
 namespace policy {
 
 namespace {
 
-// Encodes (policy, hash) into a single string.
-std::string GetSubkey(const std::string& policy, const std::string& hash) {
-  DCHECK(!policy.empty());
+// Encodes (key, hash) into a single string.
+std::string GetSubkey(const std::string& key, const std::string& hash) {
+  DCHECK(!key.empty());
   DCHECK(!hash.empty());
-  return base::NumberToString(policy.size()) + ":" +
-         base::NumberToString(hash.size()) + ":" + policy + hash;
+  return base::NumberToString(key.size()) + ":" +
+         base::NumberToString(hash.size()) + ":" + key + hash;
 }
 
 }  // namespace
@@ -42,34 +43,34 @@ CloudExternalDataStore::~CloudExternalDataStore() {
   // when this destructor is called not on |task_runner|.
 }
 
-void CloudExternalDataStore::Prune(
-    const CloudExternalDataManager::Metadata& metadata) {
+void CloudExternalDataStore::Prune(const PruningData& key_hash_pairs_to_keep) {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
   std::set<std::string> subkeys_to_keep;
-  for (CloudExternalDataManager::Metadata::const_iterator it = metadata.begin();
-       it != metadata.end(); ++it) {
-    subkeys_to_keep.insert(GetSubkey(it->first, it->second.hash));
+  for (const auto& it : key_hash_pairs_to_keep) {
+    subkeys_to_keep.insert(GetSubkey(it.first, it.second));
   }
   cache_->PurgeOtherSubkeys(cache_key_, subkeys_to_keep);
 }
 
-base::FilePath CloudExternalDataStore::Store(const std::string& policy,
+base::FilePath CloudExternalDataStore::Store(const std::string& key,
                                              const std::string& hash,
                                              const std::string& data) {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
-  return cache_->Store(cache_key_, GetSubkey(policy, hash), data);
+  return cache_->Store(cache_key_, GetSubkey(key, hash), data);
 }
 
-base::FilePath CloudExternalDataStore::Load(const std::string& policy,
+base::FilePath CloudExternalDataStore::Load(const std::string& key,
                                             const std::string& hash,
                                             size_t max_size,
                                             std::string* data) {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
-  const std::string subkey = GetSubkey(policy, hash);
+  const std::string subkey = GetSubkey(key, hash);
   base::FilePath file_path = cache_->Load(cache_key_, subkey, data);
   if (!file_path.empty()) {
-    if (data->size() <= max_size && crypto::SHA256HashString(*data) == hash)
+    if (data->size() <= max_size && std::string(base::as_string_view(
+                                        crypto::hash::Sha256(*data))) == hash) {
       return file_path;
+    }
     // If the data is larger than allowed or does not match the expected hash,
     // delete the entry.
     cache_->Delete(cache_key_, subkey);

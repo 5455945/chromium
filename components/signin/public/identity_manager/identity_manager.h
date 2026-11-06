@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,42 +6,47 @@
 #define COMPONENTS_SIGNIN_PUBLIC_IDENTITY_MANAGER_IDENTITY_MANAGER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 
-#include "base/macros.h"
+#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/scoped_observation.h"
+#include "base/scoped_observation_traits.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "components/account_manager_core/account.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/signin/internal/identity_manager/primary_account_manager.h"
 #include "components/signin/internal/identity_manager/profile_oauth2_token_service.h"
 #include "components/signin/internal/identity_manager/profile_oauth2_token_service_observer.h"
+#include "components/signin/public/base/consent_level.h"
+#include "components/signin/public/base/oauth_consumer_id.h"
 #include "components/signin/public/base/signin_client.h"
+#include "components/signin/public/base/signin_metrics.h"
 #include "components/signin/public/identity_manager/access_token_fetcher.h"
 #include "components/signin/public/identity_manager/account_info.h"
-#include "components/signin/public/identity_manager/consent_level.h"
 #include "components/signin/public/identity_manager/identity_mutator.h"
-#include "components/signin/public/identity_manager/scope_set.h"
-#include "components/signin/public/identity_manager/ubertoken_fetcher.h"
+#include "crypto/sign.h"
 #include "google_apis/gaia/oauth2_access_token_manager.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+#include "components/signin/public/base/binding_key_registration_token_result.h"
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
 #include "base/android/jni_android.h"
 #include "base/containers/flat_map.h"
 #include "base/time/time.h"
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 namespace account_manager {
-class AccountManager;
+class AccountManagerFacade;
 }
 #endif
-
-namespace gaia {
-class GaiaSource;
-struct ListedAccount;
-}  // namespace gaia
 
 namespace network {
 class SharedURLLoaderFactory;
@@ -57,7 +62,8 @@ class NewTabPageUI;
 
 namespace signin {
 
-struct AccountsInCookieJarInfo;
+class AccountsInCookieJarInfo;
+struct AccountAvailabilityOptions;
 class IdentityManagerTest;
 class IdentityTestEnvironment;
 class DiagnosticsProvider;
@@ -81,6 +87,8 @@ class IdentityManager : public KeyedService,
 
     // Called when there is a change in the primary account or in the consent
     // level for the primary account.
+    // To avoid undesired UI changes during the account switching process, UI
+    // code can use `OnEndBatchOfPrimaryAccountChanges()`.
     //
     // Note: Observers are not allowed to change the primary account directly
     // from this methood as that would lead to |event_details| not being correct
@@ -90,7 +98,7 @@ class IdentityManager : public KeyedService,
 
     // Called when a new refresh token is associated with |account_info|.
     // NOTE: On a signin event, the ordering of this callback wrt the
-    // OnPrimaryAccountSet() callback is undefined. If you as a client are
+    // |OnPrimaryAccountChanged| callback is undefined. If you as a client are
     // interested in both callbacks, PrimaryAccountAccessTokenFetcher will
     // likely meet your needs. Otherwise, if this lack of ordering is
     // problematic for your use case, please contact blundell@chromium.org.
@@ -104,7 +112,7 @@ class IdentityManager : public KeyedService,
     // NOTE: It is not guaranteed that a call to
     // OnRefreshTokenUpdatedForAccount() has previously occurred for this
     // account due to corner cases.
-    // TODO(https://crbug.com/884731): Eliminate these corner cases.
+    // TODO(crbug.com/40593967): Eliminate these corner cases.
     // NOTE: On a signout event, the ordering of this callback wrt the
     // OnPrimaryAccountCleared() callback is undefined.If this lack of ordering
     // is problematic for your use case, please contact blundell@chromium.org.
@@ -115,24 +123,34 @@ class IdentityManager : public KeyedService,
     // changed. Note: It is always called after
     // |OnRefreshTokenUpdatedForAccount| when the refresh token is updated. It
     // is not called when the refresh token is removed.
+    // `token_operation_source` has a default value of
+    // `signin_metrics::SourceForRefreshTokenOperation::Unknown` which means
+    // that either the token did not change (example is when a token becomes
+    // invalid on the server) or that the operation value was not explicitly
+    // set.
     virtual void OnErrorStateOfRefreshTokenUpdatedForAccount(
         const CoreAccountInfo& account_info,
-        const GoogleServiceAuthError& error) {}
+        const GoogleServiceAuthError& error,
+        signin_metrics::SourceForRefreshTokenOperation token_operation_source) {
+    }
 
     // Called after refresh tokens are loaded.
     virtual void OnRefreshTokensLoaded() {}
 
     // Called whenever the list of Gaia accounts in the cookie jar has changed.
-    // |accounts_in_cookie_jar_info.accounts| is ordered by the order of the
-    // accounts in the cookie.
     //
-    // This observer method is also called when fetching the list of accounts
-    // in Gaia cookies fails after a number of internal retries. In this case:
-    // * |error| hold the last error to fetch the list of accounts;
-    // * |accounts_in_cookie_jar_info.accounts_are_fresh| is set to false as
-    //   the accounts information is considered stale;
-    // * |accounts_in_cookie_jar_info.accounts| holds the last list of known
-    //   accounts in the cookie jar.
+    // This observer method is also called when fetching the list of accounts in
+    // Gaia cookies fails after a number of internal retries.
+    //
+    // * `accounts_in_cookie_jar_info` contains the information about accounts
+    //    cookies. Accounts in this object are ordered by the order of accounts
+    //    in the cookie. If fetching accounts failed or hasn't finished yet,
+    //    this object will contain the last known state of accounts in the
+    //    cookie jar. See `AccountsInCookieJarInfo` documentation for more
+    //    details on the information available there.
+    // * `error` holds the last error that occurred while fetching the list of
+    //    accounts (or `GoogleServiceAuthError::AuthErrorNone()`, if fetching
+    //    succeeded).
     virtual void OnAccountsInCookieUpdated(
         const AccountsInCookieJarInfo& accounts_in_cookie_jar_info,
         const GoogleServiceAuthError& error) {}
@@ -150,6 +168,19 @@ class IdentityManager : public KeyedService,
     // Called after removing an account info.
     virtual void OnExtendedAccountInfoRemoved(const AccountInfo& info) {}
 
+#if BUILDFLAG(IS_IOS)
+    // Called after the list of accounts in `GetAccountsOnDevice` changes.
+    virtual void OnAccountsOnDeviceChanged() {}
+    // Called once the batch of primary account changes ended.
+    // This method is also called for each single primary account event, when
+    // there is no batch.
+    // UI code should prefer this event instead of `OnPrimaryAccountChanged()`,
+    // to avoid UI glitches when the user wants to switch from one primary
+    // account to another (by showing sign-out temporary state).
+    // See `StartBatchOfPrimaryAccountChanges()`.
+    virtual void OnEndBatchOfPrimaryAccountChanges() {}
+#endif  // BUILDFLAG(IS_IOS)
+
     // Called on Shutdown(), for observers that aren't KeyedServices to remove
     // their observers.
     virtual void OnIdentityManagerShutdown(IdentityManager* identity_manager) {}
@@ -159,14 +190,31 @@ class IdentityManager : public KeyedService,
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
 
+#if BUILDFLAG(IS_IOS)
+  // Whether a batch of primary account changes is in progress. See
+  // `OnEndBatchOfPrimaryAccountChanges()`.
+  bool IsBatchOfPrimaryAccountChangesInProgress() const;
+
+  // Starts a batch of primary account changes (e.g. when switching from one
+  // primary account to another). `OnEndBatchOfPrimaryAccountChanges()` is not
+  // sent on `OnPrimaryAccountChanged()` while the batch is running, and is sent
+  // when the returned `ScopedClosureRunner` is destructed.
+  // See `OnEndBatchOfPrimaryAccountChanges()`.
+  base::ScopedClosureRunner StartBatchOfPrimaryAccountChanges();
+#endif  // BUILDFLAG(IS_IOS)
+
   // Provides access to the core information of the user's primary account.
   // The primary account may or may not be blessed with the sync consent.
   // Returns an empty struct if no such info is available, either because there
   // is no primary account yet or because the user signed out or the |consent|
   // level required |ConsentLevel::kSync| was not granted.
+  // Note that `ConsentLevel::kSync` is deprecated, see the `ConsentLevel`
+  // documentation.
   // Returns a non-empty struct if the primary account exists and was granted
   // the required consent level.
-  // TODO(1046746): Update (./README.md).
+  // TODO(crbug.com/40067058): revisit this once `ConsentLevel::kSync` is
+  // removed.
+  // TODO(crbug.com/40116578): Update (./README.md).
   CoreAccountInfo GetPrimaryAccountInfo(ConsentLevel consent_level) const;
 
   // Provides access to the account ID of the user's primary account. Simple
@@ -176,44 +224,59 @@ class IdentityManager : public KeyedService,
   // Returns whether the user's primary account is available. If consent is
   // |ConsentLevel::kSync| then true implies that the user has blessed this
   // account for sync.
+  // Note that `ConsentLevel::kSync` is deprecated, see the `ConsentLevel`
+  // documentation.
+  // TODO(crbug.com/40067058): revisit this once `ConsentLevel::kSync` is
+  // removed.
   bool HasPrimaryAccount(ConsentLevel consent_level) const;
 
   // Creates an AccessTokenFetcher given the passed-in information.
-  std::unique_ptr<AccessTokenFetcher> CreateAccessTokenFetcherForAccount(
+  //
+  // Only use this method if the feature requires dynamic scopes each time it
+  // requests an access token. Don't use this method if the feature gets it's
+  // scopes from finch. In that case you should add your finch logic in the
+  // OAuthConsumerRegistry subclasses.
+  //
+  // If you create a new OAuthConsumerId for this method then it will also need
+  // to be added in oauth_consumer_registry.cc. Otherwise this method will
+  // crash.
+  [[nodiscard]] std::unique_ptr<AccessTokenFetcher>
+  CreateAccessTokenFetcherWithDynamicScopesForAccount(
       const CoreAccountId& account_id,
-      const std::string& oauth_consumer_name,
+      OAuthConsumerId oauth_consumer_id,
       const ScopeSet& scopes,
       AccessTokenFetcher::TokenCallback callback,
-      AccessTokenFetcher::Mode mode) WARN_UNUSED_RESULT;
+      AccessTokenFetcher::Mode mode,
+      AccessTokenFetcher::Source token_source =
+          AccessTokenFetcher::Source::kProfile);
 
-  // Creates an AccessTokenFetcher given the passed-in information, allowing
+  // Creates an AccessTokenFetcher for the |oauth_consumer_id| feature.
+  [[nodiscard]] std::unique_ptr<AccessTokenFetcher>
+  CreateAccessTokenFetcherForAccount(const CoreAccountId& account_id,
+                                     OAuthConsumerId oauth_consumer_id,
+                                     AccessTokenFetcher::TokenCallback callback,
+                                     AccessTokenFetcher::Mode mode,
+                                     AccessTokenFetcher::Source token_source =
+                                         AccessTokenFetcher::Source::kProfile);
+
+  // Creates an AccessTokenFetcher for the |oauth_conumser_id| feature, allowing
   // to specify a custom |url_loader_factory| as well.
-  std::unique_ptr<AccessTokenFetcher> CreateAccessTokenFetcherForAccount(
+  [[nodiscard]] std::unique_ptr<AccessTokenFetcher>
+  CreateAccessTokenFetcherForAccount(
       const CoreAccountId& account_id,
-      const std::string& oauth_consumer_name,
+      OAuthConsumerId oauth_consumer_id,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-      const ScopeSet& scopes,
       AccessTokenFetcher::TokenCallback callback,
-      AccessTokenFetcher::Mode mode) WARN_UNUSED_RESULT;
-
-  // Creates an AccessTokenFetcher given the passed-in information, allowing to
-  // specify custom |client_id| and |client_secret| to identify the OAuth client
-  // app.
-  std::unique_ptr<AccessTokenFetcher> CreateAccessTokenFetcherForClient(
-      const CoreAccountId& account_id,
-      const std::string& client_id,
-      const std::string& client_secret,
-      const std::string& oauth_consumer_name,
-      const ScopeSet& scopes,
-      AccessTokenFetcher::TokenCallback callback,
-      AccessTokenFetcher::Mode mode) WARN_UNUSED_RESULT;
+      AccessTokenFetcher::Mode mode);
 
   // If an entry exists in the cache of access tokens corresponding to the
   // given information, removes that entry; in this case, the next access token
-  // request for |account_id| and |scopes| will fetch a new token from the
-  // network. Otherwise, is a no-op.
+  // request for |account_id| and |oauth_consumer_id| will fetch a new token
+  // from the network. Otherwise, is a no-op.
+  //
+  // This method doesn't support `OAuthConsumerId` using dynamic scopes.
   void RemoveAccessTokenFromCache(const CoreAccountId& account_id,
-                                  const ScopeSet& scopes,
+                                  OAuthConsumerId oauth_consumer_id,
                                   const std::string& access_token);
 
   // Provides the information of all accounts that have refresh tokens.
@@ -234,6 +297,11 @@ class IdentityManager : public KeyedService,
   // Returns true if a refresh token exists for |account_id|.
   bool HasAccountWithRefreshToken(const CoreAccountId& account_id) const;
 
+#if BUILDFLAG(IS_IOS)
+  bool HasAccountWithRefreshTokenOnDevice(
+      const CoreAccountId& account_id) const;
+#endif
+
   // Returns true if all refresh tokens have been loaded from disk.
   bool AreRefreshTokensLoaded() const;
 
@@ -243,6 +311,46 @@ class IdentityManager : public KeyedService,
   // returned by GetErrorStateOfRefreshTokenForAccount(account_id)).
   bool HasAccountWithRefreshTokenInPersistentErrorState(
       const CoreAccountId& account_id) const;
+
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  // Asynchronously generates a registration token for binding a refresh token
+  // to a shared binding key.
+  // `supported_algorithms` is a space-separated list of acceptable signature
+  // algorithm names (e.g., "ES256 RS256"). This parameter may be ignored if an
+  // existing binding key is reused instead of generating a new one.
+  // Returns false if the generation cannot be started. In that case, `callback`
+  // will not be invoked.
+  bool GenerateBindingKeyRegistrationToken(
+      base::span<const crypto::sign::SignatureKind> supported_algorithms,
+      std::string_view auth_code,
+      base::OnceCallback<void(
+          std::optional<signin::BindingKeyRegistrationTokenResult>)> callback);
+
+  // Returns `true` if (a) a refresh token exists for `account_id`, and (b) the
+  // refresh token is bound to a device, it returns `false` otherwise.
+  bool HasAccountWithBoundRefreshToken(const CoreAccountId& account_id) const;
+
+  // Returns `true` if (a) a refresh token exists for `account_id`, and (b) the
+  // refresh token is bound to an mTLS certificate. It returns `false`
+  // otherwise.
+  bool HasAccountWithRefreshTokenBoundToMtls(
+      const CoreAccountId& account_id) const;
+
+  // Returns whether all bound refresh tokens share the same binding key.
+  //
+  // Unbound tokens are ignored in this check. Returns `true` if there are zero
+  // or one bound tokens, or if all bound tokens use the same key. Returns
+  // `false` only if there are multiple bound tokens with different keys.
+  bool AllBoundTokensShareSameBindingKey() const;
+
+  // Returns the wrapped binding key to reuse if any existing account is already
+  // bound. It returns an empty vector if no existing account is bound.
+  //
+  // NOTE: The refresh tokens must be loaded to correctly check the binding
+  // status of the accounts. If the refresh tokens are not loaded, calling this
+  // function results in a crash.
+  std::vector<uint8_t> GetWrappedBindingKey() const;
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
   // Returns the error state of the refresh token associated with |account_id|.
   // In particular: Returns GoogleServiceAuthError::AuthErrorNone() if either
@@ -263,24 +371,28 @@ class IdentityManager : public KeyedService,
       const CoreAccountId& account_id) const;
   // The same as `FindExtendedAccountInfo()` but finds an account by email.
   AccountInfo FindExtendedAccountInfoByEmailAddress(
-      const std::string& email_address) const;
+      std::string_view email_address) const;
   // The same as `FindExtendedAccountInfo()` but finds an account by gaia ID.
-  AccountInfo FindExtendedAccountInfoByGaiaId(const std::string& gaia_id) const;
-
-  // Creates an UbertokenFetcher given the passed-in information, allowing
-  // to specify a custom |url_loader_factory| as well.
-  std::unique_ptr<UbertokenFetcher> CreateUbertokenFetcherForAccount(
-      const CoreAccountId& account_id,
-      UbertokenFetcher::CompletionCallback callback,
-      gaia::GaiaSource source,
-      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
+  AccountInfo FindExtendedAccountInfoByGaiaId(const GaiaId& gaia_id) const;
 
   // Provides the information of all accounts that are present in the Gaia
   // cookie in the cookie jar, ordered by their order in the cookie.
-  // If the returned accounts are not fresh, an internal update will be
-  // triggered and there will be a subsequent invocation of
-  // IdentityManager::Observer::OnAccountsInCookieJarChanged().
+  //
+  // When `switches::kAvoidAutoTriggerListAccountsOnStale` is enabled, this
+  // method will not trigger an update even if the accounts are stale.
   AccountsInCookieJarInfo GetAccountsInCookieJar() const;
+
+  // Returns the accounts in the cookie jar without triggering an internal
+  // update even if the accounts in the cookie jar are stale.
+  //
+  // TODO(crbug.com/517864199): Remove once GetAccountsInCookieJar() no longer
+  // triggers an update.
+  AccountsInCookieJarInfo GetCachedAccountsInCookieJar() const;
+
+  // Returns the session index of the primary account in the cookie jar, or
+  // std::nullopt if the primary account is not signed in or not found in the
+  // cookie jar.
+  std::optional<size_t> GetSessionIndexForPrimaryAccount() const;
 
   // Returns pointer to the object used to change the signed-in state of the
   // primary account, if supported on the current platform. Otherwise, returns
@@ -300,6 +412,19 @@ class IdentityManager : public KeyedService,
   // device-level accounts. May be null if the system has no such notion.
   DeviceAccountsSynchronizer* GetDeviceAccountsSynchronizer();
 
+#if BUILDFLAG(IS_IOS)
+  // Gets all accounts on the device, including the ones from other profiles, in
+  // the order provided by the system (usually the order in which the accounts
+  // were added).
+  [[nodiscard]] std::vector<AccountInfo> GetAccountsOnDevice() const;
+#endif
+
+  // Overrides the value of the given account capability for the account.
+  // Passing `std::nullopt` clears the override.
+  void SetCapabilityOverride(const CoreAccountId& account_id,
+                             std::string_view capability_name,
+                             std::optional<Tribool> override_value);
+
   // Observer interface for classes that want to monitor status of various
   // requests. Mostly useful in tests and debugging contexts (e.g., WebUI).
   class DiagnosticsObserver {
@@ -317,11 +442,12 @@ class IdentityManager : public KeyedService,
 
     // Called when an access token request is completed. Contains diagnostic
     // information about the access token request.
-    virtual void OnAccessTokenRequestCompleted(const CoreAccountId& account_id,
-                                               const std::string& consumer_id,
-                                               const ScopeSet& scopes,
-                                               GoogleServiceAuthError error,
-                                               base::Time expiration_time) {}
+    virtual void OnAccessTokenRequestCompleted(
+        const CoreAccountId& account_id,
+        const std::string& consumer_id,
+        const ScopeSet& scopes,
+        const GoogleServiceAuthError& error,
+        base::Time expiration_time) {}
 
     // Called when an access token was removed.
     virtual void OnAccessTokenRemovedFromCache(const CoreAccountId& account_id,
@@ -364,14 +490,11 @@ class IdentityManager : public KeyedService,
     std::unique_ptr<AccountsMutator> accounts_mutator;
     std::unique_ptr<DeviceAccountsSynchronizer> device_accounts_synchronizer;
     std::unique_ptr<DiagnosticsProvider> diagnostics_provider;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-    account_manager::AccountManager* ash_account_manager = nullptr;
+    raw_ptr<SigninClient> signin_client = nullptr;
+#if BUILDFLAG(IS_CHROMEOS)
+    raw_ptr<account_manager::AccountManagerFacade, DanglingUntriaged>
+        account_manager_facade = nullptr;
 #endif
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-    SigninClient* signin_client = nullptr;
-#endif
-
-    bool allow_access_token_fetch = true;
 
     InitParameters();
     InitParameters(InitParameters&&);
@@ -382,6 +505,10 @@ class IdentityManager : public KeyedService,
   };
 
   explicit IdentityManager(IdentityManager::InitParameters&& parameters);
+
+  IdentityManager(const IdentityManager&) = delete;
+  IdentityManager& operator=(const IdentityManager&) = delete;
+
   ~IdentityManager() override;
 
   // KeyedService:
@@ -391,26 +518,8 @@ class IdentityManager : public KeyedService,
   // initialized.
   void OnNetworkInitialized();
 
-  // Methods related to migration of account IDs from email to Gaia ID.
-  // TODO(https://crbug.com/883272): Remove these once all platforms have
-  // migrated to the new account_id based on gaia (currently, only ChromeOS
-  // remains).
-
-  // Possible values for the account ID migration state, needs to be kept in
-  // sync with AccountTrackerService::AccountIdMigrationState.
-  enum AccountIdMigrationState {
-    MIGRATION_NOT_STARTED = 0,
-    MIGRATION_IN_PROGRESS = 1,
-    MIGRATION_DONE = 2,
-    NUM_MIGRATION_STATES
-  };
-
-  // Returns the currently saved state of the migration of account IDs.
-  AccountIdMigrationState GetAccountIdMigrationState() const;
-
-  // Picks the correct account_id for the specified account depending on the
-  // migration state.
-  CoreAccountId PickAccountIdForAccount(const std::string& gaia,
+  // Picks the correct account_id for account with the given gaia id and email.
+  CoreAccountId PickAccountIdForAccount(const GaiaId& gaia,
                                         const std::string& email) const;
 
   // Methods used only by embedder-level factory classes.
@@ -424,56 +533,64 @@ class IdentityManager : public KeyedService,
   // state of IdentityManager.
   DiagnosticsProvider* GetDiagnosticsProvider();
 
-#if defined(OS_ANDROID)
-  // Returns a pointer to the AccountTrackerService Java instance associated
-  // with this object.
-  // TODO(https://crbug.com/934688): Eliminate this method once
-  // AccountTrackerService.java has no more client usage.
-  base::android::ScopedJavaLocalRef<jobject>
-  LegacyGetAccountTrackerServiceJavaObject();
+  // Calling this method provides a hint that a new account may be added in the
+  // near future, and front-loads some processing to speed that up.
+  //
+  // Calling this API is an optional optimization (particularly for cases where
+  // latency of async processing is user-visible). It is OK to call this even
+  // if a new account is not then added, and it is OK to not call this even if a
+  // new account is later added.
+  void PrepareForAddingNewAccount();
+
+#if BUILDFLAG(IS_ANDROID)
+  // Get the reference on the java IdentityManager.
+  base::android::ScopedJavaLocalRef<jobject> GetJavaObject() const;
 
   // Get the reference on the java IdentityManager.
-  base::android::ScopedJavaLocalRef<jobject> GetJavaObject();
+  static IdentityManager* FromJavaObject(
+      JNIEnv* env,
+      const base::android::JavaRef<jobject>& j_identity_manager);
 
   // Provide the reference on the java IdentityMutator.
   base::android::ScopedJavaLocalRef<jobject> GetIdentityMutatorJavaObject();
 
-  // This method has the contractual assumption that the account is a known
-  // account and has as its semantics that it fetches the account info for the
-  // account, triggering an OnExtendedAccountInfoUpdated() callback if the info
-  // was successfully fetched.
-  void ForceRefreshOfExtendedAccountInfo(const CoreAccountId& account_id);
+  // This method refreshes the AccountInfo associated with |account_id| when
+  // the existing account info is stale. Otherwise it's a no-op.
+  // This method triggers an OnExtendedAccountInfoUpdated() callback if the
+  // info was successfully fetched.
+  void RefreshAccountInfoIfStale(const CoreAccountId& account_id);
 
   // Overloads for calls from java:
   bool HasPrimaryAccount(JNIEnv* env) const;
 
   base::android::ScopedJavaLocalRef<jobject> GetPrimaryAccountInfo(
-      JNIEnv* env,
-      jint consent_level) const;
+      JNIEnv* env) const;
 
   base::android::ScopedJavaLocalRef<jobject> GetPrimaryAccountId(
       JNIEnv* env) const;
 
+  base::android::ScopedJavaLocalRef<jobject> FindExtendedAccountInfoByAccountId(
+      JNIEnv* env,
+      const base::android::JavaRef<jobject>& j_account_id) const;
+
   base::android::ScopedJavaLocalRef<jobject>
   FindExtendedAccountInfoByEmailAddress(
       JNIEnv* env,
-      const base::android::JavaParamRef<jstring>& j_email) const;
+      const base::android::JavaRef<jstring>& j_email) const;
 
-  base::android::ScopedJavaLocalRef<jobjectArray> GetAccountsWithRefreshTokens(
-      JNIEnv* env) const;
+  // Refreshes all accounts with refresh tokens if they are stale. See
+  // RefreshAccountInfoIfStale(const CoreAccountId&).
+  void RefreshAccountInfoIfStale(JNIEnv* env);
 
-  // Forces refreshing extended account info with image for the given
-  // core account id.
-  void ForceRefreshOfExtendedAccountInfo(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& j_core_account_id);
+  // Returns true if the browser allows the primary account to be cleared.
+  bool IsClearPrimaryAccountAllowed(JNIEnv* env) const;
 #endif
+
+  // Returns a weak pointer of this.
+  base::WeakPtr<IdentityManager> GetWeakPtr();
 
  private:
   // These test helpers need to use some of the private methods below.
-  friend CoreAccountInfo SetPrimaryAccount(IdentityManager* identity_manager,
-                                           const std::string& email,
-                                           ConsentLevel consent_level);
   friend void SetRefreshTokenForPrimaryAccount(
       IdentityManager* identity_manager,
       const std::string& token_value);
@@ -481,25 +598,22 @@ class IdentityManager : public KeyedService,
       IdentityManager* identity_manager);
   friend void RemoveRefreshTokenForPrimaryAccount(
       IdentityManager* identity_manager);
-  friend AccountInfo MakePrimaryAccountAvailable(
-      IdentityManager* identity_manager,
-      const std::string& email,
-      ConsentLevel consent_level);
   friend void RevokeSyncConsent(IdentityManager* identity_manager);
   friend void ClearPrimaryAccount(IdentityManager* identity_manager);
-  friend AccountInfo MakeAccountAvailable(IdentityManager* identity_manager,
-                                          const std::string& email);
-  friend AccountInfo MakeAccountAvailableWithCookies(
+  friend AccountInfo MakeAccountAvailable(
       IdentityManager* identity_manager,
-      network::TestURLLoaderFactory* test_url_loader_factory,
-      const std::string& email,
-      const std::string& gaia_id);
-  friend void SetRefreshTokenForAccount(IdentityManager* identity_manager,
-                                        const CoreAccountId& account_id,
-                                        const std::string& token_value);
+      const AccountAvailabilityOptions& options);
+  friend void SetAutomaticIssueOfAccessTokens(IdentityManager* identity_manager,
+                                              bool grant);
+  friend void SetRefreshTokenForAccount(
+      IdentityManager* identity_manager,
+      const CoreAccountId& account_id,
+      const std::string& token_value,
+      const TokenBindingInfo& token_binding_info);
   friend void SetInvalidRefreshTokenForAccount(
       IdentityManager* identity_manager,
-      const CoreAccountId& account_id);
+      const CoreAccountId& account_id,
+      signin_metrics::SourceForRefreshTokenOperation source);
   friend void RemoveRefreshTokenForAccount(IdentityManager* identity_manager,
                                            const CoreAccountId& account_id);
   friend void UpdateAccountInfoForAccount(IdentityManager* identity_manager,
@@ -529,22 +643,27 @@ class IdentityManager : public KeyedService,
   friend void SimulateSuccessfulFetchOfAccountInfo(
       IdentityManager* identity_manager,
       const CoreAccountId& account_id,
-      const std::string& email,
-      const std::string& gaia,
-      const std::string& hosted_domain,
-      const std::string& full_name,
-      const std::string& given_name,
-      const std::string& locale,
-      const std::string& picture_url);
+      std::string_view email,
+      const GaiaId& gaia,
+      std::string_view hosted_domain,
+      std::string_view full_name,
+      std::string_view given_name,
+      std::string_view locale,
+      std::string_view picture_url);
+
+#if BUILDFLAG(IS_CHROMEOS)
+  friend account_manager::AccountManagerFacade* GetAccountManagerFacade(
+      IdentityManager* identity_manager);
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   // Temporary access to getters (e.g. GetTokenService()).
-  // TODO(https://crbug.com/944127): Remove this friendship by
+  // TODO(crbug.com/40619310): Remove this friendship by
   // extending identity_test_utils.h as needed.
   friend IdentityTestEnvironment;
 
   // IdentityManagerTest reaches into IdentityManager internals in
   // order to drive its behavior.
-  // TODO(https://crbug.com/943135): Find a better way to accomplish this.
+  // TODO(crbug.com/40618872): Find a better way to accomplish this.
   friend IdentityManagerTest;
   FRIEND_TEST_ALL_PREFIXES(IdentityManagerTest, Construct);
   FRIEND_TEST_ALL_PREFIXES(IdentityManagerTest,
@@ -587,12 +706,12 @@ class IdentityManager : public KeyedService,
   FRIEND_TEST_ALL_PREFIXES(IdentityManagerTest,
                            CallbackSentOnAccountsCookieDeletedByUserAction);
   FRIEND_TEST_ALL_PREFIXES(IdentityManagerTest, OnNetworkInitialized);
-  FRIEND_TEST_ALL_PREFIXES(IdentityManagerTest,
-                           ForceRefreshOfExtendedAccountInfo);
+  FRIEND_TEST_ALL_PREFIXES(IdentityManagerTest, RefreshAccountInfoIfStale);
   FRIEND_TEST_ALL_PREFIXES(IdentityManagerTest, FindExtendedPrimaryAccountInfo);
+  FRIEND_TEST_ALL_PREFIXES(IdentityManagerTest, BatchOfPrimaryAccountChanges);
 
-  // Only caller to FindExtendedPrimaryAccountInfo().
-  // TODO(https://crbug.com/1213351): Delete once the private call has been
+  // Both classes only call FindExtendedPrimaryAccountInfo().
+  // TODO(crbug.com/40183609): Delete once the private calls have been
   // removed.
   friend class ::NewTabPageUI;
 
@@ -600,7 +719,7 @@ class IdentityManager : public KeyedService,
   // does not require tokens to be loaded.
   // Do not add more external callers, as account info is generally not
   // available until tokens are loaded.
-  // TODO(https://crbug.com/1213351): Remove existing external callers.
+  // TODO(crbug.com/40183609): Remove existing external callers.
   AccountInfo FindExtendedPrimaryAccountInfo(ConsentLevel consent_level);
 
   // Private getters used for testing only (i.e. see identity_test_utils.h).
@@ -609,8 +728,8 @@ class IdentityManager : public KeyedService,
   AccountTrackerService* GetAccountTrackerService() const;
   AccountFetcherService* GetAccountFetcherService() const;
   GaiaCookieManagerService* GetGaiaCookieManagerService() const;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  account_manager::AccountManager* GetAshAccountManager() const;
+#if BUILDFLAG(IS_CHROMEOS)
+  account_manager::AccountManagerFacade* GetAccountManagerFacade() const;
 #endif
 
   // Populates and returns an AccountInfo object corresponding to |account_id|,
@@ -621,6 +740,9 @@ class IdentityManager : public KeyedService,
   // PrimaryAccountManager::Observer:
   void OnPrimaryAccountChanged(
       const PrimaryAccountChangeEvent& event_details) override;
+#if BUILDFLAG(IS_IOS)
+  void OnEndBatchOfPrimaryAccountChanges() override;
+#endif  // BUILDFLAG(IS_IOS)
 
   // ProfileOAuth2TokenServiceObserver:
   void OnRefreshTokenAvailable(const CoreAccountId& account_id) override;
@@ -628,12 +750,17 @@ class IdentityManager : public KeyedService,
   void OnRefreshTokensLoaded() override;
   void OnEndBatchChanges() override;
   void OnAuthErrorChanged(const CoreAccountId& account_id,
-                          const GoogleServiceAuthError& auth_error) override;
+                          const GoogleServiceAuthError& auth_error,
+                          signin_metrics::SourceForRefreshTokenOperation
+                              token_operation_source) override;
+#if BUILDFLAG(IS_IOS)
+  void OnAccountsOnDeviceChanged() override;
+  void OnAccountOnDeviceUpdated(const AccountInfo& account_info) override;
+#endif
 
   // GaiaCookieManagerService callbacks:
   void OnGaiaAccountsInCookieUpdated(
-      const std::vector<gaia::ListedAccount>& signed_in_accounts,
-      const std::vector<gaia::ListedAccount>& signed_out_accounts,
+      const AccountsInCookieJarInfo& accounts_in_cookie_jar_info,
       const GoogleServiceAuthError& error);
   void OnGaiaCookieDeletedByUserAction();
 
@@ -644,7 +771,7 @@ class IdentityManager : public KeyedService,
   void OnFetchAccessTokenComplete(const CoreAccountId& account_id,
                                   const std::string& consumer_id,
                                   const ScopeSet& scopes,
-                                  GoogleServiceAuthError error,
+                                  const GoogleServiceAuthError& error,
                                   base::Time expiration_time) override;
   void OnAccessTokenRemoved(const CoreAccountId& account_id,
                             const ScopeSet& scopes) override;
@@ -666,11 +793,13 @@ class IdentityManager : public KeyedService,
   std::unique_ptr<GaiaCookieManagerService> gaia_cookie_manager_service_;
   std::unique_ptr<PrimaryAccountManager> primary_account_manager_;
   std::unique_ptr<AccountFetcherService> account_fetcher_service_;
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  SigninClient* const signin_client_;
+  const raw_ptr<SigninClient> signin_client_;
+#if BUILDFLAG(IS_CHROMEOS)
+  const raw_ptr<account_manager::AccountManagerFacade, DanglingUntriaged>
+      account_manager_facade_;
 #endif
 
-  IdentityMutator identity_mutator_;
+  std::unique_ptr<IdentityMutator> identity_mutator_;
 
   // DiagnosticsProvider instance.
   std::unique_ptr<DiagnosticsProvider> diagnostics_provider_;
@@ -685,28 +814,60 @@ class IdentityManager : public KeyedService,
 
   // Lists of observers.
   // Makes sure lists are empty on destruction.
-  base::ObserverList<Observer, true>::Unchecked observer_list_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      Observer,
+      /*check_empty=*/true,
+      /*reentrancy=*/
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>::Unchecked
+      observer_list_;
   base::ObserverList<DiagnosticsObserver, true>::Unchecked
       diagnostics_observation_list_;
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   // Java-side IdentityManager object.
   base::android::ScopedJavaGlobalRef<jobject> java_identity_manager_;
-
-  // CoreAccountId and the corresponding fetch start time, this is only
-  // used to record account information fetch duration.
-  base::flat_map<CoreAccountId, base::TimeTicks>
-      account_info_fetch_start_times_;
 #endif
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  account_manager::AccountManager* ash_account_manager_ = nullptr;
-#endif
-
-  const bool allow_access_token_fetch_;
-  DISALLOW_COPY_AND_ASSIGN(IdentityManager);
+  base::WeakPtrFactory<IdentityManager> weak_pointer_factory_;
 };
 
 }  // namespace signin
+
+namespace base {
+
+template <>
+struct ScopedObservationTraits<signin::IdentityManager,
+                               signin::IdentityManager::DiagnosticsObserver> {
+  static void AddObserver(
+      signin::IdentityManager* source,
+      signin::IdentityManager::DiagnosticsObserver* observer) {
+    source->AddDiagnosticsObserver(observer);
+  }
+  static void RemoveObserver(
+      signin::IdentityManager* source,
+      signin::IdentityManager::DiagnosticsObserver* observer) {
+    source->RemoveDiagnosticsObserver(observer);
+  }
+};
+
+}  // namespace base
+
+#if BUILDFLAG(IS_ANDROID)
+namespace jni_zero {
+template <>
+inline signin::IdentityManager* FromJniType<signin::IdentityManager*>(
+    JNIEnv* env,
+    const JavaRef<jobject>& j_identity_manager) {
+  return signin::IdentityManager::FromJavaObject(env, j_identity_manager);
+}
+
+template <>
+inline ScopedJavaLocalRef<jobject> ToJniType(
+    JNIEnv* env,
+    signin::IdentityManager* identity_manager) {
+  return identity_manager ? identity_manager->GetJavaObject() : nullptr;
+}
+}  // namespace jni_zero
+#endif
 
 #endif  // COMPONENTS_SIGNIN_PUBLIC_IDENTITY_MANAGER_IDENTITY_MANAGER_H_

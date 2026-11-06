@@ -1,84 +1,140 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/send_tab_to_self/send_tab_to_self_util.h"
 
+#include <iterator>
+#include <optional>
+#include <ostream>
+
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/sync/device_info_sync_service_factory.h"
+#include "chrome/browser/send_tab_to_self/send_tab_to_self_scroll_observer.h"
 #include "chrome/browser/sync/send_tab_to_self_sync_service_factory.h"
-#include "components/send_tab_to_self/features.h"
+#include "components/autofill/content/browser/content_autofill_client.h"
+#include "components/autofill/content/browser/content_autofill_driver.h"
+#include "components/send_tab_to_self/metrics_util.h"
+#include "components/send_tab_to_self/outgoing_tab_form_field_extractor.h"
+#include "components/send_tab_to_self/page_context.h"
+#include "components/send_tab_to_self/received_tab_forms_filler.h"
+#include "components/send_tab_to_self/send_tab_to_self_entry.h"
 #include "components/send_tab_to_self/send_tab_to_self_model.h"
 #include "components/send_tab_to_self/send_tab_to_self_sync_service.h"
-#include "components/sync/driver/sync_driver_switches.h"
-#include "components/sync/driver/sync_service.h"
-#include "components/sync/driver/sync_user_settings.h"
-#include "components/sync_device_info/device_info.h"
-#include "components/sync_device_info/device_info_sync_service.h"
-#include "components/sync_device_info/device_info_tracker.h"
-#include "content/public/browser/navigation_entry.h"
+#include "components/shared_highlighting/core/common/text_fragment.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/common/url_constants.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 
 namespace send_tab_to_self {
 
-bool IsUserSyncTypeActive(Profile* profile) {
+namespace {
+
+using ExtractorCallback = base::RepeatingCallback<
+    PageContext::FormFieldInfo(autofill::AutofillManager&, const url::Origin&)>;
+
+PageContext::FormFieldInfo ExtractFormFieldsFromWebContentsInternal(
+    content::WebContents* web_contents,
+    ExtractorCallback extractor) {
+  if (!web_contents) {
+    return PageContext::FormFieldInfo();
+  }
+
+  const url::Origin main_origin =
+      web_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin();
+
+  PageContext::FormFieldInfo form_field_info;
+
+  web_contents->ForEachRenderFrameHost([&](content::RenderFrameHost* rfh) {
+    autofill::ContentAutofillDriver* driver =
+        autofill::ContentAutofillDriver::GetForRenderFrameHost(rfh);
+    if (!driver) {
+      return;
+    }
+
+    PageContext::FormFieldInfo frame_info =
+        extractor.Run(driver->GetAutofillManager(), main_origin);
+    form_field_info.fields.insert(
+        form_field_info.fields.end(),
+        std::make_move_iterator(frame_info.fields.begin()),
+        std::make_move_iterator(frame_info.fields.end()));
+  });
+
+  return form_field_info;
+}
+
+}  // namespace
+
+std::optional<EntryPointDisplayReason> GetEntryPointDisplayReason(
+    content::WebContents* web_contents,
+    const std::optional<GURL>& url) {
+  if (!web_contents) {
+    return std::nullopt;
+  }
+
   SendTabToSelfSyncService* service =
-      SendTabToSelfSyncServiceFactory::GetForProfile(profile);
-  // The service will be null if the user is in incognito mode so better to
-  // check for that.
-  return service && service->GetSendTabToSelfModel() &&
-         service->GetSendTabToSelfModel()->IsReady();
+      SendTabToSelfSyncServiceFactory::GetForProfile(
+          Profile::FromBrowserContext(web_contents->GetBrowserContext()));
+  const GURL& url_to_check = url.value_or(web_contents->GetLastCommittedURL());
+  return service ? service->GetEntryPointDisplayReason(url_to_check)
+                 : std::nullopt;
 }
 
-bool HasValidTargetDevice(Profile* profile) {
-  SendTabToSelfSyncService* service =
-      SendTabToSelfSyncServiceFactory::GetForProfile(profile);
-  return service && service->GetSendTabToSelfModel() &&
-         service->GetSendTabToSelfModel()->HasValidTargetDevice();
+bool ShouldDisplayEntryPoint(content::WebContents* web_contents,
+                             const std::optional<GURL>& url) {
+  return GetEntryPointDisplayReason(web_contents, url).has_value();
 }
 
-bool AreContentRequirementsMet(const GURL& url, Profile* profile) {
-  bool is_http_or_https = url.SchemeIsHTTPOrHTTPS();
-  bool is_incognito_mode = profile->IsIncognitoProfile();
-  return is_http_or_https && !is_incognito_mode;
+PageContext::FormFieldInfo ExtractFormFieldsFromWebContents(
+    content::WebContents* web_contents) {
+  return ExtractFormFieldsFromWebContentsInternal(
+      web_contents, base::BindRepeating(&ExtractOutgoingTabFormFields));
 }
 
-bool ShouldOfferFeature(content::WebContents* web_contents) {
-  if (!web_contents)
-    return false;
-  Profile* profile =
-      Profile::FromBrowserContext(web_contents->GetBrowserContext());
-
-  content::NavigationEntry* navigation_entry =
-      web_contents->GetController().GetLastCommittedEntry();
-  bool has_last_entry = (navigation_entry != nullptr);
-
-  return IsUserSyncTypeActive(profile) && HasValidTargetDevice(profile) &&
-         AreContentRequirementsMet(web_contents->GetURL(), profile) &&
-         has_last_entry;
+PageContext::FormFieldInfo
+ExtractFormFieldsFromWebContentsForTesting(  // IN-TEST
+    content::WebContents* web_contents,
+    std::ostream& os) {
+  return ExtractFormFieldsFromWebContentsInternal(
+      web_contents,
+      base::BindRepeating(
+          [](std::ostream* os, autofill::AutofillManager& manager,
+             const url::Origin& origin) {
+            return ExtractOutgoingTabFormFieldsForTesting(  // IN-TEST
+                manager, origin, *os);
+          },
+          &os));
 }
 
-bool ShouldOfferFeatureForLink(content::WebContents* web_contents,
-                               const GURL& link_url) {
-  if (!web_contents)
-    return false;
-  Profile* profile =
-      Profile::FromBrowserContext(web_contents->GetBrowserContext());
-  return IsUserSyncTypeActive(profile) && HasValidTargetDevice(profile) &&
-         // Send tab to self should not be offered for tel links, click to call
-         // feature will be handling tel links.
-         !link_url.SchemeIs(url::kTelScheme) &&
-         (AreContentRequirementsMet(web_contents->GetURL(), profile) ||
-          AreContentRequirementsMet(link_url, profile));
+void FillWebContents(content::WebContents* web_contents,
+                     const url::Origin& origin,
+                     const PageContext& page_context) {
+  if (!web_contents || page_context.form_field_info.fields.empty()) {
+    return;
+  }
+
+  autofill::ContentAutofillClient* autofill_client =
+      autofill::ContentAutofillClient::FromWebContents(web_contents);
+  if (autofill_client) {
+    ReceivedTabFormsFiller::Start(*autofill_client, origin,
+                                  page_context.form_field_info);
+  }
 }
 
-bool ShouldOfferOmniboxIcon(content::WebContents* web_contents) {
-  if (!web_contents)
-    return false;
-  return !web_contents->IsWaitingForResponse() &&
-         ShouldOfferFeature(web_contents);
+std::optional<std::string> GetScrollPositionAsTextFragment(
+    const SendTabToSelfEntry* entry) {
+  if (!entry || entry->GetPageContext().scroll_position.IsEmpty()) {
+    return std::nullopt;
+  }
+
+  shared_highlighting::TextFragment tf =
+      entry->GetPageContext()
+          .scroll_position.text_fragment.ToSharedHighlightingTextFragment();
+  return tf.ToEscapedString(shared_highlighting::TextFragment::
+                                EscapedStringFormat::kWithoutTextDirective);
 }
 
 }  // namespace send_tab_to_self

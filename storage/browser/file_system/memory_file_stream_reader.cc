@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include <utility>
 
 #include "base/memory/ptr_util.h"
-#include "base/task_runner_util.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
 
@@ -30,7 +29,7 @@ MemoryFileStreamReader::MemoryFileStreamReader(
 
 MemoryFileStreamReader::~MemoryFileStreamReader() = default;
 
-int MemoryFileStreamReader::Read(net::IOBuffer* buf,
+int MemoryFileStreamReader::Read(scoped_refptr<net::IOBuffer> buf,
                                  int buf_len,
                                  net::CompletionOnceCallback callback) {
   task_runner_->PostTaskAndReplyWithResult(
@@ -54,7 +53,7 @@ int MemoryFileStreamReader::Read(net::IOBuffer* buf,
             return util->ReadFile(path, offset, std::move(buf), buf_len);
           },
           memory_file_util_, file_path_, expected_modification_time_, offset_,
-          base::WrapRefCounted(buf), buf_len),
+          std::move(buf), buf_len),
       base::BindOnce(&MemoryFileStreamReader::OnReadCompleted,
                      weak_factory_.GetWeakPtr(), std::move(callback)));
 
@@ -70,24 +69,23 @@ void MemoryFileStreamReader::OnReadCompleted(
   std::move(callback).Run(result);
 }
 
-int64_t MemoryFileStreamReader::GetLength(
-    net::Int64CompletionOnceCallback callback) {
+int64_t MemoryFileStreamReader::GetLength(GetLengthCallback callback) {
   task_runner_->PostTaskAndReplyWithResult(
       FROM_HERE,
       base::BindOnce(
           [](base::WeakPtr<ObfuscatedFileUtilMemoryDelegate> util,
-             const base::FilePath& path,
-             base::Time expected_modification_time) -> int64_t {
+             const base::FilePath& path, base::Time expected_modification_time)
+              -> base::expected<int64_t, net::Error> {
             if (!util)
-              return net::ERR_FILE_NOT_FOUND;
+              return base::unexpected(net::ERR_FILE_NOT_FOUND);
             base::File::Info file_info;
             if (util->GetFileInfo(path, &file_info) != base::File::FILE_OK) {
-              return net::ERR_FILE_NOT_FOUND;
+              return base::unexpected(net::ERR_FILE_NOT_FOUND);
             }
 
             if (!FileStreamReader::VerifySnapshotTime(
                     expected_modification_time, file_info)) {
-              return net::ERR_UPLOAD_FILE_CHANGED;
+              return base::unexpected(net::ERR_UPLOAD_FILE_CHANGED);
             }
 
             return file_info.size;
@@ -102,9 +100,9 @@ int64_t MemoryFileStreamReader::GetLength(
 }
 
 void MemoryFileStreamReader::OnGetLengthCompleted(
-    net::Int64CompletionOnceCallback callback,
-    int64_t result) {
-  std::move(callback).Run(result);
+    GetLengthCallback callback,
+    base::expected<int64_t, net::Error> result) {
+  std::move(callback).Run(std::move(result));
 }
 
 }  // namespace storage

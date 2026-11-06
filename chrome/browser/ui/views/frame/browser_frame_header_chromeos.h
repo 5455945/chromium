@@ -1,12 +1,11 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_VIEWS_FRAME_BROWSER_FRAME_HEADER_CHROMEOS_H_
 #define CHROME_BROWSER_UI_VIEWS_FRAME_BROWSER_FRAME_HEADER_CHROMEOS_H_
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "chromeos/ui/frame/frame_header.h"
 #include "ui/gfx/image/image_skia.h"
 
@@ -32,20 +31,20 @@ class BrowserFrameHeaderChromeOS : public chromeos::FrameHeader {
       views::View* view,
       AppearanceProvider* appearance_provider,
       chromeos::FrameCaptionButtonContainerView* caption_button_container);
-  ~BrowserFrameHeaderChromeOS() override;
 
-  // Returns the amount that the frame background is inset from the left edge of
-  // the window.
-  static int GetThemeBackgroundXInset();
+  BrowserFrameHeaderChromeOS(const BrowserFrameHeaderChromeOS&) = delete;
+  BrowserFrameHeaderChromeOS& operator=(const BrowserFrameHeaderChromeOS&) =
+      delete;
+
+  ~BrowserFrameHeaderChromeOS() override;
 
   // FrameHeader:
   void UpdateFrameColors() override;
-  SkPath GetWindowMaskForFrameHeader(const gfx::Size& size) override;
+  views::CaptionButtonLayoutSize GetButtonLayoutSize() const override;
 
  protected:
   // FrameHeader:
   void DoPaintHeader(gfx::Canvas* canvas) override;
-  views::CaptionButtonLayoutSize GetButtonLayoutSize() const override;
   SkColor GetTitleColor() const override;
   SkColor GetCurrentFrameColor() const override;
 
@@ -53,9 +52,7 @@ class BrowserFrameHeaderChromeOS : public chromeos::FrameHeader {
   // Paints the frame image.
   void PaintFrameImages(gfx::Canvas* canvas);
 
-  AppearanceProvider* appearance_provider_ = nullptr;
-
-  DISALLOW_COPY_AND_ASSIGN(BrowserFrameHeaderChromeOS);
+  raw_ptr<AppearanceProvider> appearance_provider_ = nullptr;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_FRAME_BROWSER_FRAME_HEADER_CHROMEOS_H_

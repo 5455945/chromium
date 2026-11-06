@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,6 +16,12 @@ namespace ash {
 class SessionLimitNotificationControllerTest : public AshTestBase {
  public:
   SessionLimitNotificationControllerTest() = default;
+
+  SessionLimitNotificationControllerTest(
+      const SessionLimitNotificationControllerTest&) = delete;
+  SessionLimitNotificationControllerTest& operator=(
+      const SessionLimitNotificationControllerTest&) = delete;
+
   ~SessionLimitNotificationControllerTest() override = default;
 
  protected:
@@ -23,7 +29,7 @@ class SessionLimitNotificationControllerTest : public AshTestBase {
 
   void UpdateSessionLengthLimitInMin(int mins) {
     Shell::Get()->session_controller()->SetSessionLengthLimit(
-        base::TimeDelta::FromMinutes(mins), base::Time::Now());
+        base::Minutes(mins), base::Time::Now());
   }
 
   message_center::Notification* GetNotification() {
@@ -48,9 +54,6 @@ class SessionLimitNotificationControllerTest : public AshTestBase {
         SessionLimitNotificationController::kNotificationId,
         false /* by_user */);
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(SessionLimitNotificationControllerTest);
 };
 
 TEST_F(SessionLimitNotificationControllerTest, Notification) {
@@ -164,10 +167,18 @@ TEST_F(SessionLimitNotificationControllerTest, RemoveNotification) {
 class SessionLimitNotificationControllerLoginTest
     : public SessionLimitNotificationControllerTest {
  public:
-  SessionLimitNotificationControllerLoginTest() { set_start_session(false); }
+  SessionLimitNotificationControllerLoginTest() = default;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(SessionLimitNotificationControllerLoginTest);
+  SessionLimitNotificationControllerLoginTest(
+      const SessionLimitNotificationControllerLoginTest&) = delete;
+  SessionLimitNotificationControllerLoginTest& operator=(
+      const SessionLimitNotificationControllerLoginTest&) = delete;
+
+  // SessionLimitNotificationControllerTest:
+  void SetUpInitParams(AshTestHelper::InitParams& init_params) override {
+    SessionLimitNotificationControllerTest::SetUpInitParams(init_params);
+    init_params.users.clear();
+  }
 };
 
 TEST_F(SessionLimitNotificationControllerLoginTest,
@@ -178,7 +189,7 @@ TEST_F(SessionLimitNotificationControllerLoginTest,
   EXPECT_FALSE(GetNotification());
 
   // Notification is shown after login.
-  CreateUserSessions(1);
+  SimulateUserLogin(kRegularUserLoginInfo);
   EXPECT_TRUE(GetNotification());
 
   RemoveNotification();
@@ -191,7 +202,7 @@ TEST_F(SessionLimitNotificationControllerLoginTest,
 
   // Notification should be absent.
   UpdateSessionLengthLimitInMin(kNotificationThresholdInMinutes + 10);
-  CreateUserSessions(1);
+  SimulateUserLogin(kRegularUserLoginInfo);
   EXPECT_FALSE(GetNotification());
 
   RemoveNotification();

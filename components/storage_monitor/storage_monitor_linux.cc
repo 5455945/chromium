@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,27 +12,21 @@
 #include <sys/stat.h>
 
 #include <limits>
-#include <list>
 #include <memory>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/containers/contains.h"
-#include "base/macros.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/process/kill.h"
 #include "base/process/launch.h"
 #include "base/process/process.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task/post_task.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
-#include "base/task_runner_util.h"
 #include "base/threading/scoped_blocking_call.h"
-#include "base/threading/sequenced_task_runner_handle.h"
 #include "components/storage_monitor/media_storage_util.h"
 #include "components/storage_monitor/removable_device_constants.h"
 #include "components/storage_monitor/storage_info.h"
@@ -78,27 +72,7 @@ std::string MakeDeviceUniqueId(struct udev_device* device) {
   return kVendorModelSerialPrefix + vendor + ":" + model + ":" + serial_short;
 }
 
-// Records GetDeviceInfo result on destruction, to see how often we fail to get
-// device details.
-class ScopedGetDeviceInfoResultRecorder {
- public:
-  ScopedGetDeviceInfoResultRecorder() = default;
-  ~ScopedGetDeviceInfoResultRecorder() {
-    UMA_HISTOGRAM_BOOLEAN("MediaDeviceNotification.UdevRequestSuccess",
-                          result_);
-  }
-
-  void set_result(bool result) {
-    result_ = result;
-  }
-
- private:
-  bool result_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(ScopedGetDeviceInfoResultRecorder);
-};
-
-// Returns the storage partition size of the device specified by |device_path|.
+// Returns the storage partition size of the device specified by `device_path`.
 // If the requested information is unavailable, returns 0.
 uint64_t GetDeviceStorageSize(const base::FilePath& device_path,
                               struct udev_device* device) {
@@ -122,8 +96,6 @@ std::unique_ptr<StorageInfo> GetDeviceInfo(const base::FilePath& device_path,
   DCHECK(!device_path.empty());
 
   std::unique_ptr<StorageInfo> storage_info;
-
-  ScopedGetDeviceInfoResultRecorder results_recorder;
 
   device::ScopedUdevPtr udev_obj(device::udev_new());
   if (!udev_obj.get())
@@ -158,7 +130,7 @@ std::unique_ptr<StorageInfo> GetDeviceInfo(const base::FilePath& device_path,
   const char* value =
       device::udev_device_get_sysattr_value(device.get(), kRemovableSysAttr);
   if (!value) {
-    // |parent_device| is owned by |device| and does not need to be cleaned
+    // `parent_device` is owned by `device` and does not need to be cleaned
     // up.
     struct udev_device* parent_device =
         device::udev_device_get_parent_with_subsystem_devtype(
@@ -177,8 +149,6 @@ std::unique_ptr<StorageInfo> GetDeviceInfo(const base::FilePath& device_path,
                : StorageInfo::REMOVABLE_MASS_STORAGE_NO_DCIM;
   }
 
-  results_recorder.set_result(true);
-
   storage_info = std::make_unique<StorageInfo>(
       StorageInfo::MakeDeviceId(type, unique_id), mount_point.value(),
       volume_label, vendor_name, model_name,
@@ -186,7 +156,7 @@ std::unique_ptr<StorageInfo> GetDeviceInfo(const base::FilePath& device_path,
   return storage_info;
 }
 
-// Runs |callback| with the |new_mtab| on |storage_monitor_task_runner|.
+// Runs `callback` with the `new_mtab` on `storage_monitor_task_runner`.
 void BounceMtabUpdateToStorageMonitorTaskRunner(
     scoped_refptr<base::SequencedTaskRunner> storage_monitor_task_runner,
     const MtabWatcherLinux::UpdateMtabCallback& callback,
@@ -206,8 +176,7 @@ std::unique_ptr<MtabWatcherLinux> CreateMtabWatcherLinuxOnMtabWatcherTaskRunner(
 }
 
 StorageMonitor::EjectStatus EjectPathOnBlockingTaskRunner(
-    const base::FilePath& path,
-    const base::FilePath& device) {
+    const base::FilePath& path) {
   base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
                                                 base::BlockingType::MAY_BLOCK);
 
@@ -220,7 +189,7 @@ StorageMonitor::EjectStatus EjectPathOnBlockingTaskRunner(
   if (!process.IsValid())
     return StorageMonitor::EJECT_FAILURE;
 
-  static constexpr auto kEjectTimeout = base::TimeDelta::FromSeconds(3);
+  static constexpr auto kEjectTimeout = base::Seconds(3);
   int exit_code = -1;
   if (!process.WaitForExitWithTimeout(kEjectTimeout, &exit_code)) {
     process.Terminate(-1, false);
@@ -256,10 +225,10 @@ void StorageMonitorLinux::Init() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!mtab_path_.empty());
 
-  base::PostTaskAndReplyWithResult(
-      mtab_watcher_task_runner_.get(), FROM_HERE,
+  mtab_watcher_task_runner_->PostTaskAndReplyWithResult(
+      FROM_HERE,
       base::BindOnce(&CreateMtabWatcherLinuxOnMtabWatcherTaskRunner, mtab_path_,
-                     base::SequencedTaskRunnerHandle::Get(),
+                     base::SequencedTaskRunner::GetCurrentDefault(),
                      base::BindRepeating(&StorageMonitorLinux::UpdateMtab,
                                          weak_ptr_factory_.GetWeakPtr())),
       base::BindOnce(&StorageMonitorLinux::OnMtabWatcherCreated,
@@ -276,14 +245,14 @@ bool StorageMonitorLinux::GetStorageInfoForPath(
     return false;
 
   base::FilePath current = path;
-  while (!base::Contains(mount_info_map_, current) &&
-         current != current.DirName())
+  while (!mount_info_map_.contains(current) && current != current.DirName())
     current = current.DirName();
 
-  auto mount_info = mount_info_map_.find(current);
-  if (mount_info == mount_info_map_.end())
+  auto mount_info_it = mount_info_map_.find(current);
+  if (mount_info_it == mount_info_map_.end()) {
     return false;
-  *device_info = mount_info->second.storage_info;
+  }
+  *device_info = mount_info_it->second.storage_info;
   return true;
 }
 
@@ -303,22 +272,29 @@ void StorageMonitorLinux::EjectDevice(
     return;
   }
 
-  DCHECK_NE(type, StorageInfo::MTP_OR_PTP);
-
   // Find the mount point for the given device ID.
-  base::FilePath path;
-  base::FilePath device;
-  for (auto mount_info = mount_info_map_.begin();
-       mount_info != mount_info_map_.end(); ++mount_info) {
-    if (mount_info->second.storage_info.device_id() == device_id) {
-      path = mount_info->first;
-      device = mount_info->second.mount_device;
-      mount_info_map_.erase(mount_info);
+  base::FilePath mount_point;
+  for (auto it = mount_info_map_.begin(); it != mount_info_map_.end(); ++it) {
+    const MountPointInfo& mount_point_info = it->second;
+    if (mount_point_info.storage_info.device_id() == device_id) {
+      mount_point = it->first;
+      const base::FilePath& mount_device = mount_point_info.mount_device;
+      auto priority_it = mount_priority_map_.find(mount_device);
+      CHECK(priority_it != mount_priority_map_.end());
+      ReferencedMountPoint& priority_mount_point = priority_it->second;
+      bool erased = priority_mount_point.erase(mount_point);
+      CHECK(erased);
+      if (priority_mount_point.empty()) {
+        mount_priority_map_.erase(priority_it);
+      }
+
+      // Do this at the end so `mount_device` is valid while accessed.
+      mount_info_map_.erase(it);
       break;
     }
   }
 
-  if (path.empty()) {
+  if (mount_point.empty()) {
     std::move(callback).Run(EJECT_NO_SUCH_DEVICE);
     return;
   }
@@ -327,7 +303,7 @@ void StorageMonitorLinux::EjectDevice(
 
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
-      base::BindOnce(&EjectPathOnBlockingTaskRunner, path, device),
+      base::BindOnce(&EjectPathOnBlockingTaskRunner, mount_point),
       std::move(callback));
 }
 
@@ -341,59 +317,63 @@ void StorageMonitorLinux::UpdateMtab(const MountPointDeviceMap& new_mtab) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   // Check existing mtab entries for unaccounted mount points.
   // These mount points must have been removed in the new mtab.
-  std::list<base::FilePath> mount_points_to_erase;
-  std::list<base::FilePath> multiple_mounted_devices_needing_reattachment;
-  for (MountMap::const_iterator old_iter = mount_info_map_.begin();
-       old_iter != mount_info_map_.end(); ++old_iter) {
-    const base::FilePath& mount_point = old_iter->first;
-    const base::FilePath& mount_device = old_iter->second.mount_device;
-    auto new_iter = new_mtab.find(mount_point);
-    // |mount_point| not in |new_mtab| or |mount_device| is no longer mounted at
-    // |mount_point|.
-    if (new_iter == new_mtab.end() || (new_iter->second != mount_device)) {
-      auto priority = mount_priority_map_.find(mount_device);
-      DCHECK(priority != mount_priority_map_.end());
-      ReferencedMountPoint::const_iterator has_priority =
-          priority->second.find(mount_point);
-      if (StorageInfo::IsRemovableDevice(
-              old_iter->second.storage_info.device_id())) {
-        DCHECK(has_priority != priority->second.end());
-        if (has_priority->second) {
-          receiver()->ProcessDetach(old_iter->second.storage_info.device_id());
-        }
-        if (priority->second.size() > 1)
-          multiple_mounted_devices_needing_reattachment.push_back(mount_device);
-      }
-      priority->second.erase(mount_point);
-      if (priority->second.empty())
-        mount_priority_map_.erase(mount_device);
-      mount_points_to_erase.push_back(mount_point);
+  std::vector<base::FilePath> mount_points_to_erase;
+  std::vector<base::FilePath> multiple_mounted_devices_needing_reattachment;
+  for (const auto& mount_info : mount_info_map_) {
+    const base::FilePath& mount_point = mount_info.first;
+    const base::FilePath& mount_device = mount_info.second.mount_device;
+    auto new_it = new_mtab.find(mount_point);
+    if (new_it != new_mtab.end() && new_it->second == mount_device) {
+      continue;
     }
+
+    // `mount_point` not in `new_mtab` or `mount_device` is no longer mounted at
+    // `mount_point`.
+    auto priority_it = mount_priority_map_.find(mount_device);
+    CHECK(priority_it != mount_priority_map_.end());
+    ReferencedMountPoint& priority_mount_point = priority_it->second;
+    ReferencedMountPoint::const_iterator has_priority_it =
+        priority_mount_point.find(mount_point);
+    CHECK(has_priority_it != priority_mount_point.end());
+    const StorageInfo& storage_info = mount_info.second.storage_info;
+    if (StorageInfo::IsRemovableDevice(storage_info.device_id())) {
+      if (has_priority_it->second) {
+        receiver()->ProcessDetach(storage_info.device_id());
+      }
+      if (priority_mount_point.size() > 1) {
+        multiple_mounted_devices_needing_reattachment.push_back(mount_device);
+      }
+    }
+    priority_mount_point.erase(has_priority_it);
+    if (priority_mount_point.empty()) {
+      mount_priority_map_.erase(priority_it);
+    }
+    mount_points_to_erase.push_back(mount_point);
   }
 
-  // Erase the |mount_info_map_| entries afterwards. Erasing in the loop above
+  // Erase the `mount_info_map_` entries afterwards. Erasing in the loop above
   // using the iterator is slightly more efficient, but more tricky, since
   // calling std::map::erase() on an iterator invalidates it.
-  for (std::list<base::FilePath>::const_iterator it =
-           mount_points_to_erase.begin();
-       it != mount_points_to_erase.end();
-       ++it) {
-    mount_info_map_.erase(*it);
+  for (const base::FilePath& to_erase : mount_points_to_erase) {
+    mount_info_map_.erase(to_erase);
   }
 
   // For any multiply mounted device where the mount that we had notified
   // got detached, send a notification of attachment for one of the other
   // mount points.
-  for (std::list<base::FilePath>::const_iterator it =
-           multiple_mounted_devices_needing_reattachment.begin();
-       it != multiple_mounted_devices_needing_reattachment.end();
-       ++it) {
-    auto first_mount_point_info = mount_priority_map_.find(*it)->second.begin();
-    const base::FilePath& mount_point = first_mount_point_info->first;
-    first_mount_point_info->second = true;
+  for (const base::FilePath& needs_reattachment :
+       multiple_mounted_devices_needing_reattachment) {
+    auto priority_it = mount_priority_map_.find(needs_reattachment);
+    CHECK(priority_it != mount_priority_map_.end());
+    ReferencedMountPoint& priority_mount_point = priority_it->second;
+    CHECK(!priority_mount_point.empty());
+    auto first_mount_point_info_it = priority_mount_point.begin();
+    const base::FilePath& mount_point = first_mount_point_info_it->first;
+    first_mount_point_info_it->second = true;
 
-    const StorageInfo& mount_info =
-        mount_info_map_.find(mount_point)->second.storage_info;
+    auto mount_info_it = mount_info_map_.find(mount_point);
+    CHECK(mount_info_it != mount_info_map_.end());
+    const StorageInfo& mount_info = mount_info_it->second.storage_info;
     DCHECK(StorageInfo::IsRemovableDevice(mount_info.device_id()));
     receiver()->ProcessAttach(mount_info);
   }
@@ -402,31 +382,31 @@ void StorageMonitorLinux::UpdateMtab(const MountPointDeviceMap& new_mtab) {
   scoped_refptr<base::SequencedTaskRunner> mounting_task_runner =
       base::ThreadPool::CreateSequencedTaskRunner(
           {base::MayBlock(), base::TaskPriority::BEST_EFFORT});
-  for (auto new_iter = new_mtab.begin(); new_iter != new_mtab.end();
-       ++new_iter) {
-    const base::FilePath& mount_point = new_iter->first;
-    const base::FilePath& mount_device = new_iter->second;
-    auto old_iter = mount_info_map_.find(mount_point);
-    if (old_iter == mount_info_map_.end() ||
-        old_iter->second.mount_device != mount_device) {
-      // New mount point found or an existing mount point found with a new
-      // device.
-      if (IsDeviceAlreadyMounted(mount_device)) {
-        HandleDeviceMountedMultipleTimes(mount_device, mount_point);
-      } else {
-        base::PostTaskAndReplyWithResult(
-            mounting_task_runner.get(), FROM_HERE,
-            base::BindOnce(get_device_info_callback_, mount_device,
-                           mount_point),
-            base::BindOnce(&StorageMonitorLinux::AddNewMount,
-                           weak_ptr_factory_.GetWeakPtr(), mount_device));
-      }
+  for (const auto& new_mount_info : new_mtab) {
+    const base::FilePath& mount_point = new_mount_info.first;
+    const base::FilePath& mount_device = new_mount_info.second;
+    auto old_it = mount_info_map_.find(mount_point);
+    if (old_it != mount_info_map_.end() &&
+        old_it->second.mount_device == mount_device) {
+      continue;
+    }
+
+    // New mount point found or an existing mount point found with a new
+    // device.
+    if (IsDeviceAlreadyMounted(mount_device)) {
+      HandleDeviceMountedMultipleTimes(mount_device, mount_point);
+    } else {
+      mounting_task_runner->PostTaskAndReplyWithResult(
+          FROM_HERE,
+          base::BindOnce(get_device_info_callback_, mount_device, mount_point),
+          base::BindOnce(&StorageMonitorLinux::AddNewMount,
+                         weak_ptr_factory_.GetWeakPtr(), mount_device));
     }
   }
 
-  // Note: Relies on scheduled tasks on the |mounting_task_runner| being
+  // Note: Relies on scheduled tasks on the `mounting_task_runner` being
   // sequential. This block needs to follow the for loop, so that the DoNothing
-  // call on the |mounting_task_runner| happens after the scheduled metadata
+  // call on the `mounting_task_runner` happens after the scheduled metadata
   // retrievals, meaning that the reply callback will then happen after all the
   // AddNewMount calls.
   if (!IsInitialized()) {
@@ -440,7 +420,7 @@ void StorageMonitorLinux::UpdateMtab(const MountPointDeviceMap& new_mtab) {
 bool StorageMonitorLinux::IsDeviceAlreadyMounted(
     const base::FilePath& mount_device) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  return base::Contains(mount_priority_map_, mount_device);
+  return mount_priority_map_.contains(mount_device);
 }
 
 void StorageMonitorLinux::HandleDeviceMountedMultipleTimes(
@@ -448,12 +428,16 @@ void StorageMonitorLinux::HandleDeviceMountedMultipleTimes(
     const base::FilePath& mount_point) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  auto priority = mount_priority_map_.find(mount_device);
-  DCHECK(priority != mount_priority_map_.end());
-  const base::FilePath& other_mount_point = priority->second.begin()->first;
-  priority->second[mount_point] = false;
-  mount_info_map_[mount_point] =
-      mount_info_map_.find(other_mount_point)->second;
+  auto priority_it = mount_priority_map_.find(mount_device);
+  CHECK(priority_it != mount_priority_map_.end());
+  ReferencedMountPoint& priority_mount_point = priority_it->second;
+  CHECK(!priority_mount_point.empty());
+  const base::FilePath& other_mount_point = priority_mount_point.begin()->first;
+  priority_mount_point[mount_point] = false;
+
+  auto mount_info_it = mount_info_map_.find(other_mount_point);
+  CHECK(mount_info_it != mount_info_map_.end());
+  mount_info_map_[mount_point] = mount_info_it->second;
 }
 
 void StorageMonitorLinux::AddNewMount(

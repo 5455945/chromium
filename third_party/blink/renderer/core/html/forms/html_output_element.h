@@ -31,6 +31,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_HTML_FORMS_HTML_OUTPUT_ELEMENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_FORMS_HTML_OUTPUT_ELEMENT_H_
 
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/dom_token_list.h"
 #include "third_party/blink/renderer/core/html/forms/html_form_control_element.h"
 
@@ -42,6 +43,10 @@ class CORE_EXPORT HTMLOutputElement final : public HTMLFormControlElement {
  public:
   explicit HTMLOutputElement(Document&);
   ~HTMLOutputElement() override;
+
+  ElementType GetElementType() const final {
+    return ElementType::kHTMLOutputElement;
+  }
 
   bool willValidate() const override { return false; }
 
@@ -55,16 +60,19 @@ class CORE_EXPORT HTMLOutputElement final : public HTMLFormControlElement {
     return is_default_value_mode_;
   }
 
+  bool IsOutputElement() const override { return true; }
+
   void Trace(Visitor*) const override;
 
  private:
   void ParseAttribute(const AttributeModificationParams&) override;
-  const AtomicString& FormControlType() const override;
+  mojom::blink::FormControlType FormControlType() const override;
+  const AtomicString& FormControlTypeAsString() const override;
   bool IsDisabledFormControl() const override;
   bool MatchesEnabledPseudoClass() const override;
   bool IsEnumeratable() const override { return true; }
   bool IsLabelable() const override { return true; }
-  bool SupportsFocus() const override;
+  FocusableState SupportsFocus(UpdateBehavior update_behavior) const override;
   void ResetImpl() override;
 
   bool is_default_value_mode_;

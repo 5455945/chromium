@@ -1,16 +1,19 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/test/gmock_callback_support.h"
 #include "base/test/task_environment.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/time/time.h"
+#include "media/base/channel_layout.h"
 #include "media/base/media_util.h"
 #include "media/base/mock_filters.h"
 #include "media/filters/decoder_stream.h"
@@ -48,14 +51,19 @@ class AudioDecoderStreamTest : public testing::Test {
       : audio_decoder_stream_(
             std::make_unique<AudioDecoderStream::StreamTraits>(
                 &media_log_,
-                CHANNEL_LAYOUT_STEREO),
+                ChannelLayoutConfig::Stereo(),
+                kSampleFormatPlanarF32),
             task_environment_.GetMainThreadTaskRunner(),
             base::BindRepeating(&AudioDecoderStreamTest::CreateMockAudioDecoder,
                                 base::Unretained(this)),
             &media_log_) {
     // Any valid config will do.
-    demuxer_stream_.set_audio_decoder_config(
-        {kCodecAAC, kSampleFormatS16, CHANNEL_LAYOUT_STEREO, 44100, {}, {}});
+    demuxer_stream_.set_audio_decoder_config({AudioCodec::kAAC,
+                                              kSampleFormatS16,
+                                              ChannelLayoutConfig::Stereo(),
+                                              44100,
+                                              {},
+                                              {}});
     EXPECT_CALL(demuxer_stream_, SupportsConfigChanges())
         .WillRepeatedly(Return(true));
 
@@ -68,8 +76,12 @@ class AudioDecoderStreamTest : public testing::Test {
     run_loop.Run();
   }
 
+  AudioDecoderStreamTest(const AudioDecoderStreamTest&) = delete;
+  AudioDecoderStreamTest& operator=(const AudioDecoderStreamTest&) = delete;
+
   MockDemuxerStream* demuxer_stream() { return &demuxer_stream_; }
   MockAudioDecoder* decoder() { return decoder_; }
+  AudioDecoderStream* audio_decoder_stream() { return &audio_decoder_stream_; }
 
   void ReadAudioBuffer(base::OnceClosure closure) {
     audio_decoder_stream_.Read(
@@ -80,17 +92,18 @@ class AudioDecoderStreamTest : public testing::Test {
   void ProduceDecoderOutput(scoped_refptr<DecoderBuffer> buffer,
                             AudioDecoder::DecodeCB decode_cb) {
     // Make sure successive AudioBuffers have increasing timestamps.
-    last_timestamp_ += base::TimeDelta::FromMilliseconds(27);
+    last_timestamp_ += base::Milliseconds(27);
     const auto& config = demuxer_stream_.audio_decoder_config();
-    base::SequencedTaskRunnerHandle::Get()->PostTask(
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
         base::BindOnce(
             decoder_output_cb_,
             AudioBuffer::CreateEmptyBuffer(
                 config.channel_layout(), config.channels(),
                 config.samples_per_second(), 1221, last_timestamp_)));
-    base::SequencedTaskRunnerHandle::Get()->PostTask(
-        FROM_HERE, base::BindOnce(std::move(decode_cb), DecodeStatus::OK));
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(std::move(decode_cb), DecoderStatus::Codes::kOk));
   }
 
   void RunUntilIdle() { task_environment_.RunUntilIdle(); }
@@ -101,7 +114,7 @@ class AudioDecoderStreamTest : public testing::Test {
     EXPECT_CALL(*decoder, Initialize_(_, _, _, _, _))
         .Times(AnyNumber())
         .WillRepeatedly(DoAll(SaveArg<3>(&decoder_output_cb_),
-                              RunOnceCallback<2>(OkStatus())));
+                              RunOnceCallback<2>(DecoderStatus::Codes::kOk)));
     decoder_ = decoder.get();
 
     std::vector<std::unique_ptr<AudioDecoder>> result;
@@ -119,11 +132,9 @@ class AudioDecoderStreamTest : public testing::Test {
   testing::NiceMock<MockDemuxerStream> demuxer_stream_{DemuxerStream::AUDIO};
   AudioDecoderStream audio_decoder_stream_;
 
-  MockAudioDecoder* decoder_ = nullptr;
+  raw_ptr<MockAudioDecoder> decoder_ = nullptr;
   AudioDecoder::OutputCB decoder_output_cb_;
   base::TimeDelta last_timestamp_;
-
-  DISALLOW_COPY_AND_ASSIGN(AudioDecoderStreamTest);
 };
 
 TEST_F(AudioDecoderStreamTest, FlushOnConfigChange) {
@@ -131,8 +142,11 @@ TEST_F(AudioDecoderStreamTest, FlushOnConfigChange) {
   ASSERT_NE(first_decoder, nullptr);
 
   // Make a regular DemuxerStream::Read().
+  scoped_refptr<DecoderBuffer> buffer = base::MakeRefCounted<DecoderBuffer>(12);
+  DemuxerStream::DecoderBufferVector buffers;
+  buffers.emplace_back(buffer);
   EXPECT_CALL(*demuxer_stream(), OnRead(_))
-      .WillOnce(RunOnceCallback<0>(DemuxerStream::kOk, new DecoderBuffer(12)));
+      .WillOnce(RunOnceCallback<0>(DemuxerStream::kOk, buffers));
   EXPECT_CALL(*decoder(), Decode(IsRegularDecoderBuffer(), _))
       .WillOnce(Invoke(this, &AudioDecoderStreamTest::ProduceDecoderOutput));
   base::RunLoop run_loop0;
@@ -143,7 +157,8 @@ TEST_F(AudioDecoderStreamTest, FlushOnConfigChange) {
   // Expect the decoder to be flushed.  Upon flushing, the decoder releases
   // internally buffered output.
   EXPECT_CALL(*demuxer_stream(), OnRead(_))
-      .WillOnce(RunOnceCallback<0>(DemuxerStream::kConfigChanged, nullptr));
+      .WillOnce(RunOnceCallback<0>(DemuxerStream::kConfigChanged,
+                                   DemuxerStream::DecoderBufferVector()));
   EXPECT_CALL(*decoder(), Decode(IsEOSDecoderBuffer(), _))
       .WillOnce(Invoke(this, &AudioDecoderStreamTest::ProduceDecoderOutput));
   base::RunLoop run_loop1;
@@ -154,6 +169,42 @@ TEST_F(AudioDecoderStreamTest, FlushOnConfigChange) {
   // processing the last decode.
   EXPECT_CALL(*decoder(), Initialize_(_, _, _, _, _));
   RunUntilIdle();
+}
+
+TEST_F(AudioDecoderStreamTest, ExtremeTimestampDeltasDoNotCrash) {
+  const base::TimeDelta kTimestamps[] = {
+      base::TimeDelta::FiniteMin() / 2,
+      base::TimeDelta::FiniteMax() / 2,
+      base::TimeDelta::FiniteMin() / 2,
+      base::Milliseconds(-50),
+      base::Milliseconds(-20),
+      base::Milliseconds(-40),
+      base::Milliseconds(0),
+      base::Milliseconds(30),
+      base::Milliseconds(60),
+      base::Milliseconds(90),
+      base::Milliseconds(120),
+      base::Milliseconds(150),
+      base::Milliseconds(180),
+      base::Milliseconds(210),
+  };
+
+  for (base::TimeDelta timestamp : kTimestamps) {
+    auto buffer = base::MakeRefCounted<DecoderBuffer>(12);
+    buffer->set_timestamp(timestamp);
+    buffer->set_duration(kNoTimestamp);
+    DemuxerStream::DecoderBufferVector buffers = {std::move(buffer)};
+    EXPECT_CALL(*demuxer_stream(), OnRead(_))
+        .WillOnce(RunOnceCallback<0>(DemuxerStream::kOk, std::move(buffers)));
+    EXPECT_CALL(*decoder(), Decode(IsRegularDecoderBuffer(), _))
+        .WillOnce(Invoke(this, &AudioDecoderStreamTest::ProduceDecoderOutput));
+    base::RunLoop run_loop;
+    ReadAudioBuffer(run_loop.QuitClosure());
+    run_loop.Run();
+  }
+
+  EXPECT_EQ(audio_decoder_stream()->AverageDuration(),
+            base::Microseconds(31250));
 }
 
 }  // namespace media

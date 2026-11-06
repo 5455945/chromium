@@ -1,29 +1,39 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {BindingsTestRunner} from 'bindings_test_runner';
+import * as Common from 'devtools/core/common/common.js';
+import * as Host from 'devtools/core/host/host.js';
+import * as TextUtils from 'devtools/core/text_utils/text_utils.js';
+import * as Persistence from 'devtools/models/persistence/persistence.js';
+import * as Workspace from 'devtools/models/workspace/workspace.js';
+import {SourcesTestRunner} from 'sources_test_runner';
+import {TestRunner} from 'test_runner';
+
 (async function() {
   TestRunner.addResult(`Tests file system project.\n`);
-  await TestRunner.loadModule('sources'); await TestRunner.loadTestModule('sources_test_runner');
-  await TestRunner.loadTestModule('bindings_test_runner');
   await TestRunner.showPanel('sources');
 
   function fileSystemUISourceCodes() {
     var uiSourceCodes = [];
-    var fileSystemProjects = Workspace.workspace.projectsForType(Workspace.projectTypes.FileSystem);
-    for (var project of fileSystemProjects)
-      uiSourceCodes = uiSourceCodes.concat(project.uiSourceCodes());
+    var fileSystemProjects = Workspace.Workspace.WorkspaceImpl.instance().projectsForType(Workspace.Workspace.projectTypes.FileSystem);
+    for (var project of fileSystemProjects) {
+      for (const uiSourceCode of project.uiSourceCodes()) {
+        uiSourceCodes.push(uiSourceCode);
+      }
+    }
     return uiSourceCodes;
   }
 
   function dumpUISourceCode(uiSourceCode, callback) {
     TestRunner.addResult('UISourceCode: ' + uiSourceCode.url().replace(/.*(LayoutTests|web_tests)./, ''));
-    if (uiSourceCode.contentType() === Common.resourceTypes.Script ||
-        uiSourceCode.contentType() === Common.resourceTypes.Document)
+    if (uiSourceCode.contentType() === Common.ResourceType.resourceTypes.Script ||
+        uiSourceCode.contentType() === Common.ResourceType.resourceTypes.Document)
       TestRunner.addResult(
           'UISourceCode is content script: ' +
-          (uiSourceCode.project().type() === Workspace.projectTypes.ContentScripts));
-    uiSourceCode.requestContent().then(didRequestContent);
+          (uiSourceCode.project().type() === Workspace.Workspace.projectTypes.ContentScripts));
+    uiSourceCode.requestContentData().then(TextUtils.ContentData.ContentData.asDeferredContent).then(didRequestContent);
 
     function didRequestContent(content, contentEncoded) {
       TestRunner.addResult('Highlighter type: ' + uiSourceCode.mimeType());
@@ -75,8 +85,8 @@
   TestRunner.runTestSuite([
     function testFileSystems(next) {
       TestRunner.addResult('Adding first file system.');
-      var fs1 = new BindingsTestRunner.TestFileSystem('file:///var/www');
-      var fs2 = new BindingsTestRunner.TestFileSystem('file:///foo/bar');
+      var fs1 = new BindingsTestRunner.TestFileSystem('/var/www');
+      var fs2 = new BindingsTestRunner.TestFileSystem('/foo/bar');
       TestRunner.addResult('Adding second file system.');
 
       TestRunner.addResult('Adding files to file systems.');
@@ -89,13 +99,13 @@
       fs1.reportCreated(function() {});
       fs2.reportCreated(function() {});
 
-      Workspace.workspace.addEventListener(Workspace.Workspace.Events.UISourceCodeAdded, onUISourceCode);
+      Workspace.Workspace.WorkspaceImpl.instance().addEventListener(Workspace.Workspace.Events.UISourceCodeAdded, onUISourceCode);
 
       var count = 3;
       function onUISourceCode() {
         if (--count)
           return;
-        Workspace.workspace.removeEventListener(Workspace.Workspace.Events.UISourceCodeAdded, onUISourceCode);
+        Workspace.Workspace.WorkspaceImpl.instance().removeEventListener(Workspace.Workspace.Events.UISourceCodeAdded, onUISourceCode);
         onUISourceCodesLoaded();
       }
 
@@ -108,7 +118,7 @@
 
       function uiSourceCodesDumped() {
         dumpUISourceCodeLocations(uiSourceCodes, 5);
-        Workspace.workspace.addEventListener(Workspace.Workspace.Events.WorkingCopyCommitted, contentCommitted, this);
+        Workspace.Workspace.WorkspaceImpl.instance().addEventListener(Workspace.Workspace.Events.WorkingCopyCommitted, contentCommitted, this);
         uiSourceCodes[0].addRevision('<Modified UISourceCode content>');
       }
 
@@ -125,7 +135,7 @@
     },
 
     function testDefaultExcludes(next) {
-      createFileSystem('file:///var/www', dumpExcludes);
+      createFileSystem('/var/www', dumpExcludes);
 
       function dumpExcludes(fs) {
         TestRunner.addResult('');
@@ -137,8 +147,8 @@
     },
 
     function testExcludesSettings(next) {
-      Common.settings.createLocalSetting('workspaceExcludedFolders', {}).set({'file:///var/www2': ['/html/']});
-      createFileSystem('file:///var/www2', dumpExcludes);
+      Common.Settings.Settings.instance().createLocalSetting('workspace-excluded-folders', {}).set({'file:///var/www2': ['/html/']});
+      createFileSystem('/var/www2', dumpExcludes);
 
       function dumpExcludes(fs) {
         TestRunner.addResult('');
@@ -150,7 +160,7 @@
     },
 
     function testExcludesViaDelegate(next) {
-      createFileSystem('file:///var/www3', dumpExcludes);
+      createFileSystem('/var/www3', dumpExcludes);
 
       function dumpExcludes(fs) {
         fileSystemUISourceCodes()[0].project().excludeFolder('file:///var/www3/html2/');
@@ -163,7 +173,7 @@
     },
 
     function testFileAddedExternally(next) {
-      var fs = new BindingsTestRunner.TestFileSystem('file:///var/www4');
+      var fs = new BindingsTestRunner.TestFileSystem('/var/www4');
       var dir = fs.root.mkdir('html');
       dir.addFile('foo.js', '');
       fs.reportCreated(dumpFileSystem);
@@ -173,7 +183,7 @@
         dumpWorkspaceUISourceCodes();
 
         dir.addFile('bar.js', '');
-        InspectorFrontendHost.events.dispatchEventToListeners(
+        Host.InspectorFrontendHost.InspectorFrontendHostInstance.events.dispatchEventToListeners(
             Host.InspectorFrontendHostAPI.Events.FileSystemFilesChangedAddedRemoved,
             {changed: [], added: ['/var/www4/html/bar.js'], removed: []});
 
@@ -185,7 +195,7 @@
     },
 
     function testGitFolders(next) {
-      var fs = new BindingsTestRunner.TestFileSystem('file:///var/www3');
+      var fs = new BindingsTestRunner.TestFileSystem('/var/www3');
       var project1 = fs.root.mkdir('project_1');
       project1.mkdir('.git').addFile('foo.git');
       var project2 = fs.root.mkdir('project_2');
@@ -197,7 +207,7 @@
       fs.reportCreated(dumpGitFolders);
 
       function dumpGitFolders() {
-        var isolatedFileSystem = Persistence.isolatedFileSystemManager.fileSystem('file:///var/www3');
+        var isolatedFileSystem = Persistence.IsolatedFileSystemManager.IsolatedFileSystemManager.instance().fileSystem('file:///var/www3');
         var folders = isolatedFileSystem.initialGitFolders();
         folders.sort();
         for (var gitFolder of folders)
@@ -208,7 +218,7 @@
     },
 
     function testUISourceCodeMetadata(next) {
-      var fs = new BindingsTestRunner.TestFileSystem('file:///var/www3');
+      var fs = new BindingsTestRunner.TestFileSystem('/var/www3');
       var file = fs.root.mkdir('test').addFile('hello.js', '123456');
       fs.reportCreated(function() {});
       SourcesTestRunner.waitForScriptSource('hello.js', onUISourceCode);
@@ -239,7 +249,7 @@
     },
 
     function testFileRename(next) {
-      var fs = new BindingsTestRunner.TestFileSystem('file:///var/www3');
+      var fs = new BindingsTestRunner.TestFileSystem('/var/www3');
       var file = fs.root.mkdir('test').addFile('hello.js', '123456');
       fs.reportCreated(function() {});
       SourcesTestRunner.waitForScriptSource('hello.js', onUISourceCode);

@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,29 +18,26 @@
 namespace mojo {
 
 template <>
-struct CONTENT_EXPORT
-    EnumTraits<content::mojom::PointerActionType,
-               content::SyntheticPointerActionParams::PointerActionType> {
+struct EnumTraits<content::mojom::PointerActionType,
+                  content::SyntheticPointerActionParams::PointerActionType> {
   static content::mojom::PointerActionType ToMojom(
       content::SyntheticPointerActionParams::PointerActionType input);
-  static bool FromMojom(
-      content::mojom::PointerActionType input,
-      content::SyntheticPointerActionParams::PointerActionType* output);
+  static content::SyntheticPointerActionParams::PointerActionType FromMojom(
+      content::mojom::PointerActionType input);
 };
 
 template <>
-struct CONTENT_EXPORT
-    EnumTraits<content::mojom::SyntheticButton,
-               content::SyntheticPointerActionParams::Button> {
+struct EnumTraits<content::mojom::SyntheticButton,
+                  content::SyntheticPointerActionParams::Button> {
   static content::mojom::SyntheticButton ToMojom(
       content::SyntheticPointerActionParams::Button input);
-  static bool FromMojom(content::mojom::SyntheticButton input,
-                        content::SyntheticPointerActionParams::Button* output);
+  static content::SyntheticPointerActionParams::Button FromMojom(
+      content::mojom::SyntheticButton input);
 };
 
 template <>
-struct CONTENT_EXPORT StructTraits<content::mojom::SyntheticSmoothDragDataView,
-                                   content::SyntheticSmoothDragGestureParams> {
+struct StructTraits<content::mojom::SyntheticSmoothDragDataView,
+                    content::SyntheticSmoothDragGestureParams> {
   static content::mojom::GestureSourceType gesture_source_type(
       const content::SyntheticSmoothDragGestureParams& r) {
     return r.gesture_source_type;
@@ -61,13 +58,23 @@ struct CONTENT_EXPORT StructTraits<content::mojom::SyntheticSmoothDragDataView,
     return r.speed_in_pixels_s;
   }
 
+  static float vsync_offset_ms(
+      const content::SyntheticSmoothDragGestureParams& r) {
+    return r.vsync_offset_ms;
+  }
+
+  static content::mojom::InputEventPattern input_event_pattern(
+      const content::SyntheticSmoothDragGestureParams& r) {
+    return r.input_event_pattern;
+  }
+
   static bool Read(content::mojom::SyntheticSmoothDragDataView r,
                    content::SyntheticSmoothDragGestureParams* out);
 };
 
 template <>
-struct CONTENT_EXPORT StructTraits<content::mojom::SyntheticPinchDataView,
-                                   content::SyntheticPinchGestureParams> {
+struct StructTraits<content::mojom::SyntheticPinchDataView,
+                    content::SyntheticPinchGestureParams> {
   static float scale_factor(const content::SyntheticPinchGestureParams& r) {
     return r.scale_factor;
   }
@@ -82,14 +89,22 @@ struct CONTENT_EXPORT StructTraits<content::mojom::SyntheticPinchDataView,
     return r.relative_pointer_speed_in_pixels_s;
   }
 
+  static float vsync_offset_ms(const content::SyntheticPinchGestureParams& r) {
+    return r.vsync_offset_ms;
+  }
+
+  static content::mojom::InputEventPattern input_event_pattern(
+      const content::SyntheticPinchGestureParams& r) {
+    return r.input_event_pattern;
+  }
+
   static bool Read(content::mojom::SyntheticPinchDataView r,
                    content::SyntheticPinchGestureParams* out);
 };
 
 template <>
-struct CONTENT_EXPORT
-    StructTraits<content::mojom::SyntheticSmoothScrollDataView,
-                 content::SyntheticSmoothScrollGestureParams> {
+struct StructTraits<content::mojom::SyntheticSmoothScrollDataView,
+                    content::SyntheticSmoothScrollGestureParams> {
   static content::mojom::GestureSourceType gesture_source_type(
       const content::SyntheticSmoothScrollGestureParams& r) {
     return r.gesture_source_type;
@@ -135,13 +150,23 @@ struct CONTENT_EXPORT
     return r.modifiers;
   }
 
+  static float vsync_offset_ms(
+      const content::SyntheticSmoothScrollGestureParams& r) {
+    return r.vsync_offset_ms;
+  }
+
+  static content::mojom::InputEventPattern input_event_pattern(
+      const content::SyntheticSmoothScrollGestureParams& r) {
+    return r.input_event_pattern;
+  }
+
   static bool Read(content::mojom::SyntheticSmoothScrollDataView r,
                    content::SyntheticSmoothScrollGestureParams* out);
 };
 
 template <>
-struct CONTENT_EXPORT StructTraits<content::mojom::SyntheticTapDataView,
-                                   content::SyntheticTapGestureParams> {
+struct StructTraits<content::mojom::SyntheticTapDataView,
+                    content::SyntheticTapGestureParams> {
   static content::mojom::GestureSourceType gesture_source_type(
       const content::SyntheticTapGestureParams& r) {
     return r.gesture_source_type;
@@ -161,9 +186,8 @@ struct CONTENT_EXPORT StructTraits<content::mojom::SyntheticTapDataView,
 };
 
 template <>
-struct CONTENT_EXPORT
-    StructTraits<content::mojom::SyntheticPointerActionParamsDataView,
-                 content::SyntheticPointerActionParams> {
+struct StructTraits<content::mojom::SyntheticPointerActionParamsDataView,
+                    content::SyntheticPointerActionParams> {
   static content::SyntheticPointerActionParams::PointerActionType
   pointer_action_type(const content::SyntheticPointerActionParams& r) {
     return r.pointer_action_type_;
@@ -231,9 +255,8 @@ struct CONTENT_EXPORT
 };
 
 template <>
-struct CONTENT_EXPORT
-    StructTraits<content::mojom::SyntheticPointerActionDataView,
-                 content::SyntheticPointerActionListParams> {
+struct StructTraits<content::mojom::SyntheticPointerActionDataView,
+                    content::SyntheticPointerActionListParams> {
   static content::mojom::GestureSourceType gesture_source_type(
       const content::SyntheticPointerActionListParams& r) {
     return r.gesture_source_type;

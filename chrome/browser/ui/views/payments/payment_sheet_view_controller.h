@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,11 @@
 
 #include <memory>
 
-#include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ui/views/payments/payment_request_sheet_controller.h"
 #include "components/payments/content/payment_request_spec.h"
 #include "components/payments/content/payment_request_state.h"
+#include "ui/views/input_event_activation_protector.h"
 
 namespace payments {
 
@@ -29,6 +29,11 @@ class PaymentSheetViewController : public PaymentRequestSheetController,
   PaymentSheetViewController(base::WeakPtr<PaymentRequestSpec> spec,
                              base::WeakPtr<PaymentRequestState> state,
                              base::WeakPtr<PaymentRequestDialogView> dialog);
+
+  PaymentSheetViewController(const PaymentSheetViewController&) = delete;
+  PaymentSheetViewController& operator=(const PaymentSheetViewController&) =
+      delete;
+
   ~PaymentSheetViewController() override;
 
   // PaymentRequestSpec::Observer:
@@ -40,13 +45,20 @@ class PaymentSheetViewController : public PaymentRequestSheetController,
 
   void ButtonPressed(base::RepeatingClosure closure);
 
+  views::InputEventActivationProtector* input_protector_for_testing() {
+    return input_protector_.get();
+  }
+
  private:
   // PaymentRequestSheetController:
+  ButtonCallback GetPrimaryButtonCallback() override;
   std::u16string GetSecondaryButtonLabel() override;
   bool ShouldShowHeaderBackArrow() override;
   std::u16string GetSheetTitle() override;
   void FillContentView(views::View* content_view) override;
   std::unique_ptr<views::View> CreateExtraFooterView() override;
+  bool GetSheetId(DialogViewID* sheet_id) override;
+  base::WeakPtr<PaymentRequestSheetController> GetWeakPtr() override;
 
   // These functions create the various sections and rows of the payment sheet.
   // Where applicable, they also populate |accessible_content|, which shouldn't
@@ -63,10 +75,17 @@ class PaymentSheetViewController : public PaymentRequestSheetController,
   std::unique_ptr<views::View> CreateDataSourceRow();
 
   void AddShippingButtonPressed();
-  void AddPaymentMethodButtonPressed();
   void AddContactInfoButtonPressed();
 
-  DISALLOW_COPY_AND_ASSIGN(PaymentSheetViewController);
+  // Used to mitigate against accidental clicks on the primary button if a user
+  // e.g., double-clicks on a web-content button that then launches
+  // PaymentRequest. See https://crbug.com/40062366
+  void PossiblyIgnorePrimaryButtonPress(ButtonCallback callback,
+                                        const ui::Event& event);
+  std::unique_ptr<views::InputEventActivationProtector> input_protector_;
+
+  // Must be the last member of a leaf class.
+  base::WeakPtrFactory<PaymentSheetViewController> weak_ptr_factory_{this};
 };
 
 }  // namespace payments

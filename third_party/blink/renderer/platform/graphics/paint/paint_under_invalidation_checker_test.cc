@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,7 +14,7 @@ using testing::ElementsAre;
 namespace blink {
 
 // Death tests don't work properly on Android.
-#if defined(GTEST_HAS_DEATH_TEST) && !defined(OS_ANDROID)
+#if defined(GTEST_HAS_DEATH_TEST) && !BUILDFLAG(IS_ANDROID)
 
 class PaintControllerUnderInvalidationTest
     : private ScopedPaintUnderInvalidationCheckingForTest,
@@ -26,18 +26,23 @@ class PaintControllerUnderInvalidationTest
 
 TEST_F(PaintControllerUnderInvalidationTest, ChangeDrawing) {
   auto test = [&]() {
-    FakeDisplayItemClient first("first");
-    GraphicsContext context(GetPaintController());
+    FakeDisplayItemClient& first =
+        *MakeGarbageCollected<FakeDisplayItemClient>("first");
+    {
+      AutoCommitPaintController paint_controller(GetPersistentData());
+      GraphicsContext context(paint_controller);
+      InitRootChunk(paint_controller);
+      DrawRect(context, first, kBackgroundType, gfx::Rect(1, 1, 1, 1));
+      DrawRect(context, first, kForegroundType, gfx::Rect(1, 1, 3, 3));
+    }
 
-    InitRootChunk();
-    DrawRect(context, first, kBackgroundType, IntRect(1, 1, 1, 1));
-    DrawRect(context, first, kForegroundType, IntRect(1, 1, 3, 3));
-    CommitAndFinishCycle();
-
-    InitRootChunk();
-    DrawRect(context, first, kBackgroundType, IntRect(2, 2, 3, 3));
-    DrawRect(context, first, kForegroundType, IntRect(1, 1, 3, 3));
-    CommitAndFinishCycle();
+    {
+      AutoCommitPaintController paint_controller(GetPersistentData());
+      GraphicsContext context(paint_controller);
+      InitRootChunk(paint_controller);
+      DrawRect(context, first, kBackgroundType, gfx::Rect(2, 2, 3, 3));
+      DrawRect(context, first, kForegroundType, gfx::Rect(1, 1, 3, 3));
+    }
   };
 
   EXPECT_DEATH(test(),
@@ -52,56 +57,73 @@ TEST_F(PaintControllerUnderInvalidationTest, ChangeDrawing) {
 TEST_F(PaintControllerUnderInvalidationTest, MoreDrawing) {
   // We don't detect under-invalidation in this case, and PaintController can
   // also handle the case gracefully.
-  FakeDisplayItemClient first("first");
-  GraphicsContext context(GetPaintController());
+  FakeDisplayItemClient& first =
+      *MakeGarbageCollected<FakeDisplayItemClient>("first");
 
-  InitRootChunk();
-  DrawRect(context, first, kBackgroundType, IntRect(1, 1, 1, 1));
-  CommitAndFinishCycle();
+  {
+    AutoCommitPaintController paint_controller(GetPersistentData());
+    GraphicsContext context(paint_controller);
+    InitRootChunk(paint_controller);
+    DrawRect(context, first, kBackgroundType, gfx::Rect(1, 1, 1, 1));
+  }
 
-  InitRootChunk();
-  DrawRect(context, first, kBackgroundType, IntRect(1, 1, 1, 1));
-  DrawRect(context, first, kForegroundType, IntRect(1, 1, 3, 3));
-  CommitAndFinishCycle();
+  {
+    AutoCommitPaintController paint_controller(GetPersistentData());
+    GraphicsContext context(paint_controller);
+    InitRootChunk(paint_controller);
+    DrawRect(context, first, kBackgroundType, gfx::Rect(1, 1, 1, 1));
+    DrawRect(context, first, kForegroundType, gfx::Rect(1, 1, 3, 3));
+  }
 }
 
 TEST_F(PaintControllerUnderInvalidationTest, LessDrawing) {
   // We don't detect under-invalidation in this case, and PaintController can
   // also handle the case gracefully.
-  FakeDisplayItemClient first("first");
-  GraphicsContext context(GetPaintController());
+  FakeDisplayItemClient& first =
+      *MakeGarbageCollected<FakeDisplayItemClient>("first");
+  {
+    AutoCommitPaintController paint_controller(GetPersistentData());
+    GraphicsContext context(paint_controller);
+    InitRootChunk(paint_controller);
+    DrawRect(context, first, kBackgroundType, gfx::Rect(1, 1, 1, 1));
+    DrawRect(context, first, kForegroundType, gfx::Rect(1, 1, 3, 3));
+  }
 
-  InitRootChunk();
-  DrawRect(context, first, kBackgroundType, IntRect(1, 1, 1, 1));
-  DrawRect(context, first, kForegroundType, IntRect(1, 1, 3, 3));
-  CommitAndFinishCycle();
-
-  InitRootChunk();
-  DrawRect(context, first, kBackgroundType, IntRect(1, 1, 1, 1));
-  CommitAndFinishCycle();
+  {
+    AutoCommitPaintController paint_controller(GetPersistentData());
+    GraphicsContext context(paint_controller);
+    InitRootChunk(paint_controller);
+    DrawRect(context, first, kBackgroundType, gfx::Rect(1, 1, 1, 1));
+  }
 }
 
 TEST_F(PaintControllerUnderInvalidationTest, ChangeDrawingInSubsequence) {
   auto test = [&]() {
-    FakeDisplayItemClient first("first");
-    GraphicsContext context(GetPaintController());
-    InitRootChunk();
+    FakeDisplayItemClient& first =
+        *MakeGarbageCollected<FakeDisplayItemClient>("first");
     {
-      SubsequenceRecorder r(context, first);
-      DrawRect(context, first, kBackgroundType, IntRect(1, 1, 1, 1));
-      DrawRect(context, first, kForegroundType, IntRect(1, 1, 3, 3));
+      AutoCommitPaintController paint_controller(GetPersistentData());
+      GraphicsContext context(paint_controller);
+      InitRootChunk(paint_controller);
+      {
+        SubsequenceRecorder r(context, first);
+        DrawRect(context, first, kBackgroundType, gfx::Rect(1, 1, 1, 1));
+        DrawRect(context, first, kForegroundType, gfx::Rect(1, 1, 3, 3));
+      }
     }
-    CommitAndFinishCycle();
 
-    InitRootChunk();
     {
-      EXPECT_FALSE(
-          SubsequenceRecorder::UseCachedSubsequenceIfPossible(context, first));
-      SubsequenceRecorder r(context, first);
-      DrawRect(context, first, kBackgroundType, IntRect(2, 2, 1, 1));
-      DrawRect(context, first, kForegroundType, IntRect(1, 1, 3, 3));
+      AutoCommitPaintController paint_controller(GetPersistentData());
+      GraphicsContext context(paint_controller);
+      InitRootChunk(paint_controller);
+      {
+        EXPECT_FALSE(SubsequenceRecorder::UseCachedSubsequenceIfPossible(
+            context, first));
+        SubsequenceRecorder r(context, first);
+        DrawRect(context, first, kBackgroundType, gfx::Rect(2, 2, 1, 1));
+        DrawRect(context, first, kForegroundType, gfx::Rect(1, 1, 3, 3));
+      }
     }
-    CommitAndFinishCycle();
   };
 
   EXPECT_DEATH(test(),
@@ -116,25 +138,30 @@ TEST_F(PaintControllerUnderInvalidationTest, ChangeDrawingInSubsequence) {
 
 TEST_F(PaintControllerUnderInvalidationTest, MoreDrawingInSubsequence) {
   auto test = [&]() {
-    FakeDisplayItemClient first("first");
-    GraphicsContext context(GetPaintController());
-
-    InitRootChunk();
+    FakeDisplayItemClient& first =
+        *MakeGarbageCollected<FakeDisplayItemClient>("first");
     {
-      SubsequenceRecorder r(context, first);
-      DrawRect(context, first, kBackgroundType, IntRect(1, 1, 1, 1));
+      AutoCommitPaintController paint_controller(GetPersistentData());
+      GraphicsContext context(paint_controller);
+      InitRootChunk(paint_controller);
+      {
+        SubsequenceRecorder r(context, first);
+        DrawRect(context, first, kBackgroundType, gfx::Rect(1, 1, 1, 1));
+      }
     }
-    CommitAndFinishCycle();
 
-    InitRootChunk();
     {
-      EXPECT_FALSE(
-          SubsequenceRecorder::UseCachedSubsequenceIfPossible(context, first));
-      SubsequenceRecorder r(context, first);
-      DrawRect(context, first, kBackgroundType, IntRect(1, 1, 1, 1));
-      DrawRect(context, first, kForegroundType, IntRect(1, 1, 3, 3));
+      AutoCommitPaintController paint_controller(GetPersistentData());
+      GraphicsContext context(paint_controller);
+      InitRootChunk(paint_controller);
+      {
+        EXPECT_FALSE(SubsequenceRecorder::UseCachedSubsequenceIfPossible(
+            context, first));
+        SubsequenceRecorder r(context, first);
+        DrawRect(context, first, kBackgroundType, gfx::Rect(1, 1, 1, 1));
+        DrawRect(context, first, kForegroundType, gfx::Rect(1, 1, 3, 3));
+      }
     }
-    CommitAndFinishCycle();
   };
 
   EXPECT_DEATH(test(),
@@ -148,25 +175,30 @@ TEST_F(PaintControllerUnderInvalidationTest, MoreDrawingInSubsequence) {
 
 TEST_F(PaintControllerUnderInvalidationTest, LessDrawingInSubsequence) {
   auto test = [&]() {
-    FakeDisplayItemClient first("first");
-    GraphicsContext context(GetPaintController());
-
-    InitRootChunk();
+    FakeDisplayItemClient& first =
+        *MakeGarbageCollected<FakeDisplayItemClient>("first");
     {
-      SubsequenceRecorder r(context, first);
-      DrawRect(context, first, kBackgroundType, IntRect(1, 1, 3, 3));
-      DrawRect(context, first, kForegroundType, IntRect(1, 1, 3, 3));
+      AutoCommitPaintController paint_controller(GetPersistentData());
+      GraphicsContext context(paint_controller);
+      InitRootChunk(paint_controller);
+      {
+        SubsequenceRecorder r(context, first);
+        DrawRect(context, first, kBackgroundType, gfx::Rect(1, 1, 3, 3));
+        DrawRect(context, first, kForegroundType, gfx::Rect(1, 1, 3, 3));
+      }
     }
-    CommitAndFinishCycle();
 
-    InitRootChunk();
     {
-      EXPECT_FALSE(
-          SubsequenceRecorder::UseCachedSubsequenceIfPossible(context, first));
-      SubsequenceRecorder r(context, first);
-      DrawRect(context, first, kBackgroundType, IntRect(1, 1, 3, 3));
+      AutoCommitPaintController paint_controller(GetPersistentData());
+      GraphicsContext context(paint_controller);
+      InitRootChunk(paint_controller);
+      {
+        EXPECT_FALSE(SubsequenceRecorder::UseCachedSubsequenceIfPossible(
+            context, first));
+        SubsequenceRecorder r(context, first);
+        DrawRect(context, first, kBackgroundType, gfx::Rect(1, 1, 3, 3));
+      }
     }
-    CommitAndFinishCycle();
   };
 
   EXPECT_DEATH(test(),
@@ -178,48 +210,59 @@ TEST_F(PaintControllerUnderInvalidationTest, InvalidationInSubsequence) {
   // We allow invalidated display item clients as long as they would produce the
   // same display items. The cases of changed display items are tested by other
   // test cases.
-  FakeDisplayItemClient container("container");
-  FakeDisplayItemClient content("content");
-  GraphicsContext context(GetPaintController());
-
-  InitRootChunk();
+  FakeDisplayItemClient& container =
+      *MakeGarbageCollected<FakeDisplayItemClient>("container");
+  FakeDisplayItemClient& content =
+      *MakeGarbageCollected<FakeDisplayItemClient>("content");
   {
-    SubsequenceRecorder r(context, container);
-    DrawRect(context, content, kBackgroundType, IntRect(1, 1, 3, 3));
+    AutoCommitPaintController paint_controller(GetPersistentData());
+    GraphicsContext context(paint_controller);
+    InitRootChunk(paint_controller);
+    {
+      SubsequenceRecorder r(context, container);
+      DrawRect(context, content, kBackgroundType, gfx::Rect(1, 1, 3, 3));
+    }
   }
-  CommitAndFinishCycle();
 
   content.Invalidate();
-  InitRootChunk();
-  // Leave container not invalidated.
   {
-    EXPECT_FALSE(SubsequenceRecorder::UseCachedSubsequenceIfPossible(
-        context, container));
-    SubsequenceRecorder r(context, container);
-    DrawRect(context, content, kBackgroundType, IntRect(1, 1, 3, 3));
+    AutoCommitPaintController paint_controller(GetPersistentData());
+    GraphicsContext context(paint_controller);
+    InitRootChunk(paint_controller);
+    // Leave container not invalidated.
+    {
+      EXPECT_FALSE(SubsequenceRecorder::UseCachedSubsequenceIfPossible(
+          context, container));
+      SubsequenceRecorder r(context, container);
+      DrawRect(context, content, kBackgroundType, gfx::Rect(1, 1, 3, 3));
+    }
   }
-  CommitAndFinishCycle();
 }
 
 TEST_F(PaintControllerUnderInvalidationTest, SubsequenceBecomesEmpty) {
   auto test = [&]() {
-    FakeDisplayItemClient target("target");
-    GraphicsContext context(GetPaintController());
-
-    InitRootChunk();
+    FakeDisplayItemClient& target =
+        *MakeGarbageCollected<FakeDisplayItemClient>("target");
     {
-      SubsequenceRecorder r(context, target);
-      DrawRect(context, target, kBackgroundType, IntRect(1, 1, 3, 3));
+      AutoCommitPaintController paint_controller(GetPersistentData());
+      GraphicsContext context(paint_controller);
+      InitRootChunk(paint_controller);
+      {
+        SubsequenceRecorder r(context, target);
+        DrawRect(context, target, kBackgroundType, gfx::Rect(1, 1, 3, 3));
+      }
     }
-    CommitAndFinishCycle();
 
-    InitRootChunk();
     {
-      EXPECT_FALSE(
-          SubsequenceRecorder::UseCachedSubsequenceIfPossible(context, target));
-      SubsequenceRecorder r(context, target);
+      AutoCommitPaintController paint_controller(GetPersistentData());
+      GraphicsContext context(paint_controller);
+      InitRootChunk(paint_controller);
+      {
+        EXPECT_FALSE(SubsequenceRecorder::UseCachedSubsequenceIfPossible(
+            context, target));
+        SubsequenceRecorder r(context, target);
+      }
     }
-    CommitAndFinishCycle();
   };
 
   EXPECT_DEATH(test(),
@@ -228,64 +271,76 @@ TEST_F(PaintControllerUnderInvalidationTest, SubsequenceBecomesEmpty) {
 }
 
 TEST_F(PaintControllerUnderInvalidationTest, SkipCacheInSubsequence) {
-  FakeDisplayItemClient container("container");
-  FakeDisplayItemClient content("content");
-  GraphicsContext context(GetPaintController());
-
-  InitRootChunk();
+  FakeDisplayItemClient& container =
+      *MakeGarbageCollected<FakeDisplayItemClient>("container");
+  FakeDisplayItemClient& content =
+      *MakeGarbageCollected<FakeDisplayItemClient>("content");
   {
-    SubsequenceRecorder r(context, container);
+    AutoCommitPaintController paint_controller(GetPersistentData());
+    GraphicsContext context(paint_controller);
+    InitRootChunk(paint_controller);
     {
-      DisplayItemCacheSkipper cache_skipper(context);
-      DrawRect(context, content, kBackgroundType, IntRect(1, 1, 3, 3));
+      SubsequenceRecorder r(context, container);
+      {
+        DisplayItemCacheSkipper cache_skipper(context);
+        DrawRect(context, content, kBackgroundType, gfx::Rect(1, 1, 3, 3));
+      }
+      DrawRect(context, content, kForegroundType, gfx::Rect(2, 2, 4, 4));
     }
-    DrawRect(context, content, kForegroundType, IntRect(2, 2, 4, 4));
   }
-  CommitAndFinishCycle();
 
-  InitRootChunk();
   {
-    EXPECT_FALSE(SubsequenceRecorder::UseCachedSubsequenceIfPossible(
-        context, container));
-    SubsequenceRecorder r(context, container);
+    AutoCommitPaintController paint_controller(GetPersistentData());
+    GraphicsContext context(paint_controller);
+    InitRootChunk(paint_controller);
     {
-      DisplayItemCacheSkipper cache_skipper(context);
-      DrawRect(context, content, kBackgroundType, IntRect(2, 2, 4, 4));
+      EXPECT_FALSE(SubsequenceRecorder::UseCachedSubsequenceIfPossible(
+          context, container));
+      SubsequenceRecorder r(context, container);
+      {
+        DisplayItemCacheSkipper cache_skipper(context);
+        DrawRect(context, content, kBackgroundType, gfx::Rect(2, 2, 4, 4));
+      }
+      DrawRect(context, content, kForegroundType, gfx::Rect(2, 2, 4, 4));
     }
-    DrawRect(context, content, kForegroundType, IntRect(2, 2, 4, 4));
   }
-  CommitAndFinishCycle();
 }
 
 TEST_F(PaintControllerUnderInvalidationTest,
        EmptySubsequenceInCachedSubsequence) {
-  FakeDisplayItemClient container("container");
-  FakeDisplayItemClient content("content");
-  GraphicsContext context(GetPaintController());
-
-  InitRootChunk();
+  FakeDisplayItemClient& container =
+      *MakeGarbageCollected<FakeDisplayItemClient>("container");
+  FakeDisplayItemClient& content =
+      *MakeGarbageCollected<FakeDisplayItemClient>("content");
   {
-    SubsequenceRecorder r(context, container);
-    DrawRect(context, container, kBackgroundType, IntRect(1, 1, 3, 3));
-    { SubsequenceRecorder r1(context, content); }
-    DrawRect(context, container, kForegroundType, IntRect(1, 1, 3, 3));
+    AutoCommitPaintController paint_controller(GetPersistentData());
+    GraphicsContext context(paint_controller);
+    InitRootChunk(paint_controller);
+    {
+      SubsequenceRecorder r(context, container);
+      DrawRect(context, container, kBackgroundType, gfx::Rect(1, 1, 3, 3));
+      { SubsequenceRecorder r1(context, content); }
+      DrawRect(context, container, kForegroundType, gfx::Rect(1, 1, 3, 3));
+    }
   }
-  CommitAndFinishCycle();
 
-  InitRootChunk();
   {
-    EXPECT_FALSE(SubsequenceRecorder::UseCachedSubsequenceIfPossible(
-        context, container));
-    SubsequenceRecorder r(context, container);
-    DrawRect(context, container, kBackgroundType, IntRect(1, 1, 3, 3));
-    EXPECT_FALSE(
-        SubsequenceRecorder::UseCachedSubsequenceIfPossible(context, content));
-    { SubsequenceRecorder r1(context, content); }
-    DrawRect(context, container, kForegroundType, IntRect(1, 1, 3, 3));
+    AutoCommitPaintController paint_controller(GetPersistentData());
+    GraphicsContext context(paint_controller);
+    InitRootChunk(paint_controller);
+    {
+      EXPECT_FALSE(SubsequenceRecorder::UseCachedSubsequenceIfPossible(
+          context, container));
+      SubsequenceRecorder r(context, container);
+      DrawRect(context, container, kBackgroundType, gfx::Rect(1, 1, 3, 3));
+      EXPECT_FALSE(SubsequenceRecorder::UseCachedSubsequenceIfPossible(
+          context, content));
+      { SubsequenceRecorder r1(context, content); }
+      DrawRect(context, container, kForegroundType, gfx::Rect(1, 1, 3, 3));
+    }
   }
-  CommitAndFinishCycle();
 }
 
-#endif  // defined(GTEST_HAS_DEATH_TEST) && !defined(OS_ANDROID)
+#endif  // defined(GTEST_HAS_DEATH_TEST) && !BUILDFLAG(IS_ANDROID)
 
 }  // namespace blink

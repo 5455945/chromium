@@ -1,16 +1,20 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "components/enterprise/browser/reporting/report_scheduler.h"
 
 #include <memory>
 
 #include "base/command_line.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/branding_buildflags.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_browser_main.h"
 #include "chrome/browser/chrome_browser_main_extra_parts.h"
+#include "chrome/browser/enterprise/reporting/report_scheduler_desktop.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
@@ -20,6 +24,7 @@
 #include "components/enterprise/browser/controller/fake_browser_dm_token_storage.h"
 #include "components/enterprise/browser/enterprise_switches.h"
 #include "components/enterprise/browser/reporting/common_pref_names.h"
+#include "components/policy/core/common/policy_switches.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/test/browser_test.h"
 
@@ -37,7 +42,7 @@ class ChromeBrowserExtraSetUp : public ChromeBrowserMainExtraParts {
   }
 
  private:
-  policy::ChromeBrowserCloudManagementController::Observer* observer_;
+  raw_ptr<policy::ChromeBrowserCloudManagementController::Observer> observer_;
 };
 
 class ReportSchedulerTest
@@ -46,6 +51,8 @@ class ReportSchedulerTest
  public:
   ReportSchedulerTest() {
     policy::BrowserDMTokenStorage::SetForTesting(&storage_);
+    storage_.SetDMToken("dm-token");
+    storage_.SetClientId("client-id");
   }
   ~ReportSchedulerTest() override = default;
 
@@ -54,6 +61,7 @@ class ReportSchedulerTest
   }
 
   void CreatedBrowserMainParts(content::BrowserMainParts* parts) override {
+    InProcessBrowserTest::CreatedBrowserMainParts(parts);
     static_cast<ChromeBrowserMainParts*>(parts)->AddParts(
         std::make_unique<ChromeBrowserExtraSetUp>(this));
   }
@@ -65,8 +73,9 @@ class ReportSchedulerTest
   }
 
   // policy::ChromeBrowserCloudManagementController::Observer
-  void OnCloudReportingLaunched() override {
+  void OnCloudReportingLaunched(ReportScheduler* report_scheduler) override {
     has_cloud_reporting_launched = true;
+    report_scheduler_ = report_scheduler;
     if (run_loop_)
       run_loop_->Quit();
   }
@@ -78,16 +87,22 @@ class ReportSchedulerTest
     run_loop_->Run();
   }
 
-#if !BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  ReportScheduler* report_scheduler() { return report_scheduler_; }
+
   void SetUpDefaultCommandLine(base::CommandLine* command_line) override {
     InProcessBrowserTest::SetUpDefaultCommandLine(command_line);
+#if !BUILDFLAG(GOOGLE_CHROME_BRANDING)
     command_line->AppendSwitch(::switches::kEnableChromeBrowserCloudManagement);
-  }
 #endif
+    command_line->AppendSwitchASCII(policy::switches::kDeviceManagementUrl,
+                                    "https://localhost/");
+  }
+
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
   policy::FakeBrowserDMTokenStorage storage_;
   std::unique_ptr<base::RunLoop> run_loop_;
+  raw_ptr<ReportScheduler, DanglingUntriaged> report_scheduler_;
   bool has_cloud_reporting_launched = false;
 };
 
@@ -95,6 +110,26 @@ class ReportSchedulerTest
 // without crash.
 IN_PROC_BROWSER_TEST_F(ReportSchedulerTest, LaunchTest) {
   WaitForCloudReportingLaunching();
+  // The report should be either scheduled or being uploaded.
+  EXPECT_TRUE(report_scheduler()->IsNextReportScheduledForTesting() ||
+              report_scheduler()->GetActiveTriggerForTesting() ==
+                  ReportTrigger::kTriggerTimer);
+}
+
+// Verify that a security report trigger is aborted and not active if security
+// signals reporting is disabled.
+IN_PROC_BROWSER_TEST_F(ReportSchedulerTest,
+                       SecurityTriggerGatedWhenSignalsReportingDisabled) {
+  WaitForCloudReportingLaunching();
+
+  // Trigger security report via public delegate callback.
+  static_cast<ReportSchedulerDesktop*>(
+      report_scheduler()->GetDelegateForTesting())
+      ->OnReportEventTriggered(SecurityReportTrigger::kTimer);
+
+  // Assert that the trigger did not become active.
+  EXPECT_NE(report_scheduler()->GetActiveTriggerForTesting(),
+            ReportTrigger::kTriggerSecurity);
 }
 
 }  // namespace enterprise_reporting

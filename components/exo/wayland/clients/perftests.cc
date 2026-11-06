@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -27,8 +27,16 @@ perf_test::PerfResultReporter SetUpReporter(const std::string& story) {
   return reporter;
 }
 
+// TODO(crbug.com/335313263): Flaky on Linux/ChromeOS ASAN.
+#if BUILDFLAG(IS_LINUX) && defined(ADDRESS_SANITIZER)
+#define MAYBE_Simple DISABLED_Simple
+#elif BUILDFLAG(IS_CHROMEOS) && defined(ADDRESS_SANITIZER)
+#define MAYBE_Simple DISABLED_Simple
+#else
+#define MAYBE_Simple Simple
+#endif
 // Test simple double-buffered client performance.
-TEST_F(WaylandClientPerfTests, Simple) {
+TEST_F(WaylandClientPerfTests, MAYBE_Simple) {
   const int kWarmUpFrames = 20;
   const int kTestFrames = 600;
 
@@ -40,11 +48,13 @@ TEST_F(WaylandClientPerfTests, Simple) {
   exo::wayland::clients::Simple client;
   EXPECT_TRUE(client.Init(params));
 
-  client.Run(kWarmUpFrames, false, nullptr);
+  const exo::wayland::clients::Simple::RunParam run_params = {false, false};
+
+  client.Run(kWarmUpFrames, run_params, nullptr);
 
   exo::wayland::clients::Simple::PresentationFeedback feedback;
   auto start_time = base::Time::Now();
-  client.Run(kTestFrames, false, &feedback);
+  client.Run(kTestFrames, run_params, &feedback);
   auto time_delta = base::Time::Now() - start_time;
   float fps = kTestFrames / time_delta.InSecondsF();
   auto reporter = SetUpReporter(kStorySimple);
@@ -62,12 +72,14 @@ class WaylandClientBlurPerfTests
       public ::testing::WithParamInterface<double> {
  public:
   WaylandClientBlurPerfTests() = default;
+
+  WaylandClientBlurPerfTests(const WaylandClientBlurPerfTests&) = delete;
+  WaylandClientBlurPerfTests& operator=(const WaylandClientBlurPerfTests&) =
+      delete;
+
   ~WaylandClientBlurPerfTests() override = default;
 
   double max_sigma() const { return GetParam(); }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(WaylandClientBlurPerfTests);
 };
 
 INSTANTIATE_TEST_SUITE_P(All,

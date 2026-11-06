@@ -1,4 +1,4 @@
-// Copyright 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,17 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <string>
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "base/trace_event/traced_value.h"
+#include "components/viz/common/features.h"
 #include "components/viz/common/frame_sinks/begin_frame_args.h"
 
 namespace viz {
@@ -29,9 +32,7 @@ DelayBasedTimeSource::DelayBasedTimeSource(
       last_tick_time_(base::TimeTicks() - interval_),
       task_runner_(task_runner),
       tick_closure_(base::BindRepeating(&DelayBasedTimeSource::OnTimerTick,
-                                        base::Unretained(this))) {
-  timer_.SetTaskRunner(task_runner_);
-}
+                                        base::Unretained(this))) {}
 
 DelayBasedTimeSource::~DelayBasedTimeSource() = default;
 
@@ -44,9 +45,10 @@ void DelayBasedTimeSource::SetActive(bool active) {
   active_ = active;
 
   if (active_) {
+    timer_.SetTaskRunner(task_runner_.get());
     PostNextTickTask(Now());
   } else {
-    timer_.AbandonAndStop();
+    timer_.Stop();
     last_tick_time_ = base::TimeTicks();
     next_tick_time_ = base::TimeTicks();
   }
@@ -151,13 +153,25 @@ base::TimeTicks DelayBasedTimeSource::Now() const {
 void DelayBasedTimeSource::PostNextTickTask(base::TimeTicks now) {
   if (interval_.is_zero()) {
     next_tick_time_ = now;
+    timer_.Start(FROM_HERE, base::TimeTicks(), tick_closure_,
+                 base::subtle::DelayPolicy::kPrecise);
   } else {
     next_tick_time_ = now.SnappedToNextTick(timebase_, interval_);
-    if (next_tick_time_ == now)
+
+    // Some devices report vblank timings with enough variance as to confuse
+    // 'SnappedToNextTick' on the time remaining for next begin frame. This
+    // code allows for up to 'kMaxJudderAllowed' time for these values to
+    // simply be corrected to the next interval and thereby avoid an erroneous
+    // double tick. See crbug.com/398090404 for details.
+    const auto kMaxJudderAllowed = base::Microseconds(500);
+    if (now + kMaxJudderAllowed >= next_tick_time_) {
       next_tick_time_ += interval_;
+    }
+
     DCHECK_GT(next_tick_time_, now);
+    timer_.Start(FROM_HERE, next_tick_time_, tick_closure_,
+                 base::subtle::DelayPolicy::kPrecise);
   }
-  timer_.Start(FROM_HERE, next_tick_time_ - now, tick_closure_);
 }
 
 std::string DelayBasedTimeSource::TypeString() const {

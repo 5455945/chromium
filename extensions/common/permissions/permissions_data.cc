@@ -1,18 +1,23 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/common/permissions/permissions_data.h"
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
+#include "base/feature_list.h"
+#include "base/memory/stack_allocated.h"
 #include "base/no_destructor.h"
 #include "content/public/common/url_constants.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/error_utils.h"
+#include "extensions/common/extension_features.h"
+#include "extensions/common/extension_id.h"
+#include "extensions/common/extension_urls.h"
 #include "extensions/common/extensions_client.h"
 #include "extensions/common/manifest.h"
 #include "extensions/common/manifest_constants.h"
@@ -29,48 +34,61 @@ namespace extensions {
 
 namespace {
 
+constexpr char kErrorBlocked[] = "Blocked";
+
 PermissionsData::PolicyDelegate* g_policy_delegate = nullptr;
 
-struct DefaultPolicyRestrictions {
+struct URLPatternAccessSet {
   URLPatternSet blocked_hosts;
   URLPatternSet allowed_hosts;
+};
+
+struct ContextPermissions {
+  // The set of default policy restrictions to apply to extensions if a more
+  // specific rule isn't set.
+  // Extensions cannot interact with the blocked sites, even if the permission
+  // is otherwise granted. The allowlist takes precedent over the blocklist.
+  URLPatternAccessSet default_policy_restrictions;
+  // Restrictions set by the user dictating which sites extensions can / cannot
+  // run on. The allowlist takes precedent over the blocklist.
+  // Policy-specified hosts take precedent over user-specified hosts.
+  URLPatternAccessSet user_restrictions;
 };
 
 // A map between a profile (referenced by a unique id) and the default policies
 // for that profile. Since different profile have different defaults, we need to
 // have separate entries.
-using DefaultPolicyRestrictionsMap = std::map<int, DefaultPolicyRestrictions>;
+using ContextPermissionsMap = std::map<int, ContextPermissions>;
 
-// Lock to access the default policy restrictions. This should never be acquired
+// Lock to access the context permissions map. This should never be acquired
 // before PermissionsData instance level |runtime_lock_| to prevent deadlocks.
-base::Lock& GetDefaultPolicyRestrictionsLock() {
+base::Lock& GetContextPermissionsLock() {
   static base::NoDestructor<base::Lock> lock;
   return *lock;
 }
 
-// Returns the DefaultPolicyRestrictions for the given context_id.
-// i.e. the URLs an extension can't interact with. An extension can override
-// these settings by declaring its own list of blocked and allowed hosts
-// using policy_blocked_hosts and policy_allowed_hosts.
-// Must be called with the default policy restriction lock already acquired.
-DefaultPolicyRestrictions& GetDefaultPolicyRestrictions(int context_id) {
-  static base::NoDestructor<DefaultPolicyRestrictionsMap>
-      default_policy_restrictions_map;
-  GetDefaultPolicyRestrictionsLock().AssertAcquired();
-  return (*default_policy_restrictions_map)[context_id];
+// Returns the ContextPermissions for the given context_id.
+// Must be called with the context permissions lock already required.
+ContextPermissions& GetContextPermissions(int context_id) {
+  static base::NoDestructor<ContextPermissionsMap> context_permissions_map;
+  GetContextPermissionsLock().AssertAcquired();
+  return (*context_permissions_map)[context_id];
 }
 
 class AutoLockOnValidThread {
+  STACK_ALLOCATED();
+
  public:
   AutoLockOnValidThread(base::Lock& lock, base::ThreadChecker* thread_checker)
       : auto_lock_(lock) {
     DCHECK(!thread_checker || thread_checker->CalledOnValidThread());
   }
 
+  AutoLockOnValidThread(const AutoLockOnValidThread&) = delete;
+  AutoLockOnValidThread& operator=(const AutoLockOnValidThread&) = delete;
+
  private:
   base::AutoLock auto_lock_;
-
-  DISALLOW_COPY_AND_ASSIGN(AutoLockOnValidThread);
 };
 
 }  // namespace
@@ -104,7 +122,7 @@ bool PermissionsData::CanExecuteScriptEverywhere(
   const ExtensionsClient::ScriptingAllowlist& allowlist =
       ExtensionsClient::Get()->GetScriptingAllowlist();
 
-  return base::Contains(allowlist, extension_id);
+  return std::ranges::contains(allowlist, extension_id);
 }
 
 bool PermissionsData::IsRestrictedUrl(const GURL& document_url,
@@ -118,7 +136,7 @@ bool PermissionsData::IsRestrictedUrl(const GURL& document_url,
   }
 
   // Check if the scheme is valid for extensions. If not, return.
-  if (!URLPattern::IsValidSchemeForExtensions(document_url.scheme()) &&
+  if (!URLPattern::IsValidSchemeForExtensions(document_url.GetScheme()) &&
       document_url.spec() != url::kAboutBlankURL &&
       document_url.spec() != url::kAboutSrcdocURL) {
     if (error) {
@@ -135,8 +153,7 @@ bool PermissionsData::IsRestrictedUrl(const GURL& document_url,
   if (!ExtensionsClient::Get()->IsScriptableURL(document_url, error))
     return true;
 
-  bool allow_on_chrome_urls = base::CommandLine::ForCurrentProcess()->HasSwitch(
-                                  switches::kExtensionsOnChromeURLs);
+  bool allow_on_chrome_urls = switches::AreExtensionsOnChromeURLsAllowed();
   if (document_url.SchemeIs(content::kChromeUIScheme) &&
       !allow_on_chrome_urls) {
     if (error)
@@ -144,8 +161,10 @@ bool PermissionsData::IsRestrictedUrl(const GURL& document_url,
     return true;
   }
 
+  bool allow_on_extension_urls =
+      switches::AreExtensionsOnExtensionURLsAllowed();
   if (document_url.SchemeIs(kExtensionScheme) &&
-      document_url.host() != extension_id_ && !allow_on_chrome_urls) {
+      document_url.GetHost() != extension_id_ && !allow_on_extension_urls) {
     if (error)
       *error = manifest_errors::kCannotAccessExtensionUrl;
     return true;
@@ -156,32 +175,32 @@ bool PermissionsData::IsRestrictedUrl(const GURL& document_url,
 
 // static
 bool PermissionsData::AllUrlsIncludesChromeUrls(
-    const std::string& extension_id) {
+    const ExtensionId& extension_id) {
   return extension_id == extension_misc::kChromeVoxExtensionId;
 }
 
 bool PermissionsData::UsesDefaultPolicyHostRestrictions() const {
   DCHECK(!thread_checker_ || thread_checker_->CalledOnValidThread());
-  // no locking necessary here as the value is only set once initially
-  // from the main thread and then will only be read.
-  return context_id_.has_value();
+  return uses_default_policy_host_restrictions_;
 }
 
 // static
 URLPatternSet PermissionsData::GetDefaultPolicyBlockedHosts(int context_id) {
-  base::AutoLock lock(GetDefaultPolicyRestrictionsLock());
-  return GetDefaultPolicyRestrictions(context_id).blocked_hosts.Clone();
+  base::AutoLock lock(GetContextPermissionsLock());
+  return GetContextPermissions(context_id)
+      .default_policy_restrictions.blocked_hosts.Clone();
 }
 
 // static
 URLPatternSet PermissionsData::GetDefaultPolicyAllowedHosts(int context_id) {
-  base::AutoLock lock(GetDefaultPolicyRestrictionsLock());
-  return GetDefaultPolicyRestrictions(context_id).allowed_hosts.Clone();
+  base::AutoLock lock(GetContextPermissionsLock());
+  return GetContextPermissions(context_id)
+      .default_policy_restrictions.allowed_hosts.Clone();
 }
 
 URLPatternSet PermissionsData::policy_blocked_hosts() const {
   base::AutoLock auto_lock(runtime_lock_);
-  if (context_id_.has_value())
+  if (uses_default_policy_host_restrictions_ && context_id_.has_value())
     return GetDefaultPolicyBlockedHosts(context_id_.value());
 
   return policy_blocked_hosts_unsafe_.Clone();
@@ -189,7 +208,7 @@ URLPatternSet PermissionsData::policy_blocked_hosts() const {
 
 URLPatternSet PermissionsData::policy_allowed_hosts() const {
   base::AutoLock auto_lock(runtime_lock_);
-  if (context_id_.has_value())
+  if (uses_default_policy_host_restrictions_ && context_id_.has_value())
     return GetDefaultPolicyAllowedHosts(context_id_.value());
 
   return policy_allowed_hosts_unsafe_.Clone();
@@ -198,6 +217,12 @@ URLPatternSet PermissionsData::policy_allowed_hosts() const {
 void PermissionsData::BindToCurrentThread() const {
   DCHECK(!thread_checker_);
   thread_checker_ = std::make_unique<base::ThreadChecker>();
+}
+
+void PermissionsData::SetContextId(int context_id) const {
+  DCHECK(!context_id_ || context_id_ == context_id);
+  AutoLockOnValidThread lock(runtime_lock_, thread_checker_.get());
+  context_id_ = context_id;
 }
 
 void PermissionsData::SetPermissions(
@@ -214,12 +239,13 @@ void PermissionsData::SetPolicyHostRestrictions(
   AutoLockOnValidThread lock(runtime_lock_, thread_checker_.get());
   policy_blocked_hosts_unsafe_ = policy_blocked_hosts.Clone();
   policy_allowed_hosts_unsafe_ = policy_allowed_hosts.Clone();
-  context_id_ = absl::nullopt;
+  uses_default_policy_host_restrictions_ = false;
 }
 
-void PermissionsData::SetUsesDefaultHostRestrictions(int context_id) const {
+void PermissionsData::SetUsesDefaultHostRestrictions() const {
   AutoLockOnValidThread lock(runtime_lock_, thread_checker_.get());
-  context_id_ = context_id;
+  DCHECK(context_id_);
+  uses_default_policy_host_restrictions_ = true;
 }
 
 // static
@@ -227,11 +253,70 @@ void PermissionsData::SetDefaultPolicyHostRestrictions(
     int context_id,
     const URLPatternSet& default_policy_blocked_hosts,
     const URLPatternSet& default_policy_allowed_hosts) {
-  base::AutoLock lock(GetDefaultPolicyRestrictionsLock());
-  GetDefaultPolicyRestrictions(context_id).blocked_hosts =
+  base::AutoLock lock(GetContextPermissionsLock());
+  ContextPermissions& context_permissions = GetContextPermissions(context_id);
+  context_permissions.default_policy_restrictions.blocked_hosts =
       default_policy_blocked_hosts.Clone();
-  GetDefaultPolicyRestrictions(context_id).allowed_hosts =
+  context_permissions.default_policy_restrictions.allowed_hosts =
       default_policy_allowed_hosts.Clone();
+}
+
+// static
+void PermissionsData::SetUserHostRestrictions(
+    int context_id,
+    URLPatternSet user_blocked_hosts,
+    URLPatternSet user_allowed_hosts) {
+  base::AutoLock lock(GetContextPermissionsLock());
+  ContextPermissions& context_permissions = GetContextPermissions(context_id);
+  context_permissions.user_restrictions.blocked_hosts =
+      std::move(user_blocked_hosts);
+  context_permissions.user_restrictions.allowed_hosts =
+      std::move(user_allowed_hosts);
+}
+
+// static
+URLPatternSet PermissionsData::GetUserAllowedHosts(int context_id) {
+  base::AutoLock lock(GetContextPermissionsLock());
+  return GetContextPermissions(context_id)
+      .user_restrictions.allowed_hosts.Clone();
+}
+
+// static
+URLPatternSet PermissionsData::GetUserBlockedHosts(int context_id) {
+  base::AutoLock lock(GetContextPermissionsLock());
+  return GetContextPermissions(context_id)
+      .user_restrictions.blocked_hosts.Clone();
+}
+
+URLPatternSet PermissionsData::GetUserBlockedHosts() const {
+  if (!base::FeatureList::IsEnabled(
+          extensions_features::kExtensionsMenuAccessControl)) {
+    // Feature not enabled.
+    return {};
+  }
+
+  if (!context_id_) {
+    // Context ID is unset, so this extension isn't associated with a context.
+    // This happens a) in unit tests and b) in extensions embedders like app
+    // shell that don't set the context (and also don't support user host
+    // restrictions).
+    // TODO(crbug.com/40803363): It'd be nice to change this (even if
+    // app shell just sets a global context id) so that we can DCHECK it here.
+    // If we didn't have a context ID set in production Chromium, it'd be a bug
+    // and would result in the extension potentially having access to user-
+    // restricted sites.
+    return {};
+  }
+
+  if (location_ == mojom::ManifestLocation::kComponent ||
+      Manifest::IsPolicyLocation(location_)) {
+    // Extension is exempt from user settings.
+    return {};
+  }
+
+  base::AutoLock lock(GetContextPermissionsLock());
+  return GetContextPermissions(*context_id_)
+      .user_restrictions.blocked_hosts.Clone();
 }
 
 void PermissionsData::UpdateTabSpecificPermissions(
@@ -256,13 +341,21 @@ void PermissionsData::ClearTabSpecificPermissions(int tab_id) const {
   tab_specific_permissions_.erase(tab_id);
 }
 
+bool PermissionsData::HasTabPermissionsForSecurityOrigin(
+    int tab_id,
+    const GURL& url) const {
+  base::AutoLock auto_lock(runtime_lock_);
+  const PermissionSet* tab_permissions = GetTabSpecificPermissions(tab_id);
+  return tab_permissions &&
+         tab_permissions->effective_hosts().MatchesSecurityOrigin(url);
+}
+
 bool PermissionsData::HasAPIPermission(APIPermissionID permission) const {
   base::AutoLock auto_lock(runtime_lock_);
   return active_permissions_unsafe_->HasAPIPermission(permission);
 }
 
-bool PermissionsData::HasAPIPermission(
-    const std::string& permission_name) const {
+bool PermissionsData::HasAPIPermission(std::string_view permission_name) const {
   base::AutoLock auto_lock(runtime_lock_);
   return active_permissions_unsafe_->HasAPIPermission(permission_name);
 }
@@ -298,12 +391,7 @@ URLPatternSet PermissionsData::GetEffectiveHostPermissions() const {
 bool PermissionsData::HasHostPermission(const GURL& url) const {
   base::AutoLock auto_lock(runtime_lock_);
   return active_permissions_unsafe_->HasExplicitAccessToOrigin(url) &&
-         !IsPolicyBlockedHostUnsafe(url);
-}
-
-bool PermissionsData::HasEffectiveAccessToAllHosts() const {
-  base::AutoLock auto_lock(runtime_lock_);
-  return active_permissions_unsafe_->HasEffectiveAccessToAllHosts();
+         !IsPolicyBlockedHostUnsafe(url) && !IsUrlBlockedByUser(url);
 }
 
 PermissionMessages PermissionsData::GetPermissionMessages() const {
@@ -344,9 +432,10 @@ PermissionsData::PageAccess PermissionsData::GetPageAccess(
 
   const PermissionSet* tab_permissions = GetTabSpecificPermissions(tab_id);
   return CanRunOnPage(
-      document_url, tab_id, active_permissions_unsafe_->explicit_hosts(),
+      document_url, active_permissions_unsafe_->explicit_hosts(),
       withheld_permissions_unsafe_->explicit_hosts(),
-      tab_permissions ? &tab_permissions->explicit_hosts() : nullptr, error);
+      tab_permissions ? &tab_permissions->explicit_hosts() : nullptr,
+      PatternMatchMode::kMatchUrl, error);
 }
 
 bool PermissionsData::CanRunContentScriptOnPage(const GURL& document_url,
@@ -367,9 +456,37 @@ PermissionsData::PageAccess PermissionsData::GetContentScriptAccess(
 
   const PermissionSet* tab_permissions = GetTabSpecificPermissions(tab_id);
   return CanRunOnPage(
-      document_url, tab_id, active_permissions_unsafe_->scriptable_hosts(),
+      document_url, active_permissions_unsafe_->scriptable_hosts(),
       withheld_permissions_unsafe_->scriptable_hosts(),
-      tab_permissions ? &tab_permissions->scriptable_hosts() : nullptr, error);
+      tab_permissions ? &tab_permissions->scriptable_hosts() : nullptr,
+      PatternMatchMode::kMatchUrl, error);
+}
+
+PermissionsData::PageAccess PermissionsData::GetPageAccessForSecurityOrigin(
+    const GURL& document_url,
+    int tab_id) const {
+  base::AutoLock auto_lock(runtime_lock_);
+
+  const PermissionSet* tab_permissions = GetTabSpecificPermissions(tab_id);
+  return CanRunOnPage(
+      document_url, active_permissions_unsafe_->explicit_hosts(),
+      withheld_permissions_unsafe_->explicit_hosts(),
+      tab_permissions ? &tab_permissions->explicit_hosts() : nullptr,
+      PatternMatchMode::kMatchSecurityOrigin, /*error=*/nullptr);
+}
+
+PermissionsData::PageAccess
+PermissionsData::GetContentScriptAccessForSecurityOrigin(
+    const GURL& document_url,
+    int tab_id) const {
+  base::AutoLock auto_lock(runtime_lock_);
+
+  const PermissionSet* tab_permissions = GetTabSpecificPermissions(tab_id);
+  return CanRunOnPage(
+      document_url, active_permissions_unsafe_->scriptable_hosts(),
+      withheld_permissions_unsafe_->scriptable_hosts(),
+      tab_permissions ? &tab_permissions->scriptable_hosts() : nullptr,
+      PatternMatchMode::kMatchSecurityOrigin, /*error=*/nullptr);
 }
 
 bool PermissionsData::CanCaptureVisiblePage(
@@ -385,6 +502,11 @@ bool PermissionsData::CanCaptureVisiblePage(
   // does not.)
   url::Origin origin = url::Origin::Create(document_url);
   const GURL origin_url = origin.GetURL();
+
+  if (!ExtensionsClient::Get()->IsCapturableURL(origin_url, error)) {
+    return false;
+  }
+
   {
     base::AutoLock auto_lock(runtime_lock_);
     // Disallow capturing policy-blocked hosts. No exceptions.
@@ -429,8 +551,8 @@ bool PermissionsData::CanCaptureVisiblePage(
     // (such as file:// URLs or chrome:// URLs for component extensions). If an
     // extension has <all_urls>, GetPageAccess() will still (correctly) return
     // false if, for instance, the URL is a file:// URL and the extension does
-    // not have file access. See https://crbug.com/810220. If the extension has
-    // page access (and has activeTab or <all_urls>), allow the capture.
+    // not have file access. See https://crbug.com/40090425. If the extension
+    // has page access (and has activeTab or <all_urls>), allow the capture.
     if (GetPageAccess(origin_url, tab_id, &access_error) ==
         PageAccess::kAllowed)
       return true;
@@ -439,14 +561,25 @@ bool PermissionsData::CanCaptureVisiblePage(
     if (!has_page_capture) {
       if (error)
         *error = manifest_errors::kPageCaptureNeeded;
+      return false;
+    }
+
+    // We can't use GetPageAccess() here because that would require developers
+    // using the pageCapture API to declare host_permissions in their manifest,
+    // and that's not part of the API spec. In lieu of that, check for URLs the
+    // user has specifically disallowed. https://crbug.com/514503077
+    if (IsUrlBlockedByUser(origin_url)) {
+      if (error) {
+        *error = kErrorBlocked;
+      }
+      return false;
     }
 
     // If the URL is a typical web URL, the pageCapture permission is
     // sufficient.
     if ((origin_url.SchemeIs(url::kHttpScheme) ||
          origin_url.SchemeIs(url::kHttpsScheme)) &&
-        !origin.IsSameOriginWith(url::Origin::Create(
-            ExtensionsClient::Get()->GetWebstoreBaseURL()))) {
+        !extension_urls::IsWebstoreOrigin(origin)) {
       return true;
     }
   }
@@ -463,8 +596,9 @@ bool PermissionsData::CanCaptureVisiblePage(
   // the extension page may have embedded web content.
   // TODO(devlin): Should activeTab/<all_urls> account for the extension's own
   // domain?
-  if (origin_url.host() == extension_id_)
+  if (origin_url.GetHost() == extension_id_) {
     return true;
+  }
 
   // The following are special cases that require activeTab explicitly. Normal
   // extensions will never have full access to these pages (i.e., can never
@@ -482,8 +616,7 @@ bool PermissionsData::CanCaptureVisiblePage(
       origin_url.SchemeIs(kExtensionScheme) ||
       // Note: The origin of a data: url is empty, so check the url itself.
       document_url.SchemeIs(url::kDataScheme) ||
-      origin.IsSameOriginWith(
-          url::Origin::Create(ExtensionsClient::Get()->GetWebstoreBaseURL()));
+      extension_urls::IsWebstoreOrigin(origin);
 
   if (!allowed_with_active_tab) {
     if (error)
@@ -512,21 +645,48 @@ bool PermissionsData::IsPolicyBlockedHostUnsafe(const GURL& url) const {
   // We don't use [default_]policy_[blocked|allowed]_hosts() to avoid copying
   // URLPatternSet.
   runtime_lock_.AssertAcquired();
-  if (context_id_.has_value()) {
-    return GetDefaultPolicyBlockedHosts(context_id_.value()).MatchesURL(url) &&
-           !GetDefaultPolicyAllowedHosts(context_id_.value()).MatchesURL(url);
+  if (uses_default_policy_host_restrictions_ && context_id_.has_value()) {
+    base::AutoLock lock(GetContextPermissionsLock());
+    const URLPatternAccessSet& default_policy_restrictions =
+        GetContextPermissions(*context_id_).default_policy_restrictions;
+    return default_policy_restrictions.blocked_hosts.MatchesURL(url) &&
+           !default_policy_restrictions.allowed_hosts.MatchesURL(url);
   }
 
   return policy_blocked_hosts_unsafe_.MatchesURL(url) &&
          !policy_allowed_hosts_unsafe_.MatchesURL(url);
 }
 
+bool PermissionsData::IsUrlBlockedByUser(const GURL& document_url) const {
+  // Only applies when per-URL extension blocking is enabled.
+  if (!base::FeatureList::IsEnabled(
+          extensions_features::kExtensionsMenuAccessControl)) {
+    return false;
+  }
+
+  if (!context_id_ || location_ == mojom::ManifestLocation::kComponent ||
+      Manifest::IsPolicyLocation(location_)) {
+    return false;
+  }
+
+  base::AutoLock lock(GetContextPermissionsLock());
+  auto& context_permissions = GetContextPermissions(*context_id_);
+  // Check if the host is restricted by the user. `allowed_hosts` takes
+  // precedent over `blocked_hosts`. Note that, today, PermissionsManager
+  // ensures there's no overlap, but this will change if/when
+  // PermissionsManager uses URLPatterns instead of origins.
+  return context_permissions.user_restrictions.blocked_hosts.MatchesURL(
+             document_url) &&
+         !context_permissions.user_restrictions.allowed_hosts.MatchesURL(
+             document_url);
+}
+
 PermissionsData::PageAccess PermissionsData::CanRunOnPage(
     const GURL& document_url,
-    int tab_id,
     const URLPatternSet& permitted_url_patterns,
     const URLPatternSet& withheld_url_patterns,
     const URLPatternSet* tab_url_patterns,
+    PatternMatchMode match_mode,
     std::string* error) const {
   runtime_lock_.AssertAcquired();
   if (location_ != mojom::ManifestLocation::kComponent &&
@@ -539,14 +699,33 @@ PermissionsData::PageAccess PermissionsData::CanRunOnPage(
   if (IsRestrictedUrl(document_url, error))
     return PageAccess::kDenied;
 
-  if (tab_url_patterns && tab_url_patterns->MatchesURL(document_url))
-    return PageAccess::kAllowed;
+  if (IsUrlBlockedByUser(document_url)) {
+    if (error) {
+      // TODO(crbug.com/40803363): What level of information should
+      // we specify here? Policy host restrictions pass a descriptive error
+      // back to the extension; is there any harm in doing so?
+      *error = kErrorBlocked;
+    }
+    return PageAccess::kDenied;
+  }
 
-  if (permitted_url_patterns.MatchesURL(document_url))
-    return PageAccess::kAllowed;
+  auto matches_patterns = [&](const URLPatternSet& patterns) {
+    return match_mode == PatternMatchMode::kMatchSecurityOrigin
+               ? patterns.MatchesSecurityOrigin(document_url)
+               : patterns.MatchesURL(document_url);
+  };
 
-  if (withheld_url_patterns.MatchesURL(document_url))
+  if (tab_url_patterns && matches_patterns(*tab_url_patterns)) {
+    return PageAccess::kAllowed;
+  }
+
+  if (matches_patterns(permitted_url_patterns)) {
+    return PageAccess::kAllowed;
+  }
+
+  if (matches_patterns(withheld_url_patterns)) {
     return PageAccess::kWithheld;
+  }
 
   if (error) {
     if (active_permissions_unsafe_->HasAPIPermission(APIPermissionID::kTab)) {

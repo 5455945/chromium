@@ -1,24 +1,30 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "gpu/vulkan/tests/native_window.h"
 
+#include <memory>
+#include <utility>
+
+#include "base/check.h"
 #include "base/containers/flat_map.h"
-#include "ui/base/ui_base_features.h"
+#include "base/notimplemented.h"
+#include "build/build_config.h"
 #include "ui/platform_window/platform_window_delegate.h"
 #include "ui/platform_window/platform_window_init_properties.h"
 
-#if defined(USE_OZONE)
+#if BUILDFLAG(IS_OZONE)
 #include "ui/ozone/public/ozone_platform.h"
-#endif
-
-#if defined(USE_X11)
-#include "ui/platform_window/x11/x11_window.h"  // nogncheck
-#endif
+#endif  // BUILDFLAG(IS_OZONE)
 
 namespace gpu {
 namespace {
+
+class Window;
+using WindowMap =
+    base::flat_map<gfx::AcceleratedWidget, std::unique_ptr<Window>>;
+WindowMap* g_windows = nullptr;
 
 class Window : public ui::PlatformWindowDelegate {
  public:
@@ -28,26 +34,14 @@ class Window : public ui::PlatformWindowDelegate {
   void Initialize(const gfx::Rect& bounds) {
     DCHECK(!platform_window_);
 
-#if defined(USE_OZONE) || defined(USE_X11)
+#if BUILDFLAG(IS_OZONE)
     ui::PlatformWindowInitProperties props(bounds);
-#if defined(USE_OZONE)
-    if (features::IsUsingOzonePlatform()) {
-      platform_window_ = ui::OzonePlatform::GetInstance()->CreatePlatformWindow(
-          this, std::move(props));
-    }
-#endif
-#if defined(USE_X11)
-    if (!platform_window_) {
-      DCHECK(!features::IsUsingOzonePlatform());
-      auto x11_window = std::make_unique<ui::X11Window>(this);
-      x11_window->Initialize(std::move(props));
-      platform_window_ = std::move(x11_window);
-    }
-#endif
+    platform_window_ = ui::OzonePlatform::GetInstance()->CreatePlatformWindow(
+        this, std::move(props));
 #else
     NOTIMPLEMENTED();
     return;
-#endif
+#endif  // BUILDFLAG(IS_OZONE)
     platform_window_->Show();
   }
 
@@ -69,13 +63,11 @@ class Window : public ui::PlatformWindowDelegate {
   void OnWillDestroyAcceleratedWidget() override {}
   void OnAcceleratedWidgetDestroyed() override {}
   void OnActivationChanged(bool active) override {}
-  void OnMouseEnter() override {}
+  void OnCursorUpdate() override {}
 
   std::unique_ptr<ui::PlatformWindow> platform_window_;
   gfx::AcceleratedWidget widget_ = gfx::kNullAcceleratedWidget;
 };
-
-base::flat_map<gfx::AcceleratedWidget, std::unique_ptr<Window>> g_windows_;
 
 }  // namespace
 
@@ -83,15 +75,24 @@ gfx::AcceleratedWidget CreateNativeWindow(const gfx::Rect& bounds) {
   auto window = std::make_unique<Window>();
   window->Initialize(bounds);
   gfx::AcceleratedWidget widget = window->widget();
-  if (widget != gfx::kNullAcceleratedWidget)
-    g_windows_[widget] = std::move(window);
+  if (widget != gfx::kNullAcceleratedWidget) {
+    if (!g_windows) {
+      g_windows = new WindowMap();
+    }
+    (*g_windows)[widget] = std::move(window);
+  }
   return widget;
 }
 
 void DestroyNativeWindow(gfx::AcceleratedWidget window) {
-  auto it = g_windows_.find(window);
-  DCHECK(it != g_windows_.end());
-  g_windows_.erase(it);
+  CHECK(g_windows);
+  auto it = g_windows->find(window);
+  CHECK(it != g_windows->end());
+  g_windows->erase(it);
+  if (g_windows->empty()) {
+    delete g_windows;
+    g_windows = nullptr;
+  }
 }
 
 }  // namespace gpu

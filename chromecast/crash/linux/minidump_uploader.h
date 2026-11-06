@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,7 @@
 
 #include <string>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "chromecast/crash/linux/synchronized_minidump_manager.h"
 
 class PrefService;
@@ -26,11 +25,18 @@ class MinidumpUploader : public SynchronizedMinidumpManager {
       base::RepeatingCallback<std::unique_ptr<PrefService>()>;
 
   // If |server_url| is empty, a default server url will be chosen.
-  MinidumpUploader(CastSysInfo* sys_info, const std::string& server_url);
   MinidumpUploader(CastSysInfo* sys_info,
                    const std::string& server_url,
+                   const std::string& crash_report_product_name);
+  MinidumpUploader(CastSysInfo* sys_info,
+                   const std::string& server_url,
+                   const std::string& crash_report_product_name,
                    CastCrashdumpUploader* const uploader,
                    PrefServiceGeneratorCallback callback);
+
+  MinidumpUploader(const MinidumpUploader&) = delete;
+  MinidumpUploader& operator=(const MinidumpUploader&) = delete;
+
   ~MinidumpUploader() override;
 
   // Attempts to upload all minidumps in the minidumps directory. Acquires a
@@ -55,6 +61,11 @@ class MinidumpUploader : public SynchronizedMinidumpManager {
   const std::string system_version_;
 
   const std::string upload_location_;
+  // Not to be confused with |product_name_|, which is set to the real product
+  // name for the crash report, |crash_report_product_name_| should be set to
+  // the expected "product_name" field on go/crash to query the crash report,
+  // e.g. "Eureka".
+  const std::string crash_report_product_name_;
 
   // Whether or not a reboot should be scheduled.
   bool reboot_scheduled_;
@@ -65,8 +76,6 @@ class MinidumpUploader : public SynchronizedMinidumpManager {
   // Used for injecting mocks/inducing different behavior in unittests.
   CastCrashdumpUploader* const uploader_;
   PrefServiceGeneratorCallback pref_service_generator_;
-
-  DISALLOW_COPY_AND_ASSIGN(MinidumpUploader);
 };
 
 }  // namespace chromecast

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,10 @@
 #include <algorithm>
 
 #include "base/check_op.h"
+#include "base/notreached.h"
 #include "base/values.h"
+#include "pdf/draw_utils/coordinates.h"
+#include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
@@ -16,6 +19,7 @@ namespace chrome_pdf {
 
 namespace {
 
+constexpr char kDirection[] = "direction";
 constexpr char kDefaultPageOrientation[] = "defaultPageOrientation";
 constexpr char kTwoUpViewEnabled[] = "twoUpViewEnabled";
 
@@ -28,18 +32,7 @@ int GetWidestPageWidth(const std::vector<gfx::Size>& page_sizes) {
   return widest_page_width;
 }
 
-gfx::Rect InsetRect(const gfx::Rect& rect,
-                    const draw_utils::PageInsetSizes& inset_sizes) {
-  gfx::Rect inset_rect(rect);
-  inset_rect.Inset(inset_sizes.left, inset_sizes.top, inset_sizes.right,
-                   inset_sizes.bottom);
-  return inset_rect;
-}
-
 }  // namespace
-
-const draw_utils::PageInsetSizes DocumentLayout::kSingleViewInsets{
-    /*left=*/5, /*top=*/3, /*right=*/5, /*bottom=*/7};
 
 DocumentLayout::Options::Options() = default;
 
@@ -49,20 +42,23 @@ DocumentLayout::Options& DocumentLayout::Options::operator=(
 
 DocumentLayout::Options::~Options() = default;
 
-base::Value DocumentLayout::Options::ToValue() const {
-  base::Value dictionary(base::Value::Type::DICTIONARY);
-  dictionary.SetIntKey(kDefaultPageOrientation,
-                       static_cast<int32_t>(default_page_orientation_));
-  dictionary.SetBoolKey(kTwoUpViewEnabled,
-                        page_spread_ == PageSpread::kTwoUpOdd);
+base::DictValue DocumentLayout::Options::ToValue() const {
+  base::DictValue dictionary;
+  dictionary.Set(kDirection, direction_);
+  dictionary.Set(kDefaultPageOrientation,
+                 static_cast<int>(default_page_orientation_));
+  dictionary.Set(kTwoUpViewEnabled, page_spread_ == PageSpread::kTwoUpOdd);
   return dictionary;
 }
 
-void DocumentLayout::Options::FromValue(const base::Value& value) {
-  DCHECK(value.is_dict());
+void DocumentLayout::Options::FromValue(const base::DictValue& value) {
+  int32_t direction = value.FindInt(kDirection).value();
+  DCHECK_GE(direction, base::i18n::UNKNOWN_DIRECTION);
+  DCHECK_LE(direction, base::i18n::TEXT_DIRECTION_MAX);
+  direction_ = static_cast<base::i18n::TextDirection>(direction);
 
   int32_t default_page_orientation =
-      value.FindIntKey(kDefaultPageOrientation).value();
+      value.FindInt(kDefaultPageOrientation).value();
   DCHECK_GE(default_page_orientation,
             static_cast<int32_t>(PageOrientation::kOriginal));
   DCHECK_LE(default_page_orientation,
@@ -70,7 +66,7 @@ void DocumentLayout::Options::FromValue(const base::Value& value) {
   default_page_orientation_ =
       static_cast<PageOrientation>(default_page_orientation);
 
-  page_spread_ = value.FindBoolKey(kTwoUpViewEnabled).value()
+  page_spread_ = value.FindBool(kTwoUpViewEnabled).value()
                      ? PageSpread::kTwoUpOdd
                      : PageSpread::kOneUp;
 }
@@ -108,6 +104,7 @@ void DocumentLayout::ComputeLayout(const std::vector<gfx::Size>& page_sizes) {
     case PageSpread::kTwoUpOdd:
       return ComputeTwoUpOddLayout(page_sizes);
   }
+  NOTREACHED();
 }
 
 void DocumentLayout::ComputeOneUpLayout(
@@ -130,8 +127,8 @@ void DocumentLayout::ComputeOneUpLayout(
     gfx::Rect page_rect =
         draw_utils::GetRectForSingleView(page_size, document_size);
     CopyRectIfModified(page_rect, page_layouts_[i].outer_rect);
-    CopyRectIfModified(InsetRect(page_rect, kSingleViewInsets),
-                       page_layouts_[i].inner_rect);
+    page_rect.Inset(kSingleViewInsets);
+    CopyRectIfModified(page_rect, page_layouts_[i].inner_rect);
 
     draw_utils::ExpandDocumentSize(page_size, &document_size);
   }
@@ -153,9 +150,8 @@ void DocumentLayout::ComputeTwoUpOddLayout(
   }
 
   for (size_t i = 0; i < page_sizes.size(); ++i) {
-    draw_utils::PageInsetSizes page_insets =
-        draw_utils::GetPageInsetsForTwoUpView(
-            i, page_sizes.size(), kSingleViewInsets, kHorizontalSeparator);
+    gfx::Insets page_insets = draw_utils::GetPageInsetsForTwoUpView(
+        i, page_sizes.size(), kSingleViewInsets, kHorizontalSeparator);
     const gfx::Size& page_size = page_sizes[i];
 
     gfx::Rect page_rect;
@@ -169,8 +165,8 @@ void DocumentLayout::ComputeTwoUpOddLayout(
           0, std::max(page_size.height(), page_sizes[i - 1].height()));
     }
     CopyRectIfModified(page_rect, page_layouts_[i].outer_rect);
-    CopyRectIfModified(InsetRect(page_rect, page_insets),
-                       page_layouts_[i].inner_rect);
+    page_rect.Inset(page_insets);
+    CopyRectIfModified(page_rect, page_layouts_[i].inner_rect);
   }
 
   if (page_sizes.size() % 2 == 1) {

@@ -1,4 +1,4 @@
-# Copyright 2019 The Chromium Authors. All rights reserved.
+# Copyright 2019 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -12,8 +12,6 @@ from .composition_parts import WithIdentifier
 from .extended_attribute import ExtendedAttributes
 from .reference import RefById
 from .reference import RefByIdFactory
-from .typedef import Typedef
-from .user_defined_type import UserDefinedType
 
 # The implementation class hierarchy of IdlType
 #
@@ -24,7 +22,9 @@ from .user_defined_type import UserDefinedType
 # + TypedefType
 # + _ArrayLikeType
 # | + SequenceType
+# | + AsyncSequenceType
 # | + FrozenArrayType
+# | + ObservableArrayType
 # | + VariadicType
 # + RecordType
 # + PromiseType
@@ -32,6 +32,10 @@ from .user_defined_type import UserDefinedType
 # + NullableType
 
 _IDL_TYPE_PASS_KEY = object()
+
+
+def IsArrayLike(idl_object):
+    return isinstance(idl_object, _ArrayLikeType)
 
 
 class IdlTypeFactory(object):
@@ -48,7 +52,8 @@ class IdlTypeFactory(object):
         self._idl_types = []
         # Factory to initialize instances of ReferenceType.
         self._ref_by_id_factory = RefByIdFactory(
-            target_attrs_with_priority=RefById.get_all_attributes(IdlType))
+            target_attrs_with_priority=RefById.get_all_attributes(IdlType)
+        )
         # |_is_frozen| is initially False and you can create new instances of
         # IdlType.  The first invocation of |for_each| freezes the factory and
         # you can no longer create a new instance of IdlType.
@@ -101,6 +106,9 @@ class IdlTypeFactory(object):
     def sequence_type(self, *args, **kwargs):
         return self._create(SequenceType, args, kwargs)
 
+    def async_sequence_type(self, *args, **kwargs):
+        return self._create(AsyncSequenceType, args, kwargs)
+
     def frozen_array_type(self, *args, **kwargs):
         return self._create(FrozenArrayType, args, kwargs)
 
@@ -125,7 +133,8 @@ class IdlTypeFactory(object):
     def _create(self, idl_type_concrete_class, args, kwargs):
         assert not self._is_frozen
         idl_type = idl_type_concrete_class(
-            *args, pass_key=_IDL_TYPE_PASS_KEY, **kwargs)
+            *args, pass_key=_IDL_TYPE_PASS_KEY, **kwargs
+        )
         self._idl_types.append(idl_type)
         return idl_type
 
@@ -148,7 +157,7 @@ class IdlType(WithExtendedAttributes, WithDebugInfo):
     """
 
     class Optionality(object):
-        """https://heycam.github.io/webidl/#dfn-optionality-value"""
+        """https://webidl.spec.whatwg.org/#dfn-optionality-value"""
 
         class Type(str):
             pass
@@ -157,24 +166,30 @@ class IdlType(WithExtendedAttributes, WithDebugInfo):
         OPTIONAL = Type('optional')
         VARIADIC = Type('variadic')
 
-    def __init__(self,
-                 is_optional=False,
-                 extended_attributes=None,
-                 debug_info=None,
-                 pass_key=None):
+    def __init__(
+        self,
+        is_optional=False,
+        extended_attributes=None,
+        debug_info=None,
+        pass_key=None,
+    ):
         assert isinstance(is_optional, bool)
         assert pass_key is _IDL_TYPE_PASS_KEY
         WithExtendedAttributes.__init__(
-            self, extended_attributes, readonly=True)
+            self, extended_attributes, readonly=True
+        )
         WithDebugInfo.__init__(self, debug_info)
         self._is_optional = is_optional
 
     def __eq__(self, other):
         """Returns True if |self| and |other| represent the equivalent type."""
-        return (self.__class__ == other.__class__
-                and ExtendedAttributes.equals(self.extended_attributes,
-                                              other.extended_attributes)
-                and self.is_optional == other.is_optional)
+        return (
+            self.__class__ == other.__class__
+            and ExtendedAttributes.equals(
+                self.extended_attributes, other.extended_attributes
+            )
+            and self.is_optional == other.is_optional
+        )
 
     def __ne__(self, other):
         return not self == other
@@ -196,12 +211,13 @@ class IdlType(WithExtendedAttributes, WithDebugInfo):
     def type_name(self):
         """
         Returns the type name.
-        https://heycam.github.io/webidl/#dfn-type-name
+        https://webidl.spec.whatwg.org/#dfn-type-name
         Note that a type name is not necessarily unique.
         """
         return '{}{}'.format(
-            self.type_name_without_extended_attributes, ''.join(
-                sorted(self.effective_annotations.keys())))
+            self.type_name_without_extended_attributes,
+            ''.join(sorted(self.effective_annotations.keys())),
+        )
 
     @property
     def type_name_with_extended_attribute_key_values(self):
@@ -221,8 +237,8 @@ class IdlType(WithExtendedAttributes, WithDebugInfo):
     def keyword_typename(self):
         """
         Returns the keyword name of the type if this is a simple built-in type,
-        e.g. "any", "boolean", "unsigned long long", "void", etc.  Otherwise,
-        returns None.
+        e.g. "any", "boolean", "unsigned long long", "undefined", etc.
+        Otherwise, returns None.
         """
         return None
 
@@ -233,7 +249,7 @@ class IdlType(WithExtendedAttributes, WithDebugInfo):
 
         In case of x.apply_to_all_composing_elements(callback), |callback| will
         be recursively called back on x, x.inner_type, x.element_type,
-        x.result_type.original_type, etc. if any.
+        x.result_type, x.original_type, etc. if any.
 
         If |callback| raises a StopIteration, then this function stops
         traversing deeper than this type (inner type, etc.), however, siblings
@@ -273,7 +289,8 @@ class IdlType(WithExtendedAttributes, WithDebugInfo):
             value_counts[value] += 1
         assert value_counts[False] == 0 or value_counts[True] == 0, (
             "Specify only True or False arguments.  Unspecified arguments are "
-            "automatically set to the opposite value.")
+            "automatically set to the opposite value."
+        )
         default = value_counts[True] == 0
         for arg, value in switches.items():
             if value is None:
@@ -285,12 +302,12 @@ class IdlType(WithExtendedAttributes, WithDebugInfo):
     def effective_annotations(self):
         """
         Returns the extended attributes associated with this IDL type.
-        https://heycam.github.io/webidl/#idl-type-extended-attribute-associated-with
+        https://webidl.spec.whatwg.org/#idl-type-extended-attribute-associated-with
 
         For example, given the following IDL fragments,
 
           typedef [ExtAttr1] long NewLong;
-          void f([ExtAttr2] NewLong arg);
+          undefined f([ExtAttr2] NewLong arg);
 
         arg.idl_type.extended_attributes returns [ExtAttr2],
         arg.idl_type.unwrap().extended_attributes returns [ExtAttr1], and
@@ -302,7 +319,7 @@ class IdlType(WithExtendedAttributes, WithDebugInfo):
     def does_include_nullable_type(self):
         """
         Returns True if this type includes a nulllable type.
-        https://heycam.github.io/webidl/#dfn-includes-a-nullable-type
+        https://webidl.spec.whatwg.org/#dfn-includes-a-nullable-type
         """
         return False
 
@@ -331,6 +348,11 @@ class IdlType(WithExtendedAttributes, WithDebugInfo):
     @property
     def is_floating_point_numeric(self):
         """Returns True if this is a floating point numeric type."""
+        return False
+
+    @property
+    def is_bigint(self):
+        """Returns True if this is a bigint."""
         return False
 
     @property
@@ -391,8 +413,8 @@ class IdlType(WithExtendedAttributes, WithDebugInfo):
         return False
 
     @property
-    def is_void(self):
-        """Returns True if this is type 'void'."""
+    def is_undefined(self):
+        """Returns True if this is type 'undefined'."""
         return False
 
     @property
@@ -421,6 +443,16 @@ class IdlType(WithExtendedAttributes, WithDebugInfo):
         return False
 
     @property
+    def is_async_iterator(self):
+        """Returns True if this is an asynchronous iterator type."""
+        return False
+
+    @property
+    def is_sync_iterator(self):
+        """Returns True if this is a synchronous iterator type."""
+        return False
+
+    @property
     def is_typedef(self):
         """
         Returns True if this is a typedef.
@@ -434,6 +466,11 @@ class IdlType(WithExtendedAttributes, WithDebugInfo):
     @property
     def is_sequence(self):
         """Returns True if this is a sequence type."""
+        return False
+
+    @property
+    def is_async_sequence(self):
+        """Returns True if this is an async sequence type."""
         return False
 
     @property
@@ -460,6 +497,21 @@ class IdlType(WithExtendedAttributes, WithDebugInfo):
     def is_union(self):
         """Returns True if this is a union type."""
         return False
+
+    @property
+    def is_event_handler(self):
+        """
+        Returns True if this is an event handler type.
+
+        Event handler types are EventHandler, OnBeforeUnloadEventHandler,
+        and OnErrorEventHandler.
+        """
+
+        return self.is_typedef and self.identifier in (
+            "EventHandler",
+            "OnBeforeUnloadEventHandler",
+            "OnErrorEventHandler",
+        )
 
     @property
     def is_nullable(self):
@@ -508,8 +560,8 @@ class IdlType(WithExtendedAttributes, WithDebugInfo):
     @property
     def element_type(self):
         """
-        Returns the element type if |is_sequence|, |is_frozen_array|, or
-        |is_variadic|.
+        Returns the element type if |is_sequence|, |is_async_sequence|,
+        |is_frozen_array|, or |is_variadic|.
         """
         return None
 
@@ -537,7 +589,7 @@ class IdlType(WithExtendedAttributes, WithDebugInfo):
     def flattened_member_types(self):
         """
         Returns a set of flattened member types if |is_union|.
-        https://heycam.github.io/webidl/#dfn-flattened-union-member-types
+        https://webidl.spec.whatwg.org/#dfn-flattened-union-member-types
 
         Note that this is not simple flattening, and a nullable type will be
         unwrapped.  Annotated types are always unwrapped but you can access it
@@ -570,6 +622,16 @@ class IdlType(WithExtendedAttributes, WithDebugInfo):
         return None
 
     @property
+    def observable_array_definition_object(self):
+        """
+        Returns an object that represents an observable array or None.
+
+        Note that a returned object is not an IdlType.  It's of type
+        ObservableArray.
+        """
+        return None
+
+    @property
     def union_definition_object(self):
         """
         Returns an object that represents an union or None.
@@ -581,10 +643,14 @@ class IdlType(WithExtendedAttributes, WithDebugInfo):
     def _format_syntactic_form(self, syntactic_form_inner):
         """Helper function to implement |syntactic_form|."""
         optional_form = 'optional ' if self.is_optional else ''
-        ext_attr_form = ('{} '.format(self.extended_attributes.syntactic_form)
-                         if self.extended_attributes else '')
-        return '{}{}{}'.format(optional_form, ext_attr_form,
-                               syntactic_form_inner)
+        ext_attr_form = (
+            '{} '.format(self.extended_attributes.syntactic_form)
+            if self.extended_attributes
+            else ''
+        )
+        return '{}{}{}'.format(
+            optional_form, ext_attr_form, syntactic_form_inner
+        )
 
     def _unwrap(self, switches):
         return self
@@ -594,52 +660,93 @@ class SimpleType(IdlType):
     """
     Represents built-in types that do not contain other types internally.
     e.g. primitive types, string types, and object types.
-    https://heycam.github.io/webidl/#idl-types
+    https://webidl.spec.whatwg.org/#idl-types
     """
 
-    _INTEGER_TYPES = ('byte', 'octet', 'short', 'unsigned short', 'long',
-                      'unsigned long', 'long long', 'unsigned long long')
-    _FLOATING_POINT_NUMERIC_TYPES = ('float', 'unrestricted float', 'double',
-                                     'unrestricted double')
+    _INTEGER_TYPES = (
+        'byte',
+        'octet',
+        'short',
+        'unsigned short',
+        'long',
+        'unsigned long',
+        'long long',
+        'unsigned long long',
+    )
+    _FLOATING_POINT_NUMERIC_TYPES = (
+        'float',
+        'unrestricted float',
+        'double',
+        'unrestricted double',
+    )
     _NUMERIC_TYPES = _FLOATING_POINT_NUMERIC_TYPES + _INTEGER_TYPES
     _STRING_TYPES = ('DOMString', 'ByteString', 'USVString')
-    _TYPED_ARRAY_TYPES = ('Int8Array', 'Int16Array', 'Int32Array',
-                          'Uint8Array', 'Uint16Array', 'Uint32Array',
-                          'Uint8ClampedArray', 'Float32Array', 'Float64Array')
+    _TYPED_ARRAY_TYPES = (
+        'Int8Array',
+        'Int16Array',
+        'Int32Array',
+        'BigInt64Array',
+        'Uint8Array',
+        'Uint16Array',
+        'Uint32Array',
+        'BigUint64Array',
+        'Uint8ClampedArray',
+        'Float16Array',
+        'Float32Array',
+        'Float64Array',
+    )
     # ArrayBufferView is not defined as a buffer source type in Web IDL, it's
     # defined as an union type of all typed array types.  However, practically
     # it's much more convenient and reasonable for most of (if not all) use
     # cases to treat ArrayBufferView as a buffer source type than as an union
     # type.
-    # https://heycam.github.io/webidl/#ArrayBufferView
+    # https://webidl.spec.whatwg.org/#ArrayBufferView
     #
     # Note that BufferSource is an union type as defined in Web IDL.
-    # https://heycam.github.io/webidl/#BufferSource
+    # https://webidl.spec.whatwg.org/#BufferSource
     _BUFFER_SOURCE_TYPES = (
-        ('ArrayBuffer', 'ArrayBufferView', 'DataView') + _TYPED_ARRAY_TYPES)
-    _MISC_TYPES = ('any', 'boolean', 'object', 'symbol', 'void')
-    _VALID_TYPES = set(_NUMERIC_TYPES + _STRING_TYPES + _BUFFER_SOURCE_TYPES +
-                       _MISC_TYPES)
+        'ArrayBuffer',
+        'ArrayBufferView',
+        'DataView',
+    ) + _TYPED_ARRAY_TYPES
+    _MISC_TYPES = (
+        'any',
+        'bigint',
+        'boolean',
+        'object',
+        'symbol',
+        'undefined',
+        'void',
+    )
+    _VALID_TYPES = set(
+        _NUMERIC_TYPES + _STRING_TYPES + _BUFFER_SOURCE_TYPES + _MISC_TYPES
+    )
 
-    def __init__(self,
-                 name,
-                 is_optional=False,
-                 extended_attributes=None,
-                 debug_info=None,
-                 pass_key=None):
-        assert name in SimpleType._VALID_TYPES, (
-            'Unknown type name: {}'.format(name))
+    def __init__(
+        self,
+        name,
+        is_optional=False,
+        extended_attributes=None,
+        debug_info=None,
+        pass_key=None,
+    ):
+        assert name in SimpleType._VALID_TYPES, 'Unknown type name: {}'.format(
+            name
+        )
         IdlType.__init__(
             self,
             is_optional=is_optional,
             extended_attributes=extended_attributes,
             debug_info=debug_info,
-            pass_key=pass_key)
+            pass_key=pass_key,
+        )
         self._name = name
 
     def __eq__(self, other):
-        return (IdlType.__eq__(self, other)
-                and self.syntactic_form == other.syntactic_form)
+        return (
+            IdlType.__eq__(self, other)
+            and self.syntactic_form == other.syntactic_form
+        )
 
     def __hash__(self):
         return hash(self._name)
@@ -668,6 +775,10 @@ class SimpleType(IdlType):
     @property
     def is_floating_point_numeric(self):
         return self._name in SimpleType._FLOATING_POINT_NUMERIC_TYPES
+
+    @property
+    def is_bigint(self):
+        return self._name == 'bigint'
 
     @property
     def is_boolean(self):
@@ -710,8 +821,8 @@ class SimpleType(IdlType):
         return self._name == 'any'
 
     @property
-    def is_void(self):
-        return self._name == 'void'
+    def is_undefined(self):
+        return self._name == 'undefined' or self._name == 'void'
 
 
 class ReferenceType(IdlType, RefById):
@@ -726,13 +837,15 @@ class ReferenceType(IdlType, RefById):
     identifier may be resolved to a TypedefType.
     """
 
-    def __init__(self,
-                 identifier,
-                 is_optional=False,
-                 extended_attributes=None,
-                 debug_info=None,
-                 ref_by_id_factory=None,
-                 pass_key=None):
+    def __init__(
+        self,
+        identifier,
+        is_optional=False,
+        extended_attributes=None,
+        debug_info=None,
+        ref_by_id_factory=None,
+        pass_key=None,
+    ):
         assert isinstance(ref_by_id_factory, RefByIdFactory)
 
         IdlType.__init__(
@@ -740,13 +853,16 @@ class ReferenceType(IdlType, RefById):
             is_optional=is_optional,
             extended_attributes=extended_attributes,
             debug_info=debug_info,
-            pass_key=pass_key)
+            pass_key=pass_key,
+        )
         ref_by_id_factory.init_subclass_instance(
-            self, identifier=identifier, debug_info=debug_info)
+            self, identifier=identifier, debug_info=debug_info
+        )
 
     def __eq__(self, other):
-        return (IdlType.__eq__(self, other)
-                and self.identifier == other.identifier)
+        return (
+            IdlType.__eq__(self, other) and self.identifier == other.identifier
+        )
 
     def __hash__(self):
         return hash(self.identifier)
@@ -766,19 +882,20 @@ class DefinitionType(IdlType, WithIdentifier):
 
     def __init__(self, reference_type, user_defined_type, pass_key=None):
         assert isinstance(reference_type, ReferenceType)
-        assert isinstance(user_defined_type, UserDefinedType)
         IdlType.__init__(
             self,
             is_optional=reference_type.is_optional,
             extended_attributes=reference_type.extended_attributes,
             debug_info=reference_type.debug_info,
-            pass_key=pass_key)
+            pass_key=pass_key,
+        )
         WithIdentifier.__init__(self, user_defined_type.identifier)
         self._type_definition_object = user_defined_type
 
     def __eq__(self, other):
-        return (IdlType.__eq__(self, other)
-                and self.identifier == other.identifier)
+        return (
+            IdlType.__eq__(self, other) and self.identifier == other.identifier
+        )
 
     def __hash__(self):
         return hash(self.identifier)
@@ -816,6 +933,14 @@ class DefinitionType(IdlType, WithIdentifier):
         return self.type_definition_object.is_callback_function
 
     @property
+    def is_async_iterator(self):
+        return self.type_definition_object.is_async_iterator
+
+    @property
+    def is_sync_iterator(self):
+        return self.type_definition_object.is_sync_iterator
+
+    @property
     def type_definition_object(self):
         return self._type_definition_object
 
@@ -833,19 +958,20 @@ class TypedefType(IdlType, WithIdentifier):
 
     def __init__(self, reference_type, typedef, pass_key=None):
         assert isinstance(reference_type, ReferenceType)
-        assert isinstance(typedef, Typedef)
         IdlType.__init__(
             self,
             is_optional=reference_type.is_optional,
             extended_attributes=reference_type.extended_attributes,
             debug_info=reference_type.debug_info,
-            pass_key=pass_key)
+            pass_key=pass_key,
+        )
         WithIdentifier.__init__(self, typedef.identifier)
         self._typedef = typedef
 
     def __eq__(self, other):
-        return (IdlType.__eq__(self, other)
-                and self.identifier == other.identifier)
+        return (
+            IdlType.__eq__(self, other) and self.identifier == other.identifier
+        )
 
     def __hash__(self):
         return hash(self.identifier)
@@ -873,7 +999,8 @@ class TypedefType(IdlType, WithIdentifier):
         if not original_annotations:
             return self.extended_attributes
         return ExtendedAttributes(
-            list(self.extended_attributes) + list(original_annotations))
+            list(self.extended_attributes) + list(original_annotations)
+        )
 
     @property
     def does_include_nullable_type(self):
@@ -902,24 +1029,29 @@ class TypedefType(IdlType, WithIdentifier):
 
 
 class _ArrayLikeType(IdlType):
-    def __init__(self,
-                 element_type,
-                 is_optional=False,
-                 extended_attributes=None,
-                 debug_info=None,
-                 pass_key=None):
+    def __init__(
+        self,
+        element_type,
+        is_optional=False,
+        extended_attributes=None,
+        debug_info=None,
+        pass_key=None,
+    ):
         assert isinstance(element_type, IdlType)
         IdlType.__init__(
             self,
             is_optional=is_optional,
             extended_attributes=extended_attributes,
             debug_info=debug_info,
-            pass_key=pass_key)
+            pass_key=pass_key,
+        )
         self._element_type = element_type
 
     def __eq__(self, other):
-        return (IdlType.__eq__(self, other)
-                and self.element_type == other.element_type)
+        return (
+            IdlType.__eq__(self, other)
+            and self.element_type == other.element_type
+        )
 
     def __hash__(self):
         return hash((self.__class__, self.element_type))
@@ -937,26 +1069,30 @@ class _ArrayLikeType(IdlType):
 
 
 class SequenceType(_ArrayLikeType):
-    """https://heycam.github.io/webidl/#idl-sequence"""
+    """https://webidl.spec.whatwg.org/#idl-sequence"""
 
-    def __init__(self,
-                 element_type,
-                 is_optional=False,
-                 extended_attributes=None,
-                 debug_info=None,
-                 pass_key=None):
+    def __init__(
+        self,
+        element_type,
+        is_optional=False,
+        extended_attributes=None,
+        debug_info=None,
+        pass_key=None,
+    ):
         _ArrayLikeType.__init__(
             self,
             element_type,
             is_optional=is_optional,
             extended_attributes=extended_attributes,
             debug_info=debug_info,
-            pass_key=pass_key)
+            pass_key=pass_key,
+        )
 
     @property
     def syntactic_form(self):
-        return self._format_syntactic_form('sequence<{}>'.format(
-            self.element_type.syntactic_form))
+        return self._format_syntactic_form(
+            'sequence<{}>'.format(self.element_type.syntactic_form)
+        )
 
     @property
     def type_name_without_extended_attributes(self):
@@ -967,27 +1103,66 @@ class SequenceType(_ArrayLikeType):
         return True
 
 
-class FrozenArrayType(_ArrayLikeType):
-    """https://heycam.github.io/webidl/#idl-frozen-array"""
+class AsyncSequenceType(_ArrayLikeType):
+    """https://webidl.spec.whatwg.org/#idl-async-iterable-type"""
 
-    def __init__(self,
-                 element_type,
-                 is_optional=False,
-                 extended_attributes=None,
-                 debug_info=None,
-                 pass_key=None):
+    def __init__(
+        self,
+        element_type,
+        is_optional=False,
+        extended_attributes=None,
+        debug_info=None,
+        pass_key=None,
+    ):
         _ArrayLikeType.__init__(
             self,
             element_type,
             is_optional=is_optional,
             extended_attributes=extended_attributes,
             debug_info=debug_info,
-            pass_key=pass_key)
+            pass_key=pass_key,
+        )
 
     @property
     def syntactic_form(self):
-        return self._format_syntactic_form('FrozenArray<{}>'.format(
-            self.element_type.syntactic_form))
+        return self._format_syntactic_form(
+            'async_sequence<{}>'.format(self.element_type.syntactic_form)
+        )
+
+    @property
+    def type_name_without_extended_attributes(self):
+        return '{}AsyncSequence'.format(self.element_type.type_name)
+
+    @property
+    def is_async_sequence(self):
+        return True
+
+
+class FrozenArrayType(_ArrayLikeType):
+    """https://webidl.spec.whatwg.org/#idl-frozen-array"""
+
+    def __init__(
+        self,
+        element_type,
+        is_optional=False,
+        extended_attributes=None,
+        debug_info=None,
+        pass_key=None,
+    ):
+        _ArrayLikeType.__init__(
+            self,
+            element_type,
+            is_optional=is_optional,
+            extended_attributes=extended_attributes,
+            debug_info=debug_info,
+            pass_key=pass_key,
+        )
+
+    @property
+    def syntactic_form(self):
+        return self._format_syntactic_form(
+            'FrozenArray<{}>'.format(self.element_type.syntactic_form)
+        )
 
     @property
     def type_name_without_extended_attributes(self):
@@ -999,25 +1174,31 @@ class FrozenArrayType(_ArrayLikeType):
 
 
 class ObservableArrayType(_ArrayLikeType):
-    """https://heycam.github.io/webidl/#idl-observable-array"""
+    """https://webidl.spec.whatwg.org/#idl-observable-array"""
 
-    def __init__(self,
-                 element_type,
-                 is_optional=False,
-                 extended_attributes=None,
-                 debug_info=None,
-                 pass_key=None):
-        _ArrayLikeType.__init__(self,
-                                element_type,
-                                is_optional=is_optional,
-                                extended_attributes=extended_attributes,
-                                debug_info=debug_info,
-                                pass_key=pass_key)
+    def __init__(
+        self,
+        element_type,
+        is_optional=False,
+        extended_attributes=None,
+        debug_info=None,
+        pass_key=None,
+    ):
+        _ArrayLikeType.__init__(
+            self,
+            element_type,
+            is_optional=is_optional,
+            extended_attributes=extended_attributes,
+            debug_info=debug_info,
+            pass_key=pass_key,
+        )
+        self._observable_array_definition_object = None
 
     @property
     def syntactic_form(self):
-        return self._format_syntactic_form('ObservableArray<{}>'.format(
-            self.element_type.syntactic_form))
+        return self._format_syntactic_form(
+            'ObservableArray<{}>'.format(self.element_type.syntactic_form)
+        )
 
     @property
     def type_name_without_extended_attributes(self):
@@ -1027,13 +1208,26 @@ class ObservableArrayType(_ArrayLikeType):
     def is_observable_array(self):
         return True
 
+    @property
+    def observable_array_definition_object(self):
+        return self._observable_array_definition_object
+
+    def set_observable_array_definition_object(
+        self, observable_array_definition_object
+    ):
+        assert self._observable_array_definition_object is None
+        self._observable_array_definition_object = (
+            observable_array_definition_object
+        )
+
 
 class VariadicType(_ArrayLikeType):
     """Represents a type used for variadic arguments."""
 
     def __init__(self, element_type, debug_info=None, pass_key=None):
         _ArrayLikeType.__init__(
-            self, element_type, debug_info=debug_info, pass_key=pass_key)
+            self, element_type, debug_info=debug_info, pass_key=pass_key
+        )
 
     @property
     def syntactic_form(self):
@@ -1060,15 +1254,17 @@ class VariadicType(_ArrayLikeType):
 
 
 class RecordType(IdlType):
-    """https://heycam.github.io/webidl/#idl-record"""
+    """https://webidl.spec.whatwg.org/#idl-record"""
 
-    def __init__(self,
-                 key_type,
-                 value_type,
-                 is_optional=False,
-                 extended_attributes=None,
-                 debug_info=None,
-                 pass_key=None):
+    def __init__(
+        self,
+        key_type,
+        value_type,
+        is_optional=False,
+        extended_attributes=None,
+        debug_info=None,
+        pass_key=None,
+    ):
         assert isinstance(key_type, IdlType)
         assert isinstance(value_type, IdlType)
         IdlType.__init__(
@@ -1076,26 +1272,34 @@ class RecordType(IdlType):
             is_optional=is_optional,
             extended_attributes=extended_attributes,
             debug_info=debug_info,
-            pass_key=pass_key)
+            pass_key=pass_key,
+        )
         self._key_type = key_type
         self._value_type = value_type
 
     def __eq__(self, other):
-        return (IdlType.__eq__(self, other) and self.key_type == other.key_type
-                and self.value_type == other.value_type)
+        return (
+            IdlType.__eq__(self, other)
+            and self.key_type == other.key_type
+            and self.value_type == other.value_type
+        )
 
     def __hash__(self):
         return hash((self.__class__, self.key_type, self.value_type))
 
     @property
     def syntactic_form(self):
-        return self._format_syntactic_form('record<{}, {}>'.format(
-            self.key_type.syntactic_form, self.value_type.syntactic_form))
+        return self._format_syntactic_form(
+            'record<{}, {}>'.format(
+                self.key_type.syntactic_form, self.value_type.syntactic_form
+            )
+        )
 
     @property
     def type_name_without_extended_attributes(self):
-        return '{}{}Record'.format(self.key_type.type_name,
-                                   self.value_type.type_name)
+        return '{}{}Record'.format(
+            self.key_type.type_name, self.value_type.type_name
+        )
 
     def apply_to_all_composing_elements(self, callback):
         try:
@@ -1119,34 +1323,40 @@ class RecordType(IdlType):
 
 
 class PromiseType(IdlType):
-    """https://heycam.github.io/webidl/#idl-promise"""
+    """https://webidl.spec.whatwg.org/#idl-promise"""
 
-    def __init__(self,
-                 result_type,
-                 is_optional=False,
-                 extended_attributes=None,
-                 debug_info=None,
-                 pass_key=None):
+    def __init__(
+        self,
+        result_type,
+        is_optional=False,
+        extended_attributes=None,
+        debug_info=None,
+        pass_key=None,
+    ):
         assert isinstance(result_type, IdlType)
         IdlType.__init__(
             self,
             is_optional=is_optional,
             extended_attributes=extended_attributes,
             debug_info=debug_info,
-            pass_key=pass_key)
+            pass_key=pass_key,
+        )
         self._result_type = result_type
 
     def __eq__(self, other):
-        return (IdlType.__eq__(self, other)
-                and self.result_type == other.result_type)
+        return (
+            IdlType.__eq__(self, other)
+            and self.result_type == other.result_type
+        )
 
     def __hash__(self):
         return hash((self.__class__, self.result_type))
 
     @property
     def syntactic_form(self):
-        return self._format_syntactic_form('Promise<{}>'.format(
-            self.result_type.syntactic_form))
+        return self._format_syntactic_form(
+            'Promise<{}>'.format(self.result_type.syntactic_form)
+        )
 
     @property
     def type_name_without_extended_attributes(self):
@@ -1170,14 +1380,20 @@ class PromiseType(IdlType):
 
 
 class UnionType(IdlType):
-    """https://heycam.github.io/webidl/#idl-union"""
+    """https://webidl.spec.whatwg.org/#idl-union"""
 
-    def __init__(self,
-                 member_types,
-                 is_optional=False,
-                 extended_attributes=None,
-                 debug_info=None,
-                 pass_key=None):
+    class Usage(object):
+        INPUT = 1
+        OUTPUT = 2
+
+    def __init__(
+        self,
+        member_types,
+        is_optional=False,
+        extended_attributes=None,
+        debug_info=None,
+        pass_key=None,
+    ):
         assert isinstance(member_types, (list, tuple))
         assert all(isinstance(member, IdlType) for member in member_types)
         IdlType.__init__(
@@ -1185,9 +1401,11 @@ class UnionType(IdlType):
             is_optional=is_optional,
             extended_attributes=extended_attributes,
             debug_info=debug_info,
-            pass_key=pass_key)
+            pass_key=pass_key,
+        )
         self._member_types = tuple(member_types)
         self._union_definition_object = None
+        self._usage = 0
 
     def __eq__(self, other):
         """
@@ -1201,22 +1419,41 @@ class UnionType(IdlType):
         anything else is taken into account.  This is mostly consistent with
         that X != Y where Y is typedef'ed to X.
         """
-        return (IdlType.__eq__(self, other)
-                and set(self.member_types) == set(other.member_types))
+        return IdlType.__eq__(self, other) and set(self.member_types) == set(
+            other.member_types
+        )
 
     def __hash__(self):
-        return hash((self.__class__,
-                     functools.reduce(lambda x, idl_type: x + hash(idl_type),
-                                      self.member_types, 0)))
+        return hash(
+            (
+                self.__class__,
+                functools.reduce(
+                    lambda x, idl_type: x + hash(idl_type), self.member_types, 0
+                ),
+            )
+        )
 
     @property
     def syntactic_form(self):
-        return self._format_syntactic_form('({})'.format(' or '.join(
-            [member.syntactic_form for member in self.member_types])))
+        return self._format_syntactic_form(
+            '({})'.format(
+                ' or '.join(
+                    [member.syntactic_form for member in self.member_types]
+                )
+            )
+        )
 
     @property
     def type_name_without_extended_attributes(self):
-        return 'Or'.join([member.type_name for member in self.member_types])
+        # The type name of union type is defined as a concatenation of the type
+        # names of each member type, _in order_, putting "Or" in-between each
+        # name.  However, there is (almost) no benefit to follow this exact
+        # definition, or even it's harmful because each instance of UnionType
+        # could have different type names even when the types are
+        # indistinguishable.  Thus, we sort the type names of each member type.
+        return 'Or'.join(
+            sorted(member.type_name for member in self.member_types)
+        )
 
     def apply_to_all_composing_elements(self, callback):
         try:
@@ -1229,12 +1466,14 @@ class UnionType(IdlType):
     @property
     def does_include_nullable_type(self):
         return any(
-            member.does_include_nullable_type for member in self.member_types)
+            member.does_include_nullable_type for member in self.member_types
+        )
 
     @property
     def does_include_nullable_or_dict(self):
-        return any(member.does_include_nullable_or_dict
-                   for member in self.member_types)
+        return any(
+            member.does_include_nullable_or_dict for member in self.member_types
+        )
 
     @property
     def is_union(self):
@@ -1250,7 +1489,9 @@ class UnionType(IdlType):
             if idl_type.is_union:
                 return functools.reduce(
                     lambda x, idl_type: x + flatten(idl_type),
-                    idl_type.member_types, [])
+                    idl_type.member_types,
+                    [],
+                )
             elif idl_type.is_typedef:
                 return flatten(idl_type.original_type)
             elif idl_type.is_nullable:
@@ -1265,34 +1506,51 @@ class UnionType(IdlType):
         return self._union_definition_object
 
     def set_union_definition_object(self, union_definition_object):
-        # In Python2, we need to avoid circular imports.
-        from .union import Union
-        assert isinstance(union_definition_object, Union)
         assert self._union_definition_object is None
         self._union_definition_object = union_definition_object
 
+    @property
+    def is_phantom(self):
+        """Returns True if a class for union should not be generated,
+        as would be the case if enum only exists at the IDL level and
+        is not passed down to implementation. This can happen when all
+        enum variants are coerced to a single type."""
+        return "PassAsSpan" in self.effective_annotations
+
+    @property
+    def usage(self):
+        return self._usage
+
+    def add_usage(self, usage):
+        assert isinstance(usage, int)
+        self._usage = self._usage | usage
+
 
 class NullableType(IdlType):
-    """https://heycam.github.io/webidl/#idl-nullable-type"""
+    """https://webidl.spec.whatwg.org/#idl-nullable-type"""
 
-    def __init__(self,
-                 inner_type,
-                 is_optional=False,
-                 extended_attributes=None,
-                 debug_info=None,
-                 pass_key=None):
+    def __init__(
+        self,
+        inner_type,
+        is_optional=False,
+        extended_attributes=None,
+        debug_info=None,
+        pass_key=None,
+    ):
         assert isinstance(inner_type, IdlType)
         IdlType.__init__(
             self,
             is_optional=is_optional,
             extended_attributes=extended_attributes,
             debug_info=debug_info,
-            pass_key=pass_key)
+            pass_key=pass_key,
+        )
         self._inner_type = inner_type
 
     def __eq__(self, other):
-        return (IdlType.__eq__(self, other)
-                and self.inner_type == other.inner_type)
+        return (
+            IdlType.__eq__(self, other) and self.inner_type == other.inner_type
+        )
 
     def __hash__(self):
         return hash((self.__class__, self.inner_type))
@@ -1304,7 +1562,7 @@ class NullableType(IdlType):
 
     @property
     def type_name_without_extended_attributes(self):
-        # https://heycam.github.io/webidl/#idl-annotated-types
+        # https://webidl.spec.whatwg.org/#idl-annotated-types
         # Web IDL seems not supposing a case of [X] ([Y] Type)?, i.e. something
         # like [X] nullable<[Y] Type>, which should turn into "TypeYOrNullX".
         #
@@ -1312,7 +1570,8 @@ class NullableType(IdlType):
         # the type name must be "LongOrNullClamp" instead of "LongClampOrNull".
         assert not self.extended_attributes
         return '{}OrNull'.format(
-            self.inner_type.type_name_without_extended_attributes)
+            self.inner_type.type_name_without_extended_attributes
+        )
 
     def apply_to_all_composing_elements(self, callback):
         try:

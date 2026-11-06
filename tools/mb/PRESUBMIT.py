@@ -1,35 +1,39 @@
-# Copyright 2015 The Chromium Authors. All rights reserved.
+# Copyright 2015 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-USE_PYTHON3 = True
+
+PRESUBMIT_VERSION = '2.0.0'
 
 
-def _CommonChecks(input_api, output_api):
-  results = []
+def CheckFreeze(input_api, output_api):
+  return input_api.canned_checks.CheckInfraFreeze(input_api, output_api)
 
-  # Run Pylint over the files in the directory.
-  pylint_checks = input_api.canned_checks.GetPylint(input_api, output_api)
-  results.extend(input_api.RunTests(pylint_checks))
 
-  # Run the MB unittests.
-  results.extend(input_api.canned_checks.RunUnitTestsInDirectory(
-      input_api, output_api, '.', [ r'^.+_unittest\.py$']))
+def CheckTests(input_api, output_api):
+  if not input_api.HasAffectedFiles(extensions='.py'):
+    return []
+  return input_api.RunTests(
+    input_api.canned_checks.GetUnitTestsInDirectory(
+      input_api, output_api, '.', [r'.+_(unit)?test\.py$']
+    )
+  )
 
-  # Validate the format of the mb_config.pyl file.
-  cmd = [input_api.python_executable, 'mb.py', 'validate']
+
+def CheckMbValidate(input_api, output_api):
+  if not input_api.HasAffectedFiles(
+    path=['mb_config.pyl', 'mb.py', 'mb_config_expectations']
+  ):
+    return []
+  cmd = [input_api.python3_executable, 'mb.py', 'validate']
   kwargs = {'cwd': input_api.PresubmitLocalPath()}
-  results.extend(input_api.RunTests([
-      input_api.Command(name='mb_validate',
-                        cmd=cmd, kwargs=kwargs,
-                        message=output_api.PresubmitError)]))
-
-  return results
-
-
-def CheckChangeOnUpload(input_api, output_api):
-  return _CommonChecks(input_api, output_api)
-
-
-def CheckChangeOnCommit(input_api, output_api):
-  return _CommonChecks(input_api, output_api)
+  return input_api.RunTests(
+    [
+      input_api.Command(
+        name='mb_validate',
+        cmd=cmd,
+        kwargs=kwargs,
+        message=output_api.PresubmitError,
+      ),
+    ]
+  )

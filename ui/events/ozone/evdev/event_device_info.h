@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,11 +10,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <string>
 #include <vector>
 
 #include "base/component_export.h"
-#include "base/macros.h"
+#include "base/containers/span.h"
 #include "ui/events/devices/input_device.h"
 #include "ui/events/ozone/evdev/event_device_util.h"
 
@@ -45,6 +46,19 @@ enum COMPONENT_EXPORT(EVDEV) EventDeviceType {
   DT_ALL,
 };
 
+// Status of Keyboard Device
+enum COMPONENT_EXPORT(EVDEV) KeyboardType {
+  NOT_KEYBOARD,
+  IN_BLOCKLIST,
+  STYLUS_BUTTON_DEVICE,
+  VALID_KEYBOARD,
+  IN_ALLOWLIST,
+};
+
+std::ostream& operator<<(std::ostream& os, const KeyboardType value);
+
+std::ostream& operator<<(std::ostream& os, const EventDeviceType value);
+
 // Device information for Linux input devices
 //
 // This stores and queries information about input devices; in
@@ -52,21 +66,25 @@ enum COMPONENT_EXPORT(EVDEV) EventDeviceType {
 class COMPONENT_EXPORT(EVDEV) EventDeviceInfo {
  public:
   EventDeviceInfo();
+
+  EventDeviceInfo(const EventDeviceInfo&) = delete;
+  EventDeviceInfo& operator=(const EventDeviceInfo&) = delete;
+
   ~EventDeviceInfo();
 
   // Initialize device information from an open device.
   bool Initialize(int fd, const base::FilePath& path);
 
   // Manual initialization.
-  void SetEventTypes(const unsigned long* ev_bits, size_t len);
-  void SetKeyEvents(const unsigned long* key_bits, size_t len);
-  void SetRelEvents(const unsigned long* rel_bits, size_t len);
-  void SetAbsEvents(const unsigned long* abs_bits, size_t len);
-  void SetMscEvents(const unsigned long* msc_bits, size_t len);
-  void SetSwEvents(const unsigned long* sw_bits, size_t len);
-  void SetLedEvents(const unsigned long* led_bits, size_t len);
-  void SetFfEvents(const unsigned long* ff_bits, size_t len);
-  void SetProps(const unsigned long* prop_bits, size_t len);
+  void SetEventTypes(base::span<const unsigned long> ev_bits);
+  void SetKeyEvents(base::span<const unsigned long> key_bits);
+  void SetRelEvents(base::span<const unsigned long> rel_bits);
+  void SetAbsEvents(base::span<const unsigned long> abs_bits);
+  void SetMscEvents(base::span<const unsigned long> msc_bits);
+  void SetSwEvents(base::span<const unsigned long> sw_bits);
+  void SetLedEvents(base::span<const unsigned long> led_bits);
+  void SetFfEvents(base::span<const unsigned long> ff_bits);
+  void SetProps(base::span<const unsigned long> prop_bits);
   void SetAbsInfo(unsigned int code, const input_absinfo& absinfo);
   void SetAbsMtSlots(unsigned int code, const std::vector<int32_t>& values);
   void SetAbsMtSlot(unsigned int code, unsigned int slot, uint32_t value);
@@ -133,6 +151,9 @@ class COMPONENT_EXPORT(EVDEV) EventDeviceInfo {
   // Has stylus EV_KEY events.
   bool HasStylus() const;
 
+  // Determine status of keyboard device (No keyboard, In blocklist, ect.).
+  KeyboardType GetKeyboardType() const;
+
   // Determine whether there's a keyboard on this device.
   bool HasKeyboard() const;
 
@@ -146,6 +167,9 @@ class COMPONENT_EXPORT(EVDEV) EventDeviceInfo {
   // Determine whether there's a touchpad on this device.
   bool HasTouchpad() const;
 
+  // Determine whether there's a haptic touchpad on this device.
+  bool HasHapticTouchpad() const;
+
   // Determine whether there's a tablet on this device.
   bool HasTablet() const;
 
@@ -155,11 +179,24 @@ class COMPONENT_EXPORT(EVDEV) EventDeviceInfo {
   // Determine whether there's a stylus garage switch on this device.
   bool HasStylusSwitch() const;
 
+  // Determine whether there are numberpad keys on this device.
+  bool HasNumberpad() const;
+
   // Determine whether there's a gamepad on this device.
   bool HasGamepad() const;
 
+  // Determine whether horizontal and vertical resolutions are reported by the
+  // device.
+  bool HasValidMTAbsXY() const;
+
+  // Determine whether this device supports heatmap.
+  bool SupportsHeatmap() const;
+
   // Determine whether the device supports rumble.
   bool SupportsRumble() const;
+
+  // Determine whether it's semi-multitouch device.
+  bool IsSemiMultitouch() const;
 
   // Determine if this is a dedicated device for a stylus button.
   bool IsStylusButtonDevice() const;
@@ -169,11 +206,21 @@ class COMPONENT_EXPORT(EVDEV) EventDeviceInfo {
   // device is used to track the mute switch state.
   bool IsMicrophoneMuteSwitchDevice() const;
 
+  // Determine if this device uses libinput for touchpad.
+  bool UseLibinput() const;
+
   // The device type (internal or external.)
   InputDeviceType device_type() const { return device_type_; }
 
+  std::array<unsigned long, EVDEV_BITS_TO_LONGS(KEY_CNT)> GetKeyBits() const {
+    return key_bits_;
+  }
+
   // Determines InputDeviceType from device identification.
   static InputDeviceType GetInputDeviceTypeFromId(input_id id);
+
+  // Determines if device is within a limited set of internal USB devices.
+  static bool IsInternalUSB(input_id id);
 
  private:
   enum class LegacyAbsoluteDeviceType {
@@ -187,20 +234,20 @@ class COMPONENT_EXPORT(EVDEV) EventDeviceInfo {
   // do not tell us what the axes mean.
   LegacyAbsoluteDeviceType ProbeLegacyAbsoluteDevice() const;
 
-  unsigned long ev_bits_[EVDEV_BITS_TO_LONGS(EV_CNT)];
-  unsigned long key_bits_[EVDEV_BITS_TO_LONGS(KEY_CNT)];
-  unsigned long rel_bits_[EVDEV_BITS_TO_LONGS(REL_CNT)];
-  unsigned long abs_bits_[EVDEV_BITS_TO_LONGS(ABS_CNT)];
-  unsigned long msc_bits_[EVDEV_BITS_TO_LONGS(MSC_CNT)];
-  unsigned long sw_bits_[EVDEV_BITS_TO_LONGS(SW_CNT)];
-  unsigned long led_bits_[EVDEV_BITS_TO_LONGS(LED_CNT)];
-  unsigned long prop_bits_[EVDEV_BITS_TO_LONGS(INPUT_PROP_CNT)];
-  unsigned long ff_bits_[EVDEV_BITS_TO_LONGS(FF_CNT)];
+  std::array<unsigned long, EVDEV_BITS_TO_LONGS(EV_CNT)> ev_bits_;
+  std::array<unsigned long, EVDEV_BITS_TO_LONGS(KEY_CNT)> key_bits_;
+  std::array<unsigned long, EVDEV_BITS_TO_LONGS(REL_CNT)> rel_bits_;
+  std::array<unsigned long, EVDEV_BITS_TO_LONGS(ABS_CNT)> abs_bits_;
+  std::array<unsigned long, EVDEV_BITS_TO_LONGS(MSC_CNT)> msc_bits_;
+  std::array<unsigned long, EVDEV_BITS_TO_LONGS(SW_CNT)> sw_bits_;
+  std::array<unsigned long, EVDEV_BITS_TO_LONGS(LED_CNT)> led_bits_;
+  std::array<unsigned long, EVDEV_BITS_TO_LONGS(INPUT_PROP_CNT)> prop_bits_;
+  std::array<unsigned long, EVDEV_BITS_TO_LONGS(FF_CNT)> ff_bits_;
 
-  struct input_absinfo abs_info_[ABS_CNT];
+  std::array<input_absinfo, ABS_CNT> abs_info_;
 
   // Store the values for the multi-touch properties for each slot.
-  std::vector<int32_t> slot_values_[EVDEV_ABS_MT_COUNT];
+  std::array<std::vector<int32_t>, EVDEV_ABS_MT_COUNT> slot_values_;
 
   // Device identification.
   std::string name_;
@@ -212,10 +259,8 @@ class COMPONENT_EXPORT(EVDEV) EventDeviceInfo {
 
   // Whether this is an internal or external device.
   InputDeviceType device_type_ = InputDeviceType::INPUT_DEVICE_UNKNOWN;
-
-  DISALLOW_COPY_AND_ASSIGN(EventDeviceInfo);
 };
 
-}  // namspace ui
+}  // namespace ui
 
 #endif  // UI_EVENTS_OZONE_EVDEV_EVENT_DEVICE_INFO_H_

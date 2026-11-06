@@ -26,6 +26,7 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/html/html_frame_owner_element.h"
 #include "third_party/blink/renderer/core/layout/layout_replaced.h"
+#include "third_party/blink/renderer/platform/transforms/affine_transform.h"
 
 namespace ui {
 class Cursor;
@@ -42,20 +43,11 @@ class WebPluginContainerImpl;
 class CORE_EXPORT LayoutEmbeddedContent : public LayoutReplaced {
  public:
   explicit LayoutEmbeddedContent(HTMLFrameOwnerElement*);
-  ~LayoutEmbeddedContent() override;
-
-  bool ContentDocumentContainsGraphicsLayer() const;
 
   bool NodeAtPoint(HitTestResult&,
                    const HitTestLocation&,
                    const PhysicalOffset& accumulated_offset,
-                   HitTestAction) override;
-
-  void AddRef() {
-    NOT_DESTROYED();
-    ++ref_count_;
-  }
-  void Release();
+                   HitTestPhase) override;
 
   // LayoutEmbeddedContent::ChildFrameView returns the LocalFrameView associated
   // with the current Node, if Node is HTMLFrameOwnerElement. This is different
@@ -66,7 +58,8 @@ class CORE_EXPORT LayoutEmbeddedContent : public LayoutReplaced {
   WebPluginContainerImpl* Plugin() const;
   EmbeddedContentView* GetEmbeddedContentView() const;
 
-  PhysicalRect ReplacedContentRect() const final;
+  PhysicalRect ReplacedContentRectFrom(
+      const PhysicalRect& base_content_rect) const override;
 
   void UpdateOnEmbeddedContentViewChange();
   void UpdateGeometry(EmbeddedContentView&);
@@ -78,11 +71,17 @@ class CORE_EXPORT LayoutEmbeddedContent : public LayoutReplaced {
 
   bool IsThrottledFrameView() const;
 
+  virtual bool ShowsUnavailablePluginIndicator() const;
+
  protected:
   PaintLayerType LayerTypeRequired() const override;
 
-  void StyleDidChange(StyleDifference, const ComputedStyle* old_style) final;
-  void UpdateLayout() override;
+  PhysicalNaturalSizingInfo GetNaturalDimensions() const override;
+
+  void StyleDidChange(StyleDifference,
+                      const ComputedStyle* old_style,
+                      const ComputedStyle& new_style,
+                      const StyleChangeContext&) override;
   void PaintReplaced(const PaintInfo&,
                      const PhysicalOffset& paint_offset) const override;
   CursorDirective GetCursor(const PhysicalOffset&, ui::Cursor&) const final;
@@ -97,23 +96,22 @@ class CORE_EXPORT LayoutEmbeddedContent : public LayoutReplaced {
     return To<HTMLFrameOwnerElement>(GetNode());
   }
 
- private:
-  bool CanHaveAdditionalCompositingReasons() const override {
-    NOT_DESTROYED();
-    return true;
-  }
-  CompositingReasons AdditionalCompositingReasons() const override;
+  void CountSvgFilterPaint() const;
 
-  void WillBeDestroyed() final;
-  void DeleteThis() final;
+ private:
+  void WillBeDestroyed(const ComputedStyle*) final;
 
   bool NodeAtPointOverEmbeddedContentView(
       HitTestResult&,
       const HitTestLocation&,
       const PhysicalOffset& accumulated_offset,
-      HitTestAction);
+      HitTestPhase);
 
-  int ref_count_;
+  bool PointOverResizer(const HitTestResult&,
+                        const HitTestLocation&,
+                        const PhysicalOffset& accumulated_offset) const;
+
+  void PropagateZoomFactor(double zoom_factor);
 };
 
 template <>

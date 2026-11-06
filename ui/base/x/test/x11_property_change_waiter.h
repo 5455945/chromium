@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,11 @@
 
 #include <stdint.h>
 
-#include <memory>
-
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "ui/events/platform_event.h"
 #include "ui/gfx/x/connection.h"
 #include "ui/gfx/x/event.h"
-#include "ui/gfx/x/x11_window_event_manager.h"
+#include "ui/gfx/x/window_event_manager.h"
 
 namespace ui {
 
@@ -22,6 +19,10 @@ namespace ui {
 class X11PropertyChangeWaiter : public x11::EventObserver {
  public:
   X11PropertyChangeWaiter(x11::Window window, const char* property);
+
+  X11PropertyChangeWaiter(const X11PropertyChangeWaiter&) = delete;
+  X11PropertyChangeWaiter& operator=(const X11PropertyChangeWaiter&) = delete;
+
   ~X11PropertyChangeWaiter() override;
 
   // Blocks till the value of |property_| changes.
@@ -37,18 +38,18 @@ class X11PropertyChangeWaiter : public x11::EventObserver {
   // x11::EventObserver:
   void OnEvent(const x11::Event& event) override;
 
+  const raw_ptr<x11::Connection> connection_;
+
   x11::Window x_window_;
   const char* property_;
 
-  std::unique_ptr<x11::XScopedEventSelector> x_window_events_;
+  x11::ScopedEventSelector x_window_events_;
 
   // Whether Wait() should block.
   bool wait_;
 
   // Ends the run loop.
   base::OnceClosure quit_closure_;
-
-  DISALLOW_COPY_AND_ASSIGN(X11PropertyChangeWaiter);
 };
 
 }  // namespace ui

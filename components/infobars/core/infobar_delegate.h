@@ -1,30 +1,21 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_INFOBARS_CORE_INFOBAR_DELEGATE_H_
 #define COMPONENTS_INFOBARS_CORE_INFOBAR_DELEGATE_H_
 
+#include <optional>
 #include <string>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
-#include "ui/base/window_open_disposition.h"
+#include "ui/base/mojom/window_open_disposition.mojom-forward.h"
 #include "url/gurl.h"
 
 class ConfirmInfoBarDelegate;
-class HungRendererInfoBarDelegate;
 class ThemeInstalledInfoBarDelegate;
 
-namespace blocked_content {
-class PopupBlockedInfoBarDelegate;
-}
-
-#if defined(OS_ANDROID)
-namespace offline_pages {
-class OfflinePageInfoBarDelegate;
-}
-#endif
 
 namespace translate {
 class TranslateInfoBarDelegate;
@@ -33,6 +24,10 @@ class TranslateInfoBarDelegate;
 namespace gfx {
 class Image;
 struct VectorIcon;
+}  // namespace gfx
+
+namespace ui {
+class ImageModel;
 }
 
 namespace infobars {
@@ -46,6 +41,22 @@ class InfoBar;
 // InfoBar variety.
 class InfoBarDelegate {
  public:
+  // Used to arbitrate visibility and queueing order of InfoBars on a
+  // per-WebContents basis.
+  enum class InfobarPriority {
+    // Promotional or non-urgent surfaces.
+    kLow = 0,
+
+    // Standard feature-driven prompts. Examples: Translate, Save Password,
+    // Send Tab to Self, Extensions web auth flow.
+    kDefault = 1,
+
+    // Security/safety-critical surfaces. Examples:  tab-sharing warnings, other
+    // critical banners. May stack up to a small cap and are never preempted by
+    // lower tiers.
+    kCriticalSecurity = 2,
+  };
+
   // The type of the infobar. It controls its appearance, such as its background
   // color.
   enum Type {
@@ -53,30 +64,28 @@ class InfoBarDelegate {
     PAGE_ACTION_TYPE,
   };
 
-  enum InfoBarAutomationType {
-    CONFIRM_INFOBAR,
-    PASSWORD_INFOBAR,
-    RPH_INFOBAR,
-    UNKNOWN_INFOBAR,
-  };
-
+  // NOTE FOR DESKTOP INFOBARS:
+  // All new desktop infobars MUST use the centralized BrowserInfoBarManager
+  // framework (via InfoBarSpec) rather than directly subclassing
+  // ConfirmInfoBarDelegate or calling CreateConfirmInfoBar().
+  //
   // Unique identifier for every InfoBarDelegate subclass.  Use suffixes to mark
   // infobars specific to particular OSes/platforms.
-  // KEEP IN SYNC WITH THE InfoBarIdentifier ENUM IN enums.xml.
   // NEW VALUES MUST BE APPENDED AND AVOID CHANGING ANY PRE-EXISTING VALUES.
   // A Java counterpart will be generated for this enum.
   // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.chrome.browser.infobar
+  // LINT.IfChange(InfoBarIdentifier)
   enum InfoBarIdentifier {
     INVALID = -1,
     TEST_INFOBAR = 0,
     // Removed: APP_BANNER_INFOBAR_DELEGATE = 1,
     // Removed: APP_BANNER_INFOBAR_DELEGATE_DESKTOP = 2,
     // Removed: ANDROID_DOWNLOAD_MANAGER_DUPLICATE_INFOBAR_DELEGATE = 3,
-    DUPLICATE_DOWNLOAD_INFOBAR_DELEGATE_ANDROID = 4,
+    // Removed: DUPLICATE_DOWNLOAD_INFOBAR_DELEGATE_ANDROID = 4,
     // Removed: DOWNLOAD_REQUEST_INFOBAR_DELEGATE_ANDROID = 5,
     // Removed: FULLSCREEN_INFOBAR_DELEGATE = 6,
-    HUNG_PLUGIN_INFOBAR_DELEGATE = 7,
-    HUNG_RENDERER_INFOBAR_DELEGATE_ANDROID = 8,
+    // Removed: HUNG_PLUGIN_INFOBAR_DELEGATE = 7,
+    // Removed: HUNG_RENDERER_INFOBAR_DELEGATE_ANDROID = 8,
     // Removed: MEDIA_STREAM_INFOBAR_DELEGATE_ANDROID = 9,
     // Removed: MEDIA_THROTTLE_INFOBAR_DELEGATE = 10,
     // Removed: REQUEST_QUOTA_INFOBAR_DELEGATE = 11,
@@ -85,24 +94,24 @@ class InfoBarDelegate {
     INCOGNITO_CONNECTABILITY_INFOBAR_DELEGATE = 14,
     THEME_INSTALLED_INFOBAR_DELEGATE = 15,
     // Removed: GEOLOCATION_INFOBAR_DELEGATE_ANDROID = 16,
-    THREE_D_API_INFOBAR_DELEGATE = 17,
+    // Removed: THREE_D_API_INFOBAR_DELEGATE = 17,
     // Removed: INSECURE_CONTENT_INFOBAR_DELEGATE = 18,
     // Removed: MIDI_PERMISSION_INFOBAR_DELEGATE_ANDROID = 19,
     // Removed: PROTECTED_MEDIA_IDENTIFIER_INFOBAR_DELEGATE_ANDROID = 20,
-    NACL_INFOBAR_DELEGATE = 21,
+    // Removed: NACL_INFOBAR_DELEGATE = 21,
     // Removed: DATA_REDUCTION_PROXY_INFOBAR_DELEGATE_ANDROID = 22,
     // Removed: NOTIFICATION_PERMISSION_INFOBAR_DELEGATE = 23,
     // Removed: AUTO_SIGNIN_FIRST_RUN_INFOBAR_DELEGATE = 24,
-    GENERATED_PASSWORD_SAVED_INFOBAR_DELEGATE_ANDROID = 25,
+    // Removed: GENERATED_PASSWORD_SAVED_INFOBAR_DELEGATE_ANDROID = 25,
     SAVE_PASSWORD_INFOBAR_DELEGATE_MOBILE = 26,
     // Removed: PEPPER_BROKER_INFOBAR_DELEGATE = 27,
-    PERMISSION_UPDATE_INFOBAR_DELEGATE_ANDROID = 28,
+    // Removed: PERMISSION_UPDATE_INFOBAR_DELEGATE_ANDROID = 28,
     // Removed: DURABLE_STORAGE_PERMISSION_INFOBAR_DELEGATE_ANDROID = 29,
     // Removed: NPAPI_REMOVAL_INFOBAR_DELEGATE = 30,
-    OUTDATED_PLUGIN_INFOBAR_DELEGATE = 31,
+    // Removed: OUTDATED_PLUGIN_INFOBAR_DELEGATE = 31,
     // Removed: PLUGIN_METRO_MODE_INFOBAR_DELEGATE = 32,
-    RELOAD_PLUGIN_INFOBAR_DELEGATE = 33,
-    PLUGIN_OBSERVER_INFOBAR_DELEGATE = 34,
+    // Removed: RELOAD_PLUGIN_INFOBAR_DELEGATE = 33,
+    // Removed: PLUGIN_OBSERVER_INFOBAR_DELEGATE = 34,
     // Removed: SSL_ADD_CERTIFICATE = 35,
     // Removed: SSL_ADD_CERTIFICATE_INFOBAR_DELEGATE = 36,
     POPUP_BLOCKED_INFOBAR_DELEGATE_MOBILE = 37,
@@ -115,7 +124,7 @@ class InfoBarDelegate {
     DEFAULT_BROWSER_INFOBAR_DELEGATE = 44,
     GOOGLE_API_KEYS_INFOBAR_DELEGATE = 45,
     OBSOLETE_SYSTEM_INFOBAR_DELEGATE = 46,
-    SESSION_CRASHED_INFOBAR_DELEGATE_IOS = 47,
+    // Removed: SESSION_CRASHED_INFOBAR_DELEGATE_IOS = 47,
     PAGE_INFO_INFOBAR_DELEGATE = 48,
     AUTOFILL_CC_INFOBAR_DELEGATE_MOBILE = 49,
     TRANSLATE_INFOBAR_DELEGATE_NON_AURA = 50,
@@ -125,58 +134,92 @@ class InfoBarDelegate {
     // Removed: NATIVE_APP_OPEN_POLICY_INFOBAR_DELEGATE = 54,
     RE_SIGN_IN_INFOBAR_DELEGATE_IOS = 55,
     SHOW_PASSKIT_ERROR_INFOBAR_DELEGATE_IOS = 56,
-    // Removed: READER_MODE_INFOBAR_DELEGATE_IOS = 57,
+    READER_MODE_INFOBAR_DELEGATE_IOS = 57,
     SYNC_ERROR_INFOBAR_DELEGATE_IOS = 58,
-    UPGRADE_INFOBAR_DELEGATE_IOS = 59,
-    WINDOW_ERROR_INFOBAR_DELEGATE_ANDROID = 60,
-    DANGEROUS_DOWNLOAD_INFOBAR_DELEGATE_ANDROID = 61,
+    // Removed: UPGRADE_INFOBAR_DELEGATE_IOS = 59,
+    // Removed: WINDOW_ERROR_INFOBAR_DELEGATE_ANDROID = 60,
+    // Removed: DANGEROUS_DOWNLOAD_INFOBAR_DELEGATE_ANDROID = 61,
     // Removed: DESKTOP_SEARCH_REDIRECTION_INFOBAR_DELEGATE = 62,
-    UPDATE_PASSWORD_INFOBAR_DELEGATE_MOBILE = 63,
-    DATA_REDUCTION_PROMO_INFOBAR_DELEGATE_ANDROID = 64,
-    AUTOFILL_CREDIT_CARD_FILLING_INFOBAR_DELEGATE_ANDROID = 65,
-    ADS_BLOCKED_INFOBAR_DELEGATE_ANDROID = 66,
-    INSTANT_APPS_INFOBAR_DELEGATE_ANDROID = 67,
+    // Removed: UPDATE_PASSWORD_INFOBAR_DELEGATE_MOBILE = 63,
+    // Removed: DATA_REDUCTION_PROMO_INFOBAR_DELEGATE_ANDROID = 64,
+    // Removed: AUTOFILL_CREDIT_CARD_FILLING_INFOBAR_DELEGATE_ANDROID = 65,
+    // Removed: ADS_BLOCKED_INFOBAR_DELEGATE_ANDROID = 66,
+    // Removed: INSTANT_APPS_INFOBAR_DELEGATE_ANDROID = 67,
     // Removed: DATA_REDUCTION_PROXY_PREVIEW_INFOBAR_DELEGATE = 68,
-    SCREEN_CAPTURE_INFOBAR_DELEGATE_ANDROID = 69,
-    GROUPED_PERMISSION_INFOBAR_DELEGATE_ANDROID = 70,
-    OFFLINE_PAGE_INFOBAR_DELEGATE_ANDROID = 71,
-    SEARCH_GEOLOCATION_DISCLOSURE_INFOBAR_DELEGATE_ANDROID = 72,
+    // Removed: SCREEN_CAPTURE_INFOBAR_DELEGATE_ANDROID = 69,
+    // Removed: PERMISSION_INFOBAR_DELEGATE_ANDROID = 70,
+    // Removed: OFFLINE_PAGE_INFOBAR_DELEGATE_ANDROID = 71,
+    // Removed: SEARCH_GEOLOCATION_DISCLOSURE_INFOBAR_DELEGATE_ANDROID = 72,
     AUTOMATION_INFOBAR_DELEGATE = 73,
-    VR_SERVICES_UPGRADE_ANDROID = 74,
-    READER_MODE_INFOBAR_ANDROID = 75,
-    VR_FEEDBACK_INFOBAR_ANDROID = 76,
-    FRAMEBUST_BLOCK_INFOBAR_ANDROID = 77,
-    SURVEY_INFOBAR_ANDROID = 78,
-    NEAR_OOM_INFOBAR_ANDROID = 79,
-    INSTALLABLE_AMBIENT_BADGE_INFOBAR_DELEGATE = 80,
+    // Removed: VR_SERVICES_UPGRADE_ANDROID = 74,
+    // Removed: READER_MODE_INFOBAR_ANDROID = 75,
+    // Removed: VR_FEEDBACK_INFOBAR_ANDROID = 76,
+    // Removed: FRAMEBUST_BLOCK_INFOBAR_ANDROID = 77,
+    // Removed: SURVEY_INFOBAR_ANDROID = 78,
+    // Removed: NEAR_OOM_INFOBAR_ANDROID = 79,
+    // Removed: INSTALLABLE_AMBIENT_BADGE_INFOBAR_DELEGATE = 80,
     // Removed: PAGE_LOAD_CAPPING_INFOBAR_DELEGATE = 81,
-    DOWNLOAD_PROGRESS_INFOBAR_ANDROID = 82,
-    AR_CORE_UPGRADE_ANDROID = 83,
-    BLOATED_RENDERER_INFOBAR_DELEGATE = 84,
+    // Removed: DOWNLOAD_PROGRESS_INFOBAR_ANDROID = 82,
+    // Removed: AR_CORE_UPGRADE_ANDROID = 83,
+    // Removed: BLOATED_RENDERER_INFOBAR_DELEGATE = 84,
     // Removed: SUPERVISED_USERS_DEPRECATED_INFOBAR_DELEGATE = 85,
-    NEAR_OOM_REDUCTION_INFOBAR_ANDROID = 86,
+    // Removed: NEAR_OOM_REDUCTION_INFOBAR_ANDROID = 86,
     // Removed: LITE_PAGE_PREVIEWS_INFOBAR = 87,
-    MODULE_INSTALL_FAILURE_INFOBAR_ANDROID = 88,
-    INLINE_UPDATE_READY_INFOBAR_ANDROID = 89,
-    INLINE_UPDATE_FAILED_INFOBAR_ANDROID = 90,
+    // Removed: MODULE_INSTALL_FAILURE_INFOBAR_ANDROID = 88,
+    // Removed: INLINE_UPDATE_READY_INFOBAR_ANDROID = 89,
+    // Removed: INLINE_UPDATE_FAILED_INFOBAR_ANDROID = 90,
     // Removed: FLASH_DEPRECATION_INFOBAR_DELEGATE = 91,
     SEND_TAB_TO_SELF_INFOBAR_DELEGATE = 92,
     TAB_SHARING_INFOBAR_DELEGATE = 93,
-    SAFETY_TIP_INFOBAR_DELEGATE = 94,
-    WEBOTP_SERVICE_INFOBAR_DELEGATE = 95,
+    // Removed SAFETY_TIP_INFOBAR_DELEGATE = 94,
+    // Removed: WEBOTP_SERVICE_INFOBAR_DELEGATE = 95,
     KNOWN_INTERCEPTION_DISCLOSURE_INFOBAR_DELEGATE = 96,
-    SYNC_ERROR_INFOBAR_DELEGATE_ANDROID = 97,
-    MIXED_CONTENT_DOWNLOAD_INFOBAR_DELEGATE_ANDROID = 98,
-    CONDITIONAL_TAB_STRIP_INFOBAR_ANDROID = 99,
-    LITE_MODE_HTTPS_IMAGE_COMPRESSION_INFOBAR_ANDROID = 100,
+    // Removed: SYNC_ERROR_INFOBAR_DELEGATE_ANDROID = 97,
+    // Removed: INSECURE_DOWNLOAD_INFOBAR_DELEGATE_ANDROID = 98,
+    // Removed: CONDITIONAL_TAB_STRIP_INFOBAR_ANDROID = 99,
+    // Removed: LITE_MODE_HTTPS_IMAGE_COMPRESSION_INFOBAR_ANDROID = 100,
     // Removed: SYSTEM_INFOBAR_DELEGATE_MAC = 101,
-    EXPERIMENTAL_INFOBAR_DELEGATE_LACROS = 102,
+    // Removed: EXPERIMENTAL_INFOBAR_DELEGATE_LACROS = 102,
     // Removed: ROSETTA_REQUIRED_INFOBAR_DELEGATE = 103,
     // Removed: WEBID_PERMISSION_INFOBAR_DELEGATE = 104,
-    AUTOFILL_OFFER_NOTIFICATION_INFOBAR_DELEGATE = 105,
+    // Removed: AUTOFILL_OFFER_NOTIFICATION_INFOBAR_DELEGATE = 105,
     AUTOFILL_ADDRESS_PROFILE_INFOBAR_DELEGATE_IOS = 106,
     ADD_TO_READING_LIST_IOS = 107,
+    IOS_PERMISSIONS_INFOBAR_DELEGATE = 108,
+    // Removed: SUPPORTED_LINKS_INFOBAR_DELEGATE_CHROMEOS = 109,
+    // Removed: AUTOFILL_VIRTUAL_CARD_ENROLLMENT_INFOBAR_DELEGATE_MOBILE = 110,
+    TAILORED_SECURITY_SERVICE_INFOBAR_DELEGATE = 111,
+    CHROME_FOR_TESTING_INFOBAR_DELEGATE = 112,
+    EXTENSIONS_WEB_AUTH_FLOW_INFOBAR_DELEGATE = 113,
+    // Removed: TAB_PICKUP_INFOBAR_DELEGATE = 114,
+    LOCAL_TEST_POLICIES_APPLIED_INFOBAR = 115,
+    // Removed: BIDDING_AND_AUCTION_CONSENTED_DEBUGGING_DELEGATE = 116,
+    // Removed: PARCEL_TRACKING_INFOBAR_DELEGATE = 117,
+    // Removed: TEST_THIRD_PARTY_COOKIE_PHASEOUT_DELEGATE = 118,
+    ENABLE_LINK_CAPTURING_INFOBAR_DELEGATE = 119,
+    DEV_TOOLS_SHARED_PROCESS_DELEGATE = 120,
+    ENHANCED_SAFE_BROWSING_INFOBAR_DELEGATE = 121,
+    CREDENTIAL_PROVIDER_INFOBAR_DELEGATE_IOS = 122,
+    PDF_INFOBAR_DELEGATE = 123,
+    INSTALLER_DOWNLOADER_INFOBAR_DELEGATE = 124,
+    COLLABORATION_GROUP_UPDATE_INFOBAR_DELEGATE = 125,
+    COLLABORATION_OUT_OF_DATE_INFOBAR_DELEGATE = 126,
+    PIN_INFOBAR_DELEGATE = 127,
+    SESSION_RESTORE_INFOBAR_DELEGATE = 128,
+    // Removed: ROLL_BACK_MODE_B_INFOBAR_DELEGATE = 129,
+    DEV_TOOLS_REMOTE_DEBUGGING_INFOBAR_DELEGATE = 130,
+    STARTUP_LAUNCH_INFOBAR_DELEGATE = 131,
+    AUTOFILL_AI_SAVE_ENTITY_INFOBAR_DELEGATE_IOS = 132,
+    JS_OPTIMIZATIONS_INFOBAR_DELEGATE = 133,
+    WEB_APP_BLOCKED_MIGRATION_INFOBAR_DELEGATE = 134,
+    OSCRYPTASYNC_AVAILABILITY_INFOBAR_DELEGATE = 135,
+    AUTOFILL_AI_PRE_FETCH_FAILURE_INFOBAR_DELEGATE_IOS = 136,
+    // Removed: SIGNIN_QRCODE_INFOBAR_DELEGATE = 137,
+    FORMS_AI_PRIVATE_INFERENCE_INFOBAR_DELEGATE_IOS = 138,
+    PASSWORD_SAVED_INFOBAR_DELEGATE_IOS = 139,
+    CONTEXTUAL_CUE_INFOBAR_DELEGATE_IOS = 140,
   };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/browser/enums.xml:InfoBarIdentifier)
 
   // Describes navigation events, used to decide whether infobars should be
   // dismissed.
@@ -189,12 +232,20 @@ class InfoBarDelegate {
     bool did_replace_entry;
     bool is_reload;
     bool is_redirect;
+#if BUILDFLAG(IS_IOS)
     // True if the navigation was caused by a form submission.
-    bool is_form_submission = false;
+    bool is_form_submission;
+    // True if the navigation was caused by a user gesture, e.g. reload or load
+    // new content from the omnibox.
+    bool has_user_gesture;
+#endif  // BUILDFLAG(IS_IOS)
   };
 
   // Value to use when the InfoBar has no icon to show.
   static const int kNoIconID;
+
+  InfoBarDelegate(const InfoBarDelegate&) = delete;
+  InfoBarDelegate& operator=(const InfoBarDelegate&) = delete;
 
   // Called when the InfoBar that owns this delegate is being destroyed.  At
   // this point nothing is visible onscreen.
@@ -205,7 +256,8 @@ class InfoBarDelegate {
   // and in histograms/enums.xml.
   virtual InfoBarIdentifier GetIdentifier() const = 0;
 
-  virtual InfoBarAutomationType GetInfoBarAutomationType() const;
+  // Returns the priority tier for this infobar delegate. Default is kDefault.
+  virtual InfobarPriority GetPriority() const;
 
   // Returns the resource ID of the icon to be shown for this InfoBar.  If the
   // value is equal to |kNoIconID|, GetIcon() will not show an icon by default.
@@ -222,7 +274,7 @@ class InfoBarDelegate {
   // Most subclasses should not override this; override GetIconId() instead
   // unless the infobar needs to show an image from somewhere other than the
   // resource bundle as its icon.
-  virtual gfx::Image GetIcon() const;
+  virtual ui::ImageModel GetIcon() const;
 
   // Returns the text of the link to be displayed, if any. Otherwise returns
   // an empty string.
@@ -230,6 +282,10 @@ class InfoBarDelegate {
 
   // Returns the URL the link should navigate to.
   virtual GURL GetLinkURL() const;
+
+  // Returns the accessible text of the link to give more context to the screen
+  // reader. Otherwise returns std::nullopt.
+  virtual std::optional<std::u16string> GetLinkAccessibleText() const;
 
   // Returns true if the supplied |delegate| is equal to this one. Equality is
   // left to the implementation to define. This function is called by the
@@ -253,7 +309,7 @@ class InfoBarDelegate {
   //
   // The |disposition| specifies how the resulting document should be loaded
   // (based on the event flags present when the link was clicked).
-  virtual bool LinkClicked(WindowOpenDisposition disposition);
+  virtual bool LinkClicked(ui::mojom::WindowOpenDisposition disposition);
 
   // Called when the user clicks on the close button to dismiss the infobar.
   virtual void InfoBarDismissed();
@@ -265,34 +321,41 @@ class InfoBarDelegate {
   // default.
   virtual bool ShouldAnimate() const;
 
+  // Returns true if the InfoBar should hide when the browser is in fullscreen
+  // mode. False by default.
+  virtual bool ShouldHideInFullscreen() const;
+
   // Type-checking downcast routines:
   virtual ConfirmInfoBarDelegate* AsConfirmInfoBarDelegate();
-  virtual HungRendererInfoBarDelegate* AsHungRendererInfoBarDelegate();
-  virtual blocked_content::PopupBlockedInfoBarDelegate*
-  AsPopupBlockedInfoBarDelegate();
+  virtual const ConfirmInfoBarDelegate* AsConfirmInfoBarDelegate() const;
   virtual ThemeInstalledInfoBarDelegate* AsThemePreviewInfobarDelegate();
+#if BUILDFLAG(IS_IOS)
   virtual translate::TranslateInfoBarDelegate* AsTranslateInfoBarDelegate();
-#if defined(OS_ANDROID)
-  virtual offline_pages::OfflinePageInfoBarDelegate*
-  AsOfflinePageInfoBarDelegate();
 #endif
 
   void set_infobar(InfoBar* infobar) { infobar_ = infobar; }
   void set_nav_entry_id(int nav_entry_id) { nav_entry_id_ = nav_entry_id; }
+  void set_dark_mode(bool dark_mode) { dark_mode_ = dark_mode; }
 
  protected:
   InfoBarDelegate();
 
   InfoBar* infobar() { return infobar_; }
 
+  bool dark_mode() const { return dark_mode_; }
+
  private:
   // The InfoBar associated with us.
-  InfoBar* infobar_ = nullptr;
+  raw_ptr<InfoBar> infobar_ = nullptr;
 
   // The ID of the active navigation entry at the time we became owned.
   int nav_entry_id_ = 0;
 
-  DISALLOW_COPY_AND_ASSIGN(InfoBarDelegate);
+  // Whether the background of the InfoBar is dark. Normally, this is a UI-level
+  // concern that delegates need not worry about. However, some delegates need
+  // to change their behavior in this case, e.g. by returning a different icon
+  // entirely, not just one with a different color.
+  bool dark_mode_ = false;
 };
 
 }  // namespace infobars

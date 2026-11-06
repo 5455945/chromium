@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -26,32 +26,6 @@ const NameMapElement<It2MeHostState> kIt2MeHostStates[] = {
     {It2MeHostState::kInvalidDomainError, kHostStateDomainError},
 };
 
-}
-
-bool ParseIt2MeNativeMessageJson(const std::string& message,
-                                 std::string& message_type,
-                                 base::Value& dictionary_value) {
-  auto opt_message = base::JSONReader::Read(message);
-  if (!opt_message.has_value()) {
-    LOG(ERROR) << "Received a message that's not valid JSON.";
-    return false;
-  }
-
-  auto message_value = std::move(opt_message.value());
-  if (!message_value.is_dict()) {
-    LOG(ERROR) << "Received a message that's not a dictionary.";
-    return false;
-  }
-
-  const std::string* message_type_value =
-      message_value.FindStringPath(kMessageType);
-  if (message_type_value) {
-    message_type = *message_type_value;
-  }
-
-  dictionary_value = std::move(message_value);
-
-  return true;
 }
 
 std::string It2MeHostStateToString(It2MeHostState host_state) {

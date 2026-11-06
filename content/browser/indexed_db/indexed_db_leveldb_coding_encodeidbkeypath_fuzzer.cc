@@ -1,11 +1,13 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <fuzzer/FuzzedDataProvider.h>
 #include <stddef.h>
 #include <stdint.h>
 
-#include <fuzzer/FuzzedDataProvider.h>
+#include <string_view>
+#include <tuple>
 
 #include "base/strings/utf_string_conversions.h"
 #include "content/browser/indexed_db/indexed_db_leveldb_coding.h"
@@ -50,13 +52,13 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   FuzzedDataProvider fuzzed_data(data, size);
   IndexedDBKeyPath key_path = GetKeyPath(&fuzzed_data);
   std::string result;
-  content::EncodeIDBKeyPath(key_path, &result);
+  content::indexed_db::EncodeIDBKeyPath(key_path, &result);
 
   // Ensure that |result| can be decoded back into the original key path.
   IndexedDBKeyPath decoded_key_path;
-  auto result_str_piece = base::StringPiece(result);
-  ignore_result(
-      content::DecodeIDBKeyPath(&result_str_piece, &decoded_key_path));
+  auto result_str_view = std::string_view(result);
+  std::ignore = content::indexed_db::DecodeIDBKeyPath(&result_str_view,
+                                                      &decoded_key_path);
   assert(decoded_key_path == key_path);
   return 0;
 }

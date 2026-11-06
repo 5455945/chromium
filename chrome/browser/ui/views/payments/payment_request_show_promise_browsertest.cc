@@ -1,13 +1,14 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ui/views/payments/payment_request_browsertest_base.h"
 #include "chrome/browser/ui/views/payments/payment_request_dialog_view_ids.h"
-#include "components/autofill/core/browser/autofill_test_utils.h"
-#include "components/autofill/core/browser/data_model/autofill_profile.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
+#include "components/payments/core/features.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -19,18 +20,19 @@ namespace payments {
 namespace {
 
 class PaymentRequestShowPromiseTest : public PaymentRequestBrowserTestBase {
- protected:
-  PaymentRequestShowPromiseTest() {}
-  ~PaymentRequestShowPromiseTest() override {}
+ public:
+  PaymentRequestShowPromiseTest(const PaymentRequestShowPromiseTest&) = delete;
+  PaymentRequestShowPromiseTest& operator=(
+      const PaymentRequestShowPromiseTest&) = delete;
 
-  // Installs the payment handler for window.location.href payment method that
+ protected:
+  PaymentRequestShowPromiseTest() { SetBypassUserInteractionForTesting(); }
+  ~PaymentRequestShowPromiseTest() override = default;
+
+  // Installs the payment handler for window.location.origin payment method that
   // responds to "paymentrequest" events by echoing back the "total" object.
   void InstallEchoPaymentHandler() {
-    std::string contents;
-    ASSERT_TRUE(content::ExecuteScriptAndExtractString(
-        GetActiveWebContents(), "install();", &contents));
-    ASSERT_EQ(contents, "instruments.set(): Payment handler installed.")
-        << contents;
+    InstallPaymentApp("a.com", "/show_promise/app.js", &payment_method_);
   }
 
   // Shows the browser payment sheet.
@@ -40,11 +42,10 @@ class PaymentRequestShowPromiseTest : public PaymentRequestBrowserTestBase {
                                  DialogEvent::SPEC_DONE_UPDATING,
                                  DialogEvent::PROCESSING_SPINNER_HIDDEN,
                                  DialogEvent::DIALOG_OPENED});
-    // The boolean "true" makes the payment method be the URL of the webpage,
-    // which is necessary because service workers cannot use "basic-card"
-    // payment method (the default payment method of the test page).
-    ASSERT_TRUE(content::ExecuteScript(GetActiveWebContents(), "buy(true);"));
-    WaitForObservedEvent();
+    ASSERT_TRUE(
+        content::ExecJs(GetActiveWebContents(),
+                        content::JsReplace("buy($1)", payment_method_)));
+    ASSERT_TRUE(WaitForObservedEvent());
     EXPECT_TRUE(web_modal::WebContentsModalDialogManager::FromWebContents(
                     GetActiveWebContents())
                     ->IsDialogActive());
@@ -71,8 +72,9 @@ class PaymentRequestShowPromiseTest : public PaymentRequestBrowserTestBase {
   void ExpectNoShippingWarningMessage() {
     views::View* view = dialog_view()->GetViewByID(
         static_cast<int>(DialogViewID::WARNING_LABEL));
-    if (!view || !view->GetVisible())
+    if (!view || !view->GetVisible()) {
       return;
+    }
 
     EXPECT_EQ(std::u16string(), static_cast<views::Label*>(view)->GetText());
   }
@@ -113,12 +115,15 @@ class PaymentRequestShowPromiseTest : public PaymentRequestBrowserTestBase {
   // Clicks the "Pay" button and waits for the dialog to close.
   void Pay() {
     ResetEventWaiterForSequence(
-        {DialogEvent::PROCESSING_SPINNER_SHOWN, DialogEvent::DIALOG_CLOSED});
+        {DialogEvent::LOADING_VIEW_SHOWN, DialogEvent::DIALOG_CLOSED});
     ClickOnDialogViewAndWait(DialogViewID::PAY_BUTTON, dialog_view());
   }
 
+  std::string payment_method_;
+
  private:
-  DISALLOW_COPY_AND_ASSIGN(PaymentRequestShowPromiseTest);
+  base::test::ScopedFeatureList feature_list_{
+      features::kPaymentRequestMandatoryPaymentAppUi};
 };
 
 IN_PROC_BROWSER_TEST_F(PaymentRequestShowPromiseTest, SingleOptionShipping) {
@@ -227,75 +232,53 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestShowPromiseTest, SkipUI) {
   base::HistogramTester histogram_tester;
   NavigateTo("/show_promise/digital_goods.html");
   InstallEchoPaymentHandler();
-  ASSERT_TRUE(content::ExecuteScript(GetActiveWebContents(), "create();"));
+  ASSERT_TRUE(
+      content::ExecJs(GetActiveWebContents(),
+                      content::JsReplace("create($1)", payment_method_)));
   ResetEventWaiterForSequence(
       {DialogEvent::PROCESSING_SPINNER_SHOWN,
        DialogEvent::PROCESSING_SPINNER_HIDDEN, DialogEvent::SPEC_DONE_UPDATING,
        DialogEvent::PROCESSING_SPINNER_HIDDEN, DialogEvent::DIALOG_OPENED,
-       DialogEvent::PROCESSING_SPINNER_SHOWN, DialogEvent::DIALOG_CLOSED});
-  ASSERT_TRUE(content::ExecuteScript(GetActiveWebContents(), "buy();"));
-  WaitForObservedEvent();
+       DialogEvent::LOADING_VIEW_SHOWN, DialogEvent::DIALOG_CLOSED});
+  ASSERT_TRUE(content::ExecJs(GetActiveWebContents(), "buy();"));
+  ASSERT_TRUE(WaitForObservedEvent());
 
   ExpectBodyContains({R"({"currency":"USD","value":"1.00"})"});
-
-  // The initial total in digital_goods.js is 99.99 while the final total is
-  // 1.00. Verify that transaction amount metrics are recorded only once and
-  // with final total rather than the initial one. The final total falls into
-  // micro transaction category.
-  constexpr uint32_t kMicroTransaction = 1;
-  histogram_tester.ExpectUniqueSample(
-      "PaymentRequest.TransactionAmount.Triggered", kMicroTransaction, 1);
-  histogram_tester.ExpectUniqueSample(
-      "PaymentRequest.TransactionAmount.Completed", kMicroTransaction, 1);
 }
 
 IN_PROC_BROWSER_TEST_F(PaymentRequestShowPromiseTest, Reject) {
   NavigateTo("/show_promise/reject.html");
   InstallEchoPaymentHandler();
-  ResetEventWaiterForSequence(
-      {DialogEvent::PROCESSING_SPINNER_SHOWN, DialogEvent::DIALOG_CLOSED});
-  ASSERT_TRUE(content::ExecuteScript(GetActiveWebContents(), "buy();"));
-  WaitForObservedEvent();
-
-  ExpectBodyContains({R"(AbortError)"});
+  EXPECT_EQ("AbortError: rejected",
+            content::EvalJs(GetActiveWebContents(),
+                            content::JsReplace("buy($1)", payment_method_)));
 }
 
 IN_PROC_BROWSER_TEST_F(PaymentRequestShowPromiseTest, Timeout) {
   NavigateTo("/show_promise/timeout.html");
   InstallEchoPaymentHandler();
-  ResetEventWaiterForSequence(
-      {DialogEvent::PROCESSING_SPINNER_SHOWN, DialogEvent::DIALOG_CLOSED});
-  ASSERT_TRUE(content::ExecuteScript(GetActiveWebContents(), "buy();"));
-  WaitForObservedEvent();
-
-  ExpectBodyContains({R"(AbortError)"});
+  EXPECT_EQ(
+      "AbortError: Timed out waiting for a PaymentRequest.show(promise) to "
+      "resolve.",
+      content::EvalJs(GetActiveWebContents(),
+                      content::JsReplace("buy($1)", payment_method_)));
 }
 
-// Disabled for being flaky. crbug.com/1116607
 IN_PROC_BROWSER_TEST_F(PaymentRequestShowPromiseTest,
-                       DISABLED_UnsupportedPaymentMethod) {
+                       UnsupportedPaymentMethod) {
   NavigateTo("/show_promise/unsupported.html");
-  ResetEventWaiterForSequence(
-      {DialogEvent::PROCESSING_SPINNER_SHOWN,
-       DialogEvent::PROCESSING_SPINNER_HIDDEN, DialogEvent::SPEC_DONE_UPDATING,
-       DialogEvent::PROCESSING_SPINNER_HIDDEN, DialogEvent::NOT_SUPPORTED_ERROR,
-       DialogEvent::DIALOG_CLOSED});
-  ASSERT_TRUE(content::ExecuteScript(GetActiveWebContents(), "buy();"));
-  WaitForObservedEvent();
-
-  ExpectBodyContains(
-      {R"(NotSupportedError: The payment method "foo" is not supported)"});
+  EXPECT_EQ(R"(NotSupportedError: The payment method "foo" is not supported.)",
+            content::EvalJs(GetActiveWebContents(), "buy();"));
 }
 
 IN_PROC_BROWSER_TEST_F(PaymentRequestShowPromiseTest, InvalidDetails) {
   NavigateTo("/show_promise/invalid_details.html");
   InstallEchoPaymentHandler();
-  ResetEventWaiterForSequence(
-      {DialogEvent::PROCESSING_SPINNER_SHOWN, DialogEvent::DIALOG_CLOSED});
-  ASSERT_TRUE(content::ExecuteScript(GetActiveWebContents(), "buy();"));
-  WaitForObservedEvent();
-
-  ExpectBodyContains({R"(Total amount value should be non-negative)"});
+  EXPECT_EQ(
+      "TypeError: Failed to construct 'PaymentDetailsUpdate': Total amount "
+      "value should be non-negative",
+      content::EvalJs(GetActiveWebContents(),
+                      content::JsReplace("buy($1)", payment_method_)));
 }
 
 IN_PROC_BROWSER_TEST_F(PaymentRequestShowPromiseTest,

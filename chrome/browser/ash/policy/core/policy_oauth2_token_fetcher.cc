@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,8 @@
 #include <vector>
 
 #include "ash/constants/ash_switches.h"
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
 #include "base/strings/string_util.h"
@@ -42,6 +42,11 @@ class PolicyOAuth2TokenFetcherImpl : public PolicyOAuth2TokenFetcher,
                                      public OAuth2AccessTokenConsumer {
  public:
   explicit PolicyOAuth2TokenFetcherImpl(const std::string& consumer_name);
+
+  PolicyOAuth2TokenFetcherImpl(const PolicyOAuth2TokenFetcherImpl&) = delete;
+  PolicyOAuth2TokenFetcherImpl& operator=(const PolicyOAuth2TokenFetcherImpl&) =
+      delete;
+
   ~PolicyOAuth2TokenFetcherImpl() override;
 
  private:
@@ -94,7 +99,7 @@ class PolicyOAuth2TokenFetcherImpl : public PolicyOAuth2TokenFetcher,
   void ForwardPolicyToken(const std::string& token,
                           const GoogleServiceAuthError& error);
 
-  // Auth code which is used to retreive a refresh token.
+  // Auth code which is used to retrieve a refresh token.
   std::string auth_code_;
 
   scoped_refptr<network::SharedURLLoaderFactory> system_url_loader_factory_;
@@ -120,21 +125,20 @@ class PolicyOAuth2TokenFetcherImpl : public PolicyOAuth2TokenFetcher,
   const std::string consumer_name_;
 
   base::WeakPtrFactory<PolicyOAuth2TokenFetcherImpl> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(PolicyOAuth2TokenFetcherImpl);
 };
 
 PolicyOAuth2TokenFetcherImpl::PolicyOAuth2TokenFetcherImpl(
     const std::string& consumer_name)
     : consumer_name_(consumer_name) {}
 
-PolicyOAuth2TokenFetcherImpl::~PolicyOAuth2TokenFetcherImpl() {}
+PolicyOAuth2TokenFetcherImpl::~PolicyOAuth2TokenFetcherImpl() = default;
 
 void PolicyOAuth2TokenFetcherImpl::StartWithAuthCode(
     const std::string& auth_code,
     scoped_refptr<network::SharedURLLoaderFactory> system_url_loader_factory,
     TokenCallback callback) {
-  DCHECK(!refresh_token_fetcher_ && !access_token_fetcher_);
+  CHECK(!refresh_token_fetcher_ && !access_token_fetcher_,
+        base::NotFatalUntil::M160);
 
   auth_code_ = auth_code;
   system_url_loader_factory_ = system_url_loader_factory;
@@ -146,7 +150,8 @@ void PolicyOAuth2TokenFetcherImpl::StartWithRefreshToken(
     const std::string& oauth2_refresh_token,
     scoped_refptr<network::SharedURLLoaderFactory> system_url_loader_factory,
     TokenCallback callback) {
-  DCHECK(!refresh_token_fetcher_ && !access_token_fetcher_);
+  CHECK(!refresh_token_fetcher_ && !access_token_fetcher_,
+        base::NotFatalUntil::M160);
 
   oauth2_refresh_token_ = oauth2_refresh_token;
   system_url_loader_factory_ = system_url_loader_factory;
@@ -157,15 +162,15 @@ void PolicyOAuth2TokenFetcherImpl::StartWithRefreshToken(
 void PolicyOAuth2TokenFetcherImpl::StartFetchingRefreshToken() {
   // Don't fetch tokens for test.
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          chromeos::switches::kDisableGaiaServices)) {
+          ash::switches::kDisableGaiaServices)) {
     failed_ = true;
     ForwardPolicyToken(
         std::string(),
-        GoogleServiceAuthError(GoogleServiceAuthError::CONNECTION_FAILED));
+        GoogleServiceAuthError::FromConnectionError(net::ERR_FAILED));
     return;
   }
 
-  DCHECK(!auth_code_.empty());
+  CHECK(!auth_code_.empty(), base::NotFatalUntil::M160);
   refresh_token_fetcher_ = std::make_unique<GaiaAuthFetcher>(
       this, gaia::GaiaSource::kChrome, system_url_loader_factory_);
   refresh_token_fetcher_->StartAuthCodeForOAuth2TokenExchange(auth_code_);
@@ -206,7 +211,7 @@ void PolicyOAuth2TokenFetcherImpl::OnGetTokenSuccess(
   VLOG(1) << "OAuth2 access token (device management) fetching succeeded.";
   oauth2_access_token_ = token_response.access_token;
   ForwardPolicyToken(token_response.access_token,
-                     GoogleServiceAuthError(GoogleServiceAuthError::NONE));
+                     GoogleServiceAuthError::AuthErrorNone());
 }
 
 void PolicyOAuth2TokenFetcherImpl::OnGetTokenFailure(
@@ -221,12 +226,11 @@ void PolicyOAuth2TokenFetcherImpl::OnGetTokenFailure(
 void PolicyOAuth2TokenFetcherImpl::RetryOnError(
     const GoogleServiceAuthError& error,
     base::OnceClosure task) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   if (error.IsTransientError() && retry_count_ < kMaxRequestAttemptCount) {
     retry_count_++;
     content::GetUIThreadTaskRunner({})->PostDelayedTask(
-        FROM_HERE, std::move(task),
-        base::TimeDelta::FromMilliseconds(kRequestRestartDelay));
+        FROM_HERE, std::move(task), base::Milliseconds(kRequestRestartDelay));
     return;
   }
   LOG(ERROR) << "Unrecoverable error or retry count max reached: "
@@ -250,8 +254,13 @@ void PolicyOAuth2TokenFetcherImpl::ForwardPolicyToken(
 // requests.
 class PolicyOAuth2TokenFetcherFake : public PolicyOAuth2TokenFetcher {
  public:
-  PolicyOAuth2TokenFetcherFake() {}
-  ~PolicyOAuth2TokenFetcherFake() override {}
+  PolicyOAuth2TokenFetcherFake() = default;
+
+  PolicyOAuth2TokenFetcherFake(const PolicyOAuth2TokenFetcherFake&) = delete;
+  PolicyOAuth2TokenFetcherFake& operator=(const PolicyOAuth2TokenFetcherFake&) =
+      delete;
+
+  ~PolicyOAuth2TokenFetcherFake() override = default;
 
  private:
   void StartWithAuthCode(
@@ -285,8 +294,6 @@ class PolicyOAuth2TokenFetcherFake : public PolicyOAuth2TokenFetcher {
 
   const std::string refresh_token_ = "fake_refresh_token";
   const std::string access_token_ = "fake_access_token";
-
-  DISALLOW_COPY_AND_ASSIGN(PolicyOAuth2TokenFetcherFake);
 };
 
 }  // namespace
@@ -304,8 +311,8 @@ PolicyOAuth2TokenFetcher::CreateInstance(const std::string& consumer_name) {
   return std::make_unique<PolicyOAuth2TokenFetcherImpl>(consumer_name);
 }
 
-PolicyOAuth2TokenFetcher::PolicyOAuth2TokenFetcher() {}
+PolicyOAuth2TokenFetcher::PolicyOAuth2TokenFetcher() = default;
 
-PolicyOAuth2TokenFetcher::~PolicyOAuth2TokenFetcher() {}
+PolicyOAuth2TokenFetcher::~PolicyOAuth2TokenFetcher() = default;
 
 }  // namespace policy

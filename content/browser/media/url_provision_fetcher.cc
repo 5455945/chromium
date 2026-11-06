@@ -1,29 +1,74 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/media/url_provision_fetcher.h"
 
-#include "base/bind.h"
+#include <optional>
+#include <string>
+#include <utility>
+
+#include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "content/public/browser/provision_fetcher_factory.h"
-#include "media/base/bind_to_current_loop.h"
+#include "content/public/common/url_utils.h"
 #include "media/base/media_switches.h"
 #include "net/base/load_flags.h"
+#include "net/base/net_errors.h"
+#include "net/base/url_util.h"
+#include "net/http/http_response_headers.h"
 #include "net/http/http_util.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
+#include "net/url_request/redirect_info.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
+#include "url/url_constants.h"
 
 namespace content {
+
+namespace {
+
+// 64 KiB upper bound for CDM provisioning responses (certificates / tokens).
+constexpr size_t kMaxProvisionResponseSize = 64 * 1024;
+
+}  // namespace
 
 // Implementation of URLProvisionFetcher.
 
 URLProvisionFetcher::URLProvisionFetcher(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory)
-    : url_loader_factory_(std::move(url_loader_factory)) {
-  DCHECK(url_loader_factory_);
+    : URLProvisionFetcher(std::move(url_loader_factory), "Widevine CDM v1.0") {}
+
+URLProvisionFetcher::URLProvisionFetcher(
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    std::string_view user_agent)
+    : url_loader_factory_(std::move(url_loader_factory)),
+      user_agent_(user_agent) {
+  CHECK(url_loader_factory_, base::NotFatalUntil::M160);
+}
+
+void URLProvisionFetcher::OnRedirect(
+    const GURL& url_before_redirect,
+    const net::RedirectInfo& redirect_info,
+    const network::mojom::URLResponseHead& response_head,
+    std::vector<std::string>* removed_headers) {
+  const bool redirect_not_allowed =
+      redirect_info.new_method != net::HttpRequestHeaders::kPostMethod ||
+      !redirect_info.new_url.is_valid() ||
+      !redirect_info.new_url.SchemeIs(url::kHttpsScheme) ||
+      net::IsLocalhost(redirect_info.new_url);
+
+  if (redirect_not_allowed) {
+    DVLOG(1) << __func__ << ": Insecure redirect: " << redirect_info.new_url;
+    simple_url_loader_.reset();
+    base::UmaHistogramSparse("Media.EME.UrlProvisionFetcher.ResponseCode",
+                             net::ERR_UNSAFE_REDIRECT);
+    if (response_cb_) {
+      std::move(response_cb_).Run(false, std::string());
+    }
+  }
 }
 
 URLProvisionFetcher::~URLProvisionFetcher() {}
@@ -39,13 +84,17 @@ void URLProvisionFetcher::Retrieve(
     return;
   }
 
+  if (base::FeatureList::IsEnabled(media::kHardenUrlProvisionFetcher)) {
+    if (!default_url.is_valid() || !default_url.SchemeIs(url::kHttpsScheme)) {
+      DVLOG(1) << __func__ << ": Invalid or non-HTTPS URL: " << default_url;
+      std::move(response_cb).Run(false, std::string());
+      return;
+    }
+  }
+
   response_cb_ = std::move(response_cb);
 
-  const std::string request_string =
-      default_url.spec() + "&signedRequest=" + request_data;
-  DVLOG(1) << __func__ << ": request:" << request_string;
-
-  DCHECK(!simple_url_loader_);
+  CHECK(!simple_url_loader_, base::NotFatalUntil::M160);
   net::NetworkTrafficAnnotationTag traffic_annotation =
       net::DefineNetworkTrafficAnnotation("url_prevision_fetcher", R"(
         semantics {
@@ -76,21 +125,43 @@ void URLProvisionFetcher::Retrieve(
           policy_exception_justification: "Not implemented."
         })");
   auto resource_request = std::make_unique<network::ResourceRequest>();
-  resource_request->url = GURL(request_string);
   resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
-  resource_request->method = "POST";
-  resource_request->headers.SetHeader("User-Agent", "Widevine CDM v1.0");
+  resource_request->method = net::HttpRequestHeaders::kPostMethod;
+  resource_request->headers.SetHeader(net::HttpRequestHeaders::kUserAgent,
+                                      user_agent_);
+
+  std::string post_body;
+  std::string content_type;
+
+  resource_request->url = default_url;
+  post_body = "signedRequest=" + request_data;
+  content_type = "application/x-www-form-urlencoded";
+
+  DVLOG(1) << __func__ << ": url:'" << resource_request->url
+           << "' content_type:'" << content_type << "' body:'" << post_body
+           << "'";
+
   simple_url_loader_ = network::SimpleURLLoader::Create(
       std::move(resource_request), traffic_annotation);
-  simple_url_loader_->AttachStringForUpload("", "application/json");
-  simple_url_loader_->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
-      url_loader_factory_.get(),
-      base::BindOnce(&URLProvisionFetcher::OnSimpleLoaderComplete,
-                     base::Unretained(this)));
+  simple_url_loader_->AttachStringForUpload(post_body, content_type);
+  if (base::FeatureList::IsEnabled(media::kHardenUrlProvisionFetcher)) {
+    simple_url_loader_->SetOnRedirectCallback(base::BindRepeating(
+        &URLProvisionFetcher::OnRedirect, base::Unretained(this)));
+    simple_url_loader_->DownloadToString(
+        url_loader_factory_.get(),
+        base::BindOnce(&URLProvisionFetcher::OnSimpleLoaderComplete,
+                       base::Unretained(this)),
+        kMaxProvisionResponseSize);
+  } else {
+    simple_url_loader_->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
+        url_loader_factory_.get(),
+        base::BindOnce(&URLProvisionFetcher::OnSimpleLoaderComplete,
+                       base::Unretained(this)));
+  }
 }
 
 void URLProvisionFetcher::OnSimpleLoaderComplete(
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   bool success = false;
   int response_code = simple_url_loader_->NetError();
   std::string response;
@@ -106,7 +177,7 @@ void URLProvisionFetcher::OnSimpleLoaderComplete(
 
   if (response_body) {
     success = true;
-    response = std::move(*response_body);
+    response = std::move(response_body).value();
   } else {
     DVLOG(1) << "CDM provision: server returned error code " << response_code;
   }
@@ -121,8 +192,16 @@ void URLProvisionFetcher::OnSimpleLoaderComplete(
 
 std::unique_ptr<media::ProvisionFetcher> CreateProvisionFetcher(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory) {
-  DCHECK(url_loader_factory);
+  CHECK(url_loader_factory, base::NotFatalUntil::M160);
   return std::make_unique<URLProvisionFetcher>(std::move(url_loader_factory));
+}
+
+std::unique_ptr<media::ProvisionFetcher> CreateProvisionFetcherWithUserAgent(
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    std::string_view user_agent) {
+  CHECK(url_loader_factory, base::NotFatalUntil::M160);
+  return std::make_unique<URLProvisionFetcher>(std::move(url_loader_factory),
+                                               user_agent);
 }
 
 }  // namespace content

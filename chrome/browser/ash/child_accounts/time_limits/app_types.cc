@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,36 +9,32 @@
 #include "base/check_op.h"
 #include "base/notreached.h"
 
-namespace ash {
-namespace app_time {
+namespace ash::app_time {
 
 namespace {
 
-std::string AppTypeToString(apps::mojom::AppType app_type) {
+std::string AppTypeToString(apps::AppType app_type) {
   switch (app_type) {
-    case apps::mojom::AppType::kUnknown:
+    case apps::AppType::kUnknown:
       return "Unknown";
-    case apps::mojom::AppType::kArc:
+    case apps::AppType::kArc:
       return "Arc";
-    case apps::mojom::AppType::kWeb:
+    case apps::AppType::kWeb:
       return "Web";
-    case apps::mojom::AppType::kExtension:
+    case apps::AppType::kChromeApp:
+    case apps::AppType::kExtension:
       return "Extension";
-    case apps::mojom::AppType::kBuiltIn:
-      return "Built in";
-    case apps::mojom::AppType::kCrostini:
+    case apps::AppType::kCrostini:
       return "Crostini";
-    case apps::mojom::AppType::kMacOs:
-      return "Mac OS";
-    case apps::mojom::AppType::kPluginVm:
+    case apps::AppType::kPluginVm:
       return "Plugin VM";
-    case apps::mojom::AppType::kStandaloneBrowser:
-      return "LaCrOS";
-    case apps::mojom::AppType::kRemote:
+    case apps::AppType::kRemote:
       return "Remote";
-    case apps::mojom::AppType::kBorealis:
+    case apps::AppType::kBorealis:
       return "Borealis";
-    case apps::mojom::AppType::kSystemWeb:
+    case apps::AppType::kBruschetta:
+      return "Bruschetta";
+    case apps::AppType::kSystemWeb:
       return "SystemWeb";
   }
   NOTREACHED();
@@ -65,8 +61,10 @@ bool CanMerge(const AppActivity::ActiveTime& t1,
 
 }  // namespace
 
-AppId::AppId(apps::mojom::AppType app_type, const std::string& app_id)
+AppId::AppId(apps::AppType app_type, const std::string& app_id)
     : app_type_(app_type), app_id_(app_id) {
+  // TODO(crbug.com/568736263): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK(!app_id.empty());
 }
 
@@ -79,14 +77,6 @@ AppId::AppId(AppId&&) = default;
 AppId& AppId::operator=(AppId&&) = default;
 
 AppId::~AppId() = default;
-
-bool AppId::operator==(const AppId& rhs) const {
-  return app_type_ == rhs.app_type() && app_id_ == rhs.app_id();
-}
-
-bool AppId::operator!=(const AppId& rhs) const {
-  return !(*this == rhs);
-}
 
 bool AppId::operator<(const AppId& rhs) const {
   return app_id_ < rhs.app_id();
@@ -103,17 +93,17 @@ PauseAppInfo::PauseAppInfo(const AppId& app,
     : app_id(app), daily_limit(limit), show_pause_dialog(show_dialog) {}
 
 AppLimit::AppLimit(AppRestriction restriction,
-                   absl::optional<base::TimeDelta> daily_limit,
+                   std::optional<base::TimeDelta> daily_limit,
                    base::Time last_updated)
     : restriction_(restriction),
       daily_limit_(daily_limit),
       last_updated_(last_updated) {
-  DCHECK_EQ(restriction_ == AppRestriction::kBlocked,
-            daily_limit_ == absl::nullopt);
-  DCHECK(daily_limit_ == absl::nullopt ||
-         daily_limit >= base::TimeDelta::FromHours(0));
-  DCHECK(daily_limit_ == absl::nullopt ||
-         daily_limit <= base::TimeDelta::FromHours(24));
+  CHECK_EQ(restriction_ == AppRestriction::kBlocked,
+           daily_limit_ == std::nullopt, base::NotFatalUntil::M160);
+  CHECK(daily_limit_ == std::nullopt || daily_limit >= base::Hours(0),
+        base::NotFatalUntil::M160);
+  CHECK(daily_limit_ == std::nullopt || daily_limit <= base::Hours(24),
+        base::NotFatalUntil::M160);
 }
 
 AppLimit::AppLimit(const AppLimit&) = default;
@@ -127,11 +117,12 @@ AppLimit& AppLimit::operator=(AppLimit&&) = default;
 AppLimit::~AppLimit() = default;
 
 // static
-absl::optional<AppActivity::ActiveTime> AppActivity::ActiveTime::Merge(
+std::optional<AppActivity::ActiveTime> AppActivity::ActiveTime::Merge(
     const ActiveTime& t1,
     const ActiveTime& t2) {
-  if (!CanMerge(t1, t2))
-    return absl::nullopt;
+  if (!CanMerge(t1, t2)) {
+    return std::nullopt;
+  }
 
   base::Time active_from = std::min(t1.active_from(), t2.active_from());
   base::Time active_to = std::max(t1.active_to(), t2.active_to());
@@ -140,11 +131,11 @@ absl::optional<AppActivity::ActiveTime> AppActivity::ActiveTime::Merge(
 
 // static
 const base::TimeDelta AppActivity::ActiveTime::kActiveTimeMergePrecision =
-    base::TimeDelta::FromSeconds(1);
+    base::Seconds(1);
 
 AppActivity::ActiveTime::ActiveTime(base::Time start, base::Time end)
     : active_from_(start), active_to_(end) {
-  DCHECK_GT(active_to_, active_from_);
+  CHECK_GT(active_to_, active_from_, base::NotFatalUntil::M160);
 }
 
 AppActivity::ActiveTime::ActiveTime(const AppActivity::ActiveTime& rhs) =
@@ -174,18 +165,18 @@ bool AppActivity::ActiveTime::IsLaterThan(base::Time timestamp) const {
 }
 
 void AppActivity::ActiveTime::set_active_from(base::Time active_from) {
-  DCHECK_GT(active_to_, active_from);
+  CHECK_GT(active_to_, active_from, base::NotFatalUntil::M160);
   active_from_ = active_from;
 }
 
 void AppActivity::ActiveTime::set_active_to(base::Time active_to) {
-  DCHECK_GT(active_to, active_from_);
+  CHECK_GT(active_to, active_from_, base::NotFatalUntil::M160);
   active_to_ = active_to;
 }
 
 AppActivity::AppActivity(AppState app_state)
     : app_state_(app_state),
-      running_active_time_(base::TimeDelta::FromSeconds(0)),
+      running_active_time_(base::Seconds(0)),
       last_updated_time_ticks_(base::TimeTicks::Now()) {}
 AppActivity::AppActivity(AppState app_state,
                          base::TimeDelta running_active_time)
@@ -201,41 +192,46 @@ AppActivity::~AppActivity() = default;
 void AppActivity::SetAppState(AppState app_state) {
   app_state_ = app_state;
   CaptureOngoingActivity(base::Time::Now());
-  if (!is_active_)
+  if (!is_active_) {
     last_updated_time_ticks_ = base::TimeTicks::Now();
+  }
 }
 
 void AppActivity::SetAppActive(base::Time timestamp) {
-  DCHECK(!is_active_);
-  DCHECK(app_state_ == AppState::kAvailable ||
-         app_state_ == AppState::kAlwaysAvailable);
+  CHECK(!is_active_, base::NotFatalUntil::M160);
+  CHECK(app_state_ == AppState::kAvailable ||
+            app_state_ == AppState::kAlwaysAvailable,
+        base::NotFatalUntil::M160);
   is_active_ = true;
   last_updated_time_ticks_ = base::TimeTicks::Now();
 }
 
 void AppActivity::SetAppInactive(base::Time timestamp) {
-  if (!is_active_)
+  if (!is_active_) {
     return;
+  }
   CaptureOngoingActivity(timestamp);
   is_active_ = false;
 }
 
 void AppActivity::ResetRunningActiveTime(base::Time timestamp) {
   CaptureOngoingActivity(timestamp);
-  running_active_time_ = base::TimeDelta::FromMinutes(0);
+  running_active_time_ = base::Minutes(0);
 }
 
 base::TimeDelta AppActivity::RunningActiveTime() const {
-  if (!is_active_)
+  if (!is_active_) {
     return running_active_time_;
+  }
 
   return running_active_time_ +
          (base::TimeTicks::Now() - last_updated_time_ticks_);
 }
 
 void AppActivity::CaptureOngoingActivity(base::Time timestamp) {
-  if (!is_active_)
+  if (!is_active_) {
     return;
+  }
 
   // Log the active time before the until the reset.
   base::TimeTicks now = base::TimeTicks::Now();
@@ -248,9 +244,10 @@ void AppActivity::CaptureOngoingActivity(base::Time timestamp) {
 
   // Timestamps can be equal if SetAppInactive() is called directly after
   // SetAppState(). Happens in tests.
-  DCHECK_GE(timestamp, start_time);
-  if (timestamp > start_time)
+  CHECK_GE(timestamp, start_time, base::NotFatalUntil::M160);
+  if (timestamp > start_time) {
     active_times_.push_back(ActiveTime(start_time, timestamp));
+  }
 
   last_updated_time_ticks_ = now;
 }
@@ -259,5 +256,4 @@ std::vector<AppActivity::ActiveTime> AppActivity::TakeActiveTimes() {
   return std::move(active_times_);
 }
 
-}  // namespace app_time
-}  // namespace ash
+}  // namespace ash::app_time

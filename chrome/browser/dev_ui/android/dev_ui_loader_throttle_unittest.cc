@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,10 +10,12 @@
 
 #include "chrome/android/modules/dev_ui/provider/dev_ui_module_provider.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
-#include "content/public/browser/navigation_handle.h"
+#include "content/public/common/buildflags.h"
 #include "content/public/test/mock_navigation_handle.h"
+#include "content/public/test/mock_navigation_throttle_registry.h"
 #include "net/base/net_errors.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/features.h"
 #include "url/gurl.h"
 
 namespace dev_ui {
@@ -30,6 +32,21 @@ const char* const kNonDevUiUrls[] = {
 const char* const kDevUiUrls[] = {
     "chrome://bluetooth-internals",
     "chrome://bluetooth-internals/path?query#frag",
+    "chrome://browser-actuator-internals",
+    "chrome://browser-actuator-internals/path?query#frag",
+    "chrome://chrome-finds-internals",
+    "chrome://chrome-finds-internals/path?query#frag",
+    "chrome://connectors-internals",
+    "chrome://connectors-internals/path?query#frag",
+    "chrome://private-ai-internals",
+    "chrome://private-ai-internals/path?query#frag",
+    "chrome://regional-capabilities-internals",
+    "chrome://regional-capabilities-internals/path?query#frag",
+    "chrome://segmentation-internals",
+    "chrome://segmentation-internals/path?query#frag",
+#if BUILDFLAG(ENABLE_DEVTOOLS_FRONTEND)
+    "devtools://devtools/bundled/devtools_app.html",
+#endif
 };
 
 /******** MockDevUiModuleProvider ********/
@@ -87,11 +104,12 @@ class MockDevUiModuleProvider : public DevUiModuleProvider {
 //   problematic since the tests own the throttle instance.
 // * We want to record results for verification.
 // Note that this is instantiated directly, instead of using
-// DevUiLoaderThrottle::MaybeCreateThrottleFor().
+// DevUiLoaderThrottle::MaybeCreateAndAdd().
 class TestDevUiLoaderThrottle : public DevUiLoaderThrottle {
  public:
-  explicit TestDevUiLoaderThrottle(content::NavigationHandle* navigation_handle)
-      : DevUiLoaderThrottle(navigation_handle), cancel_result(LAST) {}
+  explicit TestDevUiLoaderThrottle(
+      content::NavigationThrottleRegistry& registry)
+      : DevUiLoaderThrottle(registry), cancel_result(LAST) {}
   ~TestDevUiLoaderThrottle() override = default;
   TestDevUiLoaderThrottle(const TestDevUiLoaderThrottle&) = delete;
   const TestDevUiLoaderThrottle& operator=(const TestDevUiLoaderThrottle&) =
@@ -137,14 +155,27 @@ class DevUiLoaderThrottleTest : public ChromeRenderViewHostTestHarness {
   MockDevUiModuleProvider mock_provider_;
 };
 
+class DevUiLoaderThrottleFencedFrameTest : public DevUiLoaderThrottleTest {
+ public:
+  DevUiLoaderThrottleFencedFrameTest() {
+    scoped_feature_list_.InitAndEnableFeatureWithParameters(
+        blink::features::kFencedFrames, {{"implementation_type", "mparch"}});
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
 }  // namespace
 
 TEST_F(DevUiLoaderThrottleTest, ShouldInstallDevUiDfm) {
   auto ShouldInstallDevUiDfm = DevUiLoaderThrottle::ShouldInstallDevUiDfm;
-  for (const char* url_string : kNonDevUiUrls)
+  for (const char* url_string : kNonDevUiUrls) {
     EXPECT_FALSE(ShouldInstallDevUiDfm(GURL(url_string)));
-  for (const char* url_string : kDevUiUrls)
+  }
+  for (const char* url_string : kDevUiUrls) {
     EXPECT_TRUE(ShouldInstallDevUiDfm(GURL(url_string)));
+  }
 }
 
 // Test to ensure that pages that are purposefully left in the base module are
@@ -161,21 +192,26 @@ TEST_F(DevUiLoaderThrottleTest, PreventAccidentalInclusion) {
   EXPECT_FALSE(ShouldInstallDevUiDfm(GURL("chrome://dino")));
   // chrome://flags has relatively high usage.
   EXPECT_FALSE(ShouldInstallDevUiDfm(GURL("chrome://flags")));
-  // Useful for filing bugs.
+  // Useful for filing bugs and diagnosing crashes/metrics offline.
+  EXPECT_FALSE(ShouldInstallDevUiDfm(GURL("chrome://crashes")));
+  EXPECT_FALSE(ShouldInstallDevUiDfm(GURL("chrome://histograms")));
   EXPECT_FALSE(ShouldInstallDevUiDfm(GURL("chrome://version")));
   // Used by Android WebView.
   EXPECT_FALSE(ShouldInstallDevUiDfm(GURL("chrome://safe-browsing")));
+  EXPECT_FALSE(ShouldInstallDevUiDfm(GURL("chrome://user-actions")));
 }
 
-TEST_F(DevUiLoaderThrottleTest, MaybeCreateThrottleFor) {
+TEST_F(DevUiLoaderThrottleTest, MaybeCreateAndAdd) {
   bool is_installed = false;
   auto creates_throttle = [&](const std::string& url_string) -> bool {
     mock_provider_.Reset();
     mock_provider_.SetIsInstalled(is_installed);
     content::MockNavigationHandle handle(GURL(url_string), main_rfh());
-    std::unique_ptr<content::NavigationThrottle> throttle =
-        DevUiLoaderThrottle::MaybeCreateThrottleFor(&handle);
-    return throttle != nullptr;
+    content::MockNavigationThrottleRegistry registry(
+        &handle,
+        content::MockNavigationThrottleRegistry::RegistrationMode::kHold);
+    DevUiLoaderThrottle::MaybeCreateAndAdd(registry);
+    return !registry.throttles().empty();
   };
 
   // Case 1: DevUI DFM is not installed.
@@ -205,11 +241,55 @@ TEST_F(DevUiLoaderThrottleTest, MaybeCreateThrottleFor) {
   }
 }
 
+TEST_F(DevUiLoaderThrottleFencedFrameTest, MaybeCreateAndAdd) {
+  bool is_installed = false;
+  content::RenderFrameHost* render_frame_host = nullptr;
+  auto creates_throttle = [&](const std::string& url_string) -> bool {
+    mock_provider_.Reset();
+    mock_provider_.SetIsInstalled(is_installed);
+    content::MockNavigationHandle handle(GURL(url_string), render_frame_host);
+    content::MockNavigationThrottleRegistry registry(
+        &handle,
+        content::MockNavigationThrottleRegistry::RegistrationMode::kHold);
+    DevUiLoaderThrottle::MaybeCreateAndAdd(registry);
+    return !registry.throttles().empty();
+  };
+
+  content::RenderFrameHostTester::For(main_rfh())
+      ->InitializeRenderFrameIfNeeded();
+  render_frame_host =
+      content::RenderFrameHostTester::For(main_rfh())->AppendFencedFrame();
+  EXPECT_TRUE(render_frame_host);
+
+  // In any case, throttles should not be created in fenced frames.
+  is_installed = false;
+  for (const char* url_string : kNonDevUiUrls) {
+    EXPECT_FALSE(creates_throttle(url_string));
+    EXPECT_FALSE(mock_provider_.GetIsLoaded());
+  }
+  for (const char* url_string : kDevUiUrls) {
+    EXPECT_FALSE(creates_throttle(url_string));
+    EXPECT_FALSE(mock_provider_.GetIsLoaded());
+  }
+  is_installed = true;
+  for (const char* url_string : kNonDevUiUrls) {
+    EXPECT_FALSE(creates_throttle(url_string));
+    EXPECT_FALSE(mock_provider_.GetIsLoaded());
+  }
+  for (const char* url_string : kDevUiUrls) {
+    EXPECT_FALSE(creates_throttle(url_string));
+    EXPECT_FALSE(mock_provider_.GetIsLoaded());
+  }
+}
+
 TEST_F(DevUiLoaderThrottleTest, InstallSuccess) {
   for (const char* url_string : kDevUiUrls) {
     mock_provider_.Reset();
     content::MockNavigationHandle handle(GURL(url_string), main_rfh());
-    auto throttle = std::make_unique<TestDevUiLoaderThrottle>(&handle);
+    content::MockNavigationThrottleRegistry registry(
+        &handle,
+        content::MockNavigationThrottleRegistry::RegistrationMode::kHold);
+    auto throttle = std::make_unique<TestDevUiLoaderThrottle>(registry);
     EXPECT_FALSE(throttle->called_resume);
     EXPECT_FALSE(throttle->called_cancel);
     EXPECT_FALSE(mock_provider_.GetIsInstalled());
@@ -235,10 +315,16 @@ TEST_F(DevUiLoaderThrottleTest, InstallQueued) {
   mock_provider_.Reset();
   // Page 1 request.
   content::MockNavigationHandle handle1(GURL(kDevUiUrls[0]), main_rfh());
-  auto throttle1 = std::make_unique<TestDevUiLoaderThrottle>(&handle1);
+  content::MockNavigationThrottleRegistry registry1(
+      &handle1,
+      content::MockNavigationThrottleRegistry::RegistrationMode::kHold);
+  auto throttle1 = std::make_unique<TestDevUiLoaderThrottle>(registry1);
   // Page 2 request.
   content::MockNavigationHandle handle2(GURL(kDevUiUrls[1]), main_rfh());
-  auto throttle2 = std::make_unique<TestDevUiLoaderThrottle>(&handle2);
+  content::MockNavigationThrottleRegistry registry2(
+      &handle2,
+      content::MockNavigationThrottleRegistry::RegistrationMode::kHold);
+  auto throttle2 = std::make_unique<TestDevUiLoaderThrottle>(registry2);
   EXPECT_FALSE(mock_provider_.GetIsInstalled());
   EXPECT_FALSE(mock_provider_.GetIsLoaded());
 
@@ -263,10 +349,16 @@ TEST_F(DevUiLoaderThrottleTest, InstallRedundant) {
   mock_provider_.Reset();
   // Page 1 request.
   content::MockNavigationHandle handle1(GURL(kDevUiUrls[0]), main_rfh());
-  auto throttle1 = std::make_unique<TestDevUiLoaderThrottle>(&handle1);
+  content::MockNavigationThrottleRegistry registry1(
+      &handle1,
+      content::MockNavigationThrottleRegistry::RegistrationMode::kHold);
+  auto throttle1 = std::make_unique<TestDevUiLoaderThrottle>(registry1);
   // Page 2 request.
   content::MockNavigationHandle handle2(GURL(kDevUiUrls[1]), main_rfh());
-  auto throttle2 = std::make_unique<TestDevUiLoaderThrottle>(&handle2);
+  content::MockNavigationThrottleRegistry registry2(
+      &handle2,
+      content::MockNavigationThrottleRegistry::RegistrationMode::kHold);
+  auto throttle2 = std::make_unique<TestDevUiLoaderThrottle>(registry2);
   EXPECT_FALSE(mock_provider_.GetIsInstalled());
   EXPECT_FALSE(mock_provider_.GetIsLoaded());
 
@@ -295,7 +387,10 @@ TEST_F(DevUiLoaderThrottleTest, InstallFailure) {
   for (const char* url_string : kDevUiUrls) {
     mock_provider_.Reset();
     content::MockNavigationHandle handle(GURL(url_string), main_rfh());
-    auto throttle = std::make_unique<TestDevUiLoaderThrottle>(&handle);
+    content::MockNavigationThrottleRegistry registry(
+        &handle,
+        content::MockNavigationThrottleRegistry::RegistrationMode::kHold);
+    auto throttle = std::make_unique<TestDevUiLoaderThrottle>(registry);
     EXPECT_FALSE(throttle->called_resume);
     EXPECT_FALSE(throttle->called_cancel);
     EXPECT_FALSE(mock_provider_.GetIsInstalled());

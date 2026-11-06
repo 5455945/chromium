@@ -1,14 +1,13 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "components/password_manager/core/browser/generation/password_requirements_spec_fetcher_impl.h"
-
+#include "base/memory/raw_ptr.h"
 #include "base/test/bind.h"
-#include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
 #include "components/autofill/core/browser/proto/password_requirements.pb.h"
 #include "components/autofill/core/browser/proto/password_requirements_shard.pb.h"
+#include "components/password_manager/core/browser/generation/password_requirements_spec_fetcher_impl.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -70,7 +69,7 @@ TEST(PasswordRequirementsSpecFetcherTest, FetchData) {
     net::HttpStatusCode response_status = net::HTTP_OK;
 
     // Expected spec.
-    PasswordRequirementsSpec* expected_spec;
+    raw_ptr<PasswordRequirementsSpec> expected_spec;
     ResultCode expected_result;
   } tests[] = {
       {
@@ -204,7 +203,6 @@ TEST(PasswordRequirementsSpecFetcherTest, FetchData) {
 
   for (const auto& test : tests) {
     SCOPED_TRACE(test.test_name);
-    base::HistogramTester histogram_tester;
 
     base::test::TaskEnvironment environment(
         base::test::TaskEnvironment::TimeSource::MOCK_TIME);
@@ -233,17 +231,13 @@ TEST(PasswordRequirementsSpecFetcherTest, FetchData) {
     if (test.timeout == kMagicTimeout) {
       // Make sure that the request takes longer than the timeout and gets
       // killed by the timer.
-      environment.FastForwardBy(
-          base::TimeDelta::FromMilliseconds(2 * kMagicTimeout));
+      environment.FastForwardBy(base::Milliseconds(2 * kMagicTimeout));
       environment.RunUntilIdle();
     }
 
     ASSERT_TRUE(callback_called);
     EXPECT_EQ(test.expected_spec->SerializeAsString(),
               returned_spec.SerializeAsString());
-    histogram_tester.ExpectUniqueSample(
-        "PasswordManager.RequirementsSpecFetcher.Result", test.expected_result,
-        1u);
   }
 }
 
@@ -295,8 +289,7 @@ TEST(PasswordRequirementsSpecFetcherTest, FetchDataInterleaved) {
     EXPECT_EQ(1, loader_factory.NumPending());
 
     if (simulate_timeout) {
-      environment.FastForwardBy(
-          base::TimeDelta::FromMilliseconds(2 * kTimeout));
+      environment.FastForwardBy(base::Milliseconds(2 * kTimeout));
       environment.RunUntilIdle();
       EXPECT_FALSE(spec_for_a.has_min_length());
       EXPECT_FALSE(spec_for_b.has_min_length());

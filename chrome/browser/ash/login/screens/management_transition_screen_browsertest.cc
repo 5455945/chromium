@@ -1,6 +1,8 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "chrome/browser/ash/login/screens/management_transition_screen.h"
 
 #include <memory>
 #include <string>
@@ -13,20 +15,21 @@
 #include "chrome/browser/ash/arc/session/arc_service_launcher.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
 #include "chrome/browser/ash/arc/test/test_arc_session_manager.h"
+#include "chrome/browser/ash/login/test/device_state_mixin.h"
 #include "chrome/browser/ash/login/test/js_checker.h"
 #include "chrome/browser/ash/login/test/logged_in_user_mixin.h"
 #include "chrome/browser/ash/login/test/oobe_screen_waiter.h"
-#include "chrome/browser/ash/login/ui/login_display_host.h"
+#include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/webui/chromeos/login/management_transition_screen_handler.h"
-#include "chrome/browser/ui/webui/chromeos/login/oobe_ui.h"
+#include "chrome/browser/ui/ash/login/login_display_host.h"
+#include "chrome/browser/ui/webui/ash/login/management_transition_screen_handler.h"
+#include "chrome/browser/ui/webui/ash/login/oobe_ui.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
-#include "components/arc/arc_features.h"
-#include "components/arc/arc_prefs.h"
-#include "components/arc/session/arc_session_runner.h"
-#include "components/arc/session/arc_supervision_transition.h"
-#include "components/arc/test/fake_arc_session.h"
+#include "chromeos/ash/experiences/arc/arc_prefs.h"
+#include "chromeos/ash/experiences/arc/session/arc_management_transition.h"
+#include "chromeos/ash/experiences/arc/session/arc_session_runner.h"
+#include "chromeos/ash/experiences/arc/test/fake_arc_session.h"
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_service.h"
 #include "components/user_manager/user_type.h"
@@ -47,15 +50,12 @@ const test::UIPath kAcceptButton = {kManagementTransitionId, "accept-button"};
 
 struct TransitionScreenTestParams {
   TransitionScreenTestParams(LoggedInUserMixin::LogInType pre_test_user_type,
-                             LoggedInUserMixin::LogInType test_user_type,
-                             bool use_managed_account = false)
+                             LoggedInUserMixin::LogInType test_user_type)
       : pre_test_user_type(pre_test_user_type),
-        test_user_type(test_user_type),
-        use_managed_account(use_managed_account) {}
+        test_user_type(test_user_type) {}
 
   LoggedInUserMixin::LogInType pre_test_user_type;
   LoggedInUserMixin::LogInType test_user_type;
-  bool use_managed_account;
 };
 
 // Param returns the original user type.
@@ -63,9 +63,11 @@ class ManagementTransitionScreenTest
     : public MixinBasedInProcessBrowserTest,
       public testing::WithParamInterface<TransitionScreenTestParams> {
  public:
-  ManagementTransitionScreenTest() {
-    feature_list_.InitAndEnableFeature(
-        arc::kEnableUnmanagedToManagedTransitionFeature);
+  ManagementTransitionScreenTest() = default;
+
+  ManagementTransitionScreen* GetScreen() {
+    return WizardController::default_controller()
+        ->GetScreen<ManagementTransitionScreen>();
   }
 
   ~ManagementTransitionScreenTest() override = default;
@@ -85,17 +87,8 @@ class ManagementTransitionScreenTest
     arc::ExpandPropertyFilesForTesting(arc::ArcSessionManager::Get());
 
     MixinBasedInProcessBrowserTest::SetUpOnMainThread();
-    // For this test class, the PRE tests just happen to always wait for active
-    // session immediately after logging in, while the main tests do some checks
-    // and then postpone WaitForActiveSession() until later. So wait for active
-    // session immediately if IsPreTest() and postpone the call to
-    // WaitForActiveSession() otherwise.
-    logged_in_user_mixin_.LogInUser(
-        false /*issue_any_scope_token*/,
-        content::IsPreTest() /*wait_for_active_session*/);
-
     // Allow ARC by policy for managed users.
-    if (use_managed_account()) {
+    if (GetTargetUserType() == LoggedInUserMixin::LogInType::kManaged) {
       logged_in_user_mixin()
           .GetUserPolicyMixin()
           ->RequestPolicyUpdate()
@@ -103,6 +96,17 @@ class ManagementTransitionScreenTest
           ->mutable_arcenabled()
           ->set_value(true);
     }
+
+    // For this test class, the PRE tests just set up necessary state,
+    // so they follow usual pattern and wait for user session to start.
+    // Main tests do some checks and then explicitly trigger
+    // WaitForActiveSession().
+    base::flat_set<ash::LoggedInUserMixin::LoginDetails> details(
+        {ash::LoggedInUserMixin::LoginDetails::kNoBrowserLaunch});
+    if (!content::IsPreTest()) {
+      details.insert(ash::LoggedInUserMixin::LoginDetails::kDontWaitForSession);
+    }
+    logged_in_user_mixin_.LogInUser(details);
   }
 
   LoggedInUserMixin::LogInType GetTargetUserType() const {
@@ -110,36 +114,27 @@ class ManagementTransitionScreenTest
                                 : GetParam().test_user_type;
   }
 
-  bool use_managed_account() { return GetParam().use_managed_account; }
-
-  absl::optional<AccountId> GetAccountId() {
-    if (use_managed_account()) {
-      return AccountId::FromUserEmailGaiaId(
-          FakeGaiaMixin::kEnterpriseUser1,
-          FakeGaiaMixin::kEnterpriseUser1GaiaId);
-    }
-
-    return absl::nullopt;
+  bool IsChild() const {
+    return GetTargetUserType() == LoggedInUserMixin::LogInType::kChild;
   }
 
  protected:
   LoggedInUserMixin& logged_in_user_mixin() { return logged_in_user_mixin_; }
 
  private:
-  LoggedInUserMixin logged_in_user_mixin_{&mixin_host_,
-                                          GetTargetUserType(),
+  DeviceStateMixin device_state_{
+      &mixin_host_,
+      DeviceStateMixin::State::OOBE_COMPLETED_PERMANENTLY_UNOWNED};
+  LoggedInUserMixin logged_in_user_mixin_{&mixin_host_, /*test_base=*/this,
                                           embedded_test_server(),
-                                          this,
-                                          false /*should_launch_browser*/,
-                                          GetAccountId()};
-
-  base::test::ScopedFeatureList feature_list_;
+                                          GetTargetUserType()};
 };
 
 IN_PROC_BROWSER_TEST_P(ManagementTransitionScreenTest,
                        PRE_SuccessfulTransition) {
   Profile* profile = ProfileManager::GetPrimaryUserProfile();
   profile->GetPrefs()->SetBoolean(arc::prefs::kArcSignedIn, true);
+  profile->GetPrefs()->SetBoolean(arc::prefs::kArcIsManaged, IsChild());
   arc::SetArcPlayStoreEnabledForProfile(profile, true);
 }
 
@@ -153,8 +148,8 @@ IN_PROC_BROWSER_TEST_P(ManagementTransitionScreenTest, SuccessfulTransition) {
   EXPECT_FALSE(LoginScreenTestApi::IsAddUserButtonShown());
 
   ProfileManager::GetPrimaryUserProfile()->GetPrefs()->SetInteger(
-      arc::prefs::kArcSupervisionTransition,
-      static_cast<int>(arc::ArcSupervisionTransition::NO_TRANSITION));
+      arc::prefs::kArcManagementTransition,
+      static_cast<int>(arc::ArcManagementTransition::NO_TRANSITION));
 
   EXPECT_FALSE(ProfileManager::GetPrimaryUserProfile()->GetPrefs()->GetBoolean(
       arc::prefs::kArcDataRemoveRequested));
@@ -165,12 +160,11 @@ IN_PROC_BROWSER_TEST_P(ManagementTransitionScreenTest, SuccessfulTransition) {
 IN_PROC_BROWSER_TEST_P(ManagementTransitionScreenTest, PRE_TransitionTimeout) {
   Profile* profile = ProfileManager::GetPrimaryUserProfile();
   profile->GetPrefs()->SetBoolean(arc::prefs::kArcSignedIn, true);
+  profile->GetPrefs()->SetBoolean(arc::prefs::kArcIsManaged, IsChild());
   arc::SetArcPlayStoreEnabledForProfile(profile, true);
 }
 
-// Flaky on linux-chromeos-rel (see https://crbug.com/1032997)
-IN_PROC_BROWSER_TEST_P(ManagementTransitionScreenTest,
-                       DISABLED_TransitionTimeout) {
+IN_PROC_BROWSER_TEST_P(ManagementTransitionScreenTest, TransitionTimeout) {
   OobeScreenWaiter(ManagementTransitionScreenView::kScreenId).Wait();
 
   test::OobeJS().ExpectVisiblePath(kManagementDialog);
@@ -179,11 +173,7 @@ IN_PROC_BROWSER_TEST_P(ManagementTransitionScreenTest,
   EXPECT_FALSE(LoginScreenTestApi::IsGuestButtonShown());
   EXPECT_FALSE(LoginScreenTestApi::IsAddUserButtonShown());
 
-  base::OneShotTimer* timer =
-      LoginDisplayHost::default_host()
-          ->GetOobeUI()
-          ->GetHandler<ManagementTransitionScreenHandler>()
-          ->GetTimerForTesting();
+  base::OneShotTimer* timer = GetScreen()->GetTimerForTesting();
   ASSERT_TRUE(timer->IsRunning());
   timer->FireNow();
 
@@ -215,12 +205,11 @@ INSTANTIATE_TEST_SUITE_P(
     ManagementTransitionScreenTest,
     testing::Values(
         TransitionScreenTestParams(LoggedInUserMixin::LogInType::kChild,
-                                   LoggedInUserMixin::LogInType::kRegular),
-        TransitionScreenTestParams(LoggedInUserMixin::LogInType::kRegular,
+                                   LoggedInUserMixin::LogInType::kConsumer),
+        TransitionScreenTestParams(LoggedInUserMixin::LogInType::kConsumer,
                                    LoggedInUserMixin::LogInType::kChild),
-        TransitionScreenTestParams(LoggedInUserMixin::LogInType::kRegular,
-                                   LoggedInUserMixin::LogInType::kRegular,
-                                   true /* use_managed_account */)));
+        TransitionScreenTestParams(LoggedInUserMixin::LogInType::kManaged,
+                                   LoggedInUserMixin::LogInType::kManaged)));
 
 }  // namespace
 }  // namespace ash

@@ -1,17 +1,18 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_MEDIA_ROUTER_DISCOVERY_DIAL_DEVICE_DESCRIPTION_SERVICE_H_
 #define CHROME_BROWSER_MEDIA_ROUTER_DISCOVERY_DIAL_DEVICE_DESCRIPTION_SERVICE_H_
 
+#include <map>
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
 #include "base/sequence_checker.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/media/router/discovery/dial/dial_device_data.h"
 #include "chrome/browser/media/router/discovery/dial/parsed_dial_device_description.h"
@@ -62,6 +63,10 @@ class DeviceDescriptionService {
   DeviceDescriptionService(
       const DeviceDescriptionParseSuccessCallback& success_cb,
       const DeviceDescriptionParseErrorCallback& error_cb);
+
+  DeviceDescriptionService(const DeviceDescriptionService&) = delete;
+  DeviceDescriptionService& operator=(const DeviceDescriptionService&) = delete;
+
   virtual ~DeviceDescriptionService();
 
   // For each device in |devices|, if there is a valid cache entry for it, call
@@ -79,6 +84,12 @@ class DeviceDescriptionService {
   virtual void ParseDeviceDescription(
       const DialDeviceData& device_data,
       const DialDeviceDescriptionData& description_data);
+
+  // Overridden by unit tests.
+  virtual std::unique_ptr<DeviceDescriptionFetcher> CreateFetcher(
+      const DialDeviceData& device_data,
+      base::OnceCallback<void(const DialDeviceDescriptionData&)> success_cb,
+      base::OnceCallback<void(const std::string&)> error_cb);
 
  private:
   friend class DeviceDescriptionServiceTest;
@@ -128,7 +139,7 @@ class DeviceDescriptionService {
   void OnParsedDeviceDescription(
       const DialDeviceData& device_data,
       const ParsedDialDeviceDescription& device_description,
-      SafeDialDeviceDescriptionParser::ParsingError parsing_error);
+      SafeDialDeviceDescriptionParser::ParsingResult parsing_result);
 
   // Remove expired cache entries from |description_map_|.
   void CleanUpCacheEntries();
@@ -160,8 +171,6 @@ class DeviceDescriptionService {
   SafeDialDeviceDescriptionParser device_description_parser_;
 
   SEQUENCE_CHECKER(sequence_checker_);
-
-  DISALLOW_COPY_AND_ASSIGN(DeviceDescriptionService);
 };
 
 }  // namespace media_router

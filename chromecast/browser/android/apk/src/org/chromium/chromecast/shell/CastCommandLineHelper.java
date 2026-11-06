@@ -1,144 +1,109 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chromecast.shell;
 
 import android.content.Intent;
-import android.content.SharedPreferences;
-
-import androidx.annotation.VisibleForTesting;
-
-import org.json.JSONException;
-import org.json.JSONObject;
 
 import org.chromium.base.CommandLine;
-import org.chromium.base.ContextUtils;
+import org.chromium.base.CommandLineInitUtil;
 import org.chromium.base.Log;
-import org.chromium.chromecast.base.Itertools;
 
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 
-/**
- * Helper class for handling command line flags passed to the Cast Service through Intent extras.
- */
+/** Helper class that serializes the command line arguments from Intent extra data. */
 public class CastCommandLineHelper {
     private static final String TAG = "CastCmdLineHelper";
-    private static final String COMMAND_LINE_FLAGS_PREF = "cast_command_line_args";
+    // Default command line flags for `cast_browser` process.
+    private static final String COMMAND_LINE_FILE = "castshell-command-line";
+    private static final String CAST_COMMAND_LINE_PARAM_KEY =
+            "com.google.android.apps.mediashell.CommandLineArgs";
 
-    private static final AtomicBoolean sCommandLineInitialized = new AtomicBoolean(false);
-
-    private CastCommandLineHelper() {}
-
-    /**
-     * Parses whitelisted command line args from the provided Intent's extras and saves them to
-     * persistent storage. No-op if the provided Intent is null.
-     */
-    public static void saveCommandLineArgsFromIntent(
-            Intent intent, Iterable<String> commandLineArgs) {
-        if (intent == null) return;
-
-        // Store the command line args in a JSON object to safely preserve the separation between
-        // switch name and value while fitting SharedPreferences' restricted set of supported types.
-        JSONObject cmdLineArgs = new JSONObject();
-        for (String swtch : commandLineArgs) {
-            // getStringExtra() returning null doesn't necessarily indicate the extra doesn't exist.
-            // It could be a null String extra, e.g. inserted with "--esn" from the command line or
-            // putExtra(name, (String) null)). Null values map to a switch with no value.
-            if (!intent.hasExtra(swtch)) continue;
-
-            String value = intent.getStringExtra(swtch);
-            try {
-                cmdLineArgs.put(swtch, (value == null) ? JSONObject.NULL : value);
-            } catch (JSONException e) {
-                Log.e(TAG, "failed to add arg to JSON object: %s=%s", swtch, value);
-                continue;
-            }
-        }
-
-        // If no matching extras were found, we still overwrite the preference to ensure that old
-        // args aren't applied.
-        SharedPreferences prefs = ContextUtils.getAppSharedPreferences();
-        prefs.edit().putString(COMMAND_LINE_FLAGS_PREF, cmdLineArgs.toString()).apply();
-    }
+    private static final Set<String> ALLOWED_SWITCHES =
+            new HashSet<>(
+                    Arrays.asList(
+                            "enable-cast-receiver",
+                            "cast-app-id",
+                            "remote-debugging-port",
+                            "v",
+                            "enable-features",
+                            "cast-core-service-endpoint",
+                            "cast-core-runtime-id",
+                            "runtime-service-path",
+                            "enable-grpc-over-tcpip",
+                            "runtime-auth-token",
+                            "metrics-recording-only",
+                            "force-video-overlays",
+                            "javaless-renderers"));
 
     /**
-     * Reads command line args from persistent storage and initializes the CommandLine with those
-     * args. Does not initialize CommandLine if it has been already been done.
+     * Initializes the command line and set the arguments from the Intent extra data.
+     *
+     * @param intent Intent to use to load command line arguments from.
      */
-    @SuppressWarnings("VisibleForTests")  // For call to cmdline.hasSwitch()
-    public static void initCommandLineWithSavedArgs(CommandLineInitializer commandLineInitializer) {
-        // CommandLine is a singleton, so check whether CastCommandLineHelper has initialized it
-        // already and do nothing if so. We keep track of this in a static variable so we can still
-        // assert that something else doesn't generally initialize the CommandLine before us.
-        if (!sCommandLineInitialized.compareAndSet(false, true)) {
-            Log.i(TAG, "command line already initialized by us, skipping");
+    public static void initCommandLine(Intent intent) {
+        CommandLineInitUtil.initCommandLine(COMMAND_LINE_FILE, null);
+
+        if (intent == null) {
             return;
         }
-        assert !CommandLine.isInitialized();
 
-        final JSONObject args = loadArgsFromPrefs(ContextUtils.getAppSharedPreferences());
+        String[] commandLineArgs = intent.getStringArrayExtra(CAST_COMMAND_LINE_PARAM_KEY);
+        if (commandLineArgs == null || commandLineArgs.length == 0) {
+            return;
+        }
 
-        // Let the injected delegate do the standard command line initialization.
-        final CommandLine cmdline = commandLineInitializer.initCommandLine();
-
-        // If SharedPreferences contains any command line args previously saved from an Intent,
-        // apply them as defaults, i.e. if a value isn't already present in the CommandLine
-        // singleton. Values may already be present if loaded by the Application.
-        for (String swtch : Itertools.fromIterator(args.keys())) {
-            String value;
-            try {
-                value = args.isNull(swtch) ? null : args.getString(swtch);
-            } catch (JSONException e) {
-                Log.e(TAG, "failed to get string value for switch '%s'", swtch);
+        List<String> safeArgs = new ArrayList<>();
+        for (String arg : commandLineArgs) {
+            if (arg == null) {
+                continue;
+            }
+            // Must start with at least one dash to be a switch.
+            if (!arg.startsWith("-")) {
+                // If it doesn't start with "-", it's a positional argument.
+                // We block them by default for security, as we only expect allowed switches.
                 continue;
             }
 
-            if (!cmdline.hasSwitch(swtch)) {
-                Log.d(TAG, "appending command line arg: %s=%s", swtch, value);
-                cmdline.appendSwitchWithValue(swtch, value);
-            } else {
-                Log.w(TAG, "skipped command line arg from intent, value already present: %s=%s",
-                        swtch, value);
+            // Handle "--" or "-" case (not a valid switch).
+            if (arg.equals("-") || arg.equals("--")) {
+                continue;
+            }
+
+            String switchName = arg.startsWith("--") ? arg.substring(2) : arg.substring(1);
+            int equalsIndex = switchName.indexOf('=');
+            if (equalsIndex > 0) {
+                switchName = switchName.substring(0, equalsIndex);
+            }
+
+            if (ALLOWED_SWITCHES.contains(switchName)) {
+                safeArgs.add(arg);
             }
         }
-    }
 
-    private static JSONObject loadArgsFromPrefs(SharedPreferences prefs) {
-        final String argsJson = prefs.getString(COMMAND_LINE_FLAGS_PREF, null);
-        if (argsJson == null) {
-            Log.i(TAG, "no saved command line args.");
-            return new JSONObject();
-        }
-        try {
-            return new JSONObject(argsJson);
-        } catch (JSONException e) {
-            Log.e(TAG, "failed to parse cmd line args stored in shared prefs: %s", e);
-            return new JSONObject();
-        }
-    }
-
-    @VisibleForTesting
-    static void resetSavedArgsForTest() {
-        SharedPreferences prefs = ContextUtils.getAppSharedPreferences();
-        prefs.edit().remove(COMMAND_LINE_FLAGS_PREF).apply();
-    }
-
-    @VisibleForTesting
-    static void resetCommandLineForTest() {
-        CommandLine.reset();
-        sCommandLineInitialized.set(false);
+        Log.d(TAG, "Applying command line arguments: count=%d", safeArgs.size());
+        CommandLine.getInstance().appendSwitchesAndArguments(safeArgs.toArray(new String[0]));
     }
 
     /**
-     * Delegate interface for initCommandLineWithSavedArgs().
+     * Store command line arguments to Intent's extra data.
      *
-     * The CommandLineInitializer is responsible for initializing the CommandLine singleton.
-     * CommandLine.isInitialized() must be true after this interface's method is called.
-     *
-     * TODO(sanfin): This is a workaround for an upstream refactor at go/chromium-cl/794031.
-     * Consider refactoring CastCommandLineHelper and other scattered CommandLine logic to depend
-     * less on singletons and other code smells.
+     * @param intent Intent to store the command line arguments to.
+     * @param commandLineArgs Command line arguments to store.
      */
-    public interface CommandLineInitializer { public CommandLine initCommandLine(); }
+    public static void setCommandLineArgs(Intent intent, String[] commandLineArgs) {
+        assert (intent != null);
+
+        if (commandLineArgs == null || commandLineArgs.length == 0) {
+            return;
+        }
+
+        Log.d(TAG, "Setting command line arguments: count=%d", commandLineArgs.length);
+        intent.putExtra(CAST_COMMAND_LINE_PARAM_KEY, commandLineArgs);
+    }
 }

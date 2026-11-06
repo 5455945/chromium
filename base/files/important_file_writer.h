@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,21 +6,23 @@
 #define BASE_FILES_IMPORTANT_FILE_WRITER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <variant>
 
 #include "base/base_export.h"
-#include "base/callback.h"
+#include "base/compiler_specific.h"
+#include "base/files/file.h"
 #include "base/files/file_path.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
-#include "base/strings/string_piece.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
-#include "third_party/abseil-cpp/absl/types/variant.h"
 
 namespace base {
-
-class SequencedTaskRunner;
 
 // Helper for atomically writing a file to ensure that it won't be corrupted by
 // *application* crash during write (implemented as create, flush, rename).
@@ -41,16 +43,17 @@ class BASE_EXPORT ImportantFileWriter {
   // Promise-like callback that returns (via output parameter) the serialized
   // data to be written. This callback is invoked on the sequence where I/O
   // operations are executed. Returning false indicates an error.
-  using BackgroundDataProducerCallback = base::OnceCallback<bool(std::string*)>;
+  using BackgroundDataProducerCallback =
+      base::OnceCallback<std::optional<std::string>()>;
 
   // Used by ScheduleSave to lazily provide the data to be saved. Allows us
   // to also batch data serializations.
   class BASE_EXPORT DataSerializer {
    public:
-    // Should put serialized string in |data| and return true on successful
-    // serialization. Will be called on the same thread on which
-    // ImportantFileWriter has been created.
-    virtual bool SerializeData(std::string* data) = 0;
+    // Returns a string for serialisation when successful, or a nullopt in case
+    // it failed to generate the data. Will be called on the same thread on
+    // which ImportantFileWriter has been created.
+    virtual std::optional<std::string> SerializeData() = 0;
 
    protected:
     virtual ~DataSerializer() = default;
@@ -74,24 +77,49 @@ class BASE_EXPORT ImportantFileWriter {
   // Save |data| to |path| in an atomic manner. Blocks and writes data on the
   // current thread. Does not guarantee file integrity across system crash (see
   // the class comment above).
-  static bool WriteFileAtomically(const FilePath& path,
-                                  StringPiece data,
-                                  StringPiece histogram_suffix = StringPiece());
+  static bool WriteFileAtomically(
+      const FilePath& path,
+      std::string_view data,
+      std::string_view histogram_suffix = std::string_view());
+
+  // If `file_path` does not exist, attempts to restore it by renaming the most
+  // recent temporary file in its parent directory whose name prefix matches
+  // `file_path`'s base name (i.e. a leftover temp file written by an
+  // ImportantFileWriter for that path). Does nothing if `file_path` already
+  // exists or if no matching temporary file is found. The outcome is recorded
+  // in the "ImportantFile.MissingFileRestoreResult{ImportantFileClients}"
+  // histogram only when `file_path` is missing.
+  static void RestoreMissingFileIfNeeded(
+      const FilePath& file_path,
+      std::string_view histogram_suffix = std::string_view());
+
+  // Tag type for constructors below to indicate that file I/O operations should
+  // be executed synchronously on the current sequence (which must allow
+  // blocking).
+  struct BlockCurrentSequenceTag {
+    explicit BlockCurrentSequenceTag() = default;
+  };
+  static constexpr BlockCurrentSequenceTag kBlockCurrentSequence{};
+
+  using TaskRunnerOrBlockCurrentSequence =
+      std::variant<scoped_refptr<SequencedTaskRunner>, BlockCurrentSequenceTag>;
 
   // Initialize the writer.
   // |path| is the name of file to write.
-  // |task_runner| is the SequencedTaskRunner instance where on which we will
-  // execute file I/O operations.
-  // All non-const methods, ctor and dtor must be called on the same thread.
+  // |task_runner| is either the SequencedTaskRunner instance on which we will
+  // execute file I/O operations, or `kBlockCurrentSequence` to execute file I/O
+  // operations synchronously on the current sequence (which must allow
+  // blocking).
+  // All non-const methods, ctor and dtor must be called on the same sequence.
   ImportantFileWriter(const FilePath& path,
-                      scoped_refptr<SequencedTaskRunner> task_runner,
-                      StringPiece histogram_suffix = StringPiece());
+                      TaskRunnerOrBlockCurrentSequence task_runner,
+                      std::string_view histogram_suffix = std::string_view());
 
   // Same as above, but with a custom commit interval.
   ImportantFileWriter(const FilePath& path,
-                      scoped_refptr<SequencedTaskRunner> task_runner,
+                      TaskRunnerOrBlockCurrentSequence task_runner,
                       TimeDelta interval,
-                      StringPiece histogram_suffix = StringPiece());
+                      std::string_view histogram_suffix = std::string_view());
 
   ImportantFileWriter(const ImportantFileWriter&) = delete;
   ImportantFileWriter& operator=(const ImportantFileWriter&) = delete;
@@ -100,15 +128,16 @@ class BASE_EXPORT ImportantFileWriter {
   // of destruction.
   ~ImportantFileWriter();
 
-  const FilePath& path() const { return path_; }
+  const FilePath& path() const LIFETIME_BOUND { return path_; }
 
   // Returns true if there is a scheduled write pending which has not yet
   // been started.
   bool HasPendingWrite() const;
 
-  // Save |data| to target filename. Does not block. If there is a pending write
-  // scheduled by ScheduleWrite(), it is cancelled.
-  void WriteNow(std::unique_ptr<std::string> data);
+  // Save |data| to target filename. Does not block (unless constructed with
+  // `kBlockCurrentSequence`). If there is a pending write scheduled by
+  // ScheduleWrite(), it is cancelled.
+  void WriteNow(std::string data);
 
   // Schedule a save to target filename. Data will be serialized and saved
   // to disk after the commit interval. If another ScheduleWrite is issued
@@ -118,11 +147,14 @@ class BASE_EXPORT ImportantFileWriter {
   // ImportantFileWriter.
   void ScheduleWrite(DataSerializer* serializer);
 
-  // Same as above but uses the BackgroundDataSerializer API.
+  // Same as above but uses the BackgroundDataSerializer API. Must not be called
+  // when constructed with `kBlockCurrentSequence`.
   void ScheduleWriteWithBackgroundDataSerializer(
       BackgroundDataSerializer* serializer);
 
-  // Serialize data pending to be saved and execute write on background thread.
+  // Serialize data pending to be saved and execute write on background thread
+  // (or synchronously on the current sequence if constructed with
+  // `kBlockCurrentSequence`).
   void DoScheduledWrite();
 
   // Registers |before_next_write_callback| and |after_next_write_callback| to
@@ -137,9 +169,7 @@ class BASE_EXPORT ImportantFileWriter {
       OnceClosure before_next_write_callback,
       OnceCallback<void(bool success)> after_next_write_callback);
 
-  TimeDelta commit_interval() const {
-    return commit_interval_;
-  }
+  TimeDelta commit_interval() const { return commit_interval_; }
 
   // Overrides the timer to use for scheduling writes with |timer_override|.
   void SetTimerForTesting(OneShotTimer* timer_override);
@@ -151,11 +181,18 @@ class BASE_EXPORT ImportantFileWriter {
     previous_data_size_ = previous_data_size;
   }
 
+  // Allows tests to call the given callback instead of ReplaceFile().
+  using ReplaceFileCallback =
+      RepeatingCallback<bool(const FilePath&, const FilePath&, File::Error*)>;
+  void SetReplaceFileCallbackForTesting(ReplaceFileCallback callback);
+
  private:
-  const OneShotTimer& timer() const {
+  const OneShotTimer& timer() const LIFETIME_BOUND {
     return timer_override_ ? *timer_override_ : timer_;
   }
-  OneShotTimer& timer() { return timer_override_ ? *timer_override_ : timer_; }
+  OneShotTimer& timer() LIFETIME_BOUND {
+    return timer_override_ ? *timer_override_ : timer_;
+  }
 
   // Same as WriteNow() but it uses a promise-like signature that allows running
   // custom logic in the background sequence.
@@ -169,6 +206,7 @@ class BASE_EXPORT ImportantFileWriter {
       BackgroundDataProducerCallback data_producer_for_background_sequence,
       OnceClosure before_write_callback,
       OnceCallback<void(bool success)> after_write_callback,
+      ReplaceFileCallback replace_file_callback,
       const std::string& histogram_suffix);
 
   // Writes |data| to |path|, recording histograms with an optional
@@ -176,10 +214,12 @@ class BASE_EXPORT ImportantFileWriter {
   // from an instance of ImportantFileWriter or a direct call to
   // WriteFileAtomically. When false, the directory containing |path| is added
   // to the set cleaned by the ImportantFileWriterCleaner (Windows only).
-  static bool WriteFileAtomicallyImpl(const FilePath& path,
-                                      StringPiece data,
-                                      StringPiece histogram_suffix,
-                                      bool from_instance);
+  static bool WriteFileAtomicallyImpl(
+      const FilePath& path,
+      std::string_view data,
+      std::string_view histogram_suffix,
+      bool from_instance,
+      ReplaceFileCallback replace_file_callback);
 
   void ClearPendingWrite();
 
@@ -190,17 +230,21 @@ class BASE_EXPORT ImportantFileWriter {
   // Path being written to.
   const FilePath path_;
 
-  // TaskRunner for the thread on which file I/O can be done.
-  const scoped_refptr<SequencedTaskRunner> task_runner_;
+  // TaskRunner for the thread on which file I/O can be done, or
+  // `kBlockCurrentSequence` if file I/O is done synchronously on the current
+  // sequence.
+  const TaskRunnerOrBlockCurrentSequence task_runner_;
 
   // Timer used to schedule commit after ScheduleWrite.
   OneShotTimer timer_;
 
   // An override for |timer_| used for testing.
-  OneShotTimer* timer_override_ = nullptr;
+  raw_ptr<OneShotTimer> timer_override_ = nullptr;
 
   // Serializer which will provide the data to be saved.
-  absl::variant<absl::monostate, DataSerializer*, BackgroundDataSerializer*>
+  std::variant<std::monostate,
+               raw_ptr<DataSerializer>,
+               raw_ptr<BackgroundDataSerializer>>
       serializer_;
 
   // Time delta after which scheduled data will be written to disk.
@@ -213,6 +257,8 @@ class BASE_EXPORT ImportantFileWriter {
   // preallocating memory for the data serialization. It is only used for
   // scheduled writes.
   size_t previous_data_size_ = 0;
+
+  ReplaceFileCallback replace_file_callback_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 

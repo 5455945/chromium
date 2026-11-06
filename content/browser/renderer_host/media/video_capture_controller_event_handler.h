@@ -1,17 +1,13 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_BROWSER_RENDERER_HOST_MEDIA_VIDEO_CAPTURE_CONTROLLER_EVENT_HANDLER_H_
 #define CONTENT_BROWSER_RENDERER_HOST_MEDIA_VIDEO_CAPTURE_CONTROLLER_EVENT_HANDLER_H_
 
-#include <memory>
-
-#include "content/common/content_export.h"
 #include "media/capture/mojom/video_capture_buffer.mojom.h"
 #include "media/capture/mojom/video_capture_types.mojom.h"
 #include "mojo/public/cpp/system/buffer.h"
-#include "ui/gfx/geometry/size.h"
 
 namespace media {
 class VideoFrame;
@@ -43,8 +39,11 @@ struct ReadyBuffer {
 // Other methods can be forwarded synchronously.
 
 // TODO(mcasas): https://crbug.com/654176 merge back into VideoCaptureController
-class CONTENT_EXPORT VideoCaptureControllerEventHandler {
+class VideoCaptureControllerEventHandler {
  public:
+  virtual void OnCaptureConfigurationChanged(
+      const VideoCaptureControllerID& id) = 0;
+
   // An Error has occurred in the VideoCaptureDevice.
   virtual void OnError(const VideoCaptureControllerID& id,
                        media::VideoCaptureError error) = 0;
@@ -59,10 +58,21 @@ class CONTENT_EXPORT VideoCaptureControllerEventHandler {
 
   // A buffer (and optionally scaled versions of it) has been filled with a
   // captured VideoFrame.
-  virtual void OnBufferReady(
-      const VideoCaptureControllerID& id,
-      const ReadyBuffer& buffer,
-      const std::vector<ReadyBuffer>& scaled_buffers) = 0;
+  virtual void OnBufferReady(const VideoCaptureControllerID& id,
+                             const ReadyBuffer& buffer) = 0;
+
+  // A frame was dropped - OnBufferReady() was never called for this frame. In
+  // other words the frame was dropped before it reached the renderer process.
+  virtual void OnFrameDropped(const VideoCaptureControllerID& id,
+                              media::VideoCaptureFrameDropReason reason) = 0;
+
+  // All subsequent buffers are guaranteed to have a capture version
+  // whose value is at least |capture_version|.
+  virtual void OnNewCaptureVersion(const VideoCaptureControllerID& id,
+                                   media::CaptureVersion capture_version) = 0;
+
+  virtual void OnFrameWithEmptyRegionCapture(
+      const VideoCaptureControllerID& id) = 0;
 
   // The capture session has ended and no more frames will be sent.
   virtual void OnEnded(const VideoCaptureControllerID& id) = 0;

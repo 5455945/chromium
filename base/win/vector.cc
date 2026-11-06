@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,11 @@
 namespace base {
 namespace win {
 namespace internal {
+
+VectorChangedEventArgs::VectorChangedEventArgs(
+    ABI::Windows::Foundation::Collections::CollectionChange change,
+    unsigned int index)
+    : change_(change), index_(index) {}
 
 HRESULT VectorChangedEventArgs::get_CollectionChange(
     ABI::Windows::Foundation::Collections::CollectionChange* value) {

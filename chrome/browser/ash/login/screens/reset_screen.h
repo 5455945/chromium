@@ -1,4 +1,4 @@
-// Copyright (c) 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,26 +6,25 @@
 #define CHROME_BROWSER_ASH_LOGIN_SCREENS_RESET_SCREEN_H_
 
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 
-#include "base/callback.h"
-#include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "ash/public/cpp/login_accelerators.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ash/login/help_app_launcher.h"
 #include "chrome/browser/ash/login/screens/base_screen.h"
-#include "chrome/browser/chromeos/tpm_firmware_update.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-// TODO(https://crbug.com/1164001): move to forward declaration.
-#include "chrome/browser/ui/webui/chromeos/login/reset_screen_handler.h"
-#include "chromeos/dbus/update_engine_client.h"
+#include "chrome/browser/ash/tpm/tpm_firmware_update.h"
+#include "chromeos/ash/components/dbus/update_engine/update_engine_client.h"
 
 class PrefRegistrySimple;
+class PrefService;
 
 namespace ash {
-class ErrorScreen;
+
+class ResetView;
 class ScopedGuestButtonBlocker;
 
 // Representation independent class that controls screen showing reset to users.
@@ -33,13 +32,22 @@ class ScopedGuestButtonBlocker;
 // will end up in the device restart.
 class ResetScreen : public BaseScreen, public UpdateEngineClient::Observer {
  public:
-  ResetScreen(ResetView* view,
-              ErrorScreen* error_screen,
-              const base::RepeatingClosure& exit_callback);
-  ~ResetScreen() override;
+  enum class State {
+    kRestartRequired = 0,
+    kRevertPromise,
+    kPowerwashProposal,
+    kError,
+  };
 
-  // Called when view is destroyed so there's no dead reference to it.
-  void OnViewDestroyed(ResetView* view);
+  // `local_state` must be non-null and must outlive `this`.
+  ResetScreen(PrefService* local_state,
+              base::WeakPtr<ResetView> view,
+              const base::RepeatingClosure& exit_callback);
+
+  ResetScreen(const ResetScreen&) = delete;
+  ResetScreen& operator=(const ResetScreen&) = delete;
+
+  ~ResetScreen() override;
 
   // Registers Local State preferences.
   static void RegisterPrefs(PrefRegistrySimple* registry);
@@ -59,17 +67,27 @@ class ResetScreen : public BaseScreen, public UpdateEngineClient::Observer {
   // TPM firmware update has to be installed, the mode of update will be passed
   // as second parameter to `callback`.
   static void CheckIfPowerwashAllowed(
-      base::OnceCallback<void(bool, absl::optional<tpm_firmware_update::Mode>)>
+      base::OnceCallback<void(bool, std::optional<tpm_firmware_update::Mode>)>
           callback);
 
  private:
   // BaseScreen implementation:
   void ShowImpl() override;
   void HideImpl() override;
-  void OnUserAction(const std::string& action_id) override;
+  void OnUserAction(const base::ListValue& args) override;
+  bool HandleAccelerator(LoginAcceleratorAction action) final;
 
   // UpdateEngineClient::Observer implementation:
   void UpdateStatusChanged(const update_engine::StatusResult& status) override;
+
+  void SetIsRollbackAvailable(bool value);
+  // Only serve the request if the confirmation dialog isn't being shown.
+  void SetIsRollbackRequested(bool value);
+  void SetIsTpmFirmwareUpdateChecked(bool value);
+  void SetTpmFirmwareUpdateMode(tpm_firmware_update::Mode value);
+  void SetShouldShowConfirmationDialog(bool value);
+  void SetConfirmationDialogClosed();
+  void SetScreenState(State value);
 
   void OnRollbackCheck(bool can_rollback);
   void OnTPMFirmwareUpdateAvailableCheck(
@@ -79,13 +97,12 @@ class ResetScreen : public BaseScreen, public UpdateEngineClient::Observer {
   void OnPowerwash();
   void OnRestart();
   void OnToggleRollback();
-  void OnShowConfirm();
-  void OnConfirmationDismissed();
 
   void ShowHelpArticle(HelpAppLauncher::HelpTopic topic);
 
-  ResetView* view_;
-  ErrorScreen* error_screen_;
+  const raw_ref<PrefService> local_state_;
+
+  base::WeakPtr<ResetView> view_;
   base::RepeatingClosure exit_callback_;
 
   // Help application used for help dialogs.
@@ -96,17 +113,16 @@ class ResetScreen : public BaseScreen, public UpdateEngineClient::Observer {
 
   std::unique_ptr<ScopedGuestButtonBlocker> scoped_guest_button_blocker_;
 
-  base::WeakPtrFactory<ResetScreen> weak_ptr_factory_{this};
+  State state_ = State::kRestartRequired;
+  tpm_firmware_update::Mode mode_ = tpm_firmware_update::Mode::kPowerwash;
+  bool is_rollback_available_ = false;
+  bool is_rollback_requested_ = false;
+  bool is_tpm_firmware_update_checked_ = false;
+  bool is_showing_confirmation_dialog_ = false;
 
-  DISALLOW_COPY_AND_ASSIGN(ResetScreen);
+  base::WeakPtrFactory<ResetScreen> weak_ptr_factory_{this};
 };
 
 }  // namespace ash
-
-// TODO(https://crbug.com/1164001): remove after the //chrome/browser/chromeos
-// source migration is finished.
-namespace chromeos {
-using ::ash::ResetScreen;
-}
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_SCREENS_RESET_SCREEN_H_

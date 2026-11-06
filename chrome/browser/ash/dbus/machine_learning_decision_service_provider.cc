@@ -1,18 +1,18 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/dbus/machine_learning_decision_service_provider.h"
 
-#include "base/bind.h"
+#include "ash/constants/ash_features.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "chrome/browser/ash/power/ml/user_activity_controller.h"
-#include "chrome/common/chrome_features.h"
 #include "dbus/bus.h"
 #include "dbus/message.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
-namespace chromeos {
+namespace ash {
 
 MachineLearningDecisionServiceProvider::MachineLearningDecisionServiceProvider()
     : user_activity_controller_(
@@ -24,7 +24,8 @@ MachineLearningDecisionServiceProvider::
 void MachineLearningDecisionServiceProvider::Start(
     scoped_refptr<dbus::ExportedObject> exported_object) {
   exported_object->ExportMethod(
-      kMlDecisionServiceInterface, kMlDecisionServiceShouldDeferScreenDimMethod,
+      chromeos::kMlDecisionServiceInterface,
+      chromeos::kMlDecisionServiceShouldDeferScreenDimMethod,
       base::BindRepeating(
           &MachineLearningDecisionServiceProvider::ShouldDeferScreenDim,
           weak_ptr_factory_.GetWeakPtr()),
@@ -47,9 +48,9 @@ void MachineLearningDecisionServiceProvider::ShouldDeferScreenDim(
   std::unique_ptr<dbus::Response> response =
       dbus::Response::FromMethodCall(method_call);
 
-  // Smart dim only works when features::kSmartDim is enabled. Simply return
-  // false otherwise.
-  if (!base::FeatureList::IsEnabled(features::kSmartDim)) {
+  // Smart dim only works when ash::features::kSmartDim is enabled. Simply
+  // return false otherwise.
+  if (!base::FeatureList::IsEnabled(ash::features::kSmartDim)) {
     SendSmartDimDecision(std::move(response), std::move(response_sender),
                          false);
     return;
@@ -70,4 +71,4 @@ void MachineLearningDecisionServiceProvider::SendSmartDimDecision(
   std::move(response_sender).Run(std::move(response));
 }
 
-}  // namespace chromeos
+}  // namespace ash

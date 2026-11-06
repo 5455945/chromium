@@ -1,16 +1,19 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.webapps;
 
 import android.content.Context;
-import android.util.Log;
 
 import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.ContextUtils;
-import org.chromium.base.StrictModeContext;
+import org.chromium.base.Log;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -27,12 +30,13 @@ import javax.crypto.spec.SecretKeySpec;
 /**
  * Authenticate the source of Intents to launch web apps (see {@link #WebappLauncherActivity}).
  *
- * Chrome does not keep a store of valid URLs for installed web apps (because it cannot know when
+ * <p>Chrome does not keep a store of valid URLs for installed web apps (because it cannot know when
  * any have been uninstalled). Therefore, upon installation, it tells the Launcher a message
  * authentication code (MAC) along with the URL for the web app, and then Chrome can verify the MAC
  * when starting e.g. {@link #WebappLauncherActivity}. Chrome can thus distinguish between
  * legitimate, installed web apps and arbitrary other URLs.
  */
+@NullMarked
 public class WebappAuthenticator {
     private static final String TAG = "WebappAuthenticator";
     private static final String MAC_ALGORITHM_NAME = "HmacSHA256";
@@ -40,22 +44,23 @@ public class WebappAuthenticator {
     private static final int MAC_KEY_BYTE_COUNT = 32;
     private static final Object sLock = new Object();
 
-    private static SecretKey sKey;
+    public static final int MAC_INVALID = 0;
+    public static final int MAC_LEGACY = 1;
+    public static final int MAC_TRUSTED = 2;
+
+    private static @Nullable SecretKey sKey;
 
     /**
      * @see #getMacForUrl
-     *
      * @param url The URL to validate.
      * @param mac The bytes of a previously-calculated MAC.
-     *
      * @return true if the MAC is a valid MAC for the URL, false otherwise.
      */
     public static boolean isUrlValid(String url, byte[] mac) {
         byte[] goodMac;
-        // TODO(crbug.com/525785): Temporarily allowing disk access until more permanent fix is in.
-        try (StrictModeContext ignored = StrictModeContext.allowDiskReads()) {
-            goodMac = getMacForUrl(url);
-        }
+        // TODO(crbug.com/41198030): Temporarily allowing disk access until more permanent fix is
+        // in.
+        goodMac = getMacForUrl(url);
         if (goodMac == null) {
             return false;
         }
@@ -64,21 +69,75 @@ public class WebappAuthenticator {
 
     /**
      * @see #isUrlValid
-     *
      * @param url A URL for which to calculate a MAC.
-     *
      * @return The bytes of a MAC for the URL, or null if a secure MAC was not available.
      */
-    public static byte[] getMacForUrl(String url) {
+    public static byte @Nullable [] getMacForUrl(String url) {
+        return getMacForUrlAndIcon(url, null);
+    }
+
+    /**
+     * Calculates a MAC for a URL and an encoded icon using length-prefixed encoding.
+     *
+     * @param url A URL for which to calculate a MAC.
+     * @param encodedIcon The base64 encoded icon, or null.
+     * @return The bytes of a MAC, or null if a secure MAC was not available.
+     */
+    public static byte @Nullable [] getMacForUrlAndIcon(String url, @Nullable String encodedIcon) {
         Mac mac = getMac();
         if (mac == null) {
             return null;
         }
-        return mac.doFinal(ApiCompatibilityUtils.getBytesUtf8(url));
+        if (encodedIcon == null) {
+            mac.update(ApiCompatibilityUtils.getBytesUtf8(url));
+            return mac.doFinal();
+        }
+        try {
+            ByteArrayOutputStream byteStream = new ByteArrayOutputStream();
+            DataOutputStream dataStream = new DataOutputStream(byteStream);
+            byte[] urlBytes = ApiCompatibilityUtils.getBytesUtf8(url);
+            dataStream.writeInt(urlBytes.length);
+            dataStream.write(urlBytes);
+            byte[] iconBytes = ApiCompatibilityUtils.getBytesUtf8(encodedIcon);
+            dataStream.writeInt(iconBytes.length);
+            dataStream.write(iconBytes);
+            dataStream.flush();
+            mac.update(byteStream.toByteArray());
+            return mac.doFinal();
+        } catch (IOException e) {
+            Log.w(TAG, "Error serializing MAC data", e);
+            return null;
+        }
+    }
+
+    /**
+     * Verifies the MAC for a URL and encoded icon.
+     *
+     * @param url The URL to validate.
+     * @param encodedIcon The base64 encoded icon, or null.
+     * @param mac The bytes of a previously-calculated MAC.
+     * @return MAC_TRUSTED (2) if MAC matches URL and Icon. MAC_LEGACY (1) if MAC matches URL only.
+     *     MAC_INVALID (0) otherwise.
+     */
+    public static int verifyMac(String url, @Nullable String encodedIcon, byte[] mac) {
+        assert mac != null;
+        if (encodedIcon != null) {
+            byte[] goodMacWithIcon = getMacForUrlAndIcon(url, encodedIcon);
+            if (goodMacWithIcon != null && constantTimeAreArraysEqual(goodMacWithIcon, mac)) {
+                return MAC_TRUSTED;
+            }
+        }
+        byte[] goodMacUrlOnly = getMacForUrlAndIcon(url, null);
+        if (goodMacUrlOnly != null && constantTimeAreArraysEqual(goodMacUrlOnly, mac)) {
+            return MAC_LEGACY;
+        }
+        return MAC_INVALID;
     }
 
     // TODO(palmer): Put this method, and as much of this class as possible, in a utility class.
     private static boolean constantTimeAreArraysEqual(byte[] a, byte[] b) {
+        assert a != null;
+        assert b != null;
         if (a.length != b.length) {
             return false;
         }
@@ -90,13 +149,13 @@ public class WebappAuthenticator {
         return result == 0;
     }
 
-    private static SecretKey readKeyFromFile(
+    private static @Nullable SecretKey readKeyFromFile(
             Context context, String basename, String algorithmName) {
         FileInputStream input = null;
         File file = context.getFileStreamPath(basename);
         try {
             if (file.length() != MAC_KEY_BYTE_COUNT) {
-                Log.w(TAG, "Could not read key from '" + file + "': invalid file contents");
+                Log.w(TAG, "Could not read key from '%s': invalid file contents", file);
                 return null;
             }
 
@@ -112,7 +171,7 @@ public class WebappAuthenticator {
                 return null;
             }
         } catch (Exception e) {
-            Log.w(TAG, "Could not read key from '" + file + "': " + e);
+            Log.w(TAG, "Could not read key from '%s'", file, e);
             return null;
         } finally {
             try {
@@ -120,7 +179,7 @@ public class WebappAuthenticator {
                     input.close();
                 }
             } catch (IOException e) {
-                Log.e(TAG, "Could not close key input stream '" + file + "': " + e);
+                Log.e(TAG, "Could not close key input stream '%s'", file, e);
             }
         }
     }
@@ -130,8 +189,11 @@ public class WebappAuthenticator {
         byte[] keyBytes = key.getEncoded();
         FileOutputStream output = null;
         if (MAC_KEY_BYTE_COUNT != keyBytes.length) {
-            Log.e(TAG, "writeKeyToFile got key encoded bytes length " + keyBytes.length
-                    + "; expected " + MAC_KEY_BYTE_COUNT);
+            Log.e(
+                    TAG,
+                    "writeKeyToFile got key encoded bytes length %d; expected %d",
+                    keyBytes.length,
+                    MAC_KEY_BYTE_COUNT);
             return false;
         }
 
@@ -140,7 +202,7 @@ public class WebappAuthenticator {
             output.write(keyBytes);
             return true;
         } catch (Exception e) {
-            Log.e(TAG, "Could not write key to '" + file + "': " + e);
+            Log.e(TAG, "Could not write key to '%s'", file, e);
             return false;
         } finally {
             try {
@@ -148,12 +210,12 @@ public class WebappAuthenticator {
                     output.close();
                 }
             } catch (IOException e) {
-                Log.e(TAG, "Could not close key output stream '" + file + "': " + e);
+                Log.e(TAG, "Could not close key output stream '%s'", file, e);
             }
         }
     }
 
-    private static SecretKey getKey() {
+    private static @Nullable SecretKey getKey() {
         synchronized (sLock) {
             if (sKey == null) {
                 Context context = ContextUtils.getApplicationContext();
@@ -174,9 +236,7 @@ public class WebappAuthenticator {
         }
     }
 
-    /**
-     * Generates the authentication encryption key in a background thread (if necessary).
-     */
+    /** Generates the authentication encryption key in a background thread (if necessary). */
     private static SecretKey generateMacKey() {
         if (sKey != null) {
             return sKey;
@@ -194,7 +254,7 @@ public class WebappAuthenticator {
     /**
      * @return A Mac, or null if it is not possible to instantiate one.
      */
-    private static Mac getMac() {
+    private static @Nullable Mac getMac() {
         try {
             SecretKey key = getKey();
             if (key == null) {

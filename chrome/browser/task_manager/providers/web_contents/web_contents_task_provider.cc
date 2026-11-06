@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,19 +6,30 @@
 
 #include <memory>
 
-#include "base/bind.h"
 #include "base/check.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/notreached.h"
 #include "chrome/browser/task_manager/providers/web_contents/back_forward_cache_task.h"
+#include "chrome/browser/task_manager/providers/web_contents/guest_task_mparch.h"
+#include "chrome/browser/task_manager/providers/web_contents/prerender_task.h"
 #include "chrome/browser/task_manager/providers/web_contents/subframe_task.h"
 #include "chrome/browser/task_manager/providers/web_contents/web_contents_tags_manager.h"
+#include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "content/public/common/content_features.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "components/guest_view/browser/guest_view_base.h"
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 using content::RenderFrameHost;
 using content::RenderProcessHost;
@@ -26,6 +37,24 @@ using content::SiteInstance;
 using content::WebContents;
 
 namespace task_manager {
+
+namespace {
+
+bool IsMPArchGuestMainFrame(RenderFrameHost* render_frame_host) {
+  if (!base::FeatureList::IsEnabled(features::kGuestViewMPArch)) {
+    return false;
+  }
+#if BUILDFLAG(IS_ANDROID)
+  // Guest view is not enabled on Android.
+  return false;
+#else   // BUILDFLAG(IS_ANDROID)
+  auto* guest =
+      guest_view::GuestViewBase::FromRenderFrameHost(render_frame_host);
+  return guest && guest->GetGuestMainFrame() == render_frame_host;
+#endif  // BUILDFLAG(IS_ANDROID)
+}
+
+}  // namespace
 
 // Defines an entry for each WebContents that will be tracked by the provider.
 // The entry is used to observe certain events in its corresponding WebContents
@@ -53,7 +82,8 @@ class WebContentsTaskProvider::WebContentsEntry
   // Returns the |RendererTask| that corresponds to the given
   // |render_frame_host| or |nullptr| if the given frame is not tracked by this
   // entry.
-  RendererTask* GetTaskForFrame(RenderFrameHost* render_frame_host) const;
+  base::WeakPtr<RendererTask> GetTaskForFrame(
+      RenderFrameHost* render_frame_host) const;
 
   // content::WebContentsObserver:
   void RenderFrameDeleted(RenderFrameHost* render_frame_host) override;
@@ -63,17 +93,17 @@ class WebContentsTaskProvider::WebContentsEntry
       RenderFrameHost* render_frame_host,
       RenderFrameHost::LifecycleState old_state,
       RenderFrameHost::LifecycleState new_state) override;
-  void RenderFrameCreated(RenderFrameHost*) override;
   void WebContentsDestroyed() override;
   void OnRendererUnresponsive(RenderProcessHost* render_process_host) override;
   void DidFinishNavigation(
       content::NavigationHandle* navigation_handle) override;
-  void TitleWasSet(content::NavigationEntry* entry) override;
+  void TitleWasSetForMainFrame(
+      content::RenderFrameHost* render_frame_host) override;
 
   void RenderFrameReady(int process_routing_id, int frame_routing_id);
 
  private:
-  // Defines a callback for WebContents::ForEachFrame() to create a
+  // Defines a callback for WebContents::ForEachRenderFrameHost() to create a
   // corresponding task for the given |render_frame_host| and notifying the
   // provider's observer of the new task.
   void CreateTaskForFrame(RenderFrameHost* render_frame_host);
@@ -91,19 +121,19 @@ class WebContentsTaskProvider::WebContentsEntry
   RenderFrameHost* FindLocalRoot(RenderFrameHost* render_frame_host) const;
 
   // The provider that owns this entry.
-  WebContentsTaskProvider* provider_;
+  raw_ptr<WebContentsTaskProvider> provider_;
 
   // For each SiteInstance, the frames within it that are tracked (local roots
   // only as per FindLocalRoot()), and its RendererTask. The number of tracked
   // items is small, thus flat_map and flat_set.
   struct SiteInstanceInfo {
-    base::flat_set<RenderFrameHost*> frames;
+    base::flat_set<raw_ptr<RenderFrameHost, CtnExperimental>> frames;
     std::unique_ptr<RendererTask> renderer_task;
   };
   base::flat_map<SiteInstance*, SiteInstanceInfo> site_instance_infos_;
 
   // States whether we did record a main frame for this entry.
-  SiteInstance* main_frame_site_instance_ = nullptr;
+  raw_ptr<SiteInstance> primary_main_frame_site_instance_ = nullptr;
 
   base::WeakPtrFactory<WebContentsEntry> weak_factory_{this};
 };
@@ -120,9 +150,26 @@ WebContentsTaskProvider::WebContentsEntry::~WebContentsEntry() {
 }
 
 void WebContentsTaskProvider::WebContentsEntry::CreateAllTasks() {
-  DCHECK(web_contents()->GetMainFrame());
-  web_contents()->ForEachFrame(base::BindRepeating(
-      &WebContentsEntry::CreateTaskForFrame, base::Unretained(this)));
+  CHECK(web_contents()->GetPrimaryMainFrame(), base::NotFatalUntil::M162);
+  web_contents()->ForEachRenderFrameHost(
+      [this](content::RenderFrameHost* render_frame_host) {
+        const auto state = render_frame_host->GetLifecycleState();
+        // `WebContents::ForEachRenderFrameHost` does not iterate over
+        // speculative or pending commit RFHs.
+        //
+        // TODO(crbug.com/40262518): Move this CHECK into
+        // `WebContents::ForEachRenderFrameHost`.
+        CHECK_NE(state, RenderFrameHost::LifecycleState::kPendingCommit);
+        // TODO(crbug.com/40262518):
+        // `WebContents::ForEachRenderFrameHost` should explicitly exclude
+        // `kPendingDeletion`, just like `kSpeculative` and `kPendingCommit`.
+        if (state == RenderFrameHost::LifecycleState::kPendingDeletion) {
+          // A `kPendingDeletion` RFH will soon be destroyed. The task manager
+          // does not need to create a task for such a RFH.
+          return;
+        }
+        CreateTaskForFrame(render_frame_host);
+      });
 }
 
 void WebContentsTaskProvider::WebContentsEntry::ClearAllTasks(
@@ -137,10 +184,11 @@ void WebContentsTaskProvider::WebContentsEntry::ClearAllTasks(
   }
 
   site_instance_infos_.clear();
-  main_frame_site_instance_ = nullptr;
+  primary_main_frame_site_instance_ = nullptr;
 }
 
-RendererTask* WebContentsTaskProvider::WebContentsEntry::GetTaskForFrame(
+base::WeakPtr<RendererTask>
+WebContentsTaskProvider::WebContentsEntry::GetTaskForFrame(
     RenderFrameHost* render_frame_host) const {
   SiteInstance* site_instance = render_frame_host->GetSiteInstance();
   auto itr = site_instance_infos_.find(site_instance);
@@ -148,19 +196,19 @@ RendererTask* WebContentsTaskProvider::WebContentsEntry::GetTaskForFrame(
     return nullptr;
 
   // Only local roots are in the frame list.
-  if (!itr->second.frames.count(render_frame_host))
+  if (!itr->second.frames.count(FindLocalRoot(render_frame_host)))
     return nullptr;
 
-  return itr->second.renderer_task.get();
+  return itr->second.renderer_task->AsWeakPtr();
 }
 
 RenderFrameHost* WebContentsTaskProvider::WebContentsEntry::FindLocalRoot(
     RenderFrameHost* render_frame_host) const {
-  SiteInstance* site_instance = render_frame_host->GetSiteInstance();
   RenderFrameHost* candidate = render_frame_host;
   while (RenderFrameHost* parent = candidate->GetParent()) {
-    if (parent->GetSiteInstance() != site_instance)
+    if (parent->GetProcess() != candidate->GetProcess()) {
       break;
+    }
     candidate = parent;
   }
   return candidate;
@@ -174,8 +222,6 @@ void WebContentsTaskProvider::WebContentsEntry::RenderFrameDeleted(
 void WebContentsTaskProvider::WebContentsEntry::RenderFrameHostChanged(
     RenderFrameHost* old_host,
     RenderFrameHost* new_host) {
-  DCHECK(new_host->IsActive());
-
   // The navigating frame and its subframes are now pending deletion. Stop
   // tracking them immediately rather than when they are destroyed. The order of
   // deletion is important. The children must be removed first.
@@ -183,12 +229,11 @@ void WebContentsTaskProvider::WebContentsEntry::RenderFrameHostChanged(
     ClearTasksForDescendantsOf(old_host);
     ClearTaskForFrame(old_host);
   }
-
-  CreateTaskForFrame(new_host);
+  // Tasks creation for |new_host| is delayed to |DidFinishNavigation|.
 }
 
-// Only handle frames entering or exiting
-// RenderFrameHost::LifecycleState::kInBackForwardCache.
+// Handles creation and deletion of BFCache tasks for pages entering and leaving
+// the BFCache, and deletion of prerender tasks after prerendering activation.
 void WebContentsTaskProvider::WebContentsEntry::RenderFrameHostStateChanged(
     RenderFrameHost* render_frame_host,
     RenderFrameHost::LifecycleState old_state,
@@ -198,18 +243,14 @@ void WebContentsTaskProvider::WebContentsEntry::RenderFrameHostStateChanged(
 
   if (new_state == RenderFrameHost::LifecycleState::kInBackForwardCache)
     CreateTaskForFrame(render_frame_host);
-}
 
-void WebContentsTaskProvider::WebContentsEntry::RenderFrameCreated(
-    RenderFrameHost* render_frame_host) {
-  DCHECK(render_frame_host->IsRenderFrameLive());
-
-  // Skip pending/speculative hosts. We'll create tasks for these if the
-  // navigation commits, at which point RenderFrameHostChanged() will fire.
-  if (!render_frame_host->IsActive())
-    return;
-
-  CreateTaskForFrame(render_frame_host);
+  // |RenderFrameDeleted| is not fired for prerender page activation so we need
+  // to delete prerender task. |RenderFrameHostStateChanged| is the earliest
+  // event of the prerendering activation flow.
+  if (old_state == RenderFrameHost::LifecycleState::kPrerendering &&
+      new_state == RenderFrameHost::LifecycleState::kActive) {
+    ClearTaskForFrame(render_frame_host);
+  }
 }
 
 void WebContentsTaskProvider::WebContentsEntry::RenderFrameReady(
@@ -222,14 +263,14 @@ void WebContentsTaskProvider::WebContentsEntry::RenderFrameReady(
   if (!render_frame_host)
     return;
 
-  Task* task = GetTaskForFrame(render_frame_host);
-
-  if (!task)
+  base::WeakPtr<Task> task = GetTaskForFrame(render_frame_host);
+  if (!task) {
     return;
+  }
 
   const base::ProcessId determine_pid_from_handle = base::kNullProcessId;
   provider_->UpdateTaskProcessInfoAndNotifyObserver(
-      task, render_frame_host->GetProcess()->GetProcess().Handle(),
+      task.get(), render_frame_host->GetProcess()->GetProcess().Handle(),
       determine_pid_from_handle);
 }
 
@@ -251,24 +292,66 @@ void WebContentsTaskProvider::WebContentsEntry::OnRendererUnresponsive(
 
 void WebContentsTaskProvider::WebContentsEntry::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
-  // We only need to update tasks for main frame navigations.
-  // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
-  // frames. This caller was converted automatically to the primary main frame
-  // to preserve its semantics. Follow up to confirm correctness.
-  if (!navigation_handle->IsInPrimaryMainFrame())
+  // No task creation/update for downloads and HTTP204/205.
+  if (!navigation_handle->HasCommitted()) {
     return;
+  }
 
-  RendererTask* main_frame_task =
-      GetTaskForFrame(web_contents()->GetMainFrame());
-  if (!main_frame_task)
+  // Creation.
+  //
+  // Create a task if we have not encountered this site instance before, or it
+  // is a new RenderFrameHost for this site instance. For same-document
+  // navigation, since neither |RenderFrameDeleted| nor |RenderFrameHostChanged|
+  // is fired to delete the existing task, we do not recreate them.
+  //
+  // TODO(crbug.com/40171294): DidFinishNavigation is not called when we
+  // create initial empty documents, and as a result, we will not create new
+  // tasks for these empty documents if they are in a different process from
+  // their embedder/opener (eg: an empty fenced frame or a blank tab created by
+  // window.open('', '_blank', 'noopener')). Ideally, we would call
+  // CreateTaskForFrame inside RenderFrameCreated instead (which is called for
+  // initial documents), but CreateTaskForFrame uses RFH::GetLifecycleState,
+  // which cannot currently be called inside RenderFrameCreated (due to a DCHECK
+  // which doesn't allow the method to be called when the state is
+  // 'kSpeculative').
+  {
+    auto* rfh = navigation_handle->GetRenderFrameHost();
+    auto* site_instance = rfh->GetSiteInstance();
+    auto it = site_instance_infos_.find(site_instance);
+    if (!navigation_handle->IsSameDocument() &&
+        (it == site_instance_infos_.end() ||
+         it->second.frames.find(rfh) == it->second.frames.end())) {
+      CreateTaskForFrame(rfh);
+    }
+  }
+
+  // Update.
+  //
+  // We only need to update tasks for primary main frame navigations except for
+  // MPArch guest view.
+  //
+  // FencedFrame task gets the title from
+  // |SecurityPrincipal::GetDeprecatedSiteURL()| which does not change for the
+  // same site instance, thus no need to update;
+  // prerender does not support multiple navigations thus no need to update its
+  // title.
+  if (!navigation_handle->IsInPrimaryMainFrame() &&
+      !IsMPArchGuestMainFrame(navigation_handle->GetRenderFrameHost())) {
     return;
+  }
+
+  base::WeakPtr<RendererTask> main_frame_task =
+      GetTaskForFrame(web_contents()->GetPrimaryMainFrame());
+  if (!main_frame_task) {
+    return;
+  }
 
   for (auto& it : site_instance_infos_) {
-    RendererTask* task = it.second.renderer_task.get();
+    base::WeakPtr<RendererTask> task = it.second.renderer_task->AsWeakPtr();
 
-    // Listening to WebContentsObserver::TitleWasSet() only is not enough in
-    // some cases when the the web page doesn't have a title. That's why we
-    // update the title here as well.
+    // Listening to WebContentsObserver::TitleWasSetForMainFrame() only is
+    // not enough in some cases when the the web page doesn't have a title.
+    // That's why we update the title here as well.
     task->UpdateTitle();
 
     // Call RendererTask::UpdateFavicon() to set the current favicon to the
@@ -279,32 +362,51 @@ void WebContentsTaskProvider::WebContentsEntry::DidFinishNavigation(
   }
 }
 
-void WebContentsTaskProvider::WebContentsEntry::TitleWasSet(
-    content::NavigationEntry* entry) {
-  for (auto& it : site_instance_infos_) {
-    RendererTask* task = it.second.renderer_task.get();
-    task->UpdateTitle();
-    task->UpdateFavicon();
+void WebContentsTaskProvider::WebContentsEntry::TitleWasSetForMainFrame(
+    content::RenderFrameHost* render_frame_host) {
+  content::SiteInstance* site_instance = render_frame_host->GetSiteInstance();
+  if (auto it = site_instance_infos_.find(site_instance);
+      it != site_instance_infos_.end()) {
+    it->second.renderer_task->UpdateTitle();
+    it->second.renderer_task->UpdateFavicon();
   }
 }
 
 void WebContentsTaskProvider::WebContentsEntry::CreateTaskForFrame(
     RenderFrameHost* render_frame_host) {
+  CHECK(render_frame_host, base::NotFatalUntil::M162);
   // Currently we do not track speculative RenderFrameHosts or RenderFrameHosts
   // which are pending deletion.
-  DCHECK(render_frame_host);
-  DCHECK(render_frame_host->IsActive() ||
-         render_frame_host->GetLifecycleState() ==
-             RenderFrameHost::LifecycleState::kInBackForwardCache);
+  const auto rfh_state = render_frame_host->GetLifecycleState();
+  switch (rfh_state) {
+    case RenderFrameHost::LifecycleState::kPrerendering:
+    case RenderFrameHost::LifecycleState::kInBackForwardCache:
+    case RenderFrameHost::LifecycleState::kActive:
+      break;
+    default:
+      NOTREACHED() << "Illegal RFH state for TaskManager: "
+                   << static_cast<int>(rfh_state);
+  }
 
-  // Exclude sad tabs and sad OOPIFs.
-  if (!render_frame_host->IsRenderFrameLive())
+  // Exclude sad tabs, sad OOPIFs.
+  if (!render_frame_host->IsRenderFrameLive()) {
     return;
+  }
+
+  // Another instance of this class will be created for inner WebContents. If we
+  // iterate into an inner WebContents that is not associated with `this`, skip
+  // it, so we don't create duplicated tasks. Task creation for RenderFrameHosts
+  // not associated with a WebContents should be handled by a different type of
+  // TaskProvider.
+  if (content::WebContents::FromRenderFrameHost(render_frame_host) !=
+      web_contents()) {
+    return;
+  }
 
   // Exclude frames in the same SiteInstance or same process as their parent;
   // |site_instance_infos_| only contains local roots.
   content::SiteInstance* site_instance = render_frame_host->GetSiteInstance();
-  auto* parent = render_frame_host->GetParent();
+  auto* parent = render_frame_host->GetParentOrOuterDocument();
   if (parent && (site_instance == parent->GetSiteInstance() ||
                  site_instance->GetProcess() ==
                      parent->GetSiteInstance()->GetProcess())) {
@@ -312,9 +414,9 @@ void WebContentsTaskProvider::WebContentsEntry::CreateTaskForFrame(
   }
 
   bool site_instance_exists = site_instance_infos_.count(site_instance) != 0;
-  bool is_primary_main_frame =
-      (render_frame_host == web_contents()->GetMainFrame());
-  bool site_instance_is_main = (site_instance == main_frame_site_instance_);
+  bool is_primary_main_frame = render_frame_host->IsInPrimaryMainFrame();
+  bool site_instance_is_main =
+      (site_instance == primary_main_frame_site_instance_);
 
   std::unique_ptr<RendererTask> new_task;
 
@@ -323,27 +425,34 @@ void WebContentsTaskProvider::WebContentsEntry::CreateTaskForFrame(
   // represented by a SubframeTask.
   if (!site_instance_exists ||
       (is_primary_main_frame && !site_instance_is_main)) {
-    if (render_frame_host->GetLifecycleState() ==
-        RenderFrameHost::LifecycleState::kInBackForwardCache) {
-      // Use RFH::GetMainFrame instead web_contents()->GetMainFrame() because
-      // the BFCached frames are not the currently active main frame.
+    base::WeakPtr<RendererTask> primary_main_frame_task =
+        GetTaskForFrame(web_contents()->GetPrimaryMainFrame());
+
+    if (rfh_state == RenderFrameHost::LifecycleState::kInBackForwardCache) {
+      // Use RFH::GetMainFrame instead web_contents()->GetPrimaryMainFrame()
+      // because the BFCached frames are not the currently active main frame.
       RenderFrameHost* main_frame = render_frame_host->GetMainFrame();
       new_task = std::make_unique<BackForwardCacheTask>(
-          render_frame_host, GetTaskForFrame(main_frame));
+          render_frame_host, GetTaskForFrame(main_frame), provider_);
+    } else if (rfh_state == RenderFrameHost::LifecycleState::kPrerendering) {
+      new_task = std::make_unique<PrerenderTask>(render_frame_host, provider_);
     } else if (is_primary_main_frame) {
       const WebContentsTag* tag =
           WebContentsTag::FromWebContents(web_contents());
       new_task = tag->CreateTask(provider_);
-      main_frame_site_instance_ = site_instance;
+      primary_main_frame_site_instance_ = site_instance;
+    } else if (IsMPArchGuestMainFrame(render_frame_host)) {
+      new_task = std::make_unique<GuestTaskMPArch>(
+          render_frame_host, std::move(primary_main_frame_task));
     } else {
       new_task = std::make_unique<SubframeTask>(
-          render_frame_host, GetTaskForFrame(web_contents()->GetMainFrame()));
+          render_frame_host, std::move(primary_main_frame_task));
     }
   }
 
   auto insert_result =
       site_instance_infos_[site_instance].frames.insert(render_frame_host);
-  DCHECK(insert_result.second);
+  CHECK(insert_result.second, base::NotFatalUntil::M162);
 
   if (new_task) {
     if (site_instance_exists) {
@@ -361,7 +470,7 @@ void WebContentsTaskProvider::WebContentsEntry::CreateTaskForFrame(
       render_frame_host->GetProcess()->PostTaskWhenProcessIsReady(
           base::BindOnce(&WebContentsEntry::RenderFrameReady,
                          weak_factory_.GetWeakPtr(),
-                         render_frame_host->GetProcess()->GetID(),
+                         render_frame_host->GetProcess()->GetDeprecatedID(),
                          render_frame_host->GetRoutingID()));
     }
   }
@@ -369,7 +478,7 @@ void WebContentsTaskProvider::WebContentsEntry::CreateTaskForFrame(
 
 void WebContentsTaskProvider::WebContentsEntry::ClearTaskForFrame(
     RenderFrameHost* render_frame_host) {
-  DCHECK(render_frame_host);
+  CHECK(render_frame_host, base::NotFatalUntil::M162);
   content::SiteInstance* site_instance = render_frame_host->GetSiteInstance();
   auto itr = site_instance_infos_.find(site_instance);
   if (itr == site_instance_infos_.end())
@@ -386,44 +495,42 @@ void WebContentsTaskProvider::WebContentsEntry::ClearTaskForFrame(
     site_instance_infos_.erase(itr);
     provider_->NotifyObserverTaskRemoved(renderer_task.get());
 
-    if (site_instance == main_frame_site_instance_)
-      main_frame_site_instance_ = nullptr;
+    if (site_instance == primary_main_frame_site_instance_)
+      primary_main_frame_site_instance_ = nullptr;
   }
 
 #if DCHECK_IS_ON()
   // Whenever we have a task, we should have a main frame site instance.
-  // However, when a tab is destroyed and there was a BFCached Task, the main
-  // task may be cleaned up before the BFCached Task.
+  // However, when a tab is destroyed and there was a BFCached Task or a
+  // prerender task, the main task may be cleaned up before the
+  // BFCached/prerender Task. BFCache or prerender tasks will be deleted
+  // asynchronously after the main frame is deleted.
 
-  bool only_bfcache_rfhs = true;
-  for (auto& entry : site_instance_infos_) {
-    for (auto* rfh : entry.second.frames) {
-      if (rfh->GetLifecycleState() !=
-          RenderFrameHost::LifecycleState::kInBackForwardCache) {
-        only_bfcache_rfhs = false;
+  bool only_bfcache_or_prerender_rfhs = true;
+  for (auto& [ignore, site_instance_info] : site_instance_infos_) {
+    for (RenderFrameHost* rfh : site_instance_info.frames) {
+      const auto state = rfh->GetLifecycleState();
+      if (state != RenderFrameHost::LifecycleState::kInBackForwardCache &&
+          state != RenderFrameHost::LifecycleState::kPrerendering) {
+        only_bfcache_or_prerender_rfhs = false;
       }
     }
   }
-
-  DCHECK(only_bfcache_rfhs || site_instance_infos_.empty() ==
-                                  (main_frame_site_instance_ == nullptr));
+  CHECK(only_bfcache_or_prerender_rfhs ||
+            site_instance_infos_.empty() ==
+                (primary_main_frame_site_instance_ == nullptr),
+        base::NotFatalUntil::M162);
 #endif
 }
 
 void WebContentsTaskProvider::WebContentsEntry::ClearTasksForDescendantsOf(
     RenderFrameHost* ancestor) {
-  // 1) Collect descendants.
-  base::flat_set<RenderFrameHost*> descendants;
-  for (const auto& site_instance_pair : site_instance_infos_) {
-    for (auto* frame : site_instance_pair.second.frames) {
-      if (frame->IsDescendantOf(ancestor))
-        descendants.insert(frame);
-    }
-  }
-
-  // 2) Delete them.
-  for (RenderFrameHost* rfh : descendants)
-    ClearTaskForFrame(rfh);
+  ancestor->ForEachRenderFrameHost(
+      [this, ancestor](content::RenderFrameHost* render_frame_host) {
+        if (render_frame_host == ancestor)
+          return;
+        ClearTaskForFrame(render_frame_host);
+      });
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -438,9 +545,9 @@ WebContentsTaskProvider::~WebContentsTaskProvider() {
 
 void WebContentsTaskProvider::OnWebContentsTagCreated(
     const WebContentsTag* tag) {
-  DCHECK(tag);
+  CHECK(tag, base::NotFatalUntil::M162);
   content::WebContents* web_contents = tag->web_contents();
-  DCHECK(web_contents);
+  CHECK(web_contents, base::NotFatalUntil::M162);
 
   // TODO(afakhry): Check if we need this check. It seems that we no longer
   // need it in the new implementation.
@@ -459,12 +566,12 @@ void WebContentsTaskProvider::OnWebContentsTagCreated(
 
 void WebContentsTaskProvider::OnWebContentsTagRemoved(
     const WebContentsTag* tag) {
-  DCHECK(tag);
+  CHECK(tag, base::NotFatalUntil::M162);
   content::WebContents* web_contents = tag->web_contents();
-  DCHECK(web_contents);
+  CHECK(web_contents, base::NotFatalUntil::M162);
 
   auto itr = entries_map_.find(web_contents);
-  DCHECK(itr != entries_map_.end());
+  CHECK(itr != entries_map_.end());
 
   // Must manually clear the tasks and notify the observer.
   itr->second->ClearAllTasks(true);
@@ -474,7 +581,7 @@ void WebContentsTaskProvider::OnWebContentsTagRemoved(
 Task* WebContentsTaskProvider::GetTaskOfUrlRequest(int child_id, int route_id) {
   content::RenderFrameHost* rfh =
       content::RenderFrameHost::FromID(child_id, route_id);
-  return GetTaskOfFrame(rfh);
+  return GetTaskOfFrame(rfh).get();
 }
 
 bool WebContentsTaskProvider::HasWebContents(
@@ -482,7 +589,8 @@ bool WebContentsTaskProvider::HasWebContents(
   return entries_map_.count(web_contents) != 0;
 }
 
-Task* WebContentsTaskProvider::GetTaskOfFrame(content::RenderFrameHost* rfh) {
+base::WeakPtr<Task> WebContentsTaskProvider::GetTaskOfFrame(
+    content::RenderFrameHost* rfh) {
   content::WebContents* web_contents =
       content::WebContents::FromRenderFrameHost(rfh);
 
@@ -504,8 +612,9 @@ void WebContentsTaskProvider::StartUpdating() {
 
   // 1- Collect all pre-existing WebContents from the WebContentsTagsManager.
   WebContentsTagsManager* tags_manager = WebContentsTagsManager::GetInstance();
-  for (const auto* tag : tags_manager->tracked_tags())
+  for (const task_manager::WebContentsTag* tag : tags_manager->tracked_tags()) {
     OnWebContentsTagCreated(tag);
+  }
 
   // 2- Start observing newly connected ones.
   tags_manager->SetProvider(this);
@@ -525,7 +634,7 @@ void WebContentsTaskProvider::DeleteEntry(content::WebContents* web_contents) {
   // This erase() will delete the WebContentsEntry, which is actually our
   // caller, but it's expecting us to delete it.
   bool success = entries_map_.erase(web_contents) != 0;
-  DCHECK(success);
+  CHECK(success, base::NotFatalUntil::M162);
 }
 
 }  // namespace task_manager

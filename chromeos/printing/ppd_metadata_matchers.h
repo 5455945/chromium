@@ -1,9 +1,12 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 // This file contains matchers useful for testing with parsed PPD
 // metadata.
+
+#ifndef CHROMEOS_PRINTING_PPD_METADATA_MATCHERS_H_
+#define CHROMEOS_PRINTING_PPD_METADATA_MATCHERS_H_
 
 #include <string>
 
@@ -11,9 +14,6 @@
 #include "base/version.h"
 #include "chromeos/printing/ppd_metadata_parser.h"
 #include "testing/gmock/include/gmock/gmock-matchers.h"
-
-#ifndef CHROMEOS_PRINTING_PPD_METADATA_MATCHERS_H_
-#define CHROMEOS_PRINTING_PPD_METADATA_MATCHERS_H_
 
 namespace chromeos {
 
@@ -64,10 +64,10 @@ MATCHER_P2(RestrictionsWithMinAndMaxMilestones,
 MATCHER(UnboundedRestrictions,
         "is a Restrictions with neither min nor max milestones") {
   return ExplainMatchResult(
-             Field(&Restrictions::min_milestone, Eq(absl::nullopt)), arg,
+             Field(&Restrictions::min_milestone, Eq(std::nullopt)), arg,
              result_listener) &&
          ExplainMatchResult(
-             Field(&Restrictions::max_milestone, Eq(absl::nullopt)), arg,
+             Field(&Restrictions::max_milestone, Eq(std::nullopt)), arg,
              result_listener);
 }
 

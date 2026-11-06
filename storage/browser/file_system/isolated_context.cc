@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,17 +10,29 @@
 #include <memory>
 
 #include "base/check_op.h"
-#include "base/macros.h"
 #include "base/notreached.h"
 #include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "storage/browser/file_system/file_system_url.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
+
+class GURL;
 
 namespace storage {
 
 namespace {
+
+// The given path should not contain any '..' and should be absolute.
+bool IsPathValid(const base::FilePath& path) {
+#if BUILDFLAG(IS_ANDROID)
+  if (path.IsContentUri()) {
+    return true;
+  }
+#endif
+  return !path.ReferencesParent() && path.IsAbsolute();
+}
 
 base::FilePath::StringType GetRegisterNameForPath(const base::FilePath& path) {
   // If it's not a root path simply return a base name.
@@ -61,9 +73,9 @@ IsolatedContext::FileInfoSet::~FileInfoSet() = default;
 
 bool IsolatedContext::FileInfoSet::AddPath(const base::FilePath& path,
                                            std::string* registered_name) {
-  // The given path should not contain any '..' and should be absolute.
-  if (path.ReferencesParent() || !path.IsAbsolute())
+  if (!IsPathValid(path)) {
     return false;
+  }
   base::FilePath::StringType name = GetRegisterNameForPath(path);
   std::string utf8name = base::FilePath(name).AsUTF8Unsafe();
   base::FilePath normalized_path = path.NormalizePathSeparators();
@@ -90,9 +102,9 @@ bool IsolatedContext::FileInfoSet::AddPath(const base::FilePath& path,
 
 bool IsolatedContext::FileInfoSet::AddPathWithName(const base::FilePath& path,
                                                    const std::string& name) {
-  // The given path should not contain any '..' and should be absolute.
-  if (path.ReferencesParent() || !path.IsAbsolute())
+  if (!IsPathValid(path)) {
     return false;
+  }
   return fileset_.insert(MountPointInfo(name, path.NormalizePathSeparators()))
       .second;
 }
@@ -161,6 +173,9 @@ class IsolatedContext::Instance {
   // could be registered by IsolatedContext::RegisterDraggedFileSystem().
   Instance(FileSystemType type, const std::set<MountPointInfo>& files);
 
+  Instance(const Instance&) = delete;
+  Instance& operator=(const Instance&) = delete;
+
   ~Instance();
 
   FileSystemType type() const { return type_; }
@@ -191,8 +206,6 @@ class IsolatedContext::Instance {
   // Reference counts. Note that an isolated filesystem is created with ref==0
   // and will get deleted when the ref count reaches <=0.
   int ref_counts_;
-
-  DISALLOW_COPY_AND_ASSIGN(Instance);
 };
 
 IsolatedContext::Instance::Instance(FileSystemType type,
@@ -269,8 +282,9 @@ IsolatedContext::ScopedFSHandle IsolatedContext::RegisterFileSystemForPath(
     const base::FilePath& path_in,
     std::string* register_name) {
   base::FilePath path(path_in.NormalizePathSeparators());
-  if (path.ReferencesParent() || !path.IsAbsolute())
+  if (!IsPathValid(path)) {
     return ScopedFSHandle();
+  }
   std::string name;
   if (register_name && !register_name->empty()) {
     name = *register_name;
@@ -348,8 +362,8 @@ bool IsolatedContext::CrackVirtualPath(
   *mount_option = FileSystemMountOption();
 
   // The virtual_path should comprise <id_or_name> and <relative_path> parts.
-  std::vector<base::FilePath::StringType> components;
-  virtual_path.GetComponents(&components);
+  std::vector<base::FilePath::StringType> components =
+      virtual_path.GetComponents();
   if (components.size() < 1)
     return false;
   auto component_iter = components.begin();
@@ -388,18 +402,20 @@ bool IsolatedContext::CrackVirtualPath(
   return true;
 }
 
-FileSystemURL IsolatedContext::CrackURL(const GURL& url) const {
-  FileSystemURL filesystem_url = FileSystemURL(url);
+FileSystemURL IsolatedContext::CrackURL(
+    const GURL& url,
+    const blink::StorageKey& storage_key) const {
+  FileSystemURL filesystem_url = FileSystemURL(url, storage_key);
   if (!filesystem_url.is_valid())
     return FileSystemURL();
   return CrackFileSystemURL(filesystem_url);
 }
 
 FileSystemURL IsolatedContext::CreateCrackedFileSystemURL(
-    const url::Origin& origin,
+    const blink::StorageKey& storage_key,
     FileSystemType type,
     const base::FilePath& virtual_path) const {
-  return CrackFileSystemURL(FileSystemURL(origin, type, virtual_path));
+  return CrackFileSystemURL(FileSystemURL(storage_key, type, virtual_path));
 }
 
 void IsolatedContext::RevokeFileSystemByPath(const base::FilePath& path_in) {
@@ -415,7 +431,7 @@ void IsolatedContext::RevokeFileSystemByPath(const base::FilePath& path_in) {
 
 void IsolatedContext::AddReference(const std::string& filesystem_id) {
   base::AutoLock locker(lock_);
-  DCHECK(instance_map_.find(filesystem_id) != instance_map_.end());
+  DCHECK(instance_map_.contains(filesystem_id));
   instance_map_[filesystem_id]->AddRef();
 }
 
@@ -474,7 +490,7 @@ FileSystemURL IsolatedContext::CrackFileSystemURL(
   }
 
   return FileSystemURL(
-      url.origin(), url.mount_type(), url.virtual_path(),
+      url.storage_key(), url.mount_type(), url.virtual_path(),
       !url.filesystem_id().empty() ? url.filesystem_id() : mount_name,
       cracked_type, cracked_path,
       cracked_mount_name.empty() ? mount_name : cracked_mount_name,
@@ -489,7 +505,7 @@ bool IsolatedContext::UnregisterFileSystem(const std::string& filesystem_id) {
   Instance* instance = found->second.get();
   if (instance->IsSinglePathInstance()) {
     auto ids_iter = path_to_id_map_.find(instance->file_info().path);
-    DCHECK(ids_iter != path_to_id_map_.end());
+    CHECK(ids_iter != path_to_id_map_.end());
     ids_iter->second.erase(filesystem_id);
     if (ids_iter->second.empty())
       path_to_id_map_.erase(ids_iter);
@@ -501,12 +517,12 @@ bool IsolatedContext::UnregisterFileSystem(const std::string& filesystem_id) {
 std::string IsolatedContext::GetNewFileSystemId() const {
   // Returns an arbitrary random string which must be unique in the map.
   lock_.AssertAcquired();
-  uint32_t random_data[4];
+  uint8_t random_data[16];
   std::string id;
   do {
-    base::RandBytes(random_data, sizeof(random_data));
-    id = base::HexEncode(random_data, sizeof(random_data));
-  } while (instance_map_.find(id) != instance_map_.end());
+    base::RandBytes(random_data);
+    id = base::HexEncode(random_data);
+  } while (instance_map_.contains(id));
   return id;
 }
 

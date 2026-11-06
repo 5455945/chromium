@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,16 @@
 #include <algorithm>
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/utf_string_conversions.h"
-#include "components/autofill/core/browser/autofill_data_util.h"
-#include "components/autofill/core/browser/data_model/autofill_profile.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
+#include "components/autofill/core/browser/data_model/addresses/name_info.h"
+#include "components/autofill/core/browser/data_quality/autofill_data_util.h"
+#include "components/autofill/core/browser/data_quality/validation.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/geo/address_i18n.h"
 #include "components/autofill/core/browser/geo/autofill_country.h"
-#include "components/autofill/core/browser/validation.h"
 #include "components/payments/core/payment_options_provider.h"
 #include "components/payments/core/payment_request_data_util.h"
 #include "components/strings/grit/components_strings.h"
@@ -29,7 +31,7 @@ PaymentsProfileComparator::PaymentsProfileComparator(
     const PaymentOptionsProvider& options)
     : autofill::AutofillProfileComparator(app_locale), options_(options) {}
 
-PaymentsProfileComparator::~PaymentsProfileComparator() {}
+PaymentsProfileComparator::~PaymentsProfileComparator() = default;
 
 PaymentsProfileComparator::ProfileFields
 PaymentsProfileComparator::GetMissingProfileFields(
@@ -37,23 +39,26 @@ PaymentsProfileComparator::GetMissingProfileFields(
   if (!profile)
     return kName | kPhone | kEmail | kAddress;
 
-  if (!cache_.count(profile->guid())) {
-    cache_[profile->guid()] = ComputeMissingFields(*profile);
+  auto it = cache_.find(profile->guid());
+  if (it == cache_.end()) {
+    it = cache_.emplace(profile->guid(), ComputeMissingFields(*profile)).first;
   } else {
     // Cache hit. In debug mode, recompute and check that invalidation has
     // occurred where necessary.
-    DCHECK_EQ(cache_[profile->guid()], ComputeMissingFields(*profile))
+    DCHECK_EQ(it->second, ComputeMissingFields(*profile))
         << "Profiles must be invalidated when their contents change.";
   }
 
-  return cache_[profile->guid()];
+  return it->second;
 }
 
-std::vector<autofill::AutofillProfile*>
+std::vector<raw_ptr<autofill::AutofillProfile, VectorExperimental>>
 PaymentsProfileComparator::FilterProfilesForContact(
-    const std::vector<autofill::AutofillProfile*>& profiles) const {
+    const std::vector<raw_ptr<autofill::AutofillProfile, VectorExperimental>>&
+        profiles) const {
   // We will be removing profiles, so we operate on a copy.
-  std::vector<autofill::AutofillProfile*> processed = profiles;
+  std::vector<raw_ptr<autofill::AutofillProfile, VectorExperimental>>
+      processed = profiles;
 
   // Stable sort, since profiles are expected to be passed in frecency order.
   std::stable_sort(
@@ -93,29 +98,41 @@ PaymentsProfileComparator::FilterProfilesForContact(
 bool PaymentsProfileComparator::IsContactEqualOrSuperset(
     const autofill::AutofillProfile& super,
     const autofill::AutofillProfile& sub) const {
-  if (options_.request_payer_name()) {
+  if (options_->request_payer_name()) {
     if (sub.HasInfo(autofill::NAME_FULL) &&
         !super.HasInfo(autofill::NAME_FULL)) {
       return false;
     }
-    if (!HaveMergeableNames(super, sub))
+    const base::expected<autofill::NameInfo,
+                         autofill::NameInfo::MergeFailureReason>
+        names_merge_result = autofill::NameInfo::MergeNames(
+            super.GetNameInfo(), super.GetAddressCountryCode(),
+            sub.GetNameInfo(), sub.GetAddressCountryCode(),
+            sub.usage_history().use_date() < super.usage_history().use_date());
+    if (!names_merge_result.has_value() &&
+        names_merge_result.error() !=
+            autofill::NameInfo::MergeFailureReason::kAlternativeNameFailed) {
       return false;
+    }
   }
-  if (options_.request_payer_phone()) {
+  if (options_->request_payer_phone()) {
     if (sub.HasInfo(autofill::PHONE_HOME_WHOLE_NUMBER) &&
         !super.HasInfo(autofill::PHONE_HOME_WHOLE_NUMBER)) {
       return false;
     }
-    if (!HaveMergeablePhoneNumbers(super, sub))
+    if (!MergePhoneNumbers(super, sub).has_value()) {
       return false;
+    }
   }
-  if (options_.request_payer_email()) {
+  if (options_->request_payer_email()) {
     if (sub.HasInfo(autofill::EMAIL_ADDRESS) &&
         !super.HasInfo(autofill::EMAIL_ADDRESS)) {
       return false;
     }
-    if (!HaveMergeableEmailAddresses(super, sub))
+
+    if (!MergeEmailAddresses(super, sub).has_value()) {
       return false;
+    }
   }
   return true;
 }
@@ -138,12 +155,14 @@ bool PaymentsProfileComparator::IsContactInfoComplete(
            GetRequiredProfileFieldsForContact());
 }
 
-std::vector<autofill::AutofillProfile*>
+std::vector<raw_ptr<autofill::AutofillProfile, VectorExperimental>>
 PaymentsProfileComparator::FilterProfilesForShipping(
-    const std::vector<autofill::AutofillProfile*>& profiles) const {
+    const std::vector<raw_ptr<autofill::AutofillProfile, VectorExperimental>>&
+        profiles) const {
   // Since we'll be changing the order/contents of the const input vector,
   // we make a copy.
-  std::vector<autofill::AutofillProfile*> processed = profiles;
+  std::vector<raw_ptr<autofill::AutofillProfile, VectorExperimental>>
+      processed = profiles;
 
   std::stable_sort(
       processed.begin(), processed.end(),
@@ -152,7 +171,7 @@ PaymentsProfileComparator::FilterProfilesForShipping(
                GetShippingCompletenessScore(p2);
       });
 
-  // TODO(crbug.com/722949): Remove profiles with no relevant information, or
+  // TODO(crbug.com/40520855): Remove profiles with no relevant information, or
   // which are subsets of more-complete profiles.
 
   return processed;
@@ -176,36 +195,6 @@ bool PaymentsProfileComparator::IsShippingComplete(
   // are set (i.e., the result is nonzero), then shipping is incomplete.
   return !(GetMissingProfileFields(profile) &
            GetRequiredProfileFieldsForShipping());
-}
-
-void PaymentsProfileComparator::RecordMissingFieldsOfShippingProfile(
-    const autofill::AutofillProfile* profile) const {
-  // We should not record anything when no shipping fields is required.
-  if (GetRequiredProfileFieldsForShipping() == kNone)
-    return;
-
-  // Record any required fields that are missing.
-  PaymentsProfileComparator::ProfileFields missing_fields =
-      GetMissingProfileFields(profile) & GetRequiredProfileFieldsForShipping();
-  if (missing_fields != kNone) {
-    base::UmaHistogramSparse("PaymentRequest.MissingShippingFields",
-                             missing_fields);
-  }
-}
-
-void PaymentsProfileComparator::RecordMissingFieldsOfContactProfile(
-    const autofill::AutofillProfile* profile) const {
-  // We should not record anything when no contact fields is required.
-  if (GetRequiredProfileFieldsForContact() == kNone)
-    return;
-
-  // Record any required fields that are missing.
-  PaymentsProfileComparator::ProfileFields missing_fields =
-      GetMissingProfileFields(profile) & GetRequiredProfileFieldsForContact();
-  if (missing_fields != kNone) {
-    base::UmaHistogramSparse("PaymentRequest.MissingContactFields",
-                             missing_fields);
-  }
 }
 
 std::u16string PaymentsProfileComparator::GetStringForMissingContactFields(
@@ -253,15 +242,14 @@ PaymentsProfileComparator::ComputeMissingFields(
   const std::string country =
       autofill::data_util::GetCountryCodeWithFallback(profile, app_locale());
 
-  std::u16string phone = profile.GetInfo(
-      autofill::AutofillType(autofill::PHONE_HOME_WHOLE_NUMBER), app_locale());
+  std::u16string phone =
+      profile.GetInfo(autofill::PHONE_HOME_WHOLE_NUMBER, app_locale());
   std::u16string intl_phone = base::UTF8ToUTF16("+" + base::UTF16ToUTF8(phone));
   if (!(autofill::IsPossiblePhoneNumber(phone, country) ||
         autofill::IsPossiblePhoneNumber(intl_phone, country)))
     missing |= kPhone;
 
-  std::u16string email = profile.GetInfo(
-      autofill::AutofillType(autofill::EMAIL_ADDRESS), app_locale());
+  std::u16string email = profile.GetInfo(autofill::EMAIL_ADDRESS, app_locale());
   if (!autofill::IsValidEmailAddress(email))
     missing |= kEmail;
 
@@ -274,18 +262,18 @@ PaymentsProfileComparator::ComputeMissingFields(
 PaymentsProfileComparator::ProfileFields
 PaymentsProfileComparator::GetRequiredProfileFieldsForContact() const {
   ProfileFields required = kNone;
-  if (options_.request_payer_name())
+  if (options_->request_payer_name())
     required |= kName;
-  if (options_.request_payer_phone())
+  if (options_->request_payer_phone())
     required |= kPhone;
-  if (options_.request_payer_email())
+  if (options_->request_payer_email())
     required |= kEmail;
   return required;
 }
 
 PaymentsProfileComparator::ProfileFields
 PaymentsProfileComparator::GetRequiredProfileFieldsForShipping() const {
-  return options_.request_shipping() ? (kAddress | kName | kPhone) : kNone;
+  return options_->request_shipping() ? (kAddress | kName | kPhone) : kNone;
 }
 
 std::u16string PaymentsProfileComparator::GetStringForMissingFields(
@@ -315,7 +303,6 @@ std::u16string PaymentsProfileComparator::GetTitleForMissingFields(
   switch (fields) {
     case 0:
       NOTREACHED() << "Title should not be requested if no fields are missing";
-      return std::u16string();
     case kName:
       return l10n_util::GetStringUTF16(IDS_PAYMENTS_ADD_NAME);
     case kPhone:

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,16 +8,27 @@
 namespace user_prefs {
 namespace tracked {
 
+extern const char kTrackedPrefHistogramAuthDataCalculated[];
+extern const char kTrackedPrefHistogramNewValueSerialized[];
 extern const char kTrackedPrefHistogramUnchanged[];
 extern const char kTrackedPrefHistogramCleared[];
-extern const char kTrackedPrefHistogramMigratedLegacyDeviceId[];
 extern const char kTrackedPrefHistogramChanged[];
 extern const char kTrackedPrefHistogramInitialized[];
 extern const char kTrackedPrefHistogramTrustedInitialized[];
 extern const char kTrackedPrefHistogramNullInitialized[];
 extern const char kTrackedPrefHistogramWantedReset[];
 extern const char kTrackedPrefHistogramReset[];
+extern const char kTrackedPrefHistogramResetEncrypted[];
 extern const char kTrackedPrefRegistryValidationSuffix[];
+extern const char kTrackedPrefHistogramWantedResetEncrypted[];
+// Histograms for encrypted hash validation.
+extern const char kTrackedPrefHistogramUnchangedEncrypted[];
+extern const char kTrackedPrefHistogramClearedEncrypted[];
+extern const char kTrackedPrefHistogramChangedEncrypted[];
+// Histograms for HMAC validation fallback.
+extern const char kTrackedPrefHistogramUnchangedViaHmacFallback[];
+extern const char kTrackedPrefHistogramClearedViaHmacFallback[];
+extern const char kTrackedPrefHistogramChangedViaHmacFallback[];
 
 }  // namespace tracked
 }  // namespace user_prefs

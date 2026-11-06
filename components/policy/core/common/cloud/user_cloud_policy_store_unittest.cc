@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,22 +6,31 @@
 
 #include <memory>
 
+#include "base/command_line.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/macros.h"
-#include "base/run_loop.h"
+#include "base/logging.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/test/gmock_callback_support.h"
+#include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/test/test_future.h"
+#include "base/time/time.h"
 #include "components/account_id/account_id.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/mock_cloud_external_data_manager.h"
 #include "components/policy/core/common/cloud/mock_cloud_policy_store.h"
 #include "components/policy/core/common/cloud/test/policy_builder.h"
+#include "components/policy/core/common/features.h"
 #include "components/policy/core/common/policy_switches.h"
 #include "components/policy/policy_constants.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+using base::test::TaskEnvironment;
+using base::test::TestFuture;
 using testing::AllOf;
 using testing::Eq;
 using testing::Mock;
@@ -32,10 +41,7 @@ namespace policy {
 
 namespace {
 
-void RunUntilIdle() {
-  base::RunLoop run_loop;
-  run_loop.RunUntilIdle();
-}
+const base::TimeDelta kShortDelay = base::Seconds(15);
 
 bool WriteStringToFile(const base::FilePath path, const std::string& data) {
   if (!base::CreateDirectory(path.DirName())) {
@@ -43,8 +49,7 @@ bool WriteStringToFile(const base::FilePath path, const std::string& data) {
     return false;
   }
 
-  int size = data.size();
-  if (base::WriteFile(path, data.c_str(), size) != size) {
+  if (!base::WriteFile(path, data)) {
     DLOG(WARNING) << "Failed to write " << path.value();
     return false;
   }
@@ -58,12 +63,16 @@ class UserCloudPolicyStoreTest : public testing::Test {
  public:
   UserCloudPolicyStoreTest()
       : task_environment_(
-            base::test::SingleThreadTaskEnvironment::MainThreadType::UI) {}
+            base::test::SingleThreadTaskEnvironment::MainThreadType::UI,
+            TaskEnvironment::TimeSource::MOCK_TIME) {}
+  UserCloudPolicyStoreTest(const UserCloudPolicyStoreTest&) = delete;
+  UserCloudPolicyStoreTest& operator=(const UserCloudPolicyStoreTest&) = delete;
 
   void SetUp() override {
     ASSERT_TRUE(tmp_dir_.CreateUniqueTempDir());
     store_ = std::make_unique<UserCloudPolicyStore>(
-        policy_file(), key_file(), base::ThreadTaskRunnerHandle::Get());
+        policy_file(), key_file(), dm_protocol::GetChromeUserPolicyType(),
+        base::SingleThreadTaskRunner::GetCurrentDefault());
     external_data_manager_ = std::make_unique<MockCloudExternalDataManager>();
     external_data_manager_->SetPolicyStore(store_.get());
     store_->SetSigninAccountId(PolicyBuilder::GetFakeAccountIdForTesting());
@@ -76,6 +85,14 @@ class UserCloudPolicyStoreTest : public testing::Test {
     // provision).
     policy_.SetDefaultInitialSigningKey();
 
+    // This will change the verification key to be used by the
+    // CloudPolicyValidator. It will allow for the policy provided by the
+    // PolicyBuilder to pass the signature validation.
+    base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+    command_line->AppendSwitchASCII(
+        switches::kPolicyVerificationKey,
+        PolicyBuilder::GetEncodedPolicyVerificationKey());
+
     InitPolicyPayload(&policy_.payload());
 
     policy_.Build();
@@ -85,7 +102,8 @@ class UserCloudPolicyStoreTest : public testing::Test {
     store_->RemoveObserver(&observer_);
     external_data_manager_.reset();
     store_.reset();
-    RunUntilIdle();
+    const base::TimeDelta kLongDelay = base::Seconds(60);
+    task_environment_.FastForwardBy(kLongDelay);
   }
 
   void InitPolicyPayload(enterprise_management::CloudPolicySettings* payload) {
@@ -108,28 +126,37 @@ class UserCloudPolicyStoreTest : public testing::Test {
     const PolicyMap::Entry* entry =
         store->policy_map().Get(key::kSearchSuggestEnabled);
     ASSERT_TRUE(entry);
-    EXPECT_TRUE(base::Value(true).Equals(entry->value()));
+    EXPECT_EQ(true, *entry->value(base::Value::Type::BOOLEAN));
     ASSERT_TRUE(store->policy_map().Get(key::kURLBlocklist));
   }
 
-  // Install an expectation on |observer_| for an error code.
-  void ExpectError(CloudPolicyStore* store, CloudPolicyStore::Status error) {
+  // Install an expectation on |observer_| for an error code. Return a
+  // TestFuture that can wait until the error arrives.
+  [[nodiscard]] TestFuture<void> ExpectError(CloudPolicyStore* store,
+                                             CloudPolicyStore::Status error) {
+    base::test::TestFuture<void> error_observed;
     EXPECT_CALL(observer_,
-                OnStoreError(AllOf(Eq(store),
-                                   Property(&CloudPolicyStore::status,
-                                            Eq(error)))));
+                OnStoreError(AllOf(
+                    Eq(store), Property(&CloudPolicyStore::status, Eq(error)))))
+        .WillOnce(base::test::RunOnceClosure(error_observed.GetCallback()));
+    return error_observed;
   }
 
   void StorePolicyAndEnsureLoaded(
       const enterprise_management::PolicyFetchResponse& policy) {
+    base::test::TestFuture<void> future;
     Sequence s;
     EXPECT_CALL(*external_data_manager_, OnPolicyStoreLoaded()).InSequence(s);
-    EXPECT_CALL(observer_, OnStoreLoaded(store_.get())).InSequence(s);
+    EXPECT_CALL(observer_, OnStoreLoaded(store_.get()))
+        .InSequence(s)
+        .WillOnce(base::test::RunOnceClosure(future.GetCallback()));
     store_->Store(policy);
-    RunUntilIdle();
+    EXPECT_TRUE(future.Wait());
     Mock::VerifyAndClearExpectations(external_data_manager_.get());
     Mock::VerifyAndClearExpectations(&observer_);
     ASSERT_TRUE(store_->policy());
+    // Wait for the policy to be written into a file.
+    task_environment_.FastForwardBy(kShortDelay);
   }
 
   UserPolicyBuilder policy_;
@@ -140,21 +167,21 @@ class UserCloudPolicyStoreTest : public testing::Test {
   base::test::SingleThreadTaskEnvironment task_environment_;
 
   base::ScopedTempDir tmp_dir_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(UserCloudPolicyStoreTest);
 };
 
 TEST_F(UserCloudPolicyStoreTest, LoadWithNoFile) {
   EXPECT_FALSE(store_->policy());
   EXPECT_TRUE(store_->policy_map().empty());
 
+  base::test::TestFuture<void> future;
   Sequence s;
   EXPECT_CALL(*external_data_manager_, OnPolicyStoreLoaded()).InSequence(s);
-  EXPECT_CALL(observer_, OnStoreLoaded(store_.get())).InSequence(s);
+  EXPECT_CALL(observer_, OnStoreLoaded(store_.get()))
+      .InSequence(s)
+      .WillOnce(base::test::RunOnceClosure(future.GetCallback()));
   store_->Load();
-  RunUntilIdle();
 
+  EXPECT_TRUE(future.Wait());
   EXPECT_FALSE(store_->policy());
   EXPECT_TRUE(store_->policy_map().empty());
 }
@@ -166,13 +193,12 @@ TEST_F(UserCloudPolicyStoreTest, LoadWithInvalidFile) {
   // Create a bogus file.
   ASSERT_TRUE(base::CreateDirectory(policy_file().DirName()));
   std::string bogus_data = "bogus_data";
-  int size = bogus_data.size();
-  ASSERT_EQ(size, base::WriteFile(policy_file(),
-                                  bogus_data.c_str(), bogus_data.size()));
+  ASSERT_TRUE(base::WriteFile(policy_file(), bogus_data));
 
-  ExpectError(store_.get(), CloudPolicyStore::STATUS_LOAD_ERROR);
+  TestFuture<void> error_observed =
+      ExpectError(store_.get(), CloudPolicyStore::STATUS_LOAD_ERROR);
   store_->Load();
-  RunUntilIdle();
+  EXPECT_TRUE(error_observed.Wait());
 
   EXPECT_FALSE(store_->policy());
   EXPECT_TRUE(store_->policy_map().empty());
@@ -198,11 +224,10 @@ TEST_F(UserCloudPolicyStoreTest, LoadImmediatelyWithInvalidFile) {
   // Create a bogus file.
   ASSERT_TRUE(base::CreateDirectory(policy_file().DirName()));
   std::string bogus_data = "bogus_data";
-  int size = bogus_data.size();
-  ASSERT_EQ(size, base::WriteFile(policy_file(),
-                                  bogus_data.c_str(), bogus_data.size()));
+  ASSERT_TRUE(base::WriteFile(policy_file(), bogus_data));
 
-  ExpectError(store_.get(), CloudPolicyStore::STATUS_LOAD_ERROR);
+  TestFuture<void> error_observed =
+      ExpectError(store_.get(), CloudPolicyStore::STATUS_LOAD_ERROR);
   store_->LoadImmediately();  // Should load without running the message loop.
 
   EXPECT_FALSE(store_->policy());
@@ -222,11 +247,11 @@ TEST_F(UserCloudPolicyStoreTest, ShouldFailToLoadUnsignedPolicy) {
   std::string data;
   ASSERT_TRUE(unsigned_builder.policy().SerializeToString(&data));
   ASSERT_TRUE(base::CreateDirectory(policy_file().DirName()));
-  int size = data.size();
-  ASSERT_EQ(size, base::WriteFile(policy_file(), data.c_str(), size));
+  ASSERT_TRUE(base::WriteFile(policy_file(), data));
 
   // Now make sure the data generates a validation error.
-  ExpectError(store_.get(), CloudPolicyStore::STATUS_VALIDATION_ERROR);
+  TestFuture<void> error_observed =
+      ExpectError(store_.get(), CloudPolicyStore::STATUS_VALIDATION_ERROR);
   store_->LoadImmediately();  // Should load without running the message loop.
   Mock::VerifyAndClearExpectations(&observer_);
 
@@ -266,11 +291,16 @@ TEST_F(UserCloudPolicyStoreTest, StoreThenClear) {
   // Policy file should exist.
   ASSERT_TRUE(base::PathExists(policy_file()));
 
-  Sequence s2;
-  EXPECT_CALL(*external_data_manager_, OnPolicyStoreLoaded()).InSequence(s2);
-  EXPECT_CALL(observer_, OnStoreLoaded(store_.get())).InSequence(s2);
+  base::test::TestFuture<void> future;
+  Sequence s;
+  EXPECT_CALL(*external_data_manager_, OnPolicyStoreLoaded()).InSequence(s);
+  EXPECT_CALL(observer_, OnStoreLoaded(store_.get()))
+      .InSequence(s)
+      .WillOnce(base::test::RunOnceClosure(future.GetCallback()));
   store_->Clear();
-  RunUntilIdle();
+  EXPECT_TRUE(future.Wait());
+  // Wait for the file to be cleared.
+  task_environment_.FastForwardBy(kShortDelay);
 
   // Policy file should not exist.
   ASSERT_TRUE(!base::PathExists(policy_file()));
@@ -318,9 +348,10 @@ TEST_F(UserCloudPolicyStoreTest, ProvisionKeyTwice) {
   policy_.Build();
   EXPECT_FALSE(policy_.policy().has_new_public_key_signature());
 
-  ExpectError(store_.get(), CloudPolicyStore::STATUS_VALIDATION_ERROR);
+  TestFuture<void> error_observed =
+      ExpectError(store_.get(), CloudPolicyStore::STATUS_VALIDATION_ERROR);
   store_->Store(policy_.policy());
-  RunUntilIdle();
+  EXPECT_TRUE(error_observed.Wait());
 }
 
 TEST_F(UserCloudPolicyStoreTest, StoreTwoTimes) {
@@ -358,12 +389,15 @@ TEST_F(UserCloudPolicyStoreTest, StoreThenLoad) {
 
   // Now, make sure the policy can be read back in from a second store.
   std::unique_ptr<UserCloudPolicyStore> store2(new UserCloudPolicyStore(
-      policy_file(), key_file(), base::ThreadTaskRunnerHandle::Get()));
+      policy_file(), key_file(), dm_protocol::GetChromeUserPolicyType(),
+      base::SingleThreadTaskRunner::GetCurrentDefault()));
   store2->SetSigninAccountId(PolicyBuilder::GetFakeAccountIdForTesting());
   store2->AddObserver(&observer_);
-  EXPECT_CALL(observer_, OnStoreLoaded(store2.get()));
+  base::test::TestFuture<void> error_observed;
+  EXPECT_CALL(observer_, OnStoreLoaded(store2.get()))
+      .WillOnce(base::test::RunOnceClosure(error_observed.GetCallback()));
   store2->Load();
-  RunUntilIdle();
+  EXPECT_TRUE(error_observed.Wait());
 
   ASSERT_TRUE(store2->policy());
   EXPECT_EQ(policy_.policy_data().SerializeAsString(),
@@ -383,7 +417,8 @@ TEST_F(UserCloudPolicyStoreTest, StoreThenLoadImmediately) {
 
   // Now, make sure the policy can be read back in from a second store.
   std::unique_ptr<UserCloudPolicyStore> store2(new UserCloudPolicyStore(
-      policy_file(), key_file(), base::ThreadTaskRunnerHandle::Get()));
+      policy_file(), key_file(), dm_protocol::GetChromeUserPolicyType(),
+      base::SingleThreadTaskRunner::GetCurrentDefault()));
   store2->SetSigninAccountId(PolicyBuilder::GetFakeAccountIdForTesting());
   store2->AddObserver(&observer_);
   EXPECT_CALL(observer_, OnStoreLoaded(store2.get()));
@@ -403,9 +438,10 @@ TEST_F(UserCloudPolicyStoreTest, StoreValidationError) {
   policy_.Build();
 
   // Store policy.
-  ExpectError(store_.get(), CloudPolicyStore::STATUS_VALIDATION_ERROR);
+  TestFuture<void> error_observed =
+      ExpectError(store_.get(), CloudPolicyStore::STATUS_VALIDATION_ERROR);
   store_->Store(policy_.policy());
-  RunUntilIdle();
+  EXPECT_TRUE(error_observed.Wait());
   ASSERT_FALSE(store_->policy());
 }
 
@@ -414,27 +450,30 @@ TEST_F(UserCloudPolicyStoreTest, StoreUnsigned) {
   policy_.policy().mutable_policy_data_signature()->clear();
 
   // Store policy.
-  ExpectError(store_.get(), CloudPolicyStore::STATUS_VALIDATION_ERROR);
+  TestFuture<void> error_observed =
+      ExpectError(store_.get(), CloudPolicyStore::STATUS_VALIDATION_ERROR);
   store_->Store(policy_.policy());
-  RunUntilIdle();
+  EXPECT_TRUE(error_observed.Wait());
   ASSERT_FALSE(store_->policy());
 }
 
 TEST_F(UserCloudPolicyStoreTest, LoadValidationError) {
-  AccountId other_account_id =
-      AccountId::FromUserEmailGaiaId("foobar@foobar.com", "another-gaia-id");
+  AccountId other_account_id = AccountId::FromUserEmailGaiaId(
+      "foobar@foobar.com", GaiaId("another-gaia-id"));
   // Force a validation error by changing the account id after policy is stored.
   StorePolicyAndEnsureLoaded(policy_.policy());
 
   // Sign out, and sign back in as a different user, and try to load the profile
   // data (should fail due to mismatched account id).
   std::unique_ptr<UserCloudPolicyStore> store2(new UserCloudPolicyStore(
-      policy_file(), key_file(), base::ThreadTaskRunnerHandle::Get()));
+      policy_file(), key_file(), dm_protocol::GetChromeUserPolicyType(),
+      base::SingleThreadTaskRunner::GetCurrentDefault()));
   store2->SetSigninAccountId(other_account_id);
   store2->AddObserver(&observer_);
-  ExpectError(store2.get(), CloudPolicyStore::STATUS_VALIDATION_ERROR);
+  TestFuture<void> error2_observed =
+      ExpectError(store2.get(), CloudPolicyStore::STATUS_VALIDATION_ERROR);
   store2->Load();
-  RunUntilIdle();
+  EXPECT_TRUE(error2_observed.Wait());
 
   ASSERT_FALSE(store2->policy());
   store2->RemoveObserver(&observer_);
@@ -442,23 +481,28 @@ TEST_F(UserCloudPolicyStoreTest, LoadValidationError) {
   // Sign out - we should be able to load the policy (don't check users
   // when signed out).
   std::unique_ptr<UserCloudPolicyStore> store3(new UserCloudPolicyStore(
-      policy_file(), key_file(), base::ThreadTaskRunnerHandle::Get()));
+      policy_file(), key_file(), dm_protocol::GetChromeUserPolicyType(),
+      base::SingleThreadTaskRunner::GetCurrentDefault()));
   store3->AddObserver(&observer_);
-  EXPECT_CALL(observer_, OnStoreLoaded(store3.get()));
+  base::test::TestFuture<void> future;
+  EXPECT_CALL(observer_, OnStoreLoaded(store3.get()))
+      .WillOnce(base::test::RunOnceClosure(future.GetCallback()));
   store3->Load();
-  RunUntilIdle();
+  EXPECT_TRUE(future.Wait());
 
   ASSERT_TRUE(store3->policy());
   store3->RemoveObserver(&observer_);
 
   // Now start a signin as a different user - this should fail validation.
   std::unique_ptr<UserCloudPolicyStore> store4(new UserCloudPolicyStore(
-      policy_file(), key_file(), base::ThreadTaskRunnerHandle::Get()));
+      policy_file(), key_file(), dm_protocol::GetChromeUserPolicyType(),
+      base::SingleThreadTaskRunner::GetCurrentDefault()));
   store4->SetSigninAccountId(other_account_id);
   store4->AddObserver(&observer_);
-  ExpectError(store4.get(), CloudPolicyStore::STATUS_VALIDATION_ERROR);
+  TestFuture<void> error4_observed =
+      ExpectError(store4.get(), CloudPolicyStore::STATUS_VALIDATION_ERROR);
   store4->Load();
-  RunUntilIdle();
+  EXPECT_TRUE(error4_observed.Wait());
 
   ASSERT_FALSE(store4->policy());
   store4->RemoveObserver(&observer_);
@@ -481,12 +525,15 @@ TEST_F(UserCloudPolicyStoreTest, KeyRotation) {
   // Now load this in a new store - this should trigger key rotation. The keys
   // will still verify using the existing verification key.
   std::unique_ptr<UserCloudPolicyStore> store2(new UserCloudPolicyStore(
-      policy_file(), key_file(), base::ThreadTaskRunnerHandle::Get()));
+      policy_file(), key_file(), dm_protocol::GetChromeUserPolicyType(),
+      base::SingleThreadTaskRunner::GetCurrentDefault()));
   store2->SetSigninAccountId(PolicyBuilder::GetFakeAccountIdForTesting());
   store2->AddObserver(&observer_);
-  EXPECT_CALL(observer_, OnStoreLoaded(store2.get()));
+  base::test::TestFuture<void> store2_loaded;
+  EXPECT_CALL(observer_, OnStoreLoaded(store2.get()))
+      .WillOnce(base::test::RunOnceClosure(store2_loaded.GetCallback()));
   store2->Load();
-  RunUntilIdle();
+  EXPECT_TRUE(store2_loaded.Wait());
   ASSERT_TRUE(store2->policy());
   ASSERT_FALSE(store2->policy()->has_public_key_version());
   store2->RemoveObserver(&observer_);
@@ -507,13 +554,100 @@ TEST_F(UserCloudPolicyStoreTest, InvalidCachedVerificationSignature) {
   // Now load this in a new store - this should cause a validation error because
   // the key won't verify.
   std::unique_ptr<UserCloudPolicyStore> store2(new UserCloudPolicyStore(
-      policy_file(), key_file(), base::ThreadTaskRunnerHandle::Get()));
+      policy_file(), key_file(), dm_protocol::GetChromeUserPolicyType(),
+      base::SingleThreadTaskRunner::GetCurrentDefault()));
   store2->SetSigninAccountId(PolicyBuilder::GetFakeAccountIdForTesting());
   store2->AddObserver(&observer_);
-  ExpectError(store2.get(), CloudPolicyStore::STATUS_VALIDATION_ERROR);
+  TestFuture<void> error_observed =
+      ExpectError(store2.get(), CloudPolicyStore::STATUS_VALIDATION_ERROR);
   store2->Load();
-  RunUntilIdle();
+  EXPECT_TRUE(error_observed.Wait());
   store2->RemoveObserver(&observer_);
+}
+
+TEST_F(UserCloudPolicyStoreTest, LoadPolicyExceedingOneMegabyte) {
+  // Generate a valid policy payload of ~1.5 MB (> 1 MB limit at ToT).
+  UserPolicyBuilder builder;
+  builder.SetDefaultInitialSigningKey();
+  std::string large_string(1500 * 1024, 'a');
+  builder.payload().mutable_urlblocklist()->mutable_value()->add_entries(
+      large_string);
+  builder.Build();
+
+  std::string policy_data = builder.GetBlob();
+  ASSERT_GT(policy_data.size(), 1024u * 1024u);
+  ASSERT_TRUE(WriteStringToFile(policy_file(), policy_data));
+
+  // Write key to disk so key validation would succeed.
+  std::string key_data;
+  enterprise_management::PolicySigningKey key;
+  key.set_signing_key(builder.policy().new_public_key());
+  key.set_signing_key_signature(
+      builder.policy().new_public_key_verification_signature_deprecated());
+  key.set_new_public_key_verification_data(
+      builder.policy().new_public_key_verification_data());
+  key.set_new_public_key_verification_data_signature(
+      builder.policy().new_public_key_verification_data_signature());
+  key.set_verification_key(GetPolicyVerificationKey());
+  ASSERT_TRUE(key.SerializeToString(&key_data));
+  ASSERT_TRUE(WriteStringToFile(key_file(), key_data));
+
+  // With the feature disabled (kUserPolicyCacheSizeLimit2MB disabled),
+  // loading should fail with STATUS_LOAD_ERROR.
+  {
+    base::test::ScopedFeatureList scoped_feature_list;
+    scoped_feature_list.InitAndDisableFeature(
+        features::kUserPolicyCacheSizeLimit2MB);
+
+    std::unique_ptr<UserCloudPolicyStore> store_disabled =
+        std::make_unique<UserCloudPolicyStore>(
+            policy_file(), key_file(), dm_protocol::GetChromeUserPolicyType(),
+            base::SingleThreadTaskRunner::GetCurrentDefault());
+    store_disabled->SetSigninAccountId(
+        PolicyBuilder::GetFakeAccountIdForTesting());
+    MockCloudPolicyStoreObserver observer_disabled;
+    store_disabled->AddObserver(&observer_disabled);
+
+    base::test::TestFuture<void> error_future;
+    EXPECT_CALL(
+        observer_disabled,
+        OnStoreError(AllOf(Eq(store_disabled.get()),
+                           Property(&CloudPolicyStore::status,
+                                    Eq(CloudPolicyStore::STATUS_LOAD_ERROR)))))
+        .WillOnce(base::test::RunOnceClosure(error_future.GetCallback()));
+
+    store_disabled->Load();
+    EXPECT_TRUE(error_future.Wait());
+    EXPECT_FALSE(store_disabled->policy());
+    store_disabled->RemoveObserver(&observer_disabled);
+  }
+
+  // With default features (kUserPolicyCacheSizeLimit2MB enabled by default),
+  // loading a ~1.5 MB cache should succeed with STATUS_OK and record cache
+  // size in KB.
+  base::HistogramTester histogram_tester;
+  std::unique_ptr<UserCloudPolicyStore> store_default =
+      std::make_unique<UserCloudPolicyStore>(
+          policy_file(), key_file(), dm_protocol::GetChromeUserPolicyType(),
+          base::SingleThreadTaskRunner::GetCurrentDefault());
+  store_default->SetSigninAccountId(
+      PolicyBuilder::GetFakeAccountIdForTesting());
+  MockCloudPolicyStoreObserver observer_default;
+  store_default->AddObserver(&observer_default);
+
+  base::test::TestFuture<void> loaded_future;
+  EXPECT_CALL(observer_default, OnStoreLoaded(store_default.get()))
+      .WillOnce(base::test::RunOnceClosure(loaded_future.GetCallback()));
+
+  store_default->Load();
+  EXPECT_TRUE(loaded_future.Wait());
+  EXPECT_EQ(CloudPolicyStore::STATUS_OK, store_default->status());
+  ASSERT_TRUE(store_default->policy());
+  histogram_tester.ExpectUniqueSample(
+      "Enterprise.CloudPolicy.LocalCacheSize.User", policy_data.size() / 1024,
+      1);
+
+  store_default->RemoveObserver(&observer_default);
 }
 
 }  // namespace policy

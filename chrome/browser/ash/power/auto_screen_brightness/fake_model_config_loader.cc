@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,19 +8,19 @@ namespace ash {
 namespace power {
 namespace auto_screen_brightness {
 
-FakeModelConfigLoader::FakeModelConfigLoader() {}
+FakeModelConfigLoader::FakeModelConfigLoader() = default;
 
 FakeModelConfigLoader::~FakeModelConfigLoader() = default;
 
 void FakeModelConfigLoader::ReportModelConfigLoaded() {
-  DCHECK(is_initialized_);
+  CHECK(is_initialized_, base::NotFatalUntil::M160);
   for (auto& observer : observers_) {
     NotifyObserver(&observer);
   }
 }
 
 void FakeModelConfigLoader::AddObserver(Observer* const observer) {
-  DCHECK(observer);
+  CHECK(observer, base::NotFatalUntil::M160);
   observers_.AddObserver(observer);
   if (is_initialized_) {
     NotifyObserver(observer);
@@ -28,15 +28,15 @@ void FakeModelConfigLoader::AddObserver(Observer* const observer) {
 }
 
 void FakeModelConfigLoader::RemoveObserver(Observer* const observer) {
-  DCHECK(observer);
+  CHECK(observer, base::NotFatalUntil::M160);
   observers_.RemoveObserver(observer);
 }
 
 void FakeModelConfigLoader::NotifyObserver(Observer* const observer) {
-  DCHECK(observer);
+  CHECK(observer, base::NotFatalUntil::M160);
   observer->OnModelConfigLoaded(is_model_config_valid_
-                                    ? absl::optional<ModelConfig>(model_config_)
-                                    : absl::nullopt);
+                                    ? std::optional<ModelConfig>(model_config_)
+                                    : std::nullopt);
 }
 
 }  // namespace auto_screen_brightness

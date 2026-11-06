@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,8 @@
 
 #include <dlfcn.h>
 
+#include "base/files/file_util.h"
+#include "components/soda/buildflags.h"
 #include "components/soda/constants.h"
 #include "sandbox/linux/syscall_broker/broker_command.h"
 #include "sandbox/linux/syscall_broker/broker_file_permission.h"
@@ -21,7 +23,10 @@ namespace {
 std::vector<BrokerFilePermission> GetSodaFilePermissions() {
   auto soda_dir = GetSodaDirectory();
   std::vector<BrokerFilePermission> permissions{
-      BrokerFilePermission::ReadOnly("/dev/urandom")};
+      BrokerFilePermission::ReadOnly("/dev/urandom"),
+      // Read by the memory allocator bundled with libsoda.so when it is loaded
+      // after the sandbox has been engaged. Without it the allocator aborts.
+      BrokerFilePermission::ReadOnly("/sys/devices/system/cpu/possible")};
 
   // This may happen if a user doesn't have a SODA installation.
   if (!soda_dir.empty()) {
@@ -36,14 +41,41 @@ std::vector<BrokerFilePermission> GetSodaFilePermissions() {
         language_packs_dir.AsEndingWithSeparator().value()));
   }
 
+#if BUILDFLAG(ENABLE_SODA_INTEGRATION_TESTS)
+  auto test_resources_dir = GetSodaTestResourcesDirectory();
+  if (!test_resources_dir.empty()) {
+    permissions.push_back(BrokerFilePermission::ReadOnlyRecursive(
+        test_resources_dir.AsEndingWithSeparator().value()));
+  }
+#endif
+
   return permissions;
 }
 
 }  // namespace
 
+const char* GetSodaBinaryPathSwitch() {
+  return kSodaBinaryPathSwitch;
+}
+
 bool SpeechRecognitionPreSandboxHook(
+    base::FilePath binary_path,
     sandbox::policy::SandboxLinux::Options options) {
-  void* soda_library = dlopen(GetSodaBinaryPath().value().c_str(),
+#if BUILDFLAG(ENABLE_SODA_INTEGRATION_TESTS)
+  base::FilePath test_binary_path = GetSodaTestBinaryPath();
+  DCHECK(base::PathExists(test_binary_path));
+  void* soda_test_library = dlopen(GetSodaTestBinaryPath().value().c_str(),
+                                   RTLD_NOW | RTLD_GLOBAL | RTLD_NODELETE);
+  DCHECK(soda_test_library);
+#endif
+
+  // Fall back to the latest installed binary for embedders that don't pass the
+  // path of the binary that they will ask this process to load.
+  if (binary_path.empty()) {
+    binary_path = GetSodaBinaryPath();
+  }
+
+  void* soda_library = dlopen(binary_path.value().c_str(),
                               RTLD_NOW | RTLD_GLOBAL | RTLD_NODELETE);
   DCHECK(soda_library);
 
@@ -54,9 +86,7 @@ bool SpeechRecognitionPreSandboxHook(
                                    sandbox::syscall_broker::COMMAND_READLINK,
                                    sandbox::syscall_broker::COMMAND_STAT,
                                }),
-                               GetSodaFilePermissions(),
-                               sandbox::policy::SandboxLinux::PreSandboxHook(),
-                               options);
+                               GetSodaFilePermissions(), options);
   instance->EngageNamespaceSandboxIfPossible();
 
   return true;

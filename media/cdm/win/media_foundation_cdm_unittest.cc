@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,22 @@
 
 #include <wchar.h>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/gmock_callback_support.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
+#include "base/test/run_until.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "media/base/media_switches.h"
 #include "media/base/mock_filters.h"
 #include "media/base/test_helpers.h"
+#include "media/base/win/hresults.h"
 #include "media/base/win/media_foundation_cdm_proxy.h"
 #include "media/base/win/mf_helpers.h"
 #include "media/base/win/mf_mocks.h"
+#include "media/cdm/win/media_foundation_cdm_module.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -26,6 +33,7 @@ using ::testing::NotNull;
 using ::testing::Return;
 using ::testing::SetArgPointee;
 using ::testing::SetArgReferee;
+using ::testing::StartsWith;
 using ::testing::StrEq;
 using ::testing::StrictMock;
 using ::testing::WithoutArgs;
@@ -36,34 +44,50 @@ namespace {
 
 const char kSessionId[] = "session_id";
 const double kExpirationMs = 123456789.0;
-const auto kExpirationTime = base::Time::FromJsTime(kExpirationMs);
+const auto kExpirationTime =
+    base::Time::FromMillisecondsSinceUnixEpoch(kExpirationMs);
+const char kTestUmaPrefix[] = "Media.EME.TestUmaPrefix.";
 
 std::vector<uint8_t> StringToVector(const std::string& str) {
   return std::vector<uint8_t>(str.begin(), str.end());
-}
-
-// testing::InvokeArgument<N> does not work with base::OnceCallback. Use this
-// gmock action template to invoke base::OnceCallback. `k` is the k-th argument
-// and `T` is the callback's type.
-ACTION_TEMPLATE(InvokeCallbackArgument,
-                HAS_2_TEMPLATE_PARAMS(int, k, typename, T),
-                AND_1_VALUE_PARAMS(p0)) {
-  std::move(const_cast<T&>(std::get<k>(args))).Run(p0);
 }
 
 }  // namespace
 
 using Microsoft::WRL::ComPtr;
 
+// A helper class to manage the dynamic behavior for IsTypeSupportedCB.
+class IsTypedSupportedCallbackHandler {
+ public:
+  void SetBehavior(MediaFoundationCdm::IsTypeSupportedCB new_behavior) {
+    current_behavior_ = std::move(new_behavior);
+  }
+
+  void Run(const std::string& content_type,
+           MediaFoundationCdm::IsTypeSupportedResultCB cb) {
+    if (current_behavior_) {
+      current_behavior_.Run(content_type, std::move(cb));
+    }
+  }
+
+ private:
+  MediaFoundationCdm::IsTypeSupportedCB current_behavior_;
+};
+
 class MediaFoundationCdmTest : public testing::Test {
  public:
   MediaFoundationCdmTest()
-      : mf_cdm_(MakeComPtr<MockMFCdm>()),
-        mf_cdm_session_(MakeComPtr<MockMFCdmSession>()),
+      : mf_cdm_(MakeComPtr<StrictMock<MockMFCdm>>()),
+        mf_cdm_session_(MakeComPtr<StrictMock<MockMFCdmSession>>()),
         cdm_(base::MakeRefCounted<MediaFoundationCdm>(
+            kTestUmaPrefix,
+            /*content_protection_hwnd=*/nullptr,
             base::BindRepeating(&MediaFoundationCdmTest::CreateMFCdm,
                                 base::Unretained(this)),
-            is_type_supported_cb_.Get(),
+            base::BindRepeating(
+                &IsTypedSupportedCallbackHandler::Run,
+                base::Unretained(&is_type_supported_cb_handler_)),
+            cdm_event_cb_.Get(),
             base::BindRepeating(&MockCdmClient::OnSessionMessage,
                                 base::Unretained(&cdm_client_)),
             base::BindRepeating(&MockCdmClient::OnSessionClosed,
@@ -90,6 +114,7 @@ class MediaFoundationCdmTest : public testing::Test {
 
   void InitializeAndExpectFailure() {
     can_initialize_ = false;
+    EXPECT_CALL(cdm_event_cb_, Run(CdmEvent::kCdmError, E_FAIL));
     ASSERT_FAILED(cdm_->Initialize());
   }
 
@@ -146,23 +171,20 @@ class MediaFoundationCdmTest : public testing::Test {
     EXPECT_EQ(session_id_, kSessionId);
   }
 
-  void OnCdmProxyReceived(scoped_refptr<MediaFoundationCdmProxy> mf_cdm_proxy) {
-    mf_cdm_proxy_ = std::move(mf_cdm_proxy);
-  }
-
  protected:
   base::test::TaskEnvironment task_environment_;
 
   StrictMock<MockCdmClient> cdm_client_;
-  StrictMock<base::MockCallback<MediaFoundationCdm::IsTypeSupportedCB>>
-      is_type_supported_cb_;
-  ComPtr<MockMFCdm> mf_cdm_;
-  ComPtr<MockMFCdmSession> mf_cdm_session_;
+  IsTypedSupportedCallbackHandler is_type_supported_cb_handler_;
+  StrictMock<base::MockCallback<MediaFoundationCdm::CdmEventCB>> cdm_event_cb_;
+  ComPtr<StrictMock<MockMFCdm>> mf_cdm_;
+  ComPtr<StrictMock<MockMFCdmSession>> mf_cdm_session_;
   ComPtr<IMFContentDecryptionModuleSessionCallbacks> mf_cdm_session_callbacks_;
   scoped_refptr<MediaFoundationCdm> cdm_;
   bool can_initialize_ = true;
   std::string session_id_;
   scoped_refptr<MediaFoundationCdmProxy> mf_cdm_proxy_;
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 TEST_F(MediaFoundationCdmTest, SetServerCertificate) {
@@ -189,6 +211,20 @@ TEST_F(MediaFoundationCdmTest, SetServerCertificate_Failure) {
       certificate, std::make_unique<MockCdmPromise>(/*expect_success=*/false));
 }
 
+// HardwareContextReset during SetServerCertificate() will cause the the promise
+// rejected.
+TEST_F(MediaFoundationCdmTest, SetServerCertificate_HardwareContextReset) {
+  Initialize();
+
+  std::vector<uint8_t> certificate = StringToVector("certificate");
+  COM_EXPECT_CALL(mf_cdm_,
+                  SetServerCertificate(certificate.data(), certificate.size()))
+      .WillOnce(Return(DRM_E_TEE_INVALID_HWDRM_STATE));
+
+  cdm_->SetServerCertificate(
+      certificate, std::make_unique<MockCdmPromise>(/*expect_success=*/false));
+}
+
 TEST_F(MediaFoundationCdmTest, GetStatusForPolicy_HdcpNone_KeyStatusUsable) {
   Initialize();
   CdmKeyInformation::KeyStatus key_status;
@@ -198,14 +234,32 @@ TEST_F(MediaFoundationCdmTest, GetStatusForPolicy_HdcpNone_KeyStatusUsable) {
   EXPECT_EQ(CdmKeyInformation::KeyStatus::USABLE, key_status);
 }
 
-TEST_F(MediaFoundationCdmTest, GetStatusForPolicy_HdcpV1_1_KeyStatusUsable) {
+TEST_F(MediaFoundationCdmTest, GetStatusForPolicy_HdcpV1_0_KeyStatusUsable) {
+  StrictMock<base::MockCallback<MediaFoundationCdm::IsTypeSupportedCB>>
+      is_type_supported_cb;
   Initialize();
-  EXPECT_CALL(is_type_supported_cb_,
+  EXPECT_CALL(is_type_supported_cb,
               Run("video/mp4;codecs=\"avc1\";features=\"hdcp=1\"", _))
-      .WillOnce(
-          InvokeCallbackArgument<1,
-                                 MediaFoundationCdm::IsTypeSupportedResultCB>(
-              /*is_supported=*/true));
+      .WillOnce(base::test::RunOnceCallback<1>(
+          /*value_or_error=*/base::ok(true)));
+  is_type_supported_cb_handler_.SetBehavior(is_type_supported_cb.Get());
+
+  CdmKeyInformation::KeyStatus key_status;
+  cdm_->GetStatusForPolicy(HdcpVersion::kHdcpVersion1_0,
+                           std::make_unique<MockCdmKeyStatusPromise>(
+                               /*expect_success=*/true, &key_status));
+  EXPECT_EQ(CdmKeyInformation::KeyStatus::USABLE, key_status);
+}
+
+TEST_F(MediaFoundationCdmTest, GetStatusForPolicy_HdcpV1_1_KeyStatusUsable) {
+  StrictMock<base::MockCallback<MediaFoundationCdm::IsTypeSupportedCB>>
+      is_type_supported_cb;
+  Initialize();
+  EXPECT_CALL(is_type_supported_cb,
+              Run("video/mp4;codecs=\"avc1\";features=\"hdcp=2\"", _))
+      .WillOnce(base::test::RunOnceCallback<1>(
+          /*value_or_error=*/base::ok(true)));
+  is_type_supported_cb_handler_.SetBehavior(is_type_supported_cb.Get());
 
   CdmKeyInformation::KeyStatus key_status;
   cdm_->GetStatusForPolicy(HdcpVersion::kHdcpVersion1_1,
@@ -215,20 +269,55 @@ TEST_F(MediaFoundationCdmTest, GetStatusForPolicy_HdcpV1_1_KeyStatusUsable) {
 }
 
 TEST_F(MediaFoundationCdmTest,
-       GetStatusForPolicy_HdcpV2_3_KeyStatusOutputRestricted) {
+       GetStatusForPolicy_HdcpV2_1_KeyStatusOutputRestricted) {
+  StrictMock<base::MockCallback<MediaFoundationCdm::IsTypeSupportedCB>>
+      is_type_supported_cb;
   Initialize();
-  EXPECT_CALL(is_type_supported_cb_,
+  EXPECT_CALL(is_type_supported_cb,
               Run("video/mp4;codecs=\"avc1\";features=\"hdcp=2\"", _))
-      .WillOnce(
-          InvokeCallbackArgument<1,
-                                 MediaFoundationCdm::IsTypeSupportedResultCB>(
-              /*is_supported=*/false));
+      .WillOnce(base::test::RunOnceCallback<1>(
+          /*value_or_error=*/base::ok(false)));
+  is_type_supported_cb_handler_.SetBehavior(is_type_supported_cb.Get());
+
+  CdmKeyInformation::KeyStatus key_status;
+  cdm_->GetStatusForPolicy(HdcpVersion::kHdcpVersion2_1,
+                           std::make_unique<MockCdmKeyStatusPromise>(
+                               /*expect_success=*/true, &key_status));
+  EXPECT_EQ(CdmKeyInformation::KeyStatus::OUTPUT_RESTRICTED, key_status);
+}
+
+TEST_F(MediaFoundationCdmTest,
+       GetStatusForPolicy_HdcpV2_3_KeyStatusOutputRestricted) {
+  StrictMock<base::MockCallback<MediaFoundationCdm::IsTypeSupportedCB>>
+      is_type_supported_cb;
+  Initialize();
+  EXPECT_CALL(is_type_supported_cb, Run(_, _)).Times(0);
+  is_type_supported_cb_handler_.SetBehavior(is_type_supported_cb.Get());
 
   CdmKeyInformation::KeyStatus key_status;
   cdm_->GetStatusForPolicy(HdcpVersion::kHdcpVersion2_3,
                            std::make_unique<MockCdmKeyStatusPromise>(
                                /*expect_success=*/true, &key_status));
   EXPECT_EQ(CdmKeyInformation::KeyStatus::OUTPUT_RESTRICTED, key_status);
+}
+
+TEST_F(MediaFoundationCdmTest,
+       GetStatusForPolicy_KeyStatusOutputRestrictedWithError_UmaReported) {
+  base::HistogramTester histogram_tester;
+  Initialize();
+  is_type_supported_cb_handler_.SetBehavior(
+      base::BindRepeating([](const std::string& content_type,
+                             MediaFoundationCdm::IsTypeSupportedResultCB cb) {
+        std::move(cb).Run(base::unexpected(E_FAIL));
+      }));
+
+  CdmKeyInformation::KeyStatus key_status;
+  cdm_->GetStatusForPolicy(HdcpVersion::kHdcpVersion2_2,
+                           std::make_unique<MockCdmKeyStatusPromise>(
+                               /*expect_success=*/true, &key_status));
+  EXPECT_EQ(CdmKeyInformation::KeyStatus::OUTPUT_RESTRICTED, key_status);
+  histogram_tester.ExpectUniqueSample(
+      std::string(kTestUmaPrefix) + "GetStatusForPolicy", E_FAIL, 1);
 }
 
 TEST_F(MediaFoundationCdmTest, CreateSessionAndGenerateRequest) {
@@ -277,7 +366,8 @@ TEST_F(MediaFoundationCdmTest, CreateSessionAndGenerateRequest_Parallel) {
   EXPECT_EQ(session_id_2, kSessionId2);
 }
 
-TEST_F(MediaFoundationCdmTest, InitializeFailure) {
+TEST_F(MediaFoundationCdmTest,
+       CreateSessionAndGenerateRequest_AfterInitializeFailure) {
   InitializeAndExpectFailure();
 
   std::vector<uint8_t> init_data = StringToVector("init_data");
@@ -308,6 +398,31 @@ TEST_F(MediaFoundationCdmTest,
   EXPECT_TRUE(session_id_.empty());
 }
 
+// HardwareContextReset during SetServerCertificate() will cause the session
+// closed and the promise resolved.
+TEST_F(MediaFoundationCdmTest,
+       CreateSessionAndGenerateRequest_CreateSessionHardwareContextReset) {
+  Initialize();
+
+  COM_EXPECT_CALL(mf_cdm_,
+                  CreateSession(MF_MEDIAKEYSESSION_TYPE_TEMPORARY, _, _))
+      .WillOnce(Return(DRM_E_TEE_INVALID_HWDRM_STATE));
+  EXPECT_CALL(cdm_event_cb_, Run(CdmEvent::kHardwareContextReset,
+                                 DRM_E_TEE_INVALID_HWDRM_STATE));
+  EXPECT_CALL(cdm_client_,
+              OnSessionClosed(StartsWith("DUMMY_"),
+                              CdmSessionClosedReason::kHardwareContextReset));
+
+  std::vector<uint8_t> init_data = StringToVector("init_data");
+  cdm_->CreateSessionAndGenerateRequest(
+      CdmSessionType::kTemporary, EmeInitDataType::WEBM, init_data,
+      std::make_unique<MockCdmSessionPromise>(/*expect_success=*/true,
+                                              &session_id_));
+
+  task_environment_.RunUntilIdle();
+  EXPECT_FALSE(session_id_.empty());
+}
+
 TEST_F(MediaFoundationCdmTest,
        CreateSessionAndGenerateRequest_GenerateRequestFailure) {
   Initialize();
@@ -329,6 +444,34 @@ TEST_F(MediaFoundationCdmTest,
 
   task_environment_.RunUntilIdle();
   EXPECT_TRUE(session_id_.empty());
+}
+
+TEST_F(MediaFoundationCdmTest,
+       CreateSessionAndGenerateRequest_GenerateRequestHardwareContextReset) {
+  Initialize();
+
+  COM_EXPECT_CALL(mf_cdm_,
+                  CreateSession(MF_MEDIAKEYSESSION_TYPE_TEMPORARY, _, _))
+      .WillOnce(DoAll(SaveComPtr<1>(&mf_cdm_session_callbacks_),
+                      SetComPointee<2>(mf_cdm_session_.Get()), Return(S_OK)));
+
+  std::vector<uint8_t> init_data = StringToVector("init_data");
+  COM_EXPECT_CALL(mf_cdm_session_,
+                  GenerateRequest(StrEq(L"webm"), NotNull(), init_data.size()))
+      .WillOnce(Return(DRM_E_TEE_INVALID_HWDRM_STATE));
+  EXPECT_CALL(cdm_event_cb_, Run(CdmEvent::kHardwareContextReset,
+                                 DRM_E_TEE_INVALID_HWDRM_STATE));
+  EXPECT_CALL(cdm_client_,
+              OnSessionClosed(StartsWith("DUMMY_"),
+                              CdmSessionClosedReason::kHardwareContextReset));
+
+  cdm_->CreateSessionAndGenerateRequest(
+      CdmSessionType::kTemporary, EmeInitDataType::WEBM, init_data,
+      std::make_unique<MockCdmSessionPromise>(/*expect_success=*/true,
+                                              &session_id_));
+
+  task_environment_.RunUntilIdle();
+  EXPECT_FALSE(session_id_.empty());
 }
 
 // Duplicate session IDs cause session creation failure.
@@ -429,6 +572,26 @@ TEST_F(MediaFoundationCdmTest, UpdateSession_Failure) {
   task_environment_.RunUntilIdle();
 }
 
+TEST_F(MediaFoundationCdmTest, UpdateSession_HardwareContextReset) {
+  Initialize();
+  CreateSessionAndGenerateRequest();
+
+  std::vector<uint8_t> response = StringToVector("response");
+  COM_EXPECT_CALL(mf_cdm_session_, Update(NotNull(), response.size()))
+      .WillOnce(Return(DRM_E_TEE_INVALID_HWDRM_STATE));
+  COM_EXPECT_CALL(mf_cdm_session_, Close()).WillOnce(Return(S_OK));
+  EXPECT_CALL(cdm_client_,
+              OnSessionClosed(kSessionId,
+                              CdmSessionClosedReason::kHardwareContextReset));
+  EXPECT_CALL(cdm_event_cb_, Run(CdmEvent::kHardwareContextReset,
+                                 DRM_E_TEE_INVALID_HWDRM_STATE));
+
+  cdm_->UpdateSession(
+      session_id_, response,
+      std::make_unique<MockCdmPromise>(/*expect_success=*/true));
+  task_environment_.RunUntilIdle();
+}
+
 TEST_F(MediaFoundationCdmTest, CloseSession) {
   Initialize();
   CreateSessionAndGenerateRequest();
@@ -447,6 +610,19 @@ TEST_F(MediaFoundationCdmTest, CloseSession_Failure) {
   CreateSessionAndGenerateRequest();
 
   COM_EXPECT_CALL(mf_cdm_session_, Close()).WillOnce(Return(E_FAIL));
+
+  cdm_->CloseSession(
+      session_id_, std::make_unique<MockCdmPromise>(/*expect_success=*/false));
+  task_environment_.RunUntilIdle();
+}
+
+// DRM_E_TEE_INVALID_HWDRM_STATE not handled for CloseSession yet.
+TEST_F(MediaFoundationCdmTest, CloseSession_HardwareContextReset) {
+  Initialize();
+  CreateSessionAndGenerateRequest();
+
+  COM_EXPECT_CALL(mf_cdm_session_, Close())
+      .WillOnce(Return(DRM_E_TEE_INVALID_HWDRM_STATE));
 
   cdm_->CloseSession(
       session_id_, std::make_unique<MockCdmPromise>(/*expect_success=*/false));
@@ -478,13 +654,30 @@ TEST_F(MediaFoundationCdmTest, RemoveSession_Failure) {
   task_environment_.RunUntilIdle();
 }
 
+TEST_F(MediaFoundationCdmTest, RemoveSession_HardwareContextReset) {
+  Initialize();
+  CreateSessionAndGenerateRequest();
+
+  COM_EXPECT_CALL(mf_cdm_session_, Remove())
+      .WillOnce(Return(DRM_E_TEE_INVALID_HWDRM_STATE));
+  COM_EXPECT_CALL(mf_cdm_session_, Close()).WillOnce(Return(S_OK));
+  EXPECT_CALL(cdm_client_,
+              OnSessionClosed(kSessionId,
+                              CdmSessionClosedReason::kHardwareContextReset));
+  EXPECT_CALL(cdm_event_cb_, Run(CdmEvent::kHardwareContextReset,
+                                 DRM_E_TEE_INVALID_HWDRM_STATE));
+
+  cdm_->RemoveSession(
+      session_id_, std::make_unique<MockCdmPromise>(/*expect_success=*/true));
+  task_environment_.RunUntilIdle();
+}
+
 TEST_F(MediaFoundationCdmTest, HardwareContextReset) {
   Initialize();
   CreateSessionAndGenerateRequest();
 
   CdmContext* cdm_context = cdm_->GetCdmContext();
-  cdm_context->GetMediaFoundationCdmProxy(base::BindOnce(
-      &MediaFoundationCdmTest::OnCdmProxyReceived, base::Unretained(this)));
+  mf_cdm_proxy_ = cdm_context->GetMediaFoundationCdmProxy();
   task_environment_.RunUntilIdle();
   ASSERT_TRUE(mf_cdm_proxy_);
 
@@ -492,6 +685,8 @@ TEST_F(MediaFoundationCdmTest, HardwareContextReset) {
   EXPECT_CALL(cdm_client_,
               OnSessionClosed(kSessionId,
                               CdmSessionClosedReason::kHardwareContextReset));
+  EXPECT_CALL(cdm_event_cb_, Run(CdmEvent::kHardwareContextReset,
+                                 DRM_E_TEE_INVALID_HWDRM_STATE));
   mf_cdm_proxy_->OnHardwareContextReset();
 
   // Create a new session and expect success.
@@ -503,18 +698,20 @@ TEST_F(MediaFoundationCdmTest, HardwareContextReset_InitializeFailure) {
   CreateSessionAndGenerateRequest();
 
   CdmContext* cdm_context = cdm_->GetCdmContext();
-  cdm_context->GetMediaFoundationCdmProxy(base::BindOnce(
-      &MediaFoundationCdmTest::OnCdmProxyReceived, base::Unretained(this)));
+  mf_cdm_proxy_ = cdm_context->GetMediaFoundationCdmProxy();
   task_environment_.RunUntilIdle();
   ASSERT_TRUE(mf_cdm_proxy_);
 
   // Make the next `Initialize()` fail.
   can_initialize_ = false;
+  EXPECT_CALL(cdm_event_cb_, Run(CdmEvent::kCdmError, E_FAIL));
 
   COM_EXPECT_CALL(mf_cdm_session_, Close()).WillOnce(Return(S_OK));
   EXPECT_CALL(cdm_client_,
               OnSessionClosed(kSessionId,
                               CdmSessionClosedReason::kHardwareContextReset));
+  EXPECT_CALL(cdm_event_cb_, Run(CdmEvent::kHardwareContextReset,
+                                 DRM_E_TEE_INVALID_HWDRM_STATE));
   mf_cdm_proxy_->OnHardwareContextReset();
 
   std::vector<uint8_t> init_data = StringToVector("init_data");
@@ -523,6 +720,93 @@ TEST_F(MediaFoundationCdmTest, HardwareContextReset_InitializeFailure) {
       std::make_unique<MockCdmSessionPromise>(/*expect_success=*/false,
                                               &session_id_));
   task_environment_.RunUntilIdle();
+}
+
+TEST_F(MediaFoundationCdmTest, RequireServerCert_Enabled_NonOsCdm_NoCert) {
+  // For non-OS CDMs, CreateSessionAndGenerateRequest should work
+  // without SetServerCertificate when the feature is enabled
+  scoped_feature_list_.InitAndEnableFeature(
+      kHardwareSecureDecryptionRequireServerCert);
+  Initialize();
+  MediaFoundationCdmModule::GetInstance()->SetIsOsCdmForTesting(false);
+  COM_EXPECT_CALL(mf_cdm_, SetServerCertificate(_, _)).Times(0);
+  CreateSessionAndGenerateRequest();
+}
+
+TEST_F(MediaFoundationCdmTest, RequireServerCert_Disabled_NonOsCdm_NoCert) {
+  // For non-OS CDMs, CreateSessionAndGenerateRequest should work
+  // without SetServerCertificate when the feature is disabled
+  scoped_feature_list_.InitAndDisableFeature(
+      kHardwareSecureDecryptionRequireServerCert);
+  Initialize();
+  MediaFoundationCdmModule::GetInstance()->SetIsOsCdmForTesting(false);
+  COM_EXPECT_CALL(mf_cdm_, SetServerCertificate(_, _)).Times(0);
+  CreateSessionAndGenerateRequest();
+}
+
+TEST_F(MediaFoundationCdmTest, RequireServerCert_Disabled_OsCdm_NoCert) {
+  // For OS CDMs, CreateSessionAndGenerateRequest should work
+  // without SetServerCertificate when the feature is disabled
+  scoped_feature_list_.InitAndDisableFeature(
+      kHardwareSecureDecryptionRequireServerCert);
+  Initialize();
+  MediaFoundationCdmModule::GetInstance()->SetIsOsCdmForTesting(true);
+  COM_EXPECT_CALL(mf_cdm_, SetServerCertificate(_, _)).Times(0);
+  CreateSessionAndGenerateRequest();
+}
+
+TEST_F(MediaFoundationCdmTest, RequireServerCert_Enabled_OsCdm) {
+  // Set a shorter timeout then the default
+  // since this test is expected to run quickly.
+  base::test::ScopedRunLoopTimeout timeout(FROM_HERE, base::Seconds(5));
+
+  // Enable the feature flag that requires SetServerCertificate
+  // before CreateSessionAndGenerateRequest for OS CDMs.
+  scoped_feature_list_.InitAndEnableFeature(
+      kHardwareSecureDecryptionRequireServerCert);
+
+  Initialize();
+  MediaFoundationCdmModule::GetInstance()->SetIsOsCdmForTesting(true);
+
+  // For OS CDMs, CreateSessionAndGenerateRequest should fail
+  // without SetServerCertificate when the feature is enabled
+  std::vector<uint8_t> init_data = StringToVector("init_data");
+
+  COM_EXPECT_CALL(mf_cdm_, SetServerCertificate(_, _)).Times(0);
+
+  // First try CreateSessionAndGenerateRequest without calling
+  // SetServerCertificate. This should fail for OS CDMs when the
+  // feature is enabled
+  cdm_->CreateSessionAndGenerateRequest(
+      CdmSessionType::kTemporary, EmeInitDataType::WEBM, init_data,
+      std::make_unique<MockCdmSessionPromise>(/*expect_success=*/false,
+                                              &session_id_));
+  ASSERT_TRUE(base::test::RunUntil([&]() { return session_id_.empty(); }));
+
+  // Now call SetServerCertificate first
+  std::vector<uint8_t> certificate = StringToVector("certificate");
+  COM_EXPECT_CALL(mf_cdm_, SetServerCertificate(NotNull(), certificate.size()))
+      .WillOnce(Return(S_OK));
+
+  cdm_->SetServerCertificate(
+      certificate, std::make_unique<MockCdmPromise>(/*expect_success=*/true));
+
+  // Now CreateSessionAndGenerateRequest should succeed
+  COM_EXPECT_CALL(mf_cdm_,
+                  CreateSession(MF_MEDIAKEYSESSION_TYPE_TEMPORARY, _, _))
+      .WillOnce(DoAll(SaveComPtr<1>(&mf_cdm_session_callbacks_),
+                      SetComPointee<2>(mf_cdm_session_.Get()), Return(S_OK)));
+
+  SetGenerateRequestExpectations(mf_cdm_session_, kSessionId,
+                                 &mf_cdm_session_callbacks_);
+
+  cdm_->CreateSessionAndGenerateRequest(
+      CdmSessionType::kTemporary, EmeInitDataType::WEBM, init_data,
+      std::make_unique<MockCdmSessionPromise>(/*expect_success=*/true,
+                                              &session_id_));
+
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return session_id_ == kSessionId; }));
 }
 
 }  // namespace media

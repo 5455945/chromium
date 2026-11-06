@@ -31,10 +31,12 @@
 #include "third_party/blink/renderer/core/html/forms/base_temporal_input_type.h"
 
 #include <limits>
+
 #include "third_party/blink/public/strings/grit/blink_strings.h"
 #include "third_party/blink/renderer/core/html/forms/chooser_only_temporal_input_type_view.h"
 #include "third_party/blink/renderer/core/html/forms/html_input_element.h"
 #include "third_party/blink/renderer/core/html/forms/multiple_fields_temporal_input_type_view.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/text/platform_locale.h"
 #include "third_party/blink/renderer/platform/wtf/date_math.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
@@ -42,8 +44,8 @@
 
 namespace blink {
 
-static const int kMsecPerMinute = 60 * 1000;
-static const int kMsecPerSecond = 1000;
+static constexpr int kMsecPerMinute = base::Minutes(1).InMilliseconds();
+static constexpr int kMsecPerSecond = base::Seconds(1).InMilliseconds();
 
 String BaseTemporalInputType::BadInputText() const {
   return GetLocale().QueryString(IDS_FORM_VALIDATION_BAD_INPUT_DATETIME);
@@ -67,13 +69,13 @@ double BaseTemporalInputType::ValueAsDate() const {
 }
 
 void BaseTemporalInputType::SetValueAsDate(
-    const absl::optional<base::Time>& value,
+    const std::optional<base::Time>& value,
     ExceptionState&) const {
-  GetElement().setValue(SerializeWithDate(value));
+  GetElement().SetValue(SerializeWithDate(value));
 }
 
 double BaseTemporalInputType::ValueAsDouble() const {
-  const Decimal value = ParseToNumber(GetElement().value(), Decimal::Nan());
+  const Decimal value = ParseToNumber(GetElement().Value(), Decimal::Nan());
   return value.IsFinite() ? value.ToDouble()
                           : DateComponents::InvalidMilliseconds();
 }
@@ -82,16 +84,15 @@ void BaseTemporalInputType::SetValueAsDouble(
     double new_value,
     TextFieldEventBehavior event_behavior,
     ExceptionState& exception_state) const {
-  SetValueAsDecimal(Decimal::FromDouble(new_value), event_behavior,
-                    exception_state);
+  SetValueAsDecimal(Decimal::FromDouble(new_value), event_behavior);
 }
 
 bool BaseTemporalInputType::TypeMismatchFor(const String& value) const {
-  return !value.IsEmpty() && !ParseToDateComponents(value, nullptr);
+  return !value.empty() && !ParseToDateComponents(value, nullptr);
 }
 
 bool BaseTemporalInputType::TypeMismatch() const {
-  return TypeMismatchFor(GetElement().value());
+  return TypeMismatchFor(GetElement().Value());
 }
 
 String BaseTemporalInputType::ValueNotEqualText(const Decimal& value) const {
@@ -124,10 +125,6 @@ Decimal BaseTemporalInputType::DefaultValueForStepUp() const {
       ConvertToLocalTime(base::Time::Now()).InMillisecondsF());
 }
 
-bool BaseTemporalInputType::IsSteppable() const {
-  return true;
-}
-
 Decimal BaseTemporalInputType::ParseToNumber(
     const String& source,
     const Decimal& default_value) const {
@@ -141,7 +138,7 @@ Decimal BaseTemporalInputType::ParseToNumber(
 
 bool BaseTemporalInputType::ParseToDateComponents(const String& source,
                                                   DateComponents* out) const {
-  if (source.IsEmpty())
+  if (source.empty())
     return false;
   DateComponents ignored_result;
   if (!out)
@@ -164,17 +161,18 @@ String BaseTemporalInputType::SerializeWithComponents(
   if (!GetElement().GetAllowedValueStep(&step))
     return date.ToString();
   if (step.Remainder(kMsecPerMinute).IsZero())
-    return date.ToString(DateComponents::kNone);
+    return date.ToString(DateComponents::SecondFormat::kNone);
   if (step.Remainder(kMsecPerSecond).IsZero())
-    return date.ToString(DateComponents::kSecond);
-  return date.ToString(DateComponents::kMillisecond);
+    return date.ToString(DateComponents::SecondFormat::kSecond);
+  return date.ToString(DateComponents::SecondFormat::kMillisecond);
 }
 
 String BaseTemporalInputType::SerializeWithDate(
-    const absl::optional<base::Time>& value) const {
+    const std::optional<base::Time>& value) const {
   if (!value)
     return g_empty_string;
-  return Serialize(Decimal::FromDouble(value->ToJsTimeIgnoringNull()));
+  return Serialize(
+      Decimal::FromDouble(value->InMillisecondsFSinceUnixEpochIgnoringNull()));
 }
 
 String BaseTemporalInputType::LocalizeValue(
@@ -184,11 +182,11 @@ String BaseTemporalInputType::LocalizeValue(
     return proposed_value;
 
   String localized = GetElement().GetLocale().FormatDateTime(date);
-  return localized.IsEmpty() ? proposed_value : localized;
+  return localized.empty() ? proposed_value : localized;
 }
 
 String BaseTemporalInputType::VisibleValue() const {
-  return LocalizeValue(GetElement().value());
+  return LocalizeValue(GetElement().Value());
 }
 
 String BaseTemporalInputType::SanitizeValue(
@@ -208,8 +206,16 @@ bool BaseTemporalInputType::ValueMissing(const String& value) const {
   // For text-mode input elements (including dates), the value is missing only
   // if it is mutable.
   // https://html.spec.whatwg.org/multipage/input.html#the-required-attribute
-  return GetElement().IsRequired() && value.IsEmpty() &&
+  return GetElement().IsRequired() && value.empty() &&
          !GetElement().IsDisabledOrReadOnly();
+}
+
+bool BaseTemporalInputType::SupportsBaseAppearance(
+    Element::BaseAppearanceValue value) const {
+  if (!RuntimeEnabledFeatures::AppearanceBaseEnabled()) {
+    return false;
+  }
+  return value == Element::BaseAppearanceValue::kBase;
 }
 
 bool BaseTemporalInputType::MayTriggerVirtualKeyboard() const {
@@ -218,12 +224,12 @@ bool BaseTemporalInputType::MayTriggerVirtualKeyboard() const {
 
 bool BaseTemporalInputType::ShouldHaveSecondField(
     const DateComponents& date) const {
+  static constexpr int kMillisecondsPerMinute =
+      static_cast<int>(base::Minutes(1).InMilliseconds());
   StepRange step_range = CreateStepRange(kAnyIsDefaultStep);
   return date.Second() || date.Millisecond() ||
-         !step_range.Minimum()
-              .Remainder(static_cast<int>(kMsPerMinute))
-              .IsZero() ||
-         !step_range.Step().Remainder(static_cast<int>(kMsPerMinute)).IsZero();
+         !step_range.Minimum().Remainder(kMillisecondsPerMinute).IsZero() ||
+         !step_range.Step().Remainder(kMillisecondsPerMinute).IsZero();
 }
 
 }  // namespace blink

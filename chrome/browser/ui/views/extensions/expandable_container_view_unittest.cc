@@ -1,29 +1,32 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/views/extensions/expandable_container_view.h"
 
-#include "base/strings/utf_string_conversions.h"
 #include "chrome/test/views/chrome_views_test_base.h"
 
 using ExpandableContainerViewTest = ChromeViewsTestBase;
 
-TEST_F(ExpandableContainerViewTest, DetailLevelVisibility) {
-  std::vector<std::u16string> details;
-  details.push_back(u"Detail 1");
-  details.push_back(u"Detail 2");
-  details.push_back(u"Detail 2");
+TEST_F(ExpandableContainerViewTest, VisibleAndCollapsedDetails) {
+  std::u16string visible_details = u"• Detail #1\n• Detail #2\n• Detail #3";
+  std::u16string collapsed_details = u"• Detail #4";
+  auto container = std::make_unique<ExpandableContainerView>(visible_details,
+                                                             collapsed_details);
 
-  int content_width = 100;
-  auto container =
-      std::make_unique<ExpandableContainerView>(details, content_width);
+  // Initially the details view is visible because it displays visible_details.
+  EXPECT_TRUE(container->details_view()->GetVisible());
+  EXPECT_EQ(container->GetDetailsTextForTest(), visible_details);
 
-  // Initially the details view should not be expanded or visible.
-  EXPECT_FALSE(container->details_view()->GetVisible());
-
-  // When the link is triggered, the details should get expanded and become
-  // visible.
+  // When the link is triggered, the details remain visible and expand to show
+  // all details in the same label.
   container->ToggleDetailLevelForTest();
   EXPECT_TRUE(container->details_view()->GetVisible());
+  EXPECT_EQ(container->GetDetailsTextForTest(),
+            visible_details + u"\n" + collapsed_details);
+
+  // Triggering the link again collapses it back to visible_details.
+  container->ToggleDetailLevelForTest();
+  EXPECT_TRUE(container->details_view()->GetVisible());
+  EXPECT_EQ(container->GetDetailsTextForTest(), visible_details);
 }

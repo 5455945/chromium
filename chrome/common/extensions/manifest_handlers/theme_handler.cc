@@ -1,17 +1,27 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/common/extensions/manifest_handlers/theme_handler.h"
 
 #include <memory>
+#include <string>
+#include <vector>
 
+#include "base/containers/flat_map.h"
+#include "base/feature_list.h"
+#include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/grit/generated_resources.h"
+#include "extensions/common/error_utils.h"
+#include "extensions/common/extension.h"
+#include "extensions/common/extension_resource.h"
 #include "extensions/common/manifest.h"
 #include "extensions/common/manifest_constants.h"
+#include "extensions/common/manifest_handler_helpers.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace extensions {
@@ -21,193 +31,266 @@ namespace errors = manifest_errors;
 
 namespace {
 
-bool LoadImages(const base::DictionaryValue* theme_value,
+bool IsThemeImageMimeTypeValid(const base::FilePath& relative_path,
+                               std::vector<std::string>* warnings) {
+  // In case of an image with no file extension, issue a warning and allow it
+  // for compatibility with existing themes.
+  if (relative_path.Extension().empty()) {
+    warnings->emplace_back(ErrorUtils::FormatErrorMessage(
+        errors::kThemeImageMissingFileExtension, relative_path.AsUTF8Unsafe()));
+    return true;
+  }
+
+  if (!manifest_handler_helpers::IsSupportedExtensionImageMimeType(
+          relative_path)) {
+    // Issue a warning and ignore this entry. This is a warning and not a
+    // hard-error to preserve both backwards compatibility and potential
+    // future-compatibility if mime types change.
+    warnings->emplace_back(ErrorUtils::FormatErrorMessage(
+        errors::kInvalidThemeImageMimeType, relative_path.AsUTF8Unsafe()));
+    return false;
+  }
+
+  return true;
+}
+
+bool LoadImages(const Extension& extension,
+                const base::DictValue& theme_dict,
                 std::u16string* error,
+                std::vector<std::string>* warnings,
                 ThemeInfo* theme_info) {
-  const base::DictionaryValue* images_value = NULL;
-  if (theme_value->GetDictionary(keys::kThemeImages, &images_value)) {
+  if (const base::DictValue* images_dict =
+          theme_dict.FindDict(keys::kThemeImages)) {
+    ThemeInfo::ThemeImages theme_images;
+
     // Validate that the images are all strings.
-    for (base::DictionaryValue::Iterator iter(*images_value); !iter.IsAtEnd();
-         iter.Advance()) {
+    for (const auto [key, value] : *images_dict) {
+      std::vector<ThemeInfo::ThemeResource> theme_resources;
+
       // The value may be a dictionary of scales and files paths.
       // Or the value may be a file path, in which case a scale
       // of 100% is assumed.
-      if (iter.value().is_dict()) {
-        const base::DictionaryValue* inner_value = NULL;
-        if (iter.value().GetAsDictionary(&inner_value)) {
-          for (base::DictionaryValue::Iterator inner_iter(*inner_value);
-               !inner_iter.IsAtEnd(); inner_iter.Advance()) {
-            if (!inner_iter.value().is_string()) {
-              *error = base::ASCIIToUTF16(errors::kInvalidThemeImages);
-              return false;
-            }
+      if (value.is_dict()) {
+        for (const auto [inner_key, inner_value] : value.GetDict()) {
+          if (!inner_value.is_string()) {
+            *error = errors::kInvalidThemeImagesValueType;
+            return false;
           }
-        } else {
-          *error = base::ASCIIToUTF16(errors::kInvalidThemeImages);
+
+          ExtensionResource local_path =
+              extension.GetResource(inner_value.GetString());
+          if (local_path.empty()) {
+            *error = errors::kInvalidThemeImagesPath;
+            return false;
+          }
+
+          if (!IsThemeImageMimeTypeValid(local_path.relative_path(),
+                                         warnings)) {
+            theme_resources.clear();
+            break;
+          }
+
+          theme_resources.emplace_back(std::move(local_path), inner_key);
+        }
+      } else if (value.is_string()) {
+        ExtensionResource local_path = extension.GetResource(value.GetString());
+        if (local_path.empty()) {
+          *error = errors::kInvalidThemeImagesPath;
           return false;
         }
-      } else if (!iter.value().is_string()) {
-        *error = base::ASCIIToUTF16(errors::kInvalidThemeImages);
+
+        if (IsThemeImageMimeTypeValid(local_path.relative_path(), warnings)) {
+          theme_resources.emplace_back(std::move(local_path), std::string());
+        }
+      } else {
+        *error = errors::kInvalidThemeImagesValueType;
         return false;
       }
+
+      if (!theme_resources.empty()) {
+        theme_images[key] = std::move(theme_resources);
+      }
     }
-    theme_info->theme_images_.reset(images_value->DeepCopy());
+    theme_info->theme_images_ = std::move(theme_images);
   }
   return true;
 }
 
-bool LoadColors(const base::DictionaryValue* theme_value,
+bool LoadColors(const base::DictValue& theme_dict,
                 std::u16string* error,
                 ThemeInfo* theme_info) {
-  const base::DictionaryValue* colors_value = NULL;
-  if (theme_value->GetDictionary(keys::kThemeColors, &colors_value)) {
+  if (const base::DictValue* colors_value =
+          theme_dict.FindDict(keys::kThemeColors)) {
     // Validate that the colors are RGB or RGBA lists.
-    for (base::DictionaryValue::Iterator iter(*colors_value); !iter.IsAtEnd();
-         iter.Advance()) {
-      const base::ListValue* color_list = NULL;
-      double alpha = 0.0;
-      int color = 0;
-      // The color must be a list...
-      if (!iter.value().GetAsList(&color_list) ||
-          // ... and either 3 items (RGB) or 4 (RGBA).
-          ((color_list->GetSize() != 3) &&
-           ((color_list->GetSize() != 4) ||
-            // For RGBA, the fourth item must be a real or int alpha value.
-            // Note that GetDouble() can get an integer value.
-            !color_list->GetDouble(3, &alpha))) ||
-          // For both RGB and RGBA, the first three items must be ints (R,G,B).
-          !color_list->GetInteger(0, &color) ||
-          !color_list->GetInteger(1, &color) ||
-          !color_list->GetInteger(2, &color)) {
-        *error = base::ASCIIToUTF16(errors::kInvalidThemeColors);
+    for (const auto [key, value] : *colors_value) {
+      if (!value.is_list()) {
+        *error = errors::kInvalidThemeColors;
+        return false;
+      }
+      const base::ListValue& color_list = value.GetList();
+
+      // There must be either 3 items (RGB), or 4 (RGBA).
+      if (!(color_list.size() == 3 || color_list.size() == 4)) {
+        *error = errors::kInvalidThemeColors;
+        return false;
+      }
+
+      // The first three items (RGB), must be ints:
+      if (!(color_list[0].is_int() && color_list[1].is_int() &&
+            color_list[2].is_int())) {
+        *error = errors::kInvalidThemeColors;
+        return false;
+      }
+
+      // If there is a 4th item (alpha), it may be either int or double:
+      if (color_list.size() == 4 &&
+          !(color_list[3].is_int() || color_list[3].is_double())) {
+        *error = errors::kInvalidThemeColors;
         return false;
       }
     }
-    theme_info->theme_colors_.reset(colors_value->DeepCopy());
+
+    theme_info->theme_colors_ = colors_value->Clone();
   }
   return true;
 }
 
-bool LoadTints(const base::DictionaryValue* theme_value,
+bool LoadTints(const base::DictValue& theme_dict,
                std::u16string* error,
                ThemeInfo* theme_info) {
-  const base::DictionaryValue* tints_value = NULL;
-  if (!theme_value->GetDictionary(keys::kThemeTints, &tints_value))
+  const base::DictValue* tints_dict = theme_dict.FindDict(keys::kThemeTints);
+  if (!tints_dict) {
     return true;
+  }
 
   // Validate that the tints are all reals.
-  for (base::DictionaryValue::Iterator iter(*tints_value); !iter.IsAtEnd();
-       iter.Advance()) {
-    const base::ListValue* tint_list = NULL;
-    double v = 0.0;
-    if (!iter.value().GetAsList(&tint_list) ||
-        tint_list->GetSize() != 3 ||
-        !tint_list->GetDouble(0, &v) ||
-        !tint_list->GetDouble(1, &v) ||
-        !tint_list->GetDouble(2, &v)) {
-      *error = base::ASCIIToUTF16(errors::kInvalidThemeTints);
+  for (const auto [key, value] : *tints_dict) {
+    if (!value.is_list()) {
+      *error = errors::kInvalidThemeTints;
+      return false;
+    }
+
+    const base::ListValue& tint_list = value.GetList();
+    if (tint_list.size() != 3) {
+      *error = errors::kInvalidThemeTints;
+      return false;
+    }
+
+    if (!tint_list[0].GetIfDouble() || !tint_list[1].GetIfDouble() ||
+        !tint_list[2].GetIfDouble()) {
+      *error = errors::kInvalidThemeTints;
       return false;
     }
   }
-  theme_info->theme_tints_.reset(tints_value->DeepCopy());
+
+  theme_info->theme_tints_ = tints_dict->Clone();
   return true;
 }
 
-bool LoadDisplayProperties(const base::DictionaryValue* theme_value,
+bool LoadDisplayProperties(const base::DictValue& theme_dict,
                            std::u16string* error,
                            ThemeInfo* theme_info) {
-  const base::DictionaryValue* display_properties_value = NULL;
-  if (theme_value->GetDictionary(keys::kThemeDisplayProperties,
-                                 &display_properties_value)) {
-    theme_info->theme_display_properties_.reset(
-        display_properties_value->DeepCopy());
+  if (const base::DictValue* display_properties_value =
+          theme_dict.FindDict(keys::kThemeDisplayProperties)) {
+    theme_info->theme_display_properties_ = display_properties_value->Clone();
   }
   return true;
-}
-
-const ThemeInfo* GetInfo(const Extension* extension) {
-  return static_cast<ThemeInfo*>(extension->GetManifestData(keys::kTheme));
 }
 
 }  // namespace
 
-ThemeInfo::ThemeInfo() {
-}
+// static
+const char* ThemeInfo::kManifestDataKey = keys::kTheme;
 
-ThemeInfo::~ThemeInfo() {
+ThemeInfo::ThemeInfo() = default;
+
+ThemeInfo::~ThemeInfo() = default;
+
+// static
+const ThemeInfo::ThemeImages* ThemeInfo::GetImages(const Extension* extension) {
+  const ThemeInfo* theme_info = extension->GetManifestData<ThemeInfo>();
+  return theme_info ? &theme_info->theme_images_ : nullptr;
 }
 
 // static
-const base::DictionaryValue* ThemeInfo::GetImages(const Extension* extension) {
-  const ThemeInfo* theme_info = GetInfo(extension);
-  return theme_info ? theme_info->theme_images_.get() : NULL;
+const base::DictValue* ThemeInfo::GetColors(const Extension* extension) {
+  const ThemeInfo* theme_info = extension->GetManifestData<ThemeInfo>();
+  return theme_info ? &theme_info->theme_colors_ : nullptr;
 }
 
 // static
-const base::DictionaryValue* ThemeInfo::GetColors(const Extension* extension) {
-  const ThemeInfo* theme_info = GetInfo(extension);
-  return theme_info ? theme_info->theme_colors_.get() : NULL;
+const base::DictValue* ThemeInfo::GetTints(const Extension* extension) {
+  const ThemeInfo* theme_info = extension->GetManifestData<ThemeInfo>();
+  return theme_info ? &theme_info->theme_tints_ : nullptr;
 }
 
 // static
-const base::DictionaryValue* ThemeInfo::GetTints(const Extension* extension) {
-  const ThemeInfo* theme_info = GetInfo(extension);
-  return theme_info ? theme_info->theme_tints_.get() : NULL;
-}
-
-// static
-const base::DictionaryValue* ThemeInfo::GetDisplayProperties(
+const base::DictValue* ThemeInfo::GetDisplayProperties(
     const Extension* extension) {
-  const ThemeInfo* theme_info = GetInfo(extension);
-  return theme_info ? theme_info->theme_display_properties_.get() : NULL;
+  const ThemeInfo* theme_info = extension->GetManifestData<ThemeInfo>();
+  return theme_info ? &theme_info->theme_display_properties_ : nullptr;
 }
 
-ThemeHandler::ThemeHandler() {
-}
+ThemeHandler::ThemeHandler() = default;
 
-ThemeHandler::~ThemeHandler() {
-}
+ThemeHandler::~ThemeHandler() = default;
 
 bool ThemeHandler::Parse(Extension* extension, std::u16string* error) {
-  const base::DictionaryValue* theme_value = NULL;
-  if (!extension->manifest()->GetDictionary(keys::kTheme, &theme_value)) {
-    *error = base::ASCIIToUTF16(errors::kInvalidTheme);
+  const base::DictValue* theme_dict =
+      extension->manifest()->FindDictPath(keys::kTheme);
+  if (!theme_dict) {
+    *error = errors::kInvalidTheme;
+    return false;
+  }
+  std::unique_ptr<ThemeInfo> theme_info(new ThemeInfo);
+  std::vector<std::string> image_warnings;
+  if (!LoadImages(*extension, *theme_dict, error, &image_warnings,
+                  theme_info.get())) {
+    return false;
+  }
+  if (!LoadColors(*theme_dict, error, theme_info.get())) {
+    return false;
+  }
+  if (!LoadTints(*theme_dict, error, theme_info.get())) {
+    return false;
+  }
+  if (!LoadDisplayProperties(*theme_dict, error, theme_info.get())) {
     return false;
   }
 
-  std::unique_ptr<ThemeInfo> theme_info(new ThemeInfo);
-  if (!LoadImages(theme_value, error, theme_info.get()))
-    return false;
-  if (!LoadColors(theme_value, error, theme_info.get()))
-    return false;
-  if (!LoadTints(theme_value, error, theme_info.get()))
-    return false;
-  if (!LoadDisplayProperties(theme_value, error, theme_info.get()))
-    return false;
+  for (const auto& warning : image_warnings) {
+    extension->AddInstallWarning(InstallWarning(warning, keys::kThemeImages));
+  }
 
-  extension->SetManifestData(keys::kTheme, std::move(theme_info));
+  extension->SetManifestData(std::move(theme_info));
   return true;
 }
 
-bool ThemeHandler::Validate(const Extension* extension,
+bool ThemeHandler::Validate(const Extension& extension,
                             std::string* error,
                             std::vector<InstallWarning>* warnings) const {
   // Validate that theme images exist.
-  if (extension->is_theme()) {
-    const base::DictionaryValue* images_value =
-        extensions::ThemeInfo::GetImages(extension);
-    if (images_value) {
-      for (base::DictionaryValue::Iterator iter(*images_value); !iter.IsAtEnd();
-           iter.Advance()) {
-        std::string val;
-        if (iter.value().GetAsString(&val)) {
-          base::FilePath image_path = extension->path().Append(
-              base::FilePath::FromUTF8Unsafe(val));
-          if (!base::PathExists(image_path)) {
-            *error =
-                l10n_util::GetStringFUTF8(IDS_EXTENSION_INVALID_IMAGE_PATH,
-                                          image_path.LossyDisplayName());
-            return false;
+  if (extension.is_theme()) {
+    const ThemeInfo::ThemeImages* theme_images =
+        extensions::ThemeInfo::GetImages(&extension);
+    if (theme_images) {
+      for (const auto& [theme_image_name, theme_resources] : *theme_images) {
+        for (const auto& theme_resource : theme_resources) {
+          base::FilePath image_path = theme_resource.resource.GetFilePath();
+          if (image_path.empty() || !base::PathExists(image_path)) {
+            // Bad entry.
+            if (theme_resource.scale.empty()) {
+              *error = l10n_util::GetStringFUTF8(
+                  IDS_EXTENSION_INVALID_IMAGE_PATH,
+                  theme_resource.resource.relative_path().AsUTF16Unsafe());
+              return false;
+            }
+            // This is a warning and not a hard-error for backwards
+            // compatibility with existing themes.
+            warnings->emplace_back(ErrorUtils::FormatErrorMessage(
+                errors::kInvalidThemeDictImagePath, theme_image_name,
+                theme_resource.scale,
+                theme_resource.resource.relative_path().AsUTF8Unsafe()));
           }
         }
       }

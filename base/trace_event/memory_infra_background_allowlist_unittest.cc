@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,7 @@
 
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace base {
-
-namespace trace_event {
+namespace base::trace_event {
 
 TEST(MemoryInfraBackgroundAllowlist, Allowlist) {
   // Global dumps that are of hex digits are all allowed for background use.
@@ -21,17 +19,13 @@ TEST(MemoryInfraBackgroundAllowlist, Allowlist) {
   EXPECT_FALSE(IsMemoryAllocatorDumpNameInAllowlist("shared_memory/GHIJK"));
 
   // Test a couple that contain pointer values.
-  EXPECT_TRUE(IsMemoryAllocatorDumpNameInAllowlist("net/url_request_context"));
+  EXPECT_TRUE(IsMemoryAllocatorDumpNameInAllowlist("blink_gc/main/heap"));
   EXPECT_TRUE(IsMemoryAllocatorDumpNameInAllowlist(
-      "net/url_request_context/app_request/0x123/cookie_monster"));
-  EXPECT_TRUE(
-      IsMemoryAllocatorDumpNameInAllowlist("net/http_network_session_0x123"));
+      "blink_gc/workers/worker_0x123/heap"));
+  EXPECT_TRUE(IsMemoryAllocatorDumpNameInAllowlist(
+      "blink_gc/workers/heap/worker_0x123"));
   EXPECT_FALSE(
-      IsMemoryAllocatorDumpNameInAllowlist("net/http_network_session/0x123"));
-  EXPECT_TRUE(IsMemoryAllocatorDumpNameInAllowlist(
-      "net/http_network_session_0x123/quic_stream_factory"));
+      IsMemoryAllocatorDumpNameInAllowlist("blink_gc/main/heap/0x123"));
 }
 
-}  // namespace trace_event
-
-}  // namespace base
+}  // namespace base::trace_event

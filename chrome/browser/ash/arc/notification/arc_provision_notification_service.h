@@ -1,11 +1,11 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_ASH_ARC_NOTIFICATION_ARC_PROVISION_NOTIFICATION_SERVICE_H_
 #define CHROME_BROWSER_ASH_ARC_NOTIFICATION_ARC_PROVISION_NOTIFICATION_SERVICE_H_
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager_observer.h"
 #include "components/keyed_service/core/keyed_service.h"
@@ -34,10 +34,18 @@ class ArcProvisionNotificationService
 
   ArcProvisionNotificationService(content::BrowserContext* context,
                                   ArcBridgeService* bridge_service);
+
+  ArcProvisionNotificationService(const ArcProvisionNotificationService&) =
+      delete;
+  ArcProvisionNotificationService& operator=(
+      const ArcProvisionNotificationService&) = delete;
+
   ~ArcProvisionNotificationService() override;
 
   // session_manager::SessionManagerObserver:
   void OnSessionStateChanged() override;
+
+  static void EnsureFactoryBuilt();
 
  private:
   // Shows/hides the notification.
@@ -53,7 +61,7 @@ class ArcProvisionNotificationService
   void OnArcSessionStopped(ArcStopReason stop_reason) override;
   void OnArcErrorShowRequested(ArcSupportHost::ErrorInfo error_info) override;
 
-  content::BrowserContext* const context_;
+  const raw_ptr<content::BrowserContext> context_;
 
   base::ScopedObservation<session_manager::SessionManager,
                           session_manager::SessionManagerObserver>
@@ -61,8 +69,6 @@ class ArcProvisionNotificationService
 
   // Indicates whether notification should be shown right after session starts.
   bool show_on_session_starts_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(ArcProvisionNotificationService);
 };
 
 }  // namespace arc

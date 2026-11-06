@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-
-# Copyright 2018 The Chromium Authors. All rights reserved.
+# Copyright 2018 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """A script used to manage Google Maven dependencies for Chromium.
@@ -12,25 +11,38 @@ For each dependency in `build.gradle`:
   - Generate a README.chromium file
   - Generate a GN target in BUILD.gn
   - Generate .info files for AAR libraries
-  - Generate a 'deps' entry in DEPS.
+
+When --android-deps-dir contains a build.gradle.template (and no
+--output-subdir is given), this script also drives a full roll of that
+project: it fills the template, runs the steps above into <dir>/cipd/,
+writes VERSION.txt, to_commit.zip and cipd.yaml for the
+chromium/third_party/android_deps/autorolled CIPD package, and with --local
+extracts the committed files into the tree.
 """
 
 import argparse
 import collections
-import concurrent.futures
 import contextlib
 import fnmatch
 import logging
-import tempfile
-import textwrap
 import os
+import pathlib
 import re
+import shlex
 import shutil
 import subprocess
-import zipfile
+import sys
+import tempfile
+import time
+import urllib.request
+
+from typing import Dict
 
 # Assume this script is stored under third_party/android_deps/
 _CHROMIUM_SRC = os.path.normpath(os.path.join(__file__, '..', '..', '..'))
+
+sys.path.insert(1, os.path.join(_CHROMIUM_SRC, 'build/autoroll'))
+import fetch_util
 
 # Default android_deps directory.
 _PRIMARY_ANDROID_DEPS_DIR = os.path.join(_CHROMIUM_SRC, 'third_party',
@@ -38,6 +50,12 @@ _PRIMARY_ANDROID_DEPS_DIR = os.path.join(_CHROMIUM_SRC, 'third_party',
 
 # Path to additional_readme_paths.json relative to custom 'android_deps' directory.
 _ADDITIONAL_README_PATHS = 'additional_readme_paths.json'
+
+# Path to Bill of Materials json output by gradle.
+_BOM_NAME = 'bill_of_materials.json'
+
+# CIPD package produced by a full roll (see module docstring).
+_ROLL_CIPD_PACKAGE = 'chromium/third_party/android_deps/autorolled'
 
 # Path to BUILD.gn file from custom 'android_deps' directory.
 _BUILD_GN = 'BUILD.gn'
@@ -48,10 +66,15 @@ _BUILD_GRADLE = 'build.gradle'
 # Location of the android_deps libs directory relative to custom 'android_deps' directory.
 _LIBS_DIR = 'libs'
 
-_GN_PATH = os.path.join(_CHROMIUM_SRC, 'third_party', 'depot_tools', 'gn')
+_GN_PATH = os.path.join(_CHROMIUM_SRC, 'third_party', 'depot_tools', 'gn.py')
 
-_GRADLEW = os.path.join(_CHROMIUM_SRC, 'third_party', 'gradle_wrapper',
-                        'gradlew')
+_GRADLEW = os.path.join(_CHROMIUM_SRC, 'third_party', 'android_build_tools',
+                        'gradle_wrapper', 'gradlew')
+
+sys.path.append(os.path.join(_CHROMIUM_SRC, 'build', 'android'))
+import java_home  # noqa: E402
+
+_JAVA_HOME = java_home.JAVA_HOME
 
 # Git-controlled files needed by, but not updated by this tool.
 # Relative to _PRIMARY_ANDROID_DEPS_DIR.
@@ -59,20 +82,22 @@ _PRIMARY_ANDROID_DEPS_FILES = [
     'buildSrc',
     'licenses',
     'settings.gradle.template',
-    'vulnerability_supressions.xml',
 ]
 
 # Git-controlled files needed by and updated by this tool.
 # Relative to args.android_deps_dir.
 _CUSTOM_ANDROID_DEPS_FILES = [
-    os.path.join('..', '..', 'DEPS'),
     _BUILD_GN,
     _ADDITIONAL_README_PATHS,
     'subprojects.txt',
 ]
 
-# If this file exists in an aar file then it is appended to LICENSE
-_THIRD_PARTY_LICENSE_FILENAME = 'third_party_licenses.txt'
+# Dictionary mapping long info file names to shorter ones to avoid paths being
+# over 200 chars. This must match the dictionary in BuildConfigGenerator.groovy.
+_REDUCED_ID_LENGTH_MAP = {
+    'com_google_android_apps_common_testing_accessibility_framework_accessibility_test_framework':
+    'com_google_android_accessibility_test_framework',
+}
 
 # Path to the aar.py script used to generate .info files.
 _AAR_PY = os.path.join(_CHROMIUM_SRC, 'build', 'android', 'gyp', 'aar.py')
@@ -133,7 +158,10 @@ def RunCommand(args, print_stdout=False, cwd=None):
   """
     logging.debug('Run %s', args)
     stdout = None if print_stdout else subprocess.PIPE
-    p = subprocess.Popen(args, stdout=stdout, cwd=cwd)
+    # Explicitly set JAVA_HOME since some bots do not have this already set.
+    env = os.environ.copy()
+    env['JAVA_HOME'] = _JAVA_HOME
+    p = subprocess.Popen(args, stdout=stdout, cwd=cwd, env=env)
     pout, _ = p.communicate()
     if p.returncode != 0:
         RaiseCommandException(args, p.returncode, None, pout)
@@ -154,7 +182,13 @@ def RunCommandAndGetOutput(args):
     messages.
   """
     logging.debug('Run %s', args)
-    p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    # Explicitly set JAVA_HOME since some bots do not have this already set.
+    env = os.environ.copy()
+    env['JAVA_HOME'] = _JAVA_HOME
+    p = subprocess.Popen(args,
+                         stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE,
+                         env=env)
     pout, perr = p.communicate()
     if p.returncode != 0:
         RaiseCommandException(args, p.returncode, pout, perr)
@@ -173,6 +207,17 @@ def DeleteDirectory(dir_path):
     if os.path.exists(dir_path):
         logging.debug('rmdir [%s]', dir_path)
         shutil.rmtree(dir_path)
+
+
+def Symlink(src_dir, src_paths, dst_dir, dst_paths):
+    for src_path, dst_path in zip(src_paths, dst_paths):
+        abs_src_path = os.path.join(src_dir, src_path)
+        abs_dst_path = os.path.join(dst_dir, dst_path)
+        shutil.rmtree(abs_dst_path, ignore_errors=True)
+        if os.path.exists(abs_dst_path):
+            os.unlink(abs_dst_path)
+        MakeDirectory(os.path.dirname(abs_dst_path))
+        os.symlink(abs_src_path, abs_dst_path)
 
 
 def Copy(src_dir, src_paths, dst_dir, dst_paths, src_path_must_exist=True):
@@ -224,9 +269,16 @@ def CopyFileOrDirectory(src_path, dst_path, ignore_extension=None):
         if ignore_extension:
             ignore = shutil.ignore_patterns('*' + ignore_extension)
         shutil.copytree(src_path, dst_path, ignore=ignore)
-    elif not ignore_extension or not re.match('.*\.' + ignore_extension[1:],
+        subprocess.run(['chmod', '-R', '+w', dst_path])
+    elif not ignore_extension or not re.match(r'.*\.' + ignore_extension[1:],
                                               src_path):
+        # cipd/gclient extract files as read only, allow writing before trying
+        # to override.
+        if os.path.exists(dst_path):
+            subprocess.run(['chmod', '+w', dst_path])
         shutil.copy(src_path, dst_path)
+        # In case src_path was also from cipd, +w after copying too.
+        subprocess.run(['chmod', '+w', dst_path])
 
 
 def ReadFile(file_path):
@@ -268,25 +320,26 @@ CipdPackageInfo = collections.namedtuple('CipdPackageInfo',
 
 # Regular expressions used to extract useful info from cipd.yaml files
 # generated by Gradle. See BuildConfigGenerator.groovy:makeCipdYaml()
-_RE_CIPD_CREATE = re.compile('cipd create --pkg-def cipd.yaml -tag (\S*)')
-_RE_CIPD_PACKAGE = re.compile('package: (\S*)')
+_RE_CIPD_CREATE = re.compile(r'cipd create --pkg-def cipd.yaml -tag (\S*)')
+_RE_CIPD_PACKAGE = re.compile(r'package: (\S*)')
 
 
 def _ParseSubprojects(subproject_path):
     """Parses listing of subproject build.gradle files. Returns list of paths."""
     if not os.path.exists(subproject_path):
-        return None
+        return {}
 
-    subprojects = []
+    subprojects = {}
     for subproject in open(subproject_path):
         subproject = subproject.strip()
         if subproject and not subproject.startswith('#'):
-            subprojects.append(subproject)
+            path, name = subproject.split(':')
+            subprojects[name] = path
     return subprojects
 
 
-def _GenerateSettingsGradle(subproject_dirs, settings_template_path,
-                            settings_out_path):
+def _GenerateSettingsGradle(subproject_dirs: Dict[str, str],
+                            settings_template_path, settings_out_path):
     """Generates settings file by replacing "{{subproject_dirs}}" string in template.
 
     Args:
@@ -299,7 +352,10 @@ def _GenerateSettingsGradle(subproject_dirs, settings_template_path,
 
     subproject_dirs_str = ''
     if subproject_dirs:
-        subproject_dirs_str = '\'' + '\',\''.join(subproject_dirs) + '\''
+        mappings = []
+        for name, path in subproject_dirs.items():
+            mappings.append(f'{name}: \'{path}\'')
+        subproject_dirs_str = ', '.join(mappings)
 
     template_content = template_content.replace('{{subproject_dirs}}',
                                                 subproject_dirs_str)
@@ -307,52 +363,81 @@ def _GenerateSettingsGradle(subproject_dirs, settings_template_path,
         f.write(template_content)
 
 
+def _SubstituteAndroidxRepo(build_gradle_data):
+    """Points the // <ANDROIDX_REPO> placeholder at the current androidx repo."""
+    if '// <ANDROIDX_REPO>' not in build_gradle_data:
+        return build_gradle_data
+    version = fetch_util.get_current_androidx_version()
+    repo_url = fetch_util.make_androidx_maven_url(version)
+    return build_gradle_data.replace('// <ANDROIDX_REPO>',
+                                     f'maven {{ url = "{repo_url}" }}')
+
+
+def _InitSubprojects(android_deps_dir, build_android_deps_dir,
+                     using_build_dir: bool):
+    subprojects = _ParseSubprojects(
+        os.path.join(android_deps_dir, 'subprojects.txt'))
+    subdirs = {name: f'subproject_{name}' for name in subprojects}
+    for name, original_path in subprojects.items():
+        subdir = subdirs[name]
+        build_gradle = os.path.join(subdir, _BUILD_GRADLE)
+        src_path = pathlib.Path(android_deps_dir) / original_path
+        data = _SubstituteAndroidxRepo(src_path.read_text())
+        dst_path = pathlib.Path(build_android_deps_dir) / build_gradle
+        dst_path.parent.mkdir(exist_ok=using_build_dir)
+        dst_path.write_text(data)
+
+    _GenerateSettingsGradle(
+        subdirs,
+        os.path.join(_PRIMARY_ANDROID_DEPS_DIR, 'settings.gradle.template'),
+        os.path.join(build_android_deps_dir, 'settings.gradle'))
+
+
 def _BuildGradleCmd(build_android_deps_dir, task):
-    cmd = [
-        _GRADLEW, '-b',
-        os.path.join(build_android_deps_dir, _BUILD_GRADLE), '--stacktrace',
-        task
+    # --no-daemon: the packager bot runs the androidx and android_deps rolls
+    # back to back with identical buildSrc copies. A reused daemon serves the
+    # second run stale Groovy metaclass state from the first, breaking the
+    # private method call in BuildConfigGenerator.main(). A fresh JVM costs a
+    # few seconds per run.
+    return [
+        _GRADLEW, '--no-daemon', '-p', build_android_deps_dir, '--stacktrace',
+        '--warning-mode', 'all', task
     ]
-    settings_gradle_path = os.path.join(build_android_deps_dir,
-                                        'settings.gradle')
-    if os.path.exists(settings_gradle_path):
-        cmd += ['-c', os.path.abspath(settings_gradle_path)]
-    return cmd
 
 
-def _CheckVulnerabilities(build_android_deps_dir, report_dst):
-    logging.warning('Running Gradle dependencyCheckAnalyze. This may take a '
-                    'few minutes the first time.')
+def _EnsureGradleWrapper(max_retries=3, retry_delay_sec=5):
+    """Ensures the Gradle wrapper distribution is downloaded with retries.
 
-    # Separate command from main gradle command so that we can provide specific
-    # diagnostics in case of failure of this step.
-    gradle_cmd = _BuildGradleCmd(build_android_deps_dir,
-                                 'dependencyCheckAnalyze')
+    On fresh bot caches, the first gradlew invocation downloads the Gradle
+    distribution zip from services.gradle.org without built-in retries.
+    Bootstrapping the wrapper separately before setupRepository allows
+    transient network errors (e.g. connect or read timeouts) to be retried
+    cleanly.
+    """
+    cmd = [_GRADLEW, '--version']
+    for attempt in range(max_retries + 1):
+        try:
+            RunCommandAndGetOutput(cmd)
+            return
+        except Exception as e:
+            if attempt == max_retries:
+                raise
+            delay = retry_delay_sec * (attempt + 1)
+            logging.warning(
+                'Gradle wrapper bootstrap failed (attempt %d/%d), '
+                'retrying in %ds: %s', attempt + 1, max_retries + 1, delay, e)
+            time.sleep(delay)
 
-    report_src = os.path.join(build_android_deps_dir, 'build', 'reports')
-    if os.path.exists(report_dst):
-        shutil.rmtree(report_dst)
 
-    try:
-        logging.info('CMD: %s', ' '.join(gradle_cmd))
-        subprocess.run(gradle_cmd, check=True)
-    except subprocess.CalledProcessError:
-        report_path = os.path.join(report_dst, 'dependency-check-report.html')
-        logging.error(
-            textwrap.dedent("""
-               =============================================================================
-               A package has a known vulnerability. It may not be in a package or packages
-               which you just added, but you need to resolve the problem before proceeding.
-               If you can't easily fix it by rolling the package to a fixed version now,
-               please file a crbug of type= Bug-Security providing all relevant information,
-               and then rerun this command with --ignore-vulnerabilities.
-               The html version of the report is avialable at: {}
-               =============================================================================
-               """.format(report_path)))
-        raise
-    finally:
-        if os.path.exists(report_src):
-            CopyFileOrDirectory(report_src, report_dst)
+def _ReduceNameLength(path_str):
+    """Returns a shorter path string if needed.
+
+  Args:
+    path_str: A String representing the path.
+  Returns:
+    A String (possibly shortened) of that path.
+  """
+    return _REDUCED_ID_LENGTH_MAP.get(path_str, path_str)
 
 
 def GetCipdPackageInfo(cipd_yaml_path):
@@ -396,6 +481,8 @@ def ParseDeps(root_dir, libs_dir):
     result = {}
     root_dir = os.path.abspath(root_dir)
     libs_dir = os.path.abspath(os.path.join(root_dir, libs_dir))
+    # TODO(mheikal): do not use cipd.yaml for this since it is not useful for
+    # subprojects. Change to read from a README.chromium
     for cipd_file in FindInDirectory(libs_dir, 'cipd.yaml'):
         pkg_name, pkg_tag = GetCipdPackageInfo(cipd_file)
         cipd_path = os.path.dirname(cipd_file)
@@ -416,12 +503,28 @@ def PrintPackageList(packages, list_name):
     print('\n'.join('    - ' + p for p in packages))
 
 
+def _DownloadOverrides(overrides, build_libs_dir):
+    for spec in overrides:
+        subpath, url = spec.split(':', 1)
+        target_path = os.path.join(build_libs_dir, subpath)
+        if not os.path.isfile(target_path):
+            found_files = 'Found instead:\n' + '\n'.join(
+                FindInDirectory(os.path.dirname(target_path), '*'))
+            raise Exception(
+                f'Override path does not exist: {target_path}\n{found_files}')
+        logging.info('Fetching override for %s', target_path)
+        with urllib.request.urlopen(url) as response:
+            with open(target_path, 'wb') as f:
+                shutil.copyfileobj(response, f)
+
+
 def _CreateAarInfos(aar_files):
     jobs = []
 
     for aar_file in aar_files:
         aar_dirname = os.path.dirname(aar_file)
-        aar_info_name = os.path.basename(aar_dirname) + '.info'
+        aar_info_name = _ReduceNameLength(
+            os.path.basename(aar_dirname)) + '.info'
         aar_info_path = os.path.join(aar_dirname, aar_info_name)
 
         logging.debug('- %s', aar_info_name)
@@ -434,48 +537,49 @@ def _CreateAarInfos(aar_files):
             raise Exception('Command Failed: {}\n'.format(' '.join(cmd)))
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument(
-        '--android-deps-dir',
-        help='Path to directory containing build.gradle from chromium-dir.',
-        default=_PRIMARY_ANDROID_DEPS_DIR)
-    parser.add_argument(
-        '--build-dir',
-        help='Path to build directory (default is temporary directory).')
-    parser.add_argument('--ignore-licenses',
-                        help='Ignores licenses for these deps.',
-                        action='store_true')
-    parser.add_argument('--ignore-vulnerabilities',
-                        help='Ignores vulnerabilities for these deps.',
-                        action='store_true')
-    parser.add_argument('-v',
-                        '--verbose',
-                        dest='verbose_count',
-                        default=0,
-                        action='count',
-                        help='Verbose level (multiple times for more)')
-    args = parser.parse_args()
+def _FixArchiveNames(android_deps_dir):
+    # Make sure the .aar / .jar has the filename according to the cipd.yaml
+    # file. 3pp bot does this transformation for us, but it's needed for
+    # --local and for the android_deps / androidx packages.
+    src_libs_dir = os.path.join(android_deps_dir, _LIBS_DIR)
+    # Match .aar and .jar
+    for src_path in FindInDirectory(src_libs_dir, '*.?ar'):
+        dirname = os.path.dirname(src_path)
+        yaml_path = os.path.join(dirname, 'cipd.yaml')
+        data = pathlib.Path(yaml_path).read_text('utf-8')
+        new_name = re.search(r'- file: (.*)', data).group(1)
+        dst_path = os.path.join(dirname, new_name)
+        logging.debug('mv [%s -> %s]', src_path, dst_path)
+        shutil.move(src_path, dst_path)
 
-    logging.basicConfig(
-        level=logging.WARNING - 10 * args.verbose_count,
-        format='%(levelname).1s %(relativeCreated)6d %(message)s')
+
+def _RunEngine(args):
+    """Resolves and downloads the deps of one project and writes its outputs."""
     debug = args.verbose_count >= 2
 
     if not os.path.isfile(os.path.join(args.android_deps_dir, _BUILD_GRADLE)):
         raise Exception('--android-deps-dir {} does not contain {}.'.format(
             args.android_deps_dir, _BUILD_GRADLE))
-    is_primary_android_deps = args.android_deps_dir == _PRIMARY_ANDROID_DEPS_DIR
-    android_deps_subdir = os.path.relpath(args.android_deps_dir, _CHROMIUM_SRC)
+    is_primary_android_deps = os.path.samefile(args.android_deps_dir,
+                                               _PRIMARY_ANDROID_DEPS_DIR)
+    android_deps_relpath = os.path.relpath(args.android_deps_dir,
+                                           _CHROMIUM_SRC)
+    output_android_deps_dir = args.android_deps_dir
+    if args.output_subdir:
+        output_android_deps_dir = os.path.join(args.android_deps_dir,
+                                               args.output_subdir)
 
     with BuildDir(args.build_dir) as build_dir:
-        build_android_deps_dir = os.path.join(build_dir, android_deps_subdir)
+        build_android_deps_dir = os.path.join(build_dir, android_deps_relpath)
 
         logging.info('Using build directory: %s', build_dir)
-        Copy(_PRIMARY_ANDROID_DEPS_DIR, _PRIMARY_ANDROID_DEPS_FILES,
-             build_android_deps_dir, _PRIMARY_ANDROID_DEPS_FILES)
+        if args.build_dir:
+            # Always use the latest files from the repo when debugging.
+            Symlink(_PRIMARY_ANDROID_DEPS_DIR, _PRIMARY_ANDROID_DEPS_FILES,
+                    build_android_deps_dir, _PRIMARY_ANDROID_DEPS_FILES)
+        else:
+            Copy(_PRIMARY_ANDROID_DEPS_DIR, _PRIMARY_ANDROID_DEPS_FILES,
+                 build_android_deps_dir, _PRIMARY_ANDROID_DEPS_FILES)
         Copy(args.android_deps_dir, [_BUILD_GRADLE], build_android_deps_dir,
              [_BUILD_GRADLE])
         Copy(args.android_deps_dir,
@@ -484,31 +588,12 @@ def main():
              _CUSTOM_ANDROID_DEPS_FILES,
              src_path_must_exist=is_primary_android_deps)
 
-        subprojects = _ParseSubprojects(
-            os.path.join(args.android_deps_dir, 'subprojects.txt'))
-        subproject_dirs = []
-        if subprojects:
-            for (index, subproject) in enumerate(subprojects):
-                subproject_dir = 'subproject{}'.format(index)
-                Copy(args.android_deps_dir, [subproject],
-                     build_android_deps_dir,
-                     [os.path.join(subproject_dir, 'build.gradle')])
-                subproject_dirs.append(subproject_dir)
-
-        _GenerateSettingsGradle(
-            subproject_dirs,
-            os.path.join(_PRIMARY_ANDROID_DEPS_DIR,
-                         'settings.gradle.template'),
-            os.path.join(build_android_deps_dir, 'settings.gradle'))
-
-        if not args.ignore_vulnerabilities:
-            report_dst = os.path.join(args.android_deps_dir,
-                                      'vulnerability_reports')
-            _CheckVulnerabilities(build_android_deps_dir, report_dst)
+        _InitSubprojects(args.android_deps_dir, build_android_deps_dir,
+                         bool(args.build_dir))
 
         logging.info('Running Gradle.')
 
-        # This gradle command generates the new DEPS and BUILD.gn files, it can
+        # This gradle command generates the new BUILD.gn files, it can
         # also handle special cases.
         # Edit BuildConfigGenerator.groovy#addSpecialTreatment for such cases.
         gradle_cmd = _BuildGradleCmd(build_android_deps_dir, 'setupRepository')
@@ -517,39 +602,33 @@ def main():
         if args.ignore_licenses:
             gradle_cmd.append('-PskipLicenses=true')
 
-        subprocess.run(gradle_cmd, check=True)
-
-        build_libs_dir = os.path.join(build_android_deps_dir, _LIBS_DIR)
+        _EnsureGradleWrapper()
+        RunCommand(gradle_cmd, print_stdout=True)
 
         logging.info('# Reformat %s.',
                      os.path.join(args.android_deps_dir, _BUILD_GN))
-        gn_args = [
-            os.path.relpath(_GN_PATH, _CHROMIUM_SRC), 'format',
-            os.path.join(os.path.relpath(build_android_deps_dir, _CHROMIUM_SRC),
-                         _BUILD_GN)
-        ]
-        RunCommand(gn_args, print_stdout=debug, cwd=_CHROMIUM_SRC)
+        gn_path = os.path.relpath(_GN_PATH, _CHROMIUM_SRC)
 
+        gn_input = os.path.join(build_android_deps_dir, _BUILD_GN)
+        gn_args = [gn_path, 'format', gn_input]
+        try:
+            RunCommand(gn_args, print_stdout=debug, cwd=_CHROMIUM_SRC)
+        except Exception:
+            if os.path.exists(gn_input):
+                shutil.copyfile(gn_input, '/tmp/gn-format-input')
+                logging.warning('Saved GN input to /tmp/gn-format-input')
+            raise
+
+        build_libs_dir = os.path.join(build_android_deps_dir, _LIBS_DIR)
+        if args.override_artifact:
+            _DownloadOverrides(args.override_artifact, build_libs_dir)
         aar_files = FindInDirectory(build_libs_dir, '*.aar')
 
         logging.info('# Generate Android .aar info files.')
         _CreateAarInfos(aar_files)
 
-        if not args.ignore_licenses:
-            logging.info('# Looking for nested license files.')
-            for aar_file in aar_files:
-                # Play Services .aar files have embedded licenses.
-                with zipfile.ZipFile(aar_file) as z:
-                    if _THIRD_PARTY_LICENSE_FILENAME in z.namelist():
-                        aar_dirname = os.path.dirname(aar_file)
-                        license_path = os.path.join(aar_dirname, 'LICENSE')
-                        # Make sure to append as we don't want to lose the
-                        # existing license.
-                        with open(license_path, 'ab') as f:
-                            f.write(z.read(_THIRD_PARTY_LICENSE_FILENAME))
-
         logging.info('# Compare CIPD packages.')
-        existing_packages = ParseDeps(args.android_deps_dir, _LIBS_DIR)
+        existing_packages = ParseDeps(output_android_deps_dir, _LIBS_DIR)
         build_packages = ParseDeps(build_android_deps_dir, _LIBS_DIR)
 
         deleted_packages = []
@@ -565,27 +644,34 @@ def main():
 
         new_packages = sorted(set(build_packages) - set(existing_packages))
 
-        # Copy updated DEPS and BUILD.gn to build directory.
-        update_cmds = []
+        # Copy updated BUILD.gn to output directory.
         Copy(build_android_deps_dir,
              _CUSTOM_ANDROID_DEPS_FILES,
-             args.android_deps_dir,
+             output_android_deps_dir,
              _CUSTOM_ANDROID_DEPS_FILES,
              src_path_must_exist=is_primary_android_deps)
 
+        # Not all projects (eg: the primary project) output a bill of materials.
+        # Thus only copy if it exists.
+        Copy(build_android_deps_dir, [_BOM_NAME],
+             output_android_deps_dir, [_BOM_NAME],
+             src_path_must_exist=False)
+
         # Delete obsolete or updated package directories.
         for pkg in existing_packages.values():
-            pkg_path = os.path.join(args.android_deps_dir, pkg.path)
+            pkg_path = os.path.join(output_android_deps_dir, pkg.path)
             DeleteDirectory(pkg_path)
 
         # Copy new and updated packages from build directory.
         for pkg in build_packages.values():
             pkg_path = pkg.path
-            dst_pkg_path = os.path.join(args.android_deps_dir, pkg_path)
+            dst_pkg_path = os.path.join(output_android_deps_dir, pkg_path)
             src_pkg_path = os.path.join(build_android_deps_dir, pkg_path)
             CopyFileOrDirectory(src_pkg_path,
                                 dst_pkg_path,
                                 ignore_extension=".tmp")
+
+        _FixArchiveNames(output_android_deps_dir)
 
         # Useful for printing timestamp.
         logging.info('All Done.')
@@ -596,6 +682,139 @@ def main():
             PrintPackageList(updated_packages, 'updated')
         if deleted_packages:
             PrintPackageList(deleted_packages, 'deleted')
+
+
+def _RunFullRoll(args):
+    """Rolls the project in args.android_deps_dir into its cipd/ directory."""
+    project_dir = pathlib.Path(args.android_deps_dir)
+    cipd_path = project_dir / 'cipd'
+    project_relpath = pathlib.Path(os.path.relpath(project_dir,
+                                                   _CHROMIUM_SRC)).as_posix()
+
+    if args.use_bom:
+        version_map_str = fetch_util.generate_version_map_str(project_dir /
+                                                              _BOM_NAME)
+    else:
+        version_map_str = ''
+
+    fetch_util.fill_template(project_dir / 'build.gradle.template',
+                             project_dir / _BUILD_GRADLE,
+                             version_overrides=version_map_str)
+
+    os.makedirs(cipd_path, exist_ok=True)
+    # cipd/gclient extract files as read only, allow writing before running
+    # the engine.
+    subprocess.run(['chmod', '-R', '+w', str(cipd_path)], check=True)
+
+    args.output_subdir = 'cipd'
+    _RunEngine(args)
+
+    version_map_str, bom_hash = fetch_util.generate_version_map_str(
+        cipd_path / _BOM_NAME, with_hash=True)
+
+    # Regenerate the build.gradle file filling in the version map so that
+    # consumers of the package do not have to re-resolve versions.
+    fetch_util.fill_template(project_dir / 'build.gradle.template',
+                             cipd_path / _BUILD_GRADLE,
+                             version_overrides=version_map_str)
+
+    # Generated files that the roll commits back into the tree.
+    generated_files = [
+        _BUILD_GN,
+        _BOM_NAME,
+        _ADDITIONAL_README_PATHS,
+        _BUILD_GRADLE,
+    ]
+    # TODO(mheikal): probably need to hash all text files, including licenses
+    # and readmes.
+    content_hash = fetch_util.hash_files(
+        [cipd_path / filename for filename in generated_files])
+
+    version_string = f'{bom_hash}.{content_hash}'
+    (cipd_path / 'VERSION.txt').write_text(version_string)
+    generated_files.append('VERSION.txt')
+
+    file_map = {f: f'{project_relpath}/{f}' for f in generated_files}
+    fetch_util.create_to_commit_zip(output_path=cipd_path / 'to_commit.zip',
+                                    package_root=cipd_path,
+                                    dirnames=['libs'],
+                                    absolute_file_map=file_map)
+
+    if args.local:
+        cmd = [
+            str(project_dir / 'extract_and_commit_extras.py'),
+            '--cipd-package-path',
+            str(cipd_path),
+            '--no-git-add',
+        ]
+        logging.info('Running: %s', shlex.join(cmd))
+        subprocess.run(cmd, cwd=_CHROMIUM_SRC, check=True)
+
+    fetch_util.write_cipd_yaml(package_root=cipd_path,
+                               package_name=_ROLL_CIPD_PACKAGE,
+                               version=version_string,
+                               output_path=cipd_path / 'cipd.yaml')
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument(
+        '--android-deps-dir',
+        help='Path to directory containing build.gradle from chromium-dir.',
+        default=_PRIMARY_ANDROID_DEPS_DIR)
+    parser.add_argument(
+        '--output-subdir',
+        help='Path to subdirectory under --android-deps-dir to output to '
+        'instead.')
+    parser.add_argument(
+        '--build-dir',
+        help='Path to build directory (default is temporary directory).')
+    parser.add_argument('--ignore-licenses',
+                        help='Ignores licenses for these deps.',
+                        action='store_true')
+    parser.add_argument('--override-artifact',
+                        action='append',
+                        help='lib_subpath:url of .aar / .jar to override.')
+    parser.add_argument(
+        '--local',
+        help='Local (non-bot) run: silences the bot warning and, for a full '
+        'roll, runs extract_and_commit_extras.py to update the committed '
+        'files.',
+        action='store_true')
+    parser.add_argument('-v',
+                        '--verbose',
+                        dest='verbose_count',
+                        default=0,
+                        action='count',
+                        help='Verbose level (multiple times for more)')
+    parser.add_argument(
+        '--use-bom',
+        action='store_true',
+        help='Full roll only: use the existing bill_of_materials.json '
+        'instead of resolving the latest versions.')
+    args = parser.parse_args()
+    # Paths below are passed to subprocesses run with cwd=_CHROMIUM_SRC.
+    args.android_deps_dir = os.path.abspath(args.android_deps_dir)
+
+    logging.basicConfig(
+        level=logging.WARNING - 10 * args.verbose_count,
+        format='%(levelname).1s %(relativeCreated)6d %(message)s')
+
+    if 'SWARMING_TASK_ID' not in os.environ and not (args.local
+                                                     or args.output_subdir):
+        logging.warning(
+            'Detected not running on a bot. You probably want to use --local')
+
+    has_template = os.path.isfile(
+        os.path.join(args.android_deps_dir, 'build.gradle.template'))
+    if has_template and not args.output_subdir:
+        _RunFullRoll(args)
+        return
+    if args.use_bom:
+        parser.error('--use-bom is only supported for a full roll')
+    _RunEngine(args)
 
 
 if __name__ == "__main__":

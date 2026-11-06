@@ -1,20 +1,19 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_VIEWS_RELAUNCH_NOTIFICATION_RELAUNCH_RECOMMENDED_BUBBLE_VIEW_H_
 #define CHROME_BROWSER_UI_VIEWS_RELAUNCH_NOTIFICATION_RELAUNCH_RECOMMENDED_BUBBLE_VIEW_H_
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "base/time/time.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_bubble_delegate_view.h"
 #include "chrome/browser/ui/views/relaunch_notification/relaunch_recommended_timer.h"
+#include "ui/views/bubble/bubble_dialog_delegate_view.h"
 
-class Browser;
+class BrowserWindowInterface;
 
 namespace views {
-class Button;
 class Widget;
 }  // namespace views
 
@@ -26,9 +25,14 @@ class RelaunchRecommendedBubbleView : public LocationBarBubbleDelegateView {
   // Shows the bubble in |browser| for an upgrade that was detected at
   // |detection_time|. |on_accept| is run if the user accepts the prompt to
   // restart.
-  static views::Widget* ShowBubble(Browser* browser,
+  static views::Widget* ShowBubble(BrowserWindowInterface* browser,
                                    base::Time detection_time,
                                    base::RepeatingClosure on_accept);
+
+  RelaunchRecommendedBubbleView(const RelaunchRecommendedBubbleView&) = delete;
+  RelaunchRecommendedBubbleView& operator=(
+      const RelaunchRecommendedBubbleView&) = delete;
+
   ~RelaunchRecommendedBubbleView() override;
 
   // LocationBarBubbleDelegateView:
@@ -40,10 +44,9 @@ class RelaunchRecommendedBubbleView : public LocationBarBubbleDelegateView {
  protected:
   // LocationBarBubbleDelegateView:
   void Init() override;
-  void VisibilityChanged(views::View* starting_from, bool is_visible) override;
 
  private:
-  RelaunchRecommendedBubbleView(views::Button* anchor_button,
+  RelaunchRecommendedBubbleView(views::BubbleAnchor anchor,
                                 base::Time detection_time,
                                 base::RepeatingClosure on_accept);
 
@@ -55,8 +58,6 @@ class RelaunchRecommendedBubbleView : public LocationBarBubbleDelegateView {
 
   // Timer that schedules title refreshes.
   RelaunchRecommendedTimer relaunch_recommended_timer_;
-
-  DISALLOW_COPY_AND_ASSIGN(RelaunchRecommendedBubbleView);
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_RELAUNCH_NOTIFICATION_RELAUNCH_RECOMMENDED_BUBBLE_VIEW_H_

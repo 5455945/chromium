@@ -1,16 +1,17 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_AURA_TEST_TEST_WINDOWS_H_
 #define UI_AURA_TEST_TEST_WINDOWS_H_
 
+#include <optional>
 #include <string>
 
-#include "base/compiler_specific.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/aura/client/window_types.h"
 #include "ui/aura/test/aura_test_base.h"
+#include "ui/aura/test/test_window_builder.h"
 #include "ui/aura/test/test_window_delegate.h"
 
 namespace aura {
@@ -23,22 +24,12 @@ namespace test {
 void SetEnvForTestWindows(Env* env);
 Env* GetEnvForTestWindows();
 
-Window* CreateTestWindowWithId(int id, Window* parent);
-Window* CreateTestWindowWithBounds(const gfx::Rect& bounds, Window* parent);
-Window* CreateTestWindow(SkColor color,
-                         int id,
-                         const gfx::Rect& bounds,
-                         Window* parent);
-Window* CreateTestWindowWithDelegate(WindowDelegate* delegate,
-                                     int id,
-                                     const gfx::Rect& bounds,
-                                     Window* parent);
-Window* CreateTestWindowWithDelegateAndType(WindowDelegate* delegate,
-                                            client::WindowType type,
-                                            int id,
-                                            const gfx::Rect& bounds,
-                                            Window* parent,
-                                            bool show_on_creation);
+// Creates a test window. It internally uses TestWindowBuilder. If `color` is
+// specified, it'll create a test delegate that fills the content with the given
+// color.
+[[nodiscard]] std::unique_ptr<Window> CreateTestWindow(
+    WindowBuilderParams params = {},
+    std::optional<SkColor> color = std::nullopt);
 
 // Returns true if |upper| is above |lower| in the window stacking order.
 bool WindowIsAbove(Window* upper, Window* lower);

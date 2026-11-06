@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,51 +8,55 @@ import android.content.Context;
 import android.content.res.ColorStateList;
 
 import androidx.annotation.ColorInt;
-import androidx.annotation.Nullable;
 
 import org.chromium.base.ObserverList;
-import org.chromium.ui.util.ColorUtils;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 
-/**
- * An abstract class that provides the current theme color.
- */
+/** An abstract class that provides the current theme color. */
+@NullMarked
 public abstract class ThemeColorProvider {
-    /**
-     * An interface to be notified about changes to the theme color.
-     */
+    /** An interface to be notified about changes to the theme color. */
     public interface ThemeColorObserver {
         /**
          * @param color The new color the observer should use.
          * @param shouldAnimate Whether the change of color should be animated.
          */
-        void onThemeColorChanged(int color, boolean shouldAnimate);
+        void onThemeColorChanged(@ColorInt int color, boolean shouldAnimate);
     }
 
-    /**
-     * An interface to be notified about changes to the tint.
-     */
+    /** An interface to be notified about changes to the tint. */
     public interface TintObserver {
         /**
-         * @param tint The new tint the observer should use.
-         * @param useLight Whether the observer should use light mode.
+         * @param tint The new tint the observer should use, without applying Activity state
+         *     (focused vs unfocused) rules. This should be used for elements that don't adjust tint
+         *     based on Activity focus.
+         * @param activityFocusTint The tint the observer should use including consideration for
+         *     whether the Activity is focused. This should be used for elements that do adjust tint
+         *     based on Activity focus.
+         * @param brandedColorScheme The {@link BrandedColorScheme} the observer should use.
          */
-        void onTintChanged(ColorStateList tint, boolean useLight);
+        void onTintChanged(
+                @Nullable ColorStateList tint,
+                @Nullable ColorStateList activityFocusTint,
+                @BrandedColorScheme int brandedColorScheme);
     }
 
-    /** Light mode tint (used when color is dark). */
-    private final ColorStateList mLightModeTint;
-
-    /** Dark mode tint (used when color is light). */
-    private final ColorStateList mDarkModeTint;
-
     /** Current primary color. */
-    private int mPrimaryColor;
+    private @ColorInt int mPrimaryColor;
+
+    /** The {@link BrandedColorScheme} for the current theme. */
+    private @Nullable @BrandedColorScheme Integer mBrandedColorScheme;
 
     /**
-     * Whether should use light tint (corresponds to dark color). If null, the state is not
-     * initialized.
+     * The primary icon tint for the current theme, that does not take the activity focus state into
+     * account.
      */
-    private @Nullable Boolean mUseLightTint;
+    private @Nullable ColorStateList mTint;
+
+    /** The icon tint for the current theme, that takes the activity focus state into account. */
+    private @Nullable ColorStateList mActivityFocusTint;
 
     /** List of {@link ThemeColorObserver}s. These are used to broadcast events to listeners. */
     private final ObserverList<ThemeColorObserver> mThemeColorObservers;
@@ -64,15 +68,14 @@ public abstract class ThemeColorProvider {
      * @param context The {@link Context} that is used to retrieve color related resources.
      */
     public ThemeColorProvider(Context context) {
-        mThemeColorObservers = new ObserverList<ThemeColorObserver>();
-        mTintObservers = new ObserverList<TintObserver>();
-        mLightModeTint = ThemeUtils.getThemedToolbarIconTint(context, true);
-        mDarkModeTint = ThemeUtils.getThemedToolbarIconTint(context, false);
+        mThemeColorObservers = new ObserverList<>();
+        mTintObservers = new ObserverList<>();
+        mTint = ThemeUtils.getThemedToolbarIconTint(context, BrandedColorScheme.APP_DEFAULT);
     }
 
     /**
      * @param observer Adds a {@link ThemeColorObserver} that will be notified when the theme color
-     *                 changes. This method does not trigger the observer.
+     *     changes. This method does not trigger the observer.
      */
     public void addThemeColorObserver(ThemeColorObserver observer) {
         mThemeColorObservers.addObserver(observer);
@@ -103,49 +106,76 @@ public abstract class ThemeColorProvider {
     /**
      * @return The current theme color of this provider.
      */
-    @ColorInt
-    public int getThemeColor() {
+    public @ColorInt int getThemeColor() {
         return mPrimaryColor;
     }
 
     /**
-     * @return The current tint of this provider.
+     * @return The current tint of this provider, that does not take the activity focus state into
+     *     account.
      */
-    public ColorStateList getTint() {
-        return useLight() ? mLightModeTint : mDarkModeTint;
+    public @Nullable ColorStateList getTint() {
+        return mTint;
     }
 
     /**
-     * @return Whether or not this provider is using light tints.
+     * @return The tint that takes the current activity's focus state into account.
      */
-    public boolean useLight() {
-        return mUseLightTint != null ? mUseLightTint : false;
+    public @Nullable ColorStateList getActivityFocusTint() {
+        return mActivityFocusTint;
     }
 
     /**
-     * Clears out the observer lists.
+     * @return The current {@link BrandedColorScheme} of this provider.
      */
+    public @BrandedColorScheme int getBrandedColorScheme() {
+        return mBrandedColorScheme != null ? mBrandedColorScheme : BrandedColorScheme.APP_DEFAULT;
+    }
+
+    /** Clears out the observer lists. */
     public void destroy() {
         mThemeColorObservers.clear();
         mTintObservers.clear();
     }
 
-    protected void updatePrimaryColor(int color, boolean shouldAnimate) {
+    protected void updatePrimaryColor(@ColorInt int color, boolean shouldAnimate) {
         if (mPrimaryColor == color) return;
         mPrimaryColor = color;
         for (ThemeColorObserver observer : mThemeColorObservers) {
             observer.onThemeColorChanged(color, shouldAnimate);
         }
-        updateTint();
     }
 
-    private void updateTint() {
-        final boolean useLight = ColorUtils.shouldUseLightForegroundOnBackground(mPrimaryColor);
-        if (mUseLightTint != null && useLight == mUseLightTint) return;
-        mUseLightTint = useLight;
-        final ColorStateList tint = useLight ? mLightModeTint : mDarkModeTint;
-        for (TintObserver observer : mTintObservers) {
-            observer.onTintChanged(tint, useLight);
+    protected void updateTint(
+            @Nullable ColorStateList tint,
+            @Nullable ColorStateList activityFocusTint,
+            @BrandedColorScheme int brandedColorScheme) {
+        if (tint == mTint
+                && activityFocusTint == mActivityFocusTint
+                && mBrandedColorScheme != null
+                && mBrandedColorScheme == brandedColorScheme) {
+            return;
         }
+        mTint = tint;
+        mActivityFocusTint = activityFocusTint;
+        mBrandedColorScheme = brandedColorScheme;
+
+        for (TintObserver observer : mTintObservers) {
+            observer.onTintChanged(tint, activityFocusTint, brandedColorScheme);
+        }
+    }
+
+    /**
+     * Determines the icon tint based on activity focus state.
+     *
+     * @return The tint for the provided {@link BrandedColorScheme} that takes the activity focus
+     *     state into account.
+     */
+    protected static ColorStateList calculateActivityFocusTint(
+            Context context,
+            @BrandedColorScheme int brandedColorScheme,
+            boolean isActivityFocused) {
+        return ThemeUtils.getThemedToolbarIconTintForActivityState(
+                context, brandedColorScheme, isActivityFocused);
     }
 }

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,6 @@
 #include <string>
 
 #include "base/component_export.h"
-#include "base/macros.h"
 #include "components/tab_groups/tab_group_color.h"
 #include "third_party/skia/include/core/SkColor.h"
 
@@ -38,12 +37,9 @@ class COMPONENT_EXPORT(TAB_GROUPS) TabGroupVisualData {
   bool is_collapsed() const { return is_collapsed_; }
 
   // Checks whether two instances are visually equivalent.
-  bool operator==(const TabGroupVisualData& other) const {
-    return title_ == other.title_ && color_ == other.color_;
-  }
-  bool operator!=(const TabGroupVisualData& other) const {
-    return !(*this == other);
-  }
+  auto operator<=>(const TabGroupVisualData&) const = default;
+
+  void SetTitle(const std::u16string& title) { title_ = title; }
 
  private:
   std::u16string title_;

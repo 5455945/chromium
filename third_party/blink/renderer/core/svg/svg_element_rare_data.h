@@ -20,12 +20,11 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_SVG_SVG_ELEMENT_RARE_DATA_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_SVG_SVG_ELEMENT_RARE_DATA_H_
 
-#include "base/macros.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/core/svg/svg_element.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/transforms/affine_transform.h"
-#include "third_party/blink/renderer/platform/wtf/hash_set.h"
 
 namespace blink {
 
@@ -36,9 +35,9 @@ class SVGElementRareData final : public GarbageCollected<SVGElementRareData> {
  public:
   SVGElementRareData()
       : corresponding_element_(nullptr),
-        instances_updates_blocked_(false),
-        needs_override_computed_style_update_(false),
-        web_animated_attributes_dirty_(false) {}
+        needs_override_computed_style_update_(false) {}
+  SVGElementRareData(const SVGElementRareData&) = delete;
+  SVGElementRareData& operator=(const SVGElementRareData&) = delete;
 
   SVGElementSet& OutgoingReferences() { return outgoing_references_; }
   const SVGElementSet& OutgoingReferences() const {
@@ -56,11 +55,6 @@ class SVGElementRareData final : public GarbageCollected<SVGElementRareData> {
     return element_instances_;
   }
 
-  bool InstanceUpdatesBlocked() const { return instances_updates_blocked_; }
-  void SetInstanceUpdatesBlocked(bool value) {
-    instances_updates_blocked_ = value;
-  }
-
   SVGElement* CorrespondingElement() const {
     return corresponding_element_.Get();
   }
@@ -68,18 +62,7 @@ class SVGElementRareData final : public GarbageCollected<SVGElementRareData> {
     corresponding_element_ = corresponding_element;
   }
 
-  void SetWebAnimatedAttributesDirty(bool dirty) {
-    web_animated_attributes_dirty_ = dirty;
-  }
-  bool WebAnimatedAttributesDirty() const {
-    return web_animated_attributes_dirty_;
-  }
-
-  HashSet<QualifiedName>& WebAnimatedAttributes() {
-    return web_animated_attributes_;
-  }
-
-  ElementSMILAnimations* GetSMILAnimations() { return smil_animations_; }
+  ElementSMILAnimations* GetSMILAnimations() { return smil_animations_.Get(); }
   ElementSMILAnimations& EnsureSMILAnimations();
 
   MutableCSSPropertyValueSet* AnimatedSMILStyleProperties() const {
@@ -94,8 +77,13 @@ class SVGElementRareData final : public GarbageCollected<SVGElementRareData> {
     needs_override_computed_style_update_ = true;
   }
 
-  SVGElementResourceClient* GetSVGResourceClient() { return resource_client_; }
+  SVGElementResourceClient* GetSVGResourceClient() {
+    return resource_client_.Get();
+  }
   SVGElementResourceClient& EnsureSVGResourceClient(SVGElement*);
+
+  SVGResourceTarget& EnsureResourceTarget(SVGElement& element);
+  bool HasResourceTarget() const;
 
   AffineTransform* AnimateMotionTransform();
 
@@ -108,15 +96,12 @@ class SVGElementRareData final : public GarbageCollected<SVGElementRareData> {
   Member<SVGElement> corresponding_element_;
   Member<SVGElementResourceClient> resource_client_;
   Member<ElementSMILAnimations> smil_animations_;
-  bool instances_updates_blocked_ : 1;
   bool needs_override_computed_style_update_ : 1;
-  bool web_animated_attributes_dirty_ : 1;
-  HashSet<QualifiedName> web_animated_attributes_;
   Member<MutableCSSPropertyValueSet> animated_smil_style_properties_;
-  scoped_refptr<ComputedStyle> override_computed_style_;
+  Member<const ComputedStyle> override_computed_style_;
+  WeakMember<SVGResourceTarget> resource_target_;
   // Used by <animateMotion>
   AffineTransform animate_motion_transform_;
-  DISALLOW_COPY_AND_ASSIGN(SVGElementRareData);
 };
 
 }  // namespace blink

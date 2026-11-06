@@ -1,16 +1,8 @@
-// Copyright 2013 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 goog.module('goog.PromiseTest');
 goog.setTestOnly();
@@ -1505,7 +1497,7 @@ testSuite({
       assertEquals(1, rejectionCall.getArguments().length);
       const err = rejectionCall.getArguments()[0];
       assertEquals('thenAlways throw', err.message);
-      assertEquals(goog.global, rejectionCall.getThis());
+      assertEquals(null, rejectionCall.getThis());
     });
 
     return p.thenAlways(() => {
@@ -1586,7 +1578,7 @@ testSuite({
   },
 
   testCancel() {
-    const p = new GoogPromise(goog.nullFunction);
+    const p = new GoogPromise(functions.UNDEFINED);
     const child = p.then(shouldNotCall, (reason) => {
       assertTrue(reason instanceof GoogPromise.CancellationError);
       assertEquals(
@@ -1606,7 +1598,7 @@ testSuite({
       return;
     }
     // Given.
-    const p = new GoogPromise(goog.nullFunction);
+    const p = new GoogPromise(functions.UNDEFINED);
     function recurse(depth) {
       if (depth == 0) {
         p.cancel('cancellation message');
@@ -1630,7 +1622,7 @@ testSuite({
 
   testThenVoidCancel() {
     let thenVoidCalled = false;
-    const p = new GoogPromise(goog.nullFunction);
+    const p = new GoogPromise(functions.UNDEFINED);
 
     p.thenVoid(shouldNotCall, (reason) => {
       assertTrue(reason instanceof GoogPromise.CancellationError);
@@ -1689,7 +1681,7 @@ testSuite({
 
   testCancelPropagation() {
     let cancelError;
-    const p = new GoogPromise(goog.nullFunction);
+    const p = new GoogPromise(functions.UNDEFINED);
 
     const p2 =
         p.then(shouldNotCall, (reason) => {
@@ -1732,7 +1724,7 @@ testSuite({
     };
 
     let cancelError;
-    const p = new GoogPromise(goog.nullFunction);
+    const p = new GoogPromise(functions.UNDEFINED);
 
     const p2 = p.then(shouldNotCall, (reason) => {
       cancelError = reason;
@@ -1766,7 +1758,7 @@ testSuite({
   testCancelPropagationUpward() {
     let cancelError;
     const cancelCalls = [];
-    const parent = new GoogPromise(goog.nullFunction);
+    const parent = new GoogPromise(functions.UNDEFINED);
 
     const child = parent.then(shouldNotCall, (reason) => {
       assertTrue(reason instanceof GoogPromise.CancellationError);
@@ -1805,7 +1797,7 @@ testSuite({
   testThenVoidCancelPropagationUpward() {
     let cancelError;
     const cancelCalls = [];
-    const parent = new GoogPromise(goog.nullFunction);
+    const parent = new GoogPromise(functions.UNDEFINED);
 
     const child = parent.then(shouldNotCall, (reason) => {
       assertTrue(reason instanceof GoogPromise.CancellationError);
@@ -1956,6 +1948,7 @@ testSuite({
     const err = new GoogPromise.CancellationError('cancel message');
     assertTrue(err instanceof Error);
     assertTrue(err instanceof GoogPromise.CancellationError);
+    assertFalse(err.reportErrorToServer);
     assertEquals('cancel', err.name);
     assertEquals('cancel message', err.message);
   },
@@ -2049,7 +2042,7 @@ testSuite({
     assertEquals(1, unhandledRejections.getCallCount());
     const rejectionCall = unhandledRejections.popLastCall();
     assertArrayEquals([sentinel], rejectionCall.getArguments());
-    assertEquals(goog.global, rejectionCall.getThis());
+    assertEquals(null, rejectionCall.getThis());
   },
 
   testUnhandledRejection2() {
@@ -2060,7 +2053,7 @@ testSuite({
     assertEquals(1, unhandledRejections.getCallCount());
     const rejectionCall = unhandledRejections.popLastCall();
     assertArrayEquals([sentinel], rejectionCall.getArguments());
-    assertEquals(goog.global, rejectionCall.getThis());
+    assertEquals(null, rejectionCall.getThis());
   },
 
   testThenVoidUnhandledRejection() {
@@ -2071,7 +2064,7 @@ testSuite({
     assertEquals(1, unhandledRejections.getCallCount());
     const rejectionCall = unhandledRejections.popLastCall();
     assertArrayEquals([sentinel], rejectionCall.getArguments());
-    assertEquals(goog.global, rejectionCall.getThis());
+    assertEquals(null, rejectionCall.getThis());
   },
 
   testUnhandledRejection() {
@@ -2124,7 +2117,7 @@ testSuite({
     assertEquals(1, unhandledRejections.getCallCount());
     const rejectionCall = unhandledRejections.popLastCall();
     assertArrayEquals([sentinel], rejectionCall.getArguments());
-    assertEquals(goog.global, rejectionCall.getThis());
+    assertEquals(null, rejectionCall.getThis());
   },
 
   testUnhandledRejectionAfterThenAlways() {
@@ -2137,7 +2130,7 @@ testSuite({
     assertEquals(1, unhandledRejections.getCallCount());
     const rejectionCall = unhandledRejections.popLastCall();
     assertArrayEquals([sentinel], rejectionCall.getArguments());
-    assertEquals(goog.global, rejectionCall.getThis());
+    assertEquals(null, rejectionCall.getThis());
   },
 
   testHandledBlockingRejection() {
@@ -2201,7 +2194,7 @@ testSuite({
       // Expected
     }
 
-    // TODO(b/136116638): Expect 0 unhandled rejections in all environemnts.
+    // TODO(user): Expect 0 unhandled rejections in all environemnts.
     assertEquals(MICROTASKS_EXIST ? 1 : 0, unhandledRejections.getCallCount());
   },
 
@@ -2222,14 +2215,14 @@ testSuite({
 
     // Test COMPILED code path.
     try {
-      goog.global['COMPILED'] = true;
+      globalThis['COMPILED'] = true;
       /** @constructor */
       function C() {}
       C.prototype.then = (opt_a, opt_b, opt_c) => {};
       Thenable.addImplementation(C);
       assertTrue(Thenable.isImplementedBy(new C));
     } finally {
-      goog.global['COMPILED'] = false;
+      globalThis['COMPILED'] = false;
     }
   },
 

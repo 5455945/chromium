@@ -4,8 +4,8 @@ include_rules = [
   "+chromecast/crash",
   "+chromecast/gpu",
   "+chromecast/renderer",
-  "+chromecast/utility",
   "+components/crash",
+  "+components/prefs",
   "+content/public/app",
   "+content/public/browser",
   "+content/public/common",
@@ -14,7 +14,7 @@ include_rules = [
 ]
 
 specific_include_rules = {
-  "cast_test_launcher\.cc": [
+  "cast_test_launcher\\.cc": [
     "+content/public/test",
     "+mojo/core/embedder/embedder.h",
   ],

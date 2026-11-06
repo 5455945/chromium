@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,15 @@
 #define MEDIA_MOJO_SERVICES_MOJO_RENDERER_SERVICE_H_
 
 #include <stdint.h>
-#include <memory>
 
-#include "base/callback.h"
+#include <memory>
+#include <optional>
+
 #include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "base/unguessable_token.h"
 #include "media/base/buffering_state.h"
@@ -26,7 +28,6 @@
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace media {
 
@@ -52,21 +53,24 @@ class MEDIA_MOJO_EXPORT MojoRendererService final : public mojom::Renderer,
   MojoRendererService(MojoCdmServiceContext* mojo_cdm_service_context,
                       std::unique_ptr<media::Renderer> renderer);
 
+  MojoRendererService(const MojoRendererService&) = delete;
+  MojoRendererService& operator=(const MojoRendererService&) = delete;
+
   ~MojoRendererService() final;
 
   // mojom::Renderer implementation.
   void Initialize(
       mojo::PendingAssociatedRemote<mojom::RendererClient> client,
-      absl::optional<std::vector<mojo::PendingRemote<mojom::DemuxerStream>>>
+      std::optional<std::vector<mojo::PendingRemote<mojom::DemuxerStream>>>
           streams,
-      mojom::MediaUrlParamsPtr media_url_params,
       InitializeCallback callback) final;
   void Flush(FlushCallback callback) final;
   void StartPlayingFrom(base::TimeDelta time_delta) final;
   void SetPlaybackRate(double playback_rate) final;
   void SetVolume(float volume) final;
-  void SetCdm(const absl::optional<base::UnguessableToken>& cdm_id,
+  void SetCdm(const std::optional<base::UnguessableToken>& cdm_id,
               SetCdmCallback callback) final;
+  void SetLatencyHint(std::optional<base::TimeDelta> latency_hint) final;
 
  private:
   enum State {
@@ -79,6 +83,7 @@ class MEDIA_MOJO_EXPORT MojoRendererService final : public mojom::Renderer,
 
   // RendererClient implementation.
   void OnError(PipelineStatus status) final;
+  void OnFallback(PipelineStatus status) final;
   void OnEnded() final;
   void OnStatisticsUpdate(const PipelineStatistics& stats) final;
   void OnBufferingStateChange(BufferingState state,
@@ -88,7 +93,7 @@ class MEDIA_MOJO_EXPORT MojoRendererService final : public mojom::Renderer,
   void OnVideoConfigChange(const VideoDecoderConfig& config) final;
   void OnVideoNaturalSizeChange(const gfx::Size& size) final;
   void OnVideoOpacityChange(bool opaque) final;
-  void OnVideoFrameRateChange(absl::optional<int> fps) final;
+  void OnVideoFrameRateChange(std::optional<int> fps) final;
 
   // Called when the MediaResourceShim is ready to go (has a config,
   // pipe handle, etc) and can be handed off to a renderer for use.
@@ -112,7 +117,7 @@ class MEDIA_MOJO_EXPORT MojoRendererService final : public mojom::Renderer,
   // Callback executed once SetCdm() completes.
   void OnCdmAttached(base::OnceCallback<void(bool)> callback, bool success);
 
-  MojoCdmServiceContext* const mojo_cdm_service_context_ = nullptr;
+  const raw_ptr<MojoCdmServiceContext> mojo_cdm_service_context_ = nullptr;
 
   State state_;
   double playback_rate_;
@@ -135,8 +140,6 @@ class MEDIA_MOJO_EXPORT MojoRendererService final : public mojom::Renderer,
 
   base::WeakPtr<MojoRendererService> weak_this_;
   base::WeakPtrFactory<MojoRendererService> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(MojoRendererService);
 };
 
 }  // namespace media

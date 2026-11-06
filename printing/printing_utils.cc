@@ -1,42 +1,56 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "printing/printing_utils.h"
 
-#include <unicode/ulocdata.h>
-
 #include <algorithm>
-#include <cmath>
+#include <cstring>
 #include <string>
+#include <string_view>
 
+#include "base/i18n/file_util_icu.h"
 #include "base/logging.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "printing/units.h"
+#include "build/build_config.h"
+#include "build/chromeos_buildflags.h"
+#include "printing/mojom/print.mojom.h"
 #include "third_party/icu/source/common/unicode/uchar.h"
-#include "ui/gfx/geometry/size.h"
 #include "ui/gfx/text_elider.h"
+
+#if BUILDFLAG(USE_CUPS)
+#include <unicode/ulocdata.h>
+
+#include <cmath>
+
+#include "printing/units.h"
+#include "ui/gfx/geometry/size.h"
+#endif
+
+#if BUILDFLAG(IS_WIN)
+#include <windows.h>
+#endif
 
 namespace printing {
 
 namespace {
 
 constexpr size_t kMaxDocumentTitleLength = 80;
-constexpr gfx::Size kIsoA4Microns = gfx::Size(210000, 297000);
 
-}  // namespace
+#if BUILDFLAG(USE_CUPS)
+constexpr gfx::Size kIsoA4Microns = gfx::Size(210000, 297000);
+#endif
 
 std::u16string SimplifyDocumentTitleWithLength(const std::u16string& title,
                                                size_t length) {
   std::u16string no_controls(title);
-  no_controls.erase(
-      std::remove_if(no_controls.begin(), no_controls.end(), &u_iscntrl),
-      no_controls.end());
+  std::erase_if(no_controls, &u_iscntrl);
+
+  base::i18n::ReplaceIllegalCharacters(&no_controls, '_');
 
   static constexpr const char* kCharsToReplace[] = {
-      "\\", "/", "<", ">", ":", "\"", "'", "|", "?", "*", "~",
+      "'", "~", "(", ")", "{", "}",
   };
   for (const char* c : kCharsToReplace) {
     base::ReplaceChars(no_controls, base::ASCIIToUTF16(c), u"_", &no_controls);
@@ -47,35 +61,20 @@ std::u16string SimplifyDocumentTitleWithLength(const std::u16string& title,
   return result;
 }
 
-std::u16string FormatDocumentTitleWithOwnerAndLength(
-    const std::u16string& owner,
-    const std::u16string& title,
-    size_t length) {
-  const std::u16string separator = u": ";
-  DCHECK_LT(separator.size(), length);
-
-  std::u16string short_title =
-      SimplifyDocumentTitleWithLength(owner, length - separator.size());
-  short_title += separator;
-  if (short_title.size() < length) {
-    short_title +=
-        SimplifyDocumentTitleWithLength(title, length - short_title.size());
-  }
-
-  return short_title;
-}
+}  // namespace
 
 std::u16string SimplifyDocumentTitle(const std::u16string& title) {
   return SimplifyDocumentTitleWithLength(title, kMaxDocumentTitleLength);
 }
 
-std::u16string FormatDocumentTitleWithOwner(const std::u16string& owner,
-                                            const std::u16string& title) {
-  return FormatDocumentTitleWithOwnerAndLength(owner, title,
-                                               kMaxDocumentTitleLength);
+std::u16string SimplifyDocumentTitleWithLengthForTesting(
+    const std::u16string& title,
+    size_t length) {
+  return SimplifyDocumentTitleWithLength(title, length);
 }
 
-gfx::Size GetDefaultPaperSizeFromLocaleMicrons(base::StringPiece locale) {
+#if BUILDFLAG(USE_CUPS)
+gfx::Size GetDefaultPaperSizeFromLocaleMicrons(std::string_view locale) {
   if (locale.empty())
     return kIsoA4Microns;
 
@@ -91,7 +90,7 @@ gfx::Size GetDefaultPaperSizeFromLocaleMicrons(base::StringPiece locale) {
     return kIsoA4Microns;
   }
   // Convert millis to microns
-  return gfx::Size(width * 1000, height * 1000);
+  return gfx::Size(width * kMicronsPerMm, height * kMicronsPerMm);
 }
 
 bool SizesEqualWithinEpsilon(const gfx::Size& lhs,
@@ -104,6 +103,50 @@ bool SizesEqualWithinEpsilon(const gfx::Size& lhs,
 
   return std::abs(lhs.width() - rhs.width()) <= epsilon &&
          std::abs(lhs.height() - rhs.height()) <= epsilon;
+}
+#endif  // BUILDFLAG(USE_CUPS)
+
+#if BUILDFLAG(IS_WIN)
+gfx::Rect GetCenteredPageContentRect(const gfx::Size& paper_size,
+                                     const gfx::Size& page_size,
+                                     const gfx::Rect& page_content_rect) {
+  gfx::Rect content_rect = page_content_rect;
+  if (paper_size.width() > page_size.width()) {
+    int diff = paper_size.width() - page_size.width();
+    content_rect.set_x(content_rect.x() + diff / 2);
+  }
+  if (paper_size.height() > page_size.height()) {
+    int diff = paper_size.height() - page_size.height();
+    content_rect.set_y(content_rect.y() + diff / 2);
+  }
+  return content_rect;
+}
+
+gfx::Rect GetPrintableAreaDeviceUnits(HDC hdc) {
+  DCHECK(hdc);
+
+  gfx::Size physical_size_device_units(GetDeviceCaps(hdc, PHYSICALWIDTH),
+                                       GetDeviceCaps(hdc, PHYSICALHEIGHT));
+  gfx::Rect printable_area_device_units(
+      GetDeviceCaps(hdc, PHYSICALOFFSETX), GetDeviceCaps(hdc, PHYSICALOFFSETY),
+      GetDeviceCaps(hdc, HORZRES), GetDeviceCaps(hdc, VERTRES));
+
+  // Sanity check the printable_area: we've seen crashes caused by a printable
+  // area rect of 0, 0, 0, 0, so it seems some drivers don't set it.
+  if (printable_area_device_units.IsEmpty() ||
+      !gfx::Rect(physical_size_device_units)
+           .Contains(printable_area_device_units)) {
+    printable_area_device_units = gfx::Rect(physical_size_device_units);
+  }
+
+  return printable_area_device_units;
+}
+#endif  // BUILDFLAG(IS_WIN)
+
+bool LooksLikePdf(base::span<const uint8_t> maybe_pdf_data) {
+  constexpr auto kPdfStartsWith = base::span_from_cstring("%PDF-");
+  return maybe_pdf_data.size() >= 50u &&
+         maybe_pdf_data.first(kPdfStartsWith.size()) == kPdfStartsWith;
 }
 
 }  // namespace printing

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,13 +13,16 @@ namespace base {
 
 namespace {
 
-#if defined(OS_FUCHSIA)
-// TODO(https://crbug.com/1060357): Enable when RTC flake is fixed.
+constexpr TimeTicks kOneYearAfterUnixEpoch =
+    TimeTicks() + Microseconds(Time::kMicrosecondsFromWindowsToUnixEpoch) +
+    Days(365);
+
+// Disabled on Android due to flakes; see https://crbug.com/1474884.
+#if BUILDFLAG(IS_ANDROID)
 #define MAYBE_Time DISABLED_Time
 #else
 #define MAYBE_Time Time
 #endif
-
 TEST(ScopedMockClockOverrideTest, MAYBE_Time) {
   // Choose a reference time that we know to be in the past but close to now.
   Time build_time = GetBuildTime();
@@ -37,8 +40,8 @@ TEST(ScopedMockClockOverrideTest, MAYBE_Time) {
 
     EXPECT_NE(Time(), Time::Now());
     Time start = Time::Now();
-    mock_clock.Advance(TimeDelta::FromSeconds(1));
-    EXPECT_EQ(start + TimeDelta::FromSeconds(1), Time::Now());
+    mock_clock.Advance(Seconds(1));
+    EXPECT_EQ(start + Seconds(1), Time::Now());
   }
 
   // All methods return real time again.
@@ -50,26 +53,24 @@ TEST(ScopedMockClockOverrideTest, MAYBE_Time) {
 
 TEST(ScopedMockClockOverrideTest, TimeTicks) {
   // Override is not active. All Now() methods should return a sensible value.
-  EXPECT_LT(TimeTicks::UnixEpoch(), TimeTicks::Now());
+  EXPECT_LT(TimeTicks(), TimeTicks::Now());
   EXPECT_GT(TimeTicks::Max(), TimeTicks::Now());
-  EXPECT_LT(TimeTicks::UnixEpoch() + TimeDelta::FromDays(365),
-            TimeTicks::Now());
 
   {
     // Set override.
     ScopedMockClockOverride mock_clock;
 
-    EXPECT_NE(TimeTicks(), TimeTicks::Now());
     TimeTicks start = TimeTicks::Now();
-    mock_clock.Advance(TimeDelta::FromSeconds(1));
-    EXPECT_EQ(start + TimeDelta::FromSeconds(1), TimeTicks::Now());
+    EXPECT_LT(TimeTicks(), start);
+    EXPECT_LE(kOneYearAfterUnixEpoch, start);
+    EXPECT_GT(TimeTicks::Max(), start);
+    mock_clock.Advance(Seconds(1));
+    EXPECT_EQ(start + Seconds(1), TimeTicks::Now());
   }
 
   // All methods return real ticks again.
-  EXPECT_LT(TimeTicks::UnixEpoch(), TimeTicks::Now());
+  EXPECT_LT(TimeTicks(), TimeTicks::Now());
   EXPECT_GT(TimeTicks::Max(), TimeTicks::Now());
-  EXPECT_LT(TimeTicks::UnixEpoch() + TimeDelta::FromDays(365),
-            TimeTicks::Now());
 }
 
 TEST(ScopedMockClockOverrideTest, ThreadTicks) {
@@ -88,8 +89,8 @@ TEST(ScopedMockClockOverrideTest, ThreadTicks) {
 
       EXPECT_NE(ThreadTicks(), ThreadTicks::Now());
       ThreadTicks start = ThreadTicks::Now();
-      mock_clock.Advance(TimeDelta::FromSeconds(1));
-      EXPECT_EQ(start + TimeDelta::FromSeconds(1), ThreadTicks::Now());
+      mock_clock.Advance(Seconds(1));
+      EXPECT_EQ(start + Seconds(1), ThreadTicks::Now());
     }
 
     // All methods return real ticks again.

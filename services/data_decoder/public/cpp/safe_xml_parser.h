@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,20 +8,16 @@
 #include <initializer_list>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/token.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-
-namespace base {
-class Value;
-}
+#include "base/values.h"
 
 namespace data_decoder {
 
 // Returns all the children of |element|.
-const base::Value* GetXmlElementChildren(const base::Value& element);
+const base::ListValue* GetXmlElementChildren(const base::Value& element);
 
 // Returns the qualified name |name_space|:|name| or simply |name| if
 // |name_space| is empty.
@@ -85,7 +81,7 @@ bool GetAllXmlElementChildrenWithTag(const base::Value& element,
 // not needed.
 const base::Value* FindXmlElementPath(
     const base::Value& element,
-    std::initializer_list<base::StringPiece> path,
+    std::initializer_list<std::string_view> path,
     bool* unique_path);
 
 // Returns the value of the attribute named |attribute_name| in |element|, or

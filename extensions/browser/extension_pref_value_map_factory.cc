@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,16 +6,18 @@
 
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "extensions/browser/extension_pref_value_map.h"
+#include "extensions/browser/extension_registry.h"
+#include "extensions/browser/extension_registry_factory.h"
 #include "extensions/browser/extensions_browser_client.h"
 
 ExtensionPrefValueMapFactory::ExtensionPrefValueMapFactory()
     : BrowserContextKeyedServiceFactory(
         "ExtensionPrefValueMap",
         BrowserContextDependencyManager::GetInstance()) {
+  DependsOn(extensions::ExtensionRegistryFactory::GetInstance());
 }
 
-ExtensionPrefValueMapFactory::~ExtensionPrefValueMapFactory() {
-}
+ExtensionPrefValueMapFactory::~ExtensionPrefValueMapFactory() = default;
 
 // static
 ExtensionPrefValueMap* ExtensionPrefValueMapFactory::GetForBrowserContext(
@@ -26,17 +28,20 @@ ExtensionPrefValueMap* ExtensionPrefValueMapFactory::GetForBrowserContext(
 
 // static
 ExtensionPrefValueMapFactory* ExtensionPrefValueMapFactory::GetInstance() {
-  return base::Singleton<ExtensionPrefValueMapFactory>::get();
+  static base::NoDestructor<ExtensionPrefValueMapFactory> instance;
+  return instance.get();
 }
 
-KeyedService* ExtensionPrefValueMapFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+ExtensionPrefValueMapFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  return new ExtensionPrefValueMap();
+  return std::make_unique<ExtensionPrefValueMap>(
+      extensions::ExtensionRegistry::Get(context));
 }
 
 content::BrowserContext* ExtensionPrefValueMapFactory::GetBrowserContextToUse(
     content::BrowserContext* context) const {
   // Redirected in incognito.
-  return extensions::ExtensionsBrowserClient::Get()->GetOriginalContext(
-      context);
+  return extensions::ExtensionsBrowserClient::Get()
+      ->GetContextRedirectedToOriginal(context);
 }

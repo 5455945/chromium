@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/sparse_histogram.h"
+#include "base/numerics/clamped_math.h"
 
 namespace image_fetcher {
 
@@ -23,6 +24,7 @@ const int kMaxCacheSizeKb = 1024 * 300; /* 300MB */
 const int kMaxCacheMetadataCount = 1000;
 
 constexpr char kEventsHistogram[] = "ImageFetcher.Events";
+constexpr char kEventsClientHistogram[] = "ImageFetcher.Events2";
 constexpr char kImageLoadFromCacheHistogram[] =
     "ImageFetcher.ImageLoadFromCacheTime";
 constexpr char kImageLoadFromCacheJavaHistogram[] =
@@ -42,10 +44,10 @@ constexpr char kImageCacheMetadataCount[] = "ImageFetcher.CacheMetadataCount";
 
 // Returns a raw pointer to a histogram which is owned
 base::HistogramBase* GetTimeHistogram(const std::string& histogram_name,
-                                      const std::string client_name) {
+                                      const std::string& client_name) {
   return base::LinearHistogram::FactoryTimeGet(
-      histogram_name + std::string(".") + client_name, base::TimeDelta(),
-      base::TimeDelta::FromMilliseconds(kMaxReportTimeMs),
+      histogram_name + "." + client_name, base::TimeDelta(),
+      base::Milliseconds(kMaxReportTimeMs),
       /* one bucket every 20ms. */ kMaxReportTimeMs / 20,
       base::Histogram::kUmaTargetedHistogramFlag);
 }
@@ -71,12 +73,8 @@ void ImageFetcherMetricsReporter::ReportEvent(const std::string& client_name,
                                               ImageFetcherEvent event) {
   DCHECK(!client_name.empty());
   UMA_HISTOGRAM_ENUMERATION(kEventsHistogram, event);
-  base::LinearHistogram::FactoryGet(
-      kEventsHistogram + std::string(".") + client_name, 0,
-      static_cast<int>(ImageFetcherEvent::kMaxValue),
-      static_cast<int>(ImageFetcherEvent::kMaxValue),
-      base::Histogram::kUmaTargetedHistogramFlag)
-      ->Add(static_cast<int>(event));
+  base::UmaHistogramEnumeration(
+      kEventsClientHistogram + std::string(".") + client_name, event);
 }
 
 // static

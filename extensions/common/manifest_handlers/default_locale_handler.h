@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 
 #include <string>
 
-#include "base/macros.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/manifest_handler.h"
 
@@ -15,6 +14,8 @@ namespace extensions {
 
 // A structure to hold the locale information for an extension.
 struct LocaleInfo : public Extension::ManifestData {
+  static const char* kManifestDataKey;
+
   // Default locale for fall back. Can be empty if extension is not localized.
   std::string default_locale;
 
@@ -25,12 +26,16 @@ struct LocaleInfo : public Extension::ManifestData {
 class DefaultLocaleHandler : public ManifestHandler {
  public:
   DefaultLocaleHandler();
+
+  DefaultLocaleHandler(const DefaultLocaleHandler&) = delete;
+  DefaultLocaleHandler& operator=(const DefaultLocaleHandler&) = delete;
+
   ~DefaultLocaleHandler() override;
 
   bool Parse(Extension* extension, std::u16string* error) override;
 
   // Validates locale info. Doesn't check if messages.json files are valid.
-  bool Validate(const Extension* extension,
+  bool Validate(const Extension& extension,
                 std::string* error,
                 std::vector<InstallWarning>* warnings) const override;
 
@@ -38,8 +43,6 @@ class DefaultLocaleHandler : public ManifestHandler {
 
  private:
   base::span<const char* const> Keys() const override;
-
-  DISALLOW_COPY_AND_ASSIGN(DefaultLocaleHandler);
 };
 
 }  // namespace extensions

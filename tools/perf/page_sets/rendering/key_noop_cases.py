@@ -1,4 +1,4 @@
-# Copyright 2015 The Chromium Authors. All rights reserved.
+# Copyright 2015 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 from telemetry.page import shared_page_state
@@ -13,16 +13,19 @@ class NoOpPage(rendering_story.RenderingStory):
   TAGS = [story_tags.KEY_NOOP]
   SUPPORTED_PLATFORMS = platforms.MOBILE_ONLY
 
-  def __init__(self,
-               page_set,
-               shared_page_state_class=shared_page_state.SharedMobilePageState,
-               name_suffix='',
-               extra_browser_args=None):
+  def __init__(
+    self,
+    page_set,
+    shared_page_state_class=shared_page_state.SharedMobilePageState,
+    name_suffix='',
+    extra_browser_args=None,
+  ):
     super(NoOpPage, self).__init__(
-        page_set=page_set,
-        shared_page_state_class=shared_page_state_class,
-        name_suffix=name_suffix,
-        extra_browser_args=['--disable-top-sites', '--report-silk-details'])
+      page_set=page_set,
+      shared_page_state_class=shared_page_state_class,
+      name_suffix=name_suffix,
+      extra_browser_args=['--disable-top-sites', '--report-silk-details'],
+    )
 
   def RunNavigateSteps(self, action_runner):
     super(NoOpPage, self).RunNavigateSteps(action_runner)
@@ -55,8 +58,12 @@ class NoOpTouchScrollPage(NoOpPage):
   def RunPageInteractions(self, action_runner):
     # The noop touch motion should last ~5 seconds.
     with action_runner.CreateGestureInteraction('ScrollAction'):
-      action_runner.ScrollPage(direction='down', use_touch=True,
-                               speed_in_pixels_per_second=300, distance=1500)
+      action_runner.ScrollPage(
+        direction='down',
+        use_touch=True,
+        speed_in_pixels_per_second=300,
+        distance=1500,
+      )
 
 
 # Why: Scrolling an empty, unscrollable page should have no expensive side

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,8 +11,6 @@
 #include "ash/wm/window_resizer.h"
 #include "base/compiler_specific.h"
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
-#include "base/memory/weak_ptr.h"
 #include "ui/gfx/geometry/point_f.h"
 
 namespace ash {
@@ -27,6 +25,10 @@ class ASH_EXPORT DragWindowResizer : public WindowResizer {
   // displays to |next_window_resizer|.
   DragWindowResizer(std::unique_ptr<WindowResizer> next_window_resizer,
                     WindowState* window_state);
+
+  DragWindowResizer(const DragWindowResizer&) = delete;
+  DragWindowResizer& operator=(const DragWindowResizer&) = delete;
+
   ~DragWindowResizer() override;
 
   // WindowResizer:
@@ -34,13 +36,13 @@ class ASH_EXPORT DragWindowResizer : public WindowResizer {
   void CompleteDrag() override;
   void RevertDrag() override;
   void FlingOrSwipe(ui::GestureEvent* event) override;
-
-  WindowResizer* next_window_resizer_for_testing() {
-    return next_window_resizer_.get();
-  }
+  void Pinch(const gfx::PointF& location, float scale) override;
+  void OnDragCompleted() override;
 
  private:
   FRIEND_TEST_ALL_PREFIXES(DragWindowResizerTest, DragWindowController);
+  FRIEND_TEST_ALL_PREFIXES(DragWindowResizerTest,
+                           DragWindowControllerLatchesTargetOpacity);
   FRIEND_TEST_ALL_PREFIXES(DragWindowResizerTest,
                            DragWindowControllerAcrossThreeDisplays);
 
@@ -63,10 +65,6 @@ class ASH_EXPORT DragWindowResizer : public WindowResizer {
 
   // Current instance for use by the DragWindowResizerTest.
   static DragWindowResizer* instance_;
-
-  base::WeakPtrFactory<DragWindowResizer> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(DragWindowResizer);
 };
 
 }  // namespace ash

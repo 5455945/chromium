@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,11 @@
 #include <string>
 #include <unordered_set>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "content/public/browser/devtools_manager_delegate.h"
 
 namespace content {
+class RenderFrameHost;
 class WebContents;
 }
 
@@ -25,6 +26,11 @@ class CastDevToolsManagerDelegate : public content::DevToolsManagerDelegate {
   static CastDevToolsManagerDelegate* GetInstance();
 
   CastDevToolsManagerDelegate();
+
+  CastDevToolsManagerDelegate(const CastDevToolsManagerDelegate&) = delete;
+  CastDevToolsManagerDelegate& operator=(const CastDevToolsManagerDelegate&) =
+      delete;
+
   ~CastDevToolsManagerDelegate() override;
 
   void EnableWebContentsForDebugging(content::WebContents* web_contents);
@@ -32,12 +38,14 @@ class CastDevToolsManagerDelegate : public content::DevToolsManagerDelegate {
   bool HasEnabledWebContents() const;
 
   // content::DevToolsManagerDelegate implementation.
-  content::DevToolsAgentHost::List RemoteDebuggingTargets() override;
+  content::DevToolsAgentHost::List RemoteDebuggingTargets(
+      TargetType target_type) override;
   std::string GetDiscoveryPageHTML() override;
+  bool AllowInspectingRenderFrameHost(content::RenderFrameHost* rfh) override;
 
  private:
-  std::unordered_set<content::WebContents*> enabled_webcontents_;
-  DISALLOW_COPY_AND_ASSIGN(CastDevToolsManagerDelegate);
+  std::unordered_set<raw_ptr<content::WebContents, DanglingUntriaged>>
+      enabled_webcontents_;
 };
 
 }  // namespace shell

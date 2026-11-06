@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,32 +9,32 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
+#include "base/time/time.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/dm_auth.h"
 #include "components/policy/policy_export.h"
-#include "components/policy/proto/device_management_backend.pb.h"
-#include "services/network/public/cpp/simple_url_loader.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+
+class GURL;
 
 namespace base {
 class SequencedTaskRunner;
 }
 
-namespace content {
-class BrowserContext;
+namespace net {
+struct NetworkTrafficAnnotationTag;
 }
 
 namespace network {
+struct ResourceRequest;
 class SharedURLLoaderFactory;
-}
+}  // namespace network
 
 namespace policy {
 
@@ -77,6 +77,8 @@ class POLICY_EXPORT DeviceManagementService {
   static constexpr int kPendingApproval = 412;
   static constexpr int kRequestTooLarge = 413;
   static constexpr int kConsumerAccountWithPackagedLicense = 417;
+  static constexpr int kInvalidPackagedDeviceForKiosk = 418;
+  static constexpr int kOrgUnitEnrollmentLimitExceeded = 419;
   static constexpr int kTooManyRequests = 429;
   static constexpr int kInternalServerError = 500;
   static constexpr int kServiceUnavailable = 503;
@@ -96,7 +98,7 @@ class POLICY_EXPORT DeviceManagementService {
   // possible because some aren't ready during startup. http://crbug.com/302798
   class POLICY_EXPORT Configuration {
    public:
-    virtual ~Configuration() {}
+    virtual ~Configuration() = default;
 
     // Server at which to contact the service (DMServer).
     virtual std::string GetDMServerUrl() const = 0;
@@ -112,11 +114,6 @@ class POLICY_EXPORT DeviceManagementService {
 
     // Server endpoint for encrypted events.
     virtual std::string GetEncryptedReportingServerUrl() const = 0;
-
-    // Server at which to contact the real time reporting service for
-    // enterprise connectors.
-    virtual std::string GetReportingConnectorServerUrl(
-        content::BrowserContext* context) const = 0;
   };
 
   // A DeviceManagementService job manages network requests to the device
@@ -144,7 +141,7 @@ class POLICY_EXPORT DeviceManagementService {
       RETRY_WITH_DELAY
     };
 
-    virtual ~Job() {}
+    virtual ~Job() = default;
   };
 
   class JobImpl;
@@ -185,7 +182,7 @@ class POLICY_EXPORT DeviceManagementService {
     // facilitate reading of logs.)
     // TYPE_INVALID is used only in tests so that they can EXPECT the correct
     // job type has been used.  Otherwise, tests would need to initially set
-    // the type to somehing like TYPE_AUTO_ENROLLMENT, and then it would not
+    // the type to something like TYPE_AUTO_ENROLLMENT, and then it would not
     // be possible to EXPECT the job type in auto enrollment tests.
     enum JobType {
       TYPE_INVALID = -1,
@@ -208,7 +205,7 @@ class POLICY_EXPORT DeviceManagementService {
       /* TYPE_REQUEST_LICENSE_TYPES = 16, */
       /*Deprecated, CloudPolicyClient no longer uses it.
         TYPE_UPLOAD_APP_INSTALL_REPORT = 17,*/
-      TYPE_TOKEN_ENROLLMENT = 18,
+      TYPE_BROWSER_REGISTRATION = 18,
       TYPE_CHROME_DESKTOP_REPORT = 19,
       TYPE_INITIAL_ENROLLMENT_STATE_RETRIEVAL = 20,
       TYPE_UPLOAD_POLICY_VALIDATION_REPORT = 21,
@@ -219,6 +216,16 @@ class POLICY_EXPORT DeviceManagementService {
       TYPE_PSM_HAS_DEVICE_STATE_REQUEST = 26,
       TYPE_UPLOAD_ENCRYPTED_REPORT = 27,
       TYPE_CHECK_USER_ACCOUNT = 28,
+      TYPE_UPLOAD_EUICC_INFO = 29,
+      TYPE_BROWSER_UPLOAD_PUBLIC_KEY = 30,
+      TYPE_CHROME_PROFILE_REPORT = 31,
+      TYPE_OIDC_REGISTRATION = 32,
+      TYPE_TOKEN_BASED_DEVICE_REGISTRATION = 33,
+      TYPE_UPLOAD_FM_REGISTRATION_TOKEN = 34,
+      TYPE_POLICY_AGENT_REGISTRATION = 35,
+      TYPE_DETERMINE_PROMOTION_ELIGIBILITY = 36,
+      TYPE_GENERATE_CHROME_PROFILE_CHALLENGE = 37,
+      TYPE_USER_MANAGEMENT_STATUS_AND_POLICIES = 38,
     };
 
     // The set of HTTP query parameters of the request.
@@ -227,7 +234,7 @@ class POLICY_EXPORT DeviceManagementService {
     // Convert the job type into a string.
     static std::string GetJobTypeAsString(JobType type);
 
-    virtual ~JobConfiguration() {}
+    virtual ~JobConfiguration() = default;
 
     virtual JobType GetType() = 0;
 
@@ -242,6 +249,12 @@ class POLICY_EXPORT DeviceManagementService {
     // Gets the payload to send in requests.
     virtual std::string GetPayload() = 0;
 
+    // The content type of the payload.
+    virtual std::string GetContentType() = 0;
+
+    // Whether the request will forward user cookies or not.
+    virtual bool AreCookiesUsed() = 0;
+
     // Returns the network annotation to assign to requests.
     virtual net::NetworkTrafficAnnotationTag GetTrafficAnnotationTag() = 0;
 
@@ -250,6 +263,9 @@ class POLICY_EXPORT DeviceManagementService {
         bool bypass_proxy,
         int last_error) = 0;
 
+    // Returns whether UMA histograms should be recorded. If this is false
+    // then GetUmaName() is invalid.
+    virtual bool ShouldRecordUma() const = 0;
     // Returns the the UMA histogram to record stats about the network request.
     virtual std::string GetUmaName() = 0;
 
@@ -274,6 +290,8 @@ class POLICY_EXPORT DeviceManagementService {
                                    int net_error,
                                    int response_code,
                                    const std::string& response_body) = 0;
+
+    virtual std::optional<base::TimeDelta> GetTimeoutDuration() = 0;
   };
 
   explicit DeviceManagementService(
@@ -305,9 +323,7 @@ class POLICY_EXPORT DeviceManagementService {
   std::pair<std::unique_ptr<Job>, JobForTesting> CreateJobForTesting(
       std::unique_ptr<JobConfiguration> config);
 
-  const scoped_refptr<base::SequencedTaskRunner> GetTaskRunnerForTesting() {
-    return task_runner_;
-  }
+  const scoped_refptr<base::SequencedTaskRunner> GetTaskRunnerForTesting();
 
  private:
   using JobQueue = std::vector<base::WeakPtr<JobImpl>>;
@@ -353,10 +369,29 @@ class POLICY_EXPORT JobConfigurationBase
   JobConfigurationBase(const JobConfigurationBase&) = delete;
   JobConfigurationBase& operator=(const JobConfigurationBase&) = delete;
 
+  // DeviceManagementService::JobConfiguration:
+  JobType GetType() override;
+  const ParameterMap& GetQueryParams() override;
+  scoped_refptr<network::SharedURLLoaderFactory> GetUrlLoaderFactory() override;
+  net::NetworkTrafficAnnotationTag GetTrafficAnnotationTag() override;
+  std::unique_ptr<network::ResourceRequest> GetResourceRequest(
+      bool bypass_proxy,
+      int last_error) override;
+  bool ShouldRecordUma() const override;
+  DeviceManagementService::Job::RetryMethod ShouldRetry(
+      int response_code,
+      const std::string& response_body) override;
+  std::optional<base::TimeDelta> GetTimeoutDuration() override;
+  std::string GetContentType() override;
+  bool AreCookiesUsed() override;
+
+  void set_use_cookies(bool use_cookies) { use_cookies_ = use_cookies; }
+
  protected:
   JobConfigurationBase(JobType type,
                        DMAuth auth_data,
-                       absl::optional<std::string> oauth_token,
+                       std::optional<std::string> oauth_token,
+                       bool use_cookies,
                        scoped_refptr<network::SharedURLLoaderFactory> factory);
   ~JobConfigurationBase() override;
 
@@ -366,20 +401,11 @@ class POLICY_EXPORT JobConfigurationBase
 
   const DMAuth& GetAuth() const override;
 
-  // DeviceManagementService::JobConfiguration.
-  JobType GetType() override;
-  const ParameterMap& GetQueryParams() override;
-  scoped_refptr<network::SharedURLLoaderFactory> GetUrlLoaderFactory() override;
-  net::NetworkTrafficAnnotationTag GetTrafficAnnotationTag() override;
-  std::unique_ptr<network::ResourceRequest> GetResourceRequest(
-      bool bypass_proxy,
-      int last_error) override;
-  DeviceManagementService::Job::RetryMethod ShouldRetry(
-      int response_code,
-      const std::string& response_body) override;
-
   // Derived classes should return the base URL for the request.
   virtual GURL GetURL(int last_error) const = 0;
+
+  // Timeout for job request
+  std::optional<base::TimeDelta> timeout_;
 
  private:
   JobType type_;
@@ -391,7 +417,12 @@ class POLICY_EXPORT JobConfigurationBase
 
   // OAuth token that will be passed as a query parameter. Both |auth_data_|
   // and |oauth_token_| can be specified for one request.
-  absl::optional<std::string> oauth_token_;
+  std::optional<std::string> oauth_token_;
+
+  // Will allow using cookies as part of the request when true. Cookies can
+  // be used in combination with other auth models, the order of precedence
+  // will be determined server-side.
+  bool use_cookies_;
 
   // Query parameters for the network request.
   ParameterMap query_params_;

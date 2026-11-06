@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,20 +9,24 @@
 
 #include "base/check_op.h"
 #include "base/no_destructor.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/trace_event.h"
 #include "ui/events/devices/device_data_manager.h"
-#include "ui/ozone/common/base_keyboard_hook.h"
 #include "ui/ozone/platform_object.h"
 #include "ui/ozone/platform_selection.h"
 #include "ui/ozone/public/platform_global_shortcut_listener.h"
+#include "ui/ozone/public/platform_keyboard_hook.h"
 #include "ui/ozone/public/platform_menu_utils.h"
 #include "ui/ozone/public/platform_screen.h"
+#include "ui/ozone/public/platform_session_manager.h"
 #include "ui/ozone/public/platform_user_input_monitor.h"
 
 namespace ui {
 
 namespace {
 OzonePlatform* g_instance = nullptr;
+
+bool g_fail_initialize_ui_for_test = false;
 
 void EnsureInstance() {
   if (g_instance)
@@ -35,13 +39,27 @@ void EnsureInstance() {
 
   // TODO(spang): Currently need to leak this object.
   OzonePlatform* pl = platform.release();
-  DCHECK_EQ(g_instance, pl);
+  CHECK_EQ(g_instance, pl, base::NotFatalUntil::M163);
 }
 
 }  // namespace
 
+OzonePlatform::PlatformRuntimeProperties::SupportsForTest
+    OzonePlatform::PlatformRuntimeProperties::override_supports_ssd_for_test =
+        OzonePlatform::PlatformRuntimeProperties::SupportsForTest::kNotSet;
+
+OzonePlatform::PlatformRuntimeProperties::SupportsForTest OzonePlatform::
+    PlatformRuntimeProperties::override_supports_per_window_scaling_for_test =
+        OzonePlatform::PlatformRuntimeProperties::SupportsForTest::kNotSet;
+
+OzonePlatform::PlatformProperties::SupportsForTest OzonePlatform::
+    PlatformProperties::override_set_parent_for_non_top_level_windows_for_test =
+        OzonePlatform::PlatformProperties::SupportsForTest::kNotSet;
+
 OzonePlatform::PlatformProperties::PlatformProperties() = default;
 OzonePlatform::PlatformProperties::~PlatformProperties() = default;
+
+OzonePlatform::PlatformRuntimeProperties::PlatformRuntimeProperties() = default;
 
 OzonePlatform::OzonePlatform() {
   DCHECK(!g_instance) << "There should only be a single OzonePlatform.";
@@ -51,29 +69,33 @@ OzonePlatform::OzonePlatform() {
 OzonePlatform::~OzonePlatform() = default;
 
 // static
-void OzonePlatform::PreEarlyInitialization() {
+void OzonePlatform::PreSandboxStartup() {
   EnsureInstance();
-  if (g_instance->prearly_initialized_)
+  if (g_instance->presandboxstartup_initialized_) {
     return;
-  g_instance->prearly_initialized_ = true;
-  g_instance->PreEarlyInitialize();
+  }
+  g_instance->presandboxstartup_initialized_ = true;
+  g_instance->OnPreSandboxStartup();
 }
 
 // static
-void OzonePlatform::InitializeForUI(const InitParams& args) {
+bool OzonePlatform::InitializeForUI(const InitParams& args) {
   EnsureInstance();
   if (g_instance->initialized_ui_)
-    return;
-  g_instance->initialized_ui_ = true;
+    return true;
   g_instance->single_process_ = args.single_process;
-  g_instance->InitializeUI(args);
+  if (!g_instance->InitializeUI(args))
+    return false;
+  g_instance->initialized_ui_ = true;
   // This is deliberately created after initializing so that the platform can
   // create its own version of DDM.
   DeviceDataManager::CreateInstance();
+  return true;
 }
 
 // static
 void OzonePlatform::InitializeForGPU(const InitParams& args) {
+  TRACE_EVENT("gpu,startup", "ui::OzonePlatform::InitializeForGPU");
   EnsureInstance();
   if (g_instance->initialized_gpu_)
     return;
@@ -89,8 +111,23 @@ OzonePlatform* OzonePlatform::GetInstance() {
 }
 
 // static
+bool OzonePlatform::IsInitialized() {
+  return !!g_instance;
+}
+
+// static
 std::string OzonePlatform::GetPlatformNameForTest() {
   return GetOzonePlatformName();
+}
+
+// static
+bool OzonePlatform::RunningOnWaylandForTest() {
+  return OzonePlatform::GetPlatformNameForTest() == "wayland";
+}
+
+// static
+bool OzonePlatform::RunningOnX11ForTest() {
+  return OzonePlatform::GetPlatformNameForTest() == "x11";
 }
 
 PlatformClipboard* OzonePlatform::GetPlatformClipboard() {
@@ -119,19 +156,17 @@ OzonePlatform::GetPlatformGlobalShortcutListener(
 std::unique_ptr<PlatformKeyboardHook> OzonePlatform::CreateKeyboardHook(
     PlatformKeyboardHookTypes type,
     base::RepeatingCallback<void(KeyEvent* event)> callback,
-    absl::optional<base::flat_set<DomCode>> dom_codes,
+    std::optional<base::flat_set<DomCode>> dom_codes,
     gfx::AcceleratedWidget accelerated_widget) {
-  switch (type) {
-    case PlatformKeyboardHookTypes::kModifier:
-      return std::make_unique<BaseKeyboardHook>(std::move(dom_codes),
-                                                std::move(callback));
-    case PlatformKeyboardHookTypes::kMedia:
-      return nullptr;
-  }
+  return nullptr;
+}
+
+PlatformSessionManager* OzonePlatform::GetSessionManager() {
+  return nullptr;
 }
 
 bool OzonePlatform::IsNativePixmapConfigSupported(
-    gfx::BufferFormat format,
+    viz::SharedImageFormat format,
     gfx::BufferUsage usage) const {
   // Platform that support NativePixmap must override this method.
   return false;
@@ -149,23 +184,17 @@ OzonePlatform::GetPlatformProperties() {
 
 const OzonePlatform::PlatformRuntimeProperties&
 OzonePlatform::GetPlatformRuntimeProperties() {
-  static const OzonePlatform::PlatformRuntimeProperties properties;
+  CHECK(initialized_ui_ || initialized_gpu_, base::NotFatalUntil::M163);
+
+  static const PlatformRuntimeProperties properties;
   return properties;
-}
-
-const OzonePlatform::InitializedHostProperties&
-OzonePlatform::GetInitializedHostProperties() {
-  DCHECK(initialized_ui_);
-
-  static InitializedHostProperties host_properties;
-  return host_properties;
 }
 
 void OzonePlatform::AddInterfaces(mojo::BinderMap* binders) {}
 
 void OzonePlatform::AfterSandboxEntry() {
   // This should not be called in single-process mode.
-  DCHECK(!single_process_);
+  CHECK(!single_process_, base::NotFatalUntil::M163);
 }
 
 std::unique_ptr<PlatformUserInputMonitor>
@@ -175,10 +204,21 @@ OzonePlatform::GetPlatformUserInputMonitor(
 }
 
 void OzonePlatform::PostCreateMainMessageLoop(
-    base::OnceCallback<void()> shutdown_cb) {}
+    base::OnceCallback<void()> shutdown_cb,
+    scoped_refptr<base::SingleThreadTaskRunner> input_event_task_runner) {}
 
 void OzonePlatform::PostMainMessageLoopRun() {}
 
-void OzonePlatform::PreEarlyInitialize() {}
+// static
+bool OzonePlatform::ShouldFailInitializeUIForTest() {
+  return g_fail_initialize_ui_for_test;
+}
+
+// static
+void OzonePlatform::SetFailInitializeUIForTest(bool fail) {
+  g_fail_initialize_ui_for_test = fail;
+}
+
+void OzonePlatform::OnPreSandboxStartup() {}
 
 }  // namespace ui

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,67 +6,54 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
-#include "media/base/bind_to_current_loop.h"
+#include "base/task/bind_post_task.h"
+#include "base/test/mock_callback.h"
+#include "base/test/scoped_feature_list.h"
+#include "base/test/test_future.h"
+#include "base/time/time.h"
+#include "media/base/video_frame.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom-blink.h"
+#include "third_party/blink/public/platform/modules/mediastream/web_media_stream_sink.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/scheduler/test/renderer_scheduler_test_support.h"
 #include "third_party/blink/public/web/modules/mediastream/media_stream_video_sink.h"
 #include "third_party/blink/public/web/web_heap.h"
+#include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/modules/mediastream/media_stream_video_track.h"
 #include "third_party/blink/renderer/modules/mediastream/mock_mojo_media_stream_dispatcher_host.h"
+#include "third_party/blink/renderer/modules/mediastream/mock_video_capturer_source.h"
 #include "third_party/blink/renderer/modules/mediastream/video_track_adapter_settings.h"
+#include "third_party/blink/renderer/platform/mediastream/media_stream_component_impl.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_source.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
 #include "third_party/blink/renderer/platform/testing/io_task_runner_testing_platform_support.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
+#include "third_party/blink/renderer/platform/video_capture/video_capturer_source.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 
 using ::testing::_;
 using ::testing::InSequence;
+using ::testing::Return;
 
 namespace blink {
 
+using mojom::blink::MediaStreamRequestResult;
+
 namespace {
 
-class MockVideoCapturerSource : public media::VideoCapturerSource {
- public:
-  MockVideoCapturerSource() {}
-
-  MOCK_METHOD0(RequestRefreshFrame, void());
-  MOCK_METHOD0(GetPreferredFormats, media::VideoCaptureFormats());
-  MOCK_METHOD3(MockStartCapture,
-               void(const media::VideoCaptureParams& params,
-                    const VideoCaptureDeliverFrameCB& new_frame_callback,
-                    const RunningCallback& running_callback));
-  MOCK_METHOD0(MockStopCapture, void());
-  void StartCapture(const media::VideoCaptureParams& params,
-                    const VideoCaptureDeliverFrameCB& new_frame_callback,
-                    const RunningCallback& running_callback) override {
-    running_cb_ = running_callback;
-    capture_params_ = params;
-    MockStartCapture(params, new_frame_callback, running_callback);
-    SetRunning(true);
-  }
-  void StopCapture() override { MockStopCapture(); }
-  void SetRunning(bool is_running) {
-    PostCrossThreadTask(*scheduler::GetSingleThreadTaskRunnerForTesting(),
-                        FROM_HERE,
-                        CrossThreadBindOnce(running_cb_, is_running));
-  }
-  const media::VideoCaptureParams& capture_params() const {
-    return capture_params_;
-  }
-
- private:
-  RunningCallback running_cb_;
-  media::VideoCaptureParams capture_params_;
-};
+MATCHER_P2(IsExpectedDOMException, name, message, "") {
+  return arg->name() == name && arg->message() == message;
+}
 
 class FakeMediaStreamVideoSink : public MediaStreamVideoSink {
  public:
@@ -82,15 +69,14 @@ class FakeMediaStreamVideoSink : public MediaStreamVideoSink {
         track,
         ConvertToBaseRepeatingCallback(
             CrossThreadBindRepeating(&FakeMediaStreamVideoSink::OnVideoFrame,
-                                     WTF::CrossThreadUnretained(this))),
-        MediaStreamVideoSink::IsSecure::kYes,
-        MediaStreamVideoSink::UsesAlpha::kDefault);
+                                     CrossThreadUnretained(this))),
+        WebMediaStreamSink::IsSecure::kYes,
+        WebMediaStreamSink::UsesAlpha::kDefault);
   }
 
   void DisconnectFromTrack() { MediaStreamVideoSink::DisconnectFromTrack(); }
 
   void OnVideoFrame(scoped_refptr<media::VideoFrame> frame,
-                    std::vector<scoped_refptr<media::VideoFrame>> scaled_frames,
                     base::TimeTicks capture_time) {
     *capture_time_ = capture_time;
     *metadata_ = frame->metadata();
@@ -98,8 +84,8 @@ class FakeMediaStreamVideoSink : public MediaStreamVideoSink {
   }
 
  private:
-  base::TimeTicks* const capture_time_;
-  media::VideoFrameMetadata* const metadata_;
+  const raw_ptr<base::TimeTicks> capture_time_;
+  const raw_ptr<media::VideoFrameMetadata> metadata_;
   base::OnceClosure got_frame_cb_;
 };
 
@@ -111,23 +97,25 @@ class MediaStreamVideoCapturerSourceTest : public testing::Test {
     auto delegate = std::make_unique<MockVideoCapturerSource>();
     delegate_ = delegate.get();
     EXPECT_CALL(*delegate_, GetPreferredFormats());
-    video_capturer_source_ = new MediaStreamVideoCapturerSource(
-        /*LocalFrame =*/nullptr,
-        WTF::Bind(&MediaStreamVideoCapturerSourceTest::OnSourceStopped,
-                  WTF::Unretained(this)),
-        std::move(delegate));
+    auto video_capturer_source =
+        std::make_unique<MediaStreamVideoCapturerSource>(
+            scheduler::GetSingleThreadTaskRunnerForTesting(),
+            /*LocalFrame =*/nullptr,
+            BindOnce(&MediaStreamVideoCapturerSourceTest::OnSourceStopped,
+                     Unretained(this)),
+            std::move(delegate));
+    video_capturer_source_ = video_capturer_source.get();
     video_capturer_source_->SetMediaStreamDispatcherHostForTesting(
         mock_dispatcher_host_.CreatePendingRemoteAndBind());
     stream_source_ = MakeGarbageCollected<MediaStreamSource>(
         "dummy_source_id", MediaStreamSource::kTypeVideo, "dummy_source_name",
-        false /* remote */);
-    stream_source_->SetPlatformSource(base::WrapUnique(video_capturer_source_));
+        false /* remote */, std::move(video_capturer_source));
     stream_source_id_ = stream_source_->Id();
 
     MediaStreamVideoCapturerSource::DeviceCapturerFactoryCallback callback =
-        WTF::BindRepeating(
+        blink::BindRepeating(
             &MediaStreamVideoCapturerSourceTest::RecreateVideoCapturerSource,
-            WTF::Unretained(this));
+            Unretained(this));
     video_capturer_source_->SetDeviceCapturerFactoryCallbackForTesting(
         std::move(callback));
   }
@@ -139,17 +127,16 @@ class MediaStreamVideoCapturerSourceTest : public testing::Test {
 
   WebMediaStreamTrack StartSource(
       const VideoTrackAdapterSettings& adapter_settings,
-      const absl::optional<bool>& noise_reduction,
+      const std::optional<bool>& noise_reduction,
       bool is_screencast,
       double min_frame_rate) {
     bool enabled = true;
-    // CreateVideoTrack will trigger OnConstraintsApplied.
+    // CreateVideoTrack will trigger StartDone.
     return MediaStreamVideoTrack::CreateVideoTrack(
         video_capturer_source_, adapter_settings, noise_reduction,
-        is_screencast, min_frame_rate, absl::nullopt, absl::nullopt,
-        absl::nullopt, false,
-        WTF::Bind(&MediaStreamVideoCapturerSourceTest::OnConstraintsApplied,
-                  base::Unretained(this)),
+        is_screencast, min_frame_rate, nullptr, false,
+        BindOnce(&MediaStreamVideoCapturerSourceTest::StartDone,
+                 base::Unretained(this)),
         enabled);
   }
 
@@ -162,44 +149,127 @@ class MediaStreamVideoCapturerSourceTest : public testing::Test {
     EXPECT_EQ(String(source.Id()), stream_source_id_);
   }
   void OnStarted(bool result) {
+    VideoCaptureRunState run_state = result ? VideoCaptureRunState::kRunning
+                                            : VideoCaptureRunState::kStopped;
     video_capturer_source_->OnRunStateChanged(delegate_->capture_params(),
-                                              result);
+                                              run_state);
   }
 
   void SetStopCaptureFlag() { stop_capture_flag_ = true; }
 
   MOCK_METHOD0(MockNotification, void());
 
-  std::unique_ptr<media::VideoCapturerSource> RecreateVideoCapturerSource(
+  std::unique_ptr<VideoCapturerSource> RecreateVideoCapturerSource(
       const base::UnguessableToken& session_id) {
     auto delegate = std::make_unique<MockVideoCapturerSource>();
     delegate_ = delegate.get();
-    EXPECT_CALL(*delegate_, MockStartCapture(_, _, _));
+    EXPECT_CALL(*delegate_, MockStartCapture(_, _, _))
+        .WillOnce(Return(VideoCaptureRunState::kRunning));
     return delegate;
   }
 
  protected:
-  void OnConstraintsApplied(WebPlatformMediaStreamSource* source,
-                            mojom::blink::MediaStreamRequestResult result,
-                            const WebString& result_name) {}
+  WebMediaStreamTrack StartTabCaptureSource() {
+    MediaStreamDevice device(mojom::MediaStreamType::GUM_TAB_VIDEO_CAPTURE,
+                             "dummy_device_id", "dummy_device_name");
+    device.set_session_id(base::UnguessableToken::Create());
+    video_capturer_source_->SetDevice(device);
+    EXPECT_CALL(mock_delegate(), MockStartCapture(_, _, _))
+        .WillOnce(Return(VideoCaptureRunState::kRunning));
+    return StartSource(VideoTrackAdapterSettings(), std::nullopt, false, 0.0);
+  }
 
+  WebMediaStreamTrack CloneTrack(const WebMediaStreamTrack& original_track,
+                                 const String& clone_id = "cloned_track") {
+    auto* original_native_track = MediaStreamVideoTrack::From(original_track);
+    std::unique_ptr<MediaStreamTrackPlatform> cloned_platform =
+        original_native_track->CreateFromComponent(original_track, clone_id);
+    return WebMediaStreamTrack(MakeGarbageCollected<MediaStreamComponentImpl>(
+        clone_id, original_track.Source(), std::move(cloned_platform)));
+  }
+
+  // Waits until every message already sent to the dispatcher host has been
+  // received by `mock_dispatcher_host_`.
+  void FlushDispatcherHost() {
+    video_capturer_source_->host_.FlushForTesting();
+  }
+
+  std::optional<media::CaptureVersion> GetNextCaptureVersion(
+      media::mojom::SubCaptureTargetType type) {
+    return video_capturer_source_->GetNextCaptureVersion(type);
+  }
+
+  media::mojom::ApplySubCaptureTargetResult ApplySubCaptureTarget(
+      MediaStreamVideoTrack* track,
+      media::mojom::SubCaptureTargetType type,
+      const base::Token& track_target,
+      uint32_t version) {
+    base::test::TestFuture<media::mojom::ApplySubCaptureTargetResult> result;
+    video_capturer_source_->ApplySubCaptureTarget(
+        track, type, track_target, version, result.GetCallback());
+    return result.Get();
+  }
+
+  void ApplySubCaptureTargetAndExpectSuccess(
+      MediaStreamVideoTrack* track,
+      media::mojom::SubCaptureTargetType type,
+      const base::Token& track_target,
+      const base::Token& expected_gpu_target,
+      uint32_t expected_version) {
+    EXPECT_CALL(mock_dispatcher_host_,
+                ApplySubCaptureTarget(_, type, expected_gpu_target,
+                                      expected_version, _))
+        .WillOnce([](const base::UnguessableToken&,
+                     media::mojom::SubCaptureTargetType, const base::Token&,
+                     uint32_t,
+                     mojom::blink::MediaStreamDispatcherHost::
+                         ApplySubCaptureTargetCallback callback) {
+          std::move(callback).Run(
+              media::mojom::ApplySubCaptureTargetResult::kSuccess);
+        });
+
+    auto next_version = GetNextCaptureVersion(type);
+    ASSERT_TRUE(next_version.has_value());
+    ASSERT_EQ(next_version->sub_capture, expected_version);
+
+    ASSERT_EQ(ApplySubCaptureTarget(track, type, track_target,
+                                    next_version->sub_capture),
+              media::mojom::ApplySubCaptureTargetResult::kSuccess);
+  }
+
+  base::Token GetTrackTarget(const MediaStreamVideoTrack* track) const {
+    auto it = video_capturer_source_->track_targets_.find(track);
+    return it != video_capturer_source_->track_targets_.end() ? it->value.target
+                                                              : base::Token();
+  }
+
+  void StartDone(WebPlatformMediaStreamSource* source,
+                 MediaStreamRequestResult result,
+                 const WebString& result_name) {
+    start_result_ = result;
+  }
+
+  base::test::ScopedFeatureList feature_list_;
+  test::TaskEnvironment task_environment_;
   ScopedTestingPlatformSupport<IOTaskRunnerTestingPlatformSupport> platform_;
 
   Persistent<MediaStreamSource> stream_source_;
   MockMojoMediaStreamDispatcherHost mock_dispatcher_host_;
-  MediaStreamVideoCapturerSource*
-      video_capturer_source_;               // owned by |stream_source_|.
-  MockVideoCapturerSource* delegate_;       // owned by |source_|.
+  raw_ptr<MediaStreamVideoCapturerSource, DanglingUntriaged>
+      video_capturer_source_;  // owned by |stream_source_|.
+  raw_ptr<MockVideoCapturerSource, DanglingUntriaged>
+      delegate_;  // owned by |source_|.
   String stream_source_id_;
   bool source_stopped_;
   bool stop_capture_flag_ = false;
+  MediaStreamRequestResult start_result_;
 };
 
 TEST_F(MediaStreamVideoCapturerSourceTest, StartAndStop) {
   InSequence s;
   EXPECT_CALL(mock_delegate(), MockStartCapture(_, _, _));
   WebMediaStreamTrack track =
-      StartSource(VideoTrackAdapterSettings(), absl::nullopt, false, 0.0);
+      StartSource(VideoTrackAdapterSettings(), std::nullopt, false, 0.0);
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(MediaStreamSource::kReadyStateLive,
             stream_source_->GetReadyState());
@@ -207,16 +277,16 @@ TEST_F(MediaStreamVideoCapturerSourceTest, StartAndStop) {
 
   // A bogus notification of running from the delegate when the source has
   // already started should not change the state.
-  delegate_->SetRunning(true);
+  delegate_->SetRunning(VideoCaptureRunState::kRunning);
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(MediaStreamSource::kReadyStateLive,
             stream_source_->GetReadyState());
   EXPECT_FALSE(source_stopped_);
-  EXPECT_TRUE(video_capturer_source_->GetCurrentCaptureParams().has_value());
+  EXPECT_TRUE(video_capturer_source_->GetCurrentFormat().has_value());
 
   // If the delegate stops, the source should stop.
   EXPECT_CALL(mock_delegate(), MockStopCapture());
-  delegate_->SetRunning(false);
+  delegate_->SetRunning(VideoCaptureRunState::kStopped);
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(MediaStreamSource::kReadyStateEnded,
             stream_source_->GetReadyState());
@@ -227,17 +297,18 @@ TEST_F(MediaStreamVideoCapturerSourceTest, StartAndStop) {
 
 TEST_F(MediaStreamVideoCapturerSourceTest, CaptureTimeAndMetadataPlumbing) {
   VideoCaptureDeliverFrameCB deliver_frame_cb;
-  media::VideoCapturerSource::RunningCallback running_cb;
+  VideoCapturerSource::VideoCaptureRunningCallbackCB running_cb;
 
   InSequence s;
   EXPECT_CALL(mock_delegate(), MockStartCapture(_, _, _))
       .WillOnce(testing::DoAll(testing::SaveArg<1>(&deliver_frame_cb),
-                               testing::SaveArg<2>(&running_cb)));
+                               testing::SaveArg<2>(&running_cb),
+                               Return(VideoCaptureRunState::kRunning)));
   EXPECT_CALL(mock_delegate(), RequestRefreshFrame());
   EXPECT_CALL(mock_delegate(), MockStopCapture());
   WebMediaStreamTrack track =
-      StartSource(VideoTrackAdapterSettings(), absl::nullopt, false, 0.0);
-  running_cb.Run(true);
+      StartSource(VideoTrackAdapterSettings(), std::nullopt, false, 0.0);
+  running_cb.Run(VideoCaptureRunState::kRunning);
 
   base::RunLoop run_loop;
   base::TimeTicks reference_capture_time =
@@ -246,16 +317,14 @@ TEST_F(MediaStreamVideoCapturerSourceTest, CaptureTimeAndMetadataPlumbing) {
   media::VideoFrameMetadata metadata;
   FakeMediaStreamVideoSink fake_sink(
       &capture_time, &metadata,
-      media::BindToCurrentLoop(run_loop.QuitClosure()));
+      base::BindPostTaskToCurrentDefault(run_loop.QuitClosure()));
   fake_sink.ConnectToTrack(track);
   const scoped_refptr<media::VideoFrame> frame =
       media::VideoFrame::CreateBlackFrame(gfx::Size(2, 2));
   frame->metadata().frame_rate = 30.0;
   PostCrossThreadTask(
       *Platform::Current()->GetIOTaskRunner(), FROM_HERE,
-      CrossThreadBindOnce(deliver_frame_cb, frame,
-                          std::vector<scoped_refptr<media::VideoFrame>>(),
-                          reference_capture_time));
+      CrossThreadBindOnce(deliver_frame_cb, frame, reference_capture_time));
   run_loop.Run();
   fake_sink.DisconnectFromTrack();
   EXPECT_EQ(reference_capture_time, capture_time);
@@ -264,9 +333,10 @@ TEST_F(MediaStreamVideoCapturerSourceTest, CaptureTimeAndMetadataPlumbing) {
 
 TEST_F(MediaStreamVideoCapturerSourceTest, Restart) {
   InSequence s;
-  EXPECT_CALL(mock_delegate(), MockStartCapture(_, _, _));
+  EXPECT_CALL(mock_delegate(), MockStartCapture(_, _, _))
+      .WillOnce(Return(VideoCaptureRunState::kRunning));
   WebMediaStreamTrack track =
-      StartSource(VideoTrackAdapterSettings(), absl::nullopt, false, 0.0);
+      StartSource(VideoTrackAdapterSettings(), std::nullopt, false, 0.0);
   base::RunLoop().RunUntilIdle();
 
   EXPECT_EQ(MediaStreamSource::kReadyStateLive,
@@ -276,7 +346,7 @@ TEST_F(MediaStreamVideoCapturerSourceTest, Restart) {
   EXPECT_CALL(mock_delegate(), MockStopCapture());
   EXPECT_TRUE(video_capturer_source_->IsRunning());
   video_capturer_source_->StopForRestart(
-      WTF::Bind([](MediaStreamVideoSource::RestartResult result) {
+      BindOnce([](MediaStreamVideoSource::RestartResult result) {
         EXPECT_EQ(result, MediaStreamVideoSource::RestartResult::IS_STOPPED);
       }));
   base::RunLoop().RunUntilIdle();
@@ -294,7 +364,7 @@ TEST_F(MediaStreamVideoCapturerSourceTest, Restart) {
   // the same.
   EXPECT_FALSE(video_capturer_source_->IsRunning());
   video_capturer_source_->StopForRestart(
-      WTF::Bind([](MediaStreamVideoSource::RestartResult result) {
+      BindOnce([](MediaStreamVideoSource::RestartResult result) {
         EXPECT_EQ(result, MediaStreamVideoSource::RestartResult::INVALID_STATE);
       }));
   base::RunLoop().RunUntilIdle();
@@ -304,11 +374,12 @@ TEST_F(MediaStreamVideoCapturerSourceTest, Restart) {
   EXPECT_FALSE(video_capturer_source_->IsRunning());
 
   // Restart the source. With the mock delegate, any video format will do.
-  EXPECT_CALL(mock_delegate(), MockStartCapture(_, _, _));
+  EXPECT_CALL(mock_delegate(), MockStartCapture(_, _, _))
+      .WillOnce(Return(VideoCaptureRunState::kRunning));
   EXPECT_FALSE(video_capturer_source_->IsRunning());
   video_capturer_source_->Restart(
       media::VideoCaptureFormat(),
-      WTF::Bind([](MediaStreamVideoSource::RestartResult result) {
+      BindOnce([](MediaStreamVideoSource::RestartResult result) {
         EXPECT_EQ(result, MediaStreamVideoSource::RestartResult::IS_RUNNING);
       }));
   base::RunLoop().RunUntilIdle();
@@ -322,7 +393,7 @@ TEST_F(MediaStreamVideoCapturerSourceTest, Restart) {
   EXPECT_TRUE(video_capturer_source_->IsRunning());
   video_capturer_source_->Restart(
       media::VideoCaptureFormat(),
-      WTF::Bind([](MediaStreamVideoSource::RestartResult result) {
+      BindOnce([](MediaStreamVideoSource::RestartResult result) {
         EXPECT_EQ(result, MediaStreamVideoSource::RestartResult::INVALID_STATE);
       }));
   base::RunLoop().RunUntilIdle();
@@ -333,7 +404,7 @@ TEST_F(MediaStreamVideoCapturerSourceTest, Restart) {
   // An delegate stop should stop the source and change the track state to
   // "ended".
   EXPECT_CALL(mock_delegate(), MockStopCapture());
-  delegate_->SetRunning(false);
+  delegate_->SetRunning(VideoCaptureRunState::kStopped);
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(MediaStreamSource::kReadyStateEnded,
             stream_source_->GetReadyState());
@@ -345,13 +416,15 @@ TEST_F(MediaStreamVideoCapturerSourceTest, Restart) {
 
 TEST_F(MediaStreamVideoCapturerSourceTest, StartStopAndNotify) {
   InSequence s;
-  EXPECT_CALL(mock_delegate(), MockStartCapture(_, _, _));
+  EXPECT_CALL(mock_delegate(), MockStartCapture(_, _, _))
+      .WillOnce(Return(VideoCaptureRunState::kRunning));
   WebMediaStreamTrack web_track =
-      StartSource(VideoTrackAdapterSettings(), absl::nullopt, false, 0.0);
+      StartSource(VideoTrackAdapterSettings(), std::nullopt, false, 0.0);
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(MediaStreamSource::kReadyStateLive,
             stream_source_->GetReadyState());
   EXPECT_FALSE(source_stopped_);
+  EXPECT_EQ(start_result_, MediaStreamRequestResult::OK);
 
   stop_capture_flag_ = false;
   EXPECT_CALL(mock_delegate(), MockStopCapture())
@@ -361,8 +434,8 @@ TEST_F(MediaStreamVideoCapturerSourceTest, StartStopAndNotify) {
   MediaStreamTrackPlatform* track =
       MediaStreamTrackPlatform::GetTrack(web_track);
   track->StopAndNotify(
-      WTF::Bind(&MediaStreamVideoCapturerSourceTest::MockNotification,
-                base::Unretained(this)));
+      BindOnce(&MediaStreamVideoCapturerSourceTest::MockNotification,
+               base::Unretained(this)));
   EXPECT_EQ(MediaStreamSource::kReadyStateEnded,
             stream_source_->GetReadyState());
   EXPECT_TRUE(source_stopped_);
@@ -376,21 +449,25 @@ TEST_F(MediaStreamVideoCapturerSourceTest, StartStopAndNotify) {
 
 TEST_F(MediaStreamVideoCapturerSourceTest, ChangeSource) {
   InSequence s;
-  EXPECT_CALL(mock_delegate(), MockStartCapture(_, _, _));
+  EXPECT_CALL(mock_delegate(), MockStartCapture(_, _, _))
+      .WillOnce(Return(VideoCaptureRunState::kRunning));
   WebMediaStreamTrack track =
-      StartSource(VideoTrackAdapterSettings(), absl::nullopt, false, 0.0);
+      StartSource(VideoTrackAdapterSettings(), std::nullopt, false, 0.0);
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(MediaStreamSource::kReadyStateLive,
             stream_source_->GetReadyState());
   EXPECT_FALSE(source_stopped_);
+  EXPECT_EQ(start_result_, MediaStreamRequestResult::OK);
 
   // A bogus notification of running from the delegate when the source has
   // already started should not change the state.
-  delegate_->SetRunning(true);
+  delegate_->SetRunning(VideoCaptureRunState::kRunning);
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(MediaStreamSource::kReadyStateLive,
             stream_source_->GetReadyState());
   EXPECT_FALSE(source_stopped_);
+  EXPECT_EQ(video_capturer_source_->GetCaptureVersion(),
+            media::CaptureVersion());
 
   // |ChangeSourceImpl()| will recreate the |delegate_|, so check the
   // |MockStartCapture()| invoking in the |RecreateVideoCapturerSource()|.
@@ -402,16 +479,345 @@ TEST_F(MediaStreamVideoCapturerSourceTest, ChangeSource) {
   EXPECT_EQ(MediaStreamSource::kReadyStateLive,
             stream_source_->GetReadyState());
   EXPECT_FALSE(source_stopped_);
+  EXPECT_EQ(video_capturer_source_->GetCaptureVersion(),
+            media::CaptureVersion(/*source=*/1, /*sub_capture=*/0));
 
   // If the delegate stops, the source should stop.
   EXPECT_CALL(mock_delegate(), MockStopCapture());
-  delegate_->SetRunning(false);
+  delegate_->SetRunning(VideoCaptureRunState::kStopped);
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(MediaStreamSource::kReadyStateEnded,
             stream_source_->GetReadyState());
   // Verify that WebPlatformMediaStreamSource::SourceStoppedCallback has
   // been triggered.
   EXPECT_TRUE(source_stopped_);
+}
+
+TEST_F(MediaStreamVideoCapturerSourceTest, FailStartSystemPermission) {
+  InSequence s;
+  EXPECT_CALL(mock_delegate(), MockStartCapture(_, _, _))
+      .WillOnce(Return(VideoCaptureRunState::kSystemPermissionsError));
+  WebMediaStreamTrack track =
+      StartSource(VideoTrackAdapterSettings(), std::nullopt, false, 0.0);
+  base::RunLoop().RunUntilIdle();
+  EXPECT_TRUE(source_stopped_);
+  EXPECT_EQ(start_result_,
+            MediaStreamRequestResult::PERMISSION_DENIED_BY_SYSTEM);
+}
+
+TEST_F(MediaStreamVideoCapturerSourceTest, FailStartCamInUse) {
+  InSequence s;
+  EXPECT_CALL(mock_delegate(), MockStartCapture(_, _, _))
+      .WillOnce(Return(VideoCaptureRunState::kCameraBusyError));
+  WebMediaStreamTrack track =
+      StartSource(VideoTrackAdapterSettings(), std::nullopt, false, 0.0);
+  base::RunLoop().RunUntilIdle();
+  EXPECT_TRUE(source_stopped_);
+  EXPECT_EQ(start_result_, MediaStreamRequestResult::DEVICE_IN_USE);
+}
+
+TEST_F(MediaStreamVideoCapturerSourceTest, ApplySubCaptureTargetSingleTrack) {
+  InSequence s;
+  WebMediaStreamTrack track = StartTabCaptureSource();
+  auto* native_track = MediaStreamVideoTrack::From(track);
+
+  const base::Token token(123, 456);
+  ASSERT_NO_FATAL_FAILURE(ApplySubCaptureTargetAndExpectSuccess(
+      native_track, media::mojom::SubCaptureTargetType::kCropTarget, token,
+      /*expected_gpu_target=*/token, /*expected_version=*/1u));
+}
+
+TEST_F(MediaStreamVideoCapturerSourceTest,
+       ApplySubCaptureTargetFailsWhenHostMissingDoesNotMutateState) {
+  WebMediaStreamTrack track = StartTabCaptureSource();
+  auto* native_track = MediaStreamVideoTrack::From(track);
+  ASSERT_TRUE(native_track);
+
+  // Clear the dispatcher host remote so GetMediaStreamDispatcherHost() returns
+  // nullptr.
+  video_capturer_source_->SetMediaStreamDispatcherHostForTesting(
+      mojo::NullRemote());
+
+  const base::Token token(123, 456);
+  EXPECT_EQ(ApplySubCaptureTarget(
+                native_track, media::mojom::SubCaptureTargetType::kCropTarget,
+                token, 1u),
+            media::mojom::ApplySubCaptureTargetResult::kErrorGeneric);
+
+  // Verify local state was NOT mutated.
+  EXPECT_TRUE(GetTrackTarget(native_track).is_zero());
+}
+
+TEST_F(MediaStreamVideoCapturerSourceTest, ApplySubCaptureTargetClones) {
+  InSequence s;
+  WebMediaStreamTrack track1 = StartTabCaptureSource();
+  WebMediaStreamTrack track2 = CloneTrack(track1, "track2");
+
+  auto* native_track1 = MediaStreamVideoTrack::From(track1);
+  auto* native_track2 = MediaStreamVideoTrack::From(track2);
+
+  const base::Token token1(111, 222);
+  const base::Token token2(333, 444);
+
+  // 1. First track cropped, second track uncropped -> Multi-Track (Full Frame
+  // mode in GPU).
+  ASSERT_NO_FATAL_FAILURE(ApplySubCaptureTargetAndExpectSuccess(
+      native_track1, media::mojom::SubCaptureTargetType::kCropTarget, token1,
+      /*expected_gpu_target=*/base::Token(), /*expected_version=*/1u));
+
+  // 2. Both tracks cropped to the SAME target -> Optimized Single Target mode
+  // in GPU.
+  ASSERT_NO_FATAL_FAILURE(ApplySubCaptureTargetAndExpectSuccess(
+      native_track2, media::mojom::SubCaptureTargetType::kCropTarget, token1,
+      /*expected_gpu_target=*/token1, /*expected_version=*/2u));
+
+  // 3. Second track changed to DIFFERENT target token2 -> GPU switched back to
+  // Full Frame mode.
+  ASSERT_NO_FATAL_FAILURE(ApplySubCaptureTargetAndExpectSuccess(
+      native_track2, media::mojom::SubCaptureTargetType::kCropTarget, token2,
+      /*expected_gpu_target=*/base::Token(), /*expected_version=*/3u));
+}
+
+TEST_F(MediaStreamVideoCapturerSourceTest,
+       ApplySubCaptureTargetClonedTrackInheritsTarget) {
+  InSequence s;
+  WebMediaStreamTrack track1 = StartTabCaptureSource();
+  auto* native_track1 = MediaStreamVideoTrack::From(track1);
+
+  const base::Token token1(111, 222);
+  const base::Token token2(333, 444);
+
+  // 1. Crop track1 to token1.
+  ASSERT_NO_FATAL_FAILURE(ApplySubCaptureTargetAndExpectSuccess(
+      native_track1, media::mojom::SubCaptureTargetType::kCropTarget, token1,
+      /*expected_gpu_target=*/token1, /*expected_version=*/1u));
+
+  // 2. Clone track1 -> track2.
+  WebMediaStreamTrack track2 = CloneTrack(track1, "track2");
+  auto* native_track2 = MediaStreamVideoTrack::From(track2);
+  ASSERT_TRUE(native_track2);
+  EXPECT_EQ(GetTrackTarget(native_track2), token1);
+
+  // 3. Crop track1 to token2. Track2 retains token1, GPU switches to full
+  // frame.
+  ASSERT_NO_FATAL_FAILURE(ApplySubCaptureTargetAndExpectSuccess(
+      native_track1, media::mojom::SubCaptureTargetType::kCropTarget, token2,
+      /*expected_gpu_target=*/base::Token(), /*expected_version=*/2u));
+
+  EXPECT_EQ(GetTrackTarget(native_track1), token2);
+  EXPECT_EQ(GetTrackTarget(native_track2), token1);
+
+  // 4. Clone track2 (which has token1) -> track3. Track3 inherits token1.
+  WebMediaStreamTrack track3 = CloneTrack(track2, "track3");
+  auto* native_track3 = MediaStreamVideoTrack::From(track3);
+  ASSERT_TRUE(native_track3);
+  EXPECT_EQ(GetTrackTarget(native_track3), token1);
+
+  // 5. Clone track1 (which has token2) -> track4. Track4 inherits token2.
+  WebMediaStreamTrack track4 = CloneTrack(track1, "track4");
+  auto* native_track4 = MediaStreamVideoTrack::From(track4);
+  ASSERT_TRUE(native_track4);
+  EXPECT_EQ(GetTrackTarget(native_track4), token2);
+}
+
+TEST_F(MediaStreamVideoCapturerSourceTest,
+       ApplySubCaptureTargetRestrictionTargetFailsIfClonesExist) {
+  InSequence s;
+  WebMediaStreamTrack track1 = StartTabCaptureSource();
+  auto* native_track1 = MediaStreamVideoTrack::From(track1);
+  ASSERT_TRUE(native_track1);
+
+  const base::Token token1(111, 222);
+
+  // Single track: ApplySubCaptureTarget for kRestrictionTarget succeeds.
+  ASSERT_NO_FATAL_FAILURE(ApplySubCaptureTargetAndExpectSuccess(
+      native_track1, media::mojom::SubCaptureTargetType::kRestrictionTarget,
+      token1, /*expected_gpu_target=*/token1, /*expected_version=*/1u));
+
+  // Clone track1 -> track2.
+  WebMediaStreamTrack track2 = CloneTrack(track1, "track2");
+  ASSERT_TRUE(MediaStreamVideoTrack::From(track2));
+
+  // Multiple tracks: GetNextCaptureVersion for kRestrictionTarget must fail
+  // (std::nullopt).
+  auto version2 = GetNextCaptureVersion(
+      media::mojom::SubCaptureTargetType::kRestrictionTarget);
+  EXPECT_FALSE(version2.has_value());
+
+  // Applying restriction target when clones exist must reject with
+  // kInvalidTarget.
+  const base::Token token2(333, 444);
+  EXPECT_EQ(
+      ApplySubCaptureTarget(
+          native_track1, media::mojom::SubCaptureTargetType::kRestrictionTarget,
+          token2, 99),
+      media::mojom::ApplySubCaptureTargetResult::kInvalidTarget);
+}
+
+TEST_F(MediaStreamVideoCapturerSourceTest,
+       ApplySubCaptureTargetClearsGpuStateOnLastTrackRemoval) {
+  WebMediaStreamTrack track1 = StartTabCaptureSource();
+  auto* native_track1 = MediaStreamVideoTrack::From(track1);
+  ASSERT_TRUE(native_track1);
+
+  const base::Token token1(111, 222);
+  ASSERT_NO_FATAL_FAILURE(ApplySubCaptureTargetAndExpectSuccess(
+      native_track1, media::mojom::SubCaptureTargetType::kCropTarget, token1,
+      /*expected_gpu_target=*/token1, /*expected_version=*/1u));
+
+  // Removing the last track must send a zero token IPC to clear the GPU state
+  // and stop capture.
+  base::test::TestFuture<void> teardown_future;
+  EXPECT_CALL(
+      mock_dispatcher_host_,
+      ApplySubCaptureTarget(_, media::mojom::SubCaptureTargetType::kCropTarget,
+                            base::Token(), 2u, _))
+      .WillOnce([&teardown_future](const base::UnguessableToken&,
+                                   media::mojom::SubCaptureTargetType,
+                                   const base::Token&, uint32_t,
+                                   mojom::blink::MediaStreamDispatcherHost::
+                                       ApplySubCaptureTargetCallback callback) {
+        std::move(callback).Run(
+            media::mojom::ApplySubCaptureTargetResult::kSuccess);
+        teardown_future.SetValue();
+      });
+  EXPECT_CALL(mock_delegate(), MockStopCapture());
+
+  native_track1->Stop();
+  EXPECT_TRUE(teardown_future.Wait());
+}
+
+TEST_F(MediaStreamVideoCapturerSourceTest,
+       ApplySubCaptureTargetClonedAfterRestrictionInheritsTarget) {
+  WebMediaStreamTrack track1 = StartTabCaptureSource();
+  auto* native_track1 = MediaStreamVideoTrack::From(track1);
+  ASSERT_TRUE(native_track1);
+
+  const base::Token token1(111, 222);
+  ASSERT_NO_FATAL_FAILURE(ApplySubCaptureTargetAndExpectSuccess(
+      native_track1, media::mojom::SubCaptureTargetType::kRestrictionTarget,
+      token1, /*expected_gpu_target=*/token1, /*expected_version=*/1u));
+
+  // Clone track1 -> track2.
+  WebMediaStreamTrack track2 = CloneTrack(track1, "track2");
+  auto* native_track2 = MediaStreamVideoTrack::From(track2);
+  ASSERT_TRUE(native_track2);
+
+  // Attempting to apply a crop target on track2 must fail with kInvalidTarget
+  // because an active restriction target is present on another track.
+  const base::Token token2(333, 444);
+  EXPECT_EQ(ApplySubCaptureTarget(
+                native_track2, media::mojom::SubCaptureTargetType::kCropTarget,
+                token2, 99),
+            media::mojom::ApplySubCaptureTargetResult::kInvalidTarget);
+}
+
+TEST_F(MediaStreamVideoCapturerSourceTest,
+       RemovingOneOfIdenticallyCroppedTracksRetainsGpuCrop) {
+  WebMediaStreamTrack track1 = StartTabCaptureSource();
+  auto* native_track1 = MediaStreamVideoTrack::From(track1);
+  ASSERT_TRUE(native_track1);
+
+  const base::Token token1(111, 222);
+  ASSERT_NO_FATAL_FAILURE(ApplySubCaptureTargetAndExpectSuccess(
+      native_track1, media::mojom::SubCaptureTargetType::kCropTarget, token1,
+      /*expected_gpu_target=*/token1, /*expected_version=*/1u));
+
+  // Clone track1 -> track2 (inherits token1).
+  WebMediaStreamTrack track2 = CloneTrack(track1, "track2");
+  auto* native_track2 = MediaStreamVideoTrack::From(track2);
+  ASSERT_TRUE(native_track2);
+
+  // Stopping track1 must NOT send any uncrop IPC to the GPU since track2 is
+  // still active and cropped to token1.
+  EXPECT_CALL(mock_dispatcher_host_, ApplySubCaptureTarget(_, _, _, _, _))
+      .Times(0);
+  native_track1->Stop();
+  testing::Mock::VerifyAndClearExpectations(&mock_dispatcher_host_);
+
+  // Stopping track2 (the last track) clears the GPU state with a zero token.
+  base::test::TestFuture<void> teardown_future;
+  EXPECT_CALL(
+      mock_dispatcher_host_,
+      ApplySubCaptureTarget(_, media::mojom::SubCaptureTargetType::kCropTarget,
+                            base::Token(), 2u, _))
+      .WillOnce([&teardown_future](const base::UnguessableToken&,
+                                   media::mojom::SubCaptureTargetType,
+                                   const base::Token&, uint32_t,
+                                   mojom::blink::MediaStreamDispatcherHost::
+                                       ApplySubCaptureTargetCallback callback) {
+        std::move(callback).Run(
+            media::mojom::ApplySubCaptureTargetResult::kSuccess);
+        teardown_future.SetValue();
+      });
+  EXPECT_CALL(mock_delegate(), MockStopCapture());
+
+  native_track2->Stop();
+  EXPECT_TRUE(teardown_future.Wait());
+}
+
+TEST_F(MediaStreamVideoCapturerSourceTest,
+       CropTargetOnCloneRejectedWhenRegionCaptureOfClonedTracksDisabled) {
+  feature_list_.InitAndDisableFeature(features::kRegionCaptureOfClonedTracks);
+
+  WebMediaStreamTrack track1 = StartTabCaptureSource();
+  WebMediaStreamTrack track2 = CloneTrack(track1, "track2");
+  auto* native_track2 = MediaStreamVideoTrack::From(track2);
+  ASSERT_TRUE(native_track2);
+
+  EXPECT_CALL(mock_dispatcher_host_, ApplySubCaptureTarget(_, _, _, _, _))
+      .Times(0);
+
+  EXPECT_FALSE(
+      GetNextCaptureVersion(media::mojom::SubCaptureTargetType::kCropTarget)
+          .has_value());
+
+  const base::Token token(111, 222);
+  EXPECT_EQ(ApplySubCaptureTarget(
+                native_track2, media::mojom::SubCaptureTargetType::kCropTarget,
+                token, 1u),
+            media::mojom::ApplySubCaptureTargetResult::kInvalidTarget);
+  EXPECT_TRUE(GetTrackTarget(native_track2).is_zero());
+  FlushDispatcherHost();
+  testing::Mock::VerifyAndClearExpectations(&mock_dispatcher_host_);
+}
+
+TEST_F(MediaStreamVideoCapturerSourceTest,
+       ClonedTrackInheritsCropWhenRegionCaptureOfClonedTracksDisabled) {
+  feature_list_.InitAndDisableFeature(features::kRegionCaptureOfClonedTracks);
+
+  WebMediaStreamTrack track1 = StartTabCaptureSource();
+  auto* native_track1 = MediaStreamVideoTrack::From(track1);
+  ASSERT_TRUE(native_track1);
+
+  // A single track can still be cropped.
+  const base::Token token1(111, 222);
+  ASSERT_NO_FATAL_FAILURE(ApplySubCaptureTargetAndExpectSuccess(
+      native_track1, media::mojom::SubCaptureTargetType::kCropTarget, token1,
+      /*expected_gpu_target=*/token1, /*expected_version=*/1u));
+
+  // The clone inherits the crop, and the GPU keeps cropping to it.
+  EXPECT_CALL(mock_dispatcher_host_, ApplySubCaptureTarget(_, _, _, _, _))
+      .Times(0);
+  WebMediaStreamTrack track2 = CloneTrack(track1, "track2");
+  auto* native_track2 = MediaStreamVideoTrack::From(track2);
+  ASSERT_TRUE(native_track2);
+  EXPECT_EQ(GetTrackTarget(native_track2), token1);
+
+  // Neither track can change its target while the other exists.
+  const base::Token token2(333, 444);
+  EXPECT_EQ(ApplySubCaptureTarget(
+                native_track1, media::mojom::SubCaptureTargetType::kCropTarget,
+                token2, 2u),
+            media::mojom::ApplySubCaptureTargetResult::kInvalidTarget);
+  EXPECT_EQ(ApplySubCaptureTarget(
+                native_track2, media::mojom::SubCaptureTargetType::kCropTarget,
+                base::Token(), 2u),
+            media::mojom::ApplySubCaptureTargetResult::kInvalidTarget);
+  EXPECT_EQ(GetTrackTarget(native_track1), token1);
+  EXPECT_EQ(GetTrackTarget(native_track2), token1);
+  FlushDispatcherHost();
+  testing::Mock::VerifyAndClearExpectations(&mock_dispatcher_host_);
 }
 
 }  // namespace blink

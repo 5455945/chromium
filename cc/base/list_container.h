@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,13 @@
 
 #include <stddef.h>
 
+#include <iterator>
 #include <memory>
+#include <optional>
+#include <utility>
 
 #include "base/check.h"
 #include "cc/base/list_container_helper.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace cc {
 
@@ -26,6 +28,8 @@ namespace cc {
 template <class BaseElementType>
 class ListContainer {
  public:
+  using value_type = const BaseElementType*;
+
   // This constructor reserves the requested memory up front so only single
   // allocation is needed. When num_of_elements_to_reserve_for is zero, use the
   // default size.
@@ -122,7 +126,7 @@ class ListContainer {
   template <typename DerivedElementType>
   DerivedElementType* ReplaceExistingElement(Iterator at) {
     at->~BaseElementType();
-    return new (at.item_iterator) DerivedElementType();
+    return new (at.item()) DerivedElementType();
   }
 
   // Insert |count| new elements of |DerivedElementType| before |at|. This will
@@ -134,14 +138,14 @@ class ListContainer {
   Iterator InsertBeforeAndInvalidateAllPointers(
       Iterator at,
       size_t count,
-      const absl::optional<DerivedElementType> source = absl::nullopt) {
+      const std::optional<DerivedElementType> source = std::nullopt) {
     helper_.InsertBeforeAndInvalidateAllPointers(&at, count);
     Iterator result = at;
     for (size_t i = 0; i < count; ++i) {
       if (source) {
-        new (at.item_iterator) DerivedElementType(source.value());
+        new (at.item()) DerivedElementType(source.value());
       } else {
-        new (at.item_iterator) DerivedElementType();
+        new (at.item()) DerivedElementType();
       }
       ++at;
     }
@@ -189,19 +193,21 @@ class ListContainer {
     // This class is only defined to forward iterate through
     // CharAllocator.
    public:
+    constexpr Iterator() = default;
+
     Iterator(ListContainerHelper::CharAllocator* container,
              size_t vector_ind,
-             char* item_iter,
+             size_t item_offset,
              size_t index)
         : ListContainerHelper::Iterator(container,
                                         vector_ind,
-                                        item_iter,
+                                        item_offset,
                                         index) {}
     BaseElementType* operator->() const {
-      return reinterpret_cast<BaseElementType*>(item_iterator);
+      return reinterpret_cast<BaseElementType*>(item());
     }
     BaseElementType* operator*() const {
-      return reinterpret_cast<BaseElementType*>(item_iterator);
+      return reinterpret_cast<BaseElementType*>(item());
     }
     Iterator operator++(int unused_post_increment) {
       Iterator tmp = *this;
@@ -234,21 +240,23 @@ class ListContainer {
     // This class is only defined to forward iterate through
     // CharAllocator.
    public:
+    constexpr ConstIterator() = default;
+
     ConstIterator(ListContainerHelper::CharAllocator* container,
                   size_t vector_ind,
-                  char* item_iter,
+                  size_t item_offset,
                   size_t index)
         : ListContainerHelper::ConstIterator(container,
                                              vector_ind,
-                                             item_iter,
+                                             item_offset,
                                              index) {}
     ConstIterator(const Iterator& other)  // NOLINT
         : ListContainerHelper::ConstIterator(other) {}
     const BaseElementType* operator->() const {
-      return reinterpret_cast<const BaseElementType*>(item_iterator);
+      return reinterpret_cast<const BaseElementType*>(item());
     }
     const BaseElementType* operator*() const {
-      return reinterpret_cast<const BaseElementType*>(item_iterator);
+      return reinterpret_cast<const BaseElementType*>(item());
     }
     ConstIterator operator++(int unused_post_increment) {
       ConstIterator tmp = *this;
@@ -282,19 +290,21 @@ class ListContainer {
     // This class is only defined to reverse iterate through
     // CharAllocator.
    public:
+    constexpr ReverseIterator() = default;
+
     ReverseIterator(ListContainerHelper::CharAllocator* container,
                     size_t vector_ind,
-                    char* item_iter,
+                    size_t item_offset,
                     size_t index)
         : ListContainerHelper::ReverseIterator(container,
                                                vector_ind,
-                                               item_iter,
+                                               item_offset,
                                                index) {}
     BaseElementType* operator->() const {
-      return reinterpret_cast<BaseElementType*>(item_iterator);
+      return reinterpret_cast<BaseElementType*>(item());
     }
     BaseElementType* operator*() const {
-      return reinterpret_cast<BaseElementType*>(item_iterator);
+      return reinterpret_cast<BaseElementType*>(item());
     }
     ReverseIterator operator++(int unused_post_increment) {
       ReverseIterator tmp = *this;
@@ -326,21 +336,23 @@ class ListContainer {
     // This class is only defined to reverse iterate through
     // CharAllocator.
    public:
+    constexpr ConstReverseIterator() = default;
+
     ConstReverseIterator(ListContainerHelper::CharAllocator* container,
                          size_t vector_ind,
-                         char* item_iter,
+                         size_t item_offset,
                          size_t index)
         : ListContainerHelper::ConstReverseIterator(container,
                                                     vector_ind,
-                                                    item_iter,
+                                                    item_offset,
                                                     index) {}
     ConstReverseIterator(const ReverseIterator& other)  // NOLINT
         : ListContainerHelper::ConstReverseIterator(other) {}
     const BaseElementType* operator->() const {
-      return reinterpret_cast<const BaseElementType*>(item_iterator);
+      return reinterpret_cast<const BaseElementType*>(item());
     }
     const BaseElementType* operator*() const {
-      return reinterpret_cast<const BaseElementType*>(item_iterator);
+      return reinterpret_cast<const BaseElementType*>(item());
     }
     ConstReverseIterator operator++(int unused_post_increment) {
       ConstReverseIterator tmp = *this;

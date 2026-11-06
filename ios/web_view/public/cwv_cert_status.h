@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -26,9 +26,7 @@ typedef NS_OPTIONS(NSInteger, CWVCertStatus) {
   CWVCertStatusNameConstraintViolation = 1 << 14,
   CWVCertStatusValidityTooLong = 1 << 15,
   CWVCertStatusCertificateTransparencyRequired = 1 << 24,
-  CWVCertStatusSymantecLegacy = 1 << 25,
   CWVCertStatusKnownInterceptionBlocked = 1 << 26,
-  CWVCertStatusLegacyTLS = 1 << 27,
 };
 
 #endif  // IOS_WEB_VIEW_PUBLIC_CWV_CERT_STATUS_H_

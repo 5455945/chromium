@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,17 @@ package org.chromium.chrome.browser.tasks.tab_management;
 
 import static androidx.test.espresso.Espresso.onView;
 import static androidx.test.espresso.action.ViewActions.click;
-import static androidx.test.espresso.assertion.ViewAssertions.matches;
-import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
-import static org.mockito.Mockito.when;
 
+import static org.chromium.base.test.transit.ViewFinder.waitForView;
+import static org.chromium.chrome.browser.tasks.tab_management.UiTypeHelper.isMessageCard;
+import static org.chromium.chrome.browser.tasks.tab_management.UiTypeHelper.isValidUiType;
+
+import android.annotation.SuppressLint;
+import android.app.Activity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
@@ -21,250 +24,209 @@ import android.widget.FrameLayout;
 import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.test.filters.SmallTest;
 
-import org.junit.Rule;
+import org.junit.Before;
+import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Test;
-import org.junit.rules.TestRule;
-import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.junit.runner.RunWith;
 
-import org.chromium.base.test.util.CriteriaHelper;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
-import org.chromium.chrome.browser.tasks.tab_management.suggestions.TabSuggestion;
+import org.chromium.base.ThreadUtils;
+import org.chromium.base.test.BaseActivityTestRule;
+import org.chromium.base.test.util.Batch;
+import org.chromium.base.test.util.DisableIf;
+import org.chromium.chrome.browser.price_tracking.PriceDropNotificationManagerImpl;
+import org.chromium.chrome.browser.tasks.tab_management.MessageCardView.ServiceDismissActionProvider;
+import org.chromium.chrome.browser.tasks.tab_management.MessageService.Message;
+import org.chromium.chrome.browser.tasks.tab_management.PriceMessageService.PriceMessageData;
+import org.chromium.chrome.browser.tasks.tab_management.PriceMessageService.PriceMessageType;
+import org.chromium.chrome.browser.tasks.tab_management.TabProperties.UiType;
+import org.chromium.chrome.browser.tasks.tab_management.TabSwitcherMessageManager.MessageType;
 import org.chromium.chrome.tab_ui.R;
-import org.chromium.chrome.test.util.browser.Features;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
+import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.modelutil.LayoutViewBuilder;
 import org.chromium.ui.modelutil.MVCListAdapter;
 import org.chromium.ui.modelutil.SimpleRecyclerViewAdapter;
-import org.chromium.ui.test.util.DummyUiActivityTestCase;
+import org.chromium.ui.test.util.BlankUiTestActivity;
 
-import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/**
- * Integration tests for MessageCardProvider component.
- */
-@Features.DisableFeatures(ChromeFeatureList.TAB_TO_GTS_ANIMATION)
-public class MessageCardProviderTest extends DummyUiActivityTestCase {
-    private static final int SUGGESTED_TAB_COUNT = 2;
+/** Integration tests for MessageCardProvider component. */
+@RunWith(ChromeJUnit4ClassRunner.class)
+@Batch(Batch.PER_CLASS)
+public class MessageCardProviderTest {
+    @ClassRule
+    public static BaseActivityTestRule<BlankUiTestActivity> sActivityTestRule =
+            new BaseActivityTestRule<>(BlankUiTestActivity.class);
 
-    @Rule
-    public TestRule mProcessor = new Features.JUnitProcessor();
+    private final ServiceDismissActionProvider<@MessageType Integer> mServiceDismissActionProvider =
+            (messageType) -> {};
+    private final AtomicBoolean mReviewed = new AtomicBoolean();
+    private final AtomicBoolean mDismissed = new AtomicBoolean();
+
+    private static Activity sActivity;
 
     private TabListRecyclerView mRecyclerView;
-    private TabListRecyclerView.VisibilityListener mRecyclerViewVisibilityListener =
-            new TabListRecyclerView.VisibilityListener() {
-                @Override
-                public void startedShowing(boolean isAnimating) {
-                    List<MessageCardProviderMediator.Message> messageList =
-                            mCoordinator.getMessageItems();
-                    for (int i = 0; i < messageList.size(); i++) {
-                        MessageCardProviderMediator.Message message = messageList.get(i);
-                        if (message.type == MessageService.MessageType.PRICE_MESSAGE) {
-                            mModelList.add(new MVCListAdapter.ListItem(
-                                    TabProperties.UiType.LARGE_MESSAGE, message.model));
-                        } else {
-                            mModelList.add(new MVCListAdapter.ListItem(
-                                    TabProperties.UiType.MESSAGE, message.model));
-                        }
-                    }
-                }
-
-                @Override
-                public void finishedShowing() {
-                    mFinishedShowing.set(true);
-                }
-
-                @Override
-                public void startedHiding(boolean isAnimating) {
-                    mFinishedShowing.set(false);
-                    mModelList.clear();
-                }
-
-                @Override
-                public void finishedHiding() {}
-            };
-
-    private TabListModel mModelList = new TabListModel();
+    private TabListModel mModelList;
     private SimpleRecyclerViewAdapter mAdapter;
+    private MessageCardProvider<@MessageType Integer, @UiType Integer> mCoordinator;
+    private MessageService<@MessageType Integer, @UiType Integer> mTestingService;
+    private MessageService<@MessageType Integer, @UiType Integer> mPriceService;
+    private PriceMessageData mPriceMessageData;
 
-    private AtomicBoolean mFinishedShowing = new AtomicBoolean(false);
+    @BeforeClass
+    public static void setupSuite() {
+        sActivity = sActivityTestRule.launchActivity(null);
+    }
 
-    private MessageService mTestingService =
-            new MessageService(MessageService.MessageType.FOR_TESTING);
-    private MessageService mSuggestionService =
-            new MessageService(MessageService.MessageType.TAB_SUGGESTION);
-    private MessageCardProviderCoordinator mCoordinator;
-    private MessageService mPriceService =
-            new MessageService(MessageService.MessageType.PRICE_MESSAGE);
+    @Before
+    public void setUp() throws Exception {
+        mReviewed.set(false);
+        mDismissed.set(false);
+        mPriceMessageData =
+                new PriceMessageData(
+                        PriceMessageType.PRICE_WELCOME,
+                        /* priceTabData= */ null,
+                        () -> mReviewed.set(true),
+                        () -> mDismissed.set(true));
 
-    private MessageCardView.DismissActionProvider mUiDismissActionProvider = (messageType) -> {};
-
-    @Mock
-    private TabSuggestionMessageService.TabSuggestionMessageData mTabSuggestionMessageData;
-
-    @Mock
-    private PriceMessageService.PriceMessageData mPriceMessageData;
-
-    @Override
-    public void setUpTest() throws Exception {
-        super.setUpTest();
-        MockitoAnnotations.initMocks(this);
         // TODO(meiliang): Replace with TabSwitcher instead when ready to integrate with
         // TabSwitcher.
-        ViewGroup view = new FrameLayout(getActivity());
-        mAdapter = new SimpleRecyclerViewAdapter(mModelList);
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mModelList = new TabListModel();
+                    ViewGroup view = new FrameLayout(sActivity);
+                    mAdapter = new SimpleRecyclerViewAdapter(mModelList);
 
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            getActivity().setContentView(view);
+                    sActivity.setContentView(view);
 
-            mRecyclerView = (TabListRecyclerView) getActivity().getLayoutInflater().inflate(
-                    R.layout.tab_list_recycler_view_layout, view, false);
-            mRecyclerView.setVisibilityListener(mRecyclerViewVisibilityListener);
-            mRecyclerView.setVisibility(View.INVISIBLE);
+                    mRecyclerView =
+                            (TabListRecyclerView)
+                                    sActivity
+                                            .getLayoutInflater()
+                                            .inflate(
+                                                    R.layout.tab_list_recycler_view_layout,
+                                                    view,
+                                                    false);
+                    mRecyclerView.setVisibility(View.VISIBLE);
 
-            mAdapter.registerType(TabProperties.UiType.MESSAGE,
-                    new LayoutViewBuilder(R.layout.tab_grid_message_card_item),
-                    MessageCardViewBinder::bind);
+                    mAdapter.registerType(
+                            UiType.IPH_MESSAGE,
+                            new LayoutViewBuilder<>(R.layout.tab_grid_message_card_item),
+                            MessageCardViewBinder::bind);
 
-            mAdapter.registerType(TabProperties.UiType.LARGE_MESSAGE,
-                    new LayoutViewBuilder(R.layout.large_message_card_item),
-                    LargeMessageCardViewBinder::bind);
+                    mAdapter.registerType(
+                            UiType.PRICE_MESSAGE,
+                            new LayoutViewBuilder<>(R.layout.large_message_card_item),
+                            LargeMessageCardViewBinder::bind);
 
-            GridLayoutManager layoutManager = new GridLayoutManager(mRecyclerView.getContext(), 2);
-            layoutManager.setSpanSizeLookup(new GridLayoutManager.SpanSizeLookup() {
-                @Override
-                public int getSpanSize(int i) {
-                    int itemType = mAdapter.getItemViewType(i);
+                    GridLayoutManager layoutManager =
+                            new GridLayoutManager(mRecyclerView.getContext(), 2);
+                    layoutManager.setSpanSizeLookup(
+                            new GridLayoutManager.SpanSizeLookup() {
+                                @SuppressLint("WrongConstant")
+                                @Override
+                                public int getSpanSize(int i) {
+                                    int itemType = mAdapter.getItemViewType(i);
+                                    assertTrue(isValidUiType(itemType));
 
-                    if (itemType == TabProperties.UiType.MESSAGE
-                            || itemType == TabProperties.UiType.LARGE_MESSAGE) {
-                        return 2;
-                    }
-                    return 1;
-                }
-            });
-            mRecyclerView.setLayoutManager(layoutManager);
-            mRecyclerView.setAdapter(mAdapter);
+                                    if (isMessageCard(itemType)) {
+                                        return 2;
+                                    }
+                                    return 1;
+                                }
+                            });
+                    mRecyclerView.setLayoutManager(layoutManager);
+                    mRecyclerView.setAdapter(mAdapter);
 
-            view.addView(mRecyclerView);
-        });
+                    view.addView(mRecyclerView);
 
-        mCoordinator = new MessageCardProviderCoordinator(
-                getActivity(), () -> false, mUiDismissActionProvider);
-        mCoordinator.subscribeMessageService(mTestingService);
-        mCoordinator.subscribeMessageService(mSuggestionService);
-        mCoordinator.subscribeMessageService(mPriceService);
+                    mTestingService =
+                            new MessageService<>(
+                                    MessageType.FOR_TESTING,
+                                    UiType.IPH_MESSAGE,
+                                    R.layout.tab_grid_message_card_item,
+                                    MessageCardViewBinder::bind);
+                    mPriceService =
+                            new MessageService<>(
+                                    MessageType.PRICE_MESSAGE,
+                                    UiType.IPH_MESSAGE,
+                                    R.layout.tab_grid_message_card_item,
+                                    MessageCardViewBinder::bind);
 
-        when(mTabSuggestionMessageData.getActionType())
-                .thenReturn(TabSuggestion.TabSuggestionAction.CLOSE);
-    }
-
-    @Test
-    @SmallTest
-    public void testShowingTabSuggestionMessage() {
-        when(mTabSuggestionMessageData.getSize()).thenReturn(SUGGESTED_TAB_COUNT);
-        mSuggestionService.sendAvailabilityNotification(mTabSuggestionMessageData);
-
-        TestThreadUtils.runOnUiThreadBlocking(() -> mRecyclerView.startShowing(false));
-
-        CriteriaHelper.pollUiThread(
-                () -> mRecyclerView.getVisibility() == View.VISIBLE && mFinishedShowing.get());
-
-        onView(withId(R.id.tab_grid_message_item)).check(matches(isDisplayed()));
-    }
-
-    @Test
-    @SmallTest
-    public void testReviewTabSuggestionMessage() {
-        AtomicBoolean reviewed = new AtomicBoolean();
-        when(mTabSuggestionMessageData.getSize()).thenReturn(SUGGESTED_TAB_COUNT);
-        when(mTabSuggestionMessageData.getReviewActionProvider())
-                .thenReturn(() -> reviewed.set(true));
-        mSuggestionService.sendAvailabilityNotification(mTabSuggestionMessageData);
-
-        TestThreadUtils.runOnUiThreadBlocking(() -> mRecyclerView.startShowing(false));
-
-        CriteriaHelper.pollUiThread(
-                () -> mRecyclerView.getVisibility() == View.VISIBLE && mFinishedShowing.get());
-
-        onView(withId(R.id.tab_grid_message_item)).check(matches(isDisplayed()));
-
-        assertFalse(reviewed.get());
-        onView(withId(R.id.action_button)).perform(click());
-        assertTrue(reviewed.get());
-    }
-
-    @Test
-    @SmallTest
-    public void testDismissTabSuggestionMessage() {
-        AtomicBoolean dismissed = new AtomicBoolean();
-        when(mTabSuggestionMessageData.getSize()).thenReturn(SUGGESTED_TAB_COUNT);
-        when(mTabSuggestionMessageData.getDismissActionProvider())
-                .thenReturn((type) -> dismissed.set(true));
-        mSuggestionService.sendAvailabilityNotification(mTabSuggestionMessageData);
-
-        TestThreadUtils.runOnUiThreadBlocking(() -> mRecyclerView.startShowing(false));
-
-        CriteriaHelper.pollUiThread(
-                () -> mRecyclerView.getVisibility() == View.VISIBLE && mFinishedShowing.get());
-
-        onView(withId(R.id.tab_grid_message_item)).check(matches(isDisplayed()));
-
-        assertFalse(dismissed.get());
-        onView(withId(R.id.close_button)).perform(click());
-        assertTrue(dismissed.get());
+                    mCoordinator = new MessageCardProvider<>(mServiceDismissActionProvider);
+                    mCoordinator.subscribeMessageService(mTestingService);
+                    mCoordinator.subscribeMessageService(mPriceService);
+                });
     }
 
     @Test
     @SmallTest
     public void testPriceMessage() {
-        mPriceService.sendAvailabilityNotification(mPriceMessageData);
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    sendAvailabilityNotification();
+                    addMessageCards();
+                });
 
-        TestThreadUtils.runOnUiThreadBlocking(() -> mRecyclerView.startShowing(false));
-
-        CriteriaHelper.pollUiThread(
-                () -> mRecyclerView.getVisibility() == View.VISIBLE && mFinishedShowing.get());
-
-        onView(withId(R.id.large_message_card_item)).check(matches(isDisplayed()));
+        waitForView(withId(R.id.large_message_card_item));
     }
 
     @Test
     @SmallTest
     public void testReviewPriceMessage() {
-        AtomicBoolean reviewed = new AtomicBoolean();
-        when(mPriceMessageData.getReviewActionProvider()).thenReturn(() -> reviewed.set(true));
-        mPriceService.sendAvailabilityNotification(mPriceMessageData);
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    sendAvailabilityNotification();
+                    addMessageCards();
+                });
 
-        TestThreadUtils.runOnUiThreadBlocking(() -> mRecyclerView.startShowing(false));
+        waitForView(withId(R.id.large_message_card_item));
 
-        CriteriaHelper.pollUiThread(
-                () -> mRecyclerView.getVisibility() == View.VISIBLE && mFinishedShowing.get());
-
-        onView(withId(R.id.large_message_card_item)).check(matches(isDisplayed()));
-
-        assertFalse(reviewed.get());
+        assertFalse(mReviewed.get());
         onView(withId(R.id.action_button)).perform(click());
-        assertTrue(reviewed.get());
+        assertTrue(mReviewed.get());
     }
 
     @Test
     @SmallTest
+    @DisableIf.Device(
+            DeviceFormFactor.DESKTOP) // TODO(crbug.com/493814627): Test failing on Desktop bot
     public void testDismissPriceMessage() {
-        AtomicBoolean dismissed = new AtomicBoolean();
-        when(mPriceMessageData.getDismissActionProvider())
-                .thenReturn((type) -> dismissed.set(true));
-        mPriceService.sendAvailabilityNotification(mPriceMessageData);
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    sendAvailabilityNotification();
+                    addMessageCards();
+                });
 
-        TestThreadUtils.runOnUiThreadBlocking(() -> mRecyclerView.startShowing(false));
+        waitForView(withId(R.id.large_message_card_item));
 
-        CriteriaHelper.pollUiThread(
-                () -> mRecyclerView.getVisibility() == View.VISIBLE && mFinishedShowing.get());
-
-        onView(withId(R.id.large_message_card_item)).check(matches(isDisplayed()));
-
-        assertFalse(dismissed.get());
+        assertFalse(mDismissed.get());
         onView(withId(R.id.close_button)).perform(click());
-        assertTrue(dismissed.get());
+        assertTrue(mDismissed.get());
+    }
+
+    private void addMessageCards() {
+        for (MessageService<@MessageType Integer, @UiType Integer> service :
+                mCoordinator.getMessageServices()) {
+            Message<@MessageType Integer> message =
+                    mCoordinator.getNextMessageItemForType(service.getMessageType());
+            if (message == null) continue;
+            if (message.type == MessageType.PRICE_MESSAGE) {
+                mModelList.add(new MVCListAdapter.ListItem(UiType.PRICE_MESSAGE, message.model));
+            } else {
+                mModelList.add(new MVCListAdapter.ListItem(UiType.IPH_MESSAGE, message.model));
+            }
+        }
+    }
+
+    private void sendAvailabilityNotification() {
+        mPriceService.queueMessage(
+                dismiss ->
+                        PriceMessageCardViewModel.create(
+                                sActivity,
+                                c -> {},
+                                mPriceMessageData,
+                                new PriceDropNotificationManagerImpl(null)));
     }
 }

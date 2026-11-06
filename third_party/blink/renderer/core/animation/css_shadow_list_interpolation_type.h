@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,10 +10,11 @@
 namespace blink {
 
 class ShadowList;
+struct ColorThemeInfo;
 
 class CSSShadowListInterpolationType : public CSSInterpolationType {
  public:
-  CSSShadowListInterpolationType(PropertyHandle property)
+  explicit CSSShadowListInterpolationType(PropertyHandle property)
       : CSSInterpolationType(property) {}
 
   InterpolationValue MaybeConvertStandardPropertyUnderlyingValue(
@@ -27,7 +28,9 @@ class CSSShadowListInterpolationType : public CSSInterpolationType {
                                   StyleResolverState&) const final;
 
  private:
-  InterpolationValue ConvertShadowList(const ShadowList*, double zoom) const;
+  InterpolationValue ConvertShadowList(const ShadowList*,
+                                       double zoom,
+                                       const ColorThemeInfo&) const;
   InterpolationValue CreateNeutralValue() const;
 
   InterpolationValue MaybeConvertNeutral(const InterpolationValue& underlying,
@@ -37,7 +40,7 @@ class CSSShadowListInterpolationType : public CSSInterpolationType {
   InterpolationValue MaybeConvertInherit(const StyleResolverState&,
                                          ConversionCheckers&) const final;
   InterpolationValue MaybeConvertValue(const CSSValue&,
-                                       const StyleResolverState*,
+                                       const StyleResolverState&,
                                        ConversionCheckers&) const final;
   PairwiseInterpolationValue MaybeMergeSingles(
       InterpolationValue&& start,
@@ -48,10 +51,10 @@ class CSSShadowListInterpolationType : public CSSInterpolationType {
       EffectModel::CompositeOperation,
       ConversionCheckers&) const final;
   InterpolationValue PerformAdditiveComposition(
-      std::unique_ptr<InterpolableList> interpolable_list,
+      InterpolableList* interpolable_list,
       const InterpolationValue& underlying) const;
   InterpolationValue PerformAccumulativeComposition(
-      std::unique_ptr<InterpolableList> interpolable_list,
+      InterpolableList* interpolable_list,
       const InterpolationValue& underlying) const;
 };
 

@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,19 +8,28 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <string>
+#include <string_view>
 
 #include "base/compiler_specific.h"
-#include "base/stl_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "gin/function_template.h"
 #include "gin/handle.h"
 #include "gin/public/isolate_holder.h"
+#include "gin/public/wrappable_pointer_tags.h"
 #include "gin/test/v8_test.h"
 #include "gin/wrappable.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "v8/include/v8.h"
+#include "v8/include/cppgc/allocation.h"
+#include "v8/include/v8-container.h"
+#include "v8/include/v8-cppgc.h"
+#include "v8/include/v8-forward.h"
+#include "v8/include/v8-function.h"
+#include "v8/include/v8-isolate.h"
+#include "v8/include/v8-primitive.h"
+#include "v8/include/v8-template.h"
 
 namespace gin {
 
@@ -41,15 +50,16 @@ typedef V8Test ConverterTest;
 TEST_F(ConverterTest, Bool) {
   HandleScope handle_scope(instance_->isolate());
 
-  EXPECT_TRUE(Converter<bool>::ToV8(instance_->isolate(), true)->StrictEquals(
-      Boolean::New(instance_->isolate(), true)));
-  EXPECT_TRUE(Converter<bool>::ToV8(instance_->isolate(), false)->StrictEquals(
-      Boolean::New(instance_->isolate(), false)));
+  EXPECT_TRUE(Converter<bool>::ToV8(instance_->isolate(), true)
+                  ->StrictEquals(Boolean::New(instance_->isolate(), true)));
+  EXPECT_TRUE(Converter<bool>::ToV8(instance_->isolate(), false)
+                  ->StrictEquals(Boolean::New(instance_->isolate(), false)));
 
-  struct {
+  struct TestData {
     Local<Value> input;
     bool expected;
-  } test_data[] = {
+  };
+  auto test_data = std::to_array<TestData>({
       {Boolean::New(instance_->isolate(), false).As<Value>(), false},
       {Boolean::New(instance_->isolate(), true).As<Value>(), true},
       {Number::New(instance_->isolate(), 0).As<Value>(), false},
@@ -68,9 +78,9 @@ TEST_F(ConverterTest, Bool) {
       {Object::New(instance_->isolate()).As<Value>(), true},
       {Null(instance_->isolate()).As<Value>(), false},
       {Undefined(instance_->isolate()).As<Value>(), false},
-  };
+  });
 
-  for (size_t i = 0; i < base::size(test_data); ++i) {
+  for (size_t i = 0; i < std::size(test_data); ++i) {
     bool result = false;
     EXPECT_TRUE(Converter<bool>::FromV8(instance_->isolate(),
                                         test_data[i].input, &result));
@@ -81,6 +91,54 @@ TEST_F(ConverterTest, Bool) {
                                         test_data[i].input, &result));
     EXPECT_EQ(test_data[i].expected, result);
   }
+}
+
+TEST_F(ConverterTest, String) {
+  v8::Isolate* isolate = instance_->isolate();
+
+  HandleScope handle_scope(isolate);
+
+  auto one_byte = [isolate](std::string_view latin1) {
+    return String::NewFromOneByte(
+               isolate, reinterpret_cast<const uint8_t*>(latin1.data()),
+               v8::NewStringType::kNormal, static_cast<int>(latin1.size()))
+        .ToLocalChecked();
+  };
+
+  std::string result;
+  EXPECT_FALSE(
+      Converter<std::string>::FromV8(isolate, v8::False(isolate), &result));
+
+  // One-byte ASCII strings, including a cons string that has to be flattened
+  // (the halves are long enough that Concat does not just copy them).
+  ASSERT_TRUE(
+      Converter<std::string>::FromV8(isolate, String::Empty(isolate), &result));
+  EXPECT_EQ(result, "");
+  ASSERT_TRUE(
+      Converter<std::string>::FromV8(isolate, one_byte("hello"), &result));
+  EXPECT_EQ(result, "hello");
+  ASSERT_TRUE(Converter<std::string>::FromV8(
+      isolate,
+      String::Concat(isolate, one_byte("the first half, "),
+                     one_byte("the second half")),
+      &result));
+  EXPECT_EQ(result, "the first half, the second half");
+
+  // One-byte strings outside ASCII are Latin-1 and must be re-encoded.
+  ASSERT_TRUE(
+      Converter<std::string>::FromV8(isolate, one_byte("caf\xe9"), &result));
+  EXPECT_EQ(result, "caf\xc3\xa9");
+  ASSERT_TRUE(Converter<std::string>::FromV8(
+      isolate,
+      String::Concat(isolate, one_byte("caf\xe9 au lait, "),
+                     one_byte("\xe0 la cr\xe8me")),
+      &result));
+  EXPECT_EQ(result, "caf\xc3\xa9 au lait, \xc3\xa0 la cr\xc3\xa8me");
+
+  // Two-byte string.
+  ASSERT_TRUE(Converter<std::string>::FromV8(
+      isolate, StringToV8(isolate, "\xe2\x98\x83 snowman"), &result));
+  EXPECT_EQ(result, "\xe2\x98\x83 snowman");
 }
 
 TEST_F(ConverterTest, String16) {
@@ -110,18 +168,19 @@ TEST_F(ConverterTest, String16) {
 TEST_F(ConverterTest, Int32) {
   HandleScope handle_scope(instance_->isolate());
 
-  int test_data_to[] = {-1, 0, 1};
-  for (size_t i = 0; i < base::size(test_data_to); ++i) {
+  auto test_data_to = std::to_array<int>({-1, 0, 1});
+  for (size_t i = 0; i < std::size(test_data_to); ++i) {
     EXPECT_TRUE(Converter<int32_t>::ToV8(instance_->isolate(), test_data_to[i])
                     ->StrictEquals(
-                          Integer::New(instance_->isolate(), test_data_to[i])));
+                        Integer::New(instance_->isolate(), test_data_to[i])));
   }
 
-  struct {
+  struct TestDataFrom {
     v8::Local<v8::Value> input;
     bool expect_success;
     int expected_result;
-  } test_data_from[] = {
+  };
+  auto test_data_from = std::to_array<TestDataFrom>({
       {Boolean::New(instance_->isolate(), false).As<Value>(), false, 0},
       {Boolean::New(instance_->isolate(), true).As<Value>(), false, 0},
       {Integer::New(instance_->isolate(), -1).As<Value>(), true, -1},
@@ -143,15 +202,16 @@ TEST_F(ConverterTest, Int32) {
       {Array::New(instance_->isolate()).As<Value>(), false, 0},
       {v8::Null(instance_->isolate()).As<Value>(), false, 0},
       {v8::Undefined(instance_->isolate()).As<Value>(), false, 0},
-  };
+  });
 
-  for (size_t i = 0; i < base::size(test_data_from); ++i) {
+  for (size_t i = 0; i < std::size(test_data_from); ++i) {
     int32_t result = std::numeric_limits<int32_t>::min();
     bool success = Converter<int32_t>::FromV8(instance_->isolate(),
                                               test_data_from[i].input, &result);
     EXPECT_EQ(test_data_from[i].expect_success, success) << i;
-    if (success)
+    if (success) {
       EXPECT_EQ(test_data_from[i].expected_result, result) << i;
+    }
   }
 }
 
@@ -180,7 +240,8 @@ TEST_F(ConverterTest, VectorOfVectors) {
   HandleScope handle_scope(instance_->isolate());
 
   std::vector<std::vector<int>> vector_of_vectors = {
-      {1, 2, 3}, {4, 5, 6},
+      {1, 2, 3},
+      {4, 5, 6},
   };
 
   v8::Local<v8::Value> v8_value =
@@ -194,14 +255,16 @@ namespace {
 
 class MyObject : public Wrappable<MyObject> {
  public:
-  static WrapperInfo kWrapperInfo;
+  static constexpr WrapperInfo kWrapperInfo = {{kEmbedderNativeGin},
+                                               kTestObject};
 
-  static gin::Handle<MyObject> Create(v8::Isolate* isolate) {
-    return CreateHandle(isolate, new MyObject());
+  static MyObject* Create(v8::Isolate* isolate) {
+    return cppgc::MakeGarbageCollected<MyObject>(
+        isolate->GetCppHeap()->GetAllocationHandle());
   }
-};
 
-WrapperInfo MyObject::kWrapperInfo = {kEmbedderNativeGin};
+  const WrapperInfo* wrapper_info() const override { return &kWrapperInfo; }
+};
 
 }  // namespace
 
@@ -209,8 +272,8 @@ TEST_F(ConverterTest, VectorOfWrappables) {
   v8::Isolate* isolate = instance_->isolate();
   v8::HandleScope handle_scope(isolate);
 
-  Handle<MyObject> obj = MyObject::Create(isolate);
-  std::vector<MyObject*> vector = {obj.get()};
+  MyObject* obj = MyObject::Create(isolate);
+  std::vector<MyObject*> vector = {obj};
   v8::MaybeLocal<v8::Value> maybe = ConvertToV8(isolate, vector);
   v8::Local<v8::Value> array;
   ASSERT_TRUE(maybe.ToLocal(&array));
@@ -264,6 +327,16 @@ TEST_F(ConverterTest, MoveOnlyParameters) {
   auto func = func_templ->GetFunction(context).ToLocalChecked();
   v8::Local<v8::Value> argv[] = {v8::Undefined(isolate)};
   func->Call(context, v8::Undefined(isolate), 1, argv).ToLocalChecked();
+}
+
+TEST_F(ConverterTest, VectorOfMoveOnly) {
+  v8::Isolate* isolate = instance_->isolate();
+  v8::HandleScope handle_scope(isolate);
+
+  v8::Local<v8::Value> v8_value = v8::Array::New(instance_->isolate(), 1);
+  std::vector<MoveOnlyObject> out_value;
+  ASSERT_TRUE(ConvertFromV8(instance_->isolate(), v8_value, &out_value));
+  EXPECT_EQ(out_value.size(), 1u);
 }
 
 }  // namespace gin

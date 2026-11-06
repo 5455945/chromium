@@ -31,20 +31,19 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 
 #include "base/debug/dump_without_crashing.h"
-#include "third_party/blink/renderer/bindings/core/v8/custom/v8_custom_xpath_ns_resolver.h"
 #include "third_party/blink/renderer/bindings/core/v8/idl_types.h"
 #include "third_party/blink/renderer/bindings/core/v8/native_value_traits_impl.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_controller.h"
-#include "third_party/blink/renderer/bindings/core/v8/v8_array_buffer_view.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_state_impl.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_dom_exception.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_element.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_event_target.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_html_link_element.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_object_builder.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_script_runner.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_window.h"
-#include "third_party/blink/renderer/bindings/core/v8/v8_worker_global_scope.h"
-#include "third_party/blink/renderer/bindings/core/v8/v8_worklet_global_scope.h"
-#include "third_party/blink/renderer/bindings/core/v8/v8_xpath_ns_resolver.h"
 #include "third_party/blink/renderer/bindings/core/v8/window_proxy.h"
+#include "third_party/blink/renderer/bindings/core/v8/window_proxy_manager.h"
 #include "third_party/blink/renderer/bindings/core/v8/worker_or_worklet_script_controller.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/qualified_name.h"
@@ -55,12 +54,15 @@
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/inspector/inspector_trace_events.h"
 #include "third_party/blink/renderer/core/loader/frame_loader.h"
-#include "third_party/blink/renderer/core/typed_arrays/flexible_array_buffer_view.h"
+#include "third_party/blink/renderer/core/shadow_realm/shadow_realm_global_scope.h"
+#include "third_party/blink/renderer/core/workers/worker_global_scope.h"
 #include "third_party/blink/renderer/core/workers/worker_or_worklet_global_scope.h"
-#include "third_party/blink/renderer/core/xml/xpath_ns_resolver.h"
+#include "third_party/blink/renderer/core/workers/worklet_global_scope.h"
+#include "third_party/blink/renderer/platform/bindings/exception_code.h"
 #include "third_party/blink/renderer/platform/bindings/runtime_call_stats.h"
-#include "third_party/blink/renderer/platform/bindings/v8_binding_macros.h"
+#include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/bindings/v8_object_constructor.h"
+#include "third_party/blink/renderer/platform/bindings/v8_per_isolate_data.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/traced_value.h"
 #include "third_party/blink/renderer/platform/scheduler/public/event_loop.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
@@ -85,21 +87,22 @@ void V8SetReturnValue(const v8::PropertyCallbackInfo<v8::Value>& info,
     DCHECK(descriptor.has_writable());
     info.GetReturnValue().Set(
         V8ObjectBuilder(ScriptState::ForCurrentRealm(info))
-            .Add("configurable", descriptor.configurable())
-            .Add("enumerable", descriptor.enumerable())
-            .Add("value", descriptor.value())
-            .Add("writable", descriptor.writable())
-            .V8Value());
+            .AddBoolean("configurable", descriptor.configurable())
+            .AddBoolean("enumerable", descriptor.enumerable())
+            .AddV8Value("value", descriptor.value())
+            .AddBoolean("writable", descriptor.writable())
+            .V8Object());
     return;
   }
   // Accessor property
   DCHECK(descriptor.has_get() || descriptor.has_set());
-  info.GetReturnValue().Set(V8ObjectBuilder(ScriptState::ForCurrentRealm(info))
-                                .Add("configurable", descriptor.configurable())
-                                .Add("enumerable", descriptor.enumerable())
-                                .Add("get", descriptor.get())
-                                .Add("set", descriptor.set())
-                                .V8Value());
+  info.GetReturnValue().Set(
+      V8ObjectBuilder(ScriptState::ForCurrentRealm(info))
+          .AddBoolean("configurable", descriptor.configurable())
+          .AddBoolean("enumerable", descriptor.enumerable())
+          .AddV8Value("get", descriptor.get())
+          .AddV8Value("set", descriptor.set())
+          .V8Object());
 }
 
 const int32_t kMaxInt32 = 0x7fffffff;
@@ -114,16 +117,16 @@ static double EnforceRange(double x,
                            double maximum,
                            const char* type_name,
                            ExceptionState& exception_state) {
-  if (std::isnan(x) || std::isinf(x)) {
+  if (!std::isfinite(x)) {
     exception_state.ThrowTypeError(
-        "Value is" + String(std::isinf(x) ? " infinite and" : "") +
-        " not of type '" + String(type_name) + "'.");
+        StrCat({"Value is", std::isinf(x) ? " infinite and" : "",
+                " not of type '", type_name, "'."}));
     return 0;
   }
   x = trunc(x);
   if (x < minimum || x > maximum) {
-    exception_state.ThrowTypeError("Value is outside the '" +
-                                   String(type_name) + "' value range.");
+    exception_state.ThrowTypeError(
+        StrCat({"Value is outside the '", type_name, "' value range."}));
     return 0;
   }
   return x;
@@ -182,12 +185,12 @@ static inline T ToSmallerInt(v8::Isolate* isolate,
     if (result >= LimitsTrait::kMinValue && result <= LimitsTrait::kMaxValue)
       return static_cast<T>(result);
     if (configuration == kEnforceRange) {
-      exception_state.ThrowTypeError("Value is outside the '" +
-                                     String(type_name) + "' value range.");
+      exception_state.ThrowTypeError(
+          StrCat({"Value is outside the '", type_name, "' value range."}));
       return 0;
     }
     if (configuration == kClamp)
-      return clampTo<T>(result);
+      return ClampTo<T>(result);
     result %= LimitsTrait::kNumberOfValues;
     return static_cast<T>(result > LimitsTrait::kMaxValue
                               ? result - LimitsTrait::kNumberOfValues
@@ -199,10 +202,9 @@ static inline T ToSmallerInt(v8::Isolate* isolate,
     number_object = value.As<v8::Number>();
   } else {
     // Can the value be converted to a number?
-    v8::TryCatch block(isolate);
+    TryRethrowScope rethrow_scope(isolate, exception_state);
     if (!value->ToNumber(isolate->GetCurrentContext())
              .ToLocal(&number_object)) {
-      exception_state.RethrowV8Exception(block.Exception());
       return 0;
     }
   }
@@ -218,18 +220,23 @@ static inline T ToSmallerInt(v8::Isolate* isolate,
     return 0;
 
   if (configuration == kClamp)
-    return clampTo<T>(number_value);
+    return ClampTo<T>(number_value);
 
   if (std::isinf(number_value))
     return 0;
 
+  // Confine number to (-kNumberOfValues, kNumberOfValues).
   number_value =
       number_value < 0 ? -floor(fabs(number_value)) : floor(fabs(number_value));
   number_value = fmod(number_value, LimitsTrait::kNumberOfValues);
 
-  return static_cast<T>(number_value > LimitsTrait::kMaxValue
-                            ? number_value - LimitsTrait::kNumberOfValues
-                            : number_value);
+  // Adjust range to [-kMinValue, kMaxValue].
+  if (number_value < LimitsTrait::kMinValue)
+    number_value += LimitsTrait::kNumberOfValues;
+  else if (LimitsTrait::kMaxValue < number_value)
+    number_value -= LimitsTrait::kNumberOfValues;
+
+  return static_cast<T>(number_value);
 }
 
 template <typename T>
@@ -246,12 +253,12 @@ static inline T ToSmallerUInt(v8::Isolate* isolate,
     if (result >= 0 && result <= LimitsTrait::kMaxValue)
       return static_cast<T>(result);
     if (configuration == kEnforceRange) {
-      exception_state.ThrowTypeError("Value is outside the '" +
-                                     String(type_name) + "' value range.");
+      exception_state.ThrowTypeError(
+          StrCat({"Value is outside the '", type_name, "' value range."}));
       return 0;
     }
     if (configuration == kClamp)
-      return clampTo<T>(result);
+      return ClampTo<T>(result);
     return static_cast<T>(result);
   }
 
@@ -260,10 +267,9 @@ static inline T ToSmallerUInt(v8::Isolate* isolate,
     number_object = value.As<v8::Number>();
   } else {
     // Can the value be converted to a number?
-    v8::TryCatch block(isolate);
+    TryRethrowScope rethrow_scope(isolate, exception_state);
     if (!value->ToNumber(isolate->GetCurrentContext())
              .ToLocal(&number_object)) {
-      exception_state.RethrowV8Exception(block.Exception());
       return 0;
     }
   }
@@ -280,7 +286,7 @@ static inline T ToSmallerUInt(v8::Isolate* isolate,
     return 0;
 
   if (configuration == kClamp)
-    return clampTo<T>(number_value);
+    return ClampTo<T>(number_value);
 
   if (std::isinf(number_value))
     return 0;
@@ -333,10 +339,9 @@ int32_t ToInt32Slow(v8::Isolate* isolate,
                     ExceptionState& exception_state) {
   DCHECK(!value->IsInt32());
   // Can the value be converted to a number?
-  v8::TryCatch block(isolate);
+  TryRethrowScope rethrow_scope(isolate, exception_state);
   v8::Local<v8::Number> number_object;
   if (!value->ToNumber(isolate->GetCurrentContext()).ToLocal(&number_object)) {
-    exception_state.RethrowV8Exception(block.Exception());
     return 0;
   }
 
@@ -352,14 +357,13 @@ int32_t ToInt32Slow(v8::Isolate* isolate,
     return 0;
 
   if (configuration == kClamp)
-    return clampTo<int32_t>(number_value);
+    return ClampTo<int32_t>(number_value);
 
   if (std::isinf(number_value))
     return 0;
 
   int32_t result;
   if (!number_object->Int32Value(isolate->GetCurrentContext()).To(&result)) {
-    exception_state.RethrowV8Exception(block.Exception());
     return 0;
   }
   return result;
@@ -381,14 +385,13 @@ uint32_t ToUInt32Slow(v8::Isolate* isolate,
       return 0;
     }
     DCHECK_EQ(configuration, kClamp);
-    return clampTo<uint32_t>(result);
+    return ClampTo<uint32_t>(result);
   }
 
   // Can the value be converted to a number?
-  v8::TryCatch block(isolate);
+  TryRethrowScope rethrow_scope(isolate, exception_state);
   v8::Local<v8::Number> number_object;
   if (!value->ToNumber(isolate->GetCurrentContext()).ToLocal(&number_object)) {
-    exception_state.RethrowV8Exception(block.Exception());
     return 0;
   }
   DCHECK(!number_object.IsEmpty());
@@ -404,14 +407,13 @@ uint32_t ToUInt32Slow(v8::Isolate* isolate,
     return 0;
 
   if (configuration == kClamp)
-    return clampTo<uint32_t>(number_value);
+    return ClampTo<uint32_t>(number_value);
 
   if (std::isinf(number_value))
     return 0;
 
   uint32_t result;
   if (!number_object->Uint32Value(isolate->GetCurrentContext()).To(&result)) {
-    exception_state.RethrowV8Exception(block.Exception());
     return 0;
   }
   return result;
@@ -425,9 +427,8 @@ int64_t ToInt64Slow(v8::Isolate* isolate,
 
   v8::Local<v8::Number> number_object;
   // Can the value be converted to a number?
-  v8::TryCatch block(isolate);
+  TryRethrowScope rethrow_scope(isolate, exception_state);
   if (!value->ToNumber(isolate->GetCurrentContext()).ToLocal(&number_object)) {
-    exception_state.RethrowV8Exception(block.Exception());
     return 0;
   }
   DCHECK(!number_object.IsEmpty());
@@ -437,6 +438,14 @@ int64_t ToInt64Slow(v8::Isolate* isolate,
   if (configuration == kEnforceRange) {
     return EnforceRange(number_value, -kJSMaxInteger, kJSMaxInteger,
                         "long long", exception_state);
+  }
+  if (std::isnan(number_value)) {
+    return 0;
+  }
+
+  if (configuration == kClamp) {
+    return ClampTo<int64_t>(std::nearbyint(number_value), -kJSMaxInteger,
+                            kJSMaxInteger);
   }
 
   return DoubleToInteger(number_value);
@@ -458,14 +467,13 @@ uint64_t ToUInt64Slow(v8::Isolate* isolate,
       return 0;
     }
     DCHECK_EQ(configuration, kClamp);
-    return clampTo<uint64_t>(result);
+    return ClampTo<uint64_t>(result);
   }
 
   v8::Local<v8::Number> number_object;
   // Can the value be converted to a number?
-  v8::TryCatch block(isolate);
+  TryRethrowScope rethrow_scope(isolate, exception_state);
   if (!value->ToNumber(isolate->GetCurrentContext()).ToLocal(&number_object)) {
-    exception_state.RethrowV8Exception(block.Exception());
     return 0;
   }
   DCHECK(!number_object.IsEmpty());
@@ -480,8 +488,9 @@ uint64_t ToUInt64Slow(v8::Isolate* isolate,
   if (std::isnan(number_value))
     return 0;
 
-  if (configuration == kClamp)
-    return clampTo<uint64_t>(number_value);
+  if (configuration == kClamp) {
+    return ClampTo<uint64_t>(std::nearbyint(number_value), 0, kJSMaxInteger);
+  }
 
   return DoubleToInteger(number_value);
 }
@@ -503,10 +512,9 @@ double ToDoubleSlow(v8::Isolate* isolate,
                     v8::Local<v8::Value> value,
                     ExceptionState& exception_state) {
   DCHECK(!value->IsNumber());
-  v8::TryCatch block(isolate);
+  TryRethrowScope rethrow_scope(isolate, exception_state);
   v8::Local<v8::Number> number_value;
   if (!value->ToNumber(isolate->GetCurrentContext()).ToLocal(&number_value)) {
-    exception_state.RethrowV8Exception(block.Exception());
     return 0;
   }
   return number_value->Value();
@@ -528,13 +536,13 @@ double ToRestrictedDouble(v8::Isolate* isolate,
 static bool HasUnmatchedSurrogates(const String& string) {
   // By definition, 8-bit strings are confined to the Latin-1 code page and
   // have no surrogates, matched or otherwise.
-  if (string.IsEmpty() || string.Is8Bit())
+  if (string.empty() || string.Is8Bit())
     return false;
 
-  const UChar* characters = string.Characters16();
-  const unsigned length = string.length();
+  auto characters = string.Span16();
+  const size_t length = characters.size();
 
-  for (unsigned i = 0; i < length; ++i) {
+  for (size_t i = 0; i < length; ++i) {
     UChar c = characters[i];
     if (U16_IS_SINGLE(c))
       continue;
@@ -553,7 +561,7 @@ static bool HasUnmatchedSurrogates(const String& string) {
 
 // Replace unmatched surrogates with REPLACEMENT CHARACTER U+FFFD.
 String ReplaceUnmatchedSurrogates(String string) {
-  // This roughly implements http://heycam.github.io/webidl/#dfn-obtain-unicode
+  // This roughly implements https://webidl.spec.whatwg.org/#dfn-obtain-unicode
   // but since Blink strings are 16-bits internally, the output is simply
   // re-encoded to UTF-16.
 
@@ -566,17 +574,17 @@ String ReplaceUnmatchedSurrogates(String string) {
   DCHECK(!string.Is8Bit());
 
   // 1. Let S be the DOMString value.
-  const UChar* s = string.Characters16();
+  const auto s = string.Span16();
 
   // 2. Let n be the length of S.
-  const unsigned n = string.length();
+  const size_t n = s.size();
 
   // 3. Initialize i to 0.
-  unsigned i = 0;
+  size_t i = 0;
 
   // 4. Initialize U to be an empty sequence of Unicode characters.
-  StringBuffer<UChar> result(n);
-  UChar* u = result.Characters();
+  StringBuffer<UChar> result(static_cast<wtf_size_t>(n));
+  auto u = result.Span();
 
   // 5. While i < n:
   while (i < n) {
@@ -590,13 +598,13 @@ String ReplaceUnmatchedSurrogates(String string) {
     } else if (U16_IS_TRAIL(c)) {
       // 0xDC00 <= c <= 0xDFFF
       // Append to U a U+FFFD REPLACEMENT CHARACTER.
-      u[i] = kReplacementCharacter;
+      u[i] = uchar::kReplacementCharacter;
     } else {
       // 0xD800 <= c <= 0xDBFF
       DCHECK(U16_IS_LEAD(c));
       if (i == n - 1) {
         // 1. If i = n-1, then append to U a U+FFFD REPLACEMENT CHARACTER.
-        u[i] = kReplacementCharacter;
+        u[i] = uchar::kReplacementCharacter;
       } else {
         // 2. Otherwise, i < n-1:
         DCHECK_LT(i, n - 1);
@@ -613,7 +621,7 @@ String ReplaceUnmatchedSurrogates(String string) {
         } else {
           // 3. Otherwise, d < 0xDC00 or d > 0xDFFF. Append to U a U+FFFD
           //    REPLACEMENT CHARACTER.
-          u[i] = kReplacementCharacter;
+          u[i] = uchar::kReplacementCharacter;
         }
       }
     }
@@ -626,27 +634,22 @@ String ReplaceUnmatchedSurrogates(String string) {
   return String::Adopt(result);
 }
 
-XPathNSResolver* ToXPathNSResolver(ScriptState* script_state,
-                                   v8::Local<v8::Value> value) {
-  XPathNSResolver* resolver = nullptr;
-  if (V8XPathNSResolver::HasInstance(value, script_state->GetIsolate())) {
-    resolver = V8XPathNSResolver::ToImpl(v8::Local<v8::Object>::Cast(value));
-  } else if (value->IsObject()) {
-    resolver = MakeGarbageCollected<V8CustomXPathNSResolver>(
-        script_state, value.As<v8::Object>());
-  }
-  return resolver;
+LocalDOMWindow* ToLocalDOMWindow(const ScriptState* script_state) {
+  return DynamicTo<LocalDOMWindow>(ToExecutionContext(script_state));
 }
 
-DOMWindow* ToDOMWindow(v8::Isolate* isolate, v8::Local<v8::Value> value) {
-  return V8Window::ToImplWithTypeCheck(isolate, value);
+ExecutionContext* ToExecutionContext(const ScriptState* script_state) {
+  RUNTIME_CALL_TIMER_SCOPE_DISABLED_BY_DEFAULT(
+      script_state->GetIsolate(),
+      RuntimeCallStats::CounterId::kToExecutionContext);
+  return static_cast<const ScriptStateImpl*>(script_state)
+      ->GetExecutionContext();
 }
 
 LocalDOMWindow* ToLocalDOMWindow(v8::Local<v8::Context> context) {
   if (context.IsEmpty())
     return nullptr;
-  return To<LocalDOMWindow>(
-      ToDOMWindow(context->GetIsolate(), context->Global()));
+  return DynamicTo<LocalDOMWindow>(ToExecutionContext(context));
 }
 
 LocalDOMWindow* EnteredDOMWindow(v8::Isolate* isolate) {
@@ -667,37 +670,10 @@ LocalDOMWindow* CurrentDOMWindow(v8::Isolate* isolate) {
 }
 
 ExecutionContext* ToExecutionContext(v8::Local<v8::Context> context) {
-  // TODO(jgruber,crbug.com/v8/10460): Change this back to a DCHECK once the
-  // crash has been flushed out.
-  CHECK(!context.IsEmpty());
-
-  RUNTIME_CALL_TIMER_SCOPE(context->GetIsolate(),
-                           RuntimeCallStats::CounterId::kToExecutionContext);
-
-  v8::Local<v8::Object> global_proxy = context->Global();
-
-  // TODO(jgruber,crbug.com/v8/10460): Change these back to a DCHECK once the
-  // crash has been flushed out.
-  CHECK(!global_proxy.IsEmpty());
-  CHECK(global_proxy->IsObject());
-
-  // There are several contexts other than Window, WorkerGlobalScope or
-  // WorkletGlobalScope but entering into ToExecutionContext, namely GC context,
-  // DevTools' context (debug context), and maybe more.  They all don't have
-  // any internal field.
-  if (global_proxy->InternalFieldCount() == 0)
-    return nullptr;
-
-  const WrapperTypeInfo* wrapper_type_info = ToWrapperTypeInfo(global_proxy);
-  if (wrapper_type_info->Equals(V8Window::GetWrapperTypeInfo()))
-    return V8Window::ToImpl(global_proxy)->GetExecutionContext();
-  if (wrapper_type_info->IsSubclass(V8WorkerGlobalScope::GetWrapperTypeInfo()))
-    return V8WorkerGlobalScope::ToImpl(global_proxy)->GetExecutionContext();
-  if (wrapper_type_info->IsSubclass(V8WorkletGlobalScope::GetWrapperTypeInfo()))
-    return V8WorkletGlobalScope::ToImpl(global_proxy)->GetExecutionContext();
-
-  NOTREACHED();
-  return nullptr;
+  DCHECK(!context.IsEmpty());
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
+  ScriptState* script_state = ScriptState::MaybeFrom(isolate, context);
+  return script_state ? ToExecutionContext(script_state) : nullptr;
 }
 
 ExecutionContext* CurrentExecutionContext(v8::Isolate* isolate) {
@@ -714,16 +690,6 @@ LocalFrame* ToLocalFrameIfNotDetached(v8::Local<v8::Context> context) {
   return nullptr;
 }
 
-void ToFlexibleArrayBufferView(v8::Isolate* isolate,
-                               v8::Local<v8::Value> value,
-                               FlexibleArrayBufferView& result) {
-  if (!value->IsArrayBufferView()) {
-    result.Clear();
-    return;
-  }
-  result.SetContents(value.As<v8::ArrayBufferView>());
-}
-
 static ScriptState* ToScriptStateImpl(LocalFrame* frame,
                                       DOMWrapperWorld& world) {
   if (!frame)
@@ -731,7 +697,8 @@ static ScriptState* ToScriptStateImpl(LocalFrame* frame,
   v8::Local<v8::Context> context = ToV8ContextEvenIfDetached(frame, world);
   if (context.IsEmpty())
     return nullptr;
-  ScriptState* script_state = ScriptState::From(context);
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
+  ScriptState* script_state = ScriptState::From(isolate, context);
   if (!script_state->ContextIsValid())
     return nullptr;
   DCHECK_EQ(frame, ToLocalFrameIfNotDetached(context));
@@ -746,8 +713,10 @@ v8::Local<v8::Context> ToV8Context(ExecutionContext* context,
       return ToV8Context(frame, world);
   } else if (auto* scope = DynamicTo<WorkerOrWorkletGlobalScope>(context)) {
     if (WorkerOrWorkletScriptController* script = scope->ScriptController()) {
-      if (script->GetScriptState()->ContextIsValid())
-        return script->GetScriptState()->GetContext();
+      if (ScriptState* script_state = script->GetScriptState()) {
+        if (script_state->ContextIsValid())
+          return script_state->GetContext();
+      }
     }
   }
   return v8::Local<v8::Context>();
@@ -760,6 +729,8 @@ v8::Local<v8::Context> ToV8Context(LocalFrame* frame, DOMWrapperWorld& world) {
   return script_state->GetContext();
 }
 
+// TODO(ishell): return ScriptState* in order to avoid unnecessary hops
+// script_state -> context -> script_state on caller side.
 v8::Local<v8::Context> ToV8ContextEvenIfDetached(LocalFrame* frame,
                                                  DOMWrapperWorld& world) {
   // TODO(yukishiino): this method probably should not force context creation,
@@ -769,7 +740,8 @@ v8::Local<v8::Context> ToV8ContextEvenIfDetached(LocalFrame* frame,
   // TODO(crbug.com/1046282): The following bailout is a temporary fix
   // introduced due to crbug.com/1037985 .  Remove this temporary fix once
   // the root cause is fixed.
-  if (frame->IsProvisional()) {
+  if (!frame->IsDetached() && frame->IsProvisional()) {
+    DCHECK(false);
     base::debug::DumpWithoutCrashing();
     return v8::Local<v8::Context>();
   }
@@ -777,13 +749,37 @@ v8::Local<v8::Context> ToV8ContextEvenIfDetached(LocalFrame* frame,
   return frame->WindowProxy(world)->ContextIfInitialized();
 }
 
+v8::Local<v8::Context> ToV8ContextMaybeEmpty(LocalFrame* frame,
+                                             DOMWrapperWorld& world) {
+  DCHECK(frame);
+
+  // TODO(crbug.com/1046282): The following bailout is a temporary fix
+  // introduced due to crbug.com/1037985 .  Remove this temporary fix once
+  // the root cause is fixed.
+  if (frame->IsProvisional()) {
+    DCHECK(false);
+    base::debug::DumpWithoutCrashing();
+    return v8::Local<v8::Context>();
+  }
+  DCHECK(frame->WindowProxyMaybeUninitialized(world));
+  v8::Local<v8::Context> context =
+      frame->WindowProxyMaybeUninitialized(world)->ContextIfInitialized();
+
+  DCHECK(context.IsEmpty() || frame == ToLocalFrameIfNotDetached(context));
+  return context;
+}
+
 ScriptState* ToScriptState(ExecutionContext* context, DOMWrapperWorld& world) {
   DCHECK(context);
   if (LocalDOMWindow* window = DynamicTo<LocalDOMWindow>(context)) {
     return ToScriptState(window->GetFrame(), world);
   } else if (auto* scope = DynamicTo<WorkerOrWorkletGlobalScope>(context)) {
-    if (WorkerOrWorkletScriptController* script = scope->ScriptController())
-      return script->GetScriptState();
+    if (WorkerOrWorkletScriptController* script = scope->ScriptController()) {
+      if (ScriptState* script_state = script->GetScriptState()) {
+        if (script_state->ContextIsValid())
+          return script_state;
+      }
+    }
   }
   return nullptr;
 }
@@ -796,90 +792,18 @@ ScriptState* ToScriptState(LocalFrame* frame, DOMWrapperWorld& world) {
 }
 
 ScriptState* ToScriptStateForMainWorld(LocalFrame* frame) {
-  return ToScriptState(frame, DOMWrapperWorld::MainWorld());
+  if (!frame) {
+    return nullptr;
+  }
+  auto* isolate = ToIsolate(frame);
+  v8::HandleScope handle_scope(isolate);
+  return ToScriptStateImpl(frame, DOMWrapperWorld::MainWorld(isolate));
 }
 
-bool IsValidEnum(const String& value,
-                 const char* const* valid_values,
-                 size_t length,
-                 const String& enum_name,
-                 ExceptionState& exception_state) {
-  for (size_t i = 0; i < length; ++i) {
-    // Avoid the strlen inside String::operator== (because of the StringView).
-    if (WTF::Equal(value.Impl(), valid_values[i]))
-      return true;
-  }
-  exception_state.ThrowTypeError("The provided value '" + value +
-                                 "' is not a valid enum value of type " +
-                                 enum_name + ".");
-  return false;
-}
-
-bool IsValidEnum(const Vector<String>& values,
-                 const char* const* valid_values,
-                 size_t length,
-                 const String& enum_name,
-                 ExceptionState& exception_state) {
-  for (auto value : values) {
-    if (!IsValidEnum(value, valid_values, length, enum_name, exception_state))
-      return false;
-  }
-  return true;
-}
-
-v8::Local<v8::Function> GetEsIteratorMethod(v8::Isolate* isolate,
-                                            v8::Local<v8::Object> object,
-                                            ExceptionState& exception_state) {
-  const v8::Local<v8::Value> key = v8::Symbol::GetIterator(isolate);
-
-  v8::TryCatch try_catch(isolate);
-  v8::Local<v8::Value> iterator_method;
-  if (!object->Get(isolate->GetCurrentContext(), key)
-           .ToLocal(&iterator_method)) {
-    exception_state.RethrowV8Exception(try_catch.Exception());
-    return v8::Local<v8::Function>();
-  }
-
-  if (iterator_method->IsNullOrUndefined())
-    return v8::Local<v8::Function>();
-
-  if (!iterator_method->IsFunction()) {
-    exception_state.ThrowTypeError("Iterator must be callable function");
-    return v8::Local<v8::Function>();
-  }
-
-  return iterator_method.As<v8::Function>();
-}
-
-v8::Local<v8::Object> GetEsIteratorWithMethod(
-    v8::Isolate* isolate,
-    v8::Local<v8::Function> getter_function,
-    v8::Local<v8::Object> object,
-    ExceptionState& exception_state) {
-  v8::TryCatch block(isolate);
-  v8::Local<v8::Value> iterator;
-  if (!V8ScriptRunner::CallFunction(
-           getter_function, ToExecutionContext(isolate->GetCurrentContext()),
-           object, 0, nullptr, isolate)
-           .ToLocal(&iterator)) {
-    exception_state.RethrowV8Exception(block.Exception());
-    return v8::Local<v8::Object>();
-  }
-  if (!iterator->IsObject()) {
-    exception_state.ThrowTypeError("Iterator is not an object.");
-    return v8::Local<v8::Object>();
-  }
-  return iterator.As<v8::Object>();
-}
-
-bool HasCallableIteratorSymbol(v8::Isolate* isolate,
-                               v8::Local<v8::Value> value,
-                               ExceptionState& exception_state) {
-  if (!value->IsObject())
-    return false;
-  v8::Local<v8::Function> iterator_method =
-      GetEsIteratorMethod(isolate, value.As<v8::Object>(), exception_state);
-  return !iterator_method.IsEmpty();
+ScriptState* ToScriptStateForMainWorld(ExecutionContext* context) {
+  DCHECK(context);
+  return ToScriptState(context,
+                       DOMWrapperWorld::MainWorld(context->GetIsolate()));
 }
 
 v8::Isolate* ToIsolate(const LocalFrame* frame) {
@@ -887,18 +811,14 @@ v8::Isolate* ToIsolate(const LocalFrame* frame) {
   return frame->GetWindowProxyManager()->GetIsolate();
 }
 
-v8::Local<v8::Value> FromJSONString(v8::Isolate* isolate,
-                                    v8::Local<v8::Context> context,
+v8::Local<v8::Value> FromJSONString(ScriptState* script_state,
                                     const String& stringified_json,
-                                    ExceptionState& exception_state) {
+                                    std::optional<v8::ScriptOrigin> origin) {
+  auto v8_string = V8String(script_state->GetIsolate(), stringified_json);
   v8::Local<v8::Value> parsed;
-  v8::TryCatch try_catch(isolate);
-  if (!v8::JSON::Parse(context, V8String(isolate, stringified_json))
-           .ToLocal(&parsed)) {
-    if (try_catch.HasCaught())
-      exception_state.RethrowV8Exception(try_catch.Exception());
-  }
 
+  std::ignore = v8::JSON::Parse(script_state->GetContext(), v8_string, origin)
+                    .ToLocal(&parsed);
   return parsed;
 }
 
@@ -908,11 +828,10 @@ Vector<String> GetOwnPropertyNames(v8::Isolate* isolate,
   if (object.IsEmpty())
     return Vector<String>();
 
-  v8::TryCatch try_catch(isolate);
+  TryRethrowScope rethrow_scope(isolate, exception_state);
   v8::Local<v8::Array> property_names;
   if (!object->GetOwnPropertyNames(isolate->GetCurrentContext())
            .ToLocal(&property_names)) {
-    exception_state.RethrowV8Exception(try_catch.Exception());
     return Vector<String>();
   }
 
@@ -928,6 +847,71 @@ v8::MicrotaskQueue* ToMicrotaskQueue(ExecutionContext* execution_context) {
 
 v8::MicrotaskQueue* ToMicrotaskQueue(ScriptState* script_state) {
   return ToMicrotaskQueue(ExecutionContext::From(script_state));
+}
+
+scheduler::EventLoop& ToEventLoop(ExecutionContext* execution_context) {
+  DCHECK(execution_context);
+  return *execution_context->GetAgent()->event_loop();
+}
+
+scheduler::EventLoop& ToEventLoop(ScriptState* script_state) {
+  return ToEventLoop(ExecutionContext::From(script_state));
+}
+
+bool IsInParallelAlgorithmRunnable(ExecutionContext* execution_context,
+                                   ScriptState* script_state) {
+  if (!execution_context || execution_context->IsContextDestroyed())
+    return false;
+
+  // It's possible that execution_context is the one of the
+  // document tree (i.e. the execution context of the document
+  // that the receiver object currently belongs to) and
+  // script_state is the one of the receiver object's creation
+  // context (i.e. the script state of the V8 context in which
+  // the receiver object was created). So, check the both contexts.
+  // TODO(yukishiino): Find the necessary and sufficient conditions of the
+  // runnability.
+  if (!script_state->ContextIsValid())
+    return false;
+
+  return true;
+}
+
+void ApplyContextToException(ScriptState* script_state,
+                             v8::Local<v8::Value> exception,
+                             v8::ExceptionContext type,
+                             const char* class_name,
+                             const String& property_name) {
+  ApplyContextToException(script_state->GetIsolate(),
+                          script_state->GetContext(), exception, type,
+                          class_name, property_name);
+}
+
+void ApplyContextToException(v8::Isolate* isolate,
+                             v8::Local<v8::Context> context,
+                             v8::Local<v8::Value> exception,
+                             v8::ExceptionContext type,
+                             const char* class_name,
+                             const String& property_name) {
+  ExceptionCode code = 0;
+  if (auto* dom_exception = V8DOMException::ToWrappable(isolate, exception)) {
+    dom_exception->AddContextToMessages(type, class_name, property_name);
+    code = dom_exception->code();
+  } else if (exception->IsObject()) {
+    v8::TryCatch try_catch(isolate);
+    v8::Local<v8::String> message_key = V8String(isolate, "message");
+    auto exception_object = exception.As<v8::Object>();
+    String updated_message = ExceptionMessages::AddContextToMessage(
+        type, class_name, property_name,
+        ToCoreString(isolate, exception_object->Get(context, message_key)
+                                  .ToLocalChecked()
+                                  ->ToString(context)
+                                  .ToLocalChecked()));
+    std::ignore = exception_object->CreateDataProperty(
+        context, message_key, V8String(isolate, updated_message));
+  }
+  V8PerIsolateData::From(isolate)->SetLastExceptionInfo(type, class_name,
+                                                        property_name, code);
 }
 
 }  // namespace blink

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,21 +9,26 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/check.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/ref_counted.h"
+#include "base/memory/ref_counted_delete_on_sequence.h"
 #include "base/sequence_checker.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/task/task_traits.h"
+#include "base/task/thread_pool.h"
 #include "base/threading/thread.h"
-#include "base/win/windows_types.h"
-#include "base/win/wrapped_window_proc.h"
-#include "chrome/browser/lifetime/application_lifetime.h"
+#include "chrome/browser/lifetime/application_lifetime_desktop.h"
 #include "chrome/browser/ui/views/status_icons/status_icon_win.h"
 #include "chrome/browser/ui/views/status_icons/status_tray_state_changer_win.h"
 #include "chrome/common/chrome_constants.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/geometry/point.h"
-#include "ui/gfx/win/hwnd_util.h"
+#include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/win/window_impl.h"
 
 static const UINT kStatusIconMessage = WM_APP + 1;
 
@@ -48,14 +53,20 @@ class StatusTrayStateChangerProxyImpl : public StatusTrayStateChangerProxy {
     worker_thread_.init_com_with_mta(false);
   }
 
+  StatusTrayStateChangerProxyImpl(const StatusTrayStateChangerProxyImpl&) =
+      delete;
+  StatusTrayStateChangerProxyImpl& operator=(
+      const StatusTrayStateChangerProxyImpl&) = delete;
+
   ~StatusTrayStateChangerProxyImpl() override {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   }
 
   void EnqueueChange(UINT icon_id, HWND window) override {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    if (pending_requests_ == 0)
+    if (pending_requests_ == 0) {
       worker_thread_.Start();
+    }
 
     ++pending_requests_;
     worker_thread_.task_runner()->PostTaskAndReply(
@@ -80,10 +91,11 @@ class StatusTrayStateChangerProxyImpl : public StatusTrayStateChangerProxy {
   // Called on UI thread.
   void ChangeDone() {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    DCHECK_GT(pending_requests_, 0);
+    CHECK_GT(pending_requests_, 0, base::NotFatalUntil::M162);
 
-    if (--pending_requests_ == 0)
+    if (--pending_requests_ == 0) {
       worker_thread_.Stop();
+    }
   }
 
  private:
@@ -93,67 +105,90 @@ class StatusTrayStateChangerProxyImpl : public StatusTrayStateChangerProxy {
   SEQUENCE_CHECKER(sequence_checker_);
 
   base::WeakPtrFactory<StatusTrayStateChangerProxyImpl> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(StatusTrayStateChangerProxyImpl);
 };
+
+// WindowImpl shares its registered window class across instances, including
+// when a new tray is created before an old tray's Shell requests finish.
+class StatusTrayWin::Window::MessageWindow : public gfx::WindowImpl {
+ public:
+  explicit MessageWindow(StatusTrayWin* tray)
+      : WindowImpl("StatusTrayWin"), tray_(tray) {
+    set_window_class_name(chrome::kStatusTrayWindowClass);
+    set_initial_class_style(0);
+    // Message-only windows do not receive the TaskbarCreated broadcast.
+    set_window_style(WS_POPUP);
+    Init(nullptr, gfx::Rect());
+  }
+
+  ~MessageWindow() override {
+    ClearUserData();
+    DestroyWindow(hwnd());
+  }
+
+  void Detach() { tray_ = nullptr; }
+
+ private:
+  BOOL ProcessWindowMessage(HWND window,
+                            UINT message,
+                            WPARAM wparam,
+                            LPARAM lparam,
+                            LRESULT& result,
+                            DWORD msg_map_id) override {
+    if (!tray_) {
+      return FALSE;
+    }
+    result = tray_->WndProc(window, message, wparam, lparam);
+    return TRUE;
+  }
+
+  raw_ptr<StatusTrayWin> tray_;
+};
+
+StatusTrayWin::Window::Window(StatusTrayWin* tray)
+    : base::RefCountedDeleteOnSequence<Window>(
+          base::SingleThreadTaskRunner::GetCurrentDefault()),
+      message_window_(std::make_unique<MessageWindow>(tray)),
+      hwnd_(message_window_->hwnd()),
+      task_runner_(base::ThreadPool::CreateSequencedTaskRunner(
+          {base::MayBlock(),
+           // Do not let an unresponsive Shell block browser shutdown. Requests
+           // that have not started are skipped, including icon removal. A
+           // skipped removal may leave a stale tray icon until the Shell
+           // refreshes it. Running requests retain their resources but are not
+           // waited on during shutdown.
+           base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN})) {}
+
+StatusTrayWin::Window::~Window() {
+  CHECK(owning_task_runner()->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M163);
+}
+
+void StatusTrayWin::Window::Detach() {
+  CHECK(owning_task_runner()->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M163);
+  message_window_->Detach();
+}
 
 StatusTrayWin::StatusTrayWin()
     : next_icon_id_(1),
-      atom_(0),
-      instance_(NULL),
-      window_(NULL) {
-  // Register our window class
-  WNDCLASSEX window_class;
-  base::win::InitializeWindowClass(
-      chrome::kStatusTrayWindowClass,
-      &base::win::WrappedWindowProc<StatusTrayWin::WndProcStatic>,
-      0, 0, 0, NULL, NULL, NULL, NULL, NULL,
-      &window_class);
-  instance_ = window_class.hInstance;
-  atom_ = RegisterClassEx(&window_class);
-  CHECK(atom_);
-
-  // If the taskbar is re-created after we start up, we have to rebuild all of
-  // our icons.
-  taskbar_created_message_ = RegisterWindowMessage(TEXT("TaskbarCreated"));
-
-  // Create an offscreen window for handling messages for the status icons. We
-  // create a hidden WS_POPUP window instead of an HWND_MESSAGE window, because
-  // only top-level windows such as popups can receive broadcast messages like
-  // "TaskbarCreated".
-  window_ = CreateWindow(MAKEINTATOM(atom_),
-                         0, WS_POPUP, 0, 0, 0, 0, 0, 0, instance_, 0);
-  gfx::CheckWindowCreated(window_, ::GetLastError());
-  gfx::SetWindowUserData(window_, this);
+      taskbar_created_message_(RegisterWindowMessage(L"TaskbarCreated")) {
+  window_ = base::MakeRefCounted<Window>(this);
 }
 
 StatusTrayWin::~StatusTrayWin() {
-  if (window_)
-    DestroyWindow(window_);
-
-  if (atom_)
-    UnregisterClass(MAKEINTATOM(atom_), instance_);
+  // Requests retain the HWND, but must no longer dispatch to this object.
+  // The last request releases the window back to its creating UI sequence.
+  window_->Detach();
 }
 
 void StatusTrayWin::UpdateIconVisibilityInBackground(
     StatusIconWin* status_icon) {
-  if (!state_changer_proxy_.get())
+  if (!state_changer_proxy_.get()) {
     state_changer_proxy_ = std::make_unique<StatusTrayStateChangerProxyImpl>();
+  }
 
   state_changer_proxy_->EnqueueChange(status_icon->icon_id(),
                                       status_icon->window());
-}
-
-LRESULT CALLBACK StatusTrayWin::WndProcStatic(HWND hwnd,
-                                              UINT message,
-                                              WPARAM wparam,
-                                              LPARAM lparam) {
-  StatusTrayWin* msg_wnd = reinterpret_cast<StatusTrayWin*>(
-      GetWindowLongPtr(hwnd, GWLP_USERDATA));
-  if (msg_wnd)
-    return msg_wnd->WndProc(hwnd, message, wparam, lparam);
-  else
-    return ::DefWindowProc(hwnd, message, wparam, lparam);
 }
 
 LRESULT CALLBACK StatusTrayWin::WndProc(HWND hwnd,
@@ -162,9 +197,8 @@ LRESULT CALLBACK StatusTrayWin::WndProc(HWND hwnd,
                                         LPARAM lparam) {
   if (message == taskbar_created_message_) {
     // We need to reset all of our icons because the taskbar went away.
-    for (StatusIcons::const_iterator i(status_icons().begin());
-         i != status_icons().end(); ++i) {
-      StatusIconWin* win_icon = static_cast<StatusIconWin*>(i->get());
+    for (const auto& i : status_icons()) {
+      auto* win_icon = static_cast<StatusIconWin*>(i.icon.get());
       win_icon->ResetIcon();
     }
     return TRUE;
@@ -172,10 +206,8 @@ LRESULT CALLBACK StatusTrayWin::WndProc(HWND hwnd,
     StatusIconWin* win_icon = nullptr;
 
     // Find the selected status icon.
-    for (StatusIcons::const_iterator i(status_icons().begin());
-         i != status_icons().end();
-         ++i) {
-      StatusIconWin* current_win_icon = static_cast<StatusIconWin*>(i->get());
+    for (const auto& i : status_icons()) {
+      auto* current_win_icon = static_cast<StatusIconWin*>(i.icon.get());
       if (current_win_icon->icon_id() == wparam) {
         win_icon = current_win_icon;
         break;
@@ -185,8 +217,9 @@ LRESULT CALLBACK StatusTrayWin::WndProc(HWND hwnd,
     // It is possible for this procedure to be called with an obsolete icon
     // id.  In that case we should just return early before handling any
     // actions.
-    if (!win_icon)
+    if (!win_icon) {
       return TRUE;
+    }
 
     switch (lparam) {
       case TB_INDETERMINATE:
@@ -198,8 +231,7 @@ LRESULT CALLBACK StatusTrayWin::WndProc(HWND hwnd,
       case WM_CONTEXTMENU:
         // Walk our icons, find which one was clicked on, and invoke its
         // HandleClickEvent() method.
-        gfx::Point cursor_pos(
-            display::Screen::GetScreen()->GetCursorScreenPoint());
+        gfx::Point cursor_pos(display::Screen::Get()->GetCursorScreenPoint());
         win_icon->HandleClickEvent(cursor_pos, lparam == WM_LBUTTONDOWN);
         return TRUE;
     }
@@ -217,13 +249,14 @@ std::unique_ptr<StatusIcon> StatusTrayWin::CreatePlatformStatusIcon(
     const gfx::ImageSkia& image,
     const std::u16string& tool_tip) {
   UINT next_icon_id;
-  if (type == StatusTray::OTHER_ICON)
+  if (type == StatusTray::OTHER_ICON) {
     next_icon_id = NextIconId();
-  else
+  } else {
     next_icon_id = ReservedIconId(type);
+  }
 
-  auto icon = std::make_unique<StatusIconWin>(this, next_icon_id, window_,
-                                              kStatusIconMessage);
+  auto icon = std::make_unique<StatusIconWin>(
+      weak_factory_.GetWeakPtr(), next_icon_id, window_, kStatusIconMessage);
 
   icon->SetImage(image);
   icon->SetToolTip(tool_tip);

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,9 @@
 
 #include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 ExtensionWebRequestTimeTracker::RequestTimeLog::RequestTimeLog() = default;
 ExtensionWebRequestTimeTracker::RequestTimeLog::~RequestTimeLog() = default;
@@ -19,8 +22,9 @@ void ExtensionWebRequestTimeTracker::LogRequestStartTime(
     bool has_listener,
     bool has_extra_headers_listener) {
   auto iter = request_time_logs_.find(request_id);
-  if (iter != request_time_logs_.end())
+  if (iter != request_time_logs_.end()) {
     return;
+  }
 
   RequestTimeLog& log = request_time_logs_[request_id];
   log.request_start_time = start_time;
@@ -28,12 +32,29 @@ void ExtensionWebRequestTimeTracker::LogRequestStartTime(
   log.has_extra_headers_listener = has_extra_headers_listener;
 }
 
+void ExtensionWebRequestTimeTracker::LogBeforeRequestDNRStartTime(
+    int64_t request_id,
+    base::TimeTicks start_time) {
+  auto iter = request_time_logs_.find(request_id);
+  CHECK(iter != request_time_logs_.end());
+  iter->second.before_request_dnr_start_time = start_time;
+}
+
+void ExtensionWebRequestTimeTracker::LogBeforeRequestDNRCompletionTime(
+    int64_t request_id,
+    base::TimeTicks completion_time) {
+  auto iter = request_time_logs_.find(request_id);
+  CHECK(iter != request_time_logs_.end());
+  iter->second.before_request_dnr_completion_time = completion_time;
+}
+
 void ExtensionWebRequestTimeTracker::LogRequestEndTime(
     int64_t request_id,
     const base::TimeTicks& end_time) {
   auto iter = request_time_logs_.find(request_id);
-  if (iter == request_time_logs_.end())
+  if (iter == request_time_logs_.end()) {
     return;
+  }
 
   AnalyzeLogRequest(iter->second, end_time);
 
@@ -55,8 +76,9 @@ void ExtensionWebRequestTimeTracker::AnalyzeLogRequest(
                         request_duration);
   }
 
-  if (log.block_duration.is_zero())
+  if (log.block_duration.is_zero()) {
     return;
+  }
 
   UMA_HISTOGRAM_TIMES("Extensions.WebRequest.TotalBlockingRequestTime",
                       request_duration);
@@ -64,11 +86,33 @@ void ExtensionWebRequestTimeTracker::AnalyzeLogRequest(
 
   // Ignore really short requests. Time spent on these is negligible, and any
   // extra delay the extension adds is likely to be noise.
-  constexpr auto kMinRequestTimeToCare = base::TimeDelta::FromMilliseconds(10);
+  constexpr auto kMinRequestTimeToCare = base::Milliseconds(10);
   if (request_duration >= kMinRequestTimeToCare) {
     const int percentage =
         base::ClampRound(log.block_duration / request_duration * 100);
     UMA_HISTOGRAM_PERCENTAGE("Extensions.NetworkDelayPercentage", percentage);
+  }
+
+  constexpr int kBucketCount = 50;
+
+  if (!log.before_request_dnr_completion_time.is_null()) {
+    // Since declarativeNetRequest handlers are evaluated synchronously in the
+    // same method, if there's a completion time, there should always be a
+    // start time. (The inverse is not true, since we only log completion time
+    // if there was at least one relevant action.)
+    DCHECK(!log.before_request_dnr_start_time.is_null());
+
+    base::TimeDelta elapsed_time = log.before_request_dnr_completion_time -
+                                   log.before_request_dnr_start_time;
+
+    UMA_HISTOGRAM_TIMES(
+        "Extensions.WebRequest."
+        "BeforeRequestDeclarativeNetRequestEvaluationTime",
+        elapsed_time);
+    UMA_HISTOGRAM_CUSTOM_MICROSECONDS_TIMES(
+        "Extensions.WebRequest."
+        "BeforeRequestDeclarativeNetRequestEvaluationTimeInMicroseconds",
+        elapsed_time, base::Microseconds(1), base::Seconds(30), kBucketCount);
   }
 }
 
@@ -76,8 +120,9 @@ void ExtensionWebRequestTimeTracker::IncrementTotalBlockTime(
     int64_t request_id,
     const base::TimeDelta& block_time) {
   auto iter = request_time_logs_.find(request_id);
-  if (iter != request_time_logs_.end())
+  if (iter != request_time_logs_.end()) {
     iter->second.block_duration += block_time;
+  }
 }
 
 void ExtensionWebRequestTimeTracker::SetRequestCanceled(int64_t request_id) {

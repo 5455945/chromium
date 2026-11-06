@@ -1,12 +1,12 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef MEDIA_MOJO_COMMON_MOJO_DATA_PIPE_READ_WRITE_H_
 #define MEDIA_MOJO_COMMON_MOJO_DATA_PIPE_READ_WRITE_H_
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_span.h"
 #include "mojo/public/cpp/system/data_pipe.h"
 #include "mojo/public/cpp/system/simple_watcher.h"
 
@@ -17,6 +17,9 @@ class MojoDataPipeReader {
  public:
   explicit MojoDataPipeReader(
       mojo::ScopedDataPipeConsumerHandle consumer_handle);
+
+  MojoDataPipeReader(const MojoDataPipeReader&) = delete;
+  MojoDataPipeReader& operator=(const MojoDataPipeReader&) = delete;
 
   ~MojoDataPipeReader();
 
@@ -49,18 +52,16 @@ class MojoDataPipeReader {
 
   // The current buffer to be read. It is provided by Read() and should be
   // guaranteed to be valid until the current read completes.
-  uint8_t* current_buffer_ = nullptr;
+  raw_ptr<uint8_t, AllowPtrArithmetic> current_buffer_ = nullptr;
 
   // The number of bytes to be read for the current read request.
-  uint32_t current_buffer_size_ = 0;
+  size_t current_buffer_size_ = 0;
 
   // The current once callback to be called when read completes.
   DoneCB done_cb_;
 
   // Number of bytes already read into the current buffer.
-  uint32_t bytes_read_ = 0;
-
-  DISALLOW_COPY_AND_ASSIGN(MojoDataPipeReader);
+  size_t bytes_read_ = 0;
 };
 
 // Write a certain amount of data into a mojo data pipe by request.
@@ -69,16 +70,19 @@ class MojoDataPipeWriter {
   explicit MojoDataPipeWriter(
       mojo::ScopedDataPipeProducerHandle producer_handle);
 
+  MojoDataPipeWriter(const MojoDataPipeWriter&) = delete;
+  MojoDataPipeWriter& operator=(const MojoDataPipeWriter&) = delete;
+
   ~MojoDataPipeWriter();
 
   using DoneCB = base::OnceCallback<void(bool)>;
-  // Writes |num_bytes| data from |buffer| into the mojo data pipe. When the
+  // Writes data from |buffer| into the mojo data pipe. When the
   // operation completes, |done_cb| is called and indicates whether the writing
   // succeeded. This is not allowed to be called when another writing is
   // ongoing. |buffer| needs to be valid for reading during the entire writing
-  // process. |done_cb| will be called immediately if |num_bytes| is zero or
-  // the data pipe is closed without doing anything.
-  void Write(const uint8_t* buffer, uint32_t num_bytes, DoneCB done_cb);
+  // process. |done_cb| will be called immediately if the size of |bytes| is
+  // zero or the data pipe is closed without doing anything.
+  void Write(base::span<const uint8_t> buffer, DoneCB done_cb);
 
   bool IsPipeValid() const;
 
@@ -99,18 +103,10 @@ class MojoDataPipeWriter {
 
   // The current buffer to be written. It is provided by Write() and should be
   // guaranteed to be valid until the current write completes.
-  const uint8_t* current_buffer_ = nullptr;
-
-  // The number of bytes to be written for the current write request.
-  uint32_t current_buffer_size_ = 0;
+  base::raw_span<const uint8_t> current_buffer_;
 
   // The current once callback to be called when write completes.
   DoneCB done_cb_;
-
-  // Number of bytes already written from the current buffer.
-  uint32_t bytes_written_ = 0;
-
-  DISALLOW_COPY_AND_ASSIGN(MojoDataPipeWriter);
 };
 
 }  // namespace media

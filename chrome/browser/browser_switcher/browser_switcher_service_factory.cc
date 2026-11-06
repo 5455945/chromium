@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,22 +6,25 @@
 
 #include "build/build_config.h"
 #include "chrome/browser/browser_switcher/browser_switcher_service.h"
-#include "chrome/browser/profiles/incognito_helpers.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_context.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "chrome/browser/browser_switcher/browser_switcher_service_win.h"
+#endif
+
+#if BUILDFLAG(IS_CHROMEOS)
+#error BrowserSwitcher is not supported on ChromeOS. Neither Ash nor LaCrOS.
 #endif
 
 namespace browser_switcher {
 
 namespace {
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 using BrowserSwitcherServiceImpl = BrowserSwitcherServiceWin;
 #else
 using BrowserSwitcherServiceImpl = BrowserSwitcherService;
@@ -31,7 +34,8 @@ using BrowserSwitcherServiceImpl = BrowserSwitcherService;
 
 // static
 BrowserSwitcherServiceFactory* BrowserSwitcherServiceFactory::GetInstance() {
-  return base::Singleton<BrowserSwitcherServiceFactory>::get();
+  static base::NoDestructor<BrowserSwitcherServiceFactory> instance;
+  return instance.get();
 }
 
 // static
@@ -46,20 +50,19 @@ BrowserSwitcherServiceFactory::BrowserSwitcherServiceFactory()
           "BrowserSwitcherServiceFactory",
           BrowserContextDependencyManager::GetInstance()) {}
 
-BrowserSwitcherServiceFactory::~BrowserSwitcherServiceFactory() {}
+BrowserSwitcherServiceFactory::~BrowserSwitcherServiceFactory() = default;
 
-KeyedService* BrowserSwitcherServiceFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+BrowserSwitcherServiceFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  auto* instance =
-      new BrowserSwitcherServiceImpl(Profile::FromBrowserContext(context));
+  Profile* profile = Profile::FromBrowserContext(context);
+  if (!profile || !profile->IsRegularProfile()) {
+    return nullptr;
+  }
+  std::unique_ptr<BrowserSwitcherServiceImpl> instance =
+      std::make_unique<BrowserSwitcherServiceImpl>(profile);
   instance->Init();
   return instance;
-}
-
-content::BrowserContext* BrowserSwitcherServiceFactory::GetBrowserContextToUse(
-    content::BrowserContext* context) const {
-  // Use the original profile's BrowserSwitcherService, even in Incognito mode.
-  return chrome::GetBrowserContextRedirectedInIncognito(context);
 }
 
 }  // namespace browser_switcher

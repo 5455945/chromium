@@ -1,17 +1,17 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 #ifndef SERVICES_DEVICE_BATTERY_BATTERY_STATUS_MANAGER_LINUX_H_
 #define SERVICES_DEVICE_BATTERY_BATTERY_STATUS_MANAGER_LINUX_H_
 
-#include "services/device/battery/battery_status_manager.h"
+#include <memory>
 
-namespace base {
-class Thread;
-}
+#include "base/memory/weak_ptr.h"
+#include "services/device/battery/battery_status_manager.h"
 
 namespace dbus {
 class Bus;
+class ObjectProxy;
 }  // namespace dbus
 
 namespace device {
@@ -46,29 +46,42 @@ class BatteryStatusManagerLinux : public BatteryStatusManager {
  public:
   explicit BatteryStatusManagerLinux(
       const BatteryStatusService::BatteryUpdateCallback& callback);
+
+  BatteryStatusManagerLinux(const BatteryStatusManagerLinux&) = delete;
+  BatteryStatusManagerLinux& operator=(const BatteryStatusManagerLinux&) =
+      delete;
+
   ~BatteryStatusManagerLinux() override;
 
  private:
   friend class BatteryStatusManagerLinuxTest;
-  class BatteryStatusNotificationThread;
+  class BatteryProperties;
 
   // BatteryStatusManager:
   bool StartListeningBatteryChange() override;
   void StopListeningBatteryChange() override;
 
-  // Starts the notifier thread if not already started and returns true on
-  // success.
-  bool StartNotifierThreadIfNecessary();
-  base::Thread* GetNotifierThreadForTesting();
+  void NotifyBatteryStatus(const BatteryProperties* properties);
+
+  void ShutdownDBusConnection();
+
+  mojom::BatteryStatus ComputeWebBatteryStatus(
+      const BatteryProperties* properties);
+
+  void SetDBusForTesting(dbus::Bus* bus);
 
   static std::unique_ptr<BatteryStatusManagerLinux> CreateForTesting(
       const BatteryStatusService::BatteryUpdateCallback& callback,
       dbus::Bus* bus);
 
   BatteryStatusService::BatteryUpdateCallback callback_;
-  std::unique_ptr<BatteryStatusNotificationThread> notifier_thread_;
+  scoped_refptr<dbus::Bus> system_bus_;
+  // Owned by `system_bus_`.
+  raw_ptr<dbus::ObjectProxy> display_device_proxy_;
+  std::unique_ptr<BatteryProperties> properties_;
+  bool notifying_battery_status_ = false;
 
-  DISALLOW_COPY_AND_ASSIGN(BatteryStatusManagerLinux);
+  base::WeakPtrFactory<BatteryStatusManagerLinux> weak_ptr_factory_{this};
 };
 
 }  // namespace device

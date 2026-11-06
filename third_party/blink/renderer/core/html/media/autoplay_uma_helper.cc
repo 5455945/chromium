@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,12 @@
 #include "services/metrics/public/cpp/ukm_recorder.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/html/media/autoplay_policy.h"
 #include "third_party/blink/renderer/core/html/media/html_media_element.h"
+#include "third_party/blink/renderer/core/html/media/html_video_element.h"
 #include "third_party/blink/renderer/core/intersection_observer/intersection_observer.h"
 #include "third_party/blink/renderer/core/intersection_observer/intersection_observer_entry.h"
 #include "third_party/blink/renderer/core/page/page.h"
@@ -24,8 +26,7 @@ namespace blink {
 
 namespace {
 
-constexpr base::TimeDelta kMaxOffscreenDurationUma =
-    base::TimeDelta::FromHours(1);
+constexpr base::TimeDelta kMaxOffscreenDurationUma = base::Hours(1);
 constexpr int32_t kOffscreenDurationUmaBucketCount = 50;
 
 // Returns a int64_t with the following structure:
@@ -113,7 +114,7 @@ void AutoplayUmaHelper::RecordAutoplayUnmuteStatus(
                                 status);
 
   // Record UKM event for unmute muted autoplay.
-  if (element_->GetDocument().IsInMainFrame()) {
+  if (element_->GetDocument().IsInOutermostMainFrame()) {
     int source = static_cast<int>(AutoplaySource::kAttribute);
     if (sources_.size() == kDualSourceSize) {
       source = static_cast<int>(AutoplaySource::kDualSource);
@@ -173,12 +174,13 @@ void AutoplayUmaHelper::OnIntersectionChangedForMutedVideoOffscreenDuration(
 
 void AutoplayUmaHelper::Invoke(ExecutionContext* execution_context,
                                Event* event) {
-  if (event->type() == event_type_names::kPlaying)
+  if (event->type() == event_type_names::kPlaying) {
     HandlePlayingEvent();
-  else if (event->type() == event_type_names::kPause)
+  } else if (event->type() == event_type_names::kPause) {
     HandlePauseEvent();
-  else
+  } else {
     NOTREACHED();
+  }
 }
 
 void AutoplayUmaHelper::HandlePlayingEvent() {
@@ -207,12 +209,14 @@ void AutoplayUmaHelper::MaybeStartRecordingMutedVideoPlayMethodBecomeVisible() {
     return;
 
   muted_video_play_method_intersection_observer_ = IntersectionObserver::Create(
-      {}, {IntersectionObserver::kMinimumThreshold}, &element_->GetDocument(),
-      WTF::BindRepeating(
+      element_->GetDocument(),
+      BindRepeating(
           &AutoplayUmaHelper::
               OnIntersectionChangedForMutedVideoPlayMethodBecomeVisible,
           WrapWeakPersistent(this)),
-      LocalFrameUkmAggregator::kMediaIntersectionObserver);
+      LocalFrameMetricsAggregator::kMediaIntersectionObserver,
+      IntersectionObserver::Params{
+          .thresholds = {IntersectionObserver::kMinimumThreshold}});
   muted_video_play_method_intersection_observer_->observe(element_);
   SetExecutionContext(element_->GetExecutionContext());
 }
@@ -240,13 +244,13 @@ void AutoplayUmaHelper::MaybeStartRecordingMutedVideoOffscreenDuration() {
   is_visible_ = false;
   muted_video_offscreen_duration_intersection_observer_ =
       IntersectionObserver::Create(
-          {}, {IntersectionObserver::kMinimumThreshold},
-          &element_->GetDocument(),
-          WTF::BindRepeating(
-              &AutoplayUmaHelper::
-                  OnIntersectionChangedForMutedVideoOffscreenDuration,
-              WrapWeakPersistent(this)),
-          LocalFrameUkmAggregator::kMediaIntersectionObserver);
+          element_->GetDocument(),
+          BindRepeating(&AutoplayUmaHelper::
+                            OnIntersectionChangedForMutedVideoOffscreenDuration,
+                        WrapWeakPersistent(this)),
+          LocalFrameMetricsAggregator::kMediaIntersectionObserver,
+          IntersectionObserver::Params{
+              .thresholds = {IntersectionObserver::kMinimumThreshold}});
   muted_video_offscreen_duration_intersection_observer_->observe(element_);
   element_->addEventListener(event_type_names::kPause, this, false);
   SetExecutionContext(element_->GetExecutionContext());
@@ -265,9 +269,8 @@ void AutoplayUmaHelper::MaybeStopRecordingMutedVideoOffscreenDuration() {
 
   UMA_HISTOGRAM_CUSTOM_TIMES(
       "Media.Video.Autoplay.Muted.PlayMethod.OffscreenDuration",
-      muted_video_autoplay_offscreen_duration_,
-      base::TimeDelta::FromMilliseconds(1), kMaxOffscreenDurationUma,
-      kOffscreenDurationUmaBucketCount);
+      muted_video_autoplay_offscreen_duration_, base::Milliseconds(1),
+      kMaxOffscreenDurationUma, kOffscreenDurationUmaBucketCount);
 
   muted_video_offscreen_duration_intersection_observer_->disconnect();
   muted_video_offscreen_duration_intersection_observer_ = nullptr;
@@ -278,7 +281,7 @@ void AutoplayUmaHelper::MaybeStopRecordingMutedVideoOffscreenDuration() {
 
 void AutoplayUmaHelper::MaybeUnregisterContextDestroyedObserver() {
   // TODO(keishi): Remove IsIteratingOverObservers() check when
-  // HeapObserverSet() supports removal while iterating.
+  // HeapObserverList() supports removal while iterating.
   if (!ShouldListenToContextDestroyed() && !GetExecutionContext()
                                                 ->ContextLifecycleObserverSet()
                                                 .IsIteratingOverObservers()) {

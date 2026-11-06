@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,13 +17,19 @@ void TranslateTriggerDecision::PreventAllTriggering() {
   can_auto_href_translate_ = false;
   can_show_href_translate_ui_ = false;
   can_show_predefined_language_translate_ui_ = false;
+  can_auto_translate_for_predefined_language_ = false;
 }
 
 void TranslateTriggerDecision::PreventAutoTranslate() {
   can_auto_translate_ = false;
 }
+
+void TranslateTriggerDecision::ForceAutoTranslate() {
+  should_force_auto_translate_ = true;
+}
+
 bool TranslateTriggerDecision::can_auto_translate() const {
-  return can_auto_translate_;
+  return can_auto_translate_ || should_force_auto_translate_;
 }
 
 void TranslateTriggerDecision::PreventShowingUI() {
@@ -63,14 +69,14 @@ bool TranslateTriggerDecision::should_suppress_from_ranker() const {
 }
 
 bool TranslateTriggerDecision::IsTriggeringPossible() const {
-  return can_auto_translate_ || can_show_ui_;
+  return can_auto_translate() || can_show_ui_;
 }
 
 bool TranslateTriggerDecision::ShouldAutoTranslate() const {
-  return can_auto_translate_;
+  return can_auto_translate();
 }
 
 bool TranslateTriggerDecision::ShouldShowUI() const {
-  return !can_auto_translate_ && can_show_ui_ && !should_suppress_from_ranker_;
+  return !can_auto_translate() && can_show_ui_ && !should_suppress_from_ranker_;
 }
 }  // namespace translate

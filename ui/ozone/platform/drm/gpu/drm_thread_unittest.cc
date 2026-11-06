@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,28 +6,14 @@
 
 #include <utility>
 
-#include "base/callback_helpers.h"
-#include "base/files/scoped_temp_dir.h"
+#include "base/functional/callback_helpers.h"
 #include "base/test/task_environment.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/gfx/linux/test/mock_gbm_device.h"
-#include "ui/ozone/platform/drm/gpu/drm_device_generator.h"
-#include "ui/ozone/platform/drm/gpu/mock_drm_device.h"
-
+#include "ui/ozone/platform/drm/gpu/fake_drm_device_generator.h"
 namespace ui {
 
 namespace {
-
-class FakeDrmDeviceGenerator : public DrmDeviceGenerator {
-  // DrmDeviceGenerator:
-  scoped_refptr<DrmDevice> CreateDevice(const base::FilePath& path,
-                                        base::File file,
-                                        bool is_primary_device) override {
-    auto gbm_device = std::make_unique<MockGbmDevice>();
-    return base::MakeRefCounted<MockDrmDevice>(std::move(gbm_device));
-  }
-};
 
 void StubTask() {}
 
@@ -75,7 +61,9 @@ class DrmThreadTest : public testing::Test {
     base::FilePath file_path("/dev/null");
     base::File file(file_path, base::File::FLAG_OPEN | base::File::FLAG_WRITE |
                                    base::File::FLAG_READ);
-    drm_device_->AddGraphicsDevice(file_path, std::move(file));
+    drm_device_->AddGraphicsDevice(
+        file_path,
+        mojo::PlatformHandle(base::ScopedFD(file.TakePlatformFile())));
   }
 
   base::test::TaskEnvironment env_;
@@ -130,6 +118,33 @@ TEST_F(DrmThreadTest, CheckOverlayCapabilitiesDestroyedWindow) {
   for (const auto& status : result) {
     EXPECT_EQ(OVERLAY_STATUS_NOT, status);
   }
+}
+
+// Verifies that we gracefully handle the case where GetHardwareCapabilities()
+// is called on a destroyed window.
+TEST_F(DrmThreadTest, GetHardwareCapabilitiesDestroyedWindow) {
+  gfx::AcceleratedWidget widget = 5;
+  constexpr gfx::Rect bounds(10, 10);
+  AddGraphicsDevice();
+  drm_device_->CreateWindow(widget, bounds);
+  drm_device_->DestroyWindow(widget);
+  drm_device_.FlushForTesting();
+  bool called = false;
+  HardwareCapabilities result;
+  result.is_valid = true;
+  drm_thread_.task_runner()->PostTask(
+      FROM_HERE, base::BindOnce(&DrmThread::GetHardwareCapabilities,
+                                base::Unretained(&drm_thread_), widget,
+                                base::BindRepeating(
+                                    [](bool* called, HardwareCapabilities* out,
+                                       HardwareCapabilities capabilities) {
+                                      *called = true;
+                                      *out = std::move(capabilities);
+                                    },
+                                    &called, &result)));
+  drm_thread_.FlushForTesting();
+  EXPECT_TRUE(called);
+  EXPECT_FALSE(result.is_valid);
 }
 
 }  // namespace ui

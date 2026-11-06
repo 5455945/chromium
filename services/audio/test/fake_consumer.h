@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include <vector>
 
 #include "base/files/file_path.h"
-#include "base/macros.h"
 
 namespace media {
 class AudioBus;
@@ -21,6 +20,9 @@ namespace audio {
 class FakeConsumer {
  public:
   FakeConsumer(int channels, int sample_rate);
+
+  FakeConsumer(const FakeConsumer&) = delete;
+  FakeConsumer& operator=(const FakeConsumer&) = delete;
 
   ~FakeConsumer();
 
@@ -39,11 +41,6 @@ class FakeConsumer {
   bool IsSilent(int channel) const;
   bool IsSilentInRange(int channel, int begin_frame, int end_frame) const;
 
-  // Returns the position at which silence in the recording ends, at or after
-  // |begin_frame|. If the entire recording after the given position is silent,
-  // this will return GetRecordedFrameCount().
-  int FindEndOfSilence(int channel, int begin_frame) const;
-
   // Returns the amplitude of the given |frequency| in the given |channel| just
   // before the given |end_frame| position.
   double ComputeAmplitudeAt(int channel, double frequency, int end_frame) const;
@@ -55,8 +52,6 @@ class FakeConsumer {
  private:
   const int sample_rate_;
   std::vector<std::vector<float>> recorded_channel_data_;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeConsumer);
 };
 
 }  // namespace audio

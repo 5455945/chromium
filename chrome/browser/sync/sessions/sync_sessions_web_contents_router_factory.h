@@ -1,26 +1,24 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_SYNC_SESSIONS_SYNC_SESSIONS_WEB_CONTENTS_ROUTER_FACTORY_H_
 #define CHROME_BROWSER_SYNC_SESSIONS_SYNC_SESSIONS_WEB_CONTENTS_ROUTER_FACTORY_H_
 
-#include "base/macros.h"
-#include "components/keyed_service/content/browser_context_keyed_service_factory.h"
+#include "chrome/browser/profiles/profile_keyed_service_factory.h"
 
 class Profile;
 
 namespace base {
 template <typename T>
-struct DefaultSingletonTraits;
+class NoDestructor;
 }  // namespace base
 
 namespace sync_sessions {
 
 class SyncSessionsWebContentsRouter;
 
-class SyncSessionsWebContentsRouterFactory
-    : public BrowserContextKeyedServiceFactory {
+class SyncSessionsWebContentsRouterFactory : public ProfileKeyedServiceFactory {
  public:
   // Get the SyncSessionsWebContentsRouter service for |profile|, creating one
   // if needed.
@@ -29,18 +27,20 @@ class SyncSessionsWebContentsRouterFactory
   // Get the singleton instance of the factory.
   static SyncSessionsWebContentsRouterFactory* GetInstance();
 
+  SyncSessionsWebContentsRouterFactory(
+      const SyncSessionsWebContentsRouterFactory&) = delete;
+  SyncSessionsWebContentsRouterFactory& operator=(
+      const SyncSessionsWebContentsRouterFactory&) = delete;
+
  private:
-  friend struct base::DefaultSingletonTraits<
-      SyncSessionsWebContentsRouterFactory>;
+  friend base::NoDestructor<SyncSessionsWebContentsRouterFactory>;
 
   SyncSessionsWebContentsRouterFactory();
   ~SyncSessionsWebContentsRouterFactory() override;
 
   // Overridden from BrowserContextKeyedServiceFactory.
-  KeyedService* BuildServiceInstanceFor(
+  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
       content::BrowserContext* context) const override;
-
-  DISALLOW_COPY_AND_ASSIGN(SyncSessionsWebContentsRouterFactory);
 };
 
 }  // namespace sync_sessions

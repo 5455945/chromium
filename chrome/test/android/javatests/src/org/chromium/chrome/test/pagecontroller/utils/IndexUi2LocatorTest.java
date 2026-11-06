@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,17 +8,18 @@ import static org.mockito.Mockito.when;
 
 import static org.chromium.chrome.test.pagecontroller.utils.TestUtils.assertLocatorResults;
 
-import android.support.test.uiautomator.UiDevice;
-import android.support.test.uiautomator.UiObject2;
+import androidx.test.uiautomator.UiDevice;
+import androidx.test.uiautomator.UiObject2;
 
 import org.junit.Before;
 import org.junit.FixMethodOrder;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.MethodSorters;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
-import org.robolectric.annotation.Config;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 
@@ -26,40 +27,29 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-/**
- * Tests for IndexUi2Locator
- */
+/** Tests for IndexUi2Locator */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 @FixMethodOrder(MethodSorters.NAME_ASCENDING)
 public class IndexUi2LocatorTest {
-    @Mock
-    private IUi2Locator mLocator0;
+    @Mock private IUi2Locator mLocator0;
 
-    @Mock
-    private UiObject2 mResult0;
+    @Mock private UiObject2 mResult0;
 
-    @Mock
-    private UiObject2 mResult1;
+    @Mock private UiObject2 mResult1;
 
-    @Mock
-    private List<UiObject2> mLocatorResults0;
+    @Mock private List<UiObject2> mLocatorResults0;
 
-    @Mock
-    private List<UiObject2> mLocatorResults1;
+    @Mock private List<UiObject2> mLocatorResults1;
 
-    @Mock
-    private UiObject2 mRoot;
+    @Mock private UiObject2 mRoot;
 
-    @Mock
-    private UiDevice mDevice;
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Mock private UiDevice mDevice;
 
     private List<UiObject2> mLocatorResults;
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
-
         mLocatorResults0 = Collections.singletonList(mResult0);
         mLocatorResults1 = Collections.singletonList(mResult1);
 

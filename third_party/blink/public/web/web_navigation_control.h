@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,8 @@
 #define THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_NAVIGATION_CONTROL_H_
 
 #include <memory>
+#include <vector>
 
-#include "base/callback.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/web/web_document_loader.h"
 #include "third_party/blink/public/web/web_frame_load_type.h"
@@ -19,6 +19,9 @@ class WebSecurityOrigin;
 class WebURL;
 struct WebNavigationInfo;
 struct WebNavigationParams;
+namespace scheduler {
+class TaskAttributionId;
+}  // namespace scheduler
 
 // This interface gives control to navigation-related functionality of
 // WebLocalFrame. It is separated from WebLocalFrame to give precise control
@@ -29,10 +32,13 @@ class WebNavigationControl : public WebLocalFrame {
   ~WebNavigationControl() override {}
 
   // Runs beforeunload handlers for this frame and its local descendants.
-  // Returns |true| if all the frames agreed to proceed with unloading
+  // Returns `true` if all the frames agreed to proceed with unloading
   // from their respective event handlers.
   // Note: this may lead to the destruction of the frame.
-  virtual bool DispatchBeforeUnloadEvent(bool is_reload) = 0;
+  virtual bool DispatchBeforeUnloadEvent(
+      bool is_reload,
+      base::TimeTicks& out_before_unload_dialog_opened_time,
+      base::TimeTicks& out_before_unload_dialog_closed_time) = 0;
 
   // Commits a cross-document navigation in the frame. See WebNavigationParams
   // for details. Calls WebLocalFrameClient::DidCommitNavigation synchronously
@@ -44,7 +50,7 @@ class WebNavigationControl : public WebLocalFrame {
       std::unique_ptr<WebDocumentLoader::ExtraData> extra_data) = 0;
 
   // Commits a same-document navigation in the frame. For history navigations,
-  // a valid WebHistoryItem should be provided. |initiator_origin| is null
+  // a valid WebHistoryItem should be provided. `initiator_origin` is null
   // for browser-initiated navigations. Returns CommitResult::Ok if the
   // navigation has actually committed.
   virtual mojom::CommitResult CommitSameDocumentNavigation(
@@ -54,13 +60,30 @@ class WebNavigationControl : public WebLocalFrame {
       bool is_client_redirect,
       bool has_transient_user_activation,
       const WebSecurityOrigin& initiator_origin,
-      std::unique_ptr<WebDocumentLoader::ExtraData> extra_data) = 0;
+      bool is_browser_initiated,
+      bool has_ua_visual_transition,
+      std::optional<scheduler::TaskAttributionId>
+          soft_navigation_heuristics_task_id,
+      bool should_skip_screenshot) = 0;
 
-  // Override the normal rules for whether a load has successfully committed
-  // in this frame. Used to propagate state when this frame has navigated
-  // cross process.
-  virtual void SetCommittedFirstRealLoad() = 0;
-  virtual bool HasCommittedFirstRealLoad() = 0;
+  // Override the normal rules that determine whether the frame is on the
+  // initial empty document or not. Used to propagate state when this frame has
+  // navigated cross process.
+  virtual void SetIsNotOnInitialEmptyDocument() = 0;
+  virtual bool IsOnInitialEmptyDocument() = 0;
+
+  // Notifies that a renderer-initiated navigation to `urls` will
+  // potentially start.
+  // This is fired in the following situations so that the browser can
+  // speculatively warm-up service workers (start the renderer process and
+  // load scripts) or start (warm up + run the service worker script).
+  // - The anchor tag is in the viewport.
+  // - The mouse hovered the anchor tag.
+  // - The mousedown or touchstart event gets dispatched on the anchor tag.
+  // - The beforeunload event gets dispatched.
+  // Note that the navigation might not actually start.
+  virtual void MaybeStartOutermostMainFrameNavigation(
+      const std::vector<WebURL>& urls) const = 0;
 
   // Marks the frame as loading, before WebLocalFrameClient issues a navigation
   // request through the browser process on behalf of the frame.

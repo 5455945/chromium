@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,12 +10,14 @@
 #include <memory>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "third_party/blink/public/platform/web_crypto.h"
 
 namespace webcrypto {
 
-class CryptoData;
 class GenerateKeyResult;
+class EncapsulateKeyResult;
+class EncapsulateBitsResult;
 class Status;
 
 // These functions provide an entry point for synchronous webcrypto operations.
@@ -28,16 +30,16 @@ class Status;
 
 Status Encrypt(const blink::WebCryptoAlgorithm& algorithm,
                const blink::WebCryptoKey& key,
-               const CryptoData& data,
+               base::span<const uint8_t> data,
                std::vector<uint8_t>* buffer);
 
 Status Decrypt(const blink::WebCryptoAlgorithm& algorithm,
                const blink::WebCryptoKey& key,
-               const CryptoData& data,
+               base::span<const uint8_t> data,
                std::vector<uint8_t>* buffer);
 
 Status Digest(const blink::WebCryptoAlgorithm& algorithm,
-              const CryptoData& data,
+              base::span<const uint8_t> data,
               std::vector<uint8_t>* buffer);
 
 Status GenerateKey(const blink::WebCryptoAlgorithm& algorithm,
@@ -46,7 +48,7 @@ Status GenerateKey(const blink::WebCryptoAlgorithm& algorithm,
                    GenerateKeyResult* result);
 
 Status ImportKey(blink::WebCryptoKeyFormat format,
-                 const CryptoData& key_data,
+                 base::span<const uint8_t> key_data,
                  const blink::WebCryptoAlgorithm& algorithm,
                  bool extractable,
                  blink::WebCryptoKeyUsageMask usages,
@@ -58,13 +60,13 @@ Status ExportKey(blink::WebCryptoKeyFormat format,
 
 Status Sign(const blink::WebCryptoAlgorithm& algorithm,
             const blink::WebCryptoKey& key,
-            const CryptoData& data,
+            base::span<const uint8_t> data,
             std::vector<uint8_t>* buffer);
 
 Status Verify(const blink::WebCryptoAlgorithm& algorithm,
               const blink::WebCryptoKey& key,
-              const CryptoData& signature,
-              const CryptoData& data,
+              base::span<const uint8_t> signature,
+              base::span<const uint8_t> data,
               bool* signature_match);
 
 Status WrapKey(blink::WebCryptoKeyFormat format,
@@ -74,7 +76,7 @@ Status WrapKey(blink::WebCryptoKeyFormat format,
                std::vector<uint8_t>* buffer);
 
 Status UnwrapKey(blink::WebCryptoKeyFormat format,
-                 const CryptoData& wrapped_key_data,
+                 base::span<const uint8_t> wrapped_key_data,
                  const blink::WebCryptoKey& wrapping_key,
                  const blink::WebCryptoAlgorithm& wrapping_algorithm,
                  const blink::WebCryptoAlgorithm& algorithm,
@@ -84,7 +86,7 @@ Status UnwrapKey(blink::WebCryptoKeyFormat format,
 
 Status DeriveBits(const blink::WebCryptoAlgorithm& algorithm,
                   const blink::WebCryptoKey& base_key,
-                  unsigned int length_bits,
+                  std::optional<unsigned int> length_bits,
                   std::vector<uint8_t>* derived_bytes);
 
 // Derives a key by calling the underlying deriveBits/getKeyLength/importKey
@@ -114,15 +116,53 @@ Status DeriveKey(const blink::WebCryptoAlgorithm& algorithm,
                  blink::WebCryptoKeyUsageMask usages,
                  blink::WebCryptoKey* derived_key);
 
+// Encapsulate and Decapsulate functions are implemented by calling the
+// underlying encapsulate/decapsulate/importKey operations, as per the spec
+// (https://wicg.github.io/webcrypto-modern-algos/).
+Status EncapsulateKey(const blink::WebCryptoAlgorithm& algorithm,
+                      const blink::WebCryptoKey& encapsulation_key,
+                      const blink::WebCryptoAlgorithm& shared_key_algorithm,
+                      bool extractable,
+                      blink::WebCryptoKeyUsageMask usages,
+                      EncapsulateKeyResult* result);
+
+Status EncapsulateBits(const blink::WebCryptoAlgorithm& algorithm,
+                       const blink::WebCryptoKey& encapsulation_key,
+                       EncapsulateBitsResult* result);
+
+Status DecapsulateKey(const blink::WebCryptoAlgorithm& algorithm,
+                      const blink::WebCryptoKey& decapsulation_key,
+                      base::span<const uint8_t> ciphertext,
+                      const blink::WebCryptoAlgorithm& shared_key_algorithm,
+                      bool extractable,
+                      blink::WebCryptoKeyUsageMask usages,
+                      blink::WebCryptoKey* shared_key);
+
+Status DecapsulateBits(const blink::WebCryptoAlgorithm& algorithm,
+                       const blink::WebCryptoKey& decapsulation_key,
+                       base::span<const uint8_t> ciphertext,
+                       std::vector<uint8_t>* shared_bits);
+
+Status GetPublicKey(const blink::WebCryptoKey& key,
+                    blink::WebCryptoKeyUsageMask usages,
+                    blink::WebCryptoKey* public_key);
+
 bool SerializeKeyForClone(const blink::WebCryptoKey& key,
-                          blink::WebVector<uint8_t>* key_data);
+                          std::vector<uint8_t>* key_data);
 
 bool DeserializeKeyForClone(const blink::WebCryptoKeyAlgorithm& algorithm,
                             blink::WebCryptoKeyType type,
                             bool extractable,
                             blink::WebCryptoKeyUsageMask usages,
-                            const CryptoData& key_data,
+                            base::span<const uint8_t> key_data,
                             blink::WebCryptoKey* key);
+
+bool Supports(blink::WebCryptoOperation op,
+              const blink::WebCryptoAlgorithm& algorithm,
+              std::optional<unsigned int> length_bits);
+
+Status GetKeyLength(const blink::WebCryptoAlgorithm& key_length_algorithm,
+                    std::optional<unsigned int>* length_bits);
 
 }  // namespace webcrypto
 

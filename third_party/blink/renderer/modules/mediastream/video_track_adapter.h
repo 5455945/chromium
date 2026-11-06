@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,17 @@
 
 #include <stdint.h>
 
-#include "base/callback.h"
-#include "base/macros.h"
-#include "base/memory/weak_ptr.h"
-#include "base/single_thread_task_runner.h"
+#include <optional>
+
+#include "base/feature_list.h"
+#include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/sequence_checker.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
+#include "base/token.h"
 #include "media/base/video_frame.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/platform/modules/mediastream/media_stream_types.h"
 #include "third_party/blink/public/web/modules/mediastream/encoded_video_frame.h"
 #include "third_party/blink/renderer/modules/mediastream/media_stream_video_track.h"
@@ -21,10 +25,15 @@
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
 #include "third_party/blink/renderer/platform/wtf/thread_safe_ref_counted.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
+#include "third_party/webrtc_overrides/low_precision_timer.h"
+
 
 namespace blink {
 
 class VideoTrackAdapterSettings;
+
+MODULES_EXPORT BASE_DECLARE_FEATURE(kScaleFrameForGetDisplayMedia);
+MODULES_EXPORT BASE_DECLARE_FEATURE(kMediaStreamTrackEmptyVideoFrameMonitor);
 
 // VideoTrackAdapter is a helper class used by MediaStreamVideoSource used for
 // adapting the video resolution from a source implementation to the resolution
@@ -32,17 +41,19 @@ class VideoTrackAdapterSettings;
 // The constraints can be set as max width and height as well as max and min
 // aspect ratio.
 // Video frames are delivered to a track using a VideoCaptureDeliverFrameCB on
-// the IO-thread.
+// the video task runner.
 // Adaptations is done by wrapping the original media::VideoFrame in a new
 // media::VideoFrame with a new visible_rect and natural_size.
 class MODULES_EXPORT VideoTrackAdapter
-    : public WTF::ThreadSafeRefCounted<VideoTrackAdapter> {
+    : public ThreadSafeRefCounted<VideoTrackAdapter> {
  public:
   using OnMutedCallback = base::RepeatingCallback<void(bool mute_state)>;
 
-  VideoTrackAdapter(
-      scoped_refptr<base::SingleThreadTaskRunner> io_task_runner,
-      base::WeakPtr<MediaStreamVideoSource> media_stream_video_source);
+  VideoTrackAdapter(scoped_refptr<base::SequencedTaskRunner> video_task_runner,
+                    bool is_video_desktop_capture_type);
+
+  VideoTrackAdapter(const VideoTrackAdapter&) = delete;
+  VideoTrackAdapter& operator=(const VideoTrackAdapter&) = delete;
 
   // Register |track| to receive video frames in and |encoded_frame_callback|
   // and in |frame_callback| with a resolution within the boundaries of the
@@ -51,35 +62,62 @@ class MODULES_EXPORT VideoTrackAdapter
   // interval to check for passing frames and inform of the result via
   // |on_muted_state_callback|.
   void AddTrack(const MediaStreamVideoTrack* track,
-                VideoCaptureDeliverFrameCB frame_callback,
-                EncodedVideoFrameCB encoded_frame_callback,
-                VideoTrackSettingsCallback settings_callback,
-                VideoTrackFormatCallback track_callback,
+                MediaStreamVideoSourceCallbacks video_stream_fallbacks,
                 const VideoTrackAdapterSettings& settings);
   void RemoveTrack(const MediaStreamVideoTrack* track);
   void ReconfigureTrack(const MediaStreamVideoTrack* track,
                         const VideoTrackAdapterSettings& settings);
+  void SetTrackSubCaptureTarget(const MediaStreamVideoTrack* track,
+                                const base::Token& sub_capture_target);
 
   // Delivers |frame| to all tracks that have registered a callback.
-  // Must be called on the IO-thread.
-  void DeliverFrameOnIO(
+  // Must be called on the video task runner.
+  void DeliverFrameOnVideoTaskRunner(
       scoped_refptr<media::VideoFrame> video_frame,
-      std::vector<scoped_refptr<media::VideoFrame>> scaled_video_frames,
       base::TimeTicks estimated_capture_time);
 
   // Delivers |encoded_frame| to all tracks that have registered a callback.
-  // Must be called on the IO-thread.
-  void DeliverEncodedVideoFrameOnIO(scoped_refptr<EncodedVideoFrame> frame,
-                                    base::TimeTicks estimated_capture_time);
+  // Must be called on the video task runner.
+  void DeliverEncodedVideoFrameOnVideoTaskRunner(
+      scoped_refptr<EncodedVideoFrame> frame,
+      base::TimeTicks estimated_capture_time);
 
-  base::SingleThreadTaskRunner* io_task_runner() const {
-    DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-    return io_task_runner_.get();
+  // Called if a frame was dropped prior to delivery, i.e.
+  // DeliverFrameOnVideoTaskRunner() will not be called for this frame.
+  void OnFrameDroppedOnVideoTaskRunner(
+      media::VideoCaptureFrameDropReason reason);
+
+  // Creates and delivers a black frame of |size| to all tracks that have
+  // registered a frame delivery callback.
+  //
+  // Unlike a bare media::VideoFrame::CreateBlackFrame(), the frame is stamped
+  // so that it survives the pipeline: it continues the source's timestamp
+  // timeline rather than restarting at zero, and it carries |capture_version|
+  // rather than a default-constructed one. Without both, the frame is
+  // discarded downstream and the consumer is left displaying the last real
+  // frame indefinitely.
+  //
+  // Must be called on the video task runner.
+  void DeliverBlackFrameOnVideoTaskRunner(
+      const gfx::Size& size,
+      media::CaptureVersion capture_version,
+      base::TimeTicks estimated_capture_time);
+
+  // Called when it is guaranteed that all subsequent frames delivered
+  // over DeliverFrameOnVideoTaskRunner() will have a capture-target version
+  // that is equal-to-or-greater-than the given capture-target version.
+  void NewCaptureVersionOnVideoTaskRunner(
+      media::CaptureVersion capture_version);
+
+  base::SequencedTaskRunner* video_task_runner() const {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    return video_task_runner_.get();
   }
 
   // Start monitor that frames are delivered to this object. I.E, that
-  // |DeliverFrameOnIO| is called with a frame rate of |source_frame_rate|.
-  // |on_muted_callback| is triggered on the main render thread.
+  // |DeliverFrameOnVideoTaskRunner| is called with a frame rate of
+  // |source_frame_rate|. |on_muted_callback| is triggered on the main render
+  // thread.
   void StartFrameMonitoring(double source_frame_rate,
                             const OnMutedCallback& on_muted_callback);
   void StopFrameMonitoring();
@@ -97,89 +135,112 @@ class MODULES_EXPORT VideoTrackAdapter
                                    const VideoTrackAdapterSettings& settings,
                                    gfx::Size* desired_size);
 
-  absl::optional<gfx::Size> source_frame_size() const {
+  std::optional<gfx::Size> source_frame_size() const {
     return source_frame_size_;
   }
 
  private:
   virtual ~VideoTrackAdapter();
-  friend class WTF::ThreadSafeRefCounted<VideoTrackAdapter>;
+  friend class ThreadSafeRefCounted<VideoTrackAdapter>;
 
   // These aliases mimic the definition of VideoCaptureDeliverFrameCB,
   // VideoTrackSettingsCallback and VideoTrackFormatCallback respectively.
   using VideoCaptureDeliverFrameInternalCallback =
-      WTF::CrossThreadFunction<void(
-          scoped_refptr<media::VideoFrame> video_frame,
-          std::vector<scoped_refptr<media::VideoFrame>> scaled_video_frames,
-          base::TimeTicks estimated_capture_time)>;
+      CrossThreadFunction<void(scoped_refptr<media::VideoFrame> video_frame,
+                               base::TimeTicks estimated_capture_time)>;
+  using VideoCaptureNotifyFrameDroppedInternalCallback =
+      CrossThreadFunction<void(media::VideoCaptureFrameDropReason)>;
   using DeliverEncodedVideoFrameInternalCallback =
-      WTF::CrossThreadFunction<void(
-          scoped_refptr<EncodedVideoFrame> video_frame,
-          base::TimeTicks estimated_capture_time)>;
+      CrossThreadFunction<void(scoped_refptr<EncodedVideoFrame> video_frame,
+                               base::TimeTicks estimated_capture_time)>;
+  using VideoCaptureSubCaptureVersionInternalCallback =
+      CrossThreadFunction<void(media::CaptureVersion)>;
   using VideoTrackSettingsInternalCallback =
-      WTF::CrossThreadFunction<void(gfx::Size frame_size, double frame_rate)>;
+      CrossThreadFunction<void(gfx::Size frame_size,
+                               double frame_rate,
+                               std::optional<gfx::Size> metadata_source_size,
+                               std::optional<float> device_scale_factor)>;
   using VideoTrackFormatInternalCallback =
-      WTF::CrossThreadFunction<void(const media::VideoCaptureFormat&)>;
-  void AddTrackOnIO(
+      CrossThreadFunction<void(const media::VideoCaptureFormat&)>;
+
+  struct VideoTrackCallbacks {
+    VideoCaptureDeliverFrameInternalCallback frame_callback;
+    VideoCaptureNotifyFrameDroppedInternalCallback
+        notify_frame_dropped_callback;
+    DeliverEncodedVideoFrameInternalCallback encoded_frame_callback;
+    VideoCaptureSubCaptureVersionInternalCallback capture_version_callback;
+    VideoTrackSettingsInternalCallback settings_callback;
+    VideoTrackFormatInternalCallback format_callback;
+  };
+
+  void AddTrackOnVideoTaskRunner(
       const MediaStreamVideoTrack* track,
-      VideoCaptureDeliverFrameInternalCallback frame_callback,
-      DeliverEncodedVideoFrameInternalCallback encoded_frame_callback,
-      VideoTrackSettingsInternalCallback settings_callback,
-      VideoTrackFormatInternalCallback track_callback,
+      VideoTrackCallbacks callbacks,
+      const VideoTrackAdapterSettings& settings,
+      base::Token sub_capture_target = base::Token());
+
+  void RemoveTrackOnVideoTaskRunner(const MediaStreamVideoTrack* track);
+  void ReconfigureTrackOnVideoTaskRunner(
+      const MediaStreamVideoTrack* track,
       const VideoTrackAdapterSettings& settings);
+  void SetTrackSubCaptureTargetOnVideoTaskRunner(
+      const MediaStreamVideoTrack* track,
+      base::Token sub_capture_target);
 
-  void RemoveTrackOnIO(const MediaStreamVideoTrack* track);
-  void ReconfigureTrackOnIO(const MediaStreamVideoTrack* track,
-                            const VideoTrackAdapterSettings& settings);
+  using OnMutedInternalCallback = CrossThreadFunction<void(bool mute_state)>;
+  void StartFrameMonitoringOnVideoTaskRunner(
+      OnMutedInternalCallback on_muted_state_callback,
+      double source_frame_rate);
+  void StopFrameMonitoringOnVideoTaskRunner();
+  void SetSourceFrameSizeOnVideoTaskRunner(const gfx::Size& frame_size);
 
-  using OnMutedInternalCallback =
-      WTF::CrossThreadFunction<void(bool mute_state)>;
-  void StartFrameMonitoringOnIO(OnMutedInternalCallback on_muted_state_callback,
-                                double source_frame_rate);
-  void StopFrameMonitoringOnIO();
-  void SetSourceFrameSizeOnIO(const gfx::Size& frame_size);
-
-  // Compare |frame_counter_snapshot| with the current |frame_counter_|, and
-  // inform of the situation (muted, not muted) via |set_muted_state_callback|.
-  void CheckFramesReceivedOnIO(OnMutedInternalCallback set_muted_state_callback,
-                               uint64_t old_frame_counter_snapshot);
+  // Compare |old_frame_counter_snapshot_| with the current |frame_counter_|,
+  // and inform of the situation (muted, not muted) via |on_muted_callback_|.
+  void CheckFramesReceivedOnVideoTaskRunner();
 
   // |thread_checker_| is bound to the main render thread.
-  THREAD_CHECKER(thread_checker_);
+  SEQUENCE_CHECKER(sequence_checker_);
 
-  const scoped_refptr<base::SingleThreadTaskRunner> io_task_runner_;
-
-  base::WeakPtr<MediaStreamVideoSource> media_stream_video_source_;
-
+  const scoped_refptr<base::SequencedTaskRunner> video_task_runner_;
+  const bool is_video_desktop_capture_type_;
   // |renderer_task_runner_| is used to ensure that
   // VideoCaptureDeliverFrameCB is released on the main render thread.
   const scoped_refptr<base::SingleThreadTaskRunner> renderer_task_runner_;
 
-  // VideoFrameResolutionAdapter is an inner class that lives on the IO-thread.
-  // It does the resolution adaptation and delivers frames to all registered
-  // tracks.
+  // VideoFrameResolutionAdapter is an inner class that lives on the video task
+  // runner. It does the resolution adaptation and delivers frames to all
+  // registered tracks.
   class VideoFrameResolutionAdapter;
-  using FrameAdapters = WTF::Vector<scoped_refptr<VideoFrameResolutionAdapter>>;
+  using FrameAdapters = Vector<scoped_refptr<VideoFrameResolutionAdapter>>;
   FrameAdapters adapters_;
 
-  // Set to true if frame monitoring has been started. It is only accessed on
-  // the IO-thread.
-  bool monitoring_frame_rate_;
+  // Is non-null while frame monitoring. It is only accessed on the video task
+  // runner.
+  std::unique_ptr<LowPrecisionTimer> monitoring_frame_rate_timer_;
+  OnMutedInternalCallback on_muted_callback_;
 
   // Keeps track of it frames have been received. It is only accessed on the
-  // IO-thread.
+  // video task runner.
   bool muted_state_;
 
-  // Running frame counter, accessed on the IO-thread.
+  // Running frame counter, accessed on the video task runner.
   uint64_t frame_counter_;
+  uint64_t old_frame_counter_snapshot_;
 
-  // Frame rate configured on the video source, accessed on the IO-thread.
+  // Frame rate configured on the video source, accessed on the video task
+  // runner.
   float source_frame_rate_;
 
-  // Resolution configured on the video source, accessed on the IO-thread.
-  absl::optional<gfx::Size> source_frame_size_;
+  // Resolution configured on the video source, accessed on the video task
+  // runner.
+  std::optional<gfx::Size> source_frame_size_;
 
-  DISALLOW_COPY_AND_ASSIGN(VideoTrackAdapter);
+  // Media timestamp of the most recently delivered frame, and the wall time at
+  // which it was delivered. Used to place a synthesized black frame on the same
+  // timeline as the real frames instead of restarting it at zero. Accessed on
+  // the video task runner.
+  base::TimeDelta last_frame_timestamp_;
+  base::TimeTicks last_frame_arrival_time_;
 };
 
 }  // namespace blink

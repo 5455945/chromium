@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,19 @@
 #define SERVICES_AUDIO_PUBLIC_CPP_INPUT_IPC_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/callback_helpers.h"
-#include "base/macros.h"
+#include "base/component_export.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "media/audio/audio_input_ipc.h"
+#include "media/base/audio_processing.h"
 #include "media/mojo/mojom/audio_input_stream.mojom.h"
 #include "media/mojo/mojom/audio_logging.mojom.h"
+#include "media/mojo/mojom/audio_processing.mojom.h"
 #include "media/mojo/mojom/audio_stream_factory.mojom.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -25,12 +29,19 @@ namespace audio {
 // InputIPC is a client-side class for handling creation,
 // initialization and control of an input stream. May only be used on a single
 // thread.
-class InputIPC : public media::AudioInputIPC,
-                 public media::mojom::AudioInputStreamClient {
+class COMPONENT_EXPORT(AUDIO_PUBLIC_CPP) InputIPC
+    : public media::AudioInputIPC,
+      public media::mojom::AudioInputStreamClient {
  public:
   InputIPC(mojo::PendingRemote<media::mojom::AudioStreamFactory> stream_factory,
            const std::string& device_id,
-           mojo::PendingRemote<media::mojom::AudioLog> log);
+           mojo::PendingRemote<media::mojom::AudioLog> log,
+           std::optional<media::AudioProcessingSettings> processing_settings =
+               std::nullopt);
+
+  InputIPC(const InputIPC&) = delete;
+  InputIPC& operator=(const InputIPC&) = delete;
+
   ~InputIPC() override;
 
   // AudioInputIPC implementation
@@ -48,18 +59,24 @@ class InputIPC : public media::AudioInputIPC,
   void OnError(media::mojom::InputStreamErrorCode code) override;
   void OnMutedStateChanged(bool is_muted) override;
 
-  void StreamCreated(media::mojom::ReadOnlyAudioDataPipePtr data_pipe,
+  void StreamCreated(media::mojom::ReadWriteAudioDataPipePtr data_pipe,
                      bool is_muted,
-                     const absl::optional<base::UnguessableToken>& stream_id);
+                     const std::optional<base::UnguessableToken>& stream_id);
 
   SEQUENCE_CHECKER(sequence_checker_);
 
   mojo::Remote<media::mojom::AudioInputStream> stream_;
   mojo::Receiver<AudioInputStreamClient> stream_client_receiver_{this};
-  media::AudioInputIPCDelegate* delegate_ = nullptr;
+  raw_ptr<media::AudioInputIPCDelegate> delegate_ = nullptr;
 
   std::string device_id_;
-  absl::optional<base::UnguessableToken> stream_id_;
+  std::optional<base::UnguessableToken> stream_id_;
+
+  const std::optional<media::AudioProcessingSettings> processing_settings_;
+  // Bound in CreateStream() when `processing_settings_` is set, since the
+  // audio service requires a valid controls receiver alongside the processing
+  // config.
+  mojo::Remote<media::mojom::AudioProcessorControls> processor_controls_;
 
   // |pending_stream_factory_| is initialized in the constructor, and later
   // bound to |stream_factory_|. This is done because the constructor may be
@@ -71,8 +88,6 @@ class InputIPC : public media::AudioInputIPC,
   mojo::Remote<media::mojom::AudioLog> log_;
 
   base::WeakPtrFactory<InputIPC> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(InputIPC);
 };
 
 }  // namespace audio

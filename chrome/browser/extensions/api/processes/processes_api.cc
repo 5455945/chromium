@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,27 +11,31 @@
 #include <set>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/byte_size.h"
+#include "base/functional/bind.h"
 #include "base/lazy_instance.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/metrics/histogram.h"
 #include "base/process/process.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/extensions/api/tabs/tabs_constants.h"
-#include "chrome/browser/extensions/extension_tab_util.h"
-#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/task_manager/task_manager_interface.h"
 #include "chrome/common/extensions/api/processes.h"
+#include "components/sessions/core/session_id.h"
 #include "content/public/browser/browser_child_process_host.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/child_process_data.h"
+#include "content/public/browser/child_process_host.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/common/child_process_host.h"
 #include "content/public/common/result_codes.h"
+#include "extensions/browser/api/constants.h"
+#include "extensions/browser/extensions_browser_client.h"
 #include "extensions/common/error_utils.h"
+#include "extensions/common/event_args.h"
+#include "third_party/blink/public/mojom/devtools/console_message.mojom.h"
 
 namespace extensions {
 
@@ -46,12 +50,6 @@ namespace {
 base::LazyInstance<BrowserContextKeyedAPIFactory<ProcessesAPI>>::
     DestructorAtExit g_processes_api_factory = LAZY_INSTANCE_INITIALIZER;
 
-int64_t GetRefreshTypesFlagOnlyEssentialData() {
-  // This is the only non-optional data in the Process as defined by the API in
-  // processes.idl.
-  return task_manager::REFRESH_TYPE_NACL;
-}
-
 // This does not include memory. The memory refresh flag will only be added once
 // a listener to OnUpdatedWithMemory event is added.
 int64_t GetRefreshTypesForProcessOptionalData() {
@@ -62,11 +60,11 @@ int64_t GetRefreshTypesForProcessOptionalData() {
       task_manager::REFRESH_TYPE_WEBCACHE_STATS;
 }
 
-std::unique_ptr<api::processes::Cache> CreateCacheData(
+api::processes::Cache CreateCacheData(
     const blink::WebCacheResourceTypeStat& stat) {
-  std::unique_ptr<api::processes::Cache> cache(new api::processes::Cache());
-  cache->size = static_cast<double>(stat.size);
-  cache->live_size = static_cast<double>(stat.size);
+  api::processes::Cache cache;
+  cache.size = static_cast<double>(stat.size);
+  cache.live_size = static_cast<double>(stat.size);
   return cache;
 }
 
@@ -74,50 +72,39 @@ api::processes::ProcessType GetProcessType(
     task_manager::Task::Type task_type) {
   switch (task_type) {
     case task_manager::Task::BROWSER:
-      return api::processes::PROCESS_TYPE_BROWSER;
+      return api::processes::ProcessType::kBrowser;
 
     case task_manager::Task::RENDERER:
-      return api::processes::PROCESS_TYPE_RENDERER;
+      return api::processes::ProcessType::kRenderer;
 
     case task_manager::Task::EXTENSION:
     case task_manager::Task::GUEST:
-      return api::processes::PROCESS_TYPE_EXTENSION;
+      return api::processes::ProcessType::kExtension;
 
-    case task_manager::Task::PLUGIN:
-      return api::processes::PROCESS_TYPE_PLUGIN;
-
-    case task_manager::Task::NACL:
-      return api::processes::PROCESS_TYPE_NACL;
-
-    // TODO(https://crbug.com/1048715): Assign a different process type for each
+    // TODO(crbug.com/40117341): Assign a different process type for each
     //                                  worker type.
     case task_manager::Task::DEDICATED_WORKER:
     case task_manager::Task::SHARED_WORKER:
-      return api::processes::PROCESS_TYPE_WORKER;
+      return api::processes::ProcessType::kWorker;
 
     case task_manager::Task::SERVICE_WORKER:
-      return api::processes::PROCESS_TYPE_SERVICE_WORKER;
+      return api::processes::ProcessType::kServiceWorker;
 
     case task_manager::Task::UTILITY:
-      return api::processes::PROCESS_TYPE_UTILITY;
+      return api::processes::ProcessType::kUtility;
 
     case task_manager::Task::GPU:
-      return api::processes::PROCESS_TYPE_GPU;
+      return api::processes::ProcessType::kGpu;
 
     case task_manager::Task::UNKNOWN:
     case task_manager::Task::ARC:
     case task_manager::Task::CROSTINI:
-    case task_manager::Task::PLUGIN_VM:
     case task_manager::Task::SANDBOX_HELPER:
     case task_manager::Task::ZYGOTE:
-    // TODO(crbug.com/1186464): Do not expose lacros tasks for now. Defer
-    // the decision until further discussion is made.
-    case task_manager::Task::LACROS:
-      return api::processes::PROCESS_TYPE_OTHER;
+      return api::processes::ProcessType::kOther;
   }
 
   NOTREACHED() << "Unknown task type.";
-  return api::processes::PROCESS_TYPE_NONE;
 }
 
 // Fills |out_process| with the data of the process in which the task with |id|
@@ -129,13 +116,13 @@ void FillProcessData(
     task_manager::TaskManagerInterface* task_manager,
     bool include_optional,
     api::processes::Process* out_process) {
-  DCHECK(out_process);
+  CHECK(out_process, base::NotFatalUntil::M161);
 
-  out_process->id = task_manager->GetChildProcessUniqueId(id);
+  // TODO(crbug.com/379869738): Remove GetUnsafeValue.
+  out_process->id = task_manager->GetChildProcessUniqueId(id).GetUnsafeValue();
   out_process->os_process_id = task_manager->GetProcessId(id);
   out_process->type = GetProcessType(task_manager->GetType(id));
   out_process->profile = base::UTF16ToUTF8(task_manager->GetProfileName(id));
-  out_process->nacl_debug_port = task_manager->GetNaClDebugStubPort(id);
 
   // Collect the tab IDs of all the tasks sharing this renderer if any.
   const task_manager::TaskIdList tasks_on_process =
@@ -144,34 +131,41 @@ void FillProcessData(
     api::processes::TaskInfo task_info;
     task_info.title = base::UTF16ToUTF8(task_manager->GetTitle(task_id));
     const SessionID tab_id = task_manager->GetTabId(task_id);
-    if (tab_id.is_valid())
-      task_info.tab_id = std::make_unique<int>(tab_id.id());
+    if (tab_id.is_valid()) {
+      task_info.tab_id = tab_id.id();
+    }
 
     out_process->tasks.push_back(std::move(task_info));
   }
 
   // If we don't need to include the optional properties, just return now.
-  if (!include_optional)
+  if (!include_optional) {
     return;
-
-  const double cpu_usage = task_manager->GetPlatformIndependentCPUUsage(id);
-  if (!std::isnan(cpu_usage))
-    out_process->cpu = std::make_unique<double>(cpu_usage);
-
-  const int64_t network_usage = task_manager->GetProcessTotalNetworkUsage(id);
-  if (network_usage != -1)
-    out_process->network = std::make_unique<double>(network_usage);
-
-  int64_t v8_allocated = 0;
-  int64_t v8_used = 0;
-  if (task_manager->GetV8Memory(id, &v8_allocated, &v8_used)) {
-    out_process->js_memory_allocated = std::make_unique<double>(v8_allocated);
-    out_process->js_memory_used = std::make_unique<double>(v8_used);
   }
 
-  const int64_t sqlite_bytes = task_manager->GetSqliteMemoryUsed(id);
-  if (sqlite_bytes != -1)
-    out_process->sqlite_memory = std::make_unique<double>(sqlite_bytes);
+  const double cpu_usage = task_manager->GetPlatformIndependentCPUUsage(id);
+  if (!std::isnan(cpu_usage)) {
+    out_process->cpu = cpu_usage;
+  }
+
+  const std::optional<base::ByteSize> network_usage =
+      task_manager->GetProcessTotalNetworkUsage(id);
+  if (network_usage.has_value()) {
+    out_process->network = network_usage->InBytes();
+  }
+
+  base::ByteSize v8_allocated;
+  base::ByteSize v8_used;
+  if (task_manager->GetV8Memory(id, &v8_allocated, &v8_used)) {
+    out_process->js_memory_allocated = v8_allocated.InBytes();
+    out_process->js_memory_used = v8_used.InBytes();
+  }
+
+  const std::optional<base::ByteSize> sqlite_bytes =
+      task_manager->GetSqliteMemoryUsed(id);
+  if (sqlite_bytes.has_value()) {
+    out_process->sqlite_memory = sqlite_bytes.value().InBytesF();
+  }
 
   blink::WebCacheResourceTypeStats cache_stats;
   if (task_manager->GetWebCacheStats(id, &cache_stats)) {
@@ -188,14 +182,12 @@ void FillProcessData(
 ////////////////////////////////////////////////////////////////////////////////
 
 ProcessesEventRouter::ProcessesEventRouter(content::BrowserContext* context)
-    : task_manager::TaskManagerObserver(base::TimeDelta::FromSeconds(1),
+    : task_manager::TaskManagerObserver(base::Seconds(1),
                                         task_manager::REFRESH_TYPE_NONE),
       browser_context_(context),
-      listeners_(0) {
-}
+      listeners_(0) {}
 
-ProcessesEventRouter::~ProcessesEventRouter() {
-}
+ProcessesEventRouter::~ProcessesEventRouter() = default;
 
 void ProcessesEventRouter::ListenerAdded() {
   UpdateRefreshTypesFlagsBasedOnListeners();
@@ -217,40 +209,45 @@ void ProcessesEventRouter::ListenerRemoved() {
 }
 
 void ProcessesEventRouter::OnTaskAdded(task_manager::TaskId id) {
-  if (!HasEventListeners(api::processes::OnCreated::kEventName))
+  if (!HasEventListeners(api::processes::OnCreated::kEventName)) {
     return;
+  }
 
   int child_process_host_id = 0;
-  if (!ShouldReportOnCreatedOrOnExited(id, &child_process_host_id))
+  if (!ShouldReportOnCreatedOrOnExited(id, &child_process_host_id)) {
     return;
+  }
 
   api::processes::Process process;
   FillProcessData(id,
                   observed_task_manager(),
                   false,  // include_optional
                   &process);
+  auto event_args = base::MakeRefCounted<EventArgs>(
+      api::processes::OnCreated::Create(process));
   DispatchEvent(events::PROCESSES_ON_CREATED,
-                api::processes::OnCreated::kEventName,
-                api::processes::OnCreated::Create(process));
+                api::processes::OnCreated::kEventName, std::move(event_args));
 }
 
 void ProcessesEventRouter::OnTaskToBeRemoved(task_manager::TaskId id) {
-  if (!HasEventListeners(api::processes::OnExited::kEventName))
+  if (!HasEventListeners(api::processes::OnExited::kEventName)) {
     return;
+  }
 
   int child_process_host_id = 0;
-  if (!ShouldReportOnCreatedOrOnExited(id, &child_process_host_id))
+  if (!ShouldReportOnCreatedOrOnExited(id, &child_process_host_id)) {
     return;
+  }
 
   int exit_code = 0;
   base::TerminationStatus status = base::TERMINATION_STATUS_STILL_RUNNING;
   observed_task_manager()->GetTerminationStatus(id, &status, &exit_code);
 
+  auto event_args =
+      base::MakeRefCounted<EventArgs>(api::processes::OnExited::Create(
+          child_process_host_id, status, exit_code));
   DispatchEvent(events::PROCESSES_ON_EXITED,
-                api::processes::OnExited::kEventName,
-                api::processes::OnExited::Create(child_process_host_id,
-                                                 status,
-                                                 exit_code));
+                api::processes::OnExited::kEventName, std::move(event_args));
 }
 
 void ProcessesEventRouter::OnTasksRefreshedWithBackgroundCalculations(
@@ -260,26 +257,30 @@ void ProcessesEventRouter::OnTasksRefreshedWithBackgroundCalculations(
   const bool has_on_updated_with_memory_listeners =
       HasEventListeners(api::processes::OnUpdatedWithMemory::kEventName);
 
-  if (!has_on_updated_listeners && !has_on_updated_with_memory_listeners)
+  if (!has_on_updated_listeners && !has_on_updated_with_memory_listeners) {
     return;
+  }
 
   // Get the data of tasks sharing the same process only once.
   std::set<base::ProcessId> seen_processes;
-  base::DictionaryValue processes_dictionary;
+  base::DictValue processes_dictionary;
   for (const auto& task_id : task_ids) {
     // We are not interested in tasks, but rather the processes on which they
     // run.
     const base::ProcessId proc_id =
         observed_task_manager()->GetProcessId(task_id);
-    if (seen_processes.count(proc_id))
+    if (seen_processes.count(proc_id)) {
       continue;
+    }
 
-    const int child_process_host_id =
+    const content::ChildProcessId child_process_host_id =
         observed_task_manager()->GetChildProcessUniqueId(task_id);
     // Ignore tasks that don't have a valid child process host ID like ARC
     // processes. We report the browser process info here though.
-    if (child_process_host_id == content::ChildProcessHost::kInvalidUniqueID)
+    if (!child_process_host_id && observed_task_manager()->GetType(task_id) !=
+                                      task_manager::Task::BROWSER) {
       continue;
+    }
 
     seen_processes.insert(proc_id);
     api::processes::Process process;
@@ -290,63 +291,70 @@ void ProcessesEventRouter::OnTasksRefreshedWithBackgroundCalculations(
 
     if (has_on_updated_with_memory_listeners) {
       // Append the memory footprint to the process data.
-      const int64_t memory_footprint =
+      std::optional<base::ByteSize> usage =
           observed_task_manager()->GetMemoryFootprintUsage(task_id);
-      process.private_memory =
-          std::make_unique<double>(static_cast<double>(memory_footprint));
+      const int64_t memory_footprint = usage ? usage->InBytes() : -1;
+      process.private_memory = static_cast<double>(memory_footprint);
     }
 
     // Store each process indexed by the string version of its ChildProcessHost
     // ID.
-    processes_dictionary.Set(base::NumberToString(child_process_host_id),
-                             process.ToValue());
+    processes_dictionary.Set(
+        base::NumberToString(child_process_host_id.value()), process.ToValue());
   }
 
   // Done with data collection. Now dispatch the appropriate events according to
   // the present listeners.
-  DCHECK(has_on_updated_listeners || has_on_updated_with_memory_listeners);
+  CHECK(has_on_updated_listeners || has_on_updated_with_memory_listeners,
+        base::NotFatalUntil::M161);
   if (has_on_updated_listeners) {
     api::processes::OnUpdated::Processes processes;
-    processes.additional_properties.MergeDictionary(&processes_dictionary);
+    processes.additional_properties.Merge(processes_dictionary.Clone());
+    auto event_args = base::MakeRefCounted<EventArgs>(
+        api::processes::OnUpdated::Create(processes));
     // NOTE: If there are listeners to the updates with memory as well,
     // listeners to onUpdated (without memory) will also get the memory info
     // of processes as an added bonus.
     DispatchEvent(events::PROCESSES_ON_UPDATED,
-                  api::processes::OnUpdated::kEventName,
-                  api::processes::OnUpdated::Create(processes));
+                  api::processes::OnUpdated::kEventName, std::move(event_args));
   }
 
   if (has_on_updated_with_memory_listeners) {
     api::processes::OnUpdatedWithMemory::Processes processes;
-    processes.additional_properties.MergeDictionary(&processes_dictionary);
+    processes.additional_properties.Merge(std::move(processes_dictionary));
+    auto event_args = base::MakeRefCounted<EventArgs>(
+        api::processes::OnUpdatedWithMemory::Create(processes));
     DispatchEvent(events::PROCESSES_ON_UPDATED_WITH_MEMORY,
                   api::processes::OnUpdatedWithMemory::kEventName,
-                  api::processes::OnUpdatedWithMemory::Create(processes));
+                  std::move(event_args));
   }
 }
 
 void ProcessesEventRouter::OnTaskUnresponsive(task_manager::TaskId id) {
-  if (!HasEventListeners(api::processes::OnUnresponsive::kEventName))
+  if (!HasEventListeners(api::processes::OnUnresponsive::kEventName)) {
     return;
+  }
 
   api::processes::Process process;
   FillProcessData(id,
                   observed_task_manager(),
                   false,  // include_optional
                   &process);
+  auto event_args = base::MakeRefCounted<EventArgs>(
+      api::processes::OnUnresponsive::Create(process));
   DispatchEvent(events::PROCESSES_ON_UNRESPONSIVE,
                 api::processes::OnUnresponsive::kEventName,
-                api::processes::OnUnresponsive::Create(process));
+                std::move(event_args));
 }
 
 void ProcessesEventRouter::DispatchEvent(
     events::HistogramValue histogram_value,
     const std::string& event_name,
-    std::vector<base::Value> event_args) const {
+    scoped_refptr<const EventArgs> event_args) const {
   EventRouter* event_router = EventRouter::Get(browser_context_);
   if (event_router) {
-    std::unique_ptr<Event> event(
-        new Event(histogram_value, event_name, std::move(event_args)));
+    auto event = std::make_unique<Event>(histogram_value, event_name,
+                                         std::move(event_args));
     event_router->BroadcastEvent(std::move(event));
   }
 }
@@ -361,14 +369,16 @@ bool ProcessesEventRouter::ShouldReportOnCreatedOrOnExited(
     task_manager::TaskId id,
     int* out_child_process_host_id) const {
   // Is it the first task to be created or the last one to be removed?
-  if (observed_task_manager()->GetNumberOfTasksOnSameProcess(id) != 1)
+  if (observed_task_manager()->GetNumberOfTasksOnSameProcess(id) != 1) {
     return false;
+  }
 
   // Ignore tasks that don't have a valid child process host ID like ARC
   // processes, as well as the browser process (neither onCreated() nor
   // onExited() shouldn't report the browser process).
+  // TODO(crbug.com/379869738): Remove GetUnsafeValue.
   *out_child_process_host_id =
-      observed_task_manager()->GetChildProcessUniqueId(id);
+      observed_task_manager()->GetChildProcessUniqueId(id).GetUnsafeValue();
   if (*out_child_process_host_id ==
           content::ChildProcessHost::kInvalidUniqueID ||
       *out_child_process_host_id == 0) {
@@ -380,14 +390,11 @@ bool ProcessesEventRouter::ShouldReportOnCreatedOrOnExited(
 
 void ProcessesEventRouter::UpdateRefreshTypesFlagsBasedOnListeners() {
   int64_t refresh_types = task_manager::REFRESH_TYPE_NONE;
-  if (HasEventListeners(api::processes::OnCreated::kEventName) ||
-      HasEventListeners(api::processes::OnUnresponsive::kEventName)) {
-    refresh_types |= GetRefreshTypesFlagOnlyEssentialData();
-  }
 
   const int64_t on_updated_types = GetRefreshTypesForProcessOptionalData();
-  if (HasEventListeners(api::processes::OnUpdated::kEventName))
+  if (HasEventListeners(api::processes::OnUpdated::kEventName)) {
     refresh_types |= on_updated_types;
+  }
 
   if (HasEventListeners(api::processes::OnUpdatedWithMemory::kEventName)) {
     refresh_types |=
@@ -461,24 +468,22 @@ ProcessesEventRouter* ProcessesAPI::processes_event_router() {
 
 ExtensionFunction::ResponseAction ProcessesGetProcessIdForTabFunction::Run() {
   // For this function, the task manager doesn't even need to be running.
-  std::unique_ptr<api::processes::GetProcessIdForTab::Params> params(
-      api::processes::GetProcessIdForTab::Params::Create(*args_));
-  EXTENSION_FUNCTION_VALIDATE(params.get());
+  std::optional<api::processes::GetProcessIdForTab::Params> params =
+      api::processes::GetProcessIdForTab::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
 
   const int tab_id = params->tab_id;
   content::WebContents* contents = nullptr;
-  int tab_index = -1;
-  if (!ExtensionTabUtil::GetTabById(
-          tab_id, Profile::FromBrowserContext(browser_context()),
-          include_incognito_information(), nullptr, nullptr, &contents,
-          &tab_index)) {
-    return RespondNow(
-        Error(tabs_constants::kTabNotFoundError, base::NumberToString(tab_id)));
+  if (!ExtensionsBrowserClient::Get()->IsValidTabId(
+          browser_context(), tab_id, include_incognito_information(),
+          &contents)) {
+    return RespondNow(Error(kTabNotFoundError, base::NumberToString(tab_id)));
   }
 
-  // TODO(https://crbug.com/767563): chrome.processes.getProcessIdForTab API
+  // TODO(crbug.com/41345944): chrome.processes.getProcessIdForTab API
   // incorrectly assumes a *single* renderer process per tab.
-  const int process_id = contents->GetMainFrame()->GetProcess()->GetID();
+  const int process_id =
+      contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID();
   return RespondNow(ArgumentList(
       api::processes::GetProcessIdForTab::Results::Create(process_id)));
 }
@@ -488,12 +493,12 @@ ExtensionFunction::ResponseAction ProcessesGetProcessIdForTabFunction::Run() {
 ////////////////////////////////////////////////////////////////////////////////
 
 ExtensionFunction::ResponseAction ProcessesTerminateFunction::Run() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
   // For this function, the task manager doesn't even need to be running.
-  std::unique_ptr<api::processes::Terminate::Params> params(
-      api::processes::Terminate::Params::Create(*args_));
-  EXTENSION_FUNCTION_VALIDATE(params.get());
+  std::optional<api::processes::Terminate::Params> params =
+      api::processes::Terminate::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
 
   child_process_host_id_ = params->process_id;
   if (child_process_host_id_ < 0) {
@@ -508,39 +513,21 @@ ExtensionFunction::ResponseAction ProcessesTerminateFunction::Run() {
   // Check if it's a renderer.
   auto* render_process_host =
       content::RenderProcessHost::FromID(child_process_host_id_);
-  if (render_process_host)
+  if (render_process_host) {
     return RespondNow(
         TerminateIfAllowed(render_process_host->GetProcess().Handle()));
+  }
 
-  // This could be a non-renderer child process like a plugin or a nacl
-  // process. Try to get its handle from the BrowserChildProcessHost on the
-  // IO thread.
-  content::GetIOThreadTaskRunner({})->PostTaskAndReplyWithResult(
-      FROM_HERE,
-      base::BindOnce(&ProcessesTerminateFunction::GetProcessHandleOnIO, this,
-                     child_process_host_id_),
-      base::BindOnce(&ProcessesTerminateFunction::OnProcessHandleOnUI, this));
+  // Check if it's a non-renderer child process (e.g. utility, GPU).
+  auto* browser_child_process_host =
+      content::BrowserChildProcessHost::FromID(child_process_host_id_);
+  if (browser_child_process_host) {
+    return RespondNow(
+        TerminateIfAllowed(browser_child_process_host->GetProcess().Handle()));
+  }
 
-  // Promise to respond later.
-  return RespondLater();
-}
-
-base::ProcessHandle ProcessesTerminateFunction::GetProcessHandleOnIO(
-    int child_process_host_id) const {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
-
-  auto* host = content::BrowserChildProcessHost::FromID(child_process_host_id);
-  if (host)
-    return host->GetData().GetProcess().Handle();
-
-  return base::kNullProcessHandle;
-}
-
-void ProcessesTerminateFunction::OnProcessHandleOnUI(
-    base::ProcessHandle handle) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-
-  Respond(TerminateIfAllowed(handle));
+  return RespondNow(Error(errors::kProcessNotFound,
+                          base::NumberToString(child_process_host_id_)));
 }
 
 ExtensionFunction::ResponseValue
@@ -564,8 +551,6 @@ ProcessesTerminateFunction::TerminateIfAllowed(base::ProcessHandle handle) {
 
   const bool did_terminate =
       process.Terminate(content::RESULT_CODE_KILLED, true /* wait */);
-  if (did_terminate)
-    UMA_HISTOGRAM_COUNTS_1M("ChildProcess.KilledByExtensionAPI", 1);
 
   return ArgumentList(
       api::processes::Terminate::Results::Create(did_terminate));
@@ -576,23 +561,23 @@ ProcessesTerminateFunction::TerminateIfAllowed(base::ProcessHandle handle) {
 ////////////////////////////////////////////////////////////////////////////////
 
 ProcessesGetProcessInfoFunction::ProcessesGetProcessInfoFunction()
-    : task_manager::TaskManagerObserver(
-          base::TimeDelta::FromSeconds(1),
-          GetRefreshTypesFlagOnlyEssentialData()) {
-}
+    : task_manager::TaskManagerObserver(base::Seconds(1),
+                                        task_manager::REFRESH_TYPE_NONE) {}
 
 ExtensionFunction::ResponseAction ProcessesGetProcessInfoFunction::Run() {
-  std::unique_ptr<api::processes::GetProcessInfo::Params> params(
-      api::processes::GetProcessInfo::Params::Create(*args_));
-  EXTENSION_FUNCTION_VALIDATE(params.get());
-  if (params->process_ids.as_integer)
+  std::optional<api::processes::GetProcessInfo::Params> params =
+      api::processes::GetProcessInfo::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
+  if (params->process_ids.as_integer) {
     process_host_ids_.push_back(*params->process_ids.as_integer);
-  else
+  } else {
     process_host_ids_.swap(*params->process_ids.as_integers);
+  }
 
   include_memory_ = params->include_memory;
-  if (include_memory_)
+  if (include_memory_) {
     AddRefreshType(task_manager::REFRESH_TYPE_MEMORY_FOOTPRINT);
+  }
 
   // Keep this object alive until the first of either OnTasksRefreshed() or
   // OnTasksRefreshedWithBackgroundCalculations() is received depending on
@@ -610,8 +595,9 @@ void ProcessesGetProcessInfoFunction::OnTasksRefreshed(
     const task_manager::TaskIdList& task_ids) {
   // Memory is background calculated and will be ready when
   // OnTasksRefreshedWithBackgroundCalculations() is invoked.
-  if (include_memory_)
+  if (include_memory_) {
     return;
+  }
 
   GatherDataAndRespond(task_ids);
 }
@@ -619,13 +605,14 @@ void ProcessesGetProcessInfoFunction::OnTasksRefreshed(
 void
 ProcessesGetProcessInfoFunction::OnTasksRefreshedWithBackgroundCalculations(
     const task_manager::TaskIdList& task_ids) {
-  if (!include_memory_)
+  if (!include_memory_) {
     return;
+  }
 
   GatherDataAndRespond(task_ids);
 }
 
-ProcessesGetProcessInfoFunction::~ProcessesGetProcessInfoFunction() {}
+ProcessesGetProcessInfoFunction::~ProcessesGetProcessInfoFunction() = default;
 
 void ProcessesGetProcessInfoFunction::GatherDataAndRespond(
     const task_manager::TaskIdList& task_ids) {
@@ -639,24 +626,27 @@ void ProcessesGetProcessInfoFunction::GatherDataAndRespond(
   for (const auto& task_id : task_ids) {
     const base::ProcessId proc_id =
         observed_task_manager()->GetProcessId(task_id);
-    if (seen_processes.count(proc_id))
+    if (seen_processes.count(proc_id)) {
       continue;
+    }
 
-    const int child_process_host_id =
+    const content::ChildProcessId child_process_host_id =
         observed_task_manager()->GetChildProcessUniqueId(task_id);
     // Ignore tasks that don't have a valid child process host ID like ARC
     // processes. We report the browser process info here though.
-    if (child_process_host_id == content::ChildProcessHost::kInvalidUniqueID)
+    if (!child_process_host_id && observed_task_manager()->GetType(task_id) !=
+                                      task_manager::Task::BROWSER) {
       continue;
+    }
 
     if (specific_processes_requested) {
       // Note: we can't use |!process_host_ids_.empty()| directly in the above
       // condition as we will erase from |process_host_ids_| below.
-      auto itr = std::find(process_host_ids_.begin(),
-                           process_host_ids_.end(),
-                           child_process_host_id);
-      if (itr == process_host_ids_.end())
+      auto itr =
+          std::ranges::find(process_host_ids_, child_process_host_id.value());
+      if (itr == process_host_ids_.end()) {
         continue;
+      }
 
       // If found, we remove it from |process_host_ids|, so that at the end if
       // anything remains in |process_host_ids|, those were invalid arguments
@@ -674,17 +664,16 @@ void ProcessesGetProcessInfoFunction::GatherDataAndRespond(
                     &process);
 
     if (include_memory_) {
-      // Append the memory footprint to the process data.
-      const int64_t memory_footprint =
+      std::optional<base::ByteSize> usage =
           observed_task_manager()->GetMemoryFootprintUsage(task_id);
-      process.private_memory =
-          std::make_unique<double>(static_cast<double>(memory_footprint));
+      const int64_t memory_footprint = usage ? usage->InBytes() : -1;
+      process.private_memory = static_cast<double>(memory_footprint);
     }
 
     // Store each process indexed by the string version of its
     // ChildProcessHost ID.
     processes.additional_properties.Set(
-        base::NumberToString(child_process_host_id), process.ToValue());
+        base::NumberToString(child_process_host_id.value()), process.ToValue());
   }
 
   // Report the invalid host ids sent in the arguments.

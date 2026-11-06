@@ -1,61 +1,65 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <stdint.h>
 
-#include "base/bind.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "base/test/scoped_feature_list.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/test/test_future.h"
+#include "base/test/test_mock_time_task_runner.h"
+#include "content/browser/notifications/notification_database_conversions.h"
 #include "content/browser/notifications/platform_notification_context_impl.h"
 #include "content/browser/service_worker/embedded_worker_test_helper.h"
+#include "content/browser/service_worker/service_worker_context_core.h"
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
 #include "content/public/browser/notification_database_data.h"
-#include "content/public/browser/permission_type.h"
+#include "content/public/browser/permission_result.h"
+#include "content/public/browser/render_process_host.h"
+#include "content/public/browser/weak_document_ptr.h"
 #include "content/public/common/content_client.h"
-#include "content/public/common/content_features.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/mock_permission_manager.h"
+#include "content/public/test/mock_render_process_host.h"
 #include "content/public/test/test_browser_context.h"
 #include "content/test/mock_platform_notification_service.h"
-#include "content/test/test_content_browser_client.h"
+#include "mojo/public/cpp/bindings/remote.h"
+#include "storage/common/database/database_identifier.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/notifications/notification_resources.h"
+#include "third_party/blink/public/common/permissions/permission_utils.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
+#include "third_party/blink/public/mojom/notifications/notification_service.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_registration.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_registration_options.mojom.h"
+#include "third_party/leveldatabase/env_chromium.h"
 #include "third_party/leveldatabase/leveldb_chrome.h"
+#include "third_party/leveldatabase/src/include/leveldb/db.h"
 #include "url/gurl.h"
 
+#if BUILDFLAG(IS_MAC)
+#include "base/mac/mac_util.h"
+#endif
+
 using ::testing::Return;
+
+MATCHER_P(PermissionTypeMatcher, id, "") {
+  return ::testing::Matches(::testing::Eq(id))(
+      blink::PermissionDescriptorToPermissionType(arg));
+}
 
 namespace content {
 
 // Fake Service Worker registration id to use in tests requiring one.
 const int64_t kFakeServiceWorkerRegistrationId = 42;
-
-class NotificationBrowserClient : public TestContentBrowserClient {
- public:
-  explicit NotificationBrowserClient(BrowserContext* browser_context)
-      : platform_notification_service_(
-            std::make_unique<MockPlatformNotificationService>(
-                browser_context)) {}
-
-  PlatformNotificationService* GetPlatformNotificationService(
-      BrowserContext* browser_context) override {
-    return platform_notification_service_.get();
-  }
-
- private:
-  std::unique_ptr<PlatformNotificationService> platform_notification_service_;
-};
 
 class PlatformNotificationContextTest : public ::testing::Test {
  public:
@@ -65,7 +69,9 @@ class PlatformNotificationContextTest : public ::testing::Test {
     // Provide a mock permission manager to the |browser_context_|.
     permission_manager_ = new ::testing::NiceMock<MockPermissionManager>();
     browser_context_.SetPermissionControllerDelegate(
-        base::WrapUnique(permission_manager_));
+        base::WrapUnique(permission_manager_.get()));
+    browser_context_.SetPlatformNotificationService(
+        std::make_unique<MockPlatformNotificationService>(&browser_context_));
   }
 
   // Callback to provide when reading a single notification from the database.
@@ -129,8 +135,11 @@ class PlatformNotificationContextTest : public ::testing::Test {
 
   // Overrides the task runner in |context| with the current message loop
   // proxy, to reduce the number of threads involved in the tests.
-  void OverrideTaskRunnerForTesting(PlatformNotificationContextImpl* context) {
-    context->SetTaskRunnerForTesting(base::ThreadTaskRunnerHandle::Get());
+  void OverrideTaskRunnerForTesting(
+      PlatformNotificationContextImpl* context,
+      scoped_refptr<base::SequencedTaskRunner> task_runner =
+          base::SingleThreadTaskRunner::GetCurrentDefault()) {
+    context->SetTaskRunnerForTesting(std::move(task_runner));
   }
 
   // Gets the currently displayed notifications from |service| synchronously.
@@ -222,11 +231,33 @@ class PlatformNotificationContextTest : public ::testing::Test {
     return notification_id;
   }
 
+  // Writes metadata with the provided key and value to the database and returns
+  // the success status.
+  bool WriteNotificationMetadataSync(PlatformNotificationContextImpl* context,
+                                     const std::string& notification_id,
+                                     const GURL& origin,
+                                     const std::string& metadata_key,
+                                     const std::string& metadata_value) {
+    bool result = false;
+    base::RunLoop run_loop;
+    context->WriteNotificationMetadata(
+        notification_id, origin, metadata_key, metadata_value,
+        base::BindLambdaForTesting([&](bool success) {
+          result = success;
+          run_loop.Quit();
+        }));
+    run_loop.Run();
+    return result;
+  }
+
   void SetPermissionStatus(const GURL& origin,
                            blink::mojom::PermissionStatus permission_status) {
     ON_CALL(*permission_manager_,
-            GetPermissionStatus(PermissionType::NOTIFICATIONS, origin, origin))
-        .WillByDefault(Return(permission_status));
+            GetPermissionResultForOriginWithoutContext(
+                PermissionTypeMatcher(blink::PermissionType::NOTIFICATIONS),
+                url::Origin::Create(origin), url::Origin::Create(origin)))
+        .WillByDefault(Return(content::PermissionResult(
+            permission_status, PermissionStatusSource::UNSPECIFIED)));
   }
 
   // Returns the file path to the leveldb database for |context|.
@@ -260,7 +291,7 @@ class PlatformNotificationContextTest : public ::testing::Test {
 
  private:
   TestBrowserContext browser_context_;
-  MockPermissionManager* permission_manager_ = nullptr;
+  raw_ptr<MockPermissionManager> permission_manager_ = nullptr;
 
   bool success_ = false;
   size_t deleted_count_ = 0;
@@ -286,8 +317,6 @@ TEST_F(PlatformNotificationContextTest, ReadNonExistentNotification) {
 }
 
 TEST_F(PlatformNotificationContextTest, InitializeIsLazy) {
-  NotificationBrowserClient notification_browser_client(browser_context());
-  SetBrowserClientForTesting(&notification_browser_client);
   GURL origin("https://example.com");
 
   base::ScopedTempDir database_dir;
@@ -336,6 +365,27 @@ TEST_F(PlatformNotificationContextTest, WriteReadNotification) {
 
   const NotificationDatabaseData& read_database_data = database_data();
   EXPECT_EQ(notification_database_data.origin, read_database_data.origin);
+}
+
+TEST_F(PlatformNotificationContextTest, ReadNotificationsFromBrowser) {
+  scoped_refptr<PlatformNotificationContextImpl> context =
+      CreatePlatformNotificationContext();
+
+  GURL origin("https://example.com");
+  NotificationDatabaseData data;
+  data.origin = origin;
+  data.service_worker_registration_id = kFakeServiceWorkerRegistrationId;
+
+  // Write one notification shown not by the browser.
+  data.is_shown_by_browser = false;
+  WriteNotificationDataSync(context.get(), origin, data);
+  // Write one notification shown by the browser.
+  data.is_shown_by_browser = true;
+  WriteNotificationDataSync(context.get(), origin, data);
+
+  // Reading via ReadAllNotificationDataForServiceWorkerRegistration should not
+  // return notifications shown by the browser.
+  EXPECT_EQ(1u, GetStoredNotificationsSync(context.get(), origin).size());
 }
 
 TEST_F(PlatformNotificationContextTest, WriteReadReplacedNotification) {
@@ -454,11 +504,8 @@ TEST_F(PlatformNotificationContextTest, DeleteNotification) {
 }
 
 TEST_F(PlatformNotificationContextTest, DeleteClosesNotification) {
-  NotificationBrowserClient notification_browser_client(browser_context());
-  SetBrowserClientForTesting(&notification_browser_client);
   PlatformNotificationService* service =
-      notification_browser_client.GetPlatformNotificationService(
-          browser_context());
+      browser_context()->GetPlatformNotificationService();
 
   scoped_refptr<PlatformNotificationContextImpl> context =
       CreatePlatformNotificationContext();
@@ -493,15 +540,98 @@ TEST_F(PlatformNotificationContextTest, DeleteClosesNotification) {
 }
 
 TEST_F(PlatformNotificationContextTest,
+       DeleteNotificationDataClosesAfterDatabaseTask) {
+  PlatformNotificationService* service =
+      browser_context()->GetPlatformNotificationService();
+
+  auto db_task_runner = base::MakeRefCounted<base::TestMockTimeTaskRunner>();
+  auto context = base::MakeRefCounted<PlatformNotificationContextImpl>(
+      base::FilePath(), browser_context(), nullptr);
+  OverrideTaskRunnerForTesting(context.get(), db_task_runner);
+  context->Initialize();
+  db_task_runner->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
+
+  GURL origin("https://example.com");
+  NotificationDatabaseData notification_database_data;
+  notification_database_data.origin = origin;
+  notification_database_data.service_worker_registration_id =
+      kFakeServiceWorkerRegistrationId;
+  notification_database_data.notification_data.tag = "chat-tag";
+
+  // Write an initial tagged notification and flush both task runners so the
+  // notification is displayed and its deterministic tagged ID is known.
+  context->WriteNotificationData(
+      next_persistent_notification_id(), kFakeServiceWorkerRegistrationId,
+      origin, notification_database_data,
+      base::BindOnce(&PlatformNotificationContextTest::DidWriteNotificationData,
+                     base::Unretained(this)));
+  db_task_runner->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
+  ASSERT_TRUE(success());
+  const std::string tagged_id = notification_id();
+  ASSERT_EQ(1u, GetDisplayedNotificationsSync(service).size());
+
+  // Queue a replacement WriteNotificationData followed by
+  // DeleteNotificationData on the UI thread before the database task runner
+  // executes.
+  context->WriteNotificationData(
+      next_persistent_notification_id(), kFakeServiceWorkerRegistrationId,
+      origin, notification_database_data,
+      base::BindOnce(&PlatformNotificationContextTest::DidWriteNotificationData,
+                     base::Unretained(this)));
+  context->DeleteNotificationData(
+      tagged_id, origin, /*close_notification=*/true,
+      base::BindOnce(
+          &PlatformNotificationContextTest::DidDeleteNotificationData,
+          base::Unretained(this)));
+
+  // Flushing the UI thread before the database task runner executes must not
+  // prematurely close the currently displayed notification.
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(1u, GetDisplayedNotificationsSync(service).size());
+
+  // Once the serialized database tasks run and their UI callbacks complete,
+  // DisplayNotification runs before CloseNotifications, leaving 0 displayed
+  // notifications.
+  db_task_runner->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
+  EXPECT_TRUE(success());
+  EXPECT_EQ(0u, GetDisplayedNotificationsSync(service).size());
+
+  // Now verify the reverse sequence (DeleteNotificationData followed by
+  // WriteNotificationData for the same tag): CloseNotifications must run on
+  // the UI thread before DisplayNotification so the newly written notification
+  // remains displayed.
+  context->DeleteNotificationData(
+      tagged_id, origin, /*close_notification=*/true,
+      base::BindOnce(
+          &PlatformNotificationContextTest::DidDeleteNotificationData,
+          base::Unretained(this)));
+  context->WriteNotificationData(
+      next_persistent_notification_id(), kFakeServiceWorkerRegistrationId,
+      origin, notification_database_data,
+      base::BindOnce(&PlatformNotificationContextTest::DidWriteNotificationData,
+                     base::Unretained(this)));
+  db_task_runner->RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
+  EXPECT_TRUE(success());
+  EXPECT_EQ(1u, GetDisplayedNotificationsSync(service).size());
+
+  // Release `context` and flush `db_task_runner` so `DeleteSoon` frees
+  // `database_` before `db_task_runner` goes out of scope.
+  context->Shutdown();
+  context.reset();
+  db_task_runner->RunUntilIdle();
+}
+
+TEST_F(PlatformNotificationContextTest,
        DeleteAllNotificationDataForBlockedOrigins) {
-  NotificationBrowserClient notification_browser_client(browser_context());
-  SetBrowserClientForTesting(&notification_browser_client);
 
   scoped_refptr<PlatformNotificationContextImpl> context =
       CreatePlatformNotificationContext();
   PlatformNotificationService* service =
-      notification_browser_client.GetPlatformNotificationService(
-          browser_context());
+      browser_context()->GetPlatformNotificationService();
 
   GURL origin1("https://example1.com");
   GURL origin2("https://example.com");
@@ -557,11 +687,8 @@ TEST_F(PlatformNotificationContextTest,
 }
 
 TEST_F(PlatformNotificationContextTest, ServiceWorkerUnregistered) {
-  NotificationBrowserClient notification_browser_client(browser_context());
-  SetBrowserClientForTesting(&notification_browser_client);
   PlatformNotificationService* service =
-      notification_browser_client.GetPlatformNotificationService(
-          browser_context());
+      browser_context()->GetPlatformNotificationService();
   std::unique_ptr<EmbeddedWorkerTestHelper> embedded_worker_test_helper(
       new EmbeddedWorkerTestHelper(base::FilePath()));
 
@@ -577,7 +704,8 @@ TEST_F(PlatformNotificationContextTest, ServiceWorkerUnregistered) {
 
   GURL origin("https://example.com");
   GURL script_url("https://example.com/worker.js");
-  blink::StorageKey key(url::Origin::Create(origin));
+  const blink::StorageKey key =
+      blink::StorageKey::CreateFirstParty(url::Origin::Create(origin));
 
   int64_t service_worker_registration_id =
       blink::mojom::kInvalidServiceWorkerRegistrationId;
@@ -585,11 +713,17 @@ TEST_F(PlatformNotificationContextTest, ServiceWorkerUnregistered) {
   // Register a Service Worker to get a valid registration id.
   blink::mojom::ServiceWorkerRegistrationOptions options;
   options.scope = origin;
+  auto fetch_client_settings_object =
+      blink::mojom::FetchClientSettingsObject::New();
+  fetch_client_settings_object->policy_container_policies =
+      blink::mojom::PolicyContainerPolicies::New();
   embedded_worker_test_helper->context()->RegisterServiceWorker(
-      script_url, key, options, blink::mojom::FetchClientSettingsObject::New(),
+      script_url, key, options, std::move(fetch_client_settings_object),
+
       base::BindOnce(&PlatformNotificationContextTest::DidRegisterServiceWorker,
                      base::Unretained(this), &service_worker_registration_id),
-      /*requesting_frame_id=*/GlobalRenderFrameHostId());
+      /*requesting_frame_id=*/GlobalRenderFrameHostId(),
+      PolicyContainerPolicies());
 
   base::RunLoop().RunUntilIdle();
   ASSERT_NE(service_worker_registration_id,
@@ -615,7 +749,7 @@ TEST_F(PlatformNotificationContextTest, ServiceWorkerUnregistered) {
   // Now drop the Service Worker registration which owns that notification.
   embedded_worker_test_helper->context()->UnregisterServiceWorker(
       origin, key,
-      /*is_immediate=*/false,
+      /*is_immediate=*/false, ServiceWorkerRegistration::DeleteInitiator::kTest,
       base::BindOnce(
           &PlatformNotificationContextTest::DidUnregisterServiceWorker,
           base::Unretained(this), &unregister_status));
@@ -702,9 +836,38 @@ TEST_F(PlatformNotificationContextTest, DestroyOnDiskDatabase) {
   EXPECT_TRUE(IsDirectoryEmpty(database_dir.GetPath()));
 }
 
+TEST_F(PlatformNotificationContextTest,
+       CreateServiceAfterShutdownDropsReceiver) {
+  scoped_refptr<PlatformNotificationContextImpl> context =
+      CreatePlatformNotificationContext();
+  MockRenderProcessHost render_process_host(browser_context());
+  GURL origin("https://example.com");
+  context->Shutdown();
+
+  // Bind before setting the handler: set_disconnect_handler() requires a bound
+  // Remote (it calls is_connected(), which DCHECKs is_bound()).
+  mojo::Remote<blink::mojom::NotificationService> remote;
+  auto receiver = remote.BindNewPipeAndPassReceiver();
+  base::RunLoop run_loop;
+  remote.set_disconnect_handler(run_loop.QuitClosure());
+
+  // Mirrors an in-flight BrowserInterfaceBroker request dispatched after the
+  // storage partition has been shut down but before the RenderProcessHost is
+  // torn down.
+  context->CreateService(
+      &render_process_host,
+      blink::StorageKey::CreateFromStringForTesting(origin.spec()), origin,
+      WeakDocumentPtr(),
+      RenderProcessHost::NotificationServiceCreatorType::kDocument,
+      std::move(receiver));
+
+  // The request must be dropped rather than bound to a service with a null
+  // BrowserContext.
+  run_loop.Run();
+  EXPECT_FALSE(remote.is_connected());
+}
+
 TEST_F(PlatformNotificationContextTest, DestroyCorruptedDatabase) {
-  NotificationBrowserClient notification_browser_client(browser_context());
-  SetBrowserClientForTesting(&notification_browser_client);
   base::ScopedTempDir database_dir;
   ASSERT_TRUE(database_dir.CreateUniqueTempDir());
 
@@ -787,8 +950,6 @@ TEST_F(PlatformNotificationContextTest, ReadAllServiceWorkerDataFilled) {
 }
 
 TEST_F(PlatformNotificationContextTest, SynchronizeNotifications) {
-  NotificationBrowserClient notification_browser_client(browser_context());
-  SetBrowserClientForTesting(&notification_browser_client);
 
   scoped_refptr<PlatformNotificationContextImpl> context =
       CreatePlatformNotificationContext();
@@ -816,13 +977,12 @@ TEST_F(PlatformNotificationContextTest, SynchronizeNotifications) {
 
   // Let some time pass so the stored notification is not considered new anymore
   // and gets deleted in the next synchronize pass.
-  task_environment_.FastForwardBy(base::TimeDelta::FromSeconds(1));
+  task_environment_.FastForwardBy(base::Seconds(1));
 
   // Delete the notification from the display service without removing it from
   // the database. It should automatically synchronize on the next read.
   PlatformNotificationService* service =
-      notification_browser_client.GetPlatformNotificationService(
-          browser_context());
+      browser_context()->GetPlatformNotificationService();
   service->ClosePersistentNotification(notification_id());
 
   ASSERT_EQ(0u, GetStoredNotificationsSync(context.get(), origin).size());
@@ -841,14 +1001,19 @@ TEST_F(PlatformNotificationContextTest, SynchronizeNotifications) {
 }
 
 TEST_F(PlatformNotificationContextTest, DeleteOldNotifications) {
+#if BUILDFLAG(IS_MAC)
+  // TODO(crbug.com/434660312): Re-enable on macOS 26 once issues with
+  // unexpected test timeout failures are resolved.
+  if (base::mac::MacOSMajorVersion() == 26) {
+    GTEST_SKIP() << "Disabled on macOS Tahoe.";
+  }
+#endif
+
   base::HistogramTester histogram_tester;
-  NotificationBrowserClient notification_browser_client(browser_context());
-  SetBrowserClientForTesting(&notification_browser_client);
   scoped_refptr<PlatformNotificationContextImpl> context =
       CreatePlatformNotificationContext();
   PlatformNotificationService* service =
-      notification_browser_client.GetPlatformNotificationService(
-          browser_context());
+      browser_context()->GetPlatformNotificationService();
 
   // Let PlatformNotificationContext synchronize displayed notifications.
   base::RunLoop().RunUntilIdle();
@@ -860,7 +1025,8 @@ TEST_F(PlatformNotificationContextTest, DeleteOldNotifications) {
   WriteNotificationDataSync(context.get(), origin, data);
 
   // Let some time pass but not enough to delete the notification yet.
-  task_environment_.FastForwardBy(base::TimeDelta::FromDays(5));
+  task_environment_.AdvanceClock(base::Days(5));
+  base::RunLoop().RunUntilIdle();
   context->TriggerNotifications();
   // Allow for closing notifications on the UI thread.
   base::RunLoop().RunUntilIdle();
@@ -877,7 +1043,8 @@ TEST_F(PlatformNotificationContextTest, DeleteOldNotifications) {
 
   // Let some more time pass so the first notification is not considered new
   // anymore and should get closed while the second one should stay.
-  task_environment_.FastForwardBy(base::TimeDelta::FromDays(2));
+  task_environment_.AdvanceClock(base::Days(2));
+  base::RunLoop().RunUntilIdle();
   context->TriggerNotifications();
   // Allow for closing notifications on the UI thread.
   base::RunLoop().RunUntilIdle();
@@ -893,9 +1060,6 @@ TEST_F(PlatformNotificationContextTest, DeleteOldNotifications) {
 }
 
 TEST_F(PlatformNotificationContextTest, WriteDisplaysNotification) {
-  NotificationBrowserClient notification_browser_client(browser_context());
-  SetBrowserClientForTesting(&notification_browser_client);
-
   scoped_refptr<PlatformNotificationContextImpl> context =
       CreatePlatformNotificationContext();
 
@@ -917,8 +1081,7 @@ TEST_F(PlatformNotificationContextTest, WriteDisplaysNotification) {
   // The written notification should be shown now.
   std::set<std::string> displayed_notification_ids =
       GetDisplayedNotificationsSync(
-          notification_browser_client.GetPlatformNotificationService(
-              browser_context()));
+          browser_context()->GetPlatformNotificationService());
 
   ASSERT_EQ(1u, displayed_notification_ids.size());
   EXPECT_EQ(notification_id(), *displayed_notification_ids.begin());
@@ -940,11 +1103,11 @@ TEST_F(PlatformNotificationContextTest, WriteReadNotificationResources) {
 
   // Store resources for the new notification.
   std::vector<NotificationResourceData> resources;
-  resources.push_back(
-      {notification_id, origin, blink::NotificationResources()});
+  resources.emplace_back(notification_id, origin,
+                         blink::NotificationResources());
   // Also try inserting resources for an invalid notification id.
   std::string invalid_id = "invalid-id";
-  resources.push_back({invalid_id, origin, blink::NotificationResources()});
+  resources.emplace_back(invalid_id, origin, blink::NotificationResources());
   // Writing resources should succeed.
   ASSERT_TRUE(
       WriteNotificationResourcesSync(context.get(), std::move(resources)));
@@ -959,14 +1122,8 @@ TEST_F(PlatformNotificationContextTest, WriteReadNotificationResources) {
 }
 
 TEST_F(PlatformNotificationContextTest, ReDisplayNotifications) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(features::kNotificationTriggers);
-
-  NotificationBrowserClient notification_browser_client(browser_context());
-  SetBrowserClientForTesting(&notification_browser_client);
   PlatformNotificationService* service =
-      notification_browser_client.GetPlatformNotificationService(
-          browser_context());
+      browser_context()->GetPlatformNotificationService();
 
   scoped_refptr<PlatformNotificationContextImpl> context =
       CreatePlatformNotificationContext();
@@ -977,15 +1134,15 @@ TEST_F(PlatformNotificationContextTest, ReDisplayNotifications) {
   NotificationDatabaseData data1;
   data1.notification_resources = blink::NotificationResources();
   data1.notification_data.show_trigger_timestamp =
-      base::Time::Now() + base::TimeDelta::FromDays(10);
+      base::Time::Now() + base::Days(10);
   WriteNotificationDataSync(context.get(), origin, data1);
   // 1 notification with stored resources.
   NotificationDatabaseData data2;
   std::string notification_id =
       WriteNotificationDataSync(context.get(), origin, data2);
   std::vector<NotificationResourceData> resources;
-  resources.push_back(
-      {notification_id, origin, blink::NotificationResources()});
+  resources.emplace_back(notification_id, origin,
+                         blink::NotificationResources());
   WriteNotificationResourcesSync(context.get(), std::move(resources));
   // 1 notification without resources.
   NotificationDatabaseData data3;
@@ -1015,14 +1172,8 @@ TEST_F(PlatformNotificationContextTest, ReDisplayNotifications) {
 }
 
 TEST_F(PlatformNotificationContextTest, CountVisibleNotification) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(features::kNotificationTriggers);
-
-  NotificationBrowserClient notification_browser_client(browser_context());
-  SetBrowserClientForTesting(&notification_browser_client);
   PlatformNotificationService* service =
-      notification_browser_client.GetPlatformNotificationService(
-          browser_context());
+      browser_context()->GetPlatformNotificationService();
 
   scoped_refptr<PlatformNotificationContextImpl> context =
       CreatePlatformNotificationContext();
@@ -1032,18 +1183,22 @@ TEST_F(PlatformNotificationContextTest, CountVisibleNotification) {
   data.origin = origin;
   data.service_worker_registration_id = kFakeServiceWorkerRegistrationId;
 
+  // Notification shown by the browser will be visible.
+  data.is_shown_by_browser = true;
+  WriteNotificationDataSync(context.get(), origin, data);
   // Regular notification will be visible.
+  data.is_shown_by_browser = false;
   WriteNotificationDataSync(context.get(), origin, data);
   // We will close this notification without removing it from the database.
   std::string notification_id =
       WriteNotificationDataSync(context.get(), origin, data);
   // Scheduled notification won't be visible.
   data.notification_data.show_trigger_timestamp =
-      base::Time::Now() + base::TimeDelta::FromDays(10);
+      base::Time::Now() + base::Days(10);
   WriteNotificationDataSync(context.get(), origin, data);
 
-  // Expect to see two notifications.
-  ASSERT_EQ(2u, GetDisplayedNotificationsSync(service).size());
+  // Expect to see three notifications.
+  ASSERT_EQ(3u, GetDisplayedNotificationsSync(service).size());
 
   // Close the notification without deleting it.
   service->ClosePersistentNotification(notification_id);
@@ -1053,19 +1208,16 @@ TEST_F(PlatformNotificationContextTest, CountVisibleNotification) {
       origin, kFakeServiceWorkerRegistrationId,
       base::BindLambdaForTesting([&](bool success, int count) {
         EXPECT_TRUE(success);
-        // Only the first notification should be counted as visible.
-        EXPECT_EQ(1, count);
+        // Only the first two notifications should be counted as visible.
+        EXPECT_EQ(2, count);
         run_loop.Quit();
       }));
   run_loop.Run();
 }
 
 TEST_F(PlatformNotificationContextTest, DeleteNotificationsWithTag) {
-  NotificationBrowserClient notification_browser_client(browser_context());
-  SetBrowserClientForTesting(&notification_browser_client);
   PlatformNotificationService* service =
-      notification_browser_client.GetPlatformNotificationService(
-          browser_context());
+      browser_context()->GetPlatformNotificationService();
 
   scoped_refptr<PlatformNotificationContextImpl> context =
       CreatePlatformNotificationContext();
@@ -1088,7 +1240,7 @@ TEST_F(PlatformNotificationContextTest, DeleteNotificationsWithTag) {
 
   base::RunLoop run_loop;
   context->DeleteAllNotificationDataWithTag(
-      tag, origin,
+      tag, /*is_shown_by_browser=*/false, origin,
       base::BindLambdaForTesting([&](bool success, size_t deleted_count) {
         EXPECT_TRUE(success);
         EXPECT_EQ(1u, deleted_count);
@@ -1107,16 +1259,65 @@ TEST_F(PlatformNotificationContextTest, DeleteNotificationsWithTag) {
   EXPECT_EQ(0u, displayed_notifications.count(notification_id));
 }
 
+TEST_F(PlatformNotificationContextTest, DeleteNotificationsWithTagFromBrowser) {
+  PlatformNotificationService* service =
+      browser_context()->GetPlatformNotificationService();
+
+  scoped_refptr<PlatformNotificationContextImpl> context =
+      CreatePlatformNotificationContext();
+
+  const GURL origin("https://example.com");
+  const std::string tag = "foo";
+
+  NotificationDatabaseData data;
+  data.notification_data.tag = tag;
+
+  // Write notifications from and not from the browser to the database.
+  data.is_shown_by_browser = false;
+  WriteNotificationDataSync(context.get(), origin, data);
+  data.is_shown_by_browser = true;
+  std::string notification_id =
+      WriteNotificationDataSync(context.get(), origin, data);
+
+  // Expect to see both notifications.
+  ASSERT_EQ(2u, GetDisplayedNotificationsSync(service).size());
+
+  base::RunLoop run_loop;
+  context->DeleteAllNotificationDataWithTag(
+      tag, /*is_shown_by_browser=*/true, origin,
+      base::BindLambdaForTesting([&](bool success, size_t deleted_count) {
+        EXPECT_TRUE(success);
+        EXPECT_EQ(1u, deleted_count);
+        run_loop.Quit();
+      }));
+  run_loop.Run();
+
+  // The notifications close task has a lower priority than the response
+  // callback, run tasks so we can check visible notifications after close.
+  base::RunLoop().RunUntilIdle();
+
+  // Expect the notification shown by the browser to be closed.
+  std::set<std::string> displayed_notifications =
+      GetDisplayedNotificationsSync(service);
+  EXPECT_EQ(1u, displayed_notifications.size());
+  EXPECT_EQ(0u, displayed_notifications.count(notification_id));
+}
+
 TEST_F(PlatformNotificationContextTest, GetOldestNotificationTime) {
+#if BUILDFLAG(IS_MAC)
+  // TODO(crbug.com/434660312): Re-enable on macOS 26 once issues with
+  // unexpected test timeout failures are resolved.
+  if (base::mac::MacOSMajorVersion() == 26) {
+    GTEST_SKIP() << "Disabled on macOS Tahoe.";
+  }
+#endif
+
   base::HistogramTester histogram_tester;
-  NotificationBrowserClient notification_browser_client(browser_context());
-  SetBrowserClientForTesting(&notification_browser_client);
 
   scoped_refptr<PlatformNotificationContextImpl> context =
       CreatePlatformNotificationContext();
   PlatformNotificationService* service =
-      notification_browser_client.GetPlatformNotificationService(
-          browser_context());
+      browser_context()->GetPlatformNotificationService();
 
   GURL origin("https://example.com");
 
@@ -1134,7 +1335,7 @@ TEST_F(PlatformNotificationContextTest, GetOldestNotificationTime) {
 
     // This is done to simulate a change in time to have notifications from
     // different times and days.
-    task_environment_.FastForwardBy(base::TimeDelta::FromDays(1));
+    task_environment_.FastForwardBy(base::Days(1));
   }
 
   // Verify that the 5 notifications are present.
@@ -1159,14 +1360,11 @@ TEST_F(PlatformNotificationContextTest, GetOldestNotificationTime) {
 TEST_F(PlatformNotificationContextTest,
        GetOldestNotificationTimeForEmptyOrigin) {
   base::HistogramTester histogram_tester;
-  NotificationBrowserClient notification_browser_client(browser_context());
-  SetBrowserClientForTesting(&notification_browser_client);
 
   scoped_refptr<PlatformNotificationContextImpl> context =
       CreatePlatformNotificationContext();
   PlatformNotificationService* service =
-      notification_browser_client.GetPlatformNotificationService(
-          browser_context());
+      browser_context()->GetPlatformNotificationService();
 
   GURL origin("https://example.com");
 
@@ -1184,6 +1382,221 @@ TEST_F(PlatformNotificationContextTest,
         run_loop.Quit();
       }));
   run_loop.Run();
+}
+
+TEST_F(PlatformNotificationContextTest, WriteReadNotificationMetadata) {
+  base::HistogramTester histogram_tester;
+  scoped_refptr<PlatformNotificationContextImpl> context =
+      CreatePlatformNotificationContext();
+  GURL origin("https://example.com");
+
+  // Write a notification to the database.
+  NotificationDatabaseData data;
+  std::string notification_id =
+      WriteNotificationDataSync(context.get(), origin, data);
+
+  // Writing metadata should succeed. Get serialized metadata string for
+  // checking database write.
+  std::string metadata_key_1 = "content-detection";
+  std::string old_metadata_value_1 = "{\"bad\":\"value\"}";
+  ASSERT_TRUE(WriteNotificationMetadataSync(context.get(), notification_id,
+                                            origin, metadata_key_1,
+                                            old_metadata_value_1));
+
+  // Update `metadata_key` metadata with new value.
+  std::string new_metadata_value_1 = "{\"good\":\"value\"}";
+  ASSERT_TRUE(WriteNotificationMetadataSync(context.get(), notification_id,
+                                            origin, metadata_key_1,
+                                            new_metadata_value_1));
+
+  // Update notification database entry with another type of metadata.
+  std::string metadata_key_2 = "other-type-of-metadata";
+  std::string metadata_value_2 = "{\"key\":\"other value\"}";
+  ASSERT_TRUE(WriteNotificationMetadataSync(context.get(), notification_id,
+                                            origin, metadata_key_2,
+                                            metadata_value_2));
+
+  // The write operation should have succeeded with a notification id.
+  context->ReadNotificationDataAndRecordInteraction(
+      notification_id, origin, PlatformNotificationContext::Interaction::NONE,
+      base::BindOnce(&PlatformNotificationContextTest::DidReadNotificationData,
+                     base::Unretained(this)));
+
+  base::RunLoop().RunUntilIdle();
+
+  // The read operation should have succeeded, with the right notification.
+  ASSERT_TRUE(success());
+
+  const NotificationDatabaseData& read_database_data = database_data();
+  EXPECT_EQ(origin, read_database_data.origin);
+  ASSERT_TRUE(read_database_data.serialized_metadata.contains(metadata_key_1));
+  EXPECT_EQ(new_metadata_value_1,
+            read_database_data.serialized_metadata.at(metadata_key_1));
+  ASSERT_TRUE(read_database_data.serialized_metadata.contains(metadata_key_2));
+  EXPECT_EQ(metadata_value_2,
+            read_database_data.serialized_metadata.at(metadata_key_2));
+
+  // Check histogram statuses are logged with value `0`, corresponding to
+  // `STATUS_OK`.
+  histogram_tester.ExpectBucketCount(
+      "Notifications.Database.WriteNotificationMetadataReadResult",
+      /*sample=*/0, /*expected_count=*/3);
+  histogram_tester.ExpectBucketCount(
+      "Notifications.Database.WriteNotificationMetadataUpdateResult",
+      /*sample=*/0, /*expected_count=*/3);
+}
+
+TEST_F(PlatformNotificationContextTest,
+       DestroyDatabaseOnCorruptedNotificationIdDuringSync) {
+  base::ScopedTempDir database_dir;
+  ASSERT_TRUE(database_dir.CreateUniqueTempDir());
+
+  GURL origin("https://example.com");
+  base::FilePath db_path = database_dir.GetPath().Append(
+      FILE_PATH_LITERAL("Platform Notifications"));
+
+  // Create an on-disk database containing a corrupted DATA: record whose
+  // serialized proto is missing `notification_id`.
+  {
+    NotificationDatabaseData corrupted_data;
+    corrupted_data.origin = origin;
+    std::string serialized_data;
+    ASSERT_TRUE(
+        SerializeNotificationDatabaseData(corrupted_data, &serialized_data));
+
+    std::unique_ptr<leveldb::DB> db;
+    leveldb_env::Options options;
+    options.create_if_missing = true;
+    ASSERT_TRUE(leveldb_env::OpenDB(options, db_path.AsUTF8Unsafe(), &db).ok());
+    std::string key =
+        "DATA:" + storage::GetIdentifierFromOrigin(origin) + '\0' + "bad-id";
+    ASSERT_TRUE(db->Put(leveldb::WriteOptions(), key, serialized_data).ok());
+  }
+  EXPECT_FALSE(base::IsDirectoryEmpty(db_path));
+
+  // Initializing the context runs DoSyncNotificationData(), which should detect
+  // STATUS_ERROR_CORRUPTED and destroy the database instead of crashing in
+  // DeleteNotificationData().
+  auto context = CreatePlatformNotificationContext(database_dir.GetPath());
+  EXPECT_TRUE(base::IsDirectoryEmpty(db_path));
+
+  // Subsequent reads should re-initialize a clean database.
+  EXPECT_EQ(0u, GetStoredNotificationsSync(context.get(), origin).size());
+  EXPECT_FALSE(base::IsDirectoryEmpty(db_path));
+}
+
+TEST_F(PlatformNotificationContextTest,
+       PurgeNonPersistentNotificationIdOnReadAll) {
+  base::ScopedTempDir database_dir;
+  ASSERT_TRUE(database_dir.CreateUniqueTempDir());
+
+  GURL origin("https://example.com");
+  const std::string kCorruptedId = "not-a-persistent-id";
+  base::FilePath db_path = database_dir.GetPath().Append(
+      FILE_PATH_LITERAL("Platform Notifications"));
+
+  // Write a corrupted DATA: record whose ID lacks the persistent prefix. It is
+  // a pending scheduled notification so that the startup sync keeps it.
+  {
+    NotificationDatabaseData corrupted_data;
+    corrupted_data.notification_id = kCorruptedId;
+    corrupted_data.origin = origin;
+    corrupted_data.service_worker_registration_id =
+        kFakeServiceWorkerRegistrationId;
+    corrupted_data.creation_time_millis = base::Time::Now();
+    corrupted_data.notification_data.show_trigger_timestamp =
+        base::Time::Now() + base::Days(1);
+    std::string serialized_data;
+    ASSERT_TRUE(
+        SerializeNotificationDatabaseData(corrupted_data, &serialized_data));
+
+    std::unique_ptr<leveldb::DB> db;
+    leveldb_env::Options options;
+    options.create_if_missing = true;
+    ASSERT_TRUE(leveldb_env::OpenDB(options, db_path.AsUTF8Unsafe(), &db).ok());
+    std::string key = "DATA:" + storage::GetIdentifierFromOrigin(origin) +
+                      '\0' + kCorruptedId;
+    ASSERT_TRUE(db->Put(leveldb::WriteOptions(), key, serialized_data).ok());
+  }
+
+  auto context = CreatePlatformNotificationContext(database_dir.GetPath());
+
+  // Reading all notifications with synchronization support must not hit a
+  // CHECK on the non-persistent ID; the record is dropped from the result.
+  EXPECT_EQ(0u, GetStoredNotificationsSync(context.get(), origin).size());
+
+  // The corrupted record should have been purged from the database.
+  base::test::TestFuture<bool, const NotificationDatabaseData&> read_future;
+  context->ReadNotificationDataAndRecordInteraction(
+      kCorruptedId, origin, PlatformNotificationContext::Interaction::NONE,
+      read_future.GetCallback());
+  EXPECT_FALSE(read_future.Get<0>());
+}
+
+TEST_F(PlatformNotificationContextTest, EmptyNotificationIdAndInvalidOrigin) {
+  scoped_refptr<PlatformNotificationContextImpl> context =
+      CreatePlatformNotificationContext();
+  GURL origin("https://example.com");
+
+  // Deleting with an empty notification_id or invalid origin should fail
+  // gracefully without hitting CHECKs.
+  {
+    base::test::TestFuture<bool> delete_future;
+    context->DeleteNotificationData(
+        /*notification_id=*/"", origin, /*close_notification=*/true,
+        delete_future.GetCallback());
+    EXPECT_FALSE(delete_future.Get());
+  }
+  {
+    base::test::TestFuture<bool> delete_future;
+    context->DeleteNotificationData(
+        /*notification_id=*/"id", GURL(), /*close_notification=*/true,
+        delete_future.GetCallback());
+    EXPECT_FALSE(delete_future.Get());
+  }
+
+  // Reading data with an empty notification_id or invalid origin should fail
+  // gracefully.
+  {
+    base::test::TestFuture<bool, const NotificationDatabaseData&> read_future;
+    context->ReadNotificationDataAndRecordInteraction(
+        /*notification_id=*/"", origin,
+        PlatformNotificationContext::Interaction::NONE,
+        read_future.GetCallback());
+    EXPECT_FALSE(read_future.Get<0>());
+  }
+  {
+    base::test::TestFuture<bool, const NotificationDatabaseData&> read_future;
+    context->ReadNotificationDataAndRecordInteraction(
+        /*notification_id=*/"id", GURL(),
+        PlatformNotificationContext::Interaction::NONE,
+        read_future.GetCallback());
+    EXPECT_FALSE(read_future.Get<0>());
+  }
+
+  // Reading resources with an empty notification_id or invalid origin should
+  // fail gracefully.
+  EXPECT_FALSE(ReadNotificationResourcesSync(context.get(),
+                                             /*notification_id=*/"", origin));
+  EXPECT_FALSE(ReadNotificationResourcesSync(context.get(),
+                                             /*notification_id=*/"id", GURL()));
+
+  // Writing metadata with an empty notification_id or invalid origin should
+  // fail gracefully.
+  EXPECT_FALSE(WriteNotificationMetadataSync(
+      context.get(), /*notification_id=*/"", origin, "key", "value"));
+  EXPECT_FALSE(WriteNotificationMetadataSync(
+      context.get(), /*notification_id=*/"id", GURL(), "key", "value"));
+
+  // Writing resources with an empty notification_id or invalid origin entry
+  // should skip it without crashing.
+  std::vector<NotificationResourceData> resources;
+  resources.emplace_back(
+      /*notification_id=*/"", origin, blink::NotificationResources());
+  resources.emplace_back(
+      /*notification_id=*/"id", GURL(), blink::NotificationResources());
+  EXPECT_TRUE(
+      WriteNotificationResourcesSync(context.get(), std::move(resources)));
 }
 
 }  // namespace content

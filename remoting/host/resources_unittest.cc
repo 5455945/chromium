@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,25 +23,23 @@ class ResourcesTest : public testing::Test {
   bool resources_available_;
 };
 
-// TODO(alexeypa): Reenable the test once http://crbug.com/269143 (ChromeOS) and
-// http://crbug.com/268043 (MacOS) are fixed.
-TEST_F(ResourcesTest, DISABLED_ProductName) {
+TEST_F(ResourcesTest, ProductName) {
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   std::string expected_product_name = "Chrome Remote Desktop";
 #else   // BUILDFLAG(GOOGLE_CHROME_BRANDING)
   std::string expected_product_name = "Chromoting";
-#endif  // BUILDFLAGdefined(GOOGLE_CRANDING)
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
 
   // Chrome-style i18n is not used on Windows or Android.
-#if defined(OS_WIN) || defined(OS_ANDROID)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID)
   EXPECT_FALSE(resources_available_);
 #else
   EXPECT_TRUE(resources_available_);
 #endif
 
   if (resources_available_) {
-    EXPECT_EQ(expected_product_name,
-              l10n_util::GetStringUTF8(IDS_PRODUCT_NAME));
+    EXPECT_EQ(l10n_util::GetStringUTF8(IDS_PRODUCT_NAME),
+              expected_product_name);
   }
 }
 

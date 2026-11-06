@@ -1,20 +1,21 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "cc/resources/ui_resource_request.h"
 
-#include "base/memory/ptr_util.h"
+#include <memory>
+
+#include "base/check_op.h"
 
 namespace cc {
 
-UIResourceRequest::UIResourceRequest(UIResourceRequestType type,
-                                     UIResourceId id)
+UIResourceRequest::UIResourceRequest(Type type, UIResourceId id)
     : type_(type), id_(id) {
-  DCHECK(type == UI_RESOURCE_DELETE);
+  DCHECK_EQ(type, Type::kDelete);
 }
 
-UIResourceRequest::UIResourceRequest(UIResourceRequestType type,
+UIResourceRequest::UIResourceRequest(Type type,
                                      UIResourceId id,
                                      const UIResourceBitmap& bitmap)
     : type_(type), id_(id), bitmap_(new UIResourceBitmap(bitmap)) {}
@@ -28,7 +29,7 @@ UIResourceRequest& UIResourceRequest::operator=(
   type_ = request.type_;
   id_ = request.id_;
   if (request.bitmap_) {
-    bitmap_ = base::WrapUnique(new UIResourceBitmap(*request.bitmap_.get()));
+    bitmap_ = std::make_unique<UIResourceBitmap>(*request.bitmap_.get());
   } else {
     bitmap_ = nullptr;
   }

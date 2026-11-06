@@ -1,13 +1,12 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef IOS_WEB_VIEW_INTERNAL_CWV_BACK_FORWARD_LIST_INTERNAL_H_
 #define IOS_WEB_VIEW_INTERNAL_CWV_BACK_FORWARD_LIST_INTERNAL_H_
 
-#import "ios/web_view/public/cwv_back_forward_list.h"
-
 #import "ios/web_view/internal/cwv_back_forward_list_item_internal.h"
+#import "ios/web_view/public/cwv_back_forward_list.h"
 
 NS_ASSUME_NONNULL_BEGIN
 

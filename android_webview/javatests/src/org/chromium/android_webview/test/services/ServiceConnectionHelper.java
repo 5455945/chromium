@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,6 +13,7 @@ import com.google.common.util.concurrent.SettableFuture;
 
 import org.junit.Assert;
 
+import org.chromium.android_webview.common.services.ServiceHelper;
 import org.chromium.android_webview.test.AwActivityTestRule;
 import org.chromium.base.ContextUtils;
 
@@ -34,26 +35,29 @@ public class ServiceConnectionHelper implements AutoCloseable {
      * @param flags should be {@code 0} or a combination of {@code Context#BIND_*}.
      */
     public ServiceConnectionHelper(Intent intent, int flags) {
-        mConnection = new ServiceConnection() {
-            @Override
-            public void onServiceConnected(ComponentName name, IBinder service) {
-                mFuture.set(service);
-            }
+        mConnection =
+                new ServiceConnection() {
+                    @Override
+                    public void onServiceConnected(ComponentName name, IBinder service) {
+                        mFuture.set(service);
+                    }
 
-            @Override
-            public void onServiceDisconnected(ComponentName name) {}
-        };
+                    @Override
+                    public void onServiceDisconnected(ComponentName name) {}
+                };
 
         boolean success =
-                ContextUtils.getApplicationContext().bindService(intent, mConnection, flags);
-        Assert.assertTrue("Failed to bind to service with " + intent + ". "
+                ServiceHelper.bindService(
+                        ContextUtils.getApplicationContext(), intent, mConnection, flags);
+        Assert.assertTrue(
+                "Failed to bind to service with "
+                        + intent
+                        + ". "
                         + "Did you expose it in android_webview/test/shell/AndroidManifest.xml?",
                 success);
     }
 
-    /**
-     * Returns the IBinder for this connection.
-     */
+    /** Returns the IBinder for this connection. */
     public IBinder getBinder() {
         return AwActivityTestRule.waitForFuture(mFuture);
     }

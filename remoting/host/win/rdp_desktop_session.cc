@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,19 +8,17 @@
 
 #include "base/strings/utf_string_conversions.h"
 #include "remoting/base/auto_thread_task_runner.h"
-#include "remoting/host/screen_resolution.h"
+#include "remoting/host/base/screen_resolution.h"
 #include "remoting/host/win/chromoting_module.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_geometry.h"
 
 namespace remoting {
 
-RdpDesktopSession::RdpDesktopSession() {
-}
+RdpDesktopSession::RdpDesktopSession() = default;
 
-RdpDesktopSession::~RdpDesktopSession() {
-}
+RdpDesktopSession::~RdpDesktopSession() = default;
 
-STDMETHODIMP RdpDesktopSession::Connect(
+IFACEMETHODIMP RdpDesktopSession::Connect(
     long width,
     long height,
     long dpi_x,
@@ -42,25 +40,25 @@ STDMETHODIMP RdpDesktopSession::Connect(
   return S_OK;
 }
 
-STDMETHODIMP RdpDesktopSession::Disconnect() {
+IFACEMETHODIMP RdpDesktopSession::Disconnect() {
   client_.reset();
   event_handler_ = nullptr;
   return S_OK;
 }
 
-STDMETHODIMP RdpDesktopSession::ChangeResolution(long width,
-                                                 long height,
-                                                 long dpi_x,
-                                                 long dpi_y) {
+IFACEMETHODIMP RdpDesktopSession::ChangeResolution(long width,
+                                                   long height,
+                                                   long dpi_x,
+                                                   long dpi_y) {
   if (client_) {
-    client_->ChangeResolution(ScreenResolution(
-        webrtc::DesktopSize(width, height),
-        webrtc::DesktopVector(dpi_x, dpi_y)));
+    client_->ChangeResolution(
+        ScreenResolution(webrtc::DesktopSize(width, height),
+                         webrtc::DesktopVector(dpi_x, dpi_y)));
   }
   return S_OK;
 }
 
-STDMETHODIMP RdpDesktopSession::InjectSas() {
+IFACEMETHODIMP RdpDesktopSession::InjectSas() {
   if (client_) {
     client_->InjectSas();
   }
@@ -69,8 +67,8 @@ STDMETHODIMP RdpDesktopSession::InjectSas() {
 
 void RdpDesktopSession::OnRdpConnected() {
   HRESULT result = event_handler_->OnRdpConnected();
-  CHECK(SUCCEEDED(result)) << "OnRdpConnected() failed: 0x"
-                           << std::hex << result << std::dec << ".";
+  CHECK(SUCCEEDED(result)) << "OnRdpConnected() failed: 0x" << std::hex
+                           << result << std::dec << ".";
 }
 
 void RdpDesktopSession::OnRdpClosed() {
@@ -79,4 +77,4 @@ void RdpDesktopSession::OnRdpClosed() {
                            << std::dec << ".";
 }
 
-} // namespace remoting
+}  // namespace remoting

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -31,6 +31,10 @@ namespace ml {
 class SmartDimWorker {
  public:
   SmartDimWorker();
+
+  SmartDimWorker(const SmartDimWorker&) = delete;
+  SmartDimWorker& operator=(const SmartDimWorker&) = delete;
+
   virtual ~SmartDimWorker();
 
   // Gets model score threshold above which the screen dim is recommended.
@@ -63,9 +67,6 @@ class SmartDimWorker {
   // Remotes used to execute functions in the ML service side.
   mojo::Remote<chromeos::machine_learning::mojom::Model> model_;
   mojo::Remote<chromeos::machine_learning::mojom::GraphExecutor> executor_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(SmartDimWorker);
 };
 
 }  // namespace ml

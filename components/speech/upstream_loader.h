@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,18 +8,24 @@
 #include <memory>
 #include <string>
 
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/system/data_pipe.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/mojom/chunked_data_pipe_getter.mojom.h"
 
+namespace net {
+class HttpResponseHeaders;
+}  // namespace net
+
 namespace speech {
 
 class UpstreamLoaderClient;
 
 // Maximum amount of data written per Mojo write.
-const uint32_t kMaxUploadWrite = 128 * 1024;
+const size_t kMaxUploadWrite = 128 * 1024;
 
 // Streams sound data up to the server. Buffers entire request body into memory,
 // so it can be replayed in the case of redirects or retries.
@@ -35,11 +41,11 @@ class UpstreamLoader : public network::mojom::ChunkedDataPipeGetter {
 
   void SendData();
 
-  void AppendChunkToUpload(const std::string& data, bool is_last_chunk);
+  void AppendChunkToUpload(std::string_view data, bool is_last_chunk);
 
  private:
   void OnUploadPipeWriteable(MojoResult unused);
-  void OnComplete(std::unique_ptr<std::string> response_body);
+  void OnComplete(scoped_refptr<net::HttpResponseHeaders> headers);
 
   // mojom::ChunkedDataPipeGetter implementation:
   void GetSize(GetSizeCallback get_size_callback) override;
@@ -66,7 +72,7 @@ class UpstreamLoader : public network::mojom::ChunkedDataPipeGetter {
   network::mojom::ChunkedDataPipeGetter::GetSizeCallback get_size_callback_;
 
   // The UpstreamLoaderClient must outlive the UpstreamLoader.
-  UpstreamLoaderClient* const upstream_loader_client_;
+  const raw_ptr<UpstreamLoaderClient> upstream_loader_client_;
 
   std::unique_ptr<network::SimpleURLLoader> simple_url_loader_;
   mojo::ReceiverSet<network::mojom::ChunkedDataPipeGetter> receiver_set_;

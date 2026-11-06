@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,11 @@
 #include <memory>
 #include <utility>
 
-#include "base/android/build_info.h"
+#include "base/android/android_info.h"
 #include "base/android/jni_string.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/threading/thread_task_runner_handle.h"
-#include "services/device/usb/jni_headers/ChromeUsbDevice_jni.h"
+#include "base/task/single_thread_task_runner.h"
 #include "services/device/usb/usb_configuration_android.h"
 #include "services/device/usb/usb_descriptors.h"
 #include "services/device/usb/usb_device_handle_android.h"
@@ -21,8 +20,10 @@
 #include "services/device/usb/usb_service_android.h"
 #include "services/device/usb/webusb_descriptors.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "services/device/usb/jni_headers/ChromeUsbDevice_jni.h"
+
 using base::android::ConvertJavaStringToUTF16;
-using base::android::JavaObjectArrayReader;
 using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
 
@@ -33,13 +34,8 @@ scoped_refptr<UsbDeviceAndroid> UsbDeviceAndroid::Create(
     JNIEnv* env,
     base::WeakPtr<UsbServiceAndroid> service,
     const JavaRef<jobject>& usb_device) {
-  auto* build_info = base::android::BuildInfo::GetInstance();
   ScopedJavaLocalRef<jobject> wrapper =
       Java_ChromeUsbDevice_create(env, usb_device);
-
-  uint16_t device_version = 0;
-  if (build_info->sdk_int() >= base::android::SDK_VERSION_MARSHMALLOW)
-    device_version = Java_ChromeUsbDevice_getDeviceVersion(env, wrapper);
 
   std::u16string manufacturer_string;
   ScopedJavaLocalRef<jstring> manufacturer_jstring =
@@ -57,7 +53,8 @@ scoped_refptr<UsbDeviceAndroid> UsbDeviceAndroid::Create(
   // targeting the Q SDK.
   std::u16string serial_number;
   if (service->HasDevicePermission(wrapper) ||
-      build_info->sdk_int() < base::android::SDK_VERSION_Q) {
+      base::android::android_info::sdk_int() <
+          base::android::android_info::SDK_VERSION_Q) {
     ScopedJavaLocalRef<jstring> serial_jstring =
         Java_ChromeUsbDevice_getSerialNumber(env, wrapper);
     if (!serial_jstring.is_null())
@@ -71,7 +68,8 @@ scoped_refptr<UsbDeviceAndroid> UsbDeviceAndroid::Create(
       Java_ChromeUsbDevice_getDeviceSubclass(env, wrapper),
       Java_ChromeUsbDevice_getDeviceProtocol(env, wrapper),
       Java_ChromeUsbDevice_getVendorId(env, wrapper),
-      Java_ChromeUsbDevice_getProductId(env, wrapper), device_version,
+      Java_ChromeUsbDevice_getProductId(env, wrapper),
+      Java_ChromeUsbDevice_getDeviceVersion(env, wrapper),
       manufacturer_string, product_string, serial_number, wrapper));
 }
 
@@ -80,7 +78,7 @@ void UsbDeviceAndroid::RequestPermission(ResultCallback callback) {
     request_permission_callbacks_.push_back(std::move(callback));
     service_->RequestDevicePermission(j_object_);
   } else {
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(callback), permission_granted_));
   }
 }
@@ -88,7 +86,7 @@ void UsbDeviceAndroid::RequestPermission(ResultCallback callback) {
 void UsbDeviceAndroid::Open(OpenCallback callback) {
   scoped_refptr<UsbDeviceHandle> device_handle;
   if (service_) {
-    JNIEnv* env = base::android::AttachCurrentThread();
+    JNIEnv* env = jni_zero::AttachCurrentThread();
     ScopedJavaLocalRef<jobject> connection =
         service_->OpenDevice(env, j_object_);
     if (!connection.is_null()) {
@@ -96,7 +94,7 @@ void UsbDeviceAndroid::Open(OpenCallback callback) {
       handles().push_back(device_handle.get());
     }
   }
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), device_handle));
 }
 
@@ -136,8 +134,9 @@ UsbDeviceAndroid::UsbDeviceAndroid(JNIEnv* env,
       device_id_(Java_ChromeUsbDevice_getDeviceId(env, wrapper)),
       service_(service),
       j_object_(wrapper) {
-  JavaObjectArrayReader<jobject> configs(
-      Java_ChromeUsbDevice_getConfigurations(env, j_object_));
+  ScopedJavaLocalRef<jobjectArray> configs_array =
+      Java_ChromeUsbDevice_getConfigurations(env, j_object_);
+  jni_zero::JArrayView<jobject> configs = configs_array.CreateView(env);
   device_info_->configurations.reserve(configs.size());
   for (auto config : configs) {
     device_info_->configurations.push_back(
@@ -225,3 +224,5 @@ void UsbDeviceAndroid::OnReadWebUsbDescriptors(
 }
 
 }  // namespace device
+
+DEFINE_JNI(ChromeUsbDevice)

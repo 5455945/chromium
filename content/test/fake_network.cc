@@ -1,9 +1,11 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/test/fake_network.h"
 
+#include "base/byte_size.h"
+#include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_util.h"
@@ -66,8 +68,8 @@ const FakeNetwork::ResponseInfo& FakeNetwork::FindResponseInfo(
   static const base::NoDestructor<ResponseInfo> kDefaultJsResponseInfo(
       kDefaultHttpHeaderForJS, kDefaultHttpBodyForJS, /*network_accessed=*/true,
       net::OK);
-  bool is_js =
-      base::EndsWith(url.path(), ".js", base::CompareCase::INSENSITIVE_ASCII);
+  bool is_js = base::EndsWith(url.GetPath(), ".js",
+                              base::CompareCase::INSENSITIVE_ASCII);
 
   return is_js ? *kDefaultJsResponseInfo : *kDefaultResponseInfo;
 }
@@ -104,19 +106,18 @@ bool FakeNetwork::HandleRequest(URLLoaderInterceptor::RequestParams* params) {
   response->parsed_headers =
       network::PopulateParsedHeaders(info.headers.get(), url_request.url);
   mojo::Remote<network::mojom::URLLoaderClient>& client = params->client;
-  client->OnReceiveResponse(std::move(response));
 
-  uint32_t bytes_written = response_info.body.size();
   mojo::ScopedDataPipeProducerHandle producer_handle;
   mojo::ScopedDataPipeConsumerHandle consumer_handle;
   CHECK_EQ(MOJO_RESULT_OK,
            mojo::CreateDataPipe(nullptr, producer_handle, consumer_handle));
-  producer_handle->WriteData(response_info.body.data(), &bytes_written,
-                             MOJO_WRITE_DATA_FLAG_ALL_OR_NONE);
-  client->OnStartLoadingResponseBody(std::move(consumer_handle));
+  producer_handle->WriteAllData(base::as_byte_span(response_info.body));
+  client->OnReceiveResponse(std::move(response), std::move(consumer_handle),
+                            std::nullopt);
 
   network::URLLoaderCompletionStatus status;
   status.error_code = response_info.error_code;
+  status.decoded_body_length = base::ByteSize(response_info.body.size());
   client->OnComplete(status);
   return true;
 }

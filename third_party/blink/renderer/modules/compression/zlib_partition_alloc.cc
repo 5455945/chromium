@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 #include "third_party/blink/renderer/modules/compression/zlib_partition_alloc.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/partitions.h"
 
@@ -10,11 +14,11 @@ void ZlibPartitionAlloc::Configure(z_stream* stream) {
 
 void* ZlibPartitionAlloc::Alloc(void*, uint32_t items, uint32_t size) {
   // BufferMalloc is safer than FastMalloc when handling untrusted data.
-  return WTF::Partitions::BufferMalloc(items * size, "zlib");
+  return Partitions::BufferMalloc(items * size, "zlib");
 }
 
 void ZlibPartitionAlloc::Free(void*, void* address) {
-  WTF::Partitions::BufferFree(address);
+  Partitions::BufferFree(address);
 }
 
 }  // namespace blink

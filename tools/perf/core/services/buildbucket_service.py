@@ -1,4 +1,4 @@
-# Copyright 2019 The Chromium Authors. All rights reserved.
+# Copyright 2019 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -31,14 +31,17 @@ def GetBuild(project, bucket, builder, build_number):
     builder: The builder name (e.g. 'linux_chromium_rel_ng').
     build_number: An int with the build number to get.
   """
-  return Request('GetBuild', data={
+  return Request(
+    'GetBuild',
+    data={
       'builder': {
-          'project': project,
-          'bucket': bucket,
-          'builder': builder,
+        'project': project,
+        'bucket': bucket,
+        'builder': builder,
       },
       'buildNumber': build_number,
-  })
+    },
+  )
 
 
 def GetBuilds(project, bucket, builder, only_completed=True):
@@ -53,13 +56,9 @@ def GetBuilds(project, bucket, builder, only_completed=True):
       include only completed builds.
   """
   data = {
-      'predicate': {
-          'builder': {
-              'project': project,
-              'bucket': bucket,
-              'builder': builder
-          }
-      }
+    'predicate': {
+      'builder': {'project': project, 'bucket': bucket, 'builder': builder}
+    }
   }
   if only_completed:
     data['predicate']['status'] = 'ENDED_MASK'

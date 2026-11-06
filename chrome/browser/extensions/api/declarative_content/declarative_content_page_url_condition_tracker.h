@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,11 +9,14 @@
 #include <set>
 #include <string>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/extensions/api/declarative_content/content_predicate_evaluator.h"
 #include "components/url_matcher/url_matcher.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace base {
 class Value;
@@ -27,6 +30,11 @@ class Extension;
 // URLMatcherConditionSet.
 class DeclarativeContentPageUrlPredicate : public ContentPredicate {
  public:
+  DeclarativeContentPageUrlPredicate(
+      const DeclarativeContentPageUrlPredicate&) = delete;
+  DeclarativeContentPageUrlPredicate& operator=(
+      const DeclarativeContentPageUrlPredicate&) = delete;
+
   ~DeclarativeContentPageUrlPredicate() override;
 
   url_matcher::URLMatcherConditionSet* url_matcher_condition_set() const {
@@ -49,11 +57,9 @@ class DeclarativeContentPageUrlPredicate : public ContentPredicate {
           url_matcher_condition_set);
 
   // Weak.
-  ContentPredicateEvaluator* const evaluator_;
+  const raw_ptr<ContentPredicateEvaluator, DanglingUntriaged> evaluator_;
 
   scoped_refptr<url_matcher::URLMatcherConditionSet> url_matcher_condition_set_;
-
-  DISALLOW_COPY_AND_ASSIGN(DeclarativeContentPageUrlPredicate);
 };
 
 // Supports tracking of URL matches across tab contents in a browser context,
@@ -62,6 +68,12 @@ class DeclarativeContentPageUrlConditionTracker
     : public ContentPredicateEvaluator {
  public:
   explicit DeclarativeContentPageUrlConditionTracker(Delegate* delegate);
+
+  DeclarativeContentPageUrlConditionTracker(
+      const DeclarativeContentPageUrlConditionTracker&) = delete;
+  DeclarativeContentPageUrlConditionTracker& operator=(
+      const DeclarativeContentPageUrlConditionTracker&) = delete;
+
   ~DeclarativeContentPageUrlConditionTracker() override;
 
   // ContentPredicateEvaluator:
@@ -100,11 +112,15 @@ class DeclarativeContentPageUrlConditionTracker
                           url_matcher::URLMatcher* url_matcher,
                           RequestEvaluationCallback request_evaluation,
                           WebContentsDestroyedCallback web_contents_destroyed);
+
+    PerWebContentsTracker(const PerWebContentsTracker&) = delete;
+    PerWebContentsTracker& operator=(const PerWebContentsTracker&) = delete;
+
     ~PerWebContentsTracker() override;
 
     void UpdateMatchesForCurrentUrl(bool request_evaluation_if_unchanged);
 
-    const std::set<url_matcher::URLMatcherConditionSet::ID>& matches() {
+    const std::set<base::MatcherStringPattern::ID>& matches() {
       return matches_;
     }
 
@@ -112,13 +128,11 @@ class DeclarativeContentPageUrlConditionTracker
     // content::WebContentsObserver
     void WebContentsDestroyed() override;
 
-    url_matcher::URLMatcher* url_matcher_;
+    raw_ptr<url_matcher::URLMatcher> url_matcher_;
     const RequestEvaluationCallback request_evaluation_;
     WebContentsDestroyedCallback web_contents_destroyed_;
 
-    std::set<url_matcher::URLMatcherConditionSet::ID> matches_;
-
-    DISALLOW_COPY_AND_ASSIGN(PerWebContentsTracker);
+    std::set<base::MatcherStringPattern::ID> matches_;
   };
 
   // Called by PerWebContentsTracker on web contents destruction.
@@ -127,20 +141,20 @@ class DeclarativeContentPageUrlConditionTracker
   void UpdateMatchesForAllTrackers();
 
   // Weak.
-  Delegate* const delegate_;
+  const raw_ptr<Delegate> delegate_;
 
   // Matches URLs for all WebContents.
   url_matcher::URLMatcher url_matcher_;
 
   // Grouped predicates tracked by this object.
-  std::map<const void*, std::vector<const DeclarativeContentPageUrlPredicate*>>
+  std::map<const void*,
+           std::vector<raw_ptr<const DeclarativeContentPageUrlPredicate,
+                               VectorExperimental>>>
       tracked_predicates_;
 
   // Maps WebContents to the tracker for that WebContents state.
   std::map<content::WebContents*, std::unique_ptr<PerWebContentsTracker>>
       per_web_contents_tracker_;
-
-  DISALLOW_COPY_AND_ASSIGN(DeclarativeContentPageUrlConditionTracker);
 };
 
 }  // namespace extensions

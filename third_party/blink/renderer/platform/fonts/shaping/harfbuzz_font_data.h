@@ -1,36 +1,45 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_SHAPING_HARFBUZZ_FONT_DATA_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_SHAPING_HARFBUZZ_FONT_DATA_H_
 
+#include <hb-cplusplus.hh>
+#include <memory>
+
+#include "base/check_op.h"
 #include "third_party/blink/renderer/platform/fonts/font_platform_data.h"
 #include "third_party/blink/renderer/platform/fonts/opentype/open_type_vertical_data.h"
 #include "third_party/blink/renderer/platform/fonts/shaping/harfbuzz_face.h"
+#include "third_party/blink/renderer/platform/fonts/shaping/variation_selector_mode.h"
 #include "third_party/skia/include/core/SkFont.h"
+#include "third_party/skia/include/core/SkStrikeRef.h"
 
 struct hb_font_t;
 
 namespace blink {
 
-const unsigned kInvalidFallbackMetricsValue = static_cast<unsigned>(-1);
+inline constexpr wtf_size_t kInvalidFallbackMetricsValue =
+    static_cast<wtf_size_t>(-1);
 
-// The HarfBuzzFontData struct carries user-pointer data for hb_font_t callback
-// functions/operations. It contains metrics and OpenType layout information
-// related to a font scaled to a particular size.
-struct HarfBuzzFontData {
-  USING_FAST_MALLOC(HarfBuzzFontData);
-
+// The HarfBuzzFontData struct carries user-pointer data (a context) for
+// |hb_font_t| callback functions/operations. It contains metrics and OpenType
+// layout information related to a font scaled to a particular size,
+// as well as the desired VariationSelectorMode for the current range.
+// Since it lives on a thread-local cache, it is used by one thread only.
+struct HarfBuzzFontData final : public GarbageCollected<HarfBuzzFontData> {
  public:
-  HarfBuzzFontData()
-      : font_(),
-        space_in_gpos_(SpaceGlyphInOpenTypeTables::Unknown),
-        space_in_gsub_(SpaceGlyphInOpenTypeTables::Unknown),
-        vertical_data_(nullptr),
-        range_set_(nullptr) {}
+  explicit HarfBuzzFontData(hb_font_t* unscaled_font)
+      : unscaled_font_(unscaled_font) {}
+
   HarfBuzzFontData(const HarfBuzzFontData&) = delete;
   HarfBuzzFontData& operator=(const HarfBuzzFontData&) = delete;
+
+  void Trace(Visitor* visitor) const {
+    visitor->Trace(vertical_data_);
+    visitor->Trace(range_set_);
+  }
 
   // The vertical origin and vertical advance functions in HarfBuzzFace require
   // the ascent and height metrics as fallback in case no specific vertical
@@ -40,16 +49,20 @@ struct HarfBuzzFontData {
       HarfBuzzFace::VerticalLayoutCallbacks vertical_layout) {
     float ascent = 0;
     float descent = 0;
-    unsigned dummy_ascent_inflation = 0;
-    unsigned dummy_descent_inflation = 0;
 
-    font_ = SkFont();
-    platform_data.SetupSkFont(&font_);
+    SkFont new_font = platform_data.CreateSkFont();
 
-    if (UNLIKELY(vertical_layout == HarfBuzzFace::PrepareForVerticalLayout)) {
-      FontMetrics::AscentDescentWithHacks(
-          ascent, descent, dummy_ascent_inflation, dummy_descent_inflation,
-          platform_data, font_);
+    // Strikes are based on font data, so if the font changes, we need to reset
+    // the strike data.
+    if (strike_ref_ && font_ != new_font) {
+      strike_ref_ = SkStrikeRef();
+    }
+    font_ = std::move(new_font);
+
+    if (vertical_layout == HarfBuzzFace::kPrepareForVerticalLayout)
+        [[unlikely]] {
+      FontMetrics::AscentDescentWithHacks(ascent, descent, platform_data,
+                                          font_);
       ascent_fallback_ = ascent;
       // Simulate the rounding that FontMetrics does so far for returning the
       // integer Height()
@@ -69,43 +82,57 @@ struct HarfBuzzFontData {
     }
   }
 
-  float SizePerUnit(const SkTypeface& typeface) const {
-    if (size_per_unit_ != kInvalidFallbackMetricsValue)
-      return size_per_unit_;
-    int units_per_em = typeface.getUnitsPerEm();
-    size_per_unit_ = font_.getSize() / units_per_em;
-    return size_per_unit_;
+  SkStrikeRef& EnsureStrikeRef() {
+    if (!strike_ref_) {
+      strike_ref_ = font_.makeStrikeRef();
+    }
+    return strike_ref_;
   }
 
-  scoped_refptr<OpenTypeVerticalData> VerticalData() {
+  OpenTypeVerticalData* VerticalData() {
     if (!vertical_data_) {
       DCHECK_NE(ascent_fallback_, kInvalidFallbackMetricsValue);
       DCHECK_NE(height_fallback_, kInvalidFallbackMetricsValue);
       DCHECK_NE(size_per_unit_, kInvalidFallbackMetricsValue);
 
       vertical_data_ =
-          OpenTypeVerticalData::CreateUnscaled(font_.refTypeface());
+          MakeGarbageCollected<OpenTypeVerticalData>(font_.refTypeface());
     }
     vertical_data_->SetScaleAndFallbackMetrics(size_per_unit_, ascent_fallback_,
                                                height_fallback_);
-    return vertical_data_;
+    return vertical_data_.Get();
   }
 
+  VariationSelectorMode GetVariationSelectorMode() const {
+    return variation_selector_mode_;
+  }
+  void SetVariationSelectorMode(VariationSelectorMode value) {
+    variation_selector_mode_ = value;
+  }
+
+  const hb::unique_ptr<hb_font_t> unscaled_font_;
   SkFont font_;
+  // Lazily-populated cached strike for the HarfBuzz advance callbacks; reset
+  // when `font_` changes. See `UpdateFallbackMetricsAndScale`.
+  SkStrikeRef strike_ref_;
 
   // Capture these scaled fallback metrics from FontPlatformData so that a
   // OpenTypeVerticalData object can be constructed from them when needed.
-  mutable float size_per_unit_;
+  float size_per_unit_;
   float ascent_fallback_;
   float height_fallback_;
 
-  enum class SpaceGlyphInOpenTypeTables { Unknown, Present, NotPresent };
+  enum class SpaceGlyphInOpenTypeTables { kUnknown, kPresent, kNotPresent };
 
-  SpaceGlyphInOpenTypeTables space_in_gpos_;
-  SpaceGlyphInOpenTypeTables space_in_gsub_;
+  SpaceGlyphInOpenTypeTables space_in_gpos_ =
+      SpaceGlyphInOpenTypeTables::kUnknown;
+  SpaceGlyphInOpenTypeTables space_in_gsub_ =
+      SpaceGlyphInOpenTypeTables::kUnknown;
 
-  scoped_refptr<OpenTypeVerticalData> vertical_data_;
-  scoped_refptr<UnicodeRangeSet> range_set_;
+  Member<OpenTypeVerticalData> vertical_data_;
+  Member<const UnicodeRangeSet> range_set_;
+  VariationSelectorMode variation_selector_mode_ =
+      kUseSpecifiedVariationSelector;
 };
 
 }  // namespace blink

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +8,15 @@ this.onfetch = function(event) {
     var url = event.request.url;
     event.respondWith(
         caches.open(CACHE_NAME)
-          .then(function(c) {
+            .then(function(c) {
               cache = c;
               return cache.match(url);
             })
-          .then(function(response) {
-              if (response)
-                return response;
+            .then(function(response) {
+              if (response) {
+                return self.location.search === '?clone' ? response.clone() :
+                                                           response;
+              }
               var cloned_response = undefined;
               return fetch(url)
                 .then(function(res) {

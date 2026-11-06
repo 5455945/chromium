@@ -1,14 +1,20 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "crypto/chaps_support.h"
 
 #include <dlfcn.h>
+#include <secmod.h>
 #include <secmodt.h>
 
+#include <string_view>
+
 #include "base/logging.h"
+#include "base/memory/raw_ptr_exclusion.h"
+#include "base/memory/stack_allocated.h"
 #include "base/threading/scoped_blocking_call.h"
+#include "crypto/scoped_nss_types.h"
 #include "nss_util_internal.h"
 
 namespace crypto {
@@ -20,13 +26,18 @@ const char kChapsModuleName[] = "Chaps";
 const char kChapsPath[] = "libchaps.so";
 
 class ScopedChapsLoadFixup {
+  STACK_ALLOCATED();
+
  public:
   ScopedChapsLoadFixup();
   ~ScopedChapsLoadFixup();
 
  private:
 #if defined(COMPONENT_BUILD)
-  void* chaps_handle_;
+  // This field stores a handle and is not a pointer to PA memory.
+  // Also, this class is always stack-allocated and visibility is limited.
+  // Hence no benefit from using raw_ptr<void>.
+  RAW_PTR_EXCLUSION void* chaps_handle_;
 #endif
 };
 
@@ -76,13 +87,37 @@ SECMODModule* LoadChaps() {
       "NSS=\"slotParams=(0={slotFlags=[PublicCerts] askpw=only})\"");
 }
 
-bool IsSlotProvidedByChaps(PK11SlotInfo* slot) {
-  if (!slot)
-    return false;
+ScopedPK11Slot GetChapsSlot(SECMODModule* chaps_module, CK_SLOT_ID slot_id) {
+  DCHECK(chaps_module);
 
-  SECMODModule* pk11_module = PK11_GetModule(slot);
-  return pk11_module && base::StringPiece(pk11_module->commonName) ==
-                            base::StringPiece(kChapsModuleName);
+  // NSS functions may reenter //net via extension hooks. If the reentered
+  // code needs to synchronously wait for a task to run but the thread pool in
+  // which that task must run doesn't have enough threads to schedule it, a
+  // deadlock occurs. To prevent that, the base::ScopedBlockingCall below
+  // increments the thread pool capacity for the duration of the TPM
+  // initialization.
+  base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
+                                                base::BlockingType::WILL_BLOCK);
+
+  DVLOG(3) << "Poking chaps module.";
+  SECStatus rv = SECMOD_UpdateSlotList(chaps_module);
+  if (rv != SECSuccess)
+    LOG(ERROR) << "SECMOD_UpdateSlotList failed: " << PORT_GetError();
+
+  ScopedPK11Slot slot =
+      ScopedPK11Slot(SECMOD_LookupSlot(chaps_module->moduleID, slot_id));
+  if (!slot)
+    LOG(ERROR) << "TPM slot " << slot_id << " not found.";
+  return slot;
+}
+
+bool IsChapsModule(SECMODModule* pk11_module) {
+  return pk11_module && std::string_view(pk11_module->commonName) ==
+                            std::string_view(kChapsModuleName);
+}
+
+bool IsSlotProvidedByChaps(PK11SlotInfo* slot) {
+  return slot && IsChapsModule(PK11_GetModule(slot));
 }
 
 }  // namespace crypto

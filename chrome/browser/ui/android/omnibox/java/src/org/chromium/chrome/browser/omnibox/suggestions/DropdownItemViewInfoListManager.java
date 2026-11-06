@@ -1,17 +1,20 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.omnibox.suggestions;
 
-import android.util.SparseArray;
-import android.util.SparseBooleanArray;
+import android.content.Context;
 import android.view.View;
 
-import androidx.annotation.NonNull;
-
-import org.chromium.chrome.browser.omnibox.styles.OmniboxTheme;
-import org.chromium.components.omnibox.AutocompleteResult;
+import org.chromium.base.Callback;
+import org.chromium.base.supplier.NonNullObservableSupplier;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.chrome.browser.omnibox.fusebox.Fusebox.FuseboxLayoutMode;
+import org.chromium.chrome.browser.omnibox.suggestions.SuggestionCommonProperties.FormFactor;
+import org.chromium.chrome.browser.omnibox.suggestions.SuggestionCommonProperties.RoundSides;
+import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -21,29 +24,35 @@ import java.util.Collections;
 import java.util.List;
 
 /** Manages the list of DropdownItemViewInfo elements. */
+@NullMarked
 class DropdownItemViewInfoListManager {
+    private final Context mContext;
     private final ModelList mManagedModel;
-    private final SparseBooleanArray mGroupsCollapsedState;
+    private final NonNullObservableSupplier<Integer> mRoundSidesSupplier;
+    private final Callback<@RoundSides Integer> mRoundSidesCallback = this::onRoundSidesChanged;
     private int mLayoutDirection;
-    private @OmniboxTheme int mOmniboxTheme;
+    private @BrandedColorScheme int mBrandedColorScheme;
+    private @FuseboxLayoutMode int mFuseboxLayoutMode = FuseboxLayoutMode.TOOLBAR;
+    private boolean mApplySideSpacing = true;
     private List<DropdownItemViewInfo> mSourceViewInfoList;
 
-    DropdownItemViewInfoListManager(@NonNull ModelList managedModel) {
+    DropdownItemViewInfoListManager(
+            ModelList managedModel,
+            Context context,
+            NonNullObservableSupplier<Integer> roundSidesSupplier) {
         assert managedModel != null : "Must specify a non-null model.";
+        mContext = context;
         mLayoutDirection = View.LAYOUT_DIRECTION_INHERIT;
-        mOmniboxTheme = OmniboxTheme.LIGHT_THEME;
+        mBrandedColorScheme = BrandedColorScheme.LIGHT_BRANDED_THEME;
         mSourceViewInfoList = Collections.emptyList();
-        mGroupsCollapsedState = new SparseBooleanArray();
         mManagedModel = managedModel;
-    }
-
-    /** @return Total count of view infos that may be shown in the Omnibox Suggestions list. */
-    int getSuggestionsCount() {
-        return mSourceViewInfoList.size();
+        mRoundSidesSupplier = roundSidesSupplier;
+        mRoundSidesSupplier.addSyncObserver(mRoundSidesCallback);
     }
 
     /**
      * Sets the layout direction to be used for any new suggestion views.
+     *
      * @see View#setLayoutDirection(int)
      */
     void setLayoutDirection(int layoutDirection) {
@@ -58,161 +67,75 @@ class DropdownItemViewInfoListManager {
 
     /**
      * Specifies the visual theme to be used by the suggestions.
-     * @param omniboxTheme Specifies which {@link OmniboxTheme} should be used.
+     *
+     * @param brandedColorScheme Specifies which {@link BrandedColorScheme} should be used.
      */
-    void setOmniboxTheme(@OmniboxTheme int omniboxTheme) {
-        if (mOmniboxTheme == omniboxTheme) return;
+    void setBrandedColorScheme(@BrandedColorScheme int brandedColorScheme) {
+        if (mBrandedColorScheme == brandedColorScheme) return;
 
-        mOmniboxTheme = omniboxTheme;
+        mBrandedColorScheme = brandedColorScheme;
         for (int i = 0; i < mSourceViewInfoList.size(); i++) {
             PropertyModel model = mSourceViewInfoList.get(i).model;
-            model.set(SuggestionCommonProperties.OMNIBOX_THEME, omniboxTheme);
+            model.set(SuggestionCommonProperties.COLOR_SCHEME, brandedColorScheme);
         }
     }
 
-    /**
-     * Toggle the collapsed state of suggestions belonging to specific group.
-     *
-     * @param groupId ID of the group whose collapsed state is expected to change.
-     * @param groupIsCollapsed Collapsed state of the group.
-     */
-    void setGroupCollapsedState(int groupId, boolean groupIsCollapsed) {
-        if (getGroupCollapsedState(groupId) == groupIsCollapsed) return;
-        mGroupsCollapsedState.put(groupId, groupIsCollapsed);
-        if (groupIsCollapsed) {
-            removeSuggestionsForGroup(groupId);
-        } else {
-            insertSuggestionsForGroup(groupId);
+    void setFuseboxLayoutMode(@FuseboxLayoutMode int fuseboxLayoutMode) {
+        if (mFuseboxLayoutMode == fuseboxLayoutMode) return;
+        mFuseboxLayoutMode = fuseboxLayoutMode;
+        mApplySideSpacing = fuseboxLayoutMode != FuseboxLayoutMode.SUGGESTIONS_POPOVER;
+        for (int i = 0; i < mSourceViewInfoList.size(); i++) {
+            PropertyModel model = mSourceViewInfoList.get(i).model;
+            model.set(SuggestionCommonProperties.FUSEBOX_LAYOUT_MODE, fuseboxLayoutMode);
+            model.set(SuggestionCommonProperties.APPLY_SIDE_SPACING, mApplySideSpacing);
         }
-    }
-
-    /**
-     * @param groupId ID of the suggestions group.
-     * @return True, if group should be collapsed, otherwise false.
-     */
-    private boolean getGroupCollapsedState(int groupId) {
-        return mGroupsCollapsedState.get(groupId, /* defaultCollapsedState= */ false);
-    }
-
-    /** @return Whether the supplied view info is a header for the specific group of suggestions. */
-    private boolean isGroupHeaderWithId(DropdownItemViewInfo info, int groupId) {
-        return (info.type == OmniboxSuggestionUiType.HEADER && info.groupId == groupId);
     }
 
     /** Clear all DropdownItemViewInfo lists. */
     void clear() {
         mSourceViewInfoList.clear();
         mManagedModel.clear();
-        mGroupsCollapsedState.clear();
     }
+
+    void onNativeInitialized() {}
 
     /**
      * Specify the input list of DropdownItemViewInfo elements.
      *
      * @param sourceList Source list of ViewInfo elements.
-     * @param groupsDetails Group ID to GroupDetails map carrying group collapsed state information.
      */
-    void setSourceViewInfoList(@NonNull List<DropdownItemViewInfo> sourceList,
-            @NonNull SparseArray<AutocompleteResult.GroupDetails> groupsDetails) {
+    void setSourceViewInfoList(List<DropdownItemViewInfo> sourceList) {
         mSourceViewInfoList = sourceList;
-        mGroupsCollapsedState.clear();
-
-        // Clone information about the recommended group collapsed state.
-        for (int index = 0; index < groupsDetails.size(); index++) {
-            mGroupsCollapsedState.put(
-                    groupsDetails.keyAt(index), groupsDetails.valueAt(index).collapsedByDefault);
-        }
 
         // Build a new list of suggestions. Honor the default collapsed state.
         final List<ListItem> suggestionsList = new ArrayList<>();
+        int deviceType =
+                DeviceFormFactor.isNonMultiDisplayContextOnTablet(mContext)
+                        ? FormFactor.TABLET
+                        : FormFactor.PHONE;
         for (int i = 0; i < mSourceViewInfoList.size(); i++) {
             final DropdownItemViewInfo item = mSourceViewInfoList.get(i);
             final PropertyModel model = item.model;
             model.set(SuggestionCommonProperties.LAYOUT_DIRECTION, mLayoutDirection);
-            model.set(SuggestionCommonProperties.OMNIBOX_THEME, mOmniboxTheme);
-
-            final boolean groupIsDefaultCollapsed = getGroupCollapsedState(item.groupId);
-            if (!groupIsDefaultCollapsed || isGroupHeaderWithId(item, item.groupId)) {
-                suggestionsList.add(item);
-            }
+            model.set(SuggestionCommonProperties.APPLY_SIDE_SPACING, mApplySideSpacing);
+            model.set(SuggestionCommonProperties.COLOR_SCHEME, mBrandedColorScheme);
+            model.set(SuggestionCommonProperties.FUSEBOX_LAYOUT_MODE, mFuseboxLayoutMode);
+            model.set(SuggestionCommonProperties.DEVICE_FORM_FACTOR, deviceType);
+            model.set(SuggestionCommonProperties.BG_ROUND_SIDES, mRoundSidesSupplier.get());
+            suggestionsList.add(item);
         }
 
         mManagedModel.set(suggestionsList);
     }
 
-    /**
-     * Remove all suggestions that belong to specific group.
-     *
-     * @param groupId Group ID of suggestions that should be removed.
-     */
-    private void removeSuggestionsForGroup(int groupId) {
-        int index;
-        int count = 0;
-
-        for (index = mManagedModel.size() - 1; index >= 0; index--) {
-            DropdownItemViewInfo viewInfo = (DropdownItemViewInfo) mManagedModel.get(index);
-            if (isGroupHeaderWithId(viewInfo, groupId)) {
-                break;
-            } else if (viewInfo.groupId == groupId) {
-                count++;
-            } else if (count > 0 && viewInfo.groupId != groupId) {
-                break;
-            }
-        }
-        if (count > 0) {
-            // Skip group header when dropping items.
-            mManagedModel.removeRange(index + 1, count);
-        }
+    void destroy() {
+        mRoundSidesSupplier.removeObserver(mRoundSidesCallback);
     }
 
-    /**
-     * Insert all suggestions that belong to specific group.
-     *
-     * @param groupId Group ID of suggestions that should be removed.
-     */
-    private void insertSuggestionsForGroup(int groupId) {
-        int insertPosition = 0;
-
-        // Search for the insert position.
-        // Iterate through all *available* view infos until we find the first element that we
-        // should insert. To determine the insertion point we skip past all *displayed* view
-        // infos that were also preceding elements that we want to insert.
-        for (; insertPosition < mManagedModel.size(); insertPosition++) {
-            final DropdownItemViewInfo viewInfo =
-                    (DropdownItemViewInfo) mManagedModel.get(insertPosition);
-            // Insert suggestions directly below their header.
-            if (isGroupHeaderWithId(viewInfo, groupId)) break;
-        }
-
-        // Check if reached the end of the list.
-        if (insertPosition == mManagedModel.size()) return;
-
-        // insertPosition points to header - advance the index and see if we already have
-        // elements belonging to that group on the list.
-        insertPosition++;
-        if (insertPosition < mManagedModel.size()
-                && ((DropdownItemViewInfo) mManagedModel.get(insertPosition)).groupId == groupId) {
-            return;
-        }
-
-        // Find elements to insert.
-        int firstElementIndex = -1;
-        int count = 0;
-        for (int index = 0; index < mSourceViewInfoList.size(); index++) {
-            final DropdownItemViewInfo viewInfo = mSourceViewInfoList.get(index);
-            if (isGroupHeaderWithId(viewInfo, groupId)) {
-                firstElementIndex = index + 1;
-            } else if (viewInfo.groupId == groupId) {
-                count++;
-            } else if (count > 0 && viewInfo.groupId != groupId) {
-                break;
-            }
-        }
-
-        if (count != 0 && firstElementIndex != -1) {
-            mManagedModel.addAll(
-                    mSourceViewInfoList.subList(firstElementIndex, firstElementIndex + count),
-                    insertPosition);
+    private void onRoundSidesChanged(@RoundSides int roundSides) {
+        for (int i = 0; i < mSourceViewInfoList.size(); i++) {
+            PropertyModel model = mSourceViewInfoList.get(i).model;
+            model.set(SuggestionCommonProperties.BG_ROUND_SIDES, roundSides);
         }
     }
 }

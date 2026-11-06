@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,7 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "device/bluetooth/bluetooth_remote_gatt_service.h"
 #include "device/bluetooth/public/cpp/bluetooth_uuid.h"
 
@@ -41,6 +41,11 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothRemoteGattServiceAndroid
       const std::string& instance_id,
       const base::android::JavaRef<jobject>&
           chrome_bluetooth_device);  // ChromeBluetoothDevice
+
+  BluetoothRemoteGattServiceAndroid(const BluetoothRemoteGattServiceAndroid&) =
+      delete;
+  BluetoothRemoteGattServiceAndroid& operator=(
+      const BluetoothRemoteGattServiceAndroid&) = delete;
 
   ~BluetoothRemoteGattServiceAndroid() override;
 
@@ -77,13 +82,12 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothRemoteGattServiceAndroid
   // |characteristics_|, DCHECKing that it has not already been created.
   void CreateGattRemoteCharacteristic(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& caller,
-      const base::android::JavaParamRef<jstring>& instance_id,
-      const base::android::JavaParamRef<
+      const base::android::JavaRef<jstring>& instance_id,
+      const base::android::JavaRef<
           jobject>& /* BluetoothGattCharacteristicWrapper */
-      bluetooth_gatt_characteristic_wrapper,
-      const base::android::JavaParamRef<
-          jobject>& /* ChromeBluetoothDevice */ chrome_bluetooth_device);
+          bluetooth_gatt_characteristic_wrapper,
+      const base::android::JavaRef<jobject>& /* ChromeBluetoothDevice */
+          chrome_bluetooth_device);
 
  private:
   BluetoothRemoteGattServiceAndroid(BluetoothAdapterAndroid* adapter,
@@ -98,16 +102,14 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothRemoteGattServiceAndroid
 
   // The adapter associated with this service. It's ok to store a raw pointer
   // here since |adapter_| indirectly owns this instance.
-  BluetoothAdapterAndroid* adapter_;
+  raw_ptr<BluetoothAdapterAndroid> adapter_;
 
   // The device this GATT service belongs to. It's ok to store a raw pointer
   // here since |device_| owns this instance.
-  BluetoothDeviceAndroid* device_;
+  raw_ptr<BluetoothDeviceAndroid> device_;
 
   // Adapter unique instance ID.
   std::string instance_id_;
-
-  DISALLOW_COPY_AND_ASSIGN(BluetoothRemoteGattServiceAndroid);
 };
 
 }  // namespace device

@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Copyright 2018 The Chromium Authors. All rights reserved.
+# Copyright 2018 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 variants_header=variants-04
@@ -12,7 +12,7 @@ set -e
 for cmd in gen-signedexchange gen-certurl dump-signedexchange; do
     if ! command -v $cmd > /dev/null 2>&1; then
         echo "$cmd is not installed. Please run:"
-        echo "  go get -u github.com/WICG/webpackage/go/signedexchange/cmd/..."
+        echo "  GO111MODULE=on go install github.com/WICG/webpackage/go/signedexchange/cmd/{gen-signedexchange,gen-certurl,dump-signedexchange}@latest"
         echo '  export PATH=$PATH:$(go env GOPATH)/bin'
         exit 1
     fi
@@ -95,6 +95,9 @@ cp test.example.org_test.sxg test.example.org_test_invalid_content_type.sxg
 
 # Generate the signed exchange for downloading test case.
 cp test.example.org_test.sxg test.example.org_test_download.sxg
+
+# Generate the compressed signed exchange.
+gzip -c test.example.org_test.sxg > test.example.org_test.sxg.gz
 
 # Generate the signed exchange file with invalid magic string
 xxd -p test.example.org_test.sxg |
@@ -275,6 +278,22 @@ gen-signedexchange \
   -expire 168h \
   -responseHeader "content-security-policy: frame-ancestors 'none'" \
   -o test.example.org_csp.sxg \
+  -miRecordSize 100
+
+# A signed exchange with "Vary: Cookie" response header.
+gen-signedexchange \
+  -version 1b3 \
+  -uri https://test.example.org/test/ \
+  -status 200 \
+  -content test.html \
+  -certificate prime256v1-sha256.public.pem \
+  -certUrl https://cert.example.org/cert.msg \
+  -validityUrl https://test.example.org/resource.validity.msg \
+  -privateKey prime256v1.key \
+  -date $signature_date \
+  -expire 168h \
+  -responseHeader "Vary: Cookie" \
+  -o test.example.org_vary_cookie.sxg \
   -miRecordSize 100
 
 echo "Update the test signatures in "

@@ -1,19 +1,23 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_ANDROID_HISTORY_BROWSING_HISTORY_BRIDGE_H_
 #define CHROME_BROWSER_ANDROID_HISTORY_BROWSING_HISTORY_BRIDGE_H_
 
+#include <cstdint>
+#include <map>
 #include <memory>
+#include <optional>
+#include <string>
 #include <vector>
 
 #include "base/android/scoped_java_ref.h"
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/history/profile_based_browsing_history_driver.h"
 
-using base::android::JavaParamRef;
+using base::android::JavaRef;
 
 // The bridge for fetching browsing history information for the Android
 // history UI. This queries the history::BrowsingHistoryService and listens
@@ -21,31 +25,59 @@ using base::android::JavaParamRef;
 class BrowsingHistoryBridge : public ProfileBasedBrowsingHistoryDriver {
  public:
   explicit BrowsingHistoryBridge(JNIEnv* env,
-                                 const JavaParamRef<jobject>& obj,
-                                 const JavaParamRef<jobject>& j_profile);
-  void Destroy(JNIEnv*, const JavaParamRef<jobject>&);
+                                 const JavaRef<jobject>& obj,
+                                 Profile* profile);
 
+  BrowsingHistoryBridge(const BrowsingHistoryBridge&) = delete;
+  BrowsingHistoryBridge& operator=(const BrowsingHistoryBridge&) = delete;
+
+  void Destroy();
+
+  // Queries history matching `query` and the given filters. `begin_time_ms`
+  // (inclusive) and `end_time_ms` (exclusive) restrict the visit time in
+  // milliseconds since the Unix epoch; 0 means unbounded.
   void QueryHistory(JNIEnv* env,
-                    const JavaParamRef<jobject>& obj,
-                    const JavaParamRef<jobject>& j_result_obj,
-                    jstring j_query);
+                    const JavaRef<jobject>& j_result_obj,
+                    const std::u16string& query,
+                    const std::optional<std::string>& app_id,
+                    const std::optional<std::string>& hostname_suffix,
+                    const std::vector<std::string>& client_ids,
+                    bool include_user_visits,
+                    bool include_actor_visits,
+                    int64_t begin_time_ms,
+                    int64_t end_time_ms);
 
   void QueryHistoryContinuation(JNIEnv* env,
-                                const JavaParamRef<jobject>& obj,
-                                const JavaParamRef<jobject>& j_result_obj);
+                                const JavaRef<jobject>& j_result_obj);
 
-  // Adds a HistoryEntry with the |j_url| and |j_native_timestamps| to the list
-  // of items being removed. The removal will not be committed until
-  // ::removeItems() is called.
-  void MarkItemForRemoval(JNIEnv* env,
-                          const JavaParamRef<jobject>& obj,
-                          const JavaParamRef<jobject>& j_url,
-                          const JavaParamRef<jlongArray>& j_native_timestamps);
+  void GetAllAppIds();
+
+  std::vector<history::BrowsingHistoryService::ClientGroup> GetAllClients();
+
+  void GetLastVisitToHostBeforeRecentNavigations(
+      const std::string& host_name,
+      const JavaRef<jobject>& jcallback_);
+
+  // Adds a HistoryEntry with the primary `url`, `app_id`, and
+  // `native_timestamps_map` (mapping URLs, including any grouped similar visit
+  // URLs, to their visit timestamps) to the list of items being removed. The
+  // removal will not be committed until `RemoveItems()` is called.
+  void MarkItemForRemoval(
+      const GURL& url,
+      const std::optional<std::string>& app_id,
+      const std::map<GURL, std::vector<int64_t>>& native_timestamps_map);
 
   // Removes all items that have been marked for removal through
   // ::markItemForRemoval().
-  void RemoveItems(JNIEnv* env,
-                   const JavaParamRef<jobject>& obj);
+  void RemoveItems();
+
+  // Queries `HistoryService` for the cached page title associated with `url` in
+  // `profile`, invoking `callback` with the UTF-8 page title (or an empty
+  // string if unavailable).
+  static void GetPageTitleForUrl(
+      Profile* profile,
+      const GURL& url,
+      base::OnceCallback<void(const std::string&)> callback);
 
   // BrowsingHistoryDriver implementation.
   void OnQueryComplete(
@@ -58,6 +90,7 @@ class BrowsingHistoryBridge : public ProfileBasedBrowsingHistoryDriver {
   void HistoryDeleted() override;
   void HasOtherFormsOfBrowsingHistory(
       bool has_other_forms, bool has_synced_results) override;
+  void OnGetAllAppIds(const std::vector<std::string>& app_ids) override;
 
   // ProfileBasedBrowsingHistoryDriver implementation.
   Profile* GetProfile() override;
@@ -71,11 +104,9 @@ class BrowsingHistoryBridge : public ProfileBasedBrowsingHistoryDriver {
 
   std::vector<history::BrowsingHistoryService::HistoryEntry> items_to_remove_;
 
-  Profile* profile_;
+  raw_ptr<Profile> profile_;
 
   base::OnceClosure query_history_continuation_;
-
-  DISALLOW_COPY_AND_ASSIGN(BrowsingHistoryBridge);
 };
 
 #endif  // CHROME_BROWSER_ANDROID_HISTORY_BROWSING_HISTORY_BRIDGE_H_

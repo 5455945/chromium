@@ -1,16 +1,14 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.multiwindow;
 
-import android.annotation.TargetApi;
 import android.app.Activity;
 import android.app.ActivityManager;
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
-import android.os.Build;
 
 import androidx.annotation.Nullable;
 
@@ -20,25 +18,27 @@ import org.junit.Assert;
 import org.chromium.base.ActivityState;
 import org.chromium.base.ApplicationStatus;
 import org.chromium.base.ContextUtils;
+import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.CriteriaNotSatisfiedException;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.ChromeTabbedActivity2;
+import org.chromium.chrome.browser.multiwindow.MultiInstanceManager.NewWindowAppSource;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.content_public.browser.LoadUrlParams;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
 
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
-/**
- * Utilities helper class for multi-window tests.
- */
+/** Utilities helper class for multi-window tests. */
 public class MultiWindowTestHelper {
     /**
      * Creates a new {@link ChromeTabbedActivity2} with no {@link LoadUrlParams}.
+     *
      * @param activity A current running activity that will handle the intent to start another
-     *                 activity.
+     *     activity.
      * @return The new {@link ChromeTabbedActivity2}.
      */
     public static ChromeTabbedActivity2 createSecondChromeTabbedActivity(Activity activity) {
@@ -47,10 +47,11 @@ public class MultiWindowTestHelper {
 
     /**
      * Creates a new {@link ChromeTabbedActivity2}.
+     *
      * @param activity A current running activity that will handle the intent to start another
-     *                 activity.
+     *     activity.
      * @param params {@link LoadUrlParams} used to create the launch intent. May be null if no
-     *               params should be used when creating the activity.
+     *     params should be used when creating the activity.
      * @return The new {@link ChromeTabbedActivity2}.
      */
     public static ChromeTabbedActivity2 createSecondChromeTabbedActivity(
@@ -64,10 +65,14 @@ public class MultiWindowTestHelper {
         // Get the class name to use for the second ChromeTabbedActivity. This step is important
         // for initializing things in MultiWindowUtils.java.
         Class<? extends Activity> secondActivityClass =
-                MultiWindowUtils.getInstance().getOpenInOtherWindowActivity(activity);
+                ThreadUtils.runOnUiThreadBlocking(
+                        () ->
+                                MultiWindowUtils.getInstance()
+                                        .getOpenInOtherWindowActivity(activity));
         Assert.assertEquals(
                 "ChromeTabbedActivity2 should be used as the 'open in other window' activity.",
-                ChromeTabbedActivity2.class, secondActivityClass);
+                ChromeTabbedActivity2.class,
+                secondActivityClass);
 
         // Create an intent and start the second ChromeTabbedActivity.
         Intent intent;
@@ -82,56 +87,57 @@ public class MultiWindowTestHelper {
         activity.startActivity(intent);
 
         // Wait for ChromeTabbedActivity2 to be created.
-        CriteriaHelper.pollUiThread(() -> {
-            Criteria.checkThat(ApplicationStatus.getRunningActivities().size(),
-                    Matchers.is(numExpectedActivities));
-        });
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Criteria.checkThat(
+                            ApplicationStatus.getRunningActivities().size(),
+                            Matchers.is(numExpectedActivities));
+                });
 
         return waitForSecondChromeTabbedActivity();
     }
 
-    /**
-     * Waits for an instance of ChromeTabbedActivity2, and then waits until it's resumed.
-     */
+    /** Waits for an instance of ChromeTabbedActivity2, and then waits until it's resumed. */
     public static ChromeTabbedActivity2 waitForSecondChromeTabbedActivity() {
         AtomicReference<ChromeTabbedActivity2> returnActivity = new AtomicReference<>();
-        CriteriaHelper.pollUiThread(() -> {
-            for (Activity runningActivity : ApplicationStatus.getRunningActivities()) {
-                if (runningActivity.getClass().equals(ChromeTabbedActivity2.class)) {
-                    returnActivity.set((ChromeTabbedActivity2) runningActivity);
-                    return;
-                }
-            }
-            throw new CriteriaNotSatisfiedException(
-                    "Couldn't find instance of ChromeTabbedActivity2");
-        });
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    for (Activity runningActivity : ApplicationStatus.getRunningActivities()) {
+                        if (runningActivity.getClass().equals(ChromeTabbedActivity2.class)) {
+                            returnActivity.set((ChromeTabbedActivity2) runningActivity);
+                            return;
+                        }
+                    }
+                    throw new CriteriaNotSatisfiedException(
+                            "Couldn't find instance of ChromeTabbedActivity2");
+                });
         waitUntilActivityResumed(returnActivity.get());
         return returnActivity.get();
     }
 
     private static void waitUntilActivityResumed(final Activity activity) {
-        CriteriaHelper.pollUiThread(() -> {
-            Criteria.checkThat(ApplicationStatus.getStateForActivity(activity),
-                    Matchers.is(ActivityState.RESUMED));
-        });
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Criteria.checkThat(
+                            ApplicationStatus.getStateForActivity(activity),
+                            Matchers.is(ActivityState.RESUMED));
+                });
     }
 
-    /**
-     * Moves the given activity to the foreground so it can receive user input.
-     */
-    @TargetApi(Build.VERSION_CODES.N)
+    /** Moves the given activity to the foreground so it can receive user input. */
     public static void moveActivityToFront(final Activity activity) {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            Context context = ContextUtils.getApplicationContext();
-            ActivityManager activityManager =
-                    (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
-            for (ActivityManager.AppTask task : activityManager.getAppTasks()) {
-                if (activity.getTaskId() == task.getTaskInfo().id) {
-                    task.moveToFront();
-                    break;
-                }
-            }
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    Context context = ContextUtils.getApplicationContext();
+                    ActivityManager activityManager =
+                            (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
+                    for (ActivityManager.AppTask task : activityManager.getAppTasks()) {
+                        if (activity.getTaskId() == task.getTaskInfo().id) {
+                            task.moveToFront();
+                            break;
+                        }
+                    }
+                });
         waitUntilActivityResumed(activity);
     }
 
@@ -140,18 +146,83 @@ public class MultiWindowTestHelper {
      * 'expectedActiveTabId' ID. 'expectedActiveTabId' is optional and can be Tab.INVALID_TAB_ID.
      * 'tag' is an arbitrary string that is prepended to failure reasons.
      */
-    public static void waitForTabs(final String tag, final ChromeTabbedActivity activity,
-            final int expectedTotalTabCount, final int expectedActiveTabId) {
-        CriteriaHelper.pollUiThread(() -> {
-            int actualTotalTabCount = activity.getTabModelSelector().getTotalTabCount();
-            Criteria.checkThat(actualTotalTabCount, Matchers.is(expectedTotalTabCount));
-        });
+    public static void waitForTabs(
+            final String tag,
+            final ChromeTabbedActivity activity,
+            final int expectedTotalTabCount,
+            final int expectedActiveTabId) {
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    int actualTotalTabCount = activity.getTabModelSelector().getTotalTabCount();
+                    Criteria.checkThat(actualTotalTabCount, Matchers.is(expectedTotalTabCount));
+                });
 
         if (expectedActiveTabId == Tab.INVALID_TAB_ID) return;
 
-        CriteriaHelper.pollUiThread(() -> {
-            int actualActiveTabId = activity.getActivityTab().getId();
-            Criteria.checkThat(actualActiveTabId, Matchers.is(expectedActiveTabId));
-        });
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    int actualActiveTabId = activity.getActivityTab().getId();
+                    Criteria.checkThat(actualActiveTabId, Matchers.is(expectedActiveTabId));
+                });
+    }
+
+    /**
+     * Creates a new ChromeTabbedActivity (API 31 only) for use in tests.
+     *
+     * @param context The context used to build the intent to start the new activity.
+     * @return The newly created ChromeTabbedActivity after it is resumed and its tab state is
+     *     initialized.
+     */
+    public static ChromeTabbedActivity createNewChromeTabbedActivity(Context context) {
+        Intent intent =
+                MultiWindowUtils.createNewWindowIntent(
+                        context,
+                        /* windowId= */ -1,
+                        /* preferNew= */ true,
+                        /* openAdjacently= */ false,
+                        NewWindowAppSource.MENU);
+        return waitForNewChromeTabbedActivity(
+                () -> ContextUtils.getApplicationContext().startActivity(intent));
+    }
+
+    /**
+     * Runs {@code trigger} on the UI thread and waits for a newly created {@link
+     * ChromeTabbedActivity} (excluding any already-running instances) to reach {@link
+     * ActivityState#RESUMED} and complete tab state initialization.
+     *
+     * @param trigger Runnable that initiates creation of the new window.
+     * @return The newly created {@link ChromeTabbedActivity}.
+     */
+    public static ChromeTabbedActivity waitForNewChromeTabbedActivity(Runnable trigger) {
+        Set<Activity> existingActivities =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () -> new HashSet<>(ApplicationStatus.getRunningActivities()));
+        ThreadUtils.runOnUiThreadBlocking(trigger);
+
+        AtomicReference<ChromeTabbedActivity> newActivityRef = new AtomicReference<>();
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    for (Activity runningActivity : ApplicationStatus.getRunningActivities()) {
+                        if (runningActivity instanceof ChromeTabbedActivity
+                                && !existingActivities.contains(runningActivity)) {
+                            newActivityRef.set((ChromeTabbedActivity) runningActivity);
+                            break;
+                        }
+                    }
+                    ChromeTabbedActivity candidate = newActivityRef.get();
+                    Criteria.checkThat(
+                            "New ChromeTabbedActivity was not created.",
+                            candidate,
+                            Matchers.notNullValue());
+                    Criteria.checkThat(
+                            ApplicationStatus.getStateForActivity(candidate),
+                            Matchers.is(ActivityState.RESUMED));
+                    Criteria.checkThat(
+                            candidate.getTabModelSelectorSupplier().get(), Matchers.notNullValue());
+                    Criteria.checkThat(
+                            candidate.getTabModelSelector().isTabStateInitialized(),
+                            Matchers.is(true));
+                });
+        return newActivityRef.get();
     }
 }

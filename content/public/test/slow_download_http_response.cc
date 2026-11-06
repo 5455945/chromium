@@ -1,13 +1,18 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/public/test/slow_download_http_response.h"
 
-#include "base/bind.h"
-#include "base/strings/stringprintf.h"
+#include <memory>
+#include <utility>
+
+#include "base/functional/bind.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
-#include "base/threading/thread_task_runner_handle.h"
 
 namespace content {
 
@@ -18,8 +23,13 @@ const char SlowDownloadHttpResponse::kUnknownSizeUrl[] =
     "/download-unknown-size";
 const char SlowDownloadHttpResponse::kKnownSizeUrl[] = "/download-known-size";
 
-// static
-base::OnceClosure g_finish_last_request;
+namespace {
+
+// Finishes the most recent slow download. Owned; a raw pointer so it has no
+// exit-time destructor.
+base::OnceClosure* g_finish_last_request = nullptr;
+
+}  // namespace
 
 // static
 std::unique_ptr<net::test_server::HttpResponse>
@@ -27,8 +37,12 @@ SlowDownloadHttpResponse::HandleSlowDownloadRequest(
     const net::test_server::HttpRequest& request) {
   if (request.relative_url ==
       SlowDownloadHttpResponse::kFinishSlowResponseUrl) {
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
-        FROM_HERE, std::move(g_finish_last_request));
+    std::unique_ptr<base::OnceClosure> finish(
+        std::exchange(g_finish_last_request, nullptr));
+    if (finish) {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, std::move(*finish));
+    }
     return std::make_unique<net::test_server::BasicHttpResponse>();
   }
 
@@ -44,7 +58,9 @@ SlowDownloadHttpResponse::HandleSlowDownloadRequest(
         std::move(start_response).Run();
         // If there's an active slow download request already, we clobber the
         // finish closure so it will never be finished.
-        g_finish_last_request = std::move(finish_response);
+        delete g_finish_last_request;
+        g_finish_last_request =
+            new base::OnceClosure(std::move(finish_response));
       }));
 }
 
@@ -55,15 +71,18 @@ SlowDownloadHttpResponse::SlowDownloadHttpResponse(
 
 SlowDownloadHttpResponse::~SlowDownloadHttpResponse() = default;
 
-void SlowDownloadHttpResponse::AddResponseHeaders(std::string* response) {
-  response->append("Content-type: application/octet-stream\r\n");
-  response->append("Cache-Control: max-age=0\r\n");
+base::StringPairs SlowDownloadHttpResponse::ResponseHeaders() {
+  base::StringPairs response;
+  response.emplace_back("Content-type", "application/octet-stream");
+  response.emplace_back("Cache-Control", "max-age=0");
 
-  if (base::LowerCaseEqualsASCII(kKnownSizeUrl, url_)) {
-    response->append(
-        base::StringPrintf("Content-Length: %d\r\n",
-                           kFirstResponsePartSize + kSecondResponsePartSize));
+  if (base::EqualsCaseInsensitiveASCII(kKnownSizeUrl, url_)) {
+    response.emplace_back(
+        "Content-Length",
+        base::NumberToString(kFirstResponsePartSize + kSecondResponsePartSize));
   }
+
+  return response;
 }
 
 }  // namespace content

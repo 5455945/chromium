@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,14 +8,17 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "base/files/file_path.h"
-#include "base/macros.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/memory/raw_ptr.h"
+#include "components/viz/common/resources/shared_image_format.h"
+#include "skia/ext/skcolorspace_primaries.h"
 #include "ui/display/types/display_constants.h"
 #include "ui/display/types/display_mode.h"
+#include "ui/display/types/drm_formats_and_modifiers.h"
 #include "ui/gfx/buffer_types.h"
 #include "ui/gfx/color_space.h"
 #include "ui/gfx/geometry/point.h"
@@ -31,34 +34,69 @@ class DISPLAY_TYPES_EXPORT DisplaySnapshot {
  public:
   using DisplayModeList = std::vector<std::unique_ptr<const DisplayMode>>;
 
-  DisplaySnapshot(
-      int64_t display_id,
-      const gfx::Point& origin,
-      const gfx::Size& physical_size,
-      DisplayConnectionType type,
-      uint64_t base_connector_id,
-      const std::vector<uint64_t>& path_topology,
-      bool is_aspect_preserving_scaling,
-      bool has_overscan,
-      PrivacyScreenState privacy_screen_state,
-      bool has_color_correction_matrix,
-      bool color_correction_in_linear_space,
-      const gfx::ColorSpace& color_space,
-      uint32_t bits_per_channel,
-      const absl::optional<gfx::HDRStaticMetadata>& hdr_static_metadata,
-      std::string display_name,
-      const base::FilePath& sys_path,
-      DisplayModeList modes,
-      PanelOrientation panel_orientation,
-      const std::vector<uint8_t>& edid,
-      const DisplayMode* current_mode,
-      const DisplayMode* native_mode,
-      int64_t product_code,
-      int32_t year_of_manufacture,
-      const gfx::Size& maximum_cursor_size);
+  struct ColorInfo {
+    // The color space of the display.
+    // TODO(crbug.com/40945652): This should be derived from other
+    // members.
+    gfx::ColorSpace color_space = gfx::ColorSpace::CreateSRGB();
+
+    // Primaries and gamma indicated by the EDID.
+    SkColorSpacePrimaries edid_primaries = SkNamedPrimariesExt::kSRGB;
+    float edid_gamma = 2.2;
+
+    // HDR static metadata, if available.
+    std::optional<gfx::HDRStaticMetadata> hdr_static_metadata;
+
+    // True if the display's color management is capable of applying color
+    // temperature adjustment. If not, then color temperature adjustment
+    // must be performed in software.
+    bool supports_color_temperature_adjustment = false;
+
+    // The number of bits per color channel.
+    uint32_t bits_per_channel = 8u;
+  };
+
+  DisplaySnapshot(int64_t display_id,
+                  int64_t port_display_id,
+                  int64_t edid_display_id,
+                  uint16_t connector_index,
+                  const gfx::Point& origin,
+                  const gfx::Size& physical_size,
+                  DisplayConnectionType type,
+                  uint64_t base_connector_id,
+                  const std::vector<uint64_t>& path_topology,
+                  bool is_aspect_preserving_scaling,
+                  bool has_overscan,
+                  PrivacyScreenState privacy_screen_state,
+                  bool has_content_protection_key,
+                  const ColorInfo& color_info,
+                  std::string display_name,
+                  const base::FilePath& sys_path,
+                  DisplayModeList modes,
+                  PanelOrientation panel_orientation,
+                  const std::vector<uint8_t>& edid,
+                  const DisplayMode* current_mode,
+                  const DisplayMode* native_mode,
+                  int64_t product_code,
+                  int32_t year_of_manufacture,
+                  const gfx::Size& maximum_cursor_size,
+                  VariableRefreshRateState variable_refresh_rate_state,
+                  const DrmFormatsAndModifiers& drm_formats_and_modifiers_);
+
+  DisplaySnapshot(const DisplaySnapshot&) = delete;
+  DisplaySnapshot& operator=(const DisplaySnapshot&) = delete;
+
   virtual ~DisplaySnapshot();
 
   int64_t display_id() const { return display_id_; }
+
+  // port_display_id() and edid_display_id() are required for
+  // backward-compatibility and will eventually be removed once the migration to
+  // EDID-based display IDs is completed. See http://b/193060019.
+  int64_t port_display_id() const { return port_display_id_; }
+  int64_t edid_display_id() const { return edid_display_id_; }
+
+  uint16_t connector_index() const { return connector_index_; }
   const gfx::Point& origin() const { return origin_; }
   void set_origin(const gfx::Point& origin) { origin_ = origin; }
   const gfx::Size& physical_size() const { return physical_size_; }
@@ -72,16 +110,17 @@ class DISPLAY_TYPES_EXPORT DisplaySnapshot {
   PrivacyScreenState privacy_screen_state() const {
     return privacy_screen_state_;
   }
+  bool has_content_protection_key() const {
+    return has_content_protection_key_;
+  }
   bool has_color_correction_matrix() const {
-    return has_color_correction_matrix_;
+    return color_info_.supports_color_temperature_adjustment;
   }
-  bool color_correction_in_linear_space() const {
-    return color_correction_in_linear_space_;
-  }
-  const gfx::ColorSpace& color_space() const { return color_space_; }
-  uint32_t bits_per_channel() const { return bits_per_channel_; }
-  const absl::optional<gfx::HDRStaticMetadata>& hdr_static_metadata() const {
-    return hdr_static_metadata_;
+  const ColorInfo& color_info() const { return color_info_; }
+  const gfx::ColorSpace& color_space() const { return color_info_.color_space; }
+  uint32_t bits_per_channel() const { return color_info_.bits_per_channel; }
+  const std::optional<gfx::HDRStaticMetadata>& hdr_static_metadata() const {
+    return color_info_.hdr_static_metadata;
   }
   const std::string& display_name() const { return display_name_; }
   const base::FilePath& sys_path() const { return sys_path_; }
@@ -89,16 +128,24 @@ class DISPLAY_TYPES_EXPORT DisplaySnapshot {
   PanelOrientation panel_orientation() const { return panel_orientation_; }
   const std::vector<uint8_t>& edid() const { return edid_; }
   const DisplayMode* current_mode() const { return current_mode_; }
-  void set_current_mode(const DisplayMode* mode) { current_mode_ = mode; }
+  void set_current_mode(const DisplayMode* mode);
   const DisplayMode* native_mode() const { return native_mode_; }
   int64_t product_code() const { return product_code_; }
   int32_t year_of_manufacture() const { return year_of_manufacture_; }
   const gfx::Size& maximum_cursor_size() const { return maximum_cursor_size_; }
-
-  void add_mode(const DisplayMode* mode) { modes_.push_back(mode->Clone()); }
+  VariableRefreshRateState variable_refresh_rate_state() const {
+    return variable_refresh_rate_state_;
+  }
+  void set_variable_refresh_rate_state(
+      VariableRefreshRateState variable_refresh_rate_state) {
+    variable_refresh_rate_state_ = variable_refresh_rate_state;
+  }
+  const DrmFormatsAndModifiers& GetDRMFormatsAndModifiers() const {
+    return drm_formats_and_modifiers_;
+  }
 
   // Clones display state.
-  std::unique_ptr<DisplaySnapshot> Clone();
+  std::unique_ptr<DisplaySnapshot> Clone() const;
 
   // Returns a textual representation of this display state.
   std::string ToString() const;
@@ -106,12 +153,30 @@ class DISPLAY_TYPES_EXPORT DisplaySnapshot {
   // Used when no |product_code_| known.
   static const int64_t kInvalidProductCode = -1;
 
-  // Returns the buffer format to be used for the primary plane buffer.
-  static gfx::BufferFormat PrimaryFormat();
+  // Returns the SharedImageFormat to be used for the primary plane buffer.
+  static viz::SharedImageFormat PrimaryFormat();
+
+  // Adds |connector_index_| to bits 33-48 of |edid_display_id_|. This function
+  // is not plumbed via mojom to limit and control usage across processes.
+  void AddIndexToDisplayId();
+
+  // Returns whether the display is capable of enabling variable refresh rates.
+  bool IsVrrCapable() const;
+
+  // Returns whether the display has variable refresh rates enabled.
+  bool IsVrrEnabled() const;
 
  private:
   // Display id for this output.
   const int64_t display_id_;
+  // Port-based display ID.
+  const int64_t port_display_id_;
+  // EDID-based display ID.
+  int64_t edid_display_id_;
+
+  // Used by AddIndexToDisplayId() to resolve display ID collisions when two
+  // (or more) displays produce identical IDs due to incomplete EDIDs.
+  const uint16_t connector_index_;
 
   // Display's origin on the framebuffer.
   gfx::Point origin_;
@@ -173,21 +238,22 @@ class DISPLAY_TYPES_EXPORT DisplaySnapshot {
 
   const PrivacyScreenState privacy_screen_state_;
 
-  // Whether this display has advanced color correction available.
-  const bool has_color_correction_matrix_;
-  // Whether the color correction matrix will be applied in linear color space
-  // instead of gamma compressed one.
-  const bool color_correction_in_linear_space_;
+  const bool has_content_protection_key_;
 
-  const gfx::ColorSpace color_space_;
-  uint32_t bits_per_channel_;
-  absl::optional<gfx::HDRStaticMetadata> hdr_static_metadata_;
+  const ColorInfo color_info_;
 
   const std::string display_name_;
 
   const base::FilePath sys_path_;
 
+  // List of modes which natively exist on the display (i.e. have been extracted
+  // from the display's EDID blob).
   DisplayModeList modes_;
+  // List of modes which do not natively exist on the display. Modes are added
+  // to this list as-needed due to either panel fitting from other displays or
+  // from creating virtual modes. Once added, modes are not removed from this
+  // list for the lifetime of the snapshot.
+  DisplayModeList nonnative_modes_;
 
   // The orientation of the panel in respect to the natural device orientation.
   PanelOrientation panel_orientation_;
@@ -197,10 +263,10 @@ class DISPLAY_TYPES_EXPORT DisplaySnapshot {
   std::vector<uint8_t> edid_;
 
   // Mode currently being used by the output.
-  const DisplayMode* current_mode_;
+  raw_ptr<const DisplayMode> current_mode_;
 
   // "Best" mode supported by the output.
-  const DisplayMode* const native_mode_;
+  const raw_ptr<const DisplayMode> native_mode_;
 
   // Combination of manufacturer id and product id.
   const int64_t product_code_;
@@ -210,8 +276,12 @@ class DISPLAY_TYPES_EXPORT DisplaySnapshot {
   // Maximum supported cursor size on this display.
   const gfx::Size maximum_cursor_size_;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(DisplaySnapshot);
+  // Whether VRR is enabled, disabled, or not capable on this display.
+  VariableRefreshRateState variable_refresh_rate_state_;
+
+  // A list of supported Linux DRM formats and corresponding lists of modifiers
+  // for each one.
+  const DrmFormatsAndModifiers drm_formats_and_modifiers_;
 };
 
 }  // namespace display

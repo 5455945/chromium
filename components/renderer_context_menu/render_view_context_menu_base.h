@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,26 +7,28 @@
 
 #include <stddef.h>
 
-#include <map>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "components/renderer_context_menu/context_menu_content_type.h"
 #include "components/renderer_context_menu/render_view_context_menu_observer.h"
 #include "components/renderer_context_menu/render_view_context_menu_proxy.h"
 #include "content/public/browser/context_menu_params.h"
+#include "content/public/browser/page_navigator.h"
 #include "content/public/browser/site_instance.h"
-#include "ppapi/buildflags/buildflags.h"
+#include "content/public/common/buildflags.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
-#include "ui/base/models/simple_menu_model.h"
+#include "ui/base/mojom/window_open_disposition.mojom-forward.h"
 #include "ui/base/page_transition_types.h"
-#include "ui/base/window_open_disposition.h"
+#include "ui/menus/simple_menu_model.h"
 
 namespace content {
+class NavigationHandle;
 class RenderFrameHost;
 class WebContents;
 }
@@ -38,7 +40,7 @@ class RenderViewContextMenuBase : public ui::SimpleMenuModel::Delegate,
   // the embedder.
   class ToolkitDelegate {
    public:
-    virtual ~ToolkitDelegate() {}
+    virtual ~ToolkitDelegate() = default;
     // Initialize the toolkit's menu.
     virtual void Init(ui::SimpleMenuModel* menu_model) = 0;
 
@@ -65,8 +67,12 @@ class RenderViewContextMenuBase : public ui::SimpleMenuModel::Delegate,
   // True if the given id is the one generated for content context menu.
   static bool IsContentCustomCommandId(int id);
 
-  RenderViewContextMenuBase(content::RenderFrameHost* render_frame_host,
+  RenderViewContextMenuBase(content::RenderFrameHost& render_frame_host,
                             const content::ContextMenuParams& params);
+
+  RenderViewContextMenuBase(const RenderViewContextMenuBase&) = delete;
+  RenderViewContextMenuBase& operator=(const RenderViewContextMenuBase&) =
+      delete;
 
   ~RenderViewContextMenuBase() override;
 
@@ -116,9 +122,11 @@ class RenderViewContextMenuBase : public ui::SimpleMenuModel::Delegate,
   void RemoveMenuItem(int command_id) override;
   void RemoveAdjacentSeparators() override;
   void RemoveSeparatorBeforeMenuItem(int command_id) override;
-  content::RenderViewHost* GetRenderViewHost() const override;
   content::WebContents* GetWebContents() const override;
   content::BrowserContext* GetBrowserContext() const override;
+
+  // May return nullptr if the frame was deleted while the menu was open.
+  content::RenderFrameHost* GetRenderFrameHost() const override;
 
  protected:
   friend class RenderViewContextMenuTest;
@@ -145,7 +153,7 @@ class RenderViewContextMenuBase : public ui::SimpleMenuModel::Delegate,
   virtual void RecordUsedItem(int id) = 0;
 
   // Increments histogram value for visible context menu item specified by |id|.
-  virtual void RecordShownItem(int id) = 0;
+  virtual void RecordShownItem(int id, bool is_submenu) = 0;
 
 #if BUILDFLAG(ENABLE_PLUGINS)
   virtual void HandleAuthorizeAllPlugins() = 0;
@@ -157,29 +165,45 @@ class RenderViewContextMenuBase : public ui::SimpleMenuModel::Delegate,
   // TODO(oshima): Remove this.
   virtual void AppendPlatformEditableItems() {}
 
-  // May return nullptr if the frame was deleted while the menu was open.
-  content::RenderFrameHost* GetRenderFrameHost() const;
-
   bool IsCustomItemChecked(int id) const;
   bool IsCustomItemEnabled(int id) const;
 
-  // Opens the specified URL string in a new tab.
+  // Opens the specified URL.
   void OpenURL(const GURL& url,
                const GURL& referrer,
-               WindowOpenDisposition disposition,
+               const url::Origin& initiator,
+               ui::mojom::WindowOpenDisposition disposition,
                ui::PageTransition transition);
 
-  // Opens the specified URL string in a new tab with the extra headers.
-  void OpenURLWithExtraHeaders(const GURL& url,
-                               const GURL& referrer,
-                               WindowOpenDisposition disposition,
-                               ui::PageTransition transition,
-                               const std::string& extra_headers,
-                               bool started_from_context_menu);
+  // Opens the specified URL with extra headers.
+  virtual void OpenURLWithExtraHeaders(
+      const GURL& url,
+      const GURL& referrer,
+      const url::Origin& initiator,
+      ui::mojom::WindowOpenDisposition disposition,
+      ui::PageTransition transition,
+      const std::string& extra_headers,
+      bool started_from_context_menu,
+      base::OnceCallback<void(content::NavigationHandle&)>
+          navigation_handle_callback);
+
+  virtual ui::IsNewFeatureAtValue GetIsNewFeatureAtValue(
+      const std::string& feature_name) const;
+
+  // Populates OpenURLParams for opening the specified URL string in a new tab
+  // with the extra headers.
+  content::OpenURLParams GetOpenURLParamsWithExtraHeaders(
+      const GURL& url,
+      const GURL& referring_url,
+      const url::Origin& initiator,
+      ui::mojom::WindowOpenDisposition disposition,
+      ui::PageTransition transition,
+      const std::string& extra_headers,
+      bool started_from_context_menu);
 
   content::ContextMenuParams params_;
-  content::WebContents* const source_web_contents_;
-  content::BrowserContext* const browser_context_;
+  const raw_ptr<content::WebContents, DanglingUntriaged> source_web_contents_;
+  const raw_ptr<content::BrowserContext, DanglingUntriaged> browser_context_;
 
   ui::SimpleMenuModel menu_model_;
 
@@ -196,8 +220,8 @@ class RenderViewContextMenuBase : public ui::SimpleMenuModel::Delegate,
   scoped_refptr<content::SiteInstance> site_instance_;
 
   // Our observers.
-  mutable base::ObserverList<RenderViewContextMenuObserver>::Unchecked
-      observers_;
+  mutable base::ReentrantObserverList<
+      RenderViewContextMenuObserver>::UncheckedAndDanglingUntriaged observers_;
 
   // Whether a command has been executed. Used to track whether menu observers
   // should be notified of menu closing without execution.
@@ -208,11 +232,17 @@ class RenderViewContextMenuBase : public ui::SimpleMenuModel::Delegate,
  private:
   bool AppendCustomItems();
 
+  void AddCustomItemsToMenu(
+      const std::vector<blink::mojom::CustomContextMenuItemPtr>& items,
+      size_t depth,
+      size_t* total_items,
+      std::vector<std::unique_ptr<ui::SimpleMenuModel>>* submenus,
+      ui::SimpleMenuModel::Delegate* delegate,
+      ui::SimpleMenuModel* menu_model);
+
   std::unique_ptr<ToolkitDelegate> toolkit_delegate_;
 
   std::vector<std::unique_ptr<ui::SimpleMenuModel>> custom_submenus_;
-
-  DISALLOW_COPY_AND_ASSIGN(RenderViewContextMenuBase);
 };
 
 #endif  // COMPONENTS_RENDERER_CONTEXT_MENU_RENDER_VIEW_CONTEXT_MENU_BASE_H_

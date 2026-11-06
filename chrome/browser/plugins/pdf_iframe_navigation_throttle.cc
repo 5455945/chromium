@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,22 +8,31 @@
 
 #include "base/feature_list.h"
 #include "base/memory/weak_ptr.h"
-#include "base/task/post_task.h"
-#include "base/threading/sequenced_task_runner_handle.h"
-#include "chrome/common/chrome_features.h"
+#include "base/strings/escape.h"
+#include "base/task/sequenced_task_runner.h"
+#include "build/build_config.h"
 #include "chrome/common/pdf_util.h"
+#include "components/pdf/common/constants.h"
+#include "components/pdf/common/pdf_util.h"
 #include "content/public/browser/download_utils.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_user_data.h"
-#include "net/base/escape.h"
 #include "net/http/http_response_headers.h"
+#include "ui/base/mojom/window_open_disposition.mojom.h"
+#include "ui/base/page_transition_types.h"
 
 #if BUILDFLAG(ENABLE_PLUGINS)
 #include "chrome/browser/plugins/chrome_plugin_service_filter.h"
 #include "content/public/browser/plugin_service.h"
+#include "content/public/common/webplugininfo.h"
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+#include "content/public/browser/render_widget_host_view.h"
+#include "third_party/blink/public/common/features.h"
 #endif
 
 namespace {
@@ -33,65 +42,55 @@ class PdfWebContentsLifetimeHelper
     : public content::WebContentsUserData<PdfWebContentsLifetimeHelper> {
  public:
   explicit PdfWebContentsLifetimeHelper(content::WebContents* web_contents)
-      : web_contents_(web_contents) {}
+      : content::WebContentsUserData<PdfWebContentsLifetimeHelper>(
+            *web_contents) {}
 
   base::WeakPtr<PdfWebContentsLifetimeHelper> GetWeakPtr() {
     return weak_factory_.GetWeakPtr();
   }
 
   void NavigateIFrameToPlaceholder(const content::OpenURLParams& url_params) {
-    web_contents_->OpenURL(url_params);
+    GetWebContents().OpenURL(url_params, /*navigation_handle_callback=*/{});
   }
 
  private:
   friend class content::WebContentsUserData<PdfWebContentsLifetimeHelper>;
 
-  content::WebContents* const web_contents_;
   base::WeakPtrFactory<PdfWebContentsLifetimeHelper> weak_factory_{this};
 
   WEB_CONTENTS_USER_DATA_KEY_DECL();
 };
 
-WEB_CONTENTS_USER_DATA_KEY_IMPL(PdfWebContentsLifetimeHelper)
+WEB_CONTENTS_USER_DATA_KEY_IMPL(PdfWebContentsLifetimeHelper);
 
 #if BUILDFLAG(ENABLE_PLUGINS)
-// Returns true if the PDF plugin for |navigation_handle| is enabled. Optionally
-// also sets |is_stale| to true if the plugin list needs a reload.
-bool IsPDFPluginEnabled(content::NavigationHandle* navigation_handle,
-                        bool* is_stale) {
-  content::WebContents* web_contents = navigation_handle->GetWebContents();
-  int process_id = web_contents->GetMainFrame()->GetProcess()->GetID();
-  int routing_id = web_contents->GetMainFrame()->GetRoutingID();
-
-  content::WebPluginInfo plugin_info;
-  return content::PluginService::GetInstance()->GetPluginInfo(
-      process_id, routing_id, navigation_handle->GetURL(),
-      web_contents->GetMainFrame()->GetLastCommittedOrigin(), kPDFMimeType,
-      false /* allow_wildcard */, is_stale, &plugin_info,
-      nullptr /* actual_mime_type */);
+// Returns true if the PDF plugin for `navigation_handle` is enabled.
+bool IsPDFPluginEnabled(content::NavigationHandle* navigation_handle) {
+  return content::PluginService::GetInstance()->HasPlugin(
+      navigation_handle->GetWebContents()->GetBrowserContext(),
+      navigation_handle->GetURL(), pdf::kPDFMimeType);
 }
 #endif
 
 }  // namespace
 
 PDFIFrameNavigationThrottle::PDFIFrameNavigationThrottle(
-    content::NavigationHandle* navigation_handle)
-    : content::NavigationThrottle(navigation_handle) {}
+    content::NavigationThrottleRegistry& registry)
+    : content::NavigationThrottle(registry) {}
 
-PDFIFrameNavigationThrottle::~PDFIFrameNavigationThrottle() {}
+PDFIFrameNavigationThrottle::~PDFIFrameNavigationThrottle() = default;
 
 const char* PDFIFrameNavigationThrottle::GetNameForLogging() {
   return "PDFIFrameNavigationThrottle";
 }
 
 // static
-std::unique_ptr<content::NavigationThrottle>
-PDFIFrameNavigationThrottle::MaybeCreateThrottleFor(
-    content::NavigationHandle* handle) {
-  if (handle->IsInMainFrame())
-    return nullptr;
+void PDFIFrameNavigationThrottle::MaybeCreateAndAdd(
+    content::NavigationThrottleRegistry& registry) {
+  if (registry.GetNavigationHandle().IsInMainFrame())
+    return;
 
-  return std::make_unique<PDFIFrameNavigationThrottle>(handle);
+  registry.AddThrottle(std::make_unique<PDFIFrameNavigationThrottle>(registry));
 }
 
 content::NavigationThrottle::ThrottleCheckResult
@@ -103,56 +102,59 @@ PDFIFrameNavigationThrottle::WillProcessResponse() {
 
   std::string mime_type;
   response_headers->GetMimeType(&mime_type);
-  if (mime_type != kPDFMimeType)
+  if (mime_type != pdf::kPDFMimeType) {
     return content::NavigationThrottle::PROCEED;
+  }
 
   // We MUST download responses marked as attachments rather than showing
   // a placeholder.
-  if (content::download_utils::MustDownload(navigation_handle()->GetURL(),
-                                            response_headers, mime_type)) {
+  if (content::download_utils::MustDownload(
+          navigation_handle()->GetWebContents()->GetBrowserContext(),
+          navigation_handle()->GetURL(), response_headers, mime_type)) {
     return content::NavigationThrottle::PROCEED;
   }
 
-  ReportPDFLoadStatus(PDFLoadStatus::kLoadedIframePdfWithNoPdfViewer);
-
 #if BUILDFLAG(ENABLE_PLUGINS)
-  bool is_stale = false;
-  bool pdf_plugin_enabled = IsPDFPluginEnabled(navigation_handle(), &is_stale);
-
-  if (is_stale) {
-    // On browser start, the plugin list may not be ready yet.
-    content::PluginService::GetInstance()->GetPlugins(
-        base::BindOnce(&PDFIFrameNavigationThrottle::OnPluginsLoaded,
-                       weak_factory_.GetWeakPtr()));
-    return content::NavigationThrottle::DEFER;
-  }
+  // Refresh plugins.
+  content::PluginService::GetInstance()->GetPlugins();
 
   // If the plugin was found, proceed on the navigation. Otherwise fall through
   // to the placeholder case.
-  if (pdf_plugin_enabled)
+  if (IsPDFPluginEnabled(navigation_handle())) {
     return content::NavigationThrottle::PROCEED;
+  }
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+  if (base::FeatureList::IsEnabled(
+          blink::features::kAndroidHandlePdfInIframe)) {
+    content::RenderFrameHost* rfh = navigation_handle()->GetRenderFrameHost();
+    content::RenderWidgetHostView* view = rfh ? rfh->GetView() : nullptr;
+    bool is_hidden_view = !view || view->GetViewBounds().IsEmpty();
+    // Open PDFs in a new tab if the view is hidden and the user tried to access
+    // it.
+    if (is_hidden_view && navigation_handle()->HasUserGesture()) {
+      // Open in new tab
+      content::OpenURLParams params =
+          content::OpenURLParams::FromNavigationHandle(navigation_handle());
+      params.disposition = ui::mojom::WindowOpenDisposition::kNewForegroundTab;
+      navigation_handle()->GetWebContents()->OpenURL(
+          params, /*navigation_handle_callback=*/{});
+      // Cancel the navigation in the original frame so it doesn't show
+      // placeholder.
+      return content::NavigationThrottle::CANCEL_AND_IGNORE;
+    }
+  }
 #endif
 
   LoadPlaceholderHTML();
   return content::NavigationThrottle::CANCEL_AND_IGNORE;
 }
 
-#if BUILDFLAG(ENABLE_PLUGINS)
-void PDFIFrameNavigationThrottle::OnPluginsLoaded(
-    const std::vector<content::WebPluginInfo>& plugins) {
-  if (IsPDFPluginEnabled(navigation_handle(), nullptr /* is_stale */)) {
-    Resume();
-  } else {
-    LoadPlaceholderHTML();
-    CancelDeferredNavigation(content::NavigationThrottle::CANCEL_AND_IGNORE);
-  }
-}
-#endif
-
 void PDFIFrameNavigationThrottle::LoadPlaceholderHTML() {
   // Prepare the params to navigate to the placeholder.
   std::string html = GetPDFPlaceholderHTML(navigation_handle()->GetURL());
-  GURL data_url("data:text/html," + net::EscapePath(html));
+  GURL data_url("data:text/html," + base::EscapePath(html));
   content::OpenURLParams params =
       content::OpenURLParams::FromNavigationHandle(navigation_handle());
   params.url = data_url;
@@ -166,10 +168,12 @@ void PDFIFrameNavigationThrottle::LoadPlaceholderHTML() {
   if (!web_contents)
     return;
 
+  ReportPDFLoadStatus(PDFLoadStatus::kLoadedIframePdfWithNoPdfViewer);
+
   PdfWebContentsLifetimeHelper::CreateForWebContents(web_contents);
   PdfWebContentsLifetimeHelper* helper =
       PdfWebContentsLifetimeHelper::FromWebContents(web_contents);
-  base::SequencedTaskRunnerHandle::Get()->PostTask(
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
       base::BindOnce(&PdfWebContentsLifetimeHelper::NavigateIFrameToPlaceholder,
                      helper->GetWeakPtr(), std::move(params)));

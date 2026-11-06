@@ -1,18 +1,14 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/command_line.h"
-#include "base/macros.h"
-#include "chrome/browser/browser_process.h"
+#include "base/functional/bind.h"
 #include "chrome/browser/extensions/extension_apitest.h"
-#include "components/user_manager/user.h"
-#include "components/user_manager/user_manager.h"
+#include "chrome/browser/profiles/profile.h"
 #include "components/wifi/fake_wifi_service.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_utils.h"
@@ -28,10 +24,10 @@
 // networkingPrivate API is implemented in NetworkingPrivateServiceClient, so
 // this uses its own set of test expectations to reflect that. The expectations
 // should be kept similar to the ChromeOS (primary) implementation as much as
-// possible. See also crbug.com/460119.
+// possible. See also crbug.com/41158448.
 
-using testing::Return;
 using testing::_;
+using testing::Return;
 
 using extensions::NetworkingPrivateDelegate;
 using extensions::NetworkingPrivateDelegateFactory;
@@ -44,12 +40,17 @@ namespace {
 class NetworkingPrivateServiceClientApiTest
     : public extensions::ExtensionApiTest {
  public:
-  NetworkingPrivateServiceClientApiTest() {}
+  NetworkingPrivateServiceClientApiTest() = default;
+
+  NetworkingPrivateServiceClientApiTest(
+      const NetworkingPrivateServiceClientApiTest&) = delete;
+  NetworkingPrivateServiceClientApiTest& operator=(
+      const NetworkingPrivateServiceClientApiTest&) = delete;
 
   bool RunNetworkingSubtest(const std::string& subtest) {
-    const std::string page_url = "main.html?" + subtest;
+    const std::string extension_url = "main.html?" + subtest;
     return RunExtensionTest("networking_private/service_client",
-                            {.page_url = page_url.c_str()},
+                            {.extension_url = extension_url.c_str()},
                             {.load_as_component = true});
   }
 
@@ -80,9 +81,6 @@ class NetworkingPrivateServiceClientApiTest
     content::RunAllPendingInMessageLoop();
     extensions::ExtensionApiTest::TearDownOnMainThread();
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(NetworkingPrivateServiceClientApiTest);
 };
 
 // Place each subtest into a separate browser test so that the stub networking
@@ -113,7 +111,7 @@ IN_PROC_BROWSER_TEST_F(NetworkingPrivateServiceClientApiTest,
       << message_;
 }
 
-// TODO(stevenjb/mef): Implement |limit| to fix this, crbug.com/371442.
+// TODO(stevenjb/mef): Implement |limit| to fix this, crbug.com/40364703.
 IN_PROC_BROWSER_TEST_F(NetworkingPrivateServiceClientApiTest,
                        DISABLED_GetNetworks) {
   EXPECT_TRUE(RunNetworkingSubtest("getNetworks")) << message_;
@@ -155,14 +153,15 @@ IN_PROC_BROWSER_TEST_F(NetworkingPrivateServiceClientApiTest, CreateNetwork) {
   EXPECT_TRUE(RunNetworkingSubtest("createNetwork")) << message_;
 }
 
-// TODO(stevenjb/mef): Fix this, crbug.com/371442.
+// TODO(stevenjb/mef): Fix this, crbug.com/40364703.
 IN_PROC_BROWSER_TEST_F(NetworkingPrivateServiceClientApiTest,
                        DISABLED_GetManagedProperties) {
   EXPECT_TRUE(RunNetworkingSubtest("getManagedProperties")) << message_;
 }
 
+// TODO(b/349276078): This test is flaky.
 IN_PROC_BROWSER_TEST_F(NetworkingPrivateServiceClientApiTest,
-                       OnNetworksChangedEventConnect) {
+                       DISABLED_OnNetworksChangedEventConnect) {
   EXPECT_TRUE(RunNetworkingSubtest("onNetworksChangedEventConnect"))
       << message_;
 }

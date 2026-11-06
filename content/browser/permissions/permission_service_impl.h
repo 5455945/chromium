@@ -1,23 +1,26 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_BROWSER_PERMISSIONS_PERMISSION_SERVICE_IMPL_H_
 #define CONTENT_BROWSER_PERMISSIONS_PERMISSION_SERVICE_IMPL_H_
 
-#include "base/callback.h"
 #include "base/containers/id_map.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "content/browser/permissions/permission_service_context.h"
-#include "content/common/content_export.h"
+#include "content/public/browser/permission_request_description.h"
+#include "content/public/browser/permission_result.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "third_party/blink/public/mojom/permissions/permission.mojom.h"
 #include "url/origin.h"
 
-namespace content {
-
+namespace blink {
 enum class PermissionType;
+}
+
+namespace content {
 
 // Implements the PermissionService Mojo interface.
 // This service can be created from a RenderFrameHost or a RenderProcessHost.
@@ -26,57 +29,90 @@ enum class PermissionType;
 // to have some information about the current context. That enables the service
 // to know whether it can show UI and have knowledge of the associated
 // WebContents for example.
-class CONTENT_EXPORT PermissionServiceImpl
-    : public blink::mojom::PermissionService {
+// TODO(crbug.com/40220500): Use url::Origin instead of GURL.
+class PermissionServiceImpl : public blink::mojom::PermissionService {
  public:
   PermissionServiceImpl(PermissionServiceContext* context,
                         const url::Origin& origin);
+
+  PermissionServiceImpl(const PermissionServiceImpl&) = delete;
+  PermissionServiceImpl& operator=(const PermissionServiceImpl&) = delete;
+
   ~PermissionServiceImpl() override;
 
  private:
   friend class PermissionServiceImplTest;
 
-  using PermissionStatusCallback =
-      base::OnceCallback<void(blink::mojom::PermissionStatus)>;
+  using InternalRequestPermissionsCallback =
+      base::OnceCallback<void(const std::vector<PermissionResult>&)>;
 
   class PendingRequest;
   using RequestsMap = base::IDMap<std::unique_ptr<PendingRequest>>;
 
   // blink::mojom::PermissionService.
   void HasPermission(blink::mojom::PermissionDescriptorPtr permission,
-                     PermissionStatusCallback callback) override;
+                     HasPermissionCallback callback) override;
+  void RegisterPageEmbeddedPermissionControl(
+      std::vector<blink::mojom::PermissionDescriptorPtr> permissions,
+      blink::mojom::EmbeddedPermissionRequestDescriptorPtr descriptor,
+      mojo::PendingRemote<blink::mojom::EmbeddedPermissionControlClient> client)
+      override;
+  void RequestPageEmbeddedPermission(
+      std::vector<blink::mojom::PermissionDescriptorPtr> permissions,
+      blink::mojom::EmbeddedPermissionRequestDescriptorPtr descriptor,
+      RequestPageEmbeddedPermissionCallback callback) override;
   void RequestPermission(blink::mojom::PermissionDescriptorPtr permission,
-                         bool user_gesture,
-                         PermissionStatusCallback callback) override;
+                         RequestPermissionCallback callback) override;
   void RequestPermissions(
       std::vector<blink::mojom::PermissionDescriptorPtr> permissions,
-      bool user_gesture,
       RequestPermissionsCallback callback) override;
   void RevokePermission(blink::mojom::PermissionDescriptorPtr permission,
-                        PermissionStatusCallback callback) override;
+                        RevokePermissionCallback callback) override;
   void AddPermissionObserver(
+      blink::mojom::PermissionDescriptorPtr permission,
+      blink::mojom::PermissionStatusWithDetailsPtr last_known_status,
+      mojo::PendingRemote<blink::mojom::PermissionObserver> observer) override;
+  void AddPageEmbeddedPermissionObserver(
       blink::mojom::PermissionDescriptorPtr permission,
       blink::mojom::PermissionStatus last_known_status,
       mojo::PendingRemote<blink::mojom::PermissionObserver> observer) override;
+  void NotifyEventListener(blink::mojom::PermissionDescriptorPtr permission,
+                           const std::string& event_type,
+                           bool is_added) override;
+
+  void RequestPermissionsInternal(
+      BrowserContext* browser_context,
+      PermissionRequestDescription request_description,
+      InternalRequestPermissionsCallback callback);
+
+  int CreatePendingRequest(
+      const std::vector<blink::mojom::PermissionDescriptorPtr>& permissions,
+      InternalRequestPermissionsCallback callback);
 
   void OnRequestPermissionsResponse(
       int pending_request_id,
-      const std::vector<blink::mojom::PermissionStatus>& result);
+      const std::vector<PermissionResult>& result);
 
-  blink::mojom::PermissionStatus GetPermissionStatus(
+  void OnPageEmbeddedPermissionControlRegistered(
+      std::vector<blink::mojom::PermissionDescriptorPtr> permissions,
+      bool allow,
+      const mojo::Remote<blink::mojom::EmbeddedPermissionControlClient>&
+          client);
+
+  PermissionResult GetPermissionResult(
       const blink::mojom::PermissionDescriptorPtr& permission);
-  blink::mojom::PermissionStatus GetPermissionStatusFromType(
-      PermissionType type);
-  void ResetPermissionStatus(PermissionType type);
+  PermissionResult GetPermissionResultForCurrentContext(
+      const blink::mojom::PermissionDescriptorPtr& permission);
+  PermissionResult GetCombinedPermissionAndDeviceResult(
+      const blink::mojom::PermissionDescriptorPtr& permission);
+  void ResetPermissionStatus(blink::PermissionType type);
   void ReceivedBadMessage();
 
   RequestsMap pending_requests_;
   // context_ owns |this|.
-  PermissionServiceContext* context_;
+  raw_ptr<PermissionServiceContext> context_;
   const url::Origin origin_;
   base::WeakPtrFactory<PermissionServiceImpl> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(PermissionServiceImpl);
 };
 
 }  // namespace content

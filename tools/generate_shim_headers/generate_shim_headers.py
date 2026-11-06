@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright (c) 2012 The Chromium Authors. All rights reserved.
+# Copyright 2012 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -10,7 +10,6 @@ but just forward to the system ones.
 This allows seamless compilation against system headers with no changes
 to our source code.
 """
-
 
 import optparse
 import os.path
@@ -44,20 +43,21 @@ def GeneratorMain(argv):
     parser.error('Missing arguments - header file names.')
 
   source_tree_root = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), '..', '..'))
+    os.path.join(os.path.dirname(__file__), '..', '..')
+  )
 
   for root in options.headers_root:
     target_directory = os.path.join(
-      options.output_directory,
-      os.path.relpath(root, source_tree_root))
+      options.output_directory, os.path.relpath(root, source_tree_root)
+    )
     if options.generate and not os.path.exists(target_directory):
       os.makedirs(target_directory)
 
     for header_spec in args:
       if ';' in header_spec:
-        (header_filename,
-         include_before,
-         include_after) = header_spec.split(';', 2)
+        (header_filename, include_before, include_after) = header_spec.split(
+          ';', 2
+        )
       else:
         header_filename = header_spec
         include_before = ''

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,40 +13,42 @@ import static org.chromium.chrome.browser.browser_controls.BrowserStateBrowserCo
 import android.os.SystemClock;
 
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.Mockito;
-import org.mockito.MockitoAnnotations;
-import org.robolectric.annotation.Config;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.Callback;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.cc.input.BrowserControlsState;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 
-/**
- * Unit tests for the BrowserStateBrowserControlsVisibilityDelegate.
- */
+import java.util.concurrent.TimeUnit;
+
+/** Unit tests for the BrowserStateBrowserControlsVisibilityDelegate. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class BrowserStateBrowserControlsVisibilityDelegateTest {
-    @Mock
-    private Callback<Integer> mCallback;
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Mock private Callback<Integer> mCallback;
 
     private BrowserStateBrowserControlsVisibilityDelegate mDelegate;
-    private ObservableSupplierImpl<Boolean> mPersistentModeSupplier;
+    private SettableNonNullObservableSupplier<Boolean> mPersistentModeSupplier;
 
     @Before
+    @SuppressWarnings("unchecked") // Mockito.reset() is a generic-varargs method.
     public void beforeTest() {
-        MockitoAnnotations.initMocks(this);
-
-        mPersistentModeSupplier = new ObservableSupplierImpl<>();
-        mPersistentModeSupplier.set(false);
+        mPersistentModeSupplier = ObservableSuppliers.createNonNull(false);
 
         mDelegate = new BrowserStateBrowserControlsVisibilityDelegate(mPersistentModeSupplier);
-        mDelegate.addObserver(mCallback);
+        mDelegate.addSyncObserverAndPostIfNonNull(mCallback);
         Mockito.reset(mCallback);
     }
 
@@ -64,7 +66,67 @@ public class BrowserStateBrowserControlsVisibilityDelegateTest {
         mDelegate.showControlsTransient();
         assertEquals(BrowserControlsState.SHOWN, constraints());
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
+        assertEquals(BrowserControlsState.BOTH, constraints());
+
+        verify(mCallback, times(2)).onResult(Mockito.anyInt());
+    }
+
+    @Test
+    @EnableFeatures(
+            ChromeFeatureList.BROWSER_CONTROLS_LOCKOUT_DURATION + ":minimum_show_duration_ms/1500")
+    public void testTransientShowWithCustomLockoutDuration() {
+        assertEquals(
+                1500, BrowserStateBrowserControlsVisibilityDelegate.getMinimumShowDurationMs());
+
+        assertEquals(BrowserControlsState.BOTH, constraints());
+        mDelegate.showControlsTransient();
+        assertEquals(BrowserControlsState.SHOWN, constraints());
+
+        ShadowLooper.idleMainLooper(1000, TimeUnit.MILLISECONDS);
+        assertEquals(BrowserControlsState.SHOWN, constraints());
+
+        ShadowLooper.idleMainLooper(500, TimeUnit.MILLISECONDS);
+        assertEquals(BrowserControlsState.BOTH, constraints());
+
+        verify(mCallback, times(2)).onResult(Mockito.anyInt());
+    }
+
+    @Test
+    @EnableFeatures(
+            ChromeFeatureList.BROWSER_CONTROLS_LOCKOUT_DURATION + ":minimum_show_duration_ms/500")
+    public void testTransientShowWithLockoutDurationBelowSecurityMinClamped() {
+        assertEquals(
+                1000, BrowserStateBrowserControlsVisibilityDelegate.getMinimumShowDurationMs());
+
+        assertEquals(BrowserControlsState.BOTH, constraints());
+        mDelegate.showControlsTransient();
+        assertEquals(BrowserControlsState.SHOWN, constraints());
+
+        ShadowLooper.idleMainLooper(500, TimeUnit.MILLISECONDS);
+        assertEquals(BrowserControlsState.SHOWN, constraints());
+
+        ShadowLooper.idleMainLooper(500, TimeUnit.MILLISECONDS);
+        assertEquals(BrowserControlsState.BOTH, constraints());
+
+        verify(mCallback, times(2)).onResult(Mockito.anyInt());
+    }
+
+    @Test
+    @EnableFeatures(
+            ChromeFeatureList.BROWSER_CONTROLS_LOCKOUT_DURATION + ":minimum_show_duration_ms/5000")
+    public void testTransientShowWithLockoutDurationAboveSecurityMaxClamped() {
+        assertEquals(
+                3000, BrowserStateBrowserControlsVisibilityDelegate.getMinimumShowDurationMs());
+
+        assertEquals(BrowserControlsState.BOTH, constraints());
+        mDelegate.showControlsTransient();
+        assertEquals(BrowserControlsState.SHOWN, constraints());
+
+        ShadowLooper.idleMainLooper(2500, TimeUnit.MILLISECONDS);
+        assertEquals(BrowserControlsState.SHOWN, constraints());
+
+        ShadowLooper.idleMainLooper(500, TimeUnit.MILLISECONDS);
         assertEquals(BrowserControlsState.BOTH, constraints());
 
         verify(mCallback, times(2)).onResult(Mockito.anyInt());
@@ -90,12 +152,6 @@ public class BrowserStateBrowserControlsVisibilityDelegateTest {
         int token = mDelegate.showControlsPersistent();
         assertEquals(BrowserControlsState.SHOWN, constraints());
         mDelegate.releasePersistentShowingToken(token);
-
-        // If the controls are not shown for the mimimum allowed time, then a task is posted to
-        // keep them shown for longer.  Ensure the controls can not be hidden until this delayed
-        // task has been run.
-        assertEquals(BrowserControlsState.SHOWN, constraints());
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
         assertEquals(BrowserControlsState.BOTH, constraints());
 
         verify(mCallback, times(2)).onResult(Mockito.anyInt());
@@ -110,10 +166,15 @@ public class BrowserStateBrowserControlsVisibilityDelegateTest {
         // Advance the clock to exceed the minimum show time.
         advanceTime(2 * MINIMUM_SHOW_DURATION_MS);
         assertEquals(BrowserControlsState.SHOWN, constraints());
-        // At this point, the controls have been shown long enough that the transient request will
-        // be a no-op.
         mDelegate.showControlsTransient();
+
+        // Controls should stil be shown since showControlsTransient was just called.
         mDelegate.releasePersistentShowingToken(token);
+        assertEquals(BrowserControlsState.SHOWN, constraints());
+        advanceTime((long) (0.5 * MINIMUM_SHOW_DURATION_MS));
+        assertEquals(BrowserControlsState.SHOWN, constraints());
+
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         assertEquals(BrowserControlsState.BOTH, constraints());
 
         verify(mCallback, times(2)).onResult(Mockito.anyInt());
@@ -128,14 +189,12 @@ public class BrowserStateBrowserControlsVisibilityDelegateTest {
         // Advance the clock but not beyond the min show duration.
         advanceTime((long) (0.5 * MINIMUM_SHOW_DURATION_MS));
         assertEquals(BrowserControlsState.SHOWN, constraints());
-        // At this point, the controls have not been shown long enough, so the transient request
-        // will delay the ability to hide.
         mDelegate.showControlsTransient();
         mDelegate.releasePersistentShowingToken(token);
         assertEquals(BrowserControlsState.SHOWN, constraints());
 
         // Run the pending tasks on the UI thread, which will include the transient delayed task.
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         assertEquals(BrowserControlsState.BOTH, constraints());
 
         verify(mCallback, times(2)).onResult(Mockito.anyInt());

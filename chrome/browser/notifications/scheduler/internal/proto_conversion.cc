@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,7 +24,7 @@ int64_t TimeDeltaToMilliseconds(const base::TimeDelta& delta) {
 // Helper method to convert serialized time delta as integer to base::TimeDelta
 // for deserialization. Loses precision beyond miliseconds.
 base::TimeDelta MillisecondsToTimeDelta(int64_t serialized_delat_ms) {
-  return base::TimeDelta::FromMilliseconds(serialized_delat_ms);
+  return base::Milliseconds(serialized_delat_ms);
 }
 
 // Helper method to convert base::Time to integer for serialization. Loses
@@ -37,7 +37,7 @@ int64_t TimeToMilliseconds(const base::Time& time) {
 // deserialization. Loses precision beyond miliseconds.
 base::Time MillisecondsToTime(int64_t serialized_time_ms) {
   return base::Time::FromDeltaSinceWindowsEpoch(
-      base::TimeDelta::FromMilliseconds(serialized_time_ms));
+      base::Milliseconds(serialized_time_ms));
 }
 
 // Converts SchedulerClientType to its associated enum in proto buffer.
@@ -50,6 +50,7 @@ proto::SchedulerClientType ToSchedulerClientType(SchedulerClientType type) {
     case SchedulerClientType::kTest3:
       return proto::SchedulerClientType::TEST_3;
     case SchedulerClientType::kUnknown:
+    case SchedulerClientType::kDeprecatedFeatureGuide:
       return proto::SchedulerClientType::UNKNOWN;
     case SchedulerClientType::kWebUI:
       return proto::SchedulerClientType::WEBUI;
@@ -59,6 +60,10 @@ proto::SchedulerClientType ToSchedulerClientType(SchedulerClientType type) {
       return proto::SchedulerClientType::PREFETCH;
     case SchedulerClientType::kReadingList:
       return proto::SchedulerClientType::READING_LIST;
+    case SchedulerClientType::kTips:
+      return proto::SchedulerClientType::TIPS;
+    case SchedulerClientType::kChromeFinds:
+      return proto::SchedulerClientType::CHROME_FINDS;
   }
   NOTREACHED();
 }
@@ -83,6 +88,10 @@ SchedulerClientType FromSchedulerClientType(
       return SchedulerClientType::kPrefetch;
     case proto::SchedulerClientType::READING_LIST:
       return SchedulerClientType::kReadingList;
+    case proto::SchedulerClientType::TIPS:
+      return SchedulerClientType::kTips;
+    case proto::SchedulerClientType::CHROME_FINDS:
+      return SchedulerClientType::kChromeFinds;
   }
   NOTREACHED();
 }
@@ -327,7 +336,7 @@ void IconEntryToProto(IconEntry* entry, notifications::proto::Icon* proto) {
 }
 
 void IconEntryFromProto(proto::Icon* proto, notifications::IconEntry* entry) {
-  DCHECK(proto->has_icon());
+  CHECK(proto->has_icon(), base::NotFatalUntil::M161);
   entry->data.swap(*proto->mutable_icon());
 }
 
@@ -389,14 +398,16 @@ void ClientStateToProto(ClientState* client_state,
 
 void ClientStateFromProto(proto::ClientState* proto,
                           notifications::ClientState* client_state) {
+  // TODO(crbug.com/571058302): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK(proto->has_type());
-  DCHECK(proto->has_current_max_daily_show());
+  CHECK(proto->has_current_max_daily_show(), base::NotFatalUntil::M161);
   client_state->type = FromSchedulerClientType(proto->type());
   client_state->current_max_daily_show = proto->current_max_daily_show();
 
   for (const auto& proto_impression : proto->impressions()) {
     Impression impression;
-    DCHECK(proto_impression.has_create_time());
+    CHECK(proto_impression.has_create_time(), base::NotFatalUntil::M161);
     impression.create_time = MillisecondsToTime(proto_impression.create_time());
     impression.feedback = FromUserFeedback(proto_impression.feedback());
     impression.impression = FromImpressionResult(proto_impression.impression());
@@ -428,9 +439,9 @@ void ClientStateFromProto(proto::ClientState* proto,
 
   if (proto->has_suppression_info()) {
     const auto& proto_suppression = proto->suppression_info();
-    DCHECK(proto_suppression.has_last_trigger_time());
-    DCHECK(proto_suppression.has_duration_ms());
-    DCHECK(proto_suppression.has_recover_goal());
+    CHECK(proto_suppression.has_last_trigger_time(), base::NotFatalUntil::M161);
+    CHECK(proto_suppression.has_duration_ms(), base::NotFatalUntil::M161);
+    CHECK(proto_suppression.has_recover_goal(), base::NotFatalUntil::M161);
 
     SuppressionInfo suppression_info(
         MillisecondsToTime(proto_suppression.last_trigger_time()),

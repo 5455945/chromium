@@ -72,18 +72,21 @@ async_test((t) => {
     target.getBoundingClientRect();
     axTarget = axElementById("target");
 
-    // Now that #target is not locked, it is saved as a normal AXLayout object and has  4 children:
-    // the text node "target" and 4 div children (#child, #displayNone, #hidden, and #target_label).
-    t.step(() => { assert_equals(axTarget.childrenCount, 5, "Children count when not locked"); });
+    // Now #target is not locked, expect 5 children ("target" text node, 4 divs).
+    // This is the same as it would be if content-visibility had never been used.
+    t.step(() => { assert_equals(axTarget.childrenCount, 3, "Children count when not locked"); });
 
     for (let i = 0; i < axTarget.childrenCount; ++i) {
       const axChild = axTarget.childAtIndex(i);
       if (axChild == axElementById("hidden") || axChild == axElementById("displayNone")) {
         t.step(() => { assert_true(axChild.isIgnored, "After commit, isIgnored is true on child #" + i); });
         t.step(() => { assert_false(axChild.isVisible, "After commit, isVisible is false on child #" + i); });
-      } else {
+      } else if (i == 0 || axChild == axElementById("child") || axChild == axElementById("target_label")) {
         t.step(() => { assert_false(axChild.isIgnored, "After update, isIgnored is false on child #" + i); });
         t.step(() => { assert_true(axChild.isVisible, "After commit, isVisible is true on child #" + i); });
+      } else {
+        // These are the whitespace nodes
+        t.step(() => { assert_true(axChild.isIgnored, "After update, isIgnored is true on child #" + i); });
       }
     }
 

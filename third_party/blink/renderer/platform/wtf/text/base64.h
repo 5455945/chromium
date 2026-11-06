@@ -27,69 +27,51 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_TEXT_BASE64_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_TEXT_BASE64_H_
 
-#include "base/compiler_specific.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_view.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "third_party/blink/renderer/platform/wtf/wtf_export.h"
 
-namespace WTF {
+namespace blink {
 
-enum Base64EncodePolicy { kBase64DoNotInsertLFs, kBase64InsertLFs };
+// Compliant with https://infra.spec.whatwg.org/#forgiving-base64-encode.
+WTF_EXPORT void Base64Encode(base::span<const uint8_t>, Vector<char>&);
+[[nodiscard]] WTF_EXPORT String Base64Encode(base::span<const uint8_t>);
 
-enum Base64DecodePolicy { kBase64DoNotValidatePadding, kBase64ValidatePadding };
+enum class Base64DecodePolicy {
+  // Compliant with https://infra.spec.whatwg.org/#forgiving-base64-decode.
+  kForgiving,
 
-WTF_EXPORT void Base64Encode(base::span<const uint8_t>,
-                             Vector<char>&,
-                             Base64EncodePolicy = kBase64DoNotInsertLFs);
-WTF_EXPORT String Base64Encode(base::span<const uint8_t>,
-                               Base64EncodePolicy = kBase64DoNotInsertLFs)
-    WARN_UNUSED_RESULT;
+  // Same behavior as kForgiving except:
+  // - Step 1 (removing HTML whitespace) is omitted.
+  // - Step 2.1 is modified to remove all padding chars from the input instead
+  //   of a maximum of 2 chars.
+  kNoPaddingValidation,
+};
+WTF_EXPORT bool Base64Decode(
+    const StringView&,
+    Vector<uint8_t>&,
+    Base64DecodePolicy policy = Base64DecodePolicy::kNoPaddingValidation);
 
-WTF_EXPORT bool Base64Decode(
-    const String&,
-    Vector<char>&,
-    CharacterMatchFunctionPtr should_ignore_character = nullptr,
-    Base64DecodePolicy = kBase64DoNotValidatePadding);
-WTF_EXPORT bool Base64Decode(
-    const Vector<char>&,
-    Vector<char>&,
-    CharacterMatchFunctionPtr should_ignore_character = nullptr,
-    Base64DecodePolicy = kBase64DoNotValidatePadding);
-WTF_EXPORT bool Base64Decode(
-    const char*,
-    unsigned,
-    Vector<char>&,
-    CharacterMatchFunctionPtr should_ignore_character = nullptr,
-    Base64DecodePolicy = kBase64DoNotValidatePadding);
-WTF_EXPORT bool Base64Decode(
-    const UChar*,
-    unsigned,
-    Vector<char>&,
-    CharacterMatchFunctionPtr should_ignore_character = nullptr,
-    Base64DecodePolicy = kBase64DoNotValidatePadding);
-WTF_EXPORT bool Base64UnpaddedURLDecode(
-    const String& in,
-    Vector<char>&,
-    CharacterMatchFunctionPtr should_ignore_character = nullptr,
-    Base64DecodePolicy = kBase64DoNotValidatePadding);
+WTF_EXPORT bool Base64UnpaddedUrlDecode(const String& in, Vector<uint8_t>&);
 
 // Given an encoding in either base64 or base64url, returns a normalized
 // encoding in plain base64.
 WTF_EXPORT String NormalizeToBase64(const String&);
 
-WTF_EXPORT String Base64URLEncode(const char*,
-                                  unsigned,
-                                  Base64EncodePolicy = kBase64DoNotInsertLFs);
+enum class Base64UrlEncodePolicy {
+  // Include any required padding ('=') in the result.
+  kIncludePadding,
 
-}  // namespace WTF
+  // Remove trailing padding from the result.
+  kOmitPadding,
+};
 
-using WTF::Base64EncodePolicy;
-using WTF::kBase64DoNotInsertLFs;
-using WTF::kBase64InsertLFs;
-using WTF::Base64DecodePolicy;
-using WTF::kBase64DoNotValidatePadding;
-using WTF::kBase64ValidatePadding;
-using WTF::Base64Encode;
-using WTF::Base64Decode;
+// Encode to base64url. `policy` determines if padding should be included not.
+// https://datatracker.ietf.org/doc/html/rfc4648#section-5
+WTF_EXPORT String Base64UrlEncode(base::span<const uint8_t>,
+                                  Base64UrlEncodePolicy policy);
+
+}  // namespace blink
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_TEXT_BASE64_H_

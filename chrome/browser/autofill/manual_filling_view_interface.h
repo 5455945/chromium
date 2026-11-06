@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,12 @@
 #define CHROME_BROWSER_AUTOFILL_MANUAL_FILLING_VIEW_INTERFACE_H_
 
 #include <memory>
+#include <optional>
 #include <vector>
 
+#include "base/types/strong_alias.h"
 #include "build/build_config.h"
-#include "components/autofill/core/browser/ui/accessory_sheet_enums.h"
-#include "url/gurl.h"
+#include "chrome/browser/keyboard_accessory/android/accessory_sheet_enums.h"
 
 class ManualFillingController;
 
@@ -23,46 +24,27 @@ class WebContents;
 }  // namespace content
 
 // The interface for creating and controlling a view for the password accessory.
-// The view gets data from a given |ManualFillingController| and forwards
+// The view gets data from a given `ManualFillingController` and forwards
 // any request (like filling a suggestion) back to the controller.
 class ManualFillingViewInterface {
  public:
-  // Defines which item types exist.
-  // TODO(crbug.com/902425): Remove this once AccessorySheetData is used on the
-  //                         frontend to represent data to present.
-  // GENERATED_JAVA_ENUM_PACKAGE: (
-  //   org.chromium.chrome.browser.autofill.keyboard_accessory)
-  // GENERATED_JAVA_CLASS_NAME_OVERRIDE: ItemType
-  enum class Type {
-    // An item in title style to purely to display text. Non-interactive.
-    LABEL = 1,  // e.g. the "Passwords for this site" section header.
-
-    // An item in list style to displaying an interactive suggestion.
-    SUGGESTION = 2,  // e.g. a user's email address used for sign-up.
-
-    // An item in list style to displaying a non-interactive suggestion.
-    NON_INTERACTIVE_SUGGESTION = 3,  // e.g. the "(No username)" suggestion.
-
-    // A horizontal, non-interactive divider used to visually divide sections.
-    DIVIDER = 4,
-
-    // A single, usually static and interactive suggestion.
-    OPTION = 5,  // e.g. the "Manage passwords..." link.
-
-    // A horizontal, non-interactive divider used to visually divide the
-    // accessory sheet from the accessory bar.
-    TOP_DIVIDER = 6,
-  };
+  using WaitForKeyboard = base::StrongAlias<struct WaitForKeyboardTag, bool>;
+  using ShouldShowOnLargeFormFactor =
+      base::StrongAlias<struct ShouldShowOnLargeFormFactorTag, bool>;
+  using IsUnstructuredField =
+      base::StrongAlias<struct IsUnstructuredFieldTag, bool>;
+  using ShouldShowAction = base::StrongAlias<struct ShouldShowActionTag, bool>;
 
   virtual ~ManualFillingViewInterface() = default;
 
   // Called with data that should replace the data currently shown in an
   // accessory sheet of the same type.
-  virtual void OnItemsAvailable(const autofill::AccessorySheetData& data) = 0;
+  virtual void OnItemsAvailable(autofill::AccessorySheetData data) = 0;
 
-  // Called when the generation action should be offered or rescinded
-  // in the keyboard accessory.
-  virtual void OnAutomaticGenerationStatusChanged(bool available) = 0;
+  // Called when a keyboard accessory action should be offered or rescinded.
+  virtual void OnAccessoryActionAvailabilityChanged(
+      ShouldShowAction shouldShowAction,
+      autofill::AccessoryAction action) = 0;
 
   // Called to inform the view that the accessory sheet should be closed now.
   virtual void CloseAccessorySheet() = 0;
@@ -70,15 +52,36 @@ class ManualFillingViewInterface {
   // Opens a keyboard which dismisses the sheet. NoOp without open sheet.
   virtual void SwapSheetWithKeyboard() = 0;
 
-  // Shows the accessory bar when the keyboard is also shown.
-  virtual void ShowWhenKeyboardIsVisible() = 0;
+  // Shows the accessory bar. If `wait_for_keyboard`, shows the bar when the
+  // keyboard is also shown. `should_show_on_large_form_factor` controls whether
+  // the accessory should be displayed on Large Form Factors (where it is
+  // otherwise suppressed on empty fields). `is_unstructured_field` controls
+  // whether the focused field is an unstructured field like contenteditable or
+  // textarea (where only the AtMemory icon is shown).
+  virtual void Show(
+      WaitForKeyboard wait_for_keyboard,
+      ShouldShowOnLargeFormFactor should_show_on_large_form_factor,
+      IsUnstructuredField is_unstructured_field) = 0;
 
   // Hides the accessory bar and the accessory sheet (if open).
   virtual void Hide() = 0;
 
-  // Shows the accessory sheet for the given |tab_type|.
+  // Shows the accessory sheet for the given `tab_type`.
   virtual void ShowAccessorySheetTab(
       const autofill::AccessoryTabType& tab_type) = 0;
+
+  // Highlights a suggestion visually when navigated via keyboard or selection.
+  // Passing `std::nullopt` clears the selection.
+  virtual void SetSelectedSuggestion(std::optional<int> suggestion_index) = 0;
+
+  // Performs the keyboard navigation `action` in the accessory bar. Returns
+  // whether the action was handled, i.e. whether the triggering key event
+  // should be consumed.
+  virtual bool Navigate(autofill::NavigationAction action) = 0;
+
+  // Clicks the keyboard-selected manual fallback icon. Returns whether one was
+  // selected.
+  virtual bool AcceptFallback() = 0;
 
  private:
   friend class ManualFillingControllerImpl;

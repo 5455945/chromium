@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,26 +6,31 @@
 
 #include <string>
 
-#include "base/bind.h"
+#include "base/check_deref.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
+#include "chrome/browser/ash/app_list/arc/arc_app_utils.h"
 #include "chrome/browser/ash/arc/arc_optin_uma.h"
 #include "chrome/browser/ash/arc/arc_util.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
-#include "chrome/browser/consent_auditor/consent_auditor_factory.h"
-#include "chrome/browser/prefs/pref_service_syncable_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/ui/app_list/arc/arc_app_utils.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chrome/grit/generated_resources.h"
-#include "components/arc/arc_prefs.h"
-#include "components/arc/arc_util.h"
+#include "chromeos/ash/components/browser_context_helper/annotated_account_id.h"
+#include "chromeos/ash/components/signin/identity_manager_provider.h"
+#include "chromeos/ash/experiences/arc/app/arc_app_constants.h"
+#include "chromeos/ash/experiences/arc/arc_prefs.h"
+#include "chromeos/ash/experiences/arc/arc_util.h"
 #include "components/consent_auditor/consent_auditor.h"
-#include "components/signin/public/identity_manager/consent_level.h"
+#include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/sync_preferences/pref_service_syncable.h"
 #include "content/public/browser/browser_thread.h"
+
+// Enable VLOG level 1.
+#undef ENABLED_VLOG_LEVEL
+#define ENABLED_VLOG_LEVEL 1
 
 using sync_pb::UserConsentTypes;
 
@@ -33,10 +38,13 @@ namespace arc {
 
 ArcPlayStoreEnabledPreferenceHandler::ArcPlayStoreEnabledPreferenceHandler(
     Profile* profile,
-    ArcSessionManager* arc_session_manager)
-    : profile_(profile), arc_session_manager_(arc_session_manager) {
-  DCHECK(profile_);
-  DCHECK(arc_session_manager_);
+    ArcSessionManager* arc_session_manager,
+    consent_auditor::ConsentAuditor* consent_auditor)
+    : profile_(profile),
+      arc_session_manager_(arc_session_manager),
+      consent_auditor_(CHECK_DEREF(consent_auditor)) {
+  CHECK(profile_, base::NotFatalUntil::M160);
+  CHECK(arc_session_manager_, base::NotFatalUntil::M160);
 }
 
 ArcPlayStoreEnabledPreferenceHandler::~ArcPlayStoreEnabledPreferenceHandler() {
@@ -44,7 +52,7 @@ ArcPlayStoreEnabledPreferenceHandler::~ArcPlayStoreEnabledPreferenceHandler() {
 }
 
 void ArcPlayStoreEnabledPreferenceHandler::Start() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
 
   // Start observing Google Play Store enabled preference.
   pref_change_registrar_.Init(profile_->GetPrefs());
@@ -94,7 +102,7 @@ void ArcPlayStoreEnabledPreferenceHandler::Start() {
 }
 
 void ArcPlayStoreEnabledPreferenceHandler::OnPreferenceChanged() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   const bool is_play_store_enabled = IsArcPlayStoreEnabledForProfile(profile_);
   if (!IsArcPlayStoreEnabledPreferenceManagedForProfile(profile_)) {
     // Update UMA only for non-Managed cases. Note, that multiple OptIn/OptOut
@@ -128,27 +136,30 @@ void ArcPlayStoreEnabledPreferenceHandler::OnPreferenceChanged() {
 
       // Tell Consent Auditor that the Play Store consent was revoked.
       signin::IdentityManager* identity_manager =
-          IdentityManagerFactory::GetForProfile(profile_);
-      // TODO(crbug.com/850297): Fix unrelated tests that are not properly
+          ash::IdentityManagerProvider::Get().Find(CHECK_DEREF(
+              ash::AnnotatedAccountId::Get(profile_->GetOriginalProfile())));
+      // TODO(crbug.com/40579665): Fix unrelated tests that are not properly
       // setting up the state of identity_manager and enable the DCHECK instead
       // of the conditional below.
       // DCHECK(identity_manager->HasPrimaryAccount(
       //            signin::ConsentLevel::kSignin));
-      if (identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSignin)) {
+      if (identity_manager &&
+          identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSignin)) {
         // This class doesn't care about browser sync consent.
-        const CoreAccountId account_id = identity_manager->GetPrimaryAccountId(
-            signin::ConsentLevel::kSignin);
+        const GaiaId gaia_id =
+            identity_manager
+                ->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin)
+                .gaia;
 
         UserConsentTypes::ArcPlayTermsOfServiceConsent play_consent;
         play_consent.set_status(UserConsentTypes::NOT_GIVEN);
         play_consent.set_confirmation_grd_id(
-            IDS_SETTINGS_ANDROID_APPS_DISABLE_DIALOG_REMOVE);
+            IDS_SETTINGS_ANDROID_APPS_REMOVE_BUTTON);
         play_consent.add_description_grd_ids(
-            IDS_SETTINGS_ANDROID_APPS_DISABLE_DIALOG_MESSAGE);
+            IDS_OS_SETTINGS_ANDROID_APPS_DISABLE_DIALOG_MESSAGE);
         play_consent.set_consent_flow(
             UserConsentTypes::ArcPlayTermsOfServiceConsent::SETTING_CHANGE);
-        ConsentAuditorFactory::GetForProfile(profile_)->RecordArcPlayConsent(
-            account_id, play_consent);
+        consent_auditor_->RecordArcPlayConsent(gaia_id, play_consent);
       }
     }
   }
@@ -168,13 +179,18 @@ void ArcPlayStoreEnabledPreferenceHandler::UpdateArcSessionManager() {
         IsArcPlayStoreEnabledPreferenceManagedForProfile(profile_));
   }
 
-  if (ShouldArcAlwaysStart() || IsArcPlayStoreEnabledForProfile(profile_)) {
+  if (ShouldArcAlwaysStart()) {
+    arc_session_manager_->AllowActivation(
+        ArcSessionManager::AllowActivationReason::kAlwaysStartIsEnabled);
     arc_session_manager_->RequestEnable();
+  } else if (IsArcPlayStoreEnabledForProfile(profile_)) {
+    if (!ShouldArcStartManually()) {
+      arc_session_manager_->RequestEnable();
+    } else {
+      VLOG(1) << "ARC is not started automatically";
+    }
   } else {
-    const bool enable_requested = arc_session_manager_->enable_requested();
-    arc_session_manager_->RequestDisable();
-    if (enable_requested)
-      arc_session_manager_->RequestArcDataRemoval();
+    arc_session_manager_->RequestDisableWithArcDataRemoval();
   }
 }
 

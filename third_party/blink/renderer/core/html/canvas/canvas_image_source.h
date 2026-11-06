@@ -29,11 +29,10 @@
 
 #include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/platform/geometry/float_size.h"
-#include "third_party/blink/renderer/platform/graphics/graphics_types.h"
+#include "third_party/blink/renderer/platform/graphics/flush_reason.h"
 #include "third_party/blink/renderer/platform/graphics/image_orientation.h"
-#include "third_party/blink/renderer/platform/graphics/static_bitmap_image.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
+#include "ui/gfx/geometry/size_f.h"
 
 namespace blink {
 
@@ -42,24 +41,18 @@ class Image;
 enum SourceImageStatus {
   kNormalSourceImageStatus,
   kUndecodableSourceImageStatus,     // Image element with a 'broken' image
-  kZeroSizeCanvasSourceImageStatus,  // Source is a canvas with width or heigh
+  kZeroSizeCanvasSourceImageStatus,  // Source is a canvas with width or height
                                      // of zero
+  kZeroSizeImageSourceStatus,    // Image element with width or height of zero
   kIncompleteSourceImageStatus,  // Image element with no source media
   kInvalidSourceImageStatus,
+  kLayersOpenInCanvasSource,  // Source is a canvas with open layers
 };
-
-// This is the helper function to get the canvas image with a
-// specific alpha op requirements.
-scoped_refptr<StaticBitmapImage> GetImageWithAlphaDisposition(
-    scoped_refptr<StaticBitmapImage>&&,
-    const AlphaDisposition);
 
 class CORE_EXPORT CanvasImageSource {
  public:
-  virtual scoped_refptr<Image> GetSourceImageForCanvas(
-      SourceImageStatus*,
-      const FloatSize&,
-      const AlphaDisposition alpha_disposition = kPremultiplyAlpha) = 0;
+  virtual scoped_refptr<Image> GetSourceImageForCanvas(SourceImageStatus*,
+                                                       const gfx::SizeF&) = 0;
 
   // IMPORTANT: Result must be independent of whether destinationContext is
   // already tainted because this function may be used to determine whether
@@ -67,11 +60,8 @@ class CORE_EXPORT CanvasImageSource {
   // another canvas, which may not be already tainted.
   virtual bool WouldTaintOrigin() const = 0;
 
-  virtual bool IsCSSImageValue() const { return false; }
-  virtual bool IsImageElement() const { return false; }
   virtual bool IsVideoElement() const { return false; }
   virtual bool IsCanvasElement() const { return false; }
-  virtual bool IsSVGSource() const { return false; }
   virtual bool IsImageBitmap() const { return false; }
   virtual bool IsOffscreenCanvas() const { return false; }
   virtual bool IsVideoFrame() const { return false; }
@@ -82,14 +72,18 @@ class CORE_EXPORT CanvasImageSource {
   //  https://html.spec.whatwg.org/multipage/canvas.html#check-the-usability-of-the-image-argument
   virtual bool IsNeutered() const { return false; }
 
-  virtual FloatSize ElementSize(const FloatSize& default_object_size,
-                                const RespectImageOrientationEnum) const = 0;
-  virtual FloatSize DefaultDestinationSize(
-      const FloatSize& default_object_size,
+  // Spec about placeholder context:
+  // https://html.spec.whatwg.org/multipage/canvas.html#offscreencanvas-placeholder
+  virtual bool IsPlaceholder() const { return false; }
+
+  virtual gfx::SizeF ElementSize(const gfx::SizeF& default_object_size,
+                                 const RespectImageOrientationEnum) const = 0;
+  virtual gfx::SizeF DefaultDestinationSize(
+      const gfx::SizeF& default_object_size,
       const RespectImageOrientationEnum respect_orientation) const {
     return ElementSize(default_object_size, respect_orientation);
   }
-  virtual const KURL& SourceURL() const { return BlankURL(); }
+  virtual const KURL& SourceURL() const { return BlankUrl(); }
   virtual bool IsOpaque() const { return false; }
   virtual bool IsAccelerated() const = 0;
 

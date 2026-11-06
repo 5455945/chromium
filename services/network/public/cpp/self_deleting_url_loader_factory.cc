@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,9 @@
 namespace network {
 
 SelfDeletingURLLoaderFactory::SelfDeletingURLLoaderFactory(
-    mojo::PendingReceiver<mojom::URLLoaderFactory> factory_receiver) {
+    mojo::PendingReceiver<mojom::URLLoaderFactory> factory_receiver,
+    base::SelfDeletingPassKey key)
+    : base::SelfDeleting(key) {
   receivers_.set_disconnect_handler(base::BindRepeating(
       &SelfDeletingURLLoaderFactory::OnDisconnect, base::Unretained(this)));
   receivers_.Add(this, std::move(factory_receiver));
@@ -35,6 +37,13 @@ void SelfDeletingURLLoaderFactory::Clone(
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
   receivers_.Add(this, std::move(loader));
+}
+
+void SelfDeletingURLLoaderFactory::ReportBadMessage(std::string_view message) {
+  receivers_.ReportBadMessage(message);
+  if (receivers_.empty()) {
+    delete this;
+  }
 }
 
 void SelfDeletingURLLoaderFactory::OnDisconnect() {

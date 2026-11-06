@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include <memory>
 
 #include "ash/keyboard/ui/keyboard_ui.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/aura/window_observer.h"
 
 class ChromeKeyboardWebContents;
@@ -22,8 +22,8 @@ class BrowserContext;
 }
 
 namespace ui {
-class Shadow;
-}
+class Decoration;
+}  // namespace ui
 
 // Subclass of KeyboardUI. It is used by KeyboardController to get
 // access to the virtual keyboard window and setup Chrome extension functions.
@@ -32,6 +32,10 @@ class ChromeKeyboardUI : public keyboard::KeyboardUI,
                          public aura::WindowObserver {
  public:
   explicit ChromeKeyboardUI(content::BrowserContext* context);
+
+  ChromeKeyboardUI(const ChromeKeyboardUI&) = delete;
+  ChromeKeyboardUI& operator=(const ChromeKeyboardUI&) = delete;
+
   ~ChromeKeyboardUI() override;
 
   // keyboard::KeyboardUI:
@@ -57,12 +61,10 @@ class ChromeKeyboardUI : public keyboard::KeyboardUI,
 
   // The BrowserContext to use for creating the WebContents hosting the
   // keyboard.
-  content::BrowserContext* const browser_context_;
+  const raw_ptr<content::BrowserContext> browser_context_;
 
   std::unique_ptr<ChromeKeyboardWebContents> keyboard_contents_;
-  std::unique_ptr<ui::Shadow> shadow_;
-
-  DISALLOW_COPY_AND_ASSIGN(ChromeKeyboardUI);
+  std::unique_ptr<ui::Decoration> shadow_decoration_;
 };
 
 #endif  // CHROME_BROWSER_UI_ASH_KEYBOARD_CHROME_KEYBOARD_UI_H_

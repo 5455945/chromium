@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,14 +8,14 @@
 #include <iosfwd>
 #include <string>
 
-#include "ui/gfx/geometry/geometry_export.h"
+#include "base/component_export.h"
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/vector3d_f.h"
 
 namespace gfx {
 
 // A point has an x, y and z coordinate.
-class GEOMETRY_EXPORT Point3F {
+class COMPONENT_EXPORT(GEOMETRY) Point3F {
  public:
   constexpr Point3F() : x_(0), y_(0), z_(0) {}
   constexpr Point3F(float x, float y, float z) : x_(x), y_(y), z_(z) {}
@@ -45,6 +45,8 @@ class GEOMETRY_EXPORT Point3F {
     z_ = z;
   }
 
+  bool IsOrigin() const { return x_ == 0 && y_ == 0 && z_ == 0; }
+
   // Offset the point by the given vector.
   void operator+=(const Vector3dF& v) {
     x_ += v.x();
@@ -69,8 +71,12 @@ class GEOMETRY_EXPORT Point3F {
 
   PointF AsPointF() const { return PointF(x_, y_); }
 
+  Vector3dF OffsetFromOrigin() const { return Vector3dF(x_, y_, z_); }
+
   // Returns a string representation of 3d point.
   std::string ToString() const;
+
+  friend bool operator==(const Point3F&, const Point3F&) = default;
 
  private:
   float x_;
@@ -80,24 +86,19 @@ class GEOMETRY_EXPORT Point3F {
   // copy/assign are allowed.
 };
 
-inline bool operator==(const Point3F& lhs, const Point3F& rhs) {
-  return lhs.x() == rhs.x() && lhs.y() == rhs.y() && lhs.z() == rhs.z();
-}
-
-inline bool operator!=(const Point3F& lhs, const Point3F& rhs) {
-  return !(lhs == rhs);
-}
-
 // Add a vector to a point, producing a new point offset by the vector.
-GEOMETRY_EXPORT Point3F operator+(const Point3F& lhs, const Vector3dF& rhs);
+COMPONENT_EXPORT(GEOMETRY)
+Point3F operator+(const Point3F& lhs, const Vector3dF& rhs);
 
 // Subtract a vector from a point, producing a new point offset by the vector's
 // inverse.
-GEOMETRY_EXPORT Point3F operator-(const Point3F& lhs, const Vector3dF& rhs);
+COMPONENT_EXPORT(GEOMETRY)
+Point3F operator-(const Point3F& lhs, const Vector3dF& rhs);
 
 // Subtract one point from another, producing a vector that represents the
 // distances between the two points along each axis.
-GEOMETRY_EXPORT Vector3dF operator-(const Point3F& lhs, const Point3F& rhs);
+COMPONENT_EXPORT(GEOMETRY)
+Vector3dF operator-(const Point3F& lhs, const Point3F& rhs);
 
 inline Point3F PointAtOffsetFromOrigin(const Vector3dF& offset) {
   return Point3F(offset.x(), offset.y(), offset.z());

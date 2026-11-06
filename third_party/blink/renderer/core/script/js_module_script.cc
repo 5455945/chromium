@@ -1,15 +1,17 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/script/js_module_script.h"
 
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/loader/modulescript/module_script_creation_params.h"
 #include "third_party/blink/renderer/core/script/modulator.h"
 #include "third_party/blink/renderer/core/script/module_record_resolver.h"
 #include "third_party/blink/renderer/platform/bindings/parkable_string.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
+#include "third_party/blink/renderer/platform/bindings/v8_throw_exception.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "v8/include/v8.h"
 
@@ -22,11 +24,23 @@ JSModuleScript* JSModuleScript::Create(
     Modulator* modulator,
     const ScriptFetchOptions& options,
     const TextPosition& start_position) {
+  // Note: this needs to be set here so modulator->IsScriptingDisabled() below
+  //       has access to the correct context information.
+  // TODO(crbug.com/371004128): this seems wrong; `IsScriptingDisabled()` should
+  //       be modified so that it uses the correct ScriptState internally.
+  ScriptState* script_state = modulator->GetScriptState();
+  ScriptState::Scope scope(script_state);
+
   // <spec step="1">If scripting is disabled for settings's responsible browsing
   // context, then set source to the empty string.</spec>
+  //
+  // The `static_cast` is added to avoid copy construction. Without
+  // `static_cast`, we'd create an temporary object either
+  // `CopyWithClearedSourceText()` or a copy of `original_params`.
   const ModuleScriptCreationParams& params =
       modulator->IsScriptingDisabled()
-          ? original_params.CopyWithClearedSourceText()
+          ? static_cast<const ModuleScriptCreationParams&>(
+                original_params.CopyWithClearedSourceText())
           : original_params;
 
   // <spec step="2">Let script be a new module script that this algorithm will
@@ -38,16 +52,13 @@ JSModuleScript* JSModuleScript::Create(
 
   // <spec step="7">Let result be ParseModule(source, settings's Realm,
   // script).</spec>
-  ScriptState* script_state = modulator->GetScriptState();
-  ScriptState::Scope scope(script_state);
   v8::Isolate* isolate = script_state->GetIsolate();
-  ExceptionState exception_state(isolate, ExceptionState::kExecutionContext,
-                                 "JSModuleScript", "Create");
+  v8::TryCatch try_catch(isolate);
 
   ModuleRecordProduceCacheData* produce_cache_data = nullptr;
 
   v8::Local<v8::Module> result = ModuleRecord::Compile(
-      isolate, params, options, start_position, exception_state,
+      script_state, params, options, start_position,
       modulator->GetV8CacheOptions(), &produce_cache_data);
 
   // CreateInternal processes Steps 4 and 8-10.
@@ -61,12 +72,11 @@ JSModuleScript* JSModuleScript::Create(
       params.BaseURL(), options, start_position, produce_cache_data);
 
   // <spec step="8">If result is a list of errors, then:</spec>
-  if (exception_state.HadException()) {
+  if (try_catch.HasCaught()) {
     DCHECK(result.IsEmpty());
 
     // <spec step="8.1">Set script's parse error to result[0].</spec>
-    v8::Local<v8::Value> error = exception_state.GetException();
-    exception_state.ClearException();
+    v8::Local<v8::Value> error = try_catch.Exception();
     script->SetParseErrorAndClearRecord(ScriptValue(isolate, error));
 
     // <spec step="8.2">Return script.</spec>
@@ -77,33 +87,44 @@ JSModuleScript* JSModuleScript::Create(
   // result.[[RequestedModules]]:</spec>
   for (const auto& requested :
        ModuleRecord::ModuleRequests(script_state, result)) {
-    // <spec step="9.1">Let url be the result of resolving a module specifier
-    // given script's base URL and requested.</spec>
-    //
-    // <spec step="9.2">If url is failure, then:</spec>
+    v8::MaybeLocal<v8::Value> error;
+
     String failure_reason;
-    bool module_specifier_is_valid =
-        script->ResolveModuleSpecifier(requested.specifier, &failure_reason)
-            .IsValid();
-    ModuleType module_type = modulator->ModuleTypeFromRequest(requested);
+    // <spec step="9.1">If requested.[[Attributes]] contains a Record entry
+    // such that entry.[[Key]] is not "type", then:</spec>
+    if (requested.HasInvalidImportAttributeKey(&failure_reason)) {
+      // <spec step="9.1.1">Let error be a new SyntaxError exception.</spec>
+      error = V8ThrowException::CreateSyntaxError(
+          isolate, StrCat({"Invalid attribute key \"", failure_reason, "\"."}));
 
-    if (!module_specifier_is_valid || module_type == ModuleType::kInvalid) {
-      // <spec step="9.2.1">Let error be a new TypeError exception.</spec>
-      String error_message;
-      if (!module_specifier_is_valid) {
-        error_message = "Failed to resolve module specifier \"" +
-                        requested.specifier + "\". " + failure_reason;
-      } else {
-        error_message = "\"" + requested.GetModuleTypeString() +
-                        "\" is not a valid module type.";
-      }
-      v8::Local<v8::Value> error =
-          V8ThrowException::CreateTypeError(isolate, error_message);
+      // <spec step="9.2">Resolve a module specifier given script and
+      // requested.[[Specifier]], catching any exceptions.</spec>
+    } else if (!script
+                    ->ResolveModuleSpecifier(requested.specifier,
+                                             &failure_reason)
+                    .IsValid()) {
+      error = V8ThrowException::CreateTypeError(
+          isolate, StrCat({"Failed to resolve module specifier \"",
+                           requested.specifier, "\". ", failure_reason}));
+      // <spec step="9.4">Let moduleType be the result of running the module
+      // type from module request steps given requested.</spec>
+      //
+      // <spec step="9.5">If the result of running the module type allowed steps
+      // given moduleType and settings is false, then:</spec>
+    } else if (modulator->ModuleTypeFromRequest(requested) ==
+               ModuleType::kInvalid) {
+      // <spec step="9.5.1">Let error be a new TypeError exception.</spec>
+      error = V8ThrowException::CreateTypeError(
+          isolate, StrCat({"\"", requested.GetModuleTypeString(),
+                           "\" is not a valid module type."}));
+    }
 
-      // <spec step="9.2.2">Set script's parse error to error.</spec>
-      script->SetParseErrorAndClearRecord(ScriptValue(isolate, error));
+    if (!error.IsEmpty()) {
+      // <spec step="9.1.2">Set script's parse error to error.</spec>
+      script->SetParseErrorAndClearRecord(
+          ScriptValue(isolate, error.ToLocalChecked()));
 
-      // <spec step="9.2.3">Return script.</spec>
+      // <spec step="9.1.3">Return script.</spec>
       return script;
     }
   }
@@ -164,9 +185,9 @@ JSModuleScript::JSModuleScript(Modulator* settings_object,
                    record,
                    source_url,
                    base_url,
-                   fetch_options),
+                   fetch_options,
+                   start_position),
       source_text_length_(source_text_length),
-      start_position_(start_position),
       produce_cache_data_(produce_cache_data) {}
 
 void JSModuleScript::ProduceCache() {
@@ -177,8 +198,11 @@ void JSModuleScript::ProduceCache() {
   v8::Isolate* isolate = script_state->GetIsolate();
   ScriptState::Scope scope(script_state);
 
-  V8CodeCache::ProduceCache(isolate, produce_cache_data_, source_text_length_,
-                            SourceURL(), StartPosition());
+  ExecutionContext* execution_context =
+      ExecutionContext::From(isolate->GetCurrentContext());
+  V8CodeCache::ProduceCache(
+      isolate, ExecutionContext::GetCodeCacheHostFromContext(execution_context),
+      produce_cache_data_, source_text_length_, SourceUrl(), StartPosition());
 
   produce_cache_data_ = nullptr;
 }

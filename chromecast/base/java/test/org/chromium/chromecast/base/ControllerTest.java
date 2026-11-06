@@ -1,11 +1,12 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chromecast.base;
 
+import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.contains;
-import static org.junit.Assert.assertThat;
+import static org.hamcrest.Matchers.equalTo;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -244,5 +245,20 @@ public class ControllerTest {
         recorder.verify().opened(Unit.unit()).end();
         controller.set(Unit.unit());
         recorder.verify().end();
+    }
+
+    @Test
+    public void testReentrantClose() {
+        Controller<Unit> controller = new Controller<>();
+        controller.set(Unit.unit());
+        Box<Integer> timesClosed = new Box<>(0);
+        Observer<Unit> observer =
+                Observer.onClose(
+                        x -> {
+                            timesClosed.value += 1;
+                            controller.reset();
+                        });
+        controller.subscribe(observer).close();
+        assertThat(timesClosed.value, equalTo(1));
     }
 }

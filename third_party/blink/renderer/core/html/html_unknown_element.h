@@ -40,6 +40,10 @@ class HTMLUnknownElement final : public HTMLElement {
  public:
   HTMLUnknownElement(const QualifiedName&, Document&);
 
+  ElementType GetElementType() const final {
+    return ElementType::kHTMLUnknownElement;
+  }
+
  private:
   bool IsHTMLUnknownElement() const override { return true; }
 };
@@ -47,6 +51,13 @@ class HTMLUnknownElement final : public HTMLElement {
 inline bool IsHTMLUnknownElement(const HTMLElement& element) {
   return element.IsHTMLUnknownElement();
 }
+
+template <>
+struct DowncastTraits<HTMLUnknownElement> {
+  static bool AllowFrom(const Node& node) {
+    return node.GetElementType() == ElementType::kHTMLUnknownElement;
+  }
+};
 
 }  // namespace blink
 

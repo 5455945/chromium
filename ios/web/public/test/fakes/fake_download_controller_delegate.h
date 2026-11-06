@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <memory>
 #include <vector>
 
+#import "base/memory/raw_ptr.h"
 #include "ios/web/public/download/download_controller_delegate.h"
 
 namespace web {
@@ -20,6 +21,12 @@ class WebState;
 class FakeDownloadControllerDelegate : public DownloadControllerDelegate {
  public:
   FakeDownloadControllerDelegate(DownloadController* controller);
+
+  FakeDownloadControllerDelegate(const FakeDownloadControllerDelegate&) =
+      delete;
+  FakeDownloadControllerDelegate& operator=(
+      const FakeDownloadControllerDelegate&) = delete;
+
   ~FakeDownloadControllerDelegate() override;
 
   using AliveDownloadTaskList =
@@ -36,10 +43,9 @@ class FakeDownloadControllerDelegate : public DownloadControllerDelegate {
                          std::unique_ptr<DownloadTask>) override;
   void OnDownloadControllerDestroyed(DownloadController*) override;
 
-  DownloadController* controller_ = nullptr;
+  raw_ptr<DownloadControllerDelegate> old_delegate_ = nullptr;
+  raw_ptr<DownloadController> controller_ = nullptr;
   AliveDownloadTaskList alive_download_tasks_;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeDownloadControllerDelegate);
 };
 
 }  // namespace web

@@ -1,11 +1,11 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef SERVICES_DEVICE_PUBLIC_CPP_TEST_SCOPED_GEOLOCATION_OVERRIDER_H_
 #define SERVICES_DEVICE_PUBLIC_CPP_TEST_SCOPED_GEOLOCATION_OVERRIDER_H_
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "services/device/public/mojom/geoposition.mojom.h"
 
 namespace device {
@@ -21,11 +21,18 @@ namespace device {
 // same process that runs the Device Service implementation.
 class ScopedGeolocationOverrider {
  public:
-  explicit ScopedGeolocationOverrider(mojom::GeopositionPtr position);
+  // Overrides location with result. If a separate high_accuracy_result is
+  // specified, the latter will be returned if location is requested with
+  // enableHighAccuracy=true.
+  explicit ScopedGeolocationOverrider(
+      mojom::GeopositionResultPtr result,
+      mojom::GeopositionResultPtr high_accuracy_result = nullptr);
   ScopedGeolocationOverrider(double latitude, double longitude);
   ~ScopedGeolocationOverrider();
-  void OverrideGeolocation(mojom::GeopositionPtr position);
-  void UpdateLocation(mojom::GeopositionPtr position);
+  void OverrideGeolocation(
+      mojom::GeopositionResultPtr result,
+      mojom::GeopositionResultPtr high_accuracy_result = nullptr);
+  void UpdateLocation(mojom::GeopositionResultPtr result);
   void UpdateLocation(double latitude, double longitude);
 
   // Pause resolving Geolocation queries to keep request inflight.
@@ -42,6 +49,8 @@ class ScopedGeolocationOverrider {
   // This is used to verify if consumers properly close the connections when
   // they should no longer be listening.
   size_t GetGeolocationInstanceCount() const;
+
+  size_t GetQueryNextPositionCount() const;
 
   // Register callback to be notified when a Remote<Geolocation> is cleared and
   // the corresponding fake Geolocation instance is disposed.

@@ -1,8 +1,10 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.feedback;
+
+import org.chromium.build.annotations.NullMarked;
 
 /**
  * Used by various components to provide a set of feedback data that can be gathered asynchronously.
@@ -10,6 +12,7 @@ package org.chromium.chrome.browser.feedback;
  * this source isn't ready.  At that point this source should do it's best to provide what data it
  * can.
  */
+@NullMarked
 public interface AsyncFeedbackSource extends FeedbackSource {
     /**
      * Starts the feedback collection process for this source.  This source should notify

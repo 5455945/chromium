@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,19 +6,25 @@
 #define CHROME_BROWSER_UI_GLOBAL_MEDIA_CONTROLS_PRESENTATION_REQUEST_NOTIFICATION_PRODUCER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/ui/global_media_controls/media_notification_container_observer.h"
-#include "chrome/browser/ui/global_media_controls/media_notification_container_observer_set.h"
-#include "chrome/browser/ui/global_media_controls/media_notification_producer.h"
-#include "chrome/browser/ui/global_media_controls/media_notification_service_observer.h"
+#include "base/unguessable_token.h"
 #include "chrome/browser/ui/global_media_controls/presentation_request_notification_item.h"
+#include "components/global_media_controls/public/mojom/device_service.mojom.h"
 #include "components/media_router/browser/presentation/web_contents_presentation_manager.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "content/public/browser/presentation_observer.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
+#include "mojo/public/cpp/bindings/remote.h"
 
 // An object that creates and manages media notifications related to
-// presentation requests.
+// presentation requests by delegating to the implementer of
+// global_media_controls::mojom::DevicePickerProvider that handles the UI.
+// On Chrome OS, this object lives on the browser-side of the crosapi split.
+// On other platforms, both this and DevicePickerProvider live within the same
+// browser process.
 //
 // The purpose of this class is somewhat subtle.  When a page uses the Cast API
 // or Presentation API to make itself castable, we want there to be a
@@ -41,36 +47,41 @@
 // involved; at that point CastMediaNotificationProducer become responsible for
 // managing the notification for an active session.
 class PresentationRequestNotificationProducer final
-    : public MediaNotificationProducer,
-      public media_router::WebContentsPresentationManager::Observer,
-      public MediaNotificationServiceObserver,
-      public MediaNotificationContainerObserver {
+    : public content::PresentationObserver,
+      public global_media_controls::mojom::DevicePickerObserver {
  public:
-  explicit PresentationRequestNotificationProducer(
-      MediaNotificationService* notification_service);
+  // See the comments on the member fields corresponding to the parameters.
+  PresentationRequestNotificationProducer(
+      base::RepeatingCallback<bool(content::WebContents*)>
+          has_active_notifications_callback,
+      const base::UnguessableToken& source_id);
   PresentationRequestNotificationProducer(
       const PresentationRequestNotificationProducer&) = delete;
   PresentationRequestNotificationProducer& operator=(
       const PresentationRequestNotificationProducer&) = delete;
   ~PresentationRequestNotificationProducer() final;
 
-  // MediaNotificationProducer:
-  base::WeakPtr<media_message_center::MediaNotificationItem>
-  GetNotificationItem(const std::string& id) override;
-  // Returns the supplemental notification's id if it should be shown.
-  std::set<std::string> GetActiveControllableNotificationIds() const override;
-  void OnItemShown(const std::string& id,
-                   MediaNotificationContainerImpl* container) override;
-
-  // MediaNotificationContainerObserver:
-  void OnContainerDismissed(const std::string& id) override;
-
   void OnStartPresentationContextCreated(
       std::unique_ptr<media_router::StartPresentationContext> context);
   // Returns the WebContents associated with the PresentationRequest that
-  // |this| manages.
+  // `this` manages.
   content::WebContents* GetWebContents();
   base::WeakPtr<PresentationRequestNotificationItem> GetNotificationItem();
+
+  void BindProvider(
+      mojo::PendingRemote<global_media_controls::mojom::DevicePickerProvider>
+          pending_provider);
+
+  // global_media_controls::mojom::DevicePickerObserver:
+  void OnMediaUIOpened() override;
+  void OnMediaUIClosed() override;
+  void OnMediaUIUpdated() override;
+  void OnPickerDismissed() override;
+
+  // content::PresentationObserver:
+  void OnPresentationsChanged(bool has_presentation) override;
+  void OnDefaultPresentationChanged(
+      const content::PresentationRequest* presentation_request) override;
 
   void SetTestPresentationManager(
       base::WeakPtr<media_router::WebContentsPresentationManager>
@@ -79,27 +90,6 @@ class PresentationRequestNotificationProducer final
  private:
   friend class PresentationRequestNotificationProducerTest;
   class PresentationRequestWebContentsObserver;
-
-  // An observer for the WebContents associated with |item_| that closes the
-  // dialog when the WebContents is destroyed or navigated.
-  std::unique_ptr<PresentationRequestWebContentsObserver>
-      presentation_request_observer_;
-
-  // MediaNotificationServiceObserver:
-  void OnNotificationListChanged() final;
-  void OnMediaDialogOpened() final;
-  void OnMediaDialogClosed() final;
-
-  void AfterMediaDialogOpened(
-      base::WeakPtr<media_router::WebContentsPresentationManager>
-          presentation_manager);
-  void AfterMediaDialogClosed();
-
-  // WebContentsPresentationManager::Observer:
-  void OnMediaRoutesChanged(
-      const std::vector<media_router::MediaRoute>& routes) override;
-  void OnDefaultPresentationChanged(
-      const content::PresentationRequest* presentation_request) final;
 
   void CreateItemForPresentationRequest(
       const content::PresentationRequest& request,
@@ -113,11 +103,25 @@ class PresentationRequestNotificationProducer final
   }
 
   // Queries |notification_service_| for active sessions associated with the
-  // WebContents that |this| manages and stores the value in |should_hide_|.
+  // WebContents that |this| manages and stores the value in |should_show_|.
   // Show or hide |item_| if the visibility changed.
   void ShowOrHideItem();
 
-  MediaNotificationService* const notification_service_;
+  mojo::Remote<global_media_controls::mojom::DevicePickerProvider> provider_;
+
+  mojo::Receiver<global_media_controls::mojom::DevicePickerObserver>
+      observer_receiver_;
+
+  // An observer for the WebContents associated with |item_| that closes the
+  // dialog when the WebContents is destroyed or navigated.
+  std::unique_ptr<PresentationRequestWebContentsObserver>
+      presentation_request_observer_;
+
+  // This callback is called to determine if there currently are active
+  // media notifications (not managed by `this`) that are associated with
+  // `web_contents`.
+  base::RepeatingCallback<bool(content::WebContents* web_contents)>
+      has_active_notifications_callback_;
 
   // A copy of the WebContentsPresentationManager associated with the web
   // page where the media dialog is opened. The value is nullptr if the media
@@ -130,13 +134,18 @@ class PresentationRequestNotificationProducer final
       test_presentation_manager_;
 
   // The notification managed by this producer, if there is one.
-  absl::optional<PresentationRequestNotificationItem> item_;
+  std::optional<PresentationRequestNotificationItem> item_;
 
-  // True if |notification_service_| should hide |item_| because there are
+  // False if |notification_service_| should hide |item_| because there are
   // active notifications on WebContents managed by this producer.
-  bool should_hide_ = true;
+  bool should_show_ = false;
 
-  MediaNotificationContainerObserverSet container_observer_set_;
+  // Whether the media dialog containing the media notifications is open.
+  bool is_dialog_open_ = false;
+
+  // The MediaSession source ID for the current BrowserContext. This is passed
+  // to `provider_` to distinguish `this` from other possible clients.
+  const base::UnguessableToken source_id_;
 
   base::WeakPtrFactory<PresentationRequestNotificationProducer> weak_factory_{
       this};

@@ -1,21 +1,28 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "third_party/blink/renderer/platform/graphics/gpu/webgl_image_conversion.h"
 
+#include <array>
+#include <cstring>
 #include <limits>
 #include <memory>
 
+#include "base/bit_cast.h"
 #include "base/compiler_specific.h"
 #include "base/numerics/checked_math.h"
 #include "build/build_config.h"
+#include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/platform/graphics/cpu/arm/webgl_image_conversion_neon.h"
+#include "third_party/blink/renderer/platform/graphics/cpu/loongarch64/webgl_image_conversion_lsx.h"
 #include "third_party/blink/renderer/platform/graphics/cpu/mips/webgl_image_conversion_msa.h"
 #include "third_party/blink/renderer/platform/graphics/cpu/x86/webgl_image_conversion_sse.h"
 #include "third_party/blink/renderer/platform/graphics/image_observer.h"
 #include "third_party/blink/renderer/platform/graphics/skia/skia_utils.h"
 #include "third_party/blink/renderer/platform/image-decoders/image_decoder.h"
+#include "third_party/skia/include/core/SkColorSpace.h"
 #include "third_party/skia/include/core/SkImage.h"
 
 namespace blink {
@@ -67,223 +74,226 @@ T ClampAndScaleFloat(float value) {
   return ClampFloat<T>(value * std::numeric_limits<T>::max());
 }
 
-// Return kDataFormatNumFormats if format/type combination is invalid.
-WebGLImageConversion::DataFormat GetDataFormat(GLenum destination_format,
-                                               GLenum destination_type) {
-  WebGLImageConversion::DataFormat dst_format =
-      WebGLImageConversion::kDataFormatRGBA8;
-  switch (destination_type) {
+}  // namespace
+
+WebGLImageConversion::DataFormat WebGLImageConversion::GetDataFormat(
+    GLenum format,
+    GLenum type) {
+  DataFormat result = kDataFormatRGBA8;
+  switch (type) {
     case GL_BYTE:
-      switch (destination_format) {
+      switch (format) {
         case GL_RED:
         case GL_RED_INTEGER:
-          dst_format = WebGLImageConversion::kDataFormatR8_S;
+          result = kDataFormatR8_S;
           break;
         case GL_RG:
         case GL_RG_INTEGER:
-          dst_format = WebGLImageConversion::kDataFormatRG8_S;
+          result = kDataFormatRG8_S;
           break;
         case GL_RGB:
         case GL_RGB_INTEGER:
-          dst_format = WebGLImageConversion::kDataFormatRGB8_S;
+          result = kDataFormatRGB8_S;
           break;
         case GL_RGBA:
         case GL_RGBA_INTEGER:
-          dst_format = WebGLImageConversion::kDataFormatRGBA8_S;
+          result = kDataFormatRGBA8_S;
           break;
         default:
-          return WebGLImageConversion::kDataFormatNumFormats;
+          return kDataFormatNumFormats;
       }
       break;
     case GL_UNSIGNED_BYTE:
-      switch (destination_format) {
+      switch (format) {
         case GL_RGB:
         case GL_RGB_INTEGER:
         case GL_SRGB_EXT:
-          dst_format = WebGLImageConversion::kDataFormatRGB8;
+          result = kDataFormatRGB8;
           break;
         case GL_RGBA:
         case GL_RGBA_INTEGER:
         case GL_SRGB_ALPHA_EXT:
-          dst_format = WebGLImageConversion::kDataFormatRGBA8;
+          result = kDataFormatRGBA8;
           break;
         case GL_ALPHA:
-          dst_format = WebGLImageConversion::kDataFormatA8;
+          result = kDataFormatA8;
           break;
         case GL_LUMINANCE:
         case GL_RED:
         case GL_RED_INTEGER:
-          dst_format = WebGLImageConversion::kDataFormatR8;
+          result = kDataFormatR8;
           break;
         case GL_RG:
         case GL_RG_INTEGER:
-          dst_format = WebGLImageConversion::kDataFormatRG8;
+          result = kDataFormatRG8;
           break;
         case GL_LUMINANCE_ALPHA:
-          dst_format = WebGLImageConversion::kDataFormatRA8;
+          result = kDataFormatRA8;
           break;
         default:
-          return WebGLImageConversion::kDataFormatNumFormats;
+          return kDataFormatNumFormats;
       }
       break;
     case GL_SHORT:
-      switch (destination_format) {
+      switch (format) {
         case GL_RED_INTEGER:
-          dst_format = WebGLImageConversion::kDataFormatR16_S;
+          result = kDataFormatR16_S;
           break;
         case GL_RG_INTEGER:
-          dst_format = WebGLImageConversion::kDataFormatRG16_S;
+          result = kDataFormatRG16_S;
           break;
         case GL_RGB_INTEGER:
-          dst_format = WebGLImageConversion::kDataFormatRGB16_S;
+          result = kDataFormatRGB16_S;
           break;
         case GL_RGBA_INTEGER:
-          dst_format = WebGLImageConversion::kDataFormatRGBA16_S;
+          result = kDataFormatRGBA16_S;
           break;
         default:
-          return WebGLImageConversion::kDataFormatNumFormats;
+          return kDataFormatNumFormats;
       }
       break;
     case GL_UNSIGNED_SHORT:
-      switch (destination_format) {
+      switch (format) {
         case GL_RED_INTEGER:
-          dst_format = WebGLImageConversion::kDataFormatR16;
+          result = kDataFormatR16;
           break;
         case GL_DEPTH_COMPONENT:
-          dst_format = WebGLImageConversion::kDataFormatD16;
+          result = kDataFormatD16;
           break;
         case GL_RG_INTEGER:
-          dst_format = WebGLImageConversion::kDataFormatRG16;
+          result = kDataFormatRG16;
           break;
         case GL_RGB_INTEGER:
-          dst_format = WebGLImageConversion::kDataFormatRGB16;
+          result = kDataFormatRGB16;
           break;
         case GL_RGBA_INTEGER:
-          dst_format = WebGLImageConversion::kDataFormatRGBA16;
+          result = kDataFormatRGBA16;
           break;
         default:
-          return WebGLImageConversion::kDataFormatNumFormats;
+          return kDataFormatNumFormats;
       }
       break;
     case GL_INT:
-      switch (destination_format) {
+      switch (format) {
         case GL_RED_INTEGER:
-          dst_format = WebGLImageConversion::kDataFormatR32_S;
+          result = kDataFormatR32_S;
           break;
         case GL_RG_INTEGER:
-          dst_format = WebGLImageConversion::kDataFormatRG32_S;
+          result = kDataFormatRG32_S;
           break;
         case GL_RGB_INTEGER:
-          dst_format = WebGLImageConversion::kDataFormatRGB32_S;
+          result = kDataFormatRGB32_S;
           break;
         case GL_RGBA_INTEGER:
-          dst_format = WebGLImageConversion::kDataFormatRGBA32_S;
+          result = kDataFormatRGBA32_S;
           break;
         default:
-          return WebGLImageConversion::kDataFormatNumFormats;
+          return kDataFormatNumFormats;
       }
       break;
     case GL_UNSIGNED_INT:
-      switch (destination_format) {
+      switch (format) {
         case GL_RED_INTEGER:
-          dst_format = WebGLImageConversion::kDataFormatR32;
+          result = kDataFormatR32;
           break;
         case GL_DEPTH_COMPONENT:
-          dst_format = WebGLImageConversion::kDataFormatD32;
+          result = kDataFormatD32;
           break;
         case GL_RG_INTEGER:
-          dst_format = WebGLImageConversion::kDataFormatRG32;
+          result = kDataFormatRG32;
           break;
         case GL_RGB_INTEGER:
-          dst_format = WebGLImageConversion::kDataFormatRGB32;
+          result = kDataFormatRGB32;
           break;
         case GL_RGBA_INTEGER:
-          dst_format = WebGLImageConversion::kDataFormatRGBA32;
+          result = kDataFormatRGBA32;
           break;
         default:
-          return WebGLImageConversion::kDataFormatNumFormats;
+          return kDataFormatNumFormats;
       }
       break;
     case GL_HALF_FLOAT_OES:  // OES_texture_half_float
     case GL_HALF_FLOAT:
-      switch (destination_format) {
+      switch (format) {
         case GL_RGBA:
-          dst_format = WebGLImageConversion::kDataFormatRGBA16F;
+          result = kDataFormatRGBA16F;
           break;
         case GL_RGB:
-          dst_format = WebGLImageConversion::kDataFormatRGB16F;
+          result = kDataFormatRGB16F;
           break;
         case GL_RG:
-          dst_format = WebGLImageConversion::kDataFormatRG16F;
+          result = kDataFormatRG16F;
           break;
         case GL_ALPHA:
-          dst_format = WebGLImageConversion::kDataFormatA16F;
+          result = kDataFormatA16F;
           break;
         case GL_LUMINANCE:
         case GL_RED:
-          dst_format = WebGLImageConversion::kDataFormatR16F;
+          result = kDataFormatR16F;
           break;
         case GL_LUMINANCE_ALPHA:
-          dst_format = WebGLImageConversion::kDataFormatRA16F;
+          result = kDataFormatRA16F;
           break;
         default:
-          return WebGLImageConversion::kDataFormatNumFormats;
+          return kDataFormatNumFormats;
       }
       break;
     case GL_FLOAT:  // OES_texture_float
-      switch (destination_format) {
+      switch (format) {
         case GL_RGBA:
-          dst_format = WebGLImageConversion::kDataFormatRGBA32F;
+          result = kDataFormatRGBA32F;
           break;
         case GL_RGB:
-          dst_format = WebGLImageConversion::kDataFormatRGB32F;
+          result = kDataFormatRGB32F;
           break;
         case GL_RG:
-          dst_format = WebGLImageConversion::kDataFormatRG32F;
+          result = kDataFormatRG32F;
           break;
         case GL_ALPHA:
-          dst_format = WebGLImageConversion::kDataFormatA32F;
+          result = kDataFormatA32F;
           break;
         case GL_LUMINANCE:
         case GL_RED:
-          dst_format = WebGLImageConversion::kDataFormatR32F;
+          result = kDataFormatR32F;
           break;
         case GL_DEPTH_COMPONENT:
-          dst_format = WebGLImageConversion::kDataFormatD32F;
+          result = kDataFormatD32F;
           break;
         case GL_LUMINANCE_ALPHA:
-          dst_format = WebGLImageConversion::kDataFormatRA32F;
+          result = kDataFormatRA32F;
           break;
         default:
-          return WebGLImageConversion::kDataFormatNumFormats;
+          return kDataFormatNumFormats;
       }
       break;
     case GL_UNSIGNED_SHORT_4_4_4_4:
-      dst_format = WebGLImageConversion::kDataFormatRGBA4444;
+      result = kDataFormatRGBA4444;
       break;
     case GL_UNSIGNED_SHORT_5_5_5_1:
-      dst_format = WebGLImageConversion::kDataFormatRGBA5551;
+      result = kDataFormatRGBA5551;
       break;
     case GL_UNSIGNED_SHORT_5_6_5:
-      dst_format = WebGLImageConversion::kDataFormatRGB565;
+      result = kDataFormatRGB565;
       break;
     case GL_UNSIGNED_INT_5_9_9_9_REV:
-      dst_format = WebGLImageConversion::kDataFormatRGB5999;
+      result = kDataFormatRGB5999;
       break;
     case GL_UNSIGNED_INT_24_8:
-      dst_format = WebGLImageConversion::kDataFormatDS24_8;
+      result = kDataFormatDS24_8;
       break;
     case GL_UNSIGNED_INT_10F_11F_11F_REV:
-      dst_format = WebGLImageConversion::kDataFormatRGB10F11F11F;
+      result = kDataFormatRGB10F11F11F;
       break;
     case GL_UNSIGNED_INT_2_10_10_10_REV:
-      dst_format = WebGLImageConversion::kDataFormatRGBA2_10_10_10;
+      result = kDataFormatRGBA2_10_10_10;
       break;
     default:
-      return WebGLImageConversion::kDataFormatNumFormats;
+      return kDataFormatNumFormats;
   }
-  return dst_format;
+  return result;
 }
+
+namespace {
 
 // The following Float to Half-Float conversion code is from the implementation
 // of http://www.fox-toolkit.org/ftp/fasthalffloatconversion.pdf , "Fast Half
@@ -333,7 +343,7 @@ void generatetables(){
 }
 */
 
-const uint16_t g_base_table[512] = {
+const std::array<uint16_t, 512> g_base_table = {
     0,     0,     0,     0,     0,     0,     0,     0,     0,     0,     0,
     0,     0,     0,     0,     0,     0,     0,     0,     0,     0,     0,
     0,     0,     0,     0,     0,     0,     0,     0,     0,     0,     0,
@@ -380,9 +390,10 @@ const uint16_t g_base_table[512] = {
     64512, 64512, 64512, 64512, 64512, 64512, 64512, 64512, 64512, 64512, 64512,
     64512, 64512, 64512, 64512, 64512, 64512, 64512, 64512, 64512, 64512, 64512,
     64512, 64512, 64512, 64512, 64512, 64512, 64512, 64512, 64512, 64512, 64512,
-    64512, 64512, 64512, 64512, 64512, 64512};
+    64512, 64512, 64512, 64512, 64512, 64512,
+};
 
-const unsigned char g_shift_table[512] = {
+const std::array<unsigned char, 512> g_shift_table = {
     24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24,
     24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24,
     24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24,
@@ -409,10 +420,11 @@ const unsigned char g_shift_table[512] = {
     24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24,
     24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24,
     24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24,
-    24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 13};
+    24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 13,
+};
 
 uint16_t ConvertFloatToHalfFloat(float f) {
-  unsigned temp = *(reinterpret_cast<unsigned*>(&f));
+  uint32_t temp = base::bit_cast<uint32_t>(f);
   uint16_t signexp = (temp >> 23) & 0x1ff;
   return g_base_table[signexp] +
          ((temp & 0x007fffff) >> g_shift_table[signexp]);
@@ -461,7 +473,7 @@ void generatef16tof32tables() {
 }
 */
 
-const uint32_t g_mantissa_table[2048] = {
+const std::array<uint32_t, 2048> g_mantissa_table = {
     0x0,        0x33800000, 0x34000000, 0x34400000, 0x34800000, 0x34a00000,
     0x34c00000, 0x34e00000, 0x35000000, 0x35100000, 0x35200000, 0x35300000,
     0x35400000, 0x35500000, 0x35600000, 0x35700000, 0x35800000, 0x35880000,
@@ -803,17 +815,19 @@ const uint32_t g_mantissa_table[2048] = {
     0x387d8000, 0x387da000, 0x387dc000, 0x387de000, 0x387e0000, 0x387e2000,
     0x387e4000, 0x387e6000, 0x387e8000, 0x387ea000, 0x387ec000, 0x387ee000,
     0x387f0000, 0x387f2000, 0x387f4000, 0x387f6000, 0x387f8000, 0x387fa000,
-    0x387fc000, 0x387fe000};
+    0x387fc000, 0x387fe000,
+};
 
-const uint16_t g_offset_table[64] = {
+const std::array<uint16_t, 64> g_offset_table = {
     0,    1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024,
     1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024,
     1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 0,
     1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024,
     1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024,
-    1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024};
+    1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024,
+};
 
-const uint32_t g_exponent_table[64] = {
+const std::array<uint32_t, 64> g_exponent_table = {
     0x0,        0x800000,   0x1000000,  0x1800000,  0x2000000,  0x2800000,
     0x3000000,  0x3800000,  0x4000000,  0x4800000,  0x5000000,  0x5800000,
     0x6000000,  0x6800000,  0x7000000,  0x7800000,  0x8000000,  0x8800000,
@@ -824,14 +838,18 @@ const uint32_t g_exponent_table[64] = {
     0x85000000, 0x85800000, 0x86000000, 0x86800000, 0x87000000, 0x87800000,
     0x88000000, 0x88800000, 0x89000000, 0x89800000, 0x8a000000, 0x8a800000,
     0x8b000000, 0x8b800000, 0x8c000000, 0x8c800000, 0x8d000000, 0x8d800000,
-    0x8e000000, 0x8e800000, 0x8f000000, 0xc7800000};
+    0x8e000000, 0x8e800000, 0x8f000000, 0xc7800000,
+};
 
 float ConvertHalfFloatToFloat(uint16_t half) {
   uint32_t temp =
       g_mantissa_table[g_offset_table[half >> 10] + (half & 0x3ff)] +
       g_exponent_table[half >> 10];
-  return *(reinterpret_cast<float*>(&temp));
+  return base::bit_cast<float>(temp);
 }
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunsafe-buffer-usage"
 
 /* BEGIN CODE SHARED WITH MOZILLA FIREFOX */
 
@@ -883,8 +901,8 @@ void Unpack<WebGLImageConversion::kDataFormatBGRA8, uint8_t, uint8_t>(
     const uint8_t* source,
     uint8_t* destination,
     unsigned pixels_per_row) {
-  const uint32_t* source32 = reinterpret_cast_ptr<const uint32_t*>(source);
-  uint32_t* destination32 = reinterpret_cast_ptr<uint32_t*>(destination);
+  const uint32_t* source32 = reinterpret_cast<const uint32_t*>(source);
+  uint32_t* destination32 = reinterpret_cast<uint32_t*>(destination);
 
 #if defined(ARCH_CPU_X86_FAMILY)
   simd::UnpackOneRowOfBGRA8LittleToRGBA8(source32, destination32,
@@ -894,17 +912,21 @@ void Unpack<WebGLImageConversion::kDataFormatBGRA8, uint8_t, uint8_t>(
   simd::unpackOneRowOfBGRA8LittleToRGBA8MSA(source32, destination32,
                                             pixels_per_row);
 #endif
+#if defined(ARCH_CPU_LOONGARCH_FAMILY)
+  simd::UnpackOneRowOfBGRA8LittleToRGBA8(source32, destination32,
+                                         pixels_per_row);
+#endif
   for (unsigned i = 0; i < pixels_per_row; ++i) {
     uint32_t bgra = source32[i];
 #if defined(ARCH_CPU_BIG_ENDIAN)
-    uint32_t brMask = 0xff00ff00;
-    uint32_t gaMask = 0x00ff00ff;
+    constexpr uint32_t kBrMask = 0xff00ff00;
+    constexpr uint32_t kGaMask = 0x00ff00ff;
 #else
-    uint32_t br_mask = 0x00ff00ff;
-    uint32_t ga_mask = 0xff00ff00;
+    constexpr uint32_t kBrMask = 0x00ff00ff;
+    constexpr uint32_t kGaMask = 0xff00ff00;
 #endif
     uint32_t rgba =
-        (((bgra >> 16) | (bgra << 16)) & br_mask) | (bgra & ga_mask);
+        (((bgra >> 16) | (bgra << 16)) & kBrMask) | (bgra & kGaMask);
     destination32[i] = rgba;
   }
 }
@@ -923,6 +945,10 @@ void Unpack<WebGLImageConversion::kDataFormatRGBA5551, uint16_t, uint8_t>(
 #endif
 #if defined(HAVE_MIPS_MSA_INTRINSICS)
   simd::unpackOneRowOfRGBA5551ToRGBA8MSA(source, destination, pixels_per_row);
+#endif
+#if defined(ARCH_CPU_LOONGARCH_FAMILY)
+  simd::UnpackOneRowOfRGBA5551LittleToRGBA8(source, destination,
+                                            pixels_per_row);
 #endif
 
   for (unsigned i = 0; i < pixels_per_row; ++i) {
@@ -953,6 +979,10 @@ void Unpack<WebGLImageConversion::kDataFormatRGBA4444, uint16_t, uint8_t>(
 #endif
 #if defined(HAVE_MIPS_MSA_INTRINSICS)
   simd::unpackOneRowOfRGBA4444ToRGBA8MSA(source, destination, pixels_per_row);
+#endif
+#if defined(ARCH_CPU_LOONGARCH_FAMILY)
+  simd::UnpackOneRowOfRGBA4444LittleToRGBA8(source, destination,
+                                            pixels_per_row);
 #endif
   for (unsigned i = 0; i < pixels_per_row; ++i) {
     uint16_t packed_value = source[0];
@@ -1268,6 +1298,9 @@ void Pack<WebGLImageConversion::kDataFormatR8,
 #if defined(HAVE_MIPS_MSA_INTRINSICS)
   simd::packOneRowOfRGBA8LittleToR8MSA(source, destination, pixels_per_row);
 #endif
+#if defined(ARCH_CPU_LOONGARCH_FAMILY)
+  simd::PackOneRowOfRGBA8LittleToR8(source, destination, pixels_per_row);
+#endif
   for (unsigned i = 0; i < pixels_per_row; ++i) {
     float scale_factor = source[3] ? 255.0f / source[3] : 1.0f;
     uint8_t source_r =
@@ -1369,6 +1402,9 @@ void Pack<WebGLImageConversion::kDataFormatRA8,
 #endif
 #if defined(HAVE_MIPS_MSA_INTRINSICS)
   simd::packOneRowOfRGBA8LittleToRA8MSA(source, destination, pixels_per_row);
+#endif
+#if defined(ARCH_CPU_LOONGARCH_FAMILY)
+  simd::PackOneRowOfRGBA8LittleToRA8(source, destination, pixels_per_row);
 #endif
   for (unsigned i = 0; i < pixels_per_row; ++i) {
     float scale_factor = source[3] ? 255.0f / source[3] : 1.0f;
@@ -1562,6 +1598,9 @@ void Pack<WebGLImageConversion::kDataFormatRGBA8,
 #endif
 #if defined(HAVE_MIPS_MSA_INTRINSICS)
   simd::packOneRowOfRGBA8LittleToRGBA8MSA(source, destination, pixels_per_row);
+#endif
+#if defined(ARCH_CPU_LOONGARCH_FAMILY)
+  simd::PackOneRowOfRGBA8LittleToRGBA8(source, destination, pixels_per_row);
 #endif
   for (unsigned i = 0; i < pixels_per_row; ++i) {
     float scale_factor = source[3] ? 255.0f / source[3] : 1.0f;
@@ -3204,11 +3243,13 @@ unsigned TexelBytesForFormat(WebGLImageConversion::DataFormat format) {
 
 /* END CODE SHARED WITH MOZILLA FIREFOX */
 
+#pragma clang diagnostic pop
+
 class FormatConverter {
   STACK_ALLOCATED();
 
  public:
-  FormatConverter(const IntRect& source_data_sub_rectangle,
+  FormatConverter(const gfx::Rect& source_data_sub_rectangle,
                   int depth,
                   int unpack_image_height,
                   const void* src_start,
@@ -3228,7 +3269,7 @@ class FormatConverter {
     const unsigned kMaxNumberOfComponents = 4;
     const unsigned kMaxBytesPerComponent = 4;
     unpacked_intermediate_src_data_ = std::make_unique<uint8_t[]>(
-        src_sub_rectangle_.Width() * kMaxNumberOfComponents *
+        src_sub_rectangle_.width() * kMaxNumberOfComponents *
         kMaxBytesPerComponent);
     DCHECK(unpacked_intermediate_src_data_.get());
   }
@@ -3252,7 +3293,7 @@ class FormatConverter {
             WebGLImageConversion::AlphaOp alphaOp>
   void Convert();
 
-  const IntRect& src_sub_rectangle_;
+  const gfx::Rect& src_sub_rectangle_;
   const int depth_;
   const int unpack_image_height_;
   const void* const src_start_;
@@ -3273,6 +3314,7 @@ void FormatConverter::Convert(WebGLImageConversion::DataFormat src_format,
     FORMATCONVERTER_CASE_SRCFORMAT(WebGLImageConversion::kDataFormatRA8)
     FORMATCONVERTER_CASE_SRCFORMAT(WebGLImageConversion::kDataFormatRA32F)
     FORMATCONVERTER_CASE_SRCFORMAT(WebGLImageConversion::kDataFormatRGBA8)
+    FORMATCONVERTER_CASE_SRCFORMAT(WebGLImageConversion::kDataFormatRGBA16)
     FORMATCONVERTER_CASE_SRCFORMAT(WebGLImageConversion::kDataFormatARGB8)
     FORMATCONVERTER_CASE_SRCFORMAT(WebGLImageConversion::kDataFormatABGR8)
     FORMATCONVERTER_CASE_SRCFORMAT(WebGLImageConversion::kDataFormatAR8)
@@ -3384,13 +3426,11 @@ void FormatConverter::Convert() {
   if (SrcFormat == DstFormat &&
       alphaOp == WebGLImageConversion::kAlphaDoNothing) {
     NOTREACHED();
-    return;
   }
   // Note that ImageBitmaps with SrcFormat==kDataFormatRGBA16F return
   // false for IsFloatFormat since the input data is uint16_t.
   if (!IsFloatFormat<DstFormat>::value && IsFloatFormat<SrcFormat>::value) {
     NOTREACHED();
-    return;
   }
 
   // Only textures uploaded from DOM elements or ImageData can allow DstFormat
@@ -3400,25 +3440,21 @@ void FormatConverter::Convert() {
   if (!src_format_comes_from_dom_element_or_image_data &&
       SrcFormat != DstFormat) {
     NOTREACHED();
-    return;
   }
   // Likewise, only textures uploaded from DOM elements or ImageData can
   // possibly need to be unpremultiplied.
   if (!src_format_comes_from_dom_element_or_image_data &&
       alphaOp == WebGLImageConversion::kAlphaDoUnmultiply) {
     NOTREACHED();
-    return;
   }
   if (src_format_comes_from_dom_element_or_image_data &&
       alphaOp == WebGLImageConversion::kAlphaDoUnmultiply &&
       !SupportsConversionFromDomElements<DstFormat>::value) {
     NOTREACHED();
-    return;
   }
   if ((!HasAlpha(SrcFormat) || !HasColor(SrcFormat) || !HasColor(DstFormat)) &&
       alphaOp != WebGLImageConversion::kAlphaDoNothing) {
     NOTREACHED();
-    return;
   }
   // If converting DOM element data to UNSIGNED_INT_5_9_9_9_REV or
   // UNSIGNED_INT_10F_11F_11F_REV, we should always switch to FLOAT instead to
@@ -3428,7 +3464,6 @@ void FormatConverter::Convert() {
       (DstFormat == WebGLImageConversion::kDataFormatRGB5999 ||
        DstFormat == WebGLImageConversion::kDataFormatRGB10F11F11F)) {
     NOTREACHED();
-    return;
   }
 
   typedef typename DataTypeForFormat<SrcFormat>::Type SrcType;
@@ -3446,9 +3481,9 @@ void FormatConverter::Convert() {
   DCHECK(!kTrivialUnpack || !kTrivialPack);
 
   const SrcType* src_row_start =
-      static_cast<const SrcType*>(static_cast<const void*>(
+      static_cast<const SrcType*>(static_cast<const void*>(UNSAFE_TODO(
           static_cast<const uint8_t*>(src_start_) +
-          ((src_stride_ * src_sub_rectangle_.Y()) + src_row_offset_)));
+          ((src_stride_ * src_sub_rectangle_.y()) + src_row_offset_))));
 
   // If packing multiple images into a 3D texture, and flipY is true,
   // then the sub-rectangle is pointing at the start of the
@@ -3456,57 +3491,61 @@ void FormatConverter::Convert() {
   // the positive direction, we need to back it up to point at the
   // last, or "topmost", of these images.
   if (dst_stride_ < 0 && depth_ > 1) {
-    src_row_start -=
-        (depth_ - 1) * src_stride_in_elements * unpack_image_height_;
+    UNSAFE_TODO(src_row_start -=
+                (depth_ - 1) * src_stride_in_elements * unpack_image_height_);
   }
 
   DstType* dst_row_start = static_cast<DstType*>(dst_start_);
   if (kTrivialUnpack) {
     for (int d = 0; d < depth_; ++d) {
-      for (int i = 0; i < src_sub_rectangle_.Height(); ++i) {
+      for (int i = 0; i < src_sub_rectangle_.height(); ++i) {
         Pack<DstFormat, alphaOp>(src_row_start, dst_row_start,
-                                 src_sub_rectangle_.Width());
-        src_row_start += src_stride_in_elements;
-        dst_row_start += dst_stride_in_elements;
+                                 src_sub_rectangle_.width());
+        UNSAFE_TODO({
+          src_row_start += src_stride_in_elements;
+          dst_row_start += dst_stride_in_elements;
+        });
       }
-      src_row_start += src_stride_in_elements *
-                       (unpack_image_height_ - src_sub_rectangle_.Height());
+      UNSAFE_TODO(src_row_start +=
+                  src_stride_in_elements *
+                  (unpack_image_height_ - src_sub_rectangle_.height()));
     }
   } else if (kTrivialPack) {
     for (int d = 0; d < depth_; ++d) {
-      for (int i = 0; i < src_sub_rectangle_.Height(); ++i) {
+      for (int i = 0; i < src_sub_rectangle_.height(); ++i) {
         Unpack<SrcFormat>(src_row_start, dst_row_start,
-                          src_sub_rectangle_.Width());
-        src_row_start += src_stride_in_elements;
-        dst_row_start += dst_stride_in_elements;
+                          src_sub_rectangle_.width());
+        UNSAFE_TODO({
+          src_row_start += src_stride_in_elements;
+          dst_row_start += dst_stride_in_elements;
+        });
       }
-      src_row_start += src_stride_in_elements *
-                       (unpack_image_height_ - src_sub_rectangle_.Height());
+      UNSAFE_TODO(src_row_start +=
+                  src_stride_in_elements *
+                  (unpack_image_height_ - src_sub_rectangle_.height()));
     }
   } else {
     for (int d = 0; d < depth_; ++d) {
-      for (int i = 0; i < src_sub_rectangle_.Height(); ++i) {
+      for (int i = 0; i < src_sub_rectangle_.height(); ++i) {
         Unpack<SrcFormat>(src_row_start,
                           reinterpret_cast<IntermType*>(
                               unpacked_intermediate_src_data_.get()),
-                          src_sub_rectangle_.Width());
+                          src_sub_rectangle_.width());
         Pack<DstFormat, alphaOp>(reinterpret_cast<IntermType*>(
                                      unpacked_intermediate_src_data_.get()),
-                                 dst_row_start, src_sub_rectangle_.Width());
-        src_row_start += src_stride_in_elements;
-        dst_row_start += dst_stride_in_elements;
+                                 dst_row_start, src_sub_rectangle_.width());
+        UNSAFE_TODO({
+          src_row_start += src_stride_in_elements;
+          dst_row_start += dst_stride_in_elements;
+        });
       }
-      src_row_start += src_stride_in_elements *
-                       (unpack_image_height_ - src_sub_rectangle_.Height());
+      UNSAFE_TODO(src_row_start +=
+                  src_stride_in_elements *
+                  (unpack_image_height_ - src_sub_rectangle_.height()));
     }
   }
   success_ = true;
   return;
-}
-
-bool FrameIsValid(const SkBitmap& frame_bitmap) {
-  return !frame_bitmap.isNull() && !frame_bitmap.empty() &&
-         frame_bitmap.colorType() == kN32_SkColorType;
 }
 
 }  // anonymous namespace
@@ -3518,6 +3557,44 @@ WebGLImageConversion::PixelStoreParams::PixelStoreParams()
       skip_pixels(0),
       skip_rows(0),
       skip_images(0) {}
+
+WebGLImageConversion::DataFormat WebGLImageConversion::SkColorTypeToDataFormat(
+    SkColorType color_type) {
+  switch (color_type) {
+    case kRGBA_8888_SkColorType:
+      return kDataFormatRGBA8;
+    case kBGRA_8888_SkColorType:
+      return kDataFormatBGRA8;
+    case kR16G16B16A16_unorm_SkColorType:
+      return kDataFormatRGBA16;
+    case kRGBA_F16_SkColorType:
+      return kDataFormatRGBA16F;
+    case kRGBA_F32_SkColorType:
+      return kDataFormatRGBA32F;
+    default:
+      NOTREACHED();
+  }
+}
+
+SkColorType WebGLImageConversion::DataFormatToSkColorType(
+    WebGLImageConversion::DataFormat data_format,
+    SkColorType default_color_type) {
+  switch (data_format) {
+    case kDataFormatRGBA8:
+      return kRGBA_8888_SkColorType;
+    case kDataFormatBGRA8:
+      return kBGRA_8888_SkColorType;
+    case kDataFormatRGBA16:
+      return kR16G16B16A16_unorm_SkColorType;
+    case kDataFormatRGBA16F:
+      return kRGBA_F16_SkColorType;
+    case kDataFormatRGBA32F:
+      return kRGBA_F32_SkColorType;
+    default:
+      break;
+  }
+  return default_color_type;
+}
 
 bool WebGLImageConversion::ComputeFormatAndTypeParameters(
     GLenum format,
@@ -3715,101 +3792,6 @@ GLenum WebGLImageConversion::ComputeImageSizeInBytes(
   return GL_NO_ERROR;
 }
 
-WebGLImageConversion::ImageExtractor::ImageExtractor(
-    Image* image,
-    ImageHtmlDomSource image_html_dom_source,
-    bool premultiply_alpha,
-    bool ignore_color_space) {
-  image_ = image;
-  image_html_dom_source_ = image_html_dom_source;
-  ExtractImage(premultiply_alpha, ignore_color_space);
-}
-
-void WebGLImageConversion::ImageExtractor::ExtractImage(
-    bool premultiply_alpha,
-    bool ignore_color_space) {
-  DCHECK(!image_pixel_locker_);
-
-  if (!image_)
-    return;
-
-  sk_sp<SkImage> skia_image =
-      image_->PaintImageForCurrentFrame().GetSwSkImage();
-  SkImageInfo info =
-      skia_image ? SkImageInfo::MakeN32Premul(image_->width(), image_->height())
-                 : SkImageInfo::MakeUnknown();
-  alpha_op_ = kAlphaDoNothing;
-  bool has_alpha = skia_image ? !skia_image->isOpaque() : true;
-
-  bool need_unpremultiplied = has_alpha && !premultiply_alpha;
-  bool need_color_conversion = !ignore_color_space && skia_image &&
-                               skia_image->colorSpace() &&
-                               !skia_image->colorSpace()->isSRGB();
-  if ((!skia_image || ignore_color_space || need_unpremultiplied ||
-       need_color_conversion) &&
-      image_->Data()) {
-    // Attempt to get raw unpremultiplied image data.
-    const bool data_complete = true;
-    std::unique_ptr<ImageDecoder> decoder(ImageDecoder::Create(
-        image_->Data(), data_complete, ImageDecoder::kAlphaNotPremultiplied,
-        ImageDecoder::kDefaultBitDepth,
-        ignore_color_space ? ColorBehavior::Ignore()
-                           : ColorBehavior::TransformToSRGB()));
-    if (!decoder || !decoder->FrameCount())
-      return;
-    ImageFrame* frame = decoder->DecodeFrameBufferAtIndex(0);
-    if (!frame || frame->GetStatus() != ImageFrame::kFrameComplete)
-      return;
-    has_alpha = frame->HasAlpha();
-    SkBitmap bitmap = frame->Bitmap();
-    if (!FrameIsValid(bitmap))
-      return;
-
-    // TODO(fmalita): Partial frames are not supported currently: only fully
-    // decoded frames make it through.  We could potentially relax this and
-    // use SkImage::MakeFromBitmap(bitmap) to make a copy.
-    skia_image = frame->FinalizePixelsAndGetImage();
-    info = bitmap.info();
-
-    if (has_alpha && premultiply_alpha)
-      alpha_op_ = kAlphaDoPremultiply;
-  } else if (!premultiply_alpha && has_alpha) {
-    // 1. For texImage2D with HTMLVideoElment input, assume no PremultiplyAlpha
-    //    had been applied and the alpha value for each pixel is 0xFF.  This is
-    //    true at present; if it is changed in the future it will need
-    //    adjustment accordingly.
-    // 2. For texImage2D with HTMLCanvasElement input in which alpha is already
-    //    premultiplied in this port, do AlphaDoUnmultiply if
-    //    UNPACK_PREMULTIPLY_ALPHA_WEBGL is set to false.
-    if (image_html_dom_source_ != kHtmlDomVideo)
-      alpha_op_ = kAlphaDoUnmultiply;
-  }
-
-  if (!skia_image)
-    return;
-
-#if SK_B32_SHIFT
-  image_source_format_ = kDataFormatRGBA8;
-#else
-  image_source_format_ = kDataFormatBGRA8;
-#endif
-  image_source_unpack_alignment_ =
-      0;  // FIXME: this seems to always be zero - why use at all?
-
-  DCHECK(skia_image->width());
-  DCHECK(skia_image->height());
-  image_width_ = skia_image->width();
-  image_height_ = skia_image->height();
-
-  // Fail if the image was downsampled because of memory limits.
-  if (image_width_ != (unsigned)image_->width() ||
-      image_height_ != (unsigned)image_->height())
-    return;
-
-  image_pixel_locker_.emplace(std::move(skia_image), info.alphaType(),
-                              kN32_SkColorType);
-}
-
 unsigned WebGLImageConversion::GetChannelBitsByFormat(GLenum format) {
   switch (format) {
     case GL_ALPHA:
@@ -3898,33 +3880,37 @@ unsigned WebGLImageConversion::GetChannelBitsByFormat(GLenum format) {
   }
 }
 
-bool WebGLImageConversion::PackImageData(
-    Image* image,
-    const void* pixels,
+bool WebGLImageConversion::PackSkPixmap(
+    const SkPixmap* pixmap,
     GLenum format,
     GLenum type,
     bool flip_y,
     AlphaOp alpha_op,
-    DataFormat source_format,
-    unsigned source_image_width,
-    unsigned source_image_height,
-    const IntRect& source_image_sub_rectangle,
+    const gfx::Rect& source_image_sub_rectangle,
     int depth,
     unsigned source_unpack_alignment,
     int unpack_image_height,
     Vector<uint8_t>& data) {
-  if (!pixels)
-    return false;
+  DCHECK(pixmap);
+  const void* const pixels = pixmap->addr();
+  DCHECK(pixels);
+  const unsigned source_image_width = pixmap->width();
+  DCHECK(source_image_width);
+  const unsigned source_image_height = pixmap->height();
+  DCHECK(source_image_height);
+  const DataFormat source_format = SkColorTypeToDataFormat(pixmap->colorType());
+  DCHECK_NE(source_format, kDataFormatNumFormats);
 
   unsigned packed_size;
   // Output data is tightly packed (alignment == 1).
   PixelStoreParams params;
   params.alignment = 1;
-  if (ComputeImageSizeInBytes(format, type, source_image_sub_rectangle.Width(),
-                              source_image_sub_rectangle.Height(), depth,
+  if (ComputeImageSizeInBytes(format, type, source_image_sub_rectangle.width(),
+                              source_image_sub_rectangle.height(), depth,
                               params, &packed_size, nullptr,
-                              nullptr) != GL_NO_ERROR)
+                              nullptr) != GL_NO_ERROR) {
     return false;
+  }
   data.resize(packed_size);
 
   return PackPixels(reinterpret_cast<const uint8_t*>(pixels), source_format,
@@ -3932,44 +3918,6 @@ bool WebGLImageConversion::PackImageData(
                     source_image_sub_rectangle, depth, source_unpack_alignment,
                     unpack_image_height, format, type, alpha_op, data.data(),
                     flip_y);
-}
-
-bool WebGLImageConversion::ExtractImageData(
-    const void* image_data,
-    DataFormat source_data_format,
-    const IntSize& image_data_size,
-    const IntRect& source_image_sub_rectangle,
-    int depth,
-    int unpack_image_height,
-    GLenum format,
-    GLenum type,
-    bool flip_y,
-    bool premultiply_alpha,
-    Vector<uint8_t>& data) {
-  if (!image_data)
-    return false;
-  int width = image_data_size.Width();
-  int height = image_data_size.Height();
-
-  unsigned packed_size;
-  // Output data is tightly packed (alignment == 1).
-  PixelStoreParams params;
-  params.alignment = 1;
-  if (ComputeImageSizeInBytes(format, type, source_image_sub_rectangle.Width(),
-                              source_image_sub_rectangle.Height(), depth,
-                              params, &packed_size, nullptr,
-                              nullptr) != GL_NO_ERROR)
-    return false;
-  data.resize(packed_size);
-
-  if (!PackPixels(image_data, source_data_format, width, height,
-                  source_image_sub_rectangle, depth, 0, unpack_image_height,
-                  format, type,
-                  premultiply_alpha ? kAlphaDoPremultiply : kAlphaDoNothing,
-                  data.data(), flip_y))
-    return false;
-
-  return true;
 }
 
 bool WebGLImageConversion::ExtractTextureData(
@@ -3996,16 +3944,18 @@ bool WebGLImageConversion::ExtractTextureData(
   data.resize(width * height * bytes_per_pixel);
 
   unsigned image_size_in_bytes, skip_size_in_bytes;
-  ComputeImageSizeInBytes(format, type, width, height, 1, unpack_params,
-                          &image_size_in_bytes, nullptr, &skip_size_in_bytes);
+  if (ComputeImageSizeInBytes(format, type, width, height, 1, unpack_params,
+                              &image_size_in_bytes, nullptr,
+                              &skip_size_in_bytes) != GL_NO_ERROR)
+    return false;
   const uint8_t* src_data = static_cast<const uint8_t*>(pixels);
   if (skip_size_in_bytes) {
-    src_data += skip_size_in_bytes;
+    UNSAFE_TODO(src_data += skip_size_in_bytes);
   }
 
   if (!PackPixels(src_data, source_data_format,
                   unpack_params.row_length ? unpack_params.row_length : width,
-                  height, IntRect(0, 0, width, height), 1,
+                  height, gfx::Rect(0, 0, width, height), 1,
                   unpack_params.alignment, 0, format, type,
                   (premultiply_alpha ? kAlphaDoPremultiply : kAlphaDoNothing),
                   data.data(), flip_y))
@@ -4014,22 +3964,23 @@ bool WebGLImageConversion::ExtractTextureData(
   return true;
 }
 
-bool WebGLImageConversion::PackPixels(const void* source_data,
-                                      DataFormat source_data_format,
-                                      unsigned source_data_width,
-                                      unsigned source_data_height,
-                                      const IntRect& source_data_sub_rectangle,
-                                      int depth,
-                                      unsigned source_unpack_alignment,
-                                      int unpack_image_height,
-                                      unsigned destination_format,
-                                      unsigned destination_type,
-                                      AlphaOp alpha_op,
-                                      void* destination_data,
-                                      bool flip_y) {
+bool WebGLImageConversion::PackPixels(
+    const void* source_data,
+    DataFormat source_data_format,
+    unsigned source_data_width,
+    unsigned source_data_height,
+    const gfx::Rect& source_data_sub_rectangle,
+    int depth,
+    unsigned source_unpack_alignment,
+    int unpack_image_height,
+    unsigned destination_format,
+    unsigned destination_type,
+    AlphaOp alpha_op,
+    void* destination_data,
+    bool flip_y) {
   DCHECK_GE(depth, 1);
   if (unpack_image_height == 0) {
-    unpack_image_height = source_data_sub_rectangle.Height();
+    unpack_image_height = source_data_sub_rectangle.height();
   }
   int valid_src = source_data_width * TexelBytesForFormat(source_data_format);
   int remainder =
@@ -4037,17 +3988,17 @@ bool WebGLImageConversion::PackPixels(const void* source_data,
   int src_stride =
       remainder ? (valid_src + source_unpack_alignment - remainder) : valid_src;
   int src_row_offset =
-      source_data_sub_rectangle.X() * TexelBytesForFormat(source_data_format);
+      source_data_sub_rectangle.x() * TexelBytesForFormat(source_data_format);
   DataFormat dst_data_format =
       GetDataFormat(destination_format, destination_type);
   if (dst_data_format == kDataFormatNumFormats)
     return false;
   int dst_stride =
-      source_data_sub_rectangle.Width() * TexelBytesForFormat(dst_data_format);
+      source_data_sub_rectangle.width() * TexelBytesForFormat(dst_data_format);
   if (flip_y) {
-    destination_data =
+    destination_data = UNSAFE_TODO(
         static_cast<uint8_t*>(destination_data) +
-        dst_stride * ((depth * source_data_sub_rectangle.Height()) - 1);
+        dst_stride * ((depth * source_data_sub_rectangle.height()) - 1));
     dst_stride = -dst_stride;
   }
   if (!HasAlpha(source_data_format) || !HasColor(source_data_format) ||
@@ -4055,10 +4006,12 @@ bool WebGLImageConversion::PackPixels(const void* source_data,
     alpha_op = kAlphaDoNothing;
 
   if (source_data_format == dst_data_format && alpha_op == kAlphaDoNothing) {
-    const uint8_t* base_ptr = static_cast<const uint8_t*>(source_data) +
-                              src_stride * source_data_sub_rectangle.Y();
-    const uint8_t* base_end = static_cast<const uint8_t*>(source_data) +
-                              src_stride * source_data_sub_rectangle.MaxY();
+    const uint8_t* base_ptr =
+        UNSAFE_TODO(static_cast<const uint8_t*>(source_data) +
+                    src_stride * source_data_sub_rectangle.y());
+    const uint8_t* base_end =
+        UNSAFE_TODO(static_cast<const uint8_t*>(source_data) +
+                    src_stride * source_data_sub_rectangle.bottom());
 
     // If packing multiple images into a 3D texture, and flipY is true,
     // then the sub-rectangle is pointing at the start of the
@@ -4068,8 +4021,10 @@ bool WebGLImageConversion::PackPixels(const void* source_data,
     if (flip_y && depth > 1) {
       const ptrdiff_t distance_to_top_image =
           (depth - 1) * src_stride * unpack_image_height;
-      base_ptr -= distance_to_top_image;
-      base_end -= distance_to_top_image;
+      UNSAFE_TODO({
+        base_ptr -= distance_to_top_image;
+        base_end -= distance_to_top_image;
+      });
     }
 
     unsigned row_size = (dst_stride > 0) ? dst_stride : -dst_stride;
@@ -4079,12 +4034,16 @@ bool WebGLImageConversion::PackPixels(const void* source_data,
       const uint8_t* ptr = base_ptr;
       const uint8_t* ptr_end = base_end;
       while (ptr < ptr_end) {
-        memcpy(dst, ptr + src_row_offset, row_size);
-        ptr += src_stride;
-        dst += dst_stride;
+        UNSAFE_TODO({
+          memcpy(dst, ptr + src_row_offset, row_size);
+          ptr += src_stride;
+          dst += dst_stride;
+        });
       }
-      base_ptr += unpack_image_height * src_stride;
-      base_end += unpack_image_height * src_stride;
+      UNSAFE_TODO({
+        base_ptr += unpack_image_height * src_stride;
+        base_end += unpack_image_height * src_stride;
+      });
     }
     return true;
   }

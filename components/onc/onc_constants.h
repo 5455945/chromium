@@ -1,12 +1,13 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 #ifndef COMPONENTS_ONC_ONC_CONSTANTS_H_
 #define COMPONENTS_ONC_ONC_CONSTANTS_H_
 
 #include <string>
+#include <string_view>
 
-#include "components/onc/onc_export.h"
+#include "base/component_export.h"
 
 // Constants for ONC properties.
 namespace onc {
@@ -26,498 +27,588 @@ enum ONCSource {
 // The setting that Shill declared to be using. For example, if no policy and no
 // user setting exists, Shill might still report a property like network
 // security options or a SSID.
-ONC_EXPORT extern const char kAugmentationActiveSetting[];
+inline constexpr char kAugmentationActiveSetting[] = "Active";
 // The one of different setting sources (user/device policy, user/shared
 // settings) that has highest priority over the others.
-ONC_EXPORT extern const char kAugmentationEffectiveSetting[];
-ONC_EXPORT extern const char kAugmentationUserPolicy[];
-ONC_EXPORT extern const char kAugmentationDevicePolicy[];
-ONC_EXPORT extern const char kAugmentationUserSetting[];
-ONC_EXPORT extern const char kAugmentationSharedSetting[];
-ONC_EXPORT extern const char kAugmentationUserEditable[];
-ONC_EXPORT extern const char kAugmentationDeviceEditable[];
+inline constexpr char kAugmentationEffectiveSetting[] = "Effective";
+inline constexpr char kAugmentationUserPolicy[] = "UserPolicy";
+inline constexpr char kAugmentationDevicePolicy[] = "DevicePolicy";
+inline constexpr char kAugmentationUserSetting[] = "UserSetting";
+inline constexpr char kAugmentationSharedSetting[] = "SharedSetting";
+inline constexpr char kAugmentationUserEditable[] = "UserEditable";
+inline constexpr char kAugmentationDeviceEditable[] = "DeviceEditable";
 
 // Special key for indicating that the Effective value is the Active value
 // and was set by an extension. Used for ProxySettings.
-ONC_EXPORT extern const char kAugmentationActiveExtension[];
+inline constexpr char kAugmentationActiveExtension[] = "ActiveExtension";
 
 // Common keys/values.
-ONC_EXPORT extern const char kRecommended[];
-ONC_EXPORT extern const char kRemove[];
+inline constexpr char kRecommended[] = "Recommended";
+inline constexpr char kRemove[] = "Remove";
 
 // Top Level Configuration
 namespace toplevel_config {
-ONC_EXPORT extern const char kCertificates[];
-ONC_EXPORT extern const char kEncryptedConfiguration[];
-ONC_EXPORT extern const char kNetworkConfigurations[];
-ONC_EXPORT extern const char kGlobalNetworkConfiguration[];
-ONC_EXPORT extern const char kType[];
-ONC_EXPORT extern const char kUnencryptedConfiguration[];
+inline constexpr char kAdminAPNList[] = "AdminAPNList";
+inline constexpr char kCertificates[] = "Certificates";
+inline constexpr char kEncryptedConfiguration[] = "EncryptedConfiguration";
+inline constexpr char kNetworkConfigurations[] = "NetworkConfigurations";
+inline constexpr char kGlobalNetworkConfiguration[] =
+    "GlobalNetworkConfiguration";
+inline constexpr char kType[] = "Type";
+inline constexpr char kUnencryptedConfiguration[] = "UnencryptedConfiguration";
 }  // namespace toplevel_config
 
 // NetworkConfiguration.
 namespace network_config {
-ONC_EXPORT extern const char kCellular[];
-ONC_EXPORT extern const char kDevice[];
-ONC_EXPORT extern const char kEthernet[];
-ONC_EXPORT extern const char kGUID[];
-ONC_EXPORT extern const char kIPAddressConfigType[];
-ONC_EXPORT extern const char kIPConfigs[];
-ONC_EXPORT extern const char kIPConfigTypeDHCP[];
-ONC_EXPORT extern const char kIPConfigTypeStatic[];
-ONC_EXPORT extern const char kSavedIPConfig[];
-ONC_EXPORT extern const char kStaticIPConfig[];
-ONC_EXPORT extern const char kMacAddress[];
-ONC_EXPORT extern const char kMetered[];
-ONC_EXPORT extern const char kNameServersConfigType[];
-ONC_EXPORT extern const char kName[];
-ONC_EXPORT extern const char kPriority[];
-ONC_EXPORT extern const char kProxySettings[];
-ONC_EXPORT extern const char kSource[];
-ONC_EXPORT extern const char kSourceDevice[];
-ONC_EXPORT extern const char kSourceDevicePolicy[];
-ONC_EXPORT extern const char kSourceNone[];
-ONC_EXPORT extern const char kSourceUser[];
-ONC_EXPORT extern const char kSourceUserPolicy[];
-ONC_EXPORT extern const char kConnectionState[];
-ONC_EXPORT extern const char kRestrictedConnectivity[];
-ONC_EXPORT extern const char kConnectable[];
-ONC_EXPORT extern const char kErrorState[];
-ONC_EXPORT extern const char kTether[];
-ONC_EXPORT extern const char kTrafficCounterResetTime[];
-ONC_EXPORT extern const char kType[];
-ONC_EXPORT extern const char kVPN[];
-ONC_EXPORT extern const char kWiFi[];
-ONC_EXPORT extern const char kWimaxDeprecated[];
+inline constexpr char kCellular[] = "Cellular";
+inline constexpr char kCheckCaptivePortal[] = "CheckCaptivePortal";
+inline constexpr char kDevice[] = "Device";
+inline constexpr char kEthernet[] = "Ethernet";
+inline constexpr char kGUID[] = "GUID";
+inline constexpr char kIPAddressConfigType[] = "IPAddressConfigType";
+inline constexpr char kIPConfigs[] = "IPConfigs";
+inline constexpr char kIPConfigTypeDHCP[] = "DHCP";
+inline constexpr char kIPConfigTypeStatic[] = "Static";
+inline constexpr char kSavedIPConfig[] = "SavedIPConfig";
+inline constexpr char kStaticIPConfig[] = "StaticIPConfig";
+inline constexpr char kMacAddress[] = "MacAddress";
+inline constexpr char kMetered[] = "Metered";
+inline constexpr char kNameServersConfigType[] = "NameServersConfigType";
+inline constexpr char kName[] = "Name";
+inline constexpr char kPriority[] = "Priority";
+inline constexpr char kProxySettings[] = "ProxySettings";
+inline constexpr char kSource[] = "Source";
+inline constexpr char kSourceDevice[] = "Device";
+inline constexpr char kSourceDevicePolicy[] = "DevicePolicy";
+inline constexpr char kSourceNone[] = "None";
+inline constexpr char kSourceUser[] = "User";
+inline constexpr char kSourceUserPolicy[] = "UserPolicy";
+inline constexpr char kConnectionState[] = "ConnectionState";
+inline constexpr char kRestrictedConnectivity[] = "RestrictedConnectivity";
+inline constexpr char kConnectable[] = "Connectable";
+inline constexpr char kErrorState[] = "ErrorState";
+inline constexpr char kTether[] = "Tether";
+inline constexpr char kTrafficCounterResetTime[] = "TrafficCounterResetTime";
+inline constexpr char kType[] = "Type";
+inline constexpr char kVPN[] = "VPN";
+inline constexpr char kWiFi[] = "WiFi";
+inline constexpr char kWimaxDeprecated[] = "WiMAX";
 
-ONC_EXPORT extern std::string CellularProperty(const std::string& property);
-ONC_EXPORT extern std::string TetherProperty(const std::string& property);
-ONC_EXPORT extern std::string VpnProperty(const std::string& property);
-ONC_EXPORT extern std::string WifiProperty(const std::string& property);
+COMPONENT_EXPORT(ONC)
+extern std::string CellularProperty(std::string_view property);
+COMPONENT_EXPORT(ONC)
+extern std::string TetherProperty(std::string_view property);
+COMPONENT_EXPORT(ONC)
+extern std::string VpnProperty(std::string_view property);
+COMPONENT_EXPORT(ONC)
+extern std::string WifiProperty(std::string_view property);
 
 }  // namespace network_config
 
 namespace network_type {
-ONC_EXPORT extern const char kCellular[];
-ONC_EXPORT extern const char kEthernet[];
-ONC_EXPORT extern const char kTether[];
-ONC_EXPORT extern const char kVPN[];
-ONC_EXPORT extern const char kWiFi[];
-ONC_EXPORT extern const char kWimaxDeprecated[];
+inline constexpr char kCellular[] = "Cellular";
+inline constexpr char kEthernet[] = "Ethernet";
+inline constexpr char kTether[] = "Tether";
+inline constexpr char kVPN[] = "VPN";
+inline constexpr char kWiFi[] = "WiFi";
+inline constexpr char kWimaxDeprecated[] = "WiMAX";
 // Patterns matching multiple types, not part of the ONC spec.
-ONC_EXPORT extern const char kAllTypes[];
-ONC_EXPORT extern const char kWireless[];
+inline constexpr char kAllTypes[] = "All";
+inline constexpr char kWireless[] = "Wireless";
 }  // namespace network_type
 
+namespace check_captive_portal {
+inline constexpr char kFalse[] = "False";
+inline constexpr char kHTTPOnly[] = "HTTPOnly";
+inline constexpr char kTrue[] = "True";
+}  // namespace check_captive_portal
+
 namespace cellular {
-ONC_EXPORT extern const char kActivationState[];
-ONC_EXPORT extern const char kActivated[];
-ONC_EXPORT extern const char kActivating[];
-ONC_EXPORT extern const char kAutoConnect[];
-ONC_EXPORT extern const char kNotActivated[];
-ONC_EXPORT extern const char kPartiallyActivated[];
-ONC_EXPORT extern const char kActivationType[];
-ONC_EXPORT extern const char kAllowRoaming[];
-ONC_EXPORT extern const char kAPN[];
-ONC_EXPORT extern const char kAPNList[];
-ONC_EXPORT extern const char kCarrier[];
-ONC_EXPORT extern const char kESN[];
-ONC_EXPORT extern const char kFamily[];
-ONC_EXPORT extern const char kFirmwareRevision[];
-ONC_EXPORT extern const char kFoundNetworks[];
-ONC_EXPORT extern const char kHardwareRevision[];
-ONC_EXPORT extern const char kHomeProvider[];
-ONC_EXPORT extern const char kEID[];
-ONC_EXPORT extern const char kICCID[];
-ONC_EXPORT extern const char kIMEI[];
-ONC_EXPORT extern const char kIMSI[];
-ONC_EXPORT extern const char kLastGoodAPN[];
-ONC_EXPORT extern const char kManufacturer[];
-ONC_EXPORT extern const char kMDN[];
-ONC_EXPORT extern const char kMEID[];
-ONC_EXPORT extern const char kMIN[];
-ONC_EXPORT extern const char kModelID[];
-ONC_EXPORT extern const char kNetworkTechnology[];
-ONC_EXPORT extern const char kPaymentPortal[];
-ONC_EXPORT extern const char kRoamingHome[];
-ONC_EXPORT extern const char kRoamingRequired[];
-ONC_EXPORT extern const char kRoamingRoaming[];
-ONC_EXPORT extern const char kRoamingState[];
-ONC_EXPORT extern const char kScanning[];
-ONC_EXPORT extern const char kServingOperator[];
-ONC_EXPORT extern const char kSignalStrength[];
-ONC_EXPORT extern const char kSIMLockStatus[];
-ONC_EXPORT extern const char kSIMPresent[];
-ONC_EXPORT extern const char kSupportNetworkScan[];
-ONC_EXPORT extern const char kTechnologyCdma1Xrtt[];
-ONC_EXPORT extern const char kTechnologyEdge[];
-ONC_EXPORT extern const char kTechnologyEvdo[];
-ONC_EXPORT extern const char kTechnologyGprs[];
-ONC_EXPORT extern const char kTechnologyGsm[];
-ONC_EXPORT extern const char kTechnologyHspa[];
-ONC_EXPORT extern const char kTechnologyHspaPlus[];
-ONC_EXPORT extern const char kTechnologyLte[];
-ONC_EXPORT extern const char kTechnologyLteAdvanced[];
-ONC_EXPORT extern const char kTechnologyUmts[];
+inline constexpr char kActivationState[] = "ActivationState";
+inline constexpr char kActivated[] = "Activated";
+inline constexpr char kActivating[] = "Activating";
+inline constexpr char kAutoConnect[] = "AutoConnect";
+inline constexpr char kNotActivated[] = "NotActivated";
+inline constexpr char kPartiallyActivated[] = "PartiallyActivated";
+inline constexpr char kActivationType[] = "ActivationType";
+inline constexpr char kAdminAssignedAPNIds[] = "AdminAssignedAPNIds";
+inline constexpr char kAllowRoaming[] = "AllowRoaming";
+inline constexpr char kAPN[] = "APN";
+inline constexpr char kAPNList[] = "APNList";
+inline constexpr char kCustomAPNList[] = "CustomAPNList";
+inline constexpr char kESN[] = "ESN";
+inline constexpr char kFamily[] = "Family";
+inline constexpr char kFirmwareRevision[] = "FirmwareRevision";
+inline constexpr char kFoundNetworks[] = "FoundNetworks";
+inline constexpr char kHardwareRevision[] = "HardwareRevision";
+inline constexpr char kHomeProvider[] = "HomeProvider";
+inline constexpr char kEID[] = "EID";
+inline constexpr char kICCID[] = "ICCID";
+inline constexpr char kIMEI[] = "IMEI";
+inline constexpr char kIMSI[] = "IMSI";
+inline constexpr char kLastConnectedAttachApnProperty[] =
+    "LastConnectedAttachApnProperty";
+inline constexpr char kLastConnectedDefaultApnProperty[] =
+    "LastConnectedDefaultApnProperty";
+inline constexpr char kLastGoodAPN[] = "LastGoodAPN";
+inline constexpr char kManufacturer[] = "Manufacturer";
+inline constexpr char kMDN[] = "MDN";
+inline constexpr char kMEID[] = "MEID";
+inline constexpr char kMIN[] = "MIN";
+inline constexpr char kModelID[] = "ModelID";
+inline constexpr char kNetworkTechnology[] = "NetworkTechnology";
+inline constexpr char kPaymentPortal[] = "PaymentPortal";
+inline constexpr char kRoamingHome[] = "Home";
+inline constexpr char kRoamingRequired[] = "Required";
+inline constexpr char kRoamingRoaming[] = "Roaming";
+inline constexpr char kRoamingState[] = "RoamingState";
+inline constexpr char kScanning[] = "Scanning";
+inline constexpr char kServingOperator[] = "ServingOperator";
+inline constexpr char kSignalStrength[] = "SignalStrength";
+inline constexpr char kSIMLockStatus[] = "SIMLockStatus";
+inline constexpr char kSIMPresent[] = "SIMPresent";
+inline constexpr char kSMDPAddress[] = "SMDPAddress";
+inline constexpr char kSMDSAddress[] = "SMDSAddress";
+inline constexpr char kSupportNetworkScan[] = "SupportNetworkScan";
+inline constexpr char kTechnologyCdma1Xrtt[] = "CDMA1XRTT";
+inline constexpr char kTechnologyEdge[] = "EDGE";
+inline constexpr char kTechnologyEvdo[] = "EVDO";
+inline constexpr char kTechnologyGprs[] = "GPRS";
+inline constexpr char kTechnologyGsm[] = "GSM";
+inline constexpr char kTechnologyHspa[] = "HSPA";
+inline constexpr char kTechnologyHspaPlus[] = "HSPAPlus";
+inline constexpr char kTechnologyLte[] = "LTE";
+inline constexpr char kTechnologyLteAdvanced[] = "LTEAdvanced";
+inline constexpr char kTechnologyUmts[] = "UMTS";
+inline constexpr char kTechnology5gNr[] = "5GNR";
+inline constexpr char kTextMessagesAllow[] = "Allow";
+inline constexpr char kTextMessagesSuppress[] = "Suppress";
+inline constexpr char kTextMessagesUnset[] = "Unset";
 }  // namespace cellular
 
 namespace cellular_provider {
-ONC_EXPORT extern const char kCode[];
-ONC_EXPORT extern const char kCountry[];
-ONC_EXPORT extern const char kName[];
+inline constexpr char kCode[] = "Code";
+inline constexpr char kCountry[] = "Country";
+inline constexpr char kName[] = "Name";
 }  // namespace cellular_provider
 
 namespace cellular_apn {
-ONC_EXPORT extern const char kAccessPointName[];
-ONC_EXPORT extern const char kName[];
-ONC_EXPORT extern const char kUsername[];
-ONC_EXPORT extern const char kPassword[];
-ONC_EXPORT extern const char kAuthentication[];
-ONC_EXPORT extern const char kLocalizedName[];
-ONC_EXPORT extern const char kLanguage[];
-ONC_EXPORT extern const char kAttach[];
+inline constexpr char kAccessPointName[] = "AccessPointName";
+inline constexpr char kName[] = "Name";
+inline constexpr char kUsername[] = "Username";
+inline constexpr char kPassword[] = "Password";
+inline constexpr char kAuthentication[] = "Authentication";
+inline constexpr char kLocalizedName[] = "LocalizedName";
+inline constexpr char kLanguage[] = "Language";
+inline constexpr char kAttach[] = "Attach";
+inline constexpr char kId[] = "Id";
+inline constexpr char kState[] = "State";
+inline constexpr char kStateEnabled[] = "Enabled";
+inline constexpr char kStateDisabled[] = "Disabled";
+inline constexpr char kAuthenticationAutomatic[] = "";
+inline constexpr char kAuthenticationPap[] = "PAP";
+inline constexpr char kAuthenticationChap[] = "CHAP";
+inline constexpr char kIpType[] = "IpType";
+inline constexpr char kIpTypeAutomatic[] = "";
+inline constexpr char kIpTypeIpv4[] = "IPv4";
+inline constexpr char kIpTypeIpv6[] = "IPv6";
+inline constexpr char kIpTypeIpv4Ipv6[] = "IPv4orIPv6";
+inline constexpr char kApnTypes[] = "ApnTypes";
+inline constexpr char kApnTypeDefault[] = "Default";
+inline constexpr char kApnTypeAttach[] = "Attach";
+inline constexpr char kApnTypeTether[] = "Tether";
+inline constexpr char kSource[] = "Source";
+inline constexpr char kSourceUi[] = "Ui";
+inline constexpr char kSourceAdmin[] = "Admin";
+inline constexpr char kSourceModb[] = "Modb";
+inline constexpr char kSourceModem[] = "Modem";
 }  // namespace cellular_apn
 
 namespace cellular_found_network {
-ONC_EXPORT extern const char kStatus[];
-ONC_EXPORT extern const char kNetworkId[];
-ONC_EXPORT extern const char kShortName[];
-ONC_EXPORT extern const char kLongName[];
-ONC_EXPORT extern const char kTechnology[];
+inline constexpr char kStatus[] = "Status";
+inline constexpr char kNetworkId[] = "NetworkId";
+inline constexpr char kShortName[] = "ShortName";
+inline constexpr char kLongName[] = "LongName";
+inline constexpr char kTechnology[] = "Technology";
 }  // namespace cellular_found_network
 
 namespace cellular_payment_portal {
-ONC_EXPORT extern const char kMethod[];
-ONC_EXPORT extern const char kPostData[];
-ONC_EXPORT extern const char kUrl[];
+inline constexpr char kMethod[] = "Method";
+inline constexpr char kPostData[] = "PostData";
+inline constexpr char kUrl[] = "Url";
 }  // namespace cellular_payment_portal
 
 namespace sim_lock_status {
-ONC_EXPORT extern const char kLockEnabled[];
-ONC_EXPORT extern const char kLockType[];
-ONC_EXPORT extern const char kRetriesLeft[];
+inline constexpr char kLockEnabled[] = "LockEnabled";
+inline constexpr char kLockType[] = "LockType";
+inline constexpr char kRetriesLeft[] = "RetriesLeft";
 }  // namespace sim_lock_status
 
 namespace connection_state {
-ONC_EXPORT extern const char kConnected[];
-ONC_EXPORT extern const char kConnecting[];
-ONC_EXPORT extern const char kNotConnected[];
+inline constexpr char kConnected[] = "Connected";
+inline constexpr char kConnecting[] = "Connecting";
+inline constexpr char kNotConnected[] = "NotConnected";
 }  // namespace connection_state
 
 namespace ipconfig {
-ONC_EXPORT extern const char kGateway[];
-ONC_EXPORT extern const char kIPAddress[];
-ONC_EXPORT extern const char kIPv4[];
-ONC_EXPORT extern const char kIPv6[];
-ONC_EXPORT extern const char kNameServers[];
-ONC_EXPORT extern const char kRoutingPrefix[];
-ONC_EXPORT extern const char kSearchDomains[];
-ONC_EXPORT extern const char kIncludedRoutes[];
-ONC_EXPORT extern const char kExcludedRoutes[];
-ONC_EXPORT extern const char kType[];
-ONC_EXPORT extern const char kWebProxyAutoDiscoveryUrl[];
+inline constexpr char kGateway[] = "Gateway";
+inline constexpr char kIPAddress[] = "IPAddress";
+inline constexpr char kIPv4[] = "IPv4";
+inline constexpr char kIPv6[] = "IPv6";
+inline constexpr char kNameServers[] = "NameServers";
+inline constexpr char kRoutingPrefix[] = "RoutingPrefix";
+inline constexpr char kSearchDomains[] = "SearchDomains";
+inline constexpr char kIncludedRoutes[] = "IncludedRoutes";
+inline constexpr char kExcludedRoutes[] = "ExcludedRoutes";
+inline constexpr char kType[] = "Type";
+inline constexpr char kWebProxyAutoDiscoveryUrl[] = "WebProxyAutoDiscoveryUrl";
+inline constexpr char kMTU[] = "MTU";
 }  // namespace ipconfig
 
 namespace ethernet {
-ONC_EXPORT extern const char kAuthentication[];
-ONC_EXPORT extern const char kAuthenticationNone[];
-ONC_EXPORT extern const char kEAP[];
-ONC_EXPORT extern const char k8021X[];
+inline constexpr char kAuthentication[] = "Authentication";
+inline constexpr char kAuthenticationNone[] = "None";
+inline constexpr char kEAP[] = "EAP";
+inline constexpr char k8021X[] = "8021X";
 }  // namespace ethernet
 
 namespace tether {
-ONC_EXPORT extern const char kBatteryPercentage[];
-ONC_EXPORT extern const char kCarrier[];
-ONC_EXPORT extern const char kHasConnectedToHost[];
-ONC_EXPORT extern const char kSignalStrength[];
+inline constexpr char kBatteryPercentage[] = "BatteryPercentage";
+inline constexpr char kCarrier[] = "Carrier";
+inline constexpr char kHasConnectedToHost[] = "HasConnectedToHost";
+inline constexpr char kSignalStrength[] = "SignalStrength";
 }  // namespace tether
 
 namespace wifi {
-ONC_EXPORT extern const char kAllowGatewayARPPolling[];
-ONC_EXPORT extern const char kAutoConnect[];
-ONC_EXPORT extern const char kBSSID[];
-ONC_EXPORT extern const char kEAP[];
-ONC_EXPORT extern const char kFrequency[];
-ONC_EXPORT extern const char kFrequencyList[];
-ONC_EXPORT extern const char kHexSSID[];
-ONC_EXPORT extern const char kHiddenSSID[];
-ONC_EXPORT extern const char kPassphrase[];
-ONC_EXPORT extern const char kSSID[];
-ONC_EXPORT extern const char kSecurity[];
-ONC_EXPORT extern const char kSecurityNone[];
-ONC_EXPORT extern const char kSignalStrength[];
-ONC_EXPORT extern const char kWEP_PSK[];
-ONC_EXPORT extern const char kWEP_8021X[];
-ONC_EXPORT extern const char kWPA_PSK[];
-ONC_EXPORT extern const char kWPA2_PSK[];
-ONC_EXPORT extern const char kWPA_EAP[];
+inline constexpr char kAllowGatewayARPPolling[] = "AllowGatewayARPPolling";
+inline constexpr char kAutoConnect[] = "AutoConnect";
+inline constexpr char kBSSID[] = "BSSID";
+inline constexpr char kBSSIDAllowlist[] = "BSSIDAllowlist";
+inline constexpr char kBSSIDRequested[] = "BSSIDRequested";
+inline constexpr char kEAP[] = "EAP";
+inline constexpr char kFrequency[] = "Frequency";
+inline constexpr char kFrequencyList[] = "FrequencyList";
+inline constexpr char kHexSSID[] = "HexSSID";
+inline constexpr char kHiddenSSID[] = "HiddenSSID";
+inline constexpr char kPassphrase[] = "Passphrase";
+inline constexpr char kSSID[] = "SSID";
+inline constexpr char kSecurity[] = "Security";
+inline constexpr char kSecurityNone[] = "None";
+inline constexpr char kSignalStrength[] = "SignalStrength";
+inline constexpr char kSignalStrengthRssi[] = "SignalStrengthRssi";
+inline constexpr char kWEP_PSK[] = "WEP-PSK";
+inline constexpr char kWEP_8021X[] = "WEP-8021X";
+inline constexpr char kWPA_PSK[] = "WPA-PSK";
+inline constexpr char kWPA2_PSK[] = "WPA2-PSK";
+inline constexpr char kWPA_EAP[] = "WPA-EAP";
+inline constexpr char kPasspointId[] = "PasspointId";
+inline constexpr char kPasspointMatchType[] = "PasspointMatchType";
 }  // namespace wifi
 
+// Deprecated, properties exist for ignoring old ONC config entries.
 namespace wimax_deprecated {
-ONC_EXPORT extern const char kAutoConnect[];
-ONC_EXPORT extern const char kEAP[];
+inline constexpr char kAutoConnect[] = "AutoConnect";
+inline constexpr char kEAP[] = "EAP";
 }  // namespace wimax_deprecated
 
 namespace client_cert {
-ONC_EXPORT extern const char kClientCertProvisioningProfileId[];
-ONC_EXPORT extern const char kClientCertPattern[];
-ONC_EXPORT extern const char kClientCertPKCS11Id[];
-ONC_EXPORT extern const char kClientCertRef[];
-ONC_EXPORT extern const char kClientCertType[];
-ONC_EXPORT extern const char kClientCertTypeNone[];
-ONC_EXPORT extern const char kCommonName[];
-ONC_EXPORT extern const char kEmailAddress[];
-ONC_EXPORT extern const char kEnrollmentURI[];
-ONC_EXPORT extern const char kIssuerCARef[];
-ONC_EXPORT extern const char kIssuerCAPEMs[];
-ONC_EXPORT extern const char kIssuer[];
-ONC_EXPORT extern const char kLocality[];
-ONC_EXPORT extern const char kOrganization[];
-ONC_EXPORT extern const char kOrganizationalUnit[];
-ONC_EXPORT extern const char kPattern[];
-ONC_EXPORT extern const char kProvisioningProfileId[];
-ONC_EXPORT extern const char kPKCS11Id[];
-ONC_EXPORT extern const char kRef[];
-ONC_EXPORT extern const char kSubject[];
+inline constexpr char kClientCertProvisioningProfileId[] =
+    "ClientCertProvisioningProfileId";
+inline constexpr char kClientCertPattern[] = "ClientCertPattern";
+inline constexpr char kClientCertPKCS11Id[] = "ClientCertPKCS11Id";
+inline constexpr char kClientCertRef[] = "ClientCertRef";
+inline constexpr char kClientCertType[] = "ClientCertType";
+inline constexpr char kClientCertTypeNone[] = "None";
+inline constexpr char kCommonName[] = "CommonName";
+inline constexpr char kEmailAddress[] = "EmailAddress";
+inline constexpr char kEnrollmentURI[] = "EnrollmentURI";
+inline constexpr char kIssuerCARef[] = "IssuerCARef";
+inline constexpr char kIssuerCAPEMs[] = "IssuerCAPEMs";
+inline constexpr char kIssuer[] = "Issuer";
+inline constexpr char kLocality[] = "Locality";
+inline constexpr char kOrganization[] = "Organization";
+inline constexpr char kOrganizationalUnit[] = "OrganizationalUnit";
+inline constexpr char kPattern[] = "Pattern";
+inline constexpr char kProvisioningProfileId[] = "ProvisioningProfileId";
+inline constexpr char kPKCS11Id[] = "PKCS11Id";
+inline constexpr char kRef[] = "Ref";
+inline constexpr char kSubject[] = "Subject";
 }  // namespace client_cert
 
 namespace certificate {
-ONC_EXPORT extern const char kAuthority[];
-ONC_EXPORT extern const char kClient[];
-ONC_EXPORT extern const char kGUID[];
-ONC_EXPORT extern const char kPKCS12[];
-ONC_EXPORT extern const char kScope[];
-ONC_EXPORT extern const char kServer[];
-ONC_EXPORT extern const char kTrustBits[];
-ONC_EXPORT extern const char kType[];
-ONC_EXPORT extern const char kWeb[];
-ONC_EXPORT extern const char kX509[];
+inline constexpr char kAuthority[] = "Authority";
+inline constexpr char kClient[] = "Client";
+inline constexpr char kGUID[] = "GUID";
+inline constexpr char kPKCS12[] = "PKCS12";
+inline constexpr char kScope[] = "Scope";
+inline constexpr char kServer[] = "Server";
+inline constexpr char kTrustBits[] = "TrustBits";
+inline constexpr char kType[] = "Type";
+inline constexpr char kWeb[] = "Web";
+inline constexpr char kX509[] = "X509";
 }  // namespace certificate
 
 namespace scope {
-ONC_EXPORT extern const char kDefault[];
-ONC_EXPORT extern const char kExtension[];
-ONC_EXPORT extern const char kId[];
-ONC_EXPORT extern const char kType[];
+inline constexpr char kDefault[] = "Default";
+inline constexpr char kExtension[] = "Extension";
+inline constexpr char kId[] = "Id";
+inline constexpr char kType[] = "Type";
 }  // namespace scope
 
 namespace encrypted {
-ONC_EXPORT extern const char kAES256[];
-ONC_EXPORT extern const char kCipher[];
-ONC_EXPORT extern const char kCiphertext[];
-ONC_EXPORT extern const char kHMACMethod[];
-ONC_EXPORT extern const char kHMAC[];
-ONC_EXPORT extern const char kIV[];
-ONC_EXPORT extern const char kIterations[];
-ONC_EXPORT extern const char kPBKDF2[];
-ONC_EXPORT extern const char kSHA1[];
-ONC_EXPORT extern const char kSalt[];
-ONC_EXPORT extern const char kStretch[];
+inline constexpr char kAES256[] = "AES256";
+inline constexpr char kCipher[] = "Cipher";
+inline constexpr char kCiphertext[] = "Ciphertext";
+inline constexpr char kHMACMethod[] = "HMACMethod";
+inline constexpr char kHMAC[] = "HMAC";
+inline constexpr char kIV[] = "IV";
+inline constexpr char kIterations[] = "Iterations";
+inline constexpr char kPBKDF2[] = "PBKDF2";
+inline constexpr char kSHA1[] = "SHA1";
+inline constexpr char kSalt[] = "Salt";
+inline constexpr char kStretch[] = "Stretch";
 }  // namespace encrypted
 
 namespace eap {
-ONC_EXPORT extern const char kAnonymousIdentity[];
-ONC_EXPORT extern const char kAutomatic[];
-ONC_EXPORT extern const char kEAP_AKA[];
-ONC_EXPORT extern const char kEAP_FAST[];
-ONC_EXPORT extern const char kEAP_SIM[];
-ONC_EXPORT extern const char kEAP_TLS[];
-ONC_EXPORT extern const char kEAP_TTLS[];
-ONC_EXPORT extern const char kGTC[];
-ONC_EXPORT extern const char kIdentity[];
-ONC_EXPORT extern const char kInner[];
-ONC_EXPORT extern const char kLEAP[];
-ONC_EXPORT extern const char kMD5[];
-ONC_EXPORT extern const char kMSCHAP[];
-ONC_EXPORT extern const char kMSCHAPv2[];
-ONC_EXPORT extern const char kOuter[];
-ONC_EXPORT extern const char kPAP[];
-ONC_EXPORT extern const char kPEAP[];
-ONC_EXPORT extern const char kPassword[];
-ONC_EXPORT extern const char kSaveCredentials[];
-ONC_EXPORT extern const char kServerCAPEMs[];
-ONC_EXPORT extern const char kServerCARef[];
-ONC_EXPORT extern const char kServerCARefs[];
-ONC_EXPORT extern const char kSubjectMatch[];
-ONC_EXPORT extern const char kSubjectAlternativeNameMatch[];
-ONC_EXPORT extern const char kTLSVersionMax[];
-ONC_EXPORT extern const char kUseSystemCAs[];
-ONC_EXPORT extern const char kUseProactiveKeyCaching[];
+inline constexpr char kAnonymousIdentity[] = "AnonymousIdentity";
+inline constexpr char kAutomatic[] = "Automatic";
+inline constexpr char kCHAP[] = "CHAP";
+inline constexpr char kDomainSuffixMatch[] = "DomainSuffixMatch";
+inline constexpr char kEAP_AKA[] = "EAP-AKA";
+inline constexpr char kEAP_FAST[] = "EAP-FAST";
+inline constexpr char kEAP_SIM[] = "EAP-SIM";
+inline constexpr char kEAP_TLS[] = "EAP-TLS";
+inline constexpr char kEAP_TTLS[] = "EAP-TTLS";
+inline constexpr char kGTC[] = "GTC";
+inline constexpr char kIdentity[] = "Identity";
+inline constexpr char kInner[] = "Inner";
+inline constexpr char kLEAP[] = "LEAP";
+inline constexpr char kMD5[] = "MD5";
+inline constexpr char kMSCHAP[] = "MSCHAP";
+inline constexpr char kMSCHAPv2[] = "MSCHAPv2";
+inline constexpr char kOuter[] = "Outer";
+inline constexpr char kPAP[] = "PAP";
+inline constexpr char kPEAP[] = "PEAP";
+inline constexpr char kPassword[] = "Password";
+inline constexpr char kSaveCredentials[] = "SaveCredentials";
+inline constexpr char kServerCAPEMs[] = "ServerCAPEMs";
+inline constexpr char kServerCARef[] = "ServerCARef";
+inline constexpr char kServerCARefs[] = "ServerCARefs";
+inline constexpr char kSubjectMatch[] = "SubjectMatch";
+inline constexpr char kSubjectAlternativeNameMatch[] =
+    "SubjectAlternativeNameMatch";
+inline constexpr char kTLSVersionMax[] = "TLSVersionMax";
+inline constexpr char kUseSystemCAs[] = "UseSystemCAs";
+inline constexpr char kUseProactiveKeyCaching[] = "UseProactiveKeyCaching";
 }  // namespace eap
 
 namespace eap_subject_alternative_name_match {
-ONC_EXPORT extern const char kType[];
-ONC_EXPORT extern const char kValue[];
-ONC_EXPORT extern const char kEMAIL[];
-ONC_EXPORT extern const char kDNS[];
-ONC_EXPORT extern const char kURI[];
+inline constexpr char kType[] = "Type";
+inline constexpr char kValue[] = "Value";
+inline constexpr char kEMAIL[] = "EMAIL";
+inline constexpr char kDNS[] = "DNS";
+inline constexpr char kURI[] = "URI";
 }  // namespace eap_subject_alternative_name_match
 
 namespace vpn {
-ONC_EXPORT extern const char kArcVpn[];
-ONC_EXPORT extern const char kAutoConnect[];
-ONC_EXPORT extern const char kHost[];
-ONC_EXPORT extern const char kIPsec[];
-ONC_EXPORT extern const char kL2TP[];
-ONC_EXPORT extern const char kOpenVPN[];
-ONC_EXPORT extern const char kPassword[];
-ONC_EXPORT extern const char kSaveCredentials[];
-ONC_EXPORT extern const char kThirdPartyVpn[];
-ONC_EXPORT extern const char kTypeL2TP_IPsec[];
-ONC_EXPORT extern const char kType[];
-ONC_EXPORT extern const char kUsername[];
-ONC_EXPORT extern const char kWireGuard[];
+inline constexpr char kArcVpn[] = "ARCVPN";
+inline constexpr char kAutoConnect[] = "AutoConnect";
+inline constexpr char kHost[] = "Host";
+inline constexpr char kIPsec[] = "IPsec";
+inline constexpr char kL2TP[] = "L2TP";
+inline constexpr char kOpenVPN[] = "OpenVPN";
+inline constexpr char kPassword[] = "Password";
+inline constexpr char kSaveCredentials[] = "SaveCredentials";
+inline constexpr char kThirdPartyVpn[] = "ThirdPartyVPN";
+inline constexpr char kTypeL2TP_IPsec[] = "L2TP-IPsec";
+inline constexpr char kType[] = "Type";
+inline constexpr char kUsername[] = "Username";
+inline constexpr char kWireGuard[] = "WireGuard";
 }  // namespace vpn
 
 namespace ipsec {
-ONC_EXPORT extern const char kAuthenticationType[];
-ONC_EXPORT extern const char kCert[];
-ONC_EXPORT extern const char kEAP[];
-ONC_EXPORT extern const char kGroup[];
-ONC_EXPORT extern const char kIKEVersion[];
-ONC_EXPORT extern const char kPSK[];
-ONC_EXPORT extern const char kServerCAPEMs[];
-ONC_EXPORT extern const char kServerCARef[];
-ONC_EXPORT extern const char kServerCARefs[];
-ONC_EXPORT extern const char kXAUTH[];
+inline constexpr char kAuthenticationType[] = "AuthenticationType";
+inline constexpr char kCert[] = "Cert";
+inline constexpr char kEAP[] = "EAP";
+inline constexpr char kGroup[] = "Group";
+inline constexpr char kIKEVersion[] = "IKEVersion";
+inline constexpr char kLocalIdentity[] = "LocalIdentity";
+inline constexpr char kPSK[] = "PSK";
+inline constexpr char kRemoteIdentity[] = "RemoteIdentity";
+inline constexpr char kServerCAPEMs[] = "ServerCAPEMs";
+inline constexpr char kServerCARef[] = "ServerCARef";
+inline constexpr char kServerCARefs[] = "ServerCARefs";
+inline constexpr char kXAUTH[] = "XAUTH";
 }  // namespace ipsec
 
 namespace l2tp {
-ONC_EXPORT extern const char kLcpEchoDisabled[];
-ONC_EXPORT extern const char kPassword[];
-ONC_EXPORT extern const char kSaveCredentials[];
-ONC_EXPORT extern const char kUsername[];
+inline constexpr char kLcpEchoDisabled[] = "LcpEchoDisabled";
+inline constexpr char kPassword[] = "Password";
+inline constexpr char kSaveCredentials[] = "SaveCredentials";
+inline constexpr char kUsername[] = "Username";
 }  // namespace l2tp
 
 namespace openvpn {
-ONC_EXPORT extern const char kAuthNoCache[];
-ONC_EXPORT extern const char kAuthRetry[];
-ONC_EXPORT extern const char kAuth[];
-ONC_EXPORT extern const char kCipher[];
-ONC_EXPORT extern const char kCompLZO[];
-ONC_EXPORT extern const char kCompNoAdapt[];
-ONC_EXPORT extern const char kCompressionAlgorithm[];
-ONC_EXPORT extern const char kExtraHosts[];
-ONC_EXPORT extern const char kIgnoreDefaultRoute[];
-ONC_EXPORT extern const char kInteract[];
-ONC_EXPORT extern const char kKeyDirection[];
-ONC_EXPORT extern const char kNoInteract[];
-ONC_EXPORT extern const char kNone[];
-ONC_EXPORT extern const char kNsCertType[];
-ONC_EXPORT extern const char kOTP[];
-ONC_EXPORT extern const char kPassword[];
-ONC_EXPORT extern const char kPort[];
-ONC_EXPORT extern const char kProto[];
-ONC_EXPORT extern const char kPushPeerInfo[];
-ONC_EXPORT extern const char kRemoteCertEKU[];
-ONC_EXPORT extern const char kRemoteCertKU[];
-ONC_EXPORT extern const char kRemoteCertTLS[];
-ONC_EXPORT extern const char kRenegSec[];
-ONC_EXPORT extern const char kServerCAPEMs[];
-ONC_EXPORT extern const char kServerCARef[];
-ONC_EXPORT extern const char kServerCARefs[];
-ONC_EXPORT extern const char kServerCertPEM[];
-ONC_EXPORT extern const char kServerCertRef[];
-ONC_EXPORT extern const char kServerPollTimeout[];
-ONC_EXPORT extern const char kServer[];
-ONC_EXPORT extern const char kShaper[];
-ONC_EXPORT extern const char kStaticChallenge[];
-ONC_EXPORT extern const char kTLSAuthContents[];
-ONC_EXPORT extern const char kTLSRemote[];
-ONC_EXPORT extern const char kTLSVersionMin[];
-ONC_EXPORT extern const char kUserAuthenticationType[];
-ONC_EXPORT extern const char kVerb[];
-ONC_EXPORT extern const char kVerifyHash[];
-ONC_EXPORT extern const char kVerifyX509[];
+inline constexpr char kAuthNoCache[] = "AuthNoCache";
+inline constexpr char kAuthRetry[] = "AuthRetry";
+inline constexpr char kAuth[] = "Auth";
+inline constexpr char kCipher[] = "Cipher";
+inline constexpr char kCompLZO[] = "CompLZO";
+inline constexpr char kCompNoAdapt[] = "CompNoAdapt";
+inline constexpr char kCompressionAlgorithm[] = "CompressionAlgorithm";
+inline constexpr char kExtraHosts[] = "ExtraHosts";
+inline constexpr char kIgnoreDefaultRoute[] = "IgnoreDefaultRoute";
+inline constexpr char kInteract[] = "interact";
+inline constexpr char kKeyDirection[] = "KeyDirection";
+inline constexpr char kNoInteract[] = "nointeract";
+inline constexpr char kNone[] = "none";
+inline constexpr char kNsCertType[] = "NsCertType";
+inline constexpr char kOTP[] = "OTP";
+inline constexpr char kPassword[] = "Password";
+inline constexpr char kPort[] = "Port";
+inline constexpr char kProto[] = "Proto";
+inline constexpr char kPushPeerInfo[] = "PushPeerInfo";
+inline constexpr char kRemoteCertEKU[] = "RemoteCertEKU";
+inline constexpr char kRemoteCertKU[] = "RemoteCertKU";
+inline constexpr char kRemoteCertTLS[] = "RemoteCertTLS";
+inline constexpr char kRenegSec[] = "RenegSec";
+inline constexpr char kServerCAPEMs[] = "ServerCAPEMs";
+inline constexpr char kServerCARef[] = "ServerCARef";
+inline constexpr char kServerCARefs[] = "ServerCARefs";
+inline constexpr char kServerCertPEM[] = "ServerCertPEM";
+inline constexpr char kServerCertRef[] = "ServerCertRef";
+inline constexpr char kServerPollTimeout[] = "ServerPollTimeout";
+inline constexpr char kServer[] = "server";
+inline constexpr char kShaper[] = "Shaper";
+inline constexpr char kStaticChallenge[] = "StaticChallenge";
+inline constexpr char kTLSAuthContents[] = "TLSAuthContents";
+inline constexpr char kTLSRemote[] = "TLSRemote";
+inline constexpr char kTLSVersionMin[] = "TLSVersionMin";
+inline constexpr char kUserAuthenticationType[] = "UserAuthenticationType";
+inline constexpr char kVerb[] = "Verb";
+inline constexpr char kVerifyHash[] = "VerifyHash";
+inline constexpr char kVerifyX509[] = "VerifyX509";
 }  // namespace openvpn
 
 namespace wireguard {
-ONC_EXPORT extern const char kAddress[];
-ONC_EXPORT extern const char kAllowedIPs[];
-ONC_EXPORT extern const char kEndpoint[];
-ONC_EXPORT extern const char kPeers[];
-ONC_EXPORT extern const char kPersistentKeepalive[];
-ONC_EXPORT extern const char kPresharedKey[];
-ONC_EXPORT extern const char kPrivateKey[];
-ONC_EXPORT extern const char kPublicKey[];
+inline constexpr char kAllowedIPs[] = "AllowedIPs";
+inline constexpr char kEndpoint[] = "Endpoint";
+inline constexpr char kIPAddresses[] = "IPAddresses";
+inline constexpr char kPeers[] = "Peers";
+inline constexpr char kPersistentKeepalive[] = "PersistentKeepalive";
+inline constexpr char kPresharedKey[] = "PresharedKey";
+inline constexpr char kPrivateKey[] = "PrivateKey";
+inline constexpr char kPublicKey[] = "PublicKey";
 }  // namespace wireguard
 
 namespace openvpn_compression_algorithm {
-ONC_EXPORT extern const char kFramingOnly[];
-ONC_EXPORT extern const char kLz4[];
-ONC_EXPORT extern const char kLz4V2[];
-ONC_EXPORT extern const char kLzo[];
-ONC_EXPORT extern const char kNone[];
+inline constexpr char kFramingOnly[] = "FramingOnly";
+inline constexpr char kLz4[] = "LZ4";
+inline constexpr char kLz4V2[] = "LZ4-V2";
+inline constexpr char kLzo[] = "LZO";
+inline constexpr char kNone[] = "None";
 }  // namespace openvpn_compression_algorithm
 
 namespace openvpn_user_auth_type {
-ONC_EXPORT extern const char kNone[];
-ONC_EXPORT extern const char kOTP[];
-ONC_EXPORT extern const char kPassword[];
-ONC_EXPORT extern const char kPasswordAndOTP[];
-}  // openvpn_user_auth_type
+inline constexpr char kNone[] = "None";
+inline constexpr char kOTP[] = "OTP";
+inline constexpr char kPassword[] = "Password";
+inline constexpr char kPasswordAndOTP[] = "PasswordAndOTP";
+}  // namespace openvpn_user_auth_type
 
 namespace third_party_vpn {
-ONC_EXPORT extern const char kExtensionID[];
-ONC_EXPORT extern const char kProviderName[];
-}  // third_party_vpn
+inline constexpr char kExtensionID[] = "ExtensionID";
+inline constexpr char kProviderName[] = "ProviderName";
+}  // namespace third_party_vpn
 
 namespace arc_vpn {
-ONC_EXPORT extern const char kTunnelChrome[];
+// Deprecated. Property left here for ONC backward compatibility. See
+// b/185202698 for details.
+inline constexpr char kTunnelChrome[] = "TunnelChrome";
 }  // namespace arc_vpn
 
 namespace verify_x509 {
-ONC_EXPORT extern const char kName[];
-ONC_EXPORT extern const char kType[];
+inline constexpr char kName[] = "Name";
+inline constexpr char kType[] = "Type";
 
 namespace types {
-ONC_EXPORT extern const char kName[];
-ONC_EXPORT extern const char kNamePrefix[];
-ONC_EXPORT extern const char kSubject[];
+inline constexpr char kName[] = "name";
+inline constexpr char kNamePrefix[] = "name-prefix";
+inline constexpr char kSubject[] = "subject";
 }  // namespace types
 }  // namespace verify_x509
 
 namespace substitutes {
-ONC_EXPORT extern const char kLoginEmail[];
-ONC_EXPORT extern const char kLoginID[];
-ONC_EXPORT extern const char kCertSANEmail[];
-ONC_EXPORT extern const char kCertSANUPN[];
-ONC_EXPORT extern const char kCertSubjectCommonName[];
-ONC_EXPORT extern const char kDeviceSerialNumber[];
-ONC_EXPORT extern const char kDeviceAssetId[];
-ONC_EXPORT extern const char kPasswordPlaceholderVerbatim[];
+inline constexpr char kLoginEmail[] = "LOGIN_EMAIL";
+inline constexpr char kLoginID[] = "LOGIN_ID";
+inline constexpr char kCertSANEmail[] = "CERT_SAN_EMAIL";
+inline constexpr char kCertSANUPN[] = "CERT_SAN_UPN";
+inline constexpr char kCertSubjectCommonName[] = "CERT_SUBJECT_COMMON_NAME";
+inline constexpr char kDeviceSerialNumber[] = "DEVICE_SERIAL_NUMBER";
+inline constexpr char kDeviceAssetId[] = "DEVICE_ASSET_ID";
+// The password placeholder is defined as ${PASSWORD} because it's compared
+// verbatim against the policy-specified password field, and if it matches,
+// another bool (|shill::kEapUseLoginPasswordProperty|) is set, which makes
+// shill replace the whole password field.
+// The other placeholders above on the other hand are replaced using
+// VariableExpander.
+inline constexpr char kPasswordPlaceholderVerbatim[] = "${PASSWORD}";
 }  // namespace substitutes
 
 namespace proxy {
-ONC_EXPORT extern const char kDirect[];
-ONC_EXPORT extern const char kExcludeDomains[];
-ONC_EXPORT extern const char kFtp[];
-ONC_EXPORT extern const char kHost[];
-ONC_EXPORT extern const char kHttp[];
-ONC_EXPORT extern const char kHttps[];
-ONC_EXPORT extern const char kManual[];
-ONC_EXPORT extern const char kPAC[];
-ONC_EXPORT extern const char kPort[];
-ONC_EXPORT extern const char kSocks[];
-ONC_EXPORT extern const char kType[];
-ONC_EXPORT extern const char kWPAD[];
+inline constexpr char kDirect[] = "Direct";
+inline constexpr char kExcludeDomains[] = "ExcludeDomains";
+inline constexpr char kFtp[] = "FTPProxy";
+inline constexpr char kHost[] = "Host";
+inline constexpr char kHttp[] = "HTTPProxy";
+inline constexpr char kHttps[] = "SecureHTTPProxy";
+inline constexpr char kManual[] = "Manual";
+inline constexpr char kPAC[] = "PAC";
+inline constexpr char kPort[] = "Port";
+inline constexpr char kSocks[] = "SOCKS";
+inline constexpr char kType[] = "Type";
+inline constexpr char kWPAD[] = "WPAD";
 }  // namespace proxy
 
 namespace global_network_config {
-ONC_EXPORT extern const char kAllowOnlyPolicyNetworksToAutoconnect[];
-ONC_EXPORT extern const char kAllowOnlyPolicyNetworksToConnect[];
-ONC_EXPORT extern const char kAllowOnlyPolicyNetworksToConnectIfAvailable[];
-ONC_EXPORT extern const char kBlacklistedHexSSIDs[];  // Deprecated
-ONC_EXPORT extern const char kBlockedHexSSIDs[];
-ONC_EXPORT extern const char kDisableNetworkTypes[];
-}  // global_network_config
+inline constexpr char kAllowAPNModification[] = "AllowAPNModification";
+inline constexpr char kAllowCellularSimLock[] = "AllowCellularSimLock";
+inline constexpr char kAllowCellularHotspot[] = "AllowCellularHotspot";
+inline constexpr char kAllowOnlyPolicyCellularNetworks[] =
+    "AllowOnlyPolicyCellularNetworks";
+inline constexpr char kAllowOnlyPolicyNetworksToAutoconnect[] =
+    "AllowOnlyPolicyNetworksToAutoconnect";
+// AllowOnlyPolicyNetworksToConnect and
+// AllowOnlyPolicyNetworksToConnectIfAvailable field are currently only applied
+// to WiFi networks. TODO(crbug.com/1234561): Fix this when ONC field is
+// updated.
+inline constexpr char kAllowOnlyPolicyWiFiToConnect[] =
+    "AllowOnlyPolicyNetworksToConnect";
+inline constexpr char kAllowOnlyPolicyWiFiToConnectIfAvailable[] =
+    "AllowOnlyPolicyNetworksToConnectIfAvailable";
+inline constexpr char kAllowTextMessages[] = "AllowTextMessages";
+// Deprecated
+inline constexpr char kBlacklistedHexSSIDs[] = "BlacklistedHexSSIDs";
+inline constexpr char kBlockedHexSSIDs[] = "BlockedHexSSIDs";
+inline constexpr char kDisableNetworkTypes[] = "DisableNetworkTypes";
+inline constexpr char kRecommendedValuesAreEphemeral[] =
+    "RecommendedValuesAreEphemeral";
+inline constexpr char kPSIMAdminAssignedAPNIds[] = "PSIMAdminAssignedAPNIds";
+inline constexpr char kPSIMAdminAssignedAPNs[] = "PSIMAdminAssignedAPNs";
+inline constexpr char kUserCreatedNetworkConfigurationsAreEphemeral[] =
+    "UserCreatedNetworkConfigurationsAreEphemeral";
+inline constexpr char kDisconnectWiFiOnEthernet[] = "DisconnectWiFiOnEthernet";
+inline constexpr char kDisconnectWiFiOnEthernetWhenConnected[] =
+    "WhenConnected";
+inline constexpr char kDisconnectWiFiOnEthernetWhenOnline[] = "WhenOnline";
+}  // namespace global_network_config
 
 namespace device_state {
-ONC_EXPORT extern const char kUninitialized[];
-ONC_EXPORT extern const char kDisabled[];
-ONC_EXPORT extern const char kEnabling[];
-ONC_EXPORT extern const char kEnabled[];
-}  // device_state
+inline constexpr char kUninitialized[] = "Uninitialized";
+inline constexpr char kDisabled[] = "Disabled";
+inline constexpr char kEnabling[] = "Enabling";
+inline constexpr char kEnabled[] = "Enabled";
+}  // namespace device_state
 
 }  // namespace onc
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,8 +13,8 @@
 namespace gfx {
 
 HRGN CreateHRGNFromSkRegion(const SkRegion& region) {
-  base::win::ScopedRegion temp(::CreateRectRgn(0, 0, 0, 0));
-  base::win::ScopedRegion result(::CreateRectRgn(0, 0, 0, 0));
+  base::win::ScopedGDIObject<HRGN> temp(::CreateRectRgn(0, 0, 0, 0));
+  base::win::ScopedGDIObject<HRGN> result(::CreateRectRgn(0, 0, 0, 0));
 
   for (SkRegion::Iterator i(region); !i.done(); i.next()) {
     const SkIRect& rect = i.rect();

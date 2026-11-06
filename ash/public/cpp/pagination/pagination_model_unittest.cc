@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,10 @@
 
 #include "ash/public/cpp/pagination/pagination_model_observer.h"
 #include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "ui/views/test/widget_test.h"
 
@@ -20,6 +21,11 @@ namespace test {
 class TestPaginationModelObserver : public PaginationModelObserver {
  public:
   TestPaginationModelObserver() = default;
+
+  TestPaginationModelObserver(const TestPaginationModelObserver&) = delete;
+  TestPaginationModelObserver& operator=(const TestPaginationModelObserver&) =
+      delete;
+
   ~TestPaginationModelObserver() override = default;
 
   void Reset() {
@@ -98,7 +104,8 @@ class TestPaginationModelObserver : public PaginationModelObserver {
 
   void TransitionEnded() override { ++transition_ended_call_count_; }
 
-  PaginationModel* model_ = nullptr;
+  // set in PaginationModelTest
+  raw_ptr<PaginationModel> model_ = nullptr;
 
   int expected_page_selection_ = 0;
   int expected_transition_start_ = 0;
@@ -116,14 +123,16 @@ class TestPaginationModelObserver : public PaginationModelObserver {
 
   int transition_start_call_count_ = 0;
   int transition_ended_call_count_ = 0;
-  base::RunLoop* wait_loop_ = nullptr;
-
-  DISALLOW_COPY_AND_ASSIGN(TestPaginationModelObserver);
+  raw_ptr<base::RunLoop> wait_loop_ = nullptr;
 };
 
 class PaginationModelTest : public views::test::WidgetTest {
  public:
   PaginationModelTest() = default;
+
+  PaginationModelTest(const PaginationModelTest&) = delete;
+  PaginationModelTest& operator=(const PaginationModelTest&) = delete;
+
   ~PaginationModelTest() override = default;
 
   // testing::Test overrides:
@@ -132,14 +141,15 @@ class PaginationModelTest : public views::test::WidgetTest {
     widget_.reset(CreateTopLevelPlatformWidget());
     pagination_ = std::make_unique<PaginationModel>(widget_->GetContentsView());
     pagination_->SetTotalPages(5);
-    pagination_->SetTransitionDurations(base::TimeDelta::FromMilliseconds(1),
-                                        base::TimeDelta::FromMilliseconds(1));
+    pagination_->SetTransitionDurations(base::Milliseconds(1),
+                                        base::Milliseconds(1));
     observer_.set_model(pagination_.get());
     pagination_->AddObserver(&observer_);
   }
   void TearDown() override {
     pagination_->RemoveObserver(&observer_);
     observer_.set_model(NULL);
+    observer_.Reset();
     widget_.reset();
     views::test::WidgetTest::TearDown();
   }
@@ -169,9 +179,8 @@ class PaginationModelTest : public views::test::WidgetTest {
   void WaitForRevertAnimation() {
     while (pagination()->IsRevertingCurrentTransition()) {
       base::RunLoop run_loop;
-      base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
-          FROM_HERE, run_loop.QuitClosure(),
-          base::TimeDelta::FromMilliseconds(100));
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+          FROM_HERE, run_loop.QuitClosure(), base::Milliseconds(100));
       run_loop.Run();
     }
   }
@@ -184,8 +193,6 @@ class PaginationModelTest : public views::test::WidgetTest {
   WidgetAutoclosePtr widget_;
   std::unique_ptr<PaginationModel> pagination_;
   std::unique_ptr<base::RunLoop> paging_animation_wait_loop_;
-
-  DISALLOW_COPY_AND_ASSIGN(PaginationModelTest);
 };
 
 TEST_F(PaginationModelTest, SelectPage) {
@@ -512,6 +519,24 @@ TEST_F(PaginationModelTest, NoTransitionEndForRevertingAnimation) {
   pagination()->SelectPageRelative(1, /*animate=*/true);
   WaitForPagingAnimation();
   WaitForRevertAnimation();
+  EXPECT_EQ(1, observer_.transition_start_call_count());
+  EXPECT_EQ(1, observer_.transition_end_call_count());
+}
+
+// Tests that a canceled scroll will call both TransitionStart and
+// TransitionEnd.
+TEST_F(PaginationModelTest, CancelAnimationHasOneTransitionEnd) {
+  const int kStartPage = 2;
+
+  // Scroll to the next page (negative delta) and cancel it.
+  SetStartPageAndExpects(kStartPage, 0, 1, 0);
+  pagination()->StartScroll();
+  pagination()->UpdateScroll(-0.1);
+  EXPECT_EQ(kStartPage + 1, pagination()->transition().target_page);
+  pagination()->EndScroll(true);  // Cancel transition
+  WaitForPagingAnimation();
+  EXPECT_EQ(0, observer_.selection_count());
+
   EXPECT_EQ(1, observer_.transition_start_call_count());
   EXPECT_EQ(1, observer_.transition_end_call_count());
 }

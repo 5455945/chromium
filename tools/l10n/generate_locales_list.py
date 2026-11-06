@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2021 The Chromium Authors. All rights reserved.
+# Copyright 2021 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """Generates the list of locales with strings for the current platform.
@@ -53,6 +53,7 @@ def gen_locales(locales):  # type: (list) -> str
 
 def main():  # type: () -> None
     import doctest
+
     doctest.testmod()
 
     if len(sys.argv) < 2:

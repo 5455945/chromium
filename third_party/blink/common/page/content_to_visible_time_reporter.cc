@@ -1,34 +1,41 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/public/common/page/content_to_visible_time_reporter.h"
 
+#include <algorithm>
+#include <string_view>
 #include <utility>
+#include <variant>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/debug/dump_without_crashing.h"
+#include "base/dcheck_is_on.h"
+#include "base/functional/bind.h"
+#include "base/functional/function_ref.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
-#include "base/trace_event/trace_event.h"
-#include "third_party/blink/public/mojom/page/record_content_to_visible_time_request.mojom.h"
-#include "ui/gfx/presentation_feedback.h"
+#include "base/strings/strcat.h"
+#include "base/time/time.h"
+#include "base/trace_event/histogram_scope.h"
+#include "base/trace_event/trace_id_helper.h"
+#include "base/trace_event/typed_macros.h"
+#include "base/tracing/protos/chrome_track_event.pbzero.h"
+#include "components/viz/common/frame_timing_details.h"
+#include "third_party/abseil-cpp/absl/functional/overload.h"
+#include "third_party/blink/public/common/page/content_to_visible_time_request.h"
+#include "third_party/perfetto/include/perfetto/tracing/event_context.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 namespace blink {
 
 namespace {
 
-//  Used to generate unique "TabSwitching::Latency" event ids. Note: The address
-//  of ContentToVisibleTimeReporter can't be used as an id because a single
-//  ContentToVisibleTimeReporter can generate multiple overlapping events.
-int g_num_trace_events_in_process = 0;
+using TabSwitchResult = ContentToVisibleTimeReporter::TabSwitchResult;
 
-const char* GetHistogramSuffix(
-    bool has_saved_frames,
-    const mojom::RecordContentToVisibleTimeRequest& start_state) {
-  if (has_saved_frames)
+const char* GetSavedFrameHistogramSuffix(
+    const VisibleTimeEvent::TabSwitchReason& start_state) {
+  if (start_state.had_saved_frame_at_start) {
     return "WithSavedFrames";
+  }
 
   if (start_state.destination_is_loaded) {
     return "NoSavedFrames_Loaded";
@@ -37,184 +44,252 @@ const char* GetHistogramSuffix(
   }
 }
 
-void ReportUnOccludedMetric(const base::TimeTicks requested_time,
-                            const gfx::PresentationFeedback& feedback) {
-  const base::TimeDelta delta = feedback.timestamp - requested_time;
-  UMA_HISTOGRAM_TIMES("Aura.WebContentsWindowUnOccludedTime", delta);
+const char* GetFrozenStateHistogramSuffix(
+    const VisibleTimeEvent::TabSwitchReason& start_state) {
+  if (!start_state.destination_is_loaded) {
+    return "FrozenState.NotLoaded";
+  }
+  return start_state.destination_is_frozen ? "FrozenState.Loaded_Frozen"
+                                           : "FrozenState.Loaded_Unfrozen";
+}
+
+void RecordTabSwitchHistogramVariants(
+    std::string_view histogram_name,
+    const VisibleTimeEvent::TabSwitchReason& start_state,
+    base::FunctionRef<void(std::string_view)> record_histogram) {
+  record_histogram(histogram_name);
+  record_histogram(base::StrCat(
+      {histogram_name, ".", GetSavedFrameHistogramSuffix(start_state)}));
+  record_histogram(base::StrCat(
+      {histogram_name, ".", GetFrozenStateHistogramSuffix(start_state)}));
 }
 
 void RecordBackForwardCacheRestoreMetric(
     const base::TimeTicks requested_time,
-    const gfx::PresentationFeedback& feedback) {
-  const base::TimeDelta delta = feedback.timestamp - requested_time;
+    base::TimeTicks presentation_timestamp) {
+  const base::TimeDelta delta = presentation_timestamp - requested_time;
   // Histogram to record the content to visible duration after restoring a page
   // from back-forward cache. Here min, max bucket size are same as the
   // "PageLoad.PaintTiming.NavigationToFirstContentfulPaint" metric.
   base::UmaHistogramCustomTimes(
       "BackForwardCache.Restore.NavigationToFirstPaint", delta,
-      base::TimeDelta::FromMilliseconds(10), base::TimeDelta::FromMinutes(10),
-      100);
+      base::Milliseconds(10), base::Minutes(10), 100);
+}
+
+bool IsLatencyTraceCategoryEnabled() {
+  // Avoid unnecessary work to compute a track.
+  return TRACE_EVENT_CATEGORY_ENABLED("latency");
+}
+
+void RecordTabSwitchTraceEvent(
+    base::TimeTicks start_time,
+    base::TimeTicks end_time,
+    TabSwitchResult result,
+    const VisibleTimeEvent::TabSwitchReason& start_state,
+    uint64_t flow_id) {
+  if (!IsLatencyTraceCategoryEnabled()) {
+    return;
+  }
+
+  using TabSwitchMeasurement = perfetto::protos::pbzero::TabSwitchMeasurement;
+  DCHECK_GE(end_time, start_time);
+  const auto track =
+      perfetto::Track::Global(base::trace_event::GetNextGlobalTraceId());
+  const auto flow = perfetto::Flow::Global(flow_id);
+  TRACE_EVENT_BEGIN(
+      "latency", "TabSwitching::Latency", track, start_time,
+      [&](perfetto::EventContext ctx) {
+        TabSwitchMeasurement* measurement =
+            ctx.event<perfetto::protos::pbzero::ChromeTrackEvent>()
+                ->set_tab_switch_measurement();
+        switch (result) {
+          case TabSwitchResult::kSuccess:
+            measurement->set_result(TabSwitchMeasurement::RESULT_SUCCESS);
+            break;
+          case TabSwitchResult::kIncomplete:
+            measurement->set_result(TabSwitchMeasurement::RESULT_INCOMPLETE);
+            break;
+          case TabSwitchResult::kMissedTabHide:
+            measurement->set_result(
+                TabSwitchMeasurement::RESULT_MISSED_TAB_HIDE);
+            break;
+        }
+        if (start_state.had_saved_frame_at_start) {
+          measurement->set_tab_state(
+              TabSwitchMeasurement::STATE_WITH_SAVED_FRAMES);
+        } else if (start_state.destination_is_loaded) {
+          measurement->set_tab_state(
+              TabSwitchMeasurement::STATE_LOADED_NO_SAVED_FRAMES);
+        } else {
+          measurement->set_tab_state(
+              TabSwitchMeasurement::STATE_NOT_LOADED_NO_SAVED_FRAMES);
+        }
+      });
+  TRACE_EVENT_END("latency", track, end_time, flow);
+}
+
+void RecordTabSwitchHistogramsAndTraceEvent(
+    TabSwitchResult tab_switch_result,
+    base::TimeTicks start_time,
+    base::TimeTicks presentation_timestamp,
+    const VisibleTimeEvent::TabSwitchReason& start_state) {
+  uint64_t event_id = base::trace_event::GetNextGlobalTraceId();
+  RecordTabSwitchTraceEvent(start_time, presentation_timestamp,
+                            tab_switch_result, start_state, event_id);
+
+  const auto tab_switch_duration = presentation_timestamp - start_time;
+
+  base::trace_event::HistogramScope scoped_event(event_id);
+
+  // Record result histogram.
+  RecordTabSwitchHistogramVariants(
+      "Browser.Tabs.TabSwitchResult3", start_state,
+      [tab_switch_result](std::string_view histogram_name) {
+        base::UmaHistogramEnumeration(histogram_name, tab_switch_result);
+      });
+
+  // Record latency histogram.
+  const auto record_duration_histogram =
+      [tab_switch_duration](std::string_view histogram_name) {
+        base::UmaHistogramMediumTimes(histogram_name, tab_switch_duration);
+      };
+  switch (tab_switch_result) {
+    case TabSwitchResult::kSuccess:
+      RecordTabSwitchHistogramVariants("Browser.Tabs.TotalSwitchDuration3",
+                                       start_state, record_duration_histogram);
+      break;
+    case TabSwitchResult::kMissedTabHide:
+    case TabSwitchResult::kIncomplete:
+      RecordTabSwitchHistogramVariants(
+          "Browser.Tabs.TotalIncompleteSwitchDuration3", start_state,
+          record_duration_histogram);
+      break;
+  }
 }
 
 }  // namespace
-
-void UpdateRecordContentToVisibleTimeRequest(
-    mojom::RecordContentToVisibleTimeRequest const& from,
-    mojom::RecordContentToVisibleTimeRequest& to) {
-  to.event_start_time = std::min(to.event_start_time, from.event_start_time);
-  to.destination_is_loaded |= from.destination_is_loaded;
-  to.show_reason_tab_switching |= from.show_reason_tab_switching;
-  to.show_reason_unoccluded |= from.show_reason_unoccluded;
-  to.show_reason_bfcache_restore |= from.show_reason_bfcache_restore;
-}
 
 ContentToVisibleTimeReporter::ContentToVisibleTimeReporter() = default;
 
 ContentToVisibleTimeReporter::~ContentToVisibleTimeReporter() = default;
 
-base::OnceCallback<void(const gfx::PresentationFeedback&)>
+ContentToVisibleTimeReporter::SuccessfulPresentationTimeCallback
 ContentToVisibleTimeReporter::TabWasShown(
-    bool has_saved_frames,
-    mojom::RecordContentToVisibleTimeRequestPtr start_state,
-    base::TimeTicks widget_visibility_request_timestamp) {
-  DCHECK(!start_state->event_start_time.is_null());
-  DCHECK(!widget_visibility_request_timestamp.is_null());
-  DCHECK(!tab_switch_start_state_);
-  DCHECK(widget_visibility_request_timestamp_.is_null());
+    RecordContentToVisibleTimeRequest start_state) {
+#if DCHECK_IS_ON()
+  for (const auto& event : start_state.events) {
+    DCHECK(!event.event_start_time.is_null());
+  }
+#endif
 
-  // Invalidate previously issued callbacks, to avoid accessing a null
-  // |tab_switch_start_state_|.
-  //
-  // TODO(https://crbug.com/1121339): Make sure that TabWasShown() is never
-  // called twice without a call to TabWasHidden() in-between, and remove this
-  // mitigation.
-  weak_ptr_factory_.InvalidateWeakPtrs();
+  const bool has_tab_switch = std::ranges::any_of(
+      start_state.events, [](const VisibleTimeEvent& event) {
+        return std::holds_alternative<VisibleTimeEvent::TabSwitchReason>(
+            event.reason);
+      });
+  const bool has_bfcache_restore = std::ranges::any_of(
+      start_state.events, [](const VisibleTimeEvent& event) {
+        return std::holds_alternative<VisibleTimeEvent::BFCacheRestoreReason>(
+            event.reason);
+      });
+  base::UmaHistogramBoolean(
+      "Browser.Tabs.TabShowReason.BothTabSwitchingAndBfcache",
+      has_tab_switch && has_bfcache_restore);
 
-  has_saved_frames_ = has_saved_frames;
-  tab_switch_start_state_ = std::move(start_state);
-  widget_visibility_request_timestamp_ = widget_visibility_request_timestamp;
+  if (tab_switch_start_state_ && has_tab_switch) {
+    for (const VisibleTimeEvent& event : tab_switch_start_state_->events) {
+      if (std::holds_alternative<VisibleTimeEvent::TabSwitchReason>(
+              event.reason)) {
+        // Missed a tab hide, so record an incomplete tab switch before
+        // resetting the state.
+        //
+        // This can happen when the tab is backgrounded, but still visible in a
+        // visible capturer or VR, so the widget is never notified to hide.
+        // TabWasHidden is only called correctly for *hidden* capturers (such as
+        // picture-in-picture). See
+        // WebContentsImpl::CalculatePageVisibilityState for more details.
+        //
+        // TODO(crbug.com/40211849): Refactor visibility states to call
+        // TabWasHidden every time a tab is backgrounded, even if the content is
+        // still visible.
+        RecordTabSwitchHistogramsAndTraceEvent(
+            TabSwitchResult::kMissedTabHide, event.event_start_time,
+            base::TimeTicks::Now(),
+            std::get<VisibleTimeEvent::TabSwitchReason>(event.reason));
+      }
+    }
+  }
+  // Note: Usually `tab_switch_start_state_` should be null here, but sometimes
+  // it isn't (in practice, this happens on Mac - see crbug.com/1284500). This
+  // can happen if TabWasShown() gets called twice without TabWasHidden() in
+  // between (which is supposed to be impossible).
+  // DCHECK(tab_switch_start_state_.empty());
 
-  // |tab_switch_start_state_| is only reset by RecordHistogramsAndTraceEvents
-  // once the metrics have been emitted.
+  OverwriteTabSwitchStartState(std::move(start_state));
+
+  // |tab_switch_start_state_| is only reset by ResetTabSwitchStartState once
+  // the metrics have been emitted.
   return base::BindOnce(
       &ContentToVisibleTimeReporter::RecordHistogramsAndTraceEvents,
-      weak_ptr_factory_.GetWeakPtr(), false /* is_incomplete */,
-      tab_switch_start_state_->show_reason_tab_switching,
-      tab_switch_start_state_->show_reason_unoccluded,
-      tab_switch_start_state_->show_reason_bfcache_restore);
-}
-
-base::OnceCallback<void(const gfx::PresentationFeedback&)>
-ContentToVisibleTimeReporter::TabWasShown(
-    bool has_saved_frames,
-    base::TimeTicks event_start_time,
-    bool destination_is_loaded,
-    bool show_reason_tab_switching,
-    bool show_reason_unoccluded,
-    bool show_reason_bfcache_restore,
-    base::TimeTicks widget_visibility_request_timestamp) {
-  return TabWasShown(
-      has_saved_frames,
-      mojom::RecordContentToVisibleTimeRequest::New(
-          event_start_time, destination_is_loaded, show_reason_tab_switching,
-          show_reason_unoccluded, show_reason_bfcache_restore),
-      widget_visibility_request_timestamp);
+      weak_ptr_factory_.GetWeakPtr(), TabSwitchResult::kSuccess);
 }
 
 void ContentToVisibleTimeReporter::TabWasHidden() {
   if (tab_switch_start_state_) {
-    RecordHistogramsAndTraceEvents(true /* is_incomplete */,
-                                   true /* show_reason_tab_switching */,
-                                   false /* show_reason_unoccluded */,
-                                   false /* show_reason_bfcache_restore */,
-                                   gfx::PresentationFeedback::Failure());
-    weak_ptr_factory_.InvalidateWeakPtrs();
+    for (const VisibleTimeEvent& event : tab_switch_start_state_->events) {
+      if (std::holds_alternative<VisibleTimeEvent::TabSwitchReason>(
+              event.reason)) {
+        RecordTabSwitchHistogramsAndTraceEvent(
+            TabSwitchResult::kIncomplete, event.event_start_time,
+            base::TimeTicks::Now(),
+            std::get<VisibleTimeEvent::TabSwitchReason>(event.reason));
+      }
+    }
   }
+  // No matter what the show reason, clear `tab_switch_start_state_` which is no
+  // longer valid.
+  ResetTabSwitchStartState();
 }
 
 void ContentToVisibleTimeReporter::RecordHistogramsAndTraceEvents(
-    bool is_incomplete,
-    bool show_reason_tab_switching,
-    bool show_reason_unoccluded,
-    bool show_reason_bfcache_restore,
-    const gfx::PresentationFeedback& feedback) {
+    TabSwitchResult tab_switch_result,
+    const viz::FrameTimingDetails& frame_timing_details) {
+  const base::TimeTicks presentation_timestamp =
+      frame_timing_details.presentation_feedback.timestamp;
+
   DCHECK(tab_switch_start_state_);
-  DCHECK(!widget_visibility_request_timestamp_.is_null());
   // If the DCHECK fail, make sure RenderWidgetHostImpl::WasShown was triggered
   // for recording the event.
-  DCHECK(show_reason_bfcache_restore || show_reason_unoccluded ||
-         show_reason_tab_switching);
-
-  if (show_reason_bfcache_restore) {
-    RecordBackForwardCacheRestoreMetric(
-        tab_switch_start_state_->event_start_time, feedback);
+  for (const VisibleTimeEvent& event : tab_switch_start_state_->events) {
+    std::visit(absl::Overload{
+                   [&](const VisibleTimeEvent::TabSwitchReason& tab_switch) {
+                     RecordTabSwitchHistogramsAndTraceEvent(
+                         tab_switch_result, event.event_start_time,
+                         presentation_timestamp, tab_switch);
+                   },
+                   [&](const VisibleTimeEvent::BFCacheRestoreReason&) {
+                     RecordBackForwardCacheRestoreMetric(
+                         event.event_start_time, presentation_timestamp);
+                   },
+               },
+               event.reason);
   }
 
-  if (show_reason_unoccluded) {
-    ReportUnOccludedMetric(tab_switch_start_state_->event_start_time, feedback);
+  ResetTabSwitchStartState();
+}
+
+void ContentToVisibleTimeReporter::OverwriteTabSwitchStartState(
+    std::optional<RecordContentToVisibleTimeRequest> state) {
+  if (tab_switch_start_state_) {
+    // Invalidate previously issued callbacks, to avoid accessing
+    // `tab_switch_start_state_` which is about to be deleted.
+    //
+    // TODO(crbug.com/40211849): Make sure that TabWasShown() is never called
+    // twice without a call to TabWasHidden() in-between, and remove this
+    // mitigation.
+    weak_ptr_factory_.InvalidateWeakPtrs();
   }
-
-  if (!show_reason_tab_switching)
-    return;
-
-  // Tab switching has occurred.
-  auto tab_switch_result = TabSwitchResult::kSuccess;
-  if (is_incomplete)
-    tab_switch_result = TabSwitchResult::kIncomplete;
-  else if (feedback.flags & gfx::PresentationFeedback::kFailure)
-    tab_switch_result = TabSwitchResult::kPresentationFailure;
-
-  const auto tab_switch_duration =
-      feedback.timestamp - tab_switch_start_state_->event_start_time;
-
-  // Record trace events.
-  TRACE_EVENT_NESTABLE_ASYNC_BEGIN_WITH_TIMESTAMP0(
-      "latency", "TabSwitching::Latency",
-      TRACE_ID_LOCAL(g_num_trace_events_in_process),
-      tab_switch_start_state_->event_start_time);
-  TRACE_EVENT_NESTABLE_ASYNC_END_WITH_TIMESTAMP2(
-      "latency", "TabSwitching::Latency",
-      TRACE_ID_LOCAL(g_num_trace_events_in_process), feedback.timestamp,
-      "result", tab_switch_result, "latency",
-      tab_switch_duration.InMillisecondsF());
-  ++g_num_trace_events_in_process;
-
-  // Record result histogram.
-  base::UmaHistogramEnumeration(
-      std::string("Browser.Tabs.TabSwitchResult.") +
-          GetHistogramSuffix(has_saved_frames_, *tab_switch_start_state_),
-      tab_switch_result);
-
-  // Record latency histogram.
-  switch (tab_switch_result) {
-    case TabSwitchResult::kSuccess: {
-      base::UmaHistogramTimes(
-          std::string("Browser.Tabs.TotalSwitchDuration.") +
-              GetHistogramSuffix(has_saved_frames_, *tab_switch_start_state_),
-          tab_switch_duration);
-      break;
-    }
-    case TabSwitchResult::kIncomplete: {
-      base::UmaHistogramTimes(
-          std::string("Browser.Tabs.TotalIncompleteSwitchDuration.") +
-              GetHistogramSuffix(has_saved_frames_, *tab_switch_start_state_),
-          tab_switch_duration);
-      break;
-    }
-    case TabSwitchResult::kPresentationFailure: {
-      break;
-    }
-  }
-
-  // Record legacy latency histogram.
-  UMA_HISTOGRAM_TIMES(
-      "MPArch.RWH_TabSwitchPaintDuration",
-      feedback.timestamp - widget_visibility_request_timestamp_);
-
-  // Reset tab switch information.
-  has_saved_frames_ = false;
-  tab_switch_start_state_.reset();
-  widget_visibility_request_timestamp_ = base::TimeTicks();
+  tab_switch_start_state_ = std::move(state);
 }
 
 }  // namespace blink

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,18 +16,18 @@ class Layer;
 
 namespace ui_devtools {
 
-// TODO(https://crbug.com/757283): Remove this file when LayerElement exists
+// TODO(crbug.com/41340254): Remove this file when LayerElement exists
 
-// Appends Layer properties to ret (ex: layer-type, layer-mask, etc).
+// Appends Layer properties to ret (ex: type, layer_mask_layer, etc).
 // This is used to display information about the layer on devtools.
 // Note that ret may not be empty when it's passed in.
 void AppendLayerPropertiesMatchedStyle(const ui::Layer* layer,
                                        std::vector<UIElement::UIProperty>* ret);
 
-// Takes in color property from DevTools frontend as string in rgba()/rgb(),
-// hex, or hsla()/hsl() format and sets |output| to the SkColor value as a
-// string. Returns true if successful.
-bool ParseColorFromFrontend(const std::string& input, std::string* output);
+// Sets a property on ui::Layer from a string value. Returns true if successful.
+bool SetLayerPropertyFromString(ui::Layer* layer,
+                                const std::string& name,
+                                const std::string& value);
 
 }  // namespace ui_devtools
 

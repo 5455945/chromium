@@ -1,12 +1,15 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/device_orientation/device_orientation_controller.h"
 
-#include "third_party/blink/public/mojom/permissions_policy/permissions_policy.mojom-blink.h"
+#include "base/notreached.h"
+#include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
+#include "third_party/blink/public/mojom/permissions/permission_status.mojom-blink.h"
 #include "third_party/blink/public/platform/platform.h"
-#include "third_party/blink/renderer/core/frame/deprecation.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_permission_state.h"
 #include "third_party/blink/renderer/core/frame/frame_console.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
@@ -15,7 +18,10 @@
 #include "third_party/blink/renderer/modules/device_orientation/device_orientation_event.h"
 #include "third_party/blink/renderer/modules/device_orientation/device_orientation_event_pump.h"
 #include "third_party/blink/renderer/modules/event_modules.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/modules/permissions/permission_utils.h"
+#include "third_party/blink/renderer/platform/bindings/script_state.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/wtf/assertions.h"
 
@@ -23,7 +29,8 @@ namespace blink {
 
 DeviceOrientationController::DeviceOrientationController(LocalDOMWindow& window)
     : DeviceSingleWindowEventController(window),
-      Supplement<LocalDOMWindow>(window) {}
+      Supplement<LocalDOMWindow>(window),
+      permission_service_(&window) {}
 
 DeviceOrientationController::~DeviceOrientationController() = default;
 
@@ -70,10 +77,16 @@ void DeviceOrientationController::DidAddEventListener(
 
   UseCounter::Count(GetWindow(), WebFeature::kDeviceOrientationSecureOrigin);
 
+  if (!has_requested_permission_) {
+    UseCounter::Count(
+        GetWindow(),
+        WebFeature::kDeviceOrientationUsedWithoutPermissionRequest);
+  }
+
   if (!has_event_listener_) {
     if (!CheckPolicyFeatures(
-            {mojom::blink::PermissionsPolicyFeature::kAccelerometer,
-             mojom::blink::PermissionsPolicyFeature::kGyroscope})) {
+            {network::mojom::PermissionsPolicyFeature::kAccelerometer,
+             network::mojom::PermissionsPolicyFeature::kGyroscope})) {
       LogToConsolePolicyFeaturesDisabled(*GetWindow().GetFrame(),
                                          EventTypeName());
       return;
@@ -132,9 +145,24 @@ void DeviceOrientationController::ClearOverride() {
     DidUpdateData();
 }
 
+void DeviceOrientationController::RestartPumpIfNeeded() {
+  if (!orientation_event_pump_ || !has_event_listener_) {
+    return;
+  }
+  // We do this to make sure that existing connections to
+  // device::mojom::blink::Sensor instances are dropped and GetSensor() is
+  // called again, so that e.g. the virtual sensors are used when added, or the
+  // real ones are used again when the virtual sensors are removed.
+  StopUpdating();
+  set_needs_checking_null_events(/*enabled=*/true);
+  orientation_event_pump_.Clear();
+  StartUpdating();
+}
+
 void DeviceOrientationController::Trace(Visitor* visitor) const {
   visitor->Trace(override_orientation_data_);
   visitor->Trace(orientation_event_pump_);
+  visitor->Trace(permission_service_);
   DeviceSingleWindowEventController::Trace(visitor);
   Supplement<LocalDOMWindow>::Trace(visitor);
 }
@@ -148,16 +176,44 @@ void DeviceOrientationController::RegisterWithOrientationEventPump(
   orientation_event_pump_->SetController(this);
 }
 
+ScriptPromise<V8PermissionState> DeviceOrientationController::RequestPermission(
+    ScriptState* script_state) {
+  ExecutionContext* context = GetSupplementable();
+  DCHECK_EQ(context, ExecutionContext::From(script_state));
+
+  has_requested_permission_ = true;
+
+  if (!permission_service_.is_bound()) {
+    ConnectToPermissionService(context,
+                               permission_service_.BindNewPipeAndPassReceiver(
+                                   context->GetTaskRunner(TaskType::kSensor)));
+  }
+
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<V8PermissionState>>(
+          script_state);
+  auto promise = resolver->Promise();
+
+  permission_service_->RequestPermission(
+      CreatePermissionDescriptor(mojom::blink::PermissionName::SENSORS),
+      resolver->WrapCallbackInScriptScope(
+          BindOnce([](ScriptPromiseResolver<V8PermissionState>* resolver,
+                      mojom::blink::PermissionStatusWithDetailsPtr status) {
+            resolver->Resolve(ToV8PermissionState(status->status));
+          })));
+
+  return promise;
+}
+
 // static
 void DeviceOrientationController::LogToConsolePolicyFeaturesDisabled(
     LocalFrame& frame,
     const AtomicString& event_name) {
-  const String& message = String::Format(
-      "The %s events are blocked by permissions policy. "
-      "See "
-      "https://github.com/w3c/webappsec-permissions-policy/blob/master/"
-      "features.md#sensor-features",
-      event_name.Ascii().c_str());
+  const String& message =
+      StrCat({"The ", event_name,
+              " events are blocked by permissions policy. See "
+              "https://github.com/w3c/webappsec-permissions-policy/blob/master/"
+              "features.md#sensor-features"});
   auto* console_message = MakeGarbageCollected<ConsoleMessage>(
       mojom::ConsoleMessageSource::kJavaScript,
       mojom::ConsoleMessageLevel::kWarning, std::move(message));

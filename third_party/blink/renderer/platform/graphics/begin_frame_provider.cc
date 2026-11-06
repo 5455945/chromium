@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,22 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/trace_event.h"
-#include "components/power_scheduler/power_mode.h"
-#include "components/power_scheduler/power_mode_arbiter.h"
-#include "components/power_scheduler/power_mode_voter.h"
+#include "build/build_config.h"
+#include "cc/base/features.h"
+#include "cc/scheduler/scheduler_state_machine.h"
 #include "services/viz/public/mojom/compositing/frame_timing_details.mojom-blink.h"
 #include "third_party/blink/public/common/thread_safe_browser_interface_broker_proxy.h"
 #include "third_party/blink/public/platform/platform.h"
+#include "third_party/blink/renderer/platform/graphics/begin_frame_provider_params.h"
 #include "third_party/blink/renderer/platform/mojo/mojo_binding_context.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread_scheduler.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 #include "ui/gfx/mojom/presentation_feedback.mojom-blink.h"
 
 namespace blink {
@@ -33,10 +37,7 @@ BeginFrameProvider::BeginFrameProvider(
       frame_sink_id_(begin_frame_provider_params.frame_sink_id),
       parent_frame_sink_id_(begin_frame_provider_params.parent_frame_sink_id),
       compositor_frame_sink_(context),
-      begin_frame_client_(client),
-      animation_power_mode_voter_(
-          power_scheduler::PowerModeArbiter::GetInstance()->NewVoter(
-              "PowerModeVoter.Animation.Worker")) {}
+      begin_frame_client_(client) {}
 
 void BeginFrameProvider::ResetCompositorFrameSink() {
   compositor_frame_sink_.reset();
@@ -72,16 +73,16 @@ void BeginFrameProvider::CreateCompositorFrameSinkIfNeeded() {
   if (compositor_frame_sink_.is_bound())
     return;
 
-  // Once we are using RAF, this thread is driving Display updates. Update
-  // priority accordingly.
-  base::PlatformThread::SetCurrentThreadPriority(base::ThreadPriority::DISPLAY);
+  // Once we are using RAF, this thread is driving user interactive display
+  // updates. Update priority accordingly.
+  lease_.emplace(base::ThreadType::kPresentation);
 
   mojo::Remote<mojom::blink::EmbeddedFrameSinkProvider> provider;
   Platform::Current()->GetBrowserInterfaceBroker()->GetInterface(
       provider.BindNewPipeAndPassReceiver());
 
   scoped_refptr<base::SingleThreadTaskRunner> task_runner =
-      ThreadScheduler::Current()->CompositorTaskRunner();
+      begin_frame_client_->GetCompositorTaskRunner();
 
   provider->CreateSimpleCompositorFrameSink(
       parent_frame_sink_id_, frame_sink_id_,
@@ -89,7 +90,7 @@ void BeginFrameProvider::CreateCompositorFrameSinkIfNeeded() {
       cfs_receiver_.BindNewPipeAndPassRemote(task_runner),
       compositor_frame_sink_.BindNewPipeAndPassReceiver(task_runner));
 
-  compositor_frame_sink_.set_disconnect_with_reason_handler(WTF::Bind(
+  compositor_frame_sink_.set_disconnect_with_reason_handler(BindOnce(
       &BeginFrameProvider::OnMojoConnectionError, WrapWeakPersistent(this)));
 }
 
@@ -103,15 +104,35 @@ void BeginFrameProvider::RequestBeginFrame() {
 
   needs_begin_frame_ = true;
   compositor_frame_sink_->SetNeedsBeginFrame(true);
-  animation_power_mode_voter_->VoteFor(power_scheduler::PowerMode::kAnimation);
+}
+
+// static
+bool BeginFrameProvider::ShouldThrottleBeginFrame(
+    const viz::BeginFrameArgs& args,
+    base::TimeTicks last_begin_frame_time) {
+  if (last_begin_frame_time.is_null()) {
+    return false;
+  }
+  bool is_webview = false;
+#if BUILDFLAG(IS_ANDROID)
+  is_webview =
+      Platform::Current() &&
+      Platform::Current()->IsSynchronousCompositingEnabledForAndroidWebView();
+#endif
+  base::TimeDelta throttled_interval =
+      cc::SchedulerStateMachine::GetMainFrameThrottledInterval(args.interval,
+                                                               is_webview);
+  return !throttled_interval.is_zero() &&
+         args.frame_time - last_begin_frame_time < throttled_interval &&
+         base::FeatureList::IsEnabled(features::kThrottleOffscreenCanvasTo60Hz);
 }
 
 void BeginFrameProvider::OnBeginFrame(
     const viz::BeginFrameArgs& args,
-    const WTF::HashMap<uint32_t, viz::FrameTimingDetails>&) {
-  TRACE_EVENT_WITH_FLOW0("blink", "BeginFrameProvider::OnBeginFrame",
-                         TRACE_ID_GLOBAL(args.trace_id),
-                         TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT);
+    const HashMap<uint32_t, viz::FrameTimingDetails>&,
+    Vector<viz::ReturnedResource> resources) {
+  TRACE_EVENT("blink", "BeginFrameProvider::OnBeginFrame",
+              perfetto::Flow::Global(args.trace_id));
 
   if (args.deadline < base::TimeTicks::Now()) {
     compositor_frame_sink_->DidNotProduceFrame(viz::BeginFrameAck(args, false));
@@ -120,19 +141,29 @@ void BeginFrameProvider::OnBeginFrame(
 
   // If there was no need for a BeginFrame, just skip it.
   if (needs_begin_frame_ && requested_needs_begin_frame_) {
+    if (ShouldThrottleBeginFrame(args, last_begin_frame_time_)) {
+      compositor_frame_sink_->DidNotProduceFrame(
+          viz::BeginFrameAck(args, false));
+      return;
+    }
+    last_begin_frame_time_ = args.frame_time;
     requested_needs_begin_frame_ = false;
     begin_frame_client_->BeginFrame(args);
   } else {
     if (!requested_needs_begin_frame_) {
       needs_begin_frame_ = false;
       compositor_frame_sink_->SetNeedsBeginFrame(false);
-      animation_power_mode_voter_->ResetVoteAfterTimeout(
-          power_scheduler::PowerModeVoter::kAnimationTimeout);
     }
   }
 }
 
 void BeginFrameProvider::FinishBeginFrame(const viz::BeginFrameArgs& args) {
+  // It appears that we can lose our existing Mojo Connection, and previously
+  // posted tasks can attempt to use the unbounded `compositor_frame_sink_`.
+  // If that occurs return so that we don't crash.
+  if (!compositor_frame_sink_.is_bound()) {
+    return;
+  }
   compositor_frame_sink_->DidNotProduceFrame(viz::BeginFrameAck(args, false));
 }
 

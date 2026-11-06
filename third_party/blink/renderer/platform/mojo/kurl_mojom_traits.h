@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,16 +15,16 @@ namespace mojo {
 
 template <>
 struct StructTraits<url::mojom::UrlDataView, ::blink::KURL> {
-  static WTF::String url(const ::blink::KURL& blinkUrl) {
+  static const blink::String& url(const ::blink::KURL& blinkUrl) {
     if (!blinkUrl.IsValid() ||
         blinkUrl.GetString().length() > url::kMaxURLChars) {
-      return g_empty_string;
+      return blink::g_empty_string;
     }
 
     return blinkUrl.GetString();
   }
   static bool Read(url::mojom::UrlDataView data, ::blink::KURL* out) {
-    WTF::String urlString;
+    blink::String urlString;
     if (!data.ReadUrl(&urlString))
       return false;
 
@@ -32,7 +32,7 @@ struct StructTraits<url::mojom::UrlDataView, ::blink::KURL> {
       return false;
 
     *out = ::blink::KURL(::blink::KURL(), urlString);
-    if (!urlString.IsEmpty() && !out->IsValid())
+    if (!urlString.empty() && !out->IsValid())
       return false;
 
     return true;

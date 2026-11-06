@@ -1,8 +1,11 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/cache_storage/cache_storage_control_wrapper.h"
+
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/thread_pool.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
 
 namespace content {
@@ -15,7 +18,7 @@ CacheStorageControlWrapper::CacheStorageControlWrapper(
     mojo::PendingRemote<storage::mojom::BlobStorageContext>
         blob_storage_context) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(quota_manager_proxy);
+  CHECK(quota_manager_proxy, base::NotFatalUntil::M158);
 
   // QuotaManagerProxy::RegisterClient() must be called during construction
   // until crbug.com/1182630 is fixed.
@@ -25,8 +28,7 @@ CacheStorageControlWrapper::CacheStorageControlWrapper(
           cache_storage_client_remote.InitWithNewPipeAndPassReceiver();
   quota_manager_proxy->RegisterClient(
       std::move(cache_storage_client_remote),
-      storage::QuotaClientType::kServiceWorkerCache,
-      {blink::mojom::StorageType::kTemporary});
+      storage::QuotaClientType::kServiceWorkerCache);
   mojo::PendingRemote<storage::mojom::QuotaClient>
       background_fetch_client_remote;
   mojo::PendingReceiver<storage::mojom::QuotaClient>
@@ -34,15 +36,15 @@ CacheStorageControlWrapper::CacheStorageControlWrapper(
           background_fetch_client_remote.InitWithNewPipeAndPassReceiver();
   quota_manager_proxy->RegisterClient(
       std::move(background_fetch_client_remote),
-      storage::QuotaClientType::kBackgroundFetch,
-      {blink::mojom::StorageType::kTemporary});
+      storage::QuotaClientType::kBackgroundFetch);
 
   cache_storage_context_ = base::SequenceBound<CacheStorageContextImpl>(
-      CacheStorageContextImpl::CreateSchedulerTaskRunner());
+      base::ThreadPool::CreateSequencedTaskRunner(
+          base::TaskPriority::USER_BLOCKING),
+      std::move(quota_manager_proxy));
   cache_storage_context_.AsyncCall(&CacheStorageContextImpl::Init)
       .WithArgs(cache_storage_control_.BindNewPipeAndPassReceiver(),
-                user_data_directory, std::move(quota_manager_proxy),
-                std::move(cache_storage_client_receiver),
+                user_data_directory, std::move(cache_storage_client_receiver),
                 std::move(background_fetch_client_receiver),
                 std::move(blob_storage_context));
 
@@ -64,31 +66,20 @@ void CacheStorageControlWrapper::AddReceiver(
     const network::CrossOriginEmbedderPolicy& cross_origin_embedder_policy,
     mojo::PendingRemote<network::mojom::CrossOriginEmbedderPolicyReporter>
         coep_reporter_remote,
-    const blink::StorageKey& storage_key,
+    const network::DocumentIsolationPolicy& document_isolation_policy,
+    mojo::PendingRemote<network::mojom::DocumentIsolationPolicyReporter>
+        dip_reporter_remote,
+    const storage::BucketLocator& bucket,
     storage::mojom::CacheStorageOwner owner,
     mojo::PendingReceiver<blink::mojom::CacheStorage> receiver) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (storage_policy_observer_)
-    storage_policy_observer_->StartTrackingOrigin(storage_key.origin());
-  cache_storage_control_->AddReceiver(cross_origin_embedder_policy,
-                                      std::move(coep_reporter_remote),
-                                      storage_key, owner, std::move(receiver));
-}
-
-void CacheStorageControlWrapper::DeleteForStorageKey(
-    const blink::StorageKey& storage_key) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  cache_storage_control_->DeleteForStorageKey(storage_key);
-}
-
-void CacheStorageControlWrapper::GetAllStorageKeysInfo(
-    storage::mojom::CacheStorageControl::GetAllStorageKeysInfoCallback
-        callback) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  cache_storage_control_->GetAllStorageKeysInfo(std::move(callback));
+    storage_policy_observer_->StartTrackingOrigin(bucket.storage_key.origin());
+  cache_storage_control_->AddReceiver(
+      cross_origin_embedder_policy, std::move(coep_reporter_remote),
+      document_isolation_policy, std::move(dip_reporter_remote), bucket, owner,
+      std::move(receiver));
 }
 
 void CacheStorageControlWrapper::AddObserver(

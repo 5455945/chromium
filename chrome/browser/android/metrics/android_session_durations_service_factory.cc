@@ -1,24 +1,26 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/android/metrics/android_session_durations_service_factory.h"
 
+#include "base/no_destructor.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/android/metrics/android_session_durations_service.h"
+#include "chrome/browser/metrics/profile_metrics_service_factory.h"
 #include "chrome/browser/profiles/incognito_helpers.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
-#include "components/keyed_service/content/browser_context_dependency_manager.h"
 
 namespace {
 std::vector<AndroidSessionDurationsService*> GetForAllActiveProfiles() {
   std::vector<AndroidSessionDurationsService*> services;
 
   Profile* profile = ProfileManager::GetActiveUserProfile();
-  DCHECK(profile);
+  CHECK(profile, base::NotFatalUntil::M161);
   services.push_back(
       AndroidSessionDurationsServiceFactory::GetForProfile(profile));
 
@@ -63,40 +65,52 @@ void AndroidSessionDurationsServiceFactory::OnAppEnterBackground(
 }
 
 AndroidSessionDurationsServiceFactory::AndroidSessionDurationsServiceFactory()
-    : BrowserContextKeyedServiceFactory(
+    : ProfileKeyedServiceFactory(
           "AndroidSessionDurationsService",
-          BrowserContextDependencyManager::GetInstance()) {
+          // Lifetime metric is only recorded for Regular, Incognito, and
+          // Isolated profiles.
+          ProfileSelections::Builder()
+              .WithRegular(ProfileSelection::kOwnInstance)
+              .WithIsolatedMode(ProfileSelection::kOwnInstance)
+              .WithGuest(ProfileSelection::kOriginalOnly)
+              .WithSystem(ProfileSelection::kOriginalOnly)
+              .Build()) {
   DependsOn(SyncServiceFactory::GetInstance());
   DependsOn(IdentityManagerFactory::GetInstance());
+  DependsOn(ProfileMetricsServiceFactory::GetInstance());
 }
 
 AndroidSessionDurationsServiceFactory::
     ~AndroidSessionDurationsServiceFactory() = default;
 
-KeyedService* AndroidSessionDurationsServiceFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+AndroidSessionDurationsServiceFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
   Profile* profile = Profile::FromBrowserContext(context);
-  if (profile->IsIncognitoProfile()) {
-    auto* service = new AndroidSessionDurationsService();
-    service->InitializeForIncognitoProfile();
-    return service;
+  if (profile->IsOffTheRecord() &&
+      !profile->IsPrimaryOTRProfileWithRegularParent()) {
+    return nullptr;
   }
 
-  // Lifetime metric is not recorded for non-incognito off the record profiles.
-  if (profile->IsOffTheRecord())
-    return nullptr;
-
-  auto* service = new AndroidSessionDurationsService();
-  service->InitializeForRegularProfile(
-      SyncServiceFactory::GetForProfile(profile),
-      IdentityManagerFactory::GetForProfile(profile));
+  std::unique_ptr<AndroidSessionDurationsService> service =
+      std::make_unique<AndroidSessionDurationsService>();
+  if (profile->IsPrimaryOTRProfileWithRegularParent()) {
+    AndroidSessionDurationsService::OffTheRecordProfileType
+        off_the_record_profile_type =
+            profile->IsEnterpriseIsolatedModeProfile()
+                ? AndroidSessionDurationsService::OffTheRecordProfileType::
+                      kIsolated
+                : AndroidSessionDurationsService::OffTheRecordProfileType::
+                      kIncognito;
+    service->InitializeForIncognitoAndIsolatedProfile(
+        off_the_record_profile_type);
+  } else {
+    service->InitializeForRegularProfile(
+        profile->GetPrefs(), SyncServiceFactory::GetForProfile(profile),
+        IdentityManagerFactory::GetForProfile(profile),
+        ProfileMetricsServiceFactory::GetForProfile(profile));
+  }
   return service;
-}
-
-content::BrowserContext*
-AndroidSessionDurationsServiceFactory::GetBrowserContextToUse(
-    content::BrowserContext* context) const {
-  return chrome::GetBrowserContextOwnInstanceInIncognito(context);
 }
 
 bool AndroidSessionDurationsServiceFactory::ServiceIsNULLWhileTesting() const {

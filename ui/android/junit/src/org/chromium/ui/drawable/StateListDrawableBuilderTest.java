@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,8 +21,7 @@ import org.chromium.ui.shadows.ShadowAnimatedStateListDrawable;
 import org.chromium.ui.shadows.ShadowAppCompatResources;
 
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE,
-        shadows = {ShadowAppCompatResources.class, ShadowAnimatedStateListDrawable.class})
+@Config(shadows = {ShadowAppCompatResources.class, ShadowAnimatedStateListDrawable.class})
 public class StateListDrawableBuilderTest {
     private static final int[] CHECKED_STATE = new int[] {android.R.attr.state_checked};
     private static final int[] WILDCARD_STATE = new int[0];
@@ -31,15 +30,18 @@ public class StateListDrawableBuilderTest {
 
     @Test
     public void testBuild() {
-        StateListDrawableBuilder b = new StateListDrawableBuilder(RuntimeEnvironment.application);
+        StateListDrawableBuilder b =
+                new StateListDrawableBuilder(RuntimeEnvironment.getApplication());
         b.addState(CHECKED_DRAWABLE, android.R.attr.state_checked);
         b.addState(DEFAULT_DRAWABLE, WILDCARD_STATE);
         StateListDrawable result = b.build();
         assertEquals(result.getClass(), AnimatedStateListDrawable.class);
         ShadowAnimatedStateListDrawable drawable = Shadow.extract(result);
-        assertEquals(CHECKED_DRAWABLE,
+        assertEquals(
+                CHECKED_DRAWABLE,
                 shadowOf(drawable.getDrawableForState(CHECKED_STATE)).getCreatedFromResId());
-        assertEquals(DEFAULT_DRAWABLE,
+        assertEquals(
+                DEFAULT_DRAWABLE,
                 shadowOf(drawable.getDrawableForState(WILDCARD_STATE)).getCreatedFromResId());
     }
 }

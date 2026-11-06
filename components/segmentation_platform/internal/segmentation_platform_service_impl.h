@@ -1,18 +1,29 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_SEGMENTATION_PLATFORM_INTERNAL_SEGMENTATION_PLATFORM_SERVICE_IMPL_H_
 #define COMPONENTS_SEGMENTATION_PLATFORM_INTERNAL_SEGMENTATION_PLATFORM_SERVICE_IMPL_H_
 
-#include "components/segmentation_platform/public/segmentation_platform_service.h"
-
 #include <memory>
 #include <string>
 
+#include "base/containers/circular_deque.h"
+#include "base/containers/flat_map.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "components/leveldb_proto/public/proto_database.h"
+#include "components/segmentation_platform/internal/database/storage_service.h"
+#include "components/segmentation_platform/internal/database_client_impl.h"
+#include "components/segmentation_platform/internal/metrics/field_trial_recorder.h"
+#include "components/segmentation_platform/internal/migration/prefs_migrator.h"
+#include "components/segmentation_platform/internal/platform_options.h"
+#include "components/segmentation_platform/internal/scheduler/execution_service.h"
+#include "components/segmentation_platform/internal/selection/result_refresh_manager.h"
+#include "components/segmentation_platform/internal/service_proxy_impl.h"
+#include "components/segmentation_platform/internal/signals/signal_handler.h"
+#include "components/segmentation_platform/public/segmentation_platform_service.h"
+#include "components/sync_device_info/device_info_tracker.h"
 
 namespace base {
 class Clock;
@@ -20,63 +31,75 @@ class FilePath;
 class SequencedTaskRunner;
 }  // namespace base
 
+namespace history {
+class HistoryService;
+}
+
 namespace leveldb_proto {
 class ProtoDatabaseProvider;
 }  // namespace leveldb_proto
-
-namespace optimization_guide {
-class OptimizationGuideModelProvider;
-}  // namespace optimization_guide
 
 class PrefService;
 
 namespace segmentation_platform {
 
-namespace proto {
-class SegmentInfo;
-class SignalData;
-class SignalStorageConfigs;
-}  // namespace proto
+namespace processing {
+class InputDelegateHolder;
+}
 
 struct Config;
-class HistogramSignalHandler;
-class ModelExecutionManager;
-class ModelExecutionSchedulerImpl;
-class SegmentationResultPrefs;
-class SegmentInfoDatabase;
+class RequestDispatcher;
+class FieldTrialRegister;
+class ModelProviderFactory;
 class SegmentSelectorImpl;
-class SignalDatabaseImpl;
-class SignalFilterProcessor;
-class SignalStorageConfig;
-class UserActionSignalHandler;
+class SegmentScoreProvider;
+class UkmDataManager;
 
 // The internal implementation of the SegmentationPlatformService.
 class SegmentationPlatformServiceImpl : public SegmentationPlatformService {
  public:
-  SegmentationPlatformServiceImpl(
-      optimization_guide::OptimizationGuideModelProvider* model_provider,
-      leveldb_proto::ProtoDatabaseProvider* db_provider,
-      const base::FilePath& storage_dir,
-      PrefService* pref_service,
-      const scoped_refptr<base::SequencedTaskRunner>& task_runner,
-      base::Clock* clock,
-      std::unique_ptr<Config> config);
+  struct InitParams {
+    InitParams();
+    ~InitParams();
 
-  // For testing only.
-  SegmentationPlatformServiceImpl(
-      std::unique_ptr<leveldb_proto::ProtoDatabase<proto::SegmentInfo>>
-          segment_db,
-      std::unique_ptr<leveldb_proto::ProtoDatabase<proto::SignalData>>
-          signal_db,
-      std::unique_ptr<leveldb_proto::ProtoDatabase<proto::SignalStorageConfigs>>
-          signal_storage_config_db,
-      optimization_guide::OptimizationGuideModelProvider* model_provider,
-      PrefService* pref_service,
-      const scoped_refptr<base::SequencedTaskRunner>& task_runner,
-      base::Clock* clock,
-      std::unique_ptr<Config> config);
+    bool IsValid();
+
+    // Profile data:
+    std::string profile_id;
+    raw_ptr<leveldb_proto::ProtoDatabaseProvider> db_provider = nullptr;
+    raw_ptr<history::HistoryService> history_service = nullptr;
+    base::FilePath storage_dir;
+    raw_ptr<PrefService> profile_prefs = nullptr;
+
+    // Device info tracker. It is owned by
+    // the DeviceInfoSynceService, which the segmentation platform service
+    // depends on. It is guaranteed to outlive the segmentation platform
+    // service.
+    raw_ptr<syncer::DeviceInfoTracker> device_info_tracker = nullptr;
+
+    // Platform configuration:
+    std::unique_ptr<ModelProviderFactory> model_provider;
+    raw_ptr<UkmDataManager> ukm_data_manager = nullptr;
+    std::vector<std::unique_ptr<Config>> configs;
+    std::unique_ptr<FieldTrialRegister> field_trial_register;
+    std::unique_ptr<processing::InputDelegateHolder> input_delegate_holder;
+
+    scoped_refptr<base::SequencedTaskRunner> task_runner;
+    raw_ptr<base::Clock> clock = nullptr;
+
+    // Test only:
+    std::unique_ptr<StorageService> storage_service;
+  };
+
+  explicit SegmentationPlatformServiceImpl(
+      std::unique_ptr<InitParams> init_params);
+
+  SegmentationPlatformServiceImpl();
 
   ~SegmentationPlatformServiceImpl() override;
+
+  // KeyedService implementation.
+  void Shutdown() override;
 
   // Disallow copy/assign.
   SegmentationPlatformServiceImpl(const SegmentationPlatformServiceImpl&) =
@@ -87,52 +110,117 @@ class SegmentationPlatformServiceImpl : public SegmentationPlatformService {
   // SegmentationPlatformService overrides.
   void GetSelectedSegment(const std::string& segmentation_key,
                           SegmentSelectionCallback callback) override;
+  void GetClassificationResult(const std::string& segmentation_key,
+                               const PredictionOptions& prediction_options,
+                               scoped_refptr<InputContext> input_context,
+                               ClassificationResultCallback callback) override;
+  void GetAnnotatedNumericResult(
+      const std::string& segmentation_key,
+      const PredictionOptions& prediction_options,
+      scoped_refptr<InputContext> input_context,
+      AnnotatedNumericResultCallback callback) override;
+  void GetInputKeysForModel(const std::string& segmentation_key,
+                            InputContextKeysCallback callback) override;
+  SegmentSelectionResult GetCachedSegmentResult(
+      const std::string& segmentation_key) override;
+  void CollectTrainingData(SegmentId segment_id,
+                           TrainingRequestId request_id,
+                           const TrainingLabels& param,
+                           SuccessCallback callback) override;
+  void CollectTrainingData(SegmentId segment_id,
+                           TrainingRequestId request_id,
+                           ukm::SourceId ukm_source_id,
+                           const TrainingLabels& param,
+                           SuccessCallback callback) override;
   void EnableMetrics(bool signal_collection_allowed) override;
+  ServiceProxy* GetServiceProxy() override;
+  DatabaseClient* GetDatabaseClient() override;
+  bool IsPlatformInitialized() override;
+
+  bool IsMetricsEnabledForTesting() const { return is_metrics_enabled_; }
 
  private:
-  FRIEND_TEST_ALL_PREFIXES(SegmentationPlatformServiceImplTest,
-                           InitializationFlow);
+  friend class SegmentationPlatformServiceImplTest;
+  friend class TestServicesForPlatform;
 
-  void OnSegmentInfoDatabaseInitialized(bool success);
-  void OnSignalDatabaseInitialized(bool success);
-  void OnSignalStorageConfigInitialized(bool success);
-  bool IsInitializationFinished() const;
-  void MaybeRunPostInitializationRoutines();
-  void OnSegmentationModelUpdated(proto::SegmentInfo segment_info);
+  void OnDatabaseInitialized(bool success);
 
-  optimization_guide::OptimizationGuideModelProvider* model_provider_;
+  // Must only be invoked with a valid SegmentInfo.
+  void OnSegmentationModelUpdated(proto::SegmentInfo segment_info,
+                                  std::optional<int64_t> old_model_version);
+
+  // Callback sent to child classes to notify when model results need to be
+  // refreshed. For example, when history is cleared.
+  void OnModelRefreshNeeded();
+
+  // Called when service status changes.
+  void OnServiceStatusChanged();
+
+  // Task that runs every day or at startup to keep the platform data updated.
+  void RunDailyTasks(bool is_startup);
+
+  // Creates SegmentResultProvider for all configs.
+  std::map<std::string, std::unique_ptr<SegmentResultProvider>>
+  CreateSegmentResultProviders();
+
+  // Creates SegmentResultProvider.
+  std::unique_ptr<SegmentResultProvider> CreateSegmentResultProvider();
+  std::unique_ptr<ModelProviderFactory> model_provider_factory_;
+
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
-  base::Clock* clock_;
+  raw_ptr<base::Clock> clock_;
+  const PlatformOptions platform_options_;
 
-  // Config.
-  std::unique_ptr<Config> config_;
+  // Temporarily stored till initialization and moved to `execution_service_`.
+  std::unique_ptr<processing::InputDelegateHolder> input_delegate_holder_;
 
-  // Databases.
-  std::unique_ptr<SegmentInfoDatabase> segment_info_database_;
-  std::unique_ptr<SignalDatabaseImpl> signal_database_;
-  std::unique_ptr<SignalStorageConfig> signal_storage_config_;
-  std::unique_ptr<SegmentationResultPrefs> segmentation_result_prefs_;
+  std::unique_ptr<FieldTrialRegister> field_trial_register_;
+
+  std::unique_ptr<StorageService> storage_service_;
+  // Storage initialization status.
+  std::optional<bool> storage_init_status_;
 
   // Signal processing.
-  std::unique_ptr<UserActionSignalHandler> user_action_signal_handler_;
-  std::unique_ptr<HistogramSignalHandler> histogram_signal_handler_;
-  std::unique_ptr<SignalFilterProcessor> signal_filter_processor_;
+  SignalHandler signal_handler_;
+
+  bool is_metrics_enabled_{false};
+
+  ExecutionService execution_service_;
+
+  std::unique_ptr<DatabaseClientImpl> database_client_;
 
   // Segment selection.
   // TODO(shaktisahu): Determine safe destruction ordering between
   // SegmentSelectorImpl and ModelExecutionSchedulerImpl.
-  std::unique_ptr<SegmentSelectorImpl> segment_selector_;
+  base::flat_map<std::string, std::unique_ptr<SegmentSelectorImpl>>
+      segment_selectors_;
 
-  // Model execution scheduling logic.
-  std::unique_ptr<ModelExecutionSchedulerImpl> model_execution_scheduler_;
+  // Records field trials for all configs.
+  std::unique_ptr<FieldTrialRecorder> field_trial_recorder_;
 
-  // Model execution.
-  std::unique_ptr<ModelExecutionManager> model_execution_manager_;
+  // For routing requests to the right handler.
+  std::unique_ptr<RequestDispatcher> request_dispatcher_;
 
-  // Database initialization statuses.
-  absl::optional<bool> segment_info_database_initialized_;
-  absl::optional<bool> signal_database_initialized_;
-  absl::optional<bool> signal_storage_config_initialized_;
+  // Refreshes model results.
+  std::unique_ptr<ResultRefreshManager> result_refresh_manager_;
+
+  // Segment results.
+  std::unique_ptr<SegmentScoreProvider> segment_score_provider_;
+
+  std::unique_ptr<ServiceProxyImpl> proxy_;
+
+  // Prefs Migration
+  std::unique_ptr<PrefsMigrator> prefs_migrator_;
+
+  // PrefService from profile.
+  raw_ptr<PrefService> profile_prefs_;
+
+  // For metrics only:
+  const base::Time creation_time_;
+  base::Time init_time_;
+
+  // For caching any method calls that were received before initialization.
+  base::circular_deque<base::OnceClosure> pending_actions_;
 
   base::WeakPtrFactory<SegmentationPlatformServiceImpl> weak_ptr_factory_{this};
 };

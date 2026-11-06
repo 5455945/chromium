@@ -1,11 +1,11 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/platform/graphics/compositor_filter_operations.h"
 
-#include "third_party/blink/renderer/platform/geometry/int_rect.h"
 #include "third_party/blink/renderer/platform/graphics/color.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 #include "ui/gfx/geometry/rect.h"
 
 namespace blink {
@@ -38,8 +38,9 @@ void CompositorFilterOperations::AppendHueRotateFilter(float amount) {
 void CompositorFilterOperations::AppendColorMatrixFilter(Vector<float> values) {
   DCHECK_EQ(values.size(), 20u);
   cc::FilterOperation::Matrix matrix = {};
-  for (WTF::wtf_size_t i = 0; i < values.size(); ++i)
+  for (wtf_size_t i = 0; i < values.size(); ++i) {
     matrix[i] = values[i];
+  }
   filter_operations_.Append(
       cc::FilterOperation::CreateColorMatrixFilter(matrix));
 }
@@ -67,12 +68,13 @@ void CompositorFilterOperations::AppendBlurFilter(float amount,
       cc::FilterOperation::CreateBlurFilter(amount, tile_mode));
 }
 
-void CompositorFilterOperations::AppendDropShadowFilter(IntPoint offset,
+void CompositorFilterOperations::AppendDropShadowFilter(gfx::Vector2d offset,
                                                         float std_deviation,
                                                         const Color& color) {
-  gfx::Point gfx_offset(offset.X(), offset.Y());
+  gfx::Point gfx_offset(offset.x(), offset.y());
+  // TODO(crbug/1308932): Remove FromColor and make all SkColor4f.
   filter_operations_.Append(cc::FilterOperation::CreateDropShadowFilter(
-      gfx_offset, std_deviation, color.Rgb()));
+      gfx_offset, std_deviation, SkColor4f::FromColor(color.Rgb())));
 }
 
 void CompositorFilterOperations::AppendColorMatrixFilter(
@@ -100,17 +102,17 @@ void CompositorFilterOperations::AppendReferenceFilter(
 
 void CompositorFilterOperations::Clear() {
   filter_operations_.Clear();
+  origin_tainted_ = false;
+  contains_backdrop_ = false;
 }
 
 bool CompositorFilterOperations::IsEmpty() const {
   return filter_operations_.IsEmpty();
 }
 
-FloatRect CompositorFilterOperations::MapRect(
-    const FloatRect& input_rect) const {
-  gfx::Rect result =
-      filter_operations_.MapRect(EnclosingIntRect(input_rect), SkMatrix::I());
-  return FloatRect(result.x(), result.y(), result.width(), result.height());
+gfx::Rect CompositorFilterOperations::MapRect(
+    const gfx::Rect& input_rect) const {
+  return filter_operations_.MapRect(input_rect);
 }
 
 bool CompositorFilterOperations::HasFilterThatMovesPixels() const {
@@ -128,8 +130,8 @@ bool CompositorFilterOperations::operator==(
 }
 
 String CompositorFilterOperations::ToString() const {
-  return String(filter_operations_.ToString().c_str()) + " at " +
-         reference_box_.ToString();
+  return StrCat({String(filter_operations_.ToString()), " at ",
+                 String(reference_box_.ToString())});
 }
 
 }  // namespace blink

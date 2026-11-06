@@ -9,6 +9,7 @@
 <translation id="1591070050619849194">Tüm resim animasyonunu devre dışı bırakın.</translation>
 <translation id="1703735871906654364">Klavye Göz Atma</translation>
 <translation id="1791496371305830581">Tüm animasyonlu resimlere izin verin.</translation>
+<translation id="1974060860693918893">Gelişmiş</translation>
 <translation id="1996252509865389616">Etkinleştirilsin mi?</translation>
 <translation id="2079545284768500474">Geri al</translation>
 <translation id="2179565792157161713">Uzun Açıklamayı Yeni Sekmede Aç</translation>
@@ -26,6 +27,7 @@
 <translation id="3812541808639806898">Resim "Alt" Metni Görüntüleyici</translation>
 <translation id="381767806621926835">"longdesc" veya "aria-describedat" özelliği olan herhangi bir şeyi sağ tıklayıp uzun açıklamasına erişin.</translation>
 <translation id="4023902424053835668">Web sayfalarının metinlerine ok tuşlarını kullanarak göz atın.</translation>
+<translation id="4384008284958619421">Modern ekran okuyucular ve Google Chrome artık erişilebilir öğe açıklamalarını ve ARIA standartlarını yerel olarak destekliyor.</translation>
 <translation id="4388820049312272371">İmleç konumunu hızlı bir yanıp sönme ile vurgulama.</translation>
 <translation id="4394049700291259645">Devre dışı bırak</translation>
 <translation id="4769065380738716500">Resimler, alternatif metinleriyle değiştirildi.</translation>
@@ -51,6 +53,7 @@
 <translation id="6170146920149900756">Color Enhancer</translation>
 <translation id="633394792577263429">Kelime kelime hareket etmek için &lt;span class='key'&gt;Control&lt;/span&gt; tuşunu basılı tutun.</translation>
 <translation id="6550675742724504774">Seçenekler</translation>
+<translation id="6699630355767768222">3. Adım: Düzeltme için renk eksenini geçersiz kılma.</translation>
 <translation id="6838518108677880446">Kurulum:</translation>
 <translation id="690628312087070417">Klavye imleci uzun mesafe atlarsa:</translation>
 <translation id="6965382102122355670">Tamam</translation>
@@ -60,9 +63,11 @@
 <translation id="7658239707568436148">İptal</translation>
 <translation id="786423340267544509">aria-describedat veya longdesc özelliği olan öğelere sınır ekleyin.</translation>
 <translation id="7942349550061667556">Kırmızı</translation>
+<translation id="8081200409424070383">Uzun Açıklamalar desteği 20 Kasım 2026'da sonlandırılacak.</translation>
 <translation id="8260673944985561857">Caret Browsing Seçenekleri</translation>
 <translation id="8321034316479930120">Animasyon Politikası</translation>
 <translation id="8480209185614411573">Yüksek Kontrast</translation>
 <translation id="8609925175482059018">Caret Browsing'i etkinleştirmek için &lt;span class='key'&gt;F7&lt;/span&gt; tuşuna basın. Kapatmak için yine aynı tuşa basın.</translation>
+<translation id="8798099450830957504">Varsayılan</translation>
 <translation id="894241283505723656">İçerik Menüsünde Uzun Açıklamalar</translation>
 </translationbundle>

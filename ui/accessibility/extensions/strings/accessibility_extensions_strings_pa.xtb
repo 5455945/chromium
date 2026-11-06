@@ -9,6 +9,7 @@
 <translation id="1591070050619849194">ਸਾਰੇ ਚਿੱਤਰ ਐਨੀਮੇਸ਼ਨ ਨੂੰ ਬੰਦ ਕਰੋ।</translation>
 <translation id="1703735871906654364">Caret ਬ੍ਰਾਊਜ਼ਿੰਗ</translation>
 <translation id="1791496371305830581">ਸਾਰੀਆਂ ਐਨੀਮੇਟ ਕੀਤੀਆਂ ਤਸਵੀਰਾਂ ਨੂੰ ਅਨੁਮਤੀ ਦਿਓ।</translation>
+<translation id="1974060860693918893">ਉੱਨਤ</translation>
 <translation id="1996252509865389616">ਕੀ ਚਾਲੂ ਕਰਨਾ ਹੈ?</translation>
 <translation id="2079545284768500474">ਅਣਕੀਤਾ ਕਰੋ</translation>
 <translation id="2179565792157161713">ਨਵੀਂ ਟੈਬ ਵਿੱਚ ਲੰਮਾ ਵਰਣਨ ਖੋਲ੍ਹੋ</translation>
@@ -26,10 +27,11 @@
 <translation id="3812541808639806898">ਚਿੱਤਰ ਵਿਕਲਪਿਕ ਲਿਖਤ ਦੇਖੋ</translation>
 <translation id="381767806621926835">ਇਸਦੇ ਲੰਮੇ ਵਰਣਨ ਤੱਕ ਪਹੁੰਚ ਪ੍ਰਾਪਤ ਕਰਨ ਲਈ ਇੱਕ "longdesc" ਜਾਂ "aria-describedat" ਵਿਸ਼ੇਸ਼ਤਾ ਵਾਲੇ ਕਿਸੇ 'ਤੇ ਵੀ ਸੱਜਾ-ਕਲਿੱਕ ਕਰੋ।</translation>
 <translation id="4023902424053835668">ਤੀਰ ਕੁੰਜੀਆਂ ਵਰਤਦੇ ਹੋਏ ਵੈੱਬ ਪੰਨਿਆਂ ਦੀ ਲਿਖਤ ਬ੍ਰਾਊਜ਼ ਕਰੋ।</translation>
+<translation id="4384008284958619421">ਆਧੁਨਿਕ ਸਕ੍ਰੀਨ ਰੀਡਰ ਅਤੇ Google Chrome ਹੁਣ ਪਹੁੰਚਯੋਗ ਤੱਤ ਵਰਣਨਾਂ ਅਤੇ ARIA ਮਿਆਰਾਂ ਦਾ ਮੂਲ ਰੂਪ ਵਿੱਚ ਸਮਰਥਨ ਕਰਦੇ ਹਨ।</translation>
 <translation id="4388820049312272371">ਇੱਕ ਤਤਕਾਲ ਫਲੈਸ਼ ਨਾਲ ਕਰਸਰ ਪੋਜੀਸ਼ਨ ਉਜਾਗਰ ਕਰੋ।</translation>
 <translation id="4394049700291259645">ਬੰਦ ਕਰੋ</translation>
 <translation id="4769065380738716500">ਚਿੱਤਰ ਉਹਨਾਂ ਦੇ alt ਟੈਕਸਟ ਰਾਹੀਂ ਬਦਲੇ ਗਏ ਹਨ।</translation>
-<translation id="4896660567607030658">ਕੋਈ ਫੀਡਬੈਕ ਨਹੀਂ, ਕੇਵਲ ਕਰਸਰ ਦਿਖਾਓ।</translation>
+<translation id="4896660567607030658">ਕੋਈ ਵਿਚਾਰ ਨਹੀਂ, ਬਸ ਕਰਸਰ ਦਿਖਾਓ।</translation>
 <translation id="4937901943818762779">ਐਨੀਮੇਟ ਕੀਤੀ ਤਸਵੀਰਾਂ ਨੂੰ ਅਨੁਮਤੀ ਦਿਓ, ਲੇਕਿਨ ਸਿਰਫ਼ ਇੱਕ ਵਾਰ।</translation>
 <translation id="4949131196216960195">ਕੈਰਟ ਬ੍ਰਾਊਜ਼ਿੰਗ ਚਾਲੂ ਕਰਨ ਲਈ &lt;span class='key'&gt;ਖੋਜ&lt;/span&gt; + &lt;img src='increase_brightness.png'&gt; (ਚਮਕ ਵਧਾਉਣ ਵਾਲੀ ਕੁੰਜੀ, ਜਾਂ F7) ਦਬਾਓ, ਇਸਨੂੰ ਬੰਦ ਕਰਨ ਲਈ ਇਸਨੂੰ ਦੁਬਾਰਾ ਦਬਾਓ।</translation>
 <translation id="4954450790315188152">ਜਦੋਂ Caret ਬ੍ਰਾਊਜ਼ਿੰਗ ਸਮਰਥਿਤ ਹੁੰਦੀ ਹੈ:</translation>
@@ -42,7 +44,7 @@
 <translation id="5558600050691192317">ਕੀ-ਬੋਰਡ ਕਮਾਂਡਾਂ</translation>
 <translation id="5594989420907487559">ਐਨੀਮੇਸ਼ਨਾਂ ਨੂੰ ਸਿਰਫ਼ ਇੱਕ ਵਾਰ ਚਲਾਓ, ਜਾਂ ਪੂਰੀ ਤਰ੍ਹਾਂ ਐਨੀਮੇਸ਼ਨ ਨੂੰ ਅਸਮਰਥਿਤ ਕਰੋ।</translation>
 <translation id="5631241868147802353">ਪੂਰਵ-ਨਿਰਧਾਰਤ ਰੰਗ ਸਕੀਮ:</translation>
-<translation id="5650358096585648000">ਵਿਜ਼ੁਅਲ ਫੀਡਬੈਕ</translation>
+<translation id="5650358096585648000">ਦ੍ਰਿਸ਼ਟੀਗਤ ਵਿਚਾਰ</translation>
 <translation id="5710185147685935461">ਵੈਬਸਫ਼ਿਆਂ ਨੂੰ ਆਸਾਨੀ ਨਾਲ ਪੜ੍ਹਨ ਯੋਗ ਬਣਾਉਣ ਲਈ ਰੰਗ ਸਕੀਮ ਬਦਲੋ ਜਾਂ ਇਨਵਰਟ ਕਰੋ।</translation>
 <translation id="5939518447894949180">ਰੀਸੈਟ ਕਰੋ</translation>
 <translation id="595639123821853262">ਇਨਵਰਟ ਕੀਤਾ ਗ੍ਰੇਸਕੇਲ</translation>
@@ -51,6 +53,7 @@
 <translation id="6170146920149900756">ਰੰਗ ਵਿਸਤਾਰਕ</translation>
 <translation id="633394792577263429">ਸ਼ਬਦਾਂ ਮੁਤਾਬਕ ਮੂਵ ਕਰਨ ਲਈ &lt;span class='key'&gt;ਨਿਯੰਤਰਣ&lt;/span&gt; ਨੂੰ ਹੇਠਾਂ ਹੋਲਡ ਕਰੋ।</translation>
 <translation id="6550675742724504774">ਚੋਣਾਂ</translation>
+<translation id="6699630355767768222">ਪੜਾਅ 3: ਸੁਧਾਈ ਕਰਨ ਲਈ ਰੰਗ ਦੇ ਧੁਰੇ ਨੂੰ ਓਵਰਰਾਈਡ ਕਰੋ।</translation>
 <translation id="6838518108677880446">ਸੈੱਟਅੱਪ:</translation>
 <translation id="690628312087070417">ਜਦੋਂ caret ਕਾਫ਼ੀ ਦੂਰ ਚਲਾ ਜਾਂਦਾ ਹੈ:</translation>
 <translation id="6965382102122355670">ਠੀਕ</translation>
@@ -61,9 +64,11 @@
 <translation id="7658239707568436148">ਰੱਦ ਕਰੋ</translation>
 <translation id="786423340267544509">aria-describedat ਜਾਂ longdesc ਵਿਸ਼ੇਸ਼ਤਾਵਾਂ ਨਾਲ ਐਲੀਮੈਂਟਸ ਲਈ ਬਾਰਡਰ ਜੋੜੋ।</translation>
 <translation id="7942349550061667556">ਲਾਲ</translation>
+<translation id="8081200409424070383">Long Descriptions ਨੂੰ 20 ਨਵੰਬਰ 2026 ਨੂੰ ਬੰਦ ਕੀਤਾ ਜਾ ਰਿਹਾ ਹੈ।</translation>
 <translation id="8260673944985561857">Caret ਬ੍ਰਾਊਜ਼ਿੰਗ ਚੋਣਾਂ</translation>
 <translation id="8321034316479930120">ਐਨੀਮੇਸ਼ਨ ਨੀਤੀ</translation>
 <translation id="8480209185614411573">ਵੱਧ ਕੰਟ੍ਰਾਸਟ</translation>
 <translation id="8609925175482059018">Caret ਬ੍ਰਾਊਜ਼ਿੰਗ ਨੂੰ ਚਾਲੂ ਕਰਨ ਲਈ &lt;span class='key'&gt;F7&lt;/span&gt; ਦਬਾਓ। ਇਸਨੂੰ ਬੰਦ ਕਰਨ ਲਈ ਦੁਬਾਰਾ ਇਹ ਦਬਾਓ।</translation>
+<translation id="8798099450830957504">ਪੂਰਵ-ਨਿਰਧਾਰਤ</translation>
 <translation id="894241283505723656">ਸੰਦਰਭੀ ਮੀਨੂ ਵਿੱਚ ਲੰਮੇ ਵਰਣਨ</translation>
 </translationbundle>

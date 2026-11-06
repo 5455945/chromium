@@ -1,48 +1,53 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/arc/input_method_manager/arc_input_method_manager_service.h"
 
+#include <algorithm>
 #include <memory>
+#include <optional>
 #include <tuple>
 #include <utility>
 #include <vector>
 
-#include "ash/public/cpp/ash_pref_names.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/public/cpp/keyboard/arc/arc_input_method_bounds_tracker.h"
 #include "ash/public/cpp/keyboard/keyboard_switches.h"
-#include "ash/public/cpp/tablet_mode.h"
-#include "base/containers/cxx20_erase.h"
-#include "base/macros.h"
+#include "ash/wm/tablet_mode/tablet_mode_controller_test_api.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_command_line.h"
 #include "chrome/browser/ash/arc/input_method_manager/test_input_method_manager_bridge.h"
 #include "chrome/browser/ui/ash/keyboard/chrome_keyboard_controller_client_test_helper.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
-#include "components/arc/arc_service_manager.h"
-#include "components/arc/test/test_browser_context.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
+#include "chromeos/ui/base/app_types.h"
+#include "chromeos/ui/base/window_properties.h"
 #include "components/crx_file/id_util.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/base/ime/chromeos/extension_ime_util.h"
-#include "ui/base/ime/chromeos/ime_bridge.h"
-#include "ui/base/ime/chromeos/mock_ime_input_context_handler.h"
-#include "ui/base/ime/chromeos/mock_input_method_manager.h"
+#include "ui/aura/client/aura_constants.h"
+#include "ui/aura/test/test_windows.h"
+#include "ui/base/ime/ash/extension_ime_util.h"
+#include "ui/base/ime/ash/ime_bridge.h"
+#include "ui/base/ime/ash/mock_ime_input_context_handler.h"
+#include "ui/base/ime/ash/mock_input_method_manager.h"
+#include "ui/base/ime/ash/scoped_input_method_manager_for_testing.h"
 #include "ui/base/ime/dummy_text_input_client.h"
 #include "ui/base/ime/mock_input_method.h"
+#include "ui/display/test/test_screen.h"
 #include "ui/views/widget/widget.h"
 
 namespace arc {
 namespace {
 
-namespace im = ::chromeos::input_method;
+namespace im = ::ash::input_method;
 using ::ash::AccessibilityNotificationType;
 
 mojom::ImeInfoPtr GenerateImeInfo(const std::string& id,
@@ -58,43 +63,6 @@ mojom::ImeInfoPtr GenerateImeInfo(const std::string& id,
   info->is_allowed_in_clamshell_mode = always_allowed;
   return info;
 }
-
-class FakeTabletMode : public ash::TabletMode {
- public:
-  FakeTabletMode() = default;
-  ~FakeTabletMode() override = default;
-
-  // ash::TabletMode overrides:
-  void AddObserver(ash::TabletModeObserver* observer) override {
-    observer_ = observer;
-  }
-
-  void RemoveObserver(ash::TabletModeObserver* observer) override {
-    observer_ = nullptr;
-  }
-
-  bool InTabletMode() const override { return in_tablet_mode; }
-
-  bool ForceUiTabletModeState(absl::optional<bool> enabled) override {
-    return false;
-  }
-
-  void SetEnabledForTest(bool enabled) override {
-    bool changed = (in_tablet_mode != enabled);
-    in_tablet_mode = enabled;
-
-    if (changed && observer_) {
-      if (in_tablet_mode)
-        observer_->OnTabletModeStarted();
-      else
-        observer_->OnTabletModeEnded();
-    }
-  }
-
- private:
-  ash::TabletModeObserver* observer_ = nullptr;
-  bool in_tablet_mode = false;
-};
 
 class FakeInputMethodBoundsObserver
     : public ArcInputMethodManagerService::Observer {
@@ -132,23 +100,23 @@ class TestInputMethodManager : public im::MockInputMethodManager {
   class TestState : public im::MockInputMethodManager::State {
    public:
     TestState()
-        : added_input_method_extensions_(), active_input_method_ids_() {}
+        : added_input_method_extensions_(), enabled_input_method_ids_() {}
 
-    const std::vector<std::string>& GetActiveInputMethodIds() const override {
-      return active_input_method_ids_;
+    const std::vector<std::string>& GetEnabledInputMethodIds() const override {
+      return enabled_input_method_ids_;
     }
 
     im::InputMethodDescriptor GetCurrentInputMethod() const override {
       im::InputMethodDescriptor descriptor(
-          active_ime_id_, "", "", "", std::vector<std::string>(),
-          false /* is_login_keyboard */, GURL(), GURL());
+          current_ime_id_, "", "", "", std::vector<std::string>(),
+          false /* is_login_keyboard */, GURL(), GURL(),
+          /*handwriting_language=*/std::nullopt);
       return descriptor;
     }
 
-    void AddInputMethodExtension(
-        const std::string& extension_id,
-        const im::InputMethodDescriptors& descriptors,
-        ui::IMEEngineHandlerInterface* instance) override {
+    void AddInputMethodExtension(const std::string& extension_id,
+                                 const im::InputMethodDescriptors& descriptors,
+                                 ash::TextInputMethod* instance) override {
       added_input_method_extensions_.push_back(
           std::make_tuple(extension_id, descriptors, instance));
     }
@@ -158,32 +126,32 @@ class TestInputMethodManager : public im::MockInputMethodManager {
     }
 
     bool EnableInputMethod(
-        const std::string& new_active_input_method_id) override {
-      enabled_input_methods_.push_back(new_active_input_method_id);
+        const std::string& new_enabled_input_method_id) override {
+      enabled_input_methods_.push_back(new_enabled_input_method_id);
       return true;
     }
 
-    void AddActiveInputMethodId(const std::string& ime_id) {
-      if (!std::count(active_input_method_ids_.begin(),
-                      active_input_method_ids_.end(), ime_id)) {
-        active_input_method_ids_.push_back(ime_id);
+    void AddEnabledInputMethodId(const std::string& ime_id) {
+      if (!std::ranges::contains(enabled_input_method_ids_, ime_id)) {
+        enabled_input_method_ids_.push_back(ime_id);
       }
     }
 
-    void RemoveActiveInputMethodId(const std::string& ime_id) {
-      base::EraseIf(active_input_method_ids_,
+    void RemoveEnabledInputMethodId(const std::string& ime_id) {
+      std::erase_if(enabled_input_method_ids_,
                     [&ime_id](const std::string& id) { return id == ime_id; });
     }
 
-    void SetActiveInputMethod(const std::string& ime_id) {
-      active_ime_id_ = ime_id;
+    void SetCurrentInputMethod(const std::string& ime_id) {
+      current_ime_id_ = ime_id;
     }
 
     void GetInputMethodExtensions(
         im::InputMethodDescriptors* descriptors) override {
-      for (const auto& id : active_input_method_ids_) {
-        descriptors->push_back(im::InputMethodDescriptor(
-            id, "", "", {}, {}, false, GURL(), GURL()));
+      for (const auto& id : enabled_input_method_ids_) {
+        descriptors->push_back(
+            im::InputMethodDescriptor(id, "", "", {}, {}, false, GURL(), GURL(),
+                                      /*handwriting_language=*/std::nullopt));
       }
     }
 
@@ -195,7 +163,7 @@ class TestInputMethodManager : public im::MockInputMethodManager {
 
     std::vector<std::tuple<std::string,
                            im::InputMethodDescriptors,
-                           ui::IMEEngineHandlerInterface*>>
+                           ash::TextInputMethod*>>
         added_input_method_extensions_;
     std::vector<std::string> removed_input_method_extensions_;
     std::vector<std::string> enabled_input_methods_;
@@ -205,13 +173,17 @@ class TestInputMethodManager : public im::MockInputMethodManager {
     ~TestState() override = default;
 
    private:
-    std::vector<std::string> active_input_method_ids_;
-    std::string active_ime_id_;
+    std::vector<std::string> enabled_input_method_ids_;
+    std::string current_ime_id_;
   };
 
   TestInputMethodManager() {
     state_ = scoped_refptr<TestState>(new TestState());
   }
+
+  TestInputMethodManager(const TestInputMethodManager&) = delete;
+  TestInputMethodManager& operator=(const TestInputMethodManager&) = delete;
+
   ~TestInputMethodManager() override = default;
 
   scoped_refptr<InputMethodManager::State> GetActiveIMEState() override {
@@ -222,39 +194,70 @@ class TestInputMethodManager : public im::MockInputMethodManager {
 
  private:
   scoped_refptr<TestState> state_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestInputMethodManager);
 };
 
-class TestIMEInputContextHandler : public ui::MockIMEInputContextHandler {
+class TestIMEInputContextHandler : public ash::MockIMEInputContextHandler {
  public:
   explicit TestIMEInputContextHandler(ui::InputMethod* input_method)
       : input_method_(input_method) {}
 
+  TestIMEInputContextHandler(const TestIMEInputContextHandler&) = delete;
+  TestIMEInputContextHandler& operator=(const TestIMEInputContextHandler&) =
+      delete;
+
   ui::InputMethod* GetInputMethod() override { return input_method_; }
 
  private:
-  ui::InputMethod* const input_method_;
+  const raw_ptr<ui::InputMethod> input_method_;
+};
 
-  DISALLOW_COPY_AND_ASSIGN(TestIMEInputContextHandler);
+class TestWindowDelegate : public ArcInputMethodManagerService::WindowDelegate {
+ public:
+  TestWindowDelegate() = default;
+  ~TestWindowDelegate() override = default;
+
+  aura::Window* GetFocusedWindow() const override {
+    return focused_;
+    ;
+  }
+
+  aura::Window* GetActiveWindow() const override { return active_; }
+
+  void SetFocusedWindow(aura::Window* window) { focused_ = window; }
+
+  void SetActiveWindow(aura::Window* window) { active_ = window; }
+
+ private:
+  raw_ptr<aura::Window, DanglingUntriaged> focused_ = nullptr;
+  raw_ptr<aura::Window, DanglingUntriaged> active_ = nullptr;
 };
 
 class ArcInputMethodManagerServiceTest : public testing::Test {
  protected:
   ArcInputMethodManagerServiceTest()
       : arc_service_manager_(std::make_unique<ArcServiceManager>()) {}
+
+  ArcInputMethodManagerServiceTest(const ArcInputMethodManagerServiceTest&) =
+      delete;
+  ArcInputMethodManagerServiceTest& operator=(
+      const ArcInputMethodManagerServiceTest&) = delete;
+
   ~ArcInputMethodManagerServiceTest() override = default;
 
   ArcInputMethodManagerService* service() { return service_; }
 
   TestInputMethodManagerBridge* bridge() { return test_bridge_; }
 
-  TestInputMethodManager* imm() { return input_method_manager_; }
+  TestInputMethodManager* imm() { return input_method_manager_->get(); }
 
   TestingProfile* profile() { return profile_.get(); }
 
+  TestWindowDelegate* window_delegate() { return window_delegate_; }
+
   void ToggleTabletMode(bool enabled) {
-    tablet_mode_controller_->SetEnabledForTest(enabled);
+    auto state = enabled ? display::TabletState::kInTabletMode
+                         : display::TabletState::kInClamshellMode;
+    test_screen_.OverrideTabletStateForTesting(state);
   }
 
   void NotifyNewBounds(const gfx::Rect& bounds) {
@@ -263,18 +266,23 @@ class ArcInputMethodManagerServiceTest : public testing::Test {
 
   std::vector<std::string> GetEnabledInputMethodIds() {
     return base::SplitString(
-        profile()->GetPrefs()->GetString(prefs::kLanguageEnabledImes), ",",
+        profile()->GetPrefs()->GetString(ash::prefs::kLanguageEnabledImes), ",",
         base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
   }
 
+  aura::Window* CreateTestArcWindow() {
+    auto* window =
+        aura::test::CreateTestWindow({.bounds = {100, 100}, .window_id = 1})
+            .release();
+    window->SetProperty(aura::client::kSkipImeProcessing, true);
+    window->SetProperty(chromeos::kAppTypeKey, chromeos::AppType::ARC_APP);
+    return window;
+  }
+
   void SetUp() override {
-    ui::IMEBridge::Initialize();
-    input_method_manager_ = new TestInputMethodManager();
-    chromeos::input_method::InputMethodManager::Initialize(
-        input_method_manager_);
+    input_method_manager_.emplace();
     profile_ = std::make_unique<TestingProfile>();
 
-    tablet_mode_controller_ = std::make_unique<FakeTabletMode>();
     input_method_bounds_tracker_ =
         std::make_unique<ash::ArcInputMethodBoundsTracker>();
 
@@ -286,7 +294,10 @@ class ArcInputMethodManagerServiceTest : public testing::Test {
         profile_.get());
     test_bridge_ = new TestInputMethodManagerBridge();
     service_->SetInputMethodManagerBridgeForTesting(
-        base::WrapUnique(test_bridge_));
+        base::WrapUnique(test_bridge_.get()));
+    window_delegate_ = new TestWindowDelegate();
+    service_->SetWindowDelegateForTesting(
+        base::WrapUnique(window_delegate_.get()));
   }
 
   void TearDown() override {
@@ -294,33 +305,35 @@ class ArcInputMethodManagerServiceTest : public testing::Test {
     service_->Shutdown();
     chrome_keyboard_controller_client_test_helper_.reset();
     input_method_bounds_tracker_.reset();
-    tablet_mode_controller_.reset();
     profile_.reset();
-    chromeos::input_method::InputMethodManager::Shutdown();
-    ui::IMEBridge::Shutdown();
+    input_method_manager_.reset();
   }
 
  private:
   content::BrowserTaskEnvironment task_environment_;
 
+  display::test::TestScreen test_screen_{/*create_dispay=*/true,
+                                         /*register_screen=*/true};
   std::unique_ptr<ArcServiceManager> arc_service_manager_;
+  // Declared before `profile_` so that it outlives the profile and its keyed
+  // services.
+  std::optional<im::ScopedInputMethodManagerForTesting<TestInputMethodManager>>
+      input_method_manager_;
   std::unique_ptr<TestingProfile> profile_;
   std::unique_ptr<ChromeKeyboardControllerClientTestHelper>
       chrome_keyboard_controller_client_test_helper_;
-  std::unique_ptr<FakeTabletMode> tablet_mode_controller_;
   std::unique_ptr<ash::ArcInputMethodBoundsTracker>
       input_method_bounds_tracker_;
-  TestInputMethodManager* input_method_manager_ = nullptr;
-  TestInputMethodManagerBridge* test_bridge_ = nullptr;  // Owned by |service_|
-  ArcInputMethodManagerService* service_ = nullptr;
-
-  DISALLOW_COPY_AND_ASSIGN(ArcInputMethodManagerServiceTest);
+  raw_ptr<TestInputMethodManagerBridge> test_bridge_ =
+      nullptr;  // Owned by |service_|
+  raw_ptr<ArcInputMethodManagerService, DanglingUntriaged> service_ = nullptr;
+  raw_ptr<TestWindowDelegate, DanglingUntriaged> window_delegate_ = nullptr;
 };
 
 }  // anonymous namespace
 
 TEST_F(ArcInputMethodManagerServiceTest, EnableIme) {
-  namespace ceiu = chromeos::extension_ime_util;
+  namespace aeiu = ::ash::extension_ime_util;
   using crx_file::id_util::GenerateId;
 
   ToggleTabletMode(true);
@@ -328,46 +341,46 @@ TEST_F(ArcInputMethodManagerServiceTest, EnableIme) {
   ASSERT_EQ(0u, bridge()->enable_ime_calls_.size());
 
   const std::string extension_ime_id =
-      ceiu::GetInputMethodID(GenerateId("test.extension.ime"), "us");
+      aeiu::GetInputMethodID(GenerateId("test.extension.ime"), "us");
   const std::string component_extension_ime_id =
-      ceiu::GetComponentInputMethodID(
+      aeiu::GetComponentInputMethodID(
           GenerateId("test.component.extension.ime"), "us");
   const std::string arc_ime_id =
-      ceiu::GetArcInputMethodID(GenerateId("test.arc.ime"), "us");
+      aeiu::GetArcInputMethodID(GenerateId("test.arc.ime"), "us");
 
   // EnableIme is called only when ARC IME is enable or disabled.
-  imm()->state()->AddActiveInputMethodId(extension_ime_id);
+  imm()->state()->AddEnabledInputMethodId(extension_ime_id);
   service()->ImeMenuListChanged();
   EXPECT_EQ(0u, bridge()->enable_ime_calls_.size());
 
-  imm()->state()->AddActiveInputMethodId(component_extension_ime_id);
+  imm()->state()->AddEnabledInputMethodId(component_extension_ime_id);
   service()->ImeMenuListChanged();
   EXPECT_EQ(0u, bridge()->enable_ime_calls_.size());
 
   // Enable the ARC IME and verify that EnableIme is called.
-  imm()->state()->AddActiveInputMethodId(arc_ime_id);
+  imm()->state()->AddEnabledInputMethodId(arc_ime_id);
   service()->ImeMenuListChanged();
   ASSERT_EQ(1u, bridge()->enable_ime_calls_.size());
-  EXPECT_EQ(ceiu::GetComponentIDByInputMethodID(arc_ime_id),
+  EXPECT_EQ(aeiu::GetComponentIDByInputMethodID(arc_ime_id),
             std::get<std::string>(bridge()->enable_ime_calls_[0]));
   EXPECT_TRUE(std::get<bool>(bridge()->enable_ime_calls_[0]));
 
   // Disable the ARC IME and verify that EnableIme is called with false.
-  imm()->state()->RemoveActiveInputMethodId(arc_ime_id);
+  imm()->state()->RemoveEnabledInputMethodId(arc_ime_id);
   service()->ImeMenuListChanged();
   ASSERT_EQ(2u, bridge()->enable_ime_calls_.size());
-  EXPECT_EQ(ceiu::GetComponentIDByInputMethodID(arc_ime_id),
+  EXPECT_EQ(aeiu::GetComponentIDByInputMethodID(arc_ime_id),
             std::get<std::string>(bridge()->enable_ime_calls_[1]));
   EXPECT_FALSE(std::get<bool>(bridge()->enable_ime_calls_[1]));
 
   // EnableIme is not called when non ARC IME is disabled.
-  imm()->state()->RemoveActiveInputMethodId(extension_ime_id);
+  imm()->state()->RemoveEnabledInputMethodId(extension_ime_id);
   service()->ImeMenuListChanged();
   EXPECT_EQ(2u, bridge()->enable_ime_calls_.size());
 }
 
 TEST_F(ArcInputMethodManagerServiceTest, EnableIme_WithPrefs) {
-  namespace ceiu = chromeos::extension_ime_util;
+  namespace aeiu = ::ash::extension_ime_util;
   using crx_file::id_util::GenerateId;
 
   ToggleTabletMode(true);
@@ -375,16 +388,16 @@ TEST_F(ArcInputMethodManagerServiceTest, EnableIme_WithPrefs) {
   ASSERT_EQ(0u, bridge()->enable_ime_calls_.size());
 
   const std::string component_extension_ime_id =
-      ceiu::GetComponentInputMethodID(
+      aeiu::GetComponentInputMethodID(
           GenerateId("test.component.extension.ime"), "us");
   const std::string arc_ime_id =
-      ceiu::GetArcInputMethodID(GenerateId("test.arc.ime"), "us");
+      aeiu::GetArcInputMethodID(GenerateId("test.arc.ime"), "us");
 
-  imm()->state()->AddActiveInputMethodId(component_extension_ime_id);
+  imm()->state()->AddEnabledInputMethodId(component_extension_ime_id);
   service()->ImeMenuListChanged();
   EXPECT_EQ(0u, bridge()->enable_ime_calls_.size());
 
-  imm()->state()->AddActiveInputMethodId(arc_ime_id);
+  imm()->state()->AddEnabledInputMethodId(arc_ime_id);
   service()->ImeMenuListChanged();
   ASSERT_EQ(1u, bridge()->enable_ime_calls_.size());
 
@@ -392,17 +405,17 @@ TEST_F(ArcInputMethodManagerServiceTest, EnableIme_WithPrefs) {
   // toggling to the laptop mode. In that case, the prefs still have the IME's
   // ID.
   profile()->GetPrefs()->SetString(
-      prefs::kLanguageEnabledImes,
+      ash::prefs::kLanguageEnabledImes,
       base::StringPrintf("%s,%s", component_extension_ime_id.c_str(),
                          arc_ime_id.c_str()));
-  imm()->state()->RemoveActiveInputMethodId(arc_ime_id);
+  imm()->state()->RemoveEnabledInputMethodId(arc_ime_id);
   service()->ImeMenuListChanged();
   // Verify that EnableIme(id, false) is NOT called.
   EXPECT_EQ(1u, bridge()->enable_ime_calls_.size());  // still 1u, not 2u.
 }
 
 TEST_F(ArcInputMethodManagerServiceTest, SwitchImeTo) {
-  namespace ceiu = chromeos::extension_ime_util;
+  namespace aeiu = ::ash::extension_ime_util;
   using crx_file::id_util::GenerateId;
 
   const std::string arc_ime_service_id =
@@ -410,39 +423,39 @@ TEST_F(ArcInputMethodManagerServiceTest, SwitchImeTo) {
 
   ToggleTabletMode(true);
 
-  ASSERT_EQ(0u, bridge()->switch_ime_to_calls_.size());
+  bridge()->switch_ime_to_calls_.clear();
 
   const std::string extension_ime_id =
-      ceiu::GetInputMethodID(GenerateId("test.extension.ime"), "us");
+      aeiu::GetInputMethodID(GenerateId("test.extension.ime"), "us");
   const std::string component_extension_ime_id =
-      ceiu::GetComponentInputMethodID(
+      aeiu::GetComponentInputMethodID(
           GenerateId("test.component.extension.ime"), "us");
-  const std::string arc_ime_id = ceiu::GetArcInputMethodID(
+  const std::string arc_ime_id = aeiu::GetArcInputMethodID(
       GenerateId("test.arc.ime"), "ime.id.in.arc.container");
 
-  // Set active input method to the extension ime.
-  imm()->state()->SetActiveInputMethod(extension_ime_id);
+  // Set current (active) input method to the extension ime.
+  imm()->state()->SetCurrentInputMethod(extension_ime_id);
   service()->InputMethodChanged(imm(), nullptr, false /* show_message */);
   // ArcImeService should be selected.
   ASSERT_EQ(1u, bridge()->switch_ime_to_calls_.size());
   EXPECT_EQ(arc_ime_service_id, bridge()->switch_ime_to_calls_[0]);
 
-  // Set active input method to the component extension ime.
-  imm()->state()->SetActiveInputMethod(component_extension_ime_id);
+  // Set current (active) input method to the component extension ime.
+  imm()->state()->SetCurrentInputMethod(component_extension_ime_id);
   service()->InputMethodChanged(imm(), nullptr, false /* show_message */);
   // ArcImeService should be selected.
   ASSERT_EQ(2u, bridge()->switch_ime_to_calls_.size());
   EXPECT_EQ(arc_ime_service_id, bridge()->switch_ime_to_calls_[1]);
 
-  // Set active input method to the arc ime.
-  imm()->state()->SetActiveInputMethod(arc_ime_id);
+  // Set current (active) input method to the arc ime.
+  imm()->state()->SetCurrentInputMethod(arc_ime_id);
   service()->InputMethodChanged(imm(), nullptr, false /* show_message */);
   ASSERT_EQ(3u, bridge()->switch_ime_to_calls_.size());
   EXPECT_EQ("ime.id.in.arc.container", bridge()->switch_ime_to_calls_[2]);
 }
 
 TEST_F(ArcInputMethodManagerServiceTest, OnImeDisabled) {
-  namespace ceiu = chromeos::extension_ime_util;
+  namespace aeiu = ::ash::extension_ime_util;
 
   constexpr char kNonArcIme[] = "ime_a";
   constexpr char kArcImeX[] = "arc_ime_x";
@@ -453,9 +466,9 @@ TEST_F(ArcInputMethodManagerServiceTest, OnImeDisabled) {
   const std::string proxy_ime_extension_id =
       crx_file::id_util::GenerateId(kArcIMEProxyExtensionName);
   const std::string arc_ime_x_component =
-      ceiu::GetArcInputMethodID(proxy_ime_extension_id, kArcImeX);
+      aeiu::GetArcInputMethodID(proxy_ime_extension_id, kArcImeX);
   const std::string arc_ime_y_component =
-      ceiu::GetArcInputMethodID(proxy_ime_extension_id, kArcImeY);
+      aeiu::GetArcInputMethodID(proxy_ime_extension_id, kArcImeY);
   mojom::ImeInfoPtr arc_ime_x = GenerateImeInfo(kArcImeX, "", "", false, false);
   mojom::ImeInfoPtr arc_ime_y = GenerateImeInfo(kArcImeY, "", "", false, false);
 
@@ -472,10 +485,11 @@ TEST_F(ArcInputMethodManagerServiceTest, OnImeDisabled) {
   // Enable one non-ARC IME, then remove an ARC IME. This usually does not
   // happen, but confirm that OnImeDisabled() does not do anything bad even
   // if the IPC is called that way.
-  profile()->GetPrefs()->SetString(prefs::kLanguageEnabledImes, kNonArcIme);
+  profile()->GetPrefs()->SetString(ash::prefs::kLanguageEnabledImes,
+                                   kNonArcIme);
   service()->OnImeDisabled(kArcImeX);
   EXPECT_EQ(kNonArcIme,
-            profile()->GetPrefs()->GetString(prefs::kLanguageEnabledImes));
+            profile()->GetPrefs()->GetString(ash::prefs::kLanguageEnabledImes));
 
   // Enable two IMEs (one non-ARC and one ARC), remove the ARC IME, and then
   // confirm the non-ARC one remains.
@@ -489,10 +503,10 @@ TEST_F(ArcInputMethodManagerServiceTest, OnImeDisabled) {
   std::string pref_str =
       base::StringPrintf("%s,%s", kNonArcIme, arc_ime_x_component.c_str());
   EXPECT_EQ(pref_str,
-            profile()->GetPrefs()->GetString(prefs::kLanguageEnabledImes));
+            profile()->GetPrefs()->GetString(ash::prefs::kLanguageEnabledImes));
   service()->OnImeDisabled(kArcImeX);
   EXPECT_EQ(kNonArcIme,
-            profile()->GetPrefs()->GetString(prefs::kLanguageEnabledImes));
+            profile()->GetPrefs()->GetString(ash::prefs::kLanguageEnabledImes));
 
   // Enable two ARC IMEs along with one non-ARC one, remove one of two ARC IMEs,
   // then confirm one non-ARC IME and one ARC IME still remain.
@@ -507,16 +521,16 @@ TEST_F(ArcInputMethodManagerServiceTest, OnImeDisabled) {
       base::StringPrintf("%s,%s,%s", kNonArcIme, arc_ime_x_component.c_str(),
                          arc_ime_y_component.c_str());
   EXPECT_EQ(pref_str,
-            profile()->GetPrefs()->GetString(prefs::kLanguageEnabledImes));
+            profile()->GetPrefs()->GetString(ash::prefs::kLanguageEnabledImes));
   service()->OnImeDisabled(kArcImeX);
   pref_str =
       base::StringPrintf("%s,%s", kNonArcIme, arc_ime_y_component.c_str());
   EXPECT_EQ(pref_str,
-            profile()->GetPrefs()->GetString(prefs::kLanguageEnabledImes));
+            profile()->GetPrefs()->GetString(ash::prefs::kLanguageEnabledImes));
 }
 
 TEST_F(ArcInputMethodManagerServiceTest, OnImeInfoChanged) {
-  namespace ceiu = chromeos::extension_ime_util;
+  namespace aeiu = ::ash::extension_ime_util;
 
   ToggleTabletMode(true);
 
@@ -533,9 +547,8 @@ TEST_F(ArcInputMethodManagerServiceTest, OnImeInfoChanged) {
   mojom::ImeInfoPtr info2 = GenerateImeInfo(android_ime_id2, display_name2,
                                             settings_url2, true, false);
 
-  std::vector<
-      std::tuple<std::string, chromeos::input_method::InputMethodDescriptors,
-                 ui::IMEEngineHandlerInterface*>>& added_extensions =
+  std::vector<std::tuple<std::string, im::InputMethodDescriptors,
+                         ash::TextInputMethod*>>& added_extensions =
       imm()->state()->added_input_method_extensions_;
   ASSERT_EQ(0u, added_extensions.size());
 
@@ -553,24 +566,27 @@ TEST_F(ArcInputMethodManagerServiceTest, OnImeInfoChanged) {
     service()->OnImeInfoChanged(std::move(info_array));
     ASSERT_EQ(1u, added_extensions.size());
     ASSERT_EQ(1u, std::get<1>(added_extensions[0]).size());
-    EXPECT_EQ(android_ime_id1, ceiu::GetComponentIDByInputMethodID(
+    EXPECT_EQ(android_ime_id1, aeiu::GetComponentIDByInputMethodID(
                                    std::get<1>(added_extensions[0])[0].id()));
     EXPECT_EQ(display_name1, std::get<1>(added_extensions[0])[0].name());
     ASSERT_EQ(1u, std::get<1>(added_extensions[0])[0].language_codes().size());
-    EXPECT_TRUE(chromeos::extension_ime_util::IsArcIME(
+    EXPECT_TRUE(ash::extension_ime_util::IsArcIME(
         std::get<1>(added_extensions[0])[0].id()));
 
     // Emulate enabling ARC IME from chrome://settings.
     const std::string& arc_ime_id = std::get<1>(added_extensions[0])[0].id();
-    profile()->GetPrefs()->SetString(prefs::kLanguageEnabledImes, arc_ime_id);
-    EXPECT_EQ(arc_ime_id,
-              profile()->GetPrefs()->GetString(prefs::kLanguageEnabledImes));
+    profile()->GetPrefs()->SetString(ash::prefs::kLanguageEnabledImes,
+                                     arc_ime_id);
+    EXPECT_EQ(arc_ime_id, profile()->GetPrefs()->GetString(
+                              ash::prefs::kLanguageEnabledImes));
 
     // Removing the ARC IME should clear the pref
     std::vector<mojom::ImeInfoPtr> empty_info_array;
     service()->OnImeInfoChanged(std::move(empty_info_array));
-    EXPECT_TRUE(
-        profile()->GetPrefs()->GetString(prefs::kLanguageEnabledImes).empty());
+    EXPECT_TRUE(profile()
+                    ->GetPrefs()
+                    ->GetString(ash::prefs::kLanguageEnabledImes)
+                    .empty());
     added_extensions.clear();
   }
 
@@ -583,49 +599,49 @@ TEST_F(ArcInputMethodManagerServiceTest, OnImeInfoChanged) {
     // The ARC IMEs should be registered as two IMEs in one extension.
     ASSERT_EQ(1u, added_extensions.size());
     ASSERT_EQ(2u, std::get<1>(added_extensions[0]).size());
-    EXPECT_EQ(android_ime_id1, ceiu::GetComponentIDByInputMethodID(
+    EXPECT_EQ(android_ime_id1, aeiu::GetComponentIDByInputMethodID(
                                    std::get<1>(added_extensions[0])[0].id()));
     EXPECT_EQ(display_name1, std::get<1>(added_extensions[0])[0].name());
-    EXPECT_EQ(android_ime_id2, ceiu::GetComponentIDByInputMethodID(
+    EXPECT_EQ(android_ime_id2, aeiu::GetComponentIDByInputMethodID(
                                    std::get<1>(added_extensions[0])[1].id()));
     EXPECT_EQ(display_name2, std::get<1>(added_extensions[0])[1].name());
 
     // Already enabled IME should be added to the pref automatically.
     const std::string& arc_ime_id2 = std::get<1>(added_extensions[0])[1].id();
-    EXPECT_EQ(arc_ime_id2,
-              profile()->GetPrefs()->GetString(prefs::kLanguageEnabledImes));
+    EXPECT_EQ(arc_ime_id2, profile()->GetPrefs()->GetString(
+                               ash::prefs::kLanguageEnabledImes));
 
     added_extensions.clear();
   }
 }
 
 TEST_F(ArcInputMethodManagerServiceTest, EnableArcIMEsOnlyInTabletMode) {
-  namespace ceiu = chromeos::extension_ime_util;
+  namespace aeiu = ::ash::extension_ime_util;
   using crx_file::id_util::GenerateId;
 
   constexpr char kArcIMEProxyExtensionName[] =
       "org.chromium.arc.inputmethod.proxy";
 
   const std::string extension_ime_id =
-      ceiu::GetInputMethodID(GenerateId("test.extension.ime"), "us");
+      aeiu::GetInputMethodID(GenerateId("test.extension.ime"), "us");
   const std::string component_extension_ime_id =
-      ceiu::GetComponentInputMethodID(
+      aeiu::GetComponentInputMethodID(
           GenerateId("test.component.extension.ime"), "us");
   const std::string proxy_ime_extension_id =
       crx_file::id_util::GenerateId(kArcIMEProxyExtensionName);
   const std::string android_ime_id = "test.arc.ime";
   const std::string arc_ime_id =
-      ceiu::GetArcInputMethodID(proxy_ime_extension_id, android_ime_id);
+      aeiu::GetArcInputMethodID(proxy_ime_extension_id, android_ime_id);
 
   // Start from tablet mode.
   ToggleTabletMode(true);
 
   // Activate the extension IME and the component extension IME.
-  imm()->state()->AddActiveInputMethodId(extension_ime_id);
-  imm()->state()->AddActiveInputMethodId(component_extension_ime_id);
+  imm()->state()->AddEnabledInputMethodId(extension_ime_id);
+  imm()->state()->AddEnabledInputMethodId(component_extension_ime_id);
   // Update the prefs because the testee checks them.
   profile()->GetPrefs()->SetString(
-      prefs::kLanguageEnabledImes,
+      ash::prefs::kLanguageEnabledImes,
       base::StringPrintf("%s,%s", extension_ime_id.c_str(),
                          component_extension_ime_id.c_str()));
   service()->ImeMenuListChanged();
@@ -709,32 +725,32 @@ TEST_F(ArcInputMethodManagerServiceTest, EnableArcIMEsOnlyInTabletMode) {
 
 TEST_F(ArcInputMethodManagerServiceTest,
        RemoveArcIMEsWhenAccessibilityKeyboardEnabled) {
-  namespace ceiu = chromeos::extension_ime_util;
+  namespace aeiu = ::ash::extension_ime_util;
   using crx_file::id_util::GenerateId;
 
   constexpr char kArcIMEProxyExtensionName[] =
       "org.chromium.arc.inputmethod.proxy";
 
   const std::string extension_ime_id =
-      ceiu::GetInputMethodID(GenerateId("test.extension.ime"), "us");
+      aeiu::GetInputMethodID(GenerateId("test.extension.ime"), "us");
   const std::string component_extension_ime_id =
-      ceiu::GetComponentInputMethodID(
+      aeiu::GetComponentInputMethodID(
           GenerateId("test.component.extension.ime"), "us");
   const std::string proxy_ime_extension_id =
       crx_file::id_util::GenerateId(kArcIMEProxyExtensionName);
   const std::string android_ime_id = "test.arc.ime";
   const std::string arc_ime_id =
-      ceiu::GetArcInputMethodID(proxy_ime_extension_id, android_ime_id);
+      aeiu::GetArcInputMethodID(proxy_ime_extension_id, android_ime_id);
 
   // Start from tablet mode.
   ToggleTabletMode(true);
 
   // Activate the extension IME and the component extension IME.
-  imm()->state()->AddActiveInputMethodId(extension_ime_id);
-  imm()->state()->AddActiveInputMethodId(component_extension_ime_id);
+  imm()->state()->AddEnabledInputMethodId(extension_ime_id);
+  imm()->state()->AddEnabledInputMethodId(component_extension_ime_id);
   // Update the prefs because the testee checks them.
   profile()->GetPrefs()->SetString(
-      prefs::kLanguageEnabledImes,
+      ash::prefs::kLanguageEnabledImes,
       base::StringPrintf("%s,%s", extension_ime_id.c_str(),
                          component_extension_ime_id.c_str()));
   service()->ImeMenuListChanged();
@@ -805,22 +821,22 @@ TEST_F(ArcInputMethodManagerServiceTest,
 
 TEST_F(ArcInputMethodManagerServiceTest,
        AllowArcIMEsWhileCommandLineFlagIsSet) {
-  namespace ceiu = chromeos::extension_ime_util;
+  namespace aeiu = ::ash::extension_ime_util;
   using crx_file::id_util::GenerateId;
 
   constexpr char kArcIMEProxyExtensionName[] =
       "org.chromium.arc.inputmethod.proxy";
 
   const std::string extension_ime_id =
-      ceiu::GetInputMethodID(GenerateId("test.extension.ime"), "us");
+      aeiu::GetInputMethodID(GenerateId("test.extension.ime"), "us");
   const std::string component_extension_ime_id =
-      ceiu::GetComponentInputMethodID(
+      aeiu::GetComponentInputMethodID(
           GenerateId("test.component.extension.ime"), "us");
   const std::string proxy_ime_extension_id =
       crx_file::id_util::GenerateId(kArcIMEProxyExtensionName);
   const std::string android_ime_id = "test.arc.ime";
   const std::string arc_ime_id =
-      ceiu::GetArcInputMethodID(proxy_ime_extension_id, android_ime_id);
+      aeiu::GetArcInputMethodID(proxy_ime_extension_id, android_ime_id);
 
   // Add '--enable-virtual-keyboard' flag.
   base::test::ScopedCommandLine scoped_command_line;
@@ -831,11 +847,11 @@ TEST_F(ArcInputMethodManagerServiceTest,
   ToggleTabletMode(true);
 
   // Activate the extension IME and the component extension IME.
-  imm()->state()->AddActiveInputMethodId(extension_ime_id);
-  imm()->state()->AddActiveInputMethodId(component_extension_ime_id);
+  imm()->state()->AddEnabledInputMethodId(extension_ime_id);
+  imm()->state()->AddEnabledInputMethodId(component_extension_ime_id);
   // Update the prefs because the testee checks them.
   profile()->GetPrefs()->SetString(
-      prefs::kLanguageEnabledImes,
+      ash::prefs::kLanguageEnabledImes,
       base::StringPrintf("%s,%s", extension_ime_id.c_str(),
                          component_extension_ime_id.c_str()));
   service()->ImeMenuListChanged();
@@ -898,73 +914,78 @@ TEST_F(ArcInputMethodManagerServiceTest, FocusAndBlur) {
   }
   // The proxy IME engine should be added.
   ASSERT_EQ(1u, imm()->state()->added_input_method_extensions_.size());
-  ui::IMEEngineHandlerInterface* engine_handler =
+  ash::TextInputMethod* engine_handler =
       std::get<2>(imm()->state()->added_input_method_extensions_.at(0));
 
   // Set up mock input context.
-  const ui::IMEEngineHandlerInterface::InputContext test_context{
-      ui::TEXT_INPUT_TYPE_TEXT,
-      ui::TEXT_INPUT_MODE_DEFAULT,
-      0 /* flags */,
-      ui::TextInputClient::FOCUS_REASON_MOUSE,
-      true /* should_do_learning */};
+  const ash::TextInputMethod::InputContext test_context(
+      ui::TEXT_INPUT_TYPE_TEXT);
   ui::MockInputMethod mock_input_method(nullptr);
   TestIMEInputContextHandler test_context_handler(&mock_input_method);
   ui::DummyTextInputClient dummy_text_input_client(ui::TEXT_INPUT_TYPE_TEXT);
-  ui::IMEBridge::Get()->SetInputContextHandler(&test_context_handler);
+  ash::IMEBridge::Get()->SetInputContextHandler(&test_context_handler);
 
   // Enable the ARC IME.
-  ui::IMEBridge::Get()->SetCurrentEngineHandler(engine_handler);
-  engine_handler->Enable(
-      chromeos::extension_ime_util::GetComponentIDByInputMethodID(
-          std::get<1>(imm()->state()->added_input_method_extensions_.at(0))
-              .at(0)
-              .id()));
+  ash::IMEBridge::Get()->SetCurrentEngineHandler(engine_handler);
+  engine_handler->Enable(ash::extension_ime_util::GetComponentIDByInputMethodID(
+      std::get<1>(imm()->state()->added_input_method_extensions_.at(0))
+          .at(0)
+          .id()));
   mock_input_method.SetFocusedTextInputClient(&dummy_text_input_client);
 
   ASSERT_EQ(0, bridge()->focus_calls_count_);
 
-  engine_handler->FocusIn(test_context);
+  engine_handler->Focus(test_context);
   EXPECT_EQ(1, bridge()->focus_calls_count_);
 
-  engine_handler->FocusOut();
+  engine_handler->Blur();
+  EXPECT_EQ(1, bridge()->focus_calls_count_);
+
+  // If an ARC window is focused, Focus doesn't call the bridge's Focus().
+  auto window = base::WrapUnique(CreateTestArcWindow());
+  window_delegate()->SetFocusedWindow(window.get());
+  window_delegate()->SetActiveWindow(window.get());
+
+  engine_handler->Focus(test_context);
+  EXPECT_EQ(1, bridge()->focus_calls_count_);
+
+  engine_handler->Blur();
   EXPECT_EQ(1, bridge()->focus_calls_count_);
 }
 
 TEST_F(ArcInputMethodManagerServiceTest, DisableFallbackVirtualKeyboard) {
-  namespace ceiu = chromeos::extension_ime_util;
+  namespace aeiu = ::ash::extension_ime_util;
   using crx_file::id_util::GenerateId;
 
   ToggleTabletMode(true);
 
   const std::string extension_ime_id =
-      ceiu::GetInputMethodID(GenerateId("test.extension.ime"), "us");
+      aeiu::GetInputMethodID(GenerateId("test.extension.ime"), "us");
   const std::string component_extension_ime_id =
-      ceiu::GetComponentInputMethodID(
+      aeiu::GetComponentInputMethodID(
           GenerateId("test.component.extension.ime"), "us");
-  const std::string arc_ime_id = ceiu::GetArcInputMethodID(
+  const std::string arc_ime_id = aeiu::GetArcInputMethodID(
       GenerateId("test.arc.ime"), "ime.id.in.arc.container");
 
-  // Set active input method to the extension ime.
-  imm()->state()->SetActiveInputMethod(extension_ime_id);
+  // Set current (active) input method to the extension ime.
+  imm()->state()->SetCurrentInputMethod(extension_ime_id);
   service()->InputMethodChanged(imm(), profile(), false /* show_message */);
 
   // Enable Chrome OS virtual keyboard
   auto* client = ChromeKeyboardControllerClient::Get();
   client->ClearEnableFlag(keyboard::KeyboardEnableFlag::kAndroidDisabled);
   client->SetEnableFlag(keyboard::KeyboardEnableFlag::kTouchEnabled);
-  base::RunLoop().RunUntilIdle();  // Allow observers to fire and process.
   ASSERT_FALSE(
       client->IsEnableFlagSet(keyboard::KeyboardEnableFlag::kAndroidDisabled));
 
   // It's disabled when the ARC IME is activated.
-  imm()->state()->SetActiveInputMethod(arc_ime_id);
+  imm()->state()->SetCurrentInputMethod(arc_ime_id);
   service()->InputMethodChanged(imm(), profile(), false);
   EXPECT_TRUE(
       client->IsEnableFlagSet(keyboard::KeyboardEnableFlag::kAndroidDisabled));
 
   // It's re-enabled when the ARC IME is deactivated.
-  imm()->state()->SetActiveInputMethod(component_extension_ime_id);
+  imm()->state()->SetCurrentInputMethod(component_extension_ime_id);
   service()->InputMethodChanged(imm(), profile(), false);
   EXPECT_FALSE(
       client->IsEnableFlagSet(keyboard::KeyboardEnableFlag::kAndroidDisabled));
@@ -987,36 +1008,31 @@ TEST_F(ArcInputMethodManagerServiceTest, ShowVirtualKeyboard) {
   }
   // The proxy IME engine should be added.
   ASSERT_EQ(1u, imm()->state()->added_input_method_extensions_.size());
-  ui::IMEEngineHandlerInterface* engine_handler =
+  ash::TextInputMethod* engine_handler =
       std::get<2>(imm()->state()->added_input_method_extensions_.at(0));
 
   // Set up mock input context.
-  const ui::IMEEngineHandlerInterface::InputContext test_context{
-      ui::TEXT_INPUT_TYPE_TEXT,
-      ui::TEXT_INPUT_MODE_DEFAULT,
-      0 /* flags */,
-      ui::TextInputClient::FOCUS_REASON_MOUSE,
-      true /* should_do_learning */};
+  const ash::TextInputMethod::InputContext test_context(
+      ui::TEXT_INPUT_TYPE_TEXT);
   ui::MockInputMethod mock_input_method(nullptr);
   TestIMEInputContextHandler test_context_handler(&mock_input_method);
   ui::DummyTextInputClient dummy_text_input_client(ui::TEXT_INPUT_TYPE_TEXT);
-  ui::IMEBridge::Get()->SetInputContextHandler(&test_context_handler);
+  ash::IMEBridge::Get()->SetInputContextHandler(&test_context_handler);
 
   // Enable the ARC IME.
-  ui::IMEBridge::Get()->SetCurrentEngineHandler(engine_handler);
-  engine_handler->Enable(
-      chromeos::extension_ime_util::GetComponentIDByInputMethodID(
-          std::get<1>(imm()->state()->added_input_method_extensions_.at(0))
-              .at(0)
-              .id()));
+  ash::IMEBridge::Get()->SetCurrentEngineHandler(engine_handler);
+  engine_handler->Enable(ash::extension_ime_util::GetComponentIDByInputMethodID(
+      std::get<1>(imm()->state()->added_input_method_extensions_.at(0))
+          .at(0)
+          .id()));
 
   mock_input_method.SetFocusedTextInputClient(&dummy_text_input_client);
 
   EXPECT_EQ(0, bridge()->show_virtual_keyboard_calls_count_);
-  mock_input_method.ShowVirtualKeyboardIfEnabled();
+  mock_input_method.SetVirtualKeyboardVisibilityIfEnabled(true);
   EXPECT_EQ(1, bridge()->show_virtual_keyboard_calls_count_);
-  ui::IMEBridge::Get()->SetInputContextHandler(nullptr);
-  ui::IMEBridge::Get()->SetCurrentEngineHandler(nullptr);
+  ash::IMEBridge::Get()->SetInputContextHandler(nullptr);
+  ash::IMEBridge::Get()->SetCurrentEngineHandler(nullptr);
 }
 
 TEST_F(ArcInputMethodManagerServiceTest, VisibilityObserver) {
@@ -1056,28 +1072,23 @@ TEST_F(ArcInputMethodManagerServiceTest, VisibilityObserver) {
   }
   // The proxy IME engine should be added.
   ASSERT_EQ(1u, imm()->state()->added_input_method_extensions_.size());
-  ui::IMEEngineHandlerInterface* engine_handler =
+  ash::TextInputMethod* engine_handler =
       std::get<2>(imm()->state()->added_input_method_extensions_.at(0));
 
   // Set up mock input context.
-  const ui::IMEEngineHandlerInterface::InputContext test_context{
-      ui::TEXT_INPUT_TYPE_TEXT,
-      ui::TEXT_INPUT_MODE_DEFAULT,
-      0 /* flags */,
-      ui::TextInputClient::FOCUS_REASON_MOUSE,
-      true /* should_do_learning */};
+  const ash::TextInputMethod::InputContext test_context(
+      ui::TEXT_INPUT_TYPE_TEXT);
   ui::MockInputMethod mock_input_method(nullptr);
   TestIMEInputContextHandler test_context_handler(&mock_input_method);
   ui::DummyTextInputClient dummy_text_input_client(ui::TEXT_INPUT_TYPE_TEXT);
-  ui::IMEBridge::Get()->SetInputContextHandler(&test_context_handler);
+  ash::IMEBridge::Get()->SetInputContextHandler(&test_context_handler);
 
   // Enable the ARC IME.
-  ui::IMEBridge::Get()->SetCurrentEngineHandler(engine_handler);
-  engine_handler->Enable(
-      chromeos::extension_ime_util::GetComponentIDByInputMethodID(
-          std::get<1>(imm()->state()->added_input_method_extensions_.at(0))
-              .at(0)
-              .id()));
+  ash::IMEBridge::Get()->SetCurrentEngineHandler(engine_handler);
+  engine_handler->Enable(ash::extension_ime_util::GetComponentIDByInputMethodID(
+      std::get<1>(imm()->state()->added_input_method_extensions_.at(0))
+          .at(0)
+          .id()));
   mock_input_method.SetFocusedTextInputClient(&dummy_text_input_client);
 
   // Notify non-empty bounds should cause a visibility changed event now.

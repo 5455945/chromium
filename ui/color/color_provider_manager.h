@@ -1,17 +1,19 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_COLOR_COLOR_PROVIDER_MANAGER_H_
 #define UI_COLOR_COLOR_PROVIDER_MANAGER_H_
 
+#include <cstddef>
 #include <memory>
-#include <tuple>
+#include <vector>
 
-#include "base/callback.h"
 #include "base/callback_list.h"
 #include "base/component_export.h"
 #include "base/containers/flat_map.h"
+#include "base/functional/callback.h"
+#include "ui/color/color_provider_key.h"
 
 namespace ui {
 
@@ -24,17 +26,9 @@ class ColorProvider;
 // necessary to construct a ColorProviderManager manually.
 class COMPONENT_EXPORT(COLOR) ColorProviderManager {
  public:
-  enum class ColorMode {
-    kLight,
-    kDark,
-  };
-  enum class ContrastMode {
-    kNormal,
-    kHigh,
-  };
-  using ColorProviderKey = std::tuple<ColorMode, ContrastMode>;
-  using ColorProviderInitializerList = base::RepeatingCallbackList<
-      void(ColorProvider*, ColorMode, ContrastMode)>;
+  using ColorProviderInitializerList =
+      base::RepeatingCallbackList<void(ColorProvider*,
+                                       const ColorProviderKey&)>;
 
   ColorProviderManager(const ColorProviderManager&) = delete;
   ColorProviderManager& operator=(const ColorProviderManager&) = delete;
@@ -54,7 +48,15 @@ class COMPONENT_EXPORT(COLOR) ColorProviderManager {
       ColorProviderInitializerList::CallbackType Initializer);
 
   // Returns a color provider for |key|, creating one if necessary.
-  ColorProvider* GetColorProviderFor(ColorProviderKey key);
+  ColorProvider* GetColorProviderFor(const ColorProviderKey& key);
+
+  size_t num_providers_initialized() const {
+    return num_providers_initialized_;
+  }
+
+  size_t num_cached_providers_for_testing() const {
+    return color_providers_.size();
+  }
 
  protected:
   ColorProviderManager();
@@ -69,6 +71,10 @@ class COMPONENT_EXPORT(COLOR) ColorProviderManager {
 
   base::flat_map<ColorProviderKey, std::unique_ptr<ColorProvider>>
       color_providers_;
+
+  // Tracks the number of ColorProviders constructed and initialized by the
+  // manager for metrics purposes.
+  size_t num_providers_initialized_ = 0;
 };
 
 }  // namespace ui

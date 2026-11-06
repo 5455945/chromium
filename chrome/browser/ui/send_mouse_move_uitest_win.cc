@@ -1,10 +1,9 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <windows.h>
 
-#include "base/macros.h"
 #include "base/run_loop.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -16,11 +15,12 @@
 #include "ui/gfx/geometry/rect.h"
 
 class SendMouseMoveUITest : public InProcessBrowserTest {
+ public:
+  SendMouseMoveUITest(const SendMouseMoveUITest&) = delete;
+  SendMouseMoveUITest& operator=(const SendMouseMoveUITest&) = delete;
+
  protected:
   SendMouseMoveUITest() = default;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(SendMouseMoveUITest);
 };
 
 // This test positions the mouse at every point on the screen. It is not meant
@@ -36,7 +36,7 @@ IN_PROC_BROWSER_TEST_F(SendMouseMoveUITest, DISABLED_Fullscreen) {
   // current process.
   chrome::ToggleFullscreenMode(browser());
 
-  display::Screen* const screen = display::Screen::GetScreen();
+  display::Screen* const screen = display::Screen::Get();
   const gfx::Rect screen_bounds = screen->GetPrimaryDisplay().bounds();
   for (int scan_y = screen_bounds.y(); scan_y < screen_bounds.bottom();
        ++scan_y) {
@@ -57,14 +57,15 @@ IN_PROC_BROWSER_TEST_F(SendMouseMoveUITest, DISABLED_Fullscreen) {
 }
 
 // Test that the mouse can be positioned at a few locations on the screen.
-IN_PROC_BROWSER_TEST_F(SendMouseMoveUITest, Probe) {
+// TODO(crbug.com/337060697): This test is flaky.
+IN_PROC_BROWSER_TEST_F(SendMouseMoveUITest, DISABLED_Probe) {
   // Make the browser fullscreen so that we can position the mouse anywhere on
   // the display, as ui_controls::SendMouseMoveNotifyWhenDone can only provide
   // notifications when the mouse is moved over a window belonging to the
   // current process.
   chrome::ToggleFullscreenMode(browser());
 
-  display::Screen* const screen = display::Screen::GetScreen();
+  display::Screen* const screen = display::Screen::Get();
   const gfx::Rect screen_bounds = screen->GetPrimaryDisplay().bounds();
 
   // Position the mouse at the corners and the center.
@@ -80,7 +81,7 @@ IN_PROC_BROWSER_TEST_F(SendMouseMoveUITest, Probe) {
                  << "(" << point.x() << ", " << point.y() << ")");
     // Move the pointer.
     base::RunLoop run_loop;
-    EXPECT_TRUE(ui_controls::SendMouseMoveNotifyWhenDone(
+    ASSERT_TRUE(ui_controls::SendMouseMoveNotifyWhenDone(
         point.x(), point.y(), run_loop.QuitClosure()));
     run_loop.Run();
 

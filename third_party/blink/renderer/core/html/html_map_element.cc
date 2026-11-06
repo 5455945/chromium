@@ -32,6 +32,7 @@
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/layout/hit_test_result.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
@@ -60,41 +61,61 @@ HTMLAreaElement* HTMLMapElement::AreaForPoint(
 HTMLImageElement* HTMLMapElement::ImageElement() {
   HTMLCollection* images = GetDocument().images();
   for (unsigned i = 0; Element* curr = images->item(i); ++i) {
-    // The HTMLImageElement's useMap() value includes the '#' symbol at the
-    // beginning, which has to be stripped off.
     auto& image_element = To<HTMLImageElement>(*curr);
-    String use_map_name =
-        image_element.FastGetAttribute(html_names::kUsemapAttr)
-            .GetString()
-            .Substring(1);
-    if (use_map_name == name_)
+    if (MatchesUseMap(
+            image_element.FastGetAttribute(html_names::kUsemapAttr))) {
       return &image_element;
+    }
   }
 
   return nullptr;
 }
 
-void HTMLMapElement::ParseAttribute(const AttributeModificationParams& params) {
-  // FIXME: This logic seems wrong for XML documents.
-  // Either the id or name will be used depending on the order the attributes
-  // are parsed.
+bool HTMLMapElement::MatchesUseMap(
+    const AtomicString& use_map_name_with_hash) const {
+  // The HTMLImageElement's useMap() value includes the '#' symbol at the
+  // beginning, which has to be stripped off.
+  if (use_map_name_with_hash.length() <= 1) {
+    return false;
+  }
+  StringView use_map_name(use_map_name_with_hash, 1);
+  return use_map_name == name_ || use_map_name == GetIdAttribute();
+}
 
+void HTMLMapElement::ParseAttribute(const AttributeModificationParams& params) {
+  // To return the first image that matches usemap on name or id attributes, we
+  // need to track their values in the TreeScope.
+  // https://html.spec.whatwg.org/multipage/#image-map-processing-model
   if (params.name == html_names::kIdAttr ||
       params.name == html_names::kNameAttr) {
+    if (isConnected()) {
+      // Note that GetIdAttribute() will already return the new value of the
+      // `id` attribute, while GetName() won't change until the `name_` member
+      // is changed below.
+      AtomicString old_name = GetName();
+      AtomicString old_id = params.name == html_names::kIdAttr
+                                ? params.old_value
+                                : GetIdAttribute();
+      GetTreeScope().RemoveImageMap(*this, old_name, old_id);
+    }
+
     if (params.name == html_names::kIdAttr) {
       // Call base class so that hasID bit gets set.
       HTMLElement::ParseAttribute(params);
-      if (IsA<HTMLDocument>(GetDocument()))
-        return;
+    } else {
+      StringView map_name = params.new_value;
+      if (map_name.starts_with('#')) {
+        map_name.remove_prefix(1);
+      }
+      if (RuntimeEnabledFeatures::FixMapElementEmptyNameBugEnabled() ||
+          !map_name.empty()) {
+        name_ = map_name.ToAtomicString();
+      }
     }
-    if (isConnected())
-      GetTreeScope().RemoveImageMap(*this);
-    String map_name = params.new_value;
-    if (map_name[0] == '#')
-      map_name = map_name.Substring(1);
-    name_ = AtomicString(map_name);
-    if (isConnected())
+
+    if (isConnected()) {
       GetTreeScope().AddImageMap(*this);
+    }
 
     return;
   }
@@ -114,8 +135,9 @@ Node::InsertionNotificationRequest HTMLMapElement::InsertedInto(
 }
 
 void HTMLMapElement::RemovedFrom(ContainerNode& insertion_point) {
-  if (insertion_point.isConnected())
-    GetTreeScope().RemoveImageMap(*this);
+  if (insertion_point.isConnected()) {
+    GetTreeScope().RemoveImageMap(*this, GetName(), GetIdAttribute());
+  }
   HTMLElement::RemovedFrom(insertion_point);
 }
 

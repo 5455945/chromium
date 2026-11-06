@@ -1,47 +1,31 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/test/revocation_builder.h"
 
+#include <string_view>
+
+#include "base/containers/span.h"
+#include "base/functional/callback.h"
 #include "base/hash/sha1.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
+#include "base/strings/string_view_util.h"
+#include "base/test/bind.h"
+#include "crypto/evp.h"
+#include "crypto/openssl_util.h"
 #include "net/cert/asn1_util.h"
+#include "net/cert/time_conversions.h"
 #include "net/cert/x509_util.h"
-#include "net/der/encode_values.h"
-#include "net/der/input.h"
+#include "net/test/cert_builder.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/boringssl/src/include/openssl/bytestring.h"
 #include "third_party/boringssl/src/include/openssl/mem.h"
+#include "third_party/boringssl/src/pki/input.h"
 
 namespace net {
 
 namespace {
-
-std::string Sha256WithRSAEncryption() {
-  const uint8_t kSha256WithRSAEncryption[] = {0x30, 0x0D, 0x06, 0x09, 0x2a,
-                                              0x86, 0x48, 0x86, 0xf7, 0x0d,
-                                              0x01, 0x01, 0x0b, 0x05, 0x00};
-  return std::string(std::begin(kSha256WithRSAEncryption),
-                     std::end(kSha256WithRSAEncryption));
-}
-
-std::string Sha1WithRSAEncryption() {
-  const uint8_t kSha1WithRSAEncryption[] = {0x30, 0x0D, 0x06, 0x09, 0x2a,
-                                            0x86, 0x48, 0x86, 0xf7, 0x0d,
-                                            0x01, 0x01, 0x05, 0x05, 0x00};
-  return std::string(std::begin(kSha1WithRSAEncryption),
-                     std::end(kSha1WithRSAEncryption));
-}
-
-std::string Md5WithRSAEncryption() {
-  const uint8_t kMd5WithRSAEncryption[] = {0x30, 0x0d, 0x06, 0x09, 0x2a,
-                                           0x86, 0x48, 0x86, 0xf7, 0x0d,
-                                           0x01, 0x01, 0x04, 0x05, 0x00};
-  return std::string(std::begin(kMd5WithRSAEncryption),
-                     std::end(kMd5WithRSAEncryption));
-}
 
 std::string Sha1() {
   // SEQUENCE { OBJECT_IDENTIFIER { 1.3.14.3.2.26 } }
@@ -50,59 +34,51 @@ std::string Sha1() {
   return std::string(std::begin(kSHA1), std::end(kSHA1));
 }
 
-// Adds bytes (specified as a StringPiece) to the given CBB.
+// Adds bytes (specified as a std::string_view) to the given CBB.
 // The argument ordering follows the boringssl CBB_* api style.
-bool CBBAddBytes(CBB* cbb, base::StringPiece bytes) {
+bool CBBAddBytes(CBB* cbb, std::string_view bytes) {
   return CBB_add_bytes(cbb, reinterpret_cast<const uint8_t*>(bytes.data()),
                        bytes.size());
 }
 
-// Adds bytes (from fixed size array) to the given CBB.
+// Adds bytes (specified as a span) to the given CBB.
 // The argument ordering follows the boringssl CBB_* api style.
-template <size_t N>
-bool CBBAddBytes(CBB* cbb, const uint8_t (&data)[N]) {
-  return CBB_add_bytes(cbb, data, N);
+bool CBBAddBytes(CBB* cbb, base::span<const uint8_t> data) {
+  return CBB_add_bytes(cbb, data.data(), data.size());
 }
 
 // Adds a GeneralizedTime value to the given CBB.
 // The argument ordering follows the boringssl CBB_* api style.
-bool CBBAddGeneralizedTime(CBB* cbb, const base::Time& time) {
-  der::GeneralizedTime generalized_time;
-  if (!der::EncodeTimeAsGeneralizedTime(time, &generalized_time))
+bool CBBAddGeneralizedTime(CBB* cbb, base::Time time) {
+  bssl::der::GeneralizedTime generalized_time;
+  if (!EncodeTimeAsGeneralizedTime(time, &generalized_time)) {
     return false;
+  }
   CBB time_cbb;
-  uint8_t out[der::kGeneralizedTimeLength];
-  if (!der::EncodeGeneralizedTime(generalized_time, out) ||
+  uint8_t out[bssl::der::kGeneralizedTimeLength];
+  if (!bssl::der::EncodeGeneralizedTime(generalized_time, out) ||
       !CBB_add_asn1(cbb, &time_cbb, CBS_ASN1_GENERALIZEDTIME) ||
-      !CBBAddBytes(&time_cbb, out) || !CBB_flush(cbb))
+      !CBBAddBytes(&time_cbb, out) || !CBB_flush(cbb)) {
     return false;
+  }
   return true;
 }
 
 // Finalizes the CBB to a std::string.
 std::string FinishCBB(CBB* cbb) {
-  size_t cbb_len;
-  uint8_t* cbb_bytes;
-
-  if (!CBB_finish(cbb, &cbb_bytes, &cbb_len)) {
-    ADD_FAILURE() << "CBB_finish() failed";
+  if (!CBB_flush(cbb)) {
+    ADD_FAILURE() << "CBB_flush() failed";
     return std::string();
   }
-
-  bssl::UniquePtr<uint8_t> delete_bytes(cbb_bytes);
-  return std::string(reinterpret_cast<char*>(cbb_bytes), cbb_len);
+  return std::string(base::as_string_view(crypto::CbbAsSpan(cbb)));
 }
 
 std::string PKeyToSPK(const EVP_PKEY* pkey) {
-  bssl::ScopedCBB cbb;
-  if (!CBB_init(cbb.get(), 64) || !EVP_marshal_public_key(cbb.get(), pkey)) {
-    ADD_FAILURE();
-    return std::string();
-  }
-  std::string spki = FinishCBB(cbb.get());
+  std::vector<uint8_t> spki = crypto::evp::PublicKeyToBytes(pkey);
 
-  base::StringPiece spk;
-  if (!asn1::ExtractSubjectPublicKeyFromSPKI(spki, &spk)) {
+  std::string_view spk;
+  if (!asn1::ExtractSubjectPublicKeyFromSPKI(base::as_string_view(spki),
+                                             &spk)) {
     ADD_FAILURE();
     return std::string();
   }
@@ -110,7 +86,7 @@ std::string PKeyToSPK(const EVP_PKEY* pkey) {
   // ExtractSubjectPublicKeyFromSPKI() includes the unused bit count. For this
   // application, the unused bit count must be zero, and is not included in the
   // result.
-  if (!base::StartsWith(spk, "\0")) {
+  if (spk.empty() || spk[0] != '\0') {
     ADD_FAILURE();
     return std::string();
   }
@@ -119,14 +95,15 @@ std::string PKeyToSPK(const EVP_PKEY* pkey) {
   return std::string(spk);
 }
 
-// Returns a DER-encoded OCSPResponse with the given |response_status|.
+// Returns a DER-encoded bssl::OCSPResponse with the given |response_status|.
 // |response_type| and |response| are optional and may be empty.
-std::string EncodeOCSPResponse(OCSPResponse::ResponseStatus response_status,
-                               der::Input response_type,
-                               std::string response) {
+std::string EncodeOCSPResponse(
+    bssl::OCSPResponse::ResponseStatus response_status,
+    bssl::der::Input response_type,
+    std::string response) {
   // RFC 6960 section 4.2.1:
   //
-  //    OCSPResponse ::= SEQUENCE {
+  //    bssl::OCSPResponse ::= SEQUENCE {
   //       responseStatus         OCSPResponseStatus,
   //       responseBytes          [0] EXPLICIT ResponseBytes OPTIONAL }
   //
@@ -151,7 +128,7 @@ std::string EncodeOCSPResponse(OCSPResponse::ResponseStatus response_status,
       ocsp_response_bytes_sequence, ocsp_response_type,
       ocsp_response_octet_string;
 
-  if (!CBB_init(cbb.get(), 64 + response_type.Length() + response.size()) ||
+  if (!CBB_init(cbb.get(), 64 + response_type.size() + response.size()) ||
       !CBB_add_asn1(cbb.get(), &ocsp_response, CBS_ASN1_SEQUENCE) ||
       !CBB_add_asn1(&ocsp_response, &ocsp_response_status,
                     CBS_ASN1_ENUMERATED) ||
@@ -161,14 +138,14 @@ std::string EncodeOCSPResponse(OCSPResponse::ResponseStatus response_status,
     return std::string();
   }
 
-  if (response_type.Length()) {
+  if (!response_type.empty()) {
     if (!CBB_add_asn1(&ocsp_response, &ocsp_response_bytes,
                       CBS_ASN1_CONTEXT_SPECIFIC | CBS_ASN1_CONSTRUCTED | 0) ||
         !CBB_add_asn1(&ocsp_response_bytes, &ocsp_response_bytes_sequence,
                       CBS_ASN1_SEQUENCE) ||
         !CBB_add_asn1(&ocsp_response_bytes_sequence, &ocsp_response_type,
                       CBS_ASN1_OBJECT) ||
-        !CBBAddBytes(&ocsp_response_type, response_type.AsStringPiece()) ||
+        !CBBAddBytes(&ocsp_response_type, response_type) ||
         !CBB_add_asn1(&ocsp_response_bytes_sequence,
                       &ocsp_response_octet_string, CBS_ASN1_OCTETSTRING) ||
         !CBBAddBytes(&ocsp_response_octet_string, response)) {
@@ -244,14 +221,14 @@ bool AddOCSPSingleResponse(CBB* responses_cbb,
 
   unsigned int cert_status_tag_number;
   switch (response.cert_status) {
-    case OCSPRevocationStatus::GOOD:
+    case bssl::OCSPRevocationStatus::GOOD:
       cert_status_tag_number = CBS_ASN1_CONTEXT_SPECIFIC | 0;
       break;
-    case OCSPRevocationStatus::REVOKED:
+    case bssl::OCSPRevocationStatus::REVOKED:
       cert_status_tag_number =
           CBS_ASN1_CONTEXT_SPECIFIC | CBS_ASN1_CONSTRUCTED | 1;
       break;
-    case OCSPRevocationStatus::UNKNOWN:
+    case bssl::OCSPRevocationStatus::UNKNOWN:
       cert_status_tag_number = CBS_ASN1_CONTEXT_SPECIFIC | 2;
       break;
   }
@@ -262,7 +239,7 @@ bool AddOCSPSingleResponse(CBB* responses_cbb,
     ADD_FAILURE();
     return false;
   }
-  if (response.cert_status == OCSPRevocationStatus::REVOKED &&
+  if (response.cert_status == bssl::OCSPRevocationStatus::REVOKED &&
       !CBBAddGeneralizedTime(&cert_status_cbb, response.revocation_time)) {
     ADD_FAILURE();
     return false;
@@ -283,16 +260,17 @@ bool AddOCSPSingleResponse(CBB* responses_cbb,
 }  // namespace
 
 std::string BuildOCSPResponseError(
-    OCSPResponse::ResponseStatus response_status) {
-  DCHECK_NE(response_status, OCSPResponse::ResponseStatus::SUCCESSFUL);
-  return EncodeOCSPResponse(response_status, der::Input(), std::string());
+    bssl::OCSPResponse::ResponseStatus response_status) {
+  DCHECK_NE(response_status, bssl::OCSPResponse::ResponseStatus::SUCCESSFUL);
+  return EncodeOCSPResponse(response_status, bssl::der::Input(), std::string());
 }
 
 std::string BuildOCSPResponse(
     const std::string& responder_subject,
     EVP_PKEY* responder_key,
     base::Time produced_at,
-    const std::vector<OCSPBuilderSingleResponse>& responses) {
+    const std::vector<OCSPBuilderSingleResponse>& responses,
+    std::optional<bssl::SignatureAlgorithm> signature_algorithm) {
   std::string responder_name_hash = base::SHA1HashString(responder_subject);
   std::string responder_key_hash =
       base::SHA1HashString(PKeyToSPK(responder_key));
@@ -337,13 +315,14 @@ std::string BuildOCSPResponse(
 
   // responseExtensions not currently supported.
 
-  return BuildOCSPResponseWithResponseData(responder_key,
-                                           FinishCBB(tbs_cbb.get()));
+  return BuildOCSPResponseWithResponseData(
+      responder_key, FinishCBB(tbs_cbb.get()), signature_algorithm);
 }
 
 std::string BuildOCSPResponseWithResponseData(
     EVP_PKEY* responder_key,
-    const std::string& tbs_response_data) {
+    const std::string& tbs_response_data,
+    std::optional<bssl::SignatureAlgorithm> signature_algorithm) {
   //    For a basic OCSP responder, responseType will be id-pkix-ocsp-basic.
   //
   //    id-pkix-ocsp           OBJECT IDENTIFIER ::= { id-ad-ocsp }
@@ -366,67 +345,49 @@ std::string BuildOCSPResponseWithResponseData(
   //
   bssl::ScopedCBB basic_ocsp_response_cbb;
   CBB basic_ocsp_response, signature;
-  bssl::ScopedEVP_MD_CTX ctx;
-  uint8_t* sig_out;
-  size_t sig_len;
-  if (!CBB_init(basic_ocsp_response_cbb.get(), 64 + tbs_response_data.size()) ||
+  if (!responder_key) {
+    ADD_FAILURE();
+    return std::string();
+  }
+  if (!signature_algorithm)
+    signature_algorithm =
+        CertBuilder::DefaultSignatureAlgorithmForKey(responder_key);
+  if (!signature_algorithm) {
+    ADD_FAILURE();
+    return std::string();
+  }
+  std::string signature_algorithm_tlv =
+      CertBuilder::SignatureAlgorithmToDer(*signature_algorithm);
+  if (signature_algorithm_tlv.empty() ||
+      !CBB_init(basic_ocsp_response_cbb.get(), 64 + tbs_response_data.size()) ||
       !CBB_add_asn1(basic_ocsp_response_cbb.get(), &basic_ocsp_response,
                     CBS_ASN1_SEQUENCE) ||
       !CBBAddBytes(&basic_ocsp_response, tbs_response_data) ||
-      !CBBAddBytes(&basic_ocsp_response, Sha256WithRSAEncryption()) ||
+      !CBBAddBytes(&basic_ocsp_response, signature_algorithm_tlv) ||
       !CBB_add_asn1(&basic_ocsp_response, &signature, CBS_ASN1_BITSTRING) ||
       !CBB_add_u8(&signature, 0 /* no unused bits */) ||
-      !EVP_DigestSignInit(ctx.get(), nullptr, EVP_sha256(), nullptr,
-                          responder_key) ||
-      !EVP_DigestSign(
-          ctx.get(), nullptr, &sig_len,
-          reinterpret_cast<const uint8_t*>(tbs_response_data.data()),
-          tbs_response_data.size()) ||
-      !CBB_reserve(&signature, &sig_out, sig_len) ||
-      !EVP_DigestSign(
-          ctx.get(), sig_out, &sig_len,
-          reinterpret_cast<const uint8_t*>(tbs_response_data.data()),
-          tbs_response_data.size()) ||
-      !CBB_did_write(&signature, sig_len)) {
+      !CertBuilder::SignData(*signature_algorithm, tbs_response_data,
+                             responder_key, &signature)) {
     ADD_FAILURE();
     return std::string();
   }
 
   // certs field not currently supported.
 
-  return EncodeOCSPResponse(OCSPResponse::ResponseStatus::SUCCESSFUL,
-                            BasicOCSPResponseOid(),
+  return EncodeOCSPResponse(bssl::OCSPResponse::ResponseStatus::SUCCESSFUL,
+                            bssl::der::Input(bssl::kBasicOCSPResponseOid),
                             FinishCBB(basic_ocsp_response_cbb.get()));
 }
 
-std::string BuildCrl(const std::string& crl_issuer_subject,
-                     EVP_PKEY* crl_issuer_key,
-                     const std::vector<uint64_t>& revoked_serials,
-                     DigestAlgorithm digest) {
-  std::string signature_algorithm;
-  const EVP_MD* md = nullptr;
-  switch (digest) {
-    case DigestAlgorithm::Sha256: {
-      signature_algorithm = Sha256WithRSAEncryption();
-      md = EVP_sha256();
-      break;
-    }
-
-    case DigestAlgorithm::Sha1: {
-      signature_algorithm = Sha1WithRSAEncryption();
-      md = EVP_sha1();
-      break;
-    }
-
-    case DigestAlgorithm::Md5: {
-      signature_algorithm = Md5WithRSAEncryption();
-      md = EVP_md5();
-      break;
-    }
-
-    default:
-      ADD_FAILURE();
-      return std::string();
+std::string BuildCrlWithSigner(
+    const std::string& crl_issuer_subject,
+    EVP_PKEY* crl_issuer_key,
+    const std::vector<uint64_t>& revoked_serials,
+    const std::string& signature_algorithm_tlv,
+    base::OnceCallback<bool(std::string, CBB*)> signer) {
+  if (!crl_issuer_key) {
+    ADD_FAILURE();
+    return std::string();
   }
   //    TBSCertList  ::=  SEQUENCE  {
   //         version                 Version OPTIONAL,
@@ -449,12 +410,12 @@ std::string BuildCrl(const std::string& crl_issuer_subject,
   if (!CBB_init(tbs_cbb.get(), 10) ||
       !CBB_add_asn1(tbs_cbb.get(), &tbs_cert_list, CBS_ASN1_SEQUENCE) ||
       !CBB_add_asn1_uint64(&tbs_cert_list, 1 /* V2 */) ||
-      !CBBAddBytes(&tbs_cert_list, signature_algorithm) ||
+      !CBBAddBytes(&tbs_cert_list, signature_algorithm_tlv) ||
       !CBBAddBytes(&tbs_cert_list, crl_issuer_subject) ||
-      !x509_util::CBBAddTime(
-          &tbs_cert_list, base::Time::Now() - base::TimeDelta::FromDays(1)) ||
-      !x509_util::CBBAddTime(
-          &tbs_cert_list, base::Time::Now() + base::TimeDelta::FromDays(6))) {
+      !x509_util::CBBAddTime(&tbs_cert_list,
+                             base::Time::Now() - base::Days(1)) ||
+      !x509_util::CBBAddTime(&tbs_cert_list,
+                             base::Time::Now() + base::Days(6))) {
     ADD_FAILURE();
     return std::string();
   }
@@ -469,9 +430,8 @@ std::string BuildCrl(const std::string& crl_issuer_subject,
       if (!CBB_add_asn1(&revoked_serials_cbb, &revoked_serial_cbb,
                         CBS_ASN1_SEQUENCE) ||
           !CBB_add_asn1_uint64(&revoked_serial_cbb, revoked_serial) ||
-          !x509_util::CBBAddTime(
-              &revoked_serial_cbb,
-              base::Time::Now() - base::TimeDelta::FromDays(1)) ||
+          !x509_util::CBBAddTime(&revoked_serial_cbb,
+                                 base::Time::Now() - base::Days(1)) ||
           !CBB_flush(&revoked_serials_cbb)) {
         ADD_FAILURE();
         return std::string();
@@ -487,27 +447,61 @@ std::string BuildCrl(const std::string& crl_issuer_subject,
   //         signatureValue       BIT STRING  }
   bssl::ScopedCBB crl_cbb;
   CBB cert_list, signature;
-  bssl::ScopedEVP_MD_CTX ctx;
-  uint8_t* sig_out;
-  size_t sig_len;
   if (!CBB_init(crl_cbb.get(), 10) ||
       !CBB_add_asn1(crl_cbb.get(), &cert_list, CBS_ASN1_SEQUENCE) ||
       !CBBAddBytes(&cert_list, tbs_tlv) ||
-      !CBBAddBytes(&cert_list, signature_algorithm) ||
+      !CBBAddBytes(&cert_list, signature_algorithm_tlv) ||
       !CBB_add_asn1(&cert_list, &signature, CBS_ASN1_BITSTRING) ||
       !CBB_add_u8(&signature, 0 /* no unused bits */) ||
-      !EVP_DigestSignInit(ctx.get(), nullptr, md, nullptr, crl_issuer_key) ||
-      !EVP_DigestSign(ctx.get(), nullptr, &sig_len,
-                      reinterpret_cast<const uint8_t*>(tbs_tlv.data()),
-                      tbs_tlv.size()) ||
-      !CBB_reserve(&signature, &sig_out, sig_len) ||
-      !EVP_DigestSign(ctx.get(), sig_out, &sig_len,
-                      reinterpret_cast<const uint8_t*>(tbs_tlv.data()),
-                      tbs_tlv.size()) ||
-      !CBB_did_write(&signature, sig_len)) {
+      !std::move(signer).Run(tbs_tlv, &signature)) {
     ADD_FAILURE();
     return std::string();
   }
   return FinishCBB(crl_cbb.get());
 }
+
+std::string BuildCrl(
+    const std::string& crl_issuer_subject,
+    EVP_PKEY* crl_issuer_key,
+    const std::vector<uint64_t>& revoked_serials,
+    std::optional<bssl::SignatureAlgorithm> signature_algorithm) {
+  if (!signature_algorithm) {
+    signature_algorithm =
+        CertBuilder::DefaultSignatureAlgorithmForKey(crl_issuer_key);
+  }
+  if (!signature_algorithm) {
+    ADD_FAILURE();
+    return std::string();
+  }
+  std::string signature_algorithm_tlv =
+      CertBuilder::SignatureAlgorithmToDer(*signature_algorithm);
+  if (signature_algorithm_tlv.empty()) {
+    ADD_FAILURE();
+    return std::string();
+  }
+
+  auto signer =
+      base::BindLambdaForTesting([&](std::string tbs_tlv, CBB* signature) {
+        return CertBuilder::SignData(*signature_algorithm, tbs_tlv,
+                                     crl_issuer_key, signature);
+      });
+  return BuildCrlWithSigner(crl_issuer_subject, crl_issuer_key, revoked_serials,
+                            signature_algorithm_tlv, signer);
+}
+
+std::string BuildCrlWithAlgorithmTlvAndDigest(
+    const std::string& crl_issuer_subject,
+    EVP_PKEY* crl_issuer_key,
+    const std::vector<uint64_t>& revoked_serials,
+    const std::string& signature_algorithm_tlv,
+    const EVP_MD* digest) {
+  auto signer =
+      base::BindLambdaForTesting([&](std::string tbs_tlv, CBB* signature) {
+        return CertBuilder::SignDataWithDigest(digest, tbs_tlv, crl_issuer_key,
+                                               signature);
+      });
+  return BuildCrlWithSigner(crl_issuer_subject, crl_issuer_key, revoked_serials,
+                            signature_algorithm_tlv, signer);
+}
+
 }  // namespace net

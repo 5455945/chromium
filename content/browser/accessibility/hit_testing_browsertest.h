@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,19 @@
 
 #include "content/browser/accessibility/accessibility_content_browsertest.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/gfx/geometry/point.h"
+
+namespace gfx {
+
+class Point;
+
+}  // namespace gfx
 
 namespace content {
 
-// First parameter of the tuple = device scale factor
-// Second parameter = whether use-zoom-for-dsf is enabled
-using AccessibilityZoomTestParam = std::tuple<double, bool>;
-
 class AccessibilityHitTestingBrowserTest
     : public AccessibilityContentBrowserTest,
-      public ::testing::WithParamInterface<AccessibilityZoomTestParam> {
+      public ::testing::WithParamInterface<double> {
  public:
   AccessibilityHitTestingBrowserTest();
   ~AccessibilityHitTestingBrowserTest() override;
@@ -24,12 +27,11 @@ class AccessibilityHitTestingBrowserTest
   void SetUpCommandLine(base::CommandLine* command_line) override;
 
   struct TestPassToString {
-    std::string operator()(
-        const ::testing::TestParamInfo<AccessibilityZoomTestParam>& info) const;
+    std::string operator()(const ::testing::TestParamInfo<double>& info) const;
   };
 
  protected:
-  BrowserAccessibilityManager* GetRootBrowserAccessibilityManager();
+  ui::BrowserAccessibilityManager* GetRootBrowserAccessibilityManager();
   float GetDeviceScaleFactor();
   float GetPageScaleFactor();
   gfx::Rect GetViewBoundsInScreenCoordinates();
@@ -38,25 +40,27 @@ class AccessibilityHitTestingBrowserTest
   gfx::Point FrameToCSSPoint(gfx::Point css_point);
 
   // Test the hit test action that fires an event.
-  BrowserAccessibility* HitTestAndWaitForResultWithEvent(
+  ui::BrowserAccessibility* HitTestAndWaitForResultWithEvent(
       const gfx::Point& point,
       ax::mojom::Event event_to_fire);
-  BrowserAccessibility* HitTestAndWaitForResult(const gfx::Point& point);
+  ui::BrowserAccessibility* HitTestAndWaitForResult(const gfx::Point& point);
 
   // Test the hit test mojo RPC that calls a callback function.
-  BrowserAccessibility* AsyncHitTestAndWaitForCallback(const gfx::Point& point);
+  ui::BrowserAccessibility* AsyncHitTestAndWaitForCallback(
+      const gfx::Point& point);
 
   // Test the caching async hit test.
-  BrowserAccessibility* CallCachingAsyncHitTest(const gfx::Point& page_point);
+  ui::BrowserAccessibility* CallCachingAsyncHitTest(
+      const gfx::Point& page_point);
 
-  BrowserAccessibility* CallNearestLeafNode(const gfx::Point& page_point);
+  ui::BrowserAccessibility* CallNearestLeafNode(const gfx::Point& page_point);
   void SynchronizeThreads();
   std::string FormatHitTestAccessibilityTree();
   std::string GetScopedTrace(gfx::Point css_point);
   void SimulatePinchZoom(float desired_page_scale);
 
   float page_scale_ = 1.0f;
-  gfx::Vector2d scroll_offset_;
+  gfx::Point scroll_offset_;
 };
 
 }  // namespace content

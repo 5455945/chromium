@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,8 @@
 
 #include <string>
 
-#include "base/util/type_safety/id_type.h"
-#include "url/gurl.h"
+#include "base/types/id_type.h"
+#include "content/public/browser/global_routing_id.h"
 
 namespace content {
 class RenderFrameHost;
@@ -24,43 +24,41 @@ namespace permissions {
 class PermissionRequestID {
  public:
   // Uniquely identifies a request (at least) within a given frame.
-  using RequestLocalId = util::IdType64<PermissionRequestID>;
+  using RequestLocalId = base::IdType64<PermissionRequestID>;
 
   PermissionRequestID(content::RenderFrameHost* render_frame_host,
                       RequestLocalId request_local_id);
-  PermissionRequestID(int render_process_id,
-                      int render_frame_id,
+  PermissionRequestID(content::GlobalRenderFrameHostId id,
                       RequestLocalId request_local_id);
   ~PermissionRequestID();
 
   PermissionRequestID(const PermissionRequestID&);
   PermissionRequestID& operator=(const PermissionRequestID&);
 
-  int render_process_id() const { return render_process_id_; }
-  int render_frame_id() const { return render_frame_id_; }
+  void set_global_render_frame_host_id(
+      const content::GlobalRenderFrameHostId& id) {
+    global_render_frame_host_id_ = id;
+  }
+
+  const content::GlobalRenderFrameHostId& global_render_frame_host_id() const {
+    return global_render_frame_host_id_;
+  }
 
   // Deprecated. Only accessible for testing.
   RequestLocalId request_local_id_for_testing() const {
     return request_local_id_;
   }
 
-  bool operator==(const PermissionRequestID& other) const;
-  bool operator!=(const PermissionRequestID& other) const;
+  friend bool operator==(const PermissionRequestID&,
+                         const PermissionRequestID&) = default;
 
   std::string ToString() const;
 
  private:
-  int render_process_id_;
-  int render_frame_id_;
+  content::GlobalRenderFrameHostId global_render_frame_host_id_;
   RequestLocalId request_local_id_;
 };
 
 }  // namespace permissions
-
-namespace std {
-template <>
-struct hash<permissions::PermissionRequestID::RequestLocalId>
-    : public permissions::PermissionRequestID::RequestLocalId::Hasher {};
-}  // namespace std
 
 #endif  // COMPONENTS_PERMISSIONS_PERMISSION_REQUEST_ID_H_

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,22 +23,20 @@ class CORE_EXPORT BoxPaintInvalidator {
                       const PaintInvalidatorContext& context)
       : box_(box), context_(context) {}
 
-  static void BoxWillBeDestroyed(const LayoutBox&);
-
   void InvalidatePaint();
 
  private:
   friend class BoxPaintInvalidatorTest;
 
   bool HasEffectiveBackground();
-  bool BackgroundGeometryDependsOnLayoutOverflowRect();
-  bool BackgroundPaintsOntoScrollingContentsLayer();
-  bool BackgroundPaintsOntoMainGraphicsLayer();
-  bool ShouldFullyInvalidateBackgroundOnLayoutOverflowChange(
-      const PhysicalRect& old_layout_overflow,
-      const PhysicalRect& new_layout_overflow);
+  bool BackgroundGeometryDependsOnScrollableOverflowRect();
+  bool BackgroundPaintsInContentsSpace();
+  bool BackgroundPaintsInBorderBoxSpace();
+  bool ShouldFullyInvalidateBackgroundOnScrollableOverflowChange(
+      const PhysicalRect& old_scrollable_overflow,
+      const PhysicalRect& new_scrollable_overflow);
 
-  enum BackgroundInvalidationType { kNone = 0, kIncremental, kFull };
+  enum class BackgroundInvalidationType { kNone = 0, kIncremental, kFull };
   BackgroundInvalidationType ComputeViewBackgroundInvalidation();
   BackgroundInvalidationType ComputeBackgroundInvalidation(
       bool& should_invalidate_all_layers);
@@ -46,8 +44,8 @@ class CORE_EXPORT BoxPaintInvalidator {
 
   PaintInvalidationReason ComputePaintInvalidationReason();
 
-  bool NeedsToSavePreviousContentBoxRect();
-  bool NeedsToSavePreviousOverflowData();
+  bool ShouldInvalidateGapDecorations() const;
+
   void SavePreviousBoxGeometriesIfNeeded();
 
   const LayoutBox& box_;

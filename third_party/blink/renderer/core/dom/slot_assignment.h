@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,9 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_DOM_SLOT_ASSIGNMENT_H_
 
 #include "third_party/blink/renderer/core/dom/tree_ordered_map.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 
 namespace blink {
@@ -32,7 +34,7 @@ class SlotAssignment final : public GarbageCollected<SlotAssignment> {
   // Instead, provide alternative, HTMLSlotElement::hasAssignedNodesSlow()
   // so that slotchange can be detected.
 
-  const HeapVector<Member<HTMLSlotElement>>& Slots();
+  HeapVector<Member<HTMLSlotElement>>& Slots();
 
   void DidAddSlot(HTMLSlotElement&);
   void DidRemoveSlot(HTMLSlotElement&);
@@ -41,22 +43,12 @@ class SlotAssignment final : public GarbageCollected<SlotAssignment> {
                                   const AtomicString& new_value);
 
   bool FindHostChildBySlotName(const AtomicString& slot_name) const;
-  void CallSlotChangeAfterRemovedFromAssignFunction(HTMLSlotElement& slot);
-  void CallSlotChangeAfterAdditionFromAssignFunction(
-      HTMLSlotElement& slot,
-      const HeapVector<Member<Node>>& added_assign_nodes);
-  void CallSlotChangeAfterAddition(HTMLSlotElement& slot);
-  void CallSlotChangeAfterRemoved(HTMLSlotElement& slot);
-  void CallSlotChangeIfNeeded(HTMLSlotElement& slot, Node& child);
 
   void Trace(Visitor*) const;
 
   bool NeedsAssignmentRecalc() const { return needs_assignment_recalc_; }
   void SetNeedsAssignmentRecalc();
   void RecalcAssignment();
-  HeapHashSet<Member<Node>>& GetCandidateDirectionality() {
-    return candidate_directionality_set_;
-  }
 
  private:
   enum class SlotMutationType {
@@ -65,7 +57,6 @@ class SlotAssignment final : public GarbageCollected<SlotAssignment> {
   };
 
   HTMLSlotElement* FindSlotInManualSlotting(Node&);
-  HTMLSlotElement* FindSlotInUserAgentShadow(const Node&) const;
 
   void CollectSlots();
   HTMLSlotElement* GetCachedFirstSlotWithoutAccessingNodeTree(
@@ -82,7 +73,10 @@ class SlotAssignment final : public GarbageCollected<SlotAssignment> {
   unsigned needs_collect_slots_ : 1;
   unsigned needs_assignment_recalc_ : 1;
   unsigned slot_count_ : 30;
-  HeapHashSet<Member<Node>> candidate_directionality_set_;
+  // True while RecalcAssignment() is running for this shadow root. Used to
+  // bail out of re-entrant recalcs, which would rebuild slots_ while an outer
+  // RecalcAssignment() is still iterating it.
+  bool in_recalc_assignment_ = false;
 };
 
 }  // namespace blink

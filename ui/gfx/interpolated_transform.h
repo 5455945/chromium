@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,12 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "base/component_export.h"
+#include "ui/gfx/geometry/decomposed_transform.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/point3_f.h"
+#include "ui/gfx/geometry/transform.h"
 #include "ui/gfx/geometry/vector3d_f.h"
-#include "ui/gfx/gfx_export.h"
-#include "ui/gfx/transform.h"
-#include "ui/gfx/transform_util.h"
 
 namespace ui {
 
@@ -27,13 +26,17 @@ namespace ui {
 // scale from 0.3 to 1 from between times 0.75 and 1.
 //
 ///////////////////////////////////////////////////////////////////////////////
-class GFX_EXPORT InterpolatedTransform {
+class COMPONENT_EXPORT(GFX) InterpolatedTransform {
  public:
   InterpolatedTransform();
   // The interpolated transform varies only when t in (start_time, end_time).
   // If t <= start_time, Interpolate(t) will return the initial transform, and
   // if t >= end_time, Interpolate(t) will return the final transform.
   InterpolatedTransform(float start_time, float end_time);
+
+  InterpolatedTransform(const InterpolatedTransform&) = delete;
+  InterpolatedTransform& operator=(const InterpolatedTransform&) = delete;
+
   virtual ~InterpolatedTransform();
 
   // Returns the interpolated transform at time t. Note: not virtual.
@@ -76,8 +79,6 @@ class GFX_EXPORT InterpolatedTransform {
   std::unique_ptr<InterpolatedTransform> child_;
 
   bool reversed_;
-
-  DISALLOW_COPY_AND_ASSIGN(InterpolatedTransform);
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -86,13 +87,18 @@ class GFX_EXPORT InterpolatedTransform {
 // Represents an animated rotation.
 //
 ///////////////////////////////////////////////////////////////////////////////
-class GFX_EXPORT InterpolatedRotation : public InterpolatedTransform {
+class COMPONENT_EXPORT(GFX) InterpolatedRotation
+    : public InterpolatedTransform {
  public:
   InterpolatedRotation(float start_degrees, float end_degrees);
   InterpolatedRotation(float start_degrees,
                        float end_degrees,
                        float start_time,
                        float end_time);
+
+  InterpolatedRotation(const InterpolatedRotation&) = delete;
+  InterpolatedRotation& operator=(const InterpolatedRotation&) = delete;
+
   ~InterpolatedRotation() override;
 
  protected:
@@ -101,8 +107,6 @@ class GFX_EXPORT InterpolatedRotation : public InterpolatedTransform {
  private:
   const float start_degrees_;
   const float end_degrees_;
-
-  DISALLOW_COPY_AND_ASSIGN(InterpolatedRotation);
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -111,7 +115,8 @@ class GFX_EXPORT InterpolatedRotation : public InterpolatedTransform {
 // Represents an animated rotation.
 //
 ///////////////////////////////////////////////////////////////////////////////
-class GFX_EXPORT InterpolatedAxisAngleRotation : public InterpolatedTransform {
+class COMPONENT_EXPORT(GFX) InterpolatedAxisAngleRotation
+    : public InterpolatedTransform {
  public:
   InterpolatedAxisAngleRotation(const gfx::Vector3dF& axis,
                                 float start_degrees,
@@ -121,6 +126,11 @@ class GFX_EXPORT InterpolatedAxisAngleRotation : public InterpolatedTransform {
                                 float end_degrees,
                                 float start_time,
                                 float end_time);
+
+  InterpolatedAxisAngleRotation(const InterpolatedAxisAngleRotation&) = delete;
+  InterpolatedAxisAngleRotation& operator=(
+      const InterpolatedAxisAngleRotation&) = delete;
+
   ~InterpolatedAxisAngleRotation() override;
 
  protected:
@@ -130,8 +140,6 @@ class GFX_EXPORT InterpolatedAxisAngleRotation : public InterpolatedTransform {
   gfx::Vector3dF axis_;
   const float start_degrees_;
   const float end_degrees_;
-
-  DISALLOW_COPY_AND_ASSIGN(InterpolatedAxisAngleRotation);
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -140,7 +148,7 @@ class GFX_EXPORT InterpolatedAxisAngleRotation : public InterpolatedTransform {
 // Represents an animated scale.
 //
 ///////////////////////////////////////////////////////////////////////////////
-class GFX_EXPORT InterpolatedScale : public InterpolatedTransform {
+class COMPONENT_EXPORT(GFX) InterpolatedScale : public InterpolatedTransform {
  public:
   InterpolatedScale(float start_scale, float end_scale);
   InterpolatedScale(float start_scale, float end_scale,
@@ -151,6 +159,10 @@ class GFX_EXPORT InterpolatedScale : public InterpolatedTransform {
                     const gfx::Point3F& end_scale,
                     float start_time,
                     float end_time);
+
+  InterpolatedScale(const InterpolatedScale&) = delete;
+  InterpolatedScale& operator=(const InterpolatedScale&) = delete;
+
   ~InterpolatedScale() override;
 
  protected:
@@ -159,11 +171,10 @@ class GFX_EXPORT InterpolatedScale : public InterpolatedTransform {
  private:
   const gfx::Point3F start_scale_;
   const gfx::Point3F end_scale_;
-
-  DISALLOW_COPY_AND_ASSIGN(InterpolatedScale);
 };
 
-class GFX_EXPORT InterpolatedTranslation : public InterpolatedTransform {
+class COMPONENT_EXPORT(GFX) InterpolatedTranslation
+    : public InterpolatedTransform {
  public:
   InterpolatedTranslation(const gfx::PointF& start_pos,
                           const gfx::PointF& end_pos);
@@ -177,6 +188,10 @@ class GFX_EXPORT InterpolatedTranslation : public InterpolatedTransform {
                           const gfx::Point3F& end_pos,
                           float start_time,
                           float end_time);
+
+  InterpolatedTranslation(const InterpolatedTranslation&) = delete;
+  InterpolatedTranslation& operator=(const InterpolatedTranslation&) = delete;
+
   ~InterpolatedTranslation() override;
 
  protected:
@@ -185,8 +200,6 @@ class GFX_EXPORT InterpolatedTranslation : public InterpolatedTransform {
  private:
   const gfx::Point3F start_pos_;
   const gfx::Point3F end_pos_;
-
-  DISALLOW_COPY_AND_ASSIGN(InterpolatedTranslation);
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -198,9 +211,15 @@ class GFX_EXPORT InterpolatedTranslation : public InterpolatedTransform {
 // See InterpolatedTransformAboutPivot for an example of its usage.
 //
 ///////////////////////////////////////////////////////////////////////////////
-class GFX_EXPORT InterpolatedConstantTransform : public InterpolatedTransform {
+class COMPONENT_EXPORT(GFX) InterpolatedConstantTransform
+    : public InterpolatedTransform {
  public:
   explicit InterpolatedConstantTransform(const gfx::Transform& transform);
+
+  InterpolatedConstantTransform(const InterpolatedConstantTransform&) = delete;
+  InterpolatedConstantTransform& operator=(
+      const InterpolatedConstantTransform&) = delete;
+
   ~InterpolatedConstantTransform() override;
 
  protected:
@@ -208,8 +227,6 @@ class GFX_EXPORT InterpolatedConstantTransform : public InterpolatedTransform {
 
  private:
   const gfx::Transform transform_;
-
-  DISALLOW_COPY_AND_ASSIGN(InterpolatedConstantTransform);
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -220,7 +237,7 @@ class GFX_EXPORT InterpolatedConstantTransform : public InterpolatedTransform {
 // P * T * P^-1 where P is a constant transform to the new origin.
 //
 ///////////////////////////////////////////////////////////////////////////////
-class GFX_EXPORT InterpolatedTransformAboutPivot
+class COMPONENT_EXPORT(GFX) InterpolatedTransformAboutPivot
     : public InterpolatedTransform {
  public:
   // Takes ownership of the passed transform.
@@ -234,6 +251,12 @@ class GFX_EXPORT InterpolatedTransformAboutPivot
       std::unique_ptr<InterpolatedTransform> transform,
       float start_time,
       float end_time);
+
+  InterpolatedTransformAboutPivot(const InterpolatedTransformAboutPivot&) =
+      delete;
+  InterpolatedTransformAboutPivot& operator=(
+      const InterpolatedTransformAboutPivot&) = delete;
+
   ~InterpolatedTransformAboutPivot() override;
 
  protected:
@@ -244,11 +267,10 @@ class GFX_EXPORT InterpolatedTransformAboutPivot
             std::unique_ptr<InterpolatedTransform> transform);
 
   std::unique_ptr<InterpolatedTransform> transform_;
-
-  DISALLOW_COPY_AND_ASSIGN(InterpolatedTransformAboutPivot);
 };
 
-class GFX_EXPORT InterpolatedMatrixTransform : public InterpolatedTransform {
+class COMPONENT_EXPORT(GFX) InterpolatedMatrixTransform
+    : public InterpolatedTransform {
  public:
   InterpolatedMatrixTransform(const gfx::Transform& start_transform,
                               const gfx::Transform& end_transform);

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,11 @@
 
 #include <set>
 #include <string>
+#include <string_view>
 
-#include "base/callback.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/profiles/profile_attributes_storage.h"
 #include "chrome/browser/profiles/profile_manager_observer.h"
 #include "chrome/browser/profiles/profile_shortcut_manager.h"
@@ -18,7 +20,7 @@
 namespace profiles {
 
 // Name of the badged icon file generated for a given profile.
-extern const base::FilePath::StringPieceType kProfileIconFileName;
+extern const base::FilePath::StringViewType kProfileIconFileName;
 
 namespace internal {
 
@@ -36,6 +38,11 @@ std::wstring GetUniqueShortcutFilenameForProfile(
     const std::u16string& profile_name,
     const std::set<base::FilePath>& excludes);
 
+// Looks through the various Windows directories that could have pinned
+// shortcuts and returns a vector of shortcuts with profile `profile_path`.
+const std::vector<base::FilePath> GetPinnedShortCutsForProfile(
+    const base::FilePath& profile_path);
+
 // This class checks that shortcut filename matches certain profile.
 class ShortcutFilenameMatcher {
  public:
@@ -49,13 +56,19 @@ class ShortcutFilenameMatcher {
 
  private:
   const std::wstring profile_shortcut_filename_;
-  const base::WStringPiece lnk_ext_;
-  base::WStringPiece profile_shortcut_name_;
+  const std::wstring_view lnk_ext_;
+  std::wstring_view profile_shortcut_name_;
 };
 
 // Returns the command-line flags to launch Chrome with the given profile.
 std::wstring CreateProfileShortcutFlags(const base::FilePath& profile_path,
                                         const bool incognito = false);
+
+// Returns the command-line flags for a desktop shortcut to launch Chrome with
+// the given profile (includes `--source-shortcut-location=desktop`).
+std::wstring CreateProfileDesktopShortcutFlags(
+    const base::FilePath& profile_path,
+    bool incognito = false);
 
 }  // namespace internal
 }  // namespace profiles
@@ -80,6 +93,10 @@ class ProfileShortcutManagerWin : public ProfileShortcutManager,
     UPDATE_NON_PROFILE_SHORTCUTS,
   };
 
+  // Unit tests can't launch other processes.
+  static void DisableUnpinningForTests();
+  static void DisableOutOfProcessShortcutOpsForTests();
+
   explicit ProfileShortcutManagerWin(ProfileManager* manager);
   ProfileShortcutManagerWin(const ProfileShortcutManagerWin&) = delete;
   ProfileShortcutManagerWin& operator=(const ProfileShortcutManagerWin&) =
@@ -87,8 +104,6 @@ class ProfileShortcutManagerWin : public ProfileShortcutManager,
   ~ProfileShortcutManagerWin() override;
 
   // ProfileShortcutManager implementation:
-  void CreateIncognitoProfileShortcut(
-      const base::FilePath& profile_path) override;
   void CreateOrUpdateProfileIcon(const base::FilePath& profile_path) override;
   void CreateProfileShortcut(const base::FilePath& profile_path) override;
   void RemoveProfileShortcuts(const base::FilePath& profile_path) override;
@@ -106,6 +121,8 @@ class ProfileShortcutManagerWin : public ProfileShortcutManager,
   void OnProfileNameChanged(const base::FilePath& profile_path,
                             const std::u16string& old_profile_name) override;
   void OnProfileAvatarChanged(const base::FilePath& profile_path) override;
+  void OnProfileHighResAvatarLoaded(
+      const base::FilePath& profile_path) override;
 
   // ProfileManagerObserver:
   void OnProfileAdded(Profile* profile) override;
@@ -124,7 +141,10 @@ class ProfileShortcutManagerWin : public ProfileShortcutManager,
       NonProfileShortcutAction action,
       bool incognito);
 
-  ProfileManager* profile_manager_;
+  raw_ptr<ProfileManager> profile_manager_;
+  // The profile icon of these profiles needs to be updated when an avatar image
+  // is loaded.
+  std::set<base::FilePath> profiles_with_pending_avatar_load_;
 };
 
 #endif  // CHROME_BROWSER_PROFILES_PROFILE_SHORTCUT_MANAGER_WIN_H_

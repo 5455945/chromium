@@ -26,7 +26,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_AUDIO_AUDIO_SOURCE_PROVIDER_CLIENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_AUDIO_AUDIO_SOURCE_PROVIDER_CLIENT_H_
 
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 
 namespace blink {
@@ -35,14 +35,12 @@ class AudioSourceProviderClient : public GarbageCollectedMixin {
  public:
   virtual void SetFormat(uint32_t number_of_channels, float sample_rate) = 0;
   // Oilpan: Callers should keep this object alive during lock() and unlock().
-  virtual void lock() {}
-  virtual void unlock() {}
+  virtual void lock() = 0;
+  virtual void unlock() = 0;
 
   // Called on the main thread when HTMLMediaElement::currentSrc() is
   // changed.
-  virtual void OnCurrentSrcChanged(const KURL& current_src) {}
-
-  void Trace(Visitor* visitor) const override {}
+  virtual void OnCurrentSrcChanged(const KURL& current_src) = 0;
 
  protected:
   virtual ~AudioSourceProviderClient() = default;

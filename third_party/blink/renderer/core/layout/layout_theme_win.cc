@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,10 @@
 
 #include <windows.h>
 
+#include "base/no_destructor.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/platform/web_test_support.h"
+#include "ui/color/color_provider.h"
 
 namespace blink {
 
@@ -16,21 +18,17 @@ scoped_refptr<LayoutTheme> LayoutThemeWin::Create() {
 }
 
 LayoutTheme& LayoutTheme::NativeTheme() {
-  DEFINE_STATIC_REF(LayoutTheme, layout_theme, (LayoutThemeWin::Create()));
-  return *layout_theme;
+  static const base::NoDestructor<scoped_refptr<LayoutTheme>> layout_theme(
+      LayoutThemeWin::Create());
+  return **layout_theme;
 }
 
-Color LayoutThemeWin::SystemColor(
-    CSSValueID css_value_id,
-    mojom::blink::ColorScheme color_scheme) const {
-  // Fall back to the default system colors if the color scheme is dark and
-  // forced colors is not enabled.
-  if (WebTestSupport::IsRunningWebTest() ||
-      (color_scheme == mojom::blink::ColorScheme::kDark &&
-       !InForcedColorsMode())) {
-    return DefaultSystemColor(css_value_id, color_scheme);
-  }
-  return SystemColorFromNativeTheme(css_value_id, color_scheme);
+Color LayoutThemeWin::SystemHighlightFromColorProvider(
+    mojom::blink::ColorScheme color_scheme,
+    const ui::ColorProvider* color_provider) const {
+  SkColor system_highlight_color =
+      color_provider->GetColor(ui::kColorCssSystemHighlight);
+  return Color::FromSkColor(system_highlight_color);
 }
 
 }  // namespace blink

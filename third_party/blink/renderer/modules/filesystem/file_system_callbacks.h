@@ -31,6 +31,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_FILESYSTEM_FILE_SYSTEM_CALLBACKS_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_FILESYSTEM_FILE_SYSTEM_CALLBACKS_H_
 
+#include "base/functional/callback.h"
 #include "third_party/blink/public/mojom/filesystem/file_system.mojom-blink-forward.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_void_callback.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_entry_callback.h"
@@ -43,7 +44,8 @@
 #include "third_party/blink/renderer/modules/filesystem/entry_heap_vector.h"
 #include "third_party/blink/renderer/platform/blob/blob_data.h"
 #include "third_party/blink/renderer/platform/file_metadata.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
+#include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
@@ -78,7 +80,9 @@ class SnapshotFileCallbackBase {
   virtual ~SnapshotFileCallbackBase() = default;
 
   // Called when a snapshot file is created successfully.
-  virtual void DidCreateSnapshotFile(const FileMetadata&) = 0;
+  virtual void DidCreateSnapshotFile(
+      const FileMetadata&,
+      mojo::PendingRemote<mojom::blink::SnapshotPermissionToken>) = 0;
 
   virtual void DidFail(base::File::Error error) = 0;
 };
@@ -112,7 +116,7 @@ class EntryCallbacks final : public FileSystemCallbacksBase {
 
 class EntriesCallbacks final : public FileSystemCallbacksBase {
  public:
-  using SuccessCallback = base::RepeatingCallback<void(EntryHeapVector*)>;
+  using SuccessCallback = base::RepeatingCallback<void(GCedEntryHeapVector*)>;
   using ErrorCallback = base::OnceCallback<void(base::File::Error)>;
 
   EntriesCallbacks(const SuccessCallback&,
@@ -137,7 +141,7 @@ class EntriesCallbacks final : public FileSystemCallbacksBase {
   ErrorCallback error_callback_;
   Persistent<DirectoryReaderBase> directory_reader_;
   String base_path_;
-  Persistent<HeapVector<Member<Entry>>> entries_;
+  Persistent<GCedEntryHeapVector> entries_;
 };
 
 class FileSystemCallbacks final : public FileSystemCallbacksBase {
@@ -241,7 +245,9 @@ class SnapshotFileCallback final : public SnapshotFileCallbackBase,
                        ExecutionContext*);
 
   // Called when a snapshot file is created successfully.
-  void DidCreateSnapshotFile(const FileMetadata&) override;
+  void DidCreateSnapshotFile(
+      const FileMetadata&,
+      mojo::PendingRemote<mojom::blink::SnapshotPermissionToken>) override;
 
   // Called when a request operation has failed.
   void DidFail(base::File::Error error) override;

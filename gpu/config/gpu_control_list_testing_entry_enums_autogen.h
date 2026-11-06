@@ -1,4 +1,4 @@
-// Copyright (c) 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -34,7 +34,7 @@ enum GpuControlListTestingEntryEnum {
   kGpuControlListEntryTest_LexicalDriverVersionEntry = 18,
   kGpuControlListEntryTest_NeedsMoreInfoEntry = 19,
   kGpuControlListEntryTest_NeedsMoreInfoForExceptionsEntry = 20,
-  kGpuControlListEntryTest_NeedsMoreInfoForGlVersionEntry = 21,
+  kGpuControlListEntryTest_NeedsMoreInfoForGLESVersionEntry = 21,
   kGpuControlListEntryTest_FeatureTypeAllEntry = 22,
   kGpuControlListEntryTest_FeatureTypeAllEntryWithExceptions = 23,
   kGpuControlListEntryTest_SingleActiveGPU = 24,
@@ -79,19 +79,27 @@ enum GpuControlListTestingEntryEnum {
   kGpuControlListEntryTest_GpuSeriesSecondary = 63,
   kGpuControlListEntryTest_GpuSeriesInException = 64,
   kGpuControlListEntryTest_MultipleDrivers = 65,
-  kGpuControlListEntryTest_HardwareOverlay = 66,
-  kGpuControlListEntryTest_GpuGeneration = 67,
-  kGpuControlListEntryTest_GpuGenerationActive = 68,
-  kGpuControlListEntryTest_GpuGenerationAny = 69,
-  kGpuControlListEntryTest_GpuGenerationPrimary = 70,
-  kGpuControlListEntryTest_GpuGenerationSecondary = 71,
-  kGpuControlListEntryTest_SubpixelFontRendering = 72,
-  kGpuControlListEntryTest_SubpixelFontRenderingDontCare = 73,
-  kGpuControlListEntryTest_IntelDriverVendorEntry = 74,
-  kGpuControlListEntryTest_IntelDriverVersionEntry = 75,
-  kGpuControlListEntryTest_IntelOldDriverVersionEntry = 76,
-  kGpuControlListEntryTest_DeviceRevisionEntry = 77,
-  kGpuControlListEntryTest_DeviceRevisionUnspecifiedEntry = 78,
+  kGpuControlListEntryTest_GpuGeneration = 66,
+  kGpuControlListEntryTest_GpuGenerationActive = 67,
+  kGpuControlListEntryTest_GpuGenerationAny = 68,
+  kGpuControlListEntryTest_GpuGenerationPrimary = 69,
+  kGpuControlListEntryTest_GpuGenerationSecondary = 70,
+  kGpuControlListEntryTest_SubpixelFontRendering = 71,
+  kGpuControlListEntryTest_SubpixelFontRenderingDontCare = 72,
+  kGpuControlListEntryTest_IntelDriverVendorEntry = 73,
+  kGpuControlListEntryTest_IntelDriverVersionEntry = 74,
+  kGpuControlListEntryTest_DeviceRevisionEntry = 75,
+  kGpuControlListEntryTest_DeviceRevisionUnspecifiedEntry = 76,
+  kGpuControlListEntryTest_AnyDriverVersion = 77,
+  kGpuControlListEntryTest_ActiveDriverVersion = 78,
+  kGpuControlListEntryTest_NativeAngleRenderer = 79,
+  kGpuControlListEntryTest_GlTypeEntry = 80,
+  kGpuControlListEntryTest_GLES30Exception = 81,
+  kGpuControlListEntryTest_WrongANGLEException = 82,
+  kGpuControlListEntryTest_ANGLEException = 83,
+  kGpuControlListEntryTest_GlTypeAngleGl = 84,
+  kGpuControlListEntryTest_GLVersionOnly = 85,
+  kGpuControlListEntryTest_D3DFeatureLevel = 86,
 };
 }  // namespace gpu
 

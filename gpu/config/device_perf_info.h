@@ -1,15 +1,17 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef GPU_CONFIG_DEVICE_PERF_INFO_H_
 #define GPU_CONFIG_DEVICE_PERF_INFO_H_
 
-#include "build/build_config.h"
-#include "gpu/gpu_export.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include <cstdint>
+#include <optional>
 
-#if defined(OS_WIN)
+#include "build/build_config.h"
+#include "gpu/config/gpu_config_export.h"
+
+#if BUILDFLAG(IS_WIN)
 #include <d3dcommon.h>
 #endif
 
@@ -18,7 +20,7 @@ namespace gpu {
 // These values are persistent to logs. Entries should not be renumbered and
 // numeric values should never be reused.
 // This should match enum IntelGpuGeneration in
-//  \tools\metrics\histograms\enums.xml
+//  \tools\metrics\histograms\metadata\gpu\enums.xml
 enum class IntelGpuGeneration {
   kNonIntel = 0,
   kUnknownIntel = 1,  // Intel GPU, but not one of the following generations.
@@ -30,8 +32,10 @@ enum class IntelGpuGeneration {
   kGen9 = 9,
   kGen10 = 10,
   kGen11 = 11,
-  kGen12 = 12,
-  kMaxValue = kGen12,
+  kXe = 12,
+  kXe2 = 13,
+  kXe3 = 14,
+  kMaxValue = kXe3,
 };
 
 enum class HasDiscreteGpu {
@@ -41,11 +45,11 @@ enum class HasDiscreteGpu {
   kMaxValue = kUnknown,
 };
 
-struct GPU_EXPORT DevicePerfInfo {
+struct GPU_CONFIG_EXPORT DevicePerfInfo {
   uint32_t total_physical_memory_mb = 0u;
   uint32_t total_disk_space_mb = 0u;
   uint32_t hardware_concurrency = 0u;
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   // system commit limit (n pages) x page size.
   uint32_t system_commit_limit_mb = 0u;
   // If multiple GPUs are detected, this holds the highest feature level.
@@ -60,8 +64,9 @@ struct GPU_EXPORT DevicePerfInfo {
 };
 
 // Thread-safe getter and setter of global instance of DevicePerfInfo.
-GPU_EXPORT absl::optional<DevicePerfInfo> GetDevicePerfInfo();
-GPU_EXPORT void SetDevicePerfInfo(const DevicePerfInfo& device_perf_info);
+GPU_CONFIG_EXPORT std::optional<DevicePerfInfo> GetDevicePerfInfo();
+GPU_CONFIG_EXPORT void SetDevicePerfInfo(
+    const DevicePerfInfo& device_perf_info);
 
 }  // namespace gpu
 

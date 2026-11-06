@@ -1,51 +1,86 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/http/broken_alternative_services.h"
 
-#include "base/bind.h"
+#include <ranges>
+#include <utility>
+
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/memory/singleton.h"
 #include "base/time/tick_clock.h"
 #include "base/time/time.h"
+#include "net/base/features.h"
 #include "net/http/http_server_properties.h"
 
 namespace net {
 
 namespace {
 
-// Initial delay for broken alternative services.
-const uint64_t kBrokenAlternativeProtocolDelaySecs = 300;
+// Default broken alternative services, which is used when
+// exponential_backoff_on_initial_delay is false.
+constexpr base::TimeDelta kDefaultBrokenAlternativeProtocolDelay =
+    base::Seconds(300);
 // Subsequent failures result in exponential (base 2) backoff.
-// Limit binary shift to limit delay to approximately 2 days.
-const int kBrokenDelayMaxShift = 9;
+// Given the shortest broken delay is 1s, limit binary shift to limit delay to
+// approximately 2 days.
+const int kBrokenDelayMaxShift = 18;
+// Lower limit of broken alternative service delay.
+constexpr base::TimeDelta kMinBrokenAlternativeProtocolDelay = base::Seconds(1);
 
 base::TimeDelta ComputeBrokenAlternativeServiceExpirationDelay(
-    int broken_count) {
+    int broken_count,
+    base::TimeDelta initial_delay,
+    base::TimeDelta max_delay,
+    bool exponential_backoff_on_initial_delay) {
   DCHECK_GE(broken_count, 0);
-  if (broken_count > kBrokenDelayMaxShift)
+
+  if (initial_delay < kMinBrokenAlternativeProtocolDelay) {
+    initial_delay = kMinBrokenAlternativeProtocolDelay;
+  }
+  if (initial_delay > kDefaultBrokenAlternativeProtocolDelay) {
+    initial_delay = kDefaultBrokenAlternativeProtocolDelay;
+  }
+  if (broken_count == 0) {
+    return initial_delay;
+  }
+  // Limit broken_count to avoid overflow.
+  if (broken_count > kBrokenDelayMaxShift) {
     broken_count = kBrokenDelayMaxShift;
-  return base::TimeDelta::FromSeconds(kBrokenAlternativeProtocolDelaySecs) *
-         (1 << broken_count);
+  }
+  base::TimeDelta delay;
+  // If the initialDelay flag is on then the first codepath will
+  // always be taken as the other codepath will be deleted if the experiment is
+  // successful.
+  if (exponential_backoff_on_initial_delay ||
+      base::FeatureList::IsEnabled(
+          features::kInitialDelayForBrokenAlternativeService)) {
+    delay = initial_delay * (1 << broken_count);
+  } else {
+    delay = kDefaultBrokenAlternativeProtocolDelay * (1 << (broken_count - 1));
+  }
+  return std::min(delay, max_delay);
 }
 
 }  // namespace
 
 BrokenAlternativeService::BrokenAlternativeService(
     const AlternativeService& alternative_service,
-    const NetworkIsolationKey& network_isolation_key,
-    bool use_network_isolation_key)
+    const NetworkAnonymizationKey& network_anonymization_key,
+    bool use_network_anonymization_key)
     : alternative_service(alternative_service),
-      network_isolation_key(use_network_isolation_key ? network_isolation_key
-                                                      : NetworkIsolationKey()) {
-}
+      network_anonymization_key(use_network_anonymization_key
+                                    ? network_anonymization_key
+                                    : NetworkAnonymizationKey()) {}
 
 BrokenAlternativeService::~BrokenAlternativeService() = default;
 
 bool BrokenAlternativeService::operator<(
     const BrokenAlternativeService& other) const {
-  return std::tie(alternative_service, network_isolation_key) <
-         std::tie(other.alternative_service, other.network_isolation_key);
+  return std::tie(alternative_service, network_anonymization_key) <
+         std::tie(other.alternative_service, other.network_anonymization_key);
 }
 
 BrokenAlternativeServices::BrokenAlternativeServices(
@@ -55,7 +90,10 @@ BrokenAlternativeServices::BrokenAlternativeServices(
     : delegate_(delegate),
       clock_(clock),
       recently_broken_alternative_services_(
-          max_recently_broken_alternative_service_entries) {
+          max_recently_broken_alternative_service_entries),
+      initial_delay_(
+          features::kInitialDelayForBrokenAlternativeServiceParam.Get()),
+      max_delay_(features::kMaxDelayForBrokenAlternativeServiceParam.Get()) {
   DCHECK(delegate_);
   DCHECK(clock_);
 }
@@ -72,7 +110,7 @@ void BrokenAlternativeServices::Clear() {
 void BrokenAlternativeServices::MarkBrokenUntilDefaultNetworkChanges(
     const BrokenAlternativeService& broken_alternative_service) {
   DCHECK(!broken_alternative_service.alternative_service.host.empty());
-  DCHECK_NE(kProtoUnknown,
+  DCHECK_NE(NextProto::kProtoUnknown,
             broken_alternative_service.alternative_service.protocol);
 
   // The brokenness will expire on the default network change or based on
@@ -95,7 +133,7 @@ void BrokenAlternativeServices::MarkBrokenImpl(
     const BrokenAlternativeService& broken_alternative_service) {
   // Empty host means use host of origin, callers are supposed to substitute.
   DCHECK(!broken_alternative_service.alternative_service.host.empty());
-  DCHECK_NE(kProtoUnknown,
+  DCHECK_NE(NextProto::kProtoUnknown,
             broken_alternative_service.alternative_service.protocol);
 
   auto it =
@@ -107,8 +145,9 @@ void BrokenAlternativeServices::MarkBrokenImpl(
     broken_count = it->second++;
   }
   base::TimeTicks expiration =
-      clock_->NowTicks() +
-      ComputeBrokenAlternativeServiceExpirationDelay(broken_count);
+      clock_->NowTicks() + ComputeBrokenAlternativeServiceExpirationDelay(
+                               broken_count, initial_delay_, max_delay_,
+                               exponential_backoff_on_initial_delay_);
   // Return if alternative service is already in expiration queue.
   BrokenAlternativeServiceList::iterator list_it;
   if (!AddToBrokenListAndMap(broken_alternative_service, expiration,
@@ -126,7 +165,7 @@ void BrokenAlternativeServices::MarkBrokenImpl(
 
 void BrokenAlternativeServices::MarkRecentlyBroken(
     const BrokenAlternativeService& broken_alternative_service) {
-  DCHECK_NE(kProtoUnknown,
+  DCHECK_NE(NextProto::kProtoUnknown,
             broken_alternative_service.alternative_service.protocol);
   if (recently_broken_alternative_services_.Get(broken_alternative_service) ==
       recently_broken_alternative_services_.end()) {
@@ -138,8 +177,7 @@ bool BrokenAlternativeServices::IsBroken(
     const BrokenAlternativeService& broken_alternative_service) const {
   // Empty host means use host of origin, callers are supposed to substitute.
   DCHECK(!broken_alternative_service.alternative_service.host.empty());
-  return broken_alternative_service_map_.find(broken_alternative_service) !=
-         broken_alternative_service_map_.end();
+  return broken_alternative_service_map_.contains(broken_alternative_service);
 }
 
 bool BrokenAlternativeServices::IsBroken(
@@ -164,13 +202,12 @@ bool BrokenAlternativeServices::WasRecentlyBroken(
   return recently_broken_alternative_services_.Get(
              broken_alternative_service) !=
              recently_broken_alternative_services_.end() ||
-         broken_alternative_service_map_.find(broken_alternative_service) !=
-             broken_alternative_service_map_.end();
+         broken_alternative_service_map_.contains(broken_alternative_service);
 }
 
 void BrokenAlternativeServices::Confirm(
     const BrokenAlternativeService& broken_alternative_service) {
-  DCHECK_NE(kProtoUnknown,
+  DCHECK_NE(NextProto::kProtoUnknown,
             broken_alternative_service.alternative_service.protocol);
 
   // Remove |broken_alternative_service| from
@@ -195,8 +232,9 @@ void BrokenAlternativeServices::Confirm(
 
 bool BrokenAlternativeServices::OnDefaultNetworkChanged() {
   bool changed = !broken_alternative_services_on_default_network_.empty();
-  while (!broken_alternative_services_on_default_network_.empty()) {
-    Confirm(*broken_alternative_services_on_default_network_.begin());
+  for (const auto& broken_alternative_service :
+       std::exchange(broken_alternative_services_on_default_network_, {})) {
+    Confirm(broken_alternative_service);
   }
   return changed;
 }
@@ -222,12 +260,12 @@ void BrokenAlternativeServices::SetBrokenAndRecentlyBrokenAlternativeServices(
   recently_broken_alternative_services_.Swap(
       *recently_broken_alternative_services);
   // Add back all existing recently broken alt svcs to cache so they're at
-  // front of recency list (MRUCache::Get() does this automatically).
-  for (auto it = recently_broken_alternative_services->rbegin();
-       it != recently_broken_alternative_services->rend(); ++it) {
-    if (recently_broken_alternative_services_.Get(it->first) ==
+  // front of recency list (LRUCache::Get() does this automatically).
+  for (const auto& [service, broken_count] :
+       std::views::reverse(*recently_broken_alternative_services)) {
+    if (recently_broken_alternative_services_.Get(service) ==
         recently_broken_alternative_services_.end()) {
-      recently_broken_alternative_services_.Put(it->first, it->second);
+      recently_broken_alternative_services_.Put(service, broken_count);
     }
   }
 
@@ -244,9 +282,10 @@ void BrokenAlternativeServices::SetBrokenAndRecentlyBrokenAlternativeServices(
   auto list_it = broken_alternative_service_list_.begin();
   for (size_t i = 0; i < num_broken_alt_svcs_added; ++i) {
     const BrokenAlternativeService& broken_alternative_service = list_it->first;
-    auto map_it =
-        broken_alternative_service_map_.find(broken_alternative_service);
-    if (map_it != broken_alternative_service_map_.end()) {
+
+    auto [map_it, inserted] = broken_alternative_service_map_.try_emplace(
+        broken_alternative_service, list_it);
+    if (!inserted) {
       // Implies this entry already exists somewhere else in
       // |broken_alternative_service_list_|. Remove the existing entry from
       // |broken_alternative_service_list_|, and update the
@@ -255,9 +294,6 @@ void BrokenAlternativeServices::SetBrokenAndRecentlyBrokenAlternativeServices(
       auto list_existing_entry_it = map_it->second;
       broken_alternative_service_list_.erase(list_existing_entry_it);
       map_it->second = list_it;
-    } else {
-      broken_alternative_service_map_.insert(
-          std::make_pair(broken_alternative_service, list_it));
     }
 
     if (recently_broken_alternative_services_.Peek(
@@ -286,6 +322,23 @@ void BrokenAlternativeServices::SetBrokenAndRecentlyBrokenAlternativeServices(
     ScheduleBrokenAlternateProtocolMappingsExpiration();
 }
 
+void BrokenAlternativeServices::SetDelayParams(
+    std::optional<base::TimeDelta> initial_delay,
+    std::optional<bool> exponential_backoff_on_initial_delay) {
+  // Disallow overriding values when the experiment is enabled.
+  if (base::FeatureList::IsEnabled(
+          features::kInitialDelayForBrokenAlternativeService)) {
+    return;
+  }
+  if (initial_delay.has_value()) {
+    initial_delay_ = initial_delay.value();
+  }
+  if (exponential_backoff_on_initial_delay.has_value()) {
+    exponential_backoff_on_initial_delay_ =
+        exponential_backoff_on_initial_delay.value();
+  }
+}
+
 const BrokenAlternativeServiceList&
 BrokenAlternativeServices::broken_alternative_service_list() const {
   return broken_alternative_service_list_;
@@ -302,10 +355,9 @@ bool BrokenAlternativeServices::AddToBrokenListAndMap(
     BrokenAlternativeServiceList::iterator* it) {
   DCHECK(it);
 
-  auto map_it =
-      broken_alternative_service_map_.find(broken_alternative_service);
-  if (map_it != broken_alternative_service_map_.end())
+  if (broken_alternative_service_map_.contains(broken_alternative_service)) {
     return false;
+  }
 
   // Iterate from end of |broken_alternative_service_list_| to find where to
   // insert it to keep the list sorted by expiration time.
@@ -320,9 +372,8 @@ bool BrokenAlternativeServices::AddToBrokenListAndMap(
 
   // Insert |broken_alternative_service| into the list and the map.
   list_it = broken_alternative_service_list_.insert(
-      list_it, std::make_pair(broken_alternative_service, expiration));
-  broken_alternative_service_map_.insert(
-      std::make_pair(broken_alternative_service, list_it));
+      list_it, std::pair(broken_alternative_service, expiration));
+  broken_alternative_service_map_.emplace(broken_alternative_service, list_it);
 
   *it = list_it;
   return true;
@@ -338,7 +389,7 @@ void BrokenAlternativeServices::ExpireBrokenAlternateProtocolMappings() {
     }
 
     delegate_->OnExpireBrokenAlternativeService(
-        it->first.alternative_service, it->first.network_isolation_key);
+        it->first.alternative_service, it->first.network_anonymization_key);
 
     broken_alternative_service_map_.erase(it->first);
     broken_alternative_service_list_.erase(it);

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,23 +8,23 @@
 chrome.test.runTests([
   function notAvailable() {
     chrome.systemPrivate.getUpdateStatus(function(status) {
-      chrome.test.assertEq(status.state, "NotAvailable");
+      chrome.test.assertEq(status.state, 'NotAvailable');
       chrome.test.assertEq(status.downloadProgress, 0.0);
       chrome.test.succeed();
     });
   },
   function updating() {
     chrome.systemPrivate.getUpdateStatus(function(status) {
-      chrome.test.assertEq(status.state, "Updating");
+      chrome.test.assertEq(status.state, 'Updating');
       chrome.test.assertEq(status.downloadProgress, 0.5);
       chrome.test.succeed();
     });
   },
   function needRestart() {
     chrome.systemPrivate.getUpdateStatus(function(status) {
-      chrome.test.assertEq(status.state, "NeedRestart");
+      chrome.test.assertEq(status.state, 'NeedRestart');
       chrome.test.assertEq(status.downloadProgress, 1);
       chrome.test.succeed();
     });
-  }
+  },
 ]);

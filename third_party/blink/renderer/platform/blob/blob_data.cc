@@ -33,23 +33,27 @@
 #include <memory>
 #include <utility>
 
+#include "base/check_is_test.h"
+#include "base/containers/span.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/single_thread_task_runner.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "services/network/public/mojom/data_pipe_getter.mojom-blink.h"
 #include "third_party/blink/public/common/thread_safe_browser_interface_broker_proxy.h"
 #include "third_party/blink/public/mojom/blob/blob.mojom-blink.h"
 #include "third_party/blink/public/mojom/blob/blob_registry.mojom-blink.h"
 #include "third_party/blink/public/mojom/blob/data_element.mojom-blink.h"
+#include "third_party/blink/public/mojom/blob/file_backed_blob_factory.mojom-blink.h"
 #include "third_party/blink/public/platform/file_path_conversion.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/platform/blob/blob_bytes_provider.h"
-#include "third_party/blink/renderer/platform/instrumentation/histogram.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
 #include "third_party/blink/renderer/platform/wtf/text/line_ending.h"
 #include "third_party/blink/renderer/platform/wtf/text/text_encoding.h"
+#include "third_party/blink/renderer/platform/wtf/thread_specific.h"
 #include "third_party/blink/renderer/platform/wtf/uuid.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
@@ -61,10 +65,25 @@ using mojom::blink::DataElementBlob;
 using mojom::blink::DataElementBytes;
 using mojom::blink::DataElementBytesPtr;
 using mojom::blink::DataElementFile;
-using mojom::blink::DataElementFilesystemURL;
 using mojom::blink::DataElementPtr;
 
 namespace {
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// LINT.IfChange(BlobUuidAccess)
+enum class BlobUuidAccess {
+  kSyncUuid = 0,
+  kAsyncUuidWasReady = 1,
+  kAsyncUuidBlocked = 2,
+  kUuidUnavailable = 3,
+  kMaxValue = kUuidUnavailable,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/storage/enums.xml:BlobUuidAccess)
+
+void LogBlobUuidAccess(BlobUuidAccess access) {
+  base::UmaHistogramEnumeration("Storage.Blob.RendererUuidAccess", access);
+}
 
 // http://dev.w3.org/2006/webapi/FileAPI/#constructorBlob
 bool IsValidBlobType(const String& type) {
@@ -79,12 +98,13 @@ bool IsValidBlobType(const String& type) {
 mojom::blink::BlobRegistry* g_blob_registry_for_testing = nullptr;
 
 mojom::blink::BlobRegistry* GetThreadSpecificRegistry() {
-  if (UNLIKELY(g_blob_registry_for_testing))
+  if (g_blob_registry_for_testing) [[unlikely]] {
     return g_blob_registry_for_testing;
+  }
 
   DEFINE_THREAD_SAFE_STATIC_LOCAL(
       ThreadSpecific<mojo::Remote<mojom::blink::BlobRegistry>>, registry, ());
-  if (UNLIKELY(!registry.IsSet())) {
+  if (!registry.IsSet()) [[unlikely]] {
     // TODO(mek): Going through BrowserInterfaceBroker to get a
     // mojom::blink::BlobRegistry ends up going through the main thread. Ideally
     // workers wouldn't need to do that.
@@ -106,48 +126,13 @@ BlobData::BlobData(FileCompositionStatus composition)
 BlobData::~BlobData() = default;
 
 Vector<mojom::blink::DataElementPtr> BlobData::ReleaseElements() {
-  return std::move(elements_);
-}
-
-std::unique_ptr<BlobData> BlobData::CreateForFileWithUnknownSize(
-    const String& path) {
-  std::unique_ptr<BlobData> data = base::WrapUnique(
-      new BlobData(FileCompositionStatus::SINGLE_UNKNOWN_SIZE_FILE));
-  data->elements_.push_back(DataElement::NewFile(DataElementFile::New(
-      WebStringToFilePath(path), 0, BlobData::kToEndOfFile, base::Time())));
-  return data;
-}
-
-std::unique_ptr<BlobData> BlobData::CreateForFileWithUnknownSize(
-    const String& path,
-    const absl::optional<base::Time>& expected_modification_time) {
-  std::unique_ptr<BlobData> data = base::WrapUnique(
-      new BlobData(FileCompositionStatus::SINGLE_UNKNOWN_SIZE_FILE));
-  data->elements_.push_back(DataElement::NewFile(
-      DataElementFile::New(WebStringToFilePath(path), 0, BlobData::kToEndOfFile,
-                           expected_modification_time)));
-  return data;
-}
-
-std::unique_ptr<BlobData> BlobData::CreateForFileSystemURLWithUnknownSize(
-    const KURL& file_system_url,
-    const absl::optional<base::Time>& expected_modification_time) {
-  std::unique_ptr<BlobData> data = base::WrapUnique(
-      new BlobData(FileCompositionStatus::SINGLE_UNKNOWN_SIZE_FILE));
-  data->elements_.push_back(DataElement::NewFileFilesystem(
-      DataElementFilesystemURL::New(file_system_url, 0, BlobData::kToEndOfFile,
-                                    expected_modification_time)));
-  return data;
-}
-
-void BlobData::DetachFromCurrentThread() {
-  content_type_ = content_type_.IsolatedCopy();
-  for (auto& element : elements_) {
-    if (element->is_file_filesystem()) {
-      auto& file_element = element->get_file_filesystem();
-      file_element->url = file_element->url.Copy();
-    }
+  if (last_bytes_provider_) {
+    DCHECK(last_bytes_provider_receiver_);
+    BlobBytesProvider::Bind(std::move(last_bytes_provider_),
+                            std::move(last_bytes_provider_receiver_));
   }
+
+  return std::move(elements_);
 }
 
 void BlobData::SetContentType(const String& content_type) {
@@ -158,36 +143,18 @@ void BlobData::SetContentType(const String& content_type) {
 }
 
 void BlobData::AppendData(scoped_refptr<RawData> data) {
-  AppendDataInternal(base::make_span(data->data(), data->length()), data);
-}
-
-void BlobData::AppendFile(
-    const String& path,
-    int64_t offset,
-    int64_t length,
-    const absl::optional<base::Time>& expected_modification_time) {
-  DCHECK_EQ(file_composition_, FileCompositionStatus::NO_UNKNOWN_SIZE_FILES)
-      << "Blobs with a unknown-size file cannot have other items.";
-  DCHECK_NE(length, BlobData::kToEndOfFile)
-      << "It is illegal to append file items that have an unknown size. To "
-         "create a blob with a single file with unknown size, use "
-         "BlobData::createForFileWithUnknownSize. Otherwise please provide the "
-         "file size.";
-  DCHECK_GE(length, 0);
-  // Skip zero-byte items, as they don't matter for the contents of the blob.
-  if (length == 0)
-    return;
-  elements_.push_back(DataElement::NewFile(DataElementFile::New(
-      WebStringToFilePath(path), offset, length, expected_modification_time)));
+  AppendDataInternal(base::span(*data), data);
 }
 
 void BlobData::AppendBlob(scoped_refptr<BlobDataHandle> data_handle,
                           int64_t offset,
                           int64_t length) {
-  DCHECK_EQ(file_composition_, FileCompositionStatus::NO_UNKNOWN_SIZE_FILES)
+  DCHECK_EQ(file_composition_, FileCompositionStatus::kNoUnknownSizeFiles)
       << "Blobs with a unknown-size file cannot have other items.";
-  DCHECK(!data_handle->IsSingleUnknownSizeFile())
-      << "It is illegal to append an unknown size file blob.";
+  DCHECK(!data_handle->IsSingleUnknownSizeFile() ||
+         length != BlobData::kToEndOfFile)
+      << "It is illegal to append an unknown size file blob without specifying "
+         "a size.";
   // Skip zero-byte items, as they don't matter for the contents of the blob.
   if (length == 0)
     return;
@@ -195,48 +162,31 @@ void BlobData::AppendBlob(scoped_refptr<BlobDataHandle> data_handle,
       DataElementBlob::New(data_handle->CloneBlobRemote(), offset, length)));
 }
 
-void BlobData::AppendFileSystemURL(
-    const KURL& url,
-    int64_t offset,
-    int64_t length,
-    const absl::optional<base::Time>& expected_modification_time) {
-  DCHECK_EQ(file_composition_, FileCompositionStatus::NO_UNKNOWN_SIZE_FILES)
-      << "Blobs with a unknown-size file cannot have other items.";
-  DCHECK_GE(length, 0);
-  // Skip zero-byte items, as they don't matter for the contents of the blob.
-  if (length == 0)
-    return;
-  elements_.push_back(
-      DataElement::NewFileFilesystem(DataElementFilesystemURL::New(
-          url, offset, length, expected_modification_time)));
-}
-
 void BlobData::AppendText(const String& text,
                           bool do_normalize_line_endings_to_native) {
-  DCHECK_EQ(file_composition_, FileCompositionStatus::NO_UNKNOWN_SIZE_FILES)
+  DCHECK_EQ(file_composition_, FileCompositionStatus::kNoUnknownSizeFiles)
       << "Blobs with a unknown-size file cannot have other items.";
-  std::string utf8_text = UTF8Encoding().Encode(text, WTF::kNoUnencodables);
+  std::string utf8_text =
+      Utf8Encoding().Encode(text, UnencodableHandling::kNone);
 
   if (do_normalize_line_endings_to_native) {
     if (utf8_text.length() >
         BlobBytesProvider::kMaxConsolidatedItemSizeInBytes) {
       auto raw_data = RawData::Create();
-      NormalizeLineEndingsToNative(utf8_text, *raw_data->MutableData());
-      AppendDataInternal(base::make_span(raw_data->data(), raw_data->length()),
-                         raw_data);
+      NormalizeLineEndingsToNative(utf8_text, raw_data->MutableData());
+      AppendDataInternal(base::span(*raw_data), raw_data);
     } else {
-      Vector<char> buffer;
+      Vector<uint8_t> buffer;
       NormalizeLineEndingsToNative(utf8_text, buffer);
-      AppendDataInternal(base::make_span(buffer));
+      AppendDataInternal(base::span(buffer));
     }
   } else {
-    AppendDataInternal(base::make_span(utf8_text.data(), utf8_text.length()));
+    AppendDataInternal(base::as_byte_span(utf8_text));
   }
 }
 
-void BlobData::AppendBytes(const void* bytes, size_t length) {
-  AppendDataInternal(
-      base::make_span(reinterpret_cast<const char*>(bytes), length));
+void BlobData::AppendBytes(base::span<const uint8_t> bytes) {
+  AppendDataInternal(bytes);
 }
 
 uint64_t BlobData::length() const {
@@ -244,16 +194,13 @@ uint64_t BlobData::length() const {
 
   for (const auto& element : elements_) {
     switch (element->which()) {
-      case DataElement::Tag::BYTES:
+      case DataElement::Tag::kBytes:
         length += element->get_bytes()->length;
         break;
-      case DataElement::Tag::FILE:
+      case DataElement::Tag::kFile:
         length += element->get_file()->length;
         break;
-      case DataElement::Tag::FILE_FILESYSTEM:
-        length += element->get_file_filesystem()->length;
-        break;
-      case DataElement::Tag::BLOB:
+      case DataElement::Tag::kBlob:
         length += element->get_blob()->length;
         break;
     }
@@ -261,37 +208,47 @@ uint64_t BlobData::length() const {
   return length;
 }
 
-void BlobData::AppendDataInternal(base::span<const char> data,
+void BlobData::AppendDataInternal(base::span<const uint8_t> data,
                                   scoped_refptr<RawData> raw_data) {
-  DCHECK_EQ(file_composition_, FileCompositionStatus::NO_UNKNOWN_SIZE_FILES)
+  DCHECK_EQ(file_composition_, FileCompositionStatus::kNoUnknownSizeFiles)
       << "Blobs with a unknown-size file cannot have other items.";
   // Skip zero-byte items, as they don't matter for the contents of the blob.
   if (data.empty())
     return;
   bool should_embed_bytes = current_memory_population_ + data.size() <=
                             DataElementBytes::kMaximumEmbeddedDataSize;
-  if (!elements_.IsEmpty() && elements_.back()->is_bytes()) {
+  if (!elements_.empty() && elements_.back()->is_bytes()) {
     // Append bytes to previous element.
     DCHECK(last_bytes_provider_);
+    DCHECK(last_bytes_provider_receiver_);
     const auto& bytes_element = elements_.back()->get_bytes();
     bytes_element->length += data.size();
     if (should_embed_bytes && bytes_element->embedded_data) {
-      bytes_element->embedded_data->Append(data.data(), data.size());
+      bytes_element->embedded_data->append_range(data);
       current_memory_population_ += data.size();
     } else if (bytes_element->embedded_data) {
       current_memory_population_ -= bytes_element->embedded_data->size();
-      bytes_element->embedded_data = absl::nullopt;
+      bytes_element->embedded_data = std::nullopt;
     }
   } else {
+    if (last_bytes_provider_) {
+      // If `last_bytes_provider_` is set, but the previous element is not a
+      // bytes element, a new BytesProvider will be created and we need to
+      // make sure to bind the previous one first.
+      DCHECK(last_bytes_provider_receiver_);
+      BlobBytesProvider::Bind(std::move(last_bytes_provider_),
+                              std::move(last_bytes_provider_receiver_));
+    }
     mojo::PendingRemote<BytesProvider> bytes_provider_remote;
-    last_bytes_provider_ = BlobBytesProvider::CreateAndBind(
-        bytes_provider_remote.InitWithNewPipeAndPassReceiver());
+    last_bytes_provider_ = std::make_unique<BlobBytesProvider>();
+    last_bytes_provider_receiver_ =
+        bytes_provider_remote.InitWithNewPipeAndPassReceiver();
 
     auto bytes_element = DataElementBytes::New(
-        data.size(), absl::nullopt, std::move(bytes_provider_remote));
+        data.size(), std::nullopt, std::move(bytes_provider_remote));
     if (should_embed_bytes) {
       bytes_element->embedded_data = Vector<uint8_t>();
-      bytes_element->embedded_data->Append(data.data(), data.size());
+      bytes_element->embedded_data->append_range(data);
       current_memory_population_ += data.size();
     }
     elements_.push_back(DataElement::NewBytes(std::move(bytes_element)));
@@ -303,49 +260,115 @@ void BlobData::AppendDataInternal(base::span<const char> data,
 }
 
 // static
+scoped_refptr<BlobDataHandle> BlobDataHandle::Create() {
+  scoped_refptr<BlobDataHandle> handle = base::AdoptRef(new BlobDataHandle());
+  handle->Register({});
+  return handle;
+}
+
+// static
+scoped_refptr<BlobDataHandle> BlobDataHandle::Create(
+    std::unique_ptr<BlobData> data,
+    uint64_t size) {
+  scoped_refptr<BlobDataHandle> handle = base::AdoptRef(new BlobDataHandle(
+      data->ContentType(), size, data->IsSingleUnknownSizeFile()));
+  handle->Register(data->ReleaseElements());
+  return handle;
+}
+
+// static
+scoped_refptr<BlobDataHandle> BlobDataHandle::CreateForFile(
+    mojom::blink::FileBackedBlobFactory* file_backed_blob_factory,
+    const String& path,
+    int64_t offset,
+    int64_t length,
+    const std::optional<base::Time>& expected_modification_time,
+    const String& content_type,
+    mojo::PendingRemote<mojom::blink::SnapshotPermissionToken>
+        snapshot_permission_token) {
+  mojom::blink::DataElementFilePtr element = mojom::blink::DataElementFile::New(
+      StringToFilePath(path), offset, length, expected_modification_time);
+  uint64_t size = length == BlobData::kToEndOfFile
+                      ? std::numeric_limits<uint64_t>::max()
+                      : length;
+  scoped_refptr<BlobDataHandle> handle = base::AdoptRef(
+      new BlobDataHandle(content_type, size, length == BlobData::kToEndOfFile));
+  handle->RegisterFile(file_backed_blob_factory, std::move(element),
+                       std::move(snapshot_permission_token));
+  return handle;
+}
+
+// static
 scoped_refptr<BlobDataHandle> BlobDataHandle::Create(
     const String& uuid,
     const String& type,
     uint64_t size,
     mojo::PendingRemote<mojom::blink::Blob> blob_remote) {
-  if (blob_remote.is_valid()) {
-    return base::AdoptRef(
-        new BlobDataHandle(uuid, type, size, std::move(blob_remote)));
-  }
-  return base::AdoptRef(new BlobDataHandle(uuid, type, size));
+  CHECK(blob_remote.is_valid());
+  return base::AdoptRef(
+      new BlobDataHandle(uuid, type, size, std::move(blob_remote)));
 }
 
 BlobDataHandle::BlobDataHandle()
-    : uuid_(WTF::CreateCanonicalUUIDString()),
-      size_(0),
-      is_single_unknown_size_file_(false) {
+    : size_(0), is_single_unknown_size_file_(false) {}
+
+BlobDataHandle::BlobDataHandle(const String& type,
+                               uint64_t size,
+                               bool is_single_unknown_size_file)
+    : type_(type),
+      size_(size),
+      is_single_unknown_size_file_(is_single_unknown_size_file) {}
+
+void BlobDataHandle::Register(Vector<mojom::blink::DataElementPtr> elements) {
+  base::AutoLock locker(blob_remote_lock_);
+  TRACE_EVENT0("Blob", "Registry::RegisterBlob");
   GetThreadSpecificRegistry()->Register(
-      blob_remote_.InitWithNewPipeAndPassReceiver(), uuid_, "", "", {});
+      blob_remote_.InitWithNewPipeAndPassReceiver(),
+      type_.IsNull() ? "" : type_, std::move(elements),
+      base::BindOnce(&BlobDataHandle::DidGetUuid, base::RetainedRef(this)));
 }
 
-BlobDataHandle::BlobDataHandle(std::unique_ptr<BlobData> data, uint64_t size)
-    : uuid_(WTF::CreateCanonicalUUIDString()),
-      type_(data->ContentType().IsolatedCopy()),
-      size_(size),
-      is_single_unknown_size_file_(data->IsSingleUnknownSizeFile()) {
-  TRACE_EVENT0("Blob", "Registry::RegisterBlob");
-  SCOPED_BLINK_UMA_HISTOGRAM_TIMER_THREAD_SAFE("Storage.Blob.RegisterBlobTime");
-  GetThreadSpecificRegistry()->Register(
-      blob_remote_.InitWithNewPipeAndPassReceiver(), uuid_,
-      type_.IsNull() ? "" : type_, "", data->ReleaseElements());
+void BlobDataHandle::RegisterFile(
+    mojom::blink::FileBackedBlobFactory* file_backed_blob_factory,
+    mojom::blink::DataElementFilePtr file_element,
+    mojo::PendingRemote<mojom::blink::SnapshotPermissionToken>
+        snapshot_permission_token) {
+  if (file_backed_blob_factory) {
+    base::AutoLock locker(blob_remote_lock_);
+    file_backed_blob_factory->RegisterBlob(
+        blob_remote_.InitWithNewPipeAndPassReceiver(),
+        type_.IsNull() ? "" : type_, std::move(file_element),
+        std::move(snapshot_permission_token),
+        base::BindOnce(&BlobDataHandle::DidGetUuid, base::RetainedRef(this)));
+  } else {
+    // This path is taken for sandboxed filesystems (kTemporary or kPersistent)
+    // and for detached windows.
+    Vector<mojom::blink::DataElementPtr> elements;
+    elements.push_back(DataElement::NewFile(std::move(file_element)));
+
+    base::AutoLock locker(blob_remote_lock_);
+    // In the normal BlobRegistry case, just hold onto the token locally until
+    // the UUID is returned. This works because the BlobRegistry synchronously
+    // builds the blob (on the IO thread), whereas FileBackedBlobFactory does it
+    // asynchronously.
+    GetThreadSpecificRegistry()->Register(
+        blob_remote_.InitWithNewPipeAndPassReceiver(),
+        type_.IsNull() ? "" : type_, std::move(elements),
+        base::BindOnce(&BlobDataHandle::DidGetUuid, base::RetainedRef(this))
+            .Then(base::OnceClosure(base::DoNothingWithBoundArgs(
+                std::move(snapshot_permission_token)))));
+  }
 }
 
 BlobDataHandle::BlobDataHandle(const String& uuid,
                                const String& type,
                                uint64_t size)
-    : uuid_(uuid.IsolatedCopy()),
-      type_(IsValidBlobType(type) ? type.IsolatedCopy() : ""),
+    : uuid_(uuid),
+      type_(IsValidBlobType(type) ? type : ""),
       size_(size),
       is_single_unknown_size_file_(false) {
-  SCOPED_BLINK_UMA_HISTOGRAM_TIMER_THREAD_SAFE(
-      "Storage.Blob.GetBlobFromUUIDTime");
-  GetThreadSpecificRegistry()->GetBlobFromUUID(
-      blob_remote_.InitWithNewPipeAndPassReceiver(), uuid_);
+  // This is only used by unit tests that won't access `blob_remote_`.
+  CHECK_IS_TEST();
 }
 
 BlobDataHandle::BlobDataHandle(
@@ -353,8 +376,8 @@ BlobDataHandle::BlobDataHandle(
     const String& type,
     uint64_t size,
     mojo::PendingRemote<mojom::blink::Blob> blob_remote)
-    : uuid_(uuid.IsolatedCopy()),
-      type_(IsValidBlobType(type) ? type.IsolatedCopy() : ""),
+    : uuid_(uuid),
+      type_(IsValidBlobType(type) ? type : ""),
       size_(size),
       is_single_unknown_size_file_(false),
       blob_remote_(std::move(blob_remote)) {
@@ -364,7 +387,7 @@ BlobDataHandle::BlobDataHandle(
 BlobDataHandle::~BlobDataHandle() = default;
 
 mojo::PendingRemote<mojom::blink::Blob> BlobDataHandle::CloneBlobRemote() {
-  MutexLocker locker(blob_remote_mutex_);
+  base::AutoLock locker(blob_remote_lock_);
   if (!blob_remote_.is_valid())
     return mojo::NullRemote();
   mojo::Remote<mojom::blink::Blob> blob(std::move(blob_remote_));
@@ -376,7 +399,7 @@ mojo::PendingRemote<mojom::blink::Blob> BlobDataHandle::CloneBlobRemote() {
 
 void BlobDataHandle::CloneBlobRemote(
     mojo::PendingReceiver<mojom::blink::Blob> receiver) {
-  MutexLocker locker(blob_remote_mutex_);
+  base::AutoLock locker(blob_remote_lock_);
   if (!blob_remote_.is_valid())
     return;
   mojo::Remote<mojom::blink::Blob> blob(std::move(blob_remote_));
@@ -384,46 +407,67 @@ void BlobDataHandle::CloneBlobRemote(
   blob_remote_ = blob.Unbind();
 }
 
-mojo::PendingRemote<network::mojom::blink::DataPipeGetter>
-BlobDataHandle::AsDataPipeGetter() {
-  MutexLocker locker(blob_remote_mutex_);
-  if (!blob_remote_.is_valid())
-    return mojo::NullRemote();
-  mojo::PendingRemote<network::mojom::blink::DataPipeGetter> result;
-  mojo::Remote<mojom::blink::Blob> blob(std::move(blob_remote_));
-  blob->AsDataPipeGetter(result.InitWithNewPipeAndPassReceiver());
-  blob_remote_ = blob.Unbind();
-  return result;
-}
-
 void BlobDataHandle::ReadAll(
     mojo::ScopedDataPipeProducerHandle pipe,
     mojo::PendingRemote<mojom::blink::BlobReaderClient> client) {
-  MutexLocker locker(blob_remote_mutex_);
+  base::AutoLock locker(blob_remote_lock_);
   mojo::Remote<mojom::blink::Blob> blob(std::move(blob_remote_));
   blob->ReadAll(std::move(pipe), std::move(client));
   blob_remote_ = blob.Unbind();
 }
 
-void BlobDataHandle::ReadRange(
-    uint64_t offset,
-    uint64_t length,
-    mojo::ScopedDataPipeProducerHandle pipe,
-    mojo::PendingRemote<mojom::blink::BlobReaderClient> client) {
-  MutexLocker locker(blob_remote_mutex_);
-  mojo::Remote<mojom::blink::Blob> blob(std::move(blob_remote_));
-  blob->ReadRange(offset, length, std::move(pipe), std::move(client));
-  blob_remote_ = blob.Unbind();
-}
-
 bool BlobDataHandle::CaptureSnapshot(
     uint64_t* snapshot_size,
-    absl::optional<base::Time>* snapshot_modification_time) {
+    std::optional<base::Time>* snapshot_modification_time) {
   // This method operates on a cloned blob remote; this lets us avoid holding
-  // the |blob_remote_mutex_| locked during the duration of the (synchronous)
+  // the |blob_remote_lock_| locked during the duration of the (synchronous)
   // CaptureSnapshot call.
   mojo::Remote<mojom::blink::Blob> remote(CloneBlobRemote());
   return remote->CaptureSnapshot(snapshot_size, snapshot_modification_time);
+}
+
+String BlobDataHandle::GetUuidMayBlock() {
+  if (!uuid_.empty()) {
+    LogBlobUuidAccess(BlobUuidAccess::kSyncUuid);
+    return uuid_;
+  }
+
+  if (base::AutoLock locker(async_uuid_lock_); !async_uuid_.empty()) {
+    LogBlobUuidAccess(BlobUuidAccess::kAsyncUuidWasReady);
+    return async_uuid_;
+  }
+
+  if (mojo::Remote<mojom::blink::Blob> remote{CloneBlobRemote()}) {
+    // Clone remote to avoid holding lock during this synchronous call.
+    LogBlobUuidAccess(BlobUuidAccess::kAsyncUuidBlocked);
+    String uuid;
+    remote->GetInternalUUID(&uuid);
+    base::AutoLock locker(async_uuid_lock_);
+    async_uuid_ = std::move(uuid);
+    return async_uuid_;
+  }
+
+  LogBlobUuidAccess(BlobUuidAccess::kUuidUnavailable);
+  return {};
+}
+
+String BlobDataHandle::MaybeUuid() const {
+  if (!uuid_.empty()) {
+    return uuid_;
+  }
+
+  base::AutoLock locker(async_uuid_lock_);
+  return async_uuid_;
+}
+
+void BlobDataHandle::DidGetUuid(const String& uuid) {
+  CHECK(uuid_.empty());
+  base::AutoLock locker(async_uuid_lock_);
+  if (async_uuid_.empty()) {
+    async_uuid_ = uuid;
+  } else {
+    CHECK_EQ(async_uuid_, uuid);
+  }
 }
 
 // static

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,14 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
+#include "components/signin/public/base/consent_level.h"
+#include "components/signin/public/base/oauth_consumer_id.h"
 #include "components/signin/public/identity_manager/access_token_fetcher.h"
-#include "components/signin/public/identity_manager/consent_level.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
-#include "components/signin/public/identity_manager/scope_set.h"
 #include "google_apis/gaia/core_account_id.h"
 
 class GoogleServiceAuthError;
@@ -67,28 +68,23 @@ struct AccessTokenInfo;
 //     // create access token requests could and should just create
 //     // PrimaryAccountAccessTokenFetchers directly themselves rather than
 //     // introducing wrapper API surfaces.
+//
 //     MyClass::StartAccessTokenRequestForPrimaryAccount() {
-//       // Choose scopes to obtain for the access token.
-//       ScopeSet scopes;
-//       scopes.insert(GaiaConstants::kMyFirstScope);
-//       scopes.insert(GaiaConstants::kMySecondScope);
-
 //       // Choose the mode in which to fetch the access token:
 //       // see AccessTokenFetcher::Mode below for definitions.
 //       auto mode =
 //         PrimaryAccountAccessTokenFetcher::Mode::kWaitUntilAvailable;
-
+//
 //       // Create the fetcher.
 //       access_token_fetcher_ =
 //           std::make_unique<PrimaryAccountAccessTokenFetcher>(
-//               /*consumer_name=*/"MyClass",
+//               OAuthConsumerId::MyFeatureId,
 //               identity_manager_,
-//               scopes,
+//               mode,
 //               base::BindOnce(&MyClass::OnAccessTokenRequestCompleted,
 //                              // It is safe to use base::Unretained as
 //                              // |this| owns |access_token_fetcher_|.
-//                              base::Unretained(this)),
-//                              mode);
+//                              base::Unretained(this)));
 //
 //     }
 //     void MyClass::OnAccessTokenRequestCompleted(
@@ -111,7 +107,7 @@ struct AccessTokenInfo;
 //     }
 //   }
 //
-//   Concrete test example:
+// Concrete test example:
 //   TEST(MyClassTest, SuccessfulAccessTokenFetchForPrimaryAccount) {
 //     IdentityTestEnvironment identity_test_env;
 //
@@ -120,7 +116,8 @@ struct AccessTokenInfo;
 //
 //     // Make the primary account available, which should result in an access
 //     // token fetch being made on behalf of |my_class|.
-//     identity_test_env.MakePrimaryAccountAvailable("test_email");
+//     identity_test_env.
+//         MakePrimaryAccountAvailable("test_email", ConsentLevel::kSignin);
 //
 //     identity_test_env.
 //         WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
@@ -131,6 +128,37 @@ struct AccessTokenInfo;
 //     // the test can now perform any desired validation of expected actions
 //     // |MyClass| took in response.
 //   }
+//
+// It is also possible to create a PrimaryAccountAccessTokenFetcher that does
+// not immediately start its access token request, as follows:
+//
+//       auto access_token_fetcher =
+//           std::make_unique<PrimaryAccountAccessTokenFetcher>(
+//               OAuthConsumerId::MyFeatureId,
+//               identity_manager_,
+//               mode);
+//
+// This allows an ownership model wherein MyClass does not store a
+// std::unique_ptr<PrimaryAccountAccessTokenFetcher> instance variable; instead,
+// the fetcher is bound to the |TokenCallback| itself and destroyed
+// automatically when the callback is called or destroyed. Continuing the
+// example from above:
+//
+//       auto* access_token_fetcher_ptr = access_token_fetcher.get();
+//       access_token_fetcher_ptr.Start(
+//           base::BindOnce(&MyClass::OnAccessTokenRequestCompleted,
+//                          // |this| no longer owns |access_token_fetcher|, so
+//                          // a |WeakPtr| is required.
+//                          my_class_weak_factory_.GetWeakPtr()),
+//                          std::move(access_token_fetcher));
+//
+//     void MyClass::OnAccessTokenRequestCompleted(
+//         std::unique_ptr<PrimaryAccountAccessTokenFetcher> fetcher,
+//         GoogleServiceAuthError error,
+//         AccessTokenInfo access_token_info) {
+//       ...
+//       // |fetcher| is destroyed automatically when this callback finishes.
+//     }
 class PrimaryAccountAccessTokenFetcher : public IdentityManager::Observer {
  public:
   // Specifies how this instance should behave:
@@ -146,21 +174,33 @@ class PrimaryAccountAccessTokenFetcher : public IdentityManager::Observer {
   // if the user is not signed in and doesn't sign in.
   enum class Mode { kImmediate, kWaitUntilAvailable };
 
-  // Instantiates a fetcher and immediately starts the process of obtaining an
-  // OAuth2 access token for the given |scopes|. The |callback| is called once
-  // the request completes (successful or not). If the
-  // PrimaryAccountAccessTokenFetcher is destroyed before the process completes,
-  // the callback is not called.
-  // |consent| defaults to kSync because historically having an "authenticated"
-  // account was tied to browser sync. See ./README.md.
-  PrimaryAccountAccessTokenFetcher(const std::string& oauth_consumer_name,
+  // Instantiates an OAuth2 access token fetcher for the given
+  // |oauth_consumer_id|. Once the fetcher is created, the caller initiates its
+  // token request using |Start()|. See ./README.md.
+  PrimaryAccountAccessTokenFetcher(OAuthConsumerId oauth_consumer_id,
                                    IdentityManager* identity_manager,
-                                   const ScopeSet& scopes,
+                                   Mode mode,
+                                   ConsentLevel consent);
+
+  // Convenience constructor that immediately issues the access token request.
+  PrimaryAccountAccessTokenFetcher(OAuthConsumerId oauth_consumer_id,
+                                   IdentityManager* identity_manager,
                                    AccessTokenFetcher::TokenCallback callback,
                                    Mode mode,
-                                   ConsentLevel consent = ConsentLevel::kSync);
+                                   ConsentLevel consent);
+
+  PrimaryAccountAccessTokenFetcher(const PrimaryAccountAccessTokenFetcher&) =
+      delete;
+  PrimaryAccountAccessTokenFetcher& operator=(
+      const PrimaryAccountAccessTokenFetcher&) = delete;
 
   ~PrimaryAccountAccessTokenFetcher() override;
+
+  // Starts the process of obtaining an OAuth2 access token for the fetcher's
+  // |scopes_|. |callback| is called once the request completes (successfully
+  // or not). If the fetcher is destroyed before the process completes, the
+  // callback is not called.
+  void Start(AccessTokenFetcher::TokenCallback callback);
 
   // Exposed for tests.
   bool access_token_request_retried() { return access_token_retried_; }
@@ -192,9 +232,8 @@ class PrimaryAccountAccessTokenFetcher : public IdentityManager::Observer {
   void OnAccessTokenFetchComplete(GoogleServiceAuthError error,
                                   AccessTokenInfo access_token_info);
 
-  std::string oauth_consumer_name_;
-  IdentityManager* identity_manager_;
-  ScopeSet scopes_;
+  OAuthConsumerId oauth_consumer_id_;
+  raw_ptr<IdentityManager, DanglingUntriaged> identity_manager_;
 
   // Per the contract of this class, it is allowed for clients to delete this
   // object as part of the invocation of |callback_|. Hence, this object must
@@ -218,8 +257,6 @@ class PrimaryAccountAccessTokenFetcher : public IdentityManager::Observer {
   Mode mode_;
 
   const ConsentLevel consent_;
-
-  DISALLOW_COPY_AND_ASSIGN(PrimaryAccountAccessTokenFetcher);
 };
 
 }  // namespace signin

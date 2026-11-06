@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,47 +6,77 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/sequenced_task_runner.h"
-#include "base/task/post_task.h"
+#include "base/functional/bind.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/public/browser/browser_thread.h"
+#include "mojo/public/cpp/bindings/message.h"
+#include "ui/accessibility/ax_location_and_scroll_updates.h"
+#include "ui/accessibility/ax_updates_and_events.h"
 
 namespace content {
 
 RenderAccessibilityHost::RenderAccessibilityHost(
     base::WeakPtr<RenderFrameHostImpl> render_frame_host_impl,
-    mojo::PendingReceiver<mojom::RenderAccessibilityHost> receiver,
     ui::AXTreeID tree_id)
     : render_frame_host_impl_(std::move(render_frame_host_impl)),
-      receiver_{this, std::move(receiver)},
       tree_id_(tree_id) {}
 
 RenderAccessibilityHost::~RenderAccessibilityHost() = default;
 
 void RenderAccessibilityHost::HandleAXEvents(
-    mojom::AXUpdatesAndEventsPtr updates_and_events,
-    int32_t reset_token,
+    const ui::AXUpdatesAndEvents& updates_and_events,
+    const ui::AXLocationAndScrollUpdates& location_and_scroll_updates,
+    uint32_t reset_token,
     HandleAXEventsCallback callback) {
+  NOTREACHED() << "Non-const ref version of this method should be used as a "
+                  "performance optimization.";
+}
+
+void RenderAccessibilityHost::HandleAXEvents(
+    ui::AXUpdatesAndEvents& updates_and_events,
+    ui::AXLocationAndScrollUpdates& location_and_scroll_updates,
+    uint32_t reset_token,
+    HandleAXEventsCallback callback) {
+  if (!updates_and_events.HasValidAXNodeIDsFromRenderer() ||
+      !location_and_scroll_updates.HasValidAXNodeIDsFromRenderer()) {
+    mojo::ReportBadMessage("Invalid AXNodeID from renderer.");
+    std::move(callback).Run();
+    return;
+  }
   // Post the HandleAXEvents task onto the UI thread, and then when that
-  // mojo contract).
-  base::PostTaskAndReply(
-      // finishes, post back the response callback onto this runner (to satisfy
-      // the
-      FROM_HERE, BrowserThread::ID::UI,
+  // finishes, post back the response callback onto this runner (to satisfy
+  // the mojo contract).
+  GetUIThreadTaskRunner({})->PostTaskAndReply(
+      FROM_HERE,
       base::BindOnce(&RenderFrameHostImpl::HandleAXEvents,
                      render_frame_host_impl_, tree_id_,
-                     std::move(updates_and_events), reset_token),
+                     std::move(updates_and_events),
+                     std::move(location_and_scroll_updates), reset_token,
+                     mojo::GetBadMessageCallback()),
       std::move(callback));
 }
 
 void RenderAccessibilityHost::HandleAXLocationChanges(
-    std::vector<content::mojom::LocationChangesPtr> changes) {
-  base::PostTask(
-      FROM_HERE, BrowserThread::ID::UI,
+    const ui::AXLocationAndScrollUpdates& changes,
+    uint32_t reset_token) {
+  NOTREACHED() << "Non-const ref version of this method should be used as a "
+                  "performance optimization.";
+}
+
+void RenderAccessibilityHost::HandleAXLocationChanges(
+    ui::AXLocationAndScrollUpdates& changes,
+    uint32_t reset_token) {
+  if (!changes.HasValidAXNodeIDsFromRenderer()) {
+    mojo::ReportBadMessage("Invalid AXNodeID from renderer.");
+    return;
+  }
+  GetUIThreadTaskRunner({})->PostTask(
+      FROM_HERE,
       base::BindOnce(&RenderFrameHostImpl::HandleAXLocationChanges,
-                     render_frame_host_impl_, tree_id_, std::move(changes)));
+                     render_frame_host_impl_, tree_id_, std::move(changes),
+                     reset_token, mojo::GetBadMessageCallback()));
 }
 
 }  // namespace content

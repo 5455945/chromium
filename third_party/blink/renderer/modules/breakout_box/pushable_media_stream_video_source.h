@@ -1,19 +1,19 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_BREAKOUT_BOX_PUSHABLE_MEDIA_STREAM_VIDEO_SOURCE_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_BREAKOUT_BOX_PUSHABLE_MEDIA_STREAM_VIDEO_SOURCE_H_
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/synchronization/lock.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/public/web/modules/mediastream/media_stream_video_source.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
-#include "third_party/blink/renderer/platform/wtf/threading_primitives.h"
 
 namespace blink {
-
-class MediaStreamVideoTrackSignalObserver;
 
 // Simplifies the creation of video tracks.  Just do this:
 // auto source = std::make_unique<PushableMediaStreamVideoSource>();
@@ -28,7 +28,7 @@ class MODULES_EXPORT PushableMediaStreamVideoSource
   // PushableMediaStreamVideoSource from multiple threads. This also includes
   // safely posting tasks to/from outside the main thread.
   // The public methods of this class can be called on any thread.
-  class MODULES_EXPORT Broker : public WTF::ThreadSafeRefCounted<Broker> {
+  class MODULES_EXPORT Broker : public ThreadSafeRefCounted<Broker> {
    public:
     Broker(const Broker&) = delete;
     Broker& operator=(const Broker&) = delete;
@@ -39,9 +39,15 @@ class MODULES_EXPORT PushableMediaStreamVideoSource
     // StopSource() is called.
     void OnClientStopped();
     bool IsRunning();
+    // Indicates if connected sinks require the alpha channel.
+    bool CanDiscardAlpha();
+    // Indicates if connected sinks require a memory-mapped video frame.
+    bool RequireMappedFrame();
     void PushFrame(scoped_refptr<media::VideoFrame> video_frame,
                    base::TimeTicks estimated_capture_time);
     void StopSource();
+    bool IsMuted();
+    void SetMuted(bool);
 
    private:
     friend class PushableMediaStreamVideoSource;
@@ -52,33 +58,36 @@ class MODULES_EXPORT PushableMediaStreamVideoSource
     void OnSourceStarted(VideoCaptureDeliverFrameCB);
     void OnSourceDestroyedOrStopped();
     void StopSourceOnMain();
+    void SetCanDiscardAlpha(bool can_discard_alpha);
+    void ProcessFeedback(const media::VideoCaptureFeedback& feedback);
 
-    WTF::Mutex mutex_;
+    base::Lock lock_;
     // |source_| can only change its value on |main_task_runner_|. We use
-    // |mutex_| to guard it for value changes and for reads outside
-    // |main_task_runner_|. It is not necessary to guard it with |mutex_| to
+    // |lock_| to guard it for value changes and for reads outside
+    // |main_task_runner_|. It is not necessary to guard it with |lock_| to
     // read its value on |main_task_runner_|. This helps avoid deadlocks in
     // Stop()/OnSourceDestroyedOrStopped() interactions.
-    PushableMediaStreamVideoSource* source_;
+    raw_ptr<PushableMediaStreamVideoSource> source_;
     // The same apples to |frame_callback_|, but since it does not have
     // complex interactions with owners, like |source_| does, we always guard
     // it for simplicity.
-    VideoCaptureDeliverFrameCB frame_callback_ GUARDED_BY(mutex_);
-    int num_clients_ GUARDED_BY(mutex_) = 0;
+    VideoCaptureDeliverFrameCB frame_callback_ GUARDED_BY(lock_);
+    int num_clients_ GUARDED_BY(lock_) = 0;
+    bool muted_ GUARDED_BY(lock_) = false;
+    bool can_discard_alpha_ GUARDED_BY(lock_) = false;
+    media::VideoCaptureFeedback feedback_ GUARDED_BY(lock_);
+
     scoped_refptr<base::SingleThreadTaskRunner> main_task_runner_;
-    scoped_refptr<base::SingleThreadTaskRunner> io_task_runner_;
+    scoped_refptr<base::SequencedTaskRunner> video_task_runner_;
   };
 
   explicit PushableMediaStreamVideoSource(
       scoped_refptr<base::SingleThreadTaskRunner>);
-  PushableMediaStreamVideoSource(
-      scoped_refptr<base::SingleThreadTaskRunner> main_task_runner,
-      const base::WeakPtr<MediaStreamVideoSource>& upstream_source);
   ~PushableMediaStreamVideoSource() override;
 
   // See the definition of VideoCaptureDeliverFrameCB in
-  // media/capture/video_capturer_source.h for the documentation
-  // of |estimated_capture_time| and the difference with
+  // third_party/blink/public/platform/media/video_capture.h
+  // for the documentation of |estimated_capture_time| and the difference with
   // media::VideoFrame::timestamp().
   // This function can be called on any thread.
   void PushFrame(scoped_refptr<media::VideoFrame> video_frame,
@@ -89,22 +98,19 @@ class MODULES_EXPORT PushableMediaStreamVideoSource
   scoped_refptr<Broker> GetBroker() const { return broker_; }
 
   // MediaStreamVideoSource
-  void RequestRefreshFrame() override;
-  void OnFrameDropped(media::VideoCaptureFrameDropReason reason) override;
-  VideoCaptureFeedbackCB GetFeedbackCallback() const override;
-  void StartSourceImpl(VideoCaptureDeliverFrameCB frame_callback,
-                       EncodedVideoFrameCB encoded_frame_callback) override;
+  void StartSourceImpl(
+      MediaStreamVideoSourceCallbacks media_stream_callbacks) override;
   void StopSourceImpl() override;
-  base::WeakPtr<MediaStreamVideoSource> GetWeakPtr() const override;
-
-  VideoCaptureFeedbackCB GetInternalFeedbackCallback() const;
-  void SetSignalObserver(MediaStreamVideoTrackSignalObserver*);
+  base::WeakPtr<MediaStreamVideoSource> GetWeakPtr() override;
+  void OnSourceCanDiscardAlpha(bool can_discard_alpha) override;
+  // This function can be called on any thread.
+  media::VideoCaptureFeedbackCB GetFeedbackCallback() const override;
 
  private:
-  base::WeakPtr<MediaStreamVideoSource> upstream_source_;
-  WeakPersistent<MediaStreamVideoTrackSignalObserver> signal_observer_;
+  void ProcessFeedbackInternal(const media::VideoCaptureFeedback& feedback);
+
   scoped_refptr<Broker> broker_;
-  base::WeakPtrFactory<MediaStreamVideoSource> weak_factory_{this};
+  base::WeakPtrFactory<PushableMediaStreamVideoSource> weak_factory_{this};
 };
 
 }  // namespace blink

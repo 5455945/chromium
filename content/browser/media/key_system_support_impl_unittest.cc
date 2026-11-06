@@ -1,37 +1,35 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/media/key_system_support_impl.h"
 
 #include <string>
-#include <vector>
 
-#include "base/containers/contains.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
-#include "base/strings/utf_string_conversions.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/test/bind.h"
 #include "base/test/gmock_callback_support.h"
 #include "base/test/mock_callback.h"
-#include "base/test/scoped_feature_list.h"
-#include "base/token.h"
-#include "content/browser/gpu/gpu_data_manager_impl.h"
-#include "content/browser/media/cdm_registry_impl.h"
-#include "content/public/browser/cdm_registry.h"
-#include "content/public/browser/plugin_service.h"
-#include "content/public/common/cdm_info.h"
-#include "content/public/common/webplugininfo.h"
+#include "content/public/browser/permission_descriptor_util.h"
+#include "content/public/browser/permission_result.h"
 #include "content/public/test/browser_task_environment.h"
-#include "media/base/decrypt_config.h"
-#include "media/base/media_switches.h"
+#include "content/public/test/mock_permission_controller.h"
+#include "content/public/test/test_browser_context.h"
+#include "content/public/test/test_renderer_host.h"
+#include "media/base/cdm_capability.h"
+#include "media/base/key_system_capability.h"
 #include "media/base/video_codecs.h"
-#include "media/cdm/cdm_capability.h"
+#include "mojo/public/cpp/bindings/equals_traits.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
+#include "mojo/public/cpp/system/functions.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/mojom/permissions/permission_status.mojom-shared.h"
 
 namespace content {
-
-namespace {
 
 using AudioCodec = media::AudioCodec;
 using VideoCodec = media::VideoCodec;
@@ -39,259 +37,314 @@ using EncryptionScheme = media::EncryptionScheme;
 using CdmSessionType = media::CdmSessionType;
 using Robustness = CdmInfo::Robustness;
 using base::test::RunOnceCallback;
+using media::CdmCapability;
+using media::KeySystemCapability;
 using testing::_;
+using testing::SaveArg;
 
-const char kTestCdmName[] = "Test Content Decryption Module";
-const base::Token kTestCdmGuid{1234, 5678};
-const char kVersion[] = "1.1.1.1";
-const char kTestPath[] = "/aa/bb";
-const char kTestFileSystemId[] = "file_system_id";
+const char kTestKeySystem[] = "com.example.somesystem";
 
-// Helper function to convert a VideoCodecMap to a list of VideoCodec values
-// so that they can be compared. VideoCodecProfiles are ignored.
-std::vector<media::VideoCodec> VideoCodecMapToList(
-    const media::CdmCapability::VideoCodecMap& map) {
-  std::vector<media::VideoCodec> list;
-  for (const auto& entry : map) {
-    list.push_back(entry.first);
-  }
-  return list;
+ACTION_TEMPLATE(PostOnceCallback,
+                HAS_1_TEMPLATE_PARAMS(int, k),
+                AND_1_VALUE_PARAMS(p0)) {
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(std::move(std::get<k>(args)), p0));
 }
 
-#define EXPECT_STL_EQ(container, ...)                            \
-  do {                                                           \
-    EXPECT_THAT(container, ::testing::ElementsAre(__VA_ARGS__)); \
-  } while (false)
+namespace {
 
-#define EXPECT_AUDIO_CODECS(...) \
-  EXPECT_STL_EQ(capability_->sw_secure_capability->audio_codecs, __VA_ARGS__)
+class KeySystemSupportObserverImpl
+    : public media::mojom::KeySystemSupportObserver {
+ public:
+  explicit KeySystemSupportObserverImpl(KeySystemCapabilitiesUpdateCB cb)
+      : key_system_support_cb_(std::move(cb)) {}
+  KeySystemSupportObserverImpl(const KeySystemSupportObserverImpl&) = delete;
+  KeySystemSupportObserverImpl& operator=(const KeySystemSupportObserverImpl&) =
+      delete;
+  ~KeySystemSupportObserverImpl() override = default;
 
-#define EXPECT_VIDEO_CODECS(...)                                            \
-  EXPECT_STL_EQ(                                                            \
-      VideoCodecMapToList(capability_->sw_secure_capability->video_codecs), \
-      __VA_ARGS__)
+  // media::mojom::KeySystemSupportObserver
+  void OnKeySystemSupportUpdated(
+      const KeySystemCapabilities& capabilities) final {
+    key_system_support_cb_.Run(std::move(capabilities));
+  }
 
-#define EXPECT_ENCRYPTION_SCHEMES(...)                                 \
-  EXPECT_STL_EQ(capability_->sw_secure_capability->encryption_schemes, \
-                __VA_ARGS__)
+ private:
+  KeySystemCapabilitiesUpdateCB key_system_support_cb_;
+};
 
-#define EXPECT_SESSION_TYPES(...) \
-  EXPECT_STL_EQ(capability_->sw_secure_capability->session_types, __VA_ARGS__)
+CdmCapability TestCdmCapability() {
+  return CdmCapability(
+      {AudioCodec::kVorbis}, {{VideoCodec::kVP8, {}}, {VideoCodec::kVP9, {}}},
+      {EncryptionScheme::kCenc, EncryptionScheme::kCbcs},
+      {CdmSessionType::kTemporary, CdmSessionType::kPersistentLicense},
+      base::Version("1.2.3.4"));
+}
 
-#define EXPECT_HW_SECURE_AUDIO_CODECS(...) \
-  EXPECT_STL_EQ(capability_->hw_secure_capability->audio_codecs, __VA_ARGS__)
-
-#define EXPECT_HW_SECURE_VIDEO_CODECS(...)                                  \
-  EXPECT_STL_EQ(                                                            \
-      VideoCodecMapToList(capability_->hw_secure_capability->video_codecs), \
-      __VA_ARGS__)
-
-#define EXPECT_HW_SECURE_ENCRYPTION_SCHEMES(...)                       \
-  EXPECT_STL_EQ(capability_->hw_secure_capability->encryption_schemes, \
-                __VA_ARGS__)
-
-#define EXPECT_HW_SECURE_SESSION_TYPES(...) \
-  EXPECT_STL_EQ(capability_->hw_secure_capability->session_types, __VA_ARGS__)
+KeySystemCapabilities TestKeySystemCapabilities(
+    std::optional<CdmCapability> sw_secure_capability,
+    std::optional<CdmCapability> hw_secure_capability) {
+  KeySystemCapabilities key_system_capabilities;
+  key_system_capabilities[kTestKeySystem] = KeySystemCapability(
+      sw_secure_capability.has_value()
+          ? media::CdmCapabilityOrStatus(
+                std::move(sw_secure_capability).value())
+          : base::unexpected(media::CdmCapabilityQueryStatus::kUnknown),
+      hw_secure_capability.has_value()
+          ? media::CdmCapabilityOrStatus(
+                std::move(hw_secure_capability).value())
+          : base::unexpected(media::CdmCapabilityQueryStatus::kUnknown));
+  return key_system_capabilities;
+}
 
 }  // namespace
 
-class KeySystemSupportImplTest : public testing::Test {
+class KeySystemSupportImplTest : public RenderViewHostTestHarness {
+ public:
+  void SetUp() override {
+    LOG(ERROR) << __func__;
+    RenderViewHostTestHarness::SetUp();
+
+    test_browser_context_ = std::make_unique<content::TestBrowserContext>();
+    test_browser_context_->SetPermissionControllerForTesting(
+        std::make_unique<testing::NiceMock<MockPermissionController>>());
+
+    KeySystemSupportImpl::GetOrCreateForCurrentDocument(main_rfh())
+        ->SetGetKeySystemCapabilitiesUpdateCbForTesting(get_support_cb_.Get());
+    KeySystemSupportImpl::GetOrCreateForCurrentDocument(main_rfh())
+        ->Bind(key_system_support_.BindNewPipeAndPassReceiver());
+  }
+
+  void TearDown() override {
+    test_browser_context_.reset();
+    RenderViewHostTestHarness::TearDown();
+  }
+
+  void OnKeySystemSupportUpdated(base::OnceClosure done_cb,
+                                 KeySystemCapabilities capabilities) {
+    results_.push_back(std::move(capabilities));
+    std::move(done_cb).Run();
+  }
+
+  void SetPermissionStatus(blink::mojom::PermissionStatus permission_status) {
+    auto* mock_permission_controller = static_cast<MockPermissionController*>(
+        test_browser_context_->GetPermissionController());
+
+    ON_CALL(*mock_permission_controller,
+            RequestPermissionFromCurrentDocument(
+                main_rfh(),
+                PermissionRequestDescription(
+                    PermissionDescriptorUtil::
+                        CreatePermissionDescriptorForPermissionType(
+                            blink::PermissionType::PROTECTED_MEDIA_IDENTIFIER),
+                    main_rfh()->HasTransientUserActivation()),
+                _))
+        .WillByDefault(RunOnceCallback<2>(PermissionResult(permission_status)));
+
+    KeySystemSupportImpl::GetForCurrentDocument(main_rfh())
+        ->OnProtectedMediaIdentifierPermissionUpdated(
+            PermissionResult(permission_status));
+  }
+
  protected:
-  void SetUp() final {
+  void GetKeySystemSupport() {
     DVLOG(1) << __func__;
-    // As `CdmRegistryImpl::GetInstance()` is a static, explicitly reset
-    // `CdmRegistryImpl` so each test starts with a clean state.
-    CdmRegistryImpl::GetInstance()->ResetForTesting();
 
-    auto key_system_support_impl = std::make_unique<KeySystemSupportImpl>();
-    key_system_support_impl->SetHardwareSecureCapabilityCBForTesting(
-        hw_secure_capability_cb_.Get());
-
+    base::RunLoop run_loop;
+    mojo::PendingRemote<media::mojom::KeySystemSupportObserver> observer_remote;
     mojo::MakeSelfOwnedReceiver(
-        std::move(key_system_support_impl),
-        key_system_support_.BindNewPipeAndPassReceiver());
-  }
-
-  media::CdmCapability TestCdmCapability() {
-    return media::CdmCapability(
-        {AudioCodec::kCodecVorbis},
-        {{VideoCodec::kCodecVP8, {}}, {VideoCodec::kCodecVP9, {}}},
-        {EncryptionScheme::kCenc, EncryptionScheme::kCbcs},
-        {CdmSessionType::kTemporary, CdmSessionType::kPersistentLicense});
-  }
-
-  // Registers |key_system| with |capability|. All other values for CdmInfo have
-  // some default value as they're not returned by IsKeySystemSupported().
-  void Register(const std::string& key_system,
-                absl::optional<media::CdmCapability> capability,
-                Robustness robustness = Robustness::kSoftwareSecure) {
-    DVLOG(1) << __func__;
-
-    CdmRegistry::GetInstance()->RegisterCdm(
-        CdmInfo(key_system, robustness, std::move(capability),
-                /*supports_sub_key_systems=*/false, kTestCdmName, kTestCdmGuid,
-                base::Version(kVersion),
-                base::FilePath::FromUTF8Unsafe(kTestPath), kTestFileSystemId));
-  }
-
-  // Determines if |key_system| is registered. If it is, updates |codecs_|
-  // and |persistent_|.
-  bool IsSupported(const std::string& key_system) {
-    DVLOG(1) << __func__;
-    bool is_supported = false;
-    key_system_support_->IsKeySystemSupported(key_system, &is_supported,
-                                              &capability_);
-    return is_supported;
-  }
-
-  gpu::GpuFeatureInfo ALLOW_UNUSED_TYPE
-  GetGpuFeatureInfoWithOneDisabled(gpu::GpuFeatureType disabled_feature) {
-    gpu::GpuFeatureInfo gpu_feature_info;
-    for (auto& status : gpu_feature_info.status_values)
-      status = gpu::GpuFeatureStatus::kGpuFeatureStatusEnabled;
-    gpu_feature_info.status_values[disabled_feature] =
-        gpu::GpuFeatureStatus::kGpuFeatureStatusDisabled;
-    return gpu_feature_info;
+        std::make_unique<KeySystemSupportObserverImpl>(base::BindRepeating(
+            &KeySystemSupportImplTest::OnKeySystemSupportUpdated,
+            base::Unretained(this), run_loop.QuitClosure())),
+        observer_remote.InitWithNewPipeAndPassReceiver());
+    key_system_support_->SetObserver(std::move(observer_remote));
+    run_loop.Run();
   }
 
   mojo::Remote<media::mojom::KeySystemSupport> key_system_support_;
-  base::MockCallback<KeySystemSupportImpl::HardwareSecureCapabilityCB>
-      hw_secure_capability_cb_;
-  base::test::ScopedFeatureList scoped_feature_list_;
-  BrowserTaskEnvironment task_environment_;
+  base::MockCallback<KeySystemSupportImpl::GetKeySystemCapabilitiesUpdateCB>
+      get_support_cb_;
 
-  // Updated by IsSupported().
-  media::mojom::KeySystemCapabilityPtr capability_;
+  // KeySystemSupport update results. It's a list of updates received by an
+  // observer.
+  std::vector<KeySystemCapabilities> results_;
+  std::unique_ptr<content::TestBrowserContext> test_browser_context_;
 };
 
 TEST_F(KeySystemSupportImplTest, NoKeySystems) {
-  EXPECT_FALSE(IsSupported("KeySystem"));
-  EXPECT_FALSE(capability_);
+  EXPECT_CALL(get_support_cb_, Run(_, _))
+      .WillOnce(RunOnceCallback<1>(KeySystemCapabilities()));
+  GetKeySystemSupport();
+
+  EXPECT_EQ(results_.size(), 1u);  // One update
+
+  const auto& capabilities = results_[0];
+  EXPECT_TRUE(capabilities.empty());  // No capabilities
 }
 
-TEST_F(KeySystemSupportImplTest, SoftwareSecureCapability) {
-  Register("KeySystem", TestCdmCapability());
+TEST_F(KeySystemSupportImplTest, OneUpdate) {
+  EXPECT_CALL(get_support_cb_, Run(_, _))
+      .WillOnce(RunOnceCallback<1>(
+          TestKeySystemCapabilities(TestCdmCapability(), std::nullopt)));
+  GetKeySystemSupport();
 
-  EXPECT_TRUE(IsSupported("KeySystem"));
-  EXPECT_TRUE(capability_->sw_secure_capability);
-  EXPECT_FALSE(capability_->hw_secure_capability);
-  EXPECT_AUDIO_CODECS(AudioCodec::kCodecVorbis);
-  EXPECT_VIDEO_CODECS(VideoCodec::kCodecVP8, VideoCodec::kCodecVP9);
-  EXPECT_ENCRYPTION_SCHEMES(EncryptionScheme::kCenc, EncryptionScheme::kCbcs);
-  EXPECT_SESSION_TYPES(CdmSessionType::kTemporary,
-                       CdmSessionType::kPersistentLicense);
+  EXPECT_EQ(results_.size(), 1u);  // One update
+
+  auto& capabilities = results_[0];
+  ASSERT_TRUE(capabilities.count(kTestKeySystem));
+  const auto& capability = capabilities[kTestKeySystem];
+  EXPECT_TRUE(capability.sw_cdm_capability_or_status.has_value());
+  EXPECT_FALSE(capability.hw_cdm_capability_or_status.has_value());
 }
 
-TEST_F(KeySystemSupportImplTest,
-       HardwareSecureCapability_HardwareSecureDecryptionDisabled) {
-  scoped_feature_list_.InitAndDisableFeature(media::kHardwareSecureDecryption);
-  Register("KeySystem", TestCdmCapability(), Robustness::kHardwareSecure);
+TEST_F(KeySystemSupportImplTest, TwoUpdates) {
+  KeySystemCapabilitiesUpdateCB callback;
+  EXPECT_CALL(get_support_cb_, Run(_, _)).WillOnce(SaveArg<1>(&callback));
 
-  EXPECT_FALSE(IsSupported("KeySystem"));
+  base::RunLoop run_loop_1;
+  mojo::PendingRemote<media::mojom::KeySystemSupportObserver> observer_remote;
+  mojo::MakeSelfOwnedReceiver(
+      std::make_unique<KeySystemSupportObserverImpl>(base::BindRepeating(
+          &KeySystemSupportImplTest::OnKeySystemSupportUpdated,
+          base::Unretained(this), base::DoNothing())),
+      observer_remote.InitWithNewPipeAndPassReceiver());
+  key_system_support_->SetObserver(std::move(observer_remote));
+  run_loop_1.RunUntilIdle();
+
+  // Update twice, one with hardware capability, one without.
+  base::RunLoop run_loop_2;
+  callback.Run(TestKeySystemCapabilities(TestCdmCapability(), std::nullopt));
+  callback.Run(
+      TestKeySystemCapabilities(TestCdmCapability(), TestCdmCapability()));
+  run_loop_2.RunUntilIdle();
+
+  EXPECT_EQ(results_.size(), 2u);  // Two updates
+
+  auto& capabilities_1 = results_[0];
+  ASSERT_TRUE(capabilities_1.count(kTestKeySystem));
+  const auto& capability_1 = capabilities_1[kTestKeySystem];
+  EXPECT_TRUE(capability_1.sw_cdm_capability_or_status.has_value());
+  EXPECT_FALSE(capability_1.hw_cdm_capability_or_status.has_value());
+
+  auto& capabilities_2 = results_[1];
+  ASSERT_TRUE(capabilities_2.count(kTestKeySystem));
+  const auto& capability_2 = capabilities_2[kTestKeySystem];
+  EXPECT_TRUE(capability_2.sw_cdm_capability_or_status.has_value());
+  EXPECT_TRUE(capability_2.hw_cdm_capability_or_status.has_value());
 }
 
-TEST_F(KeySystemSupportImplTest, HardwareSecureCapability) {
-  scoped_feature_list_.InitAndEnableFeature(media::kHardwareSecureDecryption);
-  Register("KeySystem", TestCdmCapability(), Robustness::kHardwareSecure);
+TEST_F(KeySystemSupportImplTest, TwoObservers_ObserverAlreadyBound) {
+  EXPECT_CALL(get_support_cb_, Run(_, _))
+      .WillOnce(RunOnceCallback<1>(
+          TestKeySystemCapabilities(TestCdmCapability(), std::nullopt)));
 
-  // Simulate GPU process initialization completing with GL unavailable.
-  gpu::GpuFeatureInfo gpu_feature_info = GetGpuFeatureInfoWithOneDisabled(
-      gpu::GpuFeatureType::GPU_FEATURE_TYPE_ACCELERATED_GL);
-  GpuDataManagerImpl::GetInstance()->UpdateGpuFeatureInfo(gpu_feature_info,
-                                                          absl::nullopt);
+  base::RunLoop run_loop;
+  mojo::PendingRemote<media::mojom::KeySystemSupportObserver> observer_1_remote;
+  mojo::PendingRemote<media::mojom::KeySystemSupportObserver> observer_2_remote;
+  mojo::MakeSelfOwnedReceiver(
+      std::make_unique<KeySystemSupportObserverImpl>(base::BindRepeating(
+          &KeySystemSupportImplTest::OnKeySystemSupportUpdated,
+          base::Unretained(this), base::DoNothing())),
+      observer_1_remote.InitWithNewPipeAndPassReceiver());
+  mojo::MakeSelfOwnedReceiver(
+      std::make_unique<KeySystemSupportObserverImpl>(base::BindRepeating(
+          &KeySystemSupportImplTest::OnKeySystemSupportUpdated,
+          base::Unretained(this), run_loop.QuitClosure())),
+      observer_2_remote.InitWithNewPipeAndPassReceiver());
+  key_system_support_->SetObserver(std::move(observer_1_remote));
+  key_system_support_->SetObserver(std::move(observer_2_remote));
 
-  EXPECT_TRUE(IsSupported("KeySystem"));
-  EXPECT_FALSE(capability_->sw_secure_capability);
-  EXPECT_TRUE(capability_->hw_secure_capability);
-  EXPECT_HW_SECURE_AUDIO_CODECS(AudioCodec::kCodecVorbis);
-  EXPECT_HW_SECURE_VIDEO_CODECS(VideoCodec::kCodecVP8, VideoCodec::kCodecVP9);
-  EXPECT_HW_SECURE_ENCRYPTION_SCHEMES(EncryptionScheme::kCenc,
-                                      EncryptionScheme::kCbcs);
-  EXPECT_HW_SECURE_SESSION_TYPES(CdmSessionType::kTemporary,
-                                 CdmSessionType::kPersistentLicense);
+  mojo::SetDefaultProcessErrorHandler(
+      base::BindLambdaForTesting([&](const std::string& error) {
+        EXPECT_EQ(error,
+                  std::string(media::mojom::KeySystemSupportObserver::Name_) +
+                      "::SetObserver observer already bound");
+        run_loop.Quit();
+      }));
+
+  run_loop.Run();
 }
 
-TEST_F(KeySystemSupportImplTest, Profiles) {
-  Register("KeySystem",
-           media::CdmCapability(
-               {AudioCodec::kCodecVorbis},
-               {{VideoCodec::kCodecVP9,
-                 {media::VP9PROFILE_PROFILE0, media::VP9PROFILE_PROFILE2}}},
-               {EncryptionScheme::kCenc}, {CdmSessionType::kTemporary}));
+TEST_F(KeySystemSupportImplTest, TwoReceivers_SecondReceiverFails) {
+  // First receiver is bound in SetUp.
 
-  EXPECT_TRUE(IsSupported("KeySystem"));
-  EXPECT_TRUE(capability_->sw_secure_capability);
-  EXPECT_VIDEO_CODECS(VideoCodec::kCodecVP9);
-  EXPECT_TRUE(base::Contains(
-      capability_->sw_secure_capability->video_codecs[VideoCodec::kCodecVP9],
-      media::VP9PROFILE_PROFILE0));
-  EXPECT_TRUE(base::Contains(
-      capability_->sw_secure_capability->video_codecs[VideoCodec::kCodecVP9],
-      media::VP9PROFILE_PROFILE2));
+  // Binding a second receiver should fail gracefully.
+  base::RunLoop run_loop;
+  mojo::Remote<media::mojom::KeySystemSupport> key_system_support;
+  KeySystemSupportImpl::GetOrCreateForCurrentDocument(main_rfh())
+      ->Bind(key_system_support.BindNewPipeAndPassReceiver());
+
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindLambdaForTesting([&]() {
+        EXPECT_FALSE(key_system_support.is_connected());
+        run_loop.Quit();
+      }));
+  run_loop.Run();
 }
 
-TEST_F(KeySystemSupportImplTest, MultipleKeySystems) {
-  Register("KeySystem1", TestCdmCapability());
-  Register("KeySystem2", TestCdmCapability());
+TEST_F(KeySystemSupportImplTest, AllowHWSecureCapability) {
+  base::RunLoop run_loop_1;
+  mojo::PendingRemote<media::mojom::KeySystemSupportObserver> observer_remote;
+  mojo::MakeSelfOwnedReceiver(
+      std::make_unique<KeySystemSupportObserverImpl>(base::BindRepeating(
+          &KeySystemSupportImplTest::OnKeySystemSupportUpdated,
+          base::Unretained(this), base::DoNothing())),
+      observer_remote.InitWithNewPipeAndPassReceiver());
+  key_system_support_->SetObserver(std::move(observer_remote));
 
-  EXPECT_TRUE(IsSupported("KeySystem1"));
-  EXPECT_TRUE(IsSupported("KeySystem2"));
+// Only windows can disallow hw secure capability.
+#if BUILDFLAG(IS_WIN)
+  EXPECT_CALL(get_support_cb_, Run(testing::IsFalse(), _))
+      .WillOnce(RunOnceCallback<1>(KeySystemCapabilities()));
+#else
+  EXPECT_CALL(get_support_cb_, Run(testing::IsTrue(), _))
+      .WillOnce(RunOnceCallback<1>(KeySystemCapabilities()));
+#endif
+
+  SetPermissionStatus(blink::mojom::PermissionStatus::DENIED);
+  run_loop_1.RunUntilIdle();
+
+  // Switching the permission to GRANTED should change hw secure capability.
+  base::RunLoop run_loop_2;
+  EXPECT_CALL(get_support_cb_, Run(testing::IsTrue(), _))
+      .WillOnce(RunOnceCallback<1>(KeySystemCapabilities()));
+  SetPermissionStatus(blink::mojom::PermissionStatus::GRANTED);
+  run_loop_2.RunUntilIdle();
 }
 
-TEST_F(KeySystemSupportImplTest, MissingKeySystem) {
-  Register("KeySystem", TestCdmCapability());
+// Scenario 6: Pending capability check IPC forwarding.
+// Validates observer dispatch for capability updates with kPending status.
+TEST_F(KeySystemSupportImplTest, PendingCapabilityCheck) {
+  base::RunLoop run_loop;
+  mojo::PendingRemote<media::mojom::KeySystemSupportObserver> observer_remote;
+  mojo::MakeSelfOwnedReceiver(
+      std::make_unique<KeySystemSupportObserverImpl>(base::BindRepeating(
+          &KeySystemSupportImplTest::OnKeySystemSupportUpdated,
+          base::Unretained(this), run_loop.QuitClosure())),
+      observer_remote.InitWithNewPipeAndPassReceiver());
 
-  EXPECT_FALSE(IsSupported("KeySystem1"));
-  EXPECT_FALSE(capability_);
-}
+  // Simulate a pending capability update where checks are currently in
+  // progress.
+  KeySystemCapabilities pending_capabilities;
+  pending_capabilities[kTestKeySystem] = media::KeySystemCapability(
+      base::unexpected(media::CdmCapabilityQueryStatus::kUnknown),
+      base::unexpected(media::CdmCapabilityQueryStatus::kPending));
 
-TEST_F(KeySystemSupportImplTest, LazyInitialize_Supported) {
-  scoped_feature_list_.InitAndEnableFeature(media::kHardwareSecureDecryption);
-  Register("KeySystem", absl::nullopt, Robustness::kHardwareSecure);
+  EXPECT_CALL(get_support_cb_, Run(_, _))
+      .WillOnce(RunOnceCallback<1>(std::move(pending_capabilities)));
 
-  // Simulate GPU process initialization completing with GL unavailable.
-  gpu::GpuFeatureInfo gpu_feature_info = GetGpuFeatureInfoWithOneDisabled(
-      gpu::GpuFeatureType::GPU_FEATURE_TYPE_ACCELERATED_GL);
-  GpuDataManagerImpl::GetInstance()->UpdateGpuFeatureInfo(gpu_feature_info,
-                                                          absl::nullopt);
+  key_system_support_->SetObserver(std::move(observer_remote));
+  run_loop.Run();
 
-  EXPECT_CALL(hw_secure_capability_cb_, Run("KeySystem", _))
-      .WillOnce(RunOnceCallback<1>(TestCdmCapability()));
-  EXPECT_TRUE(IsSupported("KeySystem"));
-  EXPECT_TRUE(capability_);
-
-  // Calling IsSupported() again should not trigger `hw_secure_capability_cb_`.
-  EXPECT_TRUE(IsSupported("KeySystem"));
-  EXPECT_TRUE(capability_);
-}
-
-TEST_F(KeySystemSupportImplTest, LazyInitialize_NotSupported) {
-  scoped_feature_list_.InitAndEnableFeature(media::kHardwareSecureDecryption);
-  Register("KeySystem", absl::nullopt, Robustness::kHardwareSecure);
-
-  // Simulate GPU process initialization completing with GL unavailable.
-  gpu::GpuFeatureInfo gpu_feature_info = GetGpuFeatureInfoWithOneDisabled(
-      gpu::GpuFeatureType::GPU_FEATURE_TYPE_ACCELERATED_GL);
-  GpuDataManagerImpl::GetInstance()->UpdateGpuFeatureInfo(gpu_feature_info,
-                                                          absl::nullopt);
-
-  EXPECT_CALL(hw_secure_capability_cb_, Run("KeySystem", _))
-      .WillOnce(RunOnceCallback<1>(absl::nullopt));
-  EXPECT_FALSE(IsSupported("KeySystem"));
-  EXPECT_FALSE(capability_);
-
-  // Calling IsSupported() again should not trigger `hw_secure_capability_cb_`.
-  EXPECT_FALSE(IsSupported("KeySystem"));
-  EXPECT_FALSE(capability_);
-}
-
-TEST_F(KeySystemSupportImplTest,
-       LazyInitialize_HardwareSecureDecryptionDisabled) {
-  scoped_feature_list_.InitAndDisableFeature(media::kHardwareSecureDecryption);
-  Register("KeySystem", absl::nullopt, Robustness::kHardwareSecure);
-
-  EXPECT_FALSE(IsSupported("KeySystem"));
-  EXPECT_FALSE(capability_);
+  ASSERT_EQ(results_.size(), 1u);
+  ASSERT_TRUE(results_[0].contains(kTestKeySystem));
+  EXPECT_FALSE(
+      results_[0][kTestKeySystem].sw_cdm_capability_or_status.has_value());
+  EXPECT_FALSE(
+      results_[0][kTestKeySystem].hw_cdm_capability_or_status.has_value());
+  EXPECT_TRUE(results_[0][kTestKeySystem].IsPending());
+  EXPECT_EQ(results_[0][kTestKeySystem].hw_cdm_capability_or_status.error(),
+            media::CdmCapabilityQueryStatus::kPending);
 }
 
 }  // namespace content

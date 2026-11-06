@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,13 @@
 
 #include "mojo/public/cpp/bindings/struct_traits.h"
 #include "net/http/http_request_headers.h"
+#include "services/network/public/cpp/http_request_headers_update_params.h"
 #include "services/network/public/mojom/http_request_headers.mojom-shared.h"
 
 namespace mojo {
 
 template <>
-struct COMPONENT_EXPORT(NETWORK_CPP_BASE)
+struct COMPONENT_EXPORT(NETWORK_CPP_HTTP_REQUEST_HEADERS)
     StructTraits<network::mojom::HttpRequestHeaderKeyValuePairDataView,
                  net::HttpRequestHeaders::HeaderKeyValuePair> {
   static const std::string& key(
@@ -28,7 +29,7 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE)
 };
 
 template <>
-struct COMPONENT_EXPORT(NETWORK_CPP_BASE)
+struct COMPONENT_EXPORT(NETWORK_CPP_HTTP_REQUEST_HEADERS)
     StructTraits<network::mojom::HttpRequestHeadersDataView,
                  net::HttpRequestHeaders> {
   static net::HttpRequestHeaders::HeaderVector headers(
@@ -37,6 +38,27 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE)
   }
   static bool Read(network::mojom::HttpRequestHeadersDataView data,
                    net::HttpRequestHeaders* headers);
+};
+
+template <>
+struct COMPONENT_EXPORT(NETWORK_CPP_HTTP_REQUEST_HEADERS)
+    StructTraits<network::mojom::HttpRequestHeadersUpdateParamsDataView,
+                 network::HttpRequestHeadersUpdateParams> {
+  static const std::vector<std::string>& removed_headers(
+      const network::HttpRequestHeadersUpdateParams& data) {
+    return data.removed_headers;
+  }
+  static const net::HttpRequestHeaders& modified_headers(
+      const network::HttpRequestHeadersUpdateParams& data) {
+    return data.modified_headers;
+  }
+  static const net::HttpRequestHeaders& modified_cors_exempt_headers(
+      const network::HttpRequestHeadersUpdateParams& data) {
+    return data.modified_cors_exempt_headers;
+  }
+  static bool Read(
+      network::mojom::HttpRequestHeadersUpdateParamsDataView data,
+      network::HttpRequestHeadersUpdateParams* headers_update_params);
 };
 
 }  // namespace mojo

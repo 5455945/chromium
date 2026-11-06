@@ -1,15 +1,19 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/component_updater/ssl_error_assistant_component_installer.h"
 
-#include <memory>
-#include <utility>
+#include <stdint.h>
 
-#include "base/bind.h"
-#include "base/cxx17_backports.h"
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
 #include "base/task/thread_pool.h"
@@ -18,23 +22,22 @@
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 
-using component_updater::ComponentUpdateService;
-
 namespace {
 
-const base::FilePath::CharType kConfigBinaryPbFileName[] =
+constexpr base::FilePath::CharType kConfigBinaryPbFileName[] =
     FILE_PATH_LITERAL("ssl_error_assistant.pb");
 
 // The SHA256 of the SubjectPublicKeyInfo used to sign the extension.
 // The extension id is: giekcmmlnklenlaomppkphknjmnnpneh
-const uint8_t kSslErrorAssistantPublicKeySHA256[32] = {
+constexpr uint8_t kSslErrorAssistantPublicKeySHA256[32] = {
     0x68, 0x4a, 0x2c, 0xcb, 0xda, 0xb4, 0xdb, 0x0e, 0xcf, 0xfa, 0xf7,
     0xad, 0x9c, 0xdd, 0xfd, 0x47, 0x97, 0xe4, 0x73, 0x24, 0x67, 0x93,
     0x9c, 0xb1, 0x14, 0xcd, 0x3f, 0x54, 0x66, 0x25, 0x99, 0x3f};
 
 void LoadProtoFromDisk(const base::FilePath& pb_path) {
-  if (pb_path.empty())
+  if (pb_path.empty()) {
     return;
+  }
 
   std::string binary_pb;
   if (!base::ReadFileToString(pb_path, &binary_pb)) {
@@ -69,7 +72,7 @@ namespace component_updater {
 
 bool SSLErrorAssistantComponentInstallerPolicy::
     SupportsGroupPolicyEnabledComponentUpdates() const {
-  return false;
+  return true;
 }
 
 bool SSLErrorAssistantComponentInstallerPolicy::RequiresNetworkEncryption()
@@ -79,7 +82,7 @@ bool SSLErrorAssistantComponentInstallerPolicy::RequiresNetworkEncryption()
 
 update_client::CrxInstaller::Result
 SSLErrorAssistantComponentInstallerPolicy::OnCustomInstall(
-    const base::DictionaryValue& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) {
   return update_client::CrxInstaller::Result(0);  // Nothing custom here.
 }
@@ -94,7 +97,7 @@ base::FilePath SSLErrorAssistantComponentInstallerPolicy::GetInstalledPath(
 void SSLErrorAssistantComponentInstallerPolicy::ComponentReady(
     const base::Version& version,
     const base::FilePath& install_dir,
-    std::unique_ptr<base::DictionaryValue> manifest) {
+    base::DictValue manifest) {
   DVLOG(1) << "Component ready, version " << version.GetString() << " in "
            << install_dir.value();
 
@@ -105,7 +108,7 @@ void SSLErrorAssistantComponentInstallerPolicy::ComponentReady(
 
 // Called during startup and installation before ComponentReady().
 bool SSLErrorAssistantComponentInstallerPolicy::VerifyInstallation(
-    const base::DictionaryValue& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) const {
   // No need to actually validate the proto here, since we'll do the checking
   // in PopulateFromDynamicUpdate().
@@ -119,9 +122,7 @@ SSLErrorAssistantComponentInstallerPolicy::GetRelativeInstallDir() const {
 
 void SSLErrorAssistantComponentInstallerPolicy::GetHash(
     std::vector<uint8_t>* hash) const {
-  hash->assign(kSslErrorAssistantPublicKeySHA256,
-               kSslErrorAssistantPublicKeySHA256 +
-                   base::size(kSslErrorAssistantPublicKeySHA256));
+  hash->assign_range(kSslErrorAssistantPublicKeySHA256);
 }
 
 std::string SSLErrorAssistantComponentInstallerPolicy::GetName() const {

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,16 +16,12 @@ bool IsTranslatableURL(const GURL& url) {
   // - the devtools (which is considered UI)
   // - about:blank
   // - Chrome OS file manager extension [but not able to check here]
-  // - an FTP page (as FTP pages tend to have long lists of filenames that may
-  //   confuse the CLD)
-  // Note: this is duplicated logic from TranslateService (missing a chromeos
-  // file manager check at this components level).
-  // TODO(1064974) Reuse this utility in TranslateService once subframe
-  // translation launched. Note that the chromeos checks in the
-  // TranslateService version will still need to be at the browser level.
+  // This is duplicated logic from TranslateService. It was planned to be reused
+  // in TranslateService once subframe translation launched, but that work was
+  // abandoned. The chromeos checks in the TranslateService version will still
+  // need to be at the browser level. See crbug.com/40123934 for context.
   return !url.is_empty() && !url.SchemeIs(content::kChromeUIScheme) &&
-         !url.SchemeIs(content::kChromeDevToolsScheme) && !url.IsAboutBlank() &&
-         !url.SchemeIs(url::kFtpScheme);
+         !url.SchemeIs(content::kChromeDevToolsScheme) && !url.IsAboutBlank();
 }
 
 }  // namespace translate

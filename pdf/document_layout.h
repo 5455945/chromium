@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,14 +9,12 @@
 #include <vector>
 
 #include "base/check_op.h"
-#include "pdf/draw_utils/coordinates.h"
+#include "base/i18n/rtl.h"
+#include "base/values.h"
 #include "pdf/page_orientation.h"
+#include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
-
-namespace base {
-class Value;
-}
 
 namespace chrome_pdf {
 
@@ -29,7 +27,7 @@ namespace chrome_pdf {
 // orientation of pages.
 class DocumentLayout final {
  public:
-  // TODO(crbug.com/1144505): Add `kTwoUpEven` page spread support.
+  // TODO(crbug.com/40155509): Add `kTwoUpEven` page spread support.
   enum class PageSpread {
     kOneUp = 0,     // One page per spread.
     kTwoUpOdd = 1,  // Two pages per spread, with odd pages first.
@@ -45,20 +43,21 @@ class DocumentLayout final {
 
     ~Options();
 
-    friend bool operator==(const Options& lhs, const Options& rhs) {
-      return lhs.page_spread() == rhs.page_spread() &&
-             lhs.default_page_orientation() == rhs.default_page_orientation();
+    friend constexpr bool operator==(const Options&, const Options&) = default;
+
+    // Serializes layout options to a base::DictValue.
+    base::DictValue ToValue() const;
+
+    // Deserializes layout options from a base::DictValue.
+    void FromValue(const base::DictValue& value);
+
+    // Page layout direction. This is tied to the direction of the user's UI,
+    // rather than the direction of individual pages.
+    base::i18n::TextDirection direction() const { return direction_; }
+
+    void set_direction(base::i18n::TextDirection direction) {
+      direction_ = direction;
     }
-
-    friend bool operator!=(const Options& lhs, const Options& rhs) {
-      return !(lhs == rhs);
-    }
-
-    // Serializes layout options to a base::Value.
-    base::Value ToValue() const;
-
-    // Deserializes layout options from a base::Value.
-    void FromValue(const base::Value& value);
 
     PageOrientation default_page_orientation() const {
       return default_page_orientation_;
@@ -76,11 +75,13 @@ class DocumentLayout final {
     void set_page_spread(PageSpread spread) { page_spread_ = spread; }
 
    private:
+    base::i18n::TextDirection direction_ = base::i18n::UNKNOWN_DIRECTION;
     PageOrientation default_page_orientation_ = PageOrientation::kOriginal;
     PageSpread page_spread_ = PageSpread::kOneUp;
   };
 
-  static const draw_utils::PageInsetSizes kSingleViewInsets;
+  static constexpr gfx::Insets kSingleViewInsets =
+      gfx::Insets::TLBR(/*top=*/3, /*left=*/5, /*bottom=*/7, /*right=*/5);
   static constexpr int32_t kBottomSeparator = 4;
   static constexpr int32_t kHorizontalSeparator = 1;
 

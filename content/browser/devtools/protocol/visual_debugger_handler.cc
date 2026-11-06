@@ -1,17 +1,19 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/devtools/protocol/visual_debugger_handler.h"
 
 #include <string.h>
+
 #include <algorithm>
 
-#include "base/bind_post_task.h"
+#include "base/functional/bind.h"
 #include "base/json/json_writer.h"
+#include "base/task/bind_post_task.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "content/browser/devtools/protocol/base_string_adapter.h"
 #include "content/browser/gpu/gpu_process_host.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -21,7 +23,6 @@
 namespace content {
 namespace protocol {
 
-static const int sMaxJsonDepth = 1000;
 VisualDebuggerHandler::VisualDebuggerHandler()
     : DevToolsDomainHandler(VisualDebugger::Metainfo::domainName) {}
 
@@ -35,59 +36,58 @@ void VisualDebuggerHandler::Wire(UberDispatcher* dispatcher) {
 }
 
 DispatchResponse VisualDebuggerHandler::FilterStream(
-    std::unique_ptr<protocol::DictionaryValue> in_filter) {
-  std::unique_ptr<base::Value> dict =
-      toBaseValue(in_filter.get(), sMaxJsonDepth);
-
-  GpuProcessHost::CallOnIO(
-      GPU_PROCESS_KIND_SANDBOXED,
-      /*force_create=*/false,
-      base::BindOnce(
-          [](base::Value json, GpuProcessHost* host) {
-            host->gpu_host()->FilterVisualDebugStream(std::move(json));
-          },
-          std::move(*dict.get())));
+    std::unique_ptr<base::DictValue> in_filter) {
+  auto* host = GetGpuProcessHost(/*force_create=*/true);
+  if (!host) {
+    return DispatchResponse::ServerError("GPU process is not available");
+  }
+  host->gpu_host()->FilterVisualDebugStream(std::move(*in_filter));
 
   return DispatchResponse::Success();
 }
 
 DispatchResponse VisualDebuggerHandler::StartStream() {
+  auto* host = GetGpuProcessHost(/*force_create=*/true);
+  if (!host) {
+    enabled_ = false;
+    return DispatchResponse::ServerError("GPU process is not available");
+  }
   enabled_ = true;
-  GpuProcessHost::CallOnIO(
-      GPU_PROCESS_KIND_SANDBOXED,
-      /*force_create=*/false,
-      base::BindOnce(
-          [](base::RepeatingCallback<void(base::Value)> callback,
-             GpuProcessHost* host) {
-            host->gpu_host()->StartVisualDebugStream(callback);
-          },
-          base::BindPostTask(
-              base::ThreadTaskRunnerHandle::Get(),
-              base::BindRepeating(&VisualDebuggerHandler::OnFrameResponse,
-                                  weak_ptr_factory_.GetWeakPtr()),
-              FROM_HERE)));
+  host->gpu_host()->StartVisualDebugStream(base::BindPostTask(
+      base::SingleThreadTaskRunner::GetCurrentDefault(),
+      base::BindRepeating(&VisualDebuggerHandler::OnFrameResponse,
+                          weak_ptr_factory_.GetWeakPtr()),
+      FROM_HERE));
   return DispatchResponse::Success();
 }
 
 void VisualDebuggerHandler::OnFrameResponse(base::Value json) {
   // This should be called via the 'BindPostTask' in 'StartStream' function
   // above and thus should be in the correct thread.
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  std::unique_ptr<protocol::DictionaryValue> dict =
-      protocol::DictionaryValue::cast(toProtocolValue(&json, sMaxJsonDepth));
-  frontend_->FrameResponse(std::move(dict));
+  CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI),
+        base::NotFatalUntil::M159);
+  frontend_->FrameResponse(
+      std::make_unique<base::DictValue>(std::move(json).TakeDict()));
 }
 
 DispatchResponse VisualDebuggerHandler::StopStream() {
   if (enabled_) {
-    GpuProcessHost::CallOnIO(GPU_PROCESS_KIND_SANDBOXED,
-                             /*force_create=*/false,
-                             base::BindOnce([](GpuProcessHost* host) {
-                               host->gpu_host()->StopVisualDebugStream();
-                             }));
+    // Cleanup must not launch a replacement GPU process.
+    auto* host = GetGpuProcessHost(/*force_create=*/false);
+    if (host) {
+      host->gpu_host()->StopVisualDebugStream();
+    }
   }
   enabled_ = false;
   return DispatchResponse::Success();
 }
+
+GpuProcessHost* VisualDebuggerHandler::GetGpuProcessHost(bool force_create) {
+  if (gpu_process_host_getter_for_testing_) {
+    return gpu_process_host_getter_for_testing_.Run(force_create);
+  }
+  return GpuProcessHost::Get(GPU_PROCESS_KIND_SANDBOXED, force_create);
+}
+
 }  // namespace protocol
 }  // namespace content

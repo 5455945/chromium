@@ -1,17 +1,19 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/component_updater/installer_policies/origin_trials_component_installer.h"
 
-#include <iterator>
+#include <stdint.h>
+
+#include <string>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
 #include "base/path_service.h"
 #include "base/values.h"
@@ -39,10 +41,10 @@ namespace component_updater {
 
 namespace {
 
-static const char kManifestOriginTrialsKey[] = "origin-trials";
+constexpr char kManifestOriginTrialsKey[] = "origin-trials";
 
 // Extension id is llkgjffcdpffmhiakmfcdcblohccpfmo
-const uint8_t kOriginTrialSha2Hash[] = {
+constexpr uint8_t kOriginTrialSha2Hash[] = {
     0xbb, 0xa6, 0x95, 0x52, 0x3f, 0x55, 0xc7, 0x80, 0xac, 0x52, 0x32,
     0x1b, 0xe7, 0x22, 0xf5, 0xce, 0x6a, 0xfd, 0x9c, 0x9e, 0xa9, 0x2a,
     0x0b, 0x50, 0x60, 0x2b, 0x7f, 0x6c, 0x64, 0x80, 0x09, 0x04};
@@ -52,10 +54,10 @@ const uint8_t kOriginTrialSha2Hash[] = {
 // static
 void OriginTrialsComponentInstallerPolicy::GetComponentHash(
     std::vector<uint8_t>* hash) {
-  if (!hash)
+  if (!hash) {
     return;
-  hash->assign(std::begin(kOriginTrialSha2Hash),
-               std::end(kOriginTrialSha2Hash));
+  }
+  hash->assign_range(kOriginTrialSha2Hash);
 }
 
 void OriginTrialsComponentInstallerPolicy::GetHash(
@@ -64,10 +66,10 @@ void OriginTrialsComponentInstallerPolicy::GetHash(
 }
 
 bool OriginTrialsComponentInstallerPolicy::VerifyInstallation(
-    const base::DictionaryValue& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) const {
   // Test if the "origin-trials" key is present in the manifest.
-  return manifest.HasKey(kManifestOriginTrialsKey);
+  return manifest.contains(kManifestOriginTrialsKey);
 }
 
 bool OriginTrialsComponentInstallerPolicy::
@@ -81,7 +83,7 @@ bool OriginTrialsComponentInstallerPolicy::RequiresNetworkEncryption() const {
 
 update_client::CrxInstaller::Result
 OriginTrialsComponentInstallerPolicy::OnCustomInstall(
-    const base::DictionaryValue& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) {
   return update_client::CrxInstaller::Result(0);
 }
@@ -91,7 +93,7 @@ void OriginTrialsComponentInstallerPolicy::OnCustomUninstall() {}
 void OriginTrialsComponentInstallerPolicy::ComponentReady(
     const base::Version& version,
     const base::FilePath& install_dir,
-    std::unique_ptr<base::DictionaryValue> manifest) {}
+    base::DictValue manifest) {}
 
 base::FilePath OriginTrialsComponentInstallerPolicy::GetRelativeInstallDir()
     const {

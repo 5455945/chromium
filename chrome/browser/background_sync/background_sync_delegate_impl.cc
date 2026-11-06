@@ -1,22 +1,25 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/background_sync/background_sync_delegate_impl.h"
 
+#include "build/build_config.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/metrics/ukm_background_recorder_service.h"
-#include "chrome/browser/profiles/profile_keep_alive_types.h"
+#include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/keep_alive_registry/keep_alive_registry.h"
 #include "components/keep_alive_registry/keep_alive_types.h"
 #include "components/site_engagement/content/site_engagement_service.h"
+#include "components/webapps/common/web_app_id.h"
 #include "content/public/browser/background_sync_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/browser/web_contents.h"
 #include "url/origin.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/android/background_sync_launcher_android.h"
 #endif
 
@@ -29,26 +32,30 @@ BackgroundSyncDelegateImpl::BackgroundSyncDelegateImpl(Profile* profile)
 
       site_engagement_service_(
           site_engagement::SiteEngagementService::Get(profile)) {
-  DCHECK(profile_);
-  DCHECK(ukm_background_service_);
-  DCHECK(site_engagement_service_);
+  CHECK(profile_, base::NotFatalUntil::M161);
+  CHECK(ukm_background_service_, base::NotFatalUntil::M161);
+  CHECK(site_engagement_service_, base::NotFatalUntil::M161);
   off_the_record_ = profile_->IsOffTheRecord();
 }
 
 BackgroundSyncDelegateImpl::~BackgroundSyncDelegateImpl() = default;
 
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
 BackgroundSyncDelegateImpl::BackgroundSyncEventKeepAliveImpl::
     BackgroundSyncEventKeepAliveImpl(Profile* profile) {
   keepalive_ = std::unique_ptr<ScopedKeepAlive,
                                content::BrowserThread::DeleteOnUIThread>(
       new ScopedKeepAlive(KeepAliveOrigin::BACKGROUND_SYNC,
                           KeepAliveRestartOption::DISABLED));
-  profile_keepalive_ =
-      std::unique_ptr<ScopedProfileKeepAlive,
-                      content::BrowserThread::DeleteOnUIThread>(
-          new ScopedProfileKeepAlive(profile,
-                                     ProfileKeepAliveOrigin::kBackgroundSync));
+  if (!profile->IsOffTheRecord()) {
+    // TODO(crbug.com/40159237): Remove this guard when OTR profiles become
+    // refcounted and support ScopedProfileKeepAlive.
+    profile_keepalive_ =
+        std::unique_ptr<ScopedProfileKeepAlive,
+                        content::BrowserThread::DeleteOnUIThread>(
+            new ScopedProfileKeepAlive(
+                profile, ProfileKeepAliveOrigin::kBackgroundSync));
+  }
 }
 
 BackgroundSyncDelegateImpl::BackgroundSyncEventKeepAliveImpl::
@@ -60,11 +67,11 @@ BackgroundSyncDelegateImpl::CreateBackgroundSyncEventKeepAlive() {
     return std::make_unique<BackgroundSyncEventKeepAliveImpl>(profile_);
   return nullptr;
 }
-#endif  // !defined(OS_ANDROID)
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 void BackgroundSyncDelegateImpl::GetUkmSourceId(
     const url::Origin& origin,
-    base::OnceCallback<void(absl::optional<ukm::SourceId>)> callback) {
+    base::OnceCallback<void(std::optional<ukm::SourceId>)> callback) {
   ukm_background_service_->GetBackgroundSourceIdIfAllowed(origin,
                                                           std::move(callback));
 }
@@ -85,7 +92,7 @@ bool BackgroundSyncDelegateImpl::IsProfileOffTheRecord() {
 
 void BackgroundSyncDelegateImpl::NoteSuspendedPeriodicSyncOrigins(
     std::set<url::Origin> suspended_origins) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
   for (auto& origin : suspended_origins)
     suspended_periodic_sync_origins_.insert(std::move(origin));
@@ -96,7 +103,7 @@ int BackgroundSyncDelegateImpl::GetSiteEngagementPenalty(const GURL& url) {
       site_engagement_service_->GetEngagementLevel(url);
   if (engagement_level == blink::mojom::EngagementLevel::NONE) {
     suspended_periodic_sync_origins_.insert(
-        url::Origin::Create(url.GetOrigin()));
+        url::Origin::Create(url.DeprecatedGetOriginAsURL()));
   }
 
   switch (engagement_level) {
@@ -115,10 +122,9 @@ int BackgroundSyncDelegateImpl::GetSiteEngagementPenalty(const GURL& url) {
   }
 
   NOTREACHED();
-  return kEngagementLevelNonePenalty;
 }
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 
 void BackgroundSyncDelegateImpl::ScheduleBrowserWakeUpWithDelay(
     blink::mojom::BackgroundSyncType sync_type,
@@ -140,14 +146,16 @@ bool BackgroundSyncDelegateImpl::ShouldDisableAndroidNetworkDetection() {
   return false;
 }
 
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
 
 void BackgroundSyncDelegateImpl::OnEngagementEvent(
     content::WebContents* web_contents,
     const GURL& url,
     double score,
-    site_engagement::EngagementType engagement_type) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    double old_score,
+    site_engagement::EngagementType engagement_type,
+    const std::optional<webapps::AppId>& app_id) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
   if (score == 0.0)
     return;
@@ -159,8 +167,9 @@ void BackgroundSyncDelegateImpl::OnEngagementEvent(
 
   suspended_periodic_sync_origins_.erase(iter);
 
+  // Engagement is always accumulated in the main frame.
   auto* storage_partition =
-      profile_->GetStoragePartitionForUrl(url, /* can_create= */ false);
+      web_contents->GetPrimaryMainFrame()->GetStoragePartition();
   if (!storage_partition)
     return;
 

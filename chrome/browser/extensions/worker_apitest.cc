@@ -1,8 +1,9 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/extensions/extension_apitest.h"
+#include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
 
@@ -18,7 +19,13 @@ class WorkerTest : public ExtensionApiTest {
   }
 };
 
-IN_PROC_BROWSER_TEST_F(WorkerTest, WorkerInBackgroundPage) {
+// TODO(crbug.com/431290255): Flaky on Windows with ASAN.
+#if BUILDFLAG(IS_WIN) && defined(ADDRESS_SANITIZER)
+#define MAYBE_WorkerInBackgroundPage DISABLED_WorkerInBackgroundPage
+#else
+#define MAYBE_WorkerInBackgroundPage WorkerInBackgroundPage
+#endif
+IN_PROC_BROWSER_TEST_F(WorkerTest, MAYBE_WorkerInBackgroundPage) {
   embedded_test_server()->ServeFilesFromDirectory(test_data_dir_);
   ASSERT_TRUE(StartEmbeddedTestServer());
   ASSERT_TRUE(RunExtensionTest("worker")) << message_;

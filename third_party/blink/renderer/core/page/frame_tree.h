@@ -22,7 +22,8 @@
 
 #include "base/dcheck_is_on.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 
 namespace blink {
@@ -96,8 +97,11 @@ class CORE_EXPORT FrameTree final {
   void Trace(Visitor*) const;
 
  private:
-  Frame* FindFrameForNavigationInternal(const AtomicString& name,
-                                        const KURL&) const;
+  // TODO(crbug.com/1315802): Refactor _unfencedTop handling.
+  Frame* FindFrameForNavigationInternal(
+      const AtomicString& name,
+      const KURL&,
+      FrameLoadRequest* request = nullptr) const;
 
   Member<Frame> this_frame_;
 
@@ -116,7 +120,7 @@ class CORE_EXPORT FrameTree final {
 
 #if DCHECK_IS_ON()
 // Outside the blink namespace for ease of invocation from gdb.
-void showFrameTree(const blink::Frame*);
+void ShowFrameTree(const blink::Frame*);
 #endif
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_CORE_PAGE_FRAME_TREE_H_

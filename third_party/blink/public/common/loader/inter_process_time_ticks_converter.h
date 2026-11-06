@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,7 +23,7 @@ class SiteSpecificTimeDelta final {
     return SiteSpecificTimeDelta<T>(delta);
   }
   static SiteSpecificTimeDelta<T> FromMicroseconds(int64_t usec) {
-    return SiteSpecificTimeDelta<T>(base::TimeDelta::FromMicroseconds(usec));
+    return SiteSpecificTimeDelta<T>(base::Microseconds(usec));
   }
 
   base::TimeDelta ToTimeDelta() const { return delta_; }
@@ -124,6 +124,46 @@ using RemoteTimeDelta = SiteSpecificTimeDelta<SiteSpecificTimeRemoteTag>;
 // - |remote_upper_bound|: The equivalent point on the remote process. This
 //                         should be recorded immediately before
 //                         |local_upper_bound|.
+//
+// Timing Diagram:
+//
+//        Local Process                       Remote Process
+//       +-----------------------+           +-------------------------+
+//   T   |                       |           |                         |
+//   I   | [1] local_lower_bound |           |                         |
+//   M   |           *           |           |                         |
+//   E   |            \          |           |                         |
+//       |             \  Mojo Request Latency (Half-overhead)         |
+//   |   |              \        |           |                         |
+//   |   |               \       |           |                         |
+//   |   |                ------------->-----> [2] remote_lower_bound  |
+//   v   |                       |           |           *             |
+//       |                       |           |           |             |
+//       |                       |           |      Remote Work        |
+//       |                       |           |     (remote_range)      |
+//       |                       |           |           |             |
+//       |                       |           |           *             |
+//       |                /--<---------<-------[3] remote_upper_bound  |
+//       |               /       |           |                         |
+//       |              /        |           |                         |
+//       |             /  Mojo Response Latency (Half-overhead)        |
+//       |            /          |           |                         |
+//       |           *           |           |                         |
+//       | [4] local_upper_bound |           |                         |
+//       |                       |           |                         |
+//       +-----------------------+           +-------------------------+
+//
+// [local_range]  = [4] - [1]
+// [remote_range] = [3] - [2]
+//
+// Total Mojo Overhead  = [local_range] - [remote_range]
+// Request/Response Latency (assumed symmetric) = (Total Mojo Overhead) / 2
+//
+// It is important to note that all four of these reference points must be
+// accurately provided. If any point is missing or incorrect (for example, by
+// using a default-constructed base::TimeTicks()), this class cannot correctly
+// fix the clock skew. Using incorrect reference points will lead to large
+// errors in the converted time.
 //
 // Once these bounds are determined, values within the remote process's range
 // can be converted to the local process's range. The values are converted as

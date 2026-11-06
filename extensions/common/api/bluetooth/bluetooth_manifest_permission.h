@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,12 +23,12 @@ namespace extensions {
 
 class BluetoothManifestPermission : public ManifestPermission {
  public:
-  typedef std::set<std::string> BluetoothUuidSet;
+  using BluetoothUuidSet = std::set<std::string>;
   BluetoothManifestPermission();
   ~BluetoothManifestPermission() override;
 
-  // Tries to construct the info based on |value|, as it would have appeared in
-  // the manifest. Sets |error| and returns an empty scoped_ptr on failure.
+  // Tries to construct the info based on `value`, as it would have appeared in
+  // the manifest. Sets `error` and returns an empty scoped_ptr on failure.
   static std::unique_ptr<BluetoothManifestPermission> FromValue(
       const base::Value& value,
       std::u16string* error);
@@ -46,7 +46,7 @@ class BluetoothManifestPermission : public ManifestPermission {
   std::string id() const override;
   PermissionIDSet GetPermissions() const override;
   bool FromValue(const base::Value* value) override;
-  std::unique_ptr<base::Value> ToValue() const override;
+  base::Value ToValue() const override;
   std::unique_ptr<ManifestPermission> Diff(
       const ManifestPermission* rhs) const override;
   std::unique_ptr<ManifestPermission> Union(

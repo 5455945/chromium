@@ -1,12 +1,13 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_CERTIFICATE_DIALOGS_H_
 #define CHROME_BROWSER_UI_CERTIFICATE_DIALOGS_H_
 
-#include "net/cert/scoped_nss_types.h"
-#include "net/cert/x509_certificate.h"
+#include "chrome/common/buildflags.h"
+#include "third_party/boringssl/src/include/openssl/base.h"
+#include "third_party/boringssl/src/include/openssl/pool.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
 
 namespace content {
@@ -16,19 +17,22 @@ class WebContents;
 void ShowCertSelectFileDialog(ui::SelectFileDialog* select_file_dialog,
                               ui::SelectFileDialog::Type type,
                               const base::FilePath& suggested_path,
-                              gfx::NativeWindow parent,
-                              void* params);
+                              gfx::NativeWindow parent);
 
-// Show a dialog to save |cert| alone or the cert + its chain.
+// Show a dialog to save the first certificate or the whole chain.
 void ShowCertExportDialog(content::WebContents* web_contents,
                           gfx::NativeWindow parent,
-                          const scoped_refptr<net::X509Certificate>& cert);
+                          std::vector<bssl::UniquePtr<CRYPTO_BUFFER>> certs,
+                          const std::string& cert_title);
 
-// Show a dialog to save the first certificate or the whole chain encompassed by
-// the iterators.
-void ShowCertExportDialog(content::WebContents* web_contents,
-                          gfx::NativeWindow parent,
-                          net::ScopedCERTCertificateList::iterator certs_begin,
-                          net::ScopedCERTCertificateList::iterator certs_end);
+#if BUILDFLAG(CHROME_ROOT_STORE_CERT_MANAGEMENT_UI)
+// Show a dialog to save all the certs provided; certs are not necessarily part
+// of any chain.
+void ShowCertExportDialogSaveAll(
+    content::WebContents* web_contents,
+    gfx::NativeWindow parent,
+    std::vector<bssl::UniquePtr<CRYPTO_BUFFER>> certs,
+    const std::string& suggested_file_name);
+#endif  // BUILDFLAG(CHROME_ROOT_STORE_CERT_MANAGEMENT_UI)
 
 #endif  // CHROME_BROWSER_UI_CERTIFICATE_DIALOGS_H_

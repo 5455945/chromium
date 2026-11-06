@@ -1,10 +1,10 @@
-# Copyright 2016 The Chromium Authors. All rights reserved.
+# Copyright 2016 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 import os
 
-from page_sets.system_health import browsing_stories, chrome_stories
+from page_sets.system_health import chrome_stories
 from page_sets.system_health import platforms
 from page_sets.system_health import story_tags
 from page_sets.system_health import system_health_story
@@ -20,14 +20,13 @@ class SystemHealthStorySet(story.StorySet):
   See https://goo.gl/Jek2NL.
   """
 
-  def __init__(self,
-               platform,
-               case=None,
-               take_memory_measurement=False,
-               tag=None):
+  def __init__(
+    self, platform, case=None, take_memory_measurement=False, tag=None
+  ):
     super(SystemHealthStorySet, self).__init__(
-        archive_data_file=('../data/system_health_%s.json' % platform),
-        cloud_storage_bucket=story.PARTNER_BUCKET)
+      archive_data_file=('../data/system_health_%s.json' % platform),
+      cloud_storage_bucket=story.PARTNER_BUCKET,
+    )
 
     assert platform in platforms.ALL_PLATFORMS
 
@@ -38,12 +37,15 @@ class SystemHealthStorySet(story.StorySet):
         return False
       if case and not story_class.NAME.startswith(case + ':'):
         return False
-      if tag and not tag in story_class.TAGS:
+      if tag and tag not in story_class.TAGS:
         return False
       return True
 
     for story_class in IterAllSystemHealthStoryClasses():
       if IncludeStory(story_class):
+        if platform == 'mobile':
+          # Extra browser args are disabled in the mobile platform
+          story_class.EXTRA_BROWSER_ARGUMENTS = []
         self.AddStory(story_class(self, take_memory_measurement))
 
   def GetAbridgedStorySetTagFilter(self):
@@ -52,10 +54,12 @@ class SystemHealthStorySet(story.StorySet):
 
 class SystemHealthBlankStorySet(story.StorySet):
   """A story set containing the chrome:blank story only."""
+
   def __init__(self, take_memory_measurement=False):
     super(SystemHealthBlankStorySet, self).__init__()
     self.AddStory(
-        chrome_stories.BlankAboutBlankStory(self, take_memory_measurement))
+      chrome_stories.BlankAboutBlankStory(self, take_memory_measurement)
+    )
 
 
 class DesktopSystemHealthStorySet(SystemHealthStorySet):
@@ -66,9 +70,11 @@ class DesktopSystemHealthStorySet(SystemHealthStorySet):
   the generic SystemHealthStorySet class instead (you'll need to override the
   CreateStorySet method of your benchmark).
   """
+
   def __init__(self):
     super(DesktopSystemHealthStorySet, self).__init__(
-        'desktop', take_memory_measurement=False)
+      'desktop', take_memory_measurement=False
+    )
 
 
 class MobileSystemHealthStorySet(SystemHealthStorySet):
@@ -79,9 +85,11 @@ class MobileSystemHealthStorySet(SystemHealthStorySet):
   the generic SystemHealthStorySet class instead (you'll need to override the
   CreateStorySet method of your benchmark).
   """
+
   def __init__(self):
     super(MobileSystemHealthStorySet, self).__init__(
-        'mobile', take_memory_measurement=False)
+      'mobile', take_memory_measurement=False
+    )
 
 
 def IterAllSystemHealthStoryClasses():
@@ -93,16 +101,11 @@ def IterAllSystemHealthStoryClasses():
   start_dir = os.path.dirname(os.path.abspath(__file__))
   # Sort the classes by their names so that their order is stable and
   # deterministic.
-  for unused_cls_name, cls in sorted(discover.DiscoverClasses(
+  for unused_cls_name, cls in sorted(
+    discover.DiscoverClasses(
       start_dir=start_dir,
       top_level_dir=os.path.dirname(start_dir),
-      base_class=system_health_story.SystemHealthStory).items()):
+      base_class=system_health_story.SystemHealthStory,
+    ).items()
+  ):
     yield cls
-
-
-class SystemHealthPCScanStorySet(story.StorySet):
-  """A story set containing stories for benchmarking PCScan feature."""
-
-  def __init__(self, take_memory_measurement=False):
-    super(SystemHealthPCScanStorySet, self).__init__()
-    self.AddStory(browsing_stories.CnnStory2021(self, take_memory_measurement))

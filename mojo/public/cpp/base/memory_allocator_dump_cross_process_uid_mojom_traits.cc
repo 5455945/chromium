@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,8 +12,9 @@ bool StructTraits<mojo_base::mojom::MemoryAllocatorDumpCrossProcessUidDataView,
     Read(mojo_base::mojom::MemoryAllocatorDumpCrossProcessUidDataView data,
          base::trace_event::MemoryAllocatorDumpGuid* out) {
   // Receiving a zeroed MemoryAllocatorDumpCrossProcessUid is a bug.
-  if (data.value() == 0)
+  if (data.value() == 0) {
     return false;
+  }
 
   *out = base::trace_event::MemoryAllocatorDumpGuid(data.value());
   return true;

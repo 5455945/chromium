@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,36 +7,19 @@
 //    ../../third_party/xcbproto/src \
 //    gen/ui/gfx/x \
 //    bigreq \
-//    composite \
-//    damage \
-//    dpms \
-//    dri2 \
 //    dri3 \
-//    ge \
 //    glx \
-//    present \
 //    randr \
-//    record \
 //    render \
-//    res \
 //    screensaver \
 //    shape \
 //    shm \
 //    sync \
-//    xc_misc \
-//    xevie \
-//    xf86dri \
-//    xf86vidmode \
 //    xfixes \
-//    xinerama \
 //    xinput \
 //    xkb \
-//    xprint \
 //    xproto \
-//    xselinux \
-//    xtest \
-//    xv \
-//    xvmc
+//    xtest
 
 #ifndef UI_GFX_X_GENERATED_PROTOS_RENDER_H_
 #define UI_GFX_X_GENERATED_PROTOS_RENDER_H_
@@ -45,15 +28,15 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <vector>
 
 #include "base/component_export.h"
 #include "base/files/scoped_file.h"
-#include "base/memory/ref_counted_memory.h"
 #include "base/memory/scoped_refptr.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/gfx/x/error.h"
 #include "ui/gfx/x/ref_counted_fd.h"
+#include "ui/gfx/x/xproto_types.h"
 #include "xproto.h"
 
 namespace x11 {
@@ -197,35 +180,58 @@ class COMPONENT_EXPORT(X11) Render {
 
   struct PictFormatError : public x11::Error {
     uint16_t sequence{};
+    uint32_t bad_value{};
+    uint16_t minor_opcode{};
+    uint8_t major_opcode{};
 
     std::string ToString() const override;
   };
 
   struct PictureError : public x11::Error {
     uint16_t sequence{};
+    uint32_t bad_value{};
+    uint16_t minor_opcode{};
+    uint8_t major_opcode{};
 
     std::string ToString() const override;
   };
 
   struct PictOpError : public x11::Error {
     uint16_t sequence{};
+    uint32_t bad_value{};
+    uint16_t minor_opcode{};
+    uint8_t major_opcode{};
 
     std::string ToString() const override;
   };
 
   struct GlyphSetError : public x11::Error {
     uint16_t sequence{};
+    uint32_t bad_value{};
+    uint16_t minor_opcode{};
+    uint8_t major_opcode{};
 
     std::string ToString() const override;
   };
 
   struct GlyphError : public x11::Error {
     uint16_t sequence{};
+    uint32_t bad_value{};
+    uint16_t minor_opcode{};
+    uint8_t major_opcode{};
 
     std::string ToString() const override;
   };
 
   struct DirectFormat {
+    bool operator==(const DirectFormat& other) const {
+      return red_shift == other.red_shift && red_mask == other.red_mask &&
+             green_shift == other.green_shift &&
+             green_mask == other.green_mask && blue_shift == other.blue_shift &&
+             blue_mask == other.blue_mask && alpha_shift == other.alpha_shift &&
+             alpha_mask == other.alpha_mask;
+    }
+
     uint16_t red_shift{};
     uint16_t red_mask{};
     uint16_t green_shift{};
@@ -237,6 +243,11 @@ class COMPONENT_EXPORT(X11) Render {
   };
 
   struct PictFormInfo {
+    bool operator==(const PictFormInfo& other) const {
+      return id == other.id && type == other.type && depth == other.depth &&
+             direct == other.direct && colormap == other.colormap;
+    }
+
     PictFormat id{};
     PictType type{};
     uint8_t depth{};
@@ -245,21 +256,38 @@ class COMPONENT_EXPORT(X11) Render {
   };
 
   struct PictVisual {
+    bool operator==(const PictVisual& other) const {
+      return visual == other.visual && format == other.format;
+    }
+
     VisualId visual{};
     PictFormat format{};
   };
 
   struct PictDepth {
+    bool operator==(const PictDepth& other) const {
+      return depth == other.depth && visuals == other.visuals;
+    }
+
     uint8_t depth{};
     std::vector<PictVisual> visuals{};
   };
 
   struct PictScreen {
+    bool operator==(const PictScreen& other) const {
+      return fallback == other.fallback && depths == other.depths;
+    }
+
     PictFormat fallback{};
     std::vector<PictDepth> depths{};
   };
 
   struct IndexValue {
+    bool operator==(const IndexValue& other) const {
+      return pixel == other.pixel && red == other.red && green == other.green &&
+             blue == other.blue && alpha == other.alpha;
+    }
+
     uint32_t pixel{};
     uint16_t red{};
     uint16_t green{};
@@ -268,6 +296,11 @@ class COMPONENT_EXPORT(X11) Render {
   };
 
   struct Color {
+    bool operator==(const Color& other) const {
+      return red == other.red && green == other.green && blue == other.blue &&
+             alpha == other.alpha;
+    }
+
     uint16_t red{};
     uint16_t green{};
     uint16_t blue{};
@@ -275,22 +308,39 @@ class COMPONENT_EXPORT(X11) Render {
   };
 
   struct PointFix {
+    bool operator==(const PointFix& other) const {
+      return x == other.x && y == other.y;
+    }
+
     Fixed x{};
     Fixed y{};
   };
 
   struct LineFix {
+    bool operator==(const LineFix& other) const {
+      return p1 == other.p1 && p2 == other.p2;
+    }
+
     PointFix p1{};
     PointFix p2{};
   };
 
   struct Triangle {
+    bool operator==(const Triangle& other) const {
+      return p1 == other.p1 && p2 == other.p2 && p3 == other.p3;
+    }
+
     PointFix p1{};
     PointFix p2{};
     PointFix p3{};
   };
 
   struct Trapezoid {
+    bool operator==(const Trapezoid& other) const {
+      return top == other.top && bottom == other.bottom && left == other.left &&
+             right == other.right;
+    }
+
     Fixed top{};
     Fixed bottom{};
     LineFix left{};
@@ -298,6 +348,11 @@ class COMPONENT_EXPORT(X11) Render {
   };
 
   struct GlyphInfo {
+    bool operator==(const GlyphInfo& other) const {
+      return width == other.width && height == other.height && x == other.x &&
+             y == other.y && x_off == other.x_off && y_off == other.y_off;
+    }
+
     uint16_t width{};
     uint16_t height{};
     int16_t x{};
@@ -307,6 +362,14 @@ class COMPONENT_EXPORT(X11) Render {
   };
 
   struct Transform {
+    bool operator==(const Transform& other) const {
+      return matrix11 == other.matrix11 && matrix12 == other.matrix12 &&
+             matrix13 == other.matrix13 && matrix21 == other.matrix21 &&
+             matrix22 == other.matrix22 && matrix23 == other.matrix23 &&
+             matrix31 == other.matrix31 && matrix32 == other.matrix32 &&
+             matrix33 == other.matrix33;
+    }
+
     Fixed matrix11{};
     Fixed matrix12{};
     Fixed matrix13{};
@@ -319,17 +382,29 @@ class COMPONENT_EXPORT(X11) Render {
   };
 
   struct AnimationCursorElement {
+    bool operator==(const AnimationCursorElement& other) const {
+      return cursor == other.cursor && delay == other.delay;
+    }
+
     Cursor cursor{};
     uint32_t delay{};
   };
 
   struct SpanFix {
+    bool operator==(const SpanFix& other) const {
+      return l == other.l && r == other.r && y == other.y;
+    }
+
     Fixed l{};
     Fixed r{};
     Fixed y{};
   };
 
   struct Trap {
+    bool operator==(const Trap& other) const {
+      return top == other.top && bot == other.bot;
+    }
+
     SpanFix top{};
     SpanFix bot{};
   };
@@ -392,19 +467,19 @@ class COMPONENT_EXPORT(X11) Render {
     Picture pid{};
     Drawable drawable{};
     PictFormat format{};
-    absl::optional<Repeat> repeat{};
-    absl::optional<Picture> alphamap{};
-    absl::optional<int32_t> alphaxorigin{};
-    absl::optional<int32_t> alphayorigin{};
-    absl::optional<int32_t> clipxorigin{};
-    absl::optional<int32_t> clipyorigin{};
-    absl::optional<Pixmap> clipmask{};
-    absl::optional<uint32_t> graphicsexposure{};
-    absl::optional<SubwindowMode> subwindowmode{};
-    absl::optional<PolyEdge> polyedge{};
-    absl::optional<PolyMode> polymode{};
-    absl::optional<Atom> dither{};
-    absl::optional<uint32_t> componentalpha{};
+    std::optional<Repeat> repeat{};
+    std::optional<Picture> alphamap{};
+    std::optional<int32_t> alphaxorigin{};
+    std::optional<int32_t> alphayorigin{};
+    std::optional<int32_t> clipxorigin{};
+    std::optional<int32_t> clipyorigin{};
+    std::optional<Pixmap> clipmask{};
+    std::optional<uint32_t> graphicsexposure{};
+    std::optional<SubwindowMode> subwindowmode{};
+    std::optional<PolyEdge> polyedge{};
+    std::optional<PolyMode> polymode{};
+    std::optional<Atom> dither{};
+    std::optional<uint32_t> componentalpha{};
   };
 
   using CreatePictureResponse = Response<void>;
@@ -415,35 +490,35 @@ class COMPONENT_EXPORT(X11) Render {
       const Picture& pid = {},
       const Drawable& drawable = {},
       const PictFormat& format = {},
-      const absl::optional<Repeat>& repeat = absl::nullopt,
-      const absl::optional<Picture>& alphamap = absl::nullopt,
-      const absl::optional<int32_t>& alphaxorigin = absl::nullopt,
-      const absl::optional<int32_t>& alphayorigin = absl::nullopt,
-      const absl::optional<int32_t>& clipxorigin = absl::nullopt,
-      const absl::optional<int32_t>& clipyorigin = absl::nullopt,
-      const absl::optional<Pixmap>& clipmask = absl::nullopt,
-      const absl::optional<uint32_t>& graphicsexposure = absl::nullopt,
-      const absl::optional<SubwindowMode>& subwindowmode = absl::nullopt,
-      const absl::optional<PolyEdge>& polyedge = absl::nullopt,
-      const absl::optional<PolyMode>& polymode = absl::nullopt,
-      const absl::optional<Atom>& dither = absl::nullopt,
-      const absl::optional<uint32_t>& componentalpha = absl::nullopt);
+      const std::optional<Repeat>& repeat = std::nullopt,
+      const std::optional<Picture>& alphamap = std::nullopt,
+      const std::optional<int32_t>& alphaxorigin = std::nullopt,
+      const std::optional<int32_t>& alphayorigin = std::nullopt,
+      const std::optional<int32_t>& clipxorigin = std::nullopt,
+      const std::optional<int32_t>& clipyorigin = std::nullopt,
+      const std::optional<Pixmap>& clipmask = std::nullopt,
+      const std::optional<uint32_t>& graphicsexposure = std::nullopt,
+      const std::optional<SubwindowMode>& subwindowmode = std::nullopt,
+      const std::optional<PolyEdge>& polyedge = std::nullopt,
+      const std::optional<PolyMode>& polymode = std::nullopt,
+      const std::optional<Atom>& dither = std::nullopt,
+      const std::optional<uint32_t>& componentalpha = std::nullopt);
 
   struct ChangePictureRequest {
     Picture picture{};
-    absl::optional<Repeat> repeat{};
-    absl::optional<Picture> alphamap{};
-    absl::optional<int32_t> alphaxorigin{};
-    absl::optional<int32_t> alphayorigin{};
-    absl::optional<int32_t> clipxorigin{};
-    absl::optional<int32_t> clipyorigin{};
-    absl::optional<Pixmap> clipmask{};
-    absl::optional<uint32_t> graphicsexposure{};
-    absl::optional<SubwindowMode> subwindowmode{};
-    absl::optional<PolyEdge> polyedge{};
-    absl::optional<PolyMode> polymode{};
-    absl::optional<Atom> dither{};
-    absl::optional<uint32_t> componentalpha{};
+    std::optional<Repeat> repeat{};
+    std::optional<Picture> alphamap{};
+    std::optional<int32_t> alphaxorigin{};
+    std::optional<int32_t> alphayorigin{};
+    std::optional<int32_t> clipxorigin{};
+    std::optional<int32_t> clipyorigin{};
+    std::optional<Pixmap> clipmask{};
+    std::optional<uint32_t> graphicsexposure{};
+    std::optional<SubwindowMode> subwindowmode{};
+    std::optional<PolyEdge> polyedge{};
+    std::optional<PolyMode> polymode{};
+    std::optional<Atom> dither{};
+    std::optional<uint32_t> componentalpha{};
   };
 
   using ChangePictureResponse = Response<void>;
@@ -452,19 +527,19 @@ class COMPONENT_EXPORT(X11) Render {
 
   Future<void> ChangePicture(
       const Picture& picture = {},
-      const absl::optional<Repeat>& repeat = absl::nullopt,
-      const absl::optional<Picture>& alphamap = absl::nullopt,
-      const absl::optional<int32_t>& alphaxorigin = absl::nullopt,
-      const absl::optional<int32_t>& alphayorigin = absl::nullopt,
-      const absl::optional<int32_t>& clipxorigin = absl::nullopt,
-      const absl::optional<int32_t>& clipyorigin = absl::nullopt,
-      const absl::optional<Pixmap>& clipmask = absl::nullopt,
-      const absl::optional<uint32_t>& graphicsexposure = absl::nullopt,
-      const absl::optional<SubwindowMode>& subwindowmode = absl::nullopt,
-      const absl::optional<PolyEdge>& polyedge = absl::nullopt,
-      const absl::optional<PolyMode>& polymode = absl::nullopt,
-      const absl::optional<Atom>& dither = absl::nullopt,
-      const absl::optional<uint32_t>& componentalpha = absl::nullopt);
+      const std::optional<Repeat>& repeat = std::nullopt,
+      const std::optional<Picture>& alphamap = std::nullopt,
+      const std::optional<int32_t>& alphaxorigin = std::nullopt,
+      const std::optional<int32_t>& alphayorigin = std::nullopt,
+      const std::optional<int32_t>& clipxorigin = std::nullopt,
+      const std::optional<int32_t>& clipyorigin = std::nullopt,
+      const std::optional<Pixmap>& clipmask = std::nullopt,
+      const std::optional<uint32_t>& graphicsexposure = std::nullopt,
+      const std::optional<SubwindowMode>& subwindowmode = std::nullopt,
+      const std::optional<PolyEdge>& polyedge = std::nullopt,
+      const std::optional<PolyMode>& polymode = std::nullopt,
+      const std::optional<Atom>& dither = std::nullopt,
+      const std::optional<uint32_t>& componentalpha = std::nullopt);
 
   struct SetPictureClipRectanglesRequest {
     Picture picture{};

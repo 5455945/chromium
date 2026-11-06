@@ -1,11 +1,16 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/devtools/devtools_issue_storage.h"
 
+#include <bit>
+#include <cstdint>
+
+#include "base/debug/crash_logging.h"
 #include "content/browser/devtools/protocol/audits.h"
-#include "content/browser/renderer_host/frame_tree_node.h"
+#include "content/browser/devtools/render_frame_devtools_agent_host.h"
+#include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/page_transition_types.h"
@@ -14,51 +19,75 @@ namespace content {
 
 static const unsigned kMaxIssueCount = 1000;
 
-RENDER_DOCUMENT_HOST_USER_DATA_KEY_IMPL(DevToolsIssueStorage)
+PAGE_USER_DATA_KEY_IMPL(DevToolsIssueStorage);
 
-DevToolsIssueStorage::DevToolsIssueStorage(RenderFrameHost* rfh)
-    : WebContentsObserver(content::WebContents::FromRenderFrameHost(rfh)) {}
-DevToolsIssueStorage::~DevToolsIssueStorage() = default;
+DevToolsIssueStorage::DevToolsIssueStorage(Page& page)
+    : PageUserData<DevToolsIssueStorage>(page) {
+  // DevToolsIssueStorage is only created for outermost pages.
+  CHECK(!page.GetMainDocument().GetParentOrOuterDocument(),
+        base::NotFatalUntil::M159);
+}
 
-void DevToolsIssueStorage::AddInspectorIssue(
-    int frame_tree_node_id,
+DevToolsIssueStorage::~DevToolsIssueStorage() {
+  // TOOD(1351587): remove explicit destructor once the bug is fixed.
+  // This is so that crash key is scoped to issue destruction.
+  SCOPED_CRASH_KEY_NUMBER("devtools", "audit_issue_count",
+                          std::bit_width<uint32_t>(total_added_issues_) - 1);
+  issues_.clear();
+}
+
+const protocol::Audits::InspectorIssue& DevToolsIssueStorage::AddInspectorIssue(
+    RenderFrameHost* rfh,
     std::unique_ptr<protocol::Audits::InspectorIssue> issue) {
-  DCHECK_LE(issues_.size(), kMaxIssueCount);
+  CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+
+  CHECK_LE(issues_.size(), kMaxIssueCount, base::NotFatalUntil::M159);
   if (issues_.size() == kMaxIssueCount) {
     issues_.pop_front();
   }
-  issues_.emplace_back(frame_tree_node_id, std::move(issue));
+  total_added_issues_++;
+  issues_.emplace_back(rfh->GetGlobalId(), std::move(issue));
+  return *issues_.back().second.get();
 }
 
 std::vector<const protocol::Audits::InspectorIssue*>
-DevToolsIssueStorage::FilterIssuesBy(
-    const base::flat_set<int>& frame_tree_node_ids) const {
+DevToolsIssueStorage::FindIssuesForAgentOf(
+    RenderFrameHost* render_frame_host) const {
+  CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+
+  RenderFrameHostImpl* render_frame_host_impl =
+      static_cast<RenderFrameHostImpl*>(render_frame_host);
+  RenderFrameHostImpl* main_rfh =
+      static_cast<RenderFrameHostImpl*>(&page().GetMainDocument());
+  DevToolsAgentHostImpl* agent_host =
+      RenderFrameDevToolsAgentHost::GetFor(render_frame_host_impl);
+  CHECK_EQ(&render_frame_host->GetOutermostMainFrame()->GetPage(), &page(),
+           base::NotFatalUntil::M159);
+  CHECK(RenderFrameDevToolsAgentHost::ShouldCreateDevToolsForHost(
+            render_frame_host_impl),
+        base::NotFatalUntil::M159);
+  CHECK(agent_host, base::NotFatalUntil::M159);
+  bool is_main_agent = render_frame_host_impl == main_rfh;
+
   std::vector<const protocol::Audits::InspectorIssue*> issues;
   for (const auto& entry : issues_) {
-    if (frame_tree_node_ids.contains(entry.first)) {
-      issues.push_back(entry.second.get());
+    bool should_add;
+    RenderFrameHostImpl* issue_rfh = RenderFrameHostImpl::FromID(entry.first);
+    if (!issue_rfh) {
+      // Issues that fall in this category are either associated with |main_rfh|
+      // or with deleted subframe RFHs of |main_rfh|. In both cases, we only
+      // want to retrieve them for |main_rfh|'s agent.
+      // Note: This means that issues for deleted subframe RFHs get reparented
+      // to |main_rfh| after deletion.
+      should_add = is_main_agent;
+    } else {
+      should_add =
+          RenderFrameDevToolsAgentHost::GetFor(issue_rfh) == agent_host;
     }
+    if (should_add)
+      issues.push_back(entry.second.get());
   }
   return issues;
-}
-
-void DevToolsIssueStorage::FrameDeleted(int frame_tree_node_id) {
-  const int main_frame_id = FrameTreeNode::GloballyFindByID(frame_tree_node_id)
-                                ->frame_tree()
-                                ->root()
-                                ->frame_tree_node_id();
-  // Deletion of the main frame causes the DevToolsIssueStorage to be cleaned
-  // up. Also there would no longer be a root frame we could re-parent issues
-  // on.
-  if (frame_tree_node_id == main_frame_id)
-    return;
-
-  // Reassign issues from the deleted frame to the root frame.
-  for (auto& entry : issues_) {
-    if (entry.first == frame_tree_node_id) {
-      entry.first = main_frame_id;
-    }
-  }
 }
 
 }  // namespace content

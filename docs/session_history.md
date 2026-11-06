@@ -76,6 +76,8 @@ The joint session history of a tab is persisted so that tabs can be restored
 (e.g., between Chromium restarts, after closing a tab, or on another device).
 This requires serializing the state in each NavigationEntry and its tree of
 FrameNavigationEntries, using a PageState object and other metadata.
+See [Modifying Session History Serialization](modifying_session_history_serialization.md)
+for how to safely add new values to be saved and restored.
 
 Not everything in NavigationEntry is persisted. All data members of
 NavigationEntryImpl and FrameNavigationEntry should be documented with whether
@@ -113,13 +115,8 @@ NavigationEntries rather than persisting and restoring.
  * Not every NavigationRequest has a pending NavigationEntry. For example,
    subframe navigations do not, and renderer-initiated main frame navigations
    may clear an existing browser-initiated pending NavigationEntry (using
-   PendingEntryRef) without replacing it with a new one.
- * Some main frame documents may not have a corresponding NavigationEntry
-   even after commit (e.g., the initial empty document, per
-   [issue 524208](https://crbug.com/524208)).
+   PendingEntryRef) without replacing it with a new one. As a result,
+   NavigationRequests are a more reliable way of tracking state associated with
+   a pending navigation.
  * Some subframe documents may not have a corresponding FrameNavigationEntry
    after commit (e.g., see [issue 608402](https://crbug.com/608402)).
- * FrameNavigationEntries should be shared between NavigationEntries when they
-   do not change (e.g., to support history.replaceState after subframe
-   navigations), but this is not yet supported.
-   See [issue 373041](https://crbug.com/373041).

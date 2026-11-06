@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,10 +19,9 @@ TEST(TextDirectionTest, TextDirection) {
     mojo_base::mojom::TextDirection serialized_direction =
         mojo::EnumTraits<mojo_base::mojom::TextDirection,
                          base::i18n::TextDirection>::ToMojom(direction_in);
-    ASSERT_TRUE((mojo::EnumTraits<
-                 mojo_base::mojom::TextDirection,
-                 base::i18n::TextDirection>::FromMojom(serialized_direction,
-                                                       &direction_out)));
+    direction_out = mojo::EnumTraits<
+        mojo_base::mojom::TextDirection,
+        base::i18n::TextDirection>::FromMojom(serialized_direction);
     EXPECT_EQ(direction_in, direction_out);
   }
 }

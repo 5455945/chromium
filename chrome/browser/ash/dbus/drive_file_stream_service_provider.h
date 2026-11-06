@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,19 +7,17 @@
 
 #include <stdint.h>
 
-#include "base/compiler_specific.h"
 #include "base/files/scoped_file.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "chromeos/dbus/services/cros_dbus_service.h"
+#include "chromeos/ash/components/dbus/services/cros_dbus_service.h"
 #include "dbus/exported_object.h"
 
 namespace dbus {
 class MethodCall;
-}
+}  // namespace dbus
 
-namespace chromeos {
+namespace ash {
 
 // DriveFileStreamServiceProvider exposes D-Bus methods which will be
 // called by the DriveFileStream service - new implementation of Drive
@@ -30,6 +28,12 @@ class DriveFileStreamServiceProvider
     : public CrosDBusService::ServiceProviderInterface {
  public:
   DriveFileStreamServiceProvider();
+
+  DriveFileStreamServiceProvider(const DriveFileStreamServiceProvider&) =
+      delete;
+  DriveFileStreamServiceProvider& operator=(
+      const DriveFileStreamServiceProvider&) = delete;
+
   ~DriveFileStreamServiceProvider() override;
 
   // CrosDBusService::ServiceProviderInterface overrides:
@@ -44,10 +48,8 @@ class DriveFileStreamServiceProvider
   // Keep this last so that all weak pointers will be invalidated at the
   // beginning of destruction.
   base::WeakPtrFactory<DriveFileStreamServiceProvider> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(DriveFileStreamServiceProvider);
 };
 
-}  // namespace chromeos
+}  // namespace ash
 
 #endif  // CHROME_BROWSER_ASH_DBUS_DRIVE_FILE_STREAM_SERVICE_PROVIDER_H_

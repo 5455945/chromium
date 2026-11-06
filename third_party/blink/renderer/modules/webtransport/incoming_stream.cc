@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,105 +8,111 @@
 
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_function.h"
-#include "third_party/blink/renderer/bindings/core/v8/v8_array_buffer.h"
-#include "third_party/blink/renderer/bindings/core/v8/v8_iterator_result_value.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_throw_dom_exception.h"
-#include "third_party/blink/renderer/bindings/modules/v8/v8_stream_abort_info.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_web_transport_error.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/streams/readable_stream.h"
+#include "third_party/blink/renderer/core/streams/readable_stream_byob_request.h"
 #include "third_party/blink/renderer/core/streams/readable_stream_default_controller_with_script_scope.h"
 #include "third_party/blink/renderer/core/streams/readable_stream_generic_reader.h"
 #include "third_party/blink/renderer/core/streams/readable_stream_transferring_optimizer.h"
-#include "third_party/blink/renderer/core/streams/stream_promise_resolver.h"
-#include "third_party/blink/renderer/core/streams/underlying_source_base.h"
+#include "third_party/blink/renderer/core/streams/underlying_byte_source_base.h"
 #include "third_party/blink/renderer/core/typed_arrays/array_buffer/array_buffer_contents.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_typed_array.h"
+#include "third_party/blink/renderer/modules/webtransport/web_transport_error.h"
 #include "third_party/blink/renderer/platform/bindings/exception_code.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/bindings/trace_wrapper_v8_reference.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "v8/include/v8.h"
 
 namespace blink {
 
-// An implementation of UnderlyingSourceBase that forwards all operations to the
-// IncomingStream object that created it.
-class IncomingStream::UnderlyingSource final : public UnderlyingSourceBase {
+// An implementation of UnderlyingByteSourceBase that forwards all operations to
+// the IncomingStream object that created it.
+class IncomingStream::UnderlyingByteSource final
+    : public UnderlyingByteSourceBase {
  public:
-  explicit UnderlyingSource(ScriptState* script_state, IncomingStream* stream)
-      : UnderlyingSourceBase(script_state), incoming_stream_(stream) {}
+  explicit UnderlyingByteSource(ScriptState* script_state,
+                                IncomingStream* stream)
+      : script_state_(script_state), incoming_stream_(stream) {}
 
-  ScriptPromise Start(ScriptState* script_state) override {
-    incoming_stream_->controller_ = Controller();
-    return ScriptPromise::CastUndefined(script_state);
+  ScriptPromise<IDLUndefined> Pull(ReadableByteStreamController* controller,
+                                   ExceptionState& exception_state) override {
+    DCHECK_EQ(controller, incoming_stream_->controller_);
+    incoming_stream_->ReadFromPipeAndEnqueue(exception_state);
+    return ToResolvedUndefinedPromise(script_state_.Get());
   }
 
-  ScriptPromise pull(ScriptState* script_state) override {
-    incoming_stream_->ReadFromPipeAndEnqueue();
-    return ScriptPromise::CastUndefined(script_state);
+  ScriptPromise<IDLUndefined> Cancel() override {
+    return Cancel(v8::Undefined(script_state_->GetIsolate()));
   }
 
-  ScriptPromise Cancel(ScriptState* script_state, ScriptValue reason) override {
-    incoming_stream_->AbortAndReset();
-    return ScriptPromise::CastUndefined(script_state);
+  ScriptPromise<IDLUndefined> Cancel(v8::Local<v8::Value> reason) override {
+    uint32_t code = 0;
+    WebTransportError* exception =
+        V8WebTransportError::ToWrappable(script_state_->GetIsolate(), reason);
+    if (exception) {
+      code = exception->streamErrorCode().value_or(0);
+    }
+    incoming_stream_->AbortAndReset(code);
+    return ToResolvedUndefinedPromise(script_state_.Get());
   }
+
+  ScriptState* GetScriptState() override { return script_state_.Get(); }
 
   void Trace(Visitor* visitor) const override {
+    visitor->Trace(script_state_);
     visitor->Trace(incoming_stream_);
-    UnderlyingSourceBase::Trace(visitor);
+    UnderlyingByteSourceBase::Trace(visitor);
   }
 
  private:
+  const Member<ScriptState> script_state_;
   const Member<IncomingStream> incoming_stream_;
 };
 
-IncomingStream::IncomingStream(ScriptState* script_state,
-                               base::OnceClosure on_abort,
-                               mojo::ScopedDataPipeConsumerHandle handle)
+IncomingStream::IncomingStream(
+    ScriptState* script_state,
+    base::OnceCallback<void(std::optional<uint32_t>, bool)> on_abort,
+    mojo::ScopedDataPipeConsumerHandle handle)
     : script_state_(script_state),
       on_abort_(std::move(on_abort)),
       data_pipe_(std::move(handle)),
-      read_watcher_(FROM_HERE, mojo::SimpleWatcher::ArmingPolicy::MANUAL),
-      close_watcher_(FROM_HERE, mojo::SimpleWatcher::ArmingPolicy::AUTOMATIC) {}
+      read_watcher_(FROM_HERE, mojo::SimpleWatcher::ArmingPolicy::MANUAL) {}
 
 IncomingStream::~IncomingStream() = default;
 
 void IncomingStream::Init(ExceptionState& exception_state) {
   DVLOG(1) << "IncomingStream::Init() this=" << this;
-  auto* stream = MakeGarbageCollected<ReadableStream>();
+  auto* stream = MakeGarbageCollected<ReadableStream>(script_state_);
   InitWithExistingReadableStream(stream, exception_state);
 }
 
 void IncomingStream::InitWithExistingReadableStream(
     ReadableStream* stream,
     ExceptionState& exception_state) {
-  read_watcher_.Watch(data_pipe_.get(), MOJO_HANDLE_SIGNAL_READABLE,
-                      MOJO_TRIGGER_CONDITION_SIGNALS_SATISFIED,
-                      WTF::BindRepeating(&IncomingStream::OnHandleReady,
-                                         WrapWeakPersistent(this)));
-  close_watcher_.Watch(data_pipe_.get(), MOJO_HANDLE_SIGNAL_PEER_CLOSED,
-                       MOJO_TRIGGER_CONDITION_SIGNALS_SATISFIED,
-                       WTF::BindRepeating(&IncomingStream::OnPeerClosed,
-                                          WrapWeakPersistent(this)));
+  read_watcher_.Watch(
+      data_pipe_.get(),
+      MOJO_HANDLE_SIGNAL_READABLE | MOJO_HANDLE_SIGNAL_PEER_CLOSED,
+      MOJO_TRIGGER_CONDITION_SIGNALS_SATISFIED,
+      BindRepeating(&IncomingStream::OnHandleReady, WrapWeakPersistent(this)));
+  ReadableStream::InitByteStream(
+      script_state_, stream,
+      MakeGarbageCollected<UnderlyingByteSource>(script_state_, this),
+      exception_state);
+  if (exception_state.HadException()) {
+    return;
+  }
 
-  // This object cannot be garbage collected as long as
-  // |reading_aborted_resolver_| is set and the ExecutionContext has not been
-  // destroyed, so it is guaranteed that that conditions in the
-  // ScriptPromiseResolver destructor will be satisfied.
-  reading_aborted_resolver_ =
-      MakeGarbageCollected<ScriptPromiseResolver>(script_state_);
-  reading_aborted_ = reading_aborted_resolver_->Promise();
-  stream->InitWithCountQueueingStrategy(
-      script_state_,
-      MakeGarbageCollected<UnderlyingSource>(script_state_, this), 1,
-      AllowPerChunkTransferring(false),
-      /*optimizer=*/nullptr, exception_state);
   readable_ = stream;
+  controller_ = To<ReadableByteStreamController>(stream->GetController());
 }
 
 void IncomingStream::OnIncomingStreamClosed(bool fin_received) {
@@ -123,26 +129,20 @@ void IncomingStream::OnIncomingStreamClosed(bool fin_received) {
   // Wait until HandlePipeClosed() has also been called before processing the
   // close.
   if (is_pipe_closed_) {
-    // We need a JavaScript scope to be entered in order to resolve the
-    // |reading_aborted_| promise.
-    ScriptState::Scope scope(script_state_);
     ProcessClose();
+  } else {
+    // Wait for MOJO_HANDLE_SIGNAL_PEER_CLOSED.
+    read_watcher_.ArmOrNotify();
   }
 }
 
-void IncomingStream::AbortReading(StreamAbortInfo*) {
-  DVLOG(1) << "IncomingStream::abortReading() this=" << this;
-
-  CloseAbortAndReset();
-}
-
-void IncomingStream::Reset() {
-  DVLOG(1) << "IncomingStream::Reset() this=" << this;
+void IncomingStream::Error(ScriptValue reason) {
+  DVLOG(1) << "IncomingStream::Error() this=" << this;
 
   // We no longer need to call |on_abort_|.
   on_abort_.Reset();
 
-  ErrorStreamAbortAndReset(CreateAbortException(IsLocalAbort(false)));
+  ErrorStreamAbortAndReset(reason);
 }
 
 void IncomingStream::ContextDestroyed() {
@@ -155,42 +155,19 @@ void IncomingStream::Trace(Visitor* visitor) const {
   visitor->Trace(script_state_);
   visitor->Trace(readable_);
   visitor->Trace(controller_);
-  visitor->Trace(reading_aborted_);
-  visitor->Trace(reading_aborted_resolver_);
 }
 
 void IncomingStream::OnHandleReady(MojoResult result,
                                    const mojo::HandleSignalsState&) {
   DVLOG(1) << "IncomingStream::OnHandleReady() this=" << this
            << " result=" << result;
-
-  switch (result) {
-    case MOJO_RESULT_OK:
-      ReadFromPipeAndEnqueue();
-      break;
-
-    case MOJO_RESULT_FAILED_PRECONDITION:
-      // Will be handled by |close_watcher_|.
-      break;
-
-    default:
-      NOTREACHED();
-  }
-}
-
-void IncomingStream::OnPeerClosed(MojoResult result,
-                                  const mojo::HandleSignalsState&) {
-  DVLOG(1) << "IncomingStream::OnPeerClosed() this=" << this
-           << " result=" << result;
-
-  switch (result) {
-    case MOJO_RESULT_OK:
-      HandlePipeClosed();
-      break;
-
-    default:
-      NOTREACHED();
-  }
+  // |ReadFromPipeAndEnqueue| throws if close has been requested, stream state
+  // is not readable, or buffer is invalid. Because both
+  // |ErrorStreamAbortAndReset| and |ProcessClose| reset pipe, stream should be
+  // readable here. Buffer returned by |BeginReadData| is expected to be valid
+  // with size > 0.
+  NonThrowableExceptionState exception_state;
+  ReadFromPipeAndEnqueue(exception_state);
 }
 
 void IncomingStream::HandlePipeClosed() {
@@ -206,9 +183,6 @@ void IncomingStream::HandlePipeClosed() {
   // Wait until OnIncomingStreamClosed() has also been called before processing
   // the close.
   if (fin_received_.has_value()) {
-    // We need a JavaScript scope to be entered in order to resolve the
-    // |reading_aborted_| promise.
-    ScriptState::Scope scope(script_state_);
     ProcessClose();
   }
 }
@@ -219,16 +193,31 @@ void IncomingStream::ProcessClose() {
   DCHECK(fin_received_.has_value());
 
   if (fin_received_.value()) {
-    CloseAbortAndReset();
+    ScriptState::Scope scope(script_state_);
+    // Ignore exception because stream will be errored soon.
+    CloseAbortAndReset(IGNORE_EXCEPTION);
   }
 
-  ErrorStreamAbortAndReset(CreateAbortException(IsLocalAbort(false)));
+  ScriptValue error;
+  {
+    ScriptState::Scope scope(script_state_);
+    DOMExceptionCode code = DOMExceptionCode::kNetworkError;
+    String message = "The stream was aborted by the remote server";
+
+    error = ScriptValue(script_state_->GetIsolate(),
+                        V8ThrowDOMException::CreateOrEmpty(
+                            script_state_->GetIsolate(), code, message));
+  }
+  ErrorStreamAbortAndReset(error);
 }
 
-void IncomingStream::ReadFromPipeAndEnqueue() {
+void IncomingStream::ReadFromPipeAndEnqueue(ExceptionState& exception_state) {
   DVLOG(1) << "IncomingStream::ReadFromPipeAndEnqueue() this=" << this
            << " in_two_phase_read_=" << in_two_phase_read_
            << " read_pending_=" << read_pending_;
+  if (is_pipe_closed_) {
+    return;
+  }
 
   // Protect against re-entrancy.
   if (in_two_phase_read_) {
@@ -237,22 +226,32 @@ void IncomingStream::ReadFromPipeAndEnqueue() {
   }
   DCHECK(!read_pending_);
 
-  const void* buffer = nullptr;
-  uint32_t buffer_num_bytes = 0;
-  auto result = data_pipe_->BeginReadData(&buffer, &buffer_num_bytes,
-                                          MOJO_BEGIN_READ_DATA_FLAG_NONE);
+  base::span<const uint8_t> buffer;
+  auto result =
+      data_pipe_->BeginReadData(MOJO_BEGIN_READ_DATA_FLAG_NONE, buffer);
   switch (result) {
     case MOJO_RESULT_OK: {
       in_two_phase_read_ = true;
-      // EnqueueBytes() may re-enter this method via pull().
-      EnqueueBytes(buffer, buffer_num_bytes);
-      data_pipe_->EndReadData(buffer_num_bytes);
+
+      // RespondBYOBRequestOrEnqueueBytes() may re-enter this method via pull().
+      size_t read_bytes =
+          RespondBYOBRequestOrEnqueueBytes(buffer, exception_state);
+      if (exception_state.HadException()) {
+        return;
+      }
+      // Casting back to `uint32_t` is safe because `read_bytes` cannot be
+      // greater than `buffer_num_bytes`.
+      data_pipe_->EndReadData(read_bytes);
+      bytes_received_ += read_bytes;
       in_two_phase_read_ = false;
       if (read_pending_) {
         read_pending_ = false;
         // pull() will not be called when another pull() is in progress, so the
         // maximum recursion depth is 1.
-        ReadFromPipeAndEnqueue();
+        ReadFromPipeAndEnqueue(exception_state);
+        if (exception_state.HadException()) {
+          return;
+        }
       }
       break;
     }
@@ -262,74 +261,69 @@ void IncomingStream::ReadFromPipeAndEnqueue() {
       return;
 
     case MOJO_RESULT_FAILED_PRECONDITION:
-      // This will be handled by close_watcher_.
+      HandlePipeClosed();
       return;
 
     default:
       NOTREACHED() << "Unexpected result: " << result;
-      return;
   }
 }
 
-void IncomingStream::EnqueueBytes(const void* source, uint32_t byte_length) {
-  DVLOG(1) << "IncomingStream::EnqueueBytes() this=" << this;
+size_t IncomingStream::RespondBYOBRequestOrEnqueueBytes(
+    base::span<const uint8_t> source,
+    ExceptionState& exception_state) {
+  DVLOG(1) << "IncomingStream::RespondBYOBRequestOrEnqueueBytes() this="
+           << this;
 
-  auto* buffer =
-      DOMUint8Array::Create(static_cast<const uint8_t*>(source), byte_length);
-  controller_->Enqueue(buffer);
+  ScriptState::Scope scope(script_state_);
+
+  if (ReadableStreamBYOBRequest* request = controller_->byobRequest()) {
+    base::span<uint8_t> view = request->view()->ByteSpan();
+    size_t byob_response_length = std::min(view.size(), source.size());
+    view.copy_prefix_from(source.first(byob_response_length));
+    request->respond(script_state_, byob_response_length, exception_state);
+    return byob_response_length;
+  }
+
+  auto* buffer = DOMUint8Array::Create(source);
+  controller_->enqueue(script_state_, NotShared(buffer), exception_state);
+  return source.size();
 }
 
-ScriptValue IncomingStream::CreateAbortException(IsLocalAbort is_local_abort) {
-  DVLOG(1) << "IncomingStream::CreateAbortException() this=" << this
-           << " is_local_abort=" << static_cast<bool>(is_local_abort);
-
-  DOMExceptionCode code = is_local_abort ? DOMExceptionCode::kAbortError
-                                         : DOMExceptionCode::kNetworkError;
-  String message =
-      String::Format("The stream was aborted %s",
-                     is_local_abort ? "locally" : "by the remote server");
-
-  return ScriptValue(script_state_->GetIsolate(),
-                     V8ThrowDOMException::CreateOrEmpty(
-                         script_state_->GetIsolate(), code, message));
-}
-
-void IncomingStream::CloseAbortAndReset() {
+void IncomingStream::CloseAbortAndReset(ExceptionState& exception_state) {
   DVLOG(1) << "IncomingStream::CloseAbortAndReset() this=" << this;
 
   if (controller_) {
-    controller_->Close();
-    controller_ = nullptr;
+    ScriptState::Scope scope(script_state_);
+    readable_->CloseStream(script_state_, exception_state);
+    if (!exception_state.HadException()) {
+      controller_ = nullptr;
+    }
   }
 
-  AbortAndReset();
+  AbortAndReset(std::nullopt);
 }
 
 void IncomingStream::ErrorStreamAbortAndReset(ScriptValue exception) {
   DVLOG(1) << "IncomingStream::ErrorStreamAbortAndReset() this=" << this;
 
   if (controller_) {
-    controller_->Error(exception);
+    controller_->error(script_state_, exception);
     controller_ = nullptr;
   }
 
-  AbortAndReset();
+  AbortAndReset(std::nullopt);
 }
 
-void IncomingStream::AbortAndReset() {
+void IncomingStream::AbortAndReset(std::optional<uint32_t> code) {
   DVLOG(1) << "IncomingStream::AbortAndReset() this=" << this;
-
-  if (reading_aborted_resolver_) {
-    // TODO(ricea): Set errorCode on the StreamAbortInfo.
-    reading_aborted_resolver_->Resolve(StreamAbortInfo::Create());
-    reading_aborted_resolver_ = nullptr;
-  }
 
   state_ = State::kAborted;
 
   if (on_abort_) {
     // Cause WebTransport to drop its reference to us.
-    std::move(on_abort_).Run();
+    // Pass whether OnIncomingStreamClosed() was called (fin_received_ is set).
+    std::move(on_abort_).Run(code, fin_received_.has_value());
   }
 
   ResetPipe();
@@ -339,7 +333,6 @@ void IncomingStream::ResetPipe() {
   DVLOG(1) << "IncomingStream::ResetPipe() this=" << this;
 
   read_watcher_.Cancel();
-  close_watcher_.Cancel();
   data_pipe_.reset();
 }
 

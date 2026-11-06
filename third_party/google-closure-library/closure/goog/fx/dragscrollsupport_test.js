@@ -1,16 +1,8 @@
-// Copyright 2008 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 goog.module('goog.fx.DragScrollSupportTest');
 goog.setTestOnly();
@@ -44,6 +36,7 @@ testSuite({
     clock.dispose();
   },
 
+  /** @suppress {visibility} suppression added to enable type checking */
   testDragZeroMarginDivVContainer() {
     const dsc = new DragScrollSupport(vContainerDiv);
 
@@ -95,6 +88,64 @@ testSuite({
     dsc.dispose();
   },
 
+  /** @suppress {visibility} suppression added to enable type checking */
+  testBodyScrollDragZeroMarginDivVContainer() {
+    const dsc = new DragScrollSupport(vContainerDiv);
+
+    document.body.setAttribute('style', 'height: 1500px;');
+    if (document.scrollingElement) {
+      document.scrollingElement.scrollTop = 20;
+    } else {
+      // IE doesn't have scrollingElement API.
+      window.scrollTo(0, 20);
+    }
+
+    // Set initial scroll state.
+    let scrollTop = 50;
+    vContainerDiv.scrollTop = scrollTop;
+
+    // Mouse move events are relative to the viewport, so this is (mostly) the
+    // same as the testDragZeroMarginDivVContainer test width adjust coordinates
+    events.fireMouseMoveEvent(vContainerDiv, new Coordinate(50, 50));
+    clock.tick(DragScrollSupport.TIMER_STEP_ + 1);
+    assertEquals(
+        'Mousing inside the vContainer should not trigger scrolling.',
+        scrollTop, vContainerDiv.scrollTop);
+    assertEquals(
+        'Scroll timer should not tick yet', 0, clock.getTimeoutsMade());
+
+    scrollTop = vContainerDiv.scrollTop;
+    events.fireMouseMoveEvent(vContainerDiv, new Coordinate(50, 110));
+    clock.tick(DragScrollSupport.TIMER_STEP_ + 1);
+    assertTrue(
+        'Mousing below the vContainer should trigger scrolling down.',
+        scrollTop < vContainerDiv.scrollTop);
+    scrollTop = vContainerDiv.scrollTop;
+    clock.tick(DragScrollSupport.TIMER_STEP_ + 1);
+    assertTrue(
+        'Mousing below the vContainer should trigger scrolling down.',
+        scrollTop < vContainerDiv.scrollTop);
+
+    scrollTop = vContainerDiv.scrollTop;
+    events.fireMouseMoveEvent(vContainerDiv, new Coordinate(50, 50));
+    clock.tick(DragScrollSupport.TIMER_STEP_ + 1);
+    assertEquals(
+        'Mousing inside the vContainer should stop scrolling.', scrollTop,
+        vContainerDiv.scrollTop);
+
+    clock.tick(DragScrollSupport.TIMER_STEP_ + 1);
+
+    dsc.dispose();
+    if (document.scrollingElement) {
+      document.scrollingElement.scrollTop = 0;
+    } else {
+      // IE doesn't have scrollingElement API.
+      window.scrollTo(0, 0);
+    }
+    document.body.removeAttribute('style');
+  },
+
+  /** @suppress {visibility} suppression added to enable type checking */
   testDragZeroMarginDivHContainer() {
     const dsc = new DragScrollSupport(hContainerDiv);
 
@@ -147,6 +198,7 @@ testSuite({
     dsc.dispose();
   },
 
+  /** @suppress {visibility} suppression added to enable type checking */
   testDragMarginDivVContainer() {
     const dsc = new DragScrollSupport(vContainerDiv, 20);
 
@@ -203,6 +255,7 @@ testSuite({
     dsc.dispose();
   },
 
+  /** @suppress {visibility} suppression added to enable type checking */
   testDragMarginScrollConstrainedDivVContainer() {
     const dsc = new DragScrollSupport(vContainerDiv, 20);
     dsc.setConstrainScroll(true);
@@ -300,6 +353,7 @@ testSuite({
     dsc.dispose();
   },
 
+  /** @suppress {visibility} suppression added to enable type checking */
   testSetHorizontalScrolling() {
     const dsc = new DragScrollSupport(hContainerDiv);
     dsc.setHorizontalScrolling(false);
@@ -333,6 +387,10 @@ testSuite({
   },
 
   testConstrainBoundsWithMargin() {
+    /**
+     * @suppress {visibility,checkTypes} suppression added to enable type
+     * checking
+     */
     const rect = DragScrollSupport.prototype.constrainBounds_.call(
         {margin_: 25}, new GoogRect(0, 0, 100, 100));
     assertEquals(25, rect.left);

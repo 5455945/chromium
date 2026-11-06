@@ -1,153 +1,227 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/omnibox/browser/autocomplete_provider.h"
 
 #include <algorithm>
-#include <set>
 #include <string>
 
-#include "base/feature_list.h"
-#include "base/i18n/case_conversion.h"
-#include "base/logging.h"
-#include "base/no_destructor.h"
-#include "base/strings/string_split.h"
+#include "base/i18n/icubridge/date_time_formatter.h"
+#include "base/i18n/icubridge/icu_bridge.h"
+#include "base/i18n/time_formatting.h"
+#include "base/notreached.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/trace_event/memory_usage_estimator.h"
 #include "components/bookmarks/browser/bookmark_utils.h"
+#include "components/omnibox/browser/autocomplete_enums.h"
 #include "components/omnibox/browser/autocomplete_i18n.h"
 #include "components/omnibox/browser/autocomplete_input.h"
 #include "components/omnibox/browser/autocomplete_match.h"
 #include "components/omnibox/browser/autocomplete_match_classification.h"
+#include "components/omnibox/browser/autocomplete_provider_listener.h"
 #include "components/omnibox/browser/history_provider.h"
 #include "components/omnibox/browser/omnibox_field_trial.h"
-#include "components/omnibox/browser/scored_history_match.h"
-#include "components/omnibox/common/omnibox_features.h"
+#include "components/search_engines/template_url_starter_pack_data.h"
 #include "components/url_formatter/url_fixer.h"
 #include "url/gurl.h"
 
 AutocompleteProvider::AutocompleteProvider(Type type)
     : provider_max_matches_(OmniboxFieldTrial::GetProviderMaxMatches(type)),
-      done_(true),
       type_(type) {}
 
 // static
 const char* AutocompleteProvider::TypeToString(Type type) {
+  // When creating a new provider, add the provider type to this function and
+  // make sure to also add the appropriate OmniboxProvider variant to the
+  // Omnibox.ProviderTime2 histogram (defined in omnibox/histograms.xml) so that
+  // the run-time metrics associated with the relevant provider can be properly
+  // analyzed.
   switch (type) {
-    case TYPE_BOOKMARK:
+    case AutocompleteProvider::Type::kBookmark:
       return "Bookmark";
-    case TYPE_BUILTIN:
+    case AutocompleteProvider::Type::kBuiltin:
       return "Builtin";
-    case TYPE_CLIPBOARD:
+    case AutocompleteProvider::Type::kClipboard:
       return "Clipboard";
-    case TYPE_DOCUMENT:
+    case AutocompleteProvider::Type::kDocument:
       return "Document";
-    case TYPE_HISTORY_QUICK:
+    case AutocompleteProvider::Type::kHistoryQuick:
       return "HistoryQuick";
-    case TYPE_HISTORY_URL:
+    case AutocompleteProvider::Type::kHistoryUrl:
       return "HistoryURL";
-    case TYPE_KEYWORD:
+    case AutocompleteProvider::Type::kKeyword:
       return "Keyword";
-    case TYPE_ON_DEVICE_HEAD:
+    case AutocompleteProvider::Type::kOnDeviceHead:
       return "OnDeviceHead";
-    case TYPE_SEARCH:
+    case AutocompleteProvider::Type::kSearch:
       return "Search";
-    case TYPE_SHORTCUTS:
+    case AutocompleteProvider::Type::kShortcuts:
       return "Shortcuts";
-    case TYPE_ZERO_SUGGEST:
+    case AutocompleteProvider::Type::kZeroSuggest:
       return "ZeroSuggest";
-    case TYPE_ZERO_SUGGEST_LOCAL_HISTORY:
+    case AutocompleteProvider::Type::kZeroSuggestLocalHistory:
       return "LocalHistoryZeroSuggest";
-    case TYPE_QUERY_TILE:
+    case AutocompleteProvider::Type::kQueryTile:
       return "QueryTile";
-    case TYPE_MOST_VISITED_SITES:
+    case AutocompleteProvider::Type::kMostVisitedSites:
       return "MostVisitedSites";
-    case TYPE_VERBATIM_MATCH:
+    case AutocompleteProvider::Type::kVerbatimMatch:
       return "VerbatimMatch";
-    case TYPE_VOICE_SUGGEST:
+    case AutocompleteProvider::Type::kVoiceSuggest:
       return "VoiceSuggest";
+    case AutocompleteProvider::Type::kHistoryFuzzy:
+      return "HistoryFuzzy";
+    case AutocompleteProvider::Type::kOpenTab:
+      return "OpenTab";
+    case AutocompleteProvider::Type::kHistoryClusterProvider:
+      return "HistoryCluster";
+    case AutocompleteProvider::Type::kCalculator:
+      return "Calculator";
+    case AutocompleteProvider::Type::kFeaturedSearch:
+      return "FeaturedSearch";
+    case AutocompleteProvider::Type::kHistoryEmbeddings:
+      return "HistoryEmbeddings";
+    case AutocompleteProvider::Type::kEnterpriseSearchAggregator:
+      return "EnterpriseSearchAggregator";
+    case AutocompleteProvider::Type::kUnscopedExtension:
+      return "UnscopedExtension";
+    case AutocompleteProvider::Type::kRecentlyClosedTabs:
+      return "RecentlyClosedTabs";
+    case AutocompleteProvider::Type::kContextualSearch:
+      return "ContextualSearch";
+    case AutocompleteProvider::Type::kTabGroup:
+      return "TabGroup";
+    case AutocompleteProvider::Type::kCrossDeviceTab:
+      return "CrossDeviceTab";
     default:
-      NOTREACHED() << "Unhandled AutocompleteProvider::Type " << type;
+      DUMP_WILL_BE_NOTREACHED()
+          << "Unhandled AutocompleteProvider::Type " << static_cast<int>(type);
       return "Unknown";
   }
 }
 
-void AutocompleteProvider::Stop(bool clear_cached_results,
-                                bool due_to_user_inactivity) {
+const std::u16string AutocompleteProvider::LocalizedLastModifiedString(
+    base::Time now,
+    base::Time modified_time) {
+  // Use shorthand if the times fall on the same day or in the same year.
+  base::Time::Exploded exploded_modified_time;
+  base::Time::Exploded exploded_now;
+  modified_time.LocalExplode(&exploded_modified_time);
+  now.LocalExplode(&exploded_now);
+  if (exploded_modified_time.year == exploded_now.year) {
+    if (exploded_modified_time.month == exploded_now.month &&
+        exploded_modified_time.day_of_month == exploded_now.day_of_month) {
+      // Same local calendar day - use localized time.
+      return base::TimeFormatTimeOfDay(modified_time);
+    }
+
+    // Same year but not the same day: use abbreviated month/day ("Jan 1").
+    using base::i18n::IcuBridge;
+    using base::i18n::datetime_options::MD;
+    return IcuBridge::GetInstance().date_time_formatter().Format(modified_time,
+                                                                 MD::Medium());
+  }
+
+  // No shorthand; display full MM/DD/YYYY.
+  return base::TimeFormatShortDateNumeric(modified_time);
+}
+
+void AutocompleteProvider::AddListener(AutocompleteProviderListener* listener) {
+  listeners_.push_back(listener);
+}
+
+void AutocompleteProvider::NotifyListeners(bool updated_matches) const {
+  for (AutocompleteProviderListener* listener : listeners_) {
+    listener->OnProviderUpdate(updated_matches, this);
+  }
+}
+
+void AutocompleteProvider::StartPrefetch(const AutocompleteInput& input) {
+  DCHECK(!input.omit_asynchronous_matches());
+}
+
+void AutocompleteProvider::Stop(AutocompleteStopReason stop_reason) {
   done_ = true;
+  if (stop_reason == AutocompleteStopReason::kClobbered) {
+    matches_.clear();
+    suggestion_groups_map_.clear();
+  }
 }
 
 const char* AutocompleteProvider::GetName() const {
   return TypeToString(type_);
 }
 
-// static
-ACMatchClassifications AutocompleteProvider::ClassifyAllMatchesInString(
-    const std::u16string& find_text,
-    const std::u16string& text,
-    const bool text_is_search_query,
-    const ACMatchClassifications& original_class) {
-  // TODO (manukh) Move this function to autocomplete_match_classification
-  DCHECK(!find_text.empty());
-
-  if (text.empty())
-    return original_class;
-
-  TermMatches term_matches = FindTermMatches(find_text, text);
-
-  ACMatchClassifications classifications;
-  if (text_is_search_query) {
-    classifications = ClassifyTermMatches(term_matches, text.size(),
-                                          ACMatchClassification::NONE,
-                                          ACMatchClassification::MATCH);
-  } else
-    classifications = ClassifyTermMatches(term_matches, text.size(),
-                                          ACMatchClassification::MATCH,
-                                          ACMatchClassification::NONE);
-
-  return AutocompleteMatch::MergeClassifications(original_class,
-                                                 classifications);
-}
-
-metrics::OmniboxEventProto_ProviderType AutocompleteProvider::
-    AsOmniboxEventProviderType() const {
+metrics::OmniboxEventProto_ProviderType
+AutocompleteProvider::AsOmniboxEventProviderType() const {
   switch (type_) {
-    case TYPE_BOOKMARK:
+    case AutocompleteProvider::Type::kBookmark:
       return metrics::OmniboxEventProto::BOOKMARK;
-    case TYPE_BUILTIN:
+    case AutocompleteProvider::Type::kBuiltin:
       return metrics::OmniboxEventProto::BUILTIN;
-    case TYPE_CLIPBOARD:
+    case AutocompleteProvider::Type::kClipboard:
       return metrics::OmniboxEventProto::CLIPBOARD;
-    case TYPE_DOCUMENT:
+    case AutocompleteProvider::Type::kDocument:
       return metrics::OmniboxEventProto::DOCUMENT;
-    case TYPE_HISTORY_QUICK:
+    case AutocompleteProvider::Type::kHistoryQuick:
       return metrics::OmniboxEventProto::HISTORY_QUICK;
-    case TYPE_HISTORY_URL:
+    case AutocompleteProvider::Type::kHistoryUrl:
       return metrics::OmniboxEventProto::HISTORY_URL;
-    case TYPE_KEYWORD:
+    case AutocompleteProvider::Type::kKeyword:
       return metrics::OmniboxEventProto::KEYWORD;
-    case TYPE_ON_DEVICE_HEAD:
+    case AutocompleteProvider::Type::kOnDeviceHead:
       return metrics::OmniboxEventProto::ON_DEVICE_HEAD;
-    case TYPE_SEARCH:
+    case AutocompleteProvider::Type::kSearch:
       return metrics::OmniboxEventProto::SEARCH;
-    case TYPE_SHORTCUTS:
+    case AutocompleteProvider::Type::kShortcuts:
       return metrics::OmniboxEventProto::SHORTCUTS;
-    case TYPE_ZERO_SUGGEST:
+    case AutocompleteProvider::Type::kZeroSuggest:
       return metrics::OmniboxEventProto::ZERO_SUGGEST;
-    case TYPE_ZERO_SUGGEST_LOCAL_HISTORY:
+    case AutocompleteProvider::Type::kZeroSuggestLocalHistory:
       return metrics::OmniboxEventProto::ZERO_SUGGEST_LOCAL_HISTORY;
-    case TYPE_QUERY_TILE:
+    case AutocompleteProvider::Type::kQueryTile:
       return metrics::OmniboxEventProto::QUERY_TILE;
-    case TYPE_MOST_VISITED_SITES:
-      return metrics::OmniboxEventProto::ZERO_SUGGEST;
-    case TYPE_VERBATIM_MATCH:
-      return metrics::OmniboxEventProto::ZERO_SUGGEST;
-    case TYPE_VOICE_SUGGEST:
+    case AutocompleteProvider::Type::kMostVisitedSites:
+      return metrics::OmniboxEventProto::MOST_VISITED_SITES;
+    case AutocompleteProvider::Type::kVerbatimMatch:
+      return metrics::OmniboxEventProto::VERBATIM_MATCH;
+    case AutocompleteProvider::Type::kVoiceSuggest:
       return metrics::OmniboxEventProto::SEARCH;
+    case AutocompleteProvider::Type::kHistoryFuzzy:
+      return metrics::OmniboxEventProto::HISTORY_FUZZY;
+    case AutocompleteProvider::Type::kOpenTab:
+      return metrics::OmniboxEventProto::OPEN_TAB;
+    case AutocompleteProvider::Type::kHistoryClusterProvider:
+      return metrics::OmniboxEventProto::HISTORY_CLUSTER;
+    case AutocompleteProvider::Type::kCalculator:
+      return metrics::OmniboxEventProto::CALCULATOR;
+    case AutocompleteProvider::Type::kFeaturedSearch:
+      return metrics::OmniboxEventProto::FEATURED_SEARCH;
+    case AutocompleteProvider::Type::kHistoryEmbeddings:
+      return metrics::OmniboxEventProto::HISTORY_EMBEDDINGS;
+    case AutocompleteProvider::Type::kEnterpriseSearchAggregator:
+      return metrics::OmniboxEventProto::ENTERPRISE_SEARCH_AGGREGATOR;
+    case AutocompleteProvider::Type::kUnscopedExtension:
+      return metrics::OmniboxEventProto::UNSCOPED_EXTENSION;
+    case AutocompleteProvider::Type::kRecentlyClosedTabs:
+      return metrics::OmniboxEventProto::RECENTLY_CLOSED_TABS;
+    case AutocompleteProvider::Type::kContextualSearch:
+      return metrics::OmniboxEventProto::CONTEXTUAL_SEARCH_PROVIDER;
+    case AutocompleteProvider::Type::kTabGroup:
+      return metrics::OmniboxEventProto::TAB_GROUP_PROVIDER;
+    case AutocompleteProvider::Type::kCrossDeviceTab:
+      return metrics::OmniboxEventProto::CROSS_DEVICE_TAB;
     default:
-      NOTREACHED() << "Unhandled AutocompleteProvider::Type " << type_;
+      // TODO(crbug.com/40940012) This was a NOTREACHED that we converted to
+      //   help debug crbug.com/1499235 since NOTREACHED's don't log their
+      //   message in crash reports. Should be reverted back to a NOTREACHED or
+      //   NOTREACHED if their logs eventually begin being logged to
+      //   crash reports.
+      DUMP_WILL_BE_NOTREACHED()
+          << "[NOTREACHED] Unhandled AutocompleteProvider::Type "
+          << static_cast<int>(type_);
       return metrics::OmniboxEventProto::UNKNOWN_PROVIDER;
   }
 }
@@ -157,10 +231,13 @@ void AutocompleteProvider::DeleteMatch(const AutocompleteMatch& match) {
                 << "' has not implemented DeleteMatch.";
 }
 
-void AutocompleteProvider::AddProviderInfo(ProvidersInfo* provider_info) const {
+void AutocompleteProvider::DeleteMatchElement(const AutocompleteMatch& match,
+                                              size_t element_index) {
+  DLOG(WARNING) << "The AutocompleteProvider '" << GetName()
+                << "' has not implemented DeleteMatchElement.";
 }
 
-void AutocompleteProvider::ResetSession() {
+void AutocompleteProvider::AddProviderInfo(ProvidersInfo* provider_info) const {
 }
 
 size_t AutocompleteProvider::EstimateMemoryUsage() const {
@@ -168,7 +245,28 @@ size_t AutocompleteProvider::EstimateMemoryUsage() const {
 }
 
 AutocompleteProvider::~AutocompleteProvider() {
-  Stop(false, false);
+  // Don't bother using `kClobbered` to clear caches and state, since those will
+  // be destroyed with the provider.
+  Stop(AutocompleteStopReason::kInteraction);
+}
+
+// static
+AutocompleteProvider::AdjustedInputAndStarterPackKeyword
+AutocompleteProvider::AdjustInputForStarterPackKeyword(
+    const AutocompleteInput& input,
+    const TemplateURLService* turl_service) {
+  if (input.in_keyword_mode()) {
+    AutocompleteInput keyword_input = input;
+    const TemplateURL* template_url =
+        AutocompleteInput::GetSubstitutingTemplateURLForInput(turl_service,
+                                                              &keyword_input);
+    if (template_url &&
+        template_url->starter_pack_id() !=
+            template_url_starter_pack_data::StarterPackId::kNone) {
+      return {keyword_input, template_url};
+    }
+  }
+  return {input, nullptr};
 }
 
 // static
@@ -179,7 +277,7 @@ AutocompleteProvider::FixupReturn AutocompleteProvider::FixupUserInput(
 
   // Fixup and canonicalize user input.
   const GURL canonical_gurl(
-      url_formatter::FixupURL(base::UTF16ToUTF8(input_text), std::string()));
+      url_formatter::FixupURL(base::UTF16ToUTF8(input_text)));
   std::string canonical_gurl_str(canonical_gurl.possibly_invalid_spec());
   if (canonical_gurl_str.empty()) {
     // This probably won't happen, but there are no guarantees.
@@ -194,9 +292,8 @@ AutocompleteProvider::FixupReturn AutocompleteProvider::FixupUserInput(
   // "17173.com"), swap the original hostname in for the fixed-up one.
   if ((input.type() != metrics::OmniboxInputType::URL) &&
       canonical_gurl.HostIsIPAddress()) {
-    std::string original_hostname =
-        base::UTF16ToUTF8(input_text.substr(input.parts().host.begin,
-                                            input.parts().host.len));
+    std::string original_hostname = base::UTF16ToUTF8(
+        input_text.substr(input.parts().host.begin, input.parts().host.len));
     const url::Parsed& parts =
         canonical_gurl.parsed_for_possibly_invalid_spec();
     // parts.host must not be empty when HostIsIPAddress() is true.
@@ -272,31 +369,24 @@ size_t AutocompleteProvider::TrimSchemePrefix(std::u16string* url,
   return (scheme_pos == 0) ? prefix_end : 0;
 }
 
-// static
-bool AutocompleteProvider::InExplicitExperimentalKeywordMode(
-    const AutocompleteInput& input,
-    const std::u16string& keyword) {
-  return OmniboxFieldTrial::IsExperimentalKeywordModeEnabled() &&
-         input.prefer_keyword() &&
-         base::StartsWith(input.text(), keyword,
-                          base::CompareCase::SENSITIVE) &&
-         IsExplicitlyInKeywordMode(input, keyword);
-}
+void AutocompleteProvider::ResizeMatches(size_t max_matches,
+                                         bool ml_scoring_enabled) {
+  if (matches_.size() <= max_matches) {
+    return;
+  }
 
-// static
-bool AutocompleteProvider::IsExplicitlyInKeywordMode(
-    const AutocompleteInput& input,
-    const std::u16string& keyword) {
-  // It is important to this method that we determine if the user entered
-  // keyword mode intentionally, as we use this routine to e.g. filter
-  // all but keyword results. Currently we assume that the user entered
-  // keyword mode intentionally with all entry methods except with a
-  // space (and disregard entry method during a backspace). However, if the
-  // user has typed a char past the space, we again assume keyword mode.
-  return (((input.keyword_mode_entry_method() !=
-                metrics::OmniboxEventProto::SPACE_AT_END &&
-            input.keyword_mode_entry_method() !=
-                metrics::OmniboxEventProto::SPACE_IN_MIDDLE) &&
-           !input.prevent_inline_autocomplete()) ||
-          input.text().size() > keyword.size() + 1);
+  // When ML Scoring is not enabled, simply resize the `matches_` list.
+  if (!ml_scoring_enabled) {
+    matches_.resize(max_matches);
+    return;
+  }
+
+  // The provider should pass all match candidates to the controller if ML
+  // scoring is enabled. Mark any matches over `max_matches` with zero relevance
+  // and `culled_by_provider` set to true to simulate the resizing.
+  std::ranges::for_each(std::next(matches_.begin(), max_matches),
+                        matches_.end(), [&](auto& match) {
+                          match.relevance = 0;
+                          match.culled_by_provider = true;
+                        });
 }

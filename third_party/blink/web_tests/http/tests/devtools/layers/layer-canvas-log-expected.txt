@@ -9,7 +9,6 @@ Canvas log:
             paint : {
                 blendMode : "Src"
                 color : "#00000000"
-                filterLevel : "None"
                 flags : "none"
                 strokeCap : "Butt"
                 strokeJoin : "Miter"
@@ -25,7 +24,6 @@ Canvas log:
         params : {
             paint : {
                 color : "#FF0000FF"
-                filterLevel : "Low"
                 flags : "AntiAlias"
                 strokeCap : "Butt"
                 strokeJoin : "Miter"
@@ -41,13 +39,38 @@ Canvas log:
             }
         }
     }
+    10 : {
+        commandIndex : 10
+        method : "drawRect"
+        params : {
+            paint : {
+                color : "#80000000"
+                flags : "AntiAlias"
+                strokeCap : "Butt"
+                strokeJoin : "Miter"
+                strokeMiter : 4
+                strokeWidth : 0
+                styleName : "Fill"
+            }
+            rect : {
+                bottom : 10
+                left : 0
+                right : 10
+                top : 0
+            }
+        }
+    }
+    11 : {
+        commandIndex : 11
+        method : "restore"
+        params : undefined
+    }
     2 : {
         commandIndex : 2
         method : "drawRect"
         params : {
             paint : {
                 color : "#FFFF0000"
-                filterLevel : "Low"
                 flags : "AntiAlias"
                 strokeCap : "Butt"
                 strokeJoin : "Miter"
@@ -65,13 +88,42 @@ Canvas log:
     }
     3 : {
         commandIndex : 3
+        method : "save"
+        params : undefined
+    }
+    4 : {
+        commandIndex : 4
+        method : "concat44"
+        params : {
+            matrix44 : [
+                1
+                0
+                0
+                0
+                0
+                1
+                0
+                0
+                0
+                0
+                1
+                0
+                0
+                50
+                0
+                1
+            ]
+        }
+    }
+    5 : {
+        commandIndex : 5
         method : "drawImageRect"
         params : {
             dst : {
-                bottom : 71
+                bottom : 21
                 left : 0
                 right : 19
-                top : 50
+                top : 0
             }
             image : {
                 height : 21
@@ -80,13 +132,16 @@ Canvas log:
             }
             paint : {
                 color : "#FF000000"
-                filterLevel : "Low"
                 flags : "AntiAlias"
                 strokeCap : "Butt"
                 strokeJoin : "Miter"
                 strokeMiter : 4
                 strokeWidth : 0
                 styleName : "Fill"
+            }
+            sampling : {
+                filter : "kLinear"
+                mipmap : "kLinear"
             }
             src : {
                 bottom : 21
@@ -96,21 +151,26 @@ Canvas log:
             }
         }
     }
-    4 : {
-        commandIndex : 4
+    6 : {
+        commandIndex : 6
+        method : "restore"
+        params : undefined
+    }
+    7 : {
+        commandIndex : 7
         method : "save"
         params : undefined
     }
-    5 : {
-        commandIndex : 5
+    8 : {
+        commandIndex : 8
         method : "translate"
         params : {
             dx : 0
             dy : 71
         }
     }
-    6 : {
-        commandIndex : 6
+    9 : {
+        commandIndex : 9
         method : "clipRect"
         params : {
             SkRegion::Op : "kIntersect_Op"
@@ -122,33 +182,6 @@ Canvas log:
             }
             softClipEdgeStyle : true
         }
-    }
-    7 : {
-        commandIndex : 7
-        method : "drawRect"
-        params : {
-            paint : {
-                color : "#7F000000"
-                filterLevel : "None"
-                flags : "AntiAlias"
-                strokeCap : "Butt"
-                strokeJoin : "Miter"
-                strokeMiter : 4
-                strokeWidth : 0
-                styleName : "Fill"
-            }
-            rect : {
-                bottom : 10
-                left : 0
-                right : 10
-                top : 0
-            }
-        }
-    }
-    8 : {
-        commandIndex : 8
-        method : "restore"
-        params : undefined
     }
 }
 

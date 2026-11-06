@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "chromeos/dbus/power/fake_power_manager_client.h"
@@ -17,6 +18,11 @@ namespace chromeos {
 class PowerPolicyControllerTest : public testing::Test {
  public:
   PowerPolicyControllerTest() = default;
+
+  PowerPolicyControllerTest(const PowerPolicyControllerTest&) = delete;
+  PowerPolicyControllerTest& operator=(const PowerPolicyControllerTest&) =
+      delete;
+
   ~PowerPolicyControllerTest() override = default;
 
   void SetUp() override {
@@ -37,20 +43,21 @@ class PowerPolicyControllerTest : public testing::Test {
     return FakePowerManagerClient::Get();
   }
 
-  PowerPolicyController* policy_controller_;
+  raw_ptr<PowerPolicyController, DanglingUntriaged> policy_controller_;
   base::test::SingleThreadTaskEnvironment task_environment_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(PowerPolicyControllerTest);
 };
 
 TEST_F(PowerPolicyControllerTest, Prefs) {
   PowerPolicyController::PrefValues prefs;
   prefs.ac_screen_dim_delay_ms = 600000;
+  prefs.ac_quick_dim_delay_ms = 500000;
   prefs.ac_screen_off_delay_ms = 660000;
+  prefs.ac_quick_lock_delay_ms = 550000;
   prefs.ac_idle_delay_ms = 720000;
   prefs.battery_screen_dim_delay_ms = 300000;
+  prefs.battery_quick_dim_delay_ms = 250000;
   prefs.battery_screen_off_delay_ms = 360000;
+  prefs.battery_quick_lock_delay_ms = 260000;
   prefs.battery_idle_delay_ms = 420000;
   prefs.ac_idle_action = PowerPolicyController::ACTION_SUSPEND;
   prefs.battery_idle_action = PowerPolicyController::ACTION_STOP_SESSION;
@@ -66,17 +73,22 @@ TEST_F(PowerPolicyControllerTest, Prefs) {
   prefs.force_nonzero_brightness_for_user_activity = false;
   prefs.boot_on_ac = true;
   prefs.usb_power_share = false;
+  prefs.send_feedback_if_undimmed = true;
   policy_controller_->ApplyPrefs(prefs);
 
   power_manager::PowerManagementPolicy expected_policy;
   expected_policy.mutable_ac_delays()->set_screen_dim_ms(600000);
+  expected_policy.mutable_ac_delays()->set_quick_dim_ms(500000);
   expected_policy.mutable_ac_delays()->set_screen_off_ms(660000);
   expected_policy.mutable_ac_delays()->set_screen_lock_ms(-1);
+  expected_policy.mutable_ac_delays()->set_quick_lock_ms(550000);
   expected_policy.mutable_ac_delays()->set_idle_warning_ms(-1);
   expected_policy.mutable_ac_delays()->set_idle_ms(720000);
   expected_policy.mutable_battery_delays()->set_screen_dim_ms(300000);
+  expected_policy.mutable_battery_delays()->set_quick_dim_ms(250000);
   expected_policy.mutable_battery_delays()->set_screen_off_ms(360000);
   expected_policy.mutable_battery_delays()->set_screen_lock_ms(-1);
+  expected_policy.mutable_battery_delays()->set_quick_lock_ms(260000);
   expected_policy.mutable_battery_delays()->set_idle_warning_ms(-1);
   expected_policy.mutable_battery_delays()->set_idle_ms(420000);
   expected_policy.set_ac_idle_action(
@@ -95,6 +107,7 @@ TEST_F(PowerPolicyControllerTest, Prefs) {
   expected_policy.set_force_nonzero_brightness_for_user_activity(false);
   expected_policy.set_boot_on_ac(true);
   expected_policy.set_usb_power_share(false);
+  expected_policy.set_send_feedback_if_undimmed(true);
   expected_policy.mutable_battery_charge_mode()->set_mode(
       power_manager::PowerManagementPolicy::BatteryChargeMode::ADAPTIVE);
 
@@ -400,6 +413,20 @@ TEST_F(PowerPolicyControllerTest, DoNothingOnLidClosedWhileSigningOut) {
       PowerPolicyController::GetPolicyDebugString(power_manager()->policy()));
 }
 
+TEST_F(PowerPolicyControllerTest, DoNothingWhenIdleInDemoMode) {
+  policy_controller_->SetShouldDoNothingWhenIdleInDemoMode();
+
+  power_manager::PowerManagementPolicy expected_policy;
+  expected_policy.set_ac_idle_action(
+      power_manager::PowerManagementPolicy_Action_DO_NOTHING);
+  expected_policy.set_battery_idle_action(
+      power_manager::PowerManagementPolicy_Action_DO_NOTHING);
+
+  EXPECT_EQ(
+      PowerPolicyController::GetPolicyDebugString(expected_policy),
+      PowerPolicyController::GetPolicyDebugString(power_manager()->policy()));
+}
+
 TEST_F(PowerPolicyControllerTest, SuspendOnLidClosedWhileSignedOut) {
   PowerPolicyController::PrefValues prefs;
   policy_controller_->ApplyPrefs(prefs);
@@ -490,16 +517,48 @@ TEST_F(PowerPolicyControllerTest, PolicyAutoScreenLockDelay) {
   // Longer AC delay.
   prefs.enable_auto_screen_lock = true;
   policy_controller_->ApplyPrefs(prefs);
-  EXPECT_EQ(base::TimeDelta::FromMilliseconds(prefs.ac_screen_lock_delay_ms),
+  EXPECT_EQ(base::Milliseconds(prefs.ac_screen_lock_delay_ms),
             policy_controller_->Get()->GetMaxPolicyAutoScreenLockDelay());
 
   // Longer battery delay.
   prefs.ac_screen_lock_delay_ms = 1000;
   prefs.battery_screen_lock_delay_ms = 4000;
   policy_controller_->ApplyPrefs(prefs);
-  EXPECT_EQ(
-      base::TimeDelta::FromMilliseconds(prefs.battery_screen_lock_delay_ms),
-      policy_controller_->Get()->GetMaxPolicyAutoScreenLockDelay());
+  EXPECT_EQ(base::Milliseconds(prefs.battery_screen_lock_delay_ms),
+            policy_controller_->Get()->GetMaxPolicyAutoScreenLockDelay());
+}
+
+TEST_F(PowerPolicyControllerTest,
+       GetMaxPolicyAutoScreenLockDelayDefaultValues) {
+  PowerPolicyController::PrefValues prefs;
+  policy_controller_->ApplyPrefs(prefs);
+
+  // Autolock disabled.
+  prefs.enable_auto_screen_lock = false;
+  policy_controller_->ApplyPrefs(prefs);
+  EXPECT_EQ(base::TimeDelta(),
+            policy_controller_->Get()->GetMaxPolicyAutoScreenLockDelay());
+
+  // Autolock enabled.
+
+  // No specified delay for either AC or battery, will use the default value.
+  prefs.enable_auto_screen_lock = true;
+  policy_controller_->ApplyPrefs(prefs);
+  int expected_default_delay_ms = 510000;
+  EXPECT_EQ(base::Milliseconds(expected_default_delay_ms),
+            policy_controller_->Get()->GetMaxPolicyAutoScreenLockDelay());
+
+  // Longer battery delay.
+  prefs.battery_screen_lock_delay_ms = 600000;
+  policy_controller_->ApplyPrefs(prefs);
+  EXPECT_EQ(base::Milliseconds(prefs.battery_screen_lock_delay_ms),
+            policy_controller_->Get()->GetMaxPolicyAutoScreenLockDelay());
+
+  // Longer AC delay.
+  prefs.ac_screen_lock_delay_ms = 700000;
+  policy_controller_->ApplyPrefs(prefs);
+  EXPECT_EQ(base::Milliseconds(prefs.ac_screen_lock_delay_ms),
+            policy_controller_->Get()->GetMaxPolicyAutoScreenLockDelay());
 }
 
 TEST_F(PowerPolicyControllerTest, FastSuspendWhenBacklightsForcedOff) {

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,45 +6,72 @@
 
 #include <memory>
 
-#include "base/notreached.h"
-#include "base/values.h"
-#include "components/version_info/version_info.h"
-#include "content/public/browser/trace_uploader.h"
-#include "services/network/public/cpp/shared_url_loader_factory.h"
+#include "android_webview/browser/aw_browser_process.h"
+#include "android_webview/browser/metrics/aw_metrics_service_client.h"
+#include "base/system/sys_info.h"
+#include "components/metrics/version_utils.h"
+#include "components/tracing/common/background_tracing_metrics_provider.h"
+#include "components/tracing/common/background_tracing_state_manager.h"
+#include "components/tracing/common/background_tracing_utils.h"
+#include "components/tracing/common/pref_names.h"
+#include "components/tracing/common/system_profile_metadata_recorder.h"
+#include "components/version_info/android/channel_getter.h"
 
 namespace android_webview {
 
-AwTracingDelegate::AwTracingDelegate() {}
-AwTracingDelegate::~AwTracingDelegate() {}
+AwTracingDelegate::AwTracingDelegate(PrefService& local_state)
+    : local_state_(local_state) {}
 
-std::unique_ptr<content::TraceUploader> AwTracingDelegate::GetTraceUploader(
-    scoped_refptr<network::SharedURLLoaderFactory>) {
-  NOTREACHED();
-  return NULL;
+AwTracingDelegate::~AwTracingDelegate() = default;
+
+// static
+void AwTracingDelegate::RegisterPrefs(PrefRegistrySimple* registry) {
+  registry->RegisterDictionaryPref(tracing::kBackgroundTracingSessionState);
 }
 
-bool AwTracingDelegate::IsAllowedToBeginBackgroundScenario(
-    const content::BackgroundTracingConfig& config,
-    bool requires_anonymized_data) {
-  // Background tracing is allowed in general and can be restricted when
-  // configuring BackgroundTracingManager.
-  return true;
+bool AwTracingDelegate::IsRecordingAllowed(
+    IsLocalScenario is_local_scenario,
+    base::TimeTicks session_start) const {
+  // Local scenarios save traces locally without uploading to metrics servers,
+  // so they do not require UMA metrics consent.
+  if (*is_local_scenario) {
+    return true;
+  }
+  auto* client = AwMetricsServiceClient::GetInstance();
+  // Optimistically assume tracing is allowed when consent is not yet
+  // determined to support startup tracing. The trace will not be saved if
+  // metrics reporting is disabled when finalizing.
+  return !client->IsConsentDetermined() || client->IsReportingEnabled();
 }
 
-bool AwTracingDelegate::IsAllowedToEndBackgroundScenario(
-    const content::BackgroundTracingConfig& config,
-    bool requires_anonymized_data,
-    bool is_crash_scenario) {
-  // Background tracing is allowed in general and can be restricted when
-  // configuring BackgroundTracingManager.
-  return true;
+std::unique_ptr<tracing::BackgroundTracingStateManager>
+AwTracingDelegate::CreateStateManager() {
+  return tracing::BackgroundTracingStateManager::CreateInstance(
+      &local_state_.get());
 }
 
-std::unique_ptr<base::DictionaryValue>
-AwTracingDelegate::GenerateMetadataDict() {
-  auto metadata_dict = std::make_unique<base::DictionaryValue>();
-  metadata_dict->SetString("revision", version_info::GetLastChange());
-  return metadata_dict;
+std::string AwTracingDelegate::RecordSerializedSystemProfileMetrics() const {
+  metrics::SystemProfileProto system_profile_proto;
+  auto recorder = tracing::BackgroundTracingMetricsProvider::
+      GetSystemProfileMetricsRecorder();
+  if (!recorder) {
+    return std::string();
+  }
+  recorder.Run(system_profile_proto);
+  std::string serialized_system_profile;
+  system_profile_proto.SerializeToString(&serialized_system_profile);
+  return serialized_system_profile;
+}
+
+tracing::MetadataDataSource::BundleRecorder
+AwTracingDelegate::CreateSystemProfileMetadataRecorder() const {
+  return base::BindRepeating(&tracing::RecordSystemProfileMetadata);
+}
+
+tracing::MetadataDataSource::ChromeMetadataRecorder
+AwTracingDelegate::CreateChromeMetadataPacketRecorder() const {
+  return base::BindRepeating(&tracing::FillChromeMetadataPacket,
+                             version_info::android::GetChannel());
 }
 
 }  // namespace android_webview

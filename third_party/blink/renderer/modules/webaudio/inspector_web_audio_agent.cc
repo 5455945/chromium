@@ -1,61 +1,59 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/webaudio/inspector_web_audio_agent.h"
 
 #include <memory>
+
+#include "third_party/blink/renderer/bindings/modules/v8/v8_automation_rate.h"
 #include "third_party/blink/renderer/core/page/page.h"
-#include "third_party/blink/renderer/core/frame/local_frame.h"
-#include "third_party/blink/renderer/modules/webaudio/base_audio_context.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_context.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_graph_tracer.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_listener.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_node.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_param.h"
+#include "third_party/blink/renderer/modules/webaudio/base_audio_context.h"
 
 namespace blink {
 
 namespace {
 
-String GetContextTypeEnum(BaseAudioContext* context) {
+const char* GetContextTypeEnum(BaseAudioContext* context) {
   return context->HasRealtimeConstraint()
       ? protocol::WebAudio::ContextTypeEnum::Realtime
       : protocol::WebAudio::ContextTypeEnum::Offline;
 }
 
-String GetContextStateEnum(BaseAudioContext* context) {
+const char* GetContextStateEnum(BaseAudioContext* context) {
   switch (context->ContextState()) {
-    case BaseAudioContext::AudioContextState::kSuspended:
+    case V8AudioContextState::Enum::kSuspended:
       return protocol::WebAudio::ContextStateEnum::Suspended;
-    case BaseAudioContext::AudioContextState::kRunning:
+    case V8AudioContextState::Enum::kRunning:
       return protocol::WebAudio::ContextStateEnum::Running;
-    case BaseAudioContext::AudioContextState::kClosed:
+    case V8AudioContextState::Enum::kClosed:
       return protocol::WebAudio::ContextStateEnum::Closed;
-    default:
-      NOTREACHED();
-      break;
+    case V8AudioContextState::Enum::kInterrupted:
+      return protocol::WebAudio::ContextStateEnum::Interrupted;
   }
+  NOTREACHED();
 }
 
 // Strips "Node" from the node name string. For example, "GainNode" will return
 // "Gain".
 String StripNodeSuffix(const String& nodeName) {
-  return nodeName.EndsWith("Node") ? nodeName.Left(nodeName.length() - 4)
-                                   : "Unknown";
+  return nodeName.ends_with("Node") ? nodeName.substr(0, nodeName.length() - 4)
+                                    : "Unknown";
 }
 
 // Strips out the prefix and returns the actual parameter name. If the name
-// does not match |NodeName.ParamName| pattern, returns "Unknown" instead.
+// does not match `NodeName.ParamName` pattern, returns "Unknown" instead.
 String StripParamPrefix(const String& paramName) {
-  Vector<String> name_tokens;
-  paramName.Split('.', name_tokens);
+  Vector<String> name_tokens = paramName.SplitSkippingEmpty('.');
   return name_tokens.size() == 2 ? name_tokens.at(1) : "Unknown";
 }
 
 }  // namespace
-
-using protocol::Response;
 
 InspectorWebAudioAgent::InspectorWebAudioAgent(Page* page)
     : page_(page),
@@ -65,44 +63,50 @@ InspectorWebAudioAgent::InspectorWebAudioAgent(Page* page)
 InspectorWebAudioAgent::~InspectorWebAudioAgent() = default;
 
 void InspectorWebAudioAgent::Restore() {
-  if (!enabled_.Get())
+  if (!enabled_.Get()) {
     return;
+  }
 
   AudioGraphTracer* graph_tracer = AudioGraphTracer::FromPage(page_);
   graph_tracer->SetInspectorAgent(this);
 }
 
-Response InspectorWebAudioAgent::enable() {
-  if (enabled_.Get())
-    return Response::Success();
+protocol::Response InspectorWebAudioAgent::enable() {
+  if (enabled_.Get()) {
+    return protocol::Response::Success();
+  }
   enabled_.Set(true);
   AudioGraphTracer* graph_tracer = AudioGraphTracer::FromPage(page_);
   graph_tracer->SetInspectorAgent(this);
-  return Response::Success();
+  return protocol::Response::Success();
 }
 
-Response InspectorWebAudioAgent::disable() {
-  if (!enabled_.Get())
-    return Response::Success();
+protocol::Response InspectorWebAudioAgent::disable() {
+  if (!enabled_.Get()) {
+    return protocol::Response::Success();
+  }
   enabled_.Clear();
   AudioGraphTracer* graph_tracer = AudioGraphTracer::FromPage(page_);
   graph_tracer->SetInspectorAgent(nullptr);
-  return Response::Success();
+  return protocol::Response::Success();
 }
 
-Response InspectorWebAudioAgent::getRealtimeData(
+protocol::Response InspectorWebAudioAgent::getRealtimeData(
     const protocol::WebAudio::GraphObjectId& contextId,
     std::unique_ptr<ContextRealtimeData>* out_data) {
   auto* const graph_tracer = AudioGraphTracer::FromPage(page_);
-  if (!enabled_.Get())
-    return Response::ServerError("Enable agent first.");
+  if (!enabled_.Get()) {
+    return protocol::Response::ServerError("Enable agent first.");
+  }
 
   BaseAudioContext* context = graph_tracer->GetContextById(contextId);
-  if (!context)
-    return Response::ServerError("Cannot find BaseAudioContext with such id.");
+  if (!context) {
+    return protocol::Response::ServerError(
+        "Cannot find BaseAudioContext with such id.");
+  }
 
   if (!context->HasRealtimeConstraint()) {
-    return Response::ServerError(
+    return protocol::Response::ServerError(
         "ContextRealtimeData is only avaliable for an AudioContext.");
   }
 
@@ -115,7 +119,7 @@ Response InspectorWebAudioAgent::getRealtimeData(
           .setCallbackIntervalMean(metric.mean_callback_interval)
           .setCallbackIntervalVariance(metric.variance_callback_interval)
           .build();
-  return Response::Success();
+  return protocol::Response::Success();
 }
 
 void InspectorWebAudioAgent::DidCreateBaseAudioContext(
@@ -154,8 +158,8 @@ void InspectorWebAudioAgent::DidCreateAudioNode(AudioNode* node) {
           .setNumberOfInputs(node->numberOfInputs())
           .setNumberOfOutputs(node->numberOfOutputs())
           .setChannelCount(node->channelCount())
-          .setChannelCountMode(node->channelCountMode())
-          .setChannelInterpretation(node->channelInterpretation())
+          .setChannelCountMode(node->channelCountMode().AsString())
+          .setChannelInterpretation(node->channelInterpretation().AsString())
           .setContextId(node->ParentUuid())
           .build());
 }
@@ -169,7 +173,7 @@ void InspectorWebAudioAgent::DidCreateAudioParam(AudioParam* param) {
       protocol::WebAudio::AudioParam::create()
           .setParamId(param->Uuid())
           .setParamType(StripParamPrefix(param->GetParamName()))
-          .setRate(param->automationRate())
+          .setRate(param->automationRate().AsString())
           .setDefaultValue(param->defaultValue())
           .setMinValue(param->minValue())
           .setMaxValue(param->maxValue())
@@ -240,6 +244,7 @@ InspectorWebAudioAgent::BuildProtocolContext(BaseAudioContext* context) {
       .setCallbackBufferSize(context->CallbackBufferSize())
       .setMaxOutputChannelCount(context->MaxChannelCount())
       .setSampleRate(context->sampleRate())
+      .setRenderQuantumSize(context->renderQuantumSize())
       .build();
 }
 

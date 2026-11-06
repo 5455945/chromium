@@ -1,26 +1,32 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <stddef.h>
+
 #include <utility>
 
-#include "base/bind.h"
 #include "base/files/file_util.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/path_service.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/search_engine_choice/search_engine_choice_service_factory.h"
+#include "chrome/browser/search_engines/template_url_prepopulate_data_resolver_factory.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/search_engines/search_engine_choice/search_engine_choice_service.h"
+#include "components/search_engines/template_url_data.h"
 #include "components/search_engines/template_url_prepopulate_data.h"
+#include "components/search_engines/template_url_prepopulate_data_resolver.h"
 #include "components/search_engines/template_url_service.h"
+#include "components/search_engines/template_url_starter_pack_data.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
@@ -52,10 +58,11 @@ class TemplateURLServiceLoader {
     message_loop_runner->Run();
   }
 
- private:
-  TemplateURLService* model_;
+  TemplateURLServiceLoader(const TemplateURLServiceLoader&) = delete;
+  TemplateURLServiceLoader& operator=(const TemplateURLServiceLoader&) = delete;
 
-  DISALLOW_COPY_AND_ASSIGN(TemplateURLServiceLoader);
+ private:
+  raw_ptr<TemplateURLService> model_;
 };
 
 std::unique_ptr<net::test_server::HttpResponse> SendResponse(
@@ -80,9 +87,12 @@ IN_PROC_BROWSER_TEST_F(TemplateURLScraperTest, ScrapeWithOnSubmit) {
       base::BindRepeating(&SendResponse));
   ASSERT_TRUE(embedded_test_server()->Start());
 
+  TemplateURLPrepopulateData::Resolver* prepopulate_data_resolver =
+      TemplateURLPrepopulateData::ResolverFactory::GetForProfile(
+          browser()->GetProfile());
   TemplateURLService* template_urls =
       TemplateURLServiceFactory::GetInstance()->GetForProfile(
-          browser()->profile());
+          browser()->GetProfile());
   TemplateURLServiceLoader loader(template_urls);
 
   TemplateURLService::TemplateURLVector all_urls =
@@ -91,10 +101,12 @@ IN_PROC_BROWSER_TEST_F(TemplateURLScraperTest, ScrapeWithOnSubmit) {
   // We need to substract the default pre-populated engines that the profile is
   // set up with.
   std::vector<std::unique_ptr<TemplateURLData>> prepopulate_urls =
-      TemplateURLPrepopulateData::GetPrepopulatedEngines(
-          browser()->profile()->GetPrefs(), nullptr);
+      prepopulate_data_resolver->GetPrepopulatedEngines();
+  std::vector<std::unique_ptr<TemplateURLData>> starter_pack_urls =
+      template_url_starter_pack_data::GetStarterPackEngines();
 
-  EXPECT_EQ(prepopulate_urls.size(), all_urls.size());
+  EXPECT_EQ(prepopulate_urls.size() + starter_pack_urls.size(),
+            all_urls.size());
 
   std::string port(base::NumberToString(embedded_test_server()->port()));
   ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(
@@ -107,9 +119,10 @@ IN_PROC_BROWSER_TEST_F(TemplateURLScraperTest, ScrapeWithOnSubmit) {
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
   content::TestNavigationObserver observer(web_contents);
-  EXPECT_TRUE(content::ExecuteScript(web_contents, "submit_form()"));
+  EXPECT_TRUE(content::ExecJs(web_contents, "submit_form()"));
   observer.Wait();
 
   all_urls = template_urls->GetTemplateURLs();
-  EXPECT_EQ(prepopulate_urls.size() + 1, all_urls.size());
+  EXPECT_EQ(prepopulate_urls.size() + starter_pack_urls.size() + 1,
+            all_urls.size());
 }

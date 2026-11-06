@@ -1,4 +1,4 @@
-// Copyright 2014 The Crashpad Authors. All rights reserved.
+// Copyright 2014 The Crashpad Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,13 +24,13 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <iterator>
 #include <utility>
 
+#include "base/apple/mach_logging.h"
+#include "base/apple/scoped_mach_port.h"
 #include "base/check_op.h"
-#include "base/cxx17_backports.h"
 #include "base/logging.h"
-#include "base/mac/mach_logging.h"
-#include "base/mac/scoped_mach_port.h"
 #include "base/notreached.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/rand_util.h"
@@ -51,42 +51,49 @@ namespace {
 class ChildPortHandshakeServer final : public ChildPortServer::Interface {
  public:
   ChildPortHandshakeServer();
+
+  ChildPortHandshakeServer(const ChildPortHandshakeServer&) = delete;
+  ChildPortHandshakeServer& operator=(const ChildPortHandshakeServer&) = delete;
+
   ~ChildPortHandshakeServer();
 
-  mach_port_t RunServer(base::ScopedFD server_write_fd,
-                        ChildPortHandshake::PortRightType port_right_type);
+  ChildPortHandshake::HandshakePorts RunServer(
+      base::ScopedFD server_write_fd,
+      ChildPortHandshake::PortRightType port_right_type);
 
  private:
   // ChildPortServer::Interface:
-  kern_return_t HandleChildPortCheckIn(child_port_server_t server,
-                                       child_port_token_t token,
-                                       mach_port_t port,
-                                       mach_msg_type_name_t right_type,
-                                       const mach_msg_trailer_t* trailer,
-                                       bool* destroy_request) override;
+  kern_return_t HandleChildPortCheckIn(
+      child_port_server_t server,
+      child_port_token_t token,
+      mach_port_t port,
+      mach_msg_type_name_t right_type,
+      mach_port_t embedder_port,
+      const mach_msg_trailer_t* trailer,
+      bool* destroy_request) override;
 
   child_port_token_t token_;
   mach_port_t port_;
   mach_msg_type_name_t right_type_;
+  mach_port_t embedder_port_;
   bool checked_in_;
-
-  DISALLOW_COPY_AND_ASSIGN(ChildPortHandshakeServer);
 };
 
 ChildPortHandshakeServer::ChildPortHandshakeServer()
     : token_(0),
       port_(MACH_PORT_NULL),
       right_type_(MACH_MSG_TYPE_PORT_NONE),
-      checked_in_(false) {
-}
+      embedder_port_(MACH_PORT_NULL),
+      checked_in_(false) {}
 
 ChildPortHandshakeServer::~ChildPortHandshakeServer() {
 }
 
-mach_port_t ChildPortHandshakeServer::RunServer(
+ChildPortHandshake::HandshakePorts ChildPortHandshakeServer::RunServer(
     base::ScopedFD server_write_fd,
     ChildPortHandshake::PortRightType port_right_type) {
   DCHECK_EQ(port_, kMachPortNull);
+  DCHECK_EQ(embedder_port_, kMachPortNull);
   DCHECK(!checked_in_);
   DCHECK(server_write_fd.is_valid());
 
@@ -94,7 +101,7 @@ mach_port_t ChildPortHandshakeServer::RunServer(
   token_ = base::RandUint64();
   if (!LoggingWriteFile(server_write_fd.get(), &token_, sizeof(token_))) {
     LOG(WARNING) << "no client check-in";
-    return MACH_PORT_NULL;
+    return {};
   }
 
   // Create a unique name for the bootstrap service mapping. Make it unguessable
@@ -111,7 +118,8 @@ mach_port_t ChildPortHandshakeServer::RunServer(
 
   // Check the new service in with the bootstrap server, obtaining a receive
   // right for it.
-  base::mac::ScopedMachReceiveRight server_port(BootstrapCheckIn(service_name));
+  base::apple::ScopedMachReceiveRight server_port(
+      BootstrapCheckIn(service_name));
   CHECK(server_port.is_valid());
 
   // Share the service name with the client via the pipe.
@@ -120,13 +128,13 @@ mach_port_t ChildPortHandshakeServer::RunServer(
                         &service_name_length,
                         sizeof(service_name_length))) {
     LOG(WARNING) << "no client check-in";
-    return MACH_PORT_NULL;
+    return {};
   }
 
   if (!LoggingWriteFile(
           server_write_fd.get(), service_name.c_str(), service_name_length)) {
     LOG(WARNING) << "no client check-in";
-    return MACH_PORT_NULL;
+    return {};
   }
 
   // Prior to macOS 10.12, a kqueue cannot monitor a raw Mach receive right with
@@ -135,7 +143,7 @@ mach_port_t ChildPortHandshakeServer::RunServer(
   // MACH_PORT_RIGHT_PORT_SET, to 10.12.0 xnu-3789.1.32/osfmk/ipc/ipc_pset.c
   // filt_machportattach(), which also handles MACH_PORT_TYPE_RECEIVE. Create a
   // new port set and add the receive right to it.
-  base::mac::ScopedMachPortSet server_port_set(
+  base::apple::ScopedMachPortSet server_port_set(
       NewMachPort(MACH_PORT_RIGHT_PORT_SET));
   CHECK(server_port_set.is_valid());
 
@@ -165,8 +173,8 @@ mach_port_t ChildPortHandshakeServer::RunServer(
          0,
          0,
          nullptr);
-  int rv = HANDLE_EINTR(kevent(
-      kq.get(), changelist, base::size(changelist), nullptr, 0, nullptr));
+  int rv = HANDLE_EINTR(
+      kevent(kq.get(), changelist, std::size(changelist), nullptr, 0, nullptr));
   PCHECK(rv != -1) << "kevent";
 
   ChildPortServer child_port_server(this);
@@ -192,7 +200,7 @@ mach_port_t ChildPortHandshakeServer::RunServer(
       // Non-blocking kevent() with no events to return.
       DCHECK(!blocking);
       LOG(WARNING) << "no client check-in";
-      return MACH_PORT_NULL;
+      return {};
     }
 
     DCHECK_EQ(rv, 1);
@@ -228,7 +236,7 @@ mach_port_t ChildPortHandshakeServer::RunServer(
             break;
           } else if (mr != MACH_MSG_SUCCESS) {
             MACH_LOG(ERROR, mr) << "MachMessageServer::Run";
-            return MACH_PORT_NULL;
+            return {};
           }
         }
         break;
@@ -254,12 +262,16 @@ mach_port_t ChildPortHandshakeServer::RunServer(
 
       default:
         NOTREACHED();
-        break;
     }
   }
 
   if (port_ == MACH_PORT_NULL) {
-    return MACH_PORT_NULL;
+    if (embedder_port_ != MACH_PORT_NULL) {
+      MachMessageDestroyReceivedPort(embedder_port_,
+                                     MACH_MSG_TYPE_PORT_RECEIVE);
+      embedder_port_ = MACH_PORT_NULL;
+    }
+    return {};
   }
 
   bool mismatch = false;
@@ -283,12 +295,18 @@ mach_port_t ChildPortHandshakeServer::RunServer(
   if (mismatch) {
     MachMessageDestroyReceivedPort(port_, right_type_);
     port_ = MACH_PORT_NULL;
-    return MACH_PORT_NULL;
+    if (embedder_port_ != MACH_PORT_NULL) {
+      MachMessageDestroyReceivedPort(embedder_port_,
+                                     MACH_MSG_TYPE_PORT_RECEIVE);
+      embedder_port_ = MACH_PORT_NULL;
+    }
+    return {};
   }
 
-  mach_port_t port = MACH_PORT_NULL;
-  std::swap(port_, port);
-  return port;
+  ChildPortHandshake::HandshakePorts handshake_ports;
+  std::swap(port_, handshake_ports.port);
+  std::swap(embedder_port_, handshake_ports.embedder_port);
+  return handshake_ports;
 }
 
 kern_return_t ChildPortHandshakeServer::HandleChildPortCheckIn(
@@ -296,9 +314,11 @@ kern_return_t ChildPortHandshakeServer::HandleChildPortCheckIn(
     const child_port_token_t token,
     mach_port_t port,
     mach_msg_type_name_t right_type,
+    mach_port_t embedder_port,
     const mach_msg_trailer_t* trailer,
     bool* destroy_request) {
   DCHECK_EQ(port_, kMachPortNull);
+  DCHECK_EQ(embedder_port_, kMachPortNull);
   DCHECK(!checked_in_);
 
   if (token != token_) {
@@ -321,6 +341,7 @@ kern_return_t ChildPortHandshakeServer::HandleChildPortCheckIn(
       // to remain intact. It gives ownership of the right to its caller.
       port_ = port;
       right_type_ = right_type;
+      embedder_port_ = embedder_port;
     }
   }
 
@@ -370,20 +391,24 @@ base::ScopedFD ChildPortHandshake::ServerWriteFD() {
   return std::move(server_write_fd_);
 }
 
-mach_port_t ChildPortHandshake::RunServer(PortRightType port_right_type) {
+ChildPortHandshake::HandshakePorts ChildPortHandshake::RunServer(
+    PortRightType port_right_type) {
   client_read_fd_.reset();
   return RunServerForFD(std::move(server_write_fd_), port_right_type);
 }
 
 bool ChildPortHandshake::RunClient(mach_port_t port,
-                                   mach_msg_type_name_t right_type) {
+                                   mach_msg_type_name_t right_type,
+                                   mach_port_t embedder_port) {
   server_write_fd_.reset();
-  return RunClientForFD(std::move(client_read_fd_), port, right_type);
+  return RunClientForFD(
+      std::move(client_read_fd_), port, right_type, embedder_port);
 }
 
 // static
-mach_port_t ChildPortHandshake::RunServerForFD(base::ScopedFD server_write_fd,
-                                               PortRightType port_right_type) {
+ChildPortHandshake::HandshakePorts ChildPortHandshake::RunServerForFD(
+    base::ScopedFD server_write_fd,
+    PortRightType port_right_type) {
   ChildPortHandshakeServer server;
   return server.RunServer(std::move(server_write_fd), port_right_type);
 }
@@ -391,7 +416,8 @@ mach_port_t ChildPortHandshake::RunServerForFD(base::ScopedFD server_write_fd,
 // static
 bool ChildPortHandshake::RunClientForFD(base::ScopedFD client_read_fd,
                                         mach_port_t port,
-                                        mach_msg_type_name_t right_type) {
+                                        mach_msg_type_name_t right_type,
+                                        mach_port_t embedder_port) {
   DCHECK(client_read_fd.is_valid());
 
   // Read the token and the service name from the read side of the pipe.
@@ -403,7 +429,8 @@ bool ChildPortHandshake::RunClientForFD(base::ScopedFD client_read_fd,
   }
 
   // Look up the server and check in with it by providing the token and port.
-  return RunClientInternal_SendCheckIn(service_name, token, port, right_type);
+  return RunClientInternal_SendCheckIn(
+      service_name, token, port, right_type, embedder_port);
 }
 
 // static
@@ -437,17 +464,22 @@ bool ChildPortHandshake::RunClientInternal_SendCheckIn(
     const std::string& service_name,
     child_port_token_t token,
     mach_port_t port,
-    mach_msg_type_name_t right_type) {
+    mach_msg_type_name_t right_type,
+    mach_port_t embedder_port) {
   // Get a send right to the server by looking up the service with the bootstrap
   // server by name.
-  base::mac::ScopedMachSendRight server_port(BootstrapLookUp(service_name));
+  base::apple::ScopedMachSendRight server_port(BootstrapLookUp(service_name));
   if (server_port == kMachPortNull) {
     return false;
   }
 
   // Check in with the server.
-  kern_return_t kr = child_port_check_in(
-      server_port.get(), token, port, right_type);
+  kern_return_t kr = child_port_check_in(server_port.get(),
+                                         token,
+                                         port,
+                                         right_type,
+                                         embedder_port,
+                                         MACH_MSG_TYPE_MOVE_RECEIVE);
   if (kr != KERN_SUCCESS) {
     MACH_LOG(ERROR, kr) << "child_port_check_in";
     return false;

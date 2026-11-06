@@ -1,16 +1,20 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/base_jni_headers/FeatureList_jni.h"
 #include "base/feature_list.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "base/features_jni/FeatureList_jni.h"
 
 namespace base {
 namespace android {
 
-static jboolean JNI_FeatureList_IsInitialized(JNIEnv* env) {
+static bool JNI_FeatureList_IsInitialized(JNIEnv* env) {
   return !!base::FeatureList::GetInstance();
 }
 
 }  // namespace android
 }  // namespace base
+
+DEFINE_JNI(FeatureList)

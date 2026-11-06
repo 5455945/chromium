@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,11 @@
 #include <stdint.h>
 
 #include <string>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
-#include "base/macros.h"
 #include "media/base/media_export.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
 namespace media {
 
@@ -36,9 +35,13 @@ using UUID = std::vector<uint8_t>;
 // provide customized additions to Android's media handling.
 class MEDIA_EXPORT MediaDrmBridgeClient {
  public:
-  typedef std::unordered_map<std::string, UUID> KeySystemUuidMap;
+  typedef absl::flat_hash_map<std::string, UUID> KeySystemUuidMap;
 
   MediaDrmBridgeClient();
+
+  MediaDrmBridgeClient(const MediaDrmBridgeClient&) = delete;
+  MediaDrmBridgeClient& operator=(const MediaDrmBridgeClient&) = delete;
+
   virtual ~MediaDrmBridgeClient();
 
   // Adds extra mappings from key-system name to Android UUID into |map|.
@@ -51,8 +54,6 @@ class MEDIA_EXPORT MediaDrmBridgeClient {
 
  private:
   friend class KeySystemManager;
-
-  DISALLOW_COPY_AND_ASSIGN(MediaDrmBridgeClient);
 };
 
 }  // namespace media

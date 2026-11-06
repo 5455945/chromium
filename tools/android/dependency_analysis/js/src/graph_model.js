@@ -1,9 +1,39 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 /**
- * @fileoverview Data structures for representing a directed graph.
+ * @file Data structures for representing a directed graph.
  */
+
+/**
+ * Some classes add noise that are not always relevant (e.g. tests, utils,
+ * feature maps, etc). This list is used to exclude those classes. If any one of
+ * these strings is a substring of the classname, the class will not display on
+ * the visual graph. Compiled as a RegExp for speed, case insensitive.
+ */
+const filterRegex = new RegExp(
+    [
+      'Test',
+      'Util',
+      'JNI',
+      'Log',
+      'ChromeFeature',
+      'ContentFeature',
+      'BuildConfig',
+      'UserData',
+      'CachedFlag',
+      'Constants',
+      'TraceEvent',
+      'Callback',
+      'ObservableSupplier',
+      'OneShotSupplier',
+      'PropertyModel',
+      'DeviceInfo',
+      'MutableFlag',
+      'RecordHistogram',
+      'CommandLine',
+    ].join('|'),
+    'i');
 
 /** Some aspects of the node's state, to help with node visualization. */
 class NodeVisualizationState {
@@ -53,6 +83,7 @@ class GraphNode {
 
   /**
    * Adds a node to the inbound set of this node.
+   *
    * @param {!GraphNode} other The inbound node.
    */
   addInbound(other) {
@@ -61,10 +92,23 @@ class GraphNode {
 
   /**
    * Adds a node to the outbound set of this node.
+   *
    * @param {!GraphNode} other The outbound node.
    */
   addOutbound(other) {
     this.outbound.add(other);
+  }
+}
+
+/** A node representing a Java class. */
+class ClassNode extends GraphNode {
+  constructor(id, displayName, packageName, buildTargets) {
+    super(id, displayName);
+
+    /** @public {string} */
+    this.packageName = packageName;
+    /** @public {!Array<string>} */
+    this.buildTargets = buildTargets;
   }
 }
 
@@ -78,15 +122,13 @@ class PackageNode extends GraphNode {
   }
 }
 
-/** A node representing a Java class. */
-class ClassNode extends GraphNode {
-  constructor(id, displayName, packageName, buildTargets) {
+/** A node representing a Java build target. */
+class TargetNode extends GraphNode {
+  constructor(id, displayName, classNames) {
     super(id, displayName);
 
-    /** @public {string} */
-    this.packageName = packageName;
     /** @public {!Array<string>} */
-    this.buildTargets = buildTargets;
+    this.classNames = classNames;
   }
 }
 
@@ -112,7 +154,7 @@ class GraphEdge {
 /**
  * The graph data for d3 to visualize.
  *
- * @typedef {Object} D3GraphData
+ * @typedef {object} D3GraphData
  * @property {!Array<!GraphNode>} nodes The nodes to visualize.
  * @property {!Array<!GraphEdge>} edges The edges to visualize.
  */
@@ -123,6 +165,7 @@ let D3GraphData;
  *
  * This is used as an SVG element ID, so it must adhere to ID requirements
  * (unique, non-empty, no whitespace).
+ *
  * @param {string} sourceId The ID of the source node.
  * @param {string} targetId The ID of the target node.
  * @return {string} The ID uniquely identifying the edge source -> target.
@@ -142,6 +185,7 @@ class GraphModel {
 
   /**
    * Adds a GraphNode to the node set.
+   *
    * @param {!GraphNode} node The node to add.
    */
   addNodeIfNew(node) {
@@ -152,6 +196,7 @@ class GraphModel {
 
   /**
    * Retrieves a GraphNode from the node set, if it exists.
+   *
    * @param {string} id The ID of the desired node.
    * @return {?GraphNode} The GraphNode if it exists, otherwise null.
    */
@@ -161,6 +206,7 @@ class GraphModel {
 
   /**
    * Retrieves a GraphEdge from the edge set, if it exists.
+   *
    * @param {string} id The ID of the desired edge.
    * @return {?GraphEdge} The GraphEdge if it exists, otherwise null.
    */
@@ -171,6 +217,7 @@ class GraphModel {
   /**
    * Creates and adds an GraphEdge to the edge set.
    * Also updates the inbound/outbound sets of the edge's nodes.
+   *
    * @param {!GraphNode} sourceNode The node at the start of the edge.
    * @param {!GraphNode} targetNode The node at the end of the edge.
    */
@@ -197,9 +244,11 @@ class GraphModel {
    * @param {!Set<string>} includedNodeSet The nodes included in the filter.
    * @param {number} inboundDepth The maximum inbound distance.
    * @param {number} outboundDepth The maximum outbound distance.
+   * @param {boolean} excludeNoise Whether to exclude noisy nodes (e.g. test
+   *     classes) from the graph.
    * @return {!D3GraphData} The nodes and edges to visualize.
    */
-  getDataForD3(includedNodeSet, inboundDepth, outboundDepth) {
+  getDataForD3(includedNodeSet, inboundDepth, outboundDepth, excludeNoise) {
     // These will be updated throughout the function and returned at the end.
     const /** !Set<!GraphNode> */ resultNodeSet = new Set();
     const /** !Set<!GraphNode> */ resultEdgeSet = new Set();
@@ -226,6 +275,7 @@ class GraphModel {
 
     /**
      * Runs BFS and updates the result (resultNodeSet, resultEdgeSet).
+     *
      * @param {boolean} inboundTraversal Whether inbound edges should be used to
      *     traverse. If false, outbound edges are used.
      * @param {!Set<string>} seenNodes The IDs of nodes already visited in the
@@ -255,6 +305,13 @@ class GraphModel {
                 otherNode.visualizationState.selectedByOutbound = true;
                 otherNode.visualizationState.outboundDepth = curDepth + 1;
               }
+
+              if (excludeNoise) {
+                if (filterRegex.test(otherNode.displayName)) {
+                  continue;
+                }
+              }
+
               nodeQueue.push(otherNode);
               seenNodes.add(otherNode.id);
               resultNodeSet.add(otherNode);
@@ -301,10 +358,11 @@ class GraphModel {
 }
 
 export {
-  GraphNode,
-  PackageNode,
   ClassNode,
+  D3GraphData,
   GraphEdge,
   GraphModel,
-  D3GraphData,
+  GraphNode,
+  PackageNode,
+  TargetNode,
 };

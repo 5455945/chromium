@@ -1,4 +1,4 @@
-// Copyright (c) 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,11 @@
 
 #include <utility>
 
+#include "build/build_config.h"
+#include "content/public/browser/media_stream_request.h"
 #include "content/public/browser/web_contents.h"
-#include "third_party/blink/public/mojom/mediastream/media_stream.mojom-shared.h"
+#include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
+#include "ui/base/mojom/window_open_disposition.mojom.h"
 
 namespace background_loader {
 
@@ -18,13 +21,16 @@ BackgroundLoaderContents::BackgroundLoaderContents(
   // CreateParams::initially_hidden == false, and that we never change the
   // visibility after that.  If we did change it, then background throttling
   // could kill the background offliner while it was running.
-  web_contents_ = content::WebContents::Create(
-      content::WebContents::CreateParams(browser_context_));
+  content::WebContents::CreateParams create_params(browser_context_);
+  // Background, so not user-visible.
+  create_params.is_never_composited = true;
+  web_contents_ = content::WebContents::Create(create_params);
+  web_contents_->SetOwnerLocationForDebug(FROM_HERE);
   web_contents_->SetAudioMuted(true);
   web_contents_->SetDelegate(this);
 }
 
-BackgroundLoaderContents::~BackgroundLoaderContents() {}
+BackgroundLoaderContents::~BackgroundLoaderContents() = default;
 
 void BackgroundLoaderContents::LoadPage(const GURL& url) {
   web_contents_->GetController().LoadURL(
@@ -42,15 +48,13 @@ void BackgroundLoaderContents::SetDelegate(Delegate* delegate) {
   delegate_ = delegate;
 }
 
-bool BackgroundLoaderContents::IsNeverComposited(
-    content::WebContents* web_contents) {
-  // Background, so not user-visible.
-  return true;
-}
-
 void BackgroundLoaderContents::CloseContents(content::WebContents* source) {
   // Do nothing. Other pages should not be able to close a background page.
-  NOTREACHED();
+  //
+  // TODO(crbug.com/374382473): This used to be NOTREACHED() but is reachable as
+  // of 2024-11-20. It should either be made not reachable (and the NOTREACHED()
+  // added back) or document why this should be reachable (as opposed to the
+  // "should not be able to close" in the comment above).
 }
 
 bool BackgroundLoaderContents::ShouldSuppressDialogs(
@@ -59,7 +63,8 @@ bool BackgroundLoaderContents::ShouldSuppressDialogs(
   return true;
 }
 
-bool BackgroundLoaderContents::ShouldFocusPageAfterCrash() {
+bool BackgroundLoaderContents::ShouldFocusPageAfterCrash(
+    content::WebContents* source) {
   // Background page should never be focused.
   return false;
 }
@@ -77,6 +82,7 @@ void BackgroundLoaderContents::CanDownload(
 }
 
 bool BackgroundLoaderContents::IsWebContentsCreationOverridden(
+    content::RenderFrameHost* opener,
     content::SiteInstance* source_site_instance,
     content::mojom::WindowContainerType window_container_type,
     const GURL& opener_url,
@@ -86,21 +92,23 @@ bool BackgroundLoaderContents::IsWebContentsCreationOverridden(
   return true;
 }
 
-void BackgroundLoaderContents::AddNewContents(
+content::WebContents* BackgroundLoaderContents::AddNewContents(
     content::WebContents* source,
     std::unique_ptr<content::WebContents> new_contents,
     const GURL& target_url,
-    WindowOpenDisposition disposition,
-    const gfx::Rect& initial_rect,
+    ui::mojom::WindowOpenDisposition disposition,
+    const blink::mojom::WindowFeatures& window_features,
     bool user_gesture,
     bool* was_blocked) {
   // Pop-ups should be blocked;
   // background pages should not create other contents
-  if (was_blocked != nullptr)
+  if (was_blocked != nullptr) {
     *was_blocked = true;
+  }
+  return nullptr;
 }
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 bool BackgroundLoaderContents::ShouldBlockMediaRequest(const GURL& url) {
   // Background pages should not have access to media.
   return true;
@@ -113,23 +121,16 @@ void BackgroundLoaderContents::RequestMediaAccessPermission(
     content::MediaResponseCallback callback) {
   // No permissions granted, act as if dismissed.
   std::move(callback).Run(
-      blink::MediaStreamDevices(),
+      blink::mojom::StreamDevicesSet(),
       blink::mojom::MediaStreamRequestResult::PERMISSION_DISMISSED,
       std::unique_ptr<content::MediaStreamUI>());
 }
 
 bool BackgroundLoaderContents::CheckMediaAccessPermission(
     content::RenderFrameHost* render_frame_host,
-    const GURL& security_origin,
+    const url::Origin& security_origin,
     blink::mojom::MediaStreamType type) {
   return false;  // No permissions granted.
-}
-
-void BackgroundLoaderContents::AdjustPreviewsStateForNavigation(
-    content::WebContents* web_contents,
-    blink::PreviewsState* previews_state) {
-  if (*previews_state == 0)
-    *previews_state = blink::PreviewsTypes::PREVIEWS_OFF;
 }
 
 bool BackgroundLoaderContents::ShouldAllowLazyLoad() {

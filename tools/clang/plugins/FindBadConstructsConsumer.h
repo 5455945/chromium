@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -31,9 +31,12 @@
 #include "clang/Basic/SourceManager.h"
 #include "clang/Basic/SourceLocation.h"
 
+#include "BlinkDataMemberTypeChecker.h"
 #include "CheckIPCVisitor.h"
+#include "CheckLayoutObjectMethodsVisitor.h"
 #include "ChromeClassTester.h"
 #include "Options.h"
+#include "StackAllocatedChecker.h"
 #include "SuppressibleDiagnosticBuilder.h"
 
 namespace chrome_checker {
@@ -50,6 +53,8 @@ class FindBadConstructsConsumer
 
   // RecursiveASTVisitor:
   bool TraverseDecl(clang::Decl* decl);
+  bool VisitCXXConstructExpr(clang::CXXConstructExpr* expr);
+  bool VisitCXXRecordDecl(clang::CXXRecordDecl* cxx_record_decl);
   bool VisitEnumDecl(clang::EnumDecl* enum_decl);
   bool VisitTagDecl(clang::TagDecl* tag_decl);
   bool VisitVarDecl(clang::VarDecl* var_decl);
@@ -61,12 +66,19 @@ class FindBadConstructsConsumer
                         clang::SourceLocation record_location,
                         clang::CXXRecordDecl* record) override;
 
+  void CheckStdRangesPipeOperator(clang::CallExpr* call_expr);
+  // Returns false if CheckStdRangesPipeOperator() can't report anything in
+  // this translation unit.
+  bool MayCallStdRangesPipeOperator(clang::ASTContext& context);
+
  private:
   // The type of problematic ref-counting pattern that was encountered.
   enum RefcountIssue { None, ImplicitDestructor, PublicDestructor };
 
   void CheckCtorDtorWeight(clang::SourceLocation record_location,
                            clang::CXXRecordDecl* record);
+
+  bool IsRecursivelyAggregate(clang::CXXRecordDecl* record);
 
   // Returns a diagnostic builder that only emits the diagnostic if the spelling
   // location (the actual characters that make up the token) is not in an
@@ -83,10 +95,14 @@ class FindBadConstructsConsumer
   void CheckVirtualSpecifiers(const clang::CXXMethodDecl* method);
   void CheckVirtualBodies(const clang::CXXMethodDecl* method);
 
-  void CountType(const clang::Type* type,
-                 int* trivial_member,
-                 int* non_trivial_member,
-                 int* templated_non_trivial_member);
+  enum class TypeClassification {
+    kTrivial,
+    kNonTrivial,
+    kTrivialTemplate,
+    kNonTrivialTemplate,
+    kNonTrivialExternTemplate
+  };
+  TypeClassification ClassifyType(const clang::Type* type);
 
   static RefcountIssue CheckRecordForRefcountIssue(
       const clang::CXXRecordDecl* record,
@@ -104,7 +120,11 @@ class FindBadConstructsConsumer
   void CheckWeakPtrFactoryMembers(clang::SourceLocation record_location,
                                   clang::CXXRecordDecl* record);
   void CheckEnumMaxValue(clang::EnumDecl* decl);
-  void CheckVarDecl(clang::VarDecl* decl);
+  void CheckDeducedAutoPointer(clang::VarDecl* decl);
+  void CheckConstructingSpanFromStringLiteral(
+      clang::CXXConstructorDecl* ctor_decl,
+      llvm::ArrayRef<const clang::Expr*> args,
+      clang::SourceLocation loc);
 
   void ParseFunctionTemplates(clang::TranslationUnitDecl* decl);
 
@@ -129,8 +149,14 @@ class FindBadConstructsConsumer
   unsigned diag_note_implicit_dtor_;
   unsigned diag_note_public_dtor_;
   unsigned diag_note_protected_non_virtual_dtor_;
+  unsigned diag_span_from_string_literal_;
+  unsigned diag_note_span_from_string_literal1_;
+  unsigned diag_std_ranges_pipe_operator_;
 
+  std::unique_ptr<BlinkDataMemberTypeChecker> blink_data_member_type_checker_;
   std::unique_ptr<CheckIPCVisitor> ipc_visitor_;
+  std::unique_ptr<CheckLayoutObjectMethodsVisitor> layout_visitor_;
+  std::unique_ptr<StackAllocatedChecker> stack_allocated_checker_;
 };
 
 }  // namespace chrome_checker

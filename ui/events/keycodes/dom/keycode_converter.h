@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,16 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
+#include <ostream>
 #include <string>
+#include <string_view>
 
 #include "build/build_config.h"
+#include "ui/events/keycodes/dom/dom_code.h"
 #include "ui/events/keycodes/dom/dom_key.h"
 
-#if defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "ui/events/keycodes/keyboard_codes_posix.h"
 #endif
 
@@ -20,8 +24,6 @@
 // http://www.w3.org/TR/uievents/
 
 namespace ui {
-
-enum class DomCode;
 
 enum class DomKeyLocation { STANDARD, LEFT, RIGHT, NUMPAD };
 
@@ -63,7 +65,7 @@ class KeycodeConverter {
   // Convert a DomCode into a native keycode.
   static int DomCodeToNativeKeycode(DomCode code);
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   // Convert a XKB keycode into a DomCode.
   static DomCode XkbKeycodeToDomCode(uint32_t xkb_keycode);
 
@@ -77,25 +79,29 @@ class KeycodeConverter {
   static int DomCodeToEvdevCode(DomCode code);
 #endif
 
-#if defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS)
   // If |key_code| is one of the keys (plus, minus, brackets, period, comma),
   // that are treated positionally for keyboard shortcuts, this returns the
   // DomCode of that key in the US layout. Any other key returns
   // |DomCode::NONE|.
-  static DomCode MapUSPositionalShortcutKeyToDomCode(KeyboardCode key_code);
+  static DomCode MapUSPositionalShortcutKeyToDomCode(
+      KeyboardCode key_code,
+      DomCode original_dom_code = ui::DomCode::NONE);
 
   // If |code| is one of the keys (plus, minus, brackets, period, comma) that
   // are treated positionally for keyboard shortcuts, this returns the
   // KeyboardCode (aka VKEY) of that key in the US layout. Any other key
   // returns |VKEY_UNKNOWN|
-  static KeyboardCode MapPositionalDomCodeToUSShortcutKey(DomCode code);
+  static KeyboardCode MapPositionalDomCodeToUSShortcutKey(
+      DomCode code,
+      KeyboardCode original_key_code = VKEY_UNKNOWN);
 #endif
 
-  // Convert a UI Events |code| string value into a DomCode.
-  static DomCode CodeStringToDomCode(const std::string& code);
-
-  // Convert a DomCode into a UI Events |code| string value.
-  static const char* DomCodeToCodeString(DomCode dom_code);
+  // Conversion between DOM Code string and DomCode enum values.
+  // Returns the invalid value if the supplied code is not recognized,
+  // or has no mapping.
+  static DomCode CodeStringToDomCode(std::string_view code);
+  static std::string DomCodeToCodeString(DomCode dom_code);
 
   // Return the DomKeyLocation of a DomCode. The DomKeyLocation distinguishes
   // keys with the same meaning, and therefore the same DomKey or non-located
@@ -108,14 +114,18 @@ class KeycodeConverter {
   // - a key name from http://www.w3.org/TR/DOM-Level-3-Events-key/, or
   // - a single Unicode character (represented in UTF-8).
   // Returns DomKey::NONE for other inputs, including |nullptr|.
-  static DomKey KeyStringToDomKey(const std::string& key);
+  static DomKey KeyStringToDomKey(std::string_view key);
 
   // Convert a DomKey into a UI Events |key| string value.
-  // For an invalid DomKey, returns an empty string.
+  // Returns an empty string for invalid DomKey values.
   static std::string DomKeyToKeyString(DomKey dom_key);
 
   // Returns true if the DomKey is a modifier.
   static bool IsDomKeyForModifier(DomKey dom_key);
+
+  // Returns true if the DomKey is a named key, as defined by
+  // https://www.w3.org/TR/uievents-key/#named-key-attribute-value
+  static bool IsDomKeyNamed(DomKey dom_key);
 
   // The following methods relate to USB keycodes.
   // Note that USB keycodes are not part of any web standard.
@@ -124,29 +134,26 @@ class KeycodeConverter {
   // Return the value that identifies an invalid USB keycode.
   static uint32_t InvalidUsbKeycode();
 
-  // Convert a USB keycode into an equivalent platform native keycode.
+  // Conversion between USB keycode and native keycode values.
+  // Returns the invalid value if the supplied code is not recognized,
+  // or has no mapping.
   static int UsbKeycodeToNativeKeycode(uint32_t usb_keycode);
-
-  // Convert a platform native keycode into an equivalent USB keycode.
   static uint32_t NativeKeycodeToUsbKeycode(int native_keycode);
 
-  // Convert a USB keycode into a DomCode.
+  // Conversion between USB keycode and DomCode values.
+  // Returns the "invalid" value if the supplied key code is not
+  // recognized.
   static DomCode UsbKeycodeToDomCode(uint32_t usb_keycode);
-
-  // Convert a DomCode into a USB keycode.
   static uint32_t DomCodeToUsbKeycode(DomCode dom_code);
-
-  // Convert a UI Event |code| string into a USB keycode value.
-  static uint32_t CodeStringToUsbKeycode(const std::string& code);
-
-  // Convert a UI Event |code| string into a native keycode.
-  static int CodeStringToNativeKeycode(const std::string& code);
 
   // Static methods to support testing.
   static size_t NumKeycodeMapEntriesForTest();
   static const KeycodeMapEntry* GetKeycodeMapForTest();
   static const char* DomKeyStringForTest(size_t index);
 };
+
+// Stream operator to print DomKey in tests.
+std::ostream& operator<<(std::ostream& os, const DomKey& dom_key);
 
 }  // namespace ui
 

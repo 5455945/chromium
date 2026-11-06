@@ -1,20 +1,21 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/startup/startup_browser_creator_impl.h"
 
+#include <string_view>
+#include <vector>
+
 #include "base/command_line.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "chrome/browser/prefs/session_startup_pref.h"
 #include "chrome/browser/ui/startup/startup_tab_provider.h"
-#include "chrome/common/chrome_switches.h"
+#include "chrome/common/chrome_version.h"
 #include "chrome/common/url_constants.h"
+#include "components/signin/public/base/signin_switches.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ash/crosapi/browser_util.h"
-#endif
 
 using Creator = StartupBrowserCreatorImpl;
 
@@ -27,12 +28,11 @@ constexpr uint32_t kResetTriggerTabs = 1 << 2;
 constexpr uint32_t kPinnedTabs = 1 << 3;
 constexpr uint32_t kPreferencesTabs = 1 << 4;
 constexpr uint32_t kNewTabPageTabs = 1 << 5;
-constexpr uint32_t kPostCrashTab = 1 << 6;
-constexpr uint32_t kExtensionsCheckupTabs = 1 << 7;
-
-#if defined(OS_WIN)
-constexpr uint32_t kWelcomeBackTab = 1 << 8;
-#endif  // defined(OS_WIN)
+constexpr uint32_t kPostCrashTabs = 1 << 6;
+constexpr uint32_t kCommandLineTabs = 1 << 7;
+#if !BUILDFLAG(IS_ANDROID)
+constexpr uint32_t kNewFeaturesTabs = 1 << 8;
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 class FakeStartupTabProvider : public StartupTabProvider {
  public:
@@ -40,293 +40,431 @@ class FakeStartupTabProvider : public StartupTabProvider {
   // tab and return true. For options not passed, the adder will return false.
   explicit FakeStartupTabProvider(uint32_t options) : options_(options) {}
 
-  StartupTabs GetOnboardingTabs(Profile* profile) const override {
-    StartupTabs tabs;
-    if (options_ & kOnboardingTabs)
-      tabs.emplace_back(GURL("https://onboarding"), false);
-    return tabs;
-  }
-
   StartupTabs GetDistributionFirstRunTabs(
       StartupBrowserCreator* browser_creator) const override {
     StartupTabs tabs;
-    if (options_ & kDistributionFirstRunTabs)
-      tabs.emplace_back(GURL("https://distribution"), false);
+    if (options_ & kDistributionFirstRunTabs) {
+      tabs.emplace_back(GURL("https://distribution"));
+    }
     return tabs;
   }
 
   StartupTabs GetResetTriggerTabs(Profile* profile) const override {
     StartupTabs tabs;
-    if (options_ & kResetTriggerTabs)
-      tabs.emplace_back(GURL("https://reset-trigger"), false);
+    if (options_ & kResetTriggerTabs) {
+      tabs.emplace_back(GURL("https://reset-trigger"));
+    }
     return tabs;
   }
 
   StartupTabs GetPinnedTabs(const base::CommandLine& command_line_,
                             Profile* profile) const override {
     StartupTabs tabs;
-    if (options_ & kPinnedTabs)
-      tabs.emplace_back(GURL("https://pinned"), true);
+    if (options_ & kPinnedTabs) {
+      tabs.emplace_back(GURL("https://pinned"), StartupTab::Type::kPinned);
+    }
     return tabs;
   }
 
   StartupTabs GetPreferencesTabs(const base::CommandLine& command_line_,
                                  Profile* profile) const override {
     StartupTabs tabs;
-    if (options_ & kPreferencesTabs)
-      tabs.emplace_back(GURL("https://prefs"), false);
+    if (options_ & kPreferencesTabs) {
+      tabs.emplace_back(GURL("https://prefs"));
+    }
     return tabs;
   }
 
   StartupTabs GetNewTabPageTabs(const base::CommandLine& command_line_,
                                 Profile* profile) const override {
     StartupTabs tabs;
-    if (options_ & kNewTabPageTabs)
-      tabs.emplace_back(GURL("https://new-tab"), false);
+    if (options_ & kNewTabPageTabs) {
+      tabs.emplace_back(GURL("https://new-tab"));
+    }
     return tabs;
   }
 
-#if defined(OS_WIN)
-  StartupTabs GetWelcomeBackTabs(Profile* profile,
-                                 StartupBrowserCreator* browser_creator,
-                                 bool process_startup) const override {
+  StartupTabs GetCommandLineTabs(const base::CommandLine& command_line,
+                                 const base::FilePath& cur_dir,
+                                 Profile* profile) const override {
     StartupTabs tabs;
-    if (process_startup && (options_ & kWelcomeBackTab))
-      tabs.emplace_back(GURL("https://welcome-back"), false);
-    return tabs;
-  }
-#endif  // defined(OS_WIN)
-
-  StartupTabs GetPostCrashTabs(
-      bool has_incompatible_applications) const override {
-    StartupTabs tabs;
-    if (has_incompatible_applications && (options_ & kPostCrashTab))
-      tabs.emplace_back(GURL("https://incompatible-applications"), false);
+    if (options_ & kCommandLineTabs) {
+      tabs.emplace_back(GURL("https://cmd-line"));
+    }
     return tabs;
   }
 
-  StartupTabs GetExtensionCheckupTabs(
-      bool serve_extensions_page) const override {
+  CommandLineTabsPresent HasCommandLineTabs(
+      const base::CommandLine& command_line,
+      const base::FilePath& cur_dir) const override {
+    return (options_ & kCommandLineTabs) ? CommandLineTabsPresent::kYes
+                                         : CommandLineTabsPresent::kNo;
+  }
+
+#if !BUILDFLAG(IS_ANDROID)
+  StartupTabs GetNewFeaturesTabs(bool whats_new_enabled) const override {
     StartupTabs tabs;
-    if (options_ & kExtensionsCheckupTabs)
-      tabs.emplace_back(GURL("https://extensions/"), false);
+    if (options_ & kNewFeaturesTabs) {
+      tabs.emplace_back(GURL("https://whats-new/"));
+    }
     return tabs;
   }
+#endif  // !BUILDFLAG(IS_ANDROID)
 
  private:
   const uint32_t options_;
 };
 
+// Fake StartupTabProvider that returns identical tabs for both pinned and
+// preference tabs. Used to test handling of duplicate pinned tabs in startup
+// tabs and restored tabs.
+class DuplicateFakeStartupTabProvider : public StartupTabProvider {
+ public:
+  static constexpr std::string_view kDuplicateUrl = "https://duplicate.test";
+  static constexpr std::string_view kDuplicateHost = "duplicate.test";
+
+  DuplicateFakeStartupTabProvider() = default;
+
+  DuplicateFakeStartupTabProvider(DuplicateFakeStartupTabProvider&& other) =
+      default;
+  DuplicateFakeStartupTabProvider& operator=(
+      DuplicateFakeStartupTabProvider&& other) = default;
+
+  ~DuplicateFakeStartupTabProvider() = default;
+
+  StartupTabs GetDistributionFirstRunTabs(
+      StartupBrowserCreator* browser_creator) const override {
+    return StartupTabs();
+  }
+
+  StartupTabs GetResetTriggerTabs(Profile* profile) const override {
+    return StartupTabs();
+  }
+
+  StartupTabs GetPinnedTabs(const base::CommandLine& command_line_,
+                            Profile* profile) const override {
+    StartupTabs tabs;
+    tabs.emplace_back(GURL(kDuplicateUrl), StartupTab::Type::kPinned);
+    return tabs;
+  }
+
+  StartupTabs GetPreferencesTabs(const base::CommandLine& command_line_,
+                                 Profile* profile) const override {
+    StartupTabs tabs;
+    tabs.emplace_back(GURL(kDuplicateUrl));
+    return tabs;
+  }
+
+  StartupTabs GetNewTabPageTabs(const base::CommandLine& command_line_,
+                                Profile* profile) const override {
+    return StartupTabs();
+  }
+
+  StartupTabs GetCommandLineTabs(const base::CommandLine& command_line,
+                                 const base::FilePath& cur_dir,
+                                 Profile* profile) const override {
+    return StartupTabs();
+  }
+
+  CommandLineTabsPresent HasCommandLineTabs(
+      const base::CommandLine& command_line,
+      const base::FilePath& cur_dir) const override {
+    return CommandLineTabsPresent::kNo;
+  }
+
+#if !BUILDFLAG(IS_ANDROID)
+  StartupTabs GetNewFeaturesTabs(bool whats_new_enabled) const override {
+    return StartupTabs();
+  }
+#endif  // !BUILDFLAG(IS_ANDROID)
+};
+
 }  // namespace
+
+// Comparing a `StartupTab` with a string will compare the tab's host with that
+// string. This is used to compare lists more easily via
+// `testing::ElementsAreArray`.
+bool operator==(const StartupTab& actual_tab, std::string_view expected_host) {
+  return actual_tab.url.host() == expected_host;
+}
+
+class StartupBrowserCreatorImplTest : public testing::Test {
+ public:
+  StartupBrowserCreatorImplTest() = default;
+};
 
 // "Standard" case: Tabs specified in onboarding, reset trigger, pinned tabs, or
 // preferences shouldn't interfere with each other. Nothing specified on the
 // command line. Reset trigger always appears first.
-TEST(StartupBrowserCreatorImplTest, DetermineStartupTabs) {
+TEST_F(StartupBrowserCreatorImplTest, DetermineStartupTabs) {
+  using LaunchResult = Creator::LaunchResult;
+
   FakeStartupTabProvider provider(kOnboardingTabs | kResetTriggerTabs |
                                   kPinnedTabs | kPreferencesTabs |
                                   kNewTabPageTabs);
-  Creator impl(base::FilePath(),
-               base::CommandLine(base::CommandLine::NO_PROGRAM),
-               chrome::startup::IS_FIRST_RUN);
+  base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
+  Creator impl(base::FilePath(), command_line,
+               chrome::startup::IsFirstRun::kYes);
 
-  StartupTabs output = impl.DetermineStartupTabs(
-      provider, StartupTabs(), true, false, false, false, true, true, false);
-  ASSERT_EQ(4U, output.size());
-  EXPECT_EQ("reset-trigger", output[0].url.host());
-  EXPECT_EQ("onboarding", output[1].url.host());
-  EXPECT_EQ("prefs", output[2].url.host());
-  EXPECT_EQ("pinned", output[3].url.host());
+  auto output = impl.DetermineStartupTabs(
+      provider, chrome::startup::IsProcessStartup::kYes,
+      /*is_ephemeral_profile=*/false, /*is_post_crash_launch=*/false,
+      /*promotional_tabs_enabled=*/true, /*whats_new_enabled=*/false);
+  EXPECT_EQ(LaunchResult::kNormally, output.launch_result);
+
+  std::vector<std::string_view> expected_tab_hosts;
+  expected_tab_hosts.emplace_back("reset-trigger");
+  expected_tab_hosts.emplace_back("prefs");
+  expected_tab_hosts.emplace_back("pinned");
+  EXPECT_THAT(output.tabs, testing::ElementsAreArray(expected_tab_hosts));
 
   // No extra onboarding content for managed starts.
-  output = impl.DetermineStartupTabs(provider, StartupTabs(), true, false,
-                                     false, false, false, true, false);
-  ASSERT_EQ(3U, output.size());
-  EXPECT_EQ("reset-trigger", output[0].url.host());
-  EXPECT_EQ("prefs", output[1].url.host());
-  EXPECT_EQ("pinned", output[2].url.host());
+  output = impl.DetermineStartupTabs(
+      provider, chrome::startup::IsProcessStartup::kYes,
+      /*is_ephemeral_profile=*/false, /*is_post_crash_launch=*/false,
+      /*promotional_tabs_enabled=*/false, /*whats_new_enabled=*/false);
+  EXPECT_EQ(LaunchResult::kNormally, output.launch_result);
+
+  ASSERT_EQ(3U, output.tabs.size());
+  EXPECT_EQ("reset-trigger", output.tabs[0].url.host());
+  EXPECT_EQ("prefs", output.tabs[1].url.host());
+  EXPECT_EQ("pinned", output.tabs[2].url.host());
 
   // No onboarding if not enabled even if promo is allowed.
-  output = impl.DetermineStartupTabs(provider, StartupTabs(), true, false,
-                                     false, false, true, false, false);
-  ASSERT_EQ(3U, output.size());
-  EXPECT_EQ("reset-trigger", output[0].url.host());
-  EXPECT_EQ("prefs", output[1].url.host());
-  EXPECT_EQ("pinned", output[2].url.host());
+  output = impl.DetermineStartupTabs(
+      provider, chrome::startup::IsProcessStartup::kYes,
+      /*is_ephemeral_profile=*/false, /*is_post_crash_launch=*/false,
+      /*promotional_tabs_enabled=*/true, /*whats_new_enabled=*/false);
+  EXPECT_EQ(LaunchResult::kNormally, output.launch_result);
+
+  ASSERT_EQ(3U, output.tabs.size());
+  EXPECT_EQ("reset-trigger", output.tabs[0].url.host());
+  EXPECT_EQ("prefs", output.tabs[1].url.host());
+  EXPECT_EQ("pinned", output.tabs[2].url.host());
+}
+
+TEST_F(StartupBrowserCreatorImplTest,
+       DetermineStartupTabs_DeduplicatePinnedTabs) {
+  using LaunchResult = Creator::LaunchResult;
+
+  DuplicateFakeStartupTabProvider provider;
+  base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
+  Creator impl(base::FilePath(), command_line,
+               chrome::startup::IsFirstRun::kNo);
+
+  auto output = impl.DetermineStartupTabs(
+      provider, chrome::startup::IsProcessStartup::kYes,
+      /*is_ephemeral_profile=*/false, /*is_post_crash_launch=*/false,
+      /*promotional_tabs_enabled=*/true, /*whats_new_enabled=*/false);
+  EXPECT_EQ(LaunchResult::kNormally, output.launch_result);
+
+  // Duplicated URL is expected to appear only once.
+  ASSERT_EQ(1U, output.tabs.size());
+  EXPECT_EQ(DuplicateFakeStartupTabProvider::kDuplicateHost,
+            output.tabs[0].url.host());
+  EXPECT_EQ(StartupTab::Type::kPinned, output.tabs[0].type);
 }
 
 // Only the New Tab Page should appear in Incognito mode, skipping all the usual
 // tabs.
-TEST(StartupBrowserCreatorImplTest, DetermineStartupTabs_Incognito) {
-  FakeStartupTabProvider provider(kOnboardingTabs | kDistributionFirstRunTabs |
-                                  kResetTriggerTabs | kPinnedTabs |
-                                  kPreferencesTabs | kNewTabPageTabs);
-  Creator impl(base::FilePath(),
-               base::CommandLine(base::CommandLine::NO_PROGRAM),
-               chrome::startup::IS_FIRST_RUN);
+TEST_F(StartupBrowserCreatorImplTest, DetermineStartupTabs_Incognito) {
+  FakeStartupTabProvider provider(
+      kOnboardingTabs | kDistributionFirstRunTabs | kResetTriggerTabs |
+      kPinnedTabs | kPreferencesTabs | kNewTabPageTabs | kNewFeaturesTabs);
+  base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
+  Creator impl(base::FilePath(), command_line,
+               chrome::startup::IsFirstRun::kYes);
 
-  StartupTabs output = impl.DetermineStartupTabs(
-      provider, StartupTabs(), true, true, false, false, true, true, false);
-  ASSERT_EQ(1U, output.size());
+  auto output = impl.DetermineStartupTabs(
+      provider, chrome::startup::IsProcessStartup::kYes,
+      /*is_ephemeral_profile=*/true, /*is_post_crash_launch=*/false,
+      /*promotional_tabs_enabled=*/true, /*whats_new_enabled=*/true);
+  EXPECT_EQ(Creator::LaunchResult::kNormally, output.launch_result);
+  ASSERT_EQ(1U, output.tabs.size());
   // Check for the actual NTP URL, rather than the sentinel returned by the
   // fake, because the Provider is ignored entirely when short-circuited by
   // incognito logic.
-  EXPECT_EQ(GURL(chrome::kChromeUINewTabURL), output[0].url);
+  EXPECT_EQ(chrome::ChromeUINewTabURLAsGURL(), output.tabs[0].url);
 }
 
 // Also only show the New Tab Page after a crash, except if there is a
 // problem application.
-TEST(StartupBrowserCreatorImplTest, DetermineStartupTabs_Crash) {
-  FakeStartupTabProvider provider(
-      kOnboardingTabs | kDistributionFirstRunTabs | kResetTriggerTabs |
-      kPinnedTabs | kPreferencesTabs | kNewTabPageTabs | kPostCrashTab);
-  Creator impl(base::FilePath(),
-               base::CommandLine(base::CommandLine::NO_PROGRAM),
-               chrome::startup::IS_FIRST_RUN);
+TEST_F(StartupBrowserCreatorImplTest, DetermineStartupTabs_Crash) {
+  FakeStartupTabProvider provider(kOnboardingTabs | kDistributionFirstRunTabs |
+                                  kResetTriggerTabs | kPinnedTabs |
+                                  kPreferencesTabs | kNewTabPageTabs |
+                                  kNewFeaturesTabs | kPostCrashTabs);
+  base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
+  Creator impl(base::FilePath(), command_line,
+               chrome::startup::IsFirstRun::kYes);
 
   // Regular Crash Recovery case:
-  StartupTabs output = impl.DetermineStartupTabs(
-      provider, StartupTabs(), true, false, true, false, true, true, false);
-  ASSERT_EQ(1U, output.size());
+  auto output = impl.DetermineStartupTabs(
+      provider, chrome::startup::IsProcessStartup::kYes,
+      /*is_ephemeral_profile=*/false, /*is_post_crash_launch=*/true,
+      /*promotional_tabs_enabled=*/true, /*whats_new_enabled=*/true);
+  EXPECT_EQ(Creator::LaunchResult::kNormally, output.launch_result);
+
+  ASSERT_EQ(1U, output.tabs.size());
   // Check for the actual NTP URL, rather than the sentinel returned by the
   // fake, because the Provider is ignored entirely when short-circuited by
   // the post-crash logic.
-  EXPECT_EQ(GURL(chrome::kChromeUINewTabURL), output[0].url);
-
-  // Crash Recovery case with problem applications:
-  output = impl.DetermineStartupTabs(provider, StartupTabs(), true, false, true,
-                                     true, true, true, false);
-  ASSERT_EQ(1U, output.size());
-  EXPECT_EQ(GURL("https://incompatible-applications"), output[0].url);
+  EXPECT_EQ(chrome::ChromeUINewTabURLAsGURL(), output.tabs[0].url);
 }
 
 // If initial preferences specify content, this should block all other
 // policies. The only exception is command line URLs, tested below.
-TEST(StartupBrowserCreatorImplTest, DetermineStartupTabs_InitialPrefs) {
-  FakeStartupTabProvider provider(kOnboardingTabs | kDistributionFirstRunTabs |
-                                  kResetTriggerTabs | kPinnedTabs |
-                                  kPreferencesTabs | kNewTabPageTabs);
-  Creator impl(base::FilePath(),
-               base::CommandLine(base::CommandLine::NO_PROGRAM),
-               chrome::startup::IS_FIRST_RUN);
+TEST_F(StartupBrowserCreatorImplTest, DetermineStartupTabs_InitialPrefs) {
+  FakeStartupTabProvider provider(
+      kOnboardingTabs | kDistributionFirstRunTabs | kResetTriggerTabs |
+      kPinnedTabs | kPreferencesTabs | kNewTabPageTabs | kNewFeaturesTabs);
+  base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
+  Creator impl(base::FilePath(), command_line,
+               chrome::startup::IsFirstRun::kYes);
 
-  StartupTabs output = impl.DetermineStartupTabs(
-      provider, StartupTabs(), true, false, false, false, true, true, false);
-  ASSERT_EQ(1U, output.size());
-  EXPECT_EQ("distribution", output[0].url.host());
+  auto output = impl.DetermineStartupTabs(
+      provider, chrome::startup::IsProcessStartup::kYes,
+      /*is_ephemeral_profile=*/false, /*is_post_crash_launch=*/false,
+      /*promotional_tabs_enabled=*/true, /*whats_new_enabled=*/true);
+  EXPECT_EQ(Creator::LaunchResult::kNormally, output.launch_result);
+  ASSERT_EQ(1U, output.tabs.size());
+  EXPECT_EQ("distribution", output.tabs[0].url.host());
 }
 
 // URLs specified on the command line should always appear, and should block
 // all other tabs except the Reset Trigger tab.
-TEST(StartupBrowserCreatorImplTest, DetermineStartupTabs_CommandLine) {
+TEST_F(StartupBrowserCreatorImplTest, DetermineStartupTabs_CommandLine) {
+  using LaunchResult = Creator::LaunchResult;
+
   FakeStartupTabProvider provider(kOnboardingTabs | kDistributionFirstRunTabs |
                                   kResetTriggerTabs | kPinnedTabs |
-                                  kPreferencesTabs | kNewTabPageTabs);
-  Creator impl(base::FilePath(),
-               base::CommandLine(base::CommandLine::NO_PROGRAM),
-               chrome::startup::IS_FIRST_RUN);
+                                  kPreferencesTabs | kNewTabPageTabs |
+                                  kNewFeaturesTabs | kCommandLineTabs);
+  base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
+  Creator impl(base::FilePath(), command_line,
+               chrome::startup::IsFirstRun::kYes);
 
-  StartupTabs cmd_line_tabs = {StartupTab(GURL("https://cmd-line"), false)};
+  auto output = impl.DetermineStartupTabs(
+      provider, chrome::startup::IsProcessStartup::kYes,
+      /*is_ephemeral_profile=*/false, /*is_post_crash_launch=*/false,
+      /*promotional_tabs_enabled=*/true, /*whats_new_enabled=*/true);
+  EXPECT_EQ(LaunchResult::kWithGivenUrls, output.launch_result);
 
-  StartupTabs output = impl.DetermineStartupTabs(
-      provider, cmd_line_tabs, true, false, false, false, true, true, false);
-  ASSERT_EQ(3U, output.size());
-  EXPECT_EQ("reset-trigger", output[0].url.host());
-  EXPECT_EQ("cmd-line", output[1].url.host());
-  EXPECT_EQ("pinned", output[2].url.host());
+  ASSERT_EQ(3U, output.tabs.size());
+  EXPECT_EQ("reset-trigger", output.tabs[0].url.host());
+  EXPECT_EQ("cmd-line", output.tabs[1].url.host());
+  EXPECT_EQ("pinned", output.tabs[2].url.host());
 
   // Also test that both incognito and crash recovery don't interfere with
   // command line tabs.
 
   // Incognito
-  output = impl.DetermineStartupTabs(provider, cmd_line_tabs, true, true, false,
-                                     false, true, true, false);
-  ASSERT_EQ(1U, output.size());
-  EXPECT_EQ("cmd-line", output[0].url.host());
+  output = impl.DetermineStartupTabs(
+      provider, chrome::startup::IsProcessStartup::kYes,
+      /*is_ephemeral_profile=*/true, /*is_post_crash_launch=*/false,
+      /*promotional_tabs_enabled=*/true, /*whats_new_enabled=*/true);
+  EXPECT_EQ(LaunchResult::kWithGivenUrls, output.launch_result);
+
+  ASSERT_EQ(1U, output.tabs.size());
+  EXPECT_EQ("cmd-line", output.tabs[0].url.host());
 
   // Crash Recovery
-  output = impl.DetermineStartupTabs(provider, cmd_line_tabs, true, false, true,
-                                     false, true, true, false);
-  ASSERT_EQ(1U, output.size());
-  EXPECT_EQ("cmd-line", output[0].url.host());
+  output = impl.DetermineStartupTabs(
+      provider, chrome::startup::IsProcessStartup::kYes,
+      /*is_ephemeral_profile=*/false, /*is_post_crash_launch=*/true,
+      /*promotional_tabs_enabled=*/true, /*whats_new_enabled=*/true);
+  EXPECT_EQ(LaunchResult::kWithGivenUrls, output.launch_result);
 
-  // Crash Recovery with incompatible applications.
-  output = impl.DetermineStartupTabs(provider, cmd_line_tabs, true, false, true,
-                                     true, true, true, false);
-  ASSERT_EQ(1U, output.size());
-  EXPECT_EQ("cmd-line", output[0].url.host());
+  ASSERT_EQ(1U, output.tabs.size());
+  EXPECT_EQ("cmd-line", output.tabs[0].url.host());
 }
 
 // New Tab Page should appear alongside pinned tabs and the reset trigger, but
 // should be superseded by onboarding tabs and by tabs specified in preferences.
-TEST(StartupBrowserCreatorImplTest, DetermineStartupTabs_NewTabPage) {
+TEST_F(StartupBrowserCreatorImplTest, DetermineStartupTabs_NewTabPage) {
   FakeStartupTabProvider provider_allows_ntp(kPinnedTabs | kResetTriggerTabs |
                                              kNewTabPageTabs);
-  Creator impl(base::FilePath(),
-               base::CommandLine(base::CommandLine::NO_PROGRAM),
-               chrome::startup::IS_FIRST_RUN);
+  base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
+  Creator impl(base::FilePath(), command_line,
+               chrome::startup::IsFirstRun::kYes);
 
-  StartupTabs output =
-      impl.DetermineStartupTabs(provider_allows_ntp, StartupTabs(), true, false,
-                                false, false, true, true, false);
-  ASSERT_EQ(3U, output.size());
-  EXPECT_EQ("reset-trigger", output[0].url.host());
-  EXPECT_EQ("new-tab", output[1].url.host());
-  EXPECT_EQ("pinned", output[2].url.host());
+  auto output = impl.DetermineStartupTabs(
+      provider_allows_ntp, chrome::startup::IsProcessStartup::kYes,
+      /*is_ephemeral_profile=*/false,
+      /*is_post_crash_launch=*/false, /*promotional_tabs_enabled=*/true,
+      /*whats_new_enabled=*/false);
+  EXPECT_EQ(Creator::LaunchResult::kNormally, output.launch_result);
+  ASSERT_EQ(3U, output.tabs.size());
+  EXPECT_EQ("reset-trigger", output.tabs[0].url.host());
+  EXPECT_EQ("new-tab", output.tabs[1].url.host());
+  EXPECT_EQ("pinned", output.tabs[2].url.host());
 }
 
-// If the user's preferences satisfy the conditions, show the extensions page
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+// If the user's preferences satisfy the conditions, show the What's New page
 // upon startup.
-TEST(StartupBrowserCreatorImplTest, DetermineStartupTabs_ExtensionCheckupPage) {
-  FakeStartupTabProvider provider(kNewTabPageTabs | kExtensionsCheckupTabs);
-  Creator impl(base::FilePath(),
-               base::CommandLine(base::CommandLine::NO_PROGRAM),
-               chrome::startup::IS_FIRST_RUN);
+TEST_F(StartupBrowserCreatorImplTest, DetermineStartupTabs_NewFeaturesPage) {
+  using LaunchResult = Creator::LaunchResult;
 
-  StartupTabs output = impl.DetermineStartupTabs(
-      provider, StartupTabs(), true, false, false, false, true, true, true);
-  ASSERT_EQ(2U, output.size());
-  EXPECT_EQ("extensions", output[0].url.host());
-  EXPECT_EQ("new-tab", output[1].url.host());
+  FakeStartupTabProvider provider(kNewTabPageTabs | kNewFeaturesTabs);
+  base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
+  Creator impl(base::FilePath(), command_line,
+               chrome::startup::IsFirstRun::kNo);
+
+  auto output = impl.DetermineStartupTabs(
+      provider, chrome::startup::IsProcessStartup::kYes,
+      /*is_ephemeral_profile=*/false, /*is_post_crash_launch=*/false,
+      /*promotional_tabs_enabled=*/true, /*whats_new_enabled=*/true);
+  EXPECT_EQ(LaunchResult::kNormally, output.launch_result);
+  ASSERT_EQ(2U, output.tabs.size());
+  EXPECT_EQ("whats-new", output.tabs[0].url.host());
+  EXPECT_EQ("new-tab", output.tabs[1].url.host());
+
+  // New features can appear with prefs/pinned.
+  FakeStartupTabProvider provider_with_pinned(
+      kPinnedTabs | kPreferencesTabs | kNewTabPageTabs | kNewFeaturesTabs);
+  output = impl.DetermineStartupTabs(
+      provider_with_pinned, chrome::startup::IsProcessStartup::kYes,
+      /*is_ephemeral_profile=*/false,
+      /*is_post_crash_launch=*/false, /*promotional_tabs_enabled=*/true,
+      /*whats_new_enabled=*/true);
+  EXPECT_EQ(LaunchResult::kNormally, output.launch_result);
+  ASSERT_EQ(3U, output.tabs.size());
+  EXPECT_EQ("whats-new", output.tabs[0].url.host());
+  EXPECT_EQ("prefs", output.tabs[1].url.host());
+  EXPECT_EQ("pinned", output.tabs[2].url.host());
+
+  // Onboarding overrides What's New.
+  base::CommandLine first_run_command_line(base::CommandLine::NO_PROGRAM);
+  Creator first_run_impl(base::FilePath(), first_run_command_line,
+                         chrome::startup::IsFirstRun::kYes);
+  FakeStartupTabProvider provider_with_onboarding(
+      kOnboardingTabs | kNewTabPageTabs | kNewFeaturesTabs);
+  output = first_run_impl.DetermineStartupTabs(
+      provider_with_onboarding, chrome::startup::IsProcessStartup::kYes,
+      /*is_ephemeral_profile=*/false,
+      /*is_post_crash_launch=*/false, /*promotional_tabs_enabled=*/true,
+      /*whats_new_enabled=*/true);
+  EXPECT_EQ(LaunchResult::kNormally, output.launch_result);
+
+  std::vector<std::string_view> expected_tab_hosts;
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  expected_tab_hosts.emplace_back("new-tab");
+#else
+  // Onboarding is not supported and has no effect.
+  expected_tab_hosts.emplace_back("whats-new");
+  expected_tab_hosts.emplace_back("new-tab");
+#endif
+  EXPECT_THAT(output.tabs, testing::ElementsAreArray(expected_tab_hosts));
 }
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
-#if defined(OS_WIN)
-// The welcome back page should appear before any other session restore tabs.
-TEST(StartupBrowserCreatorImplTest, DetermineStartupTabs_WelcomeBackPage) {
-  FakeStartupTabProvider provider_allows_ntp(kPinnedTabs | kPreferencesTabs |
-                                             kWelcomeBackTab);
-  Creator impl(base::FilePath(),
-               base::CommandLine(base::CommandLine::NO_PROGRAM),
-               chrome::startup::IS_FIRST_RUN);
-
-  StartupTabs output =
-      impl.DetermineStartupTabs(provider_allows_ntp, StartupTabs(), true, false,
-                                false, false, true, true, false);
-  ASSERT_EQ(3U, output.size());
-  EXPECT_EQ("welcome-back", output[0].url.host());
-  EXPECT_EQ("prefs", output[1].url.host());
-  EXPECT_EQ("pinned", output[2].url.host());
-
-  // No welcome back for non-startup opens.
-  output = impl.DetermineStartupTabs(provider_allows_ntp, StartupTabs(), false,
-                                     false, false, false, true, true, false);
-  ASSERT_EQ(2U, output.size());
-  EXPECT_EQ("prefs", output[0].url.host());
-  EXPECT_EQ("pinned", output[1].url.host());
-
-  // No welcome back for managed starts even if first run.
-  output = impl.DetermineStartupTabs(provider_allows_ntp, StartupTabs(), true,
-                                     false, false, false, false, true, false);
-  ASSERT_EQ(2U, output.size());
-  EXPECT_EQ("prefs", output[0].url.host());
-  EXPECT_EQ("pinned", output[1].url.host());
-}
-#endif  // defined(OS_WIN)
-
-TEST(StartupBrowserCreatorImplTest, DetermineBrowserOpenBehavior_Startup) {
+TEST_F(StartupBrowserCreatorImplTest, DetermineBrowserOpenBehavior_Startup) {
   SessionStartupPref pref_default(SessionStartupPref::Type::DEFAULT);
   SessionStartupPref pref_last(SessionStartupPref::Type::LAST);
   SessionStartupPref pref_urls(SessionStartupPref::Type::URLS);
+  SessionStartupPref pref_last_and_urls(
+      SessionStartupPref::Type::LAST_AND_URLS);
 
   // The most typical case: startup, not recovering from a crash, no switches.
   // Test each pref with and without command-line tabs.
@@ -353,12 +491,24 @@ TEST(StartupBrowserCreatorImplTest, DetermineBrowserOpenBehavior_Startup) {
   output = Creator::DetermineBrowserOpenBehavior(
       pref_last, Creator::PROCESS_STARTUP | Creator::HAS_CMD_LINE_TABS);
   EXPECT_EQ(Creator::BrowserOpenBehavior::SYNCHRONOUS_RESTORE, output);
+
+  output = Creator::DetermineBrowserOpenBehavior(pref_last_and_urls,
+                                                 Creator::PROCESS_STARTUP);
+  EXPECT_EQ(Creator::BrowserOpenBehavior::SYNCHRONOUS_RESTORE, output);
+
+  output = Creator::DetermineBrowserOpenBehavior(
+      pref_last_and_urls,
+      Creator::PROCESS_STARTUP | Creator::HAS_CMD_LINE_TABS);
+  EXPECT_EQ(Creator::BrowserOpenBehavior::SYNCHRONOUS_RESTORE, output);
 }
 
-TEST(StartupBrowserCreatorImplTest, DetermineBrowserOpenBehavior_CmdLineTabs) {
+TEST_F(StartupBrowserCreatorImplTest,
+       DetermineBrowserOpenBehavior_CmdLineTabs) {
   SessionStartupPref pref_default(SessionStartupPref::Type::DEFAULT);
   SessionStartupPref pref_last(SessionStartupPref::Type::LAST);
   SessionStartupPref pref_urls(SessionStartupPref::Type::URLS);
+  SessionStartupPref pref_last_and_urls(
+      SessionStartupPref::Type::LAST_AND_URLS);
 
   // Command line tabs after startup should prompt use of existing window,
   // regardless of pref.
@@ -374,13 +524,17 @@ TEST(StartupBrowserCreatorImplTest, DetermineBrowserOpenBehavior_CmdLineTabs) {
                                                  Creator::HAS_CMD_LINE_TABS);
   EXPECT_EQ(Creator::BrowserOpenBehavior::USE_EXISTING, output);
 
+  output = Creator::DetermineBrowserOpenBehavior(pref_last_and_urls,
+                                                 Creator::HAS_CMD_LINE_TABS);
+  EXPECT_EQ(Creator::BrowserOpenBehavior::USE_EXISTING, output);
+
   // Exception: this can be overridden by passing a switch.
   output = Creator::DetermineBrowserOpenBehavior(
       pref_urls, Creator::HAS_NEW_WINDOW_SWITCH | Creator::HAS_CMD_LINE_TABS);
   EXPECT_EQ(Creator::BrowserOpenBehavior::NEW, output);
 }
 
-TEST(StartupBrowserCreatorImplTest, DetermineBrowserOpenBehavior_PostCrash) {
+TEST_F(StartupBrowserCreatorImplTest, DetermineBrowserOpenBehavior_PostCrash) {
   SessionStartupPref pref_last(SessionStartupPref::Type::LAST);
 
   // Launching after crash should block session restore.
@@ -389,10 +543,12 @@ TEST(StartupBrowserCreatorImplTest, DetermineBrowserOpenBehavior_PostCrash) {
   EXPECT_EQ(Creator::BrowserOpenBehavior::NEW, output);
 }
 
-TEST(StartupBrowserCreatorImplTest, DetermineBrowserOpenBehavior_NotStartup) {
+TEST_F(StartupBrowserCreatorImplTest, DetermineBrowserOpenBehavior_NotStartup) {
   SessionStartupPref pref_default(SessionStartupPref::Type::DEFAULT);
   SessionStartupPref pref_last(SessionStartupPref::Type::LAST);
   SessionStartupPref pref_urls(SessionStartupPref::Type::URLS);
+  SessionStartupPref pref_last_and_urls(
+      SessionStartupPref::Type::LAST_AND_URLS);
 
   // Launch after startup without command-line tabs should always create a new
   // window.
@@ -405,30 +561,17 @@ TEST(StartupBrowserCreatorImplTest, DetermineBrowserOpenBehavior_NotStartup) {
 
   output = Creator::DetermineBrowserOpenBehavior(pref_urls, 0);
   EXPECT_EQ(Creator::BrowserOpenBehavior::NEW, output);
+
+  output = Creator::DetermineBrowserOpenBehavior(pref_last_and_urls, 0);
+  EXPECT_EQ(Creator::BrowserOpenBehavior::NEW, output);
 }
 
-TEST(StartupBrowserCreatorImplTest, ShouldLaunch) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  // Forcibly set ash-chrome as the primary browser.
-  // This is the current default behavior.
-  crosapi::browser_util::SetLacrosPrimaryBrowserForTest(false);
-#endif
-
-  EXPECT_TRUE(StartupBrowserCreatorImpl::ShouldLaunch(
-      base::CommandLine(base::CommandLine::NO_PROGRAM)));
-  {
-    base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
-    command_line.AppendSwitch(switches::kNoStartupWindow);
-    EXPECT_FALSE(StartupBrowserCreatorImpl::ShouldLaunch(command_line));
-  }
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  // Check what happens if lacros-chrome becomes the primary browser.
-  crosapi::browser_util::SetLacrosPrimaryBrowserForTest(true);
-  EXPECT_FALSE(StartupBrowserCreatorImpl::ShouldLaunch(
-      base::CommandLine(base::CommandLine::NO_PROGRAM)));
-
-  // Restore the global testing set up.
-  crosapi::browser_util::SetLacrosPrimaryBrowserForTest(absl::nullopt);
-#endif
+TEST_F(StartupBrowserCreatorImplTest, DetermineNonMilestoneUpdate) {
+  EXPECT_EQ(false, Creator::IsNonMilestoneUpdate("", "140.0.7297.0"));
+  EXPECT_EQ(false,
+            Creator::IsNonMilestoneUpdate("140.0.7297.0", "140.0.7297.0"));
+  EXPECT_EQ(false,
+            Creator::IsNonMilestoneUpdate("140.0.7297.0", "141.0.7327.0"));
+  EXPECT_EQ(true,
+            Creator::IsNonMilestoneUpdate("140.0.7297.0", "140.0.7297.1"));
 }

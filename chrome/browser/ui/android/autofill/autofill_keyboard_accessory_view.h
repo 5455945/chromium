@@ -1,75 +1,63 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2024 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_ANDROID_AUTOFILL_AUTOFILL_KEYBOARD_ACCESSORY_VIEW_H_
 #define CHROME_BROWSER_UI_ANDROID_AUTOFILL_AUTOFILL_KEYBOARD_ACCESSORY_VIEW_H_
 
-#include <jni.h>
-#include <stddef.h>
+#include <memory>
+#include <string>
 #include <vector>
 
-#include "base/android/scoped_java_ref.h"
-#include "base/callback.h"
-#include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "chrome/browser/autofill/autofill_keyboard_accessory_adapter.h"
-#include "chrome/browser/ui/autofill/autofill_popup_view.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/weak_ptr.h"
+#include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 
 namespace autofill {
 
-class AutofillPopupController;
+class AutofillKeyboardAccessoryController;
 
-// A suggestion view that acts as an alternative to the field-attached popup
-// window. This view appears above the keyboard and spans the width of the
-// screen, condensing rather than overlaying the content area.
-class AutofillKeyboardAccessoryView
-    : public AutofillKeyboardAccessoryAdapter::AccessoryView {
+// The interface that the native view for the Keyboard Accessory implements.
+class AutofillKeyboardAccessoryView {
  public:
-  explicit AutofillKeyboardAccessoryView(AutofillPopupController* controller);
-  ~AutofillKeyboardAccessoryView() override;
+  // Creates an `AutofillKeyboardAccessoryView`. Returns `nullptr` if the
+  // initialization is unsuccessful.
+  static std::unique_ptr<AutofillKeyboardAccessoryView> Create(
+      base::WeakPtr<AutofillKeyboardAccessoryController> controller);
 
-  // Implementation of AutofillKeyboardAccessoryAdapter::AccessoryView.
-  bool Initialize() override;
-  void Hide() override;
-  void Show() override;
-  void ConfirmDeletion(const std::u16string& confirmation_title,
-                       const std::u16string& confirmation_body,
-                       base::OnceClosure confirm_deletion) override;
+  virtual ~AutofillKeyboardAccessoryView() = default;
 
-  // --------------------------------------------------------------------------
-  // Methods called from Java via JNI
-  // --------------------------------------------------------------------------
+  // Initializes the Java-side of this bridge. Returns true after a successful
+  // creation and false otherwise.
+  virtual bool Initialize() = 0;
 
-  // Called when an autofill item was selected.
-  void SuggestionSelected(JNIEnv* env,
-                          const base::android::JavaParamRef<jobject>& obj,
-                          jint list_index);
+  // Requests to dismiss this view.
+  virtual void Hide() = 0;
 
-  // Called when the deletion of an autofill item was requested.
-  void DeletionRequested(JNIEnv* env,
-                         const base::android::JavaParamRef<jobject>& obj,
-                         jint list_index);
+  // Requests to show this view with the data provided by the controller.
+  virtual void Show() = 0;
 
-  // Called when the deletion of an autofill item was confirmed.
-  void DeletionConfirmed(JNIEnv* env,
-                         const base::android::JavaParamRef<jobject>& obj);
+  // Ask to confirm a deletion. Triggers the callback upon the user confirming
+  // or declining the deletion. The deletion callback parameter specifies
+  // whether the deletion was confirmed or declined.
+  virtual void ConfirmDeletion(
+      const std::u16string& confirmation_title,
+      const std::u16string& confirmation_body,
+      const std::u16string& confirmation_body_link,
+      const std::u16string& confirm_button_text,
+      base::OnceCallback<void(bool)> deletion_callback) = 0;
 
-  // Called when this view was dismissed.
-  void ViewDismissed(JNIEnv* env,
-                     const base::android::JavaParamRef<jobject>& obj);
-
- private:
-  // Weak reference to owner of this class. Always outlives this view.
-  AutofillPopupController* controller_;
-
-  // Call to confirm a requested deletion.
-  base::OnceClosure confirm_deletion_;
-
-  // The corresponding java object.
-  base::android::ScopedJavaGlobalRef<jobject> java_object_;
-
-  DISALLOW_COPY_AND_ASSIGN(AutofillKeyboardAccessoryView);
+  // Shows the Autofill AI suggestion details dialog. Triggers
+  // `suppression_callback` with true if the user confirmed suppression
+  // ("Remove from Chrome"), or false if dismissed ("Got it").
+  virtual void ShowAutofillAiSuggestionDetails(
+      const std::u16string& title,
+      const std::u16string& body,
+      const std::u16string& confirm_button_text,
+      const std::u16string& primary_button_text,
+      std::vector<EntityInstance::PersonalContextRecordTypePayload::Source>
+          sources,
+      base::OnceCallback<void(bool)> suppression_callback) = 0;
 };
 
 }  // namespace autofill

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "base/containers/flat_map.h"
 #include "sandbox/win/src/crosscall_server.h"
 #include "sandbox/win/src/interception.h"
 #include "sandbox/win/src/ipc_tags.h"
@@ -19,33 +19,38 @@ namespace sandbox {
 // dispatchers.
 class TopLevelDispatcher : public Dispatcher {
  public:
-  // |policy| must outlive this class.
+  // `policy` must outlive this class, and be fully Configured.
   explicit TopLevelDispatcher(PolicyBase* policy);
+
+  TopLevelDispatcher(const TopLevelDispatcher&) = delete;
+  TopLevelDispatcher& operator=(const TopLevelDispatcher&) = delete;
+
   ~TopLevelDispatcher() override;
 
-  Dispatcher* OnMessageReady(IPCParams* ipc,
+  Dispatcher* OnMessageReady(IpcTag ipc_tag,
+                             const IPCParamTypes& types,
                              CallbackGeneric* callback) override;
   bool SetupService(InterceptionManager* manager, IpcTag service) override;
 
  private:
+  friend class PolicyDiagnostic;
+
   // Test IPC provider.
-  bool Ping(IPCInfo* ipc, void* cookie);
+  bool Ping1(IPCInfo* ipc, uint32_t cookie);
+  bool Ping2(IPCInfo* ipc, CountedBuffer* io_buffer);
 
   // Returns a dispatcher from ipc_targets_.
   Dispatcher* GetDispatcher(IpcTag ipc_tag);
+  // Helper that reports the set of IPCs this top level dispatcher can service.
+  std::vector<IpcTag> ipc_targets();
 
-  PolicyBase* policy_;
+  // Dispatchers below are only created if they are needed.
   std::unique_ptr<Dispatcher> filesystem_dispatcher_;
-  std::unique_ptr<Dispatcher> named_pipe_dispatcher_;
   std::unique_ptr<Dispatcher> thread_process_dispatcher_;
-  std::unique_ptr<Dispatcher> sync_dispatcher_;
-  std::unique_ptr<Dispatcher> registry_dispatcher_;
   std::unique_ptr<Dispatcher> handle_dispatcher_;
   std::unique_ptr<Dispatcher> process_mitigations_win32k_dispatcher_;
   std::unique_ptr<Dispatcher> signed_dispatcher_;
-  Dispatcher* ipc_targets_[kMaxIpcTag];
-
-  DISALLOW_COPY_AND_ASSIGN(TopLevelDispatcher);
+  base::flat_map<IpcTag, Dispatcher*> ipc_targets_;
 };
 
 }  // namespace sandbox

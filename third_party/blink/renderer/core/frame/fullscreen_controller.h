@@ -31,11 +31,13 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_FULLSCREEN_CONTROLLER_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_FULLSCREEN_CONTROLLER_H_
 
+#include <memory>
+
+#include "base/memory/raw_ptr.h"
+#include "cc/trees/layer_tree_host.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/platform/geometry/float_point.h"
-#include "third_party/blink/renderer/platform/geometry/int_size.h"
 #include "third_party/blink/renderer/platform/graphics/color.h"
-#include "third_party/blink/renderer/platform/heap/heap_allocator.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_linked_hash_set.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
@@ -70,6 +72,11 @@ class CORE_EXPORT FullscreenController {
   void DidEnterFullscreen();
   void DidExitFullscreen();
 
+  // Called when a pending fullscreen request was not granted by the browser
+  // (e.g. if an entry and exit coalesced while visual property updates were
+  // being throttled). Rejects any pending request and resets state to kInitial.
+  void DidFailToEnterFullscreen();
+
   // Called by Fullscreen (via ChromeClient) to notify that the fullscreen
   // element has changed.
   void FullscreenElementChanged(Element* old_element,
@@ -89,7 +96,7 @@ class CORE_EXPORT FullscreenController {
 
   void EnterFullscreenCallback(bool granted);
 
-  WebViewImpl* web_view_base_;
+  raw_ptr<WebViewImpl, UnprotectedInRelease | DanglingUntriaged> web_view_base_;
 
   // State is used to avoid unnecessary enter/exit requests.
   enum class State {
@@ -98,11 +105,32 @@ class CORE_EXPORT FullscreenController {
     kFullscreen,
     kChangingFullscreenDisplays,
     kExitingFullscreen,
+    // Fullscreen exit is in flight to the browser, and a new EnterFullscreen
+    // request has been sent before the browser acknowledged the exit.
+    kReenteringFullscreen,
   };
   State state_ = State::kInitial;
 
-  using PendingFullscreenSet = HeapLinkedHashSet<WeakMember<LocalFrame>>;
+  // Returns true if an EnterFullscreen request is currently in flight to the
+  // browser.
+  bool IsEnteringFullscreen() const {
+    return state_ == State::kEnteringFullscreen ||
+           state_ == State::kChangingFullscreenDisplays ||
+           state_ == State::kReenteringFullscreen;
+  }
+
+  // Returns true if fullscreen has been entered and not yet exited by the
+  // browser (including while an exit or exit+re-enter is in flight).
+  bool IsFullscreenOrExiting() const {
+    return state_ == State::kFullscreen ||
+           state_ == State::kExitingFullscreen ||
+           state_ == State::kReenteringFullscreen;
+  }
+
+  using PendingFullscreenSet = GCedHeapLinkedHashSet<WeakMember<LocalFrame>>;
   Persistent<PendingFullscreenSet> pending_frames_;
+
+  std::unique_ptr<cc::ScopedRequestHighFramerate> high_framerate_request_;
 };
 
 }  // namespace blink

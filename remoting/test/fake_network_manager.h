@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,21 +14,22 @@ namespace remoting {
 
 // FakeNetworkManager always returns one interface with the IP address
 // specified in the constructor.
-class FakeNetworkManager : public rtc::NetworkManager {
+class FakeNetworkManager : public webrtc::NetworkManager {
  public:
-  explicit FakeNetworkManager(const rtc::IPAddress& address);
+  explicit FakeNetworkManager(const webrtc::IPAddress& address);
   ~FakeNetworkManager() override;
 
-  // rtc::NetworkManager interface.
+  // webrtc::NetworkManager interface.
   void StartUpdating() override;
   void StopUpdating() override;
-  void GetNetworks(NetworkList* networks) const override;
+  std::vector<const webrtc::Network*> GetNetworks() const override;
+  std::vector<const webrtc::Network*> GetAnyAddressNetworks() override;
 
  protected:
   void SendNetworksChangedSignal();
 
   bool started_;
-  std::unique_ptr<rtc::Network> network_;
+  std::unique_ptr<webrtc::Network> network_;
 
   base::WeakPtrFactory<FakeNetworkManager> weak_factory_{this};
 };

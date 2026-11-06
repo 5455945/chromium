@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,14 +9,14 @@
 
 #include "base/feature_list.h"
 #include "base/memory/ptr_util.h"
-#include "base/task/post_task.h"
+#include "base/notreached.h"
+#include "base/observer_list.h"
 #include "base/task/thread_pool.h"
-#include "base/task_runner_util.h"
 #include "build/build_config.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "chrome/browser/performance_monitor/metric_evaluator_helper_win.h"
-#elif defined(OS_POSIX)
+#elif BUILDFLAG(IS_POSIX)
 #include "chrome/browser/performance_monitor/metric_evaluator_helper_posix.h"
 #endif
 
@@ -31,8 +31,7 @@ using MetricRefreshFrequencies =
 SystemMonitor* g_system_metrics_monitor = nullptr;
 
 // The default interval at which the metrics are refreshed.
-constexpr base::TimeDelta kDefaultRefreshInterval =
-    base::TimeDelta::FromSeconds(2);
+constexpr base::TimeDelta kDefaultRefreshInterval = base::Seconds(2);
 
 }  // namespace
 
@@ -45,25 +44,25 @@ SystemMonitor::SystemMonitor(
           metric_evaluators_helper.release(),
           base::OnTaskRunnerDeleter(blocking_task_runner_)),
       metric_evaluators_metadata_(CreateMetricMetadataArray()) {
-  DCHECK(!g_system_metrics_monitor);
+  CHECK(!g_system_metrics_monitor, base::NotFatalUntil::M162);
   g_system_metrics_monitor = this;
 }
 
 SystemMonitor::~SystemMonitor() {
-  DCHECK_EQ(this, g_system_metrics_monitor);
+  CHECK_EQ(this, g_system_metrics_monitor, base::NotFatalUntil::M162);
   g_system_metrics_monitor = nullptr;
 }
 
 // static
 std::unique_ptr<SystemMonitor> SystemMonitor::Create() {
-  DCHECK(!g_system_metrics_monitor);
+  CHECK(!g_system_metrics_monitor, base::NotFatalUntil::M162);
   return base::WrapUnique(new SystemMonitor(CreateMetricEvaluatorsHelper()));
 }
 
 // static
 std::unique_ptr<SystemMonitor> SystemMonitor::CreateForTesting(
     std::unique_ptr<MetricEvaluatorsHelper> helper) {
-  DCHECK(!g_system_metrics_monitor);
+  CHECK(!g_system_metrics_monitor, base::NotFatalUntil::M162);
   return base::WrapUnique(new SystemMonitor(std::move(helper)));
 }
 
@@ -207,8 +206,8 @@ void SystemMonitor::UpdateObservedMetrics() {
 
 void SystemMonitor::RefreshCallback() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  base::PostTaskAndReplyWithResult(
-      blocking_task_runner_.get(), FROM_HERE,
+  blocking_task_runner_->PostTaskAndReplyWithResult(
+      FROM_HERE,
       base::BindOnce(&SystemMonitor::EvaluateMetrics, GetMetricsToEvaluate()),
       base::BindOnce(&SystemMonitor::NotifyObservers,
                      weak_factory_.GetWeakPtr()));
@@ -228,7 +227,7 @@ void SystemMonitor::NotifyObservers(SystemMonitor::MetricVector metrics) {
       continue;
     for (auto& observer : observers_) {
       const auto& iter = observer_metrics_.find(&observer);
-      DCHECK(iter != observer_metrics_.end());
+      CHECK(iter != observer_metrics_.end());
       if (metric_evaluators_metadata_[static_cast<size_t>(metric->type())]
               .get_refresh_frequency_field_function(iter->second) !=
           SystemMonitor::SamplingFrequency::kNoSampling) {
@@ -241,14 +240,13 @@ void SystemMonitor::NotifyObservers(SystemMonitor::MetricVector metrics) {
 // static
 std::unique_ptr<MetricEvaluatorsHelper>
 SystemMonitor::CreateMetricEvaluatorsHelper() {
-#if defined(OS_WIN)
-  MetricEvaluatorsHelper* helper = new MetricEvaluatorsHelperWin();
-#elif defined(OS_POSIX)
-  MetricEvaluatorsHelper* helper = new MetricEvaluatorsHelperPosix();
+#if BUILDFLAG(IS_WIN)
+  return base::WrapUnique(new MetricEvaluatorsHelperWin());
+#elif BUILDFLAG(IS_POSIX)
+  return std::make_unique<MetricEvaluatorsHelperPosix>();
 #else
 #error Unsupported platform
 #endif
-  return base::WrapUnique(helper);
 }
 
 SystemMonitor::MetricEvaluator::MetricEvaluator(Type type) : type_(type) {}
@@ -257,7 +255,7 @@ SystemMonitor::MetricEvaluator::~MetricEvaluator() = default;
 template <typename T>
 SystemMonitor::MetricEvaluatorImpl<T>::MetricEvaluatorImpl(
     Type type,
-    base::OnceCallback<absl::optional<T>()> evaluate_function,
+    base::OnceCallback<std::optional<T>()> evaluate_function,
     void (SystemObserver::*notify_function)(ObserverArgType))
     : MetricEvaluator(type),
       evaluate_function_(std::move(evaluate_function)),
@@ -277,17 +275,17 @@ SystemMonitor::MetricMetadata::MetricMetadata(
 template <typename T>
 void SystemMonitor::MetricEvaluatorImpl<T>::NotifyObserver(
     SystemObserver* observer) {
-  DCHECK(value());
+  CHECK(value(), base::NotFatalUntil::M162);
   (observer->*notify_function_)(value().value());
 }
 
 template <typename T>
 void SystemMonitor::MetricEvaluatorImpl<T>::Evaluate() {
-  DCHECK(evaluate_function_);
+  CHECK(evaluate_function_, base::NotFatalUntil::M162);
   value_ = std::move(evaluate_function_).Run();
 }
 
-absl::optional<base::SystemMetrics>
+std::optional<base::SystemMetrics>
 MetricEvaluatorsHelper::GetSystemMetricsStruct() {
   return base::SystemMetrics::Sample();
 }

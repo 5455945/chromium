@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,11 @@ chrome.test.assertFalse(chrome.test.isProcessingUserGesture());
 
 // Note: showNotification() requires SW to be activated first.
 self.onactivate = function(e) {
-  self.registration.showNotification('Hello world',
-      {body: 'Body here'})
+  self.registration.showNotification('Hello world', {body: 'Body here'})
       .then((e) => {
         chrome.test.notifyPass();
-      }).catch((e) => {
+      })
+      .catch((e) => {
         chrome.test.notifyFailure('showNotification failed');
       });
 };

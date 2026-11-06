@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,15 @@
 
 #include <type_traits>
 
-#include "base/cxx17_backports.h"
+#include "base/compiler_specific.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/numerics/checked_math.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/trace_event/trace_event.h"
-#include "build/chromeos_buildflags.h"
-#include "media/gpu/decode_surface_handler.h"
+#include "build/build_config.h"
 #include "media/gpu/macros.h"
-#include "media/gpu/vaapi/va_surface.h"
 #include "media/gpu/vaapi/vaapi_common.h"
+#include "media/gpu/vaapi/vaapi_decode_surface_handler.h"
 #include "media/gpu/vaapi/vaapi_wrapper.h"
 
 namespace media {
@@ -21,7 +22,7 @@ namespace media {
 using DecodeStatus = VP9Decoder::VP9Accelerator::Status;
 
 VP9VaapiVideoDecoderDelegate::VP9VaapiVideoDecoderDelegate(
-    DecodeSurfaceHandler<VASurface>* const vaapi_dec,
+    VaapiDecodeSurfaceHandler* const vaapi_dec,
     scoped_refptr<VaapiWrapper> vaapi_wrapper,
     ProtectedSessionUpdateCB on_protected_session_update_cb,
     CdmContext* cdm_context,
@@ -36,37 +37,26 @@ VP9VaapiVideoDecoderDelegate::~VP9VaapiVideoDecoderDelegate() {
   DCHECK(!picture_params_);
   DCHECK(!slice_params_);
   DCHECK(!crypto_params_);
-  DCHECK(!proc_params_);
   DCHECK(!protected_params_);
 }
 
 scoped_refptr<VP9Picture> VP9VaapiVideoDecoderDelegate::CreateVP9Picture() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  const auto va_surface = vaapi_dec_->CreateSurface();
-  if (!va_surface)
+  auto va_surface_handle = vaapi_dec_->CreateSurface();
+  if (!va_surface_handle) {
     return nullptr;
+  }
 
-  scoped_refptr<VP9Picture> pic = new VaapiVP9Picture(std::move(va_surface));
-  if (!vaapi_dec_->IsScalingDecode())
-    return pic;
-
-  // Setup the scaling buffer.
-  scoped_refptr<VASurface> scaled_surface = vaapi_dec_->CreateDecodeSurface();
-  CHECK(scaled_surface);
-  pic->AsVaapiVP9Picture()->SetDecodeSurface(std::move(scaled_surface));
-  return pic;
+  return base::MakeRefCounted<VaapiVP9Picture>(std::move(va_surface_handle));
 }
 
 DecodeStatus VP9VaapiVideoDecoderDelegate::SubmitDecode(
     scoped_refptr<VP9Picture> pic,
     const Vp9SegmentationParams& seg,
     const Vp9LoopFilterParams& lf,
-    const Vp9ReferenceFrameVector& ref_frames,
-    base::OnceClosure done_cb) {
+    const Vp9ReferenceFrameVector& ref_frames) {
   TRACE_EVENT0("media,gpu", "VP9VaapiVideoDecoderDelegate::SubmitDecode");
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  // |done_cb| should be null as we return false from IsFrameContextRequired().
-  DCHECK(!done_cb);
 
   const Vp9FrameHeader* frame_hdr = pic->frame_hdr.get();
   DCHECK(frame_hdr);
@@ -87,7 +77,7 @@ DecodeStatus VP9VaapiVideoDecoderDelegate::SubmitDecode(
       return DecodeStatus::kFail;
   }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   const DecryptConfig* decrypt_config = pic->decrypt_config();
   if (decrypt_config && !SetDecryptConfig(decrypt_config->Clone()))
     return DecodeStatus::kFail;
@@ -97,7 +87,7 @@ DecodeStatus VP9VaapiVideoDecoderDelegate::SubmitDecode(
   VAEncryptionParameters crypto_param{};
   if (IsEncryptedSession()) {
     const ProtectedSessionState state = SetupDecryptDecode(
-        /*full_sample=*/false, frame_hdr->frame_size, &crypto_param,
+        /*full_sample=*/false, frame_hdr->data.size(), &crypto_param,
         &encryption_segment_info,
         decrypt_config ? decrypt_config->subsamples()
                        : std::vector<SubsampleEntry>());
@@ -117,19 +107,19 @@ DecodeStatus VP9VaapiVideoDecoderDelegate::SubmitDecode(
         return DecodeStatus::kFail;
     }
   }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   pic_param.frame_width = base::checked_cast<uint16_t>(frame_hdr->frame_width);
   pic_param.frame_height =
       base::checked_cast<uint16_t>(frame_hdr->frame_height);
-  CHECK_EQ(kVp9NumRefFrames, base::size(pic_param.reference_frames));
-  for (size_t i = 0; i < base::size(pic_param.reference_frames); ++i) {
+  CHECK_EQ(kVp9NumRefFrames, std::size(pic_param.reference_frames));
+  for (size_t i = 0; i < std::size(pic_param.reference_frames); ++i) {
     auto ref_pic = ref_frames.GetFrame(i);
     if (ref_pic) {
-      pic_param.reference_frames[i] =
-          ref_pic->AsVaapiVP9Picture()->GetVADecodeSurfaceID();
+      UNSAFE_TODO(pic_param.reference_frames[i]) =
+          ref_pic->AsVaapiVP9Picture()->va_surface_id();
     } else {
-      pic_param.reference_frames[i] = VA_INVALID_SURFACE;
+      UNSAFE_TODO(pic_param.reference_frames[i]) = VA_INVALID_SURFACE;
     }
   }
 
@@ -178,16 +168,17 @@ DecodeStatus VP9VaapiVideoDecoderDelegate::SubmitDecode(
   DCHECK((pic_param.profile == 0 && pic_param.bit_depth == 8) ||
          (pic_param.profile == 2 && pic_param.bit_depth == 10));
 
-  slice_param.slice_data_size = frame_hdr->frame_size;
+  slice_param.slice_data_size =
+      base::checked_cast<uint32_t>(frame_hdr->data.size());
   slice_param.slice_data_offset = 0;
   slice_param.slice_data_flag = VA_SLICE_DATA_FLAG_ALL;
 
   static_assert(
-      std::extent<decltype(Vp9SegmentationParams::feature_enabled)>() ==
+      std::tuple_size_v<decltype(Vp9SegmentationParams::feature_enabled)> ==
           std::extent<decltype(slice_param.seg_param)>(),
       "seg_param array of incorrect size");
-  for (size_t i = 0; i < base::size(slice_param.seg_param); ++i) {
-    VASegmentParameterVP9& seg_param = slice_param.seg_param[i];
+  for (size_t i = 0; i < std::size(slice_param.seg_param); ++i) {
+    VASegmentParameterVP9& seg_param = UNSAFE_TODO(slice_param.seg_param[i]);
 #define SEG_TO_SP_SF(a, b) seg_param.segment_flags.fields.a = b
     SEG_TO_SP_SF(
         segment_reference_enabled,
@@ -206,9 +197,8 @@ DecodeStatus VP9VaapiVideoDecoderDelegate::SubmitDecode(
     seg_param.chroma_ac_quant_scale = seg.uv_dequant[i][1];
   }
 
-  // Always re-create |encoded_data| because reusing the buffer causes horrific
-  // artifacts in decoded buffers. TODO(b/169725321): This seems to be a driver
-  // bug, fix it and reuse the buffer.
+  // Create VASliceData buffer |encoded_data| every frame so that decoding can
+  // be more asynchronous than reusing the buffer.
   std::unique_ptr<ScopedVABuffer> encoded_data;
 
   std::vector<std::pair<VABufferID, VaapiWrapper::VABufferDescriptor>> buffers =
@@ -216,8 +206,9 @@ DecodeStatus VP9VaapiVideoDecoderDelegate::SubmitDecode(
         {picture_params_->type(), picture_params_->size(), &pic_param}},
        {slice_params_->id(),
         {slice_params_->type(), slice_params_->size(), &slice_param}}};
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   std::unique_ptr<uint8_t[]> protected_vp9_data;
+  std::string amd_decrypt_params;
   if (IsTranscrypted()) {
     CHECK(decrypt_config);
     CHECK_EQ(decrypt_config->subsamples().size(), 1u);
@@ -228,9 +219,20 @@ DecodeStatus VP9VaapiVideoDecoderDelegate::SubmitDecode(
         return DecodeStatus::kFail;
     }
     DCHECK_EQ(decrypt_config->key_id().length(), protected_params_->size());
+    // For VP9 superframes, the IV may have been incremented, so copy that
+    // back into the decryption parameters. The decryption parameters struct has
+    // a uint32_t for the first parameter, and the second is the 128-bit IV and
+    // then various other fields. Total max structure size is 128 bytes. The
+    // structure definition is in ChromeOS internal code so we do not reference
+    // it directly here.
+    constexpr uint32_t dp_iv_offset = sizeof(uint32_t);
+    amd_decrypt_params = decrypt_config->key_id();
+    UNSAFE_TODO(memcpy(&amd_decrypt_params[dp_iv_offset],
+                       decrypt_config->iv().data(),
+                       DecryptConfig::kDecryptionKeySize));
     buffers.push_back({protected_params_->id(),
                        {protected_params_->type(), protected_params_->size(),
-                        decrypt_config->key_id().data()}});
+                        amd_decrypt_params.data()}});
 
     // For transcrypted VP9 on AMD we need to send the UCH + cypher_bytes from
     // the buffer as the slice data per AMD's instructions.
@@ -248,53 +250,38 @@ DecodeStatus VP9VaapiVideoDecoderDelegate::SubmitDecode(
     protected_vp9_data =
         std::make_unique<uint8_t[]>(protected_data_size.ValueOrDie());
     // Copy the UCH.
-    memcpy(protected_vp9_data.get(), frame_hdr->data,
-           frame_hdr->uncompressed_header_size);
+    UNSAFE_TODO(memcpy(protected_vp9_data.get(), frame_hdr->data.data(),
+                       frame_hdr->uncompressed_header_size));
     // Copy the transcrypted data.
-    memcpy(protected_vp9_data.get() + frame_hdr->uncompressed_header_size,
-           frame_hdr->data + decrypt_config->subsamples()[0].clear_bytes,
-           decrypt_config->subsamples()[0].cypher_bytes);
+    UNSAFE_TODO(memcpy(
+        protected_vp9_data.get() + frame_hdr->uncompressed_header_size,
+        frame_hdr->data.data() + decrypt_config->subsamples()[0].clear_bytes,
+        base::strict_cast<size_t>(
+            decrypt_config->subsamples()[0].cypher_bytes)));
     buffers.push_back({encoded_data->id(),
                        {encoded_data->type(), encoded_data->size(),
                         protected_vp9_data.get()}});
   } else {
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
     encoded_data = vaapi_wrapper_->CreateVABuffer(VASliceDataBufferType,
-                                                  frame_hdr->frame_size);
+                                                  frame_hdr->data.size());
     if (!encoded_data)
       return DecodeStatus::kFail;
     buffers.push_back(
         {encoded_data->id(),
-         {encoded_data->type(), encoded_data->size(), frame_hdr->data}});
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+         {encoded_data->type(), encoded_data->size(), frame_hdr->data.data()}});
+#if BUILDFLAG(IS_CHROMEOS)
   }
   if (uses_crypto) {
     buffers.push_back(
         {crypto_params_->id(),
          {crypto_params_->type(), crypto_params_->size(), &crypto_param}});
   }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   const VaapiVP9Picture* vaapi_pic = pic->AsVaapiVP9Picture();
-  VAProcPipelineParameterBuffer proc_buffer;
-  if (vaapi_dec_->IsScalingDecode()) {
-    if (!proc_params_) {
-      proc_params_ = vaapi_wrapper_->CreateVABuffer(
-          VAProcPipelineParameterBufferType, sizeof(proc_buffer));
-      if (!proc_params_)
-        return DecodeStatus::kFail;
-    }
-    CHECK(gfx::Rect(vaapi_pic->GetDecodeSize()).Contains(pic->visible_rect()));
-    CHECK(FillDecodeScalingIfNeeded(
-        pic->visible_rect(), vaapi_pic->GetVADecodeSurfaceID(),
-        pic->AsVaapiVP9Picture()->va_surface(), &proc_buffer));
-    buffers.push_back(
-        {proc_params_->id(),
-         {proc_params_->type(), proc_params_->size(), &proc_buffer}});
-  }
-
-  bool success = vaapi_wrapper_->MapAndCopyAndExecute(
-      vaapi_pic->GetVADecodeSurfaceID(), buffers);
+  const bool success =
+      vaapi_wrapper_->MapAndCopyAndExecute(vaapi_pic->va_surface_id(), buffers);
   if (!success && NeedsProtectedSessionRecovery())
     return DecodeStatus::kTryAgain;
 
@@ -309,24 +296,11 @@ bool VP9VaapiVideoDecoderDelegate::OutputPicture(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   const VaapiVP9Picture* vaapi_pic = pic->AsVaapiVP9Picture();
-  vaapi_dec_->SurfaceReady(
-      vaapi_pic->va_surface(), vaapi_pic->bitstream_id(),
-      vaapi_dec_->GetOutputVisibleRect(vaapi_pic->visible_rect(),
-                                       vaapi_pic->va_surface()->size()),
-      vaapi_pic->get_colorspace());
+  vaapi_dec_->SurfaceReady(vaapi_pic->va_surface_id(),
+                           vaapi_pic->bitstream_id(), vaapi_pic->visible_rect(),
+                           vaapi_pic->get_colorspace(),
+                           vaapi_pic->dynamic_hdr_metadata());
   return true;
-}
-
-bool VP9VaapiVideoDecoderDelegate::IsFrameContextRequired() const {
-  return false;
-}
-
-bool VP9VaapiVideoDecoderDelegate::GetFrameContext(
-    scoped_refptr<VP9Picture> pic,
-    Vp9FrameContext* frame_ctx) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  NOTIMPLEMENTED() << "Frame context update not supported";
-  return false;
 }
 
 void VP9VaapiVideoDecoderDelegate::OnVAContextDestructionSoon() {
@@ -335,7 +309,6 @@ void VP9VaapiVideoDecoderDelegate::OnVAContextDestructionSoon() {
   picture_params_.reset();
   slice_params_.reset();
   crypto_params_.reset();
-  proc_params_.reset();
   protected_params_.reset();
 }
 

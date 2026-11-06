@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,11 @@
 #include <memory>
 
 #include "base/files/file_path.h"
-#include "base/macros.h"
+#include "chrome/browser/notifications/scheduler/internal/icon_store.h"
+#include "chrome/browser/notifications/scheduler/internal/impression_store.h"
+#include "chrome/browser/notifications/scheduler/internal/notification_store.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/prefs/pref_service.h"
 
 namespace leveldb_proto {
 class ProtoDatabaseProvider;
@@ -18,8 +21,10 @@ class ProtoDatabaseProvider;
 namespace notifications {
 
 class DisplayAgent;
+class FindsAgent;
 class NotificationBackgroundTaskScheduler;
 class NotificationSchedulerClientRegistrar;
+class TipsAgent;
 
 // Creates the notification schedule service with all the embedder level
 // dependencies. This layer is mainly to forbid the embedder to depend on
@@ -29,9 +34,12 @@ std::unique_ptr<KeyedService> CreateNotificationScheduleService(
     std::unique_ptr<NotificationBackgroundTaskScheduler>
         background_task_scheduler,
     std::unique_ptr<DisplayAgent> display_agent,
+    std::unique_ptr<TipsAgent> tips_agent,
+    std::unique_ptr<FindsAgent> finds_agent,
     leveldb_proto::ProtoDatabaseProvider* db_provider,
     const base::FilePath& storage_dir,
-    bool off_the_record);
+    bool off_the_record,
+    PrefService* pref_service);
 
 }  // namespace notifications
 

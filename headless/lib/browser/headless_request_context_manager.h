@@ -1,25 +1,23 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef HEADLESS_LIB_BROWSER_HEADLESS_REQUEST_CONTEXT_MANAGER_H_
 #define HEADLESS_LIB_BROWSER_HEADLESS_REQUEST_CONTEXT_MANAGER_H_
 
+#include <memory>
+#include <string>
+
 #include "base/files/file_path.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
 #include "build/build_config.h"
 #include "content/public/browser/browser_context.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
-#include "mojo/public/cpp/bindings/remote.h"
 #include "services/cert_verifier/public/mojom/cert_verifier_service_factory.mojom-forward.h"
+#include "services/network/public/cpp/cookie_encryption_provider_impl.h"
 #include "services/network/public/mojom/network_context.mojom.h"
-#include "services/network/public/mojom/network_service.mojom.h"
 
-#include <string>
-
-namespace content {
-class ResourceContext;
+namespace os_crypt_async {
+class OSCryptAsync;
 }
 
 namespace headless {
@@ -30,10 +28,17 @@ class HeadlessProxyConfigMonitor;
 class HeadlessRequestContextManager {
  public:
   static std::unique_ptr<HeadlessRequestContextManager> CreateSystemContext(
-      const HeadlessBrowserContextOptions* options);
+      const HeadlessBrowserContextOptions* options,
+      os_crypt_async::OSCryptAsync* os_crypt_async);
 
   HeadlessRequestContextManager(const HeadlessBrowserContextOptions* options,
-                                base::FilePath user_data_path);
+                                base::FilePath user_data_path,
+                                os_crypt_async::OSCryptAsync* os_crypt_async);
+
+  HeadlessRequestContextManager(const HeadlessRequestContextManager&) = delete;
+  HeadlessRequestContextManager& operator=(
+      const HeadlessRequestContextManager&) = delete;
+
   ~HeadlessRequestContextManager();
 
   void ConfigureNetworkContextParams(
@@ -43,10 +48,6 @@ class HeadlessRequestContextManager {
       ::cert_verifier::mojom::CertVerifierCreationParams*
           cert_verifier_creation_params);
 
-  content::ResourceContext* GetResourceContext() {
-    return resource_context_.get();
-  }
-
  private:
   void ConfigureNetworkContextParamsInternal(
       ::network::mojom::NetworkContextParams* network_context_params,
@@ -55,16 +56,17 @@ class HeadlessRequestContextManager {
 
   const bool cookie_encryption_enabled_;
 
+  const raw_ptr<os_crypt_async::OSCryptAsync> os_crypt_async_;
+
   base::FilePath user_data_path_;
+  base::FilePath disk_cache_dir_;
   std::string accept_language_;
   std::string user_agent_;
   std::unique_ptr<net::ProxyConfig> proxy_config_;
   std::unique_ptr<HeadlessProxyConfigMonitor> proxy_config_monitor_;
+  std::unique_ptr<CookieEncryptionProviderImpl> cookie_encryption_provider_;
 
   mojo::PendingRemote<::network::mojom::NetworkContext> system_context_;
-  std::unique_ptr<content::ResourceContext> resource_context_;
-
-  DISALLOW_COPY_AND_ASSIGN(HeadlessRequestContextManager);
 };
 
 }  // namespace headless

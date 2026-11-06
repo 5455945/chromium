@@ -1,12 +1,18 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 
+#include <memory>
+#include <utility>
+
+#include "base/check.h"
+#include "base/command_line.h"
 #include "base/debug/dump_without_crashing.h"
-#include "build/chromeos_buildflags.h"
+#include "base/logging.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
+#include "chrome/browser/apps/app_service/publisher_host_factory.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/profiles/incognito_helpers.h"
 #include "chrome/browser/profiles/profile.h"
@@ -16,12 +22,13 @@
 #include "extensions/browser/extension_prefs_factory.h"
 #include "extensions/browser/extension_registry_factory.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/guest_os/guest_os_registry_service_factory.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
+#include "chrome/browser/ash/system_web_apps/system_web_app_manager_factory.h"
 #include "chrome/browser/notifications/notification_display_service_factory.h"
 #include "extensions/browser/app_window/app_window_registry.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace apps {
 
@@ -39,43 +46,59 @@ bool AppServiceProxyFactory::IsAppServiceAvailableForProfile(Profile* profile) {
   // user's browsing data from incognito to an app. Clients of the App Service
   // should explicitly decide when it is and isn't appropriate to use the
   // associated real profile and pass that to this method.
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // An exception on Chrome OS is the guest profile, which is incognito, but
   // can have apps within it.
-  return (!chromeos::ProfileHelper::IsSigninProfile(profile) &&
-          (!profile->IsOffTheRecord() || profile->IsGuestSession()));
+
+  // Use OTR profile for Guest Session.
+  if (profile->IsGuestSession()) {
+    return profile->IsOffTheRecord();
+  }
+
+  return (!ash::ProfileHelper::IsSigninProfile(profile) &&
+          !profile->IsOffTheRecord());
 #else
   return !profile->IsOffTheRecord();
-#endif
+#endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
 // static
 AppServiceProxy* AppServiceProxyFactory::GetForProfile(Profile* profile) {
-  // TODO(https://crbug.com/1122463): remove this and convert back to a DCHECK
+  // TODO(crbug.com/40146603): remove this and convert back to a DCHECK
   // once we have audited and removed code paths that call here with a profile
   // that doesn't have an App Service.
   if (!IsAppServiceAvailableForProfile(profile)) {
-    DVLOG(1) << "Called AppServiceProxyFactory::GetForProfile() on a profile "
-                "which does not contain an AppServiceProxy. Please check "
-                "whether this is appropriate as you may be leaking information "
-                "out of this profile. Returning the AppServiceProxy attached "
-                "to the parent profile instead.";
+    // See comments in app_service_proxy_factory.h for how to handle profiles
+    // with no AppServiceProxy. As an interim measure, we return the parent
+    // profile in non-guest Incognito profiles.
+    LOG(ERROR) << "Called AppServiceProxyFactory::GetForProfile() on a profile "
+                  "which does not contain an AppServiceProxy";
     // Fail tests that would trigger DumpWithoutCrashing.
-    DCHECK(!base::CommandLine::ForCurrentProcess()->HasSwitch(
-        switches::kTestType));
+    CHECK(
+        !base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kTestType),
+        base::NotFatalUntil::M161);
     base::debug::DumpWithoutCrashing();
   }
 
   AppServiceProxy* proxy = static_cast<AppServiceProxy*>(
       AppServiceProxyFactory::GetInstance()->GetServiceForBrowserContext(
           profile, true /* create */));
-  DCHECK_NE(nullptr, proxy);
+  CHECK_NE(nullptr, proxy, base::NotFatalUntil::M161);
   return proxy;
 }
 
 // static
 AppServiceProxyFactory* AppServiceProxyFactory::GetInstance() {
-  return base::Singleton<AppServiceProxyFactory>::get();
+  static base::NoDestructor<AppServiceProxyFactory> instance;
+  return instance.get();
+}
+
+base::AutoReset<std::unique_ptr<PublisherHostFactory>>
+AppServiceProxyFactory::SetPublisherHostFactory(
+    std::unique_ptr<PublisherHostFactory> publisher_host_factory) {
+  base::AutoReset result(&publisher_host_factory_,
+                         std::move(publisher_host_factory));
+  return result;
 }
 
 AppServiceProxyFactory::AppServiceProxyFactory()
@@ -86,18 +109,26 @@ AppServiceProxyFactory::AppServiceProxyFactory()
   DependsOn(extensions::ExtensionRegistryFactory::GetInstance());
   DependsOn(HostContentSettingsMapFactory::GetInstance());
   DependsOn(web_app::WebAppProviderFactory::GetInstance());
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
+  DependsOn(ash::SystemWebAppManagerFactory::GetInstance());
   DependsOn(guest_os::GuestOsRegistryServiceFactory::GetInstance());
   DependsOn(NotificationDisplayServiceFactory::GetInstance());
   DependsOn(extensions::AppWindowRegistry::Factory::GetInstance());
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
 AppServiceProxyFactory::~AppServiceProxyFactory() = default;
 
-KeyedService* AppServiceProxyFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+AppServiceProxyFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  return new AppServiceProxy(Profile::FromBrowserContext(context));
+  CHECK(publisher_host_factory_)
+      << "PubliserHostFactory is not set. You'll need to call "
+      << "AppServiceProxyFactory::SetPublisherHostFactory to set it up";
+  auto proxy = std::make_unique<AppServiceProxy>(
+      Profile::FromBrowserContext(context), publisher_host_factory_.get());
+  proxy->Initialize();
+  return proxy;
 }
 
 content::BrowserContext* AppServiceProxyFactory::GetBrowserContextToUse(
@@ -107,22 +138,23 @@ content::BrowserContext* AppServiceProxyFactory::GetBrowserContextToUse(
     return nullptr;
   }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  if (chromeos::ProfileHelper::IsSigninProfile(profile)) {
-    return nullptr;
-  }
-
+#if BUILDFLAG(IS_CHROMEOS)
   // We must have a proxy in guest mode to ensure default extension-based apps
   // are served.
   if (profile->IsGuestSession()) {
-    return chrome::GetBrowserContextOwnInstanceInIncognito(context);
+    return profile->IsOffTheRecord()
+               ? GetBrowserContextOwnInstanceInIncognito(context)
+               : nullptr;
   }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+  if (ash::ProfileHelper::IsSigninProfile(profile)) {
+    return nullptr;
+  }
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
-  // TODO(https://crbug.com/1122463): replace this with
+  // TODO(crbug.com/40146603): replace this with
   // BrowserContextKeyedServiceFactory::GetBrowserContextToUse(context) once
   // all non-guest incognito accesses have been removed.
-  return chrome::GetBrowserContextRedirectedInIncognito(context);
+  return GetBrowserContextRedirectedInIncognito(context);
 }
 
 bool AppServiceProxyFactory::ServiceIsCreatedWithBrowserContext() const {

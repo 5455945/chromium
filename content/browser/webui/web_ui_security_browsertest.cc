@@ -1,29 +1,33 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
 #include "base/hash/hash.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/path_service.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/threading/thread_restrictions.h"
-#include "content/browser/child_process_security_policy_impl.h"
+#include "content/browser/process_lock.h"
 #include "content/browser/renderer_host/frame_tree_node.h"
+#include "content/browser/renderer_host/render_frame_host_impl.h"
+#include "content/browser/renderer_host/render_frame_proxy_host.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/browser/webui/web_ui_controller_factory_registry.h"
 #include "content/common/content_navigation_policy.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/site_isolation_policy.h"
 #include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_controller.h"
 #include "content/public/browser/web_ui_data_source.h"
+#include "content/public/browser/webui_config_map.h"
 #include "content/public/common/bindings_policy.h"
 #include "content/public/common/content_paths.h"
+#include "content/public/common/content_switches.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -37,6 +41,8 @@
 #include "content/shell/browser/shell.h"
 #include "content/test/content_browser_test_utils_internal.h"
 #include "net/base/url_util.h"
+#include "third_party/blink/public/mojom/frame/frame.mojom.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
 #include "ui/webui/untrusted_web_ui_browsertest_util.h"
 #include "url/gurl.h"
 
@@ -46,33 +52,39 @@ class WebUISecurityTest : public ContentBrowserTest {
  public:
   WebUISecurityTest() = default;
 
+  WebUISecurityTest(const WebUISecurityTest&) = delete;
+  WebUISecurityTest& operator=(const WebUISecurityTest&) = delete;
+
   TestWebUIControllerFactory* factory() { return &factory_; }
-  ui::TestUntrustedWebUIControllerFactory& untrusted_factory() {
-    return untrusted_factory_;
-  }
 
  private:
   TestWebUIControllerFactory factory_;
   ScopedWebUIControllerFactoryRegistration factory_registration_{&factory_};
-  ui::TestUntrustedWebUIControllerFactory untrusted_factory_;
-  ScopedWebUIControllerFactoryRegistration untrusted_factory_registration_{
-      &untrusted_factory_};
-
-  DISALLOW_COPY_AND_ASSIGN(WebUISecurityTest);
 };
 
-// Verify chrome-untrusted:// have no bindings.
+// Verify chrome-untrusted:// have no bindings and cannot request chrome or file
+// URLs.
 IN_PROC_BROWSER_TEST_F(WebUISecurityTest, UntrustedNoBindings) {
   auto* web_contents = shell()->web_contents();
-  untrusted_factory().add_web_ui_config(
+  WebUIConfigMap::GetInstance().AddUntrustedWebUIConfig(
       std::make_unique<ui::TestUntrustedWebUIConfig>("test-host"));
 
   const GURL untrusted_url(GetChromeUntrustedUIURL("test-host/title1.html"));
   EXPECT_TRUE(NavigateToURL(web_contents, untrusted_url));
 
+  auto process_id =
+      shell()->web_contents()->GetPrimaryMainFrame()->GetProcess()->GetID();
   EXPECT_FALSE(ChildProcessSecurityPolicyImpl::GetInstance()->HasWebUIBindings(
-      shell()->web_contents()->GetMainFrame()->GetProcess()->GetID()));
-  EXPECT_EQ(0, shell()->web_contents()->GetMainFrame()->GetEnabledBindings());
+      process_id));
+  EXPECT_TRUE(shell()
+                  ->web_contents()
+                  ->GetPrimaryMainFrame()
+                  ->GetEnabledBindings()
+                  .empty());
+  EXPECT_FALSE(ChildProcessSecurityPolicyImpl::GetInstance()->CanRequestURL(
+      process_id, GURL("file:///etc/passwd")));
+  EXPECT_FALSE(ChildProcessSecurityPolicyImpl::GetInstance()->CanRequestURL(
+      process_id, GURL("chrome://version")));
 }
 
 // Loads a WebUI which does not have any bindings.
@@ -81,65 +93,81 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest, NoBindings) {
   EXPECT_TRUE(NavigateToURL(shell(), test_url));
 
   EXPECT_FALSE(ChildProcessSecurityPolicyImpl::GetInstance()->HasWebUIBindings(
-      shell()->web_contents()->GetMainFrame()->GetProcess()->GetID()));
-  EXPECT_EQ(0, shell()->web_contents()->GetMainFrame()->GetEnabledBindings());
+      shell()->web_contents()->GetPrimaryMainFrame()->GetProcess()->GetID()));
+  EXPECT_TRUE(shell()
+                  ->web_contents()
+                  ->GetPrimaryMainFrame()
+                  ->GetEnabledBindings()
+                  .empty());
 }
 
 // Loads a WebUI which has WebUI bindings.
 IN_PROC_BROWSER_TEST_F(WebUISecurityTest, WebUIBindings) {
-  GURL test_url(GetWebUIURL("web-ui/title1.html?bindings=" +
-                            base::NumberToString(BINDINGS_POLICY_WEB_UI)));
+  GURL test_url(GetWebUIURL(
+      "web-ui/title1.html?bindings=" +
+      base::NumberToString(
+          BindingsPolicySet({BindingsPolicyValue::kWebUi}).ToEnumBitmask())));
   EXPECT_TRUE(NavigateToURL(shell(), test_url));
 
   EXPECT_TRUE(ChildProcessSecurityPolicyImpl::GetInstance()->HasWebUIBindings(
-      shell()->web_contents()->GetMainFrame()->GetProcess()->GetID()));
-  EXPECT_EQ(BINDINGS_POLICY_WEB_UI,
-            shell()->web_contents()->GetMainFrame()->GetEnabledBindings());
+      shell()->web_contents()->GetPrimaryMainFrame()->GetProcess()->GetID()));
+  EXPECT_EQ(
+      BindingsPolicySet({BindingsPolicyValue::kWebUi}),
+      shell()->web_contents()->GetPrimaryMainFrame()->GetEnabledBindings());
 }
 
 // Loads a WebUI which has Mojo bindings.
 IN_PROC_BROWSER_TEST_F(WebUISecurityTest, MojoBindings) {
-  GURL test_url(GetWebUIURL("web-ui/title1.html?bindings=" +
-                            base::NumberToString(BINDINGS_POLICY_MOJO_WEB_UI)));
+  GURL test_url(GetWebUIURL(
+      "web-ui/title1.html?bindings=" +
+      base::NumberToString(BindingsPolicySet({BindingsPolicyValue::kMojoWebUi})
+                               .ToEnumBitmask())));
   EXPECT_TRUE(NavigateToURL(shell(), test_url));
 
   EXPECT_TRUE(ChildProcessSecurityPolicyImpl::GetInstance()->HasWebUIBindings(
-      shell()->web_contents()->GetMainFrame()->GetProcess()->GetID()));
-  EXPECT_EQ(BINDINGS_POLICY_MOJO_WEB_UI,
-            shell()->web_contents()->GetMainFrame()->GetEnabledBindings());
+      shell()->web_contents()->GetPrimaryMainFrame()->GetProcess()->GetID()));
+  EXPECT_EQ(
+      BindingsPolicySet({BindingsPolicyValue::kMojoWebUi}),
+      shell()->web_contents()->GetPrimaryMainFrame()->GetEnabledBindings());
 }
 
 // Loads a WebUI which has both WebUI and Mojo bindings.
 IN_PROC_BROWSER_TEST_F(WebUISecurityTest, WebUIAndMojoBindings) {
-  GURL test_url(GetWebUIURL("web-ui/title1.html?bindings=" +
-                            base::NumberToString(BINDINGS_POLICY_WEB_UI |
-                                                 BINDINGS_POLICY_MOJO_WEB_UI)));
+  GURL test_url(GetWebUIURL(
+      "web-ui/title1.html?bindings=" +
+      base::NumberToString(BindingsPolicySet({BindingsPolicyValue::kWebUi,
+                                              BindingsPolicyValue::kMojoWebUi})
+                               .ToEnumBitmask())));
   EXPECT_TRUE(NavigateToURL(shell(), test_url));
 
   EXPECT_TRUE(ChildProcessSecurityPolicyImpl::GetInstance()->HasWebUIBindings(
-      shell()->web_contents()->GetMainFrame()->GetProcess()->GetID()));
-  EXPECT_EQ(BINDINGS_POLICY_WEB_UI | BINDINGS_POLICY_MOJO_WEB_UI,
-            shell()->web_contents()->GetMainFrame()->GetEnabledBindings());
+      shell()->web_contents()->GetPrimaryMainFrame()->GetProcess()->GetID()));
+  EXPECT_EQ(
+      BindingsPolicySet(
+          {BindingsPolicyValue::kWebUi, BindingsPolicyValue::kMojoWebUi}),
+      shell()->web_contents()->GetPrimaryMainFrame()->GetEnabledBindings());
 }
 
 // Verify that reloading a WebUI document or navigating between documents on
-// the same WebUI will result in using the same SiteInstance and will not
-// create a new WebUI instance.
+// the same WebUI will result in using the same SiteInstance, and will reuse
+// the same WebUI instance if the RenderFrameHost is reused.
 IN_PROC_BROWSER_TEST_F(WebUISecurityTest, WebUIReuse) {
   GURL test_url(GetWebUIURL("web-ui/title1.html"));
   EXPECT_TRUE(NavigateToURL(shell(), test_url));
 
   FrameTreeNode* root = static_cast<WebContentsImpl*>(shell()->web_contents())
-                            ->GetFrameTree()
-                            ->root();
+                            ->GetPrimaryFrameTree()
+                            .root();
 
   // Capture the SiteInstance and WebUI used in the first navigation to compare
   // with the ones used after the reload.
   scoped_refptr<SiteInstance> initial_site_instance =
       root->current_frame_host()->GetSiteInstance();
+  RenderFrameHostImplWrapper initial_rfh(root->current_frame_host());
   WebUI* initial_web_ui = root->current_frame_host()->web_ui();
 
-  // Reload the document and check that SiteInstance and WebUI are reused.
+  // Reload the document and check that SiteInstance is reused, and the WebUI is
+  // reused if the RenderFrameHost is reused.
   TestFrameNavigationObserver observer(root);
   shell()->web_contents()->GetController().Reload(ReloadType::NORMAL, false);
   observer.Wait();
@@ -148,16 +176,40 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest, WebUIReuse) {
 
   EXPECT_EQ(initial_site_instance,
             root->current_frame_host()->GetSiteInstance());
-  EXPECT_EQ(initial_web_ui, root->current_frame_host()->web_ui());
+  if (ShouldCreateNewHostForAllFrames()) {
+    EXPECT_NE(initial_rfh.get(), root->current_frame_host());
+    // We can't check for WebUI inequality as the same address might be reused
+    // for the new WebUI object, but we can check that the new WebUI points to
+    // the new RFH.
+    EXPECT_EQ(root->current_frame_host(),
+              root->current_frame_host()->web_ui()->GetRenderFrameHost());
+    EXPECT_NE(initial_rfh.get(),
+              root->current_frame_host()->web_ui()->GetRenderFrameHost());
+  } else {
+    EXPECT_EQ(initial_rfh.get(), root->current_frame_host());
+    EXPECT_EQ(initial_web_ui, root->current_frame_host()->web_ui());
+  }
 
   // Navigate to another document on the same WebUI and check that SiteInstance
-  // and WebUI are reused.
+  // is reused, and the WebUI is reused if the RenderFrameHost is reused.
   GURL next_url(GetWebUIURL("web-ui/title2.html"));
   EXPECT_TRUE(NavigateToURL(shell(), next_url));
 
   EXPECT_EQ(initial_site_instance,
             root->current_frame_host()->GetSiteInstance());
-  EXPECT_EQ(initial_web_ui, root->current_frame_host()->web_ui());
+  if (ShouldCreateNewHostForAllFrames()) {
+    EXPECT_NE(initial_rfh.get(), root->current_frame_host());
+    // We can't check for WebUI inequality as the same address might be reused
+    // for the new WebUI object, but we can check that the new WebUI points to
+    // the new RFH.
+    EXPECT_EQ(root->current_frame_host(),
+              root->current_frame_host()->web_ui()->GetRenderFrameHost());
+    EXPECT_NE(initial_rfh.get(),
+              root->current_frame_host()->web_ui()->GetRenderFrameHost());
+  } else {
+    EXPECT_EQ(initial_rfh.get(), root->current_frame_host());
+    EXPECT_EQ(initial_web_ui, root->current_frame_host()->web_ui());
+  }
 }
 
 // Verify that a WebUI can add a subframe for its own WebUI.
@@ -166,8 +218,8 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest, WebUISameSiteSubframe) {
   EXPECT_TRUE(NavigateToURL(shell(), test_url));
 
   FrameTreeNode* root = static_cast<WebContentsImpl*>(shell()->web_contents())
-                            ->GetFrameTree()
-                            ->root();
+                            ->GetPrimaryFrameTree()
+                            .root();
   EXPECT_EQ(1U, root->child_count());
 
   TestFrameNavigationObserver observer(root->child_at(0));
@@ -178,9 +230,11 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest, WebUISameSiteSubframe) {
   EXPECT_EQ(subframe_url, observer.last_committed_url());
   EXPECT_EQ(root->current_frame_host()->GetSiteInstance(),
             root->child_at(0)->current_frame_host()->GetSiteInstance());
-  EXPECT_EQ(
-      GetWebUIURL("web-ui"),
-      root->child_at(0)->current_frame_host()->GetSiteInstance()->GetSiteURL());
+  EXPECT_EQ(GetWebUIURL("web-ui"), root->child_at(0)
+                                       ->current_frame_host()
+                                       ->GetSiteInstance()
+                                       ->GetSecurityPrincipal()
+                                       .GetDeprecatedSiteURL());
 
   // The subframe should have its own WebUI object different from the parent
   // frame.
@@ -198,12 +252,12 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest, WebUICrossSiteSubframe) {
   EXPECT_TRUE(NavigateToURL(shell(), main_frame_url));
 
   FrameTreeNode* root = static_cast<WebContentsImpl*>(shell()->web_contents())
-                            ->GetFrameTree()
-                            ->root();
+                            ->GetPrimaryFrameTree()
+                            .root();
   EXPECT_EQ(1U, root->child_count());
   FrameTreeNode* child = root->child_at(0);
 
-  EXPECT_EQ(BINDINGS_POLICY_WEB_UI,
+  EXPECT_EQ(BindingsPolicySet({BindingsPolicyValue::kWebUi}),
             root->current_frame_host()->GetEnabledBindings());
   EXPECT_EQ(shell()->web_contents()->GetSiteInstance(),
             child->current_frame_host()->GetSiteInstance());
@@ -213,7 +267,9 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest, WebUICrossSiteSubframe) {
     TestFrameNavigationObserver observer(child);
     GURL child_frame_url(
         GetWebUIURL("web-ui-subframe/title2.html?noxfo=true&bindings=" +
-                    base::NumberToString(BINDINGS_POLICY_MOJO_WEB_UI)));
+                    base::NumberToString(
+                        BindingsPolicySet({BindingsPolicyValue::kMojoWebUi})
+                            .ToEnumBitmask())));
     EXPECT_TRUE(ExecJs(shell(),
                        JsReplace("document.getElementById($1).src = $2;",
                                  "test_iframe", child_frame_url),
@@ -221,13 +277,15 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest, WebUICrossSiteSubframe) {
     observer.Wait();
     EXPECT_TRUE(observer.last_navigation_succeeded());
     EXPECT_EQ(child_frame_url, observer.last_committed_url());
-    EXPECT_EQ(BINDINGS_POLICY_MOJO_WEB_UI,
+    EXPECT_EQ(BindingsPolicySet({BindingsPolicyValue::kMojoWebUi}),
               child->current_frame_host()->GetEnabledBindings());
     EXPECT_EQ(url::Origin::Create(child_frame_url),
               child->current_frame_host()->GetLastCommittedOrigin());
   }
-  EXPECT_EQ(GetWebUIURL("web-ui-subframe"),
-            child->current_frame_host()->GetSiteInstance()->GetSiteURL());
+  EXPECT_EQ(GetWebUIURL("web-ui-subframe"), child->current_frame_host()
+                                                ->GetSiteInstance()
+                                                ->GetSecurityPrincipal()
+                                                .GetDeprecatedSiteURL());
   EXPECT_NE(root->current_frame_host()->GetSiteInstance(),
             child->current_frame_host()->GetSiteInstance());
   EXPECT_NE(root->current_frame_host()->GetProcess(),
@@ -242,7 +300,9 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest, WebUICrossSiteSubframe) {
     TestFrameNavigationObserver observer(child);
     GURL child_frame_url(
         GetWebUIURL("web-ui-subframe/title3.html?noxfo=true&bindings=" +
-                    base::NumberToString(BINDINGS_POLICY_MOJO_WEB_UI)));
+                    base::NumberToString(
+                        BindingsPolicySet({BindingsPolicyValue::kMojoWebUi})
+                            .ToEnumBitmask())));
     EXPECT_TRUE(ExecJs(shell(),
                        JsReplace("document.getElementById($1).src = $2;",
                                  "test_iframe", child_frame_url),
@@ -250,7 +310,7 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest, WebUICrossSiteSubframe) {
     observer.Wait();
     EXPECT_TRUE(observer.last_navigation_succeeded());
     EXPECT_EQ(child_frame_url, observer.last_committed_url());
-    EXPECT_EQ(BINDINGS_POLICY_MOJO_WEB_UI,
+    EXPECT_EQ(BindingsPolicySet({BindingsPolicyValue::kMojoWebUi}),
               child->current_frame_host()->GetEnabledBindings());
     EXPECT_EQ(url::Origin::Create(child_frame_url),
               child->current_frame_host()->GetLastCommittedOrigin());
@@ -261,14 +321,71 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest, WebUICrossSiteSubframe) {
     TestFrameNavigationObserver observer(child);
     GURL child_frame_url(
         GetWebUIURL("web-ui-subframe/title1.html?noxfo=true&bindings=" +
-                    base::NumberToString(BINDINGS_POLICY_MOJO_WEB_UI)));
+                    base::NumberToString(
+                        BindingsPolicySet({BindingsPolicyValue::kMojoWebUi})
+                            .ToEnumBitmask())));
     NavigateFrameToURL(child, child_frame_url);
     observer.Wait();
     EXPECT_TRUE(observer.last_navigation_succeeded());
     EXPECT_EQ(child_frame_url, observer.last_committed_url());
-    EXPECT_EQ(BINDINGS_POLICY_MOJO_WEB_UI,
+    EXPECT_EQ(BindingsPolicySet({BindingsPolicyValue::kMojoWebUi}),
               child->current_frame_host()->GetEnabledBindings());
   }
+}
+
+// Verify that when a trusted WebUI frame navigates another frame via a
+// remote frame proxy, the navigation is upgraded to browser-initiated and the
+// referrer is stripped.
+IN_PROC_BROWSER_TEST_F(
+    WebUISecurityTest,
+    RemoteFrameNavigationFromWebUIUpgradesToBrowserInitiated) {
+  EXPECT_TRUE(embedded_test_server()->Start());
+
+  GURL main_frame_url(
+      GetWebUIURL("web-ui/page_with_blank_iframe.html?childsrc=child-src *;"));
+  EXPECT_TRUE(NavigateToURL(shell(), main_frame_url));
+
+  FrameTreeNode* root = static_cast<WebContentsImpl*>(shell()->web_contents())
+                            ->GetPrimaryFrameTree()
+                            .root();
+  EXPECT_EQ(1U, root->child_count());
+
+  FrameTreeNode* child = root->child_at(0);
+  GURL child_frame_url =
+      embedded_test_server()->GetURL("b.com", "/title1.html");
+  NavigateFrameToURL(child, child_frame_url);
+
+  SiteInstanceImpl* root_instance =
+      root->current_frame_host()->GetSiteInstance();
+  RenderFrameProxyHost* child_proxy =
+      child->current_frame_host()
+          ->browsing_context_state()
+          ->GetRenderFrameProxyHost(root_instance->group());
+  ASSERT_TRUE(child_proxy);
+
+  GURL dest_url = embedded_test_server()->GetURL("b.com", "/title2.html");
+  TestNavigationManager nav_manager(shell()->web_contents(), dest_url);
+
+  auto params = blink::mojom::OpenURLParams::New();
+  params->url = dest_url;
+  params->disposition = ui::mojom::WindowOpenDisposition::kCurrentTab;
+  params->initiator_state_token =
+      root->current_frame_host()->current_initiator_state_token();
+  params->initiator_document_token =
+      root->current_frame_host()->GetDocumentToken();
+  params->initiator_frame_token = root->current_frame_host()->GetFrameToken();
+  params->referrer = blink::mojom::Referrer::New(
+      main_frame_url, network::mojom::ReferrerPolicy::kDefault);
+
+  static_cast<blink::mojom::RemoteFrameHost*>(child_proxy)
+      ->OpenURL(std::move(params));
+
+  EXPECT_TRUE(nav_manager.WaitForRequestStart());
+
+  NavigationHandle* handle = nav_manager.GetNavigationHandle();
+  ASSERT_TRUE(handle);
+  EXPECT_FALSE(handle->IsRendererInitiated());
+  EXPECT_TRUE(handle->GetReferrer().url.is_empty());
 }
 
 // Verify that SiteInstance and WebUI reuse happens in subframes as well.
@@ -282,8 +399,8 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest, WebUIReuseInSubframe) {
   EXPECT_TRUE(NavigateToURL(shell(), main_frame_url));
 
   FrameTreeNode* root = static_cast<WebContentsImpl*>(shell()->web_contents())
-                            ->GetFrameTree()
-                            ->root();
+                            ->GetPrimaryFrameTree()
+                            .root();
   EXPECT_EQ(1U, root->child_count());
   FrameTreeNode* child = root->child_at(0);
 
@@ -296,6 +413,9 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest, WebUIReuseInSubframe) {
       child->current_frame_host()->GetGlobalId();
 
   GURL subframe_same_site_url(GetWebUIURL("web-ui/title2.html"));
+  bool rfh_should_change =
+      child->current_frame_host()
+          ->ShouldChangeRenderFrameHostOnSameSiteNavigation();
   {
     TestFrameNavigationObserver observer(child);
     NavigateFrameToURL(child, subframe_same_site_url);
@@ -305,11 +425,22 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest, WebUIReuseInSubframe) {
   }
   EXPECT_EQ(initial_site_instance,
             child->current_frame_host()->GetSiteInstance());
-  if (ShouldCreateNewHostForSameSiteSubframe()) {
-    EXPECT_NE(initial_web_ui, child->current_frame_host()->web_ui());
+  if (rfh_should_change) {
+    // We can't check for WebUI inequality as the same address might be reused
+    // for the new WebUI object, but we can check that the new WebUI points to
+    // the new RFH.
+    EXPECT_EQ(child->current_frame_host(),
+              child->current_frame_host()->web_ui()->GetRenderFrameHost());
+    EXPECT_NE(initial_rfh_id, child->current_frame_host()->GetGlobalId());
+    EXPECT_NE(initial_rfh_id, child->current_frame_host()
+                                  ->web_ui()
+                                  ->GetRenderFrameHost()
+                                  ->GetGlobalId());
   } else {
     EXPECT_EQ(initial_web_ui, child->current_frame_host()->web_ui());
   }
+  GlobalRenderFrameHostId second_rfh_id =
+      child->current_frame_host()->GetGlobalId();
 
   // Navigate the child frame cross-site.
   GURL subframe_cross_site_url(GetWebUIURL("web-ui-subframe/title1.html"));
@@ -324,15 +455,28 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest, WebUIReuseInSubframe) {
             child->current_frame_host()->GetSiteInstance());
   EXPECT_NE(root->current_frame_host()->web_ui(),
             child->current_frame_host()->web_ui());
-  EXPECT_NE(initial_web_ui, child->current_frame_host()->web_ui());
+  // We can't check for WebUI inequality as the same address might be reused
+  // for the new WebUI object, but we can check that the new WebUI points to
+  // the new RFH.
+  EXPECT_EQ(child->current_frame_host(),
+            child->current_frame_host()->web_ui()->GetRenderFrameHost());
+  EXPECT_NE(second_rfh_id, child->current_frame_host()->GetGlobalId());
+  EXPECT_NE(second_rfh_id, child->current_frame_host()
+                               ->web_ui()
+                               ->GetRenderFrameHost()
+                               ->GetGlobalId());
 
-  // Capture the new SiteInstance and WebUI of the subframe and navigate it to
-  // another document on the same site.
-  scoped_refptr<SiteInstance> second_site_instance =
+  // Capture the new SiteInstance, WebUI and RFH ID of the subframe and navigate
+  // it to another document on the same site.
+  scoped_refptr<SiteInstance> third_site_instance =
       child->current_frame_host()->GetSiteInstance();
-  WebUI* second_web_ui = child->current_frame_host()->web_ui();
+  WebUI* third_web_ui = child->current_frame_host()->web_ui();
+  GlobalRenderFrameHostId third_rfh_id =
+      child->current_frame_host()->GetGlobalId();
 
   GURL subframe_cross_site_url2(GetWebUIURL("web-ui-subframe/title2.html"));
+  rfh_should_change = child->current_frame_host()
+                          ->ShouldChangeRenderFrameHostOnSameSiteNavigation();
   {
     TestFrameNavigationObserver observer(child);
     NavigateFrameToURL(child, subframe_cross_site_url2);
@@ -340,12 +484,21 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest, WebUIReuseInSubframe) {
     EXPECT_TRUE(observer.last_navigation_succeeded());
     EXPECT_EQ(subframe_cross_site_url2, observer.last_committed_url());
   }
-  EXPECT_EQ(second_site_instance,
+  EXPECT_EQ(third_site_instance,
             child->current_frame_host()->GetSiteInstance());
-  if (ShouldCreateNewHostForSameSiteSubframe()) {
-    EXPECT_NE(second_web_ui, child->current_frame_host()->web_ui());
+  if (rfh_should_change) {
+    // We can't check for WebUI inequality as the same address might be reused
+    // for the new WebUI object, but we can check that the new WebUI points to
+    // the new RFH.
+    EXPECT_EQ(child->current_frame_host(),
+              child->current_frame_host()->web_ui()->GetRenderFrameHost());
+    EXPECT_NE(third_rfh_id, child->current_frame_host()->GetGlobalId());
+    EXPECT_NE(third_rfh_id, child->current_frame_host()
+                                ->web_ui()
+                                ->GetRenderFrameHost()
+                                ->GetGlobalId());
   } else {
-    EXPECT_EQ(second_web_ui, child->current_frame_host()->web_ui());
+    EXPECT_EQ(third_web_ui, child->current_frame_host()->web_ui());
   }
 
   // Navigate back to the first document in the subframe, which should bring
@@ -376,8 +529,9 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest, WindowOpenWebUI) {
   GURL test_url(GetWebUIURL("web-ui/title1.html"));
   EXPECT_TRUE(NavigateToURL(shell(), test_url));
   EXPECT_EQ(test_url, shell()->web_contents()->GetLastCommittedURL());
-  EXPECT_TRUE(shell()->web_contents()->GetMainFrame()->GetEnabledBindings() &
-              BINDINGS_POLICY_WEB_UI);
+  EXPECT_TRUE(
+      shell()->web_contents()->GetPrimaryMainFrame()->GetEnabledBindings().Has(
+          BindingsPolicyValue::kWebUi));
 
   TestNavigationObserver new_contents_observer(nullptr, 1);
   new_contents_observer.StartWatchingNewWebContents();
@@ -393,19 +547,22 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest, WindowOpenWebUI) {
   Shell* new_shell = Shell::windows()[1];
 
   EXPECT_EQ(new_tab_url, new_shell->web_contents()->GetLastCommittedURL());
-  EXPECT_TRUE(new_shell->web_contents()->GetMainFrame()->GetEnabledBindings() &
-              BINDINGS_POLICY_WEB_UI);
+  EXPECT_TRUE(new_shell->web_contents()
+                  ->GetPrimaryMainFrame()
+                  ->GetEnabledBindings()
+                  .Has(BindingsPolicyValue::kWebUi));
 
   // SiteInstances should be different and unrelated due to the
   // BrowsingInstance swaps on navigation.
-  EXPECT_NE(new_shell->web_contents()->GetMainFrame()->GetSiteInstance(),
-            shell()->web_contents()->GetMainFrame()->GetSiteInstance());
-  EXPECT_FALSE(
-      new_shell->web_contents()
-          ->GetMainFrame()
-          ->GetSiteInstance()
-          ->IsRelatedSiteInstance(
-              shell()->web_contents()->GetMainFrame()->GetSiteInstance()));
+  EXPECT_NE(new_shell->web_contents()->GetPrimaryMainFrame()->GetSiteInstance(),
+            shell()->web_contents()->GetPrimaryMainFrame()->GetSiteInstance());
+  EXPECT_FALSE(new_shell->web_contents()
+                   ->GetPrimaryMainFrame()
+                   ->GetSiteInstance()
+                   ->IsRelatedSiteInstance(shell()
+                                               ->web_contents()
+                                               ->GetPrimaryMainFrame()
+                                               ->GetSiteInstance()));
 
   EXPECT_NE(shell()->web_contents()->GetWebUI(),
             new_shell->web_contents()->GetWebUI());
@@ -420,20 +577,24 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest, WebUIFailedNavigation) {
   GURL start_url(GetWebUIURL("web-ui/title1.html"));
   EXPECT_TRUE(NavigateToURL(shell(), start_url));
   EXPECT_EQ(start_url, shell()->web_contents()->GetLastCommittedURL());
-  EXPECT_EQ(BINDINGS_POLICY_WEB_UI,
-            shell()->web_contents()->GetMainFrame()->GetEnabledBindings());
+  EXPECT_EQ(
+      BindingsPolicySet({BindingsPolicyValue::kWebUi}),
+      shell()->web_contents()->GetPrimaryMainFrame()->GetEnabledBindings());
 
   FrameTreeNode* root = static_cast<WebContentsImpl*>(shell()->web_contents())
-                            ->GetFrameTree()
-                            ->root();
+                            ->GetPrimaryFrameTree()
+                            .root();
 
   GURL webui_error_url(GetWebUIURL("web-ui/error"));
   EXPECT_FALSE(NavigateToURL(shell(), webui_error_url));
   EXPECT_FALSE(root->current_frame_host()->web_ui());
-  EXPECT_EQ(0, root->current_frame_host()->GetEnabledBindings());
+  EXPECT_TRUE(root->current_frame_host()->GetEnabledBindings().empty());
 
   if (SiteIsolationPolicy::IsErrorPageIsolationEnabled(true)) {
-    EXPECT_EQ(root->current_frame_host()->GetSiteInstance()->GetSiteURL(),
+    EXPECT_EQ(root->current_frame_host()
+                  ->GetSiteInstance()
+                  ->GetSecurityPrincipal()
+                  .GetDeprecatedSiteURL(),
               GURL(kUnreachableWebDataURL));
   }
 
@@ -442,7 +603,7 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest, WebUIFailedNavigation) {
       embedded_test_server()->GetURL("foo.com", "/nonexistent"));
   EXPECT_FALSE(NavigateToURL(shell(), http_error_url));
   EXPECT_FALSE(root->current_frame_host()->web_ui());
-  EXPECT_EQ(0, root->current_frame_host()->GetEnabledBindings());
+  EXPECT_TRUE(root->current_frame_host()->GetEnabledBindings().empty());
 }
 
 // Verify load script from chrome-untrusted:// is blocked.
@@ -450,7 +611,7 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest,
                        DisallowResourceRequestToChromeUntrusted) {
   ASSERT_TRUE(embedded_test_server()->Start());
   GURL web_url(embedded_test_server()->GetURL("/title2.html"));
-  untrusted_factory().add_web_ui_config(
+  WebUIConfigMap::GetInstance().AddUntrustedWebUIConfig(
       std::make_unique<ui::TestUntrustedWebUIConfig>("test-host"));
 
   EXPECT_TRUE(NavigateToURL(shell(), web_url));
@@ -479,45 +640,29 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest,
   }
 }
 
-class WebUISecurityTestWithWebUIReportOnlyTrustedTypesEnabled
-    : public WebUISecurityTest {
- public:
-  WebUISecurityTestWithWebUIReportOnlyTrustedTypesEnabled() {
-    feature_list_.InitAndEnableFeature(features::kWebUIReportOnlyTrustedTypes);
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-// Verify Report-Only Trusted Types won't block assignment to a dangerous sink,
-// but logs warning
-IN_PROC_BROWSER_TEST_F(WebUISecurityTestWithWebUIReportOnlyTrustedTypesEnabled,
-                       DoNotBlockSinkAssignmentOnReportOnlyTrustedTypes) {
+// Verify chrome-untrusted://resources can't be loaded from the Web.
+IN_PROC_BROWSER_TEST_F(WebUISecurityTest, DisallowWebRequestToSharedResources) {
   ASSERT_TRUE(embedded_test_server()->Start());
-  GURL test_url(GetWebUIURL("web-ui/title1.html"));
+  ASSERT_TRUE(
+      NavigateToURL(shell(), embedded_test_server()->GetURL("/title2.html")));
 
-  EXPECT_TRUE(NavigateToURL(shell(), test_url));
+  const char kLoadResourceScript[] =
+      "new Promise((resolve) => {"
+      "  const script = document.createElement('script');"
+      "  script.onload = () => {"
+      "    resolve('Script load should have failed');"
+      "  };"
+      "  script.onerror = (e) => {"
+      "    resolve('Load failed');"
+      "  };"
+      "  script.src = $1;"
+      "  document.body.appendChild(script);"
+      "});";
 
-  const char kDangerousSinkUse[] =
-      "(() => {"
-      "  try {"
-      "    document.body.innerHTML = 1;"
-      "    throw 'Assignment should have blocked';"
-      "  } catch(e) {"
-      "    return 'Assignment blocked';"
-      "  }"
-      "})();";
-  {
-    WebContentsConsoleObserver console_observer(shell()->web_contents());
-    console_observer.SetPattern(
-        "This document requires 'TrustedHTML' assignment.");
-
-    EXPECT_EQ("Assignment blocked",
-              EvalJs(shell(), kDangerousSinkUse, EXECUTE_SCRIPT_DEFAULT_OPTIONS,
-                     1 /* world_id */));
-    console_observer.Wait();
-  }
+  GURL shared_resource_url =
+      GURL("chrome-untrusted://resources/mojo/mojo/public/js/bindings.js");
+  EXPECT_EQ("Load failed", EvalJs(shell(), JsReplace(kLoadResourceScript,
+                                                     shared_resource_url)));
 }
 
 namespace {
@@ -542,16 +687,12 @@ class UntrustedSourceWithCorsSupport : public URLDataSource {
       const std::string& origin) override {
     return origin;
   }
-  std::string GetMimeType(const std::string& path) override {
-    return "text/html";
-  }
+  std::string GetMimeType(const GURL& url) override { return "text/html"; }
   void StartDataRequest(const GURL& url,
                         const WebContents::Getter& wc_getter,
                         GotDataCallback callback) override {
-    std::string dummy_html = "<html><body>dummy</body></html>";
-    scoped_refptr<base::RefCountedString> response =
-        base::RefCountedString::TakeString(&dummy_html);
-    std::move(callback).Run(response.get());
+    std::move(callback).Run(base::MakeRefCounted<base::RefCountedString>(
+        std::string("<html><body>dummy</body></html>")));
   }
 
  private:
@@ -595,8 +736,8 @@ EvalJsResult PerformFetch(Shell* shell,
 IN_PROC_BROWSER_TEST_F(WebUISecurityTest,
                        DisallowWebPageFetchRequestToChromeUntrusted) {
   const GURL untrusted_url = GURL("chrome-untrusted://test/title1.html");
-  untrusted_factory().add_web_ui_config(
-      std::make_unique<ui::TestUntrustedWebUIConfig>(untrusted_url.host()));
+  WebUIConfigMap::GetInstance().AddUntrustedWebUIConfig(
+      std::make_unique<ui::TestUntrustedWebUIConfig>(untrusted_url.GetHost()));
   ASSERT_TRUE(embedded_test_server()->Start());
 
   const GURL web_url = embedded_test_server()->GetURL("/title2.html");
@@ -626,8 +767,8 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest,
 // Verify a chrome-untrusted:// document can fetch itself.
 IN_PROC_BROWSER_TEST_F(WebUISecurityTest, ChromeUntrustedFetchRequestToSelf) {
   const GURL untrusted_url = GURL("chrome-untrusted://test/title1.html");
-  untrusted_factory().add_web_ui_config(
-      std::make_unique<ui::TestUntrustedWebUIConfig>(untrusted_url.host()));
+  WebUIConfigMap::GetInstance().AddUntrustedWebUIConfig(
+      std::make_unique<ui::TestUntrustedWebUIConfig>(untrusted_url.GetHost()));
 
   EXPECT_TRUE(NavigateToURL(shell(), untrusted_url));
   EXPECT_EQ("success",
@@ -641,13 +782,13 @@ IN_PROC_BROWSER_TEST_F(
     WebUISecurityTest,
     DisallowCrossOriginFetchRequestToChromeUntrustedByDefault) {
   const GURL untrusted_url1 = GURL("chrome-untrusted://test1/title1.html");
-  untrusted_factory().add_web_ui_config(
-      std::make_unique<ui::TestUntrustedWebUIConfig>(untrusted_url1.host()));
+  WebUIConfigMap::GetInstance().AddUntrustedWebUIConfig(
+      std::make_unique<ui::TestUntrustedWebUIConfig>(untrusted_url1.GetHost()));
 
   const GURL untrusted_url2 = GURL("chrome-untrusted://test2/title2.html");
   URLDataSource::Add(
       shell()->web_contents()->GetBrowserContext(),
-      UntrustedSourceWithCorsSupport::CreateForHost(untrusted_url2.host()));
+      UntrustedSourceWithCorsSupport::CreateForHost(untrusted_url2.GetHost()));
 
   EXPECT_TRUE(NavigateToURL(shell(), untrusted_url1));
 
@@ -655,13 +796,13 @@ IN_PROC_BROWSER_TEST_F(
     WebContentsConsoleObserver console_observer(shell()->web_contents());
     EXPECT_EQ("Failed to fetch",
               PerformFetch(shell(), untrusted_url2, FetchMode::CORS));
-    console_observer.Wait();
+    ASSERT_TRUE(console_observer.Wait());
     EXPECT_EQ(console_observer.GetMessageAt(0),
               base::StringPrintf(
-                  "Refused to connect to '%s' because it violates the "
-                  "following Content Security Policy directive: \"default-src "
-                  "'self'\". Note that 'connect-src' was not explicitly set, "
-                  "so 'default-src' is used as a fallback.\n",
+                  "Connecting to '%s' violates the following Content Security "
+                  "Policy directive: \"default-src 'self'\". Note that "
+                  "'connect-src' was not explicitly set, so 'default-src' is "
+                  "used as a fallback. The action has been blocked.",
                   untrusted_url2.spec().c_str()));
   }
 
@@ -669,15 +810,186 @@ IN_PROC_BROWSER_TEST_F(
     WebContentsConsoleObserver console_observer(shell()->web_contents());
     EXPECT_EQ("Failed to fetch",
               PerformFetch(shell(), untrusted_url2, FetchMode::NO_CORS));
-    console_observer.Wait();
+    ASSERT_TRUE(console_observer.Wait());
     EXPECT_EQ(console_observer.GetMessageAt(0),
               base::StringPrintf(
-                  "Refused to connect to '%s' because it violates the "
-                  "following Content Security Policy directive: \"default-src "
-                  "'self'\". Note that 'connect-src' was not explicitly set, "
-                  "so 'default-src' is used as a fallback.\n",
+                  "Connecting to '%s' violates the following Content Security "
+                  "Policy directive: \"default-src 'self'\". Note that "
+                  "'connect-src' was not explicitly set, so 'default-src' is "
+                  "used as a fallback. The action has been blocked.",
                   untrusted_url2.spec().c_str()));
   }
+}
+
+// Verify a cross-origin fetch request from a chrome-untrusted:// page to
+// another chrome-untrusted:// page is blocked when the requested data source
+// does not allow the requesting origin through its
+// Access-Control-Allow-Origin value, even if the requesting page's Content
+// Security Policy allows the request.
+// Note: Both CORS and NO_CORS modes fail with "Failed to fetch" because
+// WebUIURLLoaderFactory rejects unpermitted cross-origin requests at the
+// factory level with net::ERR_FAILED, preventing even opaque responses.
+IN_PROC_BROWSER_TEST_F(WebUISecurityTest,
+                       DisallowCrossOriginFetchRequestToChromeUntrustedSource) {
+  TestUntrustedDataSourceHeaders headers;
+  headers.default_src = "default-src chrome-untrusted://test2;";
+  const GURL untrusted_url1 = GURL("chrome-untrusted://test1/title1.html");
+  WebUIConfigMap::GetInstance().AddUntrustedWebUIConfig(
+      std::make_unique<ui::TestUntrustedWebUIConfig>(untrusted_url1.GetHost(),
+                                                     headers));
+
+  // The data source for test2 does not serve an Access-Control-Allow-Origin
+  // header to other origins.
+  const GURL untrusted_url2 = GURL("chrome-untrusted://test2/title2.html");
+  AddUntrustedDataSource(shell()->web_contents()->GetBrowserContext(),
+                         untrusted_url2.GetHost());
+
+  EXPECT_TRUE(NavigateToURL(shell(), untrusted_url1));
+
+  EXPECT_EQ("Failed to fetch",
+            PerformFetch(shell(), untrusted_url2, FetchMode::CORS));
+  EXPECT_EQ("Failed to fetch",
+            PerformFetch(shell(), untrusted_url2, FetchMode::NO_CORS));
+}
+
+// Verify that a sandboxed iframe embedded within a chrome-untrusted:// page
+// (which has an opaque origin with a chrome-untrusted:// precursor) can fetch
+// subresources from its precursor origin.
+IN_PROC_BROWSER_TEST_F(WebUISecurityTest,
+                       SandboxedFrameSubresourceFetchToPrecursorAllowed) {
+  TestUntrustedDataSourceHeaders headers;
+  headers.no_xfo = true;
+  headers.child_src = "child-src 'self';";
+  WebUIConfigMap::GetInstance().AddUntrustedWebUIConfig(
+      std::make_unique<ui::TestUntrustedWebUIConfig>("test-host", headers));
+
+  const GURL untrusted_url(GetChromeUntrustedUIURL("test-host/title1.html"));
+  EXPECT_TRUE(NavigateToURL(shell(), untrusted_url));
+
+  // Create a sandboxed iframe without allow-same-origin so its origin is
+  // opaque.
+  const char kCreateIframeScript[] =
+      "new Promise((resolve) => {"
+      "  const iframe = document.createElement('iframe');"
+      "  iframe.sandbox = 'allow-scripts';"
+      "  iframe.id = 'sandboxed_frame';"
+      "  iframe.src = $1;"
+      "  iframe.onload = () => resolve('loaded');"
+      "  document.body.appendChild(iframe);"
+      "});";
+
+  EXPECT_EQ("loaded",
+            EvalJs(shell(), JsReplace(kCreateIframeScript, untrusted_url),
+                   EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1 /* world_id */));
+
+  FrameTreeNode* root = static_cast<WebContentsImpl*>(shell()->web_contents())
+                            ->GetPrimaryFrameTree()
+                            .root();
+  ASSERT_EQ(1U, root->child_count());
+  RenderFrameHostImpl* sandboxed_rfh = root->child_at(0)->current_frame_host();
+  EXPECT_TRUE(sandboxed_rfh->GetLastCommittedOrigin().opaque());
+  EXPECT_EQ(
+      url::Origin::Create(untrusted_url).GetTupleOrPrecursorTupleIfOpaque(),
+      sandboxed_rfh->GetLastCommittedOrigin()
+          .GetTupleOrPrecursorTupleIfOpaque());
+
+  // Fetch a subresource on the same precursor origin from the sandboxed iframe.
+  const char kFetchScript[] =
+      "fetch($1).then("
+      "  response => 'success',"
+      "  error => error.message"
+      ");";
+  const GURL subresource_url(GetChromeUntrustedUIURL("test-host/title2.html"));
+  EXPECT_EQ("success",
+            EvalJs(sandboxed_rfh, JsReplace(kFetchScript, subresource_url),
+                   EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1 /* world_id */));
+}
+
+// Verify that a sandboxed iframe embedded within a chrome-untrusted:// page
+// cannot fetch subresources from a different chrome-untrusted:// origin that
+// has not opted into cross-origin access.
+IN_PROC_BROWSER_TEST_F(WebUISecurityTest,
+                       SandboxedFrameSubresourceFetchToDifferentOriginDenied) {
+  TestUntrustedDataSourceHeaders headers;
+  headers.no_xfo = true;
+  headers.child_src = "child-src 'self';";
+  headers.default_src = "default-src chrome-untrusted://test2 'self';";
+  WebUIConfigMap::GetInstance().AddUntrustedWebUIConfig(
+      std::make_unique<ui::TestUntrustedWebUIConfig>("test1", headers));
+
+  // test2 does not allow cross-origin access.
+  const GURL untrusted_url2 = GURL("chrome-untrusted://test2/title2.html");
+  AddUntrustedDataSource(shell()->web_contents()->GetBrowserContext(),
+                         untrusted_url2.GetHost());
+
+  const GURL untrusted_url1 = GURL("chrome-untrusted://test1/title1.html");
+  EXPECT_TRUE(NavigateToURL(shell(), untrusted_url1));
+
+  // Create a sandboxed iframe inside test1.
+  const char kCreateIframeScript[] =
+      "new Promise((resolve) => {"
+      "  const iframe = document.createElement('iframe');"
+      "  iframe.sandbox = 'allow-scripts';"
+      "  iframe.id = 'sandboxed_frame';"
+      "  iframe.src = $1;"
+      "  iframe.onload = () => resolve('loaded');"
+      "  document.body.appendChild(iframe);"
+      "});";
+
+  EXPECT_EQ("loaded",
+            EvalJs(shell(), JsReplace(kCreateIframeScript, untrusted_url1),
+                   EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1 /* world_id */));
+
+  FrameTreeNode* root = static_cast<WebContentsImpl*>(shell()->web_contents())
+                            ->GetPrimaryFrameTree()
+                            .root();
+  ASSERT_EQ(1U, root->child_count());
+  RenderFrameHostImpl* sandboxed_rfh = root->child_at(0)->current_frame_host();
+  EXPECT_TRUE(sandboxed_rfh->GetLastCommittedOrigin().opaque());
+
+  // Attempt to fetch test2 from the sandboxed iframe.
+  const char kFetchScript[] =
+      "fetch($1).then("
+      "  response => 'success',"
+      "  error => error.message"
+      ");";
+  EXPECT_EQ("Failed to fetch",
+            EvalJs(sandboxed_rfh, JsReplace(kFetchScript, untrusted_url2),
+                   EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1 /* world_id */));
+}
+
+// Verify a chrome-untrusted:// page can load scripts from the shared
+// resources at chrome-untrusted://resources, which are served to all WebUI
+// origins.
+IN_PROC_BROWSER_TEST_F(WebUISecurityTest,
+                       AllowChromeUntrustedScriptRequestToSharedResources) {
+  TestUntrustedDataSourceHeaders headers;
+  headers.no_trusted_types = true;
+  WebUIConfigMap::GetInstance().AddUntrustedWebUIConfig(
+      std::make_unique<ui::TestUntrustedWebUIConfig>("test-host", headers));
+
+  const GURL untrusted_url(GetChromeUntrustedUIURL("test-host/title1.html"));
+  EXPECT_TRUE(NavigateToURL(shell(), untrusted_url));
+
+  const char kLoadModuleScript[] =
+      "new Promise((resolve) => {"
+      "  const script = document.createElement('script');"
+      "  script.type = 'module';"
+      "  script.onload = () => {"
+      "    resolve('Script loaded');"
+      "  };"
+      "  script.onerror = () => {"
+      "    resolve('Load failed');"
+      "  };"
+      "  script.src = $1;"
+      "  document.body.appendChild(script);"
+      "});";
+
+  const GURL shared_resource_url(
+      GURL("chrome-untrusted://resources/js/assert.js"));
+  EXPECT_EQ("Script loaded",
+            EvalJs(shell(), JsReplace(kLoadModuleScript, shared_resource_url),
+                   EXECUTE_SCRIPT_DEFAULT_OPTIONS, 1 /* world_id */));
 }
 
 // Verify cross-origin fetch request from a chrome-untrusted:// page to another
@@ -687,14 +999,14 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest,
   TestUntrustedDataSourceHeaders headers;
   headers.default_src = "default-src chrome-untrusted://test2;";
   const GURL untrusted_url1 = GURL("chrome-untrusted://test1/title1.html");
-  untrusted_factory().add_web_ui_config(
-      std::make_unique<ui::TestUntrustedWebUIConfig>(untrusted_url1.host(),
+  WebUIConfigMap::GetInstance().AddUntrustedWebUIConfig(
+      std::make_unique<ui::TestUntrustedWebUIConfig>(untrusted_url1.GetHost(),
                                                      headers));
 
   const GURL untrusted_url2 = GURL("chrome-untrusted://test2/title2.html");
   URLDataSource::Add(
       shell()->web_contents()->GetBrowserContext(),
-      UntrustedSourceWithCorsSupport::CreateForHost(untrusted_url2.host()));
+      UntrustedSourceWithCorsSupport::CreateForHost(untrusted_url2.GetHost()));
 
   EXPECT_TRUE(NavigateToURL(shell(), untrusted_url1));
   EXPECT_EQ("success", PerformFetch(shell(), untrusted_url2, FetchMode::CORS));
@@ -710,8 +1022,8 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest,
   TestUntrustedDataSourceHeaders headers;
   headers.default_src = "default-src chrome://webui;";
   const GURL untrusted_url = GURL("chrome-untrusted://test1/title1.html");
-  untrusted_factory().add_web_ui_config(
-      std::make_unique<ui::TestUntrustedWebUIConfig>(untrusted_url.host(),
+  WebUIConfigMap::GetInstance().AddUntrustedWebUIConfig(
+      std::make_unique<ui::TestUntrustedWebUIConfig>(untrusted_url.GetHost(),
                                                      headers));
 
   const GURL chrome_url = GURL("chrome://webui/title2.html");
@@ -722,7 +1034,7 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest,
     WebContentsConsoleObserver console_observer(shell()->web_contents());
     EXPECT_EQ("Failed to fetch",
               PerformFetch(shell(), chrome_url, FetchMode::CORS));
-    console_observer.Wait();
+    ASSERT_TRUE(console_observer.Wait());
     EXPECT_EQ(
         console_observer.GetMessageAt(0),
         base::StringPrintf(
@@ -734,7 +1046,7 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest,
     WebContentsConsoleObserver console_observer(shell()->web_contents());
     EXPECT_EQ("Failed to fetch",
               PerformFetch(shell(), chrome_url, FetchMode::NO_CORS));
-    console_observer.Wait();
+    ASSERT_TRUE(console_observer.Wait());
     EXPECT_EQ(
         console_observer.GetMessageAt(0),
         base::StringPrintf(
@@ -765,8 +1077,8 @@ EvalJsResult PerformXHRRequest(Shell* shell, const GURL& xhr_url) {
 IN_PROC_BROWSER_TEST_F(WebUISecurityTest,
                        DisallowWebPageXHRRequestToChromeUntrusted) {
   const GURL untrusted_url = GURL("chrome-untrusted://test/title1.html");
-  untrusted_factory().add_web_ui_config(
-      std::make_unique<ui::TestUntrustedWebUIConfig>(untrusted_url.host()));
+  WebUIConfigMap::GetInstance().AddUntrustedWebUIConfig(
+      std::make_unique<ui::TestUntrustedWebUIConfig>(untrusted_url.GetHost()));
   ASSERT_TRUE(embedded_test_server()->Start());
   const GURL web_url = embedded_test_server()->GetURL("/title2.html");
 
@@ -784,8 +1096,8 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest,
 IN_PROC_BROWSER_TEST_F(WebUISecurityTest,
                        AllowChromeUntrustedXHRRequestToSelf) {
   const GURL untrusted_url = GURL("chrome-untrusted://test/title1.html");
-  untrusted_factory().add_web_ui_config(
-      std::make_unique<ui::TestUntrustedWebUIConfig>(untrusted_url.host()));
+  WebUIConfigMap::GetInstance().AddUntrustedWebUIConfig(
+      std::make_unique<ui::TestUntrustedWebUIConfig>(untrusted_url.GetHost()));
 
   EXPECT_TRUE(NavigateToURL(shell(), untrusted_url));
   EXPECT_EQ("success", PerformXHRRequest(shell(), untrusted_url));
@@ -798,25 +1110,25 @@ IN_PROC_BROWSER_TEST_F(
     WebUISecurityTest,
     DisallowCrossOriginXHRRequestToChromeUntrustedByDefault) {
   const GURL untrusted_url1 = GURL("chrome-untrusted://test1/title1.html");
-  untrusted_factory().add_web_ui_config(
-      std::make_unique<ui::TestUntrustedWebUIConfig>(untrusted_url1.host()));
+  WebUIConfigMap::GetInstance().AddUntrustedWebUIConfig(
+      std::make_unique<ui::TestUntrustedWebUIConfig>(untrusted_url1.GetHost()));
 
   const GURL untrusted_url2 = GURL("chrome-untrusted://test2/");
   URLDataSource::Add(
       shell()->web_contents()->GetBrowserContext(),
-      UntrustedSourceWithCorsSupport::CreateForHost(untrusted_url2.host()));
+      UntrustedSourceWithCorsSupport::CreateForHost(untrusted_url2.GetHost()));
 
   EXPECT_TRUE(NavigateToURL(shell(), untrusted_url1));
 
   WebContentsConsoleObserver console_observer(shell()->web_contents());
   EXPECT_EQ("error", PerformXHRRequest(shell(), untrusted_url2));
-  console_observer.Wait();
+  ASSERT_TRUE(console_observer.Wait());
   EXPECT_EQ(console_observer.GetMessageAt(0),
             base::StringPrintf(
-                "Refused to connect to '%s' because it violates the "
-                "following Content Security Policy directive: \"default-src "
-                "'self'\". Note that 'connect-src' was not explicitly set, "
-                "so 'default-src' is used as a fallback.\n",
+                "Connecting to '%s' violates the following Content Security "
+                "Policy directive: \"default-src 'self'\". Note that "
+                "'connect-src' was not explicitly set, so 'default-src' is "
+                "used as a fallback. The action has been blocked.",
                 untrusted_url2.spec().c_str()));
 }
 
@@ -829,17 +1141,41 @@ IN_PROC_BROWSER_TEST_F(
   TestUntrustedDataSourceHeaders headers;
   headers.default_src = "default-src chrome-untrusted://test2;";
   const GURL untrusted_url1 = GURL("chrome-untrusted://test1/title1.html");
-  untrusted_factory().add_web_ui_config(
-      std::make_unique<ui::TestUntrustedWebUIConfig>(untrusted_url1.host(),
+  WebUIConfigMap::GetInstance().AddUntrustedWebUIConfig(
+      std::make_unique<ui::TestUntrustedWebUIConfig>(untrusted_url1.GetHost(),
                                                      headers));
 
   const GURL untrusted_url2 = GURL("chrome-untrusted://test2/");
   URLDataSource::Add(
       shell()->web_contents()->GetBrowserContext(),
-      UntrustedSourceWithCorsSupport::CreateForHost(untrusted_url2.host()));
+      UntrustedSourceWithCorsSupport::CreateForHost(untrusted_url2.GetHost()));
 
   EXPECT_TRUE(NavigateToURL(shell(), untrusted_url1));
   EXPECT_EQ("success", PerformXHRRequest(shell(), untrusted_url2));
+}
+
+// Verify a cross-origin XHR request from a chrome-untrusted:// page to
+// another chrome-untrusted:// page is blocked when the requested data source
+// does not allow the requesting origin through its
+// Access-Control-Allow-Origin value, even if the requesting page's Content
+// Security Policy allows the request.
+IN_PROC_BROWSER_TEST_F(WebUISecurityTest,
+                       DisallowCrossOriginXHRRequestToChromeUntrustedSource) {
+  TestUntrustedDataSourceHeaders headers;
+  headers.default_src = "default-src chrome-untrusted://test2;";
+  const GURL untrusted_url1 = GURL("chrome-untrusted://test1/title1.html");
+  WebUIConfigMap::GetInstance().AddUntrustedWebUIConfig(
+      std::make_unique<ui::TestUntrustedWebUIConfig>(untrusted_url1.GetHost(),
+                                                     headers));
+
+  // The data source for test2 does not serve an Access-Control-Allow-Origin
+  // header to other origins.
+  const GURL untrusted_url2 = GURL("chrome-untrusted://test2/title2.html");
+  AddUntrustedDataSource(shell()->web_contents()->GetBrowserContext(),
+                         untrusted_url2.GetHost());
+
+  EXPECT_TRUE(NavigateToURL(shell(), untrusted_url1));
+  EXPECT_EQ("error", PerformXHRRequest(shell(), untrusted_url2));
 }
 
 // Verify XHR request from a chrome-untrusted:// page to a chrome:// page is
@@ -849,8 +1185,8 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest,
   TestUntrustedDataSourceHeaders headers;
   headers.default_src = "default-src chrome://webui;";
   const GURL untrusted_url = GURL("chrome-untrusted://test1/title1.html");
-  untrusted_factory().add_web_ui_config(
-      std::make_unique<ui::TestUntrustedWebUIConfig>(untrusted_url.host(),
+  WebUIConfigMap::GetInstance().AddUntrustedWebUIConfig(
+      std::make_unique<ui::TestUntrustedWebUIConfig>(untrusted_url.GetHost(),
                                                      headers));
 
   const GURL chrome_url = GURL("chrome://webui/title2.html");
@@ -859,10 +1195,139 @@ IN_PROC_BROWSER_TEST_F(WebUISecurityTest,
 
   WebContentsConsoleObserver console_observer(shell()->web_contents());
   EXPECT_EQ("error", PerformXHRRequest(shell(), chrome_url));
-  console_observer.Wait();
+  ASSERT_TRUE(console_observer.Wait());
   EXPECT_EQ(console_observer.GetMessageAt(0),
             base::StringPrintf("Not allowed to load local resource: %s",
                                chrome_url.spec().c_str()));
+}
+
+// Test that there's no crash when a navigation to a WebUI page reuses an
+// inactive RenderViewHost. Previously, this led to a browser process crash in
+// WebUI pages that use MojoWebUIController, which tried to use the
+// RenderViewHost's GetPrimaryMainFrame() when it was invalid in
+// RenderViewCreated(). See https://crbug.com/627027.
+IN_PROC_BROWSER_TEST_F(WebUISecurityTest, ReuseRVHWithWebUI) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+
+  // Visit a WebUI page with bindings.
+  const GURL webui_url(GetWebUIURL(
+      "web-ui/title1.html?bindings=" +
+      base::NumberToString(BindingsPolicySet({BindingsPolicyValue::kMojoWebUi})
+                               .ToEnumBitmask())));
+  ASSERT_TRUE(NavigateToURL(shell(), webui_url));
+
+  // window.open a new tab.  This will keep the WebUI page's process alive
+  // once we navigate away from it.
+  ShellAddedObserver new_shell_observer;
+  TestNavigationObserver new_tab_observer(webui_url);
+  new_tab_observer.StartWatchingNewWebContents();
+  ASSERT_TRUE(ExecJs(shell()->web_contents(),
+                     JsReplace("window.open($1);", webui_url)));
+  Shell* new_shell = new_shell_observer.GetShell();
+  new_tab_observer.Wait();
+  WebContents* new_contents = new_shell->web_contents();
+  EXPECT_TRUE(WaitForLoadStop(new_contents));
+  RenderFrameHost* webui_rfh = new_contents->GetPrimaryMainFrame();
+  EXPECT_EQ(webui_rfh->GetLastCommittedURL(), webui_url);
+  EXPECT_TRUE(
+      webui_rfh->GetEnabledBindings().Has(BindingsPolicyValue::kMojoWebUi));
+  RenderViewHostImpl* webui_rvh =
+      static_cast<RenderViewHostImpl*>(webui_rfh->GetRenderViewHost());
+
+  // Navigate to another page in the opened tab.
+  const GURL nonwebui_url(embedded_test_server()->GetURL("/title2.html"));
+  ASSERT_TRUE(NavigateToURL(new_shell, nonwebui_url));
+  EXPECT_NE(webui_rvh,
+            new_contents->GetPrimaryMainFrame()->GetRenderViewHost());
+
+  // Go back in the opened tab.  This should finish without crashing and should
+  // reuse the old RenderViewHost.
+  TestNavigationObserver back_load_observer(new_contents);
+  new_contents->GetController().GoBack();
+  back_load_observer.Wait();
+  EXPECT_EQ(webui_rvh,
+            new_contents->GetPrimaryMainFrame()->GetRenderViewHost());
+  EXPECT_TRUE(webui_rvh->IsRenderViewLive());
+  EXPECT_TRUE(new_contents->GetPrimaryMainFrame()->GetEnabledBindings().Has(
+      BindingsPolicyValue::kMojoWebUi));
+}
+
+class WebUIBrowserSideSecurityTest : public WebUISecurityTest {
+ public:
+  WebUIBrowserSideSecurityTest() = default;
+
+ protected:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    // Disable Web Security to skip renderer-side checks so that we can test
+    // browser-side checks.
+    command_line->AppendSwitch(switches::kDisableWebSecurity);
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(WebUIBrowserSideSecurityTest,
+                       DenyWebAccessToSharedResources) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+  ASSERT_TRUE(
+      NavigateToURL(shell(), embedded_test_server()->GetURL("/title2.html")));
+
+  const char kLoadResourceScript[] =
+      "new Promise((resolve) => {"
+      "  const script = document.createElement('script');"
+      "  script.onload = () => {"
+      "    resolve('Script load should have failed');"
+      "  };"
+      "  script.onerror = (e) => {"
+      "    resolve('Load failed');"
+      "  };"
+      "  script.src = $1;"
+      "  document.body.appendChild(script);"
+      "});";
+
+  DevToolsInspectorLogWatcher log_watcher(shell()->web_contents());
+
+  GURL shared_resource_url =
+      GURL("chrome-untrusted://resources/mojo/mojo/public/js/bindings.js");
+  EXPECT_EQ("Load failed", EvalJs(shell(), JsReplace(kLoadResourceScript,
+                                                     shared_resource_url)));
+  log_watcher.FlushAndStopWatching();
+
+  EXPECT_EQ(log_watcher.last_message(),
+            "Failed to load resource: net::ERR_UNKNOWN_URL_SCHEME");
+}
+
+// Test base class that disables site isolation to ensure security properties
+// of WebUIs hold true even in that mode.
+class WebUISecurityTestSiteIsolationDisabled : public WebUISecurityTest {
+ public:
+  WebUISecurityTestSiteIsolationDisabled() = default;
+  ~WebUISecurityTestSiteIsolationDisabled() override = default;
+
+  WebUISecurityTestSiteIsolationDisabled(
+      const WebUISecurityTestSiteIsolationDisabled&) = delete;
+  WebUISecurityTestSiteIsolationDisabled& operator=(
+      const WebUISecurityTestSiteIsolationDisabled&) = delete;
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    WebUISecurityTest::SetUpCommandLine(command_line);
+    command_line->AppendSwitch(switches::kDisableSiteIsolation);
+  }
+};
+
+// Verify that navigating to WebUI puts it in a locked process even when site
+// isolation is disabled.
+IN_PROC_BROWSER_TEST_F(WebUISecurityTestSiteIsolationDisabled,
+                       EnsureProcessLockWithoutSiteIsolation) {
+  // Verify that site isolation is indeed disabled.
+  EXPECT_FALSE(SiteIsolationPolicy::UseDedicatedProcessesForAllSites());
+
+  GURL test_url(GetWebUIURL("web-ui/title1.html"));
+  EXPECT_TRUE(NavigateToURL(shell(), test_url));
+
+  RenderProcessHost* rph =
+      shell()->web_contents()->GetPrimaryMainFrame()->GetProcess();
+  EXPECT_TRUE(rph->GetProcessLock().IsLockedToSite());
+  EXPECT_EQ(test_url.GetWithEmptyPath(),
+            rph->GetProcessLock().agent_cluster_key().GetSite());
 }
 
 }  // namespace content

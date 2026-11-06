@@ -1,9 +1,8 @@
-#!/usr/bin/env python
-# Copyright 2017 The Chromium Authors. All rights reserved.
+#!/usr/bin/env python3
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import argparse
 import json
 import os
 import sys
@@ -26,9 +25,13 @@ def StandardIsolatedScriptMerge(output_json, summary_json, jsons_to_merge):
     with open(summary_json) as f:
       summary = json.load(f)
   except (IOError, ValueError):
-    print >> sys.stderr, (
+    print(
+      (
         'summary.json is missing or can not be read',
-        'Something is seriously wrong with swarming client or the bot.')
+        'Something is seriously wrong with swarming client or the bot.',
+      ),
+      file=sys.stderr,
+    )
     return 1
 
   missing_shards = []
@@ -36,8 +39,9 @@ def StandardIsolatedScriptMerge(output_json, summary_json, jsons_to_merge):
   for index, result in enumerate(summary['shards']):
     output_path = None
     if result:
-      output_path = find_shard_output_path(index, result.get('task_id'),
-                                           jsons_to_merge)
+      output_path = find_shard_output_path(
+        index, result.get('task_id'), jsons_to_merge
+      )
     if not output_path:
       missing_shards.append(index)
       continue
@@ -45,8 +49,8 @@ def StandardIsolatedScriptMerge(output_json, summary_json, jsons_to_merge):
     with open(output_path) as f:
       try:
         json_contents = json.load(f)
-      except ValueError:
-        raise ValueError('Failed to parse JSON from %s' % j)
+      except ValueError as e:
+        raise ValueError('Failed to parse JSON from %s' % output_path) from e
       shard_results_list.append(json_contents)
 
   merged_results = results_merger.merge_test_results(shard_results_list)
@@ -75,16 +79,22 @@ def find_shard_output_path(index, task_id, jsons_to_merge):
   """
   # 'output.json' is set in swarming/api.py, gtest_task method.
   matching_json_files = [
-      j for j in jsons_to_merge
-      if (os.path.basename(j) == 'output.json' and
-          (os.path.basename(os.path.dirname(j)) == str(index) or
-           os.path.basename(os.path.dirname(j)) == task_id))]
+    j
+    for j in jsons_to_merge
+    if (
+      os.path.basename(j) == 'output.json'
+      and (
+        os.path.basename(os.path.dirname(j)) == str(index)
+        or os.path.basename(os.path.dirname(j)) == task_id
+      )
+    )
+  ]
 
   if not matching_json_files:
-    print >> sys.stderr, 'shard %s test output missing' % index
+    print('shard %s test output missing' % index, file=sys.stderr)
     return None
-  elif len(matching_json_files) > 1:
-    print >> sys.stderr, 'duplicate test output for shard %s' % index
+  if len(matching_json_files) > 1:
+    print('duplicate test output for shard %s' % index, file=sys.stderr)
     return None
 
   return matching_json_files[0]
@@ -94,7 +104,8 @@ def main(raw_args):
   parser = merge_api.ArgumentParser()
   args = parser.parse_args(raw_args)
   return StandardIsolatedScriptMerge(
-      args.output_json, args.summary_json, args.jsons_to_merge)
+    args.output_json, args.summary_json, args.jsons_to_merge
+  )
 
 
 if __name__ == '__main__':

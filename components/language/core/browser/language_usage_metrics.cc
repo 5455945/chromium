@@ -1,10 +1,13 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/language/core/browser/language_usage_metrics.h"
 
 #include <stddef.h>
+
+#include <set>
+#include <string_view>
 
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
@@ -15,14 +18,18 @@ namespace language {
 
 // static
 void LanguageUsageMetrics::RecordAcceptLanguages(
-    base::StringPiece accept_languages) {
-  std::set<int> languages;
-  ParseAcceptLanguages(accept_languages, &languages);
+    std::string_view accept_languages) {
+  std::vector<int> languages = ParseAcceptLanguages(accept_languages);
 
   UMA_HISTOGRAM_COUNTS_100("LanguageUsage.AcceptLanguage.Count",
                            languages.size());
   for (int language_code : languages) {
     base::UmaHistogramSparse("LanguageUsage.AcceptLanguage", language_code);
+  }
+
+  if (!languages.empty()) {
+    base::UmaHistogramSparse("LanguageUsage.AcceptLanguage.FirstAcceptLanguage",
+                             languages[0]);
   }
 }
 
@@ -39,7 +46,7 @@ void LanguageUsageMetrics::RecordPageLanguages(
       continue;
     }
 
-    const int language_code = ToLanguageCode(language_info.language_code);
+    const int language_code = ToLanguageCodeHash(language_info.language_code);
     if (language_code != 0) {
       base::UmaHistogramSparse("LanguageUsage.MostFrequentPageLanguages",
                                language_code);
@@ -48,18 +55,8 @@ void LanguageUsageMetrics::RecordPageLanguages(
 }
 
 // static
-void LanguageUsageMetrics::RecordApplicationLanguage(
-    base::StringPiece application_locale) {
-  const int language_code = ToLanguageCode(application_locale);
-  if (language_code != 0) {
-    base::UmaHistogramSparse("LanguageUsage.ApplicationLanguage",
-                             language_code);
-  }
-}
-
-// static
-int LanguageUsageMetrics::ToLanguageCode(base::StringPiece locale) {
-  base::StringPiece language_part =
+int LanguageUsageMetrics::ToLanguageCodeHash(std::string_view locale) {
+  std::string_view language_part =
       locale.substr(0U, locale.find_first_of("-_"));
 
   int language_code = 0;
@@ -88,18 +85,19 @@ int LanguageUsageMetrics::ToLanguageCode(base::StringPiece locale) {
 }
 
 // static
-void LanguageUsageMetrics::ParseAcceptLanguages(
-    base::StringPiece accept_languages,
-    std::set<int>* languages) {
-  languages->clear();
-  base::CStringTokenizer locales(
-      accept_languages.data(),
-      accept_languages.data() + accept_languages.size(), ",");
+std::vector<int> LanguageUsageMetrics::ParseAcceptLanguages(
+    std::string_view accept_languages) {
+  std::set<int> visited_languages;
+  std::vector<int> languages;
+
+  base::StringViewTokenizer locales(accept_languages, ",");
   while (locales.GetNext()) {
-    const int language_code = ToLanguageCode(locales.token_piece());
-    if (language_code != 0)
-      languages->insert(language_code);
+    const int language_hash = ToLanguageCodeHash(locales.token_piece());
+    if (language_hash != 0 && visited_languages.insert(language_hash).second) {
+      languages.push_back(language_hash);
+    }
   }
+  return languages;
 }
 
 }  // namespace language

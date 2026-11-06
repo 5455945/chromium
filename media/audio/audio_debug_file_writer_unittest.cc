@@ -1,6 +1,8 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "media/audio/audio_debug_file_writer.h"
 
 #include <stdint.h>
 
@@ -8,45 +10,83 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/containers/heap_array.h"
+#include "base/containers/span.h"
+#include "base/containers/span_reader.h"
 #include "base/files/file_util.h"
-#include "base/memory/ptr_util.h"
-#include "base/synchronization/waitable_event.h"
-#include "base/sys_byteorder.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/task_environment.h"
-#include "base/threading/thread.h"
-#include "media/audio/audio_debug_file_writer.h"
 #include "media/base/audio_bus.h"
+#include "media/base/audio_bus_pool.h"
+#include "media/base/audio_parameters.h"
 #include "media/base/audio_sample_types.h"
 #include "media/base/test_helpers.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+using testing::_;
 
 namespace media {
 
 namespace {
 
-static const uint16_t kBytesPerSample = sizeof(uint16_t);
-static const uint16_t kPcmEncoding = 1;
-static const size_t kWavHeaderSize = 44;
-
-uint16_t ReadLE2(const char* buf) {
-  return static_cast<uint8_t>(buf[0]) | (static_cast<uint8_t>(buf[1]) << 8);
-}
-
-uint32_t ReadLE4(const char* buf) {
-  return static_cast<uint8_t>(buf[0]) | (static_cast<uint8_t>(buf[1]) << 8) |
-         (static_cast<uint8_t>(buf[2]) << 16) |
-         (static_cast<uint8_t>(buf[3]) << 24);
-}
+static constexpr uint16_t kBytesPerSample = sizeof(uint16_t);
+static constexpr uint16_t kPcmEncoding = 1;
+static constexpr size_t kWavHeaderSize = 44;
 
 base::File OpenFile(const base::FilePath& file_path) {
   return base::File(file_path, base::File::FLAG_OPEN | base::File::FLAG_WRITE);
 }
 
+// Serves only to expose the protected Create method of AudioDebugFileWriter.
+class AudioDebugFileWriterUnderTest : public AudioDebugFileWriter {
+ public:
+  // Should not be instantiated
+  AudioDebugFileWriterUnderTest() = delete;
+
+  static Ptr Create(const AudioParameters& params,
+                    base::File file,
+                    std::unique_ptr<AudioBusPool> audio_bus_pool) {
+    return AudioDebugFileWriter::Create(params, std::move(file),
+                                        std::move(audio_bus_pool));
+  }
+};
+
+class MockAudioBusPool : public AudioBusPool {
+ public:
+  explicit MockAudioBusPool(const AudioParameters& params) : params_(params) {}
+
+  MockAudioBusPool(const MockAudioBusPool&) = delete;
+  MockAudioBusPool& operator=(const MockAudioBusPool&) = delete;
+  ~MockAudioBusPool() override = default;
+
+  std::unique_ptr<AudioBus> GetAudioBus() override {
+    if (audio_bus_to_return_) {
+      return std::move(audio_bus_to_return_);
+    }
+    return AudioBus::Create(params_);
+  }
+
+  MOCK_METHOD1(OnInsertAudioBus, void(AudioBus*));
+
+  void InsertAudioBus(std::unique_ptr<AudioBus> audio_bus) override {
+    OnInsertAudioBus(audio_bus.get());
+  }
+
+  void SetNextAudioBus(std::unique_ptr<AudioBus> audio_bus) {
+    audio_bus_to_return_ = std::move(audio_bus);
+  }
+
+ private:
+  const AudioParameters params_;
+
+  std::unique_ptr<AudioBus> audio_bus_to_return_;
+};
+
 }  // namespace
 
 // <channel layout, sample rate, frames per buffer, number of buffer writes
-typedef std::tuple<ChannelLayout, int, int, int> AudioDebugFileWriterTestData;
+using AudioDebugFileWriterTestData =
+    std::tuple<ChannelLayoutConfig, int, int, int>;
 
 class AudioDebugFileWriterTest
     : public testing::TestWithParam<AudioDebugFileWriterTestData> {
@@ -55,6 +95,7 @@ class AudioDebugFileWriterTest
       base::test::TaskEnvironment::ThreadPoolExecutionMode execution_mode)
       : task_environment_(base::test::TaskEnvironment::MainThreadType::DEFAULT,
                           execution_mode),
+        debug_writer_(nullptr, base::OnTaskRunnerDeleter(nullptr)),
         params_(AudioParameters::Format::AUDIO_PCM_LINEAR,
                 std::get<0>(GetParam()),
                 std::get<1>(GetParam()),
@@ -62,29 +103,32 @@ class AudioDebugFileWriterTest
         writes_(std::get<3>(GetParam())),
         source_samples_(params_.frames_per_buffer() * params_.channels() *
                         writes_),
-        source_interleaved_(source_samples_ ? new int16_t[source_samples_]
-                                            : nullptr) {
-    InitSourceInterleaved(source_interleaved_.get(), source_samples_);
+        source_interleaved_(base::HeapArray<int16_t>::Uninit(source_samples_)) {
+    InitSourceInterleaved(source_interleaved_);
   }
   AudioDebugFileWriterTest()
       : AudioDebugFileWriterTest(
             base::test::TaskEnvironment::ThreadPoolExecutionMode::ASYNC) {}
 
+  AudioDebugFileWriterTest(const AudioDebugFileWriterTest&) = delete;
+  AudioDebugFileWriterTest& operator=(const AudioDebugFileWriterTest&) = delete;
+
  protected:
   virtual ~AudioDebugFileWriterTest() = default;
 
-  static void InitSourceInterleaved(int16_t* source_interleaved,
-                                    int source_samples) {
-    if (source_samples) {
-      // equal steps to cover int16_t range of values
-      int16_t step = 0xffff / source_samples;
-      int16_t val = std::numeric_limits<int16_t>::min();
-      for (int i = 0; i < source_samples; ++i, val += step)
-        source_interleaved[i] = val;
+  static void InitSourceInterleaved(base::span<int16_t> source_interleaved) {
+    if (source_interleaved.empty()) {
+      return;
+    }
+    // equal steps to cover int16_t range of values
+    const int16_t step = 0xffff / source_interleaved.size();
+    int16_t val = std::numeric_limits<int16_t>::min();
+    for (size_t i = 0; i < source_interleaved.size(); ++i, val += step) {
+      source_interleaved[i] = val;
     }
   }
 
-  static void VerifyHeader(const char (&wav_header)[kWavHeaderSize],
+  static void VerifyHeader(const base::span<const uint8_t> wav_header,
                            const AudioParameters& params,
                            int writes,
                            int64_t file_length) {
@@ -92,52 +136,66 @@ class AudioDebugFileWriterTest
     uint32_t data_size =
         static_cast<uint32_t>(params.frames_per_buffer() * params.channels() *
                               writes * kBytesPerSample);
+    base::SpanReader span_reader(wav_header);
     // Offset Length  Content
     //  0      4     "RIFF"
-    EXPECT_EQ(0, strncmp(wav_header, "RIFF", 4));
+    EXPECT_EQ(span_reader.Read<4u>(), base::byte_span_from_cstring("RIFF"));
     //  4      4     <file length - 8>
     ASSERT_GT(file_length, 8);
-    EXPECT_EQ(static_cast<uint64_t>(file_length - 8), ReadLE4(wav_header + 4));
-    EXPECT_EQ(static_cast<uint32_t>(data_size + kWavHeaderSize - 8),
-              ReadLE4(wav_header + 4));
+    uint32_t result = 0;
+    span_reader.ReadU32LittleEndian(result);
+    EXPECT_EQ(static_cast<uint64_t>(file_length - 8), result);
+    EXPECT_EQ(static_cast<uint32_t>(data_size + kWavHeaderSize - 8), result);
     //  8      4     "WAVE"
     // 12      4     "fmt "
-    EXPECT_EQ(0, strncmp(wav_header + 8, "WAVEfmt ", 8));
+    EXPECT_EQ(span_reader.Read<8u>(), base::byte_span_from_cstring("WAVEfmt "));
     // 16      4     <length of the fmt data> (=16)
-    EXPECT_EQ(16U, ReadLE4(wav_header + 16));
+    span_reader.ReadU32LittleEndian(result);
+    EXPECT_EQ(16U, result);
     // 20      2     <WAVE file encoding tag>
-    EXPECT_EQ(kPcmEncoding, ReadLE2(wav_header + 20));
+    uint16_t encoding = 0;
+    span_reader.ReadU16LittleEndian(encoding);
+    EXPECT_EQ(kPcmEncoding, encoding);
     // 22      2     <channels>
-    EXPECT_EQ(params.channels(), ReadLE2(wav_header + 22));
+    uint16_t channels = 0;
+    span_reader.ReadU16LittleEndian(channels);
+    EXPECT_EQ(params.channels(), channels);
     // 24      4     <sample rate>
-    EXPECT_EQ(static_cast<uint32_t>(params.sample_rate()),
-              ReadLE4(wav_header + 24));
+    uint32_t sample_rate = 0;
+    span_reader.ReadU32LittleEndian(sample_rate);
+    EXPECT_EQ(static_cast<uint32_t>(params.sample_rate()), sample_rate);
     // 28      4     <bytes per second> (sample rate * block align)
+    uint32_t bytes_per_second = 0;
+    span_reader.ReadU32LittleEndian(bytes_per_second);
     EXPECT_EQ(static_cast<uint32_t>(params.sample_rate()) * block_align,
-              ReadLE4(wav_header + 28));
+              bytes_per_second);
     // 32      2     <block align>  (channels * bits per sample / 8)
-    EXPECT_EQ(block_align, ReadLE2(wav_header + 32));
+    uint16_t read_block_align = 0;
+    span_reader.ReadU16LittleEndian(read_block_align);
+    EXPECT_EQ(block_align, read_block_align);
     // 34      2     <bits per sample>
-    EXPECT_EQ(kBytesPerSample * 8, ReadLE2(wav_header + 34));
+    uint16_t bits_per_sample = 0;
+    span_reader.ReadU16LittleEndian(bits_per_sample);
+    EXPECT_EQ(kBytesPerSample * 8, bits_per_sample);
     // 36      4     "data"
-    EXPECT_EQ(0, strncmp(wav_header + 36, "data", 4));
+    EXPECT_EQ(span_reader.Read<4u>(), base::byte_span_from_cstring("data"));
     // 40      4     <sample data size(n)>
-    EXPECT_EQ(data_size, ReadLE4(wav_header + 40));
+    uint32_t sample_data_size = 0;
+    span_reader.ReadU32LittleEndian(sample_data_size);
+    EXPECT_EQ(data_size, sample_data_size);
   }
 
   // |result_interleaved| is expected to be little-endian.
-  static void VerifyDataRecording(const int16_t* source_interleaved,
-                                  const int16_t* result_interleaved,
-                                  int16_t source_samples) {
+  static void VerifyDataRecording(
+      base::span<const int16_t> source_interleaved,
+      base::span<const int16_t> result_interleaved) {
     // Allow mismatch by 1 due to rounding error in int->float->int
     // calculations.
-    for (int i = 0; i < source_samples; ++i)
-      EXPECT_LE(std::abs(static_cast<int16_t>(
-                             base::ByteSwapToLE16(source_interleaved[i])) -
-                         result_interleaved[i]),
-                1)
+    for (size_t i = 0; i < source_interleaved.size(); ++i) {
+      EXPECT_LE(std::abs(source_interleaved[i] - result_interleaved[i]), 1)
           << "i = " << i << " source " << source_interleaved[i] << " result "
           << result_interleaved[i];
+    }
   }
 
   void VerifyRecording(const base::FilePath& file_path) {
@@ -145,63 +203,55 @@ class AudioDebugFileWriterTest
     ASSERT_TRUE(file.IsValid());
 
     char wav_header[kWavHeaderSize];
-    EXPECT_EQ(file.Read(0, wav_header, kWavHeaderSize),
+    EXPECT_EQ(file.Read(0, base::as_writable_byte_span(wav_header)),
               static_cast<int>(kWavHeaderSize));
-    VerifyHeader(wav_header, params_, writes_, file.GetLength());
+    VerifyHeader(base::as_byte_span(wav_header), params_, writes_,
+                 file.GetLength());
 
     if (source_samples_ > 0) {
-      std::unique_ptr<int16_t[]> result_interleaved(
-          new int16_t[source_samples_]);
-      memset(result_interleaved.get(), 0, source_samples_ * kBytesPerSample);
+      auto result_interleaved =
+          base::HeapArray<int16_t>::WithSize(source_samples_);
 
       // Recording is read from file as a byte sequence, so it stored as
       // little-endian.
-      int read = file.Read(kWavHeaderSize,
-                           reinterpret_cast<char*>(result_interleaved.get()),
-                           source_samples_ * kBytesPerSample);
+      std::optional<size_t> read = file.Read(
+          kWavHeaderSize, base::as_writable_byte_span(result_interleaved));
       EXPECT_EQ(static_cast<int>(file.GetLength() - kWavHeaderSize), read);
 
-      VerifyDataRecording(source_interleaved_.get(), result_interleaved.get(),
-                          source_samples_);
+      VerifyDataRecording(source_interleaved_, result_interleaved);
     }
   }
 
-  void DoDebugRecording() {
+  void DoDebugRecording(bool expect_buses_returned_to_pool = true) {
+    EXPECT_CALL(*mock_audio_bus_pool_, OnInsertAudioBus(_))
+        .Times(expect_buses_returned_to_pool ? writes_ : 0);
+
+    auto remaining_data = source_interleaved_.as_span();
+    const size_t samples_per_buffer =
+        params_.frames_per_buffer() * params_.channels();
+
     for (int i = 0; i < writes_; ++i) {
       std::unique_ptr<AudioBus> bus =
           AudioBus::Create(params_.channels(), params_.frames_per_buffer());
 
       bus->FromInterleaved<media::SignedInt16SampleTypeTraits>(
-          source_interleaved_.get() +
-              i * params_.channels() * params_.frames_per_buffer(),
-          params_.frames_per_buffer());
+          remaining_data.take_first(samples_per_buffer));
 
-      debug_writer_->Write(std::move(bus));
+      debug_writer_->Write(*bus);
     }
   }
 
-  void RecordAndVerifyOnce() {
-    base::FilePath file_path;
-    ASSERT_TRUE(base::CreateTemporaryFile(&file_path));
-    base::File file = OpenFile(file_path);
-    ASSERT_TRUE(file.IsValid());
+  void CreateDebugWriter(base::File file) {
+    auto audio_bus_pool = std::make_unique<MockAudioBusPool>(params_);
+    mock_audio_bus_pool_ = audio_bus_pool.get();
+    debug_writer_ = AudioDebugFileWriterUnderTest::Create(
+        params_, std::move(file), std::move(audio_bus_pool));
+  }
 
-    debug_writer_->Start(std::move(file));
-
-    DoDebugRecording();
-
-    debug_writer_->Stop();
-
-    task_environment_.RunUntilIdle();
-
-    VerifyRecording(file_path);
-
-    if (::testing::Test::HasFailure()) {
-      LOG(ERROR) << "Test failed; keeping recording(s) at ["
-                 << file_path.value().c_str() << "].";
-    } else {
-      ASSERT_TRUE(base::DeleteFile(file_path));
-    }
+  void DestroyDebugWriter() {
+    // Drop unowned reference before deleting owner.
+    mock_audio_bus_pool_ = nullptr;
+    debug_writer_.reset();
   }
 
  protected:
@@ -209,7 +259,10 @@ class AudioDebugFileWriterTest
   base::test::TaskEnvironment task_environment_;
 
   // Writer under test.
-  std::unique_ptr<AudioDebugFileWriter> debug_writer_;
+  AudioDebugFileWriter::Ptr debug_writer_;
+
+  // Pointer to the AudioBusPool of the most recently created writer.
+  raw_ptr<MockAudioBusPool> mock_audio_bus_pool_;
 
   // AudioBus parameters.
   AudioParameters params_;
@@ -221,10 +274,7 @@ class AudioDebugFileWriterTest
   int source_samples_;
 
   // Source data.
-  std::unique_ptr<int16_t[]> source_interleaved_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(AudioDebugFileWriterTest);
+  base::HeapArray<int16_t> source_interleaved_;
 };
 
 class AudioDebugFileWriterBehavioralTest : public AudioDebugFileWriterTest {};
@@ -237,24 +287,62 @@ class AudioDebugFileWriterSingleThreadTest : public AudioDebugFileWriterTest {
 };
 
 TEST_P(AudioDebugFileWriterTest, WaveRecordingTest) {
-  debug_writer_ = std::make_unique<AudioDebugFileWriter>(params_);
-  RecordAndVerifyOnce();
-}
-
-TEST_P(AudioDebugFileWriterSingleThreadTest,
-       DeletedBeforeRecordingFinishedOnFileThread) {
-  debug_writer_ = std::make_unique<AudioDebugFileWriter>(params_);
-
   base::FilePath file_path;
   ASSERT_TRUE(base::CreateTemporaryFile(&file_path));
   base::File file = OpenFile(file_path);
   ASSERT_TRUE(file.IsValid());
 
-  debug_writer_->Start(std::move(file));
-
+  CreateDebugWriter(std::move(file));
   DoDebugRecording();
+  DestroyDebugWriter();
 
-  debug_writer_.reset();
+  task_environment_.RunUntilIdle();
+
+  VerifyRecording(file_path);
+
+  if (::testing::Test::HasFailure()) {
+    LOG(ERROR) << "Test failed; keeping recording(s) at ["
+               << file_path.value().c_str() << "].";
+  } else {
+    ASSERT_TRUE(base::DeleteFile(file_path));
+  }
+}
+
+TEST_P(AudioDebugFileWriterBehavioralTest, ShouldReuseAudioBusesWithPool) {
+  base::FilePath file_path;
+  ASSERT_TRUE(base::CreateTemporaryFile(&file_path));
+  base::File file = OpenFile(file_path);
+  ASSERT_TRUE(file.IsValid());
+
+  CreateDebugWriter(std::move(file));
+
+  // Set a specific audio bus to be returned by the pool.
+  std::unique_ptr<AudioBus> reference_audio_bus = AudioBus::Create(params_);
+  AudioBus* reference_audio_bus_ptr = reference_audio_bus.get();
+  mock_audio_bus_pool_->SetNextAudioBus(std::move(reference_audio_bus));
+
+  // Expect that same audio bus to be returned to the pool.
+  EXPECT_CALL(*mock_audio_bus_pool_, OnInsertAudioBus(reference_audio_bus_ptr));
+
+  std::unique_ptr<AudioBus> bus = AudioBus::Create(params_);
+  bus->FromInterleaved<media::SignedInt16SampleTypeTraits>(
+      source_interleaved_.first(static_cast<size_t>(
+          params_.frames_per_buffer() * params_.channels())));
+
+  debug_writer_->Write(*bus);
+  task_environment_.RunUntilIdle();
+}
+
+TEST_P(AudioDebugFileWriterSingleThreadTest,
+       DeletedBeforeRecordingFinishedOnFileThread) {
+  base::FilePath file_path;
+  ASSERT_TRUE(base::CreateTemporaryFile(&file_path));
+  base::File file = OpenFile(file_path);
+  ASSERT_TRUE(file.IsValid());
+
+  CreateDebugWriter(std::move(file));
+  DoDebugRecording();
+  DestroyDebugWriter();
 
   task_environment_.RunUntilIdle();
 
@@ -269,31 +357,55 @@ TEST_P(AudioDebugFileWriterSingleThreadTest,
 }
 
 TEST_P(AudioDebugFileWriterBehavioralTest, StartWithInvalidFile) {
-  debug_writer_ = std::make_unique<AudioDebugFileWriter>(params_);
   base::File file;  // Invalid file, recording should not crash
-  debug_writer_->Start(std::move(file));
-  DoDebugRecording();
+  CreateDebugWriter(std::move(file));
+
+  DoDebugRecording(/*expect_buses_returned_to_pool = */ false);
+  task_environment_.RunUntilIdle();
 }
 
 TEST_P(AudioDebugFileWriterBehavioralTest, StartStopStartStop) {
-  debug_writer_ = std::make_unique<AudioDebugFileWriter>(params_);
-  RecordAndVerifyOnce();
-  RecordAndVerifyOnce();
-}
+  base::FilePath file_path1;
+  ASSERT_TRUE(base::CreateTemporaryFile(&file_path1));
+  base::File file1 = OpenFile(file_path1);
+  ASSERT_TRUE(file1.IsValid());
 
-TEST_P(AudioDebugFileWriterBehavioralTest, DestroyNotStarted) {
-  debug_writer_ = std::make_unique<AudioDebugFileWriter>(params_);
-  debug_writer_.reset();
+  base::FilePath file_path2;
+  ASSERT_TRUE(base::CreateTemporaryFile(&file_path2));
+  base::File file2 = OpenFile(file_path2);
+  ASSERT_TRUE(file2.IsValid());
+
+  CreateDebugWriter(std::move(file1));
+  DoDebugRecording();
+  DestroyDebugWriter();
+
+  CreateDebugWriter(std::move(file2));
+  DoDebugRecording();
+  DestroyDebugWriter();
+
+  task_environment_.RunUntilIdle();
+
+  VerifyRecording(file_path1);
+  VerifyRecording(file_path2);
+
+  if (::testing::Test::HasFailure()) {
+    LOG(ERROR) << "Test failed; keeping recording(s) at ["
+               << file_path1.value().c_str() << ", "
+               << file_path2.value().c_str() << "].";
+  } else {
+    ASSERT_TRUE(base::DeleteFile(file_path1));
+    ASSERT_TRUE(base::DeleteFile(file_path2));
+  }
 }
 
 TEST_P(AudioDebugFileWriterBehavioralTest, DestroyStarted) {
-  debug_writer_ = std::make_unique<AudioDebugFileWriter>(params_);
   base::FilePath file_path;
   ASSERT_TRUE(base::CreateTemporaryFile(&file_path));
   base::File file = OpenFile(file_path);
   ASSERT_TRUE(file.IsValid());
-  debug_writer_->Start(std::move(file));
-  debug_writer_.reset();
+  CreateDebugWriter(std::move(file));
+  DestroyDebugWriter();
+  task_environment_.RunUntilIdle();
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -302,53 +414,34 @@ INSTANTIATE_TEST_SUITE_P(
     // Using 10ms frames per buffer everywhere.
     testing::Values(
         // No writes.
-        std::make_tuple(ChannelLayout::CHANNEL_LAYOUT_MONO,
-                        44100,
-                        44100 / 100,
-                        0),
+        std::make_tuple(ChannelLayoutConfig::Mono(), 44100, 44100 / 100, 0),
         // 1 write of mono.
-        std::make_tuple(ChannelLayout::CHANNEL_LAYOUT_MONO,
-                        44100,
-                        44100 / 100,
-                        1),
+        std::make_tuple(ChannelLayoutConfig::Mono(), 44100, 44100 / 100, 1),
         // 1 second of mono.
-        std::make_tuple(ChannelLayout::CHANNEL_LAYOUT_MONO,
-                        44100,
-                        44100 / 100,
-                        100),
+        std::make_tuple(ChannelLayoutConfig::Mono(), 44100, 44100 / 100, 100),
         // 1 second of mono, higher rate.
-        std::make_tuple(ChannelLayout::CHANNEL_LAYOUT_MONO,
-                        48000,
-                        48000 / 100,
-                        100),
+        std::make_tuple(ChannelLayoutConfig::Mono(), 48000, 48000 / 100, 100),
         // 1 second of stereo.
-        std::make_tuple(ChannelLayout::CHANNEL_LAYOUT_STEREO,
-                        44100,
-                        44100 / 100,
-                        100),
+        std::make_tuple(ChannelLayoutConfig::Stereo(), 44100, 44100 / 100, 100),
         // 15 seconds of stereo, higher rate.
-        std::make_tuple(ChannelLayout::CHANNEL_LAYOUT_STEREO,
+        std::make_tuple(ChannelLayoutConfig::Stereo(),
                         48000,
                         48000 / 100,
                         1500)));
 
-INSTANTIATE_TEST_SUITE_P(AudioDebugFileWriterBehavioralTest,
-                         AudioDebugFileWriterBehavioralTest,
-                         // Using 10ms frames per buffer everywhere.
-                         testing::Values(
-                             // No writes.
-                             std::make_tuple(ChannelLayout::CHANNEL_LAYOUT_MONO,
-                                             44100,
-                                             44100 / 100,
-                                             100)));
+INSTANTIATE_TEST_SUITE_P(
+    AudioDebugFileWriterBehavioralTest,
+    AudioDebugFileWriterBehavioralTest,
+    // Using 10ms frames per buffer everywhere.
+    testing::Values(
+        // No writes.
+        std::make_tuple(ChannelLayoutConfig::Mono(), 44100, 44100 / 100, 100)));
 
-INSTANTIATE_TEST_SUITE_P(AudioDebugFileWriterSingleThreadTest,
-                         AudioDebugFileWriterSingleThreadTest,
-                         // Using 10ms frames per buffer everywhere.
-                         testing::Values(
-                             // No writes.
-                             std::make_tuple(ChannelLayout::CHANNEL_LAYOUT_MONO,
-                                             44100,
-                                             44100 / 100,
-                                             100)));
+INSTANTIATE_TEST_SUITE_P(
+    AudioDebugFileWriterSingleThreadTest,
+    AudioDebugFileWriterSingleThreadTest,
+    // Using 10ms frames per buffer everywhere.
+    testing::Values(
+        // No writes.
+        std::make_tuple(ChannelLayoutConfig::Mono(), 44100, 44100 / 100, 100)));
 }  // namespace media

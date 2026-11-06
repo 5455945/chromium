@@ -1,52 +1,62 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.profiles;
 
+import androidx.annotation.VisibleForTesting;
+
+import org.jni_zero.JNINamespace;
+import org.jni_zero.JniType;
+import org.jni_zero.NativeMethods;
+
 import org.chromium.base.Callback;
-import org.chromium.base.annotations.JNINamespace;
-import org.chromium.base.annotations.NativeMethods;
-import org.chromium.components.embedder_support.browser_context.BrowserContextHandle;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.components.embedder_support.browser_context.PartitionResolver;
 import org.chromium.components.embedder_support.simple_factory_key.SimpleFactoryKeyHandle;
+import org.chromium.content_public.browser.BrowserContextHandle;
 
 /**
  * Profile specific implementation for resolving various partition objects, such as {@link
  * BrowserContextHandle}. This class requires native to be initialized in order to work properly.
  */
 @JNINamespace("profile_resolver")
+@NullMarked
 public class ProfileResolver implements PartitionResolver {
     @Override
-    public String tokenize(BrowserContextHandle handle) {
+    public String tokenize(@Nullable BrowserContextHandle handle) {
         return ProfileResolverJni.get().tokenizeProfile((Profile) handle);
     }
 
     @Override
-    public String tokenize(SimpleFactoryKeyHandle handle) {
+    public String tokenize(@Nullable SimpleFactoryKeyHandle handle) {
         return ProfileResolverJni.get().tokenizeProfileKey((ProfileKey) handle);
     }
 
     @Override
-    public void resolveBrowserContext(String token, Callback<BrowserContextHandle> callback) {
-        ProfileResolverJni.get().resolveProfile(
-                token, (Profile profile) -> callback.onResult(profile));
+    public void resolveBrowserContext(
+            @Nullable String token, Callback<@Nullable BrowserContextHandle> callback) {
+        ProfileResolverJni.get()
+                .resolveProfile(token, (@Nullable Profile profile) -> callback.onResult(profile));
     }
 
     @Override
-    public void resolveSimpleFactoryKey(String token, Callback<SimpleFactoryKeyHandle> callback) {
-        ProfileResolverJni.get().resolveProfileKey(
-                token, (ProfileKey key) -> callback.onResult(key));
+    public void resolveSimpleFactoryKey(
+            @Nullable String token, Callback<@Nullable SimpleFactoryKeyHandle> callback) {
+        ProfileResolverJni.get()
+                .resolveProfileKey(token, (@Nullable ProfileKey key) -> callback.onResult(key));
     }
 
     /**
      * Profile specific resolve method. Often more convenient to call from //chrome/ code. Callers
      * should be careful to be able to handle both inline/renterant and asynchronous invocations of
      * the passed callback.
+     *
      * @param token A value previously provided by a tokenize call.
      * @param callback A callback to pass the resolved profile on success, otherwise null.
      */
-    public void resolveProfile(String token, Callback<Profile> callback) {
+    public void resolveProfile(@Nullable String token, Callback<@Nullable Profile> callback) {
         ProfileResolverJni.get().resolveProfile(token, callback);
     }
 
@@ -54,18 +64,31 @@ public class ProfileResolver implements PartitionResolver {
      * Profile specific resolve method. Often more convenient to call from //chrome/ code. Callers
      * should be careful to be able to handle both inline/renterant and asynchronous invocations of
      * the passed callback.
+     *
      * @param token A value previously provided by a tokenize call.
      * @param callback A callback to pass the resolved profile key on success, otherwise null.
      */
-    public void resolveProfileKey(String token, Callback<ProfileKey> callback) {
+    public void resolveProfileKey(@Nullable String token, Callback<@Nullable ProfileKey> callback) {
         ProfileResolverJni.get().resolveProfileKey(token, callback);
     }
 
+    @VisibleForTesting
     @NativeMethods
-    interface Natives {
-        String tokenizeProfile(Profile profile);
-        String tokenizeProfileKey(ProfileKey profileKey);
-        void resolveProfile(String token, Callback<Profile> callback);
-        void resolveProfileKey(String token, Callback<ProfileKey> callback);
+    public interface Natives {
+        @JniType("std::string")
+        String tokenizeProfile(@JniType("Profile*") @Nullable Profile profile);
+
+        @JniType("std::string")
+        String tokenizeProfileKey(@JniType("ProfileKey*") @Nullable ProfileKey profileKey);
+
+        void resolveProfile(
+                @JniType("std::optional<std::string>") @Nullable String token,
+                @JniType("base::OnceCallback<void(Profile*)>")
+                        Callback<@Nullable Profile> callback);
+
+        void resolveProfileKey(
+                @JniType("std::optional<std::string>") @Nullable String token,
+                @JniType("base::OnceCallback<void(ProfileKey*)>")
+                        Callback<@Nullable ProfileKey> callback);
     }
 }

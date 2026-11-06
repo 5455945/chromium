@@ -4,6 +4,8 @@
     <meta charset="utf-8">
     <title>$i18n{title}</title>
     <link rel="stylesheet" href="chrome://resources/css/text_defaults_md.css">
+    <link rel="stylesheet" href="chrome://resources/chromeos/colors/cros_styles.css">
+    <link rel="stylesheet" href="chrome://theme/colors.css?sets=legacy,sys">
   </head>
   <style>
     body,
@@ -15,11 +17,12 @@
     }
 
     #content {
+      background-color: var(--cros-bg-color);
       height: 100%;
       overflow: auto;
     }
   </style>
-  <body>
+  <body class="jelly-enabled">
     <div id="content">
       <internet-config-dialog></internet-config-dialog>
       <script type="module" src="internet_config_dialog.js"></script>

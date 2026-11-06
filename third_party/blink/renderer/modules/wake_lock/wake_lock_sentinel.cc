@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,36 +14,33 @@
 namespace blink {
 
 WakeLockSentinel::WakeLockSentinel(ScriptState* script_state,
-                                   WakeLockType type,
+                                   V8WakeLockType::Enum type,
                                    WakeLockManager* manager)
-    : ExecutionContextLifecycleObserver(ExecutionContext::From(script_state)),
+    : ActiveScriptWrappable<WakeLockSentinel>({}),
+      ExecutionContextLifecycleObserver(ExecutionContext::From(script_state)),
       manager_(manager),
       type_(type) {}
 
 WakeLockSentinel::~WakeLockSentinel() = default;
 
-ScriptPromise WakeLockSentinel::release(ScriptState* script_state) {
+ScriptPromise<IDLUndefined> WakeLockSentinel::release(
+    ScriptState* script_state) {
   // https://w3c.github.io/screen-wake-lock/#the-release-method
   // 1. If this's [[Released]] is false, then run release a wake lock with lock
   //    set to this and type set to the value of this's type attribute.
   DoRelease();
   // 2. Return a promise resolved with undefined.
-  return ScriptPromise::CastUndefined(script_state);
+  return ToResolvedUndefinedPromise(script_state);
 }
 
 bool WakeLockSentinel::released() const {
   return released_;
 }
 
-String WakeLockSentinel::type() const {
+V8WakeLockType WakeLockSentinel::type() const {
   // https://w3c.github.io/screen-wake-lock/#dom-wakelocksentinel-type
   // The type attribute corresponds to the WakeLockSentinel's wake lock type.
-  switch (type_) {
-    case WakeLockType::kScreen:
-      return "screen";
-    case WakeLockType::kSystem:
-      return "system";
-  }
+  return V8WakeLockType(type_);
 }
 
 ExecutionContext* WakeLockSentinel::GetExecutionContext() const {
@@ -56,7 +53,7 @@ const AtomicString& WakeLockSentinel::InterfaceName() const {
 
 void WakeLockSentinel::Trace(Visitor* visitor) const {
   visitor->Trace(manager_);
-  EventTargetWithInlineData::Trace(visitor);
+  EventTarget::Trace(visitor);
   ExecutionContextLifecycleObserver::Trace(visitor);
 }
 

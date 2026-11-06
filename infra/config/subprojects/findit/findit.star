@@ -1,9 +1,11 @@
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-load("//lib/builders.star", "builder", "defaults", "goma", "os")
-load("//lib/swarming.star", swarming_lib = "swarming")
+load("@chromium-luci//builders.star", "builder", "defaults")
+load("@chromium-luci//consoles.star", "consoles")
+load("@chromium-luci//swarming.star", swarming_lib = "swarming")
+load("//lib/siso.star", "siso")
 
 luci.bucket(
     name = "findit",
@@ -21,6 +23,30 @@ luci.bucket(
     ],
 )
 
+# Define the shadow bucket of `findit`.
+luci.bucket(
+    name = "findit.shadow",
+    shadows = "findit",
+    # Only the builds with allowed pool and service account can be created
+    # in this bucket.
+    constraints = luci.bucket_constraints(
+        pools = ["luci.chromium.findit"],
+        service_accounts = ["findit-builder@chops-service-accounts.iam.gserviceaccount.com"],
+    ),
+    bindings = [
+        # for led permissions.
+        luci.binding(
+            roles = "role/buildbucket.creator",
+            groups = "project-findit-owners",
+        ),
+    ],
+    dynamic = True,
+)
+
+consoles.list_view(
+    name = "findit",
+)
+
 # FindIt builders use a separate pool with a dedicated set of permissions.
 swarming_lib.pool_realm(name = "pools/findit")
 
@@ -31,58 +57,38 @@ swarming_lib.task_triggerers(
     groups = ["project-findit-owners"],
 )
 
-defaults.auto_builder_dimension.set(False)
-defaults.bucket.set("findit")
-defaults.build_numbers.set(True)
-defaults.builderless.set(True)
-defaults.ssd.set(True)
-defaults.configure_kitchen.set(True)
-defaults.execution_timeout.set(8 * time.hour)
-defaults.pool.set("luci.chromium.findit")
-defaults.service_account.set("findit-builder@chops-service-accounts.iam.gserviceaccount.com")
-defaults.swarming_tags.set(["vpython:native-python-wrapper"])
-
-defaults.caches.set([
-    swarming.cache(
-        name = "win_toolchain",
-        path = "win_toolchain",
-    ),
-])
+defaults.set(
+    bucket = "findit",
+    pool = "luci.chromium.findit",
+    builderless = True,
+    ssd = True,
+    list_view = "findit",
+    auto_builder_dimension = False,
+    build_numbers = True,
+    contact_team_email = "chops-luci-test@google.com",
+    execution_timeout = 8 * time.hour,
+    experiments = {
+        "chromium_tests.resultdb_module": 100,
+    },
+    service_account = "findit-builder@chops-service-accounts.iam.gserviceaccount.com",
+)
 
 # Builders are defined in lexicographic order by name
 
-# Same as findit_variable, except now with a specified recipe, as this is no
-# longer overridable with Buildbucket V2
+# LUCI Bisection builder to verify a culprit (go/luci-bisection-design-doc).
 builder(
-    name = "findit-rerun",
-    executable = "recipe:findit/chromium/single_revision",
-    goma_backend = goma.backend.RBE_PROD,
+    name = "gofindit-culprit-verification",
+    description_html = "LUCI Bisection builder to verify a culprit revision.",
+    executable = "recipe:gofindit/chromium/single_revision",
+    siso_project = siso.project.DEFAULT_TRUSTED,
+    siso_remote_jobs = siso.remote_jobs.DEFAULT,
 )
 
-# Dimensionless trybot for findit.
-#
-# Findit will add appropriate dimensions and properties as needed based on
-# the waterfall builder being analyzed.
-#
-# TODO(robertocn): Remove _variable trybot builders from "try" bucket
-#   after they have been configured to use this generic builder, as well as
-#   the findit 'mixin'.
+# Builder to run a test for a single revision.
 builder(
-    name = "findit_variable",
-    # Findit app specifies these for each build it schedules. The reason why
-    # we specify them here is to pass validation of the buildbucket config.
-    # Also, to illustrate the typical use case of this bucket.
-    executable = "recipe:findit/chromium/compile",
-    goma_backend = goma.backend.RBE_PROD,
-)
-
-builder(
-    name = "linux_chromium_bot_db_exporter",
-    executable = "recipe:findit/chromium/export_bot_db",
-    os = os.LINUX_XENIAL_OR_BIONIC_SWITCH_TO_DEFAULT,
-    properties = {
-        "gs_bucket": "findit-for-me",
-        "gs_object": "bot_db.json",
-    },
-    schedule = "0 0,6,12,18 * * *",
+    name = "test-single-revision",
+    description_html = "LUCI Bisection builder to run a test for a single revision.",
+    executable = "recipe:gofindit/chromium/test_single_revision",
+    siso_project = siso.project.DEFAULT_TRUSTED,
+    siso_remote_jobs = siso.remote_jobs.DEFAULT,
 )

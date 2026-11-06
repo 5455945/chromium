@@ -29,17 +29,20 @@
 
 #include "third_party/blink/renderer/platform/fonts/font_metrics.h"
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "build/build_config.h"
 #include "third_party/blink/renderer/platform/fonts/font_platform_data.h"
 #include "third_party/blink/renderer/platform/fonts/vdmx_parser.h"
+#include "third_party/blink/renderer/platform/wtf/math_extras.h"
 #include "third_party/skia/include/core/SkFont.h"
 #include "third_party/skia/include/core/SkFontMetrics.h"
 #include "third_party/skia/include/core/SkTypeface.h"
 
 namespace blink {
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_ANDROID) || \
-    defined(OS_FUCHSIA)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || \
+    BUILDFLAG(IS_FUCHSIA)
 // This is the largest VDMX table which we'll try to load and parse.
 static const size_t kMaxVDMXTableSize = 1024 * 1024;  // 1 MB
 #endif
@@ -47,13 +50,11 @@ static const size_t kMaxVDMXTableSize = 1024 * 1024;  // 1 MB
 void FontMetrics::AscentDescentWithHacks(
     float& ascent,
     float& descent,
-    unsigned& visual_overflow_inflation_for_ascent,
-    unsigned& visual_overflow_inflation_for_descent,
     const FontPlatformData& platform_data,
     const SkFont& font,
     bool subpixel_ascent_descent,
-    absl::optional<float> ascent_override,
-    absl::optional<float> descent_override) {
+    std::optional<float> ascent_override,
+    std::optional<float> descent_override) {
   SkTypeface* face = font.getTypeface();
   DCHECK(face);
 
@@ -68,27 +69,34 @@ void FontMetrics::AscentDescentWithHacks(
   int vdmx_ascent = 0, vdmx_descent = 0;
   bool is_vdmx_valid = false;
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_ANDROID) || \
-    defined(OS_FUCHSIA)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || \
+    BUILDFLAG(IS_FUCHSIA)
   // Manually digging up VDMX metrics is only applicable when bytecode hinting
   // using FreeType.  With DirectWrite or CoreText, no bytecode hinting is ever
   // done.  This code should be pushed into FreeType (hinted font metrics).
   static const uint32_t kVdmxTag = SkSetFourByteTag('V', 'D', 'M', 'X');
-  int pixel_size = platform_data.size() + 0.5;
+  int pixel_size = ClampTo<int>(platform_data.size() + 0.5);
   // TODO(xiaochengh): How do we support ascent/descent override with VDMX?
   if (!ascent_override && !descent_override && !font.isForceAutoHinting() &&
       (font.getHinting() == SkFontHinting::kFull ||
        font.getHinting() == SkFontHinting::kNormal)) {
     size_t vdmx_size = face->getTableSize(kVdmxTag);
     if (vdmx_size && vdmx_size < kMaxVDMXTableSize) {
-      uint8_t* vdmx_table = (uint8_t*)WTF::Partitions::FastMalloc(
+      uint8_t* vdmx_table = (uint8_t*)Partitions::FastMalloc(
           vdmx_size, WTF_HEAP_PROFILER_TYPE_NAME(FontMetrics));
-      if (vdmx_table &&
-          face->getTableData(kVdmxTag, 0, vdmx_size, vdmx_table) == vdmx_size &&
-          ParseVDMX(&vdmx_ascent, &vdmx_descent, vdmx_table, vdmx_size,
-                    pixel_size))
-        is_vdmx_valid = true;
-      WTF::Partitions::FastFree(vdmx_table);
+      if (vdmx_table) {
+        // SAFETY: FastMalloc allocated vdmx_size bytes for vdmx_table.
+        auto vdmx_span = UNSAFE_BUFFERS(base::span(vdmx_table, vdmx_size));
+        if (face->getTableData(kVdmxTag, 0, vdmx_size, vdmx_table) ==
+            vdmx_size) {
+          if (auto max_min = ParseVdmx(vdmx_span, pixel_size)) {
+            vdmx_ascent = max_min->first;
+            vdmx_descent = max_min->second;
+            is_vdmx_valid = true;
+          }
+        }
+        Partitions::FastFree(vdmx_table);
+      }
     }
   }
 #endif
@@ -112,29 +120,22 @@ void FontMetrics::AscentDescentWithHacks(
     ascent = SkScalarRoundToScalar(-metrics.fAscent);
     descent = SkScalarRoundToScalar(metrics.fDescent);
 
-    if (ascent < -metrics.fAscent)
-      visual_overflow_inflation_for_ascent = 1;
-    if (descent < metrics.fDescent) {
-      visual_overflow_inflation_for_descent = 1;
-#if defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_ANDROID) || \
-    defined(OS_FUCHSIA)
-      // When subpixel positioning is enabled, if the descent is rounded down,
-      // the descent part of the glyph may be truncated when displayed in a
-      // 'overflow: hidden' container.  To avoid that, borrow 1 unit from the
-      // ascent when possible.
-      if (platform_data.GetFontRenderStyle().use_subpixel_positioning &&
-          ascent >= 1) {
-        ++descent;
-        --ascent;
-        // We should inflate overflow 1 more pixel for ascent instead.
-        visual_overflow_inflation_for_descent = 0;
-        ++(visual_overflow_inflation_for_ascent);
-      }
-#endif
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || \
+    BUILDFLAG(IS_FUCHSIA)
+    // When subpixel positioning is enabled, if the descent is rounded down,
+    // the descent part of the glyph may be truncated when displayed in a
+    // 'overflow: hidden' container.  To avoid that, borrow 1 unit from the
+    // ascent when possible.
+    if (descent < metrics.fDescent &&
+        platform_data.GetFontRenderStyle().use_subpixel_positioning &&
+        ascent >= 1) {
+      ++descent;
+      --ascent;
     }
+#endif
   }
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   // We are preserving this ascent hack to match Safari's ascent adjustment
   // in their SimpleFontDataMac.mm, for details see crbug.com/445830.
   // We need to adjust Times, Helvetica, and Courier to closely match the
@@ -150,69 +151,78 @@ void FontMetrics::AscentDescentWithHacks(
 #endif
 }
 
-float FontMetrics::FloatAscentInternal(FontBaseline baseline_type) const {
+float FontMetrics::FloatAscentInternal(
+    FontBaseline baseline_type,
+    ApplyBaselineTable apply_baseline_table) const {
   switch (baseline_type) {
-    case kAlphabeticBaseline:
+    case FontBaseline::kAlphabetic:
       NOTREACHED();
-      return float_ascent_;
-    case kCentralBaseline:
+    case FontBaseline::kCentral:
       return FloatHeight() / 2;
 
       // The following computations are based on 'dominant-baseline' support in
       // the legacy SVG <text>.
 
-    case kTextUnderBaseline:
+    case FontBaseline::kTextUnder:
       return FloatHeight();
-    case kIdeographicUnderBaseline:
-      // TODO(layout-dev): Should refer to 'ideo' in OpenType.
+    case FontBaseline::kIdeographicUnder:
+      if (ideographic_baseline_position_.has_value() && apply_baseline_table) {
+        return float_ascent_ - ideographic_baseline_position_.value();
+      }
       return FloatHeight();
-    case kXMiddleBaseline:
+    case FontBaseline::kXMiddle:
       return float_ascent_ - XHeight() / 2;
-    case kMathBaseline:
+    case FontBaseline::kMath:
       // TODO(layout-dev): Should refer to 'math' in OpenType or 'bsln' value 4
       // in TrueType AAT.
       return float_ascent_ * 0.5f;
-    case kHangingBaseline:
-      // TODO(layout-dev): Should refer to 'hang' in OpenType or 'bsln' value 3
-      // in TrueType AAT.
+    case FontBaseline::kHanging:
+      if (hanging_baseline_position_.has_value() && apply_baseline_table) {
+        return float_ascent_ - hanging_baseline_position_.value();
+      }
       return float_ascent_ * 0.2f;
-    case kTextOverBaseline:
+    case FontBaseline::kTextOver:
       return 0;
   }
   NOTREACHED();
-  return float_ascent_;
 }
 
-int FontMetrics::IntAscentInternal(FontBaseline baseline_type) const {
+int FontMetrics::IntAscentInternal(
+    FontBaseline baseline_type,
+    ApplyBaselineTable apply_baseline_table) const {
   switch (baseline_type) {
-    case kAlphabeticBaseline:
+    case FontBaseline::kAlphabetic:
       NOTREACHED();
-      return int_ascent_;
-    case kCentralBaseline:
+    case FontBaseline::kCentral:
       return Height() - Height() / 2;
 
       // The following computations are based on 'dominant-baseline' support in
       // the legacy SVG <text>.
 
-    case kTextUnderBaseline:
+    case FontBaseline::kTextUnder:
       return Height();
-    case kIdeographicUnderBaseline:
-      // TODO(layout-dev): Should refer to 'ideo' in OpenType.
+    case FontBaseline::kIdeographicUnder:
+      if (ideographic_baseline_position_.has_value() && apply_baseline_table) {
+        return static_cast<int>(
+            int_ascent_ -
+            static_cast<int>(lroundf(ideographic_baseline_position_.value())));
+      }
       return Height();
-    case kXMiddleBaseline:
+    case FontBaseline::kXMiddle:
       return int_ascent_ - static_cast<int>(XHeight() / 2);
-    case kMathBaseline:
-      // TODO(layout-dev): Should refer to 'math' in OpenType or 'bsln' value 4
-      // in TrueType AAT.
+    case FontBaseline::kMath:
+      if (hanging_baseline_position_.has_value() && apply_baseline_table) {
+        return int_ascent_ -
+               static_cast<int>(lroundf(hanging_baseline_position_.value()));
+      }
       return int_ascent_ / 2;
-    case kHangingBaseline:
+    case FontBaseline::kHanging:
       // TODO(layout-dev): Should refer to 'hang' in OpenType or 'bsln' value 3
       // in TrueType AAT.
       return int_ascent_ * 2 / 10;
-    case kTextOverBaseline:
+    case FontBaseline::kTextOver:
       return 0;
   }
   NOTREACHED();
-  return int_ascent_;
 }
 }

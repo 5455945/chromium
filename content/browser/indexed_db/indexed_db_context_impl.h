@@ -1,279 +1,370 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_BROWSER_INDEXED_DB_INDEXED_DB_CONTEXT_IMPL_H_
 #define CONTENT_BROWSER_INDEXED_DB_INDEXED_DB_CONTEXT_IMPL_H_
 
-#include <stddef.h>
-#include <stdint.h>
-
+#include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
 
-#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/weak_ptr.h"
+#include "base/threading/sequence_bound.h"
+#include "base/timer/elapsed_timer.h"
+#include "components/services/storage/privileged/mojom/indexed_db_control.mojom.h"
+#include "components/services/storage/privileged/mojom/indexed_db_control_test.mojom.h"
+#include "components/services/storage/public/cpp/quota_client_callback_wrapper.h"
 #include "components/services/storage/public/mojom/blob_storage_context.mojom.h"
 #include "components/services/storage/public/mojom/file_system_access_context.mojom.h"
-#include "components/services/storage/public/mojom/indexed_db_control.mojom.h"
-#include "components/services/storage/public/mojom/indexed_db_control_test.mojom.h"
 #include "components/services/storage/public/mojom/quota_client.mojom.h"
-#include "components/services/storage/public/mojom/storage_policy_update.mojom.h"
-#include "content/browser/indexed_db/indexed_db_backing_store.h"
-#include "content/browser/indexed_db/indexed_db_dispatcher_host.h"
+#include "content/browser/indexed_db/instance/bucket_context.h"
+#include "content/common/content_export.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/bindings/remote_set.h"
+#include "net/base/schemeful_site.h"
 #include "storage/browser/quota/quota_manager_proxy.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
 
 namespace base {
-class Clock;
-class ListValue;
 class FilePath;
 class SequencedTaskRunner;
-}
-
-namespace blink {
-class StorageKey;
-}
+}  // namespace base
 
 namespace storage {
+struct BucketLocator;
 class QuotaClientCallbackWrapper;
-}
+}  // namespace storage
 
-namespace content {
-class IndexedDBConnection;
-class IndexedDBFactoryImpl;
-class IndexedDBQuotaClient;
+namespace content::indexed_db {
 
+// This class manages all the active/open backing stores for IndexedDB, of which
+// there is at most one per bucket. It also serves as the central liaison to
+// other Chromium components such as the quota manager. It runs on its own
+// thread, so almost all interaction is declared via a mojo interface.
 class CONTENT_EXPORT IndexedDBContextImpl
-    : public base::RefCountedThreadSafe<IndexedDBContextImpl>,
-      public storage::mojom::IndexedDBControl,
-      public storage::mojom::IndexedDBControlTest {
+    : public storage::mojom::IndexedDBControl,
+      public storage::mojom::IndexedDBControlTest,
+      public storage::mojom::QuotaClient {
  public:
-  // The indexed db directory.
-  static const base::FilePath::CharType kIndexedDBDirectory[];
-
-  // Release |context| on the IDBTaskRunner.
-  static void ReleaseOnIDBSequence(
-      scoped_refptr<IndexedDBContextImpl>&& context);
-
-  // If |data_path| is empty, nothing will be saved to disk.
-  // |task_runner| is optional, and only set during testing.
-  // This is *not* called on the IDBTaskRunner, unlike most other functions.
+  // If `base_data_path` is empty, nothing will be saved to disk.
+  // This is *not* called on the idb_task_runner, unlike most other functions.
   IndexedDBContextImpl(
-      const base::FilePath& data_path,
+      const base::FilePath& base_data_path,
       scoped_refptr<storage::QuotaManagerProxy> quota_manager_proxy,
-      base::Clock* clock,
       mojo::PendingRemote<storage::mojom::BlobStorageContext>
           blob_storage_context,
       mojo::PendingRemote<storage::mojom::FileSystemAccessContext>
           file_system_access_context,
-      scoped_refptr<base::SequencedTaskRunner> io_task_runner,
-      scoped_refptr<base::SequencedTaskRunner> custom_task_runner);
+      scoped_refptr<base::SequencedTaskRunner> custom_task_runner,
+      DisallowInactiveClientCallback client_state_checker);
 
-  void Bind(mojo::PendingReceiver<storage::mojom::IndexedDBControl> control);
+  ~IndexedDBContextImpl() override;
+
+  // Called to initiate shutdown. This is *not* called on the idb_task_runner.
+  static void Shutdown(std::unique_ptr<IndexedDBContextImpl> context);
+
+  IndexedDBContextImpl(const IndexedDBContextImpl&) = delete;
+  IndexedDBContextImpl& operator=(const IndexedDBContextImpl&) = delete;
+
+  void BindControl(
+      mojo::PendingReceiver<storage::mojom::IndexedDBControl> control);
 
   // mojom::IndexedDBControl implementation:
   void BindIndexedDB(
-      const blink::StorageKey& storage_key,
+      const storage::BucketLocator& bucket_locator,
+      const storage::BucketClientInfo& client_info,
       mojo::PendingReceiver<blink::mojom::IDBFactory> receiver) override;
-  void GetUsage(GetUsageCallback usage_callback) override;
-  void DeleteForStorageKey(const blink::StorageKey& storage_key,
-                           DeleteForStorageKeyCallback callback) override;
-  void ForceClose(const blink::StorageKey& storage_key,
-                  storage::mojom::ForceCloseReason reason,
+  void ForceClose(storage::BucketId bucket_id,
                   base::OnceClosure callback) override;
-  void GetConnectionCount(const blink::StorageKey& storage_key,
-                          GetConnectionCountCallback callback) override;
-  void DownloadStorageKeyData(const blink::StorageKey& storage_key,
-                              DownloadStorageKeyDataCallback callback) override;
-  void GetAllStorageKeysDetails(
-      GetAllStorageKeysDetailsCallback callback) override;
+  void StartMetadataRecording(storage::BucketId bucket_id,
+                              StartMetadataRecordingCallback callback) override;
+  void StopMetadataRecording(storage::BucketId bucket_id,
+                             StopMetadataRecordingCallback callback) override;
+
+  void DownloadBucketData(storage::BucketId bucket_id,
+                          DownloadBucketDataCallback callback) override;
+  void GetAllBucketsDetails(GetAllBucketsDetailsCallback callback) override;
   void SetForceKeepSessionState() override;
   void ApplyPolicyUpdates(std::vector<storage::mojom::StoragePolicyUpdatePtr>
                               policy_updates) override;
-  void BindTestInterface(
+  void BindTestInterfaceForTesting(
       mojo::PendingReceiver<storage::mojom::IndexedDBControlTest> receiver)
       override;
   void AddObserver(
       mojo::PendingRemote<storage::mojom::IndexedDBObserver> observer) override;
 
+  base::FilePath GetFilePathForTesting(
+      const storage::BucketLocator& bucket_locator,
+      bool sqlite);
+
   // mojom::IndexedDBControlTest implementation:
   void GetBaseDataPathForTesting(
       GetBaseDataPathForTestingCallback callback) override;
-  void GetFilePathForTesting(const blink::StorageKey& storage_key,
+  void GetFilePathForTesting(const storage::BucketLocator& bucket_locator,
+                             bool for_sqlite,
                              GetFilePathForTestingCallback callback) override;
   void ResetCachesForTesting(base::OnceClosure callback) override;
-  void ForceSchemaDowngradeForTesting(
-      const blink::StorageKey& storage_key,
-      ForceSchemaDowngradeForTestingCallback callback) override;
-  void HasV2SchemaCorruptionForTesting(
-      const blink::StorageKey& storage_key,
-      HasV2SchemaCorruptionForTestingCallback callback) override;
-  void WriteToIndexedDBForTesting(const blink::StorageKey& storage_key,
-                                  const std::string& key,
-                                  const std::string& value,
-                                  base::OnceClosure callback) override;
-  void GetBlobCountForTesting(const blink::StorageKey& storage_key,
-                              GetBlobCountForTestingCallback callback) override;
-  void GetNextBlobNumberForTesting(
-      const blink::StorageKey& storage_key,
-      int64_t database_id,
-      GetNextBlobNumberForTestingCallback callback) override;
   void GetPathForBlobForTesting(
-      const blink::StorageKey& storage_key,
+      const storage::BucketLocator& bucket_locator,
       int64_t database_id,
       int64_t blob_number,
       GetPathForBlobForTestingCallback callback) override;
-  void CompactBackingStoreForTesting(const blink::StorageKey& storage_key,
-                                     base::OnceClosure callback) override;
+  void FlushBackingStoreForTesting(const storage::BucketLocator& bucket_locator,
+                                   base::OnceClosure callback) override;
+  void FlushBucketSequenceForTesting(
+      const storage::BucketLocator& bucket_locator,
+      base::OnceClosure callback) override;
+  void PerformAndVerifySqliteMigrationForTesting(
+      const storage::BucketLocator& bucket_locator,
+      PerformAndVerifySqliteMigrationForTestingCallback callback) override;
+  void GetUsageForTesting(GetUsageForTestingCallback) override;
   void BindMockFailureSingletonForTesting(
       mojo::PendingReceiver<storage::mojom::MockFailureInjector> receiver)
       override;
-  void GetDatabaseKeysForTesting(
-      GetDatabaseKeysForTestingCallback callback) override;
+  void ForceInitializeFromFilesForTesting(
+      ForceInitializeFromFilesForTestingCallback callback) override;
 
-  // TODO(enne): fix internal indexeddb callers to use ForceClose async instead.
-  void ForceCloseSync(const blink::StorageKey& storage_key,
-                      storage::mojom::ForceCloseReason reason);
+  // storage::mojom::QuotaClient implementation:
+  void GetBucketUsage(const storage::BucketLocator& bucket,
+                      GetBucketUsageCallback callback) override;
+  void GetDefaultStorageKeys(GetDefaultStorageKeysCallback callback) override;
+  void DeleteBucketData(const storage::BucketLocator& bucket,
+                        DeleteBucketDataCallback callback) override;
+  void PerformStorageCleanup(PerformStorageCleanupCallback callback) override;
 
-  IndexedDBFactoryImpl* GetIDBFactory();
+  // Exposed for testing.
+  bool BucketContextExists(const storage::BucketLocator& bucket_locator) const;
 
-  // Called by StoragePartitionImpl to clear session-only data.
-  // *not* called on the IDBTaskRunner.
-  void Shutdown();
-
-  int64_t GetStorageKeyDiskUsage(const blink::StorageKey& storage_key);
-
-  // This getter is thread-safe.
-  base::SequencedTaskRunner* IDBTaskRunner() { return idb_task_runner_.get(); }
-
-  // Methods called by IndexedDBFactoryImpl or IndexedDBDispatcherHost for
-  // quota support.
-  void FactoryOpened(const blink::StorageKey& storage_key);
-  void ConnectionOpened(const blink::StorageKey& storage_key,
-                        IndexedDBConnection* db);
-  void ConnectionClosed(const blink::StorageKey& storage_key,
-                        IndexedDBConnection* db);
-  void TransactionComplete(const blink::StorageKey& storage_key);
-  void DatabaseDeleted(const blink::StorageKey& storage_key);
-
-  // Called when blob files have been cleaned (an aggregated delayed task).
-  void BlobFilesCleaned(const blink::StorageKey& storage_key);
-
-  // Will be null in unit tests.
-  storage::QuotaManagerProxy* quota_manager_proxy() const {
-    return quota_manager_proxy_.get();
+  // Exposed for testing.
+  const scoped_refptr<base::SequencedTaskRunner>& idb_task_runner() const {
+    return idb_task_runner_;
   }
 
-  // Returns a list of all storage_keys with backing stores.
-  std::vector<blink::StorageKey> GetAllStorageKeys();
-  bool HasStorageKey(const blink::StorageKey& storage_key);
-
-  // Used by IndexedDBInternalsUI to populate internals page.
-  base::ListValue* GetAllStorageKeysDetails();
-
-  // GetStoragePaths returns all paths owned by this database, in arbitrary
-  // order.
-  std::vector<base::FilePath> GetStoragePaths(
-      const blink::StorageKey& storage_key) const;
-
-  const base::FilePath& data_path() const { return data_path_; }
-  bool IsInMemoryContext() const { return data_path_.empty(); }
-  size_t GetConnectionCountSync(const blink::StorageKey& storage_key);
-  int GetStorageKeyBlobFileCount(const blink::StorageKey& storage_key);
-
-  bool is_incognito() const { return data_path_.empty(); }
-
-  storage::mojom::BlobStorageContext* blob_storage_context() const {
-    return blob_storage_context_ ? blob_storage_context_.get() : nullptr;
-  }
-  storage::mojom::FileSystemAccessContext* file_system_access_context() const {
-    return file_system_access_context_ ? file_system_access_context_.get()
-                                       : nullptr;
-  }
-
-  void NotifyIndexedDBListChanged(const blink::StorageKey& storage_key);
-  void NotifyIndexedDBContentChanged(const blink::StorageKey& storage_key,
-                                     const std::u16string& database_name,
-                                     const std::u16string& object_store_name);
+  const base::FilePath GetFirstPartyDataPathForTesting() const;
+  base::SequenceBound<BucketContext>* GetBucketContextForTesting(
+      const storage::BucketId& id);
 
  private:
-  friend class base::RefCountedThreadSafe<IndexedDBContextImpl>;
+  friend class IndexedDBTestBase;
+  friend class FactoryTest;
+  FRIEND_TEST_ALL_PREFIXES(IndexedDBTest, BasicFactoryCreationAndTearDown);
+  FRIEND_TEST_ALL_PREFIXES(IndexedDBTest, TooLongOrigin);
 
-  FRIEND_TEST_ALL_PREFIXES(IndexedDBTest, ClearLocalState);
-  FRIEND_TEST_ALL_PREFIXES(IndexedDBTest, ClearSessionOnlyDatabases);
-  FRIEND_TEST_ALL_PREFIXES(IndexedDBTest, SetForceKeepSessionState);
-  FRIEND_TEST_ALL_PREFIXES(IndexedDBTest, ForceCloseOpenDatabasesOnDelete);
-  friend class IndexedDBQuotaClientTest;
+  void BindControlOnIDBSequence(
+      mojo::PendingReceiver<storage::mojom::IndexedDBControl> control);
 
-  class IndexedDBGetUsageAndQuotaCallback;
+  void BindPipesOnIDBSequence(
+      mojo::PendingReceiver<storage::mojom::QuotaClient>
+          pending_quota_client_receiver,
+      mojo::PendingRemote<storage::mojom::BlobStorageContext>
+          pending_blob_storage_context,
+      mojo::PendingRemote<storage::mojom::FileSystemAccessContext>
+          pending_file_system_access_context);
 
-  ~IndexedDBContextImpl() override;
+  // mojom::IndexedDBControl internal implementation:
+  void BindIndexedDBImpl(
+      const storage::BucketClientInfo& client_info,
+      mojo::PendingReceiver<blink::mojom::IDBFactory> receiver,
+      storage::QuotaErrorOr<storage::BucketInfo> bucket_info);
 
-  void ShutdownOnIDBSequence();
+  void ForceClose(const storage::BucketLocator& bucket_locator,
+                  bool delete_bucket_data,
+                  base::OnceClosure callback);
 
-  base::FilePath GetBlobStorePath(const blink::StorageKey& storage_key) const;
-  base::FilePath GetLevelDBPath(const blink::StorageKey& storage_key) const;
+  // Always run immediately before destruction. `purge_origins` owns `this` and
+  // should be run only if it's necessary to delete data for some origins before
+  // destruction of `this`.
+  void ShutdownOnIDBSequence(base::ElapsedTimer shutdown_timer,
+                             base::OnceClosure purge_origins);
+  void PurgeOrigins();
 
-  int64_t ReadUsageFromDisk(const blink::StorageKey& storage_key) const;
-  void EnsureDiskUsageCacheInitialized(const blink::StorageKey& storage_key);
-  // Compares the disk usage stored in `storage_key_size_map_` with disk. If
-  // there is a difference, it updates `storage_key_size_map_` and notifies the
-  // quota system.
-  void QueryDiskAndUpdateQuotaUsage(const blink::StorageKey& storage_key);
-  base::Time GetStorageKeyLastModified(const blink::StorageKey& storage_key);
+  base::FilePath GetDataPath(
+      const storage::BucketLocator& bucket_locator) const;
+  const base::FilePath GetLegacyDataPath() const;
 
-  // Returns `storage_key_set_` (this context's in-memory cache of storage_keys
-  // with backing stores); the cache will be primed as needed by checking disk.
-  std::set<blink::StorageKey>* GetStorageKeySet();
+  void NotifyObserversBucketSizeChanged(
+      const storage::BucketLocator& bucket_locator);
+  base::Time GetBucketLastModified(
+      const storage::BucketLocator& bucket_locator);
 
-  const scoped_refptr<base::SequencedTaskRunner> idb_task_runner_;
-  IndexedDBDispatcherHost dispatcher_host_;
+  // We need to initialize the buckets already stored to the disk, but this
+  // cannot be done in the constructor as it might block destruction.
+  void InitializeFromFilesIfNeeded(base::OnceClosure callback);
+  bool did_initialize_from_files_{false};
+  std::vector<base::OnceClosure> on_initialize_from_files_callbacks_;
 
-  // Bound and accessed on the |idb_task_runner_|.
+  using DidGetBucketLocatorCallback = base::OnceCallback<void(
+      const std::optional<storage::BucketLocator>& bucket_locator)>;
+
+  void GetOrCreateDefaultBucket(const blink::StorageKey& storage_key,
+                                DidGetBucketLocatorCallback callback);
+
+  // Finds IDB files in their legacy location, which is currently used for
+  // default buckets in first party contexts. Non-default buckets and default
+  // buckets in third party contexts, when partitioning is enabled, are returned
+  // by `FindIndexedDBFiles`.
+  std::map<blink::StorageKey, base::FilePath> FindLegacyIndexedDBFiles() const;
+
+  // Finds buckets in the profile that have an IndexedDB directory, e.g.
+  // will return 6 if <profile>/WebStorage/6/IndexedDB exists.
+  std::vector<storage::BucketId> FindBucketsWithIndexedDBDirs() const;
+
+  void DidForceCloseForDeleteBucketData(
+      const storage::BucketLocator& bucket_locator,
+      DeleteBucketDataCallback callback);
+
+  // Invoked after asynchronously retrieving buckets from the quota manager in
+  // service of `GetAllBucketsDetails()`.
+  void ContinueGetAllBucketsDetails(
+      GetAllBucketsDetailsCallback callback,
+      std::vector<storage::QuotaErrorOr<storage::BucketInfo>> bucket_infos);
+
+  size_t GetOpenBucketCountForTesting() const;
+
+  // Finishes filling in `info` with data relevant to idb-internals and passes
+  // the result back via `result`. The bucket is described by
+  // `info->bucket_locator`.
+  void FillInBucketMetadata(
+      storage::mojom::IdbBucketMetadataPtr info,
+      base::OnceCallback<void(storage::mojom::IdbBucketMetadataPtr)> result);
+
+  void EnsureBucketContext(const storage::BucketInfo& bucket);
+
+  void CompactBackingStoreForTesting(
+      const storage::BucketLocator& bucket_locator);
+
+  // Returns all paths owned by this database, in arbitrary order.
+  std::vector<base::FilePath> GetStoragePaths(
+      const storage::BucketLocator& bucket_locator) const;
+
+  // Called when files for the given bucket have been written. `flushed` is set
+  // to true if the writes were flushed to disk already, as with a transaction
+  // that has strict durability.
+  void OnFilesWritten(const storage::BucketLocator& bucket_locator,
+                      bool flushed);
+
+  void NotifyIndexedDBContentChanged(
+      const storage::BucketLocator& bucket_locator,
+      const std::u16string& database_name,
+      const std::u16string& object_store_name);
+
+  void DestroyBucketContext(storage::BucketLocator bucket_locator);
+
+  std::optional<storage::BucketLocator> LookUpBucket(
+      storage::BucketId bucket_id);
+
+  // Returns nullptr if the bucket context does not exist.
+  base::SequenceBound<BucketContext>* GetBucketContextForTesting(
+      const storage::BucketLocator& bucket_locator);
+
+  bool in_memory() const { return base_data_path_.empty(); }
+
+  scoped_refptr<base::SequencedTaskRunner> idb_task_runner_;
+
+  // Bound and accessed on the `idb_task_runner_`.
   mojo::Remote<storage::mojom::BlobStorageContext> blob_storage_context_;
   mojo::Remote<storage::mojom::FileSystemAccessContext>
       file_system_access_context_;
-  std::unique_ptr<IndexedDBFactoryImpl> indexeddb_factory_;
 
-  // If |data_path_| is empty then this is an incognito session and the backing
-  // store will be held in-memory rather than on-disk.
-  const base::FilePath data_path_;
+  // If `base_data_path_` is empty then this is an incognito session and the
+  // backing store will be held in-memory rather than on-disk.
+  const base::FilePath base_data_path_;
 
   // If true, nothing (not even session-only data) should be deleted on exit.
-  bool force_keep_session_state_;
+  bool force_keep_session_state_ = false;
+  // Will be null in unit tests.
   const scoped_refptr<storage::QuotaManagerProxy> quota_manager_proxy_;
-  std::unique_ptr<std::set<blink::StorageKey>> storage_key_set_;
-  std::map<blink::StorageKey, int64_t> storage_key_size_map_;
-  // The set of storage_keys whose storage should be cleared on shutdown.
-  std::set<blink::StorageKey> storage_keys_to_purge_on_shutdown_;
-  base::Clock* const clock_;
 
-  const std::unique_ptr<IndexedDBQuotaClient> quota_client_;
-  const std::unique_ptr<storage::QuotaClientCallbackWrapper>
-      quota_client_wrapper_;
+  // This set contains all buckets that have stored IDB data on disk. This is
+  // distinct from `bucket_contexts_`, which are only created for active IDB
+  // clients.
+  std::set<storage::BucketLocator> bucket_set_;
 
-  mojo::ReceiverSet<storage::mojom::IndexedDBControl> receivers_;
-  mojo::ReceiverSet<storage::mojom::IndexedDBControlTest> test_receivers_;
-  absl::optional<mojo::Receiver<storage::mojom::MockFailureInjector>>
-      mock_failure_injector_;
-  mojo::RemoteSet<storage::mojom::IndexedDBObserver> observers_;
+  // This map is a cache of the size used by a given bucket. The cache is
+  // cleared after transactions that can change the size of the database (i.e.
+  // those that are not readonly), and re-populated lazily. There are three
+  // possible states for each bucket in this map:
+  //
+  // 1) Not present. This indicates that the usage should be calculated (and
+  //    stored in the map).
+  // 2) Present, with a non-negative value. This indicates that the cache is, as
+  //    far as we know, valid and up to date for the given bucket. This state
+  //    persists until the next writing transaction occurs.
+  // 3) Present, with a negative value. This indicates that the usage is not
+  //    cached AND the last readwrite transaction did NOT flush changes to disk
+  //    (i.e. durability was 'relaxed').
+  //
+  // TODO(crbug.com/40285925): use an abstract model for quota instead of real
+  // world bytes.
+  std::map<storage::BucketLocator, int64_t> bucket_size_map_;
+
+  // The set of sites whose storage should be cleared on shutdown. These are
+  // matched against the origin and top level site in each bucket's StorageKey.
+  std::set<url::Origin> origins_to_purge_on_shutdown_;
+
+  storage::QuotaClientCallbackWrapper quota_client_wrapper_{this};
   mojo::Receiver<storage::mojom::QuotaClient> quota_client_receiver_;
-  const std::unique_ptr<storage::FilesystemProxy> filesystem_proxy_;
 
-  DISALLOW_COPY_AND_ASSIGN(IndexedDBContextImpl);
+  mojo::ReceiverSet<storage::mojom::IndexedDBControl> control_receivers_;
+  mojo::ReceiverSet<storage::mojom::IndexedDBControlTest> test_receivers_;
+
+  mojo::RemoteSet<storage::mojom::IndexedDBObserver> observers_;
+
+  // For testing: when non-null, this receiver will be passed off to the next
+  // bucket context that's created.
+  mojo::PendingReceiver<storage::mojom::MockFailureInjector>
+      pending_failure_injector_;
+
+  std::map<storage::BucketLocator,
+           base::SequenceBound<BucketContext>,
+           storage::CompareBucketLocators>
+      bucket_contexts_;
+
+  // For the most part, every bucket gets its own SequencedTaskRunner. But each
+  // "site", i.e. StorageKey's `top_level_site()`, has a cap on the number of
+  // task runners its buckets will be allotted, which is equal to the number of
+  // cores on the device. When creating a new BucketContext, it will get a
+  // unique task runner that runs on the threadpool unless `active_bucket_count`
+  // is over the number of cores, in which case the task runner will be shared
+  // with other buckets.
+  struct TaskRunnerLimiter {
+    TaskRunnerLimiter();
+    ~TaskRunnerLimiter();
+
+    int active_bucket_count = 0;
+    scoped_refptr<base::SequencedTaskRunner> overflow_task_runner;
+  };
+  std::map<net::SchemefulSite, TaskRunnerLimiter> task_runner_limiters_;
+
+  // When true, run backing stores (and bucket contexts) on `idb_task_runner_`
+  // to simplify unit tests. This is set to true when the ctor param
+  // `custom_task_runner` is non null.
+  bool force_single_thread_ = false;
+
+  // If recording begins on a bucket ID that doesn't currently have a context,
+  // add it to a pending set and actually begin once the context is created.
+  std::set<storage::BucketId> pending_bucket_recording_;
+
+  // Timer started when `Shutdown()` was called. Used for UMA.
+  std::optional<base::ElapsedTimer> shutdown_timer_;
+
+  DisallowInactiveClientCallback client_state_checker_;
+
+  // weak_factory_->GetWeakPtr() may be used on any thread, but the resulting
+  // pointer must only be checked/used on idb_task_runner_.
+  base::WeakPtrFactory<IndexedDBContextImpl> weak_factory_{this};
 };
 
-}  // namespace content
+}  // namespace content::indexed_db
 
 #endif  // CONTENT_BROWSER_INDEXED_DB_INDEXED_DB_CONTEXT_IMPL_H_

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,7 @@
 #include "base/task/task_traits.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace base {
-namespace internal {
+namespace base::internal {
 
 TEST(ScopedSetTaskPriorityForCurrentThreadTest,
      ScopedSetTaskPriorityForCurrentThread) {
@@ -21,5 +20,4 @@ TEST(ScopedSetTaskPriorityForCurrentThreadTest,
   EXPECT_EQ(TaskPriority::USER_BLOCKING, GetTaskPriorityForCurrentThread());
 }
 
-}  // namespace internal
-}  // namespace base
+}  // namespace base::internal

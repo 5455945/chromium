@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,20 +13,28 @@
 #include "components/favicon/core/favicon_handler.h"
 #include "components/favicon/core/favicon_url.h"
 
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/device_info.h"
+#endif
+
 namespace favicon {
 namespace {
 
-#if defined(OS_ANDROID) || defined(OS_IOS)
-const bool kEnableTouchIcon = true;
+bool EnableTouchIcon() {
+#if BUILDFLAG(IS_ANDROID)
+  return !base::android::device_info::is_desktop();
+#elif BUILDFLAG(IS_IOS)
+  return true;
 #else
-const bool kEnableTouchIcon = false;
+  return false;
 #endif
+}
 
 }  // namespace
 
 FaviconDriverImpl::FaviconDriverImpl(CoreFaviconService* favicon_service)
     : favicon_service_(favicon_service) {
-  if (kEnableTouchIcon) {
+  if (EnableTouchIcon()) {
     handlers_.push_back(std::make_unique<FaviconHandler>(
         favicon_service_, this, FaviconDriverObserver::NON_TOUCH_LARGEST));
     handlers_.push_back(std::make_unique<FaviconHandler>(
@@ -43,6 +51,12 @@ void FaviconDriverImpl::FetchFavicon(const GURL& page_url,
                                      bool is_same_document) {
   for (const std::unique_ptr<FaviconHandler>& handler : handlers_)
     handler->FetchFavicon(page_url, is_same_document);
+}
+
+void FaviconDriverImpl::CancelPendingFaviconRequests() {
+  for (const std::unique_ptr<FaviconHandler>& handler : handlers_) {
+    handler->CancelPendingFaviconRequests();
+  }
 }
 
 bool FaviconDriverImpl::HasPendingTasksForTest() {
@@ -72,10 +86,9 @@ void FaviconDriverImpl::OnUpdateCandidates(
     // icons override inline touch icons).
     handler->OnUpdateCandidates(
         page_url, candidates,
-        (handler->icon_types().count(
-             favicon_base::IconType::kWebManifestIcon) != 0)
+        handler->icon_types().Has(favicon_base::IconType::kWebManifestIcon)
             ? manifest_url
-            : GURL::EmptyGURL());
+            : GURL());
   }
 }
 

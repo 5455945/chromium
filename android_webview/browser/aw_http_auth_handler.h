@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,7 +13,6 @@
 #include "base/memory/weak_ptr.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/login_delegate.h"
-#include "content/public/browser/web_contents_observer.h"
 
 namespace content {
 class WebContents;
@@ -26,31 +25,28 @@ class AuthChallengeInfo;
 namespace android_webview {
 
 // Bridges the Java class of the same name and content::LoginDelegate.
-class AwHttpAuthHandler : public content::LoginDelegate,
-                          public content::WebContentsObserver {
+class AwHttpAuthHandler : public content::LoginDelegate {
  public:
   AwHttpAuthHandler(const net::AuthChallengeInfo& auth_info,
                     content::WebContents* web_contents,
                     bool first_auth_attempt,
-                    LoginAuthRequiredCallback callback);
+                    content::LoginDelegate::LoginAuthRequiredCallback callback);
   ~AwHttpAuthHandler() override;
 
   // from AwHttpAuthHandler
   bool HandleOnUIThread(content::WebContents* web_contents);
 
-  void Proceed(JNIEnv* env,
-               const base::android::JavaParamRef<jobject>& obj,
-               const base::android::JavaParamRef<jstring>& username,
-               const base::android::JavaParamRef<jstring>& password);
-  void Cancel(JNIEnv* env, const base::android::JavaParamRef<jobject>& obj);
+  void Proceed(const std::u16string& username, const std::u16string& password);
+  void Cancel();
 
  private:
   void Start();
 
+  base::WeakPtr<content::WebContents> web_contents_;
   base::android::ScopedJavaGlobalRef<jobject> http_auth_handler_;
   std::string host_;
   std::string realm_;
-  LoginAuthRequiredCallback callback_;
+  content::LoginDelegate::LoginAuthRequiredCallback callback_;
   base::WeakPtrFactory<AwHttpAuthHandler> weak_factory_{this};
 };
 

@@ -1,6 +1,7 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 
 #include "google_apis/gcm/engine/connection_handler_impl.h"
 
@@ -10,13 +11,13 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_timeouts.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "google/protobuf/io/coded_stream.h"
 #include "google/protobuf/io/zero_copy_stream_impl_lite.h"
@@ -27,13 +28,15 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/ip_address.h"
-#include "net/base/network_isolation_key.h"
+#include "net/base/network_anonymization_key.h"
 #include "net/base/test_completion_callback.h"
 #include "net/log/net_log_source.h"
 #include "net/socket/socket_test_util.h"
 #include "net/socket/stream_socket.h"
 #include "net/test/gtest_util.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
+#include "net/url_request/url_request_context.h"
+#include "net/url_request/url_request_context_builder.h"
 #include "net/url_request/url_request_test_util.h"
 #include "services/network/network_context.h"
 #include "services/network/network_service.h"
@@ -199,7 +202,7 @@ class GCMConnectionHandlerImplTest : public testing::Test {
   std::unique_ptr<network::NetworkService> network_service_;
   mojo::Remote<network::mojom::NetworkContext> network_context_remote_;
   net::MockClientSocketFactory socket_factory_;
-  net::TestURLRequestContext url_request_context_;
+  std::unique_ptr<net::URLRequestContext> url_request_context_;
   std::unique_ptr<network::NetworkContext> network_context_;
   mojo::Remote<network::mojom::ProxyResolvingSocketFactory>
       mojo_socket_factory_remote_;
@@ -212,18 +215,18 @@ GCMConnectionHandlerImplTest::GCMConnectionHandlerImplTest()
       task_environment_(base::test::TaskEnvironment::MainThreadType::IO),
       network_change_notifier_(
           net::NetworkChangeNotifier::CreateMockIfNeeded()),
-      network_service_(network::NetworkService::CreateForTesting()),
-      url_request_context_(true /* delay_initialization */) {
+      network_service_(network::NetworkService::CreateForTesting()) {
   address_list_ = net::AddressList::CreateFromIPAddress(
       net::IPAddress::IPv4Localhost(), kMCSPort);
   socket_factory_.set_enable_read_if_ready(true);
-  url_request_context_.set_client_socket_factory(&socket_factory_);
-  url_request_context_.Init();
+  auto context_builder = net::CreateTestURLRequestContextBuilder();
+  context_builder->set_client_socket_factory_for_testing(&socket_factory_);
+  url_request_context_ = context_builder->Build();
 
   network_context_ = std::make_unique<network::NetworkContext>(
       network_service_.get(),
       network_context_remote_.BindNewPipeAndPassReceiver(),
-      &url_request_context_,
+      url_request_context_.get(),
       /*cors_exempt_header_list=*/std::vector<std::string>());
 }
 
@@ -254,15 +257,14 @@ void GCMConnectionHandlerImplTest::BuildSocket(const ReadList& read_list,
   const url::Origin kOrigin = url::Origin::Create(kDestination);
   mojo_socket_factory_remote_->CreateProxyResolvingSocket(
       kDestination,
-      net::NetworkIsolationKey(kOrigin /* top_frame_origin */,
-                               kOrigin /* frame_origin */),
+      net::NetworkAnonymizationKey::CreateSameSite(net::SchemefulSite(kOrigin)),
       std::move(options),
       net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS),
       mojo_socket_remote_.BindNewPipeAndPassReceiver(),
       mojo::NullRemote() /* observer */,
       base::BindLambdaForTesting(
-          [&](int result, const absl::optional<net::IPEndPoint>& local_addr,
-              const absl::optional<net::IPEndPoint>& peer_addr,
+          [&](int result, const std::optional<net::IPEndPoint>& local_addr,
+              const std::optional<net::IPEndPoint>& peer_addr,
               mojo::ScopedDataPipeConsumerHandle receive_pipe_handle,
               mojo::ScopedDataPipeProducerHandle send_pipe_handle) {
             net_error = result;
@@ -282,7 +284,8 @@ void GCMConnectionHandlerImplTest::PumpLoop() {
 void GCMConnectionHandlerImplTest::Connect(
     ScopedMessage* dst_proto) {
   connection_handler_ = std::make_unique<ConnectionHandlerImpl>(
-      base::ThreadTaskRunnerHandle::Get(), TestTimeouts::tiny_timeout(),
+      base::SingleThreadTaskRunner::GetCurrentDefault(),
+      TestTimeouts::tiny_timeout(),
       base::BindRepeating(&GCMConnectionHandlerImplTest::ReadContinuation,
                           base::Unretained(this), dst_proto),
       base::BindRepeating(&GCMConnectionHandlerImplTest::WriteContinuation,
@@ -322,13 +325,10 @@ void GCMConnectionHandlerImplTest::ConnectionContinuation(int error) {
 // successfully.
 TEST_F(GCMConnectionHandlerImplTest, Init) {
   std::string handshake_request = EncodeHandshakeRequest();
-  WriteList write_list(1, net::MockWrite(net::ASYNC,
-                                         handshake_request.c_str(),
-                                         handshake_request.size()));
+  WriteList write_list(1, net::MockWrite(net::ASYNC, handshake_request));
   std::string handshake_response = EncodeHandshakeResponse();
   ReadList read_list;
-  read_list.push_back(net::MockRead(net::ASYNC, handshake_response.c_str(),
-                                    handshake_response.size()));
+  read_list.push_back(net::MockRead(net::ASYNC, handshake_response));
   read_list.push_back(net::MockRead(net::SYNCHRONOUS, net::OK) /* EOF */);
   BuildSocket(read_list, write_list);
 
@@ -346,15 +346,12 @@ TEST_F(GCMConnectionHandlerImplTest, Init) {
 // should fail.
 TEST_F(GCMConnectionHandlerImplTest, InitFailedVersionCheck) {
   std::string handshake_request = EncodeHandshakeRequest();
-  WriteList write_list(1, net::MockWrite(net::ASYNC,
-                                         handshake_request.c_str(),
-                                         handshake_request.size()));
+  WriteList write_list(1, net::MockWrite(net::ASYNC, handshake_request));
   std::string handshake_response = EncodeHandshakeResponse();
   // Overwrite the version byte.
   handshake_response[0] = 37;
   ReadList read_list;
-  read_list.push_back(net::MockRead(net::ASYNC, handshake_response.c_str(),
-                                    handshake_response.size()));
+  read_list.push_back(net::MockRead(net::ASYNC, handshake_response));
   read_list.push_back(net::MockRead(net::SYNCHRONOUS, net::OK) /* EOF */);
   BuildSocket(read_list, write_list);
 
@@ -371,9 +368,7 @@ TEST_F(GCMConnectionHandlerImplTest, InitFailedVersionCheck) {
 // out.
 TEST_F(GCMConnectionHandlerImplTest, InitTimeout) {
   std::string handshake_request = EncodeHandshakeRequest();
-  WriteList write_list(1, net::MockWrite(net::ASYNC,
-                                         handshake_request.c_str(),
-                                         handshake_request.size()));
+  WriteList write_list(1, net::MockWrite(net::ASYNC, handshake_request));
   ReadList read_list(1, net::MockRead(net::SYNCHRONOUS,
                                       net::ERR_IO_PENDING));
   BuildSocket(read_list, write_list);
@@ -391,14 +386,12 @@ TEST_F(GCMConnectionHandlerImplTest, InitTimeout) {
 // in a time out.
 TEST_F(GCMConnectionHandlerImplTest, InitIncompleteTimeout) {
   std::string handshake_request = EncodeHandshakeRequest();
-  WriteList write_list(1, net::MockWrite(net::ASYNC,
-                                         handshake_request.c_str(),
-                                         handshake_request.size()));
+  WriteList write_list(1, net::MockWrite(net::ASYNC, handshake_request));
   std::string handshake_response = EncodeHandshakeResponse();
   ReadList read_list;
-  read_list.push_back(net::MockRead(net::ASYNC,
-                                    handshake_response.c_str(),
-                                    handshake_response.size() / 2));
+  read_list.push_back(
+      net::MockRead(net::ASYNC, std::string_view(handshake_response)
+                                    .substr(0, handshake_response.size() / 2)));
   read_list.push_back(net::MockRead(net::SYNCHRONOUS,
                                     net::ERR_IO_PENDING));
   BuildSocket(read_list, write_list);
@@ -415,9 +408,7 @@ TEST_F(GCMConnectionHandlerImplTest, InitIncompleteTimeout) {
 // Reinitialize the connection handler after failing to initialize.
 TEST_F(GCMConnectionHandlerImplTest, ReInit) {
   std::string handshake_request = EncodeHandshakeRequest();
-  WriteList write_list(1, net::MockWrite(net::ASYNC,
-                                         handshake_request.c_str(),
-                                         handshake_request.size()));
+  WriteList write_list(1, net::MockWrite(net::ASYNC, handshake_request));
   ReadList read_list(1, net::MockRead(net::SYNCHRONOUS,
                                       net::ERR_IO_PENDING));
   BuildSocket(read_list, write_list);
@@ -432,11 +423,9 @@ TEST_F(GCMConnectionHandlerImplTest, ReInit) {
 
   // Build a new socket and reconnect, successfully this time.
   std::string handshake_response = EncodeHandshakeResponse();
-  WriteList write_list2(1, net::MockWrite(net::ASYNC, handshake_request.c_str(),
-                                          handshake_request.size()));
+  WriteList write_list2(1, net::MockWrite(net::ASYNC, handshake_request));
   ReadList read_list2;
-  read_list2.push_back(net::MockRead(net::ASYNC, handshake_response.c_str(),
-                                     handshake_response.size()));
+  read_list2.push_back(net::MockRead(net::ASYNC, handshake_response));
   read_list2.push_back(net::MockRead(net::SYNCHRONOUS, net::OK) /* EOF */);
   BuildSocket(read_list2, write_list2);
   Connect(&received_message);
@@ -450,16 +439,14 @@ TEST_F(GCMConnectionHandlerImplTest, ReInit) {
 
 // Verify that messages can be received after initialization.
 // Flaky on Linux (crbug.com/906093)
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_RecvMsg DISABLED_RecvMsg
 #else
 #define MAYBE_RecvMsg RecvMsg
 #endif
 TEST_F(GCMConnectionHandlerImplTest, MAYBE_RecvMsg) {
   std::string handshake_request = EncodeHandshakeRequest();
-  WriteList write_list(1, net::MockWrite(net::ASYNC,
-                                         handshake_request.c_str(),
-                                         handshake_request.size()));
+  WriteList write_list(1, net::MockWrite(net::ASYNC, handshake_request));
   std::string handshake_response = EncodeHandshakeResponse();
 
   std::string data_message_proto = BuildDataMessage(kDataMsgFrom,
@@ -467,12 +454,8 @@ TEST_F(GCMConnectionHandlerImplTest, MAYBE_RecvMsg) {
   std::string data_message_pkt =
       EncodePacket(kDataMessageStanzaTag, data_message_proto);
   ReadList read_list;
-  read_list.push_back(net::MockRead(net::ASYNC,
-                                    handshake_response.c_str(),
-                                    handshake_response.size()));
-  read_list.push_back(net::MockRead(net::ASYNC,
-                                    data_message_pkt.c_str(),
-                                    data_message_pkt.size()));
+  read_list.push_back(net::MockRead(net::ASYNC, handshake_response));
+  read_list.push_back(net::MockRead(net::ASYNC, data_message_pkt));
   read_list.push_back(net::MockRead(net::SYNCHRONOUS, net::OK) /* EOF */);
   BuildSocket(read_list, write_list);
 
@@ -489,9 +472,7 @@ TEST_F(GCMConnectionHandlerImplTest, MAYBE_RecvMsg) {
 // Verify that if two messages arrive at once, they're treated appropriately.
 TEST_F(GCMConnectionHandlerImplTest, Recv2Msgs) {
   std::string handshake_request = EncodeHandshakeRequest();
-  WriteList write_list(1, net::MockWrite(net::ASYNC,
-                                         handshake_request.c_str(),
-                                         handshake_request.size()));
+  WriteList write_list(1, net::MockWrite(net::ASYNC, handshake_request));
   std::string handshake_response = EncodeHandshakeResponse();
 
   std::string data_message_proto = BuildDataMessage(kDataMsgFrom,
@@ -502,12 +483,8 @@ TEST_F(GCMConnectionHandlerImplTest, Recv2Msgs) {
       EncodePacket(kDataMessageStanzaTag, data_message_proto);
   data_message_pkt += EncodePacket(kDataMessageStanzaTag, data_message_proto2);
   ReadList read_list;
-  read_list.push_back(net::MockRead(net::ASYNC,
-                                    handshake_response.c_str(),
-                                    handshake_response.size()));
-  read_list.push_back(net::MockRead(net::SYNCHRONOUS,
-                                    data_message_pkt.c_str(),
-                                    data_message_pkt.size()));
+  read_list.push_back(net::MockRead(net::ASYNC, handshake_response));
+  read_list.push_back(net::MockRead(net::SYNCHRONOUS, data_message_pkt));
   read_list.push_back(net::MockRead(net::SYNCHRONOUS, net::OK) /* EOF */);
   BuildSocket(read_list, write_list);
 
@@ -528,9 +505,7 @@ TEST_F(GCMConnectionHandlerImplTest, Recv2Msgs) {
 // Receive a long (>128 bytes) message.
 TEST_F(GCMConnectionHandlerImplTest, RecvLongMsg) {
   std::string handshake_request = EncodeHandshakeRequest();
-  WriteList write_list(1, net::MockWrite(net::ASYNC,
-                                         handshake_request.c_str(),
-                                         handshake_request.size()));
+  WriteList write_list(1, net::MockWrite(net::ASYNC, handshake_request));
   std::string handshake_response = EncodeHandshakeResponse();
 
   std::string data_message_proto =
@@ -539,12 +514,8 @@ TEST_F(GCMConnectionHandlerImplTest, RecvLongMsg) {
       EncodePacket(kDataMessageStanzaTag, data_message_proto);
   DCHECK_GT(data_message_pkt.size(), 128U);
   ReadList read_list;
-  read_list.push_back(net::MockRead(net::ASYNC,
-                                    handshake_response.c_str(),
-                                    handshake_response.size()));
-  read_list.push_back(net::MockRead(net::ASYNC,
-                                    data_message_pkt.c_str(),
-                                    data_message_pkt.size()));
+  read_list.push_back(net::MockRead(net::ASYNC, handshake_response));
+  read_list.push_back(net::MockRead(net::ASYNC, data_message_pkt));
   read_list.push_back(net::MockRead(net::SYNCHRONOUS, net::OK) /* EOF */);
   BuildSocket(read_list, write_list);
 
@@ -561,9 +532,7 @@ TEST_F(GCMConnectionHandlerImplTest, RecvLongMsg) {
 // Receive a long (>128 bytes) message in two synchronous parts.
 TEST_F(GCMConnectionHandlerImplTest, RecvLongMsg2Parts) {
   std::string handshake_request = EncodeHandshakeRequest();
-  WriteList write_list(1, net::MockWrite(net::ASYNC,
-                                         handshake_request.c_str(),
-                                         handshake_request.size()));
+  WriteList write_list(1, net::MockWrite(net::ASYNC, handshake_request));
   std::string handshake_response = EncodeHandshakeResponse();
 
   std::string data_message_proto =
@@ -572,19 +541,15 @@ TEST_F(GCMConnectionHandlerImplTest, RecvLongMsg2Parts) {
       EncodePacket(kDataMessageStanzaTag, data_message_proto);
   DCHECK_GT(data_message_pkt.size(), 128U);
   ReadList read_list;
-  read_list.push_back(net::MockRead(net::ASYNC,
-                                    handshake_response.c_str(),
-                                    handshake_response.size()));
+  read_list.push_back(net::MockRead(net::ASYNC, handshake_response));
 
   int bytes_in_first_message = data_message_pkt.size() / 2;
-  read_list.push_back(net::MockRead(net::SYNCHRONOUS,
-                                    data_message_pkt.c_str(),
-                                    bytes_in_first_message));
-  read_list.push_back(net::MockRead(net::SYNCHRONOUS,
-                                    data_message_pkt.c_str() +
-                                        bytes_in_first_message,
-                                    data_message_pkt.size() -
-                                        bytes_in_first_message));
+  read_list.push_back(net::MockRead(
+      net::SYNCHRONOUS,
+      std::string_view(data_message_pkt).substr(0, bytes_in_first_message)));
+  read_list.push_back(net::MockRead(
+      net::SYNCHRONOUS,
+      std::string_view(data_message_pkt).substr(bytes_in_first_message)));
   read_list.push_back(net::MockRead(net::SYNCHRONOUS, net::OK) /* EOF */);
   BuildSocket(read_list, write_list);
 
@@ -601,9 +566,7 @@ TEST_F(GCMConnectionHandlerImplTest, RecvLongMsg2Parts) {
 // Receive two long (>128 bytes) message.
 TEST_F(GCMConnectionHandlerImplTest, Recv2LongMsgs) {
   std::string handshake_request = EncodeHandshakeRequest();
-  WriteList write_list(1, net::MockWrite(net::ASYNC,
-                                         handshake_request.c_str(),
-                                         handshake_request.size()));
+  WriteList write_list(1, net::MockWrite(net::ASYNC, handshake_request));
   std::string handshake_response = EncodeHandshakeResponse();
 
   std::string data_message_proto =
@@ -615,12 +578,8 @@ TEST_F(GCMConnectionHandlerImplTest, Recv2LongMsgs) {
   data_message_pkt += EncodePacket(kDataMessageStanzaTag, data_message_proto2);
   DCHECK_GT(data_message_pkt.size(), 256U);
   ReadList read_list;
-  read_list.push_back(net::MockRead(net::ASYNC,
-                                    handshake_response.c_str(),
-                                    handshake_response.size()));
-  read_list.push_back(net::MockRead(net::SYNCHRONOUS,
-                                    data_message_pkt.c_str(),
-                                    data_message_pkt.size()));
+  read_list.push_back(net::MockRead(net::ASYNC, handshake_response));
+  read_list.push_back(net::MockRead(net::SYNCHRONOUS, data_message_pkt));
   read_list.push_back(net::MockRead(net::SYNCHRONOUS, net::OK) /* EOF */);
   BuildSocket(read_list, write_list);
 
@@ -642,9 +601,7 @@ TEST_F(GCMConnectionHandlerImplTest, Recv2LongMsgs) {
 // read times out.
 TEST_F(GCMConnectionHandlerImplTest, ReadTimeout) {
   std::string handshake_request = EncodeHandshakeRequest();
-  WriteList write_list(1, net::MockWrite(net::ASYNC,
-                                         handshake_request.c_str(),
-                                         handshake_request.size()));
+  WriteList write_list(1, net::MockWrite(net::ASYNC, handshake_request));
   std::string handshake_response = EncodeHandshakeResponse();
 
   std::string data_message_proto = BuildDataMessage(kDataMsgFrom,
@@ -653,19 +610,15 @@ TEST_F(GCMConnectionHandlerImplTest, ReadTimeout) {
       EncodePacket(kDataMessageStanzaTag, data_message_proto);
   int bytes_in_first_message = data_message_pkt.size() / 2;
   ReadList read_list;
-  read_list.push_back(net::MockRead(net::ASYNC,
-                                    handshake_response.c_str(),
-                                    handshake_response.size()));
-  read_list.push_back(net::MockRead(net::ASYNC,
-                                    data_message_pkt.c_str(),
-                                    bytes_in_first_message));
+  read_list.push_back(net::MockRead(net::ASYNC, handshake_response));
+  read_list.push_back(net::MockRead(
+      net::ASYNC,
+      std::string_view(data_message_pkt).substr(0, bytes_in_first_message)));
   read_list.push_back(net::MockRead(net::SYNCHRONOUS,
                                     net::ERR_IO_PENDING));
-  read_list.push_back(net::MockRead(net::ASYNC,
-                                    data_message_pkt.c_str() +
-                                        bytes_in_first_message,
-                                    data_message_pkt.size() -
-                                        bytes_in_first_message));
+  read_list.push_back(net::MockRead(
+      net::ASYNC,
+      std::string_view(data_message_pkt).substr(bytes_in_first_message)));
   BuildSocket(read_list, write_list);
 
   ScopedMessage received_message;
@@ -682,20 +635,14 @@ TEST_F(GCMConnectionHandlerImplTest, ReadTimeout) {
 // Receive a message with zero data bytes.
 TEST_F(GCMConnectionHandlerImplTest, RecvMsgNoData) {
   std::string handshake_request = EncodeHandshakeRequest();
-  WriteList write_list(1, net::MockWrite(net::ASYNC,
-                                         handshake_request.c_str(),
-                                         handshake_request.size()));
+  WriteList write_list(1, net::MockWrite(net::ASYNC, handshake_request));
   std::string handshake_response = EncodeHandshakeResponse();
 
   std::string data_message_pkt = EncodePacket(kHeartbeatPingTag, "");
   ASSERT_EQ(data_message_pkt.size(), 2U);
   ReadList read_list;
-  read_list.push_back(net::MockRead(net::ASYNC,
-                                    handshake_response.c_str(),
-                                    handshake_response.size()));
-  read_list.push_back(net::MockRead(net::ASYNC,
-                                    data_message_pkt.c_str(),
-                                    data_message_pkt.size()));
+  read_list.push_back(net::MockRead(net::ASYNC, handshake_response));
+  read_list.push_back(net::MockRead(net::ASYNC, data_message_pkt));
   read_list.push_back(net::MockRead(net::SYNCHRONOUS, net::OK) /* EOF */);
   BuildSocket(read_list, write_list);
 
@@ -720,17 +667,11 @@ TEST_F(GCMConnectionHandlerImplTest, SendMsg) {
   std::string data_message_pkt =
       EncodePacket(kDataMessageStanzaTag, data_message.SerializeAsString());
   WriteList write_list;
-  write_list.push_back(net::MockWrite(net::ASYNC,
-                                      handshake_request.c_str(),
-                                      handshake_request.size()));
-  write_list.push_back(net::MockWrite(net::ASYNC,
-                                      data_message_pkt.c_str(),
-                                      data_message_pkt.size()));
+  write_list.push_back(net::MockWrite(net::ASYNC, handshake_request));
+  write_list.push_back(net::MockWrite(net::ASYNC, data_message_pkt));
   std::string handshake_response = EncodeHandshakeResponse();
   ReadList read_list;
-  read_list.push_back(net::MockRead(net::ASYNC,
-                                    handshake_response.c_str(),
-                                    handshake_response.size()));
+  read_list.push_back(net::MockRead(net::ASYNC, handshake_response));
   read_list.push_back(net::MockRead(net::SYNCHRONOUS, net::ERR_IO_PENDING));
   BuildSocket(read_list, write_list);
 
@@ -749,14 +690,10 @@ TEST_F(GCMConnectionHandlerImplTest, SendMsg) {
 TEST_F(GCMConnectionHandlerImplTest, SendMsgSocketDisconnected) {
   std::string handshake_request = EncodeHandshakeRequest();
   WriteList write_list;
-  write_list.push_back(net::MockWrite(net::ASYNC,
-                                      handshake_request.c_str(),
-                                      handshake_request.size()));
+  write_list.push_back(net::MockWrite(net::ASYNC, handshake_request));
   std::string handshake_response = EncodeHandshakeResponse();
   ReadList read_list;
-  read_list.push_back(net::MockRead(net::ASYNC,
-                                    handshake_response.c_str(),
-                                    handshake_response.size()));
+  read_list.push_back(net::MockRead(net::ASYNC, handshake_response));
   read_list.push_back(net::MockRead(net::SYNCHRONOUS, net::ERR_IO_PENDING));
   BuildSocket(read_list, write_list);
 
@@ -781,9 +718,7 @@ TEST_F(GCMConnectionHandlerImplTest, SendMsgSocketDisconnected) {
 // read the packet by using the in-memory buffer.
 TEST_F(GCMConnectionHandlerImplTest, ExtraLargeDataPacket) {
   std::string handshake_request = EncodeHandshakeRequest();
-  WriteList write_list(1, net::MockWrite(net::ASYNC,
-                                         handshake_request.c_str(),
-                                         handshake_request.size()));
+  WriteList write_list(1, net::MockWrite(net::ASYNC, handshake_request));
   std::string handshake_response = EncodeHandshakeResponse();
 
   const std::string kVeryLongFrom(20000, '0');
@@ -792,12 +727,8 @@ TEST_F(GCMConnectionHandlerImplTest, ExtraLargeDataPacket) {
   std::string data_message_pkt =
       EncodePacket(kDataMessageStanzaTag, data_message_proto);
   ReadList read_list;
-  read_list.push_back(net::MockRead(net::ASYNC,
-                                    handshake_response.c_str(),
-                                    handshake_response.size()));
-  read_list.push_back(net::MockRead(net::ASYNC,
-                                    data_message_pkt.c_str(),
-                                    data_message_pkt.size()));
+  read_list.push_back(net::MockRead(net::ASYNC, handshake_response));
+  read_list.push_back(net::MockRead(net::ASYNC, data_message_pkt));
   read_list.push_back(net::MockRead(net::SYNCHRONOUS, net::OK) /* EOF */);
   BuildSocket(read_list, write_list);
 
@@ -816,9 +747,7 @@ TEST_F(GCMConnectionHandlerImplTest, ExtraLargeDataPacket) {
 // read the packet by using the in-memory buffer.
 TEST_F(GCMConnectionHandlerImplTest, 2ExtraLargeDataPacketMsgs) {
   std::string handshake_request = EncodeHandshakeRequest();
-  WriteList write_list(1, net::MockWrite(net::ASYNC,
-                                         handshake_request.c_str(),
-                                         handshake_request.size()));
+  WriteList write_list(1, net::MockWrite(net::ASYNC, handshake_request));
   std::string handshake_response = EncodeHandshakeResponse();
 
   const std::string kVeryLongFrom(20000, '0');
@@ -827,15 +756,9 @@ TEST_F(GCMConnectionHandlerImplTest, 2ExtraLargeDataPacketMsgs) {
   std::string data_message_pkt =
       EncodePacket(kDataMessageStanzaTag, data_message_proto);
   ReadList read_list;
-  read_list.push_back(net::MockRead(net::ASYNC,
-                                    handshake_response.c_str(),
-                                    handshake_response.size()));
-  read_list.push_back(net::MockRead(net::ASYNC,
-                                    data_message_pkt.c_str(),
-                                    data_message_pkt.size()));
-  read_list.push_back(net::MockRead(net::SYNCHRONOUS,
-                                    data_message_pkt.c_str(),
-                                    data_message_pkt.size()));
+  read_list.push_back(net::MockRead(net::ASYNC, handshake_response));
+  read_list.push_back(net::MockRead(net::ASYNC, data_message_pkt));
+  read_list.push_back(net::MockRead(net::SYNCHRONOUS, data_message_pkt));
   read_list.push_back(net::MockRead(net::SYNCHRONOUS, net::OK) /* EOF */);
   BuildSocket(read_list, write_list);
 
@@ -858,21 +781,15 @@ TEST_F(GCMConnectionHandlerImplTest, 2ExtraLargeDataPacketMsgs) {
 // the connection with an invalid argument error.
 TEST_F(GCMConnectionHandlerImplTest, InvalidTag) {
   std::string handshake_request = EncodeHandshakeRequest();
-  WriteList write_list(1, net::MockWrite(net::ASYNC,
-                                         handshake_request.c_str(),
-                                         handshake_request.size()));
+  WriteList write_list(1, net::MockWrite(net::ASYNC, handshake_request));
   std::string handshake_response = EncodeHandshakeResponse();
 
   std::string invalid_message = "0";
   std::string invalid_message_pkt =
       EncodePacket(kInvalidTag, invalid_message);
   ReadList read_list;
-  read_list.push_back(net::MockRead(net::ASYNC,
-                                    handshake_response.c_str(),
-                                    handshake_response.size()));
-  read_list.push_back(net::MockRead(net::ASYNC,
-                                    invalid_message_pkt.c_str(),
-                                    invalid_message_pkt.size()));
+  read_list.push_back(net::MockRead(net::ASYNC, handshake_response));
+  read_list.push_back(net::MockRead(net::ASYNC, invalid_message_pkt));
   read_list.push_back(net::MockRead(net::SYNCHRONOUS, net::OK) /* EOF */);
   BuildSocket(read_list, write_list);
 
@@ -889,9 +806,7 @@ TEST_F(GCMConnectionHandlerImplTest, InvalidTag) {
 // Receive a message where the size field spans two socket reads.
 TEST_F(GCMConnectionHandlerImplTest, RecvMsgSplitSize) {
   std::string handshake_request = EncodeHandshakeRequest();
-  WriteList write_list(1, net::MockWrite(net::ASYNC,
-                                         handshake_request.c_str(),
-                                         handshake_request.size()));
+  WriteList write_list(1, net::MockWrite(net::ASYNC, handshake_request));
   std::string handshake_response = EncodeHandshakeResponse();
 
   std::string data_message_proto =
@@ -900,17 +815,13 @@ TEST_F(GCMConnectionHandlerImplTest, RecvMsgSplitSize) {
       EncodePacket(kDataMessageStanzaTag, data_message_proto);
   DCHECK_GT(data_message_pkt.size(), 128U);
   ReadList read_list;
-  read_list.push_back(net::MockRead(net::ASYNC,
-                                    handshake_response.c_str(),
-                                    handshake_response.size()));
+  read_list.push_back(net::MockRead(net::ASYNC, handshake_response));
   // The first two bytes are the tag byte and the first byte of the size packet.
-  read_list.push_back(net::MockRead(net::ASYNC,
-                                    data_message_pkt.c_str(),
-                                    2));
+  read_list.push_back(net::MockRead(
+      net::ASYNC, std::string_view(data_message_pkt).substr(0, 2)));
   // Start from the second byte of the size packet.
-  read_list.push_back(net::MockRead(net::ASYNC,
-                                    data_message_pkt.c_str() + 2,
-                                    data_message_pkt.size() - 2));
+  read_list.push_back(
+      net::MockRead(net::ASYNC, std::string_view(data_message_pkt).substr(2)));
   read_list.push_back(net::MockRead(net::SYNCHRONOUS, net::OK) /* EOF */);
   BuildSocket(read_list, write_list);
 
@@ -928,18 +839,15 @@ TEST_F(GCMConnectionHandlerImplTest, RecvMsgSplitSize) {
 // the connection with a FAILED error.
 TEST_F(GCMConnectionHandlerImplTest, InvalidData) {
   std::string handshake_request = EncodeHandshakeRequest();
-  WriteList write_list(1, net::MockWrite(net::ASYNC, handshake_request.c_str(),
-                                         handshake_request.size()));
+  WriteList write_list(1, net::MockWrite(net::ASYNC, handshake_request));
   std::string handshake_response = EncodeHandshakeResponse();
   std::string data_message_proto = BuildCorruptDataMessage();
   std::string invalid_message_pkt =
       EncodePacket(kDataMessageStanzaTag, data_message_proto);
 
   ReadList read_list;
-  read_list.push_back(net::MockRead(net::ASYNC, handshake_response.c_str(),
-                                    handshake_response.size()));
-  read_list.push_back(net::MockRead(net::ASYNC, invalid_message_pkt.c_str(),
-                                    invalid_message_pkt.size()));
+  read_list.push_back(net::MockRead(net::ASYNC, handshake_response));
+  read_list.push_back(net::MockRead(net::ASYNC, invalid_message_pkt));
   read_list.push_back(net::MockRead(net::SYNCHRONOUS, net::OK) /* EOF */);
   BuildSocket(read_list, write_list);
 
@@ -957,8 +865,7 @@ TEST_F(GCMConnectionHandlerImplTest, InvalidData) {
 // the connection with a FAILED error.
 TEST_F(GCMConnectionHandlerImplTest, InvalidDataLong) {
   std::string handshake_request = EncodeHandshakeRequest();
-  WriteList write_list(1, net::MockWrite(net::ASYNC, handshake_request.c_str(),
-                                         handshake_request.size()));
+  WriteList write_list(1, net::MockWrite(net::ASYNC, handshake_request));
   std::string handshake_response = EncodeHandshakeResponse();
   std::string data_message_proto = BuildCorruptDataMessage();
   // Pad the corrupt data so it's beyond the normal single packet length.
@@ -967,10 +874,8 @@ TEST_F(GCMConnectionHandlerImplTest, InvalidDataLong) {
       EncodePacket(kDataMessageStanzaTag, data_message_proto);
 
   ReadList read_list;
-  read_list.push_back(net::MockRead(net::ASYNC, handshake_response.c_str(),
-                                    handshake_response.size()));
-  read_list.push_back(net::MockRead(net::ASYNC, invalid_message_pkt.c_str(),
-                                    invalid_message_pkt.size()));
+  read_list.push_back(net::MockRead(net::ASYNC, handshake_response));
+  read_list.push_back(net::MockRead(net::ASYNC, invalid_message_pkt));
   read_list.push_back(net::MockRead(net::SYNCHRONOUS, net::OK) /* EOF */);
   BuildSocket(read_list, write_list);
 

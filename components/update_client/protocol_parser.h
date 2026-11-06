@@ -1,17 +1,20 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_UPDATE_CLIENT_PROTOCOL_PARSER_H_
 #define COMPONENTS_UPDATE_CLIENT_PROTOCOL_PARSER_H_
 
-#include <cstdint>
+#include <stdint.h>
+
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/version.h"
 #include "url/gurl.h"
 
 namespace update_client {
@@ -19,51 +22,54 @@ namespace update_client {
 class ProtocolParser {
  public:
   // The result of parsing one |app| entity in an update check response.
-  struct Result {
-    struct Manifest {
-      struct Package {
-        Package();
-        Package(const Package& other);
-        ~Package();
+  struct Data {
+    Data();
+    Data(const std::string& install_data_index, const std::string& text);
+    Data(const Data& other);
+    Data& operator=(const Data&);
+    ~Data();
 
-        // |fingerprint| is optional. It identifies the package, preferably
-        // with a modified sha256 hash of the package in hex format.
-        std::string fingerprint;
+    // The `install_data_index` specified by the update check.
+    std::string install_data_index;
 
-        // Attributes for the full update.
-        std::string name;
-        std::string hash_sha256;
-        int64_t size = 0;
+    // The server data corresponding to the `name`/`install_data_index pair`.
+    std::string text;
+  };
 
-        // Attributes for the differential update.
-        std::string namediff;
-        std::string hashdiff_sha256;
-        int64_t sizediff = 0;
-      };
+  struct Operation {
+    Operation();
+    Operation(const Operation& other);
+    Operation& operator=(const Operation&);
+    ~Operation();
+    std::string type;
+    std::string sha256_in;
+    std::string sha256_out;
+    std::string sha256_previous;
+    std::string path;
+    std::string arguments;
+    int64_t size = 0;
+    std::vector<GURL> urls;
+  };
 
-      Manifest();
-      Manifest(const Manifest& other);
-      ~Manifest();
+  struct Pipeline {
+    Pipeline();
+    Pipeline(const Pipeline& other);
+    Pipeline& operator=(const Pipeline&);
+    ~Pipeline();
+    std::string pipeline_id;
+    std::vector<Operation> operations;
+  };
 
-      std::string version;
-      std::string browser_min_version;
-      std::vector<Package> packages;
+  struct App {
+    App();
+    App(const App& other);
+    App& operator=(const App&);
+    ~App();
 
-      // A path within the CRX archive to an executable to run as part of the
-      // update. The executable is typically an application installer.
-      std::string run;
+    std::string app_id;
 
-      // Command-line arguments for the binary specified by |run|.
-      std::string arguments;
-    };
-
-    Result();
-    Result(const Result& other);
-    ~Result();
-
-    std::string extension_id;
-
-    // The updatecheck response status.
+    // status indicates the outcome of the check. It can be filled from either
+    // the app or updatecheck node.
     std::string status;
 
     // App-specific additions in the updatecheck response, including the
@@ -71,43 +77,38 @@ class ProtocolParser {
     // elements).
     std::map<std::string, std::string> custom_attributes;
 
-    // The list of fallback urls, for full and diff updates respectively.
-    // These urls are base urls; they don't include the filename.
-    std::vector<GURL> crx_urls;
-    std::vector<GURL> crx_diffurls;
-
-    Manifest manifest;
-
     // The server has instructed the client to set its [key] to [value] for each
     // key-value pair in this string.
-    std::map<std::string, std::string> cohort_attrs;
+    std::optional<std::string> cohort;
+    std::optional<std::string> cohort_name;
+    std::optional<std::string> cohort_hint;
 
-    // The following are the only allowed keys in |cohort_attrs|.
-    static const char kCohort[];
-    static const char kCohortHint[];
-    static const char kCohortName[];
+    // Contains the data responses corresponding to the data elements specified
+    // in the update request.
+    std::vector<Data> data;
 
-    // Contains the run action returned by the server as part of an update
-    // check response. This indicates the need to trigger the execution of
-    // something bound to a component which is already installed.
-    std::string action_run;
+    // When an update is available, these fields will be filled.
+    base::Version nextversion;
+    std::vector<Pipeline> pipelines;
   };
 
-  static const int kNoDaystart = -1;
+  static constexpr int kNoDaystart = -1;
   struct Results {
     Results();
     Results(const Results& other);
+    Results& operator=(const Results&);
     ~Results();
 
     // This will be >= 0, or kNoDaystart if the <daystart> tag was not present.
-    int daystart_elapsed_seconds = kNoDaystart;
-
-    // This will be >= 0, or kNoDaystart if the <daystart> tag was not present.
     int daystart_elapsed_days = kNoDaystart;
-    std::vector<Result> list;
+
+    std::vector<App> apps;
   };
 
   static std::unique_ptr<ProtocolParser> Create();
+
+  ProtocolParser(const ProtocolParser&) = delete;
+  ProtocolParser& operator=(const ProtocolParser&) = delete;
 
   virtual ~ProtocolParser();
 
@@ -125,15 +126,13 @@ class ProtocolParser {
   ProtocolParser();
 
   // Appends parse error details to |errors_| string.
-  void ParseError(const char* details, ...);
+  void ParseError(std::string_view details);
 
  private:
-  virtual bool DoParse(const std::string& response, Results* results) = 0;
+  virtual bool DoParse(std::string_view response, Results* results) = 0;
 
   Results results_;
   std::string errors_;
-
-  DISALLOW_COPY_AND_ASSIGN(ProtocolParser);
 };
 
 }  // namespace update_client

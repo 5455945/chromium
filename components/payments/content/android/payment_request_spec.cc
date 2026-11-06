@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,19 +10,22 @@
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
 #include "components/payments/content/android/byte_buffer_helper.h"
-#include "components/payments/content/android/jni_headers/PaymentRequestSpec_jni.h"
 #include "third_party/blink/public/mojom/payments/payment_request.mojom.h"
+#include "third_party/jni_zero/jni_zero.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/payments/content/android/minimal_jni/PaymentRequestSpec_jni.h"
 
 namespace payments {
 namespace android {
 
 // static
-jlong JNI_PaymentRequestSpec_Create(
+static jni_zero::JniUniquePtr<PaymentRequestSpec> JNI_PaymentRequestSpec_Create(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& joptions_byte_buffer,
-    const base::android::JavaParamRef<jobject>& jdetails_byte_buffer,
-    const base::android::JavaParamRef<jobjectArray>& jmethod_data_byte_buffers,
-    const base::android::JavaParamRef<jstring>& japp_locale) {
+    const base::android::JavaRef<jobject>& joptions_byte_buffer,
+    const base::android::JavaRef<jobject>& jdetails_byte_buffer,
+    const base::android::JavaRef<jobjectArray>& jmethod_data_byte_buffers,
+    const base::android::JavaRef<jstring>& japp_locale) {
   mojom::PaymentOptionsPtr options;
   bool success =
       DeserializeFromJavaByteBuffer(env, joptions_byte_buffer, &options);
@@ -37,21 +40,19 @@ jlong JNI_PaymentRequestSpec_Create(
                                                &method_data);
   DCHECK(success);
 
-  return reinterpret_cast<intptr_t>(
-      new PaymentRequestSpec(std::make_unique<payments::PaymentRequestSpec>(
+  return jni_zero::MakeUnique<PaymentRequestSpec>(
+      std::make_unique<payments::PaymentRequestSpec>(
           std::move(options), std::move(details), std::move(method_data),
           /*delegate=*/nullptr,
-          base::android::ConvertJavaStringToUTF8(env, japp_locale))));
+          base::android::ConvertJavaStringToUTF8(env, japp_locale)));
 }
 
 // static
 base::WeakPtr<payments::PaymentRequestSpec>
 PaymentRequestSpec::FromJavaPaymentRequestSpec(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& jpayment_request_spec) {
-  return reinterpret_cast<PaymentRequestSpec*>(
-             Java_PaymentRequestSpec_getNativePointer(env,
-                                                      jpayment_request_spec))
+    const base::android::JavaRef<jobject>& jpayment_request_spec) {
+  return Java_PaymentRequestSpec_getNativePointer(env, jpayment_request_spec)
       ->spec_->AsWeakPtr();
 }
 
@@ -61,7 +62,7 @@ PaymentRequestSpec::PaymentRequestSpec(
 
 void PaymentRequestSpec::UpdateWith(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& jdetails_byte_buffer) {
+    const base::android::JavaRef<jobject>& jdetails_byte_buffer) {
   mojom::PaymentDetailsPtr details;
   bool success =
       DeserializeFromJavaByteBuffer(env, jdetails_byte_buffer, &details);
@@ -72,7 +73,7 @@ void PaymentRequestSpec::UpdateWith(
 
 void PaymentRequestSpec::Retry(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& jvalidation_errors_buffer) {
+    const base::android::JavaRef<jobject>& jvalidation_errors_buffer) {
   mojom::PaymentValidationErrorsPtr validation_errors;
   bool success = DeserializeFromJavaByteBuffer(env, jvalidation_errors_buffer,
                                                &validation_errors);
@@ -112,11 +113,9 @@ PaymentRequestSpec::GetMethodData(JNIEnv* env) {
   return SerializeToJavaArrayOfByteArrays(env, spec_->method_data());
 }
 
-void PaymentRequestSpec::Destroy(JNIEnv* env) {
-  delete this;
-}
-
 PaymentRequestSpec::~PaymentRequestSpec() = default;
 
 }  // namespace android
 }  // namespace payments
+
+DEFINE_JNI(PaymentRequestSpec)

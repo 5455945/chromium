@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,28 +9,27 @@
 #include <string>
 #include <unordered_set>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/values.h"
 #include "chrome/test/chromedriver/chrome/devtools_event_listener.h"
 #include "chrome/test/chromedriver/chrome/web_view.h"
 
-namespace base {
-class DictionaryValue;
-}
-
-struct BrowserInfo;
 class DevToolsClient;
 class Status;
 
 // Tracks execution context creation.
 class FrameTracker : public DevToolsEventListener {
  public:
-  FrameTracker(DevToolsClient* client,
-               WebView* web_view = nullptr,
-               const BrowserInfo* browser_info = nullptr);
+  explicit FrameTracker(DevToolsClient* client, WebView* web_view = nullptr);
+
+  FrameTracker(const FrameTracker&) = delete;
+  FrameTracker& operator=(const FrameTracker&) = delete;
+
   ~FrameTracker() override;
 
-  Status GetContextIdForFrame(const std::string& frame_id, int* context_id);
+  Status GetContextIdForFrame(const std::string& frame_id,
+                              std::string* context_id) const;
+  void SetContextIdForFrame(std::string frame_id, std::string context_id);
   WebView* GetTargetForFrame(const std::string& frame_id);
   bool IsKnownFrame(const std::string& frame_id) const;
   void DeleteTargetForFrame(const std::string& frame_id);
@@ -39,15 +38,15 @@ class FrameTracker : public DevToolsEventListener {
   Status OnConnected(DevToolsClient* client) override;
   Status OnEvent(DevToolsClient* client,
                  const std::string& method,
-                 const base::DictionaryValue& params) override;
+                 const base::DictValue& params) override;
+
+  void ForEachTarget(base::RepeatingCallback<void(WebView&)> func);
 
  private:
-  std::map<std::string, int> frame_to_context_map_;
+  std::map<std::string, std::string> frame_to_context_map_;
   std::map<std::string, std::unique_ptr<WebView>> frame_to_target_map_;
   std::unordered_set<std::string> attached_frames_;
-  WebView* web_view_;
-
-  DISALLOW_COPY_AND_ASSIGN(FrameTracker);
+  raw_ptr<WebView> web_view_;
 };
 
 #endif  // CHROME_TEST_CHROMEDRIVER_CHROME_FRAME_TRACKER_H_

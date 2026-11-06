@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,11 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "base/files/file_util.h"
 #include "base/path_service.h"
-#include "base/strings/string_piece.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -43,13 +44,19 @@ namespace downgrade {
 // is expected to be used in a PRE_ and a regular test, with IsPreTest used to
 // distinguish these cases at runtime.
 class UserDataDowngradeBrowserTestBase : public InProcessBrowserTest {
+ public:
+  UserDataDowngradeBrowserTestBase(const UserDataDowngradeBrowserTestBase&) =
+      delete;
+  UserDataDowngradeBrowserTestBase& operator=(
+      const UserDataDowngradeBrowserTestBase&) = delete;
+
  protected:
   // Returns true if the PRE_ test is running, meaning that the test is in the
   // "before relaunch" stage.
   static bool IsPreTest() {
-    const base::StringPiece test_name(
+    const std::string_view test_name(
         ::testing::UnitTest::GetInstance()->current_test_info()->name());
-    return test_name.find("PRE_") != base::StringPiece::npos;
+    return test_name.find("PRE_") != std::string_view::npos;
   }
 
   // Returns the next Chrome milestone version.
@@ -120,8 +127,6 @@ class UserDataDowngradeBrowserTestBase : public InProcessBrowserTest {
   base::FilePath other_file_;
 
   registry_util::RegistryOverrideManager registry_override_manager_;
-
-  DISALLOW_COPY_AND_ASSIGN(UserDataDowngradeBrowserTestBase);
 };
 
 // A gMock matcher that is satisfied when its argument is a command line
@@ -134,6 +139,12 @@ MATCHER_P(HasSwitch, switch_name, "") {
 // that User Data was moved and then subsequently deleted.
 class UserDataDowngradeBrowserCopyAndCleanTest
     : public UserDataDowngradeBrowserTestBase {
+ public:
+  UserDataDowngradeBrowserCopyAndCleanTest(
+      const UserDataDowngradeBrowserCopyAndCleanTest&) = delete;
+  UserDataDowngradeBrowserCopyAndCleanTest& operator=(
+      const UserDataDowngradeBrowserCopyAndCleanTest&) = delete;
+
  protected:
   using ParentClass = UserDataDowngradeBrowserTestBase;
 
@@ -155,10 +166,17 @@ class UserDataDowngradeBrowserCopyAndCleanTest
               mock_relaunch_callback_->Get());
 
       // Expect that browser startup short-circuits into a relaunch.
-      set_expected_exit_code(chrome::RESULT_CODE_DOWNGRADE_AND_RELAUNCH);
+      set_expected_exit_code(CHROME_RESULT_CODE_DOWNGRADE_AND_RELAUNCH);
 
       // Prepare to check histograms during the restart.
       histogram_tester_ = std::make_unique<base::HistogramTester>();
+    } else {
+      // Verify the contents of the renamed user data directory.
+      ASSERT_TRUE(base::DirectoryExists(moved_user_data_dir()));
+      EXPECT_TRUE(base::PathExists(
+          moved_user_data_dir().Append(other_file().BaseName())));
+      EXPECT_EQ(GetNextChromeVersion(),
+                GetLastVersion(moved_user_data_dir())->GetString());
     }
   }
 
@@ -173,27 +191,14 @@ class UserDataDowngradeBrowserCopyAndCleanTest
     }
   }
 
-  // Verify the contents of the renamed user data directory.
   void SetUpOnMainThread() override {
     // This is never reached in the pre test due to the relaunch.
     ASSERT_FALSE(ParentClass::IsPreTest());
-    ASSERT_TRUE(base::DirectoryExists(moved_user_data_dir()));
-    EXPECT_TRUE(base::PathExists(
-        moved_user_data_dir().Append(other_file().BaseName())));
-    EXPECT_EQ(GetNextChromeVersion(),
-              GetLastVersion(moved_user_data_dir())->GetString());
     ParentClass::SetUpOnMainThread();
   }
 
   void TearDownInProcessBrowserTestFixture() override {
-    if (ParentClass::IsPreTest()) {
-      // Verify that the downgrade was detected and that the move took place.
-      histogram_tester_->ExpectUniqueSample(
-          "Downgrade.Type", 1 /* Type::kAdministrativeWipe */, 1);
-      histogram_tester_->ExpectUniqueSample(
-          "Downgrade.UserDataDirMove.Result",
-          1 /* UserDataMoveResult::kSuccess */, 1);
-    } else {
+    if (!ParentClass::IsPreTest()) {
       // Verify the renamed user data directory has been deleted.
       EXPECT_FALSE(base::DirectoryExists(moved_user_data_dir()));
     }
@@ -212,7 +217,7 @@ class UserDataDowngradeBrowserCopyAndCleanTest
   // Writes |downgrade_version| into the DowngradeVersion value in ClientState
   // so that the browser believes that a downgrade was driven by an
   // administrator rather than an accident of fate.
-  void SetDowngradeVersion(base::StringPiece downgrade_version) {
+  void SetDowngradeVersion(std::string_view downgrade_version) {
     ASSERT_EQ(base::win::RegKey(root_key(),
                                 install_static::GetClientStateKeyPath().c_str(),
                                 KEY_SET_VALUE | KEY_WOW64_32KEY)
@@ -227,8 +232,6 @@ class UserDataDowngradeBrowserCopyAndCleanTest
   std::unique_ptr<upgrade_util::ScopedRelaunchChromeBrowserOverride>
       relaunch_chrome_override_;
   std::unique_ptr<base::HistogramTester> histogram_tester_;
-
-  DISALLOW_COPY_AND_ASSIGN(UserDataDowngradeBrowserCopyAndCleanTest);
 };
 
 // Verify the user data directory has been renamed and created again after
@@ -247,17 +250,21 @@ IN_PROC_BROWSER_TEST_F(UserDataDowngradeBrowserCopyAndCleanTest, Test) {
 // driven downgrade and ensures that User Data is not moved aside and deleted.
 class UserDataDowngradeBrowserNoResetTest
     : public UserDataDowngradeBrowserTestBase {
+ public:
+  UserDataDowngradeBrowserNoResetTest(
+      const UserDataDowngradeBrowserNoResetTest&) = delete;
+  UserDataDowngradeBrowserNoResetTest& operator=(
+      const UserDataDowngradeBrowserNoResetTest&) = delete;
+
  protected:
   UserDataDowngradeBrowserNoResetTest() = default;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(UserDataDowngradeBrowserNoResetTest);
 };
 
 // Verify the user data directory will not be reset without downgrade.
 IN_PROC_BROWSER_TEST_F(UserDataDowngradeBrowserNoResetTest, PRE_Test) {}
 
-IN_PROC_BROWSER_TEST_F(UserDataDowngradeBrowserNoResetTest, Test) {
+// TODO(crbug.com/40925550): Re-enable this test
+IN_PROC_BROWSER_TEST_F(UserDataDowngradeBrowserNoResetTest, DISABLED_Test) {
   base::ScopedAllowBlockingForTesting allow_blocking;
   EXPECT_EQ(chrome::kChromeVersion,
             GetLastVersion(user_data_dir())->GetString());

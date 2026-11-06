@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,51 +6,72 @@
 #define UI_VIEWS_CONTROLS_MENU_MENU_HOST_H_
 
 #include <memory>
+#include <string>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "build/build_config.h"
-#include "ui/base/ui_base_types.h"
-#include "ui/gfx/geometry/rect.h"
+#include "ui/base/owned_window_anchor.h"
+#include "ui/views/focus/focus_manager.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_observer.h"
 
+namespace gfx {
+class Insets;
+class Rect;
+}  // namespace gfx
+
+namespace ui {
+class TextInputClient;
+}  // namespace ui
+
 namespace views {
 
+class MenuControllerTest;
 class SubmenuView;
 class View;
 class Widget;
 
 namespace internal {
-
+#if defined(USE_AURA)
 // This class is internal to views.
 class PreMenuEventDispatchHandler;
-
+#endif  // defined(USE_AURA)
 }  // namespace internal
 
-namespace test {
-class MenuControllerTest;
-}  // namespace test
-
-// SubmenuView uses a MenuHost to house the SubmenuView.
+// `SubmenuView` uses a `MenuHost` to house the `SubmenuView`.
 //
-// SubmenuView owns the MenuHost. When SubmenuView is done with the MenuHost
-// |DestroyMenuHost| is invoked. The one exception to this is if the native
-// OS destroys the widget out from under us, in which case |MenuHostDestroyed|
-// is invoked back on the SubmenuView and the SubmenuView then drops references
-// to the MenuHost.
-class MenuHost : public Widget, public WidgetObserver {
+// As a `Widget`, `MenuHost` is owned by the widget system. `SubmenuView`
+// creates `MenuHost` and when `SubmenuView` is done with the `MenuHost`
+// `DestroyMenuHost` is invoked, which leads to the destruction of the
+// `MenuHost`. Alternatively, the OS may destroy the widget. In this case
+// `MenuHost` invokes `MenuHostDestroyed` on the `SubmenuView` and the
+// `SubmenuView` then drops references to the `MenuHost`.
+class MenuHost : public Widget,
+                 public WidgetObserver,
+                 public FocusChangeListener {
  public:
   struct InitParams {
-    Widget* parent = nullptr;
+    raw_ptr<Widget> parent = nullptr;
     gfx::Rect bounds;
-    View* contents_view = nullptr;
+    raw_ptr<View> contents_view = nullptr;
     bool do_capture = false;
     gfx::NativeView native_view_for_gestures;
-    ui::MenuType menu_type = ui::MenuType::kRootContextMenu;
+    // Window that is stacked below a new menu window (can be different from the
+    // |parent|).
+    raw_ptr<Widget> context = nullptr;
+
+    // Additional information that helps to position anchored windows in such
+    // backends as Wayland.
+    ui::OwnedWindowAnchor owned_window_anchor;
   };
 
   explicit MenuHost(SubmenuView* submenu);
+
+  MenuHost(const MenuHost&) = delete;
+  MenuHost& operator=(const MenuHost&) = delete;
+
   ~MenuHost() override;
 
   // Initializes and shows the MenuHost.
@@ -73,44 +94,73 @@ class MenuHost : public Widget, public WidgetObserver {
   // Sets the bounds of the menu host.
   void SetMenuHostBounds(const gfx::Rect& bounds);
 
+  // Sets the anchor of the menu host.
+  void SetMenuHostOwnedWindowAnchor(const ui::OwnedWindowAnchor& anchor);
+
   // Releases a mouse grab installed by |ShowMenuHost|.
   void ReleaseMenuHostCapture();
 
+  bool destroying_for_testing() const { return destroying_; }
+
  private:
-  friend class test::MenuControllerTest;
+  friend class MenuControllerTest;
+
+  // Listens to the owner widget's FocusManager.
+  class OwnerFocusChangeListener;
 
   // Widget:
   internal::RootView* CreateRootView() override;
   void OnMouseCaptureLost() override;
   void OnNativeWidgetDestroyed() override;
   void OnOwnerClosing() override;
-  void OnDragWillStart() override;
-  void OnDragComplete() override;
+  void OnDragDropWillStart() override;
+  void OnDragDropCompleted() override;
   Widget* GetPrimaryWindowWidget() override;
+  bool CanFocusViewsWithoutActivation() const override;
+  // Shares the owner widget's InputMethod so views focused inside the
+  // non-activating MenuHost receive text input routed through the active owner
+  // window.
+  ui::InputMethod* GetInputMethod() override;
+  gfx::Insets GetCustomInsetsInDIP() const override;
 
   // WidgetObserver:
   void OnWidgetDestroying(Widget* widget) override;
 
-  // Parent of the MenuHost widget.
-  Widget* owner_ = nullptr;
+  // FocusChangeListener (this widget's FocusManager):
+  void OnWillChangeFocus(View* focused_before, View* focused_now) override;
+  void OnDidChangeFocus(View* focused_before, View* focused_now) override;
 
-  gfx::NativeView native_view_for_gestures_ = nullptr;
+  // Clears focus without restoring the owner's TextInputClient. Called when the
+  // owner changes its own focus or is destroyed.
+  void ClearFocusForOwner();
 
-  // The view we contain.
-  SubmenuView* submenu_;
+  // Returns the parent of the MenuHost widget.
+  Widget* GetOwner();
+
+  base::ScopedObservation<Widget, WidgetObserver> owner_observation_{this};
+  base::ScopedObservation<FocusManager, FocusChangeListener>
+      focus_manager_observation_{this};
+  std::unique_ptr<OwnerFocusChangeListener> owner_focus_change_listener_;
+
+  // The owner InputMethod's client when focus entered this MenuHost; restored
+  // when focus leaves.
+  base::WeakPtr<ui::TextInputClient> owner_text_input_client_;
+
+  gfx::NativeView native_view_for_gestures_ = gfx::NativeView();
+
+  // The view we contain, owned by `MenuItemView`.
+  raw_ptr<SubmenuView> submenu_ = nullptr;
 
   // If true, DestroyMenuHost has been invoked.
-  bool destroying_;
+  bool destroying_ = false;
 
   // If true and capture is lost we don't notify the delegate.
-  bool ignore_capture_lost_;
+  bool ignore_capture_lost_ = false;
 
-#if !defined(OS_MAC)
+#if defined(USE_AURA)
   // Handles raw touch events at the moment.
   std::unique_ptr<internal::PreMenuEventDispatchHandler> pre_dispatch_handler_;
-#endif
-
-  DISALLOW_COPY_AND_ASSIGN(MenuHost);
+#endif  // defined(USE_AURA)
 };
 
 }  // namespace views

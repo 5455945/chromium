@@ -189,7 +189,7 @@ the browser process to:
     definition of proper defanging varies per platform.
 1.  Prepend its own parent directory to the basename, e.g. ~/Downloads.
 
-> TODO(https://crbug.com/779196): Even better would be to implement a C++ type
+> TODO(crbug.com/41352236): Even better would be to implement a C++ type
 > performs the appropriate sanitizations and recommend its usage directly here.
 
 
@@ -207,6 +207,26 @@ the previous section), then such data should be verified before being used.
       messages handled asynchronously).  For legacy IPC, the renderer process
       may be terminated by calling the `ReceivedBadMessage` function (separate
       implementations exist for `//content`, `//chrome` and other layers).
+
+
+### Don't leak UnguessableTokens
+
+Don't send an UnguessableToken to a process that's not supposed to know about
+it. That would defeat the purpose of being unguessable.  A compromised renderer
+with an actual token from a different process could potentially use it to spoof
+browser-side checks.
+
+[`blink::RemoteFrameToken`](/third_party/blink/public/common/tokens/tokens.h) is
+the token that a *specific* renderer process knows for a frame that is in a
+different process (identifying a `blink::RemoteFrame` in that renderer and a
+`content::RenderFrameProxyHost` in the browser). Each renderer that is aware of
+that frame has a different `RemoteFrameToken` for it. Be sure to send each
+token to the right renderer.
+
+Similarly, don't send a `RemoteFrameToken` to the renderer that hosts the
+frame. Use
+[`blink::LocalFrameToken`](/third_party/blink/public/common/tokens/tokens.h)
+for that.
 
 
 ### Do not define unused or unimplemented things
@@ -249,7 +269,7 @@ class View : public mojom::View {
  public:
   // ...
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   void UpdateBrowserControlsState(bool enable_hiding, bool enable_showing,
                                   bool animate);
 #endif
@@ -271,7 +291,7 @@ class View : public mojom::View {
  public:
   // ...
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   void UpdateBrowserControlsState(bool enable_hiding, bool enable_showing,
                                   bool animate) override;
 #else
@@ -398,6 +418,8 @@ enforce that the input data is valid. Common ones to watch out for:
 *   Time types: use `mojo_base.mojom.TimeDelta` /
     `mojo_base.mojom.TimeTicks` / `mojo_base.mojom.Time`, not `int64` /
     `uint64` / `double` / et cetera.
+    *   In WebUI, use `mojo_base.mojom.JSTime` for times coming from Javascript
+        Date objects.
 *   URLs: use `url.mojom.Url`, not `string`.
 *   `array<uint8>` or `string` and `memcpy()`: use a Mojo struct and statically
     define the serialized fields. While `memcpy()` may be tempting for its
@@ -551,20 +573,7 @@ struct TokenManager {
 };
 ```
 
-There are some known exceptions to this rule because mojo does not handle
-optional primitives.
-
-**_Allowed because mojo has no support for optional primitives_**
-```c++
-  struct Foo {
-    int32 x;
-    bool has_x;  // does the value of `x` have meaning?
-    int32 y;
-    bool has_y;  // does the value of `y` have meaning?
-  };
-```
-
-Another common case where we tolerate imperfect message semantics is
+A known exception where we tolerate imperfect message semantics is
 with weakly typed integer [bitfields](#handling-bitfields).
 
 ### Handling bitfields
@@ -596,6 +605,74 @@ struct Person {
   uint32 vehicle_bitfield;
 };
 ```
+In both cases, consider typemapping these mojo types to your preferred C++ construct
+(e.g. `base::StrongAlias<...>`, `base::EnumSet<...>`, etc.) to improve downstream
+readability and type safety.
+
+### Avoid object lifetime issues with self-owned receivers
+
+When creating new
+[Mojo services](https://chromium.googlesource.com/chromium/src/+/HEAD/docs/mojo_and_services.md)
+in the browser process (exposed to the renderer via `BrowserInterfaceBrokers` in
+a host object like `RenderFrameHostImpl`, `DedicatedWorkerHost`, etc.), one
+approach is to have the interface implementation be owned by the `Receiver`
+using `mojo::MakeSelfOwnedReceiver`. From the
+[`mojo::MakeSelfOwnedReceiver` declaration](https://source.chromium.org/chromium/chromium/src/+/main:mojo/public/cpp/bindings/self_owned_receiver.h;l=129;drc=643cdf61903e99f27c3d80daee67e217e9d280e0):
+```
+// Binds the lifetime of an interface implementation to the lifetime of the
+// Receiver. When the Receiver is disconnected (typically by the remote end
+// closing the entangled Remote), the implementation will be deleted.
+```
+Consider such an interface created in `RenderFrameHostImpl`, and consider that
+and a corresponding `Remote` was created for this interface and owned by
+`RenderFrame`. It may seem logical to think that:
+ 1. (true) The `Receiver` owns the interface implementation
+ 2. (true) The lifetime of the `Receiver` is based on the lifetime of the
+    `Remote` in the renderer
+ 3. (true) The `Remote` is owned by the `RenderFrame`
+ 4. (true) The lifetime of the `RenderFrameHostImpl` is based on the lifetime of
+    the `RenderFrame`
+ 5. (true) Destroying the `RenderFrame` will cause the `Remote` to be destroyed,
+    ultimately causing the `Receiver` and the interface implementation to be
+    destroyed. The `RenderFrameHostImpl` will likely be destroyed at some point
+    as well.
+ 6. (false) It's safe to assume that `RenderFrameHostImpl` will outlive the
+    self-owned `Receiver` and interface implementation
+
+A
+[common](https://microsoftedge.github.io/edgevr/posts/yet-another-uaf/)
+mistake based on the last assumption above is to store and use a raw pointer
+to the `RenderFrameHostImpl` object in the interface implementation. If the
+`Receiver` outlives the `RenderFrameHostImpl` and uses the pointer to it, a
+Use-After-Free will occur. One way a malicious site or compromised renderer
+could make this happen is to generate lots of messages to the interface and then
+close the frame. The `Receiver` might have a backlog of messages to process
+before it gets the message indicating that the renderer's `Remote` was closed,
+and the `RenderFrameHostImpl` can be destroyed in the meantime.
+
+Similarly, it's not safe to assume that the `Profile` object (and objects owned
+by it; `StoragePartitionImpl`, for instance) will outlive the `Receiver`. This
+has been observed to be true for at least incognito windows, where a renderer
+can generate messages, close the page, and cause the entire window to close
+(assuming no other pages are open), ultimately causing the
+`OffTheRecordProfileImpl` object to be destroyed before the `Receiver` object.
+
+To avoid these types of issues, some solutions include:
+
+ - Using `DocumentService` or `DocumentUserData` instead of
+   `mojo::MakeSelfOwnedReceiver` for document-based interfaces where the
+   interface implementation needs access to a `RenderFrameHostImpl` object. See
+   the
+   [`DocumentService` declaration](https://source.chromium.org/chromium/chromium/src/+/main:content/public/browser/document_service.h;l=27;drc=d4bf612a0258dd80cfc6d17d49419dd878ebaeb0)
+   for more details.
+
+ - Having the `Receiver` and/or interface implementation be owned by the object
+   it relies on (for instance, store the `Receiver` in a private member or
+   use a `mojo::UniqueReceiverSet` for storing multiple `Receiver` /
+   interface implementation pairs).
+
+ - Using `WeakPtr`s instead of raw pointers to provide a way to check whether
+   an object has been destroyed.
 
 ## C++ Best Practices
 
@@ -653,7 +730,7 @@ serialization and deserialization. 😄
 // In url_gurl_mojom_traits.h:
 template <>
 struct StructTraits<url::mojom::UrlDataView, GURL> {
-  static base::StringPiece url(const GURL& r);
+  static std::string_view url(const GURL& r);
 
   // If Read() returns false, Mojo will discard the message.
   static bool Read(url::mojom::UrlDataView data, GURL* out);
@@ -662,19 +739,19 @@ struct StructTraits<url::mojom::UrlDataView, GURL> {
 // In url_gurl_mojom_traits.cc:
 // Note that methods that aren't simple getters should be defined
 // out-of-line to avoid code bloat.
-base::StringPiece StructTraits<url::mojom::UrlDataView, GURL>::url(
+std::string_view StructTraits<url::mojom::UrlDataView, GURL>::url(
     const GURL& r) {
   if (r.possibly_invalid_spec().length() > url::kMaxURLChars ||
       !r.is_valid()) {
-    return base::StringPiece();
+    return std::string_view();
   }
-  return base::StringPiece(r.possibly_invalid_spec().c_str(),
-                           r.possibly_invalid_spec().length());
+  return std::string_view(r.possibly_invalid_spec().c_str(),
+                          r.possibly_invalid_spec().length());
 }
 
 bool StructTraits<url::mojom::UrlDataView, GURL>::Read(
     url::mojom::UrlDataView data, GURL* out) {
-  base::StringPiece url_string;
+  std::string_view url_string;
   if (!data.ReadUrl(&url_string))
     return false;
   if (url_string.length() > url::kMaxURLChars)
@@ -786,8 +863,51 @@ process sending bad input, et cetera.
     being dispatched on the stack.
 *   `mojo::GetBadMessageCallback()`: use to generate a callback to report bad
     IPC input. The callback must be generated while a message is being
-    dispatched on the stack; however, the returned callback may be invoked be
-    freely invoked in asynchronously posted callbacks.
+    dispatched on the stack; however, the returned callback may be freely
+    invoked in asynchronously posted callbacks.
+
+### ReportBadMessage vs CHECK
+
+Questions often arise about when to use `mojo::ReportBadMessage()` versus
+`CHECK()` (or `DCHECK()`) in Mojo method implementations. The decision primarily
+depends on whether the sender is trusted or untrusted.
+
+#### Untrusted Sender (e.g. Renderer -> Browser)
+
+When the sender is untrusted (e.g. a renderer process for regular pages or
+chrome-untrusted:// WebUIs), **never use `CHECK()` to validate the message
+content or the state prerequisites**. A compromised sender can trigger a
+`CHECK()` to crash the receiving process (e.g. the browser), creating a
+Denial-of-Service abuse.
+
+Instead, use `mojo::Receiver::ReportBadMessage()` (or `mojo::ReportBadMessage`)
+for both:
+
+*   **Message Validation**: The arguments are invalid (e.g. logical
+    inconsistencies not caught by Mojo bindings).
+*   **State Validation**: The message is valid but received at the wrong time
+    (e.g. `DoPostInitWork()` called before `Init()`).
+
+**Important**: `ReportBadMessage()` does *not* stop execution of the current
+function. **You must manually `return` immediately after calling it.** Failure
+to do so can lead to crashes or other bugs if the code continues to run with
+invalid state. A surprisingly common bug is reporting a bad message but
+erroneously continuing onwards: https://crbug.com/1285384
+
+Under the hood, `ReportBadMessage()` executes the `BadMessageCallback`
+associated with the current message dispatch. For renderer-to-browser IPC, this
+terminates the renderer process.
+
+#### Trusted Sender (e.g. Browser -> Renderer, Trusted WebUI -> Browser)
+
+When the sender is trusted, `CHECK()` is acceptable and often preferred. If a
+trusted sender sends a malformed message or violates a state invariant, it
+indicates a bug in the trusted sender. `CHECK()` is appropriate to identify
+such bugs.
+
+For example, Top Chrome WebUIs (chrome://) are generally considered trusted. If
+`PageHandler::DoPostInitWork()` is called before `Init()`, it is a bug in the
+WebUI implementation, and `CHECK()` is appropriate.
 
 
 ## Java Best Practices
@@ -847,6 +967,15 @@ Message pipes are fairly inexpensive, but they are not free either: it takes 6
 control messages to establish a message pipe. Keep this in mind: if the
 interface is used relatively frequently, connecting once and reusing the
 interface pointer is probably a good idea.
+
+## Copy data out of BigBuffer before parsing
+
+[BigBuffer](/mojo/public/mojom/base/big_buffer.mojom) uses shared memory to make
+passing large messages fast. When shmem is backing the message, it may be
+writable in the sending process while being read in the receiving process. If a
+BigBuffer is received from an untrustworthy process, you should make a copy of
+the data before processing it to avoid time-of-check time-of-use (TOCTOU) bugs.
+The |size()| of the data cannot be manipulated.
 
 
 ## Ensure An Explicit Grant For WebUI Bindings

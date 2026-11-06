@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,12 +11,15 @@
 
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
-#include "media/base/win/mf_initializer_export.h"
+#include "base/synchronization/lock.h"
+#include "base/thread_annotations.h"
+#include "base/types/pass_key.h"
+#include "media/base/media_export.h"
 
 namespace media {
 
 // Wrap around the usage of device handle from |device_manager|.
-class MF_INITIALIZER_EXPORT DXGIDeviceScopedHandle {
+class MEDIA_EXPORT DXGIDeviceScopedHandle {
  public:
   explicit DXGIDeviceScopedHandle(IMFDXGIDeviceManager* device_manager);
   DXGIDeviceScopedHandle(const DXGIDeviceScopedHandle&) = delete;
@@ -32,18 +35,37 @@ class MF_INITIALIZER_EXPORT DXGIDeviceScopedHandle {
   HANDLE device_handle_ = INVALID_HANDLE_VALUE;
 };
 
-class MF_INITIALIZER_EXPORT DXGIDeviceManager
+class MEDIA_EXPORT DXGIDeviceManager
     : public base::RefCountedThreadSafe<DXGIDeviceManager> {
  public:
+  REQUIRE_ADOPTION_FOR_REFCOUNTED_TYPE();
+
+  DXGIDeviceManager(
+      base::PassKey<DXGIDeviceManager>,
+      Microsoft::WRL::ComPtr<IMFDXGIDeviceManager> mf_dxgi_device_manager,
+      UINT d3d_device_reset_token,
+      CHROME_LUID luid);
   DXGIDeviceManager(const DXGIDeviceManager&) = delete;
   DXGIDeviceManager& operator=(const DXGIDeviceManager&) = delete;
 
   // Returns a DXGIDeviceManager with associated D3D device set, or nullptr on
   // failure.
-  static scoped_refptr<DXGIDeviceManager> Create();
+  static scoped_refptr<DXGIDeviceManager> Create(CHROME_LUID luid);
+  static scoped_refptr<DXGIDeviceManager> Create(CHROME_LUID luid,
+                                                 ID3D11Device* shared_device);
 
   // Associates a new D3D device with the DXGI Device Manager
-  virtual HRESULT ResetDevice();
+  // returns it in the parameter, which can't be nullptr.
+  virtual HRESULT ResetDevice(Microsoft::WRL::ComPtr<ID3D11Device>& d3d_device);
+
+  // Associates a shared D3D device  with the DXGI Device Manager
+  virtual HRESULT ResetDeviceWithSharedDevice(ID3D11Device* shared_device);
+
+  // Checks if the local device was removed, recreates it if needed.
+  // Returns DeviceRemovedReason HRESULT value.
+  // Returns the local device in |new_device|, if it's not nullptr.
+  virtual HRESULT CheckDeviceRemovedAndGetDevice(
+      Microsoft::WRL::ComPtr<ID3D11Device>* new_device);
 
   // Registers this manager in capture engine attributes.
   HRESULT RegisterInCaptureEngineAttributes(IMFAttributes* attributes);
@@ -60,15 +82,22 @@ class MF_INITIALIZER_EXPORT DXGIDeviceManager
 
   Microsoft::WRL::ComPtr<IMFDXGIDeviceManager> GetMFDXGIDeviceManager();
 
+  void OnGpuInfoUpdate(CHROME_LUID luid);
+
  protected:
   friend class base::RefCountedThreadSafe<DXGIDeviceManager>;
   DXGIDeviceManager(
       Microsoft::WRL::ComPtr<IMFDXGIDeviceManager> mf_dxgi_device_manager,
-      UINT d3d_device_reset_token);
+      UINT d3d_device_reset_token,
+      CHROME_LUID luid);
   virtual ~DXGIDeviceManager();
 
-  Microsoft::WRL::ComPtr<IMFDXGIDeviceManager> mf_dxgi_device_manager_;
-  UINT d3d_device_reset_token_ = 0;
+  Microsoft::WRL::ComPtr<IMFDXGIDeviceManager> mf_dxgi_device_manager_
+      GUARDED_BY(lock_);
+  UINT d3d_device_reset_token_ GUARDED_BY(lock_) = 0;
+  CHROME_LUID luid_ GUARDED_BY(lock_) = {0, 0};
+
+  base::Lock lock_;
 };
 
 }  // namespace media

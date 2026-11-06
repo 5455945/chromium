@@ -1,20 +1,25 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef MOJO_PUBLIC_CPP_BINDINGS_LIB_HASH_UTIL_H_
 #define MOJO_PUBLIC_CPP_BINDINGS_LIB_HASH_UTIL_H_
 
-#include <cstring>
+#include <concepts>
 #include <functional>
+#include <optional>
 #include <type_traits>
 #include <vector>
 
 #include "mojo/public/cpp/bindings/lib/template_util.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace mojo {
 namespace internal {
+
+template <typename T>
+concept HasHashMethod = requires(const T& t) {
+  { t.Hash(size_t{0}) } -> std::same_as<size_t>;
+};
 
 template <typename T>
 size_t HashCombine(size_t seed, const T& value) {
@@ -24,37 +29,22 @@ size_t HashCombine(size_t seed, const T& value) {
 }
 
 template <typename T>
-struct HasHashMethod {
-  template <typename U>
-  static char Test(decltype(&U::Hash));
-  template <typename U>
-  static int Test(...);
-  static const bool value = sizeof(Test<T>(0)) == sizeof(char);
+struct HashTraits {
+  static_assert(sizeof(T), "T must be a complete type.");
 
- private:
-  EnsureTypeIsComplete<T> check_t_;
-};
-
-template <typename T, bool has_hash_method = HasHashMethod<T>::value>
-struct HashTraits;
-
-template <typename T>
-size_t Hash(size_t seed, const T& value);
-
-template <typename T>
-struct HashTraits<T, true> {
-  static size_t Hash(size_t seed, const T& value) { return value.Hash(seed); }
-};
-
-template <typename T>
-struct HashTraits<T, false> {
   static size_t Hash(size_t seed, const T& value) {
     return HashCombine(seed, value);
   }
 };
 
 template <typename T>
-struct HashTraits<std::vector<T>, false> {
+  requires(HasHashMethod<T>)
+struct HashTraits<T> {
+  static size_t Hash(size_t seed, const T& value) { return value.Hash(seed); }
+};
+
+template <typename T>
+struct HashTraits<std::vector<T>> {
   static size_t Hash(size_t seed, const std::vector<T>& value) {
     for (const auto& element : value) {
       seed = HashCombine(seed, element);
@@ -64,10 +54,14 @@ struct HashTraits<std::vector<T>, false> {
 };
 
 template <typename T>
-struct HashTraits<absl::optional<std::vector<T>>, false> {
-  static size_t Hash(size_t seed, const absl::optional<std::vector<T>>& value) {
-    if (!value)
+size_t Hash(size_t seed, const T& value);
+
+template <typename T>
+struct HashTraits<std::optional<std::vector<T>>> {
+  static size_t Hash(size_t seed, const std::optional<std::vector<T>>& value) {
+    if (!value) {
       return HashCombine(seed, 0);
+    }
 
     return Hash(seed, *value);
   }

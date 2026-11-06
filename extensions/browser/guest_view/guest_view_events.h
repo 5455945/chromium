@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,7 @@
 namespace extensions {
 namespace guest_view_events {
 
-// Returns the events::HistogramValue for the |event_name| guest view event.
+// Returns the events::HistogramValue for the `event_name` guest view event.
 // This knows about all events for all guest view types, whether web view,
 // extension options, the guest view base class, etc.
 events::HistogramValue GetEventHistogramValue(const std::string& event_name);

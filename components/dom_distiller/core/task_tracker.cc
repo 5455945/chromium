@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,15 @@
 
 #include <stddef.h>
 
+#include <deque>
 #include <memory>
 #include <utility>
+#include <vector>
 
 #include "base/auto_reset.h"
 #include "base/location.h"
-#include "base/single_thread_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/observer_list.h"
+#include "base/task/single_thread_task_runner.h"
 #include "components/dom_distiller/core/distilled_content_store.h"
 #include "components/dom_distiller/core/proto/distilled_article.pb.h"
 #include "components/dom_distiller/core/proto/distilled_page.pb.h"
@@ -42,11 +44,12 @@ TaskTracker::TaskTracker(const ArticleEntry& entry,
 TaskTracker::~TaskTracker() {
   DCHECK(destruction_allowed_);
   DCHECK(viewers_.empty());
+  DCHECK(pending_viewers_.empty());
 }
 
-void TaskTracker::StartDistiller(
-    DistillerFactory* factory,
-    std::unique_ptr<DistillerPage> distiller_page) {
+void TaskTracker::StartDistiller(DistillerFactory* factory,
+                                 std::unique_ptr<DistillerPage> distiller_page,
+                                 bool use_cache) {
   if (distiller_) {
     return;
   }
@@ -56,13 +59,11 @@ void TaskTracker::StartDistiller(
   GURL url(entry_.pages[0]);
   DCHECK(url.is_valid());
 
-  distiller_ = factory->CreateDistillerForUrl(url);
+  distiller_ = factory->CreateDistiller();
   distiller_->DistillPage(
       url, std::move(distiller_page),
       base::BindOnce(&TaskTracker::OnDistillerFinished,
-                     weak_ptr_factory_.GetWeakPtr()),
-      base::BindRepeating(&TaskTracker::OnArticleDistillationUpdated,
-                          weak_ptr_factory_.GetWeakPtr()));
+                     weak_ptr_factory_.GetWeakPtr(), use_cache));
 }
 
 void TaskTracker::StartBlobFetcher() {
@@ -77,22 +78,23 @@ void TaskTracker::StartBlobFetcher() {
 void TaskTracker::AddSaveCallback(SaveCallback callback) {
   DCHECK(!callback.is_null());
   save_callbacks_.push_back(std::move(callback));
-  if (content_ready_) {
-    // Distillation for this task has already completed, and so it can be
-    // immediately saved.
-    ScheduleSaveCallbacks(true);
+  if (distilled_article_) {
+    // Distillation for this task has already completed, and so the save
+    // callback can be immediately scheduled.
+    ScheduleSaveCallbacks(content_ready_);
   }
 }
 
 std::unique_ptr<ViewerHandle> TaskTracker::AddViewer(
     ViewRequestDelegate* delegate) {
   viewers_.AddObserver(delegate);
-  if (content_ready_) {
+  if (distilled_article_) {
     // Distillation for this task has already completed, and so the delegate can
     // be immediately told of the result.
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
-        FROM_HERE, base::BindOnce(&TaskTracker::NotifyViewer,
-                                  weak_ptr_factory_.GetWeakPtr(), delegate));
+    pending_viewers_.push_back(delegate);
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&TaskTracker::NotifyPendingViewer,
+                                  weak_ptr_factory_.GetWeakPtr()));
   }
   return std::make_unique<ViewerHandle>(base::BindOnce(
       &TaskTracker::RemoveViewer, weak_ptr_factory_.GetWeakPtr(), delegate));
@@ -116,6 +118,7 @@ bool TaskTracker::HasUrl(const GURL& url) const {
 }
 
 void TaskTracker::RemoveViewer(ViewRequestDelegate* delegate) {
+  std::erase(pending_viewers_, delegate);
   viewers_.RemoveObserver(delegate);
   if (viewers_.empty()) {
     MaybeCancel();
@@ -140,35 +143,49 @@ void TaskTracker::CancelSaveCallbacks() {
 }
 
 void TaskTracker::ScheduleSaveCallbacks(bool distillation_succeeded) {
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
       base::BindOnce(&TaskTracker::DoSaveCallbacks,
                      weak_ptr_factory_.GetWeakPtr(), distillation_succeeded));
 }
 
 void TaskTracker::OnDistillerFinished(
-    std::unique_ptr<DistilledArticleProto> distilled_article) {
+    bool use_cache,
+    std::unique_ptr<DistilledArticleProto> distilled_article,
+    DistillationParseResult result) {
+  // If content is already ready (e.g. loaded from the BlobFetcher), we ignore
+  // the distiller's failure since we already have the successful result.
   if (content_ready_) {
     return;
   }
 
+  if (result != DistillationParseResult::kSuccess) {
+    // We notify viewers of the specific failure reason, but we do not return
+    // early here. We must proceed to clean up the `distiller_` and call
+    // `ContentSourceFinished()` to notify legacy viewers of the failure
+    // (via an empty article).
+    for (auto& viewer : viewers_) {
+      viewer.OnDistillationFailed(result);
+    }
+  }
+
   DistilledArticleReady(std::move(distilled_article));
-  if (content_ready_) {
+  if (content_ready_ && use_cache) {
     AddDistilledContentToStore(*distilled_article_);
   }
 
   // 'distiller_ != null' is used as a signal that distillation is in progress,
   // so it needs to be released so that we know distillation is done.
-  base::ThreadTaskRunnerHandle::Get()->DeleteSoon(FROM_HERE,
-                                                  distiller_.release());
+  base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(
+      FROM_HERE, distiller_.release());
 
   ContentSourceFinished();
 }
 
 void TaskTracker::CancelPendingSources() {
   if (distiller_) {
-    base::ThreadTaskRunnerHandle::Get()->DeleteSoon(FROM_HERE,
-                                                    distiller_.release());
+    base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(
+        FROM_HERE, distiller_.release());
   }
 }
 
@@ -228,6 +245,17 @@ void TaskTracker::NotifyViewersAndCallbacks() {
   DoSaveCallbacks(content_ready_);
 }
 
+void TaskTracker::NotifyPendingViewer() {
+  // A pending viewer may have been removed by `RemoveViewer()` before this
+  // posted task ran.
+  if (pending_viewers_.empty()) {
+    return;
+  }
+  ViewRequestDelegate* delegate = pending_viewers_.front();
+  pending_viewers_.pop_front();
+  NotifyViewer(delegate);
+}
+
 void TaskTracker::NotifyViewer(ViewRequestDelegate* delegate) {
   delegate->OnArticleReady(distilled_article_.get());
 }
@@ -238,13 +266,6 @@ void TaskTracker::DoSaveCallbacks(bool success) {
       std::move(callback).Run(entry_, distilled_article_.get(), success);
     save_callbacks_.clear();
     MaybeCancel();
-  }
-}
-
-void TaskTracker::OnArticleDistillationUpdated(
-    const ArticleDistillationUpdate& article_update) {
-  for (auto& viewer : viewers_) {
-    viewer.OnArticleUpdated(article_update);
   }
 }
 

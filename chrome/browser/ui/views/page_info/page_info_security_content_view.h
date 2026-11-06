@@ -1,19 +1,24 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_VIEWS_PAGE_INFO_PAGE_INFO_SECURITY_CONTENT_VIEW_H_
 #define CHROME_BROWSER_UI_VIEWS_PAGE_INFO_PAGE_INFO_SECURITY_CONTENT_VIEW_H_
 
-#include "chrome/browser/ui/views/page_info/page_info_hover_button.h"
+#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
+#include "chrome/browser/ui/views/controls/rich_hover_button.h"
 #include "chrome/browser/ui/views/page_info/security_information_view.h"
 #include "components/page_info/page_info_ui.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/view.h"
 
 // The view that contains `SecurityInformationView` and a certificate button.
 // It is used as a content of the security subpage or is directly integrated in
 // the main page if connection isn't secure.
 class PageInfoSecurityContentView : public views::View, public PageInfoUI {
+  METADATA_HEADER(PageInfoSecurityContentView, views::View)
+
  public:
   // `is_standalone_page` is true, when this view is used as a content view of
   // a subpage and this view becomes current UI for `PageInfo` by calling
@@ -26,22 +31,34 @@ class PageInfoSecurityContentView : public views::View, public PageInfoUI {
   void SetIdentityInfo(const IdentityInfo& identity_info) override;
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(PageInfoBubbleViewTest, CheckHeaderInteractions);
+
   void ResetDecisionsClicked();
 
   void SecurityDetailsClicked(const ui::Event& event);
 
-  PageInfo* presenter_;
+  raw_ptr<PageInfo, DanglingUntriaged> presenter_;
 
   // The button that opens the "Certificate" dialog.
-  PageInfoHoverButton* certificate_button_ = nullptr;
+  raw_ptr<RichHoverButton> certificate_button_ = nullptr;
 
   // The views that shows the status of the site's identity check.
-  SecurityInformationView* security_view_ = nullptr;
+  raw_ptr<SecurityInformationView> security_view_ = nullptr;
+
+  // The view that shows the QWAC status of the site, if it is a 1-QWAC.
+  raw_ptr<SecurityInformationView> one_qwac_view_ = nullptr;
+
+  // The button that displays identity information of a 2-QWAC and opens the
+  // certificate viewer for the 2-QWAC cert.
+  raw_ptr<RichHoverButton> two_qwac_button_ = nullptr;
 
   // The certificate provided by the site, if one exists.
   scoped_refptr<net::X509Certificate> certificate_;
 
-  // TODO(crbug.com/1188101): Add plumbing to check this in tests or rewrite
+  // The 2-QWAC certificate for the site, if it has a valid 2-QWAC.
+  scoped_refptr<net::X509Certificate> two_qwac_;
+
+  // TODO(crbug.com/40754666): Add plumbing to check this in tests or rewrite
   // tests not use it.
   PageInfoUI::SecurityDescriptionType security_description_type_ =
       PageInfoUI::SecurityDescriptionType::CONNECTION;

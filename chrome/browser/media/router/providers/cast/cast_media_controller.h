@@ -1,18 +1,18 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_MEDIA_ROUTER_PROVIDERS_CAST_CAST_MEDIA_CONTROLLER_H_
 #define CHROME_BROWSER_MEDIA_ROUTER_PROVIDERS_CAST_CAST_MEDIA_CONTROLLER_H_
 
-#include "base/macros.h"
-#include "components/cast_channel/cast_message_util.h"
+#include "base/memory/raw_ptr.h"
 #include "components/media_router/common/mojom/media_controller.mojom.h"
 #include "components/media_router/common/mojom/media_status.mojom.h"
+#include "components/media_router/common/providers/cast/channel/cast_message_util.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
-#include "mojo/public/cpp/bindings/receiver.h"
-#include "mojo/public/cpp/bindings/remote.h"
+#include "mojo/public/cpp/bindings/receiver_set.h"
+#include "mojo/public/cpp/bindings/remote_set.h"
 
 namespace base {
 class Value;
@@ -45,13 +45,15 @@ enum SupportedMediaCommand {
   kSupportedMediaCommandStreamTransfer = 1 << 18,
 };
 
-// Per-session object for sending media control commands to a Cast receiver, and
-// notifying an observer of updates on the session's media status.
+// Per-session object for sending media control commands to a Cast receiver
+// (device), and notifying observers of updates on the session's media status.
 class CastMediaController : public mojom::MediaController {
  public:
-  CastMediaController(AppActivity* activity,
-                      mojo::PendingReceiver<mojom::MediaController> receiver,
-                      mojo::PendingRemote<mojom::MediaStatusObserver> observer);
+  explicit CastMediaController(AppActivity* activity);
+
+  CastMediaController(const CastMediaController&) = delete;
+  CastMediaController& operator=(const CastMediaController&) = delete;
+
   ~CastMediaController() override;
 
   // mojom::MediaController overrides:
@@ -63,29 +65,31 @@ class CastMediaController : public mojom::MediaController {
   void NextTrack() override;
   void PreviousTrack() override;
 
+  void AddMediaController(
+      mojo::PendingReceiver<mojom::MediaController> receiver,
+      mojo::PendingRemote<mojom::MediaStatusObserver> observer);
+
   // These methods may notify the MediaStatusObserver that the status has been
   // updated.
   void SetSession(const CastSession& session);
-  void SetMediaStatus(const base::Value& media_status);
+  void SetMediaStatus(const base::DictValue& media_status);
 
   const std::string& sender_id() const { return sender_id_; }
 
  private:
-  base::Value CreateMediaRequest(cast_channel::V2MessageType type);
-  base::Value CreateVolumeRequest();
+  base::DictValue CreateMediaRequest(cast_channel::V2MessageType type);
+  base::DictValue CreateVolumeRequest();
 
-  void UpdateMediaStatus(const base::Value& message_value);
+  void UpdateMediaStatus(const base::DictValue& message_value);
 
   const std::string sender_id_;
-  AppActivity* const activity_;
+  const raw_ptr<AppActivity> activity_;
   mojom::MediaStatus media_status_;
   std::string session_id_;
-  int media_session_id_;
+  int media_session_id_ = -1;
 
-  mojo::Receiver<mojom::MediaController> receiver_;
-  mojo::Remote<mojom::MediaStatusObserver> observer_;
-
-  DISALLOW_COPY_AND_ASSIGN(CastMediaController);
+  mojo::ReceiverSet<mojom::MediaController> receivers_;
+  mojo::RemoteSet<mojom::MediaStatusObserver> observers_;
 };
 
 }  // namespace media_router

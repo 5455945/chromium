@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,62 +7,59 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
 
-namespace media {
+namespace blink {
 
 CdmResultForUMA ConvertCdmExceptionToResultForUMA(
-    CdmPromise::Exception exception_code) {
+    media::CdmPromise::Exception exception_code) {
   switch (exception_code) {
-    case CdmPromise::Exception::NOT_SUPPORTED_ERROR:
+    case media::CdmPromise::Exception::NOT_SUPPORTED_ERROR:
       return NOT_SUPPORTED_ERROR;
-    case CdmPromise::Exception::INVALID_STATE_ERROR:
+    case media::CdmPromise::Exception::INVALID_STATE_ERROR:
       return INVALID_STATE_ERROR;
-    case CdmPromise::Exception::QUOTA_EXCEEDED_ERROR:
+    case media::CdmPromise::Exception::QUOTA_EXCEEDED_ERROR:
       return QUOTA_EXCEEDED_ERROR;
-    case CdmPromise::Exception::TYPE_ERROR:
+    case media::CdmPromise::Exception::TYPE_ERROR:
       return TYPE_ERROR;
   }
   NOTREACHED();
-  return INVALID_STATE_ERROR;
 }
 
-blink::WebContentDecryptionModuleException ConvertCdmException(
-    CdmPromise::Exception exception_code) {
+WebContentDecryptionModuleException ConvertCdmException(
+    media::CdmPromise::Exception exception_code) {
   switch (exception_code) {
-    case CdmPromise::Exception::NOT_SUPPORTED_ERROR:
-      return blink::kWebContentDecryptionModuleExceptionNotSupportedError;
-    case CdmPromise::Exception::INVALID_STATE_ERROR:
-      return blink::kWebContentDecryptionModuleExceptionInvalidStateError;
-    case CdmPromise::Exception::QUOTA_EXCEEDED_ERROR:
-      return blink::kWebContentDecryptionModuleExceptionQuotaExceededError;
-    case CdmPromise::Exception::TYPE_ERROR:
-      return blink::kWebContentDecryptionModuleExceptionTypeError;
+    case media::CdmPromise::Exception::NOT_SUPPORTED_ERROR:
+      return kWebContentDecryptionModuleExceptionNotSupportedError;
+    case media::CdmPromise::Exception::INVALID_STATE_ERROR:
+      return kWebContentDecryptionModuleExceptionInvalidStateError;
+    case media::CdmPromise::Exception::QUOTA_EXCEEDED_ERROR:
+      return kWebContentDecryptionModuleExceptionQuotaExceededError;
+    case media::CdmPromise::Exception::TYPE_ERROR:
+      return kWebContentDecryptionModuleExceptionTypeError;
   }
   NOTREACHED();
-  return blink::kWebContentDecryptionModuleExceptionInvalidStateError;
 }
 
-blink::WebEncryptedMediaKeyInformation::KeyStatus ConvertCdmKeyStatus(
+WebEncryptedMediaKeyInformation::KeyStatus ConvertCdmKeyStatus(
     media::CdmKeyInformation::KeyStatus key_status) {
   switch (key_status) {
     case media::CdmKeyInformation::USABLE:
-      return blink::WebEncryptedMediaKeyInformation::KeyStatus::kUsable;
+      return WebEncryptedMediaKeyInformation::KeyStatus::kUsable;
     case media::CdmKeyInformation::INTERNAL_ERROR:
-      return blink::WebEncryptedMediaKeyInformation::KeyStatus::kInternalError;
+      return WebEncryptedMediaKeyInformation::KeyStatus::kInternalError;
     case media::CdmKeyInformation::EXPIRED:
-      return blink::WebEncryptedMediaKeyInformation::KeyStatus::kExpired;
+      return WebEncryptedMediaKeyInformation::KeyStatus::kExpired;
     case media::CdmKeyInformation::OUTPUT_RESTRICTED:
-      return blink::WebEncryptedMediaKeyInformation::KeyStatus::
-          kOutputRestricted;
+      return WebEncryptedMediaKeyInformation::KeyStatus::kOutputRestricted;
     case media::CdmKeyInformation::OUTPUT_DOWNSCALED:
-      return blink::WebEncryptedMediaKeyInformation::KeyStatus::
-          kOutputDownscaled;
+      return WebEncryptedMediaKeyInformation::KeyStatus::kOutputDownscaled;
     case media::CdmKeyInformation::KEY_STATUS_PENDING:
-      return blink::WebEncryptedMediaKeyInformation::KeyStatus::kStatusPending;
+      return WebEncryptedMediaKeyInformation::KeyStatus::kStatusPending;
     case media::CdmKeyInformation::RELEASED:
-      return blink::WebEncryptedMediaKeyInformation::KeyStatus::kReleased;
+      return WebEncryptedMediaKeyInformation::KeyStatus::kReleased;
+    case media::CdmKeyInformation::USABLE_IN_FUTURE:
+      return WebEncryptedMediaKeyInformation::KeyStatus::kUsableInFuture;
   }
   NOTREACHED();
-  return blink::WebEncryptedMediaKeyInformation::KeyStatus::kInternalError;
 }
 
 void ReportCdmResultUMA(const std::string& uma_name,
@@ -78,4 +75,4 @@ void ReportCdmResultUMA(const std::string& uma_name,
   base::UmaHistogramEnumeration(uma_name, result, NUM_RESULT_CODES);
 }
 
-}  // namespace media
+}  // namespace blink

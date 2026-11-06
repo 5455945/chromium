@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 
 #include <utility>
 
+#include "cc/paint/deferred_paint_record.h"
 #include "cc/paint/paint_export.h"
 #include "cc/paint/paint_image.h"
 #include "cc/paint/paint_image_generator.h"
@@ -33,6 +34,7 @@ class CC_PAINT_EXPORT PaintImageBuilder {
   static PaintImageBuilder WithProperties(PaintImage image);
 
   PaintImageBuilder(PaintImageBuilder&& other);
+  PaintImageBuilder& operator=(PaintImageBuilder&& other);
   ~PaintImageBuilder();
 
   PaintImageBuilder&& set_id(PaintImage::Id id) {
@@ -56,11 +58,14 @@ class CC_PAINT_EXPORT PaintImageBuilder {
     paint_image_.content_id_ = content_id;
     return std::move(*this);
   }
-  PaintImageBuilder&& set_paint_record(sk_sp<PaintRecord> paint_record,
+  PaintImageBuilder&& set_paint_record(PaintRecord paint_record,
                                        const gfx::Rect& rect,
                                        PaintImage::ContentId content_id) {
     DCHECK_NE(content_id, PaintImage::kInvalidContentId);
 
+    if (paint_record.has_read_back_disallowed_content()) {
+      paint_image_.is_read_back_disallowed_ = true;
+    }
     paint_image_.paint_record_ = std::move(paint_record);
     paint_image_.paint_record_rect_ = rect;
     paint_image_.content_id_ = content_id;
@@ -75,6 +80,23 @@ class CC_PAINT_EXPORT PaintImageBuilder {
     paint_image_.animation_type_ = type;
     return std::move(*this);
   }
+  PaintImageBuilder&& set_gainmap_paint_image_generator(
+      sk_sp<PaintImageGenerator> generator,
+      const SkGainmapInfo& gainmap_info) {
+    // Setting SkGainmapInfo with no gainmap image is an error.
+    DCHECK(generator);
+    paint_image_.gainmap_paint_image_generator_ = std::move(generator);
+    paint_image_.gainmap_info_ = gainmap_info;
+    return std::move(*this);
+  }
+  PaintImageBuilder&& set_hdr_metadata(gfx::HDRMetadata hdr_metadata) {
+    paint_image_.hdr_metadata_ = hdr_metadata;
+    return std::move(*this);
+  }
+  PaintImageBuilder&& set_reinterpret_as_srgb(bool reinterpret_as_srgb) {
+    paint_image_.reinterpret_as_srgb_ = reinterpret_as_srgb;
+    return std::move(*this);
+  }
   PaintImageBuilder&& set_completion_state(PaintImage::CompletionState state) {
     paint_image_.completion_state_ = state;
     return std::move(*this);
@@ -87,6 +109,17 @@ class CC_PAINT_EXPORT PaintImageBuilder {
     paint_image_.is_high_bit_depth_ = is_high_bit_depth;
     return std::move(*this);
   }
+  PaintImageBuilder&& set_no_cache(bool no_cache) {
+    paint_image_.no_cache_ = no_cache;
+    return std::move(*this);
+  }
+  // Marks whether pixel readback of this image is disallowed (e.g., cross-
+  // origin images without CORS access).
+  PaintImageBuilder&& set_is_read_back_disallowed(
+      bool is_read_back_disallowed) {
+    paint_image_.is_read_back_disallowed_ = is_read_back_disallowed;
+    return std::move(*this);
+  }
   PaintImageBuilder&& set_repetition_count(int count) {
     paint_image_.repetition_count_ = count;
     return std::move(*this);
@@ -97,17 +130,28 @@ class CC_PAINT_EXPORT PaintImageBuilder {
     return std::move(*this);
   }
 
+  PaintImageBuilder&& set_sync_animation_sequence_id(
+      PaintImage::AnimationSequenceId id) {
+    paint_image_.sync_animation_sequence_id_ = id;
+    return std::move(*this);
+  }
+
+  PaintImageBuilder&& set_sync_animation_target_id(PaintImage::Id id) {
+    paint_image_.sync_animation_target_id_ = id;
+    return std::move(*this);
+  }
+
   PaintImageBuilder&& set_decoding_mode(
       PaintImage::DecodingMode decoding_mode) {
     paint_image_.decoding_mode_ = decoding_mode;
     return std::move(*this);
   }
-  PaintImageBuilder&& set_paint_worklet_input(
-      scoped_refptr<PaintWorkletInput> input) {
-    paint_image_.paint_worklet_input_ = std::move(input);
+
+  PaintImageBuilder&& set_deferred_paint_record(
+      scoped_refptr<DeferredPaintRecord> input) {
+    paint_image_.deferred_paint_record_ = std::move(input);
     return std::move(*this);
   }
-
   PaintImage TakePaintImage();
 
  private:
@@ -124,6 +168,13 @@ class CC_PAINT_EXPORT PaintImageBuilder {
                                         PaintImage::ContentId content_id) {
     paint_image_.sk_image_ = std::move(sk_image);
     paint_image_.content_id_ = content_id;
+    return std::move(*this);
+  }
+  PaintImageBuilder&& set_gainmap_texture_image(
+      sk_sp<SkImage> gainmap_sk_image,
+      const SkGainmapInfo& gainmap_info) {
+    paint_image_.gainmap_sk_image_ = std::move(gainmap_sk_image);
+    paint_image_.gainmap_info_ = gainmap_info;
     return std::move(*this);
   }
 

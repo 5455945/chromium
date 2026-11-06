@@ -1,16 +1,15 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/browsing_data/storage_partition_code_cache_data_remover.h"
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
-#include "base/sequenced_task_runner_helpers.h"
-#include "base/single_thread_task_runner.h"
-#include "base/task/post_task.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/sequenced_task_runner_helpers.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "content/browser/browsing_data/conditional_cache_deletion_helper.h"
 #include "content/browser/code_cache/generated_code_cache.h"
 #include "content/browser/code_cache/generated_code_cache_context.h"
@@ -40,7 +39,7 @@ StoragePartitionCodeCacheDataRemover::Create(
     base::RepeatingCallback<bool(const GURL&)> url_predicate,
     base::Time begin_time,
     base::Time end_time) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   return new StoragePartitionCodeCacheDataRemover(
       storage_partition->GetGeneratedCodeCacheContext(),
       std::move(url_predicate), begin_time, end_time);
@@ -50,12 +49,22 @@ StoragePartitionCodeCacheDataRemover::~StoragePartitionCodeCacheDataRemover() {}
 
 void StoragePartitionCodeCacheDataRemover::Remove(
     base::OnceClosure done_callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   DCHECK(!done_callback.is_null())
       << __func__ << " called with a null callback";
   done_callback_ = std::move(done_callback);
 
-  ClearJSCodeCache();
+  GeneratedCodeCacheContext::RunOrPostTask(
+      generated_code_cache_context_, FROM_HERE,
+      base::BindOnce(&StoragePartitionCodeCacheDataRemover::ClearJSCodeCache,
+                     base::Unretained(this)));
+}
+
+void StoragePartitionCodeCacheDataRemover::ClearedCodeCache() {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+  std::move(done_callback_).Run();
+  base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE,
+                                                                this);
 }
 
 void StoragePartitionCodeCacheDataRemover::ClearCache(
@@ -93,8 +102,16 @@ void StoragePartitionCodeCacheDataRemover::ClearCache(
 }
 
 void StoragePartitionCodeCacheDataRemover::ClearJSCodeCache() {
+  if (generated_code_cache_context_) {
+    // TODO(crbug.com/374930286): Add support for selective removal in
+    // PersistentCache.
+    generated_code_cache_context_->ClearAndDeletePersistentCacheCollection();
+  }
+
   if (generated_code_cache_context_ &&
       generated_code_cache_context_->generated_js_code_cache()) {
+    generated_code_cache_context_->generated_js_code_cache()
+        ->ClearInMemoryCache();
     net::CompletionOnceCallback callback = base::BindOnce(
         &StoragePartitionCodeCacheDataRemover::ClearWASMCodeCache,
         base::Unretained(this));
@@ -113,14 +130,37 @@ void StoragePartitionCodeCacheDataRemover::ClearJSCodeCache() {
 void StoragePartitionCodeCacheDataRemover::ClearWASMCodeCache(int rv) {
   if (generated_code_cache_context_ &&
       generated_code_cache_context_->generated_wasm_code_cache()) {
+    generated_code_cache_context_->generated_wasm_code_cache()
+        ->ClearInMemoryCache();
+
     net::CompletionOnceCallback callback = base::BindOnce(
-        &StoragePartitionCodeCacheDataRemover::DoneClearCodeCache,
+        &StoragePartitionCodeCacheDataRemover::ClearWebUIJSCodeCache,
         base::Unretained(this));
     generated_code_cache_context_->generated_wasm_code_cache()->GetBackend(
         base::BindOnce(&StoragePartitionCodeCacheDataRemover::ClearCache,
                        base::Unretained(this), std::move(callback)));
   } else {
-    // There is no Wasm cache, done with clearing caches.
+    // There is no Wasm cache, so move on to the next step.
+    ClearWebUIJSCodeCache(net::ERR_FAILED);
+  }
+}
+
+// |rv| is the returned when clearing the code cache. We don't handle
+// any errors here, so the result value is ignored.
+void StoragePartitionCodeCacheDataRemover::ClearWebUIJSCodeCache(int rv) {
+  if (generated_code_cache_context_ &&
+      generated_code_cache_context_->generated_webui_js_code_cache()) {
+    generated_code_cache_context_->generated_webui_js_code_cache()
+        ->ClearInMemoryCache();
+
+    net::CompletionOnceCallback callback = base::BindOnce(
+        &StoragePartitionCodeCacheDataRemover::DoneClearCodeCache,
+        base::Unretained(this));
+    generated_code_cache_context_->generated_webui_js_code_cache()->GetBackend(
+        base::BindOnce(&StoragePartitionCodeCacheDataRemover::ClearCache,
+                       base::Unretained(this), std::move(callback)));
+  } else {
+    // There is no WebUI JS cache, done with clearing caches.
     DoneClearCodeCache(net::ERR_FAILED);
   }
 }
@@ -128,9 +168,11 @@ void StoragePartitionCodeCacheDataRemover::ClearWASMCodeCache(int rv) {
 // |rv| is the returned when clearing the code cache. We don't handle
 // any errors here, so the result value is ignored.
 void StoragePartitionCodeCacheDataRemover::DoneClearCodeCache(int rv) {
-  // Notify that we are done.
-  std::move(done_callback_).Run();
-  base::ThreadTaskRunnerHandle::Get()->DeleteSoon(FROM_HERE, this);
+  // Notify the UI thread that we are done.
+  GetUIThreadTaskRunner({})->PostTask(
+      FROM_HERE,
+      base::BindOnce(&StoragePartitionCodeCacheDataRemover::ClearedCodeCache,
+                     base::Unretained(this)));
 }
 
 }  // namespace content

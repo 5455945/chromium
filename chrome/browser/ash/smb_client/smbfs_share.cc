@@ -1,11 +1,11 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/smb_client/smbfs_share.h"
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
@@ -13,21 +13,17 @@
 #include "base/unguessable_token.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/smb_client/smb_service_helper.h"
-#include "chrome/browser/chromeos/file_manager/volume_manager.h"
-#include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/webui/chromeos/smb_shares/smb_credentials_dialog.h"
-#include "crypto/sha2.h"
+#include "chrome/browser/ui/webui/ash/smb_shares/smb_credentials_dialog.h"
+#include "crypto/hash.h"
 #include "storage/browser/file_system/external_mount_points.h"
 
-namespace ash {
-namespace smb_client {
+namespace ash::smb_client {
 
 namespace {
 
 constexpr char kMountDirPrefix[] = "smbfs-";
 constexpr char kMountIdHashSeparator[] = "#";
-constexpr base::TimeDelta kAllowCredentialsTimeout =
-    base::TimeDelta::FromSeconds(5);
+constexpr base::TimeDelta kAllowCredentialsTimeout = base::Seconds(5);
 
 SmbMountResult MountErrorToMountResult(smbfs::mojom::MountError mount_error) {
   switch (mount_error) {
@@ -62,16 +58,24 @@ SmbFsShare::SmbFsShare(Profile* profile,
       display_name_(display_name),
       options_(options),
       mount_id_(GenerateStableMountId()) {
-  DCHECK(share_url_.IsValid());
+  CHECK(share_url_.IsValid(), base::NotFatalUntil::M160);
 }
 
 SmbFsShare::~SmbFsShare() {
   Unmount(base::DoNothing());
 }
 
+void SmbFsShare::AddMountObserver(MountObserver* observer) {
+  mount_observers_.AddObserver(observer);
+}
+
+void SmbFsShare::RemoveMountObserver(MountObserver* observer) {
+  mount_observers_.RemoveObserver(observer);
+}
+
 void SmbFsShare::Mount(SmbFsShare::MountCallback callback) {
-  DCHECK(!mounter_);
-  DCHECK(!host_);
+  CHECK(!mounter_, base::NotFatalUntil::M160);
+  CHECK(!host_, base::NotFatalUntil::M160);
 
   if (unmount_pending_) {
     LOG(WARNING) << "Cannot mount a shared that is being unmounted";
@@ -88,10 +92,11 @@ void SmbFsShare::Mount(SmbFsShare::MountCallback callback) {
   } else {
     mounter_ = std::make_unique<smbfs::SmbFsMounter>(
         share_url_.ToString(), mount_dir, options_, this,
-        chromeos::disks::DiskMountManager::GetInstance());
+        disks::DiskMountManager::GetInstance());
   }
   mounter_->Mount(base::BindOnce(&SmbFsShare::OnMountDone,
-                                 base::Unretained(this), std::move(callback)));
+                                 weak_factory_.GetWeakPtr(),
+                                 std::move(callback)));
 }
 
 void SmbFsShare::Remount(const MountOptions& options,
@@ -136,18 +141,18 @@ void SmbFsShare::DeleteRecursively(
   delete_recursively_callback_ = std::move(callback);
   host_->DeleteRecursively(std::move(transformed_path),
                            base::BindOnce(&SmbFsShare::OnDeleteRecursivelyDone,
-                                          base::Unretained(this)));
+                                          weak_factory_.GetWeakPtr()));
 }
 
 void SmbFsShare::OnDeleteRecursivelyDone(base::File::Error error) {
-  DCHECK(delete_recursively_callback_);
+  CHECK(delete_recursively_callback_, base::NotFatalUntil::M160);
   std::move(delete_recursively_callback_).Run(error);
 }
 
 void SmbFsShare::Unmount(SmbFsShare::UnmountCallback callback) {
   if (unmount_pending_) {
     LOG(WARNING) << "Cannot unmount a shared that is being unmounted";
-    std::move(callback).Run(chromeos::MountError::MOUNT_ERROR_INTERNAL);
+    std::move(callback).Run(MountError::kInternalError);
     return;
   }
 
@@ -158,21 +163,21 @@ void SmbFsShare::Unmount(SmbFsShare::UnmountCallback callback) {
 
   if (!host_) {
     LOG(WARNING) << "Cannot unmount as the share is already unmounted";
-    std::move(callback).Run(chromeos::MountError::MOUNT_ERROR_PATH_NOT_MOUNTED);
+    std::move(callback).Run(MountError::kPathNotMounted);
     return;
   }
 
-  // Remove volume from VolumeManager. It's critical this is done before
-  // revoking the filesystem from ExternalMountPoints as some observers
-  // (ie. Crostini) need to create a cracked FileSystemURL (which
-  // requires the mount to still be registered with ExternalMountPoints)
-  // during the unmount process.
-  file_manager::VolumeManager::Get(profile_)->RemoveSmbFsVolume(
-      host_->mount_path());
+  // Notify observers (e.g. VolumeManager via SmbService) before revoking
+  // the filesystem from ExternalMountPoints as some observers (ie. Crostini)
+  // need to create a cracked FileSystemURL (which requires the mount to still
+  // be registered with ExternalMountPoints) during the unmount process.
+  for (auto& observer : mount_observers_) {
+    observer.OnSmbFsUnmounted(host_->mount_path());
+  }
 
   storage::ExternalMountPoints* const mount_points =
       storage::ExternalMountPoints::GetSystemInstance();
-  DCHECK(mount_points);
+  CHECK(mount_points, base::NotFatalUntil::M160);
   bool success = mount_points->RevokeFileSystem(mount_id_);
   CHECK(success);
 
@@ -180,11 +185,12 @@ void SmbFsShare::Unmount(SmbFsShare::UnmountCallback callback) {
   // may result in OnDisconnected() being called, but reentrant calls to
   // Unmount() will be aborted as unmount_pending_ == true.
   host_->Unmount(base::BindOnce(&SmbFsShare::OnUnmountDone,
-                                base::Unretained(this), std::move(callback)));
+                                weak_factory_.GetWeakPtr(),
+                                std::move(callback)));
 }
 
 void SmbFsShare::OnUnmountDone(SmbFsShare::UnmountCallback callback,
-                               chromeos::MountError result) {
+                               MountError result) {
   host_.reset();
 
   // Must do this *after* destroying SmbFsHost so that reentrant calls to
@@ -206,19 +212,20 @@ void SmbFsShare::OnMountDone(MountCallback callback,
     return;
   }
 
-  DCHECK(smbfs_host);
+  CHECK(smbfs_host, base::NotFatalUntil::M160);
   host_ = std::move(smbfs_host);
 
   storage::ExternalMountPoints* const mount_points =
       storage::ExternalMountPoints::GetSystemInstance();
-  DCHECK(mount_points);
+  CHECK(mount_points, base::NotFatalUntil::M160);
   bool success = mount_points->RegisterFileSystem(
       mount_id_, storage::kFileSystemTypeSmbFs,
       storage::FileSystemMountOption(), host_->mount_path());
   CHECK(success);
 
-  file_manager::VolumeManager::Get(profile_)->AddSmbFsVolume(
-      host_->mount_path(), display_name_);
+  for (auto& observer : mount_observers_) {
+    observer.OnSmbFsMounted(host_->mount_path(), display_name_);
+  }
   std::move(callback).Run(SmbMountResult::kSuccess);
 }
 
@@ -227,15 +234,20 @@ void SmbFsShare::OnDisconnected() {
 
   // At this point, we won't receive any more callbacks from the Mojo host, so
   // run any pending callbacks.
-  if (remove_credentials_callback_) {
-    LOG(WARNING) << "Mojo disconnected while removing credentials";
-    std::move(remove_credentials_callback_).Run(false /* success */);
-  }
-
   if (delete_recursively_callback_) {
     LOG(WARNING)
         << "Mojo disconnected while recursively deleting a path on the share";
-    std::move(delete_recursively_callback_).Run(base::File::FILE_ERROR_FAILED);
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(delete_recursively_callback_),
+                                  base::File::FILE_ERROR_FAILED));
+  }
+
+  // This method must run last as it deletes "this"
+  if (remove_credentials_callback_) {
+    LOG(WARNING) << "Mojo disconnected while removing credentials";
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(remove_credentials_callback_),
+                                  false /* success */));
   }
 }
 
@@ -290,7 +302,7 @@ void SmbFsShare::OnSmbCredentialsDialogShowDone(
 }
 
 void SmbFsShare::RemoveSavedCredentials(RemoveCredentialsCallback callback) {
-  DCHECK(!remove_credentials_callback_);
+  CHECK(!remove_credentials_callback_, base::NotFatalUntil::M160);
 
   if (!host_) {
     std::move(callback).Run(false /* success */);
@@ -299,11 +311,11 @@ void SmbFsShare::RemoveSavedCredentials(RemoveCredentialsCallback callback) {
 
   remove_credentials_callback_ = std::move(callback);
   host_->RemoveSavedCredentials(base::BindOnce(
-      &SmbFsShare::OnRemoveSavedCredentialsDone, base::Unretained(this)));
+      &SmbFsShare::OnRemoveSavedCredentialsDone, weak_factory_.GetWeakPtr()));
 }
 
 void SmbFsShare::OnRemoveSavedCredentialsDone(bool success) {
-  DCHECK(remove_credentials_callback_);
+  CHECK(remove_credentials_callback_, base::NotFatalUntil::M160);
   std::move(remove_credentials_callback_).Run(success);
 }
 
@@ -313,9 +325,8 @@ void SmbFsShare::SetMounterCreationCallbackForTest(
 }
 
 std::string SmbFsShare::GenerateStableMountId() const {
-  std::string hash_input = GenerateStableMountIdInput();
-  return base::ToLowerASCII(base::HexEncode(
-      crypto::SHA256HashString(hash_input).c_str(), crypto::kSHA256Length));
+  const auto input = GenerateStableMountIdInput();
+  return base::HexEncodeLower(crypto::hash::Sha256(input));
 }
 
 std::string SmbFsShare::GenerateStableMountIdInput() const {
@@ -347,5 +358,4 @@ std::string SmbFsShare::GenerateStableMountIdInput() const {
   return base::JoinString(mount_id_hash_components, kMountIdHashSeparator);
 }
 
-}  // namespace smb_client
-}  // namespace ash
+}  // namespace ash::smb_client

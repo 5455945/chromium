@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,12 @@
 
 #include <stddef.h>
 
+#include <array>
 #include <vector>
 
+#include "base/base64.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/trace_event/traced_value.h"
 #include "base/values.h"
@@ -19,38 +23,49 @@
 #include "cc/paint/paint_record.h"
 #include "cc/paint/render_surface_filters.h"
 #include "cc/paint/skia_paint_canvas.h"
-#include "cc/test/geometry_test_utils.h"
 #include "cc/test/pixel_test_utils.h"
 #include "cc/test/skia_common.h"
 #include "cc/test/test_skcanvas.h"
+#include "skia/ext/font_utils.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "third_party/skia/include/core/SkFont.h"
+#include "third_party/skia/include/core/SkFontMgr.h"
+#include "third_party/skia/include/core/SkPicture.h"
+#include "third_party/skia/include/core/SkSerialProcs.h"
+#include "third_party/skia/include/core/SkStream.h"
 #include "third_party/skia/include/core/SkSurface.h"
+#include "third_party/skia/include/core/SkTextBlob.h"
+#include "third_party/skia/include/core/SkTypeface.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_conversions.h"
-#include "ui/gfx/skia_util.h"
+#include "ui/gfx/geometry/skia_conversions.h"
+#include "ui/gfx/geometry/transform.h"
 
 namespace cc {
 
 namespace {
 
-bool CompareN32Pixels(void* actual_pixels,
-                      void* expected_pixels,
+bool CompareN32Pixels(base::span<unsigned char> actual_pixels,
+                      base::span<unsigned char> expected_pixels,
                       int width,
                       int height) {
-  if (memcmp(actual_pixels, expected_pixels, 4 * width * height) == 0)
+  CHECK_EQ(actual_pixels.size(), 4u * width * height);
+  CHECK_EQ(expected_pixels.size(), 4u * width * height);
+  if (actual_pixels == expected_pixels) {
     return true;
+  }
 
   SkImageInfo actual_info = SkImageInfo::MakeN32Premul(width, height);
   SkBitmap actual_bitmap;
-  actual_bitmap.installPixels(actual_info, actual_pixels,
+  actual_bitmap.installPixels(actual_info, actual_pixels.data(),
                               actual_info.minRowBytes());
 
   SkImageInfo expected_info = SkImageInfo::MakeN32Premul(width, height);
   SkBitmap expected_bitmap;
-  expected_bitmap.installPixels(expected_info, expected_pixels,
+  expected_bitmap.installPixels(expected_info, expected_pixels.data(),
                                 expected_info.minRowBytes());
 
   std::string gen_bmp_data_url = GetPNGDataUrl(actual_bitmap);
@@ -76,16 +91,11 @@ class DisplayItemListTest : public testing::Test {
 
 #define EXPECT_TRACED_RECT(x, y, width, height, rect_list) \
   do {                                                     \
-    ASSERT_EQ(4u, rect_list->GetSize());                   \
-    double d;                                              \
-    EXPECT_TRUE((rect_list)->GetDouble(0, &d));            \
-    EXPECT_EQ(x, d);                                       \
-    EXPECT_TRUE((rect_list)->GetDouble(1, &d));            \
-    EXPECT_EQ(y, d);                                       \
-    EXPECT_TRUE((rect_list)->GetDouble(2, &d));            \
-    EXPECT_EQ(width, d);                                   \
-    EXPECT_TRUE((rect_list)->GetDouble(3, &d));            \
-    EXPECT_EQ(height, d);                                  \
+    ASSERT_EQ(4u, rect_list->size());                      \
+    EXPECT_EQ(x, (*rect_list)[0].GetIfDouble());           \
+    EXPECT_EQ(y, (*rect_list)[1].GetIfDouble());           \
+    EXPECT_EQ(width, (*rect_list)[2].GetIfDouble());       \
+    EXPECT_EQ(height, (*rect_list)[3].GetIfDouble());      \
   } while (false)
 
 // AddToValue should not crash if there are different numbers of visual_rect
@@ -110,29 +120,35 @@ TEST_F(DisplayItemListTest, TraceEmptyVisualRect) {
   // Pass: we don't crash
   std::unique_ptr<base::Value> root = ToBaseValue(list.get(), true);
 
-  const base::DictionaryValue* root_dict;
-  ASSERT_TRUE(root->GetAsDictionary(&root_dict));
-  const base::DictionaryValue* params_dict;
-  ASSERT_TRUE(root_dict->GetDictionary("params", &params_dict));
-  const base::ListValue* items;
-  ASSERT_TRUE(params_dict->GetList("items", &items));
-  ASSERT_EQ(2u, items->GetSize());
+  const base::DictValue* root_dict = root->GetIfDict();
+  ASSERT_NE(nullptr, root_dict);
+  const base::DictValue* params_dict = root_dict->FindDict("params");
+  ASSERT_NE(nullptr, params_dict);
+  const base::ListValue* items = params_dict->FindList("items");
+  ASSERT_NE(nullptr, items);
+  ASSERT_EQ(2u, items->size());
 
-  const base::DictionaryValue* item_dict;
+  const base::DictValue* item_dict;
   const base::ListValue* visual_rect;
-  std::string name;
+  const std::string* name;
 
-  ASSERT_TRUE(items->GetDictionary(0, &item_dict));
-  ASSERT_TRUE(item_dict->GetList("visual_rect", &visual_rect));
+  item_dict = ((*items)[0]).GetIfDict();
+  ASSERT_NE(nullptr, item_dict);
+  visual_rect = item_dict->FindList("visual_rect");
+  ASSERT_NE(nullptr, visual_rect);
   EXPECT_TRACED_RECT(0, 0, 0, 0, visual_rect);
-  EXPECT_TRUE(item_dict->GetString("name", &name));
-  EXPECT_EQ("DrawRect", name);
+  name = item_dict->FindString("name");
+  ASSERT_NE(nullptr, name);
+  EXPECT_EQ("DrawRectOp", *name);
 
-  ASSERT_TRUE(items->GetDictionary(1, &item_dict));
-  ASSERT_TRUE(item_dict->GetList("visual_rect", &visual_rect));
+  item_dict = ((*items)[1]).GetIfDict();
+  ASSERT_NE(nullptr, item_dict);
+  visual_rect = item_dict->FindList("visual_rect");
+  ASSERT_NE(nullptr, visual_rect);
   EXPECT_TRACED_RECT(8, 9, 10, 10, visual_rect);
-  EXPECT_TRUE(item_dict->GetString("name", &name));
-  EXPECT_EQ("DrawRect", name);
+  name = item_dict->FindString("name");
+  ASSERT_NE(nullptr, name);
+  EXPECT_EQ("DrawRectOp", *name);
 }
 
 TEST_F(DisplayItemListTest, SingleUnpairedRange) {
@@ -141,7 +157,7 @@ TEST_F(DisplayItemListTest, SingleUnpairedRange) {
   blue_flags.setColor(SK_ColorBLUE);
   PaintFlags red_paint;
   red_paint.setColor(SK_ColorRED);
-  unsigned char pixels[4 * 100 * 100] = {0};
+  unsigned char pixels[4 * 100 * 100] = {};
   auto list = base::MakeRefCounted<DisplayItemList>();
 
   gfx::Point offset(8, 9);
@@ -158,7 +174,7 @@ TEST_F(DisplayItemListTest, SingleUnpairedRange) {
   DrawDisplayList(pixels, layer_rect, list);
 
   SkBitmap expected_bitmap;
-  unsigned char expected_pixels[4 * 100 * 100] = {0};
+  unsigned char expected_pixels[4 * 100 * 100] = {};
   SkImageInfo info =
       SkImageInfo::MakeN32Premul(layer_rect.width(), layer_rect.height());
   expected_bitmap.installPixels(info, expected_pixels, info.minRowBytes());
@@ -203,7 +219,7 @@ TEST_F(DisplayItemListTest, ClipPairedRange) {
   blue_flags.setColor(SK_ColorBLUE);
   PaintFlags red_paint;
   red_paint.setColor(SK_ColorRED);
-  unsigned char pixels[4 * 100 * 100] = {0};
+  unsigned char pixels[4 * 100 * 100] = {};
   auto list = base::MakeRefCounted<DisplayItemList>();
 
   gfx::Point first_offset(8, 9);
@@ -252,7 +268,7 @@ TEST_F(DisplayItemListTest, ClipPairedRange) {
   DrawDisplayList(pixels, layer_rect, list);
 
   SkBitmap expected_bitmap;
-  unsigned char expected_pixels[4 * 100 * 100] = {0};
+  unsigned char expected_pixels[4 * 100 * 100] = {};
   SkImageInfo info =
       SkImageInfo::MakeN32Premul(layer_rect.width(), layer_rect.height());
   expected_bitmap.installPixels(info, expected_pixels, info.minRowBytes());
@@ -277,7 +293,7 @@ TEST_F(DisplayItemListTest, TransformPairedRange) {
   blue_flags.setColor(SK_ColorBLUE);
   PaintFlags red_paint;
   red_paint.setColor(SK_ColorRED);
-  unsigned char pixels[4 * 100 * 100] = {0};
+  unsigned char pixels[4 * 100 * 100] = {};
   auto list = base::MakeRefCounted<DisplayItemList>();
 
   gfx::Point first_offset(8, 9);
@@ -297,7 +313,7 @@ TEST_F(DisplayItemListTest, TransformPairedRange) {
   {
     list->StartPaint();
     list->push<SaveOp>();
-    list->push<ConcatOp>(transform.GetMatrixAsSkM44());
+    list->push<ConcatOp>(gfx::TransformToSkM44(transform));
     list->EndPaintOfPairedBegin();
   }
 
@@ -324,7 +340,7 @@ TEST_F(DisplayItemListTest, TransformPairedRange) {
   DrawDisplayList(pixels, layer_rect, list);
 
   SkBitmap expected_bitmap;
-  unsigned char expected_pixels[4 * 100 * 100] = {0};
+  unsigned char expected_pixels[4 * 100 * 100] = {};
   SkImageInfo info =
       SkImageInfo::MakeN32Premul(layer_rect.width(), layer_rect.height());
   expected_bitmap.installPixels(info, expected_pixels, info.minRowBytes());
@@ -334,7 +350,7 @@ TEST_F(DisplayItemListTest, TransformPairedRange) {
       SkRect::MakeLTRB(0.f + first_offset.x(), 0.f + first_offset.y(),
                        60.f + first_offset.x(), 60.f + first_offset.y()),
       red_paint);
-  expected_canvas.setMatrix(SkMatrix(transform.matrix()));
+  expected_canvas.setMatrix(gfx::TransformToSkM44(transform));
   expected_canvas.drawRect(
       SkRect::MakeLTRB(50.f + second_offset.x(), 50.f + second_offset.y(),
                        75.f + second_offset.x(), 75.f + second_offset.y()),
@@ -346,10 +362,11 @@ TEST_F(DisplayItemListTest, TransformPairedRange) {
 TEST_F(DisplayItemListTest, FilterPairedRange) {
   gfx::Rect layer_rect(100, 100);
   FilterOperations filters;
-  unsigned char pixels[4 * 100 * 100] = {0};
+  unsigned char pixels[4 * 100 * 100] = {};
   auto list = base::MakeRefCounted<DisplayItemList>();
 
-  sk_sp<SkSurface> source_surface = SkSurface::MakeRasterN32Premul(50, 50);
+  sk_sp<SkSurface> source_surface =
+      SkSurfaces::Raster(SkImageInfo::MakeN32Premul(50, 50));
   SkCanvas* source_canvas = source_surface->getCanvas();
   source_canvas->clear(SkColorSetRGB(128, 128, 128));
   PaintImage source_image = PaintImageBuilder::WithDefault()
@@ -371,7 +388,7 @@ TEST_F(DisplayItemListTest, FilterPairedRange) {
   // below.
   SkRect rect = SkRect::MakeWH(source_image.width(), source_image.height());
   sk_sp<PaintFilter> image_filter = sk_make_sp<ImagePaintFilter>(
-      source_image, rect, rect, kHigh_SkFilterQuality);
+      source_image, rect, rect, PaintFlags::FilterQuality::kHigh);
   filters.Append(FilterOperation::CreateReferenceFilter(image_filter));
   filters.Append(FilterOperation::CreateBrightnessFilter(0.5f));
   gfx::RectF filter_bounds(10.f, 10.f, 50.f, 50.f);
@@ -381,12 +398,11 @@ TEST_F(DisplayItemListTest, FilterPairedRange) {
     list->push<TranslateOp>(filter_bounds.x(), filter_bounds.y());
 
     PaintFlags flags;
-    flags.setImageFilter(
-        RenderSurfaceFilters::BuildImageFilter(filters, filter_bounds.size()));
+    flags.setImageFilter(RenderSurfaceFilters::BuildImageFilter(filters));
 
     SkRect layer_bounds = gfx::RectFToSkRect(filter_bounds);
     layer_bounds.offset(-filter_bounds.x(), -filter_bounds.y());
-    list->push<SaveLayerOp>(&layer_bounds, &flags);
+    list->push<SaveLayerOp>(layer_bounds, flags);
     list->push<TranslateOp>(-filter_bounds.x(), -filter_bounds.y());
 
     list->EndPaintOfPairedBegin();
@@ -419,7 +435,7 @@ TEST_F(DisplayItemListTest, FilterPairedRange) {
   DrawDisplayList(pixels, layer_rect, list);
 
   SkBitmap expected_bitmap;
-  unsigned char expected_pixels[4 * 100 * 100] = {0};
+  unsigned char expected_pixels[4 * 100 * 100] = {};
   PaintFlags paint;
   paint.setColor(SkColorSetRGB(64, 64, 64));
   SkImageInfo info =
@@ -459,45 +475,50 @@ TEST_F(DisplayItemListTest, AsValueWithNoOps) {
 
   // Pass |true| to ask for PaintOps even though there are none.
   std::unique_ptr<base::Value> root = ToBaseValue(list.get(), true);
-  const base::DictionaryValue* root_dict;
-  ASSERT_TRUE(root->GetAsDictionary(&root_dict));
+  const base::DictValue* root_dict = root->GetIfDict();
+  ASSERT_NE(nullptr, root_dict);
   // The traced value has a params dictionary as its root.
   {
-    const base::DictionaryValue* params_dict;
-    ASSERT_TRUE(root_dict->GetDictionary("params", &params_dict));
+    const base::DictValue* params_dict = root_dict->FindDict("params");
+    ASSERT_NE(nullptr, params_dict);
 
     // The real contents of the traced value is in here.
     {
       const base::ListValue* params_list;
 
       // The layer_rect field is present by empty.
-      ASSERT_TRUE(params_dict->GetList("layer_rect", &params_list));
+      params_list = params_dict->FindList("layer_rect");
+      ASSERT_NE(nullptr, params_list);
       EXPECT_TRACED_RECT(0, 0, 0, 0, params_list);
 
       // The items list is there but empty.
-      ASSERT_TRUE(params_dict->GetList("items", &params_list));
-      EXPECT_EQ(0u, params_list->GetSize());
+      params_list = params_dict->FindList("items");
+      ASSERT_NE(nullptr, params_list);
+      EXPECT_EQ(0u, params_list->size());
     }
   }
 
   // Pass |false| to not include PaintOps.
   root = ToBaseValue(list.get(), false);
-  ASSERT_TRUE(root->GetAsDictionary(&root_dict));
+  root_dict = root->GetIfDict();
+  ASSERT_NE(nullptr, root_dict);
   // The traced value has a params dictionary as its root.
   {
-    const base::DictionaryValue* params_dict;
-    ASSERT_TRUE(root_dict->GetDictionary("params", &params_dict));
+    const base::DictValue* params_dict = root_dict->FindDict("params");
+    ASSERT_NE(nullptr, params_dict);
 
     // The real contents of the traced value is in here.
     {
       const base::ListValue* params_list;
 
       // The layer_rect field is present by empty.
-      ASSERT_TRUE(params_dict->GetList("layer_rect", &params_list));
+      params_list = params_dict->FindList("layer_rect");
+      ASSERT_NE(nullptr, params_list);
       EXPECT_TRACED_RECT(0, 0, 0, 0, params_list);
 
       // The items list is not there since we asked for no ops.
-      ASSERT_FALSE(params_dict->GetList("items", &params_list));
+      params_list = params_dict->FindList("items");
+      ASSERT_EQ(nullptr, params_list);
     }
   }
 }
@@ -511,7 +532,7 @@ TEST_F(DisplayItemListTest, AsValueWithOps) {
   {
     list->StartPaint();
     list->push<SaveOp>();
-    list->push<ConcatOp>(transform.GetMatrixAsSkM44());
+    list->push<ConcatOp>(gfx::TransformToSkM44(transform));
     list->EndPaintOfPairedBegin();
   }
 
@@ -523,7 +544,7 @@ TEST_F(DisplayItemListTest, AsValueWithOps) {
     PaintFlags red_paint;
     red_paint.setColor(SK_ColorRED);
 
-    list->push<SaveLayerOp>(nullptr, &red_paint);
+    list->push<SaveLayerOp>(red_paint);
     list->push<TranslateOp>(static_cast<float>(offset.x()),
                             static_cast<float>(offset.y()));
     list->push<DrawRectOp>(SkRect::MakeWH(4, 4), red_paint);
@@ -541,68 +562,237 @@ TEST_F(DisplayItemListTest, AsValueWithOps) {
 
   // Pass |true| to ask for PaintOps to be included.
   std::unique_ptr<base::Value> root = ToBaseValue(list.get(), true);
-  const base::DictionaryValue* root_dict;
-  ASSERT_TRUE(root->GetAsDictionary(&root_dict));
+  const base::DictValue* root_dict = root->GetIfDict();
+  ASSERT_NE(nullptr, root_dict);
   // The traced value has a params dictionary as its root.
   {
-    const base::DictionaryValue* params_dict;
-    ASSERT_TRUE(root_dict->GetDictionary("params", &params_dict));
+    const base::DictValue* params_dict = root_dict->FindDict("params");
+    ASSERT_NE(nullptr, params_dict);
 
     // The real contents of the traced value is in here.
     {
-      const base::ListValue* layer_rect_list;
+      const base::ListValue* layer_rect_list =
+          params_dict->FindList("layer_rect");
       // The layer_rect field is present and has the bounds of the rtree.
-      ASSERT_TRUE(params_dict->GetList("layer_rect", &layer_rect_list));
+      ASSERT_NE(nullptr, layer_rect_list);
       EXPECT_TRACED_RECT(2, 3, 8, 9, layer_rect_list);
 
       // The items list has 3 things in it since we built 3 visual rects.
-      const base::ListValue* items;
-      ASSERT_TRUE(params_dict->GetList("items", &items));
-      ASSERT_EQ(7u, items->GetSize());
+      const base::ListValue* items = params_dict->FindList("items");
+      ASSERT_NE(nullptr, items);
+      ASSERT_EQ(7u, items->size());
 
-      const char* expected_names[] = {"Save",      "Concat",   "SaveLayer",
-                                      "Translate", "DrawRect", "Restore",
-                                      "Restore"};
-      bool expected_has_skp[] = {false, true, true, true, true, false, false};
+      auto expected_names = std::to_array<const char*>({
+          "SaveOp",
+          "ConcatOp",
+          "SaveLayerOp",
+          "TranslateOp",
+          "DrawRectOp",
+          "RestoreOp",
+          "RestoreOp",
+      });
+      auto expected_has_skp = std::to_array<bool>({
+          false,
+          true,
+          true,
+          true,
+          true,
+          false,
+          false,
+      });
 
       for (int i = 0; i < 7; ++i) {
-        const base::DictionaryValue* item_dict;
-        ASSERT_TRUE(items->GetDictionary(i, &item_dict));
+        const base::Value& item_value = (*items)[i];
+        ASSERT_TRUE(item_value.is_dict());
+        const base::DictValue& item_dict = item_value.GetDict();
 
-        const base::ListValue* visual_rect;
-        ASSERT_TRUE(item_dict->GetList("visual_rect", &visual_rect));
+        const base::ListValue* visual_rect = item_dict.FindList("visual_rect");
+        ASSERT_NE(nullptr, visual_rect);
         EXPECT_TRACED_RECT(2, 3, 8, 9, visual_rect);
 
-        std::string name;
-        EXPECT_TRUE(item_dict->GetString("name", &name));
-        EXPECT_EQ(expected_names[i], name);
+        const std::string* name = item_dict.FindString("name");
+        EXPECT_NE(nullptr, name);
+        EXPECT_EQ(expected_names[i], *name);
 
-        EXPECT_EQ(
-            expected_has_skp[i],
-            item_dict->GetString("skp64", static_cast<std::string*>(nullptr)));
+        EXPECT_EQ(expected_has_skp[i],
+                  item_dict.FindString("skp64") != nullptr);
       }
     }
   }
 
   // Pass |false| to not include PaintOps.
   root = ToBaseValue(list.get(), false);
-  ASSERT_TRUE(root->GetAsDictionary(&root_dict));
+  root_dict = root->GetIfDict();
+  ASSERT_NE(nullptr, root_dict);
   // The traced value has a params dictionary as its root.
   {
-    const base::DictionaryValue* params_dict;
-    ASSERT_TRUE(root_dict->GetDictionary("params", &params_dict));
+    const base::DictValue* params_dict = root_dict->FindDict("params");
+    ASSERT_NE(nullptr, params_dict);
 
     // The real contents of the traced value is in here.
     {
       const base::ListValue* params_list;
       // The layer_rect field is present and has the bounds of the rtree.
-      ASSERT_TRUE(params_dict->GetList("layer_rect", &params_list));
+      params_list = params_dict->FindList("layer_rect");
+      ASSERT_NE(nullptr, params_list);
       EXPECT_TRACED_RECT(2, 3, 8, 9, params_list);
 
       // The items list is not present since we asked for no ops.
-      ASSERT_FALSE(params_dict->GetList("items", &params_list));
+      params_list = params_dict->FindList("items");
+      ASSERT_EQ(nullptr, params_list);
     }
   }
+}
+
+TEST_F(DisplayItemListTest, AsValueWithNonZeroOffsetHasValidSkp) {
+  gfx::Point offset(20, 30);
+  gfx::Size size(8, 9);
+  gfx::Rect bounds(offset, size);
+  auto list = base::MakeRefCounted<DisplayItemList>();
+
+  {
+    list->StartPaint();
+    PaintFlags red_paint;
+    red_paint.setColor(SK_ColorRED);
+    list->push<DrawRectOp>(gfx::RectToSkRect(bounds), red_paint);
+    list->EndPaintOfUnpaired(bounds);
+  }
+  list->Finalize();
+
+  std::unique_ptr<base::Value> root = ToBaseValue(list.get(), true);
+  const base::DictValue* root_dict = root->GetIfDict();
+  ASSERT_NE(nullptr, root_dict);
+
+  auto verify_skp64_draws_red = [&](const std::string* b64_skp) {
+    ASSERT_NE(nullptr, b64_skp);
+    std::string decoded;
+    ASSERT_TRUE(base::Base64Decode(*b64_skp, &decoded));
+    sk_sp<SkPicture> picture =
+        SkPicture::MakeFromData(decoded.data(), decoded.size());
+    ASSERT_NE(nullptr, picture);
+    EXPECT_EQ(SkRect::MakeWH(size.width(), size.height()), picture->cullRect());
+
+    SkBitmap bitmap;
+    ASSERT_TRUE(bitmap.tryAllocN32Pixels(size.width(), size.height()));
+    bitmap.eraseColor(SK_ColorTRANSPARENT);
+    SkCanvas canvas(bitmap, SkSurfaceProps{});
+    picture->playback(&canvas);
+
+    for (int y = 0; y < size.height(); ++y) {
+      for (int x = 0; x < size.width(); ++x) {
+        EXPECT_EQ(SK_ColorRED, bitmap.getColor(x, y));
+      }
+    }
+  };
+
+  verify_skp64_draws_red(root_dict->FindString("skp64"));
+
+  const base::DictValue* params_dict = root_dict->FindDict("params");
+  ASSERT_NE(nullptr, params_dict);
+  const base::ListValue* items = params_dict->FindList("items");
+  ASSERT_NE(nullptr, items);
+  ASSERT_EQ(1u, items->size());
+  ASSERT_TRUE((*items)[0].is_dict());
+  verify_skp64_draws_red((*items)[0].GetDict().FindString("skp64"));
+}
+
+TEST_F(DisplayItemListTest, AsValueWithDrawTextBlobHasValidSkp) {
+  gfx::Point offset(20, 30);
+  gfx::Size size(100, 40);
+  gfx::Rect bounds(offset, size);
+  auto list = base::MakeRefCounted<DisplayItemList>();
+
+  SkFont font = skia::DefaultFont();
+  font.setSize(24.0f);
+  sk_sp<SkTextBlob> text_blob = SkTextBlob::MakeFromString("Hello", font);
+  ASSERT_NE(nullptr, text_blob);
+
+  {
+    list->StartPaint();
+    PaintFlags black_paint;
+    black_paint.setColor(SK_ColorBLACK);
+    list->push<DrawTextBlobOp>(text_blob, static_cast<float>(offset.x()),
+                               static_cast<float>(offset.y() + 28),
+                               black_paint);
+    list->EndPaintOfUnpaired(bounds);
+  }
+  list->Finalize();
+
+  std::unique_ptr<base::Value> root = ToBaseValue(list.get(), true);
+  const base::DictValue* root_dict = root->GetIfDict();
+  ASSERT_NE(nullptr, root_dict);
+
+  auto verify_skp64_draws_text = [&](const std::string* b64_skp) {
+    ASSERT_NE(nullptr, b64_skp);
+    std::string decoded;
+    ASSERT_TRUE(base::Base64Decode(*b64_skp, &decoded));
+
+    // Verify that `kDontIncludeData` omitted embedded font data: deserializing
+    // without an `SkFontMgr` produces an empty typeface (`countGlyphs() == 0`).
+    bool deserialized_empty_without_font_mgr = false;
+    SkDeserialProcs no_font_mgr_procs{
+        .fTypefaceStreamProc = [](SkStream& stream,
+                                  void* ctx) -> sk_sp<SkTypeface> {
+          sk_sp<SkTypeface> tf = SkTypeface::MakeDeserialize(&stream, nullptr);
+          if (tf && tf->countGlyphs() == 0) {
+            *static_cast<bool*>(ctx) = true;
+          }
+          return tf;
+        },
+        .fTypefaceCtx = &deserialized_empty_without_font_mgr,
+    };
+    sk_sp<SkPicture> picture_without_font_mgr = SkPicture::MakeFromData(
+        decoded.data(), decoded.size(), &no_font_mgr_procs);
+    ASSERT_NE(nullptr, picture_without_font_mgr);
+    EXPECT_TRUE(deserialized_empty_without_font_mgr);
+
+    // Deserializing with `skia::DefaultFontMgr()` resolves the typeface and
+    // renders non-transparent text pixels.
+    bool deserialized_non_empty_typeface = false;
+    SkDeserialProcs procs{
+        .fTypefaceStreamProc = [](SkStream& stream,
+                                  void* ctx) -> sk_sp<SkTypeface> {
+          sk_sp<SkTypeface> tf =
+              SkTypeface::MakeDeserialize(&stream, skia::DefaultFontMgr());
+          if (tf && tf->countGlyphs() > 0) {
+            *static_cast<bool*>(ctx) = true;
+          }
+          return tf;
+        },
+        .fTypefaceCtx = &deserialized_non_empty_typeface,
+    };
+    sk_sp<SkPicture> picture =
+        SkPicture::MakeFromData(decoded.data(), decoded.size(), &procs);
+    ASSERT_NE(nullptr, picture);
+    EXPECT_TRUE(deserialized_non_empty_typeface);
+    EXPECT_EQ(SkRect::MakeWH(size.width(), size.height()), picture->cullRect());
+
+    SkBitmap bitmap;
+    ASSERT_TRUE(bitmap.tryAllocN32Pixels(size.width(), size.height()));
+    bitmap.eraseColor(SK_ColorTRANSPARENT);
+    SkCanvas canvas(bitmap, SkSurfaceProps{});
+    picture->playback(&canvas);
+
+    int non_transparent_pixels = 0;
+    for (int y = 0; y < size.height(); ++y) {
+      for (int x = 0; x < size.width(); ++x) {
+        if (bitmap.getColor(x, y) != SK_ColorTRANSPARENT) {
+          ++non_transparent_pixels;
+        }
+      }
+    }
+    EXPECT_GT(non_transparent_pixels, 0);
+  };
+
+  verify_skp64_draws_text(root_dict->FindString("skp64"));
+
+  const base::DictValue* params_dict = root_dict->FindDict("params");
+  ASSERT_NE(nullptr, params_dict);
+  const base::ListValue* items = params_dict->FindList("items");
+  ASSERT_NE(nullptr, items);
+  ASSERT_EQ(1u, items->size());
+  ASSERT_TRUE((*items)[0].is_dict());
+  verify_skp64_draws_text((*items)[0].GetDict().FindString("skp64"));
 }
 
 TEST_F(DisplayItemListTest, SizeEmpty) {
@@ -652,7 +842,7 @@ TEST_F(DisplayItemListTest, AppendVisualRectSimple) {
   }
 
   EXPECT_EQ(1u, list->TotalOpCount());
-  EXPECT_RECT_EQ(drawing_bounds, list->VisualRectForTesting(0));
+  EXPECT_EQ(drawing_bounds, list->VisualRectForTesting(0));
 }
 
 TEST_F(DisplayItemListTest, AppendVisualRectEmptyBlock) {
@@ -675,9 +865,9 @@ TEST_F(DisplayItemListTest, AppendVisualRectEmptyBlock) {
   }
 
   EXPECT_EQ(3u, list->TotalOpCount());
-  EXPECT_RECT_EQ(gfx::Rect(), list->VisualRectForTesting(0));
-  EXPECT_RECT_EQ(gfx::Rect(), list->VisualRectForTesting(1));
-  EXPECT_RECT_EQ(gfx::Rect(), list->VisualRectForTesting(2));
+  EXPECT_EQ(gfx::Rect(), list->VisualRectForTesting(0));
+  EXPECT_EQ(gfx::Rect(), list->VisualRectForTesting(1));
+  EXPECT_EQ(gfx::Rect(), list->VisualRectForTesting(2));
 }
 
 TEST_F(DisplayItemListTest, AppendVisualRectEmptyBlockContainingEmptyBlock) {
@@ -712,11 +902,11 @@ TEST_F(DisplayItemListTest, AppendVisualRectEmptyBlockContainingEmptyBlock) {
   }
 
   EXPECT_EQ(5u, list->TotalOpCount());
-  EXPECT_RECT_EQ(gfx::Rect(), list->VisualRectForTesting(0));
-  EXPECT_RECT_EQ(gfx::Rect(), list->VisualRectForTesting(1));
-  EXPECT_RECT_EQ(gfx::Rect(), list->VisualRectForTesting(2));
-  EXPECT_RECT_EQ(gfx::Rect(), list->VisualRectForTesting(3));
-  EXPECT_RECT_EQ(gfx::Rect(), list->VisualRectForTesting(4));
+  EXPECT_EQ(gfx::Rect(), list->VisualRectForTesting(0));
+  EXPECT_EQ(gfx::Rect(), list->VisualRectForTesting(1));
+  EXPECT_EQ(gfx::Rect(), list->VisualRectForTesting(2));
+  EXPECT_EQ(gfx::Rect(), list->VisualRectForTesting(3));
+  EXPECT_EQ(gfx::Rect(), list->VisualRectForTesting(4));
 }
 
 TEST_F(DisplayItemListTest, AppendVisualRectBlockContainingDrawing) {
@@ -747,10 +937,10 @@ TEST_F(DisplayItemListTest, AppendVisualRectBlockContainingDrawing) {
   }
 
   EXPECT_EQ(4u, list->TotalOpCount());
-  EXPECT_RECT_EQ(drawing_bounds, list->VisualRectForTesting(0));
-  EXPECT_RECT_EQ(drawing_bounds, list->VisualRectForTesting(1));
-  EXPECT_RECT_EQ(drawing_bounds, list->VisualRectForTesting(2));
-  EXPECT_RECT_EQ(drawing_bounds, list->VisualRectForTesting(3));
+  EXPECT_EQ(drawing_bounds, list->VisualRectForTesting(0));
+  EXPECT_EQ(drawing_bounds, list->VisualRectForTesting(1));
+  EXPECT_EQ(drawing_bounds, list->VisualRectForTesting(2));
+  EXPECT_EQ(drawing_bounds, list->VisualRectForTesting(3));
 }
 
 TEST_F(DisplayItemListTest, AppendVisualRectBlockContainingEscapedDrawing) {
@@ -781,10 +971,10 @@ TEST_F(DisplayItemListTest, AppendVisualRectBlockContainingEscapedDrawing) {
   }
 
   EXPECT_EQ(4u, list->TotalOpCount());
-  EXPECT_RECT_EQ(drawing_bounds, list->VisualRectForTesting(0));
-  EXPECT_RECT_EQ(drawing_bounds, list->VisualRectForTesting(1));
-  EXPECT_RECT_EQ(drawing_bounds, list->VisualRectForTesting(2));
-  EXPECT_RECT_EQ(drawing_bounds, list->VisualRectForTesting(3));
+  EXPECT_EQ(drawing_bounds, list->VisualRectForTesting(0));
+  EXPECT_EQ(drawing_bounds, list->VisualRectForTesting(1));
+  EXPECT_EQ(drawing_bounds, list->VisualRectForTesting(2));
+  EXPECT_EQ(drawing_bounds, list->VisualRectForTesting(3));
 }
 
 TEST_F(DisplayItemListTest,
@@ -824,11 +1014,11 @@ TEST_F(DisplayItemListTest,
   }
 
   EXPECT_EQ(5u, list->TotalOpCount());
-  EXPECT_RECT_EQ(drawing_a_bounds, list->VisualRectForTesting(0));
-  EXPECT_RECT_EQ(drawing_b_bounds, list->VisualRectForTesting(1));
-  EXPECT_RECT_EQ(drawing_b_bounds, list->VisualRectForTesting(2));
-  EXPECT_RECT_EQ(drawing_b_bounds, list->VisualRectForTesting(3));
-  EXPECT_RECT_EQ(drawing_b_bounds, list->VisualRectForTesting(4));
+  EXPECT_EQ(drawing_a_bounds, list->VisualRectForTesting(0));
+  EXPECT_EQ(drawing_b_bounds, list->VisualRectForTesting(1));
+  EXPECT_EQ(drawing_b_bounds, list->VisualRectForTesting(2));
+  EXPECT_EQ(drawing_b_bounds, list->VisualRectForTesting(3));
+  EXPECT_EQ(drawing_b_bounds, list->VisualRectForTesting(4));
 }
 
 TEST_F(DisplayItemListTest, AppendVisualRectTwoBlocksTwoDrawings) {
@@ -882,14 +1072,14 @@ TEST_F(DisplayItemListTest, AppendVisualRectTwoBlocksTwoDrawings) {
   EXPECT_EQ(8u, list->TotalOpCount());
   gfx::Rect merged_drawing_bounds = gfx::Rect(drawing_a_bounds);
   merged_drawing_bounds.Union(drawing_b_bounds);
-  EXPECT_RECT_EQ(merged_drawing_bounds, list->VisualRectForTesting(0));
-  EXPECT_RECT_EQ(merged_drawing_bounds, list->VisualRectForTesting(1));
-  EXPECT_RECT_EQ(drawing_a_bounds, list->VisualRectForTesting(2));
-  EXPECT_RECT_EQ(drawing_b_bounds, list->VisualRectForTesting(3));
-  EXPECT_RECT_EQ(drawing_b_bounds, list->VisualRectForTesting(4));
-  EXPECT_RECT_EQ(drawing_b_bounds, list->VisualRectForTesting(5));
-  EXPECT_RECT_EQ(drawing_b_bounds, list->VisualRectForTesting(6));
-  EXPECT_RECT_EQ(merged_drawing_bounds, list->VisualRectForTesting(7));
+  EXPECT_EQ(merged_drawing_bounds, list->VisualRectForTesting(0));
+  EXPECT_EQ(merged_drawing_bounds, list->VisualRectForTesting(1));
+  EXPECT_EQ(drawing_a_bounds, list->VisualRectForTesting(2));
+  EXPECT_EQ(drawing_b_bounds, list->VisualRectForTesting(3));
+  EXPECT_EQ(drawing_b_bounds, list->VisualRectForTesting(4));
+  EXPECT_EQ(drawing_b_bounds, list->VisualRectForTesting(5));
+  EXPECT_EQ(drawing_b_bounds, list->VisualRectForTesting(6));
+  EXPECT_EQ(merged_drawing_bounds, list->VisualRectForTesting(7));
 }
 
 TEST_F(DisplayItemListTest,
@@ -945,14 +1135,14 @@ TEST_F(DisplayItemListTest,
   EXPECT_EQ(8u, list->TotalOpCount());
   gfx::Rect merged_drawing_bounds = gfx::Rect(drawing_a_bounds);
   merged_drawing_bounds.Union(drawing_b_bounds);
-  EXPECT_RECT_EQ(merged_drawing_bounds, list->VisualRectForTesting(0));
-  EXPECT_RECT_EQ(merged_drawing_bounds, list->VisualRectForTesting(1));
-  EXPECT_RECT_EQ(drawing_a_bounds, list->VisualRectForTesting(2));
-  EXPECT_RECT_EQ(drawing_b_bounds, list->VisualRectForTesting(3));
-  EXPECT_RECT_EQ(drawing_b_bounds, list->VisualRectForTesting(4));
-  EXPECT_RECT_EQ(drawing_b_bounds, list->VisualRectForTesting(5));
-  EXPECT_RECT_EQ(drawing_b_bounds, list->VisualRectForTesting(6));
-  EXPECT_RECT_EQ(merged_drawing_bounds, list->VisualRectForTesting(7));
+  EXPECT_EQ(merged_drawing_bounds, list->VisualRectForTesting(0));
+  EXPECT_EQ(merged_drawing_bounds, list->VisualRectForTesting(1));
+  EXPECT_EQ(drawing_a_bounds, list->VisualRectForTesting(2));
+  EXPECT_EQ(drawing_b_bounds, list->VisualRectForTesting(3));
+  EXPECT_EQ(drawing_b_bounds, list->VisualRectForTesting(4));
+  EXPECT_EQ(drawing_b_bounds, list->VisualRectForTesting(5));
+  EXPECT_EQ(drawing_b_bounds, list->VisualRectForTesting(6));
+  EXPECT_EQ(merged_drawing_bounds, list->VisualRectForTesting(7));
 }
 
 TEST_F(DisplayItemListTest,
@@ -1008,14 +1198,14 @@ TEST_F(DisplayItemListTest,
   EXPECT_EQ(8u, list->TotalOpCount());
   gfx::Rect merged_drawing_bounds = gfx::Rect(drawing_a_bounds);
   merged_drawing_bounds.Union(drawing_b_bounds);
-  EXPECT_RECT_EQ(merged_drawing_bounds, list->VisualRectForTesting(0));
-  EXPECT_RECT_EQ(merged_drawing_bounds, list->VisualRectForTesting(1));
-  EXPECT_RECT_EQ(drawing_a_bounds, list->VisualRectForTesting(2));
-  EXPECT_RECT_EQ(drawing_b_bounds, list->VisualRectForTesting(3));
-  EXPECT_RECT_EQ(drawing_b_bounds, list->VisualRectForTesting(4));
-  EXPECT_RECT_EQ(drawing_b_bounds, list->VisualRectForTesting(5));
-  EXPECT_RECT_EQ(drawing_b_bounds, list->VisualRectForTesting(6));
-  EXPECT_RECT_EQ(merged_drawing_bounds, list->VisualRectForTesting(7));
+  EXPECT_EQ(merged_drawing_bounds, list->VisualRectForTesting(0));
+  EXPECT_EQ(merged_drawing_bounds, list->VisualRectForTesting(1));
+  EXPECT_EQ(drawing_a_bounds, list->VisualRectForTesting(2));
+  EXPECT_EQ(drawing_b_bounds, list->VisualRectForTesting(3));
+  EXPECT_EQ(drawing_b_bounds, list->VisualRectForTesting(4));
+  EXPECT_EQ(drawing_b_bounds, list->VisualRectForTesting(5));
+  EXPECT_EQ(drawing_b_bounds, list->VisualRectForTesting(6));
+  EXPECT_EQ(merged_drawing_bounds, list->VisualRectForTesting(7));
 }
 
 TEST_F(DisplayItemListTest,
@@ -1071,14 +1261,14 @@ TEST_F(DisplayItemListTest,
   EXPECT_EQ(8u, list->TotalOpCount());
   gfx::Rect merged_drawing_bounds = gfx::Rect(drawing_a_bounds);
   merged_drawing_bounds.Union(drawing_b_bounds);
-  EXPECT_RECT_EQ(merged_drawing_bounds, list->VisualRectForTesting(0));
-  EXPECT_RECT_EQ(merged_drawing_bounds, list->VisualRectForTesting(1));
-  EXPECT_RECT_EQ(drawing_a_bounds, list->VisualRectForTesting(2));
-  EXPECT_RECT_EQ(drawing_b_bounds, list->VisualRectForTesting(3));
-  EXPECT_RECT_EQ(drawing_b_bounds, list->VisualRectForTesting(4));
-  EXPECT_RECT_EQ(drawing_b_bounds, list->VisualRectForTesting(5));
-  EXPECT_RECT_EQ(drawing_b_bounds, list->VisualRectForTesting(6));
-  EXPECT_RECT_EQ(merged_drawing_bounds, list->VisualRectForTesting(7));
+  EXPECT_EQ(merged_drawing_bounds, list->VisualRectForTesting(0));
+  EXPECT_EQ(merged_drawing_bounds, list->VisualRectForTesting(1));
+  EXPECT_EQ(drawing_a_bounds, list->VisualRectForTesting(2));
+  EXPECT_EQ(drawing_b_bounds, list->VisualRectForTesting(3));
+  EXPECT_EQ(drawing_b_bounds, list->VisualRectForTesting(4));
+  EXPECT_EQ(drawing_b_bounds, list->VisualRectForTesting(5));
+  EXPECT_EQ(drawing_b_bounds, list->VisualRectForTesting(6));
+  EXPECT_EQ(merged_drawing_bounds, list->VisualRectForTesting(7));
 }
 
 TEST_F(DisplayItemListTest, VisualRectForPairsEnclosingEmptyPainting) {
@@ -1107,9 +1297,9 @@ TEST_F(DisplayItemListTest, VisualRectForPairsEnclosingEmptyPainting) {
   }
 
   EXPECT_EQ(3u, list->TotalOpCount());
-  EXPECT_RECT_EQ(visual_rect, list->VisualRectForTesting(0));
-  EXPECT_RECT_EQ(visual_rect, list->VisualRectForTesting(1));
-  EXPECT_RECT_EQ(visual_rect, list->VisualRectForTesting(2));
+  EXPECT_EQ(visual_rect, list->VisualRectForTesting(0));
+  EXPECT_EQ(visual_rect, list->VisualRectForTesting(1));
+  EXPECT_EQ(visual_rect, list->VisualRectForTesting(2));
 }
 
 TEST_F(DisplayItemListTest, TotalOpCount) {
@@ -1127,7 +1317,7 @@ TEST_F(DisplayItemListTest, TotalOpCount) {
   list->StartPaint();
   list->push<SaveOp>();
   list->push<TranslateOp>(10.f, 20.f);
-  list->push<DrawRecordOp>(sub_list->ReleaseAsRecord());
+  list->push<DrawRecordOp>(sub_list->FinalizeAndReleaseAsRecordForTesting());
   list->push<RestoreOp>();
   list->EndPaintOfUnpaired(gfx::Rect());
   EXPECT_EQ(8u, list->TotalOpCount());
@@ -1135,21 +1325,20 @@ TEST_F(DisplayItemListTest, TotalOpCount) {
 
 TEST_F(DisplayItemListTest, AreaOfDrawText) {
   auto list = base::MakeRefCounted<DisplayItemList>();
-  auto sub_list = base::MakeRefCounted<DisplayItemList>();
 
-  auto text_blob1 = SkTextBlob::MakeFromString("ABCD", SkFont());
+  SkFont font = skia::DefaultFont();
+  auto text_blob1 = SkTextBlob::MakeFromString("ABCD", font);
   gfx::Size text_blob1_size(ceilf(text_blob1->bounds().width()),
                             ceilf(text_blob1->bounds().height()));
   auto text_blob1_area = text_blob1_size.width() * text_blob1_size.height();
-  auto text_blob2 = SkTextBlob::MakeFromString("EFG", SkFont());
+  auto text_blob2 = SkTextBlob::MakeFromString("EFG", font);
   gfx::Size text_blob2_size(ceilf(text_blob2->bounds().width()),
                             ceilf(text_blob2->bounds().height()));
   auto text_blob2_area = text_blob2_size.width() * text_blob2_size.height();
 
-  sub_list->StartPaint();
-  sub_list->push<DrawTextBlobOp>(text_blob1, 0.0f, 0.0f, PaintFlags());
-  sub_list->EndPaintOfUnpaired(gfx::Rect());
-  auto record = sub_list->ReleaseAsRecord();
+  PaintOpBuffer sub_buffer;
+  sub_buffer.push<DrawTextBlobOp>(text_blob1, 0.0f, 0.0f, PaintFlags());
+  auto record = sub_buffer.ReleaseAsRecord();
 
   list->StartPaint();
   list->push<SaveOp>();

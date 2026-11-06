@@ -1,15 +1,15 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_BROWSER_RENDERER_HOST_INPUT_SYNTHETIC_GESTURE_TARGET_AURA_H_
 #define CONTENT_BROWSER_RENDERER_HOST_INPUT_SYNTHETIC_GESTURE_TARGET_AURA_H_
 
-#include "base/macros.h"
 #include "content/browser/renderer_host/input/synthetic_gesture_target_base.h"
 #include "content/browser/renderer_host/render_widget_host_view_aura.h"
 #include "content/common/input/synthetic_gesture_params.h"
 #include "ui/aura/event_injector.h"
+#include "ui/compositor/host_begin_frame_observer.h"
 
 namespace aura {
 class Window;
@@ -18,9 +18,16 @@ class Window;
 namespace content {
 
 // SyntheticGestureTarget implementation for aura
-class SyntheticGestureTargetAura : public SyntheticGestureTargetBase {
+class SyntheticGestureTargetAura
+    : public SyntheticGestureTargetBase,
+      public ui::HostBeginFrameObserver::SimpleBeginFrameObserver {
  public:
   explicit SyntheticGestureTargetAura(RenderWidgetHostImpl* host);
+
+  SyntheticGestureTargetAura(const SyntheticGestureTargetAura&) = delete;
+  ~SyntheticGestureTargetAura() override;
+  SyntheticGestureTargetAura& operator=(const SyntheticGestureTargetAura&) =
+      delete;
 
   // SyntheticGestureTargetBase:
   void DispatchWebTouchEventToPlatform(
@@ -40,6 +47,9 @@ class SyntheticGestureTargetAura : public SyntheticGestureTargetBase {
   content::mojom::GestureSourceType GetDefaultSyntheticGestureSourceType()
       const override;
 
+  void GetVSyncParameters(base::TimeTicks& timebase,
+                          base::TimeDelta& interval) const override;
+
   float GetTouchSlopInDips() const override;
 
   float GetSpanSlopInDips() const override;
@@ -47,6 +57,13 @@ class SyntheticGestureTargetAura : public SyntheticGestureTargetBase {
   float GetMinScalingSpanInDips() const override;
 
  private:
+  // ui::HostBeginFrameObserver::SimpleBeginFrameObserver:
+  void OnBeginFrame(
+      base::TimeTicks frame_begin_time,
+      base::TimeDelta frame_interval,
+      std::optional<base::TimeTicks> first_coalesced_frame_begin_time) override;
+  void OnBeginFrameSourceShuttingDown() override;
+
   RenderWidgetHostViewAura* GetView() const;
   aura::Window* GetWindow() const;
 
@@ -62,7 +79,10 @@ class SyntheticGestureTargetAura : public SyntheticGestureTargetBase {
 
   aura::EventInjector event_injector_;
 
-  DISALLOW_COPY_AND_ASSIGN(SyntheticGestureTargetAura);
+  base::TimeTicks vsync_timebase_;
+  base::TimeDelta vsync_interval_{base::Microseconds(16667)};
+
+  raw_ptr<ui::Compositor> observed_compositor_;
 };
 
 }  // namespace content

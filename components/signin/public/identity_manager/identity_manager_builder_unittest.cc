@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,31 +9,56 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/test/task_environment.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/image_fetcher/core/fake_image_decoder.h"
+#include "components/metrics/profile_metrics_service.h"
+#include "components/signin/internal/identity_manager/account_capabilities_fetcher.h"
+#include "components/signin/internal/identity_manager/account_fetcher_factory.h"
 #include "components/signin/internal/identity_manager/account_fetcher_service.h"
+#include "components/signin/internal/identity_manager/account_info_fetcher.h"
 #include "components/signin/public/base/test_signin_client.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "services/network/test/test_network_connection_tracker.h"
 #include "services/network/test/test_url_loader_factory.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include "components/signin/public/identity_manager/identity_test_utils.h"
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "ash/components/account_manager/account_manager_factory.h"
-#include "components/account_manager_core/account_manager_facade_impl.h"
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chromeos/ash/components/account_manager/account_manager_factory.h"
 #include "components/account_manager_core/chromeos/account_manager.h"
 #endif
 
-#if defined(OS_IOS)
+#if BUILDFLAG(IS_IOS)
 #include "components/signin/public/identity_manager/ios/fake_device_accounts_provider.h"
 #endif
 
 namespace signin {
+
+class MockAccountFetcherFactory : public AccountFetcherFactory {
+ public:
+  MockAccountFetcherFactory() = default;
+  ~MockAccountFetcherFactory() override = default;
+
+  MOCK_METHOD(std::unique_ptr<AccountInfoFetcher>,
+              CreateAccountInfoFetcher,
+              (const CoreAccountId&,
+               base::OnceCallback<void(std::optional<AccountInfo>)>),
+              (override));
+
+  MOCK_METHOD(std::unique_ptr<AccountCapabilitiesFetcher>,
+              CreateAccountCapabilitiesFetcher,
+              (const CoreAccountInfo& account_info,
+               AccountCapabilitiesFetcher::FetchPriority fetch_priority,
+               AccountCapabilitiesFetcher::OnSomeCapabilitiesFetchedCallback
+                   on_some_capabilities_fetched_callback,
+               AccountCapabilitiesFetcher::OnAllFetchesCompleteCallback
+                   on_all_fetches_complete_callback),
+              (override));
+};
 
 class IdentityManagerBuilderTest : public testing::Test {
  protected:
@@ -50,11 +75,13 @@ class IdentityManagerBuilderTest : public testing::Test {
     return &pref_service_;
   }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  ash::AccountManagerFactory* GetAccountManagerFactory() {
-    return &account_manager_factory_;
+  metrics::ProfileMetricsService* GetProfileMetricsService() {
+    return &profile_metrics_service_;
   }
-#endif
+
+  network::TestURLLoaderFactory* GetTestURLLoaderFactory() {
+    return &test_url_loader_factory_;
+  }
 
  public:
   IdentityManagerBuilderTest(const IdentityManagerBuilderTest&) = delete;
@@ -66,9 +93,7 @@ class IdentityManagerBuilderTest : public testing::Test {
   sync_preferences::TestingPrefServiceSyncable pref_service_;
   network::TestURLLoaderFactory test_url_loader_factory_;
   TestSigninClient signin_client_;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  ash::AccountManagerFactory account_manager_factory_;
-#endif
+  metrics::ProfileMetricsService profile_metrics_service_;
 };
 
 // Test that IdentityManagerBuilder properly set all required parameters to the
@@ -76,46 +101,40 @@ class IdentityManagerBuilderTest : public testing::Test {
 TEST_F(IdentityManagerBuilderTest, BuildIdentityManagerInitParameters) {
   base::ScopedTempDir temp_dir;
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
-  base::FilePath dest_path = temp_dir.GetPath();
+  base::FilePath profile_path = temp_dir.GetPath();
 
-#if defined(OS_ANDROID)
-  SetUpMockAccountManagerFacade();
+#if BUILDFLAG(IS_ANDROID)
+  SetUpFakeAccountManagerFacade();
 #endif
 
   IdentityManagerBuildParams params;
-  params.account_consistency = AccountConsistencyMethod::kDisabled;
   params.image_decoder = std::make_unique<image_fetcher::FakeImageDecoder>();
   params.local_state = GetPrefService();
   params.network_connection_tracker =
       network::TestNetworkConnectionTracker::GetInstance();
   params.pref_service = GetPrefService();
-  params.profile_path = dest_path;
+  params.profile_path = profile_path;
   params.signin_client = GetSigninClient();
+  params.profile_metrics_service = GetProfileMetricsService();
 
-#if defined(OS_IOS)
+#if BUILDFLAG(IS_IOS)
   params.device_accounts_provider =
       std::make_unique<FakeDeviceAccountsProvider>();
+  params.account_fetcher_factory =
+      std::make_unique<MockAccountFetcherFactory>();
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  auto* account_manager =
-      GetAccountManagerFactory()->GetAccountManager(dest_path.value());
-  account_manager->Initialize(
-      dest_path, GetSigninClient()->GetURLLoaderFactory(),
-      base::BindRepeating(
-          [](base::OnceClosure closure) -> void { std::move(closure).Run(); }));
-  params.account_manager = account_manager;
+#if BUILDFLAG(IS_CHROMEOS)
+  // This enables `AccountManagerFactory::Get()`, which is needed for
+  // `ProfileOAuth2TokenServiceDelegateChromeOS`.
+  ash::AccountManagerFactory account_manager_factory;
 
-  mojo::Remote<crosapi::mojom::AccountManager> remote;
-  GetAccountManagerFactory()
-      ->GetAccountManagerAsh(dest_path.value())
-      ->BindReceiver(remote.BindNewPipeAndPassReceiver());
-  auto account_manager_facade =
-      std::make_unique<account_manager::AccountManagerFacadeImpl>(
-          std::move(remote),
-          /*remote_version=*/std::numeric_limits<uint32_t>::max());
+  account_manager_factory.GetAccountManager(profile_path.value())
+      ->InitializeInEphemeralMode(
+          GetTestURLLoaderFactory()->GetSafeWeakWrapper());
 
-  params.account_manager_facade = account_manager_facade.get();
+  params.account_manager_facade =
+      account_manager_factory.GetAccountManagerFacade(profile_path.value());
   params.is_regular_profile = true;
 #endif
 
@@ -130,15 +149,15 @@ TEST_F(IdentityManagerBuilderTest, BuildIdentityManagerInitParameters) {
   EXPECT_NE(init_params.primary_account_mutator, nullptr);
   EXPECT_NE(init_params.accounts_cookie_mutator, nullptr);
   EXPECT_NE(init_params.diagnostics_provider, nullptr);
-#if defined(OS_IOS) || defined(OS_ANDROID)
+#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_ANDROID)
   EXPECT_NE(init_params.device_accounts_synchronizer, nullptr);
   EXPECT_EQ(init_params.accounts_mutator, nullptr);
 #else
   EXPECT_EQ(init_params.device_accounts_synchronizer, nullptr);
   EXPECT_NE(init_params.accounts_mutator, nullptr);
 #endif
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  EXPECT_NE(init_params.ash_account_manager, nullptr);
+#if BUILDFLAG(IS_CHROMEOS)
+  EXPECT_NE(init_params.account_manager_facade, nullptr);
 #endif
 }
 

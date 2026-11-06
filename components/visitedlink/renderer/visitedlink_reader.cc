@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright 2006-2008 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "base/bind.h"
 #include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/metrics/histogram_functions.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/web/web_view.h"
 
 using blink::WebView;
@@ -21,11 +23,38 @@ VisitedLinkReader::~VisitedLinkReader() {
   FreeTable();
 }
 
+bool VisitedLinkReader::UsePartitionedDatabase() const {
+  return base::FeatureList::IsEnabled(
+             blink::features::kPartitionVisitedLinkDatabaseWithSelfLinks) ||
+         is_pseudo_partitioned_;
+}
+
 base::RepeatingCallback<
     void(mojo::PendingReceiver<mojom::VisitedLinkNotificationSink>)>
 VisitedLinkReader::GetBindCallback() {
   return base::BindRepeating(&VisitedLinkReader::Bind,
                              weak_factory_.GetWeakPtr());
+}
+
+uint64_t VisitedLinkReader::ComputePartitionedFingerprint(
+    std::string_view canonical_link_url,
+    const net::SchemefulSite& top_level_site,
+    const url::Origin& frame_origin) {
+  // Ensure that we can determine a valid triple-partition key for this link. If
+  // invalid, we return the null fingerprint.
+  if (canonical_link_url.empty() || top_level_site.opaque() ||
+      frame_origin.opaque()) {
+    return 0;
+  }
+  // Determine the per-origin salt used for this fingerprint.
+  auto it = salts_.find(frame_origin);
+  if (it != salts_.end()) {
+    return VisitedLinkCommon::ComputePartitionedFingerprint(
+        canonical_link_url, top_level_site, frame_origin, it->second);
+  }
+  // If we cannot determine the per-origin salt, we cannot read the hashtable,
+  // so we must return the null fingerprint.
+  return 0;
 }
 
 // Initializes the table with the given shared memory handle. This memory is
@@ -35,8 +64,15 @@ void VisitedLinkReader::UpdateVisitedLinks(
   // Since this function may be called again to change the table, we may need
   // to free old objects.
   FreeTable();
-  DCHECK(hash_table_ == nullptr);
+  DCHECK(hash_table_.empty());
+  if (UsePartitionedDatabase()) {
+    return UpdatePartitionedVisitedLinks(std::move(table_region));
+  }
+  return UpdateUnpartitionedVisitedLinks(std::move(table_region));
+}
 
+void VisitedLinkReader::UpdateUnpartitionedVisitedLinks(
+    base::ReadOnlySharedMemoryRegion table_region) {
   int32_t table_len = 0;
   {
     // Map the header into our process so we can see how long the rest is,
@@ -49,7 +85,7 @@ void VisitedLinkReader::UpdateVisitedLinks(
     const SharedHeader* header =
         static_cast<const SharedHeader*>(header_mapping.memory());
     table_len = header->length;
-    memcpy(salt_, header->salt, sizeof(salt_));
+    salt_ = header->salt;
   }
 
   // Now we know the length, so map the table contents.
@@ -58,9 +94,47 @@ void VisitedLinkReader::UpdateVisitedLinks(
     return;
 
   // Commit the data.
-  hash_table_ = const_cast<Fingerprint*>(reinterpret_cast<const Fingerprint*>(
-      static_cast<const SharedHeader*>(table_mapping_.memory()) + 1));
-  table_length_ = table_len;
+  static_assert(sizeof(SharedHeader) % sizeof(Fingerprint) == 0,
+                "Header size must be a multiple of Fingerprint size");
+  hash_table_ = table_mapping_.GetMemoryAsSpan<Fingerprint>()
+                    .subspan<sizeof(SharedHeader) / sizeof(Fingerprint)>()
+                    .first(static_cast<size_t>(table_len));
+  base::UmaHistogramCounts10M(
+      "History.VisitedLinks.HashTableLengthOnReaderInit", table_length());
+}
+
+void VisitedLinkReader::UpdatePartitionedVisitedLinks(
+    base::ReadOnlySharedMemoryRegion table_region) {
+  int32_t table_len = 0;
+  {
+    // Map the header into our process so we can see how long the rest is,
+    // and set the salt.
+    base::ReadOnlySharedMemoryMapping header_mapping =
+        table_region.MapAt(0, sizeof(PartitionedSharedHeader));
+    if (!header_mapping.IsValid()) {
+      return;
+    }
+
+    const PartitionedSharedHeader* header =
+        static_cast<const PartitionedSharedHeader*>(header_mapping.memory());
+    table_len = header->length;
+  }
+
+  // Now we know the length, so map the table contents.
+  table_mapping_ = table_region.Map();
+  if (!table_mapping_.IsValid()) {
+    return;
+  }
+
+  // Commit the data.
+  static_assert(sizeof(PartitionedSharedHeader) % sizeof(Fingerprint) == 0,
+                "Header size must be a multiple of Fingerprint size");
+  hash_table_ =
+      table_mapping_.GetMemoryAsSpan<Fingerprint>()
+          .subspan<sizeof(PartitionedSharedHeader) / sizeof(Fingerprint)>()
+          .first(static_cast<size_t>(table_len));
+  base::UmaHistogramCounts10M(
+      "History.VisitedLinks.HashTableLengthOnReaderInit", table_length());
 }
 
 void VisitedLinkReader::AddVisitedLinks(
@@ -73,13 +147,18 @@ void VisitedLinkReader::ResetVisitedLinks(bool invalidate_hashes) {
   WebView::ResetVisitedLinkState(invalidate_hashes);
 }
 
-void VisitedLinkReader::FreeTable() {
-  if (!hash_table_)
-    return;
+void VisitedLinkReader::UpdateOriginSalts(
+    const base::flat_map<url::Origin, uint64_t>& origin_salts) {
+  for (const auto& [origin, salt] : origin_salts) {
+    base::UmaHistogramBoolean(
+        "Blink.History.VisitedLinks.IsSaltFromNavigationThrottle", false);
+    AddOrUpdateSalt(origin, salt);
+  }
+}
 
+void VisitedLinkReader::FreeTable() {
   table_mapping_ = base::ReadOnlySharedMemoryMapping();
-  hash_table_ = nullptr;
-  table_length_ = 0;
+  hash_table_ = {};
 }
 
 void VisitedLinkReader::Bind(

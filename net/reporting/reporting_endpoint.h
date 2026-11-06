@@ -1,17 +1,19 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_REPORTING_REPORTING_ENDPOINT_H_
 #define NET_REPORTING_REPORTING_ENDPOINT_H_
 
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
 #include "base/time/time.h"
+#include "base/unguessable_token.h"
 #include "net/base/net_export.h"
-#include "net/base/network_isolation_key.h"
+#include "net/base/network_anonymization_key.h"
+#include "net/reporting/reporting_target_type.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -19,11 +21,29 @@ namespace net {
 
 // Identifies an endpoint group.
 struct NET_EXPORT ReportingEndpointGroupKey {
+  // Constructs a default ReportingEndpointGroupKey.
   ReportingEndpointGroupKey();
 
-  ReportingEndpointGroupKey(const NetworkIsolationKey& network_isolation_key,
-                            const url::Origin& origin,
-                            const std::string& group_name);
+  // Constructs a ReportingEndpointGroupKey with a null `reporting_source`.
+  ReportingEndpointGroupKey(
+      const NetworkAnonymizationKey& network_anonymization_key,
+      const std::optional<url::Origin>& origin,
+      const std::string& group_name,
+      ReportingTargetType target_type);
+
+  // Constructs a ReportingEndpointGroupKey with the given parameters.
+  ReportingEndpointGroupKey(
+      const NetworkAnonymizationKey& network_anonymization_key,
+      std::optional<base::UnguessableToken> reporting_source,
+      const std::optional<url::Origin>& origin,
+      const std::string& group_name,
+      ReportingTargetType target_type);
+
+  // Constructs a ReportingEndpointGroupKey with the given `reporting_source`
+  // and all other members from `other`.
+  ReportingEndpointGroupKey(
+      const ReportingEndpointGroupKey& other,
+      const std::optional<base::UnguessableToken>& reporting_source);
 
   ReportingEndpointGroupKey(const ReportingEndpointGroupKey& other);
   ReportingEndpointGroupKey(ReportingEndpointGroupKey&& other);
@@ -35,28 +55,52 @@ struct NET_EXPORT ReportingEndpointGroupKey {
 
   std::string ToString() const;
 
-  // The NetworkIsolationKey the group is scoped to. Needed to prevent leaking
-  // third party contexts across sites.
-  NetworkIsolationKey network_isolation_key;
+  // True if this endpoint "group" is actually being used to represent a single
+  // V1 document endpoint.
+  bool IsDocumentEndpoint() const { return reporting_source.has_value(); }
 
-  // Origin that configured this endpoint group.
-  url::Origin origin;
+  // True if this endpoint "group" is set by the enterprise policy.
+  bool IsEnterpriseEndpoint() const {
+    return target_type == ReportingTargetType::kEnterprise;
+  }
+
+  // Source token for the document or worker which configured this endpoint, if
+  // this was configured with the Reporting-Endpoints header. For endpoint
+  // groups configured with the Report-To header and enterprise endpoint groups,
+  // this will be nullopt.
+  std::optional<base::UnguessableToken> reporting_source;
+
+  // The NetworkAnonymizationKey the group is scoped to. Needed to prevent
+  // leaking third party contexts across sites. This is empty for enterprise
+  // groups.
+  NetworkAnonymizationKey network_anonymization_key;
+
+  // Origin that configured this endpoint group. For enterprise endpoint groups,
+  // this will be nullopt.
+  std::optional<url::Origin> origin;
 
   // Name of the endpoint group (defaults to "default" during header parsing).
   std::string group_name;
+
+  // Used to distinguish web developer and enterprise entities so that
+  // enterprise reports aren’t sent to web developer endpoints and web developer
+  // reports aren’t sent to enterprise endpoints.
+  ReportingTargetType target_type = ReportingTargetType::kDeveloper;
+
+  friend bool operator==(const ReportingEndpointGroupKey&,
+                         const ReportingEndpointGroupKey&) = default;
+
+  friend auto operator<=>(const ReportingEndpointGroupKey&,
+                          const ReportingEndpointGroupKey&) = default;
 };
 
-NET_EXPORT bool operator==(const ReportingEndpointGroupKey& lhs,
-                           const ReportingEndpointGroupKey& rhs);
-NET_EXPORT bool operator!=(const ReportingEndpointGroupKey& lhs,
-                           const ReportingEndpointGroupKey& rhs);
 NET_EXPORT bool operator<(const ReportingEndpointGroupKey& lhs,
                           const ReportingEndpointGroupKey& rhs);
 NET_EXPORT bool operator>(const ReportingEndpointGroupKey& lhs,
                           const ReportingEndpointGroupKey& rhs);
 
 // The configuration by an origin to use an endpoint for report delivery.
-// TODO(crbug.com/912622): Track endpoint failures for garbage collection.
+// TODO(crbug.com/41430426): Track endpoint failures for garbage collection.
 struct NET_EXPORT ReportingEndpoint {
   struct NET_EXPORT EndpointInfo {
     static const int kDefaultPriority;
@@ -74,6 +118,9 @@ struct NET_EXPORT ReportingEndpoint {
     // priority; among those with the same priority, each endpoint has a chance
     // of being chosen that is proportional to its weight.
     int weight = kDefaultWeight;
+
+    friend bool operator==(const EndpointInfo& lhs,
+                           const EndpointInfo& rhs) = default;
   };
 
   struct Statistics {
@@ -88,6 +135,9 @@ struct NET_EXPORT ReportingEndpoint {
     // The number of individual reports that we've successfully uploaded for
     // this endpoint.
     int successful_reports = 0;
+
+    friend bool operator==(const Statistics& lhs,
+                           const Statistics& rhs) = default;
   };
 
   // Constructs an invalid ReportingEndpoint.
@@ -101,6 +151,9 @@ struct NET_EXPORT ReportingEndpoint {
 
   ReportingEndpoint& operator=(const ReportingEndpoint&);
   ReportingEndpoint& operator=(ReportingEndpoint&&);
+
+  friend bool operator==(const ReportingEndpoint& lhs,
+                         const ReportingEndpoint& rhs) = default;
 
   ~ReportingEndpoint();
 

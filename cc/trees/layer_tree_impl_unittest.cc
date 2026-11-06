@@ -1,20 +1,36 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "cc/trees/layer_tree_impl.h"
 
-#include "base/numerics/ranges.h"
+#include <algorithm>
+#include <cinttypes>
+#include <optional>
+
+#include "base/memory/raw_ptr.h"
+#include "base/strings/stringprintf.h"
+#include "base/test/scoped_feature_list.h"
+#include "base/time/time.h"
+#include "base/trace_event/traced_value.h"
+#include "base/values.h"
+#include "cc/base/features.h"
+#include "cc/input/scroll_snap_data.h"
+#include "cc/layers/append_quads_context.h"
+#include "cc/layers/append_quads_data.h"
 #include "cc/layers/heads_up_display_layer_impl.h"
+#include "cc/layers/picture_layer_impl.h"
 #include "cc/test/fake_layer_tree_host_impl.h"
 #include "cc/test/fake_raster_source.h"
-#include "cc/test/geometry_test_utils.h"
 #include "cc/test/layer_tree_impl_test_base.h"
 #include "cc/trees/clip_node.h"
+#include "cc/trees/debug_rect_history.h"
 #include "cc/trees/draw_property_utils.h"
 #include "cc/trees/layer_tree_host_impl.h"
+#include "cc/trees/scroll_node.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/gfx/geometry/test/geometry_util.h"
 
 namespace cc {
 namespace {
@@ -23,11 +39,24 @@ std::pair<gfx::PointF, gfx::PointF> GetVisibleSelectionEndPoints(
     const gfx::RectF& rect,
     const gfx::PointF& top,
     const gfx::PointF& bottom) {
-  gfx::PointF start(base::ClampToRange(top.x(), rect.x(), rect.right()),
-                    base::ClampToRange(top.y(), rect.y(), rect.bottom()));
-  gfx::PointF end =
-      start + gfx::Vector2dF(bottom.x() - top.x(), bottom.y() - top.y());
+  gfx::PointF start(std::clamp(top.x(), rect.x(), rect.right()),
+                    std::clamp(top.y(), rect.y(), rect.bottom()));
+  gfx::PointF end = start + (bottom - top);
   return {start, end};
+}
+
+// Returns the snap targets of the snap container with `scroll_element_id` in
+// `tree`, or nullopt if `tree` doesn't have it.
+std::optional<TargetSnapAreaElementIds> GetTargetSnapAreaElementIds(
+    const LayerTreeImpl* tree,
+    ElementId scroll_element_id) {
+  const ScrollNode* scroll_node =
+      tree->property_trees()->scroll_tree().FindNodeFromElementId(
+          scroll_element_id);
+  if (!scroll_node || !scroll_node->snap_container_data.has_value()) {
+    return std::nullopt;
+  }
+  return scroll_node->snap_container_data->GetTargetSnapAreaElementIds();
 }
 
 class LayerTreeImplTest : public LayerTreeImplTestBase, public testing::Test {
@@ -55,9 +84,9 @@ class LayerTreeImplTest : public LayerTreeImplTestBase, public testing::Test {
                                float top_depth,
                                float left_child_depth,
                                float right_child_depth) {
-    top_ = AddLayer<LayerImpl>();
-    left_child_ = AddLayer<LayerImpl>();
-    right_child_ = AddLayer<LayerImpl>();
+    top_ = AddLayerInActiveTree<LayerImpl>();
+    left_child_ = AddLayerInActiveTree<LayerImpl>();
+    right_child_ = AddLayerInActiveTree<LayerImpl>();
 
     gfx::Size bounds(100, 100);
     {
@@ -65,7 +94,7 @@ class LayerTreeImplTest : public LayerTreeImplTestBase, public testing::Test {
       translate_z.Translate3d(0, 0, top_depth);
       top_->SetBounds(bounds);
       top_->SetDrawsContent(true);
-      top_->SetHitTestable(true);
+      top_->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
 
       CopyProperties(root_layer(), top_);
       auto& transform_node = CreateTransformNode(top_);
@@ -77,7 +106,7 @@ class LayerTreeImplTest : public LayerTreeImplTestBase, public testing::Test {
       translate_z.Translate3d(0, 0, left_child_depth);
       left_child_->SetBounds(bounds);
       left_child_->SetDrawsContent(true);
-      left_child_->SetHitTestable(true);
+      left_child_->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
 
       CopyProperties(top_, left_child_);
       auto& transform_node = CreateTransformNode(left_child_);
@@ -90,7 +119,7 @@ class LayerTreeImplTest : public LayerTreeImplTestBase, public testing::Test {
       translate_z.Translate3d(0, 0, right_child_depth);
       right_child_->SetBounds(bounds);
       right_child_->SetDrawsContent(true);
-      right_child_->SetHitTestable(true);
+      right_child_->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
 
       CopyProperties(top_, right_child_);
       auto& transform_node = CreateTransformNode(right_child_);
@@ -113,9 +142,9 @@ class LayerTreeImplTest : public LayerTreeImplTestBase, public testing::Test {
   }
 
   // These layers are created by HitTestSimpleTree().
-  LayerImpl* top_ = nullptr;
-  LayerImpl* left_child_ = nullptr;
-  LayerImpl* right_child_ = nullptr;
+  raw_ptr<LayerImpl> top_ = nullptr;
+  raw_ptr<LayerImpl> left_child_ = nullptr;
+  raw_ptr<LayerImpl> right_child_ = nullptr;
 };
 
 TEST_F(LayerTreeImplTest, HitTestingForSingleLayer) {
@@ -123,7 +152,7 @@ TEST_F(LayerTreeImplTest, HitTestingForSingleLayer) {
   LayerImpl* root = root_layer();
   root->SetBounds(bounds);
   root->SetDrawsContent(true);
-  root->SetHitTestable(true);
+  root->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
 
   host_impl().active_tree()->SetDeviceViewportRect(gfx::Rect(root->bounds()));
   UpdateDrawProperties(host_impl().active_tree());
@@ -163,13 +192,13 @@ TEST_F(LayerTreeImplTest, UpdateViewportAndHitTest) {
   LayerImpl* root = root_layer();
   root->SetBounds(bounds);
   root->SetDrawsContent(true);
-  root->SetHitTestable(true);
+  root->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
 
   host_impl().active_tree()->SetDeviceViewportRect(gfx::Rect(root->bounds()));
   UpdateDrawProperties(host_impl().active_tree());
   EXPECT_EQ(
       gfx::RectF(gfx::SizeF(bounds)),
-      host_impl().active_tree()->property_trees()->clip_tree.ViewportClip());
+      host_impl().active_tree()->property_trees()->clip_tree().ViewportClip());
   EXPECT_EQ(gfx::Rect(bounds), root->visible_layer_rect());
 
   gfx::Size new_bounds(50, 50);
@@ -178,7 +207,7 @@ TEST_F(LayerTreeImplTest, UpdateViewportAndHitTest) {
   host_impl().active_tree()->FindLayerThatIsHitByPoint(test_point);
   EXPECT_EQ(
       gfx::RectF(gfx::SizeF(new_bounds)),
-      host_impl().active_tree()->property_trees()->clip_tree.ViewportClip());
+      host_impl().active_tree()->property_trees()->clip_tree().ViewportClip());
   EXPECT_EQ(gfx::Rect(new_bounds), root->visible_layer_rect());
 }
 
@@ -186,13 +215,13 @@ TEST_F(LayerTreeImplTest, HitTestingForSingleLayerAndHud) {
   LayerImpl* root = root_layer();
   root->SetBounds(gfx::Size(100, 100));
   root->SetDrawsContent(true);
-  root->SetHitTestable(true);
+  root->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
 
   // Create hud and add it as a child of root.
-  auto* hud = AddLayer<HeadsUpDisplayLayerImpl>();
+  auto* hud = AddLayerInActiveTree<HeadsUpDisplayLayerImpl>(std::string());
   hud->SetBounds(gfx::Size(200, 200));
   hud->SetDrawsContent(true);
-  hud->SetHitTestable(true);
+  hud->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
 
   host_impl().active_tree()->SetDeviceViewportRect(gfx::Rect(hud->bounds()));
   host_impl().active_tree()->set_hud_layer(hud);
@@ -231,18 +260,18 @@ TEST_F(LayerTreeImplTest, HitTestingForSingleLayerAndHud) {
 
 TEST_F(LayerTreeImplTest, HitTestingForUninvertibleTransform) {
   gfx::Transform uninvertible_transform;
-  uninvertible_transform.matrix().set(0, 0, 0.0);
-  uninvertible_transform.matrix().set(1, 1, 0.0);
-  uninvertible_transform.matrix().set(2, 2, 0.0);
-  uninvertible_transform.matrix().set(3, 3, 0.0);
+  uninvertible_transform.set_rc(0, 0, 0.0);
+  uninvertible_transform.set_rc(1, 1, 0.0);
+  uninvertible_transform.set_rc(2, 2, 0.0);
+  uninvertible_transform.set_rc(3, 3, 0.0);
   ASSERT_FALSE(uninvertible_transform.IsInvertible());
 
   LayerImpl* root = root_layer();
 
-  LayerImpl* layer = AddLayer<LayerImpl>();
+  LayerImpl* layer = AddLayerInActiveTree<LayerImpl>();
   layer->SetBounds(gfx::Size(100, 100));
   layer->SetDrawsContent(true);
-  layer->SetHitTestable(true);
+  layer->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
   root->SetBounds(layer->bounds());
   CopyProperties(root, layer);
   CreateTransformNode(layer).local = uninvertible_transform;
@@ -295,10 +324,10 @@ TEST_F(LayerTreeImplTest, HitTestingForUninvertibleTransform) {
 TEST_F(LayerTreeImplTest, HitTestingForSinglePositionedLayer) {
   // This layer is positioned, and hit testing should correctly know where the
   // layer is located.
-  LayerImpl* test_layer = AddLayer<LayerImpl>();
+  LayerImpl* test_layer = AddLayerInActiveTree<LayerImpl>();
   test_layer->SetBounds(gfx::Size(100, 100));
   test_layer->SetDrawsContent(true);
-  test_layer->SetHitTestable(true);
+  test_layer->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
   CopyProperties(root_layer(), test_layer);
   test_layer->SetOffsetToTransformParent(gfx::Vector2dF(50.f, 50.f));
 
@@ -345,10 +374,10 @@ TEST_F(LayerTreeImplTest, HitTestingForSingleRotatedLayer) {
   rotation45_degrees_about_center.RotateAboutZAxis(45.0);
   rotation45_degrees_about_center.Translate(-50.0, -50.0);
 
-  LayerImpl* layer = AddLayer<LayerImpl>();
+  LayerImpl* layer = AddLayerInActiveTree<LayerImpl>();
   layer->SetBounds(gfx::Size(100, 100));
   layer->SetDrawsContent(true);
-  layer->SetHitTestable(true);
+  layer->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
   root->SetBounds(layer->bounds());
   CopyProperties(root, layer);
   CreateTransformNode(layer).local = rotation45_degrees_about_center;
@@ -401,7 +430,7 @@ TEST_F(LayerTreeImplTest, HitTestingClipNodeDifferentTransformAndTargetIds) {
 
   gfx::Transform translation;
   translation.Translate(100, 100);
-  LayerImpl* render_surface = AddLayer<LayerImpl>();
+  LayerImpl* render_surface = AddLayerInActiveTree<LayerImpl>();
   render_surface->SetBounds(gfx::Size(100, 100));
   CopyProperties(root, render_surface);
   CreateTransformNode(render_surface).local = translation;
@@ -410,20 +439,20 @@ TEST_F(LayerTreeImplTest, HitTestingClipNodeDifferentTransformAndTargetIds) {
 
   gfx::Transform scale_matrix;
   scale_matrix.Scale(2, 2);
-  LayerImpl* scale = AddLayer<LayerImpl>();
+  LayerImpl* scale = AddLayerInActiveTree<LayerImpl>();
   scale->SetBounds(gfx::Size(50, 50));
   CopyProperties(render_surface, scale);
   CreateTransformNode(scale).local = scale_matrix;
 
-  LayerImpl* clip = AddLayer<LayerImpl>();
+  LayerImpl* clip = AddLayerInActiveTree<LayerImpl>();
   clip->SetBounds(gfx::Size(25, 25));
   CopyProperties(scale, clip);
   CreateClipNode(clip);
 
-  LayerImpl* test = AddLayer<LayerImpl>();
+  LayerImpl* test = AddLayerInActiveTree<LayerImpl>();
   test->SetBounds(gfx::Size(100, 100));
   test->SetDrawsContent(true);
-  test->SetHitTestable(true);
+  test->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
   CopyProperties(clip, test);
 
   host_impl().active_tree()->SetDeviceViewportRect(gfx::Rect(root->bounds()));
@@ -446,17 +475,17 @@ TEST_F(LayerTreeImplTest, HitTestingSiblings) {
   LayerImpl* root = root_layer();
   root->SetBounds(gfx::Size(100, 100));
 
-  LayerImpl* child1 = AddLayer<LayerImpl>();
+  LayerImpl* child1 = AddLayerInActiveTree<LayerImpl>();
   child1->SetBounds(gfx::Size(25, 25));
   child1->SetDrawsContent(true);
-  child1->SetHitTestable(true);
+  child1->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
   CopyProperties(root, child1);
   CreateClipNode(child1);
 
-  LayerImpl* child2 = AddLayer<LayerImpl>();
+  LayerImpl* child2 = AddLayerInActiveTree<LayerImpl>();
   child2->SetBounds(gfx::Size(75, 75));
   child2->SetDrawsContent(true);
-  child2->SetHitTestable(true);
+  child2->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
   CopyProperties(root, child2);
   CreateClipNode(child2);
 
@@ -483,10 +512,10 @@ TEST_F(LayerTreeImplTest, HitTestingForSinglePerspectiveLayer) {
   gfx::Transform translation_by_z;
   translation_by_z.Translate3d(0.0, 0.0, -1.0);
 
-  LayerImpl* layer = AddLayer<LayerImpl>();
+  LayerImpl* layer = AddLayerInActiveTree<LayerImpl>();
   layer->SetBounds(gfx::Size(100, 100));
   layer->SetDrawsContent(true);
-  layer->SetHitTestable(true);
+  layer->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
   root->SetBounds(layer->bounds());
   CopyProperties(root, layer);
   CreateTransformNode(layer).local =
@@ -531,7 +560,7 @@ TEST_F(LayerTreeImplTest, HitTestingForSimpleClippedLayer) {
   LayerImpl* root = root_layer();
   root->SetBounds(gfx::Size(100, 100));
 
-  LayerImpl* clipping_layer = AddLayer<LayerImpl>();
+  LayerImpl* clipping_layer = AddLayerInActiveTree<LayerImpl>();
   // this layer is positioned, and hit testing should correctly know where the
   // layer is located.
   clipping_layer->SetBounds(gfx::Size(50, 50));
@@ -539,10 +568,10 @@ TEST_F(LayerTreeImplTest, HitTestingForSimpleClippedLayer) {
   clipping_layer->SetOffsetToTransformParent(gfx::Vector2dF(25.f, 25.f));
   CreateClipNode(clipping_layer);
 
-  LayerImpl* child = AddLayer<LayerImpl>();
+  LayerImpl* child = AddLayerInActiveTree<LayerImpl>();
   child->SetBounds(gfx::Size(300, 300));
   child->SetDrawsContent(true);
-  child->SetHitTestable(true);
+  child->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
   CopyProperties(clipping_layer, child);
   child->SetOffsetToTransformParent(gfx::Vector2dF(-50.f, -50.f));
 
@@ -600,9 +629,9 @@ TEST_F(LayerTreeImplTest, HitTestingForMultiClippedRotatedLayer) {
   // Visible rects computed by combinig clips in target space and root space
   // don't match because of rotation transforms. So, we skip
   // verify_visible_rect_calculations.
-  LayerImpl* child = AddLayer<LayerImpl>();
-  LayerImpl* grand_child = AddLayer<LayerImpl>();
-  LayerImpl* rotated_leaf = AddLayer<LayerImpl>();
+  LayerImpl* child = AddLayerInActiveTree<LayerImpl>();
+  LayerImpl* grand_child = AddLayerInActiveTree<LayerImpl>();
+  LayerImpl* rotated_leaf = AddLayerInActiveTree<LayerImpl>();
 
   child->SetBounds(gfx::Size(80, 80));
   CopyProperties(root, child);
@@ -631,7 +660,7 @@ TEST_F(LayerTreeImplTest, HitTestingForMultiClippedRotatedLayer) {
   rotated_leaf_transform.Translate(-50.0, -50.0);
   rotated_leaf->SetBounds(gfx::Size(100, 100));
   rotated_leaf->SetDrawsContent(true);
-  rotated_leaf->SetHitTestable(true);
+  rotated_leaf->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
   CopyProperties(grand_child, rotated_leaf);
   CreateTransformNode(rotated_leaf).local = rotated_leaf_transform;
 
@@ -688,7 +717,7 @@ TEST_F(LayerTreeImplTest, HitTestingForNonClippingIntermediateLayer) {
   LayerImpl* root = root_layer();
   root->SetBounds(gfx::Size(100, 100));
 
-  LayerImpl* intermediate_layer = AddLayer<LayerImpl>();
+  LayerImpl* intermediate_layer = AddLayerInActiveTree<LayerImpl>();
   intermediate_layer->SetBounds(gfx::Size(50, 50));
   CopyProperties(root, intermediate_layer);
   // this layer is positioned, and hit testing should correctly know where the
@@ -698,10 +727,10 @@ TEST_F(LayerTreeImplTest, HitTestingForNonClippingIntermediateLayer) {
   // The child of the intermediate_layer is translated so that it does not
   // overlap intermediate_layer at all.  If child is incorrectly clipped, we
   // would not be able to hit it successfully.
-  LayerImpl* child = AddLayer<LayerImpl>();
+  LayerImpl* child = AddLayerInActiveTree<LayerImpl>();
   child->SetBounds(gfx::Size(20, 20));
   child->SetDrawsContent(true);
-  child->SetHitTestable(true);
+  child->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
   CopyProperties(intermediate_layer, child);
   child->SetOffsetToTransformParent(gfx::Vector2dF(70.f, 70.f));
 
@@ -740,7 +769,7 @@ TEST_F(LayerTreeImplTest, HitTestingForMultipleLayers) {
   LayerImpl* root = root_layer();
   root->SetBounds(gfx::Size(100, 100));
   root->SetDrawsContent(true);
-  root->SetHitTestable(true);
+  root->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
 
   // child1 and child2 are initialized to overlap between x=50 and x=60.
   // grand_child is set to overlap both child1 and child2 between y=50 and
@@ -748,28 +777,28 @@ TEST_F(LayerTreeImplTest, HitTestingForMultipleLayers) {
   // grand_child, (third) child1, and (back) the root layer behind all other
   // layers.
 
-  LayerImpl* child1 = AddLayer<LayerImpl>();
+  LayerImpl* child1 = AddLayerInActiveTree<LayerImpl>();
   child1->SetBounds(gfx::Size(50, 50));
   child1->SetDrawsContent(true);
-  child1->SetHitTestable(true);
+  child1->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
   CopyProperties(root, child1);
   child1->SetOffsetToTransformParent(gfx::Vector2dF(10.f, 10.f));
 
   // Remember that grand_child is positioned with respect to its parent (i.e.
   // child1).  In screen space, the intended position is (10, 50), with size
   // 100 x 50.
-  LayerImpl* grand_child1 = AddLayer<LayerImpl>();
+  LayerImpl* grand_child1 = AddLayerInActiveTree<LayerImpl>();
   grand_child1->SetBounds(gfx::Size(100, 50));
   grand_child1->SetDrawsContent(true);
-  grand_child1->SetHitTestable(true);
+  grand_child1->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
   CopyProperties(child1, grand_child1);
   grand_child1->SetOffsetToTransformParent(
       gfx::Vector2dF(0.f, 40.f) + child1->offset_to_transform_parent());
 
-  LayerImpl* child2 = AddLayer<LayerImpl>();
+  LayerImpl* child2 = AddLayerInActiveTree<LayerImpl>();
   child2->SetBounds(gfx::Size(50, 50));
   child2->SetDrawsContent(true);
-  child2->SetHitTestable(true);
+  child2->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
   CopyProperties(root, child2);
   child2->SetOffsetToTransformParent(gfx::Vector2dF(50.f, 10.f));
 
@@ -866,7 +895,7 @@ TEST_F(LayerTreeImplTest, HitTestingForMultipleLayersAtVaryingDepths) {
   LayerImpl* root = root_layer();
   root->SetBounds(gfx::Size(100, 100));
   root->SetDrawsContent(true);
-  root->SetHitTestable(true);
+  root->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
   GetTransformNode(root)->flattens_inherited_transform = false;
   GetTransformNode(root)->sorting_context_id = 1;
 
@@ -876,10 +905,10 @@ TEST_F(LayerTreeImplTest, HitTestingForMultipleLayersAtVaryingDepths) {
   // grand_child, (third) child1, and (back) the root layer behind all other
   // layers.
 
-  LayerImpl* child1 = AddLayer<LayerImpl>();
+  LayerImpl* child1 = AddLayerInActiveTree<LayerImpl>();
   child1->SetBounds(gfx::Size(50, 50));
   child1->SetDrawsContent(true);
-  child1->SetHitTestable(true);
+  child1->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
   CopyProperties(root, child1);
   auto& child1_transform_node = CreateTransformNode(child1);
   child1_transform_node.post_translation = gfx::Vector2dF(10.f, 10.f);
@@ -889,21 +918,21 @@ TEST_F(LayerTreeImplTest, HitTestingForMultipleLayersAtVaryingDepths) {
   // Remember that grand_child is positioned with respect to its parent (i.e.
   // child1).  In screen space, the intended position is (10, 50), with size
   // 100 x 50.
-  LayerImpl* grand_child1 = AddLayer<LayerImpl>();
+  LayerImpl* grand_child1 = AddLayerInActiveTree<LayerImpl>();
   grand_child1->SetBounds(gfx::Size(100, 50));
   grand_child1->SetDrawsContent(true);
-  grand_child1->SetHitTestable(true);
+  grand_child1->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
   CopyProperties(child1, grand_child1);
   auto& grand_child1_transform_node = CreateTransformNode(grand_child1);
   grand_child1_transform_node.post_translation = gfx::Vector2dF(0.f, 40.f);
   grand_child1_transform_node.flattens_inherited_transform = false;
 
-  LayerImpl* child2 = AddLayer<LayerImpl>();
+  LayerImpl* child2 = AddLayerInActiveTree<LayerImpl>();
   child2->SetBounds(gfx::Size(50, 50));
   gfx::Transform translate_z;
   translate_z.Translate3d(0, 0, 10.f);
   child2->SetDrawsContent(true);
-  child2->SetHitTestable(true);
+  child2->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
   CopyProperties(root, child2);
   auto& child2_transform_node = CreateTransformNode(child2);
   child2_transform_node.local = translate_z;
@@ -967,27 +996,27 @@ TEST_F(LayerTreeImplTest, HitTestingRespectsClipParents) {
   LayerImpl* root = root_layer();
   root->SetBounds(gfx::Size(100, 100));
   root->SetDrawsContent(true);
-  root->SetHitTestable(true);
+  root->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
 
-  LayerImpl* child = AddLayer<LayerImpl>();
+  LayerImpl* child = AddLayerInActiveTree<LayerImpl>();
   child->SetBounds(gfx::Size(1, 1));
   child->SetDrawsContent(true);
-  child->SetHitTestable(true);
+  child->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
   CopyProperties(root, child);
   child->SetOffsetToTransformParent(gfx::Vector2dF(10.f, 10.f));
   CreateClipNode(child);
 
-  LayerImpl* scroll_child = AddLayer<LayerImpl>();
+  LayerImpl* scroll_child = AddLayerInActiveTree<LayerImpl>();
   scroll_child->SetBounds(gfx::Size(200, 200));
   scroll_child->SetDrawsContent(true);
-  scroll_child->SetHitTestable(true);
+  scroll_child->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
   CopyProperties(root, scroll_child);
   scroll_child->SetClipTreeIndex(child->clip_tree_index());
 
-  LayerImpl* grand_child = AddLayer<LayerImpl>();
+  LayerImpl* grand_child = AddLayerInActiveTree<LayerImpl>();
   grand_child->SetBounds(gfx::Size(200, 200));
   grand_child->SetDrawsContent(true);
-  grand_child->SetHitTestable(true);
+  grand_child->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
   CopyProperties(scroll_child, grand_child);
   CreateEffectNode(grand_child).render_surface_reason =
       RenderSurfaceReason::kTest;
@@ -1011,7 +1040,7 @@ TEST_F(LayerTreeImplTest, HitTestingForMultipleLayerLists) {
   LayerImpl* root = root_layer();
   root->SetBounds(gfx::Size(100, 100));
   root->SetDrawsContent(true);
-  root->SetHitTestable(true);
+  root->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
 
   // child 1 and child2 are initialized to overlap between x=50 and x=60.
   // grand_child is set to overlap both child1 and child2 between y=50 and
@@ -1019,10 +1048,10 @@ TEST_F(LayerTreeImplTest, HitTestingForMultipleLayerLists) {
   // grand_child, (third) child1, and (back) the root layer behind all other
   // layers.
 
-  LayerImpl* child1 = AddLayer<LayerImpl>();
+  LayerImpl* child1 = AddLayerInActiveTree<LayerImpl>();
   child1->SetBounds(gfx::Size(50, 50));
   child1->SetDrawsContent(true);
-  child1->SetHitTestable(true);
+  child1->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
   CopyProperties(root, child1);
   CreateTransformNode(child1).post_translation = gfx::Vector2dF(10.f, 10.f);
   CreateEffectNode(child1).render_surface_reason = RenderSurfaceReason::kTest;
@@ -1030,20 +1059,20 @@ TEST_F(LayerTreeImplTest, HitTestingForMultipleLayerLists) {
   // Remember that grand_child is positioned with respect to its parent (i.e.
   // child1).  In screen space, the intended position is (10, 50), with size
   // 100 x 50.
-  LayerImpl* grand_child1 = AddLayer<LayerImpl>();
+  LayerImpl* grand_child1 = AddLayerInActiveTree<LayerImpl>();
   grand_child1->SetBounds(gfx::Size(100, 50));
   grand_child1->SetDrawsContent(true);
-  grand_child1->SetHitTestable(true);
+  grand_child1->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
   CopyProperties(child1, grand_child1);
   CreateTransformNode(grand_child1).post_translation =
       gfx::Vector2dF(0.f, 40.f);
   CreateEffectNode(grand_child1).render_surface_reason =
       RenderSurfaceReason::kTest;
 
-  LayerImpl* child2 = AddLayer<LayerImpl>();
+  LayerImpl* child2 = AddLayerInActiveTree<LayerImpl>();
   child2->SetBounds(gfx::Size(50, 50));
   child2->SetDrawsContent(true);
-  child2->SetHitTestable(true);
+  child2->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
   CopyProperties(root, child2);
   CreateTransformNode(child2).post_translation = gfx::Vector2dF(50.f, 10.f);
   CreateEffectNode(child2).render_surface_reason = RenderSurfaceReason::kTest;
@@ -1120,7 +1149,7 @@ TEST_F(LayerTreeImplTest, HitCheckingTouchHandlerRegionsForSingleLayer) {
   LayerImpl* root = root_layer();
   root->SetBounds(gfx::Size(100, 100));
   root->SetDrawsContent(true);
-  root->SetHitTestable(true);
+  root->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
 
   host_impl().active_tree()->SetDeviceViewportRect(gfx::Rect(root->bounds()));
   UpdateDrawProperties(host_impl().active_tree());
@@ -1185,19 +1214,19 @@ TEST_F(LayerTreeImplTest,
   LayerImpl* root = root_layer();
 
   gfx::Transform uninvertible_transform;
-  uninvertible_transform.matrix().set(0, 0, 0.0);
-  uninvertible_transform.matrix().set(1, 1, 0.0);
-  uninvertible_transform.matrix().set(2, 2, 0.0);
-  uninvertible_transform.matrix().set(3, 3, 0.0);
+  uninvertible_transform.set_rc(0, 0, 0.0);
+  uninvertible_transform.set_rc(1, 1, 0.0);
+  uninvertible_transform.set_rc(2, 2, 0.0);
+  uninvertible_transform.set_rc(3, 3, 0.0);
   ASSERT_FALSE(uninvertible_transform.IsInvertible());
 
   TouchActionRegion touch_action_region;
   touch_action_region.Union(TouchAction::kNone, gfx::Rect(10, 10, 50, 50));
 
-  LayerImpl* layer = AddLayer<LayerImpl>();
+  LayerImpl* layer = AddLayerInActiveTree<LayerImpl>();
   layer->SetBounds(gfx::Size(100, 100));
   layer->SetDrawsContent(true);
-  layer->SetHitTestable(true);
+  layer->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
   layer->SetTouchActionRegion(touch_action_region);
   root->SetBounds(layer->bounds());
   CopyProperties(root, layer);
@@ -1264,10 +1293,10 @@ TEST_F(LayerTreeImplTest,
 
   // This layer is positioned, and hit testing should correctly know where the
   // layer is located.
-  LayerImpl* test_layer = AddLayer<LayerImpl>();
+  LayerImpl* test_layer = AddLayerInActiveTree<LayerImpl>();
   test_layer->SetBounds(gfx::Size(100, 100));
   test_layer->SetDrawsContent(true);
-  test_layer->SetHitTestable(true);
+  test_layer->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
   test_layer->SetTouchActionRegion(touch_action_region);
   CopyProperties(root_layer(), test_layer);
   test_layer->SetOffsetToTransformParent(gfx::Vector2dF(50.f, 50.f));
@@ -1328,16 +1357,16 @@ TEST_F(LayerTreeImplTest,
   LayerImpl* root = root_layer();
   root->SetBounds(gfx::Size(100, 100));
 
-  LayerImpl* page_scale_layer = AddLayer<LayerImpl>();
+  LayerImpl* page_scale_layer = AddLayerInActiveTree<LayerImpl>();
   CopyProperties(root, page_scale_layer);
   CreateTransformNode(page_scale_layer);
 
   TouchActionRegion touch_action_region;
   touch_action_region.Union(TouchAction::kNone, gfx::Rect(10, 10, 30, 30));
-  LayerImpl* test_layer = AddLayer<LayerImpl>();
+  LayerImpl* test_layer = AddLayerInActiveTree<LayerImpl>();
   test_layer->SetBounds(gfx::Size(50, 50));
   test_layer->SetDrawsContent(true);
-  test_layer->SetHitTestable(true);
+  test_layer->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
   test_layer->SetTouchActionRegion(touch_action_region);
   CopyProperties(page_scale_layer, test_layer);
   test_layer->SetOffsetToTransformParent(gfx::Vector2dF(25.f, 25.f));
@@ -1351,7 +1380,7 @@ TEST_F(LayerTreeImplTest,
       gfx::Rect(scaled_bounds_for_root));
 
   host_impl().active_tree()->SetDeviceScaleFactor(device_scale_factor);
-  LayerTreeImpl::ViewportPropertyIds viewport_property_ids;
+  ViewportPropertyIds viewport_property_ids;
   viewport_property_ids.page_scale_transform =
       page_scale_layer->transform_tree_index();
   host_impl().active_tree()->SetViewportPropertyIds(viewport_property_ids);
@@ -1463,7 +1492,7 @@ TEST_F(LayerTreeImplTest, HitCheckingTouchHandlerRegionsForSimpleClippedLayer) {
   LayerImpl* root = root_layer();
   root->SetBounds(gfx::Size(100, 100));
 
-  LayerImpl* clipping_layer = AddLayer<LayerImpl>();
+  LayerImpl* clipping_layer = AddLayerInActiveTree<LayerImpl>();
   // this layer is positioned, and hit testing should correctly know where
   // the layer is located.
   clipping_layer->SetBounds(gfx::Size(50, 50));
@@ -1474,10 +1503,10 @@ TEST_F(LayerTreeImplTest, HitCheckingTouchHandlerRegionsForSimpleClippedLayer) {
   TouchActionRegion touch_action_region;
   touch_action_region.Union(TouchAction::kNone, gfx::Rect(10, 10, 50, 50));
 
-  LayerImpl* child = AddLayer<LayerImpl>();
+  LayerImpl* child = AddLayerInActiveTree<LayerImpl>();
   child->SetBounds(gfx::Size(300, 300));
   child->SetDrawsContent(true);
-  child->SetHitTestable(true);
+  child->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
   child->SetTouchActionRegion(touch_action_region);
   CopyProperties(clipping_layer, child);
   child->SetOffsetToTransformParent(
@@ -1540,12 +1569,12 @@ TEST_F(LayerTreeImplTest,
   LayerImpl* root = root_layer();
   root->SetBounds(gfx::Size(100, 100));
 
-  LayerImpl* surface = AddLayer<LayerImpl>();
+  LayerImpl* surface = AddLayerInActiveTree<LayerImpl>();
   surface->SetBounds(gfx::Size(100, 100));
   CopyProperties(root, surface);
   CreateEffectNode(surface).render_surface_reason = RenderSurfaceReason::kTest;
 
-  LayerImpl* clipping_layer = AddLayer<LayerImpl>();
+  LayerImpl* clipping_layer = AddLayerInActiveTree<LayerImpl>();
   // This layer is positioned, and hit testing should correctly know where
   // the layer is located.
   clipping_layer->SetBounds(gfx::Size(50, 50));
@@ -1556,10 +1585,10 @@ TEST_F(LayerTreeImplTest,
   TouchActionRegion touch_action_region;
   touch_action_region.Union(TouchAction::kNone, gfx::Rect(0, 0, 300, 300));
 
-  LayerImpl* child = AddLayer<LayerImpl>();
+  LayerImpl* child = AddLayerInActiveTree<LayerImpl>();
   child->SetBounds(gfx::Size(300, 300));
   child->SetDrawsContent(true);
-  child->SetHitTestable(true);
+  child->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
   child->SetTouchActionRegion(touch_action_region);
   CopyProperties(clipping_layer, child);
   child->SetOffsetToTransformParent(
@@ -1609,23 +1638,23 @@ TEST_F(LayerTreeImplTest, HitCheckingTouchHandlerOverlappingRegions) {
   LayerImpl* root = root_layer();
   root->SetBounds(gfx::Size(100, 100));
 
-  LayerImpl* touch_layer = AddLayer<LayerImpl>();
+  LayerImpl* touch_layer = AddLayerInActiveTree<LayerImpl>();
   // this layer is positioned, and hit testing should correctly know where
   // the layer is located.
   touch_layer->SetBounds(gfx::Size(50, 50));
   touch_layer->SetDrawsContent(true);
-  touch_layer->SetHitTestable(true);
+  touch_layer->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
   TouchActionRegion touch_action_region;
   touch_action_region.Union(TouchAction::kNone, gfx::Rect(0, 0, 50, 50));
   touch_layer->SetTouchActionRegion(touch_action_region);
   CopyProperties(root, touch_layer);
 
-  LayerImpl* notouch_layer = AddLayer<LayerImpl>();
+  LayerImpl* notouch_layer = AddLayerInActiveTree<LayerImpl>();
   // this layer is positioned, and hit testing should correctly know where
   // the layer is located.
   notouch_layer->SetBounds(gfx::Size(50, 50));
   notouch_layer->SetDrawsContent(true);
-  notouch_layer->SetHitTestable(true);
+  notouch_layer->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
   CopyProperties(root, notouch_layer);
   notouch_layer->SetOffsetToTransformParent(gfx::Vector2dF(0, 25));
 
@@ -1675,14 +1704,14 @@ TEST_F(LayerTreeImplTest, HitTestingTouchHandlerRegionsForLayerThatIsNotDrawn) {
   LayerImpl* root = root_layer();
   root->SetBounds(gfx::Size(100, 100));
   root->SetDrawsContent(true);
-  root->SetHitTestable(true);
+  root->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
 
   TouchActionRegion touch_action_region;
   touch_action_region.Union(TouchAction::kNone, gfx::Rect(10, 10, 30, 30));
-  LayerImpl* test_layer = AddLayer<LayerImpl>();
+  LayerImpl* test_layer = AddLayerInActiveTree<LayerImpl>();
   test_layer->SetBounds(gfx::Size(50, 50));
   test_layer->SetDrawsContent(false);
-  test_layer->SetHitTestable(false);
+  test_layer->SetHitTestOpaqueness(HitTestOpaqueness::kTransparent);
   test_layer->SetTouchActionRegion(touch_action_region);
   CopyProperties(root, test_layer);
 
@@ -1710,11 +1739,11 @@ TEST_F(LayerTreeImplTest, HitTestingTouchHandlerRegionsForLayerThatIsNotDrawn) {
           test_point);
   EXPECT_FALSE(result_layer);
   EXPECT_FALSE(test_layer->contributes_to_drawn_render_surface());
-  EXPECT_TRANSFORMATION_MATRIX_EQ(
+  EXPECT_TRANSFORM_EQ(
       expected_screen_space_transform,
       draw_property_utils::ScreenSpaceTransform(
           test_layer,
-          host_impl().active_tree()->property_trees()->transform_tree));
+          host_impl().active_tree()->property_trees()->transform_tree()));
 
   // We change the position of the test layer such that the test point is now
   // inside the test_layer.
@@ -1730,11 +1759,11 @@ TEST_F(LayerTreeImplTest, HitTestingTouchHandlerRegionsForLayerThatIsNotDrawn) {
   ASSERT_TRUE(result_layer);
   ASSERT_EQ(test_layer, result_layer);
   EXPECT_FALSE(result_layer->contributes_to_drawn_render_surface());
-  EXPECT_TRANSFORMATION_MATRIX_EQ(
+  EXPECT_TRANSFORM_EQ(
       expected_screen_space_transform,
       draw_property_utils::ScreenSpaceTransform(
           test_layer,
-          host_impl().active_tree()->property_trees()->transform_tree));
+          host_impl().active_tree()->property_trees()->transform_tree()));
 }
 
 TEST_F(LayerTreeImplTest, SelectionBoundsForSingleLayer) {
@@ -1842,14 +1871,14 @@ TEST_F(LayerTreeImplTest, SelectionBoundsForPartialOccludedLayers) {
 
   gfx::Vector2dF clipping_offset(10, 10);
 
-  LayerImpl* clipping_layer = AddLayer<LayerImpl>();
+  LayerImpl* clipping_layer = AddLayerInActiveTree<LayerImpl>();
   // The clipping layer should occlude the right selection bound.
   clipping_layer->SetBounds(gfx::Size(50, 50));
   CopyProperties(root, clipping_layer);
   clipping_layer->SetOffsetToTransformParent(clipping_offset);
   CreateClipNode(clipping_layer);
 
-  LayerImpl* clipped_layer = AddLayer<LayerImpl>();
+  LayerImpl* clipped_layer = AddLayerInActiveTree<LayerImpl>();
   clipped_layer->SetBounds(gfx::Size(100, 100));
   clipped_layer->SetDrawsContent(true);
   CopyProperties(clipping_layer, clipped_layer);
@@ -1985,13 +2014,13 @@ TEST_F(LayerTreeImplTest, SelectionBoundsForScaledLayers) {
   root->SetDrawsContent(true);
   root->SetBounds(gfx::Size(100, 100));
 
-  LayerImpl* page_scale_layer = AddLayer<LayerImpl>();
+  LayerImpl* page_scale_layer = AddLayerInActiveTree<LayerImpl>();
   page_scale_layer->SetBounds(gfx::Size(50, 50));
   CopyProperties(root, page_scale_layer);
   CreateTransformNode(page_scale_layer);
 
   gfx::Vector2dF sub_layer_offset(10, 0);
-  LayerImpl* sub_layer = AddLayer<LayerImpl>();
+  LayerImpl* sub_layer = AddLayerInActiveTree<LayerImpl>();
   sub_layer->SetBounds(gfx::Size(50, 50));
   sub_layer->SetDrawsContent(true);
   CopyProperties(page_scale_layer, sub_layer);
@@ -2004,7 +2033,7 @@ TEST_F(LayerTreeImplTest, SelectionBoundsForScaledLayers) {
   gfx::Size scaled_bounds_for_root = gfx::ScaleToCeiledSize(
       root->bounds(), device_scale_factor * page_scale_factor);
 
-  LayerTreeImpl::ViewportPropertyIds viewport_property_ids;
+  ViewportPropertyIds viewport_property_ids;
   viewport_property_ids.page_scale_transform =
       page_scale_layer->transform_tree_index();
   host_impl().active_tree()->SetViewportPropertyIds(viewport_property_ids);
@@ -2069,7 +2098,7 @@ TEST_F(LayerTreeImplTest, SelectionBoundsForDSFEnabled) {
   host_impl().active_tree()->SetDeviceViewportRect(gfx::Rect(root->bounds()));
 
   gfx::Vector2dF sub_layer_offset(10, 0);
-  LayerImpl* sub_layer = AddLayer<LayerImpl>();
+  LayerImpl* sub_layer = AddLayerInActiveTree<LayerImpl>();
   sub_layer->SetBounds(gfx::Size(50, 50));
   sub_layer->SetDrawsContent(true);
   CopyProperties(root, sub_layer);
@@ -2132,16 +2161,15 @@ TEST_F(LayerTreeImplTest, SelectionBoundsWithLargeTransforms) {
   LayerImpl* root = root_layer();
   root->SetBounds(gfx::Size(100, 100));
 
-  gfx::Transform large_transform;
-  large_transform.Scale(SkDoubleToScalar(1e37), SkDoubleToScalar(1e37));
+  gfx::Transform large_transform = gfx::Transform::MakeScale(1e37);
   large_transform.RotateAboutYAxis(30);
 
-  LayerImpl* child = AddLayer<LayerImpl>();
+  LayerImpl* child = AddLayerInActiveTree<LayerImpl>();
   child->SetBounds(gfx::Size(100, 100));
   CopyProperties(root, child);
   CreateTransformNode(child).local = large_transform;
 
-  LayerImpl* grand_child = AddLayer<LayerImpl>();
+  LayerImpl* grand_child = AddLayerInActiveTree<LayerImpl>();
   grand_child->SetBounds(gfx::Size(100, 100));
   grand_child->SetDrawsContent(true);
   CopyProperties(child, grand_child);
@@ -2167,10 +2195,236 @@ TEST_F(LayerTreeImplTest, SelectionBoundsWithLargeTransforms) {
   viz::Selection<gfx::SelectionBound> output;
   host_impl().active_tree()->GetViewportSelection(&output);
 
-  // edge_end and edge_start aren't allowed to have NaNs, so the selection
-  // should be empty.
-  EXPECT_EQ(gfx::SelectionBound(), output.start);
-  EXPECT_EQ(gfx::SelectionBound(), output.end);
+  auto point_is_valid = [](const gfx::PointF& p) {
+    return std::isfinite(p.x()) && std::isfinite(p.y());
+  };
+  auto selection_bound_is_valid = [&](const gfx::SelectionBound& b) {
+    return point_is_valid(b.edge_start()) &&
+           point_is_valid(b.visible_edge_start()) &&
+           point_is_valid(b.edge_end()) && point_is_valid(b.visible_edge_end());
+  };
+  // No NaNs or infinities in SelectounBound.
+  EXPECT_TRUE(selection_bound_is_valid(output.start))
+      << output.start.ToString();
+  EXPECT_TRUE(selection_bound_is_valid(output.end)) << output.end.ToString();
+}
+
+TEST_F(LayerTreeImplTest, SelectionBoundsForCaretLayer) {
+  LayerImpl* root = root_layer();
+  root->SetDrawsContent(true);
+  root->SetBounds(gfx::Size(100, 100));
+  host_impl().active_tree()->SetDeviceViewportRect(gfx::Rect(root->bounds()));
+
+  gfx::Vector2dF caret_layer_offset(10, 20);
+  LayerImpl* caret_layer = AddLayerInActiveTree<LayerImpl>();
+  caret_layer->SetBounds(gfx::Size(1, 16));
+  caret_layer->SetDrawsContent(true);
+  CopyProperties(root, caret_layer);
+  caret_layer->SetOffsetToTransformParent(caret_layer_offset);
+
+  UpdateDrawProperties(host_impl().active_tree());
+
+  LayerSelection input;
+  input.start.type = gfx::SelectionBound::CENTER;
+  input.start.edge_start = gfx::Point(0, 0);
+  input.start.edge_end = gfx::Point(0, 16);
+  input.start.layer_id = caret_layer->id();
+  input.end = input.start;
+  host_impl().active_tree()->RegisterSelection(input);
+
+  viz::Selection<gfx::SelectionBound> output;
+  host_impl().active_tree()->GetViewportSelection(&output);
+  EXPECT_EQ(gfx::SelectionBound::CENTER, output.start.type());
+  EXPECT_EQ(gfx::PointF(10, 20), output.start.edge_start());
+  EXPECT_EQ(gfx::PointF(10, 36), output.start.edge_end());
+  EXPECT_EQ(gfx::PointF(10, 20), output.start.visible_edge_start());
+  EXPECT_EQ(gfx::PointF(10, 36), output.start.visible_edge_end());
+  EXPECT_TRUE(output.start.visible());
+  EXPECT_EQ(output.end, output.start);
+}
+
+class LayerTreeImplSelectionFullEdgeTest : public LayerTreeImplTest {
+ public:
+  LayerTreeImplSelectionFullEdgeTest() {
+    scoped_feature_list_.InitAndEnableFeature(
+        features::kSelectionEdgeVisibilityUsesFullEdge);
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+// Regression test for crbug.com/451833352. When line-height > height on an
+// input, the selection edge_end overflows the clip but edge_start is still
+// visible. With selection_edge_visibility_uses_full_edge, the handle should
+// be visible because part of the edge is within the visible area.
+TEST_F(LayerTreeImplSelectionFullEdgeTest,
+       SelectionBoundsVisibleWithPartialEdgeOverflow) {
+  LayerImpl* root = root_layer();
+  root->SetDrawsContent(true);
+  root->SetBounds(gfx::Size(100, 100));
+
+  gfx::Vector2dF clipping_offset(10, 10);
+
+  LayerImpl* clipping_layer = AddLayerInActiveTree<LayerImpl>();
+  // Create a 50x40 clipping region.
+  clipping_layer->SetBounds(gfx::Size(50, 40));
+  CopyProperties(root, clipping_layer);
+  clipping_layer->SetOffsetToTransformParent(clipping_offset);
+  CreateClipNode(clipping_layer);
+
+  LayerImpl* clipped_layer = AddLayerInActiveTree<LayerImpl>();
+  clipped_layer->SetBounds(gfx::Size(100, 100));
+  clipped_layer->SetDrawsContent(true);
+  CopyProperties(clipping_layer, clipped_layer);
+  clipped_layer->SetOffsetToTransformParent(
+      clipping_layer->offset_to_transform_parent());
+
+  host_impl().active_tree()->SetDeviceViewportRect(gfx::Rect(root->bounds()));
+  UpdateDrawProperties(host_impl().active_tree());
+
+  LayerSelection input;
+
+  // Case 1: edge_start is inside the clip, edge_end overflows below.
+  // The clipping region is 40px tall, so visible area is y=[0,40).
+  // edge_start at y=5 is inside, edge_end at y=55 is outside.
+  // With full-edge visibility, the handle should be visible.
+  input.start.type = gfx::SelectionBound::LEFT;
+  input.start.edge_start = gfx::Point(10, 5);
+  input.start.edge_end = gfx::Point(10, 55);
+  input.start.layer_id = clipped_layer->id();
+
+  input.end.type = gfx::SelectionBound::RIGHT;
+  input.end.edge_start = gfx::Point(30, 5);
+  input.end.edge_end = gfx::Point(30, 55);
+  input.end.layer_id = clipped_layer->id();
+
+  host_impl().active_tree()->RegisterSelection(input);
+
+  viz::Selection<gfx::SelectionBound> output;
+  host_impl().active_tree()->GetViewportSelection(&output);
+
+  // Both bounds should be visible because edge_start is within the clip.
+  EXPECT_TRUE(output.start.visible());
+  EXPECT_TRUE(output.end.visible());
+
+  // Case 2: The entire edge is outside the clip - should be hidden.
+  input.start.edge_start = gfx::Point(10, 45);
+  input.start.edge_end = gfx::Point(10, 95);
+  input.end.edge_start = gfx::Point(30, 45);
+  input.end.edge_end = gfx::Point(30, 95);
+  host_impl().active_tree()->RegisterSelection(input);
+  host_impl().active_tree()->GetViewportSelection(&output);
+  EXPECT_FALSE(output.start.visible());
+  EXPECT_FALSE(output.end.visible());
+
+  // Case 3: edge_end is inside the clip, edge_start overflows above.
+  // This is the scenario that already worked with the old code.
+  input.start.edge_start = gfx::Point(10, -15);
+  input.start.edge_end = gfx::Point(10, 35);
+  input.end.edge_start = gfx::Point(30, -15);
+  input.end.edge_end = gfx::Point(30, 35);
+  host_impl().active_tree()->RegisterSelection(input);
+  host_impl().active_tree()->GetViewportSelection(&output);
+  EXPECT_TRUE(output.start.visible());
+  EXPECT_TRUE(output.end.visible());
+}
+
+// With the feature disabled, the legacy point-based visibility test should
+// hide handles when edge_end is outside the clip even if edge_start is
+// visible.
+TEST_F(LayerTreeImplTest, SelectionBoundsHiddenWithPartialEdgeOverflowLegacy) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      features::kSelectionEdgeVisibilityUsesFullEdge);
+
+  LayerImpl* root = root_layer();
+  root->SetDrawsContent(true);
+  root->SetBounds(gfx::Size(100, 100));
+
+  gfx::Vector2dF clipping_offset(10, 10);
+
+  LayerImpl* clipping_layer = AddLayerInActiveTree<LayerImpl>();
+  clipping_layer->SetBounds(gfx::Size(50, 40));
+  CopyProperties(root, clipping_layer);
+  clipping_layer->SetOffsetToTransformParent(clipping_offset);
+  CreateClipNode(clipping_layer);
+
+  LayerImpl* clipped_layer = AddLayerInActiveTree<LayerImpl>();
+  clipped_layer->SetBounds(gfx::Size(100, 100));
+  clipped_layer->SetDrawsContent(true);
+  CopyProperties(clipping_layer, clipped_layer);
+  clipped_layer->SetOffsetToTransformParent(
+      clipping_layer->offset_to_transform_parent());
+
+  host_impl().active_tree()->SetDeviceViewportRect(gfx::Rect(root->bounds()));
+  UpdateDrawProperties(host_impl().active_tree());
+
+  LayerSelection input;
+  // edge_start at y=5 is inside the clip, edge_end at y=55 is outside.
+  // With the legacy code, the handle should be hidden because the point
+  // near edge_end doesn't hit the layer.
+  input.start.type = gfx::SelectionBound::LEFT;
+  input.start.edge_start = gfx::Point(10, 5);
+  input.start.edge_end = gfx::Point(10, 55);
+  input.start.layer_id = clipped_layer->id();
+
+  input.end.type = gfx::SelectionBound::RIGHT;
+  input.end.edge_start = gfx::Point(30, 5);
+  input.end.edge_end = gfx::Point(30, 55);
+  input.end.layer_id = clipped_layer->id();
+
+  host_impl().active_tree()->RegisterSelection(input);
+
+  viz::Selection<gfx::SelectionBound> output;
+  host_impl().active_tree()->GetViewportSelection(&output);
+
+  // Legacy behavior: hidden because edge_end is clipped.
+  EXPECT_FALSE(output.start.visible());
+  EXPECT_FALSE(output.end.visible());
+}
+
+// When will-change:transform is on the input itself, the input IS the
+// composited layer. With line-height > height, both edge endpoints can be
+// outside the layer bounds but the middle passes through.
+TEST_F(LayerTreeImplSelectionFullEdgeTest,
+       SelectionBoundsVisibleWhenBothEndpointsOutsideLayer) {
+  LayerImpl* root = root_layer();
+  root->SetDrawsContent(true);
+  root->SetBounds(gfx::Size(400, 400));
+
+  // Simulate a composited input with height=40px where line-height causes the
+  // selection edge to extend from y=-5 to y=45 (both outside 0-40 bounds).
+  LayerImpl* input_layer = AddLayerInActiveTree<LayerImpl>();
+  input_layer->SetBounds(gfx::Size(200, 40));
+  input_layer->SetDrawsContent(true);
+  CopyProperties(root, input_layer);
+  input_layer->SetOffsetToTransformParent(gfx::Vector2dF(10, 50));
+
+  host_impl().active_tree()->SetDeviceViewportRect(gfx::Rect(root->bounds()));
+  UpdateDrawProperties(host_impl().active_tree());
+
+  LayerSelection input;
+  // Edge extends from y=-5 (above layer) to y=45 (below layer).
+  // The layer is 40px tall, so the middle portion (y=0 to y=40) is visible.
+  input.start.type = gfx::SelectionBound::LEFT;
+  input.start.edge_start = gfx::Point(10, -5);
+  input.start.edge_end = gfx::Point(10, 45);
+  input.start.layer_id = input_layer->id();
+
+  input.end.type = gfx::SelectionBound::RIGHT;
+  input.end.edge_start = gfx::Point(100, -5);
+  input.end.edge_end = gfx::Point(100, 45);
+  input.end.layer_id = input_layer->id();
+
+  host_impl().active_tree()->RegisterSelection(input);
+
+  viz::Selection<gfx::SelectionBound> output;
+  host_impl().active_tree()->GetViewportSelection(&output);
+
+  // Both bounds should be visible because the edge passes through the layer.
+  EXPECT_TRUE(output.start.visible());
+  EXPECT_TRUE(output.end.visible());
 }
 
 TEST_F(LayerTreeImplTest, NumLayersTestOne) {
@@ -2178,20 +2432,21 @@ TEST_F(LayerTreeImplTest, NumLayersTestOne) {
   EXPECT_EQ(1u, host_impl().active_tree()->NumLayers());
   EXPECT_TRUE(root_layer());
   // Create another layer, should increment.
-  AddLayer<LayerImpl>();
+  AddLayerInActiveTree<LayerImpl>();
   EXPECT_EQ(2u, host_impl().active_tree()->NumLayers());
 }
 
 TEST_F(LayerTreeImplTest, NumLayersSmallTree) {
   EXPECT_EQ(1u, host_impl().active_tree()->NumLayers());
-  AddLayer<LayerImpl>();
-  AddLayer<LayerImpl>();
-  AddLayer<LayerImpl>();
+  AddLayerInActiveTree<LayerImpl>();
+  AddLayerInActiveTree<LayerImpl>();
+  AddLayerInActiveTree<LayerImpl>();
   EXPECT_EQ(4u, host_impl().active_tree()->NumLayers());
 }
 
 TEST_F(LayerTreeImplTest, DeviceScaleFactorNeedsDrawPropertiesUpdate) {
-  host_impl().active_tree()->UpdateDrawProperties();
+  host_impl().active_tree()->UpdateDrawProperties(
+      /*update_tiles=*/true, /*update_image_animation_controller=*/true);
   EXPECT_FALSE(host_impl().active_tree()->needs_update_draw_properties());
   host_impl().active_tree()->SetDeviceScaleFactor(1.f);
   EXPECT_FALSE(host_impl().active_tree()->needs_update_draw_properties());
@@ -2202,7 +2457,8 @@ TEST_F(LayerTreeImplTest, DeviceScaleFactorNeedsDrawPropertiesUpdate) {
 TEST_F(LayerTreeImplTest, DisplayColorSpacesDoesNotNeedDrawPropertiesUpdate) {
   host_impl().active_tree()->SetDisplayColorSpaces(
       gfx::DisplayColorSpaces(gfx::ColorSpace::CreateXYZD50()));
-  host_impl().active_tree()->UpdateDrawProperties();
+  host_impl().active_tree()->UpdateDrawProperties(
+      /*update_tiles=*/true, /*update_image_animation_controller=*/true);
   EXPECT_FALSE(host_impl().active_tree()->needs_update_draw_properties());
   host_impl().active_tree()->SetDisplayColorSpaces(
       gfx::DisplayColorSpaces(gfx::ColorSpace::CreateSRGB()));
@@ -2214,16 +2470,16 @@ TEST_F(LayerTreeImplTest, HitTestingCorrectLayerWheelListener) {
       EventListenerClass::kMouseWheel, EventListenerProperties::kBlocking);
 
   LayerImpl* root = root_layer();
-  LayerImpl* top = AddLayer<LayerImpl>();
-  LayerImpl* left_child = AddLayer<LayerImpl>();
-  LayerImpl* right_child = AddLayer<LayerImpl>();
+  LayerImpl* top = AddLayerInActiveTree<LayerImpl>();
+  LayerImpl* left_child = AddLayerInActiveTree<LayerImpl>();
+  LayerImpl* right_child = AddLayerInActiveTree<LayerImpl>();
 
   {
     gfx::Transform translate_z;
     translate_z.Translate3d(0, 0, 10);
     top->SetBounds(gfx::Size(100, 100));
     top->SetDrawsContent(true);
-    top->SetHitTestable(true);
+    top->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
     CopyProperties(root, top);
     CreateTransformNode(top).local = translate_z;
   }
@@ -2232,7 +2488,7 @@ TEST_F(LayerTreeImplTest, HitTestingCorrectLayerWheelListener) {
     translate_z.Translate3d(0, 0, 10);
     left_child->SetBounds(gfx::Size(100, 100));
     left_child->SetDrawsContent(true);
-    left_child->SetHitTestable(true);
+    left_child->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
     CopyProperties(top, left_child);
     CreateTransformNode(left_child).local = translate_z;
   }
@@ -2255,11 +2511,47 @@ TEST_F(LayerTreeImplTest, HitTestingCorrectLayerWheelListener) {
   EXPECT_EQ(left_child, result_layer);
 }
 
+TEST_F(LayerTreeImplTest, DebugRectHistoryLayoutShiftWithoutHud) {
+  LayerTreeDebugState state;
+  state.show_layout_shift_regions = true;
+
+  auto history = DebugRectHistory::Create();
+  history->SaveDebugRectsForCurrentFrame(host_impl().active_tree(), nullptr,
+                                         RenderSurfaceList{}, state);
+
+  EXPECT_EQ(0u, history->debug_rects().size());
+}
+
+TEST_F(LayerTreeImplTest, DebugRectHistoryLayoutShiftWithHud) {
+  LayerTreeDebugState state;
+  state.show_layout_shift_regions = true;
+
+  auto* hud = AddLayerInActiveTree<HeadsUpDisplayLayerImpl>(std::string());
+  hud->SetBounds(gfx::Size(200, 200));
+  hud->SetWebVitalsDebugRects(
+      {{WebVitalMetricType::kLayoutShift, gfx::Rect(10, 10, 50, 50)}});
+
+  host_impl().active_tree()->set_hud_layer(hud);
+  CopyProperties(root_layer(), hud);
+  UpdateDrawProperties(host_impl().active_tree());
+
+  // HUD rects should start with one value
+  EXPECT_EQ(1u, hud->WebVitalsDebugRects().size());
+
+  auto history = DebugRectHistory::Create();
+  history->SaveDebugRectsForCurrentFrame(host_impl().active_tree(), hud,
+                                         RenderSurfaceList{}, state);
+
+  // HUD rects should be moved to debug rect history after saving current frame
+  EXPECT_EQ(0u, hud->WebVitalsDebugRects().size());
+  ASSERT_EQ(1u, history->debug_rects().size());
+  EXPECT_EQ(DebugRectType::kLayoutShift, history->debug_rects()[0].type);
+  EXPECT_EQ(gfx::Rect(10, 10, 50, 50), history->debug_rects()[0].rect);
+}
+
 namespace {
 
-class PersistentSwapPromise
-    : public SwapPromise,
-      public base::SupportsWeakPtr<PersistentSwapPromise> {
+class PersistentSwapPromise final : public SwapPromise {
  public:
   PersistentSwapPromise() = default;
   ~PersistentSwapPromise() override = default;
@@ -2268,17 +2560,21 @@ class PersistentSwapPromise
   MOCK_METHOD1(WillSwap, void(viz::CompositorFrameMetadata* metadata));
   MOCK_METHOD0(DidSwap, void());
 
-  DidNotSwapAction DidNotSwap(DidNotSwapReason reason) override {
+  DidNotSwapAction DidNotSwap(DidNotSwapReason reason,
+                              base::TimeTicks ts) override {
     return DidNotSwapAction::KEEP_ACTIVE;
   }
+  int64_t GetTraceId() const override { return 0; }
 
-  void OnCommit() override {}
-  int64_t TraceId() const override { return 0; }
+  base::WeakPtr<PersistentSwapPromise> AsWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+
+ private:
+  base::WeakPtrFactory<PersistentSwapPromise> weak_ptr_factory_{this};
 };
 
-class NotPersistentSwapPromise
-    : public SwapPromise,
-      public base::SupportsWeakPtr<NotPersistentSwapPromise> {
+class NotPersistentSwapPromise final : public SwapPromise {
  public:
   NotPersistentSwapPromise() = default;
   ~NotPersistentSwapPromise() override = default;
@@ -2287,12 +2583,18 @@ class NotPersistentSwapPromise
   void WillSwap(viz::CompositorFrameMetadata* metadata) override {}
   void DidSwap() override {}
 
-  DidNotSwapAction DidNotSwap(DidNotSwapReason reason) override {
+  DidNotSwapAction DidNotSwap(DidNotSwapReason reason,
+                              base::TimeTicks ts) override {
     return DidNotSwapAction::BREAK_PROMISE;
   }
+  int64_t GetTraceId() const override { return 0; }
 
-  void OnCommit() override {}
-  int64_t TraceId() const override { return 0; }
+  base::WeakPtr<NotPersistentSwapPromise> AsWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+
+ private:
+  base::WeakPtrFactory<NotPersistentSwapPromise> weak_ptr_factory_{this};
 };
 
 }  // namespace
@@ -2385,243 +2687,333 @@ TEST_F(LayerTreeImplTest, TrackPictureLayersWithPaintWorklets) {
   CopyProperties(root, child2);
   CopyProperties(root, child3);
 
-  Region empty_invalidation;
-  scoped_refptr<RasterSource> raster_source1(
-      FakeRasterSource::CreateFilledWithPaintWorklet(child1->bounds()));
-  child1->UpdateRasterSource(raster_source1, &empty_invalidation, nullptr,
-                             nullptr);
-  scoped_refptr<RasterSource> raster_source3(
-      FakeRasterSource::CreateFilledWithPaintWorklet(child3->bounds()));
-  child3->UpdateRasterSource(raster_source3, &empty_invalidation, nullptr,
-                             nullptr);
+  scoped_refptr<RasterSource> raster_source1 =
+      FakeRasterSource::CreateFilledWithPaintWorklet(child1->bounds());
+  child1->SetRasterSourceForTesting(raster_source1);
+  scoped_refptr<RasterSource> raster_source3 =
+      FakeRasterSource::CreateFilledWithPaintWorklet(child3->bounds());
+  child3->SetRasterSourceForTesting(raster_source3);
 
   // The set should correctly track which layers are in it.
-  const base::flat_set<PictureLayerImpl*>& layers =
-      pending_tree->picture_layers_with_paint_worklets();
+  auto layers = pending_tree->picture_layers_with_paint_worklets();
   EXPECT_EQ(layers.size(), 2u);
-  EXPECT_TRUE(layers.contains(child1));
-  EXPECT_TRUE(layers.contains(child3));
+  EXPECT_TRUE(std::ranges::contains(layers, child1));
+  EXPECT_TRUE(std::ranges::contains(layers, child3));
 
   // Test explicitly removing a layer from the set.
-  scoped_refptr<RasterSource> empty_raster_source(
-      FakeRasterSource::CreateFilled(child1->bounds()));
-  child1->UpdateRasterSource(empty_raster_source, &empty_invalidation, nullptr,
-                             nullptr);
+  scoped_refptr<RasterSource> empty_raster_source =
+      FakeRasterSource::CreateFilled(child1->bounds());
+  child1->SetRasterSourceForTesting(empty_raster_source);
+
   EXPECT_EQ(layers.size(), 1u);
-  EXPECT_FALSE(layers.contains(child1));
+  EXPECT_FALSE(std::ranges::contains(layers, child1));
 
   pending_tree->DetachLayers();
   EXPECT_EQ(layers.size(), 0u);
 }
 
-namespace {
-class CommitToPendingTreeLayerTreeImplTestSettings : public LayerListSettings {
+class CommitToActiveTreeLayerTreeImplTest : public LayerTreeImplTest {
  public:
-  CommitToPendingTreeLayerTreeImplTestSettings() {
-    commit_to_active_tree = false;
-  }
+  CommitToActiveTreeLayerTreeImplTest()
+      : LayerTreeImplTest(CommitToActiveTreeLayerListSettings()) {}
 };
 
-class CommitToPendingTreeLayerTreeImplTest : public LayerTreeImplTest {
- public:
-  CommitToPendingTreeLayerTreeImplTest()
-      : LayerTreeImplTest(CommitToPendingTreeLayerTreeImplTestSettings()) {}
-};
-}  // namespace
+// Verifies that the effect node's |is_fast_rounded_corner| is set to a draw
+// properties of a RenderSurface, and then correctly forwarded to the shared
+// quad state.
+TEST_F(LayerTreeImplTest, CheckRenderSurfaceIsFastRoundedCorner) {
+  const gfx::MaskFilterInfo kMaskFilterWithRoundedCorners(
+      gfx::RectF(5, 5), gfx::RoundedCornersF(2.5), gfx::LinearGradient());
 
-TEST_F(CommitToPendingTreeLayerTreeImplTest,
-       ElementIdToAnimationMapsTrackOnlyOnSyncTree) {
-  ASSERT_FALSE(host_impl().CommitToActiveTree());
+  LayerImpl* root = root_layer();
+  root->SetBounds(gfx::Size(100, 100));
+  root->SetDrawsContent(true);
+  root->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
 
-  // When we have a pending tree (e.g. commit_to_active_tree is false), the
-  // various ElementId to animation maps should not track anything for the
-  // active tree (as they are only used on the sync tree).
-  LayerTreeImpl* active_tree = host_impl().active_tree();
-  UpdateDrawProperties(active_tree);
-  LayerImpl* active_root = active_tree->root_layer();
+  LayerImpl* child1 = AddLayerInActiveTree<LayerImpl>();
+  child1->SetBounds(gfx::Size(50, 50));
+  child1->SetDrawsContent(true);
+  child1->SetHitTestOpaqueness(HitTestOpaqueness::kMixed);
+  CopyProperties(root, child1);
+  auto& node = CreateEffectNode(child1);
+  node.render_surface_reason = RenderSurfaceReason::kRoundedCorner;
+  node.mask_filter_info = kMaskFilterWithRoundedCorners;
+  node.is_fast_rounded_corner = true;
 
-  auto& active_opacity_map =
-      active_tree->element_id_to_opacity_animations_for_testing();
-  ASSERT_EQ(active_opacity_map.size(), 0u);
-  active_tree->SetOpacityMutated(active_root->element_id(), 0.5f);
-  EXPECT_EQ(active_opacity_map.size(), 0u);
+  host_impl().active_tree()->SetDeviceViewportRect(gfx::Rect(root->bounds()));
+  UpdateDrawProperties(host_impl().active_tree());
 
-  auto& active_transform_map =
-      active_tree->element_id_to_transform_animations_for_testing();
-  ASSERT_EQ(active_transform_map.size(), 0u);
-  active_tree->SetTransformMutated(active_root->element_id(), gfx::Transform());
-  EXPECT_EQ(active_transform_map.size(), 0u);
+  // Sanity check the scenario we just created.
+  ASSERT_EQ(2u, GetRenderSurfaceList().size());
 
-  auto& active_filter_map =
-      active_tree->element_id_to_filter_animations_for_testing();
-  ASSERT_EQ(active_filter_map.size(), 0u);
-  active_tree->SetFilterMutated(active_root->element_id(), FilterOperations());
-  EXPECT_EQ(active_filter_map.size(), 0u);
+  RenderSurfaceImpl* render_surface = GetRenderSurface(child1);
+  EXPECT_TRUE(render_surface->is_fast_rounded_corner());
 
-  // The pending/recycle tree however should track them. Here we need two nodes
-  // (the root and a child) as we will be adding entries for both the pending
-  // and recycle tree cases.
-  host_impl().CreatePendingTree();
-  LayerTreeImpl* pending_tree = host_impl().pending_tree();
-  LayerImpl* pending_root = EnsureRootLayerInPendingTree();
-  pending_root->SetBounds(gfx::Size(1, 1));
-  LayerImpl* child = AddLayerInPendingTree<LayerImpl>();
-  pending_tree->SetElementIdsForTesting();
+  auto render_pass = viz::CompositorRenderPass::Create();
+  AppendQuadsData append_quads_data;
 
-  // A scale transform forces a TransformNode.
-  gfx::Transform scale3d;
-  scale3d.Scale3d(1, 1, 0.5);
-  CopyProperties(pending_root, child);
-  CreateTransformNode(child).local = scale3d;
-  // A non-one opacity forces an EffectNode.
-  CreateEffectNode(child).opacity = 0.9f;
+  render_surface->AppendQuads(AppendQuadsContext{DRAW_MODE_HARDWARE, {}, false},
+                              render_pass.get(), &append_quads_data);
 
-  UpdateDrawProperties(pending_tree);
+  ASSERT_EQ(1u, render_pass->shared_quad_state_list.size());
+  viz::SharedQuadState* shared_quad_state =
+      render_pass->shared_quad_state_list.front();
 
-  auto& pending_opacity_map =
-      pending_tree->element_id_to_opacity_animations_for_testing();
-  ASSERT_EQ(pending_opacity_map.size(), 0u);
-  pending_tree->SetOpacityMutated(pending_root->element_id(), 0.5f);
-  EXPECT_EQ(pending_opacity_map.size(), 1u);
-
-  auto& pending_transform_map =
-      pending_tree->element_id_to_transform_animations_for_testing();
-  ASSERT_EQ(pending_transform_map.size(), 0u);
-  pending_tree->SetTransformMutated(pending_root->element_id(),
-                                    gfx::Transform());
-  EXPECT_EQ(pending_transform_map.size(), 1u);
-
-  auto& pending_filter_map =
-      pending_tree->element_id_to_filter_animations_for_testing();
-  ASSERT_EQ(pending_filter_map.size(), 0u);
-  pending_tree->SetFilterMutated(pending_root->element_id(),
-                                 FilterOperations());
-  EXPECT_EQ(pending_filter_map.size(), 1u);
-
-  // Finally, check the recycle tree - this should still track them.
-  host_impl().ActivateSyncTree();
-  LayerTreeImpl* recycle_tree = host_impl().recycle_tree();
-  ASSERT_TRUE(recycle_tree);
-
-  auto& recycle_opacity_map =
-      recycle_tree->element_id_to_opacity_animations_for_testing();
-  ASSERT_EQ(recycle_opacity_map.size(), 1u);
-  recycle_tree->SetOpacityMutated(child->element_id(), 0.5f);
-  EXPECT_EQ(recycle_opacity_map.size(), 2u);
-
-  auto& recycle_transform_map =
-      recycle_tree->element_id_to_transform_animations_for_testing();
-  ASSERT_EQ(recycle_transform_map.size(), 1u);
-  recycle_tree->SetTransformMutated(child->element_id(), gfx::Transform());
-  EXPECT_EQ(recycle_transform_map.size(), 2u);
-
-  auto& recycle_filter_map =
-      recycle_tree->element_id_to_filter_animations_for_testing();
-  ASSERT_EQ(recycle_filter_map.size(), 1u);
-  recycle_tree->SetFilterMutated(child->element_id(), FilterOperations());
-  EXPECT_EQ(recycle_filter_map.size(), 2u);
+  EXPECT_EQ(kMaskFilterWithRoundedCorners, shared_quad_state->mask_filter_info);
+  EXPECT_TRUE(shared_quad_state->is_fast_rounded_corner);
 }
 
-TEST_F(LayerTreeImplTest, ElementIdToAnimationMapsTrackOnlyOnSyncTree) {
-  ASSERT_TRUE(host_impl().CommitToActiveTree());
-
-  // When we are commiting directly to the active tree, the various ElementId to
-  // animation maps should track on the active tree (as it is the sync tree, and
-  // they are used on the sync tree).
-  LayerTreeImpl* active_tree = host_impl().active_tree();
-  UpdateDrawProperties(active_tree);
-  LayerImpl* root = active_tree->root_layer();
-
-  auto& opacity_map =
-      active_tree->element_id_to_opacity_animations_for_testing();
-  ASSERT_EQ(opacity_map.size(), 0u);
-  active_tree->SetOpacityMutated(root->element_id(), 0.5f);
-  EXPECT_EQ(opacity_map.size(), 1u);
-
-  auto& transform_map =
-      active_tree->element_id_to_transform_animations_for_testing();
-  ASSERT_EQ(transform_map.size(), 0u);
-  active_tree->SetTransformMutated(root->element_id(), gfx::Transform());
-  EXPECT_EQ(transform_map.size(), 1u);
-
-  auto& filter_map = active_tree->element_id_to_filter_animations_for_testing();
-  ASSERT_EQ(filter_map.size(), 0u);
-  active_tree->SetFilterMutated(root->element_id(), FilterOperations());
-  EXPECT_EQ(filter_map.size(), 1u);
+LayerTreeSettings LayerTreeImplOcclusionSettings() {
+  LayerTreeSettings settings = CommitToPendingTreeLayerListSettings();
+  settings.minimum_occlusion_tracking_size = gfx::Size(1, 1);
+  return settings;
 }
-
-class LayerTreeImplOcclusionSettings : public LayerListSettings {
- public:
-  explicit LayerTreeImplOcclusionSettings(bool enabled) {
-    enable_occlusion = enabled;
-    minimum_occlusion_tracking_size = gfx::Size(1, 1);
-  }
-};
 
 class LayerTreeImplOcclusionTest : public LayerTreeImplTest {
  public:
-  explicit LayerTreeImplOcclusionTest(bool enable_occlusion)
-      : LayerTreeImplTest(LayerTreeImplOcclusionSettings(enable_occlusion)),
-        enable_occlusion_(enable_occlusion) {}
-
-  void TestOcclusion() {
-    LayerImpl* root = root_layer();
-    root->SetBounds(gfx::Size(100, 100));
-
-    // Create a 50x50 layer in the center of our root bounds.
-    LayerImpl* bottom_layer = AddLayer<LayerImpl>();
-    bottom_layer->SetBounds(gfx::Size(50, 50));
-    bottom_layer->SetDrawsContent(true);
-    bottom_layer->SetContentsOpaque(true);
-    CopyProperties(root, bottom_layer);
-    bottom_layer->SetOffsetToTransformParent(gfx::Vector2dF(25, 25));
-
-    // Create a full-bounds 100x100 layer which occludes the 50x50 layer.
-    LayerImpl* occluding_layer = AddLayer<LayerImpl>();
-    occluding_layer->SetBounds(gfx::Size(100, 100));
-    occluding_layer->SetDrawsContent(true);
-    occluding_layer->SetContentsOpaque(true);
-    CopyProperties(root, occluding_layer);
-
-    host_impl().active_tree()->SetDeviceViewportRect(gfx::Rect(root->bounds()));
-    UpdateDrawProperties(host_impl().active_tree());
-
-    LayerTreeImpl* active_tree = host_impl().active_tree();
-    if (enable_occlusion_) {
-      // With occlusion on, the root is fully occluded, as is the bottom layer.
-      EXPECT_TRUE(active_tree->UnoccludedScreenSpaceRegion().IsEmpty());
-      EXPECT_TRUE(bottom_layer->draw_properties()
-                      .occlusion_in_content_space.HasOcclusion());
-    } else {
-      // With occlusion off, the full root should be unoccluded and the bottom
-      // layer should have no occlusion.
-      EXPECT_TRUE(active_tree->UnoccludedScreenSpaceRegion().Contains(
-          gfx::Rect(root->bounds())));
-      EXPECT_FALSE(bottom_layer->draw_properties()
-                       .occlusion_in_content_space.HasOcclusion());
-    }
-  }
-
- private:
-  bool enable_occlusion_;
+  LayerTreeImplOcclusionTest()
+      : LayerTreeImplTest(LayerTreeImplOcclusionSettings()) {}
 };
 
-class LayerTreeImplOcclusionDisabledTest : public LayerTreeImplOcclusionTest {
- public:
-  LayerTreeImplOcclusionDisabledTest() : LayerTreeImplOcclusionTest(false) {}
-};
+TEST_F(LayerTreeImplOcclusionTest, Occlusion) {
+  LayerImpl* root = root_layer();
+  root->SetBounds(gfx::Size(100, 100));
 
-class LayerTreeImplOcclusionEnabledTest : public LayerTreeImplOcclusionTest {
- public:
-  LayerTreeImplOcclusionEnabledTest() : LayerTreeImplOcclusionTest(true) {}
-};
+  // Create a 50x50 layer in the center of our root bounds.
+  LayerImpl* bottom_layer = AddLayerInActiveTree<LayerImpl>();
+  bottom_layer->SetBounds(gfx::Size(50, 50));
+  bottom_layer->SetDrawsContent(true);
+  bottom_layer->SetContentsOpaque(true);
+  CopyProperties(root, bottom_layer);
+  bottom_layer->SetOffsetToTransformParent(gfx::Vector2dF(25, 25));
 
-TEST_F(LayerTreeImplOcclusionDisabledTest, OcclusionDisabled) {
-  TestOcclusion();
+  // Create a full-bounds 100x100 layer which occludes the 50x50 layer.
+  LayerImpl* occluding_layer = AddLayerInActiveTree<LayerImpl>();
+  occluding_layer->SetBounds(gfx::Size(100, 100));
+  occluding_layer->SetDrawsContent(true);
+  occluding_layer->SetContentsOpaque(true);
+  CopyProperties(root, occluding_layer);
+
+  host_impl().active_tree()->SetDeviceViewportRect(gfx::Rect(root->bounds()));
+  UpdateDrawProperties(host_impl().active_tree());
+
+  LayerTreeImpl* active_tree = host_impl().active_tree();
+  // With occlusion on, the root is fully occluded, as is the bottom layer.
+  EXPECT_TRUE(active_tree->UnoccludedScreenSpaceRegion().IsEmpty());
+  EXPECT_TRUE(bottom_layer->draw_properties()
+                  .occlusion_in_content_space.HasOcclusion());
 }
 
-TEST_F(LayerTreeImplOcclusionEnabledTest, OcclusionEnabled) {
-  TestOcclusion();
+TEST_F(LayerTreeImplTest, TotalScrollOffsetForElement) {
+  LayerImpl* root = root_layer();
+  root->SetBounds(gfx::Size(100, 100));
+
+  LayerImpl* scroller = AddLayerInActiveTree<LayerImpl>();
+  scroller->SetBounds(gfx::Size(50, 50));
+  scroller->SetElementId(ElementId(100));
+  CopyProperties(root, scroller);
+  CreateTransformNode(scroller);
+  // Create a scroll node. The content is larger than the container.
+  CreateScrollNode(scroller, gfx::Size(50, 50));
+  GetScrollNode(scroller)->bounds = gfx::Size(100, 200);
+
+  host_impl().active_tree()->SetDeviceViewportRect(gfx::Rect(root->bounds()));
+  UpdateDrawProperties(host_impl().active_tree());
+
+  // Initial state, no scroll.
+  EXPECT_POINTF_EQ(
+      gfx::PointF(0, 0),
+      host_impl().active_tree()->TotalScrollOffset(scroller->element_id()));
+  EXPECT_POINTF_EQ(
+      gfx::PointF(50, 150),
+      host_impl().active_tree()->TotalMaxScrollOffset(scroller->element_id()));
+
+  // Apply some scroll.
+  SetScrollOffset(scroller, gfx::PointF(10, 20));
+  host_impl().active_tree()->SetDeviceViewportRect(gfx::Rect(root->bounds()));
+  UpdateDrawProperties(host_impl().active_tree());
+
+  EXPECT_POINTF_EQ(
+      gfx::PointF(10, 20),
+      host_impl().active_tree()->TotalScrollOffset(scroller->element_id()));
+
+  // Test with invalid ElementId.
+  EXPECT_POINTF_EQ(
+      gfx::PointF(0, 0),
+      host_impl().active_tree()->TotalScrollOffset(ElementId(999)));
+  EXPECT_POINTF_EQ(
+      gfx::PointF(0, 0),
+      host_impl().active_tree()->TotalMaxScrollOffset(ElementId(999)));
+}
+
+TEST_F(LayerTreeImplTest, SetTargetSnapAreaElementIdsSyncsTrees) {
+  host_impl().CreatePendingTree();
+  LayerTreeImpl* pending_tree = host_impl().pending_tree();
+  LayerImpl* root = EnsureRootLayerInPendingTree();
+  root->SetBounds(gfx::Size(100, 100));
+
+  const ElementId kScrollerId(100);
+  LayerImpl* scroller = AddLayerInPendingTree<LayerImpl>();
+  scroller->SetBounds(gfx::Size(50, 50));
+  scroller->SetElementId(kScrollerId);
+  CopyProperties(root, scroller);
+  CreateTransformNode(scroller);
+  ScrollNode& pending_scroll_node =
+      CreateScrollNode(scroller, gfx::Size(50, 50));
+  pending_scroll_node.bounds = gfx::Size(100, 200);
+  pending_scroll_node.snap_container_data.emplace();
+
+  pending_tree->SetDeviceViewportRect(gfx::Rect(root->bounds()));
+  UpdateDrawProperties(pending_tree);
+
+  // Activate the pending tree so that active_tree and recycle_tree both have
+  // the scroll node with snap_container_data.
+  host_impl().ActivateSyncTree();
+  ASSERT_EQ(nullptr, host_impl().pending_tree());
+  ASSERT_NE(nullptr, host_impl().recycle_tree());
+  const TargetSnapAreaElementIds kInitialTargets;
+  EXPECT_EQ(kInitialTargets, GetTargetSnapAreaElementIds(
+                                 host_impl().active_tree(), kScrollerId));
+  EXPECT_EQ(kInitialTargets, GetTargetSnapAreaElementIds(
+                                 host_impl().recycle_tree(), kScrollerId));
+
+  // Setting new targets on active_tree also updates recycle_tree.
+  const TargetSnapAreaElementIds kTargets1(ElementId(10), ElementId(20));
+  EXPECT_TRUE(host_impl().active_tree()->SetTargetSnapAreaElementIds(
+      kScrollerId, kTargets1));
+  EXPECT_EQ(kTargets1, GetTargetSnapAreaElementIds(host_impl().active_tree(),
+                                                   kScrollerId));
+  EXPECT_EQ(kTargets1, GetTargetSnapAreaElementIds(host_impl().recycle_tree(),
+                                                   kScrollerId));
+
+  // Setting the same targets again returns false and changes nothing.
+  EXPECT_FALSE(host_impl().active_tree()->SetTargetSnapAreaElementIds(
+      kScrollerId, kTargets1));
+  EXPECT_EQ(kTargets1, GetTargetSnapAreaElementIds(host_impl().active_tree(),
+                                                   kScrollerId));
+  EXPECT_EQ(kTargets1, GetTargetSnapAreaElementIds(host_impl().recycle_tree(),
+                                                   kScrollerId));
+
+  // Simulate an impl-side invalidation (e.g. for a raster-inducing scroll)
+  // which swaps recycle_tree into pending_tree and activates it. The snap
+  // targets on active_tree must not be overwritten with stale values.
+  host_impl().CreatePendingTree();
+  ASSERT_EQ(nullptr, host_impl().recycle_tree());
+  // pending_tree is the former recycle_tree, so it already has kTargets1.
+  EXPECT_EQ(kTargets1, GetTargetSnapAreaElementIds(host_impl().pending_tree(),
+                                                   kScrollerId));
+
+  const TargetSnapAreaElementIds kTargets2(ElementId(30), ElementId(40));
+  EXPECT_TRUE(host_impl().active_tree()->SetTargetSnapAreaElementIds(
+      kScrollerId, kTargets2));
+  EXPECT_EQ(kTargets2, GetTargetSnapAreaElementIds(host_impl().active_tree(),
+                                                   kScrollerId));
+  EXPECT_EQ(kTargets2, GetTargetSnapAreaElementIds(host_impl().pending_tree(),
+                                                   kScrollerId));
+
+  host_impl().ActivateSyncTree();
+  EXPECT_EQ(kTargets2, GetTargetSnapAreaElementIds(host_impl().active_tree(),
+                                                   kScrollerId));
+  EXPECT_EQ(kTargets2, GetTargetSnapAreaElementIds(host_impl().recycle_tree(),
+                                                   kScrollerId));
+
+  // Setting targets on a tree other than active_tree doesn't sync them back
+  // to active_tree.
+  const TargetSnapAreaElementIds kTargets3(ElementId(50), ElementId(60));
+  EXPECT_TRUE(host_impl().recycle_tree()->SetTargetSnapAreaElementIds(
+      kScrollerId, kTargets3));
+  EXPECT_EQ(kTargets3, GetTargetSnapAreaElementIds(host_impl().recycle_tree(),
+                                                   kScrollerId));
+  EXPECT_EQ(kTargets2, GetTargetSnapAreaElementIds(host_impl().active_tree(),
+                                                   kScrollerId));
+}
+
+// A commit may remove a scroller from the pending tree while the active tree
+// still has it. Setting snap targets on the active tree should still work, and
+// should leave the pending tree alone.
+TEST_F(LayerTreeImplTest,
+       SetTargetSnapAreaElementIdsWithScrollerMissingFromPendingTree) {
+  LayerImpl* root = root_layer();
+  const ElementId kScrollerId(100);
+  LayerImpl* scroller = AddLayerInActiveTree<LayerImpl>();
+  scroller->SetBounds(gfx::Size(50, 50));
+  scroller->SetElementId(kScrollerId);
+  CopyProperties(root, scroller);
+  CreateTransformNode(scroller);
+  ScrollNode& scroll_node = CreateScrollNode(scroller, gfx::Size(50, 50));
+  scroll_node.bounds = gfx::Size(100, 200);
+  scroll_node.snap_container_data.emplace();
+  UpdateDrawProperties(host_impl().active_tree());
+
+  // The pending tree only has a root layer, as if a commit removed the
+  // scroller.
+  host_impl().CreatePendingTree();
+  EnsureRootLayerInPendingTree();
+  LayerTreeImpl* pending_tree = host_impl().pending_tree();
+  ASSERT_FALSE(
+      GetTargetSnapAreaElementIds(pending_tree, kScrollerId).has_value());
+
+  const TargetSnapAreaElementIds kTargets(ElementId(10), ElementId(20));
+  EXPECT_TRUE(host_impl().active_tree()->SetTargetSnapAreaElementIds(
+      kScrollerId, kTargets));
+  EXPECT_EQ(kTargets, GetTargetSnapAreaElementIds(host_impl().active_tree(),
+                                                  kScrollerId));
+  EXPECT_FALSE(
+      GetTargetSnapAreaElementIds(pending_tree, kScrollerId).has_value());
+
+  // Setting the targets on the pending tree directly does nothing.
+  EXPECT_FALSE(
+      pending_tree->SetTargetSnapAreaElementIds(kScrollerId, kTargets));
+  EXPECT_FALSE(
+      GetTargetSnapAreaElementIds(pending_tree, kScrollerId).has_value());
+}
+
+TEST_F(LayerTreeImplTest, AsValueIntoRenderSurfaceLayerList) {
+  LayerImpl* root = root_layer();
+  root->SetBounds(gfx::Size(100, 100));
+  root->SetDrawsContent(true);
+
+  LayerImpl* drawing_child = AddLayerInActiveTree<LayerImpl>();
+  drawing_child->SetBounds(gfx::Size(50, 50));
+  drawing_child->SetDrawsContent(true);
+  CopyProperties(root, drawing_child);
+
+  LayerImpl* non_drawing_child = AddLayerInActiveTree<LayerImpl>();
+  non_drawing_child->SetBounds(gfx::Size(50, 50));
+  non_drawing_child->SetDrawsContent(false);
+  CopyProperties(root, non_drawing_child);
+
+  host_impl().active_tree()->SetDeviceViewportRect(gfx::Rect(root->bounds()));
+  UpdateDrawProperties(host_impl().active_tree());
+
+  ASSERT_TRUE(root->contributes_to_drawn_render_surface());
+  ASSERT_TRUE(drawing_child->contributes_to_drawn_render_surface());
+  ASSERT_FALSE(non_drawing_child->contributes_to_drawn_render_surface());
+
+  base::trace_event::TracedValueJSON state;
+  host_impl().active_tree()->AsValueInto(&state);
+  std::unique_ptr<base::Value> value = state.ToBaseValue();
+  ASSERT_NE(nullptr, value);
+  const base::DictValue* dict = value->GetIfDict();
+  ASSERT_NE(nullptr, dict);
+
+  const base::ListValue* rsl_list = dict->FindList("render_surface_layer_list");
+  ASSERT_NE(nullptr, rsl_list);
+  ASSERT_EQ(2u, rsl_list->size());
+
+  ASSERT_TRUE((*rsl_list)[0].is_dict());
+  const std::string* id_ref_0 = (*rsl_list)[0].GetDict().FindString("id_ref");
+  ASSERT_NE(nullptr, id_ref_0);
+  EXPECT_EQ(base::StringPrintf("0x%" PRIxPTR,
+                               reinterpret_cast<uintptr_t>(drawing_child)),
+            *id_ref_0);
+
+  ASSERT_TRUE((*rsl_list)[1].is_dict());
+  const std::string* id_ref_1 = (*rsl_list)[1].GetDict().FindString("id_ref");
+  ASSERT_NE(nullptr, id_ref_1);
+  EXPECT_EQ(
+      base::StringPrintf("0x%" PRIxPTR, reinterpret_cast<uintptr_t>(root)),
+      *id_ref_1);
 }
 
 }  // namespace

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,28 +9,37 @@ import android.app.Application;
 import android.app.Application.ActivityLifecycleCallbacks;
 import android.os.Bundle;
 
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JNINamespace;
+import org.jni_zero.JniPtr;
+import org.jni_zero.JniRawPtr;
+import org.jni_zero.JniType;
+import org.jni_zero.JniTypeToken;
+import org.jni_zero.NativeMethods;
+
 import org.chromium.base.ContextUtils;
 import org.chromium.base.Log;
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.JNINamespace;
-import org.chromium.base.annotations.NativeMethods;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.base.ImmutableWeakReference;
 import org.chromium.ui.base.WindowAndroid;
 
-/**
- * Installs AR DFM and ArCore runtimes.
- */
+/** Installs AR DFM and ArCore runtimes. */
 @JNINamespace("webxr")
+@NullMarked
 public class ArCoreInstallUtils {
+    @JniType("::webxr::ArCoreInstallHelper")
+    interface NativeArCoreInstallHelper extends JniTypeToken {}
+
     /**
-     * Helper class to store a reference to the ArCoreInstallUtils instance and activity
-     * that requested an install of ArCore, and await that activity being resumed.
+     * Helper class to store a reference to the ArCoreInstallUtils instance and activity that
+     * requested an install of ArCore, and await that activity being resumed.
      */
-    private class InstallRequest implements ActivityLifecycleCallbacks {
-        private ArCoreInstallUtils mInstallInstance;
-        private ImmutableWeakReference<Activity> mWeakActivity;
-        private ImmutableWeakReference<Application> mWeakApplication;
+    private static class InstallRequest implements ActivityLifecycleCallbacks {
+        private @Nullable ArCoreInstallUtils mInstallInstance;
+        private final ImmutableWeakReference<Activity> mWeakActivity;
+        private final ImmutableWeakReference<Application> mWeakApplication;
 
         public InstallRequest(ArCoreInstallUtils instance, Activity activity) {
             this.mInstallInstance = instance;
@@ -58,13 +67,14 @@ public class ArCoreInstallUtils {
         public void onActivityResumed(Activity activity) {
             if (mWeakActivity.get() != activity || mInstallInstance == null) return;
 
-            mInstallInstance.onArCoreRequestInstallReturned(activity);
+            mInstallInstance.onArCoreRequestInstallReturned();
         }
 
         // Unfortunately, ActivityLifecycleCallbacks force us to implement all of the methods, but
         // we only really care about onActivityResumed for our purposes.
         @Override
-        public void onActivityCreated(final Activity activity, Bundle savedInstanceState) {}
+        public void onActivityCreated(
+                final Activity activity, @Nullable Bundle savedInstanceState) {}
 
         @Override
         public void onActivityDestroyed(Activity activity) {}
@@ -84,23 +94,24 @@ public class ArCoreInstallUtils {
 
     private static final String TAG = "ArCoreInstallUtils";
 
-    private long mNativeArCoreInstallUtils;
+    private @Nullable JniRawPtr<NativeArCoreInstallHelper> mNativeArCoreInstallUtils;
 
     // This tracks the relevant information of the instance that requested installation of ARCore.
     // Should be non-null only if there is a pending request to install ARCore.
-    private static InstallRequest sInstallRequest;
+    private static @Nullable InstallRequest sInstallRequest;
 
     // Cached ArCoreShim instance - valid only after AR module was installed and
     // getArCoreShimInstance() was called.
-    private static ArCoreShim sArCoreInstance;
+    private static @Nullable ArCoreShim sArCoreInstance;
 
     private static ArCoreShim getArCoreShimInstance() {
         if (sArCoreInstance != null) return sArCoreInstance;
 
         try {
             sArCoreInstance =
-                    (ArCoreShim) Class.forName("org.chromium.components.webxr.ArCoreShimImpl")
-                            .newInstance();
+                    (ArCoreShim)
+                            Class.forName("org.chromium.components.webxr.ArCoreShimImpl")
+                                    .newInstance();
         } catch (ClassNotFoundException e) {
             throw new RuntimeException(e);
         } catch (InstantiationException e) {
@@ -113,16 +124,24 @@ public class ArCoreInstallUtils {
     }
 
     @CalledByNative
-    private static ArCoreInstallUtils create(long nativeArCoreInstallUtils) {
+    static ArCoreInstallUtils create(
+            JniRawPtr<NativeArCoreInstallHelper> nativeArCoreInstallUtils) {
         return new ArCoreInstallUtils(nativeArCoreInstallUtils);
     }
 
     @CalledByNative
     private void onNativeDestroy() {
-        mNativeArCoreInstallUtils = 0;
+        if (mNativeArCoreInstallUtils != null) {
+            mNativeArCoreInstallUtils.release();
+            mNativeArCoreInstallUtils = null;
+        }
+        if (sInstallRequest != null) {
+            sInstallRequest.dispose();
+            sInstallRequest = null;
+        }
     }
 
-    private ArCoreInstallUtils(long nativeArCoreInstallUtils) {
+    private ArCoreInstallUtils(JniRawPtr<NativeArCoreInstallHelper> nativeArCoreInstallUtils) {
         mNativeArCoreInstallUtils = nativeArCoreInstallUtils;
     }
 
@@ -138,14 +157,13 @@ public class ArCoreInstallUtils {
 
     @CalledByNative
     private static boolean shouldRequestInstallSupportedArCore() {
-        @ArCoreAvailability
-        int availability = getArCoreInstallStatus();
+        @ArCoreAvailability int availability = getArCoreInstallStatus();
         // Skip ARCore installation if we are certain that it is already installed.
         // In all other cases, we might as well try to install it and handle installation failures.
         return availability != ArCoreAvailability.SUPPORTED_INSTALLED;
     }
 
-    private Activity getActivity(final WebContents webContents) {
+    private @Nullable Activity getActivity(final WebContents webContents) {
         if (webContents == null) return null;
         WindowAndroid window = webContents.getTopLevelNativeWindow();
         if (window == null) return null;
@@ -172,7 +190,7 @@ public class ArCoreInstallUtils {
                 // Install flow will resume in onArCoreRequestInstallReturned, mark that
                 // there is active request. Native code notification will be deferred until
                 // our activity gets resumed.
-                sInstallRequest = new InstallRequest(ArCoreInstallUtils.this, activity);
+                sInstallRequest = new InstallRequest(this, activity);
             } else if (installStatus == ArCoreShim.InstallStatus.INSTALLED) {
                 // No need to install - notify native code.
                 maybeNotifyNativeOnRequestInstallSupportedArCoreResult(true);
@@ -188,37 +206,25 @@ public class ArCoreInstallUtils {
         }
     }
 
-    /**
-     * Helper used to notify native code about the result of the request to install ARCore.
-     */
+    /** Helper used to notify native code about the result of the request to install ARCore. */
     private void maybeNotifyNativeOnRequestInstallSupportedArCoreResult(boolean success) {
-        if (mNativeArCoreInstallUtils != 0) {
-            ArCoreInstallUtilsJni.get().onRequestInstallSupportedArCoreResult(
-                    mNativeArCoreInstallUtils, success);
+        if (mNativeArCoreInstallUtils != null) {
+            ArCoreInstallUtilsJni.get()
+                    .onRequestInstallSupportedArCoreResult(mNativeArCoreInstallUtils, success);
         }
     }
 
-    private void onArCoreRequestInstallReturned(Activity activity) {
+    private void onArCoreRequestInstallReturned() {
         assert sInstallRequest != null;
-        try {
-            // Since |userRequestedInstall| parameter is false, the below call should
-            // throw if ARCore is still not installed - no need to check the result.
-            getArCoreShimInstance().requestInstall(activity, false);
-            maybeNotifyNativeOnRequestInstallSupportedArCoreResult(true);
-        } catch (ArCoreShim.UnavailableDeviceNotCompatibleException e) {
-            Log.w(TAG, "Exception thrown when trying to validate install state of ARCore: %s",
-                    e.toString());
-            maybeNotifyNativeOnRequestInstallSupportedArCoreResult(false);
-        } catch (ArCoreShim.UnavailableUserDeclinedInstallationException e) {
-            maybeNotifyNativeOnRequestInstallSupportedArCoreResult(false);
-        }
-
+        maybeNotifyNativeOnRequestInstallSupportedArCoreResult(
+                getArCoreInstallStatus() == ArCoreAvailability.SUPPORTED_INSTALLED);
         sInstallRequest.dispose();
         sInstallRequest = null;
     }
 
     @NativeMethods
     /* package */ interface ArInstallHelperNative {
-        void onRequestInstallSupportedArCoreResult(long nativeArCoreInstallHelper, boolean success);
+        void onRequestInstallSupportedArCoreResult(
+                JniPtr<NativeArCoreInstallHelper> self, boolean success);
     }
 }

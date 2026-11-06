@@ -1,27 +1,24 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <string>
 
-#include "base/metrics/field_trial_param_associator.h"
-
-#include "base/bind.h"
 #include "base/check.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/metrics/field_trial_param_associator.h"
 #include "base/notreached.h"
 #include "base/run_loop.h"
-#include "base/task/post_task.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_impl.h"
 #include "chrome/browser/chrome_content_browser_client.h"
 #include "chrome/browser/net/system_network_context_manager.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "content/public/browser/browser_task_traits.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/network_service_instance.h"
 #include "content/public/common/content_features.h"
@@ -52,8 +49,8 @@ class NetInfoNetworkQualityEstimatorHoldbackBrowserTest
 
   void VerifyNetworkQualityNetInfoWebAPI(
       const std::string& expected_effective_connection_type) {
-    ui_test_utils::NavigateToURL(browser(),
-                                 test_server_.GetURL("/net_info.html"));
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(
+        browser(), test_server_.GetURL("/net_info.html")));
     content::NavigationEntry* entry =
         GetWebContents()->GetController().GetVisibleEntry();
     EXPECT_EQ(content::PAGE_TYPE_NORMAL, entry->GetPageType());
@@ -62,20 +59,16 @@ class NetInfoNetworkQualityEstimatorHoldbackBrowserTest
               RunScriptExtractString("getEffectiveType()"));
 
     if (expected_effective_connection_type == "slow-2g") {
-      VerifyRtt(base::TimeDelta::FromMilliseconds(3600),
-                RunScriptExtractDouble("getRtt()"));
+      VerifyRtt(base::Milliseconds(3600), RunScriptExtractDouble("getRtt()"));
       VerifyDownlinkKbps(40, RunScriptExtractDouble("getDownlink()") * 1000);
     } else if (expected_effective_connection_type == "2g") {
-      VerifyRtt(base::TimeDelta::FromMilliseconds(1800),
-                RunScriptExtractDouble("getRtt()"));
+      VerifyRtt(base::Milliseconds(1800), RunScriptExtractDouble("getRtt()"));
       VerifyDownlinkKbps(75, RunScriptExtractDouble("getDownlink()") * 1000);
     } else if (expected_effective_connection_type == "3g") {
-      VerifyRtt(base::TimeDelta::FromMilliseconds(450),
-                RunScriptExtractDouble("getRtt()"));
+      VerifyRtt(base::Milliseconds(450), RunScriptExtractDouble("getRtt()"));
       VerifyDownlinkKbps(400, RunScriptExtractDouble("getDownlink()") * 1000);
     } else if (expected_effective_connection_type == "4g") {
-      VerifyRtt(base::TimeDelta::FromMilliseconds(175),
-                RunScriptExtractDouble("getRtt()"));
+      VerifyRtt(base::Milliseconds(175), RunScriptExtractDouble("getRtt()"));
       VerifyDownlinkKbps(1600, RunScriptExtractDouble("getDownlink()") * 1000);
     } else {
       DCHECK(false);
@@ -101,12 +94,10 @@ class NetInfoNetworkQualityEstimatorHoldbackBrowserTest
     // them directly.
     if (type == net::EFFECTIVE_CONNECTION_TYPE_3G) {
       g_browser_process->network_quality_tracker()
-          ->ReportRTTsAndThroughputForTesting(
-              base::TimeDelta::FromMilliseconds(450), 400);
+          ->ReportRTTsAndThroughputForTesting(base::Milliseconds(450), 400);
     } else if (type == net::EFFECTIVE_CONNECTION_TYPE_SLOW_2G) {
       g_browser_process->network_quality_tracker()
-          ->ReportRTTsAndThroughputForTesting(
-              base::TimeDelta::FromMilliseconds(3600), 40);
+          ->ReportRTTsAndThroughputForTesting(base::Milliseconds(3600), 40);
     } else {
       NOTREACHED();
     }
@@ -121,8 +112,8 @@ class NetInfoNetworkQualityEstimatorHoldbackBrowserTest
     EXPECT_EQ(0, got_rtt_milliseconds % 50)
         << " got_rtt_milliseconds=" << got_rtt_milliseconds;
 
-    if (expected_rtt > base::TimeDelta::FromMilliseconds(3000))
-      expected_rtt = base::TimeDelta::FromMilliseconds(3000);
+    if (expected_rtt > base::Milliseconds(3000))
+      expected_rtt = base::Milliseconds(3000);
 
     // The difference between the actual and the estimate value should be within
     // 10%. Add 50 (bucket size used in Blink) to account for the cases when the
@@ -162,19 +153,19 @@ class NetInfoNetworkQualityEstimatorHoldbackBrowserTest
 
   std::string RunScriptExtractString(const std::string& script) {
     return content::EvalJs(browser()->tab_strip_model()->GetActiveWebContents(),
-                           script, content::EXECUTE_SCRIPT_USE_MANUAL_REPLY)
+                           script)
         .ExtractString();
   }
 
   double RunScriptExtractDouble(const std::string& script) {
     return content::EvalJs(browser()->tab_strip_model()->GetActiveWebContents(),
-                           script, content::EXECUTE_SCRIPT_USE_MANUAL_REPLY)
+                           script)
         .ExtractDouble();
   }
 
   int RunScriptExtractInt(const std::string& script) {
     return content::EvalJs(browser()->tab_strip_model()->GetActiveWebContents(),
-                           script, content::EXECUTE_SCRIPT_USE_MANUAL_REPLY)
+                           script)
         .ExtractInt();
   }
 
@@ -190,8 +181,8 @@ IN_PROC_BROWSER_TEST_P(NetInfoNetworkQualityEstimatorHoldbackBrowserTest,
   base::RunLoop().RunUntilIdle();
 
   EXPECT_TRUE(embedded_test_server()->Start());
-  ui_test_utils::NavigateToURL(
-      browser(), embedded_test_server()->GetURL("/net_info.html"));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL("/net_info.html")));
 
   if (GetParam()) {
     // ConfigureHoldbackExperiment() sets holdback ECT to 2G.

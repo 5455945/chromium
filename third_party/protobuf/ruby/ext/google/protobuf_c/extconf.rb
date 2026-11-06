@@ -2,20 +2,37 @@
 
 require 'mkmf'
 
-if RUBY_PLATFORM =~ /darwin/ || RUBY_PLATFORM =~ /linux/
-  $CFLAGS += " -std=gnu90 -O3 -DNDEBUG -Wall -Wdeclaration-after-statement -Wsign-compare"
+ext_name = "google/protobuf_c"
+
+dir_config(ext_name)
+
+if ENV["CC"]
+  RbConfig::CONFIG["CC"] = RbConfig::MAKEFILE_CONFIG["CC"] = ENV["CC"]
+end
+
+if ENV["CXX"]
+  RbConfig::CONFIG["CXX"] = RbConfig::MAKEFILE_CONFIG["CXX"] = ENV["CXX"]
+end
+
+if ENV["LD"]
+  RbConfig::CONFIG["LD"] = RbConfig::MAKEFILE_CONFIG["LD"] = ENV["LD"]
+end
+
+debug_enabled = ENV["PROTOBUF_CONFIG"] == "dbg"
+
+additional_c_flags = debug_enabled ? "-O0 -fno-omit-frame-pointer -fvisibility=default -g" : "-O3 -DNDEBUG -fvisibility=hidden"
+
+if RUBY_PLATFORM =~ /darwin/ || RUBY_PLATFORM =~ /linux/ || RUBY_PLATFORM =~ /freebsd/
+  $CFLAGS += " -std=gnu99 -Wall -Wsign-compare -Wno-declaration-after-statement #{additional_c_flags}"
 else
-  $CFLAGS += " -std=gnu90 -O3 -DNDEBUG"
+  $CFLAGS += " -std=gnu99 #{additional_c_flags}"
 end
 
+$VPATH << "$(srcdir)/third_party/utf8_range"
+$INCFLAGS += " -I$(srcdir)/third_party/utf8_range"
 
-if RUBY_PLATFORM =~ /linux/
-  # Instruct the linker to point memcpy calls at our __wrap_memcpy wrapper.
-  $LDFLAGS += " -Wl,-wrap,memcpy"
-end
+$srcs = ["protobuf.c", "convert.c", "defs.c", "message.c", "repeated_field.c",
+         "map.c", "ruby-upb.c", "utf8_range.c", "shared_convert.c",
+         "shared_message.c"]
 
-$objs = ["protobuf.o", "defs.o", "storage.o", "message.o",
-         "repeated_field.o", "map.o", "encode_decode.o", "upb.o",
-         "wrap_memcpy.o"]
-
-create_makefile("google/protobuf_c")
+create_makefile(ext_name)

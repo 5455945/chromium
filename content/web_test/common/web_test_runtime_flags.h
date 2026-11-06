@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include <string>
 
 #include "base/check.h"
-#include "base/macros.h"
 #include "content/web_test/common/tracked_dictionary.h"
 
 namespace content {
@@ -21,29 +20,41 @@ class WebTestRuntimeFlags {
   // Creates default flags (see also the Reset method).
   WebTestRuntimeFlags();
 
+  WebTestRuntimeFlags(const WebTestRuntimeFlags&) = delete;
+  WebTestRuntimeFlags& operator=(const WebTestRuntimeFlags&) = delete;
+
   // Resets all the values to their defaults.
   void Reset();
 
   TrackedDictionary& tracked_dictionary() { return dict_; }
 
-#define DEFINE_BOOL_WEB_TEST_RUNTIME_FLAG(name)                     \
-  bool name() const {                                               \
-    bool result;                                                    \
-    bool found = dict_.current_values().GetBoolean(#name, &result); \
-    DCHECK(found);                                                  \
-    return result;                                                  \
-  }                                                                 \
+#define DEFINE_BOOL_WEB_TEST_RUNTIME_FLAG(name)             \
+  bool name() const {                                       \
+    std::optional<bool> result =                            \
+        dict_.current_values().FindBoolByDottedPath(#name); \
+    DCHECK(result);                                         \
+    return *result;                                         \
+  }                                                         \
   void set_##name(bool new_value) { dict_.SetBoolean(#name, new_value); }
 
-#define DEFINE_STRING_WEB_TEST_RUNTIME_FLAG(name)                  \
-  std::string name() const {                                       \
-    std::string result;                                            \
-    bool found = dict_.current_values().GetString(#name, &result); \
-    DCHECK(found);                                                 \
-    return result;                                                 \
-  }                                                                \
-  void set_##name(const std::string& new_value) {                  \
-    dict_.SetString(#name, new_value);                             \
+#define DEFINE_INT_WEB_TEST_RUNTIME_FLAG(name)             \
+  int name() const {                                       \
+    std::optional<int> result =                            \
+        dict_.current_values().FindIntByDottedPath(#name); \
+    DCHECK(result);                                        \
+    return *result;                                        \
+  }                                                        \
+  void set_##name(int new_value) { dict_.SetInteger(#name, new_value); }
+
+#define DEFINE_STRING_WEB_TEST_RUNTIME_FLAG(name)             \
+  std::string name() const {                                  \
+    const std::string* result =                               \
+        dict_.current_values().FindStringByDottedPath(#name); \
+    DCHECK(result);                                           \
+    return *result;                                           \
+  }                                                           \
+  void set_##name(const std::string& new_value) {             \
+    dict_.SetString(#name, new_value);                        \
   }
 
   // If true, the test runner will generate pixel results.
@@ -72,6 +83,20 @@ class WebTestRuntimeFlags {
   // named frame printed.
   DEFINE_STRING_WEB_TEST_RUNTIME_FLAG(printing_frame)
 
+  // Default page width and height when printing. Set both to 0 in order to use
+  // the frame width / height.
+  DEFINE_INT_WEB_TEST_RUNTIME_FLAG(printing_width)
+  DEFINE_INT_WEB_TEST_RUNTIME_FLAG(printing_height)
+
+  // Default page margin size when printing. This default margin will apply to
+  // all four sides of the page.
+  DEFINE_INT_WEB_TEST_RUNTIME_FLAG(printing_margin)
+
+  // Printable safe inset. Printers usually have unprintable areas near the
+  // paper edges, due to the paper handling mechanism. This is the larger inset
+  // of those areas.
+  DEFINE_INT_WEB_TEST_RUNTIME_FLAG(safe_printable_inset)
+
   // If true, don't dump output until notifyDone is called.
   DEFINE_BOOL_WEB_TEST_RUNTIME_FLAG(wait_until_done)
 
@@ -98,12 +123,7 @@ class WebTestRuntimeFlags {
   // If true, the test runner will dump the drag image as pixel results.
   DEFINE_BOOL_WEB_TEST_RUNTIME_FLAG(dump_drag_image)
 
-  // Contents of Accept-Language HTTP header requested by the test.
-  DEFINE_STRING_WEB_TEST_RUNTIME_FLAG(accept_languages)
-
   // Flags influencing behavior of WebTestContentSettingsClient.
-  DEFINE_BOOL_WEB_TEST_RUNTIME_FLAG(images_allowed)
-  DEFINE_BOOL_WEB_TEST_RUNTIME_FLAG(scripts_allowed)
   DEFINE_BOOL_WEB_TEST_RUNTIME_FLAG(storage_allowed)
   DEFINE_BOOL_WEB_TEST_RUNTIME_FLAG(running_insecure_content_allowed)
   DEFINE_BOOL_WEB_TEST_RUNTIME_FLAG(dump_web_content_settings_client_callbacks)
@@ -162,13 +182,14 @@ class WebTestRuntimeFlags {
   // True for web platform tests.
   DEFINE_BOOL_WEB_TEST_RUNTIME_FLAG(is_web_platform_tests_mode)
 
+  // Whether to enable automatic drag n' drop.
+  DEFINE_BOOL_WEB_TEST_RUNTIME_FLAG(auto_drag_drop_enabled)
+
 #undef DEFINE_BOOL_WEB_TEST_RUNTIME_FLAG
 #undef DEFINE_STRING_WEB_TEST_RUNTIME_FLAG
 
  private:
   TrackedDictionary dict_;
-
-  DISALLOW_COPY_AND_ASSIGN(WebTestRuntimeFlags);
 };
 
 }  // namespace content

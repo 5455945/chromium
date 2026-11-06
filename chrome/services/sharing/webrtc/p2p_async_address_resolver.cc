@@ -1,4 +1,4 @@
-// Copyright (c) 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,11 @@
 
 #include <utility>
 
-#include "base/bind.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "jingle/glue/utils.h"
+#include "components/webrtc/net_address_utils.h"
+#include "net/base/address_family.h"
 
 namespace sharing {
 
@@ -23,15 +24,22 @@ P2PAsyncAddressResolver::~P2PAsyncAddressResolver() {
   DCHECK(state_ == STATE_CREATED || state_ == STATE_FINISHED);
 }
 
-void P2PAsyncAddressResolver::Start(const rtc::SocketAddress& host_name,
+void P2PAsyncAddressResolver::Start(const webrtc::SocketAddress& host_name,
+                                    std::optional<int> address_family,
                                     DoneCallback done_callback) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DCHECK_EQ(STATE_CREATED, state_);
 
   state_ = STATE_SENT;
   done_callback_ = std::move(done_callback);
+
+  std::optional<net::AddressFamily> family;
+  if (address_family.has_value()) {
+    family = net::ToAddressFamily(*address_family);
+  }
+
   socket_manager_->GetHostAddress(
-      host_name.hostname(), /*enable_mdns=*/true,
+      host_name.hostname(), family, /*enable_mdns=*/true,
       base::BindOnce(&P2PAsyncAddressResolver::OnResponse,
                      base::Unretained(this)));
 }

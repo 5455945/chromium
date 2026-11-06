@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,8 +18,10 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/command_line.h"
 #include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/posix/unix_domain_socket.h"
@@ -68,21 +70,6 @@ base::OnceClosure ClosureFromTwoClosures(base::OnceClosure one,
 }
 
 }  // namespace
-
-// This function triggers the static and lazy construction of objects that need
-// to be created before imposing the sandbox.
-static void ZygotePreSandboxInit() {
-  base::GetUrandomFD();
-
-  base::SysInfo::AmountOfPhysicalMemory();
-  base::SysInfo::NumberOfProcessors();
-
-  // ICU DateFormat class (used in base/time_format.cc) needs to get the
-  // Olson timezone ID by accessing the zoneinfo files on disk. After
-  // TimeZone::createDefault is called once here, the timezone ID is
-  // cached and there's no more need to access the file system.
-  std::unique_ptr<icu::TimeZone> zone(icu::TimeZone::createDefault());
-}
 
 static bool CreateInitProcessReaper(
     base::OnceClosure post_fork_parent_callback) {
@@ -152,8 +139,6 @@ static void EnterLayerOneSandbox(sandbox::policy::SandboxLinux* linux_sandbox,
                                  base::OnceClosure post_fork_parent_callback) {
   DCHECK(linux_sandbox);
 
-  ZygotePreSandboxInit();
-
 // Check that the pre-sandbox initialization didn't spawn threads.
 // It's not just our code which may do so - some system-installed libraries
 // are known to be culprits, e.g. lttng.
@@ -203,9 +188,9 @@ bool ZygoteMain(
 
   if (using_layer1_sandbox) {
     // Let the ZygoteHost know we're booting up.
-    if (!base::UnixDomainSocket::SendMsg(
-            kZygoteSocketPairFd, kZygoteBootMessage, sizeof(kZygoteBootMessage),
-            std::vector<int>())) {
+    if (!base::UnixDomainSocket::SendMsg(kZygoteSocketPairFd,
+                                         base::as_byte_span(kZygoteBootMessage),
+                                         std::vector<int>())) {
       // This is not a CHECK failure because the browser process could either
       // crash or quickly exit while the zygote is starting. In either case a
       // zygote crash is not useful. https://crbug.com/692227

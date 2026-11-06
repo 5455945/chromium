@@ -1,22 +1,25 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef BASE_TASK_THREAD_POOL_WORKER_THREAD_H_
 #define BASE_TASK_THREAD_POOL_WORKER_THREAD_H_
 
-#include <memory>
+#include <optional>
 
 #include "base/base_export.h"
 #include "base/compiler_specific.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/synchronization/atomic_flag.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/common/checked_lock.h"
 #include "base/task/thread_pool/task_source.h"
+#include "base/task/thread_pool/task_tracker.h"
 #include "base/task/thread_pool/tracked_ref.h"
 #include "base/thread_annotations.h"
 #include "base/threading/platform_thread.h"
+#include "base/threading/scoped_thread_priority.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 
@@ -43,15 +46,15 @@ class BASE_EXPORT WorkerThread : public RefCountedThreadSafe<WorkerThread>,
  public:
   // Labels this WorkerThread's association. This doesn't affect any logic
   // but will add a stack frame labeling this thread for ease of stack trace
-  // identification.
+  // identification
   enum class ThreadLabel {
     POOLED,
     SHARED,
     DEDICATED,
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
     SHARED_COM,
     DEDICATED_COM,
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
   };
 
   // Delegate interface for WorkerThread. All methods are called from the
@@ -62,29 +65,28 @@ class BASE_EXPORT WorkerThread : public RefCountedThreadSafe<WorkerThread>,
 
     // Returns the ThreadLabel the Delegate wants its WorkerThreads' stacks
     // to be labeled with.
-    virtual ThreadLabel GetThreadLabel() const = 0;
+    virtual ThreadLabel GetThreadLabel() const;
 
     // Called by |worker|'s thread when it enters its main function.
-    virtual void OnMainEntry(const WorkerThread* worker) = 0;
+    virtual void OnMainEntry(WorkerThread* worker) = 0;
 
     // Called by |worker|'s thread to get a TaskSource from which to run a Task.
     virtual RegisteredTaskSource GetWork(WorkerThread* worker) = 0;
 
-    // Called by the WorkerThread after it ran a Task. If the Task's
-    // TaskSource should be reenqueued, it is passed to |task_source|.
-    // Otherwise, |task_source| is nullptr.
-    virtual void DidProcessTask(RegisteredTaskSource task_source) = 0;
+    // Called by the worker thread to swap the task source that has just run for
+    // another one, if available. |task_source| must not be null. The worker can
+    // then run the task returned as if it was acquired via GetWork().
+    virtual RegisteredTaskSource SwapProcessedTask(
+        RegisteredTaskSource task_source,
+        WorkerThread* worker) = 0;
 
     // Called to determine how long to sleep before the next call to GetWork().
     // GetWork() may be called before this timeout expires if the worker's
     // WakeUp() method is called.
     virtual TimeDelta GetSleepTimeout() = 0;
 
-    // Called by the WorkerThread's thread to wait for work. Override this
-    // method if the thread in question needs special handling to go to sleep.
-    // |wake_up_event| is a manually resettable event and is signaled on
-    // WorkerThread::WakeUp()
-    virtual void WaitForWork(WaitableEvent* wake_up_event);
+    // Called by the WorkerThread's thread to wait for work.
+    virtual void WaitForWork();
 
     // Called by |worker|'s thread right before the main function exits. The
     // Delegate is free to release any associated resources in this call. It is
@@ -92,43 +94,85 @@ class BASE_EXPORT WorkerThread : public RefCountedThreadSafe<WorkerThread>,
     // TaskTracker after calling OnMainExit() on the Delegate.
     virtual void OnMainExit(WorkerThread* worker) {}
 
-    static constexpr TimeDelta kPurgeThreadCacheIdleDelay =
-        TimeDelta::FromSeconds(1);
+    // Called by a WorkerThread when it is woken up without any work being
+    // available for it to run.
+    virtual void RecordUnnecessaryWakeup() {}
+
+    static constexpr TimeDelta kPurgeThreadCacheIdleDelay = Seconds(1);
+
+    // Do not wake up to purge within the first minute of process lifetime. In
+    // short lived processes this will avoid waking up to try and save memory
+    // for a heap that will be going away soon. For longer lived processes this
+    // should allow for better performance at process startup since even if a
+    // worker goes to sleep for kPurgeThreadCacheIdleDelay it's very likely it
+    // will be needed soon after because of heavy startup workloads.
+    static constexpr TimeDelta kFirstSleepDurationBeforePurge = Minutes(1);
+
+   protected:
+    friend WorkerThread;
+
+    // Called in WaitForWork() to hide the worker's synchronization
+    // mechanism. Returns |true| if signaled, and |false| if the call timed out.
+    virtual bool TimedWait(TimeDelta timeout);
+
+#if PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) && \
+    PA_CONFIG(THREAD_CACHE_SUPPORTED)
+    // Returns the desired sleep time before the worker has to wake up to purge
+    // the cache thread or reclaim itself.
+    virtual TimeDelta GetSleepDurationBeforePurge(TimeTicks now);
+
+    void set_first_sleep_time_for_testing(TimeTicks first_sleep_time) {
+      first_sleep_time_for_testing_ = first_sleep_time;
+    }
+
+    // Simulated time at which the worker first attempts to go to sleep.
+    TimeTicks first_sleep_time_for_testing_;
+
+#endif  // PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) &&
+        // PA_CONFIG(THREAD_CACHE_SUPPORTED)
+
+    // Event to wake up the thread managed by the WorkerThread whose delegate
+    // this is.
+    WaitableEvent wake_up_event_{WaitableEvent::ResetPolicy::AUTOMATIC,
+                                 WaitableEvent::InitialState::NOT_SIGNALED};
   };
 
   // Creates a WorkerThread that runs Tasks from TaskSources returned by
-  // |delegate|. No actual thread will be created for this WorkerThread
-  // before Start() is called. |priority_hint| is the preferred thread priority;
-  // the actual thread priority depends on shutdown state and platform
-  // capabilities. |task_tracker| is used to handle shutdown behavior of Tasks.
-  // |predecessor_lock| is a lock that is allowed to be held when calling
-  // methods on this WorkerThread. |backward_compatibility| indicates
-  // whether backward compatibility is enabled. Either JoinForTesting() or
-  // Cleanup() must be called before releasing the last external reference.
-  WorkerThread(ThreadPriority priority_hint,
+  // |delegate()|. No actual thread will be created for this WorkerThread before
+  // Start() is called. |thread_type_hint| is the preferred thread type; the
+  // actual thread type depends on shutdown state and platform
+  // capabilities. |task_tracker| is used to handle shutdown behavior of
+  // Tasks. |sequence_num| is an index that helps identifying this
+  // WorkerThread. |predecessor_lock| is a lock that is allowed to be held when
+  // calling methods on this WorkerThread.  Either JoinForTesting() or Cleanup()
+  // must be called before releasing the last external reference.
+  WorkerThread(ThreadType thread_type_hint,
                std::unique_ptr<Delegate> delegate,
                TrackedRef<TaskTracker> task_tracker,
-               const CheckedLock* predecessor_lock = nullptr);
+               size_t sequence_num,
+               const CheckedLock* predecessor_lock = nullptr,
+               void* flow_terminator = nullptr);
 
   WorkerThread(const WorkerThread&) = delete;
   WorkerThread& operator=(const WorkerThread&) = delete;
 
   // Creates a thread to back the WorkerThread. The thread will be in a wait
   // state pending a WakeUp() call. No thread will be created if Cleanup() was
-  // called. If specified, |worker_thread_observer| will be notified when the
-  // worker enters and exits its main function. It must not be destroyed before
-  // JoinForTesting() has returned (must never be destroyed in production).
-  // Returns true on success.
-  bool Start(WorkerThreadObserver* worker_thread_observer = nullptr);
+  // called. `io_thread_task_runner` is used to setup FileDescriptorWatcher on
+  // worker threads. `io_thread_task_runner` must refer to a Thread with
+  // MessgaePumpType::IO. If specified, |worker_thread_observer| will be
+  // notified when the worker enters and exits its main function. It must not be
+  // destroyed before JoinForTesting() has returned (must never be destroyed in
+  // production). Returns true on success.
+  bool Start(scoped_refptr<SingleThreadTaskRunner> io_thread_task_runner_,
+             WorkerThreadObserver* worker_thread_observer = nullptr);
 
-  // Wakes up this WorkerThread if it wasn't already awake. After this is
-  // called, this WorkerThread will run Tasks from TaskSources returned by
-  // the GetWork() method of its delegate until it returns nullptr. No-op if
-  // Start() wasn't called. DCHECKs if called after Start() has failed or after
-  // Cleanup() has been called.
+  // Wakes up this WorkerThread if it wasn't already awake. After
+  // this is called, this WorkerThread will run Tasks from
+  // TaskSources returned by the GetWork() method of its delegate until it
+  // returns nullptr. No-op if Start() wasn't called. DCHECKs if called after
+  // Start() has failed or after Cleanup() has been called.
   void WakeUp();
-
-  WorkerThread::Delegate* delegate() { return delegate_.get(); }
 
   // Joins this WorkerThread. If a Task is already running, it will be
   // allowed to complete its execution. This can only be called once.
@@ -152,6 +196,11 @@ class BASE_EXPORT WorkerThread : public RefCountedThreadSafe<WorkerThread>,
   //   worker_ = nullptr;
   void Cleanup();
 
+  Delegate* delegate();
+
+  // Boosts thread priority for shutdown if shutdown has started.
+  void MaybeBoostPriorityForShutdown();
+
   // Informs this WorkerThread about periods during which it is not being
   // used. Thread-safe.
   void BeginUnusedPeriod();
@@ -160,21 +209,22 @@ class BASE_EXPORT WorkerThread : public RefCountedThreadSafe<WorkerThread>,
   // this WorkerThread is currently in-use. Thread-safe.
   TimeTicks GetLastUsedTime() const;
 
- private:
+  size_t sequence_num() const { return sequence_num_; }
+
+ protected:
   friend class RefCountedThreadSafe<WorkerThread>;
   class Thread;
 
   ~WorkerThread() override;
 
+  // Must be called by implementations on destruction.
+  void Destroy();
+
   bool ShouldExit() const;
 
-  // Returns the thread priority to use based on the priority hint, current
-  // shutdown state, and platform capabilities.
-  ThreadPriority GetDesiredThreadPriority() const;
-
-  // Changes the thread priority to |desired_thread_priority|. Must be called on
-  // the thread managed by |this|.
-  void UpdateThreadPriority(ThreadPriority desired_thread_priority);
+  // Raises the thread type to kDefault during shutdown if shutdown has started.
+  // Must be called on the thread managed by |this|.
+  void MaybeUpdateThreadType();
 
   // PlatformThread::Delegate:
   void ThreadMain() override;
@@ -187,18 +237,18 @@ class BASE_EXPORT WorkerThread : public RefCountedThreadSafe<WorkerThread>,
   void RunBackgroundSharedWorker();
   void RunDedicatedWorker();
   void RunBackgroundDedicatedWorker();
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   void RunSharedCOMWorker();
   void RunBackgroundSharedCOMWorker();
   void RunDedicatedCOMWorker();
   void RunBackgroundDedicatedCOMWorker();
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
   // The real main, invoked through :
   //     ThreadMain() -> RunLabeledWorker() -> RunWorker().
-  // "RunLabeledWorker()" is a dummy frame based on ThreadLabel+ThreadPriority
+  // "RunLabeledWorker()" is a dummy frame based on ThreadLabel+ThreadType
   // and used to easily identify threads in stack traces.
-  void NOT_TAIL_CALLED RunWorker();
+  NOT_TAIL_CALLED void RunWorker();
 
   // Self-reference to prevent destruction of |this| while the thread is alive.
   // Set in Start() before creating the thread. Reset in ThreadMain() before the
@@ -215,27 +265,34 @@ class BASE_EXPORT WorkerThread : public RefCountedThreadSafe<WorkerThread>,
   // stand as a required idle thread).
   TimeTicks last_used_time_ GUARDED_BY(thread_lock_);
 
-  // Event to wake up the thread managed by |this|.
-  WaitableEvent wake_up_event_{WaitableEvent::ResetPolicy::AUTOMATIC,
-                               WaitableEvent::InitialState::NOT_SIGNALED};
-
   // Whether the thread should exit. Set by Cleanup().
   AtomicFlag should_exit_;
 
-  const std::unique_ptr<Delegate> delegate_;
   const TrackedRef<TaskTracker> task_tracker_;
 
   // Optional observer notified when a worker enters and exits its main
   // function. Set in Start() and never modified afterwards.
-  WorkerThreadObserver* worker_thread_observer_ = nullptr;
+  raw_ptr<WorkerThreadObserver> worker_thread_observer_ = nullptr;
 
-  // Desired thread priority.
-  const ThreadPriority priority_hint_;
+  // Desired thread type.
+  const ThreadType thread_type_hint_;
 
-  // Actual thread priority. Can be different than |priority_hint_| depending on
-  // system capabilities and shutdown state. No lock required because all post-
-  // construction accesses occur on the thread.
-  ThreadPriority current_thread_priority_;
+  // Active lease during shutdown to raise thread type to kDefault. No lock
+  // required because all post-construction accesses occur on the thread.
+  std::optional<PlatformThread::RaiseThreadTypeLease>
+      shutdown_raise_thread_type_lease_;
+
+  std::optional<ScopedBoostablePriority> priority_boost_;
+
+  const size_t sequence_num_;
+
+  // Used to terminate WorkerThread::WakeUp trace event flows.
+  const intptr_t flow_terminator_;
+
+  // Service thread task runner.
+  scoped_refptr<SingleThreadTaskRunner> io_thread_task_runner_;
+
+  const std::unique_ptr<Delegate> delegate_;
 
   // Set once JoinForTesting() has been called.
   AtomicFlag join_called_for_testing_;

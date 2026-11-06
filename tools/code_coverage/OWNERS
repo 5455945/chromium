@@ -1,4 +1,6 @@
-liaoyuke@chromium.org
-robertocn@chromium.org
-nodir@chromium.org
-inferno@chromium.org
+davidhinojosa@google.com
+jeffyoon@google.com
+pasthana@google.com
+benreich@chromium.org
+tiborg@chromium.org
+per-file *fuzz*.py=file://testing/libfuzzer/OWNERS

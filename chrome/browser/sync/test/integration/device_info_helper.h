@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,37 +6,54 @@
 #define CHROME_BROWSER_SYNC_TEST_INTEGRATION_DEVICE_INFO_HELPER_H_
 
 #include <ostream>
-#include <string>
+#include <string_view>
 
-#include "chrome/browser/sync/test/integration/status_change_checker.h"
-#include "components/sync/protocol/sync.pb.h"
-#include "components/sync/test/fake_server/fake_server.h"
+#include "chrome/browser/sync/test/integration/fake_server_match_status_checker.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+namespace sync_pb {
+class SyncEntity;
+}
 
 // A helper class that waits for a certain set of DeviceInfos on the FakeServer.
 // The desired state is passed in as a GTest matcher.
-class ServerDeviceInfoMatchChecker : public StatusChangeChecker,
-                                     fake_server::FakeServer::Observer {
+class ServerDeviceInfoMatchChecker
+    : public fake_server::FakeServerMatchStatusChecker {
  public:
   using Matcher = testing::Matcher<std::vector<sync_pb::SyncEntity>>;
 
-  ServerDeviceInfoMatchChecker(fake_server::FakeServer* fake_server,
-                               const Matcher& matcher);
+  explicit ServerDeviceInfoMatchChecker(const Matcher& matcher);
   ~ServerDeviceInfoMatchChecker() override;
   ServerDeviceInfoMatchChecker(const ServerDeviceInfoMatchChecker&) = delete;
   ServerDeviceInfoMatchChecker& operator=(const ServerDeviceInfoMatchChecker&) =
       delete;
 
   // FakeServer::Observer overrides.
-  void OnCommit(const std::string& committer_invalidator_client_id,
-                syncer::ModelTypeSet committed_model_types) override;
+  void OnCommit(syncer::DataTypeSet committed_data_types) override;
 
   // StatusChangeChecker overrides.
   bool IsExitConditionSatisfied(std::ostream* os) override;
 
  private:
-  fake_server::FakeServer* const fake_server_;
   const Matcher matcher_;
 };
+
+namespace device_info_helper {
+
+MATCHER(HasSharingFields, "") {
+  return arg.specifics()
+      .device_info()
+      .sharing_fields()
+      .has_sender_id_fcm_token_v2();
+}
+
+MATCHER_P(HasCacheGuid, expected_cache_guid, "") {
+  return arg.specifics().device_info().cache_guid() == expected_cache_guid;
+}
+
+bool WaitForFullDeviceInfoCommitted(std::string_view cache_guid);
+
+}  // namespace device_info_helper
 
 #endif  // CHROME_BROWSER_SYNC_TEST_INTEGRATION_DEVICE_INFO_HELPER_H_

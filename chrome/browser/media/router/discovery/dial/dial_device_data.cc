@@ -1,9 +1,10 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/media/router/discovery/dial/dial_device_data.h"
-#include "net/base/ip_address.h"
+
+#include "base/check.h"
 
 namespace media_router {
 
@@ -20,7 +21,7 @@ DialDeviceData::DialDeviceData(const std::string& device_id,
 
 DialDeviceData::DialDeviceData(const DialDeviceData& other) = default;
 
-DialDeviceData::~DialDeviceData() {}
+DialDeviceData::~DialDeviceData() = default;
 
 const GURL& DialDeviceData::device_description_url() const {
   return device_description_url_;
@@ -30,39 +31,36 @@ void DialDeviceData::set_device_description_url(const GURL& url) {
   device_description_url_ = url;
 }
 
-// static
-bool DialDeviceData::IsDeviceDescriptionUrl(const GURL& url) {
-  if (!url.is_valid() || url.is_empty() || !url.SchemeIsHTTPOrHTTPS())
-    return false;
-
-  net::IPAddress address;
-  if (!net::ParseURLHostnameToAddress(url.host(), &address))
-    return false;
-
-  // TODO(crbug.com/679432): check that this IP address matches the address that
-  // we received the SSDP advertisement from.
-  return !address.IsPubliclyRoutable();
+void DialDeviceData::set_ip_address(const net::IPAddress& ip_address) {
+  ip_address_ = ip_address;
 }
 
-// static
-bool DialDeviceData::IsValidDialAppUrl(
-    const GURL& url,
-    const net::IPAddress& expected_ip_address) {
-  if (!url.is_valid() || !url.SchemeIsHTTPOrHTTPS())
+bool DialDeviceData::IsValidUrl(const GURL& url) const {
+  if (!url.is_valid() || url.is_empty() || !url.SchemeIsHTTPOrHTTPS()) {
     return false;
+  }
 
-  net::IPAddress host_ip;
-  return host_ip.AssignFromIPLiteral(url.HostNoBracketsPiece()) &&
-         host_ip.IsValid() && host_ip == expected_ip_address;
+  net::IPAddress host_address;
+  if (!net::ParseURLHostnameToAddress(url.GetHost(), &host_address)) {
+    return false;
+  }
+
+  if (host_address.IsPubliclyRoutable()) {
+    return false;
+  }
+
+  return host_address == ip_address_;
 }
 
 bool DialDeviceData::UpdateFrom(const DialDeviceData& new_data) {
-  DCHECK(new_data.device_id() == device_id_);
-  DCHECK(new_data.label().empty());
+  CHECK(new_data.device_id() == device_id_, base::NotFatalUntil::M161);
+  CHECK(new_data.label().empty(), base::NotFatalUntil::M161);
   std::string label_tmp(label_);
   bool updated_api_visible_field =
       (new_data.device_description_url() != device_description_url_) ||
-      (new_data.config_id() != config_id_);
+      (new_data.config_id() != config_id_) ||
+      (new_data.ip_address() != ip_address_) ||
+      (new_data.max_age() != max_age_);
   *this = new_data;
   label_ = label_tmp;
   return updated_api_visible_field;

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 package org.chromium.components.browser_ui.widget.tile;
@@ -11,12 +11,12 @@ import android.view.ViewGroup;
 
 import androidx.annotation.LayoutRes;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
 
-/**
- * Coordinator for the TileView.
- */
+/** Coordinator for the TileView. */
+@NullMarked
 public class TileViewCoordinator {
     private final TileView mView;
     private final TileViewMediator mMediator;
@@ -57,12 +57,12 @@ public class TileViewCoordinator {
     }
 
     /**
-     * Set whether the Icon Badge should be visible.
+     * Set whether the offline badge should be visible.
      *
-     * @param badgeVisible Whether icon badge should be visible.
+     * @param isVisible Whether offline badge should be visible.
      */
-    public void setBadgeVisible(boolean badgeVisible) {
-        mMediator.setBadgeVisible(badgeVisible);
+    public void setOfflineBadgeVisibility(boolean isVisible) {
+        mMediator.setOfflineBadgeVisibility(isVisible);
     }
 
     /**
@@ -72,6 +72,20 @@ public class TileViewCoordinator {
      */
     public void setShowLargeIcon(boolean showLargeIcon) {
         mMediator.setShowLargeIcon(showLargeIcon);
+    }
+
+    /**
+     * Set the rounding radius of the embedded icon.
+     * The supplied radius value is clipped at half the smaller of the (width, height) dimensions,
+     * so that supplying an exceptionally large value will always guarantee the view to be round.
+     *
+     * Radius is only applied when displaying small icons. Large icons are implicitly rounded to
+     * fill in the view.
+     *
+     * @param roundingRadiusPx Rounding radius (in pixels), or 0 to disable rounding.
+     */
+    public void setSmallIconRoundingRadiusPx(int roundingRadiusPx) {
+        mMediator.setSmallIconRoundingRadiusPx(roundingRadiusPx);
     }
 
     /**

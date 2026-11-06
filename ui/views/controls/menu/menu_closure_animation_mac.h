@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,12 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
 #include "ui/gfx/animation/animation.h"
 #include "ui/gfx/animation/animation_delegate.h"
+#include "ui/views/view_tracker.h"
 #include "ui/views/views_export.h"
 
 namespace views {
@@ -32,10 +33,24 @@ class SubmenuView;
 // This class also supports animating a menu away without animating the
 // selection effect, which is achieved by passing nullptr for the item to
 // animate. In this case, the animation skips straight to step 3 above.
-class VIEWS_EXPORT MenuClosureAnimationMac
-    : public gfx::AnimationDelegate,
-      public base::SupportsWeakPtr<MenuClosureAnimationMac> {
+class VIEWS_EXPORT MenuClosureAnimationMac final
+    : public gfx::AnimationDelegate {
  public:
+  // Disables (or, with `disable` = false, enables) animations for the lifetime
+  // of this object, restoring the previous state on destruction.
+  class VIEWS_EXPORT ScopedDisableAnimationsForTesting {
+   public:
+    explicit ScopedDisableAnimationsForTesting(bool disable = true);
+    ScopedDisableAnimationsForTesting(
+        const ScopedDisableAnimationsForTesting&) = delete;
+    ScopedDisableAnimationsForTesting& operator=(
+        const ScopedDisableAnimationsForTesting&) = delete;
+    ~ScopedDisableAnimationsForTesting();
+
+   private:
+    const bool previous_value_;
+  };
+
   // After this closure animation is done, |callback| is run to finish
   // dismissing the menu. If |item| is given, this will animate the item being
   // accepted before animating the menu closing; if |item| is nullptr, only the
@@ -43,6 +58,10 @@ class VIEWS_EXPORT MenuClosureAnimationMac
   MenuClosureAnimationMac(MenuItemView* item,
                           SubmenuView* menu,
                           base::OnceClosure callback);
+
+  MenuClosureAnimationMac(const MenuClosureAnimationMac&) = delete;
+  MenuClosureAnimationMac& operator=(const MenuClosureAnimationMac&) = delete;
+
   ~MenuClosureAnimationMac() override;
 
   // Start the animation.
@@ -51,13 +70,9 @@ class VIEWS_EXPORT MenuClosureAnimationMac
   // Returns the MenuItemView this animation targets.
   MenuItemView* item() { return item_; }
 
-  // Returns the SubmenuView this animation targets.
-  SubmenuView* menu() { return menu_; }
-
-  // Causes animations to take no time for testing purposes. Note that this
-  // still causes the completion callback to be run asynchronously, so test
-  // situations have the same control flow as non-test situations.
-  static void DisableAnimationsForTesting();
+  // Returns the SubmenuView this animation targets, or null if it has been
+  // destroyed.
+  SubmenuView* menu();
 
  private:
   enum class AnimationStep {
@@ -80,11 +95,12 @@ class VIEWS_EXPORT MenuClosureAnimationMac
   base::OnceClosure callback_;
   base::OneShotTimer timer_;
   std::unique_ptr<gfx::Animation> fade_animation_;
-  MenuItemView* item_;
-  SubmenuView* menu_;
-  AnimationStep step_;
-
-  DISALLOW_COPY_AND_ASSIGN(MenuClosureAnimationMac);
+  raw_ptr<MenuItemView> item_;
+  // Tracked rather than a raw pointer since the submenu may be destroyed while
+  // the fade is running (e.g. when the menu model is rebuilt).
+  ViewTracker menu_;
+  AnimationStep step_ = AnimationStep::kStart;
+  base::WeakPtrFactory<MenuClosureAnimationMac> weak_ptr_factory_{this};
 };
 
 }  // namespace views

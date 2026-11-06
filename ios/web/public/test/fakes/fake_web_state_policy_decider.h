@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,18 +19,18 @@ class FakeWebStatePolicyDecider : public WebStatePolicyDecider {
   explicit FakeWebStatePolicyDecider(WebState* web_state);
   ~FakeWebStatePolicyDecider() override = default;
 
-  // Sets the value returned from |ShouldAllowRequest|.
+  // Sets the value returned from `ShouldAllowRequest`.
   void SetShouldAllowRequest(
       WebStatePolicyDecider::PolicyDecision should_allow_request);
 
   // WebStatePolicyDecider overrides
-  // Always calls |callback| with PolicyDecision::Allow().
+  // Always calls `callback` with PolicyDecision::Allow().
   void ShouldAllowRequest(NSURLRequest* request,
-                          const RequestInfo& request_info,
+                          RequestInfo request_info,
                           PolicyDecisionCallback callback) override;
-  // Always calls |callback| with PolicyDecision::Allow().
+  // Always calls `callback` with PolicyDecision::Allow().
   void ShouldAllowResponse(NSURLResponse* response,
-                           bool for_main_frame,
+                           ResponseInfo response_info,
                            PolicyDecisionCallback callback) override;
   void WebStateDestroyed() override {}
 

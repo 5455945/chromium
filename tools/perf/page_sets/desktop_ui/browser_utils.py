@@ -1,20 +1,22 @@
-# Copyright 2021 The Chromium Authors. All rights reserved.
+# Copyright 2021 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 import time
 
 
-def Resize(browser,
-           tab_id,
-           start_width=None,
-           end_width=None,
-           start_height=None,
-           end_height=None,
-           yoyo=False,
-           repeat=1,
-           steps=100,
-           step_interval=0.01):
+def Resize(
+  browser,
+  tab_id,
+  start_width=None,
+  end_width=None,
+  start_height=None,
+  end_height=None,
+  yoyo=False,
+  repeat=1,
+  steps=100,
+  step_interval=0.01,
+):
   window_id = browser.GetWindowForTarget(tab_id)['result']['windowId']
   for _ in range(repeat):
     if yoyo:

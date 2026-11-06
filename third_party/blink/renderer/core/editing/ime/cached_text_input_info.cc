@@ -1,15 +1,16 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/editing/ime/cached_text_input_info.h"
 
+#include "build/build_config.h"
 #include "third_party/blink/renderer/core/editing/editing_utilities.h"
 #include "third_party/blink/renderer/core/editing/ephemeral_range.h"
 #include "third_party/blink/renderer/core/editing/iterators/text_iterator.h"
 #include "third_party/blink/renderer/core/html/forms/text_control_element.h"
+#include "third_party/blink/renderer/core/layout/inline/inline_node.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
-#include "third_party/blink/renderer/core/layout/ng/inline/ng_inline_node.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
@@ -40,6 +41,16 @@ EphemeralRange ComputeWholeContentRange(const ContainerNode& container) {
                         Position::AfterNode(*before_placeholder));
 }
 
+LayoutObject* FindLayoutObject(const ContainerNode& container) {
+  for (const Node& node : FlatTreeTraversal::InclusiveAncestorsOf(container)) {
+    if (auto* layout_object = node.GetLayoutObject())
+      return layout_object;
+  }
+  // Because |LayoutView| is derived from |LayoutBlockFlow|, |layout_object_|
+  // should not be null.
+  NOTREACHED() << container;
+}
+
 }  // namespace
 
 // static
@@ -50,9 +61,7 @@ TextIteratorBehavior CachedTextInputInfo::Behavior() {
       .Build();
 }
 
-void CachedTextInputInfo::ClearIfNeeded(const LayoutObject& layout_object) {
-  if (layout_object_ != &layout_object)
-    return;
+void CachedTextInputInfo::Clear() const {
   container_ = nullptr;
   layout_object_ = nullptr;
   text_ = g_empty_string;
@@ -61,18 +70,35 @@ void CachedTextInputInfo::ClearIfNeeded(const LayoutObject& layout_object) {
   offset_map_.clear();
 }
 
+void CachedTextInputInfo::ClearIfNeeded(const LayoutObject& layout_object) {
+  if (layout_object_ != &layout_object)
+    return;
+  Clear();
+}
+
+void CachedTextInputInfo::DidChangeVisibility(
+    const LayoutObject& layout_object) {
+  DidLayoutSubtree(layout_object);
+}
+
 void CachedTextInputInfo::DidLayoutSubtree(const LayoutObject& layout_object) {
   // <div style="contain:strict; ...">abc</div> reaches here.
   if (!container_)
     return;
-  Node* const node = layout_object.NonPseudoNode();
-  if (!node)
+
+  if (!layout_object_) {
     return;
-  const ContainerNode* const container =
-      RootEditableElementOrTreeScopeRootNodeOf(Position(node, 0));
-  if (!container || !container->GetLayoutObject())
-    return;
-  ClearIfNeeded(*container->GetLayoutObject());
+  }
+
+  if (layout_object_->IsDescendantOf(&layout_object)) {
+    // `<span contenteditable>...</span>` reaches here.
+    return Clear();
+  }
+
+  if (layout_object.IsDescendantOf(layout_object_)) {
+    // CachedTextInputInfoTest.RelayoutBoundary reaches here.
+    return Clear();
+  }
 }
 
 void CachedTextInputInfo::DidUpdateLayout(const LayoutObject& layout_object) {
@@ -82,39 +108,62 @@ void CachedTextInputInfo::DidUpdateLayout(const LayoutObject& layout_object) {
 void CachedTextInputInfo::EnsureCached(const ContainerNode& container) const {
   if (IsValidFor(container))
     return;
-  offset_map_.clear();
+  Clear();
   container_ = &container;
   layout_object_ = container.GetLayoutObject();
-  composition_.Clear();
-  selection_.Clear();
-  text_ = g_empty_string;
+
+  if (!layout_object_) {
+    if (auto* shadow_root = DynamicTo<ShadowRoot>(container)) {
+      // See http://crbug.com/1228373
+      layout_object_ = FindLayoutObject(shadow_root->host());
+    } else {
+      layout_object_ = FindLayoutObject(container);
+    }
+    // Because we use |layout_object_| as a cache key, |layout_object_| can
+    // not be null.
+    DCHECK(layout_object_) << container;
+  }
+
+  if (const auto* text_control = EnclosingTextControl(&container)) {
+    text_control->AnalyzeInnerEditorValue(&offset_map_);
+    if (IsEditable(*container_)) {
+      // We assume this function is called after `TextControlElement::
+      // SubtreeHasChanged()`. So we can avoid the slow
+      // SerializeInnerEditorValue().
+      text_ = text_control->InnerEditorValue();
+      DCHECK(EqualIgnoringNullity(text_,
+                                  text_control->SerializeInnerEditorValue()));
+    }
+    return;
+  }
 
   TextIteratorAlgorithm<EditingStrategy> it(ComputeWholeContentRange(container),
                                             Behavior());
   if (it.AtEnd())
     return;
 
-  const bool needs_text = HasEditableStyle(*container_);
+  const bool needs_text = IsEditable(*container_);
 
   // The initial buffer size can be critical for performance:
   // https://bugs.webkit.org/show_bug.cgi?id=81192
-  constexpr unsigned kInitialCapacity = 1 << 15;
+  constexpr wtf_size_t kInitialCapacity = 1 << 15;
 
   StringBuilder builder;
   if (needs_text) {
-    unsigned capacity = kInitialCapacity;
+    wtf_size_t capacity = kInitialCapacity;
     if (auto* block_flow =
             DynamicTo<LayoutBlockFlow>(container.GetLayoutObject())) {
-      if (block_flow->HasNGInlineNodeData()) {
-        if (const auto* mapping = NGInlineNode::GetOffsetMapping(block_flow))
+      if (block_flow->GetInlineNodeData()) {
+        if (const auto* mapping = InlineNode::GetOffsetMapping(block_flow)) {
           capacity = mapping->GetText().length();
+        }
       }
     }
     builder.ReserveCapacity(capacity);
   }
 
   const Node* last_text_node = nullptr;
-  unsigned length = 0;
+  wtf_size_t length = 0;
   for (; !it.AtEnd(); it.Advance()) {
     const Node* node = it.GetTextState().PositionNode();
     if (last_text_node != node && IsA<Text>(node)) {
@@ -126,7 +175,7 @@ void CachedTextInputInfo::EnsureCached(const ContainerNode& container) const {
     length += it.GetTextState().length();
   }
 
-  if (!builder.IsEmpty())
+  if (!builder.empty())
     text_ = builder.ToString();
 }
 
@@ -153,28 +202,33 @@ PlainTextRange CachedTextInputInfo::GetPlainTextRange(
   // |range| may not in |container|. See http://crbug.com/1161562
   if (container_start > range.StartPosition())
     return PlainTextRange();
-  const unsigned start_offset =
+  const wtf_size_t start_offset =
       RangeLength(EphemeralRange(container_start, range.StartPosition()));
-  const unsigned end_offset =
+  const wtf_size_t end_offset =
       range.IsCollapsed()
           ? start_offset
           : RangeLength(EphemeralRange(container_start, range.EndPosition()));
+// TODO(crbug.com/1256635): This DCHECK is triggered by Crostini on CrOS.
+#if !BUILDFLAG(IS_CHROMEOS)
   DCHECK_EQ(
-      static_cast<unsigned>(TextIterator::RangeLength(
+      static_cast<wtf_size_t>(TextIterator::RangeLength(
           EphemeralRange(container_start, range.EndPosition()), Behavior())),
       end_offset);
+#endif
   return PlainTextRange(start_offset, end_offset);
 }
 
 PlainTextRange CachedTextInputInfo::GetSelection(
     const EphemeralRange& range) const {
   DCHECK(container_);
+  if (range.IsNull())
+    return PlainTextRange();
   return GetPlainTextRangeWithCache(range, &selection_);
 }
 
 String CachedTextInputInfo::GetText() const {
   DCHECK(container_);
-  DCHECK(HasEditableStyle(*container_));
+  DCHECK(IsEditable(*container_));
   return text_;
 }
 
@@ -188,20 +242,22 @@ void CachedTextInputInfo::LayoutObjectWillBeDestroyed(
   ClearIfNeeded(layout_object);
 }
 
-unsigned CachedTextInputInfo::RangeLength(const EphemeralRange& range) const {
+wtf_size_t CachedTextInputInfo::RangeLength(const EphemeralRange& range) const {
   const Node* const node = range.EndPosition().AnchorNode();
   if (range.StartPosition() == Position(*container_, 0) && IsA<Text>(node)) {
     const auto it = offset_map_.find(To<Text>(node));
     if (it != offset_map_.end()) {
-      const unsigned length =
+      const wtf_size_t length =
           it->value +
           TextIterator::RangeLength(
               EphemeralRange(Position(node, 0), range.EndPosition()),
               Behavior());
-      DCHECK_EQ(
-          static_cast<unsigned>(TextIterator::RangeLength(range, Behavior())),
-          length)
+// TODO(crbug.com/1256635): Revert https://crrev.com/c/3221041 to re-enable this
+// DCHECK on CrOS.
+#if !BUILDFLAG(IS_CHROMEOS)
+      DCHECK_EQ(TextIterator::RangeLength(range, Behavior()), length)
           << it->value << " " << range;
+#endif
       return length;
     }
   }
@@ -210,6 +266,7 @@ unsigned CachedTextInputInfo::RangeLength(const EphemeralRange& range) const {
 
 void CachedTextInputInfo::Trace(Visitor* visitor) const {
   visitor->Trace(container_);
+  visitor->Trace(layout_object_);
   visitor->Trace(composition_);
   visitor->Trace(offset_map_);
   visitor->Trace(selection_);

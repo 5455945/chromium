@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,15 +9,15 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
 
-template <typename T>
-class MIDIPortMap : public ScriptWrappable, public Maplike<String, T*> {
+template <typename InterfaceType, typename ValueType>
+class MIDIPortMap : public ScriptWrappable, public Maplike<InterfaceType> {
  public:
-  explicit MIDIPortMap(const HeapVector<Member<T>>& entries)
+  explicit MIDIPortMap(const HeapVector<Member<ValueType>>& entries)
       : entries_(entries) {}
 
   // IDL attributes / methods
@@ -30,20 +30,16 @@ class MIDIPortMap : public ScriptWrappable, public Maplike<String, T*> {
 
  private:
   // We use HeapVector here to keep the entry order.
-  using Entries = HeapVector<Member<T>>;
-  using IteratorType = typename Entries::const_iterator;
+  using Entries = HeapVector<Member<ValueType>>;
 
-  typename PairIterable<String, T*>::IterationSource* StartIteration(
-      ScriptState*,
-      ExceptionState&) override {
-    return MakeGarbageCollected<MapIterationSource>(this, entries_.begin(),
-                                                    entries_.end());
+  typename PairSyncIterable<InterfaceType>::IterationSource*
+  CreateIterationSource(ScriptState*) override {
+    return MakeGarbageCollected<MapIterationSource>(this);
   }
 
   bool GetMapEntry(ScriptState*,
                    const String& key,
-                   T*& value,
-                   ExceptionState&) override {
+                   ValueType*& value) override {
     // FIXME: This function is not O(1). Perhaps it's OK because in typical
     // cases not so many ports are connected.
     for (const auto& p : entries_) {
@@ -55,39 +51,38 @@ class MIDIPortMap : public ScriptWrappable, public Maplike<String, T*> {
     return false;
   }
 
-  // Note: This template class relies on the fact that m_map.m_entries will
+  // Note: This template class relies on the fact that entries_ will
   // never be modified once it is created.
   class MapIterationSource final
-      : public PairIterable<String, T*>::IterationSource {
+      : public PairSyncIterable<InterfaceType>::IterationSource {
    public:
-    MapIterationSource(MIDIPortMap<T>* map,
-                       IteratorType iterator,
-                       IteratorType end)
-        : map_(map), iterator_(iterator), end_(end) {}
+    explicit MapIterationSource(MIDIPortMap<InterfaceType, ValueType>* map)
+        : map_(map) {}
 
-    bool Next(ScriptState* script_state,
-              String& key,
-              T*& value,
-              ExceptionState&) override {
-      if (iterator_ == end_)
+    bool FetchNextItem(ScriptState* script_state,
+                       String& key,
+                       ValueType*& value) override {
+      const Entries& entries = map_->entries_;
+      if (index_ == entries.size()) {
         return false;
-      key = (*iterator_)->id();
-      value = *iterator_;
-      ++iterator_;
+      }
+      auto& entry = entries[index_];
+      key = entry->id();
+      value = entry;
+      ++index_;
       return true;
     }
 
     void Trace(Visitor* visitor) const override {
       visitor->Trace(map_);
-      PairIterable<String, T*>::IterationSource::Trace(visitor);
+      PairSyncIterable<InterfaceType>::IterationSource::Trace(visitor);
     }
 
    private:
-    // m_map is stored just for keeping it alive. It needs to be kept
+    // map_ is stored just for keeping it alive. It needs to be kept
     // alive while JavaScript holds the iterator to it.
-    const Member<const MIDIPortMap<T>> map_;
-    IteratorType iterator_;
-    const IteratorType end_;
+    const Member<const MIDIPortMap<InterfaceType, ValueType>> map_;
+    wtf_size_t index_ = 0;
   };
 
   const Entries entries_;

@@ -24,10 +24,10 @@
 
 #include "third_party/blink/renderer/platform/graphics/filters/fe_displacement_map.h"
 
-#include "base/stl_util.h"
+#include "base/types/optional_util.h"
 #include "third_party/blink/renderer/platform/graphics/filters/filter.h"
 #include "third_party/blink/renderer/platform/graphics/filters/paint_filter_builder.h"
-#include "third_party/blink/renderer/platform/wtf/text/text_stream.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_builder_stream.h"
 
 namespace blink {
 
@@ -40,14 +40,15 @@ FEDisplacementMap::FEDisplacementMap(Filter* filter,
       y_channel_selector_(y_channel_selector),
       scale_(scale) {}
 
-FloatRect FEDisplacementMap::MapEffect(const FloatRect& rect) const {
-  FloatRect result = rect;
-  result.InflateX(GetFilter()->ApplyHorizontalScale(std::abs(scale_) / 2));
-  result.InflateY(GetFilter()->ApplyVerticalScale(std::abs(scale_) / 2));
+gfx::RectF FEDisplacementMap::MapEffect(const gfx::RectF& rect) const {
+  gfx::RectF result = rect;
+  result.Outset(gfx::OutsetsF::VH(
+      GetFilter()->ApplyVerticalScale(std::abs(scale_) / 2),
+      GetFilter()->ApplyHorizontalScale(std::abs(scale_) / 2)));
   return result;
 }
 
-FloatRect FEDisplacementMap::MapInputs(const FloatRect& rect) const {
+gfx::RectF FEDisplacementMap::MapInputs(const gfx::RectF& rect) const {
   return InputEffect(0)->MapRect(rect);
 }
 
@@ -109,25 +110,28 @@ sk_sp<PaintFilter> FEDisplacementMap::CreateImageFilter() {
   // FEDisplacementMap must be a pass-through filter if
   // the origin is tainted. See:
   // https://drafts.fxtf.org/filter-effects/#fedisplacemnentmap-restrictions.
-  if (InputEffect(1)->OriginTainted())
+  // Backdrop filters also are considered origin tainting for FEDisplacementMap
+  // because the backdrop may contain private information.
+  if (InputEffect(1)->OriginTainted() || InputEffect(1)->ContainsBackdrop()) {
     return color;
+  }
 
   sk_sp<PaintFilter> displ = paint_filter_builder::Build(
       InputEffect(1), OperatingInterpolationSpace());
   SkColorChannel type_x = ToSkiaMode(x_channel_selector_);
   SkColorChannel type_y = ToSkiaMode(y_channel_selector_);
-  absl::optional<PaintFilter::CropRect> crop_rect = GetCropRect();
+  std::optional<PaintFilter::CropRect> crop_rect = GetCropRect();
   // FIXME : Only applyHorizontalScale is used and applyVerticalScale is ignored
   // This can be fixed by adding a 2nd scale parameter to
   // DisplacementMapEffectPaintFilter.
   return sk_make_sp<DisplacementMapEffectPaintFilter>(
       type_x, type_y,
       SkFloatToScalar(GetFilter()->ApplyHorizontalScale(scale_)),
-      std::move(displ), std::move(color), base::OptionalOrNullptr(crop_rect));
+      std::move(displ), std::move(color), base::OptionalToPtr(crop_rect));
 }
 
-static WTF::TextStream& operator<<(WTF::TextStream& ts,
-                                   const ChannelSelectorType& type) {
+static StringBuilder& operator<<(StringBuilder& ts,
+                                 const ChannelSelectorType& type) {
   switch (type) {
     case CHANNEL_UNKNOWN:
       ts << "UNKNOWN";
@@ -148,8 +152,9 @@ static WTF::TextStream& operator<<(WTF::TextStream& ts,
   return ts;
 }
 
-WTF::TextStream& FEDisplacementMap::ExternalRepresentation(WTF::TextStream& ts,
-                                                           int indent) const {
+StringBuilder& FEDisplacementMap::ExternalRepresentation(
+    StringBuilder& ts,
+    wtf_size_t indent) const {
   WriteIndent(ts, indent);
   ts << "[feDisplacementMap";
   FilterEffect::ExternalRepresentation(ts);

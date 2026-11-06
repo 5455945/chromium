@@ -15,15 +15,21 @@
 #include "absl/random/internal/nonsecure_base.h"
 
 #include <algorithm>
-#include <iostream>
-#include <memory>
+#include <cstddef>
+#include <cstdint>
+#include <iterator>
 #include <random>
-#include <sstream>
+#include <thread>  // NOLINT
+#include <type_traits>
+#include <utility>
+#include <vector>
 
 #include "gtest/gtest.h"
+#include "absl/algorithm/container.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/random/distributions.h"
 #include "absl/random/random.h"
-#include "absl/strings/str_cat.h"
+#include "absl/synchronization/mutex.h"
 
 namespace {
 
@@ -68,19 +74,19 @@ TEST(NonsecureURBGBase, StandardInterface) {
 
   using T = typename E::result_type;
 
-  static_assert(!std::is_copy_constructible<E>::value,
+  static_assert(!std::is_copy_constructible_v<E>,
                 "NonsecureURBGBase should not be copy constructible");
 
-  static_assert(!absl::is_copy_assignable<E>::value,
+  static_assert(!std::is_copy_assignable_v<E>,
                 "NonsecureURBGBase should not be copy assignable");
 
-  static_assert(std::is_move_constructible<E>::value,
+  static_assert(std::is_move_constructible_v<E>,
                 "NonsecureURBGBase should be move constructible");
 
-  static_assert(absl::is_move_assignable<E>::value,
+  static_assert(std::is_move_assignable_v<E>,
                 "NonsecureURBGBase should be move assignable");
 
-  static_assert(std::is_same<decltype(std::declval<E>()()), T>::value,
+  static_assert(std::is_same_v<decltype(std::declval<E>()()), T>,
                 "return type of operator() must be result_type");
 
   {
@@ -88,10 +94,10 @@ TEST(NonsecureURBGBase, StandardInterface) {
     Use(x);
     Use(y);
 
-    static_assert(std::is_same<decltype(x == y), bool>::value,
+    static_assert(std::is_same_v<decltype(x == y), bool>,
                   "return type of operator== must be bool");
 
-    static_assert(std::is_same<decltype(x != y), bool>::value,
+    static_assert(std::is_same_v<decltype(x != y), bool>,
                   "return type of operator== must be bool");
   }
 
@@ -192,54 +198,70 @@ TEST(NonsecureURBGBase, EqualSeedSequencesYieldEqualVariates) {
   }
 }
 
-// This is a PRNG-compatible type specifically designed to test
-// that NonsecureURBGBase::Seeder can correctly handle iterators
-// to arbitrary non-uint32_t size types.
-template <typename T>
-struct SeederTestEngine {
-  using result_type = T;
+TEST(NonsecureURBGBase, DistinctSequencesPerThread) {
+  constexpr int kNumThreads = 12;
+  constexpr size_t kValuesPerThread = 32;
+  using result_type = absl::BitGen::result_type;
 
-  static constexpr result_type(min)() {
-    return (std::numeric_limits<result_type>::min)();
-  }
-  static constexpr result_type(max)() {
-    return (std::numeric_limits<result_type>::max)();
-  }
+  // Acquire initial sequences from multiple threads.
+  std::vector<std::vector<result_type>> data;
+  {
+    absl::Mutex mu;
+    std::vector<std::thread> threads;
+    for (int i = 0; i < kNumThreads; i++) {
+      threads.emplace_back([&]() {
+        absl::BitGen gen;
 
-  template <class SeedSequence,
-            typename = typename absl::enable_if_t<
-                !std::is_same<SeedSequence, SeederTestEngine>::value>>
-  explicit SeederTestEngine(SeedSequence&& seq) {
-    seed(seq);
-  }
-
-  SeederTestEngine(const SeederTestEngine&) = default;
-  SeederTestEngine& operator=(const SeederTestEngine&) = default;
-  SeederTestEngine(SeederTestEngine&&) = default;
-  SeederTestEngine& operator=(SeederTestEngine&&) = default;
-
-  result_type operator()() { return state[0]; }
-
-  template <class SeedSequence>
-  void seed(SeedSequence&& seq) {
-    std::fill(std::begin(state), std::end(state), T(0));
-    seq.generate(std::begin(state), std::end(state));
+        std::vector<result_type> v(kValuesPerThread);
+        absl::c_generate(v, [&]() { return gen(); });
+        absl::MutexLock l(mu);
+        data.push_back(std::move(v));
+      });
+    }
+    for (auto& t : threads) t.join();
   }
 
-  T state[2];
-};
+  EXPECT_EQ(data.size(), kNumThreads);
 
-TEST(NonsecureURBGBase, SeederWorksForU32) {
-  using U32 =
-      absl::random_internal::NonsecureURBGBase<SeederTestEngine<uint32_t>>;
-  U32 x;
-  EXPECT_NE(0, x());
+  // There should be essentially no duplicates in the sequences.
+  size_t expected_size = 0;
+  absl::flat_hash_set<result_type> seen;
+  for (const auto& v : data) {
+    expected_size += v.size();
+    for (result_type x : v) seen.insert(x);
+  }
+  EXPECT_GE(seen.size(), expected_size - 1);
 }
 
-TEST(NonsecureURBGBase, SeederWorksForU64) {
-  using U64 =
-      absl::random_internal::NonsecureURBGBase<SeederTestEngine<uint64_t>>;
+TEST(RandenPoolSeedSeqTest, SeederWorksForU32) {
+  absl::random_internal::RandenPoolSeedSeq seeder;
 
-  U64 x;
-  EXPECT_NE(0, x());
+  uint32_t state[2] = {0, 0};
+  seeder.generate(std::begin(state), std::end(state));
+  EXPECT_FALSE(state[0] == 0 && state[1] == 0);
+}
+
+TEST(RandenPoolSeedSeqTest, SeederWorksForU64) {
+  absl::random_internal::RandenPoolSeedSeq seeder;
+
+  uint64_t state[2] = {0, 0};
+  seeder.generate(std::begin(state), std::end(state));
+  EXPECT_FALSE(state[0] == 0 && state[1] == 0);
+  EXPECT_FALSE((state[0] >> 32) == 0 && (state[1] >> 32) == 0);
+}
+
+TEST(RandenPoolSeedSeqTest, SeederWorksForS32) {
+  absl::random_internal::RandenPoolSeedSeq seeder;
+
+  int32_t state[2] = {0, 0};
+  seeder.generate(std::begin(state), std::end(state));
+  EXPECT_FALSE(state[0] == 0 && state[1] == 0);
+}
+
+TEST(RandenPoolSeedSeqTest, SeederWorksForVector) {
+  absl::random_internal::RandenPoolSeedSeq seeder;
+
+  std::vector<uint32_t> state(2);
+  seeder.generate(std::begin(state), std::end(state));
+  EXPECT_FALSE(state[0] == 0 && state[1] == 0);
 }

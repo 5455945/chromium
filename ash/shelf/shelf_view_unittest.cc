@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,84 +10,110 @@
 #include <utility>
 #include <vector>
 
-#include "ash/accessibility/accessibility_controller_impl.h"
+#include "ash/accessibility/accessibility_controller.h"
 #include "ash/app_list/test/app_list_test_helper.h"
 #include "ash/app_list/views/app_list_view.h"
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/display/screen_orientation_controller.h"
 #include "ash/display/screen_orientation_controller_test_api.h"
-#include "ash/focus_cycler.h"
+#include "ash/focus/focus_cycler.h"
 #include "ash/ime/ime_controller_impl.h"
 #include "ash/public/cpp/shelf_config.h"
-#include "ash/public/cpp/shelf_item_delegate.h"
 #include "ash/public/cpp/shelf_model.h"
 #include "ash/public/cpp/shelf_prefs.h"
 #include "ash/public/cpp/shell_window_ids.h"
+#include "ash/public/cpp/test/test_shelf_item_delegate.h"
 #include "ash/public/cpp/window_properties.h"
 #include "ash/root_window_controller.h"
 #include "ash/screen_util.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shelf/back_button.h"
 #include "ash/shelf/home_button.h"
+#include "ash/shelf/scrollable_shelf_view.h"
 #include "ash/shelf/shelf.h"
 #include "ash/shelf/shelf_app_button.h"
+#include "ash/shelf/shelf_bubble.h"
+#include "ash/shelf/shelf_context_menu_model.h"
+#include "ash/shelf/shelf_controller.h"
 #include "ash/shelf/shelf_focus_cycler.h"
+#include "ash/shelf/shelf_menu_model_adapter.h"
+#include "ash/shelf/shelf_metrics.h"
 #include "ash/shelf/shelf_navigation_widget.h"
 #include "ash/shelf/shelf_observer.h"
 #include "ash/shelf/shelf_test_util.h"
 #include "ash/shelf/shelf_tooltip_manager.h"
 #include "ash/shelf/shelf_view_test_api.h"
 #include "ash/shelf/shelf_widget.h"
+#include "ash/shelf/shelf_window_preview_bubble.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
+#include "ash/system/progress_indicator/progress_indicator.h"
 #include "ash/system/status_area_widget.h"
 #include "ash/test/ash_test_base.h"
 #include "ash/test/ash_test_helper.h"
-#include "ash/test/ui_controls_factory_ash.h"
-#include "ash/test_screenshot_delegate.h"
+#include "ash/utility/haptics_tracking_test_input_controller.h"
 #include "ash/wallpaper/wallpaper_controller_impl.h"
 #include "ash/wallpaper/wallpaper_controller_test_api.h"
-#include "ash/wm/tablet_mode/tablet_mode_controller.h"
+#include "ash/wm/desks/desks_test_util.h"
+#include "ash/wm/overview/overview_test_util.h"
+#include "ash/wm/tablet_mode/tablet_mode_controller_test_api.h"
+#include "ash/wm/window_pin_util.h"
 #include "ash/wm/window_state.h"
 #include "base/i18n/rtl.h"
-#include "base/macros.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/run_loop.h"
+#include "base/scoped_observation.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/bind.h"
 #include "base/test/icu_test_util.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/metrics/user_action_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/scoped_mock_time_message_loop_task_runner.h"
+#include "base/test/test_future.h"
 #include "base/time/time.h"
+#include "chromeos/constants/chromeos_features.h"
 #include "components/prefs/pref_service.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/aura/client/aura_constants.h"
+#include "ui/aura/client/window_parenting_client.h"
 #include "ui/aura/test/aura_test_base.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_event_dispatcher.h"
+#include "ui/aura/window_observer.h"
+#include "ui/base/interaction/element_tracker.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/test/ui_controls.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/compositor/layer.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
+#include "ui/display/tablet_state.h"
 #include "ui/display/test/display_manager_test_api.h"
 #include "ui/events/event.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/event_utils.h"
 #include "ui/events/test/event_generator.h"
+#include "ui/events/test/test_event_handler.h"
 #include "ui/events/types/event_type.h"
 #include "ui/gfx/geometry/point.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/bounds_animator.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/animation/ink_drop_impl.h"
-#include "ui/views/animation/test/ink_drop_host_view_test_api.h"
+#include "ui/views/animation/test/ink_drop_host_test_api.h"
 #include "ui/views/animation/test/ink_drop_impl_test_api.h"
 #include "ui/views/bubble/bubble_frame_view.h"
+#include "ui/views/controls/menu/menu_item_view.h"
+#include "ui/views/controls/menu/submenu_view.h"
+#include "ui/views/interaction/element_tracker_views.h"
+#include "ui/views/interaction/view_subregion_anchor.h"
 #include "ui/views/view_model.h"
+#include "ui/views/view_tracker.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "ui/wm/core/coordinate_conversion.h"
@@ -99,8 +125,16 @@ using testing::IsEmpty;
 namespace ash {
 namespace {
 
+// Create a test 1x1 icon image with a given |color|.
+gfx::ImageSkia CreateImageSkiaIcon(SkColor color) {
+  SkBitmap bitmap;
+  bitmap.allocN32Pixels(1, 1);
+  bitmap.eraseColor(color);
+  return gfx::ImageSkia::CreateFrom1xBitmap(bitmap);
+}
+
 int64_t GetPrimaryDisplayId() {
-  return display::Screen::GetScreen()->GetPrimaryDisplay().id();
+  return display::Screen::Get()->GetPrimaryDisplay().id();
 }
 
 void ExpectFocused(views::View* view) {
@@ -113,11 +147,49 @@ void ExpectNotFocused(views::View* view) {
   EXPECT_FALSE(view->Contains(view->GetFocusManager()->GetFocusedView()));
 }
 
+class LayerAnimationWaiter : public ui::LayerAnimationObserver {
+ public:
+  explicit LayerAnimationWaiter(ui::LayerAnimator* animator)
+      : animator_(animator) {
+    animator_->AddObserver(this);
+  }
+
+  void OnLayerAnimationEnded(ui::LayerAnimationSequence* sequence) override {
+    OnAnimationCompleted();
+  }
+
+  void OnLayerAnimationAborted(ui::LayerAnimationSequence* sequence) override {
+    OnAnimationCompleted();
+  }
+
+  void OnLayerAnimationScheduled(
+      ui::LayerAnimationSequence* sequence) override {}
+
+  void Wait() { run_loop_.Run(); }
+
+ private:
+  void OnAnimationCompleted() {
+    if (animator_->is_animating() == false) {
+      animator_->RemoveObserver(this);
+      animator_ = nullptr;
+      run_loop_.Quit();
+    }
+  }
+
+  // Dangling when executing ShelfViewPromiseAppTest.PromiseIconLayers because
+  // layer is destroyed by the ShelfView.
+  raw_ptr<ui::LayerAnimator> animator_;
+  base::RunLoop run_loop_;
+};
+
 class TestShelfObserver : public ShelfObserver {
  public:
   explicit TestShelfObserver(Shelf* shelf) : shelf_(shelf) {
     shelf_->AddObserver(this);
   }
+
+  TestShelfObserver(const TestShelfObserver&) = delete;
+  TestShelfObserver& operator=(const TestShelfObserver&) = delete;
 
   ~TestShelfObserver() override { shelf_->RemoveObserver(this); }
 
@@ -140,11 +212,9 @@ class TestShelfObserver : public ShelfObserver {
   }
 
  private:
-  Shelf* shelf_;
+  const raw_ptr<Shelf> shelf_;
   bool icon_positions_changed_ = false;
   base::TimeDelta icon_positions_animation_duration_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestShelfObserver);
 };
 
 // A ShelfItemDelegate that tracks the last context menu request, and exposes a
@@ -156,8 +226,9 @@ class AsyncContextMenuShelfItemDelegate : public ShelfItemDelegate {
 
   bool RunPendingContextMenuCallback(
       std::unique_ptr<ui::SimpleMenuModel> model) {
-    if (pending_context_menu_callback_.is_null())
+    if (pending_context_menu_callback_.is_null()) {
       return false;
+    }
     std::move(pending_context_menu_callback_).Run(std::move(model));
     return true;
   }
@@ -178,6 +249,109 @@ class AsyncContextMenuShelfItemDelegate : public ShelfItemDelegate {
   GetContextMenuCallback pending_context_menu_callback_;
 };
 
+// ProgressIndicatorWaiter -----------------------------------------------------
+
+// A class which supports waiting for a progress indicator to reach a desired
+// state of progress.
+class ProgressIndicatorWaiter {
+ public:
+  ProgressIndicatorWaiter() = default;
+  ProgressIndicatorWaiter(const ProgressIndicatorWaiter&) = delete;
+  ProgressIndicatorWaiter& operator=(const ProgressIndicatorWaiter&) = delete;
+  ~ProgressIndicatorWaiter() = default;
+
+  // Waits for `progress_indicator` to reach the specified `progress`. If the
+  // `progress_indicator` is already at `progress`, this method no-ops.
+  void WaitForProgress(ProgressIndicator* progress_indicator,
+                       const std::optional<float>& progress) {
+    if (progress_indicator->progress() == progress) {
+      return;
+    }
+    base::RunLoop run_loop;
+    auto subscription = progress_indicator->AddProgressChangedCallback(
+        base::BindLambdaForTesting([&]() {
+          if (progress_indicator->progress() == progress) {
+            run_loop.Quit();
+          }
+        }));
+    run_loop.Run();
+  }
+};
+
+class AppMenuTestShelfItemDelegate : public ShelfItemDelegate,
+                                     public aura::WindowObserver {
+ public:
+  AppMenuTestShelfItemDelegate(const ShelfID& id,
+                               aura::Window* w1,
+                               aura::Window* w2)
+      : ShelfItemDelegate(id) {
+    w1_.Observe(w1);
+    w2_.Observe(w2);
+  }
+
+  AppMenuTestShelfItemDelegate(const AppMenuTestShelfItemDelegate&) = delete;
+  AppMenuTestShelfItemDelegate& operator=(const AppMenuTestShelfItemDelegate&) =
+      delete;
+
+  ~AppMenuTestShelfItemDelegate() override = default;
+
+  // ShelfItemDelegate:
+  void ItemSelected(std::unique_ptr<ui::Event> event,
+                    int64_t display_id,
+                    ShelfLaunchSource source,
+                    ItemSelectedCallback callback,
+                    const ItemFilterPredicate& filter_predicate) override {
+    std::move(callback).Run(
+        SHELF_ACTION_NONE, GetAppMenuItems(event ? event->flags() : ui::EF_NONE,
+                                           filter_predicate));
+  }
+
+  AppMenuItems GetAppMenuItems(
+      int event_flags,
+      const ItemFilterPredicate& filter_predicate) override {
+    AppMenuItems items;
+    if (!w1_.GetSource() || filter_predicate.is_null() ||
+        filter_predicate.Run(w1_.GetSource())) {
+      items.push_back({0, u"Window 1", gfx::ImageSkia()});
+    }
+    if (!w2_.GetSource() || filter_predicate.is_null() ||
+        filter_predicate.Run(w2_.GetSource())) {
+      items.push_back({1, u"Window 2", gfx::ImageSkia()});
+    }
+    return items;
+  }
+
+  base::expected<aura::Window*, std::u16string> GetAppMenuItemWindow(
+      int command_id) override {
+    if (command_id == 0 && w1_.GetSource()) {
+      return w1_.GetSource();
+    }
+    if (command_id == 1 && w2_.GetSource()) {
+      return w2_.GetSource();
+    }
+    // Only item 0 has a tooltip when it has no window to preview.
+    return base::unexpected(
+        std::u16string(command_id == 0 ? u"No preview" : u""));
+  }
+
+  void ExecuteCommand(bool, int64_t, int32_t, int64_t) override {}
+  void Close() override {}
+
+  // aura::WindowObserver:
+  void OnWindowDestroying(aura::Window* window) override {
+    if (w1_.IsObservingSource(window)) {
+      w1_.Reset();
+    }
+    if (w2_.IsObservingSource(window)) {
+      w2_.Reset();
+    }
+  }
+
+ private:
+  base::ScopedObservation<aura::Window, aura::WindowObserver> w1_{this};
+  base::ScopedObservation<aura::Window, aura::WindowObserver> w2_{this};
+};
+
 }  // namespace
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -186,15 +360,15 @@ class AsyncContextMenuShelfItemDelegate : public ShelfItemDelegate {
 class ShelfObserverIconTest : public AshTestBase {
  public:
   ShelfObserverIconTest() = default;
+
+  ShelfObserverIconTest(const ShelfObserverIconTest&) = delete;
+  ShelfObserverIconTest& operator=(const ShelfObserverIconTest&) = delete;
+
   ~ShelfObserverIconTest() override = default;
 
   void SetUp() override {
     AshTestBase::SetUp();
     observer_ = std::make_unique<TestShelfObserver>(GetPrimaryShelf());
-    shelf_view_test_ = std::make_unique<ShelfViewTestAPI>(
-        GetPrimaryShelf()->GetShelfViewForTesting());
-    shelf_view_test_->SetAnimationDuration(
-        base::TimeDelta::FromMilliseconds(1));
   }
 
   void TearDown() override {
@@ -204,19 +378,19 @@ class ShelfObserverIconTest : public AshTestBase {
 
   TestShelfObserver* observer() { return observer_.get(); }
 
-  ShelfViewTestAPI* shelf_view_test() { return shelf_view_test_.get(); }
-
  private:
   std::unique_ptr<TestShelfObserver> observer_;
-  std::unique_ptr<ShelfViewTestAPI> shelf_view_test_;
-
-  DISALLOW_COPY_AND_ASSIGN(ShelfObserverIconTest);
 };
 
 // A ShelfItemDelegate that tracks selections and reports a custom action.
 class ShelfItemSelectionTracker : public ShelfItemDelegate {
  public:
   ShelfItemSelectionTracker() : ShelfItemDelegate(ShelfID()) {}
+
+  ShelfItemSelectionTracker(const ShelfItemSelectionTracker&) = delete;
+  ShelfItemSelectionTracker& operator=(const ShelfItemSelectionTracker&) =
+      delete;
+
   ~ShelfItemSelectionTracker() override = default;
 
   size_t item_selected_count() const { return item_selected_count_; }
@@ -239,8 +413,51 @@ class ShelfItemSelectionTracker : public ShelfItemDelegate {
  private:
   size_t item_selected_count_ = 0;
   ShelfAction item_selected_action_ = SHELF_ACTION_NONE;
+};
 
-  DISALLOW_COPY_AND_ASSIGN(ShelfItemSelectionTracker);
+// A ShelfItemDelegate that opens system modal window on activation.
+class SystemModalWindowShelfItemDelegate : public ShelfItemDelegate {
+ public:
+  using WindowCreator = base::RepeatingCallback<std::unique_ptr<
+      aura::Window>(const gfx::Rect&, aura::client::WindowType, int)>;
+  explicit SystemModalWindowShelfItemDelegate(
+      const WindowCreator& window_creator)
+      : ShelfItemDelegate(ShelfID()), window_creator_(window_creator) {}
+  SystemModalWindowShelfItemDelegate(
+      const SystemModalWindowShelfItemDelegate&) = delete;
+  SystemModalWindowShelfItemDelegate& operator=(
+      const SystemModalWindowShelfItemDelegate&) = delete;
+  ~SystemModalWindowShelfItemDelegate() override = default;
+
+  // ShelfItemDelegate:
+  void ItemSelected(std::unique_ptr<ui::Event> event,
+                    int64_t display_id,
+                    ShelfLaunchSource source,
+                    ItemSelectedCallback callback,
+                    const ItemFilterPredicate& filter_predicate) override {
+    test_window_ = window_creator_.Run(gfx::Rect(gfx::Size(50, 50)),
+                                       aura::client::WINDOW_TYPE_NORMAL,
+                                       kShellWindowId_Invalid);
+    test_window_->SetProperty(aura::client::kModalKey,
+                              ui::mojom::ModalType::kSystem);
+    test_window_->Show();
+    aura::client::ParentWindowWithContext(
+        test_window_.get(), Shell::GetPrimaryRootWindow(), gfx::Rect(),
+        display::kInvalidDisplayId);
+
+    std::move(callback).Run(SHELF_ACTION_NONE, {});
+  }
+  void ExecuteCommand(bool, int64_t, int32_t, int64_t) override {}
+  void Close() override {}
+
+  bool HasTestWindow() const { return !!test_window_; }
+
+  void ResetTestWindow() { test_window_.reset(); }
+
+ private:
+  const WindowCreator window_creator_;
+
+  std::unique_ptr<aura::Window> test_window_;
 };
 
 // A ShelfItemDelegate to generate empty shelf context menu.
@@ -261,18 +478,21 @@ class EmptyContextMenuBuilder : public ShelfItemDelegate {
 };
 
 TEST_F(ShelfObserverIconTest, AddRemove) {
+  SetShelfAnimationDuration(base::Milliseconds(1));
+
   ShelfItem item;
   item.id = ShelfID("foo");
   item.type = TYPE_APP;
   EXPECT_FALSE(observer()->icon_positions_changed());
-  const int shelf_item_index = ShelfModel::Get()->Add(item);
-  shelf_view_test()->RunMessageLoopUntilAnimationsDone();
+  const int shelf_item_index = ShelfModel::Get()->Add(
+      item, std::make_unique<TestShelfItemDelegate>(item.id));
+  WaitForShelfAnimation();
   EXPECT_TRUE(observer()->icon_positions_changed());
   observer()->Reset();
 
   EXPECT_FALSE(observer()->icon_positions_changed());
   ShelfModel::Get()->RemoveItemAt(shelf_item_index);
-  shelf_view_test()->RunMessageLoopUntilAnimationsDone();
+  WaitForShelfAnimation();
   EXPECT_TRUE(observer()->icon_positions_changed());
   observer()->Reset();
 }
@@ -280,13 +500,13 @@ TEST_F(ShelfObserverIconTest, AddRemove) {
 // Make sure creating/deleting an window on one displays notifies a
 // shelf on external display as well as one on primary.
 TEST_F(ShelfObserverIconTest, AddRemoveWithMultipleDisplays) {
-  UpdateDisplay("400x400,400x400");
+  UpdateDisplay("500x400,500x400");
+  SetShelfAnimationDuration(base::Milliseconds(1));
+
   observer()->Reset();
 
-  Shelf* second_shelf = Shelf::ForWindow(Shell::GetAllRootWindows()[1]);
-  TestShelfObserver second_observer(second_shelf);
-  ShelfViewTestAPI second_shelf_test_api(
-      second_shelf->GetShelfViewForTesting());
+  TestShelfObserver second_observer(
+      Shelf::ForWindow(Shell::GetAllRootWindows()[1]));
 
   ShelfItem item;
   item.id = ShelfID("foo");
@@ -295,9 +515,9 @@ TEST_F(ShelfObserverIconTest, AddRemoveWithMultipleDisplays) {
   EXPECT_FALSE(second_observer.icon_positions_changed());
 
   // Add item and wait for all animations to finish.
-  const int shelf_item_index = ShelfModel::Get()->Add(item);
-  shelf_view_test()->RunMessageLoopUntilAnimationsDone();
-  second_shelf_test_api.RunMessageLoopUntilAnimationsDone();
+  const int shelf_item_index = ShelfModel::Get()->Add(
+      item, std::make_unique<TestShelfItemDelegate>(item.id));
+  WaitForShelfAnimation();
 
   EXPECT_TRUE(observer()->icon_positions_changed());
   EXPECT_TRUE(second_observer.icon_positions_changed());
@@ -310,8 +530,7 @@ TEST_F(ShelfObserverIconTest, AddRemoveWithMultipleDisplays) {
 
   // Remove the item, and wait for all the animations to complete.
   ShelfModel::Get()->RemoveItemAt(shelf_item_index);
-  shelf_view_test()->RunMessageLoopUntilAnimationsDone();
-  second_shelf_test_api.RunMessageLoopUntilAnimationsDone();
+  WaitForShelfAnimation();
 
   EXPECT_TRUE(observer()->icon_positions_changed());
   EXPECT_TRUE(second_observer.icon_positions_changed());
@@ -325,9 +544,6 @@ TEST_F(ShelfObserverIconTest, AddRemoveWithMultipleDisplays) {
 
 class ShelfViewTest : public AshTestBase {
  public:
-  static const char*
-      kTimeBetweenWindowMinimizedAndActivatedActionsHistogramName;
-
   template <typename... TaskEnvironmentTraits>
   explicit ShelfViewTest(TaskEnvironmentTraits&&... traits)
       : AshTestBase(std::forward<TaskEnvironmentTraits>(traits)...) {}
@@ -337,16 +553,7 @@ class ShelfViewTest : public AshTestBase {
 
   void SetUp() override {
     AshTestBase::SetUp();
-    model_ = ShelfModel::Get();
-    shelf_view_ = GetPrimaryShelf()->GetShelfViewForTesting();
-    navigation_view_ = GetPrimaryShelf()
-                           ->shelf_widget()
-                           ->navigation_widget()
-                           ->GetContentsView();
-    gfx::NativeWindow window = shelf_view_->shelf_widget()->GetNativeWindow();
-    status_area_ = RootWindowController::ForWindow(window)
-                       ->GetStatusAreaWidget()
-                       ->GetContentsView();
+    haptics_tracker_ = std::make_unique<HapticsTrackingTestInputController>();
 
     // The bounds should be big enough for 4 buttons.
     ASSERT_GE(GetPrimaryShelf()
@@ -356,30 +563,31 @@ class ShelfViewTest : public AshTestBase {
                   .width(),
               500);
 
-    test_api_ = std::make_unique<ShelfViewTestAPI>(shelf_view_);
-    test_api_->SetAnimationDuration(base::TimeDelta::FromMilliseconds(1));
+    test_api_ = std::make_unique<ShelfViewTestAPI>(GetShelfView());
+    test_api_->SetAnimationDuration(base::Milliseconds(1));
 
-    // Add a browser shortcut shelf item, as chrome does, for testing.
-    AddItem(TYPE_BROWSER_SHORTCUT, true);
+    // Browser shortcut shelf item is added in AshTestBase::SetUp()`.
   }
 
   void TearDown() override {
     test_api_.reset();
+    haptics_tracker_.reset();
     AshTestBase::TearDown();
   }
 
-  std::string GetNextAppId() { return base::NumberToString(id_); }
+  std::string GetNextAppId() const { return base::NumberToString(id_); }
 
  protected:
   // Add shelf items of various types, and optionally wait for animations.
   ShelfID AddItem(ShelfItemType type, bool wait_for_animations) {
-    ShelfItem item =
-        ShelfTestUtil::AddAppShortcut(base::NumberToString(id_++), type);
+    ShelfItem item = ShelfTestUtil::AddAppShortcutWithIcon(
+        base::NumberToString(id_++), type, CreateImageSkiaIcon(SK_ColorRED));
     // Set a delegate; some tests require one to select the item.
-    model_->SetShelfItemDelegate(item.id,
-                                 std::make_unique<ShelfItemSelectionTracker>());
-    if (wait_for_animations)
+    GetModel()->ReplaceShelfItemDelegate(
+        item.id, std::make_unique<ShelfItemSelectionTracker>());
+    if (wait_for_animations) {
       test_api_->RunMessageLoopUntilAnimationsDone();
+    }
     return item.id;
   }
   ShelfID AddAppShortcut() { return AddItem(TYPE_PINNED_APP, true); }
@@ -387,50 +595,95 @@ class ShelfViewTest : public AshTestBase {
   ShelfID AddApp() { return AddItem(TYPE_APP, true); }
 
   void SetShelfItemTypeToAppShortcut(const ShelfID& id) {
-    int index = model_->ItemIndexByID(id);
+    auto* model = GetModel();
+    int index = model->ItemIndexByID(id);
     DCHECK_GE(index, 0);
 
-    ShelfItem item = model_->items()[index];
+    ShelfItem item = model->items()[index];
 
     if (item.type == TYPE_APP) {
       item.type = TYPE_PINNED_APP;
-      model_->Set(index, item);
+      model->Set(index, item);
     }
     test_api_->RunMessageLoopUntilAnimationsDone();
   }
 
   void RemoveByID(const ShelfID& id) {
-    model_->RemoveItemAt(model_->ItemIndexByID(id));
+    GetModel()->RemoveItemAt(GetModel()->ItemIndexByID(id));
     test_api_->RunMessageLoopUntilAnimationsDone();
   }
 
   ShelfAppButton* GetButtonByID(const ShelfID& id) {
-    return test_api_->GetButton(model_->ItemIndexByID(id));
+    return test_api_->GetButton(GetModel()->ItemIndexByID(id));
   }
 
-  ShelfItem GetItemByID(const ShelfID& id) { return *model_->ItemByID(id); }
+  static ShelfItem GetItemByID(const ShelfID& id) {
+    return *GetModel()->ItemByID(id);
+  }
 
-  void PinAppWithID(const ShelfID& id) { model_->PinAppWithID(id.app_id); }
+  static bool IsAppPinned(const ShelfID& id) {
+    return GetModel()->IsAppPinned(id.app_id);
+  }
 
-  bool IsAppPinned(const ShelfID& id) { return model_->IsAppPinned(id.app_id); }
-
-  void CheckModelIDs(
+  static void CheckModelIDs(
       const std::vector<std::pair<ShelfID, views::View*>>& id_map) {
-    size_t map_index = 0;
-    for (size_t model_index = 0; model_index < model_->items().size();
-         ++model_index) {
-      ShelfItem item = model_->items()[model_index];
-      ShelfID id = item.id;
-      EXPECT_EQ(id_map[map_index].first, id);
-      ++map_index;
+    std::vector<ShelfID> expected;
+    for (const auto& item : id_map) {
+      expected.push_back(item.first);
     }
-    ASSERT_EQ(map_index, id_map.size());
+
+    std::vector<ShelfID> actual;
+    for (const auto& item : GetModel()->items()) {
+      actual.push_back(item.id);
+    }
+
+    EXPECT_EQ(expected, actual);
+  }
+
+  static void ExpectHelpBubbleAnchorBoundsChangedEvent(
+      base::FunctionRef<void()> function_ref) {
+    base::RunLoop run_loop;
+
+    auto subscription =
+        ui::ElementTracker::GetElementTracker()->AddCustomEventCallback(
+            views::ViewSubregionAnchor::kAnchorBoundsChangedEvent,
+            views::ElementTrackerViews::GetContextForView(GetShelfView()),
+            base::BindLambdaForTesting(
+                [&](ui::TrackedElement* tracked_element) {
+                  if (tracked_element->IsA<views::TrackedElementViews>() &&
+                      tracked_element->AsA<views::TrackedElementViews>()
+                              ->view() == GetShelfView()) {
+                    run_loop.Quit();
+                  }
+                }));
+
+    function_ref();
+    run_loop.Run();
+  }
+
+  void VerifyAnchorBoundsInScreenAreValid() {
+    gfx::Rect anchor_bounds_in_screen;
+    auto* shelf_view = GetShelfView();
+    for (int i : shelf_view->visible_views_indices()) {
+      if (test_api_->GetButton(i)) {
+        anchor_bounds_in_screen.Union(
+            test_api_->GetViewAt(i)->GetBoundsInScreen());
+      }
+    }
+    if (shelf_view->parent()) {
+      anchor_bounds_in_screen.Intersect(
+          shelf_view->parent()->GetBoundsInScreen());
+    }
+    EXPECT_THAT(shelf_view->GetAnchorBoundsInScreen(),
+                ::testing::Conditional(anchor_bounds_in_screen.IsEmpty(),
+                                       shelf_view->GetBoundsInScreen(),
+                                       anchor_bounds_in_screen));
   }
 
   void VerifyShelfItemBoundsAreValid() {
-    for (int i : shelf_view_->visible_views_indices()) {
+    for (int i : GetShelfView()->visible_views_indices()) {
       if (test_api_->GetButton(i)) {
-        gfx::Rect shelf_view_bounds = shelf_view_->GetLocalBounds();
+        gfx::Rect shelf_view_bounds = GetShelfView()->GetLocalBounds();
         gfx::Rect item_bounds = test_api_->GetBoundsByIndex(i);
         EXPECT_GE(item_bounds.x(), 0);
         EXPECT_GE(item_bounds.y(), 0);
@@ -443,10 +696,10 @@ class ShelfViewTest : public AshTestBase {
   // Simulate a mouse press event on the shelf's view at |view_index|.
   views::View* SimulateViewPressed(ShelfView::Pointer pointer, int view_index) {
     views::View* view = test_api_->GetViewAt(view_index);
-    ui::MouseEvent pressed_event(ui::ET_MOUSE_PRESSED, gfx::Point(),
+    ui::MouseEvent pressed_event(ui::EventType::kMousePressed, gfx::Point(),
                                  view->GetBoundsInScreen().origin(),
                                  ui::EventTimeForNow(), 0, 0);
-    shelf_view_->PointerPressedOnButton(view, pointer, pressed_event);
+    GetShelfView()->PointerPressedOnButton(view, pointer, pressed_event);
     return view;
   }
 
@@ -463,7 +716,7 @@ class ShelfViewTest : public AshTestBase {
   void SimulateClick(int button_index) {
     ShelfAppButton* button =
         SimulateButtonPressed(ShelfView::MOUSE, button_index);
-    ui::MouseEvent release_event(ui::ET_MOUSE_RELEASED, gfx::Point(),
+    ui::MouseEvent release_event(ui::EventType::kMouseReleased, gfx::Point(),
                                  button->GetBoundsInScreen().origin(),
                                  ui::EventTimeForNow(), 0, 0);
     button->NotifyClick(release_event);
@@ -474,7 +727,7 @@ class ShelfViewTest : public AshTestBase {
   void SimulateDoubleClick(int button_index) {
     ShelfAppButton* button =
         SimulateButtonPressed(ShelfView::MOUSE, button_index);
-    ui::MouseEvent release_event(ui::ET_MOUSE_RELEASED, gfx::Point(),
+    ui::MouseEvent release_event(ui::EventType::kMouseReleased, gfx::Point(),
                                  button->GetBoundsInScreen().origin(),
                                  ui::EventTimeForNow(), ui::EF_IS_DOUBLE_CLICK,
                                  0);
@@ -482,15 +735,15 @@ class ShelfViewTest : public AshTestBase {
     button->OnMouseReleased(release_event);
   }
 
-  void DoDrag(int dist_x,
-              int dist_y,
-              views::View* button,
-              ShelfView::Pointer pointer,
-              views::View* to) {
-    ui::MouseEvent drag_event(ui::ET_MOUSE_DRAGGED, gfx::Point(dist_x, dist_y),
-                              to->GetBoundsInScreen().origin(),
-                              ui::EventTimeForNow(), 0, 0);
-    shelf_view_->PointerDraggedOnButton(button, pointer, drag_event);
+  static void DoDrag(int dist_x,
+                     int dist_y,
+                     views::View* button,
+                     ShelfView::Pointer pointer,
+                     views::View* to) {
+    ui::MouseEvent drag_event(
+        ui::EventType::kMouseDragged, gfx::Point(dist_x, dist_y),
+        to->GetBoundsInScreen().origin(), ui::EventTimeForNow(), 0, 0);
+    GetShelfView()->PointerDraggedOnButton(button, pointer, drag_event);
   }
 
   /*
@@ -513,8 +766,9 @@ class ShelfViewTest : public AshTestBase {
     if (progressively) {
       int sgn = dist_x > 0 ? 1 : -1;
       dist_x = abs(dist_x);
-      for (; dist_x; dist_x -= std::min(10, dist_x))
+      for (; dist_x; dist_x -= std::min(10, dist_x)) {
         DoDrag(sgn * std::min(10, abs(dist_x)), 0, button, pointer, to);
+      }
     } else {
       DoDrag(dist_x, dist_y, button, pointer, to);
     }
@@ -536,12 +790,14 @@ class ShelfViewTest : public AshTestBase {
       ContinueDrag(button, pointer, button_index, destination_index, false);
     } else if (button_index < destination_index) {
       for (int cur_index = button_index + 1; cur_index <= destination_index;
-           cur_index++)
+           cur_index++) {
         ContinueDrag(button, pointer, cur_index - 1, cur_index, true);
+      }
     } else if (button_index > destination_index) {
       for (int cur_index = button_index - 1; cur_index >= destination_index;
-           cur_index--)
+           cur_index--) {
         ContinueDrag(button, pointer, cur_index + 1, cur_index, true);
+      }
     }
     return button;
   }
@@ -561,9 +817,9 @@ class ShelfViewTest : public AshTestBase {
 
   void SetupForDragTest(std::vector<std::pair<ShelfID, views::View*>>* id_map) {
     // Initialize |id_map| with the automatically-created shelf buttons.
-    for (size_t i = 0; i < model_->items().size(); ++i) {
+    for (size_t i = 0; i < GetModel()->items().size(); ++i) {
       ShelfAppButton* button = test_api_->GetButton(i);
-      id_map->push_back(std::make_pair(model_->items()[i].id, button));
+      id_map->push_back(std::make_pair(GetModel()->items()[i].id, button));
     }
     ASSERT_NO_FATAL_FAILURE(CheckModelIDs(*id_map));
 
@@ -579,9 +835,9 @@ class ShelfViewTest : public AshTestBase {
   }
 
   // Returns the item's ShelfID at |index|.
-  ShelfID GetItemId(int index) {
+  static ShelfID GetItemId(int index) {
     DCHECK_GE(index, 0);
-    return model_->items()[index].id;
+    return GetModel()->items()[index].id;
   }
 
   // Returns the center point of a button. Helper function for event generators.
@@ -589,19 +845,52 @@ class ShelfViewTest : public AshTestBase {
     return GetButtonCenter(GetButtonByID(button_id));
   }
 
-  gfx::Point GetButtonCenter(ShelfAppButton* button) {
+  gfx::Point GetButtonCenter(const ShelfAppButton* button) {
     return button->GetBoundsInScreen().CenterPoint();
   }
 
-  ShelfModel* model_ = nullptr;
-  ShelfView* shelf_view_ = nullptr;
-  views::View* navigation_view_ = nullptr;
-  views::View* status_area_ = nullptr;
+  int GetHapticTickEventsCount() const {
+    return haptics_tracker_->GetSentHapticCount(
+        ui::HapticTouchpadEffect::kTick,
+        ui::HapticTouchpadEffectStrength::kMedium);
+  }
+
+  static ShelfModel* GetModel() { return ShelfModel::Get(); }
+
+  static ShelfView* GetShelfView() {
+    return GetPrimaryShelf()->GetShelfViewForTesting();
+  }
+
+  static views::View* GetNavigationView() {
+    return GetPrimaryShelf()
+        ->shelf_widget()
+        ->navigation_widget()
+        ->GetContentsView();
+  }
+
+  static views::View* GetStatusArea() {
+    gfx::NativeWindow window =
+        GetShelfView()->shelf_widget()->GetNativeWindow();
+    return RootWindowController::ForWindow(window)
+        ->GetStatusAreaWidget()
+        ->GetContentsView();
+  }
 
   int id_ = 0;
 
+  // Used to track haptics events sent during drag.
+  std::unique_ptr<HapticsTrackingTestInputController> haptics_tracker_;
   std::unique_ptr<ShelfViewTestAPI> test_api_;
 };
+
+TEST_F(ShelfViewTest, AccessibleProperties) {
+  ui::AXNodeData data;
+
+  GetShelfView()->GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ(data.role, ax::mojom::Role::kToolbar);
+  EXPECT_EQ(data.GetStringAttribute(ax::mojom::StringAttribute::kName),
+            l10n_util::GetStringUTF8(IDS_ASH_SHELF_ACCESSIBLE_NAME));
+}
 
 class LtrRtlShelfViewTest : public ShelfViewTest,
                             public testing::WithParamInterface<bool> {
@@ -609,7 +898,7 @@ class LtrRtlShelfViewTest : public ShelfViewTest,
   LtrRtlShelfViewTest() : scoped_locale_(GetParam() ? "he" : "") {}
   LtrRtlShelfViewTest(const LtrRtlShelfViewTest&) = delete;
   LtrRtlShelfViewTest& operator=(const LtrRtlShelfViewTest&) = delete;
-  ~LtrRtlShelfViewTest() = default;
+  ~LtrRtlShelfViewTest() override = default;
 
   bool IsRtlEnabled() const { return GetParam(); }
 
@@ -620,21 +909,39 @@ class LtrRtlShelfViewTest : public ShelfViewTest,
 
 INSTANTIATE_TEST_SUITE_P(All, LtrRtlShelfViewTest, testing::Bool());
 
-const char*
-    ShelfViewTest::kTimeBetweenWindowMinimizedAndActivatedActionsHistogramName =
-        ShelfButtonPressedMetricTracker::
-            kTimeBetweenWindowMinimizedAndActivatedActionsHistogramName;
-
-class ShelfViewDragToPinTest : public ShelfViewTest {
- public:
-  ShelfViewDragToPinTest() {
-    feature_list_.InitAndEnableFeature(features::kDragUnpinnedAppToPin);
+TEST_P(LtrRtlShelfViewTest, GetAnchorBoundsInScreen) {
+  {
+    SCOPED_TRACE("Initial anchor bounds.");
+    VerifyAnchorBoundsInScreenAreValid();
   }
-  ~ShelfViewDragToPinTest() override = default;
 
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
+  ShelfID app_shortcut_id;
+
+  {
+    SCOPED_TRACE("Update anchor bounds due to addition.");
+    ExpectHelpBubbleAnchorBoundsChangedEvent(
+        [&]() { app_shortcut_id = AddAppShortcut(); });
+    VerifyAnchorBoundsInScreenAreValid();
+  }
+
+  {
+    SCOPED_TRACE("Update anchor bounds due to removal.");
+    ExpectHelpBubbleAnchorBoundsChangedEvent(
+        [&]() { RemoveByID(app_shortcut_id); });
+    VerifyAnchorBoundsInScreenAreValid();
+  }
+
+  {
+    SCOPED_TRACE("Shelf overflow anchor bounds.");
+    ExpectHelpBubbleAnchorBoundsChangedEvent([&]() {
+      while (GetShelfView()->parent()->bounds().width() >=
+             GetShelfView()->bounds().width()) {
+        AddAppShortcut();
+      }
+    });
+    VerifyAnchorBoundsInScreenAreValid();
+  }
+}
 
 TEST_P(LtrRtlShelfViewTest, VisibleShelfItemsBounds) {
   // Add 3 pinned apps, and a normal app.
@@ -643,14 +950,16 @@ TEST_P(LtrRtlShelfViewTest, VisibleShelfItemsBounds) {
   AddAppShortcut();
   const auto app_id = AddApp();
 
-  EXPECT_EQ(model_->item_count(), shelf_view_->number_of_visible_apps());
+  EXPECT_EQ(static_cast<size_t>(GetModel()->item_count()),
+            GetShelfView()->number_of_visible_apps());
   const gfx::Rect visible_items_bounds =
       test_api_->visible_shelf_item_bounds_union();
 
   // Pin the app with `app_id` and expect that the visible items bounds union
   // remains the same.
   SetShelfItemTypeToAppShortcut(app_id);
-  EXPECT_EQ(model_->item_count(), shelf_view_->number_of_visible_apps());
+  EXPECT_EQ(static_cast<size_t>(GetModel()->item_count()),
+            GetShelfView()->number_of_visible_apps());
   EXPECT_EQ(visible_items_bounds, test_api_->visible_shelf_item_bounds_union());
 }
 
@@ -659,64 +968,156 @@ TEST_P(LtrRtlShelfViewTest, EnforceDragType) {
   EXPECT_TRUE(test_api_->SameDragType(TYPE_APP, TYPE_APP));
   EXPECT_FALSE(test_api_->SameDragType(TYPE_APP, TYPE_PINNED_APP));
   EXPECT_FALSE(test_api_->SameDragType(TYPE_APP, TYPE_BROWSER_SHORTCUT));
-  EXPECT_FALSE(
-      test_api_->SameDragType(TYPE_APP, TYPE_UNPINNED_BROWSER_SHORTCUT));
 
   EXPECT_TRUE(test_api_->SameDragType(TYPE_PINNED_APP, TYPE_PINNED_APP));
   EXPECT_TRUE(test_api_->SameDragType(TYPE_PINNED_APP, TYPE_BROWSER_SHORTCUT));
-  EXPECT_FALSE(
-      test_api_->SameDragType(TYPE_PINNED_APP, TYPE_UNPINNED_BROWSER_SHORTCUT));
 
   EXPECT_TRUE(
       test_api_->SameDragType(TYPE_BROWSER_SHORTCUT, TYPE_BROWSER_SHORTCUT));
-  EXPECT_TRUE(test_api_->SameDragType(TYPE_UNPINNED_BROWSER_SHORTCUT,
-                                      TYPE_UNPINNED_BROWSER_SHORTCUT));
-
-  // No test for TYPE_BROWSER_SHORTCUT and TYPE_UNPINNED_BROWSER_SHORTCUT,
-  // because they should be mutually exclusive.
 }
 
 // Check that model changes are handled correctly while a shelf icon is being
 // dragged.
 TEST_P(LtrRtlShelfViewTest, ModelChangesWhileDragging) {
   std::vector<std::pair<ShelfID, views::View*>> id_map;
+  auto* shelf_view = GetShelfView();
+  auto* model = GetModel();
   SetupForDragTest(&id_map);
 
   // Dragging browser shortcut at index 1.
-  EXPECT_TRUE(model_->items()[0].type == TYPE_BROWSER_SHORTCUT);
+  EXPECT_TRUE(model->items()[0].type == TYPE_BROWSER_SHORTCUT);
   views::View* dragged_button = SimulateDrag(ShelfView::MOUSE, 0, 2, false);
+  EXPECT_EQ(1, GetHapticTickEventsCount());
   std::rotate(id_map.begin(), id_map.begin() + 1, id_map.begin() + 3);
   ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
-  shelf_view_->PointerReleasedOnButton(dragged_button, ShelfView::MOUSE, false);
-  EXPECT_TRUE(model_->items()[2].type == TYPE_BROWSER_SHORTCUT);
+  shelf_view->PointerReleasedOnButton(dragged_button, ShelfView::MOUSE, false);
+  EXPECT_EQ(1, GetHapticTickEventsCount());
+  EXPECT_TRUE(model->items()[2].type == TYPE_BROWSER_SHORTCUT);
+  test_api_->RunMessageLoopUntilAnimationsDone();
 
   // Dragging changes model order.
   dragged_button = SimulateDrag(ShelfView::MOUSE, 0, 2, false);
+  EXPECT_EQ(2, GetHapticTickEventsCount());
   std::rotate(id_map.begin(), id_map.begin() + 1, id_map.begin() + 3);
   ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
 
   // Cancelling the drag operation restores previous order.
-  shelf_view_->PointerReleasedOnButton(dragged_button, ShelfView::MOUSE, true);
+  shelf_view->PointerReleasedOnButton(dragged_button, ShelfView::MOUSE, true);
+  test_api_->RunMessageLoopUntilAnimationsDone();
+  EXPECT_EQ(2, GetHapticTickEventsCount());
   std::rotate(id_map.begin(), id_map.begin() + 2, id_map.begin() + 3);
   ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
 
   // Deleting an item keeps the remaining intact.
-  dragged_button = SimulateDrag(ShelfView::MOUSE, 0, 2, false);
-  model_->RemoveItemAt(0);
+  dragged_button = SimulateDrag(ShelfView::MOUSE, 3, 2, false);
+  EXPECT_EQ(3, GetHapticTickEventsCount());
+
+  // The dragged view has been moved to index 2 during drag.
+  std::rotate(id_map.begin() + 2, id_map.begin() + 3, id_map.begin() + 4);
+  ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
+
+  model->RemoveItemAt(0);
   id_map.erase(id_map.begin());
   ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
-  shelf_view_->PointerReleasedOnButton(dragged_button, ShelfView::MOUSE, false);
+  // Cancel drag, and verify that the model state has been correctly reset.
+  shelf_view->PointerReleasedOnButton(dragged_button, ShelfView::MOUSE, true);
+
+  std::rotate(id_map.begin() + 1, id_map.begin() + 2, id_map.begin() + 3);
+  ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
 
   // Waits until app removal animation finishes.
   test_api_->RunMessageLoopUntilAnimationsDone();
 
-  // Adding a shelf item cancels the drag and respects the order.
   dragged_button = SimulateDrag(ShelfView::MOUSE, 0, 2, false);
+  EXPECT_EQ(4, GetHapticTickEventsCount());
+  std::rotate(id_map.begin(), id_map.begin() + 1, id_map.begin() + 3);
   ShelfID new_id = AddAppShortcut();
   id_map.insert(id_map.begin() + 5,
                 std::make_pair(new_id, GetButtonByID(new_id)));
   ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
-  shelf_view_->PointerReleasedOnButton(dragged_button, ShelfView::MOUSE, false);
+  shelf_view->PointerReleasedOnButton(dragged_button, ShelfView::MOUSE, false);
+  ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
+  EXPECT_EQ(4, GetHapticTickEventsCount());
+
+  test_api_->RunMessageLoopUntilAnimationsDone();
+
+  // Test removing dragged item mid drag.
+  dragged_button = SimulateDrag(ShelfView::MOUSE, 1, 2, false);
+  EXPECT_EQ(5, GetHapticTickEventsCount());
+  std::rotate(id_map.begin() + 1, id_map.begin() + 2, id_map.begin() + 3);
+  ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
+
+  model->RemoveItemAt(2);
+  id_map.erase(id_map.begin() + 2);
+  ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
+
+  shelf_view->PointerReleasedOnButton(dragged_button, ShelfView::MOUSE, false);
+  ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
+  EXPECT_EQ(5, GetHapticTickEventsCount());
+
+  test_api_->RunMessageLoopUntilAnimationsDone();
+
+  // Test drag cancellation after adding an item before the dragged item.
+  dragged_button = SimulateDrag(ShelfView::MOUSE, 1, 2, false);
+  EXPECT_EQ(6, GetHapticTickEventsCount());
+  std::rotate(id_map.begin() + 1, id_map.begin() + 2, id_map.begin() + 3);
+  ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
+
+  ShelfItem prepend_item;
+  new_id = ShelfID("-1");
+  prepend_item.id = new_id;
+  prepend_item.type = TYPE_PINNED_APP;
+  ShelfModel::Get()->AddAt(
+      0, prepend_item,
+      std::make_unique<TestShelfItemDelegate>(prepend_item.id));
+  id_map.insert(id_map.begin(), std::make_pair(new_id, GetButtonByID(new_id)));
+  ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
+
+  shelf_view->PointerReleasedOnButton(dragged_button, ShelfView::MOUSE, true);
+
+  std::rotate(id_map.begin() + 2, id_map.begin() + 3, id_map.begin() + 4);
+  ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
+  EXPECT_EQ(6, GetHapticTickEventsCount());
+}
+
+// Check that model changes are handled correctly while a shelf icon is being
+// dragged.
+TEST_P(LtrRtlShelfViewTest, MovesInModelWhileDragging) {
+  std::vector<std::pair<ShelfID, views::View*>> id_map;
+  SetupForDragTest(&id_map);
+
+  views::View* dragged_button = SimulateDrag(ShelfView::MOUSE, 2, 4, false);
+  EXPECT_EQ(1, GetHapticTickEventsCount());
+  std::rotate(id_map.begin() + 2, id_map.begin() + 3, id_map.begin() + 5);
+  ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
+
+  ShelfModel::Get()->Move(1, 3);
+  std::rotate(id_map.begin() + 1, id_map.begin() + 2, id_map.begin() + 4);
+  ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
+
+  GetShelfView()->PointerReleasedOnButton(dragged_button, ShelfView::MOUSE,
+                                          true);
+  EXPECT_EQ(1, GetHapticTickEventsCount());
+
+  std::rotate(id_map.begin() + 1, id_map.begin() + 4, id_map.begin() + 5);
+  ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
+  test_api_->RunMessageLoopUntilAnimationsDone();
+
+  dragged_button = SimulateDrag(ShelfView::MOUSE, 2, 4, false);
+  EXPECT_EQ(2, GetHapticTickEventsCount());
+  std::rotate(id_map.begin() + 2, id_map.begin() + 3, id_map.begin() + 5);
+  ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
+
+  ShelfModel::Get()->Move(3, 1);
+  std::rotate(id_map.begin() + 1, id_map.begin() + 3, id_map.begin() + 4);
+  ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
+
+  GetShelfView()->PointerReleasedOnButton(dragged_button, ShelfView::MOUSE,
+                                          true);
+  EXPECT_EQ(2, GetHapticTickEventsCount());
+
+  std::rotate(id_map.begin() + 3, id_map.begin() + 4, id_map.begin() + 5);
+  ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
 }
 
 // Check that 2nd drag from the other pointer would be ignored.
@@ -727,18 +1128,20 @@ TEST_P(LtrRtlShelfViewTest, SimultaneousDrag) {
   // Start a mouse drag.
   views::View* dragged_button_mouse =
       SimulateDrag(ShelfView::MOUSE, 2, 4, false);
+  EXPECT_EQ(1, GetHapticTickEventsCount());
   std::rotate(id_map.begin() + 2, id_map.begin() + 3, id_map.begin() + 5);
   ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
   // Attempt a touch drag before the mouse drag finishes.
   views::View* dragged_button_touch =
       SimulateDrag(ShelfView::TOUCH, 5, 3, false);
+  EXPECT_EQ(1, GetHapticTickEventsCount());
 
   // Nothing changes since 2nd drag is ignored.
   ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
 
   // Finish the mouse drag.
-  shelf_view_->PointerReleasedOnButton(dragged_button_mouse, ShelfView::MOUSE,
-                                       false);
+  GetShelfView()->PointerReleasedOnButton(dragged_button_mouse,
+                                          ShelfView::MOUSE, false);
   ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
 
   // Now start a touch drag.
@@ -752,105 +1155,142 @@ TEST_P(LtrRtlShelfViewTest, SimultaneousDrag) {
   // Nothing changes since 2nd drag is ignored.
   ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
 
-  shelf_view_->PointerReleasedOnButton(dragged_button_touch, ShelfView::TOUCH,
-                                       false);
+  GetShelfView()->PointerReleasedOnButton(dragged_button_touch,
+                                          ShelfView::TOUCH, false);
   ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
+  EXPECT_EQ(1, GetHapticTickEventsCount());
 }
 
-// Ensure that the behavior of pinning and unpinning by dragging works as
-// expected.
-TEST_F(ShelfViewDragToPinTest, DragAppsToPinAndUnpin) {
+// Ensure that the behavior of pinning by dragging works as expected.
+TEST_F(ShelfViewTest, DragAppsToPin) {
   std::vector<std::pair<ShelfID, views::View*>> id_map;
+  auto* shelf_view = GetShelfView();
   SetupForDragTest(&id_map);
-  int pinned_apps_size = id_map.size();
+  size_t pinned_apps_size = id_map.size();
 
   const ShelfID open_app_id = AddApp();
-  id_map.push_back(std::make_pair(open_app_id, GetButtonByID(open_app_id)));
+  id_map.emplace_back(open_app_id, GetButtonByID(open_app_id));
 
-  // Run the pinned app at index 1.
-  ShelfItem item = model_->items()[1];
-  item.status = STATUS_RUNNING;
-  model_->Set(1, item);
-  id_map[1].second = GetButtonByID(item.id);
-
-  ASSERT_TRUE(static_cast<ShelfAppButton*>(id_map[1].second)->state() &
-              ShelfAppButton::STATE_RUNNING);
-  ASSERT_FALSE(static_cast<ShelfAppButton*>(id_map[2].second)->state() &
-               ShelfAppButton::STATE_RUNNING);
   ASSERT_TRUE(GetButtonByID(open_app_id)->state() &
               ShelfAppButton::STATE_RUNNING);
   EXPECT_EQ(test_api_->GetSeparatorIndex(), pinned_apps_size - 1);
 
-  // Drag the app at index 1 and move it to the end of the shelf. With separator
-  // available and the app is dragged to the unpinned app side, the dragged open
-  // app should be unpinned and moved to the released position.
+  // Drag the browser shortcut at index 0 and move it to the end of the shelf.
+  // The browser shortcut are not allowed to be moved across the separator so
+  // the dragged browser shortcut will stay pinned beside the separator after
+  // release.
   views::View* dragged_button =
-      SimulateDrag(ShelfView::MOUSE, 1, id_map.size() - 1, false);
-  std::rotate(id_map.begin() + 1, id_map.begin() + 2, id_map.end());
+      SimulateDrag(ShelfView::MOUSE, 0, id_map.size() - 1, false);
+  EXPECT_EQ(1, GetHapticTickEventsCount());
+  std::rotate(id_map.begin(), id_map.begin() + 1,
+              id_map.begin() + pinned_apps_size);
   ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
-  shelf_view_->PointerReleasedOnButton(dragged_button, ShelfView::MOUSE, false);
-  EXPECT_FALSE(IsAppPinned(id_map.back().first));
-  --pinned_apps_size;
+  shelf_view->PointerReleasedOnButton(dragged_button, ShelfView::MOUSE, false);
+  test_api_->RunMessageLoopUntilAnimationsDone();
+  EXPECT_EQ(1, GetHapticTickEventsCount());
+  EXPECT_TRUE(IsAppPinned(id_map[pinned_apps_size - 1].first));
+  EXPECT_EQ(test_api_->GetSeparatorIndex(), pinned_apps_size - 1);
 
-  // Drag the app at index 2 and move it to the end of the shelf. With separator
-  // available and the app is dragged to the unpinned app side, the dragged app
-  // with no running instance should be unpinned and removed from shelf.
-  dragged_button = SimulateDrag(ShelfView::MOUSE, 2, id_map.size() - 1, false);
-  shelf_view_->PointerReleasedOnButton(dragged_button, ShelfView::MOUSE, false);
-  id_map.erase(id_map.begin() + 2);
-  EXPECT_EQ(id_map.size(), model_->items().size());
+  // Drag the app at index 1 and move it to the end of the shelf. The pinned
+  // apps are not allowed to be moved across the separator so the dragged app
+  // will stay pinned beside the separator after release.
+  dragged_button = SimulateDrag(ShelfView::MOUSE, 1, id_map.size() - 1, false);
+  EXPECT_EQ(2, GetHapticTickEventsCount());
+  std::rotate(id_map.begin() + 1, id_map.begin() + 2,
+              id_map.begin() + pinned_apps_size);
   ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
-  --pinned_apps_size;
+  shelf_view->PointerReleasedOnButton(dragged_button, ShelfView::MOUSE, false);
+  test_api_->RunMessageLoopUntilAnimationsDone();
+  EXPECT_EQ(2, GetHapticTickEventsCount());
+  EXPECT_TRUE(IsAppPinned(id_map[pinned_apps_size - 1].first));
+  EXPECT_EQ(test_api_->GetSeparatorIndex(), pinned_apps_size - 1);
 
   // Drag an app in unpinned app side and move it to the beginning of the shelf.
   // With separator available and the app is dragged to the pinned app side, the
   // dragged app should be pinned and moved to the released position.
-  dragged_button = SimulateDrag(ShelfView::MOUSE, id_map.size() - 2, 0, false);
-  std::rotate(id_map.rbegin() + 1, id_map.rbegin() + 2, id_map.rend());
+  dragged_button = SimulateDrag(ShelfView::MOUSE, id_map.size() - 1, 0, false);
+  EXPECT_EQ(3, GetHapticTickEventsCount());
+  std::rotate(id_map.rbegin(), id_map.rbegin() + 1, id_map.rend());
   ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
-  shelf_view_->PointerReleasedOnButton(dragged_button, ShelfView::MOUSE, false);
+  shelf_view->PointerReleasedOnButton(dragged_button, ShelfView::MOUSE, false);
+  test_api_->RunMessageLoopUntilAnimationsDone();
+  EXPECT_EQ(3, GetHapticTickEventsCount());
   EXPECT_TRUE(IsAppPinned(id_map[0].first));
   ++pinned_apps_size;
 
-  EXPECT_EQ(test_api_->GetSeparatorIndex(), pinned_apps_size - 1);
+  // After pinning the last unpinned app by dragging, the separator is removed
+  // as there is no unpinned app on the shelf.
+  EXPECT_EQ(test_api_->GetSeparatorIndex(), std::nullopt);
 }
 
-// Check that the Browser Shortcut will not be dragged to the unpinned app side
-// or be unpinned by dragging.
-TEST_F(ShelfViewDragToPinTest, BlockBrowserShortcutFromUnpinningByDragging) {
+// Ensure that the unpinnable apps can not be pinned by dragging.
+TEST_F(ShelfViewTest, NotPinnableItemCantBePinnedByDragging) {
   std::vector<std::pair<ShelfID, views::View*>> id_map;
   SetupForDragTest(&id_map);
-  const int pinned_apps_size = id_map.size();
+  size_t pinned_apps_size = id_map.size();
 
-  const ShelfID open_app_id = AddApp();
-  id_map.push_back(std::make_pair(open_app_id, GetButtonByID(open_app_id)));
+  // Add an unpinnable app.
+  const ShelfItem unpinnable_app =
+      ShelfTestUtil::AddAppNotPinnable(base::NumberToString(id_++));
+  const ShelfID id = unpinnable_app.id;
+  id_map.emplace_back(id, GetButtonByID(id));
 
-  EXPECT_TRUE(model_->items()[0].type == TYPE_BROWSER_SHORTCUT);
+  ASSERT_TRUE(GetButtonByID(id)->state() & ShelfAppButton::STATE_RUNNING);
+  ASSERT_FALSE(IsAppPinned(id));
   EXPECT_EQ(test_api_->GetSeparatorIndex(), pinned_apps_size - 1);
 
-  // Dragging the browser shortcut to the unpinned app side should not make it
-  // unpinned.
+  // Drag an unpinnable app and move it to the beginning of the shelf. The app
+  // can not be moved across the separator so the dragged app will stay unpinned
+  // beside the separator after release.
   views::View* dragged_button =
-      SimulateDrag(ShelfView::MOUSE, 0, id_map.size() - 1, false);
-  std::rotate(id_map.begin(), id_map.begin() + 1,
-              id_map.begin() + pinned_apps_size);
+      SimulateDrag(ShelfView::MOUSE, id_map.size() - 1, 0, false);
+  EXPECT_EQ(1, GetHapticTickEventsCount());
   ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
+  GetShelfView()->PointerReleasedOnButton(dragged_button, ShelfView::MOUSE,
+                                          false);
+  test_api_->RunMessageLoopUntilAnimationsDone();
+  EXPECT_EQ(1, GetHapticTickEventsCount());
+  EXPECT_EQ(test_api_->GetSeparatorIndex(), pinned_apps_size - 1);
+  EXPECT_FALSE(IsAppPinned(id));
+}
 
-  // When drag pointer released, the browser shortcut should be the last app in
-  // the pinned app side.
-  shelf_view_->PointerReleasedOnButton(dragged_button, ShelfView::MOUSE, false);
-  EXPECT_EQ(model_->items()[pinned_apps_size - 1].type, TYPE_BROWSER_SHORTCUT);
+// Verifies that a "dialog" item is correctly detected as not pinned when
+// determining the separator position, and that it cannot be dragged to pinned
+// state.
+TEST_F(ShelfViewTest, SeparatorCorrectlyPositionedNextToDialogItem) {
+  std::vector<std::pair<ShelfID, views::View*>> id_map;
+  SetupForDragTest(&id_map);
+  size_t pinned_apps_size = id_map.size();
+
+  const ShelfID dialog_id = AddItem(TYPE_DIALOG, true);
+  id_map.emplace_back(dialog_id, GetButtonByID(dialog_id));
+
+  EXPECT_EQ(test_api_->GetSeparatorIndex(), pinned_apps_size - 1);
+
+  // Drag an unpinnable dialog item and move it to the beginning of the shelf.
+  // The item cannot be moved across the separator so the dragged item will
+  // remain unpinned after release.
+  views::View* dragged_button =
+      SimulateDrag(ShelfView::MOUSE, id_map.size() - 1, 0, false);
+  EXPECT_EQ(1, GetHapticTickEventsCount());
+  ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
+  GetShelfView()->PointerReleasedOnButton(dragged_button, ShelfView::MOUSE,
+                                          false);
+  test_api_->RunMessageLoopUntilAnimationsDone();
+  EXPECT_EQ(1, GetHapticTickEventsCount());
+  EXPECT_EQ(test_api_->GetSeparatorIndex(), pinned_apps_size - 1);
+  EXPECT_FALSE(IsAppPinned(dialog_id));
 }
 
 // Check that separator index updates as expected when a drag view is dragged
 // over it.
-TEST_F(ShelfViewDragToPinTest, DragAppAroundSeparator) {
+TEST_F(ShelfViewTest, DragAppAroundSeparator) {
   std::vector<std::pair<ShelfID, views::View*>> id_map;
   SetupForDragTest(&id_map);
-  const int pinned_apps_size = id_map.size();
+  const size_t pinned_apps_size = id_map.size();
 
   const ShelfID open_app_id = AddApp();
-  id_map.push_back(std::make_pair(open_app_id, GetButtonByID(open_app_id)));
+  id_map.emplace_back(open_app_id, GetButtonByID(open_app_id));
   EXPECT_EQ(test_api_->GetSeparatorIndex(), pinned_apps_size - 1);
   const int button_width =
       GetButtonByID(open_app_id)->GetBoundsInScreen().width();
@@ -858,12 +1298,12 @@ TEST_F(ShelfViewDragToPinTest, DragAppAroundSeparator) {
   ui::test::EventGenerator* generator = GetEventGenerator();
 
   // The test makes some assumptions that the shelf is bottom aligned.
-  ASSERT_EQ(shelf_view_->shelf()->alignment(), ShelfAlignment::kBottom);
+  ASSERT_EQ(GetShelfView()->shelf()->alignment(), ShelfAlignment::kBottom);
 
   // Drag an unpinned open app that is beside the separator around and check
   // that the separator is correctly placed.
-  ASSERT_EQ(model_->ItemIndexByID(open_app_id),
-            test_api_->GetSeparatorIndex() + 1);
+  ASSERT_EQ(static_cast<size_t>(GetModel()->ItemIndexByID(open_app_id)),
+            test_api_->GetSeparatorIndex().value() + 1);
   gfx::Point unpinned_app_location =
       GetButtonCenter(GetButtonByID(open_app_id));
   generator->set_current_screen_location(unpinned_app_location);
@@ -871,10 +1311,11 @@ TEST_F(ShelfViewDragToPinTest, DragAppAroundSeparator) {
   // Drag the mouse slightly to the left. The dragged app will stay at the same
   // index but the separator will move to the right.
   generator->MoveMouseBy(-button_width / 4, 0);
+  EXPECT_EQ(1, GetHapticTickEventsCount());
   // In this case, the separator is moved to the end of the shelf so it is set
-  // invisible and the |separator_index_| will be updated to -1.
+  // invisible and the |separator_index_| will be updated to nullopt.
   EXPECT_FALSE(test_api_->IsSeparatorVisible());
-  EXPECT_EQ(test_api_->GetSeparatorIndex(), -1);
+  EXPECT_FALSE(test_api_->GetSeparatorIndex().has_value());
   // Drag the mouse slightly to the right where the dragged app will stay at the
   // same index.
   generator->MoveMouseBy(button_width / 2, 0);
@@ -882,26 +1323,34 @@ TEST_F(ShelfViewDragToPinTest, DragAppAroundSeparator) {
   // dragging it back to its original place will show the separator again.
   EXPECT_EQ(test_api_->GetSeparatorIndex(), pinned_apps_size - 1);
   generator->ReleaseLeftButton();
+  EXPECT_EQ(1, GetHapticTickEventsCount());
+}
 
-  // Drag an pinned app that is beside the separator around and check that the
-  // separator is correctly placed. Check that the dragged app is not a browser
-  // shortcut, which can not be dragged across the separator.
-  ASSERT_NE(model_->items()[pinned_apps_size - 1].type, TYPE_BROWSER_SHORTCUT);
-  ASSERT_EQ(model_->ItemIndexByID(id_map[pinned_apps_size - 1].first),
-            test_api_->GetSeparatorIndex());
-  gfx::Point pinned_app_location =
-      GetButtonCenter(id_map[pinned_apps_size - 1].first);
-  generator->set_current_screen_location(pinned_app_location);
-  generator->PressLeftButton();
-  // Drag the mouse slightly to the right. The dragged app will stay at the same
-  // index but the separator will move to the left.
-  generator->MoveMouseBy(button_width / 4, 0);
-  EXPECT_EQ(test_api_->GetSeparatorIndex(), pinned_apps_size - 2);
-  // Drag the mouse slightly to the left. The dragged app will stay at the same
-  // index but the separator will move to the right.
-  generator->MoveMouseBy(-button_width / 2, 0);
-  EXPECT_EQ(test_api_->GetSeparatorIndex(), pinned_apps_size - 1);
-  generator->ReleaseLeftButton();
+// Verifies that mouse capture loss with a shelf button pressed, but before
+// drag start, clears any preset drag state.
+TEST_F(ShelfViewTest, MouseCaptureLossWithShelfButtonPressedClearsDragState) {
+  std::vector<std::pair<ShelfID, views::View*>> id_map;
+  SetupForDragTest(&id_map);
+
+  ShelfAppButton* button = SimulateButtonPressed(ShelfView::MOUSE, 0);
+  button->OnMouseCaptureLost();
+  auto* shelf_view = GetPrimaryShelf()->GetShelfViewForTesting();
+  EXPECT_FALSE(shelf_view->IsDraggedView(button));
+  ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
+}
+
+TEST_F(ShelfViewTest, DraggedViewVisibleAfterLosingMouseCapture) {
+  std::vector<std::pair<ShelfID, views::View*>> id_map;
+  SetupForDragTest(&id_map);
+
+  ShelfAppButton* button = SimulateButtonPressed(ShelfView::MOUSE, 0);
+  ContinueDrag(button, ShelfView::MOUSE, 0, 2, false);
+  button->OnMouseCaptureLost();
+
+  auto* shelf_view = GetPrimaryShelf()->GetShelfViewForTesting();
+  EXPECT_FALSE(shelf_view->IsDraggedView(button));
+  EXPECT_EQ(1.0f, button->layer()->opacity());
+  ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
 }
 
 // Ensure that clicking on one item and then dragging another works as expected.
@@ -913,20 +1362,23 @@ TEST_P(LtrRtlShelfViewTest, ClickOneDragAnother) {
   SimulateClick(1);
 
   // Dragging the browser item at index 0 should change the model order.
-  EXPECT_TRUE(model_->items()[0].type == TYPE_BROWSER_SHORTCUT);
+  EXPECT_TRUE(GetModel()->items()[0].type == TYPE_BROWSER_SHORTCUT);
   views::View* dragged_button = SimulateDrag(ShelfView::MOUSE, 0, 2, false);
+  EXPECT_EQ(1, GetHapticTickEventsCount());
   std::rotate(id_map.begin(), id_map.begin() + 1, id_map.begin() + 3);
   ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
-  shelf_view_->PointerReleasedOnButton(dragged_button, ShelfView::MOUSE, false);
-  EXPECT_TRUE(model_->items()[2].type == TYPE_BROWSER_SHORTCUT);
+  GetShelfView()->PointerReleasedOnButton(dragged_button, ShelfView::MOUSE,
+                                          false);
+  EXPECT_TRUE(GetModel()->items()[2].type == TYPE_BROWSER_SHORTCUT);
+  EXPECT_EQ(1, GetHapticTickEventsCount());
 }
 
 // Tests that double-clicking an item does not activate it twice.
 TEST_P(LtrRtlShelfViewTest, ClickingTwiceActivatesOnce) {
   // Watch for selection of the browser shortcut.
   ShelfItemSelectionTracker* selection_tracker = new ShelfItemSelectionTracker;
-  model_->SetShelfItemDelegate(model_->items()[0].id,
-                               base::WrapUnique(selection_tracker));
+  GetModel()->ReplaceShelfItemDelegate(GetModel()->items()[0].id,
+                                       base::WrapUnique(selection_tracker));
 
   // A single click selects the item, but a double-click does not.
   EXPECT_EQ(0u, selection_tracker->item_selected_count());
@@ -934,6 +1386,7 @@ TEST_P(LtrRtlShelfViewTest, ClickingTwiceActivatesOnce) {
   EXPECT_EQ(1u, selection_tracker->item_selected_count());
   SimulateDoubleClick(0);
   EXPECT_EQ(1u, selection_tracker->item_selected_count());
+  EXPECT_EQ(0, GetHapticTickEventsCount());
 }
 
 // Check that very small mouse drags do not prevent shelf item selection.
@@ -946,7 +1399,7 @@ TEST_P(LtrRtlShelfViewTest, ClickAndMoveSlightly) {
 
   // Install a ShelfItemDelegate that tracks when the shelf item is selected.
   ShelfItemSelectionTracker* selection_tracker = new ShelfItemSelectionTracker;
-  model_->SetShelfItemDelegate(
+  GetModel()->ReplaceShelfItemDelegate(
       shelf_id, base::WrapUnique<ShelfItemSelectionTracker>(selection_tracker));
 
   gfx::Vector2d press_offset(5, 30);
@@ -954,45 +1407,47 @@ TEST_P(LtrRtlShelfViewTest, ClickAndMoveSlightly) {
   gfx::Point press_location_in_screen =
       button->GetBoundsInScreen().origin() + press_offset;
 
-  ui::MouseEvent click_event(ui::ET_MOUSE_PRESSED, press_location,
+  ui::MouseEvent click_event(ui::EventType::kMousePressed, press_location,
                              press_location_in_screen, ui::EventTimeForNow(),
                              ui::EF_LEFT_MOUSE_BUTTON, 0);
   button->OnMousePressed(click_event);
   EXPECT_EQ(0u, selection_tracker->item_selected_count());
 
   ui::MouseEvent drag_event1(
-      ui::ET_MOUSE_DRAGGED, press_location + gfx::Vector2d(0, 1),
+      ui::EventType::kMouseDragged, press_location + gfx::Vector2d(0, 1),
       press_location_in_screen + gfx::Vector2d(0, 1), ui::EventTimeForNow(),
       ui::EF_LEFT_MOUSE_BUTTON, 0);
   button->OnMouseDragged(drag_event1);
   ui::MouseEvent drag_event2(
-      ui::ET_MOUSE_DRAGGED, press_location + gfx::Vector2d(-1, 0),
+      ui::EventType::kMouseDragged, press_location + gfx::Vector2d(-1, 0),
       press_location_in_screen + gfx::Vector2d(-1, 0), ui::EventTimeForNow(),
       ui::EF_LEFT_MOUSE_BUTTON, 0);
   button->OnMouseDragged(drag_event2);
   EXPECT_EQ(0u, selection_tracker->item_selected_count());
 
   ui::MouseEvent release_event(
-      ui::ET_MOUSE_RELEASED, press_location + gfx::Vector2d(-1, 0),
+      ui::EventType::kMouseReleased, press_location + gfx::Vector2d(-1, 0),
       press_location_in_screen + gfx::Vector2d(-1, 0), ui::EventTimeForNow(),
       ui::EF_LEFT_MOUSE_BUTTON, 0);
   button->OnMouseReleased(release_event);
   EXPECT_EQ(1u, selection_tracker->item_selected_count());
+  EXPECT_EQ(0, GetHapticTickEventsCount());
 }
 
 // Confirm that item status changes are reflected in the buttons.
 TEST_P(LtrRtlShelfViewTest, ShelfItemStatus) {
   // All buttons should be visible.
-  ASSERT_EQ(test_api_->GetButtonCount(), shelf_view_->number_of_visible_apps());
+  ASSERT_EQ(test_api_->GetButtonCount(),
+            GetShelfView()->number_of_visible_apps());
 
   // Add platform app button.
   ShelfID last_added = AddApp();
   ShelfItem item = GetItemByID(last_added);
-  int index = model_->ItemIndexByID(last_added);
+  int index = GetModel()->ItemIndexByID(last_added);
   ShelfAppButton* button = GetButtonByID(last_added);
   ASSERT_EQ(ShelfAppButton::STATE_RUNNING, button->state());
   item.status = STATUS_ATTENTION;
-  model_->Set(index, item);
+  GetModel()->Set(index, item);
   ASSERT_EQ(ShelfAppButton::STATE_ATTENTION, button->state());
 }
 
@@ -1001,7 +1456,7 @@ TEST_P(LtrRtlShelfViewTest, ShelfRipOff) {
   ui::test::EventGenerator* generator = GetEventGenerator();
 
   // The test makes some assumptions that the shelf is bottom aligned.
-  ASSERT_EQ(shelf_view_->shelf()->alignment(), ShelfAlignment::kBottom);
+  ASSERT_EQ(GetShelfView()->shelf()->alignment(), ShelfAlignment::kBottom);
 
   // The rip off threshold. Taken from |kRipOffDistance| in shelf_view.cc.
   const int kRipOffDistance = 48;
@@ -1017,6 +1472,7 @@ TEST_P(LtrRtlShelfViewTest, ShelfRipOff) {
   generator->PressLeftButton();
   // Drag the mouse to just off the shelf.
   generator->MoveMouseBy(0, -ShelfConfig::Get()->shelf_size() / 2 - 1);
+  EXPECT_EQ(1, GetHapticTickEventsCount());
   EXPECT_FALSE(test_api_->IsRippedOffFromShelf());
   // Drag the mouse past the rip off threshold.
   generator->MoveMouseBy(0, -kRipOffDistance);
@@ -1025,7 +1481,55 @@ TEST_P(LtrRtlShelfViewTest, ShelfRipOff) {
   // deleted.
   generator->MoveMouseTo(first_app_location);
   generator->ReleaseLeftButton();
+  EXPECT_EQ(1, GetHapticTickEventsCount());
   EXPECT_FALSE(test_api_->IsRippedOffFromShelf());
+}
+
+// Test that rip off drag can gracefully be canceled.
+TEST_P(LtrRtlShelfViewTest, ShelfRipOffCancel) {
+  // The test makes some assumptions that the shelf is bottom aligned.
+  ASSERT_EQ(GetShelfView()->shelf()->alignment(), ShelfAlignment::kBottom);
+
+  // The rip off threshold. Taken from |kRipOffDistance| in shelf_view.cc.
+  constexpr int kRipOffDistance = 48;
+
+  // Add two apps on the main shelf.
+  ShelfID first_app_id = AddAppShortcut();
+  AddAppShortcut();
+
+  // Cache the shelf state - test will verify that shelf items are not changed
+  // if rip off drag gets canceled.
+  std::vector<std::pair<ShelfID, views::View*>> id_map;
+  for (size_t i = 0; i < GetModel()->items().size(); ++i) {
+    ShelfAppButton* button = test_api_->GetButton(i);
+    id_map.emplace_back(GetModel()->items()[i].id, button);
+  }
+
+  // Verify that dragging an app off the shelf will trigger the app getting
+  // ripped off, unless the distance is less than |kRipOffDistance|.
+  const ShelfAppButton* dragged_button = GetButtonByID(first_app_id);
+  gfx::Point first_app_location = GetButtonCenter(dragged_button);
+
+  ui::test::EventGenerator* generator = GetEventGenerator();
+  generator->set_current_screen_location(first_app_location);
+  generator->PressLeftButton();
+
+  // Drag the mouse to just off the shelf.
+  generator->MoveMouseBy(0, -ShelfConfig::Get()->shelf_size() / 2 - 1);
+  EXPECT_EQ(1, GetHapticTickEventsCount());
+  EXPECT_FALSE(test_api_->IsRippedOffFromShelf());
+
+  // Drag the mouse past the rip off threshold.
+  generator->MoveMouseBy(0, -kRipOffDistance);
+  EXPECT_TRUE(test_api_->IsRippedOffFromShelf());
+
+  GetShelfView()->PointerReleasedOnButton(dragged_button, ShelfView::MOUSE,
+                                          true);
+  generator->ReleaseLeftButton();
+  EXPECT_EQ(1, GetHapticTickEventsCount());
+
+  EXPECT_FALSE(test_api_->IsRippedOffFromShelf());
+  ASSERT_NO_FATAL_FAILURE(CheckModelIDs(id_map));
 }
 
 // Tests that drag and drop a pinned running app will unpin it.
@@ -1033,7 +1537,7 @@ TEST_P(LtrRtlShelfViewTest, DragAndDropPinnedRunningApp) {
   ui::test::EventGenerator* generator = GetEventGenerator();
 
   // The test makes some assumptions that the shelf is bottom aligned.
-  ASSERT_EQ(shelf_view_->shelf()->alignment(), ShelfAlignment::kBottom);
+  ASSERT_EQ(GetShelfView()->shelf()->alignment(), ShelfAlignment::kBottom);
 
   // The rip off threshold. Taken from |kRipOffDistance| in shelf_view.cc.
   constexpr int kRipOffDistance = 48;
@@ -1041,53 +1545,95 @@ TEST_P(LtrRtlShelfViewTest, DragAndDropPinnedRunningApp) {
   const ShelfID id = AddApp();
   // Added only one app here, the index of the app will not change after drag
   // and drop.
-  int index = model_->ItemIndexByID(id);
+  int index = GetModel()->ItemIndexByID(id);
   ShelfItem item = GetItemByID(id);
   EXPECT_EQ(STATUS_RUNNING, item.status);
-  PinAppWithID(id);
+  GetModel()->PinExistingItemWithID(id.app_id);
   EXPECT_TRUE(IsAppPinned(GetItemId(index)));
 
   gfx::Point app_location = GetButtonCenter(GetButtonByID(id));
   generator->set_current_screen_location(app_location);
   generator->PressLeftButton();
   generator->MoveMouseBy(0, -ShelfConfig::Get()->shelf_size() / 2 - 1);
+  EXPECT_EQ(1, GetHapticTickEventsCount());
   EXPECT_FALSE(test_api_->IsRippedOffFromShelf());
   generator->MoveMouseBy(0, -kRipOffDistance);
   EXPECT_TRUE(test_api_->IsRippedOffFromShelf());
   generator->ReleaseLeftButton();
   EXPECT_FALSE(IsAppPinned(GetItemId(index)));
+  EXPECT_EQ(1, GetHapticTickEventsCount());
+}
+
+// Double click an app while animating drag icon drop.
+TEST_P(LtrRtlShelfViewTest, ActivateAppButtonDuringDropAnimation) {
+  ui::test::EventGenerator* generator = GetEventGenerator();
+
+  // Enable animations, as the test verifies behavior while a drop animation is
+  // in progress.
+  gfx::ScopedAnimationDurationScaleMode regular_animations(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+
+  // The test makes some assumptions that the shelf is bottom aligned.
+  ASSERT_EQ(GetShelfView()->shelf()->alignment(), ShelfAlignment::kBottom);
+
+  const ShelfID drag_item_id = AddApp();
+  const ShelfID activated_item_id = AddApp();
+
+  // Watch for selection of the browser shortcut.
+  auto owned_selection_tracker = std::make_unique<ShelfItemSelectionTracker>();
+  ShelfItemSelectionTracker* selection_tracker = owned_selection_tracker.get();
+  GetModel()->ReplaceShelfItemDelegate(activated_item_id,
+                                       std::move(owned_selection_tracker));
+
+  generator->set_current_screen_location(
+      GetButtonCenter(GetButtonByID(drag_item_id)));
+  generator->PressLeftButton();
+  generator->MoveMouseBy(0, -ShelfConfig::Get()->shelf_size() / 2 - 1);
+  EXPECT_EQ(1, GetHapticTickEventsCount());
+  generator->ReleaseLeftButton();
+  EXPECT_EQ(1, GetHapticTickEventsCount());
+
+  generator->set_current_screen_location(
+      GetButtonCenter(GetButtonByID(activated_item_id)));
+  generator->DoubleClickLeftButton();
+
+  EXPECT_EQ(1, GetHapticTickEventsCount());
+  EXPECT_EQ(1u, selection_tracker->item_selected_count());
+  VerifyShelfItemBoundsAreValid();
 }
 
 // Confirm that item status changes are reflected in the buttons
 // for platform apps.
 TEST_P(LtrRtlShelfViewTest, ShelfItemStatusPlatformApp) {
   // All buttons should be visible.
-  ASSERT_EQ(test_api_->GetButtonCount(), shelf_view_->number_of_visible_apps());
+  ASSERT_EQ(test_api_->GetButtonCount(),
+            GetShelfView()->number_of_visible_apps());
 
   // Add platform app button.
   ShelfID last_added = AddApp();
   ShelfItem item = GetItemByID(last_added);
-  int index = model_->ItemIndexByID(last_added);
+  int index = GetModel()->ItemIndexByID(last_added);
   ShelfAppButton* button = GetButtonByID(last_added);
   ASSERT_EQ(ShelfAppButton::STATE_RUNNING, button->state());
   item.status = STATUS_ATTENTION;
-  model_->Set(index, item);
+  GetModel()->Set(index, item);
   ASSERT_EQ(ShelfAppButton::STATE_ATTENTION, button->state());
 }
 
 // Confirm that shelf item bounds are correctly updated on shelf changes.
 TEST_P(LtrRtlShelfViewTest, ShelfItemBoundsCheck) {
   VerifyShelfItemBoundsAreValid();
-  shelf_view_->shelf()->SetAutoHideBehavior(ShelfAutoHideBehavior::kAlways);
+  GetShelfView()->shelf()->SetAutoHideBehavior(ShelfAutoHideBehavior::kAlways);
   test_api_->RunMessageLoopUntilAnimationsDone();
   VerifyShelfItemBoundsAreValid();
-  shelf_view_->shelf()->SetAutoHideBehavior(ShelfAutoHideBehavior::kNever);
+  GetShelfView()->shelf()->SetAutoHideBehavior(ShelfAutoHideBehavior::kNever);
   test_api_->RunMessageLoopUntilAnimationsDone();
   VerifyShelfItemBoundsAreValid();
 }
 
 TEST_P(LtrRtlShelfViewTest, ShelfTooltipTest) {
-  ASSERT_EQ(shelf_view_->number_of_visible_apps(), test_api_->GetButtonCount());
+  ASSERT_EQ(GetShelfView()->number_of_visible_apps(),
+            test_api_->GetButtonCount());
 
   // Prepare some items to the shelf.
   ShelfID app_button_id = AddAppShortcut();
@@ -1097,7 +1643,7 @@ TEST_P(LtrRtlShelfViewTest, ShelfTooltipTest) {
   ShelfAppButton* platform_button = GetButtonByID(platform_button_id);
 
   ShelfTooltipManager* tooltip_manager = test_api_->tooltip_manager();
-  EXPECT_TRUE(shelf_view_->GetWidget()->GetNativeWindow());
+  EXPECT_TRUE(GetShelfView()->GetWidget()->GetNativeWindow());
   ui::test::EventGenerator* generator = GetEventGenerator();
 
   generator->MoveMouseTo(app_button->GetBoundsInScreen().CenterPoint());
@@ -1197,13 +1743,13 @@ TEST_P(LtrRtlShelfViewTest, HomeButtonMetricsInTablet) {
   Shell::Get()
       ->accessibility_controller()
       ->SetTabletModeShelfNavigationButtonsEnabled(true);
-  Shell::Get()->tablet_mode_controller()->SetEnabledForTest(true);
+  ash::TabletModeControllerTestApi().EnterTabletMode();
 
   const HomeButton* home_button =
       GetPrimaryShelf()->navigation_widget()->GetHomeButton();
 
   // Make sure we're not showing the app list.
-  std::unique_ptr<aura::Window> window = CreateTestWindow();
+  std::unique_ptr<aura::Window> window = CreateWindowWithAppType();
   wm::ActivateWindow(window.get());
   EXPECT_FALSE(home_button->IsShowingAppList());
 
@@ -1219,12 +1765,16 @@ TEST_P(LtrRtlShelfViewTest, HomeButtonMetricsInTablet) {
 }
 
 TEST_P(LtrRtlShelfViewTest, ShouldHideTooltipTest) {
+  // Set a screen size large enough to have space between the home button and
+  // app buttons.
+  UpdateDisplay("2000x600");
   ShelfID app_button_id = AddAppShortcut();
   ShelfID platform_button_id = AddApp();
+  auto* shelf_view = GetShelfView();
   // TODO(manucornet): It should not be necessary to call this manually. The
   // |AddItem| call seems to sometimes be missing some re-layout steps. We
   // should find out what's going on there.
-  shelf_view_->UpdateVisibleShelfItemBoundsUnion();
+  shelf_view->UpdateVisibleShelfItemBoundsUnion();
   const HomeButton* home_button =
       GetPrimaryShelf()->navigation_widget()->GetHomeButton();
 
@@ -1233,12 +1783,13 @@ TEST_P(LtrRtlShelfViewTest, ShouldHideTooltipTest) {
       << "We should not be showing the app list";
 
   // The tooltip shouldn't hide if the mouse is on normal buttons.
-  for (int i = 0; i < test_api_->GetButtonCount(); i++) {
+  for (size_t i = 0; i < test_api_->GetButtonCount(); i++) {
     ShelfAppButton* button = test_api_->GetButton(i);
-    if (!button)
+    if (!button) {
       continue;
-    EXPECT_FALSE(shelf_view_->ShouldHideTooltip(
-        button->GetMirroredBounds().CenterPoint()))
+    }
+    EXPECT_FALSE(shelf_view->ShouldHideTooltip(
+        button->GetMirroredBounds().CenterPoint(), shelf_view))
         << "ShelfView tries to hide on button " << i;
   }
 
@@ -1247,20 +1798,24 @@ TEST_P(LtrRtlShelfViewTest, ShouldHideTooltipTest) {
   const int left = home_button->GetBoundsInScreen().right();
   // Find the first shelf button that's to the right of the home button.
   int right = 0;
-  for (int i = 0; i < test_api_->GetButtonCount(); ++i) {
+  for (size_t i = 0; i < test_api_->GetButtonCount(); ++i) {
     ShelfAppButton* button = test_api_->GetButton(i);
-    if (!button)
+    if (!button) {
       continue;
+    }
     right = button->GetBoundsInScreen().x();
-    if (right > left)
+    if (right > left) {
       break;
+    }
   }
 
   gfx::Point test_point(left + (right - left) / 2,
                         home_button->GetBoundsInScreen().y());
-  views::View::ConvertPointFromScreen(shelf_view_, &test_point);
-  EXPECT_TRUE(shelf_view_->ShouldHideTooltip(gfx::Point(
-      shelf_view_->GetMirroredXInView(test_point.x()), test_point.y())))
+  views::View::ConvertPointFromScreen(shelf_view, &test_point);
+  EXPECT_TRUE(shelf_view->ShouldHideTooltip(
+      gfx::Point(shelf_view->GetMirroredXInView(test_point.x()),
+                 test_point.y()),
+      shelf_view))
       << "Tooltip should hide between home button and first shelf item";
 
   // The tooltip shouldn't hide if the mouse is in the gap between two buttons.
@@ -1268,42 +1823,46 @@ TEST_P(LtrRtlShelfViewTest, ShouldHideTooltipTest) {
   gfx::Rect platform_button_rect =
       GetButtonByID(platform_button_id)->GetMirroredBounds();
   ASSERT_FALSE(app_button_rect.Intersects(platform_button_rect));
-  EXPECT_FALSE(shelf_view_->ShouldHideTooltip(
-      gfx::UnionRects(app_button_rect, platform_button_rect).CenterPoint()));
+  EXPECT_FALSE(shelf_view->ShouldHideTooltip(
+      gfx::UnionRects(app_button_rect, platform_button_rect).CenterPoint(),
+      shelf_view));
 
   // The tooltip should hide if it's outside of all buttons.
   gfx::Rect all_area;
-  for (int i = 0; i < test_api_->GetButtonCount(); i++) {
+  for (size_t i = 0; i < test_api_->GetButtonCount(); i++) {
     ShelfAppButton* button = test_api_->GetButton(i);
-    if (!button)
+    if (!button) {
       continue;
+    }
 
     all_area.Union(button->GetMirroredBounds());
   }
-  EXPECT_FALSE(shelf_view_->ShouldHideTooltip(
-      gfx::Point(all_area.right() - 1, all_area.bottom() - 1)));
-  EXPECT_TRUE(shelf_view_->ShouldHideTooltip(
-      gfx::Point(all_area.right(), all_area.y())));
-  EXPECT_TRUE(shelf_view_->ShouldHideTooltip(
-      gfx::Point(all_area.x() - 1, all_area.y())));
-  EXPECT_TRUE(shelf_view_->ShouldHideTooltip(
-      gfx::Point(all_area.x(), all_area.y() - 1)));
-  EXPECT_TRUE(shelf_view_->ShouldHideTooltip(
-      gfx::Point(all_area.x(), all_area.bottom())));
+  EXPECT_FALSE(shelf_view->ShouldHideTooltip(
+      gfx::Point(all_area.right() - 1, all_area.bottom() - 1), shelf_view));
+  EXPECT_TRUE(shelf_view->ShouldHideTooltip(
+      gfx::Point(all_area.right(), all_area.y()), shelf_view));
+  EXPECT_TRUE(shelf_view->ShouldHideTooltip(
+      gfx::Point(all_area.x() - 1, all_area.y()), shelf_view));
+  EXPECT_TRUE(shelf_view->ShouldHideTooltip(
+      gfx::Point(all_area.x(), all_area.y() - 1), shelf_view));
+  EXPECT_TRUE(shelf_view->ShouldHideTooltip(
+      gfx::Point(all_area.x(), all_area.bottom()), shelf_view));
 }
 
 // Test that shelf button tooltips show (except app list) with an open app list.
 TEST_P(LtrRtlShelfViewTest, ShouldHideTooltipWithAppListWindowTest) {
   GetAppListTestHelper()->ShowAndRunLoop(GetPrimaryDisplayId());
+  auto* shelf_view = GetShelfView();
 
   // The tooltip shouldn't hide if the mouse is on normal buttons.
-  for (int i = 2; i < test_api_->GetButtonCount(); i++) {
+  for (size_t i = 2; i < test_api_->GetButtonCount(); i++) {
     ShelfAppButton* button = test_api_->GetButton(i);
-    if (!button)
+    if (!button) {
       continue;
+    }
 
-    EXPECT_FALSE(shelf_view_->ShouldHideTooltip(
-        button->GetMirroredBounds().CenterPoint()))
+    EXPECT_FALSE(shelf_view->ShouldHideTooltip(
+        button->GetMirroredBounds().CenterPoint(), shelf_view))
         << "ShelfView tries to hide on button " << i;
   }
 
@@ -1311,9 +1870,11 @@ TEST_P(LtrRtlShelfViewTest, ShouldHideTooltipWithAppListWindowTest) {
   HomeButton* home_button =
       GetPrimaryShelf()->navigation_widget()->GetHomeButton();
   gfx::Point center_point = home_button->GetBoundsInScreen().CenterPoint();
-  views::View::ConvertPointFromScreen(shelf_view_, &center_point);
-  EXPECT_TRUE(shelf_view_->ShouldHideTooltip(gfx::Point(
-      shelf_view_->GetMirroredXInView(center_point.x()), center_point.y())));
+  views::View::ConvertPointFromScreen(shelf_view, &center_point);
+  EXPECT_TRUE(shelf_view->ShouldHideTooltip(
+      gfx::Point(shelf_view->GetMirroredXInView(center_point.x()),
+                 center_point.y()),
+      shelf_view));
 }
 
 // Test that by moving the mouse cursor off the button onto the bubble it closes
@@ -1328,7 +1889,7 @@ TEST_P(LtrRtlShelfViewTest, ShouldHideTooltipWhenHoveringOnTooltip) {
   EXPECT_FALSE(tooltip_manager->IsVisible());
 
   // Move the mouse over the button and check that it is visible.
-  views::View* button = shelf_view_->first_visible_button_for_testing();
+  views::View* button = GetShelfView()->first_visible_button_for_testing();
   gfx::Rect bounds = button->GetBoundsInScreen();
   generator->MoveMouseTo(bounds.CenterPoint());
   // Wait for the timer to go off.
@@ -1397,8 +1958,8 @@ TEST_P(LtrRtlShelfViewTest,
   base::UserActionTester user_action_tester;
 
   ShelfItemSelectionTracker* selection_tracker = new ShelfItemSelectionTracker;
-  model_->SetShelfItemDelegate(
-      model_->items()[0].id,
+  GetModel()->ReplaceShelfItemDelegate(
+      GetModel()->items()[0].id,
       base::WrapUnique<ShelfItemSelectionTracker>(selection_tracker));
 
   SimulateClick(0);
@@ -1413,44 +1974,24 @@ TEST_P(LtrRtlShelfViewTest, Launcher_TaskUserActionsRecordedWhenItemSelected) {
 
   ShelfItemSelectionTracker* selection_tracker = new ShelfItemSelectionTracker;
   selection_tracker->set_item_selected_action(SHELF_ACTION_NEW_WINDOW_CREATED);
-  model_->SetShelfItemDelegate(
-      model_->items()[0].id,
+  GetModel()->ReplaceShelfItemDelegate(
+      GetModel()->items()[0].id,
       base::WrapUnique<ShelfItemSelectionTracker>(selection_tracker));
 
   SimulateClick(0);
   EXPECT_EQ(1, user_action_tester.GetActionCount("Launcher_LaunchTask"));
 }
 
-// Verifies that metrics are recorded when an item is minimized and subsequently
-// activated.
-TEST_P(LtrRtlShelfViewTest,
-       VerifyMetricsAreRecordedWhenAnItemIsMinimizedAndActivated) {
-  base::HistogramTester histogram_tester;
-
-  ShelfItemSelectionTracker* selection_tracker = new ShelfItemSelectionTracker;
-  model_->SetShelfItemDelegate(
-      model_->items()[0].id,
-      base::WrapUnique<ShelfItemSelectionTracker>(selection_tracker));
-
-  selection_tracker->set_item_selected_action(SHELF_ACTION_WINDOW_MINIMIZED);
-  SimulateClick(0);
-
-  selection_tracker->set_item_selected_action(SHELF_ACTION_WINDOW_ACTIVATED);
-  SimulateClick(0);
-
-  histogram_tester.ExpectTotalCount(
-      kTimeBetweenWindowMinimizedAndActivatedActionsHistogramName, 1);
-}
-
 // Verify the animations of the shelf items are as long as expected.
 TEST_P(LtrRtlShelfViewTest, TestShelfItemsAnimations) {
-  TestShelfObserver observer(shelf_view_->shelf());
+  auto* shelf_view = GetShelfView();
+  TestShelfObserver observer(shelf_view->shelf());
   ui::test::EventGenerator* generator = GetEventGenerator();
   ShelfID first_app_id = AddAppShortcut();
   ShelfID second_app_id = AddAppShortcut();
 
   // Set the animation duration for shelf items.
-  test_api_->SetAnimationDuration(base::TimeDelta::FromMilliseconds(100));
+  test_api_->SetAnimationDuration(base::Milliseconds(100));
 
   // The shelf items should animate if they are moved within the shelf, either
   // by swapping or if the items need to be rearranged due to an item getting
@@ -1464,7 +2005,7 @@ TEST_P(LtrRtlShelfViewTest, TestShelfItemsAnimations) {
   // The shelf items should not animate when the whole shelf and its contents
   // have to move.
   observer.Reset();
-  shelf_view_->shelf()->SetAlignment(ShelfAlignment::kLeft);
+  shelf_view->shelf()->SetAlignment(ShelfAlignment::kLeft);
   test_api_->RunMessageLoopUntilAnimationsDone();
   EXPECT_EQ(1, observer.icon_positions_animation_duration().InMilliseconds());
 
@@ -1474,29 +2015,29 @@ TEST_P(LtrRtlShelfViewTest, TestShelfItemsAnimations) {
   PrefService* prefs =
       Shell::Get()->session_controller()->GetLastActiveUserPrefService();
   const int64_t id = GetPrimaryDisplay().id();
-  shelf_view_->shelf()->SetAlignment(ShelfAlignment::kBottom);
+  shelf_view->shelf()->SetAlignment(ShelfAlignment::kBottom);
   SetShelfAlignmentPref(prefs, id, ShelfAlignment::kBottom);
   observer.Reset();
-  Shell::Get()->tablet_mode_controller()->SetEnabledForTest(true);
+  ash::TabletModeControllerTestApi().EnterTabletMode();
   test_api_->RunMessageLoopUntilAnimationsDone();
   EXPECT_EQ(1, observer.icon_positions_animation_duration().InMilliseconds());
 
   observer.Reset();
-  Shell::Get()->tablet_mode_controller()->SetEnabledForTest(false);
+  ash::TabletModeControllerTestApi().LeaveTabletMode();
   test_api_->RunMessageLoopUntilAnimationsDone();
   EXPECT_EQ(1, observer.icon_positions_animation_duration().InMilliseconds());
 
   // The shelf items should not animate if we are entering or exiting tablet
   // mode, and the shelf alignment is not bottom aligned.
-  shelf_view_->shelf()->SetAlignment(ShelfAlignment::kLeft);
+  shelf_view->shelf()->SetAlignment(ShelfAlignment::kLeft);
   SetShelfAlignmentPref(prefs, id, ShelfAlignment::kLeft);
   observer.Reset();
-  Shell::Get()->tablet_mode_controller()->SetEnabledForTest(true);
+  ash::TabletModeControllerTestApi().EnterTabletMode();
   test_api_->RunMessageLoopUntilAnimationsDone();
   EXPECT_EQ(1, observer.icon_positions_animation_duration().InMilliseconds());
 
   observer.Reset();
-  Shell::Get()->tablet_mode_controller()->SetEnabledForTest(false);
+  ash::TabletModeControllerTestApi().LeaveTabletMode();
   test_api_->RunMessageLoopUntilAnimationsDone();
   EXPECT_EQ(1, observer.icon_positions_animation_duration().InMilliseconds());
 }
@@ -1504,7 +2045,7 @@ TEST_P(LtrRtlShelfViewTest, TestShelfItemsAnimations) {
 // Tests that the blank shelf view area shows a context menu on right click.
 TEST_P(LtrRtlShelfViewTest, ShelfViewShowsContextMenu) {
   ui::test::EventGenerator* generator = GetEventGenerator();
-  generator->MoveMouseTo(shelf_view_->GetBoundsInScreen().CenterPoint());
+  generator->MoveMouseTo(GetShelfView()->GetBoundsInScreen().CenterPoint());
   generator->PressRightButton();
   generator->ReleaseRightButton();
 
@@ -1514,21 +2055,21 @@ TEST_P(LtrRtlShelfViewTest, ShelfViewShowsContextMenu) {
 TEST_P(LtrRtlShelfViewTest, TabletModeStartAndEndClosesContextMenu) {
   // Show a context menu on the shelf
   ui::test::EventGenerator* generator = GetEventGenerator();
-  generator->MoveMouseTo(shelf_view_->GetBoundsInScreen().CenterPoint());
+  generator->MoveMouseTo(GetShelfView()->GetBoundsInScreen().CenterPoint());
   generator->PressRightButton();
 
   // Start tablet mode, which should close the menu.
-  shelf_view_->OnTabletModeStarted();
+  TabletModeControllerTestApi().EnterTabletMode();
 
   // Attempt to close the menu, which should already be closed.
   EXPECT_FALSE(test_api_->CloseMenu());
 
   // Show another context menu on the shelf.
-  generator->MoveMouseTo(shelf_view_->GetBoundsInScreen().CenterPoint());
+  generator->MoveMouseTo(GetShelfView()->GetBoundsInScreen().CenterPoint());
   generator->PressRightButton();
 
   // End tablet mode, which should close the menu.
-  shelf_view_->OnTabletModeEnded();
+  TabletModeControllerTestApi().LeaveTabletMode();
 
   // Attempt to close the menu, which should already be closed.
   EXPECT_FALSE(test_api_->CloseMenu());
@@ -1537,7 +2078,8 @@ TEST_P(LtrRtlShelfViewTest, TabletModeStartAndEndClosesContextMenu) {
 // Tests that ShelfWindowWatcher buttons show a context menu on right click.
 TEST_P(LtrRtlShelfViewTest, ShelfWindowWatcherButtonShowsContextMenu) {
   ui::test::EventGenerator* generator = GetEventGenerator();
-  std::unique_ptr<views::Widget> widget = CreateTestWidget();
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   widget->Show();
   aura::Window* window = widget->GetNativeWindow();
   ShelfID shelf_id("123");
@@ -1553,7 +2095,9 @@ TEST_P(LtrRtlShelfViewTest, ShelfWindowWatcherButtonShowsContextMenu) {
 // Tests that the drag view is set on left click and not set on right click.
 TEST_P(LtrRtlShelfViewTest, ShelfDragViewAndContextMenu) {
   ui::test::EventGenerator* generator = GetEventGenerator();
-  std::unique_ptr<views::Widget> widget = CreateTestWidget();
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
+  auto* shelf_view = GetShelfView();
   widget->Show();
   aura::Window* window = widget->GetNativeWindow();
   ShelfID shelf_id("123");
@@ -1568,23 +2112,25 @@ TEST_P(LtrRtlShelfViewTest, ShelfDragViewAndContextMenu) {
   ASSERT_TRUE(button);
 
   // Context menu is shown on right button press and no drag view is set.
-  EXPECT_FALSE(shelf_view_->IsShowingMenu());
-  EXPECT_FALSE(shelf_view_->drag_view());
+  EXPECT_FALSE(shelf_view->IsShowingMenu());
+  EXPECT_FALSE(shelf_view->drag_view());
   generator->MoveMouseTo(button->GetBoundsInScreen().CenterPoint());
   generator->PressRightButton();
-  EXPECT_TRUE(shelf_view_->IsShowingMenu());
-  EXPECT_FALSE(shelf_view_->drag_view());
+  EXPECT_TRUE(shelf_view->IsShowingMenu());
+  EXPECT_FALSE(shelf_view->drag_view());
 
   // Press left button. Menu should close.
   generator->PressLeftButton();
   generator->ReleaseLeftButton();
-  EXPECT_FALSE(shelf_view_->IsShowingMenu());
+  EXPECT_FALSE(shelf_view->IsShowingMenu());
   // Press left button. Drag view is set to |button|.
   generator->PressLeftButton();
   base::RunLoop().RunUntilIdle();
-  EXPECT_EQ(shelf_view_->drag_view(), button);
+  EXPECT_EQ(shelf_view->drag_view(), button);
   generator->ReleaseLeftButton();
-  EXPECT_FALSE(shelf_view_->drag_view());
+  EXPECT_FALSE(shelf_view->drag_view());
+
+  EXPECT_EQ(0, GetHapticTickEventsCount());
 }
 
 // Tests that context menu show is cancelled if item drag starts during context
@@ -1594,7 +2140,8 @@ TEST_P(LtrRtlShelfViewTest, InProgressItemDragPreventsContextMenuShow) {
   auto item_delegate_owned =
       std::make_unique<AsyncContextMenuShelfItemDelegate>();
   AsyncContextMenuShelfItemDelegate* item_delegate = item_delegate_owned.get();
-  model_->SetShelfItemDelegate(app_id, std::move(item_delegate_owned));
+  auto* shelf_view = GetShelfView();
+  GetModel()->ReplaceShelfItemDelegate(app_id, std::move(item_delegate_owned));
 
   ShelfAppButton* button = GetButtonByID(app_id);
   ASSERT_TRUE(button);
@@ -1605,13 +2152,13 @@ TEST_P(LtrRtlShelfViewTest, InProgressItemDragPreventsContextMenuShow) {
   generator->PressTouch();
 
   // Generate long press, which should start context menu request.
-  ui::GestureEventDetails event_details(ui::ET_GESTURE_LONG_PRESS);
+  ui::GestureEventDetails event_details(ui::EventType::kGestureLongPress);
   ui::GestureEvent long_press(location.x(), location.y(), 0,
                               ui::EventTimeForNow(), event_details);
   generator->Dispatch(&long_press);
 
-  EXPECT_FALSE(shelf_view_->IsShowingMenu());
-  EXPECT_FALSE(shelf_view_->drag_view());
+  EXPECT_FALSE(shelf_view->IsShowingMenu());
+  EXPECT_FALSE(shelf_view->drag_view());
   EXPECT_FALSE(button->state() & ShelfAppButton::STATE_DRAGGING);
   EXPECT_TRUE(item_delegate->HasPendingContextMenuCallback());
 
@@ -1619,9 +2166,9 @@ TEST_P(LtrRtlShelfViewTest, InProgressItemDragPreventsContextMenuShow) {
   ASSERT_TRUE(button->FireDragTimerForTest());
   generator->MoveTouchBy(0, -10);
 
-  EXPECT_FALSE(shelf_view_->IsShowingMenu());
-  EXPECT_FALSE(shelf_view_->GetShelfItemViewWithContextMenu());
-  EXPECT_TRUE(shelf_view_->drag_view());
+  EXPECT_FALSE(shelf_view->IsShowingMenu());
+  EXPECT_FALSE(shelf_view->GetShelfItemViewWithContextMenu());
+  EXPECT_TRUE(shelf_view->drag_view());
   EXPECT_TRUE(button->state() & ShelfAppButton::STATE_DRAGGING);
 
   // Return the context menu model.
@@ -1631,22 +2178,23 @@ TEST_P(LtrRtlShelfViewTest, InProgressItemDragPreventsContextMenuShow) {
       item_delegate->RunPendingContextMenuCallback(std::move(menu_model)));
 
   // The context menu show is expected to be canceled by the item drag.
-  EXPECT_FALSE(shelf_view_->IsShowingMenu());
-  EXPECT_FALSE(shelf_view_->GetShelfItemViewWithContextMenu());
-  EXPECT_TRUE(shelf_view_->drag_view());
+  EXPECT_FALSE(shelf_view->IsShowingMenu());
+  EXPECT_FALSE(shelf_view->GetShelfItemViewWithContextMenu());
+  EXPECT_TRUE(shelf_view->drag_view());
   EXPECT_TRUE(button->state() & ShelfAppButton::STATE_DRAGGING);
 
   // Drag state should be cleared when the drag ends.
   generator->ReleaseTouch();
-  EXPECT_FALSE(shelf_view_->IsShowingMenu());
-  EXPECT_FALSE(shelf_view_->GetShelfItemViewWithContextMenu());
-  EXPECT_FALSE(shelf_view_->drag_view());
+  EXPECT_FALSE(shelf_view->IsShowingMenu());
+  EXPECT_FALSE(shelf_view->GetShelfItemViewWithContextMenu());
+  EXPECT_FALSE(shelf_view->drag_view());
   EXPECT_FALSE(button->state() & ShelfAppButton::STATE_DRAGGING);
 
   // Another long press starts context menu request.
   generator->set_current_screen_location(location);
   generator->PressTouch();
-  ui::GestureEventDetails second_press_event_details(ui::ET_GESTURE_LONG_PRESS);
+  ui::GestureEventDetails second_press_event_details(
+      ui::EventType::kGestureLongPress);
   ui::GestureEvent second_long_press(location.x(), location.y(), 0,
                                      ui::EventTimeForNow(),
                                      second_press_event_details);
@@ -1661,7 +2209,8 @@ TEST_P(LtrRtlShelfViewTest, CompletedItemDragPreventsContextMenuShow) {
   auto item_delegate_owned =
       std::make_unique<AsyncContextMenuShelfItemDelegate>();
   AsyncContextMenuShelfItemDelegate* item_delegate = item_delegate_owned.get();
-  model_->SetShelfItemDelegate(app_id, std::move(item_delegate_owned));
+  auto* shelf_view = GetShelfView();
+  GetModel()->ReplaceShelfItemDelegate(app_id, std::move(item_delegate_owned));
 
   ShelfAppButton* button = GetButtonByID(app_id);
   ASSERT_TRUE(button);
@@ -1672,14 +2221,14 @@ TEST_P(LtrRtlShelfViewTest, CompletedItemDragPreventsContextMenuShow) {
   generator->PressTouch();
 
   // Generate long press, which should start context menu request.
-  ui::GestureEventDetails event_details(ui::ET_GESTURE_LONG_PRESS);
+  ui::GestureEventDetails event_details(ui::EventType::kGestureLongPress);
   ui::GestureEvent long_press(location.x(), location.y(), 0,
                               ui::EventTimeForNow(), event_details);
   generator->Dispatch(&long_press);
 
-  EXPECT_FALSE(shelf_view_->IsShowingMenu());
-  EXPECT_FALSE(shelf_view_->GetShelfItemViewWithContextMenu());
-  EXPECT_FALSE(shelf_view_->drag_view());
+  EXPECT_FALSE(shelf_view->IsShowingMenu());
+  EXPECT_FALSE(shelf_view->GetShelfItemViewWithContextMenu());
+  EXPECT_FALSE(shelf_view->drag_view());
   EXPECT_FALSE(button->state() & ShelfAppButton::STATE_DRAGGING);
 
   EXPECT_TRUE(item_delegate->HasPendingContextMenuCallback());
@@ -1688,16 +2237,16 @@ TEST_P(LtrRtlShelfViewTest, CompletedItemDragPreventsContextMenuShow) {
   ASSERT_TRUE(button->FireDragTimerForTest());
   generator->MoveTouchBy(0, -10);
 
-  EXPECT_FALSE(shelf_view_->IsShowingMenu());
-  EXPECT_FALSE(shelf_view_->GetShelfItemViewWithContextMenu());
-  EXPECT_TRUE(shelf_view_->drag_view());
+  EXPECT_FALSE(shelf_view->IsShowingMenu());
+  EXPECT_FALSE(shelf_view->GetShelfItemViewWithContextMenu());
+  EXPECT_TRUE(shelf_view->drag_view());
   EXPECT_TRUE(button->state() & ShelfAppButton::STATE_DRAGGING);
 
   // Drag state should be cleared when the drag ends.
   generator->ReleaseTouch();
-  EXPECT_FALSE(shelf_view_->IsShowingMenu());
-  EXPECT_FALSE(shelf_view_->GetShelfItemViewWithContextMenu());
-  EXPECT_FALSE(shelf_view_->drag_view());
+  EXPECT_FALSE(shelf_view->IsShowingMenu());
+  EXPECT_FALSE(shelf_view->GetShelfItemViewWithContextMenu());
+  EXPECT_FALSE(shelf_view->drag_view());
   EXPECT_FALSE(button->state() & ShelfAppButton::STATE_DRAGGING);
 
   // Return the context menu model.
@@ -1709,15 +2258,16 @@ TEST_P(LtrRtlShelfViewTest, CompletedItemDragPreventsContextMenuShow) {
   // The context menu show is expected to be canceled by the item drag, so it
   // should not be shown even though there is no in-progress drag when the
   // context menu model is received.
-  EXPECT_FALSE(shelf_view_->IsShowingMenu());
-  EXPECT_FALSE(shelf_view_->GetShelfItemViewWithContextMenu());
-  EXPECT_FALSE(shelf_view_->drag_view());
+  EXPECT_FALSE(shelf_view->IsShowingMenu());
+  EXPECT_FALSE(shelf_view->GetShelfItemViewWithContextMenu());
+  EXPECT_FALSE(shelf_view->drag_view());
   EXPECT_FALSE(button->state() & ShelfAppButton::STATE_DRAGGING);
 
   // Another long press starts context menu request.
   generator->set_current_screen_location(location);
   generator->PressTouch();
-  ui::GestureEventDetails second_press_event_details(ui::ET_GESTURE_LONG_PRESS);
+  ui::GestureEventDetails second_press_event_details(
+      ui::EventType::kGestureLongPress);
   ui::GestureEvent second_long_press(location.x(), location.y(), 0,
                                      ui::EventTimeForNow(),
                                      second_press_event_details);
@@ -1732,8 +2282,8 @@ TEST_P(LtrRtlShelfViewTest, DragAppAfterContextMenuIsShownInAlwaysShownShelf) {
   ui::test::EventGenerator* generator = GetEventGenerator();
   const ShelfID first_app_id = AddAppShortcut();
   const ShelfID second_app_id = AddAppShortcut();
-  const int last_index = model_->items().size() - 1;
-  ASSERT_TRUE(last_index >= 0);
+  const int last_index = GetModel()->items().size() - 1;
+  ASSERT_GE(last_index, 0);
 
   ShelfAppButton* button = GetButtonByID(first_app_id);
   ASSERT_TRUE(button);
@@ -1741,7 +2291,9 @@ TEST_P(LtrRtlShelfViewTest, DragAppAfterContextMenuIsShownInAlwaysShownShelf) {
   auto item_delegate_owned =
       std::make_unique<AsyncContextMenuShelfItemDelegate>();
   AsyncContextMenuShelfItemDelegate* item_delegate = item_delegate_owned.get();
-  model_->SetShelfItemDelegate(first_app_id, std::move(item_delegate_owned));
+  auto* shelf_view = GetShelfView();
+  GetModel()->ReplaceShelfItemDelegate(first_app_id,
+                                       std::move(item_delegate_owned));
 
   const gfx::Point start = GetButtonCenter(first_app_id);
   // Drag the app long enough to ensure the drag can be triggered.
@@ -1752,15 +2304,15 @@ TEST_P(LtrRtlShelfViewTest, DragAppAfterContextMenuIsShownInAlwaysShownShelf) {
   button->FireRippleActivationTimerForTest();
 
   // Generate long press, which should start context menu request.
-  ui::GestureEventDetails event_details(ui::ET_GESTURE_LONG_PRESS);
+  ui::GestureEventDetails event_details(ui::EventType::kGestureLongPress);
   ui::GestureEvent long_press(start.x(), start.y(), 0, ui::EventTimeForNow(),
                               event_details);
   generator->Dispatch(&long_press);
 
-  EXPECT_FALSE(shelf_view_->IsShowingMenu());
-  EXPECT_FALSE(shelf_view_->GetShelfItemViewWithContextMenu());
+  EXPECT_FALSE(shelf_view->IsShowingMenu());
+  EXPECT_FALSE(shelf_view->GetShelfItemViewWithContextMenu());
 
-  EXPECT_FALSE(shelf_view_->drag_view());
+  EXPECT_FALSE(shelf_view->drag_view());
   EXPECT_TRUE(button->state() & ShelfAppButton::STATE_DRAGGING);
 
   EXPECT_TRUE(item_delegate->HasPendingContextMenuCallback());
@@ -1770,21 +2322,21 @@ TEST_P(LtrRtlShelfViewTest, DragAppAfterContextMenuIsShownInAlwaysShownShelf) {
   ASSERT_TRUE(
       item_delegate->RunPendingContextMenuCallback(std::move(menu_model)));
 
-  EXPECT_TRUE(shelf_view_->IsShowingMenu());
-  EXPECT_EQ(button, shelf_view_->GetShelfItemViewWithContextMenu());
-  EXPECT_FALSE(shelf_view_->drag_view());
+  EXPECT_TRUE(shelf_view->IsShowingMenu());
+  EXPECT_EQ(button, shelf_view->GetShelfItemViewWithContextMenu());
+  EXPECT_FALSE(shelf_view->drag_view());
   EXPECT_TRUE(button->state() & ShelfAppButton::STATE_DRAGGING);
 
-  generator->GestureScrollSequence(start, end,
-                                   base::TimeDelta::FromMilliseconds(100), 3);
+  generator->GestureScrollSequence(start, end, base::Milliseconds(100), 3);
   generator->ReleaseTouch();
+  EXPECT_EQ(0, GetHapticTickEventsCount());
 
   // |first_add_id| has been moved to the end of the items in the shelf.
-  EXPECT_EQ(first_app_id, model_->items()[last_index].id);
+  EXPECT_EQ(first_app_id, GetModel()->items()[last_index].id);
 
-  EXPECT_FALSE(shelf_view_->IsShowingMenu());
-  EXPECT_FALSE(shelf_view_->GetShelfItemViewWithContextMenu());
-  EXPECT_FALSE(shelf_view_->drag_view());
+  EXPECT_FALSE(shelf_view->IsShowingMenu());
+  EXPECT_FALSE(shelf_view->GetShelfItemViewWithContextMenu());
+  EXPECT_FALSE(shelf_view->drag_view());
   EXPECT_FALSE(button->state() & ShelfAppButton::STATE_DRAGGING);
   EXPECT_FALSE(item_delegate->HasPendingContextMenuCallback());
 }
@@ -1795,16 +2347,17 @@ TEST_P(LtrRtlShelfViewTest, DragAppAfterContextMenuIsShownInAutoHideShelf) {
   ui::test::EventGenerator* generator = GetEventGenerator();
   const ShelfID first_app_id = AddAppShortcut();
   const ShelfID second_app_id = AddAppShortcut();
-  const int last_index = model_->items().size() - 1;
+  const int last_index = GetModel()->items().size() - 1;
 
   Shelf* shelf = GetPrimaryShelf();
-  std::unique_ptr<views::Widget> widget = CreateTestWidget();
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   widget->Show();
   shelf->SetAutoHideBehavior(ShelfAutoHideBehavior::kAlways);
   EXPECT_EQ(SHELF_AUTO_HIDE, shelf->GetVisibilityState());
   EXPECT_EQ(SHELF_AUTO_HIDE_HIDDEN, shelf->GetAutoHideState());
 
-  shelf->shelf_widget()->GetFocusCycler()->RotateFocus(FocusCycler::FORWARD);
+  Shell::Get()->focus_cycler()->RotateFocus(FocusCycler::FORWARD);
   EXPECT_EQ(SHELF_AUTO_HIDE_SHOWN, shelf->GetAutoHideState());
 
   ShelfAppButton* button = GetButtonByID(first_app_id);
@@ -1813,7 +2366,8 @@ TEST_P(LtrRtlShelfViewTest, DragAppAfterContextMenuIsShownInAutoHideShelf) {
   auto item_delegate_owned =
       std::make_unique<AsyncContextMenuShelfItemDelegate>();
   AsyncContextMenuShelfItemDelegate* item_delegate = item_delegate_owned.get();
-  model_->SetShelfItemDelegate(first_app_id, std::move(item_delegate_owned));
+  GetModel()->ReplaceShelfItemDelegate(first_app_id,
+                                       std::move(item_delegate_owned));
 
   const gfx::Point start = GetButtonCenter(first_app_id);
   // Drag the app long enough to ensure the drag can be triggered.
@@ -1824,15 +2378,16 @@ TEST_P(LtrRtlShelfViewTest, DragAppAfterContextMenuIsShownInAutoHideShelf) {
   button->FireRippleActivationTimerForTest();
 
   // Generate long press, which should start context menu request.
-  ui::GestureEventDetails event_details(ui::ET_GESTURE_LONG_PRESS);
+  ui::GestureEventDetails event_details(ui::EventType::kGestureLongPress);
   ui::GestureEvent long_press(start.x(), start.y(), 0, ui::EventTimeForNow(),
                               event_details);
   generator->Dispatch(&long_press);
 
-  EXPECT_FALSE(shelf_view_->IsShowingMenu());
-  EXPECT_FALSE(shelf_view_->GetShelfItemViewWithContextMenu());
+  auto* shelf_view = GetShelfView();
+  EXPECT_FALSE(shelf_view->IsShowingMenu());
+  EXPECT_FALSE(shelf_view->GetShelfItemViewWithContextMenu());
 
-  EXPECT_FALSE(shelf_view_->drag_view());
+  EXPECT_FALSE(shelf_view->drag_view());
   EXPECT_TRUE(button->state() & ShelfAppButton::STATE_DRAGGING);
 
   EXPECT_TRUE(item_delegate->HasPendingContextMenuCallback());
@@ -1842,21 +2397,21 @@ TEST_P(LtrRtlShelfViewTest, DragAppAfterContextMenuIsShownInAutoHideShelf) {
   ASSERT_TRUE(
       item_delegate->RunPendingContextMenuCallback(std::move(menu_model)));
 
-  EXPECT_TRUE(shelf_view_->IsShowingMenu());
-  EXPECT_EQ(button, shelf_view_->GetShelfItemViewWithContextMenu());
-  EXPECT_FALSE(shelf_view_->drag_view());
+  EXPECT_TRUE(shelf_view->IsShowingMenu());
+  EXPECT_EQ(button, shelf_view->GetShelfItemViewWithContextMenu());
+  EXPECT_FALSE(shelf_view->drag_view());
   EXPECT_TRUE(button->state() & ShelfAppButton::STATE_DRAGGING);
 
-  generator->GestureScrollSequence(start, end,
-                                   base::TimeDelta::FromMilliseconds(100), 3);
+  generator->GestureScrollSequence(start, end, base::Milliseconds(100), 3);
   generator->ReleaseTouch();
+  EXPECT_EQ(0, GetHapticTickEventsCount());
 
   // |first_add_id| has been moved to the end of the items in the shelf.
-  EXPECT_EQ(first_app_id, model_->items()[last_index].id);
+  EXPECT_EQ(first_app_id, GetModel()->items()[last_index].id);
 
-  EXPECT_FALSE(shelf_view_->IsShowingMenu());
-  EXPECT_FALSE(shelf_view_->GetShelfItemViewWithContextMenu());
-  EXPECT_FALSE(shelf_view_->drag_view());
+  EXPECT_FALSE(shelf_view->IsShowingMenu());
+  EXPECT_FALSE(shelf_view->GetShelfItemViewWithContextMenu());
+  EXPECT_FALSE(shelf_view->drag_view());
   EXPECT_FALSE(button->state() & ShelfAppButton::STATE_DRAGGING);
   EXPECT_FALSE(item_delegate->HasPendingContextMenuCallback());
 }
@@ -1876,7 +2431,7 @@ TEST_P(LtrRtlShelfViewTest,
   auto item_delegate_owned =
       std::make_unique<AsyncContextMenuShelfItemDelegate>();
   AsyncContextMenuShelfItemDelegate* item_delegate = item_delegate_owned.get();
-  model_->SetShelfItemDelegate(app_id, std::move(item_delegate_owned));
+  GetModel()->ReplaceShelfItemDelegate(app_id, std::move(item_delegate_owned));
 
   const gfx::Point location = GetButtonCenter(app_id);
   generator->set_current_screen_location(location);
@@ -1885,13 +2440,14 @@ TEST_P(LtrRtlShelfViewTest,
   button->FireRippleActivationTimerForTest();
 
   // Generate long press, which should start context menu request.
-  ui::GestureEventDetails event_details(ui::ET_GESTURE_LONG_PRESS);
+  ui::GestureEventDetails event_details(ui::EventType::kGestureLongPress);
   ui::GestureEvent long_press(location.x(), location.y(), 0,
                               ui::EventTimeForNow(), event_details);
   generator->Dispatch(&long_press);
 
-  EXPECT_FALSE(shelf_view_->IsShowingMenu());
-  EXPECT_FALSE(shelf_view_->GetShelfItemViewWithContextMenu());
+  auto* shelf_view = GetShelfView();
+  EXPECT_FALSE(shelf_view->IsShowingMenu());
+  EXPECT_FALSE(shelf_view->GetShelfItemViewWithContextMenu());
   EXPECT_TRUE(button->state() & ShelfAppButton::STATE_DRAGGING);
 
   EXPECT_TRUE(item_delegate->HasPendingContextMenuCallback());
@@ -1901,31 +2457,32 @@ TEST_P(LtrRtlShelfViewTest,
   ASSERT_TRUE(
       item_delegate->RunPendingContextMenuCallback(std::move(menu_model)));
 
-  EXPECT_TRUE(shelf_view_->IsShowingMenu());
-  EXPECT_EQ(button, shelf_view_->GetShelfItemViewWithContextMenu());
+  EXPECT_TRUE(shelf_view->IsShowingMenu());
+  EXPECT_EQ(button, shelf_view->GetShelfItemViewWithContextMenu());
   EXPECT_TRUE(button->state() & ShelfAppButton::STATE_DRAGGING);
 
   // Add and release touch.
   generator->PressTouchId(2, gfx::Point(10, 10));
   generator->ReleaseTouchId(2);
 
-  EXPECT_TRUE(shelf_view_->IsShowingMenu());
-  EXPECT_EQ(button, shelf_view_->GetShelfItemViewWithContextMenu());
+  EXPECT_TRUE(shelf_view->IsShowingMenu());
+  EXPECT_EQ(button, shelf_view->GetShelfItemViewWithContextMenu());
 
   // Another tap to hide the context menu.
   generator->PressTouchId(2, gfx::Point(10, 10));
   generator->ReleaseTouchId(2);
 
-  EXPECT_FALSE(shelf_view_->IsShowingMenu());
-  EXPECT_FALSE(shelf_view_->GetShelfItemViewWithContextMenu());
+  EXPECT_FALSE(shelf_view->IsShowingMenu());
+  EXPECT_FALSE(shelf_view->GetShelfItemViewWithContextMenu());
   EXPECT_FALSE(button->state() & ShelfAppButton::STATE_DRAGGING);
 
   // Releasing the original touch should not show another menu.
   generator->ReleaseTouch();
+  EXPECT_EQ(0, GetHapticTickEventsCount());
 
-  EXPECT_FALSE(shelf_view_->IsShowingMenu());
-  EXPECT_FALSE(shelf_view_->GetShelfItemViewWithContextMenu());
-  EXPECT_FALSE(shelf_view_->drag_view());
+  EXPECT_FALSE(shelf_view->IsShowingMenu());
+  EXPECT_FALSE(shelf_view->GetShelfItemViewWithContextMenu());
+  EXPECT_FALSE(shelf_view->drag_view());
   EXPECT_FALSE(button->state() & ShelfAppButton::STATE_DRAGGING);
   EXPECT_FALSE(item_delegate->HasPendingContextMenuCallback());
 }
@@ -1945,7 +2502,7 @@ TEST_P(LtrRtlShelfViewTest,
   auto item_delegate_owned =
       std::make_unique<AsyncContextMenuShelfItemDelegate>();
   AsyncContextMenuShelfItemDelegate* item_delegate = item_delegate_owned.get();
-  model_->SetShelfItemDelegate(app_id, std::move(item_delegate_owned));
+  GetModel()->ReplaceShelfItemDelegate(app_id, std::move(item_delegate_owned));
 
   // Start near the button edge.
   const gfx::Point location =
@@ -1956,13 +2513,14 @@ TEST_P(LtrRtlShelfViewTest,
   button->FireRippleActivationTimerForTest();
 
   // Generate long press, which should start context menu request.
-  ui::GestureEventDetails event_details(ui::ET_GESTURE_LONG_PRESS);
+  ui::GestureEventDetails event_details(ui::EventType::kGestureLongPress);
   ui::GestureEvent long_press(location.x(), location.y(), 0,
                               ui::EventTimeForNow(), event_details);
   generator->Dispatch(&long_press);
 
-  EXPECT_FALSE(shelf_view_->IsShowingMenu());
-  EXPECT_FALSE(shelf_view_->GetShelfItemViewWithContextMenu());
+  auto* shelf_view = GetShelfView();
+  EXPECT_FALSE(shelf_view->IsShowingMenu());
+  EXPECT_FALSE(shelf_view->GetShelfItemViewWithContextMenu());
   EXPECT_TRUE(button->state() & ShelfAppButton::STATE_DRAGGING);
 
   EXPECT_TRUE(item_delegate->HasPendingContextMenuCallback());
@@ -1972,8 +2530,8 @@ TEST_P(LtrRtlShelfViewTest,
   ASSERT_TRUE(
       item_delegate->RunPendingContextMenuCallback(std::move(menu_model)));
 
-  EXPECT_TRUE(shelf_view_->IsShowingMenu());
-  EXPECT_EQ(button, shelf_view_->GetShelfItemViewWithContextMenu());
+  EXPECT_TRUE(shelf_view->IsShowingMenu());
+  EXPECT_EQ(button, shelf_view->GetShelfItemViewWithContextMenu());
   EXPECT_TRUE(button->state() & ShelfAppButton::STATE_DRAGGING);
 
   // Move touch outside the button bounds using small distance - not enough to
@@ -1981,27 +2539,27 @@ TEST_P(LtrRtlShelfViewTest,
   generator->MoveTouch(button->GetBoundsInScreen().bottom_right() +
                        gfx::Vector2d(1, -1));
 
-  EXPECT_TRUE(shelf_view_->IsShowingMenu());
-  EXPECT_FALSE(shelf_view_->drag_view());
-  EXPECT_EQ(button, shelf_view_->GetShelfItemViewWithContextMenu());
+  EXPECT_TRUE(shelf_view->IsShowingMenu());
+  EXPECT_FALSE(shelf_view->drag_view());
+  EXPECT_EQ(button, shelf_view->GetShelfItemViewWithContextMenu());
   EXPECT_TRUE(button->state() & ShelfAppButton::STATE_DRAGGING);
 
   // Release touch - button drag state should be cleared, and the context menu
   // remain visible.
   generator->ReleaseTouch();
 
-  EXPECT_TRUE(shelf_view_->IsShowingMenu());
-  EXPECT_TRUE(shelf_view_->GetShelfItemViewWithContextMenu());
-  EXPECT_FALSE(shelf_view_->drag_view());
+  EXPECT_TRUE(shelf_view->IsShowingMenu());
+  EXPECT_TRUE(shelf_view->GetShelfItemViewWithContextMenu());
+  EXPECT_FALSE(shelf_view->drag_view());
   EXPECT_FALSE(button->state() & ShelfAppButton::STATE_DRAGGING);
   EXPECT_FALSE(item_delegate->HasPendingContextMenuCallback());
 
   // Tap to close the context menu.
   generator->GestureTapAt(gfx::Point(10, 10));
 
-  EXPECT_FALSE(shelf_view_->IsShowingMenu());
-  EXPECT_FALSE(shelf_view_->GetShelfItemViewWithContextMenu());
-  EXPECT_FALSE(shelf_view_->drag_view());
+  EXPECT_FALSE(shelf_view->IsShowingMenu());
+  EXPECT_FALSE(shelf_view->GetShelfItemViewWithContextMenu());
+  EXPECT_FALSE(shelf_view->drag_view());
   EXPECT_FALSE(button->state() & ShelfAppButton::STATE_DRAGGING);
   EXPECT_FALSE(item_delegate->HasPendingContextMenuCallback());
 }
@@ -2022,8 +2580,7 @@ void ExpectWithinOnePixel(int a, int b) {
 }
 
 TEST_P(LtrRtlShelfViewTest, IconCenteringTest) {
-  const display::Display display =
-      display::Screen::GetScreen()->GetPrimaryDisplay();
+  const display::Display display = display::Screen::Get()->GetPrimaryDisplay();
   const int screen_width = display.bounds().width();
   const int screen_center = screen_width / 2;
 
@@ -2032,7 +2589,7 @@ TEST_P(LtrRtlShelfViewTest, IconCenteringTest) {
 
   // At the start, we have exactly one app icon for the browser. That should
   // be centered on the screen.
-  const ShelfAppButton* button1 = GetButtonByID(model_->items()[0].id);
+  const ShelfAppButton* button1 = GetButtonByID(GetModel()->items()[0].id);
   ExpectWithinOnePixel(screen_center,
                        button1->GetBoundsInScreen().CenterPoint().x());
   // Also check that the distance between the icon edge and the screen edge is
@@ -2043,7 +2600,7 @@ TEST_P(LtrRtlShelfViewTest, IconCenteringTest) {
   const int apps_that_can_easily_fit_at_center_of_screen = 3;
   std::vector<ShelfAppButton*> app_buttons;
   // Start with just the browser app button.
-  app_buttons.push_back(GetButtonByID(model_->items()[0].id));
+  app_buttons.push_back(GetButtonByID(GetModel()->items()[0].id));
   int n_buttons = 1;
 
   // Now repeat the same process by adding apps until they can't fit at the
@@ -2070,17 +2627,18 @@ TEST_P(LtrRtlShelfViewTest, IconCenteringTest) {
 TEST_P(LtrRtlShelfViewTest, FirstAndLastVisibleIndex) {
   // At the start, the only visible app on the shelf is the browser app button
   // (index 0).
-  ASSERT_EQ(1u, shelf_view_->visible_views_indices().size());
-  EXPECT_EQ(0, shelf_view_->visible_views_indices()[0]);
+  auto* shelf_view = GetShelfView();
+  ASSERT_EQ(1u, shelf_view->visible_views_indices().size());
+  EXPECT_EQ(0u, shelf_view->visible_views_indices()[0]);
   // By enabling tablet mode, the back button (index 0) should become visible,
   // but that does not change the first and last visible indices.
-  Shell::Get()->tablet_mode_controller()->SetEnabledForTest(true);
-  ASSERT_EQ(1u, shelf_view_->visible_views_indices().size());
-  EXPECT_EQ(0, shelf_view_->visible_views_indices()[0]);
+  ash::TabletModeControllerTestApi().EnterTabletMode();
+  ASSERT_EQ(1u, shelf_view->visible_views_indices().size());
+  EXPECT_EQ(0u, shelf_view->visible_views_indices()[0]);
   // Turn tablet mode off again.
-  Shell::Get()->tablet_mode_controller()->SetEnabledForTest(false);
-  ASSERT_EQ(1u, shelf_view_->visible_views_indices().size());
-  EXPECT_EQ(0, shelf_view_->visible_views_indices()[0]);
+  ash::TabletModeControllerTestApi().LeaveTabletMode();
+  ASSERT_EQ(1u, shelf_view->visible_views_indices().size());
+  EXPECT_EQ(0u, shelf_view->visible_views_indices()[0]);
 }
 
 TEST_P(LtrRtlShelfViewTest, ReplacingDelegateCancelsContextMenu) {
@@ -2092,12 +2650,12 @@ TEST_P(LtrRtlShelfViewTest, ReplacingDelegateCancelsContextMenu) {
   // Right click should open the context menu.
   generator->PressRightButton();
   generator->ReleaseRightButton();
-  EXPECT_TRUE(shelf_view_->IsShowingMenu());
+  EXPECT_TRUE(GetShelfView()->IsShowingMenu());
 
   // Replacing the item delegate should close the context menu.
-  model_->SetShelfItemDelegate(app_button_id,
-                               std::make_unique<ShelfItemSelectionTracker>());
-  EXPECT_FALSE(shelf_view_->IsShowingMenu());
+  GetModel()->ReplaceShelfItemDelegate(
+      app_button_id, std::make_unique<ShelfItemSelectionTracker>());
+  EXPECT_FALSE(GetShelfView()->IsShowingMenu());
 }
 
 // Verifies that shelf is shown with the app list in fullscreen mode, and that
@@ -2106,11 +2664,12 @@ TEST_P(LtrRtlShelfViewTest, ClickItemInFullscreen) {
   ShelfID app_button_id = AddAppShortcut();
   auto selection_tracker_owned = std::make_unique<ShelfItemSelectionTracker>();
   ShelfItemSelectionTracker* selection_tracker = selection_tracker_owned.get();
-  model_->SetShelfItemDelegate(app_button_id,
-                               std::move(selection_tracker_owned));
+  GetModel()->ReplaceShelfItemDelegate(app_button_id,
+                                       std::move(selection_tracker_owned));
 
   // Create a fullscreen widget.
-  std::unique_ptr<views::Widget> widget = CreateTestWidget();
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   widget->SetFullscreen(true);
   WindowState* window_state = WindowState::Get(widget->GetNativeWindow());
   window_state->SetHideShelfWhenFullscreen(true);
@@ -2135,6 +2694,7 @@ TEST_P(LtrRtlShelfViewTest, ClickItemInFullscreen) {
   // Shelf gets hidden when the app list is dismissed.
   GetAppListTestHelper()->DismissAndRunLoop();
   EXPECT_EQ(SHELF_HIDDEN, shelf->GetVisibilityState());
+  EXPECT_EQ(0, GetHapticTickEventsCount());
 }
 
 // Verifies that shelf is shown with the app list in fullscreen mode, and that
@@ -2143,11 +2703,12 @@ TEST_P(LtrRtlShelfViewTest, TapInFullscreen) {
   ShelfID app_button_id = AddAppShortcut();
   auto selection_tracker_owned = std::make_unique<ShelfItemSelectionTracker>();
   ShelfItemSelectionTracker* selection_tracker = selection_tracker_owned.get();
-  model_->SetShelfItemDelegate(app_button_id,
-                               std::move(selection_tracker_owned));
+  GetModel()->ReplaceShelfItemDelegate(app_button_id,
+                                       std::move(selection_tracker_owned));
 
   // Create a fullscreen widget.
-  std::unique_ptr<views::Widget> widget = CreateTestWidget();
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   widget->SetFullscreen(true);
   WindowState* window_state = WindowState::Get(widget->GetNativeWindow());
   window_state->SetHideShelfWhenFullscreen(true);
@@ -2171,6 +2732,7 @@ TEST_P(LtrRtlShelfViewTest, TapInFullscreen) {
   // Shelf gets hidden when the app list is dismissed.
   GetAppListTestHelper()->DismissAndRunLoop();
   EXPECT_EQ(SHELF_HIDDEN, shelf->GetVisibilityState());
+  EXPECT_EQ(0, GetHapticTickEventsCount());
 }
 
 // Test class that tests both context and application menus.
@@ -2178,9 +2740,11 @@ class ShelfViewMenuTest : public ShelfViewTest,
                           public testing::WithParamInterface<bool> {
  public:
   ShelfViewMenuTest() = default;
-  ~ShelfViewMenuTest() override = default;
 
-  DISALLOW_COPY_AND_ASSIGN(ShelfViewMenuTest);
+  ShelfViewMenuTest(const ShelfViewMenuTest&) = delete;
+  ShelfViewMenuTest& operator=(const ShelfViewMenuTest&) = delete;
+
+  ~ShelfViewMenuTest() override = default;
 };
 
 INSTANTIATE_TEST_SUITE_P(All, ShelfViewMenuTest, testing::Bool());
@@ -2214,24 +2778,9 @@ TEST_P(ShelfViewMenuTest, ShelfViewMenuAnchorPoint) {
           .x());
 }
 
-// Test class that enables notification indicators.
-class NotificationIndicatorTest : public ShelfViewTest {
- public:
-  NotificationIndicatorTest() {
-    scoped_feature_list_.InitAndEnableFeature(
-        ::features::kNotificationIndicator);
-  }
-  ~NotificationIndicatorTest() override = default;
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-
-  DISALLOW_COPY_AND_ASSIGN(NotificationIndicatorTest);
-};
-
 // Tests that an item has a notification badge indicator when the notification
 // is added and removed.
-TEST_F(NotificationIndicatorTest, ItemHasCorrectNotificationBadgeIndicator) {
+TEST_F(ShelfViewTest, ItemHasCorrectNotificationBadgeIndicator) {
   const ShelfID item_id = AddApp();
   const ShelfAppButton* shelf_app_button = GetButtonByID(item_id);
 
@@ -2239,16 +2788,234 @@ TEST_F(NotificationIndicatorTest, ItemHasCorrectNotificationBadgeIndicator) {
   EXPECT_FALSE(shelf_app_button->state() & ShelfAppButton::STATE_NOTIFICATION);
 
   // Add a notification for the new shelf item.
-  model_->UpdateItemNotification(item_id.app_id, true /* has_badge */);
+  GetModel()->UpdateItemNotification(item_id.app_id, true /* has_badge */);
 
   EXPECT_TRUE(GetItemByID(item_id).has_notification);
   EXPECT_TRUE(shelf_app_button->state() & ShelfAppButton::STATE_NOTIFICATION);
 
   // Remove notification.
-  model_->UpdateItemNotification(item_id.app_id, false /* has_badge */);
+  GetModel()->UpdateItemNotification(item_id.app_id, false /* has_badge */);
 
   EXPECT_FALSE(GetItemByID(item_id).has_notification);
   EXPECT_FALSE(shelf_app_button->state() & ShelfAppButton::STATE_NOTIFICATION);
+}
+
+TEST_F(ShelfViewTest, TapOnItemDuringFadeOut) {
+  const ShelfID test_item_id = AddApp();
+
+  ash::TabletModeControllerTestApi().EnterTabletMode();
+
+  views::View* const test_item_button = GetButtonByID(test_item_id);
+  ASSERT_TRUE(test_item_button);
+  const gfx::Point test_item_location =
+      test_item_button->GetBoundsInScreen().CenterPoint();
+
+  // Enable animations, as the test verifies behavior while a fade out animation
+  // is in progress.
+  gfx::ScopedAnimationDurationScaleMode regular_animations(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+
+  // Simulate test app getting uninstalled.
+  GetModel()->RemoveItemAt(GetModel()->ItemIndexByID(test_item_id));
+
+  // Tap on the removed item bounds (which will remain in place during fadeout
+  // animation).
+  GetEventGenerator()->GestureTapAt(test_item_location);
+
+  test_api_->RunMessageLoopUntilAnimationsDone();
+  VerifyShelfItemBoundsAreValid();
+}
+
+TEST_F(ShelfViewTest, SwipeOnItemDuringFadeOut) {
+  const ShelfID test_item_id = AddApp();
+
+  ash::TabletModeControllerTestApi().EnterTabletMode();
+
+  views::View* const test_item_button = GetButtonByID(test_item_id);
+  ASSERT_TRUE(test_item_button);
+  const gfx::Point test_item_location =
+      test_item_button->GetBoundsInScreen().CenterPoint();
+
+  // Enable animations, as the test verifies behavior while a fade out animation
+  // is in progress.
+  gfx::ScopedAnimationDurationScaleMode regular_animations(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+
+  // Simulate test app getting uninstalled.
+  GetModel()->RemoveItemAt(GetModel()->ItemIndexByID(test_item_id));
+
+  // Swipe from the removed item bounds (which will remain in place during
+  // fadeout animation).
+  GetEventGenerator()->GestureScrollSequence(
+      test_item_location, test_item_location + gfx::Vector2d(0, -50),
+      base::Milliseconds(100), 3);
+
+  test_api_->RunMessageLoopUntilAnimationsDone();
+  VerifyShelfItemBoundsAreValid();
+}
+
+class TrustedPinnedShelfViewTest : public ShelfViewTest,
+                                   public testing::WithParamInterface<bool> {
+ protected:
+  bool IsTrustedPinned() const { return GetParam(); }
+};
+
+TEST_P(TrustedPinnedShelfViewTest, ContextMenuVisibilityWithPinnedWindow) {
+  // Create an item on the shelf and a test window for testing purposes.
+  const ShelfAppButton* const shelf_button = GetButtonByID(AddApp());
+  const std::unique_ptr<aura::Window> window = CreateWindowWithAppType();
+
+  // Open context menu before pinning the window.
+  base::test::TestFuture<void> context_menu_future;
+  test_api_->SetShelfContextMenuCallback(
+      context_menu_future.GetRepeatingCallback());
+  GetEventGenerator()->MoveMouseTo(
+      shelf_button->GetBoundsInScreen().CenterPoint());
+  GetEventGenerator()->PressRightButton();
+  ASSERT_TRUE(context_menu_future.Wait());
+  ASSERT_TRUE(GetShelfView()->IsShowingMenu());
+
+  // Pin the window and verify context menu visibility.
+  PinWindow(window.get(), IsTrustedPinned());
+  EXPECT_EQ(GetShelfView()->IsShowingMenu(), !IsTrustedPinned());
+}
+
+INSTANTIATE_TEST_SUITE_P(TrustedPinnedShelfViewTests,
+                         TrustedPinnedShelfViewTest,
+                         testing::Bool());
+
+class GhostImageShelfViewTest : public ShelfViewTest {
+ public:
+  GhostImageShelfViewTest() = default;
+
+  GhostImageShelfViewTest(const GhostImageShelfViewTest&) = delete;
+  GhostImageShelfViewTest& operator=(const GhostImageShelfViewTest&) = delete;
+
+  ~GhostImageShelfViewTest() override = default;
+
+  void StartDrag(ShelfAppButton* dragged) {
+    ASSERT_TRUE(dragged);
+    ui::test::EventGenerator* generator = GetEventGenerator();
+    generator->set_current_screen_location(
+        dragged->GetBoundsInScreen().CenterPoint());
+    generator->PressTouch();
+    ASSERT_TRUE(dragged->FireDragTimerForTest());
+  }
+};
+
+// Tests that the ghost image shows during a drag operation.
+TEST_F(GhostImageShelfViewTest, ShowGhostImageOnDrag) {
+  std::vector<std::pair<ShelfID, views::View*>> id_map;
+  SetupForDragTest(&id_map);
+  ShelfAppButton* first_app = GetButtonByID(id_map[0].first);
+
+  StartDrag(first_app);
+  EXPECT_EQ(0, GetHapticTickEventsCount());
+
+  auto* shelf_view = GetShelfView();
+  EXPECT_TRUE(first_app->state() & ShelfAppButton::STATE_DRAGGING);
+  EXPECT_FALSE(shelf_view->drag_view());
+  EXPECT_FALSE(shelf_view->current_ghost_view_index().has_value());
+
+  ShelfID second_app_id = id_map[1].first;
+  GetEventGenerator()->MoveTouch(GetButtonCenter(second_app_id));
+
+  EXPECT_TRUE(first_app->state() & ShelfAppButton::STATE_DRAGGING);
+  EXPECT_TRUE(shelf_view->drag_view());
+  EXPECT_EQ(1u, shelf_view->current_ghost_view_index());
+
+  GetEventGenerator()->ReleaseTouch();
+  EXPECT_EQ(0, GetHapticTickEventsCount());
+
+  EXPECT_FALSE(first_app->state() & ShelfAppButton::STATE_DRAGGING);
+  EXPECT_FALSE(shelf_view->drag_view());
+  EXPECT_FALSE(shelf_view->current_ghost_view_index().has_value());
+}
+
+// Tests that the ghost image is removed if the app is dragged outide of the
+// bounds of the shelf.
+TEST_F(GhostImageShelfViewTest, RemoveGhostImageForRipOffDrag) {
+  std::vector<std::pair<ShelfID, views::View*>> id_map;
+  SetupForDragTest(&id_map);
+  ShelfAppButton* first_app = GetButtonByID(id_map[0].first);
+
+  StartDrag(first_app);
+  EXPECT_EQ(0, GetHapticTickEventsCount());
+
+  auto* shelf_view = GetShelfView();
+  EXPECT_TRUE(first_app->state() & ShelfAppButton::STATE_DRAGGING);
+  EXPECT_FALSE(shelf_view->drag_view());
+  EXPECT_FALSE(shelf_view->current_ghost_view_index().has_value());
+
+  ShelfID second_app_id = id_map[1].first;
+  GetEventGenerator()->MoveTouch(GetButtonCenter(second_app_id));
+
+  EXPECT_TRUE(first_app->state() & ShelfAppButton::STATE_DRAGGING);
+  EXPECT_TRUE(shelf_view->drag_view());
+  EXPECT_EQ(1u, shelf_view->current_ghost_view_index());
+
+  // The rip off threshold. Taken from |kRipOffDistance| in shelf_view.cc.
+  constexpr int kRipOffDistance = 48;
+  // Drag off the shelf to trigger rip off drag.
+  GetEventGenerator()->MoveTouch(shelf_view->GetBoundsInScreen().top_center());
+  GetEventGenerator()->MoveTouchBy(0, -kRipOffDistance - 1);
+
+  EXPECT_TRUE(first_app->state() & ShelfAppButton::STATE_DRAGGING);
+  EXPECT_TRUE(shelf_view->drag_view());
+  EXPECT_FALSE(shelf_view->current_ghost_view_index().has_value());
+
+  GetEventGenerator()->ReleaseTouch();
+  EXPECT_EQ(0, GetHapticTickEventsCount());
+
+  EXPECT_FALSE(first_app->state() & ShelfAppButton::STATE_DRAGGING);
+  EXPECT_FALSE(shelf_view->drag_view());
+  EXPECT_FALSE(shelf_view->current_ghost_view_index().has_value());
+}
+
+// Tests that the ghost image is reinserted if the app is dragged within the
+// bounds of the shelf after a rip off.
+TEST_F(GhostImageShelfViewTest, ReinsertGhostImageAfterRipOffDrag) {
+  std::vector<std::pair<ShelfID, views::View*>> id_map;
+  SetupForDragTest(&id_map);
+  ShelfAppButton* first_app = GetButtonByID(id_map[0].first);
+
+  StartDrag(first_app);
+  EXPECT_EQ(0, GetHapticTickEventsCount());
+
+  auto* shelf_view = GetShelfView();
+  EXPECT_TRUE(first_app->state() & ShelfAppButton::STATE_DRAGGING);
+  EXPECT_FALSE(shelf_view->drag_view());
+  EXPECT_FALSE(shelf_view->current_ghost_view_index().has_value());
+
+  ShelfID second_app_id = id_map[1].first;
+  GetEventGenerator()->MoveTouch(GetButtonCenter(second_app_id));
+
+  EXPECT_TRUE(first_app->state() & ShelfAppButton::STATE_DRAGGING);
+  EXPECT_TRUE(shelf_view->drag_view());
+  EXPECT_EQ(1u, shelf_view->current_ghost_view_index());
+
+  // The rip off threshold. Taken from |kRipOffDistance| in shelf_view.cc.
+  constexpr int kRipOffDistance = 48;
+  // Drag off the shelf to trigger rip off drag.
+  GetEventGenerator()->MoveTouch(shelf_view->GetBoundsInScreen().top_center());
+  GetEventGenerator()->MoveTouchBy(0, -kRipOffDistance - 1);
+
+  EXPECT_TRUE(first_app->state() & ShelfAppButton::STATE_DRAGGING);
+  EXPECT_TRUE(shelf_view->drag_view());
+  EXPECT_FALSE(shelf_view->current_ghost_view_index().has_value());
+
+  GetEventGenerator()->MoveTouch(GetButtonCenter(second_app_id));
+
+  EXPECT_TRUE(first_app->state() & ShelfAppButton::STATE_DRAGGING);
+  EXPECT_TRUE(shelf_view->drag_view());
+  EXPECT_EQ(1u, shelf_view->current_ghost_view_index());
+
+  GetEventGenerator()->ReleaseTouch();
+  EXPECT_EQ(0, GetHapticTickEventsCount());
+
+  EXPECT_FALSE(first_app->state() & ShelfAppButton::STATE_DRAGGING);
+  EXPECT_FALSE(shelf_view->drag_view());
+  EXPECT_FALSE(shelf_view->current_ghost_view_index().has_value());
 }
 
 class ShelfViewVisibleBoundsTest : public ShelfViewTest,
@@ -2256,22 +3023,26 @@ class ShelfViewVisibleBoundsTest : public ShelfViewTest,
  public:
   ShelfViewVisibleBoundsTest() : scoped_locale_(GetParam() ? "he" : "") {}
 
+  ShelfViewVisibleBoundsTest(const ShelfViewVisibleBoundsTest&) = delete;
+  ShelfViewVisibleBoundsTest& operator=(const ShelfViewVisibleBoundsTest&) =
+      delete;
+
   void CheckAllItemsAreInBounds() {
-    gfx::Rect visible_bounds = shelf_view_->GetVisibleItemsBoundsInScreen();
-    gfx::Rect shelf_bounds = shelf_view_->GetBoundsInScreen();
+    gfx::Rect visible_bounds = GetShelfView()->GetVisibleItemsBoundsInScreen();
+    gfx::Rect shelf_bounds = GetShelfView()->GetBoundsInScreen();
     EXPECT_TRUE(shelf_bounds.Contains(visible_bounds));
-    for (int i = 0; i < test_api_->GetButtonCount(); ++i)
+    for (size_t i = 0; i < test_api_->GetButtonCount(); ++i) {
       if (ShelfAppButton* button = test_api_->GetButton(i)) {
-        if (button->GetVisible())
+        if (button->GetVisible()) {
           EXPECT_TRUE(visible_bounds.Contains(button->GetBoundsInScreen()));
+        }
       }
+    }
   }
 
  private:
   // Restores locale to the default when destructor is called.
   base::test::ScopedRestoreICUDefaultLocale scoped_locale_;
-
-  DISALLOW_COPY_AND_ASSIGN(ShelfViewVisibleBoundsTest);
 };
 
 TEST_P(ShelfViewVisibleBoundsTest, ItemsAreInBounds) {
@@ -2295,6 +3066,10 @@ class InkDropSpy : public views::InkDrop {
  public:
   explicit InkDropSpy(std::unique_ptr<views::InkDrop> ink_drop)
       : ink_drop_(std::move(ink_drop)) {}
+
+  InkDropSpy(const InkDropSpy&) = delete;
+  InkDropSpy& operator=(const InkDropSpy&) = delete;
+
   ~InkDropSpy() override = default;
 
   std::vector<views::InkDropState> GetAndResetRequestedStates() {
@@ -2307,6 +3082,7 @@ class InkDropSpy : public views::InkDrop {
   void HostSizeChanged(const gfx::Size& new_size) override {
     ink_drop_->HostSizeChanged(new_size);
   }
+  void HostViewThemeChanged() override { ink_drop_->HostViewThemeChanged(); }
   void HostTransformChanged(const gfx::Transform& new_transform) override {
     ink_drop_->HostTransformChanged(new_transform);
   }
@@ -2349,15 +3125,17 @@ class InkDropSpy : public views::InkDrop {
 
   std::unique_ptr<views::InkDrop> ink_drop_;
   std::vector<views::InkDropState> requested_states_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(InkDropSpy);
 };
 
 // A ShelfItemDelegate that returns a menu for the shelf item.
 class ListMenuShelfItemDelegate : public ShelfItemDelegate {
  public:
   ListMenuShelfItemDelegate() : ShelfItemDelegate(ShelfID()) {}
+
+  ListMenuShelfItemDelegate(const ListMenuShelfItemDelegate&) = delete;
+  ListMenuShelfItemDelegate& operator=(const ListMenuShelfItemDelegate&) =
+      delete;
+
   ~ListMenuShelfItemDelegate() override = default;
 
  private:
@@ -2372,8 +3150,6 @@ class ListMenuShelfItemDelegate : public ShelfItemDelegate {
   }
   void ExecuteCommand(bool, int64_t, int32_t, int64_t) override {}
   void Close() override {}
-
-  DISALLOW_COPY_AND_ASSIGN(ListMenuShelfItemDelegate);
 };
 
 }  // namespace
@@ -2387,19 +3163,23 @@ class ShelfViewInkDropTest : public ShelfViewTest {
   ~ShelfViewInkDropTest() override = default;
 
  protected:
+  void TearDown() override {
+    browser_button_ink_drop_impl_ = nullptr;
+    ShelfViewTest::TearDown();
+  }
+
   void InitHomeButtonInkDrop() {
-    home_button_ = GetPrimaryShelf()->navigation_widget()->GetHomeButton();
+    auto* home_button_ = home_button();
 
     auto home_button_ink_drop = std::make_unique<InkDropSpy>(
         views::InkDrop::CreateInkDropWithoutAutoHighlight(
             views::InkDrop::Get(home_button_)));
-    home_button_ink_drop_ = home_button_ink_drop.get();
     views::test::InkDropHostTestApi(views::InkDrop::Get(home_button_))
         .SetInkDrop(std::move(home_button_ink_drop), false);
   }
 
   void InitBrowserButtonInkDrop() {
-    browser_button_ = test_api_->GetButton(0);
+    auto* browser_button_ = test_api_->GetButton(0);
 
     auto ink_drop_impl = std::make_unique<views::InkDropImpl>(
         views::InkDrop::Get(browser_button_), browser_button_->size(),
@@ -2408,16 +3188,29 @@ class ShelfViewInkDropTest : public ShelfViewTest {
 
     auto browser_button_ink_drop =
         std::make_unique<InkDropSpy>(std::move(ink_drop_impl));
-    browser_button_ink_drop_ = browser_button_ink_drop.get();
     views::test::InkDropHostTestApi(views::InkDrop::Get(browser_button_))
         .SetInkDrop(std::move(browser_button_ink_drop));
   }
 
-  HomeButton* home_button_ = nullptr;
-  InkDropSpy* home_button_ink_drop_ = nullptr;
-  ShelfAppButton* browser_button_ = nullptr;
-  InkDropSpy* browser_button_ink_drop_ = nullptr;
-  views::InkDropImpl* browser_button_ink_drop_impl_ = nullptr;
+  HomeButton* home_button() {
+    return GetPrimaryShelf()->navigation_widget()->GetHomeButton();
+  }
+
+  InkDropSpy* home_button_ink_drop() {
+    return static_cast<InkDropSpy*>(
+        views::test::InkDropHostTestApi(views::InkDrop::Get(home_button()))
+            .ink_drop());
+  }
+
+  ShelfAppButton* browser_button() { return test_api_->GetButton(0); }
+
+  InkDropSpy* browser_button_ink_drop() {
+    return static_cast<InkDropSpy*>(
+        views::test::InkDropHostTestApi(views::InkDrop::Get(browser_button()))
+            .ink_drop());
+  }
+
+  raw_ptr<views::InkDropImpl> browser_button_ink_drop_impl_ = nullptr;
 };
 
 // Tests that changing visibility of the app list transitions home button's
@@ -2427,17 +3220,15 @@ TEST_F(ShelfViewInkDropTest, HomeButtonWhenVisibilityChanges) {
 
   GetAppListTestHelper()->ShowAndRunLoop(GetPrimaryDisplayId());
 
-  EXPECT_EQ(views::InkDropState::ACTIVATED,
-            home_button_ink_drop_->GetTargetInkDropState());
-  EXPECT_THAT(home_button_ink_drop_->GetAndResetRequestedStates(),
-              ElementsAre(views::InkDropState::ACTIVATED));
+  EXPECT_EQ(views::InkDropState::HIDDEN,
+            home_button_ink_drop()->GetTargetInkDropState());
+  EXPECT_THAT(home_button_ink_drop()->GetAndResetRequestedStates(), IsEmpty());
 
   GetAppListTestHelper()->DismissAndRunLoop();
 
   EXPECT_EQ(views::InkDropState::HIDDEN,
-            home_button_ink_drop_->GetTargetInkDropState());
-  EXPECT_THAT(home_button_ink_drop_->GetAndResetRequestedStates(),
-              ElementsAre(views::InkDropState::DEACTIVATED));
+            home_button_ink_drop()->GetTargetInkDropState());
+  EXPECT_THAT(home_button_ink_drop()->GetAndResetRequestedStates(), IsEmpty());
 }
 
 // Tests that when the app list is hidden, mouse press on the home button,
@@ -2447,27 +3238,27 @@ TEST_F(ShelfViewInkDropTest, HomeButtonMouseEventsWhenHidden) {
   InitHomeButtonInkDrop();
 
   ui::test::EventGenerator* generator = GetEventGenerator();
-  generator->MoveMouseTo(home_button_->GetBoundsInScreen().CenterPoint());
+  generator->MoveMouseTo(home_button()->GetBoundsInScreen().CenterPoint());
 
   // Mouse press on the button, which shows the app list, should end up in the
   // activated state.
   generator->PressLeftButton();
 
   GetAppListTestHelper()->ShowAndRunLoop(GetPrimaryDisplayId());
-  EXPECT_EQ(views::InkDropState::ACTIVATED,
-            home_button_ink_drop_->GetTargetInkDropState());
-  EXPECT_THAT(home_button_ink_drop_->GetAndResetRequestedStates(),
+  EXPECT_EQ(views::InkDropState::HIDDEN,
+            home_button_ink_drop()->GetTargetInkDropState());
+  EXPECT_THAT(home_button_ink_drop()->GetAndResetRequestedStates(),
               ElementsAre(views::InkDropState::ACTION_PENDING,
-                          views::InkDropState::ACTIVATED));
+                          views::InkDropState::ACTION_TRIGGERED));
 
   // Dragging mouse out and back and releasing the button should not change the
   // ink drop state.
-  generator->MoveMouseBy(home_button_->width(), 0);
-  generator->MoveMouseBy(-home_button_->width(), 0);
+  generator->MoveMouseBy(home_button()->width(), 0);
+  generator->MoveMouseBy(-home_button()->width(), 0);
   generator->ReleaseLeftButton();
-  EXPECT_EQ(views::InkDropState::ACTIVATED,
-            home_button_ink_drop_->GetTargetInkDropState());
-  EXPECT_THAT(home_button_ink_drop_->GetAndResetRequestedStates(), IsEmpty());
+  EXPECT_EQ(views::InkDropState::HIDDEN,
+            home_button_ink_drop()->GetTargetInkDropState());
+  EXPECT_THAT(home_button_ink_drop()->GetAndResetRequestedStates(), IsEmpty());
 }
 
 // Tests that when the app list is visible, mouse press on the home button,
@@ -2477,31 +3268,32 @@ TEST_F(ShelfViewInkDropTest, HomeButtonMouseEventsWhenVisible) {
   InitHomeButtonInkDrop();
 
   GetAppListTestHelper()->ShowAndRunLoop(GetPrimaryDisplayId());
-  EXPECT_EQ(views::InkDropState::ACTIVATED,
-            home_button_ink_drop_->GetTargetInkDropState());
-  EXPECT_THAT(home_button_ink_drop_->GetAndResetRequestedStates(),
-              ElementsAre(views::InkDropState::ACTIVATED));
+  EXPECT_EQ(views::InkDropState::HIDDEN,
+            home_button_ink_drop()->GetTargetInkDropState());
+
+  EXPECT_THAT(home_button_ink_drop()->GetAndResetRequestedStates(), IsEmpty());
 
   // Mouse press on the button, which dismisses the app list, should end up in
   // the hidden state.
   ui::test::EventGenerator* generator = GetEventGenerator();
-  generator->MoveMouseTo(home_button_->GetBoundsInScreen().CenterPoint());
+  generator->MoveMouseTo(home_button()->GetBoundsInScreen().CenterPoint());
   generator->PressLeftButton();
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(views::InkDropState::HIDDEN,
-            home_button_ink_drop_->GetTargetInkDropState());
-  EXPECT_THAT(home_button_ink_drop_->GetAndResetRequestedStates(),
+            home_button_ink_drop()->GetTargetInkDropState());
+
+  EXPECT_THAT(home_button_ink_drop()->GetAndResetRequestedStates(),
               ElementsAre(views::InkDropState::ACTION_PENDING,
-                          views::InkDropState::DEACTIVATED));
+                          views::InkDropState::ACTION_TRIGGERED));
 
   // Dragging mouse out and back and releasing the button should not change the
   // ink drop state.
-  generator->MoveMouseBy(home_button_->width(), 0);
-  generator->MoveMouseBy(-home_button_->width(), 0);
+  generator->MoveMouseBy(home_button()->width(), 0);
+  generator->MoveMouseBy(-home_button()->width(), 0);
   generator->ReleaseLeftButton();
   EXPECT_EQ(views::InkDropState::HIDDEN,
-            home_button_ink_drop_->GetTargetInkDropState());
-  EXPECT_THAT(home_button_ink_drop_->GetAndResetRequestedStates(), IsEmpty());
+            home_button_ink_drop()->GetTargetInkDropState());
+  EXPECT_THAT(home_button_ink_drop()->GetAndResetRequestedStates(), IsEmpty());
 }
 
 // Tests that when the app list is hidden, tapping on the home button
@@ -2510,25 +3302,23 @@ TEST_F(ShelfViewInkDropTest, HomeButtonGestureTapWhenHidden) {
   InitHomeButtonInkDrop();
 
   ui::test::EventGenerator* generator = GetEventGenerator();
-  generator->MoveMouseTo(home_button_->GetBoundsInScreen().CenterPoint());
+  generator->MoveMouseTo(home_button()->GetBoundsInScreen().CenterPoint());
 
   // Touch press on the button should end up in the pending state.
   generator->PressTouch();
-  EXPECT_EQ(views::InkDropState::ACTION_PENDING,
-            home_button_ink_drop_->GetTargetInkDropState());
-  EXPECT_THAT(home_button_ink_drop_->GetAndResetRequestedStates(),
-              ElementsAre(views::InkDropState::ACTION_PENDING));
+  EXPECT_EQ(views::InkDropState::HIDDEN,
+            home_button_ink_drop()->GetTargetInkDropState());
+  EXPECT_THAT(home_button_ink_drop()->GetAndResetRequestedStates(), IsEmpty());
 
   // Touch release on the button, which shows the app list, should end up in the
   // activated state.
   generator->ReleaseTouch();
 
   GetAppListTestHelper()->ShowAndRunLoop(GetPrimaryDisplayId());
-  EXPECT_EQ(views::InkDropState::ACTIVATED,
-            home_button_ink_drop_->GetTargetInkDropState());
-  EXPECT_THAT(home_button_ink_drop_->GetAndResetRequestedStates(),
-              ElementsAre(views::InkDropState::ACTION_TRIGGERED,
-                          views::InkDropState::ACTIVATED));
+  EXPECT_EQ(views::InkDropState::HIDDEN,
+            home_button_ink_drop()->GetTargetInkDropState());
+  EXPECT_THAT(home_button_ink_drop()->GetAndResetRequestedStates(),
+              ElementsAre(views::InkDropState::ACTION_TRIGGERED));
 }
 
 // Tests that when the app list is visible, tapping on the home button
@@ -2538,22 +3328,21 @@ TEST_F(ShelfViewInkDropTest, HomeButtonGestureTapWhenVisible) {
 
   GetAppListTestHelper()->ShowAndRunLoop(GetPrimaryDisplayId());
 
-  EXPECT_EQ(views::InkDropState::ACTIVATED,
-            home_button_ink_drop_->GetTargetInkDropState());
-  EXPECT_THAT(home_button_ink_drop_->GetAndResetRequestedStates(),
-              ElementsAre(views::InkDropState::ACTIVATED));
+  EXPECT_EQ(views::InkDropState::HIDDEN,
+            home_button_ink_drop()->GetTargetInkDropState());
+  EXPECT_THAT(home_button_ink_drop()->GetAndResetRequestedStates(), IsEmpty());
 
   // Touch press and release on the button, which dismisses the app list, should
   // end up in the hidden state.
   ui::test::EventGenerator* generator = GetEventGenerator();
-  generator->MoveMouseTo(home_button_->GetBoundsInScreen().CenterPoint());
+  generator->MoveMouseTo(home_button()->GetBoundsInScreen().CenterPoint());
   generator->PressTouch();
   generator->ReleaseTouch();
   GetAppListTestHelper()->WaitUntilIdle();
   EXPECT_EQ(views::InkDropState::HIDDEN,
-            home_button_ink_drop_->GetTargetInkDropState());
-  EXPECT_THAT(home_button_ink_drop_->GetAndResetRequestedStates(),
-              ElementsAre(views::InkDropState::DEACTIVATED));
+            home_button_ink_drop()->GetTargetInkDropState());
+  EXPECT_THAT(home_button_ink_drop()->GetAndResetRequestedStates(),
+              ElementsAre(views::InkDropState::ACTION_TRIGGERED));
 }
 
 // Tests that when the app list is hidden, tapping down on the home button
@@ -2562,67 +3351,62 @@ TEST_F(ShelfViewInkDropTest, HomeButtonGestureTapDragWhenHidden) {
   InitHomeButtonInkDrop();
 
   ui::test::EventGenerator* generator = GetEventGenerator();
-  gfx::Point touch_location = home_button_->GetBoundsInScreen().CenterPoint();
+  gfx::Point touch_location = home_button()->GetBoundsInScreen().CenterPoint();
   generator->MoveMouseTo(touch_location);
 
   // Touch press on the button should end up in the pending state.
   generator->PressTouch();
-  EXPECT_EQ(views::InkDropState::ACTION_PENDING,
-            home_button_ink_drop_->GetTargetInkDropState());
-  EXPECT_THAT(home_button_ink_drop_->GetAndResetRequestedStates(),
-              ElementsAre(views::InkDropState::ACTION_PENDING));
+  EXPECT_EQ(views::InkDropState::HIDDEN,
+            home_button_ink_drop()->GetTargetInkDropState());
 
   // Dragging the touch point should hide the pending ink drop.
-  touch_location.Offset(home_button_->width(), 0);
+  touch_location.Offset(home_button()->width(), 0);
   generator->MoveTouch(touch_location);
   EXPECT_EQ(views::InkDropState::HIDDEN,
-            home_button_ink_drop_->GetTargetInkDropState());
-  EXPECT_THAT(home_button_ink_drop_->GetAndResetRequestedStates(),
-              ElementsAre(views::InkDropState::ACTION_TRIGGERED));
+            home_button_ink_drop()->GetTargetInkDropState());
+  EXPECT_THAT(home_button_ink_drop()->GetAndResetRequestedStates(), IsEmpty());
 
   // Touch release should not change the ink drop state.
   generator->ReleaseTouch();
   EXPECT_EQ(views::InkDropState::HIDDEN,
-            home_button_ink_drop_->GetTargetInkDropState());
-  EXPECT_THAT(home_button_ink_drop_->GetAndResetRequestedStates(), IsEmpty());
+            home_button_ink_drop()->GetTargetInkDropState());
+  EXPECT_THAT(home_button_ink_drop()->GetAndResetRequestedStates(), IsEmpty());
 }
 
 // Tests that when the app list is visible, tapping down on the home button
 // and dragging the touch point will not change ink drop states.
 TEST_F(ShelfViewInkDropTest, HomeButtonGestureTapDragWhenVisible) {
   InitHomeButtonInkDrop();
-
   GetAppListTestHelper()->ShowAndRunLoop(GetPrimaryDisplayId());
 
-  EXPECT_EQ(views::InkDropState::ACTIVATED,
-            home_button_ink_drop_->GetTargetInkDropState());
-  EXPECT_THAT(home_button_ink_drop_->GetAndResetRequestedStates(),
-              ElementsAre(views::InkDropState::ACTIVATED));
+  EXPECT_EQ(views::InkDropState::HIDDEN,
+            home_button_ink_drop()->GetTargetInkDropState());
+  EXPECT_THAT(home_button_ink_drop()->GetAndResetRequestedStates(), IsEmpty());
 
   // Touch press on the button, dragging the touch point, and releasing, which
   // will not dismisses the app list, should end up in the |ACTIVATED| state.
   ui::test::EventGenerator* generator = GetEventGenerator();
-  gfx::Point touch_location = home_button_->GetBoundsInScreen().CenterPoint();
+  gfx::Point touch_location = home_button()->GetBoundsInScreen().CenterPoint();
   generator->MoveMouseTo(touch_location);
 
   // Touch press on the button should not change the ink drop state.
   generator->PressTouch();
-  EXPECT_EQ(views::InkDropState::ACTIVATED,
-            home_button_ink_drop_->GetTargetInkDropState());
-  EXPECT_THAT(home_button_ink_drop_->GetAndResetRequestedStates(), IsEmpty());
+  EXPECT_EQ(views::InkDropState::HIDDEN,
+            home_button_ink_drop()->GetTargetInkDropState());
+  EXPECT_THAT(home_button_ink_drop()->GetAndResetRequestedStates(), IsEmpty());
 
   // Dragging the touch point should not hide the pending ink drop.
-  touch_location.Offset(home_button_->width(), 0);
+  touch_location.Offset(home_button()->width(), 0);
   generator->MoveTouch(touch_location);
-  EXPECT_EQ(views::InkDropState::ACTIVATED,
-            home_button_ink_drop_->GetTargetInkDropState());
-  EXPECT_THAT(home_button_ink_drop_->GetAndResetRequestedStates(), IsEmpty());
+  EXPECT_EQ(views::InkDropState::HIDDEN,
+            home_button_ink_drop()->GetTargetInkDropState());
+  EXPECT_THAT(home_button_ink_drop()->GetAndResetRequestedStates(), IsEmpty());
 
   // Touch release should not change the ink drop state.
   generator->ReleaseTouch();
-  EXPECT_EQ(views::InkDropState::ACTIVATED,
-            home_button_ink_drop_->GetTargetInkDropState());
-  EXPECT_THAT(home_button_ink_drop_->GetAndResetRequestedStates(), IsEmpty());
+  EXPECT_EQ(views::InkDropState::HIDDEN,
+            home_button_ink_drop()->GetTargetInkDropState());
+  EXPECT_THAT(home_button_ink_drop()->GetAndResetRequestedStates(), IsEmpty());
 }
 
 // Tests that clicking on a shelf item that does not show a menu transitions ink
@@ -2630,39 +3414,40 @@ TEST_F(ShelfViewInkDropTest, HomeButtonGestureTapDragWhenVisible) {
 TEST_F(ShelfViewInkDropTest, ShelfButtonWithoutMenuPressRelease) {
   InitBrowserButtonInkDrop();
 
-  views::Button* button = browser_button_;
+  views::Button* button = browser_button();
   gfx::Point mouse_location = button->GetLocalBounds().CenterPoint();
 
-  ui::MouseEvent press_event(ui::ET_MOUSE_PRESSED, mouse_location,
+  ui::MouseEvent press_event(ui::EventType::kMousePressed, mouse_location,
                              mouse_location, ui::EventTimeForNow(),
                              ui::EF_LEFT_MOUSE_BUTTON, 0);
   button->OnMousePressed(press_event);
   EXPECT_EQ(views::InkDropState::ACTION_PENDING,
-            browser_button_ink_drop_->GetTargetInkDropState());
-  EXPECT_THAT(browser_button_ink_drop_->GetAndResetRequestedStates(),
+            browser_button_ink_drop()->GetTargetInkDropState());
+  EXPECT_THAT(browser_button_ink_drop()->GetAndResetRequestedStates(),
               ElementsAre(views::InkDropState::ACTION_PENDING));
 
-  ui::MouseEvent release_event(ui::ET_MOUSE_RELEASED, mouse_location,
+  ui::MouseEvent release_event(ui::EventType::kMouseReleased, mouse_location,
                                mouse_location, ui::EventTimeForNow(),
                                ui::EF_LEFT_MOUSE_BUTTON, 0);
   button->OnMouseReleased(release_event);
   EXPECT_EQ(views::InkDropState::HIDDEN,
-            browser_button_ink_drop_->GetTargetInkDropState());
-  EXPECT_THAT(browser_button_ink_drop_->GetAndResetRequestedStates(),
+            browser_button_ink_drop()->GetTargetInkDropState());
+  EXPECT_THAT(browser_button_ink_drop()->GetAndResetRequestedStates(),
               ElementsAre(views::InkDropState::ACTION_TRIGGERED));
 }
 
 // Verifies the shelf view's behavior when opening an empty context menu.
 TEST_F(ShelfViewInkDropTest, ShowEmptyShelfAppContextMenu) {
   InitBrowserButtonInkDrop();
-
+  auto* browser_button_ = browser_button();
   // Set the shelf item delegate to generate an empty context menu. Note that if
   // we do not specify the shelf item delegate, a default context menu which is
   // non-empty is created.
   const int browser_shortcut_index =
       ShelfModel::Get()->GetItemIndexForType(TYPE_BROWSER_SHORTCUT);
-  model_->SetShelfItemDelegate(model_->items()[browser_shortcut_index].id,
-                               std::make_unique<EmptyContextMenuBuilder>());
+  GetModel()->ReplaceShelfItemDelegate(
+      GetModel()->items()[browser_shortcut_index].id,
+      std::make_unique<EmptyContextMenuBuilder>());
 
   // Right mouse click at the browser button.
   const gfx::Rect button_bounds_in_screen =
@@ -2675,7 +3460,7 @@ TEST_F(ShelfViewInkDropTest, ShowEmptyShelfAppContextMenu) {
   auto* shelf_view = GetPrimaryShelf()->GetShelfViewForTesting();
   EXPECT_FALSE(shelf_view->IsShowingMenu());
   EXPECT_EQ(views::InkDropState::HIDDEN,
-            browser_button_ink_drop_->GetTargetInkDropState());
+            browser_button_ink_drop()->GetTargetInkDropState());
 
   // Press a point outside of the browser button. Then move the mouse without
   // release.
@@ -2696,45 +3481,45 @@ TEST_F(ShelfViewInkDropTest, ShowEmptyShelfAppContextMenu) {
 TEST_F(ShelfViewInkDropTest, ShelfButtonWithoutMenuPressDragReleaseOutside) {
   InitBrowserButtonInkDrop();
 
-  views::Button* button = browser_button_;
+  views::Button* button = browser_button();
   gfx::Point mouse_location = button->GetLocalBounds().CenterPoint();
 
-  ui::MouseEvent press_event(ui::ET_MOUSE_PRESSED, mouse_location,
+  ui::MouseEvent press_event(ui::EventType::kMousePressed, mouse_location,
                              mouse_location, ui::EventTimeForNow(),
                              ui::EF_LEFT_MOUSE_BUTTON, 0);
   button->OnMousePressed(press_event);
   EXPECT_EQ(views::InkDropState::ACTION_PENDING,
-            browser_button_ink_drop_->GetTargetInkDropState());
-  EXPECT_THAT(browser_button_ink_drop_->GetAndResetRequestedStates(),
+            browser_button_ink_drop()->GetTargetInkDropState());
+  EXPECT_THAT(browser_button_ink_drop()->GetAndResetRequestedStates(),
               ElementsAre(views::InkDropState::ACTION_PENDING));
 
   mouse_location.Offset(test_api_->GetMinimumDragDistance() / 2, 0);
-  ui::MouseEvent drag_event_small(ui::ET_MOUSE_DRAGGED, mouse_location,
+  ui::MouseEvent drag_event_small(ui::EventType::kMouseDragged, mouse_location,
                                   mouse_location, ui::EventTimeForNow(),
                                   ui::EF_LEFT_MOUSE_BUTTON, 0);
   button->OnMouseDragged(drag_event_small);
   EXPECT_EQ(views::InkDropState::ACTION_PENDING,
-            browser_button_ink_drop_->GetTargetInkDropState());
-  EXPECT_THAT(browser_button_ink_drop_->GetAndResetRequestedStates(),
+            browser_button_ink_drop()->GetTargetInkDropState());
+  EXPECT_THAT(browser_button_ink_drop()->GetAndResetRequestedStates(),
               IsEmpty());
 
   mouse_location.Offset(test_api_->GetMinimumDragDistance(), 0);
-  ui::MouseEvent drag_event_large(ui::ET_MOUSE_DRAGGED, mouse_location,
+  ui::MouseEvent drag_event_large(ui::EventType::kMouseDragged, mouse_location,
                                   mouse_location, ui::EventTimeForNow(),
                                   ui::EF_LEFT_MOUSE_BUTTON, 0);
   button->OnMouseDragged(drag_event_large);
   EXPECT_EQ(views::InkDropState::HIDDEN,
-            browser_button_ink_drop_->GetTargetInkDropState());
-  EXPECT_THAT(browser_button_ink_drop_->GetAndResetRequestedStates(),
+            browser_button_ink_drop()->GetTargetInkDropState());
+  EXPECT_THAT(browser_button_ink_drop()->GetAndResetRequestedStates(),
               ElementsAre(views::InkDropState::HIDDEN));
 
-  ui::MouseEvent release_event(ui::ET_MOUSE_RELEASED, mouse_location,
+  ui::MouseEvent release_event(ui::EventType::kMouseReleased, mouse_location,
                                mouse_location, ui::EventTimeForNow(),
                                ui::EF_LEFT_MOUSE_BUTTON, 0);
   button->OnMouseReleased(release_event);
   EXPECT_EQ(views::InkDropState::HIDDEN,
-            browser_button_ink_drop_->GetTargetInkDropState());
-  EXPECT_THAT(browser_button_ink_drop_->GetAndResetRequestedStates(),
+            browser_button_ink_drop()->GetTargetInkDropState());
+  EXPECT_THAT(browser_button_ink_drop()->GetAndResetRequestedStates(),
               IsEmpty());
 }
 
@@ -2743,45 +3528,45 @@ TEST_F(ShelfViewInkDropTest, ShelfButtonWithoutMenuPressDragReleaseOutside) {
 TEST_F(ShelfViewInkDropTest, ShelfButtonWithoutMenuPressDragReleaseInside) {
   InitBrowserButtonInkDrop();
 
-  views::Button* button = browser_button_;
+  views::Button* button = browser_button();
   gfx::Point mouse_location = button->GetLocalBounds().CenterPoint();
 
-  ui::MouseEvent press_event(ui::ET_MOUSE_PRESSED, mouse_location,
+  ui::MouseEvent press_event(ui::EventType::kMousePressed, mouse_location,
                              mouse_location, ui::EventTimeForNow(),
                              ui::EF_LEFT_MOUSE_BUTTON, 0);
   button->OnMousePressed(press_event);
   EXPECT_EQ(views::InkDropState::ACTION_PENDING,
-            browser_button_ink_drop_->GetTargetInkDropState());
-  EXPECT_THAT(browser_button_ink_drop_->GetAndResetRequestedStates(),
+            browser_button_ink_drop()->GetTargetInkDropState());
+  EXPECT_THAT(browser_button_ink_drop()->GetAndResetRequestedStates(),
               ElementsAre(views::InkDropState::ACTION_PENDING));
 
   mouse_location.Offset(test_api_->GetMinimumDragDistance() * 2, 0);
-  ui::MouseEvent drag_event_outside(ui::ET_MOUSE_DRAGGED, mouse_location,
-                                    mouse_location, ui::EventTimeForNow(),
-                                    ui::EF_LEFT_MOUSE_BUTTON, 0);
+  ui::MouseEvent drag_event_outside(
+      ui::EventType::kMouseDragged, mouse_location, mouse_location,
+      ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON, 0);
   button->OnMouseDragged(drag_event_outside);
   EXPECT_EQ(views::InkDropState::HIDDEN,
-            browser_button_ink_drop_->GetTargetInkDropState());
-  EXPECT_THAT(browser_button_ink_drop_->GetAndResetRequestedStates(),
+            browser_button_ink_drop()->GetTargetInkDropState());
+  EXPECT_THAT(browser_button_ink_drop()->GetAndResetRequestedStates(),
               ElementsAre(views::InkDropState::HIDDEN));
 
   mouse_location.Offset(-test_api_->GetMinimumDragDistance() * 2, 0);
-  ui::MouseEvent drag_event_inside(ui::ET_MOUSE_DRAGGED, mouse_location,
+  ui::MouseEvent drag_event_inside(ui::EventType::kMouseDragged, mouse_location,
                                    mouse_location, ui::EventTimeForNow(),
                                    ui::EF_LEFT_MOUSE_BUTTON, 0);
   button->OnMouseDragged(drag_event_inside);
   EXPECT_EQ(views::InkDropState::HIDDEN,
-            browser_button_ink_drop_->GetTargetInkDropState());
-  EXPECT_THAT(browser_button_ink_drop_->GetAndResetRequestedStates(),
+            browser_button_ink_drop()->GetTargetInkDropState());
+  EXPECT_THAT(browser_button_ink_drop()->GetAndResetRequestedStates(),
               IsEmpty());
 
-  ui::MouseEvent release_event(ui::ET_MOUSE_RELEASED, mouse_location,
+  ui::MouseEvent release_event(ui::EventType::kMouseReleased, mouse_location,
                                mouse_location, ui::EventTimeForNow(),
                                ui::EF_LEFT_MOUSE_BUTTON, 0);
   button->OnMouseReleased(release_event);
   EXPECT_EQ(views::InkDropState::HIDDEN,
-            browser_button_ink_drop_->GetTargetInkDropState());
-  EXPECT_THAT(browser_button_ink_drop_->GetAndResetRequestedStates(),
+            browser_button_ink_drop()->GetTargetInkDropState());
+  EXPECT_THAT(browser_button_ink_drop()->GetAndResetRequestedStates(),
               IsEmpty());
 }
 
@@ -2791,33 +3576,33 @@ TEST_F(ShelfViewInkDropTest, ShelfButtonWithMenuPressRelease) {
   InitBrowserButtonInkDrop();
 
   // Set a delegate for the shelf item that returns an app list menu.
-  model_->SetShelfItemDelegate(model_->items()[0].id,
-                               std::make_unique<ListMenuShelfItemDelegate>());
+  GetModel()->ReplaceShelfItemDelegate(
+      GetModel()->items()[0].id, std::make_unique<ListMenuShelfItemDelegate>());
 
-  views::Button* button = browser_button_;
+  views::Button* button = browser_button();
   gfx::Point mouse_location = button->GetLocalBounds().CenterPoint();
 
-  ui::MouseEvent press_event(ui::ET_MOUSE_PRESSED, mouse_location,
+  ui::MouseEvent press_event(ui::EventType::kMousePressed, mouse_location,
                              mouse_location, ui::EventTimeForNow(),
                              ui::EF_LEFT_MOUSE_BUTTON, 0);
   button->OnMousePressed(press_event);
   EXPECT_EQ(views::InkDropState::ACTION_PENDING,
-            browser_button_ink_drop_->GetTargetInkDropState());
-  EXPECT_THAT(browser_button_ink_drop_->GetAndResetRequestedStates(),
+            browser_button_ink_drop()->GetTargetInkDropState());
+  EXPECT_THAT(browser_button_ink_drop()->GetAndResetRequestedStates(),
               ElementsAre(views::InkDropState::ACTION_PENDING));
 
   // Mouse release will spawn a menu which we will then close.
-  ui::MouseEvent release_event(ui::ET_MOUSE_RELEASED, mouse_location,
+  ui::MouseEvent release_event(ui::EventType::kMouseReleased, mouse_location,
                                mouse_location, ui::EventTimeForNow(),
                                ui::EF_LEFT_MOUSE_BUTTON, 0);
   button->OnMouseReleased(release_event);
   EXPECT_EQ(views::InkDropState::ACTIVATED,
-            browser_button_ink_drop_->GetTargetInkDropState());
+            browser_button_ink_drop()->GetTargetInkDropState());
   EXPECT_TRUE(test_api_->CloseMenu());
 
   EXPECT_EQ(views::InkDropState::HIDDEN,
-            browser_button_ink_drop_->GetTargetInkDropState());
-  EXPECT_THAT(browser_button_ink_drop_->GetAndResetRequestedStates(),
+            browser_button_ink_drop()->GetTargetInkDropState());
+  EXPECT_THAT(browser_button_ink_drop()->GetAndResetRequestedStates(),
               ElementsAre(views::InkDropState::ACTIVATED,
                           views::InkDropState::DEACTIVATED));
 }
@@ -2826,27 +3611,28 @@ TEST_F(ShelfViewInkDropTest, DismissingMenuWithDoubleClickDoesntShowInkDrop) {
   ui::test::EventGenerator* generator = GetEventGenerator();
   InitBrowserButtonInkDrop();
 
-  views::Button* button = browser_button_;
+  views::Button* button = browser_button();
+  auto* shelf_view = GetShelfView();
 
   // Show a context menu on the home button.
-  generator->MoveMouseTo(shelf_view_->shelf_widget()
+  generator->MoveMouseTo(shelf_view->shelf_widget()
                              ->navigation_widget()
                              ->GetHomeButton()
                              ->GetBoundsInScreen()
                              .CenterPoint());
   generator->PressRightButton();
   generator->ReleaseRightButton();
-  EXPECT_TRUE(shelf_view_->IsShowingMenu());
+  EXPECT_TRUE(shelf_view->IsShowingMenu());
 
   // Now check that double-clicking on the browser button dismisses the context
   // menu, and does not show an ink drop.
   EXPECT_EQ(views::InkDropState::HIDDEN,
-            browser_button_ink_drop_->GetTargetInkDropState());
+            browser_button_ink_drop()->GetTargetInkDropState());
   generator->MoveMouseTo(button->GetBoundsInScreen().CenterPoint());
   generator->DoubleClickLeftButton();
-  EXPECT_FALSE(shelf_view_->IsShowingMenu());
+  EXPECT_FALSE(shelf_view->IsShowingMenu());
   EXPECT_EQ(views::InkDropState::HIDDEN,
-            browser_button_ink_drop_->GetTargetInkDropState());
+            browser_button_ink_drop()->GetTargetInkDropState());
 }
 
 // Tests that the shelf ink drop transforms when the host transforms. Regression
@@ -2858,7 +3644,7 @@ TEST_F(ShelfViewInkDropTest, ShelfButtonTransformed) {
       std::make_unique<views::test::InkDropImplTestApi>(
           browser_button_ink_drop_impl_);
 
-  views::Button* button = browser_button_;
+  views::Button* button = browser_button();
   gfx::Transform transform;
   transform.Translate(10, 0);
   button->SetTransform(transform);
@@ -2872,6 +3658,10 @@ TEST_F(ShelfViewInkDropTest, ShelfButtonTransformed) {
 class ShelfViewFocusTest : public ShelfViewTest {
  public:
   ShelfViewFocusTest() = default;
+
+  ShelfViewFocusTest(const ShelfViewFocusTest&) = delete;
+  ShelfViewFocusTest& operator=(const ShelfViewFocusTest&) = delete;
+
   ~ShelfViewFocusTest() override = default;
 
   // AshTestBase:
@@ -2889,22 +3679,18 @@ class ShelfViewFocusTest : public ShelfViewTest {
 
   void DoTab() {
     ui::test::EventGenerator generator(Shell::GetPrimaryRootWindow());
-    generator.PressKey(ui::KeyboardCode::VKEY_TAB, ui::EventFlags::EF_NONE);
+    generator.PressKey(ui::KeyboardCode::VKEY_TAB, ui::EF_NONE);
   }
 
   void DoShiftTab() {
     ui::test::EventGenerator generator(Shell::GetPrimaryRootWindow());
-    generator.PressKey(ui::KeyboardCode::VKEY_TAB,
-                       ui::EventFlags::EF_SHIFT_DOWN);
+    generator.PressKey(ui::KeyboardCode::VKEY_TAB, ui::EF_SHIFT_DOWN);
   }
 
   void DoEnter() {
     ui::test::EventGenerator generator(Shell::GetPrimaryRootWindow());
-    generator.PressKey(ui::KeyboardCode::VKEY_RETURN, ui::EventFlags::EF_NONE);
+    generator.PressKey(ui::KeyboardCode::VKEY_RETURN, ui::EF_NONE);
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ShelfViewFocusTest);
 };
 
 // Tests that the number of buttons is as expected and the shelf's widget
@@ -2913,12 +3699,13 @@ TEST_F(ShelfViewFocusTest, Basic) {
   // There are five buttons, including 3 app buttons. The back button and
   // launcher are always there, the browser shortcut is added in
   // ShelfViewTest and the two test apps added in ShelfViewFocusTest.
-  EXPECT_EQ(3, test_api_->GetButtonCount());
+  EXPECT_EQ(3u, test_api_->GetButtonCount());
   EXPECT_TRUE(GetPrimaryShelf()->navigation_widget()->IsActive());
 
   // The home button is focused initially because the back button is only
   // visible in tablet mode.
-  EXPECT_TRUE(shelf_view_->shelf_widget()
+  EXPECT_TRUE(GetShelfView()
+                  ->shelf_widget()
                   ->navigation_widget()
                   ->GetHomeButton()
                   ->HasFocus());
@@ -2942,7 +3729,8 @@ TEST_F(ShelfViewFocusTest, ForwardCycling) {
 TEST_F(ShelfViewFocusTest, BackwardCycling) {
   // The first element is currently focused. Let's advance to the last element
   // first.
-  EXPECT_TRUE(shelf_view_->shelf_widget()
+  EXPECT_TRUE(GetShelfView()
+                  ->shelf_widget()
                   ->navigation_widget()
                   ->GetHomeButton()
                   ->HasFocus());
@@ -2959,7 +3747,8 @@ TEST_F(ShelfViewFocusTest, BackwardCycling) {
 // Verifies that focus moves as expected between the shelf and the status area.
 TEST_F(ShelfViewFocusTest, FocusCyclingBetweenShelfAndStatusWidget) {
   // The first element of the shelf (the home button) is focused at start.
-  EXPECT_TRUE(shelf_view_->shelf_widget()
+  auto* shelf_view = GetShelfView();
+  EXPECT_TRUE(shelf_view->shelf_widget()
                   ->navigation_widget()
                   ->GetHomeButton()
                   ->HasFocus());
@@ -2973,54 +3762,66 @@ TEST_F(ShelfViewFocusTest, FocusCyclingBetweenShelfAndStatusWidget) {
   EXPECT_TRUE(test_api_->GetViewAt(2)->HasFocus());
 
   // This is the last element. Tabbing once more should go into the status
-  // area.
+  // area. If calendar view is enabled it is focusing on the date tray.
   DoTab();
-  ExpectNotFocused(shelf_view_);
-  ExpectFocused(status_area_);
+  ExpectNotFocused(shelf_view);
+  ExpectFocused(GetStatusArea());
 
   // Shift-tab: we should be back at the last element in the shelf.
   DoShiftTab();
   EXPECT_TRUE(test_api_->GetViewAt(2)->HasFocus());
-  ExpectNotFocused(status_area_);
+  ExpectNotFocused(GetStatusArea());
 
   // Go into the status area again.
   DoTab();
-  ExpectNotFocused(shelf_view_);
-  ExpectFocused(status_area_);
+  ExpectNotFocused(shelf_view);
+  ExpectFocused(GetStatusArea());
+
+  // Move the focusing ring from the date tray to the unified tray.
+  DoTab();
+  ExpectNotFocused(shelf_view);
+  ExpectFocused(GetStatusArea());
 
   // And keep going forward, now we should be cycling back to the first shelf
   // element.
   DoTab();
-  EXPECT_TRUE(shelf_view_->shelf_widget()
+  EXPECT_TRUE(shelf_view->shelf_widget()
                   ->navigation_widget()
                   ->GetHomeButton()
                   ->HasFocus());
-  ExpectNotFocused(status_area_);
+  ExpectNotFocused(GetStatusArea());
 }
 
 // Verifies that hitting the Esc key can consistently unfocus the shelf.
 TEST_F(ShelfViewFocusTest, UnfocusWithEsc) {
+  auto* shelf_view = GetShelfView();
   // The home button is focused at start.
-  EXPECT_TRUE(shelf_view_->shelf_widget()
+  EXPECT_TRUE(shelf_view->shelf_widget()
                   ->navigation_widget()
                   ->GetHomeButton()
                   ->HasFocus());
 
   // Focus the status area.
   DoShiftTab();
-  ExpectNotFocused(shelf_view_);
-  ExpectFocused(status_area_);
+  ExpectNotFocused(shelf_view);
+  ExpectFocused(GetStatusArea());
+
+  // Move the focusing ring from the unified tray to the date tray.
+  DoShiftTab();
+  ExpectNotFocused(shelf_view);
+  ExpectFocused(GetStatusArea());
 
   // Advance backwards to the last element of the shelf.
   DoShiftTab();
-  ExpectNotFocused(status_area_);
-  ExpectFocused(shelf_view_);
+  ExpectNotFocused(GetStatusArea());
+  ExpectFocused(shelf_view);
 
   // Press Escape. Nothing should be focused.
-  ui::KeyEvent key_event(ui::ET_KEY_PRESSED, ui::VKEY_ESCAPE, ui::EF_NONE);
-  shelf_view_->GetWidget()->OnKeyEvent(&key_event);
-  ExpectNotFocused(status_area_);
-  ExpectNotFocused(shelf_view_);
+  ui::KeyEvent key_event(ui::EventType::kKeyPressed, ui::VKEY_ESCAPE,
+                         ui::EF_NONE);
+  shelf_view->GetWidget()->OnKeyEvent(&key_event);
+  ExpectNotFocused(GetStatusArea());
+  ExpectNotFocused(shelf_view);
 }
 
 class ShelfViewFocusWithNoShelfNavigationTest : public ShelfViewFocusTest {
@@ -3039,25 +3840,26 @@ TEST_F(ShelfViewFocusWithNoShelfNavigationTest,
        ShelfWithoutNavigationControls) {
   // The home button is focused at start.
   ASSERT_TRUE(GetPrimaryShelf()->navigation_widget()->GetHomeButton());
-  EXPECT_TRUE(shelf_view_->shelf_widget()
+  EXPECT_TRUE(GetShelfView()
+                  ->shelf_widget()
                   ->navigation_widget()
                   ->GetHomeButton()
                   ->HasFocus());
 
   // Switch to tablet mode, which should hide navigation buttons.
-  Shell::Get()->tablet_mode_controller()->SetEnabledForTest(true);
+  ash::TabletModeControllerTestApi().EnterTabletMode();
   test_api_->RunMessageLoopUntilAnimationsDone();
 
   ASSERT_FALSE(GetPrimaryShelf()->navigation_widget()->GetHomeButton());
-  ExpectFocused(status_area_);
+  ExpectFocused(GetStatusArea());
 
   // Verify focus cycling skips the navigation widget.
   DoTab();
-  ExpectFocused(status_area_);
+  ExpectFocused(GetStatusArea());
   DoTab();
-  ExpectFocused(shelf_view_);
+  ExpectFocused(GetShelfView());
   DoShiftTab();
-  ExpectFocused(status_area_);
+  ExpectFocused(GetStatusArea());
 }
 
 class ShelfViewGestureTapTest : public ShelfViewTest {
@@ -3070,39 +3872,44 @@ class ShelfViewGestureTapTest : public ShelfViewTest {
   void SetUp() override {
     ShelfViewTest::SetUp();
 
-    app_icon1_ = GetButtonByID(AddAppShortcut());
-    app_icon2_ = GetButtonByID(AddAppShortcut());
+    app_icon1_ = AddAppShortcut();
+    app_icon2_ = AddAppShortcut();
   }
 
-  views::InkDropState GetInkDropStateOfAppIcon1() const {
-    return views::InkDrop::Get(app_icon1_)
+  views::InkDropState GetInkDropStateOfAppIcon1() {
+    return views::InkDrop::Get(app_icon1())
         ->GetInkDrop()
         ->GetTargetInkDropState();
   }
 
+  ShelfAppButton* app_icon1() { return GetButtonByID(app_icon1_); }
+
+  ShelfAppButton* app_icon2() { return GetButtonByID(app_icon2_); }
+
  protected:
-  ShelfAppButton* app_icon1_ = nullptr;
-  ShelfAppButton* app_icon2_ = nullptr;
+  ShelfID app_icon1_;
+  ShelfID app_icon2_;
 };
 
 // Verifies the shelf app button's inkdrop behavior when the mouse click
 // occurs after gesture long press but before the end of gesture.
 TEST_F(ShelfViewGestureTapTest, MouseClickInterruptionAfterGestureLongPress) {
   const gfx::Point app_icon1_center_point =
-      app_icon1_->GetBoundsInScreen().CenterPoint();
+      app_icon1()->GetBoundsInScreen().CenterPoint();
+  auto* shelf_view = GetShelfView();
   GetEventGenerator()->PressTouch(app_icon1_center_point);
 
-  // Fast forward to generate the ET_GESTURE_SHOW_PRESS event.
-  task_environment()->FastForwardBy(base::TimeDelta::FromMilliseconds(200));
+  // Fast forward to generate the EventType::kGestureShowPress event.
+  task_environment()->FastForwardBy(base::Milliseconds(200));
 
-  // Fast forward to generate the ET_GESTURE_LONG_PRESS event to show the
+  // Fast forward to generate the EventType::kGestureLongPress event to show the
   // context menu.
-  task_environment()->FastForwardBy(base::TimeDelta::FromMilliseconds(1000));
-  ASSERT_TRUE(shelf_view_->IsShowingMenu());
+  task_environment()->FastForwardBy(base::Milliseconds(1000));
+  ASSERT_TRUE(shelf_view->IsShowingMenu());
 
   // Mouse click at `app_icon2_` while gesture pressing `app_icon1_`.
   GetEventGenerator()->MoveMouseTo(
-      app_icon2_->GetBoundsInScreen().CenterPoint());
+      app_icon2()->GetBoundsInScreen().CenterPoint());
   GetEventGenerator()->ClickLeftButton();
 
   // Release the gesture press on `app_icon1_`.
@@ -3110,39 +3917,1547 @@ TEST_F(ShelfViewGestureTapTest, MouseClickInterruptionAfterGestureLongPress) {
   GetEventGenerator()->ReleaseTouch();
 
   // Verify that the context menu shows and `app_icon1_`'s inkdrop is activated.
-  EXPECT_TRUE(shelf_view_->IsShowingMenu());
+  EXPECT_TRUE(shelf_view->IsShowingMenu());
   EXPECT_EQ(views::InkDropState::ACTIVATED, GetInkDropStateOfAppIcon1());
 
   // Click at the mouse left button at an empty space. Verify that the context
   // menu is closed and the inkdrop is deactivated.
   GetEventGenerator()->MoveMouseTo(GetPrimaryDisplay().bounds().CenterPoint());
   GetEventGenerator()->ClickLeftButton();
-  EXPECT_FALSE(shelf_view_->IsShowingMenu());
+  EXPECT_FALSE(shelf_view->IsShowingMenu());
   EXPECT_EQ(views::InkDropState::HIDDEN, GetInkDropStateOfAppIcon1());
+}
+
+// Verifies that tap gesture targets the correct app item view if the previous
+// tap gesture resulted in a system modal window being shown.
+TEST_F(ShelfViewGestureTapTest, TapAfterShowingSystemModalWindow) {
+  // Add two shelf app buttons.
+  const ShelfID id1 = AddAppShortcut();
+  const ShelfID id2 = AddAppShortcut();
+
+  auto item_1_delegate_owned =
+      std::make_unique<SystemModalWindowShelfItemDelegate>(base::BindRepeating(
+          [](AshTestBase* test_base, const gfx::Rect& bounds,
+             aura::client::WindowType type, int shell_window_id) {
+            EXPECT_EQ(type, aura::client::WINDOW_TYPE_NORMAL);
+            return test_base->CreateWindowWithAppType(
+                chromeos::AppType::NON_APP, bounds, shell_window_id);
+          },
+          base::Unretained(this)));
+  SystemModalWindowShelfItemDelegate* item_1_delegate =
+      item_1_delegate_owned.get();
+  GetModel()->ReplaceShelfItemDelegate(id1, std::move(item_1_delegate_owned));
+
+  auto item_2_delegate_owned = std::make_unique<ShelfItemSelectionTracker>();
+  ShelfItemSelectionTracker* item_2_delegate = item_2_delegate_owned.get();
+  GetModel()->ReplaceShelfItemDelegate(id2, std::move(item_2_delegate_owned));
+
+  GetEventGenerator()->GestureTapAt(
+      GetButtonByID(id1)->GetBoundsInScreen().CenterPoint());
+  ASSERT_TRUE(item_1_delegate->HasTestWindow());
+  ASSERT_TRUE(Shell::IsSystemModalWindowOpen());
+  item_1_delegate->ResetTestWindow();
+
+  GetEventGenerator()->GestureTapAt(
+      GetButtonByID(id2)->GetBoundsInScreen().CenterPoint());
+  EXPECT_EQ(1u, item_2_delegate->item_selected_count());
+  EXPECT_FALSE(item_1_delegate->HasTestWindow());
+}
+
+// Verifies that removing an item that is still waiting for the context menu
+// model works as expected.
+TEST_F(ShelfViewGestureTapTest, InterruptContextMenuShowByItemRemoval) {
+  // Add two shelf app buttons.
+  const ShelfID id1 = AddAppShortcut();
+  const ShelfID id2 = AddAppShortcut();
+
+  auto item_delegate_owned =
+      std::make_unique<AsyncContextMenuShelfItemDelegate>();
+  AsyncContextMenuShelfItemDelegate* item_delegate = item_delegate_owned.get();
+  GetModel()->ReplaceShelfItemDelegate(id1, std::move(item_delegate_owned));
+
+  ShelfAppButton* app_button = GetButtonByID(id1);
+  GetEventGenerator()->MoveTouch(app_button->GetBoundsInScreen().CenterPoint());
+  GetEventGenerator()->PressTouch();
+
+  // Fast forward to generate the EventType::kGestureShowPress event.
+  task_environment()->FastForwardBy(base::Milliseconds(200));
+
+  // Fast forward to generate the EventType::kGestureLongPress event to show the
+  // context menu.
+  task_environment()->FastForwardBy(base::Milliseconds(1000));
+  EXPECT_TRUE(item_delegate->HasPendingContextMenuCallback());
+
+  // Remove the shelf item indexed by `id` before handling the pending context
+  // menu model request.
+  const int index = ShelfModel::Get()->ItemIndexByID(id1);
+  ShelfModel::Get()->RemoveItemAt(index);
+  EXPECT_FALSE(GetShelfView()->drag_view());
+
+  // Initialize the mouse drag on the shelf app button specified by `id2`.
+  ShelfAppButton* app_button2 = GetButtonByID(id2);
+  // Wait for app 2 to move in reaction to removing app 1.
+  test_api_->RunMessageLoopUntilAnimationsDone();
+  GetEventGenerator()->MoveMouseTo(
+      app_button2->GetBoundsInScreen().CenterPoint());
+  GetEventGenerator()->PressLeftButton();
+  task_environment()->FastForwardBy(base::Milliseconds(200));
+
+  // Move the mouse. Verify that the shelf view has a view under drag.
+  GetEventGenerator()->MoveMouseBy(0, -100);
+  EXPECT_TRUE(GetShelfView()->drag_view());
+}
+
+TEST_F(ShelfViewGestureTapTest,
+       PressEscapeKeyBeforeReleaseLongPressOnAppButton) {
+  const ShelfID id = AddAppShortcut();
+  auto item_delegate_owned =
+      std::make_unique<AsyncContextMenuShelfItemDelegate>();
+  AsyncContextMenuShelfItemDelegate* item_delegate = item_delegate_owned.get();
+  GetModel()->ReplaceShelfItemDelegate(id, std::move(item_delegate_owned));
+  auto* shelf_view = GetShelfView();
+
+  ShelfAppButton* app_button = GetButtonByID(id);
+  GetEventGenerator()->MoveTouch(app_button->GetBoundsInScreen().CenterPoint());
+  GetEventGenerator()->PressTouch();
+
+  // Fast forward to generate the EventType::kGestureShowPress event.
+  task_environment()->FastForwardBy(base::Milliseconds(200));
+
+  // Fast forward to generate the EventType::kGestureLongPress event to show the
+  // context menu.
+  task_environment()->FastForwardBy(base::Milliseconds(1000));
+  EXPECT_TRUE(item_delegate->HasPendingContextMenuCallback());
+
+  // Build a dummy context menu and show it.
+  {
+    auto menu_model = std::make_unique<ui::SimpleMenuModel>(nullptr);
+    menu_model->AddItem(203, u"item");
+    item_delegate->RunPendingContextMenuCallback(std::move(menu_model));
+    EXPECT_TRUE(shelf_view->IsShowingMenuForView(app_button));
+  }
+
+  // Press Escape. The context menu should be closed.
+  GetEventGenerator()->PressAndReleaseKey(ui::VKEY_ESCAPE);
+  EXPECT_FALSE(shelf_view->IsShowingMenu());
+  EXPECT_FALSE(item_delegate->HasPendingContextMenuCallback());
+
+  // Release the gesture press. The context menu should show again.
+  GetEventGenerator()->ReleaseTouch();
+  task_environment()->FastForwardBy(base::Milliseconds(1000));
+  EXPECT_TRUE(item_delegate->HasPendingContextMenuCallback());
+  {
+    auto menu_model = std::make_unique<ui::SimpleMenuModel>(nullptr);
+    menu_model->AddItem(203, u"item");
+    item_delegate->RunPendingContextMenuCallback(std::move(menu_model));
+    EXPECT_TRUE(shelf_view->IsShowingMenuForView(app_button));
+  }
+
+  // Verify that the ink drop of the app button for which the context menu shows
+  // for is activated.
+  EXPECT_EQ(
+      views::InkDropState::ACTIVATED,
+      views::InkDrop::Get(app_button)->GetInkDrop()->GetTargetInkDropState());
 }
 
 // Verifies the shelf app button's inkdrop behavior when the mouse click
 // occurs before gesture long press.
 TEST_F(ShelfViewGestureTapTest, MouseClickInterruptionBeforeGestureLongPress) {
   const gfx::Point app_icon1_center_point =
-      app_icon1_->GetBoundsInScreen().CenterPoint();
+      app_icon1()->GetBoundsInScreen().CenterPoint();
   GetEventGenerator()->PressTouch(app_icon1_center_point);
 
-  // Fast forward to generate the ET_GESTURE_SHOW_PRESS event.
-  task_environment()->FastForwardBy(base::TimeDelta::FromMilliseconds(200));
+  // Fast forward to generate the EventType::kGestureShowPress event.
+  task_environment()->FastForwardBy(base::Milliseconds(200));
 
   // Mouse click at `app_icon2_` while gesture pressing `app_icon1_`. Note that
   // we do not need to release the touch on `app_icon1_` because the gesture
   // is interrupted by the mouse click.
   GetEventGenerator()->MoveMouseTo(
-      app_icon2_->GetBoundsInScreen().CenterPoint());
+      app_icon2()->GetBoundsInScreen().CenterPoint());
   GetEventGenerator()->ClickLeftButton();
 
   // Fast forward until the callback is executed.
-  task_environment()->FastForwardBy(base::TimeDelta::FromMilliseconds(200));
+  task_environment()->FastForwardBy(base::Milliseconds(200));
 
-  EXPECT_FALSE(shelf_view_->IsShowingMenu());
+  EXPECT_FALSE(GetShelfView()->IsShowingMenu());
   EXPECT_EQ(views::InkDropState::HIDDEN, GetInkDropStateOfAppIcon1());
+}
+
+// Test class to test the desk button.
+class ShelfViewDeskButtonTest : public ShelfViewTest {
+ public:
+  ShelfViewDeskButtonTest() = default;
+
+  ShelfViewDeskButtonTest(const ShelfViewDeskButtonTest&) = delete;
+  ShelfViewDeskButtonTest& operator=(const ShelfViewDeskButtonTest&) = delete;
+
+  ~ShelfViewDeskButtonTest() override = default;
+
+  DeskButtonWidget* desk_button_widget() {
+    return test_api_->shelf_view()->shelf_widget()->desk_button_widget();
+  }
+
+  // ShelfViewTest:
+  void SetUp() override {
+    ShelfViewTest::SetUp();
+
+    // With the desk button, there should be space in the hotseat for 6 apps.
+    ASSERT_GE(GetPrimaryShelf()
+                  ->shelf_widget()
+                  ->hotseat_widget()
+                  ->GetWindowBoundsInScreen()
+                  .width(),
+              336);
+  }
+
+  PrefService* prefs() {
+    return Shell::Get()->session_controller()->GetLastActiveUserPrefService();
+  }
+};
+
+// Verify that the desk button is visible outside of overview, and not visible
+// in overview mode.
+TEST_F(ShelfViewDeskButtonTest, OverviewVisibility) {
+  SetShowDeskButtonInShelfPref(prefs(), true);
+  // The button should be visible.
+  EXPECT_TRUE(desk_button_widget()->GetLayer()->GetTargetVisibility());
+  const int original_hotseat_width = GetPrimaryShelf()
+                                         ->shelf_widget()
+                                         ->hotseat_widget()
+                                         ->GetWindowBoundsInScreen()
+                                         .width();
+
+  // The button should disappear in overview mode and reappear after.
+  ToggleOverview();
+  EXPECT_FALSE(desk_button_widget()->GetLayer()->GetTargetVisibility());
+  // To avoid unnecessary re-layout before/after overview, keep hotseat the same
+  // width.
+  EXPECT_EQ(GetPrimaryShelf()
+                ->shelf_widget()
+                ->hotseat_widget()
+                ->GetWindowBoundsInScreen()
+                .width(),
+            original_hotseat_width);
+  ToggleOverview();
+  EXPECT_TRUE(desk_button_widget()->GetLayer()->GetTargetVisibility());
+
+  // Repeat for vertical alignment.
+  test_api_->shelf_view()->shelf()->SetAlignment(ShelfAlignment::kLeft);
+  EXPECT_TRUE(desk_button_widget()->GetLayer()->GetTargetVisibility());
+  ToggleOverview();
+  EXPECT_FALSE(desk_button_widget()->GetLayer()->GetTargetVisibility());
+  ToggleOverview();
+  EXPECT_TRUE(desk_button_widget()->GetLayer()->GetTargetVisibility());
+}
+
+// Verify that the desk button is not visible in tablet mode.
+TEST_F(ShelfViewDeskButtonTest, TabletModeVisibility) {
+  SetShowDeskButtonInShelfPref(prefs(), true);
+  EXPECT_TRUE(desk_button_widget()->GetLayer()->GetTargetVisibility());
+
+  // In tablet mode, the shelf should be visible but the desk button shouldn't.
+  ash::TabletModeControllerTestApi().EnterTabletMode();
+  ASSERT_EQ(SHELF_VISIBLE, GetPrimaryShelf()->GetVisibilityState());
+  EXPECT_FALSE(desk_button_widget()->GetLayer()->GetTargetVisibility());
+
+  ash::TabletModeControllerTestApi().LeaveTabletMode();
+  EXPECT_TRUE(desk_button_widget()->GetLayer()->GetTargetVisibility());
+}
+
+// Verify that the desk button does not appear by default, appears when the user
+// has more than 1 desk, and stays even if they go back to having just one desk.
+TEST_F(ShelfViewDeskButtonTest, NewDeskVisibility) {
+  // By default the visibility pref should be `kNotSet`, the device uses desks
+  // pref should be false, and the button should not be visible.
+  EXPECT_EQ(prefs()->GetString(prefs::kShowDeskButtonInShelf), "");
+  EXPECT_FALSE(prefs()->GetBoolean(prefs::kDeviceUsesDesks));
+  EXPECT_FALSE(desk_button_widget()->GetLayer()->GetTargetVisibility());
+
+  // Going into and out of tablet mode and overview shouldn't change this.
+  ash::TabletModeControllerTestApi().EnterTabletMode();
+  ash::TabletModeControllerTestApi().LeaveTabletMode();
+  EXPECT_EQ(prefs()->GetString(prefs::kShowDeskButtonInShelf), "");
+  EXPECT_FALSE(prefs()->GetBoolean(prefs::kDeviceUsesDesks));
+  EXPECT_FALSE(desk_button_widget()->GetLayer()->GetTargetVisibility());
+
+  ToggleOverview();
+  EXPECT_FALSE(desk_button_widget()->GetLayer()->GetTargetVisibility());
+  ToggleOverview();
+  EXPECT_EQ(prefs()->GetString(prefs::kShowDeskButtonInShelf), "");
+  EXPECT_FALSE(prefs()->GetBoolean(prefs::kDeviceUsesDesks));
+  EXPECT_FALSE(desk_button_widget()->GetLayer()->GetTargetVisibility());
+
+  // Adding one desk should change the device uses desks pref to true, and it
+  // should stay that way when the desk is removed. The desk button visibility
+  // pref should not be changed.
+  Shell::Get()->desks_controller()->NewDesk(
+      DesksCreationRemovalSource::kButton);
+  EXPECT_EQ(prefs()->GetString(prefs::kShowDeskButtonInShelf), "");
+  EXPECT_TRUE(prefs()->GetBoolean(prefs::kDeviceUsesDesks));
+  EXPECT_TRUE(desk_button_widget()->GetLayer()->GetTargetVisibility());
+
+  RemoveDesk(Shell::Get()->desks_controller()->GetTargetActiveDesk(),
+             DeskCloseType::kCloseAllWindows);
+  EXPECT_EQ(prefs()->GetString(prefs::kShowDeskButtonInShelf), "");
+  EXPECT_TRUE(prefs()->GetBoolean(prefs::kDeviceUsesDesks));
+  EXPECT_TRUE(desk_button_widget()->GetLayer()->GetTargetVisibility());
+}
+
+// Verify that if the user hides the desk button, the button will never show
+// unless the user elects to show the button manually.
+TEST_F(ShelfViewDeskButtonTest, PrefHidden) {
+  SetShowDeskButtonInShelfPref(prefs(), false);
+  SetDeviceUsesDesksPref(prefs(), false);
+  EXPECT_FALSE(desk_button_widget()->GetLayer()->GetTargetVisibility());
+
+  // Adding a desk should not make the button visible.
+  Shell::Get()->desks_controller()->NewDesk(
+      DesksCreationRemovalSource::kButton);
+  EXPECT_EQ(prefs()->GetString(prefs::kShowDeskButtonInShelf), "Hidden");
+  EXPECT_TRUE(prefs()->GetBoolean(prefs::kDeviceUsesDesks));
+  EXPECT_FALSE(desk_button_widget()->GetLayer()->GetTargetVisibility());
+
+  // Removing the desk, cycling overview, and tablet mode should not make it
+  // visible.
+
+  RemoveDesk(Shell::Get()->desks_controller()->GetTargetActiveDesk(),
+             DeskCloseType::kCloseAllWindows);
+  EXPECT_EQ(prefs()->GetString(prefs::kShowDeskButtonInShelf), "Hidden");
+  EXPECT_FALSE(desk_button_widget()->GetLayer()->GetTargetVisibility());
+
+  ToggleOverview();
+  EXPECT_FALSE(desk_button_widget()->GetLayer()->GetTargetVisibility());
+  ToggleOverview();
+  EXPECT_EQ(prefs()->GetString(prefs::kShowDeskButtonInShelf), "Hidden");
+  EXPECT_FALSE(desk_button_widget()->GetLayer()->GetTargetVisibility());
+
+  ash::TabletModeControllerTestApi().EnterTabletMode();
+  ash::TabletModeControllerTestApi().LeaveTabletMode();
+  EXPECT_EQ(prefs()->GetString(prefs::kShowDeskButtonInShelf), "Hidden");
+  EXPECT_FALSE(desk_button_widget()->GetLayer()->GetTargetVisibility());
+
+  // Setting the pref to shown after being hidden should make the button
+  // visible.
+  SetShowDeskButtonInShelfPref(prefs(), true);
+  EXPECT_EQ(prefs()->GetString(prefs::kShowDeskButtonInShelf), "Shown");
+  EXPECT_TRUE(desk_button_widget()->GetLayer()->GetTargetVisibility());
+
+  // Setting the pref to hidden after being shown should make the button
+  // disappear.
+  SetShowDeskButtonInShelfPref(prefs(), false);
+  EXPECT_EQ(prefs()->GetString(prefs::kShowDeskButtonInShelf), "Hidden");
+  EXPECT_FALSE(desk_button_widget()->GetLayer()->GetTargetVisibility());
+}
+
+// Verify that the correct combination of values for the two desk button
+// visibility preferences result in the desk button being shown and not shown.
+TEST_F(ShelfViewDeskButtonTest, PrefVisibilityRelationship) {
+  for (std::string visibility : {"", "Shown", "Hidden"}) {
+    for (bool uses_desks : {true, false}) {
+      prefs()->SetString(prefs::kShowDeskButtonInShelf, visibility);
+      SetDeviceUsesDesksPref(prefs(), uses_desks);
+      if (uses_desks) {
+        if (visibility == "Hidden") {
+          EXPECT_FALSE(desk_button_widget()->GetLayer()->GetTargetVisibility());
+        } else {
+          EXPECT_TRUE(desk_button_widget()->GetLayer()->GetTargetVisibility());
+        }
+      } else {
+        if (visibility == "Shown") {
+          EXPECT_TRUE(desk_button_widget()->GetLayer()->GetTargetVisibility());
+        } else {
+          EXPECT_FALSE(desk_button_widget()->GetLayer()->GetTargetVisibility());
+        }
+      }
+    }
+  }
+}
+
+// Verify that metrics are being correctly recorded for when a user hides the
+// desk button.
+TEST_F(ShelfViewDeskButtonTest, VisibilityMetrics) {
+  SetShowDeskButtonInShelfPref(prefs(), true);
+  base::HistogramTester histogram_tester;
+  ShelfContextMenuModel menu_model(nullptr, GetPrimaryDisplayId(),
+                                   /*menu_in_shelf=*/false);
+  menu_model.ExecuteCommand(
+      static_cast<int>(ShelfContextMenuModel::CommandId::MENU_HIDE_DESK_NAME),
+      /*event_flags=*/0);
+  histogram_tester.ExpectTotalCount(kDeskButtonHiddenHistogramName, 1);
+}
+
+using ShelfViewPromiseAppTest = ShelfViewTest;
+
+TEST_F(ShelfViewPromiseAppTest, UpdateProgressOnPromiseIcon) {
+  // Add platform app button.
+  ShelfID last_added = AddAppShortcut();
+  ShelfItem item = GetItemByID(last_added);
+  auto* model = GetModel();
+  int index = model->ItemIndexByID(last_added);
+  ShelfAppButton* button = GetButtonByID(last_added);
+
+  item.app_status = AppStatus::kPending;
+  item.progress = 0.0f;
+  item.is_promise_app = true;
+  model->Set(index, item);
+
+  // Start install progress bar.
+  item.app_status = AppStatus::kInstalling;
+  item.progress = 0.0f;
+  model->Set(index, item);
+  ProgressIndicator* progress_indicator = button->GetProgressIndicatorForTest();
+  ASSERT_TRUE(progress_indicator);
+
+  EXPECT_EQ(item.progress, 0.f);
+  EXPECT_EQ(button->progress(), 0.f);
+  ProgressIndicatorWaiter().WaitForProgress(progress_indicator, 0.0f);
+
+  item.app_status = AppStatus::kInstalling;
+  item.progress = 0.3f;
+  model->Set(index, item);
+  EXPECT_EQ(item.progress, 0.3f);
+  EXPECT_EQ(button->progress(), 0.3f);
+  ProgressIndicatorWaiter().WaitForProgress(progress_indicator, 0.3f);
+
+  item.app_status = AppStatus::kInstalling;
+  item.progress = 0.7f;
+  model->Set(index, item);
+  EXPECT_EQ(item.progress, 0.7f);
+  EXPECT_EQ(button->progress(), 0.7f);
+  ProgressIndicatorWaiter().WaitForProgress(progress_indicator, 0.7f);
+
+  item.app_status = AppStatus::kInstalling;
+  item.progress = 1.5f;
+  model->Set(index, item);
+  EXPECT_EQ(item.progress, 1.5f);
+  EXPECT_EQ(button->progress(), 1.5f);
+  ProgressIndicatorWaiter().WaitForProgress(progress_indicator, 1.0f);
+}
+
+TEST_F(ShelfViewPromiseAppTest, AccessibleDescription) {
+  // Add platform app button.
+  ShelfID last_added = AddAppShortcut();
+  ShelfItem item = GetItemByID(last_added);
+  auto* model = GetModel();
+  int index = model->ItemIndexByID(last_added);
+  ShelfAppButton* button = GetButtonByID(last_added);
+
+  EXPECT_EQ(u"", button->GetViewAccessibility().GetCachedDescription());
+
+  item.app_status = AppStatus::kBlocked;
+  item.progress = 0.0f;
+  item.is_promise_app = true;
+  model->Set(index, item);
+
+  EXPECT_EQ(l10n_util::GetStringUTF16(IDS_SHELF_ITEM_BLOCKED_APP),
+            button->GetViewAccessibility().GetCachedDescription());
+
+  item.app_status = AppStatus::kPaused;
+  item.progress = 0.0f;
+  model->Set(index, item);
+
+  EXPECT_EQ(l10n_util::GetStringUTF16(IDS_SHELF_ITEM_PAUSED_APP),
+            button->GetViewAccessibility().GetCachedDescription());
+
+  item.app_status = AppStatus::kInstalling;
+  item.progress = 0.3f;
+  model->Set(index, item);
+  EXPECT_EQ(u"", button->GetViewAccessibility().GetCachedDescription());
+}
+
+TEST_F(ShelfViewPromiseAppTest, AccessibleName) {
+  ShelfID last_added = AddAppShortcut();
+  ShelfItem item = GetItemByID(last_added);
+  auto* model = GetModel();
+  int index = model->ItemIndexByID(last_added);
+  ShelfAppButton* button = GetButtonByID(last_added);
+
+  // Default title of the shelf item should be updated as the accessible name of
+  // the shelf app button.
+  ui::AXNodeData data;
+  button->GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ(data.GetString16Attribute(ax::mojom::StringAttribute::kName),
+            item.title);
+
+  // On updating the item's title the accessible name of the shelf app button
+  // should also be updated.
+  item.title = u"Test app";
+  model->Set(index, item);
+
+  data = ui::AXNodeData();
+  button->GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ(data.GetString16Attribute(ax::mojom::StringAttribute::kName),
+            item.title);
+
+  // If a non-empty accessible name of the shelf item itself is being provided
+  // in that case the preference should be given to item's accessible name
+  item.accessible_name = u"Test accessible name";
+  model->Set(index, item);
+
+  data = ui::AXNodeData();
+  button->GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ(data.GetString16Attribute(ax::mojom::StringAttribute::kName),
+            item.accessible_name);
+
+  // Passing an empty accessible to the item should once again give the
+  // preference back to item's title.
+  item.accessible_name = u"";
+  model->Set(index, item);
+
+  data = ui::AXNodeData();
+  button->GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ(data.GetString16Attribute(ax::mojom::StringAttribute::kName),
+            item.title);
+}
+
+TEST_F(ShelfViewPromiseAppTest, AppStatusReflectsOnProgressIndicator) {
+  // Add platform app button.
+  ShelfID last_added = AddAppShortcut();
+  ShelfItem item = GetItemByID(last_added);
+  auto* model = GetModel();
+  int index = model->ItemIndexByID(last_added);
+  ShelfAppButton* button = GetButtonByID(last_added);
+
+  // Promise apps are created with app_status kPending.
+  item.app_status = AppStatus::kPending;
+  item.is_promise_app = true;
+  model->Set(index, item);
+
+  ProgressIndicator* progress_indicator = button->GetProgressIndicatorForTest();
+  ASSERT_TRUE(progress_indicator);
+  // Change app status to installing and send a progress update. Verify that the
+  // progress indicator correctly reflects the progress.
+  EXPECT_EQ(button->progress(), -1.0f);
+  EXPECT_EQ(button->app_status(), AppStatus::kPending);
+  ProgressIndicatorWaiter().WaitForProgress(progress_indicator, 0.0f);
+
+  // Start install progress bar.
+  item.app_status = AppStatus::kInstalling;
+  item.progress = 0.3f;
+  model->Set(index, item);
+
+  EXPECT_EQ(button->progress(), 0.3f);
+  EXPECT_EQ(button->app_status(), AppStatus::kInstalling);
+  ProgressIndicatorWaiter().WaitForProgress(progress_indicator, 0.3f);
+
+  // Change app status back to pending state. Verify that even if the item had
+  // progress previously associated to it, the progress indicator reflects as
+  // 0 progress since it is pending.
+  item.app_status = AppStatus::kPending;
+  model->Set(index, item);
+  EXPECT_EQ(item.progress, 0.3f);
+  EXPECT_EQ(button->progress(), 0.3f);
+  EXPECT_EQ(button->app_status(), AppStatus::kPending);
+  ProgressIndicatorWaiter().WaitForProgress(progress_indicator, 0.0f);
+
+  // Send another progress update. Since the app status is still pending, the
+  // progress indicator still be 0.
+  item.progress = 0.7f;
+  model->Set(index, item);
+  EXPECT_EQ(item.progress, 0.7f);
+  EXPECT_EQ(button->progress(), 0.7f);
+  EXPECT_EQ(button->app_status(), AppStatus::kPending);
+  ProgressIndicatorWaiter().WaitForProgress(progress_indicator, 0.0f);
+
+  // Set the last status update to kReady as if the app had finished installing.
+  item.app_status = AppStatus::kReady;
+  model->Set(index, item);
+  EXPECT_EQ(button->app_status(), AppStatus::kReady);
+  ProgressIndicatorWaiter().WaitForProgress(progress_indicator, 0.0f);
+}
+
+TEST_F(ShelfViewPromiseAppTest, PromiseIconLayers) {
+  // Add platform app button.
+  ShelfID last_added = AddAppShortcut();
+  const std::string promise_app_id = last_added.app_id;
+  ShelfItem item = GetItemByID(last_added);
+  auto* model = GetModel();
+  int index = model->ItemIndexByID(last_added);
+  ShelfAppButton* button = GetButtonByID(last_added);
+
+  // Promise apps are created with app_status kPending.
+  item.app_status = AppStatus::kPending;
+  item.is_promise_app = true;
+  model->Set(index, item);
+
+  ProgressIndicator* progress_indicator = button->GetProgressIndicatorForTest();
+  ASSERT_TRUE(progress_indicator);
+  // Change app status to installing and send a progress update. Verify that the
+  // progress indicator correctly reflects the progress.
+  EXPECT_EQ(button->progress(), -1.0f);
+  EXPECT_EQ(button->app_status(), AppStatus::kPending);
+  ProgressIndicatorWaiter().WaitForProgress(progress_indicator, 0.0f);
+
+  // Start install progress bar.
+  item.app_status = AppStatus::kInstalling;
+  item.progress = 0.3f;
+  model->Set(index, item);
+
+  EXPECT_EQ(button->progress(), 0.3f);
+  EXPECT_EQ(button->app_status(), AppStatus::kInstalling);
+  EXPECT_TRUE(button->layer());
+
+  // Set the last status update to kInstallSuccess as if the app had finished
+  // installing.
+  item.app_status = AppStatus::kInstallSuccess;
+  model->Set(index, item);
+  EXPECT_EQ(button->app_status(), AppStatus::kInstallSuccess);
+  EXPECT_TRUE(button->layer());
+
+  gfx::ScopedAnimationDurationScaleMode non_zero_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+
+  // Simulate pushing the installed app.
+  model->RemoveItemAt(index);
+
+  ASSERT_TRUE(test_api_->HasPendingPromiseAppRemoval(promise_app_id));
+
+  {
+    ShelfItem installed_item;
+    installed_item.id = ShelfID("foo");
+    installed_item.title = u"Test app";
+    installed_item.type = TYPE_APP;
+    installed_item.package_id = promise_app_id;
+    ShelfModel::Get()->Add(
+        installed_item,
+        std::make_unique<TestShelfItemDelegate>(installed_item.id));
+    ShelfAppButton* installed_button = GetButtonByID(installed_item.id);
+
+    ASSERT_TRUE(installed_button->layer());
+    EXPECT_TRUE(test_api_->HasPendingPromiseAppRemoval(promise_app_id));
+
+    // Verify that the icon layer is animating.
+    EXPECT_FALSE(installed_button->layer()->GetAnimator()->is_animating());
+    EXPECT_TRUE(
+        installed_button->icon_view()->layer()->GetAnimator()->is_animating());
+    EXPECT_EQ(gfx::Transform(), installed_button->icon_view()
+                                    ->layer()
+                                    ->GetAnimator()
+                                    ->GetTargetTransform());
+    LayerAnimationWaiter animation_waiter(
+        installed_button->icon_view()->layer()->GetAnimator());
+    animation_waiter.Wait();
+  }
+
+  EXPECT_FALSE(test_api_->HasPendingPromiseAppRemoval(promise_app_id));
+}
+
+class ShelfViewWindowPreviewTest : public ShelfViewTest {
+ public:
+  ShelfViewWindowPreviewTest()
+      : ShelfViewTest(base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
+  ~ShelfViewWindowPreviewTest() override = default;
+
+  void SetUp() override {
+    ShelfViewTest::SetUp();
+
+    window1_ = CreateToplevelTestWindow({100, 100});
+    window2_ = CreateToplevelTestWindow({150, 0, 100, 100});
+
+    ShelfItem item;
+    item.id = ShelfID("test_app_id");
+    item.type = TYPE_APP;
+    auto delegate = std::make_unique<AppMenuTestShelfItemDelegate>(
+        item.id, window1_.get(), window2_.get());
+    item_index_ = ShelfModel::Get()->Add(item, std::move(delegate));
+    test_api_->RunMessageLoopUntilAnimationsDone();
+
+    ShelfAppButton* button = GetButtonByID(item.id);
+    ASSERT_TRUE(button);
+
+    // Click the button to open the application menu.
+    GetEventGenerator()->MoveMouseTo(button->GetBoundsInScreen().CenterPoint());
+    GetEventGenerator()->ClickLeftButton();
+
+    ASSERT_TRUE(menu_adapter());
+    ASSERT_TRUE(menu_adapter()->IsShowingMenu());
+    views::MenuItemView* root_menu = menu_adapter()->root_for_testing();
+    ASSERT_TRUE(root_menu);
+    ASSERT_TRUE(root_menu->HasSubmenu());
+    title_item_ = root_menu->GetSubmenu()->GetMenuItemAt(0);
+    item0_ = root_menu->GetSubmenu()->GetMenuItemAt(1);
+    item1_ = root_menu->GetSubmenu()->GetMenuItemAt(2);
+    ASSERT_TRUE(title_item_);
+    ASSERT_TRUE(item0_);
+    ASSERT_TRUE(item1_);
+  }
+
+  void TearDown() override {
+    CancelMenu();
+    if (item_index_ >= 0) {
+      ShelfModel::Get()->RemoveItemAt(item_index_);
+      test_api_->RunMessageLoopUntilAnimationsDone();
+    }
+    window2_.reset();
+    window1_.reset();
+    ShelfViewTest::TearDown();
+  }
+
+ protected:
+  ShelfMenuModelAdapter* menu_adapter() {
+    return GetShelfView()->shelf_menu_model_adapter_for_testing();
+  }
+
+  // Cancels the application menu, if open. Clears the menu item pointers
+  // first, as the items are deleted with the menu.
+  void CancelMenu() {
+    title_item_ = nullptr;
+    item0_ = nullptr;
+    item1_ = nullptr;
+    if (menu_adapter()) {
+      menu_adapter()->Cancel();
+      test_api_->RunMessageLoopUntilAnimationsDone();
+    }
+  }
+
+  base::test::ScopedFeatureList scoped_feature_list_{
+      features::kWindowPreviewOnShelf};
+  std::unique_ptr<aura::Window> window1_;
+  std::unique_ptr<aura::Window> window2_;
+  int item_index_ = -1;
+  raw_ptr<views::MenuItemView> title_item_ = nullptr;
+  raw_ptr<views::MenuItemView> item0_ = nullptr;
+  raw_ptr<views::MenuItemView> item1_ = nullptr;
+};
+
+TEST_F(ShelfViewWindowPreviewTest, ShowWindowPreviewAfterDelay) {
+  EXPECT_FALSE(menu_adapter()->preview_bubble());
+
+  // Hover item 0: preview bubble is not shown before kShowPreviewDelay.
+  GetEventGenerator()->MoveMouseTo(item0_->GetBoundsInScreen().CenterPoint());
+  EXPECT_TRUE(item0_->IsSelected());
+  EXPECT_FALSE(menu_adapter()->preview_bubble());
+
+  // Advance time by kShowPreviewDelay: preview bubble is shown for window 1.
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kShowPreviewDelay);
+  ASSERT_TRUE(menu_adapter()->preview_bubble());
+  EXPECT_EQ(window1_.get(), menu_adapter()->preview_bubble()->window());
+
+  display::Display display = display::Screen::Get()->GetDisplayNearestWindow(
+      menu_adapter()->preview_bubble()->GetWidget()->GetNativeWindow());
+  gfx::Rect bubble_bounds =
+      menu_adapter()->preview_bubble()->GetWidget()->GetWindowBoundsInScreen();
+  EXPECT_TRUE(display.work_area().Contains(bubble_bounds));
+  EXPECT_FALSE(bubble_bounds.Intersects(
+      GetPrimaryShelf()->shelf_widget()->GetWindowBoundsInScreen()));
+}
+
+TEST_F(ShelfViewWindowPreviewTest, SwitchMenuItemUpdatesPreviewInPlace) {
+  GetEventGenerator()->MoveMouseTo(item0_->GetBoundsInScreen().CenterPoint());
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kShowPreviewDelay);
+  ShelfWindowPreviewBubble* initial_bubble = menu_adapter()->preview_bubble();
+  ASSERT_TRUE(initial_bubble);
+  EXPECT_EQ(window1_.get(), initial_bubble->window());
+
+  // Hover item 1: the existing preview bubble is updated in-place immediately
+  // without recreation.
+  GetEventGenerator()->MoveMouseTo(item1_->GetBoundsInScreen().CenterPoint());
+  EXPECT_FALSE(item0_->IsSelected());
+  EXPECT_TRUE(item1_->IsSelected());
+  ASSERT_EQ(initial_bubble, menu_adapter()->preview_bubble());
+  EXPECT_EQ(window2_.get(), menu_adapter()->preview_bubble()->window());
+
+  display::Display display = display::Screen::Get()->GetDisplayNearestWindow(
+      menu_adapter()->preview_bubble()->GetWidget()->GetNativeWindow());
+  gfx::Rect bubble_bounds =
+      menu_adapter()->preview_bubble()->GetWidget()->GetWindowBoundsInScreen();
+  EXPECT_TRUE(display.work_area().Contains(bubble_bounds));
+  EXPECT_FALSE(bubble_bounds.Intersects(
+      GetPrimaryShelf()->shelf_widget()->GetWindowBoundsInScreen()));
+}
+
+TEST_F(ShelfViewWindowPreviewTest, UnselectMenuItemDelayedClose) {
+  GetEventGenerator()->MoveMouseTo(item0_->GetBoundsInScreen().CenterPoint());
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kShowPreviewDelay);
+  ShelfWindowPreviewBubble* initial_bubble = menu_adapter()->preview_bubble();
+  ASSERT_TRUE(initial_bubble);
+
+  // Move mouse to the non-selectable title item so item 0 is unselected.
+  // The bubble stays open during kClosePreviewDelay.
+  GetEventGenerator()->MoveMouseTo(
+      title_item_->GetBoundsInScreen().CenterPoint());
+  EXPECT_FALSE(item0_->IsSelected());
+  EXPECT_EQ(initial_bubble, menu_adapter()->preview_bubble());
+
+  // If another menu item is hovered before kClosePreviewDelay expires, the
+  // close timer is cancelled and the existing bubble is reused in place.
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kClosePreviewDelay /
+                                    2);
+  ASSERT_EQ(initial_bubble, menu_adapter()->preview_bubble());
+  GetEventGenerator()->MoveMouseTo(item1_->GetBoundsInScreen().CenterPoint());
+  EXPECT_TRUE(item1_->IsSelected());
+  ASSERT_EQ(initial_bubble, menu_adapter()->preview_bubble());
+  EXPECT_EQ(window2_.get(), menu_adapter()->preview_bubble()->window());
+
+  // Unselect item 1 and wait for the full kClosePreviewDelay: the preview
+  // bubble closes.
+  GetEventGenerator()->MoveMouseTo(
+      title_item_->GetBoundsInScreen().CenterPoint());
+  EXPECT_FALSE(item1_->IsSelected());
+  EXPECT_TRUE(menu_adapter()->preview_bubble());
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kClosePreviewDelay);
+  EXPECT_FALSE(menu_adapter()->preview_bubble());
+}
+
+TEST_F(ShelfViewWindowPreviewTest, WindowDestroyedClosesPreview) {
+  // Destroying a window while the show timer is pending prevents the preview
+  // bubble from being created when the timer fires.
+  GetEventGenerator()->MoveMouseTo(item0_->GetBoundsInScreen().CenterPoint());
+  EXPECT_TRUE(item0_->IsSelected());
+  window1_.reset();
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kShowPreviewDelay);
+  EXPECT_FALSE(menu_adapter()->preview_bubble());
+
+  // Destroying a window while its preview bubble is active immediately closes
+  // the preview bubble.
+  GetEventGenerator()->MoveMouseTo(item1_->GetBoundsInScreen().CenterPoint());
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kShowPreviewDelay);
+  ASSERT_TRUE(menu_adapter()->preview_bubble());
+  EXPECT_EQ(window2_.get(), menu_adapter()->preview_bubble()->window());
+
+  window2_.reset();
+  EXPECT_FALSE(menu_adapter()->preview_bubble());
+}
+
+TEST_F(ShelfViewWindowPreviewTest, StaysOpenWhileMouseOverPreview) {
+  GetEventGenerator()->MoveMouseTo(item0_->GetBoundsInScreen().CenterPoint());
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kShowPreviewDelay);
+  ShelfWindowPreviewBubble* initial_bubble = menu_adapter()->preview_bubble();
+  ASSERT_TRUE(initial_bubble);
+
+  // Moving the mouse onto the preview bubble unselects the item, but the
+  // bubble stays open while the mouse is over it.
+  const gfx::Rect preview_bounds =
+      initial_bubble->GetWidget()->GetWindowBoundsInScreen();
+  GetEventGenerator()->MoveMouseTo(preview_bounds.CenterPoint());
+  EXPECT_FALSE(item0_->IsSelected());
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kClosePreviewDelay *
+                                    2);
+  EXPECT_EQ(initial_bubble, menu_adapter()->preview_bubble());
+
+  // Moving the mouse back to the menu item keeps the same bubble.
+  GetEventGenerator()->MoveMouseTo(item0_->GetBoundsInScreen().CenterPoint());
+  EXPECT_TRUE(item0_->IsSelected());
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kClosePreviewDelay *
+                                    2);
+  EXPECT_EQ(initial_bubble, menu_adapter()->preview_bubble());
+
+  // Moving the mouse out of the preview bubble, away from the menu, closes it
+  // after kClosePreviewDelay.
+  GetEventGenerator()->MoveMouseTo(preview_bounds.CenterPoint());
+  GetEventGenerator()->MoveMouseTo(preview_bounds.top_center() -
+                                   gfx::Vector2d(0, 50));
+  EXPECT_EQ(initial_bubble, menu_adapter()->preview_bubble());
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kClosePreviewDelay);
+  EXPECT_FALSE(menu_adapter()->preview_bubble());
+  EXPECT_TRUE(menu_adapter()->IsShowingMenu());
+}
+
+TEST_F(ShelfViewWindowPreviewTest, ClickOnPreviewActivatesWindow) {
+  // `window2_` was created last and is the active window.
+  ASSERT_FALSE(wm::IsActiveWindow(window1_.get()));
+
+  GetEventGenerator()->MoveMouseTo(item0_->GetBoundsInScreen().CenterPoint());
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kShowPreviewDelay);
+  ASSERT_TRUE(menu_adapter()->preview_bubble());
+  EXPECT_EQ(window1_.get(), menu_adapter()->preview_bubble()->window());
+
+  // Clicking the preview bubble closes the menu and activates the window.
+  const gfx::Point preview_center = menu_adapter()
+                                        ->preview_bubble()
+                                        ->GetWidget()
+                                        ->GetWindowBoundsInScreen()
+                                        .CenterPoint();
+  title_item_ = nullptr;
+  item0_ = nullptr;
+  item1_ = nullptr;
+  GetEventGenerator()->MoveMouseTo(preview_center);
+  GetEventGenerator()->ClickLeftButton();
+  EXPECT_FALSE(menu_adapter());
+  EXPECT_TRUE(wm::IsActiveWindow(window1_.get()));
+}
+
+TEST_F(ShelfViewWindowPreviewTest, RightClickOnPreviewDoesNotActivateWindow) {
+  ASSERT_FALSE(wm::IsActiveWindow(window1_.get()));
+
+  GetEventGenerator()->MoveMouseTo(item0_->GetBoundsInScreen().CenterPoint());
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kShowPreviewDelay);
+  ASSERT_TRUE(menu_adapter()->preview_bubble());
+
+  const gfx::Point preview_center = menu_adapter()
+                                        ->preview_bubble()
+                                        ->GetWidget()
+                                        ->GetWindowBoundsInScreen()
+                                        .CenterPoint();
+  title_item_ = nullptr;
+  item0_ = nullptr;
+  item1_ = nullptr;
+  GetEventGenerator()->MoveMouseTo(preview_center);
+  GetEventGenerator()->ClickRightButton();
+  EXPECT_FALSE(wm::IsActiveWindow(window1_.get()));
+}
+
+TEST_F(ShelfViewWindowPreviewTest, TapOnPreviewActivatesWindow) {
+  ASSERT_FALSE(wm::IsActiveWindow(window1_.get()));
+
+  GetEventGenerator()->MoveMouseTo(item0_->GetBoundsInScreen().CenterPoint());
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kShowPreviewDelay);
+  ASSERT_TRUE(menu_adapter()->preview_bubble());
+
+  ui::test::TestEventHandler menu_handler;
+  aura::Window* menu_window = item0_->GetWidget()->GetNativeWindow();
+  menu_window->AddPreTargetHandler(&menu_handler);
+
+  const gfx::Point preview_center = menu_adapter()
+                                        ->preview_bubble()
+                                        ->GetWidget()
+                                        ->GetWindowBoundsInScreen()
+                                        .CenterPoint();
+
+  // Touch-dragging off the preview does not activate the window or leak touch
+  // or gesture events to the menu.
+  GetEventGenerator()->PressTouch(preview_center);
+  EXPECT_FALSE(wm::IsActiveWindow(window1_.get()));
+  ASSERT_TRUE(menu_adapter());
+  EXPECT_TRUE(menu_adapter()->preview_bubble());
+  GetEventGenerator()->MoveTouch({10, 10});
+  GetEventGenerator()->ReleaseTouch();
+  EXPECT_FALSE(wm::IsActiveWindow(window1_.get()));
+  ASSERT_TRUE(menu_adapter());
+  EXPECT_TRUE(menu_adapter()->preview_bubble());
+  EXPECT_EQ(0, menu_handler.num_touch_events());
+  EXPECT_EQ(0, menu_handler.num_gesture_events());
+
+  // Long-pressing on the preview does not activate the window, close the menu,
+  // or leak long-press/long-tap gestures to the menu.
+  GetEventGenerator()->PressTouch(preview_center);
+  task_environment()->FastForwardBy(base::Seconds(5));
+  GetEventGenerator()->ReleaseTouch();
+  EXPECT_FALSE(wm::IsActiveWindow(window1_.get()));
+  ASSERT_TRUE(menu_adapter());
+  EXPECT_TRUE(menu_adapter()->preview_bubble());
+  EXPECT_EQ(0, menu_handler.num_touch_events());
+  EXPECT_EQ(0, menu_handler.num_gesture_events());
+
+  menu_window->RemovePreTargetHandler(&menu_handler);
+
+  // Tapping the preview activates the window and closes the menu on release.
+  title_item_ = nullptr;
+  item0_ = nullptr;
+  item1_ = nullptr;
+  GetEventGenerator()->PressTouch(preview_center);
+  EXPECT_FALSE(wm::IsActiveWindow(window1_.get()));
+  ASSERT_TRUE(menu_adapter());
+  GetEventGenerator()->ReleaseTouch();
+  EXPECT_FALSE(menu_adapter());
+  EXPECT_TRUE(wm::IsActiveWindow(window1_.get()));
+}
+
+TEST_F(ShelfViewWindowPreviewTest,
+       PressingEscapeClosesPreviewAndKeepsMenuOpen) {
+  GetEventGenerator()->MoveMouseTo(item0_->GetBoundsInScreen().CenterPoint());
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kShowPreviewDelay);
+  ASSERT_TRUE(menu_adapter()->preview_bubble());
+
+  // Pressing 'Esc' closes the preview bubble, but keeps the menu open.
+  GetEventGenerator()->PressAndReleaseKey(ui::VKEY_ESCAPE);
+  EXPECT_FALSE(menu_adapter()->preview_bubble());
+  ASSERT_TRUE(menu_adapter());
+  EXPECT_TRUE(menu_adapter()->IsShowingMenu());
+
+  // Pressing 'Esc' again closes the menu.
+  title_item_ = nullptr;
+  item0_ = nullptr;
+  item1_ = nullptr;
+  GetEventGenerator()->PressAndReleaseKey(ui::VKEY_ESCAPE);
+  EXPECT_FALSE(menu_adapter());
+}
+
+TEST_F(ShelfViewWindowPreviewTest, ShiftEscapeCancelsMenuWithPreviewOpen) {
+  GetEventGenerator()->MoveMouseTo(item0_->GetBoundsInScreen().CenterPoint());
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kShowPreviewDelay);
+  ASSERT_TRUE(menu_adapter()->preview_bubble());
+
+  // Modified 'Esc' (Shift+Esc) is not swallowed by the preview bubble, so the
+  // menu's pre-target handler cancels the menu on key press.
+  title_item_ = nullptr;
+  item0_ = nullptr;
+  item1_ = nullptr;
+  GetEventGenerator()->PressKey(ui::VKEY_ESCAPE, ui::EF_SHIFT_DOWN);
+  EXPECT_FALSE(menu_adapter());
+  GetEventGenerator()->ReleaseKey(ui::VKEY_ESCAPE, ui::EF_SHIFT_DOWN);
+}
+
+TEST_F(ShelfViewWindowPreviewTest, TooltipBubbleAfterDelay) {
+  // Items without a window to preview show the tooltip returned by the
+  // delegate instead, if any, in a bubble anchored beside the menu.
+  window1_.reset();
+  window2_.reset();
+
+  // Hover item 0: the tooltip bubble is not shown before kShowPreviewDelay.
+  GetEventGenerator()->MoveMouseTo(item0_->GetBoundsInScreen().CenterPoint());
+  EXPECT_TRUE(item0_->IsSelected());
+  EXPECT_FALSE(menu_adapter()->tooltip_bubble());
+  EXPECT_FALSE(menu_adapter()->preview_bubble());
+
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kShowPreviewDelay);
+  ShelfBubble* tooltip_bubble = menu_adapter()->tooltip_bubble();
+  ASSERT_TRUE(tooltip_bubble);
+  EXPECT_FALSE(menu_adapter()->preview_bubble());
+  EXPECT_EQ(item0_, tooltip_bubble->GetAnchorView());
+
+  // The tooltip is placed beside the menu, within the work area.
+  const gfx::Rect bubble_bounds =
+      tooltip_bubble->GetWidget()->GetWindowBoundsInScreen();
+  EXPECT_FALSE(bubble_bounds.Intersects(item0_->GetBoundsInScreen()));
+  EXPECT_TRUE(display::Screen::Get()
+                  ->GetDisplayNearestWindow(
+                      tooltip_bubble->GetWidget()->GetNativeWindow())
+                  .work_area()
+                  .Contains(bubble_bounds));
+
+  // Item 1 has neither a window nor a tooltip: both bubbles are closed.
+  GetEventGenerator()->MoveMouseTo(item1_->GetBoundsInScreen().CenterPoint());
+  EXPECT_TRUE(item1_->IsSelected());
+  EXPECT_FALSE(menu_adapter()->tooltip_bubble());
+  EXPECT_FALSE(menu_adapter()->preview_bubble());
+
+  // Unselecting the item closes the tooltip bubble after kClosePreviewDelay.
+  GetEventGenerator()->MoveMouseTo(item0_->GetBoundsInScreen().CenterPoint());
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kShowPreviewDelay);
+  ASSERT_TRUE(menu_adapter()->tooltip_bubble());
+  GetEventGenerator()->MoveMouseTo(
+      title_item_->GetBoundsInScreen().CenterPoint());
+  EXPECT_FALSE(item0_->IsSelected());
+  EXPECT_TRUE(menu_adapter()->tooltip_bubble());
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kClosePreviewDelay);
+  EXPECT_FALSE(menu_adapter()->tooltip_bubble());
+}
+
+// Tests the side of the menu the tooltip bubble is placed on, by opening the
+// application menu from a shelf aligned to the left or right edge of the
+// screen.
+class ShelfViewTooltipBubbleSideTest
+    : public ShelfViewWindowPreviewTest,
+      public testing::WithParamInterface<ShelfAlignment> {
+ protected:
+  // Reopens the application menu from the shelf aligned to the parameter and
+  // returns its first item, which has a tooltip and no window to preview.
+  views::MenuItemView* ReopenMenuForParam() {
+    window1_.reset();
+    window2_.reset();
+    CancelMenu();
+    GetPrimaryShelf()->SetAlignment(GetParam());
+    test_api_->RunMessageLoopUntilAnimationsDone();
+
+    ShelfAppButton* button = GetButtonByID(ShelfID("test_app_id"));
+    CHECK(button);
+    GetEventGenerator()->MoveMouseTo(button->GetBoundsInScreen().CenterPoint());
+    GetEventGenerator()->ClickLeftButton();
+    CHECK(menu_adapter());
+    CHECK(menu_adapter()->IsShowingMenu());
+    views::SubmenuView* submenu =
+        menu_adapter()->root_for_testing()->GetSubmenu();
+    title_item_ = submenu->GetMenuItemAt(0);
+    item0_ = submenu->GetMenuItemAt(1);
+    item1_ = submenu->GetMenuItemAt(2);
+    return item0_;
+  }
+};
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         ShelfViewTooltipBubbleSideTest,
+                         testing::Values(ShelfAlignment::kLeft,
+                                         ShelfAlignment::kRight));
+
+TEST_P(ShelfViewTooltipBubbleSideTest, TooltipBubbleBesideMenu) {
+  views::MenuItemView* item0 = ReopenMenuForParam();
+  ASSERT_TRUE(item0);
+
+  GetEventGenerator()->MoveMouseTo(item0->GetBoundsInScreen().CenterPoint());
+  EXPECT_TRUE(item0->IsSelected());
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kShowPreviewDelay);
+  ShelfBubble* tooltip_bubble = menu_adapter()->tooltip_bubble();
+  ASSERT_TRUE(tooltip_bubble);
+
+  const gfx::Rect bubble_bounds =
+      tooltip_bubble->GetWidget()->GetWindowBoundsInScreen();
+  const gfx::Rect item_bounds = item0->GetBoundsInScreen();
+  if (GetParam() == ShelfAlignment::kLeft) {
+    // The menu is on the left half of the screen, so the tooltip is placed to
+    // the right of it.
+    EXPECT_EQ(views::BubbleBorder::LEFT_CENTER, tooltip_bubble->arrow());
+    EXPECT_GE(bubble_bounds.x(), item_bounds.right());
+  } else {
+    // The menu is on the right half of the screen, so the tooltip is placed to
+    // the left of it.
+    EXPECT_EQ(views::BubbleBorder::RIGHT_CENTER, tooltip_bubble->arrow());
+    EXPECT_LE(bubble_bounds.right(), item_bounds.x());
+  }
+  EXPECT_TRUE(display::Screen::Get()
+                  ->GetDisplayNearestWindow(
+                      tooltip_bubble->GetWidget()->GetNativeWindow())
+                  .work_area()
+                  .Contains(bubble_bounds));
+}
+
+TEST_F(ShelfViewWindowPreviewTest, SwitchBetweenPreviewAndTooltipBubble) {
+  // Item 0 has a tooltip, item 1 has a window to preview.
+  window1_.reset();
+
+  GetEventGenerator()->MoveMouseTo(item0_->GetBoundsInScreen().CenterPoint());
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kShowPreviewDelay);
+  ASSERT_TRUE(menu_adapter()->tooltip_bubble());
+  EXPECT_FALSE(menu_adapter()->preview_bubble());
+
+  // Switching to an item with a window replaces the tooltip bubble with the
+  // preview bubble immediately.
+  GetEventGenerator()->MoveMouseTo(item1_->GetBoundsInScreen().CenterPoint());
+  EXPECT_TRUE(item1_->IsSelected());
+  EXPECT_FALSE(menu_adapter()->tooltip_bubble());
+  ASSERT_TRUE(menu_adapter()->preview_bubble());
+  EXPECT_EQ(window2_.get(), menu_adapter()->preview_bubble()->window());
+
+  // Switching back replaces the preview bubble with the tooltip bubble
+  // immediately.
+  GetEventGenerator()->MoveMouseTo(item0_->GetBoundsInScreen().CenterPoint());
+  EXPECT_TRUE(item0_->IsSelected());
+  EXPECT_FALSE(menu_adapter()->preview_bubble());
+  ASSERT_TRUE(menu_adapter()->tooltip_bubble());
+  EXPECT_EQ(item0_, menu_adapter()->tooltip_bubble()->GetAnchorView());
+
+  // Closing the menu closes the tooltip bubble.
+  views::ViewTracker tooltip_tracker(menu_adapter()->tooltip_bubble());
+  CancelMenu();
+  EXPECT_FALSE(menu_adapter());
+  EXPECT_FALSE(tooltip_tracker.view());
+}
+
+namespace {
+
+class ShelfViewAppMenuHoverTest : public ShelfViewTest {
+ public:
+  ShelfViewAppMenuHoverTest()
+      : ShelfViewTest(base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
+  ~ShelfViewAppMenuHoverTest() override = default;
+
+  void SetUp() override {
+    ShelfViewTest::SetUp();
+
+    window1_ = CreateToplevelTestWindow({100, 100});
+    window2_ = CreateToplevelTestWindow({150, 0, 100, 100});
+
+    ShelfItem item;
+    item.id = ShelfID("test_app_id");
+    item.type = TYPE_APP;
+    auto delegate = std::make_unique<AppMenuTestShelfItemDelegate>(
+        item.id, window1_.get(), window2_.get());
+    ShelfModel::Get()->Add(item, std::move(delegate));
+    test_api_->RunMessageLoopUntilAnimationsDone();
+
+    button_ = GetButtonByID(item.id);
+    ASSERT_TRUE(button_);
+  }
+
+  void TearDown() override {
+    button_ = nullptr;
+    if (menu_adapter()) {
+      menu_adapter()->Cancel();
+      test_api_->RunMessageLoopUntilAnimationsDone();
+    }
+    const int index = ShelfModel::Get()->ItemIndexByID(ShelfID("test_app_id"));
+    if (index >= 0) {
+      ShelfModel::Get()->RemoveItemAt(index);
+      test_api_->RunMessageLoopUntilAnimationsDone();
+    }
+    window2_.reset();
+    window1_.reset();
+    ShelfViewTest::TearDown();
+  }
+
+ protected:
+  ShelfMenuModelAdapter* menu_adapter() {
+    return GetShelfView()->shelf_menu_model_adapter_for_testing();
+  }
+
+  base::test::ScopedFeatureList scoped_feature_list_{
+      features::kWindowPreviewOnShelf};
+  std::unique_ptr<aura::Window> window1_;
+  std::unique_ptr<aura::Window> window2_;
+  raw_ptr<ShelfAppButton> button_ = nullptr;
+};
+
+}  // namespace
+
+TEST_F(ShelfViewAppMenuHoverTest, OpensAppMenuOnHoverAfterDelay) {
+  EXPECT_FALSE(GetShelfView()->IsShowingMenu());
+
+  // Hovering over the button does not open the menu immediately.
+  GetEventGenerator()->MoveMouseTo(button_->GetBoundsInScreen().CenterPoint());
+  task_environment()->FastForwardBy(base::Milliseconds(200));
+  EXPECT_FALSE(GetShelfView()->IsShowingMenu());
+
+  // After 250ms total delay, the app menu opens via hover.
+  task_environment()->FastForwardBy(base::Milliseconds(50));
+  EXPECT_TRUE(GetShelfView()->IsShowingMenu());
+  ASSERT_TRUE(menu_adapter());
+  EXPECT_TRUE(menu_adapter()->opened_by_hover());
+}
+
+TEST_F(ShelfViewAppMenuHoverTest, ClosesWhenMouseLeavesShelfItem) {
+  GetEventGenerator()->MoveMouseTo(button_->GetBoundsInScreen().CenterPoint());
+  task_environment()->FastForwardBy(base::Milliseconds(250));
+  ASSERT_TRUE(GetShelfView()->IsShowingMenu());
+
+  // Move the mouse away from the shelf item into the empty desktop.
+  GetEventGenerator()->MoveMouseTo({0, 0});
+  EXPECT_TRUE(GetShelfView()->IsShowingMenu());
+
+  // The menu remains open before kCloseMenuDelay expires.
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kCloseMenuDelay -
+                                    base::Milliseconds(50));
+  EXPECT_TRUE(GetShelfView()->IsShowingMenu());
+
+  // After kCloseMenuDelay expires, the menu closes.
+  task_environment()->FastForwardBy(base::Milliseconds(50));
+  EXPECT_FALSE(GetShelfView()->IsShowingMenu());
+}
+
+TEST_F(ShelfViewAppMenuHoverTest, StaysOpenWhenMouseMovesToMenu) {
+  GetEventGenerator()->MoveMouseTo(button_->GetBoundsInScreen().CenterPoint());
+  task_environment()->FastForwardBy(base::Milliseconds(250));
+  ASSERT_TRUE(GetShelfView()->IsShowingMenu());
+  ASSERT_TRUE(menu_adapter());
+
+  views::Widget* menu_widget = menu_adapter()->GetSubmenuWidget();
+  ASSERT_TRUE(menu_widget);
+
+  // Move the mouse into the application menu window.
+  GetEventGenerator()->MoveMouseTo(
+      menu_widget->GetWindowBoundsInScreen().CenterPoint());
+
+  // The menu stays open indefinitely while inside the menu.
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kCloseMenuDelay * 2);
+  EXPECT_TRUE(GetShelfView()->IsShowingMenu());
+}
+
+TEST_F(ShelfViewAppMenuHoverTest, StaysOpenWhenMouseMovesToPreviewWindow) {
+  GetEventGenerator()->MoveMouseTo(button_->GetBoundsInScreen().CenterPoint());
+  task_environment()->FastForwardBy(base::Milliseconds(250));
+  ASSERT_TRUE(GetShelfView()->IsShowingMenu());
+  ASSERT_TRUE(menu_adapter());
+
+  views::MenuItemView* root_menu = menu_adapter()->root_for_testing();
+  ASSERT_TRUE(root_menu);
+  views::MenuItemView* item0 = root_menu->GetSubmenu()->GetMenuItemAt(1);
+  ASSERT_TRUE(item0);
+
+  // Hover item 0 to trigger the window preview bubble after kShowPreviewDelay.
+  GetEventGenerator()->MoveMouseTo(item0->GetBoundsInScreen().CenterPoint());
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kShowPreviewDelay);
+  ShelfWindowPreviewBubble* preview = menu_adapter()->preview_bubble();
+  ASSERT_TRUE(preview);
+  ASSERT_TRUE(preview->GetWidget());
+
+  // Move the mouse into the preview window.
+  GetEventGenerator()->MoveMouseTo(
+      preview->GetWidget()->GetWindowBoundsInScreen().CenterPoint());
+
+  // The menu and preview bubble remain open while inside the preview window.
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kCloseMenuDelay * 2);
+  EXPECT_TRUE(GetShelfView()->IsShowingMenu());
+  EXPECT_TRUE(menu_adapter()->preview_bubble());
+}
+
+TEST_F(ShelfViewAppMenuHoverTest, ClosesWhenMouseLeavesPreviewWindow) {
+  GetEventGenerator()->MoveMouseTo(button_->GetBoundsInScreen().CenterPoint());
+  task_environment()->FastForwardBy(base::Milliseconds(250));
+  ASSERT_TRUE(GetShelfView()->IsShowingMenu());
+  ASSERT_TRUE(menu_adapter());
+
+  views::MenuItemView* root_menu = menu_adapter()->root_for_testing();
+  ASSERT_TRUE(root_menu);
+  views::MenuItemView* item0 = root_menu->GetSubmenu()->GetMenuItemAt(1);
+  ASSERT_TRUE(item0);
+
+  GetEventGenerator()->MoveMouseTo(item0->GetBoundsInScreen().CenterPoint());
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kShowPreviewDelay);
+  ShelfWindowPreviewBubble* preview = menu_adapter()->preview_bubble();
+  ASSERT_TRUE(preview);
+  ASSERT_TRUE(preview->GetWidget());
+
+  // Move into the preview window.
+  GetEventGenerator()->MoveMouseTo(
+      preview->GetWidget()->GetWindowBoundsInScreen().CenterPoint());
+  task_environment()->FastForwardBy(base::Milliseconds(100));
+  EXPECT_TRUE(GetShelfView()->IsShowingMenu());
+
+  // Move outside of shelf item, menu, and preview window.
+  GetEventGenerator()->MoveMouseTo({0, 0});
+  EXPECT_TRUE(GetShelfView()->IsShowingMenu());
+
+  // After kCloseMenuDelay expires, the menu closes.
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kCloseMenuDelay);
+  EXPECT_FALSE(GetShelfView()->IsShowingMenu());
+}
+
+TEST_F(ShelfViewAppMenuHoverTest, ClickOpenedMenuDoesNotCloseOnMouseLeave) {
+  // Click the button to open the menu without hover.
+  GetEventGenerator()->MoveMouseTo(button_->GetBoundsInScreen().CenterPoint());
+  GetEventGenerator()->ClickLeftButton();
+  ASSERT_TRUE(GetShelfView()->IsShowingMenu());
+  ASSERT_TRUE(menu_adapter());
+  EXPECT_FALSE(menu_adapter()->opened_by_hover());
+
+  // Move the mouse away to the desktop.
+  GetEventGenerator()->MoveMouseTo({0, 0});
+
+  // The menu remains open even after kCloseMenuDelay expires.
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kCloseMenuDelay * 2);
+  EXPECT_TRUE(GetShelfView()->IsShowingMenu());
+}
+
+TEST_F(ShelfViewAppMenuHoverTest,
+       ClosesImmediatelyWhenMouseMovesToAnotherShelfButton) {
+  // Add a second app with multiple windows.
+  std::unique_ptr<aura::Window> window3 = CreateToplevelTestWindow({100, 100});
+  std::unique_ptr<aura::Window> window4 =
+      CreateToplevelTestWindow({150, 0, 100, 100});
+  ShelfItem item2;
+  item2.id = ShelfID("test_app_id_2");
+  item2.type = TYPE_APP;
+  auto delegate2 = std::make_unique<AppMenuTestShelfItemDelegate>(
+      item2.id, window3.get(), window4.get());
+  const int item2_index = ShelfModel::Get()->Add(item2, std::move(delegate2));
+  test_api_->RunMessageLoopUntilAnimationsDone();
+
+  ShelfAppButton* button2 = GetButtonByID(item2.id);
+  ASSERT_TRUE(button2);
+
+  // Hover over the first button to open its app menu.
+  GetEventGenerator()->MoveMouseTo(button_->GetBoundsInScreen().CenterPoint());
+  task_environment()->FastForwardBy(base::Milliseconds(250));
+  ASSERT_TRUE(GetShelfView()->IsShowingMenu());
+  ASSERT_TRUE(menu_adapter());
+  EXPECT_TRUE(menu_adapter()->opened_by_hover());
+
+  // Move the mouse directly to the second shelf button.
+  GetEventGenerator()->MoveMouseTo(button2->GetBoundsInScreen().CenterPoint());
+
+  // The first menu closes immediately without waiting for kCloseMenuDelay.
+  task_environment()->FastForwardBy(base::Milliseconds(1));
+  EXPECT_FALSE(GetShelfView()->IsShowingMenu());
+
+  // After the hover appearance delay on button2, the second menu opens.
+  task_environment()->FastForwardBy(base::Milliseconds(250));
+  EXPECT_TRUE(GetShelfView()->IsShowingMenu());
+  ASSERT_TRUE(menu_adapter());
+  EXPECT_TRUE(menu_adapter()->opened_by_hover());
+
+  menu_adapter()->Cancel();
+  test_api_->RunMessageLoopUntilAnimationsDone();
+  ShelfModel::Get()->RemoveItemAt(item2_index);
+  test_api_->RunMessageLoopUntilAnimationsDone();
+}
+
+TEST_F(ShelfViewAppMenuHoverTest, ClosesWithDelayWhenMouseMovesToShelfGap) {
+  // Add a second app so that there is a gap between two shelf buttons.
+  ShelfItem item2;
+  item2.id = ShelfID("test_app_id_2");
+  item2.type = TYPE_APP;
+  const int item2_index = ShelfModel::Get()->Add(
+      item2, std::make_unique<TestShelfItemDelegate>(item2.id));
+  test_api_->RunMessageLoopUntilAnimationsDone();
+
+  ShelfAppButton* button2 = GetButtonByID(item2.id);
+  ASSERT_TRUE(button2);
+  const gfx::Rect bounds1 = button_->GetBoundsInScreen();
+  const gfx::Rect bounds2 = button2->GetBoundsInScreen();
+  ASSERT_LT(bounds1.right(), bounds2.x());
+
+  GetEventGenerator()->MoveMouseTo(bounds1.CenterPoint());
+  task_environment()->FastForwardBy(base::Milliseconds(250));
+  ASSERT_TRUE(GetShelfView()->IsShowingMenu());
+
+  // Move the mouse into the gap between the two shelf buttons.
+  GetEventGenerator()->MoveMouseTo(
+      {(bounds1.right() + bounds2.x()) / 2, bounds1.CenterPoint().y()});
+
+  // The menu is not closed immediately.
+  task_environment()->FastForwardBy(base::Milliseconds(1));
+  EXPECT_TRUE(GetShelfView()->IsShowingMenu());
+
+  // The menu closes after kCloseMenuDelay.
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kCloseMenuDelay);
+  EXPECT_FALSE(GetShelfView()->IsShowingMenu());
+
+  ShelfModel::Get()->RemoveItemAt(item2_index);
+  test_api_->RunMessageLoopUntilAnimationsDone();
+}
+
+TEST_F(ShelfViewAppMenuHoverTest, StaysOpenOnKeyboardNavigation) {
+  GetEventGenerator()->MoveMouseTo(button_->GetBoundsInScreen().CenterPoint());
+  task_environment()->FastForwardBy(base::Milliseconds(250));
+  ASSERT_TRUE(GetShelfView()->IsShowingMenu());
+
+  // Move the mouse away from the shelf item into the empty desktop.
+  GetEventGenerator()->MoveMouseTo({0, 0});
+
+  // Navigate the menu using the keyboard.
+  GetEventGenerator()->PressKey(ui::VKEY_DOWN, ui::EF_NONE);
+
+  // The menu stays open despite the mouse being outside allowed bounds.
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kCloseMenuDelay * 2);
+  EXPECT_TRUE(GetShelfView()->IsShowingMenu());
+}
+
+TEST_F(ShelfViewAppMenuHoverTest, StaysOpenWhenMouseMovesToTooltipBubble) {
+  // Window 1 is reset so item 0 has no window preview, but has a tooltip.
+  window1_.reset();
+
+  GetEventGenerator()->MoveMouseTo(button_->GetBoundsInScreen().CenterPoint());
+  task_environment()->FastForwardBy(base::Milliseconds(250));
+  ASSERT_TRUE(GetShelfView()->IsShowingMenu());
+  ASSERT_TRUE(menu_adapter());
+
+  views::MenuItemView* root_menu = menu_adapter()->root_for_testing();
+  ASSERT_TRUE(root_menu);
+  views::MenuItemView* item0 = root_menu->GetSubmenu()->GetMenuItemAt(1);
+  ASSERT_TRUE(item0);
+
+  // Hover item 0 to trigger the tooltip bubble after kShowPreviewDelay.
+  GetEventGenerator()->MoveMouseTo(item0->GetBoundsInScreen().CenterPoint());
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kShowPreviewDelay);
+  ShelfBubble* tooltip = menu_adapter()->tooltip_bubble();
+  ASSERT_TRUE(tooltip);
+  ASSERT_TRUE(tooltip->GetWidget());
+
+  // Move the mouse into the tooltip bubble.
+  GetEventGenerator()->MoveMouseTo(
+      tooltip->GetWidget()->GetWindowBoundsInScreen().CenterPoint());
+
+  // The menu stays open indefinitely while inside the tooltip bubble.
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kCloseMenuDelay * 2);
+  EXPECT_TRUE(GetShelfView()->IsShowingMenu());
+}
+
+TEST_F(ShelfViewAppMenuHoverTest, ClosesWithDelayWhenMouseMovesToSeparator) {
+  // Add a pinned app so the separator appears between it and unpinned
+  // `button_`.
+  const ShelfID pinned_id = AddAppShortcut();
+  test_api_->RunMessageLoopUntilAnimationsDone();
+  ASSERT_TRUE(test_api_->IsSeparatorVisible());
+
+  ShelfAppButton* pinned_button = GetButtonByID(pinned_id);
+  ASSERT_TRUE(pinned_button);
+  const gfx::Rect pinned_bounds = pinned_button->GetBoundsInScreen();
+  const gfx::Rect bounds1 = button_->GetBoundsInScreen();
+  ASSERT_LT(pinned_bounds.right(), bounds1.x());
+
+  GetEventGenerator()->MoveMouseTo(bounds1.CenterPoint());
+  task_environment()->FastForwardBy(base::Milliseconds(250));
+  ASSERT_TRUE(GetShelfView()->IsShowingMenu());
+
+  // Move the mouse onto the separator between the pinned and unpinned buttons.
+  GetEventGenerator()->MoveMouseTo(
+      {(pinned_bounds.right() + bounds1.x()) / 2, bounds1.CenterPoint().y()});
+
+  // Crossing the separator should not close the menu immediately.
+  task_environment()->FastForwardBy(base::Milliseconds(1));
+  EXPECT_TRUE(GetShelfView()->IsShowingMenu());
+
+  // The menu closes after kCloseMenuDelay.
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kCloseMenuDelay);
+  EXPECT_FALSE(GetShelfView()->IsShowingMenu());
+}
+
+TEST_F(ShelfViewAppMenuHoverTest,
+       DoesNotFastCloseForScrolledOutOverflowButton) {
+  ScrollableShelfView* scrollable_shelf_view = GetPrimaryShelf()
+                                                   ->shelf_widget()
+                                                   ->hotseat_widget()
+                                                   ->scrollable_shelf_view();
+  ASSERT_TRUE(scrollable_shelf_view);
+
+  // Add unpinned apps until the shelf enters overflow and the last button lies
+  // completely outside `visible_space()`.
+  ShelfAppButton* overflow_button = nullptr;
+  while (true) {
+    ShelfItem item;
+    item.id = ShelfID("overflow_app_" +
+                      base::NumberToString(ShelfModel::Get()->item_count()));
+    item.type = TYPE_APP;
+    ShelfModel::Get()->Add(item,
+                           std::make_unique<TestShelfItemDelegate>(item.id));
+    test_api_->RunMessageLoopUntilAnimationsDone();
+
+    ShelfAppButton* candidate = GetButtonByID(item.id);
+    ASSERT_TRUE(candidate);
+    gfx::Rect visible_space_in_screen = scrollable_shelf_view->visible_space();
+    views::View::ConvertRectToScreen(scrollable_shelf_view,
+                                     &visible_space_in_screen);
+    if (!visible_space_in_screen.Intersects(candidate->GetBoundsInScreen())) {
+      overflow_button = candidate;
+      break;
+    }
+  }
+
+  GetEventGenerator()->MoveMouseTo(button_->GetBoundsInScreen().CenterPoint());
+  task_environment()->FastForwardBy(base::Milliseconds(250));
+  ASSERT_TRUE(GetShelfView()->IsShowingMenu());
+
+  // Move the mouse to the unclipped screen bounds of the scrolled-out button
+  // (outside `visible_space()`).
+  GetEventGenerator()->MoveMouseTo(
+      overflow_button->GetBoundsInScreen().CenterPoint());
+
+  // Scrolled-out buttons should not trigger an immediate close.
+  task_environment()->FastForwardBy(base::Milliseconds(1));
+  EXPECT_TRUE(GetShelfView()->IsShowingMenu());
+
+  // The menu closes after kCloseMenuDelay.
+  task_environment()->FastForwardBy(ShelfMenuModelAdapter::kCloseMenuDelay);
+  EXPECT_FALSE(GetShelfView()->IsShowingMenu());
+}
+
+TEST_F(ShelfViewAppMenuHoverTest,
+       MovingFromVisibleTooltipToMultiWindowItemUsesDelay) {
+  ShelfItem single_item;
+  single_item.id = ShelfID("test_app_id_2");
+  single_item.type = TYPE_APP;
+  single_item.title = u"Second App";
+  const int item2_index = ShelfModel::Get()->Add(
+      single_item, std::make_unique<TestShelfItemDelegate>(single_item.id));
+  test_api_->RunMessageLoopUntilAnimationsDone();
+
+  ShelfAppButton* button2 = GetButtonByID(single_item.id);
+  ASSERT_TRUE(button2);
+
+  // Hover `button2` until its tooltip bubble is visible.
+  GetEventGenerator()->MoveMouseTo(button2->GetBoundsInScreen().CenterPoint());
+  task_environment()->FastForwardBy(base::Milliseconds(250));
+  ASSERT_TRUE(test_api_->tooltip_manager()->IsVisible());
+  EXPECT_FALSE(GetShelfView()->IsShowingMenu());
+
+  // Move onto multi-window `button_`: the previous tooltip closes, and the app
+  // menu waits for the hover delay instead of popping open immediately.
+  GetEventGenerator()->MoveMouseTo(button_->GetBoundsInScreen().CenterPoint());
+  EXPECT_FALSE(test_api_->tooltip_manager()->IsVisible());
+  EXPECT_FALSE(GetShelfView()->IsShowingMenu());
+
+  task_environment()->FastForwardBy(base::Milliseconds(200));
+  EXPECT_FALSE(GetShelfView()->IsShowingMenu());
+
+  task_environment()->FastForwardBy(base::Milliseconds(50));
+  EXPECT_TRUE(GetShelfView()->IsShowingMenu());
+  ASSERT_TRUE(menu_adapter());
+  EXPECT_TRUE(menu_adapter()->opened_by_hover());
+
+  menu_adapter()->Cancel();
+  test_api_->RunMessageLoopUntilAnimationsDone();
+  ShelfModel::Get()->RemoveItemAt(item2_index);
+  test_api_->RunMessageLoopUntilAnimationsDone();
 }
 
 }  // namespace ash

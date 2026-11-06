@@ -1,20 +1,30 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_AUTOFILL_PAYMENTS_OFFER_NOTIFICATION_BUBBLE_CONTROLLER_IMPL_H_
 #define CHROME_BROWSER_UI_AUTOFILL_PAYMENTS_OFFER_NOTIFICATION_BUBBLE_CONTROLLER_IMPL_H_
 
-#include "base/macros.h"
+#include <optional>
+
+#include "base/auto_reset.h"
+#include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
+#include "base/time/time.h"
 #include "chrome/browser/ui/autofill/autofill_bubble_controller_base.h"
 #include "chrome/browser/ui/autofill/payments/offer_notification_bubble_controller.h"
-#include "components/autofill/core/browser/data_model/credit_card.h"
+#include "components/autofill/core/browser/data_model/payments/autofill_offer_data.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
+#include "ui/actions/action_id.h"
+
+namespace tabs {
+class TabInterface;
+}  // namespace tabs
 
 namespace autofill {
 
-struct AutofillOfferData;
+struct OfferNotificationOptions;
 
 // Implementation of per-tab class to control the offer notification bubble and
 // Omnibox icon.
@@ -40,58 +50,88 @@ class OfferNotificationBubbleControllerImpl
 
   // OfferBubbleController:
   std::u16string GetWindowTitle() const override;
-  std::u16string GetOkButtonLabel() const override;
   AutofillBubbleBase* GetOfferNotificationBubbleView() const override;
-  const CreditCard* GetLinkedCard() const override;
+  const AutofillOfferData* GetOffer() const override;
   bool IsIconVisible() const override;
-  void OnBubbleClosed(PaymentsBubbleClosedReason closed_reason) override;
+  void OnBubbleClosed(PaymentsUiClosedReason closed_reason) override;
 
-  // Displays an offer notification for the given |offer| on the current page.
-  // The information of the |card|, if present, will be displayed in the bubble
-  // for a card-linked offer.
-  void ShowOfferNotificationIfApplicable(const AutofillOfferData* offer,
-                                         const CreditCard* card);
+  // Displays an offer notification for the given `offer` on the current page.
+  // `options` contains information on how the offer notification should show.
+  void ShowOfferNotificationIfApplicable(
+      const AutofillOfferData& offer,
+      const OfferNotificationOptions& options);
 
   // Called when user clicks on omnibox icon.
   void ReshowBubble();
+
+  // Removes any visible bubble and the omnibox icon.
+  void DismissNotification();
+
+  // BubbleControllerBase:
+  void OnBubbleDiscarded() override {}
+  BubbleType GetBubbleType() const override;
+  base::WeakPtr<BubbleControllerBase> GetBubbleControllerBaseWeakPtr() override;
+
+  // Makes the bubble show in the active tab even if its browser window is not
+  // active, so that tests don't race other tests for window activation.
+  static base::AutoReset<bool> IgnoreWindowActivationForTesting();
 
  protected:
   explicit OfferNotificationBubbleControllerImpl(
       content::WebContents* web_contents);
 
   // AutofillBubbleControllerBase:
-  void DidFinishNavigation(
-      content::NavigationHandle* navigation_handle) override;
-  PageActionIconType GetPageActionIconType() override;
+  void OnVisibilityChanged(content::Visibility visibility) override;
   void DoShowBubble() override;
+  void UpdatePageActionIcon() override;
+#if !BUILDFLAG(IS_ANDROID)
+  std::optional<actions::ActionId> GetActionIdForPageAction() override;
+  bool ShouldShowPageAction() override;
+#endif  //! BUILDFLAG(IS_ANDROID)
+
+  // Returns whether the web content associated with this controller is active.
+  virtual bool IsWebContentsActive();
 
  private:
   friend class content::WebContentsUserData<
       OfferNotificationBubbleControllerImpl>;
+  friend class OfferNotificationBubbleControllerImplTest;
   friend class OfferNotificationBubbleViewsTestBase;
 
-  // Returns whether the web content associated with this controller is active.
-  bool IsWebContentsActive();
+  // Configures the controller's state for displaying an offer notification.
+  void SetupOfferNotification(AutofillOfferData offer);
+
+  // Hides the bubble if it is visible and resets the bubble shown timestamp.
+  // `should_show_icon` decides whether the icon should be visible after the
+  // bubble is dismissed.
+  void HideBubbleAndClearTimestamp(bool should_show_icon);
 
   // For testing.
   void SetEventObserverForTesting(ObserverForTest* observer) {
     observer_for_testing_ = observer;
   }
 
+  // The timestamp that the bubble has been shown. Used to check if the bubble
+  // has been shown for longer than kAutofillBubbleSurviveNavigationTime.
+  std::optional<base::Time> bubble_shown_timestamp_;
+
+  // The Autofill offer being displayed as a bubble. Set when the bubble is
+  // requested to be shown via ShowOfferNotificationIfApplicable(~).
+  AutofillOfferData offer_;
+
   // Denotes whether the bubble is shown due to user gesture. If this is true,
   // it means the bubble is a reshown bubble.
   bool is_user_gesture_ = false;
 
-  // The related credit card for a card linked offer. This can be nullopt for
-  // offer types other than card linked offers.
-  absl::optional<CreditCard> card_;
+  // Whether the omnibox icon for the bubble should be visible.
+  bool is_icon_visible_ = false;
 
-  // The bubble and icon are sticky over a given set of origins. This is
-  // populated when ShowOfferNotificationIfApplicable() is called and is cleared
-  // when navigating to a origins outside of this set.
-  std::vector<GURL> origins_to_display_bubble_;
+  raw_ptr<ObserverForTest> observer_for_testing_ = nullptr;
 
-  ObserverForTest* observer_for_testing_ = nullptr;
+  const raw_ref<tabs::TabInterface> tab_interface_;
+
+  base::WeakPtrFactory<OfferNotificationBubbleControllerImpl> weak_ptr_factory_{
+      this};
 
   WEB_CONTENTS_USER_DATA_KEY_DECL();
 };

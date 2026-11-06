@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "base/check.h"
+#include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_source.h"
 
 namespace blink {
@@ -31,10 +32,12 @@ void WebPlatformMediaStreamSource::StopSource() {
 
 void WebPlatformMediaStreamSource::FinalizeStopSource() {
   DCHECK(task_runner_->BelongsToCurrentThread());
-  if (!stop_callback_.is_null())
+  if (!stop_callback_.is_null()) {
     std::move(stop_callback_).Run(Owner());
-  if (Owner())
+  }
+  if (Owner()) {
     Owner().SetReadyState(WebMediaStreamSource::kReadyStateEnded);
+  }
 }
 
 void WebPlatformMediaStreamSource::SetSourceMuted(bool is_muted) {
@@ -42,8 +45,9 @@ void WebPlatformMediaStreamSource::SetSourceMuted(bool is_muted) {
   // Although this change is valid only if the ready state isn't already Ended,
   // there's code further along (like in MediaStreamTrack) which filters
   // that out already.
-  if (!Owner())
+  if (!Owner()) {
     return;
+  }
   Owner().SetReadyState(is_muted ? WebMediaStreamSource::kReadyStateMuted
                                  : WebMediaStreamSource::kReadyStateLive);
 }
@@ -56,12 +60,11 @@ void WebPlatformMediaStreamSource::SetDevice(const MediaStreamDevice& device) {
 void WebPlatformMediaStreamSource::SetCaptureHandle(
     media::mojom::CaptureHandlePtr capture_handle) {
   DCHECK(task_runner_->BelongsToCurrentThread());
-  if (!device_.display_media_info.has_value()) {
+  if (!device_.display_media_info) {
     DVLOG(1) << "Not a display-capture device.";
     return;
   }
-  auto& info = device_.display_media_info.value();
-  info->capture_handle = std::move(capture_handle);
+  device_.display_media_info->capture_handle = std::move(capture_handle);
 }
 
 void WebPlatformMediaStreamSource::SetStopCallback(
@@ -73,7 +76,6 @@ void WebPlatformMediaStreamSource::SetStopCallback(
 
 void WebPlatformMediaStreamSource::ResetSourceStoppedCallback() {
   DCHECK(task_runner_->BelongsToCurrentThread());
-  DCHECK(!stop_callback_.is_null());
   stop_callback_.Reset();
 }
 
@@ -85,7 +87,6 @@ void WebPlatformMediaStreamSource::ChangeSource(
 
 WebMediaStreamSource WebPlatformMediaStreamSource::Owner() {
   DCHECK(task_runner_->BelongsToCurrentThread());
-  DCHECK(owner_);
   return WebMediaStreamSource(owner_.Get());
 }
 

@@ -1,14 +1,16 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/download/internal/common/download_db_cache.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/task/sequenced_task_runner.h"
 #include "components/download/database/download_db.h"
 #include "components/download/database/download_db_conversions.h"
 #include "components/download/database/download_db_entry.h"
 #include "components/download/public/common/download_features.h"
+#include "components/download/public/common/download_item_impl.h"
 #include "components/download/public/common/download_stats.h"
 #include "components/download/public/common/download_utils.h"
 
@@ -27,41 +29,49 @@ enum class ShouldUpdateDownloadDBResult {
 };
 
 ShouldUpdateDownloadDBResult ShouldUpdateDownloadDB(
-    absl::optional<DownloadDBEntry> previous,
+    std::optional<DownloadDBEntry> previous,
     const DownloadDBEntry& current) {
   if (!previous)
     return ShouldUpdateDownloadDBResult::UPDATE_IMMEDIATELY;
 
-  absl::optional<InProgressInfo> previous_info;
+  std::optional<InProgressInfo> previous_info;
   if (previous->download_info)
     previous_info = previous->download_info->in_progress_info;
   base::FilePath previous_path =
       previous_info ? previous_info->current_path : base::FilePath();
-  bool previous_paused = previous_info ? previous_info->paused : false;
 
-  absl::optional<InProgressInfo> current_info;
+  bool previous_paused = previous_info && previous_info->paused;
+  DownloadDangerType previous_danger_type =
+      previous_info ? previous_info->danger_type
+                    : DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS;
+
+  std::optional<InProgressInfo> current_info;
   if (current.download_info)
     current_info = current.download_info->in_progress_info;
 
   base::FilePath current_path;
   bool paused = false;
+  DownloadDangerType danger_type = DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS;
   GURL url;
   DownloadItem::DownloadState state = DownloadItem::DownloadState::IN_PROGRESS;
   DownloadInterruptReason interrupt_reason = DOWNLOAD_INTERRUPT_REASON_NONE;
   if (current_info) {
-    base::FilePath current_path = current_info->current_path;
+    current_path = current_info->current_path;
     paused = current_info->paused;
+    danger_type = current_info->danger_type;
     if (!current_info->url_chain.empty())
       url = current_info->url_chain.back();
     state = current_info->state;
     interrupt_reason = current_info->interrupt_reason;
   }
 
-  // When download path is determined, Chrome should commit the history
-  // immediately. Otherwise the file will be left permanently on the external
-  // storage if Chrome crashes right away.
-  if (current_path != previous_path || paused != previous_paused)
+  // When download path is determined, paused state changes, or the danger
+  // type changes, Chrome should commit the history immediately so that the state
+  // is not lost if Chrome crashes or is killed right away.
+  if (current_path != previous_path || paused != previous_paused ||
+      danger_type != previous_danger_type) {
     return ShouldUpdateDownloadDBResult::UPDATE_IMMEDIATELY;
+  }
 
   if (previous.value() == current)
     return ShouldUpdateDownloadDBResult::NO_UPDATE;
@@ -76,7 +86,7 @@ void CleanUpInProgressEntry(DownloadDBEntry* entry) {
   if (!entry->download_info)
     return;
 
-  absl::optional<InProgressInfo>& in_progress_info =
+  std::optional<InProgressInfo>& in_progress_info =
       entry->download_info->in_progress_info;
   if (!in_progress_info)
     return;
@@ -98,7 +108,7 @@ void OnDownloadDBUpdated(bool success) {
 }
 
 // Check if a DownloadDBEntry represents an in progress download.
-bool IsInProgressEntry(absl::optional<DownloadDBEntry> entry) {
+bool IsInProgressEntry(std::optional<DownloadDBEntry> entry) {
   if (!entry || !entry->download_info ||
       !entry->download_info->in_progress_info)
     return false;
@@ -123,12 +133,12 @@ void DownloadDBCache::Initialize(InitializeCallback callback) {
                      weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
-absl::optional<DownloadDBEntry> DownloadDBCache::RetrieveEntry(
+std::optional<DownloadDBEntry> DownloadDBCache::RetrieveEntry(
     const std::string& guid) {
   auto iter = cached_entries_.find(guid);
   if (iter != cached_entries_.end())
     return iter->second;
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 void DownloadDBCache::AddOrReplaceEntry(const DownloadDBEntry& entry) {
@@ -141,8 +151,7 @@ void DownloadDBCache::AddOrReplaceEntry(const DownloadDBEntry& entry) {
     return;
   if (!update_timer_.IsRunning() &&
       result == ShouldUpdateDownloadDBResult::UPDATE) {
-    update_timer_.Start(FROM_HERE,
-                        base::TimeDelta::FromMilliseconds(kUpdateDBIntervalMs),
+    update_timer_.Start(FROM_HERE, base::Milliseconds(kUpdateDBIntervalMs),
                         this, &DownloadDBCache::UpdateDownloadDB);
   }
 
@@ -167,7 +176,7 @@ void DownloadDBCache::UpdateDownloadDB() {
 
   std::vector<DownloadDBEntry> entries;
   for (const auto& guid : updated_guids_) {
-    absl::optional<DownloadDBEntry> entry = RetrieveEntry(guid);
+    std::optional<DownloadDBEntry> entry = RetrieveEntry(guid);
     DCHECK(entry);
     entries.emplace_back(entry.value());
     // If the entry is no longer in-progress, remove it from the cache as it may
@@ -196,12 +205,10 @@ void DownloadDBCache::OnDownloadDBInitialized(
     InitializeCallback callback,
     bool success) {
   if (success) {
-    RecordInProgressDBCount(kInitializationSucceededCount);
     download_db_->LoadEntries(
         base::BindOnce(&DownloadDBCache::OnDownloadDBEntriesLoaded,
                        weak_factory_.GetWeakPtr(), std::move(callback)));
   } else {
-    RecordInProgressDBCount(kInitializationFailedCount);
     std::move(callback).Run(false,
                             std::make_unique<std::vector<DownloadDBEntry>>());
   }
@@ -212,7 +219,6 @@ void DownloadDBCache::OnDownloadDBEntriesLoaded(
     bool success,
     std::unique_ptr<std::vector<DownloadDBEntry>> entries) {
   initialized_ = success;
-  RecordInProgressDBCount(success ? kLoadSucceededCount : kLoadFailedCount);
   for (auto& entry : *entries) {
     // If the entry is from the metadata cache migration, just remove it from
     // DB as the data is not being cleaned up properly.

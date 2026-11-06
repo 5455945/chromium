@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,11 @@
 
 #include <memory>
 
+#include "base/notimplemented.h"
 #include "build/build_config.h"
 #include "net/net_buildflags.h"
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 #include "chrome/browser/local_discovery/service_discovery_client_mac_factory.h"
 #endif
 
@@ -29,34 +30,34 @@ ServiceDiscoverySharedClient* g_service_discovery_client = nullptr;
 }  // namespace
 
 ServiceDiscoverySharedClient::ServiceDiscoverySharedClient() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(!g_service_discovery_client);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
+  CHECK(!g_service_discovery_client, base::NotFatalUntil::M161);
   g_service_discovery_client = this;
 }
 
 ServiceDiscoverySharedClient::~ServiceDiscoverySharedClient() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK_EQ(g_service_discovery_client, this);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
+  CHECK_EQ(g_service_discovery_client, this, base::NotFatalUntil::M161);
   g_service_discovery_client = nullptr;
 }
 
 // static
 scoped_refptr<ServiceDiscoverySharedClient>
     ServiceDiscoverySharedClient::GetInstance() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-#if BUILDFLAG(ENABLE_MDNS) || defined(OS_MAC)
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
+#if BUILDFLAG(ENABLE_MDNS) || BUILDFLAG(IS_MAC)
   if (g_service_discovery_client)
     return g_service_discovery_client;
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   return ServiceDiscoveryClientMacFactory::CreateInstance();
 #else
   return base::MakeRefCounted<ServiceDiscoveryClientMdns>();
-#endif  // defined(OS_MAC)
+#endif  // BUILDFLAG(IS_MAC)
 #else
   NOTIMPLEMENTED();
   return nullptr;
-#endif  // BUILDFLAG(ENABLE_MDNS) || defined(OS_MAC)
+#endif  // BUILDFLAG(ENABLE_MDNS) || BUILDFLAG(IS_MAC)
 }
 
 }  // namespace local_discovery

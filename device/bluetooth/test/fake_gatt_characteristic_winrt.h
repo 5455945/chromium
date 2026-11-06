@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,11 +12,11 @@
 
 #include <stdint.h>
 
+#include <string_view>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
-#include "base/strings/string_piece_forward.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "device/bluetooth/bluetooth_gatt_service.h"
 
 namespace device {
@@ -35,10 +35,15 @@ class FakeGattCharacteristicWinrt
  public:
   FakeGattCharacteristicWinrt(BluetoothTestWinrt* bluetooth_test_winrt,
                               int properties,
-                              base::StringPiece uuid,
+                              std::string_view uuid,
                               uint16_t attribute_handle);
 
+  FakeGattCharacteristicWinrt(const FakeGattCharacteristicWinrt&) = delete;
+  FakeGattCharacteristicWinrt& operator=(const FakeGattCharacteristicWinrt&) =
+      delete;
+
   ~FakeGattCharacteristicWinrt() override;
+  void ClearBluetoothTestWinrt();
 
   // IGattCharacteristic:
   IFACEMETHODIMP GetDescriptors(
@@ -153,7 +158,7 @@ class FakeGattCharacteristicWinrt
   void SimulateGattCharacteristicWrite();
   void SimulateGattCharacteristicWriteError(
       BluetoothGattService::GattErrorCode error_code);
-  void SimulateGattDescriptor(base::StringPiece uuid);
+  void SimulateGattDescriptor(std::string_view uuid);
   void SimulateGattNotifySessionStarted();
   void SimulateGattNotifySessionStartError(
       BluetoothGattService::GattErrorCode error_code);
@@ -163,7 +168,7 @@ class FakeGattCharacteristicWinrt
   void SimulateGattCharacteristicChanged(const std::vector<uint8_t>& value);
 
  private:
-  BluetoothTestWinrt* bluetooth_test_winrt_;
+  raw_ptr<BluetoothTestWinrt> bluetooth_test_winrt_;
   ABI::Windows::Devices::Bluetooth::GenericAttributeProfile::
       GattCharacteristicProperties properties_;
   GUID uuid_;
@@ -192,8 +197,6 @@ class FakeGattCharacteristicWinrt
   std::vector<Microsoft::WRL::ComPtr<FakeGattDescriptorWinrt>>
       fake_descriptors_;
   uint16_t last_descriptor_attribute_handle_;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeGattCharacteristicWinrt);
 };
 
 }  // namespace device

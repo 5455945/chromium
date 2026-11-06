@@ -115,21 +115,21 @@ static OPUS_INLINE void silk_noise_shape_quantizer_del_dec(
 );
 
 void silk_NSQ_del_dec_c(
-    const silk_encoder_state    *psEncC,                                    /* I    Encoder State                   */
-    silk_nsq_state              *NSQ,                                       /* I/O  NSQ state                       */
-    SideInfoIndices             *psIndices,                                 /* I/O  Quantization Indices            */
+    const silk_encoder_state    *psEncC,                                      /* I    Encoder State                   */
+    silk_nsq_state              *NSQ,                                         /* I/O  NSQ state                       */
+    SideInfoIndices             *psIndices,                                   /* I/O  Quantization Indices            */
     const opus_int16            x16[],                                        /* I    Input                           */
-    opus_int8                   pulses[],                                   /* O    Quantized pulse signal          */
-    const opus_int16            PredCoef_Q12[ 2 * MAX_LPC_ORDER ],          /* I    Short term prediction coefs     */
-    const opus_int16            LTPCoef_Q14[ LTP_ORDER * MAX_NB_SUBFR ],    /* I    Long term prediction coefs      */
-    const opus_int16            AR_Q13[ MAX_NB_SUBFR * MAX_SHAPE_LPC_ORDER ], /* I Noise shaping coefs              */
-    const opus_int              HarmShapeGain_Q14[ MAX_NB_SUBFR ],          /* I    Long term shaping coefs         */
-    const opus_int              Tilt_Q14[ MAX_NB_SUBFR ],                   /* I    Spectral tilt                   */
-    const opus_int32            LF_shp_Q14[ MAX_NB_SUBFR ],                 /* I    Low frequency shaping coefs     */
-    const opus_int32            Gains_Q16[ MAX_NB_SUBFR ],                  /* I    Quantization step sizes         */
-    const opus_int              pitchL[ MAX_NB_SUBFR ],                     /* I    Pitch lags                      */
-    const opus_int              Lambda_Q10,                                 /* I    Rate/distortion tradeoff        */
-    const opus_int              LTP_scale_Q14                               /* I    LTP state scaling               */
+    opus_int8                   pulses[],                                     /* O    Quantized pulse signal          */
+    const opus_int16            *PredCoef_Q12,                                /* I    Short term prediction coefs     */
+    const opus_int16            LTPCoef_Q14[ LTP_ORDER * MAX_NB_SUBFR ],      /* I    Long term prediction coefs      */
+    const opus_int16            AR_Q13[ MAX_NB_SUBFR * MAX_SHAPE_LPC_ORDER ], /* I    Noise shaping coefs             */
+    const opus_int              HarmShapeGain_Q14[ MAX_NB_SUBFR ],            /* I    Long term shaping coefs         */
+    const opus_int              Tilt_Q14[ MAX_NB_SUBFR ],                     /* I    Spectral tilt                   */
+    const opus_int32            LF_shp_Q14[ MAX_NB_SUBFR ],                   /* I    Low frequency shaping coefs     */
+    const opus_int32            Gains_Q16[ MAX_NB_SUBFR ],                    /* I    Quantization step sizes         */
+    const opus_int              pitchL[ MAX_NB_SUBFR ],                       /* I    Pitch lags                      */
+    const opus_int              Lambda_Q10,                                   /* I    Rate/distortion tradeoff        */
+    const opus_int              LTP_scale_Q14                                 /* I    LTP state scaling               */
 )
 {
     opus_int            i, k, lag, start_idx, LSF_interpolation_flag, Winner_ind, subfr;
@@ -464,7 +464,7 @@ static OPUS_INLINE void silk_noise_shape_quantizer_del_dec(
             /* Input minus prediction plus noise feedback                       */
             /* r = x[ i ] - LTP_pred - LPC_pred + n_AR + n_Tilt + n_LF + n_LTP  */
             tmp1 = silk_ADD_SAT32( n_AR_Q14, n_LF_Q14 );                                /* Q14 */
-            tmp2 = silk_ADD32( n_LTP_Q14, LPC_pred_Q14 );                               /* Q13 */
+            tmp2 = silk_ADD32_ovflw( n_LTP_Q14, LPC_pred_Q14 );                         /* Q13 */
             tmp1 = silk_SUB_SAT32( tmp2, tmp1 );                                        /* Q13 */
             tmp1 = silk_RSHIFT_ROUND( tmp1, 4 );                                        /* Q10 */
 
@@ -542,10 +542,10 @@ static OPUS_INLINE void silk_noise_shape_quantizer_del_dec(
 
             /* Add predictions */
             LPC_exc_Q14 = silk_ADD32( exc_Q14, LTP_pred_Q14 );
-            xq_Q14      = silk_ADD32( LPC_exc_Q14, LPC_pred_Q14 );
+            xq_Q14      = silk_ADD32_ovflw( LPC_exc_Q14, LPC_pred_Q14 );
 
             /* Update states */
-            psSS[ 0 ].Diff_Q14     = silk_SUB_LSHIFT32( xq_Q14, x_Q10[ i ], 4 );
+            psSS[ 0 ].Diff_Q14     = silk_SUB32_ovflw( xq_Q14, silk_LSHIFT32( x_Q10[ i ], 4 ) );
 #if defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION)
             sLF_AR_shp_Q14         = silk_SUB32_ovflw( psSS[ 0 ].Diff_Q14, n_AR_Q14 );
 #else
@@ -566,10 +566,10 @@ static OPUS_INLINE void silk_noise_shape_quantizer_del_dec(
 
             /* Add predictions */
             LPC_exc_Q14 = silk_ADD32( exc_Q14, LTP_pred_Q14 );
-            xq_Q14      = silk_ADD32( LPC_exc_Q14, LPC_pred_Q14 );
+            xq_Q14      = silk_ADD32_ovflw( LPC_exc_Q14, LPC_pred_Q14 );
 
             /* Update states */
-            psSS[ 1 ].Diff_Q14     = silk_SUB_LSHIFT32( xq_Q14, x_Q10[ i ], 4 );
+            psSS[ 1 ].Diff_Q14     = silk_SUB32_ovflw( xq_Q14, silk_LSHIFT32( x_Q10[ i ], 4 ) );
 #if defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION)
             sLF_AR_shp_Q14         = silk_SUB32_ovflw( psSS[ 1 ].Diff_Q14, n_AR_Q14 );
 #else

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,16 @@
 
 #include <vector>
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "media/base/video_color_space.h"
 #include "media/gpu/codec_picture.h"
 #include "media/gpu/media_gpu_export.h"
 
 namespace media {
 
+class V4L2H265Picture;
 class VaapiH265Picture;
+class D3D11H265Picture;
 
 // A picture (a frame or a field) in the H.265 spec sense.
 // See spec at http://www.itu.int/rec/T-REC-H.265
@@ -27,7 +29,9 @@ class MEDIA_GPU_EXPORT H265Picture : public CodecPicture {
   H265Picture(const H265Picture&) = delete;
   H265Picture& operator=(const H265Picture&) = delete;
 
+  virtual V4L2H265Picture* AsV4L2H265Picture();
   virtual VaapiH265Picture* AsVaapiH265Picture();
+  virtual D3D11H265Picture* AsD3D11H265Picture();
 
   enum ReferenceType {
     kUnused = 0,
@@ -64,6 +68,7 @@ class MEDIA_GPU_EXPORT H265Picture : public CodecPicture {
   bool no_output_of_prior_pics_flag_{false};
   bool pic_output_flag_{false};
   bool valid_for_prev_tid0_pic_{false};
+  uint32_t pic_latency_count_{0};
   int slice_pic_order_cnt_lsb_{0};
   int pic_order_cnt_msb_{0};
   int pic_order_cnt_val_{0};
@@ -99,17 +104,15 @@ class H265DPB {
   // Removes all entries from the DPB.
   void Clear();
 
-  // Stores |pic| in the DPB. If |used_for_long_term| is true it'll be marked as
-  // used for long term reference, otherwise it'll be marked as used for short
-  // term reference.
+  // Stores |pic| in the DPB and marks it with |ref|.
   void StorePicture(scoped_refptr<H265Picture> pic,
                     H265Picture::ReferenceType ref);
 
   // Mark all pictures in DPB as unused for reference.
   void MarkAllUnusedForReference();
 
-  // Removes all pictures from the DPB that do not have |pic_output_flag_| set
-  // and are marked Unused for reference.
+  // Removes pictures that are no longer needed for output (PicOutputFlag is 0,
+  // or they have already been outputted) and are marked unused for reference.
   void DeleteUnused();
 
   // Returns the number of pictures in the DPB that are marked for reference.
@@ -127,7 +130,7 @@ class H265DPB {
   GetPicByPocMaskedAndMark(int poc, int mask, H265Picture::ReferenceType ref);
 
   // Appends to |out| all of the pictures in the DPB that are flagged for output
-  // but have not be outputted yet.
+  // but have not been outputted yet.
   void AppendPendingOutputPics(H265Picture::Vector* out);
 
   // Appends to |out| all of the pictures in the DPB that are not marked as

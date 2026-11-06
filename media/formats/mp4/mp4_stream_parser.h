@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,13 @@
 #include <stdint.h>
 
 #include <memory>
-#include <set>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/containers/flat_map.h"
+#include "base/containers/flat_set.h"
+#include "base/memory/raw_ptr.h"
+#include "media/base/demuxer_stream.h"
 #include "media/base/media_export.h"
 #include "media/base/stream_parser.h"
 #include "media/formats/common/offset_byte_queue.h"
@@ -25,7 +26,10 @@
 #endif
 
 namespace media {
-namespace mp4 {
+class StreamParserMetadataTrack;
+}
+
+namespace media::mp4 {
 
 struct Movie;
 struct MovieHeader;
@@ -34,22 +38,29 @@ class BoxReader;
 
 class MEDIA_EXPORT MP4StreamParser : public StreamParser {
  public:
-  MP4StreamParser(const std::set<int>& audio_object_types,
+  MP4StreamParser(std::optional<base::flat_set<int>> strict_audio_object_types,
                   bool has_sbr,
-                  bool has_flac);
+                  bool has_flac,
+                  bool has_iamf,
+                  bool has_dv);
+
+  MP4StreamParser(const MP4StreamParser&) = delete;
+  MP4StreamParser& operator=(const MP4StreamParser&) = delete;
+
   ~MP4StreamParser() override;
 
   void Init(InitCB init_cb,
-            const NewConfigCB& config_cb,
-            const NewBuffersCB& new_buffers_cb,
-            bool ignore_text_tracks,
-            const EncryptedMediaInitDataCB& encrypted_media_init_data_cb,
-            const NewMediaSegmentCB& new_segment_cb,
-            const EndMediaSegmentCB& end_of_segment_cb,
+            NewConfigCB config_cb,
+            NewBuffersCB new_buffers_cb,
+            EncryptedMediaInitDataCB encrypted_media_init_data_cb,
+            NewMediaSegmentCB new_segment_cb,
+            EndMediaSegmentCB end_of_segment_cb,
             MediaLog* media_log) override;
   void Flush() override;
   bool GetGenerateTimestampsFlag() const override;
-  bool Parse(const uint8_t* buf, int size) override;
+  [[nodiscard]] bool AppendToParseBuffer(
+      base::span<const uint8_t> buf) override;
+  [[nodiscard]] ParseStatus Parse(int max_pending_bytes_to_inspect) override;
 
   // Calculates the rotation value from the track header display matricies.
   VideoTransformation CalculateRotation(const TrackHeader& track,
@@ -63,6 +74,11 @@ class MEDIA_EXPORT MP4StreamParser : public StreamParser {
     kEmittingSamples,
     kError
   };
+
+  // Wrappers of `queue_` that observe constraint of `max_parse_offset_`.
+  base::span<const uint8_t> ModulatedPeek();
+  base::span<const uint8_t> ModulatedPeekAt(int64_t offset);
+  bool ModulatedTrim(int64_t max_offset);
 
   ParseResult ParseBox();
   bool ParseMoov(mp4::BoxReader* reader);
@@ -84,13 +100,9 @@ class MEDIA_EXPORT MP4StreamParser : public StreamParser {
   void ChangeState(State new_state);
 
   bool EmitConfigs();
-#if BUILDFLAG(USE_PROPRIETARY_CODECS)
-  bool PrepareAACBuffer(const AAC& aac_config,
-                        std::vector<uint8_t>* frame_buf,
-                        std::vector<SubsampleEntry>* subsamples) const;
-#endif
   ParseResult EnqueueSample(BufferQueueMap* buffers);
-  bool SendAndFlushSamples(BufferQueueMap* buffers);
+  bool SendAndFlushSamples(BufferQueueMap* buffers,
+                           bool all_samples_in_segment_received);
 
   void Reset();
 
@@ -110,8 +122,21 @@ class MEDIA_EXPORT MP4StreamParser : public StreamParser {
   EncryptedMediaInitDataCB encrypted_media_init_data_cb_;
   NewMediaSegmentCB new_segment_cb_;
   EndMediaSegmentCB end_of_segment_cb_;
-  MediaLog* media_log_;
+  std::unique_ptr<MediaLog> media_log_;
 
+  // Bytes of the mp4 stream.
+  // `max_parse_offset_` tracks the point in `queue_` beyond which no data may
+  // yet be parsed even if it is less than the queue's tail offset. This allows
+  // incremental parsing. `max_parse_offset_` must be less than or equal to the
+  // queue_'s current tail offset. Note that operations like Trim() and PeekAt()
+  // on the offset queue can involve offsets beyond tail or `max_parse_offset_`,
+  // so this parser must consider `max_parse_offset_` too when using those
+  // operations, otherwise more data than the amount indicated in the Parse()
+  // call's `max_pending_bytes_to_inspect` increment might be inspected in a
+  // Parse() call. See the various Modulated*() wrappers in this class.
+  // TODO(crbug.com/40815633): Consider reworking all these parsers to
+  // use a new type of queue that internally modulates the increment.
+  int64_t max_parse_offset_ = 0;
   OffsetByteQueue queue_;
 
   // These two parameters are only valid in the |kEmittingSegments| state.
@@ -134,13 +159,26 @@ class MEDIA_EXPORT MP4StreamParser : public StreamParser {
 
   bool has_audio_;
   bool has_video_;
-  std::set<uint32_t> audio_track_ids_;
-  std::set<uint32_t> video_track_ids_;
+
+  // Used to prevent reused track IDs.
+  base::flat_map<uint32_t, DemuxerStream::Type> track_ids_;
+  base::flat_map<uint32_t, std::unique_ptr<StreamParserMetadataTrack>>
+      metadata_tracks_;
+
   // The object types allowed for audio tracks. For FLAC indication, use
-  // |has_flac_|;
-  const std::set<int> audio_object_types_;
+  // |has_flac_|. If this is a nullopt, then strict object type assertion will
+  // not happen.
+  const std::optional<base::flat_set<int>> strict_audio_object_types_;
   const bool has_sbr_;
   const bool has_flac_;
+  const bool has_iamf_;
+  // Indicate if source buffer has been set as Dolby Vision. If true,
+  // always treat the source buffer as Dolby Vision, if false and if
+  // the source buffer is cross-compatible, use its compatible codec
+  // defined in Dolby Vision Profiles and Levels specification:
+  // https://professionalsupport.dolby.com/s/article/What-is-Dolby-Vision-Profile,
+  // otherwise still treat the buffer as Dolby Vision.
+  const bool has_dv_;
 
   // Tracks the number of MEDIA_LOGS for skipping empty trun samples.
   int num_empty_samples_skipped_;
@@ -151,10 +189,10 @@ class MEDIA_EXPORT MP4StreamParser : public StreamParser {
   // Tracks the number of MEDIA_LOGS for video keyframe MP4<->frame mismatch.
   int num_video_keyframe_mismatches_;
 
-  DISALLOW_COPY_AND_ASSIGN(MP4StreamParser);
+  // Tracks the number of MEDIA_LOGS for SEI recovery point keyframe promotions.
+  int num_sei_recovery_point_promotions_;
 };
 
-}  // namespace mp4
-}  // namespace media
+}  // namespace media::mp4
 
 #endif  // MEDIA_FORMATS_MP4_MP4_STREAM_PARSER_H_

@@ -1,15 +1,14 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/loader/prefetch_browsertest_base.h"
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/strings/stringprintf.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task/post_task.h"
-#include "content/browser/loader/prefetch_url_loader_service.h"
+#include "content/browser/loader/prefetch_url_loader_service_context.h"
+#include "content/browser/loader/subresource_proxying_url_loader_service.h"
 #include "content/browser/storage_partition_impl.h"
 #include "content/browser/web_package/signed_exchange_handler.h"
 #include "content/browser/web_package/signed_exchange_loader.h"
@@ -64,8 +63,9 @@ void PrefetchBrowserTestBase::SetUpOnMainThread() {
                                              ->web_contents()
                                              ->GetBrowserContext()
                                              ->GetDefaultStoragePartition());
-  partition->GetPrefetchURLLoaderService()
-      ->RegisterPrefetchLoaderCallbackForTest(base::BindRepeating(
+  partition->GetSubresourceProxyingURLLoaderService()
+      ->prefetch_url_loader_service_context_for_testing()
+      .RegisterPrefetchLoaderCallbackForTest(base::BindRepeating(
           &PrefetchBrowserTestBase::OnPrefetchURLLoaderCalled,
           base::Unretained(this)));
 }
@@ -96,6 +96,10 @@ void PrefetchBrowserTestBase::OnPrefetchURLLoaderCalled() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   base::AutoLock lock(lock_);
   prefetch_url_loader_called_++;
+
+  if (prefetch_loader_callback_) {
+    std::move(prefetch_loader_callback_).Run();
+  }
 }
 
 int PrefetchBrowserTestBase::GetPrefetchURLLoaderCallCount() {
@@ -113,35 +117,47 @@ void PrefetchBrowserTestBase::RegisterRequestHandler(
 void PrefetchBrowserTestBase::NavigateToURLAndWaitTitle(
     const GURL& url,
     const std::string& title) {
+  // If the current page already has the specified title, then the
+  // `WaitAndGetTitle()` call may return to early (for instance, before
+  // resources that might change the title have a chance to load. Callers of
+  // this method likely want the navigation to complete first, so check for
+  // this case beforehand to avoid surprises!
+  EXPECT_FALSE(EvalJs(shell()->web_contents(),
+                      JsReplace("document.title === $1;", title))
+                   .ExtractBool())
+      << "Title already matches prior to the navigation";
+
   std::u16string title16 = base::ASCIIToUTF16(title);
   TitleWatcher title_watcher(shell()->web_contents(), title16);
   // Execute the JavaScript code to trigger the followup navigation from the
   // current page.
   EXPECT_TRUE(
-      ExecJs(shell()->web_contents(),
-             base::StringPrintf("location.href = '%s';", url.spec().c_str())));
+      ExecJs(shell()->web_contents(), JsReplace("location.href = $1;", url)));
   EXPECT_EQ(title16, title_watcher.WaitAndGetTitle());
 }
 
 void PrefetchBrowserTestBase::WaitUntilLoaded(const GURL& url) {
   std::string script = R"(
-new Promise((resolve) => {
-  const url = $1;
-  if (performance.getEntriesByName(url).length > 0) {
-    resolve();
-    return;
-  }
-  new PerformanceObserver((list) => {
-    if (list.getEntriesByName(url).length > 0) {
-      resolve();
-    }
-  }).observe({ entryTypes: ['resource'] });
-}).then(() => {
-  window.domAutomationController.send(true);
-}))";
+    new Promise((resolve) => {
+      const url = $1;
+      if (performance.getEntriesByName(url).length > 0) {
+        resolve();
+        return;
+      }
+      new PerformanceObserver((list) => {
+        if (list.getEntriesByName(url).length > 0) {
+          resolve();
+        }
+      }).observe({ entryTypes: ['resource'] });
+    })
+  )";
 
-  ASSERT_EQ(true, EvalJs(shell()->web_contents(), JsReplace(script, url),
-                         EXECUTE_SCRIPT_USE_MANUAL_REPLY));
+  ASSERT_TRUE(ExecJs(shell()->web_contents(), JsReplace(script, url)));
+}
+
+void PrefetchBrowserTestBase::RegisterPrefetchLoaderCallback(
+    base::OnceClosure callback) {
+  prefetch_loader_callback_ = std::move(callback);
 }
 
 // static
@@ -172,12 +188,14 @@ int PrefetchBrowserTestBase::RequestCounter::GetRequestCount() {
 
 void PrefetchBrowserTestBase::RequestCounter::OnRequest(
     const net::test_server::HttpRequest& request) {
-  if (request.relative_url != path_)
+  if (request.relative_url != path_) {
     return;
+  }
   base::AutoLock lock(lock_);
   ++request_count_;
-  if (waiter_closure_)
+  if (waiter_closure_) {
     std::move(waiter_closure_).Run();
+  }
 }
 
 }  // namespace content

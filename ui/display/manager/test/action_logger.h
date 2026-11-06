@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,15 @@
 
 #include <string>
 
-#include "base/macros.h"
-
-namespace display {
-namespace test {
+namespace display::test {
 
 class ActionLogger {
  public:
   ActionLogger();
+
+  ActionLogger(const ActionLogger&) = delete;
+  ActionLogger& operator=(const ActionLogger&) = delete;
+
   ~ActionLogger();
 
   void AppendAction(const std::string& action);
@@ -26,11 +27,8 @@ class ActionLogger {
 
  private:
   std::string actions_;
-
-  DISALLOW_COPY_AND_ASSIGN(ActionLogger);
 };
 
-}  // namespace test
-}  // namespace display
+}  // namespace display::test
 
 #endif  // UI_DISPLAY_MANAGER_TEST_ACTION_LOGGER_H_

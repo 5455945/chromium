@@ -1,34 +1,25 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/device/generic_sensor/platform_sensor_linux.h"
 
-#include "base/bind.h"
+#include <algorithm>
+
+#include "base/functional/bind.h"
+#include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
 #include "services/device/generic_sensor/linux/sensor_data_linux.h"
 #include "services/device/generic_sensor/platform_sensor_reader_linux.h"
 
 namespace device {
 
-namespace {
-
-// Checks if at least one value has been changed.
-bool HaveValuesChanged(const SensorReading& lhs, const SensorReading& rhs) {
-  for (size_t i = 0; i < SensorReadingRaw::kValuesCount; ++i) {
-    if (lhs.raw.values[i] != rhs.raw.values[i])
-      return true;
-  }
-  return false;
-}
-
-}  // namespace
-
 PlatformSensorLinux::PlatformSensorLinux(
     mojom::SensorType type,
     SensorReadingSharedBuffer* reading_buffer,
-    PlatformSensorProvider* provider,
+    base::WeakPtr<PlatformSensorProvider> provider,
     const SensorInfoLinux* sensor_device)
-    : PlatformSensor(type, reading_buffer, provider),
+    : PlatformSensor(type, reading_buffer, std::move(provider)),
       default_configuration_(
           PlatformSensorConfiguration(sensor_device->device_frequency)),
       reporting_mode_(sensor_device->reporting_mode) {
@@ -47,11 +38,6 @@ mojom::ReportingMode PlatformSensorLinux::GetReportingMode() {
 
 void PlatformSensorLinux::UpdatePlatformSensorReading(SensorReading reading) {
   DCHECK(main_task_runner()->RunsTasksInCurrentSequence());
-  if (GetReportingMode() == mojom::ReportingMode::ON_CHANGE &&
-      !HaveValuesChanged(reading, old_values_)) {
-    return;
-  }
-  old_values_ = reading;
   reading.raw.timestamp =
       (base::TimeTicks::Now() - base::TimeTicks()).InSecondsF();
   UpdateSharedBufferAndNotifyClients(reading);

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/values.h"
@@ -35,7 +35,7 @@ VolumeMap::VolumeMap()
 
 VolumeMap::VolumeMap(std::unique_ptr<CastAudioJsonProvider> config_provider)
     : config_provider_(std::move(config_provider)) {
-  DCHECK(config_provider_);
+  CHECK(config_provider_, base::NotFatalUntil::M163);
   // base::Unretained is safe because VolumeMap outlives |config_provider_|.
   config_provider_->SetTuningChangedCallback(
       base::BindRepeating(&VolumeMap::LoadVolumeMap, base::Unretained(this)));
@@ -48,17 +48,17 @@ void VolumeMap::LoadFromFile() {
   LoadVolumeMap(config_provider_->GetCastAudioConfig());
 }
 
-void VolumeMap::LoadVolumeMap(std::unique_ptr<base::Value> cast_audio_config) {
-  const base::DictionaryValue* cast_audio_dict;
-  if (!cast_audio_config ||
-      !cast_audio_config->GetAsDictionary(&cast_audio_dict)) {
+void VolumeMap::LoadVolumeMap(
+    std::optional<base::DictValue> cast_audio_config) {
+  if (!cast_audio_config) {
     LOG(WARNING) << "No cast audio config found; using default volume map.";
     UseDefaultVolumeMap();
     return;
   }
 
-  const base::ListValue* volume_map_list;
-  if (!cast_audio_dict->GetList(kKeyVolumeMap, &volume_map_list)) {
+  const base::ListValue* volume_map_list =
+      cast_audio_config->FindList(kKeyVolumeMap);
+  if (!volume_map_list) {
     LOG(WARNING) << "No volume map found; using default volume map.";
     UseDefaultVolumeMap();
     return;
@@ -66,27 +66,26 @@ void VolumeMap::LoadVolumeMap(std::unique_ptr<base::Value> cast_audio_config) {
 
   double prev_level = -1.0;
   std::vector<LevelToDb> new_map;
-  for (size_t i = 0; i < volume_map_list->GetSize(); ++i) {
-    const base::DictionaryValue* volume_map_entry;
-    CHECK(volume_map_list->GetDictionary(i, &volume_map_entry));
 
-    double level;
-    CHECK(volume_map_entry->GetDouble(kKeyLevel, &level));
-    CHECK_GE(level, 0.0);
-    CHECK_LE(level, 1.0);
-    CHECK_GT(level, prev_level);
-    prev_level = level;
+  for (const auto& value : *volume_map_list) {
+    const base::DictValue& volume_map_entry = value.GetDict();
 
-    double db;
-    CHECK(volume_map_entry->GetDouble(kKeyDb, &db));
-    CHECK_LE(db, 0.0);
+    std::optional<double> level = volume_map_entry.FindDouble(kKeyLevel);
+    CHECK(level);
+    CHECK_GE(*level, 0.0);
+    CHECK_LE(*level, 1.0);
+    CHECK_GT(*level, prev_level);
+    prev_level = *level;
 
-    new_map.push_back({static_cast<float>(level), static_cast<float>(db)});
+    std::optional<double> db = volume_map_entry.FindDouble(kKeyDb);
+    CHECK(db);
+    CHECK_LE(*db, 0.0);
+
+    new_map.push_back({static_cast<float>(*level), static_cast<float>(*db)});
   }
 
   if (new_map.empty()) {
     LOG(FATAL) << "No entries in volume map.";
-    return;
   }
 
   if (new_map[0].level > 0.0) {

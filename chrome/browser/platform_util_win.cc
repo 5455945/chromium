@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,23 +14,22 @@
 #include <wrl/client.h>
 
 #include "base/base_paths.h"
-#include "base/bind.h"
-#include "base/cxx17_backports.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/path_service.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task/post_task.h"
+#include "base/task/single_thread_task_runner_thread_mode.h"
 #include "base/task/thread_pool.h"
+#include "base/threading/hang_watcher.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "base/win/registry.h"
 #include "base/win/scoped_co_mem.h"
 #include "chrome/browser/platform_util_internal.h"
 #include "content/public/browser/browser_thread.h"
 #include "ui/base/win/shell.h"
-#include "ui/gfx/native_widget_types.h"
 #include "url/gurl.h"
 
 using content::BrowserThread;
@@ -73,8 +72,7 @@ void ShowItemInFolderOnWorkerThread(const base::FilePath& full_path) {
   if (!platform_util::internal::AreShellOperationsAllowed())
     return;
 
-  hr =
-      SHOpenFolderAndSelectItems(dir_item, base::size(highlight), highlight, 0);
+  hr = SHOpenFolderAndSelectItems(dir_item, std::size(highlight), highlight, 0);
   if (FAILED(hr)) {
     // On some systems, the above call mysteriously fails with "file not
     // found" even though the file is there.  In these cases, ShellExecute()
@@ -92,22 +90,16 @@ void ShowItemInFolderOnWorkerThread(const base::FilePath& full_path) {
 void OpenExternalOnWorkerThread(const GURL& url) {
   base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
                                                 base::BlockingType::MAY_BLOCK);
+  if (!platform_util::internal::AreShellOperationsAllowed()) {
+    return;
+  }
+
   // Quote the input scheme to be sure that the command does not have
   // parameters unexpected by the external program. This url should already
   // have been escaped.
   std::string escaped_url = url.spec();
   escaped_url.insert(0, "\"");
   escaped_url += "\"";
-
-  // According to Mozilla in uriloader/exthandler/win/nsOSHelperAppService.cpp:
-  // "Some versions of windows (Win2k before SP3, Win XP before SP1) crash in
-  // ShellExecute on long URLs (bug 161357 on bugzilla.mozilla.org). IE 5 and 6
-  // support URLS of 2083 chars in length, 2K is safe."
-  //
-  // It may be possible to increase this. https://crbug.com/727909
-  const size_t kMaxUrlLength = 2048;
-  if (escaped_url.length() > kMaxUrlLength)
-    return;
 
   // Specify %windir%\system32 as the CWD so that any new proc spawned does not
   // inherit this proc's CWD. Without this, uninstalls may be broken by a
@@ -123,18 +115,54 @@ void OpenExternalOnWorkerThread(const GURL& url) {
           NULL, "open", escaped_url.c_str(), NULL,
           system_dir.AsUTF8Unsafe().c_str(), SW_SHOWNORMAL)) <= 32) {
     // On failure, it may be good to display a message to the user.
-    // https://crbug.com/727913
+    // https://crbug.com/40523302
     return;
   }
+}
+
+void OpenFileWithDialogOnWorkerThread(const base::FilePath& full_path) {
+  // Skip showing the dialog during browser tests.
+  if (!platform_util::internal::AreShellOperationsAllowed()) {
+    return;
+  }
+
+  // Blocks until the user dismisses the "Open with" dialog.
+  base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
+                                                base::BlockingType::WILL_BLOCK);
+
+  // Never consider the current scope as hung since the user can take unbounded
+  // time to choose an application.
+  base::HangWatcher::InvalidateActiveExpectations();
+
+  OPENASINFO open_as_info = {
+      .pcszFile = full_path.value().c_str(),
+      .pcszClass = nullptr,
+      .oaifInFlags = OAIF_EXEC,
+  };
+  SHOpenWithDialog(nullptr, &open_as_info);
 }
 
 }  // namespace
 
 void ShowItemInFolder(Profile* profile, const base::FilePath& full_path) {
   base::ThreadPool::CreateCOMSTATaskRunner(
-      {base::MayBlock(), base::TaskPriority::USER_BLOCKING})
+      {base::MayBlock(), base::TaskPriority::USER_BLOCKING,
+       base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN})
       ->PostTask(FROM_HERE,
                  base::BindOnce(&ShowItemInFolderOnWorkerThread, full_path));
+}
+
+void OpenFileWithDialog(const base::FilePath& full_path) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI);
+
+  // SHOpenWithDialog() is a shell UI API and must be called from a dedicated
+  // COM STA thread so an open picker does not stall shared shell operations.
+  base::ThreadPool::CreateCOMSTATaskRunner(
+      {base::MayBlock(), base::TaskPriority::USER_BLOCKING,
+       base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
+      base::SingleThreadTaskRunnerThreadMode::DEDICATED)
+      ->PostTask(FROM_HERE,
+                 base::BindOnce(&OpenFileWithDialogOnWorkerThread, full_path));
 }
 
 namespace internal {
@@ -156,11 +184,12 @@ void PlatformOpenVerifiedItem(const base::FilePath& path, OpenItemType type) {
 
 }  // namespace internal
 
-void OpenExternal(Profile* profile, const GURL& url) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+void OpenExternal(const GURL& url) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
 
   base::ThreadPool::CreateCOMSTATaskRunner(
-      {base::MayBlock(), base::TaskPriority::USER_BLOCKING})
+      {base::MayBlock(), base::TaskPriority::USER_BLOCKING,
+       base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN})
       ->PostTask(FROM_HERE, base::BindOnce(&OpenExternalOnWorkerThread, url));
 }
 

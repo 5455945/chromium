@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,12 @@
 
 #include <map>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/memory/ref_counted.h"
 #include "base/memory/ref_counted_delete_on_sequence.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/memory/weak_ptr.h"
+#include "content/common/content_export.h"
 
 namespace base {
 class SequencedTaskRunner;
@@ -18,9 +20,9 @@ class SequencedTaskRunner;
 
 namespace content {
 
-class DevToolsIOContext : public base::SupportsWeakPtr<DevToolsIOContext> {
+class CONTENT_EXPORT DevToolsIOContext final {
  public:
-  class Stream : public base::RefCountedDeleteOnSequence<Stream> {
+  class CONTENT_EXPORT Stream : public base::RefCountedDeleteOnSequence<Stream> {
    public:
     enum Status {
       StatusSuccess,
@@ -32,6 +34,9 @@ class DevToolsIOContext : public base::SupportsWeakPtr<DevToolsIOContext> {
         base::OnceCallback<void(std::unique_ptr<std::string> data,
                                 bool base64_encoded,
                                 int status)>;
+
+    Stream(const Stream&) = delete;
+    Stream& operator=(const Stream&) = delete;
 
     virtual bool SupportsSeek() const;
     virtual void Read(off_t position,
@@ -51,8 +56,6 @@ class DevToolsIOContext : public base::SupportsWeakPtr<DevToolsIOContext> {
     void Register(DevToolsIOContext* context, const std::string& handle);
     // We generate handle for the caller and return it.
     std::string Register(DevToolsIOContext* context);
-
-    DISALLOW_COPY_AND_ASSIGN(Stream);
   };
 
   DevToolsIOContext();
@@ -62,6 +65,10 @@ class DevToolsIOContext : public base::SupportsWeakPtr<DevToolsIOContext> {
   bool Close(const std::string& handle);
   void DiscardAllStreams();
 
+  base::WeakPtr<DevToolsIOContext> AsWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+
   static bool IsTextMimeType(const std::string& mime_type);
 
  private:
@@ -69,6 +76,8 @@ class DevToolsIOContext : public base::SupportsWeakPtr<DevToolsIOContext> {
   void RegisterStream(scoped_refptr<Stream> stream, const std::string& handle);
 
   std::map<std::string, scoped_refptr<Stream>> streams_;
+
+  base::WeakPtrFactory<DevToolsIOContext> weak_ptr_factory_{this};
 };
 
 }  // namespace content

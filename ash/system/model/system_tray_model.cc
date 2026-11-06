@@ -1,12 +1,15 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/system/model/system_tray_model.h"
 
+#include <memory>
+
+#include "ash/public/cpp/login_types.h"
+#include "ash/public/cpp/update_types.h"
 #include "ash/root_window_controller.h"
 #include "ash/shell.h"
-#include "ash/system/message_center/message_center_controller.h"
 #include "ash/system/model/clock_model.h"
 #include "ash/system/model/enterprise_domain_model.h"
 #include "ash/system/model/locale_model.h"
@@ -16,11 +19,15 @@
 #include "ash/system/model/virtual_keyboard_model.h"
 #include "ash/system/network/active_network_icon.h"
 #include "ash/system/network/tray_network_state_model.h"
+#include "ash/system/notification_center/message_center_controller.h"
 #include "ash/system/phonehub/phone_hub_notification_controller.h"
 #include "ash/system/phonehub/phone_hub_tray.h"
 #include "ash/system/status_area_widget.h"
+#include "ash/system/time/calendar_list_model.h"
+#include "ash/system/time/calendar_model.h"
+#include "ash/system/time/calendar_utils.h"
 #include "ash/system/unified/unified_system_tray.h"
-#include "chromeos/components/phonehub/phone_hub_manager.h"
+#include "chromeos/ash/components/phonehub/phone_hub_manager.h"
 
 namespace ash {
 
@@ -34,7 +41,9 @@ SystemTrayModel::SystemTrayModel()
       virtual_keyboard_(std::make_unique<VirtualKeyboardModel>()),
       network_state_model_(std::make_unique<TrayNetworkStateModel>()),
       active_network_icon_(
-          std::make_unique<ActiveNetworkIcon>(network_state_model_.get())) {}
+          std::make_unique<ActiveNetworkIcon>(network_state_model_.get())),
+      calendar_list_model_(std::make_unique<CalendarListModel>()),
+      calendar_model_(std::make_unique<CalendarModel>()) {}
 
 SystemTrayModel::~SystemTrayModel() = default;
 
@@ -62,11 +71,9 @@ void SystemTrayModel::SetUse24HourClock(bool use_24_hour) {
   clock()->SetUse24HourClock(use_24_hour);
 }
 
-void SystemTrayModel::SetEnterpriseDomainInfo(
-    const std::string& enterprise_domain_manager,
-    bool active_directory_managed) {
-  enterprise_domain()->SetEnterpriseDomainInfo(enterprise_domain_manager,
-                                               active_directory_managed);
+void SystemTrayModel::SetDeviceEnterpriseInfo(
+    const DeviceEnterpriseInfo& device_enterprise_info) {
+  enterprise_domain()->SetDeviceEnterpriseInfo(device_enterprise_info);
 }
 
 void SystemTrayModel::SetEnterpriseAccountDomainInfo(
@@ -86,26 +93,34 @@ void SystemTrayModel::SetLocaleList(
 
 void SystemTrayModel::ShowUpdateIcon(UpdateSeverity severity,
                                      bool factory_reset_required,
-                                     bool rollback,
-                                     UpdateType update_type) {
-  update_model()->SetUpdateAvailable(severity, factory_reset_required, rollback,
-                                     update_type);
+                                     bool rollback) {
+  update_model()->SetUpdateAvailable(severity, factory_reset_required,
+                                     rollback);
 }
 
-void SystemTrayModel::SetUpdateNotificationState(
-    NotificationStyle style,
-    const std::u16string& notification_title,
-    const std::u16string& notification_body) {
-  update_model()->SetUpdateNotificationState(style, notification_title,
-                                             notification_body);
+void SystemTrayModel::SetRelaunchNotificationState(
+    const RelaunchNotificationState& relaunch_notification_state) {
+  update_model()->SetRelaunchNotificationState(relaunch_notification_state);
 }
 
 void SystemTrayModel::ResetUpdateState() {
   update_model()->ResetUpdateAvailable();
 }
 
+void SystemTrayModel::SetUpdateDeferred(DeferredUpdateState state) {
+  update_model()->SetUpdateDeferred(state);
+}
+
 void SystemTrayModel::SetUpdateOverCellularAvailableIconVisible(bool visible) {
   update_model()->SetUpdateOverCellularAvailable(visible);
+}
+
+void SystemTrayModel::SetShowEolNotice(bool show) {
+  update_model()->SetShowEolNotice(show);
+}
+
+void SystemTrayModel::SetShowExtendedUpdatesNotice(bool show) {
+  update_model()->SetShowExtendedUpdatesNotice(show);
 }
 
 void SystemTrayModel::ShowVolumeSliderBubble() {
@@ -129,7 +144,7 @@ void SystemTrayModel::ShowNetworkDetailedViewBubble() {
 }
 
 void SystemTrayModel::SetPhoneHubManager(
-    chromeos::phonehub::PhoneHubManager* phone_hub_manager) {
+    phonehub::PhoneHubManager* phone_hub_manager) {
   for (RootWindowController* root_window_controller :
        Shell::GetAllRootWindowControllers()) {
     auto* phone_hub_tray =
@@ -141,6 +156,16 @@ void SystemTrayModel::SetPhoneHubManager(
       ->message_center_controller()
       ->phone_hub_notification_controller()
       ->SetManager(phone_hub_manager);
+
+  phone_hub_manager_ = phone_hub_manager;
+}
+
+bool SystemTrayModel::IsFakeModel() const {
+  return false;
+}
+
+bool SystemTrayModel::IsInUserChildSession() const {
+  return Shell::Get()->session_controller()->IsUserChild();
 }
 
 }  // namespace ash

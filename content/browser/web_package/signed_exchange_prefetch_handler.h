@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,20 +7,24 @@
 
 #include <string>
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/unguessable_token.h"
+#include "content/public/browser/frame_tree_node_id.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+
+namespace net {
+class NetworkAnonymizationKey;
+}
 
 namespace network {
-class NetworkIsolationKey;
 class SharedURLLoaderFactory;
-}
+struct ResourceRequest;
+}  // namespace network
 
 namespace blink {
 class URLLoaderThrottle;
@@ -30,7 +34,6 @@ namespace content {
 
 class PrefetchedSignedExchangeCacheEntry;
 class SignedExchangeLoader;
-class SignedExchangePrefetchMetricRecorder;
 
 // Attached to each PrefetchURLLoader if the prefetch is for a signed exchange.
 class SignedExchangePrefetchHandler final
@@ -44,7 +47,7 @@ class SignedExchangePrefetchHandler final
   // |forwarding_client| is a pointer to the downstream client (typically who
   // creates this handler).
   SignedExchangePrefetchHandler(
-      int frame_tree_node_id,
+      FrameTreeNodeId frame_tree_node_id,
       const network::ResourceRequest& resource_request,
       network::mojom::URLResponseHeadPtr response,
       mojo::ScopedDataPipeConsumerHandle response_body,
@@ -54,10 +57,13 @@ class SignedExchangePrefetchHandler final
       scoped_refptr<network::SharedURLLoaderFactory> network_loader_factory,
       URLLoaderThrottlesGetter loader_throttles_getter,
       network::mojom::URLLoaderClient* forwarding_client,
-      const net::NetworkIsolationKey& network_isolation_key,
-      scoped_refptr<SignedExchangePrefetchMetricRecorder> metric_recorder,
+      const net::NetworkAnonymizationKey& network_anonymization_key,
       const std::string& accept_langs,
       bool keep_entry_for_prefetch_cache);
+
+  SignedExchangePrefetchHandler(const SignedExchangePrefetchHandler&) = delete;
+  SignedExchangePrefetchHandler& operator=(
+      const SignedExchangePrefetchHandler&) = delete;
 
   ~SignedExchangePrefetchHandler() override;
 
@@ -78,25 +84,23 @@ class SignedExchangePrefetchHandler final
  private:
   // network::mojom::URLLoaderClient overrides:
   void OnReceiveEarlyHints(network::mojom::EarlyHintsPtr early_hints) override;
-  void OnReceiveResponse(network::mojom::URLResponseHeadPtr head) override;
+  void OnReceiveResponse(
+      network::mojom::URLResponseHeadPtr head,
+      mojo::ScopedDataPipeConsumerHandle body,
+      std::optional<mojo_base::BigBuffer> cached_metadata) override;
   void OnReceiveRedirect(const net::RedirectInfo& redirect_info,
                          network::mojom::URLResponseHeadPtr head) override;
   void OnUploadProgress(int64_t current_position,
                         int64_t total_size,
                         base::OnceCallback<void()> callback) override;
-  void OnReceiveCachedMetadata(mojo_base::BigBuffer data) override;
   void OnTransferSizeUpdated(int32_t transfer_size_diff) override;
-  void OnStartLoadingResponseBody(
-      mojo::ScopedDataPipeConsumerHandle body) override;
   void OnComplete(const network::URLLoaderCompletionStatus& status) override;
 
   mojo::Receiver<network::mojom::URLLoaderClient> loader_client_receiver_{this};
 
   std::unique_ptr<SignedExchangeLoader> signed_exchange_loader_;
 
-  network::mojom::URLLoaderClient* forwarding_client_;
-
-  DISALLOW_COPY_AND_ASSIGN(SignedExchangePrefetchHandler);
+  raw_ptr<network::mojom::URLLoaderClient> forwarding_client_;
 };
 
 }  // namespace content

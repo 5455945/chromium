@@ -1,16 +1,17 @@
+# Copyright 2022 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
 create {
   source {
-    git {
-      repo: "https://r8.googlesource.com/r8"
-      tag_pattern: "%s-dev"
+    script {
+      name: "3pp.py"
+      use_fetch_checkout_workflow: true
     }
-    patch_dir: "patches"
   }
 
   build {
-    dep: "chromium/third_party/jdk"
-    # gradle cannot be executed correctly under docker env
-    no_docker_env: true
+    install: ["3pp.py", "install"]
   }
 }
 

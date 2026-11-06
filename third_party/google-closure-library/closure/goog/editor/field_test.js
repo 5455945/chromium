@@ -1,16 +1,8 @@
-// Copyright 2012 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 /**
  * @fileoverview Shared tests for Field and ContentEditableField.
@@ -34,12 +26,13 @@ const Plugin = goog.require('goog.editor.Plugin');
 const Range = goog.require('goog.dom.Range');
 const SafeHtml = goog.require('goog.html.SafeHtml');
 const TagName = goog.require('goog.dom.TagName');
+const TestEvent = goog.require('goog.testing.events.Event');
 const classlist = goog.require('goog.dom.classlist');
 const editorRange = goog.require('goog.editor.range');
 const events = goog.require('goog.events');
 const functions = goog.require('goog.functions');
-const googArray = goog.require('goog.array');
 const googDom = goog.require('goog.dom');
+const platform = goog.require('goog.labs.userAgent.platform');
 const recordFunction = goog.require('goog.testing.recordFunction');
 const testSuite = goog.require('goog.testing.testSuite');
 const testingDom = goog.require('goog.testing.dom');
@@ -60,22 +53,29 @@ class TestPlugin extends Plugin {
 
     this.getTrogClassId = () => 'TestPlugin';
 
-    this.handleKeyDown = goog.nullFunction;
-    this.handleKeyPress = goog.nullFunction;
-    this.handleKeyUp = goog.nullFunction;
-    this.handleKeyboardShortcut = goog.nullFunction;
-    this.isSupportedCommand = goog.nullFunction;
-    this.execCommandInternal = goog.nullFunction;
-    this.queryCommandValue = goog.nullFunction;
-    this.activeOnUneditableFields = goog.nullFunction;
-    this.handleSelectionChange = goog.nullFunction;
+    /** @suppress {checkTypes} suppression added to enable type checking */
+    this.handleKeyDown = () => {};
+    /** @suppress {checkTypes} suppression added to enable type checking */
+    this.handleKeyPress = () => {};
+    /** @suppress {checkTypes} suppression added to enable type checking */
+    this.handleKeyUp = () => {};
+    /** @suppress {checkTypes} suppression added to enable type checking */
+    this.handleKeyboardShortcut = () => {};
+    /** @suppress {checkTypes} suppression added to enable type checking */
+    this.isSupportedCommand = () => {};
+    this.execCommandInternal = () => {};
+    this.queryCommandValue = () => {};
+    /** @suppress {checkTypes} suppression added to enable type checking */
+    this.activeOnUneditableFields = () => {};
+    /** @suppress {checkTypes} suppression added to enable type checking */
+    this.handleSelectionChange = () => {};
   }
 }
 
 const STRING_KEY = String.fromCharCode(KeyCodes.A).toLowerCase();
 
 /**
- * @return {events.Event} Returns an event for a keyboard shortcut for the
+ * @return {!events.Event} Returns an event for a keyboard shortcut for the
  *     letter 'a'.
  */
 function getBrowserEvent() {
@@ -112,6 +112,7 @@ function getListenerTarget(editableField) {
 }
 
 function assertClickDefaultActionIsCanceled(editableField) {
+  /** @suppress {visibility} suppression added to enable type checking */
   const cancelClickDefaultActionListener = events.getListener(
       getListenerTarget(editableField), EventType.CLICK, Field.cancelLinkClick_,
       undefined, editableField);
@@ -120,6 +121,7 @@ function assertClickDefaultActionIsCanceled(editableField) {
 }
 
 function assertClickDefaultActionIsNotCanceled(editableField) {
+  /** @suppress {visibility} suppression added to enable type checking */
   const cancelClickDefaultActionListener = events.getListener(
       getListenerTarget(editableField), EventType.CLICK, Field.cancelLinkClick_,
       undefined, editableField);
@@ -165,26 +167,24 @@ function doTestPlaceCursorAtStart(html = undefined, parentId = undefined) {
 
   // We check whether getAttribute exist because textNode may be an actual
   // TextNode, which does not have getAttribute.
-  if (textNode && textNode.getAttribute &&
-      textNode.getAttribute('_moz_editor_bogus_node')) {
+  const hasBogusNode = textNode &&
+      ((textNode.getAttribute &&
+        textNode.getAttribute('_moz_editor_bogus_node')) ||
+       (userAgent.GECKO && textNode.tagName === TagName.BR &&
+        textNode.parentNode.children.length === 1));
+  if (hasBogusNode) {
     // At least in FF >= 6, assigning '' to innerHTML of a contentEditable
     // element will results in textNode being modified into:
     // <br _moz_editor_bogus_node="TRUE" _moz_dirty=""> instead of nulling
     // it. So we should null it ourself.
+    // This was changed in FF >= 70 to simply be a single <br>.
     textNode = null;
   }
 
   let startNode = parentId ?
       editableField.getEditableDomHelper().getElement(parentId).firstChild :
-      textNode ? textNode : editableField.getElement();
-  if (userAgent.WEBKIT && !userAgent.isVersionOrHigher('528')) {
-    // Safari 3 seems to normalize the selection to the shallowest endpoint (in
-    // this case the editable element) in all cases tested below. This is OK
-    // because when you start typing it magically inserts the text at the
-    // deepest endpoint, and even behaves as desired in the case tested by
-    // testPlaceCursorAtStartNonImportantTextNode.
-    startNode = editableField.getElement();
-  }
+      textNode ? textNode :
+                 editableField.getElement();
   assertEquals(
       'The range should start at the specified expected node', startNode,
       range.getStartNode());
@@ -226,26 +226,30 @@ function doTestPlaceCursorAtEnd(
 
   // We check whether getAttribute exist because textNode may be an actual
   // TextNode, which does not have getAttribute.
-
-  const hasBogusNode = textNode && textNode.getAttribute &&
-      textNode.getAttribute('_moz_editor_bogus_node');
+  const hasBogusNode = textNode &&
+      ((textNode.getAttribute &&
+        textNode.getAttribute('_moz_editor_bogus_node')) ||
+       (userAgent.GECKO && textNode.tagName === TagName.BR &&
+        textNode.parentNode.children.length === 1));
   if (hasBogusNode) {
     // At least in FF >= 6, assigning '' to innerHTML of a contentEditable
     // element will results in textNode being modified into:
     // <br _moz_editor_bogus_node="TRUE" _moz_dirty=""> instead of nulling
     // it. So we should null it ourself.
+    // This was changed in FF >= 70 to simply be a single <br>.
     textNode = null;
   }
 
   const endNode = parentId ?
       editableField.getEditableDomHelper().getElement(parentId).lastChild :
-      textNode ? textNode : editableField.getElement();
+      textNode ? textNode :
+                 editableField.getElement();
   assertEquals(
       'The range should end at the specified expected node', endNode,
       range.getEndNode());
-  const offset = (opt_offset != null) ?
-      opt_offset :
-      textNode ? endNode.nodeValue.length : endNode.childNodes.length - 1;
+  const offset = (opt_offset != null) ? opt_offset :
+      textNode                        ? endNode.nodeValue.length :
+                                        endNode.childNodes.length - 1;
   if (hasBogusNode) {
     assertEquals(
         'The range should end at the ending of the bogus node ' +
@@ -263,9 +267,10 @@ testSuite({
     googDom.getElement('parent').innerHTML = HTML;
     assertTrue(
         'FieldConstructor should be set by the test HTML file',
-        goog.isFunction(FieldConstructor));
+        typeof FieldConstructor === 'function');
   },
 
+  /** @suppress {uselessCode} suppression added to enable type checking */
   tearDown() {
     // NOTE(nicksantos): I think IE is blowing up on this call because
     // it is lame. It manifests its lameness by throwing an exception.
@@ -363,9 +368,9 @@ testSuite({
   },
 
   /**
-   * Tests that plugins get auto disposed by default when the field is disposed.
-   * Tests that plugins with setAutoDispose(false) do not get disposed when the
-   * field is disposed.
+   * Tests that plugins get auto disposed by default when the field is
+   * disposed. Tests that plugins with setAutoDispose(false) do not get
+   * disposed when the field is disposed.
    */
   testDisposed_PluginAutoDispose() {
     const editableField = new FieldConstructor('testField');
@@ -407,12 +412,13 @@ testSuite({
   },
 
   /**
-   * Test that if a browser open a new page when clicking a link in a content
-   * editable element, a click listener is set to cancel this default action.
+   * Test that if a browser open a new page when clicking a link in a
+   * content editable element, a click listener is set to cancel this
+   * default action.
    */
   testClickDefaultActionIsCanceledWhenBrowserFollowsClick() {
-    // Simulate a browser that will open a new page when activating a link in a
-    // content editable element.
+    // Simulate a browser that will open a new page when activating a link
+    // in a content editable element.
     const editableField =
         createEditableFieldWithListeners(true /* followLinkInNewWindow */);
     assertClickDefaultActionIsCanceled(editableField);
@@ -421,12 +427,12 @@ testSuite({
   },
 
   /**
-   * Test that if a browser does not open a new page when clicking a link in a
-   * content editable element, the click default action is not canceled.
+   * Test that if a browser does not open a new page when clicking a link in
+   * a content editable element, the click default action is not canceled.
    */
   testClickDefaultActionIsNotCanceledWhenBrowserDontFollowsClick() {
-    // Simulate a browser that will NOT open a new page when activating a link
-    // in a content editable element.
+    // Simulate a browser that will NOT open a new page when activating a
+    // link in a content editable element.
     const editableField =
         createEditableFieldWithListeners(false /* followLinkInNewWindow */);
     assertClickDefaultActionIsNotCanceled(editableField);
@@ -434,7 +440,10 @@ testSuite({
     editableField.dispose();
   },
 
-  /** Test that if a plugin registers keyup, it gets called. */
+  /**
+     Test that if a plugin registers keyup, it gets called.
+     @suppress {missingProperties} suppression added to enable type checking
+   */
   testPluginKeyUp() {
     const editableField = new FieldConstructor('testField');
     const plugin = new TestPlugin();
@@ -454,7 +463,10 @@ testSuite({
     mockPlugin.$verify();
   },
 
-  /** Test that if a plugin registers keydown, it gets called. */
+  /**
+     Test that if a plugin registers keydown, it gets called.
+     @suppress {missingProperties} suppression added to enable type checking
+   */
   testPluginKeyDown() {
     const editableField = new FieldConstructor('testField');
     const plugin = new TestPlugin();
@@ -474,7 +486,10 @@ testSuite({
     mockPlugin.$verify();
   },
 
-  /** Test that if a plugin registers keypress, it gets called. */
+  /**
+     Test that if a plugin registers keypress, it gets called.
+     @suppress {missingProperties} suppression added to enable type checking
+   */
   testPluginKeyPress() {
     const editableField = new FieldConstructor('testField');
     const plugin = new TestPlugin();
@@ -495,8 +510,9 @@ testSuite({
   },
 
   /**
-   * If one plugin handles a key event, the rest of the plugins do not get their
-   * key handlers invoked.
+   * If one plugin handles a key event, the rest of the plugins do not get
+   * their key handlers invoked.
+   * @suppress {missingProperties} suppression added to enable type checking
    */
   testHandledKeyEvent() {
     const editableField = new FieldConstructor('testField');
@@ -576,6 +592,7 @@ testSuite({
   /**
    * If the first plugin does not handle the key event, the next plugin gets
    * a chance to handle it.
+   * @suppress {missingProperties} suppression added to enable type checking
    */
   testNotHandledKeyEvent() {
     const editableField = new FieldConstructor('testField');
@@ -623,6 +640,7 @@ testSuite({
   /**
    * Make sure that handleKeyboardShortcut is called if other key handlers
    * return false.
+   * @suppress {missingProperties} suppression added to enable type checking
    */
   testKeyboardShortcutCalled() {
     const editableField = new FieldConstructor('testField');
@@ -653,8 +671,9 @@ testSuite({
   },
 
   /**
-   * Make sure that handleKeyboardShortcut is not called if other key handlers
-   * return true.
+   * Make sure that handleKeyboardShortcut is not called if other key
+   * handlers return true.
+   * @suppress {missingProperties} suppression added to enable type checking
    */
   testKeyboardShortcutNotCalled() {
     const editableField = new FieldConstructor('testField');
@@ -686,11 +705,16 @@ testSuite({
   /**
    * Make sure that handleKeyboardShortcut is not called if alt is pressed.
    * @bug 1363959
+   * @suppress {missingProperties} suppression added to enable type checking
    */
   testKeyHandlingAlt() {
     const editableField = new FieldConstructor('testField');
     const plugin = new TestPlugin();
     const e = getBrowserEvent();
+    /**
+     * @suppress {strictMissingProperties} suppression added to enable type
+     * checking
+     */
     e.altKey = true;
 
     const mockPlugin = new LooseMock(plugin);
@@ -716,13 +740,23 @@ testSuite({
   },
 
   /**
-     Make sure that handleKeyboardShortcut is called if alt+shift is pressed.
+   * Make sure that handleKeyboardShortcut is called if alt+shift is
+   * pressed.
+   * @suppress {missingProperties} suppression added to enable type checking
    */
   testKeyHandlingAltShift() {
     const editableField = new FieldConstructor('testField');
     const plugin = new TestPlugin();
     const e = getBrowserEvent();
+    /**
+     * @suppress {strictMissingProperties} suppression added to enable type
+     * checking
+     */
     e.altKey = true;
+    /**
+     * @suppress {strictMissingProperties} suppression added to enable type
+     * checking
+     */
     e.shiftKey = true;
 
     const mockPlugin = new LooseMock(plugin);
@@ -777,8 +811,8 @@ testSuite({
     plugin.isSupportedCommand = functions.constant(false);
 
     editableField.execCommand('+outdent', false);
-    // Verify that a plugin's execCommand is not called if it isn't a supported
-    // command.
+    // Verify that a plugin's execCommand is not called if it isn't a
+    // supported command.
     assertNull(passedCommand);
     assertNull(passedArg);
 
@@ -789,6 +823,8 @@ testSuite({
   /**
    * Test that if one plugin supports execCommand, no other plugins
    * get a chance to handle the execComand.
+   * @suppress {missingProperties,strictMissingProperties} suppression added
+   * to enable type checking
    */
   testSupportedExecCommand() {
     const editableField = new FieldConstructor('testField');
@@ -800,9 +836,14 @@ testSuite({
     mockPlugin1.isEnabled(editableField).$anyTimes().$returns(true);
     mockPlugin1.isSupportedCommand('+indent').$returns(true);
     mockPlugin1.execCommandInternal('+indent').$returns(true);
-    mockPlugin1.execCommand('+indent').$does(() => {
-      mockPlugin1.execCommandInternal('+indent');
-    });
+    mockPlugin1.execCommand('+indent')
+        .$does(/**
+                  @suppress {strictMissingProperties} suppression added to
+                  enable type checking
+                */
+               () => {
+                 mockPlugin1.execCommandInternal('+indent');
+               });
     mockPlugin1.$replay();
 
     const mockPlugin2 = new LooseMock(plugin);
@@ -823,6 +864,8 @@ testSuite({
   /**
    * Test that if the first plugin does not support execCommand, the other
    * plugins get a chance to handle the execCommand.
+   * @suppress {missingProperties,strictMissingProperties} suppression added
+   * to enable type checking
    */
   testNotSupportedExecCommand() {
     const editableField = new FieldConstructor('testField');
@@ -841,9 +884,14 @@ testSuite({
     mockPlugin2.isEnabled(editableField).$anyTimes().$returns(true);
     mockPlugin2.isSupportedCommand('+indent').$returns(true);
     mockPlugin2.execCommandInternal('+indent').$returns(true);
-    mockPlugin2.execCommand('+indent').$does(() => {
-      mockPlugin2.execCommandInternal('+indent');
-    });
+    mockPlugin2.execCommand('+indent')
+        .$does(/**
+                  @suppress {strictMissingProperties} suppression added to
+                  enable type checking
+                */
+               () => {
+                 mockPlugin2.execCommandInternal('+indent');
+               });
     mockPlugin2.$replay();
 
     editableField.registerPlugin(mockPlugin1);
@@ -858,6 +906,7 @@ testSuite({
   /**
    * Tests that if a plugin supports a command that its queryCommandValue
    * gets called and no further plugins can handle the queryCommandValue.
+   * @suppress {missingProperties} suppression added to enable type checking
    */
   testSupportedQueryCommand() {
     const editableField = new FieldConstructor('testField');
@@ -891,6 +940,7 @@ testSuite({
    * Tests that if the first plugin does not support a command that its
    * queryCommandValue do not get called and the next plugin can handle the
    * queryCommandValue.
+   * @suppress {missingProperties} suppression added to enable type checking
    */
   testNotSupportedQueryCommand() {
     const editableField = new FieldConstructor('testField');
@@ -924,6 +974,7 @@ testSuite({
   /**
    * Tests that if a plugin handles selectionChange that it gets called and
    * no further plugins can handle the selectionChange.
+   * @suppress {missingProperties} suppression added to enable type checking
    */
   testHandledSelectionChange() {
     const editableField = new FieldConstructor('testField');
@@ -955,6 +1006,7 @@ testSuite({
   /**
    * Tests that if the first plugin does not handle selectionChange that
    * the next plugin gets a chance to handle it.
+   * @suppress {missingProperties} suppression added to enable type checking
    */
   testNotHandledSelectionChange() {
     const editableField = new FieldConstructor('testField');
@@ -1023,7 +1075,12 @@ testSuite({
     editableField.dispose();
   },
 
+  /**
+     @suppress {missingProperties} suppression added to enable type
+     checking
+   */
   testSelectionChangeOnMouseUp() {
+    /** @suppress {checkTypes} suppression added to enable type checking */
     const fakeEvent = new BrowserEvent({type: 'mouseup', target: 'fakeTarget'});
     const editableField = new FieldConstructor('testField', document);
     const clock = new MockClock(true);
@@ -1042,8 +1099,8 @@ testSuite({
     editableField.makeEditable();
 
     // Emulate a mouseup event, this should result in immediate
-    // BEFORESELECTIONCHANGE and SELECTIONCHANGE, plus a second SELECTIONCHANGE
-    // in IE after a short timeout.
+    // BEFORESELECTIONCHANGE and SELECTIONCHANGE, plus a second
+    // SELECTIONCHANGE in IE after a short timeout.
     editableField.handleMouseUp_(fakeEvent);
     assertEquals(
         'Before selection change should fire immediately', 1,
@@ -1067,6 +1124,10 @@ testSuite({
     assertEquals(
         'Plugin should have handled second selection change immediately', 2,
         plugin.handleSelectionChange.getCallCount());
+    /**
+     * @suppress {missingProperties} suppression added to enable type
+     * checking
+     */
     const args = plugin.handleSelectionChange.getLastCall().getArguments();
     assertTrue(
         'Plugin should not have received data from extra firing',
@@ -1194,7 +1255,48 @@ testSuite({
     }
   },
 
-  /** Verify that restoreSavedRange() restores the range and sets the focus. */
+  testSetSafeHtml_withPendingDelayedChangeEvent() {
+    const editableField = new FieldConstructor('testField', document);
+    const clock = new MockClock(true);
+
+    try {
+      let delayedChangeCalled = false;
+      events.listen(editableField, Field.EventType.DELAYEDCHANGE, () => {
+        delayedChangeCalled = true;
+      });
+
+      editableField.makeEditable();
+      clock.tick(1000);
+      assertFalse(
+          'Make editable must not fire delayed change.', delayedChangeCalled);
+
+      let shouldWrapInParagraphTag = false;
+      editableField.setSafeHtml(
+          shouldWrapInParagraphTag, SafeHtml.htmlEscape('foo'),
+          false /* Fire delayed change */);
+      testingDom.assertHtmlContentsMatch('foo', editableField.getElement());
+      clock.tick(100);
+      assertFalse(
+          'delayedChange should not fire after only 100ms.',
+          delayedChangeCalled);
+
+      editableField.setSafeHtml(
+          shouldWrapInParagraphTag, SafeHtml.htmlEscape('bar'),
+          true /* Don't fire delayed change */);
+      testingDom.assertHtmlContentsMatch('bar', editableField.getElement());
+      clock.tick(1000);
+      assertFalse(
+          'setSafeHtml must not fire pending delayed change if so configured.',
+          delayedChangeCalled);
+    } finally {
+      clock.dispose();
+      editableField.dispose();
+    }
+  },
+
+  /**
+     Verify that restoreSavedRange() restores the range and sets the focus.
+   */
   testRestoreSavedRange() {
     const editableField = new FieldConstructor('testField', document);
     editableField.makeEditable();
@@ -1246,6 +1348,7 @@ testSuite({
     doTestPlaceCursorAtEnd();
   },
 
+  /** @suppress {checkTypes} suppression added to enable type checking */
   testPlaceCursorAtEndEmptyField() {
     doTestPlaceCursorAtEnd('', null, 0);
   },
@@ -1349,6 +1452,7 @@ testSuite({
     assertFalse(selectionHasFired);
   },
 
+  /** @suppress {visibility} suppression added to enable type checking */
   testIsGeneratingKey() {
     const regularKeyEvent = new BrowserEvent();
     regularKeyEvent.charCode = KeyCodes.A;
@@ -1364,11 +1468,99 @@ testSuite({
 
     assertTrue(Field.isGeneratingKey_(regularKeyEvent, true));
     assertFalse(Field.isGeneratingKey_(ctrlKeyEvent, true));
-    if (userAgent.WINDOWS && !userAgent.GECKO) {
+    if ((userAgent.WINDOWS || platform.isAndroid()) && !userAgent.GECKO) {
       assertTrue(Field.isGeneratingKey_(imeKeyEvent, false));
     } else {
       assertFalse(Field.isGeneratingKey_(imeKeyEvent, false));
     }
+  },
+
+  testRegularKeyDispatchesDelayedChange() {
+    if (userAgent.GECKO) {
+      // Gecko based browsers handle changes via mutation events
+      return;
+    }
+    if (userAgent.WINDOWS || platform.isAndroid()) {
+      // Windows and Android platforms do not emit events with 'regular' key
+      // codes.
+      return;
+    }
+    const editableField = new FieldConstructor('testField');
+    const clock = new MockClock(true);
+    const delayedChanges = recordFunction();
+
+    editableField.makeEditable();
+    events.listen(editableField, Field.EventType.DELAYEDCHANGE, delayedChanges);
+
+    testingEvents.fireKeySequence(editableField.getElement(), KeyCodes.A);
+    clock.tick(1000);
+
+    if (!(userAgent.WINDOWS || platform.isAndroid()) || userAgent.GECKO) {
+      assertEquals(
+          'Delayed change event should\'ve been dispatched', 1,
+          delayedChanges.getCallCount());
+    }
+
+    clock.dispose();
+    editableField.dispose();
+  },
+
+  testImeKeyDispatchesDelayedChange() {
+    if (BrowserFeature.USE_MUTATION_EVENTS) {
+      // Gecko based browsers handle changes via mutation events
+      return;
+    }
+    if (!(userAgent.WINDOWS || platform.isAndroid())) {
+      // Only Windows and Android platforms emit these IME-specific events.
+      return;
+    }
+    const editableField = new FieldConstructor('testField');
+    const clock = new MockClock(true);
+    const delayedChanges = recordFunction();
+
+    editableField.makeEditable();
+    events.listen(editableField, Field.EventType.DELAYEDCHANGE, delayedChanges);
+
+    testingEvents.fireKeySequence(editableField.getElement(), KeyCodes.WIN_IME);
+    clock.tick(1000);
+
+    assertEquals(
+        'Delayed change event should\'ve been dispatched', 1,
+        delayedChanges.getCallCount());
+
+
+    clock.dispose();
+    editableField.dispose();
+  },
+
+  testInputEventDispatchesDelayedChange() {
+    if (BrowserFeature.USE_MUTATION_EVENTS) {
+      // Gecko based browsers handle changes via mutation events
+      return;
+    }
+    const editableField = new FieldConstructor('testField');
+    const clock = new MockClock(true);
+    const delayedChanges = recordFunction();
+
+    editableField.makeEditable();
+    events.listen(editableField, Field.EventType.DELAYEDCHANGE, delayedChanges);
+
+    // Non-typing changes on some devices rely on emitting an INPUT event, such
+    // as:
+    // - swipe-typing a word (on iOS)
+    // - accepting a word prediction (on iOS)
+    // - using speech to text (on iOS)
+    // - accepting a spellcheck suggestion (on iOS, Android or Desktop)
+    testingEvents.fireBrowserEvent(
+        new TestEvent(EventType.INPUT, editableField.getElement()));
+    clock.tick(1000);
+
+    assertEquals(
+        'Delayed change event should\'ve been dispatched', 1,
+        delayedChanges.getCallCount());
+
+    clock.dispose();
+    editableField.dispose();
   },
 
   testSetEditableClassName() {
@@ -1380,7 +1572,9 @@ testSuite({
     assertTrue(classlist.contains(element, 'editable'));
     assertEquals(
         1,
-        googArray.count(classlist.get(element), functions.equalTo('editable')));
+        Array.prototype.filter
+            .call(classlist.get(element), functions.equalTo('editable'))
+            .length);
 
     // Skip restore won't reset the original element's CSS classes.
     editableField.makeUneditable(true /* opt_skipRestore */);
@@ -1389,6 +1583,8 @@ testSuite({
     assertTrue(classlist.contains(element, 'editable'));
     assertEquals(
         1,
-        googArray.count(classlist.get(element), functions.equalTo('editable')));
+        Array.prototype.filter
+            .call(classlist.get(element), functions.equalTo('editable'))
+            .length);
   },
 });

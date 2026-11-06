@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,6 +23,9 @@ class LogoObserver;
 //
 class LogoService : public KeyedService {
  public:
+  LogoService(const LogoService&) = delete;
+  LogoService& operator=(const LogoService&) = delete;
+
   // Gets the logo for the default search provider and calls the provided
   // callbacks with the encoded and decoded logos. The service will:
   //
@@ -30,8 +33,12 @@ class LogoService : public KeyedService {
   // 2.  Fetch a fresh logo, and call callbacks.on_fresh_{en,de}coded_logo.
   //
   // At least one member of |callbacks| must be non-null. If |for_webui_ntp| is
-  // true fetches a logo that is compatible with the WebUI NTP.
-  virtual void GetLogo(LogoCallbacks callbacks, bool for_webui_ntp) = 0;
+  // true fetches a logo that is compatible with the WebUI NTP. If
+  // |enable_animated_logo| is true, fetches an animated logo and mural if
+  // available.
+  virtual void GetLogo(LogoCallbacks callbacks,
+                       bool for_webui_ntp,
+                       bool enable_animated_logo) = 0;
 
   // Gets the logo for the default search provider and notifies |observer|
   // 0-2 times with the results. The service will:
@@ -47,9 +54,6 @@ class LogoService : public KeyedService {
 
  protected:
   LogoService();
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(LogoService);
 };
 
 }  // namespace search_provider_logos

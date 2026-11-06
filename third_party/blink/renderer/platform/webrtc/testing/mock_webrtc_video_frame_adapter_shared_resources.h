@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,14 +23,12 @@ class MockSharedResources : public WebRtcVideoFrameAdapter::SharedResources {
                const gfx::Size& natural_size,
                base::TimeDelta timestamp));
 
-  MOCK_METHOD(scoped_refptr<media::VideoFrame>,
-              CreateTemporaryFrame,
-              (media::VideoPixelFormat format,
-               const gfx::Size& coded_size,
-               const gfx::Rect& visible_rect,
-               const gfx::Size& natural_size,
-               base::TimeDelta timestamp));
+  MOCK_METHOD(media::EncoderStatus,
+              ConvertAndScale,
+              (const media::VideoFrame& src_frame,
+               media::VideoFrame& dest_frame));
 
+  MOCK_METHOD(void, RequestRasterContextProvider, ());
   MOCK_METHOD(scoped_refptr<viz::RasterContextProvider>,
               GetRasterContextProvider,
               ());
@@ -45,29 +43,27 @@ class MockSharedResources : public WebRtcVideoFrameAdapter::SharedResources {
 
   void ExpectCreateFrameWithRealImplementation() {
     EXPECT_CALL(*this, CreateFrame)
-        .WillOnce(testing::Invoke(
+        .WillOnce(
             [this](media::VideoPixelFormat format, const gfx::Size& coded_size,
                    const gfx::Rect& visible_rect, const gfx::Size& natural_size,
                    base::TimeDelta timestamp) {
               return WebRtcVideoFrameAdapter::SharedResources::CreateFrame(
                   format, coded_size, visible_rect, natural_size, timestamp);
-            }));
+            });
   }
 
-  void ExpectCreateTemporaryFrameWithRealImplementation() {
-    EXPECT_CALL(*this, CreateTemporaryFrame)
-        .WillOnce(testing::Invoke([this](media::VideoPixelFormat format,
-                                         const gfx::Size& coded_size,
-                                         const gfx::Rect& visible_rect,
-                                         const gfx::Size& natural_size,
-                                         base::TimeDelta timestamp) {
-          return WebRtcVideoFrameAdapter::SharedResources::CreateTemporaryFrame(
-              format, coded_size, visible_rect, natural_size, timestamp);
-        }));
+  void ExpectConvertAndScaleWithRealImplementation() {
+    EXPECT_CALL(*this, ConvertAndScale)
+        .WillOnce([this](const media::VideoFrame& src_frame,
+                         media::VideoFrame& dest_frame) {
+          return WebRtcVideoFrameAdapter::SharedResources::ConvertAndScale(
+              src_frame, dest_frame);
+        });
   }
 
- private:
-  friend class base::RefCountedThreadSafe<MockSharedResources>;
+ protected:
+  friend class ThreadSafeRefCounted<MockSharedResources>;
+  ~MockSharedResources() override = default;
 };
 
 }  // namespace blink

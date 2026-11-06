@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "components/viz/common/resources/resource_id.h"
 #include "components/viz/common/resources/returned_resource.h"
 #include "components/viz/common/resources/transferable_resource.h"
@@ -24,19 +24,33 @@ class SurfaceResourceHolderClient;
 class VIZ_SERVICE_EXPORT SurfaceResourceHolder {
  public:
   explicit SurfaceResourceHolder(SurfaceResourceHolderClient* client);
+
+  SurfaceResourceHolder(const SurfaceResourceHolder&) = delete;
+  SurfaceResourceHolder& operator=(const SurfaceResourceHolder&) = delete;
+
   ~SurfaceResourceHolder();
 
   void Reset();
   void ReceiveFromChild(const std::vector<TransferableResource>& resources);
-  void RefResources(const std::vector<TransferableResource>& resources);
-  void UnrefResources(std::vector<ReturnedResource> resources);
+  // Returns unhandled reserved resources (with IDs >=
+  // kVizReservedRangeStartId).
+  std::vector<TransferableResource> RefResources(
+      const std::vector<TransferableResource>& resources);
+  // Returns unhandled reserved resources (with IDs >=
+  // kVizReservedRangeStartId).
+  std::vector<ReturnedResourceViz> UnrefResources(
+      std::vector<ReturnedResourceViz> resources);
 
  private:
-  SurfaceResourceHolderClient* client_;
+  raw_ptr<SurfaceResourceHolderClient> client_;
 
   struct ResourceRefs {
+    ResourceRefs();
+    ~ResourceRefs();
+
     int refs_received_from_child = 0;
     int refs_holding_resource_alive = 0;
+    scoped_refptr<gpu::ClientSharedImage> shared_image;
     gpu::SyncToken sync_token;
   };
   // Keeps track of the number of users currently in flight for each resource
@@ -46,8 +60,6 @@ class VIZ_SERVICE_EXPORT SurfaceResourceHolder {
   using ResourceIdInfoMap =
       std::unordered_map<ResourceId, ResourceRefs, ResourceIdHasher>;
   ResourceIdInfoMap resource_id_info_map_;
-
-  DISALLOW_COPY_AND_ASSIGN(SurfaceResourceHolder);
 };
 
 }  // namespace viz

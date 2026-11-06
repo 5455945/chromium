@@ -1,7 +1,9 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 #include "third_party/blink/renderer/core/timing/performance_mark.h"
+
+#include <optional>
 
 #include "third_party/blink/public/mojom/timing/performance_mark_or_measure.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
@@ -14,6 +16,7 @@
 #include "third_party/blink/renderer/core/timing/worker_global_scope_performance.h"
 #include "third_party/blink/renderer/core/workers/worker_global_scope.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
+#include "third_party/blink/renderer/platform/wtf/thread_specific.h"
 
 namespace blink {
 
@@ -22,8 +25,14 @@ PerformanceMark::PerformanceMark(
     double start_time,
     base::TimeTicks unsafe_time_for_traces,
     scoped_refptr<SerializedScriptValue> serialized_detail,
-    ExceptionState& exception_state)
-    : PerformanceEntry(name, start_time, start_time),
+    ExceptionState& exception_state,
+    DOMWindow* source,
+    uint64_t navigation_id)
+    : PerformanceEntry(/*duration=*/0.0,
+                       name,
+                       start_time,
+                       source,
+                       navigation_id),
       serialized_detail_(std::move(serialized_detail)),
       unsafe_time_for_traces_(unsafe_time_for_traces) {}
 
@@ -45,56 +54,63 @@ PerformanceMark* PerformanceMark::Create(ScriptState* script_state,
 
   DOMHighResTimeStamp start = 0.0;
   base::TimeTicks unsafe_start_for_traces;
-  ScriptValue detail = ScriptValue::CreateNull(script_state->GetIsolate());
+  std::optional<ScriptValue> detail;
   if (mark_options) {
     if (mark_options->hasStartTime()) {
       start = mark_options->startTime();
       if (start < 0.0) {
-        exception_state.ThrowTypeError("'" + mark_name +
-                                       "' cannot have a negative start time.");
+        exception_state.ThrowTypeError(
+            StrCat({"'", mark_name, "' cannot have a negative start time."}));
         return nullptr;
       }
       // |start| is in milliseconds from the start of navigation.
       // GetTimeOrigin() returns seconds from the monotonic clock's origin..
       // Trace events timestamps accept seconds (as a double) based on
       // CurrentTime::monotonicallyIncreasingTime().
-      unsafe_start_for_traces = trace_event::ToTraceTimestamp(
-          performance->GetTimeOrigin() + start / 1000.0);
+      unsafe_start_for_traces =
+          performance->GetTimeOriginInternal() + base::Milliseconds(start);
     } else {
       start = performance->now();
       unsafe_start_for_traces = base::TimeTicks::Now();
     }
 
-    if (mark_options->hasDetail())
+    if (mark_options->hasDetail()) {
       detail = mark_options->detail();
+    }
   } else {
     start = performance->now();
     unsafe_start_for_traces = base::TimeTicks::Now();
   }
 
   if (!is_worker_global_scope &&
-      PerformanceTiming::GetAttributeMapping().Contains(mark_name)) {
+      PerformanceTiming::IsAttributeName(mark_name)) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kSyntaxError,
-        "'" + mark_name +
-            "' is part of the PerformanceTiming interface, and "
-            "cannot be used as a mark name.");
+        StrCat({"'", mark_name,
+                "' is part of the PerformanceTiming interface, and cannot be "
+                "used as a mark name."}));
     return nullptr;
   }
 
-  scoped_refptr<SerializedScriptValue> serialized_detail =
-      SerializedScriptValue::Serialize(
-          script_state->GetIsolate(), detail.V8Value(),
-          SerializedScriptValue::SerializeOptions(), exception_state);
-  if (exception_state.HadException())
-    return nullptr;
+  scoped_refptr<SerializedScriptValue> serialized_detail;
+  if (!detail) {
+    serialized_detail = nullptr;
+  } else {
+    serialized_detail = SerializedScriptValue::Serialize(
+        script_state->GetIsolate(), (*detail).V8Value(),
+        SerializedScriptValue::SerializeOptions(), exception_state);
+    if (exception_state.HadException()) {
+      return nullptr;
+    }
+  }
 
   return MakeGarbageCollected<PerformanceMark>(
       mark_name, start, unsafe_start_for_traces, std::move(serialized_detail),
-      exception_state);
+      exception_state, LocalDOMWindow::From(script_state),
+      performance->NavigationId().web_exposed_id);
 }
 
-AtomicString PerformanceMark::entryType() const {
+const AtomicString& PerformanceMark::entryType() const {
   return performance_entry_names::kMark;
 }
 
@@ -106,23 +122,69 @@ mojom::blink::PerformanceMarkOrMeasurePtr
 PerformanceMark::ToMojoPerformanceMarkOrMeasure() {
   auto mojo_performance_mark_or_measure =
       PerformanceEntry::ToMojoPerformanceMarkOrMeasure();
-  mojo_performance_mark_or_measure->detail = serialized_detail_->GetWireData();
+  if (serialized_detail_) {
+    mojo_performance_mark_or_measure->detail =
+        serialized_detail_->GetWireData();
+  }
   return mojo_performance_mark_or_measure;
 }
 
 ScriptValue PerformanceMark::detail(ScriptState* script_state) {
   v8::Isolate* isolate = script_state->GetIsolate();
-  if (!serialized_detail_)
+  if (!serialized_detail_) {
     return ScriptValue(isolate, v8::Null(isolate));
+  }
   auto result = deserialized_detail_map_.insert(
       script_state, TraceWrapperV8Reference<v8::Value>());
   TraceWrapperV8Reference<v8::Value>& relevant_data =
       result.stored_value->value;
-  if (!result.is_new_entry)
-    return ScriptValue(isolate, relevant_data.NewLocal(isolate));
+  if (!result.is_new_entry) {
+    return ScriptValue(isolate, relevant_data.Get(isolate));
+  }
   v8::Local<v8::Value> value = serialized_detail_->Deserialize(isolate);
-  relevant_data.Set(isolate, value);
+  relevant_data.Reset(isolate, value);
   return ScriptValue(isolate, value);
+}
+
+// static
+const PerformanceMark::UserFeatureNameToWebFeatureMap&
+PerformanceMark::GetUseCounterMapping() {
+  DEFINE_THREAD_SAFE_STATIC_LOCAL(
+      ThreadSpecific<UserFeatureNameToWebFeatureMap>, map, ());
+  if (!map.IsSet()) {
+    *map = {
+        {"NgOptimizedImage", WebFeature::kUserFeatureNgOptimizedImage},
+        {"NgAfterRender", WebFeature::kUserFeatureNgAfterRender},
+        {"NgHydration", WebFeature::kUserFeatureNgHydration},
+        {"next-third-parties-ga", WebFeature::kUserFeatureNextThirdPartiesGA},
+        {"next-third-parties-gtm", WebFeature::kUserFeatureNextThirdPartiesGTM},
+        {"next-third-parties-YouTubeEmbed",
+         WebFeature::kUserFeatureNextThirdPartiesYouTubeEmbed},
+        {"next-third-parties-GoogleMapsEmbed",
+         WebFeature::kUserFeatureNextThirdPartiesGoogleMapsEmbed},
+        {"nuxt-image", WebFeature::kUserFeatureNuxtImage},
+        {"nuxt-picture", WebFeature::kUserFeatureNuxtPicture},
+        {"nuxt-third-parties-ga", WebFeature::kUserFeatureNuxtThirdPartiesGA},
+        {"nuxt-third-parties-gtm", WebFeature::kUserFeatureNuxtThirdPartiesGTM},
+        {"nuxt-third-parties-YouTubeEmbed",
+         WebFeature::kUserFeatureNuxtThirdPartiesYouTubeEmbed},
+        {"nuxt-third-parties-GoogleMaps",
+         WebFeature::kUserFeatureNuxtThirdPartiesGoogleMaps},
+    };
+  }
+  return *map;
+}
+
+// static
+std::optional<mojom::blink::WebFeature>
+PerformanceMark::GetWebFeatureForUserFeatureName(const String& feature_name) {
+  auto& feature_map = PerformanceMark::GetUseCounterMapping();
+  auto it = feature_map.find(feature_name);
+  if (it == feature_map.end()) {
+    return std::nullopt;
+  }
+
+  return it->value;
 }
 
 void PerformanceMark::Trace(Visitor* visitor) const {

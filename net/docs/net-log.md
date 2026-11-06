@@ -15,12 +15,12 @@ parameters, or adding information to existing ones.
 The high level objectives when adding net logging code are:
 
 * No performance cost when capturing is off.
-* Logs captured using [`kDefault`](../log/net_log_capture_mode.h) are safe to
-  upload and share publicly.
-* Capturing using [`kDefault`](../log/net_log_capture_mode.h) has a low
+* Logs captured using [`kHeavilyRedacted`](../log/net_log_capture_mode.h) are
+  safe to upload and share publicly.
+* Capturing using [`kDefault`](../log/net_log_capture_mode.h) or lower has a low
   performance impact.
-* Logs captured using [`kDefault`](../log/net_log_capture_mode.h) are small
-  enough to upload to bug reports.
+* Logs captured using [`kDefault`](../log/net_log_capture_mode.h) or lower are
+  small enough to upload to bug reports.
 * Events that may emit sensitive information have accompanying unit-tests.
 * The event and its possible parameters are documented in
   [net_log_event_type_list.h](../log/net_log_event_type_list.h)
@@ -55,7 +55,7 @@ Also consider the maximum size of any string parameters:
 NetLog parameters are specified as a JSON serializable `base::Value` which does
 not support 64-bit integers.
 
-Be careful when using `base::Value::SetIntKey()` as it will truncate 64-bit
+Be careful when using `base::DictValue::Set()` as it will truncate 64-bit
 values to 32-bits.
 
 Instead use `NetLogNumberValue()`.
@@ -123,14 +123,14 @@ at all capture modes.
 
 ```
 net_log.AddEvent(NetLogEventType::SSL_CERTIFICATES_RECEIVED, [&] {
-  base::Value dict(base::Value::Type::DICTIONARY);
-  base::Value certs(base::Value::Type::LIST);
+  base::DictValue dict;
+  base::ListValue certs;
   std::vector<std::string> encoded_chain;
   server_cert_->GetPEMEncodedChain(&encoded_chain);
   for (auto& pem : encoded_chain)
     certs.Append(std::move(pem));
-  dict.SetKey("certificates", std::move(certs));
-  return dict;
+  dict.Set("certificates", std::move(certs));
+  return base::Value(std::move(dict));
 });
 ```
 
@@ -156,10 +156,10 @@ net_log.AddEvent(NetLogEventType::COOKIE_STORE_COOKIE_ADDED,
                  [&](NetLogCaptureMode capture_mode) {
                    if (!NetLogCaptureIncludesSensitive(capture_mode))
                      return base::Value();
-                   base::Value dict(base::Value::Type::DICTIONARY);
-                   dict.SetStringKey("name", cookie->Name());
-                   dict.SetStringKey("value", cookie->Value());
-                   return dict;
+                   base::DictValue dict;
+                   dict.Set("name", cookie->Name());
+                   dict.Set("value", cookie->Value());
+                   return base::Value(std::move(dict));
                  });
 ```
 

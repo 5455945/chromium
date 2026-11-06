@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,45 +7,59 @@
 
 #include <string>
 
-#include "base/files/file.h"
-#include "base/unguessable_token.h"
+#include "build/build_config.h"
 #include "media/base/media_export.h"
+#include "media/media_buildflags.h"
 
 namespace media {
 
-enum class AutomaticGainControlType {
-  kDisabled,
-  kDefault,
-  kExperimental,
-  kHybridExperimental
-};
-enum class EchoCancellationType { kDisabled, kAec3, kSystemAec };
-enum class NoiseSuppressionType { kDisabled, kDefault, kExperimental };
-
+// This struct specifies software audio processing effects to be applied by
+// Chrome to mic capture audio. If system / hardware effects replace effects in
+// this struct, then the corresponding parameters in the struct should be
+// disabled.
 struct MEDIA_EXPORT AudioProcessingSettings {
-  EchoCancellationType echo_cancellation = EchoCancellationType::kDisabled;
-  NoiseSuppressionType noise_suppression = NoiseSuppressionType::kDisabled;
-  AutomaticGainControlType automatic_gain_control =
-      AutomaticGainControlType::kDisabled;
-  bool high_pass_filter = false;
-  bool typing_detection = false;
-  bool stereo_mirroring = false;
+  bool echo_cancellation = true;
+  bool noise_suppression = true;
+  bool automatic_gain_control = true;
+  // Multi-channel is not an individual audio effect, but determines whether the
+  // processing algorithms should preserve multi-channel input audio.
+  bool multi_channel_capture_processing = true;
+  // If true, a system loopback stream will be used as the echo cancellation
+  // reference signal.
+  bool use_loopback_aec_reference = false;
+#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
+  // If true, voice isolation will be applied.
+  bool voice_isolation = false;
+#endif
 
   bool operator==(const AudioProcessingSettings& b) const {
-    return echo_cancellation == b.echo_cancellation &&
-           noise_suppression == b.noise_suppression &&
-           automatic_gain_control == b.automatic_gain_control &&
-           high_pass_filter == b.high_pass_filter &&
-           typing_detection == b.typing_detection &&
-           stereo_mirroring == b.stereo_mirroring;
+    bool equal = echo_cancellation == b.echo_cancellation &&
+                 noise_suppression == b.noise_suppression &&
+                 automatic_gain_control == b.automatic_gain_control &&
+                 multi_channel_capture_processing ==
+                     b.multi_channel_capture_processing &&
+                 use_loopback_aec_reference == b.use_loopback_aec_reference;
+#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
+    equal = equal && voice_isolation == b.voice_isolation;
+#endif
+    return equal;
   }
 
-  // Indicates whether WebRTC will be required to perform the audio processing.
-  bool requires_apm() const {
-    return echo_cancellation == EchoCancellationType::kAec3 ||
-           noise_suppression != NoiseSuppressionType::kDisabled ||
-           automatic_gain_control != AutomaticGainControlType::kDisabled ||
-           high_pass_filter || typing_detection || stereo_mirroring;
+  bool NeedWebrtcAudioProcessing() const {
+    // TODO(crbug.com/40205004): Legacy iOS-specific behavior;
+    // reconsider.
+#if !BUILDFLAG(IS_IOS)
+    if (echo_cancellation || automatic_gain_control) {
+      return true;
+    }
+#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
+    if (voice_isolation) {
+      return true;
+    }
+#endif
+#endif
+
+    return noise_suppression;
   }
 
   // Stringifies the settings for human-readable logging.

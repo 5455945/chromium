@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,12 @@
 
 #include <cstdint>
 #include <memory>
+#include <string_view>
 
-#include "base/callback.h"
-#include "components/reporting/proto/record.pb.h"
-#include "components/reporting/proto/record_constants.pb.h"
+#include "base/functional/callback.h"
+#include "components/reporting/proto/synced/record.pb.h"
+#include "components/reporting/proto/synced/record_constants.pb.h"
+#include "components/reporting/resources/resource_manager.h"
 #include "components/reporting/util/status.h"
 #include "components/reporting/util/statusor.h"
 
@@ -24,6 +26,22 @@ namespace reporting {
 // automatically discards after |Completed| returns.
 class UploaderInterface {
  public:
+  // Reason upload is instantiated.
+  enum class UploadReason : uint32_t {
+    UNKNOWN = 0,           // Dummy value, should not be attached to any upload
+    MANUAL = 1,            // Upload triggered by manual Flush call
+    KEY_DELIVERY = 2,      // Upload requesting encryption key delivery/update
+    PERIODIC = 3,          // Upload triggered by periodic queue timer
+    IMMEDIATE_FLUSH = 4,   // Upload after IMMEDIATE event is enqueued
+    FAILURE_RETRY = 5,     // Retry after any upload failure
+    INCOMPLETE_RETRY = 6,  // Retry when some time after upload the events
+                           // are still not confirmed by the server
+    INIT_RESUME = 7,       // Automatic upload when queue initialization found
+                           // the queue is not empty (some events remained after
+                           // shutdown and restart)
+    MAX_REASON = 8,        // Anything beyond this is illegal
+  };
+
   // using AsyncStartUploaderCb =
   //     base::RepeatingCallback<StatusOr<std::unique_ptr<UploaderInterface>>(
   //         bool need_encryption_key)>;
@@ -36,7 +54,7 @@ class UploaderInterface {
       base::OnceCallback<void(StatusOr<std::unique_ptr<UploaderInterface>>)>;
   // Callback type for asynchronous UploadInterface provider.
   using AsyncStartUploaderCb =
-      base::RepeatingCallback<void(bool need_encryption_key,
+      base::RepeatingCallback<void(UploaderInterface::UploadReason reason,
                                    UploaderInterfaceResultCb)>;
 
   UploaderInterface(const UploaderInterface& other) = delete;
@@ -48,19 +66,22 @@ class UploaderInterface {
   // the record or error status has been processed, with true if next record
   // needs to be delivered and false if the Uploader should stop.
   virtual void ProcessRecord(EncryptedRecord record,
+                             ScopedReservation scoped_reservation,
                              base::OnceCallback<void(bool)> processed_cb) = 0;
 
   // Makes a note of a gap [start, start + count). Expects |processed_cb| to
   // be called after the record or error status has been processed, with true
   // if next record needs to be delivered and false if the Uploader should
   // stop.
-  virtual void ProcessGap(SequencingInformation start,
+  virtual void ProcessGap(SequenceInformation start,
                           uint64_t count,
                           base::OnceCallback<void(bool)> processed_cb) = 0;
 
   // Finalizes the upload (e.g. sends the message to server and gets
   // response). Called always, regardless of whether there were errors.
   virtual void Completed(Status final_status) = 0;
+
+  static std::string_view ReasonToString(UploadReason);
 
  protected:
   UploaderInterface();

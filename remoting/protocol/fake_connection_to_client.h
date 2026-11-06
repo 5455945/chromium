@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,61 +7,101 @@
 
 #include <stdint.h>
 
-#include "base/callback.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include <map>
+#include <memory>
+#include <string>
+
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
+#include "remoting/protocol/audio_stream.h"
 #include "remoting/protocol/connection_to_client.h"
-#include "remoting/protocol/video_feedback_stub.h"
+#include "remoting/protocol/desktop_capturer.h"
+#include "remoting/protocol/fake_message_pipe.h"
+#include "remoting/protocol/network_settings.h"
 #include "remoting/protocol/video_stream.h"
 #include "remoting/protocol/video_stub.h"
 
-namespace remoting {
-namespace protocol {
+namespace remoting::protocol {
+
+class FakeAudioStream : public protocol::AudioStream {
+ public:
+  FakeAudioStream();
+
+  FakeAudioStream(const FakeAudioStream&) = delete;
+  FakeAudioStream& operator=(const FakeAudioStream&) = delete;
+
+  ~FakeAudioStream() override;
+
+  // protocol::AudioStream interface.
+  void Pause(bool pause) override;
+
+  bool is_paused() const { return is_paused_; }
+
+  base::WeakPtr<FakeAudioStream> GetWeakPtr();
+
+ private:
+  bool is_paused_ = false;
+
+  base::WeakPtrFactory<FakeAudioStream> weak_factory_{this};
+};
 
 class FakeVideoStream : public protocol::VideoStream {
  public:
   FakeVideoStream();
+
+  FakeVideoStream(const FakeVideoStream&) = delete;
+  FakeVideoStream& operator=(const FakeVideoStream&) = delete;
+
   ~FakeVideoStream() override;
 
   // protocol::VideoStream interface.
   void SetEventTimestampsSource(scoped_refptr<InputEventTimestampsSource>
                                     event_timestamps_source) override;
   void Pause(bool pause) override;
-  void SetLosslessEncode(bool want_lossless) override;
-  void SetLosslessColor(bool want_lossless) override;
-  void SetObserver(Observer* observer) override;
-  void SelectSource(int id) override;
+  void SelectSource(webrtc::ScreenId id) override;
+  void SetTargetFramerate(int framerate) override;
 
-  Observer* observer() { return observer_; }
+  webrtc::ScreenId selected_source() const;
 
   base::WeakPtr<FakeVideoStream> GetWeakPtr();
 
  private:
-  Observer* observer_ = nullptr;
+  webrtc::ScreenId selected_source_ = -200;
 
   base::WeakPtrFactory<FakeVideoStream> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(FakeVideoStream);
 };
 
 class FakeConnectionToClient : public ConnectionToClient {
  public:
-  FakeConnectionToClient(std::unique_ptr<Session> session);
+  FakeConnectionToClient();
+
+  FakeConnectionToClient(const FakeConnectionToClient&) = delete;
+  FakeConnectionToClient& operator=(const FakeConnectionToClient&) = delete;
+
   ~FakeConnectionToClient() override;
 
   void SetEventHandler(EventHandler* event_handler) override;
+  void ApplyNetworkSettings(const NetworkSettings& settings) override;
 
   std::unique_ptr<VideoStream> StartVideoStream(
-      std::unique_ptr<webrtc::DesktopCapturer> desktop_capturer) override;
+      webrtc::ScreenId screen_id,
+      std::unique_ptr<DesktopCapturer> desktop_capturer) override;
   std::unique_ptr<AudioStream> StartAudioStream(
       std::unique_ptr<AudioSource> audio_source) override;
+  void SetAudioWriter(std::unique_ptr<FifoBufferWriter> writer) override;
 
   ClientStub* client_stub() override;
-  void Disconnect(ErrorCode disconnect_error) override;
+  void Start() override;
+  void Disconnect(ErrorCode error,
+                  std::string_view error_details,
+                  const SourceLocation& error_location) override;
 
-  Session* session() override;
+  std::unique_ptr<MessagePipe> CreateOutgoingDataChannel(
+      const std::string& name) override;
+
+  Transport* transport() override;
 
   void set_clipboard_stub(ClipboardStub* clipboard_stub) override;
   void set_host_stub(HostStub* host_stub) override;
@@ -73,51 +113,56 @@ class FakeConnectionToClient : public ConnectionToClient {
   base::WeakPtr<FakeVideoStream> last_video_stream() {
     return last_video_stream_;
   }
+  base::WeakPtr<FakeAudioStream> last_audio_stream() {
+    return last_audio_stream_;
+  }
+  FifoBufferWriter* audio_writer() { return audio_writer_.get(); }
 
   void set_client_stub(ClientStub* client_stub) { client_stub_ = client_stub; }
   void set_video_stub(VideoStub* video_stub) { video_stub_ = video_stub; }
-  void set_video_encode_task_runner(
-      scoped_refptr<base::SingleThreadTaskRunner> runner) {
-    video_encode_task_runner_ = runner;
-  }
 
   EventHandler* event_handler() { return event_handler_; }
   ClipboardStub* clipboard_stub() { return clipboard_stub_; }
   HostStub* host_stub() { return host_stub_; }
   InputStub* input_stub() { return input_stub_; }
   VideoStub* video_stub() { return video_stub_; }
-  VideoFeedbackStub* video_feedback_stub() { return video_feedback_stub_; }
 
   bool is_connected() { return is_connected_; }
   ErrorCode disconnect_error() { return disconnect_error_; }
+  const NetworkSettings& network_settings() const { return network_settings_; }
+  FakeMessagePipe* GetOutgoingDataChannel(const std::string& name) const;
+
+  base::WeakPtr<ConnectionToClient> GetWeakPtr() override;
+  base::WeakPtr<FakeConnectionToClient> GetWeakPtrForTest();
 
  private:
-  // TODO(crbug.com/1043325): Remove the requirement that ConnectionToClient
+  // TODO(crbug.com/40115219): Remove the requirement that ConnectionToClient
   // retains a pointer to the capturer if the relative pointer experiment is
   // a success.
-  std::unique_ptr<webrtc::DesktopCapturer> desktop_capturer_;
-  std::unique_ptr<Session> session_;
-  EventHandler* event_handler_ = nullptr;
+  std::unique_ptr<DesktopCapturer> desktop_capturer_;
+  std::unique_ptr<AudioSource> audio_source_;
+  raw_ptr<EventHandler> event_handler_ = nullptr;
 
   base::WeakPtr<FakeVideoStream> last_video_stream_;
+  base::WeakPtr<FakeAudioStream> last_audio_stream_;
 
-  ClientStub* client_stub_ = nullptr;
+  raw_ptr<ClientStub> client_stub_ = nullptr;
 
-  ClipboardStub* clipboard_stub_ = nullptr;
-  HostStub* host_stub_ = nullptr;
-  InputStub* input_stub_ = nullptr;
-  VideoStub* video_stub_ = nullptr;
-  VideoFeedbackStub* video_feedback_stub_ = nullptr;
-
-  scoped_refptr<base::SingleThreadTaskRunner> video_encode_task_runner_;
+  raw_ptr<ClipboardStub> clipboard_stub_ = nullptr;
+  raw_ptr<HostStub> host_stub_ = nullptr;
+  raw_ptr<InputStub> input_stub_ = nullptr;
+  raw_ptr<VideoStub> video_stub_ = nullptr;
 
   bool is_connected_ = true;
-  ErrorCode disconnect_error_ = OK;
+  ErrorCode disconnect_error_ = ErrorCode::OK;
+  NetworkSettings network_settings_;
+  std::unique_ptr<FifoBufferWriter> audio_writer_;
+  std::map<std::string, std::unique_ptr<FakeMessagePipe>>
+      outgoing_data_channels_;
 
-  DISALLOW_COPY_AND_ASSIGN(FakeConnectionToClient);
+  base::WeakPtrFactory<FakeConnectionToClient> weak_factory_{this};
 };
 
-}  // namespace protocol
-}  // namespace remoting
+}  // namespace remoting::protocol
 
 #endif  // REMOTING_PROTOCOL_FAKE_CONNECTION_TO_CLIENT_H_

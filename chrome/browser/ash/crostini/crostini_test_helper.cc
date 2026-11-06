@@ -1,56 +1,50 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/crostini/crostini_test_helper.h"
 
+#include "ash/constants/ash_features.h"
+#include "base/check_deref.h"
 #include "base/feature_list.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/ash/crostini/crostini_manager.h"
 #include "chrome/browser/ash/crostini/crostini_pref_names.h"
+#include "chrome/browser/ash/guest_os/guest_id.h"
 #include "chrome/browser/ash/guest_os/guest_os_registry_service.h"
 #include "chrome/browser/ash/guest_os/guest_os_registry_service_factory.h"
-#include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
+#include "chrome/browser/ash/guest_os/public/guest_os_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/chrome_features.h"
-#include "chrome/test/base/testing_profile.h"
-#include "chromeos/dbus/dbus_thread_manager.h"
-#include "components/crx_file/id_util.h"
+#include "chromeos/ash/components/dbus/cicerone/cicerone_client.h"
 #include "components/prefs/pref_service.h"
-#include "components/user_manager/scoped_user_manager.h"
+#include "google_apis/gaia/gaia_id.h"
+#include "third_party/skia/include/core/SkColor.h"
 
 using vm_tools::apps::App;
 using vm_tools::apps::ApplicationList;
 
 namespace crostini {
 
-CrostiniTestHelper::CrostiniTestHelper(TestingProfile* profile,
-                                       bool enable_crostini)
-    : profile_(profile) {
-  scoped_feature_list_.InitAndEnableFeature(features::kCrostini);
+constexpr SkColor kTestContainerBadgeColor = SK_ColorBLUE;
 
-  chromeos::ProfileHelper::SetAlwaysReturnPrimaryUserForTesting(true);
-  scoped_user_manager_ = std::make_unique<user_manager::ScopedUserManager>(
-      std::make_unique<ash::FakeChromeUserManager>());
-  auto* fake_user_manager = static_cast<ash::FakeChromeUserManager*>(
-      user_manager::UserManager::Get());
-  auto account = AccountId::FromUserEmailGaiaId("test@example.com", "12345");
-  fake_user_manager->AddUserWithAffiliationAndTypeAndProfile(
-      account, false, user_manager::USER_TYPE_REGULAR, profile);
-  fake_user_manager->LoginUser(account);
-
-  if (enable_crostini)
+CrostiniTestHelper::CrostiniTestHelper(Profile* profile, bool enable_crostini)
+    : profile_(CHECK_DEREF(profile)) {
+  scoped_feature_list_.InitAndEnableFeature(ash::features::kCrostini);
+  if (enable_crostini) {
     EnableCrostini(profile);
+  }
 
   current_apps_.set_vm_name(kCrostiniDefaultVmName);
   current_apps_.set_container_name(kCrostiniDefaultContainerName);
+
+  guest_os::AddContainerToPrefs(profile, DefaultContainerId(), {});
+  SetContainerBadgeColor(profile, DefaultContainerId(),
+                         kTestContainerBadgeColor);
 }
 
 CrostiniTestHelper::~CrostiniTestHelper() {
-  chromeos::ProfileHelper::SetAlwaysReturnPrimaryUserForTesting(false);
-  DisableCrostini(profile_);
+  DisableCrostini(&*profile_);
 }
 
 void CrostiniTestHelper::SetupDummyApps() {
@@ -83,23 +77,18 @@ void CrostiniTestHelper::RemoveApp(int i) {
 
 void CrostiniTestHelper::ReInitializeAppServiceIntegration() {
   // Some Crostini-related tests add apps to the registry, which queues
-  // (asynchronous) icon loading requests, which depends on D-Bus. These
-  // requests are merely queued, not executed, so without further action, D-Bus
-  // can be ignored.
-  //
-  // Separately, the App Service is a Mojo IPC service, and explicit
-  // RunUntilIdle or FlushMojoCallsForTesting calls are required to pump the
-  // IPCs, not just during this method, but also during the actual test code.
-  // Those calls have a side effect of executing those icon loading requests.
+  // (asynchronous) icon loading requests, which depends on the Cicerone D-Bus
+  // client. These requests are merely queued, not executed, so without further
+  // action, D-Bus can be ignored.
   //
   // It is simpler if those RunUntilIdle calls are unconditional, so we require
-  // D-Bus to be initialized by this point regardless of whether the App Service
+  // Cicerone to be initialized by this point, whether or not the App Service
   // is enabled. Note that we can't initialize it ourselves here because once it
   // has been initialized it must be shutdown, but it can't be shutdown until
   // after the profile (and all keyed services) have been destroyed, which we
   // can't manage because we don't own the profile.
-  CHECK(chromeos::DBusThreadManager::IsInitialized())
-      << "DBusThreadManager must be initialized before calling "
+  CHECK(ash::CiceroneClient::Get())
+      << "CiceroneClient must be initialized before calling "
          "ReInitializeAppServiceIntegration";
 
   // The App Service is originally initialized when the Profile is created,
@@ -113,9 +102,8 @@ void CrostiniTestHelper::ReInitializeAppServiceIntegration() {
   //
   // We therefore manually have the App Service re-examine whether Crostini
   // is enabled for this profile.
-  auto* proxy = apps::AppServiceProxyFactory::GetForProfile(profile_);
-  proxy->ReInitializeCrostiniForTesting(profile_);
-  proxy->FlushMojoCallsForTesting();
+  auto* proxy = apps::AppServiceProxyFactory::GetForProfile(&*profile_);
+  proxy->ReInitializeCrostiniForTesting();
 }
 
 void CrostiniTestHelper::UpdateAppKeywords(
@@ -131,11 +119,11 @@ void CrostiniTestHelper::UpdateAppKeywords(
 }
 
 // static
-void CrostiniTestHelper::EnableCrostini(TestingProfile* profile) {
+void CrostiniTestHelper::EnableCrostini(Profile* profile) {
   profile->GetPrefs()->SetBoolean(crostini::prefs::kCrostiniEnabled, true);
 }
 // static
-void CrostiniTestHelper::DisableCrostini(TestingProfile* profile) {
+void CrostiniTestHelper::DisableCrostini(Profile* profile) {
   profile->GetPrefs()->SetBoolean(crostini::prefs::kCrostiniEnabled, false);
 }
 
@@ -174,7 +162,7 @@ ApplicationList CrostiniTestHelper::BasicAppList(
 }
 
 void CrostiniTestHelper::UpdateRegistry() {
-  guest_os::GuestOsRegistryServiceFactory::GetForProfile(profile_)
+  guest_os::GuestOsRegistryServiceFactory::GetForProfile(&*profile_)
       ->UpdateApplicationList(current_apps_);
 }
 

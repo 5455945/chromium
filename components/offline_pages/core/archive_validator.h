@@ -1,23 +1,22 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_OFFLINE_PAGES_CORE_ARCHIVE_VALIDATOR_H_
 #define COMPONENTS_OFFLINE_PAGES_CORE_ARCHIVE_VALIDATOR_H_
 
+#include <stdint.h>
+
 #include <memory>
 #include <string>
 #include <utility>
 
-#include "base/macros.h"
+#include "base/containers/span.h"
 #include "build/build_config.h"
+#include "crypto/hash.h"
 
 namespace base {
 class FilePath;
-}
-
-namespace crypto {
-class SecureHash;
 }
 
 namespace offline_pages {
@@ -26,9 +25,14 @@ namespace offline_pages {
 class ArchiveValidator {
  public:
   ArchiveValidator();
+
+  ArchiveValidator(const ArchiveValidator&) = delete;
+  ArchiveValidator& operator=(const ArchiveValidator&) = delete;
+
   virtual ~ArchiveValidator();
 
-  void Update(const char* input, size_t len);
+  void Update(base::span<const uint8_t> buffer);
+  void Update(std::string_view buffer);
   std::string Finish();
 
   // Computes a SHA256 digest of the specified file. Empty string will be
@@ -50,9 +54,7 @@ class ArchiveValidator {
                            const std::string& expected_digest);
 
  private:
-  std::unique_ptr<crypto::SecureHash> secure_hash_;
-
-  DISALLOW_COPY_AND_ASSIGN(ArchiveValidator);
+  crypto::hash::Hasher hash_{crypto::hash::HashKind::kSha256};
 };
 
 }  // namespace offline_pages

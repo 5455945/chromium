@@ -1,11 +1,10 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef MOJO_PUBLIC_CPP_BINDINGS_LIB_MAP_DATA_INTERNAL_H_
 #define MOJO_PUBLIC_CPP_BINDINGS_LIB_MAP_DATA_INTERNAL_H_
 
-#include "base/macros.h"
 #include "mojo/public/cpp/bindings/lib/array_internal.h"
 #include "mojo/public/cpp/bindings/lib/validate_params.h"
 #include "mojo/public/cpp/bindings/lib/validation_errors.h"
@@ -24,39 +23,28 @@ class Map_Data {
   static bool Validate(const void* data,
                        ValidationContext* validation_context,
                        const ContainerValidateParams* validate_params) {
-    if (!data)
-      return true;
+    return ValidateMapImpl(data, validation_context, validate_params,
+                           &Array_Data<Key>::Validate,
+                           &Array_Data<Value>::Validate);
+  }
 
-    if (!ValidateStructHeaderAndClaimMemory(data, validation_context))
-      return false;
+  static bool ValidateContainer(
+      const uint64_t* offset,
+      ValidationContext* validation_context,
+      const ContainerValidateParams* validate_params) {
+    return ValidateMapContainer(offset, validation_context, validate_params,
+                                &Array_Data<Key>::Validate,
+                                &Array_Data<Value>::Validate);
+  }
 
-    const Map_Data* object = static_cast<const Map_Data*>(data);
-    if (object->header_.num_bytes != sizeof(Map_Data) ||
-        object->header_.version != 0) {
-      ReportValidationError(validation_context,
-                            VALIDATION_ERROR_UNEXPECTED_STRUCT_HEADER);
-      return false;
-    }
-
-    if (!ValidatePointerNonNullable(object->keys, 0, validation_context) ||
-        !ValidateContainer(object->keys, validation_context,
-                           validate_params->key_validate_params)) {
-      return false;
-    }
-
-    if (!ValidatePointerNonNullable(object->values, 1, validation_context) ||
-        !ValidateContainer(object->values, validation_context,
-                           validate_params->element_validate_params)) {
-      return false;
-    }
-
-    if (object->keys.Get()->size() != object->values.Get()->size()) {
-      ReportValidationError(validation_context,
-                            VALIDATION_ERROR_DIFFERENT_SIZED_ARRAYS_IN_MAP);
-      return false;
-    }
-
-    return true;
+  static bool ValidateNonNullContainer(
+      const uint64_t* offset,
+      ValidationContext* validation_context,
+      const ContainerValidateParams* validate_params,
+      int field_index) {
+    return ValidateNonNullMapContainer(
+        offset, validation_context, validate_params, field_index,
+        &Array_Data<Key>::Validate, &Array_Data<Value>::Validate);
   }
 
   StructHeader header_;
@@ -67,10 +55,7 @@ class Map_Data {
  private:
   friend class MessageFragment<Map_Data>;
 
-  Map_Data() {
-    header_.num_bytes = sizeof(*this);
-    header_.version = 0;
-  }
+  Map_Data() = default;
   ~Map_Data() = delete;
 };
 static_assert(sizeof(Map_Data<char, char>) == 24, "Bad sizeof(Map_Data)");

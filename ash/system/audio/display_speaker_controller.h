@@ -1,11 +1,10 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ASH_SYSTEM_AUDIO_DISPLAY_SPEAKER_CONTROLLER_H_
 #define ASH_SYSTEM_AUDIO_DISPLAY_SPEAKER_CONTROLLER_H_
 
-#include "base/macros.h"
 #include "chromeos/dbus/power/power_manager_client.h"
 #include "ui/display/display.h"
 #include "ui/display/display_observer.h"
@@ -17,11 +16,15 @@ class DisplaySpeakerController : public display::DisplayObserver,
                                  public chromeos::PowerManagerClient::Observer {
  public:
   DisplaySpeakerController();
+
+  DisplaySpeakerController(const DisplaySpeakerController&) = delete;
+  DisplaySpeakerController& operator=(const DisplaySpeakerController&) = delete;
+
   ~DisplaySpeakerController() override;
 
   // display::DisplayObserver.
   void OnDisplayAdded(const display::Display& new_display) override;
-  void OnDisplayRemoved(const display::Display& old_display) override;
+  void OnDisplaysRemoved(const display::Displays& removed_displays) override;
   void OnDisplayMetricsChanged(const display::Display& display,
                                uint32_t changed_metrics) override;
 
@@ -33,8 +36,6 @@ class DisplaySpeakerController : public display::DisplayObserver,
   void UpdateInternalSpeakerForDisplayRotation();
 
   display::ScopedDisplayObserver display_observer_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(DisplaySpeakerController);
 };
 
 }  // namespace ash

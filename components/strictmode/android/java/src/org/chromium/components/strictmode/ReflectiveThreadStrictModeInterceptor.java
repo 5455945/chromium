@@ -1,10 +1,9 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.strictmode;
 
-import android.annotation.TargetApi;
 import android.app.ApplicationErrorReport;
 import android.os.Build;
 import android.os.StrictMode;
@@ -13,18 +12,19 @@ import android.os.strictmode.DiskReadViolation;
 import android.os.strictmode.DiskWriteViolation;
 import android.os.strictmode.ResourceMismatchViolation;
 
-import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 
-import org.chromium.base.Consumer;
-import org.chromium.base.Function;
 import org.chromium.base.Log;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.function.Consumer;
+import java.util.function.Function;
 
 /**
  * StrictMode whitelist installer.
@@ -46,17 +46,16 @@ import java.util.List;
  * death penalty, the whitelisting mechanism itself can be configured to execute the death penalty
  * after the first non-whitelisted violation.
  */
+@NullMarked
 final class ReflectiveThreadStrictModeInterceptor implements ThreadStrictModeInterceptor {
     private static final String TAG = "ThreadStrictMode";
 
-    @NonNull
     private final List<Function<Violation, Integer>> mWhitelistEntries;
-    @Nullable
-    private final Consumer mCustomPenalty;
+    private final @Nullable Consumer<Violation> mCustomPenalty;
 
     ReflectiveThreadStrictModeInterceptor(
-            @NonNull List<Function<Violation, Integer>> whitelistEntries,
-            @Nullable Consumer customPenalty) {
+            List<Function<Violation, Integer>> whitelistEntries,
+            @Nullable Consumer<Violation> customPenalty) {
         mWhitelistEntries = whitelistEntries;
         mCustomPenalty = customPenalty;
     }
@@ -79,23 +78,26 @@ final class ReflectiveThreadStrictModeInterceptor implements ThreadStrictModeInt
             throw new RuntimeException(null, e);
         }
         violationsBeingTimed.get().clear();
-        violationsBeingTimed.set(new ArrayList<Object>() {
-            @Override
-            public boolean add(Object o) {
-                int violationType = getViolationType(o);
-                StackTraceElement[] stackTrace = Thread.currentThread().getStackTrace();
-                Violation violation =
-                        new Violation(violationType, Arrays.copyOf(stackTrace, stackTrace.length));
-                if (violationType != Violation.DETECT_UNKNOWN
-                        && violation.isInWhitelist(mWhitelistEntries)) {
-                    return true;
-                }
-                if (mCustomPenalty != null) {
-                    mCustomPenalty.accept(violation);
-                }
-                return super.add(o);
-            }
-        });
+        violationsBeingTimed.set(
+                new ArrayList<Object>() {
+                    @Override
+                    public boolean add(Object o) {
+                        int violationType = getViolationType(o);
+                        StackTraceElement[] stackTrace = Thread.currentThread().getStackTrace();
+                        Violation violation =
+                                new Violation(
+                                        violationType,
+                                        Arrays.copyOf(stackTrace, stackTrace.length));
+                        if (violationType != Violation.DETECT_FAILED
+                                && violation.isInWhitelist(mWhitelistEntries)) {
+                            return true;
+                        }
+                        if (mCustomPenalty != null) {
+                            mCustomPenalty.accept(violation);
+                        }
+                        return super.add(o);
+                    }
+                });
     }
 
     @SuppressWarnings({"unchecked"})
@@ -107,7 +109,7 @@ final class ReflectiveThreadStrictModeInterceptor implements ThreadStrictModeInt
     }
 
     /** @param o {@code android.os.StrictMode.ViolationInfo} */
-    @SuppressWarnings({"unchecked", "DiscouragedPrivateApi", "PrivateApi"})
+    @SuppressWarnings({"unchecked", "DiscouragedPrivateApi", "PrivateApi", "BlockedPrivateApi"})
     private int getViolationType(Object violationInfo) {
         try {
             Class<?> violationInfoClass = Class.forName("android.os.StrictMode$ViolationInfo");
@@ -117,12 +119,16 @@ final class ReflectiveThreadStrictModeInterceptor implements ThreadStrictModeInt
                 getViolationBitMethod.setAccessible(true);
                 int violationType = (Integer) getViolationBitMethod.invoke(violationInfo);
                 return violationType & Violation.DETECT_ALL_KNOWN;
-            } else if (Build.VERSION.SDK_INT >= 29) {
+            } else if (Build.VERSION.SDK_INT == 29) {
                 Method getViolationClassMethod =
                         violationInfoClass.getDeclaredMethod("getViolationClass");
                 getViolationClassMethod.setAccessible(true);
                 return computeViolationTypeAndroid10(
                         (Class<?>) getViolationClassMethod.invoke(violationInfo));
+            } else if (Build.VERSION.SDK_INT >= 30) {
+                // ViolationInfo#getViolationClass() is inaccessible via reflection.
+                // crbug.com/1240777 Ignore violation type when checking white list.
+                return Violation.DETECT_ALL_KNOWN;
             }
             Field crashInfoField = violationInfoClass.getDeclaredField("crashInfo");
             crashInfoField.setAccessible(true);
@@ -131,19 +137,19 @@ final class ReflectiveThreadStrictModeInterceptor implements ThreadStrictModeInt
             Method parseViolationFromMessage =
                     StrictMode.class.getDeclaredMethod("parseViolationFromMessage", String.class);
             parseViolationFromMessage.setAccessible(true);
-            int mask = (int) parseViolationFromMessage.invoke(
-                    null /* static */, crashInfo.exceptionMessage);
+            int mask =
+                    (int)
+                            parseViolationFromMessage.invoke(
+                                    /* static= */ null, crashInfo.exceptionMessage);
             return mask & Violation.DETECT_ALL_KNOWN;
         } catch (Exception e) {
             Log.e(TAG, "Unable to get violation.", e);
-            return Violation.DETECT_UNKNOWN;
+            return Violation.DETECT_FAILED;
         }
     }
 
-    /**
-     * Computes the violation type based on the class of the passed-in violation.
-     */
-    @TargetApi(29)
+    /** Computes the violation type based on the class of the passed-in violation. */
+    @RequiresApi(29)
     private static int computeViolationTypeAndroid10(Class<?> violationClass) {
         if (DiskReadViolation.class.isAssignableFrom(violationClass)) {
             return Violation.DETECT_DISK_READ;
@@ -152,6 +158,6 @@ final class ReflectiveThreadStrictModeInterceptor implements ThreadStrictModeInt
         } else if (ResourceMismatchViolation.class.isAssignableFrom(violationClass)) {
             return Violation.DETECT_RESOURCE_MISMATCH;
         }
-        return Violation.DETECT_UNKNOWN;
+        return Violation.DETECT_FAILED;
     }
 }

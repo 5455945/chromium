@@ -1,8 +1,10 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/platform/network/parsed_content_header_field_parameters.h"
+
+#include <ranges>
 
 #include "base/logging.h"
 #include "third_party/blink/renderer/platform/network/header_field_tokenizer.h"
@@ -33,14 +35,14 @@ namespace blink {
 //               "/" / "[" / "]" / "?" / "="
 //               ; Must be in quoted-string,
 //               ; to use within parameter values
-absl::optional<ParsedContentHeaderFieldParameters>
+std::optional<ParsedContentHeaderFieldParameters>
 ParsedContentHeaderFieldParameters::Parse(HeaderFieldTokenizer tokenizer,
                                           Mode mode) {
   NameValuePairs parameters;
   while (!tokenizer.IsConsumed()) {
     if (!tokenizer.Consume(';')) {
       DVLOG(1) << "Failed to find ';'";
-      return absl::nullopt;
+      return std::nullopt;
     }
 
     StringView key;
@@ -48,16 +50,16 @@ ParsedContentHeaderFieldParameters::Parse(HeaderFieldTokenizer tokenizer,
     if (!tokenizer.ConsumeToken(Mode::kNormal, key)) {
       DVLOG(1) << "Invalid content parameter name. (at " << tokenizer.Index()
                << ")";
-      return absl::nullopt;
+      return std::nullopt;
     }
     if (!tokenizer.Consume('=')) {
       DVLOG(1) << "Failed to find '='";
-      return absl::nullopt;
+      return std::nullopt;
     }
     if (!tokenizer.ConsumeTokenOrQuotedString(mode, value)) {
       DVLOG(1) << "Invalid content parameter value (at " << tokenizer.Index()
                << ", for '" << key.ToString() << "').";
-      return absl::nullopt;
+      return std::nullopt;
     }
     parameters.emplace_back(key.ToString(), value);
   }
@@ -66,14 +68,15 @@ ParsedContentHeaderFieldParameters::Parse(HeaderFieldTokenizer tokenizer,
 }
 
 String ParsedContentHeaderFieldParameters::ParameterValueForName(
-    const String& name) const {
-  if (!name.ContainsOnlyASCIIOrEmpty())
+    StringView name) const {
+  if (!name.ContainsOnlyAsciiOrEmpty()) {
     return String();
-  String lower_name = name.LowerASCII();
+  }
 
-  for (auto i = rbegin(); i != rend(); ++i) {
-    if (i->name.LowerASCII() == lower_name)
-      return i->value;
+  for (const NameValue& param : std::views::reverse(*this)) {
+    if (EqualIgnoringAsciiCase(param.name, name)) {
+      return param.value;
+    }
   }
   return String();
 }
@@ -85,7 +88,7 @@ size_t ParsedContentHeaderFieldParameters::ParameterCount() const {
 bool ParsedContentHeaderFieldParameters::HasDuplicatedNames() const {
   HashSet<String> names;
   for (const auto& parameter : parameters_) {
-    const String lowered_name = parameter.name.LowerASCII();
+    const String lowered_name = parameter.name.ToAsciiLower();
     if (names.Contains(lowered_name))
       return true;
 

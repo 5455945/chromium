@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,18 @@
 #include <stdint.h>
 
 #include <memory>
+#include <string>
 
 #include "base/base64.h"
-#include "base/bind.h"
-#include "gpu/command_buffer/common/activity_flags.h"
+#include "base/functional/bind.h"
+#include "base/memory/memory_pressure_listener_registry.h"
+#include "base/memory_coordinator/memory_coordinator_features.h"
+#include "base/memory_coordinator/test_memory_consumer_registry.h"
+#include "base/memory_coordinator/utils.h"
+#include "base/run_loop.h"
+#include "base/test/scoped_feature_list.h"
 #include "gpu/command_buffer/common/gles2_cmd_format.h"
+#include "gpu/command_buffer/common/shm_count.h"
 #include "gpu/command_buffer/service/decoder_client.h"
 #include "gpu/command_buffer/service/gl_utils.h"
 #include "gpu/command_buffer/service/gpu_service_test.h"
@@ -35,18 +42,16 @@ class PassthroughProgramCacheTest : public GpuServiceTest,
   static const bool kDisableGpuDiskCache = false;
 
   PassthroughProgramCacheTest()
-      : cache_(
-            new PassthroughProgramCache(kCacheSizeBytes, kDisableGpuDiskCache)),
-        blob_count_(0) {}
+      : cache_(kCacheSizeBytes, kDisableGpuDiskCache), blob_count_(0) {}
   ~PassthroughProgramCacheTest() override {}
 
   void OnConsoleMessage(int32_t id, const std::string& message) override {}
-  void CacheShader(const std::string& key, const std::string& shader) override {
-  }
+  void CacheBlob(gpu::GpuDiskCacheType type,
+                 const std::string& key,
+                 const std::string& blob) override {}
   void OnFenceSyncRelease(uint64_t release) override {}
   void OnDescheduleUntilFinished() override {}
   void OnRescheduleAfterFinished() override {}
-  void OnSwapBuffers(uint64_t swap_id, uint32_t flags) override {}
   void ScheduleGrContextCleanup() override {}
   void HandleReturnData(base::span<const uint8_t> data) override {}
 
@@ -80,18 +85,39 @@ class PassthroughProgramCacheTest : public GpuServiceTest,
     if (blob_size <= 0)
       return "";
 
-    // Note: after C++17, this can directly be a std::string as it has a
-    // non-const `char *data()` member.
-    std::vector<uint8_t> binary_blob(blob_size);
+    // Directly use std::string for the blob.
+    std::string binary_blob;
+    binary_blob.resize(blob_size);
     EGLsizeiANDROID blob_size_after = PassthroughProgramCache::BlobCacheGet(
         binary_key.data(), key_size, binary_blob.data(), blob_size);
 
     EXPECT_EQ(blob_size, blob_size_after);
 
-    return std::string(binary_blob.begin(), binary_blob.end());
+    return binary_blob;
   }
 
-  std::unique_ptr<PassthroughProgramCache> cache_;
+  void SimulateMemoryPressure(base::MemoryPressureLevel level) {
+    base::MemoryLimit memory_limit = base::MemoryLimit::Default();
+    switch (level) {
+      case base::MEMORY_PRESSURE_LEVEL_NONE:
+        memory_limit = base::kNoMemoryPressureThreshold;
+        break;
+      case base::MEMORY_PRESSURE_LEVEL_MODERATE:
+        memory_limit = base::kModerateMemoryPressureThreshold;
+        break;
+      case base::MEMORY_PRESSURE_LEVEL_CRITICAL:
+        memory_limit = base::kCriticalMemoryPressureThreshold;
+        break;
+    }
+    base::RunLoop run_loop;
+    test_memory_consumer_registry_.NotifyUpdateMemoryLimitAndReleaseAsync(
+        memory_limit, run_loop.QuitClosure());
+    run_loop.Run();
+  }
+
+  base::MemoryPressureListenerRegistry memory_pressure_listener_registry_;
+  base::TestMemoryConsumerRegistry test_memory_consumer_registry_;
+  PassthroughProgramCache cache_;
   int32_t blob_count_;
 };
 
@@ -104,12 +130,10 @@ TEST_F(PassthroughProgramCacheTest, LoadProgram) {
     std::string binary_blob = MakeBlob(kBlobLength, key_start + 10);
 
     // Encode the strings to pretend like they came from disk.
-    std::string key_string_64;
-    std::string value_string_64;
-    base::Base64Encode(binary_key, &key_string_64);
-    base::Base64Encode(binary_blob, &value_string_64);
+    std::string key_string_64 = base::Base64Encode(binary_key);
+    std::string value_string_64 = base::Base64Encode(binary_blob);
 
-    cache_->LoadProgram(key_string_64, value_string_64);
+    cache_.LoadProgram(key_string_64, value_string_64);
 
     // Make sure the blob was inserted.
     EXPECT_EQ(binary_blob, Get(binary_key));
@@ -181,7 +205,7 @@ TEST_F(PassthroughProgramCacheTest, Clear) {
   Set(binary_key, binary_blob);
   EXPECT_EQ(binary_blob, Get(binary_key));
 
-  cache_->Clear();
+  cache_.Clear();
 
   // Make sure the blob is removed.
   EXPECT_EQ("", Get(binary_key));
@@ -227,22 +251,22 @@ TEST_F(PassthroughProgramCacheTest, Trim) {
   EXPECT_EQ(binary_blob2, Get(binary_key2));
 
   // Trimming to exact size of the two blobs shouldn't evict anything.
-  cache_->Trim(kBlobLength * 2);
+  cache_.Trim(kBlobLength * 2);
   EXPECT_EQ(binary_blob, Get(binary_key));
   EXPECT_EQ(binary_blob2, Get(binary_key2));
 
   // Trimming to even a byte under that should evict the first (oldest) blob.
-  cache_->Trim(kBlobLength * 2 - 1);
+  cache_.Trim(kBlobLength * 2 - 1);
   EXPECT_EQ("", Get(binary_key));
   EXPECT_EQ(binary_blob2, Get(binary_key2));
 
   // Trimming to exact size of the blob that's left shouldn't evict anything.
-  cache_->Trim(kBlobLength);
+  cache_.Trim(kBlobLength);
   EXPECT_EQ("", Get(binary_key));
   EXPECT_EQ(binary_blob2, Get(binary_key2));
 
   // Trimming more should evict the second blob too.
-  cache_->Trim(kBlobLength - 1);
+  cache_.Trim(kBlobLength - 1);
   EXPECT_EQ("", Get(binary_key));
   EXPECT_EQ("", Get(binary_key2));
 
@@ -253,9 +277,116 @@ TEST_F(PassthroughProgramCacheTest, Trim) {
   EXPECT_EQ(binary_blob, Get(binary_key));
   EXPECT_EQ(binary_blob2, Get(binary_key2));
 
-  cache_->Trim(0);
+  cache_.Trim(0);
   EXPECT_EQ("", Get(binary_key));
   EXPECT_EQ("", Get(binary_key2));
+}
+
+TEST_F(PassthroughProgramCacheTest, MemoryPressure) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(base::kStatefulMemoryPressure);
+
+  const int kKeyLength = 10;
+  // Compute a blob length giving us a cache capacity of 4 entries.
+  const int kCacheCapacity = 4;
+  const int kBlobLength = kCacheSizeBytes / kCacheCapacity;
+
+  // Fill the cache.
+  for (int i = 0; i < kCacheCapacity; i++) {
+    std::string binary_key = MakeKey(kKeyLength, i);
+    std::string binary_blob = MakeBlob(kBlobLength, i);
+    Set(binary_key, binary_blob);
+  }
+
+  EXPECT_NE("", Get(MakeKey(kKeyLength, 0)));
+  EXPECT_NE("", Get(MakeKey(kKeyLength, 1)));
+  EXPECT_NE("", Get(MakeKey(kKeyLength, 2)));
+  EXPECT_NE("", Get(MakeKey(kKeyLength, 3)));
+
+  SimulateMemoryPressure(base::MEMORY_PRESSURE_LEVEL_MODERATE);
+
+  // Cache size should be reduced to 1/4 of the max size under moderate
+  // pressure.
+  EXPECT_EQ("", Get(MakeKey(kKeyLength, 0)));
+  EXPECT_EQ("", Get(MakeKey(kKeyLength, 1)));
+  EXPECT_EQ("", Get(MakeKey(kKeyLength, 2)));
+  EXPECT_NE("", Get(MakeKey(kKeyLength, 3)));
+
+  // Adding an item removes the previous one.
+  Set(MakeKey(kKeyLength, 4), MakeBlob(kBlobLength, 4));
+
+  EXPECT_EQ("", Get(MakeKey(kKeyLength, 3)));
+  EXPECT_NE("", Get(MakeKey(kKeyLength, 4)));
+
+  SimulateMemoryPressure(base::MEMORY_PRESSURE_LEVEL_CRITICAL);
+
+  EXPECT_EQ("", Get(MakeKey(kKeyLength, 4)));
+
+  // Verify new insertions are rejected.
+  Set(MakeKey(kKeyLength, 5), MakeBlob(kBlobLength, 5));
+
+  EXPECT_EQ("", Get(MakeKey(kKeyLength, 5)));
+
+  // Return memory pressure state to normal.
+  SimulateMemoryPressure(base::MEMORY_PRESSURE_LEVEL_NONE);
+
+  for (int i = 6; i < 6 + kCacheCapacity; i++) {
+    std::string binary_key = MakeKey(kKeyLength, i);
+    std::string binary_blob = MakeBlob(kBlobLength, i);
+    Set(binary_key, binary_blob);
+  }
+
+  EXPECT_NE("", Get(MakeKey(kKeyLength, 6)));
+  EXPECT_NE("", Get(MakeKey(kKeyLength, 7)));
+  EXPECT_NE("", Get(MakeKey(kKeyLength, 8)));
+  EXPECT_NE("", Get(MakeKey(kKeyLength, 9)));
+}
+
+TEST_F(PassthroughProgramCacheTest, MemoryPressureStateful) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(base::kStatefulMemoryPressure);
+
+  const int kKeyLength = 10;
+  // Compute a blob length giving us a capacity of 4 entries.
+  const int kCacheCapacity = 4;
+  const int kBlobLength = kCacheSizeBytes / kCacheCapacity;
+
+  // Fill the cache.
+  for (int i = 0; i < kCacheCapacity; i++) {
+    std::string binary_key = MakeKey(kKeyLength, i);
+    std::string binary_blob = MakeBlob(kBlobLength, i);
+    Set(binary_key, binary_blob);
+  }
+
+  EXPECT_NE("", Get(MakeKey(kKeyLength, 0)));
+  EXPECT_NE("", Get(MakeKey(kKeyLength, 1)));
+  EXPECT_NE("", Get(MakeKey(kKeyLength, 2)));
+  EXPECT_NE("", Get(MakeKey(kKeyLength, 3)));
+
+  // Moderate pressure (50%).
+  base::RunLoop run_loop;
+  test_memory_consumer_registry_.NotifyUpdateMemoryLimitAsync(
+      base::kModerateMemoryPressureThreshold, run_loop.QuitClosure());
+  run_loop.Run();
+
+  // Verify that NO memory is released yet!
+  EXPECT_NE("", Get(MakeKey(kKeyLength, 0)));
+  EXPECT_NE("", Get(MakeKey(kKeyLength, 1)));
+  EXPECT_NE("", Get(MakeKey(kKeyLength, 2)));
+  EXPECT_NE("", Get(MakeKey(kKeyLength, 3)));
+
+  // Now release memory.
+  base::RunLoop run_loop2;
+  test_memory_consumer_registry_.NotifyReleaseMemoryAsync(
+      run_loop2.QuitClosure());
+  run_loop2.Run();
+
+  // Now memory should be released!
+  // At 50% limit, size should be 1/4 (1 item).
+  EXPECT_EQ("", Get(MakeKey(kKeyLength, 0)));
+  EXPECT_EQ("", Get(MakeKey(kKeyLength, 1)));
+  EXPECT_EQ("", Get(MakeKey(kKeyLength, 2)));
+  EXPECT_NE("", Get(MakeKey(kKeyLength, 3)));
 }
 
 }  // namespace gles2

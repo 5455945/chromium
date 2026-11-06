@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,20 +16,18 @@ void RecordSmsReceiveTime(base::TimeDelta duration, ukm::SourceId source_id) {
       ukm::GetExponentialBucketMinForUserTiming(duration.InMilliseconds()));
   builder.Record(ukm::UkmRecorder::Get());
 
-  UMA_HISTOGRAM_MEDIUM_TIMES("Blink.Sms.Receive.TimeSmsReceive", duration);
+  DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES("Blink.Sms.Receive.TimeSmsReceive",
+                                        duration);
 }
 
 void RecordCancelOnSuccessTime(base::TimeDelta duration) {
-  UMA_HISTOGRAM_MEDIUM_TIMES("Blink.Sms.Receive.TimeCancelOnSuccess", duration);
+  DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES("Blink.Sms.Receive.TimeCancelOnSuccess",
+                                        duration);
 }
 
 void RecordContinueOnSuccessTime(base::TimeDelta duration) {
-  UMA_HISTOGRAM_MEDIUM_TIMES("Blink.Sms.Receive.TimeContinueOnSuccess",
-                             duration);
-}
-
-void RecordDestroyedReason(blink::WebOTPServiceDestroyedReason reason) {
-  UMA_HISTOGRAM_ENUMERATION("Blink.Sms.Receive.DestroyedReason", reason);
+  DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES(
+      "Blink.Sms.Receive.TimeContinueOnSuccess", duration);
 }
 
 void RecordSmsParsingStatus(SmsParsingStatus status, ukm::SourceId source_id) {
@@ -46,8 +44,8 @@ void RecordSmsOutcome(blink::WebOTPServiceOutcome outcome,
                       bool is_cross_origin_frame) {
   UMA_HISTOGRAM_ENUMERATION("Blink.Sms.Receive.Outcome", outcome);
 
-  DCHECK_NE(source_id, ukm::kInvalidSourceId);
-  DCHECK(ukm_recorder);
+  CHECK_NE(source_id, ukm::kInvalidSourceId, base::NotFatalUntil::M160);
+  CHECK(ukm_recorder, base::NotFatalUntil::M160);
 
   ukm::builders::SMSReceiver builder(source_id);
   builder.SetOutcome(static_cast<int>(outcome))
@@ -58,10 +56,11 @@ void RecordSmsOutcome(blink::WebOTPServiceOutcome outcome,
 void RecordSmsSuccessTime(base::TimeDelta duration,
                           ukm::SourceId source_id,
                           ukm::UkmRecorder* ukm_recorder) {
-  UMA_HISTOGRAM_MEDIUM_TIMES("Blink.Sms.Receive.TimeSuccess", duration);
+  DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES("Blink.Sms.Receive.TimeSuccess",
+                                        duration);
 
-  DCHECK_NE(source_id, ukm::kInvalidSourceId);
-  DCHECK(ukm_recorder);
+  CHECK_NE(source_id, ukm::kInvalidSourceId, base::NotFatalUntil::M160);
+  CHECK(ukm_recorder, base::NotFatalUntil::M160);
 
   ukm::builders::SMSReceiver builder(source_id);
   // Uses exponential bucketing for datapoints reflecting user activity.
@@ -71,16 +70,18 @@ void RecordSmsSuccessTime(base::TimeDelta duration,
 }
 
 void RecordSmsCancelTime(base::TimeDelta duration) {
-  UMA_HISTOGRAM_MEDIUM_TIMES("Blink.Sms.Receive.TimeCancel", duration);
+  DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES("Blink.Sms.Receive.TimeCancel",
+                                        duration);
 }
 
 void RecordSmsUserCancelTime(base::TimeDelta duration,
                              ukm::SourceId source_id,
                              ukm::UkmRecorder* ukm_recorder) {
-  UMA_HISTOGRAM_MEDIUM_TIMES("Blink.Sms.Receive.TimeUserCancel", duration);
+  DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES("Blink.Sms.Receive.TimeUserCancel",
+                                        duration);
 
-  DCHECK_NE(source_id, ukm::kInvalidSourceId);
-  DCHECK(ukm_recorder);
+  CHECK_NE(source_id, ukm::kInvalidSourceId, base::NotFatalUntil::M160);
+  CHECK(ukm_recorder, base::NotFatalUntil::M160);
 
   ukm::builders::SMSReceiver builder(source_id);
   // Uses exponential bucketing for datapoints reflecting user activity.

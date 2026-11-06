@@ -1,5 +1,4 @@
-
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +7,16 @@
 
 #import <Foundation/Foundation.h>
 
-#include "base/compiler_specific.h"
+class Browser;
 
 namespace web {
 class WebState;
 }
 
 namespace chrome_test_util {
+
+// Gets current Browser, in window with given number.
+Browser* GetCurrentBrowserForWindowWithNumber(int windowNumber);
 
 // Gets current active WebState, in window with given number.
 web::WebState* GetCurrentWebStateForWindowWithNumber(int windowNumber);

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,8 @@
 #include "ash/system/tray/size_range_layout.h"
 #include "base/check.h"
 #include "base/notreached.h"
+#include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/views/border.h"
 #include "ui/views/layout/box_layout.h"
@@ -26,20 +28,7 @@ views::BoxLayout::Orientation GetOrientation(TriView::Orientation orientation) {
   }
   // Required for some compilers.
   NOTREACHED();
-  return views::BoxLayout::Orientation::kHorizontal;
 }
-
-// A View that will perform a layout if a child view's preferred size changes.
-class RelayoutView : public views::View {
- public:
-  RelayoutView() = default;
-
-  // views::View:
-  void ChildPreferredSizeChanged(View* child) override { Layout(); }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(RelayoutView);
-};
 
 }  // namespace
 
@@ -51,19 +40,9 @@ TriView::TriView(int padding_between_containers)
 TriView::TriView(Orientation orientation) : TriView(orientation, 0) {}
 
 TriView::TriView(Orientation orientation, int padding_between_containers) {
-  AddChildView(new RelayoutView);
-  AddChildView(new RelayoutView);
-  AddChildView(new RelayoutView);
-
-  start_container_layout_manager_ =
-      GetContainer(Container::START)
-          ->SetLayoutManager(std::make_unique<SizeRangeLayout>());
-  center_container_layout_manager_ =
-      GetContainer(Container::CENTER)
-          ->SetLayoutManager(std::make_unique<SizeRangeLayout>());
-  end_container_layout_manager_ =
-      GetContainer(Container::END)
-          ->SetLayoutManager(std::make_unique<SizeRangeLayout>());
+  start_container_layout_manager_ = AddChildViewRaw(new SizeRangeLayout);
+  center_container_layout_manager_ = AddChildViewRaw(new SizeRangeLayout);
+  end_container_layout_manager_ = AddChildViewRaw(new SizeRangeLayout);
 
   auto layout = std::make_unique<views::BoxLayout>(
       GetOrientation(orientation), gfx::Insets(), padding_between_containers);
@@ -107,15 +86,11 @@ void TriView::SetMaxSize(Container container, const gfx::Size& size) {
 }
 
 void TriView::AddView(Container container, views::View* view) {
-  GetContainer(container)->AddChildView(view);
+  GetContainer(container)->AddChildViewRaw(view);
 }
 
 void TriView::AddViewAt(Container container, views::View* view, int index) {
   GetContainer(container)->AddChildViewAt(view, index);
-}
-
-void TriView::RemoveAllChildren(Container container, bool delete_children) {
-  GetContainer(container)->RemoveAllChildViews(delete_children);
 }
 
 void TriView::SetInsets(const gfx::Insets& insets) {
@@ -131,7 +106,7 @@ void TriView::SetContainerVisible(Container container, bool visible) {
   if (GetContainer(container)->GetVisible() == visible)
     return;
   GetContainer(container)->SetVisible(visible);
-  Layout();
+  DeprecatedLayoutImmediately();
 }
 
 void TriView::SetFlexForContainer(Container container, int flex) {
@@ -161,10 +136,6 @@ void TriView::ViewHierarchyChanged(
   }
 }
 
-const char* TriView::GetClassName() const {
-  return "TriView";
-}
-
 gfx::Rect TriView::GetAnchorBoundsInScreen() const {
   gfx::Rect bounds = View::GetAnchorBoundsInScreen();
 
@@ -177,7 +148,7 @@ gfx::Rect TriView::GetAnchorBoundsInScreen() const {
   // If there are other instantiations of TriView where this overlap doesn't
   // make sense, the below inset could be settable on TriView and called from
   // NetworkStateListDetailedView.
-  bounds.Inset(gfx::Insets(0, 0, 8, 0));
+  bounds.Inset(gfx::Insets::TLBR(0, 0, 8, 0));
   return bounds;
 }
 
@@ -196,7 +167,9 @@ SizeRangeLayout* TriView::GetLayoutManager(Container container) {
   }
   // Required for some compilers.
   NOTREACHED();
-  return nullptr;
 }
+
+BEGIN_METADATA(TriView)
+END_METADATA
 
 }  // namespace ash

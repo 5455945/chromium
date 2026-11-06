@@ -40,9 +40,10 @@
 #include "third_party/blink/renderer/core/loader/threadable_loader_client.h"
 #include "third_party/blink/renderer/modules/eventsource/event_source_parser.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/timer.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
+#include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 
 namespace blink {
@@ -53,7 +54,7 @@ class ExceptionState;
 class ResourceResponse;
 
 class MODULES_EXPORT EventSource final
-    : public EventTargetWithInlineData,
+    : public EventTarget,
       public ThreadableLoaderClient,
       public ActiveScriptWrappable<EventSource>,
       public ExecutionContextLifecycleObserver,
@@ -102,7 +103,7 @@ class MODULES_EXPORT EventSource final
 
  private:
   void DidReceiveResponse(uint64_t, const ResourceResponse&) override;
-  void DidReceiveData(const char*, unsigned) override;
+  void DidReceiveData(base::span<const char>) override;
   void DidFinishLoading(uint64_t) override;
   void DidFail(uint64_t, const ResourceError&) override;
   void DidFailRedirectCheck(uint64_t) override;
@@ -133,12 +134,12 @@ class MODULES_EXPORT EventSource final
   HeapTaskRunnerTimer<EventSource> connect_timer_;
 
   uint64_t reconnect_delay_;
-  String event_stream_origin_;
+  scoped_refptr<const SecurityOrigin> event_stream_origin_;
   uint64_t resource_identifier_ = 0;
 
   // The world in which this EventSource was created. We need to store this
   // because EventSource::Connect can be triggered by |connect_timer_|.
-  scoped_refptr<const DOMWrapperWorld> world_;
+  Member<const DOMWrapperWorld> world_;
 };
 
 }  // namespace blink

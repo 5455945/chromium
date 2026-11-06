@@ -1,4 +1,4 @@
-# Copyright 2016 The Chromium Authors. All rights reserved.
+# Copyright 2016 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """Module to generate a test file with random calls to the Web Bluetooth API."""
@@ -13,6 +13,7 @@ BASE_TOKENS = [
     'TRANSFORM_CONNECTABLE_BASE',
     'TRANSFORM_SERVICES_RETRIEVED_BASE',
     'TRANSFORM_CHARACTERISTICS_RETRIEVED_BASE',
+    'TRANSFORM_DESCRIPTORS_RETRIEVED_BASE',
 ]
 
 # Contains strings that represent calls to the Web Bluetooth API. These
@@ -38,16 +39,14 @@ TOKENS = [
     ],
     [
         '  return device.gatt.connect();',
-        '})'
-        '.then(gatt => {',
+        '}).then(gatt => {',
     ],
     [
         '  gatt.connect();',
     ],
     [
         '  return gatt.connect();',
-        '})'
-        '.then(gatt => {',
+        '}).then(gatt => {',
     ],
     # GetPrimaryService(s) Tokens
     [
@@ -58,13 +57,11 @@ TOKENS = [
     ],
     [
         '  return device.gatt.TRANSFORM_GET_PRIMARY_SERVICES;',
-        '})'
-        '.then(services => {',
+        '}).then(services => {',
     ],
     [
         '  return gatt.TRANSFORM_GET_PRIMARY_SERVICES;',
-        '})'
-        '.then(services => {',
+        '}).then(services => {',
     ],
     # GetCharacteristic(s) Tokens
     [
@@ -74,6 +71,21 @@ TOKENS = [
     [
         '  TRANSFORM_PICK_A_SERVICE;',
         '  return service.TRANSFORM_GET_CHARACTERISTICS;',
+    ],
+    # GetDescriptor(s) Tokens
+    [
+        '  TRANSFORM_PICK_A_CHARACTERISTIC;',
+        '  characteristic.TRANSFORM_GET_DESCRIPTORS;',
+    ],
+    [
+        '  TRANSFORM_PICK_A_CHARACTERISTIC;',
+        '  return characteristic.TRANSFORM_GET_DESCRIPTORS;',
+    ],
+    [
+        '  TRANSFORM_PICK_A_CHARACTERISTIC;',
+        '  return characteristic.TRANSFORM_GET_DESCRIPTORS;',
+        '})',
+        '.then(descriptors => {',
     ],
     # ReadValue Tokens
     [
@@ -90,6 +102,28 @@ TOKENS = [
     [
         '  TRANSFORM_PICK_A_CHARACTERISTIC;',
         '  characteristic.writeValue(TRANSFORM_VALUE);',
+    ],
+    # Read Descriptor Value Tokens
+    [
+        '  TRANSFORM_PICK_A_DESCRIPTOR;',
+        '  descriptor.readValue();',
+    ],
+    [
+        '  TRANSFORM_PICK_A_DESCRIPTOR;',
+        '  return descriptor.readValue().then(_ => descriptors);',
+        '})',
+        '.then(descriptors => {',
+    ],
+    # Write Descriptor Value Tokens
+    [
+        '  TRANSFORM_PICK_A_DESCRIPTOR;',
+        '  descriptor.writeValue(TRANSFORM_VALUE);',
+    ],
+    [
+        '  TRANSFORM_PICK_A_DESCRIPTOR;',
+        '  return descriptor.writeValue(TRANSFORM_VALUE).then(_ => descriptors);',
+        '})',
+        '.then(descriptors => {',
     ],
     [
         '  TRANSFORM_PICK_A_CHARACTERISTIC;',
@@ -164,7 +198,7 @@ def _GenerateSequenceOfRandomTokens():
     """
     result = random.choice(BASE_TOKENS)
 
-    for _ in xrange(random.randint(1, MAX_NUM_OF_TOKENS)):
+    for _ in range(random.randint(1, MAX_NUM_OF_TOKENS)):
         # Get random token.
         token = random.choice(TOKENS)
 
@@ -190,5 +224,8 @@ def GenerateTestFile(template_file_data):
         collection.
     """
 
-    return FillInParameter('TRANSFORM_RANDOM_TOKENS',
-                           _GenerateSequenceOfRandomTokens, template_file_data)
+    return FillInParameter(
+        'TRANSFORM_RANDOM_TOKENS',
+        _GenerateSequenceOfRandomTokens,
+        template_file_data,
+    )

@@ -29,7 +29,6 @@
 #include <atomic>
 #include <memory>
 
-#include "base/macros.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_typed_array.h"
 #include "third_party/blink/renderer/platform/audio/audio_array.h"
 #include "third_party/blink/renderer/platform/audio/fft_frame.h"
@@ -42,21 +41,29 @@ class RealtimeAnalyser final {
   DISALLOW_NEW();
 
  public:
-  explicit RealtimeAnalyser(unsigned render_quantum_frames);
+  // All FFT implementations are expected to handle power-of-two sizes
+  // MinFFTSize <= size <= MaxFFTSize.
+  static constexpr unsigned kMinFFTSize = 32;
+  static constexpr unsigned kMaxFFTSize = 32768;
+
+  RealtimeAnalyser();
+
+  RealtimeAnalyser(const RealtimeAnalyser&) = delete;
+  RealtimeAnalyser& operator=(const RealtimeAnalyser&) = delete;
 
   uint32_t FftSize() const { return fft_size_; }
   bool SetFftSize(uint32_t);
 
   unsigned FrequencyBinCount() const { return fft_size_ / 2; }
 
-  void SetMinDecibels(double k) { min_decibels_ = k; }
   double MinDecibels() const { return min_decibels_; }
+  void SetMinDecibels(double k) { min_decibels_ = k; }
 
-  void SetMaxDecibels(double k) { max_decibels_ = k; }
   double MaxDecibels() const { return max_decibels_; }
+  void SetMaxDecibels(double k) { max_decibels_ = k; }
 
-  void SetSmoothingTimeConstant(double k) { smoothing_time_constant_ = k; }
   double SmoothingTimeConstant() const { return smoothing_time_constant_; }
+  void SetSmoothingTimeConstant(double k) { smoothing_time_constant_ = k; }
 
   void GetFloatFrequencyData(DOMFloat32Array*, double);
   void GetByteFrequencyData(DOMUint8Array*, double);
@@ -66,20 +73,11 @@ class RealtimeAnalyser final {
   // The audio thread writes input data here.
   void WriteInput(AudioBus*, uint32_t frames_to_process);
 
-  static const double kDefaultSmoothingTimeConstant;
-  static const double kDefaultMinDecibels;
-  static const double kDefaultMaxDecibels;
-
-  static const unsigned kDefaultFFTSize;
-  static const unsigned kMinFFTSize;
-  static const unsigned kMaxFFTSize;
-  static const unsigned kInputBufferSize;
+  // Allocates internal audio buffers. Returns true on success or false
+  // if memory allocation failed.
+  bool InitializeBuffers(unsigned render_quantum_frames);
 
  private:
-  // The audio thread writes the input audio here.
-  AudioFloatArray input_buffer_;
-  std::atomic_uint write_index_{0};
-
   unsigned GetWriteIndex() const {
     return write_index_.load(std::memory_order_acquire);
   }
@@ -87,36 +85,30 @@ class RealtimeAnalyser final {
     write_index_.store(new_index, std::memory_order_release);
   }
 
+  void DoFFTAnalysis();
+
+  // The audio thread writes the input audio here.
+  AudioFloatArray input_buffer_;
+  std::atomic_uint write_index_ = 0;
+
   // Input audio is downmixed to this bus before copying to m_inputBuffer.
   scoped_refptr<AudioBus> down_mix_bus_;
 
   uint32_t fft_size_;
   std::unique_ptr<FFTFrame> analysis_frame_;
-  void DoFFTAnalysis();
-
-  // Convert the contents of magnitudeBuffer to byte values, saving the result
-  // in |destination|.
-  void ConvertToByteData(DOMUint8Array* destination);
-
-  // Convert magnidue buffer to dB, saving the result in |destination|
-  void ConvertFloatToDb(DOMFloat32Array* destination);
-
   // doFFTAnalysis() stores the floating-point magnitude analysis data here.
   AudioFloatArray magnitude_buffer_;
-  AudioFloatArray& MagnitudeBuffer() { return magnitude_buffer_; }
 
   // A value between 0 and 1 which averages the previous version of
   // m_magnitudeBuffer with the current analysis magnitude data.
-  double smoothing_time_constant_;
+  double smoothing_time_constant_ = 0.8;
 
   // The range used when converting when using getByteFrequencyData().
-  double min_decibels_;
-  double max_decibels_;
+  double min_decibels_ = -100.0;
+  double max_decibels_ = -30.0;
 
   // Time at which the FFT was last computed.
-  double last_analysis_time_;
-
-  DISALLOW_COPY_AND_ASSIGN(RealtimeAnalyser);
+  double last_analysis_time_ = -1.0;
 };
 
 }  // namespace blink

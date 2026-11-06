@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,7 @@
 #include <memory>
 
 #include "base/files/file_path.h"
-#include "base/macros.h"
-#include "base/memory/singleton.h"
+#include "base/no_destructor.h"
 #include "components/keyed_service/core/simple_keyed_service_factory.h"
 
 class SimpleFactoryKey;
@@ -21,14 +20,15 @@ class ImageFetcherService;
 // Factory to create one CachedImageFetcherService per browser context.
 class ImageFetcherServiceFactory : public SimpleKeyedServiceFactory {
  public:
-  // Return the cache path for the given profile.
-  static base::FilePath GetCachePath(SimpleFactoryKey* key);
-
   static image_fetcher::ImageFetcherService* GetForKey(SimpleFactoryKey* key);
   static ImageFetcherServiceFactory* GetInstance();
 
+  ImageFetcherServiceFactory(const ImageFetcherServiceFactory&) = delete;
+  ImageFetcherServiceFactory& operator=(const ImageFetcherServiceFactory&) =
+      delete;
+
  private:
-  friend struct base::DefaultSingletonTraits<ImageFetcherServiceFactory>;
+  friend base::NoDestructor<ImageFetcherServiceFactory>;
 
   ImageFetcherServiceFactory();
   ~ImageFetcherServiceFactory() override;
@@ -36,9 +36,8 @@ class ImageFetcherServiceFactory : public SimpleKeyedServiceFactory {
   // SimpleKeyedServiceFactory:
   std::unique_ptr<KeyedService> BuildServiceInstanceFor(
       SimpleFactoryKey* key) const override;
-  SimpleFactoryKey* GetKeyToUse(SimpleFactoryKey* key) const override;
 
-  DISALLOW_COPY_AND_ASSIGN(ImageFetcherServiceFactory);
+  SimpleFactoryKey* GetKeyToUse(SimpleFactoryKey* key) const override;
 };
 
 #endif  // CHROME_BROWSER_IMAGE_FETCHER_IMAGE_FETCHER_SERVICE_FACTORY_H_

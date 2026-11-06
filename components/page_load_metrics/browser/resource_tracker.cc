@@ -1,10 +1,12 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/page_load_metrics/browser/resource_tracker.h"
 
 #include <tuple>
+
+#include "content/public/common/child_process_id_util.h"
 
 namespace page_load_metrics {
 
@@ -33,7 +35,8 @@ void ResourceTracker::ProcessResourceUpdate(
   if (resource->cache_type == page_load_metrics::mojom::CacheType::kMemory)
     return;
 
-  content::GlobalRequestID global_id(process_id, resource->request_id);
+  content::GlobalRequestID global_id(
+      content::ToOriginatingProcessIdUnsafe(process_id), resource->request_id);
   auto it = unfinished_resources_.find(global_id);
 
   // This is the first update received for a resource.

@@ -1,16 +1,18 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_INSPECTOR_INSPECTOR_DOM_SNAPSHOT_AGENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_INSPECTOR_INSPECTOR_DOM_SNAPSHOT_AGENT_H_
 
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/css_property_names.h"
-#include "third_party/blink/renderer/core/dom/dom_node_ids.h"
 #include "third_party/blink/renderer/core/inspector/inspector_base_agent.h"
 #include "third_party/blink/renderer/core/inspector/inspector_contrast.h"
-#include "third_party/blink/renderer/core/inspector/protocol/DOMSnapshot.h"
+#include "third_party/blink/renderer/core/inspector/protocol/dom_snapshot.h"
 #include "third_party/blink/renderer/core/layout/layout_text.h"
+#include "third_party/blink/renderer/platform/graphics/dom_node_id.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
@@ -23,6 +25,7 @@ class Element;
 class InspectedFrames;
 class Node;
 class PaintLayer;
+struct OriginUrlMap;
 
 class CORE_EXPORT InspectorDOMSnapshotAgent final
     : public InspectorBaseAgent<protocol::DOMSnapshot::Metainfo> {
@@ -40,9 +43,9 @@ class CORE_EXPORT InspectorDOMSnapshotAgent final
   protocol::Response disable() override;
   protocol::Response getSnapshot(
       std::unique_ptr<protocol::Array<String>> style_filter,
-      protocol::Maybe<bool> include_event_listeners,
-      protocol::Maybe<bool> include_paint_order,
-      protocol::Maybe<bool> include_user_agent_shadow_tree,
+      std::optional<bool> include_event_listeners,
+      std::optional<bool> include_paint_order,
+      std::optional<bool> include_user_agent_shadow_tree,
       std::unique_ptr<protocol::Array<protocol::DOMSnapshot::DOMNode>>*
           dom_nodes,
       std::unique_ptr<protocol::Array<protocol::DOMSnapshot::LayoutTreeNode>>*
@@ -51,10 +54,10 @@ class CORE_EXPORT InspectorDOMSnapshotAgent final
           computed_styles) override;
   protocol::Response captureSnapshot(
       std::unique_ptr<protocol::Array<String>> computed_styles,
-      protocol::Maybe<bool> include_paint_order,
-      protocol::Maybe<bool> include_dom_rects,
-      protocol::Maybe<bool> include_blended_background_colors,
-      protocol::Maybe<bool> include_text_color_opacities,
+      std::optional<bool> include_paint_order,
+      std::optional<bool> include_dom_rects,
+      std::optional<bool> include_blended_background_colors,
+      std::optional<bool> include_text_color_opacities,
       std::unique_ptr<protocol::Array<protocol::DOMSnapshot::DocumentSnapshot>>*
           documents,
       std::unique_ptr<protocol::Array<String>>* strings) override;
@@ -69,8 +72,8 @@ class CORE_EXPORT InspectorDOMSnapshotAgent final
       const LayoutObject* layout_object,
       const LayoutText::TextBoxInfo& text_box);
 
-  using PaintOrderMap = WTF::HashMap<PaintLayer*, int>;
-  static std::unique_ptr<PaintOrderMap> BuildPaintLayerTree(Document*);
+  using PaintOrderMap = GCedHeapHashMap<Member<PaintLayer>, int>;
+  static PaintOrderMap* BuildPaintLayerTree(Document*);
 
  private:
   // Unconditionally enables the agent, even if |enabled_.Get()==true|.
@@ -103,7 +106,6 @@ class CORE_EXPORT InspectorDOMSnapshotAgent final
   static void VisitPaintLayer(PaintLayer*, PaintOrderMap* paint_order_map);
 
   using CSSPropertyFilter = Vector<const CSSProperty*>;
-  using OriginUrlMap = WTF::HashMap<DOMNodeId, String>;
 
   // State of current snapshot.
   std::unique_ptr<protocol::Array<protocol::DOMSnapshot::DOMNode>> dom_nodes_;
@@ -113,11 +115,10 @@ class CORE_EXPORT InspectorDOMSnapshotAgent final
       computed_styles_;
 
   std::unique_ptr<protocol::Array<String>> strings_;
-  WTF::HashMap<String, int> string_table_;
+  HashMap<String, int> string_table_;
 
   HeapHashMap<Member<const CSSValue>, int> css_value_cache_;
-  HashMap<scoped_refptr<const ComputedStyle>, protocol::Array<int>*>
-      style_cache_;
+  HeapHashMap<Member<const ComputedStyle>, protocol::Array<int>*> style_cache_;
 
   std::unique_ptr<protocol::Array<protocol::DOMSnapshot::DocumentSnapshot>>
       documents_;
@@ -128,7 +129,7 @@ class CORE_EXPORT InspectorDOMSnapshotAgent final
   bool include_text_color_opacities_ = false;
   std::unique_ptr<CSSPropertyFilter> css_property_filter_;
   // Maps a PaintLayer to its paint order index.
-  std::unique_ptr<PaintOrderMap> paint_order_map_;
+  Member<PaintOrderMap> paint_order_map_;
   // Maps a backend node id to the url of the script (if any) that generates
   // the corresponding node.
   std::unique_ptr<OriginUrlMap> origin_url_map_;

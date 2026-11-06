@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,28 +6,14 @@
 #define REMOTING_PROTOCOL_VIDEO_STREAM_H_
 
 #include "remoting/protocol/input_event_timestamps.h"
+#include "third_party/webrtc/modules/desktop_capture/desktop_capture_types.h"
 
-namespace webrtc {
-class DesktopSize;
-class DesktopVector;
-}  // namespace webrtc
-
-namespace remoting {
-namespace protocol {
+namespace remoting::protocol {
 
 class VideoStream {
  public:
-  class Observer {
-   public:
-    // Called to notify about screen size changes. The size is specified in
-    // physical pixels.
-    virtual void OnVideoSizeChanged(VideoStream* stream,
-                                    const webrtc::DesktopSize& size,
-                                    const webrtc::DesktopVector& dpi) = 0;
-  };
-
-  VideoStream() {}
-  virtual ~VideoStream() {}
+  VideoStream() = default;
+  virtual ~VideoStream() = default;
 
   // Sets event timestamps source to be used for the video stream.
   virtual void SetEventTimestampsSource(
@@ -37,19 +23,22 @@ class VideoStream {
   // only affects capture scheduling and does not stop/start the capturer.
   virtual void Pause(bool pause) = 0;
 
-  // Sets whether the video encoder should be requested to encode losslessly,
-  // or to use a lossless color space (typically requiring higher bandwidth).
-  virtual void SetLosslessEncode(bool want_lossless) = 0;
-  virtual void SetLosslessColor(bool want_lossless) = 0;
-
-  // Sets stream observer.
-  virtual void SetObserver(Observer* observer) = 0;
-
   // Selects the current desktop display (if multiple displays).
-  virtual void SelectSource(int id) = 0;
+  virtual void SelectSource(webrtc::ScreenId id) = 0;
+
+  // Sets the target/max video framerate for the host. The actual framerate is
+  // variable and determined by the number of changes on the screen and the rate
+  // at which the host is able to generate frames. Also WebRTC will adjust this
+  // value based on network conditions.
+  virtual void SetTargetFramerate(int framerate) = 0;
+
+  // Allows the owner of the stream to request a different |capture_interval|
+  // (usually a higher frequency) for the specified |boost_duration|. After
+  // |boost_duration| has elapsed, the capture rate will return to normal.
+  virtual void BoostFramerate(base::TimeDelta capture_interval,
+                              base::TimeDelta boost_duration) {}
 };
 
-}  // namespace protocol
-}  // namespace remoting
+}  // namespace remoting::protocol
 
 #endif  // REMOTING_PROTOCOL_VIDEO_STREAM_H_

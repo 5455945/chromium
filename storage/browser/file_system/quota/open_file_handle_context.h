@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,9 @@
 #include <stdint.h>
 
 #include "base/files/file_path.h"
-#include "base/macros.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/weak_ptr.h"
+#include "base/sequence_checker.h"
 #include "storage/common/file_system/file_system_types.h"
-#include "url/gurl.h"
 
 namespace storage {
 
@@ -26,6 +24,9 @@ class OpenFileHandleContext : public base::RefCounted<OpenFileHandleContext> {
  public:
   OpenFileHandleContext(const base::FilePath& platform_path,
                         QuotaReservationBuffer* reservation_buffer);
+
+  OpenFileHandleContext(const OpenFileHandleContext&) = delete;
+  OpenFileHandleContext& operator=(const OpenFileHandleContext&) = delete;
 
   // Updates the max written offset and returns the amount of growth.
   int64_t UpdateMaxWrittenOffset(int64_t offset);
@@ -48,9 +49,7 @@ class OpenFileHandleContext : public base::RefCounted<OpenFileHandleContext> {
 
   scoped_refptr<QuotaReservationBuffer> reservation_buffer_;
 
-  base::SequenceChecker sequence_checker_;
-
-  DISALLOW_COPY_AND_ASSIGN(OpenFileHandleContext);
+  SEQUENCE_CHECKER(sequence_checker_);
 };
 
 }  // namespace storage

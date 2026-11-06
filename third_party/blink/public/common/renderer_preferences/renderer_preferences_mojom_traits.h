@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,21 +7,21 @@
 
 #include <stdint.h>
 
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "build/build_config.h"
+#include "mojo/public/cpp/base/string16_mojom_traits.h"
 #include "mojo/public/cpp/base/time_mojom_traits.h"
 #include "mojo/public/cpp/bindings/struct_traits.h"
 #include "third_party/blink/public/common/common_export.h"
+#include "third_party/blink/public/common/peerconnection/webrtc_ip_handling_url_entry_mojom_traits.h"
 #include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
 #include "third_party/blink/public/common/user_agent/user_agent_mojom_traits.h"
+#include "third_party/blink/public/mojom/peerconnection/webrtc_ip_handling_policy.mojom.h"
 #include "third_party/blink/public/mojom/renderer_preferences.mojom-shared.h"
 #include "ui/gfx/mojom/font_render_params_mojom_traits.h"
-
-#if defined(OS_WIN)
-#include "mojo/public/cpp/base/string16_mojom_traits.h"
-#endif
 
 namespace mojo {
 
@@ -62,6 +62,14 @@ struct BLINK_COMMON_EXPORT
     return data.use_subpixel_positioning;
   }
 
+  static const float& text_contrast(const ::blink::RendererPreferences& data) {
+    return data.text_contrast;
+  }
+
+  static const float& text_gamma(const ::blink::RendererPreferences& data) {
+    return data.text_gamma;
+  }
+
   static const uint32_t& focus_ring_color(
       const ::blink::RendererPreferences& data) {
     return data.focus_ring_color;
@@ -92,7 +100,7 @@ struct BLINK_COMMON_EXPORT
     return data.browser_handles_all_top_level_requests;
   }
 
-  static absl::optional<base::TimeDelta> caret_blink_interval(
+  static std::optional<base::TimeDelta> caret_blink_interval(
       const ::blink::RendererPreferences& data) {
     return data.caret_blink_interval;
   }
@@ -122,9 +130,27 @@ struct BLINK_COMMON_EXPORT
     return data.enable_encrypted_media;
   }
 
-  static const std::string& webrtc_ip_handling_policy(
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
+    BUILDFLAG(IS_WIN)
+  static const bool& use_overlay_scrollbar(
       const ::blink::RendererPreferences& data) {
+    return data.use_overlay_scrollbar;
+  }
+#endif
+
+  static const ::blink::mojom::WebRtcIpHandlingPolicy&
+  webrtc_ip_handling_policy(const ::blink::RendererPreferences& data) {
     return data.webrtc_ip_handling_policy;
+  }
+
+  static const std::vector<::blink::WebRtcIpHandlingUrlEntry>&
+  webrtc_ip_handling_urls(const ::blink::RendererPreferences& data) {
+    return data.webrtc_ip_handling_urls;
+  }
+
+  static const std::optional<bool> webrtc_post_quantum_key_agreement(
+      const ::blink::RendererPreferences& data) {
+    return data.webrtc_post_quantum_key_agreement;
   }
 
   static const uint16_t& webrtc_udp_min_port(
@@ -142,11 +168,6 @@ struct BLINK_COMMON_EXPORT
     return data.webrtc_local_ips_allowed_urls;
   }
 
-  static const bool& webrtc_allow_legacy_tls_protocols(
-      const ::blink::RendererPreferences& data) {
-    return data.webrtc_allow_legacy_tls_protocols;
-  }
-
   static const ::blink::UserAgentOverride& user_agent_override(
       const ::blink::RendererPreferences& data) {
     return data.user_agent_override;
@@ -157,21 +178,33 @@ struct BLINK_COMMON_EXPORT
     return data.accept_languages;
   }
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+  static const bool& send_subresource_notification(
+      const ::blink::RendererPreferences& data) {
+    return data.send_subresource_notification;
+  }
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   static const std::string& system_font_family_name(
       const ::blink::RendererPreferences& data) {
     return data.system_font_family_name;
   }
 #endif
 
-#if defined(USE_X11) || defined(USE_OZONE)
+#if BUILDFLAG(IS_OZONE)
   static const bool& selection_clipboard_buffer_available(
       const ::blink::RendererPreferences& data) {
     return data.selection_clipboard_buffer_available;
   }
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_LINUX)
+  static const bool& middle_click_paste_allowed(
+      const ::blink::RendererPreferences& data) {
+    return data.middle_click_paste_allowed;
+  }
+#endif
+
+#if BUILDFLAG(IS_WIN)
   static const std::u16string& caption_font_family_name(
       const ::blink::RendererPreferences& data) {
     return data.caption_font_family_name;
@@ -212,22 +245,6 @@ struct BLINK_COMMON_EXPORT
       const ::blink::RendererPreferences& data) {
     return data.message_font_height;
   }
-  static const int32_t& vertical_scroll_bar_width_in_dips(
-      const ::blink::RendererPreferences& data) {
-    return data.vertical_scroll_bar_width_in_dips;
-  }
-  static const int32_t& horizontal_scroll_bar_height_in_dips(
-      const ::blink::RendererPreferences& data) {
-    return data.horizontal_scroll_bar_height_in_dips;
-  }
-  static const int32_t& arrow_bitmap_height_vertical_scroll_bar_in_dips(
-      const ::blink::RendererPreferences& data) {
-    return data.arrow_bitmap_height_vertical_scroll_bar_in_dips;
-  }
-  static const int32_t& arrow_bitmap_width_horizontal_scroll_bar_in_dips(
-      const ::blink::RendererPreferences& data) {
-    return data.arrow_bitmap_width_horizontal_scroll_bar_in_dips;
-  }
 #endif
 
   static const bool& plugin_fullscreen_allowed(
@@ -240,9 +257,52 @@ struct BLINK_COMMON_EXPORT
     return data.caret_browsing_enabled;
   }
 
+#if BUILDFLAG(IS_ANDROID)
+  static const bool& uses_platform_autofill(
+      const ::blink::RendererPreferences& data) {
+    return data.uses_platform_autofill;
+  }
+#endif  // BUILDFLAG(IS_ANDROID)
+
+  static int32_t autofill_shortcut_key_code(
+      const ::blink::RendererPreferences& data) {
+    return static_cast<int32_t>(data.autofill_shortcut_key_code);
+  }
+
+  static int32_t autofill_shortcut_modifiers(
+      const ::blink::RendererPreferences& data) {
+    return data.autofill_shortcut_modifiers;
+  }
+
+
+  static bool autofill_at_memory_double_ctrl_trigger_enabled(
+      const ::blink::RendererPreferences& data) {
+    return data.autofill_at_memory_double_ctrl_trigger_enabled;
+  }
+
   static const std::vector<uint16_t>& explicitly_allowed_network_ports(
       const ::blink::RendererPreferences& data) {
     return data.explicitly_allowed_network_ports;
+  }
+
+  static bool view_source_line_wrap_enabled(
+      const ::blink::RendererPreferences& data) {
+    return data.view_source_line_wrap_enabled;
+  }
+
+  static bool system_color_chooser_is_modal(
+      const ::blink::RendererPreferences& data) {
+    return data.system_color_chooser_is_modal;
+  }
+
+  static bool is_global_privacy_control_setting_enabled(
+      const ::blink::RendererPreferences& data) {
+    return data.is_global_privacy_control_setting_enabled;
+  }
+
+  static std::optional<bool> global_privacy_control_devtools_override(
+      const ::blink::RendererPreferences& data) {
+    return data.global_privacy_control_devtools_override;
   }
 
   static bool Read(blink::mojom::RendererPreferencesDataView,

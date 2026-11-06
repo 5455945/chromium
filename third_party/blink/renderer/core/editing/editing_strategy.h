@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,13 +18,13 @@ class EditingAlgorithm : public Traversal {
   STATIC_ONLY(EditingAlgorithm);
 
  public:
-  static int CaretMaxOffset(const Node&);
+  static wtf_size_t CaretMaxOffset(const Node&);
   // This method is used to create positions in the DOM. It returns the
   // maximum valid offset in a node. It returns 1 for some elements even
   // though they do not have children, which creates technically invalid DOM
   // Positions. Be sure to call |parentAnchoredEquivalent()| on a Position
   // before using it to create a DOM Range, or an exception will be thrown.
-  static int LastOffsetForEditing(const Node*);
+  static wtf_size_t LastOffsetForEditing(const Node*);
   static Node* RootUserSelectAllForNode(Node*);
 };
 

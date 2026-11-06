@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -35,7 +35,7 @@ class CONTENT_EXPORT BrowserURLHandler {
   static URLHandler null_handler();
 
   // Returns the singleton instance.
-  static  BrowserURLHandler* GetInstance();
+  static BrowserURLHandler* GetInstance();
 
   // RewriteURLIfNecessary gives all registered URLHandlers a shot at processing
   // the given URL, and modifies it in place.
@@ -59,6 +59,9 @@ class CONTENT_EXPORT BrowserURLHandler {
   // null_handler() for the opposite direction.
   virtual void AddHandlerPair(URLHandler handler,
                               URLHandler reverse_handler) = 0;
+
+  // Removes the first handler pair whose forward handler matches `handler`.
+  virtual void RemoveHandlerForTesting(URLHandler handler) = 0;
 
  protected:
   virtual ~BrowserURLHandler() {}

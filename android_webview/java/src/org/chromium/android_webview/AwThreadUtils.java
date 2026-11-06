@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,10 @@ package org.chromium.android_webview;
 import android.os.Handler;
 
 import org.chromium.base.ThreadUtils;
+import org.chromium.build.annotations.NullMarked;
 
-/**
- * Provides WebView-specific threading utilities.
- */
+/** Provides WebView-specific threading utilities. */
+@NullMarked
 public class AwThreadUtils {
     /**
      * Post a task to the current thread, ensuring that it runs on the underlying Android looper

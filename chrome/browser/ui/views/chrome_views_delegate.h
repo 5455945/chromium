@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,12 +9,9 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
-#include "base/compiler_specific.h"
-#include "base/location.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "ui/base/mojom/window_show_state.mojom-forward.h"
 #include "ui/views/views_delegate.h"
 
 class Profile;
@@ -24,35 +21,40 @@ class ScopedProfileKeepAlive;
 class ChromeViewsDelegate : public views::ViewsDelegate {
  public:
   ChromeViewsDelegate();
+
+  ChromeViewsDelegate(const ChromeViewsDelegate&) = delete;
+  ChromeViewsDelegate& operator=(const ChromeViewsDelegate&) = delete;
+
   ~ChromeViewsDelegate() override;
 
   // views::ViewsDelegate:
   void SaveWindowPlacement(const views::Widget* window,
                            const std::string& window_name,
                            const gfx::Rect& bounds,
-                           ui::WindowShowState show_state) override;
-  bool GetSavedWindowPlacement(const views::Widget* widget,
-                               const std::string& window_name,
-                               gfx::Rect* bounds,
-                               ui::WindowShowState* show_state) const override;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+                           ui::mojom::WindowShowState show_state) override;
+  bool GetSavedWindowPlacement(
+      const views::Widget* widget,
+      const std::string& window_name,
+      gfx::Rect* bounds,
+      ui::mojom::WindowShowState* show_state) const override;
+#if BUILDFLAG(IS_CHROMEOS)
   ProcessMenuAcceleratorResult ProcessAcceleratorWhileMenuShowing(
       const ui::Accelerator& accelerator) override;
   bool ShouldCloseMenuIfMouseCaptureLost() const override;
-  std::unique_ptr<views::NonClientFrameView> CreateDefaultNonClientFrameView(
+  std::unique_ptr<views::FrameView> CreateDefaultFrameView(
       views::Widget* widget) override;
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   HICON GetDefaultWindowIcon() const override;
   HICON GetSmallWindowIcon() const override;
   int GetAppbarAutohideEdges(HMONITOR monitor,
                              base::OnceClosure callback) override;
-// TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
-// of lacros-chrome is complete.
-#elif defined(OS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
-  gfx::ImageSkia* GetDefaultWindowIcon() const override;
+#endif
+
+#if BUILDFLAG(IS_LINUX)
   bool WindowManagerProvidesTitleBar(bool maximized) override;
+  gfx::ImageSkia* GetDefaultWindowIcon() const override;
 #endif
 
   void AddRef() override;
@@ -61,13 +63,13 @@ class ChromeViewsDelegate : public views::ViewsDelegate {
   void OnBeforeWidgetInit(
       views::Widget::InitParams* params,
       views::internal::NativeWidgetDelegate* delegate) override;
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   ui::ContextFactory* GetContextFactory() override;
 #endif
   std::string GetApplicationName() override;
 
  private:
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   typedef std::map<HMONITOR, int> AppbarAutohideEdgeMap;
 
   // Callback on main thread with the edges. |returned_edges| is the value that
@@ -78,7 +80,7 @@ class ChromeViewsDelegate : public views::ViewsDelegate {
                                 int edges);
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Called from GetSavedWindowPlacement() on ChromeOS to adjust the bounds.
   void AdjustSavedWindowPlacementChromeOS(const views::Widget* widget,
                                           gfx::Rect* bounds) const;
@@ -101,7 +103,7 @@ class ChromeViewsDelegate : public views::ViewsDelegate {
   std::map<Profile*, std::unique_ptr<ScopedProfileKeepAlive>>
       profile_keep_alives_;
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   AppbarAutohideEdgeMap appbar_autohide_edge_map_;
   // If true we're in the process of notifying a callback from
   // GetAutohideEdges().start a new query.
@@ -109,8 +111,6 @@ class ChromeViewsDelegate : public views::ViewsDelegate {
 
   base::WeakPtrFactory<ChromeViewsDelegate> weak_factory_{this};
 #endif
-
-  DISALLOW_COPY_AND_ASSIGN(ChromeViewsDelegate);
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_CHROME_VIEWS_DELEGATE_H_

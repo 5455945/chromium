@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,8 @@
 #include <memory>
 #include <vector>
 
-#include "base/macros.h"
 #include "chromecast/ui/mojom/ui_service.mojom.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace ui {
 class Event;
@@ -41,8 +40,7 @@ class CastWindowManager {
     MEDIA_INFO = 5,
     SETTINGS = 6,
     BOOT_ANIMATION_OVERLAY = 7,
-    CORNERS_OVERLAY = 8,
-    TOP = CORNERS_OVERLAY
+    TOP = BOOT_ANIMATION_OVERLAY,
   };
 
   class Observer {
@@ -95,6 +93,9 @@ class CastWindowManager {
   // Enable/disable the handling of all touch events.
   virtual void SetTouchInputDisabled(bool disabled) = 0;
 
+  // Enable/disable screen rotation transforms.
+  virtual void SetRotationSupported(bool supported) {}
+
   // Add an observer for when input events occur while touch input is disabled.
   virtual void AddTouchActivityObserver(
       CastTouchActivityObserver* observer) = 0;
@@ -103,14 +104,6 @@ class CastWindowManager {
   // disabled.
   virtual void RemoveTouchActivityObserver(
       CastTouchActivityObserver* observer) = 0;
-
-  // Let the window manager that the current app needs explicit rounded window
-  // decorations.
-  // TODO(rdaum): Rename to "SetNeedsRoundedCorners"
-  virtual void SetEnableRoundedCorners(bool enable) = 0;
-
-  // Called when color inversion is turned on or off.
-  virtual void NotifyColorInversionEnabled(bool enabled) = 0;
 };
 
 }  // namespace chromecast

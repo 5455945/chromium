@@ -1,16 +1,19 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/network/trust_tokens/trust_token_store.h"
 
+#include <algorithm>
+#include <map>
 #include <memory>
+#include <optional>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "services/network/public/cpp/is_potentially_trustworthy.h"
 #include "services/network/public/cpp/trust_token_parameterization.h"
+#include "services/network/public/mojom/clear_data_filter.mojom.h"
 #include "services/network/public/mojom/trust_tokens.mojom-forward.h"
 #include "services/network/trust_tokens/in_memory_trust_token_persister.h"
 #include "services/network/trust_tokens/proto/public.pb.h"
@@ -19,7 +22,6 @@
 #include "services/network/trust_tokens/trust_token_key_commitment_getter.h"
 #include "services/network/trust_tokens/trust_token_parameterization.h"
 #include "services/network/trust_tokens/types.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/protobuf/src/google/protobuf/repeated_field.h"
 #include "url/origin.h"
 
@@ -30,6 +32,7 @@ class NeverExpiringExpiryDelegate
     : public TrustTokenStore::RecordExpiryDelegate {
  public:
   bool IsRecordExpired(const TrustTokenRedemptionRecord& record,
+                       const base::TimeDelta& time_since_last_redemption,
                        const SuitableTrustTokenOrigin& issuer) override {
     return false;
   }
@@ -59,64 +62,68 @@ std::unique_ptr<TrustTokenStore> TrustTokenStore::CreateForTesting(
 }
 
 void TrustTokenStore::RecordIssuance(const SuitableTrustTokenOrigin& issuer) {
-  SuitableTrustTokenOrigin issuer_origin = issuer;
   std::unique_ptr<TrustTokenIssuerConfig> config =
       persister_->GetIssuerConfig(issuer);
   if (!config)
     config = std::make_unique<TrustTokenIssuerConfig>();
-  config->set_last_issuance(internal::TimeToString(base::Time::Now()));
+  *config->mutable_last_issuance() =
+      internal::TimeToTimestamp(base::Time::Now());
   persister_->SetIssuerConfig(issuer, std::move(config));
 }
 
-absl::optional<base::TimeDelta> TrustTokenStore::TimeSinceLastIssuance(
+std::optional<base::TimeDelta> TrustTokenStore::TimeSinceLastIssuance(
     const SuitableTrustTokenOrigin& issuer) {
   std::unique_ptr<TrustTokenIssuerConfig> config =
       persister_->GetIssuerConfig(issuer);
   if (!config)
-    return absl::nullopt;
+    return std::nullopt;
   if (!config->has_last_issuance())
-    return absl::nullopt;
-  absl::optional<base::Time> maybe_last_issuance =
-      internal::StringToTime(config->last_issuance());
-  if (!maybe_last_issuance)
-    return absl::nullopt;
+    return std::nullopt;
 
-  base::TimeDelta ret = base::Time::Now() - *maybe_last_issuance;
-  if (ret < base::TimeDelta())
-    return absl::nullopt;
+  base::Time last_issuance = internal::TimestampToTime(config->last_issuance());
+  base::TimeDelta ret = base::Time::Now() - last_issuance;
+  if (ret.is_negative())
+    return std::nullopt;
 
   return ret;
 }
 
-void TrustTokenStore::RecordRedemption(
+bool TrustTokenStore::IsRedemptionLimitHit(
     const SuitableTrustTokenOrigin& issuer,
-    const SuitableTrustTokenOrigin& top_level) {
-  std::unique_ptr<TrustTokenIssuerToplevelPairConfig> config =
-      persister_->GetIssuerToplevelPairConfig(issuer, top_level);
+    const SuitableTrustTokenOrigin& top_level) const {
+  auto config = persister_->GetIssuerToplevelPairConfig(issuer, top_level);
   if (!config)
-    config = std::make_unique<TrustTokenIssuerToplevelPairConfig>();
-  config->set_last_redemption(internal::TimeToString(base::Time::Now()));
-  persister_->SetIssuerToplevelPairConfig(issuer, top_level, std::move(config));
+    return false;
+  if (!config->has_last_redemption())
+    return false;
+  if (!config->has_penultimate_redemption())
+    return false;
+
+  base::Time penultimate_redemption =
+      internal::TimestampToTime(config->penultimate_redemption());
+  base::TimeDelta ret = base::Time::Now() - penultimate_redemption;
+  if (ret.is_negative())
+    return false;
+  if (ret > base::Seconds(
+                kTrustTokenPerIssuerToplevelRedemptionFrequencyLimitInSeconds))
+    return false;
+  return true;
 }
 
-absl::optional<base::TimeDelta> TrustTokenStore::TimeSinceLastRedemption(
+std::optional<base::TimeDelta> TrustTokenStore::TimeSinceLastRedemption(
     const SuitableTrustTokenOrigin& issuer,
     const SuitableTrustTokenOrigin& top_level) {
   auto config = persister_->GetIssuerToplevelPairConfig(issuer, top_level);
   if (!config)
-    return absl::nullopt;
+    return std::nullopt;
   if (!config->has_last_redemption())
-    return absl::nullopt;
-  absl::optional<base::Time> maybe_last_redemption =
-      internal::StringToTime(config->last_redemption());
-  // internal::StringToTime can fail in the case of data corruption (or writer
-  // error).
-  if (!maybe_last_redemption)
-    return absl::nullopt;
+    return std::nullopt;
 
-  base::TimeDelta ret = base::Time::Now() - *maybe_last_redemption;
-  if (ret < base::TimeDelta())
-    return absl::nullopt;
+  base::Time last_redemption =
+      internal::TimestampToTime(config->last_redemption());
+  base::TimeDelta ret = base::Time::Now() - last_redemption;
+  if (ret.is_negative())
+    return std::nullopt;
   return ret;
 }
 
@@ -126,7 +133,8 @@ bool TrustTokenStore::IsAssociated(const SuitableTrustTokenOrigin& issuer,
       persister_->GetToplevelConfig(top_level);
   if (!config)
     return false;
-  return base::Contains(config->associated_issuers(), issuer.Serialize());
+  return std::ranges::contains(config->associated_issuers(),
+                               issuer.Serialize());
 }
 
 bool TrustTokenStore::SetAssociation(
@@ -138,7 +146,7 @@ bool TrustTokenStore::SetAssociation(
     config = std::make_unique<TrustTokenToplevelConfig>();
   auto string_issuer = issuer.Serialize();
 
-  if (base::Contains(config->associated_issuers(), string_issuer))
+  if (std::ranges::contains(config->associated_issuers(), string_issuer))
     return true;
 
   if (config->associated_issuers_size() >=
@@ -156,9 +164,9 @@ void TrustTokenStore::PruneStaleIssuerState(
     const SuitableTrustTokenOrigin& issuer,
     const std::vector<mojom::TrustTokenVerificationKeyPtr>& keys) {
   DCHECK([&keys]() {
-    std::set<base::StringPiece> unique_keys;
+    std::set<std::string_view> unique_keys;
     for (const auto& key : keys)
-      unique_keys.insert(base::StringPiece(key->body));
+      unique_keys.insert(std::string_view(key->body));
     return unique_keys.size() == keys.size();
   }());
 
@@ -169,11 +177,10 @@ void TrustTokenStore::PruneStaleIssuerState(
 
   google::protobuf::RepeatedPtrField<TrustToken> filtered_tokens;
   for (auto& token : *config->mutable_tokens()) {
-    if (std::any_of(keys.begin(), keys.end(),
-                    [&token](const mojom::TrustTokenVerificationKeyPtr& key) {
-                      return key->body == token.signing_key();
-                    }))
+    if (std::ranges::contains(keys, token.signing_key(),
+                              &mojom::TrustTokenVerificationKey::body)) {
       *filtered_tokens.Add() = std::move(token);
+    }
   }
 
   config->mutable_tokens()->Swap(&filtered_tokens);
@@ -183,7 +190,7 @@ void TrustTokenStore::PruneStaleIssuerState(
 
 void TrustTokenStore::AddTokens(const SuitableTrustTokenOrigin& issuer,
                                 base::span<const std::string> token_bodies,
-                                base::StringPiece issuing_key) {
+                                std::string_view issuing_key) {
   auto config = persister_->GetIssuerConfig(issuer);
   if (!config)
     config = std::make_unique<TrustTokenIssuerConfig>();
@@ -195,6 +202,8 @@ void TrustTokenStore::AddTokens(const SuitableTrustTokenOrigin& issuer,
     TrustToken* entry = config->add_tokens();
     entry->set_body(*it);
     entry->set_signing_key(std::string(issuing_key));
+    *entry->mutable_creation_time() =
+        internal::TimeToTimestamp(base::Time::Now());
   }
 
   persister_->SetIssuerConfig(issuer, std::move(config));
@@ -215,12 +224,11 @@ std::vector<TrustToken> TrustTokenStore::RetrieveMatchingTokens(
   if (!config)
     return matching_tokens;
 
-  std::copy_if(config->tokens().begin(), config->tokens().end(),
-               std::back_inserter(matching_tokens),
-               [&key_matcher](const TrustToken& token) {
-                 return token.has_signing_key() &&
-                        key_matcher.Run(token.signing_key());
-               });
+  std::ranges::copy_if(config->tokens(), std::back_inserter(matching_tokens),
+                       [&key_matcher](const TrustToken& token) {
+                         return token.has_signing_key() &&
+                                key_matcher.Run(token.signing_key());
+                       });
 
   return matching_tokens;
 }
@@ -247,47 +255,67 @@ void TrustTokenStore::SetRedemptionRecord(
     const SuitableTrustTokenOrigin& top_level,
     const TrustTokenRedemptionRecord& record) {
   auto config = persister_->GetIssuerToplevelPairConfig(issuer, top_level);
-  if (!config)
+  if (!config) {
     config = std::make_unique<TrustTokenIssuerToplevelPairConfig>();
+    *config->mutable_last_redemption() =
+        internal::TimeToTimestamp(base::Time::UnixEpoch());
+  }
   *config->mutable_redemption_record() = record;
+  *config->mutable_penultimate_redemption() = config->last_redemption();
+  *config->mutable_last_redemption() =
+      internal::TimeToTimestamp(base::Time::Now());
   persister_->SetIssuerToplevelPairConfig(issuer, top_level, std::move(config));
 }
 
-absl::optional<TrustTokenRedemptionRecord>
+std::optional<TrustTokenRedemptionRecord>
 TrustTokenStore::RetrieveNonstaleRedemptionRecord(
     const SuitableTrustTokenOrigin& issuer,
     const SuitableTrustTokenOrigin& top_level) {
   auto config = persister_->GetIssuerToplevelPairConfig(issuer, top_level);
   if (!config)
-    return absl::nullopt;
+    return std::nullopt;
 
   if (!config->has_redemption_record())
-    return absl::nullopt;
+    return std::nullopt;
 
-  if (record_expiry_delegate_->IsRecordExpired(config->redemption_record(),
-                                               issuer))
-    return absl::nullopt;
+  std::optional<base::TimeDelta> maybe_time_since_last_redemption =
+      TimeSinceLastRedemption(issuer, top_level);
+  base::TimeDelta time_since_last_redemption = base::Seconds(0);
+  if (maybe_time_since_last_redemption)
+    time_since_last_redemption = *maybe_time_since_last_redemption;
+
+  if (record_expiry_delegate_->IsRecordExpired(
+          config->redemption_record(), time_since_last_redemption, issuer))
+    return std::nullopt;
 
   return config->redemption_record();
 }
 
 bool TrustTokenStore::ClearDataForFilter(mojom::ClearDataFilterPtr filter) {
+  const base::Time windows_epoch =
+      base::Time::FromDeltaSinceWindowsEpoch(base::Microseconds(0));
+  const base::Time beginning_of_time = windows_epoch;
+  const base::Time end_of_time = base::Time::Now();
   if (!filter) {
-    return persister_->DeleteForOrigins(base::BindRepeating(
-        [](const SuitableTrustTokenOrigin&) { return true; }));
+    const auto key_matcher = base::BindRepeating(
+        [](const SuitableTrustTokenOrigin&) { return true; });
+    const auto time_matcher =
+        base::BindRepeating([](const base::Time&) { return true; });
+    return persister_->DeleteForOrigins(std::move(key_matcher),
+                                        std::move(time_matcher));
   }
-
   // Returns whether |storage_key|'s data should be deleted, based on the logic
   // |filter| specifies. (Default to deleting everything, because a null
   // |filter| is a wildcard.)
-  auto matcher = base::BindRepeating(
+  auto key_matcher = base::BindRepeating(
       [](const mojom::ClearDataFilter& filter,
          const SuitableTrustTokenOrigin& storage_key) -> bool {
         // Match an origin if
         // - it is an eTLD+1 (aka "domain and registry") match with anything
         // on |filter|'s domain list, or
         // - it is an origin match with anything on |filter|'s origin list.
-        bool is_match = base::Contains(filter.origins, storage_key.origin());
+        bool is_match =
+            std::ranges::contains(filter.origins, storage_key.origin());
 
         // Computing the domain might be a little expensive, so
         // skip it if we know for sure the origin is a match because it
@@ -297,7 +325,7 @@ bool TrustTokenStore::ClearDataForFilter(mojom::ClearDataFilterPtr filter) {
               net::registry_controlled_domains::GetDomainAndRegistry(
                   storage_key.origin(),
                   net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
-          is_match = base::Contains(filter.domains, etld1_for_origin);
+          is_match = std::ranges::contains(filter.domains, etld1_for_origin);
         }
 
         switch (filter.type) {
@@ -309,7 +337,49 @@ bool TrustTokenStore::ClearDataForFilter(mojom::ClearDataFilterPtr filter) {
       },
       *filter);
 
-  return persister_->DeleteForOrigins(std::move(matcher));
+  auto time_matcher = base::BindRepeating(
+      [](const base::Time& begin_time, const base::Time& end_time,
+         const base::Time& creation_time) -> bool {
+        const base::TimeDelta creation_delta =
+            creation_time.ToDeltaSinceWindowsEpoch();
+        const base::TimeDelta begin_delta =
+            begin_time.ToDeltaSinceWindowsEpoch();
+        const base::TimeDelta end_delta = end_time.ToDeltaSinceWindowsEpoch();
+        if ((creation_delta < begin_delta) || (creation_delta > end_delta)) {
+          return false;
+        }
+        return true;
+      },
+      beginning_of_time, end_of_time);
+  return persister_->DeleteForOrigins(std::move(key_matcher),
+                                      std::move(time_matcher));
+}
+
+// Assumes predicate is created from
+// CookieSettings::CreateDeleteCookieOnExitPredicate and matches PST
+// storage key hosts.
+//
+// Some inputs and the resulting data clearing decisions.
+//
+// Serialized storage key    | Clear on exit list includes | will get cleared
+// https://a.com:1443        | a.com                       | yes
+// https://a.com:1443        | https://a.com               | yes
+// https://a.b.com:1443      | a.b.com                     | yes
+// https://a.b.com:1443      | b.com                       | no
+// https://b.com:1443        | a.b.com                     | no
+//
+bool TrustTokenStore::ClearDataForPredicate(
+    base::RepeatingCallback<bool(const std::string&)> predicate) {
+  auto time_matcher = base::BindRepeating(
+      [](const base::Time& creation_time) -> bool { return true; });
+  auto key_matcher = base::BindRepeating(
+      [](base::RepeatingCallback<bool(const std::string&)> pred,
+         const SuitableTrustTokenOrigin& storage_key) -> bool {
+        return pred.Run(storage_key.origin().host());
+      },
+      predicate);
+  return persister_->DeleteForOrigins(std::move(key_matcher),
+                                      std::move(time_matcher));
 }
 
 bool TrustTokenStore::DeleteStoredTrustTokens(
@@ -327,6 +397,10 @@ bool TrustTokenStore::DeleteStoredTrustTokens(
 base::flat_map<SuitableTrustTokenOrigin, int>
 TrustTokenStore::GetStoredTrustTokenCounts() {
   return persister_->GetStoredTrustTokenCounts();
+}
+
+IssuerRedemptionRecordMap TrustTokenStore::GetRedemptionRecords() {
+  return persister_->GetRedemptionRecords();
 }
 
 }  // namespace network

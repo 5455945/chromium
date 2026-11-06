@@ -1,16 +1,25 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2024 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/browsing_data/core/features.h"
 
-namespace browsing_data {
-namespace features {
+#include "build/build_config.h"
+#include "components/history/core/browser/features.h"
 
-const base::Feature kEnableRemovingAllThirdPartyCookies{
-    "EnableRemovingAllThirdPartyCookies", base::FEATURE_DISABLED_BY_DEFAULT};
+namespace browsing_data::features {
+#if BUILDFLAG(IS_ANDROID)
+BASE_FEATURE(kBrowsingDataModel, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kDbdPasswordRemovalOnAndroid, base::FEATURE_DISABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(IS_ANDROID)
 
-const base::Feature kEnableBrowsingDataLifetimeManager{
-    "BrowsingDataLifetimeManager", base::FEATURE_ENABLED_BY_DEFAULT};
-}  // namespace features
-}  // namespace browsing_data
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+BASE_FEATURE(kPasswordRemovalExtensionErrorKillSwitch,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+
+BASE_FEATURE(kBrowsingDataModelSharedWorkerKeyWithoutURL,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+}  // namespace browsing_data::features

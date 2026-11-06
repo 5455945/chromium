@@ -14,7 +14,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Run all tests.
+
 set -x
 
-# Invoke protractor to run tests.
-./node_modules/.bin/protractor protractor.conf.js
+# TODO: For the time being, external testing is disabled.
+exit 1
+
+# Serve the files in closure-library at http://localhost:8080.
+# We use a Python server at the moment, as the http-server npm module
+# rejects POST requests.
+./scripts/http/simple_http_server.py 2> /dev/null & sleep 5
+

@@ -1,18 +1,42 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/renderers/win/media_engine_notify_impl.h"
 
+#include <mferror.h>
+
+#include "base/metrics/histogram_functions.h"
+#include "base/strings/strcat.h"
 #include "media/base/win/mf_helpers.h"
 
 namespace media {
 
 namespace {
 
+constexpr char kSubsequentErrorUmaName[] =
+    "Media.MediaFoundation.MediaEngineError.SubsequentError";
+constexpr char kSubsequentEventUmaName[] =
+    "Media.MediaFoundation.MediaEngineError.SubsequentEvent";
+constexpr char kSubsequentEventOrErrorReportedUmaName[] =
+    "Media.MediaFoundation.MediaEngineError.SubsequentEventOrErrorReported";
+
 #define ENUM_TO_STRING(enum) \
   case enum:                 \
     return #enum
+
+std::string MediaEngineErrorToString(MF_MEDIA_ENGINE_ERR error) {
+  switch (error) {
+    ENUM_TO_STRING(MF_MEDIA_ENGINE_ERR_NOERROR);
+    ENUM_TO_STRING(MF_MEDIA_ENGINE_ERR_ABORTED);
+    ENUM_TO_STRING(MF_MEDIA_ENGINE_ERR_NETWORK);
+    ENUM_TO_STRING(MF_MEDIA_ENGINE_ERR_DECODE);
+    ENUM_TO_STRING(MF_MEDIA_ENGINE_ERR_ENCRYPTED);
+    ENUM_TO_STRING(MF_MEDIA_ENGINE_ERR_SRC_NOT_SUPPORTED);
+    default:
+      return "Unknown MF_MEDIA_ENGINE_ERR";
+  }
+}
 
 std::string MediaEngineEventToString(MF_MEDIA_ENGINE_EVENT event) {
   switch (event) {
@@ -55,6 +79,7 @@ std::string MediaEngineEventToString(MF_MEDIA_ENGINE_EVENT event) {
     ENUM_TO_STRING(MF_MEDIA_ENGINE_EVENT_STREAMRENDERINGERROR);
     ENUM_TO_STRING(MF_MEDIA_ENGINE_EVENT_SUPPORTEDRATES_CHANGED);
     ENUM_TO_STRING(MF_MEDIA_ENGINE_EVENT_AUDIOENDPOINTCHANGE);
+    ENUM_TO_STRING(MF_MEDIA_ENGINE_EVENT_ENGINE_SEEK_REQUESTED);
     default:
       return "Unknown MF_MEDIA_ENGINE_EVENT";
   }
@@ -63,51 +88,64 @@ std::string MediaEngineEventToString(MF_MEDIA_ENGINE_EVENT event) {
 #undef ENUM_TO_STRING
 
 PipelineStatus MediaEngineErrorToPipelineStatus(
-    MF_MEDIA_ENGINE_ERR media_engine_error,
-    HRESULT hr) {
-  // HRESULT 0x8004CD12 is DRM_E_TEE_INVALID_HWDRM_STATE, which can happen
-  // during OS sleep/resume, or moving video to different graphics adapters.
-  // This is not an error, so special case it here.
-  if (hr == static_cast<HRESULT>(0x8004CD12))
-    return PipelineStatus::PIPELINE_ERROR_HARDWARE_CONTEXT_RESET;
-
+    MF_MEDIA_ENGINE_ERR media_engine_error) {
   switch (media_engine_error) {
     case MF_MEDIA_ENGINE_ERR_NOERROR:
-      return PipelineStatus::PIPELINE_OK;
+      return PIPELINE_OK;
     case MF_MEDIA_ENGINE_ERR_ABORTED:
-      return PipelineStatus::PIPELINE_ERROR_ABORT;
+      return PIPELINE_ERROR_ABORT;
     case MF_MEDIA_ENGINE_ERR_NETWORK:
-      return PipelineStatus::PIPELINE_ERROR_NETWORK;
+      return PIPELINE_ERROR_NETWORK;
     case MF_MEDIA_ENGINE_ERR_DECODE:
-      FALLTHROUGH;
+      [[fallthrough]];
     case MF_MEDIA_ENGINE_ERR_ENCRYPTED:
-      return PipelineStatus::PIPELINE_ERROR_DECODE;
+      return PIPELINE_ERROR_DECODE;
     case MF_MEDIA_ENGINE_ERR_SRC_NOT_SUPPORTED:
-      return PipelineStatus::DEMUXER_ERROR_COULD_NOT_OPEN;
+      return DEMUXER_ERROR_COULD_NOT_OPEN;
     default:
       NOTREACHED();
-      return PipelineStatus::PIPELINE_ERROR_INVALID_STATE;
   }
 }
 
 }  // namespace
 
 MediaEngineNotifyImpl::MediaEngineNotifyImpl() = default;
-MediaEngineNotifyImpl::~MediaEngineNotifyImpl() = default;
+MediaEngineNotifyImpl::~MediaEngineNotifyImpl() {
+  DVLOG(1) << __func__;
+  base::AutoLock lock(lock_);
+  if (had_error_ && !is_subsequent_event_or_error_reported_) {
+    base::UmaHistogramBoolean(kSubsequentEventOrErrorReportedUmaName, false);
+  }
+}
 
 HRESULT MediaEngineNotifyImpl::RuntimeClassInitialize(
     ErrorCB error_cb,
     EndedCB ended_cb,
-    BufferingStateChangedCB buffering_state_changed_cb,
-    VideoNaturalSizeChangedCB video_natural_size_changed_cb,
-    TimeUpdateCB time_update_cb) {
+    FormatChangeCB format_change_cb,
+    LoadedDataCB loaded_data_cb,
+    CanPlayThroughCB can_play_through_cb,
+    PlayingCB playing_cb,
+    WaitingCB waiting_cb,
+    FrameStepCompletedCB frame_step_completed_cb,
+    TimeUpdateCB time_update_cb,
+    MFSeekRequestedCB mf_seek_requested_cb,
+    std::optional<VideoDecoderConfig> video_decoder_config,
+    std::optional<AudioDecoderConfig> audio_decoder_config) {
   DVLOG_FUNC(1);
 
   error_cb_ = std::move(error_cb);
   ended_cb_ = std::move(ended_cb);
-  buffering_state_changed_cb_ = std::move(buffering_state_changed_cb);
-  video_natural_size_changed_cb_ = std::move(video_natural_size_changed_cb);
+  format_change_cb_ = std::move(format_change_cb);
+  loaded_data_cb_ = std::move(loaded_data_cb);
+  can_play_through_cb_ = std::move(can_play_through_cb);
+  playing_cb_ = std::move(playing_cb);
+  waiting_cb_ = std::move(waiting_cb);
+  frame_step_completed_cb_ = std::move(frame_step_completed_cb);
   time_update_cb_ = std::move(time_update_cb);
+  mf_seek_requested_cb_ = std::move(mf_seek_requested_cb);
+
+  audio_decoder_config_ = std::move(audio_decoder_config);
+  video_decoder_config_ = std::move(video_decoder_config);
   return S_OK;
 }
 
@@ -122,40 +160,89 @@ HRESULT MediaEngineNotifyImpl::EventNotify(DWORD event_code,
   DVLOG_FUNC(3) << "event=" << MediaEngineEventToString(event);
 
   base::AutoLock lock(lock_);
-  if (has_shutdown_)
+  if (had_error_) {
+    DVLOG_FUNC(3)
+        << "Error already reported, ignore all subsequent events or errors!";
+    if (!is_subsequent_event_or_error_reported_) {
+      if (event == MF_MEDIA_ENGINE_EVENT_ERROR) {
+        MF_MEDIA_ENGINE_ERR error = static_cast<MF_MEDIA_ENGINE_ERR>(param1);
+        HRESULT hr = param2;
+        base::UmaHistogramSparse(kSubsequentErrorUmaName, error);
+        base::UmaHistogramSparse(
+            base::StrCat({kSubsequentErrorUmaName, ".",
+                          MediaEngineErrorToString(error), ".Hresult"}),
+            hr);
+      } else {
+        base::UmaHistogramSparse(kSubsequentEventUmaName, event);
+      }
+      base::UmaHistogramBoolean(kSubsequentEventOrErrorReportedUmaName, true);
+      is_subsequent_event_or_error_reported_ = true;
+    }
     return S_OK;
+  }
+  if (has_shutdown_) {
+    return S_OK;
+  }
 
   switch (event) {
     case MF_MEDIA_ENGINE_EVENT_ERROR: {
+      had_error_ = true;
+
       // |param1| - A member of the MF_MEDIA_ENGINE_ERR enumeration.
       // |param2| - An HRESULT error code, or zero.
       MF_MEDIA_ENGINE_ERR error = static_cast<MF_MEDIA_ENGINE_ERR>(param1);
       HRESULT hr = param2;
       LOG(ERROR) << __func__ << ": error=" << error << ", hr=" << PrintHr(hr);
-      error_cb_.Run(MediaEngineErrorToPipelineStatus(error, hr));
+
+      // Report the HRESULT corresponding to certain MF_MEDIA_ENGINE_ERR
+      // TODO(crbug.com/315860185): Remove this after the investigation is done.
+      base::UmaHistogramSparse(
+          base::StrCat({"Media.MediaFoundation.MediaEngineError.",
+                        MediaEngineErrorToString(error), ".Hresult"}),
+          hr);
+
+      // Report the Video and Audio codec used when encountering the HRESULT
+      // MF_E_TOPO_CODEC_NOT_FOUND.
+      // TODO(crbug.com/315860185): Remove this after the investigation is done.
+      if (hr == MF_E_TOPO_CODEC_NOT_FOUND &&
+          audio_decoder_config_.has_value() &&
+          video_decoder_config_.has_value()) {
+        base::UmaHistogramEnumeration(
+            base::StrCat(
+                {"Media.MediaFoundation.MF_E_TOPO_CODEC_NOT_FOUND.",
+                 media::GetCodecNameForUMA(video_decoder_config_->codec())}),
+            audio_decoder_config_->codec());
+      }
+
+      error_cb_.Run(MediaEngineErrorToPipelineStatus(error), hr);
       break;
     }
     case MF_MEDIA_ENGINE_EVENT_ENDED:
       ended_cb_.Run();
       break;
     case MF_MEDIA_ENGINE_EVENT_FORMATCHANGE:
-      video_natural_size_changed_cb_.Run();
+      format_change_cb_.Run();
       break;
     case MF_MEDIA_ENGINE_EVENT_LOADEDDATA:
-      video_natural_size_changed_cb_.Run();
-      FALLTHROUGH;
+      loaded_data_cb_.Run();
+      break;
+    case MF_MEDIA_ENGINE_EVENT_CANPLAYTHROUGH:
+      can_play_through_cb_.Run();
+      break;
     case MF_MEDIA_ENGINE_EVENT_PLAYING:
-      buffering_state_changed_cb_.Run(
-          BufferingState::BUFFERING_HAVE_ENOUGH,
-          BufferingStateChangeReason::BUFFERING_CHANGE_REASON_UNKNOWN);
+      playing_cb_.Run();
       break;
     case MF_MEDIA_ENGINE_EVENT_WAITING:
-      buffering_state_changed_cb_.Run(
-          BufferingState::BUFFERING_HAVE_NOTHING,
-          BufferingStateChangeReason::BUFFERING_CHANGE_REASON_UNKNOWN);
+      waiting_cb_.Run();
+      break;
+    case MF_MEDIA_ENGINE_EVENT_FRAMESTEPCOMPLETED:
+      frame_step_completed_cb_.Run();
       break;
     case MF_MEDIA_ENGINE_EVENT_TIMEUPDATE:
       time_update_cb_.Run();
+      break;
+    case MF_MEDIA_ENGINE_EVENT_ENGINE_SEEK_REQUESTED:
+      mf_seek_requested_cb_.Run();
       break;
 
     default:

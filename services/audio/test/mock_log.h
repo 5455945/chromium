@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,10 @@
 
 #include <string>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "media/base/audio_parameters.h"
 #include "media/mojo/mojom/audio_logging.mojom.h"
 #include "mojo/public/cpp/bindings/receiver.h"
-#include "mojo/public/cpp/bindings/remote.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 namespace audio {
@@ -19,6 +18,10 @@ namespace audio {
 class MockLog : public media::mojom::AudioLog {
  public:
   MockLog();
+
+  MockLog(const MockLog&) = delete;
+  MockLog& operator=(const MockLog&) = delete;
+
   ~MockLog() override;
 
   // Should only be called once.
@@ -29,8 +32,6 @@ class MockLog : public media::mojom::AudioLog {
         &MockLog::BindingConnectionError, base::Unretained(this)));
     return remote;
   }
-
-  void CloseBinding() { receiver_.reset(); }
 
   MOCK_METHOD2(OnCreated,
                void(const media::AudioParameters& params,
@@ -47,8 +48,6 @@ class MockLog : public media::mojom::AudioLog {
 
  private:
   mojo::Receiver<media::mojom::AudioLog> receiver_;
-
-  DISALLOW_COPY_AND_ASSIGN(MockLog);
 };
 
 }  // namespace audio

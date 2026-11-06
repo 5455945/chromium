@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,9 @@
 
 #include <memory>
 
-#include "base/callback.h"
 #include "base/component_export.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 
@@ -48,6 +48,9 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) HttpCacheDataCounter {
       base::Time end_time,
       HttpCacheDataCounterCallback callback);
 
+  HttpCacheDataCounter(const HttpCacheDataCounter&) = delete;
+  HttpCacheDataCounter& operator=(const HttpCacheDataCounter&) = delete;
+
   ~HttpCacheDataCounter();
 
  private:
@@ -55,9 +58,13 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) HttpCacheDataCounter {
                        base::Time end_time,
                        HttpCacheDataCounterCallback callback);
 
-  void GotBackend(std::unique_ptr<disk_cache::Backend*> backend,
-                  int error_code);
+  void GotBackend(std::pair<int, raw_ptr<disk_cache::Backend>>);
   void PostResult(bool is_upper_limit, int64_t result_or_error);
+
+  // Runs `callback_`. Posted by PostResult() through a WeakPtr so that
+  // destroying `this` cancels a result that has been posted but not yet
+  // delivered, as the class contract above promises.
+  void RunCallback(bool is_upper_limit, int64_t result_or_error);
 
   base::WeakPtr<HttpCacheDataCounter> GetWeakPtr() {
     return weak_factory_.GetWeakPtr();
@@ -68,8 +75,6 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) HttpCacheDataCounter {
   HttpCacheDataCounterCallback callback_;
 
   base::WeakPtrFactory<HttpCacheDataCounter> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(HttpCacheDataCounter);
 };
 
 }  // namespace network

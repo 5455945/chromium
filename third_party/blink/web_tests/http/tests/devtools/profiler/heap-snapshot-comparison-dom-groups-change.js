@@ -1,12 +1,16 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+import {TestRunner} from 'test_runner';
+import {HeapProfilerTestRunner} from 'heap_profiler_test_runner';
+
+import * as ProfilerModule from 'devtools/panels/profiler/profiler.js';
 
 (async function() {
   TestRunner.addResult(
       `Tests that Comparison view of heap snapshots will contain added nodes even if their ids are less than the maximumm JS object id in the base snapshot.\n`);
-  await TestRunner.loadTestModule('heap_profiler_test_runner');
-  await TestRunner.showPanel('heap_profiler');
+  await TestRunner.showPanel('heap-profiler');
 
   function createHeapSnapshotA() {
     // Represents the following graph:
@@ -64,7 +68,7 @@
 
   HeapProfilerTestRunner.runHeapSnapshotTestSuite([function testShowAll(next) {
     // Make sure all nodes are visible.
-    Profiler.HeapSnapshotDiffDataGrid.prototype.defaultPopulateCount = function() {
+    ProfilerModule.HeapSnapshotDataGrids.HeapSnapshotDiffDataGrid.prototype.defaultPopulateCount = function() {
       return 100;
     };
 
@@ -84,12 +88,12 @@
     }
 
     function step3(row) {
-      TestRunner.addResult('Delta: +' + row._addedCount + ' -' + row._removedCount);
+      TestRunner.addResult('Delta: +' + row.addedCount + ' -' + row.removedCount);
       var added = [];
       var removed = [];
       for (var i = 0; i < row.children.length; i++) {
         var child = row.children[i];
-        if (child._isDeletedNode)
+        if (child.isDeletedNode)
           removed.push(child.snapshotNodeId);
         else
           added.push(child.snapshotNodeId);

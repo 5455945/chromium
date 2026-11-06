@@ -1,11 +1,10 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/optimization_guide/content/browser/page_text_dump_result.h"
 
 #include "base/strings/stringprintf.h"
-#include "base/strings/utf_string_conversions.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -127,12 +126,24 @@ TEST(FrameTextDumpResultTest, Ordering) {
                            }));
 }
 
+TEST(PageTextDumpResultTest, WhitespaceTrimmed) {
+  FrameTextDumpResult frame_result =
+      FrameTextDumpResult::Initialize(mojom::TextDumpEvent::kFirstLayout,
+                                      content::GlobalRenderFrameHostId(1, 2),
+                                      /*amp_frame=*/false,
+                                      /*unique_navigation_id=*/0)
+          .CompleteWithContents(u"  abc\n\n");
+
+  ASSERT_TRUE(frame_result.contents());
+  EXPECT_EQ(*frame_result.contents(), u"abc");
+}
+
 TEST(PageTextDumpResultTest, Empty) {
   PageTextDumpResult page_result;
   EXPECT_TRUE(page_result.empty());
-  EXPECT_EQ(absl::nullopt, page_result.GetAMPTextContent());
-  EXPECT_EQ(absl::nullopt, page_result.GetMainFrameTextContent());
-  EXPECT_EQ(absl::nullopt, page_result.GetAllFramesTextContent());
+  EXPECT_EQ(std::nullopt, page_result.GetAMPTextContent());
+  EXPECT_EQ(std::nullopt, page_result.GetMainFrameTextContent());
+  EXPECT_EQ(std::nullopt, page_result.GetAllFramesTextContent());
 }
 
 TEST(PageTextDumpResultTest, OneAMP) {

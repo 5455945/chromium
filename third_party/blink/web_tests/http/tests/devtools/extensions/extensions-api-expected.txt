@@ -18,7 +18,12 @@ RUNNING TEST: extension_testAPI
         reload : <function>
     }
     languageServices : {
+        getWasmGlobal : <function>
+        getWasmLinearMemory : <function>
+        getWasmLocal : <function>
+        getWasmOp : <function>
         registerLanguageExtensionPlugin : <function>
+        reportResourceLoad : <function>
         unregisterLanguageExtensionPlugin : <function>
     }
     network : {
@@ -44,7 +49,6 @@ RUNNING TEST: extension_testAPI
             PerformSearch : "performSearch"
             PreviousSearchResult : "previousSearchResult"
         }
-        applyStyleSheet : <function>
         create : <function>
         elements : {
             createSidebarPane : <function>
@@ -53,8 +57,12 @@ RUNNING TEST: extension_testAPI
                 removeListener : <function>
             }
         }
+        network : {
+            show : <function>
+        }
         openResource : <function>
         setOpenResourceHandler : <function>
+        setThemeChangeHandler : <function>
         sources : {
             createSidebarPane : <function>
             onSelectionChanged : {
@@ -63,6 +71,21 @@ RUNNING TEST: extension_testAPI
             }
         }
         themeName : "themeNameForTest"
+    }
+    performance : {
+        onProfilingStarted : {
+            addListener : <function>
+            removeListener : <function>
+        }
+        onProfilingStopped : {
+            addListener : <function>
+            removeListener : <function>
+        }
+    }
+    recorder : {
+        createView : <function>
+        registerRecorderExtensionPlugin : <function>
+        unregisterRecorderExtensionPlugin : <function>
     }
     resources : {
         addRequestHeaders : <function>
@@ -79,9 +102,6 @@ RUNNING TEST: extension_testAPI
             addListener : <function>
             removeListener : <function>
         }
-    }
-    timeline : {
-        addTraceProvider : <function>
     }
 }
 All tests done.

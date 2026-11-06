@@ -1,21 +1,24 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "skia/ext/convolver.h"
 
 #include <stdint.h>
 #include <string.h>
 #include <time.h>
+
 #include <algorithm>
+#include <array>
 #include <numeric>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/logging.h"
-#include "base/stl_util.h"
+#include "base/rand_util.h"
 #include "base/time/time.h"
-#include "skia/ext/convolver.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
-#include "third_party/skia/include/core/SkColorPriv.h"
 #include "third_party/skia/include/core/SkRect.h"
 #include "third_party/skia/include/core/SkTypes.h"
 
@@ -47,7 +50,7 @@ void TestImpulseConvolution(const unsigned char* data, int width, int height) {
                  filter_x.num_values() * 4, &output[0], false);
 
   // Output should exactly match input.
-  EXPECT_EQ(0, memcmp(data, &output[0], byte_count));
+  UNSAFE_TODO(EXPECT_EQ(0, memcmp(data, &output[0], byte_count)));
 }
 
 // Fills the destination filter with a box filter averaging every two pixels
@@ -75,10 +78,10 @@ TEST(Convolver, Impulse) {
   for (int y = 0; y < height; y++) {
     for (int x = 0; x < width; x++) {
       for (int channel = 0; channel < 3; channel++) {
-        memset(input_ptr, 0, byte_count);
-        input_ptr[(y * width + x) * 4 + channel] = 0xff;
+        UNSAFE_TODO(memset(input_ptr, 0, byte_count));
+        UNSAFE_TODO(input_ptr[(y * width + x) * 4 + channel]) = 0xff;
         // Always set the alpha channel or it will attempt to "fix" it for us.
-        input_ptr[(y * width + x) * 4 + 3] = 0xff;
+        UNSAFE_TODO(input_ptr[(y * width + x) * 4 + 3]) = 0xff;
         TestImpulseConvolution(input_ptr, width, height);
       }
     }
@@ -104,9 +107,16 @@ TEST(Convolver, Halve) {
   output.resize(dest_byte_count);
 
   // First fill the array with a bunch of random data.
-  srand(static_cast<unsigned>(time(NULL)));
-  for (int i = 0; i < src_byte_count; i++)
-    input[i] = rand() * 255 / RAND_MAX;
+  base::RandBytes(input);
+  // Convolver requires premultiplied alpha input (color channels <= alpha).
+  // Random bytes might violate this, leading to clamping inside the convolver
+  // which would differ from the simple average calculation in this test.
+  for (int i = 0; i < src_byte_count; i += 4) {
+    uint8_t a = input[i + 3];
+    input[i + 0] = std::min(input[i + 0], a);
+    input[i + 1] = std::min(input[i + 1], a);
+    input[i + 2] = std::min(input[i + 2], a);
+  }
 
   // Compute the filters.
   ConvolutionFilter1D filter_x, filter_y;
@@ -114,8 +124,8 @@ TEST(Convolver, Halve) {
   FillBoxFilter(dest_height, &filter_y);
 
   // Do the convolution.
-  BGRAConvolve2D(&input[0], src_width, true, filter_x, filter_y,
-                 filter_x.num_values() * 4, &output[0], false);
+  BGRAConvolve2D(input.data(), src_row_stride, true, filter_x, filter_y,
+                 filter_x.num_values() * 4, output.data(), false);
 
   // Compute the expected results and check, allowing for a small difference
   // to account for rounding errors.
@@ -129,7 +139,7 @@ TEST(Convolver, Halve) {
                     input[src_offset + src_row_stride + 4];  // Lower right.
         value /= 4;  // Average.
         int difference = value - output[(y * dest_width + x) * 4 + channel];
-        EXPECT_TRUE(difference >= -1 || difference <= 1);
+        EXPECT_TRUE(difference >= -1 && difference <= 1);
       }
     }
   }
@@ -146,7 +156,7 @@ TEST(Convolver, AddFilter) {
 
   // An all-zero filter is handled correctly, all factors ignored
   static const float factors1[] = { 0.0f, 0.0f, 0.0f };
-  filter.AddFilter(11, factors1, base::size(factors1));
+  filter.AddFilter(11, factors1, std::size(factors1));
   ASSERT_EQ(0, filter.max_filter());
   ASSERT_EQ(1, filter.num_values());
 
@@ -157,7 +167,7 @@ TEST(Convolver, AddFilter) {
 
   // Zeroes on the left are ignored
   static const float factors2[] = { 0.0f, 1.0f, 1.0f, 1.0f, 1.0f };
-  filter.AddFilter(22, factors2, base::size(factors2));
+  filter.AddFilter(22, factors2, std::size(factors2));
   ASSERT_EQ(4, filter.max_filter());
   ASSERT_EQ(2, filter.num_values());
 
@@ -168,7 +178,7 @@ TEST(Convolver, AddFilter) {
 
   // Zeroes on the right are ignored
   static const float factors3[] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f };
-  filter.AddFilter(33, factors3, base::size(factors3));
+  filter.AddFilter(33, factors3, std::size(factors3));
   ASSERT_EQ(5, filter.max_filter());
   ASSERT_EQ(3, filter.num_values());
 
@@ -179,7 +189,7 @@ TEST(Convolver, AddFilter) {
 
   // Zeroes in leading & trailing positions
   static const float factors4[] = { 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f };
-  filter.AddFilter(44, factors4, base::size(factors4));
+  filter.AddFilter(44, factors4, std::size(factors4));
   ASSERT_EQ(5, filter.max_filter());  // No change from existing value.
   ASSERT_EQ(4, filter.num_values());
 
@@ -192,7 +202,7 @@ TEST(Convolver, AddFilter) {
   static const float factors5[] = { 0.0f, 0.0f,
                                     1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f,
                                     0.0f };
-  filter.AddFilter(55, factors5, base::size(factors5));
+  filter.AddFilter(55, factors5, std::size(factors5));
   ASSERT_EQ(6, filter.max_filter());
   ASSERT_EQ(5, filter.num_values());
 
@@ -203,7 +213,7 @@ TEST(Convolver, AddFilter) {
 
   // All-zero filters after the first one also work
   static const float factors6[] = { 0.0f };
-  filter.AddFilter(66, factors6, base::size(factors6));
+  filter.AddFilter(66, factors6, std::size(factors6));
   ASSERT_EQ(6, filter.max_filter());
   ASSERT_EQ(6, filter.num_values());
 
@@ -223,16 +233,15 @@ void VerifySIMD(unsigned int source_width,
   for (unsigned int p = 0; p < dest_width; ++p) {
     unsigned int offset = source_width * p / dest_width;
     EXPECT_LT(offset, source_width);
-    x_filter.AddFilter(
-        offset, filter,
-        std::min<int>(base::size(filter), source_width - offset));
+    x_filter.AddFilter(offset, filter,
+                       std::min<int>(std::size(filter), source_width - offset));
   }
   x_filter.PaddingForSIMD();
   for (unsigned int p = 0; p < dest_height; ++p) {
     unsigned int offset = source_height * p / dest_height;
     y_filter.AddFilter(
         offset, filter,
-        std::min<int>(base::size(filter), source_height - offset));
+        std::min<int>(std::size(filter), source_height - offset));
   }
   y_filter.PaddingForSIMD();
 
@@ -246,8 +255,8 @@ void VerifySIMD(unsigned int source_width,
   unsigned char* src_ptr = static_cast<unsigned char*>(source.getPixels());
   for (int y = 0; y < source.height(); y++) {
     for (unsigned int x = 0; x < source.rowBytes(); x++)
-      src_ptr[x] = rand() % 255;
-    src_ptr += source.rowBytes();
+      UNSAFE_TODO(src_ptr[x]) = rand() % 255;
+    UNSAFE_TODO(src_ptr += source.rowBytes());
   }
 
   // Test both cases with different has_alpha.
@@ -290,9 +299,9 @@ void VerifySIMD(unsigned int source_width,
 
     // Comparing result.
     for (unsigned int i = 0; i < dest_height; i++) {
-      EXPECT_FALSE(memcmp(r1, r2, dest_width * 4)); // RGBA always
-      r1 += result_c.rowBytes();
-      r2 += result_sse.rowBytes();
+      UNSAFE_TODO(EXPECT_FALSE(memcmp(r1, r2, dest_width * 4)));  // RGBA always
+      UNSAFE_TODO(r1 += result_c.rowBytes());
+      UNSAFE_TODO(r2 += result_sse.rowBytes());
     }
   }
 }
@@ -311,16 +320,21 @@ TEST(Convolver, VerifySIMDEdgeCases) {
 // Verify that lage upscales/downscales produce the same result
 // with and without SIMD.
 TEST(Convolver, VerifySIMDPrecision) {
-  int source_sizes[][2] = { {1920, 1080}, {1377, 523}, {325, 241} };
-  int dest_sizes[][2] = { {1280, 1024}, {177, 123} };
+  auto source_sizes = std::to_array<std::array<int, 2>>({
+      {1920, 1080},
+      {1377, 523},
+      {325, 241},
+  });
+  auto dest_sizes =
+      std::to_array<std::array<int, 2>>({{1280, 1024}, {177, 123}});
 
   srand(static_cast<unsigned int>(time(0)));
 
   // Loop over some specific source and destination dimensions.
-  for (unsigned int i = 0; i < base::size(source_sizes); ++i) {
+  for (unsigned int i = 0; i < std::size(source_sizes); ++i) {
     unsigned int source_width = source_sizes[i][0];
     unsigned int source_height = source_sizes[i][1];
-    for (unsigned int j = 0; j < base::size(dest_sizes); ++j) {
+    for (unsigned int j = 0; j < std::size(dest_sizes); ++j) {
       unsigned int dest_width = dest_sizes[j][0];
       unsigned int dest_height = dest_sizes[j][1];
       VerifySIMD(source_width, source_height, dest_width, dest_height);
@@ -328,204 +342,5 @@ TEST(Convolver, VerifySIMDPrecision) {
   }
 }
 
-TEST(Convolver, SeparableSingleConvolution) {
-  static const int kImgWidth = 1024;
-  static const int kImgHeight = 1024;
-  static const int kChannelCount = 3;
-  static const int kStrideSlack = 22;
-  ConvolutionFilter1D filter;
-  const float box[5] = { 0.2f, 0.2f, 0.2f, 0.2f, 0.2f };
-  filter.AddFilter(0, box, 5);
-
-  // Allocate a source image and set to 0.
-  const int src_row_stride = kImgWidth * kChannelCount + kStrideSlack;
-  int src_byte_count = src_row_stride * kImgHeight;
-  std::vector<unsigned char> input;
-  const int signal_x = kImgWidth / 2;
-  const int signal_y = kImgHeight / 2;
-  input.resize(src_byte_count, 0);
-  // The image has a single impulse pixel in channel 1, smack in the middle.
-  const int non_zero_pixel_index =
-      signal_y * src_row_stride + signal_x * kChannelCount + 1;
-  input[non_zero_pixel_index] = 255;
-
-  // Destination will be a single channel image with stide matching width.
-  const int dest_row_stride = kImgWidth;
-  const int dest_byte_count = dest_row_stride * kImgHeight;
-  std::vector<unsigned char> output;
-  output.resize(dest_byte_count);
-
-  // Apply convolution in X.
-  SingleChannelConvolveX1D(&input[0], src_row_stride, 1, kChannelCount,
-                           filter, SkISize::Make(kImgWidth, kImgHeight),
-                           &output[0], dest_row_stride, 0, 1, false);
-  for (int x = signal_x - 2; x <= signal_x + 2; ++x)
-    EXPECT_GT(output[signal_y * dest_row_stride + x], 0);
-
-  EXPECT_EQ(output[signal_y * dest_row_stride + signal_x - 3], 0);
-  EXPECT_EQ(output[signal_y * dest_row_stride + signal_x + 3], 0);
-
-  // Apply convolution in Y.
-  SingleChannelConvolveY1D(&input[0], src_row_stride, 1, kChannelCount,
-                           filter, SkISize::Make(kImgWidth, kImgHeight),
-                           &output[0], dest_row_stride, 0, 1, false);
-  for (int y = signal_y - 2; y <= signal_y + 2; ++y)
-    EXPECT_GT(output[y * dest_row_stride + signal_x], 0);
-
-  EXPECT_EQ(output[(signal_y - 3) * dest_row_stride + signal_x], 0);
-  EXPECT_EQ(output[(signal_y + 3) * dest_row_stride + signal_x], 0);
-
-  EXPECT_EQ(output[signal_y * dest_row_stride + signal_x - 1], 0);
-  EXPECT_EQ(output[signal_y * dest_row_stride + signal_x + 1], 0);
-
-  // The main point of calling this is to invoke the routine on input without
-  // padding.
-  std::vector<unsigned char> output2;
-  output2.resize(dest_byte_count);
-  SingleChannelConvolveX1D(&output[0], dest_row_stride, 0, 1,
-                           filter, SkISize::Make(kImgWidth, kImgHeight),
-                           &output2[0], dest_row_stride, 0, 1, false);
-  // This should be a result of 2D convolution.
-  for (int x = signal_x - 2; x <= signal_x + 2; ++x) {
-    for (int y = signal_y - 2; y <= signal_y + 2; ++y)
-      EXPECT_GT(output2[y * dest_row_stride + x], 0);
-  }
-  EXPECT_EQ(output2[0], 0);
-  EXPECT_EQ(output2[dest_row_stride - 1], 0);
-  EXPECT_EQ(output2[dest_byte_count - 1], 0);
-}
-
-TEST(Convolver, SeparableSingleConvolutionEdges) {
-  // The purpose of this test is to check if the implementation treats correctly
-  // edges of the image.
-  static const int kImgWidth = 600;
-  static const int kImgHeight = 800;
-  static const int kChannelCount = 3;
-  static const int kStrideSlack = 22;
-  static const int kChannel = 1;
-  ConvolutionFilter1D filter;
-  const float box[5] = { 0.2f, 0.2f, 0.2f, 0.2f, 0.2f };
-  filter.AddFilter(0, box, 5);
-
-  // Allocate a source image and set to 0.
-  int src_row_stride = kImgWidth * kChannelCount + kStrideSlack;
-  int src_byte_count = src_row_stride * kImgHeight;
-  std::vector<unsigned char> input(src_byte_count);
-
-  // Draw a frame around the image.
-  for (int i = 0; i < src_byte_count; ++i) {
-    int row = i / src_row_stride;
-    int col = i % src_row_stride / kChannelCount;
-    int channel = i % src_row_stride % kChannelCount;
-    if (channel != kChannel || col > kImgWidth) {
-      input[i] = 255;
-    } else if (row == 0 || col == 0 ||
-               col == kImgWidth - 1 || row == kImgHeight - 1) {
-      input[i] = 100;
-    } else if (row == 1 || col == 1 ||
-               col == kImgWidth - 2 || row == kImgHeight - 2) {
-      input[i] = 200;
-    } else {
-      input[i] = 0;
-    }
-  }
-
-  // Destination will be a single channel image with stide matching width.
-  int dest_row_stride = kImgWidth;
-  int dest_byte_count = dest_row_stride * kImgHeight;
-  std::vector<unsigned char> output;
-  output.resize(dest_byte_count);
-
-  // Apply convolution in X.
-  SingleChannelConvolveX1D(&input[0], src_row_stride, 1, kChannelCount,
-                           filter, SkISize::Make(kImgWidth, kImgHeight),
-                           &output[0], dest_row_stride, 0, 1, false);
-
-  // Sadly, comparison is not as simple as retaining all values.
-  int invalid_values = 0;
-  const unsigned char first_value = output[0];
-  EXPECT_NEAR(first_value, 100, 1);
-  for (int i = 0; i < dest_row_stride; ++i) {
-    if (output[i] != first_value)
-      ++invalid_values;
-  }
-  EXPECT_EQ(0, invalid_values);
-
-  int test_row = 22;
-  EXPECT_NEAR(output[test_row * dest_row_stride], 100, 1);
-  EXPECT_NEAR(output[test_row * dest_row_stride + 1], 80, 1);
-  EXPECT_NEAR(output[test_row * dest_row_stride + 2], 60, 1);
-  EXPECT_NEAR(output[test_row * dest_row_stride + 3], 40, 1);
-  EXPECT_NEAR(output[(test_row + 1) * dest_row_stride - 1], 100, 1);
-  EXPECT_NEAR(output[(test_row + 1) * dest_row_stride - 2], 80, 1);
-  EXPECT_NEAR(output[(test_row + 1) * dest_row_stride - 3], 60, 1);
-  EXPECT_NEAR(output[(test_row + 1) * dest_row_stride - 4], 40, 1);
-
-  SingleChannelConvolveY1D(&input[0], src_row_stride, 1, kChannelCount,
-                           filter, SkISize::Make(kImgWidth, kImgHeight),
-                           &output[0], dest_row_stride, 0, 1, false);
-
-  int test_column = 42;
-  EXPECT_NEAR(output[test_column], 100, 1);
-  EXPECT_NEAR(output[test_column + dest_row_stride], 80, 1);
-  EXPECT_NEAR(output[test_column + dest_row_stride * 2], 60, 1);
-  EXPECT_NEAR(output[test_column + dest_row_stride * 3], 40, 1);
-
-  EXPECT_NEAR(output[test_column + dest_row_stride * (kImgHeight - 1)], 100, 1);
-  EXPECT_NEAR(output[test_column + dest_row_stride * (kImgHeight - 2)], 80, 1);
-  EXPECT_NEAR(output[test_column + dest_row_stride * (kImgHeight - 3)], 60, 1);
-  EXPECT_NEAR(output[test_column + dest_row_stride * (kImgHeight - 4)], 40, 1);
-}
-
-TEST(Convolver, SetUpGaussianConvolutionFilter) {
-  ConvolutionFilter1D smoothing_filter;
-  ConvolutionFilter1D gradient_filter;
-  SetUpGaussianConvolutionKernel(&smoothing_filter, 4.5f, false);
-  SetUpGaussianConvolutionKernel(&gradient_filter, 3.0f, true);
-
-  int specified_filter_length;
-  int filter_offset;
-  int filter_length;
-
-  const ConvolutionFilter1D::Fixed* smoothing_kernel =
-      smoothing_filter.GetSingleFilter(
-          &specified_filter_length, &filter_offset, &filter_length);
-  EXPECT_TRUE(smoothing_kernel);
-  std::vector<float> fp_smoothing_kernel(filter_length);
-  std::transform(smoothing_kernel,
-                 smoothing_kernel + filter_length,
-                 fp_smoothing_kernel.begin(),
-                 ConvolutionFilter1D::FixedToFloat);
-  // Should sum-up to 1 (nearly), and all values whould be in ]0, 1[.
-  EXPECT_NEAR(std::accumulate(
-      fp_smoothing_kernel.begin(), fp_smoothing_kernel.end(), 0.0f),
-              1.0f, 0.01f);
-  EXPECT_GT(*std::min_element(fp_smoothing_kernel.begin(),
-                              fp_smoothing_kernel.end()), 0.0f);
-  EXPECT_LT(*std::max_element(fp_smoothing_kernel.begin(),
-                              fp_smoothing_kernel.end()), 1.0f);
-
-  const ConvolutionFilter1D::Fixed* gradient_kernel =
-      gradient_filter.GetSingleFilter(
-          &specified_filter_length, &filter_offset, &filter_length);
-  EXPECT_TRUE(gradient_kernel);
-  std::vector<float> fp_gradient_kernel(filter_length);
-  std::transform(gradient_kernel,
-                 gradient_kernel + filter_length,
-                 fp_gradient_kernel.begin(),
-                 ConvolutionFilter1D::FixedToFloat);
-  // Should sum-up to 0, and all values whould be in ]-1.5, 1.5[.
-  EXPECT_NEAR(std::accumulate(
-      fp_gradient_kernel.begin(), fp_gradient_kernel.end(), 0.0f),
-              0.0f, 0.01f);
-  EXPECT_GT(*std::min_element(fp_gradient_kernel.begin(),
-                              fp_gradient_kernel.end()), -1.5f);
-  EXPECT_LT(*std::min_element(fp_gradient_kernel.begin(),
-                              fp_gradient_kernel.end()), 0.0f);
-  EXPECT_LT(*std::max_element(fp_gradient_kernel.begin(),
-                              fp_gradient_kernel.end()), 1.5f);
-  EXPECT_GT(*std::max_element(fp_gradient_kernel.begin(),
-                              fp_gradient_kernel.end()), 0.0f);
-}
 
 }  // namespace skia

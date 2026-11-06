@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,7 +17,7 @@ class UI_ANDROID_EXPORT UIResourceProvider {
   virtual bool SupportsETC1NonPowerOfTwo() const = 0;
 
  protected:
-  virtual ~UIResourceProvider() {}
+  virtual ~UIResourceProvider() = default;
 };
 
 }  // namespace ui

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,12 +14,6 @@ TextIteratorBehavior::Builder::~Builder() = default;
 
 TextIteratorBehavior TextIteratorBehavior::Builder::Build() {
   return behavior_;
-}
-
-TextIteratorBehavior::Builder&
-TextIteratorBehavior::Builder::SetDoesNotBreakAtReplacedElement(bool value) {
-  behavior_.values_.bits.does_not_break_at_replaced_element = value;
-  return *this;
 }
 
 TextIteratorBehavior::Builder&
@@ -83,12 +77,6 @@ TextIteratorBehavior::Builder::SetForSelectionToString(bool value) {
   return *this;
 }
 
-TextIteratorBehavior::Builder& TextIteratorBehavior::Builder::SetForWindowFind(
-    bool value) {
-  behavior_.values_.bits.for_window_find = value;
-  return *this;
-}
-
 TextIteratorBehavior::Builder&
 TextIteratorBehavior::Builder::SetIgnoresStyleVisibility(bool value) {
   behavior_.values_.bits.ignores_style_visibility = value;
@@ -124,6 +112,20 @@ TextIteratorBehavior::Builder::SetIgnoresDisplayLock(bool value) {
   behavior_.values_.bits.ignores_display_lock = value;
   return *this;
 }
+
+TextIteratorBehavior::Builder&
+TextIteratorBehavior::Builder::SetEmitsPunctuationForReplacedElements(
+    bool value) {
+  behavior_.values_.bits.emits_punctuation_for_replaced_elements = value;
+  return *this;
+}
+
+TextIteratorBehavior::Builder&
+TextIteratorBehavior::Builder::SetIgnoresCssTextTransforms(bool value) {
+  behavior_.values_.bits.ignores_css_text_transforms = value;
+  return *this;
+}
+
 // -
 TextIteratorBehavior::TextIteratorBehavior(const TextIteratorBehavior& other) =
     default;
@@ -136,22 +138,11 @@ bool TextIteratorBehavior::operator==(const TextIteratorBehavior& other) const {
   return values_.all == other.values_.all;
 }
 
-bool TextIteratorBehavior::operator!=(const TextIteratorBehavior& other) const {
-  return !operator==(other);
-}
-
 // static
 TextIteratorBehavior
 TextIteratorBehavior::EmitsObjectReplacementCharacterBehavior() {
   return TextIteratorBehavior::Builder()
       .SetEmitsObjectReplacementCharacter(true)
-      .Build();
-}
-
-// static
-TextIteratorBehavior TextIteratorBehavior::IgnoresStyleVisibilityBehavior() {
-  return TextIteratorBehavior::Builder()
-      .SetIgnoresStyleVisibility(true)
       .Build();
 }
 
@@ -168,6 +159,16 @@ TextIteratorBehavior::AllVisiblePositionsRangeLengthBehavior() {
   return TextIteratorBehavior::Builder()
       .SetEmitsObjectReplacementCharacter(true)
       .SetEmitsCharactersBetweenAllVisiblePositions(true)
+      .Build();
+}
+
+// static
+TextIteratorBehavior TextIteratorBehavior::
+    AllVisiblePositionsIncludingShadowRootRangeLengthBehavior() {
+  return TextIteratorBehavior::Builder()
+      .SetEmitsObjectReplacementCharacter(true)
+      .SetEmitsCharactersBetweenAllVisiblePositions(true)
+      .SetEntersOpenShadowRoots(true)
       .Build();
 }
 

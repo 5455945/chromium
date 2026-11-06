@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,30 +7,31 @@
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/values.h"
 #include "build/chromeos_buildflags.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/feedback/feedback_uploader_chrome.h"
 #include "chrome/browser/feedback/feedback_uploader_factory_chrome.h"
+#include "chrome/browser/feedback/show_feedback_page.h"
 #include "chrome/browser/feedback/system_logs/chrome_system_logs_fetcher.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/simple_message_box.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/feedback/system_logs/system_logs_fetcher.h"
-#include "components/signin/public/identity_manager/consent_level.h"
+#include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/browser_context.h"
+#include "extensions/browser/extensions_browser_client.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/webui/web_ui_util.h"
+#include "ui/gfx/native_ui_types.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "base/strings/string_split.h"
 #include "base/system/sys_info.h"
 #include "chrome/browser/ash/arc/arc_util.h"
-#include "chrome/browser/ash/crosapi/browser_manager.h"
 #include "chrome/browser/ash/system_logs/iwlwifi_dump_log_source.h"
 #include "chrome/browser/ash/system_logs/single_debug_daemon_log_source.h"
 #include "chrome/browser/ash/system_logs/single_log_file_log_source.h"
@@ -40,14 +41,14 @@
 #include "extensions/browser/extension_system.h"
 #include "extensions/common/constants.h"
 #include "google_apis/gaia/gaia_auth_util.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace extensions {
 
 namespace {
 
 int GetSysInfoCheckboxStringId(content::BrowserContext* browser_context) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   if (arc::IsArcPlayStoreEnabledForProfile(
           Profile::FromBrowserContext(browser_context))) {
     return IDS_FEEDBACK_INCLUDE_SYSTEM_INFORMATION_AND_METRICS_CHKBOX_ARC;
@@ -64,14 +65,12 @@ int GetSysInfoCheckboxStringId(content::BrowserContext* browser_context) {
 ChromeFeedbackPrivateDelegate::ChromeFeedbackPrivateDelegate() = default;
 ChromeFeedbackPrivateDelegate::~ChromeFeedbackPrivateDelegate() = default;
 
-std::unique_ptr<base::DictionaryValue>
-ChromeFeedbackPrivateDelegate::GetStrings(
+base::DictValue ChromeFeedbackPrivateDelegate::GetStrings(
     content::BrowserContext* browser_context,
     bool from_crash) const {
-  std::unique_ptr<base::DictionaryValue> dict =
-      std::make_unique<base::DictionaryValue>();
+  base::DictValue dict;
 
-#define SET_STRING(id, idr) dict->SetString(id, l10n_util::GetStringUTF16(idr))
+#define SET_STRING(id, idr) dict.Set(id, l10n_util::GetStringUTF16(idr))
   SET_STRING("pageTitle", from_crash
                               ? IDS_FEEDBACK_REPORT_PAGE_TITLE_SAD_TAB_FLOW
                               : IDS_FEEDBACK_REPORT_PAGE_TITLE);
@@ -86,8 +85,6 @@ ChromeFeedbackPrivateDelegate::GetStrings(
   SET_STRING("userEmail", IDS_FEEDBACK_USER_EMAIL_LABEL);
   SET_STRING("anonymousUser", IDS_FEEDBACK_ANONYMOUS_EMAIL_OPTION);
   SET_STRING("sysInfo", GetSysInfoCheckboxStringId(browser_context));
-  SET_STRING("assistantInfo",
-             IDS_FEEDBACK_INCLUDE_ASSISTANT_INFORMATION_CHKBOX);
   SET_STRING("attachFileLabel", IDS_FEEDBACK_ATTACH_FILE_LABEL);
   SET_STRING("attachFileNote", IDS_FEEDBACK_ATTACH_FILE_NOTE);
   SET_STRING("attachFileToBig", IDS_FEEDBACK_ATTACH_FILE_TO_BIG);
@@ -95,36 +92,38 @@ ChromeFeedbackPrivateDelegate::GetStrings(
   SET_STRING("cancel", IDS_CANCEL);
   SET_STRING("noDescription", IDS_FEEDBACK_NO_DESCRIPTION);
   SET_STRING("privacyNote", IDS_FEEDBACK_PRIVACY_NOTE);
-  SET_STRING("performanceTrace",
-             IDS_FEEDBACK_INCLUDE_PERFORMANCE_TRACE_CHECKBOX);
-  SET_STRING("bluetoothLogsInfo", IDS_FEEDBACK_BLUETOOTH_LOGS_CHECKBOX);
-  SET_STRING("bluetoothLogsMessage", IDS_FEEDBACK_BLUETOOTH_LOGS_MESSAGE);
-  SET_STRING("assistantLogsMessage", IDS_FEEDBACK_ASSISTANT_LOGS_MESSAGE);
 
   // Add the localized strings needed for the "system information" page.
   SET_STRING("sysinfoPageTitle", IDS_FEEDBACK_SYSINFO_PAGE_TITLE);
   SET_STRING("sysinfoPageDescription", IDS_ABOUT_SYS_DESC);
-  SET_STRING("sysinfoPageTableTitle", IDS_ABOUT_SYS_TABLE_TITLE);
-  SET_STRING("sysinfoPageExpandAllBtn", IDS_ABOUT_SYS_EXPAND_ALL);
-  SET_STRING("sysinfoPageCollapseAllBtn", IDS_ABOUT_SYS_COLLAPSE_ALL);
-  SET_STRING("sysinfoPageExpandBtn", IDS_ABOUT_SYS_EXPAND);
-  SET_STRING("sysinfoPageCollapseBtn", IDS_ABOUT_SYS_COLLAPSE);
-  SET_STRING("sysinfoPageStatusLoading", IDS_FEEDBACK_SYSINFO_PAGE_LOADING);
+
+  // Add the localized strings shared by the "autofill metadata" and "system
+  // information" page.
+  SET_STRING("logsMapPageTableTitle", IDS_ABOUT_SYS_TABLE_TITLE);
+  SET_STRING("logsMapPageExpandAllBtn", IDS_ABOUT_SYS_EXPAND_ALL);
+  SET_STRING("logsMapPageCollapseAllBtn", IDS_ABOUT_SYS_COLLAPSE_ALL);
+  SET_STRING("logsMapPageExpandBtn", IDS_ABOUT_SYS_EXPAND);
+  SET_STRING("logsMapPageCollapseBtn", IDS_ABOUT_SYS_COLLAPSE);
+  SET_STRING("logsMapPageStatusLoading", IDS_FEEDBACK_SYSINFO_PAGE_LOADING);
 #undef SET_STRING
 
-  const std::string& app_locale = g_browser_process->GetApplicationLocale();
-  webui::SetLoadTimeDataDefaults(app_locale, dict.get());
+  std::string app_locale =
+      ExtensionsBrowserClient::Get()->GetApplicationLocale();
+  webui::SetLoadTimeDataDefaults(app_locale, &dict);
 
   return dict;
 }
 
-system_logs::SystemLogsFetcher*
-ChromeFeedbackPrivateDelegate::CreateSystemLogsFetcher(
-    content::BrowserContext* context) const {
-  return system_logs::BuildChromeSystemLogsFetcher(/*scrub_data=*/true);
+void ChromeFeedbackPrivateDelegate::FetchSystemInformation(
+    content::BrowserContext* context,
+    system_logs::SysLogsFetcherCallback callback) const {
+  // self-deleting object
+  auto* fetcher = system_logs::BuildChromeSystemLogsFetcher(
+      Profile::FromBrowserContext(context), /*scrub_data=*/true);
+  fetcher->Fetch(std::move(callback));
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 std::unique_ptr<system_logs::SystemLogsSource>
 ChromeFeedbackPrivateDelegate::CreateSingleLogSource(
     api::feedback_private::LogSource source_type) const {
@@ -135,52 +134,51 @@ ChromeFeedbackPrivateDelegate::CreateSingleLogSource(
 
   switch (source_type) {
     // These map to SupportedLogFileSources.
-    case api::feedback_private::LOG_SOURCE_MESSAGES:
+    case api::feedback_private::LogSource::kMessages:
       return std::make_unique<system_logs::SingleLogFileLogSource>(
           SupportedLogFileSource::kMessages);
-    case api::feedback_private::LOG_SOURCE_UILATEST:
+    case api::feedback_private::LogSource::kUiLatest:
       return std::make_unique<system_logs::SingleLogFileLogSource>(
           SupportedLogFileSource::kUiLatest);
-    case api::feedback_private::LOG_SOURCE_ATRUSLOG:
+    case api::feedback_private::LogSource::kAtrusLog:
       return std::make_unique<system_logs::SingleLogFileLogSource>(
           SupportedLogFileSource::kAtrusLog);
-    case api::feedback_private::LOG_SOURCE_NETLOG:
+    case api::feedback_private::LogSource::kNetLog:
       return std::make_unique<system_logs::SingleLogFileLogSource>(
           SupportedLogFileSource::kNetLog);
-    case api::feedback_private::LOG_SOURCE_EVENTLOG:
+    case api::feedback_private::LogSource::kEventLog:
       return std::make_unique<system_logs::SingleLogFileLogSource>(
           SupportedLogFileSource::kEventLog);
-    case api::feedback_private::LOG_SOURCE_UPDATEENGINELOG:
+    case api::feedback_private::LogSource::kUpdateEngineLog:
       return std::make_unique<system_logs::SingleLogFileLogSource>(
           SupportedLogFileSource::kUpdateEngineLog);
-    case api::feedback_private::LOG_SOURCE_POWERDLATEST:
+    case api::feedback_private::LogSource::kPowerdLatest:
       return std::make_unique<system_logs::SingleLogFileLogSource>(
           SupportedLogFileSource::kPowerdLatest);
-    case api::feedback_private::LOG_SOURCE_POWERDPREVIOUS:
+    case api::feedback_private::LogSource::kPowerdPrevious:
       return std::make_unique<system_logs::SingleLogFileLogSource>(
           SupportedLogFileSource::kPowerdPrevious);
 
     // These map to SupportedDebugDaemonSources.
-    case api::feedback_private::LOG_SOURCE_DRMMODETEST:
+    case api::feedback_private::LogSource::kDrmModetest:
       return std::make_unique<system_logs::SingleDebugDaemonLogSource>(
           SupportedDebugDaemonSource::kModetest);
-    case api::feedback_private::LOG_SOURCE_LSUSB:
+    case api::feedback_private::LogSource::kLsusb:
       return std::make_unique<system_logs::SingleDebugDaemonLogSource>(
           SupportedDebugDaemonSource::kLsusb);
-    case api::feedback_private::LOG_SOURCE_LSPCI:
+    case api::feedback_private::LogSource::kLspci:
       return std::make_unique<system_logs::SingleDebugDaemonLogSource>(
           SupportedDebugDaemonSource::kLspci);
-    case api::feedback_private::LOG_SOURCE_IFCONFIG:
+    case api::feedback_private::LogSource::kIfconfig:
       return std::make_unique<system_logs::SingleDebugDaemonLogSource>(
           SupportedDebugDaemonSource::kIfconfig);
-    case api::feedback_private::LOG_SOURCE_UPTIME:
+    case api::feedback_private::LogSource::kUptime:
       return std::make_unique<system_logs::SingleDebugDaemonLogSource>(
           SupportedDebugDaemonSource::kUptime);
 
-    case api::feedback_private::LOG_SOURCE_NONE:
+    case api::feedback_private::LogSource::kNone:
     default:
       NOTREACHED() << "Unknown log source type.";
-      return nullptr;
   }
 }
 
@@ -208,7 +206,7 @@ void ChromeFeedbackPrivateDelegate::FetchExtraLogs(
     // We can pass null for the 1st party IDs since we are just anonymizing
     // wifi data here.
     system_logs::SystemLogsFetcher* fetcher =
-        new system_logs::SystemLogsFetcher(scrub, nullptr);
+        new system_logs::SystemLogsFetcher(scrub);
     fetcher->AddSource(std::make_unique<system_logs::IwlwifiDumpLogSource>());
     fetcher->Fetch(base::BindOnce(&OnFetchedExtraLogs, feedback_data,
                                   std::move(callback)));
@@ -217,46 +215,29 @@ void ChromeFeedbackPrivateDelegate::FetchExtraLogs(
   }
 }
 
-void ChromeFeedbackPrivateDelegate::UnloadFeedbackExtension(
-    content::BrowserContext* context) const {
-  extensions::ExtensionSystem::Get(context)
-      ->extension_service()
-      ->component_loader()
-      ->Remove(extension_misc::kFeedbackExtensionId);
-}
-
 api::feedback_private::LandingPageType
 ChromeFeedbackPrivateDelegate::GetLandingPageType(
     const feedback::FeedbackData& feedback_data) const {
   // Googlers using eve get a custom landing page.
-  if (!gaia::IsGoogleInternalAccountEmail(feedback_data.user_email()))
-    return api::feedback_private::LANDING_PAGE_TYPE_NORMAL;
+  if (!gaia::IsGoogleInternalAccountEmail(feedback_data.user_email())) {
+    return api::feedback_private::LandingPageType::kNormal;
+  }
 
   const std::vector<std::string> board =
       base::SplitString(base::SysInfo::GetLsbReleaseBoard(), "-",
                         base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
-  return board[0] == "eve" ? api::feedback_private::LANDING_PAGE_TYPE_TECHSTOP
-                           : api::feedback_private::LANDING_PAGE_TYPE_NORMAL;
+  return board[0] == "eve" ? api::feedback_private::LandingPageType::kTechstop
+                           : api::feedback_private::LandingPageType::kNormal;
 }
-
-void ChromeFeedbackPrivateDelegate::GetLacrosHistograms(
-    GetHistogramsCallback callback) {
-  crosapi::BrowserManager* browser_manager = crosapi::BrowserManager::Get();
-  if (browser_manager->GetHistogramsSupported() &&
-      browser_manager->IsRunning()) {
-    browser_manager->GetHistograms(std::move(callback));
-  } else {
-    std::move(callback).Run(std::string());
-  }
-}
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 std::string ChromeFeedbackPrivateDelegate::GetSignedInUserEmail(
     content::BrowserContext* context) const {
   auto* identity_manager = IdentityManagerFactory::GetForProfile(
       Profile::FromBrowserContext(context));
-  if (!identity_manager)
+  if (!identity_manager) {
     return std::string();
+  }
   // Browser sync consent is not required to use feedback.
   return identity_manager->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin)
       .email;
@@ -265,8 +246,9 @@ std::string ChromeFeedbackPrivateDelegate::GetSignedInUserEmail(
 void ChromeFeedbackPrivateDelegate::NotifyFeedbackDelayed() const {
   // Show a message box to indicate that sending the feedback has been delayed
   // because the user is offline.
-  chrome::ShowWarningMessageBox(
-      nullptr, l10n_util::GetStringUTF16(IDS_FEEDBACK_OFFLINE_DIALOG_TITLE),
+  chrome::ShowWarningMessageBoxAsync(
+      gfx::NativeWindow(),
+      l10n_util::GetStringUTF16(IDS_FEEDBACK_OFFLINE_DIALOG_TITLE),
       l10n_util::GetStringUTF16(IDS_FEEDBACK_OFFLINE_DIALOG_TEXT));
 }
 
@@ -274,6 +256,23 @@ feedback::FeedbackUploader*
 ChromeFeedbackPrivateDelegate::GetFeedbackUploaderForContext(
     content::BrowserContext* context) const {
   return feedback::FeedbackUploaderFactoryChrome::GetForBrowserContext(context);
+}
+
+void ChromeFeedbackPrivateDelegate::OpenFeedback(
+    content::BrowserContext* context,
+    api::feedback_private::FeedbackSource source) const {
+  GURL url;
+
+  CHECK(source == api::feedback_private::FeedbackSource::kQuickoffice,
+        base::NotFatalUntil::M161);
+
+  Profile* profile = Profile::FromBrowserContext(context);
+  chrome::ShowFeedbackPage(url, profile,
+                           /*source=*/feedback::kFeedbackSourceQuickOffice,
+                           /*description_template=*/std::string(),
+                           /*description_placeholder_text=*/std::string(),
+                           /*category_tag=*/std::string(),
+                           /*extra_diagnostics=*/std::string());
 }
 
 }  // namespace extensions

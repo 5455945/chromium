@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,13 @@
 
 #include "ash/public/cpp/ash_public_export.h"
 #include "ash/public/cpp/session/user_info.h"
-#include "base/callback.h"
+#include "ash/public/cpp/smartlock_state.h"
+#include "base/functional/callback.h"
 #include "base/time/time.h"
-#include "base/token.h"
-#include "chromeos/components/proximity_auth/public/mojom/auth_type.mojom-forward.h"
+#include "chromeos/ash/components/proximity_auth/public/mojom/auth_type.mojom-forward.h"
 #include "chromeos/components/security_token_pin/constants.h"
 #include "components/account_id/account_id.h"
+#include "components/user_manager/multi_user/multi_user_sign_in_policy.h"
 
 namespace ash {
 
@@ -34,7 +35,7 @@ enum class OobeDialogState {
   WRONG_HWID_WARNING = 3,
 
   // Showing supervised user creation screen.
-  SUPERVISED_USER_CREATION_FLOW = 4,
+  DEPRECATED_SUPERVISED_USER_CREATION_FLOW = 4,
 
   // Showing SAML password confirmation screen.
   SAML_PASSWORD_CONFIRM = 5,
@@ -43,7 +44,7 @@ enum class OobeDialogState {
   PASSWORD_CHANGED = 6,
 
   // Showing device enrollment screen.
-  ENROLLMENT = 7,
+  ENROLLMENT_CANCEL_DISABLED = 7,
 
   // Showing error screen.
   ERROR = 8,
@@ -69,35 +70,45 @@ enum class OobeDialogState {
 
   // Showing user creation screen.
   USER_CREATION = 15,
+
+  // Showing enrollment screen with the possibility to cancel.
+  ENROLLMENT_CANCEL_ENABLED = 16,
+
+  // Showing enrollment success step.
+  ENROLLMENT_SUCCESS = 17,
+
+  // Showing theme selection screen.
+  THEME_SELECTION = 18,
+
+  // Showing marketing opt-in screen.
+  MARKETING_OPT_IN = 19,
+
+  // Closing the login screen extension UI created by a Chrome extension using
+  // chrome.loginScreenUi API.
+  EXTENSION_LOGIN_CLOSED = 20,
+
+  // Showing Gaia Info screen.
+  GAIA_INFO = 21,
+
+  // CHOOBE and Optional Screens.
+  CHOOBE = 22,
+
+  // CHILD SETUP step for user creation screen.
+  SETUP_CHILD = 23,
+
+  // ENROLL TRIAGE step for user creation screen.
+  ENROLL_TRIAGE = 24,
 };
 
-// Supported multi-profile user behavior values.
-// TODO(estade): change all the enums to use kCamelCase.
-enum class MultiProfileUserBehavior {
-  UNRESTRICTED = 0,
-  PRIMARY_ONLY = 1,
-  NOT_ALLOWED = 2,
-  OWNER_PRIMARY_ONLY = 3,
-};
-
-// Easy unlock icon states.
-enum class EasyUnlockIconState {
-  // No icon shown.
-  NONE,
-  // The user has clicked the easy unlock icon and disabled easy unlock for this
-  // login/lock session.
-  HARDLOCKED,
-  // Phone could not be found.
-  LOCKED,
-  // Phone found, but it is not unlocked.
-  LOCKED_TO_BE_ACTIVATED,
-  // Phone found, but it is too far away.
-  LOCKED_WITH_PROXIMITY_HINT,
-  // Phone found and unlocked. The user can click to dismiss the login/lock
-  // screen.
-  UNLOCKED,
-  // Scanning for phone.
-  SPINNER,
+// Modes of the managed device, which is used to update the visibility of
+// license-specific components.
+enum class ManagementDeviceMode {
+  kNone = 0,
+  kChromeEnterprise = 1,
+  kChromeEducation = 2,
+  kKioskSku = 3,
+  kOther = 4,
+  kMaxValue = kOther,
 };
 
 // The status of fingerprint availability.
@@ -114,6 +125,10 @@ enum class FingerprintState {
   // should be displayed for 3 seconds before getting back to AVAILABLE_DEFAULT
   // state.
   AVAILABLE_WITH_TOUCH_SENSOR_WARNING,
+  // Fingerprint can be used to unlock the device but the user has a failed
+  // attempt. The failed attempt feedback should be displayed for a short
+  // amount of times before getting back to AVAILABLE_DEFAULT state.
+  AVAILABLE_WITH_FAILED_ATTEMPT,
   // There have been too many attempts, so now fingerprint is disabled.
   DISABLED_FROM_ATTEMPTS,
   // It has been too long since the device was last used.
@@ -121,36 +136,18 @@ enum class FingerprintState {
   kMaxValue = DISABLED_FROM_TIMEOUT,
 };
 
-// Information about the custom icon in the user pod.
-struct ASH_PUBLIC_EXPORT EasyUnlockIconInfo {
-  EasyUnlockIconInfo();
-  EasyUnlockIconInfo(const EasyUnlockIconInfo& other);
-  EasyUnlockIconInfo(EasyUnlockIconInfo&& other);
-  ~EasyUnlockIconInfo();
+// Enterprise information about a managed device.
+struct ASH_PUBLIC_EXPORT DeviceEnterpriseInfo {
+  bool operator==(const DeviceEnterpriseInfo& other) const;
 
-  EasyUnlockIconInfo& operator=(const EasyUnlockIconInfo& other);
-  EasyUnlockIconInfo& operator=(EasyUnlockIconInfo&& other);
+  // The name of the entity that manages the device and current account user.
+  //       For standard Dasher domains, this will be the domain name (foo.com).
+  //       For FlexOrgs, this will be the admin's email (user@foo.com).
+  //       For non enterprise enrolled devices, this will be an empty string.
+  std::string enterprise_domain_manager;
 
-  // Icon that should be displayed.
-  EasyUnlockIconState icon_state = EasyUnlockIconState::NONE;
-  // Tooltip that is associated with the icon. This is shown automatically if
-  // |autoshow_tooltip| is true. The user can always see the tooltip if they
-  // hover over the icon. The tooltip should be used for the accessibility label
-  // if it is present.
-  std::u16string tooltip;
-  // If true, the tooltip should be displayed (even if the user is not currently
-  // hovering over the icon, ie, this makes |tooltip| act like a little like a
-  // notification).
-  bool autoshow_tooltip = false;
-  // Accessibility label. Only used if |tooltip| is empty.
-  // TODO(jdufault): Always populate and use |aria_label|, even if |tooltip| is
-  // non-empty.
-  std::u16string aria_label;
-  // If true, clicking the easy unlock icon should fire a hardlock event which
-  // will disable easy unlock. The hardlock event will request a new icon
-  // display via a separate EasyUnlockIconsOption update. See
-  // LoginScreenClient::HardlockPod.
-  bool hardlock_on_click = false;
+  // Which mode a managed device is enrolled in.
+  ManagementDeviceMode management_device_mode = ManagementDeviceMode::kNone;
 };
 
 // Information of each input method. This is used to populate keyboard layouts
@@ -195,7 +192,7 @@ struct ASH_PUBLIC_EXPORT LocaleItem {
   std::string title;
 
   // Group name of the locale.
-  absl::optional<std::string> group_name;
+  std::optional<std::string> group_name;
 };
 
 // Information about a public account user.
@@ -211,7 +208,7 @@ struct ASH_PUBLIC_EXPORT PublicAccountInfo {
   // The name of the device manager displayed in the login screen UI for
   // device-level management. May be either a domain (foo.com) or an email
   // address (user@foo.com).
-  absl::optional<std::string> device_enterprise_manager;
+  std::optional<std::string> device_enterprise_manager;
 
   // A list of available user locales.
   std::vector<LocaleItem> available_locales;
@@ -262,12 +259,16 @@ struct ASH_PUBLIC_EXPORT LoginUserInfo {
   // LoginScreenModel::SetFingerprintState) which update the current state.
   FingerprintState fingerprint_state = FingerprintState::UNAVAILABLE;
 
-  // True if multi-profiles sign in is allowed for this user.
-  bool is_multiprofile_allowed = false;
+  // The initial Smart Lock state. There are other methods (i.e.,
+  // LoginScreenModel::SetSmartLockState) which update the current state.
+  SmartLockState smart_lock_state = SmartLockState::kDisabled;
 
-  // Enforced policy for multi-profiles sign in.
-  MultiProfileUserBehavior multiprofile_policy =
-      MultiProfileUserBehavior::UNRESTRICTED;
+  // True if multi-user-sign-in is allowed for this user.
+  bool is_multi_user_sign_in_allowed = false;
+
+  // Enforced policy for multi-user-sign-in.
+  user_manager::MultiUserSignInPolicy multi_user_sign_in_policy =
+      user_manager::MultiUserSignInPolicy::kUnrestricted;
 
   // True if this user can be removed.
   bool can_remove = false;
@@ -283,10 +284,10 @@ struct ASH_PUBLIC_EXPORT LoginUserInfo {
   // login screen UI for user-level management. Will be either a domain name
   // (foo.com) or the email address of the admin (some_user@foo.com).
   // This is only set if the relevant user is managed.
-  absl::optional<std::string> user_account_manager;
+  std::optional<std::string> user_account_manager;
 
   // Contains the public account information if user type is PUBLIC_ACCOUNT.
-  absl::optional<PublicAccountInfo> public_account_info;
+  std::optional<PublicAccountInfo> public_account_info;
 
   // True if this user chooses to use 24 hour clock in preference.
   bool use_24hour_clock = false;

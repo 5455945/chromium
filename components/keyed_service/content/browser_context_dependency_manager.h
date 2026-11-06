@@ -1,14 +1,12 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_KEYED_SERVICE_CONTENT_BROWSER_CONTEXT_DEPENDENCY_MANAGER_H_
 #define COMPONENTS_KEYED_SERVICE_CONTENT_BROWSER_CONTEXT_DEPENDENCY_MANAGER_H_
 
-#include "base/callback_forward.h"
 #include "base/callback_list.h"
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
 #include "base/no_destructor.h"
 #include "components/keyed_service/core/dependency_manager.h"
 #include "components/keyed_service/core/keyed_service_export.h"
@@ -52,6 +50,16 @@ class KEYED_SERVICE_EXPORT BrowserContextDependencyManager
   // ServiceIsNULLWhileTesting().
   void CreateBrowserContextServicesForTest(content::BrowserContext* context);
 
+  // Called by the embedder once browser startup is complete (and, for
+  // contexts created later, shortly after their creation) to create the
+  // services whose factory overrides
+  // BrowserContextKeyedServiceFactory::ServiceIsCreatedAfterStartup() (or the
+  // refcounted equivalent) to return true. Services already created on demand
+  // are left untouched. Not called for test BrowserContexts; tests that need
+  // such a service should request it explicitly.
+  void CreateBrowserContextServicesAfterStartup(
+      content::BrowserContext* context);
+
   // Called by each BrowserContext to alert us that we should destroy services
   // associated with it.
   void DestroyBrowserContextServices(content::BrowserContext* context);
@@ -60,8 +68,9 @@ class KEYED_SERVICE_EXPORT BrowserContextDependencyManager
   // CreateBrowserContextServices() or CreateBrowserContextServicesForTest().
   // This can be useful in browser tests which wish to substitute test or mock
   // builders for the keyed services.
-  base::CallbackListSubscription RegisterCreateServicesCallbackForTesting(
-      const CreateServicesCallback& callback) WARN_UNUSED_RESULT;
+  [[nodiscard]] base::CallbackListSubscription
+  RegisterCreateServicesCallbackForTesting(
+      const CreateServicesCallback& callback);
 
   // Runtime assertion called as a part of GetServiceForBrowserContext() to
   // check if |context| is considered stale. This will NOTREACHED() or
@@ -76,7 +85,23 @@ class KEYED_SERVICE_EXPORT BrowserContextDependencyManager
   // new BrowserContext object might be created at 0xWhatever).
   void MarkBrowserContextLive(content::BrowserContext* context);
 
+  // Disables services for |context| by default: services are only created for
+  // it by factories that explicitly allow it, see
+  // KeyedServiceBaseFactory::ServiceIsAllowedWhenServicesDisabledByDefault().
+  // Must be called before any service is created for |context|.
+  void DisableBrowserContextServicesByDefault(content::BrowserContext* context);
+
+  // Returns whether DisableBrowserContextServicesByDefault() has been called
+  // for |context|.
+  bool AreBrowserContextServicesDisabledByDefault(
+      content::BrowserContext* context) const;
+
   static BrowserContextDependencyManager* GetInstance();
+
+  BrowserContextDependencyManager(const BrowserContextDependencyManager&) =
+      delete;
+  BrowserContextDependencyManager& operator=(
+      const BrowserContextDependencyManager&) = delete;
 
  private:
   friend class BrowserContextDependencyManagerUnittests;
@@ -89,16 +114,9 @@ class KEYED_SERVICE_EXPORT BrowserContextDependencyManager
   BrowserContextDependencyManager();
   ~BrowserContextDependencyManager() override;
 
-#ifndef NDEBUG
-  // DependencyManager:
-  void DumpContextDependencies(void* context) const final;
-#endif  // NDEBUG
-
   // A list of callbacks to call just before executing
   // CreateBrowserContextServices() or CreateBrowserContextServicesForTest().
   CreateServicesCallbackList create_services_callbacks_;
-
-  DISALLOW_COPY_AND_ASSIGN(BrowserContextDependencyManager);
 };
 
 #endif  // COMPONENTS_KEYED_SERVICE_CONTENT_BROWSER_CONTEXT_DEPENDENCY_MANAGER_H_

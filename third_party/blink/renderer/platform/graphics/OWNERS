@@ -1,15 +1,14 @@
 # OWNERS specializing in graphics code.
 
+blundell@chromium.org
 chrishtr@chromium.org
 flackr@chromium.org
 fmalita@chromium.org
-fserb@chromium.org
 jbroman@chromium.org
-juanmihd@chromium.org
+jpgravel@chromium.org
 kbr@chromium.org
 pdr@chromium.org
-schenney@chromium.org
-senorblanco@chromium.org
+vasilyt@chromium.org
 vollick@chromium.org
 
 # For surface ID propagation and synchronization
@@ -18,7 +17,10 @@ jonross@chromium.org
 # lowLatency canvas
 mcasas@chromium.org
 
+# canvas and images
+khushalsagar@chromium.org
+
 # Video SurfaceLayer functionality.
 per-file video_frame*=file://media/OWNERS
-per-file video_frame*=lethalantidote@chromium.org
 per-file surface_layer_bridge*=file://media/OWNERS
+per-file static_bitmap_image_to_video_frame_copier*=file://media/OWNERS

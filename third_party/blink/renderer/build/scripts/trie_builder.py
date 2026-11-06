@@ -1,4 +1,4 @@
-# Copyright 2016 The Chromium Authors. All rights reserved.
+# Copyright 2016 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -34,7 +34,7 @@ def _single_trie(string_to_value_pairs, index):
         if len(d) == 1:
             string = d[0][0]
             value = d[0][1]
-            output[char] = {string[index + 1:]: value}
+            output[char] = {string[index + 1 :]: value}
         else:
             output[char] = _single_trie(d, index + 1)
 
@@ -51,7 +51,7 @@ def trie_list_by_str_length(str_to_return_value_dict):
         dicts_by_length[len(string)].append((string, value))
 
     output = []
-    for length, pairs in dicts_by_length.items():
+    for length, pairs in sorted(dicts_by_length.items()):
         output.append((length, _single_trie(sorted(pairs), 0)))
 
     return output

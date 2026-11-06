@@ -1,19 +1,58 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_UPDATER_TAG_H_
 #define CHROME_UPDATER_TAG_H_
 
+#include <stddef.h>
+#include <stdint.h>
+
+#include <array>
+#include <optional>
 #include <ostream>
 #include <string>
+#include <string_view>
+#include <utility>
+#include <variant>
 #include <vector>
 
-#include "base/strings/string_piece.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/containers/span.h"
+#include "base/types/expected.h"
+#include "build/build_config.h"
 
-namespace updater {
-namespace tagging {
+namespace base {
+class FilePath;
+}
+
+namespace updater::tagging {
+namespace internal {
+
+// Advances the iterator by |distance| and makes sure that it remains valid,
+// else returns |end|.
+std::vector<uint8_t>::const_iterator AdvanceIt(
+    std::vector<uint8_t>::const_iterator it,
+    size_t distance,
+    std::vector<uint8_t>::const_iterator end);
+
+// Checks that the range [it, it + size) is found within the binary. |size| must
+// be > 0.
+bool CheckRange(std::vector<uint8_t>::const_iterator it,
+                size_t size,
+                std::vector<uint8_t>::const_iterator end);
+
+}  // namespace internal
+
+// Represents application requirements for admin.
+enum class NeedsAdmin {
+  // The application will install per user.
+  kNo = 0,
+  // The application will install machine-wide.
+  kYes,
+  // The application will install machine-wide if permissions allow, else will
+  // install per-user.
+  kPrefers,
+};
 
 // This struct contains the attributes for a given app parsed from a part of the
 // metainstaller tag. It contains minimal policy and is intended to be a
@@ -23,19 +62,8 @@ namespace tagging {
 // An empty string in std::string members indicates that the given attribute did
 // not appear in the tag for this app.
 struct AppArgs {
-  // Represents application requirements for admin.
-  enum class NeedsAdmin {
-    // The application will install per user.
-    kNo = 0,
-    // The application will install machine-wide.
-    kYes,
-    // The application will install machine-wide if permissions allow, else will
-    // install per-user.
-    kPrefers,
-  };
-
   // |app_id| must not be empty and will be made lowercase.
-  explicit AppArgs(base::StringPiece app_id);
+  explicit AppArgs(std::string_view app_id);
 
   ~AppArgs();
   AppArgs(const AppArgs&);
@@ -51,10 +79,16 @@ struct AppArgs {
   std::string install_data_index;
   std::string experiment_labels;
   std::string untrusted_data;
-  absl::optional<NeedsAdmin> needs_admin;
+  std::optional<NeedsAdmin> needs_admin;
 };
 
-std::ostream& operator<<(std::ostream&, const AppArgs::NeedsAdmin&);
+std::ostream& operator<<(std::ostream&, const NeedsAdmin&);
+
+// This struct contains the "runtime mode" parsed from the metainstaller tag.
+struct RuntimeModeArgs {
+  auto operator<=>(const RuntimeModeArgs&) const = default;
+  std::optional<NeedsAdmin> needs_admin;
+};
 
 // This struct contains the attributes parsed from a metainstaller tag. An empty
 // string in std::string members indicates that the given attribute did not
@@ -87,12 +121,23 @@ struct TagArgs {
   std::string experiment_labels;
   std::string referral_id;
   std::string language;
-  absl::optional<BrowserType> browser_type;
-  absl::optional<bool> flighting = false;
-  absl::optional<bool> usage_stats_enable;
+  std::optional<BrowserType> browser_type;
+  std::optional<bool> flighting = false;
+  std::optional<bool> usage_stats_enable;
+  std::string enrollment_token;
 
   // List of apps to install.
   std::vector<AppArgs> apps;
+
+  // This member is present if the "runtime mode" was provided on the command
+  // line.
+  std::optional<RuntimeModeArgs> runtime_mode;
+
+  // The original tag string.
+  std::string tag_string;
+
+  // Vector of name/value attributes from the tag.
+  std::vector<std::pair<std::string, std::string>> attributes;
 };
 
 std::ostream& operator<<(std::ostream&, const TagArgs::BrowserType&);
@@ -152,6 +197,21 @@ enum class ErrorCode {
   // Note: A value of 2 is considered the same as not specifying the usage
   // stats.
   kGlobal_UsageStatsValueIsInvalid,
+
+  // The runtime value must be "true", "persist", or "false". The values
+  // "persist" and "false" are only for backward compatibility in case someone
+  // uses it as an oversight, and are treated the same as "true".
+  kGlobal_RuntimeModeValueIsInvalid,
+
+  // The needsadmin value must be "yes", "no", or "prefers".
+  kRuntimeMode_NeedsAdminValueIsInvalid,
+
+  // The enrollment token must be a GUID.
+  kGlobal_EnrollmentTokenValueIsInvalid,
+
+  // No tag was found when attempting to extract one from a binary or other
+  // potentially-tagged content.
+  kTagNotFound,
 };
 
 std::ostream& operator<<(std::ostream&, const ErrorCode&);
@@ -171,7 +231,7 @@ std::ostream& operator<<(std::ostream&, const ErrorCode&);
 // global parameters and have the following constraints on the value:
 // - bundlename        Must not contain only whitespace.
 // - iid               Can be any string.
-// - brand             Can be any string.
+// - brand             Can be any string; usually 4 uppercase alphabetic chars.
 // - client            Can be any string.
 // - omahaexperiments  Must not contain only whitespace.
 // - referral          Can be any string.
@@ -180,27 +240,30 @@ std::ostream& operator<<(std::ostream&, const ErrorCode&);
 // - lang              Can be any string.
 // - flighting         Must be "true" or "false".
 // - usagestats        Must be "0", "1", or "2".
+// - runtime           Must be "true", "false".
+// - etoken            Must be a GUID.
 //
 // The following keys specify app-specific attributes. "appid" must be specified
 // before any other app attribute to specify the "current" app. Other app
 // attributes will then affect the parameters of the most recently specified app
 // ID. For example, if the tag is
-// "appid=App1&brand=BrandForApp1&appid=App2&ap=ApForApp2&iid=GlobalInstallId",
+// "appid=App1&ap=ApApp1&brand=GBRN&appid=App2&ap=ApApp2&iid=GlobalInstallId",
 // the resulting tag will look like:
 //   TagArgs {
 //     iid = GlobalInstallId
+//     brand = GBRN
 //     apps = [
 //       AppArgs {
 //         appid = App1
-//         brand = BrandForApp1
+//         ap = ApApp1
 //       }
 //       AppArgs {
 //         appid = App2
-//         ap = ApForApp2
+//         ap = ApApp2
 //       }
 //     ]
 //   }
-// These attributes has the following constraints on the value:
+// These attributes have the following constraints on the value:
 // - appid             Can be any ASCII string. Case-insensitive.
 // - ap                Can be any string.
 // - experiments       Must not contain only whitespace.
@@ -210,18 +273,141 @@ std::ostream& operator<<(std::ostream&, const ErrorCode&);
 // - untrusteddata     Can be any string.
 //
 // |app_installer_data_args| is also a querystring-encoded ordered list of
-// key-value pairs. Unlike in the |tag|, the values are no unescaped. The
-// following keys are valid and affect the app installer data parameters and
-// have the following constraints on the value:
+// key-value pairs. Unlike in the |tag|, the values are escaped. The following
+// keys are valid and affect the app installer data parameters and have the
+// following constraints on the value:
 // - appid        Must be a valid app id specified in |tag|.
 // - installerdata  Can be any string. Must be specified after appid.
 //
 // Note: This method assumes all attribute names are ASCII.
-ErrorCode Parse(base::StringPiece tag,
-                absl::optional<base::StringPiece> app_installer_data_args,
-                TagArgs* args);
+ErrorCode Parse(std::string_view tag,
+                std::optional<std::string_view> app_installer_data_args,
+                TagArgs& args);
 
-}  // namespace tagging
-}  // namespace updater
+// Utilities for reading and writing tags to Windows PE (.exe), MSI, and
+// Apple PKG files.
+//
+// The tag specification is as follows:
+//   - The tag area begins with a magic signature 'Gact2.0Omaha'.
+//   - The next 2 bytes are the tag string length in big endian.
+//   - Then comes the tag string in the format "key1=value1&key2=value2".
+//   - The key is alphanumeric, the value allows special characters such as '*'.
+//
+// A sample layout:
+// +-------------------------------------+
+// ~    ..............................   ~
+// |    ..............................   |
+// |    Other parts of the file          |
+// +-------------------------------------+
+// | Start of the certificate            |
+// ~    ..............................   ~
+// ~    ..............................   ~
+// | Magic signature 'Gact2.0Omaha'      | Tag starts
+// | Tag length (2 bytes in big-endian)) |
+// | tag string                          |
+// +-------------------------------------+
+//
+// A real example (an MSI file tagged with 'brand=CDCD&key2=Test'):
+// +-----------------------------------------------------------------+
+// |  G   a   c   t   2   .   0   O   m   a   h   a  0x0 0x14 b   r  |
+// |  a   n   d   =   C   D   C   D   &   k   e   y   2   =   T   e  |
+// |  s   t                                                          |
+// +-----------------------------------------------------------------+
+// Extracts a tag from `filename`.
+std::string BinaryReadTagString(const base::FilePath& file);
+std::optional<tagging::TagArgs> BinaryReadTag(const base::FilePath& file);
+
+// Maximum length for the string representation of a tag that can be written
+// into a binary. This is the amount of space that must be reserved in a binary
+// for dynamic tagging, in a file format where tags can only be patched in place
+// rather than inserted, immediately after the magic signature and size bytes.
+// Because binary tag format includes an explicit tag size, no null terminator
+// is included in this count.
+inline constexpr size_t kMaxTagStringBytes = 8192;
+
+inline constexpr auto kTagMagicUtf8 = std::to_array<uint8_t>(
+    {'G', 'a', 'c', 't', '2', '.', '0', 'O', 'm', 'a', 'h', 'a'});
+
+// Length of the binary tag header: the magic signature followed by the 2-byte
+// big-endian tag string length.
+inline constexpr size_t kTagHeaderBytes = kTagMagicUtf8.size() + 2;
+
+// Maximum length for the binary representation of a tag, including its magic
+// signature and length bytes.
+inline constexpr size_t kMaxBinaryTagBytes =
+    kTagHeaderBytes + kMaxTagStringBytes;
+
+// Default length for the binary representation of a tag, including its magic
+// signature and length bytes. Used as the default padded size of the tag space
+// when writing a tag into a binary.
+inline constexpr size_t kDefaultBinaryTagBytes = kMaxBinaryTagBytes;
+static_assert(kDefaultBinaryTagBytes == 8206,
+              "Default binary tag size is not 8206 as expected");
+
+// Returns the tag data from the last Omaha 4 binary tag found inside `buffer`,
+// excluding the signature and length bytes. If no tag is found, returns an
+// empty string.
+std::string ReadTag(base::span<const uint8_t> buffer);
+
+struct NoTagFound {};
+struct InvalidTag {
+  // The offset to the start of the "Gact2.0Omaha" signature.
+  size_t offset;
+};
+struct ValidTag {
+  // The offset to the start of the "Gact2.0Omaha" signature.
+  size_t offset;
+  // The tag data found inside the buffer, excluding the signature and length
+  // bytes.
+  std::string data;
+};
+using ReadTagResult = std::variant<NoTagFound, InvalidTag, ValidTag>;
+
+// Reads the last Omaha 4 tag found inside `buffer` and returns a
+// `ReadTagResult` expressing the outcome.
+ReadTagResult ReadTagAndOffset(base::span<const uint8_t> buffer);
+
+// GetTagFromTagString creates binary tag data from a specified tag string by
+// prefixing it with the signature and length.
+std::vector<uint8_t> GetTagFromTagString(const std::string& tag_string);
+
+// Tags `in_file` with `tag_string` and writes the result to `in_file` by
+// default, or to `out_file` if `out_file` is provided. `padded_length` is the
+// minimum size in bytes to which the injected tag space is padded (padded with
+// zeros if the tag data is smaller; not truncated if larger).
+//
+// If `padded_length` <= 0, then the tag space is shrunk to exactly fit the
+// magic signature, size, and tag string.
+bool BinaryWriteTag(const base::FilePath& in_file,
+                    const std::string& tag_string,
+                    int padded_length,
+                    base::FilePath out_file);
+
+#if BUILDFLAG(IS_MAC)
+
+// Reads the `com.apple.application-instance` extended attribute from the item
+// at `path`, parsing it as a complete metainstaller tag, including the
+// "Gact2.0Omaha" magic number prefix.
+//
+// If the file exists, has this specific extended attribute, this process can
+// read that attribute, and this process can parse a complete metainstaller
+// tag out of it, this returns the parsed `tagging::TagArgs`. If any of the
+// prerequisites before tag content parsing fail, this returns the "no tag"
+// error code. If tag parsing fails, this returns the error code from tag
+// parsing.
+base::expected<TagArgs, ErrorCode> ReadTagFromApplicationInstanceXattr(
+    const base::FilePath& path);
+
+// Overwrites the `com.apple.application-instance` extended attribute on the
+// item at `path` with a formatted binary tag containing the provided string,
+// prefixed with the "Gact2.0Omaha" signature and size, as described above.
+// It does not check the validity of the string as a tag. Returns `true` on
+// success, `false` on failure.
+bool WriteTagStringToApplicationInstanceXattr(const base::FilePath& path,
+                                              const std::string& tag_string);
+
+#endif  // BUILDFLAG(IS_MAC)
+
+}  // namespace updater::tagging
 
 #endif  // CHROME_UPDATER_TAG_H_

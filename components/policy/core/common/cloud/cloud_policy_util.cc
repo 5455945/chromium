@@ -1,147 +1,146 @@
-// Copyright (c) 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/policy/core/common/cloud/cloud_policy_util.h"
 
+#include "base/strings/strcat.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/version_info/version_info.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
+#include "components/policy/proto/device_management_backend.pb.h"
+#include "net/base/network_interfaces.h"
 
-#if defined(OS_WIN)
-#include <Windows.h>  // For GetComputerNameW()
+#if BUILDFLAG(IS_WIN)
+#include <windows.h>
+
 // SECURITY_WIN32 must be defined in order to get
 // EXTENDED_NAME_FORMAT enumeration.
 #define SECURITY_WIN32 1
 #include <security.h>
 #undef SECURITY_WIN32
-#include <wincred.h>
+
+#include "base/win/wincred_shim.h"
 #endif
 
-#if defined(OS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS) || defined(OS_APPLE)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_FUCHSIA)
 #include <pwd.h>
 #include <sys/types.h>
 #include <unistd.h>
 #endif
 
-#if defined(OS_APPLE)
+#if BUILDFLAG(IS_APPLE)
 #include <stddef.h>
 #include <sys/sysctl.h>
 #endif
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 #import <SystemConfiguration/SCDynamicStoreCopySpecific.h>
 #endif
 
-// TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
-// of lacros-chrome is complete.
-#if defined(OS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_LINUX)
 #include <limits.h>  // For HOST_NAME_MAX
 #endif
 
+#include <algorithm>
 #include <utility>
 
 #include "base/check.h"
-#include "base/cxx17_backports.h"
 #include "base/notreached.h"
 #include "base/system/sys_info.h"
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
+#include "base/functional/callback.h"
+#include "base/task/thread_pool.h"
 #include "base/win/wmi.h"
 #endif
 #include "components/version_info/version_info.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chromeos/system/statistics_provider.h"
-#include "components/user_manager/user.h"
-#include "components/user_manager/user_manager.h"
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chromeos/ash/components/system/statistics_provider.h"
+#include "components/session_manager/core/session.h"
+#include "components/session_manager/core/session_manager.h"
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/win/windows_version.h"
 #endif
 
-#if defined(OS_APPLE)
-#include "base/mac/scoped_cftyperef.h"
+#if BUILDFLAG(IS_MAC)
+#include "base/system/sys_info.h"
+#endif
+
+#if BUILDFLAG(IS_APPLE)
+#include "base/apple/scoped_cftyperef.h"
 #include "base/strings/string_util.h"
 #include "base/strings/sys_string_conversions.h"
-#include "base/system/sys_info.h"
 #endif
 
-// TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
-// of lacros-chrome is complete.
-#if defined(OS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "base/system/sys_info.h"
-#endif
-
-#if defined(OS_IOS)
+#if BUILDFLAG(IS_IOS)
 #include "base/ios/device_util.h"
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/android_info.h"
+#include "base/android/device_info.h"
+#include "base/feature_list.h"
 #endif
 
 namespace policy {
 
+#if BUILDFLAG(IS_ANDROID)
+BASE_FEATURE(kReportAndroidMachineName, base::FEATURE_ENABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(IS_ANDROID)
+
 namespace em = enterprise_management;
 
-std::string GetDeviceManufacturer() {
-#if defined(OS_IOS)
-  return "Apple Inc.";
-#else
-  return std::string();
-#endif
-}
+namespace {
 
-std::string GetDeviceModel() {
-#if defined(OS_IOS)
-  // Obtains the Apple internal device name (e.g. "iPad6,11").
-  return base::SysInfo::HardwareModelName();
-#else
-  return std::string();
-#endif
-}
+const int kMinimumVersionForExtensionInstallPolicy = 146;
+
+}  // namespace
 
 std::string GetMachineName() {
-// TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
-// of lacros-chrome is complete.
-#if defined(OS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_FUCHSIA)
   char hostname[HOST_NAME_MAX];
   if (gethostname(hostname, HOST_NAME_MAX) == 0)  // Success.
     return hostname;
   return std::string();
-#elif defined(OS_IOS)
+#elif BUILDFLAG(IS_IOS)
   // Use the Vendor ID as the machine name.
   return ios::device_util::GetVendorId();
-#elif defined(OS_MAC)
+#elif BUILDFLAG(IS_MAC)
   // Do not use NSHost currentHost, as it's very slow. http://crbug.com/138570
   SCDynamicStoreContext context = {0, NULL, NULL, NULL};
-  base::ScopedCFTypeRef<SCDynamicStoreRef> store(SCDynamicStoreCreate(
+  base::apple::ScopedCFTypeRef<SCDynamicStoreRef> store(SCDynamicStoreCreate(
       kCFAllocatorDefault, CFSTR("chrome_sync"), NULL, &context));
-  base::ScopedCFTypeRef<CFStringRef> machine_name(
+  base::apple::ScopedCFTypeRef<CFStringRef> machine_name(
       SCDynamicStoreCopyLocalHostName(store.get()));
   if (machine_name.get())
     return base::SysCFStringRefToUTF8(machine_name.get());
 
   // Fall back to get computer name.
-  base::ScopedCFTypeRef<CFStringRef> computer_name(
+  base::apple::ScopedCFTypeRef<CFStringRef> computer_name(
       SCDynamicStoreCopyComputerName(store.get(), NULL));
   if (computer_name.get())
     return base::SysCFStringRefToUTF8(computer_name.get());
 
-  // If all else fails, return to using a slightly nicer version of the
-  // hardware model.
-  char modelBuffer[256];
-  size_t length = sizeof(modelBuffer);
-  if (!sysctlbyname("hw.model", modelBuffer, &length, NULL, 0)) {
-    for (size_t i = 0; i < length; i++) {
-      if (base::IsAsciiDigit(modelBuffer[i]))
-        return std::string(modelBuffer, 0, i);
-    }
-    return std::string(modelBuffer, 0, length);
+  // If all else fails, return to using a slightly nicer version of the hardware
+  // model. Warning: This will soon return just a useless "Mac" string.
+  std::string model = base::SysInfo::HardwareModelName();
+  std::optional<base::SysInfo::HardwareModelNameSplit> split =
+      base::SysInfo::SplitHardwareModelNameDoNotUse(model);
+
+  if (!split) {
+    return model;
   }
-  return std::string();
-#elif defined(OS_WIN)
-  wchar_t computer_name[MAX_COMPUTERNAME_LENGTH + 1] = {0};
-  DWORD size = base::size(computer_name);
+
+  return split.value().category;
+#elif BUILDFLAG(IS_WIN)
+  wchar_t computer_name[MAX_COMPUTERNAME_LENGTH + 1] = {};
+  DWORD size = std::size(computer_name);
   if (::GetComputerNameW(computer_name, &size)) {
     std::string result;
     bool conversion_successful = base::WideToUTF8(computer_name, size, &result);
@@ -149,33 +148,41 @@ std::string GetMachineName() {
     return result;
   }
   return std::string();
-#elif defined(OS_ANDROID)
-  return std::string();
-#else
+#elif BUILDFLAG(IS_ANDROID)
+  if (!base::FeatureList::IsEnabled(kReportAndroidMachineName)) {
+    return std::string();
+  }
+  std::string device_name = base::android::device_info::device_name();
+  if (!device_name.empty()) {
+    return device_name;
+  }
+  // Fall back to the hardware model (`Build.MODEL`) when the user-configured
+  // device name (`Settings.Global.DEVICE_NAME`) is unset or inaccessible.
+  return base::android::android_info::model();
+#elif BUILDFLAG(IS_CHROMEOS)
   NOTREACHED();
-  return std::string();
+#else
+#error Unsupported platform
 #endif
 }
 
 std::string GetOSVersion() {
-#if defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_APPLE)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_APPLE) || \
+    BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_FUCHSIA)
   return base::SysInfo::OperatingSystemVersion();
-#elif defined(OS_WIN)
+#elif BUILDFLAG(IS_WIN)
   base::win::OSInfo::VersionNumber version_number =
       base::win::OSInfo::GetInstance()->version_number();
   return base::StringPrintf("%u.%u.%u.%u", version_number.major,
                             version_number.minor, version_number.build,
                             version_number.patch);
-#elif defined(OS_ANDROID)
-  return std::string();
 #else
   NOTREACHED();
-  return std::string();
 #endif
 }
 
 std::string GetOSPlatform() {
-  return version_info::GetOSType();
+  return std::string(version_info::GetOSType());
 }
 
 std::string GetOSArchitecture() {
@@ -183,13 +190,13 @@ std::string GetOSArchitecture() {
 }
 
 std::string GetOSUsername() {
-#if (defined(OS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)) || defined(OS_APPLE)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_APPLE)
   struct passwd* creds = getpwuid(getuid());
   if (!creds || !creds->pw_name)
     return std::string();
 
   return creds->pw_name;
-#elif defined(OS_WIN)
+#elif BUILDFLAG(IS_WIN)
   WCHAR username[CREDUI_MAX_USERNAME_LENGTH + 1] = {};
   DWORD username_length = sizeof(username);
 
@@ -202,18 +209,22 @@ std::string GetOSUsername() {
   }
 
   return base::WideToUTF8(username);
-#elif BUILDFLAG(IS_CHROMEOS_ASH)
-  if (!user_manager::UserManager::IsInitialized())
+#elif BUILDFLAG(IS_CHROMEOS)
+  auto* session_manager = session_manager::SessionManager::Get();
+  if (!session_manager) {
     return std::string();
-  auto* user = user_manager::UserManager::Get()->GetPrimaryUser();
-  if (!user)
+  }
+  const auto* primary_session = session_manager->GetPrimarySession();
+  if (!primary_session) {
     return std::string();
-  return user->GetAccountId().GetUserEmail();
-#elif defined(OS_ANDROID)
+  }
+  return primary_session->account_id().GetUserEmail();
+#elif BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_FUCHSIA)
+  // TODO(crbug.com/40200780): This should be fully implemented when there is
+  // support in fuchsia.
   return std::string();
 #else
   NOTREACHED();
-  return std::string();
 #endif
 }
 
@@ -233,9 +244,14 @@ em::Channel ConvertToProtoChannel(version_info::Channel channel) {
 }
 
 std::string GetDeviceName() {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  return chromeos::system::StatisticsProvider::GetInstance()
-      ->GetEnterpriseMachineID();
+#if BUILDFLAG(IS_CHROMEOS)
+  if (ash::system::StatisticsProvider::GetInstance()->GetLoadingState() ==
+      ash::system::StatisticsProvider::LoadingState::kNotStarted) {
+    return std::string();
+  }
+  return std::string(
+      ash::system::StatisticsProvider::GetInstance()->GetMachineID().value_or(
+          ""));
 #else
   return GetMachineName();
 #endif
@@ -245,7 +261,7 @@ std::unique_ptr<em::BrowserDeviceIdentifier> GetBrowserDeviceIdentifier() {
   std::unique_ptr<em::BrowserDeviceIdentifier> device_identifier =
       std::make_unique<em::BrowserDeviceIdentifier>();
   device_identifier->set_computer_name(GetMachineName());
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   device_identifier->set_serial_number(base::WideToUTF8(
       base::win::WmiComputerSystemInfo::Get().serial_number()));
 #else
@@ -254,18 +270,84 @@ std::unique_ptr<em::BrowserDeviceIdentifier> GetBrowserDeviceIdentifier() {
   return device_identifier;
 }
 
-bool IsMachineLevelUserCloudPolicyType(const std::string& type) {
-  return type == GetMachineLevelUserCloudPolicyTypeForCurrentOS();
+std::string GetDeviceFqdn() {
+  // Retrieves the FQDN of the computer for Windows and if this fails it reverts
+  // to the hostname as known to the net subsystem.
+#if BUILDFLAG(IS_WIN)
+  DWORD size = 1024;
+  std::wstring result_wstr(size, L'\0');
+
+  if (::GetComputerNameExW(ComputerNameDnsFullyQualified, &result_wstr[0],
+                           &size)) {
+    std::string result;
+    if (base::WideToUTF8(result_wstr.data(), size, &result)) {
+      return result;
+    }
+  }
+#endif
+  // TODO(crbug.com/398257759): Perform DNS lookup to obtain the FQDN for
+  // non-Windows platforms.
+  return net::GetHostName();
 }
 
-std::string GetMachineLevelUserCloudPolicyTypeForCurrentOS() {
-#if defined(OS_IOS)
-  return dm_protocol::kChromeMachineLevelUserCloudPolicyIOSType;
-#elif defined(OS_ANDROID)
-  return dm_protocol::kChromeMachineLevelUserCloudPolicyAndroidType;
-#else
-  return dm_protocol::kChromeMachineLevelUserCloudPolicyType;
-#endif
+std::string GetNetworkName() {
+  return net::GetWifiSSID();
+}
+
+#if BUILDFLAG(IS_WIN)
+void GetBrowserDeviceIdentifierAsync(
+    base::OnceCallback<
+        void(std::unique_ptr<enterprise_management::BrowserDeviceIdentifier>)>
+        callback) {
+  base::ThreadPool::CreateCOMSTATaskRunner(
+      {base::MayBlock(), base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN})
+      ->PostTaskAndReplyWithResult(FROM_HERE,
+                                   base::BindOnce(&GetBrowserDeviceIdentifier),
+                                   std::move(callback));
+}
+#endif  // BUILDFLAG(IS_WIN)
+
+bool IsMachineLevelUserCloudPolicyType(const std::string& type) {
+  return type == dm_protocol::kChromeMachineLevelUserCloudPolicyType;
+}
+
+bool IsExtensionInstallPolicySupportedOnThisVersion() {
+  return version_info::GetMajorVersionNumberAsInt() >=
+         kMinimumVersionForExtensionInstallPolicy;
+}
+
+bool IsExtensionInstallPolicyType(const std::string& policy_type) {
+  return policy_type ==
+             dm_protocol::kChromeExtensionInstallUserCloudPolicyType ||
+         policy_type ==
+             dm_protocol::kChromeExtensionInstallMachineLevelCloudPolicyType;
+}
+
+bool IsChromePolicyType(const std::string& policy_type) {
+  return policy_type == dm_protocol::GetChromeUserPolicyType() ||
+         policy_type == dm_protocol::kChromeMachineLevelUserCloudPolicyType;
+}
+
+bool IsMachineLevelPolicyType(const std::string& policy_type) {
+  return policy_type == dm_protocol::kChromeMachineLevelUserCloudPolicyType ||
+         policy_type ==
+             dm_protocol::kChromeExtensionInstallMachineLevelCloudPolicyType;
+}
+
+bool IsUserLevelPolicyType(const std::string& policy_type) {
+  return policy_type == dm_protocol::GetChromeUserPolicyType() ||
+         policy_type == dm_protocol::kChromeExtensionInstallUserCloudPolicyType;
+}
+
+
+std::string PolicyTypeLogPrefix(std::string_view policy_type,
+                                std::string_view settings_entity_id) {
+  if (settings_entity_id.empty()) {
+    return base::StrCat({"[policy_type=", policy_type, "] "});
+  }
+
+  return base::StrCat({"[policy_type=", policy_type,
+                       "settings_entity_id=", settings_entity_id, "] "});
 }
 
 }  // namespace policy

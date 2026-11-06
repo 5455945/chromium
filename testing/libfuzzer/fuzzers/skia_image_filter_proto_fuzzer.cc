@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,6 +14,7 @@
 
 #include "testing/libfuzzer/proto/skia_image_filter_proto_converter.h"
 
+#include "base/memory/raw_ptr.h"
 #include "base/process/memory.h"
 #include "base/test/test_discardable_memory_allocator.h"
 #include "third_party/libprotobuf-mutator/src/src/libfuzzer/libfuzzer_macro.h"
@@ -22,15 +23,13 @@
 #include "third_party/skia/include/core/SkImage.h"
 #include "third_party/skia/include/core/SkImageFilter.h"
 
-protobuf_mutator::protobuf::LogSilencer log_silencer;
-
 using skia_image_filter_proto_converter::Input;
 using skia_image_filter_proto_converter::Converter;
 
 static const int kBitmapSize = 24;
 
 struct Environment {
-  base::TestDiscardableMemoryAllocator* discardable_memory_allocator;
+  raw_ptr<base::TestDiscardableMemoryAllocator> discardable_memory_allocator;
   Environment() {
     base::EnableTerminationOnOutOfMemory();
     discardable_memory_allocator = new base::TestDiscardableMemoryAllocator();
@@ -39,8 +38,7 @@ struct Environment {
 };
 
 DEFINE_PROTO_FUZZER(const Input& input) {
-  static Environment environment = Environment();
-  ALLOW_UNUSED_LOCAL(environment);
+  [[maybe_unused]] static Environment environment = Environment();
 
   static Converter converter = Converter();
   std::string ipc_filter_message = converter.Convert(input);

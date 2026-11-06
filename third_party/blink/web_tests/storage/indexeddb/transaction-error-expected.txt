@@ -1,4 +1,4 @@
-CONSOLE ERROR: line 82: Uncaught Error: This should *NOT* be caught!
+CONSOLE ERROR: Uncaught Error: This should *NOT* be caught!
 Test IDBTransaction.error cases.
 
 On success, you will see a series of "PASS" messages, followed by "TEST COMPLETE".
@@ -10,7 +10,7 @@ store = db.createObjectStore('storeName')
 store.add('value', 'key')
 
 
-trans = db.transaction('storeName')
+trans = db.transaction('storeName', 'readonly')
 
 
 IDBTransaction.error should be null if transaction is not finished:

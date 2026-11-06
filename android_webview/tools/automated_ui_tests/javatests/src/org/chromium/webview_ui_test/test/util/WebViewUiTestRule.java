@@ -1,15 +1,13 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.webview_ui_test.test.util;
 
 import static androidx.test.espresso.matcher.RootMatchers.withDecorView;
-import static androidx.test.espresso.matcher.ViewMatchers.hasDescendant;
 import static androidx.test.espresso.matcher.ViewMatchers.isCompletelyDisplayed;
 import static androidx.test.espresso.matcher.ViewMatchers.withChild;
 import static androidx.test.espresso.matcher.ViewMatchers.withClassName;
-import static androidx.test.espresso.matcher.ViewMatchers.withText;
 
 import static org.hamcrest.CoreMatchers.allOf;
 import static org.hamcrest.Matchers.endsWith;
@@ -18,7 +16,6 @@ import static org.hamcrest.Matchers.hasItem;
 import static org.chromium.base.test.util.ScalableTimeout.scaleTimeout;
 
 import android.content.Intent;
-import android.os.Build;
 import android.webkit.WebView;
 
 import androidx.test.espresso.BaseLayerComponent;
@@ -62,13 +59,14 @@ public class WebViewUiTestRule extends BaseActivityTestRule<WebViewUiTestActivit
     }
 
     @Override
-    public void launchActivity(Intent i) {
+    public WebViewUiTestActivity launchActivity(Intent i) {
         if (mLayout != null && !mLayout.isEmpty()) {
             if (i == null) i = getActivityIntent();
             i.putExtra(WebViewUiTestActivity.EXTRA_TEST_LAYOUT_FILE, mLayout);
         }
-        super.launchActivity(i);
-        mSyncWrapper = new WebViewSyncWrapper((WebView) getActivity().findViewById(R.id.webview));
+        WebViewUiTestActivity activity = super.launchActivity(i);
+        mSyncWrapper = new WebViewSyncWrapper((WebView) activity.findViewById(R.id.webview));
+        return activity;
     }
 
     public void launchActivity() {
@@ -122,31 +120,15 @@ public class WebViewUiTestRule extends BaseActivityTestRule<WebViewUiTestActivit
     private boolean isActionBarDisplayedFunc() {
         if (mBaseLayerComponent == null) mBaseLayerComponent = DaggerBaseLayerComponent.create();
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            // For M and above
-            if (hasItem(withDecorView(withChild(allOf(
-                    withClassName(endsWith("PopupBackgroundView")),
-                    isCompletelyDisplayed())))).matches(
-                    mBaseLayerComponent.activeRootLister().listActiveRoots())) {
-                return true;
-            }
-        } else {
-            // For L
-            if (hasItem(withDecorView(hasDescendant(allOf(
-                    withClassName(endsWith("ActionMenuItemView")),
-                    isCompletelyDisplayed())))).matches(
-                    mBaseLayerComponent.activeRootLister().listActiveRoots())) {
-                return true;
-            }
-
-            // Paste option is a popup on L
-            if (hasItem(withDecorView(withChild(withText("Paste")))).matches(
-                    mBaseLayerComponent.activeRootLister().listActiveRoots())) {
-                return true;
-            }
+        if (hasItem(
+                        withDecorView(
+                                withChild(
+                                        allOf(
+                                                withClassName(endsWith("PopupBackgroundView")),
+                                                isCompletelyDisplayed()))))
+                .matches(mBaseLayerComponent.activeRootLister().listActiveRoots())) {
+            return true;
         }
-
-
         return false;
     }
 

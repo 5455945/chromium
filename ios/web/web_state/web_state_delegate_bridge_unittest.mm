@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,29 +6,46 @@
 
 #import <Foundation/Foundation.h>
 
-#include <memory>
+#import <memory>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/strings/utf_string_conversions.h"
+#import "base/functional/bind.h"
+#import "base/functional/callback_helpers.h"
+#import "base/strings/utf_string_conversions.h"
 #import "ios/web/public/test/crw_fake_web_state_delegate.h"
 #import "ios/web/public/test/fakes/fake_web_state.h"
 #import "ios/web/public/ui/context_menu_params.h"
-#include "testing/platform_test.h"
+#import "testing/gtest_mac.h"
+#import "testing/platform_test.h"
 #import "third_party/ocmock/OCMock/OCMock.h"
 #import "third_party/ocmock/gtest_support.h"
-#include "ui/base/page_transition_types.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "ui/base/mojom/window_open_disposition.mojom-shared.h"
+#import "ui/base/page_transition_types.h"
 
 // Class which conforms to CRWWebStateDelegate protocol, but does not implement
 // any optional methods.
-@interface TestEmptyWebStateDelegate : NSObject<CRWWebStateDelegate>
+@interface TestEmptyWebStateDelegate : NSObject <CRWWebStateDelegate>
 @end
 
 @implementation TestEmptyWebStateDelegate
+@end
+
+// Class which conforms to CRWWebStateDelegate protocol and only implements
+// `webState:didRequestHTTPAuthForProtectionSpace...`.
+@interface TestHTTPAuthOnlyWebStateDelegate : NSObject <CRWWebStateDelegate>
+@property(nonatomic, readonly) BOOL httpAuthenticationRequested;
+@end
+
+@implementation TestHTTPAuthOnlyWebStateDelegate
+- (void)webState:(web::WebState*)webState
+    didRequestHTTPAuthForProtectionSpace:(NSURLProtectionSpace*)protectionSpace
+                      proposedCredential:(NSURLCredential*)proposedCredential
+                       completionHandler:(void (^)(NSString* username,
+                                                   NSString* password))handler {
+  _httpAuthenticationRequested = YES;
+  if (handler) {
+    handler(@"http_user", @"http_password");
+  }
+}
 @end
 
 namespace web {
@@ -46,9 +63,7 @@ class WebStateDelegateBridgeTest : public PlatformTest {
     empty_delegate_bridge_.reset(new WebStateDelegateBridge(empty_delegate_));
   }
 
-  void TearDown() override {
-    PlatformTest::TearDown();
-  }
+  void TearDown() override { PlatformTest::TearDown(); }
 
   CRWFakeWebStateDelegate* delegate_;
   id empty_delegate_;
@@ -57,7 +72,7 @@ class WebStateDelegateBridgeTest : public PlatformTest {
   web::FakeWebState fake_web_state_;
 };
 
-// Tests |webState:createNewWebStateForURL:openerURL:initiatedByUser:|
+// Tests `webState:createNewWebStateForURL:openerURL:initiatedByUser:`
 // forwarding.
 TEST_F(WebStateDelegateBridgeTest, CreateNewWebState) {
   ASSERT_FALSE([delegate_ webState]);
@@ -70,7 +85,7 @@ TEST_F(WebStateDelegateBridgeTest, CreateNewWebState) {
   ASSERT_TRUE([delegate_ webStateCreationRequested]);
 }
 
-// Tests |closeWebState:| forwarding.
+// Tests `closeWebState:` forwarding.
 TEST_F(WebStateDelegateBridgeTest, CloseWebState) {
   ASSERT_FALSE([delegate_ webState]);
   ASSERT_FALSE([delegate_ webStateClosingRequested]);
@@ -81,7 +96,7 @@ TEST_F(WebStateDelegateBridgeTest, CloseWebState) {
   ASSERT_TRUE([delegate_ webStateClosingRequested]);
 }
 
-// Tests |webState:openURLWithParams:| forwarding.
+// Tests `webState:openURLWithParams:` forwarding.
 TEST_F(WebStateDelegateBridgeTest, OpenURLFromWebState) {
   ASSERT_FALSE([delegate_ webState]);
   ASSERT_FALSE([delegate_ openURLParams]);
@@ -89,7 +104,8 @@ TEST_F(WebStateDelegateBridgeTest, OpenURLFromWebState) {
   web::WebState::OpenURLParams params(
       GURL("https://chromium.test/"), GURL("https://virtual.chromium.test/"),
       web::Referrer(GURL("https://chromium2.test/"), ReferrerPolicyNever),
-      WindowOpenDisposition::NEW_WINDOW, ui::PAGE_TRANSITION_FORM_SUBMIT, true);
+      ui::mojom::WindowOpenDisposition::kNewWindow,
+      ui::PAGE_TRANSITION_FORM_SUBMIT, true);
   EXPECT_EQ(&fake_web_state_,
             bridge_->OpenURLFromWebState(&fake_web_state_, params));
 
@@ -106,116 +122,303 @@ TEST_F(WebStateDelegateBridgeTest, OpenURLFromWebState) {
   EXPECT_EQ(params.is_renderer_initiated, result_params->is_renderer_initiated);
 }
 
-// Tests |HandleContextMenu| forwarding.
-TEST_F(WebStateDelegateBridgeTest, HandleContextMenu) {
-  EXPECT_EQ(nil, [delegate_ contextMenuParams]);
-  web::ContextMenuParams context_menu_params;
-  context_menu_params.is_main_frame = false;
-  context_menu_params.menu_title = [@"Menu title" copy];
-  context_menu_params.link_url = GURL("http://www.url.com");
-  context_menu_params.src_url = GURL("http://www.url.com/image.jpeg");
-  context_menu_params.referrer_policy = web::ReferrerPolicyOrigin;
-  context_menu_params.view = [[UIView alloc] init];
-  context_menu_params.location = CGPointMake(5.0, 5.0);
-  bridge_->HandleContextMenu(nullptr, context_menu_params);
-  web::ContextMenuParams* result_params = [delegate_ contextMenuParams];
-  EXPECT_NE(nullptr, result_params);
-  EXPECT_EQ(context_menu_params.menu_title, result_params->menu_title);
-  EXPECT_EQ(context_menu_params.is_main_frame, result_params->is_main_frame);
-  EXPECT_EQ(context_menu_params.link_url, result_params->link_url);
-  EXPECT_EQ(context_menu_params.src_url, result_params->src_url);
-  EXPECT_EQ(context_menu_params.referrer_policy,
-            result_params->referrer_policy);
-  EXPECT_EQ(context_menu_params.view, result_params->view);
-  EXPECT_EQ(context_menu_params.location.x, result_params->location.x);
-  EXPECT_EQ(context_menu_params.location.y, result_params->location.y);
-}
-
-// Tests |ShowRepostFormWarningDialog| forwarding.
+// Tests `ShowRepostFormWarningDialog` forwarding.
 TEST_F(WebStateDelegateBridgeTest, ShowRepostFormWarningDialog) {
   EXPECT_FALSE([delegate_ repostFormWarningRequested]);
   EXPECT_FALSE([delegate_ webState]);
   base::OnceCallback<void(bool)> callback;
-  bridge_->ShowRepostFormWarningDialog(&fake_web_state_, std::move(callback));
+  bridge_->ShowRepostFormWarningDialog(
+      &fake_web_state_, web::FormWarningType::kRepost, std::move(callback));
   EXPECT_TRUE([delegate_ repostFormWarningRequested]);
   EXPECT_EQ(&fake_web_state_, [delegate_ webState]);
 }
 
-// Tests |ShowRepostFormWarningDialog| forwarding to delegate which does not
-// implement |webState:runRepostFormDialogWithCompletionHandler:| method.
+// Tests `ShowRepostFormWarningDialog` forwarding to delegate which does not
+// implement `webState:runRepostFormDialogWithCompletionHandler:` method.
 TEST_F(WebStateDelegateBridgeTest, ShowRepostFormWarningWithNoDelegateMethod) {
   __block bool callback_called = false;
   empty_delegate_bridge_->ShowRepostFormWarningDialog(
-      nullptr, base::BindOnce(^(bool should_repost) {
+      nullptr, web::FormWarningType::kRepost,
+      base::BindOnce(^(bool should_repost) {
         EXPECT_TRUE(should_repost);
         callback_called = true;
       }));
   EXPECT_TRUE(callback_called);
 }
 
-// Tests |GetJavaScriptDialogPresenter| forwarding.
+// Tests `GetJavaScriptDialogPresenter` forwarding.
 TEST_F(WebStateDelegateBridgeTest, GetJavaScriptDialogPresenter) {
   EXPECT_FALSE([delegate_ javaScriptDialogPresenterRequested]);
   bridge_->GetJavaScriptDialogPresenter(nullptr);
   EXPECT_TRUE([delegate_ javaScriptDialogPresenterRequested]);
 }
 
-// Tests |OnAuthRequired| forwarding.
-TEST_F(WebStateDelegateBridgeTest, OnAuthRequired) {
-  EXPECT_FALSE([delegate_ authenticationRequested]);
+// Tests `HandlePermissionsDecisionRequest` forwarding.
+TEST_F(WebStateDelegateBridgeTest, HandlePermissionsDecisionRequest) {
+  __block bool callback_called = false;
+  EXPECT_FALSE([delegate_ permissionsRequestHandled]);
+  EXPECT_FALSE([delegate_ webState]);
+  bridge_->HandlePermissionsDecisionRequest(
+      &fake_web_state_, @[], ^(PermissionDecision decision) {
+        EXPECT_EQ(decision, PermissionDecisionGrant);
+        callback_called = true;
+      });
+  EXPECT_TRUE([delegate_ permissionsRequestHandled]);
+  EXPECT_EQ(&fake_web_state_, [delegate_ webState]);
+  EXPECT_TRUE(callback_called);
+}
+
+// Tests `HandlePermissionsDecisionRequest` forwarding to delegate which does
+// not implement `webState:handlePermissions:decisionHandler:` method.
+TEST_F(WebStateDelegateBridgeTest,
+       HandlePermissionsDecisionRequestWithNoDelegateMethod) {
+  __block bool callback_called = false;
+  empty_delegate_bridge_->HandlePermissionsDecisionRequest(
+      nullptr, @[], ^(PermissionDecision decision) {
+        // Default decision `PermissionDecisionShowDefaultPrompt` will be used
+        // when delegate doesn't implement
+        // `webState:handlePermissions:decisionHandler:` method to handle the
+        // permissions.
+        EXPECT_EQ(decision, PermissionDecisionShowDefaultPrompt);
+        callback_called = true;
+      });
+  EXPECT_TRUE(callback_called);
+}
+
+// Tests `RequestGeolocationPermission` forwarding.
+TEST_F(WebStateDelegateBridgeTest, RequestGeolocationPermission) {
+  __block bool callback_called = false;
+  EXPECT_FALSE([delegate_ geolocationRequestHandled]);
+  EXPECT_FALSE([delegate_ webState]);
+  const GURL origin("https://example.com");
+  bridge_->RequestGeolocationPermission(
+      &fake_web_state_, origin, ^(PermissionDecision decision) {
+        EXPECT_EQ(decision, PermissionDecisionGrant);
+        callback_called = true;
+      });
+  EXPECT_TRUE([delegate_ geolocationRequestHandled]);
+  EXPECT_EQ(origin, [delegate_ lastRequestedGeolocationOrigin]);
+  EXPECT_EQ(&fake_web_state_, [delegate_ webState]);
+  EXPECT_TRUE(callback_called);
+}
+
+// Tests `RequestGeolocationPermission` forwarding to delegate which does not
+// implement `webState:requestGeolocation:decisionHandler:` method.
+TEST_F(WebStateDelegateBridgeTest,
+       RequestGeolocationPermissionWithNoDelegateMethod) {
+  __block bool callback_called = false;
+  const GURL origin("https://example.com");
+  empty_delegate_bridge_->RequestGeolocationPermission(
+      nullptr, origin, ^(PermissionDecision decision) {
+        // Default decision `PermissionDecisionShowDefaultPrompt` will be used
+        // when delegate doesn't implement
+        // `webState:requestGeolocation:decisionHandler:` method.
+        EXPECT_EQ(decision, PermissionDecisionShowDefaultPrompt);
+        callback_called = true;
+      });
+  EXPECT_TRUE(callback_called);
+}
+
+// Tests `OnAuthRequired` forwarding.
+TEST_F(WebStateDelegateBridgeTest, OnHTTPAuthRequired) {
+  EXPECT_FALSE([delegate_ httpAuthenticationRequested]);
   EXPECT_FALSE([delegate_ webState]);
   NSURLProtectionSpace* protection_space = [[NSURLProtectionSpace alloc] init];
   NSURLCredential* credential = [[NSURLCredential alloc] init];
-  WebStateDelegate::AuthCallback callback = base::DoNothing();
+  WebStateDelegate::HTTPAuthCallback callback = base::DoNothing();
   bridge_->OnAuthRequired(&fake_web_state_, protection_space, credential,
                           std::move(callback));
-  EXPECT_TRUE([delegate_ authenticationRequested]);
+  EXPECT_TRUE([delegate_ httpAuthenticationRequested]);
   EXPECT_EQ(&fake_web_state_, [delegate_ webState]);
 }
 
-// Tests |ShouldPreviewLink| forwarding.
-TEST_F(WebStateDelegateBridgeTest, ShouldPreviewLinkWithURL) {
-  GURL link_url("http://link.test/");
-  EXPECT_FALSE(delegate_.webState);
-
-  delegate_.shouldPreviewLinkWithURLReturnValue = YES;
-  EXPECT_TRUE(bridge_->ShouldPreviewLink(&fake_web_state_, link_url));
-  EXPECT_EQ(&fake_web_state_, delegate_.webState);
-  EXPECT_EQ(link_url, delegate_.linkURL);
-
-  delegate_.shouldPreviewLinkWithURLReturnValue = NO;
-  EXPECT_FALSE(bridge_->ShouldPreviewLink(&fake_web_state_, link_url));
-  EXPECT_EQ(&fake_web_state_, delegate_.webState);
-  EXPECT_EQ(link_url, delegate_.linkURL);
+// Tests `OnAuthRequired` for client certs forwarding.
+TEST_F(WebStateDelegateBridgeTest, OnClientCertAuthRequired) {
+  EXPECT_FALSE([delegate_ clientCertAuthenticationRequested]);
+  EXPECT_FALSE([delegate_ webState]);
+  NSURLProtectionSpace* protection_space = [[NSURLProtectionSpace alloc] init];
+  WebStateDelegate::ClientCertAuthCallback callback = base::DoNothing();
+  bridge_->OnAuthRequired(&fake_web_state_, protection_space,
+                          std::move(callback));
+  EXPECT_TRUE([delegate_ clientCertAuthenticationRequested]);
+  EXPECT_EQ(&fake_web_state_, [delegate_ webState]);
 }
 
-// Tests |GetPreviewingViewController| forwarding.
-TEST_F(WebStateDelegateBridgeTest, GetPreviewingViewController) {
-  GURL link_url("http://link.test/");
-  UIViewController* previewing_view_controller =
-      OCMClassMock([UIViewController class]);
-
-  EXPECT_FALSE(delegate_.webState);
-  delegate_.previewingViewControllerForLinkWithURLReturnValue =
-      previewing_view_controller;
-  EXPECT_EQ(previewing_view_controller,
-            bridge_->GetPreviewingViewController(&fake_web_state_, link_url));
-  EXPECT_EQ(&fake_web_state_, delegate_.webState);
-  EXPECT_EQ(link_url, delegate_.linkURL);
+// Tests `OnAuthRequired` for client certs forwarding to delegate which does not
+// implement
+// `webState:didRequestClientCertAuthForProtectionSpace:completionHandler:`
+// method.
+TEST_F(WebStateDelegateBridgeTest,
+       OnClientCertAuthRequiredWithNoDelegateMethod) {
+  __block bool callback_called = false;
+  WebStateDelegate::ClientCertAuthCallback callback =
+      base::BindOnce(^(SecIdentityRef identity) {
+        EXPECT_FALSE(identity);
+        callback_called = true;
+      });
+  empty_delegate_bridge_->OnAuthRequired(&fake_web_state_, nil,
+                                         std::move(callback));
+  EXPECT_TRUE(callback_called);
 }
 
-// Tests |CommitPreviewingViewController| forwarding.
-TEST_F(WebStateDelegateBridgeTest, CommitPreviewingViewController) {
-  UIViewController* previewing_view_controller =
-      OCMClassMock([UIViewController class]);
+// Tests `OnProxyAuthChallenge` forwarding.
+TEST_F(WebStateDelegateBridgeTest, OnProxyAuthChallenge) {
+  if (@available(iOS 18.1, *)) {
+    EXPECT_FALSE([delegate_ proxyAuthenticationRequested]);
+    EXPECT_FALSE([delegate_ webState]);
+    NSURLProtectionSpace* protection_space =
+        [[NSURLProtectionSpace alloc] init];
+    NSURLCredential* credential = [[NSURLCredential alloc] init];
+    NSURLResponse* failure_response = [[NSURLResponse alloc] init];
+    __block bool callback_called = false;
+    WebStateDelegate::ProxyAuthCallback callback = base::BindOnce(
+        ^(NSString* username, NSString* password, NSError* error) {
+          EXPECT_NSEQ(@"user", username);
+          EXPECT_NSEQ(@"password", password);
+          EXPECT_FALSE(error);
+          callback_called = true;
+        });
+    bridge_->OnProxyAuthChallenge(&fake_web_state_, protection_space,
+                                  credential, failure_response,
+                                  std::move(callback));
+    EXPECT_TRUE([delegate_ proxyAuthenticationRequested]);
+    EXPECT_EQ(&fake_web_state_, [delegate_ webState]);
+    EXPECT_TRUE(callback_called);
+  } else {
+    GTEST_SKIP() << "Proxy auth challenges require iOS 18.1+.";
+  }
+}
 
-  EXPECT_FALSE(delegate_.webState);
-  EXPECT_FALSE(delegate_.previewingViewController);
-  bridge_->CommitPreviewingViewController(&fake_web_state_,
-                                          previewing_view_controller);
-  EXPECT_TRUE(delegate_.commitPreviewingViewControllerRequested);
-  EXPECT_EQ(&fake_web_state_, delegate_.webState);
-  EXPECT_EQ(previewing_view_controller, delegate_.previewingViewController);
+// Tests `OnProxyAuthChallenge` forwarding to delegate which does not implement
+// `webState:didRequestProxyAuthForProtectionSpace:...` method.
+TEST_F(WebStateDelegateBridgeTest, OnProxyAuthChallengeWithNoDelegateMethod) {
+  if (@available(iOS 18.1, *)) {
+    __block bool callback_called = false;
+    WebStateDelegate::ProxyAuthCallback callback = base::BindOnce(
+        ^(NSString* username, NSString* password, NSError* error) {
+          EXPECT_FALSE(username);
+          EXPECT_FALSE(password);
+          EXPECT_FALSE(error);
+          callback_called = true;
+        });
+    empty_delegate_bridge_->OnProxyAuthChallenge(&fake_web_state_, nil, nil,
+                                                 nil, std::move(callback));
+    EXPECT_TRUE(callback_called);
+  } else {
+    GTEST_SKIP() << "Proxy auth challenges require iOS 18.1+.";
+  }
+}
+
+// Tests `OnProxyAuthChallenge` fallback to `OnAuthRequired` when delegate
+// implements `webState:didRequestHTTPAuthForProtectionSpace:...` but not
+// `webState:didRequestProxyAuthForProtectionSpace:...`.
+TEST_F(WebStateDelegateBridgeTest, OnProxyAuthChallengeFallbackToHTTPAuth) {
+  if (@available(iOS 18.1, *)) {
+    TestHTTPAuthOnlyWebStateDelegate* http_auth_delegate =
+        [[TestHTTPAuthOnlyWebStateDelegate alloc] init];
+    WebStateDelegateBridge bridge(http_auth_delegate);
+    __block bool callback_called = false;
+    WebStateDelegate::ProxyAuthCallback callback = base::BindOnce(
+        ^(NSString* username, NSString* password, NSError* error) {
+          EXPECT_NSEQ(@"http_user", username);
+          EXPECT_NSEQ(@"http_password", password);
+          EXPECT_FALSE(error);
+          callback_called = true;
+        });
+    bridge.OnProxyAuthChallenge(&fake_web_state_, nil, nil, nil,
+                                std::move(callback));
+    EXPECT_TRUE([http_auth_delegate httpAuthenticationRequested]);
+    EXPECT_TRUE(callback_called);
+  } else {
+    GTEST_SKIP() << "Proxy auth challenges require iOS 18.1+.";
+  }
+}
+
+// Tests `ShouldAllowCopy` forwarding.
+TEST_F(WebStateDelegateBridgeTest, ShouldAllowCopy) {
+  ASSERT_FALSE([delegate_ copyAllowedRequested]);
+  ASSERT_FALSE([delegate_ webState]);
+  __block bool callback_called = false;
+  bridge_->ShouldAllowCopy(&fake_web_state_, base::BindOnce(^(bool allowed) {
+    EXPECT_TRUE(allowed);
+    callback_called = true;
+  }));
+  EXPECT_TRUE([delegate_ copyAllowedRequested]);
+  EXPECT_EQ(&fake_web_state_, [delegate_ webState]);
+  EXPECT_TRUE(callback_called);
+}
+
+// Tests `ShouldAllowCopy` forwarding to delegate which does not
+// implement `webState:shouldAllowCopyWithDecisionHandler:` method.
+TEST_F(WebStateDelegateBridgeTest, ShouldAllowCopyWithNoDelegateMethod) {
+  __block bool callback_called = false;
+  empty_delegate_bridge_->ShouldAllowCopy(nullptr,
+                                          base::BindOnce(^(bool allowed) {
+                                            EXPECT_TRUE(allowed);
+                                            callback_called = true;
+                                          }));
+  EXPECT_TRUE(callback_called);
+}
+
+// Tests `ShouldAllowPaste` forwarding.
+TEST_F(WebStateDelegateBridgeTest, ShouldAllowPaste) {
+  ASSERT_FALSE([delegate_ pasteAllowedRequested]);
+  ASSERT_FALSE([delegate_ webState]);
+  __block bool callback_called = false;
+  bridge_->ShouldAllowPaste(&fake_web_state_, base::BindOnce(^(bool allowed) {
+    EXPECT_TRUE(allowed);
+    callback_called = true;
+  }));
+  EXPECT_TRUE([delegate_ pasteAllowedRequested]);
+  EXPECT_EQ(&fake_web_state_, [delegate_ webState]);
+  EXPECT_TRUE(callback_called);
+}
+
+// Tests `ShouldAllowPaste` forwarding to delegate which does not
+// implement `webState:shouldAllowPasteWithDecisionHandler:` method.
+TEST_F(WebStateDelegateBridgeTest, ShouldAllowPasteWithNoDelegateMethod) {
+  __block bool callback_called = false;
+  empty_delegate_bridge_->ShouldAllowPaste(nullptr,
+                                           base::BindOnce(^(bool allowed) {
+                                             EXPECT_TRUE(allowed);
+                                             callback_called = true;
+                                           }));
+  EXPECT_TRUE(callback_called);
+}
+
+// Tests `ShouldAllowCut` forwarding.
+TEST_F(WebStateDelegateBridgeTest, ShouldAllowCut) {
+  ASSERT_FALSE([delegate_ cutAllowedRequested]);
+  ASSERT_FALSE([delegate_ webState]);
+  __block bool callback_called = false;
+  bridge_->ShouldAllowCut(&fake_web_state_, base::BindOnce(^(bool allowed) {
+    EXPECT_TRUE(allowed);
+    callback_called = true;
+  }));
+  EXPECT_TRUE([delegate_ cutAllowedRequested]);
+  EXPECT_EQ(&fake_web_state_, [delegate_ webState]);
+  EXPECT_TRUE(callback_called);
+}
+
+// Tests `ShouldAllowCut` forwarding to delegate which does not
+// implement `webState:shouldAllowCutWithDecisionHandler:` method.
+TEST_F(WebStateDelegateBridgeTest, ShouldAllowCutWithNoDelegateMethod) {
+  __block bool callback_called = false;
+  empty_delegate_bridge_->ShouldAllowCut(nullptr,
+                                         base::BindOnce(^(bool allowed) {
+                                           EXPECT_TRUE(allowed);
+                                           callback_called = true;
+                                         }));
+  EXPECT_TRUE(callback_called);
+}
+
+// Tests `DidFinishClipboardRead` forwarding.
+TEST_F(WebStateDelegateBridgeTest, DidFinishClipboardRead) {
+  EXPECT_FALSE([delegate_ didFinishClipboardReadRequested]);
+  EXPECT_FALSE([delegate_ webState]);
+  bridge_->DidFinishClipboardRead(&fake_web_state_);
+  EXPECT_TRUE([delegate_ didFinishClipboardReadRequested]);
+  EXPECT_EQ(&fake_web_state_, [delegate_ webState]);
 }
 
 }  // namespace web

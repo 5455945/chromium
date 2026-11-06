@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,7 +16,11 @@ MockLoginScreenClient::MockLoginScreenClient() {
   Shell::Get()->login_screen_controller()->SetClient(this);
 }
 
-MockLoginScreenClient::~MockLoginScreenClient() = default;
+MockLoginScreenClient::~MockLoginScreenClient() {
+  if (Shell::HasInstance()) {
+    Shell::Get()->login_screen_controller()->SetClient(nullptr);
+  }
+}
 
 void MockLoginScreenClient::AuthenticateUserWithPasswordOrPin(
     const AccountId& account_id,

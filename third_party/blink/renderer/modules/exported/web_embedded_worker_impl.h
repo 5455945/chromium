@@ -33,21 +33,24 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/task/single_thread_task_runner.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "third_party/blink/public/mojom/cache_storage/cache_storage.mojom-blink-forward.h"
+#include "third_party/blink/public/mojom/frame/reporting_observer.mojom-blink-forward.h"
 #include "third_party/blink/public/web/web_embedded_worker.h"
 #include "third_party/blink/public/web/web_embedded_worker_start_data.h"
 #include "third_party/blink/renderer/core/workers/global_scope_creation_params.h"
 #include "third_party/blink/renderer/core/workers/worker_clients.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/modules/service_worker/service_worker_content_settings_proxy.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
 class ServiceWorkerInstalledScriptsManager;
 class ServiceWorkerThread;
+class WorkerThread;
 struct CrossThreadFetchClientSettingsObjectData;
 
 // The implementation of WebEmbeddedWorker. This is responsible for starting
@@ -59,6 +62,10 @@ struct CrossThreadFetchClientSettingsObjectData;
 class MODULES_EXPORT WebEmbeddedWorkerImpl final : public WebEmbeddedWorker {
  public:
   explicit WebEmbeddedWorkerImpl(WebServiceWorkerContextClient*);
+
+  WebEmbeddedWorkerImpl(const WebEmbeddedWorkerImpl&) = delete;
+  WebEmbeddedWorkerImpl& operator=(const WebEmbeddedWorkerImpl&) = delete;
+
   ~WebEmbeddedWorkerImpl() override;
 
   // WebEmbeddedWorker overrides.
@@ -72,11 +79,16 @@ class MODULES_EXPORT WebEmbeddedWorkerImpl final : public WebEmbeddedWorker {
           cache_storage,
       CrossVariantMojoRemote<mojom::blink::BrowserInterfaceBrokerInterfaceBase>
           browser_interface_broker,
-      scoped_refptr<base::SingleThreadTaskRunner> initiator_thread_task_runner)
-      override;
+      InterfaceRegistry* interface_registry,
+      scoped_refptr<base::SingleThreadTaskRunner> initiator_thread_task_runner,
+      CrossVariantMojoReceiver<mojom::blink::ReportingObserverInterfaceBase>
+          coep_reporting_observer,
+      CrossVariantMojoReceiver<mojom::blink::ReportingObserverInterfaceBase>
+          dip_reporting_observer) override;
   void TerminateWorkerContext() override;
 
   void WaitForShutdownForTesting();
+  WorkerThread* GetWorkerThreadForTesting() const;
 
  private:
   void StartWorkerThread(
@@ -85,7 +97,12 @@ class MODULES_EXPORT WebEmbeddedWorkerImpl final : public WebEmbeddedWorker {
       std::unique_ptr<ServiceWorkerContentSettingsProxy>,
       mojo::PendingRemote<mojom::blink::CacheStorage>,
       mojo::PendingRemote<mojom::blink::BrowserInterfaceBroker>,
-      scoped_refptr<base::SingleThreadTaskRunner> initiator_thread_task_runner);
+      InterfaceRegistry* interface_registry,
+      scoped_refptr<base::SingleThreadTaskRunner> initiator_thread_task_runner,
+      mojo::PendingReceiver<mojom::blink::ReportingObserver>
+          coep_reporting_observer,
+      mojo::PendingReceiver<mojom::blink::ReportingObserver>
+          dip_reporting_observer);
 
   // Creates a cross-thread copyable outside settings object for top-level
   // worker script fetch.
@@ -94,17 +111,14 @@ class MODULES_EXPORT WebEmbeddedWorkerImpl final : public WebEmbeddedWorker {
       const KURL& script_url,
       const SecurityOrigin*,
       const HttpsState&,
-      network::mojom::IPAddressSpace,
       const WebFetchClientSettingsObject& passed_settings_object);
 
   // Client must remain valid through the entire life time of the worker.
-  WebServiceWorkerContextClient* const worker_context_client_;
+  const raw_ptr<WebServiceWorkerContextClient> worker_context_client_;
 
   std::unique_ptr<ServiceWorkerThread> worker_thread_;
 
   bool asked_to_terminate_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(WebEmbeddedWorkerImpl);
 };
 
 }  // namespace blink

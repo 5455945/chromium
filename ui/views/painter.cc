@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,15 +7,19 @@
 #include <utility>
 
 #include "base/check.h"
-#include "ui/compositor/layer.h"
+#include "third_party/skia/include/core/SkPath.h"
+#include "third_party/skia/include/core/SkRRect.h"
 #include "ui/compositor/layer_delegate.h"
 #include "ui/compositor/layer_owner.h"
+#include "ui/compositor/layer_textured.h"
 #include "ui/compositor/paint_recorder.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/insets_f.h"
 #include "ui/gfx/geometry/rect_f.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/gfx/nine_image_painter.h"
 #include "ui/gfx/scoped_canvas.h"
 #include "ui/views/view.h"
@@ -32,10 +36,15 @@ class SolidRoundRectPainter : public Painter {
  public:
   SolidRoundRectPainter(SkColor bg_color,
                         SkColor stroke_color,
-                        float radius,
+                        gfx::RoundedCornersF radii,
                         const gfx::Insets& insets,
                         SkBlendMode blend_mode,
-                        bool antialias);
+                        bool antialias,
+                        bool should_border_scale);
+
+  SolidRoundRectPainter(const SolidRoundRectPainter&) = delete;
+  SolidRoundRectPainter& operator=(const SolidRoundRectPainter&) = delete;
+
   ~SolidRoundRectPainter() override;
 
   // Painter:
@@ -45,26 +54,27 @@ class SolidRoundRectPainter : public Painter {
  private:
   const SkColor bg_color_;
   const SkColor stroke_color_;
-  const float radius_;
+  const gfx::RoundedCornersF radii_;
   const gfx::Insets insets_;
   const SkBlendMode blend_mode_;
   const bool antialias_;
-
-  DISALLOW_COPY_AND_ASSIGN(SolidRoundRectPainter);
+  const bool should_border_scale_;
 };
 
 SolidRoundRectPainter::SolidRoundRectPainter(SkColor bg_color,
                                              SkColor stroke_color,
-                                             float radius,
+                                             gfx::RoundedCornersF radii,
                                              const gfx::Insets& insets,
                                              SkBlendMode blend_mode,
-                                             bool antialias)
+                                             bool antialias,
+                                             bool should_border_scale)
     : bg_color_(bg_color),
       stroke_color_(stroke_color),
-      radius_(radius),
+      radii_(radii),
       insets_(insets),
       blend_mode_(blend_mode),
-      antialias_(antialias) {}
+      antialias_(antialias),
+      should_border_scale_(should_border_scale) {}
 
 SolidRoundRectPainter::~SolidRoundRectPainter() = default;
 
@@ -78,26 +88,39 @@ void SolidRoundRectPainter::Paint(gfx::Canvas* canvas, const gfx::Size& size) {
 
   gfx::Rect inset_rect(size);
   inset_rect.Inset(insets_);
-  gfx::RectF fill_rect(gfx::ScaleToEnclosingRect(inset_rect, scale));
+  gfx::RectF fill_rect(gfx::ScaleToEnclosedRect(inset_rect, scale));
   gfx::RectF stroke_rect = fill_rect;
-  float scaled_radius = radius_ * scale;
 
   cc::PaintFlags flags;
   flags.setBlendMode(blend_mode_);
-  if (antialias_)
+  if (antialias_) {
     flags.setAntiAlias(true);
+  }
   flags.setStyle(cc::PaintFlags::kFill_Style);
   flags.setColor(bg_color_);
-  canvas->DrawRoundRect(fill_rect, scaled_radius, flags);
+  const gfx::RoundedCornersF scaled_radii =
+      gfx::ScaleRoundedCorners(radii_, scale);
+  const SkPath fill_path =
+      SkPath::RRect(gfx::RoundedRectFToSkRRect(fill_rect, scaled_radii));
+  canvas->DrawPath(fill_path, flags);
 
   if (stroke_color_ != SK_ColorTRANSPARENT) {
-    constexpr float kStrokeWidth = 1.0f;
-    stroke_rect.Inset(gfx::InsetsF(kStrokeWidth / 2));
-    scaled_radius -= kStrokeWidth / 2;
+    const float stroke_width = should_border_scale_ ? scale : 1.0f;
+    const float stroke_inset = stroke_width / 2;
+    stroke_rect.Inset(gfx::InsetsF(stroke_inset));
     flags.setStyle(cc::PaintFlags::kStroke_Style);
-    flags.setStrokeWidth(kStrokeWidth);
+    flags.setStrokeWidth(stroke_width);
     flags.setColor(stroke_color_);
-    canvas->DrawRoundRect(stroke_rect, scaled_radius, flags);
+
+    gfx::RoundedCornersF stroke_corners = scaled_radii;
+    stroke_corners.Set(stroke_corners.upper_left() - stroke_inset,
+                       stroke_corners.upper_right() - stroke_inset,
+                       stroke_corners.lower_right() - stroke_inset,
+                       stroke_corners.lower_left() - stroke_inset);
+
+    const SkPath stroke_path =
+        SkPath::RRect(gfx::RoundedRectFToSkRRect(stroke_rect, stroke_corners));
+    canvas->DrawPath(stroke_path, flags);
   }
 }
 
@@ -106,6 +129,10 @@ void SolidRoundRectPainter::Paint(gfx::Canvas* canvas, const gfx::Size& size) {
 class SolidFocusPainter : public Painter {
  public:
   SolidFocusPainter(SkColor color, int thickness, const gfx::InsetsF& insets);
+
+  SolidFocusPainter(const SolidFocusPainter&) = delete;
+  SolidFocusPainter& operator=(const SolidFocusPainter&) = delete;
+
   ~SolidFocusPainter() override;
 
   // Painter:
@@ -116,8 +143,6 @@ class SolidFocusPainter : public Painter {
   const SkColor color_;
   const int thickness_;
   const gfx::InsetsF insets_;
-
-  DISALLOW_COPY_AND_ASSIGN(SolidFocusPainter);
 };
 
 SolidFocusPainter::SolidFocusPainter(SkColor color,
@@ -144,10 +169,13 @@ class ImagePainter : public Painter {
  public:
   // Constructs an ImagePainter with the specified image resource ids.
   // See CreateImageGridPainter()'s comment regarding image ID count and order.
-  explicit ImagePainter(const int image_ids[]);
+  explicit ImagePainter(const ui::NineImageIds& image_ids);
 
   // Constructs an ImagePainter with the specified image and insets.
   ImagePainter(const gfx::ImageSkia& image, const gfx::Insets& insets);
+
+  ImagePainter(const ImagePainter&) = delete;
+  ImagePainter& operator=(const ImagePainter&) = delete;
 
   ~ImagePainter() override;
 
@@ -157,11 +185,9 @@ class ImagePainter : public Painter {
 
  private:
   std::unique_ptr<gfx::NineImagePainter> nine_painter_;
-
-  DISALLOW_COPY_AND_ASSIGN(ImagePainter);
 };
 
-ImagePainter::ImagePainter(const int image_ids[])
+ImagePainter::ImagePainter(const ui::NineImageIds& image_ids)
     : nine_painter_(ui::CreateNineImagePainter(image_ids)) {}
 
 ImagePainter::ImagePainter(const gfx::ImageSkia& image,
@@ -181,6 +207,10 @@ void ImagePainter::Paint(gfx::Canvas* canvas, const gfx::Size& size) {
 class PaintedLayer : public ui::LayerOwner, public ui::LayerDelegate {
  public:
   explicit PaintedLayer(std::unique_ptr<Painter> painter);
+
+  PaintedLayer(const PaintedLayer&) = delete;
+  PaintedLayer& operator=(const PaintedLayer&) = delete;
+
   ~PaintedLayer() override;
 
   // LayerDelegate:
@@ -190,13 +220,12 @@ class PaintedLayer : public ui::LayerOwner, public ui::LayerDelegate {
 
  private:
   std::unique_ptr<Painter> painter_;
-
-  DISALLOW_COPY_AND_ASSIGN(PaintedLayer);
 };
 
 PaintedLayer::PaintedLayer(std::unique_ptr<Painter> painter)
     : painter_(std::move(painter)) {
-  SetLayer(std::make_unique<ui::Layer>(ui::LAYER_TEXTURED));
+  SetLayer(std::make_unique<ui::LayerTextured>());
+  layer()->SetName("PaintedLayer");
   layer()->set_delegate(this);
 }
 
@@ -222,8 +251,8 @@ Painter::~Painter() = default;
 void Painter::PaintPainterAt(gfx::Canvas* canvas,
                              Painter* painter,
                              const gfx::Rect& rect) {
-  DCHECK(canvas);
-  DCHECK(painter);
+  CHECK(canvas, base::NotFatalUntil::M163);
+  CHECK(painter, base::NotFatalUntil::M163);
   canvas->Save();
   canvas->Translate(rect.OffsetFromOrigin());
   painter->Paint(canvas, rect.size());
@@ -234,8 +263,9 @@ void Painter::PaintPainterAt(gfx::Canvas* canvas,
 void Painter::PaintFocusPainter(View* view,
                                 gfx::Canvas* canvas,
                                 Painter* focus_painter) {
-  if (focus_painter && view->HasFocus())
+  if (focus_painter && view->HasFocus()) {
     PaintPainterAt(canvas, focus_painter, view->GetLocalBounds());
+  }
 }
 
 // static
@@ -246,7 +276,19 @@ std::unique_ptr<Painter> Painter::CreateSolidRoundRectPainter(
     SkBlendMode blend_mode,
     bool antialias) {
   return std::make_unique<SolidRoundRectPainter>(
-      color, SK_ColorTRANSPARENT, radius, insets, blend_mode, antialias);
+      color, SK_ColorTRANSPARENT, gfx::RoundedCornersF(radius), insets,
+      blend_mode, antialias, false);
+}
+
+// static
+std::unique_ptr<Painter> Painter::CreateSolidRoundRectPainterWithVariableRadius(
+    SkColor color,
+    gfx::RoundedCornersF radii,
+    const gfx::Insets& insets,
+    SkBlendMode blend_mode,
+    bool antialias) {
+  return std::make_unique<SolidRoundRectPainter>(
+      color, SK_ColorTRANSPARENT, radii, insets, blend_mode, antialias, false);
 }
 
 // static
@@ -255,9 +297,24 @@ std::unique_ptr<Painter> Painter::CreateRoundRectWith1PxBorderPainter(
     SkColor stroke_color,
     float radius,
     SkBlendMode blend_mode,
-    bool antialias) {
+    bool antialias,
+    bool should_border_scale) {
   return std::make_unique<SolidRoundRectPainter>(
-      bg_color, stroke_color, radius, gfx::Insets(), blend_mode, antialias);
+      bg_color, stroke_color, gfx::RoundedCornersF(radius), gfx::Insets(),
+      blend_mode, antialias, should_border_scale);
+}
+
+// static
+std::unique_ptr<Painter> Painter::CreateRoundRectWith1PxBorderPainter(
+    SkColor bg_color,
+    SkColor stroke_color,
+    gfx::RoundedCornersF radii,
+    SkBlendMode blend_mode,
+    bool antialias,
+    bool should_border_scale) {
+  return std::make_unique<SolidRoundRectPainter>(
+      bg_color, stroke_color, radii, gfx::Insets(), blend_mode, antialias,
+      should_border_scale);
 }
 
 // static
@@ -269,7 +326,7 @@ std::unique_ptr<Painter> Painter::CreateImagePainter(
 
 // static
 std::unique_ptr<Painter> Painter::CreateImageGridPainter(
-    const int image_ids[]) {
+    const ui::NineImageIds& image_ids) {
   return std::make_unique<ImagePainter>(image_ids);
 }
 
@@ -281,7 +338,7 @@ std::unique_ptr<Painter> Painter::CreateSolidFocusPainter(
   // on the thickness, callers had to add 1 to the bottom and right insets.
   // Subtract that here so it works the same way with the new
   // Canvas::DrawSolidFocusRect.
-  const gfx::Insets corrected_insets = insets - gfx::Insets(0, 0, 1, 1);
+  const gfx::InsetsF corrected_insets(insets - gfx::Insets::TLBR(0, 0, 1, 1));
   return std::make_unique<SolidFocusPainter>(color, 1, corrected_insets);
 }
 

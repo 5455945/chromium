@@ -1,17 +1,17 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/ash/accessibility/accessibility_controller_client.h"
 
-#include "ash/components/audio/sounds.h"
+#include <optional>
+
+#include "ash/accessibility/accessibility_controller.h"
 #include "ash/public/cpp/accessibility_controller_enums.h"
-#include "base/macros.h"
 #include "base/time/time.h"
-#include "chrome/browser/ui/ash/accessibility/fake_accessibility_controller.h"
-#include "content/public/test/browser_task_environment.h"
+#include "chrome/test/base/chrome_ash_test_base.h"
+#include "chromeos/ash/components/audio/sounds.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/gfx/geometry/point_f.h"
 
@@ -19,12 +19,17 @@ namespace {
 
 using ::ash::Sound;
 
-constexpr base::TimeDelta kShutdownSoundDuration =
-    base::TimeDelta::FromMilliseconds(1000);
+constexpr base::TimeDelta kShutdownSoundDuration = base::Milliseconds(1000);
 
 class FakeAccessibilityControllerClient : public AccessibilityControllerClient {
  public:
   FakeAccessibilityControllerClient() = default;
+
+  FakeAccessibilityControllerClient(const FakeAccessibilityControllerClient&) =
+      delete;
+  FakeAccessibilityControllerClient& operator=(
+      const FakeAccessibilityControllerClient&) = delete;
+
   ~FakeAccessibilityControllerClient() override = default;
 
   // AccessibilityControllerClient:
@@ -62,7 +67,7 @@ class FakeAccessibilityControllerClient : public AccessibilityControllerClient {
   }
 
   ash::AccessibilityAlert last_a11y_alert_ = ash::AccessibilityAlert::NONE;
-  absl::optional<Sound> last_sound_key_;
+  std::optional<Sound> last_sound_key_;
   ax::mojom::Gesture last_a11y_gesture_ = ax::mojom::Gesture::kNone;
   gfx::PointF last_a11y_gesture_point_;
   int toggle_dictation_count_ = 0;
@@ -77,28 +82,28 @@ class FakeAccessibilityControllerClient : public AccessibilityControllerClient {
 
  private:
   bool dictation_on_ = false;
-  DISALLOW_COPY_AND_ASSIGN(FakeAccessibilityControllerClient);
 };
 
 }  // namespace
 
-class AccessibilityControllerClientTest : public testing::Test {
+class AccessibilityControllerClientTest : public ChromeAshTestBase {
  public:
   AccessibilityControllerClientTest() = default;
+
+  AccessibilityControllerClientTest(const AccessibilityControllerClientTest&) =
+      delete;
+  AccessibilityControllerClientTest& operator=(
+      const AccessibilityControllerClientTest&) = delete;
+
   ~AccessibilityControllerClientTest() override = default;
-
- private:
-  content::BrowserTaskEnvironment task_environment_;
-
-  DISALLOW_COPY_AND_ASSIGN(AccessibilityControllerClientTest);
 };
 
 TEST_F(AccessibilityControllerClientTest, MethodCalls) {
-  FakeAccessibilityController controller;
   FakeAccessibilityControllerClient client;
 
-  // Tests client is set.
-  EXPECT_TRUE(controller.was_client_set());
+  ash::AccessibilityController* controller =
+      ash::AccessibilityController::Get();
+  controller->SetClient(&client);
 
   // Tests TriggerAccessibilityAlert method call.
   const ash::AccessibilityAlert alert = ash::AccessibilityAlert::SCREEN_ON;

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,6 @@
 
 #include "base/command_line.h"
 #include "base/logging.h"
-#include "base/macros.h"
 #include "base/strings/string_number_conversions.h"
 #include "chromecast/base/chromecast_switches.h"
 #include "chromecast/public/cast_egl_platform.h"
@@ -77,28 +76,35 @@ void GLOzoneEglCast::TerminateDisplay() {
       reinterpret_cast<EGLGetDisplayFn>(dlsym(egl_lib_handle, "eglGetDisplay"));
   EGLTerminateFn terminate =
       reinterpret_cast<EGLTerminateFn>(dlsym(egl_lib_handle, "eglTerminate"));
-  DCHECK(get_display);
-  DCHECK(terminate);
+  CHECK(get_display, base::NotFatalUntil::M163);
+  CHECK(terminate, base::NotFatalUntil::M163);
 
   EGLDisplay display = get_display(GetNativeDisplay().GetDisplay());
-  DCHECK_NE(display, EGL_NO_DISPLAY);
+  CHECK_NE(display, EGL_NO_DISPLAY, base::NotFatalUntil::M163);
 
   EGLBoolean terminate_result = terminate(display);
-  DCHECK_EQ(terminate_result, static_cast<EGLBoolean>(EGL_TRUE));
+  CHECK_EQ(terminate_result, static_cast<EGLBoolean>(EGL_TRUE),
+           base::NotFatalUntil::M163);
 }
 
 scoped_refptr<gl::GLSurface> GLOzoneEglCast::CreateViewGLSurface(
+    gl::GLDisplay* display,
     gfx::AcceleratedWidget widget) {
-  // Verify requested widget dimensions match our current display size.
-  DCHECK_EQ(static_cast<int>(widget >> 16), display_size_.width());
-  DCHECK_EQ(static_cast<int>(widget & 0xffff), display_size_.height());
+  // Verify requested widget dimensions are valid. Note that `display_size_`
+  // may be updated dynamically by `ResizeDisplay()` when the screen rotates or
+  // resizes, while `widget` encodes the initial window dimensions.
+  CHECK_GT(static_cast<int>(widget >> 16), 0, base::NotFatalUntil::M163);
+  CHECK_GT(static_cast<int>(widget & 0xffff), 0, base::NotFatalUntil::M163);
 
-  return gl::InitializeGLSurface(new GLSurfaceCast(widget, this));
+  return gl::InitializeGLSurface(
+      new GLSurfaceCast(display->GetAs<gl::GLDisplayEGL>(), widget, this));
 }
 
 scoped_refptr<gl::GLSurface> GLOzoneEglCast::CreateOffscreenGLSurface(
+    gl::GLDisplay* display,
     const gfx::Size& size) {
-  return gl::InitializeGLSurface(new gl::PbufferGLSurfaceEGL(size));
+  return gl::InitializeGLSurface(
+      new gl::PbufferGLSurfaceEGL(display->GetAs<gl::GLDisplayEGL>(), size));
 }
 
 gl::EGLDisplayPlatform GLOzoneEglCast::GetNativeDisplay() {
@@ -128,8 +134,7 @@ intptr_t GLOzoneEglCast::GetNativeWindow() {
 }
 
 bool GLOzoneEglCast::ResizeDisplay(gfx::Size size) {
-  DCHECK_EQ(size.width(), display_size_.width());
-  DCHECK_EQ(size.height(), display_size_.height());
+  display_size_ = size;
   return true;
 }
 
@@ -137,17 +142,27 @@ bool GLOzoneEglCast::LoadGLES2Bindings(
     const gl::GLImplementationParts& implementation) {
   InitializeHardwareIfNeeded();
 
-  void* lib_egl = egl_platform_->GetEglLibrary();
-  void* lib_gles2 = egl_platform_->GetGles2Library();
   gl::GLGetProcAddressProc gl_proc = reinterpret_cast<gl::GLGetProcAddressProc>(
       egl_platform_->GetGLProcAddressProc());
-  if (!lib_egl || !lib_gles2 || !gl_proc) {
+
+  if (!gl_proc) {
     return false;
   }
 
-  gl::SetGLGetProcAddressProc(gl_proc);
+  // The starboard version does not use lib_egl or lib_gles2. Lookups are done
+  // via gl_proc.
+#ifndef IS_STARBOARD
+  void* lib_egl = egl_platform_->GetEglLibrary();
+  void* lib_gles2 = egl_platform_->GetGles2Library();
+
+  if (!lib_egl || !lib_gles2) {
+    return false;
+  }
   gl::AddGLNativeLibrary(lib_egl);
   gl::AddGLNativeLibrary(lib_gles2);
+#endif
+
+  gl::SetGLGetProcAddressProc(gl_proc);
   return true;
 }
 

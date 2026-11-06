@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,15 +7,14 @@
 namespace blink {
 
 class KeyboardLayoutMapIterationSource final
-    : public PairIterable<String, String>::IterationSource {
+    : public PairSyncIterable<KeyboardLayoutMap>::IterationSource {
  public:
-  KeyboardLayoutMapIterationSource(const KeyboardLayoutMap& map)
+  explicit KeyboardLayoutMapIterationSource(const KeyboardLayoutMap& map)
       : map_(map), iterator_(map_->Map().begin()) {}
 
-  bool Next(ScriptState* script_state,
-            String& map_key,
-            String& map_value,
-            ExceptionState&) override {
+  bool FetchNextItem(ScriptState* script_state,
+                     String& map_key,
+                     String& map_value) override {
     if (iterator_ == map_->Map().end())
       return false;
     map_key = iterator_->key;
@@ -26,7 +25,7 @@ class KeyboardLayoutMapIterationSource final
 
   void Trace(Visitor* visitor) const override {
     visitor->Trace(map_);
-    PairIterable<String, String>::IterationSource::Trace(visitor);
+    PairSyncIterable<KeyboardLayoutMap>::IterationSource::Trace(visitor);
   }
 
  private:
@@ -38,15 +37,14 @@ class KeyboardLayoutMapIterationSource final
 KeyboardLayoutMap::KeyboardLayoutMap(const HashMap<String, String>& map)
     : layout_map_(map) {}
 
-PairIterable<String, String>::IterationSource*
-KeyboardLayoutMap::StartIteration(ScriptState*, ExceptionState&) {
+PairSyncIterable<KeyboardLayoutMap>::IterationSource*
+KeyboardLayoutMap::CreateIterationSource(ScriptState*) {
   return MakeGarbageCollected<KeyboardLayoutMapIterationSource>(*this);
 }
 
 bool KeyboardLayoutMap::GetMapEntry(ScriptState*,
                                     const String& key,
-                                    String& value,
-                                    ExceptionState&) {
+                                    String& value) {
   auto it = layout_map_.find(key);
   if (it == layout_map_.end())
     return false;

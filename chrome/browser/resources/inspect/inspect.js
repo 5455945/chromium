@@ -1,8 +1,20 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {$} from 'chrome://resources/js/util.m.js';
+import {assert} from 'chrome://resources/js/assert.js';
+
+function $(id) {
+  // Disable getElementById restriction here, because this UI uses non valid
+  // selectors that don't work with querySelector().
+  // eslint-disable-next-line no-restricted-properties
+  const el = document.getElementById(id);
+  if (!el) {
+    return null;
+  }
+  assert(el instanceof HTMLElement);
+  return el;
+}
 
 const MIN_VERSION_TAB_CLOSE = 25;
 const MIN_VERSION_TARGET_ID = 26;
@@ -14,13 +26,9 @@ let HOST_CHROME_VERSION;
 const queryParamsObject = {};
 let browserInspector = 'chrome://tracing';
 let browserInspectorTitle = 'trace';
+let staleDataCounter = 0;
 
 (function() {
-const chromeMatch = navigator.userAgent.match(/(?:^|\W)Chrome\/(\S+)/);
-if (chromeMatch && chromeMatch.length > 1) {
-  HOST_CHROME_VERSION = chromeMatch[1].split('.').map(s => Number(s) || 0);
-}
-
 const queryParams = window.location.search;
 if (!queryParams) {
   return;
@@ -71,7 +79,7 @@ function removeChildren(element_id) {
 
 function onload() {
   const tabContents = document.querySelectorAll('#content > div');
-  for (let i = 0; i != tabContents.length; i++) {
+  for (let i = 0; i !== tabContents.length; i++) {
     const tabContent = tabContents[i];
     const tabName = tabContent.querySelector('.content-header').textContent;
 
@@ -88,6 +96,7 @@ function onload() {
   onHashChange();
   initSettings();
   sendCommand('init-ui');
+  initStaleDataWatch();
 }
 
 function onHashChange() {
@@ -105,16 +114,19 @@ function selectTab(id) {
   const tabContents = document.querySelectorAll('#content > div');
   const tabHeaders = $('navigation').querySelectorAll('.tab-header');
   let found = false;
-  for (let i = 0; i != tabContents.length; i++) {
+  for (let i = 0; i !== tabContents.length; i++) {
     const tabContent = tabContents[i];
     const tabHeader = tabHeaders[i];
-    if (tabContent.id == id) {
+    const tabButton = tabHeader.querySelector('button');
+    if (tabContent.id === id) {
       tabContent.classList.add('selected');
       tabHeader.classList.add('selected');
+      tabButton.setAttribute('aria-current', 'true');
       found = true;
     } else {
       tabContent.classList.remove('selected');
       tabHeader.classList.remove('selected');
+      tabButton.removeAttribute('aria-current');
     }
   }
   if (!found) {
@@ -125,9 +137,9 @@ function selectTab(id) {
 }
 
 function populateTargets(source, data) {
-  if (source == 'local') {
+  if (source === 'local') {
     populateLocalTargets(data);
-  } else if (source == 'remote') {
+  } else if (source === 'remote') {
     populateRemoteTargets(data);
   } else {
     console.error('Unknown source type: ' + source);
@@ -148,6 +160,11 @@ function showNativeUILaunchButton(enabled) {
   $('launch-ui-devtools').disabled = !enabled;
   $('ui-devtools-disabled-text').hidden = enabled;
   $('ui-devtools-enabled-text').hidden = !enabled;
+}
+
+function setHostVersion(version) {
+  version = version.split('.').map(s => Number(s) || 0);
+  HOST_CHROME_VERSION = version;
 }
 
 function populateLocalTargets(data) {
@@ -183,7 +200,7 @@ function showIncognitoWarning() {
 
 function alreadyDisplayed(element, data) {
   const json = JSON.stringify(data);
-  if (element.cachedJSON == json) {
+  if (element.cachedJSON === json) {
     return true;
   }
   element.cachedJSON = json;
@@ -219,6 +236,10 @@ function updateUsernameVisibility(deviceSection) {
 }
 
 function populateRemoteTargets(devices) {
+  staleDataCounter = 0;
+  $('devices-stale').hidden = true;
+  $('devices-not-responding').hidden = true;
+
   if (!devices) {
     return;
   }
@@ -229,10 +250,10 @@ function populateRemoteTargets(devices) {
   }
 
   function browserCompare(a, b) {
-    if (a.adbBrowserName != b.adbBrowserName) {
+    if (a.adbBrowserName !== b.adbBrowserName) {
       return a.adbBrowserName < b.adbBrowserName;
     }
-    if (a.adbBrowserVersion != b.adbBrowserVersion) {
+    if (a.adbBrowserVersion !== b.adbBrowserVersion) {
       return a.adbBrowserVersion < b.adbBrowserVersion;
     }
     return a.id < b.id;
@@ -316,9 +337,10 @@ function populateRemoteTargets(devices) {
 
     deviceSection.querySelector('.device-name').textContent = device.adbModel;
     deviceSection.querySelector('.device-auth').textContent =
-        device.adbConnected ? '' :
+        device.adbConnected ? '' : device.adbUnauthorized ?
                               'Pending authentication: please accept ' +
-            'debugging session on the device.';
+            'debugging session on the device.' : device.adbLocked ?
+            'Device is locked.' : 'Device is not responding.';
 
     const browserList = deviceSection.querySelector('.browsers');
     const newBrowserIds = device.browsers.map(function(b) {
@@ -349,7 +371,12 @@ function populateRemoteTargets(devices) {
         const browserName = document.createElement('div');
         browserName.className = 'browser-name';
         browserHeader.appendChild(browserName);
-        browserName.textContent = browser.adbBrowserName;
+        // Localhost targets are always named "Target".
+        // Let's use the ID instead as it's more expressive.
+        browserName.textContent = browser.adbBrowserName === 'Target' ?
+            browser.id :
+            browser.adbBrowserName;
+
         if (browser.adbBrowserVersion) {
           browserName.textContent += ' (' + browser.adbBrowserVersion + ')';
         }
@@ -385,7 +412,7 @@ function populateRemoteTargets(devices) {
             input.value = '';
           }.bind(null, browser.source, browser.id, newPageUrl);
           newPageUrl.addEventListener('keyup', function(handler, event) {
-            if (event.key == 'Enter' && event.target.value) {
+            if (event.key === 'Enter' && event.target.value) {
               handler();
             }
           }.bind(null, openHandler), true);
@@ -451,12 +478,11 @@ function populateRemoteTargets(devices) {
                 row, 'close', sendTargetCommand.bind(null, 'close', page),
                 false);
           }
-          if (browserNeedsFallback) {
-            addActionLink(
-                row, 'inspect fallback',
-                sendTargetCommand.bind(null, 'inspect-fallback', page),
-                page.hasNoUniqueId || page.adbAttachedForeign);
-          }
+          addActionLink(
+              row, 'inspect fallback',
+              sendTargetCommand.bind(null, 'inspect-fallback', page),
+              page.hasNoUniqueId || page.adbAttachedForeign,
+              'Best-effort fallback to debug the target using this browser instance\'s potentially mismatching DevTools version.');
         }
       }
       updateBrowserVisibility(browserSection);
@@ -500,6 +526,31 @@ function addGuestViews(row, guests) {
 function addToWorkersList(data) {
   const row =
       addTargetToList(data, $('workers-list'), ['name', 'description', 'url']);
+
+  let description;
+  try {
+    description = JSON.parse(data.description);
+  } catch (e) {
+    // Not a JSON description, ignore and proceed.
+  }
+
+  if (description && description.extendedLifetime) {
+    const nameElement = row.querySelector('.name');
+    if (nameElement) {
+      const label = document.createElement('span');
+      label.className = 'extended-lifetime-label';
+      label.textContent = 'Extended Lifetime';
+      nameElement.appendChild(document.createTextNode(' '));
+      nameElement.appendChild(label);
+    }
+
+    // Hide the raw JSON description.
+    const descriptionElement = row.querySelector('.description');
+    if (descriptionElement) {
+      descriptionElement.style.display = 'none';
+    }
+  }
+
   addActionLink(
       row, 'terminate', sendTargetCommand.bind(null, 'close', data), false);
 }
@@ -522,7 +573,7 @@ function addToNativeUIList(data) {
 function formatValue(data, property) {
   let value = data[property];
 
-  if (property == 'name' && value == '') {
+  if (property === 'name' && value === '') {
     value = 'untitled';
   }
 
@@ -540,7 +591,9 @@ function formatValue(data, property) {
 function addFavicon(row, data) {
   const favicon = document.createElement('img');
   if (data['faviconUrl']) {
-    favicon.src = data['faviconUrl'];
+    const internalURL = new URL('chrome://favicon2/');
+    internalURL.searchParams.set('iconUrl', data['faviconUrl']);
+    favicon.src = internalURL;
   }
   const propertiesBox = row.querySelector('.properties-box');
   propertiesBox.insertBefore(favicon, propertiesBox.firstChild);
@@ -686,10 +739,13 @@ function addTargetToList(data, list, properties) {
   return row;
 }
 
-function addActionLink(row, text, handler, opt_disabled) {
+function addActionLink(row, text, handler, opt_disabled, opt_title) {
   const link = document.createElement('span');
   link.classList.add('action');
   link.setAttribute('tabindex', 1);
+  if (opt_title) {
+    link.title = opt_title;
+  }
   if (opt_disabled) {
     link.classList.add('disabled');
   } else {
@@ -699,7 +755,7 @@ function addActionLink(row, text, handler, opt_disabled) {
   link.textContent = text;
   link.addEventListener('click', handler, true);
   function handleKey(e) {
-    if (e.key == 'Enter' || e.key == ' ') {
+    if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       handler();
     }
@@ -710,6 +766,8 @@ function addActionLink(row, text, handler, opt_disabled) {
 
 function initSettings() {
   checkboxSendsCommand(
+      'remote-debugging-enabled', 'set-remote-debugging-enabled');
+  checkboxSendsCommand(
       'discover-usb-devices-enable', 'set-discover-usb-devices-enabled');
   checkboxSendsCommand('port-forwarding-enable', 'set-port-forwarding-enabled');
   checkboxSendsCommand(
@@ -717,6 +775,8 @@ function initSettings() {
 
   $('launch-ui-devtools')
       .addEventListener('click', sendCommand.bind(null, 'launch-ui-devtools'));
+  checkboxSendsCommand('bubble-locking-checkbox', 'set-bubble-locking');
+
   $('port-forwarding-config-open')
       .addEventListener('click', openPortForwardingConfig);
   $('tcp-discovery-config-open').addEventListener('click', openTargetsConfig);
@@ -725,6 +785,31 @@ function initSettings() {
   });
   $('node-frontend')
       .addEventListener('click', sendCommand.bind(null, 'open-node-frontend'));
+}
+
+function initStaleDataWatch() {
+  let lastFocus = true;
+
+  setInterval(() => {
+    const newFocus = document.hasFocus();
+    if (newFocus !== lastFocus) {
+      lastFocus = newFocus;
+      sendCommand('set-focus', newFocus);
+      staleDataCounter = 0;
+    } else {
+      staleDataCounter++;
+      if (staleDataCounter > 3) {
+        // Unhide appropriate message.
+        if (newFocus) {
+          $('devices-stale').hidden = true;
+          $('devices-not-responding').hidden = false;
+        } else {
+          $('devices-stale').hidden = false;
+          $('devices-not-responding').hidden = true;
+        }
+      }
+    }
+  }, 5000);
 }
 
 function checkboxHandler(command, event) {
@@ -739,7 +824,7 @@ function handleKey(event) {
   switch (event.keyCode) {
     case 13:  // Enter
       const dialog = $('config-dialog');
-      if (event.target.nodeName == 'INPUT') {
+      if (event.target.nodeName === 'INPUT') {
         const line = event.target.parentNode;
         if (!line.classList.contains('fresh') ||
             line.classList.contains('empty')) {
@@ -751,6 +836,8 @@ function handleKey(event) {
       } else {
         dialog.commit(true);
       }
+      break;
+    default:
       break;
   }
 }
@@ -859,7 +946,7 @@ function openTargetsConfig() {
 
 function filterList(fieldSelectors, callback) {
   const lines = $('config-dialog').querySelectorAll('.config-list-row');
-  for (let i = 0; i != lines.length; i++) {
+  for (let i = 0; i !== lines.length; i++) {
     const line = lines[i];
     const values = [];
     for (const selector of fieldSelectors) {
@@ -871,7 +958,7 @@ function filterList(fieldSelectors, callback) {
       }
       values.push(value);
     }
-    if (values.length == fieldSelectors.length) {
+    if (values.length === fieldSelectors.length) {
       callback.apply(null, values);
     }
   }
@@ -907,10 +994,44 @@ function updateTCPDiscoveryConfig(config) {
   $('tcp-discovery-config-open').disabled = !config;
 }
 
+function updateBubbleLockingCheckbox(enabled) {
+  updateCheckbox('bubble-locking-checkbox', enabled);
+}
+
+function updateRemoteDebuggingEnabled(enabled, allowed, hide, address) {
+  const remoteDebugging = $('remote-debugging');
+  const tab = $('tab-remote-debugging');
+  if (hide) {
+    remoteDebugging.hidden = true;
+    if (tab) {
+      tab.hidden = true;
+    }
+    return;
+  }
+  remoteDebugging.hidden = false;
+  if (tab) {
+    tab.hidden = false;
+  }
+
+  const checkbox = $('remote-debugging-enabled');
+  checkbox.checked = !!enabled;
+  checkbox.disabled = !allowed;
+
+  const addressContainer = $('remote-debugging-address-container');
+  if (enabled) {
+    const addressInput =
+        /** @type {!HTMLElement} */ ($('remote-debugging-address'));
+    addressInput.textContent = address ? address : 'starting…';
+    addressContainer.hidden = false;
+  } else {
+    addressContainer.hidden = true;
+  }
+}
+
 function appendRow(list, lineFactory, key, value) {
   const line = lineFactory(key, value);
   line.lastElementChild.addEventListener('keydown', function(e) {
-    if (e.key == 'Tab' && !hasKeyModifiers(e) &&
+    if (e.key === 'Tab' && !hasKeyModifiers(e) &&
         line.classList.contains('fresh') && !line.classList.contains('empty')) {
       // Tabbing forward on the fresh line, try create a new empty one.
       if (commitFreshLineIfValid(true)) {
@@ -951,11 +1072,11 @@ function validatePort(input) {
   }
 
   const inputs = document.querySelectorAll('input.port:not(.invalid)');
-  for (let i = 0; i != inputs.length; ++i) {
-    if (inputs[i] == input) {
+  for (let i = 0; i !== inputs.length; ++i) {
+    if (inputs[i] === input) {
       break;
     }
-    if (parseInt(inputs[i].value) == port) {
+    if (parseInt(inputs[i].value) === port) {
       return false;
     }
   }
@@ -963,11 +1084,12 @@ function validatePort(input) {
 }
 
 function validateLocation(input) {
-  const match = input.value.match(/^([a-zA-Z0-9\.\-_]+):(\d+)$/);
+  const match =
+      input.value.match(/^(?:[a-zA-Z0-9\.\-_]+|\[[a-fA-F0-9:]+\]):(\d+)$/);
   if (!match) {
     return false;
   }
-  const port = parseInt(match[2]);
+  const port = parseInt(match[1]);
   return port <= 65535;
 }
 
@@ -1008,8 +1130,8 @@ function createConfigField(value, className, hint, validate) {
 function checkEmptyLine(line) {
   const inputs = line.querySelectorAll('input');
   let empty = true;
-  for (let i = 0; i != inputs.length; i++) {
-    if (inputs[i].value != '') {
+  for (let i = 0; i !== inputs.length; i++) {
+    if (inputs[i].value !== '') {
       empty = false;
     }
   }
@@ -1142,11 +1264,14 @@ Object.assign(window, {
   updatePortForwardingConfig,
   updateTCPDiscoveryEnabled,
   updateTCPDiscoveryConfig,
+  updateBubbleLockingCheckbox,
+  updateRemoteDebuggingEnabled,
   populateNativeUITargets,
   populateTargets,
   populatePortStatus,
   showIncognitoWarning,
   showNativeUILaunchButton,
+  setHostVersion,
 });
 
 document.addEventListener('DOMContentLoaded', onload);

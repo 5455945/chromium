@@ -1,4 +1,4 @@
-# Copyright 2014 The Chromium Authors. All rights reserved.
+# Copyright 2014 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -21,8 +21,7 @@ static_library("instance_id") {
   deps = [
     "//base",
     "//components/gcm_driver:gcm_buildflags",
-    "//components/keyed_service/core:core",
-    "//components/prefs:prefs",
+    "//components/keyed_service/core",
     "//crypto",
     "//services/network/public/mojom",
   ]
@@ -53,6 +52,7 @@ static_library("test_support") {
   deps = [
     "//base",
     "//components/gcm_driver",
+    "//net",
     "//testing/gtest",
   ]
 

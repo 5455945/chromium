@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,11 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/sequence_checker.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
 
 namespace ash {
 namespace power {
@@ -70,9 +71,6 @@ class AlsReader {
   friend LightProviderMojo;
   friend LightSamplesObserver;
 
-  // Called when we've retrieved the number of ALS present.
-  void OnNumAlsRetrieved(int num_als);
-
   void SetLux(int lux);
   void SetAlsInitStatus(AlsInitStatus status);
   void SetAlsInitStatusForTesting(AlsInitStatus status);
@@ -98,7 +96,7 @@ class LightProviderInterface {
  protected:
   explicit LightProviderInterface(AlsReader* als_reader);
 
-  AlsReader* als_reader_;
+  raw_ptr<AlsReader, DanglingUntriaged> als_reader_;
 };
 
 }  // namespace auto_screen_brightness

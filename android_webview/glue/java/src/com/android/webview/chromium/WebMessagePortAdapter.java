@@ -1,24 +1,22 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package com.android.webview.chromium;
 
-import android.annotation.TargetApi;
-import android.os.Build;
 import android.os.Handler;
 import android.webkit.WebMessage;
 import android.webkit.WebMessagePort;
 
+import org.chromium.content_public.browser.MessagePayload;
 import org.chromium.content_public.browser.MessagePort;
 
 /**
  * This class is used to convert a WebMessagePort to a MessagePort in chromium
  * world.
  */
-@TargetApi(Build.VERSION_CODES.M)
 public class WebMessagePortAdapter extends WebMessagePort {
-    private MessagePort mPort;
+    private final MessagePort mPort;
 
     public WebMessagePortAdapter(MessagePort port) {
         mPort = port;
@@ -26,7 +24,8 @@ public class WebMessagePortAdapter extends WebMessagePort {
 
     @Override
     public void postMessage(WebMessage message) {
-        mPort.postMessage(message.getData(), toMessagePorts(message.getPorts()));
+        mPort.postMessage(
+                new MessagePayload(message.getData()), toMessagePorts(message.getPorts()));
     }
 
     @Override
@@ -41,13 +40,13 @@ public class WebMessagePortAdapter extends WebMessagePort {
 
     @Override
     public void setWebMessageCallback(final WebMessageCallback callback, final Handler handler) {
-        mPort.setMessageCallback(new MessagePort.MessageCallback() {
-            @Override
-            public void onMessage(String message, MessagePort[] ports) {
-                callback.onMessage(WebMessagePortAdapter.this,
-                        new WebMessage(message, fromMessagePorts(ports)));
-            }
-        }, handler);
+        mPort.setMessageCallback(
+                (messagePayload, ports, senderOrigin) -> {
+                    callback.onMessage(
+                            WebMessagePortAdapter.this,
+                            new WebMessage(messagePayload.getAsString(), fromMessagePorts(ports)));
+                },
+                handler);
     }
 
     public MessagePort getPort() {

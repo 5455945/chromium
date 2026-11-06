@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,9 +23,17 @@ void MessageCenter::Initialize() {
 // static
 void MessageCenter::Initialize(
     std::unique_ptr<LockScreenController> lock_screen_controller) {
-  DCHECK(!g_message_center);
-  DCHECK(lock_screen_controller);
+  CHECK(!g_message_center, base::NotFatalUntil::M163);
+  CHECK(lock_screen_controller, base::NotFatalUntil::M163);
   g_message_center = new MessageCenterImpl(std::move(lock_screen_controller));
+}
+
+// static
+void MessageCenter::InitializeForTesting(
+    std::unique_ptr<MessageCenter> message_center) {
+  CHECK(!g_message_center, base::NotFatalUntil::M163);
+  CHECK(message_center, base::NotFatalUntil::M163);
+  g_message_center = message_center.release();
 }
 
 // static
@@ -35,13 +43,13 @@ MessageCenter* MessageCenter::Get() {
 
 // static
 void MessageCenter::Shutdown() {
-  DCHECK(g_message_center);
+  CHECK(g_message_center, base::NotFatalUntil::M163);
   delete g_message_center;
   g_message_center = nullptr;
 }
 
-MessageCenter::MessageCenter() {}
+MessageCenter::MessageCenter() = default;
 
-MessageCenter::~MessageCenter() {}
+MessageCenter::~MessageCenter() = default;
 
 }  // namespace message_center

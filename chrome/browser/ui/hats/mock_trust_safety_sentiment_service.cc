@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,6 +10,8 @@
 #include "components/keyed_service/core/keyed_service.h"
 #include "content/public/browser/browser_context.h"
 
+using ::testing::NiceMock;
+
 MockTrustSafetySentimentService::MockTrustSafetySentimentService(
     Profile* profile)
     : TrustSafetySentimentService(profile) {}
@@ -18,6 +20,6 @@ MockTrustSafetySentimentService::~MockTrustSafetySentimentService() = default;
 
 std::unique_ptr<KeyedService> BuildMockTrustSafetySentimentService(
     content::BrowserContext* context) {
-  return std::make_unique<MockTrustSafetySentimentService>(
+  return std::make_unique<NiceMock<MockTrustSafetySentimentService>>(
       static_cast<Profile*>(context));
 }

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,13 @@
 
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/values.h"
 #include "chrome/browser/ui/startup/buildflags.h"
 
 namespace base {
 class CommandLine;
-class Value;
 }  // namespace base
 
 namespace content {
@@ -36,7 +36,7 @@ class WebDialogView;
 // 2. Any extra scopes provided through flags.
 // 3. A URL loader that will be used by various OAuth fetchers.
 using HandleGcpwSigninCompleteResult =
-    base::OnceCallback<void(base::Value,
+    base::OnceCallback<void(base::DictValue,
                             const std::string& additional_mdm_oauth_scopes,
                             scoped_refptr<network::SharedURLLoaderFactory>)>;
 
@@ -58,11 +58,5 @@ views::WebDialogView* ShowCredentialProviderSigninDialog(
     const base::CommandLine& command_line,
     content::BrowserContext* context,
     HandleGcpwSigninCompleteResult signin_complete_handler);
-
-#if BUILDFLAG(CAN_TEST_GCPW_SIGNIN_STARTUP)
-// Allow displaying of GCPW signin dialog when not under the winlogon desktop
-// for testing purposes.
-void EnableGcpwSigninDialogForTesting(bool enable);
-#endif  // BUILDFLAG(CAN_TEST_GCPW_SIGNIN_STARTUP)
 
 #endif  // CHROME_BROWSER_UI_STARTUP_CREDENTIAL_PROVIDER_SIGNIN_DIALOG_WIN_H_

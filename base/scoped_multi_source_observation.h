@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,10 @@
 
 #include <stddef.h>
 
-#include <vector>
-
 #include "base/check.h"
-#include "base/containers/contains.h"
-#include "base/ranges/algorithm.h"
+#include "base/memory/raw_ptr.h"
+#include "base/scoped_observation_traits.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
 namespace base {
 
@@ -34,23 +33,22 @@ namespace base {
 //     foo_observations_.AddObservation(foo);
 //   }
 //
-// For cases with methods not named AddObserver/RemoveObserver:
+////////////////////////////////////////////////////////////////////////////////
 //
-//   class MyFooStateObserver : public FooStateObserver {
-//     ...
-//    private:
-//      ScopedMultiSourceObservation<Foo,
-//                                  FooStateObserver,
-//                                  &Foo::AddStateObserver,
-//                                  &Foo::RemoveStateObserver>
-//          foo_observations_{this};
-//   };
-template <class Source,
-          class Observer,
-          void (Source::*AddObsFn)(Observer*) = &Source::AddObserver,
-          void (Source::*RemoveObsFn)(Observer*) = &Source::RemoveObserver>
+// By default `ScopedMultiSourceObservation` only works with sources that expose
+// `AddObserver` and `RemoveObserver`. However, it's also possible to
+// adapt it to custom function names (say `AddFoo` and `RemoveFoo` accordingly)
+// by tailoring ScopedObservationTraits<> for the given Source and Observer --
+// see `base/scoped_observation_traits.h` for details.
+//
+
+template <class Source, class Observer>
 class ScopedMultiSourceObservation {
  public:
+  using SourcesSet = absl::flat_hash_set<raw_ptr<Source>,
+                                         std::hash<raw_ptr<Source>>,
+                                         std::equal_to<>>;
+
   explicit ScopedMultiSourceObservation(Observer* observer)
       : observer_(observer) {}
   ScopedMultiSourceObservation(const ScopedMultiSourceObservation&) = delete;
@@ -60,23 +58,24 @@ class ScopedMultiSourceObservation {
 
   // Adds the object passed to the constructor as an observer on |source|.
   void AddObservation(Source* source) {
-    sources_.push_back(source);
-    (source->*AddObsFn)(observer_);
+    CHECK(!IsObservingSource(source));
+    sources_.insert(source);
+    Traits::AddObserver(source, observer_);
   }
 
   // Remove the object passed to the constructor as an observer from |source|.
   void RemoveObservation(Source* source) {
-    auto it = base::ranges::find(sources_, source);
-    DCHECK(it != sources_.end());
-    sources_.erase(it);
-    (source->*RemoveObsFn)(observer_);
+    size_t count = sources_.erase(source);
+    CHECK(count == 1u);
+    Traits::RemoveObserver(source, observer_);
   }
 
   // Remove the object passed to the constructor as an observer from all sources
   // it's observing.
   void RemoveAllObservations() {
-    for (Source* source : sources_)
-      (source->*RemoveObsFn)(observer_);
+    for (const auto& source : sources_) {
+      Traits::RemoveObserver(source.get(), observer_);
+    }
     sources_.clear();
   }
 
@@ -86,16 +85,27 @@ class ScopedMultiSourceObservation {
   // Returns true if |source| is being observed.
   bool IsObservingSource(Source* source) const {
     DCHECK(source);
-    return base::Contains(sources_, source);
+    return sources_.contains(source);
   }
 
   // Returns the number of sources being observed.
   size_t GetSourcesCount() const { return sources_.size(); }
 
- private:
-  Observer* const observer_;
+  // Returns a pointer to the observer that observes the sources.
+  Observer* observer() { return observer_; }
+  const Observer* observer() const { return observer_; }
 
-  std::vector<Source*> sources_;
+  // Returns the sources being observed (there is no guarantee on the order
+  // of the sources). Note: It is invalid to add or remove sources while
+  // iterating on it.
+  const SourcesSet& sources() const { return sources_; }
+
+ private:
+  using Traits = ScopedObservationTraits<Source, Observer>;
+
+  const raw_ptr<Observer> observer_;
+
+  SourcesSet sources_;
 };
 
 }  // namespace base

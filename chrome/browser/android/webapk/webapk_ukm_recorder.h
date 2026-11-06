@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,15 @@
 
 #include <stdint.h>
 
-#include "base/macros.h"
+#include "third_party/blink/public/mojom/manifest/display_mode.mojom.h"
 
 class GURL;
+
+namespace webapps {
+enum class WebappInstallSource;
+}
+
+namespace webapk {
 
 // WebApkUkmRecorder is the C++ counterpart of
 // org.chromium.chrome.browser.webapps's WebApkUkmRecorder in Java.
@@ -19,19 +25,25 @@ class GURL;
 // avoid having to instantiate this class and deal with object lifetimes.
 class WebApkUkmRecorder {
  public:
-  static void RecordInstall(const GURL& manifest_url, int version_code);
+  WebApkUkmRecorder() = delete;
+  WebApkUkmRecorder(const WebApkUkmRecorder&) = delete;
+  WebApkUkmRecorder& operator=(const WebApkUkmRecorder&) = delete;
 
-  static void RecordSessionDuration(const GURL& manifest_url,
+  static void RecordInstall(const GURL& manifest_id,
+                            webapps::WebappInstallSource install_source,
+                            blink::mojom::DisplayMode display);
+
+  static void RecordSessionDuration(const GURL& manifest_id,
                                     int64_t distributor,
                                     int64_t version_code,
                                     int64_t duration);
 
-  static void RecordVisit(const GURL& manifest_url,
+  static void RecordVisit(const GURL& manifest_id,
                           int64_t distributor,
                           int64_t version_code,
                           int source);
 
-  static void RecordUninstall(const GURL& manifest_url,
+  static void RecordUninstall(const GURL& manifest_id,
                               int64_t distributor,
                               int64_t version_code,
                               int64_t launch_count,
@@ -44,10 +56,8 @@ class WebApkUkmRecorder {
   // Note that the metric will be recorded whether or not the PWA is actually
   // installed - all that matters is that it is being visited from a
   // "non-installed experience" (ie, as a normal browser tab).
-  static void RecordWebApkableVisit(const GURL& manifest_url);
-
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(WebApkUkmRecorder);
+  static void RecordWebApkableVisit(const GURL& manifest_id);
 };
+}  // namespace webapk
 
 #endif  // CHROME_BROWSER_ANDROID_WEBAPK_WEBAPK_UKM_RECORDER_H_

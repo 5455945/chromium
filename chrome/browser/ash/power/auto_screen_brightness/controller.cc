@@ -1,22 +1,20 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/power/auto_screen_brightness/controller.h"
 
-#include "base/task/post_task.h"
 #include "base/time/default_tick_clock.h"
 #include "chrome/browser/ash/power/auto_screen_brightness/adapter.h"
 #include "chrome/browser/ash/power/auto_screen_brightness/als_reader.h"
 #include "chrome/browser/ash/power/auto_screen_brightness/brightness_monitor_impl.h"
 #include "chrome/browser/ash/power/auto_screen_brightness/gaussian_trainer.h"
-#include "chrome/browser/ash/power/auto_screen_brightness/metrics_reporter.h"
 #include "chrome/browser/ash/power/auto_screen_brightness/model_config_loader_impl.h"
 #include "chrome/browser/ash/power/auto_screen_brightness/modeller_impl.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_manager.h"
+#include "components/session_manager/core/session.h"
 #include "components/session_manager/core/session_manager.h"
+#include "components/user_manager/user.h"
+#include "components/user_manager/user_manager.h"
 
 namespace ash {
 namespace power {
@@ -24,12 +22,12 @@ namespace auto_screen_brightness {
 
 Controller::Controller() {
   auto* session_manager = session_manager::SessionManager::Get();
-  DCHECK(session_manager);
+  CHECK(session_manager, base::NotFatalUntil::M160);
 
   if (!session_manager->sessions().empty()) {
-    // If a user session has been created, we can use the primary user profile
-    // to initialize all components immediately without waiting for
-    // |OnUserSessionStarted| to be called.
+    // If a user session has been created, we can use the primary user's
+    // browser context to initialize all components immediately without waiting
+    // for |OnUserSessionStarted| to be called.
     InitializeComponents();
     return;
   }
@@ -49,8 +47,8 @@ Controller::~Controller() {
 
 void Controller::OnUserSessionStarted(bool /* is_primary_user */) {
   // The first sign-in user is the primary user, hence if |OnUserSessionStarted|
-  // is called, the primary user profile should have been created. We will
-  // ignore |is_primary_user|.
+  // is called, the primary user's browser context should have been created. We
+  // will ignore |is_primary_user|.
   if (is_initialized_)
     return;
 
@@ -58,18 +56,22 @@ void Controller::OnUserSessionStarted(bool /* is_primary_user */) {
 }
 
 void Controller::InitializeComponents() {
-  DCHECK(!is_initialized_);
+  CHECK(!is_initialized_, base::NotFatalUntil::M160);
   is_initialized_ = true;
 
-  Profile* const profile = ProfileManager::GetPrimaryUserProfile();
-  DCHECK(profile);
+  const session_manager::Session* const primary_session =
+      session_manager::SessionManager::Get()->GetPrimarySession();
+  CHECK(primary_session, base::NotFatalUntil::M163);
+  user_manager::User* const user =
+      user_manager::UserManager::Get()->FindUserAndModify(
+          primary_session->account_id());
+  CHECK(user, base::NotFatalUntil::M163);
+  const std::optional<base::FilePath> user_path = user->GetPath();
+  CHECK(user_path, base::NotFatalUntil::M163);
 
   chromeos::PowerManagerClient* power_manager_client =
       chromeos::PowerManagerClient::Get();
-  DCHECK(power_manager_client);
-
-  metrics_reporter_ = std::make_unique<MetricsReporter>(
-      power_manager_client, g_browser_process->local_state());
+  CHECK(power_manager_client, base::NotFatalUntil::M160);
 
   als_reader_ = std::make_unique<AlsReader>();
   als_reader_->Init();
@@ -81,16 +83,16 @@ void Controller::InitializeComponents() {
 
   ui::UserActivityDetector* user_activity_detector =
       ui::UserActivityDetector::Get();
-  DCHECK(user_activity_detector);
+  CHECK(user_activity_detector, base::NotFatalUntil::M160);
 
   modeller_ = std::make_unique<ModellerImpl>(
-      profile, als_reader_.get(), brightness_monitor_.get(),
+      *user_path, als_reader_.get(), brightness_monitor_.get(),
       model_config_loader_.get(), user_activity_detector,
       std::make_unique<GaussianTrainer>());
 
   adapter_ = std::make_unique<Adapter>(
-      profile, als_reader_.get(), brightness_monitor_.get(), modeller_.get(),
-      model_config_loader_.get(), metrics_reporter_.get());
+      user->GetProfilePrefs(), als_reader_.get(), brightness_monitor_.get(),
+      modeller_.get(), model_config_loader_.get());
   adapter_->Init();
 }
 

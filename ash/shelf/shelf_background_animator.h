@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,7 @@
 #include "ash/public/cpp/shelf_types.h"
 #include "ash/public/cpp/wallpaper/wallpaper_controller_observer.h"
 #include "ash/shelf/shelf_observer.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/animation/animation_delegate.h"
@@ -48,6 +48,10 @@ class ASH_EXPORT ShelfBackgroundAnimator : public ShelfObserver,
 
   ShelfBackgroundAnimator(Shelf* shelf,
                           WallpaperControllerImpl* wallpaper_controller);
+
+  ShelfBackgroundAnimator(const ShelfBackgroundAnimator&) = delete;
+  ShelfBackgroundAnimator& operator=(const ShelfBackgroundAnimator&) = delete;
+
   ~ShelfBackgroundAnimator() override;
 
   // Initializes this with the given |background_type|. This will observe the
@@ -86,6 +90,9 @@ class ASH_EXPORT ShelfBackgroundAnimator : public ShelfObserver,
   // Gets the color corresponding with |background_type|.
   SkColor GetBackgroundColor(ShelfBackgroundType background_type) const;
 
+  // Drives the current animation to the end.
+  void CompleteAnimationForTesting();
+
  protected:
   // ShelfObserver:
   void OnBackgroundTypeChanged(ShelfBackgroundType background_type,
@@ -102,6 +109,10 @@ class ASH_EXPORT ShelfBackgroundAnimator : public ShelfObserver,
   class AnimationValues {
    public:
     AnimationValues();
+
+    AnimationValues(const AnimationValues&) = delete;
+    AnimationValues& operator=(const AnimationValues&) = delete;
+
     ~AnimationValues();
 
     SkColor current_color() const { return current_color_; }
@@ -121,8 +132,6 @@ class ASH_EXPORT ShelfBackgroundAnimator : public ShelfObserver,
     SkColor initial_color_ = SK_ColorTRANSPARENT;
     SkColor current_color_ = SK_ColorTRANSPARENT;
     SkColor target_color_ = SK_ColorTRANSPARENT;
-
-    DISALLOW_COPY_AND_ASSIGN(AnimationValues);
   };
 
   // Helper function used by PaintBackground() to animate the background.
@@ -157,10 +166,10 @@ class ASH_EXPORT ShelfBackgroundAnimator : public ShelfObserver,
   void NotifyObservers();
 
   // The shelf to observe for changes to the shelf background type, can be null.
-  Shelf* shelf_;
+  raw_ptr<Shelf> shelf_;
 
   // The wallpaper controller to observe for changes and to extract colors from.
-  WallpaperControllerImpl* wallpaper_controller_;
+  raw_ptr<WallpaperControllerImpl> wallpaper_controller_;
 
   // The background type that this is animating towards or has reached.
   ShelfBackgroundType target_background_type_ = ShelfBackgroundType::kDefaultBg;
@@ -179,8 +188,6 @@ class ASH_EXPORT ShelfBackgroundAnimator : public ShelfObserver,
   AnimationValues item_background_values_;
 
   base::ObserverList<ShelfBackgroundAnimatorObserver>::Unchecked observers_;
-
-  DISALLOW_COPY_AND_ASSIGN(ShelfBackgroundAnimator);
 };
 
 }  // namespace ash

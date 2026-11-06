@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,6 +20,10 @@ namespace media {
 class MojoRendererWrapper : public Renderer {
  public:
   explicit MojoRendererWrapper(std::unique_ptr<MojoRenderer> mojo_renderer);
+
+  MojoRendererWrapper(const MojoRendererWrapper&) = delete;
+  MojoRendererWrapper& operator=(const MojoRendererWrapper&) = delete;
+
   ~MojoRendererWrapper() override;
 
   // Renderer implementation.
@@ -27,18 +31,18 @@ class MojoRendererWrapper : public Renderer {
                   RendererClient* client,
                   PipelineStatusCallback init_cb) override;
   void SetCdm(CdmContext* cdm_context, CdmAttachedCB cdm_attached_cb) override;
-  void SetLatencyHint(absl::optional<base::TimeDelta> latency_hint) override;
+  void SetLatencyHint(std::optional<base::TimeDelta> latency_hint) override;
   void Flush(base::OnceClosure flush_cb) override;
   void StartPlayingFrom(base::TimeDelta time) override;
   void SetPlaybackRate(double playback_rate) override;
   void SetVolume(float volume) override;
   base::TimeDelta GetMediaTime() override;
+  void OnTracksChanged(DemuxerStream::Type track_type,
+                       DemuxerStream* enabled_track,
+                       base::OnceClosure change_completed_cb) override;
 
  private:
   std::unique_ptr<MojoRenderer> mojo_renderer_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(MojoRendererWrapper);
 };
 
 }  // namespace media

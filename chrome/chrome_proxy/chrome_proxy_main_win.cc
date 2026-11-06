@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,10 @@
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
+#include "base/logging/logging_settings.h"
 #include "base/path_service.h"
 #include "base/process/launch.h"
+#include "chrome/common/chrome_switches.h"
 
 namespace {
 
@@ -21,7 +23,7 @@ constexpr base::FilePath::CharType kChromeProxyExecutable[] =
 }  // namespace
 
 // This binary is a workaround for Windows 10 start menu pinning icon bug:
-// https://crbug.com/732357.
+// https://crbug.com/40525317.
 //
 // When a shortcut is pinned in the Windows 10 start menu Windows will follow
 // the shortcut, find the target executable, look for a <target>.manifest file
@@ -58,6 +60,17 @@ int WINAPI wWinMain(HINSTANCE instance,
   CHECK_EQ(base::FilePath(argv[0]).BaseName().value(), kChromeProxyExecutable);
   for (size_t i = 1; i < argv.size(); ++i)
     chrome_command_line.AppendArgNative(argv[i]);
+
+  // Pass to Chrome the path of the shortcut, if any, that launched
+  // chrome_proxy.exe. This is used to record LaunchMode metrics.
+  STARTUPINFOW si = {sizeof(si)};
+  ::GetStartupInfoW(&si);
+  if (si.dwFlags & STARTF_TITLEISLINKNAME) {
+    chrome_command_line.AppendSwitchNative(switches::kSourceShortcut,
+                                           si.lpTitle);
+  } else if (si.dwFlags & STARTF_TITLEISAPPID) {
+    chrome_command_line.AppendSwitch(switches::kSourceAppId);
+  }
 
   base::LaunchOptions launch_options;
   launch_options.current_directory = chrome_dir;

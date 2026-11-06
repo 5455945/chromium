@@ -29,7 +29,7 @@ chromium commits and is monitored by several perf sheriff rotations.
 
   * **[What is the perf waterfall?](perf_waterfall.md)** An overview of the
     waterfall that runs the continuous build.
-  * **[How telemetry works](https://github.com/catapult-project/catapult/blob/master/telemetry/README.md)**:
+  * **[How telemetry works](https://chromium.googlesource.com/catapult/+/refs/heads/main/telemetry/README.md)**:
     An overview of telemetry, our performance testing harness.
   * **[How perf bisects work](bisects.md)**: An overview of the bisect bots,
     which narrow down regressions over a CL range to a specific commit.
@@ -43,7 +43,7 @@ chromium commits and is monitored by several perf sheriff rotations.
   * **[How to run on perf trybots](perf_trybots.md)**: Have an unsubmitted
     CL and want to run benchmarks on it? Need to try a variety of hardware and
     operating systems? Use the perf trybots.
-  * **[How to run telemetry locally](https://github.com/catapult-project/catapult/blob/master/telemetry/docs/run_benchmarks_locally.md)**:
+  * **[How to run telemetry locally](https://chromium.googlesource.com/catapult/+/refs/heads/main/telemetry/docs/run_benchmarks_locally.md)**:
     Instructions on running telemetry benchmarks on your local machine.
   * **[List of platforms in the lab](perf_lab_platforms.md)**: Devices,
     configurations, and OSes the chromium.perf lab tests on.
@@ -54,16 +54,15 @@ There are several other performance labs for specialized use:
 
   * **[Lab Spotlight: AV Lab (Googlers only)](http://goto.google.com/av-analysis-service)**:
     Learn all about audio/video quality testing.
-  * **[Lab Spotlight: Cluster telemetry](https://docs.google.com/document/d/1GhqosQcwsy6F-eBAmFn_ITDF7_Iv_rY9FhCKwAnk9qQ/edit)**:
-    Need to run a performance test over thousands of pages? Check out cluster
-    telemetry!
 
 ## End-user metrics
 
 The **[Speed Launch Metrics](https://docs.google.com/document/d/1Ww487ZskJ-xBmJGwPO-XPz_QcJvw-kSNffm0nPhVpj8/edit)**
 doc explains metrics available in UMA for end user performance. If you want to
 test how your change impacts these metrics for end users, you'll probably want
-to **[Run a Finch Trial](http://goto.google.com/finch101)**.
+to **[Run a Finch Trial (Googlers only)](http://goto.google.com/finch101)**. If
+you want to run a trial and are not a Googler, you'll need a Google-internal partner
+to help you run it.
 
 The **[UMA Sampling Profiler (Googlers only)](http://goto.google.com/uma-sampling-profiler-overview)**
 measures Chrome execution using statistical profiling, producing aggregate

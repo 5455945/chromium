@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,12 +23,13 @@ MediaEngagementSession::MediaEngagementSession(MediaEngagementService* service,
     pending_data_to_commit_.visit = false;
 }
 
-bool MediaEngagementSession::IsSameOriginWith(const url::Origin& origin) const {
-  return origin_.IsSameOriginWith(origin);
+bool MediaEngagementSession::IsSameOriginWith(const GURL& url) const {
+  return origin_.IsSameOriginWith(url);
 }
 
 void MediaEngagementSession::RecordSignificantMediaElementPlayback() {
-  DCHECK(!significant_media_element_playback_recorded_);
+  CHECK(!significant_media_element_playback_recorded_,
+        base::NotFatalUntil::M161);
 
   significant_media_element_playback_recorded_ = true;
   pending_data_to_commit_.media_element_playback = true;
@@ -37,7 +38,8 @@ void MediaEngagementSession::RecordSignificantMediaElementPlayback() {
 }
 
 void MediaEngagementSession::RecordSignificantAudioContextPlayback() {
-  DCHECK(!significant_audio_context_playback_recorded_);
+  CHECK(!significant_audio_context_playback_recorded_,
+        base::NotFatalUntil::M161);
 
   significant_audio_context_playback_recorded_ = true;
   pending_data_to_commit_.audio_context_playback = true;
@@ -58,7 +60,7 @@ void MediaEngagementSession::RecordShortPlaybackIgnored(int length_msec) {
 void MediaEngagementSession::RegisterAudiblePlayers(
     int32_t audible_players,
     int32_t significant_players) {
-  DCHECK_GE(audible_players, significant_players);
+  CHECK_GE(audible_players, significant_players, base::NotFatalUntil::M161);
 
   if (!audible_players && !significant_players)
     return;
@@ -98,7 +100,7 @@ MediaEngagementSession::~MediaEngagementSession() {
 }
 
 void MediaEngagementSession::RecordSignificantPlayback() {
-  DCHECK(WasSignificantPlaybackRecorded());
+  CHECK(WasSignificantPlaybackRecorded(), base::NotFatalUntil::M161);
 
   // If this was the first time we recorded significant playback then we should
   // record the playback time.
@@ -139,7 +141,7 @@ bool MediaEngagementSession::HasPendingDataToCommit() const {
 }
 
 void MediaEngagementSession::CommitPendingData() {
-  DCHECK(HasPendingDataToCommit());
+  CHECK(HasPendingDataToCommit(), base::NotFatalUntil::M161);
 
   MediaEngagementScore score = service_->CreateEngagementScore(origin_);
   bool previous_high_value = score.high_score();

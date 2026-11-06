@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,42 +6,60 @@
 
 #include <memory>
 
-#include "ash/public/cpp/ash_pref_names.h"
+#include "ash/constants/ash_pref_names.h"
+#include "ash/constants/tray_background_view_catalog.h"
 #include "ash/public/cpp/ash_typography.h"
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shelf/shelf.h"
 #include "ash/shell.h"
-#include "ash/style/ash_color_provider.h"
 #include "ash/system/session/logout_confirmation_controller.h"
 #include "ash/system/status_area_widget.h"
 #include "ash/system/tray/tray_constants.h"
 #include "ash/system/tray/tray_container.h"
 #include "ash/system/user/login_status.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/metrics/user_metrics.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "ui/accessibility/ax_node_data.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/chromeos/styles/cros_tokens_color_mappings.h"
+#include "ui/compositor/layer.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/paint_vector_icon.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/layout/fill_layout.h"
 
 namespace ash {
 
-LogoutButtonTray::LogoutButtonTray(Shelf* shelf) : TrayBackgroundView(shelf) {
+LogoutButtonTray::LogoutButtonTray(Shelf* shelf)
+    : TrayBackgroundView(shelf, TrayBackgroundViewCatalogName::kLogoutButton) {
   DCHECK(shelf);
   Shell::Get()->session_controller()->AddObserver(this);
+  // Restore Active state
+  PrefService* active_pref =
+      Shell::Get()->session_controller()->GetLastActiveUserPrefService();
+  if (active_pref) {
+    OnActiveUserPrefServiceChanged(active_pref);
+  }
 
   button_ =
       tray_container()->AddChildView(std::make_unique<views::MdTextButton>(
           base::BindRepeating(&LogoutButtonTray::ButtonPressed,
                               base::Unretained(this)),
           std::u16string(), CONTEXT_LAUNCHER_BUTTON));
-  button_->SetProminent(true);
+  button_->SetPaintToLayer();
+  button_->layer()->SetFillsBoundsOpaquely(false);
+  button_->SetStyle(ui::ButtonStyle::kProminent);
+  button_->SetBgColorIdOverride(cros_tokens::kColorAlert);
+  button_->SetEnabledTextColors(cros_tokens::kColorPrimaryInverted);
   set_use_bounce_in_animation(false);
+
+  SetFocusBehavior(FocusBehavior::NEVER);
+  SubscribeCallbacksForAccessibility();
 }
 
 LogoutButtonTray::~LogoutButtonTray() {
@@ -83,17 +101,9 @@ void LogoutButtonTray::OnActiveUserPrefServiceChanged(PrefService* prefs) {
   UpdateLogoutDialogDuration();
 }
 
-const char* LogoutButtonTray::GetClassName() const {
-  return "LogoutButtonTray";
-}
-
-void LogoutButtonTray::OnThemeChanged() {
-  TrayBackgroundView::OnThemeChanged();
-  auto* color_provider = AshColorProvider::Get();
-  button_->SetBgColorOverride(color_provider->GetControlsLayerColor(
-      AshColorProvider::ControlsLayerType::kControlBackgroundColorAlert));
-  button_->SetEnabledTextColors(color_provider->GetContentLayerColor(
-      AshColorProvider::ContentLayerType::kButtonLabelColorPrimary));
+std::u16string LogoutButtonTray::GetLoginStatusString() {
+  LoginStatus login_status = shelf()->GetStatusAreaWidget()->login_status();
+  return user::GetLocalizedSignOutStringForStatus(login_status, false);
 }
 
 void LogoutButtonTray::UpdateShowLogoutButtonInTray() {
@@ -105,20 +115,18 @@ void LogoutButtonTray::UpdateShowLogoutButtonInTray() {
 void LogoutButtonTray::UpdateLogoutDialogDuration() {
   const int duration_ms = pref_change_registrar_->prefs()->GetInteger(
       prefs::kLogoutDialogDurationMs);
-  dialog_duration_ = base::TimeDelta::FromMilliseconds(duration_ms);
+  dialog_duration_ = base::Milliseconds(duration_ms);
 }
 
 void LogoutButtonTray::UpdateAfterLoginStatusChange() {
   UpdateButtonTextAndImage();
 }
 
-void LogoutButtonTray::ClickedOutsideBubble() {}
+void LogoutButtonTray::ClickedOutsideBubble(const ui::LocatedEvent& event) {}
 
 void LogoutButtonTray::HideBubbleWithView(const TrayBubbleView* bubble_view) {}
 
-std::u16string LogoutButtonTray::GetAccessibleNameForTray() {
-  return button_->GetText();
-}
+void LogoutButtonTray::HideBubble(const TrayBubbleView* bubble_view) {}
 
 void LogoutButtonTray::HandleLocaleChange() {
   UpdateButtonTextAndImage();
@@ -132,25 +140,36 @@ void LogoutButtonTray::UpdateVisibility() {
 }
 
 void LogoutButtonTray::UpdateButtonTextAndImage() {
-  LoginStatus login_status = shelf()->GetStatusAreaWidget()->login_status();
-  const std::u16string title =
-      user::GetLocalizedSignOutStringForStatus(login_status, false);
   if (shelf()->IsHorizontalAlignment()) {
-    button_->SetText(title);
-    button_->SetImage(views::Button::STATE_NORMAL, gfx::ImageSkia());
+    button_->SetText(GetLoginStatusString());
+    button_->SetImageModel(views::Button::STATE_NORMAL, ui::ImageModel());
     button_->SetMinSize(gfx::Size(0, kTrayItemSize));
   } else {
     button_->SetText(std::u16string());
-    button_->SetAccessibleName(title);
-    button_->SetImage(
+    button_->GetViewAccessibility().SetName(GetLoginStatusString());
+    button_->SetImageModel(
         views::Button::STATE_NORMAL,
-        gfx::CreateVectorIcon(
-            kShelfLogoutIcon,
-            AshColorProvider::Get()->GetContentLayerColor(
-                AshColorProvider::ContentLayerType::kIconColorPrimary)));
+        ui::ImageModel::FromVectorIcon(kShelfLogoutIcon,
+                                       cros_tokens::kIconColorPrimary));
     button_->SetMinSize(gfx::Size(kTrayItemSize, kTrayItemSize));
   }
   UpdateVisibility();
+}
+
+void LogoutButtonTray::OnButtonTextChangedCallback(
+    ax::mojom::StringAttribute attribute,
+    const std::optional<std::string>& name) {
+  if (name.has_value()) {
+    GetViewAccessibility().SetName(name.value());
+  }
+}
+
+void LogoutButtonTray::SubscribeCallbacksForAccessibility() {
+  button_text_changed_subscription_ =
+      button_->GetViewAccessibility().AddStringAttributeChangedCallback(
+          ax::mojom::StringAttribute::kName,
+          base::BindRepeating(&LogoutButtonTray::OnButtonTextChangedCallback,
+                              base::Unretained(this)));
 }
 
 void LogoutButtonTray::ButtonPressed() {
@@ -165,5 +184,8 @@ void LogoutButtonTray::ButtonPressed() {
         LogoutConfirmationController::Source::kShelfExitButton);
   }
 }
+
+BEGIN_METADATA(LogoutButtonTray)
+END_METADATA
 
 }  // namespace ash

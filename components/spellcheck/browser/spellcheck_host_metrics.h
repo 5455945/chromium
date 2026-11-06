@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,13 +9,12 @@
 
 #include <string>
 #include <unordered_set>
-#include <vector>
 
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "build/build_config.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 // Simple struct to keep track of how many languages are supported by which
 // spell checker.
 struct LocalesSupportInfo {
@@ -24,7 +23,7 @@ struct LocalesSupportInfo {
   size_t locales_supported_by_native_only;
   size_t unsupported_locales;
 };
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
 // A helper object for recording spell-check related histograms.
 // This class encapsulates histogram names and metrics API.
@@ -45,17 +44,10 @@ class SpellCheckHostMetrics {
   SpellCheckHostMetrics();
   ~SpellCheckHostMetrics();
 
-  // Collects the number of words in the custom dictionary, which is
-  // to be uploaded via UMA.
-  static void RecordCustomWordCountStats(size_t count);
-
   // Collects status of spellchecking enabling state, which is
-  // to be uploaded via UMA
+  // to be uploaded via UMA. Intended to be called only for regular
+  // profiles (not system, guest, incognito, etc.).
   void RecordEnabledStats(bool enabled);
-
-  // Collects a histogram for dictionary corruption rate
-  // to be uploaded via UMA
-  void RecordDictionaryCorruptionStats(bool corrupted);
 
   // Collects status of spellchecking enabling state, which is
   // to be uploaded via UMA
@@ -69,18 +61,20 @@ class SpellCheckHostMetrics {
   // attempt to be uploaded via UMA
   void RecordSuggestionStats(int delta);
 
-  // Records if spelling service is enabled or disabled.
+  // Records if spelling service is enabled or disabled. Intended to be called
+  // only for regular profiles (not system, guest, incognito, etc.).
   void RecordSpellingServiceStats(bool enabled);
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   // Records spell check support for user-added Chrome languages that are not
   // eligible for spell checking (due to the hard-coded spell check locales
   // list).
-  void RecordAcceptLanguageStats(const LocalesSupportInfo& locales_info);
+  static void RecordAcceptLanguageStats(const LocalesSupportInfo& locales_info);
 
   // Records which spell checker can handle which enabled spell check locales.
-  void RecordSpellcheckLanguageStats(const LocalesSupportInfo& locales_info);
-#endif  // defined(OS_WIN)
+  static void RecordSpellcheckLanguageStats(
+      const LocalesSupportInfo& locales_info);
+#endif  // BUILDFLAG(IS_WIN)
 
  private:
   friend class SpellcheckHostMetricsTest;
@@ -105,13 +99,8 @@ class SpellCheckHostMetrics {
   int replaced_word_count_;
   int last_replaced_word_count_;
 
-  // Last recorded number of unique words.
-  size_t last_unique_word_count_;
-
   // Time when first spellcheck happened.
   base::TimeTicks start_time_;
-  // Set of checked words in the hashed form.
-  std::unordered_set<std::string> checked_word_hashes_;
   base::RepeatingTimer recording_timer_;
 };
 

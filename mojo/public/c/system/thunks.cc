@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,32 +7,28 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <optional>
+#include <string_view>
+#include <vector>
 
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
-#include "base/macros.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
-#include "base/strings/string_piece.h"
 #include "build/build_config.h"
 #include "mojo/public/c/system/core.h"
+#include "mojo/public/c/system/data_pipe.h"
+#include "mojo/public/c/system/invitation.h"
 #include "mojo/public/c/system/macros.h"
-
-#if defined(OS_CHROMEOS) || defined(OS_LINUX) || defined(OS_WIN)
-#include "base/environment.h"
-#include "base/files/file_path.h"
-#include "base/scoped_native_library.h"
-#include "base/threading/thread_restrictions.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#endif
+#include "mojo/public/c/system/message_pipe.h"
 
 namespace {
 
-typedef void (*MojoGetSystemThunksFunction)(MojoSystemThunks* thunks);
+typedef void (*MojoGetSystemThunksFunction)(MojoSystemThunks2* thunks);
 
-MojoSystemThunks g_thunks;
+MojoSystemThunks2 g_thunks;
 
 MojoResult NotImplemented(const char* name) {
   if (g_thunks.size > 0) {
@@ -41,126 +37,21 @@ MojoResult NotImplemented(const char* name) {
     return MOJO_RESULT_UNIMPLEMENTED;
   }
 
-  LOG(FATAL)
-      << "Mojo has not been initialized in this process. You must call "
-      << "either mojo::core::Init() as an embedder, or |MojoInitialize()| if "
-      << "using the mojo_core shared library.";
-  return MOJO_RESULT_UNIMPLEMENTED;
+  LOG(FATAL) << "Mojo has not been initialized in this process. You must call "
+             << "mojo::core::Init() as an embedder.";
 }
 
 }  // namespace
 
-#define INVOKE_THUNK(name, ...)                    \
-  offsetof(MojoSystemThunks, name) < g_thunks.size \
-      ? g_thunks.name(__VA_ARGS__)                 \
+#define INVOKE_THUNK(name, ...)                     \
+  offsetof(MojoSystemThunks2, name) < g_thunks.size \
+      ? g_thunks.name(__VA_ARGS__)                  \
       : NotImplemented(#name)
-
-namespace mojo {
-
-// NOTE: This is defined within the global mojo namespace so that it can be
-// referenced as a friend to base::ScopedAllowBlocking when library support is
-// enabled.
-class CoreLibraryInitializer {
- public:
-  CoreLibraryInitializer() = default;
-  CoreLibraryInitializer(const CoreLibraryInitializer&) = delete;
-  CoreLibraryInitializer& operator=(const CoreLibraryInitializer&) = delete;
-  ~CoreLibraryInitializer() = default;
-
-  MojoResult LoadLibrary(base::FilePath library_path) {
-#if defined(OS_CHROMEOS) || defined(OS_LINUX) || defined(OS_WIN)
-    if (library_ && library_->is_valid())
-      return MOJO_RESULT_OK;
-
-    if (library_path.empty()) {
-      auto environment = base::Environment::Create();
-      std::string library_path_value;
-      const char kLibraryPathEnvironmentVar[] = "MOJO_CORE_LIBRARY_PATH";
-      if (environment->GetVar(kLibraryPathEnvironmentVar, &library_path_value))
-        library_path = base::FilePath::FromUTF8Unsafe(library_path_value);
-    }
-
-    if (library_path.empty()) {
-      // Default to looking for the library in the current working directory.
-#if defined(OS_CHROMEOS) || defined(OS_LINUX)
-      const base::FilePath::CharType kDefaultLibraryPathValue[] =
-          FILE_PATH_LITERAL("./libmojo_core.so");
-#elif defined(OS_WIN)
-      const base::FilePath::CharType kDefaultLibraryPathValue[] =
-          FILE_PATH_LITERAL("mojo_core.dll");
-#endif
-      library_path = base::FilePath(kDefaultLibraryPathValue);
-    }
-
-    // NOTE: |prefer_own_symbols| on POSIX implies that the library is loaded
-    // with RTLD_DEEPBIND, which is critical given that libmojo_core.so links
-    // against base's allocator shim. Essentially, this ensures that mojo_core
-    // internals get their own heap, and this is OK since heap pointer ownership
-    // is never passed across the ABI boundary.
-    base::ScopedAllowBlocking allow_blocking;
-    base::NativeLibraryOptions library_options;
-#if !defined(ADDRESS_SANITIZER) && !defined(THREAD_SANITIZER) && \
-    !defined(MEMORY_SANITIZER) && !defined(LEAK_SANITIZER)
-    // Sanitizer builds cannnot support RTLD_DEEPBIND, but they also disable
-    // allocator shims, so it's unnecessary there.
-    library_options.prefer_own_symbols = true;
-#endif
-    base::ScopedNativeLibrary library(base::LoadNativeLibraryWithOptions(
-        library_path, library_options, nullptr));
-    if (!library.is_valid())
-      return MOJO_RESULT_NOT_FOUND;
-
-    const char kGetThunksFunctionName[] = "MojoGetSystemThunks";
-
-    MojoGetSystemThunksFunction g_get_thunks =
-        reinterpret_cast<MojoGetSystemThunksFunction>(
-            library.GetFunctionPointer(kGetThunksFunctionName));
-    if (!g_get_thunks)
-      return MOJO_RESULT_NOT_FOUND;
-
-    DCHECK_EQ(g_thunks.size, 0u);
-    g_thunks.size = sizeof(g_thunks);
-    g_get_thunks(&g_thunks);
-    if (g_thunks.size == 0)
-      return MOJO_RESULT_NOT_FOUND;
-
-    library_ = std::move(library);
-    return MOJO_RESULT_OK;
-#else   // defined(OS_CHROMEOS) || defined(OS_LINUX) || defined(OS_WIN)
-    return MOJO_RESULT_UNIMPLEMENTED;
-#endif  // defined(OS_CHROMEOS) || defined(OS_LINUX) || defined(OS_WIN)
-  }
-
- private:
-#if defined(OS_CHROMEOS) || defined(OS_LINUX) || defined(OS_WIN)
-  absl::optional<base::ScopedNativeLibrary> library_;
-#endif
-};
-
-}  // namespace mojo
 
 extern "C" {
 
 MojoResult MojoInitialize(const struct MojoInitializeOptions* options) {
-  static base::NoDestructor<mojo::CoreLibraryInitializer,
-                            base::AllowForTriviallyDestructibleType>
-      initializer;
-
-  base::StringPiece library_path_utf8;
-  if (options) {
-    if (!MOJO_IS_STRUCT_FIELD_PRESENT(options, mojo_core_path_length))
-      return MOJO_RESULT_INVALID_ARGUMENT;
-    library_path_utf8 = base::StringPiece(options->mojo_core_path,
-                                          options->mojo_core_path_length);
-  }
-
-  MojoResult load_result = initializer->LoadLibrary(
-      base::FilePath::FromUTF8Unsafe(library_path_utf8));
-  if (load_result != MOJO_RESULT_OK)
-    return load_result;
-
-  DCHECK(g_thunks.Initialize);
-  return INVOKE_THUNK(Initialize, options);
+  return MOJO_RESULT_UNIMPLEMENTED;
 }
 
 MojoTimeTicks MojoGetTimeTicksNow() {
@@ -335,6 +226,13 @@ MojoResult MojoSerializeMessage(MojoMessageHandle message,
   return INVOKE_THUNK(SerializeMessage, message, options);
 }
 
+MojoResult MojoReserveMessageCapacity(MojoMessageHandle message,
+                                      uint32_t payload_buffer_size,
+                                      uint32_t* buffer_size) {
+  return INVOKE_THUNK(ReserveMessageCapacity, message, payload_buffer_size,
+                      buffer_size);
+}
+
 MojoResult MojoAppendMessageData(MojoMessageHandle message,
                                  uint32_t payload_size,
                                  const MojoHandle* handles,
@@ -481,7 +379,7 @@ MojoResult MojoQueryQuota(MojoHandle handle,
 }
 
 MojoResult MojoShutdown(const MojoShutdownOptions* options) {
-  return INVOKE_THUNK(Shutdown, options);
+  return MOJO_RESULT_UNIMPLEMENTED;
 }
 
 MojoResult MojoSetDefaultProcessErrorHandler(
@@ -490,13 +388,376 @@ MojoResult MojoSetDefaultProcessErrorHandler(
   return INVOKE_THUNK(SetDefaultProcessErrorHandler, handler, options);
 }
 
-}  // extern "C"
+MojoResult MojoClose32(MojoHandle32 handle) {
+  return MojoClose(handle);
+}
 
-const MojoSystemThunks* MojoEmbedderGetSystemThunks() {
+MojoResult MojoQueryHandleSignalsState32(
+    MojoHandle32 handle,
+    struct MojoHandleSignalsState* signals_state) {
+  return MojoQueryHandleSignalsState(handle, signals_state);
+}
+
+MojoResult MojoCreateMessagePipe32(const MojoCreateMessagePipeOptions* options,
+                                   MojoHandle32* message_pipe_handle0,
+                                   MojoHandle32* message_pipe_handle1) {
+  MojoHandle handle0, handle1;
+  MojoResult result = MojoCreateMessagePipe(options, &handle0, &handle1);
+  *message_pipe_handle0 = static_cast<MojoHandle32>(handle0);
+  *message_pipe_handle1 = static_cast<MojoHandle32>(handle1);
+  return result;
+}
+
+MojoResult MojoWriteMessage32(MojoHandle32 message_pipe_handle,
+                              MojoMessageHandle message_handle,
+                              const MojoWriteMessageOptions* options) {
+  return MojoWriteMessage(message_pipe_handle, message_handle, options);
+}
+
+MojoResult MojoReadMessage32(MojoHandle32 message_pipe_handle,
+                             const MojoReadMessageOptions* options,
+                             MojoMessageHandle* message_handle) {
+  return MojoReadMessage(message_pipe_handle, options, message_handle);
+}
+
+MojoResult MojoFuseMessagePipes32(MojoHandle32 handle0,
+                                  MojoHandle32 handle1,
+                                  const MojoFuseMessagePipesOptions* options) {
+  return MojoFuseMessagePipes(handle0, handle1, options);
+}
+
+MojoResult MojoCreateDataPipe32(const MojoCreateDataPipeOptions* options,
+                                MojoHandle32* data_pipe_producer_handle,
+                                MojoHandle32* data_pipe_consumer_handle) {
+  MojoHandle producer, consumer;
+  MojoResult result = MojoCreateDataPipe(options, &producer, &consumer);
+  *data_pipe_producer_handle = static_cast<MojoHandle32>(producer);
+  *data_pipe_consumer_handle = static_cast<MojoHandle32>(consumer);
+  return result;
+}
+
+MojoResult MojoWriteData32(MojoHandle32 data_pipe_producer_handle,
+                           const void* elements,
+                           uint32_t* num_elements,
+                           const MojoWriteDataOptions* options) {
+  return MojoWriteData(data_pipe_producer_handle, elements, num_elements,
+                       options);
+}
+
+MojoResult MojoBeginWriteData32(MojoHandle32 data_pipe_producer_handle,
+                                const MojoBeginWriteDataOptions* options,
+                                void** buffer,
+                                uint32_t* buffer_num_elements) {
+  return MojoBeginWriteData(data_pipe_producer_handle, options, buffer,
+                            buffer_num_elements);
+}
+
+MojoResult MojoEndWriteData32(MojoHandle32 data_pipe_producer_handle,
+                              uint32_t num_elements_written,
+                              const MojoEndWriteDataOptions* options) {
+  return MojoEndWriteData(data_pipe_producer_handle, num_elements_written,
+                          options);
+}
+
+MojoResult MojoReadData32(MojoHandle32 data_pipe_consumer_handle,
+                          const MojoReadDataOptions* options,
+                          void* elements,
+                          uint32_t* num_elements) {
+  return MojoReadData(data_pipe_consumer_handle, options, elements,
+                      num_elements);
+}
+
+MojoResult MojoBeginReadData32(MojoHandle32 data_pipe_consumer_handle,
+                               const MojoBeginReadDataOptions* options,
+                               const void** buffer,
+                               uint32_t* buffer_num_elements) {
+  return MojoBeginReadData(data_pipe_consumer_handle, options, buffer,
+                           buffer_num_elements);
+}
+
+MojoResult MojoEndReadData32(MojoHandle32 data_pipe_consumer_handle,
+                             uint32_t num_elements_read,
+                             const MojoEndReadDataOptions* options) {
+  return MojoEndReadData(data_pipe_consumer_handle, num_elements_read, options);
+}
+
+MojoResult MojoCreateSharedBuffer32(
+    uint64_t num_bytes,
+    const MojoCreateSharedBufferOptions* options,
+    MojoHandle32* shared_buffer_handle) {
+  MojoHandle handle;
+  MojoResult result = MojoCreateSharedBuffer(num_bytes, options, &handle);
+  *shared_buffer_handle = static_cast<MojoHandle32>(handle);
+  return result;
+}
+
+MojoResult MojoDuplicateBufferHandle32(
+    MojoHandle32 buffer_handle,
+    const MojoDuplicateBufferHandleOptions* options,
+    MojoHandle32* new_buffer_handle) {
+  MojoHandle new_handle;
+  MojoResult result =
+      MojoDuplicateBufferHandle(buffer_handle, options, &new_handle);
+  *new_buffer_handle = static_cast<MojoHandle32>(new_handle);
+  return result;
+}
+
+MojoResult MojoMapBuffer32(MojoHandle32 buffer_handle,
+                           uint64_t offset,
+                           uint64_t num_bytes,
+                           const MojoMapBufferOptions* options,
+                           void** buffer) {
+  return MojoMapBuffer(buffer_handle, offset, num_bytes, options, buffer);
+}
+
+MojoResult MojoGetBufferInfo32(MojoHandle32 buffer_handle,
+                               const MojoGetBufferInfoOptions* options,
+                               MojoSharedBufferInfo* info) {
+  return MojoGetBufferInfo(buffer_handle, options, info);
+}
+
+MojoResult MojoCreateTrap32(MojoTrapEventHandler handler,
+                            const MojoCreateTrapOptions* options,
+                            MojoHandle32* trap_handle) {
+  MojoHandle handle;
+  MojoResult result = MojoCreateTrap(handler, options, &handle);
+  *trap_handle = static_cast<MojoHandle32>(handle);
+  return result;
+}
+
+MojoResult MojoAddTrigger32(MojoHandle32 trap_handle,
+                            MojoHandle32 handle,
+                            MojoHandleSignals signals,
+                            MojoTriggerCondition condition,
+                            uintptr_t context,
+                            const MojoAddTriggerOptions* options) {
+  return MojoAddTrigger(trap_handle, handle, signals, condition, context,
+                        options);
+}
+
+MojoResult MojoRemoveTrigger32(MojoHandle32 trap_handle,
+                               uintptr_t context,
+                               const MojoRemoveTriggerOptions* options) {
+  return MojoRemoveTrigger(trap_handle, context, options);
+}
+
+MojoResult MojoArmTrap32(MojoHandle32 trap_handle,
+                         const MojoArmTrapOptions* options,
+                         uint32_t* num_blocking_events,
+                         MojoTrapEvent* blocking_events) {
+  return MojoArmTrap(trap_handle, options, num_blocking_events,
+                     blocking_events);
+}
+
+MojoResult MojoAppendMessageData32(MojoMessageHandle message,
+                                   uint32_t payload_size,
+                                   const MojoHandle32* handles,
+                                   uint32_t num_handles,
+                                   const MojoAppendMessageDataOptions* options,
+                                   void** buffer,
+                                   uint32_t* buffer_size) {
+  std::vector<MojoHandle> handles64(num_handles);
+  for (size_t i = 0; i < num_handles; ++i) {
+    handles64[i] = UNSAFE_TODO(handles[i]);
+  }
+  return MojoAppendMessageData(message, payload_size, handles64.data(),
+                               num_handles, options, buffer, buffer_size);
+}
+
+MojoResult MojoGetMessageData32(MojoMessageHandle message,
+                                const MojoGetMessageDataOptions* options,
+                                void** buffer,
+                                uint32_t* num_bytes,
+                                MojoHandle32* handles,
+                                uint32_t* num_handles) {
+  std::vector<MojoHandle> handles64(num_handles ? *num_handles : 0);
+  MojoResult result = MojoGetMessageData(message, options, buffer, num_bytes,
+                                         handles64.data(), num_handles);
+  if (result == MOJO_RESULT_OK && num_handles) {
+    for (size_t i = 0; i < *num_handles; ++i) {
+      UNSAFE_TODO(handles[i]) = static_cast<MojoHandle32>(handles64[i]);
+    }
+  }
+  return result;
+}
+
+MojoResult MojoWrapPlatformHandle32(
+    const MojoPlatformHandle* platform_handle,
+    const MojoWrapPlatformHandleOptions* options,
+    MojoHandle32* mojo_handle) {
+  MojoHandle handle;
+  MojoResult result = MojoWrapPlatformHandle(platform_handle, options, &handle);
+  *mojo_handle = static_cast<MojoHandle32>(handle);
+  return result;
+}
+
+MojoResult MojoUnwrapPlatformHandle32(
+    MojoHandle32 mojo_handle,
+    const MojoUnwrapPlatformHandleOptions* options,
+    MojoPlatformHandle* platform_handle) {
+  return MojoUnwrapPlatformHandle(mojo_handle, options, platform_handle);
+}
+
+MojoResult MojoWrapPlatformSharedMemoryRegion32(
+    const struct MojoPlatformHandle* platform_handles,
+    uint32_t num_platform_handles,
+    uint64_t num_bytes,
+    const MojoSharedBufferGuid* guid,
+    MojoPlatformSharedMemoryRegionAccessMode access_mode,
+    const MojoWrapPlatformSharedMemoryRegionOptions* options,
+    MojoHandle32* mojo_handle) {
+  MojoHandle handle;
+  MojoResult result = MojoWrapPlatformSharedMemoryRegion(
+      platform_handles, num_platform_handles, num_bytes, guid, access_mode,
+      options, &handle);
+  *mojo_handle = static_cast<MojoHandle32>(handle);
+  return result;
+}
+
+MojoResult MojoUnwrapPlatformSharedMemoryRegion32(
+    MojoHandle32 mojo_handle,
+    const MojoUnwrapPlatformSharedMemoryRegionOptions* options,
+    struct MojoPlatformHandle* platform_handles,
+    uint32_t* num_platform_handles,
+    uint64_t* num_bytes,
+    struct MojoSharedBufferGuid* guid,
+    MojoPlatformSharedMemoryRegionAccessMode* access_mode) {
+  return MojoUnwrapPlatformSharedMemoryRegion(
+      mojo_handle, options, platform_handles, num_platform_handles, num_bytes,
+      guid, access_mode);
+}
+
+MojoResult MojoCreateInvitation32(const MojoCreateInvitationOptions* options,
+                                  MojoHandle32* invitation_handle) {
+  MojoHandle handle;
+  MojoResult result = MojoCreateInvitation(options, &handle);
+  *invitation_handle = static_cast<MojoHandle32>(handle);
+  return result;
+}
+
+MojoResult MojoAttachMessagePipeToInvitation32(
+    MojoHandle32 invitation_handle,
+    const void* name,
+    uint32_t name_num_bytes,
+    const MojoAttachMessagePipeToInvitationOptions* options,
+    MojoHandle32* message_pipe_handle) {
+  MojoHandle handle;
+  MojoResult result = MojoAttachMessagePipeToInvitation(
+      invitation_handle, name, name_num_bytes, options, &handle);
+  *message_pipe_handle = static_cast<MojoHandle32>(handle);
+  return result;
+}
+
+MojoResult MojoExtractMessagePipeFromInvitation32(
+    MojoHandle32 invitation_handle,
+    const void* name,
+    uint32_t name_num_bytes,
+    const MojoExtractMessagePipeFromInvitationOptions* options,
+    MojoHandle32* message_pipe_handle) {
+  MojoHandle handle;
+  MojoResult result = MojoExtractMessagePipeFromInvitation(
+      invitation_handle, name, name_num_bytes, options, &handle);
+  *message_pipe_handle = static_cast<MojoHandle32>(handle);
+  return result;
+}
+
+MojoResult MojoSendInvitation32(
+    MojoHandle32 invitation_handle,
+    const MojoPlatformProcessHandle* process_handle,
+    const MojoInvitationTransportEndpoint* transport_endpoint,
+    MojoProcessErrorHandler error_handler,
+    uintptr_t error_handler_context,
+    const MojoSendInvitationOptions* options) {
+  return MojoSendInvitation(invitation_handle, process_handle,
+                            transport_endpoint, error_handler,
+                            error_handler_context, options);
+}
+
+MojoResult MojoAcceptInvitation32(
+    const MojoInvitationTransportEndpoint* transport_endpoint,
+    const MojoAcceptInvitationOptions* options,
+    MojoHandle32* invitation_handle) {
+  MojoHandle handle;
+  MojoResult result =
+      MojoAcceptInvitation(transport_endpoint, options, &handle);
+  *invitation_handle = static_cast<MojoHandle32>(handle);
+  return result;
+}
+
+MojoResult MojoSetQuota32(MojoHandle32 handle,
+                          MojoQuotaType type,
+                          uint64_t limit,
+                          const MojoSetQuotaOptions* options) {
+  return MojoSetQuota(handle, type, limit, options);
+}
+
+MojoResult MojoQueryQuota32(MojoHandle32 handle,
+                            MojoQuotaType type,
+                            const MojoQueryQuotaOptions* options,
+                            uint64_t* limit,
+                            uint64_t* usage) {
+  return MojoQueryQuota(handle, type, options, limit, usage);
+}
+
+MojoSystemThunks32 g_thunks_32 = {
+    sizeof(g_thunks_32),
+    MojoInitialize,
+    MojoGetTimeTicksNow,
+    MojoClose32,
+    MojoQueryHandleSignalsState32,
+    MojoCreateMessagePipe32,
+    MojoWriteMessage32,
+    MojoReadMessage32,
+    MojoFuseMessagePipes32,
+    MojoCreateMessage,
+    MojoDestroyMessage,
+    MojoSerializeMessage,
+    MojoAppendMessageData32,
+    MojoGetMessageData32,
+    MojoSetMessageContext,
+    MojoGetMessageContext,
+    MojoNotifyBadMessage,
+    MojoCreateDataPipe32,
+    MojoWriteData32,
+    MojoBeginWriteData32,
+    MojoEndWriteData32,
+    MojoReadData32,
+    MojoBeginReadData32,
+    MojoEndReadData32,
+    MojoCreateSharedBuffer32,
+    MojoDuplicateBufferHandle32,
+    MojoMapBuffer32,
+    MojoUnmapBuffer,
+    MojoGetBufferInfo32,
+    MojoCreateTrap32,
+    MojoAddTrigger32,
+    MojoRemoveTrigger32,
+    MojoArmTrap32,
+    MojoWrapPlatformHandle32,
+    MojoUnwrapPlatformHandle32,
+    MojoWrapPlatformSharedMemoryRegion32,
+    MojoUnwrapPlatformSharedMemoryRegion32,
+    MojoCreateInvitation32,
+    MojoAttachMessagePipeToInvitation32,
+    MojoExtractMessagePipeFromInvitation32,
+    MojoSendInvitation32,
+    MojoAcceptInvitation32,
+    MojoSetQuota32,
+    MojoQueryQuota32,
+    MojoShutdown,
+    MojoSetDefaultProcessErrorHandler,
+    MojoReserveMessageCapacity,
+};
+
+const MojoSystemThunks2* MojoEmbedderGetSystemThunks2() {
   return &g_thunks;
 }
 
-void MojoEmbedderSetSystemThunks(const MojoSystemThunks* thunks) {
+const MojoSystemThunks32* MojoEmbedderGetSystemThunks32() {
+  return &g_thunks_32;
+}
+
+void MojoEmbedderSetSystemThunks(const MojoSystemThunks2* thunks) {
   // Assume embedders will always use matching versions of the Mojo Core and
   // public APIs.
   DCHECK_EQ(thunks->size, sizeof(g_thunks));
@@ -504,8 +765,11 @@ void MojoEmbedderSetSystemThunks(const MojoSystemThunks* thunks) {
   // This should only have to check that the |g_thunks->size| is zero, but we
   // have multiple Mojo Core initializations in some test suites still. For now
   // we allow double calls as long as they're the same thunks as before.
-  DCHECK(g_thunks.size == 0 || !memcmp(&g_thunks, thunks, sizeof(g_thunks)))
+  UNSAFE_TODO(DCHECK(g_thunks.size == 0 ||
+                     !memcmp(&g_thunks, thunks, sizeof(g_thunks))))
       << "Cannot set embedder thunks after Mojo API calls have been made.";
 
   g_thunks = *thunks;
 }
+
+}  // extern "C"

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 #include <string>
 
 #include "ash/ash_export.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 
 namespace base {
@@ -25,6 +25,9 @@ class ASH_EXPORT TaskSwitchTimeTracker {
   // Create a TaskSwitchTimeTracker that will record data to the histogram with
   // the given |histogram_name|.
   explicit TaskSwitchTimeTracker(const std::string& histogram_name);
+
+  TaskSwitchTimeTracker(const TaskSwitchTimeTracker&) = delete;
+  TaskSwitchTimeTracker& operator=(const TaskSwitchTimeTracker&) = delete;
 
   ~TaskSwitchTimeTracker();
 
@@ -59,16 +62,14 @@ class ASH_EXPORT TaskSwitchTimeTracker {
   std::string histogram_name_;
 
   // The histogram to log data to. Set via GetHistogram() using lazy load.
-  base::HistogramBase* histogram_ = nullptr;
+  raw_ptr<base::HistogramBase> histogram_ = nullptr;
 
   // Tracks the last time OnTaskSwitch() was called. A value of
   // base::TimeTicks() should be interpreted as not set.
   base::TimeTicks last_action_time_ = base::TimeTicks();
 
   // The clock used to determine the |last_action_time_|.
-  const base::TickClock* tick_clock_;
-
-  DISALLOW_COPY_AND_ASSIGN(TaskSwitchTimeTracker);
+  raw_ptr<const base::TickClock> tick_clock_;
 };
 
 }  // namespace ash

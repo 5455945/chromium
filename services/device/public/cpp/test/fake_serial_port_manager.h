@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 
 #include <map>
 
-#include "base/macros.h"
 #include "base/unguessable_token.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -20,6 +19,10 @@ namespace device {
 class FakeSerialPortManager : public mojom::SerialPortManager {
  public:
   FakeSerialPortManager();
+
+  FakeSerialPortManager(const FakeSerialPortManager&) = delete;
+  FakeSerialPortManager& operator=(const FakeSerialPortManager&) = delete;
+
   ~FakeSerialPortManager() override;
 
   void AddReceiver(mojo::PendingReceiver<mojom::SerialPortManager> receiver);
@@ -33,7 +36,8 @@ class FakeSerialPortManager : public mojom::SerialPortManager {
   // mojom::SerialPortManager
   void SetClient(
       mojo::PendingRemote<mojom::SerialPortManagerClient> client) override;
-  void GetDevices(GetDevicesCallback callback) override;
+  void GetDevices(bool allow_bluetooth_system_prompt,
+                  GetDevicesCallback callback) override;
   void OpenPort(const base::UnguessableToken& token,
                 bool use_alternate_path,
                 device::mojom::SerialConnectionOptionsPtr options,
@@ -46,8 +50,6 @@ class FakeSerialPortManager : public mojom::SerialPortManager {
   mojo::ReceiverSet<mojom::SerialPortManager> receivers_;
   mojo::RemoteSet<mojom::SerialPortManagerClient> clients_;
   bool simulate_open_failure_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeSerialPortManager);
 };
 
 }  // namespace device

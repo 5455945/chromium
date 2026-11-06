@@ -1,5 +1,5 @@
 
-(async function(testRunner) {
+(async function(/** @type {import('test_runner').TestRunner} */ testRunner) {
   var {page, session, dp} = await testRunner.startURL(
       'http://first.test:8000/inspector-protocol/resources/test-page.html',
       `Tests the order in which unfinished Runtime.{enable,evaluate} calls are handled around paused navigation.`);
@@ -37,6 +37,11 @@
     var obj = JSON.parse(message);
     if (callIdsToWatch.has(obj.id)) {
       testRunner.log(obj, 'receiving result ' + obj.id + ':\n', ['sessionId']);
+      callIdsToWatch.delete(obj.id);
+      if (!callIdsToWatch.size) {
+        // When we've seen all messages, the test is complete.
+        testRunner.completeTest();
+      }
     }
     originalDispatch(message);
   }
@@ -86,6 +91,4 @@
   testRunner.log('Unpausing navigation ...');
   await dp.Fetch.continueRequest({requestId});
   await navigatePromise;
-
-  testRunner.completeTest();
 })

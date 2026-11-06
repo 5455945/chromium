@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,10 +11,12 @@
 #include <memory>
 #include <vector>
 
-#include "base/mac/foundation_util.h"
-#include "base/mac/scoped_cftyperef.h"
-#include "base/macros.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/apple/foundation_util.h"
+#include "base/apple/scoped_cftyperef.h"
+#include "base/functional/bind.h"
+#include "base/task/task_traits.h"
+#include "base/task/thread_pool.h"
+#include "base/threading/scoped_blocking_call.h"
 #include "base/time/time.h"
 
 namespace device {
@@ -30,7 +32,7 @@ SInt64 GetValueAsSInt64(CFDictionaryRef description,
                         CFStringRef key,
                         SInt64 default_value) {
   CFNumberRef number =
-      base::mac::GetValueFromDictionary<CFNumberRef>(description, key);
+      base::apple::GetValueFromDictionary<CFNumberRef>(description, key);
   SInt64 value;
 
   if (number && CFNumberGetValue(number, kCFNumberSInt64Type, &value))
@@ -43,7 +45,7 @@ bool GetValueAsBoolean(CFDictionaryRef description,
                        CFStringRef key,
                        bool default_value) {
   CFBooleanRef boolean =
-      base::mac::GetValueFromDictionary<CFBooleanRef>(description, key);
+      base::apple::GetValueFromDictionary<CFBooleanRef>(description, key);
 
   return boolean ? CFBooleanGetValue(boolean) : default_value;
 }
@@ -54,14 +56,9 @@ bool CFStringsAreEqual(CFStringRef string1, CFStringRef string2) {
   return CFStringCompare(string1, string2, 0) == kCFCompareEqualTo;
 }
 
-void UpdateNumberBatteriesHistogram(int count) {
-  UMA_HISTOGRAM_CUSTOM_COUNTS("BatteryStatus.NumberBatteriesMac", count, 1, 5,
-                              6);
-}
-
 void FetchBatteryStatus(CFDictionaryRef description,
                         mojom::BatteryStatus* status) {
-  CFStringRef current_state = base::mac::GetValueFromDictionary<CFStringRef>(
+  CFStringRef current_state = base::apple::GetValueFromDictionary<CFStringRef>(
       description, CFSTR(kIOPSPowerSourceStateKey));
 
   bool on_battery_power =
@@ -91,10 +88,9 @@ void FetchBatteryStatus(CFDictionaryRef description,
 
     // Battery is charging: set the charging time if it's available, otherwise
     // set to +infinity.
-    status->charging_time =
-        charging_time != -1
-            ? base::TimeDelta::FromMinutes(charging_time).InSeconds()
-            : std::numeric_limits<double>::infinity();
+    status->charging_time = charging_time != -1
+                                ? base::Minutes(charging_time).InSeconds()
+                                : std::numeric_limits<double>::infinity();
   } else {
     // Battery is not charging.
     // Set chargingTime to +infinity if the battery is not charged. Otherwise
@@ -108,8 +104,7 @@ void FetchBatteryStatus(CFDictionaryRef description,
       SInt64 discharging_time =
           GetValueAsSInt64(description, CFSTR(kIOPSTimeToEmptyKey), -1);
       if (discharging_time != -1) {
-        status->discharging_time =
-            base::TimeDelta::FromMinutes(discharging_time).InSeconds();
+        status->discharging_time = base::Minutes(discharging_time).InSeconds();
       }
     }
   }
@@ -118,20 +113,25 @@ void FetchBatteryStatus(CFDictionaryRef description,
 std::vector<mojom::BatteryStatus> GetInternalBatteriesStates() {
   std::vector<mojom::BatteryStatus> internal_sources;
 
-  base::ScopedCFTypeRef<CFTypeRef> info(IOPSCopyPowerSourcesInfo());
-  base::ScopedCFTypeRef<CFArrayRef> power_sources_list(
-      IOPSCopyPowerSourcesList(info));
-  CFIndex count = CFArrayGetCount(power_sources_list);
+  // IOPSCopyPowerSourcesInfo is known to block.
+  base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
+                                                base::BlockingType::MAY_BLOCK);
+
+  base::apple::ScopedCFTypeRef<CFTypeRef> info(IOPSCopyPowerSourcesInfo());
+  base::apple::ScopedCFTypeRef<CFArrayRef> power_sources_list(
+      IOPSCopyPowerSourcesList(info.get()));
+  CFIndex count = CFArrayGetCount(power_sources_list.get());
 
   for (CFIndex i = 0; i < count; ++i) {
     CFDictionaryRef description = IOPSGetPowerSourceDescription(
-        info, CFArrayGetValueAtIndex(power_sources_list, i));
+        info.get(), CFArrayGetValueAtIndex(power_sources_list.get(), i));
 
     if (!description)
       continue;
 
-    CFStringRef transport_type = base::mac::GetValueFromDictionary<CFStringRef>(
-        description, CFSTR(kIOPSTransportTypeKey));
+    CFStringRef transport_type =
+        base::apple::GetValueFromDictionary<CFStringRef>(
+            description, CFSTR(kIOPSTransportTypeKey));
 
     bool internal_source =
         CFStringsAreEqual(transport_type, CFSTR(kIOPSInternalType));
@@ -148,9 +148,8 @@ std::vector<mojom::BatteryStatus> GetInternalBatteriesStates() {
   return internal_sources;
 }
 
-void OnBatteryStatusChanged(const BatteryCallback& callback) {
-  std::vector<mojom::BatteryStatus> batteries(GetInternalBatteriesStates());
-
+void HandleNewBatteryStatus(const BatteryCallback& callback,
+                            std::vector<mojom::BatteryStatus> batteries) {
   if (batteries.empty()) {
     callback.Run(mojom::BatteryStatus());
     return;
@@ -163,10 +162,20 @@ void OnBatteryStatusChanged(const BatteryCallback& callback) {
   callback.Run(batteries.front());
 }
 
+void OnBatteryStatusChangedAsync(const BatteryCallback& callback) {
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock()},
+      base::BindOnce(&GetInternalBatteriesStates),
+      base::BindOnce(&HandleNewBatteryStatus, callback));
+}
+
 class BatteryStatusObserver {
  public:
   explicit BatteryStatusObserver(const BatteryCallback& callback)
       : callback_(callback) {}
+
+  BatteryStatusObserver(const BatteryStatusObserver&) = delete;
+  BatteryStatusObserver& operator=(const BatteryStatusObserver&) = delete;
 
   ~BatteryStatusObserver() { DCHECK(!notifier_run_loop_source_); }
 
@@ -184,35 +193,36 @@ class BatteryStatusObserver {
     }
 
     CallOnBatteryStatusChanged(static_cast<void*>(&callback_));
-    CFRunLoopAddSource(CFRunLoopGetCurrent(), notifier_run_loop_source_,
+    CFRunLoopAddSource(CFRunLoopGetCurrent(), notifier_run_loop_source_.get(),
                        kCFRunLoopDefaultMode);
-    UpdateNumberBatteriesHistogram(GetInternalBatteriesStates().size());
   }
 
   void Stop() {
     if (!notifier_run_loop_source_)
       return;
 
-    CFRunLoopRemoveSource(CFRunLoopGetCurrent(), notifier_run_loop_source_,
+    CFRunLoopRemoveSource(CFRunLoopGetCurrent(),
+                          notifier_run_loop_source_.get(),
                           kCFRunLoopDefaultMode);
     notifier_run_loop_source_.reset();
   }
 
  private:
   static void CallOnBatteryStatusChanged(void* callback) {
-    OnBatteryStatusChanged(*static_cast<BatteryCallback*>(callback));
+    OnBatteryStatusChangedAsync(*static_cast<BatteryCallback*>(callback));
   }
 
   BatteryCallback callback_;
-  base::ScopedCFTypeRef<CFRunLoopSourceRef> notifier_run_loop_source_;
-
-  DISALLOW_COPY_AND_ASSIGN(BatteryStatusObserver);
+  base::apple::ScopedCFTypeRef<CFRunLoopSourceRef> notifier_run_loop_source_;
 };
 
 class BatteryStatusManagerMac : public BatteryStatusManager {
  public:
   explicit BatteryStatusManagerMac(const BatteryCallback& callback)
       : notifier_(std::make_unique<BatteryStatusObserver>(callback)) {}
+
+  BatteryStatusManagerMac(const BatteryStatusManagerMac&) = delete;
+  BatteryStatusManagerMac& operator=(const BatteryStatusManagerMac&) = delete;
 
   ~BatteryStatusManagerMac() override { notifier_->Stop(); }
 
@@ -226,8 +236,6 @@ class BatteryStatusManagerMac : public BatteryStatusManager {
 
  private:
   std::unique_ptr<BatteryStatusObserver> notifier_;
-
-  DISALLOW_COPY_AND_ASSIGN(BatteryStatusManagerMac);
 };
 
 }  // namespace

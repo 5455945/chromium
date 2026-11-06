@@ -1,4 +1,4 @@
-// Copyright (c) 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -115,6 +115,7 @@ namespace blink {
   V(OverWrite)                                    \
   V(Paste)                                        \
   V(PasteAndMatchStyle)                           \
+  V(PasteFromImageUrl)                            \
   V(PasteGlobalSelection)                         \
   V(Print)                                        \
   V(Redo)                                         \
@@ -133,7 +134,7 @@ namespace blink {
   V(SelectWord)                                   \
   V(SetMark)                                      \
   V(Strikethrough)                                \
-  V(StyleWithCSS)                                 \
+  V(StyleWithCss)                                 \
   V(Subscript)                                    \
   V(Superscript)                                  \
   V(SwapWithMark)                                 \
@@ -146,7 +147,7 @@ namespace blink {
   V(Unlink)                                       \
   V(Unscript)                                     \
   V(Unselect)                                     \
-  V(UseCSS)                                       \
+  V(UseCss)                                       \
   V(Yank)                                         \
   V(YankAndSelect)
 

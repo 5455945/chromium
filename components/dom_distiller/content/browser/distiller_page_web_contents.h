@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,11 @@
 #include <memory>
 #include <string>
 
+#include "base/memory/raw_ptr.h"
+#include "base/supports_user_data.h"
 #include "components/dom_distiller/core/distiller_page.h"
+#include "components/dom_distiller/core/dom_distiller_constants.h"
+#include "content/public/browser/navigation_throttle_registry.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -21,12 +25,14 @@ class SourcePageHandleWebContents : public SourcePageHandle {
   SourcePageHandleWebContents(content::WebContents* web_contents, bool owned);
   ~SourcePageHandleWebContents() override;
 
-  // Retreives the WebContents. The SourcePageHandleWebContents keeps ownership.
+  // Retrieves the WebContents. The SourcePageHandleWebContents keeps ownership.
   content::WebContents* web_contents() { return web_contents_; }
+
+  bool owned() { return owned_; }
 
  private:
   // The WebContents this class holds.
-  content::WebContents* web_contents_;
+  raw_ptr<content::WebContents, DanglingUntriaged> web_contents_;
   // Whether this owns |web_contents_|.
   bool owned_;
 };
@@ -44,13 +50,17 @@ class DistillerPageWebContentsFactory : public DistillerPageFactory {
       std::unique_ptr<SourcePageHandle> handle) const override;
 
  private:
-  content::BrowserContext* browser_context_;
+  raw_ptr<content::BrowserContext> browser_context_;
 };
 
 class DistillerPageWebContents : public DistillerPage,
                                  public content::WebContentsDelegate,
                                  public content::WebContentsObserver {
  public:
+  // Possibly create and add a NavigationThrottle for the given web contents.
+  static void MaybeCreateAndAddNavigationThrottle(
+      content::NavigationThrottleRegistry& registry);
+
   DistillerPageWebContents(content::BrowserContext* browser_context,
                            const gfx::Size& render_view_size,
                            std::unique_ptr<SourcePageHandleWebContents>
@@ -63,16 +73,13 @@ class DistillerPageWebContents : public DistillerPage,
 
   // content::WebContentsObserver implementation.
   void DOMContentLoaded(content::RenderFrameHost* render_frame_host) override;
-
-  void DidFailLoad(content::RenderFrameHost* render_frame_host,
-                   const GURL& validated_url,
-                   int error_code) override;
+  void DidFinishNavigation(
+      content::NavigationHandle* navigation_handle) override;
 
   DistillerPageWebContents(const DistillerPageWebContents&) = delete;
   DistillerPageWebContents& operator=(const DistillerPageWebContents&) = delete;
 
  protected:
-  bool StringifyOutput() override;
   void DistillPageImpl(const GURL& url, const std::string& script) override;
 
  private:
@@ -103,6 +110,11 @@ class DistillerPageWebContents : public DistillerPage,
                                      const base::TimeTicks& javascript_start,
                                      base::Value value);
 
+  content::RenderFrameHost& TargetRenderFrameHost();
+
+  // Returns the UserData associated with the underlying WebContents.
+  base::SupportsUserData::Data* GetUserDataForTesting();
+
   // The current state of the |DistillerPage|, initially |IDLE|.
   State state_;
 
@@ -111,7 +123,7 @@ class DistillerPageWebContents : public DistillerPage,
 
   std::unique_ptr<SourcePageHandleWebContents> source_page_handle_;
 
-  content::BrowserContext* browser_context_;
+  raw_ptr<content::BrowserContext> browser_context_;
   gfx::Size render_view_size_;
   base::WeakPtrFactory<DistillerPageWebContents> weak_factory_{this};
 };

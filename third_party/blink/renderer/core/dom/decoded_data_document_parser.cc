@@ -26,8 +26,11 @@
 #include "third_party/blink/renderer/core/dom/decoded_data_document_parser.h"
 
 #include <memory>
+
+#include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-shared.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/document_encoding_data.h"
+#include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/html/parser/text_resource_decoder.h"
 #include "third_party/blink/renderer/core/xml/document_xslt.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
@@ -45,21 +48,15 @@ void DecodedDataDocumentParser::SetDecoder(
   // transferred away by takeDecoder(), we need to make sure it's recreated
   // next time data is appended.
   needs_decoder_ = !decoder;
+  meta_charset_trace_event_emitted_ = false;
   decoder_ = std::move(decoder);
 }
 
-TextResourceDecoder* DecodedDataDocumentParser::Decoder() {
-  return decoder_.get();
-}
-
-std::unique_ptr<TextResourceDecoder> DecodedDataDocumentParser::TakeDecoder() {
-  return std::move(decoder_);
-}
-
-void DecodedDataDocumentParser::AppendBytes(const char* data, size_t length) {
+void DecodedDataDocumentParser::AppendBytes(base::span<const uint8_t> bytes) {
   TRACE_EVENT0("loading", "DecodedDataDocumentParser::AppendBytes");
-  if (!length)
+  if (bytes.empty()) {
     return;
+  }
 
   // This should be checking isStopped(), but XMLDocumentParser prematurely
   // stops parsing when handling an XSLT processing instruction and still
@@ -67,7 +64,11 @@ void DecodedDataDocumentParser::AppendBytes(const char* data, size_t length) {
   if (IsDetached())
     return;
 
-  String decoded = decoder_->Decode(data, length);
+  String auto_detected_charset;
+  String decoded = decoder_->Decode(bytes, &auto_detected_charset);
+  if (!auto_detected_charset.empty()) {
+    GetDocument()->CountUse(WebFeature::kCharsetAutoDetection);
+  }
   UpdateDocument(decoded);
 }
 
@@ -87,15 +88,70 @@ void DecodedDataDocumentParser::Flush() {
   UpdateDocument(remaining_data);
 }
 
-void DecodedDataDocumentParser::UpdateDocument(String& decoded_data) {
+void DecodedDataDocumentParser::AppendDecodedData(
+    const String& data,
+    const DocumentEncodingData& encoding_data) {
+  if (IsDetached())
+    return;
+
   // A Document created from XSLT may have changed the encoding of the data
   // before feeding it to the parser, so don't overwrite the encoding data XSLT
   // provided about the original encoding.
   if (!DocumentXSLT::HasTransformSourceDocument(*GetDocument()))
-    GetDocument()->SetEncodingData(DocumentEncodingData(*decoder_.get()));
+    GetDocument()->SetEncodingData(encoding_data);
 
-  if (!decoded_data.IsEmpty())
-    Append(decoded_data);
+  if (!data.empty())
+    Append(data);
+}
+
+void DecodedDataDocumentParser::MaybeEmitMetaCharsetTraceEvent() {
+  if (!decoder_ || meta_charset_trace_event_emitted_) {
+    return;
+  }
+
+  TRACE_EVENT_INSTANT(
+      "devtools.timeline", "MetaCharsetCheck", "data",
+      [&](perfetto::TracedValue ctx) {
+        const TextResourceDecoder::MetaCharsetDisposition disposition =
+            decoder_->GetMetaCharsetDisposition();
+        if (disposition ==
+            TextResourceDecoder::MetaCharsetDisposition::kUnknown) {
+          return;
+        }
+
+        meta_charset_trace_event_emitted_ = true;
+
+        Document* document = GetDocument();
+        LocalFrame* frame = document ? document->GetFrame() : nullptr;
+
+        const char* disposition_string = "";
+        switch (disposition) {
+          case TextResourceDecoder::MetaCharsetDisposition::kUnknown:
+            NOTREACHED();
+          case TextResourceDecoder::MetaCharsetDisposition::
+              kFoundInFirst1024Bytes:
+            disposition_string = "found-in-first-1024-bytes";
+            break;
+          case TextResourceDecoder::MetaCharsetDisposition::
+              kFoundAfterFirst1024Bytes:
+            disposition_string = "found-after-first-1024-bytes";
+            break;
+          case TextResourceDecoder::MetaCharsetDisposition::kNotFound:
+            disposition_string = "not-found";
+            break;
+        }
+
+        auto dict = std::move(ctx).WriteDictionary();
+        if (frame) {
+          dict.Add("frame", GetFrameIdForTracing(frame));
+        }
+        dict.Add("disposition", disposition_string);
+      });
+}
+
+void DecodedDataDocumentParser::UpdateDocument(const String& decoded_data) {
+  AppendDecodedData(decoded_data, DocumentEncodingData(*decoder_.get()));
+  MaybeEmitMetaCharsetTraceEvent();
 }
 
 }  // namespace blink

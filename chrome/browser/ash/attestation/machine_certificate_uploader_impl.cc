@@ -1,37 +1,36 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/attestation/machine_certificate_uploader_impl.h"
 
 #include <memory>
+#include <optional>
 #include <string>
-#include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
-#include "base/containers/span.h"
+#include "base/check_is_test.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
-#include "base/time/time.h"
 #include "chrome/browser/ash/attestation/attestation_ca_client.h"
 #include "chrome/browser/ash/attestation/attestation_key_payload.pb.h"
-#include "chromeos/attestation/attestation_flow.h"
-#include "chromeos/attestation/attestation_flow_adaptive.h"
-#include "chromeos/cryptohome/cryptohome_parameters.h"
-#include "chromeos/dbus/attestation/attestation_client.h"
-#include "chromeos/dbus/attestation/interface.pb.h"
-#include "chromeos/dbus/dbus_method_call_status.h"
-#include "chromeos/dbus/dbus_thread_manager.h"
+#include "chrome/browser/ash/attestation/certificate_util.h"
+#include "chromeos/ash/components/attestation/attestation_flow.h"
+#include "chromeos/ash/components/attestation/attestation_flow_adaptive.h"
+#include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
+#include "chromeos/ash/components/dbus/attestation/attestation_client.h"
+#include "chromeos/ash/components/dbus/attestation/interface.pb.h"
+#include "chromeos/ash/components/dbus/constants/attestation_constants.h"
+#include "chromeos/ash/components/dbus/dbus_thread_manager.h"
+#include "chromeos/dbus/common/dbus_callback.h"
 #include "components/account_id/account_id.h"
 #include "components/policy/core/common/cloud/cloud_policy_client.h"
 #include "components/user_manager/known_user.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/notification_details.h"
-#include "net/cert/pem.h"
-#include "net/cert/x509_certificate.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+
+namespace ash::attestation {
 
 namespace {
 
@@ -40,18 +39,17 @@ namespace {
 // issues certificates with an expiry of at least two years.  This value has
 // been set large enough so that the majority of users will have gone through
 // a full sign-in during the period.
-const int kExpiryThresholdInDays = 30;
-const int kRetryDelay = 5;  // Seconds.
+constexpr base::TimeDelta kExpiryThreshold = base::Days(30);
+constexpr base::TimeDelta kRetryDelay = base::Seconds(5);
 const int kRetryLimit = 100;
 
 void DBusPrivacyCACallback(
     const base::RepeatingCallback<void(const std::string&)> on_success,
-    const base::RepeatingCallback<
-        void(chromeos::attestation::AttestationStatus)> on_failure,
+    const base::RepeatingCallback<void(AttestationStatus)> on_failure,
     const base::Location& from_here,
-    chromeos::attestation::AttestationStatus status,
+    AttestationStatus status,
     const std::string& data) {
-  if (status == chromeos::attestation::ATTESTATION_SUCCESS) {
+  if (status == ATTESTATION_SUCCESS) {
     on_success.Run(data);
     return;
   }
@@ -63,17 +61,11 @@ void DBusPrivacyCACallback(
 
 }  // namespace
 
-namespace ash {
-namespace attestation {
-
 MachineCertificateUploaderImpl::MachineCertificateUploaderImpl(
     policy::CloudPolicyClient* policy_client)
-    : policy_client_(policy_client),
-      attestation_flow_(nullptr),
-      num_retries_(0),
-      retry_limit_(kRetryLimit),
-      retry_delay_(kRetryDelay) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    : MachineCertificateUploaderImpl(policy_client,
+                                     /*attestation_flow=*/nullptr) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 }
 
 MachineCertificateUploaderImpl::MachineCertificateUploaderImpl(
@@ -81,13 +73,13 @@ MachineCertificateUploaderImpl::MachineCertificateUploaderImpl(
     AttestationFlow* attestation_flow)
     : policy_client_(policy_client),
       attestation_flow_(attestation_flow),
-      num_retries_(0),
+      retry_limit_(kRetryLimit),
       retry_delay_(kRetryDelay) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 }
 
 MachineCertificateUploaderImpl::~MachineCertificateUploaderImpl() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 }
 
 void MachineCertificateUploaderImpl::UploadCertificateIfNeeded(
@@ -110,6 +102,14 @@ void MachineCertificateUploaderImpl::Start() {
   // We expect a registered CloudPolicyClient.
   if (!policy_client_->is_registered()) {
     LOG(ERROR) << "MachineCertificateUploaderImpl: Invalid CloudPolicyClient.";
+    certificate_uploaded_ = false;
+    RunCallbacks(certificate_uploaded_.value());
+    return;
+  }
+
+  // We always expect a valid attestation client, except for testing scenarios.
+  if (!AttestationClient::Get()) {
+    CHECK_IS_TEST();
     certificate_uploaded_ = false;
     RunCallbacks(certificate_uploaded_.value());
     return;
@@ -141,11 +141,14 @@ void MachineCertificateUploaderImpl::Start() {
 void MachineCertificateUploaderImpl::GetNewCertificate() {
   // We can reuse the dbus callback handler logic.
   attestation_flow_->GetCertificate(
-      PROFILE_ENTERPRISE_MACHINE_CERTIFICATE,
-      EmptyAccountId(),  // Not used.
-      std::string(),     // Not used.
-      true,              // Force a new key to be generated.
-      std::string(),     // Leave key name empty to generate a default name.
+      /*certificate_profile=*/PROFILE_ENTERPRISE_MACHINE_CERTIFICATE,
+      /*account_id=*/EmptyAccountId(),   // Not used.
+      /*request_origin=*/std::string(),  // Not used.
+      /*force_new_key=*/true,            // Force a new key to be generated.
+      /*key_crypto_type=*/::attestation::KEY_TYPE_RSA,
+      /*key_name=*/ash::attestation::kEnterpriseMachineKey,
+      /*profile_specific_data=*/std::nullopt,
+      /*callback=*/
       base::BindOnce(
           [](const base::RepeatingCallback<void(const std::string&)> on_success,
              const base::RepeatingCallback<void(AttestationStatus)> on_failure,
@@ -182,37 +185,29 @@ void MachineCertificateUploaderImpl::OnGetExistingCertificate(
 
 void MachineCertificateUploaderImpl::CheckCertificateExpiry(
     const ::attestation::GetKeyInfoReply& reply) {
-  const std::string& pem_certificate_chain = reply.certificate();
-  int num_certificates = 0;
-  net::PEMTokenizer pem_tokenizer(pem_certificate_chain, {"CERTIFICATE"});
-  while (pem_tokenizer.GetNext()) {
-    ++num_certificates;
-    scoped_refptr<net::X509Certificate> x509 =
-        net::X509Certificate::CreateFromBytes(
-            base::as_bytes(base::make_span(pem_tokenizer.data())));
-    if (!x509.get() || x509->valid_expiry().is_null()) {
-      // This logic intentionally fails open. In theory this should not happen
-      // but in practice parsing X.509 can be brittle and there are a lot of
-      // factors including which underlying module is parsing the certificate,
-      // whether that module performs more checks than just ASN.1/DER format,
-      // and the server module that generated the certificate(s). Renewal is
-      // expensive so we only renew certificates with good evidence that they
-      // have expired or will soon expire; if we don't know, we don't renew.
-      LOG(WARNING) << "Failed to parse certificate, cannot check expiry.";
-      continue;
-    }
-    const base::TimeDelta threshold =
-        base::TimeDelta::FromDays(kExpiryThresholdInDays);
-    if ((base::Time::Now() + threshold) > x509->valid_expiry()) {
+  const CertificateExpiryStatus cert_status =
+      ::ash::attestation::CheckCertificateExpiry(reply.certificate(),
+                                                 kExpiryThreshold);
+  switch (cert_status) {
+    case CertificateExpiryStatus::kExpired:
+    case CertificateExpiryStatus::kExpiringSoon:
       // The certificate has expired or will soon, replace it.
       GetNewCertificate();
       return;
-    }
+    case CertificateExpiryStatus::kValid:
+    case CertificateExpiryStatus::kInvalidPemChain:
+    case CertificateExpiryStatus::kInvalidX509:
+      // kInvalidPemChain and kInvalidX509 are not handled intentionally.
+      // Renewal is expensive so we only renew certificates with good evidence
+      // that they have expired or will soon expire; if we don't know, we don't
+      // renew.
+      LOG_IF(ERROR, cert_status != CertificateExpiryStatus::kValid)
+          << "Failed to parse certificate, cannot check expiry: "
+          << CertificateExpiryStatusToString(cert_status);
+      CheckIfUploaded(reply);
+      return;
   }
-  if (num_certificates == 0) {
-    LOG(WARNING) << "Failed to parse certificate chain, cannot check expiry.";
-  }
-  CheckIfUploaded(reply);
+  NOTREACHED() << "Unknown certificate status";
 }
 
 void MachineCertificateUploaderImpl::UploadCertificate(
@@ -246,8 +241,9 @@ void MachineCertificateUploaderImpl::CheckIfUploaded(
   UploadCertificate(reply.certificate());
 }
 
-void MachineCertificateUploaderImpl::OnUploadComplete(bool status) {
-  if (status) {
+void MachineCertificateUploaderImpl::OnUploadComplete(
+    policy::CloudPolicyClient::Result result) {
+  if (result.IsSuccess()) {
     VLOG(1) << "Enterprise Machine Certificate uploaded to DMServer.";
     ::attestation::GetKeyInfoRequest request;
     request.set_username("");
@@ -255,8 +251,11 @@ void MachineCertificateUploaderImpl::OnUploadComplete(bool status) {
     AttestationClient::Get()->GetKeyInfo(
         request, base::BindOnce(&MachineCertificateUploaderImpl::MarkAsUploaded,
                                 weak_factory_.GetWeakPtr()));
+  } else if (result.IsClientNotRegisteredError()) {
+    LOG(WARNING) << "Attempted to upload a certificate but cloud policy client "
+                    "is not registered.";
   }
-  certificate_uploaded_ = status;
+  certificate_uploaded_ = result.IsSuccess();
   RunCallbacks(certificate_uploaded_.value());
 }
 
@@ -294,11 +293,19 @@ void MachineCertificateUploaderImpl::MarkAsUploaded(
 
 void MachineCertificateUploaderImpl::HandleGetCertificateFailure(
     AttestationStatus status) {
-  if (status != ATTESTATION_SERVER_BAD_REQUEST_FAILURE) {
-    Reschedule();
-  } else {
-    certificate_uploaded_ = false;
-    RunCallbacks(certificate_uploaded_.value());
+  switch (status) {
+    case ATTESTATION_UNSPECIFIED_FAILURE:
+      Reschedule();
+      break;
+
+    case ATTESTATION_SERVER_BAD_REQUEST_FAILURE:
+    case ATTESTATION_NOT_AVAILABLE:
+      certificate_uploaded_ = false;
+      RunCallbacks(certificate_uploaded_.value());
+      break;
+
+    case ATTESTATION_SUCCESS:
+      NOTREACHED();
   }
 }
 
@@ -308,7 +315,7 @@ void MachineCertificateUploaderImpl::Reschedule() {
         FROM_HERE,
         base::BindOnce(&MachineCertificateUploaderImpl::Start,
                        weak_factory_.GetWeakPtr()),
-        base::TimeDelta::FromSeconds(retry_delay_));
+        retry_delay_);
   } else {
     LOG(WARNING) << "MachineCertificateUploaderImpl: Retry limit exceeded.";
     certificate_uploaded_ = false;
@@ -327,5 +334,4 @@ void MachineCertificateUploaderImpl::RunCallbacks(bool status) {
   }
 }
 
-}  // namespace attestation
-}  // namespace ash
+}  // namespace ash::attestation

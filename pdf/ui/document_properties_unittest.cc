@@ -1,17 +1,20 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "pdf/ui/document_properties.h"
 
+#include <optional>
 #include <string>
 
+#include "base/i18n/language_tag.h"
 #include "base/i18n/number_formatting.h"
 #include "base/i18n/rtl.h"
+#include "base/i18n/tag_converters.h"
+#include "base/i18n/test/scoped_icu_locale.h"
 #include "pdf/document_metadata.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/gfx/geometry/size.h"
 
 namespace chrome_pdf {
@@ -25,26 +28,27 @@ class FormatPageSizeTest : public testing::Test {
   void SetUp() override {
     const std::string locale(GetLocale());
     if (!locale.empty()) {
-      base::i18n::SetICUDefaultLocale(locale);
+      icu_locale_override_.emplace(
+          base::i18n::GetLanguageTagFromString(locale).value());
       base::ResetFormattersForTesting();
     }
   }
 
   void TearDown() override {
-    base::i18n::SetICUDefaultLocale(default_locale_);
+    icu_locale_override_.reset();
     base::ResetFormattersForTesting();
   }
 
   virtual std::string GetLocale() const { return std::string(); }
 
  private:
-  std::string default_locale_{base::i18n::GetConfiguredLocale()};
+  std::optional<base::i18n::ScopedDefaultIcuLocale> icu_locale_override_;
 };
 
 }  // namespace
 
 TEST_F(FormatPageSizeTest, NoUniformSize) {
-  EXPECT_EQ(FormatPageSize(absl::nullopt), u"Varies");
+  EXPECT_EQ(FormatPageSize(std::nullopt), u"Varies");
 }
 
 class FormatPageSizeMillimetersTest : public FormatPageSizeTest {
@@ -53,7 +57,7 @@ class FormatPageSizeMillimetersTest : public FormatPageSizeTest {
 };
 
 TEST_F(FormatPageSizeMillimetersTest, EmptySize) {
-  EXPECT_EQ(FormatPageSize(gfx::Size()), u"0 × 0 mm (portrait)");
+  EXPECT_EQ(FormatPageSize(gfx::Size()), u"0 × 0 mm (square)");
 }
 
 TEST_F(FormatPageSizeMillimetersTest, Portrait) {
@@ -65,12 +69,12 @@ TEST_F(FormatPageSizeMillimetersTest, Landscape) {
 }
 
 TEST_F(FormatPageSizeMillimetersTest, Square) {
-  EXPECT_EQ(FormatPageSize(gfx::Size(100, 100)), u"35 × 35 mm (portrait)");
+  EXPECT_EQ(FormatPageSize(gfx::Size(100, 100)), u"35 × 35 mm (square)");
 }
 
 TEST_F(FormatPageSizeMillimetersTest, Large) {
   EXPECT_EQ(FormatPageSize(gfx::Size(72000, 72000)),
-            u"25,400 × 25,400 mm (portrait)");
+            u"25,400 × 25,400 mm (square)");
 }
 
 class FormatPageSizeMillimetersPeriodSeparatorTest : public FormatPageSizeTest {
@@ -80,7 +84,7 @@ class FormatPageSizeMillimetersPeriodSeparatorTest : public FormatPageSizeTest {
 
 TEST_F(FormatPageSizeMillimetersPeriodSeparatorTest, Large) {
   EXPECT_EQ(FormatPageSize(gfx::Size(72000, 72000)),
-            u"25.400 × 25.400 mm (portrait)");
+            u"25.400 × 25.400 mm (square)");
 }
 
 class FormatPageSizeInchesTest : public FormatPageSizeTest {
@@ -89,7 +93,7 @@ class FormatPageSizeInchesTest : public FormatPageSizeTest {
 };
 
 TEST_F(FormatPageSizeInchesTest, EmptySize) {
-  EXPECT_EQ(FormatPageSize(gfx::Size()), u"0.00 × 0.00 in (portrait)");
+  EXPECT_EQ(FormatPageSize(gfx::Size()), u"0.00 × 0.00 in (square)");
 }
 
 TEST_F(FormatPageSizeInchesTest, Portrait) {
@@ -101,12 +105,12 @@ TEST_F(FormatPageSizeInchesTest, Landscape) {
 }
 
 TEST_F(FormatPageSizeInchesTest, Square) {
-  EXPECT_EQ(FormatPageSize(gfx::Size(100, 100)), u"1.39 × 1.39 in (portrait)");
+  EXPECT_EQ(FormatPageSize(gfx::Size(100, 100)), u"1.39 × 1.39 in (square)");
 }
 
 TEST_F(FormatPageSizeInchesTest, Large) {
   EXPECT_EQ(FormatPageSize(gfx::Size(72000, 72000)),
-            u"1,000.00 × 1,000.00 in (portrait)");
+            u"1,000.00 × 1,000.00 in (square)");
 }
 
 TEST(FormatPdfVersion, Valid) {

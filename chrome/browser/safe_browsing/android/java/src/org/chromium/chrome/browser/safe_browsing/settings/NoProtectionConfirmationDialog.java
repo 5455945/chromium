@@ -1,13 +1,18 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.safe_browsing.settings;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.content.Context;
 import android.content.res.Resources;
 
 import org.chromium.base.Callback;
+import org.chromium.build.annotations.MonotonicNonNull;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.components.browser_ui.modaldialog.AppModalPresenter;
 import org.chromium.ui.modaldialog.DialogDismissalCause;
 import org.chromium.ui.modaldialog.ModalDialogManager;
@@ -16,14 +21,15 @@ import org.chromium.ui.modaldialog.ModalDialogProperties;
 import org.chromium.ui.modaldialog.ModalDialogProperties.Controller;
 import org.chromium.ui.modelutil.PropertyModel;
 
-/**
- * Dialog to confirm if the user is sure to disable Safe Browsing.
- */
+/** Dialog to confirm if the user is sure to disable Safe Browsing. */
+@NullMarked
 public class NoProtectionConfirmationDialog {
-    private Context mContext;
-    private ModalDialogManager mManager;
-    private PropertyModel mModel;
-    private Callback<Boolean> mDidConfirmCallback;
+    private final Context mContext;
+
+    @MonotonicNonNull private ModalDialogManager mManager;
+
+    private @Nullable PropertyModel mModel;
+    private final Callback<Boolean> mDidConfirmCallback;
 
     public static NoProtectionConfirmationDialog create(
             Context context, Callback<Boolean> didConfirmCallback) {
@@ -41,14 +47,25 @@ public class NoProtectionConfirmationDialog {
         PropertyModel.Builder builder =
                 new PropertyModel.Builder(ModalDialogProperties.ALL_KEYS)
                         .with(ModalDialogProperties.CONTROLLER, makeController())
-                        .with(ModalDialogProperties.TITLE, resources,
+                        .with(
+                                ModalDialogProperties.TITLE,
+                                resources,
                                 R.string.safe_browsing_no_protection_confirmation_dialog_title)
-                        .with(ModalDialogProperties.MESSAGE, resources,
-                                R.string.safe_browsing_no_protection_confirmation_dialog_message)
-                        .with(ModalDialogProperties.POSITIVE_BUTTON_TEXT, resources,
+                        .with(
+                                ModalDialogProperties.MESSAGE_PARAGRAPH_1,
+                                resources.getString(
+                                        R.string
+                                                .safe_browsing_no_protection_confirmation_dialog_message))
+                        .with(
+                                ModalDialogProperties.POSITIVE_BUTTON_TEXT,
+                                resources,
                                 R.string.safe_browsing_no_protection_confirmation_dialog_confirm)
-                        .with(ModalDialogProperties.PRIMARY_BUTTON_FILLED, true)
-                        .with(ModalDialogProperties.NEGATIVE_BUTTON_TEXT, resources,
+                        .with(
+                                ModalDialogProperties.BUTTON_STYLES,
+                                ModalDialogProperties.ButtonStyles.PRIMARY_FILLED_NEGATIVE_OUTLINE)
+                        .with(
+                                ModalDialogProperties.NEGATIVE_BUTTON_TEXT,
+                                resources,
                                 R.string.cancel);
         mModel = builder.build();
         mManager = new ModalDialogManager(new AppModalPresenter(mContext), ModalDialogType.APP);
@@ -56,6 +73,9 @@ public class NoProtectionConfirmationDialog {
     }
 
     private Controller makeController() {
+        // Technically mManager is only non-Null when the methods inside the
+        // controller are called.
+        assumeNonNull(mManager);
         return new ModalDialogProperties.Controller() {
             @Override
             public void onClick(PropertyModel model, int buttonType) {

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,8 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/lazy_instance.h"
 #include "base/memory/ref_counted.h"
 #include "build/chromeos_buildflags.h"
@@ -20,9 +20,10 @@
 #include "extensions/browser/api/bluetooth/bluetooth_api_utils.h"
 #include "extensions/browser/api/bluetooth/bluetooth_event_router.h"
 #include "extensions/browser/event_router.h"
+#include "extensions/browser/extension_host_registry.h"
 #include "extensions/common/api/bluetooth.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "device/bluetooth/chromeos/bluetooth_utils.h"
 #endif
 
@@ -60,6 +61,13 @@ static base::LazyInstance<
 BrowserContextKeyedAPIFactory<BluetoothAPI>*
 BluetoothAPI::GetFactoryInstance() {
   return g_factory.Pointer();
+}
+
+template <>
+void BrowserContextKeyedAPIFactory<BluetoothAPI>::DeclareFactoryDependencies() {
+  /// The BluetoothEventRouter, which is owned by the BluetoothAPI object,
+  // depends on the ExtensionHostRegistry.
+  DependsOn(ExtensionHostRegistry::GetFactory());
 }
 
 // static
@@ -130,21 +138,20 @@ BluetoothGetDevicesFunction::BluetoothGetDevicesFunction() = default;
 BluetoothGetDevicesFunction::~BluetoothGetDevicesFunction() = default;
 
 bool BluetoothGetDevicesFunction::CreateParams() {
-  params_ = GetDevices::Params::Create(*args_);
-  return params_ != nullptr;
+  params_ = GetDevices::Params::Create(args());
+  return params_.has_value();
 }
 
 void BluetoothGetDevicesFunction::DoWork(
     scoped_refptr<BluetoothAdapter> adapter) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
-  std::unique_ptr<base::ListValue> device_list(new base::ListValue);
+  base::ListValue device_list;
 
   BluetoothAdapter::DeviceList devices;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Default filter values.
-  bluetooth_api::FilterType filter_type =
-      bluetooth_api::FilterType::FILTER_TYPE_ALL;
+  bluetooth_api::FilterType filter_type = bluetooth_api::FilterType::kAll;
   int limit = 0; /*no limit*/
   if (params_->filter) {
     filter_type = params_->filter->filter_type;
@@ -167,10 +174,10 @@ void BluetoothGetDevicesFunction::DoWork(
     bluetooth_api::Device extension_device;
     bluetooth_api::BluetoothDeviceToApiDevice(*device, &extension_device);
 
-    device_list->Append(extension_device.ToValue());
+    device_list.Append(extension_device.ToValue());
   }
 
-  Respond(OneArgument(base::Value::FromUniquePtrValue(std::move(device_list))));
+  Respond(WithArguments(std::move(device_list)));
 }
 
 BluetoothGetDeviceFunction::BluetoothGetDeviceFunction() = default;
@@ -178,8 +185,8 @@ BluetoothGetDeviceFunction::BluetoothGetDeviceFunction() = default;
 BluetoothGetDeviceFunction::~BluetoothGetDeviceFunction() = default;
 
 bool BluetoothGetDeviceFunction::CreateParams() {
-  params_ = GetDevice::Params::Create(*args_);
-  return params_ != nullptr;
+  params_ = GetDevice::Params::Create(args());
+  return params_.has_value();
 }
 
 void BluetoothGetDeviceFunction::DoWork(
@@ -190,8 +197,7 @@ void BluetoothGetDeviceFunction::DoWork(
   if (device) {
     bluetooth_api::Device extension_device;
     bluetooth_api::BluetoothDeviceToApiDevice(*device, &extension_device);
-    Respond(OneArgument(
-        base::Value::FromUniquePtrValue(extension_device.ToValue())));
+    Respond(WithArguments(extension_device.ToValue()));
   } else {
     Respond(Error(kInvalidDevice));
   }

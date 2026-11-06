@@ -1,13 +1,12 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef IOS_WEB_VIEW_INTERNAL_CWV_SSL_ERROR_HANDLER_INTERNAL_H_
 #define IOS_WEB_VIEW_INTERNAL_CWV_SSL_ERROR_HANDLER_INTERNAL_H_
 
-#include "ios/web_view/public/cwv_ssl_error_handler.h"
-
 #import "ios/web/public/web_state.h"
+#include "ios/web_view/public/cwv_ssl_error_handler.h"
 #include "net/ssl/ssl_info.h"
 
 NS_ASSUME_NONNULL_BEGIN

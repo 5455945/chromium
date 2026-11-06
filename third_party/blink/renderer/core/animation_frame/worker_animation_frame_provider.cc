@@ -1,14 +1,18 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/animation_frame/worker_animation_frame_provider.h"
 
+#include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/trace_event.h"
+#include "third_party/blink/renderer/core/execution_context/agent.h"
 #include "third_party/blink/renderer/core/offscreencanvas/offscreen_canvas.h"
 #include "third_party/blink/renderer/core/timing/worker_global_scope_performance.h"
-#include "third_party/blink/renderer/platform/bindings/microtask.h"
+#include "third_party/blink/renderer/core/workers/worker_global_scope.h"
+#include "third_party/blink/renderer/platform/scheduler/public/event_loop.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 
 namespace blink {
 
@@ -28,28 +32,28 @@ int WorkerAnimationFrameProvider::RegisterCallback(FrameCallback* callback) {
   }
 
   FrameRequestCallbackCollection::CallbackId id =
-      callback_collection_.RegisterFrameCallback(callback);
+      callback_collection_.RegisterFrameCallback(
+          callback, FrameCallbackType::kWebExposed);
   begin_frame_provider_->RequestBeginFrame();
   return id;
 }
 
 void WorkerAnimationFrameProvider::CancelCallback(int id) {
-  callback_collection_.CancelFrameCallback(id);
+  callback_collection_.CancelFrameCallback(id, FrameCallbackType::kWebExposed);
 }
 
 void WorkerAnimationFrameProvider::BeginFrame(const viz::BeginFrameArgs& args) {
-  TRACE_EVENT_WITH_FLOW0("blink", "WorkerAnimationFrameProvider::BeginFrame",
-                         TRACE_ID_GLOBAL(args.trace_id),
-                         TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT);
+  TRACE_EVENT("blink", "WorkerAnimationFrameProvider::BeginFrame",
+              perfetto::Flow::Global(args.trace_id));
 
-  Microtask::EnqueueMicrotask(WTF::Bind(
+  context_->GetAgent()->event_loop()->EnqueueMicrotask(BindOnce(
       [](WeakPersistent<WorkerAnimationFrameProvider> provider,
          const viz::BeginFrameArgs& args) {
         if (!provider)
           return;
-        TRACE_EVENT_WITH_FLOW0(
-            "blink", "WorkerAnimationFrameProvider::RequestAnimationFrame",
-            TRACE_ID_GLOBAL(args.trace_id), TRACE_EVENT_FLAG_FLOW_IN);
+        TRACE_EVENT("blink",
+                    "WorkerAnimationFrameProvider::RequestAnimationFrame",
+                    perfetto::TerminatingFlow::Global(args.trace_id));
         {
           OffscreenCanvas::ScopedInsideWorkerRAF inside_raf_scope(args);
           for (auto& offscreen_canvas : provider->offscreen_canvases_) {
@@ -62,7 +66,16 @@ void WorkerAnimationFrameProvider::BeginFrame(const viz::BeginFrameArgs& args) {
             }
           }
 
-          double time = (args.frame_time - base::TimeTicks()).InMillisecondsF();
+          auto* global_scope =
+              DynamicTo<WorkerGlobalScope>(provider->context_.Get());
+          DCHECK(global_scope);
+          base::TimeDelta relative_time =
+              args.frame_time.is_null()
+                  ? base::TimeDelta()
+                  : args.frame_time - global_scope->TimeOrigin();
+          double time = Performance::ClampTimeResolution(
+              relative_time,
+              provider->context_->CrossOriginIsolatedCapability());
           provider->callback_collection_.ExecuteFrameCallbacks(time, time);
         }
         provider->begin_frame_provider_->FinishBeginFrame(args);
@@ -70,9 +83,15 @@ void WorkerAnimationFrameProvider::BeginFrame(const viz::BeginFrameArgs& args) {
       WrapWeakPersistent(this), args));
 }
 
+scoped_refptr<base::SingleThreadTaskRunner>
+WorkerAnimationFrameProvider::GetCompositorTaskRunner() {
+  return context_->GetScheduler()->CompositorTaskRunner();
+}
+
 void WorkerAnimationFrameProvider::RegisterOffscreenCanvas(
-    OffscreenCanvas* context) {
-  auto result = offscreen_canvases_.insert(context);
+    OffscreenCanvas* canvas) {
+  CHECK(canvas->HasPlaceholderCanvas());
+  auto result = offscreen_canvases_.insert(canvas);
   DCHECK(result.is_new_entry);
 }
 

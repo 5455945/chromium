@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,26 +10,18 @@
 namespace crash_helper {
 namespace common {
 
-// Key in NSUserDefaults for a Boolean value that stores whether to upload
-// crash reports.
-extern const char kCrashReportsUploadingEnabledKey[];
-
-// Key in NSUserDefaults for a Boolean value that stores the last feature
-// value of kCrashpadIOS.
-extern const char kCrashpadStartOnNextRun[];
-
 // Returns true if uploading crash reports is enabled in the settings.
 bool UserEnabledUploading();
 
-// Check and cache the GroupUserDefaults value synced from the associated
-// kCrashpadIOS feature.
-bool CanCrashpadStart();
+// Sets the user preferences related to uploading crash reports and cache them
+// to be used on next startup to check if safe mode must be started.
+void SetUserEnabledUploading(bool enabled);
 
 // Returns the shared app group crashpad directory.
 base::FilePath CrashpadDumpLocation();
 
 // Initialize Crashpad.
-void StartCrashpad();
+bool StartCrashpad();
 
 }  // namespace common
 }  // namespace crash_helper

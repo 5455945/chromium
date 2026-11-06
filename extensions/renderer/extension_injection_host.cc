@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,25 +6,33 @@
 
 #include "content/public/renderer/render_frame.h"
 #include "extensions/common/constants.h"
+#include "extensions/common/extension_id.h"
 #include "extensions/common/manifest_handlers/csp_info.h"
 #include "extensions/common/mojom/host_id.mojom.h"
+#include "extensions/renderer/extension_web_view_helper.h"
 #include "extensions/renderer/renderer_extension_registry.h"
-#include "third_party/blink/public/platform/web_security_origin.h"
+#include "pdf/buildflags.h"
+#include "third_party/blink/public/web/web_document.h"
 #include "third_party/blink/public/web/web_local_frame.h"
+
+#if BUILDFLAG(ENABLE_PDF)
+#include "components/pdf/common/pdf_util.h"  // nogncheck
+#endif  // BUILDFLAG(ENABLE_PDF)
 
 namespace extensions {
 
 ExtensionInjectionHost::ExtensionInjectionHost(const Extension* extension)
     : InjectionHost(
           mojom::HostID(mojom::HostID::HostType::kExtensions, extension->id())),
-      extension_(extension) {}
+      extension_(extension),
+      isolated_world_csp_(CSPInfo::GetIsolatedWorldCSP(*extension_)) {}
 
 ExtensionInjectionHost::~ExtensionInjectionHost() {
 }
 
 // static
 std::unique_ptr<const InjectionHost> ExtensionInjectionHost::Create(
-    const std::string& extension_id) {
+    const ExtensionId& extension_id) {
   const Extension* extension =
       RendererExtensionRegistry::Get()->GetByID(extension_id);
   if (!extension)
@@ -34,7 +42,7 @@ std::unique_ptr<const InjectionHost> ExtensionInjectionHost::Create(
 }
 
 const std::string* ExtensionInjectionHost::GetContentSecurityPolicy() const {
-  return CSPInfo::GetIsolatedWorldCSP(*extension_);
+  return isolated_world_csp_ ? &(isolated_world_csp_.value()) : nullptr;
 }
 
 const GURL& ExtensionInjectionHost::url() const {
@@ -50,11 +58,31 @@ PermissionsData::PageAccess ExtensionInjectionHost::CanExecuteOnFrame(
     content::RenderFrame* render_frame,
     int tab_id,
     bool is_declarative) const {
-  blink::WebSecurityOrigin top_frame_security_origin =
-      render_frame->GetWebFrame()->Top()->GetSecurityOrigin();
-  // Only whitelisted extensions may run scripts on another extension's page.
-  if (top_frame_security_origin.Protocol().Utf8() == kExtensionScheme &&
-      top_frame_security_origin.Host().Utf8() != extension_->id() &&
+  blink::WebLocalFrame* web_local_frame = render_frame->GetWebFrame();
+
+#if BUILDFLAG(ENABLE_PDF)
+  // Block executing scripts in the PDF content frame. The parent frame should
+  // be the PDF extension frame.
+  blink::WebFrame* parent_web_frame = web_local_frame->Parent();
+  if (parent_web_frame && IsPdfExtensionOrigin(url::Origin(
+                              parent_web_frame->GetSecurityOrigin()))) {
+    return PermissionsData::PageAccess::kDenied;
+  }
+#endif  // BUILDFLAG(ENABLE_PDF)
+
+  // If the WebView is embedded in another WebView the outermost extension
+  // origin will be set, otherwise we should use it directly from the
+  // WebFrame's top origin.
+  auto outermost_origin =
+      ExtensionWebViewHelper::Get(render_frame->GetWebView())
+          ->GetOutermostOrigin();
+  if (!outermost_origin) {
+    outermost_origin = web_local_frame->Top()->GetSecurityOrigin();
+  }
+
+  // Only allowlisted extensions may run scripts on another extension's page.
+  if (outermost_origin->scheme() == kExtensionScheme &&
+      outermost_origin->host() != extension_->id() &&
       !PermissionsData::CanExecuteScriptEverywhere(extension_->id(),
                                                    extension_->location())) {
     return PermissionsData::PageAccess::kDenied;
@@ -75,11 +103,16 @@ PermissionsData::PageAccess ExtensionInjectionHost::CanExecuteOnFrame(
         tab_id,
         nullptr /* ignore error */);
   }
+  blink::WebDocument document = web_local_frame->GetDocument();
+  const bool document_is_prerendering =
+      !document.IsNull() && document.IsPrerendering();
   if (access == PermissionsData::PageAccess::kWithheld &&
-      (tab_id == -1 || render_frame->GetWebFrame()->Parent())) {
-    // Note: we don't consider ACCESS_WITHHELD for child frames or for frames
-    // outside of tabs because there is nowhere to surface a request.
-    // TODO(devlin): We should ask for permission somehow. crbug.com/491402.
+      (tab_id == -1 || !web_local_frame->IsOutermostMainFrame() ||
+       document_is_prerendering)) {
+    // Note: we don't consider ACCESS_WITHHELD for child frames, for frames
+    // outside of tabs, or for prerendered frames because there is nowhere to
+    // surface a request.
+    // TODO(devlin): We should ask for permission somehow. crbug.com/40419472.
     access = PermissionsData::PageAccess::kDenied;
   }
   return access;

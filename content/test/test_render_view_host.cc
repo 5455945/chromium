@@ -1,40 +1,45 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/test/test_render_view_host.h"
 
 #include <memory>
+#include <optional>
+#include <tuple>
 
+#include "base/notimplemented.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
+#include "components/input/render_widget_host_input_event_router.h"
 #include "components/viz/common/surfaces/parent_local_surface_id_allocator.h"
 #include "components/viz/host/host_frame_sink_manager.h"
+#include "content/browser/blob_storage/chrome_blob_storage_context.h"
 #include "content/browser/compositor/image_transport_factory.h"
 #include "content/browser/compositor/surface_utils.h"
 #include "content/browser/dom_storage/dom_storage_context_wrapper.h"
-#include "content/browser/dom_storage/session_storage_namespace_impl.h"
+#include "content/browser/dom_storage/session_storage_namespace_handle_impl.h"
 #include "content/browser/renderer_host/data_transfer_util.h"
-#include "content/browser/renderer_host/input/synthetic_gesture_target.h"
 #include "content/browser/renderer_host/render_frame_proxy_host.h"
-#include "content/browser/renderer_host/render_widget_host_input_event_router.h"
-#include "content/browser/site_instance_impl.h"
 #include "content/browser/storage_partition_impl.h"
+#include "content/common/input/synthetic_gesture_target.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/drop_data.h"
+#include "content/public/common/page_visibility_state.h"
+#include "content/test/test_page_broadcast.h"
 #include "content/test/test_render_frame_host.h"
-#include "content/test/test_render_view_host.h"
 #include "content/test/test_web_contents.h"
+#include "ipc/constants.mojom.h"
 #include "media/base/video_frame.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/page_state/page_state.h"
 #include "third_party/blink/public/common/web_preferences/web_preferences.h"
-#include "third_party/blink/public/mojom/page/drag.mojom.h"
+#include "third_party/blink/public/mojom/drag/drag.mojom.h"
 #include "ui/aura/env.h"
 #include "ui/compositor/compositor.h"
 #include "ui/compositor/layer_type.h"
@@ -47,8 +52,11 @@
 namespace content {
 
 TestRenderWidgetHostView::TestRenderWidgetHostView(RenderWidgetHost* rwh)
-    : RenderWidgetHostViewBase(rwh), is_showing_(false), is_occluded_(false) {
-#if defined(OS_ANDROID)
+    : RenderWidgetHostViewBase(rwh),
+      is_showing_(!host()->IsHidden()),
+      is_occluded_(false),
+      cursor_manager_(this) {
+#if BUILDFLAG(IS_ANDROID)
   frame_sink_id_ = AllocateFrameSinkId();
   GetHostFrameSinkManager()->RegisterFrameSinkId(
       frame_sink_id_, this, viz::ReportFirstSurfaceActivation::kYes);
@@ -68,52 +76,60 @@ TestRenderWidgetHostView::TestRenderWidgetHostView(RenderWidgetHost* rwh)
 
   host()->SetView(this);
 
-  if (host()->delegate() && host()->delegate()->GetInputEventRouter() &&
-      GetFrameSinkId().is_valid()) {
-    host()->delegate()->GetInputEventRouter()->AddFrameSinkIdOwner(
-        GetFrameSinkId(), this);
-  }
+  SetIsFrameSinkIdOwner(true);
 
 #if defined(USE_AURA)
+  constexpr gfx::Rect kBounds = gfx::Rect(0, 0, 20, 20);
   window_ = std::make_unique<aura::Window>(
       aura::test::TestWindowDelegate::CreateSelfDestroyingDelegate());
   window_->set_owned_by_parent(false);
   window_->Init(ui::LayerType::LAYER_NOT_DRAWN);
+  window_->SetBounds(kBounds);
 #endif
 }
 
 TestRenderWidgetHostView::~TestRenderWidgetHostView() {
   viz::HostFrameSinkManager* manager = GetHostFrameSinkManager();
   if (manager)
-    manager->InvalidateFrameSinkId(frame_sink_id_);
+    manager->InvalidateFrameSinkId(frame_sink_id_, this, {});
 }
 
 gfx::NativeView TestRenderWidgetHostView::GetNativeView() {
 #if defined(USE_AURA)
   return window_.get();
 #else
-  return nullptr;
+  return gfx::NativeView();
 #endif
 }
 
 gfx::NativeViewAccessible TestRenderWidgetHostView::GetNativeViewAccessible() {
-  return nullptr;
+  return gfx::NativeViewAccessible();
 }
 
 ui::TextInputClient* TestRenderWidgetHostView::GetTextInputClient() {
+#if !BUILDFLAG(IS_IOS)
   return &text_input_client_;
+#else
+  NOTREACHED();
+#endif
 }
 
 bool TestRenderWidgetHostView::HasFocus() {
   return true;
 }
 
-void TestRenderWidgetHostView::Show() {
+void TestRenderWidgetHostView::ShowWithVisibility(
+    PageVisibilityState page_visibility) {
+  page_visibility_ = page_visibility;
+  OnShowWithPageVisibility(page_visibility_);
   is_showing_ = true;
   is_occluded_ = false;
 }
 
 void TestRenderWidgetHostView::Hide() {
+  if (!host()->IsHidden()) {
+    host()->WasHidden();
+  }
   is_showing_ = false;
 }
 
@@ -121,23 +137,14 @@ bool TestRenderWidgetHostView::IsShowing() {
   return is_showing_;
 }
 
-void TestRenderWidgetHostView::WasUnOccluded() {
-  is_occluded_ = false;
-}
-
 void TestRenderWidgetHostView::WasOccluded() {
+  if (!host()->IsHidden()) {
+    host()->WasHidden();
+  }
   is_occluded_ = true;
 }
 
-void TestRenderWidgetHostView::EnsureSurfaceSynchronizedForWebTest() {
-  ++latest_capture_sequence_number_;
-}
-
-uint32_t TestRenderWidgetHostView::GetCaptureSequenceNumber() const {
-  return latest_capture_sequence_number_;
-}
-
-void TestRenderWidgetHostView::UpdateCursor(const WebCursor& cursor) {
+void TestRenderWidgetHostView::UpdateCursor(const ui::Cursor& cursor) {
   last_cursor_ = cursor;
 }
 
@@ -145,13 +152,23 @@ void TestRenderWidgetHostView::RenderProcessGone() {
   delete this;
 }
 
-void TestRenderWidgetHostView::Destroy() { delete this; }
-
-gfx::Rect TestRenderWidgetHostView::GetViewBounds() {
-  return gfx::Rect();
+void TestRenderWidgetHostView::DestroyImpl() {
+  delete this;
 }
 
-#if defined(OS_MAC)
+void TestRenderWidgetHostView::SetSize(const gfx::Size& size) {
+  bounds_.set_size(size);
+}
+
+void TestRenderWidgetHostView::SetBounds(const gfx::Rect& rect) {
+  bounds_ = rect;
+}
+
+gfx::Rect TestRenderWidgetHostView::GetViewBounds() {
+  return bounds_;
+}
+
+#if BUILDFLAG(IS_MAC)
 void TestRenderWidgetHostView::SetActive(bool active) {
   // <viettrungluu@gmail.com>: Do I need to do anything here?
 }
@@ -164,31 +181,55 @@ void TestRenderWidgetHostView::SetWindowFrameInScreen(const gfx::Rect& rect) {}
 void TestRenderWidgetHostView::ShowSharePicker(
     const std::string& title,
     const std::string& text,
-    const std::string& url,
+    const GURL& url,
     const std::vector<std::string>& file_paths,
     blink::mojom::ShareService::ShareCallback callback) {}
+
+uint64_t TestRenderWidgetHostView::GetNSViewId() const {
+  return 0;
+}
 #endif
 
-gfx::Rect TestRenderWidgetHostView::GetBoundsInRootWindow() {
+#if BUILDFLAG(IS_ANDROID)
+bool TestRenderWidgetHostView::IsTouchSequencePotentiallyActiveOnViz() {
+  return false;
+}
+#endif
+
+gfx::Rect TestRenderWidgetHostView::GetBoundsInScreen() {
   return gfx::Rect();
+}
+
+const viz::LocalSurfaceId&
+TestRenderWidgetHostView::IncrementSurfaceIdForNavigation() {
+  static constexpr viz::LocalSurfaceId kInvalidId;
+  return kInvalidId;
+}
+
+void TestRenderWidgetHostView::ClearFallbackSurfaceForCommitPending() {
+  clear_fallback_surface_for_commit_pending_called_ = true;
+}
+
+void TestRenderWidgetHostView::OnUnconfirmedTapConvertedToTap() {
+  NOTREACHED();
 }
 
 void TestRenderWidgetHostView::TakeFallbackContentFrom(
     RenderWidgetHostView* view) {
+  take_fallback_content_from_called_ = true;
   CopyBackgroundColorIfPresentFrom(*view);
 }
 
-blink::mojom::PointerLockResult TestRenderWidgetHostView::LockMouse(bool) {
+blink::mojom::PointerLockResult TestRenderWidgetHostView::LockPointer(bool) {
   return blink::mojom::PointerLockResult::kUnknownError;
 }
 
-blink::mojom::PointerLockResult TestRenderWidgetHostView::ChangeMouseLock(
+blink::mojom::PointerLockResult TestRenderWidgetHostView::ChangePointerLock(
     bool) {
   return blink::mojom::PointerLockResult::kUnknownError;
 }
 
-void TestRenderWidgetHostView::UnlockMouse() {
-}
+void TestRenderWidgetHostView::UnlockPointer() {}
 
 const viz::FrameSinkId& TestRenderWidgetHostView::GetFrameSinkId() const {
   return frame_sink_id_;
@@ -200,6 +241,10 @@ const viz::LocalSurfaceId& TestRenderWidgetHostView::GetLocalSurfaceId() const {
 
 viz::SurfaceId TestRenderWidgetHostView::GetCurrentSurfaceId() const {
   return viz::SurfaceId();
+}
+
+bool TestRenderWidgetHostView::HasSavedCompositorFrame() const {
+  return false;
 }
 
 void TestRenderWidgetHostView::OnFirstSurfaceActivation(
@@ -214,6 +259,11 @@ void TestRenderWidgetHostView::OnFrameTokenChanged(
   OnFrameTokenChangedForView(frame_token, activation_time);
 }
 
+void TestRenderWidgetHostView::ClearFallbackSurfaceCalled() {
+  clear_fallback_surface_for_commit_pending_called_ = false;
+  take_fallback_content_from_called_ = false;
+}
+
 std::unique_ptr<SyntheticGestureTarget>
 TestRenderWidgetHostView::CreateSyntheticGestureTarget() {
   NOTIMPLEMENTED();
@@ -222,15 +272,59 @@ TestRenderWidgetHostView::CreateSyntheticGestureTarget() {
 
 void TestRenderWidgetHostView::UpdateBackgroundColor() {}
 
-void TestRenderWidgetHostView::SetDisplayFeatureForTesting(
+void TestRenderWidgetHostView::DisableDisplayFeatureOverrideForEmulation() {
+  display_feature_ = std::nullopt;
+}
+
+void TestRenderWidgetHostView::OverrideDisplayFeatureForEmulation(
     const DisplayFeature* display_feature) {
   if (display_feature)
     display_feature_ = *display_feature;
   else
-    display_feature_ = absl::nullopt;
+    display_feature_ = std::nullopt;
 }
 
-absl::optional<DisplayFeature> TestRenderWidgetHostView::GetDisplayFeature() {
+void TestRenderWidgetHostView::NotifyHostAndDelegateOnWasShown(
+    std::optional<blink::RecordContentToVisibleTimeRequest>
+        visible_time_request) {
+  // Should only be called if the view was not already shown.
+  EXPECT_TRUE(!is_showing_ || is_occluded_);
+  switch (page_visibility_) {
+    case PageVisibilityState::kVisible:
+      // May or may not include a visible_time_request.
+      break;
+    case PageVisibilityState::kHiddenButPainting:
+      EXPECT_FALSE(visible_time_request);
+      break;
+    case PageVisibilityState::kHidden:
+      ADD_FAILURE();
+      break;
+  }
+  if (host()->IsHidden()) {
+    // Do not pass on `visible_time_request` because there is no compositing to
+    // measure.
+    host()->WasShown(std::nullopt);
+  }
+}
+
+void TestRenderWidgetHostView::
+    RequestSuccessfulPresentationTimeFromHostOrDelegate(
+        blink::RecordContentToVisibleTimeRequest visible_time_request) {
+  // Should only be called if the view was already shown.
+  EXPECT_TRUE(is_showing_);
+  EXPECT_FALSE(is_occluded_);
+  EXPECT_EQ(page_visibility_, PageVisibilityState::kVisible);
+}
+
+void TestRenderWidgetHostView::
+    CancelSuccessfulPresentationTimeRequestForHostAndDelegate() {
+  // Should only be called if the view was already shown.
+  EXPECT_TRUE(is_showing_);
+  EXPECT_FALSE(is_occluded_);
+  EXPECT_EQ(page_visibility_, PageVisibilityState::kHiddenButPainting);
+}
+
+std::optional<DisplayFeature> TestRenderWidgetHostView::GetDisplayFeature() {
   return display_feature_;
 }
 
@@ -238,27 +332,68 @@ ui::Compositor* TestRenderWidgetHostView::GetCompositor() {
   return compositor_;
 }
 
+input::CursorManager* TestRenderWidgetHostView::GetCursorManager() {
+  return &cursor_manager_;
+}
+
+TestRenderWidgetHostViewChildFrame::TestRenderWidgetHostViewChildFrame(
+    RenderWidgetHost* rwh)
+    : RenderWidgetHostViewChildFrame(
+          rwh,
+          display::ScreenInfos(display::ScreenInfo())) {
+  Init();
+}
+
+void TestRenderWidgetHostViewChildFrame::Reset() {
+  last_gesture_seen_ = blink::WebInputEvent::Type::kUndefined;
+}
+
+void TestRenderWidgetHostViewChildFrame::SetCompositor(
+    ui::Compositor* compositor) {
+  compositor_ = compositor;
+}
+
+ui::Compositor* TestRenderWidgetHostViewChildFrame::GetCompositor() {
+  return compositor_;
+}
+
+void TestRenderWidgetHostViewChildFrame::ProcessGestureEvent(
+    const blink::WebGestureEvent& event,
+    const ui::LatencyInfo&) {
+  last_gesture_seen_ = event.GetType();
+}
+
 TestRenderViewHost::TestRenderViewHost(
     FrameTree* frame_tree,
-    SiteInstance* instance,
+    SiteInstanceGroup* group,
+    const StoragePartitionConfig& storage_partition_config,
     std::unique_ptr<RenderWidgetHostImpl> widget,
     RenderViewHostDelegate* delegate,
     int32_t routing_id,
     int32_t main_frame_routing_id,
-    bool swapped_out)
+    scoped_refptr<BrowsingContextState> main_browsing_context_state,
+    CreateRenderViewHostCase create_case)
     : RenderViewHostImpl(frame_tree,
-                         instance,
+                         group,
+                         storage_partition_config,
                          std::move(widget),
                          delegate,
                          routing_id,
                          main_frame_routing_id,
-                         swapped_out,
-                         false /* has_initialized_audio_host */),
+                         false /* has_initialized_audio_host */,
+                         std::move(main_browsing_context_state),
+                         create_case),
       delete_counter_(nullptr) {
-  // TestRenderWidgetHostView installs itself into this->view_ in its
-  // constructor, and deletes itself when TestRenderWidgetHostView::Destroy() is
-  // called.
-  new TestRenderWidgetHostView(GetWidget());
+  if (frame_tree->is_fenced_frame()) {
+    // TestRenderWidgetHostViewChildFrame deletes itself in
+    // RenderWidgetHostViewChildFrame::Destroy.
+    new TestRenderWidgetHostViewChildFrame(GetWidget());
+  } else {
+    // TestRenderWidgetHostView installs itself into this->view_ in
+    // its constructor, and deletes itself when
+    // TestRenderWidgetHostView::Destroy() is called.
+    new TestRenderWidgetHostView(GetWidget());
+  }
 }
 
 TestRenderViewHost::~TestRenderViewHost() {
@@ -267,16 +402,20 @@ TestRenderViewHost::~TestRenderViewHost() {
 }
 
 bool TestRenderViewHost::CreateTestRenderView() {
-  return CreateRenderView(absl::nullopt, MSG_ROUTING_NONE, false);
+  return CreateRenderView(/*opener_frame_token=*/std::nullopt,
+                          /*proxy_route_id=*/IPC::mojom::kRoutingIdNone,
+                          /*window_was_created_with_opener=*/false,
+                          /*navigation_metrics_token=*/std::nullopt);
 }
 
 bool TestRenderViewHost::CreateRenderView(
-    const absl::optional<blink::FrameToken>& opener_frame_token,
+    const std::optional<blink::FrameToken>& opener_frame_token,
     int proxy_route_id,
-    bool window_was_created_with_opener) {
+    bool window_was_created_with_opener,
+    const std::optional<base::UnguessableToken>& navigation_metrics_token) {
   DCHECK(!IsRenderViewLive());
-  // Mark the RenderView as live, though there's nothing to do here since we
-  // don't yet use mojo to talk to the RenderView.
+  // Mark the `blink::WebView` as live, though there's nothing to do here since
+  // we don't yet use mojo to talk to the RenderView.
   renderer_view_created_ = true;
 
   // When the RenderViewHost has a main frame host attached, the RenderView
@@ -284,12 +423,12 @@ bool TestRenderViewHost::CreateRenderView(
   // creating the mojo connections and calling RenderFrameCreated().
   RenderFrameHostImpl* main_frame = nullptr;
   RenderFrameProxyHost* proxy_host = nullptr;
-  if (main_frame_routing_id_ != MSG_ROUTING_NONE) {
-    main_frame = RenderFrameHostImpl::FromID(GetProcess()->GetID(),
+  if (main_frame_routing_id_ != IPC::mojom::kRoutingIdNone) {
+    main_frame = RenderFrameHostImpl::FromID(GetProcess()->GetDeprecatedID(),
                                              main_frame_routing_id_);
   } else {
-    proxy_host =
-        RenderFrameProxyHost::FromID(GetProcess()->GetID(), proxy_route_id);
+    proxy_host = RenderFrameProxyHost::FromID(GetProcess()->GetDeprecatedID(),
+                                              proxy_route_id);
   }
 
   DCHECK_EQ(!!main_frame, is_active());
@@ -314,8 +453,15 @@ bool TestRenderViewHost::CreateRenderView(
   } else {
     // Pretend that mojo connections of the RemoteFrame is transferred to
     // renderer process and bound in blink.
+    mojo::AssociatedRemote<blink::mojom::RemoteFrame> remote_frame;
+    std::ignore = remote_frame.BindNewEndpointAndPassDedicatedReceiver();
+    proxy_host->BindRemoteFrameInterfaces(
+        remote_frame.Unbind(),
+        mojo::AssociatedRemote<blink::mojom::RemoteFrameHost>()
+            .BindNewEndpointAndPassDedicatedReceiver());
+
     mojo::AssociatedRemote<blink::mojom::RemoteMainFrame> remote_main_frame;
-    ignore_result(remote_main_frame.BindNewEndpointAndPassDedicatedReceiver());
+    std::ignore = remote_main_frame.BindNewEndpointAndPassDedicatedReceiver();
     proxy_host->BindRemoteMainFrameInterfaces(
         remote_main_frame.Unbind(),
         mojo::AssociatedRemote<blink::mojom::RemoteMainFrameHost>()
@@ -324,27 +470,34 @@ bool TestRenderViewHost::CreateRenderView(
     proxy_host->SetRenderFrameProxyCreated(true);
   }
 
+  mojo::AssociatedRemote<blink::mojom::PageBroadcast> broadcast_remote;
+  page_broadcast_ = std::make_unique<TestPageBroadcast>(
+      broadcast_remote.BindNewEndpointAndPassDedicatedReceiver());
+  BindPageBroadcast(broadcast_remote.Unbind());
+
   opener_frame_token_ = opener_frame_token;
   DCHECK(IsRenderViewLive());
   return true;
 }
 
-MockRenderProcessHost* TestRenderViewHost::GetProcess() {
+MockRenderProcessHost* TestRenderViewHost::GetProcess() const {
   return static_cast<MockRenderProcessHost*>(RenderViewHostImpl::GetProcess());
 }
 
 void TestRenderViewHost::SimulateWasHidden() {
-  GetWidget()->WasHidden();
+  GetWidget()->GetView()->Hide();
 }
 
 void TestRenderViewHost::SimulateWasShown() {
-  GetWidget()->WasShown({} /* record_tab_switch_time_request */);
+  GetWidget()->GetView()->ShowWithVisibility(PageVisibilityState::kVisible);
 }
 
 blink::web_pref::WebPreferences
 TestRenderViewHost::TestComputeWebPreferences() {
-  return static_cast<WebContentsImpl*>(WebContents::FromRenderViewHost(this))
-      ->ComputeWebPreferences();
+  auto* web_contents_impl =
+      static_cast<WebContentsImpl*>(WebContents::FromRenderViewHost(this));
+  return web_contents_impl->ComputeWebPreferences(
+      web_contents_impl->GetPrimaryMainFrame());
 }
 
 bool TestRenderViewHost::IsTestRenderViewHost() const {
@@ -355,39 +508,38 @@ void TestRenderViewHost::TestStartDragging(const DropData& drop_data,
                                            SkBitmap bitmap) {
   StoragePartitionImpl* storage_partition =
       static_cast<StoragePartitionImpl*>(GetProcess()->GetStoragePartition());
-  GetWidget()->StartDragging(
-      DropDataToDragData(drop_data,
-                         storage_partition->GetFileSystemAccessManager(),
-                         GetProcess()->GetID()),
+  GetMainRenderFrameHost()->StartDragging(
+      DropDataToDragData(
+          drop_data, storage_partition->GetFileSystemAccessManager(),
+          GetProcess()->GetDeprecatedID(),
+          ChromeBlobStorageContext::GetFor(GetProcess()->GetBrowserContext())),
       blink::kDragOperationEvery, std::move(bitmap), gfx::Vector2d(),
-      blink::mojom::DragEventSourceInfo::New());
+      gfx::Rect(), blink::mojom::DragEventSourceInfo::New());
 }
 
 void TestRenderViewHost::TestOnUpdateStateWithFile(
     const base::FilePath& file_path) {
   auto state = blink::PageState::CreateForTesting(GURL("http://www.google.com"),
                                                   false, "data", &file_path);
-  static_cast<RenderFrameHostImpl*>(GetMainFrame())->UpdateState(state);
+  GetMainRenderFrameHost()->UpdateState(state);
 }
 
 RenderViewHostImplTestHarness::RenderViewHostImplTestHarness()
     : RenderViewHostTestHarness(
           base::test::TaskEnvironment::TimeSource::MOCK_TIME) {
-  std::vector<ui::ScaleFactor> scale_factors;
-  scale_factors.push_back(ui::SCALE_FACTOR_100P);
-  scoped_set_supported_scale_factors_ =
-      std::make_unique<ui::test::ScopedSetSupportedScaleFactors>(scale_factors);
+  // Disable IgnoreDuplicateNavs to ensure tests run with predictable navigation
+  // behavior and don't have navigations unintentionally ignored.
+  scoped_feature_list_.InitAndDisableFeature(features::kIgnoreDuplicateNavs);
 }
 
-RenderViewHostImplTestHarness::~RenderViewHostImplTestHarness() {
-}
+RenderViewHostImplTestHarness::~RenderViewHostImplTestHarness() = default;
 
 TestRenderViewHost* RenderViewHostImplTestHarness::test_rvh() {
   return contents()->GetRenderViewHost();
 }
 
 TestRenderFrameHost* RenderViewHostImplTestHarness::main_test_rfh() {
-  return contents()->GetMainFrame();
+  return contents()->GetPrimaryMainFrame();
 }
 
 TestWebContents* RenderViewHostImplTestHarness::contents() {

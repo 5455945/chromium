@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,9 @@
 #define ANDROID_WEBVIEW_BROWSER_AW_BROWSER_PERMISSION_REQUEST_DELEGATE_H_
 
 #include "android_webview/browser/permission/permission_callback.h"
-#include "base/callback_forward.h"
-#include "url/gurl.h"
+#include "base/functional/callback_forward.h"
+
+class GURL;
 
 namespace android_webview {
 

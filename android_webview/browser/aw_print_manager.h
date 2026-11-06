@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,28 +7,42 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "base/file_descriptor_posix.h"
+#include "base/files/scoped_file.h"
+#include "base/memory/weak_ptr.h"
 #include "components/printing/browser/print_manager.h"
 #include "components/printing/common/print.mojom-forward.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "printing/print_settings.h"
 
 namespace android_webview {
-
+// Lifetime: WebView
 class AwPrintManager : public printing::PrintManager,
     public content::WebContentsUserData<AwPrintManager> {
  public:
+  AwPrintManager(const AwPrintManager&) = delete;
+  AwPrintManager& operator=(const AwPrintManager&) = delete;
+
   ~AwPrintManager() override;
 
+  static void BindPrintManagerHost(
+      mojo::PendingAssociatedReceiver<printing::mojom::PrintManagerHost>
+          receiver,
+      content::RenderFrameHost* rfh);
+
   // printing::PrintManager:
+  void SetupScriptedPrintAndroid(
+      SetupScriptedPrintAndroidCallback callback) override;
   void PdfWritingDone(int page_count) override;
 
-  bool PrintNow();
-
   // Updates the parameters for printing.
+  // All arguments must be valid / non-null.
   void UpdateParam(std::unique_ptr<printing::PrintSettings> settings,
-                   int file_descriptor,
+                   base::ScopedFD file_descriptor,
                    PdfWritingDoneCallback callback);
+
+  // Call to start printing after first setting up with UpdateParam().
+  bool PrintNow();
 
  private:
   friend class content::WebContentsUserData<AwPrintManager>;
@@ -43,19 +57,22 @@ class AwPrintManager : public printing::PrintManager,
   void ScriptedPrint(printing::mojom::ScriptedPrintParamsPtr params,
                      ScriptedPrintCallback callback) override;
 
-  static void OnDidPrintDocumentWritingDone(
-      const PdfWritingDoneCallback& callback,
+  void OnDidPrintDocumentWritingDone(
       DidPrintDocumentCallback did_print_document_cb,
       uint32_t page_count);
+
+  // Indicates whether AwPrintManager is performing Browser-initiated printing
+  // or not. Intended to be called in ScriptedPrint().
+  bool is_printing() const { return fd_.is_valid(); }
 
   std::unique_ptr<printing::PrintSettings> settings_;
 
   // The file descriptor into which the PDF of the document will be written.
-  int fd_ = -1;
+  base::ScopedFD fd_;
 
   WEB_CONTENTS_USER_DATA_KEY_DECL();
 
-  DISALLOW_COPY_AND_ASSIGN(AwPrintManager);
+  base::WeakPtrFactory<AwPrintManager> weak_ptr_factory_{this};
 };
 
 }  // namespace android_webview

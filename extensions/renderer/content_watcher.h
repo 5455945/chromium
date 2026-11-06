@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,6 @@
 
 #include <string>
 #include <vector>
-
-#include "base/macros.h"
-#include "third_party/blink/public/platform/web_vector.h"
 
 namespace blink {
 class WebString;
@@ -29,6 +26,10 @@ namespace extensions {
 class ContentWatcher {
  public:
   ContentWatcher();
+
+  ContentWatcher(const ContentWatcher&) = delete;
+  ContentWatcher& operator=(const ContentWatcher&) = delete;
+
   ~ContentWatcher();
 
   // Handler for the WatchPages Mojo method in extensions.mojom.Renderer
@@ -40,9 +41,7 @@ class ContentWatcher {
  private:
   // If any of these selectors match on a page, we need to call
   // extensions::mojom::LocalFrameHost::WatchedPageChange to notify the browser.
-  blink::WebVector<blink::WebString> css_selectors_;
-
-  DISALLOW_COPY_AND_ASSIGN(ContentWatcher);
+  std::vector<blink::WebString> css_selectors_;
 };
 
 }  // namespace extensions

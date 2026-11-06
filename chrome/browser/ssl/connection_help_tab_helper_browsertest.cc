@@ -1,11 +1,13 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ssl/connection_help_tab_helper.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_navigator.h"
+
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/strings/grit/components_strings.h"
@@ -25,6 +27,10 @@ class ConnectionHelpTabHelperTest : public InProcessBrowserTest {
       : https_server_(net::EmbeddedTestServer::TYPE_HTTPS),
         https_expired_server_(net::EmbeddedTestServer::TYPE_HTTPS) {}
 
+  ConnectionHelpTabHelperTest(const ConnectionHelpTabHelperTest&) = delete;
+  ConnectionHelpTabHelperTest& operator=(const ConnectionHelpTabHelperTest&) =
+      delete;
+
   void SetUpOnMainThread() override {
     https_server_.SetSSLConfig(net::EmbeddedTestServer::CERT_OK);
     https_expired_server_.SetSSLConfig(net::EmbeddedTestServer::CERT_EXPIRED);
@@ -35,9 +41,8 @@ class ConnectionHelpTabHelperTest : public InProcessBrowserTest {
   }
 
  protected:
-  void SetHelpCenterUrl(Browser* browser, const GURL& url) {
-    ConnectionHelpTabHelper::FromWebContents(
-        browser->tab_strip_model()->GetActiveWebContents())
+  void SetHelpCenterUrl(BrowserWindowInterface* browser, const GURL& url) {
+    ConnectionHelpTabHelper::From(browser->GetTabStripModel()->GetActiveTab())
         ->SetHelpCenterUrlForTesting(url);
   }
 
@@ -50,7 +55,6 @@ class ConnectionHelpTabHelperTest : public InProcessBrowserTest {
  private:
   net::EmbeddedTestServer https_server_;
   net::EmbeddedTestServer https_expired_server_;
-  DISALLOW_COPY_AND_ASSIGN(ConnectionHelpTabHelperTest);
 };
 
 // Tests that the chrome://connection-help redirect is not triggered for an
@@ -60,7 +64,7 @@ IN_PROC_BROWSER_TEST_F(ConnectionHelpTabHelperTest,
   GURL expired_non_support_url = https_expired_server()->GetURL("/title2.html");
   GURL good_support_url = https_server()->GetURL("/title2.html");
   SetHelpCenterUrl(browser(), good_support_url);
-  ui_test_utils::NavigateToURL(browser(), expired_non_support_url);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), expired_non_support_url));
 
   std::u16string tab_title;
   ui_test_utils::GetCurrentTabTitle(browser(), &tab_title);
@@ -73,7 +77,7 @@ IN_PROC_BROWSER_TEST_F(ConnectionHelpTabHelperTest,
                        SupportURLWithNoInterstitial) {
   GURL good_support_url = https_server()->GetURL("/title2.html");
   SetHelpCenterUrl(browser(), good_support_url);
-  ui_test_utils::NavigateToURL(browser(), good_support_url);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), good_support_url));
 
   std::u16string tab_title;
   ui_test_utils::GetCurrentTabTitle(browser(), &tab_title);
@@ -86,7 +90,7 @@ IN_PROC_BROWSER_TEST_F(ConnectionHelpTabHelperTest, InterstitialOnSupportURL) {
   GURL expired_url = https_expired_server()->GetURL("/title2.html");
   SetHelpCenterUrl(browser(), expired_url);
 
-  ui_test_utils::NavigateToURL(browser(), expired_url);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), expired_url));
 
   std::u16string tab_title;
   ui_test_utils::GetCurrentTabTitle(browser(), &tab_title);
@@ -104,7 +108,7 @@ IN_PROC_BROWSER_TEST_F(ConnectionHelpTabHelperTest,
   replacements.ClearRef();
   SetHelpCenterUrl(browser(), expired_url.ReplaceComponents(replacements));
 
-  ui_test_utils::NavigateToURL(browser(), expired_url);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), expired_url));
 
   // Check that we got redirected to the offline help content.
   std::u16string tab_title;
@@ -115,13 +119,10 @@ IN_PROC_BROWSER_TEST_F(ConnectionHelpTabHelperTest,
   // Check that the cert error details section is not hidden.
   std::string cert_error_is_hidden_js =
       "var certSection = document.getElementById('details-certerror'); "
-      "window.domAutomationController.send(certSection.className == "
-      "'hidden');";
-  bool cert_error_is_hidden;
-  ASSERT_TRUE(content::ExecuteScriptAndExtractBool(
-      browser()->tab_strip_model()->GetActiveWebContents(),
-      cert_error_is_hidden_js, &cert_error_is_hidden));
-  EXPECT_FALSE(cert_error_is_hidden);
+      "certSection.className == 'hidden';";
+  EXPECT_EQ(false, content::EvalJs(
+                       browser()->tab_strip_model()->GetActiveWebContents(),
+                       cert_error_is_hidden_js));
 }
 
 // Tests that if the help content site is opened with an error code that refers
@@ -133,7 +134,7 @@ IN_PROC_BROWSER_TEST_F(ConnectionHelpTabHelperTest,
   replacements.ClearRef();
   SetHelpCenterUrl(browser(), expired_url.ReplaceComponents(replacements));
 
-  ui_test_utils::NavigateToURL(browser(), expired_url);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), expired_url));
 
   // Check that we got redirected to the offline help content.
   std::u16string tab_title;
@@ -144,11 +145,8 @@ IN_PROC_BROWSER_TEST_F(ConnectionHelpTabHelperTest,
   // Check that the clock details section is not hidden.
   std::string clock_is_hidden_js =
       "var clockSection = document.getElementById('details-clock');  "
-      "window.domAutomationController.send(clockSection.className == "
-      "'hidden');";
-  bool clock_is_hidden;
-  ASSERT_TRUE(content::ExecuteScriptAndExtractBool(
-      browser()->tab_strip_model()->GetActiveWebContents(), clock_is_hidden_js,
-      &clock_is_hidden));
-  EXPECT_FALSE(clock_is_hidden);
+      "clockSection.className == 'hidden';";
+  EXPECT_EQ(false, content::EvalJs(
+                       browser()->tab_strip_model()->GetActiveWebContents(),
+                       clock_is_hidden_js));
 }

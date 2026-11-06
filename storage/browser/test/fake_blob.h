@@ -1,9 +1,12 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef STORAGE_BROWSER_TEST_FAKE_BLOB_H_
 #define STORAGE_BROWSER_TEST_FAKE_BLOB_H_
+
+#include <optional>
+#include <string>
 
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "third_party/blink/public/mojom/blob/blob.mojom.h"
@@ -15,6 +18,11 @@ namespace storage {
 class FakeBlob : public blink::mojom::Blob {
  public:
   explicit FakeBlob(const std::string& uuid);
+  ~FakeBlob() override;
+
+  // If no body is set, then reading will return an error through the
+  // BlobReaderClient interface. It's valid to set an empty body.
+  void set_body(std::string_view body) { body_ = std::string(body); }
 
   mojo::PendingRemote<blink::mojom::Blob> Clone();
   void Clone(mojo::PendingReceiver<blink::mojom::Blob> receiver) override;
@@ -35,7 +43,8 @@ class FakeBlob : public blink::mojom::Blob {
   void GetInternalUUID(GetInternalUUIDCallback callback) override;
 
  private:
-  std::string uuid_;
+  const std::string uuid_;
+  std::optional<std::string> body_;
 };
 
 }  // namespace storage

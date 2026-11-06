@@ -1,14 +1,12 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_COMPOSITOR_PAINT_CONTEXT_H_
 #define UI_COMPOSITOR_PAINT_CONTEXT_H_
 
-
 #include "base/check.h"
-#include "base/macros.h"
-#include "cc/paint/paint_recorder.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/compositor/compositor_export.h"
 #include "ui/gfx/geometry/rect.h"
 
@@ -39,6 +37,9 @@ class COMPOSITOR_EXPORT PaintContext {
   };
   PaintContext(const PaintContext& other, CloneWithoutInvalidation c);
 
+  PaintContext(const PaintContext&) = delete;
+  PaintContext& operator=(const PaintContext&) = delete;
+
   ~PaintContext();
 
   // When true, IsRectInvalid() can be called, otherwise its result would be
@@ -56,7 +57,7 @@ class COMPOSITOR_EXPORT PaintContext {
   // re-painted. When false, re-painting can be skipped. Bounds should be in
   // the local space with offsets up to the painting root in the PaintContext.
   bool IsRectInvalid(const gfx::Rect& bounds) const {
-    DCHECK(CanCheckInvalid());
+    CHECK(CanCheckInvalid(), base::NotFatalUntil::M163);
     return invalidation_.Intersects(bounds + offset_);
   }
 
@@ -89,7 +90,7 @@ class COMPOSITOR_EXPORT PaintContext {
   // Returns the given rect translated by the layer space offset.
   gfx::Rect ToLayerSpaceRect(const gfx::Rect& rect) const;
 
-  cc::DisplayItemList* list_;
+  raw_ptr<cc::DisplayItemList> list_;
   // The device scale of the frame being painted. Used to determine which bitmap
   // resources to use in the frame.
   float device_scale_factor_;
@@ -105,13 +106,11 @@ class COMPOSITOR_EXPORT PaintContext {
 #if DCHECK_IS_ON()
   // Used to verify that the |invalidation_| is only used to compare against
   // rects in the same space.
-  mutable void* root_visited_;
+  mutable raw_ptr<void> root_visited_;
   // Used to verify that paint recorders are not nested. True while a paint
   // recorder is active.
   mutable bool inside_paint_recorder_;
 #endif
-
-  DISALLOW_COPY_AND_ASSIGN(PaintContext);
 };
 
 }  // namespace ui

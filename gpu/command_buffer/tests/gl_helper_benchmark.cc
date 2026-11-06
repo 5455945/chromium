@@ -1,6 +1,8 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include <array>
 
 // This file looks like a unit test, but it contains benchmarks and test
 // utilities intended for manual evaluation of the scalers in
@@ -8,7 +10,7 @@
 // but cannot really "fail". There is no point in making these tests part
 // of any test automation run.
 
-#include <GLES2/gl2.h>
+#include <GLES2/gl2chromium.h>
 #include <GLES2/gl2ext.h>
 #include <GLES2/gl2extchromium.h>
 #include <stddef.h>
@@ -21,12 +23,10 @@
 
 #include "base/at_exit.h"
 #include "base/command_line.h"
-#include "base/cxx17_backports.h"
-#include "base/files/file_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/task_environment.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "components/viz/test/test_gpu_service_holder.h"
 #include "gpu/command_buffer/client/gl_helper.h"
@@ -42,47 +42,26 @@ namespace gpu {
 
 namespace {
 
-GLHelper::ScalerQuality kQualities[] = {
+constexpr auto kQualities = std::to_array<GLHelper::ScalerQuality>({
     GLHelper::SCALER_QUALITY_BEST,
     GLHelper::SCALER_QUALITY_GOOD,
     GLHelper::SCALER_QUALITY_FAST,
-};
+});
 
-const char* const kQualityNames[] = {
+constexpr auto kQualityNames = std::to_array<const char*>({
     "best",
     "good",
     "fast",
-};
+});
 
 }  // namespace
 
 class GLHelperBenchmark : public testing::Test {
  protected:
   void SetUp() override {
-    ContextCreationAttribs attributes;
-    attributes.alpha_size = 8;
-    attributes.depth_size = 24;
-    attributes.red_size = 8;
-    attributes.green_size = 8;
-    attributes.blue_size = 8;
-    attributes.stencil_size = 8;
-    attributes.samples = 4;
-    attributes.sample_buffers = 1;
-    attributes.bind_generates_resource = false;
-    attributes.gpu_preference = gl::GpuPreference::kHighPerformance;
-
     context_ = std::make_unique<GLInProcessContext>();
     auto result = context_->Initialize(
-        viz::TestGpuServiceHolder::GetInstance()->task_executor(),
-        nullptr,            /* surface */
-        true,               /* offscreen */
-        kNullSurfaceHandle, /* window */
-        attributes, SharedMemoryLimits(),
-        nullptr, /* gpu_memory_buffer_manager */
-        nullptr, /* image_factory */
-        nullptr, /* gpu_task_helper */
-        nullptr, /* display_compositor_memory_and_task_controller */
-        base::ThreadTaskRunnerHandle::Get());
+        viz::TestGpuServiceHolder::GetInstance()->task_executor());
     DCHECK_EQ(result, ContextResult::kSuccess);
     gl_ = context_->GetImplementation();
     ContextSupport* support = context_->GetImplementation();
@@ -94,52 +73,45 @@ class GLHelperBenchmark : public testing::Test {
   void TearDown() override {
     helper_scaling_.reset(nullptr);
     helper_.reset(nullptr);
+    gl_ = nullptr;
     context_.reset(nullptr);
-  }
-
-  void LoadPngFileToSkBitmap(const base::FilePath& filename, SkBitmap* bitmap) {
-    std::string compressed;
-    base::ReadFileToString(base::MakeAbsoluteFilePath(filename), &compressed);
-    ASSERT_TRUE(compressed.size());
-    ASSERT_TRUE(gfx::PNGCodec::Decode(
-        reinterpret_cast<const unsigned char*>(compressed.data()),
-        compressed.size(), bitmap));
-  }
-
-  // Save the image to a png file. Used to create the initial test files.
-  void SaveToFile(SkBitmap* bitmap, const base::FilePath& filename) {
-    std::vector<unsigned char> compressed;
-    ASSERT_TRUE(gfx::PNGCodec::Encode(
-        static_cast<unsigned char*>(bitmap->getPixels()),
-        gfx::PNGCodec::FORMAT_BGRA,
-        gfx::Size(bitmap->width(), bitmap->height()),
-        static_cast<int>(bitmap->rowBytes()), true,
-        std::vector<gfx::PNGCodec::Comment>(), &compressed));
-    ASSERT_TRUE(compressed.size());
-    FILE* f = base::OpenFile(filename, "wb");
-    ASSERT_TRUE(f);
-    ASSERT_EQ(fwrite(&*compressed.begin(), 1, compressed.size(), f),
-              compressed.size());
-    base::CloseFile(f);
   }
 
   base::test::TaskEnvironment task_environment_;
   std::unique_ptr<GLInProcessContext> context_;
-  gles2::GLES2Interface* gl_;
+  raw_ptr<gles2::GLES2Interface> gl_;  // This is owned by |context_|.
   std::unique_ptr<GLHelper> helper_;
   std::unique_ptr<GLHelperScaling> helper_scaling_;
   base::circular_deque<GLHelperScaling::ScaleOp> x_ops_, y_ops_;
 };
 
 TEST_F(GLHelperBenchmark, ScaleBenchmark) {
-  int output_sizes[] = {1920, 1080, 1249, 720,  // Output size on pixel
-                        256,  144};
-  int input_sizes[] = {3200, 2040, 2560, 1476,  // Pixel tab size
-                       1920, 1080, 1280, 720,  800, 480, 256, 144};
+  auto output_sizes = std::to_array<int>({
+      1920,
+      1080,
+      1249,
+      720,  // Output size on pixel
+      256,
+      144,
+  });
+  auto input_sizes = std::to_array<int>({
+      3200,
+      2040,
+      2560,
+      1476,  // Pixel tab size
+      1920,
+      1080,
+      1280,
+      720,
+      800,
+      480,
+      256,
+      144,
+  });
 
-  for (size_t q = 0; q < base::size(kQualities); q++) {
-    for (size_t outsize = 0; outsize < base::size(output_sizes); outsize += 2) {
-      for (size_t insize = 0; insize < base::size(input_sizes); insize += 2) {
+  for (size_t q = 0; q < std::size(kQualities); q++) {
+    for (size_t outsize = 0; outsize < std::size(output_sizes); outsize += 2) {
+      for (size_t insize = 0; insize < std::size(input_sizes); insize += 2) {
         uint32_t src_texture;
         gl_->GenTextures(1, &src_texture);
         uint32_t dst_texture;
@@ -192,7 +164,7 @@ TEST_F(GLHelperBenchmark, ScaleBenchmark) {
           if (iterations > 2000) {
             break;
           }
-          if ((end_time - start_time) > base::TimeDelta::FromSeconds(1)) {
+          if ((end_time - start_time) > base::Seconds(1)) {
             break;
           }
         }

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,13 @@
 
 #include <memory>
 
-#include "base/macros.h"
 #include "base/threading/thread.h"
 #include "base/threading/thread_checker.h"
 #include "build/build_config.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/browser_thread.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 namespace base {
 namespace win {
 class ScopedCOMInitializer;
@@ -23,10 +22,12 @@ class ScopedCOMInitializer;
 #endif
 
 namespace content {
-class NotificationService;
+class BrowserThreadImpl;
 }
 
 namespace content {
+
+class BrowserIOThreadDelegate;
 
 // ----------------------------------------------------------------------------
 // A BrowserProcessIOThread is a physical thread backing the IO thread.
@@ -37,7 +38,12 @@ namespace content {
 class CONTENT_EXPORT BrowserProcessIOThread : public base::Thread {
  public:
   // Constructs a BrowserProcessIOThread.
-  BrowserProcessIOThread();
+  explicit BrowserProcessIOThread(
+      std::unique_ptr<BrowserIOThreadDelegate> delegate);
+
+  BrowserProcessIOThread(const BrowserProcessIOThread&) = delete;
+  BrowserProcessIOThread& operator=(const BrowserProcessIOThread&) = delete;
+
   ~BrowserProcessIOThread() override;
 
   // Registers this thread to represent the IO thread in the browser_thread.h
@@ -61,14 +67,7 @@ class CONTENT_EXPORT BrowserProcessIOThread : public base::Thread {
   void CleanUp() override;
 
  private:
-  // Second Init() phase that must happen on this thread but can only happen
-  // after it's promoted to a BrowserThread in |RegisterAsBrowserThread()|.
-  void CompleteInitializationOnBrowserThread();
-
   void IOThreadRun(base::RunLoop* run_loop);
-
-  // This method encapsulates cleanup that needs to happen on the IO thread.
-  void IOThreadCleanUp();
 
   // BrowserThreads are not allowed to do file I/O nor wait on synchronization
   // primivives except when explicitly allowed in tests.
@@ -78,16 +77,11 @@ class CONTENT_EXPORT BrowserProcessIOThread : public base::Thread {
   // RegisterAsBrowserThread().
   std::unique_ptr<BrowserThreadImpl> browser_thread_;
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   std::unique_ptr<base::win::ScopedCOMInitializer> com_initializer_;
 #endif
 
-  // Each specialized thread has its own notification service.
-  std::unique_ptr<NotificationService> notification_service_;
-
   THREAD_CHECKER(browser_thread_checker_);
-
-  DISALLOW_COPY_AND_ASSIGN(BrowserProcessIOThread);
 };
 
 }  // namespace content

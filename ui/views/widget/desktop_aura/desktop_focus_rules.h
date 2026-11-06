@@ -1,18 +1,26 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_VIEWS_WIDGET_DESKTOP_AURA_DESKTOP_FOCUS_RULES_H_
 #define UI_VIEWS_WIDGET_DESKTOP_AURA_DESKTOP_FOCUS_RULES_H_
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/wm/core/base_focus_rules.h"
 
 namespace views {
 
+class DesktopNativeWidgetAura;
+
 class DesktopFocusRules : public wm::BaseFocusRules {
  public:
-  explicit DesktopFocusRules(aura::Window* content_window);
+  // `desktop_native_widget` owns `content_window` and must outlive this.
+  DesktopFocusRules(aura::Window* content_window,
+                    const DesktopNativeWidgetAura* desktop_native_widget);
+
+  DesktopFocusRules(const DesktopFocusRules&) = delete;
+  DesktopFocusRules& operator=(const DesktopFocusRules&) = delete;
+
   ~DesktopFocusRules() override;
 
  private:
@@ -29,9 +37,9 @@ class DesktopFocusRules : public wm::BaseFocusRules {
 
   // The content window. This is an activatable window even though it is a
   // child.
-  aura::Window* content_window_;
+  raw_ptr<aura::Window> content_window_;
 
-  DISALLOW_COPY_AND_ASSIGN(DesktopFocusRules);
+  raw_ptr<const DesktopNativeWidgetAura> desktop_native_widget_;
 };
 
 }  // namespace views

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -54,7 +54,7 @@ namespace mojo {
 //
 template <typename T>
 struct MapTraits {
-  static_assert(internal::AlwaysFalse<T>::value,
+  static_assert(false,
                 "Cannot find the mojo::MapTraits specialization. Did you "
                 "forget to include the corresponding header file?");
 };

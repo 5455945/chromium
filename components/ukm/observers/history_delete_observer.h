@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,14 +16,18 @@ namespace ukm {
 class HistoryDeleteObserver : public history::HistoryServiceObserver {
  public:
   HistoryDeleteObserver();
+
+  HistoryDeleteObserver(const HistoryDeleteObserver&) = delete;
+  HistoryDeleteObserver& operator=(const HistoryDeleteObserver&) = delete;
+
   ~HistoryDeleteObserver() override;
 
   // Starts observing a service for history deletions.
   void ObserveServiceForDeletions(history::HistoryService* history_service);
 
   // history::HistoryServiceObserver
-  void OnURLsDeleted(history::HistoryService* history_service,
-                     const history::DeletionInfo& deletion_info) override;
+  void OnHistoryDeletions(history::HistoryService* history_service,
+                          const history::DeletionInfo& deletion_info) override;
   void HistoryServiceBeingDeleted(
       history::HistoryService* history_service) override;
 
@@ -35,8 +39,6 @@ class HistoryDeleteObserver : public history::HistoryServiceObserver {
   base::ScopedMultiSourceObservation<history::HistoryService,
                                      history::HistoryServiceObserver>
       history_observations_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(HistoryDeleteObserver);
 };
 
 }  // namespace ukm

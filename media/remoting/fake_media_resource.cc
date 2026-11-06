@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,13 @@
 
 #include <vector>
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "media/base/decoder_buffer.h"
 #include "media/base/media_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/size.h"
 
 using testing::_;
 using testing::Invoke;
@@ -21,26 +24,27 @@ namespace remoting {
 FakeDemuxerStream::FakeDemuxerStream(bool is_audio) {
   type_ = is_audio ? DemuxerStream::AUDIO : DemuxerStream::VIDEO;
   if (is_audio) {
-    audio_config_.Initialize(kCodecAAC, kSampleFormatS16, CHANNEL_LAYOUT_STEREO,
-                             38400, std::vector<uint8_t>(),
-                             EncryptionScheme::kUnencrypted, base::TimeDelta(),
-                             0);
+    audio_config_.Initialize(
+        AudioCodec::kAAC, kSampleFormatS16, ChannelLayoutConfig::Stereo(),
+        38400, std::vector<uint8_t>(), EncryptionScheme::kUnencrypted,
+        base::TimeDelta(), 0);
   } else {
     gfx::Size size(640, 480);
     gfx::Rect rect(0, 0, 640, 480);
-    video_config_.Initialize(kCodecH264, H264PROFILE_BASELINE,
+    video_config_.Initialize(VideoCodec::kH264, H264PROFILE_BASELINE,
                              VideoDecoderConfig::AlphaMode::kIsOpaque,
                              VideoColorSpace::REC601(), kNoTransformation, size,
                              rect, size, std::vector<uint8_t>(),
                              EncryptionScheme::kUnencrypted);
   }
-  ON_CALL(*this, Read(_))
+  ON_CALL(*this, Read)
       .WillByDefault(Invoke(this, &FakeDemuxerStream::FakeRead));
 }
 
 FakeDemuxerStream::~FakeDemuxerStream() = default;
 
-void FakeDemuxerStream::FakeRead(ReadCB read_cb) {
+// Only return one buffer at a time so we ignore the count.
+void FakeDemuxerStream::FakeRead(uint32_t /*count*/, ReadCB read_cb) {
   if (buffer_queue_.empty()) {
     // Silent return to simulate waiting for buffer available.
     pending_read_cb_ = std::move(read_cb);
@@ -48,7 +52,7 @@ void FakeDemuxerStream::FakeRead(ReadCB read_cb) {
   }
   scoped_refptr<DecoderBuffer> buffer = buffer_queue_.front();
   buffer_queue_.pop_front();
-  std::move(read_cb).Run(kOk, buffer);
+  std::move(read_cb).Run(kOk, {std::move(buffer)});
 }
 
 AudioDecoderConfig FakeDemuxerStream::audio_decoder_config() {
@@ -63,8 +67,8 @@ DemuxerStream::Type FakeDemuxerStream::type() const {
   return type_;
 }
 
-DemuxerStream::Liveness FakeDemuxerStream::liveness() const {
-  return LIVENESS_UNKNOWN;
+StreamLiveness FakeDemuxerStream::liveness() const {
+  return StreamLiveness::kUnknown;
 }
 
 bool FakeDemuxerStream::SupportsConfigChanges() {
@@ -79,11 +83,10 @@ void FakeDemuxerStream::CreateFakeFrame(size_t size,
   for (size_t i = 0; i < size; ++i) {
     buffer[i] = static_cast<uint8_t>(i & 0xFF);
   }
-  base::TimeDelta pts = base::TimeDelta::FromMilliseconds(pts_ms);
+  base::TimeDelta pts = base::Milliseconds(pts_ms);
 
   // To DecoderBuffer
-  scoped_refptr<DecoderBuffer> input_buffer =
-      DecoderBuffer::CopyFrom(buffer.data(), size);
+  scoped_refptr<DecoderBuffer> input_buffer = DecoderBuffer::CopyFrom(buffer);
   input_buffer->set_timestamp(pts);
   input_buffer->set_is_key_frame(key_frame);
 
@@ -92,7 +95,7 @@ void FakeDemuxerStream::CreateFakeFrame(size_t size,
   if (!pending_read_cb_) {
     buffer_queue_.push_back(input_buffer);
   } else {
-    std::move(pending_read_cb_).Run(kOk, input_buffer);
+    std::move(pending_read_cb_).Run(kOk, {std::move(input_buffer)});
   }
 }
 
@@ -102,8 +105,8 @@ FakeMediaResource::FakeMediaResource()
 
 FakeMediaResource::~FakeMediaResource() = default;
 
-std::vector<DemuxerStream*> FakeMediaResource::GetAllStreams() {
-  std::vector<DemuxerStream*> streams;
+std::vector<raw_ptr<DemuxerStream>> FakeMediaResource::GetAllStreams() {
+  std::vector<raw_ptr<DemuxerStream>> streams;
   streams.push_back(audio_stream_.get());
   streams.push_back(video_stream_.get());
   return streams;

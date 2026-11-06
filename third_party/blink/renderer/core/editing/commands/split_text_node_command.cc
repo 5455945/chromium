@@ -30,10 +30,11 @@
 #include "third_party/blink/renderer/core/editing/editing_utilities.h"
 #include "third_party/blink/renderer/core/editing/markers/document_marker_controller.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
-SplitTextNodeCommand::SplitTextNodeCommand(Text* text, int offset)
+SplitTextNodeCommand::SplitTextNodeCommand(Text* text, wtf_size_t offset)
     : SimpleEditCommand(text->GetDocument()), text2_(text), offset_(offset) {
   // NOTE: Various callers rely on the fact that the original node becomes
   // the second node (i.e. the new node is inserted before the existing one).
@@ -42,17 +43,19 @@ SplitTextNodeCommand::SplitTextNodeCommand(Text* text, int offset)
   DCHECK(text2_);
   DCHECK_GT(text2_->length(), 0u);
   DCHECK_GT(offset_, 0u);
-  DCHECK_LT(offset_, text2_->length());
+  DCHECK_LT(offset_, text2_->length())
+      << "Please change caller to avoid having empty Text node after "
+         "SplitTextNodeCommand.";
 }
 
 void SplitTextNodeCommand::DoApply(EditingState*) {
   ContainerNode* parent = text2_->parentNode();
-  if (!parent || !HasEditableStyle(*parent))
+  if (!parent || !IsEditable(*parent))
     return;
 
   String prefix_text =
       text2_->substringData(0, offset_, IGNORE_EXCEPTION_FOR_TESTING);
-  if (prefix_text.IsEmpty())
+  if (prefix_text.empty())
     return;
 
   text1_ = Text::Create(GetDocument(), prefix_text);
@@ -63,7 +66,7 @@ void SplitTextNodeCommand::DoApply(EditingState*) {
 }
 
 void SplitTextNodeCommand::DoUnapply() {
-  if (!text1_ || !HasEditableStyle(*text1_))
+  if (!text1_ || !IsEditable(*text1_))
     return;
 
   DCHECK_EQ(text1_->GetDocument(), GetDocument());
@@ -82,7 +85,7 @@ void SplitTextNodeCommand::DoReapply() {
     return;
 
   ContainerNode* parent = text2_->parentNode();
-  if (!parent || !HasEditableStyle(*parent))
+  if (!parent || !IsEditable(*parent))
     return;
 
   GetDocument().Markers().MoveMarkers(*text2_, offset_, *text1_);
@@ -98,6 +101,10 @@ void SplitTextNodeCommand::InsertText1AndTrimText2() {
     return;
   text2_->deleteData(0, offset_, exception_state);
   GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kEditing);
+}
+
+String SplitTextNodeCommand::ToString() const {
+  return Format("SplitTextNodeCommand {{offset:{}}}", offset_);
 }
 
 void SplitTextNodeCommand::Trace(Visitor* visitor) const {

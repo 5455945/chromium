@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,16 +6,16 @@
 #define CONTENT_BROWSER_CODE_CACHE_GENERATED_CODE_CACHE_H_
 
 #include <map>
-#include <queue>
 
 #include "base/containers/queue.h"
-#include "base/containers/span.h"
 #include "base/files/file_path.h"
-#include "base/macros.h"
 #include "base/memory/weak_ptr.h"
+#include "base/timer/timer.h"
+#include "content/browser/code_cache/simple_lru_cache.h"
 #include "content/common/content_export.h"
 #include "mojo/public/cpp/base/big_buffer.h"
 #include "net/base/io_buffer.h"
+#include "net/base/network_isolation_key.h"
 #include "net/disk_cache/disk_cache.h"
 #include "url/origin.h"
 
@@ -36,8 +36,8 @@ namespace content {
 // renderer is not locked to an origin (ex:SitePerProcess is disabled) and it
 // is safe to use only |resource_url| as the key in such cases.
 //
-// This uses a simple disk_cache backend. It just stores one data stream and
-// stores response_time + generated code as one data blob.
+// This stores response_time and generated code using either a simple disk_cache
+// backend or PersistentCache depending on experiment status.
 //
 // There exists one cache per storage partition and is owned by the storage
 // partition. This cache is created, accessed and destroyed on the I/O
@@ -50,10 +50,25 @@ class CONTENT_EXPORT GeneratedCodeCache {
 
   // Cache type. Used for collecting statistics for JS and Wasm in separate
   // buckets.
-  enum CodeCacheType { kJavaScript, kWebAssembly };
+  enum CodeCacheType {
+    // JavaScript from http(s) pages.
+    kJavaScript,
+
+    // WebAssembly from http(s) pages. This cache allows more total size and
+    // more size per item than the JavaScript cache, since some
+    // WebAssembly programs are very large.
+    kWebAssembly,
+
+    // JavaScript from chrome and chrome-untrusted pages. The resource URLs are
+    // limited to only those fetched via chrome and chrome-untrusted schemes.
+    // The cache size is limited to disk_cache::kMaxWebUICodeCacheSize.
+    // Deduplication of very large items is disabled in this cache.
+    kWebUIJavaScript,
+  };
 
   // Used for collecting statistics about cache behaviour.
-  enum CacheEntryStatus {
+  // Since it's uploaded to UMA, its values must never change.
+  enum CacheEntryStatus : uint8_t {
     kHit,
     kMiss,
     kClear,
@@ -77,7 +92,25 @@ class CONTENT_EXPORT GeneratedCodeCache {
                      int max_size_bytes,
                      CodeCacheType cache_type);
 
+  GeneratedCodeCache(const GeneratedCodeCache&) = delete;
+  GeneratedCodeCache& operator=(const GeneratedCodeCache&) = delete;
+
   ~GeneratedCodeCache();
+
+  // Generates the cache key for the given `resource_url`.
+  // `resource_url` is the url corresponding to the requested resource.
+  static std::string GetResourceKey(
+      const GURL& resource_url,
+      GeneratedCodeCache::CodeCacheType cache_type);
+
+  // Generates the cache key for the given `origin_lock` and `nik`.
+  // `origin_lock` is the origin that the renderer which requested this
+  // resource is locked to. `nik` is the network isolation key that consists
+  // of top-level-site that initiated the request.
+  static std::string GetContextKey(
+      const GURL& origin_lock,
+      const net::NetworkIsolationKey& nik,
+      GeneratedCodeCache::CodeCacheType cache_type);
 
   // Runs the callback with a raw pointer to the backend. If we could not create
   // the backend then it will return a null. This runs the callback
@@ -90,6 +123,7 @@ class CONTENT_EXPORT GeneratedCodeCache {
   // there is no entry it creates a new one.
   void WriteEntry(const GURL& resource_url,
                   const GURL& origin_lock,
+                  const net::NetworkIsolationKey& nik,
                   const base::Time& response_time,
                   mojo_base::BigBuffer data);
 
@@ -97,23 +131,37 @@ class CONTENT_EXPORT GeneratedCodeCache {
   // and return it using the ReadDataCallback.
   void FetchEntry(const GURL& resource_url,
                   const GURL& origin_lock,
+                  const net::NetworkIsolationKey& nik,
                   ReadDataCallback);
 
   // Delete the entry corresponding to <resource_url, origin_lock>
-  void DeleteEntry(const GURL& resource_url, const GURL& origin_lock);
+  void DeleteEntry(const GURL& resource_url,
+                   const GURL& origin_lock,
+                   const net::NetworkIsolationKey& nik);
 
   // Should be only used for tests. Sets the last accessed timestamp of an
   // entry.
   void SetLastUsedTimeForTest(const GURL& resource_url,
                               const GURL& origin_lock,
+                              const net::NetworkIsolationKey& nik,
                               base::Time time,
-                              base::RepeatingCallback<void(void)> callback);
+                              base::OnceClosure callback);
+
+  // Clears the in-memory cache.
+  void ClearInMemoryCache();
+
+  // Destroys the instance's backend and waits for all shutdown tasks to
+  // complete. The callback is run when the backend is fully cleaned up.
+  void ShutdownForTesting(base::OnceClosure callback);
+
+  void CollectStatisticsForTest(const GURL& resource_url,
+                                const GURL& origin_lock,
+                                GeneratedCodeCache::CacheEntryStatus status);
 
   const base::FilePath& path() const { return path_; }
 
  private:
   class PendingOperation;
-  using ScopedBackendPtr = std::unique_ptr<disk_cache::Backend>;
 
   // State of the backend.
   enum BackendState { kInitializing, kInitialized, kFailed };
@@ -133,9 +181,7 @@ class CONTENT_EXPORT GeneratedCodeCache {
 
   // Creates a simple_disk_cache backend.
   void CreateBackend();
-  void DidCreateBackend(
-      scoped_refptr<base::RefCountedData<ScopedBackendPtr>> backend_ptr,
-      int rv);
+  void DidCreateBackend(disk_cache::BackendResult result);
 
   // Adds operation to the appropriate queue.
   void EnqueueOperation(std::unique_ptr<PendingOperation> op);
@@ -178,12 +224,27 @@ class CONTENT_EXPORT GeneratedCodeCache {
 
   void DoPendingGetBackend(PendingOperation* op);
 
-  void OpenCompleteForSetLastUsedForTest(
-      base::Time time,
-      base::RepeatingCallback<void(void)> callback,
-      disk_cache::EntryResult result);
+  void OpenCompleteForSetLastUsedForTest(base::Time time,
+                                         base::OnceClosure callback,
+                                         disk_cache::EntryResult result);
 
-  void CollectStatistics(GeneratedCodeCache::CacheEntryStatus status);
+  void CollectStatistics(const GURL& resource_url,
+                         const GURL& origin_lock,
+                         GeneratedCodeCache::CacheEntryStatus status);
+
+  // Whether very large cache entries are deduplicated in this cache.
+  // Deduplication is disabled in the WebUI code cache, as an additional defense
+  // against privilege escalation in case there is a bug in the deduplication
+  // logic.
+  bool IsDeduplicationEnabled() const;
+
+  bool ShouldDeduplicateEntry(uint32_t data_size) const;
+
+  // Checks that the header data in the small buffer is valid. We may read cache
+  // entries that were written by a previous version of Chrome which uses
+  // obsolete formats. These reads should fail and be doomed as soon as
+  // possible.
+  bool IsValidHeader(scoped_refptr<net::IOBufferWithSize> small_buffer) const;
 
   std::unique_ptr<disk_cache::Backend> backend_;
   BackendState backend_state_;
@@ -199,9 +260,11 @@ class CONTENT_EXPORT GeneratedCodeCache {
   int max_size_bytes_;
   CodeCacheType cache_type_;
 
-  base::WeakPtrFactory<GeneratedCodeCache> weak_ptr_factory_{this};
+  // A hypothetical memory-backed code cache. Used to collect UMAs.
+  SimpleLruCache lru_cache_;
+  static constexpr int64_t kLruCacheCapacity = 50 * 1024 * 1024;
 
-  DISALLOW_COPY_AND_ASSIGN(GeneratedCodeCache);
+  base::WeakPtrFactory<GeneratedCodeCache> weak_ptr_factory_{this};
 };
 
 }  // namespace content

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,11 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/ash/settings/stub_cros_settings_provider.h"
-#include "chromeos/dbus/session_manager/fake_session_manager_client.h"
-#include "chromeos/settings/cros_settings_provider.h"
-#include "chromeos/tpm/stub_install_attributes.h"
+#include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
+#include "chromeos/ash/components/install_attributes/stub_install_attributes.h"
+#include "chromeos/ash/components/settings/cros_settings_provider.h"
 
 class Profile;
 
@@ -22,9 +22,10 @@ class Value;
 
 namespace ash {
 
+class CrosSettingsHolder;
 class FakeOwnerSettingsService;
-class ScopedTestCrosSettings;
 class ScopedTestDeviceSettingsService;
+class UserLoginPermissionTracker;
 
 // Helps in a variety of ways with setting up CrosSettings for testing.
 // This class is overly complex for most use-cases - if possible, prefer to
@@ -36,6 +37,11 @@ class ScopedCrosSettingsTestHelper {
   // up by another (instantiated or base) class, creating another one causes
   // crash.
   explicit ScopedCrosSettingsTestHelper(bool create_settings_service = true);
+
+  ScopedCrosSettingsTestHelper(const ScopedCrosSettingsTestHelper&) = delete;
+  ScopedCrosSettingsTestHelper& operator=(const ScopedCrosSettingsTestHelper&) =
+      delete;
+
   ~ScopedCrosSettingsTestHelper();
 
   // This replaces the DeviceSettingsProvider with a simple stub that stores
@@ -82,29 +88,21 @@ class ScopedCrosSettingsTestHelper {
 
   // Get the scoped install attributes to change them as needed for the
   // current test.
-  chromeos::StubInstallAttributes* InstallAttributes();
+  StubInstallAttributes* InstallAttributes();
 
  private:
-  std::unique_ptr<chromeos::ScopedStubInstallAttributes>
-      test_install_attributes_;
+  std::unique_ptr<ScopedStubInstallAttributes> test_install_attributes_;
   std::unique_ptr<ScopedTestDeviceSettingsService>
       test_device_settings_service_;
-  std::unique_ptr<ScopedTestCrosSettings> test_cros_settings_;
+  std::unique_ptr<CrosSettingsHolder> cros_settings_holder_;
   std::unique_ptr<CrosSettingsProvider> real_settings_provider_;
   std::unique_ptr<CrosSettingsProvider> stub_settings_provider_;
-  StubCrosSettingsProvider* stub_settings_provider_ptr_;
+  raw_ptr<StubCrosSettingsProvider> stub_settings_provider_ptr_;
+  std::unique_ptr<UserLoginPermissionTracker> user_login_permission_tracker_;
 
   void Initialize(bool create_settings_service);
-
-  DISALLOW_COPY_AND_ASSIGN(ScopedCrosSettingsTestHelper);
 };
 
 }  // namespace ash
-
-// TODO(https://crbug.com/1164001): remove after //chrome/browser/chromeos
-// source migration is finished.
-namespace chromeos {
-using ::ash::ScopedCrosSettingsTestHelper;
-}  // namespace chromeos
 
 #endif  // CHROME_BROWSER_ASH_SETTINGS_SCOPED_CROS_SETTINGS_TEST_HELPER_H_

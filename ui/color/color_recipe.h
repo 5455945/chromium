@@ -1,11 +1,11 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_COLOR_COLOR_RECIPE_H_
 #define UI_COLOR_COLOR_RECIPE_H_
 
-#include <list>
+#include <vector>
 
 #include "base/component_export.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -24,7 +24,7 @@ class COMPONENT_EXPORT(COLOR) ColorRecipe {
   ColorRecipe();
   // This constructor acts as a shorthand initialization of a recipe with a
   // transform which is by far the most common means of recipe initialization.
-  ColorRecipe(const ColorTransform& transform);
+  ColorRecipe(const ColorTransform& transform);  // NOLINT
   ColorRecipe(const ColorRecipe&);
   ColorRecipe& operator=(const ColorRecipe&);
   ColorRecipe(ColorRecipe&&) noexcept;
@@ -37,8 +37,11 @@ class COMPONENT_EXPORT(COLOR) ColorRecipe {
   // is passed to each transform, since it might need to request other colors.
   SkColor GenerateResult(SkColor input, const ColorMixer& mixer) const;
 
+  // Returns true if this recipe is invariant to input color.
+  bool Invariant() const;
+
  private:
-  std::list<ColorTransform> transforms_;
+  std::vector<ColorTransform> transforms_;
 };
 
 COMPONENT_EXPORT(COLOR)

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <string>
 
 #include "base/files/file_path.h"
+#include "base/win/shortcut.h"
 #include "chrome/browser/win/conflicts/module_info.h"
 #include "chrome/browser/win/conflicts/module_info_util.h"
 #include "chrome/services/util_win/public/mojom/util_win.mojom-shared.h"
@@ -21,35 +22,23 @@ struct EnumTraits<chrome::mojom::SelectFileDialogType,
                   ui::SelectFileDialog::Type> {
   static chrome::mojom::SelectFileDialogType ToMojom(
       ui::SelectFileDialog::Type input);
-  static bool FromMojom(chrome::mojom::SelectFileDialogType input,
-                        ui::SelectFileDialog::Type* output);
+  static ui::SelectFileDialog::Type FromMojom(
+      chrome::mojom::SelectFileDialogType input);
 };
 
 template <>
 struct EnumTraits<chrome::mojom::CertificateType, CertificateInfo::Type> {
   static chrome::mojom::CertificateType ToMojom(CertificateInfo::Type input);
-  static bool FromMojom(chrome::mojom::CertificateType input,
-                        CertificateInfo::Type* output);
+  static CertificateInfo::Type FromMojom(chrome::mojom::CertificateType input);
 };
 
 template <>
-struct StructTraits<chrome::mojom::InspectionResultDataView,
-                    ModuleInspectionResult> {
-  static const std::u16string& location(const ModuleInspectionResult& input);
-  static const std::u16string& basename(const ModuleInspectionResult& input);
-  static const std::u16string& product_name(
-      const ModuleInspectionResult& input);
-  static const std::u16string& description(const ModuleInspectionResult& input);
-  static const std::u16string& version(const ModuleInspectionResult& input);
-  static chrome::mojom::CertificateType certificate_type(
-      const ModuleInspectionResult& input);
-  static const base::FilePath& certificate_path(
-      const ModuleInspectionResult& input);
-  static const std::u16string& certificate_subject(
-      const ModuleInspectionResult& input);
-
-  static bool Read(chrome::mojom::InspectionResultDataView data,
-                   ModuleInspectionResult* output);
+struct EnumTraits<chrome::mojom::ShortcutOperation,
+                  base::win::ShortcutOperation> {
+  static chrome::mojom::ShortcutOperation ToMojom(
+      base::win::ShortcutOperation input);
+  static base::win::ShortcutOperation FromMojom(
+      chrome::mojom::ShortcutOperation input);
 };
 
 template <>
@@ -63,6 +52,73 @@ struct StructTraits<chrome::mojom::FileFilterSpecDataView, ui::FileFilterSpec> {
 
   static bool Read(chrome::mojom::FileFilterSpecDataView data,
                    ui::FileFilterSpec* output);
+};
+
+template <>
+struct StructTraits<chrome::mojom::ClsIdDataView, ::CLSID> {
+  static base::span<const uint8_t> bytes(const ::CLSID& input);
+  static bool Read(chrome::mojom::ClsIdDataView data, ::CLSID* out);
+};
+
+template <>
+struct StructTraits<chrome::mojom::ShortcutPropertiesDataView,
+                    base::win::ShortcutProperties> {
+  static const base::FilePath& target(
+      const base::win::ShortcutProperties& input) {
+    return input.target;
+  }
+  static const base::FilePath& working_dir(
+      const base::win::ShortcutProperties& input) {
+    return input.working_dir;
+  }
+  static const std::wstring& arguments(
+      const base::win::ShortcutProperties& input) {
+    return input.arguments;
+  }
+  static const std::wstring& description(
+      const base::win::ShortcutProperties& input) {
+    return input.description;
+  }
+  static const base::FilePath& icon(
+      const base::win::ShortcutProperties& input) {
+    return input.icon;
+  }
+  static int icon_index(const base::win::ShortcutProperties& input) {
+    return input.icon_index;
+  }
+  static const std::wstring& app_id(
+      const base::win::ShortcutProperties& input) {
+    return input.app_id;
+  }
+  static const CLSID& toast_activator_clsid(
+      const base::win::ShortcutProperties& input) {
+    return input.toast_activator_clsid;
+  }
+  static uint32_t options(const base::win::ShortcutProperties& input) {
+    return input.options;
+  }
+  static bool Read(chrome::mojom::ShortcutPropertiesDataView data,
+                   base::win::ShortcutProperties* output);
+};
+
+template <>
+struct StructTraits<chrome::mojom::InspectionResultDataView,
+                    ModuleInspectionResult> {
+  static const std::u16string& location(const ModuleInspectionResult& input);
+  static const std::u16string& basename(const ModuleInspectionResult& input);
+  static const std::u16string& product_name(
+      const ModuleInspectionResult& input);
+  static const std::u16string& description(const ModuleInspectionResult& input);
+  static const std::u16string& version(const ModuleInspectionResult& input);
+  static CertificateInfo::Type certificate_type(
+      const ModuleInspectionResult& input);
+  static const base::FilePath& certificate_path(
+      const ModuleInspectionResult& input);
+  static const std::u16string& certificate_subject(
+      const ModuleInspectionResult& input);
+
+  static bool Read(chrome::mojom::InspectionResultDataView data,
+                   ModuleInspectionResult* output);
 };
 
 template <>
@@ -97,11 +153,34 @@ struct StructTraits<chrome::mojom::AntiVirusProductDataView,
         return chrome::mojom::AntiVirusProductState::kExpired;
     }
     NOTREACHED();
-    return chrome::mojom::AntiVirusProductState::kOff;
   }
 
   static bool Read(chrome::mojom::AntiVirusProductDataView data,
                    metrics::SystemProfileProto_AntiVirusProduct* output);
+};
+
+template <>
+struct StructTraits<chrome::mojom::TpmIdentifierDataView,
+                    metrics::SystemProfileProto_TpmIdentifier> {
+  static uint32_t manufacturer_id(
+      const metrics::SystemProfileProto_TpmIdentifier& input) {
+    return input.manufacturer_id();
+  }
+  static const std::string& manufacturer_version(
+      const metrics::SystemProfileProto_TpmIdentifier& input) {
+    return input.manufacturer_version();
+  }
+  static const std::string& manufacturer_version_info(
+      const metrics::SystemProfileProto_TpmIdentifier& input) {
+    return input.manufacturer_version_info();
+  }
+  static const std::string& tpm_specific_version(
+      const metrics::SystemProfileProto_TpmIdentifier& input) {
+    return input.tpm_specific_version();
+  }
+
+  static bool Read(chrome::mojom::TpmIdentifierDataView data,
+                   metrics::SystemProfileProto_TpmIdentifier* output);
 };
 
 }  // namespace mojo

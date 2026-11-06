@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,15 @@
 #define CHROME_BROWSER_NOTIFICATIONS_STUB_NOTIFICATION_DISPLAY_SERVICE_H_
 
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/notifications/notification_common.h"
 #include "chrome/browser/notifications/notification_display_service_impl.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "chrome/common/notifications/notification_operation.h"
 #include "ui/message_center/public/cpp/notification.h"
 
 namespace content {
@@ -32,13 +34,14 @@ class StubNotificationDisplayService : public NotificationDisplayServiceImpl {
       content::BrowserContext* browser_context);
 
   typedef base::RepeatingCallback<void(
-      NotificationCommon::Operation operation,
+      NotificationOperation operation,
       NotificationHandler::Type notification_type,
       const GURL& origin,
       const std::string& notification_id,
-      const absl::optional<int>& action_index,
-      const absl::optional<std::u16string>& reply,
-      const absl::optional<bool>& by_user)>
+      const std::optional<int>& action_index,
+      const std::optional<std::u16string>& reply,
+      const std::optional<bool>& by_user,
+      const std::optional<bool>& is_suspicious)>
       ProcessNotificationOperationCallback;
 
   explicit StubNotificationDisplayService(Profile* profile);
@@ -58,7 +61,7 @@ class StubNotificationDisplayService : public NotificationDisplayServiceImpl {
   std::vector<message_center::Notification> GetDisplayedNotificationsForType(
       NotificationHandler::Type type) const;
 
-  absl::optional<message_center::Notification> GetNotification(
+  std::optional<message_center::Notification> GetNotification(
       const std::string& notification_id);
 
   const NotificationCommon::Metadata* GetMetadataForNotification(
@@ -68,8 +71,8 @@ class StubNotificationDisplayService : public NotificationDisplayServiceImpl {
   // on, optionally with the given |action_index| and |reply|.
   void SimulateClick(NotificationHandler::Type notification_type,
                      const std::string& notification_id,
-                     absl::optional<int> action_index,
-                     absl::optional<std::u16string> reply);
+                     std::optional<int> action_index,
+                     std::optional<std::u16string> reply);
 
   // Simulates a click on the settings button of the notification identified by
   // |notification_id|.
@@ -101,14 +104,17 @@ class StubNotificationDisplayService : public NotificationDisplayServiceImpl {
   void Close(NotificationHandler::Type notification_type,
              const std::string& notification_id) override;
   void GetDisplayed(DisplayedNotificationsCallback callback) override;
-  void ProcessNotificationOperation(
-      NotificationCommon::Operation operation,
-      NotificationHandler::Type notification_type,
-      const GURL& origin,
-      const std::string& notification_id,
-      const absl::optional<int>& action_index,
-      const absl::optional<std::u16string>& reply,
-      const absl::optional<bool>& by_user) override;
+  void GetDisplayedForOrigin(const GURL& origin,
+                             DisplayedNotificationsCallback callback) override;
+  void ProcessNotificationOperation(NotificationOperation operation,
+                                    NotificationHandler::Type notification_type,
+                                    const GURL& origin,
+                                    const std::string& notification_id,
+                                    const std::optional<int>& action_index,
+                                    const std::optional<std::u16string>& reply,
+                                    const std::optional<bool>& by_user,
+                                    const std::optional<bool>& is_suspicious,
+                                    base::OnceClosure on_complete_cb) override;
 
  private:
   // Data to store for a notification that's being shown through this service.
@@ -135,7 +141,7 @@ class StubNotificationDisplayService : public NotificationDisplayServiceImpl {
   base::RepeatingClosure notification_added_closure_;
   base::RepeatingClosure notification_closed_closure_;
   std::vector<NotificationData> notifications_;
-  Profile* profile_;
+  raw_ptr<Profile> profile_;
 
   ProcessNotificationOperationCallback process_notification_operation_delegate_;
 };

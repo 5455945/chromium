@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,19 +9,24 @@
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "ui/gfx/delegated_ink_metadata.h"
 #include "ui/gfx/geometry/rect_conversions.h"
-#include "ui/gfx/skia_util.h"
+#include "ui/gfx/geometry/skia_conversions.h"
 
 namespace viz {
 
-void DelegatedInkPointRendererSkia::DrawDelegatedInkTrail(SkCanvas* canvas) {
+void DelegatedInkPointRendererSkia::DrawDelegatedInkTrail(
+    SkCanvas* canvas,
+    const gfx::Transform& transform_to_render_pass) {
   TRACE_EVENT1("viz", "DelegatedInkPointRendererSkia::DrawDelegatedInkTrail",
                "points", path_.countPoints());
 
-  if (!metadata_)
+  if (!metadata_) {
+    ResetPoints();
     return;
+  }
 
   if (!path_.isEmpty() && canvas) {
     canvas->save();
+    canvas->concat(gfx::TransformToSkM44(transform_to_render_pass));
 
     SkRect bounds = gfx::RectFToSkRect(metadata_->presentation_area());
     canvas->clipRect(bounds);
@@ -30,20 +35,19 @@ void DelegatedInkPointRendererSkia::DrawDelegatedInkTrail(SkCanvas* canvas) {
     paint.setAntiAlias(true);
     paint.setBlendMode(SkBlendMode::kSrcOver);
     paint.setColor(metadata_->color());
-    paint.setFilterQuality(kNone_SkFilterQuality);
     paint.setStrokeCap(SkPaint::kRound_Cap);
     paint.setStrokeJoin(SkPaint::kRound_Join);
     paint.setStrokeWidth(SkScalar(metadata_->diameter()));
     paint.setStyle(SkPaint::kStroke_Style);
 
-    canvas->drawPath(path_, paint);
+    // detach() also rewinds the path builder such that the already allocated
+    // storage can be reused.
+    canvas->drawPath(path_.detach(), paint);
 
     canvas->restore();
-
-    path_.rewind();
   }
 
-  // Always reset |metadata_| regardless of if the draw occurred or not so that
+  // Always reset `metadata_` regardless of if the draw occurred or not so that
   // the trail is never incorrectly drawn if the aggregated frame did not
   // contain delegated ink metadata.
   metadata_.reset();
@@ -64,7 +68,7 @@ base::TimeDelta GetImprovement(
     const std::vector<gfx::DelegatedInkPoint>* points_to_draw,
     const gfx::DelegatedInkMetadata* metadata) {
   if (points_to_draw->size() == 0)
-    return base::TimeDelta::FromMilliseconds(0);
+    return base::Milliseconds(0);
 
   return points_to_draw->back().timestamp() - metadata->timestamp();
 }
@@ -78,15 +82,16 @@ std::vector<SkPoint> DelegatedInkPointRendererSkia::GetPointsToDraw() {
   PredictPoints(&ink_points_to_draw);
 
   std::vector<SkPoint> sk_points;
-  for (gfx::DelegatedInkPoint ink_point : ink_points_to_draw)
+  for (gfx::DelegatedInkPoint ink_point : ink_points_to_draw) {
     sk_points.push_back(gfx::PointFToSkPoint(ink_point.point()));
+  }
 
   return sk_points;
 }
 
 void DelegatedInkPointRendererSkia::FinalizePathForDraw() {
-  // Always rewind the path first so that a path isn't drawn twice.
-  path_.rewind();
+  // Always reset the path first so that a path isn't drawn twice.
+  path_.reset();
 
   // Setting the damage rect to empty ensures that the damage rect is cleared
   // when trails are not being drawn so that extra drawing doesn't occur. If
@@ -95,14 +100,15 @@ void DelegatedInkPointRendererSkia::FinalizePathForDraw() {
   if (!metadata_) {
     SetDamageRect(gfx::RectF());
     ResetPrediction();
+    ResetPoints();
     return;
   }
 
   std::vector<SkPoint> sk_points = GetPointsToDraw();
 
-  TRACE_EVENT_INSTANT1("viz",
-                       "Filtered and predicted points for delegated ink trail",
-                       TRACE_EVENT_SCOPE_THREAD, "points", sk_points.size());
+  TRACE_EVENT_INSTANT("delegated_ink_trails",
+                      "Filtered and predicted points for delegated ink trail",
+                      "points", sk_points.size());
 
   // If there is only one point total after filtering and predicting, then it
   // will match the metadata point and therefore doesn't need to be drawn in
@@ -139,14 +145,15 @@ void DelegatedInkPointRendererSkia::FinalizePathForDraw() {
   // the stroke sometimes existing outside of the damage_rect. Therefore, expand
   // it here to ensure that the stroke is included, then intersect with the
   // presentation area so that is can't extend beyond the drawable area.
-  gfx::RectF damage_rect = gfx::SkRectToRectF(path_.computeTightBounds());
+  gfx::RectF damage_rect = gfx::SkRectToRectF(
+      path_.computeTightBounds().value_or(SkRect::MakeEmpty()));
   const float kRadius = metadata_->diameter() / 2.f;
-  damage_rect.Inset(-kRadius, -kRadius);
+  damage_rect.Inset(-kRadius);
   damage_rect.Intersect(metadata_->presentation_area());
 
-  TRACE_EVENT_INSTANT1(
-      "viz", "DelegatedInkPointRendererSkia::FinalizePathForDraw",
-      TRACE_EVENT_SCOPE_THREAD, "damage_rect", damage_rect.ToString());
+  TRACE_EVENT_INSTANT("delegated_ink_trails",
+                      "DelegatedInkPointRendererSkia::FinalizePathForDraw",
+                      "damage_rect", damage_rect.ToString());
 
   SetDamageRect(damage_rect);
 }

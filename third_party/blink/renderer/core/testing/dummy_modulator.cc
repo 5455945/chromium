@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/module_record.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
 #include "third_party/blink/renderer/core/loader/modulescript/module_script_creation_params.h"
+#include "third_party/blink/renderer/core/script/import_map_error.h"
 #include "third_party/blink/renderer/core/script/module_record_resolver.h"
 
 namespace blink {
@@ -25,14 +26,19 @@ class EmptyModuleRecordResolver final : public ModuleRecordResolver {
   const ModuleScript* GetModuleScriptFromModuleRecord(
       v8::Local<v8::Module>) const override {
     NOTREACHED();
-    return nullptr;
   }
 
   v8::Local<v8::Module> Resolve(const ModuleRequest& module_request,
                                 v8::Local<v8::Module> referrer,
                                 ExceptionState&) override {
     NOTREACHED();
-    return v8::Local<v8::Module>();
+  }
+
+  v8::Local<v8::WasmModuleObject> ResolveSource(
+      const ModuleRequest& module_request,
+      v8::Local<v8::Module> referrer,
+      ExceptionState&) override {
+    NOTREACHED();
   }
 };
 
@@ -50,7 +56,6 @@ void DummyModulator::Trace(Visitor* visitor) const {
 
 ScriptState* DummyModulator::GetScriptState() {
   NOTREACHED();
-  return nullptr;
 }
 
 mojom::blink::V8CacheOptions DummyModulator::GetV8CacheOptions() const {
@@ -67,7 +72,6 @@ ModuleRecordResolver* DummyModulator::GetModuleRecordResolver() {
 
 base::SingleThreadTaskRunner* DummyModulator::TaskRunner() {
   NOTREACHED();
-  return nullptr;
 }
 
 void DummyModulator::FetchTree(const KURL&,
@@ -77,7 +81,9 @@ void DummyModulator::FetchTree(const KURL&,
                                network::mojom::RequestDestination,
                                const ScriptFetchOptions&,
                                ModuleScriptCustomFetchType,
-                               ModuleTreeClient*) {
+                               ModuleTreeClient*,
+                               ModuleImportPhase,
+                               String referrer) {
   NOTREACHED();
 }
 
@@ -100,14 +106,20 @@ void DummyModulator::FetchDescendantsForInlineScript(
 
 ModuleScript* DummyModulator::GetFetchedModuleScript(const KURL&, ModuleType) {
   NOTREACHED();
-  return nullptr;
 }
 
 KURL DummyModulator::ResolveModuleSpecifier(const String&,
                                             const KURL&,
                                             String*) {
   NOTREACHED();
-  return KURL();
+}
+
+String DummyModulator::GetIntegrityMetadataString(const KURL&) const {
+  return String();
+}
+
+IntegrityMetadataSet DummyModulator::GetIntegrityMetadata(const KURL&) const {
+  return IntegrityMetadataSet();
 }
 
 bool DummyModulator::HasValidContext() {
@@ -115,51 +127,20 @@ bool DummyModulator::HasValidContext() {
 }
 
 void DummyModulator::ResolveDynamically(const ModuleRequest& module_request,
-                                        const KURL&,
                                         const ReferrerScriptInfo&,
-                                        ScriptPromiseResolver*) {
+                                        ScriptPromiseResolver<IDLAny>*) {
   NOTREACHED();
 }
 
-ScriptValue DummyModulator::CreateTypeError(const String& message) const {
+void DummyModulator::AddEntryToModuleMap(const KURL& url,
+                                         ModuleType type,
+                                         ModuleScript* script) {
   NOTREACHED();
-  return ScriptValue();
-}
-ScriptValue DummyModulator::CreateSyntaxError(const String& message) const {
-  NOTREACHED();
-  return ScriptValue();
-}
-
-void DummyModulator::RegisterImportMap(const ImportMap*,
-                                       ScriptValue error_to_rethrow) {
-  NOTREACHED();
-}
-
-Modulator::AcquiringImportMapsState
-DummyModulator::GetAcquiringImportMapsState() const {
-  NOTREACHED();
-  return AcquiringImportMapsState::kAcquiring;
-}
-
-void DummyModulator::SetAcquiringImportMapsState(AcquiringImportMapsState) {
-  NOTREACHED();
-}
-
-const ImportMap* DummyModulator::GetImportMapForTest() const {
-  NOTREACHED();
-  return nullptr;
 }
 
 ModuleImportMeta DummyModulator::HostGetImportMetaProperties(
     v8::Local<v8::Module>) const {
   NOTREACHED();
-  return ModuleImportMeta(String());
-}
-
-ScriptValue DummyModulator::InstantiateModule(v8::Local<v8::Module>,
-                                              const KURL&) {
-  NOTREACHED();
-  return ScriptValue();
 }
 
 ModuleType DummyModulator::ModuleTypeFromRequest(
@@ -167,8 +148,9 @@ ModuleType DummyModulator::ModuleTypeFromRequest(
   String module_type_string = module_request.GetModuleTypeString();
   if (module_type_string.IsNull()) {
     // Per https://github.com/whatwg/html/pull/5883, if no type assertion is
-    // provided then the import should be treated as a JavaScript module.
-    return ModuleType::kJavaScript;
+    // provided then the import should be treated as a JavaScript-or-Wasm
+    // module.
+    return ModuleType::kJavaScriptOrWasm;
   } else if (module_type_string == "json") {
     // Per https://github.com/whatwg/html/pull/5658, a "json" type assertion
     // indicates that the import should be treated as a JSON module script.
@@ -189,7 +171,6 @@ ModuleScriptFetcher* DummyModulator::CreateModuleScriptFetcher(
     ModuleScriptCustomFetchType,
     base::PassKey<ModuleScriptLoader> pass_key) {
   NOTREACHED();
-  return nullptr;
 }
 
 void DummyModulator::ProduceCacheModuleTreeTopLevel(ModuleScript*) {}

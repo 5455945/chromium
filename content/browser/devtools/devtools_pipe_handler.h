@@ -1,13 +1,12 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_BROWSER_DEVTOOLS_DEVTOOLS_PIPE_HANDLER_H_
 #define CONTENT_BROWSER_DEVTOOLS_DEVTOOLS_PIPE_HANDLER_H_
 
-#include "base/callback.h"
 #include "base/containers/span.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "content/public/browser/devtools_agent_host_client.h"
 
@@ -18,7 +17,13 @@ class PipeWriterBase;
 
 class DevToolsPipeHandler : public DevToolsAgentHostClient {
  public:
-  explicit DevToolsPipeHandler(base::OnceClosure on_disconnect);
+  DevToolsPipeHandler(int read_fd,
+                      int write_fd,
+                      base::OnceClosure on_disconnect);
+
+  DevToolsPipeHandler(const DevToolsPipeHandler&) = delete;
+  DevToolsPipeHandler& operator=(const DevToolsPipeHandler&) = delete;
+
   ~DevToolsPipeHandler() override;
 
   void HandleMessage(std::vector<uint8_t> message);
@@ -29,6 +34,9 @@ class DevToolsPipeHandler : public DevToolsAgentHostClient {
                                base::span<const uint8_t> message) override;
   void AgentHostClosed(DevToolsAgentHost* agent_host) override;
   bool UsesBinaryProtocol() override;
+  bool AllowUnsafeOperations() override;
+  std::string GetTypeForMetrics() override;
+  PeerMetadata GetPeerMetadata() override;
 
   void Shutdown();
 
@@ -50,8 +58,6 @@ class DevToolsPipeHandler : public DevToolsAgentHostClient {
   int write_fd_;
   bool shutting_down_ = false;
   base::WeakPtrFactory<DevToolsPipeHandler> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(DevToolsPipeHandler);
 };
 
 }  // namespace content

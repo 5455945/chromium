@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser.h"
+#include "third_party/blink/renderer/core/execution_context/security_context.h"
 
 namespace blink {
 
@@ -18,15 +19,14 @@ const CSSValue* ParseUAPropertyValue(CSSPropertyID id, const char* value) {
 }
 
 TEST(CSSLightDarkValuePairTest, ColorEquals) {
-  const auto* value1 = ParseUAPropertyValue(CSSPropertyID::kColor,
-                                            "-internal-light-dark(red, green)");
-  const auto* value2 = ParseUAPropertyValue(CSSPropertyID::kColor,
-                                            "-internal-light-dark(red, green)");
-  const auto* value3 = ParseUAPropertyValue(CSSPropertyID::kColor,
-                                            "-internal-light-dark(#000, #fff)");
+  const auto* value1 =
+      ParseUAPropertyValue(CSSPropertyID::kColor, "light-dark(red, green)");
+  const auto* value2 =
+      ParseUAPropertyValue(CSSPropertyID::kColor, "light-dark(red, green)");
+  const auto* value3 =
+      ParseUAPropertyValue(CSSPropertyID::kColor, "light-dark(#000, #fff)");
   const auto* value4 = ParseUAPropertyValue(
-      CSSPropertyID::kColor,
-      "-internal-light-dark(rgb(0, 0, 0), rgb(255, 255, 255))");
+      CSSPropertyID::kColor, "light-dark(rgb(0, 0, 0), rgb(255, 255, 255))");
   ASSERT_TRUE(value1);
   ASSERT_TRUE(value2);
   ASSERT_TRUE(value3);
@@ -39,14 +39,12 @@ TEST(CSSLightDarkValuePairTest, ColorEquals) {
 }
 
 TEST(CSSLightDarkValuePairTest, BackgroundImageEquals) {
-  const auto* value1 =
-      ParseUAPropertyValue(CSSPropertyID::kBackgroundImage,
-                           "-internal-light-dark(none, url(dark.png))");
-  const auto* value2 =
-      ParseUAPropertyValue(CSSPropertyID::kBackgroundImage,
-                           "-internal-light-dark(none, url(dark.png))");
+  const auto* value1 = ParseUAPropertyValue(CSSPropertyID::kBackgroundImage,
+                                            "light-dark(none, url(dark.png))");
+  const auto* value2 = ParseUAPropertyValue(CSSPropertyID::kBackgroundImage,
+                                            "light-dark(none, url(dark.png))");
   const auto* value3 = ParseUAPropertyValue(CSSPropertyID::kBackgroundImage,
-                                            "-internal-light-dark(none, none)");
+                                            "light-dark(none, none)");
   const auto* value4 =
       ParseUAPropertyValue(CSSPropertyID::kBackgroundImage, "none");
   ASSERT_TRUE(value1);
@@ -58,6 +56,17 @@ TEST(CSSLightDarkValuePairTest, BackgroundImageEquals) {
   EXPECT_TRUE(*value3 == *value3);
   EXPECT_TRUE(*value4 == *value4);
   EXPECT_FALSE(*value3 == *value4);
+}
+
+TEST(CSSLightDarkValuePairTest, IsValuePair) {
+  const auto* value =
+      ParseUAPropertyValue(CSSPropertyID::kColor, "light-dark(red, green)");
+  ASSERT_TRUE(value);
+  EXPECT_TRUE(value->IsLightDarkValuePair());
+  EXPECT_TRUE(value->IsValuePair());
+  EXPECT_FALSE(value->IsBaseValuePair());
+  EXPECT_TRUE(IsA<CSSValuePair>(*value));
+  EXPECT_FALSE(value->HasRandomFunctions());
 }
 
 }  // namespace

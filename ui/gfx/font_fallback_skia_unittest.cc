@@ -1,13 +1,15 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ui/gfx/font_fallback.h"
+#include <string_view>
 
+#include "base/i18n/language_tag.h"
 #include "base/logging.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/gfx/font_fallback.h"
 
 namespace gfx {
 
@@ -20,7 +22,8 @@ const wchar_t* kFallbackFontTests[] = {
     L"\u5203\u5204",  // CJK Unified Ideograph
 };
 
-const char kDefaultApplicationLocale[] = "us-en";
+constexpr base::i18n::LanguageTag kDefaultApplicationLocale =
+    base::i18n::GetKnownLanguageTag("en-US");
 
 }  // namespace
 
@@ -28,7 +31,7 @@ TEST(FontFallbackSkiaTest, EmptyStringFallback) {
   Font base_font;
   Font fallback_font;
   bool result = GetFallbackFont(base_font, kDefaultApplicationLocale,
-                                base::StringPiece16(), &fallback_font);
+                                std::u16string_view(), &fallback_font);
   EXPECT_FALSE(result);
 }
 
@@ -45,7 +48,7 @@ TEST(FontFallbackSkiaTest, FontFallback) {
   }
 }
 
-#if !defined(OS_ANDROID) && !defined(OS_FUCHSIA)
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_FUCHSIA)
 // TODO(sergeyu): Fuchsia doesn't not support locale for font fallbacks.
 // TODO(etienneb): Android doesn't allow locale override, unless the language
 //                 is added in the system UI.
@@ -61,12 +64,15 @@ TEST(FontFallbackSkiaTest, CJKLocaleFallback) {
   Font fallback_font_zh_cn;
   Font fallback_font_zh_tw;
   Font fallback_font_zh_hk;
-  EXPECT_TRUE(
-      GetFallbackFont(base_font, "zh-CN", kCJKTest, &fallback_font_zh_cn));
-  EXPECT_TRUE(
-      GetFallbackFont(base_font, "zh-TW", kCJKTest, &fallback_font_zh_tw));
-  EXPECT_TRUE(
-      GetFallbackFont(base_font, "zh-HK", kCJKTest, &fallback_font_zh_hk));
+  EXPECT_TRUE(GetFallbackFont(base_font,
+                              base::i18n::GetKnownLanguageTag("zh-CN"),
+                              kCJKTest, &fallback_font_zh_cn));
+  EXPECT_TRUE(GetFallbackFont(base_font,
+                              base::i18n::GetKnownLanguageTag("zh-TW"),
+                              kCJKTest, &fallback_font_zh_tw));
+  EXPECT_TRUE(GetFallbackFont(base_font,
+                              base::i18n::GetKnownLanguageTag("zh-HK"),
+                              kCJKTest, &fallback_font_zh_hk));
   EXPECT_EQ(fallback_font_zh_cn.GetFontName(),
             fallback_font_zh_tw.GetFontName());
   EXPECT_EQ(fallback_font_zh_cn.GetFontName(),
@@ -74,16 +80,20 @@ TEST(FontFallbackSkiaTest, CJKLocaleFallback) {
 
   Font fallback_font_ja;
   Font fallback_font_ja_jp;
-  EXPECT_TRUE(GetFallbackFont(base_font, "ja", kCJKTest, &fallback_font_ja));
-  EXPECT_TRUE(
-      GetFallbackFont(base_font, "ja-JP", kCJKTest, &fallback_font_ja_jp));
+  EXPECT_TRUE(GetFallbackFont(base_font, base::i18n::GetKnownLanguageTag("ja"),
+                              kCJKTest, &fallback_font_ja));
+  EXPECT_TRUE(GetFallbackFont(base_font,
+                              base::i18n::GetKnownLanguageTag("ja-JP"),
+                              kCJKTest, &fallback_font_ja_jp));
   EXPECT_EQ(fallback_font_ja.GetFontName(), fallback_font_ja_jp.GetFontName());
 
   Font fallback_font_ko;
   Font fallback_font_ko_kr;
-  EXPECT_TRUE(GetFallbackFont(base_font, "ko", kCJKTest, &fallback_font_ko));
-  EXPECT_TRUE(
-      GetFallbackFont(base_font, "ko-KR", kCJKTest, &fallback_font_ko_kr));
+  EXPECT_TRUE(GetFallbackFont(base_font, base::i18n::GetKnownLanguageTag("ko"),
+                              kCJKTest, &fallback_font_ko));
+  EXPECT_TRUE(GetFallbackFont(base_font,
+                              base::i18n::GetKnownLanguageTag("ko-KR"),
+                              kCJKTest, &fallback_font_ko_kr));
   EXPECT_EQ(fallback_font_ko.GetFontName(), fallback_font_ko_kr.GetFontName());
 
   // The three fonts must not be the same.
@@ -91,6 +101,6 @@ TEST(FontFallbackSkiaTest, CJKLocaleFallback) {
   EXPECT_NE(fallback_font_zh_cn.GetFontName(), fallback_font_ko.GetFontName());
   EXPECT_NE(fallback_font_ja.GetFontName(), fallback_font_ko.GetFontName());
 }
-#endif  // !defined(OS_ANDROID) && !defined(OS_FUCHSIA)
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_FUCHSIA)
 
 }  // namespace gfx

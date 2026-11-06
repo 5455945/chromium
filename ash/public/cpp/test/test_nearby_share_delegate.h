@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,8 @@
 
 #include "ash/public/cpp/ash_public_export.h"
 #include "ash/public/cpp/nearby_share_delegate.h"
-
-namespace base {
-class TimeTicks;
-}  // namespace base
+#include "base/time/time.h"
+#include "chromeos/ash/services/nearby/public/mojom/nearby_share_settings.mojom.h"
 
 namespace ash {
 
@@ -28,13 +26,23 @@ class ASH_PUBLIC_EXPORT TestNearbyShareDelegate : public NearbyShareDelegate {
   TestNearbyShareDelegate& operator=(TestNearbyShareDelegate&) = delete;
 
   // NearbyShareDelegate
+  bool IsEnabled() override;
+  void SetEnabled(bool enabled) override;
   bool IsPodButtonVisible() override;
   bool IsHighVisibilityOn() override;
+  bool IsOnboardingComplete() override;
   bool IsEnableHighVisibilityRequestActive() const override;
   base::TimeTicks HighVisibilityShutoffTime() const override;
   void EnableHighVisibility() override;
   void DisableHighVisibility() override;
   void ShowNearbyShareSettings() const override;
+  void ShowOnboardingPage() const override;
+  const gfx::VectorIcon& GetIcon(bool on_icon) const override;
+  std::u16string GetPlaceholderFeatureName() const override;
+  ::nearby_share::mojom::Visibility GetVisibility() const override;
+  void SetVisibility(::nearby_share::mojom::Visibility visibility) override;
+
+  void set_is_enabled(bool enabled) { is_enabled_ = enabled; }
 
   void set_is_pod_button_visible(bool visible) {
     is_pod_button_visible_ = visible;
@@ -52,14 +60,26 @@ class ASH_PUBLIC_EXPORT TestNearbyShareDelegate : public NearbyShareDelegate {
     high_visibility_shutoff_time_ = time;
   }
 
+  void set_visibility(::nearby_share::mojom::Visibility visibility) {
+    visibility_ = visibility;
+  }
+
+  void set_is_onboarding_complete(bool is_onboarding_complete) {
+    is_onboarding_complete_ = is_onboarding_complete;
+  }
+
   std::vector<Method>& method_calls() { return method_calls_; }
 
  private:
+  bool is_enabled_ = true;
   bool is_pod_button_visible_ = false;
   bool is_enable_high_visibility_request_active_ = false;
   bool is_high_visibility_on_ = false;
+  bool is_onboarding_complete_ = true;
   base::TimeTicks high_visibility_shutoff_time_;
   std::vector<Method> method_calls_;
+  ::nearby_share::mojom::Visibility visibility_ =
+      ::nearby_share::mojom::Visibility::kYourDevices;
 };
 
 }  // namespace ash

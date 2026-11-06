@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,54 +17,66 @@ using DrawingRecorderTest = PaintControllerTestBase;
 
 namespace {
 
-const IntRect kBounds(1, 2, 3, 4);
+const gfx::Rect kBounds(1, 2, 3, 4);
 
 TEST_F(DrawingRecorderTest, Nothing) {
-  FakeDisplayItemClient client;
-  GraphicsContext context(GetPaintController());
-  InitRootChunk();
-  DrawNothing(context, client, kForegroundType);
-  CommitAndFinishCycle();
-  EXPECT_THAT(GetPaintController().GetDisplayItemList(),
-              ElementsAre(IsSameId(&client, kForegroundType)));
-  EXPECT_FALSE(
-      To<DrawingDisplayItem>(GetPaintController().GetDisplayItemList()[0])
-          .GetPaintRecord());
+  FakeDisplayItemClient& client =
+      *MakeGarbageCollected<FakeDisplayItemClient>();
+  {
+    AutoCommitPaintController paint_controller(GetPersistentData());
+    GraphicsContext context(paint_controller);
+    InitRootChunk(paint_controller);
+    DrawNothing(context, client, kForegroundType);
+  }
+  EXPECT_THAT(GetPersistentData().GetDisplayItemList(),
+              ElementsAre(IsSameId(client.Id(), kForegroundType)));
+  EXPECT_TRUE(
+      To<DrawingDisplayItem>(GetPersistentData().GetDisplayItemList()[0])
+          .GetPaintRecord()
+          .empty());
 }
 
 TEST_F(DrawingRecorderTest, Rect) {
-  FakeDisplayItemClient client;
-  GraphicsContext context(GetPaintController());
-  InitRootChunk();
-  DrawRect(context, client, kForegroundType, kBounds);
-  CommitAndFinishCycle();
-  EXPECT_THAT(GetPaintController().GetDisplayItemList(),
-              ElementsAre(IsSameId(&client, kForegroundType)));
+  FakeDisplayItemClient& client =
+      *MakeGarbageCollected<FakeDisplayItemClient>();
+  {
+    AutoCommitPaintController paint_controller(GetPersistentData());
+    GraphicsContext context(paint_controller);
+    InitRootChunk(paint_controller);
+    DrawRect(context, client, kForegroundType, kBounds);
+  }
+  EXPECT_THAT(GetPersistentData().GetDisplayItemList(),
+              ElementsAre(IsSameId(client.Id(), kForegroundType)));
 }
 
 TEST_F(DrawingRecorderTest, Cached) {
-  FakeDisplayItemClient client;
-  GraphicsContext context(GetPaintController());
-  InitRootChunk();
-  DrawNothing(context, client, kBackgroundType);
-  DrawRect(context, client, kForegroundType, kBounds);
-  CommitAndFinishCycle();
+  FakeDisplayItemClient& client =
+      *MakeGarbageCollected<FakeDisplayItemClient>();
+  {
+    AutoCommitPaintController paint_controller(GetPersistentData());
+    GraphicsContext context(paint_controller);
+    InitRootChunk(paint_controller);
+    DrawNothing(context, client, kBackgroundType);
+    DrawRect(context, client, kForegroundType, kBounds);
+  }
 
-  EXPECT_THAT(GetPaintController().GetDisplayItemList(),
-              ElementsAre(IsSameId(&client, kBackgroundType),
-                          IsSameId(&client, kForegroundType)));
+  EXPECT_THAT(GetPersistentData().GetDisplayItemList(),
+              ElementsAre(IsSameId(client.Id(), kBackgroundType),
+                          IsSameId(client.Id(), kForegroundType)));
 
-  InitRootChunk();
-  DrawNothing(context, client, kBackgroundType);
-  DrawRect(context, client, kForegroundType, kBounds);
+  {
+    AutoCommitPaintController paint_controller(GetPersistentData());
+    GraphicsContext context(paint_controller);
+    InitRootChunk(paint_controller);
+    DrawNothing(context, client, kBackgroundType);
+    DrawRect(context, client, kForegroundType, kBounds);
 
-  EXPECT_EQ(2u, NumCachedNewItems());
+    EXPECT_EQ(2u, NumCachedNewItems(paint_controller));
+  }
 
-  CommitAndFinishCycle();
-
-  EXPECT_THAT(GetPaintController().GetDisplayItemList(),
-              ElementsAre(IsSameId(&client, kBackgroundType),
-                          IsSameId(&client, kForegroundType)));
+  EXPECT_THAT(GetPersistentData().GetDisplayItemList(),
+              ElementsAre(IsSameId(client.Id(), kBackgroundType),
+                          IsSameId(client.Id(), kForegroundType)));
 }
 
 }  // namespace

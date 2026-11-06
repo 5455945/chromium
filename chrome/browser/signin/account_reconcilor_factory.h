@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,24 +7,18 @@
 
 #include <memory>
 
-#include "base/memory/singleton.h"
-#include "components/keyed_service/content/browser_context_keyed_service_factory.h"
-
-namespace signin {
-class IdentityManager;
-}
+#include "base/no_destructor.h"
+#include "chrome/browser/profiles/profile_keyed_service_factory.h"
 
 namespace signin {
 class AccountReconcilorDelegate;
 }
 
 class AccountReconcilor;
-class Profile;
-class SigninClient;
 
 // Singleton that owns all AccountReconcilors and associates them with
 // Profiles. Listens for the Profile's destruction notification and cleans up.
-class AccountReconcilorFactory : public BrowserContextKeyedServiceFactory {
+class AccountReconcilorFactory : public ProfileKeyedServiceFactory {
  public:
   // Returns the instance of AccountReconcilor associated with this profile
   // (creating one if none exists). Returns NULL if this profile cannot have an
@@ -34,12 +28,8 @@ class AccountReconcilorFactory : public BrowserContextKeyedServiceFactory {
   // Returns an instance of the factory singleton.
   static AccountReconcilorFactory* GetInstance();
 
-  // BrowserContextKeyedServiceFactory:
-  void RegisterProfilePrefs(
-      user_prefs::PrefRegistrySyncable* registry) override;
-
  private:
-  friend struct base::DefaultSingletonTraits<AccountReconcilorFactory>;
+  friend base::NoDestructor<AccountReconcilorFactory>;
   friend class DummyAccountReconcilorWithDelegate;  // For testing.
 
   AccountReconcilorFactory();
@@ -50,7 +40,7 @@ class AccountReconcilorFactory : public BrowserContextKeyedServiceFactory {
   CreateAccountReconcilorDelegate(Profile* profile);
 
   // BrowserContextKeyedServiceFactory:
-  KeyedService* BuildServiceInstanceFor(
+  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
       content::BrowserContext* profile) const override;
 };
 

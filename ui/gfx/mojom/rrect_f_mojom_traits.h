@@ -1,14 +1,15 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_GFX_MOJOM_RRECT_F_MOJOM_TRAITS_H_
 #define UI_GFX_MOJOM_RRECT_F_MOJOM_TRAITS_H_
 
+#include "base/notreached.h"
 #include "ui/gfx/geometry/mojom/geometry_mojom_traits.h"
+#include "ui/gfx/geometry/rrect_f.h"
+#include "ui/gfx/geometry/rrect_f_builder.h"
 #include "ui/gfx/mojom/rrect_f.mojom-shared.h"
-#include "ui/gfx/rrect_f.h"
-#include "ui/gfx/rrect_f_builder.h"
 
 namespace mojo {
 
@@ -30,7 +31,6 @@ gfx::mojom::RRectFType GfxRRectFTypeToMojo(gfx::RRectF::Type type) {
       return gfx::mojom::RRectFType::kComplex;
   }
   NOTREACHED();
-  return gfx::mojom::RRectFType::kEmpty;
 }
 
 gfx::RRectF::Type MojoRRectFTypeToGfx(gfx::mojom::RRectFType type) {
@@ -49,7 +49,6 @@ gfx::RRectF::Type MojoRRectFTypeToGfx(gfx::mojom::RRectFType type) {
       return gfx::RRectF::Type::kComplex;
   }
   NOTREACHED();
-  return gfx::RRectF::Type::kEmpty;
 }
 
 }  // namespace

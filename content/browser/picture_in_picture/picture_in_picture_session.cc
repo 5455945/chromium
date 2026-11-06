@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,9 @@
 
 #include <utility>
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "content/browser/picture_in_picture/picture_in_picture_service_impl.h"
-#include "content/browser/picture_in_picture/picture_in_picture_window_controller_impl.h"
+#include "content/browser/picture_in_picture/video_picture_in_picture_window_controller_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 
 namespace content {
@@ -28,10 +28,11 @@ PictureInPictureSession::PictureInPictureSession(
       &PictureInPictureSession::OnConnectionError, base::Unretained(this)));
   media_player_remote_.set_disconnect_handler(base::BindOnce(
       &PictureInPictureSession::OnPlayerGone, base::Unretained(this)));
+  NotifyPictureInPictureStateChanged(true);
 }
 
 PictureInPictureSession::~PictureInPictureSession() {
-  DCHECK(is_stopping_);
+  CHECK(is_stopping_, base::NotFatalUntil::M159);
 }
 
 void PictureInPictureSession::Stop(StopCallback callback) {
@@ -44,8 +45,10 @@ void PictureInPictureSession::Update(
     const viz::SurfaceId& surface_id,
     const gfx::Size& natural_size,
     bool show_play_pause_button) {
+  NotifyPictureInPictureStateChanged(false);
   player_id_ =
-      MediaPlayerId(service_->render_frame_host()->GetGlobalId(), player_id);
+      MediaPlayerId(service_->render_frame_host().GetGlobalId(), player_id);
+  NotifyPictureInPictureStateChanged(true);
 
   media_player_remote_.reset();
   media_player_remote_.Bind(std::move(player_remote));
@@ -56,9 +59,26 @@ void PictureInPictureSession::Update(
   GetController().SetShowPlayPauseButton(show_play_pause_button);
 }
 
+void PictureInPictureSession::UpdateMediaPosition(
+    const media_session::MediaPosition& media_position) {
+  GetController().SetMediaPosition(media_position);
+}
+
 void PictureInPictureSession::OnPlayerGone() {
+  if (!is_stopping_) {
+    NotifyPictureInPictureStateChanged(false);
+  }
   player_id_.reset();
-  GetController().SetShowPlayPauseButton(false);
+  GetController().SetPlaybackControlsVisibility(false);
+}
+
+void PictureInPictureSession::NotifyPictureInPictureStateChanged(
+    bool is_picture_in_picture) {
+  if (!player_id_.has_value()) {
+    return;
+  }
+  GetController().OnPictureInPictureStateChanged(*player_id_,
+                                                 is_picture_in_picture);
 }
 
 void PictureInPictureSession::NotifyWindowResized(const gfx::Size& size) {
@@ -67,7 +87,7 @@ void PictureInPictureSession::NotifyWindowResized(const gfx::Size& size) {
 
 mojo::AssociatedRemote<media::mojom::MediaPlayer>&
 PictureInPictureSession::GetMediaPlayerRemote() {
-  DCHECK(media_player_remote_.is_bound());
+  CHECK(media_player_remote_.is_bound(), base::NotFatalUntil::M159);
   return media_player_remote_;
 }
 
@@ -80,6 +100,7 @@ void PictureInPictureSession::Disconnect() {
     return;
 
   is_stopping_ = true;
+  NotifyPictureInPictureStateChanged(false);
   observer_->OnStopped();
 }
 
@@ -91,9 +112,12 @@ void PictureInPictureSession::Shutdown() {
 }
 
 void PictureInPictureSession::StopInternal(StopCallback callback) {
+  // TODO(crbug.com/568395724): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK(!is_stopping_);
 
   is_stopping_ = true;
+  NotifyPictureInPictureStateChanged(false);
 
   // `OnStopped()` should only be called if there is no callback to run, as a
   // contract in the API.
@@ -107,17 +131,24 @@ void PictureInPictureSession::StopInternal(StopCallback callback) {
 }
 
 void PictureInPictureSession::OnConnectionError() {
+  // There is possibility that OnConnectionError arrives between StopInternal()
+  // is called and |this| is deleted. As a result, DCHECK in StopInternal()
+  // will fail.
+  if (is_stopping_)
+    return;
+
   // StopInternal() will self destruct which will close the bindings.
   StopInternal(base::NullCallback());
 }
 
 WebContentsImpl* PictureInPictureSession::GetWebContentsImpl() {
   return static_cast<WebContentsImpl*>(
-      WebContents::FromRenderFrameHost(service_->render_frame_host()));
+      WebContents::FromRenderFrameHost(&service_->render_frame_host()));
 }
 
-PictureInPictureWindowControllerImpl& PictureInPictureSession::GetController() {
-  return *PictureInPictureWindowControllerImpl::GetOrCreateForWebContents(
+VideoPictureInPictureWindowControllerImpl&
+PictureInPictureSession::GetController() {
+  return *VideoPictureInPictureWindowControllerImpl::GetOrCreateForWebContents(
       GetWebContentsImpl());
 }
 

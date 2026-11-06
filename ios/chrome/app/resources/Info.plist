@@ -4,10 +4,8 @@
 <dict>
 	<key>UIFileSharingEnabled</key>
 	<true/>
-	<key>UIApplicationShortcutWidget</key>
-	<string>${IOS_BUNDLE_ID_PREFIX}.${CONTENT_WIDGET_EXTENSION_BUNDLE_ID}</string>
 	<key>CFBundleDevelopmentRegion</key>
-	<string>English</string>
+	<string>en</string>
 	<key>CFBundleDisplayName</key>
 	<string>${CHROMIUM_SHORT_NAME}</string>
 	<key>CFBundleDocumentTypes</key>
@@ -46,7 +44,7 @@
 		</dict>
 	</dict>
 	<key>CFBundleIdentifier</key>
-	<string>${IOS_BUNDLE_ID_PREFIX}.${CHROMIUM_BUNDLE_ID:rfc1034identifier}</string>
+	<string>${BUNDLE_IDENTIFIER}</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
@@ -68,7 +66,7 @@
 		</dict>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>${IOS_BUNDLE_ID_PREFIX}.${CHROMIUM_BUNDLE_ID:rfc1034identifier}</string>
+			<string>${BUNDLE_IDENTIFIER}</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>${CHROMIUM_URL_SCHEME_1}</string>
@@ -93,8 +91,10 @@
 		<string>${CHROMIUM_HANDOFF_ID}</string>
 		<string>${IOS_MOVE_TAB_ACTIVITY_TYPE}</string>
 		<string>NSUserActivityTypeBrowsingWeb</string>
-		<string>OpenInChromeIntent</string>
+		<string>AddBookmarkToChromeIntent</string>
+		<string>AddReadingListItemToChromeIntent</string>
 		<string>OpenInChromeIncognitoIntent</string>
+		<string>OpenInChromeIntent</string>
 		<string>SearchInChromeIntent</string>
 	</array>
 	<key>UIBackgroundModes</key>
@@ -104,8 +104,8 @@
 	<key>UIApplicationShortcutItems</key>
 	<array>
 		<dict>
-			<key>UIApplicationShortcutItemIconFile</key>
-			<string>quick_action_new_search</string>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>magnifyingglass</string>
 			<key>UIApplicationShortcutItemTitle</key>
 			<string>IDS_IOS_APPLICATION_SHORTCUT_NEWSEARCH_TITLE</string>
 			<key>UIApplicationShortcutItemType</key>
@@ -113,27 +113,19 @@
 		</dict>
 		<dict>
 			<key>UIApplicationShortcutItemIconFile</key>
-			<string>quick_action_incognito_search</string>
+			<string>incognito</string>
 			<key>UIApplicationShortcutItemTitle</key>
 			<string>IDS_IOS_APPLICATION_SHORTCUT_INCOGNITOSEARCH_TITLE</string>
 			<key>UIApplicationShortcutItemType</key>
 			<string>OpenIncognitoSearch</string>
 		</dict>
 		<dict>
-			<key>UIApplicationShortcutItemIconFile</key>
-			<string>quick_action_voice_search</string>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>mic</string>
 			<key>UIApplicationShortcutItemTitle</key>
 			<string>IDS_IOS_APPLICATION_SHORTCUT_VOICE_SEARCH_TITLE</string>
 			<key>UIApplicationShortcutItemType</key>
 			<string>OpenVoiceSearch</string>
-		</dict>
-		<dict>
-			<key>UIApplicationShortcutItemIconFile</key>
-			<string>quick_action_qr_scanner</string>
-			<key>UIApplicationShortcutItemTitle</key>
-			<string>IDS_IOS_APPLICATION_SHORTCUT_QR_SCANNER_TITLE</string>
-			<key>UIApplicationShortcutItemType</key>
-			<string>OpenQRScanner</string>
 		</dict>
 	</array>
 	<key>UIPrerenderedIcon</key>
@@ -144,10 +136,6 @@
 	<array>
 		<string>arm64</string>
 	</array>
-	<key>UIStatusBarStyle</key>
-	<string>UIStatusBarStyleLightContent</string>
-	<key>UIStatusBarHidden</key>
-	<true/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
@@ -195,6 +183,8 @@
 	<string>${SSOAUTH_URL_SCHEME}</string>
 	<key>KSChannelChromeScheme</key>
 	<string>${CHROMIUM_URL_CHANNEL_SCHEME}</string>
+	<key>NSContactsUsageDescription</key>
+	<string>IDS_IOS_CONTACTS_USAGE_DESCRIPTION</string>
 	<key>NSCameraUsageDescription</key>
 	<string>IDS_IOS_CAMERA_USAGE_DESCRIPTION</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
@@ -207,6 +197,12 @@
 	<string>IDS_IOS_BLUETOOTH_USAGE_DESCRIPTION</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>IDS_IOS_FACE_ID_USAGE_DESCRIPTION</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>IDS_IOS_CALENDARS_USAGE_DESCRIPTION</string>
+	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
+	<string>IDS_IOS_CALENDARS_USAGE_DESCRIPTION</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>IDS_IOS_SPEECH_RECOGNITION_USAGE_DESCRIPTION</string>
 	<key>FirebaseScreenReportingEnabled</key>
 	<false/>
 	<key>UIApplicationSceneManifest</key>
@@ -232,5 +228,7 @@
 			</array>
 		</dict>
 	</dict>
+	<key>UISupportsFullScreenInAssistiveAccess</key>
+	<true/>
 </dict>
 </plist>

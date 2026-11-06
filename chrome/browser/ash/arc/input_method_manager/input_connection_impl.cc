@@ -1,16 +1,16 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/arc/input_method_manager/input_connection_impl.h"
 
 #include <tuple>
+#include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/threading/thread_task_runner_handle.h"
-#include "ui/base/ime/chromeos/ime_bridge.h"
-#include "ui/base/ime/chromeos/ime_keymap.h"
+#include "ui/base/ime/ash/ime_bridge.h"
+#include "ui/base/ime/ash/ime_keymap.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/keycodes/dom/dom_code.h"
 #include "ui/events/keycodes/dom/keycode_converter.h"
@@ -27,7 +27,7 @@ namespace {
 // Android.
 // TODO(yhanada): Implement a way to observe an IME operation completion and
 // send the current text input state right after the IME operation completion.
-constexpr base::TimeDelta kStateUpdateTimeout = base::TimeDelta::FromSeconds(1);
+constexpr base::TimeDelta kStateUpdateTimeout = base::Seconds(1);
 
 // Characters which should be sent as a KeyEvent and attributes of generated
 // KeyEvent.
@@ -47,13 +47,14 @@ bool IsControlChar(const std::u16string& text) {
 }
 
 ui::TextInputClient* GetTextInputClient() {
-  ui::IMEBridge* bridge = ui::IMEBridge::Get();
-  DCHECK(bridge);
-  ui::IMEInputContextHandlerInterface* handler =
-      bridge->GetInputContextHandler();
+  ash::IMEBridge* bridge = ash::IMEBridge::Get();
+  CHECK(bridge, base::NotFatalUntil::M160);
+  ash::TextInputTarget* handler = bridge->GetInputContextHandler();
   if (!handler)
     return nullptr;
   ui::TextInputClient* client = handler->GetInputMethod()->GetTextInputClient();
+  // TODO(crbug.com/578760208): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK(client);
   return client;
 }
@@ -69,7 +70,7 @@ ui::KeyEvent CreateKeyEvent(ui::EventType type,
 }  // namespace
 
 InputConnectionImpl::InputConnectionImpl(
-    chromeos::InputMethodEngine* ime_engine,
+    ash::input_method::InputMethodEngine* ime_engine,
     ArcInputMethodManagerBridge* imm_bridge,
     int input_context_id)
     : ime_engine_(ime_engine),
@@ -100,11 +101,11 @@ mojom::TextInputStatePtr InputConnectionImpl::GetTextInputState(
   ui::TextInputClient* client = GetTextInputClient();
   gfx::Range text_range = gfx::Range();
   gfx::Range selection_range = gfx::Range();
-  absl::optional<gfx::Range> composition_text_range = gfx::Range();
+  std::optional<gfx::Range> composition_text_range = gfx::Range();
   std::u16string text;
 
   if (!client) {
-    return mojom::TextInputStatePtr(base::in_place, 0, text, text_range,
+    return mojom::TextInputStatePtr(std::in_place, 0, text, text_range,
                                     selection_range, ui::TEXT_INPUT_TYPE_NONE,
                                     false, 0, is_input_state_update_requested,
                                     composition_text_range);
@@ -117,8 +118,8 @@ mojom::TextInputStatePtr InputConnectionImpl::GetTextInputState(
   client->GetTextFromRange(text_range, &text);
 
   return mojom::TextInputStatePtr(
-      base::in_place, selection_range.start(), text, text_range,
-      selection_range, client->GetTextInputType(), client->ShouldDoLearning(),
+      std::in_place, selection_range.start(), text, text_range, selection_range,
+      client->GetTextInputType(), client->ShouldDoLearning(),
       client->GetTextInputFlags(), is_input_state_update_requested,
       composition_text_range);
 }
@@ -200,25 +201,34 @@ void InputConnectionImpl::FinishComposingText() {
 void InputConnectionImpl::SetComposingText(
     const std::u16string& text,
     int new_cursor_pos,
-    const absl::optional<gfx::Range>& new_selection_range) {
+    const std::optional<gfx::Range>& new_selection_range) {
   // It's relative to the last character of the composing text,
   // so 0 means the cursor should be just before the last character of the text.
   new_cursor_pos += text.length() - 1;
 
   StartStateUpdateTimer();
 
-  const int selection_start = new_selection_range
-                                  ? new_selection_range.value().start()
-                                  : new_cursor_pos;
-  const int selection_end =
-      new_selection_range ? new_selection_range.value().end() : new_cursor_pos;
-
   ui::TextInputClient* client = GetTextInputClient();
   if (!client)
     return;
 
-  gfx::Range selection_range;
+  // Calculate the position of composition insertion point
+  gfx::Range selection_range, composition_range;
   client->GetEditableSelectionRange(&selection_range);
+  client->GetCompositionTextRange(&composition_range);
+
+  const int insertion_point = composition_range.is_empty()
+                                  ? selection_range.start()
+                                  : composition_range.start();
+
+  const int selection_start =
+      new_selection_range
+          ? new_selection_range.value().start() - insertion_point
+          : new_cursor_pos;
+  const int selection_end =
+      new_selection_range ? new_selection_range.value().end() - insertion_point
+                          : new_cursor_pos;
+
   if (text.empty() &&
       selection_range.start() == static_cast<uint32_t>(selection_start) &&
       selection_range.end() == static_cast<uint32_t>(selection_end)) {
@@ -231,9 +241,9 @@ void InputConnectionImpl::SetComposingText(
   if (!ime_engine_->SetComposition(
           input_context_id_, base::UTF16ToUTF8(text).c_str(), selection_start,
           selection_end, new_cursor_pos,
-          std::vector<chromeos::InputMethodEngineBase::SegmentInfo>(),
+          std::vector<ash::input_method::InputMethodEngine::SegmentInfo>(),
           &error)) {
-    LOG(ERROR) << "SetComposingText failed: pos=" << new_cursor_pos
+    LOG(ERROR) << "SetComposition failed: pos=" << new_cursor_pos
                << ", error=\"" << error << "\"";
     return;
   }
@@ -263,7 +273,7 @@ void InputConnectionImpl::SetSelection(const gfx::Range& new_selection_range) {
 
 void InputConnectionImpl::SendKeyEvent(
     std::unique_ptr<ui::KeyEvent> key_event) {
-  DCHECK(key_event);
+  CHECK(key_event, base::NotFatalUntil::M160);
   std::string error;
   if (!ime_engine_->SendKeyEvents(input_context_id_, {*key_event}, &error)) {
     LOG(ERROR) << error;
@@ -285,17 +295,17 @@ void InputConnectionImpl::SetCompositionRange(
 
   StartStateUpdateTimer();
 
-  const int before = selection_range.start() - new_composition_range.start();
-  const int after = new_composition_range.end() - selection_range.end();
-  chromeos::InputMethodEngineBase::SegmentInfo segment_info;
+  ash::input_method::InputMethodEngine::SegmentInfo segment_info;
   segment_info.start = 0;
   segment_info.end = new_composition_range.length();
-  segment_info.style = chromeos::InputMethodEngineBase::SEGMENT_STYLE_UNDERLINE;
+  segment_info.style =
+      ash::input_method::InputMethodEngine::SEGMENT_STYLE_UNDERLINE;
 
   std::string error;
-  if (!ime_engine_->chromeos::InputMethodEngineBase::SetCompositionRange(
-          input_context_id_, before, after, {segment_info}, &error)) {
-    LOG(ERROR) << "SetCompositionRange failed: range="
+  if (!ime_engine_->ash::input_method::InputMethodEngine::SetComposingRange(
+          input_context_id_, new_composition_range.start(),
+          new_composition_range.end(), {segment_info}, &error)) {
+    LOG(ERROR) << "SetComposingRange failed: range="
                << new_composition_range.ToString() << ", error=\"" << error
                << "\"";
   }
@@ -312,18 +322,20 @@ void InputConnectionImpl::StartStateUpdateTimer() {
 }
 
 void InputConnectionImpl::SendControlKeyEvent(const std::u16string& text) {
-  DCHECK(IsControlChar(text));
+  CHECK(IsControlChar(text), base::NotFatalUntil::M160);
 
   const std::string str = base::UTF16ToUTF8(text);
-  DCHECK_EQ(1u, str.length());
+  CHECK_EQ(1u, str.length(), base::NotFatalUntil::M160);
 
   for (const auto& t : kControlCharToKeyEvent) {
     if (std::get<0>(t) == str[0]) {
-      ui::KeyEvent press = CreateKeyEvent(ui::ET_KEY_PRESSED, std::get<1>(t),
-                                          std::get<2>(t), std::get<3>(t));
+      ui::KeyEvent press =
+          CreateKeyEvent(ui::EventType::kKeyPressed, std::get<1>(t),
+                         std::get<2>(t), std::get<3>(t));
 
-      ui::KeyEvent release = CreateKeyEvent(ui::ET_KEY_RELEASED, std::get<1>(t),
-                                            std::get<2>(t), std::get<3>(t));
+      ui::KeyEvent release =
+          CreateKeyEvent(ui::EventType::kKeyReleased, std::get<1>(t),
+                         std::get<2>(t), std::get<3>(t));
 
       std::string error;
       if (!ime_engine_->SendKeyEvents(input_context_id_, {press, release},

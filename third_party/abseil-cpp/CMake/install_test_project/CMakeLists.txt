@@ -15,11 +15,11 @@
 
 # A simple CMakeLists.txt for testing cmake installation
 
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.16)
 project(absl_cmake_testing CXX)
 
 add_executable(simple simple.cc)
 
 find_package(absl REQUIRED)
 
-target_link_libraries(simple absl::strings)
+target_link_libraries(simple absl::strings absl::config)

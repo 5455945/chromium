@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,19 +7,14 @@
 
 #include <string>
 
+#include "components/signin/public/identity_manager/access_token_info.h"
+
 namespace syncer {
 
 // Contains everything needed to talk to and identify a user account.
 struct SyncCredentials {
-  SyncCredentials() = default;
-  SyncCredentials(const SyncCredentials& other) = default;
-  ~SyncCredentials() = default;
-
-  // The email associated with this account.
-  std::string email;
-
-  // The OAuth2 access token.
-  std::string access_token;
+  // The OAuth2 access token info.
+  signin::AccessTokenInfo access_token_info;
 };
 
 }  // namespace syncer

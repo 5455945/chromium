@@ -1,4 +1,4 @@
-# Copyright 2013 The Chromium Authors. All rights reserved.
+# Copyright 2013 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -22,10 +22,11 @@ class Action(cr.Plugin):
   @classmethod
   def AddSelectorArg(cls, command, parser):
     parser.add_argument(
-        cls.SELECTOR_ARG, dest=cls.SELECTOR,
-        choices=cls.Choices(),
-        default=None,
-        help=cls.SELECTOR_HELP + ' Overrides ' + cls.SELECTOR
+      cls.SELECTOR_ARG,
+      dest=cls.SELECTOR,
+      choices=cls.Choices(),
+      default=None,
+      help=cls.SELECTOR_HELP + ' Overrides ' + cls.SELECTOR,
     )
 
   @cr.Plugin.activemethod

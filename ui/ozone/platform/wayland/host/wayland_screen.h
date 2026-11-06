@@ -1,21 +1,29 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_OZONE_PLATFORM_WAYLAND_HOST_WAYLAND_SCREEN_H_
 #define UI_OZONE_PLATFORM_WAYLAND_HOST_WAYLAND_SCREEN_H_
 
+#include <optional>
+#include <ostream>
 #include <set>
 #include <vector>
 
+#include "base/containers/flat_map.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/observer_list.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/scoped_observation.h"
+#include "base/values.h"
+#include "build/config/linux/dbus/buildflags.h"
 #include "ui/display/display_list.h"
 #include "ui/display/display_observer.h"
-#include "ui/display/tablet_state.h"
 #include "ui/gfx/buffer_types.h"
 #include "ui/gfx/geometry/point.h"
+#include "ui/linux/device_scale_factor_observer.h"
+#include "ui/linux/linux_ui.h"
+#include "ui/ozone/platform/wayland/common/wayland_object.h"
+#include "ui/ozone/platform/wayland/host/wayland_output.h"
 #include "ui/ozone/public/platform_screen.h"
 
 namespace gfx {
@@ -26,24 +34,28 @@ namespace ui {
 
 class WaylandConnection;
 
-#if defined(USE_DBUS)
+#if BUILDFLAG(USE_DBUS)
 class OrgGnomeMutterIdleMonitor;
 #endif
 
-// A PlatformScreen implementation for Wayland.
-class WaylandScreen : public PlatformScreen {
+// A PlatformScreen implementation for Wayland. Note that this object outlives
+// WaylandConnection.
+class WaylandScreen : public PlatformScreen, public DeviceScaleFactorObserver {
  public:
   explicit WaylandScreen(WaylandConnection* connection);
   WaylandScreen(const WaylandScreen&) = delete;
   WaylandScreen& operator=(const WaylandScreen&) = delete;
   ~WaylandScreen() override;
 
-  void OnOutputAddedOrUpdated(uint32_t output_id,
-                              const gfx::Rect& bounds,
-                              int32_t output_scale);
+  void OnOutputAddedOrUpdated(const WaylandOutput::Metrics& metrics);
   void OnOutputRemoved(uint32_t output_id);
 
-  void OnTabletStateChanged(display::TabletState tablet_state);
+  WaylandOutput::Id GetOutputIdForDisplayId(int64_t display_id);
+  WaylandOutput* GetWaylandOutputForDisplayId(int64_t display_id);
+  viz::SharedImageFormat GetHDRImageFormat() const;
+
+  // Returns id of the output that matches the bounds in screen coordinates.
+  WaylandOutput::Id GetOutputIdMatching(const gfx::Rect& match_rect);
 
   base::WeakPtr<WaylandScreen> GetWeakPtr();
 
@@ -62,40 +74,74 @@ class WaylandScreen : public PlatformScreen {
       const gfx::Point& point) const override;
   display::Display GetDisplayMatching(
       const gfx::Rect& match_rect) const override;
+  std::unique_ptr<PlatformScreen::PlatformScreenSaverSuspender>
+  SuspendScreenSaver() override;
+  bool IsScreenSaverActive() const override;
   base::TimeDelta CalculateIdleTime() const override;
   void AddObserver(display::DisplayObserver* observer) override;
   void RemoveObserver(display::DisplayObserver* observer) override;
-  base::Value GetGpuExtraInfoAsListValue(
+  base::ListValue GetGpuExtraInfo(
       const gfx::GpuExtraInfo& gpu_extra_info) override;
-  void SetDeviceScaleFactor(float scale) override;
+  std::optional<float> GetPreferredScaleFactorForAcceleratedWidget(
+      gfx::AcceleratedWidget widget) const override;
+
+  // DeviceScaleFactorObserver:
+  void OnDeviceScaleFactorChanged() override;
+
+  void DumpState(std::ostream& out) const;
+
+  // True if the internal representations for output objects is consistent for
+  // the screen.
+  bool VerifyOutputStateConsistentForTesting() const;
+
+  void ResetConnection();
+
+ protected:
+  // Suspends or un-suspends the platform-specific screensaver, and returns
+  // whether the operation was successful. Can be called more than once with the
+  // same value for |suspend|, but those states should not stack: the first
+  // alternating value should toggle the state of the suspend.
+  bool SetScreenSaverSuspended(bool suspend);
 
  private:
-  void AddOrUpdateDisplay(uint32_t output_id,
-                          const gfx::Rect& bounds,
-                          int32_t scale);
+  class WaylandScreenSaverSuspender
+      : public PlatformScreen::PlatformScreenSaverSuspender {
+   public:
+    WaylandScreenSaverSuspender(const WaylandScreenSaverSuspender&) = delete;
+    WaylandScreenSaverSuspender& operator=(const WaylandScreenSaverSuspender&) =
+        delete;
 
-  WaylandConnection* connection_ = nullptr;
+    ~WaylandScreenSaverSuspender() override;
 
+    static std::unique_ptr<WaylandScreenSaverSuspender> Create(
+        WaylandScreen& screen);
+
+   private:
+    explicit WaylandScreenSaverSuspender(WaylandScreen& screen);
+
+    base::WeakPtr<WaylandScreen> screen_;
+    bool is_suspending_ = false;
+  };
+
+  void AddOrUpdateDisplay(const WaylandOutput::Metrics& metrics);
+  raw_ptr<WaylandConnection> connection_ = nullptr;
+
+  base::flat_map<WaylandOutput::Id, int64_t> display_id_map_;
   display::DisplayList display_list_;
 
-  base::ObserverList<display::DisplayObserver> observers_;
+  std::optional<viz::SharedImageFormat> image_format_alpha_;
+  std::optional<viz::SharedImageFormat> image_format_no_alpha_;
+  std::optional<viz::SharedImageFormat> image_format_hdr_;
 
-  absl::optional<gfx::BufferFormat> image_format_alpha_;
-  absl::optional<gfx::BufferFormat> image_format_no_alpha_;
-
-#if defined(USE_DBUS)
+#if BUILDFLAG(USE_DBUS)
   mutable std::unique_ptr<OrgGnomeMutterIdleMonitor>
       org_gnome_mutter_idle_monitor_;
 #endif
 
-  // Fractional part of additional scale. By default, GNOME also provides scale
-  // factor for Wayland, but it uses the biggest scale factor if multiple
-  // displays are available. In contrast, wl_output.scale sends scale factor for
-  // each of the displays and we adapt accordingly. However, wl_output.scale
-  // doesn't send fractional parts, while GNOME does send that when "Large text"
-  // feature is enabled. Thus, store only this decimal part and updates displays
-  // accordingly.
-  float additional_scale_ = 0.f;
+  uint32_t screen_saver_suspension_count_ = 0;
+
+  base::ScopedObservation<ui::LinuxUi, DeviceScaleFactorObserver>
+      display_scale_factor_observer_{this};
 
   base::WeakPtrFactory<WaylandScreen> weak_factory_;
 };

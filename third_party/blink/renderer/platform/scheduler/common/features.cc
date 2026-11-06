@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,14 +13,14 @@ namespace scheduler {
 
 namespace {
 
-enum class PolicyOverride { NO_OVERRIDE, FORCE_DISABLE, FORCE_ENABLE };
+enum class PolicyOverride { kNoOverride, kForceDisable, kForceEnable };
 
 bool g_intensive_wake_up_throttling_policy_override_cached_ = false;
 
 // Returns the IntensiveWakeUpThrottling policy settings. This is checked once
 // on first access and cached. Note that that this is *not* thread-safe!
 PolicyOverride GetIntensiveWakeUpThrottlingPolicyOverride() {
-  static PolicyOverride policy = PolicyOverride::NO_OVERRIDE;
+  static PolicyOverride policy = PolicyOverride::kNoOverride;
   if (g_intensive_wake_up_throttling_policy_override_cached_)
     return policy;
 
@@ -32,13 +32,13 @@ PolicyOverride GetIntensiveWakeUpThrottlingPolicyOverride() {
       base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
           switches::kIntensiveWakeUpThrottlingPolicy);
   if (value == switches::kIntensiveWakeUpThrottlingPolicy_ForceEnable) {
-    policy = PolicyOverride::FORCE_ENABLE;
+    policy = PolicyOverride::kForceEnable;
   } else if (value == switches::kIntensiveWakeUpThrottlingPolicy_ForceDisable) {
-    policy = PolicyOverride::FORCE_DISABLE;
+    policy = PolicyOverride::kForceDisable;
   } else {
     // Necessary in testing configurations, as the policy can be parsed
     // repeatedly.
-    policy = PolicyOverride::NO_OVERRIDE;
+    policy = PolicyOverride::kNoOverride;
   }
 
   return policy;
@@ -53,8 +53,8 @@ void ClearIntensiveWakeUpThrottlingPolicyOverrideCacheForTesting() {
 bool IsIntensiveWakeUpThrottlingEnabled() {
   // If policy is present then respect it.
   auto policy = GetIntensiveWakeUpThrottlingPolicyOverride();
-  if (policy != PolicyOverride::NO_OVERRIDE)
-    return policy == PolicyOverride::FORCE_ENABLE;
+  if (policy != PolicyOverride::kNoOverride)
+    return policy == PolicyOverride::kForceEnable;
   // Otherwise respect the base::Feature.
   return base::FeatureList::IsEnabled(features::kIntensiveWakeUpThrottling);
 }
@@ -63,7 +63,7 @@ bool IsIntensiveWakeUpThrottlingEnabled() {
 // that admins get consistent behaviour that clients can't override. Otherwise
 // use the base::FeatureParams.
 
-base::TimeDelta GetIntensiveWakeUpThrottlingGracePeriod() {
+base::TimeDelta GetIntensiveWakeUpThrottlingGracePeriod(bool loading) {
   // Controls the time that elapses after a page is backgrounded before the
   // throttling policy takes effect.
   static const base::FeatureParam<int>
@@ -74,26 +74,43 @@ base::TimeDelta GetIntensiveWakeUpThrottlingGracePeriod() {
 
   int seconds = kIntensiveWakeUpThrottling_GracePeriodSeconds_Default;
   if (GetIntensiveWakeUpThrottlingPolicyOverride() ==
-      PolicyOverride::NO_OVERRIDE) {
-    seconds = kIntensiveWakeUpThrottling_GracePeriodSeconds.Get();
+      PolicyOverride::kNoOverride) {
+    if (loading) {
+      seconds = kIntensiveWakeUpThrottling_GracePeriodSeconds.Get();
+    } else {
+      seconds = kIntensiveWakeUpThrottling_GracePeriodSecondsLoaded_Default;
+    }
   }
-  return base::TimeDelta::FromSeconds(seconds);
+  return base::Seconds(seconds);
 }
 
-const base::Feature kDeprioritizeDOMTimersDuringPageLoading{
-    "DeprioritizeDOMTimersDuringPageLoading",
-    base::FEATURE_DISABLED_BY_DEFAULT};
+// When enabled, renderer main will busy loop in user space when no further work
+// is scheduled before waiting in the kernel.
+BASE_FEATURE(kBusyLoopOnRendererMain,
+             "BusyLoopOnMainThread",
+#if BUILDFLAG(IS_ANDROID)
+             base::FEATURE_ENABLED_BY_DEFAULT
+#else   // BUILDFLAG(IS_ANDROID)
+             base::FEATURE_DISABLED_BY_DEFAULT
+#endif  // BUILDFLAG(IS_ANDROID)
+);
 
-const base::FeatureParam<DeprioritizeDOMTimersPhase>::Option
-    kDeprioritizeDOMTimersPhaseOptions[] = {
-        {DeprioritizeDOMTimersPhase::kOnDOMContentLoaded, "ondomcontentloaded"},
-        {DeprioritizeDOMTimersPhase::kFirstContentfulPaint, "fcp"},
-        {DeprioritizeDOMTimersPhase::kOnLoad, "onload"}};
+// The maximum amount of time to busy loop when BusyLoopOnMainThread is enabled.
+BASE_FEATURE_PARAM(base::TimeDelta,
+                   kBusyLoopTime,
+                   &kBusyLoopOnRendererMain,
+                   "busy_loop_for",
+                   base::Milliseconds(2));
 
-const base::FeatureParam<DeprioritizeDOMTimersPhase>
-    kDeprioritizeDOMTimersPhase{&kDeprioritizeDOMTimersDuringPageLoading,
-                                "phase",
-                                DeprioritizeDOMTimersPhase::kOnDOMContentLoaded,
-                                &kDeprioritizeDOMTimersPhaseOptions};
+// Prevent scaling BusyLoopOnMainThread to its maximum value during compositor
+// driven gestures.
+BASE_FEATURE(kBusyLoopLessWhenCompositorGesture,
+#if BUILDFLAG(IS_ANDROID)
+             base::FEATURE_ENABLED_BY_DEFAULT
+#else
+             base::FEATURE_DISABLED_BY_DEFAULT
+#endif
+);
+
 }  // namespace scheduler
 }  // namespace blink

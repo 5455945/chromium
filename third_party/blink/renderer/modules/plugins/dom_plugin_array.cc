@@ -20,6 +20,7 @@
 
 #include "third_party/blink/renderer/modules/plugins/dom_plugin_array.h"
 
+#include "build/build_config.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
@@ -28,23 +29,48 @@
 #include "third_party/blink/renderer/core/page/plugin_data.h"
 #include "third_party/blink/renderer/modules/plugins/dom_mime_type_array.h"
 #include "third_party/blink/renderer/modules/plugins/navigator_plugins.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
 
-DOMPluginArray::DOMPluginArray(LocalDOMWindow* window)
-    : ExecutionContextLifecycleObserver(window),
-      PluginsChangedObserver(window ? window->GetFrame()->GetPage() : nullptr) {
-  UpdatePluginData();
+namespace {
+DOMPlugin* MakeFakePlugin(String plugin_name, LocalDOMWindow* window) {
+  String description = "Portable Document Format";
+  String filename = "internal-pdf-viewer";
+  auto* plugin_info =
+      MakeGarbageCollected<PluginInfo>(plugin_name, filename, description,
+                                       /*background_color=*/Color::kTransparent,
+                                       /*may_use_external_handler=*/false);
+  Vector<String> extensions{"pdf"};
+  for (const char* mime_type : {"application/pdf", "text/pdf"}) {
+    auto* mime_info = MakeGarbageCollected<MimeClassInfo>(
+        mime_type, description, *plugin_info, extensions);
+    plugin_info->AddMimeType(mime_info);
+  }
+  return MakeGarbageCollected<DOMPlugin>(window, *plugin_info);
+}
+}  // namespace
+
+DOMPluginArray::DOMPluginArray(LocalDOMWindow* window) : window_(window) {
+  if (IsPdfViewerAvailable()) {
+    // See crbug.com/1164635 and https://github.com/whatwg/html/pull/6738.
+    // To reduce fingerprinting and make plugins/mimetypes more
+    // interoperable, this is the spec'd, hard-coded list of plugins:
+    Vector<String> plugins{"PDF Viewer", "Chrome PDF Viewer",
+                           "Chromium PDF Viewer", "Microsoft Edge PDF Viewer",
+                           "WebKit built-in PDF"};
+    for (auto name : plugins) {
+      dom_plugins_.push_back(MakeFakePlugin(name, window));
+    }
+  }
 }
 
 void DOMPluginArray::Trace(Visitor* visitor) const {
+  visitor->Trace(window_);
   visitor->Trace(dom_plugins_);
   ScriptWrappable::Trace(visitor);
-  ExecutionContextLifecycleObserver::Trace(visitor);
-  PluginsChangedObserver::Trace(visitor);
 }
 
 unsigned DOMPluginArray::length() const {
@@ -52,34 +78,16 @@ unsigned DOMPluginArray::length() const {
 }
 
 DOMPlugin* DOMPluginArray::item(unsigned index) {
-  if (index >= dom_plugins_.size())
+  if (index >= dom_plugins_.size()) {
     return nullptr;
-
-  if (!dom_plugins_[index]) {
-    dom_plugins_[index] = MakeGarbageCollected<DOMPlugin>(
-        DomWindow(), *GetPluginData()->Plugins()[index]);
   }
-
-  return dom_plugins_[index];
-}
-
-bool DOMPluginArray::ShouldReturnEmptyPluginData() const {
-  return DOMMimeTypeArray::ShouldReturnEmptyPluginData(
-      DomWindow() ? DomWindow()->GetFrame() : nullptr);
+  return dom_plugins_[index].Get();
 }
 
 DOMPlugin* DOMPluginArray::namedItem(const AtomicString& property_name) {
-  if (ShouldReturnEmptyPluginData())
-    return nullptr;
-  PluginData* data = GetPluginData();
-  if (!data)
-    return nullptr;
-
-  for (const Member<PluginInfo>& plugin_info : data->Plugins()) {
-    if (plugin_info->Name() == property_name) {
-      unsigned index =
-          static_cast<unsigned>(&plugin_info - &data->Plugins()[0]);
-      return item(index);
+  for (const auto& plugin : dom_plugins_) {
+    if (plugin->name() == property_name) {
+      return plugin.Get();
     }
   }
   return nullptr;
@@ -87,14 +95,9 @@ DOMPlugin* DOMPluginArray::namedItem(const AtomicString& property_name) {
 
 void DOMPluginArray::NamedPropertyEnumerator(Vector<String>& property_names,
                                              ExceptionState&) const {
-  if (ShouldReturnEmptyPluginData())
-    return;
-  PluginData* data = GetPluginData();
-  if (!data)
-    return;
-  property_names.ReserveInitialCapacity(data->Plugins().size());
-  for (const PluginInfo* plugin_info : data->Plugins()) {
-    property_names.UncheckedAppend(plugin_info->Name());
+  property_names.ReserveInitialCapacity(dom_plugins_.size());
+  for (const auto& plugin : dom_plugins_) {
+    property_names.UncheckedAppend(plugin->name());
   }
 }
 
@@ -106,67 +109,53 @@ bool DOMPluginArray::NamedPropertyQuery(const AtomicString& property_name,
 }
 
 void DOMPluginArray::refresh(bool reload) {
-  if (ShouldReturnEmptyPluginData())
+  if (!window_) {
     return;
-  if (!DomWindow())
-    return;
-
-  PluginData::RefreshBrowserSidePluginCache();
-  if (PluginData* data = GetPluginData())
-    data->ResetPluginData();
-
-  for (Frame* frame = DomWindow()->GetFrame()->GetPage()->MainFrame(); frame;
-       frame = frame->Tree().TraverseNext()) {
-    auto* local_frame = DynamicTo<LocalFrame>(frame);
-    if (!local_frame)
-      continue;
-    Navigator& navigator = *local_frame->DomWindow()->navigator();
-    NavigatorPlugins::plugins(navigator)->UpdatePluginData();
-    NavigatorPlugins::mimeTypes(navigator)->UpdatePluginData();
   }
-
-  if (reload)
-    DomWindow()->GetFrame()->Reload(WebFrameLoadType::kReload);
+  if (PluginData* data = GetPluginData()) {
+    data->ResetPluginData();
+  }
+  if (reload && window_->GetFrame()) {
+    window_->GetFrame()->Reload(WebFrameLoadType::kReload);
+  }
 }
 
 PluginData* DOMPluginArray::GetPluginData() const {
-  return DomWindow() ? DomWindow()->GetFrame()->GetPluginData() : nullptr;
+  return (window_ && window_->GetFrame()) ? window_->GetFrame()->GetPluginData()
+                                          : nullptr;
 }
 
-void DOMPluginArray::UpdatePluginData() {
-  if (ShouldReturnEmptyPluginData()) {
-    dom_plugins_.clear();
-    return;
-  }
-  PluginData* data = GetPluginData();
-  if (!data) {
-    dom_plugins_.clear();
-    return;
-  }
-
-  HeapVector<Member<DOMPlugin>> old_dom_plugins(std::move(dom_plugins_));
-  dom_plugins_.clear();
-  dom_plugins_.resize(data->Plugins().size());
-
-  for (Member<DOMPlugin>& plugin : old_dom_plugins) {
-    if (plugin) {
-      for (const Member<PluginInfo>& plugin_info : data->Plugins()) {
-        if (plugin->name() == plugin_info->Name()) {
-          unsigned index =
-              static_cast<unsigned>(&plugin_info - &data->Plugins()[0]);
-          dom_plugins_[index] = plugin;
-        }
-      }
-    }
-  }
+HeapVector<Member<DOMMimeType>> DOMPluginArray::GetFixedMimeTypeArray() {
+  HeapVector<Member<DOMMimeType>> mimetypes;
+  if (dom_plugins_.empty())
+    return mimetypes;
+  DCHECK_EQ(dom_plugins_[0]->length(), 2u);
+  mimetypes.push_back(dom_plugins_[0]->item(0));
+  mimetypes.push_back(dom_plugins_[0]->item(1));
+  return mimetypes;
 }
 
-void DOMPluginArray::ContextDestroyed() {
-  dom_plugins_.clear();
-}
-
-void DOMPluginArray::PluginsChanged() {
-  UpdatePluginData();
+bool DOMPluginArray::IsPdfViewerAvailable() {
+#if BUILDFLAG(IS_ANDROID)
+  // TODO(crbug.com/556858610, crbug.com/556857897): Other desktop platforms
+  // dynamically check whether PDF viewing is handled by an extension or
+  // disabled via chrome://settings/content/pdfDocuments (PDF open vs. download
+  // setting). On Android, neither extensions nor the PDF content setting are
+  // currently supported. Revisit this check if/when PDF document content
+  // settings or extensions need to be supported.
+  if (base::FeatureList::IsEnabled(
+          blink::features::kAndroidHandlePdfInIframe)) {
+    return true;
+  }
+#endif
+  auto* data = GetPluginData();
+  if (!data)
+    return false;
+  for (const Member<MimeClassInfo>& mime_info : data->Mimes()) {
+    if (mime_info->Type() == "application/pdf")
+      return true;
+  }
+  return false;
 }
 
 }  // namespace blink

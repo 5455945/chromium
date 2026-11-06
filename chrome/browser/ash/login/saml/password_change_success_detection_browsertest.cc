@@ -1,28 +1,36 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <memory>
+#include <string>
+
+#include "ash/constants/ash_login_pref_names.h"
 #include "ash/constants/ash_switches.h"
-#include "chrome/browser/ash/login/login_pref_names.h"
+#include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "chrome/browser/ash/login/saml/in_session_password_change_manager.h"
-#include "chrome/browser/ash/login/test/embedded_test_server_mixin.h"
+#include "chrome/browser/ash/login/test/embedded_test_server_setup_mixin.h"
 #include "chrome/browser/ash/login/test/js_checker.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/test/browser_test.h"
 #include "net/base/url_util.h"
+#include "net/http/http_status_code.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
+#include "testing/gtest/include/gtest/gtest.h"
 
-using net::test_server::BasicHttpResponse;
-using net::test_server::HttpMethod;
-using net::test_server::HttpRequest;
-using net::test_server::HttpResponse;
+namespace ash {
 
-namespace chromeos {
+using ::net::test_server::BasicHttpResponse;
+using ::net::test_server::HttpMethod;
+using ::net::test_server::HttpRequest;
+using ::net::test_server::HttpResponse;
 
 constexpr char kPasswordChangePageTemplate[] =
     "<html><body onload='document.forms[0].submit();'>"
@@ -150,27 +158,26 @@ class PasswordChangeSuccessDetectionTest
   void SetUpOnMainThread() override {
     MixinBasedInProcessBrowserTest::SetUpOnMainThread();
 
-    content::WebContents* web_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
-    Profile* profile =
-        Profile::FromBrowserContext(web_contents->GetBrowserContext());
+    Profile* profile = browser()->GetProfile();
     profile->GetPrefs()->SetBoolean(prefs::kSamlInSessionPasswordChangeEnabled,
                                     true);
 
-    password_change_manager_ =
-        std::make_unique<InSessionPasswordChangeManager>(profile);
-    InSessionPasswordChangeManager::SetForTesting(
-        password_change_manager_.get());
+    // BrowserProcessPlatformPart created no manager at login, because the pref
+    // was off then, so this one can register itself as the instance returned
+    // by InSessionPasswordChangeManager::Get().
+    password_change_manager_ = std::make_unique<InSessionPasswordChangeManager>(
+        g_browser_process->local_state(), profile,
+        IdentityManagerFactory::GetForProfile(profile));
+  }
+
+  void TearDownOnMainThread() override {
+    password_change_manager_.reset();
+    MixinBasedInProcessBrowserTest::TearDownOnMainThread();
   }
 
   void WaitForPasswordChangeDetected() {
     PasswordChangeWaiter password_change_waiter;
     password_change_waiter.WaitForPasswordChange();
-  }
-
-  void TearDownOnMainThread() override {
-    InSessionPasswordChangeManager::ResetForTesting();
-    MixinBasedInProcessBrowserTest::TearDownOnMainThread();
   }
 
   net::EmbeddedTestServer embedded_test_server_{
@@ -207,4 +214,4 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeSuccessDetectionTest, DetectPingSuccess) {
   WaitForPasswordChangeDetected();
 }
 
-}  // namespace chromeos
+}  // namespace ash

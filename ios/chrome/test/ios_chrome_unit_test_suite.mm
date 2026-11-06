@@ -1,30 +1,27 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ios/chrome/test/ios_chrome_unit_test_suite.h"
+#import "ios/chrome/test/ios_chrome_unit_test_suite.h"
 
-#include "base/macros.h"
-#include "base/metrics/user_metrics.h"
-#include "base/path_service.h"
-#include "base/test/test_simple_task_runner.h"
-#include "components/content_settings/core/common/content_settings_pattern.h"
-#include "ios/chrome/browser/browser_state/browser_state_keyed_service_factories.h"
-#include "ios/chrome/browser/chrome_paths.h"
-#include "ios/chrome/browser/chrome_url_constants.h"
-#include "ios/chrome/test/testing_application_context.h"
-#include "ios/components/webui/web_ui_url_constants.h"
-#import "ios/public/provider/chrome/browser/chrome_browser_provider.h"
-#include "ios/public/provider/chrome/browser/test_chrome_provider_initializer.h"
+#import "base/memory/memory_pressure_listener_registry.h"
+#import "base/metrics/user_metrics.h"
+#import "base/path_service.h"
+#import "base/test/test_simple_task_runner.h"
+#import "components/breadcrumbs/core/breadcrumb_manager.h"
+#import "components/breadcrumbs/core/crash_reporter_breadcrumb_observer.h"
+#import "components/content_settings/core/common/content_settings_pattern.h"
+#import "ios/chrome/browser/profile/model/keyed_service_factories.h"
+#import "ios/chrome/browser/shared/model/paths/paths.h"
+#import "ios/chrome/browser/shared/model/url/chrome_url_constants.h"
+#import "ios/chrome/test/testing_application_context.h"
+#import "ios/components/webui/web_ui_url_constants.h"
+#import "ios/public/provider/chrome/browser/app_utils/app_utils_api.h"
 #import "ios/web/public/web_client.h"
-#include "testing/gtest/include/gtest/gtest.h"
-#include "ui/base/resource/resource_bundle.h"
-#include "ui/base/ui_base_paths.h"
-#include "url/url_util.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "testing/gtest/include/gtest/gtest.h"
+#import "ui/base/resource/resource_bundle.h"
+#import "ui/base/ui_base_paths.h"
+#import "url/url_util.h"
 
 namespace {
 
@@ -32,31 +29,37 @@ class IOSChromeUnitTestSuiteInitializer
     : public testing::EmptyTestEventListener {
  public:
   IOSChromeUnitTestSuiteInitializer() {}
+
+  IOSChromeUnitTestSuiteInitializer(const IOSChromeUnitTestSuiteInitializer&) =
+      delete;
+  IOSChromeUnitTestSuiteInitializer& operator=(
+      const IOSChromeUnitTestSuiteInitializer&) = delete;
+
   ~IOSChromeUnitTestSuiteInitializer() override {}
 
   void OnTestStart(const testing::TestInfo& test_info) override {
-    DCHECK(!ios::GetChromeBrowserProvider());
-    test_ios_chrome_provider_initializer_.reset(
-        new ios::TestChromeProviderInitializer());
+    ios::provider::Initialize();
+
+    memory_pressure_registry_ =
+        std::make_unique<base::MemoryPressureListenerRegistry>();
 
     DCHECK(!GetApplicationContext());
-    application_context_.reset(new TestingApplicationContext);
+    application_context_ = std::make_unique<TestingApplicationContext>();
   }
 
   void OnTestEnd(const testing::TestInfo& test_info) override {
     DCHECK_EQ(GetApplicationContext(), application_context_.get());
     application_context_.reset();
 
-    test_ios_chrome_provider_initializer_.reset();
-    DCHECK(!ios::GetChromeBrowserProvider());
+    breadcrumbs::BreadcrumbManager::GetInstance().ResetForTesting();
+
+    memory_pressure_registry_.reset();
   }
 
  private:
-  std::unique_ptr<ios::TestChromeProviderInitializer>
-      test_ios_chrome_provider_initializer_;
   std::unique_ptr<ApplicationContext> application_context_;
-
-  DISALLOW_COPY_AND_ASSIGN(IOSChromeUnitTestSuiteInitializer);
+  std::unique_ptr<base::MemoryPressureListenerRegistry>
+      memory_pressure_registry_;
 };
 
 }  // namespace
@@ -70,6 +73,17 @@ IOSChromeUnitTestSuite::~IOSChromeUnitTestSuite() {}
 void IOSChromeUnitTestSuite::Initialize() {
   url::AddStandardScheme(kChromeUIScheme, url::SCHEME_WITH_HOST);
 
+  // Force unittests to run using en-US so if testing string output will work
+  // regardless of the system language.
+  ui::ResourceBundle::InitSharedInstanceWithLocale(
+      "en-US", nullptr, ui::ResourceBundle::LOAD_COMMON_RESOURCES);
+  base::FilePath resources_pack_path;
+  base::PathService::Get(base::DIR_ASSETS, &resources_pack_path);
+  resources_pack_path =
+      resources_pack_path.Append(FILE_PATH_LITERAL("resources.pak"));
+  ui::ResourceBundle::GetSharedInstance().AddDataPackFromPath(
+      resources_pack_path, ui::kScaleFactorNone);
+
   // Add an additional listener to do the extra initialization for unit tests.
   // It will be started before the base class listeners and ended after the
   // base class listeners.
@@ -80,9 +94,9 @@ void IOSChromeUnitTestSuite::Initialize() {
   // Call the superclass Initialize() method after adding the listener.
   web::WebTestSuite::Initialize();
 
-  // Ensure that all BrowserStateKeyedServiceFactories are built before any
-  // test is run so that the dependencies are correctly resolved.
-  EnsureBrowserStateKeyedServiceFactoriesBuilt();
+  // Ensure that all KeyedServiceFactories are built before any test is run so
+  // that the dependencies are correctly resolved.
+  EnsureProfileKeyedServiceFactoriesBuilt();
 
   // Register a SingleThreadTaskRunner for base::RecordAction as overridding
   // it in individual tests is unsafe (as there is no way to unregister).
@@ -90,5 +104,5 @@ void IOSChromeUnitTestSuite::Initialize() {
 
   ios::RegisterPathProvider();
   ui::RegisterPathProvider();
-  ContentSettingsPattern::SetNonWildcardDomainNonPortSchemes(nullptr, 0);
+  ContentSettingsPattern::SetNonWildcardDomainNonPortSchemes({});
 }

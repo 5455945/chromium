@@ -1,10 +1,12 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_OFFLINE_PAGES_OFFLINE_PAGE_URL_LOADER_REQUEST_INTERCEPTOR_H_
 #define CHROME_BROWSER_OFFLINE_PAGES_OFFLINE_PAGE_URL_LOADER_REQUEST_INTERCEPTOR_H_
 
+#include "base/memory/raw_ptr.h"
+#include "content/public/browser/frame_tree_node_id.h"
 #include "content/public/browser/url_loader_request_interceptor.h"
 
 namespace content {
@@ -20,7 +22,13 @@ class OfflinePageURLLoaderRequestInterceptor
  public:
   OfflinePageURLLoaderRequestInterceptor(
       content::NavigationUIData* navigation_ui_data,
-      int frame_tree_node_id);
+      content::FrameTreeNodeId frame_tree_node_id);
+
+  OfflinePageURLLoaderRequestInterceptor(
+      const OfflinePageURLLoaderRequestInterceptor&) = delete;
+  OfflinePageURLLoaderRequestInterceptor& operator=(
+      const OfflinePageURLLoaderRequestInterceptor&) = delete;
+
   ~OfflinePageURLLoaderRequestInterceptor() override;
 
   void MaybeCreateLoader(
@@ -34,12 +42,10 @@ class OfflinePageURLLoaderRequestInterceptor
       content::URLLoaderRequestInterceptor::RequestHandler handler);
 
   // Not owned. The owner of this should outlive this class instance.
-  content::NavigationUIData* navigation_ui_data_;
+  raw_ptr<content::NavigationUIData> navigation_ui_data_;
 
-  int frame_tree_node_id_;
+  content::FrameTreeNodeId frame_tree_node_id_;
   std::unique_ptr<OfflinePageURLLoader> url_loader_;
-
-  DISALLOW_COPY_AND_ASSIGN(OfflinePageURLLoaderRequestInterceptor);
 };
 
 }  // namespace offline_pages

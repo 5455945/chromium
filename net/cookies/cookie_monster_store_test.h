@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,11 +15,9 @@
 #include <map>
 #include <memory>
 #include <string>
-#include <tuple>
 #include <utility>
 #include <vector>
 
-#include "base/macros.h"
 #include "net/cookies/canonical_cookie.h"
 #include "net/cookies/cookie_monster.h"
 #include "net/log/net_log_with_source.h"
@@ -77,6 +75,10 @@ class MockPersistentCookieStore : public CookieMonster::PersistentCookieStore {
 
   MockPersistentCookieStore();
 
+  MockPersistentCookieStore(const MockPersistentCookieStore&) = delete;
+  MockPersistentCookieStore& operator=(const MockPersistentCookieStore&) =
+      delete;
+
   // When set, Load() and LoadCookiesForKey() calls are store in the command
   // list, rather than being automatically executed. Defaults to false.
   void set_store_load_commands(bool store_load_commands) {
@@ -117,28 +119,26 @@ class MockPersistentCookieStore : public CookieMonster::PersistentCookieStore {
  private:
   CommandList commands_;
 
-  bool store_load_commands_;
+  bool store_load_commands_ = false;
 
   // Deferred result to use when Load() is called.
-  bool load_return_value_;
+  bool load_return_value_ = true;
   std::vector<std::unique_ptr<CanonicalCookie>> load_result_;
   // Indicates if the store has been fully loaded to avoid returning duplicate
   // cookies.
-  bool loaded_;
-
-  DISALLOW_COPY_AND_ASSIGN(MockPersistentCookieStore);
+  bool loaded_ = false;
 };
 
 // Helper to build a single CanonicalCookie.
 std::unique_ptr<CanonicalCookie> BuildCanonicalCookie(
     const GURL& url,
     const std::string& cookie_line,
-    const base::Time& creation_time);
+    base::Time creation_time);
 
 // Helper to build a list of CanonicalCookie*s.
 void AddCookieToList(const GURL& url,
                      const std::string& cookie_line,
-                     const base::Time& creation_time,
+                     base::Time creation_time,
                      std::vector<std::unique_ptr<CanonicalCookie>>* out_list);
 
 // Just act like a backing database.  Keep cookie information from
@@ -170,15 +170,13 @@ class MockSimplePersistentCookieStore
   ~MockSimplePersistentCookieStore() override;
 
  private:
-  typedef std::map<std::tuple<std::string, std::string, std::string>,
-                   CanonicalCookie>
-      CanonicalCookieMap;
+  typedef std::map<UniqueCookieKey, CanonicalCookie> CanonicalCookieMap;
 
   CanonicalCookieMap cookies_;
 
   // Indicates if the store has been fully loaded to avoid return duplicate
   // cookies in subsequent load requests
-  bool loaded_;
+  bool loaded_ = false;
 };
 
 // Helper function for creating a CookieMonster backed by a

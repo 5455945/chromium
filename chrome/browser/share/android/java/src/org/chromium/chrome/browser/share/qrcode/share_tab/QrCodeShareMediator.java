@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,8 @@ import android.content.Context;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
+import android.graphics.Color;
+import android.os.Build;
 import android.os.Process;
 import android.text.DynamicLayout;
 import android.text.Layout.Alignment;
@@ -18,91 +20,98 @@ import android.text.TextUtils.TruncateAt;
 import android.view.View;
 
 import org.chromium.base.metrics.RecordUserAction;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.download.FileAccessPermissionHelper;
 import org.chromium.chrome.browser.init.ChromeBrowserInitializer;
 import org.chromium.chrome.browser.share.BitmapDownloadRequest;
-import org.chromium.chrome.browser.share.qrcode.QRCodeGenerationRequest;
-import org.chromium.ui.base.AndroidPermissionDelegate;
+import org.chromium.chrome.browser.share.qrcode.QRCodeGenerator;
+import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.modelutil.PropertyModel;
 
 /**
  * QrCodeShareMediator is in charge of calculating and setting values for QrCodeShareViewProperties.
  */
+@NullMarked
 class QrCodeShareMediator {
-    private static final int MAX_URL_LENGTH = 122;
+    // QR code version 40 with M-level error correction can encode binary inputs of up to 2331
+    // bytes, and digit-only inputs of up to 5596 bytes.  See
+    // https://www.qrcode.com/en/about/version.html.
+    //
+    // See also `kMaxInputLength` in
+    // `//chrome/browser/ui/views/qrcode_generator/qrcode_generator_bubble.cc`.
+    private static final int MAX_URL_LENGTH = 2331;
 
     private final Context mContext;
     private final PropertyModel mPropertyModel;
-    private final AndroidPermissionDelegate mPermissionDelegate;
+    private @Nullable WindowAndroid mWindowAndroid;
 
     // The number of times the user has attempted to download the QR code in this dialog.
     private int mNumDownloads;
 
     private boolean mIsDownloadInProgress;
-    private String mUrl;
-    private Runnable mCloseDialog;
+    private final String mUrl;
+    private final Runnable mCloseDialog;
 
     /**
      * The QrCodeScanMediator constructor.
+     *
      * @param context The context to use.
      * @param propertyModel The property model to use to communicate with views.
      * @param closeDialog The {@link Runnable} to close the dialog.
      * @param url The url to create the QRCode.
-     * @param permissionDelegate The delegate to help with downloading QRCode.
      */
-    QrCodeShareMediator(Context context, PropertyModel propertyModel, Runnable closeDialog,
-            String url, AndroidPermissionDelegate permissionDelegate) {
+    QrCodeShareMediator(
+            Context context,
+            PropertyModel propertyModel,
+            Runnable closeDialog,
+            String url,
+            @Nullable WindowAndroid windowAndroid) {
         mContext = context;
         mPropertyModel = propertyModel;
         mCloseDialog = closeDialog;
         mUrl = url;
-        ChromeBrowserInitializer.getInstance().runNowOrAfterFullBrowserStarted(
-                () -> refreshQrCode(mUrl));
-        mPermissionDelegate = permissionDelegate;
+        ChromeBrowserInitializer.getInstance()
+                .runNowOrAfterFullBrowserStarted(() -> refreshQrCode(mUrl));
+        mWindowAndroid = windowAndroid;
         updatePermissionSettings();
     }
 
     /**
      * Refreshes the QR Code bitmap for given data.
+     *
      * @param data The data to encode.
      */
-    protected void refreshQrCode(String data) {
+    protected void refreshQrCode(@Nullable String data) {
         if (TextUtils.isEmpty(data)) {
-            mPropertyModel.set(QrCodeShareViewProperties.ERROR_STRING,
-                    mContext.getResources().getString(R.string.qr_code_error_unknown));
+            mPropertyModel.set(
+                    QrCodeShareViewProperties.ERROR_STRING,
+                    mContext.getString(R.string.qr_code_error_unknown));
             return;
         }
 
-        QRCodeGenerationRequest.QRCodeServiceCallback callback =
-                new QRCodeGenerationRequest.QRCodeServiceCallback() {
-                    @Override
-                    public void onQRCodeAvailable(Bitmap bitmap) {
-                        if (bitmap != null) {
-                            mPropertyModel.set(QrCodeShareViewProperties.QRCODE_BITMAP, bitmap);
-                            return;
-                        }
-                        String errorMessage;
-                        if (data != null && data.length() > MAX_URL_LENGTH) {
-                            errorMessage = mContext.getResources().getString(
-                                    R.string.qr_code_error_too_long, MAX_URL_LENGTH);
-                        } else {
-                            errorMessage = mContext.getResources().getString(
-                                    R.string.qr_code_error_unknown);
-                        }
-                        mPropertyModel.set(QrCodeShareViewProperties.ERROR_STRING, errorMessage);
-                    }
-                };
-        new QRCodeGenerationRequest(data, callback);
+        Bitmap bitmap = QRCodeGenerator.generateBitmap(data);
+        if (bitmap != null) {
+            mPropertyModel.set(QrCodeShareViewProperties.QRCODE_BITMAP, bitmap);
+            return;
+        }
+        String errorMessage;
+        if (data != null && data.length() > MAX_URL_LENGTH) {
+            errorMessage = mContext.getString(R.string.qr_code_error_too_long, MAX_URL_LENGTH);
+        } else {
+            errorMessage = mContext.getString(R.string.qr_code_error_unknown);
+        }
+        mPropertyModel.set(QrCodeShareViewProperties.ERROR_STRING, errorMessage);
     }
 
     /** Triggers download for the generated QR code bitmap if available. */
     protected void downloadQrCode(View view) {
         logDownload();
         Bitmap qrcodeBitmap = mPropertyModel.get(QrCodeShareViewProperties.QRCODE_BITMAP);
-        if (qrcodeBitmap != null && !mIsDownloadInProgress && mPermissionDelegate != null) {
+        if (qrcodeBitmap != null && !mIsDownloadInProgress && mWindowAndroid != null) {
             FileAccessPermissionHelper.requestFileAccessPermission(
-                    mPermissionDelegate, this::finishDownloadWithPermission);
+                    mWindowAndroid, this::finishDownloadWithPermission);
             return;
         }
     }
@@ -111,25 +120,35 @@ class QrCodeShareMediator {
         if (granted) {
             updatePermissionSettings();
             Bitmap qrcodeBitmap = mPropertyModel.get(QrCodeShareViewProperties.QRCODE_BITMAP);
-            String fileName = mContext.getString(
-                    R.string.qr_code_filename_prefix, String.valueOf(System.currentTimeMillis()));
+            String fileName =
+                    mContext.getString(
+                            R.string.qr_code_filename_prefix,
+                            String.valueOf(System.currentTimeMillis()));
             mIsDownloadInProgress = true;
             BitmapDownloadRequest.downloadBitmap(fileName, addUrlToBitmap(qrcodeBitmap, mUrl));
             mCloseDialog.run();
         }
     }
 
+    /** Returns whether we need to explicitly request a storage permission. */
+    private Boolean requiresAdditionalStoragePermission() {
+        return (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU);
+    }
+
     /** Returns whether the user has granted storage permissions. */
     private Boolean hasStoragePermission() {
+        // Not needed for newer SDKs; treat as granted implicitly.
+        if (!requiresAdditionalStoragePermission()) return true;
         return mContext.checkPermission(
-                       permission.WRITE_EXTERNAL_STORAGE, Process.myPid(), Process.myUid())
+                        permission.WRITE_EXTERNAL_STORAGE, Process.myPid(), Process.myUid())
                 == PackageManager.PERMISSION_GRANTED;
     }
 
     /** Returns whether the user can be prompted for storage permissions. */
     private Boolean canPromptForPermission() {
-        if (mPermissionDelegate == null) return false;
-        return mPermissionDelegate.canRequestPermission(permission.WRITE_EXTERNAL_STORAGE);
+        if (!requiresAdditionalStoragePermission()) return false;
+        if (mWindowAndroid == null) return false;
+        return mWindowAndroid.canRequestPermission(permission.WRITE_EXTERNAL_STORAGE);
     }
 
     /** Updates the permission settings with the latest values. */
@@ -138,6 +157,11 @@ class QrCodeShareMediator {
                 QrCodeShareViewProperties.CAN_PROMPT_FOR_PERMISSION, canPromptForPermission());
         mPropertyModel.set(
                 QrCodeShareViewProperties.HAS_STORAGE_PERMISSION, hasStoragePermission());
+    }
+
+    public void updatePermissions(WindowAndroid windowAndroid) {
+        mWindowAndroid = windowAndroid;
+        updatePermissionSettings();
     }
 
     /**
@@ -175,40 +199,60 @@ class QrCodeShareMediator {
         int textBottomPadding =
                 mContext.getResources().getDimensionPixelSize(R.dimen.url_box_bottom_padding);
 
-        TextPaint mTextPaint = new TextPaint();
-        mTextPaint.setAntiAlias(true);
-        mTextPaint.setColor(android.graphics.Color.BLACK);
-        mTextPaint.setTextSize(fontSize);
+        TextPaint textPaint = new TextPaint();
+        textPaint.setAntiAlias(true);
+        textPaint.setColor(Color.BLACK);
+        textPaint.setTextSize(fontSize);
 
         // Text is as wide as the QR code.
-        FixedLineCountLayout mTextLayout = new FixedLineCountLayout(
-                url, mTextPaint, qrCodeSize, Alignment.ALIGN_CENTER, 1.0f, 0.0f, true, 2);
+        FixedLineCountLayout textLayout =
+                new FixedLineCountLayout(
+                        url, textPaint, qrCodeSize, Alignment.ALIGN_CENTER, 1.0f, 0.0f, true, 2);
 
         // New bitmap should be long enough to fit the url with its margins, the QR code bitmap and
         // equal padding from the bottom.
-        int height =
-                (textTopPadding + mTextLayout.getHeight() + textBottomPadding) * 2 + qrCodeSize;
+        int height = (textTopPadding + textLayout.getHeight() + textBottomPadding) * 2 + qrCodeSize;
         int width = qrCodeSize + 2 * sidePadding;
         Bitmap newBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(newBitmap);
-        canvas.drawColor(android.graphics.Color.WHITE);
+        canvas.drawColor(Color.WHITE);
         canvas.translate(sidePadding, textTopPadding);
-        mTextLayout.draw(canvas);
-        canvas.drawBitmap(Bitmap.createScaledBitmap(bitmap, qrCodeSize, qrCodeSize, false), 0,
-                mTextLayout.getHeight() + textBottomPadding, mTextPaint);
+        textLayout.draw(canvas);
+        canvas.drawBitmap(
+                Bitmap.createScaledBitmap(bitmap, qrCodeSize, qrCodeSize, false),
+                0,
+                textLayout.getHeight() + textBottomPadding,
+                textPaint);
         return newBitmap;
     }
 
     // Helps to limit number of text lines and shows ellipsis for only the last line.
-    class FixedLineCountLayout extends DynamicLayout {
+    static class FixedLineCountLayout extends DynamicLayout {
         int mMaxLines;
 
-        FixedLineCountLayout(CharSequence base, TextPaint paint, int width, Alignment align,
-                float spacingmult, float spacingadd, boolean includepad, int maxLines) {
-            super(base, base, paint, width, align, spacingmult, spacingadd, includepad,
-                    TruncateAt.END, width);
+        FixedLineCountLayout(
+                CharSequence base,
+                TextPaint paint,
+                int width,
+                Alignment align,
+                float spacingmult,
+                float spacingadd,
+                boolean includepad,
+                int maxLines) {
+            super(
+                    base,
+                    base,
+                    paint,
+                    width,
+                    align,
+                    spacingmult,
+                    spacingadd,
+                    includepad,
+                    TruncateAt.END,
+                    width);
             mMaxLines = maxLines;
         }
+
         @Override
         public int getLineCount() {
             if (super.getLineCount() - 1 > mMaxLines) {

@@ -1,7 +1,8 @@
-# Copyright 2018 The Chromium Authors. All rights reserved.
+# Copyright 2018 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//media/gpu/args.gni")
 import("//mojo/public/tools/bindings/mojom.gni")
 
 mojom("common") {
@@ -17,12 +18,6 @@ mojom("common") {
   ]
 }
 
-mojom("host") {
-  sources = [ "mirroring_service_host.mojom" ]
-
-  public_deps = [ ":common" ]
-}
-
 mojom("service") {
   sources = [
     "mirroring_service.mojom",
@@ -34,8 +29,12 @@ mojom("service") {
     "//media/capture/mojom:video_capture",
     "//media/mojo/mojom",
     "//media/mojo/mojom:remoting",
+    "//sandbox/policy/mojom",
     "//services/network/public/mojom",
     "//services/viz/public/mojom",
     "//ui/gfx/geometry/mojom",
   ]
+  if (is_chromeos && use_linux_video_acceleration) {
+    enabled_features = [ "is_chromeos_with_video_accelerators" ]
+  }
 }

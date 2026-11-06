@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,7 @@
 #include <string>
 
 #include "ash/ash_export.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/aura/window_observer.h"
 
 namespace aura {
@@ -23,10 +23,15 @@ namespace ash {
 // order to restore them when the wallpaper viewer is hidden.
 class ASH_EXPORT WallpaperWindowStateManager : public aura::WindowObserver {
  public:
-  typedef std::map<std::string, std::set<aura::Window*>>
+  typedef std::map<std::string,
+                   std::set<raw_ptr<aura::Window, SetExperimental>>>
       UserIDHashWindowListMap;
 
   WallpaperWindowStateManager();
+
+  WallpaperWindowStateManager(const WallpaperWindowStateManager&) = delete;
+  WallpaperWindowStateManager& operator=(const WallpaperWindowStateManager&) =
+      delete;
 
   ~WallpaperWindowStateManager() override;
 
@@ -51,8 +56,6 @@ class ASH_EXPORT WallpaperWindowStateManager : public aura::WindowObserver {
 
   // Map of user id hash and associated list of minimized windows.
   UserIDHashWindowListMap user_id_hash_window_list_map_;
-
-  DISALLOW_COPY_AND_ASSIGN(WallpaperWindowStateManager);
 };
 
 }  // namespace ash

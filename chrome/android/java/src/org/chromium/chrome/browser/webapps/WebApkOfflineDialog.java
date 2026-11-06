@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,17 @@ package org.chromium.chrome.browser.webapps;
 
 import android.app.Activity;
 import android.app.Dialog;
-import android.content.DialogInterface;
 
 import androidx.appcompat.app.AlertDialog;
 
-import org.chromium.base.ApiCompatibilityUtils;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 
-/**
- * A dialog to notify user of network errors while loading WebAPK's start URL.
- */
+/** A dialog to notify user of network errors while loading WebAPK's start URL. */
+@NullMarked
 public class WebApkOfflineDialog {
-    private Dialog mDialog;
+    private @Nullable Dialog mDialog;
 
     /** Returns whether the dialog is showing. */
     public boolean isShowing() {
@@ -26,19 +25,14 @@ public class WebApkOfflineDialog {
 
     /**
      * Shows dialog to notify user of network error.
+     *
      * @param activity Activity that will be used for {@link Dialog#show()}.
-     * @param errorMessage
      */
     public void show(final Activity activity, String errorMessage) {
         AlertDialog.Builder builder =
-                new AlertDialog.Builder(activity, R.style.Theme_Chromium_AlertDialog);
+                new AlertDialog.Builder(activity, R.style.ThemeOverlay_BrowserUI_AlertDialog);
         builder.setMessage(errorMessage)
-                .setPositiveButton(R.string.ok, new DialogInterface.OnClickListener() {
-                    @Override
-                    public void onClick(DialogInterface dialog, int which) {
-                        ApiCompatibilityUtils.finishAndRemoveTask(activity);
-                    }
-                });
+                .setPositiveButton(R.string.ok, (_, _) -> activity.finishAndRemoveTask());
 
         mDialog = builder.create();
         mDialog.setCanceledOnTouchOutside(false);
@@ -47,6 +41,6 @@ public class WebApkOfflineDialog {
 
     /** Closes the dialog. */
     public void cancel() {
-        mDialog.cancel();
+        if (mDialog != null) mDialog.cancel();
     }
 }

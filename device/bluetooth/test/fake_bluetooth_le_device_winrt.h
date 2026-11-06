@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 #define DEVICE_BLUETOOTH_TEST_FAKE_BLUETOOTH_LE_DEVICE_WINRT_H_
 
 #include <windows.devices.bluetooth.h>
+#include <windows.devices.enumeration.h>
 #include <windows.foundation.h>
 #include <wrl/client.h>
 #include <wrl/implements.h>
@@ -13,10 +14,11 @@
 #include <stdint.h>
 
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "device/bluetooth/bluetooth_device.h"
 #include "device/bluetooth/test/fake_device_information_winrt.h"
 
@@ -36,7 +38,13 @@ class FakeBluetoothLEDeviceWinrt
           ABI::Windows::Foundation::IClosable> {
  public:
   explicit FakeBluetoothLEDeviceWinrt(BluetoothTestWinrt* bluetooth_test_winrt);
+
+  FakeBluetoothLEDeviceWinrt(const FakeBluetoothLEDeviceWinrt&) = delete;
+  FakeBluetoothLEDeviceWinrt& operator=(const FakeBluetoothLEDeviceWinrt&) =
+      delete;
+
   ~FakeBluetoothLEDeviceWinrt() override;
+  void ClearBluetoothTestWinrt();
 
   // IBluetoothLEDevice:
   IFACEMETHODIMP get_DeviceId(HSTRING* value) override;
@@ -127,7 +135,9 @@ class FakeBluetoothLEDeviceWinrt
 
   void SimulateDevicePaired(bool is_paired);
   void SimulatePairingPinCode(std::string pin_code);
-  absl::optional<BluetoothUUID> GetTargetGattService() const;
+  void SimulateConfirmOnly();
+  void SimulateDisplayPin(std::string_view display_pin);
+  std::optional<BluetoothUUID> GetTargetGattService() const;
   void SimulateGattConnection();
   void SimulateGattConnectionError(
       BluetoothDevice::ConnectErrorCode error_code);
@@ -148,9 +158,9 @@ class FakeBluetoothLEDeviceWinrt
   void SimulateGattServicesDiscoveryError();
 
  private:
-  BluetoothTestWinrt* bluetooth_test_winrt_ = nullptr;
+  raw_ptr<BluetoothTestWinrt> bluetooth_test_winrt_ = nullptr;
   uint32_t reference_count_ = 1u;
-  absl::optional<std::string> name_;
+  std::optional<std::string> name_;
 
   ABI::Windows::Devices::Bluetooth::BluetoothConnectionStatus status_ =
       ABI::Windows::Devices::Bluetooth::BluetoothConnectionStatus_Disconnected;
@@ -174,7 +184,7 @@ class FakeBluetoothLEDeviceWinrt
               IGattDeviceServicesResult>)>
       gatt_services_callback_;
   // Contains the last GUID passed to GetGattServicesForUuidAsync.
-  absl::optional<GUID> service_uuid_;
+  std::optional<GUID> service_uuid_;
 
   std::vector<Microsoft::WRL::ComPtr<FakeGattDeviceServiceWinrt>>
       fake_services_;
@@ -184,8 +194,6 @@ class FakeBluetoothLEDeviceWinrt
       ABI::Windows::Devices::Bluetooth::BluetoothLEDevice*,
       IInspectable*>>
       name_changed_handler_;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeBluetoothLEDeviceWinrt);
 };
 
 class FakeBluetoothLEDeviceStaticsWinrt
@@ -196,7 +204,14 @@ class FakeBluetoothLEDeviceStaticsWinrt
  public:
   explicit FakeBluetoothLEDeviceStaticsWinrt(
       BluetoothTestWinrt* bluetooth_test_winrt);
+
+  FakeBluetoothLEDeviceStaticsWinrt(const FakeBluetoothLEDeviceStaticsWinrt&) =
+      delete;
+  FakeBluetoothLEDeviceStaticsWinrt& operator=(
+      const FakeBluetoothLEDeviceStaticsWinrt&) = delete;
+
   ~FakeBluetoothLEDeviceStaticsWinrt() override;
+  void ClearBluetoothTestWinrt();
 
   // IBluetoothLEDeviceStatics:
   IFACEMETHODIMP FromIdAsync(
@@ -212,9 +227,7 @@ class FakeBluetoothLEDeviceStaticsWinrt
   IFACEMETHODIMP GetDeviceSelector(HSTRING* device_selector) override;
 
  private:
-  BluetoothTestWinrt* bluetooth_test_winrt_ = nullptr;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeBluetoothLEDeviceStaticsWinrt);
+  raw_ptr<BluetoothTestWinrt> bluetooth_test_winrt_ = nullptr;
 };
 
 }  // namespace device

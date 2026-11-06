@@ -1,8 +1,10 @@
-# Copyright 2019 The Chromium Authors. All rights reserved.
+# Copyright 2019 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 from . import file_io
+from .exposure import Exposure
+from .observable_array import ObservableArray
 from .typedef import Typedef
 from .union import Union
 from .user_defined_type import UserDefinedType
@@ -25,6 +27,7 @@ class DatabaseBody(object):
     """
 
     class Kind(object):
+        ASYNC_ITERATOR = 'async iterator'
         CALLBACK_FUNCTION = 'callback function'
         CALLBACK_INTERFACE = 'callback interface'
         DICTIONARY = 'dictionary'
@@ -32,10 +35,13 @@ class DatabaseBody(object):
         INTERFACE = 'interface'
         INTERFACE_MIXIN = 'interface mixin'
         NAMESPACE = 'namespace'
+        OBSERVABLE_ARRAY = 'observable array'
+        SYNC_ITERATOR = 'sync iterator'
         TYPEDEF = 'typedef'
         UNION = 'union'
 
         _ALL_ENTRIES = (
+            ASYNC_ITERATOR,
             CALLBACK_FUNCTION,
             CALLBACK_INTERFACE,
             DICTIONARY,
@@ -43,6 +49,8 @@ class DatabaseBody(object):
             INTERFACE,
             INTERFACE_MIXIN,
             NAMESPACE,
+            OBSERVABLE_ARRAY,
+            SYNC_ITERATOR,
             TYPEDEF,
             UNION,
         )
@@ -57,7 +65,10 @@ class DatabaseBody(object):
             self._defs[kind] = {}
 
     def register(self, kind, user_defined_type):
-        assert isinstance(user_defined_type, (Typedef, Union, UserDefinedType))
+        assert isinstance(
+            user_defined_type,
+            (ObservableArray, Typedef, Union, UserDefinedType),
+        )
         assert kind in DatabaseBody.Kind.values()
         try:
             self.find_by_identifier(user_defined_type.identifier)
@@ -89,6 +100,20 @@ class Database(object):
     def __init__(self, database_body):
         assert isinstance(database_body, DatabaseBody)
         self._impl = database_body
+        self._global_name_to_global_scopes = (
+            self._compute_global_name_to_global_scopes()
+        )
+        Exposure.init(
+            global_name_to_global_scopes=self._global_name_to_global_scopes
+        )
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        # Class attributes are not pickled, so restore the pre-computed data
+        # when this database is loaded from a file.
+        Exposure.init(
+            global_name_to_global_scopes=self._global_name_to_global_scopes
+        )
 
     @staticmethod
     def read_from_file(filepath):
@@ -105,6 +130,11 @@ class Database(object):
         if not found.
         """
         return self._impl.find_by_identifier(identifier)
+
+    @property
+    def async_iterators(self):
+        """Returns all async iterators."""
+        return self._view_by_kind(Database._Kind.ASYNC_ITERATOR)
 
     @property
     def callback_functions(self):
@@ -146,6 +176,16 @@ class Database(object):
         return self._view_by_kind(Database._Kind.NAMESPACE)
 
     @property
+    def observable_arrays(self):
+        """Returns all observable arrays."""
+        return self._view_by_kind(Database._Kind.OBSERVABLE_ARRAY)
+
+    @property
+    def sync_iterators(self):
+        """Returns all sync iterators."""
+        return self._view_by_kind(Database._Kind.SYNC_ITERATOR)
+
+    @property
     def typedefs(self):
         """Returns all typedef definitions."""
         return self._view_by_kind(Database._Kind.TYPEDEF)
@@ -157,3 +197,19 @@ class Database(object):
 
     def _view_by_kind(self, kind):
         return list(self._impl.find_by_kind(kind).values())
+
+    def _compute_global_name_to_global_scopes(self):
+        # Use sorted tuples rather than sets so that the pickled database is
+        # deterministic regardless of the hash seed.
+        name_to_scopes = {}
+        for interface in self.interfaces:
+            for global_name in interface.extended_attributes.values_of(
+                'Global'
+            ) + interface.extended_attributes.values_of('TargetOfExposed'):
+                name_to_scopes.setdefault(global_name, set()).add(
+                    interface.identifier
+                )
+        return {
+            name: tuple(sorted(name_to_scopes[name]))
+            for name in sorted(name_to_scopes)
+        }

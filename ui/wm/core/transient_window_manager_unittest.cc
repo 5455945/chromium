@@ -1,36 +1,42 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/wm/core/transient_window_manager.h"
 
+#include <array>
 #include <utility>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/aura/client/window_parenting_client.h"
 #include "ui/aura/test/aura_test_base.h"
 #include "ui/aura/test/test_windows.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_observer.h"
+#include "ui/aura/window_tracker.h"
 #include "ui/wm/core/transient_window_observer.h"
 #include "ui/wm/core/window_util.h"
 
 using aura::Window;
 
 using aura::test::ChildWindowIDsAsString;
-using aura::test::CreateTestWindowWithId;
+using aura::test::CreateTestWindow;
 
 namespace wm {
 
 class TestTransientWindowObserver : public TransientWindowObserver {
  public:
-  TestTransientWindowObserver() : add_count_(0), remove_count_(0) {
-  }
+  TestTransientWindowObserver() = default;
+
+  TestTransientWindowObserver(const TestTransientWindowObserver&) = delete;
+  TestTransientWindowObserver& operator=(const TestTransientWindowObserver&) =
+      delete;
 
   ~TestTransientWindowObserver() override {}
 
   int add_count() const { return add_count_; }
   int remove_count() const { return remove_count_; }
+  int parent_change_count() const { return parent_change_count_; }
 
   // TransientWindowObserver overrides:
   void OnTransientChildAdded(Window* window, Window* transient) override {
@@ -39,12 +45,14 @@ class TestTransientWindowObserver : public TransientWindowObserver {
   void OnTransientChildRemoved(Window* window, Window* transient) override {
     remove_count_++;
   }
+  void OnTransientParentChanged(Window* window) override {
+    parent_change_count_++;
+  }
 
  private:
-  int add_count_;
-  int remove_count_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestTransientWindowObserver);
+  int add_count_ = 0;
+  int remove_count_ = 0;
+  int parent_change_count_ = 0;
 };
 
 class WindowVisibilityObserver : public aura::WindowObserver {
@@ -55,6 +63,10 @@ class WindowVisibilityObserver : public aura::WindowObserver {
         owned_window_(std::move(owned_window)) {
     observed_window_->AddObserver(this);
   }
+
+  WindowVisibilityObserver(const WindowVisibilityObserver&) = delete;
+  WindowVisibilityObserver& operator=(const WindowVisibilityObserver&) = delete;
+
   ~WindowVisibilityObserver() override {
     observed_window_->RemoveObserver(this);
   }
@@ -63,15 +75,50 @@ class WindowVisibilityObserver : public aura::WindowObserver {
     owned_window_.reset();
   }
  private:
-  Window* observed_window_;
+  raw_ptr<Window> observed_window_;
   std::unique_ptr<Window> owned_window_;
+};
 
-  DISALLOW_COPY_AND_ASSIGN(WindowVisibilityObserver);
+class DeleteOnHideObserver : public aura::WindowObserver {
+ public:
+  explicit DeleteOnHideObserver(aura::Window* window) : window_(window) {
+    window_->AddObserver(this);
+  }
+
+  DeleteOnHideObserver(const DeleteOnHideObserver&) = delete;
+  DeleteOnHideObserver& operator=(const DeleteOnHideObserver&) = delete;
+
+  ~DeleteOnHideObserver() override {
+    if (window_) {
+      window_->RemoveObserver(this);
+    }
+  }
+
+  void OnWindowVisibilityChanged(aura::Window* window, bool visible) override {
+    if (window == window_ && !visible) {
+      window_->RemoveObserver(this);
+      delete window_.ExtractAsDangling();
+    }
+  }
+
+  void OnWindowDestroyed(aura::Window* window) override {
+    if (window == window_) {
+      window_ = nullptr;
+    }
+  }
+
+ private:
+  raw_ptr<aura::Window> window_;
 };
 
 class TransientWindowManagerTest : public aura::test::AuraTestBase {
  public:
   TransientWindowManagerTest() {}
+
+  TransientWindowManagerTest(const TransientWindowManagerTest&) = delete;
+  TransientWindowManagerTest& operator=(const TransientWindowManagerTest&) =
+      delete;
+
   ~TransientWindowManagerTest() override {}
 
  protected:
@@ -82,20 +129,46 @@ class TransientWindowManagerTest : public aura::test::AuraTestBase {
     window->SetType(aura::client::WINDOW_TYPE_NORMAL);
     window->Init(ui::LAYER_TEXTURED);
     AddTransientChild(parent, window);
-    aura::client::ParentWindowWithContext(window, root_window(), gfx::Rect());
+    aura::client::ParentWindowWithContext(window, root_window(), gfx::Rect(),
+                                          display::kInvalidDisplayId);
     return window;
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(TransientWindowManagerTest);
 };
+
+// Tests that creating a transient tree with a cycle in it will crash on a
+// CHECK. See a crash that can happen if we allow cycles http://b/286947509.
+TEST_F(TransientWindowManagerTest, TransientCycle) {
+  std::unique_ptr<Window> w1(CreateTestWindow(
+      {.parent = root_window(), .bounds = {100, 100}, .window_id = 0}));
+  std::unique_ptr<Window> w2(CreateTestWindow(
+      {.parent = root_window(), .bounds = {100, 100}, .window_id = 1}));
+  std::unique_ptr<Window> w3(CreateTestWindow(
+      {.parent = root_window(), .bounds = {100, 100}, .window_id = 2}));
+
+  // Creating a cylce in the hierarchy will cause a crash.
+  //
+  // w1 <-- w2 <-- w3
+  //  |             ^
+  //  |             |
+  //  +-------------+
+  //
+  wm::AddTransientChild(w1.get(), w2.get());
+  wm::AddTransientChild(w2.get(), w3.get());
+  EXPECT_DEATH(wm::AddTransientChild(w3.get(), w1.get()), "");
+}
 
 // Various assertions for transient children.
 TEST_F(TransientWindowManagerTest, TransientChildren) {
-  std::unique_ptr<Window> parent(CreateTestWindowWithId(0, root_window()));
-  std::unique_ptr<Window> w1(CreateTestWindowWithId(1, parent.get()));
-  std::unique_ptr<Window> w3(CreateTestWindowWithId(3, parent.get()));
-  Window* w2 = CreateTestWindowWithId(2, parent.get());
+  std::unique_ptr<Window> parent = CreateTestWindow(
+      {.parent = root_window(), .bounds = {100, 100}, .window_id = 0});
+  std::unique_ptr<Window> w1 = CreateTestWindow(
+      {.parent = parent.get(), .bounds = {100, 100}, .window_id = 1});
+  std::unique_ptr<Window> w3 = CreateTestWindow(
+      {.parent = parent.get(), .bounds = {100, 100}, .window_id = 3});
+  Window* w2 =
+      CreateTestWindow(
+          {.parent = parent.get(), .bounds = {100, 100}, .window_id = 2})
+          .release();
   // w2 is now owned by w1.
   AddTransientChild(w1.get(), w2);
   // Stack w1 at the top (end), this should force w2 to be last (on top of w1).
@@ -109,8 +182,11 @@ TEST_F(TransientWindowManagerTest, TransientChildren) {
   ASSERT_EQ(1u, parent->children().size());
   EXPECT_EQ(w3.get(), parent->children()[0]);
 
-  w1.reset(CreateTestWindowWithId(4, parent.get()));
-  w2 = CreateTestWindowWithId(5, w3.get());
+  w1 = CreateTestWindow(
+      {.parent = parent.get(), .bounds = {100, 100}, .window_id = 4});
+  w2 = CreateTestWindow(
+           {.parent = w3.get(), .bounds = {100, 100}, .window_id = 5})
+           .release();
   AddTransientChild(w1.get(), w2);
   parent->StackChildAtTop(w3.get());
   // Stack w1 at the top (end), this shouldn't affect w2 since it has a
@@ -170,15 +246,36 @@ TEST_F(TransientWindowManagerTest, TransientChildren) {
 
 // Tests that transient children are stacked as a unit when using stack above.
 TEST_F(TransientWindowManagerTest, TransientChildrenGroupAbove) {
-  std::unique_ptr<Window> parent(CreateTestWindowWithId(0, root_window()));
-  std::unique_ptr<Window> w1(CreateTestWindowWithId(1, parent.get()));
-  Window* w11 = CreateTestWindowWithId(11, parent.get());
-  std::unique_ptr<Window> w2(CreateTestWindowWithId(2, parent.get()));
-  Window* w21 = CreateTestWindowWithId(21, parent.get());
-  Window* w211 = CreateTestWindowWithId(211, parent.get());
-  Window* w212 = CreateTestWindowWithId(212, parent.get());
-  Window* w213 = CreateTestWindowWithId(213, parent.get());
-  Window* w22 = CreateTestWindowWithId(22, parent.get());
+  std::unique_ptr<Window> parent(CreateTestWindow(
+      {.parent = root_window(), .bounds = {100, 100}, .window_id = 0}));
+  std::unique_ptr<Window> w1(CreateTestWindow(
+      {.parent = parent.get(), .bounds = {100, 100}, .window_id = 1}));
+  Window* w11 =
+      CreateTestWindow(
+          {.parent = parent.get(), .bounds = {100, 100}, .window_id = 11})
+          .release();
+  std::unique_ptr<Window> w2(CreateTestWindow(
+      {.parent = parent.get(), .bounds = {100, 100}, .window_id = 2}));
+  Window* w21 =
+      CreateTestWindow(
+          {.parent = parent.get(), .bounds = {100, 100}, .window_id = 21})
+          .release();
+  Window* w211 =
+      CreateTestWindow(
+          {.parent = parent.get(), .bounds = {100, 100}, .window_id = 211})
+          .release();
+  Window* w212 =
+      CreateTestWindow(
+          {.parent = parent.get(), .bounds = {100, 100}, .window_id = 212})
+          .release();
+  Window* w213 =
+      CreateTestWindow(
+          {.parent = parent.get(), .bounds = {100, 100}, .window_id = 213})
+          .release();
+  Window* w22 =
+      CreateTestWindow(
+          {.parent = parent.get(), .bounds = {100, 100}, .window_id = 22})
+          .release();
   ASSERT_EQ(8u, parent->children().size());
 
   // w11 is now owned by w1.
@@ -246,15 +343,36 @@ TEST_F(TransientWindowManagerTest, TransientChildrenGroupAbove) {
 
 // Tests that transient children are stacked as a unit when using stack below.
 TEST_F(TransientWindowManagerTest, TransientChildrenGroupBelow) {
-  std::unique_ptr<Window> parent(CreateTestWindowWithId(0, root_window()));
-  std::unique_ptr<Window> w1(CreateTestWindowWithId(1, parent.get()));
-  Window* w11 = CreateTestWindowWithId(11, parent.get());
-  std::unique_ptr<Window> w2(CreateTestWindowWithId(2, parent.get()));
-  Window* w21 = CreateTestWindowWithId(21, parent.get());
-  Window* w211 = CreateTestWindowWithId(211, parent.get());
-  Window* w212 = CreateTestWindowWithId(212, parent.get());
-  Window* w213 = CreateTestWindowWithId(213, parent.get());
-  Window* w22 = CreateTestWindowWithId(22, parent.get());
+  std::unique_ptr<Window> parent(CreateTestWindow(
+      {.parent = root_window(), .bounds = {100, 100}, .window_id = 0}));
+  std::unique_ptr<Window> w1(CreateTestWindow(
+      {.parent = parent.get(), .bounds = {100, 100}, .window_id = 1}));
+  Window* w11 =
+      CreateTestWindow(
+          {.parent = parent.get(), .bounds = {100, 100}, .window_id = 11})
+          .release();
+  std::unique_ptr<Window> w2(CreateTestWindow(
+      {.parent = parent.get(), .bounds = {100, 100}, .window_id = 2}));
+  Window* w21 =
+      CreateTestWindow(
+          {.parent = parent.get(), .bounds = {100, 100}, .window_id = 21})
+          .release();
+  Window* w211 =
+      CreateTestWindow(
+          {.parent = parent.get(), .bounds = {100, 100}, .window_id = 211})
+          .release();
+  Window* w212 =
+      CreateTestWindow(
+          {.parent = parent.get(), .bounds = {100, 100}, .window_id = 212})
+          .release();
+  Window* w213 =
+      CreateTestWindow(
+          {.parent = parent.get(), .bounds = {100, 100}, .window_id = 213})
+          .release();
+  Window* w22 =
+      CreateTestWindow(
+          {.parent = parent.get(), .bounds = {100, 100}, .window_id = 22})
+          .release();
   ASSERT_EQ(8u, parent->children().size());
 
   // w11 is now owned by w1.
@@ -319,8 +437,10 @@ TEST_F(TransientWindowManagerTest, TransientChildrenGroupBelow) {
 
 // Tests that transient windows are stacked properly when created.
 TEST_F(TransientWindowManagerTest, StackUponCreation) {
-  std::unique_ptr<Window> window0(CreateTestWindowWithId(0, root_window()));
-  std::unique_ptr<Window> window1(CreateTestWindowWithId(1, root_window()));
+  std::unique_ptr<Window> window0(CreateTestWindow(
+      {.parent = root_window(), .bounds = {100, 100}, .window_id = 0}));
+  std::unique_ptr<Window> window1(CreateTestWindow(
+      {.parent = root_window(), .bounds = {100, 100}, .window_id = 1}));
 
   std::unique_ptr<Window> window2(CreateTransientChild(2, window0.get()));
   EXPECT_EQ("0 2 1", ChildWindowIDsAsString(root_window()));
@@ -341,9 +461,11 @@ TEST_F(TransientWindowManagerTest, CrashOnVisibilityChange) {
 // Tests that windows are restacked properly after a call to AddTransientChild()
 // or RemoveTransientChild().
 TEST_F(TransientWindowManagerTest, RestackUponAddOrRemoveTransientChild) {
-  std::unique_ptr<Window> windows[4];
-  for (int i = 0; i < 4; i++)
-    windows[i].reset(CreateTestWindowWithId(i, root_window()));
+  std::array<std::unique_ptr<Window>, 4> windows;
+  for (int i = 0; i < 4; i++) {
+    windows[i] = CreateTestWindow(
+        {.parent = root_window(), .bounds = {100, 100}, .window_id = i});
+  }
   EXPECT_EQ("0 1 2 3", ChildWindowIDsAsString(root_window()));
 
   AddTransientChild(windows[0].get(), windows[2].get());
@@ -370,15 +492,17 @@ class DestroyedTrackingDelegate : public aura::test::TestWindowDelegate {
       : name_(name),
         results_(results) {}
 
+  DestroyedTrackingDelegate(const DestroyedTrackingDelegate&) = delete;
+  DestroyedTrackingDelegate& operator=(const DestroyedTrackingDelegate&) =
+      delete;
+
   void OnWindowDestroyed(aura::Window* window) override {
     results_->push_back(name_);
   }
 
  private:
   const std::string name_;
-  std::vector<std::string>* results_;
-
-  DISALLOW_COPY_AND_ASSIGN(DestroyedTrackingDelegate);
+  raw_ptr<std::vector<std::string>> results_;
 };
 
 }  // namespace
@@ -406,7 +530,8 @@ TEST_F(TransientWindowManagerTest, NotifyDelegateAfterDeletingTransients) {
 TEST_F(TransientWindowManagerTest,
        StackTransientsLayersRelativeToOtherTransients) {
   // Create a window with several transients, then a couple windows on top.
-  std::unique_ptr<Window> window1(CreateTestWindowWithId(1, root_window()));
+  std::unique_ptr<Window> window1(CreateTestWindow(
+      {.parent = root_window(), .bounds = {100, 100}, .window_id = 1}));
   std::unique_ptr<Window> window11(CreateTransientChild(11, window1.get()));
   std::unique_ptr<Window> window12(CreateTransientChild(12, window1.get()));
   std::unique_ptr<Window> window13(CreateTransientChild(13, window1.get()));
@@ -432,35 +557,52 @@ TEST_F(TransientWindowManagerTest,
 
 // Verifies TransientWindowObserver is notified appropriately.
 TEST_F(TransientWindowManagerTest, TransientWindowObserverNotified) {
-  std::unique_ptr<Window> parent(CreateTestWindowWithId(0, root_window()));
-  std::unique_ptr<Window> w1(CreateTestWindowWithId(1, parent.get()));
+  std::unique_ptr<Window> parent = CreateTestWindow(
+      {.parent = root_window(), .bounds = {100, 100}, .window_id = 0});
+  std::unique_ptr<Window> w1 = CreateTestWindow(
+      {.parent = parent.get(), .bounds = {100, 100}, .window_id = 1});
 
-  TestTransientWindowObserver test_observer;
+  TestTransientWindowObserver test_parent_observer, test_child_observer;
   TransientWindowManager::GetOrCreate(parent.get())
-      ->AddObserver(&test_observer);
+      ->AddObserver(&test_parent_observer);
+  TransientWindowManager::GetOrCreate(w1.get())->AddObserver(
+      &test_child_observer);
 
   AddTransientChild(parent.get(), w1.get());
-  EXPECT_EQ(1, test_observer.add_count());
-  EXPECT_EQ(0, test_observer.remove_count());
+  EXPECT_EQ(1, test_parent_observer.add_count());
+  EXPECT_EQ(0, test_parent_observer.remove_count());
+  EXPECT_EQ(1, test_child_observer.parent_change_count());
 
   RemoveTransientChild(parent.get(), w1.get());
-  EXPECT_EQ(1, test_observer.add_count());
-  EXPECT_EQ(1, test_observer.remove_count());
+  EXPECT_EQ(1, test_parent_observer.add_count());
+  EXPECT_EQ(1, test_parent_observer.remove_count());
+  EXPECT_EQ(2, test_child_observer.parent_change_count());
 
   TransientWindowManager::GetOrCreate(parent.get())
-      ->RemoveObserver(&test_observer);
+      ->RemoveObserver(&test_parent_observer);
+  TransientWindowManager::GetOrCreate(parent.get())
+      ->RemoveObserver(&test_child_observer);
 }
 
 TEST_F(TransientWindowManagerTest, ChangeParent) {
-  std::unique_ptr<Window> container_1(CreateTestWindowWithId(0, root_window()));
-  std::unique_ptr<Window> container_2(CreateTestWindowWithId(1, root_window()));
-  std::unique_ptr<Window> container_3(CreateTestWindowWithId(2, root_window()));
-  std::unique_ptr<Window> parent(CreateTestWindowWithId(3, container_1.get()));
-  std::unique_ptr<Window> child_1(CreateTestWindowWithId(4, container_1.get()));
-  std::unique_ptr<Window> child_2(CreateTestWindowWithId(5, container_1.get()));
-  std::unique_ptr<Window> child_3(CreateTestWindowWithId(6, container_1.get()));
-  std::unique_ptr<Window> child_4(CreateTestWindowWithId(7, container_3.get()));
-  std::unique_ptr<Window> child_5(CreateTestWindowWithId(8, container_1.get()));
+  std::unique_ptr<Window> container_1 = CreateTestWindow(
+      {.parent = root_window(), .bounds = {100, 100}, .window_id = 0});
+  std::unique_ptr<Window> container_2 = CreateTestWindow(
+      {.parent = root_window(), .bounds = {100, 100}, .window_id = 1});
+  std::unique_ptr<Window> container_3 = CreateTestWindow(
+      {.parent = root_window(), .bounds = {100, 100}, .window_id = 2});
+  std::unique_ptr<Window> parent = CreateTestWindow(
+      {.parent = container_1.get(), .bounds = {100, 100}, .window_id = 3});
+  std::unique_ptr<Window> child_1 = CreateTestWindow(
+      {.parent = container_1.get(), .bounds = {100, 100}, .window_id = 4});
+  std::unique_ptr<Window> child_2 = CreateTestWindow(
+      {.parent = container_1.get(), .bounds = {100, 100}, .window_id = 5});
+  std::unique_ptr<Window> child_3 = CreateTestWindow(
+      {.parent = container_1.get(), .bounds = {100, 100}, .window_id = 6});
+  std::unique_ptr<Window> child_4 = CreateTestWindow(
+      {.parent = container_3.get(), .bounds = {100, 100}, .window_id = 7});
+  std::unique_ptr<Window> child_5 = CreateTestWindow(
+      {.parent = container_1.get(), .bounds = {100, 100}, .window_id = 8});
 
   AddTransientChild(parent.get(), child_1.get());
   AddTransientChild(child_1.get(), child_2.get());
@@ -476,6 +618,170 @@ TEST_F(TransientWindowManagerTest, ChangeParent) {
   // child_3 and child_4 should remain unaffected.
   EXPECT_EQ(child_3->parent(), container_1.get());
   EXPECT_EQ(child_4->parent(), container_3.get());
+}
+
+// Tests that the lifetime of the transient window will be determined by its
+// transient parent by default. But the transient window is still able to
+// outlive the transient parent if we explicitly
+// `set_parent_controls_lifetime()` to false through its transient window
+// manager.
+TEST_F(TransientWindowManagerTest,
+       TransientLifeTimeMayBeControlledByTransientParent) {
+  // Test that the lifetime of the transient window is controlled by its
+  // transient parent by default.
+  std::unique_ptr<Window> parent = CreateTestWindow(
+      {.parent = root_window(), .bounds = {100, 100}, .window_id = 0});
+  std::unique_ptr<Window> transient(CreateTransientChild(1, parent.get()));
+
+  aura::WindowTracker tracker({transient.get()});
+
+  // Release the ownership of the `transient` to avoid double deletion in
+  // `TransientWindowManager::OnWindowDestroying()`.
+  transient.release();
+  parent.reset();
+  EXPECT_TRUE(tracker.windows().empty());
+
+  std::unique_ptr<Window> new_parent = CreateTestWindow(
+      {.parent = root_window(), .bounds = {100, 100}, .window_id = 2});
+  std::unique_ptr<Window> new_transient(
+      CreateTransientChild(3, new_parent.get()));
+
+  tracker.Add(new_transient.get());
+
+  // Test that the transient window can outlive its transient parent by setting
+  // `set_parent_controls_lifetime()` to false.
+  wm::TransientWindowManager::GetOrCreate(new_transient.get())
+      ->set_parent_controls_lifetime(false);
+  new_parent.reset();
+  EXPECT_FALSE(tracker.windows().empty());
+}
+
+// Tests that there is no crash if a window is removed from its parent while its
+// transient children are being restacked. (crbug.com/468794860)
+TEST_F(TransientWindowManagerTest, RemoveWindowDuringRestack) {
+  // Create a parent window.
+  std::unique_ptr<Window> parent(CreateTestWindow(
+      {.parent = root_window(), .bounds = {100, 100}, .window_id = 1}));
+
+  // Create transient children.
+  std::unique_ptr<Window> t1(CreateTestWindow(
+      {.parent = root_window(), .bounds = {100, 100}, .window_id = 2}));
+  std::unique_ptr<Window> t2(CreateTestWindow(
+      {.parent = root_window(), .bounds = {100, 100}, .window_id = 3}));
+
+  AddTransientChild(parent.get(), t1.get());
+  AddTransientChild(parent.get(), t2.get());
+
+  // When t2 is restacked, remove t1 from parent.
+  class RemovalObserver : public aura::WindowObserver {
+   public:
+    RemovalObserver(Window* parent, Window* window_to_remove)
+        : parent_(parent), window_to_remove_(window_to_remove) {}
+
+    void OnWindowStackingChanged(aura::Window* window) override {
+      if (window_to_remove_->parent() == parent_) {
+        parent_->RemoveChild(window_to_remove_);
+      }
+    }
+
+   private:
+    raw_ptr<Window> parent_;
+    raw_ptr<Window> window_to_remove_;
+  };
+
+  RemovalObserver observer(root_window(), t1.get());
+  t2->AddObserver(&observer);
+
+  // Trigger restacking. This should cause t2 to be stacked above parent.
+  root_window()->StackChildAtTop(parent.get());
+
+  t2->RemoveObserver(&observer);
+}
+
+// Tests that there is no UAF if a window is destroyed during Hide().
+// (crbug.com/40062312)
+TEST_F(TransientWindowManagerTest, DeleteDuringHideUAF) {
+  std::unique_ptr<aura::Window> parent(CreateTestWindow(
+      {.parent = root_window(), .bounds = {100, 100}, .window_id = 0}));
+  parent->Hide();
+
+  std::unique_ptr<aura::Window> child_ptr = CreateTestWindow(
+      {.parent = root_window(), .bounds = {100, 100}, .window_id = 1});
+  aura::Window* child = child_ptr.get();
+
+  TransientWindowManager::GetOrCreate(child)->set_parent_controls_visibility(
+      true);
+  AddTransientChild(parent.get(), child);
+
+  // This observer will delete 'child' when it's hidden.
+  auto observer = std::make_unique<DeleteOnHideObserver>(child);
+
+  // Release the ownership of 'child' so that the observer can safely delete it.
+  [[maybe_unused]] aura::Window* released_child = child_ptr.release();
+
+  // This should trigger OnWindowVisibilityChanged on 'child'.
+  // Since 'parent' is hidden and parent_controls_visibility is true,
+  // it will call window_->Hide() internally.
+  // The observer will then delete 'child', which deletes its
+  // TransientWindowManager.
+  // WeakAutoReset will then safely check if the manager is alive.
+  child->Show();
+}
+
+namespace {
+
+class DeleteParentOnHideObserver : public aura::WindowObserver {
+ public:
+  DeleteParentOnHideObserver(aura::Window* child,
+                             std::unique_ptr<aura::Window> parent)
+      : child_(child), parent_(std::move(parent)) {
+    child_->AddObserver(this);
+  }
+  ~DeleteParentOnHideObserver() override {
+    if (child_) {
+      child_->RemoveObserver(this);
+    }
+  }
+  // WindowObserver:
+  void OnWindowVisibilityChanged(aura::Window* window,
+                                 bool visible) override {
+    if (window == child_ && !visible) {
+      parent_.reset();
+    }
+  }
+  void OnWindowDestroyed(aura::Window* window) override {
+    if (window == child_) {
+      child_ = nullptr;
+    }
+  }
+
+ private:
+  raw_ptr<aura::Window> child_;
+  std::unique_ptr<aura::Window> parent_;
+};
+
+}  // namespace
+
+// Tests that there is no UAF if a window is destroyed while its transient
+// children are being hidden in a cascade update.
+TEST_F(TransientWindowManagerTest,
+       ParentDestroyedDuringTransientChildHideCascade) {
+  std::unique_ptr<aura::Window> parent = CreateTestWindow(
+      {.parent = root_window(), .bounds = {100, 100}, .window_id = 0});
+  aura::Window* parent_ptr = parent.get();
+
+  std::unique_ptr<aura::Window> child_ptr = CreateTestWindow(
+      {.parent = root_window(), .bounds = {100, 100}, .window_id = 1});
+  aura::Window* child = child_ptr.release();
+
+  TransientWindowManager::GetOrCreate(child)->set_parent_controls_visibility(
+      true);
+  AddTransientChild(parent_ptr, child);
+
+  auto observer =
+      std::make_unique<DeleteParentOnHideObserver>(child, std::move(parent));
+
+  parent_ptr->Hide();
 }
 
 }  // namespace wm

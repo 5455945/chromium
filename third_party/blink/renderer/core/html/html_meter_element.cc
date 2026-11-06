@@ -20,7 +20,7 @@
 
 #include "third_party/blink/renderer/core/html/html_meter_element.h"
 
-#include "third_party/blink/renderer/core/dom/node_computed_style.h"
+#include "third_party/blink/renderer/core/display_lock/display_lock_utilities.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/html/html_div_element.h"
@@ -30,7 +30,7 @@
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "ui/base/ui_base_features.h"
 
@@ -39,26 +39,46 @@ namespace blink {
 HTMLMeterElement::HTMLMeterElement(Document& document)
     : HTMLElement(html_names::kMeterTag, document) {
   UseCounter::Count(document, WebFeature::kMeterElement);
+  SetHasCustomStyleCallbacks();
   EnsureUserAgentShadowRoot();
 }
 
 HTMLMeterElement::~HTMLMeterElement() = default;
 
-LayoutObject* HTMLMeterElement::CreateLayoutObject(const ComputedStyle& style,
-                                                   LegacyLayout legacy) {
+LayoutObject* HTMLMeterElement::CreateLayoutObject(const ComputedStyle& style) {
   switch (style.EffectiveAppearance()) {
-    case kMeterPart:
+    case AppearanceValue::kMeter:
       UseCounter::Count(GetDocument(),
                         WebFeature::kMeterElementWithMeterAppearance);
       break;
-    case kNoControlPart:
+    case AppearanceValue::kNone:
       UseCounter::Count(GetDocument(),
                         WebFeature::kMeterElementWithNoneAppearance);
       break;
     default:
       break;
   }
-  return HTMLElement::CreateLayoutObject(style, legacy);
+  if (style.IsVerticalWritingMode()) {
+    UseCounter::Count(GetDocument(), WebFeature::kVerticalFormControls);
+  }
+  return HTMLElement::CreateLayoutObject(style);
+}
+
+void HTMLMeterElement::DidRecalcStyle(const StyleRecalcChange change) {
+  HTMLElement::DidRecalcStyle(change);
+  if (const ComputedStyle* style = GetComputedStyle()) {
+    bool is_horizontal = style->IsHorizontalWritingMode();
+    bool is_ltr = style->IsLeftToRightDirection();
+    if (is_horizontal && is_ltr) {
+      UseCounter::Count(GetDocument(), WebFeature::kMeterElementHorizontalLtr);
+    } else if (is_horizontal && !is_ltr) {
+      UseCounter::Count(GetDocument(), WebFeature::kMeterElementHorizontalRtl);
+    } else if (is_ltr) {
+      UseCounter::Count(GetDocument(), WebFeature::kMeterElementVerticalLtr);
+    } else {
+      UseCounter::Count(GetDocument(), WebFeature::kMeterElementVerticalRtl);
+    }
+  }
 }
 
 void HTMLMeterElement::ParseAttribute(
@@ -73,7 +93,8 @@ void HTMLMeterElement::ParseAttribute(
 }
 
 double HTMLMeterElement::value() const {
-  double value = GetFloatingPointAttribute(html_names::kValueAttr, 0);
+  double value =
+      ParseHTMLFloatingPointNumber(getAttribute(html_names::kValueAttr), 0);
   return std::min(std::max(value, min()), max());
 }
 
@@ -82,7 +103,7 @@ void HTMLMeterElement::setValue(double value) {
 }
 
 double HTMLMeterElement::min() const {
-  return GetFloatingPointAttribute(html_names::kMinAttr, 0);
+  return ParseHTMLFloatingPointNumber(getAttribute(html_names::kMinAttr), 0);
 }
 
 void HTMLMeterElement::setMin(double min) {
@@ -90,9 +111,9 @@ void HTMLMeterElement::setMin(double min) {
 }
 
 double HTMLMeterElement::max() const {
-  return std::max(
-      GetFloatingPointAttribute(html_names::kMaxAttr, std::max(1.0, min())),
-      min());
+  return std::max(ParseHTMLFloatingPointNumber(
+                      getAttribute(html_names::kMaxAttr), std::max(1.0, min())),
+                  min());
 }
 
 void HTMLMeterElement::setMax(double max) {
@@ -100,7 +121,8 @@ void HTMLMeterElement::setMax(double max) {
 }
 
 double HTMLMeterElement::low() const {
-  double low = GetFloatingPointAttribute(html_names::kLowAttr, min());
+  double low =
+      ParseHTMLFloatingPointNumber(getAttribute(html_names::kLowAttr), min());
   return std::min(std::max(low, min()), max());
 }
 
@@ -109,7 +131,8 @@ void HTMLMeterElement::setLow(double low) {
 }
 
 double HTMLMeterElement::high() const {
-  double high = GetFloatingPointAttribute(html_names::kHighAttr, max());
+  double high =
+      ParseHTMLFloatingPointNumber(getAttribute(html_names::kHighAttr), max());
   return std::min(std::max(high, low()), max());
 }
 
@@ -118,8 +141,8 @@ void HTMLMeterElement::setHigh(double high) {
 }
 
 double HTMLMeterElement::optimum() const {
-  double optimum =
-      GetFloatingPointAttribute(html_names::kOptimumAttr, (max() + min()) / 2);
+  double optimum = ParseHTMLFloatingPointNumber(
+      getAttribute(html_names::kOptimumAttr), (max() + min()) / 2);
   return std::min(std::max(optimum, min()), max());
 }
 
@@ -188,12 +211,6 @@ void HTMLMeterElement::DidAddUserAgentShadowRoot(ShadowRoot& root) {
   bar->AppendChild(value_);
 
   inner->AppendChild(bar);
-
-  auto* fallback = MakeGarbageCollected<HTMLDivElement>(GetDocument());
-  fallback->AppendChild(
-      HTMLSlotElement::CreateUserAgentDefaultSlot(GetDocument()));
-  fallback->SetShadowPseudoId(AtomicString("-internal-fallback"));
-  root.AppendChild(fallback);
 }
 
 void HTMLMeterElement::UpdateValueAppearance(double percentage) {
@@ -204,7 +221,9 @@ void HTMLMeterElement::UpdateValueAppearance(double percentage) {
   DEFINE_STATIC_LOCAL(AtomicString, even_less_good_pseudo_id,
                       ("-webkit-meter-even-less-good-value"));
 
-  value_->SetInlineStyleProperty(CSSPropertyID::kWidth, percentage,
+  value_->SetInlineStyleProperty(CSSPropertyID::kInlineSize, percentage,
+                                 CSSPrimitiveValue::UnitType::kPercentage);
+  value_->SetInlineStyleProperty(CSSPropertyID::kBlockSize, 100,
                                  CSSPrimitiveValue::UnitType::kPercentage);
   switch (GetGaugeRegion()) {
     case kGaugeRegionOptimum:
@@ -220,13 +239,45 @@ void HTMLMeterElement::UpdateValueAppearance(double percentage) {
 }
 
 bool HTMLMeterElement::CanContainRangeEndPoint() const {
-  GetDocument().UpdateStyleAndLayoutTreeForNode(this);
+  if (DisplayLockUtilities::LockedAncestorPreventingPaint(*this)) {
+    // If this element is DisplayLocked, then we can't access GetComputedStyle.
+    // Even with GetComputedStyle's scoped unlock, this function may be called
+    // during selection modification which prevents lifecycle updates that the
+    // unlock would incur.
+    return false;
+  }
   return GetComputedStyle() && !GetComputedStyle()->HasEffectiveAppearance();
+}
+
+void HTMLMeterElement::AdjustStyle(ComputedStyleBuilder& builder) {
+  // Descendants of the <meter> UA shadow host use
+  // a -internal-shadow-host-has-non-auto-appearance selector which depends on
+  // the computed value of the host's 'appearance'.
+  // This information is propagated via StyleUAShadowHostData to ensure
+  // invalidation of those descendants when the appearance changes.
+
+  builder.SetUAShadowHostData(std::make_unique<StyleUAShadowHostData>(
+      /* width */ Length(),
+      /* height */ Length(),
+      /* max_width */ Length(),
+      /* max_height */ Length(),
+      StyleAspectRatio(EAspectRatioType::kAuto, gfx::SizeF()),
+      /* alt_text */ g_null_atom,
+      /* alt_attr */ g_null_atom,
+      /* src_attr */ g_null_atom, builder.HasEffectiveAppearance()));
 }
 
 void HTMLMeterElement::Trace(Visitor* visitor) const {
   visitor->Trace(value_);
   HTMLElement::Trace(visitor);
+}
+
+bool HTMLMeterElement::SupportsBaseAppearanceInternal(
+    BaseAppearanceValue value) const {
+  if (!RuntimeEnabledFeatures::AppearanceBaseEnabled()) {
+    return false;
+  }
+  return value == Element::BaseAppearanceValue::kBase;
 }
 
 }  // namespace blink

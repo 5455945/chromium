@@ -1,13 +1,13 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_PERFORMANCE_MANAGER_TAB_HELPER_FRAME_NODE_SOURCE_H_
 #define COMPONENTS_PERFORMANCE_MANAGER_TAB_HELPER_FRAME_NODE_SOURCE_H_
 
+#include "base/memory/raw_ptr.h"
 #include "components/performance_manager/frame_node_source.h"
 
-#include "base/macros.h"
 #include "base/observer_list_types.h"
 #include "base/scoped_multi_source_observation.h"
 #include "components/performance_manager/performance_manager_tab_helper.h"
@@ -20,6 +20,10 @@ class TabHelperFrameNodeSource : public FrameNodeSource,
                                  public PerformanceManagerTabHelper::Observer {
  public:
   TabHelperFrameNodeSource();
+
+  TabHelperFrameNodeSource(const TabHelperFrameNodeSource&) = delete;
+  TabHelperFrameNodeSource& operator=(const TabHelperFrameNodeSource&) = delete;
+
   ~TabHelperFrameNodeSource() override;
 
   // FrameNodeSource:
@@ -58,15 +62,14 @@ class TabHelperFrameNodeSource : public FrameNodeSource,
 
   // Maps each tab helper to the set of observed frame nodes that belongs to
   // that tab helper.
-  base::flat_map<PerformanceManagerTabHelper*, base::flat_set<FrameNodeImpl*>>
+  base::flat_map<PerformanceManagerTabHelper*,
+                 base::flat_set<raw_ptr<FrameNodeImpl, CtnExperimental>>>
       observed_frame_nodes_;
 
   // Observes frame node deletions.
   base::ScopedMultiSourceObservation<PerformanceManagerTabHelper,
                                      PerformanceManagerTabHelper::Observer>
       performance_manager_tab_helper_observations_;
-
-  DISALLOW_COPY_AND_ASSIGN(TabHelperFrameNodeSource);
 };
 
 }  // namespace performance_manager

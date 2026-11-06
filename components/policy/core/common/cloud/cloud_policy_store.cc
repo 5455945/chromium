@@ -1,22 +1,31 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/policy/core/common/cloud/cloud_policy_store.h"
 
 #include "base/check.h"
+#include "base/logging.h"
+#include "base/observer_list.h"
 #include "components/policy/core/common/cloud/cloud_external_data_manager.h"
+#include "components/policy/core/common/cloud/cloud_policy_util.h"
+#include "components/policy/core/common/policy_logger.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 
 namespace policy {
 
-CloudPolicyStore::Observer::~Observer() {}
+CloudPolicyStore::Observer::~Observer() = default;
+void CloudPolicyStore::Observer::OnStoreDestruction(CloudPolicyStore* store) {}
 
-CloudPolicyStore::CloudPolicyStore() = default;
+CloudPolicyStore::CloudPolicyStore(const std::string& policy_type)
+    : policy_type_(policy_type) {
+  CHECK(!policy_type.empty());
+}
 
 CloudPolicyStore::~CloudPolicyStore() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!external_data_manager_);
+  NotifyStoreDestruction();
 }
 
 bool CloudPolicyStore::is_managed() const {
@@ -47,6 +56,12 @@ void CloudPolicyStore::RemoveObserver(CloudPolicyStore::Observer* observer) {
   observers_.RemoveObserver(observer);
 }
 
+bool CloudPolicyStore::HasObserver(CloudPolicyStore::Observer* observer) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  return observers_.HasObserver(observer);
+}
+
 void CloudPolicyStore::NotifyStoreLoaded() {
   is_initialized_ = true;
   UpdateFirstPoliciesLoaded();
@@ -65,12 +80,31 @@ void CloudPolicyStore::UpdateFirstPoliciesLoaded() {
   first_policies_loaded_ |= has_policy();
 }
 
+void CloudPolicyStore::SetPolicy(
+    std::unique_ptr<enterprise_management::PolicyData> policy_data) {
+  VLOG_POLICY(1, CBCM_ENROLLMENT)
+      << PolicyTypeLogPrefix(policy_type(), std::string())
+      << "CloudPolicyStore::SetPolicy: " << policy_data->policy_type();
+  DCHECK(policy_data);
+  DCHECK_EQ(policy_data->policy_type(), policy_type());
+  policy_ = std::move(policy_data);
+}
+
+void CloudPolicyStore::ResetPolicy() {
+  policy_.reset();
+}
+
 void CloudPolicyStore::NotifyStoreError() {
   is_initialized_ = true;
   UpdateFirstPoliciesLoaded();
 
   for (auto& observer : observers_)
     observer.OnStoreError(this);
+}
+
+void CloudPolicyStore::NotifyStoreDestruction() {
+  for (auto& observer : observers_)
+    observer.OnStoreDestruction(this);
 }
 
 void CloudPolicyStore::SetExternalDataManager(
@@ -83,13 +117,6 @@ void CloudPolicyStore::SetExternalDataManager(
     external_data_manager_->OnPolicyStoreLoaded();
 }
 
-void CloudPolicyStore::SetPolicyMapForTesting(const PolicyMap& policy_map) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  policy_map_ = policy_map.Clone();
-  NotifyStoreLoaded();
-}
-
 void CloudPolicyStore::SetFirstPoliciesLoaded(bool loaded) {
   first_policies_loaded_ = loaded;
 }
@@ -97,6 +124,11 @@ void CloudPolicyStore::SetFirstPoliciesLoaded(bool loaded) {
 void CloudPolicyStore::set_policy_data_for_testing(
     std::unique_ptr<enterprise_management::PolicyData> policy) {
   policy_ = std::move(policy);
+}
+
+void CloudPolicyStore::set_policy_signature_public_key_for_testing(
+    const std::string& key) {
+  policy_signature_public_key_ = key;
 }
 
 }  // namespace policy

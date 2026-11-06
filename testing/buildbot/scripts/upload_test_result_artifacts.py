@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """Uploads test results artifacts.
@@ -15,23 +15,21 @@ with the 'file' scheme) to google storage.
 """
 
 import argparse
-import collections
 import copy
-import itertools
 import json
 import hashlib
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
-import urlparse
-import uuid
 
 root_dir = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), '..', '..', '..'))
-sys.path.append(os.path.join(root_dir, 'build', 'android'))
-from pylib.utils import google_storage_helper
+  os.path.join(os.path.dirname(__file__), '..', '..', '..')
+)
+
+# //build/util imports.
+sys.path.append(os.path.join(root_dir, 'build', 'util'))
+from lib.common import google_storage_helper  # noqa: E402
 
 
 def get_file_digest(filepath):
@@ -78,7 +76,7 @@ def get_tests(test_trie):
   file a bug with crbug.com/new and cc martiniss@.
   """
   if not isinstance(test_trie, dict):
-    raise ValueError("expected %s to be a dict" % test_trie)
+    raise ValueError('expected %s to be a dict' % test_trie)
 
   tests = {}
 
@@ -94,13 +92,14 @@ def get_tests(test_trie):
 
 def upload_directory_to_gs(local_path, bucket, gs_path, dry_run):
   if dry_run:
-    print 'would have uploaded %s to %s' % (local_path, gs_path)
+    print('would have uploaded %s to %s' % (local_path, gs_path))
     return
 
   # -m does multithreaded uploads, which is needed because we upload multiple
   # files. -r copies the whole directory.
   google_storage_helper.upload(
-      gs_path, local_path, bucket, gs_args=['-m'], command_args=['-r'])
+    gs_path, local_path, bucket, gs_args=['-m'], command_args=['-r']
+  )
 
 
 def hash_artifacts(tests, artifact_root):
@@ -108,8 +107,8 @@ def hash_artifacts(tests, artifact_root):
   # Sort for testing consistency.
   for test_obj in sorted(tests.values()):
     for name, location in sorted(
-        test_obj.get('artifacts', {}).items(),
-        key=lambda pair: pair[0]):
+      list(test_obj.get('artifacts', {}).items()), key=lambda pair: pair[0]
+    ):
       absolute_filepath = os.path.join(artifact_root, location)
       file_digest = get_file_digest(absolute_filepath)
       # Location is set to file digest because it's relative to the google
@@ -156,7 +155,8 @@ def upload_artifacts(data, artifact_root, dry_run, bucket):
     for artifact_name in test_obj.get('artifacts', {}):
       if artifact_name not in type_info:
         raise ValueError(
-            'Artifact %r type information not present' % artifact_name)
+          'Artifact %r type information not present' % artifact_name
+        )
 
   tempdir = tempfile.mkdtemp(prefix='upload_test_artifacts')
   try:
@@ -164,14 +164,13 @@ def upload_artifacts(data, artifact_root, dry_run, bucket):
     prep_artifacts_for_gs_upload(hashed_artifacts, tempdir)
 
     # Add * to include all files in that directory.
-    upload_directory_to_gs(
-        os.path.join(tempdir, '*'), bucket, gs_path, dry_run)
+    upload_directory_to_gs(os.path.join(tempdir, '*'), bucket, gs_path, dry_run)
 
-    local_data['artifact_permanent_location'] = 'gs://%s/%s' % (
-        bucket, gs_path)
+    local_data['artifact_permanent_location'] = 'gs://%s/%s' % (bucket, gs_path)
     return local_data
   finally:
     shutil.rmtree(tempdir)
+
 
 def main():
   parser = argparse.ArgumentParser()
@@ -179,23 +178,39 @@ def main():
   # test-result-file to args.test_result_file automatically, and dest doesn't
   # seem to work on positional arguments.
   parser.add_argument('test_result_file')
-  parser.add_argument('--output-file', type=os.path.realpath,
-                      help='If set, the input json test results file will be'
-                      ' rewritten to include new artifact location data, and'
-                      ' dumped to this value.')
-  parser.add_argument('-n', '--dry-run', action='store_true',
-                      help='If true, this script will not upload any files, and'
-                           ' will instead just print to stdout what path it'
-                           ' would have uploaded each file. Useful for testing.'
-                      )
-  parser.add_argument('--artifact-root', required=True, type=os.path.realpath,
-                      help='The file path where artifact locations are rooted.')
-  parser.add_argument('--bucket', default='chromium-test-artifacts',
-                      help='The google storage bucket to upload artifacts to.'
-                      ' The default bucket is public and accessible by anyone.')
-  parser.add_argument('-q', '--quiet', action='store_true',
-                      help='If set, does not print the transformed json file'
-                           ' to stdout.')
+  parser.add_argument(
+    '--output-file',
+    type=os.path.realpath,
+    help='If set, the input json test results file will be'
+    ' rewritten to include new artifact location data, and'
+    ' dumped to this value.',
+  )
+  parser.add_argument(
+    '-n',
+    '--dry-run',
+    action='store_true',
+    help='If true, this script will not upload any files, and'
+    ' will instead just print to stdout what path it'
+    ' would have uploaded each file. Useful for testing.',
+  )
+  parser.add_argument(
+    '--artifact-root',
+    required=True,
+    type=os.path.realpath,
+    help='The file path where artifact locations are rooted.',
+  )
+  parser.add_argument(
+    '--bucket',
+    default='chromium-test-artifacts',
+    help='The google storage bucket to upload artifacts to.'
+    ' The default bucket is public and accessible by anyone.',
+  )
+  parser.add_argument(
+    '-q',
+    '--quiet',
+    action='store_true',
+    help='If set, does not print the transformed json file to stdout.',
+  )
 
   args = parser.parse_args()
 
@@ -204,20 +219,25 @@ def main():
 
   type_info = data.get('artifact_type_info')
   if not type_info:
-    print 'File %r did not have %r top level key. Not processing.' % (
-        args.test_result_file, 'artifact_type_info')
+    print(
+      'File %r did not have %r top level key. Not processing.'
+      % (args.test_result_file, 'artifact_type_info')
+    )
     return 1
 
   new_data = upload_artifacts(
-      data, args.artifact_root, args.dry_run, args.bucket)
+    data, args.artifact_root, args.dry_run, args.bucket
+  )
   if args.output_file:
     with open(args.output_file, 'w') as f:
       json.dump(new_data, f)
 
   if new_data and not args.quiet:
-    print json.dumps(
-        new_data, indent=2, separators=(',', ': '), sort_keys=True)
+    print(
+      json.dumps(new_data, indent=2, separators=(',', ': '), sort_keys=True)
+    )
   return 0
+
 
 if __name__ == '__main__':
   sys.exit(main())

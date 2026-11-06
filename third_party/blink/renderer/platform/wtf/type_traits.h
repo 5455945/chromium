@@ -23,26 +23,16 @@
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_TYPE_TRAITS_H_
 
 #include <cstddef>
+#include <optional>
 #include <type_traits>
 #include <utility>
+#include <variant>
+
 #include "base/compiler_specific.h"
-#include "base/template_util.h"
 #include "build/build_config.h"
-#include "third_party/blink/renderer/platform/wtf/buildflags.h"
-
-#if BUILDFLAG(USE_V8_OILPAN)
 #include "v8/include/cppgc/type-traits.h"  // nogncheck
-#else                                      // !BUILDFLAG(USE_V8_OILPAN)
-namespace blink {
-template <typename T>
-class Member;
-class Visitor;
-template <typename T>
-class WeakMember;
-}  // namespace blink
-#endif                                     // !BUILDFLAG(USE_V8_OILPAN)
 
-namespace WTF {
+namespace blink {
 
 // Returns a string that contains the type name of |T| as a substring.
 template <typename T>
@@ -53,7 +43,7 @@ inline const char* GetStringWithTypeName() {
 template <typename T, typename U>
 struct IsSubclass {
  private:
-  typedef char YesType;
+  using YesType = char;
   struct NoType {
     char padding[8];
   };
@@ -69,7 +59,7 @@ struct IsSubclass {
 template <typename T, template <typename... V> class U>
 struct IsSubclassOfTemplate {
  private:
-  typedef char YesType;
+  using YesType = char;
   struct NoType {
     char padding[8];
   };
@@ -86,7 +76,7 @@ struct IsSubclassOfTemplate {
 template <typename T, template <typename V, size_t W> class U>
 struct IsSubclassOfTemplateTypenameSize {
  private:
-  typedef char YesType;
+  using YesType = char;
   struct NoType {
     char padding[8];
   };
@@ -103,7 +93,7 @@ struct IsSubclassOfTemplateTypenameSize {
 template <typename T, template <typename V, size_t W, typename X> class U>
 struct IsSubclassOfTemplateTypenameSizeTypename {
  private:
-  typedef char YesType;
+  using YesType = char;
   struct NoType {
     char padding[8];
   };
@@ -117,173 +107,73 @@ struct IsSubclassOfTemplateTypenameSizeTypename {
   static const bool value = sizeof(SubclassCheck(t_)) == sizeof(YesType);
 };
 
-#if BUILDFLAG(USE_V8_OILPAN)
-
 template <typename T>
 struct IsTraceable : cppgc::internal::IsTraceable<T> {};
+
+template <typename T>
+concept IsTraceableV = IsTraceable<T>::value;
 
 template <typename T>
 struct IsGarbageCollectedType
     : cppgc::internal::IsGarbageCollectedOrMixinType<T> {};
 
 template <typename T>
+concept IsGarbageCollectedTypeV = IsGarbageCollectedType<T>::value;
+
+template <typename T>
 struct IsWeak : cppgc::internal::IsWeak<T> {};
 
 template <typename T>
-struct IsMemberType : std::integral_constant<bool, cppgc::IsMemberTypeV<T>> {};
+concept IsWeakV = IsWeak<T>::value;
 
 template <typename T>
-struct IsWeakMemberType
-    : std::integral_constant<bool, cppgc::IsWeakMemberTypeV<T>> {};
+struct IsMemberType : std::bool_constant<cppgc::IsMemberTypeV<T>> {};
 
 template <typename T>
-struct IsMemberOrWeakMemberType
-    : std::integral_constant<bool,
-                             cppgc::IsMemberTypeV<T> ||
-                                 cppgc::IsWeakMemberTypeV<T>> {};
-
-#else  // !USE_V8_OILPAN
-
-namespace internal {
-// IsTraceMethodConst is used to verify that all Trace methods are marked as
-// const. It is equivalent to IsTraceable but for a non-const object.
-template <typename T, typename = void>
-struct IsTraceMethodConst : std::false_type {};
-
-template <typename T>
-struct IsTraceMethodConst<T,
-                          base::void_t<decltype(std::declval<const T>().Trace(
-                              std::declval<blink::Visitor*>()))>>
-    : std::true_type {};
-}  // namespace internal
-
-template <typename T, typename = void>
-struct IsTraceable : std::false_type {
-  // Fail on incomplete types.
-  static_assert(sizeof(T), "incomplete type T");
-};
-
-// Note: This also checks if a superclass of T has a trace method.
-template <typename T>
-struct IsTraceable<T,
-                   base::void_t<decltype(std::declval<T>().Trace(
-                       std::declval<blink::Visitor*>()))>> : std::true_type {
-  // All Trace methods should be marked as const. If an object of type
-  // 'T' is traceable then any object of type 'const T' should also
-  // be traceable.
-  static_assert(internal::IsTraceMethodConst<T>(),
-                "Trace methods should be marked as const.");
-};
-
-template <typename T>
-class IsGarbageCollectedTypeInternal {
-  typedef char YesType;
-  typedef struct NoType { char padding[8]; } NoType;
-
-  using NonConstType = typename std::remove_const<T>::type;
-  template <typename U>
-  static YesType CheckGarbageCollectedType(
-      typename U::IsGarbageCollectedTypeMarker*);
-  template <typename U>
-  static NoType CheckGarbageCollectedType(...);
-
-  // Separately check for GarbageCollectedMixin, which declares a different
-  // marker typedef, to avoid resolution ambiguity for cases like
-  // IsGarbageCollectedType<B> over:
-  //
-  //    class A : public GarbageCollected<A>, public GarbageCollectedMixin {
-  //        ...
-  //    };
-  //    class B : public A, public GarbageCollectedMixin { ... };
-  //
-  template <typename U>
-  static YesType CheckGarbageCollectedMixinType(
-      typename U::IsGarbageCollectedMixinMarker*);
-  template <typename U>
-  static NoType CheckGarbageCollectedMixinType(...);
-
- public:
-  static const bool value =
-      (sizeof(YesType) ==
-       sizeof(CheckGarbageCollectedType<NonConstType>(nullptr))) ||
-      (sizeof(YesType) ==
-       sizeof(CheckGarbageCollectedMixinType<NonConstType>(nullptr)));
-};
-
-template <typename T>
-class IsGarbageCollectedType : public IsGarbageCollectedTypeInternal<T> {
-  static_assert(sizeof(T), "T must be fully defined");
-};
-
-// Specifies whether a type should be treated weakly by the memory management
-// system. Only supported by the garbage collector and not by PartitionAlloc.
-// Requires garbage collection support, so it is only safe to  override in sync
-// with changing garbage collection semantics.
-template <typename T>
-struct IsWeak : std::false_type {};
-
-template <typename T>
-struct IsMemberType : std::integral_constant<
-                          bool,
-                          WTF::IsSubclassOfTemplate<T, blink::Member>::value> {
-};
-
-template <typename T>
-struct IsWeakMemberType
-    : std::integral_constant<
-          bool,
-          WTF::IsSubclassOfTemplate<T, blink::WeakMember>::value> {};
+struct IsWeakMemberType : std::bool_constant<cppgc::IsWeakMemberTypeV<T>> {};
 
 template <typename T>
 struct IsMemberOrWeakMemberType
-    : std::integral_constant<bool,
-                             IsMemberType<T>::value ||
-                                 IsWeakMemberType<T>::value> {};
+    : std::bool_constant<cppgc::IsMemberTypeV<T> ||
+                         cppgc::IsWeakMemberTypeV<T>> {};
 
-#endif  // !USE_V8_OILPAN
+template <typename T>
+struct IsAnyMemberType
+    : std::bool_constant<IsMemberOrWeakMemberType<T>::value ||
+                         cppgc::IsUntracedMemberTypeV<T>> {};
 
 template <typename T, typename U>
 struct IsTraceable<std::pair<T, U>>
-    : std::integral_constant<bool,
-                             IsTraceable<T>::value || IsTraceable<U>::value> {};
-
-// Convenience template wrapping the IsTraceableInCollection template in
-// Collection Traits. It helps make the code more readable.
-template <typename Traits>
-struct IsTraceableInCollectionTrait
-    : std::integral_constant<
-          bool,
-          Traits::template IsTraceableInCollection<>::value> {};
+    : std::bool_constant<IsTraceable<T>::value || IsTraceable<U>::value> {};
 
 enum WeakHandlingFlag {
   kNoWeakHandling,
   kWeakHandling,
 };
 
+// This is for tracing inside collections that have special support for weak
+// pointers.
+//
+// Structure:
+// - `Trace()`: Traces the contents.
+// - `IsAlive()`: Returns true if the contents are still considered alive, and
+// false otherwise.
+//
+// Default implementation for non-weak types is to use the regular non-weak
+// TraceTrait. Default implementation for types with weakness is to
+// delegate to sub types until reaching WeakMember or KeyValuePair which
+// have defined weakness semantics.
+template <WeakHandlingFlag weakness, typename T, typename Traits>
+struct TraceInCollectionTrait;
+
 template <typename T>
-struct WeakHandlingTrait
-    : std::integral_constant<WeakHandlingFlag,
-                             IsWeak<T>::value ? kWeakHandling
-                                              : kNoWeakHandling> {};
+inline constexpr WeakHandlingFlag kWeakHandlingTrait =
+    IsWeak<T>::value ? kWeakHandling : kNoWeakHandling;
 
 // This is used to check that DISALLOW_NEW objects are not
 // stored in off-heap Vectors, HashTables etc.
 template <typename T>
-struct IsDisallowNew {
- private:
-  using YesType = char;
-  struct NoType {
-    char padding[8];
-  };
-
-  template <typename U>
-  static YesType CheckMarker(typename U::IsDisallowNewMarker*);
-  template <typename U>
-  static NoType CheckMarker(...);
-
- public:
-  static const bool value = sizeof(CheckMarker<T>(nullptr)) == sizeof(YesType);
-};
+concept IsDisallowNew = requires { typename T::IsDisallowNewMarker; };
 
 template <>
 class IsGarbageCollectedType<void> {
@@ -291,32 +181,57 @@ class IsGarbageCollectedType<void> {
   static const bool value = false;
 };
 
-template <typename T,
-          bool = std::is_function<typename std::remove_const<
-                     typename std::remove_pointer<T>::type>::type>::value ||
-                 std::is_void<typename std::remove_const<
-                     typename std::remove_pointer<T>::type>::type>::value>
-class IsPointerToGarbageCollectedType {
+template <typename T>
+concept IsPointerToGarbageCollectedType =
+    std::is_pointer_v<T> &&
+    !std::is_function_v<std::remove_const_t<std::remove_pointer_t<T>>> &&
+    !std::is_void_v<std::remove_const_t<std::remove_pointer_t<T>>> &&
+    IsGarbageCollectedType<
+        std::remove_const_t<std::remove_pointer_t<T>>>::value;
+
+template <typename T>
+concept IsPointerToTraceableType =
+    std::is_pointer_v<T> &&
+    !std::is_function_v<std::remove_const_t<std::remove_pointer_t<T>>> &&
+    !std::is_void_v<std::remove_const_t<std::remove_pointer_t<T>>> &&
+    IsTraceable<std::remove_const_t<std::remove_pointer_t<T>>>::value;
+
+namespace internal {
+
+template <typename T>
+concept HasStackAllocatedMarker =
+    requires { typename T::IsStackAllocatedTypeMarker; };
+
+}  // namespace internal
+
+template <typename T>
+class IsStackAllocatedType {
  public:
-  static const bool value = false;
+  static constexpr bool value = internal::HasStackAllocatedMarker<T>;
+};
+
+template <typename T, typename U>
+class IsStackAllocatedType<std::pair<T, U>> {
+ public:
+  static constexpr bool value =
+      IsStackAllocatedType<T>::value || IsStackAllocatedType<U>::value;
 };
 
 template <typename T>
-class IsPointerToGarbageCollectedType<T*, false> {
+class IsStackAllocatedType<std::optional<T>> {
  public:
-  static const bool value = IsGarbageCollectedType<T>::value;
+  static constexpr bool value = IsStackAllocatedType<T>::value;
 };
 
-template <typename T, typename = void>
-struct IsStackAllocatedType : std::false_type {};
+template <typename... Ts>
+class IsStackAllocatedType<std::variant<Ts...>> {
+ public:
+  static constexpr bool value = std::disjunction_v<IsStackAllocatedType<Ts>...>;
+};
 
 template <typename T>
-struct IsStackAllocatedType<
-    T,
-    base::void_t<typename T::IsStackAllocatedTypeMarker>> : std::true_type {};
+concept IsStackAllocatedTypeV = IsStackAllocatedType<T>::value;
 
-}  // namespace WTF
-
-using WTF::IsGarbageCollectedType;
+}  // namespace blink
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_TYPE_TRAITS_H_

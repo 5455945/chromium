@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,19 +8,12 @@
 #include <vector>
 
 #include "base/containers/flat_map.h"
-#include "base/macros.h"
 #include "media/base/media_export.h"
 #include "media/base/video_codecs.h"
 #include "media/base/video_decoder_config.h"
 #include "ui/gfx/geometry/size.h"
 
 namespace media {
-
-// The min and max resolution used by SW decoders (dav1d, libgav1, libvpx and
-// ffmpeg for example) when queried about decoding capabilities. For now match
-// the supported resolutions of HW decoders.
-constexpr gfx::Size kDefaultSwDecodeSizeMin(8, 8);
-constexpr gfx::Size kDefaultSwDecodeSizeMax(8192, 8192);
 
 // Specification of a range of configurations that are supported by a video
 // decoder.  Also provides the ability to check if a VideoDecoderConfig matches
@@ -37,6 +30,20 @@ struct MEDIA_EXPORT SupportedVideoDecoderConfig {
 
   // Returns true if and only if |config| is a supported config.
   bool Matches(const VideoDecoderConfig& config) const;
+
+  bool operator==(const SupportedVideoDecoderConfig& other) const {
+    return profile_min == other.profile_min &&
+           profile_max == other.profile_max &&
+           coded_size_min == other.coded_size_min &&
+           coded_size_max == other.coded_size_max &&
+           allow_encrypted == other.allow_encrypted &&
+           require_encrypted == other.require_encrypted;
+  }
+  bool operator!=(const SupportedVideoDecoderConfig& other) const {
+    return !(*this == other);
+  }
+
+  bool IsValid() const;
 
   // Range of VideoCodecProfiles to match, inclusive.
   VideoCodecProfile profile_min = VIDEO_CODEC_PROFILE_UNKNOWN;

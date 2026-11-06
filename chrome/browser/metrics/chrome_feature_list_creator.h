@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,14 +8,31 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
+#include "base/feature_list.h"
+#include "base/memory/raw_ptr.h"
+#include "base/no_destructor.h"
+#include "base/types/pass_key.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/chrome_browser_field_trials.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
-#include "chrome/installer/util/initial_preferences.h"
 #include "components/metrics_services_manager/metrics_services_manager.h"
 #include "components/prefs/pref_service.h"
+
+namespace ash {
+class ChromeBrowserMainPartsAsh;
+}  // namespace ash
+
+namespace installer {
+class InitialPreferences;
+}  // namespace installer
+
+namespace network_time {
+class NetworkTimeTracker;
+}  // namespace network_time
+
+namespace variations {
+struct SeedResponse;
+}  // namespace variations
 
 class ChromeMetricsServicesManagerClient;
 
@@ -23,12 +40,18 @@ class ChromeMetricsServicesManagerClient;
 // setting up field trials, e.g. VariationsService, MetricsServicesManager etc.
 // before the full browser loop starts. The |local_state| is instantiated, and
 // its ownership will be taken by BrowserProcessImpl when the full browser
-// starts. Note: On Chrome OS, this class depends on
-// BrowserPolicyConnectorChromeOS whose behavior depends on DBusThreadManager
-// being initialized.
+// starts. Note: On ChromeOS, this class depends on BrowserPolicyConnectorAsh
+// whose behavior depends on DBusThreadManager being initialized.
 class ChromeFeatureListCreator {
  public:
-  ChromeFeatureListCreator();
+  // The instance of ChromeFeatureListCreator gets constructed on first access
+  // through this API and is never destroyed. This construction is generally a
+  // no-op until CreateFeatureList() is called.
+  static ChromeFeatureListCreator* GetInstance();
+
+  ChromeFeatureListCreator(const ChromeFeatureListCreator&) = delete;
+  ChromeFeatureListCreator& operator=(const ChromeFeatureListCreator&) = delete;
+
   ~ChromeFeatureListCreator();
 
   // Initializes all necessary parameters to create the feature list and calls
@@ -38,9 +61,6 @@ class ChromeFeatureListCreator {
   // Sets the application locale and verifies (via a CHECK) that it matches
   // what was used when creating field trials.
   void SetApplicationLocale(const std::string& locale);
-
-  // Overrides cached UI strings on the resource bundle once it is initialized.
-  void OverrideCachedUIStrings();
 
   // Gets the MetricsServicesManagerClient* used in this class.
   metrics_services_manager::MetricsServicesManagerClient*
@@ -57,13 +77,24 @@ class ChromeFeatureListCreator {
   std::unique_ptr<policy::ChromeBrowserPolicyConnector>
   TakeChromeBrowserPolicyConnector();
 
-#if !defined(OS_ANDROID) && !BUILDFLAG(IS_CHROMEOS_ASH)
+  // Passes ownership of the |network_time_tracker_| to the caller.
+  std::unique_ptr<network_time::NetworkTimeTracker> TakeNetworkTimeTracker();
+
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
   std::unique_ptr<installer::InitialPreferences> TakeInitialPrefs();
 #endif
+
+  // Passes ownership of the initial variations seed to the caller. Returns
+  // nullptr if there is no seed.
+  std::unique_ptr<variations::SeedResponse> TakeInitialSeed();
 
   PrefService* local_state() { return local_state_.get(); }
   policy::ChromeBrowserPolicyConnector* browser_policy_connector() {
     return browser_policy_connector_.get();
+  }
+  network_time::NetworkTimeTracker* network_time_tracker() {
+    CHECK(network_time_tracker_);
+    return network_time_tracker_.get();
   }
   const std::string& actual_locale() { return actual_locale_; }
 
@@ -71,15 +102,32 @@ class ChromeFeatureListCreator {
     return browser_field_trials_.get();
   }
 
+#if BUILDFLAG(IS_CHROMEOS)
+  // Get the FeatureList::Accessor, clearing immediately -- this must only be
+  // used by ChromeBrowserMainPartsAsh.
+  std::unique_ptr<base::FeatureList::Accessor> GetAndClearFeatureListAccessor(
+      base::PassKey<ash::ChromeBrowserMainPartsAsh> key) {
+    return std::move(cros_feature_list_accessor_);
+  }
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
  private:
+  friend class base::NoDestructor<ChromeFeatureListCreator>;
+
+  ChromeFeatureListCreator();
+
   void CreatePrefService();
   void ConvertFlagsToSwitches();
-  void SetupFieldTrials();
+  void CreateNetworkTimeTracker();
+
+  // Sets up the field trials and related initialization. Call only after
+  // about:flags have been converted to switches.
+  void SetUpFieldTrials();
+
   void CreateMetricsServices();
 
-  // Imports variations initial preference any preferences (to local state)
-  // needed for first run. This is always called and early outs if not
-  // first-run.
+  // Loads the initial preferences and the initial variations seed needed for
+  // first run. This is always called and early outs if not first-run.
   void SetupInitialPrefs();
 
   // Must be destroyed after |local_state_|.
@@ -95,18 +143,26 @@ class ChromeFeatureListCreator {
   std::string actual_locale_;
 
   // This is owned by |metrics_services_manager_| but we need to expose it.
-  ChromeMetricsServicesManagerClient* metrics_services_manager_client_;
+  raw_ptr<ChromeMetricsServicesManagerClient, AcrossTasksDanglingUntriaged>
+      metrics_services_manager_client_;
+
+  std::unique_ptr<network_time::NetworkTimeTracker> network_time_tracker_;
 
   std::unique_ptr<metrics_services_manager::MetricsServicesManager>
       metrics_services_manager_;
 
   std::unique_ptr<ChromeBrowserFieldTrials> browser_field_trials_;
 
-#if !defined(OS_ANDROID) && !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
   std::unique_ptr<installer::InitialPreferences> installer_initial_prefs_;
 #endif
+  std::unique_ptr<variations::SeedResponse> initial_seed_;
 
-  DISALLOW_COPY_AND_ASSIGN(ChromeFeatureListCreator);
+#if BUILDFLAG(IS_CHROMEOS)
+  // On ChromeOS, the platform needs to be able to access the
+  // FeatureList::Accessor. On other platforms, this API should not be used.
+  std::unique_ptr<base::FeatureList::Accessor> cros_feature_list_accessor_;
+#endif  // BUILDFLAG(IS_CHROMEOS)
 };
 
 #endif  // CHROME_BROWSER_METRICS_CHROME_FEATURE_LIST_CREATOR_H_

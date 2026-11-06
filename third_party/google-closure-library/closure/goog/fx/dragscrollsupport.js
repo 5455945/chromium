@@ -1,16 +1,8 @@
-// Copyright 2008 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 /**
  * @fileoverview Class to support scrollable containers for drag and drop.
@@ -25,6 +17,8 @@ goog.require('goog.events.EventHandler');
 goog.require('goog.events.EventType');
 goog.require('goog.math.Coordinate');
 goog.require('goog.style');
+goog.requireType('goog.events.Event');
+goog.requireType('goog.math.Rect');
 
 
 
@@ -48,6 +42,7 @@ goog.require('goog.style');
  */
 goog.fx.DragScrollSupport = function(
     containerNode, opt_margin, opt_externalMouseMoveTracking) {
+  'use strict';
   goog.fx.DragScrollSupport.base(this, 'constructor');
 
   /**
@@ -95,12 +90,23 @@ goog.fx.DragScrollSupport = function(
   this.scrollDelta_ = new goog.math.Coordinate();
 
   /**
+   * Whether the container actually represents the scrollable content instead of
+   * the parent of the scrollable content. For the entire page (BODY/HTML),
+   * the behavior for hit detection is different because we care about events
+   * relative to the viewport, which serves as the actual container.
+   * @private
+   * @const
+   */
+  this.containerIsActuallyContent_ =
+      containerNode.tagName === 'BODY' || containerNode.tagName === 'HTML';
+
+  /**
    * The container bounds.
    * @type {goog.math.Rect}
    * @private
    */
   this.containerBounds_ = goog.style.getBounds(containerNode);
-  if (containerNode.tagName === 'BODY' || containerNode.tagName === 'HTML') {
+  if (this.containerIsActuallyContent_) {
     var size = goog.dom.getViewportSize();
     this.containerBounds_.height = size.height;
     this.containerBounds_.width = size.width;
@@ -142,6 +148,12 @@ goog.fx.DragScrollSupport.TIMER_STEP_ = 50;
  */
 goog.fx.DragScrollSupport.SCROLL_STEP_ = 8;
 
+/**
+ * @type {!goog.math.Coordinate}
+ * @private
+ * @const
+ */
+goog.fx.DragScrollSupport.ORIGIN_COORDINATE_ = new goog.math.Coordinate(0, 0);
 
 /**
  * The suggested scrolling margin.
@@ -159,6 +171,7 @@ goog.fx.DragScrollSupport.MARGIN = 32;
  *     only when the cursor is inside the container node.
  */
 goog.fx.DragScrollSupport.prototype.setConstrainScroll = function(constrain) {
+  'use strict';
   this.constrainScroll_ = !!this.margin_ && constrain;
 };
 
@@ -169,6 +182,7 @@ goog.fx.DragScrollSupport.prototype.setConstrainScroll = function(constrain) {
  */
 goog.fx.DragScrollSupport.prototype.setHorizontalScrolling = function(
     scrolling) {
+  'use strict';
   this.horizontalScrolling_ = scrolling;
 };
 
@@ -182,6 +196,7 @@ goog.fx.DragScrollSupport.prototype.setHorizontalScrolling = function(
  * @private
  */
 goog.fx.DragScrollSupport.prototype.constrainBounds_ = function(bounds) {
+  'use strict';
   var margin = this.margin_;
   if (margin) {
     var quarterHeight = bounds.height * 0.25;
@@ -206,6 +221,7 @@ goog.fx.DragScrollSupport.prototype.constrainBounds_ = function(bounds) {
  */
 goog.fx.DragScrollSupport.prototype.setupListeners_ = function(
     externalMouseMoveTracking) {
+  'use strict';
   if (!externalMouseMoveTracking) {
     // Track mouse pointer position to determine scroll direction.
     this.eventHandler_.listen(
@@ -225,6 +241,7 @@ goog.fx.DragScrollSupport.prototype.setupListeners_ = function(
  * @private
  */
 goog.fx.DragScrollSupport.prototype.onTick_ = function(event) {
+  'use strict';
   this.containerNode_.scrollTop += this.scrollDelta_.y;
   this.containerNode_.scrollLeft += this.scrollDelta_.x;
 };
@@ -233,14 +250,24 @@ goog.fx.DragScrollSupport.prototype.onTick_ = function(event) {
 /**
  * Handler for mouse moves events.
  * @param {goog.events.Event} event Mouse move event.
+ * @suppress {strictMissingProperties} Added to tighten compiler checks
  */
 goog.fx.DragScrollSupport.prototype.onMouseMove = function(event) {
+  'use strict';
+  let eventOffset = this.containerIsActuallyContent_ ?
+      goog.fx.DragScrollSupport.ORIGIN_COORDINATE_ :
+      goog.dom.getDomHelper(this.containerNode_).getDocumentScroll();
+
+  /** @suppress {strictMissingProperties} Added to tighten compiler checks */
   var deltaX = this.horizontalScrolling_ ?
       this.calculateScrollDelta(
-          event.clientX, this.scrollBounds_.left, this.scrollBounds_.width) :
+          event.clientX + eventOffset.x, this.scrollBounds_.left,
+          this.scrollBounds_.width) :
       0;
+  /** @suppress {strictMissingProperties} Added to tighten compiler checks */
   var deltaY = this.calculateScrollDelta(
-      event.clientY, this.scrollBounds_.top, this.scrollBounds_.height);
+      event.clientY + eventOffset.y, this.scrollBounds_.top,
+      this.scrollBounds_.height);
   this.scrollDelta_.x = deltaX;
   this.scrollDelta_.y = deltaY;
 
@@ -248,7 +275,8 @@ goog.fx.DragScrollSupport.prototype.onMouseMove = function(event) {
   // bounds of the container node.
   if ((!deltaX && !deltaY) ||
       (this.constrainScroll_ &&
-       !this.isInContainerBounds_(event.clientX, event.clientY))) {
+       !this.isInContainerBounds_(
+           event.clientX + eventOffset.x, event.clientY + eventOffset.y))) {
     this.scrollTimer_.stop();
   } else if (!this.scrollTimer_.enabled) {
     this.scrollTimer_.start();
@@ -264,6 +292,7 @@ goog.fx.DragScrollSupport.prototype.onMouseMove = function(event) {
  * @private
  */
 goog.fx.DragScrollSupport.prototype.isInContainerBounds_ = function(x, y) {
+  'use strict';
   var containerBounds = this.containerBounds_;
   return containerBounds.left <= x &&
       containerBounds.left + containerBounds.width >= x &&
@@ -285,6 +314,7 @@ goog.fx.DragScrollSupport.prototype.isInContainerBounds_ = function(x, y) {
  */
 goog.fx.DragScrollSupport.prototype.calculateScrollDelta = function(
     coordinate, min, rangeLength) {
+  'use strict';
   var delta = 0;
   if (coordinate < min) {
     delta = -goog.fx.DragScrollSupport.SCROLL_STEP_;
@@ -297,6 +327,7 @@ goog.fx.DragScrollSupport.prototype.calculateScrollDelta = function(
 
 /** @override */
 goog.fx.DragScrollSupport.prototype.disposeInternal = function() {
+  'use strict';
   goog.fx.DragScrollSupport.superClass_.disposeInternal.call(this);
   this.eventHandler_.dispose();
   this.scrollTimer_.dispose();

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,12 +13,16 @@
 #include <vector>
 
 #include "base/containers/flat_set.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/types/expected.h"
 #include "components/password_manager/core/browser/credentials_cleaner.h"
 #include "components/password_manager/core/browser/hsts_query.h"
 #include "components/password_manager/core/browser/password_form.h"
-#include "components/password_manager/core/browser/password_store_consumer.h"
+#include "components/password_manager/core/browser/password_store/password_store_backend_error.h"
+#include "components/password_manager/core/browser/password_store/password_store_consumer.h"
+#include "components/password_manager/core/browser/password_store/stored_credential.h"
 
 namespace network {
 namespace mojom {
@@ -30,7 +34,7 @@ class PrefService;
 
 namespace password_manager {
 
-class PasswordStore;
+class PasswordStoreInterface;
 
 // This class is responsible for removing obsolete HTTP credentials that can
 // safely be deleted and reporting metrics about HTTP to HTTPS migration. This
@@ -60,10 +64,14 @@ class HttpCredentialCleaner : public PasswordStoreConsumer,
   // A preference from |prefs| is used to set the last time (in seconds) when
   // the cleaning was performed.
   HttpCredentialCleaner(
-      scoped_refptr<PasswordStore> store,
+      scoped_refptr<PasswordStoreInterface> store,
       base::RepeatingCallback<network::mojom::NetworkContext*()>
           network_context_getter,
       PrefService* prefs);
+
+  HttpCredentialCleaner(const HttpCredentialCleaner&) = delete;
+  HttpCredentialCleaner& operator=(const HttpCredentialCleaner&) = delete;
+
   ~HttpCredentialCleaner() override;
 
   // CredentialsCleaner:
@@ -81,15 +89,17 @@ class HttpCredentialCleaner : public PasswordStoreConsumer,
   using FormKey = std::tuple<std::string, PasswordForm::Scheme, std::u16string>;
 
   // PasswordStoreConsumer:
-  void OnGetPasswordStoreResults(
-      std::vector<std::unique_ptr<PasswordForm>> results) override;
+  void OnGetPasswordStoreResultsOrErrorFrom(
+      PasswordStoreInterface* store,
+      base::expected<std::vector<StoredCredential>, PasswordStoreBackendError>
+          results_or_error) override;
 
   // This function will inform us using |hsts_result| parameter if the |form|'s
   // host has HSTS enabled. |key| is |form|'s encoding which is used for
   // matching |form| with an HTTPS credential with the same FormKey.
   // Inside the function the metric counters are updated and, if needed, the
   // |form| is removed or migrated to HTTPS.
-  void OnHSTSQueryResult(std::unique_ptr<PasswordForm> form,
+  void OnHSTSQueryResult(PasswordForm form,
                          FormKey key,
                          HSTSResult hsts_result);
 
@@ -98,7 +108,7 @@ class HttpCredentialCleaner : public PasswordStoreConsumer,
   void SetPrefIfDone();
 
   // Clean-up is performed on |store_|.
-  scoped_refptr<PasswordStore> store_;
+  scoped_refptr<PasswordStoreInterface> store_;
 
   // Needed to create HSTS request.
   base::RepeatingCallback<network::mojom::NetworkContext*()>
@@ -106,7 +116,7 @@ class HttpCredentialCleaner : public PasswordStoreConsumer,
 
   // |prefs_| is not an owning pointer. It is used to record he last time (in
   // seconds) when the cleaning was performed.
-  PrefService* prefs_;
+  raw_ptr<PrefService> prefs_;
 
   // Map from (signon-realm excluding the protocol, Password::Scheme, username)
   // tuples of HTTPS forms to a list of passwords for that pair.
@@ -114,7 +124,7 @@ class HttpCredentialCleaner : public PasswordStoreConsumer,
 
   // Used to signal completion of the clean-up. It is null until
   // StartCleaning is called.
-  Observer* observer_ = nullptr;
+  raw_ptr<Observer> observer_ = nullptr;
 
   // The number of HTTP credentials processed after HSTS query results are
   // received.
@@ -125,8 +135,6 @@ class HttpCredentialCleaner : public PasswordStoreConsumer,
   size_t total_http_credentials_ = 0;
 
   base::WeakPtrFactory<HttpCredentialCleaner> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(HttpCredentialCleaner);
 };
 
 }  // namespace password_manager

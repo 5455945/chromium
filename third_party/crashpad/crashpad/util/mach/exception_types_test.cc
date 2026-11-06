@@ -1,4 +1,4 @@
-// Copyright 2015 The Crashpad Authors. All rights reserved.
+// Copyright 2015 The Crashpad Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,7 +20,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include "base/cxx17_backports.h"
+#include <iterator>
+
 #include "base/strings/stringprintf.h"
 #include "build/build_config.h"
 #include "gtest/gtest.h"
@@ -54,6 +55,9 @@ TEST(ExceptionTypes, ExcCrashRecoverOriginalException) {
     {0xa000000, 0, 0, SIGBUS},
     {0xb000000, 0, 0, SIGSEGV},
     {0xc000000, 0, 0, SIGSYS},
+    // A process SIGKILLed for exceeding a resource limit: only the low 20 bits
+    // of the original code[0] survive.
+    {0x9b4aaaa, EXC_RESOURCE, 0x4aaaa, SIGKILL},
     {0, 0, 0, 0},
 #if defined(ARCH_CPU_X86_FAMILY)
     {0xa10000d, EXC_BAD_ACCESS, EXC_I386_GPFLT, SIGBUS},
@@ -71,7 +75,7 @@ TEST(ExceptionTypes, ExcCrashRecoverOriginalException) {
     // TODO(macos_arm64): Add arm64 test data.
   };
 
-  for (size_t index = 0; index < base::size(kTestData); ++index) {
+  for (size_t index = 0; index < std::size(kTestData); ++index) {
     const auto& test_data = kTestData[index];
     SCOPED_TRACE(base::StringPrintf(
         "index %zu, code_0 0x%llx", index, test_data.code_0));
@@ -88,7 +92,7 @@ TEST(ExceptionTypes, ExcCrashRecoverOriginalException) {
 
   // Now make sure that ExcCrashRecoverOriginalException() properly ignores
   // optional arguments.
-  static_assert(base::size(kTestData) >= 1, "must have something to test");
+  static_assert(std::size(kTestData) >= 1, "must have something to test");
   const auto& test_data = kTestData[0];
   EXPECT_EQ(
       ExcCrashRecoverOriginalException(test_data.code_0, nullptr, nullptr),
@@ -122,8 +126,7 @@ TEST(ExceptionTypes, ExcCrashCouldContainException) {
   EXPECT_TRUE(ExcCrashCouldContainException(EXC_MACH_SYSCALL));
   EXPECT_TRUE(ExcCrashCouldContainException(EXC_RPC_ALERT));
   EXPECT_FALSE(ExcCrashCouldContainException(EXC_CRASH));
-  EXPECT_FALSE(ExcCrashCouldContainException(EXC_RESOURCE));
-  EXPECT_FALSE(ExcCrashCouldContainException(EXC_GUARD));
+  EXPECT_TRUE(ExcCrashCouldContainException(EXC_RESOURCE));
   EXPECT_FALSE(ExcCrashCouldContainException(EXC_CORPSE_NOTIFY));
   EXPECT_FALSE(ExcCrashCouldContainException(kMachExceptionSimulated));
 }
@@ -248,7 +251,7 @@ TEST(ExceptionTypes, ExceptionCodeForMetrics) {
     {0x00010000, 0x00010000, static_cast<int32_t>(0xffffffff)},
   };
 
-  for (size_t index = 0; index < base::size(kTestData); ++index) {
+  for (size_t index = 0; index < std::size(kTestData); ++index) {
     const auto& test_data = kTestData[index];
     SCOPED_TRACE(base::StringPrintf("index %zu, exception 0x%x, code_0 0x%llx",
                                     index,

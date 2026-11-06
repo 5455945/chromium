@@ -1,58 +1,123 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_TIMING_EVENT_TIMING_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_TIMING_EVENT_TIMING_H_
 
-#include <memory>
+#include <optional>
 
+#include "base/feature_list.h"
+#include "base/time/time.h"
+#include "base/types/pass_key.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/timing/window_performance.h"
+#include "third_party/blink/renderer/platform/scheduler/public/task_attribution_tracker.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
 namespace blink {
 
+CORE_EXPORT BASE_DECLARE_FEATURE(kEventTimingUseTargetFrame);
+
 class Event;
+class LocalFrame;
+class PerformanceEventTiming;
+
+class UIEventTiming;
+class NavigationEventTiming;
 
 // Event timing collects and records the event start time, processing start time
-// and processing end time of long-latency events, providing a tool to evalute
+// and processing end time of long-latency events, providing a tool to evaluate
 // input latency.
-// See also: https://github.com/wicg/event-timing
+// See also: https://github.io/event-timing
 class CORE_EXPORT EventTiming final {
-  USING_FAST_MALLOC(EventTiming);
+  STACK_ALLOCATED();
 
  public:
-  // Processes an event that will be dispatched. Notifies the
-  // InteractiveDetector if it needs to be logged into input delay histograms.
-  // Returns an object only if the event is relevant for the EventTiming API.
-  static std::unique_ptr<EventTiming> Create(LocalDOMWindow*, const Event&);
+  EventTiming(base::PassKey<UIEventTiming>,
+              LocalFrame* frame,
+              const Event& event);
+  EventTiming(base::PassKey<NavigationEventTiming>,
+              LocalFrame* frame,
+              const Event& event);
+  ~EventTiming();
 
-  explicit EventTiming(base::TimeTicks processing_start,
-                       base::TimeTicks event_timestamp,
-                       WindowPerformance* performance,
-                       bool should_log);
   EventTiming(const EventTiming&) = delete;
   EventTiming& operator=(const EventTiming&) = delete;
 
-  // Notifies the Performance object that the event has been dispatched.
-  void DidDispatchEvent(const Event&, Document& document);
+  std::optional<PerformanceTimelineEntryIdInfo> GetInteractionIdInfo() const {
+    return entry_ ? entry_->GetInteractionIdInfo() : std::nullopt;
+  }
 
-  // The caller owns the |clock| which must outlive the EventTiming.
-  static void SetTickClockForTesting(const base::TickClock* clock);
-
-  // Returns true when the type of the event is included in the EventTiming.
-  static bool IsEventTypeForEventTiming(const Event& event);
+  PerformanceEventTiming* GetEntry() const { return entry_; }
 
  private:
-  // The time the first event handler or default action started to execute.
-  base::TimeTicks processing_start_;
-  // The event timestamp to be used in EventTiming and in histograms.
-  base::TimeTicks event_timestamp_;
+  EventTiming(LocalFrame* frame, const Event& event);
 
-  Persistent<WindowPerformance> performance_;
+  WindowPerformance* performance_ = nullptr;
+  const Event* event_ = nullptr;
+  PerformanceEventTiming* entry_ = nullptr;
+  std::optional<scheduler::TaskAttributionTracker::TaskScope> task_scope_;
+};
 
-  bool should_log_event_;
+class CORE_EXPORT UIEventTiming final {
+  STACK_ALLOCATED();
+
+ public:
+  UIEventTiming(LocalFrame* frame, const Event& event);
+  UIEventTiming(LocalFrame* handling_frame,
+                LocalFrame* target_frame,
+                const Event& event);
+
+  std::optional<PerformanceTimelineEntryIdInfo> GetInteractionIdInfo() const {
+    return timing_ ? timing_->GetInteractionIdInfo() : std::nullopt;
+  }
+
+  PerformanceEventTiming* GetEntry() const {
+    return timing_ ? timing_->GetEntry() : nullptr;
+  }
+
+ private:
+  std::optional<EventTiming> timing_;
+};
+
+class CORE_EXPORT NavigationEventTiming final {
+  STACK_ALLOCATED();
+
+ public:
+  NavigationEventTiming(LocalFrame* frame, const Event& event);
+
+  std::optional<PerformanceTimelineEntryIdInfo> GetInteractionIdInfo() const {
+    return timing_ ? timing_->GetInteractionIdInfo() : std::nullopt;
+  }
+
+  PerformanceEventTiming* GetEntry() const {
+    return timing_ ? timing_->GetEntry() : nullptr;
+  }
+
+ private:
+  std::optional<EventTiming> timing_;
+};
+
+// Scoper to track the queued-to-main-thread timestamp of the WebInputEvent
+// currently being dispatched by WidgetEventHandler. This is used by
+// EventTiming to record accurate input delays even for events targeted at
+// child frames.
+class CORE_EXPORT EventQueuedTimestampScope {
+  STACK_ALLOCATED();
+
+ public:
+  explicit EventQueuedTimestampScope(base::TimeTicks queued_time);
+  ~EventQueuedTimestampScope();
+  EventQueuedTimestampScope(const EventQueuedTimestampScope&) = delete;
+  EventQueuedTimestampScope& operator=(const EventQueuedTimestampScope&) =
+      delete;
+
+  static base::TimeTicks CurrentQueuedTimestamp();
+
+ private:
+  base::TimeTicks previous_queued_time_;
+  static base::TimeTicks g_current_queued_time_;
 };
 
 }  // namespace blink

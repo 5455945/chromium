@@ -25,25 +25,32 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_DOM_EVENTS_EVENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_DOM_EVENTS_EVENT_H_
 
+#include "base/check_op.h"
+#include "base/time/time.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/events/event_dispatch_result.h"
-#include "third_party/blink/renderer/core/probe/async_task_id.h"
+#include "third_party/blink/renderer/core/probe/async_task_context.h"
+#include "third_party/blink/renderer/core/url/dom_origin_utils.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 
 namespace blink {
 
+class Animation;
+class DOMOrigin;
 class DOMWrapperWorld;
 class EventDispatcher;
 class EventInit;
 class EventPath;
 class EventTarget;
 class Node;
+class PseudoElement;
+class CSSPseudoElement;
 class ScriptState;
-class ScriptValue;
 
-class CORE_EXPORT Event : public ScriptWrappable {
+class CORE_EXPORT Event : public ScriptWrappable, public DOMOriginUtils {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
@@ -57,17 +64,11 @@ class CORE_EXPORT Event : public ScriptWrappable {
     kNo,
   };
 
-  enum PhaseType {
+  enum class PhaseType : uint8_t {
     kNone = 0,
     kCapturingPhase = 1,
     kAtTarget = 2,
     kBubblingPhase = 3
-  };
-
-  enum RailsMode {
-    kRailsModeFree = 0,
-    kRailsModeHorizontal = 1,
-    kRailsModeVertical = 2
   };
 
   enum class ComposedMode {
@@ -75,7 +76,7 @@ class CORE_EXPORT Event : public ScriptWrappable {
     kScoped,
   };
 
-  enum class PassiveMode {
+  enum class PassiveMode : uint8_t {
     // Not passive, default initialized.
     kNotPassiveDefault,
     // Not passive, explicitly specified.
@@ -138,12 +139,29 @@ class CORE_EXPORT Event : public ScriptWrappable {
   const AtomicString& type() const { return type_; }
   void SetType(const AtomicString& type) { type_ = type; }
 
-  EventTarget* target() const { return target_.Get(); }
+  // Web exposed target of the event. Can't be a pseudo-element.
+  EventTarget* target() const;
   void SetTarget(EventTarget*);
+
+
+  // This is the target that the event was dispatched to, without any
+  // retargeting. Can be a pseudo-element. Shouldn't we web exposed.
+  EventTarget* RawTarget() const { return target_.Get(); }
+
+  // Converts |pseudo_element_target| to its CSSPseudoElement wrapper via
+  // CSSPseudoElement::From() and stores it. Called while the pseudo is still
+  // connected (during event path construction), so From() won't crash.
+  void SetPseudoElementTarget(PseudoElement* pseudo_element_target);
 
   EventTarget* currentTarget() const;
   void SetCurrentTarget(EventTarget* current_target) {
     current_target_ = current_target;
+  }
+  void SetInvocationTargetInShadowTree(bool is_in_shadow_tree) {
+    invocation_target_in_shadow_tree_ = is_in_shadow_tree;
+  }
+  bool invocationTargetInShadowTree() const {
+    return invocation_target_in_shadow_tree_;
   }
 
   // This callback is invoked when an event listener has been dispatched
@@ -152,21 +170,23 @@ class CORE_EXPORT Event : public ScriptWrappable {
   // is dangerous.
   virtual void DoneDispatchingEventAtCurrentTarget() {}
 
-  void SetRelatedTargetIfExists(EventTarget* related_target);
+  virtual EventTarget* relatedTarget() const { return nullptr; }
+  virtual void SetRelatedTarget(EventTarget*) {}
+  virtual Animation* GetAnimation() const { return nullptr; }
 
-  uint8_t eventPhase() const { return event_phase_; }
-  void SetEventPhase(uint8_t event_phase) { event_phase_ = event_phase; }
+  PhaseType eventPhase() const { return event_phase_; }
+  void SetEventPhase(PhaseType event_phase) { event_phase_ = event_phase; }
 
   void SetFireOnlyCaptureListenersAtTarget(
       bool fire_only_capture_listeners_at_target) {
-    DCHECK_EQ(event_phase_, kAtTarget);
+    DCHECK_EQ(event_phase_, PhaseType::kAtTarget);
     fire_only_capture_listeners_at_target_ =
         fire_only_capture_listeners_at_target;
   }
 
   void SetFireOnlyNonCaptureListenersAtTarget(
       bool fire_only_non_capture_listeners_at_target) {
-    DCHECK_EQ(event_phase_, kAtTarget);
+    DCHECK_EQ(event_phase_, PhaseType::kAtTarget);
     fire_only_non_capture_listeners_at_target_ =
         fire_only_non_capture_listeners_at_target;
   }
@@ -231,6 +251,8 @@ class CORE_EXPORT Event : public ScriptWrappable {
   virtual bool IsBeforeUnloadEvent() const;
   virtual bool IsErrorEvent() const;
 
+  virtual bool IsPatchEvent() const;
+
   bool PropagationStopped() const {
     return propagation_stopped_ || immediate_propagation_stopped_;
   }
@@ -253,26 +275,40 @@ class CORE_EXPORT Event : public ScriptWrappable {
   const Event* UnderlyingEvent() const { return underlying_event_.Get(); }
   void SetUnderlyingEvent(const Event*);
 
-  bool HasEventPath() { return event_path_; }
+  bool HasEventPath() const { return static_cast<bool>(event_path_); }
   EventPath& GetEventPath() const {
     DCHECK(event_path_);
     return *event_path_;
   }
   void InitEventPath(Node&);
 
-  ScriptValue path(ScriptState*) const;
   HeapVector<Member<EventTarget>> composedPath(ScriptState*) const;
 
-  bool IsBeingDispatched() const { return eventPhase(); }
+  bool IsBeingDispatched() const { return eventPhase() != PhaseType::kNone; }
 
   // Events that must not leak across isolated world, similar to how
   // ErrorEvent behaves, can override this method.
+  //
+  // Every path that surfaces an `Event` to script must consult this. Ordinary
+  // event listeners do so in `JSBasedEventListener::Invoke()`, but
+  // `EventTarget::FireEventListeners()` itself does not, so a
+  // `NativeEventListener` that forwards the raw `Event` on to script (e.g. the
+  // one backing `EventTarget#when()`) is responsible for checking it directly.
   virtual bool CanBeDispatchedInWorld(const DOMWrapperWorld&) const {
     return true;
   }
 
   bool isTrusted() const { return is_trusted_; }
   void SetTrusted(bool value) { is_trusted_ = value; }
+
+  // The spec (https://www.w3.org/TR/uievents/#legacy-uievent-event-order)
+  // says that `click` events and `keydown` events should generated *trusted*
+  // `DOMActivate` and `click` synthetic events. That is so support legacy
+  // behavior that click events would run default event handler behavior.
+  // This function checks whether the provided event is "actually" trusted,
+  // in that its underlying events are all trusted, including the originating
+  // event.
+  bool IsFullyTrusted() const;
 
   void SetComposed(bool composed) {
     DCHECK(!IsBeingDispatched());
@@ -306,55 +342,72 @@ class CORE_EXPORT Event : public ScriptWrappable {
 
   virtual DispatchEventResult DispatchEvent(EventDispatcher&);
 
-  probe::AsyncTaskId* async_task_id() { return &async_task_id_; }
+  probe::AsyncTaskContext* async_task_context() { return &async_task_context_; }
+
+  // DOMOriginUtils override:
+  DOMOrigin* GetDOMOrigin(LocalDOMWindow*) const override { return nullptr; }
 
   void Trace(Visitor*) const override;
 
  protected:
   virtual void ReceivedTarget();
 
+  // Returns the CSSPseudoElement that this event originated from, if any.
+  // Returns null if the originating target is a real element or the feature
+  // is disabled. This accessor is protected: only specific event subclasses
+  // should expose it as a public web API.
+  CSSPseudoElement* pseudoTarget() const;
+
   void SetBubbles(bool bubble) { bubbles_ = bubble; }
 
   PassiveMode HandlingPassive() const { return handling_passive_; }
 
+  // Retargets the provided `node` to prevent it from being leaked when this
+  // event is fired on a node inside a ShadowRoot. If this is called during
+  // event dispatching, where currentTarget() has a value, `node` is retargeted
+  // against currentTarget(). Otherwise, it is retargeted against the node's
+  // document.
+  Node* Retarget(Node* node) const;
+
  private:
-  enum EventPathMode { kEmptyAfterDispatch, kNonEmptyAfterDispatch };
-
-  HeapVector<Member<EventTarget>> PathInternal(ScriptState*,
-                                               EventPathMode) const;
-
   AtomicString type_;
-  unsigned bubbles_ : 1;
-  unsigned cancelable_ : 1;
-  unsigned composed_ : 1;
+  bool bubbles_ : 1;
+  bool cancelable_ : 1;
+  bool composed_ : 1;
 
-  unsigned propagation_stopped_ : 1;
-  unsigned immediate_propagation_stopped_ : 1;
-  unsigned default_prevented_ : 1;
-  unsigned default_handled_ : 1;
-  unsigned was_initialized_ : 1;
-  unsigned is_trusted_ : 1;
+  bool propagation_stopped_ : 1;
+  bool immediate_propagation_stopped_ : 1;
+  bool default_prevented_ : 1;
+  bool default_handled_ : 1;
+  bool was_initialized_ : 1;
+  bool is_trusted_ : 1;
 
   // Whether preventDefault was called on uncancelable event.
-  unsigned prevent_default_called_on_uncancelable_event_ : 1;
+  bool prevent_default_called_on_uncancelable_event_ : 1;
 
   // Whether any of listeners have thrown an exception or not.
   // Corresponds to |legacyOutputDidListenersThrowFlag| in DOM standard.
   // https://dom.spec.whatwg.org/#dispatching-events
   // https://dom.spec.whatwg.org/#concept-event-listener-inner-invoke
-  unsigned legacy_did_listeners_throw_flag_ : 1;
+  bool legacy_did_listeners_throw_flag_ : 1;
 
-  unsigned fire_only_capture_listeners_at_target_ : 1;
-  unsigned fire_only_non_capture_listeners_at_target_ : 1;
+  bool fire_only_capture_listeners_at_target_ : 1;
+  bool fire_only_non_capture_listeners_at_target_ : 1;
 
-  unsigned copy_event_path_from_underlying_event_ : 1;
+  bool copy_event_path_from_underlying_event_ : 1;
+
+  bool invocation_target_in_shadow_tree_ : 1;
 
   PassiveMode handling_passive_;
-  uint8_t event_phase_;
-  probe::AsyncTaskId async_task_id_;
+  PhaseType event_phase_;
+  probe::AsyncTaskContext async_task_context_;
 
   Member<EventTarget> current_target_;
   Member<EventTarget> target_;
+  // Set eagerly in SetPseudoElementTarget() while the pseudo is connected.
+  // Storing CSSPseudoElement directly avoids calling From() on a possibly
+  // disconnected pseudo later during dispatch.
+  Member<CSSPseudoElement> pseudo_element_target_;
   Member<const Event> underlying_event_;
   Member<EventPath> event_path_;
   // The monotonic platform time in seconds, for input events it is the

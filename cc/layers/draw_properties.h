@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,9 @@
 #include <stddef.h>
 
 #include "cc/trees/occlusion.h"
+#include "ui/gfx/geometry/mask_filter_info.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/gfx/mask_filter_info.h"
-#include "ui/gfx/transform.h"
+#include "ui/gfx/geometry/transform.h"
 
 namespace cc {
 
@@ -21,7 +21,7 @@ struct CC_EXPORT DrawProperties {
   ~DrawProperties();
 
   // Transforms objects from content space to target surface space, where
-  // this layer would be drawn.
+  // this layer would be drawn. Also known as draw transform.
   gfx::Transform target_space_transform;
 
   // Transforms objects from content space to screen space (viewport space).

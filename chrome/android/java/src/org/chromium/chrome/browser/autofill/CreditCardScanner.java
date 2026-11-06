@@ -1,58 +1,66 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.autofill;
 
-import org.chromium.content_public.browser.WebContents;
+import android.content.Context;
+
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.ui.base.IntentRequestTracker;
 
 /**
  * Helper for detecting whether the device supports scanning credit cards and for scanning credit
  * cards. The default implementation cannot scan cards. An implementing subclass must provide a
  * factory that builds its instances.
  */
+@NullMarked
 public class CreditCardScanner {
     /**
      * Can be used to build subclasses of the scanner without the user of the class knowing about
      * the subclass name.
      */
-    private static Factory sFactory;
+    private static @Nullable Factory sFactory;
 
     /** The delegate to notify of scanning result. */
     protected final Delegate mDelegate;
-
-    /** The web contents that's requesting a scan. Used in subclass. */
-    protected final WebContents mWebContents;
 
     /** Builds instances of credit card scanners. */
     public interface Factory {
         /**
          * Builds an instance of credit card scanner.
          *
-         * @param webContents The web contents that are requesting a scan.
-         * @param delegate    The delegate to notify of scanning result.
+         * @param delegate The delegate to notify of scanning result.
          * @return An object that can scan a credit card.
          */
-        CreditCardScanner create(WebContents webContents, Delegate delegate);
+        CreditCardScanner create(Delegate delegate);
     }
 
     /** The delegate for credit card scanning. */
     public interface Delegate {
-        /**
-         * Notifies the delegate that scanning was cancelled.
-         */
+        /** Notifies the delegate that scanning was cancelled. */
         void onScanCancelled();
 
         /**
          * Notifies the delegate that scanning was successful.
          *
-         * @param cardHolderName  The card holder name.
-         * @param cardNumber      Credit card number.
+         * @param cardHolderName The card holder name.
+         * @param cardNumber Credit card number.
          * @param expirationMonth Expiration month in the range [1, 12].
-         * @param expirationYear  Expiration year, e.g. 2000.
+         * @param expirationYear Expiration year, e.g. 2000.
          */
         void onScanCompleted(
                 String cardHolderName, String cardNumber, int expirationMonth, int expirationYear);
+
+        /**
+         * Returns the context of the window scanning was requested from, e.g. an Activity (see
+         * {@link org.chromium.ui.base.WindowAndroid#getContext()}). Used for display-specific
+         * checks such as Android Auto projection.
+         *
+         * @return The window context, or null if the window is gone or no window is attached.
+         */
+        @Nullable Context getWindowContext();
     }
 
     /**
@@ -67,22 +75,19 @@ public class CreditCardScanner {
     /**
      * Creates an instance of a credit card scanner.
      *
-     * @param webContents The web contents that are requesting a scan.
-     * @param delegate    The delegate to notify of scanning result.
+     * @param delegate The delegate to notify of scanning result.
      * @return An object that can scan a credit card.
      */
-    public static CreditCardScanner create(WebContents webContents, Delegate delegate) {
-        return sFactory != null ? sFactory.create(webContents, delegate)
-                                : new CreditCardScanner(webContents, delegate);
+    public static CreditCardScanner create(Delegate delegate) {
+        return sFactory != null ? sFactory.create(delegate) : new CreditCardScanner(delegate);
     }
 
     /**
      * Constructor for the credit card scanner.
-     *  @param webContents The web contents that are requesting a scan.
-     * @param delegate    The delegate to notify of scanning result.
+     *
+     * @param delegate The delegate to notify of scanning result.
      */
-    protected CreditCardScanner(WebContents webContents, Delegate delegate) {
-        mWebContents = webContents;
+    protected CreditCardScanner(Delegate delegate) {
         mDelegate = delegate;
     }
 
@@ -97,8 +102,10 @@ public class CreditCardScanner {
 
     /**
      * Scans a credit card. Will invoke a delegate callback with the result.
+     *
+     * @param tracker The intent request tracker used to show the scanner intent.
      */
-    public void scan() {
+    public void scan(@Nullable IntentRequestTracker tracker) {
         mDelegate.onScanCancelled();
     }
 }

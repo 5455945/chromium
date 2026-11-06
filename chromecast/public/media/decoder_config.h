@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,13 @@
 #define CHROMECAST_PUBLIC_MEDIA_DECODER_CONFIG_H_
 
 #include <stdint.h>
+
 #include <vector>
 
 #include "cast_decrypt_config.h"
 #include "stream_id.h"
 
-namespace chromecast {
-namespace media {
+namespace chromecast::media {
 
 // Maximum audio bytes per sample.
 static const int kMaxBytesPerSample = 4;
@@ -34,9 +34,11 @@ enum AudioCodec : int {
   kCodecDTS,
   kCodecFLAC,
   kCodecMpegHAudio,
+  kCodecDTSXP2,
+  kCodecDTSE,
 
   kAudioCodecMin = kAudioCodecUnknown,
-  kAudioCodecMax = kCodecMpegHAudio,
+  kAudioCodecMax = kCodecDTSE,
 };
 
 enum class ChannelLayout {
@@ -87,9 +89,10 @@ enum SampleFormat : int {
   kSampleFormatPlanarF32,  // Float 32-bit planar.
   kSampleFormatPlanarS32,  // Signed 32-bit planar.
   kSampleFormatS24,        // Signed 24-bit.
+  kSampleFormatPlanarU8,   // Unsigned 8-bit w/ bias of 128 planar.
 
   kSampleFormatMin = kUnknownSampleFormat,
-  kSampleFormatMax = kSampleFormatS24,
+  kSampleFormatMax = kSampleFormatPlanarU8,
 };
 
 enum VideoCodec : int {
@@ -129,19 +132,28 @@ enum VideoProfile : int {
   kVP9Profile1,
   kVP9Profile2,
   kVP9Profile3,
-  kDolbyVisionCompatible_EL_MD,
-  kDolbyVisionCompatible_BL_EL_MD,
-  kDolbyVisionNonCompatible_BL_MD,
-  kDolbyVisionNonCompatible_BL_EL_MD,
+  kDolbyVisionProfile0,
+  kDolbyVisionProfile5,
+  kDolbyVisionProfile7,
   kHEVCMain,
   kHEVCMain10,
   kHEVCMainStillPicture,
   kAV1ProfileMain,
   kAV1ProfileHigh,
   kAV1ProfilePro,
+  kDolbyVisionProfile8,
+  kDolbyVisionProfile9,
+  kHEVCRext,
+  kHEVCHighThroughput,
+  kHEVCMultiviewMain,
+  kHEVCScalableMain,
+  kHEVC3dMain,
+  kHEVCScreenExtended,
+  kHEVCScalableRext,
+  kHEVCHighThroughputScreenExtended,
 
   kVideoProfileMin = kVideoProfileUnknown,
-  kVideoProfileMax = kAV1ProfilePro,
+  kVideoProfileMax = kHEVCHighThroughputScreenExtended,
 };
 
 struct CodecProfileLevel {
@@ -219,7 +231,7 @@ enum class RangeID : int8_t {
   INVALID = 0,
   // Limited Rec. 709 color range with RGB values ranging from 16 to 235.
   LIMITED = 1,
-  // Full RGB color range with RGB valees from 0 to 255.
+  // Full RGB color range with RGB values from 0 to 255.
   FULL = 2,
   // Range is defined by TransferID/MatrixID.
   DERIVED = 3,
@@ -227,9 +239,9 @@ enum class RangeID : int8_t {
 };
 // ---- Begin copy/paste from //ui/gfx/color_space.h ----
 
-// ---- Begin copy/paste from media/base/hdr_metadata.h ----
-// SMPTE ST 2086 mastering metadata.
-struct MasteringMetadata {
+// ---- Begin copy/paste from //ui/gfx/hdr_metadata.h ----
+// SMPTE ST 2086 color volume metadata.
+struct ColorVolumeMetadata {
   float primary_r_chromaticity_x = 0;
   float primary_r_chromaticity_y = 0;
   float primary_g_chromaticity_x = 0;
@@ -241,27 +253,32 @@ struct MasteringMetadata {
   float luminance_max = 0;
   float luminance_min = 0;
 
-  MasteringMetadata();
-  MasteringMetadata(const MasteringMetadata& rhs);
+  ColorVolumeMetadata();
+  ColorVolumeMetadata(const ColorVolumeMetadata& rhs);
+  ColorVolumeMetadata& operator=(const ColorVolumeMetadata& rhs);
 };
 
 // HDR metadata common for HDR10 and WebM/VP9-based HDR formats.
 struct HDRMetadata {
-  MasteringMetadata mastering_metadata;
+  ColorVolumeMetadata color_volume_metadata;
   unsigned max_content_light_level = 0;
   unsigned max_frame_average_light_level = 0;
 
   HDRMetadata();
   HDRMetadata(const HDRMetadata& rhs);
+  HDRMetadata& operator=(const HDRMetadata& rhs);
 };
 
-inline MasteringMetadata::MasteringMetadata() {}
-inline MasteringMetadata::MasteringMetadata(const MasteringMetadata& rhs) =
+inline ColorVolumeMetadata::ColorVolumeMetadata() = default;
+inline ColorVolumeMetadata::ColorVolumeMetadata(const ColorVolumeMetadata&) =
     default;
+inline ColorVolumeMetadata& ColorVolumeMetadata::operator=(
+    const ColorVolumeMetadata&) = default;
 
-inline HDRMetadata::HDRMetadata() {}
-inline HDRMetadata::HDRMetadata(const HDRMetadata& rhs) = default;
-// ---- End copy/paste from media/base/hdr_metadata.h ----
+inline HDRMetadata::HDRMetadata() = default;
+inline HDRMetadata::HDRMetadata(const HDRMetadata&) = default;
+inline HDRMetadata& HDRMetadata::operator=(const HDRMetadata&) = default;
+// ---- End copy/paste from //ui/gfx/hdr_metadata.h ----
 
 constexpr int kChannelAll = -1;
 
@@ -278,37 +295,35 @@ struct AudioConfig {
   }
 
   // Stream id.
-  StreamId id;
+  StreamId id = StreamId::kPrimary;
   // Audio codec.
-  AudioCodec codec;
+  AudioCodec codec = AudioCodec::kAudioCodecUnknown;
   // Audio channel layout.
-  ChannelLayout channel_layout;
+  ChannelLayout channel_layout = ChannelLayout::UNSUPPORTED;
   // The format of each audio sample.
-  SampleFormat sample_format;
+  SampleFormat sample_format = SampleFormat::kUnknownSampleFormat;
   // Number of bytes in each channel.
-  int bytes_per_channel;
+  int bytes_per_channel = 0;
   // Number of channels in this audio stream.
-  int channel_number;
+  int channel_number = 0;
   // Number of audio samples per second.
-  int samples_per_second;
+  int samples_per_second = 0;
   // Extra data buffer for certain codec initialization.
   std::vector<uint8_t> extra_data;
   // Encryption scheme (if any) used for the content.
-  EncryptionScheme encryption_scheme;
+  EncryptionScheme encryption_scheme = EncryptionScheme::kUnencrypted;
+  // Hardware AV sync flag.
+  bool use_hw_av_sync = false;
+  // The session id which the Android AudioTrack will be attached to. If not
+  // valid, a new one will be atomically generated by the Android system.
+  // For Cast Connect Multizone use case, if the app uses hardware av sync,
+  // mediashell will get the id of the media session opened by the app.
+  int audio_track_session_id = 0;
 };
 
-inline AudioConfig::AudioConfig()
-    : id(kPrimary),
-      codec(kAudioCodecUnknown),
-      channel_layout(ChannelLayout::UNSUPPORTED),
-      sample_format(kUnknownSampleFormat),
-      bytes_per_channel(0),
-      channel_number(0),
-      samples_per_second(0),
-      encryption_scheme(EncryptionScheme::kUnencrypted) {}
+inline AudioConfig::AudioConfig() = default;
 inline AudioConfig::AudioConfig(const AudioConfig& other) = default;
-inline AudioConfig::~AudioConfig() {
-}
+inline AudioConfig::~AudioConfig() = default;
 
 // TODO(erickung): Remove constructor once CMA backend implementation does't
 // create a new object to reset the configuration and use IsValidConfig() to
@@ -323,19 +338,21 @@ struct VideoConfig {
   }
 
   // Stream Id.
-  StreamId id;
+  StreamId id = StreamId::kPrimary;
   // Video codec.
-  VideoCodec codec;
+  VideoCodec codec = VideoCodec::kVideoCodecUnknown;
   // Video codec profile.
-  VideoProfile profile;
+  VideoProfile profile = VideoProfile::kVideoProfileUnknown;
+  // Video codec level.
+  uint32_t codec_profile_level = 0;
   // Additional video config for the video stream if available. Consumers of
   // this structure should make an explicit copy of |additional_config| if it
   // will be used after SetConfig() finishes.
-  VideoConfig* additional_config;
+  VideoConfig* additional_config = nullptr;
   // Extra data buffer for certain codec initialization.
   std::vector<uint8_t> extra_data;
   // Encryption scheme (if any) used for the content.
-  EncryptionScheme encryption_scheme;
+  EncryptionScheme encryption_scheme = EncryptionScheme::kUnencrypted;
 
   // ColorSpace info
   PrimaryID primaries = PrimaryID::UNSPECIFIED;
@@ -345,19 +362,15 @@ struct VideoConfig {
 
   bool have_hdr_metadata = false;
   HDRMetadata hdr_metadata;
+
+  // Info about the width and height, in pixels.
+  int width = 0;
+  int height = 0;
 };
 
-inline VideoConfig::VideoConfig()
-    : id(kPrimary),
-      codec(kVideoCodecUnknown),
-      profile(kVideoProfileUnknown),
-      additional_config(nullptr),
-      encryption_scheme(EncryptionScheme::kUnencrypted) {}
-
+inline VideoConfig::VideoConfig() = default;
 inline VideoConfig::VideoConfig(const VideoConfig& other) = default;
-
-inline VideoConfig::~VideoConfig() {
-}
+inline VideoConfig::~VideoConfig() = default;
 
 inline bool IsValidConfig(const AudioConfig& config) {
   return config.codec >= kAudioCodecMin && config.codec <= kAudioCodecMax &&
@@ -365,8 +378,9 @@ inline bool IsValidConfig(const AudioConfig& config) {
          config.channel_layout != ChannelLayout::UNSUPPORTED &&
          config.sample_format >= kSampleFormatMin &&
          config.sample_format <= kSampleFormatMax &&
+         config.channel_number > 0 && config.channel_number <= 32 &&
          ((config.sample_format != kUnknownSampleFormat &&
-           config.channel_number > 0 && config.bytes_per_channel > 0 &&
+           config.bytes_per_channel > 0 &&
            config.bytes_per_channel <= kMaxBytesPerSample) ||
           config.channel_layout == ChannelLayout::BITSTREAM) &&
          config.samples_per_second > 0 &&
@@ -374,12 +388,10 @@ inline bool IsValidConfig(const AudioConfig& config) {
 }
 
 inline bool IsValidConfig(const VideoConfig& config) {
-  return config.codec >= kVideoCodecMin &&
-      config.codec <= kVideoCodecMax &&
-      config.codec != kVideoCodecUnknown;
+  return config.codec >= kVideoCodecMin && config.codec <= kVideoCodecMax &&
+         config.codec != kVideoCodecUnknown;
 }
 
-}  // namespace media
-}  // namespace chromecast
+}  // namespace chromecast::media
 
 #endif  // CHROMECAST_PUBLIC_MEDIA_DECODER_CONFIG_H_

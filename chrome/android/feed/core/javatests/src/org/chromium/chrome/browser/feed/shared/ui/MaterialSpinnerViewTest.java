@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,16 +16,12 @@ import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.Robolectric;
-import org.robolectric.annotation.Config;
-import org.robolectric.annotation.LooperMode;
 
+import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.R;
-import org.chromium.testing.local.LocalRobolectricTestRunner;
 
 /** Tests for {@link MaterialSpinnerView}. */
-@RunWith(LocalRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
-@LooperMode(LooperMode.Mode.PAUSED)
+@RunWith(BaseRobolectricTestRunner.class)
 public class MaterialSpinnerViewTest {
     private FrameLayout mLayout;
     private MaterialSpinnerView mMaterialSpinnerView;

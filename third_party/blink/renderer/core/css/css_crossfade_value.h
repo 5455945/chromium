@@ -33,29 +33,51 @@
 
 namespace blink {
 
+class ImageResourceObserver;
+class ResourceFetcher;
+class StyleResolverState;
+
 namespace cssvalue {
 
 class CORE_EXPORT CSSCrossfadeValue final : public CSSImageGeneratorValue {
  public:
-  CSSCrossfadeValue(CSSValue* from_value,
-                    CSSValue* to_value,
-                    CSSPrimitiveValue* percentage_value);
+  CSSCrossfadeValue(
+      bool is_prefixed_variant,
+      HeapVector<std::pair<Member<CSSValue>, Member<CSSPrimitiveValue>>>
+          image_and_percentages);
   ~CSSCrossfadeValue();
 
-  CSSValue& From() const { return *from_value_; }
-  CSSValue& To() const { return *to_value_; }
-  CSSPrimitiveValue& Percentage() const { return *percentage_value_; }
+  const HeapVector<std::pair<Member<CSSValue>, Member<CSSPrimitiveValue>>>&
+  GetImagesAndPercentages() const {
+    return image_and_percentages_;
+  }
+  bool IsPrefixedVariant() const { return is_prefixed_variant_; }
+
+  bool HasClients() const { return !Clients().empty(); }
+  ImageResourceObserver* GetObserverProxy();
 
   String CustomCSSText() const;
-  bool HasFailedOrCanceledSubresources() const;
+  bool HasFailedOrCanceledSubresources(ResourceFetcher*) const;
   bool Equals(const CSSCrossfadeValue&) const;
+
+  const CSSCrossfadeValue& ResolveValuesIfNeeded(
+      const StyleResolverState&) const;
+  CSSCrossfadeValue& ResolveValuesIfNeeded(const StyleResolverState&);
+
+  bool HasRandomFunctions() const;
 
   void TraceAfterDispatch(Visitor*) const;
 
  private:
-  Member<CSSValue> from_value_;
-  Member<CSSValue> to_value_;
-  Member<CSSPrimitiveValue> percentage_value_;
+  CSSCrossfadeValue* ResolveValuesAndCreateCopyIfNeeded(
+      const StyleResolverState&) const;
+
+  class ObserverProxy;
+
+  bool is_prefixed_variant_;  // -webkit-cross-fade() instead of cross-fade()
+  HeapVector<std::pair<Member<CSSValue>, Member<CSSPrimitiveValue>>>
+      image_and_percentages_;
+  Member<ObserverProxy> observer_proxy_;
 };
 
 }  // namespace cssvalue

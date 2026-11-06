@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,18 @@
 
 #include "components/metrics/metrics_reporting_service.h"
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include <string_view>
+
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
+#include "components/background_task_scheduler/task_ids.h"
+#include "components/metrics/metrics_logs_event_manager.h"
 #include "components/metrics/metrics_pref_names.h"
 #include "components/metrics/metrics_service_client.h"
+#include "components/metrics/server_urls.h"
 #include "components/metrics/unsent_log_store_metrics_impl.h"
-#include "components/metrics/url_constants.h"
 #include "components/prefs/pref_registry_simple.h"
 
 namespace metrics {
@@ -24,16 +28,22 @@ void MetricsReportingService::RegisterPrefs(PrefRegistrySimple* registry) {
   MetricsLogStore::RegisterPrefs(registry);
 }
 
-MetricsReportingService::MetricsReportingService(MetricsServiceClient* client,
-                                                 PrefService* local_state)
+MetricsReportingService::MetricsReportingService(
+    MetricsServiceClient* client,
+    PrefService* local_state,
+    MetricsLogsEventManager* logs_event_manager_)
     : ReportingService(client,
                        local_state,
-                       client->GetStorageLimits().max_ongoing_log_size),
+                       client->GetStorageLimits()
+                           .ongoing_log_queue_limits.max_log_size_bytes,
+                       logs_event_manager_,
+                       background_task::TaskIds::UMA_UPLOAD_JOB_ID),
       metrics_log_store_(local_state,
                          client->GetStorageLimits(),
-                         client->GetUploadSigningKey()) {}
+                         client->GetUploadSigningKey(),
+                         logs_event_manager_) {}
 
-MetricsReportingService::~MetricsReportingService() {}
+MetricsReportingService::~MetricsReportingService() = default;
 
 LogStore* MetricsReportingService::log_store() {
   return &metrics_log_store_;
@@ -47,8 +57,8 @@ GURL MetricsReportingService::GetInsecureUploadUrl() const {
   return client()->GetInsecureMetricsServerUrl();
 }
 
-base::StringPiece MetricsReportingService::upload_mime_type() const {
-  return kDefaultMetricsMimeType;
+std::string_view MetricsReportingService::upload_mime_type() const {
+  return kMetricsMimeType;
 }
 
 MetricsLogUploader::MetricServiceType MetricsReportingService::service_type()
@@ -60,7 +70,7 @@ void MetricsReportingService::LogActualUploadInterval(
     base::TimeDelta interval) {
   UMA_HISTOGRAM_CUSTOM_COUNTS("UMA.ActualLogUploadInterval",
                               interval.InMinutes(), 1,
-                              base::TimeDelta::FromHours(12).InMinutes(), 50);
+                              base::Hours(12).InMinutes(), 50);
 }
 
 void MetricsReportingService::LogCellularConstraint(bool upload_canceled) {
@@ -88,5 +98,10 @@ void MetricsReportingService::LogSuccessMetadata(
     const std::string& staged_log) {}
 
 void MetricsReportingService::LogLargeRejection(size_t log_size) {}
+
+void MetricsReportingService::LogBackgroundUploadTaskPendingTime(
+    base::TimeDelta time) {
+  base::UmaHistogramLongTimes("UMA.LogBackgroundUploadTaskPendingTime", time);
+}
 
 }  // namespace metrics

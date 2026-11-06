@@ -28,69 +28,44 @@
 #include "base/memory/scoped_refptr.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
-#include "third_party/blink/renderer/platform/wtf/pod_arena_test_helpers.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
-namespace WTF {
-
-using arena_test_helpers::TrackedAllocator;
+namespace blink {
 
 namespace {
 
 // A couple of simple structs to allocate.
 struct TestClass1 {
-  TestClass1() : x(0), y(0), z(0), w(1) {}
+  TestClass1() = default;
 
-  float x, y, z, w;
+  float x = 0;
+  float y = 0;
+  float z = 0;
+  float w = 1;
 };
 
 struct TestClass2 {
-  TestClass2() : padding(0) {
+  TestClass2() {
     static int test_ids = 0;
     id = test_ids++;
   }
   int id;
-  int padding;
+  int padding = 0;
 };
 
 }  // anonymous namespace
 
-class PODFreeListArenaTest : public testing::Test {
+class PodFreeListArenaTest : public testing::Test {
  protected:
-  int GetFreeListSize(scoped_refptr<PODFreeListArena<TestClass1>> arena) const {
+  int GetFreeListSize(scoped_refptr<PodFreeListArena<TestClass1>> arena) const {
     return arena->GetFreeListSizeForTesting();
   }
 };
 
-// Make sure the arena can successfully allocate from more than one
-// region.
-TEST_F(PODFreeListArenaTest, CanAllocateFromMoreThanOneRegion) {
-  scoped_refptr<TrackedAllocator> allocator = TrackedAllocator::Create();
-  scoped_refptr<PODFreeListArena<TestClass1>> arena =
-      PODFreeListArena<TestClass1>::Create(allocator);
-  int num_iterations = 10 * PODArena::kDefaultChunkSize / sizeof(TestClass1);
-  for (int i = 0; i < num_iterations; ++i)
-    arena->AllocateObject();
-  EXPECT_GT(allocator->NumRegions(), 1);
-}
-
-// Make sure the arena frees all allocated regions during destruction.
-TEST_F(PODFreeListArenaTest, FreesAllAllocatedRegions) {
-  scoped_refptr<TrackedAllocator> allocator = TrackedAllocator::Create();
-  {
-    scoped_refptr<PODFreeListArena<TestClass1>> arena =
-        PODFreeListArena<TestClass1>::Create(allocator);
-    for (int i = 0; i < 3; i++)
-      arena->AllocateObject();
-    EXPECT_GT(allocator->NumRegions(), 0);
-  }
-  EXPECT_TRUE(allocator->IsEmpty());
-}
-
 // Make sure the arena runs constructors of the objects allocated within.
-TEST_F(PODFreeListArenaTest, RunsConstructorsOnNewObjects) {
-  scoped_refptr<PODFreeListArena<TestClass1>> arena =
-      PODFreeListArena<TestClass1>::Create();
+TEST_F(PodFreeListArenaTest, RunsConstructorsOnNewObjects) {
+  scoped_refptr<PodFreeListArena<TestClass1>> arena =
+      PodFreeListArena<TestClass1>::Create();
   for (int i = 0; i < 10000; i++) {
     TestClass1* tc1 = arena->AllocateObject();
     EXPECT_EQ(0, tc1->x);
@@ -101,10 +76,10 @@ TEST_F(PODFreeListArenaTest, RunsConstructorsOnNewObjects) {
 }
 
 // Make sure the arena runs constructors of the objects allocated within.
-TEST_F(PODFreeListArenaTest, RunsConstructorsOnReusedObjects) {
+TEST_F(PodFreeListArenaTest, RunsConstructorsOnReusedObjects) {
   HashSet<TestClass1*> objects;
-  scoped_refptr<PODFreeListArena<TestClass1>> arena =
-      PODFreeListArena<TestClass1>::Create();
+  scoped_refptr<PodFreeListArena<TestClass1>> arena =
+      PodFreeListArena<TestClass1>::Create();
   for (int i = 0; i < 100; i++) {
     TestClass1* tc1 = arena->AllocateObject();
     tc1->x = 100;
@@ -131,10 +106,10 @@ TEST_F(PODFreeListArenaTest, RunsConstructorsOnReusedObjects) {
 }
 
 // Make sure freeObject puts the object in the free list.
-TEST_F(PODFreeListArenaTest, AddsFreedObjectsToFreedList) {
+TEST_F(PodFreeListArenaTest, AddsFreedObjectsToFreedList) {
   Vector<TestClass1*, 100> objects;
-  scoped_refptr<PODFreeListArena<TestClass1>> arena =
-      PODFreeListArena<TestClass1>::Create();
+  scoped_refptr<PodFreeListArena<TestClass1>> arena =
+      PodFreeListArena<TestClass1>::Create();
   for (int i = 0; i < 100; i++) {
     objects.push_back(arena->AllocateObject());
   }
@@ -145,10 +120,10 @@ TEST_F(PODFreeListArenaTest, AddsFreedObjectsToFreedList) {
 }
 
 // Make sure allocations use previously freed memory.
-TEST_F(PODFreeListArenaTest, ReusesPreviouslyFreedObjects) {
+TEST_F(PodFreeListArenaTest, ReusesPreviouslyFreedObjects) {
   HashSet<TestClass2*> objects;
-  scoped_refptr<PODFreeListArena<TestClass2>> arena =
-      PODFreeListArena<TestClass2>::Create();
+  scoped_refptr<PodFreeListArena<TestClass2>> arena =
+      PodFreeListArena<TestClass2>::Create();
   for (int i = 0; i < 100; i++) {
     objects.insert(arena->AllocateObject());
   }
@@ -164,4 +139,4 @@ TEST_F(PODFreeListArenaTest, ReusesPreviouslyFreedObjects) {
   }
 }
 
-}  // namespace WTF
+}  // namespace blink

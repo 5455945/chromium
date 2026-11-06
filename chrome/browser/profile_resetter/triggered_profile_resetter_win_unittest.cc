@@ -1,8 +1,10 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/profile_resetter/triggered_profile_resetter.h"
+
+#include <windows.h>
 
 #include <stdint.h>
 
@@ -35,7 +37,7 @@ class TriggeredProfileResetterTest : public testing::Test {
     // Activate the triggered reset field trial for these tests.
     base::FieldTrial* trial = base::FieldTrialList::CreateFieldTrial(
         "TriggeredResetFieldTrial", "On");
-    trial->group();
+    trial->Activate();
   }
 
   content::BrowserTaskEnvironment task_environment_;
@@ -73,7 +75,7 @@ TEST_F(TriggeredProfileResetterTest, HasDuplicateResetTrigger) {
   FILETIME ft = {};
   SetRegTimestampAndToolName(std::wstring(), &ft);
   profile_->GetPrefs()->SetInt64(prefs::kLastProfileResetTimestamp,
-                                 bit_cast<int64_t, FILETIME>(ft));
+                                 base::bit_cast<int64_t, FILETIME>(ft));
 
   TriggeredProfileResetter triggered_profile_resetter(profile_.get());
   triggered_profile_resetter.Activate();

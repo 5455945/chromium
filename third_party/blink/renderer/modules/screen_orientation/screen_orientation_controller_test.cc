@@ -1,11 +1,13 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/screen_orientation/screen_orientation_controller.h"
 
 #include <memory>
+#include <tuple>
 
+#include "base/memory/raw_ptr.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/web/web_local_frame.h"
@@ -55,16 +57,16 @@ class MockLockOrientationCallback : public blink::WebLockOrientationCallback {
   }
 
  private:
-  LockOrientationResultHolder* results_;
+  raw_ptr<LockOrientationResultHolder> results_;
 };
 
 class ScreenOrientationControllerTest : public PageTestBase {
  protected:
   void SetUp() override {
-    PageTestBase::SetUp(IntSize());
+    PageTestBase::SetUp(gfx::Size());
     HeapMojoAssociatedRemote<device::mojom::blink::ScreenOrientation>
         screen_orientation(GetFrame().DomWindow());
-    ignore_result(screen_orientation.BindNewEndpointAndPassDedicatedReceiver());
+    std::ignore = screen_orientation.BindNewEndpointAndPassDedicatedReceiver();
     Controller()->SetScreenOrientationAssociatedRemoteForTests(
         std::move(screen_orientation));
   }
@@ -132,8 +134,7 @@ TEST_F(ScreenOrientationControllerTest, CancelPending_DoubleLock) {
 // Test that when a LockError message is received, the request is set as failed
 // with the correct values.
 TEST_F(ScreenOrientationControllerTest, LockRequest_Error) {
-  HashMap<LockResult, blink::WebLockOrientationError, WTF::IntHash<LockResult>>
-      errors;
+  HashMap<LockResult, blink::WebLockOrientationError> errors;
   errors.insert(LockResult::SCREEN_ORIENTATION_LOCK_RESULT_ERROR_NOT_AVAILABLE,
                 blink::kWebLockOrientationErrorNotAvailable);
   errors.insert(
@@ -223,14 +224,14 @@ TEST_F(ScreenOrientationControllerTest, PageVisibilityCrash) {
   std::string base_url("http://internal.test/");
   std::string test_url("single_iframe.html");
   url_test_helpers::RegisterMockedURLLoadFromBase(
-      WebString::FromUTF8(base_url), test::CoreTestDataPath(),
-      WebString::FromUTF8(test_url));
+      WebString::FromUtf8(base_url), test::CoreTestDataPath(),
+      WebString::FromUtf8(test_url));
   url_test_helpers::RegisterMockedURLLoadFromBase(
-      WebString::FromUTF8(base_url), test::CoreTestDataPath(),
-      WebString::FromUTF8("visible_iframe.html"));
+      WebString::FromUtf8(base_url), test::CoreTestDataPath(),
+      WebString("visible_iframe.html"));
 
   frame_test_helpers::CreateTestWebFrameWidgetCallback create_widget_callback =
-      base::BindRepeating(
+      blink::BindRepeating(
           &frame_test_helpers::WebViewHelper::CreateTestWebFrameWidget<
               ScreenInfoWebFrameWidget>);
   frame_test_helpers::WebViewHelper web_view_helper(create_widget_callback);
@@ -263,14 +264,14 @@ TEST_F(ScreenOrientationControllerTest,
   std::string base_url("http://internal.test/");
   std::string test_url("page_with_grandchild.html");
   url_test_helpers::RegisterMockedURLLoadFromBase(
-      WebString::FromUTF8(base_url), test::CoreTestDataPath(),
-      WebString::FromUTF8(test_url));
+      WebString::FromUtf8(base_url), test::CoreTestDataPath(),
+      WebString::FromUtf8(test_url));
   url_test_helpers::RegisterMockedURLLoadFromBase(
-      WebString::FromUTF8(base_url), test::CoreTestDataPath(),
-      WebString::FromUTF8("single_iframe.html"));
+      WebString::FromUtf8(base_url), test::CoreTestDataPath(),
+      WebString("single_iframe.html"));
   url_test_helpers::RegisterMockedURLLoadFromBase(
-      WebString::FromUTF8(base_url), test::CoreTestDataPath(),
-      WebString::FromUTF8("visible_iframe.html"));
+      WebString::FromUtf8(base_url), test::CoreTestDataPath(),
+      WebString("visible_iframe.html"));
 
   frame_test_helpers::WebViewHelper web_view_helper;
   web_view_helper.InitializeAndLoad(base_url + test_url, nullptr, nullptr);

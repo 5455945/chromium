@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,9 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "components/subresource_filter/content/mojom/subresource_filter_agent.mojom.h"
-#include "components/subresource_filter/content/renderer/ad_resource_tracker.h"
+#include "components/subresource_filter/content/mojom/subresource_filter.mojom.h"
 #include "components/subresource_filter/core/mojom/subresource_filter.mojom.h"
 #include "content/public/renderer/render_frame_observer.h"
 #include "content/public/renderer/render_frame_observer_tracker.h"
@@ -35,16 +34,16 @@ class WebDocumentSubresourceFilterImpl;
 class SubresourceFilterAgent
     : public content::RenderFrameObserver,
       public content::RenderFrameObserverTracker<SubresourceFilterAgent>,
-      public mojom::SubresourceFilterAgent,
-      public base::SupportsWeakPtr<SubresourceFilterAgent> {
+      public mojom::SubresourceFilterAgent {
  public:
   // The |ruleset_dealer| must not be null and must outlive this instance. The
-  // |render_frame| may be null in unittests. The |ad_resource_tracker| may be
-  // null.
-  explicit SubresourceFilterAgent(
-      content::RenderFrame* render_frame,
-      UnverifiedRulesetDealer* ruleset_dealer,
-      std::unique_ptr<AdResourceTracker> ad_resource_tracker);
+  // |render_frame| may be null in unittests.
+  explicit SubresourceFilterAgent(content::RenderFrame* render_frame,
+                                  UnverifiedRulesetDealer* ruleset_dealer);
+
+  SubresourceFilterAgent(const SubresourceFilterAgent&) = delete;
+  SubresourceFilterAgent& operator=(const SubresourceFilterAgent&) = delete;
+
   ~SubresourceFilterAgent() override;
 
   // Unit tests don't have a RenderFrame so the construction relies on virtual
@@ -58,10 +57,16 @@ class SubresourceFilterAgent
   // Returns the URL of the currently committed document.
   virtual GURL GetDocumentURL();
 
-  virtual bool IsMainFrame();
-  virtual bool IsParentAdSubframe();
+  // Returns true if this agent is attached to a frame that is a subresource
+  // filter child. See content_subresource_filter_throttle_manager.h for
+  // details.
+  virtual bool IsSubresourceFilterChild();
+  virtual bool IsParentAdFrame();
   virtual bool IsProvisional();
-  virtual bool IsSubframeCreatedByAdScript();
+  // This is only called by non-main frames since a child main frames (e.g.
+  // Fenced Frame) will not be initialized on the same stack as the script that
+  // created it.
+  virtual bool IsFrameCreatedByAdScript();
 
   // Injects the provided subresource |filter| into the DocumentLoader
   // orchestrating the most recently created document.
@@ -77,18 +82,17 @@ class SubresourceFilterAgent
   virtual void SendDocumentLoadStatistics(
       const mojom::DocumentLoadStatistics& statistics);
 
-  // Tells the browser that the renderer tagged the frame as an ad subframe.
-  // This is not sent for frames tagged by the browser.
-  virtual void SendFrameIsAdSubframe();
+  // Tells the browser that the renderer tagged the frame as an ad frame.  This
+  // is not sent for frames tagged by the browser.
+  virtual void SendFrameIsAd();
 
-  // Tells the browser that the frame is a subframe that was created by ad
-  // script.
-  virtual void SendSubframeWasCreatedByAdScript();
+  // Tells the browser that the frame is a frame that was created by ad script.
+  virtual void SendFrameWasCreatedByAdScript();
 
-  // True if the frame has been heuristically determined to be an ad subframe.
-  virtual bool IsAdSubframe();
+  // True if the frame has been heuristically determined to be an ad frame.
+  virtual bool IsAdFrame();
 
-  virtual const absl::optional<blink::FrameAdEvidence>& AdEvidence();
+  virtual const std::optional<blink::FrameAdEvidence>& AdEvidence();
   virtual void SetAdEvidence(const blink::FrameAdEvidence& ad_evidence);
 
   // The browser will not inform the renderer of the (sub)frame's ad status and
@@ -99,13 +103,13 @@ class SubresourceFilterAgent
   // mojom::SubresourceFilterAgent:
   void ActivateForNextCommittedLoad(
       mojom::ActivationStatePtr activation_state,
-      const absl::optional<blink::FrameAdEvidence>& ad_evidence) override;
+      const std::optional<blink::FrameAdEvidence>& ad_evidence) override;
 
  private:
-  // Returns the activation state for the `render_frame` to inherit. Main frames
-  // inherit from their opener frames, and subframes inherit from their parent
-  // frames. Assumes that the parent/opener is in a local frame relative to this
-  // one, upon construction.
+  // Returns the activation state for the `render_frame` to inherit. Root frames
+  // inherit from their opener frames, and child frames inherit from their
+  // parent frames. Assumes that the parent/opener is in a local frame relative
+  // to this one, upon construction.
   static mojom::ActivationState GetInheritedActivationState(
       content::RenderFrame* render_frame);
 
@@ -134,12 +138,9 @@ class SubresourceFilterAgent
   void OnLargeStickyAdDetected() override;
 
   // Owned by the ChromeContentRendererClient and outlives us.
-  UnverifiedRulesetDealer* ruleset_dealer_;
+  raw_ptr<UnverifiedRulesetDealer> ruleset_dealer_;
 
   mojom::ActivationState activation_state_for_next_document_;
-
-  // Tracks all ad resource observers.
-  std::unique_ptr<AdResourceTracker> ad_resource_tracker_;
 
   // Use associated interface to make sure mojo messages are ordered with regard
   // to legacy IPC messages.
@@ -149,8 +150,7 @@ class SubresourceFilterAgent
 
   base::WeakPtr<WebDocumentSubresourceFilterImpl>
       filter_for_last_created_document_;
-
-  DISALLOW_COPY_AND_ASSIGN(SubresourceFilterAgent);
+  base::WeakPtrFactory<SubresourceFilterAgent> weak_ptr_factory_{this};
 };
 
 }  // namespace subresource_filter

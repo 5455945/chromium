@@ -1,25 +1,41 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/peerconnection/webrtc_media_stream_track_adapter_map.h"
 
+#include <cstddef>
 #include <memory>
+#include <string>
+#include <utility>
+#include <vector>
 
-#include "base/bind.h"
-#include "base/memory/ptr_util.h"
+#include "base/check.h"
+#include "base/location.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
-#include "base/single_thread_task_runner.h"
+#include "base/synchronization/waitable_event.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/scoped_run_loop_timeout.h"
 #include "base/test/test_timeouts.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/platform/scheduler/test/renderer_scheduler_test_support.h"
 #include "third_party/blink/public/web/web_heap.h"
 #include "third_party/blink/renderer/modules/peerconnection/mock_peer_connection_dependency_factory.h"
+#include "third_party/blink/renderer/platform/heap/cross_thread_persistent.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_audio_source.h"
-#include "third_party/blink/renderer/platform/mediastream/media_stream_component.h"
+#include "third_party/blink/renderer/platform/mediastream/media_stream_audio_track.h"
+#include "third_party/blink/renderer/platform/mediastream/media_stream_component_impl.h"
+#include "third_party/blink/renderer/platform/mediastream/media_stream_source.h"
+#include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
 #include "third_party/blink/renderer/platform/testing/io_task_runner_testing_platform_support.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
+#include "third_party/blink/renderer/platform/testing/testing_platform_support.h"
+#include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+#include "third_party/webrtc/api/media_stream_interface.h"
 
 namespace blink {
 
@@ -40,17 +56,17 @@ class WebRtcMediaStreamTrackAdapterMapTest : public ::testing::Test {
   }
 
   MediaStreamComponent* CreateLocalTrack(const std::string& id) {
-    auto* source = MakeGarbageCollected<MediaStreamSource>(
-        String::FromUTF8(id), MediaStreamSource::kTypeAudio,
-        String::FromUTF8("local_audio_track"), false);
-    MediaStreamAudioSource* audio_source = new MediaStreamAudioSource(
+    auto audio_source = std::make_unique<MediaStreamAudioSource>(
         scheduler::GetSingleThreadTaskRunnerForTesting(), true);
-    // Takes ownership of |audio_source|.
-    source->SetPlatformSource(base::WrapUnique(audio_source));
+    MediaStreamAudioSource* audio_source_ptr = audio_source.get();
+    auto* source = MakeGarbageCollected<MediaStreamSource>(
+        String::FromUtf8(id), MediaStreamSource::kTypeAudio,
+        "local_audio_track", false, std::move(audio_source));
 
-    auto* component =
-        MakeGarbageCollected<MediaStreamComponent>(source->Id(), source);
-    audio_source->ConnectToTrack(component);
+    auto* component = MakeGarbageCollected<MediaStreamComponentImpl>(
+        source->Id(), source,
+        std::make_unique<MediaStreamAudioTrack>(/*is_local=*/true));
+    audio_source_ptr->ConnectToInitializedTrack(component);
     return component;
   }
 
@@ -60,12 +76,13 @@ class WebRtcMediaStreamTrackAdapterMapTest : public ::testing::Test {
     DCHECK(main_thread_->BelongsToCurrentThread());
     std::unique_ptr<blink::WebRtcMediaStreamTrackAdapterMap::AdapterRef>
         adapter;
-    signaling_thread()->PostTask(
-        FROM_HERE,
-        base::BindOnce(&WebRtcMediaStreamTrackAdapterMapTest::
-                           GetOrCreateRemoteTrackAdapterOnSignalingThread,
-                       base::Unretained(this), base::Unretained(webrtc_track),
-                       &adapter));
+    PostCrossThreadTask(
+        *signaling_thread(), FROM_HERE,
+        CrossThreadBindOnce(&WebRtcMediaStreamTrackAdapterMapTest::
+                                GetOrCreateRemoteTrackAdapterOnSignalingThread,
+                            CrossThreadUnretained(this),
+                            CrossThreadUnretained(webrtc_track),
+                            CrossThreadUnretained(&adapter)));
     RunMessageLoopsUntilIdle(wait_for_initialization);
     DCHECK(adapter);
     if (wait_for_initialization) {
@@ -91,10 +108,12 @@ class WebRtcMediaStreamTrackAdapterMapTest : public ::testing::Test {
     base::WaitableEvent waitable_event(
         base::WaitableEvent::ResetPolicy::MANUAL,
         base::WaitableEvent::InitialState::NOT_SIGNALED);
-    signaling_thread()->PostTask(
-        FROM_HERE, base::BindOnce(&WebRtcMediaStreamTrackAdapterMapTest::
-                                      RunMessageLoopUntilIdleOnSignalingThread,
-                                  base::Unretained(this), &waitable_event));
+    PostCrossThreadTask(
+        *signaling_thread(), FROM_HERE,
+        CrossThreadBindOnce(&WebRtcMediaStreamTrackAdapterMapTest::
+                                RunMessageLoopUntilIdleOnSignalingThread,
+                            CrossThreadUnretained(this),
+                            CrossThreadUnretained(&waitable_event)));
     waitable_event.Wait();
     if (run_loop_on_main_thread)
       base::RunLoop().RunUntilIdle();
@@ -108,6 +127,7 @@ class WebRtcMediaStreamTrackAdapterMapTest : public ::testing::Test {
   }
 
  protected:
+  test::TaskEnvironment task_environment_;
   ScopedTestingPlatformSupport<IOTaskRunnerTestingPlatformSupport> platform_;
 
   CrossThreadPersistent<MockPeerConnectionDependencyFactory>
@@ -246,6 +266,29 @@ TEST_F(WebRtcMediaStreamTrackAdapterMapTest, GetMissingRemoteTrackAdapter) {
   EXPECT_EQ(nullptr, map_->GetRemoteTrackAdapter(webrtc_track.get()));
 }
 
+TEST_F(WebRtcMediaStreamTrackAdapterMapTest,
+       DestroyAdapterRefOnSignalingThread) {
+  MediaStreamComponent* track = CreateLocalTrack("local_track");
+  std::unique_ptr<blink::WebRtcMediaStreamTrackAdapterMap::AdapterRef>
+      adapter_ref = map_->GetOrCreateLocalTrackAdapter(track);
+  EXPECT_TRUE(adapter_ref->is_initialized());
+  EXPECT_EQ(1u, map_->GetLocalTrackCount());
+
+  // Destroying the AdapterRef on the signaling thread should post the removal
+  // and disposal to the main thread.
+  PostCrossThreadTask(
+      *signaling_thread(), FROM_HERE,
+      CrossThreadBindOnce(
+          [](std::unique_ptr<
+              blink::WebRtcMediaStreamTrackAdapterMap::AdapterRef> ref) {
+            // Destroyed when going out of scope on the signaling thread.
+          },
+          std::move(adapter_ref)));
+  RunMessageLoopsUntilIdle();
+  EXPECT_EQ(0u, map_->GetLocalTrackCount());
+  EXPECT_EQ(nullptr, map_->GetLocalTrackAdapter(track));
+}
+
 // Continuously calls GetOrCreateLocalTrackAdapter() on the main thread and
 // GetOrCreateRemoteTrackAdapter() on the signaling thread hoping to hit
 // deadlocks if the operations were to synchronize with the other thread while
@@ -286,20 +329,21 @@ class WebRtcMediaStreamTrackAdapterMapStressTest
       // thread. This ensures that Quit() is called after all operations have
       // began executing (but does not guarantee that all operations have
       // completed).
-      signaling_thread()->PostTask(
-          FROM_HERE,
-          base::BindOnce(&WebRtcMediaStreamTrackAdapterMapStressTest::
-                             QuitRunLoopOnSignalingThread,
-                         base::Unretained(this), base::Unretained(run_loop)));
+      PostCrossThreadTask(
+          *signaling_thread(), FROM_HERE,
+          CrossThreadBindOnce(&WebRtcMediaStreamTrackAdapterMapStressTest::
+                                  QuitRunLoopOnSignalingThread,
+                              CrossThreadUnretained(this),
+                              CrossThreadUnretained(run_loop)));
     }
   }
 
   void PostMainThreadLoop(base::RunLoop* run_loop) {
     main_thread_->PostTask(
         FROM_HERE,
-        base::BindOnce(
+        blink::BindOnce(
             &WebRtcMediaStreamTrackAdapterMapStressTest::MainThreadLoop,
-            base::Unretained(this), base::Unretained(run_loop)));
+            blink::Unretained(this), blink::Unretained(run_loop)));
   }
 
   void SignalingThreadLoop() {
@@ -310,19 +354,20 @@ class WebRtcMediaStreamTrackAdapterMapStressTest
       track_refs.push_back(map_->GetOrCreateRemoteTrackAdapter(
           blink::MockWebRtcAudioTrack::Create("remote_track_id")));
     }
-    main_thread_->PostTask(
-        FROM_HERE,
-        base::BindOnce(&WebRtcMediaStreamTrackAdapterMapStressTest::
-                           DestroyAdapterRefsOnMainThread,
-                       base::Unretained(this), std::move(track_refs)));
+    PostCrossThreadTask(
+        *main_thread_, FROM_HERE,
+        CrossThreadBindOnce(&WebRtcMediaStreamTrackAdapterMapStressTest::
+                                DestroyAdapterRefsOnMainThread,
+                            CrossThreadUnretained(this),
+                            std::move(track_refs)));
   }
 
   void PostSignalingThreadLoop() {
-    signaling_thread()->PostTask(
-        FROM_HERE,
-        base::BindOnce(
+    PostCrossThreadTask(
+        *signaling_thread(), FROM_HERE,
+        CrossThreadBindOnce(
             &WebRtcMediaStreamTrackAdapterMapStressTest::SignalingThreadLoop,
-            base::Unretained(this)));
+            CrossThreadUnretained(this)));
   }
 
   void DestroyAdapterRefsOnMainThread(

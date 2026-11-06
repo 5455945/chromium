@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,10 @@
 
 #include "base/base_export.h"
 #include "base/files/scoped_file.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 
-extern "C" typedef struct AHardwareBuffer AHardwareBuffer;
+struct AHardwareBuffer;
+struct AHardwareBuffer_Desc;
 
 namespace base {
 namespace android {
@@ -21,6 +22,10 @@ class BASE_EXPORT ScopedHardwareBufferHandle {
 
   // Takes ownership of |other|'s buffer reference. Does NOT acquire a new one.
   ScopedHardwareBufferHandle(ScopedHardwareBufferHandle&& other);
+
+  ScopedHardwareBufferHandle(const ScopedHardwareBufferHandle&) = delete;
+  ScopedHardwareBufferHandle& operator=(const ScopedHardwareBufferHandle&) =
+      delete;
 
   // Releases this handle's reference to the underlying buffer object if still
   // valid.
@@ -49,11 +54,13 @@ class BASE_EXPORT ScopedHardwareBufferHandle {
   //
   // The caller is responsible for eventually releasing this reference to the
   // buffer object.
-  AHardwareBuffer* Take() WARN_UNUSED_RESULT;
+  [[nodiscard]] AHardwareBuffer* Take();
 
   // Creates a new handle with its own newly acquired reference to the
   // underlying buffer object. |this| must be a valid handle.
   ScopedHardwareBufferHandle Clone() const;
+
+  AHardwareBuffer_Desc Describe() const;
 
   // Consumes a handle and returns a file descriptor which can be used to
   // transmit the handle over IPC. A subsequent receiver may use
@@ -71,17 +78,15 @@ class BASE_EXPORT ScopedHardwareBufferHandle {
   //
   // This acquires a new reference to the AHardwareBuffer, with ownership passed
   // to the caller via the returned ScopedHardwareBufferHandle.
-  static ScopedHardwareBufferHandle DeserializeFromFileDescriptor(ScopedFD fd)
-      WARN_UNUSED_RESULT;
+  [[nodiscard]] static ScopedHardwareBufferHandle DeserializeFromFileDescriptor(
+      ScopedFD fd);
 
  private:
   // Assumes ownership of an existing reference to |buffer|. This does NOT
   // acquire a new reference.
   explicit ScopedHardwareBufferHandle(AHardwareBuffer* buffer);
 
-  AHardwareBuffer* buffer_ = nullptr;
-
-  DISALLOW_COPY_AND_ASSIGN(ScopedHardwareBufferHandle);
+  raw_ptr<AHardwareBuffer> buffer_ = nullptr;
 };
 
 }  // namespace android

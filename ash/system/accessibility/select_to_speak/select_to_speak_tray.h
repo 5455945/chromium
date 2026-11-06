@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,35 +7,34 @@
 
 #include "ash/accessibility/accessibility_observer.h"
 #include "ash/ash_export.h"
+#include "ash/constants/tray_background_view_catalog.h"
 #include "ash/public/cpp/session/session_observer.h"
-#include "ash/system/tray/tray_background_view.h"
-#include "base/macros.h"
-#include "ui/views/controls/image_view.h"
-
-namespace views {
-class ImageView;
-}
+#include "ash/system/tray/imaged_tray_icon.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 
 namespace ash {
 
+class Shelf;
+
 // A button in the tray that lets users start/stop Select-to-Speak.
-class ASH_EXPORT SelectToSpeakTray : public TrayBackgroundView,
+class ASH_EXPORT SelectToSpeakTray : public ImagedTrayIcon,
                                      public AccessibilityObserver,
                                      public SessionObserver {
+  METADATA_HEADER(SelectToSpeakTray, ImagedTrayIcon)
+
  public:
-  explicit SelectToSpeakTray(Shelf* shelf);
+  SelectToSpeakTray(Shelf* shelf, TrayBackgroundViewCatalogName catalog_name);
+  SelectToSpeakTray(const SelectToSpeakTray&) = delete;
+  SelectToSpeakTray& operator=(const SelectToSpeakTray&) = delete;
   ~SelectToSpeakTray() override;
 
   // TrayBackgroundView:
   void Initialize() override;
-  std::u16string GetAccessibleNameForTray() override;
-  void HandleLocaleChange() override;
-  const char* GetClassName() const override;
-  bool PerformAction(const ui::Event& event) override;
-  // The SelectToSpeakTray does not have a bubble, so these functions are
-  // no-ops.
-  void HideBubbleWithView(const TrayBubbleView* bubble_view) override {}
-  void ClickedOutsideBubble() override {}
+
+  // ImagedTrayIcon:
+  // No need to override since the icon and tray activation state will change
+  // and get updated simultaneously in `UpdateUXOnCurrentStatus()`.
+  void UpdateTrayItemColor(bool is_active) override {}
 
   // AccessibilityObserver:
   void OnAccessibilityStatusChanged() override;
@@ -46,23 +45,15 @@ class ASH_EXPORT SelectToSpeakTray : public TrayBackgroundView,
  private:
   friend class SelectToSpeakTrayTest;
 
-  // Updates the icons color depending on if the user is logged-in or not.
-  void UpdateIconsForSession();
+  // Updates icon and hovertext depending on the current status of
+  // select-to-speak. And updates the visibility of the tray depending on
+  // whether select-to-speak is enabled or disabled.
+  void UpdateUXOnCurrentStatus();
 
-  // Sets the icon when select-to-speak is activated (speaking) / deactivated.
-  // Also updates visibility when select-to-speak is enabled / disabled.
-  void CheckStatusAndUpdateIcon();
-
-  gfx::ImageSkia inactive_image_;
-  gfx::ImageSkia selecting_image_;
-  gfx::ImageSkia speaking_image_;
-
-  // Weak pointer, will be parented by TrayContainer for its lifetime.
-  views::ImageView* icon_;
+  // Updates icon if the color of the icon changes.
+  void UpdateIconOnColorChanges();
 
   ScopedSessionObserver session_observer_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(SelectToSpeakTray);
 };
 
 }  // namespace ash

@@ -1,11 +1,10 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/mojo/services/mojo_cdm_helper.h"
 
-#include "base/bind.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "build/build_config.h"
@@ -68,17 +67,28 @@ class MockCdmStorage : public mojom::CdmStorage {
 
 class TestFrameInterfaceFactory : public mojom::FrameInterfaceFactory {
  public:
+#if BUILDFLAG(ENABLE_CDM_PROVISION_FETCHER)
   void CreateProvisionFetcher(
       mojo::PendingReceiver<mojom::ProvisionFetcher>) override {}
+#endif  // BUILDFLAG(ENABLE_CDM_PROVISION_FETCHER)
   void CreateCdmStorage(
       mojo::PendingReceiver<mojom::CdmStorage> receiver) override {
     mojo::MakeSelfOwnedReceiver(std::make_unique<MockCdmStorage>(),
                                 std::move(receiver));
   }
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   void RegisterMuteStateObserver(
-      mojo::PendingRemote<media::mojom::MuteStateObserver> observer) override {}
-#endif  // defined(OS_WIN)
+      mojo::PendingRemote<mojom::MuteStateObserver> observer) override {}
+  void CreateDCOMPSurfaceRegistry(
+      mojo::PendingReceiver<mojom::DCOMPSurfaceRegistry> receiver) override {}
+  void GetFrameScreenRect(GetFrameScreenRectCallback callback) override {
+    std::move(callback).Run(gfx::Rect());
+  }
+  void GetContentProtectionWindow(
+      GetContentProtectionWindowCallback callback) override {
+    std::move(callback).Run(0u);
+  }
+#endif  // BUILDFLAG(IS_WIN)
   void GetCdmOrigin(GetCdmOriginCallback callback) override {}
   void BindEmbedderReceiver(mojo::GenericPendingReceiver) override {}
 };
@@ -120,6 +130,6 @@ TEST_F(MojoCdmHelperTest, CreateCdmFileIO_OpenWithoutClose) {
   base::RunLoop().RunUntilIdle();
 }
 
-// TODO(crbug.com/773860): Add more test cases.
+// TODO(crbug.com/40544338): Add more test cases.
 
 }  // namespace media

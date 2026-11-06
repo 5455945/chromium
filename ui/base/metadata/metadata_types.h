@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +8,14 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/callback_list.h"
 #include "base/compiler_specific.h"
 #include "base/component_export.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 
 namespace ui {
 namespace metadata {
@@ -46,6 +47,17 @@ COMPONENT_EXPORT(UI_BASE_METADATA) extern bool operator!(PropertyFlags op);
 // Used to identify the CallbackList<> within the PropertyChangedVectors map.
 using PropertyKey = const void*;
 
+// Used to generate property keys when a single field needs multiple property
+// keys - for example, if you have a single "bounds" field which is a gfx::Rect
+// and want to have four separate properties that all use that field, you can
+// use MakeUniquePropertyKey() rather than using &bounds_ + 0, &bounds_ + 1,
+// and so on. This avoids unsafe buffer use warnings.
+static inline PropertyKey MakeUniquePropertyKey(PropertyKey base,
+                                                uintptr_t offset) {
+  return reinterpret_cast<PropertyKey>(reinterpret_cast<uintptr_t>(base) +
+                                       offset);
+}
+
 using PropertyChangedCallbacks = base::RepeatingClosureList;
 using PropertyChangedCallback = PropertyChangedCallbacks::CallbackType;
 
@@ -57,12 +69,13 @@ class COMPONENT_EXPORT(UI_BASE_METADATA) MetaDataProvider {
  public:
   MetaDataProvider();
   virtual ~MetaDataProvider();
-  virtual class ClassMetaData* GetClassMetaData() = 0;
+  virtual const class ClassMetaData* GetClassMetaData() const = 0;
+  class ClassMetaData* GetClassMetaData();
 
  protected:
-  base::CallbackListSubscription AddPropertyChangedCallback(
+  [[nodiscard]] base::CallbackListSubscription AddPropertyChangedCallback(
       PropertyKey property,
-      PropertyChangedCallback callback) WARN_UNUSED_RESULT;
+      PropertyChangedCallback callback);
   void TriggerChangedCallback(PropertyKey property);
 
  private:
@@ -82,15 +95,19 @@ class MemberMetaDataBase;
 class COMPONENT_EXPORT(UI_BASE_METADATA) ClassMetaData {
  public:
   ClassMetaData();
-  ClassMetaData(std::string file, int line);
+  ClassMetaData(std::string_view file LIFETIME_BOUND, int line);
   ClassMetaData(const ClassMetaData&) = delete;
   ClassMetaData& operator=(const ClassMetaData&) = delete;
   virtual ~ClassMetaData();
 
-  const std::string& type_name() const { return type_name_; }
-  const std::vector<MemberMetaDataBase*>& members() const { return members_; }
-  const std::string& file() const { return file_; }
+  std::string_view type_name() const { return type_name_; }
+  const std::vector<raw_ptr<MemberMetaDataBase, VectorExperimental>>& members()
+      const {
+    return members_;
+  }
+  const std::string_view file() const { return file_; }
   const int& line() const { return line_; }
+  const std::string& GetUniqueName() const;
   void AddMemberData(std::unique_ptr<MemberMetaDataBase> member_data);
 
   // Lookup the member data entry for a member of this class with a given name.
@@ -111,9 +128,14 @@ class COMPONENT_EXPORT(UI_BASE_METADATA) ClassMetaData {
   //    for(views::MemberMetaDataBase* member : class_meta_data) {
   //      OperateOn(member);
   //    }
-  class COMPONENT_EXPORT(UI_BASE_METADATA) ClassMemberIterator
-      : public std::iterator<std::forward_iterator_tag, MemberMetaDataBase*> {
+  class COMPONENT_EXPORT(UI_BASE_METADATA) ClassMemberIterator {
    public:
+    using iterator_category = std::forward_iterator_tag;
+    using value_type = MemberMetaDataBase*;
+    using difference_type = std::ptrdiff_t;
+    using pointer = MemberMetaDataBase**;
+    using reference = MemberMetaDataBase*&;
+
     ClassMemberIterator(const ClassMemberIterator& other);
     ~ClassMemberIterator();
 
@@ -121,9 +143,6 @@ class COMPONENT_EXPORT(UI_BASE_METADATA) ClassMetaData {
     ClassMemberIterator operator++(int);
 
     bool operator==(const ClassMemberIterator& rhs) const;
-    bool operator!=(const ClassMemberIterator& rhs) const {
-      return !(*this == rhs);
-    }
 
     MemberMetaDataBase* operator*() {
       if (current_collection_ == nullptr ||
@@ -144,7 +163,7 @@ class COMPONENT_EXPORT(UI_BASE_METADATA) ClassMetaData {
     explicit ClassMemberIterator(ClassMetaData* starting_container);
     void IncrementHelper();
 
-    ClassMetaData* current_collection_;
+    raw_ptr<ClassMetaData> current_collection_;
     size_t current_vector_index_;
   };
 
@@ -152,13 +171,15 @@ class COMPONENT_EXPORT(UI_BASE_METADATA) ClassMetaData {
   ClassMemberIterator end();
 
  protected:
-  void SetTypeName(const std::string& type_name);
+  void SetTypeName(std::string_view type_name);
 
  private:
-  std::string type_name_;
-  std::vector<MemberMetaDataBase*> members_;
-  ClassMetaData* parent_class_meta_data_ = nullptr;
-  std::string file_;
+  // `type_name_` is a static string stored in the binary.
+  std::string_view type_name_;
+  mutable std::string unique_name_;
+  std::vector<raw_ptr<MemberMetaDataBase, VectorExperimental>> members_;
+  raw_ptr<ClassMetaData> parent_class_meta_data_ = nullptr;
+  const std::string_view file_;
   const int line_ = 0;
 };
 
@@ -168,9 +189,10 @@ class COMPONENT_EXPORT(UI_BASE_METADATA) ClassMetaData {
 class COMPONENT_EXPORT(UI_BASE_METADATA) MemberMetaDataBase {
  public:
   using ValueStrings = std::vector<std::u16string>;
-  MemberMetaDataBase(const std::string& member_name,
-                     const std::string& member_type)
-      : member_name_(member_name), member_type_(member_type) {}
+
+  MemberMetaDataBase(std::string member_name, std::string member_type)
+      : member_name_(std::move(member_name)),
+        member_type_(std::move(member_type)) {}
   MemberMetaDataBase(const MemberMetaDataBase&) = delete;
   MemberMetaDataBase& operator=(const MemberMetaDataBase&) = delete;
   virtual ~MemberMetaDataBase() = default;
@@ -197,7 +219,7 @@ class COMPONENT_EXPORT(UI_BASE_METADATA) MemberMetaDataBase {
   // available. For instance, an SkColor member type would add the "--" string
   // which tells the frontend to display a color swatch and a color editing
   // dialog.
-  virtual const char* GetMemberNamePrefix() const;
+  virtual std::string_view GetMemberNamePrefix() const;
 
   const std::string& member_name() const { return member_name_; }
   const std::string& member_type() const { return member_type_; }

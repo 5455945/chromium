@@ -1,17 +1,17 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef MEDIA_GPU_ANDROID_CODEC_IMAGE_GROUP_H_
 #define MEDIA_GPU_ANDROID_CODEC_IMAGE_GROUP_H_
 
-#include <unordered_set>
-
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "media/gpu/android/codec_image.h"
 #include "media/gpu/android/promotion_hint_aggregator.h"
 #include "media/gpu/media_gpu_export.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
 namespace base {
 class SequencedTaskRunner;
@@ -36,22 +36,26 @@ class CodecSurfaceBundle;
 // bundle (and overlay) may be accessed.  All other methods will run on the
 // provided task runner.
 class MEDIA_GPU_EXPORT CodecImageGroup
-    : public base::RefCountedThreadSafe<CodecImageGroup> {
+    : public base::RefCountedThreadSafe<CodecImageGroup>,
+      public gpu::RefCountedLockHelperDrDc {
  public:
+  REQUIRE_ADOPTION_FOR_REFCOUNTED_TYPE();
+
   // NOTE: Construction happens on the correct thread to access |bundle| and
   // any overlay it contains.  All other access to this class will happen on
   // |task_runner|, including destruction.
   CodecImageGroup(scoped_refptr<base::SequencedTaskRunner> task_runner,
-                  scoped_refptr<CodecSurfaceBundle> bundle);
+                  scoped_refptr<CodecSurfaceBundle> bundle,
+                  scoped_refptr<gpu::RefCountedLock> drdc_lock);
 
   // Notify us that |image| uses |surface_bundle_|.  We will remove |image| from
   // the group automatically when it's no longer using |surface_bundle_|.
   void AddCodecImage(CodecImage* image);
 
  protected:
-  virtual ~CodecImageGroup();
-  friend class base::RefCountedThreadSafe<CodecImageGroup>;
   friend class base::DeleteHelper<CodecImageGroup>;
+  friend class base::RefCountedThreadSafe<CodecImageGroup>;
+  virtual ~CodecImageGroup();
 
   // Notify us that |image| is no longer in use.
   void OnCodecImageUnused(CodecImage* image);
@@ -64,7 +68,7 @@ class MEDIA_GPU_EXPORT CodecImageGroup
   scoped_refptr<CodecSurfaceBundle> surface_bundle_;
 
   // All the images that use |surface_bundle_|.
-  std::unordered_set<CodecImage*> images_;
+  absl::flat_hash_set<raw_ptr<CodecImage, CtnExperimental>> images_;
 
   // Task runner for everything.
   scoped_refptr<base::SequencedTaskRunner> task_runner_;

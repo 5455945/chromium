@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,12 +18,15 @@ SocketsManifestData::SocketsManifestData(
   DCHECK(permission_);
 }
 
-SocketsManifestData::~SocketsManifestData() {}
+SocketsManifestData::~SocketsManifestData() = default;
 
 // static
-SocketsManifestData* SocketsManifestData::Get(const Extension* extension) {
-  return static_cast<SocketsManifestData*>(
-      extension->GetManifestData(manifest_keys::kSockets));
+const char* SocketsManifestData::kManifestDataKey = manifest_keys::kSockets;
+
+// static
+const SocketsManifestData* SocketsManifestData::Get(
+    const Extension* extension) {
+  return extension->GetManifestData<SocketsManifestData>();
 }
 
 // static

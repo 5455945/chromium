@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,38 +7,37 @@ package org.chromium.android_webview;
 import android.view.View;
 import android.view.ViewTreeObserver;
 
+import org.chromium.build.annotations.NullMarked;
+
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 
-/**
- * Used to register listeners that can be notified of changes to the position of a view.
- */
+/** Used to register listeners that can be notified of changes to the position of a view. */
+@NullMarked
 public class ViewPositionObserver {
-    /**
-     * Called during predraw if the position of the underlying view has changed.
-     */
-    public interface Listener { void onPositionChanged(int positionX, int positionY); }
+    /** Called during predraw if the position of the underlying view has changed. */
+    public interface Listener {
+        void onPositionChanged(int positionX, int positionY);
+    }
 
-    private View mView;
+    private final WeakReference<View> mView;
     // Absolute position of the container view relative to its parent window.
     private final int[] mPosition = new int[2];
 
-    private final ArrayList<Listener> mListeners;
-    private ViewTreeObserver.OnPreDrawListener mPreDrawListener;
+    private final ArrayList<Listener> mListeners = new ArrayList<>();
+    private final ViewTreeObserver.OnPreDrawListener mPreDrawListener;
 
     /**
      * @param view The view to observe.
      */
     public ViewPositionObserver(View view) {
-        mView = view;
-        mListeners = new ArrayList<Listener>();
+        mView = new WeakReference<>(view);
         updatePosition();
-        mPreDrawListener = new ViewTreeObserver.OnPreDrawListener() {
-            @Override
-            public boolean onPreDraw() {
-                updatePosition();
-                return true;
-            }
-        };
+        mPreDrawListener =
+                () -> {
+                    updatePosition();
+                    return true;
+                };
     }
 
     /**
@@ -59,30 +58,30 @@ public class ViewPositionObserver {
         return mPosition[1];
     }
 
-    /**
-     * Register a listener to be called when the position of the underlying view changes.
-     */
+    /** Register a listener to be called when the position of the underlying view changes. */
     public void addListener(Listener listener) {
         if (mListeners.contains(listener)) return;
 
         if (mListeners.isEmpty()) {
-            mView.getViewTreeObserver().addOnPreDrawListener(mPreDrawListener);
+            View view = mView.get();
+            if (view == null) return;
+            view.getViewTreeObserver().addOnPreDrawListener(mPreDrawListener);
             updatePosition();
         }
 
         mListeners.add(listener);
     }
 
-    /**
-     * Remove a previously installed listener.
-     */
+    /** Remove a previously installed listener. */
     public void removeListener(Listener listener) {
         if (!mListeners.contains(listener)) return;
 
         mListeners.remove(listener);
 
         if (mListeners.isEmpty()) {
-            mView.getViewTreeObserver().removeOnPreDrawListener(mPreDrawListener);
+            View view = mView.get();
+            if (view == null) return;
+            view.getViewTreeObserver().removeOnPreDrawListener(mPreDrawListener);
         }
     }
 
@@ -95,16 +94,11 @@ public class ViewPositionObserver {
     private void updatePosition() {
         int previousPositionX = mPosition[0];
         int previousPositionY = mPosition[1];
-        mView.getLocationInWindow(mPosition);
+        View view = mView.get();
+        if (view == null) return;
+        view.getLocationInWindow(mPosition);
         if (mPosition[0] != previousPositionX || mPosition[1] != previousPositionY) {
             notifyListeners();
         }
-    }
-
-    /**
-     * Clears installed listener(s).
-     */
-    public void clearListener() {
-        mListeners.clear();
     }
 }

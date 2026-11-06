@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -29,7 +29,7 @@ class TestWarningService : public WarningService {
 
 class MockObserver : public WarningService::Observer {
  public:
-  virtual ~MockObserver() {}
+  ~MockObserver() override = default;
   MOCK_METHOD1(ExtensionWarningsChanged, void(const ExtensionIdSet&));
 };
 

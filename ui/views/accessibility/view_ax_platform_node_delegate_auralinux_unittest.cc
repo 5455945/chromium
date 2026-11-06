@@ -1,18 +1,23 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ui/views/accessibility/view_ax_platform_node_delegate.h"
+#include "ui/views/accessibility/view_ax_platform_node_delegate_auralinux.h"
 
 #include <atk/atk.h>
-#include <memory>
 
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "base/test/gtest_util.h"
+#include "ui/accessibility/platform/ax_platform_for_test.h"
 #include "ui/accessibility/platform/ax_platform_node.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/test/views_test_base.h"
 
-namespace views {
-namespace test {
+namespace views::test {
 
 class ViewAXPlatformNodeDelegateAuraLinuxTest : public ViewsTestBase {
  public:
@@ -21,20 +26,19 @@ class ViewAXPlatformNodeDelegateAuraLinuxTest : public ViewsTestBase {
   ~ViewAXPlatformNodeDelegateAuraLinuxTest() override = default;
 
  private:
-  ui::testing::ScopedAxModeSetter ax_mode_setter_;
+  ::ui::ScopedAXModeSetter ax_mode_setter_;
 };
 
 TEST_F(ViewAXPlatformNodeDelegateAuraLinuxTest, TextfieldAccessibility) {
-  Widget widget;
-  Widget::InitParams init_params = CreateParams(Widget::InitParams::TYPE_POPUP);
-  init_params.ownership = Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
-  widget.Init(std::move(init_params));
+  auto widget = std::make_unique<Widget>();
+  Widget::InitParams init_params = CreateParams(
+      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_POPUP);
+  widget->Init(std::move(init_params));
 
-  View* content = widget.SetContentsView(std::make_unique<View>());
+  View* content = widget->SetContentsView(std::make_unique<View>());
 
-  Textfield* textfield = new Textfield;
-  textfield->SetAccessibleName(u"Name");
-  content->AddChildView(textfield);
+  Textfield* textfield = content->AddChildView(std::make_unique<Textfield>());
+  textfield->GetViewAccessibility().SetName(u"Name");
 
   ASSERT_EQ(0, atk_object_get_n_accessible_children(
                    textfield->GetNativeViewAccessible()))
@@ -100,31 +104,42 @@ TEST_F(ViewAXPlatformNodeDelegateAuraLinuxTest, TextfieldAccessibility) {
   text_insert_events.clear();
 }
 
+TEST_F(ViewAXPlatformNodeDelegateAuraLinuxTest,
+       ExpandedChangedNotFiredOnNonExpandableViews) {
+  auto widget = std::make_unique<Widget>();
+  Widget::InitParams init_params = CreateParams(
+      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_POPUP);
+  widget->Init(std::move(init_params));
+
+  View* content = widget->SetContentsView(std::make_unique<View>());
+  EXPECT_CHECK_DEATH(content->NotifyAccessibilityEventDeprecated(
+                         ax::mojom::Event::kExpandedChanged, true),
+                     base::NotFatalUntil::M163);
+}
+
 TEST_F(ViewAXPlatformNodeDelegateAuraLinuxTest, AuraChildWidgets) {
-  // Create the parent widget.
-  Widget widget;
-  Widget::InitParams init_params =
-      CreateParams(Widget::InitParams::TYPE_WINDOW);
-  init_params.ownership = Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
+  // Create the parent widget->
+  auto widget = std::make_unique<Widget>();
+  Widget::InitParams init_params = CreateParams(
+      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_WINDOW);
   init_params.bounds = gfx::Rect(0, 0, 400, 200);
-  widget.Init(std::move(init_params));
-  widget.Show();
+  widget->Init(std::move(init_params));
+  widget->Show();
 
   // Initially it has 1 child.
   AtkObject* root_view_accessible =
-      widget.GetRootView()->GetNativeViewAccessible();
+      widget->GetRootView()->GetNativeViewAccessible();
   ASSERT_EQ(1, atk_object_get_n_accessible_children(root_view_accessible));
 
   // Create the child widget, one of two ways (see below).
-  Widget child_widget;
-  Widget::InitParams child_init_params =
-      CreateParams(Widget::InitParams::TYPE_BUBBLE);
-  child_init_params.ownership = Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
-  child_init_params.parent = widget.GetNativeView();
+  auto child_widget = std::make_unique<Widget>();
+  Widget::InitParams child_init_params = CreateParams(
+      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_BUBBLE);
+  child_init_params.parent = widget->GetNativeView();
   child_init_params.bounds = gfx::Rect(30, 40, 100, 50);
   child_init_params.child = false;
-  child_widget.Init(std::move(child_init_params));
-  child_widget.Show();
+  child_widget->Init(std::move(child_init_params));
+  child_widget->Show();
 
   // Now the AtkObject for the parent widget should have 2 children.
   ASSERT_EQ(2, atk_object_get_n_accessible_children(root_view_accessible));
@@ -132,7 +147,7 @@ TEST_F(ViewAXPlatformNodeDelegateAuraLinuxTest, AuraChildWidgets) {
   // Make sure that querying the parent of the child gets us back to
   // the original parent.
   AtkObject* child_widget_accessible =
-      child_widget.GetRootView()->GetNativeViewAccessible();
+      child_widget->GetRootView()->GetNativeViewAccessible();
   ASSERT_EQ(atk_object_get_parent(child_widget_accessible),
             root_view_accessible);
 
@@ -145,22 +160,20 @@ TEST_F(ViewAXPlatformNodeDelegateAuraLinuxTest, AuraChildWidgets) {
 }
 
 // Tests if atk_object_get_index_in_parent doesn't DCHECK after the
-// corresponding View is removed from a Widget.
+// corresponding View is removed from a widget->
 TEST_F(ViewAXPlatformNodeDelegateAuraLinuxTest, IndexInParent) {
   // Create the Widget that will represent the application
-  Widget parent_widget;
-  Widget::InitParams init_params =
-      CreateParams(Widget::InitParams::TYPE_WINDOW);
-  init_params.ownership = Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
-  parent_widget.Init(std::move(init_params));
-  parent_widget.Show();
+  auto parent_widget = std::make_unique<Widget>();
+  Widget::InitParams init_params = CreateParams(
+      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_WINDOW);
+  parent_widget->Init(std::move(init_params));
+  parent_widget->Show();
 
   // |widget| will be destroyed later.
-  std::unique_ptr<Widget> widget = std::make_unique<Widget>();
-  Widget::InitParams child_init_params =
-      CreateParams(Widget::InitParams::TYPE_POPUP);
-  child_init_params.ownership = Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
-  child_init_params.parent = parent_widget.GetNativeView();
+  auto widget = std::make_unique<Widget>();
+  Widget::InitParams child_init_params = CreateParams(
+      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_POPUP);
+  child_init_params.parent = parent_widget->GetNativeView();
   widget->Init(std::move(child_init_params));
   widget->Show();
 
@@ -174,5 +187,35 @@ TEST_F(ViewAXPlatformNodeDelegateAuraLinuxTest, IndexInParent) {
   EXPECT_EQ(-1, atk_object_get_index_in_parent(atk_object));
 }
 
-}  // namespace test
-}  // namespace views
+TEST_F(ViewAXPlatformNodeDelegateAuraLinuxTest,
+       HiddenChildWidgetRootViewHasNoParent) {
+  auto parent_widget = std::make_unique<Widget>();
+  Widget::InitParams parent_params =
+      CreateParams(Widget::InitParams::CLIENT_OWNS_WIDGET,
+                   Widget::InitParams::TYPE_WINDOW_FRAMELESS);
+  parent_widget->Init(std::move(parent_params));
+  parent_widget->SetContentsView(std::make_unique<View>());
+  parent_widget->Show();
+
+  auto child_widget = std::make_unique<Widget>();
+  Widget::InitParams child_params = CreateParams(
+      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_POPUP);
+  child_params.parent = parent_widget->GetNativeView();
+  child_widget->Init(std::move(child_params));
+  child_widget->SetContentsView(std::make_unique<View>());
+
+  AtkObject* child_root_view =
+      child_widget->GetRootView()->GetNativeViewAccessible();
+  AtkObject* parent_root_view =
+      parent_widget->GetRootView()->GetNativeViewAccessible();
+
+  EXPECT_EQ(nullptr, atk_object_get_parent(child_root_view));
+
+  child_widget->Show();
+  EXPECT_EQ(parent_root_view, atk_object_get_parent(child_root_view));
+
+  child_widget->Hide();
+  EXPECT_EQ(nullptr, atk_object_get_parent(child_root_view));
+}
+
+}  // namespace views::test

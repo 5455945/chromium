@@ -1,16 +1,18 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/websockets/websocket_message_chunk_accumulator.h"
 
 #include <string.h>
+
 #include <algorithm>
 
-namespace blink {
+#include "base/compiler_specific.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/time/tick_clock.h"
 
-constexpr size_t WebSocketMessageChunkAccumulator::kSegmentSize;
-constexpr base::TimeDelta WebSocketMessageChunkAccumulator::kFreeDelay;
+namespace blink {
 
 WebSocketMessageChunkAccumulator::WebSocketMessageChunkAccumulator(
     scoped_refptr<base::SingleThreadTaskRunner> task_runner)
@@ -20,43 +22,49 @@ WebSocketMessageChunkAccumulator::WebSocketMessageChunkAccumulator(
 
 WebSocketMessageChunkAccumulator::~WebSocketMessageChunkAccumulator() = default;
 
-void WebSocketMessageChunkAccumulator::Append(base::span<const char> data) {
-  if (!segments_.IsEmpty()) {
+void WebSocketMessageChunkAccumulator::SetTaskRunnerForTesting(
+    scoped_refptr<base::SingleThreadTaskRunner> task_runner,
+    const base::TickClock* tick_clock) {
+  timer_.SetTaskRunnerForTesting(std::move(task_runner), tick_clock);
+}
+
+void WebSocketMessageChunkAccumulator::Append(base::span<const uint8_t> data) {
+  if (!segments_.empty()) {
+    const size_t last_segment_size = GetLastSegmentSize();
     const size_t to_be_written =
-        std::min(data.size(), kSegmentSize - GetLastSegmentSize());
-    memcpy(segments_.back().get() + GetLastSegmentSize(), data.data(),
-           to_be_written);
-    data = data.subspan(to_be_written);
+        std::min(data.size(), kSegmentSize - last_segment_size);
+    segments_.back()
+        .subspan(last_segment_size)
+        .copy_prefix_from(data.take_first(to_be_written));
     size_ += to_be_written;
   }
   while (!data.empty()) {
     SegmentPtr segment_ptr;
-    if (pool_.IsEmpty()) {
+    if (pool_.empty()) {
       segment_ptr = CreateSegment();
     } else {
       segment_ptr = std::move(pool_.back());
       pool_.pop_back();
     }
     const size_t to_be_written = std::min(data.size(), kSegmentSize);
-    memcpy(segment_ptr.get(), data.data(), to_be_written);
-    data = data.subspan(to_be_written);
+    segment_ptr.copy_prefix_from(data.take_first(to_be_written));
     size_ += to_be_written;
     segments_.push_back(std::move(segment_ptr));
   }
 }
 
-Vector<base::span<const char>> WebSocketMessageChunkAccumulator::GetView()
+Vector<base::span<const uint8_t>> WebSocketMessageChunkAccumulator::GetView()
     const {
-  Vector<base::span<const char>> view;
-  if (segments_.IsEmpty()) {
+  Vector<base::span<const uint8_t>> view;
+  if (segments_.empty()) {
     return view;
   }
 
-  view.ReserveCapacity(segments_.size());
+  view.reserve(segments_.size());
   for (wtf_size_t i = 0; i < segments_.size() - 1; ++i) {
-    view.push_back(base::make_span(segments_[i].get(), kSegmentSize));
+    view.push_back(segments_[i].as_span());
   }
-  view.push_back(base::make_span(segments_.back().get(), GetLastSegmentSize()));
+  view.push_back(segments_.back().first(GetLastSegmentSize()));
   return view;
 }
 
@@ -64,7 +72,7 @@ void WebSocketMessageChunkAccumulator::Clear() {
   num_pooled_segments_to_be_removed_ =
       std::min(num_pooled_segments_to_be_removed_, pool_.size());
   size_ = 0;
-  pool_.ReserveCapacity(pool_.size() + segments_.size());
+  pool_.reserve(pool_.size() + segments_.size());
   for (auto& segment : segments_) {
     pool_.push_back(std::move(segment));
   }
@@ -100,6 +108,10 @@ void WebSocketMessageChunkAccumulator::OnTimerFired(TimerBase*) {
   if (num_pooled_segments_to_be_removed_ > 0) {
     timer_.StartOneShot(kFreeDelay, FROM_HERE);
   }
+}
+
+void WebSocketMessageChunkAccumulator::Trace(Visitor* visitor) const {
+  visitor->Trace(timer_);
 }
 
 }  // namespace blink

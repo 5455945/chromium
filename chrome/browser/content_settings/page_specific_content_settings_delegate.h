@@ -1,16 +1,21 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_CONTENT_SETTINGS_PAGE_SPECIFIC_CONTENT_SETTINGS_DELEGATE_H_
 #define CHROME_BROWSER_CONTENT_SETTINGS_PAGE_SPECIFIC_CONTENT_SETTINGS_DELEGATE_H_
 
-#include "build/build_config.h"
-#include "chrome/browser/browsing_data/access_context_audit_service.h"
-#include "chrome/common/custom_handlers/protocol_handler.h"
-#include "components/content_settings/browser/page_specific_content_settings.h"
+#include <memory>
 
-namespace chrome {
+#include "base/scoped_observation.h"
+#include "build/build_config.h"
+#include "components/browsing_data/content/browsing_data_model.h"
+#include "components/content_settings/browser/page_specific_content_settings.h"
+#include "components/custom_handlers/protocol_handler.h"
+#include "content/public/browser/web_contents_observer.h"
+
+using StorageType =
+    content_settings::mojom::ContentSettingsManager::StorageType;
 
 class PageSpecificContentSettingsDelegate
     : public content_settings::PageSpecificContentSettings::Delegate,
@@ -28,25 +33,28 @@ class PageSpecificContentSettingsDelegate
       content::WebContents* web_contents);
 
   // Call to indicate that there is a protocol handler pending user approval.
-  void set_pending_protocol_handler(const ProtocolHandler& handler) {
+  void set_pending_protocol_handler(
+      const custom_handlers::ProtocolHandler& handler) {
     pending_protocol_handler_ = handler;
   }
 
-  const ProtocolHandler& pending_protocol_handler() const {
+  const custom_handlers::ProtocolHandler& pending_protocol_handler() const {
     return pending_protocol_handler_;
   }
 
   void ClearPendingProtocolHandler() {
-    pending_protocol_handler_ = ProtocolHandler::EmptyProtocolHandler();
+    pending_protocol_handler_ =
+        custom_handlers::ProtocolHandler::EmptyProtocolHandler();
   }
 
   // Sets the previous protocol handler which will be replaced by the
   // pending protocol handler.
-  void set_previous_protocol_handler(const ProtocolHandler& handler) {
+  void set_previous_protocol_handler(
+      const custom_handlers::ProtocolHandler& handler) {
     previous_protocol_handler_ = handler;
   }
 
-  const ProtocolHandler& previous_protocol_handler() const {
+  const custom_handlers::ProtocolHandler& previous_protocol_handler() const {
     return previous_protocol_handler_;
   }
 
@@ -60,61 +68,68 @@ class PageSpecificContentSettingsDelegate
     return pending_protocol_handler_setting_;
   }
 
+  // Called by MediaObserver
+  void OnIsCapturingVideoChanged(content::WebContents* web_contents,
+                                 bool is_capturing_video);
+  void OnIsCapturingAudioChanged(content::WebContents* web_contents,
+                                 bool is_capturing_audio);
+
  private:
   // PageSpecificContentSettings::Delegate:
   void UpdateLocationBar() override;
-  void SetContentSettingRules(
-      content::RenderProcessHost* process,
-      const RendererContentSettingRules& rules) override;
   PrefService* GetPrefs() override;
   HostContentSettingsMap* GetSettingsMap() override;
-  ContentSetting GetEmbargoSetting(const GURL& request_origin,
-                                   ContentSettingsType permission) override;
-  std::vector<storage::FileSystemType> GetAdditionalFileSystemTypes() override;
-  browsing_data::CookieHelper::IsDeletionDisabledCallback
-  GetIsDeletionDisabledCallback() override;
-  bool IsMicrophoneCameraStateChanged(
-      content_settings::PageSpecificContentSettings::MicrophoneCameraState
-          microphone_camera_state,
-      const std::string& media_stream_selected_audio_device,
-      const std::string& media_stream_selected_video_device) override;
+  std::unique_ptr<BrowsingDataModel::Delegate> CreateBrowsingDataModelDelegate()
+      override;
+  void SetDefaultRendererContentSettingRules(
+      content::RenderFrameHost* rfh,
+      RendererContentSettingRules* rules) override;
   content_settings::PageSpecificContentSettings::MicrophoneCameraState
   GetMicrophoneCameraState() override;
+  content::WebContents* MaybeGetSyncedWebContentsForPictureInPicture(
+      content::WebContents* web_contents) override;
   void OnContentAllowed(ContentSettingsType type) override;
   void OnContentBlocked(ContentSettingsType type) override;
-  void OnCacheStorageAccessAllowed(const url::Origin& origin) override;
-  void OnCookieAccessAllowed(const net::CookieList& accessed_cookies) override;
-  void OnDomStorageAccessAllowed(const url::Origin& origin) override;
-  void OnFileSystemAccessAllowed(const url::Origin& origin) override;
-  void OnIndexedDBAccessAllowed(const url::Origin& origin) override;
-  void OnServiceWorkerAccessAllowed(const url::Origin& origin) override;
-  void OnWebDatabaseAccessAllowed(const url::Origin& origin) override;
+  bool IsBlockedOnSystemLevel(ContentSettingsType type) override;
+  bool IsFrameAllowlistedForJavaScript(
+      content::RenderFrameHost* render_frame_host) override;
+  bool IsPiPWindow(content::WebContents* web_contents) override;
 
   // content::WebContentsObserver:
-  void DidFinishNavigation(
-      content::NavigationHandle* navigation_handle) override;
+  void PrimaryPageChanged(content::Page& page) override;
+
+  // Notify `PageSpecificContentSettings` about changes in capturing audio and
+  // video.
+  void OnCapturingStateChanged(content::WebContents* web_contents,
+                               ContentSettingsType type,
+                               bool is_capturing);
 
   // The pending protocol handler, if any. This can be set if
   // registerProtocolHandler was invoked without user gesture.
   // The |IsEmpty| method will be true if no protocol handler is
   // pending registration.
-  ProtocolHandler pending_protocol_handler_ =
-      ProtocolHandler::EmptyProtocolHandler();
+  custom_handlers::ProtocolHandler pending_protocol_handler_ =
+      custom_handlers::ProtocolHandler::EmptyProtocolHandler();
 
   // The previous protocol handler to be replaced by
   // the pending_protocol_handler_, if there is one. Empty if
   // there is no handler which would be replaced.
-  ProtocolHandler previous_protocol_handler_ =
-      ProtocolHandler::EmptyProtocolHandler();
+  // TODO(crbug.com/553146562): No longer read. ContentSettingRPHBubbleModel
+  // takes the handler being replaced from the registry when it opens, since
+  // this snapshot went stale whenever the registry changed while the request
+  // was pending. Remove it, its accessors, and the write in
+  // BrowserWebContentsDelegate::RegisterProtocolHandler().
+  custom_handlers::ProtocolHandler previous_protocol_handler_ =
+      custom_handlers::ProtocolHandler::EmptyProtocolHandler();
+
+  // It subscribes to Camera and Microphone capturing updates. It is used to
+  // show/hide camera/mic activity indicators.
+  class MediaObserver;
+  std::unique_ptr<MediaObserver> media_observer_;
 
   // The setting on the pending protocol handler registration. Persisted in case
   // the user opens the bubble and makes changes multiple times.
   ContentSetting pending_protocol_handler_setting_ = CONTENT_SETTING_DEFAULT;
-
-  std::unique_ptr<AccessContextAuditService::CookieAccessHelper>
-      cookie_access_helper_;
 };
-
-}  // namespace chrome
 
 #endif  // CHROME_BROWSER_CONTENT_SETTINGS_PAGE_SPECIFIC_CONTENT_SETTINGS_DELEGATE_H_

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,16 +16,16 @@
 #include "ash/shell.h"
 #include "ash/system/tray/system_tray_notifier.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/strings/string_util.h"
+#include "base/task/single_thread_task_runner.h"
 #include "ui/base/emoji/emoji_panel_helper.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/events/devices/device_data_manager.h"
 #include "ui/events/devices/input_device.h"
-#include "ui/events/devices/touchscreen_device.h"
 
 namespace ash {
 namespace {
@@ -40,38 +40,29 @@ void ResetVirtualKeyboard() {
     // extension from accidentally loading the default keyset while it's
     // shutting down. See https://crbug.com/875456.
     Shell::Get()->ime_controller()->OverrideKeyboardKeyset(
-        chromeos::input_method::ImeKeyset::kNone);
+        input_method::ImeKeyset::kNone);
   }
 }
 
 }  // namespace
 
 VirtualKeyboardController::VirtualKeyboardController()
-    : has_external_keyboard_(false),
-      has_internal_keyboard_(false),
-      has_touchscreen_(false),
-      ignore_external_keyboard_(false) {
+    : ignore_external_keyboard_(false),
+      ignore_internal_keyboard_(false),
+      bluetooth_devices_observer_(
+          std::make_unique<BluetoothDevicesObserver>(base::BindRepeating(
+              &VirtualKeyboardController::OnBluetoothAdapterOrDeviceChanged,
+              base::Unretained(this)))) {
   Shell::Get()->tablet_mode_controller()->AddObserver(this);
   Shell::Get()->session_controller()->AddObserver(this);
   ui::DeviceDataManager::GetInstance()->AddObserver(this);
   UpdateDevices();
 
   // Set callback to show the emoji panel
-  if (!base::FeatureList::IsEnabled(
-          chromeos::features::kImeSystemEmojiPicker)) {
-    ui::SetShowEmojiKeyboardCallback(base::BindRepeating(
-        &VirtualKeyboardController::ForceShowKeyboardWithKeyset,
-        base::Unretained(this), chromeos::input_method::ImeKeyset::kEmoji));
-  }
   ui::SetTabletModeShowEmojiKeyboardCallback(base::BindRepeating(
       &VirtualKeyboardController::ForceShowKeyboardWithKeyset,
-      base::Unretained(this), chromeos::input_method::ImeKeyset::kEmoji));
+      base::Unretained(this), input_method::ImeKeyset::kEmoji));
   keyboard::KeyboardUIController::Get()->AddObserver(this);
-
-  bluetooth_devices_observer_ =
-      std::make_unique<BluetoothDevicesObserver>(base::BindRepeating(
-          &VirtualKeyboardController::OnBluetoothAdapterOrDeviceChanged,
-          base::Unretained(this)));
 }
 
 VirtualKeyboardController::~VirtualKeyboardController() {
@@ -88,10 +79,24 @@ VirtualKeyboardController::~VirtualKeyboardController() {
 }
 
 void VirtualKeyboardController::ForceShowKeyboardWithKeyset(
-    chromeos::input_method::ImeKeyset keyset) {
+    input_method::ImeKeyset keyset) {
   Shell::Get()->ime_controller()->OverrideKeyboardKeyset(
       keyset, base::BindOnce(&VirtualKeyboardController::ForceShowKeyboard,
                              base::Unretained(this)));
+}
+
+void VirtualKeyboardController::ForceShowKeyboard() {
+  // If the virtual keyboard is enabled, show the keyboard directly.
+  auto* keyboard_controller = keyboard::KeyboardUIController::Get();
+  if (keyboard_controller->IsEnabled()) {
+    keyboard_controller->ShowKeyboard(false /* locked */);
+    return;
+  }
+
+  // Otherwise, temporarily enable the virtual keyboard until it is dismissed.
+  DCHECK(!keyboard::GetKeyboardEnabledFromShelf());
+  keyboard::SetKeyboardEnabledFromShelf(true);
+  keyboard_controller->ShowKeyboard(false);
 }
 
 void VirtualKeyboardController::OnTabletModeEventsBlockingChanged() {
@@ -115,23 +120,20 @@ void VirtualKeyboardController::UpdateDevices() {
   ui::DeviceDataManager* device_data_manager =
       ui::DeviceDataManager::GetInstance();
 
-  // Checks for touchscreens.
-  has_touchscreen_ = device_data_manager->GetTouchscreenDevices().size() > 0;
-
+  touchscreens_ = device_data_manager->GetTouchscreenDevices();
   // Checks for keyboards.
-  has_external_keyboard_ = false;
-  has_internal_keyboard_ = false;
+  external_keyboards_.clear();
+  internal_keyboard_name_.reset();
   for (const ui::InputDevice& device :
        device_data_manager->GetKeyboardDevices()) {
-    if (has_internal_keyboard_ && has_external_keyboard_)
-      break;
     ui::InputDeviceType type = device.type;
     if (type == ui::InputDeviceType::INPUT_DEVICE_INTERNAL)
-      has_internal_keyboard_ = true;
-    if (type == ui::InputDeviceType::INPUT_DEVICE_USB ||
-        (type == ui::InputDeviceType::INPUT_DEVICE_BLUETOOTH &&
-         bluetooth_devices_observer_->IsConnectedBluetoothDevice(device))) {
-      has_external_keyboard_ = true;
+      internal_keyboard_name_ = device.name;
+    if ((type == ui::InputDeviceType::INPUT_DEVICE_USB ||
+         (type == ui::InputDeviceType::INPUT_DEVICE_BLUETOOTH &&
+          bluetooth_devices_observer_->IsConnectedBluetoothDevice(device))) &&
+        !device.suspected_keyboard_imposter) {
+      external_keyboards_.push_back(device);
     }
   }
   // Update keyboard state.
@@ -139,40 +141,17 @@ void VirtualKeyboardController::UpdateDevices() {
 }
 
 void VirtualKeyboardController::UpdateKeyboardEnabled() {
-  bool ignore_internal_keyboard = Shell::Get()
-                                      ->tablet_mode_controller()
-                                      ->AreInternalInputDeviceEventsBlocked();
+  ignore_internal_keyboard_ = Shell::Get()
+                                  ->tablet_mode_controller()
+                                  ->AreInternalInputDeviceEventsBlocked();
   bool is_internal_keyboard_active =
-      has_internal_keyboard_ && !ignore_internal_keyboard;
+      internal_keyboard_name_ && !ignore_internal_keyboard_;
   keyboard::SetTouchKeyboardEnabled(
-      !is_internal_keyboard_active && has_touchscreen_ &&
-      (!has_external_keyboard_ || ignore_external_keyboard_));
+      !is_internal_keyboard_active && !touchscreens_.empty() &&
+      (external_keyboards_.empty() || ignore_external_keyboard_));
   Shell::Get()->system_tray_notifier()->NotifyVirtualKeyboardSuppressionChanged(
-      !is_internal_keyboard_active && has_touchscreen_ &&
-      has_external_keyboard_);
-}
-
-void VirtualKeyboardController::ForceShowKeyboard() {
-  // If the virtual keyboard is enabled, show the keyboard directly.
-  auto* keyboard_controller = keyboard::KeyboardUIController::Get();
-  if (keyboard_controller->IsEnabled()) {
-    keyboard_controller->ShowKeyboard(false /* locked */);
-    return;
-  }
-
-  // Otherwise, temporarily enable the virtual keyboard until it is dismissed.
-  DCHECK(!keyboard::GetKeyboardEnabledFromShelf());
-  keyboard::SetKeyboardEnabledFromShelf(true);
-  keyboard_controller->ShowKeyboard(false);
-}
-
-void VirtualKeyboardController::OnKeyboardEnabledChanged(bool is_enabled) {
-  if (!is_enabled) {
-    // TODO(shend/shuchen): Consider moving this logic to ImeController.
-    // https://crbug.com/896284.
-    Shell::Get()->ime_controller()->OverrideKeyboardKeyset(
-        chromeos::input_method::ImeKeyset::kNone);
-  }
+      !is_internal_keyboard_active && !touchscreens_.empty() &&
+      !external_keyboards_.empty());
 }
 
 void VirtualKeyboardController::OnKeyboardHidden(bool is_temporary_hide) {
@@ -182,7 +161,7 @@ void VirtualKeyboardController::OnKeyboardHidden(bool is_temporary_hide) {
     return;
 
   // Post a task to reset the virtual keyboard to its original state.
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(ResetVirtualKeyboard));
 }
 
@@ -201,6 +180,29 @@ void VirtualKeyboardController::OnBluetoothAdapterOrDeviceChanged(
           device::BluetoothDeviceType::KEYBOARD_MOUSE_COMBO) {
     UpdateDevices();
   }
+}
+
+const std::optional<std::string>&
+VirtualKeyboardController::GetInternalKeyboardName() const {
+  return internal_keyboard_name_;
+}
+
+const std::vector<ui::InputDevice>&
+VirtualKeyboardController::GetExternalKeyboards() const {
+  return external_keyboards_;
+}
+
+const std::vector<ui::TouchscreenDevice>&
+VirtualKeyboardController::GetTouchscreens() const {
+  return touchscreens_;
+}
+
+bool VirtualKeyboardController::IsInternalKeyboardIgnored() const {
+  return ignore_internal_keyboard_;
+}
+
+bool VirtualKeyboardController::IsExternalKeyboardIgnored() const {
+  return ignore_external_keyboard_;
 }
 
 }  // namespace ash

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,351 +6,230 @@
 
 #include <utility>
 
-#include "ash/constants/ash_features.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/accessibility/accessibility_labels_service.h"
 #include "chrome/browser/accessibility/accessibility_labels_service_factory.h"
-#include "chrome/browser/browser_process.h"
+#include "chrome/browser/actor/actor_script_tool_receiver.h"
 #include "chrome/browser/buildflags.h"
-#include "chrome/browser/dom_distiller/dom_distiller_service_factory.h"
-#include "chrome/browser/language/translate_frame_binder.h"
-#include "chrome/browser/media/history/media_history_store.mojom.h"
-#include "chrome/browser/media/media_engagement_score_details.mojom.h"
+#include "chrome/browser/glic/host/glic_page_handler.h"
+#include "chrome/browser/glic/host/guest_util.h"
+#include "chrome/browser/glic/public/features.h"
 #include "chrome/browser/navigation_predictor/navigation_predictor.h"
+#include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
+#include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/browser/password_manager/chrome_password_manager_client.h"
+#include "chrome/browser/predictors/lcp_critical_path_predictor/lcp_critical_path_predictor_host.h"
 #include "chrome/browser/predictors/network_hints_handler_impl.h"
-#include "chrome/browser/prefetch/no_state_prefetch/chrome_no_state_prefetch_contents_delegate.h"
-#include "chrome/browser/prefetch/no_state_prefetch/chrome_no_state_prefetch_processor_impl_delegate.h"
+#include "chrome/browser/preloading/prefetch/no_state_prefetch/chrome_no_state_prefetch_contents_delegate.h"
+#include "chrome/browser/preloading/prefetch/no_state_prefetch/chrome_no_state_prefetch_processor_impl_delegate.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/pwc/pwc_api_binder.h"
+#include "chrome/browser/reader_mode/reader_mode_service_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/ssl/security_state_tab_helper.h"
-#include "chrome/browser/ui/ui_features.h"
-#include "chrome/browser/ui/web_applications/draggable_region_host_impl.h"
-#include "chrome/browser/ui/webui/bluetooth_internals/bluetooth_internals.mojom.h"
-#include "chrome/browser/ui/webui/bluetooth_internals/bluetooth_internals_ui.h"
-#include "chrome/browser/ui/webui/engagement/site_engagement_ui.h"
-#include "chrome/browser/ui/webui/internals/internals_ui.h"
-#include "chrome/browser/ui/webui/media/media_engagement_ui.h"
-#include "chrome/browser/ui/webui/media/media_history_ui.h"
-#include "chrome/browser/ui/webui/omnibox/omnibox.mojom.h"
-#include "chrome/browser/ui/webui/omnibox/omnibox_ui.h"
-#include "chrome/browser/ui/webui/usb_internals/usb_internals.mojom.h"
-#include "chrome/browser/ui/webui/usb_internals/usb_internals_ui.h"
-#include "chrome/common/chrome_features.h"
+#include "chrome/browser/speech/on_device_speech_recognition_impl.h"
+#include "chrome/browser/ssl/chrome_security_state_util.h"
+#include "chrome/browser/translate/translate_frame_binder.h"
+#include "chrome/browser/ui/search_engines/search_engine_tab_helper.h"
+#include "chrome/common/buildflags.h"
 #include "chrome/common/pref_names.h"
-#include "components/contextual_search/buildflags.h"
+#include "chrome/services/speech/buildflags/buildflags.h"
+#include "components/autofill/content/browser/content_autofill_client.h"
+#include "components/credential_management/content_credential_manager.h"
 #include "components/dom_distiller/content/browser/distillability_driver.h"
 #include "components/dom_distiller/content/browser/distiller_javascript_service_impl.h"
 #include "components/dom_distiller/content/common/mojom/distillability_service.mojom.h"
 #include "components/dom_distiller/content/common/mojom/distiller_javascript_service.mojom.h"
 #include "components/dom_distiller/core/dom_distiller_service.h"
-#include "components/feed/buildflags.h"
+#include "components/language_detection/content/common/language_detection.mojom.h"
+#include "components/live_caption/caption_util.h"
 #include "components/live_caption/pref_names.h"
 #include "components/no_state_prefetch/browser/no_state_prefetch_contents.h"
 #include "components/no_state_prefetch/browser/no_state_prefetch_processor_impl.h"
-#include "components/payments/content/payment_credential_factory.h"
+#include "components/optimization_guide/public/mojom/model_broker.mojom.h"
 #include "components/performance_manager/embedder/binders.h"
-#include "components/performance_manager/public/performance_manager.h"
+#include "components/performance_manager/embedder/performance_manager_registry.h"
 #include "components/prefs/pref_service.h"
-#include "components/reading_list/features/reading_list_switches.h"
-#include "components/safe_browsing/buildflags.h"
 #include "components/security_state/content/content_utils.h"
 #include "components/security_state/core/security_state.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
-#include "components/site_engagement/core/mojom/site_engagement_details.mojom.h"
+#include "components/spellcheck/spellcheck_buildflags.h"
 #include "components/translate/content/common/translate.mojom.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/url_constants.h"
-#include "extensions/buildflags/buildflags.h"
+#include "mojo/public/cpp/bindings/binder_map.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "mojo/public/cpp/bindings/self_owned_receiver.h"
+#include "pdf/buildflags.h"
 #include "services/image_annotation/public/mojom/image_annotation.mojom.h"
-#include "third_party/blink/public/mojom/credentialmanager/credential_manager.mojom.h"
+#include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/common/features_generated.h"
+#include "third_party/blink/public/mojom/credentialmanagement/credential_manager.mojom.h"
+#include "third_party/blink/public/mojom/facilitated_payments/payment_link_handler.mojom.h"
+#include "third_party/blink/public/mojom/lcp_critical_path_predictor/lcp_critical_path_predictor.mojom.h"
 #include "third_party/blink/public/mojom/loader/navigation_predictor.mojom.h"
-#include "third_party/blink/public/mojom/payments/payment_credential.mojom.h"
 #include "third_party/blink/public/mojom/payments/payment_request.mojom.h"
+#include "third_party/blink/public/mojom/payments/secure_payment_confirmation_service.mojom.h"
+#include "third_party/blink/public/mojom/persistent_renderer_prefs.mojom.h"
 #include "third_party/blink/public/mojom/prerender/prerender.mojom.h"
 #include "third_party/blink/public/public_buildflags.h"
-#include "ui/webui/resources/cr_components/customize_themes/customize_themes.mojom.h"
+#include "ui/accessibility/accessibility_features.h"
+#include "ui/accessibility/ax_mode.h"
 
 #if BUILDFLAG(ENABLE_UNHANDLED_TAP)
-#include "chrome/browser/android/contextualsearch/unhandled_tap_notifier_impl.h"
-#include "chrome/browser/android/contextualsearch/unhandled_tap_web_contents_observer.h"
+#include "chrome/browser/android/contextualsearch/unhandled_tap_notifier_impl.h"  // nogncheck crbug.com/40147906
+#include "chrome/browser/android/contextualsearch/unhandled_tap_web_contents_observer.h"  // nogncheck crbug.com/40147906
 #include "third_party/blink/public/mojom/unhandled_tap_notifier/unhandled_tap_notifier.mojom.h"
 #endif  // BUILDFLAG(ENABLE_UNHANDLED_TAP)
 
-#if BUILDFLAG(FULL_SAFE_BROWSING)
-#include "chrome/browser/ui/webui/reset_password/reset_password.mojom.h"
-#include "chrome/browser/ui/webui/reset_password/reset_password_ui.h"
-#endif  // BUILDFLAG(FULL_SAFE_BROWSING)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+    BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/screen_ai/screen_ai_service_router.h"
+#include "chrome/browser/screen_ai/screen_ai_service_router_factory.h"
+#include "chrome/browser/text_detection/text_detection_impl.h"
+#include "chrome/browser/web_applications/sub_apps/sub_apps_service_impl.h"
+#include "services/shape_detection/public/mojom/textdetection.mojom.h"
+#endif
 
-#if defined(OS_ANDROID)
-#include "chrome/browser/android/contextualsearch/contextual_search_observer.h"
-#include "chrome/browser/android/dom_distiller/distiller_ui_handle_android.h"
+#if BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/android/reader_mode/reader_mode_ui_handle_android.h"
+#include "chrome/browser/facilitated_payments/payment_link_handler_binder.h"
 #include "chrome/browser/offline_pages/android/offline_page_auto_fetcher.h"
-#include "chrome/browser/ui/webui/explore_sites_internals/explore_sites_internals.mojom.h"
-#include "chrome/browser/ui/webui/explore_sites_internals/explore_sites_internals_ui.h"
-#include "chrome/browser/ui/webui/feed_internals/feed_internals.mojom.h"
-#include "chrome/browser/ui/webui/feed_internals/feed_internals_ui.h"
 #include "chrome/common/offline_page_auto_fetcher.mojom.h"
-#include "components/contextual_search/content/browser/contextual_search_js_api_service_impl.h"
-#include "components/contextual_search/content/common/mojom/contextual_search_js_api_service.mojom.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
 #include "third_party/blink/public/mojom/digital_goods/digital_goods.mojom.h"
 #include "third_party/blink/public/mojom/installedapp/installed_app_provider.mojom.h"
 #else
-#include "chrome/browser/accessibility/live_caption_speech_recognition_host.h"
 #include "chrome/browser/badging/badge_manager.h"
-#include "chrome/browser/cart/chrome_cart.mojom.h"
-#include "chrome/browser/cart/commerce_hint_service.h"
 #include "chrome/browser/payments/payment_request_factory.h"
-#include "chrome/browser/promo_browser_command/promo_browser_command.mojom.h"
-#include "chrome/browser/search/drive/drive.mojom.h"
-#include "chrome/browser/search/task_module/task_module.mojom.h"
-#include "chrome/browser/speech/speech_recognition_client_browser_interface.h"
-#include "chrome/browser/speech/speech_recognition_client_browser_interface_factory.h"
-#include "chrome/browser/speech/speech_recognition_service.h"
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/speech/cros_speech_recognition_service_factory.h"
-#else
-#include "chrome/browser/speech/speech_recognition_service_factory.h"
-#endif
-#include "chrome/browser/ui/webui/downloads/downloads.mojom.h"
-#include "chrome/browser/ui/webui/downloads/downloads_ui.h"
-#include "chrome/browser/ui/webui/realbox/realbox.mojom.h"
-#if !defined(OFFICIAL_BUILD)
-#include "chrome/browser/ui/webui/new_tab_page/foo/foo.mojom.h"  // nogncheck crbug.com/1125897
-#endif
-#include "chrome/browser/ui/webui/download_shelf/download_shelf.mojom.h"
-#include "chrome/browser/ui/webui/download_shelf/download_shelf_ui.h"
-#include "chrome/browser/ui/webui/history_clusters/history_clusters.mojom.h"
-#include "chrome/browser/ui/webui/history_clusters/memories_ui.h"
-#include "chrome/browser/ui/webui/internals/user_education/user_education_internals.mojom.h"
-#include "chrome/browser/ui/webui/new_tab_page/new_tab_page.mojom.h"
-#include "chrome/browser/ui/webui/new_tab_page/new_tab_page_ui.h"
-#include "chrome/browser/ui/webui/new_tab_page_third_party/new_tab_page_third_party_ui.h"
-#include "chrome/browser/ui/webui/read_later/read_later.mojom.h"
-#include "chrome/browser/ui/webui/read_later/read_later_ui.h"
-#include "chrome/browser/ui/webui/settings/settings_ui.h"
-#include "chrome/browser/ui/webui/tab_search/tab_search.mojom.h"
-#include "chrome/browser/ui/webui/tab_search/tab_search_ui.h"
-#include "chrome/common/webui_url_constants.h"
-#include "components/search/ntp_features.h"
-#include "media/base/media_switches.h"
-#include "media/mojo/mojom/speech_recognition_service.mojom.h"
-#include "mojo/public/cpp/bindings/self_owned_receiver.h"
-#include "ui/webui/resources/cr_components/most_visited/most_visited.mojom.h"
-#endif  // defined(OS_ANDROID)
+#include "chrome/browser/prefs/persistent_renderer_prefs_manager.h"
+#include "chrome/browser/web_applications/web_install_service_impl.h"
+#endif  // BUILDFLAG(IS_ANDROID)
 
-#if defined(OS_WIN) || defined(OS_MAC) || defined(OS_LINUX) || \
-    defined(OS_CHROMEOS)
-#include "chrome/browser/ui/webui/discards/discards.mojom.h"
-#include "chrome/browser/ui/webui/discards/discards_ui.h"
-#include "chrome/browser/ui/webui/discards/site_data.mojom.h"
-#endif
-
-#if !BUILDFLAG(IS_CHROMEOS_ASH) && !defined(OS_ANDROID)
-#include "chrome/browser/ui/webui/signin/profile_customization_ui.h"
-#include "chrome/browser/ui/webui/signin/profile_picker_ui.h"
-#include "ui/webui/resources/cr_components/customize_themes/customize_themes.mojom.h"
-#endif  // !defined(OS_ANDROID) && !BUILDFLAG(IS_CHROMEOS_ASH)
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "ash/webui/diagnostics_ui/diagnostics_ui.h"
-#include "ash/webui/diagnostics_ui/mojom/input_data_provider.mojom.h"
-#include "ash/webui/diagnostics_ui/mojom/network_health_provider.mojom.h"
-#include "ash/webui/diagnostics_ui/mojom/system_data_provider.mojom.h"
-#include "ash/webui/diagnostics_ui/mojom/system_routine_controller.mojom.h"
-#include "ash/webui/file_manager/file_manager_ui.h"
-#include "ash/webui/file_manager/mojom/file_manager.mojom.h"
-#include "ash/webui/scanning/mojom/scanning.mojom.h"
-#include "ash/webui/scanning/scanning_ui.h"
-#include "ash/webui/shimless_rma/shimless_rma.h"
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/apps/digital_goods/digital_goods_factory_impl.h"
-#include "chrome/browser/nearby_sharing/common/nearby_share_features.h"
-#include "chrome/browser/ui/webui/app_management/app_management.mojom.h"
-#include "chrome/browser/ui/webui/chromeos/add_supervision/add_supervision.mojom.h"
-#include "chrome/browser/ui/webui/chromeos/add_supervision/add_supervision_ui.h"
-#include "chrome/browser/ui/webui/chromeos/crostini_installer/crostini_installer.mojom.h"
-#include "chrome/browser/ui/webui/chromeos/crostini_installer/crostini_installer_ui.h"
-#include "chrome/browser/ui/webui/chromeos/crostini_upgrader/crostini_upgrader.mojom.h"
-#include "chrome/browser/ui/webui/chromeos/crostini_upgrader/crostini_upgrader_ui.h"
-#include "chrome/browser/ui/webui/chromeos/emoji/emoji_picker.mojom.h"
-#include "chrome/browser/ui/webui/chromeos/emoji/emoji_ui.h"
-#include "chrome/browser/ui/webui/chromeos/in_session_password_change/lock_screen_network_ui.h"
-#include "chrome/browser/ui/webui/chromeos/internet_config_dialog.h"
-#include "chrome/browser/ui/webui/chromeos/internet_detail_dialog.h"
-#include "chrome/browser/ui/webui/chromeos/launcher_internals/launcher_internals.mojom.h"
-#include "chrome/browser/ui/webui/chromeos/launcher_internals/launcher_internals_ui.h"
-#include "chrome/browser/ui/webui/chromeos/login/oobe_ui.h"
-#include "chrome/browser/ui/webui/chromeos/multidevice_setup/multidevice_setup_dialog.h"
-#include "chrome/browser/ui/webui/chromeos/network_ui.h"
-#include "chrome/browser/ui/webui/chromeos/vm/vm.mojom.h"
-#include "chrome/browser/ui/webui/chromeos/vm/vm_ui.h"
-#include "chrome/browser/ui/webui/internals/web_app/web_app_internals.mojom.h"
-#include "chrome/browser/ui/webui/nearby_share/nearby_share.mojom.h"
-#include "chrome/browser/ui/webui/nearby_share/nearby_share_dialog_ui.h"
-#include "chrome/browser/ui/webui/nearby_share/public/mojom/nearby_share_settings.mojom.h"  // nogncheck crbug.com/1125897
-#include "chrome/browser/ui/webui/settings/chromeos/os_settings_ui.h"
-#include "chrome/browser/ui/webui/settings/chromeos/search/search.mojom.h"
-#include "chrome/browser/ui/webui/settings/chromeos/search/user_action_recorder.mojom.h"
-#include "chromeos/components/camera_app_ui/camera_app_helper.mojom.h"
-#include "chromeos/components/camera_app_ui/camera_app_ui.h"
-#include "chromeos/components/connectivity_diagnostics/connectivity_diagnostics_ui.h"
-#include "chromeos/components/eche_app_ui/eche_app_ui.h"
-#include "chromeos/components/eche_app_ui/mojom/eche_app.mojom.h"
-#include "chromeos/components/help_app_ui/help_app_ui.h"
-#include "chromeos/components/help_app_ui/help_app_ui.mojom.h"
-#include "chromeos/components/help_app_ui/search/search.mojom.h"
-#include "chromeos/components/local_search_service/public/mojom/index.mojom.h"
-#include "chromeos/components/media_app_ui/media_app_ui.h"
-#include "chromeos/components/media_app_ui/media_app_ui.mojom.h"
-#include "chromeos/components/multidevice/debug_webui/proximity_auth_ui.h"
-#include "chromeos/components/personalization_app/mojom/personalization_app.mojom.h"
-#include "chromeos/components/personalization_app/personalization_app_ui.h"
-#include "chromeos/components/print_management/mojom/printing_manager.mojom.h"
-#include "chromeos/components/print_management/print_management_ui.h"
-#include "chromeos/services/cellular_setup/public/mojom/cellular_setup.mojom.h"
-#include "chromeos/services/cellular_setup/public/mojom/esim_manager.mojom.h"
-#include "chromeos/services/multidevice_setup/multidevice_setup_service.h"
-#include "chromeos/services/multidevice_setup/public/mojom/multidevice_setup.mojom.h"
-#include "chromeos/services/network_config/public/mojom/cros_network_config.mojom.h"  // nogncheck
-#include "chromeos/services/network_health/public/mojom/network_diagnostics.mojom.h"
-#include "chromeos/services/network_health/public/mojom/network_health.mojom.h"
-#include "media/capture/video/chromeos/mojom/camera_app.mojom.h"
-#include "third_party/blink/public/mojom/digital_goods/digital_goods.mojom.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#include "chrome/browser/speech/cros_speech_recognition_service_factory.h"
+#include "chromeos/ash/experiences/isolated_web_app/set_shape_service_impl.h"
+#include "third_party/blink/public/mojom/set_shape/set_shape.mojom.h"
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
-#if defined(OS_WIN) || BUILDFLAG(IS_CHROMEOS_ASH) || defined(OS_MAC) || \
-    defined(OS_ANDROID)
-#if defined(OS_WIN) || BUILDFLAG(IS_CHROMEOS_ASH) || defined(OS_MAC)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || \
+    BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC)
 #include "chrome/browser/webshare/share_service_impl.h"
+#include "chrome/common/chrome_features.h"
 #endif
 #include "third_party/blink/public/mojom/webshare/webshare.mojom.h"
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH) && !defined(OFFICIAL_BUILD)
-#include "chromeos/components/demo_mode_app_ui/demo_mode_app_ui.h"
-#include "chromeos/components/demo_mode_app_ui/mojom/demo_mode_app_ui.mojom.h"
-#include "chromeos/components/telemetry_extension_ui/mojom/diagnostics_service.mojom.h"  // nogncheck crbug.com/1125897
-#include "chromeos/components/telemetry_extension_ui/mojom/probe_service.mojom.h"  // nogncheck crbug.com/1125897
-#include "chromeos/components/telemetry_extension_ui/mojom/system_events_service.mojom.h"  // nogncheck crbug.com/1125897
-#include "chromeos/components/telemetry_extension_ui/telemetry_extension_ui.h"
+#if BUILDFLAG(ENABLE_SPEECH_SERVICE)
+#include "chrome/browser/accessibility/live_caption/live_caption_controller_factory.h"
+#include "chrome/browser/accessibility/live_caption/live_caption_speech_recognition_host.h"
+#include "chrome/browser/accessibility/live_caption/live_caption_unavailability_notifier.h"
+#include "chrome/browser/speech/speech_recognition_client_browser_interface.h"
+#include "chrome/browser/speech/speech_recognition_client_browser_interface_factory.h"
+#include "chrome/browser/speech/speech_recognition_service.h"
+#include "components/live_caption/live_caption_controller.h"
+#include "media/mojo/mojom/renderer_extensions.mojom.h"
+#include "media/mojo/mojom/speech_recognition.mojom.h"  // nogncheck
+#endif  // BUILDFLAG(ENABLE_SPEECH_SERVICE)
+
+#if BUILDFLAG(IS_WIN)
+#include "chrome/browser/media/media_foundation_service_monitor.h"
+#include "content/public/browser/security_principal.h"
+#include "content/public/browser/site_instance.h"
+#include "media/mojo/mojom/media_foundation_preferences.mojom.h"
+#include "media/mojo/services/media_foundation_preferences.h"
+#endif  // BUILDFLAG(IS_WIN)
+
+#if BUILDFLAG(ENABLE_BROWSER_SPEECH_SERVICE)
+#include "chrome/browser/speech/speech_recognition_service_factory.h"
+#include "media/mojo/mojom/speech_recognition_service.mojom.h"
+#endif  // BUILDFLAG(ENABLE_BROWSER_SPEECH_SERVICE)
+
+#if BUILDFLAG(ENABLE_PDF)
+#include "chrome/browser/pdf/pdf_help_bubble_handler_factory.h"
+#include "ui/webui/resources/cr_components/help_bubble/help_bubble.mojom.h"
 #endif
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "extensions/browser/api/mime_handler_private/mime_handler_private.h"
-#include "extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest.h"
-#include "extensions/common/api/mime_handler.mojom.h"  // nogncheck
+#if BUILDFLAG(ENABLE_PRINT_PREVIEW)
+#include "chrome/browser/printing/web_api/web_printing_service_binder.h"
+#include "third_party/blink/public/mojom/printing/web_printing.mojom.h"
 #endif
 
-namespace chrome {
-namespace internal {
+#if BUILDFLAG(ENABLE_SPELLCHECK)
+#include "chrome/browser/spellchecker/spell_check_host_chrome_impl.h"
+#include "components/spellcheck/common/spellcheck.mojom.h"
+#endif
+
+namespace chrome::internal {
+
+namespace {
 
 #if BUILDFLAG(ENABLE_UNHANDLED_TAP)
 void BindUnhandledTapWebContentsObserver(
     content::RenderFrameHost* const host,
     mojo::PendingReceiver<blink::mojom::UnhandledTapNotifier> receiver) {
   auto* web_contents = content::WebContents::FromRenderFrameHost(host);
-  if (!web_contents)
+  if (!web_contents) {
     return;
+  }
 
   auto* unhandled_tap_notifier_observer =
       contextual_search::UnhandledTapWebContentsObserver::FromWebContents(
           web_contents);
-  if (!unhandled_tap_notifier_observer)
+  if (!unhandled_tap_notifier_observer) {
     return;
+  }
 
   contextual_search::CreateUnhandledTapNotifierImpl(
-      unhandled_tap_notifier_observer->device_scale_factor(),
       unhandled_tap_notifier_observer->unhandled_tap_callback(),
       std::move(receiver));
 }
 #endif  // BUILDFLAG(ENABLE_UNHANDLED_TAP)
 
-#if BUILDFLAG(BUILD_CONTEXTUAL_SEARCH)
-void BindContextualSearchObserver(
-    content::RenderFrameHost* const host,
-    mojo::PendingReceiver<
-        contextual_search::mojom::ContextualSearchJsApiService> receiver) {
-  // Early return if the RenderFrameHost's delegate is not a WebContents.
-  auto* web_contents = content::WebContents::FromRenderFrameHost(host);
-  if (!web_contents)
-    return;
-
-  auto* contextual_search_observer =
-      contextual_search::ContextualSearchObserver::FromWebContents(
-          web_contents);
-  if (contextual_search_observer) {
-    contextual_search::CreateContextualSearchJsApiService(
-        contextual_search_observer->api_handler(), std::move(receiver));
-  }
-}
-#endif  // BUILDFLAG(BUILD_CONTEXTUAL_SEARCH)
-
 // Forward image Annotator requests to the profile's AccessibilityLabelsService.
 void BindImageAnnotator(
     content::RenderFrameHost* frame_host,
     mojo::PendingReceiver<image_annotation::mojom::Annotator> receiver) {
+  content::WebContents* web_contents =
+      content::WebContents::FromRenderFrameHost(frame_host);
+  if (!web_contents || !web_contents->GetAccessibilityMode().has_mode(
+                           ui::AXMode::kLabelImages)) {
+    return;
+  }
   AccessibilityLabelsServiceFactory::GetForProfile(
       Profile::FromBrowserContext(
           frame_host->GetProcess()->GetBrowserContext()))
       ->BindImageAnnotator(std::move(receiver));
 }
 
-#if !defined(OS_ANDROID)
-void BindCommerceHintObserver(
-    content::RenderFrameHost* const frame_host,
-    mojo::PendingReceiver<cart::mojom::CommerceHintObserver> receiver) {
-  // Cart is not available for non-signin single-profile users.
-  Profile* profile = Profile::FromBrowserContext(
-      frame_host->GetProcess()->GetBrowserContext());
-  auto* identity_manager = IdentityManagerFactory::GetForProfile(profile);
-  ProfileManager* profile_manager = g_browser_process->profile_manager();
-  if (!identity_manager || !profile_manager)
-    return;
-  if (!identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSignin) &&
-      profile_manager->GetNumberOfProfiles() <= 1)
-    return;
-  auto* web_contents = content::WebContents::FromRenderFrameHost(frame_host);
-  if (!web_contents)
-    return;
-  content::BrowserContext* browser_context = web_contents->GetBrowserContext();
-  if (!browser_context)
-    return;
-  if (browser_context->IsOffTheRecord())
-    return;
-
-  cart::CommerceHintService::CreateForWebContents(web_contents);
-  cart::CommerceHintService* service =
-      cart::CommerceHintService::FromWebContents(web_contents);
-  if (!service)
-    return;
-  service->BindCommerceHintObserver(frame_host, std::move(receiver));
-}
-#endif
-
 void BindDistillabilityService(
     content::RenderFrameHost* const frame_host,
     mojo::PendingReceiver<dom_distiller::mojom::DistillabilityService>
         receiver) {
   auto* web_contents = content::WebContents::FromRenderFrameHost(frame_host);
-  if (!web_contents)
+  if (!web_contents) {
     return;
+  }
 
   dom_distiller::DistillabilityDriver* driver =
       dom_distiller::DistillabilityDriver::FromWebContents(web_contents);
-  if (!driver)
+  if (!driver) {
     return;
+  }
   driver->SetIsSecureCallback(
       base::BindRepeating([](content::WebContents* contents) {
-        // SecurityStateTabHelper uses chrome-specific
-        // GetVisibleSecurityState to determine if a page is SECURE.
-        return SecurityStateTabHelper::FromWebContents(contents)
-                   ->GetSecurityLevel() ==
+        // Uses the chrome-specific visible security state to determine
+        // whether the page is SECURE.
+        return chrome_security_state::GetSecurityLevel(contents) ==
                security_state::SecurityLevel::SECURE;
       }));
   driver->CreateDistillabilityService(std::move(receiver));
@@ -361,94 +240,58 @@ void BindDistillerJavaScriptService(
     mojo::PendingReceiver<dom_distiller::mojom::DistillerJavaScriptService>
         receiver) {
   auto* web_contents = content::WebContents::FromRenderFrameHost(frame_host);
-  if (!web_contents)
+  if (!web_contents) {
     return;
+  }
 
   dom_distiller::DomDistillerService* dom_distiller_service =
-      dom_distiller::DomDistillerServiceFactory::GetForBrowserContext(
+      reader_mode::ReaderModeServiceFactory::GetForBrowserContext(
           web_contents->GetBrowserContext());
-  auto* distiller_ui_handle = dom_distiller_service->GetDistillerUIHandle();
-#if defined(OS_ANDROID)
-  static_cast<dom_distiller::android::DistillerUIHandleAndroid*>(
-      distiller_ui_handle)
+#if BUILDFLAG(IS_ANDROID)
+  static_cast<reader_mode::android::ReaderModeUIHandleAndroid*>(
+      dom_distiller_service->GetDistillerUIHandle())
       ->set_render_frame_host(frame_host);
 #endif
-  auto* distilled_page_prefs = dom_distiller_service->GetDistilledPagePrefs();
-  CreateDistillerJavaScriptService(distiller_ui_handle, distilled_page_prefs,
+  CreateDistillerJavaScriptService(dom_distiller_service->GetWeakPtr(),
                                    std::move(receiver));
 }
 
-void BindPrerenderCanceler(
+void BindNoStatePrefetchCanceler(
     content::RenderFrameHost* frame_host,
-    mojo::PendingReceiver<prerender::mojom::PrerenderCanceler> receiver) {
+    mojo::PendingReceiver<prerender::mojom::NoStatePrefetchCanceler> receiver) {
   auto* web_contents = content::WebContents::FromRenderFrameHost(frame_host);
-  if (!web_contents)
+  if (!web_contents) {
     return;
+  }
 
   auto* no_state_prefetch_contents =
       prerender::ChromeNoStatePrefetchContentsDelegate::FromWebContents(
           web_contents);
-  if (!no_state_prefetch_contents)
+  if (!no_state_prefetch_contents) {
     return;
-  no_state_prefetch_contents->AddPrerenderCancelerReceiver(std::move(receiver));
+  }
+  no_state_prefetch_contents->AddNoStatePrefetchCancelerReceiver(
+      std::move(receiver));
 }
 
 void BindNoStatePrefetchProcessor(
     content::RenderFrameHost* frame_host,
     mojo::PendingReceiver<blink::mojom::NoStatePrefetchProcessor> receiver) {
+  // NoStatePrefetch is not supported inside fenced frames.
+  if (frame_host->IsNestedWithinFencedFrame()) {
+    return;
+  }
   prerender::NoStatePrefetchProcessorImpl::Create(
       frame_host, std::move(receiver),
       std::make_unique<
           prerender::ChromeNoStatePrefetchProcessorImplDelegate>());
 }
 
-#if defined(OS_ANDROID)
-template <typename Interface>
-void ForwardToJavaWebContents(content::RenderFrameHost* frame_host,
-                              mojo::PendingReceiver<Interface> receiver) {
-  content::WebContents* contents =
-      content::WebContents::FromRenderFrameHost(frame_host);
-  if (contents)
-    contents->GetJavaInterfaces()->GetInterface(std::move(receiver));
-}
-
+#if BUILDFLAG(IS_ANDROID)
 template <typename Interface>
 void ForwardToJavaFrame(content::RenderFrameHost* render_frame_host,
                         mojo::PendingReceiver<Interface> receiver) {
   render_frame_host->GetJavaInterfaces()->GetInterface(std::move(receiver));
-}
-#endif
-
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-void BindMimeHandlerService(
-    content::RenderFrameHost* frame_host,
-    mojo::PendingReceiver<extensions::mime_handler::MimeHandlerService>
-        receiver) {
-  auto* web_contents = content::WebContents::FromRenderFrameHost(frame_host);
-  if (!web_contents)
-    return;
-
-  auto* guest_view =
-      extensions::MimeHandlerViewGuest::FromWebContents(web_contents);
-  if (!guest_view)
-    return;
-  extensions::MimeHandlerServiceImpl::Create(guest_view->GetStreamWeakPtr(),
-                                             std::move(receiver));
-}
-
-void BindBeforeUnloadControl(
-    content::RenderFrameHost* frame_host,
-    mojo::PendingReceiver<extensions::mime_handler::BeforeUnloadControl>
-        receiver) {
-  auto* web_contents = content::WebContents::FromRenderFrameHost(frame_host);
-  if (!web_contents)
-    return;
-
-  auto* guest_view =
-      extensions::MimeHandlerViewGuest::FromWebContents(web_contents);
-  if (!guest_view)
-    return;
-  guest_view->FuseBeforeUnloadControl(std::move(receiver));
 }
 #endif
 
@@ -458,485 +301,341 @@ void BindNetworkHintsHandler(
   predictors::NetworkHintsHandlerImpl::Create(frame_host, std::move(receiver));
 }
 
-#if !defined(OS_ANDROID)
+#if BUILDFLAG(ENABLE_SPEECH_SERVICE)
+bool IsSpeechRecognitionAllowed(Profile* profile,
+                                content::RenderFrameHost* frame_host) {
+  if (!profile || !captions::IsLiveCaptionFeatureSupported()) {
+    return false;
+  }
+  PrefService* profile_prefs = profile->GetPrefs();
+  if (profile_prefs->GetBoolean(prefs::kLiveCaptionEnabled)) {
+    return true;
+  }
+  if (!captions::IsHeadlessCaptionFeatureSupported() ||
+      !profile_prefs->GetBoolean(prefs::kHeadlessCaptionEnabled)) {
+    return false;
+  }
+  auto* controller =
+      captions::LiveCaptionControllerFactory::GetForProfileIfExists(profile);
+  return controller && controller->IsTranscriptionAllowed(frame_host);
+}
+
 void BindSpeechRecognitionContextHandler(
     content::RenderFrameHost* frame_host,
     mojo::PendingReceiver<media::mojom::SpeechRecognitionContext> receiver) {
   Profile* profile = Profile::FromBrowserContext(
       frame_host->GetProcess()->GetBrowserContext());
-  if (media::IsLiveCaptionFeatureEnabled()) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-    CrosSpeechRecognitionServiceFactory::GetForProfile(profile)->Create(
-        std::move(receiver));
-#else
-    SpeechRecognitionServiceFactory::GetForProfile(profile)->Create(
-        std::move(receiver));
-#endif
+  if (!IsSpeechRecognitionAllowed(profile, frame_host)) {
+    return;
   }
+
+  // Bind via the appropriate factory.
+#if BUILDFLAG(ENABLE_BROWSER_SPEECH_SERVICE)
+  auto* factory = SpeechRecognitionServiceFactory::GetForProfile(profile);
+#elif BUILDFLAG(IS_CHROMEOS)
+  auto* factory = CrosSpeechRecognitionServiceFactory::GetForProfile(profile);
+#else
+#error "No speech recognition service factory on this platform."
+#endif
+  factory->BindSpeechRecognitionContext(std::move(receiver));
 }
 
 void BindSpeechRecognitionClientBrowserInterfaceHandler(
     content::RenderFrameHost* frame_host,
     mojo::PendingReceiver<media::mojom::SpeechRecognitionClientBrowserInterface>
         receiver) {
-  if (media::IsLiveCaptionFeatureEnabled()) {
+  if (captions::IsLiveCaptionFeatureSupported()) {
+    // Bind in this process.
     Profile* profile = Profile::FromBrowserContext(
         frame_host->GetProcess()->GetBrowserContext());
-
     SpeechRecognitionClientBrowserInterfaceFactory::GetForProfile(profile)
-        ->BindReceiver(std::move(receiver));
+        ->BindReceiver(std::move(receiver), frame_host->GetGlobalId());
   }
 }
 
 void BindSpeechRecognitionRecognizerClientHandler(
     content::RenderFrameHost* frame_host,
     mojo::PendingReceiver<media::mojom::SpeechRecognitionRecognizerClient>
-        receiver) {
+        client_receiver) {
   Profile* profile = Profile::FromBrowserContext(
       frame_host->GetProcess()->GetBrowserContext());
-  PrefService* profile_prefs = profile->GetPrefs();
-  if (profile_prefs->GetBoolean(prefs::kLiveCaptionEnabled) &&
-      media::IsLiveCaptionFeatureEnabled()) {
-    captions::LiveCaptionSpeechRecognitionHost::Create(frame_host,
-                                                       std::move(receiver));
+  if (IsSpeechRecognitionAllowed(profile, frame_host)) {
+    captions::LiveCaptionSpeechRecognitionHost::Create(
+        frame_host, std::move(client_receiver));
   }
 }
+
+#if BUILDFLAG(IS_WIN)
+void BindMediaFoundationRendererNotifierHandler(
+    content::RenderFrameHost* frame_host,
+    mojo::PendingReceiver<media::mojom::MediaFoundationRendererNotifier>
+        receiver) {
+  if (captions::IsLiveCaptionFeatureSupported()) {
+    captions::LiveCaptionUnavailabilityNotifier::Create(frame_host,
+                                                        std::move(receiver));
+  }
+}
+#endif  // BUILDFLAG(IS_WIN)
+#endif  // BUILDFLAG(ENABLE_SPEECH_SERVICE)
+
+void BindOnDeviceSpeechRecognitionHandler(
+    content::RenderFrameHost* frame_host,
+    mojo::PendingReceiver<media::mojom::OnDeviceSpeechRecognition> receiver) {
+  speech::OnDeviceSpeechRecognitionImpl::GetOrCreateForCurrentDocument(
+      frame_host)
+      ->Bind(std::move(receiver));
+}
+
+#if BUILDFLAG(IS_WIN)
+void BindMediaFoundationPreferences(
+    content::RenderFrameHost* frame_host,
+    mojo::PendingReceiver<media::mojom::MediaFoundationPreferences> receiver) {
+  MediaFoundationPreferencesImpl::Create(
+      frame_host->GetSiteInstance()
+          ->GetSecurityPrincipal()
+          .GetDeprecatedSiteURL(),
+      base::BindRepeating(&MediaFoundationServiceMonitor::
+                              IsHardwareSecureDecryptionAllowedForSite),
+      std::move(receiver));
+}
+#endif  // BUILDFLAG(IS_WIN)
+
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
+    BUILDFLAG(IS_WIN)
+void BindScreenAIAnnotator(
+    content::RenderFrameHost* frame_host,
+    mojo::PendingReceiver<screen_ai::mojom::ScreenAIAnnotator> receiver) {
+  content::BrowserContext* browser_context =
+      frame_host->GetProcess()->GetBrowserContext();
+
+  screen_ai::ScreenAIServiceRouterFactory::GetForBrowserContext(browser_context)
+      ->BindScreenAIAnnotator(std::move(receiver));
+}
+
+void BindScreen2xMainContentExtractor(
+    content::RenderFrameHost* frame_host,
+    mojo::PendingReceiver<screen_ai::mojom::Screen2xMainContentExtractor>
+        receiver) {
+  screen_ai::ScreenAIServiceRouterFactory::GetForBrowserContext(
+      frame_host->GetProcess()->GetBrowserContext())
+      ->BindMainContentExtractor(std::move(receiver));
+}
+
+void BindTextDetection(
+    content::RenderFrameHost* frame_host,
+    mojo::PendingReceiver<shape_detection::mojom::TextDetection> receiver) {
+  text_detection::TextDetectionImpl::Create(frame_host, std::move(receiver));
+}
 #endif
+
+void BindModelBroker(
+    content::RenderFrameHost* frame_host,
+    mojo::PendingReceiver<optimization_guide::mojom::ModelBroker> receiver) {
+  content::BrowserContext* browser_context = frame_host->GetBrowserContext();
+  Profile* profile = Profile::FromBrowserContext(browser_context);
+  OptimizationGuideKeyedService* optimization_guide_service =
+      OptimizationGuideKeyedServiceFactory::GetForProfile(profile);
+  if (optimization_guide_service) {
+    optimization_guide_service->BindModelBroker(std::move(receiver));
+  }
+}
+
+void BindCredentialManager(
+    content::RenderFrameHost* frame_host,
+    mojo::PendingReceiver<blink::mojom::CredentialManager> receiver) {
+  content::WebContents* web_contents =
+      content::WebContents::FromRenderFrameHost(frame_host);
+  autofill::ContentAutofillClient* autofill_client =
+      autofill::ContentAutofillClient::FromWebContents(web_contents);
+  // Not every `WebContents` has a `ContentAutofillClient`.
+  if (!autofill_client) {
+    return;
+  }
+  credential_management::ContentCredentialManager* content_credential_manager =
+      autofill_client->GetContentCredentialManager();
+
+  // Try to bind to the credential manager, but if it's not available for this
+  // render frame host, the request will be just dropped. This will cause the
+  // message pipe to be closed, which will raise a connection error on the peer
+  // side.
+  if (!content_credential_manager) {
+    // TODO(crbug.com/406224744): Retry to bind the credential manager.
+    return;
+  }
+
+  content_credential_manager->BindRequest(frame_host, std::move(receiver));
+}
+
+}  // namespace
 
 void PopulateChromeFrameBinders(
     mojo::BinderMapWithContext<content::RenderFrameHost*>* map,
     content::RenderFrameHost* render_frame_host) {
-  map->Add<image_annotation::mojom::Annotator>(
-      base::BindRepeating(&BindImageAnnotator));
-
-#if !defined(OS_ANDROID)
-  if (base::FeatureList::IsEnabled(ntp_features::kNtpChromeCartModule) &&
-      !render_frame_host->GetParent()) {
-    map->Add<cart::mojom::CommerceHintObserver>(
-        base::BindRepeating(&BindCommerceHintObserver));
+  map->Add<glic::mojom::WebClientHandler>(&glic::BindGlicWebClientHandler);
+  // Defense in depth: privileged capability interfaces are not even registered
+  // for a frame outside a privileged process, so a non-PWC frame cannot
+  // request them at all. The bind-time gate (pwc::EnforceCapabilityGate)
+  // remains the security boundary for frames that do get the binders.
+  if (render_frame_host->GetProcess()->IsPrivileged()) {
+    map->Add<pwc::mojom::PrivilegedBridge>(&pwc::BindPrivilegedBridge);
   }
-#endif
+  map->Add<image_annotation::mojom::Annotator>(&BindImageAnnotator);
+
+  map->Add<blink::mojom::ScriptToolHost>(
+      &actor::ActorScriptToolReceiver::Create);
 
   map->Add<blink::mojom::AnchorElementMetricsHost>(
-      base::BindRepeating(&NavigationPredictor::Create));
+      &NavigationPredictor::Create);
+
+  map->Add<blink::mojom::LCPCriticalPathPredictorHost>(
+      &predictors::LCPCriticalPathPredictorHost::Create);
 
   map->Add<dom_distiller::mojom::DistillabilityService>(
-      base::BindRepeating(&BindDistillabilityService));
+      &BindDistillabilityService);
 
   map->Add<dom_distiller::mojom::DistillerJavaScriptService>(
-      base::BindRepeating(&BindDistillerJavaScriptService));
+      &BindDistillerJavaScriptService);
 
-  map->Add<prerender::mojom::PrerenderCanceler>(
-      base::BindRepeating(&BindPrerenderCanceler));
+  map->Add<prerender::mojom::NoStatePrefetchCanceler>(
+      &BindNoStatePrefetchCanceler);
 
   map->Add<blink::mojom::NoStatePrefetchProcessor>(
-      base::BindRepeating(&BindNoStatePrefetchProcessor));
+      &BindNoStatePrefetchProcessor);
 
-  if (performance_manager::PerformanceManager::IsAvailable()) {
-    map->Add<performance_manager::mojom::DocumentCoordinationUnit>(
-        base::BindRepeating(
-            &performance_manager::BindDocumentCoordinationUnit));
+  auto* pm_registry =
+      performance_manager::PerformanceManagerRegistry::GetInstance();
+  if (pm_registry) {
+    pm_registry->GetBinders().ExposeInterfacesToRenderFrame(map);
   }
 
   map->Add<translate::mojom::ContentTranslateDriver>(
-      base::BindRepeating(&language::BindContentTranslateDriver));
+      &translate::BindContentTranslateDriver);
 
-  map->Add<blink::mojom::CredentialManager>(
-      base::BindRepeating(&ChromePasswordManagerClient::BindCredentialManager));
+  map->Add<optimization_guide::mojom::ModelBroker>(&BindModelBroker);
 
-  map->Add<payments::mojom::PaymentCredential>(
-      base::BindRepeating(&payments::CreatePaymentCredential));
+  map->Add<blink::mojom::CredentialManager>(&BindCredentialManager);
 
-#if defined(OS_ANDROID)
-  map->Add<blink::mojom::InstalledAppProvider>(base::BindRepeating(
-      &ForwardToJavaFrame<blink::mojom::InstalledAppProvider>));
-  map->Add<payments::mojom::DigitalGoodsFactory>(base::BindRepeating(
-      &ForwardToJavaFrame<payments::mojom::DigitalGoodsFactory>));
+  map->Add<chrome::mojom::OpenSearchDescriptionDocumentHandler>(
+      base::BindRepeating(
+          &SearchEngineTabHelper::BindOpenSearchDescriptionDocumentHandler));
+
+#if BUILDFLAG(IS_ANDROID)
+  map->Add<blink::mojom::InstalledAppProvider>(
+      &ForwardToJavaFrame<blink::mojom::InstalledAppProvider>);
+  map->Add<payments::mojom::DigitalGoodsFactory>(
+      &ForwardToJavaFrame<payments::mojom::DigitalGoodsFactory>);
 #if defined(BROWSER_MEDIA_CONTROLS_MENU)
-  map->Add<blink::mojom::MediaControlsMenuHost>(base::BindRepeating(
-      &ForwardToJavaFrame<blink::mojom::MediaControlsMenuHost>));
+  map->Add<blink::mojom::MediaControlsMenuHost>(
+      &ForwardToJavaFrame<blink::mojom::MediaControlsMenuHost>);
 #endif
   map->Add<chrome::mojom::OfflinePageAutoFetcher>(
-      base::BindRepeating(&offline_pages::OfflinePageAutoFetcher::Create));
+      &offline_pages::OfflinePageAutoFetcher::Create);
   if (base::FeatureList::IsEnabled(features::kWebPayments)) {
-    map->Add<payments::mojom::PaymentRequest>(base::BindRepeating(
-        &ForwardToJavaFrame<payments::mojom::PaymentRequest>));
+    map->Add<payments::mojom::PaymentRequest>(
+        &ForwardToJavaFrame<payments::mojom::PaymentRequest>);
   }
-  map->Add<blink::mojom::ShareService>(base::BindRepeating(
-      &ForwardToJavaWebContents<blink::mojom::ShareService>));
-
-#if BUILDFLAG(BUILD_CONTEXTUAL_SEARCH)
-  map->Add<contextual_search::mojom::ContextualSearchJsApiService>(
-      base::BindRepeating(&BindContextualSearchObserver));
 
 #if BUILDFLAG(ENABLE_UNHANDLED_TAP)
   map->Add<blink::mojom::UnhandledTapNotifier>(
-      base::BindRepeating(&BindUnhandledTapWebContentsObserver));
+      &BindUnhandledTapWebContentsObserver);
 #endif  // BUILDFLAG(ENABLE_UNHANDLED_TAP)
-#endif  // BUILDFLAG(BUILD_CONTEXTUAL_SEARCH)
 
 #else
   map->Add<blink::mojom::BadgeService>(
-      base::BindRepeating(&badging::BadgeManager::BindFrameReceiver));
+      &badging::BadgeManager::BindFrameReceiverIfAllowed);
+  map->Add<blink::mojom::PersistentRendererPrefsService>(
+      &PersistentRendererPrefsManager::BindFrameReceiver);
   if (base::FeatureList::IsEnabled(features::kWebPayments)) {
-    map->Add<payments::mojom::PaymentRequest>(
-        base::BindRepeating(&payments::CreatePaymentRequest));
+    map->Add<payments::mojom::PaymentRequest>(&payments::CreatePaymentRequest);
+  }
+  if ((base::FeatureList::IsEnabled(blink::features::kWebAppInstallation) ||
+       base::FeatureList::IsEnabled(blink::features::kInstallElement)) &&
+      !render_frame_host->GetParentOrOuterDocument()) {
+    map->Add<blink::mojom::WebInstallService>(
+        &web_app::WebInstallServiceImpl::CreateIfAllowed);
   }
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  map->Add<payments::mojom::DigitalGoodsFactory>(base::BindRepeating(
-      &apps::DigitalGoodsFactoryImpl::BindDigitalGoodsFactory));
+#if BUILDFLAG(IS_CHROMEOS)
+  map->Add<payments::mojom::DigitalGoodsFactory>(
+      &apps::DigitalGoodsFactoryImpl::BindDigitalGoodsFactory);
+  map->Add<blink::mojom::SetShapeService>(&ash::SetShapeServiceImpl::Create);
 #endif
 
-#if defined(OS_WIN) || BUILDFLAG(IS_CHROMEOS_ASH) || defined(OS_MAC)
-  if (base::FeatureList::IsEnabled(features::kWebShare)) {
-    map->Add<blink::mojom::ShareService>(
-        base::BindRepeating(&ShareServiceImpl::Create));
-  }
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC)
+  map->Add<blink::mojom::ShareService>(&ShareServiceImpl::Create);
+#endif
+#if BUILDFLAG(IS_ANDROID)
+  map->Add<blink::mojom::ShareService>(
+      &ForwardToJavaFrame<blink::mojom::ShareService>);
 #endif
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-  map->Add<extensions::mime_handler::MimeHandlerService>(
-      base::BindRepeating(&BindMimeHandlerService));
-  map->Add<extensions::mime_handler::BeforeUnloadControl>(
-      base::BindRepeating(&BindBeforeUnloadControl));
-#endif
+  map->Add<network_hints::mojom::NetworkHintsHandler>(&BindNetworkHintsHandler);
+  map->Add<media::mojom::OnDeviceSpeechRecognition>(
+      &BindOnDeviceSpeechRecognitionHandler);
 
-  map->Add<network_hints::mojom::NetworkHintsHandler>(
-      base::BindRepeating(&BindNetworkHintsHandler));
-
-#if !defined(OS_ANDROID)
+#if BUILDFLAG(ENABLE_SPEECH_SERVICE)
   map->Add<media::mojom::SpeechRecognitionContext>(
-      base::BindRepeating(&BindSpeechRecognitionContextHandler));
+      &BindSpeechRecognitionContextHandler);
   map->Add<media::mojom::SpeechRecognitionClientBrowserInterface>(
-      base::BindRepeating(&BindSpeechRecognitionClientBrowserInterfaceHandler));
+      &BindSpeechRecognitionClientBrowserInterfaceHandler);
   map->Add<media::mojom::SpeechRecognitionRecognizerClient>(
-      base::BindRepeating(&BindSpeechRecognitionRecognizerClientHandler));
+      &BindSpeechRecognitionRecognizerClientHandler);
+#if BUILDFLAG(IS_WIN)
+  map->Add<media::mojom::MediaFoundationRendererNotifier>(
+      &BindMediaFoundationRendererNotifierHandler);
+#endif
+#endif  // BUILDFLAG(ENABLE_SPEECH_SERVICE)
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+    BUILDFLAG(IS_CHROMEOS)
+  if (base::FeatureList::IsEnabled(blink::features::kSubApps) &&
+      !render_frame_host->GetParentOrOuterDocument()) {
+    // The service binder will reject non-primary main frames, but we still need
+    // to register it for them because a non-primary main frame could become a
+    // primary main frame at a later time (eg. a prerendered page).
+    map->Add<blink::mojom::SubAppsService>(
+        &web_app::SubAppsServiceImpl::CreateIfAllowed);
+  }
+
+  map->Add<screen_ai::mojom::ScreenAIAnnotator>(&BindScreenAIAnnotator);
+
+  map->Add<screen_ai::mojom::Screen2xMainContentExtractor>(
+      &BindScreen2xMainContentExtractor);
+
+  map->Add<shape_detection::mojom::TextDetection>(&BindTextDetection);
 #endif
 
-#if defined(OS_WIN) || defined(OS_MAC) || defined(OS_LINUX)
-  if (base::FeatureList::IsEnabled(features::kWebAppWindowControlsOverlay) &&
-      !render_frame_host->GetParent()) {
-    map->Add<chrome::mojom::DraggableRegions>(
-        base::BindRepeating(&DraggableRegionsHostImpl::CreateIfAllowed));
+#if BUILDFLAG(IS_WIN)
+  map->Add<media::mojom::MediaFoundationPreferences>(
+      &BindMediaFoundationPreferences);
+#endif
+
+#if BUILDFLAG(ENABLE_PDF)
+  map->Add<help_bubble::mojom::PdfHelpBubbleHandlerFactory>(
+      &pdf::PdfHelpBubbleHandlerFactory::Create);
+#endif
+
+#if BUILDFLAG(ENABLE_PRINT_PREVIEW)
+  map->Add<blink::mojom::WebPrintingService>(
+      &printing::CreateWebPrintingServiceForFrame);
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+  if (base::FeatureList::IsEnabled(blink::features::kPaymentLinkDetection)) {
+    map->Add<payments::facilitated::mojom::PaymentLinkHandler>(
+        &BindPaymentLinkHandler);
   }
 #endif
+
+#if BUILDFLAG(ENABLE_SPELLCHECK)
+  map->Add<spellcheck::mojom::SpellCheckHost>(
+      [](content::RenderFrameHost* frame_host,
+         mojo::PendingReceiver<spellcheck::mojom::SpellCheckHost> receiver) {
+        SpellCheckHostChromeImpl::Create(
+            frame_host->GetProcess()->GetDeprecatedID(), std::move(receiver));
+      });
+#endif  // BUILDFLAG(ENABLE_SPELLCHECK)
 }
 
-void PopulateChromeWebUIFrameBinders(
-    mojo::BinderMapWithContext<content::RenderFrameHost*>* map) {
-  RegisterWebUIControllerInterfaceBinder<::mojom::BluetoothInternalsHandler,
-                                         BluetoothInternalsUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      media::mojom::MediaEngagementScoreDetailsProvider, MediaEngagementUI>(
-      map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      media_history::mojom::MediaHistoryStore, MediaHistoryUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<::mojom::OmniboxPageHandler,
-                                         OmniboxUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      site_engagement::mojom::SiteEngagementDetailsProvider, SiteEngagementUI>(
-      map);
-
-  RegisterWebUIControllerInterfaceBinder<::mojom::UsbInternalsPageHandler,
-                                         UsbInternalsUI>(map);
-
-#if defined(OS_ANDROID)
-  RegisterWebUIControllerInterfaceBinder<
-      explore_sites_internals::mojom::PageHandler,
-      explore_sites::ExploreSitesInternalsUI>(map);
-#else
-  RegisterWebUIControllerInterfaceBinder<downloads::mojom::PageHandlerFactory,
-                                         DownloadsUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      new_tab_page_third_party::mojom::PageHandlerFactory,
-      NewTabPageThirdPartyUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      new_tab_page::mojom::PageHandlerFactory, NewTabPageUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      most_visited::mojom::MostVisitedPageHandlerFactory, NewTabPageUI,
-      NewTabPageThirdPartyUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<history_clusters::mojom::PageHandler,
-                                         MemoriesUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      promo_browser_command::mojom::CommandHandler, NewTabPageUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<realbox::mojom::PageHandler,
-                                         NewTabPageUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      customize_themes::mojom::CustomizeThemesHandlerFactory, NewTabPageUI
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
-      ,
-      ProfileCustomizationUI, ProfilePickerUI, settings::SettingsUI
-#endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
-      >(map);
-
-#if !defined(OFFICIAL_BUILD)
-  RegisterWebUIControllerInterfaceBinder<foo::mojom::FooHandler, NewTabPageUI>(
-      map);
-#endif  // !defined(OFFICIAL_BUILD)
-
-  if (base::FeatureList::IsEnabled(ntp_features::kNtpChromeCartModule)) {
-    RegisterWebUIControllerInterfaceBinder<chrome_cart::mojom::CartHandler,
-                                           NewTabPageUI>(map);
-  }
-
-  if (base::FeatureList::IsEnabled(ntp_features::kNtpDriveModule)) {
-    RegisterWebUIControllerInterfaceBinder<drive::mojom::DriveHandler,
-                                           NewTabPageUI>(map);
-  }
-
-  if (base::FeatureList::IsEnabled(ntp_features::kNtpRecipeTasksModule) ||
-      base::FeatureList::IsEnabled(ntp_features::kNtpShoppingTasksModule)) {
-    RegisterWebUIControllerInterfaceBinder<
-        task_module::mojom::TaskModuleHandler, NewTabPageUI>(map);
-  }
-
-  if (reading_list::switches::IsReadingListEnabled()) {
-    RegisterWebUIControllerInterfaceBinder<
-        read_later::mojom::PageHandlerFactory, ReadLaterUI>(map);
-  }
-
-  if (base::FeatureList::IsEnabled(features::kSidePanel)) {
-    RegisterWebUIControllerInterfaceBinder<
-        side_panel::mojom::BookmarksPageHandlerFactory, ReadLaterUI>(map);
-  }
-
-  RegisterWebUIControllerInterfaceBinder<tab_search::mojom::PageHandlerFactory,
-                                         TabSearchUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      ::mojom::web_app_internals::WebAppInternalsPageHandler, InternalsUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      download_shelf::mojom::PageHandlerFactory, DownloadShelfUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      ::mojom::user_education_internals::UserEducationInternalsPageHandler,
-      InternalsUI>(map);
-#endif  // defined(OS_ANDROID)
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  RegisterWebUIControllerInterfaceBinder<
-      ash::file_manager::mojom::PageHandlerFactory,
-      ash::file_manager::FileManagerUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      add_supervision::mojom::AddSupervisionHandler,
-      chromeos::AddSupervisionUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      app_management::mojom::PageHandlerFactory,
-      chromeos::settings::OSSettingsUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      chromeos::settings::mojom::UserActionRecorder,
-      chromeos::settings::OSSettingsUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      chromeos::settings::mojom::SearchHandler,
-      chromeos::settings::OSSettingsUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      chromeos::cellular_setup::mojom::CellularSetup,
-      chromeos::settings::OSSettingsUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      chromeos::cellular_setup::mojom::ESimManager,
-      chromeos::settings::OSSettingsUI, chromeos::NetworkUI, chromeos::OobeUI>(
-      map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      chromeos::crostini_installer::mojom::PageHandlerFactory,
-      chromeos::CrostiniInstallerUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      chromeos::crostini_upgrader::mojom::PageHandlerFactory,
-      chromeos::CrostiniUpgraderUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      chromeos::multidevice_setup::mojom::MultiDeviceSetup, chromeos::OobeUI,
-      chromeos::multidevice::ProximityAuthUI,
-      chromeos::multidevice_setup::MultiDeviceSetupDialogUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      chromeos::multidevice_setup::mojom::PrivilegedHostDeviceSetter,
-      chromeos::OobeUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      chromeos::network_config::mojom::CrosNetworkConfig,
-      chromeos::InternetConfigDialogUI, chromeos::InternetDetailDialogUI,
-      chromeos::NetworkUI, chromeos::OobeUI, chromeos::settings::OSSettingsUI,
-      chromeos::LockScreenNetworkUI, ash::ShimlessRMADialogUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      chromeos::printing::printing_manager::mojom::PrintingMetadataProvider,
-      chromeos::printing::printing_manager::PrintManagementUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<cros::mojom::CameraAppDeviceProvider,
-                                         chromeos::CameraAppUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      chromeos_camera::mojom::CameraAppHelper, chromeos::CameraAppUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<help_app_ui::mojom::PageHandlerFactory,
-                                         chromeos::HelpAppUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      chromeos::local_search_service::mojom::Index, chromeos::HelpAppUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      chromeos::help_app::mojom::SearchHandler, chromeos::HelpAppUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      chromeos::eche_app::mojom::SignalingMessageExchanger,
-      chromeos::eche_app::EcheAppUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      chromeos::eche_app::mojom::SystemInfoProvider,
-      chromeos::eche_app::EcheAppUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      chromeos::eche_app::mojom::UidGenerator, chromeos::eche_app::EcheAppUI>(
-      map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      media_app_ui::mojom::PageHandlerFactory, chromeos::MediaAppUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      chromeos::network_health::mojom::NetworkHealthService,
-      chromeos::NetworkUI, chromeos::ConnectivityDiagnosticsUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      chromeos::network_diagnostics::mojom::NetworkDiagnosticsRoutines,
-      chromeos::NetworkUI, chromeos::ConnectivityDiagnosticsUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      chromeos::diagnostics::mojom::InputDataProvider,
-      chromeos::DiagnosticsDialogUI>(map);
-
-  if (chromeos::features::IsNetworkingInDiagnosticsAppEnabled()) {
-    RegisterWebUIControllerInterfaceBinder<
-        chromeos::diagnostics::mojom::NetworkHealthProvider,
-        chromeos::DiagnosticsDialogUI>(map);
-  }
-
-  RegisterWebUIControllerInterfaceBinder<
-      chromeos::diagnostics::mojom::SystemDataProvider,
-      chromeos::DiagnosticsDialogUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      chromeos::diagnostics::mojom::SystemRoutineController,
-      chromeos::DiagnosticsDialogUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<
-      chromeos::vm::mojom::VmDiagnosticsProvider, chromeos::VmUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<ash::scanning::mojom::ScanService,
-                                         ash::ScanningUI>(map);
-
-  // TODO(crbug.com/1218492): When boot RMA state is available disable this when
-  // not in RMA.
-  if (ash::features::IsShimlessRMAFlowEnabled()) {
-    RegisterWebUIControllerInterfaceBinder<
-        ash::shimless_rma::mojom::ShimlessRmaService, ash::ShimlessRMADialogUI>(
-        map);
-  }
-
-  if (base::FeatureList::IsEnabled(chromeos::features::kImeSystemEmojiPicker)) {
-    RegisterWebUIControllerInterfaceBinder<
-        emoji_picker::mojom::PageHandlerFactory, chromeos::EmojiUI>(map);
-  }
-
-  if (chromeos::features::IsWallpaperWebUIEnabled()) {
-    RegisterWebUIControllerInterfaceBinder<
-        chromeos::personalization_app::mojom::WallpaperProvider,
-        chromeos::PersonalizationAppUI>(map);
-  }
-
-  RegisterWebUIControllerInterfaceBinder<
-      launcher_internals::mojom::PageHandlerFactory,
-      chromeos::LauncherInternalsUI>(map);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-
-#if BUILDFLAG(IS_CHROMEOS_ASH) && !defined(OFFICIAL_BUILD)
-  if (chromeos::features::IsDemoModeSWAEnabled()) {
-    RegisterWebUIControllerInterfaceBinder<
-        chromeos::mojom::demo_mode::PageHandlerFactory,
-        chromeos::DemoModeAppUI>(map);
-  }
-
-  if (base::FeatureList::IsEnabled(chromeos::features::kTelemetryExtension)) {
-    RegisterWebUIControllerInterfaceBinder<
-        chromeos::health::mojom::DiagnosticsService,
-        chromeos::TelemetryExtensionUI>(map);
-    RegisterWebUIControllerInterfaceBinder<
-        chromeos::health::mojom::ProbeService, chromeos::TelemetryExtensionUI>(
-        map);
-    RegisterWebUIControllerInterfaceBinder<
-        chromeos::health::mojom::SystemEventsService,
-        chromeos::TelemetryExtensionUI>(map);
-  }
-#endif
-
-#if defined(OS_WIN) || defined(OS_MAC) || defined(OS_LINUX) || \
-    defined(OS_CHROMEOS)
-  RegisterWebUIControllerInterfaceBinder<discards::mojom::DetailsProvider,
-                                         DiscardsUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<discards::mojom::GraphDump,
-                                         DiscardsUI>(map);
-
-  RegisterWebUIControllerInterfaceBinder<discards::mojom::SiteDataProvider,
-                                         DiscardsUI>(map);
-#endif
-
-#if BUILDFLAG(ENABLE_FEED_V2)
-  RegisterWebUIControllerInterfaceBinder<feed_internals::mojom::PageHandler,
-                                         FeedInternalsUI>(map);
-#endif
-
-#if BUILDFLAG(FULL_SAFE_BROWSING)
-  RegisterWebUIControllerInterfaceBinder<::mojom::ResetPasswordHandler,
-                                         ResetPasswordUI>(map);
-#endif
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  // Because Nearby Share is only currently supported for the primary profile,
-  // we should only register binders in that scenario. However, we don't want to
-  // plumb the profile through to this function, so we 1) ensure that
-  // NearbyShareDialogUI will not be created for non-primary profiles, and 2)
-  // rely on the BindInterface implementation of OSSettingsUI to ensure that no
-  // Nearby Share receivers are bound.
-  if (base::FeatureList::IsEnabled(features::kNearbySharing)) {
-    RegisterWebUIControllerInterfaceBinder<
-        nearby_share::mojom::NearbyShareSettings,
-        chromeos::settings::OSSettingsUI, nearby_share::NearbyShareDialogUI>(
-        map);
-    RegisterWebUIControllerInterfaceBinder<nearby_share::mojom::ContactManager,
-                                           chromeos::settings::OSSettingsUI,
-                                           nearby_share::NearbyShareDialogUI>(
-        map);
-    RegisterWebUIControllerInterfaceBinder<
-        nearby_share::mojom::DiscoveryManager,
-        nearby_share::NearbyShareDialogUI>(map);
-    RegisterWebUIControllerInterfaceBinder<nearby_share::mojom::ReceiveManager,
-                                           chromeos::settings::OSSettingsUI>(
-        map);
-  }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-}
-
-}  // namespace internal
-}  // namespace chrome
+}  // namespace chrome::internal

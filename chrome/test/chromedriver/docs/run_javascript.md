@@ -243,9 +243,15 @@ before passing it to `WebView::CallFunctionWithTimeout`.
 The [`executeAsyncScript`] function is responsible for waiting for the
 async script to finish, as required by the WebDriver standard.
 
-### Use ` WebViewImpl::CallAsyncFunction` Method
+ChromeDriver enforces the session `script` timeout with the same driver-owned
+deadline used to prepare and wait for the DevTools command. If the timeout is
+`null`, that WebDriver deadline is unbounded, subject to higher-level client
+limits. The page wrapper does not create a second timer.
 
-This method is similar to `WebView::CallUserAsyncFunction`,
-but is intended for ChromeDriver's own embedded script code.
-This is only used to implement some obsolete features that we expect to
-remove in ChromeDriver version 85 (https://crbug.com/chromedriver/3376).
+The wrapper appends a completion callback to the user arguments and invokes the
+script as an async function, which also permits top-level `await`. For
+user-supplied scripts, the callback is the only successful completion path.
+Fulfillment of the returned promise is ignored. A returned-promise rejection
+reports a `javascript error` only if it settles the result before the callback
+and the driver deadline; a later rejection is observed but cannot change the
+settled result.

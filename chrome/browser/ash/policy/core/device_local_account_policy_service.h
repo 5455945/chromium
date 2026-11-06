@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,34 +9,33 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <string_view>
+#include <variant>
 
-#include "base/callback.h"
-#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
-#include "chrome/browser/ash/policy/core/device_local_account_extension_tracker.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
-#include "chrome/browser/chromeos/extensions/device_local_account_external_policy_loader.h"
-#include "chrome/browser/chromeos/policy/external_data/device_local_account_external_data_manager.h"
-#include "components/policy/core/common/cloud/cloud_policy_core.h"
-#include "components/policy/core/common/cloud/cloud_policy_store.h"
-#include "components/policy/core/common/cloud/component_cloud_policy_service.h"
+#include "chrome/browser/ash/policy/core/device_local_account_policy_broker.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "components/policy/core/common/schema_registry.h"
+
+static_assert(BUILDFLAG(IS_CHROMEOS), "For ChromeOS only");
 
 namespace ash {
 class DeviceSettingsService;
+class SessionManagerClient;
 }  // namespace ash
 
 namespace base {
 class SequencedTaskRunner;
 }  // namespace base
 
-namespace chromeos {
-class SessionManagerClient;
-}  // namespace chromeos
+namespace invalidation {
+class InvalidationListener;
+}
 
 namespace network {
 class SharedURLLoaderFactory;
@@ -44,111 +43,8 @@ class SharedURLLoaderFactory;
 
 namespace policy {
 
-class AffiliatedCloudPolicyInvalidator;
-class AffiliatedInvalidationServiceProvider;
-struct DeviceLocalAccount;
 class DeviceLocalAccountExternalDataService;
-class DeviceLocalAccountPolicyStore;
 class DeviceManagementService;
-
-// The main switching central that downloads, caches, refreshes, etc. policy for
-// a single device-local account.
-class DeviceLocalAccountPolicyBroker
-    : public CloudPolicyStore::Observer,
-      public ComponentCloudPolicyService::Delegate {
- public:
-  // |invalidation_service_provider| must outlive |this|.
-  // |policy_update_callback| will be invoked to notify observers that the
-  // policy for |account| has been updated.
-  // |task_runner| is the runner for policy refresh tasks.
-  // |resource_cache_task_runner| is the task runner used for file operations,
-  // it must be sequenced together with other tasks running on the same files.
-  DeviceLocalAccountPolicyBroker(
-      const DeviceLocalAccount& account,
-      const base::FilePath& component_policy_cache_path,
-      std::unique_ptr<DeviceLocalAccountPolicyStore> store,
-      scoped_refptr<DeviceLocalAccountExternalDataManager>
-          external_data_manager,
-      const base::RepeatingClosure& policy_updated_callback,
-      const scoped_refptr<base::SequencedTaskRunner>& task_runner,
-      const scoped_refptr<base::SequencedTaskRunner>&
-          resource_cache_task_runner,
-      AffiliatedInvalidationServiceProvider* invalidation_service_provider);
-  ~DeviceLocalAccountPolicyBroker() override;
-
-  // Initialize the broker, start asynchronous load of its |store_|.
-  void Initialize();
-
-  // Loads store synchronously.
-  void LoadImmediately();
-
-  // For the difference between |account_id| and |user_id|, see the
-  // documentation of DeviceLocalAccount.
-  const std::string& account_id() const { return account_id_; }
-  const std::string& user_id() const { return user_id_; }
-
-  scoped_refptr<chromeos::DeviceLocalAccountExternalPolicyLoader>
-  extension_loader() const {
-    return extension_loader_;
-  }
-
-  CloudPolicyCore* core() { return &core_; }
-  const CloudPolicyCore* core() const { return &core_; }
-
-  scoped_refptr<DeviceLocalAccountExternalDataManager> external_data_manager() {
-    return external_data_manager_;
-  }
-
-  ComponentCloudPolicyService* component_policy_service() const {
-    return component_policy_service_.get();
-  }
-
-  SchemaRegistry* schema_registry() { return &schema_registry_; }
-
-  bool HasInvalidatorForTest() const;
-
-  // Fire up the cloud connection for fetching policy for the account from the
-  // cloud if this is an enterprise-managed device.
-  void ConnectIfPossible(
-      ash::DeviceSettingsService* device_settings_service,
-      DeviceManagementService* device_management_service,
-      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
-
-  // Reads the refresh delay from policy and configures the refresh scheduler.
-  void UpdateRefreshDelay();
-
-  // Retrieves the display name for the account as stored in policy. Returns an
-  // empty string if the policy is not present.
-  std::string GetDisplayName() const;
-
-  // CloudPolicyStore::Observer:
-  void OnStoreLoaded(CloudPolicyStore* store) override;
-  void OnStoreError(CloudPolicyStore* store) override;
-
-  // ComponentCloudPolicyService::Delegate:
-  void OnComponentCloudPolicyUpdated() override;
-
- private:
-  void CreateComponentCloudPolicyService(CloudPolicyClient* client);
-
-  AffiliatedInvalidationServiceProvider* const invalidation_service_provider_;
-  const std::string account_id_;
-  const std::string user_id_;
-  const base::FilePath component_policy_cache_path_;
-  SchemaRegistry schema_registry_;
-  const std::unique_ptr<DeviceLocalAccountPolicyStore> store_;
-  std::unique_ptr<DeviceLocalAccountExtensionTracker> extension_tracker_;
-  scoped_refptr<DeviceLocalAccountExternalDataManager> external_data_manager_;
-  scoped_refptr<chromeos::DeviceLocalAccountExternalPolicyLoader>
-      extension_loader_;
-  CloudPolicyCore core_;
-  std::unique_ptr<ComponentCloudPolicyService> component_policy_service_;
-  base::RepeatingClosure policy_update_callback_;
-  std::unique_ptr<AffiliatedCloudPolicyInvalidator> invalidator_;
-  const scoped_refptr<base::SequencedTaskRunner> resource_cache_task_runner_;
-
-  DISALLOW_COPY_AND_ASSIGN(DeviceLocalAccountPolicyBroker);
-};
 
 // Manages user policy blobs for device-local accounts present on the device.
 // The actual policy blobs are brokered by session_manager (to prevent file
@@ -159,7 +55,7 @@ class DeviceLocalAccountPolicyService {
   // Interface for interested parties to observe policy changes.
   class Observer {
    public:
-    virtual ~Observer() {}
+    virtual ~Observer() = default;
 
     // Policy for the given |user_id| has changed.
     virtual void OnPolicyUpdated(const std::string& user_id) = 0;
@@ -168,17 +64,25 @@ class DeviceLocalAccountPolicyService {
     virtual void OnDeviceLocalAccountsChanged() = 0;
   };
 
+  // `url_loader_factory` must be non-null.
   DeviceLocalAccountPolicyService(
-      chromeos::SessionManagerClient* session_manager_client,
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+      ash::SessionManagerClient* session_manager_client,
       ash::DeviceSettingsService* device_settings_service,
       ash::CrosSettings* cros_settings,
-      AffiliatedInvalidationServiceProvider* invalidation_service_provider,
+      invalidation::InvalidationListener* invalidation_listener,
       scoped_refptr<base::SequencedTaskRunner> store_background_task_runner,
+      scoped_refptr<base::SequencedTaskRunner> store_first_load_task_runner,
       scoped_refptr<base::SequencedTaskRunner> extension_cache_task_runner,
       scoped_refptr<base::SequencedTaskRunner>
-          external_data_service_backend_task_runner,
-      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
-  virtual ~DeviceLocalAccountPolicyService();
+          external_data_service_backend_task_runner);
+
+  DeviceLocalAccountPolicyService(const DeviceLocalAccountPolicyService&) =
+      delete;
+  DeviceLocalAccountPolicyService& operator=(
+      const DeviceLocalAccountPolicyService&) = delete;
+
+  ~DeviceLocalAccountPolicyService();
 
   // Shuts down the service and prevents further policy fetches from the cloud.
   void Shutdown();
@@ -188,18 +92,20 @@ class DeviceLocalAccountPolicyService {
 
   // Get the policy broker for a given |user_id|. Returns NULL if that |user_id|
   // does not belong to an existing device-local account.
-  DeviceLocalAccountPolicyBroker* GetBrokerForUser(const std::string& user_id);
+  DeviceLocalAccountPolicyBroker* GetBrokerForUser(std::string_view user_id);
 
   // Indicates whether policy has been successfully fetched for the given
   // |user_id|.
-  bool IsPolicyAvailableForUser(const std::string& user_id);
+  bool IsPolicyAvailableForUser(std::string_view user_id);
 
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
 
  private:
-  typedef std::map<std::string, DeviceLocalAccountPolicyBroker*>
-      PolicyBrokerMap;
+  using PolicyBrokerMap =
+      std::map<std::string,
+               std::unique_ptr<DeviceLocalAccountPolicyBroker>,
+               std::less<>>;
 
   // Returns |true| if the directory in which force-installed extensions are
   // cached for |account_id| is busy, either because a broker that was using
@@ -238,14 +144,16 @@ class DeviceLocalAccountPolicyService {
   // Notifies the |observers_| that the policy for |user_id| has changed.
   void NotifyPolicyUpdated(const std::string& user_id);
 
+  const scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
+
   base::ObserverList<Observer, true>::Unchecked observers_;
 
-  chromeos::SessionManagerClient* session_manager_client_;
-  ash::DeviceSettingsService* device_settings_service_;
-  ash::CrosSettings* cros_settings_;
-  AffiliatedInvalidationServiceProvider* invalidation_service_provider_;
+  raw_ptr<ash::SessionManagerClient> session_manager_client_;
+  raw_ptr<ash::DeviceSettingsService> device_settings_service_;
+  raw_ptr<ash::CrosSettings> cros_settings_;
+  raw_ptr<invalidation::InvalidationListener> invalidation_listener_;
 
-  DeviceManagementService* device_management_service_;
+  raw_ptr<DeviceManagementService> device_management_service_;
 
   // The device-local account policy brokers, keyed by user ID.
   PolicyBrokerMap policy_brokers_;
@@ -269,22 +177,19 @@ class DeviceLocalAccountPolicyService {
   std::set<std::string> busy_extension_cache_directories_;
 
   const scoped_refptr<base::SequencedTaskRunner> store_background_task_runner_;
+  const scoped_refptr<base::SequencedTaskRunner> store_first_load_task_runner_;
   const scoped_refptr<base::SequencedTaskRunner> extension_cache_task_runner_;
   const scoped_refptr<base::SequencedTaskRunner> resource_cache_task_runner_;
 
   std::unique_ptr<DeviceLocalAccountExternalDataService> external_data_service_;
 
-  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
-
-  const base::CallbackListSubscription local_accounts_subscription_;
+  base::CallbackListSubscription local_accounts_subscription_;
 
   // Path to the directory that contains the cached policy for components
   // for device-local accounts.
   const base::FilePath component_policy_cache_root_;
 
   base::WeakPtrFactory<DeviceLocalAccountPolicyService> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(DeviceLocalAccountPolicyService);
 };
 
 }  // namespace policy

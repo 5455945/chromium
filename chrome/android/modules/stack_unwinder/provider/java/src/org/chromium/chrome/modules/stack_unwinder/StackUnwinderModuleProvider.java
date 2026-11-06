@@ -1,17 +1,22 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.modules.stack_unwinder;
 
-import org.chromium.base.annotations.CalledByNative;
+import org.jni_zero.CalledByNative;
+
+import org.chromium.base.BundleUtils;
+import org.chromium.build.annotations.NullMarked;
 
 /** Installs and loads the stack unwinder module. */
+@NullMarked
 public class StackUnwinderModuleProvider {
     /** Returns true if the module is installed. */
     @CalledByNative
     public static boolean isModuleInstalled() {
-        return StackUnwinderModule.isInstalled();
+        // Return false for APK builds since they do not include native library partitions.
+        return BundleUtils.isIsolatedSplitInstalled(StackUnwinderModule.SPLIT_NAME);
     }
 
     /**
@@ -21,7 +26,7 @@ public class StackUnwinderModuleProvider {
      */
     @CalledByNative
     public static void installModule() {
-        StackUnwinderModule.install((boolean success) -> {});
+        StackUnwinderModule.installDeferred();
     }
 
     /**
@@ -31,23 +36,5 @@ public class StackUnwinderModuleProvider {
     @CalledByNative
     public static void ensureNativeLoaded() {
         StackUnwinderModule.ensureNativeLoaded();
-    }
-
-    /**
-     * Returns the pointer to the CreateMemoryRegionsMap native function within the module, encoded
-     * as a long. Can be called only if the module is installed.
-     */
-    @CalledByNative
-    public static long getCreateMemoryRegionsMapFunction() {
-        return StackUnwinderModule.getImpl().getCreateMemoryRegionsMapFunction();
-    }
-
-    /**
-     * Returns the pointer to the CreateNativeUnwinder native function within the module, encoded as
-     * a long. Can be called only if the module is installed.
-     */
-    @CalledByNative
-    public static long getCreateNativeUnwinderFunction() {
-        return StackUnwinderModule.getImpl().getCreateNativeUnwinderFunction();
     }
 }

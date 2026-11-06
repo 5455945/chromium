@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,12 @@
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/values.h"
-#include "chrome/test/chromedriver/chrome/browser_info.h"
 #include "chrome/test/chromedriver/chrome/chrome.h"
 #include "chrome/test/chromedriver/chrome/devtools_client.h"
 #include "chrome/test/chromedriver/chrome/devtools_client_impl.h"
@@ -99,37 +98,38 @@ Status PerformanceLogger::OnConnected(DevToolsClient* client) {
       return Status(kOk);
     return StartTrace();
   }
+  if (client->IsTabTarget()) {
+    // Tab Targets do not support Network.enable
+    return Status(kOk);
+  }
   return EnableInspectorDomains(client);
 }
 
-Status PerformanceLogger::OnEvent(
-    DevToolsClient* client,
-    const std::string& method,
-    const base::DictionaryValue& params) {
+Status PerformanceLogger::OnEvent(DevToolsClient* client,
+                                  const std::string& method,
+                                  const base::DictValue& params) {
   if (method == "Target.attachedToTarget") {
-    std::string type, target_id, session_id;
-    if (!params.GetString("targetInfo.type", &type))
+    const std::string* type = params.FindStringByDottedPath("targetInfo.type");
+    if (!type) {
       return Status(kUnknownError,
                     "missing target type in Target.attachedToTarget event");
-    if (enable_service_worker_ && type == "service_worker") {
-      std::string target_id;
-      if (!params.GetString("targetInfo.targetId", &target_id))
+    }
+    if (enable_service_worker_ && *type == "service_worker") {
+      const std::string* target_id =
+          params.FindStringByDottedPath("targetInfo.targetId");
+      if (!target_id) {
         return Status(kUnknownError,
                       "missing target ID in Target.attachedToTarget event");
+      }
 
-      std::list<std::string> webview_ids;
-      Status status = session_->chrome->GetWebViewIds(&webview_ids,
-                                                      session_->w3c_compliant);
-
+      std::list<std::string> tabview_ids;
+      Status status = session_->chrome->GetTopLevelWebViewIds(
+          &tabview_ids, session_->w3c_compliant);
       if (status.IsError())
         return status;
 
       WebView* webview = nullptr;
-      status = session_->chrome->GetWebViewById(target_id, &webview);
-      if (status.IsError())
-        return status;
-
-      status = webview->ConnectIfNecessary();
+      status = session_->chrome->GetWebViewById(*target_id, &webview);
       if (status.IsError())
         return status;
     }
@@ -152,27 +152,24 @@ Status PerformanceLogger::BeforeCommand(const std::string& command_name) {
   return Status(kOk);
 }
 
-void PerformanceLogger::AddLogEntry(
-    Log::Level level,
-    const std::string& webview,
-    const std::string& method,
-    const base::DictionaryValue& params) {
-  base::DictionaryValue log_message_dict;
-  log_message_dict.SetString("webview", webview);
-  log_message_dict.SetString("message.method", method);
-  log_message_dict.SetPath({"message", "params"}, params.Clone());
-  std::string log_message_json;
-  base::JSONWriter::Write(log_message_dict, &log_message_json);
+void PerformanceLogger::AddLogEntry(Log::Level level,
+                                    const std::string& webview,
+                                    const std::string& method,
+                                    const base::DictValue& params) {
+  base::DictValue log_message_dict;
+  log_message_dict.Set("webview", webview);
+  log_message_dict.SetByDottedPath("message.method", method);
+  log_message_dict.SetByDottedPath("message.params", params.Clone());
+  std::string log_message_json = base::WriteJson(log_message_dict).value_or("");
 
   // TODO(klm): extract timestamp from params?
   // Look at where it is for Page, Network, and trace events.
   log_->AddEntry(level, log_message_json);
 }
 
-void PerformanceLogger::AddLogEntry(
-    const std::string& webview,
-    const std::string& method,
-    const base::DictionaryValue& params) {
+void PerformanceLogger::AddLogEntry(const std::string& webview,
+                                    const std::string& method,
+                                    const base::DictValue& params) {
   AddLogEntry(Log::kInfo, webview, method, params);
 }
 
@@ -181,12 +178,8 @@ Status PerformanceLogger::EnableInspectorDomains(DevToolsClient* client) {
   if (IsEnabled(prefs_.network)) {
     enable_commands.push_back("Network.enable");
   }
-  if (IsEnabled(prefs_.page) && (client->GetOwner() == nullptr ||
-                                 !client->GetOwner()->IsServiceWorker())) {
-    enable_commands.push_back("Page.enable");
-  }
   for (const auto& enable_command : enable_commands) {
-    base::DictionaryValue params;  // All the enable commands have empty params.
+    base::DictValue params;  // All the enable commands have empty params.
     Status status = client->SendCommand(enable_command, params);
     if (status.IsError())
       return status;
@@ -194,10 +187,9 @@ Status PerformanceLogger::EnableInspectorDomains(DevToolsClient* client) {
   return Status(kOk);
 }
 
-Status PerformanceLogger::HandleInspectorEvents(
-    DevToolsClient* client,
-    const std::string& method,
-    const base::DictionaryValue& params) {
+Status PerformanceLogger::HandleInspectorEvents(DevToolsClient* client,
+                                                const std::string& method,
+                                                const base::DictValue& params) {
   if (!ShouldLogEvent(method))
     return Status(kOk);
 
@@ -205,45 +197,44 @@ Status PerformanceLogger::HandleInspectorEvents(
   return Status(kOk);
 }
 
-Status PerformanceLogger::HandleTraceEvents(
-    DevToolsClient* client,
-    const std::string& method,
-    const base::DictionaryValue& params) {
+Status PerformanceLogger::HandleTraceEvents(DevToolsClient* client,
+                                            const std::string& method,
+                                            const base::DictValue& params) {
   if (method == "Tracing.tracingComplete") {
     trace_buffering_ = false;
   } else if (method == "Tracing.dataCollected") {
     // The Tracing.dataCollected event contains a list of trace events.
     // Add each one as an individual log entry of method Tracing.dataCollected.
-    const base::ListValue* traces;
-    if (!params.GetList("value", &traces)) {
+    const base::ListValue* traces = params.FindList("value");
+    if (!traces) {
       return Status(kUnknownError,
                     "received DevTools trace data in unexpected format");
     }
-    for (const auto& trace : traces->GetList()) {
-      const base::DictionaryValue* event_dict;
-      if (!trace.GetAsDictionary(&event_dict))
+    for (const auto& trace : *traces) {
+      const base::DictValue* event_dict = trace.GetIfDict();
+      if (!event_dict)
         return Status(kUnknownError, "trace event must be a dictionary");
       AddLogEntry(client->GetId(), "Tracing.dataCollected", *event_dict);
     }
   } else if (method == "Tracing.bufferUsage") {
     // 'value' will be between 0-1 and represents how full the DevTools trace
     // buffer is. If the buffer is full, warn the user.
-    double buffer_usage = 0;
-    if (!params.GetDouble("percentFull", &buffer_usage)) {
+    std::optional<double> maybe_buffer_usage = params.FindDouble("percentFull");
+    if (!maybe_buffer_usage.has_value()) {
       // Tracing.bufferUsage event will occur once per second, and it really
       // only serves as a warning, so if we can't reliably tell whether the
       // buffer is full, just fail silently instead of spamming the logs.
       return Status(kOk);
     }
-    if (buffer_usage >= 0.99999) {
-      base::DictionaryValue params;
+    if (maybe_buffer_usage.value() >= 0.99999) {
+      base::DictValue error_params;
       std::string err("Chrome's trace buffer filled while collecting events, "
                       "so some trace events may have been lost");
-      params.SetString("error", err);
+      error_params.Set("error", err);
       // Expose error to client via perf log using same format as other entries.
       AddLogEntry(Log::kWarning,
                   DevToolsClientImpl::kBrowserwideDevToolsClientId,
-                  "Tracing.bufferUsage", params);
+                  "Tracing.bufferUsage", error_params);
       LOG(WARNING) << err;
     }
   }
@@ -266,12 +257,13 @@ Status PerformanceLogger::StartTrace() {
   for (const std::string& str : str_list) {
     categories.Append(str);
   }
-  base::DictionaryValue params;
-  params.SetPath("traceConfig.includedCategories", std::move(categories));
-  params.SetString("traceConfig.recordingMode", "recordAsMuchAsPossible");
+  base::DictValue params;
+  params.SetByDottedPath("traceConfig.includedCategories",
+                         std::move(categories));
+  params.SetByDottedPath("traceConfig.recordingMode", "recordAsMuchAsPossible");
   // Ask DevTools to report buffer usage.
-  params.SetInteger("bufferUsageReportingInterval",
-                    prefs_.buffer_usage_reporting_interval);
+  params.Set("bufferUsageReportingInterval",
+             prefs_.buffer_usage_reporting_interval);
   Status status = browser_client_->SendCommand("Tracing.start", params);
   if (status.IsError()) {
     LOG(ERROR) << "error when starting trace: " << status.message();
@@ -291,7 +283,7 @@ Status PerformanceLogger::CollectTraceEvents() {
                   "was not started");
   }
 
-  base::DictionaryValue params;
+  base::DictValue params;
   Status status = browser_client_->SendCommand("Tracing.end", params);
   if (status.IsError()) {
     LOG(ERROR) << "error when stopping trace: " << status.message();
@@ -302,7 +294,7 @@ Status PerformanceLogger::CollectTraceEvents() {
   status = browser_client_->HandleEventsUntil(
       base::BindRepeating(&PerformanceLogger::IsTraceDone,
                           base::Unretained(this)),
-      Timeout(base::TimeDelta::FromSeconds(30)));
+      Timeout(base::Seconds(30)));
   if (status.IsError())
     return status;
 

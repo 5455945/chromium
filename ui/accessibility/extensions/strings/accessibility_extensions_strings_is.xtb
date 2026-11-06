@@ -9,6 +9,7 @@
 <translation id="1591070050619849194">Gera allar hreyfimyndir óvirkar.</translation>
 <translation id="1703735871906654364">Skoðun með textabendli</translation>
 <translation id="1791496371305830581">Leyfa allar hreyfimyndir.</translation>
+<translation id="1974060860693918893">Ítarlegt</translation>
 <translation id="1996252509865389616">Virkja?</translation>
 <translation id="2079545284768500474">Afturkalla</translation>
 <translation id="2179565792157161713">Opna ítarlega lýsingu í nýjum flipa</translation>
@@ -26,6 +27,7 @@
 <translation id="3812541808639806898">Skoðari fyrir skýringartexta mynda</translation>
 <translation id="381767806621926835">Þú getur hægrismellt á allt sem hefur eigindina „longdesc“ eða „aria-describedat“ til að opna ítarlega skýringu atriðisins.</translation>
 <translation id="4023902424053835668">Skoðaðu texta á vefsíðum með því að nota örvalyklana.</translation>
+<translation id="4384008284958619421">Nútímalegir skjálesarar og Google Chrome styðja nú aðgengilegar lýsingar á einingum og ARIA-staðla.</translation>
 <translation id="4388820049312272371">Sýna staðsetningu bendils með hröðu blikki.</translation>
 <translation id="4394049700291259645">Slökkva</translation>
 <translation id="4769065380738716500">Myndum hefur verið skipt út fyrir skýringartexta sinn.</translation>
@@ -51,6 +53,7 @@
 <translation id="6170146920149900756">Litaaukning</translation>
 <translation id="633394792577263429">Haltu &lt;span class='key'&gt;Control&lt;/span&gt; inni til að ferðast á milli orða.</translation>
 <translation id="6550675742724504774">Valkostir</translation>
+<translation id="6699630355767768222">Skref 3: Hnekkja litaás leiðréttingar.</translation>
 <translation id="6838518108677880446">Uppsetning:</translation>
 <translation id="690628312087070417">Þegar textabendillinn ferðast um langan veg:</translation>
 <translation id="6965382102122355670">Í lagi</translation>
@@ -61,9 +64,11 @@
 <translation id="7658239707568436148">Hætta við</translation>
 <translation id="786423340267544509">Bæta ramma við einingar með eigindirnar aria-describedat eða longdesc.</translation>
 <translation id="7942349550061667556">Rauður</translation>
+<translation id="8081200409424070383">Long Descriptions verður úrelt 20. nóvember 2026.</translation>
 <translation id="8260673944985561857">Valkostir skoðunar með textabendli</translation>
 <translation id="8321034316479930120">Reglur um hreyfimyndir</translation>
 <translation id="8480209185614411573">Mikil birtuskil</translation>
 <translation id="8609925175482059018">Ýttu á &lt;span class='key'&gt;F7&lt;/span&gt; til að kveikja á skoðun með textabendli. Ýttu aftur til að slökkva.</translation>
+<translation id="8798099450830957504">Sjálfgefið</translation>
 <translation id="894241283505723656">Ítarlegar lýsingar í efnisvalmynd</translation>
 </translationbundle>

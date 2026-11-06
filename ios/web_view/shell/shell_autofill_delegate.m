@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,14 @@
 
 #import "ios/web_view/shell/shell_risk_data_loader.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+// A structure to hold the title and message strings used to present an
+// autofill-related progress dialog (e.g., for card verification).
+// This struct is used as the return type for methods that dynamically determine
+// the appropriate user-facing text for various progress states.
+typedef struct {
+  NSString* title;
+  NSString* message;
+} AutofillDialogText;
 
 @interface ShellAutofillDelegate ()
 
@@ -20,8 +25,17 @@
 // Risk data loader.
 @property(nonatomic, strong) ShellRiskDataLoader* riskDataLoader;
 
+// Autofill progress dialog
+@property(nonatomic, weak) UIAlertController* autofillProgressDialog;
+
 // Returns an action for a suggestion.
-- (UIAlertAction*)actionForSuggestion:(CWVAutofillSuggestion*)suggestion;
+- (UIAlertAction*)actionForSuggestion:(CWVAutofillSuggestion*)suggestion
+                              atIndex:(NSInteger)index;
+
+// Returns an array contaning the appropriate title and message for the given
+// `CWVAutofillProgressDialogType`
+- (AutofillDialogText)titleAndMessageForAutofillProgressDialogWithType:
+    (CWVAutofillProgressDialogType)type;
 
 @end
 
@@ -42,7 +56,7 @@
 
 - (void)autofillController:(CWVAutofillController*)autofillController
     didFocusOnFieldWithIdentifier:(NSString*)fieldIdentifier
-                        fieldType:(NSString*)fieldType
+                        fieldType:(NSInteger)fieldType
                          formName:(NSString*)formName
                           frameID:(NSString*)frameID
                             value:(NSString*)value
@@ -70,8 +84,10 @@
                                  style:UIAlertActionStyleCancel
                                handler:nil];
     [alertController addAction:cancelAction];
-    for (CWVAutofillSuggestion* suggestion in suggestions) {
-      [alertController addAction:[self actionForSuggestion:suggestion]];
+    for (NSUInteger i = 0; i < suggestions.count; ++i) {
+      CWVAutofillSuggestion* suggestion = suggestions[i];
+      [alertController addAction:[self actionForSuggestion:suggestion
+                                                   atIndex:i]];
     }
 
     [[self anyKeyWindow].rootViewController
@@ -88,17 +104,28 @@
 
 - (void)autofillController:(CWVAutofillController*)autofillController
     didInputInFieldWithIdentifier:(NSString*)fieldIdentifier
-                        fieldType:(NSString*)fieldType
+                        fieldType:(NSInteger)fieldType
                          formName:(NSString*)formName
                           frameID:(NSString*)frameID
                             value:(NSString*)value
                     userInitiated:(BOOL)userInitiated {
-  // Not implemented.
+  // TODO(crbug.com/40224850): Fetching suggestions has an important side effect
+  // of calling PasswordFormManager::UpdateStateOnUserInput. This will ensure
+  // that the typed information can be remembered during the save dialogue.
+  // Make this method a no-op once the bug is fixed.
+  id completionHandler = ^(NSArray<CWVAutofillSuggestion*>* suggestions) {
+    NSLog(@"%@ suggestions: %@", NSStringFromSelector(_cmd), suggestions);
+  };
+  [autofillController fetchSuggestionsForFormWithName:formName
+                                      fieldIdentifier:fieldIdentifier
+                                            fieldType:fieldType
+                                              frameID:frameID
+                                    completionHandler:completionHandler];
 }
 
 - (void)autofillController:(CWVAutofillController*)autofillController
     didBlurOnFieldWithIdentifier:(NSString*)fieldIdentifier
-                       fieldType:(NSString*)fieldType
+                       fieldType:(NSInteger)fieldType
                         formName:(NSString*)formName
                          frameID:(NSString*)frameID
                            value:(NSString*)value
@@ -109,7 +136,7 @@
 - (void)autofillController:(CWVAutofillController*)autofillController
      didSubmitFormWithName:(NSString*)formName
                    frameID:(NSString*)frameID
-             userInitiated:(BOOL)userInitiated {
+            perfectFilling:(BOOL)perfectFilling {
   // Not implemented.
 }
 
@@ -305,8 +332,9 @@
 
 - (void)autofillController:(CWVAutofillController*)autofillController
     notifyUserOfPasswordLeakOnURL:(NSURL*)URL
-                         leakType:(CWVPasswordLeakType)leakType {
-  NSLog(@"Password on %@ is leaked!", URL);
+                         leakType:(CWVPasswordLeakType)leakType
+                         username:(NSString*)username {
+  NSLog(@"Password on %@ is leaked for username %@!", URL, username);
 }
 
 - (void)autofillController:(CWVAutofillController*)autofillController
@@ -316,40 +344,168 @@
   decisionHandler(YES);
 }
 
+- (void)autofillController:(CWVAutofillController*)autofillController
+    confirmSaveForNewAutofillProfile:(CWVAutofillProfile*)newProfile
+                          oldProfile:(nullable CWVAutofillProfile*)oldProfile
+                     decisionHandler:
+                         (void (^)(CWVAutofillProfileUserDecision decision))
+                             decisionHandler {
+  NSString* message =
+      [NSString stringWithFormat:@"new: %@\nold: %@",
+                                 newProfile.debugDescription, oldProfile];
+  UIAlertController* alertController = [UIAlertController
+      alertControllerWithTitle:@"Confirm save for new profile?"
+                       message:message
+                preferredStyle:UIAlertControllerStyleAlert];
+
+  UIAlertAction* accept = [UIAlertAction
+      actionWithTitle:@"Accept"
+                style:UIAlertActionStyleDefault
+              handler:^(UIAlertAction* action) {
+                decisionHandler(CWVAutofillProfileUserDecisionAccepted);
+              }];
+  [alertController addAction:accept];
+
+  UIAlertAction* decline = [UIAlertAction
+      actionWithTitle:@"Decline"
+                style:UIAlertActionStyleCancel
+              handler:^(UIAlertAction* action) {
+                decisionHandler(CWVAutofillProfileUserDecisionDeclined);
+              }];
+  [alertController addAction:decline];
+
+  [[self anyKeyWindow].rootViewController presentViewController:alertController
+                                                       animated:YES
+                                                     completion:nil];
+}
+
+- (void)autofillControllerDidLoginWithExistingPassword:
+    (CWVAutofillController*)autofillController {
+  NSLog(@"User logged in with an existing password");
+}
+
+- (void)autofillController:(CWVAutofillController*)autofillController
+    showProgressDialogOfType:(CWVAutofillProgressDialogType)type
+                cancelAction:(ProceduralBlock)cancelAction {
+  AutofillDialogText dialogText =
+      [self titleAndMessageForAutofillProgressDialogWithType:type];
+
+  UIAlertController* alertController =
+      [UIAlertController alertControllerWithTitle:dialogText.title
+                                          message:dialogText.message
+                                   preferredStyle:UIAlertControllerStyleAlert];
+
+  UIAlertAction* cancelActionUI =
+      [UIAlertAction actionWithTitle:@"Cancel"
+                               style:UIAlertActionStyleCancel
+                             handler:^(UIAlertAction* action) {
+                               if (cancelAction) {
+                                 cancelAction();
+                               }
+                             }];
+  [alertController addAction:cancelActionUI];
+
+  self.autofillProgressDialog = alertController;
+
+  [[self anyKeyWindow].rootViewController presentViewController:alertController
+                                                       animated:YES
+                                                     completion:nil];
+}
+
+- (void)autofillController:(CWVAutofillController*)autofillController
+    closeProgressDialogWithConfirmation:(BOOL)showConfirmation
+                             completion:(ProceduralBlock)completion {
+  if (!self.autofillProgressDialog) {
+    if (completion) {
+      completion();
+    }
+    return;
+  }
+
+  if (showConfirmation) {
+    // handle showing confirmation before dismissing.
+  }
+
+  [self.autofillProgressDialog dismissViewControllerAnimated:YES
+                                                  completion:^{
+                                                    if (completion) {
+                                                      completion();
+                                                    }
+                                                  }];
+  self.autofillProgressDialog = nil;
+}
+
 #pragma mark - Private Methods
 
-- (UIAlertAction*)actionForSuggestion:(CWVAutofillSuggestion*)suggestion {
+- (UIAlertAction*)actionForSuggestion:(CWVAutofillSuggestion*)suggestion
+                              atIndex:(NSInteger)index {
   NSString* title =
       [NSString stringWithFormat:@"%@ %@", suggestion.value,
                                  suggestion.displayDescription ?: @""];
   __weak ShellAutofillDelegate* weakSelf = self;
-  return [UIAlertAction
-      actionWithTitle:title
-                style:UIAlertActionStyleDefault
-              handler:^(UIAlertAction* action) {
-                ShellAutofillDelegate* strongSelf = weakSelf;
-                if (!strongSelf) {
-                  return;
-                }
-                [strongSelf.autofillController acceptSuggestion:suggestion
-                                              completionHandler:nil];
-                [[self anyKeyWindow] endEditing:YES];
-              }];
+  return [UIAlertAction actionWithTitle:title
+                                  style:UIAlertActionStyleDefault
+                                handler:^(UIAlertAction* action) {
+                                  ShellAutofillDelegate* strongSelf = weakSelf;
+                                  if (!strongSelf) {
+                                    return;
+                                  }
+                                  [strongSelf.autofillController
+                                       acceptSuggestion:suggestion
+                                                atIndex:index
+                                      completionHandler:nil];
+                                  [[self anyKeyWindow] endEditing:YES];
+                                }];
+}
+
+- (AutofillDialogText)titleAndMessageForAutofillProgressDialogWithType:
+    (CWVAutofillProgressDialogType)type {
+  AutofillDialogText dialogText;
+
+  switch (type) {
+    case CWVAutofillProgressDialogTypeVirtualCardUnmask:
+    case CWVAutofillProgressDialogTypeServerCardUnmask:
+      dialogText.title = @"Verifying card...";
+
+      dialogText.message =
+          (type == CWVAutofillProgressDialogTypeVirtualCardUnmask)
+              ? @"Checking your card details."
+              : @"Verifying your card details";
+      break;
+    case CWVAutofillProgressDialogTypeCardInfoRetrievalEnrolledUnmask:
+      dialogText.title = @"Retrieving Card Info...";
+      break;
+    case CWVAutofillProgressDialogTypeIbanUnmask:
+    case CWVAutofillProgressDialogType3DSFetchVCN:
+    case CWVAutofillProgressDialogTypeBNPLFetchVCN:
+    case CWVAutofillProgressDialogTypeBNPLAmountExtraction:
+    case CWVAutofillProgressDialogTypeUnspecified:
+      dialogText.title = @"Processing...";
+      dialogText.message = @"Please wait.";
+      break;
+    default:
+      NSAssert(NO, @"Unhandled CWVAutofillProgressDialogType: %ld", (long)type);
+      break;
+  }
+
+  return dialogText;
 }
 
 #pragma mark - Private
 
 - (UIWindow*)anyKeyWindow {
-#if !defined(__IPHONE_13_0) || __IPHONE_OS_VERSION_MIN_REQUIRED < __IPHONE_13_0
-  return [UIApplication sharedApplication].keyWindow;
-#else
-  NSArray<UIWindow*>* windows = [UIApplication sharedApplication].windows;
-  for (UIWindow* window in windows) {
-    if (window.isKeyWindow)
-      return window;
+  for (UIWindowScene* windowScene in UIApplication.sharedApplication
+           .connectedScenes) {
+    NSAssert([windowScene isKindOfClass:[UIWindowScene class]],
+             @"UIScene is not a UIWindowScene: %@", windowScene);
+    for (UIWindow* window in windowScene.windows) {
+      if (window.isKeyWindow) {
+        return window;
+      }
+    }
   }
+
   return nil;
-#endif
 }
 
 @end

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,12 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_DOM_WEAK_IDENTIFIER_MAP_H_
 
 #include <limits>
-#include "third_party/blink/renderer/platform/heap/handle.h"
+
+#include "base/check_op.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
-#include "third_party/blink/renderer/platform/wtf/hash_map.h"
 
 namespace blink {
 
@@ -28,22 +30,31 @@ class WeakIdentifierMap final
   }
 
   static IdentifierType Identifier(T* object) {
-    IdentifierType result = Instance().object_to_identifier_.at(object);
+    IdentifierType result;
 
-    if (WTF::IsHashTraitsEmptyValue<HashTraits<IdentifierType>>(result)) {
-      do {
+    auto it = Instance().object_to_identifier_.find(object);
+    if (it == Instance().object_to_identifier_.end()) {
+      result = Next();
+      while (!Instance().Put(object, result)) [[unlikely]] {
         result = Next();
-      } while (!LIKELY(Instance().Put(object, result)));
+      }
+    } else {
+      result = it->value;
     }
     return result;
   }
 
+  // If the object is not found, returns 0 which is not a valid identifier.
   static IdentifierType ExistingIdentifier(T* object) {
-    return Instance().object_to_identifier_.at(object);
+    auto it_result = Instance().object_to_identifier_.find(object);
+    return it_result != Instance().object_to_identifier_.end()
+               ? it_result->value
+               : 0;
   }
 
   static T* Lookup(IdentifierType identifier) {
-    return Instance().identifier_to_object_.at(identifier);
+    auto it = Instance().identifier_to_object_.find(identifier);
+    return it != Instance().identifier_to_object_.end() ? it->value : nullptr;
   }
 
   static void NotifyObjectDestroyed(T* object) {
@@ -62,8 +73,10 @@ class WeakIdentifierMap final
   static IdentifierType Next() {
     // On overflow, skip negative values for signed IdentifierType, and 0 which
     // is not a valid key in HashMap by default.
-    if (UNLIKELY(LastIdRef() == std::numeric_limits<IdentifierType>::max()))
+    if (LastIdRef() == std::numeric_limits<IdentifierType>::max())
+        [[unlikely]] {
       LastIdRef() = 0;
+    }
     return ++LastIdRef();
   }
 
@@ -73,8 +86,10 @@ class WeakIdentifierMap final
   }
 
   bool Put(T* object, IdentifierType identifier) {
-    if (!LIKELY(identifier_to_object_.insert(identifier, object).is_new_entry))
+    if (!identifier_to_object_.insert(identifier, object).is_new_entry)
+        [[unlikely]] {
       return false;
+    }
     DCHECK(object && !object_to_identifier_.Contains(object));
     object_to_identifier_.Set(object, identifier);
     DCHECK_EQ(object_to_identifier_.size(), identifier_to_object_.size());
@@ -83,8 +98,9 @@ class WeakIdentifierMap final
 
   void ObjectDestroyed(T* object) {
     IdentifierType identifier = object_to_identifier_.Take(object);
-    if (!WTF::IsHashTraitsEmptyValue<HashTraits<IdentifierType>>(identifier))
+    if (!IsHashTraitsEmptyValue<HashTraits<IdentifierType>>(identifier)) {
       identifier_to_object_.erase(identifier);
+    }
     DCHECK_EQ(object_to_identifier_.size(), identifier_to_object_.size());
   }
 

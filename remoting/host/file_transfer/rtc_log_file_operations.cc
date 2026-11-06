@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,11 @@
 
 #include <algorithm>
 
-#include "base/bind.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
-#include "base/notreached.h"
 #include "base/strings/stringprintf.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "remoting/protocol/connection_to_client.h"
 #include "remoting/protocol/file_transfer_helpers.h"
@@ -23,7 +22,8 @@ namespace {
 
 class RtcLogFileReader : public FileOperations::Reader {
  public:
-  explicit RtcLogFileReader(protocol::ConnectionToClient* connection);
+  explicit RtcLogFileReader(
+      base::WeakPtr<protocol::ConnectionToClient> connection);
   ~RtcLogFileReader() override;
   RtcLogFileReader(const RtcLogFileReader&) = delete;
   RtcLogFileReader& operator=(const RtcLogFileReader&) = delete;
@@ -47,7 +47,7 @@ class RtcLogFileReader : public FileOperations::Reader {
   // if the end is reached. Returns 0 if there is no more data to be read.
   int ReadPartially(int maximum_to_read, std::vector<std::uint8_t>& output);
 
-  protocol::ConnectionToClient* connection_;
+  base::WeakPtr<protocol::ConnectionToClient> connection_;
   base::FilePath filename_;
   base::circular_deque<LogSection> data_;
   FileOperations::State state_ = FileOperations::kCreated;
@@ -66,31 +66,14 @@ class RtcLogFileReader : public FileOperations::Reader {
   base::WeakPtrFactory<RtcLogFileReader> weak_factory_{this};
 };
 
-// This class simply returns a protocol error if the client attempts to upload
-// a file to this FileOperations implementation. The RTC log is download-only,
-// and the upload code-path is never intended to be executed. This class is
-// intended to gracefully return an error instead of crashing the host process.
-class RtcLogFileWriter : public FileOperations::Writer {
- public:
-  RtcLogFileWriter() = default;
-  ~RtcLogFileWriter() override = default;
-  RtcLogFileWriter(const RtcLogFileWriter&) = delete;
-  RtcLogFileWriter& operator=(const RtcLogFileWriter&) = delete;
-
-  // FileOperations::Writer interface.
-  void Open(const base::FilePath& filename, Callback callback) override;
-  void WriteChunk(std::vector<std::uint8_t> data, Callback callback) override;
-  void Close(Callback callback) override;
-  FileOperations::State state() const override;
-};
-
-RtcLogFileReader::RtcLogFileReader(protocol::ConnectionToClient* connection)
+RtcLogFileReader::RtcLogFileReader(
+    base::WeakPtr<protocol::ConnectionToClient> connection)
     : connection_(connection) {}
 RtcLogFileReader::~RtcLogFileReader() = default;
 
 void RtcLogFileReader::Open(OpenCallback callback) {
   state_ = FileOperations::kBusy;
-  base::SequencedTaskRunnerHandle::Get()->PostTask(
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
       base::BindOnce(&RtcLogFileReader::DoOpen, weak_factory_.GetWeakPtr(),
                      std::move(callback)));
@@ -98,7 +81,7 @@ void RtcLogFileReader::Open(OpenCallback callback) {
 
 void RtcLogFileReader::ReadChunk(std::size_t size, ReadCallback callback) {
   state_ = FileOperations::kBusy;
-  base::SequencedTaskRunnerHandle::Get()->PostTask(
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
       base::BindOnce(&RtcLogFileReader::DoReadChunk, weak_factory_.GetWeakPtr(),
                      size, std::move(callback)));
@@ -121,6 +104,13 @@ FileOperations::State RtcLogFileReader::state() const {
 }
 
 void RtcLogFileReader::DoOpen(OpenCallback callback) {
+  if (!connection_) {
+    state_ = FileOperations::kFailed;
+    std::move(callback).Run(protocol::MakeFileTransferError(
+        FROM_HERE, protocol::FileTransfer_Error_Type_PROTOCOL_ERROR));
+    return;
+  }
+
   protocol::WebrtcEventLogData* rtc_log = connection_->rtc_event_log();
   if (!rtc_log) {
     // This is a protocol error because RTC log is only supported for WebRTC
@@ -133,10 +123,9 @@ void RtcLogFileReader::DoOpen(OpenCallback callback) {
 
   base::Time::Exploded exploded;
   base::Time::NowFromSystemTime().LocalExplode(&exploded);
-  std::string filename = base::StringPrintf(
+  filename_ = base::FilePath::FromUTF8Unsafe(base::StringPrintf(
       "host-rtc-log-%d-%d-%d_%d-%d-%d", exploded.year, exploded.month,
-      exploded.day_of_month, exploded.hour, exploded.minute, exploded.second);
-  filename_ = base::FilePath::FromUTF8Unsafe(filename);
+      exploded.day_of_month, exploded.hour, exploded.minute, exploded.second));
 
   data_ = rtc_log->TakeLogData();
   current_log_section_ = data_.begin();
@@ -193,32 +182,10 @@ int RtcLogFileReader::ReadPartially(int maximum_to_read,
   return read_amount;
 }
 
-void RtcLogFileWriter::Open(const base::FilePath& filename, Callback callback) {
-  base::SequencedTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE,
-      base::BindOnce(
-          std::move(callback),
-          protocol::MakeFileTransferError(
-              FROM_HERE, protocol::FileTransfer_Error_Type_PROTOCOL_ERROR)));
-}
-
-void RtcLogFileWriter::WriteChunk(std::vector<std::uint8_t> data,
-                                  Callback callback) {
-  NOTREACHED();
-}
-
-void RtcLogFileWriter::Close(Callback callback) {
-  NOTREACHED();
-}
-
-FileOperations::State RtcLogFileWriter::state() const {
-  return FileOperations::State::kFailed;
-}
-
 }  // namespace
 
 RtcLogFileOperations::RtcLogFileOperations(
-    protocol::ConnectionToClient* connection)
+    base::WeakPtr<protocol::ConnectionToClient> connection)
     : connection_(connection) {}
 
 RtcLogFileOperations::~RtcLogFileOperations() = default;
@@ -228,7 +195,8 @@ std::unique_ptr<FileOperations::Reader> RtcLogFileOperations::CreateReader() {
 }
 
 std::unique_ptr<FileOperations::Writer> RtcLogFileOperations::CreateWriter() {
-  return std::make_unique<RtcLogFileWriter>();
+  // RTC event log transfer is download-only.
+  return nullptr;
 }
 
 }  // namespace remoting

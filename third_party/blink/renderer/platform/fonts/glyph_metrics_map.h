@@ -30,28 +30,27 @@
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_GLYPH_METRICS_MAP_H_
 
 #include <memory>
+#include <optional>
 
+#include "base/compiler_specific.h"
 #include "base/memory/ptr_util.h"
 #include "third_party/blink/renderer/platform/fonts/glyph.h"
-#include "third_party/blink/renderer/platform/geometry/float_rect.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/assertions.h"
-#include "third_party/blink/renderer/platform/wtf/hash_map.h"
-#include "third_party/blink/renderer/platform/wtf/text/unicode.h"
+#include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
+#include "ui/gfx/geometry/rect_f.h"
 
 namespace blink {
-
-const float kCGlyphSizeUnknown = -1;
 
 template <class T>
 class GlyphMetricsMap {
   USING_FAST_MALLOC(GlyphMetricsMap);
 
  public:
-  GlyphMetricsMap() : filled_primary_page_(false) {}
+  GlyphMetricsMap() = default;
   GlyphMetricsMap(const GlyphMetricsMap&) = delete;
   GlyphMetricsMap& operator=(const GlyphMetricsMap&) = delete;
-  T MetricsForGlyph(Glyph glyph) {
+  std::optional<T> MetricsForGlyph(Glyph glyph) {
     return LocatePage(glyph / GlyphMetricsPage::kSize)->MetricsForGlyph(glyph);
   }
 
@@ -71,48 +70,59 @@ class GlyphMetricsMap {
         256;  // Usually covers Latin-1 in a single page.
     GlyphMetricsPage() {}
 
-    T MetricsForGlyph(Glyph glyph) const { return metrics_[glyph % kSize]; }
-    void SetMetricsForGlyph(Glyph glyph, const T& metrics) {
-      SetMetricsForIndex(glyph % kSize, metrics);
+    std::optional<T> MetricsForGlyph(Glyph glyph) const {
+      // SAFETY: `glyph` is unsigned, `kSize` is the size of the
+      // `metrics_` array, so `glyph % kSize` is in-bounds.
+      T value = UNSAFE_BUFFERS(metrics_[glyph % kSize]);
+      if (value == UnknownMetrics())
+        return std::nullopt;
+      return value;
     }
-    void SetMetricsForIndex(unsigned index, const T& metrics) {
+    void SetMetricsForGlyph(Glyph glyph, const T& metrics) {
+      // SAFETY: `glyph` is unsigned, `kSize` is the size of the
+      // `metrics_` array, so `glyph % kSize` is in-bounds.
+      UNSAFE_BUFFERS(SetMetricsForIndex(glyph % kSize, metrics));
+    }
+    UNSAFE_BUFFER_USAGE void SetMetricsForIndex(wtf_size_t index,
+                                                const T& metrics) {
+      // SAFETY: required from caller, enforced by UNSAFE_BUFFER_USAGE.
       SECURITY_DCHECK(index < kSize);
-      metrics_[index] = metrics;
+      UNSAFE_BUFFERS(metrics_[index] = metrics);
     }
 
    private:
     T metrics_[kSize];
   };
 
-  GlyphMetricsPage* LocatePage(unsigned page_number) {
+  GlyphMetricsPage* LocatePage(wtf_size_t page_number) {
     if (!page_number && filled_primary_page_)
       return &primary_page_;
     return LocatePageSlowCase(page_number);
   }
 
-  GlyphMetricsPage* LocatePageSlowCase(unsigned page_number);
+  GlyphMetricsPage* LocatePageSlowCase(wtf_size_t page_number);
 
-  static T UnknownMetrics();
+  static constexpr T UnknownMetrics();
 
-  bool filled_primary_page_;
+  bool filled_primary_page_ = false;
   // We optimize for the page that contains glyph indices 0-255.
   GlyphMetricsPage primary_page_;
   std::unique_ptr<HashMap<int, std::unique_ptr<GlyphMetricsPage>>> pages_;
 };
 
 template <>
-inline float GlyphMetricsMap<float>::UnknownMetrics() {
-  return kCGlyphSizeUnknown;
+inline constexpr float GlyphMetricsMap<float>::UnknownMetrics() {
+  return -1;
 }
 
 template <>
-inline FloatRect GlyphMetricsMap<FloatRect>::UnknownMetrics() {
-  return FloatRect(0, 0, kCGlyphSizeUnknown, kCGlyphSizeUnknown);
+inline constexpr gfx::RectF GlyphMetricsMap<gfx::RectF>::UnknownMetrics() {
+  return gfx::RectF(std::numeric_limits<float>::min(), 0, 0, 0);
 }
 
 template <class T>
 typename GlyphMetricsMap<T>::GlyphMetricsPage*
-GlyphMetricsMap<T>::LocatePageSlowCase(unsigned page_number) {
+GlyphMetricsMap<T>::LocatePageSlowCase(wtf_size_t page_number) {
   GlyphMetricsPage* page;
   if (!page_number) {
     DCHECK(!filled_primary_page_);
@@ -120,9 +130,9 @@ GlyphMetricsMap<T>::LocatePageSlowCase(unsigned page_number) {
     filled_primary_page_ = true;
   } else {
     if (pages_) {
-      page = pages_->at(page_number);
-      if (page)
-        return page;
+      auto it = pages_->find(page_number);
+      if (it != pages_->end())
+        return it->value.get();
     } else {
       pages_ =
           std::make_unique<HashMap<int, std::unique_ptr<GlyphMetricsPage>>>();
@@ -132,9 +142,10 @@ GlyphMetricsMap<T>::LocatePageSlowCase(unsigned page_number) {
   }
 
   // Fill in the whole page with the unknown glyph information.
-  for (unsigned i = 0; i < GlyphMetricsPage::kSize; i++)
-    page->SetMetricsForIndex(i, UnknownMetrics());
-
+  for (wtf_size_t i = 0; i < GlyphMetricsPage::kSize; ++i) {
+    // SAFETY: `kSize` is the size of the metrics array to be indexed.
+    UNSAFE_BUFFERS(page->SetMetricsForIndex(i, UnknownMetrics()));
+  }
   return page;
 }
 

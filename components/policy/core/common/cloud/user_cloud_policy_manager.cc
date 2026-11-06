@@ -1,22 +1,25 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/policy/core/common/cloud/user_cloud_policy_manager.h"
 
+#include <memory>
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/sequenced_task_runner.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/account_id/account_id.h"
 #include "components/policy/core/common/cloud/cloud_external_data_manager.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/cloud_policy_service.h"
+#include "components/policy/core/common/cloud/cloud_policy_util.h"
 #include "components/policy/core/common/cloud/user_cloud_policy_store.h"
+#include "components/policy/core/common/features.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/policy/core/common/policy_types.h"
 #include "components/policy/policy_constants.h"
@@ -24,24 +27,81 @@
 
 namespace em = enterprise_management;
 
+namespace {
+
+// Directory inside the profile directory where policy-related resources are
+// stored.
+const base::FilePath::CharType kPolicy[] = FILE_PATH_LITERAL("Policy");
+
+// Directory under `kPolicy`, in the user's profile dir, where policy for
+// components is cached.
+const base::FilePath::CharType kComponentsDir[] =
+    FILE_PATH_LITERAL("Components");
+
+}  // namespace
+
 namespace policy {
 
 UserCloudPolicyManager::UserCloudPolicyManager(
-    std::unique_ptr<UserCloudPolicyStore> store,
+    std::unique_ptr<UserCloudPolicyStore> user_store,
+    std::unique_ptr<UserCloudPolicyStore> extension_install_user_store,
     const base::FilePath& component_policy_cache_path,
     std::unique_ptr<CloudExternalDataManager> external_data_manager,
     const scoped_refptr<base::SequencedTaskRunner>& task_runner,
     network::NetworkConnectionTrackerGetter network_connection_tracker_getter)
-    : CloudPolicyManager(dm_protocol::kChromeUserPolicyType,
+    : CloudPolicyManager(dm_protocol::GetChromeUserPolicyType(),
                          std::string(),
-                         store.get(),
+                         std::move(user_store),
+                         std::move(extension_install_user_store),
                          task_runner,
                          network_connection_tracker_getter),
-      store_(std::move(store)),
       component_policy_cache_path_(component_policy_cache_path),
       external_data_manager_(std::move(external_data_manager)) {}
 
-UserCloudPolicyManager::~UserCloudPolicyManager() {}
+UserCloudPolicyManager::~UserCloudPolicyManager() = default;
+
+std::unique_ptr<UserCloudPolicyManager> UserCloudPolicyManager::Create(
+    const base::FilePath& profile_path,
+    SchemaRegistry* schema_registry,
+    bool force_immediate_load,
+    const scoped_refptr<base::SequencedTaskRunner>& background_task_runner,
+    network::NetworkConnectionTrackerGetter network_connection_tracker_getter) {
+  std::unique_ptr<UserCloudPolicyStore> store =
+      UserCloudPolicyStore::Create(profile_path, background_task_runner);
+
+  std::unique_ptr<UserCloudPolicyStore> extension_install_store = nullptr;
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  if (IsExtensionInstallPolicySupportedOnThisVersion()) {
+    if (base::FeatureList::IsEnabled(
+            features::kEnableExtensionInstallPolicyFetching)) {
+      extension_install_store = UserCloudPolicyStore::CreateForExtensionInstall(
+          profile_path, background_task_runner);
+    } else {
+      UserCloudPolicyStore::CreateForExtensionInstall(profile_path,
+                                                      background_task_runner)
+          ->Clear();
+    }
+  }
+#endif  // !BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+
+  if (force_immediate_load) {
+    store->LoadImmediately();
+    if (extension_install_store) {
+      extension_install_store->LoadImmediately();
+    }
+  }
+
+  const base::FilePath component_policy_cache_dir =
+      profile_path.Append(kPolicy).Append(kComponentsDir);
+
+  auto policy_manager = std::make_unique<UserCloudPolicyManager>(
+      std::move(store), std::move(extension_install_store),
+      component_policy_cache_dir, std::unique_ptr<CloudExternalDataManager>(),
+      base::SingleThreadTaskRunner::GetCurrentDefault(),
+      network_connection_tracker_getter);
+  policy_manager->Init(schema_registry);
+  return policy_manager;
+}
 
 void UserCloudPolicyManager::Shutdown() {
   if (external_data_manager_)
@@ -50,12 +110,26 @@ void UserCloudPolicyManager::Shutdown() {
 }
 
 void UserCloudPolicyManager::SetSigninAccountId(const AccountId& account_id) {
-  store_->SetSigninAccountId(account_id);
+  if (account_id.is_valid()) {
+    // Start the recorder as it is assumed that there is now a valid managed
+    // account.
+    StartRecordingMetric();
+  }
+
+  store()->SetSigninAccountId(account_id);
+  if (extension_install_store()) {
+    extension_install_store()->SetSigninAccountId(account_id);
+  }
 }
 
-void UserCloudPolicyManager::SetPoliciesRequired(bool required) {
+void UserCloudPolicyManager::SetPoliciesRequired(bool required,
+                                                 PolicyFetchReason reason) {
   policies_required_ = required;
-  RefreshPolicies();
+  RefreshPolicies(reason);
+}
+
+bool UserCloudPolicyManager::ArePoliciesRequired() const {
+  return policies_required_;
 }
 
 void UserCloudPolicyManager::Connect(
@@ -66,9 +140,9 @@ void UserCloudPolicyManager::Connect(
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory =
       client->GetURLLoaderFactory();
 
-  CreateComponentCloudPolicyService(
-      dm_protocol::kChromeExtensionPolicyType, component_policy_cache_path_,
-      POLICY_SOURCE_CLOUD, client.get(), schema_registry());
+  CreateComponentCloudPolicyService(dm_protocol::kChromeExtensionPolicyType,
+                                    component_policy_cache_path_, client.get(),
+                                    schema_registry());
   core()->Connect(std::move(client));
   core()->StartRefreshScheduler();
   core()->TrackRefreshDelayPref(local_state,
@@ -77,31 +151,23 @@ void UserCloudPolicyManager::Connect(
     external_data_manager_->Connect(std::move(url_loader_factory));
 }
 
-// static
-std::unique_ptr<CloudPolicyClient>
-UserCloudPolicyManager::CreateCloudPolicyClient(
-    DeviceManagementService* device_management_service,
-    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory) {
-  return std::make_unique<CloudPolicyClient>(
-      device_management_service, std::move(url_loader_factory),
-      CloudPolicyClient::DeviceDMTokenCallback());
-}
-
 void UserCloudPolicyManager::DisconnectAndRemovePolicy() {
   if (external_data_manager_)
     external_data_manager_->Disconnect();
-  core()->Disconnect();
 
   // store_->Clear() will publish the updated, empty policy. The component
   // policy service must be cleared before OnStoreLoaded() is issued, so that
   // component policies are also empty at CheckAndPublishPolicy().
-  ClearAndDestroyComponentCloudPolicyService();
+  CloudPolicyManager::DisconnectAndRemovePolicy();
 
-  // When the |store_| is cleared, it informs the |external_data_manager_| that
-  // all external data references have been removed, causing the
+  // When the |user_store_| is cleared, it informs the |external_data_manager_|
+  // that all external data references have been removed, causing the
   // |external_data_manager_| to clear its cache as well.
-  store_->Clear();
-  SetPoliciesRequired(false);
+  store()->Clear();
+  if (extension_install_store()) {
+    extension_install_store()->Clear();
+  }
+  SetPoliciesRequired(false, PolicyFetchReason::kDisconnect);
 }
 
 void UserCloudPolicyManager::GetChromePolicy(PolicyMap* policy_map) {
@@ -110,15 +176,7 @@ void UserCloudPolicyManager::GetChromePolicy(PolicyMap* policy_map) {
   // If the store has a verified policy blob received from the server then apply
   // the defaults for policies that haven't been configured by the administrator
   // given that this is an enterprise user.
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  if (!store()->has_policy())
-    return;
-
-  // TODO(https://crbug.com/1206315): Don't apply enterprise defaults for Child
-  // user.
-  SetEnterpriseUsersProfileDefaults(policy_map);
-#endif
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   if (store()->has_policy() &&
       !policy_map->Get(key::kNTPContentSuggestionsEnabled)) {
     policy_map->Set(key::kNTPContentSuggestionsEnabled, POLICY_LEVEL_MANDATORY,
@@ -132,6 +190,20 @@ bool UserCloudPolicyManager::IsFirstPolicyLoadComplete(
     PolicyDomain domain) const {
   return !policies_required_ ||
          CloudPolicyManager::IsFirstPolicyLoadComplete(domain);
+}
+
+UserCloudPolicyStore* UserCloudPolicyManager::store() {
+  return static_cast<UserCloudPolicyStore*>(CloudPolicyManager::store());
+}
+
+UserCloudPolicyStore* UserCloudPolicyManager::extension_install_store() {
+  return static_cast<UserCloudPolicyStore*>(
+      CloudPolicyManager::extension_install_store());
+}
+
+void UserCloudPolicyManager::StartRecordingMetric() {
+  // Starts a recording session by creating the recorder.
+  metrics_recorder_ = std::make_unique<UserPolicyMetricsRecorder>(this);
 }
 
 }  // namespace policy

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,30 +6,50 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/byte_size.h"
 #include "base/command_line.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
+#include "base/task/single_thread_task_runner.h"
+#include "chrome/browser/predictors/perform_network_context_prefetch.h"
 #include "chrome/browser/predictors/predictors_features.h"
 #include "chrome/browser/predictors/predictors_switches.h"
+#include "chrome/browser/predictors/prefetch_traffic_annotation.h"
 #include "chrome/browser/predictors/resource_prefetch_predictor.h"
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/connection_allowlist_util.h"
 #include "content/public/browser/global_request_id.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/url_loader_throttles.h"
+#include "extensions/buildflags/buildflags.h"
 #include "net/base/load_flags.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
+#include "services/network/public/cpp/constants.h"
 #include "services/network/public/cpp/empty_url_loader_client.h"
+#include "services/network/public/cpp/permissions_policy/permissions_policy.h"
 #include "services/network/public/cpp/resource_request.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
+#include "services/network/public/cpp/url_loader_factory_builder.h"
 #include "services/network/public/mojom/fetch_api.mojom.h"
 #include "services/network/public/mojom/network_context.mojom.h"
+#include "services/network/public/mojom/url_loader_factory.mojom-forward.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/loader/throttling_url_loader.h"
+#include "third_party/blink/public/common/navigation/preloading_headers.h"
 #include "third_party/blink/public/mojom/loader/resource_load_info.mojom-shared.h"
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "extensions/browser/api/web_request/web_request_api.h"
+#include "extensions/browser/browser_context_keyed_api_factory.h"
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 namespace predictors {
 
-namespace {
-
+// This is only defined here because the traffic annotation auditor gets
+// confused if you move an annotation to a different file.
 const net::NetworkTrafficAnnotationTag kPrefetchTrafficAnnotation =
     net::DefineNetworkTrafficAnnotation("predictive_prefetch",
                                         R"(
@@ -58,23 +78,21 @@ const net::NetworkTrafficAnnotationTag kPrefetchTrafficAnnotation =
         "C) Disable 'Make searches and browsing better' under Settings > "
         "   Sync and Google services > Make searches and browsing better"
       chrome_policy {
-        URLBlacklist {
-          URLBlacklist: { entries: '*' }
+        URLBlocklist {
+          URLBlocklist: { entries: '*' }
         }
       }
       chrome_policy {
-        URLWhitelist {
-          URLWhitelist { }
+        URLAllowlist {
+          URLAllowlist { }
         }
       }
     }
     comments:
       "This feature can be safely disabled, but enabling it may result in "
-      "faster page loads. Using either URLBlacklist or URLWhitelist policies "
+      "faster page loads. Using either URLBlocklist or URLAllowlist policies "
       "(or a combination of both) limits the scope of these requests."
 )");
-
-}  // namespace
 
 // Stores the status of all prefetches associated with a given |url|.
 struct PrefetchInfo {
@@ -82,8 +100,8 @@ struct PrefetchInfo {
       : url(url),
         stats(std::make_unique<PrefetchStats>(url)),
         manager(&manager) {
-    DCHECK(url.is_valid());
-    DCHECK(url.SchemeIsHTTPOrHTTPS());
+    CHECK(url.is_valid(), base::NotFatalUntil::M162);
+    CHECK(url.SchemeIsHTTPOrHTTPS(), base::NotFatalUntil::M162);
   }
 
   ~PrefetchInfo() = default;
@@ -108,7 +126,7 @@ struct PrefetchInfo {
   bool was_canceled = false;
   std::unique_ptr<PrefetchStats> stats;
   // Owns |this|.
-  PrefetchManager* const manager;
+  const raw_ptr<PrefetchManager> manager;
 
   base::WeakPtrFactory<PrefetchInfo> weak_factory{this};
 };
@@ -117,13 +135,10 @@ struct PrefetchInfo {
 struct PrefetchJob {
   PrefetchJob(PrefetchRequest prefetch_request, PrefetchInfo& info)
       : url(prefetch_request.url),
-        network_isolation_key(
-            std::move(prefetch_request.network_isolation_key)),
         destination(prefetch_request.destination),
         info(info.weak_factory.GetWeakPtr()) {
-    DCHECK(url.is_valid());
-    DCHECK(url.SchemeIsHTTPOrHTTPS());
-    DCHECK(network_isolation_key.IsFullyPopulated());
+    CHECK(url.is_valid(), base::NotFatalUntil::M162);
+    CHECK(url.SchemeIsHTTPOrHTTPS(), base::NotFatalUntil::M162);
     info.OnJobCreated();
   }
 
@@ -136,7 +151,6 @@ struct PrefetchJob {
   PrefetchJob& operator=(const PrefetchJob&) = delete;
 
   GURL url;
-  net::NetworkIsolationKey network_isolation_key;
   network::mojom::RequestDestination destination;
 
   // PrefetchJob lives until the URL load completes, so it can outlive the
@@ -150,17 +164,47 @@ PrefetchStats::~PrefetchStats() = default;
 
 PrefetchManager::PrefetchManager(base::WeakPtr<Delegate> delegate,
                                  Profile* profile)
-    : delegate_(std::move(delegate)), profile_(profile) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(profile_);
+    : delegate_(std::move(delegate)),
+      profile_(profile),
+      use_network_context_prefetch_(base::FeatureList::IsEnabled(
+          features::kPrefetchManagerUseNetworkContextPrefetch)) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+  CHECK(profile_, base::NotFatalUntil::M162);
 }
 
 PrefetchManager::~PrefetchManager() = default;
 
 void PrefetchManager::Start(const GURL& url,
                             std::vector<PrefetchRequest> requests) {
-  DCHECK(base::FeatureList::IsEnabled(features::kLoadingPredictorPrefetch));
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK(
+      base::FeatureList::IsEnabled(features::kLoadingPredictorPrefetch) ||
+      base::FeatureList::IsEnabled(blink::features::kLCPPPrefetchSubresource));
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+
+  if (use_network_context_prefetch_) {
+    PerformNetworkContextPrefetch(profile_, url, std::move(requests));
+    return;
+  }
+
+  // Enforce the frame's Connection Allowlist if needed. If the
+  // initiator_frame_id is null, the request is browser-initiated which is out
+  // of scope for enforcement. If the initiator_frame_id does not map to a live
+  // frame, then there is no allowlist for that frame to enforce.
+  std::erase_if(requests, [&](const PrefetchRequest& request) {
+    if (!request.initiator_frame_id) {
+      return false;
+    }
+    if (auto* rfh =
+            content::RenderFrameHost::FromID(request.initiator_frame_id)) {
+      return !content::FrameConnectionAllowlistAllowsRequestAndReportIfNeeded(
+          rfh, request.url, /*is_redirect=*/false);
+    }
+    return true;
+  });
+
+  if (requests.empty()) {
+    return;
+  }
 
   PrefetchInfo* info;
   if (prefetch_info_.find(url) == prefetch_info_.end()) {
@@ -180,33 +224,41 @@ void PrefetchManager::Start(const GURL& url,
 }
 
 void PrefetchManager::Stop(const GURL& url) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+
+  if (use_network_context_prefetch_) {
+    // The NetworkContext Prefetch() functionality does its own cleanup so
+    // doesn't need to be told to stop.
+    return;
+  }
+
   auto it = prefetch_info_.find(url);
   if (it == prefetch_info_.end())
     return;
   it->second->was_canceled = true;
 }
 
-blink::mojom::ResourceType GetResourceType(
+// static
+bool PrefetchManager::IsAvailableForPrefetch(
     network::mojom::RequestDestination destination) {
-  switch (destination) {
-    case network::mojom::RequestDestination::kEmpty:
-      return blink::mojom::ResourceType::kSubResource;
-    case network::mojom::RequestDestination::kScript:
-      return blink::mojom::ResourceType::kScript;
-    case network::mojom::RequestDestination::kStyle:
-      return blink::mojom::ResourceType::kStylesheet;
-    default:
-      NOTREACHED() << destination;
-  }
-  return blink::mojom::ResourceType::kSubResource;
+  // TODO(crbug.com/342445996): Expand this for NetworkContextPrefetch once it
+  // supports more resource types.
+  return GetResourceTypeForPrefetch(destination).has_value();
 }
 
+// If `kPrefetchManagerUseNetworkContextPrefetch` feature is enabled,
+// `PrefetchManager` uses `NetworkContext::Prefetch`.
+// Else, it uses a URL loader factory for the browser process.
+//
+// Note that because the browser process URL loader factory is used, we cannot
+// enforce the Connection Allowlist in the network service. Enforcement instead
+// occurs in PrefetchManager::Start.
 void PrefetchManager::PrefetchUrl(
     std::unique_ptr<PrefetchJob> job,
     scoped_refptr<network::SharedURLLoaderFactory> factory) {
-  DCHECK(job);
-  DCHECK(job->info);
+  CHECK(!use_network_context_prefetch_);
+  CHECK(job, base::NotFatalUntil::M162);
+  CHECK(job->info, base::NotFatalUntil::M162);
 
   PrefetchInfo& info = *job->info;
   url::Origin top_frame_origin = url::Origin::Create(info.url);
@@ -221,12 +273,23 @@ void PrefetchManager::PrefetchUrl(
   // conservative one (no-referrer) by default.
   request.referrer_policy = net::ReferrerPolicy::NO_REFERRER;
 
-  request.headers.SetHeader("Purpose", "prefetch");
+  // The prefetch can happen before the permissions policy is known, so use a
+  // conservative, all-blocking permissions policy.
+  request.permissions_policy =
+      *network::PermissionsPolicy::CreateFromParsedPolicy(
+          {}, url::Origin::Create(request.url));
+
+  request.headers.SetHeader(blink::kSecPurposeHeaderName,
+                            blink::kSecPurposePrefetchHeaderValue);
 
   request.load_flags = net::LOAD_PREFETCH;
   request.destination = job->destination;
-  request.resource_type =
-      static_cast<int>(GetResourceType(request.destination));
+  auto resource_type = GetResourceTypeForPrefetch(request.destination);
+  DUMP_WILL_BE_CHECK(resource_type.has_value());
+  if (!resource_type.has_value()) {
+    resource_type = blink::mojom::ResourceType::kSubResource;
+  }
+  request.resource_type = static_cast<int>(*resource_type);
 
   // TODO(falken): Support CORS?
   request.mode = network::mojom::RequestMode::kNoCors;
@@ -240,7 +303,22 @@ void PrefetchManager::PrefetchUrl(
       net::IsolationInfo::RequestType::kOther, top_frame_origin, frame_origin,
       net::SiteForCookies::FromUrl(info.url));
 
-  // TODO(crbug.com/1092329): Ensure the request is seen by extensions.
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  network::URLLoaderFactoryBuilder factory_builder;
+  auto* web_request_api =
+      extensions::BrowserContextKeyedAPIFactory<extensions::WebRequestAPI>::Get(
+          profile_);
+  if (web_request_api) {
+    web_request_api->MaybeProxyURLLoaderFactory(
+        profile_, /*frame=*/nullptr, /*render_process_id=*/0,
+        content::ContentBrowserClient::URLLoaderFactoryType::kPrefetch,
+        /*navigation_id=*/std::nullopt, ukm::kInvalidSourceIdObj,
+        factory_builder, /*header_client=*/nullptr,
+        /*navigation_response_task_runner=*/nullptr,
+        /*request_initiator=*/url::Origin());
+  }
+  factory = std::move(factory_builder).Finish(factory);
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
   // Set up throttles. Use null values for frame/navigation-related params, for
   // now, since this is just the browser prefetching resources and the requests
@@ -252,27 +330,32 @@ void PrefetchManager::PrefetchUrl(
   std::vector<std::unique_ptr<blink::URLLoaderThrottle>> throttles =
       content::CreateContentBrowserURLLoaderThrottles(
           request, profile_, std::move(wc_getter),
-          /*navigation_ui_data=*/nullptr,
-          content::RenderFrameHost::kNoFrameTreeNodeId);
+          /*navigation_ui_data=*/nullptr, content::FrameTreeNodeId(),
+          /*navigation_id=*/std::nullopt);
 
   auto client = std::make_unique<network::EmptyURLLoaderClient>();
 
   ++inflight_jobs_count_;
 
-  // Since the CORS-RFC1918 check is skipped when the client security state is
-  // unknown, just block any local request to be safe for now.
+  // Since the Local Network Access check is skipped when the client security
+  // state is unknown, just block any local request to be safe for now.
   int options = base::CommandLine::ForCurrentProcess()->HasSwitch(
                     switches::kLoadingPredictorAllowLocalRequestForTesting)
                     ? network::mojom::kURLLoadOptionNone
                     : network::mojom::kURLLoadOptionBlockLocalRequest;
+
+  if (base::FeatureList::IsEnabled(
+          features::kLoadingPredictorPrefetchUseReadAndDiscardBody)) {
+    options |= network::mojom::kURLLoadOptionReadAndDiscardBody;
+  }
 
   std::unique_ptr<blink::ThrottlingURLLoader> loader =
       blink::ThrottlingURLLoader::CreateLoaderAndStart(
           std::move(factory), std::move(throttles),
           content::GlobalRequestID::MakeBrowserInitiated().request_id, options,
           &request, client.get(), kPrefetchTrafficAnnotation,
-          base::ThreadTaskRunnerHandle::Get(),
-          /*cors_exempt_header_list=*/absl::nullopt);
+          base::SingleThreadTaskRunner::GetCurrentDefault(),
+          /*cors_exempt_header_list=*/std::nullopt);
 
   delegate_->PrefetchInitiated(info.url, job->url);
 
@@ -292,12 +375,13 @@ void PrefetchManager::OnPrefetchFinished(
     std::unique_ptr<blink::ThrottlingURLLoader> loader,
     std::unique_ptr<network::mojom::URLLoaderClient> client,
     const network::URLLoaderCompletionStatus& status) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   PrefetchInfo& info = *job->info;
   if (observer_for_testing_)
     observer_for_testing_->OnPrefetchFinished(info.url, job->url, status);
 
+  // Cannot access the fields of `status` after this point.
   loader.reset();
   client.reset();
   job.reset();
@@ -307,10 +391,9 @@ void PrefetchManager::OnPrefetchFinished(
 }
 
 void PrefetchManager::TryToLaunchPrefetchJobs() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
-  if (queued_jobs_.empty() ||
-      inflight_jobs_count_ >= features::GetMaxInflightPrefetches()) {
+  if (queued_jobs_.empty() || inflight_jobs_count_ >= kMaxInflightPrefetches) {
     return;
   }
 
@@ -323,12 +406,12 @@ void PrefetchManager::TryToLaunchPrefetchJobs() {
       storage_partition->GetURLLoaderFactoryForBrowserProcess();
 
   while (!queued_jobs_.empty() &&
-         inflight_jobs_count_ < features::GetMaxInflightPrefetches()) {
+         inflight_jobs_count_ < kMaxInflightPrefetches) {
     std::unique_ptr<PrefetchJob> job = std::move(queued_jobs_.front());
     queued_jobs_.pop_front();
     base::WeakPtr<PrefetchInfo> info = job->info;
     // |this| owns all infos.
-    DCHECK(info);
+    CHECK(info, base::NotFatalUntil::M162);
 
     if (job->url.is_valid() && factory && !info->was_canceled)
       PrefetchUrl(std::move(job), factory);
@@ -336,16 +419,56 @@ void PrefetchManager::TryToLaunchPrefetchJobs() {
 }
 
 void PrefetchManager::AllPrefetchJobsForUrlFinished(PrefetchInfo& info) {
-  DCHECK(info.is_done());
+  CHECK(info.is_done(), base::NotFatalUntil::M162);
   auto it = prefetch_info_.find(info.url);
-  DCHECK(it != prefetch_info_.end());
-  DCHECK(&info == it->second.get());
+  CHECK(it != prefetch_info_.end());
+  CHECK(&info == it->second.get(), base::NotFatalUntil::M162);
 
   if (delegate_)
     delegate_->PrefetchFinished(std::move(info.stats));
   if (observer_for_testing_)
     observer_for_testing_->OnAllPrefetchesFinished(info.url);
   prefetch_info_.erase(it);
+}
+
+std::optional<blink::mojom::ResourceType> GetResourceTypeForPrefetch(
+    network::mojom::RequestDestination destination) {
+  switch (destination) {
+    case network::mojom::RequestDestination::kEmpty:
+      return blink::mojom::ResourceType::kSubResource;
+    case network::mojom::RequestDestination::kScript:
+      return blink::mojom::ResourceType::kScript;
+    case network::mojom::RequestDestination::kStyle:
+      return blink::mojom::ResourceType::kStylesheet;
+    case network::mojom::RequestDestination::kFont:
+      return blink::mojom::ResourceType::kFontResource;
+    case network::mojom::RequestDestination::kAudio:
+    case network::mojom::RequestDestination::kAudioWorklet:
+    case network::mojom::RequestDestination::kCompressionDictionary:
+    case network::mojom::RequestDestination::kDocument:
+    case network::mojom::RequestDestination::kEmailVerification:
+    case network::mojom::RequestDestination::kEmbed:
+    case network::mojom::RequestDestination::kFencedframe:
+    case network::mojom::RequestDestination::kFrame:
+    case network::mojom::RequestDestination::kIframe:
+    case network::mojom::RequestDestination::kImage:
+    case network::mojom::RequestDestination::kJson:
+    case network::mojom::RequestDestination::kManifest:
+    case network::mojom::RequestDestination::kObject:
+    case network::mojom::RequestDestination::kPaintWorklet:
+    case network::mojom::RequestDestination::kReport:
+    case network::mojom::RequestDestination::kServiceWorker:
+    case network::mojom::RequestDestination::kSharedWorker:
+    case network::mojom::RequestDestination::kSpeculationRules:
+    case network::mojom::RequestDestination::kText:
+    case network::mojom::RequestDestination::kTrack:
+    case network::mojom::RequestDestination::kVideo:
+    case network::mojom::RequestDestination::kWebBundle:
+    case network::mojom::RequestDestination::kWebIdentity:
+    case network::mojom::RequestDestination::kWorker:
+    case network::mojom::RequestDestination::kXslt:
+      return std::nullopt;
+  }
 }
 
 }  // namespace predictors

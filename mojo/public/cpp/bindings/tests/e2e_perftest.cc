@@ -1,24 +1,24 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/current_thread.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/perf_time_logger.h"
 #include "base/test/task_environment.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "mojo/core/embedder/embedder.h"
 #include "mojo/core/test/mojo_test_base.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "mojo/public/interfaces/bindings/tests/ping_service.mojom.h"
+#include "mojo/public/interfaces/bindings/tests/ping_service.test-mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace mojo {
@@ -83,7 +83,7 @@ void PingPongTest::RunTest(int iterations, int batch_size, int message_size) {
 
   base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
   quit_closure_ = run_loop.QuitClosure();
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&PingPongTest::DoPing, base::Unretained(this)));
   run_loop.Run();
 }
@@ -106,8 +106,9 @@ void PingPongTest::OnPingDone(const std::string& reply) {
   DCHECK_GT(calls_outstanding_, 0);
   calls_outstanding_--;
 
-  if (!calls_outstanding_)
+  if (!calls_outstanding_) {
     DoPing();
+  }
 }
 
 class MojoE2EPerftest : public core::test::MojoTestBase {
@@ -115,7 +116,7 @@ class MojoE2EPerftest : public core::test::MojoTestBase {
   void RunTestOnTaskRunner(base::TaskRunner* runner,
                            MojoHandle client_mp,
                            const std::string& test_name) {
-    if (runner == base::ThreadTaskRunnerHandle::Get().get()) {
+    if (runner == base::SingleThreadTaskRunner::GetCurrentDefault().get()) {
       RunTests(client_mp, test_name);
     } else {
       base::RunLoop run_loop;
@@ -144,8 +145,9 @@ class MojoE2EPerftest : public core::test::MojoTestBase {
     for (int batch_size : kBatchSizes) {
       for (int message_size : kMessageSizes) {
         int num_messages = kMessages;
-        if (message_size == 65536)
+        if (message_size == 65536) {
           num_messages /= 10;
+        }
         std::string sub_test_name = base::StringPrintf(
             "%s/%dx%d/%dbytes", test_name.c_str(), num_messages / batch_size,
             batch_size, message_size);
@@ -164,7 +166,7 @@ void CreateAndRunService(PendingReceiver<test::EchoService> receiver,
 
 DEFINE_TEST_CLIENT_TEST_WITH_PIPE(PingService, MojoE2EPerftest, mp) {
   MojoHandle service_mp;
-  EXPECT_EQ("hello", ReadMessageWithHandles(mp, &service_mp, 1));
+  EXPECT_EQ("hello", ReadMessageWithHandle(mp, &service_mp));
 
   auto receiver = PendingReceiver<test::EchoService>(
       ScopedMessagePipeHandle(MessagePipeHandle(service_mp)));
@@ -183,7 +185,7 @@ TEST_F(MojoE2EPerftest, MultiProcessEchoMainThread) {
   RunTestClient("PingService", [&](MojoHandle mp) {
     MojoHandle client_mp, service_mp;
     CreateMessagePipe(&client_mp, &service_mp);
-    WriteMessageWithHandles(mp, "hello", &service_mp, 1);
+    WriteMessageWithHandle(mp, "hello", service_mp);
     RunTestOnTaskRunner(task_environment_.GetMainThreadTaskRunner().get(),
                         client_mp, "MultiProcessEchoMainThread");
   });
@@ -193,7 +195,7 @@ TEST_F(MojoE2EPerftest, MultiProcessEchoIoThread) {
   RunTestClient("PingService", [&](MojoHandle mp) {
     MojoHandle client_mp, service_mp;
     CreateMessagePipe(&client_mp, &service_mp);
-    WriteMessageWithHandles(mp, "hello", &service_mp, 1);
+    WriteMessageWithHandle(mp, "hello", service_mp);
     RunTestOnTaskRunner(core::GetIOTaskRunner().get(), client_mp,
                         "MultiProcessEchoIoThread");
   });

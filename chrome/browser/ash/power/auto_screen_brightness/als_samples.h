@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,9 @@
 #define CHROME_BROWSER_ASH_POWER_AUTO_SCREEN_BRIGHTNESS_ALS_SAMPLES_H_
 
 #include <deque>
+#include <optional>
 
-#include "base/macros.h"
 #include "base/time/time.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace ash {
 namespace power {
@@ -32,6 +31,10 @@ class AmbientLightSampleBuffer {
   // Constructs a buffer that keeps samples younger than |horizon|. |horizon|
   // should be greater than 0.
   explicit AmbientLightSampleBuffer(base::TimeDelta horizon);
+
+  AmbientLightSampleBuffer(const AmbientLightSampleBuffer&) = delete;
+  AmbientLightSampleBuffer& operator=(const AmbientLightSampleBuffer&) = delete;
+
   ~AmbientLightSampleBuffer();
 
   // Adds |sample| to the buffer and discards samples that are now too old.
@@ -44,7 +47,7 @@ class AmbientLightSampleBuffer {
   // Returns average and std-dev of ambient lux from the buffer (discarding
   // samples that are now too old). |now| must be no earlier than any previously
   // added sample. If there are no valid samples, returns nullopt.
-  absl::optional<AlsAvgStdDev> AverageAmbientWithStdDev(base::TimeTicks now);
+  std::optional<AlsAvgStdDev> AverageAmbientWithStdDev(base::TimeTicks now);
 
   // Returns the number of recorded samples within |horizon| of the last
   // observed time point. |now| must be no earlier than any previously added
@@ -60,7 +63,6 @@ class AmbientLightSampleBuffer {
 
   // Removes samples from |samples_| that have time <= |now| - |horizon_|.
   void Prune(base::TimeTicks now);
-  DISALLOW_COPY_AND_ASSIGN(AmbientLightSampleBuffer);
 };
 
 }  // namespace auto_screen_brightness

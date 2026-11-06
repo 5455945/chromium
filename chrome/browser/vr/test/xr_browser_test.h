@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,21 +7,21 @@
 
 #include <unordered_set>
 
-#include "base/callback.h"
 #include "base/environment.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/vr/test/conditional_skipping.h"
-#include "chrome/test/base/in_process_browser_test.h"
-#include "device/base/features.h"
-#include "device/vr/test/test_hook.h"
+#include "chrome/test/base/platform_browser_test.h"
+#include "device/vr/public/cpp/features.h"
+#include "net/cert/test_root_certs.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "url/gurl.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include <windows.h>
 #endif
 
@@ -36,18 +36,16 @@ namespace vr {
 // //chrome/android/javatests/src/.../browser/vr/XrTestFramework.java
 // This must be subclassed for different XR features to handle the differences
 // between APIs and different usecases of the same API.
-class XrBrowserTestBase : public InProcessBrowserTest {
+class XrBrowserTestBase : public PlatformBrowserTest {
  public:
   static constexpr base::TimeDelta kPollCheckIntervalShort =
-      base::TimeDelta::FromMilliseconds(50);
+      base::Milliseconds(50);
   static constexpr base::TimeDelta kPollCheckIntervalLong =
-      base::TimeDelta::FromMilliseconds(100);
-  static constexpr base::TimeDelta kPollTimeoutShort =
-      base::TimeDelta::FromMilliseconds(1000);
+      base::Milliseconds(100);
+  static constexpr base::TimeDelta kPollTimeoutShort = base::Milliseconds(1000);
   static constexpr base::TimeDelta kPollTimeoutMedium =
-      base::TimeDelta::FromMilliseconds(5000);
-  static constexpr base::TimeDelta kPollTimeoutLong =
-      base::TimeDelta::FromMilliseconds(10000);
+      base::Milliseconds(5000);
+  static constexpr base::TimeDelta kPollTimeoutLong = base::Milliseconds(10000);
   static constexpr char kOpenXrConfigPathEnvVar[] = "XR_RUNTIME_JSON";
   static constexpr char kOpenXrConfigPathVal[] =
       "./mock_vr_clients/bin/openxr/openxr.json";
@@ -55,9 +53,6 @@ class XrBrowserTestBase : public InProcessBrowserTest {
       "chrome/test/data/xr/e2e_test_files/html/";
   static constexpr char kSwitchIgnoreRuntimeRequirements[] =
       "ignore-runtime-requirements";
-  static const std::vector<std::string> kRequiredTestSwitches;
-  static const std::vector<std::pair<std::string, std::string>>
-      kRequiredTestSwitchesWithValues;
   enum class TestStatus {
     STATUS_RUNNING = 0,
     STATUS_PASSED = 1,
@@ -70,6 +65,10 @@ class XrBrowserTestBase : public InProcessBrowserTest {
   };
 
   XrBrowserTestBase();
+
+  XrBrowserTestBase(const XrBrowserTestBase&) = delete;
+  XrBrowserTestBase& operator=(const XrBrowserTestBase&) = delete;
+
   ~XrBrowserTestBase() override;
 
   void SetUp() override;
@@ -90,15 +89,11 @@ class XrBrowserTestBase : public InProcessBrowserTest {
   void RunJavaScriptOrFail(const std::string& js_expression,
                            content::WebContents* web_contents);
 
-  // Convenience function for ensuring ExecuteScriptAndExtractBool runs
-  // successfully and for directly getting the result instead of needing to pass
-  // a pointer to be filled.
+  // Convenience function for ensuring EvalJs runs successfully.
   bool RunJavaScriptAndExtractBoolOrFail(const std::string& js_expression,
                                          content::WebContents* web_contents);
 
-  // Convenience function for ensuring ExecuteScripteAndExtractString runs
-  // successfully and for directly getting the result instead of needing to pass
-  // a pointer to be filled.
+  // Convenience function for ensuring EvalJs runs successfully.
   std::string RunJavaScriptAndExtractStringOrFail(
       const std::string& js_expression,
       content::WebContents* web_contents);
@@ -149,15 +144,11 @@ class XrBrowserTestBase : public InProcessBrowserTest {
   // JavaScript errors were encountered.
   void AssertNoJavaScriptErrors(content::WebContents* web_contents);
 
-  Browser* browser() {
-    return browser_ == nullptr ? InProcessBrowserTest::browser() : browser_;
-  }
+  void SetIncognito();
 
-  void SetBrowser(Browser* browser) { browser_ = browser; }
-
-  Browser* CreateIncognitoBrowser(Profile* profile = nullptr) {
-    return InProcessBrowserTest::CreateIncognitoBrowser(profile);
-  }
+  void OpenNewTab(const std::string& url);
+  void OpenNewTab(const std::string& url, bool incognito);
+  void CloseTab(content::WebContents* web_contents);
 
   // Convenience function for running RunJavaScriptOrFail with the return value
   // of GetCurrentWebContents.
@@ -207,15 +198,17 @@ class XrBrowserTestBase : public InProcessBrowserTest {
   }
 
  protected:
+  // Called at the start of |LoadFileAndAwaitInitialization| to allow base
+  // classes to manage any logic that they may want to manage.
+  virtual void OnBeforeLoadFile() {}
   std::unique_ptr<base::Environment> env_;
-  std::vector<base::Feature> enable_features_;
-  std::vector<base::Feature> disable_features_;
-  std::vector<std::string> append_switches_;
-  std::vector<std::string> enable_blink_features_;
+  std::vector<base::test::FeatureRef> enable_features_;
+  std::vector<base::test::FeatureRef> disable_features_;
   std::vector<XrTestRequirement> runtime_requirements_;
   std::unordered_set<std::string> ignored_requirements_;
+  std::optional<std::string> forced_runtime_;
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   HWND hwnd_;
 #endif
 
@@ -230,12 +223,12 @@ class XrBrowserTestBase : public InProcessBrowserTest {
   // HTML files, initializing and starting the server if necessary.
   net::EmbeddedTestServer* GetEmbeddedServer();
 
-  Browser* browser_ = nullptr;
   std::unique_ptr<net::EmbeddedTestServer> server_;
+  net::ScopedTestRoot scoped_test_root_;
   base::test::ScopedFeatureList scoped_feature_list_;
   bool test_skipped_at_startup_ = false;
   bool javascript_failed_ = false;
-  DISALLOW_COPY_AND_ASSIGN(XrBrowserTestBase);
+  bool incognito_ = false;
 };
 
 }  // namespace vr

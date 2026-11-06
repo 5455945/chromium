@@ -1,10 +1,11 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_ACCESSIBILITY_TEST_AX_NODE_HELPER_H_
 #define UI_ACCESSIBILITY_TEST_AX_NODE_HELPER_H_
 
+#include "base/memory/raw_ptr.h"
 #include "ui/accessibility/ax_clipping_behavior.h"
 #include "ui/accessibility/ax_coordinate_system.h"
 #include "ui/accessibility/ax_node.h"
@@ -18,7 +19,7 @@ namespace ui {
 class TestAXNodeHelper {
  public:
   // Create TestAXNodeHelper instances on-demand from an AXTree and AXNode.
-  static TestAXNodeHelper* GetOrCreate(AXTree* tree, AXNode* node);
+  static std::unique_ptr<TestAXNodeHelper> Create(AXTree* tree, AXNode* node);
   ~TestAXNodeHelper();
 
   gfx::Rect GetBoundsRect(const AXCoordinateSystem coordinate_system,
@@ -34,7 +35,7 @@ class TestAXNodeHelper {
  private:
   TestAXNodeHelper(AXTree* tree, AXNode* node);
   int InternalChildCount() const;
-  TestAXNodeHelper* InternalGetChild(int index) const;
+  std::unique_ptr<TestAXNodeHelper> InternalGetChild(int index) const;
   const AXNodeData& GetData() const;
   gfx::RectF GetLocation() const;
   gfx::RectF GetInlineTextRect(const int start_offset,
@@ -46,8 +47,8 @@ class TestAXNodeHelper {
   // Determine the offscreen status of a particular element given its bounds.
   AXOffscreenResult DetermineOffscreenResult(gfx::RectF bounds) const;
 
-  AXTree* tree_;
-  AXNode* node_;
+  raw_ptr<AXTree> tree_;
+  raw_ptr<AXNode> node_;
 };
 
 }  // namespace ui

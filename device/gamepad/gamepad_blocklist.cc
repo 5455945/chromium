@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <iterator>
+
 
 namespace device {
 namespace {
@@ -66,8 +67,12 @@ constexpr struct VendorProductPair {
     {kVendorMicrosoft, 0x07cd},
     // Surface Keyboard.
     {kVendorMicrosoft, 0x0922},
+    // Surface Laptop 3 trackpad.
+    {kVendorMicrosoft, 0x09af},
     // Surface Type Cover.
     {kVendorMicrosoft, 0x09c0},
+    // Surface Pro Signature Keyboard.
+    {kVendorMicrosoft, 0x09cb},
 };
 
 // Devices from these vendors are always blocked.
@@ -92,17 +97,11 @@ constexpr uint16_t kBlockedVendors[] = {
 }  // namespace
 
 bool GamepadIsExcluded(uint16_t vendor_id, uint16_t product_id) {
-  const uint16_t* vendors_begin = std::begin(kBlockedVendors);
-  const uint16_t* vendors_end = std::end(kBlockedVendors);
-  if (std::find(vendors_begin, vendors_end, vendor_id) != vendors_end)
-    return true;
-
-  const VendorProductPair* devices_begin = std::begin(kBlockedDevices);
-  const VendorProductPair* devices_end = std::end(kBlockedDevices);
-  return std::find_if(
-             devices_begin, devices_end, [=](const VendorProductPair& item) {
+  return std::ranges::contains(kBlockedVendors, vendor_id) ||
+         std::ranges::any_of(
+             kBlockedDevices, [=](const VendorProductPair& item) {
                return vendor_id == item.vendor && product_id == item.product;
-             }) != devices_end;
+             });
 }
 
 }  // namespace device

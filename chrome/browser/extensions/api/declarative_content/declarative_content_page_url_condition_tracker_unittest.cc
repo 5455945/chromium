@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,7 @@
 #include <set>
 #include <vector>
 
-#include "base/containers/contains.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/test/values_test_util.h"
 #include "chrome/browser/extensions/api/declarative_content/content_predicate_evaluator.h"
@@ -16,7 +15,11 @@
 #include "components/url_matcher/url_matcher.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
+#include "extensions/buildflags/buildflags.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "ui/base/page_transition_types.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -27,30 +30,39 @@ using testing::UnorderedElementsAreArray;
 
 class DeclarativeContentPageUrlConditionTrackerTest
     : public DeclarativeContentConditionTrackerTest {
+ public:
+  DeclarativeContentPageUrlConditionTrackerTest(
+      const DeclarativeContentPageUrlConditionTrackerTest&) = delete;
+  DeclarativeContentPageUrlConditionTrackerTest& operator=(
+      const DeclarativeContentPageUrlConditionTrackerTest&) = delete;
+
  protected:
   class Delegate : public ContentPredicateEvaluator::Delegate {
    public:
-    Delegate() {}
+    Delegate() = default;
 
-    std::set<content::WebContents*>& evaluation_requests() {
+    Delegate(const Delegate&) = delete;
+    Delegate& operator=(const Delegate&) = delete;
+
+    std::set<raw_ptr<content::WebContents, SetExperimental>>&
+    evaluation_requests() {
       return evaluation_requests_;
     }
 
     // ContentPredicateEvaluator::Delegate:
-    void RequestEvaluation(content::WebContents* contents) override {
-      EXPECT_FALSE(base::Contains(evaluation_requests_, contents));
+    void NotifyPredicateStateUpdated(content::WebContents* contents) override {
+      EXPECT_FALSE(evaluation_requests_.contains(contents));
       evaluation_requests_.insert(contents);
     }
 
-    bool ShouldManageConditionsForBrowserContext(
+    bool ShouldManagePredicatesForBrowserContext(
         content::BrowserContext* context) override {
       return true;
     }
 
    private:
-    std::set<content::WebContents*> evaluation_requests_;
-
-    DISALLOW_COPY_AND_ASSIGN(Delegate);
+    std::set<raw_ptr<content::WebContents, SetExperimental>>
+        evaluation_requests_;
   };
 
   DeclarativeContentPageUrlConditionTrackerTest()
@@ -79,13 +91,11 @@ class DeclarativeContentPageUrlConditionTrackerTest
   void CreatePredicateImpl(const std::string& value,
                            std::unique_ptr<const ContentPredicate>* predicate) {
     std::string error;
-    *predicate = tracker_.CreatePredicate(
-        nullptr, *base::test::ParseJsonDeprecated(value), &error);
+    *predicate =
+        tracker_.CreatePredicate(nullptr, base::test::ParseJson(value), &error);
     EXPECT_EQ("", error);
     ASSERT_TRUE(*predicate);
   }
-
-  DISALLOW_COPY_AND_ASSIGN(DeclarativeContentPageUrlConditionTrackerTest);
 };
 
 TEST(DeclarativeContentPageUrlPredicateTest, WrongPageUrlDatatype) {
@@ -93,8 +103,8 @@ TEST(DeclarativeContentPageUrlPredicateTest, WrongPageUrlDatatype) {
   std::string error;
   std::unique_ptr<DeclarativeContentPageUrlPredicate> predicate =
       DeclarativeContentPageUrlPredicate::Create(
-          nullptr, matcher.condition_factory(),
-          *base::test::ParseJsonDeprecated("[]"), &error);
+          nullptr, matcher.condition_factory(), base::test::ParseJson("[]"),
+          &error);
   EXPECT_THAT(error, HasSubstr("invalid type"));
   EXPECT_FALSE(predicate);
 
@@ -107,8 +117,7 @@ TEST(DeclarativeContentPageUrlPredicateTest, PageUrlPredicate) {
   std::unique_ptr<DeclarativeContentPageUrlPredicate> predicate =
       DeclarativeContentPageUrlPredicate::Create(
           nullptr, matcher.condition_factory(),
-          *base::test::ParseJsonDeprecated("{\"hostSuffix\": \"example.com\"}"),
-          &error);
+          base::test::ParseJson("{\"hostSuffix\": \"example.com\"}"), &error);
   EXPECT_EQ("", error);
   ASSERT_TRUE(predicate);
 
@@ -119,7 +128,7 @@ TEST(DeclarativeContentPageUrlPredicateTest, PageUrlPredicate) {
 
   EXPECT_THAT(matcher.MatchURL(GURL("http://google.com/")),
               ElementsAre(/*empty*/));
-  std::set<url_matcher::URLMatcherConditionSet::ID> page_url_matches =
+  std::set<base::MatcherStringPattern::ID> page_url_matches =
       matcher.MatchURL(GURL("http://www.example.com/foobar"));
   EXPECT_THAT(
       page_url_matches,

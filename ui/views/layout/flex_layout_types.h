@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,11 @@
 #include <algorithm>
 #include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
-#include "base/callback.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/functional/callback.h"
+#include "ui/base/metadata/base_type_conversion.h"
 #include "ui/views/layout/layout_types.h"
 #include "ui/views/views_export.h"
 
@@ -21,9 +23,6 @@ class Size;
 namespace views {
 
 class View;
-
-// Describes how elements should be aligned within a layout.
-enum class LayoutAlignment { kStart, kCenter, kEnd, kStretch };
 
 // Specifies whether flex space is allocated in the same order as the children
 // in the host view, or in reverse order. Reverse order is useful when you want
@@ -50,6 +49,46 @@ enum class FlexAllocationOrder { kNormal, kReverse };
 using FlexRule =
     base::RepeatingCallback<gfx::Size(const View*, const SizeBounds&)>;
 
+// Callback evaluated at the start of layout to determine whether a flex rule
+// should be applied, or should be passed over in favor of the next rule.
+// Returning true means the rule should be applied.
+using RuleEnabledPredicate = base::RepeatingCallback<bool(const SizeBounds&)>;
+
+// Pairs a priority order and FlexRule with an optional RuleEnabledPredicate.
+// This is used to create multi-stage flex specifications where a view
+// transitions between different sizing behaviors and layout priorities
+// depending on available space. e.g., one View may handle buttons and a text
+// field, with another element having a priority level between those of the
+// buttons and the text field.
+//
+// How RuleEnabledPredicate works:
+// When evaluating flex space under a given SizeBounds, the sequence of
+// RuleAndPredicate stages is checked in FIFO order:
+//  - If `rule_enabled_predicate` returns true for the current bounds, this
+//    stage is selected and its `order` and `rule` and are applied.
+//  - If `rule_enabled_predicate` returns false, the stage is not applied and
+//    the layout manager moves on to test the next stage in the sequence.
+//  - The last rule must be the only rule with a null `rule_enabled_predicate`,
+//    and is used if no `rule_enabled_predicate` for any previous rule returned
+//    true.
+//
+// This is intended as a temporary API, to help with the migration to using a
+// WebUI toolbar. Once that ships, this will no longer be needed.
+struct VIEWS_EXPORT RuleAndPredicate {
+  RuleAndPredicate(int order,
+                   FlexRule rule,
+                   RuleEnabledPredicate rule_enabled_predicate);
+  RuleAndPredicate(const RuleAndPredicate&);
+  RuleAndPredicate& operator=(const RuleAndPredicate&);
+  RuleAndPredicate(RuleAndPredicate&&) noexcept;
+  RuleAndPredicate& operator=(RuleAndPredicate&&) noexcept;
+  ~RuleAndPredicate();
+
+  int order;
+  FlexRule rule;
+  RuleEnabledPredicate rule_enabled_predicate;
+};
+
 // Describes a simple rule for how a child view should shrink in a layout when
 // the available size for that view decreases.
 enum class MinimumFlexSizeRule {
@@ -62,34 +101,70 @@ enum class MinimumFlexSizeRule {
 };
 
 // Describes a simple rule for how a child view should grow in a layout when
-// there is extra size avaialble for that view to occupy.
+// there is extra size available for that view to occupy.
 enum class MaximumFlexSizeRule {
-  kPreferred,  // Don't resize above preferred size.
-  kUnbounded   // Allow resize to arbitrary size.
+  kPreferred,       // Don't resize above preferred size.
+  kScaleToMaximum,  // Allow resize up to the child view's `GetMaximumSize()`.
+  kUnbounded        // Allow resize to arbitrary size.
 };
 
 // Specifies how a view should flex (i.e. grow or shrink) within its parent as
 // the available space changes. Flex specifications have three components:
 //  - A |rule| which tells the layout manager how the child view resizes with
 //    available space.
-//  - A |weight| which specifies how much of the available space is allocated to
-//    a child view that can flex. The percentage of space allocated is the
-//    weight divided by the total weight of all views at this order (see below).
+//  - A |weight| which specifies how much each individual child will deviate
+//    from its preferred size; larger weights will deviate more either when
+//    shrinking or growing. The deviation is proportional to the weight divided
+//    by the total weight of all views at this |order|.
 //  - An |order| which specifies the priority with which available space is
-//    allocated. All available space is offered to child views at order 1, then
-//    any remaining space is offered to order 2, and so forth.
+//    allocated (lower numbers -> higher priority).
 //
-// For example, say there are three child controls in a horizontal layout, each
-// of which has a flex rule that allows it to be between 0 and 20 DIPs wide.
-// Child A is at order 2 with weight 2, child B is at order 1 with weight 1, and
-// child C is at order 2 and weight 1. The parent control is 50 DIPs across and
-// has no margins.
+// Space allocation works as follows:
+// 1. All views are given the smallest possible size that |rule| allows (which
+//    might be zero.)
+// 2. Going by |order|, we attempt to allocate the preferred size of each view.
+// 3. If there is insufficient size, the deficit is allocated across all views
+//    at this |order| whose |rule| allows them to shrink, proportional to
+//    |weight|.
+// 4. Once all orders have been allocated this way, repeat the process by
+//    |order| allocating any excess space among views whose |rule| allows them
+//    to exceed their preferred size.
 //
-// All 50 DIPs are offered to child B, since it is first in order. It consumes
-// 20 DIPs, its maximum size. Of the remaining 30, 20 are offered to child A and
-// 10 are offered to child C, each of which they take - the 2:1 ratio is due to
-// the different weights. (Also note that, if there were another child at order
-// 3, it would be offered zero DIPs and might choose not to display itself.)
+// For example, say there are three child views in a horizontal layout, each
+// of which has a flex rule that allows it to be between 10 and 40 DIP with a
+// preferred width of 20 DIP. Child A is at order 2 with weight 2, child B is at
+// order 1 with weight 1, and child C is at order 2 with weight 1.
+//
+// At 30 DIP (the parent's minimum size):
+// [10][10][10]
+//
+// At 40 DIP:
+// [10][20][10] (B hits its preferred size)
+//
+// At 48 DIP:
+// [12][20][16] (deficit is spread across A and C by weight)
+//
+// At 57 DIP:
+// [18][20][19]
+//
+// At 60 DIP:
+// [20][20][20] (all views at preferred size)
+//
+// At 80 DIP:
+// [20][40][20] (B hits its maximum size)
+//
+// At 110 DIP:
+// [40][40][30] (A scales faster than C)
+//
+// At 120 DIP (the parent's maximum size):
+// [40][40][40]
+//
+// NOTE(dfried): the behavior of |weight| may seem backwards when views shrink
+// below their preferred size, but it works the way it does because:
+//  (a) It's consistent with BoxLayout, making upgrading to FlexLayout easier.
+//  (b) It allows smooth scaling across a view's preferred size.
+// If this gets too confusing we could add an option to make weights reciprocal
+// when allocating deficit.
 class VIEWS_EXPORT FlexSpecification {
  public:
   // Creates a flex specification with the default rule (no flex, always use the
@@ -99,6 +174,15 @@ class VIEWS_EXPORT FlexSpecification {
   // Creates a flex specification with a custom flex rule. Note that any copies
   // or mutations of this specification will also inherit the rule.
   explicit FlexSpecification(FlexRule rule);
+
+  // Creates a flex specification with multi-stage flex rules and predicates to
+  // determine which rule to apply. See RuleAndPredicate above for usage
+  // details. `rules_and_predicates` must be non-empty.
+  //
+  // This is intended as a temporary API, to help with the migration to using a
+  // WebUI toolbar. Once that ships, this will no longer be needed.
+  explicit FlexSpecification(
+      std::vector<RuleAndPredicate> rules_and_predicates);
 
   // Creates a flex specification using the specififed minimum size and size
   // bounds rules. If |adjust_height_for_width| is specified, extra calculations
@@ -133,7 +217,8 @@ class VIEWS_EXPORT FlexSpecification {
 
   ~FlexSpecification();
 
-  // Makes a copy of this specification with a different order.
+  // Makes a copy of this specification with a different order. Should not be
+  // called for FlexSpecifications created with RuleAndPredicates.
   FlexSpecification WithOrder(int order) const;
 
   // Makes a copy of this specification with a different weight.
@@ -148,6 +233,9 @@ class VIEWS_EXPORT FlexSpecification {
   // the center, leading, or trailing edge of the allocated space.
   FlexSpecification WithAlignment(LayoutAlignment alignment) const;
 
+  std::pair<FlexRule, int> GetRuleAndOrderForBounds(
+      const SizeBounds& bounds) const;
+
   const FlexRule& rule() const { return rule_; }
   int weight() const { return weight_; }
   int order() const { return order_; }
@@ -158,6 +246,7 @@ class VIEWS_EXPORT FlexSpecification {
   int order_ = 1;
   int weight_ = 0;
   LayoutAlignment alignment_ = LayoutAlignment::kStretch;
+  std::vector<RuleAndPredicate> rules_and_predicates_;
 };
 
 // Represents insets in a single dimension.
@@ -180,9 +269,8 @@ class VIEWS_EXPORT Inset1D {
   void Expand(int delta_leading, int delta_trailing);
 
   constexpr bool is_empty() const { return leading_ == 0 && trailing_ == 0; }
-  bool operator==(const Inset1D& other) const;
-  bool operator!=(const Inset1D& other) const;
-  bool operator<(const Inset1D& other) const;
+  friend bool operator==(const Inset1D&, const Inset1D&) = default;
+  friend auto operator<=>(const Inset1D&, const Inset1D&) = default;
 
   std::string ToString() const;
 
@@ -228,9 +316,9 @@ class VIEWS_EXPORT Span {
              const Inset1D& margins = Inset1D());
 
   constexpr bool is_empty() const { return length_ == 0; }
-  bool operator==(const Span& other) const;
-  bool operator!=(const Span& other) const;
-  bool operator<(const Span& other) const;
+
+  friend bool operator==(const Span&, const Span&) = default;
+  friend auto operator<=>(const Span&, const Span&) = default;
 
   std::string ToString() const;
 
@@ -246,5 +334,7 @@ void PrintTo(MinimumFlexSizeRule minimum_flex_size_rule, ::std::ostream* os);
 void PrintTo(MaximumFlexSizeRule maximum_flex_size_rule, ::std::ostream* os);
 
 }  // namespace views
+
+EXPORT_ENUM_CONVERTERS(views::FlexAllocationOrder, VIEWS_EXPORT)
 
 #endif  // UI_VIEWS_LAYOUT_FLEX_LAYOUT_TYPES_H_

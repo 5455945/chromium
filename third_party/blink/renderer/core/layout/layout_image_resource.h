@@ -27,13 +27,16 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_LAYOUT_IMAGE_RESOURCE_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_LAYOUT_IMAGE_RESOURCE_H_
 
+#include "base/gtest_prod_util.h"
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/core/loader/image_loader.h"
 #include "third_party/blink/renderer/core/loader/resource/image_resource_content.h"
 #include "third_party/blink/renderer/core/style/style_image.h"
 
 namespace blink {
 
 class LayoutObject;
+struct NaturalSizingInfo;
 
 class CORE_EXPORT LayoutImageResource
     : public GarbageCollected<LayoutImageResource> {
@@ -42,19 +45,29 @@ class CORE_EXPORT LayoutImageResource
   LayoutImageResource(const LayoutImageResource&) = delete;
   LayoutImageResource& operator=(const LayoutImageResource&) = delete;
   virtual ~LayoutImageResource();
+  virtual void Trace(Visitor* visitor) const;
 
   virtual void Initialize(LayoutObject*);
   virtual void Shutdown();
 
   void SetImageResource(ImageResourceContent*);
   ImageResourceContent* CachedImage() const { return cached_image_.Get(); }
-  virtual bool HasImage() const { return cached_image_; }
+  virtual bool HasImage() const { return cached_image_ != nullptr; }
+  virtual bool IsSizeAvailable() const {
+    return cached_image_ && cached_image_->IsSizeAvailable();
+  }
+  ResourcePriority ComputeResourcePriority() const;
 
-  void ResetAnimation();
+  // Kept as the legacy reset path when SvgImageAnimationReset is disabled.
+  // The enabled path resets the image directly and uses InvalidatePaint().
+  void InvalidatePaint();
+
+  void ResetAnimation(
+      ImageLoader::ResetTimeline = ImageLoader::ResetTimeline::kAll);
   bool MaybeAnimated() const;
 
-  virtual scoped_refptr<Image> GetImage(const FloatSize&) const;
-  scoped_refptr<Image> GetImage(const IntSize&) const;
+  virtual scoped_refptr<Image> GetImage(const gfx::SizeF&) const;
+  scoped_refptr<Image> GetImage(const gfx::Size&) const;
   virtual bool ErrorOccurred() const {
     return cached_image_ && cached_image_->ErrorOccurred();
   }
@@ -63,24 +76,20 @@ class CORE_EXPORT LayoutImageResource
   // the "broken image".
   void UseBrokenImage();
 
-  virtual bool HasIntrinsicSize() const;
+  virtual bool IsCorsSameOrigin() const;
 
-  virtual FloatSize ImageSize(float multiplier) const;
-  // Default size is effective when this is LayoutImageResourceStyleImage.
-  virtual FloatSize ImageSizeWithDefaultSize(float multiplier,
-                                             const FloatSize&) const;
+  virtual NaturalSizingInfo GetNaturalDimensions(float multiplier) const;
   virtual RespectImageOrientationEnum ImageOrientation() const;
   virtual WrappedImagePtr ImagePtr() const { return cached_image_.Get(); }
 
-  virtual void Trace(Visitor* visitor) const { visitor->Trace(cached_image_); }
-
  protected:
-  // Device scale factor for the associated LayoutObject.
-  float DeviceScaleFactor() const;
   // Returns an image based on the passed device scale factor.
-  static Image* BrokenImage(float device_scale_factor);
+  static Image* BrokenImage(double device_pixel_ratio);
+  double DevicePixelRatio() const;
 
-  LayoutObject* layout_object_;
+  FRIEND_TEST_ALL_PREFIXES(LayoutImageResourceTest, BrokenImageHighRes);
+
+  Member<LayoutObject> layout_object_;
   Member<ImageResourceContent> cached_image_;
 };
 

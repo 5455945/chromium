@@ -1,4 +1,4 @@
-// Copyright (c) 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,8 @@
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_EVENT_MODULES_FACTORY_H_
 
 #include <memory>
-#include "base/memory/scoped_refptr.h"
+
 #include "third_party/blink/renderer/core/events/event_factory.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 
 namespace blink {
@@ -21,7 +20,9 @@ class EventModulesFactory final : public EventFactoryBase {
     return std::make_unique<EventModulesFactory>();
   }
 
-  Event* Create(ExecutionContext*, const String& event_type) override;
+  Event* Create(ScriptState*,
+                ExecutionContext*,
+                const String& event_type) override;
 };
 
 }  // namespace blink

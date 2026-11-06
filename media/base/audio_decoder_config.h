@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,9 +10,9 @@
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
 #include "base/time/time.h"
 #include "media/base/audio_codecs.h"
+#include "media/base/audio_parameters.h"
 #include "media/base/channel_layout.h"
 #include "media/base/encryption_scheme.h"
 #include "media/base/media_export.h"
@@ -20,9 +20,6 @@
 
 namespace media {
 
-// TODO(dalecurtis): FFmpeg API uses |bytes_per_channel| instead of
-// |bits_per_channel|, we should switch over since bits are generally confusing
-// to work with.
 class MEDIA_EXPORT AudioDecoderConfig {
  public:
   // Constructs an uninitialized object. Clients should call Initialize() with
@@ -32,19 +29,22 @@ class MEDIA_EXPORT AudioDecoderConfig {
   // Constructs an initialized object.
   AudioDecoderConfig(AudioCodec codec,
                      SampleFormat sample_format,
-                     ChannelLayout channel_layout,
+                     ChannelLayoutConfig channel_layout_config,
                      int samples_per_second,
                      const std::vector<uint8_t>& extra_data,
                      EncryptionScheme encryption_scheme);
 
   AudioDecoderConfig(const AudioDecoderConfig& other);
+  AudioDecoderConfig(AudioDecoderConfig&& other);
+  AudioDecoderConfig& operator=(const AudioDecoderConfig& other);
+  AudioDecoderConfig& operator=(AudioDecoderConfig&& other);
 
   ~AudioDecoderConfig();
 
   // Resets the internal state of this object. |codec_delay| is in frames.
   void Initialize(AudioCodec codec,
                   SampleFormat sample_format,
-                  ChannelLayout channel_layout,
+                  ChannelLayoutConfig channel_layout_config,
                   int samples_per_second,
                   const std::vector<uint8_t>& extra_data,
                   EncryptionScheme encryption_scheme,
@@ -62,14 +62,15 @@ class MEDIA_EXPORT AudioDecoderConfig {
   // Returns a human-readable string describing |*this|.
   std::string AsHumanReadableString() const;
 
-  // Sets the number of channels if |channel_layout_| is CHANNEL_LAYOUT_DISCRETE
-  void SetChannelsForDiscrete(int channels);
-
   AudioCodec codec() const { return codec_; }
-  int bits_per_channel() const { return bytes_per_channel_ * 8; }
   int bytes_per_channel() const { return bytes_per_channel_; }
-  ChannelLayout channel_layout() const { return channel_layout_; }
-  int channels() const { return channels_; }
+  ChannelLayoutConfig channel_layout_config() const {
+    return channel_layout_config_;
+  }
+  ChannelLayout channel_layout() const {
+    return channel_layout_config_.channel_layout();
+  }
+  int channels() const { return channel_layout_config_.channels(); }
   int samples_per_second() const { return samples_per_second_; }
   SampleFormat sample_format() const { return sample_format_; }
   int bytes_per_frame() const { return bytes_per_frame_; }
@@ -77,7 +78,7 @@ class MEDIA_EXPORT AudioDecoderConfig {
   int codec_delay() const { return codec_delay_; }
 
   // Optional byte data required to initialize audio decoders such as Vorbis
-  // codebooks.
+  // codebooks or AAC AudioSpecificConfig.
   const std::vector<uint8_t>& extra_data() const { return extra_data_; }
 
   // Whether the audio stream is potentially encrypted.
@@ -94,10 +95,14 @@ class MEDIA_EXPORT AudioDecoderConfig {
   // useful for decryptors that decrypts an encrypted stream to a clear stream.
   void SetIsEncrypted(bool is_encrypted);
 
+  // Optionally set if the AudioCodec has a profile which may preclude certain
+  // decoders from having support.
+  void set_profile(AudioCodecProfile profile) { profile_ = profile; }
+  AudioCodecProfile profile() const { return profile_; }
+
   bool should_discard_decoder_delay() const {
     return should_discard_decoder_delay_;
   }
-
   void disable_discard_decoder_delay() {
     should_discard_decoder_delay_ = false;
   }
@@ -105,47 +110,65 @@ class MEDIA_EXPORT AudioDecoderConfig {
   // Optionally set by renderer to provide hardware layout when playback
   // starts. Intentionally not part of IsValid(). Layout is not updated for
   // device changes - use with care!
-  void set_target_output_channel_layout(ChannelLayout output_layout) {
-    target_output_channel_layout_ = output_layout;
+  void set_target_output_channel_layout(ChannelLayoutConfig channel_layout) {
+    target_output_channel_layout_ = channel_layout;
   }
-  ChannelLayout target_output_channel_layout() const {
+  const ChannelLayoutConfig& target_output_channel_layout() const {
     return target_output_channel_layout_;
   }
 
-  // Optionally set if the AudioCodec has a profile which may preclude certain
-  // decoders from having support.
-  void set_profile(AudioCodecProfile profile) { profile_ = profile; }
-  AudioCodecProfile profile() const { return profile_; }
+  // Optionally set by renderer to signal desired bitstream-passthru format.
+  void set_target_output_sample_format(SampleFormat sample_format) {
+    target_output_sample_format_ = sample_format;
+  }
+  SampleFormat target_output_sample_format() const {
+    return target_output_sample_format_;
+  }
 
  private:
-  AudioCodec codec_ = kUnknownAudioCodec;
-  AudioCodecProfile profile_ = AudioCodecProfile::kUnknown;
+  // WARNING: When modifying or adding any parameters, update the following:
+  // - AudioDecoderConfig::AsHumanReadableString()
+  // - AudioDecoderConfig::Matches()
+  // - media::mojom::AudioDecoderConfig
+  // - audio_decoder_config_mojom_traits.{h|cc}
+  // - audio_decoder_config_mojom_traits_unittest.cc
+
+  // Mandatory parameters passed in constructor:
+
+  AudioCodec codec_ = AudioCodec::kUnknown;
   SampleFormat sample_format_ = kUnknownSampleFormat;
-  int bytes_per_channel_ = 0;
+  ChannelLayoutConfig channel_layout_config_;
   int samples_per_second_ = 0;
-  int bytes_per_frame_ = 0;
   std::vector<uint8_t> extra_data_;
   EncryptionScheme encryption_scheme_ = EncryptionScheme::kUnencrypted;
 
-  // Layout and count of the *stream* being decoded.
-  ChannelLayout channel_layout_ = CHANNEL_LAYOUT_UNSUPPORTED;
-  int channels_ = 0;
-
-  // Layout of the output hardware. Optionally set. See setter comments.
-  ChannelLayout target_output_channel_layout_ = CHANNEL_LAYOUT_NONE;
-
-  // |seek_preroll_| is the duration of the data that the decoder must decode
-  // before the decoded data is valid.
+  // The duration of data that the decoder must decode before the decoded data
+  // is valid.
   base::TimeDelta seek_preroll_;
 
-  // |codec_delay_| is the number of frames the decoder should discard before
-  // returning decoded data.  This value can include both decoder delay as well
-  // as padding added during encoding.
+  // The number of frames the decoder should discard before returning decoded
+  // data. Can include both decoder delay and padding added during encoding.
   int codec_delay_ = 0;
+
+  // Optional parameters that can be set later:
+
+  AudioCodecProfile profile_ = AudioCodecProfile::kUnknown;
+
+  // Layout of the output hardware. Optionally set. See setter comments.
+  ChannelLayoutConfig target_output_channel_layout_;
+
+  // Desired output format of bitstream. Optionally set. See setter comments.
+  SampleFormat target_output_sample_format_ = kUnknownSampleFormat;
 
   // Indicates if a decoder should implicitly discard decoder delay without it
   // being explicitly marked in discard padding.
   bool should_discard_decoder_delay_ = true;
+
+  // Derived values from mandatory and optional parameters above.
+  // A frame contains samples across all channels.
+
+  int bytes_per_channel_ = 0;
+  int bytes_per_frame_ = 0;
 
   // Not using DISALLOW_COPY_AND_ASSIGN here intentionally to allow the compiler
   // generated copy constructor and assignment operator. Since the extra data is

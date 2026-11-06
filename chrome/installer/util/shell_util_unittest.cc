@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,23 +14,30 @@
 #include "base/base_paths.h"
 #include "base/base_paths_win.h"
 #include "base/command_line.h"
-#include "base/cxx17_backports.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/atomic_flag.h"
 #include "base/test/scoped_path_override.h"
 #include "base/test/test_reg_util_win.h"
 #include "base/test/test_shortcut_win.h"
 #include "base/win/registry.h"
 #include "base/win/shortcut.h"
-#include "base/win/windows_version.h"
+#include "build/branding_buildflags.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/install_static/install_util.h"
 #include "chrome/installer/util/install_util.h"
 #include "chrome/installer/util/util_constants.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+#include "chrome/install_static/google_chrome_install_modes.h"
+#include "chrome/install_static/test/scoped_install_details.h"
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
 
 namespace {
 
@@ -39,7 +46,9 @@ const wchar_t kIronExe[] = L"iron.exe";
 const wchar_t kOtherIco[] = L"other.ico";
 
 // For registry tests.
-const wchar_t kTestProgid[] = L"TestApp";
+const wchar_t kTestProgId[] = L"TestApp";
+const wchar_t kFileHandler1ProgId[] = L"FileHandler1";
+const wchar_t kFileHandler2ProgId[] = L"FileHandler2";
 const wchar_t kTestOpenCommand[] = L"C:\\test.exe";
 const wchar_t kTestApplicationName[] = L"Test Application";
 const wchar_t kTestApplicationDescription[] = L"Application Description";
@@ -60,19 +69,19 @@ class ShellUtilShortcutTest : public testing::Test {
   void SetUp() override {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     chrome_exe_ = temp_dir_.GetPath().Append(installer::kChromeExe);
-    EXPECT_EQ(0, base::WriteFile(chrome_exe_, "", 0));
+    EXPECT_TRUE(base::WriteFile(chrome_exe_, ""));
 
     chrome_proxy_exe_ = temp_dir_.GetPath().Append(installer::kChromeProxyExe);
-    EXPECT_EQ(0, base::WriteFile(chrome_proxy_exe_, "", 0));
+    EXPECT_TRUE(base::WriteFile(chrome_proxy_exe_, ""));
 
     manganese_exe_ = temp_dir_.GetPath().Append(kManganeseExe);
-    EXPECT_EQ(0, base::WriteFile(manganese_exe_, "", 0));
+    EXPECT_TRUE(base::WriteFile(manganese_exe_, ""));
 
     iron_exe_ = temp_dir_.GetPath().Append(kIronExe);
-    EXPECT_EQ(0, base::WriteFile(iron_exe_, "", 0));
+    EXPECT_TRUE(base::WriteFile(iron_exe_, ""));
 
     other_ico_ = temp_dir_.GetPath().Append(kOtherIco);
-    EXPECT_EQ(0, base::WriteFile(other_ico_, "", 0));
+    EXPECT_TRUE(base::WriteFile(other_ico_, ""));
 
     ASSERT_TRUE(fake_user_desktop_.CreateUniqueTempDir());
     ASSERT_TRUE(fake_common_desktop_.CreateUniqueTempDir());
@@ -134,13 +143,6 @@ class ShellUtilShortcutTest : public testing::Test {
                             ? fake_start_menu_.GetPath()
                             : fake_common_start_menu_.GetPath();
         break;
-      case ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_DIR_DEPRECATED:
-        expected_path = (properties.level == ShellUtil::CURRENT_USER)
-                            ? fake_start_menu_.GetPath()
-                            : fake_common_start_menu_.GetPath();
-        expected_path = expected_path.Append(
-            InstallUtil::GetChromeShortcutDirNameDeprecated());
-        break;
       default:
         ADD_FAILURE() << "Unknown location";
         return base::FilePath();
@@ -149,7 +151,7 @@ class ShellUtilShortcutTest : public testing::Test {
     std::wstring shortcut_name = properties.has_shortcut_name()
                                      ? properties.shortcut_name
                                      : InstallUtil::GetShortcutName();
-    shortcut_name.append(installer::kLnkExt);
+    shortcut_name += installer::kLnkExt;
     return expected_path.Append(shortcut_name);
   }
 
@@ -183,7 +185,7 @@ class ShellUtilShortcutTest : public testing::Test {
     if (properties.has_icon()) {
       expected_properties.set_icon(properties.icon, properties.icon_index);
     } else {
-      int icon_index = install_static::GetIconResourceIndex();
+      int icon_index = install_static::GetAppIconResourceIndex();
       expected_properties.set_icon(chrome_exe_, icon_index);
     }
 
@@ -236,64 +238,52 @@ class ShellUtilShortcutTest : public testing::Test {
 TEST_F(ShellUtilShortcutTest, GetShortcutPath) {
   base::FilePath path;
 
-  ShellUtil::GetShortcutPath(ShellUtil::SHORTCUT_LOCATION_DESKTOP,
-                             ShellUtil::CURRENT_USER, &path);
+  ASSERT_TRUE(ShellUtil::GetShortcutPath(ShellUtil::SHORTCUT_LOCATION_DESKTOP,
+                                         ShellUtil::CURRENT_USER, &path));
   EXPECT_EQ(fake_user_desktop_.GetPath(), path);
 
-  ShellUtil::GetShortcutPath(ShellUtil::SHORTCUT_LOCATION_DESKTOP,
-                             ShellUtil::SYSTEM_LEVEL, &path);
+  ASSERT_TRUE(ShellUtil::GetShortcutPath(ShellUtil::SHORTCUT_LOCATION_DESKTOP,
+                                         ShellUtil::SYSTEM_LEVEL, &path));
   EXPECT_EQ(fake_common_desktop_.GetPath(), path);
 
-  ShellUtil::GetShortcutPath(ShellUtil::SHORTCUT_LOCATION_QUICK_LAUNCH,
-                             ShellUtil::CURRENT_USER, &path);
+  ASSERT_TRUE(
+      ShellUtil::GetShortcutPath(ShellUtil::SHORTCUT_LOCATION_QUICK_LAUNCH,
+                                 ShellUtil::CURRENT_USER, &path));
   EXPECT_EQ(fake_user_quick_launch_.GetPath(), path);
 
-  std::wstring start_menu_subfolder =
-      InstallUtil::GetChromeShortcutDirNameDeprecated();
-  ShellUtil::GetShortcutPath(
-      ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_DIR_DEPRECATED,
-      ShellUtil::CURRENT_USER, &path);
-  EXPECT_EQ(fake_start_menu_.GetPath().Append(start_menu_subfolder), path);
-
-  ShellUtil::GetShortcutPath(
-      ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_DIR_DEPRECATED,
-      ShellUtil::SYSTEM_LEVEL, &path);
-  EXPECT_EQ(fake_common_start_menu_.GetPath().Append(start_menu_subfolder),
-            path);
-
-  ShellUtil::GetShortcutPath(ShellUtil::SHORTCUT_LOCATION_STARTUP,
-                             ShellUtil::SYSTEM_LEVEL, &path);
+  ASSERT_TRUE(ShellUtil::GetShortcutPath(ShellUtil::SHORTCUT_LOCATION_STARTUP,
+                                         ShellUtil::SYSTEM_LEVEL, &path));
   EXPECT_EQ(fake_common_startup_.GetPath(), path);
 
-  ShellUtil::GetShortcutPath(ShellUtil::SHORTCUT_LOCATION_STARTUP,
-                             ShellUtil::CURRENT_USER, &path);
+  ASSERT_TRUE(ShellUtil::GetShortcutPath(ShellUtil::SHORTCUT_LOCATION_STARTUP,
+                                         ShellUtil::CURRENT_USER, &path));
   EXPECT_EQ(fake_user_startup_.GetPath(), path);
 }
 
-TEST_F(ShellUtilShortcutTest, MoveExistingShortcut) {
-  test_properties_.set_shortcut_name(L"Bobo le shortcut");
-  test_properties_.level = ShellUtil::SYSTEM_LEVEL;
-  base::FilePath old_shortcut_path(GetExpectedShortcutPath(
-      ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_DIR_DEPRECATED,
-      test_properties_));
-
-  ASSERT_TRUE(ShellUtil::CreateOrUpdateShortcut(
-      ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_DIR_DEPRECATED,
-      test_properties_, ShellUtil::SHELL_SHORTCUT_CREATE_ALWAYS));
-  ValidateChromeShortcut(
-      ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_DIR_DEPRECATED,
-      test_properties_);
-  ASSERT_TRUE(base::PathExists(old_shortcut_path.DirName()));
-  ASSERT_TRUE(base::PathExists(old_shortcut_path));
-
-  ASSERT_TRUE(ShellUtil::MoveExistingShortcut(
-      ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_DIR_DEPRECATED,
-      ShellUtil::SHORTCUT_LOCATION_START_MENU_ROOT, test_properties_));
-
-  ValidateChromeShortcut(ShellUtil::SHORTCUT_LOCATION_START_MENU_ROOT,
-                         test_properties_);
-  ASSERT_FALSE(base::PathExists(old_shortcut_path));
-  ASSERT_FALSE(base::PathExists(old_shortcut_path.DirName()));
+// Test the basic mechanism of TranslateShortcutCreationOrUpdateInfo.
+// Other tests that call ShellUtil::CreateOrUpdateShortcut exercise its
+// complete functionality.
+TEST_F(ShellUtilShortcutTest, TranslateShortcutCreateOrUpdateInfo) {
+  ShellUtil::ShortcutLocation location = ShellUtil::SHORTCUT_LOCATION_DESKTOP;
+  test_properties_.set_target(chrome_exe_);
+  test_properties_.set_arguments_to_merge(L"--merged-arg");
+  ShellUtil::ShortcutOperation operation =
+      ShellUtil::SHELL_SHORTCUT_CREATE_ALWAYS;
+  base::win::ShortcutOperation base_operation;
+  base::win::ShortcutProperties base_properties;
+  base::FilePath base_shortcut_path;
+  bool should_install_shortcut = false;
+  EXPECT_TRUE(ShellUtil::TranslateShortcutCreationOrUpdateInfo(
+      location, test_properties_, operation, base_operation, base_properties,
+      should_install_shortcut, base_shortcut_path));
+  EXPECT_EQ(base_operation, base::win::ShortcutOperation::kCreateAlways);
+  EXPECT_EQ(base_properties.target, chrome_exe_);
+  EXPECT_EQ(base_properties.arguments, L"--merged-arg");
+  EXPECT_TRUE(base_properties.options &
+              base::win::ShortcutProperties::PROPERTIES_ARGUMENTS_TO_MERGE);
+  EXPECT_TRUE(should_install_shortcut);
+  EXPECT_EQ(base_shortcut_path,
+            GetExpectedShortcutPath(location, test_properties_));
 }
 
 TEST_F(ShellUtilShortcutTest, CreateChromeExeShortcutWithDefaultProperties) {
@@ -303,17 +293,6 @@ TEST_F(ShellUtilShortcutTest, CreateChromeExeShortcutWithDefaultProperties) {
       ShellUtil::SHORTCUT_LOCATION_DESKTOP, properties,
       ShellUtil::SHELL_SHORTCUT_CREATE_ALWAYS));
   ValidateChromeShortcut(ShellUtil::SHORTCUT_LOCATION_DESKTOP, properties);
-}
-
-TEST_F(ShellUtilShortcutTest, CreateStartMenuShortcutWithAllProperties) {
-  test_properties_.set_shortcut_name(L"Bobo le shortcut");
-  test_properties_.level = ShellUtil::SYSTEM_LEVEL;
-  ASSERT_TRUE(ShellUtil::CreateOrUpdateShortcut(
-      ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_DIR_DEPRECATED,
-      test_properties_, ShellUtil::SHELL_SHORTCUT_CREATE_ALWAYS));
-  ValidateChromeShortcut(
-      ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_DIR_DEPRECATED,
-      test_properties_);
 }
 
 TEST_F(ShellUtilShortcutTest, ReplaceSystemLevelDesktopShortcut) {
@@ -385,15 +364,6 @@ TEST_F(ShellUtilShortcutTest, CreateIfNoSystemLevelWithSystemLevelPresent) {
       ShellUtil::SHELL_SHORTCUT_CREATE_IF_NO_SYSTEM_LEVEL));
   ASSERT_FALSE(
       base::PathExists(fake_user_desktop_.GetPath().Append(shortcut_name)));
-}
-
-TEST_F(ShellUtilShortcutTest, CreateIfNoSystemLevelStartMenu) {
-  ASSERT_TRUE(ShellUtil::CreateOrUpdateShortcut(
-      ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_DIR_DEPRECATED,
-      test_properties_, ShellUtil::SHELL_SHORTCUT_CREATE_IF_NO_SYSTEM_LEVEL));
-  ValidateChromeShortcut(
-      ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_DIR_DEPRECATED,
-      test_properties_);
 }
 
 TEST_F(ShellUtilShortcutTest, CreateAlwaysUserWithSystemLevelPresent) {
@@ -878,7 +848,10 @@ TEST_F(ShellUtilShortcutTest, ClearShortcutArguments) {
   ShellUtil::ShortcutProperties expected_properties3(test_properties_);
 
   // Shortcut 4: targets "chrome.exe"; has both unknown and known arguments.
-  const std::wstring kKnownArg = L"--app-id";
+  const std::wstring kKnownArg = base::StrCat(
+      {L"--", base::ASCIIToWide(switches::kAppId), L" --",
+       base::ASCIIToWide(switches::kSourceShortcutLocation), L"=",
+       base::ASCIIToWide(switches::kSourceShortcutLocationDesktop)});
   const std::wstring kExpectedArgs = L"foo.com " + kKnownArg;
   test_properties_.set_shortcut_name(L"Chrome 4");
   test_properties_.set_arguments(kExpectedArgs);
@@ -968,43 +941,21 @@ TEST_F(ShellUtilShortcutTest, ShortcutsAreNotHidden) {
 
 TEST_F(ShellUtilShortcutTest, CreateMultipleStartMenuShortcutsAndRemoveFolder) {
   ASSERT_TRUE(ShellUtil::CreateOrUpdateShortcut(
-      ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_DIR_DEPRECATED,
-      test_properties_, ShellUtil::SHELL_SHORTCUT_CREATE_ALWAYS));
-  ASSERT_TRUE(ShellUtil::CreateOrUpdateShortcut(
       ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_APPS_DIR, test_properties_,
       ShellUtil::SHELL_SHORTCUT_CREATE_ALWAYS));
   test_properties_.set_shortcut_name(L"A second shortcut");
   ASSERT_TRUE(ShellUtil::CreateOrUpdateShortcut(
-      ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_DIR_DEPRECATED,
-      test_properties_, ShellUtil::SHELL_SHORTCUT_CREATE_ALWAYS));
-  ASSERT_TRUE(ShellUtil::CreateOrUpdateShortcut(
       ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_APPS_DIR, test_properties_,
       ShellUtil::SHELL_SHORTCUT_CREATE_ALWAYS));
 
-  base::FilePath chrome_shortcut_folder(fake_start_menu_.GetPath().Append(
-      InstallUtil::GetChromeShortcutDirNameDeprecated()));
   base::FilePath chrome_apps_shortcut_folder(fake_start_menu_.GetPath().Append(
       InstallUtil::GetChromeAppsShortcutDirName()));
-
-  base::FileEnumerator chrome_file_counter(chrome_shortcut_folder, false,
-                                           base::FileEnumerator::FILES);
-  int count = 0;
-  while (!chrome_file_counter.Next().empty())
-    ++count;
-  EXPECT_EQ(2, count);
-
   base::FileEnumerator chrome_apps_file_counter(
       chrome_apps_shortcut_folder, false, base::FileEnumerator::FILES);
-  count = 0;
+  int count = 0;
   while (!chrome_apps_file_counter.Next().empty())
     ++count;
   EXPECT_EQ(2, count);
-
-  ASSERT_TRUE(base::PathExists(chrome_shortcut_folder));
-  ASSERT_TRUE(ShellUtil::RemoveShortcuts(
-      ShellUtil::SHORTCUT_LOCATION_START_MENU_CHROME_DIR_DEPRECATED,
-      ShellUtil::CURRENT_USER, {chrome_exe_}));
-  ASSERT_FALSE(base::PathExists(chrome_shortcut_folder));
 
   ASSERT_TRUE(base::PathExists(chrome_apps_shortcut_folder));
   ASSERT_TRUE(ShellUtil::RemoveShortcuts(
@@ -1040,7 +991,7 @@ TEST_F(ShellUtilShortcutTest, DontRemoveChromeShortcutIfPointsToAnotherChrome) {
   ASSERT_TRUE(other_exe_dir.CreateUniqueTempDir());
   base::FilePath other_chrome_exe =
       other_exe_dir.GetPath().Append(installer::kChromeExe);
-  EXPECT_EQ(0, base::WriteFile(other_chrome_exe, "", 0));
+  EXPECT_TRUE(base::WriteFile(other_chrome_exe, ""));
 
   test_properties_.set_target(other_chrome_exe);
   ASSERT_TRUE(ShellUtil::CreateOrUpdateShortcut(
@@ -1065,7 +1016,9 @@ TEST_F(ShellUtilShortcutTest, DontRemoveChromeShortcutIfPointsToAnotherChrome) {
 
 class ShellUtilRegistryTest : public testing::Test {
  public:
-  ShellUtilRegistryTest() {}
+  ShellUtilRegistryTest() = default;
+  ShellUtilRegistryTest(const ShellUtilRegistryTest&) = delete;
+  ShellUtilRegistryTest& operator=(const ShellUtilRegistryTest&) = delete;
 
  protected:
   void SetUp() override {
@@ -1089,27 +1042,26 @@ class ShellUtilRegistryTest : public testing::Test {
     return open_command;
   }
 
-  static std::set<std::wstring> FileExtensions() {
+  static const std::set<std::wstring> FileExtensions() {
     std::set<std::wstring> file_extensions;
-    for (size_t i = 0; i < base::size(kTestFileExtensions); ++i)
-      file_extensions.insert(kTestFileExtensions[i]);
+    for (const wchar_t* extension : kTestFileExtensions) {
+      file_extensions.insert(extension);
+    }
     return file_extensions;
   }
 
-  base::FilePath& chrome_exe() { return chrome_exe_; }
+  const base::FilePath& chrome_exe() const { return chrome_exe_; }
 
  private:
   registry_util::RegistryOverrideManager registry_overrides_;
   base::ScopedTempDir temp_dir_;
   base::FilePath chrome_exe_;
-
-  DISALLOW_COPY_AND_ASSIGN(ShellUtilRegistryTest);
 };
 
 TEST_F(ShellUtilRegistryTest, AddFileAssociations) {
   // Create file associations.
   EXPECT_TRUE(ShellUtil::AddFileAssociations(
-      kTestProgid, OpenCommand(), kTestApplicationName, kTestFileTypeName,
+      kTestProgId, OpenCommand(), kTestApplicationName, kTestFileTypeName,
       base::FilePath(kTestIconPath), FileExtensions()));
 
   // Ensure that the registry keys have been correctly set.
@@ -1121,11 +1073,6 @@ TEST_F(ShellUtilRegistryTest, AddFileAssociations) {
   EXPECT_EQ(L"Test File Type", value);
   EXPECT_EQ(ERROR_SUCCESS, key.ReadValue(L"FileExtensions", &value));
   EXPECT_EQ(L".test1;.test2", value);
-  ASSERT_EQ(ERROR_SUCCESS,
-            key.Open(HKEY_CURRENT_USER,
-                     L"Software\\Classes\\TestApp\\DefaultIcon", KEY_READ));
-  EXPECT_EQ(ERROR_SUCCESS, key.ReadValue(L"", &value));
-  EXPECT_EQ(L"D:\\test.ico,0", value);
   ASSERT_EQ(
       ERROR_SUCCESS,
       key.Open(HKEY_CURRENT_USER,
@@ -1133,22 +1080,23 @@ TEST_F(ShellUtilRegistryTest, AddFileAssociations) {
   EXPECT_EQ(ERROR_SUCCESS, key.ReadValue(L"", &value));
   EXPECT_EQ(L"\"C:\\test.exe\" --single-argument %1", value);
 
-  // The Application subkey and values are only required by Windows 8 and later.
-  if (base::win::GetVersion() >= base::win::Version::WIN8) {
-    ASSERT_EQ(ERROR_SUCCESS,
-              key.Open(HKEY_CURRENT_USER,
-                       L"Software\\Classes\\TestApp\\Application", KEY_READ));
-    EXPECT_EQ(ERROR_SUCCESS, key.ReadValue(L"ApplicationName", &value));
-    EXPECT_EQ(L"Test Application", value);
-    EXPECT_EQ(ERROR_SUCCESS, key.ReadValue(L"ApplicationIcon", &value));
-    EXPECT_EQ(L"D:\\test.ico,0", value);
-  }
+  ASSERT_EQ(ERROR_SUCCESS,
+            key.Open(HKEY_CURRENT_USER,
+                     L"Software\\Classes\\TestApp\\Application", KEY_READ));
+  EXPECT_EQ(ERROR_SUCCESS, key.ReadValue(L"ApplicationName", &value));
+  EXPECT_EQ(L"Test Application", value);
+  EXPECT_EQ(ERROR_SUCCESS, key.ReadValue(L"ApplicationIcon", &value));
+  EXPECT_EQ(L"D:\\test.ico,0", value);
 
-  // .test1 should be default-associated with our test app.
+  // .test1 should not be default-associated with our test app. Programmatically
+  // becoming the default handler can be surprising to users, and risks
+  // overwriting affected file types' implicit default handlers, which are
+  // cached by Windows.
   ASSERT_EQ(ERROR_SUCCESS, key.Open(HKEY_CURRENT_USER,
                                     L"Software\\Classes\\.test1", KEY_READ));
-  EXPECT_EQ(ERROR_SUCCESS, key.ReadValue(L"", &value));
-  EXPECT_EQ(L"TestApp", value);
+
+  // .test 1 should have our app in its Open With list.
+  EXPECT_NE(ERROR_SUCCESS, key.ReadValue(L"", &value));
   ASSERT_EQ(ERROR_SUCCESS,
             key.Open(HKEY_CURRENT_USER,
                      L"Software\\Classes\\.test1\\OpenWithProgids", KEY_READ));
@@ -1173,11 +1121,11 @@ TEST_F(ShellUtilRegistryTest, AddFileAssociations) {
 TEST_F(ShellUtilRegistryTest, DeleteFileAssociations) {
   // Create file associations.
   ASSERT_TRUE(ShellUtil::AddFileAssociations(
-      kTestProgid, OpenCommand(), kTestApplicationName, kTestFileTypeName,
+      kTestProgId, OpenCommand(), kTestApplicationName, kTestFileTypeName,
       base::FilePath(kTestIconPath), FileExtensions()));
 
   // Delete them.
-  EXPECT_TRUE(ShellUtil::DeleteFileAssociations(kTestProgid));
+  EXPECT_TRUE(ShellUtil::DeleteFileAssociations(kTestProgId));
 
   // The class key should have been completely deleted.
   base::win::RegKey key;
@@ -1195,11 +1143,6 @@ TEST_F(ShellUtilRegistryTest, DeleteFileAssociations) {
                      L"Software\\Classes\\.test2\\OpenWithProgids", KEY_READ));
   EXPECT_FALSE(key.HasValue(L"TestApp"));
 
-  // .test1 should no longer have a default handler.
-  ASSERT_EQ(ERROR_SUCCESS, key.Open(HKEY_CURRENT_USER,
-                                    L"Software\\Classes\\.test1", KEY_READ));
-  EXPECT_FALSE(key.HasValue(L""));
-
   // .test2 should still have the other app as its default handler.
   ASSERT_EQ(ERROR_SUCCESS, key.Open(HKEY_CURRENT_USER,
                                     L"Software\\Classes\\.test2", KEY_READ));
@@ -1207,10 +1150,21 @@ TEST_F(ShellUtilRegistryTest, DeleteFileAssociations) {
   EXPECT_EQ(L"SomeOtherApp", value);
 }
 
+TEST_F(ShellUtilRegistryTest, RegisterFileHandlerProgIds) {
+  const std::vector<std::wstring> file_handler_prog_ids(
+      {std::wstring(kFileHandler1ProgId), std::wstring(kFileHandler2ProgId)});
+  ShellUtil::RegisterFileHandlerProgIdsForAppId(std::wstring(kTestProgId),
+                                                file_handler_prog_ids);
+  // Test that the registry contains the file handler prog ids.
+  const std::vector<std::wstring> retrieved_file_handler_prog_ids =
+      ShellUtil::GetFileHandlerProgIdsForAppId(std::wstring(kTestProgId));
+  EXPECT_EQ(file_handler_prog_ids, retrieved_file_handler_prog_ids);
+}
+
 TEST_F(ShellUtilRegistryTest, AddApplicationClass) {
   // Add TestApp application class and verify registry entries.
   EXPECT_TRUE(ShellUtil::AddApplicationClass(
-      std::wstring(kTestProgid), OpenCommand(), kTestApplicationName,
+      std::wstring(kTestProgId), OpenCommand(), kTestApplicationName,
       kTestFileTypeName, base::FilePath(kTestIconPath)));
 
   base::win::RegKey key;
@@ -1231,21 +1185,18 @@ TEST_F(ShellUtilRegistryTest, AddApplicationClass) {
   EXPECT_EQ(ERROR_SUCCESS, key.ReadValue(L"", &value));
   EXPECT_EQ(L"\"C:\\test.exe\" --single-argument %1", value);
 
-  // The Application subkey and values are only required by Windows 8 and later.
-  if (base::win::GetVersion() >= base::win::Version::WIN8) {
-    ASSERT_EQ(ERROR_SUCCESS,
-              key.Open(HKEY_CURRENT_USER,
-                       L"Software\\Classes\\TestApp\\Application", KEY_READ));
-    EXPECT_EQ(ERROR_SUCCESS, key.ReadValue(L"ApplicationName", &value));
-    EXPECT_EQ(L"Test Application", value);
-    EXPECT_EQ(ERROR_SUCCESS, key.ReadValue(L"ApplicationIcon", &value));
-    EXPECT_EQ(L"D:\\test.ico,0", value);
-  }
+  ASSERT_EQ(ERROR_SUCCESS,
+            key.Open(HKEY_CURRENT_USER,
+                     L"Software\\Classes\\TestApp\\Application", KEY_READ));
+  EXPECT_EQ(ERROR_SUCCESS, key.ReadValue(L"ApplicationName", &value));
+  EXPECT_EQ(L"Test Application", value);
+  EXPECT_EQ(ERROR_SUCCESS, key.ReadValue(L"ApplicationIcon", &value));
+  EXPECT_EQ(L"D:\\test.ico,0", value);
 }
 
 TEST_F(ShellUtilRegistryTest, DeleteApplicationClass) {
   ASSERT_TRUE(ShellUtil::AddApplicationClass(
-      kTestProgid, OpenCommand(), kTestApplicationName, kTestFileTypeName,
+      kTestProgId, OpenCommand(), kTestApplicationName, kTestFileTypeName,
       base::FilePath(kTestIconPath)));
 
   base::win::RegKey key;
@@ -1253,44 +1204,39 @@ TEST_F(ShellUtilRegistryTest, DeleteApplicationClass) {
   ASSERT_EQ(ERROR_SUCCESS, key.Open(HKEY_CURRENT_USER,
                                     L"Software\\Classes\\TestApp", KEY_READ));
 
-  EXPECT_TRUE(ShellUtil::DeleteApplicationClass(kTestProgid));
+  EXPECT_TRUE(ShellUtil::DeleteApplicationClass(kTestProgId));
   EXPECT_NE(ERROR_SUCCESS, key.Open(HKEY_CURRENT_USER,
                                     L"Software\\Classes\\TestApp", KEY_READ));
 }
 
-TEST_F(ShellUtilRegistryTest, GetFileAssociationsAndAppName) {
-  ShellUtil::FileAssociationsAndAppName empty_file_associations_and_app_name(
-      ShellUtil::GetFileAssociationsAndAppName(kTestProgid));
-  EXPECT_TRUE(empty_file_associations_and_app_name.app_name.empty());
+TEST_F(ShellUtilRegistryTest, GetAppName) {
+  const std::wstring empty_app_name(ShellUtil::GetAppName(kTestProgId));
+  EXPECT_TRUE(empty_app_name.empty());
 
-  // Add file associations and test that GetFileAssociationsAndAppName returns
-  // the registered file associations and app name. Pass kTestApplicationName
-  // for the open command, to handle the win7 case, which returns the open
-  // command executable name as the app_name.
+  // Add file associations and test that GetAppName returns the registered app
+  // name.
   ASSERT_TRUE(ShellUtil::AddFileAssociations(
-      kTestProgid, OpenCommand(), kTestApplicationName, kTestFileTypeName,
+      kTestProgId, OpenCommand(), kTestApplicationName, kTestFileTypeName,
       base::FilePath(kTestIconPath), FileExtensions()));
-  ShellUtil::FileAssociationsAndAppName file_associations_and_app_name(
-      ShellUtil::GetFileAssociationsAndAppName(kTestProgid));
-  EXPECT_EQ(file_associations_and_app_name.app_name, kTestApplicationName);
-  EXPECT_EQ(file_associations_and_app_name.file_associations, FileExtensions());
+  const std::wstring app_name(ShellUtil::GetAppName(kTestProgId));
+  EXPECT_EQ(app_name, kTestApplicationName);
 }
 
 TEST_F(ShellUtilRegistryTest, GetApplicationInfoForProgId) {
   ShellUtil::ApplicationInfo empty_application_info(
-      ShellUtil::GetApplicationInfoForProgId(kTestProgid));
+      ShellUtil::GetApplicationInfoForProgId(kTestProgId));
   EXPECT_TRUE(empty_application_info.application_name.empty());
 
   // Add application class and test that GetApplicationInfoForProgId returns
   // the registered application properties.
   EXPECT_TRUE(ShellUtil::AddApplicationClass(
-      std::wstring(kTestProgid), OpenCommand(), kTestApplicationName,
+      std::wstring(kTestProgId), OpenCommand(), kTestApplicationName,
       kTestApplicationDescription, base::FilePath(kTestIconPath)));
 
   ShellUtil::ApplicationInfo app_info(
-      ShellUtil::GetApplicationInfoForProgId(kTestProgid));
+      ShellUtil::GetApplicationInfoForProgId(kTestProgId));
 
-  EXPECT_EQ(kTestProgid, app_info.prog_id);
+  EXPECT_EQ(kTestProgId, app_info.prog_id);
 
   EXPECT_EQ(app_info.application_description, app_info.file_type_name);
   EXPECT_EQ(base::FilePath(kTestIconPath), app_info.file_type_icon_path);
@@ -1298,8 +1244,7 @@ TEST_F(ShellUtilRegistryTest, GetApplicationInfoForProgId) {
 
   EXPECT_EQ(L"\"C:\\test.exe\" --single-argument %1", app_info.command_line);
 
-  if (base::win::GetVersion() >= base::win::Version::WIN8)
-    EXPECT_EQ(L"", app_info.app_id);
+  EXPECT_EQ(L"", app_info.app_id);
 
   EXPECT_EQ(kTestApplicationName, app_info.application_name);
   EXPECT_EQ(kTestApplicationDescription, app_info.application_description);
@@ -1328,7 +1273,7 @@ TEST_F(ShellUtilRegistryTest, AddAppProtocolAssociations) {
   EXPECT_TRUE(key.HasValue(L"URL Protocol"));
 
   // Ensure that URLAssociations entries were created for each protocol.
-  // "<root_hkey>\Software\[CompanyPathName\]ProductPathName[install_suffix]\AppProtocolHandlers\|prog_id|\Capabilities\URLAssociations\<protocol>".
+  // "HKEY_CURRENT_USER\Software\[CompanyPathName\]ProductPathName[install_suffix]\AppProtocolHandlers\|prog_id|\Capabilities\URLAssociations\<protocol>".
   std::wstring capabilities_path(install_static::GetRegistryPath());
   capabilities_path.append(ShellUtil::kRegAppProtocolHandlers);
   capabilities_path.push_back(base::FilePath::kSeparators[0]);
@@ -1338,11 +1283,9 @@ TEST_F(ShellUtilRegistryTest, AddAppProtocolAssociations) {
   const std::wstring url_associations_key_name =
       capabilities_path + L"\\URLAssociations";
 
-  HKEY root = base::win::GetVersion() == base::win::Version::WIN7
-                  ? HKEY_LOCAL_MACHINE
-                  : HKEY_CURRENT_USER;
-  ASSERT_EQ(ERROR_SUCCESS,
-            key.Open(root, url_associations_key_name.c_str(), KEY_READ));
+  ASSERT_EQ(
+      ERROR_SUCCESS,
+      key.Open(HKEY_CURRENT_USER, url_associations_key_name.c_str(), KEY_READ));
 
   ASSERT_EQ(ERROR_SUCCESS, key.ReadValue(L"web+test", &value));
   EXPECT_EQ(app_progid, std::wstring(value));
@@ -1351,10 +1294,10 @@ TEST_F(ShellUtilRegistryTest, AddAppProtocolAssociations) {
   EXPECT_EQ(app_progid, std::wstring(value));
 
   // Ensure that app was registered correctly under RegisteredApplications.
-  // <root hkey>\RegisteredApplications\<prog_id>
+  // "HKEY_CURRENT_USER\RegisteredApplications\<prog_id>".
   ASSERT_EQ(
       ERROR_SUCCESS,
-      key.Open(root,
+      key.Open(HKEY_CURRENT_USER,
                std::wstring(ShellUtil::kRegRegisteredApplications).c_str(),
                KEY_READ));
 
@@ -1377,13 +1320,35 @@ TEST_F(ShellUtilRegistryTest, ToAndFromCommandLineArgument) {
   EXPECT_EQ(L"mailto:app_progid2,web+test:app_progid1", command_line);
 
   // Ensure the above command line arguments parse correctly.
-  absl::optional<ShellUtil::ProtocolAssociations> parsed_protocol_associations =
+  std::optional<ShellUtil::ProtocolAssociations> parsed_protocol_associations =
       ShellUtil::ProtocolAssociations::FromCommandLineArgument(command_line);
   ASSERT_TRUE(parsed_protocol_associations.has_value());
   EXPECT_EQ(protocol_associations.associations,
             parsed_protocol_associations.value().associations);
   EXPECT_EQ(protocol_associations.associations[L"web+test"],
             parsed_protocol_associations.value().associations[L"web+test"]);
+}
+
+TEST_F(ShellUtilRegistryTest, AddAppProtocolAssociations_InvalidProtocols) {
+  // Create test protocol associations with valid and invalid protocols.
+  const std::wstring app_progid = L"app_progid1";
+  const std::vector<std::wstring> app_protocols = {
+      L"web+test", L"invalid\\protocol", L"invalid/protocol"};
+
+  ASSERT_TRUE(ShellUtil::AddAppProtocolAssociations(app_protocols, app_progid));
+
+  // Ensure that classes were created only for the valid protocol.
+  base::win::RegKey key;
+  ASSERT_EQ(ERROR_SUCCESS, key.Open(HKEY_CURRENT_USER,
+                                    L"Software\\Classes\\web+test", KEY_READ));
+  EXPECT_TRUE(key.HasValue(L"URL Protocol"));
+
+  ASSERT_NE(ERROR_SUCCESS,
+            key.Open(HKEY_CURRENT_USER, L"Software\\Classes\\invalid\\protocol",
+                     KEY_READ));
+  ASSERT_NE(ERROR_SUCCESS,
+            key.Open(HKEY_CURRENT_USER, L"Software\\Classes\\invalid/protocol",
+                     KEY_READ));
 }
 
 TEST_F(ShellUtilRegistryTest, RemoveAppProtocolAssociations) {
@@ -1394,28 +1359,25 @@ TEST_F(ShellUtilRegistryTest, RemoveAppProtocolAssociations) {
   ASSERT_TRUE(ShellUtil::AddAppProtocolAssociations(app_protocols, app_progid));
 
   // Delete associations and ensure that the protocol entry does not exist.
-  EXPECT_TRUE(ShellUtil::RemoveAppProtocolAssociations(app_progid, false));
+  EXPECT_TRUE(ShellUtil::RemoveAppProtocolAssociations(app_progid));
 
   // Ensure that the software registration key was removed.
-  // "<root_hkey>\Software\[CompanyPathName\]ProductPathName[install_suffix]\AppProtocolHandlers\|prog_id|".
+  // "HKEY_CURRENT_USER\Software\[CompanyPathName\]ProductPathName[install_suffix]\AppProtocolHandlers\|prog_id|".
   std::wstring capabilities_path(install_static::GetRegistryPath());
   capabilities_path.append(ShellUtil::kRegAppProtocolHandlers);
   capabilities_path.push_back(base::FilePath::kSeparators[0]);
   capabilities_path.append(app_progid);
 
-  HKEY root = base::win::GetVersion() == base::win::Version::WIN7
-                  ? HKEY_LOCAL_MACHINE
-                  : HKEY_CURRENT_USER;
   base::win::RegKey key;
 
   ASSERT_EQ(ERROR_FILE_NOT_FOUND,
-            key.Open(root, capabilities_path.c_str(), KEY_READ));
+            key.Open(HKEY_CURRENT_USER, capabilities_path.c_str(), KEY_READ));
 
   // Ensure that the RegisteredApplications entry was removed.
-  // <root hkey>\RegisteredApplications\<prog_id>
+  // "HKEY_CURRENT_USER\RegisteredApplications\<prog_id>".
   ASSERT_EQ(
       ERROR_SUCCESS,
-      key.Open(root,
+      key.Open(HKEY_CURRENT_USER,
                std::wstring(ShellUtil::kRegRegisteredApplications).c_str(),
                KEY_READ));
   EXPECT_FALSE(key.HasValue(app_progid.c_str()));
@@ -1430,9 +1392,9 @@ TEST_F(ShellUtilRegistryTest, RemoveAppProtocolAssociations) {
 TEST_F(ShellUtilRegistryTest, GetApplicationForProgId) {
   // Create file associations.
   ASSERT_TRUE(ShellUtil::AddFileAssociations(
-      kTestProgid, OpenCommand(), kTestApplicationName, kTestFileTypeName,
+      kTestProgId, OpenCommand(), kTestApplicationName, kTestFileTypeName,
       base::FilePath(kTestIconPath), FileExtensions()));
-  base::FilePath exe_path = ShellUtil::GetApplicationPathForProgId(kTestProgid);
+  base::FilePath exe_path = ShellUtil::GetApplicationPathForProgId(kTestProgId);
   EXPECT_EQ(exe_path, base::FilePath(kTestOpenCommand));
 }
 
@@ -1507,7 +1469,7 @@ TEST(ShellUtilTest, GetOldUserSpecificRegistrySuffix) {
   ASSERT_TRUE(base::StartsWith(suffix, L".", base::CompareCase::SENSITIVE));
 
   wchar_t user_name[256];
-  DWORD size = base::size(user_name);
+  DWORD size = std::size(user_name);
   ASSERT_NE(0, ::GetUserName(user_name, &size));
   ASSERT_GE(size, 1U);
   ASSERT_STREQ(user_name, suffix.substr(1).c_str());

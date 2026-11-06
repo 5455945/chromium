@@ -1,13 +1,22 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.ui.android.webid;
 
-import android.content.Context;
-
+import org.chromium.blink.mojom.RpContext;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.ui.android.webid.data.Account;
-import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
+import org.chromium.chrome.browser.ui.android.webid.data.IdentityCredentialTokenError;
+import org.chromium.chrome.browser.ui.android.webid.data.IdentityProviderData;
+import org.chromium.chrome.browser.ui.android.webid.data.IdentityProviderMetadata;
+import org.chromium.chrome.browser.ui.android.webid.data.NativeAppRequestOptions;
+import org.chromium.chrome.browser.ui.android.webid.data.RelyingPartyData;
+import org.chromium.content.webid.IdentityRequestDialogDismissReason;
+import org.chromium.content.webid.IdentityRequestDialogLinkType;
+import org.chromium.content_public.browser.WebContents;
+import org.chromium.url.GURL;
 
 import java.util.List;
 
@@ -15,6 +24,7 @@ import java.util.List;
  * This component supports accounts selection for WebID. It shows a list of
  * accounts to the user which can select one of them or dismiss it.
  */
+@NullMarked
 public interface AccountSelectionComponent {
     /**
      * This delegate is called when the AccountSelection component is interacted with (e.g.
@@ -22,8 +32,7 @@ public interface AccountSelectionComponent {
      */
     interface Delegate {
         /**
-         * Called when the user select one of the accounts shown in the
-         * AccountSelectionComponent.
+         * Called when the user select one of the accounts shown in the AccountSelectionComponent.
          */
         void onAccountSelected(Account account);
 
@@ -31,21 +40,170 @@ public interface AccountSelectionComponent {
          * Called when the user dismisses the AccountSelectionComponent. Not called if a suggestion
          * was selected.
          */
-        void onDismissed();
+        void onDismissed(@IdentityRequestDialogDismissReason int dismissReason);
+
+        /** Called when the user clicks on the button to sign in to the IDP. */
+        void onLoginToIdP(GURL idpConfigUrl, GURL idpLoginUrl);
+
+        /** Called when the user clicks on the more details button in an error dialog. */
+        void onMoreDetails();
+
+        /** Called on the opener when a modal dialog that it opened has been closed. */
+        void onModalDialogClosed();
+
+        /** Called when the accounts UI is displayed. */
+        void onAccountsDisplayed();
+
+        /**
+         * Gets the WebContents used by this delegate.
+         *
+         * <p>For use by code running in the CCT popup.
+         */
+        @Nullable WebContents getWebContents();
+
+        /** Called to associate the popup with the delegate. */
+        void setPopupComponent(AccountSelectionComponent popupComponent);
+
+        /** Called when the native app returns a token result. */
+        void onNativeAppResult(String token);
+
+        /** Called when the native app returns an error result. */
+        void onNativeAppError(IdentityCredentialTokenError error);
+
+        /** Called when the native app completes login. */
+        void onNativeAppLoginFinished();
     }
 
     /**
-     * Initializes the component.
-     * @param context A {@link Context} to create views and retrieve resources.
-     * @param sheetController A {@link BottomSheetController} used to show/hide the sheet.
-     * @param delegate A {@link Delegate} that handles dismiss events.
+     * Displays the given accounts in a new bottom sheet.
+     *
+     * @param rpData The {@link RelyingPartyData} for the relying party.
+     * @param accounts A list of {@link Account}s that will be displayed.
+     * @param idpDataList The list with information about the identity providers.
+     * @param newAccounts The newly logged in accounts.
+     * @return whether the invocation is successful. If false is returned, the caller must assume
+     *     that onDismiss was called and must return early.
      */
-    void initialize(Context context, BottomSheetController sheetController, Delegate delegate);
+    boolean showAccounts(
+            RelyingPartyData rpData,
+            List<Account> accounts,
+            List<IdentityProviderData> idpDataList,
+            List<Account> newAccounts);
 
     /**
-     * Displays the given accounts in a new bottom sheet.
-     * @param url A {@link String} that contains the URL to display accounts for.
-     * @param accounts A list of {@link Account}s that will be displayed.
+     * Displays a dialog telling the user that they can sign in to an IDP for the purpose of
+     * federated login when the IDP sign-in status is signin but no accounts are received from the
+     * fetch.
+     *
+     * @param rpData is the data for the relying party.
+     * @param idpForDisplay is the formatted IDP URL to display in the FedCM prompt.
+     * @param idpMetadata is the metadata of the IDP.
+     * @param rpContext is an enum representing the desired text to be used in the title of the
+     *     FedCM prompt: "signin", "continue", etc.
+     * @return whether the invocation is successful. If false is returned, the caller must assume
+     *     that onDismiss was called and must return early.
      */
-    void showAccounts(String url, List<Account> accounts);
+    boolean showFailureDialog(
+            RelyingPartyData rpData,
+            String idpForDisplay,
+            IdentityProviderMetadata idpMetadata,
+            @RpContext.EnumType int rpContext);
+
+    /**
+     * Displays a dialog telling the user that an error has occurred in their attempt to sign-in to
+     * a website with an IDP.
+     *
+     * @param rpData is the data for the relying party.
+     * @param idpForDisplay is the formatted IDP URL to display in the FedCM prompt.
+     * @param idpMetadata is the metadata of the IDP.
+     * @param rpContext is an enum representing the desired text to be used in the title of the
+     *     FedCM prompt: "signin", "continue", etc.
+     * @param error Contains the error code and url to display in the FedCM prompt.
+     * @return whether the invocation is successful. If false is returned, the caller must assume
+     *     that onDismiss was called and must return early.
+     */
+    boolean showErrorDialog(
+            RelyingPartyData rpData,
+            String idpForDisplay,
+            IdentityProviderMetadata idpMetadata,
+            @RpContext.EnumType int rpContext,
+            IdentityCredentialTokenError error);
+
+    /**
+     * Displays a dialog with a spinner to indicate that contents are loading.
+     *
+     * @param rpData is the data for the relying party.
+     * @param idpForDisplay is the formatted IDP URL to display in the FedCM prompt.
+     * @param rpContext is an enum representing the desired text to be used in the title of the
+     *     FedCM prompt: "signin", "continue", etc.
+     * @return whether the invocation is successful. If false is returned, the caller must assume
+     *     that onDismiss was called and must return early.
+     */
+    boolean showLoadingDialog(
+            RelyingPartyData rpData, String idpForDisplay, @RpContext.EnumType int rpContext);
+
+    /**
+     * Displays the verifying UI in a new bottom sheet.
+     *
+     * @param rpData The {@link RelyingPartyData} for the relying party.
+     * @param account An {@link Account} that will be displayed.
+     * @param isAutoReauthn A {@link boolean} that represents whether this is an auto re-authn flow.
+     */
+    boolean showVerifyingDialog(RelyingPartyData rpData, Account account, boolean isAutoReauthn);
+
+    /**
+     * Attempts to show the native app UI using a native application.
+     *
+     * @param requestOptions is the request options for the native app flow.
+     * @return whether the flow was initiated successfully.
+     */
+    boolean showNativeAppUi(NativeAppRequestOptions requestOptions);
+
+    /**
+     * Closes the outstanding bottom sheet or the popup, depending on what this object corresponds
+     * to.
+     */
+    void close();
+
+    /**
+     * Sets whether the widget/bottomsheet can be displayed. If false, hides the bottomsheet.
+     * Applies to both active mode (modal) and passive mode (widget/bottom sheet).
+     */
+    void setCanShowUi(boolean canShowUi);
+
+    /** Gets the sheet's title. */
+    String getTitle();
+
+    /** Gets the sheet's subtitle, if any, or null.. */
+    @Nullable String getSubtitle();
+
+    /** Show the given URL in a popup window. */
+    void showUrl(@IdentityRequestDialogLinkType int linkType, GURL url);
+
+    /**
+     * Shows a custom tab with the given url. Returns the WebContents of the new dialog.
+     *
+     * @param url The URL to be loaded in the dialog.
+     */
+    @Nullable WebContents showModalDialog(GURL url);
+
+    /** Closes a modal dialog, if one is opened. */
+    void closeModalDialog();
+
+    /** Gets notified about the modal dialog that it opened being closed. */
+    void onModalDialogClosed();
+
+    /** Gets the WebContents for this object. */
+    @Nullable WebContents getWebContents();
+
+    /**
+     * Gets the WebContents for the RP associated with this object.
+     *
+     * <p>This is intended to be called on the custom tab object to return the WebContents for the
+     * RP, i.e. the WebContents for the object that showModalDialog was called on.
+     */
+    @Nullable WebContents getRpWebContents();
+
+    /** Called to associate the popup with the delegate. */
+    void setPopupComponent(AccountSelectionComponent popupComponent);
 }

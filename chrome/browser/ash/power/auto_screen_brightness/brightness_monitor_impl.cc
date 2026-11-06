@@ -1,20 +1,18 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/power/auto_screen_brightness/brightness_monitor_impl.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include "ash/constants/ash_features.h"
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/field_trial_params.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
-#include "base/numerics/ranges.h"
-#include "base/task/post_task.h"
 #include "chrome/browser/ash/power/auto_screen_brightness/utils.h"
 #include "chromeos/dbus/power/power_manager_client.h"
 #include "chromeos/dbus/power_manager/backlight.pb.h"
@@ -36,14 +34,15 @@ void BrightnessMonitorImpl::Init() {
   brightness_sample_delay_ =
       brightness_sample_delay_seconds < 0
           ? kBrightnessSampleDelay
-          : base::TimeDelta::FromSeconds(brightness_sample_delay_seconds);
+          : base::Seconds(brightness_sample_delay_seconds);
 
-  power_manager_client_observation_.Observe(PowerManagerClient::Get());
+  power_manager_client_observation_.Observe(
+      chromeos::PowerManagerClient::Get());
 }
 
 void BrightnessMonitorImpl::AddObserver(
     BrightnessMonitor::Observer* const observer) {
-  DCHECK(observer);
+  CHECK(observer, base::NotFatalUntil::M160);
   observers_.AddObserver(observer);
   if (brightness_monitor_status_ != Status::kInitializing) {
     observer->OnBrightnessMonitorInitialized(brightness_monitor_status_ ==
@@ -53,7 +52,7 @@ void BrightnessMonitorImpl::AddObserver(
 
 void BrightnessMonitorImpl::RemoveObserver(
     BrightnessMonitor::Observer* const observer) {
-  DCHECK(observer);
+  CHECK(observer, base::NotFatalUntil::M160);
   observers_.RemoveObserver(observer);
 }
 
@@ -64,7 +63,7 @@ void BrightnessMonitorImpl::PowerManagerBecameAvailable(
     OnInitializationComplete();
     return;
   }
-  PowerManagerClient::Get()->GetScreenBrightnessPercent(
+  chromeos::PowerManagerClient::Get()->GetScreenBrightnessPercent(
       base::BindOnce(&BrightnessMonitorImpl::OnReceiveInitialBrightnessPercent,
                      weak_ptr_factory_.GetWeakPtr()));
 }
@@ -85,9 +84,8 @@ void BrightnessMonitorImpl::ScreenBrightnessChanged(
     // Brightness should not be outside the range of [0,100]. If it's outside
     // this range after initialization completes successfully, we clip the value
     // instead of throwing it away.
-    LogDataError(DataError::kBrightnessPercent);
     brightness_percent_received =
-        base::ClampToRange(brightness_percent_received, 0.0, 100.0);
+        std::clamp(brightness_percent_received, 0.0, 100.0);
   }
 
   if (change.cause() ==
@@ -115,8 +113,9 @@ base::TimeDelta BrightnessMonitorImpl::GetBrightnessSampleDelayForTesting()
 }
 
 void BrightnessMonitorImpl::OnReceiveInitialBrightnessPercent(
-    const absl::optional<double> brightness_percent) {
-  DCHECK_EQ(brightness_monitor_status_, Status::kInitializing);
+    const std::optional<double> brightness_percent) {
+  CHECK_EQ(brightness_monitor_status_, Status::kInitializing,
+           base::NotFatalUntil::M160);
 
   if (brightness_percent && *brightness_percent >= 0.0 &&
       *brightness_percent <= 100.0) {
@@ -132,10 +131,8 @@ void BrightnessMonitorImpl::OnReceiveInitialBrightnessPercent(
 }
 
 void BrightnessMonitorImpl::OnInitializationComplete() {
-  DCHECK_NE(brightness_monitor_status_, Status::kInitializing);
-
-  UMA_HISTOGRAM_ENUMERATION("AutoScreenBrightness.BrightnessMonitorStatus",
-                            brightness_monitor_status_);
+  CHECK_NE(brightness_monitor_status_, Status::kInitializing,
+           base::NotFatalUntil::M160);
 
   const bool success = brightness_monitor_status_ == Status::kSuccess;
   for (auto& observer : observers_)
@@ -152,7 +149,6 @@ void BrightnessMonitorImpl::StartBrightnessSampleTimer() {
 void BrightnessMonitorImpl::NotifyUserBrightnessChanged() {
   if (!user_brightness_percent_) {
     NOTREACHED() << "User brightness adjustment missing on sample timeout";
-    return;
   }
 
   for (auto& observer : observers_) {
@@ -161,7 +157,7 @@ void BrightnessMonitorImpl::NotifyUserBrightnessChanged() {
   }
 
   stable_brightness_percent_ = user_brightness_percent_;
-  user_brightness_percent_ = absl::nullopt;
+  user_brightness_percent_ = std::nullopt;
 }
 
 void BrightnessMonitorImpl::NotifyUserBrightnessChangeRequested() {

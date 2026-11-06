@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include "base/scoped_observation.h"
 #include "chrome/browser/browsing_data/chrome_browsing_data_remover_constants.h"
 #include "content/public/browser/browsing_data_filter_builder.h"
+#include "ui/base/interaction/element_tracker.h"
 
 namespace {
 
@@ -17,6 +18,10 @@ class BrowsingDataTaskObserver : public content::BrowsingDataRemover::Observer {
   BrowsingDataTaskObserver(content::BrowsingDataRemover* remover,
                            base::OnceCallback<void(uint64_t)> callback,
                            int task_count);
+
+  BrowsingDataTaskObserver(const BrowsingDataTaskObserver&) = delete;
+  BrowsingDataTaskObserver& operator=(const BrowsingDataTaskObserver&) = delete;
+
   ~BrowsingDataTaskObserver() override;
 
   void OnBrowsingDataRemoverDone(uint64_t failed_data_types) override;
@@ -28,8 +33,6 @@ class BrowsingDataTaskObserver : public content::BrowsingDataRemover::Observer {
       remover_observation_{this};
   int task_count_;
   uint64_t failed_data_types_ = 0;
-
-  DISALLOW_COPY_AND_ASSIGN(BrowsingDataTaskObserver);
 };
 
 BrowsingDataTaskObserver::BrowsingDataTaskObserver(
@@ -45,7 +48,7 @@ BrowsingDataTaskObserver::~BrowsingDataTaskObserver() = default;
 
 void BrowsingDataTaskObserver::OnBrowsingDataRemoverDone(
     uint64_t failed_data_types) {
-  DCHECK(task_count_);
+  CHECK(task_count_, base::NotFatalUntil::M161);
   failed_data_types_ |= failed_data_types;
   if (--task_count_)
     return;
@@ -57,6 +60,12 @@ void BrowsingDataTaskObserver::OnBrowsingDataRemoverDone(
 }  // namespace
 
 namespace browsing_data_important_sites_util {
+
+DEFINE_CUSTOM_ELEMENT_EVENT_TYPE(
+    kOpenClearBrowsingDataDialogViaAcceleratorEventId);
+DEFINE_CUSTOM_ELEMENT_EVENT_TYPE(kClearBrowsingDataHistoryEventId);
+DEFINE_CUSTOM_ELEMENT_EVENT_TYPE(kShowClearBrowsingDataDialogEventId);
+DEFINE_CUSTOM_ELEMENT_EVENT_TYPE(kDismissClearBrowsingDataDialogEventId);
 
 void Remove(uint64_t remove_mask,
             uint64_t origin_mask,

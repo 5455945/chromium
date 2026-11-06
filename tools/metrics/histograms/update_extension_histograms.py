@@ -1,4 +1,5 @@
-# Copyright 2013 The Chromium Authors. All rights reserved.
+#!/usr/bin/env python3
+# Copyright 2013 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -14,7 +15,12 @@ from __future__ import print_function
 import os
 import sys
 
-from update_histogram_enum import UpdateHistogramEnum
+import setup_modules  # pylint: disable=unused-import
+
+
+from chromium_src.tools.metrics.histograms.update_histogram_enum import (
+  UpdateHistogramEnum,
+)
 
 if __name__ == '__main__':
   if len(sys.argv) > 1:
@@ -23,14 +29,18 @@ if __name__ == '__main__':
     sys.exit(1)
 
   histograms = (
-    ('ExtensionEvents',
-     'extensions/browser/extension_event_histogram_value.h'),
-    ('ExtensionFunctions',
-     'extensions/browser/extension_function_histogram_value.h'))
+    ('ExtensionEvents', 'extensions/browser/extension_event_histogram_value.h'),
+    (
+      'ExtensionFunctions',
+      'extensions/browser/extension_function_histogram_value.h',
+    ),
+  )
   for enum_name, source_header in histograms:
     UpdateHistogramEnum(
-        histogram_enum_name=enum_name,
-        source_enum_path=source_header,
-        start_marker='^enum HistogramValue {',
-        end_marker='^ENUM_BOUNDARY',
-        calling_script=os.path.basename(__file__))
+      'tools/metrics/histograms/metadata/extensions/enums.xml',
+      histogram_enum_name=enum_name,
+      source_enum_path=source_header,
+      start_marker='^enum HistogramValue {',
+      end_marker='^ENUM_BOUNDARY',
+      calling_script=os.path.basename(__file__),
+    )

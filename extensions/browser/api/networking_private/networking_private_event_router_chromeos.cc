@@ -1,31 +1,29 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/browser/api/networking_private/networking_private_event_router.h"
 
-#include "base/json/json_writer.h"
-#include "base/macros.h"
-#include "chromeos/network/device_state.h"
-#include "chromeos/network/network_certificate_handler.h"
-#include "chromeos/network/network_event_log.h"
-#include "chromeos/network/network_state.h"
-#include "chromeos/network/network_state_handler.h"
-#include "chromeos/network/network_state_handler_observer.h"
-#include "chromeos/network/onc/onc_signature.h"
-#include "chromeos/network/onc/onc_translator.h"
+#include <memory>
+
+#include "base/memory/raw_ptr.h"
+#include "chromeos/ash/components/network/device_state.h"
+#include "chromeos/ash/components/network/network_certificate_handler.h"
+#include "chromeos/ash/components/network/network_event_log.h"
+#include "chromeos/ash/components/network/network_state.h"
+#include "chromeos/ash/components/network/network_state_handler.h"
+#include "chromeos/ash/components/network/network_state_handler_observer.h"
+#include "chromeos/ash/components/network/onc/onc_translator.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
-#include "components/onc/onc_constants.h"
 #include "content/public/browser/browser_context.h"
-#include "extensions/browser/api/networking_private/networking_private_api.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/common/api/networking_private.h"
-#include "third_party/cros_system_api/dbus/service_constants.h"
+#include "extensions/common/event_args.h"
 
-using chromeos::DeviceState;
-using chromeos::NetworkHandler;
-using chromeos::NetworkState;
-using chromeos::NetworkStateHandler;
+using ::ash::DeviceState;
+using ::ash::NetworkHandler;
+using ::ash::NetworkState;
+using ::ash::NetworkStateHandler;
 
 namespace extensions {
 
@@ -33,21 +31,21 @@ namespace {
 
 api::networking_private::CaptivePortalStatus GetCaptivePortalStatus(
     const NetworkState* network) {
-  if (!network)
-    return api::networking_private::CAPTIVE_PORTAL_STATUS_UNKNOWN;
-  if (!network->IsConnectedState())
-    return api::networking_private::CAPTIVE_PORTAL_STATUS_OFFLINE;
+  if (!network) {
+    return api::networking_private::CaptivePortalStatus::kUnknown;
+  }
+  if (!network->IsConnectedState()) {
+    return api::networking_private::CaptivePortalStatus::kOffline;
+  }
   switch (network->portal_state()) {
     case NetworkState::PortalState::kUnknown:
-      return api::networking_private::CAPTIVE_PORTAL_STATUS_UNKNOWN;
+      return api::networking_private::CaptivePortalStatus::kUnknown;
     case NetworkState::PortalState::kOnline:
-      return api::networking_private::CAPTIVE_PORTAL_STATUS_ONLINE;
+      return api::networking_private::CaptivePortalStatus::kOnline;
     case NetworkState::PortalState::kPortalSuspected:
     case NetworkState::PortalState::kPortal:
     case NetworkState::PortalState::kNoInternet:
-      return api::networking_private::CAPTIVE_PORTAL_STATUS_PORTAL;
-    case NetworkState::PortalState::kProxyAuthRequired:
-      return api::networking_private::CAPTIVE_PORTAL_STATUS_PROXYAUTHREQUIRED;
+      return api::networking_private::CaptivePortalStatus::kPortal;
   }
 }
 
@@ -55,10 +53,16 @@ api::networking_private::CaptivePortalStatus GetCaptivePortalStatus(
 
 class NetworkingPrivateEventRouterImpl
     : public NetworkingPrivateEventRouter,
-      public chromeos::NetworkStateHandlerObserver,
-      public chromeos::NetworkCertificateHandler::Observer {
+      public ash::NetworkStateHandlerObserver,
+      public ash::NetworkCertificateHandler::Observer {
  public:
   explicit NetworkingPrivateEventRouterImpl(content::BrowserContext* context);
+
+  NetworkingPrivateEventRouterImpl(const NetworkingPrivateEventRouterImpl&) =
+      delete;
+  NetworkingPrivateEventRouterImpl& operator=(
+      const NetworkingPrivateEventRouterImpl&) = delete;
+
   ~NetworkingPrivateEventRouterImpl() override;
 
  protected:
@@ -88,15 +92,13 @@ class NetworkingPrivateEventRouterImpl
   // Otherwise, we want to unregister and not be listening to network changes.
   void StartOrStopListeningForNetworkChanges();
 
-  content::BrowserContext* context_;
-  bool listening_;
-
-  DISALLOW_COPY_AND_ASSIGN(NetworkingPrivateEventRouterImpl);
+  raw_ptr<content::BrowserContext> context_;
+  bool listening_ = false;
 };
 
 NetworkingPrivateEventRouterImpl::NetworkingPrivateEventRouterImpl(
     content::BrowserContext* context)
-    : context_(context), listening_(false) {
+    : context_(context) {
   // Register with the event router so we know when renderers are listening to
   // our events. We first check and see if there *is* an event router, because
   // some unit tests try to create all context services, but don't initialize
@@ -126,8 +128,9 @@ void NetworkingPrivateEventRouterImpl::Shutdown() {
   // event router, because some unit tests try to shutdown all context services,
   // but didn't initialize the event router first.
   EventRouter* event_router = EventRouter::Get(context_);
-  if (event_router)
+  if (event_router) {
     event_router->UnregisterObserver(this);
+  }
 
   if (listening_) {
     NetworkHandler::Get()->network_state_handler()->RemoveObserver(this,
@@ -192,11 +195,12 @@ void NetworkingPrivateEventRouterImpl::NetworkListChanged() {
     changes.push_back((*iter)->guid());
   }
 
-  auto args(api::networking_private::OnNetworkListChanged::Create(changes));
-  std::unique_ptr<Event> extension_event(
-      new Event(events::NETWORKING_PRIVATE_ON_NETWORK_LIST_CHANGED,
-                api::networking_private::OnNetworkListChanged::kEventName,
-                std::move(args)));
+  auto event_args = base::MakeRefCounted<EventArgs>(
+      api::networking_private::OnNetworkListChanged::Create(changes));
+  auto extension_event = std::make_unique<Event>(
+      events::NETWORKING_PRIVATE_ON_NETWORK_LIST_CHANGED,
+      api::networking_private::OnNetworkListChanged::kEventName,
+      std::move(event_args));
   event_router->BroadcastEvent(std::move(extension_event));
 }
 
@@ -207,11 +211,12 @@ void NetworkingPrivateEventRouterImpl::DeviceListChanged() {
     return;
   }
 
-  auto args(api::networking_private::OnDeviceStateListChanged::Create());
-  std::unique_ptr<Event> extension_event(
-      new Event(events::NETWORKING_PRIVATE_ON_DEVICE_STATE_LIST_CHANGED,
-                api::networking_private::OnDeviceStateListChanged::kEventName,
-                std::move(args)));
+  auto event_args = base::MakeRefCounted<EventArgs>(
+      api::networking_private::OnDeviceStateListChanged::Create());
+  auto extension_event = std::make_unique<Event>(
+      events::NETWORKING_PRIVATE_ON_DEVICE_STATE_LIST_CHANGED,
+      api::networking_private::OnDeviceStateListChanged::kEventName,
+      std::move(event_args));
   event_router->BroadcastEvent(std::move(extension_event));
 }
 
@@ -227,11 +232,13 @@ void NetworkingPrivateEventRouterImpl::NetworkPropertiesUpdated(
   }
   NET_LOG(EVENT) << "NetworkingPrivate.NetworkPropertiesUpdated: "
                  << NetworkId(network);
-  auto args(api::networking_private::OnNetworksChanged::Create(
-      std::vector<std::string>(1, network->guid())));
-  std::unique_ptr<Event> extension_event(new Event(
+  auto event_args = base::MakeRefCounted<EventArgs>(
+      api::networking_private::OnNetworksChanged::Create(
+          std::vector<std::string>(1, network->guid())));
+  auto extension_event = std::make_unique<Event>(
       events::NETWORKING_PRIVATE_ON_NETWORKS_CHANGED,
-      api::networking_private::OnNetworksChanged::kEventName, std::move(args)));
+      api::networking_private::OnNetworksChanged::kEventName,
+      std::move(event_args));
   event_router->BroadcastEvent(std::move(extension_event));
 }
 
@@ -241,12 +248,13 @@ void NetworkingPrivateEventRouterImpl::DevicePropertiesUpdated(
   DeviceListChanged();
 
   // DeviceState changes may affect Cellular networks.
-  if (device->type() != shill::kTypeCellular)
+  if (device->type() != shill::kTypeCellular) {
     return;
+  }
 
   NetworkStateHandler::NetworkStateList cellular_networks;
   NetworkHandler::Get()->network_state_handler()->GetNetworkListByType(
-      chromeos::NetworkTypePattern::Cellular(), false /* configured_only */,
+      ash::NetworkTypePattern::Cellular(), false /* configured_only */,
       true /* visible_only */, -1 /* default limit */, &cellular_networks);
   for (const NetworkState* network : cellular_networks) {
     NetworkPropertiesUpdated(network);
@@ -257,8 +265,9 @@ void NetworkingPrivateEventRouterImpl::ScanCompleted(
     const DeviceState* device) {
   // We include the scanning state for Cellular networks, so notify the UI when
   // a scan completes.
-  if (chromeos::NetworkTypePattern::Wireless().MatchesType(device->type()))
+  if (ash::NetworkTypePattern::Wireless().MatchesType(device->type())) {
     DevicePropertiesUpdated(device);
+  }
 }
 
 void NetworkingPrivateEventRouterImpl::OnCertificatesChanged() {
@@ -270,11 +279,12 @@ void NetworkingPrivateEventRouterImpl::OnCertificatesChanged() {
   }
   NET_LOG(EVENT) << "NetworkingPrivate.OnCertificatesChanged";
 
-  auto args(api::networking_private::OnCertificateListsChanged::Create());
-  std::unique_ptr<Event> extension_event(
-      new Event(events::NETWORKING_PRIVATE_ON_CERTIFICATE_LISTS_CHANGED,
-                api::networking_private::OnCertificateListsChanged::kEventName,
-                std::move(args)));
+  auto event_args = base::MakeRefCounted<EventArgs>(
+      api::networking_private::OnCertificateListsChanged::Create());
+  auto extension_event = std::make_unique<Event>(
+      events::NETWORKING_PRIVATE_ON_CERTIFICATE_LISTS_CHANGED,
+      api::networking_private::OnCertificateListsChanged::kEventName,
+      std::move(event_args));
   event_router->BroadcastEvent(std::move(extension_event));
 }
 
@@ -294,18 +304,19 @@ void NetworkingPrivateEventRouterImpl::PortalStateChanged(
   NET_LOG(EVENT) << "NetworkingPrivate.OnPortalDetectionCompleted: "
                  << (network ? NetworkId(network) : "");
 
-  auto args(api::networking_private::OnPortalDetectionCompleted::Create(
-      guid, GetCaptivePortalStatus(network)));
-  std::unique_ptr<Event> extension_event(
-      new Event(events::NETWORKING_PRIVATE_ON_PORTAL_DETECTION_COMPLETED,
-                api::networking_private::OnPortalDetectionCompleted::kEventName,
-                std::move(args)));
+  auto event_args = base::MakeRefCounted<EventArgs>(
+      api::networking_private::OnPortalDetectionCompleted::Create(
+          guid, GetCaptivePortalStatus(network)));
+  auto extension_event = std::make_unique<Event>(
+      events::NETWORKING_PRIVATE_ON_PORTAL_DETECTION_COMPLETED,
+      api::networking_private::OnPortalDetectionCompleted::kEventName,
+      std::move(event_args));
   event_router->BroadcastEvent(std::move(extension_event));
 }
 
-NetworkingPrivateEventRouter* NetworkingPrivateEventRouter::Create(
-    content::BrowserContext* context) {
-  return new NetworkingPrivateEventRouterImpl(context);
+std::unique_ptr<NetworkingPrivateEventRouter>
+NetworkingPrivateEventRouter::Create(content::BrowserContext* context) {
+  return std::make_unique<NetworkingPrivateEventRouterImpl>(context);
 }
 
 }  // namespace extensions

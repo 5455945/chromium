@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,11 +12,9 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
 
-import androidx.annotation.RequiresApi;
-
 import org.chromium.android_webview.common.services.ServiceNames;
-import org.chromium.base.BuildInfo;
 import org.chromium.base.ContextUtils;
+import org.chromium.build.annotations.NullMarked;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -27,6 +25,7 @@ import java.util.Map;
  * <p>This should only be called in processes which have called {@link
  * ContextUtils.initApplicationContext(Context)}.
  */
+@NullMarked
 public final class DeveloperModeUtils {
     // Do not instantiate this class.
     private DeveloperModeUtils() {}
@@ -58,7 +57,6 @@ public final class DeveloperModeUtils {
         return enabledState == PackageManager.COMPONENT_ENABLED_STATE_ENABLED;
     }
 
-    @RequiresApi(Build.VERSION_CODES.O)
     private static void startDeveloperUiService(String webViewPackageName) {
         final Context context = ContextUtils.getApplicationContext();
         Intent intent = new Intent();
@@ -67,14 +65,14 @@ public final class DeveloperModeUtils {
         try {
             context.startForegroundService(intent);
         } catch (IllegalStateException e) {
-            assert BuildInfo.isAtLeastS()
-                : "Unable to start DeveloperUiService, this is only expected on Android S";
+            assert Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                    : "Unable to start DeveloperUiService, this is only expected on Android S";
         }
     }
 
     /**
      * Fetch the flag overrides from the developer mode ContentProvider. This should only be called
-     * if {@link #isDeveloperModeEnabled(String}} returns {@code true}, otherwise this may incur
+     * if {@link #isDeveloperModeEnabled(String)} returns {@code true}, otherwise this may incur
      * unnecessary IPC or start up processes unnecessarily.
      *
      * @param webViewPackageName the package name of the WebView implementation to fetch the flags
@@ -83,17 +81,23 @@ public final class DeveloperModeUtils {
     public static Map<String, Boolean> getFlagOverrides(String webViewPackageName) {
         Map<String, Boolean> flagOverrides = new HashMap<>();
 
-        Uri uri = new Uri.Builder()
-                          .scheme("content")
-                          .authority(webViewPackageName + URI_AUTHORITY_SUFFIX)
-                          .path(FLAG_OVERRIDE_URI_PATH)
-                          .build();
+        Uri uri =
+                new Uri.Builder()
+                        .scheme("content")
+                        .authority(webViewPackageName + URI_AUTHORITY_SUFFIX)
+                        .path(FLAG_OVERRIDE_URI_PATH)
+                        .build();
         final Context appContext = ContextUtils.getApplicationContext();
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startDeveloperUiService(webViewPackageName);
-        }
-        try (Cursor cursor = appContext.getContentResolver().query(uri, /* projection */ null,
-                     /* selection */ null, /* selectionArgs */ null, /* sortOrder */ null)) {
+        startDeveloperUiService(webViewPackageName);
+        try (Cursor cursor =
+                appContext
+                        .getContentResolver()
+                        .query(
+                                uri,
+                                /* projection= */ null,
+                                /* selection= */ null,
+                                /* selectionArgs= */ null,
+                                /* sortOrder= */ null)) {
             assert cursor != null : "ContentProvider doesn't support querying '" + uri + "'";
             int flagNameColumnIndex = cursor.getColumnIndexOrThrow(FLAG_OVERRIDE_NAME_COLUMN);
             int flagStateColumnIndex = cursor.getColumnIndexOrThrow(FLAG_OVERRIDE_STATE_COLUMN);

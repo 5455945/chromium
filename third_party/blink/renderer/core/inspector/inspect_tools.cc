@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,11 +10,11 @@
 #include "third_party/blink/public/common/input/web_pointer_event.h"
 #include "third_party/blink/public/platform/web_input_event_result.h"
 #include "third_party/blink/public/resources/grit/inspector_overlay_resources_map.h"
+#include "third_party/blink/renderer/bindings/core/v8/dictionary.h"
 #include "third_party/blink/renderer/core/css/css_color.h"
 #include "third_party/blink/renderer/core/css/css_computed_style_declaration.h"
 #include "third_party/blink/renderer/core/display_lock/display_lock_utilities.h"
 #include "third_party/blink/renderer/core/dom/element.h"
-#include "third_party/blink/renderer/core/dom/node_computed_style.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/dom/static_node_list.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
@@ -24,17 +24,22 @@
 #include "third_party/blink/renderer/core/inspector/inspector_css_agent.h"
 #include "third_party/blink/renderer/core/inspector/inspector_dom_agent.h"
 #include "third_party/blink/renderer/core/inspector/node_content_visibility_state.h"
+#include "third_party/blink/renderer/core/layout/flex/layout_flexible_box.h"
 #include "third_party/blink/renderer/core/layout/hit_test_location.h"
+#include "third_party/blink/renderer/core/layout/hit_test_result.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/page/chrome_client.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/platform/cursors.h"
 #include "third_party/blink/renderer/platform/keyboard_codes.h"
 #include "third_party/inspector_protocol/crdtp/json.h"
+#include "ui/gfx/geometry/point_conversions.h"
 
 namespace blink {
 
 namespace {
+
+static const char kInvalidOverlayCommand[] = "Invalid Overlay command";
 
 InspectorHighlightContrastInfo FetchContrast(Node* node) {
   InspectorHighlightContrastInfo result;
@@ -58,7 +63,7 @@ InspectorHighlightContrastInfo FetchContrast(Node* node) {
 }
 
 Node* HoveredNodeForPoint(LocalFrame* frame,
-                          const IntPoint& point_in_root_frame,
+                          const gfx::Point& point_in_root_frame,
                           bool ignore_pointer_events_none) {
   HitTestRequest::HitTestRequestType hit_type =
       HitTestRequest::kMove | HitTestRequest::kReadOnly |
@@ -79,17 +84,17 @@ Node* HoveredNodeForPoint(LocalFrame* frame,
 Node* HoveredNodeForEvent(LocalFrame* frame,
                           const WebGestureEvent& event,
                           bool ignore_pointer_events_none) {
-  return HoveredNodeForPoint(
-      frame, RoundedIntPoint(FloatPoint(event.PositionInRootFrame())),
-      ignore_pointer_events_none);
+  return HoveredNodeForPoint(frame,
+                             gfx::ToRoundedPoint(event.PositionInRootFrame()),
+                             ignore_pointer_events_none);
 }
 
 Node* HoveredNodeForEvent(LocalFrame* frame,
                           const WebMouseEvent& event,
                           bool ignore_pointer_events_none) {
-  return HoveredNodeForPoint(
-      frame, RoundedIntPoint(FloatPoint(event.PositionInRootFrame())),
-      ignore_pointer_events_none);
+  return HoveredNodeForPoint(frame,
+                             gfx::ToRoundedPoint(event.PositionInRootFrame()),
+                             ignore_pointer_events_none);
 }
 
 Node* HoveredNodeForEvent(LocalFrame* frame,
@@ -97,7 +102,7 @@ Node* HoveredNodeForEvent(LocalFrame* frame,
                           bool ignore_pointer_events_none) {
   WebPointerEvent transformed_point = event.WebPointerEventInRootFrame();
   return HoveredNodeForPoint(
-      frame, RoundedIntPoint(FloatPoint(transformed_point.PositionInWidget())),
+      frame, gfx::ToRoundedPoint(transformed_point.PositionInWidget()),
       ignore_pointer_events_none);
 }
 
@@ -174,7 +179,7 @@ void SearchingForNodeTool::Draw(float scale) {
                              !omit_tooltip_ && highlight_config_->show_info &&
                              node->GetLayoutObject() &&
                              node->GetDocument().GetFrame();
-  overlay_->EnsureAXContext(node);
+  DCHECK(overlay_->HasAXContext(node));
   InspectorHighlight highlight(node, *highlight_config_, contrast_info_,
                                append_element_info, false,
                                content_visibility_state_);
@@ -222,7 +227,13 @@ bool SearchingForNodeTool::HandleMouseMove(const WebMouseEvent& event) {
   if (node && node->IsShadowRoot())
     node = node->ParentOrShadowHostNode();
 
-  if (!node)
+  // Keep last behavior if Ctrl + Alt(Gr) key is being pressed.
+  bool hold_selected_node =
+      (event.GetModifiers() &
+       (WebInputEvent::kAltKey | WebInputEvent::kAltGrKey)) &&
+      (event.GetModifiers() &
+       (WebInputEvent::kControlKey | WebInputEvent::kMetaKey));
+  if (!node || hold_selected_node)
     return true;
 
   std::tie(node, content_visibility_state_) =
@@ -240,6 +251,7 @@ bool SearchingForNodeTool::HandleMouseMove(const WebMouseEvent& event) {
   // Store values for the highlight.
   bool hovered_node_changed = node != hovered_node_;
   hovered_node_ = node;
+  overlay_->EnsureAXContext(node);
   event_target_node_ = (event.GetModifiers() & WebInputEvent::kShiftKey)
                            ? HoveredNodeForEvent(frame, event, false)
                            : nullptr;
@@ -249,8 +261,12 @@ bool SearchingForNodeTool::HandleMouseMove(const WebMouseEvent& event) {
                   (WebInputEvent::kControlKey | WebInputEvent::kMetaKey);
 
   contrast_info_ = FetchContrast(node);
-  if (hovered_node_changed)
+  if (hovered_node_changed) {
+    if (auto* layout_object = node->GetLayoutObject()) {
+      layout_object->SetNeedsDevtoolsInfo();
+    }
     NodeHighlightRequested(node);
+  }
   return true;
 }
 
@@ -303,7 +319,7 @@ void SearchingForNodeTool::NodeHighlightRequested(Node* node) {
 
 QuadHighlightTool::QuadHighlightTool(InspectorOverlayAgent* overlay,
                                      OverlayFrontend* frontend,
-                                     std::unique_ptr<FloatQuad> quad,
+                                     std::unique_ptr<gfx::QuadF> quad,
                                      Color color,
                                      Color outline_color)
     : InspectTool(overlay, frontend),
@@ -343,6 +359,10 @@ NodeHighlightTool::NodeHighlightTool(
   std::tie(node_, content_visibility_state_) =
       DetermineContentVisibilityState(node);
   contrast_info_ = FetchContrast(node_);
+  if (auto* layout_object = node->GetLayoutObject()) {
+    layout_object->SetNeedsDevtoolsInfo();
+  }
+  overlay_->EnsureAXContext(node);
 }
 
 String NodeHighlightTool::GetOverlayName() {
@@ -382,14 +402,13 @@ void NodeHighlightTool::DrawNode() {
 }
 
 void NodeHighlightTool::DrawMatchingSelector() {
-  if (selector_list_.IsEmpty() || !node_)
+  if (selector_list_.empty() || !node_)
     return;
   DummyExceptionStateForTesting exception_state;
   ContainerNode* query_base = node_->ContainingShadowRoot();
   if (!query_base)
     query_base = node_->ownerDocument();
-
-  overlay_->EnsureAXContext(query_base);
+  DCHECK(overlay_->HasAXContext(query_base));
 
   StaticElementList* elements = query_base->QuerySelectorAll(
       AtomicString(selector_list_), exception_state);
@@ -399,7 +418,7 @@ void NodeHighlightTool::DrawMatchingSelector() {
   for (unsigned i = 0; i < elements->length(); ++i) {
     Element* element = elements->item(i);
     // Skip elements in locked subtrees.
-    if (DisplayLockUtilities::NearestLockedExclusiveAncestor(*element))
+    if (DisplayLockUtilities::LockedAncestorPreventingPaint(*element))
       continue;
     NodeContentVisibilityState content_visibility_state =
         DetermineSelfContentVisibilityState(element);
@@ -420,7 +439,7 @@ std::unique_ptr<protocol::DictionaryValue>
 NodeHighlightTool::GetNodeInspectorHighlightAsJson(
     bool append_element_info,
     bool append_distance_info) const {
-  overlay_->EnsureAXContext(node_.Get());
+  DCHECK(overlay_->HasAXContext(node_.Get()));
   InspectorHighlight highlight(node_.Get(), *highlight_config_, contrast_info_,
                                append_element_info, append_distance_info,
                                content_visibility_state_);
@@ -434,7 +453,8 @@ String PersistentTool::GetOverlayName() {
 
 bool PersistentTool::IsEmpty() {
   return !grid_node_highlights_.size() && !flex_container_configs_.size() &&
-         !scroll_snap_configs_.size();
+         !scroll_snap_configs_.size() && !container_query_configs_.size() &&
+         !isolated_element_configs_.size();
 }
 
 void PersistentTool::SetGridConfigs(GridConfigs configs) {
@@ -449,8 +469,16 @@ void PersistentTool::SetScrollSnapConfigs(ScrollSnapConfigs configs) {
   scroll_snap_configs_ = std::move(configs);
 }
 
+void PersistentTool::SetContainerQueryConfigs(ContainerQueryConfigs configs) {
+  container_query_configs_ = std::move(configs);
+}
+
+void PersistentTool::SetIsolatedElementConfigs(IsolatedElementConfigs configs) {
+  isolated_element_configs_ = std::move(configs);
+}
+
 bool PersistentTool::ForwardEventsToOverlay() {
-  return false;
+  return isolated_element_configs_.size();
 }
 
 bool PersistentTool::HideOnHideHighlight() {
@@ -464,14 +492,14 @@ bool PersistentTool::HideOnMouseMove() {
 void PersistentTool::Draw(float scale) {
   for (auto& entry : grid_node_highlights_) {
     std::unique_ptr<protocol::Value> highlight =
-        InspectorGridHighlight(entry.first.Get(), *(entry.second));
+        InspectorGridHighlight(entry.key, *(entry.value));
     if (!highlight)
       continue;
     overlay_->EvaluateInOverlay("drawGridHighlight", std::move(highlight));
   }
   for (auto& entry : flex_container_configs_) {
     std::unique_ptr<protocol::Value> highlight =
-        InspectorFlexContainerHighlight(entry.first.Get(), *(entry.second));
+        InspectorFlexContainerHighlight(entry.key, *(entry.value));
     if (!highlight)
       continue;
     overlay_->EvaluateInOverlay("drawFlexContainerHighlight",
@@ -479,12 +507,77 @@ void PersistentTool::Draw(float scale) {
   }
   for (auto& entry : scroll_snap_configs_) {
     std::unique_ptr<protocol::Value> highlight =
-        InspectorScrollSnapHighlight(entry.first.Get(), *(entry.second));
+        InspectorScrollSnapHighlight(entry.key, *(entry.value));
     if (!highlight)
       continue;
     overlay_->EvaluateInOverlay("drawScrollSnapHighlight",
                                 std::move(highlight));
   }
+  for (auto& entry : container_query_configs_) {
+    std::unique_ptr<protocol::Value> highlight =
+        InspectorContainerQueryHighlight(entry.key, *(entry.value));
+    if (!highlight)
+      continue;
+    overlay_->EvaluateInOverlay("drawContainerQueryHighlight",
+                                std::move(highlight));
+  }
+  for (auto& entry : isolated_element_configs_) {
+    std::unique_ptr<protocol::Value> highlight =
+        InspectorIsolatedElementHighlight(entry.key, *(entry.value));
+    if (!highlight)
+      continue;
+    overlay_->EvaluateInOverlay("drawIsolatedElementHighlight",
+                                std::move(highlight));
+  }
+}
+
+// Accepts a message of the following format:
+// {
+//   highlightType: 'grid'|'flex'|'scrollSnap'|'container'|'isolatedElement',
+//   highlightIndex: number,
+//   newWidth: string,
+//   newHeight: string,
+//   resizerType: 'width'|'height'|'bidrection'
+// }
+// If the message is correct, sets the property inline style according to the
+// message.
+void PersistentTool::Dispatch(const ScriptValue& message,
+                              ExceptionState& exception_state) {
+  Dictionary dict(message);
+
+  String highlight_type =
+      dict.Get<IDLString>("highlightType", exception_state).value_or("");
+  int32_t index =
+      dict.Get<IDLLong>("highlightIndex", exception_state).value_or(-1);
+  String new_width =
+      dict.Get<IDLString>("newWidth", exception_state).value_or("");
+  String new_height =
+      dict.Get<IDLString>("newHeight", exception_state).value_or("");
+  String resizer_type =
+      dict.Get<IDLString>("resizerType", exception_state).value_or("");
+
+  if (exception_state.HadException())
+    return;
+
+  Element* element = nullptr;
+  if (highlight_type == "isolatedElement") {
+    for (auto& entry : isolated_element_configs_) {
+      if (entry.value->highlight_index == index) {
+        element = entry.key;
+        break;
+      }
+    }
+  }
+
+  if (!element) {
+    exception_state.ThrowRangeError("invalid highlightIndex");
+    return;
+  }
+
+  if (resizer_type == "width" || resizer_type == "bidirection")
+    element->SetInlineStyleProperty(CSSPropertyID::kWidth, new_width, true);
+  if (resizer_type == "height" || resizer_type == "bidirection")
+    element->SetInlineStyleProperty(CSSPropertyID::kHeight, new_height, true);
 }
 
 std::unique_ptr<protocol::DictionaryValue>
@@ -493,7 +586,7 @@ PersistentTool::GetGridInspectorHighlightsAsJson() const {
       protocol::ListValue::create();
   for (auto& entry : grid_node_highlights_) {
     std::unique_ptr<protocol::Value> highlight =
-        InspectorGridHighlight(entry.first.Get(), *(entry.second));
+        InspectorGridHighlight(entry.key, *(entry.value));
     if (!highlight)
       continue;
     highlights->pushValue(std::move(highlight));
@@ -504,6 +597,15 @@ PersistentTool::GetGridInspectorHighlightsAsJson() const {
     result->setValue("gridHighlights", std::move(highlights));
   }
   return result;
+}
+
+void PersistentTool::Trace(Visitor* visitor) const {
+  InspectTool::Trace(visitor);
+  visitor->Trace(grid_node_highlights_);
+  visitor->Trace(flex_container_configs_);
+  visitor->Trace(scroll_snap_configs_);
+  visitor->Trace(container_query_configs_);
+  visitor->Trace(isolated_element_configs_);
 }
 
 // SourceOrderTool -----------------------------------------------------------
@@ -530,18 +632,18 @@ void SourceOrderTool::Draw(float scale) {
   for (Node& child_node : NodeTraversal::ChildrenOf(*node_)) {
     // Don't draw if it's not an element or is not the direct child of the
     // parent node.
-    if (!child_node.IsElementNode())
+    auto* element = DynamicTo<Element>(child_node);
+    if (!element) {
       continue;
-    // Don't draw if it's not rendered/would be ignored by a screen reader.
-    if (child_node.GetComputedStyle()) {
-      bool display_none =
-          child_node.GetComputedStyle()->Display() == EDisplay::kNone;
-      bool visibility_hidden =
-          child_node.GetComputedStyle()->Visibility() == EVisibility::kHidden;
-      if (display_none || visibility_hidden)
-        continue;
     }
-    DrawNode(&child_node, position_number);
+    // Don't draw if it's not rendered/would be ignored by a screen reader.
+    if (const ComputedStyle* style = element->GetComputedStyle()) {
+      if (style->Display() == EDisplay::kNone ||
+          style->Visibility() == EVisibility::kHidden) {
+        continue;
+      }
+    }
+    DrawNode(element, position_number);
     position_number++;
   }
 }
@@ -578,69 +680,6 @@ void SourceOrderTool::Trace(Visitor* visitor) const {
   visitor->Trace(node_);
 }
 
-// NearbyDistanceTool ----------------------------------------------------------
-
-String NearbyDistanceTool::GetOverlayName() {
-  return OverlayNames::OVERLAY_DISTANCES;
-}
-
-bool NearbyDistanceTool::HandleMouseDown(const WebMouseEvent& event,
-                                         bool* swallow_next_mouse_up) {
-  return true;
-}
-
-bool NearbyDistanceTool::HandleMouseMove(const WebMouseEvent& event) {
-  Node* node = HoveredNodeForEvent(overlay_->GetFrame(), event, true);
-
-  // Do not highlight within user agent shadow root
-  ShadowRoot* shadow_root = InspectorDOMAgent::UserAgentShadowRoot(node);
-  if (shadow_root)
-    node = &shadow_root->host();
-
-  // Shadow roots don't have boxes - use host element instead.
-  if (node && node->IsShadowRoot())
-    node = node->ParentOrShadowHostNode();
-
-  if (!node)
-    return true;
-
-  if (auto* frame_owner = DynamicTo<HTMLFrameOwnerElement>(node)) {
-    if (!IsA<LocalFrame>(frame_owner->ContentFrame())) {
-      // Do not consume event so that remote frame can handle it.
-      overlay_->hideHighlight();
-      hovered_node_.Clear();
-      return false;
-    }
-  }
-  node = DetermineContentVisibilityState(node).first;
-
-  // Store values for the highlight.
-  hovered_node_ = node;
-  return true;
-}
-
-bool NearbyDistanceTool::HandleMouseUp(const WebMouseEvent& event) {
-  return true;
-}
-
-void NearbyDistanceTool::Draw(float scale) {
-  Node* node = hovered_node_.Get();
-  if (!node)
-    return;
-  overlay_->EnsureAXContext(node);
-  auto content_visibility_state = DetermineSelfContentVisibilityState(node);
-  InspectorHighlight highlight(
-      node, InspectorHighlight::DefaultConfig(),
-      InspectorHighlightContrastInfo(), false /* append_element_info */,
-      true /* append_distance_info */, content_visibility_state);
-  overlay_->EvaluateInOverlay("drawDistances", highlight.AsProtocolValue());
-}
-
-void NearbyDistanceTool::Trace(Visitor* visitor) const {
-  InspectTool::Trace(visitor);
-  visitor->Trace(hovered_node_);
-}
-
 // ShowViewSizeTool ------------------------------------------------------------
 
 void ShowViewSizeTool::Draw(float scale) {
@@ -670,28 +709,33 @@ String ScreenshotTool::GetOverlayName() {
   return OverlayNames::OVERLAY_SCREENSHOT;
 }
 
-void ScreenshotTool::Dispatch(const String& message) {
-  if (message.IsEmpty())
+void ScreenshotTool::Dispatch(const ScriptValue& message,
+                              ExceptionState& exception_state) {
+  Dictionary dict(message);
+
+  auto x = dict.Get<IDLLong>("x", exception_state);
+  if (exception_state.HadException())
     return;
-  std::vector<uint8_t> cbor;
-  if (message.Is8Bit()) {
-    crdtp::json::ConvertJSONToCBOR(
-        crdtp::span<uint8_t>(message.Characters8(), message.length()), &cbor);
-  } else {
-    crdtp::json::ConvertJSONToCBOR(
-        crdtp::span<uint16_t>(
-            reinterpret_cast<const uint16_t*>(message.Characters16()),
-            message.length()),
-        &cbor);
+  auto y = dict.Get<IDLLong>("y", exception_state);
+  if (exception_state.HadException())
+    return;
+  auto width = dict.Get<IDLLong>("width", exception_state);
+  if (exception_state.HadException())
+    return;
+  auto height = dict.Get<IDLLong>("height", exception_state);
+  if (exception_state.HadException())
+    return;
+
+  if (!x || !y || !width || !height) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kSyntaxError,
+                                      kInvalidOverlayCommand);
+    return;
   }
-  std::unique_ptr<protocol::DOM::Rect> box =
-      protocol::DOM::Rect::FromBinary(cbor.data(), cbor.size());
-  if (!box)
-    return;
+
+  gfx::Point p1(*x, *y);
+  gfx::Point p2(*x + *width, *y + *height);
+
   float scale = 1.0f;
-  // Capture values in the CSS pixels.
-  IntPoint p1(box->getX(), box->getY());
-  IntPoint p2(box->getX() + box->getWidth(), box->getY() + box->getHeight());
 
   if (LocalFrame* frame = overlay_->GetFrame()) {
     float emulation_scale = overlay_->GetFrame()
@@ -699,14 +743,14 @@ void ScreenshotTool::Dispatch(const String& message) {
                                 ->GetChromeClient()
                                 .InputEventsScaleForEmulation();
     // Convert from overlay terms into the absolute.
-    p1.Scale(1 / emulation_scale, 1 / emulation_scale);
-    p2.Scale(1 / emulation_scale, 1 / emulation_scale);
+    p1 = gfx::ScaleToRoundedPoint(p1, 1 / emulation_scale);
+    p2 = gfx::ScaleToRoundedPoint(p2, 1 / emulation_scale);
 
     // Scroll offset in the viewport is in the device pixels, convert before
     // calling ViewportToRootFrame.
     float dip_to_dp = overlay_->WindowToViewportScale();
-    p1.Scale(dip_to_dp, dip_to_dp);
-    p2.Scale(dip_to_dp, dip_to_dp);
+    p1 = gfx::ScaleToRoundedPoint(p1, dip_to_dp);
+    p2 = gfx::ScaleToRoundedPoint(p2, dip_to_dp);
 
     const VisualViewport& visual_viewport =
         frame->GetPage()->GetVisualViewport();
@@ -716,7 +760,7 @@ void ScreenshotTool::Dispatch(const String& message) {
     scale = frame->GetPage()->PageScaleFactor();
     if (const RootFrameViewport* root_frame_viewport =
             frame->View()->GetRootFrameViewport()) {
-      IntSize scroll_offset = FlooredIntSize(
+      gfx::Vector2d scroll_offset = gfx::ToFlooredVector2d(
           root_frame_viewport->LayoutViewport().GetScrollOffset());
       // Accunt for the layout scroll (different from viewport scroll offset).
       p1 += scroll_offset;
@@ -726,17 +770,17 @@ void ScreenshotTool::Dispatch(const String& message) {
 
   // Go back to dip for the protocol.
   float dp_to_dip = 1.f / overlay_->WindowToViewportScale();
-  p1.Scale(dp_to_dip, dp_to_dip);
-  p2.Scale(dp_to_dip, dp_to_dip);
+  p1 = gfx::ScaleToRoundedPoint(p1, dp_to_dip);
+  p2 = gfx::ScaleToRoundedPoint(p2, dp_to_dip);
 
   // Points are in device independent pixels (dip) now.
-  IntRect rect =
-      UnionRectEvenIfEmpty(IntRect(p1, IntSize()), IntRect(p2, IntSize()));
+  gfx::Rect rect = UnionRectsEvenIfEmpty(gfx::Rect(p1, gfx::Size()),
+                                         gfx::Rect(p2, gfx::Size()));
   frontend_->screenshotRequested(protocol::Page::Viewport::create()
-                                     .setX(rect.X())
-                                     .setY(rect.Y())
-                                     .setWidth(rect.Width())
-                                     .setHeight(rect.Height())
+                                     .setX(rect.x())
+                                     .setY(rect.y())
+                                     .setWidth(rect.width())
+                                     .setHeight(rect.height())
                                      .setScale(scale)
                                      .build());
 }
@@ -751,11 +795,73 @@ void PausedInDebuggerTool::Draw(float scale) {
   overlay_->EvaluateInOverlay("drawPausedInDebuggerMessage", message_);
 }
 
-void PausedInDebuggerTool::Dispatch(const String& message) {
-  if (message == "resume")
-    v8_session_->resume();
-  else if (message == "stepOver")
-    v8_session_->stepOver();
+void PausedInDebuggerTool::Dispatch(const ScriptValue& message,
+                                    ExceptionState& exception_state) {
+  String message_string;
+  if (message.ToString(message_string)) {
+    auto task_runner =
+        overlay_->GetFrame()->GetTaskRunner(TaskType::kInternalInspector);
+    if (message_string == "resume") {
+      task_runner->PostTask(
+          FROM_HERE,
+          blink::BindOnce(&PausedInDebuggerTool::ExecuteOnV8Session,
+                          WrapPersistent(weak_factory_.GetWeakCell()),
+                          Action::kResume));
+      return;
+    }
+    if (message_string == "stepOver") {
+      task_runner->PostTask(
+          FROM_HERE,
+          blink::BindOnce(&PausedInDebuggerTool::ExecuteOnV8Session,
+                          WrapPersistent(weak_factory_.GetWeakCell()),
+                          Action::kStepOver));
+      return;
+    }
+  }
+  exception_state.ThrowDOMException(DOMExceptionCode::kSyntaxError,
+                                    kInvalidOverlayCommand);
+}
+
+void PausedInDebuggerTool::ExecuteOnV8Session(Action action) {
+  if (!v8_session_) {
+    return;
+  }
+
+  switch (action) {
+    case Action::kResume:
+      v8_session_->resume(/* setTerminateOnResume */ false);
+      break;
+    case Action::kStepOver:
+      v8_session_->stepOver();
+      break;
+  }
+}
+
+void PausedInDebuggerTool::Dispose() {
+  v8_session_.reset();
+  weak_factory_.Invalidate();
+}
+
+void PausedInDebuggerTool::Trace(Visitor* visitor) const {
+  InspectTool::Trace(visitor);
+  visitor->Trace(weak_factory_);
+}
+
+// WcoTool --------------------------------------------------------
+
+WindowControlsOverlayTool::WindowControlsOverlayTool(
+    InspectorOverlayAgent* overlay,
+    OverlayFrontend* frontend,
+    std::unique_ptr<protocol::DictionaryValue> wco_config)
+    : InspectTool(overlay, frontend), wco_config_(std::move(wco_config)) {}
+
+String WindowControlsOverlayTool::GetOverlayName() {
+  return OverlayNames::OVERLAY_WINDOW_CONTROLS_OVERLAY;
+}
+
+void WindowControlsOverlayTool::Draw(float scale) {
+  overlay_->EvaluateInOverlay("drawWindowControlsOverlay",
+                              wco_config_->clone());
 }
 
 }  // namespace blink

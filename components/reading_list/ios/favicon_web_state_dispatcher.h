@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,8 +16,13 @@ namespace reading_list {
 // dispatcher keeps it alive long enough for it to download the favicons.
 class FaviconWebStateDispatcher {
  public:
-  FaviconWebStateDispatcher() {}
-  virtual ~FaviconWebStateDispatcher() {}
+  FaviconWebStateDispatcher() = default;
+
+  FaviconWebStateDispatcher(const FaviconWebStateDispatcher&) = delete;
+  FaviconWebStateDispatcher& operator=(const FaviconWebStateDispatcher&) =
+      delete;
+
+  virtual ~FaviconWebStateDispatcher() = default;
   // Returns a WebState with a Favicon Driver attached.
   virtual std::unique_ptr<web::WebState> RequestWebState() = 0;
   // Called to return a WebState. The WebState should not be used after being
@@ -26,9 +31,6 @@ class FaviconWebStateDispatcher {
 
   // Releases all the WebState currently retained for favicon fetching.
   virtual void ReleaseAll() = 0;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(FaviconWebStateDispatcher);
 };
 
 }  // namespace reading_list

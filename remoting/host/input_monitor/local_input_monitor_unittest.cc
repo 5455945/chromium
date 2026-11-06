@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,24 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/threading/thread.h"
 #include "build/build_config.h"
-#include "remoting/base/auto_thread_task_runner.h"
 #include "remoting/host/client_session_control.h"
 #include "remoting/host/host_mock_objects.h"
 #include "remoting/protocol/protocol_mock_objects.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+#if BUILDFLAG(IS_WIN)
+#include <windows.h>
+
+#include "remoting/host/win/input_extra_info.h"
+#endif
 
 namespace remoting {
 
@@ -34,16 +40,15 @@ class LocalInputMonitorTest : public testing::Test {
   void SetUp() override;
 
   base::test::TaskEnvironment task_environment_ {
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
     base::test::TaskEnvironment::MainThreadType::UI
-#else   // !defined(OS_WIN)
+#else   // !BUILDFLAG(IS_WIN)
     // Required to watch a file descriptor from NativeMessageProcessHost.
     base::test::TaskEnvironment::MainThreadType::IO
-#endif  // !defined(OS_WIN)
+#endif  // !BUILDFLAG(IS_WIN)
   };
 
-  base::RunLoop run_loop_;
-  scoped_refptr<AutoThreadTaskRunner> task_runner_;
+  scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
 
   std::string client_jid_;
   MockClientSessionControl client_session_control_;
@@ -55,9 +60,7 @@ LocalInputMonitorTest::LocalInputMonitorTest()
       client_session_control_factory_(&client_session_control_) {}
 
 void LocalInputMonitorTest::SetUp() {
-  // Run the task environment until no components depend on it.
-  task_runner_ = new AutoThreadTaskRunner(base::ThreadTaskRunnerHandle::Get(),
-                                          run_loop_.QuitClosure());
+  task_runner_ = task_environment_.GetMainThreadTaskRunner();
 }
 
 }  // namespace
@@ -69,20 +72,21 @@ TEST_F(LocalInputMonitorTest, BasicWithClientSession) {
   EXPECT_CALL(client_session_control_, client_jid())
       .Times(AnyNumber())
       .WillRepeatedly(ReturnRef(client_jid_));
-  EXPECT_CALL(client_session_control_, DisconnectSession(_)).Times(AnyNumber());
+  EXPECT_CALL(client_session_control_, DisconnectSession(_, _, _))
+      .Times(AnyNumber());
   EXPECT_CALL(client_session_control_, OnLocalPointerMoved(_, _))
       .Times(AnyNumber());
   EXPECT_CALL(client_session_control_, SetDisableInputs(_)).Times(0);
 
   {
     std::unique_ptr<LocalInputMonitor> local_input_monitor =
-        LocalInputMonitor::Create(task_runner_, task_runner_, task_runner_);
+        LocalInputMonitor::Create(task_runner_, task_runner_);
     local_input_monitor->StartMonitoringForClientSession(
         client_session_control_factory_.GetWeakPtr());
-    task_runner_ = nullptr;
   }
 
-  run_loop_.Run();
+  task_runner_->PostTask(FROM_HERE, task_environment_.QuitClosure());
+  task_environment_.RunUntilQuit();
 }
 
 TEST_F(LocalInputMonitorTest, BasicWithCallbacks) {
@@ -93,13 +97,178 @@ TEST_F(LocalInputMonitorTest, BasicWithCallbacks) {
 
   {
     std::unique_ptr<LocalInputMonitor> local_input_monitor =
-        LocalInputMonitor::Create(task_runner_, task_runner_, task_runner_);
+        LocalInputMonitor::Create(task_runner_, task_runner_);
     local_input_monitor->StartMonitoring(base::DoNothing(), base::DoNothing(),
                                          base::DoNothing());
-    task_runner_ = nullptr;
   }
 
-  run_loop_.Run();
+  task_runner_->PostTask(FROM_HERE, task_environment_.QuitClosure());
+  task_environment_.RunUntilQuit();
 }
+
+TEST_F(LocalInputMonitorTest, DestroyWithoutStarting) {
+  std::unique_ptr<LocalInputMonitor> local_input_monitor =
+      LocalInputMonitor::Create(task_runner_, task_runner_);
+  local_input_monitor.reset();
+
+  task_runner_->PostTask(FROM_HERE, task_environment_.QuitClosure());
+  task_environment_.RunUntilQuit();
+}
+
+TEST_F(LocalInputMonitorTest, CreateAndStartOnDifferentThread) {
+  base::Thread other_thread("LocalInputMonitorOtherThread");
+  ASSERT_TRUE(other_thread.Start());
+
+  std::unique_ptr<LocalInputMonitor> local_input_monitor =
+      LocalInputMonitor::Create(task_runner_, task_runner_);
+
+  base::RunLoop run_loop;
+  other_thread.task_runner()->PostTaskAndReply(
+      FROM_HERE,
+      base::BindOnce(
+          [](std::unique_ptr<LocalInputMonitor> monitor) {
+            monitor->StartMonitoring(base::DoNothing(), base::DoNothing(),
+                                     base::DoNothing());
+            monitor.reset();
+          },
+          std::move(local_input_monitor)),
+      run_loop.QuitClosure());
+  run_loop.Run();
+
+  task_runner_->PostTask(FROM_HERE, task_environment_.QuitClosure());
+  task_environment_.RunUntilQuit();
+}
+
+TEST_F(LocalInputMonitorTest, StartAndDestroyOnDifferentThread) {
+  base::Thread other_thread("LocalInputMonitorOtherThread");
+  ASSERT_TRUE(other_thread.Start());
+
+  std::unique_ptr<LocalInputMonitor> local_input_monitor =
+      LocalInputMonitor::Create(task_runner_, task_runner_);
+
+  base::RunLoop run_loop;
+  other_thread.task_runner()->PostTaskAndReply(
+      FROM_HERE,
+      base::BindOnce(
+          [](LocalInputMonitor* monitor) {
+            monitor->StartMonitoring(base::DoNothing(), base::DoNothing(),
+                                     base::DoNothing());
+          },
+          local_input_monitor.get()),
+      run_loop.QuitClosure());
+  run_loop.Run();
+
+  // Destroy `local_input_monitor` on the main thread while `other_thread` is
+  // still running, exercising the `DeleteSoon` path in
+  // `~LocalInputMonitorImpl`.
+  local_input_monitor.reset();
+  other_thread.FlushForTesting();
+
+  task_runner_->PostTask(FROM_HERE, task_environment_.QuitClosure());
+  task_environment_.RunUntilQuit();
+}
+
+#if BUILDFLAG(IS_WIN)
+struct IsCrdInjectedInputTestCase {
+  const char* test_name;
+  DWORD dwType;
+  bool has_device_handle;
+  uint32_t extra_info;
+  bool expected_is_crd;
+};
+
+class LocalInputMonitorWinTest
+    : public testing::TestWithParam<IsCrdInjectedInputTestCase> {};
+
+TEST_P(LocalInputMonitorWinTest, DistinguishesCrdInjectedFromSoftwareInput) {
+  const auto& param = GetParam();
+  RAWINPUT event = {};
+  event.header.dwType = param.dwType;
+  if (param.has_device_handle) {
+    event.header.hDevice = reinterpret_cast<HANDLE>(0x1234);
+  }
+  if (param.dwType == RIM_TYPEMOUSE) {
+    event.data.mouse.ulExtraInformation = param.extra_info;
+  } else if (param.dwType == RIM_TYPEKEYBOARD) {
+    event.data.keyboard.ExtraInformation = param.extra_info;
+  }
+
+  EXPECT_EQ(IsCrdInjectedInput(event), param.expected_is_crd);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    LocalInputMonitorWinTest,
+    testing::Values(
+        IsCrdInjectedInputTestCase{
+            .test_name = "HardwareMouseNoExtraInfo",
+            .dwType = RIM_TYPEMOUSE,
+            .has_device_handle = true,
+            .extra_info = 0,
+            .expected_is_crd = false,
+        },
+        IsCrdInjectedInputTestCase{
+            .test_name = "HardwareMouseWithCrdExtraInfo",
+            .dwType = RIM_TYPEMOUSE,
+            .has_device_handle = true,
+            .extra_info = kCrdInputExtraInfo,
+            .expected_is_crd = false,
+        },
+        // TODO(crbug.com/570142789): Re-enable once non-CRD software-injected
+        // input can be distinguished from Direct Touch and IME input.
+        IsCrdInjectedInputTestCase{
+            .test_name = "DISABLED_SoftwareMouseNoExtraInfo",
+            .dwType = RIM_TYPEMOUSE,
+            .has_device_handle = false,
+            .extra_info = 0,
+            .expected_is_crd = false,
+        },
+        IsCrdInjectedInputTestCase{
+            .test_name = "CrdInjectedMouse",
+            .dwType = RIM_TYPEMOUSE,
+            .has_device_handle = false,
+            .extra_info = kCrdInputExtraInfo,
+            .expected_is_crd = true,
+        },
+        IsCrdInjectedInputTestCase{
+            .test_name = "HardwareKeyboardNoExtraInfo",
+            .dwType = RIM_TYPEKEYBOARD,
+            .has_device_handle = true,
+            .extra_info = 0,
+            .expected_is_crd = false,
+        },
+        IsCrdInjectedInputTestCase{
+            .test_name = "HardwareKeyboardWithCrdExtraInfo",
+            .dwType = RIM_TYPEKEYBOARD,
+            .has_device_handle = true,
+            .extra_info = kCrdInputExtraInfo,
+            .expected_is_crd = false,
+        },
+        // TODO(crbug.com/570142789): Re-enable once non-CRD software-injected
+        // input can be distinguished from Direct Touch and IME input.
+        IsCrdInjectedInputTestCase{
+            .test_name = "DISABLED_SoftwareKeyboardNoExtraInfo",
+            .dwType = RIM_TYPEKEYBOARD,
+            .has_device_handle = false,
+            .extra_info = 0,
+            .expected_is_crd = false,
+        },
+        IsCrdInjectedInputTestCase{
+            .test_name = "CrdInjectedKeyboard",
+            .dwType = RIM_TYPEKEYBOARD,
+            .has_device_handle = false,
+            .extra_info = kCrdInputExtraInfo,
+            .expected_is_crd = true,
+        },
+        IsCrdInjectedInputTestCase{
+            .test_name = "NonMouseOrKeyboardEvent",
+            .dwType = RIM_TYPEHID,
+            .has_device_handle = false,
+            .extra_info = 0,
+            .expected_is_crd = false,
+        }),
+    [](const testing::TestParamInfo<LocalInputMonitorWinTest::ParamType>&
+           info) { return info.param.test_name; });
+#endif  // BUILDFLAG(IS_WIN)
 
 }  // namespace remoting

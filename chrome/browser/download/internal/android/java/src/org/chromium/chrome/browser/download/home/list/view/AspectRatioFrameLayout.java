@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,6 +11,8 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.download.internal.R;
 
 /**
@@ -30,6 +32,7 @@ import org.chromium.chrome.browser.download.internal.R;
  *         app:layout_aspectRatio="100%" />
  * </org.chromium.chrome.browser.download.home.list.view.AspectRatioFrameLayout>
  */
+@NullMarked
 public class AspectRatioFrameLayout extends FrameLayout {
     /** Creates an instance of {@link AspectRatioFrameLayout}. */
     public AspectRatioFrameLayout(Context context) {
@@ -37,12 +40,12 @@ public class AspectRatioFrameLayout extends FrameLayout {
     }
 
     /** Creates an instance of {@link AspectRatioFrameLayout}. */
-    public AspectRatioFrameLayout(Context context, AttributeSet attrs) {
+    public AspectRatioFrameLayout(Context context, @Nullable AttributeSet attrs) {
         this(context, attrs, 0);
     }
 
     /** Creates an instance of {@link AspectRatioFrameLayout}. */
-    public AspectRatioFrameLayout(Context context, AttributeSet attrs, int defStyle) {
+    public AspectRatioFrameLayout(Context context, @Nullable AttributeSet attrs, int defStyle) {
         super(context, attrs, defStyle);
     }
 
@@ -68,8 +71,7 @@ public class AspectRatioFrameLayout extends FrameLayout {
         for (int i = 0; i < getChildCount(); i++) {
             View view = getChildAt(i);
 
-            if (!(view.getLayoutParams() instanceof LayoutParams)) continue;
-            LayoutParams params = (LayoutParams) view.getLayoutParams();
+            if (!(view.getLayoutParams() instanceof LayoutParams params)) continue;
 
             params.mRestorableWidth = params.mOriginalWidth;
             params.mRestorableHeight = params.mOriginalHeight;
@@ -103,8 +105,7 @@ public class AspectRatioFrameLayout extends FrameLayout {
         for (int i = 0; i < getChildCount(); i++) {
             View view = getChildAt(i);
 
-            if (!(view.getLayoutParams() instanceof LayoutParams)) continue;
-            LayoutParams params = (LayoutParams) view.getLayoutParams();
+            if (!(view.getLayoutParams() instanceof LayoutParams params)) continue;
             if (params.mOverrodeWidth) params.width = params.mRestorableWidth;
             if (params.mOverrodeHeight) params.height = params.mRestorableHeight;
             params.mOverrodeWidth = false;
@@ -112,9 +113,7 @@ public class AspectRatioFrameLayout extends FrameLayout {
         }
     }
 
-    /**
-     * A set of layout parameters for {@link AspectRatioFrameLayout}.
-     */
+    /** A set of layout parameters for {@link AspectRatioFrameLayout}. */
     public static class LayoutParams extends FrameLayout.LayoutParams {
         /** The aspect ratio to use and enforce. */
         public float aspectRatio;
@@ -130,10 +129,15 @@ public class AspectRatioFrameLayout extends FrameLayout {
         public LayoutParams(Context context, AttributeSet attrs) {
             super(context, attrs);
 
-            TypedArray array = context.obtainStyledAttributes(
-                    attrs, R.styleable.AspectRatioFrameLayout_Layout);
-            aspectRatio = array.getFraction(
-                    R.styleable.AspectRatioFrameLayout_Layout_layout_aspectRatio, 1, 1, 0.f);
+            TypedArray array =
+                    context.obtainStyledAttributes(
+                            attrs, R.styleable.AspectRatioFrameLayout_Layout);
+            aspectRatio =
+                    array.getFraction(
+                            R.styleable.AspectRatioFrameLayout_Layout_layout_aspectRatio,
+                            1,
+                            1,
+                            0.f);
             array.recycle();
         }
 

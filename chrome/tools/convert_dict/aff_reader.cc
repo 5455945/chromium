@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright 2010 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,12 @@
 
 #include <algorithm>
 
+#include "base/compiler_specific.h"
 #include "base/files/file_util.h"
 #include "base/i18n/icu_string_conversions.h"
 #include "base/logging.h"
 #include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/tools/convert_dict/hunspell_reader.h"
@@ -24,12 +26,13 @@ namespace {
 // NULL-terminated ASCII string.
 bool StringBeginsWith(const std::string& str, const char* with) {
   size_t cur = 0;
-  while (cur < str.size() && with[cur] != 0) {
-    if (str[cur] != with[cur])
+  while (cur < str.size() && UNSAFE_TODO(with[cur]) != 0) {
+    if (str[cur] != UNSAFE_TODO(with[cur])) {
       return false;
+    }
     cur++;
   }
-  return with[cur] == 0;
+  return UNSAFE_TODO(with[cur]) == 0;
 }
 
 // Collapses runs of spaces to only one space.
@@ -90,6 +93,9 @@ bool AffReader::Read() {
       continue;
     got_command = true;
 
+    // Fields may be separated by tabs as well as spaces.
+    std::ranges::replace(line, '\t', ' ');
+
     if (StringBeginsWith(line, "SET ")) {
       // Character set encoding.
       encoding_ = line.substr(4);
@@ -127,6 +133,8 @@ bool AffReader::Read() {
       LOG(FATAL)
           << "We don't support the COMPLEXPREFIXES command yet. This would "
              "mean we have to insert words backwards as well (I think)";
+    } else if (StringBeginsWith(line, "AM ")) {
+      // Drop the table of morphological descriptions, unused by spellchecking.
     } else {
       // All other commands get stored in the other commands list.
       HandleRawCommand(line);
@@ -139,9 +147,10 @@ bool AffReader::Read() {
 bool AffReader::EncodingToUTF8(const std::string& encoded,
                                std::string* utf8) const {
   std::u16string word;
-  if (!base::CodepageToUTF16(encoded, encoding(),
-                             base::OnStringConversionError::FAIL, &word))
+  if (!base::CodepageToUTF16(encoded, encoding().c_str(),
+                             base::OnStringConversionError::FAIL, &word)) {
     return false;
+  }
   *utf8 = base::UTF16ToUTF8(word);
   return true;
 }
@@ -159,8 +168,7 @@ int AffReader::GetAFIndexForAFString(const std::string& af_string) {
 std::vector<std::string> AffReader::GetAffixGroups() const {
   int max_id = 0;
   for (auto i = affix_groups_.begin(); i != affix_groups_.end(); ++i) {
-    if (i->second > max_id)
-      max_id = i->second;
+    max_id = std::max(max_id, i->second);
   }
 
   std::vector<std::string> ret;
@@ -214,22 +222,13 @@ void AffReader::AddAffix(std::string* rule) {
         }
         part = rule->substr(part_start);  // From here to end.
 
-        if (part.find('-') != std::string::npos) {
-          // This rule has a morph rule used by old Hungarian dictionaries.
-          // When a line has a morph rule, its format becomes as listed below.
-          //   AFX D   0 d e - M
-          // To make hunspell work more happily, replace this morph rule with
-          // a compound flag as listed below.
-          //   AFX D   0 d/M e
-          std::vector<std::string> tokens = base::SplitString(
-              part, " ", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
-          if (tokens.size() >= 5) {
-            part = base::StringPrintf("%s %s/%s %s",
-                                      tokens[0].c_str(),
-                                      tokens[1].c_str(),
-                                      tokens[4].c_str(),
-                                      tokens[2].c_str());
-          }
+        // Drop the morphological description, unused by spellchecking.
+        std::vector<std::string> fields = base::SplitString(
+            part, " ", base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL);
+        // Keep the fields up to the condition.
+        if (fields.size() > 3) {
+          fields.resize(3);
+          part = base::JoinString(fields, " ");
         }
 
         size_t slash_index = part.find('/');
@@ -247,8 +246,7 @@ void AffReader::AddAffix(std::string* rule) {
 
           std::string before_flags = part.substr(0, slash_index + 1);
 
-          // After the slash are both the flags, then whitespace, then the part
-          // that tells us what to strip.
+          // After the slash are the flags, then whitespace, then the condition.
           std::vector<std::string> after_slash = base::SplitString(
               part.substr(slash_index + 1), " ",
               base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
@@ -261,9 +259,6 @@ void AffReader::AddAffix(std::string* rule) {
                          << "', but expected at least 2. Adding '.'.";
             after_slash.push_back(".");
           }
-          // Note that we may get a third term here which is the morphological
-          // description of this rule. This happens in the tests only, so we can
-          // just ignore it.
 
           part = base::StringPrintf("%s%d %s",
                                     before_flags.c_str(),

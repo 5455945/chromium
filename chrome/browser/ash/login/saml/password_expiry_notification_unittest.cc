@@ -1,34 +1,29 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/login/saml/password_expiry_notification.h"
 
-#include "ash/public/cpp/session/session_activation_observer.h"
-#include "ash/public/cpp/session/session_controller.h"
+#include <memory>
+#include <string>
+
+#include "ash/public/cpp/notification_utils.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/task_environment.h"
 #include "base/time/time.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/notifications/notification_display_service_impl.h"
-#include "chrome/browser/notifications/notification_display_service_tester.h"
-#include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/common/pref_names.h"
-#include "chrome/test/base/testing_browser_process.h"
-#include "chrome/test/base/testing_profile.h"
-#include "chrome/test/base/testing_profile_manager.h"
-#include "chromeos/login/auth/saml_password_attributes.h"
+#include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "components/user_manager/scoped_user_manager.h"
+#include "components/user_manager/user.h"
 #include "components/user_manager/user_names.h"
 #include "content/public/test/browser_task_environment.h"
-#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/message_center/message_center.h"
+#include "ui/message_center/public/cpp/notification.h"
 
-using message_center::Notification;
-
-namespace chromeos {
-
+namespace ash {
 namespace {
+
+using ::message_center::Notification;
 
 inline std::u16string utf16(const char* ascii) {
   return base::ASCIIToUTF16(ascii);
@@ -39,64 +34,71 @@ inline std::u16string GetTitleText(base::TimeDelta time_until_expiry) {
 }
 
 class PasswordExpiryNotificationTest : public testing::Test {
+ public:
+  void SetUp() override {
+    message_center::MessageCenter::Initialize();
+    user_ = fake_user_manager_->AddUser(user_manager::StubAccountId());
+  }
+
+  void TearDown() override {
+    user_ = nullptr;
+    message_center::MessageCenter::Shutdown();
+  }
+
  protected:
-  absl::optional<Notification> Notification() {
-    return NotificationDisplayServiceTester::Get()->GetNotification(
-        "saml.password-expiry-notification");
+  const Notification* Notification() {
+    return message_center::MessageCenter::Get()->FindNotificationById(
+        CreateUserScopedNotificationId("saml.password-expiry-notification",
+                                       user_->username_hash()));
   }
 
   content::BrowserTaskEnvironment task_environment_;
-  TestingProfile profile_;
-  NotificationDisplayServiceTester display_service_tester_{&profile_};
+  user_manager::TypedScopedUserManager<FakeChromeUserManager>
+      fake_user_manager_{std::make_unique<FakeChromeUserManager>()};
+  raw_ptr<const user_manager::User> user_ = nullptr;
 };
 
 }  // namespace
 
 TEST_F(PasswordExpiryNotificationTest, ShowWillSoonExpire) {
-  PasswordExpiryNotification::Show(&profile_, base::TimeDelta::FromDays(14));
-  ASSERT_TRUE(Notification().has_value());
+  PasswordExpiryNotification::Show(*user_, base::Days(14));
+  ASSERT_TRUE(Notification());
 
   EXPECT_EQ(utf16("Password expires in 14 days"), Notification()->title());
   EXPECT_EQ(utf16("Choose a new one now"), Notification()->message());
 
-  PasswordExpiryNotification::Dismiss(&profile_);
-  EXPECT_FALSE(Notification().has_value());
+  PasswordExpiryNotification::Dismiss(*user_);
+  EXPECT_FALSE(Notification());
 }
 
 TEST_F(PasswordExpiryNotificationTest, ShowAlreadyExpired) {
-  PasswordExpiryNotification::Show(&profile_, base::TimeDelta::FromDays(0));
-  ASSERT_TRUE(Notification().has_value());
+  PasswordExpiryNotification::Show(*user_, base::Days(0));
+  ASSERT_TRUE(Notification());
 
   EXPECT_EQ(utf16("Password change overdue"), Notification()->title());
   EXPECT_EQ(utf16("Choose a new one now"), Notification()->message());
 
-  PasswordExpiryNotification::Dismiss(&profile_);
-  EXPECT_FALSE(Notification().has_value());
+  PasswordExpiryNotification::Dismiss(*user_);
+  EXPECT_FALSE(Notification());
 }
 
 TEST_F(PasswordExpiryNotificationTest, GetTitleText) {
-  EXPECT_EQ(utf16("Password expires in 2 days"),
-            GetTitleText(base::TimeDelta::FromDays(2)));
-  EXPECT_EQ(utf16("Password expires in 1 day"),
-            GetTitleText(base::TimeDelta::FromDays(1)));
+  EXPECT_EQ(utf16("Password expires in 2 days"), GetTitleText(base::Days(2)));
+  EXPECT_EQ(utf16("Password expires in 1 day"), GetTitleText(base::Days(1)));
   EXPECT_EQ(utf16("Password expires in 12 hours"),
-            GetTitleText(base::TimeDelta::FromHours(12)));
-  EXPECT_EQ(utf16("Password expires in 1 hour"),
-            GetTitleText(base::TimeDelta::FromHours(1)));
+            GetTitleText(base::Hours(12)));
+  EXPECT_EQ(utf16("Password expires in 1 hour"), GetTitleText(base::Hours(1)));
   EXPECT_EQ(utf16("Password expires in 30 minutes"),
-            GetTitleText(base::TimeDelta::FromMinutes(30)));
+            GetTitleText(base::Minutes(30)));
   EXPECT_EQ(utf16("Password expires in 1 minute"),
-            GetTitleText(base::TimeDelta::FromMinutes(1)));
+            GetTitleText(base::Minutes(1)));
 
-  EXPECT_EQ(utf16("Password change overdue"),
-            GetTitleText(base::TimeDelta::FromSeconds(30)));
-  EXPECT_EQ(utf16("Password change overdue"),
-            GetTitleText(base::TimeDelta::FromSeconds(0)));
-  EXPECT_EQ(utf16("Password change overdue"),
-            GetTitleText(base::TimeDelta::FromSeconds(-10)));
+  EXPECT_EQ(utf16("Password change overdue"), GetTitleText(base::Seconds(30)));
+  EXPECT_EQ(utf16("Password change overdue"), GetTitleText(base::Seconds(0)));
+  EXPECT_EQ(utf16("Password change overdue"), GetTitleText(base::Seconds(-10)));
 
-  PasswordExpiryNotification::Dismiss(&profile_);
-  EXPECT_FALSE(Notification().has_value());
+  PasswordExpiryNotification::Dismiss(*user_);
+  EXPECT_FALSE(Notification());
 }
 
-}  // namespace chromeos
+}  // namespace ash

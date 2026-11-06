@@ -29,19 +29,18 @@
 #include <memory>
 
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/platform/geometry/float_size.h"
-#include "third_party/blink/renderer/platform/geometry/int_size.h"
-#include "third_party/blink/renderer/platform/graphics/graphics_types.h"
+#include "third_party/blink/renderer/platform/graphics/graphics_context_types.h"
 #include "third_party/blink/renderer/platform/graphics/image_orientation.h"
 #include "third_party/blink/renderer/platform/graphics/paint/display_item_client.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_image.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "ui/gfx/geometry/size.h"
+#include "ui/gfx/geometry/size_f.h"
 
 namespace blink {
 
-class FontDescription;
 class Image;
 class KURL;
 
@@ -52,35 +51,33 @@ class CORE_EXPORT DragImage {
   static std::unique_ptr<DragImage> Create(
       Image*,
       RespectImageOrientationEnum = kRespectImageOrientation,
-      float device_scale_factor = 1,
-      InterpolationQuality = kInterpolationDefault,
+      InterpolationQuality = GetDefaultInterpolationQuality(),
       float opacity = 1,
-      FloatSize image_scale = FloatSize(1, 1));
+      gfx::Vector2dF image_scale = gfx::Vector2dF(1, 1));
 
   static std::unique_ptr<DragImage> Create(const KURL&,
                                            const String& label,
-                                           const FontDescription& system_font,
                                            float device_scale_factor);
 
   DragImage(const DragImage&) = delete;
   DragImage& operator=(const DragImage&) = delete;
   ~DragImage();
 
-  static FloatSize ClampedImageScale(const IntSize&,
-                                     const IntSize&,
-                                     const IntSize& max_size);
+  static gfx::Vector2dF ClampedImageScale(const gfx::Size&,
+                                          const gfx::Size&,
+                                          const gfx::Size& max_size);
 
   const SkBitmap& Bitmap() { return bitmap_; }
-  float ResolutionScale() const { return resolution_scale_; }
-  IntSize Size() const { return IntSize(bitmap_.width(), bitmap_.height()); }
+  gfx::Size Size() const {
+    return gfx::Size(bitmap_.width(), bitmap_.height());
+  }
 
   void Scale(float scale_x, float scale_y);
 
  private:
-  DragImage(const SkBitmap&, float resolution_scale, InterpolationQuality);
+  DragImage(const SkBitmap&, InterpolationQuality);
 
   SkBitmap bitmap_;
-  float resolution_scale_;
   InterpolationQuality interpolation_quality_;
 };
 

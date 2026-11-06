@@ -1,17 +1,20 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/gwp_asan/client/sampling_malloc_shims.h"
 
 #include <stdlib.h>
+
+#include <algorithm>
+#include <array>
+#include <cstdint>
 #include <cstdlib>
 #include <memory>
 #include <string>
 
-#include "base/allocator/allocator_shim.h"
-#include "base/allocator/buildflags.h"
-#include "base/callback_helpers.h"
+#include "base/compiler_specific.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/page_size.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/gtest_util.h"
@@ -20,24 +23,27 @@
 #include "build/build_config.h"
 #include "components/crash/core/common/crash_key.h"
 #include "components/gwp_asan/client/guarded_page_allocator.h"
+#include "components/gwp_asan/client/gwp_asan.h"
 #include "components/gwp_asan/common/crash_key_name.h"
+#include "partition_alloc/buildflags.h"
+#include "partition_alloc/shim/allocator_shim.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/multiprocess_func_list.h"
 
 // These tests install global allocator shims so they are not safe to run in
 // multi-threaded contexts. Instead they're implemented as multi-process tests.
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include <malloc.h>
 static size_t GetUsableSize(void* mem) {
   return _msize(mem);
 }
-#elif defined(OS_APPLE)
+#elif BUILDFLAG(IS_APPLE)
 #include <malloc/malloc.h>
 static size_t GetUsableSize(void* mem) {
   return malloc_size(mem);
 }
-#elif defined(OS_LINUX) || defined(OS_CHROMEOS)
+#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #include <malloc.h>
 static size_t GetUsableSize(void* mem) {
   return malloc_usable_size(mem);
@@ -51,24 +57,52 @@ extern GuardedPageAllocator& GetMallocGpaForTesting();
 
 namespace {
 
-constexpr size_t kSamplingFrequency = 10;
-
-// Number of loop iterations required to definitely hit a sampled allocation.
-constexpr size_t kLoopIterations = kSamplingFrequency * 4;
+constexpr size_t kSamplingFrequency = 5;
+// Number of loop iterations required to hit a sampled allocation.
+// The probability of not hitting a sample allocation in kLoopIterations
+// is (1 - 1/kSamplingFrequency)^kLoopIterations. In this case that is
+// (4/5)^100 < 3*10^-10.
+constexpr size_t kLoopIterations = 100;
 
 constexpr int kSuccess = 0;
 constexpr int kFailure = 1;
+constexpr int kSamplingMaxSize = 16;
+
+static constexpr size_t kMaxMetadata = 2048;
+static constexpr size_t kMaxRequestedSlots = 8192;
 
 class SamplingMallocShimsTest : public base::MultiProcessTest {
  public:
   static void multiprocessTestSetup() {
-#if defined(OS_APPLE)
-    base::allocator::InitializeAllocatorShim();
-#endif  // defined(OS_APPLE)
+#if BUILDFLAG(IS_APPLE)
+    allocator_shim::InitializeAllocatorShim();
+#endif  // BUILDFLAG(IS_APPLE)
     crash_reporter::InitializeCrashKeys();
-    InstallMallocHooks(AllocatorState::kMaxMetadata,
-                       AllocatorState::kMaxMetadata, AllocatorState::kMaxSlots,
-                       kSamplingFrequency, base::DoNothing());
+    CHECK(InstallMallocHooks(
+        AllocatorSettings{
+            .max_allocated_pages = kMaxMetadata,
+            .num_metadata = kMaxMetadata,
+            .total_pages = kMaxRequestedSlots,
+            .sampling_frequency = kSamplingFrequency,
+            .sampling_min_size = 1,
+            .sampling_max_size = std::numeric_limits<int>::max(),
+        },
+        base::DoNothing()));
+  }
+
+  static void multiprocessTestSetupWithSamplingMaxSize() {
+#if BUILDFLAG(IS_APPLE)
+    allocator_shim::InitializeAllocatorShim();
+#endif  // BUILDFLAG(IS_APPLE)
+    crash_reporter::InitializeCrashKeys();
+    CHECK(InstallMallocHooks(
+        AllocatorSettings{.max_allocated_pages = kMaxMetadata,
+                          .num_metadata = kMaxMetadata,
+                          .total_pages = kMaxRequestedSlots,
+                          .sampling_frequency = kSamplingFrequency,
+                          .sampling_min_size = 1,
+                          .sampling_max_size = kSamplingMaxSize},
+        base::DoNothing()));
   }
 
  protected:
@@ -123,15 +157,15 @@ MULTIPROCESS_TEST_MAIN_WITH_SETUP(
   EXPECT_TRUE(allocationCheck([&] { return realloc(nullptr, page_size); },
                               &free, &failures));
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   EXPECT_TRUE(allocationCheck([&] { return _aligned_malloc(123, 16); },
                               &_aligned_free, &failures));
   EXPECT_TRUE(
       allocationCheck([&] { return _aligned_realloc(nullptr, 123, 16); },
                       &_aligned_free, &failures));
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
-#if defined(OS_POSIX)
+#if BUILDFLAG(IS_POSIX)
   EXPECT_TRUE(allocationCheck(
       [&]() -> void* {
         void* ptr;
@@ -140,7 +174,7 @@ MULTIPROCESS_TEST_MAIN_WITH_SETUP(
         return ptr;
       },
       &free, &failures));
-#endif  // defined(OS_POSIX)
+#endif  // BUILDFLAG(IS_POSIX)
 
   EXPECT_TRUE(allocationCheck([&] { return std::malloc(page_size); },
                               &std::free, &failures));
@@ -168,13 +202,7 @@ MULTIPROCESS_TEST_MAIN_WITH_SETUP(
   return kFailure;
 }
 
-// Flaky on Mac: https://crbug.com/1087372
-#if defined(OS_APPLE)
-#define MAYBE_BasicFunctionality DISABLED_BasicFunctionality
-#else
-#define MAYBE_BasicFunctionality BasicFunctionality
-#endif
-TEST_F(SamplingMallocShimsTest, MAYBE_BasicFunctionality) {
+TEST_F(SamplingMallocShimsTest, BasicFunctionality) {
   runTest("BasicFunctionality");
 }
 
@@ -185,7 +213,7 @@ MULTIPROCESS_TEST_MAIN_WITH_SETUP(
   CHECK_NE(alloc, nullptr);
 
   constexpr unsigned char kFillChar = 0xff;
-  memset(alloc, kFillChar, base::GetPageSize());
+  UNSAFE_TODO(memset(alloc, kFillChar, base::GetPageSize()));
 
   unsigned char* new_alloc =
       static_cast<unsigned char*>(realloc(alloc, base::GetPageSize() + 1));
@@ -193,7 +221,7 @@ MULTIPROCESS_TEST_MAIN_WITH_SETUP(
   CHECK_EQ(GetMallocGpaForTesting().PointerIsMine(new_alloc), false);
 
   for (size_t i = 0; i < base::GetPageSize(); i++)
-    CHECK_EQ(new_alloc[i], kFillChar);
+    UNSAFE_TODO(CHECK_EQ(new_alloc[i], kFillChar));
 
   free(new_alloc);
 
@@ -213,8 +241,8 @@ MULTIPROCESS_TEST_MAIN_WITH_SETUP(
     CHECK_NE(alloc, nullptr);
 
     if (GetMallocGpaForTesting().PointerIsMine(alloc)) {
-      for (size_t i = 0; i < base::GetPageSize(); i++)
-        CHECK_EQ(alloc[i], 0U);
+      for (size_t j = 0; j < base::GetPageSize(); j++)
+        UNSAFE_TODO(CHECK_EQ(alloc[j], 0U));
       free(alloc);
       return kSuccess;
     }
@@ -228,6 +256,68 @@ MULTIPROCESS_TEST_MAIN_WITH_SETUP(
 TEST_F(SamplingMallocShimsTest, Calloc) {
   runTest("Calloc");
 }
+
+// The unchecked calloc() tests below access the memory as an std::array of the
+// allocated size, which bounds the accesses. It's at most a page, which is the
+// largest allocation GWP-ASan makes.
+using CallocBytes = std::array<uint8_t, 4096>;
+
+bool IsZeroed(const CallocBytes& bytes) {
+  return std::ranges::all_of(bytes, [](uint8_t byte) { return byte == 0; });
+}
+
+MULTIPROCESS_TEST_MAIN_WITH_SETUP(
+    UncheckedCalloc,
+    SamplingMallocShimsTest::multiprocessTestSetup) {
+  for (size_t i = 0; i < kLoopIterations; i++) {
+    auto* alloc = static_cast<CallocBytes*>(
+        allocator_shim::UncheckedCalloc(1, sizeof(CallocBytes)));
+    CHECK_NE(alloc, nullptr);
+
+    if (GetMallocGpaForTesting().PointerIsMine(alloc)) {
+      CHECK(IsZeroed(*alloc));
+      allocator_shim::UncheckedFree(alloc);
+      return kSuccess;
+    }
+
+    allocator_shim::UncheckedFree(alloc);
+  }
+
+  return kFailure;
+}
+
+TEST_F(SamplingMallocShimsTest, UncheckedCalloc) {
+  runTest("UncheckedCalloc");
+}
+
+#if PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) || BUILDFLAG(IS_WIN)
+MULTIPROCESS_TEST_MAIN_WITH_SETUP(
+    UncheckedAlignedCalloc,
+    SamplingMallocShimsTest::multiprocessTestSetup) {
+  constexpr size_t kAlignment = 64;
+  for (size_t i = 0; i < kLoopIterations; i++) {
+    auto* alloc =
+        static_cast<CallocBytes*>(allocator_shim::UncheckedAlignedCalloc(
+            1, sizeof(CallocBytes), kAlignment));
+    CHECK_NE(alloc, nullptr);
+    CHECK_EQ(reinterpret_cast<uintptr_t>(alloc) % kAlignment, 0U);
+
+    if (GetMallocGpaForTesting().PointerIsMine(alloc)) {
+      CHECK(IsZeroed(*alloc));
+      allocator_shim::UncheckedAlignedFree(alloc);
+      return kSuccess;
+    }
+
+    allocator_shim::UncheckedAlignedFree(alloc);
+  }
+
+  return kFailure;
+}
+
+TEST_F(SamplingMallocShimsTest, UncheckedAlignedCalloc) {
+  runTest("UncheckedAlignedCalloc");
+}
+#endif  // PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) || BUILDFLAG(IS_WIN)
 
 // GetCrashKeyValue() operates on a per-component basis, can't read the crash
 // key from the gwp_asan_client component in a component build.
@@ -249,7 +339,7 @@ TEST_F(SamplingMallocShimsTest, CrashKey) {
 #endif  // !defined(COMPONENT_BUILD)
 
 // malloc_usable_size() is not currently used/shimmed on Android.
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
 MULTIPROCESS_TEST_MAIN_WITH_SETUP(
     GetSizeEstimate,
     SamplingMallocShimsTest::multiprocessTestSetup) {
@@ -273,7 +363,7 @@ TEST_F(SamplingMallocShimsTest, GetSizeEstimate) {
 }
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 MULTIPROCESS_TEST_MAIN_WITH_SETUP(
     AlignedRealloc,
     SamplingMallocShimsTest::multiprocessTestSetup) {
@@ -294,38 +384,30 @@ MULTIPROCESS_TEST_MAIN_WITH_SETUP(
 TEST_F(SamplingMallocShimsTest, AlignedRealloc) {
   runTest("AlignedRealloc");
 }
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
-// PartitionAlloc-Everywhere does not support batch_malloc / batch_free.
-#if defined(OS_APPLE) && !BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
 MULTIPROCESS_TEST_MAIN_WITH_SETUP(
-    BatchFree,
-    SamplingMallocShimsTest::multiprocessTestSetup) {
-  void* ptrs[AllocatorState::kMaxMetadata + 1];
-  for (size_t i = 0; i < AllocatorState::kMaxMetadata; i++) {
-    ptrs[i] = GetMallocGpaForTesting().Allocate(16);
-    CHECK(ptrs[i]);
+    SamplingRange,
+    SamplingMallocShimsTest::multiprocessTestSetupWithSamplingMaxSize) {
+  for (size_t i = 0; i < kLoopIterations; i++) {
+    unsigned char* alloc =
+        static_cast<unsigned char*>(malloc(kSamplingMaxSize * 2));
+    CHECK_NE(alloc, nullptr);
+
+    if (GetMallocGpaForTesting().PointerIsMine(alloc)) {
+      free(alloc);
+      return kFailure;
+    }
+
+    free(alloc);
   }
-  // Check that all GPA allocations were consumed.
-  CHECK_EQ(GetMallocGpaForTesting().Allocate(16), nullptr);
-
-  ptrs[AllocatorState::kMaxMetadata] =
-      malloc_zone_malloc(malloc_default_zone(), 16);
-  CHECK(ptrs[AllocatorState::kMaxMetadata]);
-
-  malloc_zone_batch_free(malloc_default_zone(), ptrs,
-                         AllocatorState::kMaxMetadata + 1);
-
-  // Check that GPA allocations were freed.
-  CHECK(GetMallocGpaForTesting().Allocate(16));
 
   return kSuccess;
 }
 
-TEST_F(SamplingMallocShimsTest, BatchFree) {
-  runTest("BatchFree");
+TEST_F(SamplingMallocShimsTest, SamplingRange) {
+  runTest("SamplingRange");
 }
-#endif  // defined(OS_APPLE) && !BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
 
 }  // namespace
 

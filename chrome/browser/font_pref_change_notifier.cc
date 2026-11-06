@@ -1,16 +1,17 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/font_pref_change_notifier.h"
 
-#include "base/bind.h"
 #include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/observer_list.h"
 #include "base/strings/string_util.h"
 #include "chrome/common/pref_names_util.h"
 #include "components/prefs/pref_service.h"
 
-FontPrefChangeNotifier::Registrar::Registrar() {}
+FontPrefChangeNotifier::Registrar::Registrar() = default;
 FontPrefChangeNotifier::Registrar::~Registrar() {
   if (is_registered())
     Unregister();
@@ -19,7 +20,7 @@ FontPrefChangeNotifier::Registrar::~Registrar() {
 void FontPrefChangeNotifier::Registrar::Register(
     FontPrefChangeNotifier* notifier,
     FontPrefChangeNotifier::Callback cb) {
-  DCHECK(!is_registered());
+  CHECK(!is_registered(), base::NotFatalUntil::M163);
   notifier_ = notifier;
   callback_ = std::move(cb);
 
@@ -27,7 +28,7 @@ void FontPrefChangeNotifier::Registrar::Register(
 }
 
 void FontPrefChangeNotifier::Registrar::Unregister() {
-  DCHECK(is_registered());
+  CHECK(is_registered(), base::NotFatalUntil::M163);
   notifier_->RemoveRegistrar(this);
 
   notifier_ = nullptr;
@@ -40,7 +41,10 @@ FontPrefChangeNotifier::FontPrefChangeNotifier(PrefService* pref_service)
 }
 
 FontPrefChangeNotifier::~FontPrefChangeNotifier() {
-  pref_service_->RemovePrefObserverAllPrefs(this);
+  if (pref_service_) {
+    pref_service_->RemovePrefObserverAllPrefs(this);
+    pref_service_ = nullptr;
+  }
 
   // There could be a shutdown race between this class and the objects
   // registered with it. We don't want the registrars to call back into us
@@ -57,11 +61,17 @@ void FontPrefChangeNotifier::RemoveRegistrar(Registrar* registrar) {
   registrars_.RemoveObserver(registrar);
 }
 
+void FontPrefChangeNotifier::OnServiceDestroyed(PrefService* service) {
+  pref_service_->RemovePrefObserverAllPrefs(this);
+  pref_service_ = nullptr;
+}
+
 void FontPrefChangeNotifier::OnPreferenceChanged(PrefService* pref_service,
-                                                 const std::string& pref_name) {
+                                                 std::string_view pref_name) {
   if (base::StartsWith(pref_name, pref_names_util::kWebKitFontPrefPrefix,
                        base::CompareCase::SENSITIVE)) {
+    const std::string pref_name_string(pref_name);
     for (auto& reg : registrars_)
-      reg.callback_.Run(pref_name);
+      reg.callback_.Run(pref_name_string);
   }
 }

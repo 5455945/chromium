@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,9 +20,9 @@ struct StructTraits<viz::mojom::ReturnedResourceDataView,
     return resource.id;
   }
 
-  static const gpu::SyncToken& sync_token(
+  static const gpu::SharedImageExportResult& shared_image_export_result(
       const viz::ReturnedResource& resource) {
-    return resource.sync_token;
+    return resource.shared_image_export_result;
   }
 
   static gfx::GpuFenceHandle release_fence(
@@ -40,7 +40,7 @@ struct StructTraits<viz::mojom::ReturnedResourceDataView,
 
   static bool Read(viz::mojom::ReturnedResourceDataView data,
                    viz::ReturnedResource* out) {
-    if (!data.ReadSyncToken(&out->sync_token) ||
+    if (!data.ReadSharedImageExportResult(&out->shared_image_export_result) ||
         !data.ReadReleaseFence(&out->release_fence) || !data.ReadId(&out->id)) {
       return false;
     }

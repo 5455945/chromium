@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,8 @@
 #include <utility>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/manifest_handlers/file_handler_info.h"
 
@@ -56,7 +57,7 @@ class WebAppFileHandlerMatch {
   bool DoMatch(const EntryInfo& entry);
 
  private:
-  const apps::FileHandler* const file_handler_;
+  const raw_ptr<const apps::FileHandler> file_handler_;
   bool matched_mime_type_ = false;
   bool matched_file_extension_ = false;
 };
@@ -90,6 +91,15 @@ bool FileHandlerCanHandleEntry(const apps::FileHandlerInfo& handler,
 bool WebAppFileHandlerCanHandleEntry(const apps::FileHandler& handler,
                                      const EntryInfo& entry);
 
+// Creates a new file entry and allows |renderer_id| to access |path|, with
+// specified permissions. This registers a new file system for |path|. Note
+// that |can_create| and |can_delete| both require |can_write|.
+GrantedFileEntry CreateFileEntryWithPermissions(int renderer_id,
+                                                const base::FilePath& path,
+                                                bool can_write,
+                                                bool can_create,
+                                                bool can_delete);
+
 // Creates a new file entry and allows |renderer_id| to access |path|. This
 // registers a new file system for |path|.
 GrantedFileEntry CreateFileEntry(content::BrowserContext* context,
@@ -101,25 +111,40 @@ GrantedFileEntry CreateFileEntry(content::BrowserContext* context,
 // |directory_paths| contain the set of directories out of |paths|.
 // For directories it makes sure they exist at their corresponding |paths|,
 // while for regular files it makes sure they exist (i.e. not links) at |paths|,
-// creating files if needed. If result is successful it calls |on_success|,
+// creating files if needed. If |root_path| is not empty, |paths| must be
+// |root_path| or located under it, and no component between |root_path| and
+// each path may be a link. If result is successful it calls |on_success|,
 // otherwise calls |on_failure|.
 void PrepareFilesForWritableApp(
     const std::vector<base::FilePath>& paths,
     content::BrowserContext* context,
     const std::set<base::FilePath>& directory_paths,
     base::OnceClosure on_success,
-    base::OnceCallback<void(const base::FilePath&)> on_failure);
+    base::OnceCallback<void(const base::FilePath&)> on_failure,
+    const base::FilePath& root_path = base::FilePath());
 
 // Returns whether |extension| has the fileSystem.write permission.
 bool HasFileSystemWritePermission(const Extension* extension);
 
 // Validates a file entry and populates |file_path| with the absolute path if it
-// is valid.
+// is valid. If |root_path| is not null, it is populated with the absolute path
+// of the granted file or directory that contains |file_path|.
 bool ValidateFileEntryAndGetPath(const std::string& filesystem_name,
                                  const std::string& filesystem_path,
                                  int render_process_id,
                                  base::FilePath* file_path,
-                                 std::string* error);
+                                 std::string* error,
+                                 base::FilePath* root_path = nullptr);
+
+// Returns a vector of EntryInfo with:
+// * |path| fields populated by |entry_paths|.
+// * |mime_type| fields populated by |mime_types| (must have same size as
+//   |entry_paths|), with empty elements replaced by a fallback.
+// * |is_directory| fields decided by whether |path| is in |directory_paths|.
+std::vector<extensions::EntryInfo> CreateEntryInfos(
+    const std::vector<base::FilePath>& entry_paths,
+    const std::vector<std::string>& mime_types,
+    const std::set<base::FilePath>& directory_paths);
 
 }  // namespace app_file_handler_util
 

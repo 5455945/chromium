@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,6 @@
 
 #include <memory>
 
-#include "base/metrics/histogram_macros.h"
 #include "chrome/browser/favicon/favicon_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_fetcher_factory.h"
@@ -16,6 +15,7 @@
 #include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_fetcher.h"
 #include "components/search_engines/template_url_service.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/favicon_status.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
@@ -24,6 +24,9 @@
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "services/network/public/mojom/url_loader_factory.mojom.h"
+#include "third_party/blink/public/mojom/loader/referrer.mojom.h"
+#include "ui/base/page_transition_types.h"
 
 using content::NavigationController;
 using content::NavigationEntry;
@@ -39,7 +42,37 @@ bool IsFormSubmit(NavigationEntry* entry) {
 
 }  // namespace
 
+DEFINE_USER_DATA(SearchEngineTabHelper);
+
+// static
+void SearchEngineTabHelper::BindOpenSearchDescriptionDocumentHandler(
+    content::RenderFrameHost* rfh,
+    mojo::PendingReceiver<chrome::mojom::OpenSearchDescriptionDocumentHandler>
+        receiver) {
+  // Bind only for outermost main frames.
+  if (rfh->GetParentOrOuterDocument()) {
+    return;
+  }
+
+  auto* web_contents = content::WebContents::FromRenderFrameHost(rfh);
+  if (!web_contents) {
+    return;
+  }
+  tabs::TabInterface* const tab =
+      tabs::TabInterface::MaybeGetFromContents(web_contents);
+  auto* tab_helper = tab ? SearchEngineTabHelper::From(tab) : nullptr;
+  if (!tab_helper) {
+    return;
+  }
+  tab_helper->osdd_handler_receivers_.Add(tab_helper, std::move(receiver));
+}
+
 SearchEngineTabHelper::~SearchEngineTabHelper() = default;
+
+// static
+SearchEngineTabHelper* SearchEngineTabHelper::From(tabs::TabInterface* tab) {
+  return tab ? Get(tab->GetUnownedUserDataHost()) : nullptr;
+}
 
 void SearchEngineTabHelper::DidFinishNavigation(
     content::NavigationHandle* handle) {
@@ -54,16 +87,18 @@ std::u16string SearchEngineTabHelper::GenerateKeywordFromNavigationEntry(
     NavigationEntry* entry) {
   // Don't autogenerate keywords for pages that are the result of form
   // submissions.
-  if (IsFormSubmit(entry))
+  if (IsFormSubmit(entry)) {
     return std::u16string();
+  }
 
   // We want to use the user typed URL if available since that represents what
   // the user typed to get here, and fall back on the regular URL if not.
   GURL url = entry->GetUserTypedURL();
   if (!url.is_valid()) {
     url = entry->GetURL();
-    if (!url.is_valid())
+    if (!url.is_valid()) {
       return std::u16string();
+    }
   }
 
   // Don't autogenerate keywords for referrers that
@@ -74,19 +109,18 @@ std::u16string SearchEngineTabHelper::GenerateKeywordFromNavigationEntry(
   // elements and update AutocompletePopup to look for keywords using the path.
   // See http://b/issue?id=863583.
   if (!(url.SchemeIs(url::kHttpScheme) || url.SchemeIs(url::kHttpsScheme)) ||
-      (url.path().length() > 1)) {
+      (url.GetPath().length() > 1)) {
     return std::u16string();
   }
 
   return TemplateURL::GenerateKeyword(url);
 }
 
-SearchEngineTabHelper::SearchEngineTabHelper(WebContents* web_contents)
+SearchEngineTabHelper::SearchEngineTabHelper(tabs::TabInterface& tab,
+                                             WebContents* web_contents)
     : content::WebContentsObserver(web_contents),
-      osdd_handler_receivers_(web_contents,
-                              this,
-                              content::WebContentsFrameReceiverSetPassKey()) {
-  DCHECK(web_contents);
+      scoped_unowned_user_data_(tab.GetUnownedUserDataHost(), *this) {
+  CHECK(web_contents, base::NotFatalUntil::M162);
 
   favicon::CreateContentFaviconDriverForWebContents(web_contents);
   favicon_driver_observation_.Observe(
@@ -100,24 +134,21 @@ void SearchEngineTabHelper::PageHasOpenSearchDescriptionDocument(
   // necessary uses TemplateURLFetcher to download the OSDD and create a
   // keyword.
 
-  // Only accept messages from the main frame.
-  if (osdd_handler_receivers_.GetCurrentTargetFrame() !=
-      web_contents()->GetMainFrame())
-    return;
-
   // Make sure that the page is the current page and other basic checks.
   // When |page_url| has file: scheme, this method doesn't work because of
   // http://b/issue?id=863583. For that reason, this doesn't check and allow
   // urls referring to osdd urls with same schemes.
-  if (!osdd_url.is_valid() || !osdd_url.SchemeIsHTTPOrHTTPS())
+  if (!osdd_url.is_valid() || !osdd_url.SchemeIsHTTPOrHTTPS()) {
     return;
+  }
 
   Profile* profile =
       Profile::FromBrowserContext(web_contents()->GetBrowserContext());
   if (page_url != web_contents()->GetLastCommittedURL() ||
       !TemplateURLFetcherFactory::GetForProfile(profile) ||
-      profile->IsOffTheRecord())
+      profile->IsOffTheRecord()) {
     return;
+  }
 
   // If the current page is a form submit, find the last page that was not a
   // form submit and use its url to generate the keyword from.
@@ -125,18 +156,21 @@ void SearchEngineTabHelper::PageHasOpenSearchDescriptionDocument(
   NavigationEntry* entry = controller.GetLastCommittedEntry();
   for (int index = controller.GetLastCommittedEntryIndex();
        (index > 0) && IsFormSubmit(entry);
-       entry = controller.GetEntryAtIndex(index))
+       entry = controller.GetEntryAtIndex(index)) {
     --index;
-  if (!entry || IsFormSubmit(entry))
+  }
+  if (!entry || IsFormSubmit(entry)) {
     return;
+  }
 
   // Autogenerate a keyword for the autodetected case; in the other cases we'll
   // generate a keyword later after fetching the OSDD.
   std::u16string keyword = GenerateKeywordFromNavigationEntry(entry);
-  if (keyword.empty())
+  if (keyword.empty()) {
     return;
+  }
 
-  auto* frame = web_contents()->GetMainFrame();
+  auto* frame = web_contents()->GetPrimaryMainFrame();
   mojo::Remote<network::mojom::URLLoaderFactory> url_loader_factory;
   frame->CreateNetworkServiceDefaultFactory(
       url_loader_factory.BindNewPipeAndPassReceiver());
@@ -160,20 +194,23 @@ void SearchEngineTabHelper::OnFaviconUpdated(
       Profile::FromBrowserContext(web_contents()->GetBrowserContext());
   TemplateURLService* url_service =
       TemplateURLServiceFactory::GetForProfile(profile);
-  if (url_service && url_service->loaded())
+  if (url_service && url_service->loaded()) {
     url_service->UpdateProviderFavicons(driver->GetActiveURL(), icon_url);
+  }
 }
 
 void SearchEngineTabHelper::GenerateKeywordIfNecessary(
     content::NavigationHandle* handle) {
   if (!handle->IsInPrimaryMainFrame() ||
-      !handle->GetSearchableFormURL().is_valid())
+      !handle->GetSearchableFormURL().is_valid()) {
     return;
+  }
 
   Profile* profile =
       Profile::FromBrowserContext(web_contents()->GetBrowserContext());
-  if (profile->IsOffTheRecord())
+  if (profile->IsOffTheRecord()) {
     return;
+  }
 
   NavigationController& controller = web_contents()->GetController();
   int last_index = controller.GetLastCommittedEntryIndex();
@@ -181,18 +218,21 @@ void SearchEngineTabHelper::GenerateKeywordIfNecessary(
   // normally due to a form submit that opened in a new tab.
   // TODO(brettw) bug 916126: we should support keywords when form submits
   //              happen in new tabs.
-  if (last_index <= 0)
+  if (last_index <= 0) {
     return;
+  }
 
   std::u16string keyword(GenerateKeywordFromNavigationEntry(
       controller.GetEntryAtIndex(last_index - 1)));
-  if (keyword.empty())
+  if (keyword.empty()) {
     return;
+  }
 
   TemplateURLService* url_service =
       TemplateURLServiceFactory::GetForProfile(profile);
-  if (!url_service)
+  if (!url_service) {
     return;
+  }
 
   if (!url_service->loaded()) {
     url_service->Load();
@@ -200,14 +240,15 @@ void SearchEngineTabHelper::GenerateKeywordIfNecessary(
   }
 
   GURL url = handle->GetSearchableFormURL();
-  if (!url_service->CanAddAutogeneratedKeyword(keyword, url))
+  if (!url_service->CanAddAutogeneratedKeyword(keyword, url)) {
     return;
+  }
 
   TemplateURLData data;
   data.SetShortName(keyword);
   data.SetKeyword(keyword);
   data.SetURL(url.spec());
-  DCHECK(controller.GetLastCommittedEntry());
+  CHECK(controller.GetLastCommittedEntry(), base::NotFatalUntil::M162);
   const GURL& current_favicon =
       controller.GetLastCommittedEntry()->GetFavicon().url;
   // If the favicon url isn't valid, it means there really isn't a favicon, or
@@ -229,5 +270,3 @@ void SearchEngineTabHelper::GenerateKeywordIfNecessary(
   // any OpenSearch document derived engines, which outrank this one.
   url_service->Add(std::make_unique<TemplateURL>(data));
 }
-
-WEB_CONTENTS_USER_DATA_KEY_IMPL(SearchEngineTabHelper)

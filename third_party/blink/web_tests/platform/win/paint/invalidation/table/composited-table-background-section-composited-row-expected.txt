@@ -1,13 +1,13 @@
 {
   "layers": [
     {
-      "name": "Scrolling Contents Layer",
+      "name": "Scrolling background of LayoutView #document",
       "bounds": [800, 600],
       "contentsOpaque": true,
       "backgroundColor": "#FFFFFF"
     },
     {
-      "name": "LayoutNGTableSection TBODY id='target'",
+      "name": "LayoutTableSection TBODY id='target'",
       "bounds": [180, 130],
       "invalidations": [
         [0, 0, 180, 130]
@@ -15,12 +15,12 @@
       "transform": 1
     },
     {
-      "name": "LayoutNGTableRow TR",
+      "name": "LayoutTableRow TR",
       "bounds": [180, 64],
       "transform": 2
     },
     {
-      "name": "LayoutNGTableCellNew TD",
+      "name": "LayoutTableCell (children-inline) TD",
       "bounds": [58, 64],
       "transform": 3
     }

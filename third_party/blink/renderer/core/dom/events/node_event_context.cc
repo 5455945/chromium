@@ -36,7 +36,13 @@
 namespace blink {
 
 NodeEventContext::NodeEventContext(Node& node, EventTarget& current_target)
-    : node_(node), current_target_(current_target) {}
+    : node_(node, Member<Node>::AtomicInitializerTag{}),
+      current_target_(current_target,
+                      Member<EventTarget>::AtomicInitializerTag{}),
+      tree_scope_event_context_(
+          nullptr,
+          Member<TreeScopeEventContext>::AtomicInitializerTag{}),
+      invocation_target_in_shadow_tree_(node.IsInShadowTree()) {}
 
 void NodeEventContext::Trace(Visitor* visitor) const {
   visitor->Trace(node_);
@@ -48,10 +54,11 @@ void NodeEventContext::HandleLocalEvents(Event& event) const {
   if (TouchEventContext* touch_context = GetTouchEventContext()) {
     touch_context->HandleLocalEvents(event);
   } else if (RelatedTarget()) {
-    event.SetRelatedTargetIfExists(RelatedTarget());
+    event.SetRelatedTarget(RelatedTarget());
   }
   event.SetTarget(Target());
   event.SetCurrentTarget(current_target_.Get());
+  event.SetInvocationTargetInShadowTree(invocation_target_in_shadow_tree_);
   node_->HandleLocalEvents(event);
 }
 

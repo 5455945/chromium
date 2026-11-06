@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,17 +10,18 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <utility>
 
-#include "base/containers/mru_cache.h"
+#include "base/containers/flat_map.h"
+#include "base/containers/lru_cache.h"
 #include "base/containers/queue.h"
-#include "base/containers/small_map.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
-#include "build/chromeos_buildflags.h"
 #include "media/base/callback_registry.h"
 #include "media/base/cdm_context.h"
 #include "media/base/status.h"
@@ -29,12 +30,10 @@
 #include "media/base/video_codecs.h"
 #include "media/base/video_frame_layout.h"
 #include "media/gpu/chromeos/video_decoder_pipeline.h"
-#include "media/gpu/decode_surface_handler.h"
-#include "media/gpu/vaapi/vaapi_utils.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "media/gpu/vaapi/vaapi_decode_surface_handler.h"
+#include "media/gpu/vaapi/vaapi_status.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
-#include "ui/gfx/gpu_memory_buffer.h"
 #include "ui/gfx/hdr_metadata.h"
 
 namespace media {
@@ -43,54 +42,73 @@ class AcceleratedVideoDecoder;
 class VaapiVideoDecoderDelegate;
 class DmabufVideoFramePool;
 class VaapiWrapper;
-class VideoFrame;
+class FrameResource;
 class VASurface;
+class ScopedVASurface;
 
-class VaapiVideoDecoder : public DecoderInterface,
-                          public DecodeSurfaceHandler<VASurface> {
+class VaapiVideoDecoder : public VideoDecoderMixin,
+                          public VaapiDecodeSurfaceHandler {
  public:
-  static std::unique_ptr<DecoderInterface> Create(
+  static std::unique_ptr<VideoDecoderMixin> Create(
+      std::unique_ptr<MediaLog> media_log,
       scoped_refptr<base::SequencedTaskRunner> decoder_task_runner,
-      base::WeakPtr<DecoderInterface::Client> client);
+      base::WeakPtr<VideoDecoderMixin::Client> client);
 
-  static SupportedVideoDecoderConfigs GetSupportedConfigs();
+  VaapiVideoDecoder(const VaapiVideoDecoder&) = delete;
+  VaapiVideoDecoder& operator=(const VaapiVideoDecoder&) = delete;
 
-  // DecoderInterface implementation.
+  static std::optional<SupportedVideoDecoderConfigs> GetSupportedConfigs();
+
+  // VideoDecoderMixin implementation, VideoDecoder part.
   void Initialize(const VideoDecoderConfig& config,
+                  bool low_delay,
                   CdmContext* cdm_context,
                   InitCB init_cb,
-                  const OutputCB& output_cb,
+                  const PipelineOutputCB& output_cb,
                   const WaitingCB& waiting_cb) override;
   void Decode(scoped_refptr<DecoderBuffer> buffer, DecodeCB decode_cb) override;
   void Reset(base::OnceClosure reset_cb) override;
+  bool NeedsBitstreamConversion() const override;
+  bool CanReadWithoutStalling() const override;
+  int GetMaxDecodeRequests() const override;
+  VideoDecoderType GetDecoderType() const override;
+  bool IsPlatformDecoder() const override;
+  // VideoDecoderMixin implementation, specific part.
   void ApplyResolutionChange() override;
   bool NeedsTranscryption() override;
 
-  // DecodeSurfaceHandler<VASurface> implementation.
-  scoped_refptr<VASurface> CreateSurface() override;
-  scoped_refptr<VASurface> CreateDecodeSurface() override;
-  bool IsScalingDecode() override;
-  const gfx::Rect GetOutputVisibleRect(
-      const gfx::Rect& decode_visible_rect,
-      const gfx::Size& output_picture_size) override;
-  void SurfaceReady(scoped_refptr<VASurface> va_surface,
+  // VaapiDecodeSurfaceHandler implementation.
+  std::unique_ptr<VASurfaceHandle> CreateSurface() override;
+  void SurfaceReady(VASurfaceID va_surface_id,
                     int32_t buffer_id,
                     const gfx::Rect& visible_rect,
-                    const VideoColorSpace& color_space) override;
+                    const VideoColorSpace& color_space,
+                    const gfx::HDRMetadata& dynamic_hdr_metadata) override;
+
+  // Must be called before Initialize().
+  void set_ignore_resolution_changes_to_smaller_vp9_for_testing(bool value);
+  ~VaapiVideoDecoder() override;
 
  private:
+  friend class VaapiVideoDecoderTest;
+
   // Decode task holding single decode request.
   struct DecodeTask {
     DecodeTask(scoped_refptr<DecoderBuffer> buffer,
                int32_t buffer_id,
                DecodeCB decode_done_cb);
-    ~DecodeTask();
+
+    DecodeTask(const DecodeTask&) = delete;
+    DecodeTask& operator=(const DecodeTask&) = delete;
+
     DecodeTask(DecodeTask&&);
     DecodeTask& operator=(DecodeTask&&) = default;
+
+    ~DecodeTask();
+
     scoped_refptr<DecoderBuffer> buffer_;
     int32_t buffer_id_ = -1;
     DecodeCB decode_done_cb_;
-    DISALLOW_COPY_AND_ASSIGN(DecodeTask);
   };
 
   enum class State {
@@ -102,14 +120,16 @@ class VaapiVideoDecoder : public DecoderInterface,
     kDecoding,             // decoding buffers.
     kChangingResolution,   // need to change resolution, waiting for pipeline to
                            // be flushed.
+    kExpectingReset,       // resolution change is aborted, waiting for decoder
+                           // to be reset.
     kResetting,            // resetting decoder.
     kError,                // decoder encountered an error.
   };
 
   VaapiVideoDecoder(
+      std::unique_ptr<MediaLog> media_log,
       scoped_refptr<base::SequencedTaskRunner> decoder_task_runner,
-      base::WeakPtr<DecoderInterface::Client> client);
-  ~VaapiVideoDecoder() override;
+      base::WeakPtr<VideoDecoderMixin::Client> client);
 
   // Schedule the next decode task in the queue to be executed.
   void ScheduleNextDecodeTask();
@@ -117,15 +137,15 @@ class VaapiVideoDecoder : public DecoderInterface,
   void HandleDecodeTask();
   // Clear the decode task queue. This is done when resetting or destroying the
   // decoder, or encountering an error.
-  void ClearDecodeTaskQueue(DecodeStatus status);
+  void ClearDecodeTaskQueue(DecoderStatus status);
 
-  // Releases the local reference to the VideoFrame associated with the
+  // Releases the local reference to the FrameResource associated with the
   // specified |surface_id| on the decoder thread. This is called when
-  // |decoder_| has outputted the VideoFrame and stopped using it as a
+  // |decoder_| has outputted the FrameResource and stopped using it as a
   // reference frame. Note that this doesn't mean the frame can be reused
   // immediately, as it might still be used by the client.
   void ReleaseVideoFrame(VASurfaceID surface_id);
-  // Callback for |frame_pool_| to notify of available resources.
+  // Callback for the frame pool to notify us when a frame becomes available.
   void NotifyFrameAvailable();
   // Callback from accelerator to indicate the protected state has been updated
   // so we can proceed or fail.
@@ -139,9 +159,11 @@ class VaapiVideoDecoder : public DecoderInterface,
   void ResetDone(base::OnceClosure reset_cb);
 
   // Create codec-specific AcceleratedVideoDecoder and reset related variables.
-  Status CreateAcceleratedVideoDecoder();
+  base::expected<std::monostate, VaapiStatus> CreateAcceleratedVideoDecoder();
 
-  // Change the current |state_| to the specified |state|.
+  // Change the current `state_` to the specified `state`. Iff the new state is
+  // an error, report the error to all pending decode and init tasks.
+  void SetState(DecoderStatus error);
   void SetState(State state);
 
   // Callback for the CDM to notify |this|.
@@ -152,58 +174,88 @@ class VaapiVideoDecoder : public DecoderInterface,
   void ApplyResolutionChangeWithScreenSizes(
       const std::vector<gfx::Size>& screen_resolution);
 
-  // Callback for when a VASurface in the decode pool is no longer used as a
-  // reference frame and should then be returned to the pool. We ignore the
-  // VASurfaceID in the normal callback because it is retained in the |surface|
-  // object.
-  void ReturnDecodeSurfaceToPool(std::unique_ptr<ScopedVASurface> surface,
-                                 VASurfaceID);
+  // Private static helper to allow using weak ptr instead of an unretained ptr.
+  static base::expected<scoped_refptr<FrameResource>, CroStatus>
+  AllocateCustomFrameProxy(base::WeakPtr<VaapiVideoDecoder> decoder,
+                           VideoPixelFormat format,
+                           const gfx::Size& coded_size,
+                           const gfx::Rect& visible_rect,
+                           const gfx::Size& natural_size,
+                           bool use_protected,
+                           bool use_linear_buffers,
+                           bool needs_detiling,
+                           base::TimeDelta timestamp);
+
+  // Allocates a new FrameResource using a new VASurface directly. Since this is
+  // only used on linux, it also sets the required YCbCr information for the
+  // frame it creates.
+  base::expected<scoped_refptr<FrameResource>, CroStatus> AllocateCustomFrame(
+      VideoPixelFormat format,
+      const gfx::Size& coded_size,
+      const gfx::Rect& visible_rect,
+      const gfx::Size& natural_size,
+      bool use_protected,
+      bool use_linear_buffers,
+      bool needs_detiling,
+      base::TimeDelta timestamp);
+
+  bool IsConfiguredForTesting() const {
+    // Mock instances of |vaapi_wrapper_| and |decoder_| are created and
+    // injected to VaapiVideoDecoder for testing purposes.
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    return !!vaapi_wrapper_ && !!decoder_;
+  }
+
+  // We can cancel the pending init during error handling if need be.
+  InitCB pending_init_cb_ GUARDED_BY_CONTEXT(sequence_checker_);
 
   // The video decoder's state.
-  State state_ = State::kUninitialized;
+  State state_ GUARDED_BY_CONTEXT(sequence_checker_) = State::kUninitialized;
 
   // Callback used to notify the client when a frame is available for output.
-  OutputCB output_cb_;
+  PipelineOutputCB output_cb_ GUARDED_BY_CONTEXT(sequence_checker_);
 
   // Callback used to notify the client when we have lost decode context and
   // request a reset (Used in protected decoding).
-  WaitingCB waiting_cb_;
+  WaitingCB waiting_cb_ GUARDED_BY_CONTEXT(sequence_checker_);
 
   // Bitstream information, written during Initialize().
-  VideoCodecProfile profile_ = VIDEO_CODEC_PROFILE_UNKNOWN;
-  VideoColorSpace color_space_;
-  absl::optional<gfx::HDRMetadata> hdr_metadata_;
+  VideoCodecProfile profile_ GUARDED_BY_CONTEXT(sequence_checker_) =
+      VIDEO_CODEC_PROFILE_UNKNOWN;
+  VideoColorSpace color_space_ GUARDED_BY_CONTEXT(sequence_checker_);
+  gfx::HDRMetadata static_hdr_metadata_ GUARDED_BY_CONTEXT(sequence_checker_);
 
   // Aspect ratio from the config.
-  VideoAspectRatio aspect_ratio_;
-
-  // Video frame pool used to allocate and recycle video frames.
-  DmabufVideoFramePool* frame_pool_ = nullptr;
+  VideoAspectRatio aspect_ratio_ GUARDED_BY_CONTEXT(sequence_checker_);
 
   // The time at which each buffer decode operation started. Not each decode
   // operation leads to a frame being output and frames might be reordered, so
   // we don't know when it's safe to drop a timestamp. This means we need to use
   // a cache here, with a size large enough to account for frame reordering.
-  base::MRUCache<int32_t, base::TimeDelta> buffer_id_to_timestamp_;
+  base::LRUCache<int32_t, base::TimeDelta> buffer_id_to_timestamp_
+      GUARDED_BY_CONTEXT(sequence_checker_);
 
   // Queue containing all requested decode tasks.
-  base::queue<DecodeTask> decode_task_queue_;
+  base::queue<DecodeTask> decode_task_queue_
+      GUARDED_BY_CONTEXT(sequence_checker_);
   // The decode task we're currently trying to execute.
-  absl::optional<DecodeTask> current_decode_task_;
+  std::optional<DecodeTask> current_decode_task_
+      GUARDED_BY_CONTEXT(sequence_checker_);
   // The next input buffer id.
-  int32_t next_buffer_id_ = 0;
+  int32_t next_buffer_id_ GUARDED_BY_CONTEXT(sequence_checker_) = 0;
 
   // The list of frames currently used as output buffers or reference frames.
-  std::map<VASurfaceID, scoped_refptr<VideoFrame>> output_frames_;
+  std::map<VASurfaceID, scoped_refptr<FrameResource>> output_frames_
+      GUARDED_BY_CONTEXT(sequence_checker_);
 
-  // VASurfaces are created via importing |frame_pool_| resources into libva in
-  // CreateSurface(). The following map keeps those VASurfaces for reuse
-  // according to the expectations of libva vaDestroySurfaces(): "Surfaces can
-  // only be destroyed after all contexts using these surfaces have been
-  // destroyed."
+  // ScopedVASurfaces are created by importing resources from a
+  // DmabufVideoFramePool into libva via CreateSurface(). The following map
+  // keeps those ScopedVASurfaces for reuse according to the expectations of
+  // libva vaDestroySurfaces(): "Surfaces can only be destroyed after all
+  // contexts using these surfaces have been destroyed."
   // TODO(crbug.com/1040291): remove this keep-alive when using SharedImages.
-  base::small_map<std::map<gfx::GpuMemoryBufferId, scoped_refptr<VASurface>>>
-      allocated_va_surfaces_;
+  base::flat_map<base::UnguessableToken, std::unique_ptr<ScopedVASurface>>
+      allocated_va_surfaces_ GUARDED_BY_CONTEXT(sequence_checker_);
 
   // We need to use a CdmContextRef so that we destruct
   // |cdm_event_cb_registration_| before the CDM is destructed. The CDM has
@@ -214,41 +266,42 @@ class VaapiVideoDecoder : public DecoderInterface,
   // decoder; however, in the VideoDecoderPipeline, which owns the
   // VaapiVideoDecoder, it uses an asynchronous destructor to destroy the
   // pipeline (and thus the VaapiVideoDecoder) on the decoder thread.
-  std::unique_ptr<CdmContextRef> cdm_context_ref_;
+  std::unique_ptr<CdmContextRef> cdm_context_ref_
+      GUARDED_BY_CONTEXT(sequence_checker_);
 
-  EncryptionScheme encryption_scheme_;
+  EncryptionScheme encryption_scheme_ GUARDED_BY_CONTEXT(sequence_checker_);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // To keep the CdmContext event callback registered.
-  std::unique_ptr<CallbackRegistration> cdm_event_cb_registration_;
+  std::unique_ptr<CallbackRegistration> cdm_event_cb_registration_
+      GUARDED_BY_CONTEXT(sequence_checker_);
 #endif
 
   // Platform and codec specific video decoder.
-  std::unique_ptr<AcceleratedVideoDecoder> decoder_;
-  scoped_refptr<VaapiWrapper> vaapi_wrapper_;
+  std::unique_ptr<AcceleratedVideoDecoder> decoder_
+      GUARDED_BY_CONTEXT(sequence_checker_);
+  scoped_refptr<VaapiWrapper> vaapi_wrapper_
+      GUARDED_BY_CONTEXT(sequence_checker_);
   // TODO(crbug.com/1022246): Instead of having the raw pointer here, getting
   // the pointer from AcceleratedVideoDecoder.
-  VaapiVideoDecoderDelegate* decoder_delegate_ = nullptr;
-
-  // When we are doing scaled decoding, this is the pool of surfaces used by the
-  // decoder for reference frames.
-  base::queue<std::unique_ptr<ScopedVASurface>>
-      decode_surface_pool_for_scaling_;
-
-  // When we are doing scaled decoding, this is the scale factor we are using,
-  // and applies the same in both dimensions.
-  absl::optional<float> decode_to_output_scale_factor_;
+  //
+  // Dangling in VideoDecoderTest.* on chromeos-amd64-generic-rel-gtest
+  raw_ptr<VaapiVideoDecoderDelegate, DanglingUntriaged> decoder_delegate_
+      GUARDED_BY_CONTEXT(sequence_checker_) = nullptr;
 
   // This is used on AMD protected content implementations to indicate that the
   // DecoderBuffers we receive have been transcrypted and need special handling.
-  bool transcryption_ = false;
+  bool transcryption_ GUARDED_BY_CONTEXT(sequence_checker_) = false;
+
+  // See VP9Decoder for information on this.
+  bool ignore_resolution_changes_to_smaller_for_testing_
+      GUARDED_BY_CONTEXT(sequence_checker_) = false;
 
   SEQUENCE_CHECKER(sequence_checker_);
 
+  // WeakPtr of *|this| and its factory, bound to |decoder_task_runner_|.
   base::WeakPtr<VaapiVideoDecoder> weak_this_;
   base::WeakPtrFactory<VaapiVideoDecoder> weak_this_factory_;
-
-  DISALLOW_COPY_AND_ASSIGN(VaapiVideoDecoder);
 };
 
 }  // namespace media

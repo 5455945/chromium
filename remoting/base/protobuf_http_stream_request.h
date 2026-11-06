@@ -1,26 +1,24 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef REMOTING_BASE_PROTOBUF_HTTP_STREAM_REQUEST_H_
 #define REMOTING_BASE_PROTOBUF_HTTP_STREAM_REQUEST_H_
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include <string_view>
+
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/timer/timer.h"
 #include "remoting/base/protobuf_http_request_base.h"
 #include "services/network/public/cpp/simple_url_loader_stream_consumer.h"
-
-namespace google {
-namespace protobuf {
-class MessageLite;
-}  // namespace protobuf
-}  // namespace google
+#include "third_party/protobuf/src/google/protobuf/message_lite.h"
 
 namespace remoting {
 
+class HttpStatus;
 class ProtobufHttpClient;
-class ProtobufHttpStatus;
 class ProtobufHttpStreamParser;
 
 // A server streaming request.
@@ -32,10 +30,10 @@ class ProtobufHttpStreamRequest final
   using MessageCallback =
       base::RepeatingCallback<void(std::unique_ptr<MessageType> message)>;
   using StreamClosedCallback =
-      base::OnceCallback<void(const ProtobufHttpStatus& status)>;
+      base::OnceCallback<void(const HttpStatus& status)>;
 
   static constexpr base::TimeDelta kStreamReadyTimeoutDuration =
-      base::TimeDelta::FromSeconds(30);
+      base::Seconds(30);
 
   explicit ProtobufHttpStreamRequest(
       std::unique_ptr<ProtobufHttpRequestConfig> config);
@@ -66,16 +64,16 @@ class ProtobufHttpStreamRequest final
 
   // ProtobufHttpStreamParser callbacks.
   void OnMessage(const std::string& message);
-  void OnStreamClosed(const ProtobufHttpStatus& status);
+  void OnStreamClosed(const HttpStatus& status);
 
   // ProtobufHttpRequestBase implementations.
-  void OnAuthFailed(const ProtobufHttpStatus& status) override;
+  void OnAuthFailed(const HttpStatus& status) override;
   void StartRequestInternal(
       network::mojom::URLLoaderFactory* loader_factory) override;
   base::TimeDelta GetRequestTimeoutDuration() const override;
 
   // network::SimpleURLLoaderStreamConsumer implementations.
-  void OnDataReceived(base::StringPiece string_piece,
+  void OnDataReceived(std::string_view string_view,
                       base::OnceClosure resume) override;
   void OnComplete(bool success) override;
   void OnRetry(base::OnceClosure start_retry) override;
@@ -83,7 +81,7 @@ class ProtobufHttpStreamRequest final
   void OnStreamReadyTimeout();
 
   // Used to create new response message instances.
-  const google::protobuf::MessageLite* default_message_;
+  raw_ptr<const google::protobuf::MessageLite> default_message_;
 
   std::unique_ptr<ProtobufHttpStreamParser> stream_parser_;
 

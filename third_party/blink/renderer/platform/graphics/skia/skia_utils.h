@@ -34,126 +34,29 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_SKIA_SKIA_UTILS_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_SKIA_SKIA_UTILS_H_
 
-#include "cc/paint/paint_canvas.h"
-#include "third_party/blink/renderer/platform/graphics/graphics_types.h"
-#include "third_party/blink/renderer/platform/graphics/image.h"
+#include "components/viz/common/resources/shared_image_format.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
-#include "third_party/blink/renderer/platform/transforms/affine_transform.h"
-#include "third_party/blink/renderer/platform/wtf/math_extras.h"
-#include "third_party/skia/include/core/SkCanvas.h"
-#include "third_party/skia/include/core/SkColor.h"
+#include "third_party/skia/include/core/SkColorSpace.h"
 #include "third_party/skia/include/core/SkData.h"
-#include "third_party/skia/include/core/SkPoint.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
-#include "third_party/skia/include/core/SkScalar.h"
+#include "ui/gfx/color_space.h"
 
 namespace blink {
-class LayoutRect;
 
-/**** constants ****/
-
-enum {
-  // Firefox limits width/height to 32767 pixels, but slows down dramatically
-  // before it reaches that limit. We limit by area instead, giving us larger
-  // maximum dimensions, in exchange for a smaller maximum canvas size.
-  kMaxCanvasArea = 32768 * 8192,  // Maximum canvas area in CSS pixels
-
-  // In Skia, we will also limit width/height to 65535.
-  kMaxSkiaDim = 65535  // Maximum width/height in CSS pixels.
-};
-
-bool PLATFORM_EXPORT IsValidImageSize(const IntSize&);
-
-SkBlendMode PLATFORM_EXPORT
-    WebCoreCompositeToSkiaComposite(CompositeOperator,
-                                    BlendMode = BlendMode::kNormal);
-SkBlendMode PLATFORM_EXPORT WebCoreBlendModeToSkBlendMode(BlendMode);
-CompositeOperator PLATFORM_EXPORT CompositeOperatorFromSkBlendMode(SkBlendMode);
-BlendMode PLATFORM_EXPORT BlendModeFromSkBlendMode(SkBlendMode);
-
-// Multiply a color's alpha channel by an additional alpha factor where
-// alpha is in the range [0, 1].
-SkColor PLATFORM_EXPORT ScaleAlpha(SkColor, float);
-
-bool PLATFORM_EXPORT
-ApproximatelyEqualSkColorSpaces(sk_sp<SkColorSpace> src_color_space,
-                                sk_sp<SkColorSpace> dst_color_space);
-
-SkRect PLATFORM_EXPORT LayoutRectToSkRect(const blink::LayoutRect& rect);
-
-// Skia has problems when passed infinite, etc floats, filter them to 0.
-inline SkScalar WebCoreFloatToSkScalar(float f) {
-  return SkFloatToScalar(std::isfinite(f) ? f : 0);
+// Temporary utility while converting canvas code to use gfx::ColorSpace.
+// TODO(crbug.com/371227617): Remove this once conversion is complete.
+inline gfx::ColorSpace SkColorSpaceToGfxColorSpace(
+    sk_sp<SkColorSpace> sk_color_space) {
+  return sk_color_space ? gfx::ColorSpace(sk_color_space.get())
+                        : gfx::ColorSpace::CreateSRGB();
 }
 
-inline SkScalar WebCoreDoubleToSkScalar(double d) {
-  return SkDoubleToScalar(std::isfinite(d) ? d : 0);
-}
-
-inline bool WebCoreFloatNearlyEqual(float a, float b) {
-  return SkScalarNearlyEqual(WebCoreFloatToSkScalar(a),
-                             WebCoreFloatToSkScalar(b));
-}
-
-inline SkPathFillType WebCoreWindRuleToSkFillType(WindRule rule) {
-  return static_cast<SkPathFillType>(rule);
-}
-
-inline WindRule SkFillTypeToWindRule(SkPathFillType fill_type) {
-  switch (fill_type) {
-    case SkPathFillType::kWinding:
-    case SkPathFillType::kEvenOdd:
-      return static_cast<WindRule>(fill_type);
-    default:
-      NOTREACHED();
-      break;
-  }
-  return RULE_NONZERO;
-}
-
-inline SkPoint FloatPointToSkPoint(const FloatPoint& point) {
-  return SkPoint::Make(WebCoreFloatToSkScalar(point.X()),
-                       WebCoreFloatToSkScalar(point.Y()));
-}
-
-SkMatrix PLATFORM_EXPORT AffineTransformToSkMatrix(const AffineTransform&);
-SkMatrix PLATFORM_EXPORT
-TransformationMatrixToSkMatrix(const TransformationMatrix&);
-
-bool NearlyIntegral(float value);
-
-InterpolationQuality ComputeInterpolationQuality(float src_width,
-                                                 float src_height,
-                                                 float dest_width,
-                                                 float dest_height,
-                                                 bool is_data_complete = true);
-
-// Technically, this is driven by the CSS/Canvas2D specs and unrelated to Skia.
-// It should probably live in the CSS layer, but the notion of a "blur radius"
-// leaks into platform/graphics currently (ideally we should only deal with
-// sigma at this level).
-// TODO(fmalita): find a better home for this helper.
-inline float BlurRadiusToStdDev(float radius) {
-  DCHECK_GE(radius, 0);
-
-  // Per spec, sigma is exactly half the blur radius:
-  // https://www.w3.org/TR/css-backgrounds-3/#shadow-blur
-  // https://html.spec.whatwg.org/C/#when-shadows-are-drawn
-  return radius * 0.5f;
-}
-
-template <typename PrimitiveType>
-void DrawPlatformFocusRing(const PrimitiveType&,
-                           cc::PaintCanvas*,
-                           SkColor,
-                           float width,
-                           float border_radius);
-
-inline SkCanvas::SrcRectConstraint WebCoreClampingModeToSkiaRectConstraint(
-    Image::ImageClampingMode clamp_mode) {
-  return clamp_mode == Image::kClampImageToSourceRect
-             ? SkCanvas::kStrict_SrcRectConstraint
-             : SkCanvas::kFast_SrcRectConstraint;
+// Temporary utility while converting canvas code to use SharedImageFormat.
+// TODO(crbug.com/391903236): Determine best long-term plan once canvas code is
+// completely converted to SharedImageFormat (i.e., crbug.com/371227617 is
+// resolved).
+inline viz::SharedImageFormat GetN32FormatForCanvas() {
+  return viz::SharedImageFormat::N32Format();
 }
 
 // Attempts to allocate an SkData on the PartitionAlloc buffer partition.
@@ -194,6 +97,11 @@ PLATFORM_EXPORT sk_sp<SkData> TryAllocateSkData(size_t size);
 //
 //     sk_sp<SkShader> shader = SkShader::MakeFoo(...);
 //     paint.setShader(shader);
+
+// TODO(dcheng): This one might have some value, though it's not entirely clear
+// if there is a specific issue with thread-hostility here. We transfer other
+// mutable references across threads all the time, e.g. there is a broad
+// allowance for scoped_refptr<T> as long as T is RefCountedThreadSafe.
 
 }  // namespace blink
 

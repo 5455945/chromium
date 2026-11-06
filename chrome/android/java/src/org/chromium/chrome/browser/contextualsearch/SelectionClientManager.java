@@ -1,15 +1,16 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.contextualsearch;
 
-import android.os.Build;
 import android.view.textclassifier.TextClassifier;
 
-import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.content_public.browser.SelectAroundCaretResult;
 import org.chromium.content_public.browser.SelectionClient;
 import org.chromium.content_public.browser.SelectionEventProcessor;
 import org.chromium.content_public.browser.SelectionPopupController;
@@ -17,56 +18,58 @@ import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.touch_selection.SelectionEventType;
 
 /**
- * Manages the current {@link SelectionClient} instances, with support for 0-2 instances.
- * This class supports one permanent instance for Smart Text Selection, and one non-permanent
- * instance for Contextual Search that can be added or removed. <p> Usage: After being constructed
- * this class knows if Smart Select is active or not, and can return a {@link SelectionClient}.
- * If Smart Select is active it will return the Smart Select Client from
- * {@link #getSelectionClient}, and if not then {@link #getSelectionClient()} will return {@code
- * null}. A non-permanent client may be added using
- * {@link #addContextualSearchSelectionClient(SelectionClient)} to connect to Contextual Search.
- * This client may be removed later using {@link #removeContextualSearchSelectionClient()}.
+ * Manages the current {@link SelectionClient} instances, with support for 0-2 instances. This class
+ * supports one permanent instance for Smart Text Selection, and one non-permanent instance for
+ * Contextual Search that can be added or removed.
+ *
+ * <p>Usage: After being constructed this class knows if Smart Select is active or not, and can
+ * return a {@link SelectionClient}. If Smart Select is active it will return the Smart Select
+ * Client from {@link #getSelectionClient}, and if not then {@link #getSelectionClient()} will
+ * return {@code null}. A non-permanent client may be added using {@link
+ * #addContextualSearchSelectionClient(SelectionClient)} to connect to Contextual Search. This
+ * client may be removed later using {@link #removeContextualSearchSelectionClient()}.
  */
+@NullMarked
 public class SelectionClientManager {
     // Whether Smart Select is allowed to be enabled in Chrome.
+    // Note: replacing this with mOptionalSelectionClient != null checks does not work. We actually
+    // do need to save the value at instantiation time in order to know whether a
+    // smartSelectionClient was provided at instantiation.
     private final boolean mIsSmartSelectionEnabledInChrome;
 
     /**
-     * The single optional client supported directly by this class.
-     * It may be null, the Smart Selection client, or our bridge between Smart Select and Contextual
-     * Search.
+     * The single optional client supported directly by this class. It may be null, the Smart
+     * Selection client, or our bridge between Smart Select and Contextual Search.
      */
     private @Nullable SelectionClient mOptionalSelectionClient;
 
     /**
      * Constructs an instance that can return a {@link SelectionClient} that's a mix of an optional
      * Smart Selection client and a transient Contextual Search client.
+     *
      * @param webContents The {@link WebContents} that will show popups for this client.
      */
     SelectionClientManager(WebContents webContents) {
-        if (Build.VERSION.SDK_INT > Build.VERSION_CODES.O) {
-            assert webContents != null;
-            mOptionalSelectionClient = SelectionClient.createSmartSelectionClient(webContents);
-            SelectionPopupController controller =
-                    SelectionPopupController.fromWebContents(webContents);
-            controller.setSelectionClient(mOptionalSelectionClient);
-        }
+        assert webContents != null;
+        mOptionalSelectionClient = SelectionClient.createSmartSelectionClient(webContents);
+        SelectionPopupController controller = SelectionPopupController.fromWebContents(webContents);
+        controller.setSelectionClient(mOptionalSelectionClient);
         mIsSmartSelectionEnabledInChrome = mOptionalSelectionClient != null;
     }
 
-    @VisibleForTesting
     /** Test-only constructor. */
-    SelectionClientManager(SelectionClient optionalSelectionClient, boolean enableSmartSelection) {
+    @VisibleForTesting
+    SelectionClientManager(
+            @Nullable SelectionClient optionalSelectionClient, boolean enableSmartSelection) {
         mOptionalSelectionClient = optionalSelectionClient;
         mIsSmartSelectionEnabledInChrome = enableSmartSelection;
     }
 
     /**
      * @return the current {@link SelectionClient} or {@code null} if there is none currently
-     *         active.
+     *     active.
      */
-    @Nullable
-    SelectionClient getSelectionClient() {
+    @Nullable SelectionClient getSelectionClient() {
         return mOptionalSelectionClient;
     }
 
@@ -81,10 +84,11 @@ public class SelectionClientManager {
             SelectionClient contextualSearchSelectionClient) {
         assert contextualSearchSelectionClient != null;
         assert !(mOptionalSelectionClient instanceof SelectionClientBridge)
-            : "No more than two selection client instances are supported!";
-        if (mIsSmartSelectionEnabledInChrome) {
-            mOptionalSelectionClient = new SelectionClientBridge(
-                    mOptionalSelectionClient, contextualSearchSelectionClient);
+                : "No more than two selection client instances are supported!";
+        if (mIsSmartSelectionEnabledInChrome && mOptionalSelectionClient != null) {
+            mOptionalSelectionClient =
+                    new SelectionClientBridge(
+                            mOptionalSelectionClient, contextualSearchSelectionClient);
         } else {
             mOptionalSelectionClient = contextualSearchSelectionClient;
         }
@@ -94,19 +98,19 @@ public class SelectionClientManager {
     /**
      * Removes the current {@link SelectionClient} from the current instances that will be notified
      * of method calls.
+     *
      * @return A remaining {@link SelectionClient} used for Smart Selection or {@code null}.
      */
-    @Nullable
-    SelectionClient removeContextualSearchSelectionClient() {
+    @Nullable SelectionClient removeContextualSearchSelectionClient() {
         if (mIsSmartSelectionEnabledInChrome) {
-            assert mOptionalSelectionClient
-                    instanceof SelectionClientBridge : "Looks like it was never added.";
+            assert mOptionalSelectionClient instanceof SelectionClientBridge
+                    : "Looks like it was never added.";
             SelectionClientBridge currentSelectionClientBridge =
                     (SelectionClientBridge) mOptionalSelectionClient;
             mOptionalSelectionClient = currentSelectionClientBridge.getSmartSelectionClient();
         } else {
             assert !(mOptionalSelectionClient instanceof SelectionClientBridge)
-                : "Internal error managing selection clients.";
+                    : "Internal error managing selection clients.";
             mOptionalSelectionClient = null;
         }
         return mOptionalSelectionClient;
@@ -131,7 +135,8 @@ public class SelectionClientManager {
          * @param contextualSearchSelectionClient A {@link SelectionClient} based on the
          *        {@code ContextualSearchManager}.
          */
-        private SelectionClientBridge(SelectionClient smartSelectionClient,
+        private SelectionClientBridge(
+                SelectionClient smartSelectionClient,
                 SelectionClient contextualSearchSelectionClient) {
             mSmartSelectionClient = smartSelectionClient;
             mContextualSearchSelectionClient = contextualSearchSelectionClient;
@@ -158,10 +163,9 @@ public class SelectionClientManager {
         }
 
         @Override
-        public void selectWordAroundCaretAck(boolean didSelect, int startAdjust, int endAdjust) {
-            mSmartSelectionClient.selectWordAroundCaretAck(didSelect, startAdjust, endAdjust);
-            mContextualSearchSelectionClient.selectWordAroundCaretAck(
-                    didSelect, startAdjust, endAdjust);
+        public void selectAroundCaretAck(@Nullable SelectAroundCaretResult result) {
+            mSmartSelectionClient.selectAroundCaretAck(result);
+            mContextualSearchSelectionClient.selectAroundCaretAck(result);
         }
 
         @Override
@@ -182,17 +186,17 @@ public class SelectionClientManager {
         }
 
         @Override
-        public TextClassifier getTextClassifier() {
+        public @Nullable TextClassifier getTextClassifier() {
             return mSmartSelectionClient.getTextClassifier();
         }
 
         @Override
-        public TextClassifier getCustomTextClassifier() {
+        public @Nullable TextClassifier getCustomTextClassifier() {
             return mSmartSelectionClient.getCustomTextClassifier();
         }
 
         @Override
-        public SelectionEventProcessor getSelectionEventProcessor() {
+        public @Nullable SelectionEventProcessor getSelectionEventProcessor() {
             return mSmartSelectionClient.getSelectionEventProcessor();
         }
     }

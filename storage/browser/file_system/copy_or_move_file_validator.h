@@ -1,13 +1,13 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef STORAGE_BROWSER_FILE_SYSTEM_COPY_OR_MOVE_FILE_VALIDATOR_H_
 #define STORAGE_BROWSER_FILE_SYSTEM_COPY_OR_MOVE_FILE_VALIDATOR_H_
 
-#include "base/callback.h"
 #include "base/component_export.h"
 #include "base/files/file.h"
+#include "base/functional/callback.h"
 
 namespace base {
 class FilePath;
@@ -30,12 +30,6 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) CopyOrMoveFileValidator {
   // Called on a source file before copying or moving to the final
   // destination.
   virtual void StartPreWriteValidation(ResultCallback result_callback) = 0;
-
-  // Called on a destination file after copying or moving to the final
-  // destination. Suitable for running Anti-Virus checks.
-  virtual void StartPostWriteValidation(
-      const base::FilePath& dest_platform_path,
-      ResultCallback result_callback) = 0;
 
  protected:
   CopyOrMoveFileValidator() = default;

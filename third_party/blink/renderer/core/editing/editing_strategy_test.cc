@@ -1,9 +1,10 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/editing/editing_strategy.h"
 
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/editing/testing/editing_test_base.h"
 
 namespace blink {
@@ -17,9 +18,9 @@ TEST_F(EditingStrategyTest, caretMaxOffset) {
   const char* shadow_content = "<slot name=#two></slot><slot name=#one></slot>";
   SetBodyContent(body_content);
   SetShadowContent(shadow_content, "host");
-  Node* host = GetDocument().getElementById("host");
-  Node* one = GetDocument().getElementById("one");
-  Node* two = GetDocument().getElementById("two");
+  Node* host = GetElementById("host");
+  Node* one = GetElementById("one");
+  Node* two = GetElementById("two");
 
   EXPECT_EQ(4, EditingStrategy::CaretMaxOffset(*host));
   EXPECT_EQ(1, EditingStrategy::CaretMaxOffset(*one));
@@ -30,6 +31,22 @@ TEST_F(EditingStrategyTest, caretMaxOffset) {
   EXPECT_EQ(1, EditingInFlatTreeStrategy::CaretMaxOffset(*one));
   EXPECT_EQ(1, EditingInFlatTreeStrategy::CaretMaxOffset(*one->firstChild()));
   EXPECT_EQ(2, EditingInFlatTreeStrategy::CaretMaxOffset(*two->firstChild()));
+}
+
+TEST_F(EditingStrategyTest, CaretMaxOffsetWithFirstLetter) {
+  SetBodyContent(
+      "<style>div::first-letter { text-transform: uppercase }</style>"
+      "<div id='a'>a</div>"
+      "<div id='b'>   b</div>"
+      "<div id='c'>cde</div>");
+
+  Node* a = GetElementById("a");
+  Node* b = GetElementById("b");
+  Node* c = GetElementById("c");
+
+  EXPECT_EQ(1, EditingStrategy::CaretMaxOffset(*a->firstChild()));
+  EXPECT_EQ(4, EditingStrategy::CaretMaxOffset(*b->firstChild()));
+  EXPECT_EQ(3, EditingStrategy::CaretMaxOffset(*c->firstChild()));
 }
 
 }  // namespace blink

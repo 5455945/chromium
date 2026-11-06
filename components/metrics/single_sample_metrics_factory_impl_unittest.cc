@@ -1,10 +1,11 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/metrics/single_sample_metrics_factory_impl.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/metrics/dummy_histogram.h"
 #include "base/run_loop.h"
 #include "base/test/gtest_util.h"
@@ -19,8 +20,8 @@ namespace metrics {
 
 namespace {
 
-const base::HistogramBase::Sample kMin = 1;
-const base::HistogramBase::Sample kMax = 10;
+const base::HistogramBase::Sample32 kMin = 1;
+const base::HistogramBase::Sample32 kMax = 10;
 const uint32_t kBucketCount = 10;
 const char kMetricName[] = "Single.Sample.Metric";
 
@@ -34,8 +35,14 @@ class SingleSampleMetricsFactoryImplTest : public testing::Test {
         base::SingleSampleMetricsFactory::Get());
   }
 
+  SingleSampleMetricsFactoryImplTest(
+      const SingleSampleMetricsFactoryImplTest&) = delete;
+  SingleSampleMetricsFactoryImplTest& operator=(
+      const SingleSampleMetricsFactoryImplTest&) = delete;
+
   ~SingleSampleMetricsFactoryImplTest() override {
     factory_->DestroyProviderForTesting();
+    factory_ = nullptr;
     if (thread_.IsRunning())
       ShutdownThread();
     base::SingleSampleMetricsFactory::DeleteFactoryForTesting();
@@ -78,12 +85,9 @@ class SingleSampleMetricsFactoryImplTest : public testing::Test {
   }
 
   base::test::SingleThreadTaskEnvironment task_environment_;
-  SingleSampleMetricsFactoryImpl* factory_;
+  raw_ptr<SingleSampleMetricsFactoryImpl> factory_;
   base::Thread thread_;
   size_t provider_count_ = 0;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(SingleSampleMetricsFactoryImplTest);
 };
 
 }  // namespace
@@ -117,7 +121,7 @@ TEST_F(SingleSampleMetricsFactoryImplTest, DefaultSingleSampleMetricWithValue) {
   std::unique_ptr<base::SingleSampleMetric> metric =
       factory_->CreateCustomCountsMetric(kMetricName, kMin, kMax, kBucketCount);
 
-  const base::HistogramBase::Sample kLastSample = 9;
+  const base::HistogramBase::Sample32 kLastSample = 9;
   metric->SetSample(1);
   metric->SetSample(3);
   metric->SetSample(5);
@@ -142,8 +146,8 @@ TEST_F(SingleSampleMetricsFactoryImplTest, DefaultSingleSampleMetricWithValue) {
 
 TEST_F(SingleSampleMetricsFactoryImplTest, MultithreadedMetrics) {
   // Allow EXPECT_DCHECK_DEATH for multiple threads.
-  // https://github.com/google/googletest/blob/master/googletest/docs/advanced.md#death-tests-and-threads
-  testing::FLAGS_gtest_death_test_style = "threadsafe";
+  // https://github.com/google/googletest/blob/main/docs/advanced.md#death-tests-and-threads
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
 
   base::HistogramTester tester;
   std::unique_ptr<base::SingleSampleMetric> metric =
@@ -164,7 +168,7 @@ TEST_F(SingleSampleMetricsFactoryImplTest, MultithreadedMetrics) {
   EXPECT_DCHECK_DEATH(threaded_metric.reset());
 
   // Test that samples are set on each thread correctly.
-  const base::HistogramBase::Sample kSample = 7;
+  const base::HistogramBase::Sample32 kSample = 7;
 
   {
     metric->SetSample(kSample);

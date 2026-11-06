@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -55,7 +55,7 @@ class CORE_EXPORT CustomElementDescriptor final {
   bool IsAutonomous() const { return name_ == local_name_; }
 
  private:
-  friend struct WTF::HashTraits<blink::CustomElementDescriptor>;
+  friend struct HashTraits<CustomElementDescriptor>;
   AtomicString name_;
   AtomicString local_name_;
 };

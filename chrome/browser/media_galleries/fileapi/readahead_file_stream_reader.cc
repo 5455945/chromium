@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,8 @@
 #include <algorithm>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/numerics/safe_conversions.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
@@ -18,32 +19,33 @@ using storage::FileStreamReader;
 
 namespace {
 
-const size_t kDesiredNumberOfBuffers = 2;  // So we are always one buffer ahead.
-const int kBufferSize = 1024*1024;  // 1MB to minimize transaction costs.
+// So that we are always one buffer ahead.
+constexpr size_t kDesiredNumberOfBuffers = 2;
+constexpr int kBufferSize = 1024 * 1024;  // 1MB to minimize transaction costs.
 
 }  // namespace
 
 ReadaheadFileStreamReader::ReadaheadFileStreamReader(FileStreamReader* source)
     : source_(source), source_error_(0), source_has_pending_read_(false) {}
 
-ReadaheadFileStreamReader::~ReadaheadFileStreamReader() {}
+ReadaheadFileStreamReader::~ReadaheadFileStreamReader() = default;
 
-int ReadaheadFileStreamReader::Read(net::IOBuffer* buf,
+int ReadaheadFileStreamReader::Read(scoped_refptr<net::IOBuffer> buf,
                                     int buf_len,
                                     net::CompletionOnceCallback callback) {
-  DCHECK(!pending_sink_buffer_.get());
-  DCHECK(pending_read_callback_.is_null());
+  CHECK(!pending_sink_buffer_.get(), base::NotFatalUntil::M161);
+  CHECK(pending_read_callback_.is_null(), base::NotFatalUntil::M161);
 
   ReadFromSourceIfNeeded();
 
   scoped_refptr<net::DrainableIOBuffer> sink =
-      base::MakeRefCounted<net::DrainableIOBuffer>(buf, buf_len);
+      base::MakeRefCounted<net::DrainableIOBuffer>(std::move(buf), buf_len);
   int result = FinishReadFromCacheOrStoredError(sink.get());
 
   // We are waiting for an source read to complete, so save the request.
   if (result == net::ERR_IO_PENDING) {
-    DCHECK(!pending_sink_buffer_.get());
-    DCHECK(pending_read_callback_.is_null());
+    CHECK(!pending_sink_buffer_.get(), base::NotFatalUntil::M161);
+    CHECK(pending_read_callback_.is_null(), base::NotFatalUntil::M161);
     pending_sink_buffer_ = sink;
     pending_read_callback_ = std::move(callback);
   }
@@ -51,8 +53,7 @@ int ReadaheadFileStreamReader::Read(net::IOBuffer* buf,
   return result;
 }
 
-int64_t ReadaheadFileStreamReader::GetLength(
-    net::Int64CompletionOnceCallback callback) {
+int64_t ReadaheadFileStreamReader::GetLength(GetLengthCallback callback) {
   return source_->GetLength(std::move(callback));
 }
 
@@ -62,7 +63,7 @@ int ReadaheadFileStreamReader::FinishReadFromCacheOrStoredError(
   // the stored error code.
   if (buffers_.empty()) {
     if (source_.get()) {
-      DCHECK(source_has_pending_read_);
+      CHECK(source_has_pending_read_, base::NotFatalUntil::M161);
       return net::ERR_IO_PENDING;
     } else {
       return source_error_;
@@ -72,13 +73,11 @@ int ReadaheadFileStreamReader::FinishReadFromCacheOrStoredError(
   while (sink->BytesRemaining() > 0 && !buffers_.empty()) {
     net::DrainableIOBuffer* source_buffer = buffers_.front().get();
 
-    DCHECK(source_buffer->BytesRemaining() > 0);
+    CHECK_GT(source_buffer->BytesRemaining(), 0, base::NotFatalUntil::M161);
 
-    int copy_len = std::min(source_buffer->BytesRemaining(),
-                            sink->BytesRemaining());
-    std::copy(source_buffer->data(), source_buffer->data() + copy_len,
-              sink->data());
-
+    const int copy_len =
+        std::min(source_buffer->BytesRemaining(), sink->BytesRemaining());
+    sink->first(copy_len).copy_from(source_buffer->first(copy_len));
     source_buffer->DidConsume(copy_len);
     sink->DidConsume(copy_len);
 
@@ -102,9 +101,9 @@ void ReadaheadFileStreamReader::ReadFromSourceIfNeeded() {
   source_has_pending_read_ = true;
 
   scoped_refptr<net::IOBuffer> buf =
-      base::MakeRefCounted<net::IOBuffer>(kBufferSize);
+      base::MakeRefCounted<net::IOBufferWithSize>(kBufferSize);
   int result = source_->Read(
-      buf.get(), kBufferSize,
+      buf, kBufferSize,
       base::BindOnce(&ReadaheadFileStreamReader::OnFinishReadFromSource,
                      weak_factory_.GetWeakPtr(), base::RetainedRef(buf)));
 
@@ -114,8 +113,8 @@ void ReadaheadFileStreamReader::ReadFromSourceIfNeeded() {
 
 void ReadaheadFileStreamReader::OnFinishReadFromSource(net::IOBuffer* buf,
                                                        int result) {
-  DCHECK(result != net::ERR_IO_PENDING);
-  DCHECK(source_has_pending_read_);
+  CHECK(result != net::ERR_IO_PENDING, base::NotFatalUntil::M161);
+  CHECK(source_has_pending_read_, base::NotFatalUntil::M161);
   source_has_pending_read_ = false;
 
   // Either store the data read from |source_|, or store the error code.
@@ -132,7 +131,7 @@ void ReadaheadFileStreamReader::OnFinishReadFromSource(net::IOBuffer* buf,
   // If there's a read request waiting for the source FileStreamReader to
   // finish reading, fulfill that request now from the cache or stored error.
   if (pending_sink_buffer_.get()) {
-    DCHECK(!pending_read_callback_.is_null());
+    CHECK(!pending_read_callback_.is_null(), base::NotFatalUntil::M161);
 
     // Free the pending callback before running it, as the callback often
     // dispatches another read.

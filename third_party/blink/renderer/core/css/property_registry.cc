@@ -1,29 +1,97 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/css/property_registry.h"
 
+#include "base/atomic_sequence_num.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
+
 namespace blink {
+
+AtomicString PropertyRegistry::AllocatePrivatePropertyName() {
+  static base::AtomicSequenceNumber sequence;
+  StringBuilder builder;
+  builder.Append(kPrivatePropertyNamePrefix);
+  builder.AppendNumber(sequence.GetNext());
+  return AtomicString(builder.ReleaseString());
+}
 
 void PropertyRegistry::RegisterProperty(const AtomicString& name,
                                         PropertyRegistration& registration) {
   DCHECK(!IsInRegisteredPropertySet(name));
   registered_properties_.Set(name, &registration);
+  registered_viewport_unit_flags_ |= registration.GetViewportUnitFlags();
   version_++;
 }
 
 void PropertyRegistry::DeclareProperty(const AtomicString& name,
                                        PropertyRegistration& registration) {
   declared_properties_.Set(name, &registration);
+  declared_viewport_unit_flags_ |= registration.GetViewportUnitFlags();
   version_++;
 }
 
+void PropertyRegistry::RegisterPrivateProperty(
+    const AtomicString& authored_name,
+    const AtomicString& private_name,
+    const CSSSyntaxDefinition& syntax) {
+  authored_private_names_.Set(private_name, authored_name);
+  private_registrations_.Set(
+      private_name,
+      MakeGarbageCollected<PropertyRegistration>(
+          private_name, syntax, /*inherits=*/true, /*initial=*/nullptr));
+}
+
+const AtomicString& PropertyRegistry::AuthoredPrivatePropertyName(
+    const AtomicString& private_name) const {
+  auto it = authored_private_names_.find(private_name);
+  return it == authored_private_names_.end() ? g_null_atom : it->value;
+}
+
+const PropertyRegistration* PropertyRegistry::PrivateRegistration(
+    const AtomicString& private_name) const {
+  auto it = private_registrations_.find(private_name);
+  return it == private_registrations_.end() ? nullptr : it->value.Get();
+}
+
+PropertyRegistry* PropertyRegistry::CopyPrivateRegistry() const {
+  auto* copy = MakeGarbageCollected<PropertyRegistry>();
+  for (const auto& entry : private_registrations_) {
+    const AtomicString& private_name = entry.key;
+    const PropertyRegistration* registration = entry.value.Get();
+    const AtomicString& authored_name =
+        AuthoredPrivatePropertyName(private_name);
+    CHECK(!authored_name.IsNull());
+    CHECK(registration);
+    copy->RegisterPrivateProperty(authored_name, private_name,
+                                  registration->Syntax());
+  }
+  return copy;
+}
+
 void PropertyRegistry::RemoveDeclaredProperties() {
-  if (declared_properties_.IsEmpty())
+  if (declared_properties_.empty()) {
     return;
+  }
   declared_properties_.clear();
+  declared_viewport_unit_flags_ = 0;
   version_++;
+}
+
+void PropertyRegistry::AddRegistrationForInspector(
+    const AtomicString& name,
+    PropertyRegistration& registration) {
+  DCHECK(!IsInRegisteredPropertySet(name));
+  registered_properties_.Set(name, &registration);
+}
+
+void PropertyRegistry::RemoveRegistrationForInspector(
+    const AtomicString& name) {
+  if (!IsInRegisteredPropertySet(name)) {
+    return;
+  }
+  declared_properties_.erase(name);
 }
 
 const PropertyRegistration* PropertyRegistry::Registration(
@@ -32,13 +100,16 @@ const PropertyRegistration* PropertyRegistry::Registration(
   // the registration from CSS.registerProperty must win.
   //
   // https://drafts.css-houdini.org/css-properties-values-api-1/#determining-registration
-  if (const auto* registration = registered_properties_.at(name))
-    return registration;
-  return declared_properties_.at(name);
+  auto it = registered_properties_.find(name);
+  if (it != registered_properties_.end()) {
+    return it->value.Get();
+  }
+  it = declared_properties_.find(name);
+  return it != declared_properties_.end() ? it->value : nullptr;
 }
 
 bool PropertyRegistry::IsEmpty() const {
-  return registered_properties_.IsEmpty() && declared_properties_.IsEmpty();
+  return registered_properties_.empty() && declared_properties_.empty();
 }
 
 bool PropertyRegistry::IsInRegisteredPropertySet(
@@ -61,21 +132,24 @@ PropertyRegistry::Iterator::Iterator(
 // @property-registrations that aren't masked by conflicting
 // CSS.registerProperty-registrations.
 void PropertyRegistry::Iterator::operator++() {
-  if (registered_iterator_ != registered_properties_.end())
+  if (registered_iterator_ != registered_properties_.end()) {
     ++registered_iterator_;
-  else
+  } else {
     ++declared_iterator_;
+  }
 
   if (registered_iterator_ == registered_properties_.end()) {
-    while (CurrentDeclaredIteratorIsMasked())
+    while (CurrentDeclaredIteratorIsMasked()) {
       ++declared_iterator_;
+    }
   }
 }
 
 PropertyRegistry::RegistrationMap::ValueType
 PropertyRegistry::Iterator::operator*() const {
-  if (registered_iterator_ != registered_properties_.end())
+  if (registered_iterator_ != registered_properties_.end()) {
     return *registered_iterator_;
+  }
   return *declared_iterator_;
 }
 

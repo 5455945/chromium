@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -8,12 +8,13 @@
 #ifndef NET_QUIC_QUIC_CHROMIUM_ALARM_FACTORY_H_
 #define NET_QUIC_QUIC_CHROMIUM_ALARM_FACTORY_H_
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "net/base/net_export.h"
-#include "net/third_party/quiche/src/quic/core/quic_alarm_factory.h"
-#include "net/third_party/quiche/src/quic/core/quic_clock.h"
-#include "net/third_party/quiche/src/quic/core/quic_packets.h"
-#include "net/third_party/quiche/src/quic/core/quic_time.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_alarm_factory.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_clock.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_packets.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_time.h"
 
 namespace base {
 class SequencedTaskRunner;
@@ -26,6 +27,10 @@ class NET_EXPORT_PRIVATE QuicChromiumAlarmFactory
  public:
   QuicChromiumAlarmFactory(base::SequencedTaskRunner* task_runner,
                            const quic::QuicClock* clock);
+
+  QuicChromiumAlarmFactory(const QuicChromiumAlarmFactory&) = delete;
+  QuicChromiumAlarmFactory& operator=(const QuicChromiumAlarmFactory&) = delete;
+
   ~QuicChromiumAlarmFactory() override;
 
   // quic::QuicAlarmFactory
@@ -35,10 +40,8 @@ class NET_EXPORT_PRIVATE QuicChromiumAlarmFactory
       quic::QuicConnectionArena* arena) override;
 
  private:
-  base::SequencedTaskRunner* task_runner_;
-  const quic::QuicClock* const clock_;
-
-  DISALLOW_COPY_AND_ASSIGN(QuicChromiumAlarmFactory);
+  scoped_refptr<base::SequencedTaskRunner> task_runner_;
+  const raw_ptr<const quic::QuicClock> clock_;
 };
 
 }  // namespace net

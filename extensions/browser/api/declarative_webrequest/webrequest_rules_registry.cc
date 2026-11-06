@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,15 @@
 #include <algorithm>
 #include <iterator>
 #include <limits>
+#include <set>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/strings/stringprintf.h"
 #include "content/public/browser/browser_thread.h"
+#include "extensions/browser/api/declarative/constants.h"
+#include "extensions/browser/api/declarative/declarative_utils.h"
 #include "extensions/browser/api/declarative_webrequest/webrequest_condition.h"
 #include "extensions/browser/api/declarative_webrequest/webrequest_constants.h"
 #include "extensions/browser/api/web_request/web_request_api_helpers.h"
@@ -20,8 +24,10 @@
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
+#include "extensions/browser/install_prefs_helper.h"
 #include "extensions/common/error_utils.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/extension_id.h"
 #include "extensions/common/permissions/permissions_data.h"
 
 using url_matcher::URLMatcherConditionSet;
@@ -46,10 +52,8 @@ WebRequestRulesRegistry::WebRequestRulesRegistry(
     int rules_registry_id)
     : RulesRegistry(browser_context,
                     declarative_webrequest_constants::kOnRequest,
-                    content::BrowserThread::UI,
                     cache_delegate,
-                    rules_registry_id),
-      browser_context_(browser_context) {}
+                    rules_registry_id) {}
 
 std::set<const WebRequestRule*> WebRequestRulesRegistry::GetMatches(
     const WebRequestData& request_data_without_ids) const {
@@ -61,8 +65,10 @@ std::set<const WebRequestRule*> WebRequestRulesRegistry::GetMatches(
 
   // 1st phase -- add all rules with some conditions without UrlFilter
   // attributes.
-  for (const auto* rule : rules_with_untriggered_conditions_) {
-    if (rule->conditions().IsFulfilled(-1, request_data))
+  for (const DeclarativeRule<WebRequestCondition, WebRequestAction>* rule :
+       rules_with_untriggered_conditions_) {
+    if (rule->conditions().IsFulfilled(base::MatcherStringPattern::kInvalidId,
+                                       request_data))
       result.insert(rule);
   }
 
@@ -122,16 +128,16 @@ WebRequestRulesRegistry::CreateDeltas(PermissionHelper* permission_helper,
     if (!rule->tags().empty() && !ignore_tags[extension_id].empty()) {
       bool ignore_rule = false;
       for (const std::string& tag : rule->tags())
-        ignore_rule |= base::Contains(ignore_tags[extension_id], tag);
+        ignore_rule |= ignore_tags[extension_id].contains(tag);
       if (ignore_rule)
         continue;
     }
 
     std::list<extension_web_request_api_helpers::EventResponseDelta>
         rule_result;
-    WebRequestAction::ApplyInfo apply_info = {permission_helper, request_data,
-                                              crosses_incognito, &rule_result,
-                                              &ignore_tags[extension_id]};
+    WebRequestAction::ApplyInfo apply_info = {
+        permission_helper, raw_ref(request_data), crosses_incognito,
+        &rule_result, &ignore_tags[extension_id]};
     rule->Apply(&apply_info);
     result.splice(result.begin(), std::move(rule_result));
 
@@ -142,7 +148,7 @@ WebRequestRulesRegistry::CreateDeltas(PermissionHelper* permission_helper,
 }
 
 std::string WebRequestRulesRegistry::AddRulesImpl(
-    const std::string& extension_id,
+    const ExtensionId& extension_id,
     const std::vector<const api::events::Rule*>& rules) {
   using RulesVector = std::vector<RulesMap::value_type>;
 
@@ -152,14 +158,34 @@ std::string WebRequestRulesRegistry::AddRulesImpl(
   std::string error;
   RulesVector new_webrequest_rules;
   new_webrequest_rules.reserve(rules.size());
-  const Extension* extension = ExtensionRegistry::Get(browser_context_)
+  const Extension* extension = ExtensionRegistry::Get(browser_context())
                                    ->enabled_extensions()
                                    .GetByID(extension_id);
-  RulesMap& registered_rules = webrequest_rules_[extension_id];
+  // Validate all rule IDs before `WebRequestRule::Create()` allocates rules or
+  // temporary `url_matcher_` condition sets.
+  const auto existing_rules_it = webrequest_rules_.find(extension_id);
+  std::set<WebRequestRule::RuleId> seen_rule_ids;
+  for (const api::events::Rule* rule : rules) {
+    // Return an error if the rule ID is missing or not valid UTF-8.
+    if (!declarative::IsValidRuleId(rule->id)) {
+      return declarative::kInvalidRuleIdError;
+    }
+
+    // Reject rule IDs that are already registered for this extension in
+    // `webrequest_rules_` or duplicated within this `rules` batch.
+    const WebRequestRule::RuleId& rule_id(*rule->id);
+    const bool already_registered =
+        existing_rules_it != webrequest_rules_.end() &&
+        existing_rules_it->second.contains(rule_id);
+    auto [_, inserted] = seen_rule_ids.insert(rule_id);
+    if (already_registered || !inserted) {
+      return base::StringPrintf(declarative::kDuplicateRuleIdError,
+                                rule_id.c_str());
+    }
+  }
 
   for (auto* rule : rules) {
     const WebRequestRule::RuleId& rule_id(*rule->id);
-    DCHECK(registered_rules.find(rule_id) == registered_rules.end());
 
     std::unique_ptr<WebRequestRule> webrequest_rule = WebRequestRule::Create(
         url_matcher_.condition_factory(), browser_context(), extension,
@@ -180,31 +206,36 @@ std::string WebRequestRulesRegistry::AddRulesImpl(
     return error;
   }
 
-  // Woohoo, everything worked fine.
+  // All rules were validated and constructed without errors. Move them into
+  // `registered_rules` (which owns each `WebRequestRule`) first so that
+  // `rule_triggers_` and `rules_with_untriggered_conditions_` only store
+  // unowned `WebRequestRule*` pointers to rules owned by `webrequest_rules_`.
+  RulesMap& registered_rules = webrequest_rules_[extension_id];
+  URLMatcherConditionSet::Vector all_new_condition_sets;
+  for (auto& [rule_id, rule] : new_webrequest_rules) {
+    auto [it, inserted] = registered_rules.emplace(rule_id, std::move(rule));
+    CHECK(inserted);
+    const WebRequestRule* registered_rule = it->second.get();
 
-  // Create the triggers.
-  for (const auto& id_rule_pair : new_webrequest_rules) {
+    // Map each rule's URL condition sets to `registered_rule` in
+    // `rule_triggers_`, and collect them to register in `url_matcher_`.
     URLMatcherConditionSet::Vector url_condition_sets;
-    const std::unique_ptr<const WebRequestRule>& rule = id_rule_pair.second;
-    rule->conditions().GetURLMatcherConditionSets(&url_condition_sets);
+    registered_rule->conditions().GetURLMatcherConditionSets(
+        &url_condition_sets);
     for (const auto& condition_set : url_condition_sets) {
-      rule_triggers_[condition_set->id()] = rule.get();
+      rule_triggers_[condition_set->id()] = registered_rule;
+    }
+    all_new_condition_sets.insert(all_new_condition_sets.end(),
+                                  url_condition_sets.begin(),
+                                  url_condition_sets.end());
+
+    // Rules with conditions that don't filter on URLs must be evaluated on
+    // every request regardless of `url_matcher_` matches.
+    if (registered_rule->conditions().HasConditionsWithoutUrls()) {
+      rules_with_untriggered_conditions_.insert(registered_rule);
     }
   }
-
-  // Register url patterns in |url_matcher_| and
-  // |rules_with_untriggered_conditions_|.
-  URLMatcherConditionSet::Vector all_new_condition_sets;
-  for (const auto& id_rule_pair : new_webrequest_rules) {
-    const std::unique_ptr<const WebRequestRule>& rule = id_rule_pair.second;
-    rule->conditions().GetURLMatcherConditionSets(&all_new_condition_sets);
-    if (rule->conditions().HasConditionsWithoutUrls())
-      rules_with_untriggered_conditions_.insert(rule.get());
-  }
   url_matcher_.AddConditionSets(all_new_condition_sets);
-
-  registered_rules.insert(std::make_move_iterator(new_webrequest_rules.begin()),
-                          std::make_move_iterator(new_webrequest_rules.end()));
 
   ClearCacheOnNavigation();
 
@@ -212,10 +243,10 @@ std::string WebRequestRulesRegistry::AddRulesImpl(
 }
 
 std::string WebRequestRulesRegistry::RemoveRulesImpl(
-    const std::string& extension_id,
+    const ExtensionId& extension_id,
     const std::vector<std::string>& rule_identifiers) {
   // URLMatcherConditionSet IDs that can be removed from URLMatcher.
-  std::vector<URLMatcherConditionSet::ID> remove_from_url_matcher;
+  std::vector<base::MatcherStringPattern::ID> remove_from_url_matcher;
   RulesMap& registered_rules = webrequest_rules_[extension_id];
 
   for (const std::string& identifier : rule_identifiers) {
@@ -243,10 +274,10 @@ std::string WebRequestRulesRegistry::RemoveRulesImpl(
 }
 
 std::string WebRequestRulesRegistry::RemoveAllRulesImpl(
-    const std::string& extension_id) {
+    const ExtensionId& extension_id) {
   // First we get out all URLMatcherConditionSets and remove the rule references
   // from |rules_with_untriggered_conditions_|.
-  std::vector<URLMatcherConditionSet::ID> remove_from_url_matcher;
+  std::vector<base::MatcherStringPattern::ID> remove_from_url_matcher;
   for (const auto& rule_id_rule_pair : webrequest_rules_[extension_id])
     CleanUpAfterRule(rule_id_rule_pair.second.get(), &remove_from_url_matcher);
   url_matcher_.RemoveConditionSets(remove_from_url_matcher);
@@ -258,7 +289,7 @@ std::string WebRequestRulesRegistry::RemoveAllRulesImpl(
 
 void WebRequestRulesRegistry::CleanUpAfterRule(
     const WebRequestRule* rule,
-    std::vector<URLMatcherConditionSet::ID>* remove_from_url_matcher) {
+    std::vector<base::MatcherStringPattern::ID>* remove_from_url_matcher) {
   URLMatcherConditionSet::Vector condition_sets;
   rule->conditions().GetURLMatcherConditionSets(&condition_sets);
   for (const scoped_refptr<URLMatcherConditionSet>& condition_set :
@@ -282,11 +313,12 @@ bool WebRequestRulesRegistry::IsEmpty() const {
   return true;
 }
 
-WebRequestRulesRegistry::~WebRequestRulesRegistry() {}
+WebRequestRulesRegistry::~WebRequestRulesRegistry() = default;
 
 base::Time WebRequestRulesRegistry::GetExtensionInstallationTime(
-    const std::string& extension_id) const {
-  return ExtensionPrefs::Get(browser_context_)->GetInstallTime(extension_id);
+    const ExtensionId& extension_id) const {
+  return GetLastUpdateTime(ExtensionPrefs::Get(browser_context()),
+                           extension_id);
 }
 
 void WebRequestRulesRegistry::ClearCacheOnNavigation() {
@@ -307,8 +339,11 @@ bool WebRequestRulesRegistry::HostPermissionsChecker(
     const Extension* extension,
     const WebRequestActionSet* actions,
     std::string* error) {
-  if (extension->permissions_data()->HasEffectiveAccessToAllHosts())
+  if (extension->permissions_data()
+          ->active_permissions()
+          .HasEffectiveAccessToAllHosts()) {
     return true;
+  }
 
   // Without the permission for all URLs, actions with the STRATEGY_DEFAULT
   // should not be registered, they would never be able to execute.
@@ -360,9 +395,11 @@ void WebRequestRulesRegistry::AddTriggeredRules(
   for (const auto& url_match : url_matches) {
     auto rule_trigger = rule_triggers_.find(url_match);
     CHECK(rule_trigger != rule_triggers_.end());
-    if (!base::Contains(*result, rule_trigger->second) &&
-        rule_trigger->second->conditions().IsFulfilled(url_match, request_data))
-      result->insert(rule_trigger->second);
+    const WebRequestRule* rule = rule_trigger->second.get();
+    if (!result->contains(rule) &&
+        rule->conditions().IsFulfilled(url_match, request_data)) {
+      result->insert(rule);
+    }
   }
 }
 

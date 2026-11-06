@@ -1,14 +1,14 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/device/usb/usb_context.h"
 
+#include <atomic>
 #include <memory>
 
-#include "base/atomicops.h"
 #include "base/logging.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/threading/simple_thread.h"
 #include "base/threading/thread_restrictions.h"
 #include "services/device/usb/usb_error.h"
@@ -23,6 +23,10 @@ namespace device {
 class UsbContext::UsbEventHandler : public base::SimpleThread {
  public:
   explicit UsbEventHandler(libusb_context* context);
+
+  UsbEventHandler(const UsbEventHandler&) = delete;
+  UsbEventHandler& operator=(const UsbEventHandler&) = delete;
+
   ~UsbEventHandler() override;
 
   // base::SimpleThread
@@ -31,14 +35,12 @@ class UsbContext::UsbEventHandler : public base::SimpleThread {
   void Stop();
 
  private:
-  base::subtle::Atomic32 running_;
-  libusb_context* context_;
-  DISALLOW_COPY_AND_ASSIGN(UsbEventHandler);
+  std::atomic<bool> running_{true};
+  raw_ptr<libusb_context, DanglingUntriaged> context_;
 };
 
 UsbContext::UsbEventHandler::UsbEventHandler(libusb_context* context)
     : base::SimpleThread("UsbEventHandler"), context_(context) {
-  base::subtle::Release_Store(&running_, 1);
 }
 
 UsbContext::UsbEventHandler::~UsbEventHandler() {
@@ -48,7 +50,7 @@ UsbContext::UsbEventHandler::~UsbEventHandler() {
 void UsbContext::UsbEventHandler::Run() {
   VLOG(1) << "UsbEventHandler started.";
 
-  while (base::subtle::Acquire_Load(&running_)) {
+  while (running_.load(std::memory_order_acquire)) {
     const int rv = libusb_handle_events(context_);
     if (rv != LIBUSB_SUCCESS) {
       VLOG(1) << "Failed to handle events: "
@@ -60,7 +62,7 @@ void UsbContext::UsbEventHandler::Run() {
 }
 
 void UsbContext::UsbEventHandler::Stop() {
-  base::subtle::Release_Store(&running_, 0);
+  running_.store(false, std::memory_order_release);
   libusb_interrupt_handle_event(context_);
 }
 

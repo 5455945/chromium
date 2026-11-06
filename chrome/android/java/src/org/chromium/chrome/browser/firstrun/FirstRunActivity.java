@@ -1,70 +1,195 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.firstrun;
 
+import static androidx.annotation.VisibleForTesting.PRIVATE;
+
+import static org.chromium.build.NullUtil.assertNonNull;
+import static org.chromium.build.NullUtil.assumeNonNull;
+
+import android.animation.Animator;
+import android.animation.ValueAnimator;
 import android.app.Activity;
+import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemClock;
-import android.text.TextUtils;
+import android.view.LayoutInflater;
+import android.view.MotionEvent;
 import android.view.View;
-import android.view.ViewTreeObserver.OnPreDrawListener;
+import android.view.ViewGroup;
 
 import androidx.annotation.CallSuper;
-import androidx.annotation.Nullable;
+import androidx.annotation.ColorInt;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.StringRes;
 import androidx.annotation.VisibleForTesting;
-import androidx.fragment.app.Fragment;
 import androidx.viewpager2.widget.ViewPager2;
 
 import org.chromium.base.ActivityState;
-import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.ApplicationStatus;
 import org.chromium.base.ApplicationStatus.ActivityStateListener;
+import org.chromium.base.DeviceInfo;
+import org.chromium.base.FeatureList;
+import org.chromium.base.Promise;
+import org.chromium.base.ResettersForTesting;
 import org.chromium.base.metrics.RecordHistogram;
-import org.chromium.base.supplier.Supplier;
+import org.chromium.base.shared_preferences.SharedPreferencesManager;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.build.annotations.Initializer;
+import org.chromium.build.annotations.MonotonicNonNull;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.back_press.BackPressHelper;
+import org.chromium.chrome.browser.browser_controls.BrowserStateBrowserControlsVisibilityDelegate;
 import org.chromium.chrome.browser.customtabs.CustomTabActivity;
-import org.chromium.chrome.browser.datareduction.DataReductionPromoUtils;
-import org.chromium.chrome.browser.datareduction.DataReductionProxyUma;
-import org.chromium.chrome.browser.fonts.FontPreloader;
-import org.chromium.chrome.browser.lifecycle.NativeInitObserver;
+import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.metrics.UmaUtils;
-import org.chromium.chrome.browser.net.spdyproxy.DataReductionProxySettings;
+import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
-import org.chromium.chrome.browser.searchwidget.SearchWidgetProvider;
+import org.chromium.chrome.browser.signin.SigninFirstRunFragment;
+import org.chromium.chrome.browser.sync.SyncErrorNotifier;
+import org.chromium.chrome.browser.ui.default_browser_promo.DefaultBrowserPromoUtils;
+import org.chromium.chrome.browser.ui.desktop_windowing.AppHeaderCoordinator;
+import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeUtils;
+import org.chromium.chrome.browser.ui.signin.DialogWhenLargeContentLayout;
+import org.chromium.chrome.browser.ui.signin.fullscreen_signin.FullscreenSigninLoadPoint;
+import org.chromium.chrome.browser.ui.signin.history_sync.HistorySyncHelper;
+import org.chromium.chrome.browser.ui.system.StatusBarColorController;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetControllerFactory;
+import org.chromium.components.browser_ui.bottomsheet.ManagedBottomSheetController;
+import org.chromium.components.browser_ui.desktop_windowing.AppHeaderState;
+import org.chromium.components.browser_ui.desktop_windowing.AppHeaderStateProvider;
+import org.chromium.components.browser_ui.desktop_windowing.DesktopWindowStateManager.AppHeaderObserver;
 import org.chromium.components.browser_ui.modaldialog.AppModalPresenter;
+import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+import org.chromium.components.browser_ui.widget.scrim.ScrimManager;
+import org.chromium.components.browser_ui.widget.scrim.ScrimManager.ScrimClient;
+import org.chromium.components.feature_engagement.EventConstants;
+import org.chromium.components.metrics.LowEntropySource;
+import org.chromium.components.signin.metrics.SigninAccessPoint;
+import org.chromium.ui.base.ActivityWindowAndroid;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.base.LocalizationUtils;
+import org.chromium.ui.edge_to_edge.EdgeToEdgeSystemBarColorHelper;
+import org.chromium.ui.interpolators.Interpolators;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modaldialog.ModalDialogManager.ModalDialogType;
+import org.chromium.ui.util.ColorUtils;
 
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.List;
+import java.util.function.BooleanSupplier;
 
 /**
  * Handles the First Run Experience sequences shown to the user launching Chrome for the first time.
  * It supports only a simple format of FRE:
+ *
+ * <pre>
  *   [Welcome]
  *   [Intro pages...]
  *   [Sign-in page]
+ * </pre>
+ *
  * The activity might be run more than once, e.g. 1) for ToS and sign-in, and 2) for intro.
  */
-public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPageDelegate {
+@NullMarked
+public class FirstRunActivity extends FirstRunActivityBase
+        implements FirstRunPageDelegate, AppHeaderObserver {
+
     /**
-     * Alerted about various events when FirstRunActivity performs them.
-     * TODO(crbug.com/1114319): Rework and use a better testing setup.
+     * A simple page transformer for transitions between successive Fragment, aiming to be as close
+     * as possible to inter-Activity transitions.
+     */
+    static class FirstRunPageTransformer implements ViewPager2.PageTransformer {
+        // The exiting page fades out, then tne entering page fades in. This is the alpha boundary
+        // expressed as fraction of total animation duration.
+        private static final float ALPHA_BOUNDARY_FRAC = 100f / 450f;
+
+        // Absolute horizontal shift of a page at position 1 or -1 as fraction of screen width.
+        private static final float MAX_X_SHIFT_FRACTION = 0.2f;
+
+        // The direction in which content moves, and is opposite to page view change; thus if
+        // transformPage() expects calls with increasing {@param position} for each {@param view},
+        // then this would be negative.
+        private int mDir = 1;
+
+        public void setDirection(int dir) {
+            mDir = dir;
+        }
+
+        @Override
+        public void transformPage(View view, float position) {
+            int pageWidth = view.getWidth();
+
+            if (position <= -1 || position >= 1) { // [-Infinity,-1] or [1,+infinity]
+                // Page is way off-screen to the left or right.
+                view.setAlpha(0f);
+            } else {
+                // Position opposes direction of travel means page is entering; else exiting.
+                boolean isEnter = mDir * position <= 0;
+                // Value that linearly increases from 0 to 1 throughout transition.
+                float progress = isEnter ? 1f - Math.abs(position) : Math.abs(position);
+                // Full extent of motion: Start value if enter; final value if exit.
+                float xShift = MAX_X_SHIFT_FRACTION * pageWidth * ((position < 0) ? -1f : 1f);
+                // API idiosyncrasy: Assigning setTranslationX(0f) always leads to page shift:
+                // * LTR: From right edge when `position` = 1 and fully seen when 0.
+                // * RTL: From left edge when `position` = 1 and fully seen when 0.
+                // Custom delta X translation is done by first counteracting this default shift:
+                // * LTR: setTranslationX(-position * pageWidth + (custom delta X)).
+                // * RTL: setTranslationX(position * pageWidth - (custom delta X)).
+                // Since signs are simply opposite, we can thus initialize `x` to
+                // `-position * pageWidth`, compute desired delta X assuming LTR, and then pass the
+                // result (negated if RTL) to setTranslationX().
+                float x = -position * pageWidth;
+
+                if (isEnter) {
+                    // Alpha: Wait for alpha boundary, then fade in.
+                    float alphaProgress =
+                            Math.max(
+                                    0f,
+                                    (progress - ALPHA_BOUNDARY_FRAC) / (1f - ALPHA_BOUNDARY_FRAC));
+                    view.setAlpha(Interpolators.LEGACY_DECELERATE.getInterpolation(alphaProgress));
+                    // `x` delta: Changes from `xShift` to 0.
+                    x += (1f - Interpolators.EMPHASIZED.getInterpolation(progress)) * xShift;
+                    // Place in front of page that's exiting.
+                    view.setTranslationZ(1f);
+                } else {
+                    // Alpha: Fade out up to alpha boundary.
+                    float alphaProgress = Math.min(progress / ALPHA_BOUNDARY_FRAC, 1f);
+                    view.setAlpha(
+                            1f - Interpolators.LEGACY_ACCELERATE.getInterpolation(alphaProgress));
+                    // `x` delta: Changes from 0 to `xShift`.
+                    x += Interpolators.EMPHASIZED.getInterpolation(progress) * xShift;
+                    // Place behind page that's entering.
+                    view.setTranslationZ(-1f);
+                }
+
+                view.setTranslationX((isRtl() ? -1f : 1f) * x);
+            }
+        }
+    }
+
+    /**
+     * Alerted about various events when FirstRunActivity performs them. TODO(crbug.com/40710744):
+     * Rework and use a better testing setup.
      */
     public interface FirstRunActivityObserver {
-        /** See {@link #onCreatePostNativeAndPoliciesPageSequence}. */
-        void onCreatePostNativeAndPoliciesPageSequence(
-                FirstRunActivity caller, Bundle freProperties);
+        /** See {@link #createPostNativeAndPoliciesPageSequence}. */
+        void onCreatePostNativeAndPoliciesPageSequence(FirstRunActivity caller);
 
         /** See {@link #acceptTermsOfService}. */
         void onAcceptTermsOfService(FirstRunActivity caller);
 
-        /** See {@link #jumpToPage}. */
+        /** See {@link #setCurrentItemForPager}. */
         void onJumpToPage(FirstRunActivity caller, int position);
 
         /** Called when First Run is completed. */
@@ -77,60 +202,40 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
         void onExitFirstRun(FirstRunActivity caller);
     }
 
-    // TODO(https://crbug.com/1196404): Replace with call into shared code once
-    // https://crrev.com/c/2815659 lands.
-    private static class ViewDrawBlocker {
-        public static void blockViewDrawUntilReady(View view, Supplier<Boolean> viewReadySupplier) {
-            view.getViewTreeObserver().addOnPreDrawListener(new OnPreDrawListener() {
-                @Override
-                public boolean onPreDraw() {
-                    if (!viewReadySupplier.get()) return false;
+    private static final String KEY_LAST_PAGER_INDEX = "LAST_PAGER_INDEX";
+    private static final String KEY_PROMO_DIALOG_TRIGGERED =
+            "DEFAULT_BROWSER_ROLE_MANAGER_DIALOG_TRIGGERED";
+    private static final String KEY_HISTORY_SYNC_STEP_COMPLETED = "HISTORY_SYNC_STEP_COMPLETED";
 
-                    view.getViewTreeObserver().removeOnPreDrawListener(this);
-                    return true;
-                }
-            });
-        }
-    }
+    private static final int TRANSITION_DELAY_MS = 450;
 
-    // UMA constants.
-    private static final int SIGNIN_SETTINGS_DEFAULT_ACCOUNT = 0;
-    private static final int SIGNIN_SETTINGS_ANOTHER_ACCOUNT = 1;
-    private static final int SIGNIN_ACCEPT_DEFAULT_ACCOUNT = 2;
-    private static final int SIGNIN_ACCEPT_ANOTHER_ACCOUNT = 3;
-    private static final int SIGNIN_NO_THANKS = 4;
-    private static final int SIGNIN_MAX = 5;
+    private final BitSet mFreProgressStepsRecorded = new BitSet(MobileFreProgress.MAX);
 
-    private static final int FRE_PROGRESS_STARTED = 0;
-    private static final int FRE_PROGRESS_WELCOME_SHOWN = 1;
-    private static final int FRE_PROGRESS_DATA_SAVER_SHOWN = 2;
-    private static final int FRE_PROGRESS_SIGNIN_SHOWN = 3;
-    private static final int FRE_PROGRESS_COMPLETED_SIGNED_IN = 4;
-    private static final int FRE_PROGRESS_COMPLETED_NOT_SIGNED_IN = 5;
-    private static final int FRE_PROGRESS_DEFAULT_SEARCH_ENGINE_SHOWN = 6;
-    private static final int FRE_PROGRESS_MAX = 7;
+    private static @Nullable FirstRunActivityObserver sObserver;
 
-    @Nullable
-    private static FirstRunActivityObserver sObserver;
+    private static boolean sIsAnimationDisabled;
 
-    private String mResultSignInAccountName;
-    private boolean mResultIsDefaultAccount;
-    private boolean mResultShowSignInSettings;
+    /** Prevents Tapjacking on T-. See crbug.com/40063907 */
+    private static final boolean sPreventTouches =
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU;
 
-    private boolean mFlowIsKnown;
     private boolean mPostNativeAndPolicyPagesCreated;
-    private boolean mNativeSideIsInitialized;
+
+    /** Use {@link Promise#isFulfilled()} to verify whether the native has been initialized. */
+    private final Promise<@Nullable Void> mNativeInitializationPromise = new Promise<>();
 
     private FirstRunFlowSequencer mFirstRunFlowSequencer;
 
-    private Bundle mFreProperties;
+    private @MonotonicNonNull Bundle mFreProperties;
 
     /**
      * Whether the first run activity was launched as a result of the user launching Chrome from the
      * Android app list.
      */
     private boolean mLaunchedFromChromeIcon;
-    private boolean mLaunchedFromCCT;
+
+    private boolean mLaunchedFromCct;
+    private boolean mTemplateUrlServiceLoaded;
 
     /**
      * {@link SystemClock} timestamp from when the FRE intent was initially created. This marks when
@@ -140,35 +245,90 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
 
     private final List<FirstRunPage> mPages = new ArrayList<>();
     private final List<Integer> mFreProgressStates = new ArrayList<>();
+    private final SafetyPromoFirstRunState mSafetyPromoFirstRunState =
+            new SafetyPromoFirstRunState();
 
+    private FirstRunPageTransformer mPageTransformer;
     private ViewPager2 mPager;
 
-    /**
-     * The pager adapter, which provides the pages to the view pager widget.
-     */
+    private @Nullable ValueAnimator mAnimator;
+
+    /** The pager adapter, which provides the pages to the view pager widget. */
     private FirstRunPagerAdapter mPagerAdapter;
 
-    /**
-     * Defines a sequence of pages to be shown (depending on parameters etc).
-     */
-    private void createPageSequence() {
-        mPages.add(shouldCreateEnterpriseCctTosPage()
-                        ? new TosAndUmaFirstRunFragmentWithEnterpriseSupport.Page()
-                        : new ToSAndUMAFirstRunFragment.Page());
-        mFreProgressStates.add(FRE_PROGRESS_WELCOME_SHOWN);
-        mPagerAdapter = new FirstRunPagerAdapter(FirstRunActivity.this, mPages);
-        mPager.setAdapter(mPagerAdapter);
-        // Other pages will be created by createPostNativeAndPoliciesPageSequence() after
-        // native and policy service have been initialized.
+    /** Tracks if the role manager dialog has been shown in default browser promo. */
+    private boolean mPromoRoleManagerDialogTriggered;
+
+    /** Tracks whether the History Sync page has been completed (either opted in or not). */
+    private boolean mHistorySyncStepCompleted;
+
+    private @Nullable AppHeaderCoordinator mAppHeaderCoordinator;
+    private @Nullable View mContentView;
+    private @Nullable ScrimManager mScrimManager;
+    private @Nullable ManagedBottomSheetController mBottomSheetController;
+
+    private boolean isFlowKnown() {
+        return mFreProperties != null;
     }
 
-    private boolean shouldCreateEnterpriseCctTosPage() {
-        // TODO(crbug.com/1111490): Revisit case when #shouldSkipWelcomePage = true.
-        //  If the client has already accepted ToS (FirstRunStatus#shouldSkipWelcomePage), do not
-        //  use the subclass ToSAndUmaCCTFirstRunFragment. Instead, use the base class
-        //  (ToSAndUMAFirstRunFragment) which simply shows a loading spinner while waiting for
-        //  native to be loaded.
-        return mLaunchedFromCCT && !FirstRunStatus.shouldSkipWelcomePage();
+    @Override
+    public void onSaveInstanceState(Bundle outState) {
+        // TODO(crbug.com/534388538): Resume the FRE where the user left off, including the
+        // carousel card. Returning from the launcher creates a new activity, so this bundle is
+        // dropped and progress has to be persisted outside the activity.
+        if (ChromeFeatureList.sDefaultBrowserPromoFre.isEnabled()) {
+            // Called by Android right before the First Run Activity is destroyed (toggle dark mode,
+            // etc.). Before activity recreation, store which page the user was looking at.
+            outState.putInt(KEY_LAST_PAGER_INDEX, mPager.getCurrentItem());
+            outState.putBoolean(KEY_PROMO_DIALOG_TRIGGERED, mPromoRoleManagerDialogTriggered);
+            outState.putBoolean(KEY_HISTORY_SYNC_STEP_COMPLETED, mHistorySyncStepCompleted);
+        }
+
+        super.onSaveInstanceState(outState);
+    }
+
+    @Override
+    public boolean getPromoRoleManagerDialogTriggered() {
+        return mPromoRoleManagerDialogTriggered;
+    }
+
+    @Override
+    public void setPromoRoleManagerDialogTriggered(boolean val) {
+        mPromoRoleManagerDialogTriggered = val;
+    }
+
+    @Override
+    public boolean getHistorySyncStepCompleted() {
+        return mHistorySyncStepCompleted;
+    }
+
+    @Override
+    public void setHistorySyncStepCompleted(boolean val) {
+        mHistorySyncStepCompleted = val;
+    }
+
+    @Override
+    public SafetyPromoFirstRunState getSafetyPromoFirstRunState() {
+        return mSafetyPromoFirstRunState;
+    }
+
+    @Override
+    public BottomSheetController getBottomSheetController() {
+        return assumeNonNull(mBottomSheetController);
+    }
+
+    /** Creates first page and sets up adapter. Should result UI being shown on the screen. */
+    private void createFirstPage() {
+        BooleanSupplier showWelcomePage = () -> !FirstRunStatus.shouldSkipWelcomePage();
+        mPages.add(new FirstRunPage<>(SigninFirstRunFragment.class, showWelcomePage));
+        mFreProgressStates.add(MobileFreProgress.WELCOME_SHOWN);
+        mPagerAdapter = new FirstRunPagerAdapter(FirstRunActivity.this, mPages);
+        mPager.setAdapter(mPagerAdapter);
+        mPageTransformer = new FirstRunPageTransformer();
+        mPager.setPageTransformer(mPageTransformer);
+
+        // Other pages will be created by createPostNativeAndPoliciesPageSequence() after
+        // native and policy service have been initialized.
     }
 
     /**
@@ -180,43 +340,152 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
     private void createPostNativeAndPoliciesPageSequence() {
         assert !mPostNativeAndPolicyPagesCreated;
         assert areNativeAndPoliciesInitialized();
-        mFirstRunFlowSequencer.onNativeAndPoliciesInitialized(mFreProperties);
 
-        boolean notifyAdapter = false;
-        // An optional Data Saver page.
-        if (mFreProperties.getBoolean(SHOW_DATA_REDUCTION_PAGE)) {
-            mPages.add(new DataReductionProxyFirstRunFragment.Page());
-            mFreProgressStates.add(FRE_PROGRESS_DATA_SAVER_SHOWN);
-            notifyAdapter = true;
-        }
+        // SyncErrorNotifier must be explicitly initialized.
+        // TODO(crbug.com/40736034): Move the initializations elsewhere.
+        Profile originalProfile =
+                assumeNonNull(getProfileProviderSupplier().get()).getOriginalProfile();
+        SyncErrorNotifier.getForProfile(originalProfile);
+
+        assumeNonNull(mFreProperties);
+        mFirstRunFlowSequencer.updateFirstRunProperties(mFreProperties);
+
+        BooleanSupplier showSearchEnginePromo =
+                () -> mFreProperties.getBoolean(SHOW_SEARCH_ENGINE_PAGE);
 
         // An optional page to select a default search engine.
-        if (mFreProperties.getBoolean(SHOW_SEARCH_ENGINE_PAGE)) {
-            mPages.add(new DefaultSearchEngineFirstRunFragment.Page());
-            mFreProgressStates.add(FRE_PROGRESS_DEFAULT_SEARCH_ENGINE_SHOWN);
-            notifyAdapter = true;
+        if (showSearchEnginePromo.getAsBoolean()) {
+            mPages.add(
+                    new FirstRunPage<>(
+                            DefaultSearchEngineFirstRunFragment.class, showSearchEnginePromo));
+            mFreProgressStates.add(MobileFreProgress.DEFAULT_SEARCH_ENGINE_SHOWN);
         }
 
-        // An optional sign-in page.
-        if (mFreProperties.getBoolean(SHOW_SIGNIN_PAGE)) {
-            mPages.add(new SyncConsentFirstRunFragment.Page(getModalDialogManagerSupplier().get()));
-            mFreProgressStates.add(FRE_PROGRESS_SIGNIN_SHOWN);
-            notifyAdapter = true;
+        // An optional history sync opt-in page, the visibility of this page will be decided on the
+        // fly according to the situation.
+        BooleanSupplier showHistorySync =
+                () -> {
+                    if (ChromeFeatureList.isEnabled(ChromeFeatureList.DEFAULT_BROWSER_PROMO_FRE)) {
+                        return mFreProperties.getBoolean(SHOW_HISTORY_SYNC_PAGE)
+                                && !mHistorySyncStepCompleted;
+                    } else {
+                        return mFreProperties.getBoolean(SHOW_HISTORY_SYNC_PAGE);
+                    }
+                };
+        if (!showHistorySync.getAsBoolean()) {
+            HistorySyncHelper historySyncHelper = HistorySyncHelper.getForProfile(originalProfile);
+            historySyncHelper.recordHistorySyncNotShown(SigninAccessPoint.START_PAGE);
+        }
+        mPages.add(new FirstRunPage<>(HistorySyncFirstRunFragment.class, showHistorySync));
+        mFreProgressStates.add(MobileFreProgress.HISTORY_SYNC_OPT_IN_SHOWN);
+
+        if (ChromeFeatureList.isEnabled(ChromeFeatureList.DEFAULT_BROWSER_PROMO_FRE)) {
+            int promoIndex = mPages.size();
+            BooleanSupplier showDefaultBrowserPromo =
+                    () -> {
+                        // When FRA gets destroyed and recreated (due to a theme change, etc.),
+                        // ViewPager2 gets temporarily reset (index is at 0 again) and the page
+                        // sequence is rebuilt. If the default browser promo fragment was showing
+                        // previously, it should be allowed to show again even though
+                        // #shouldShowRoleManagerPromoForFre will return false if the Role Manager
+                        // Dialog (RMD) was just shown. If RMD was showing, Android will
+                        // automatically re-display it after the recreation.
+                        Bundle savedState = getSavedInstanceState();
+                        if (savedState != null
+                                && savedState.getInt(KEY_LAST_PAGER_INDEX, -1) == promoIndex) {
+                            return true;
+                        }
+
+                        // Skip CCT.
+                        if (isLaunchedFromCct()) return false;
+
+                        // Restrict promos to FRE triggered via main intents only (exclude FRE
+                        // before CCTs/PWAs/TWAs).
+                        if (!mLaunchedFromChromeIcon) return false;
+
+                        return DefaultBrowserPromoUtils.getInstance()
+                                .shouldShowRoleManagerPromoForFre(this);
+                    };
+
+            mPages.add(
+                    new FirstRunPage<>(
+                            DefaultBrowserPromoFirstRunFragment.class, showDefaultBrowserPromo));
+            mFreProgressStates.add(MobileFreProgress.DEFAULT_BROWSER_PROMO_SHOWN);
         }
 
-        if (notifyAdapter && mPagerAdapter != null) {
+        if (FirstRunUtils.shouldShowSafetyFrePromo()) {
+            mPages.add(new FirstRunPage<>(SafetyPromoFirstRunFragment.class, () -> true));
+            mFreProgressStates.add(MobileFreProgress.SAFETY_PROMO_SHOWN);
+
+            // Only show the carousel detail page if the user clicked a specific promo card on the
+            // preceding overview page. If the user clicked "Start browsing", the carousel is
+            // skipped.
+            mPages.add(
+                    new FirstRunPage<>(
+                            SafetyPromoCarouselFirstRunFragment.class,
+                            () ->
+                                    FirstRunUtils.shouldShowSafetyFrePromoCarousel()
+                                            && mSafetyPromoFirstRunState.hasSelectedItem()));
+            // TODO(crbug.com/543028748): Introduce and log a dedicated MobileFreProgress state for
+            // the carousel page instead of reusing SAFETY_PROMO_SHOWN.
+            mFreProgressStates.add(MobileFreProgress.SAFETY_PROMO_SHOWN);
+        }
+
+        if (mPagerAdapter != null) {
             mPagerAdapter.notifyDataSetChanged();
         }
         mPostNativeAndPolicyPagesCreated = true;
 
         if (sObserver != null) {
-            sObserver.onCreatePostNativeAndPoliciesPageSequence(
-                    FirstRunActivity.this, mFreProperties);
+            sObserver.onCreatePostNativeAndPoliciesPageSequence(FirstRunActivity.this);
         }
     }
 
     @Override
-    protected Bundle transformSavedInstanceStateForOnCreate(Bundle savedInstanceState) {
+    protected void onPreCreate() {
+        // On tablets, where FRE activity is a dialog, transitions from fullscreen activities
+        // (the ones that use Theme.Chromium.TabbedMode, e.g. ChromeTabbedActivity) look ugly,
+        // because when FRE is started from CTA.onCreate(), currently running animation for CTA
+        // window is aborted. This is perceived as a flash of white and doesn't look good.
+        //
+        // To solve this, we apply Theme.Chromium.TabbedMode on Tablet and Automotive here, to use
+        // the same window background as other tabbed mode activities using the same theme.
+        boolean isTabletOrAuto =
+                DeviceInfo.isAutomotive()
+                        || DeviceFormFactor.isNonMultiDisplayContextOnTablet(this);
+        if (isTabletOrAuto) {
+            setTheme(R.style.Theme_Chromium_TabbedMode);
+        } else if (!EdgeToEdgeUtils.isEdgeToEdgeEverywhereEnabled()
+                && DialogWhenLargeContentLayout.shouldShowAsDialog(this)) {
+            // For consistency with tablets, the status bar should be black on phones with large
+            // screen, where the FRE is shown as dialog.
+            StatusBarColorController.setStatusBarColor(
+                    (getEdgeToEdgeManager() != null)
+                            ? getEdgeToEdgeManager().getEdgeToEdgeSystemBarColorHelper()
+                            : null,
+                    this,
+                    Color.BLACK);
+        }
+        super.onPreCreate();
+    }
+
+    @Override
+    protected void initializeSystemBarColors(
+            EdgeToEdgeSystemBarColorHelper edgeToEdgeSystemBarColorHelper) {
+        if (DialogWhenLargeContentLayout.shouldShowAsDialog(this)) {
+            @ColorInt int backgroundColor = SemanticColorUtils.getColorSurfaceContainerLow(this);
+
+            StatusBarColorController.setStatusBarColor(
+                    edgeToEdgeSystemBarColorHelper, this, backgroundColor);
+            edgeToEdgeSystemBarColorHelper.setNavigationBarColor(backgroundColor);
+        } else {
+            super.initializeSystemBarColors(edgeToEdgeSystemBarColorHelper);
+        }
+    }
+
+    @Override
+    protected @Nullable Bundle transformSavedInstanceStateForOnCreate(
+            @Nullable Bundle savedInstanceState) {
         // We pass null to Activity.onCreate() so that it doesn't automatically restore
         // the FragmentManager state - as that may cause fragments to be loaded that have
         // dependencies on native before native has been loaded (and then crash). Instead,
@@ -231,9 +500,8 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
     }
 
     /**
-     * Creates the content view for this activity.
-     * The only thing subclasses can do is wrapping the view returned by super implementation
-     * in some extra layout.
+     * Creates the content view for this activity. The only thing subclasses can do is wrapping the
+     * view returned by super implementation in some extra layout.
      */
     @CallSuper
     protected View createContentView() {
@@ -244,103 +512,172 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
 
         mPager.setId(R.id.fre_pager);
         mPager.setOffscreenPageLimit(3);
-        return mPager;
+        mContentView =
+                DialogWhenLargeContentLayout.wrapInDialogWhenLargeLayout(
+                        mPager, SemanticColorUtils.getColorSurfaceContainerLow(this));
+        return mContentView;
+    }
+
+    /**
+     * Creates the {@link BottomSheetController} for the First Run Experience, and adds the sheet
+     * container on top of the content view so that the sheets are shown over the whole activity.
+     *
+     * @param contentView The content view of the activity.
+     */
+    private void createBottomSheetController(ViewGroup contentView) {
+        ViewGroup sheetContainer =
+                (ViewGroup)
+                        LayoutInflater.from(this)
+                                .inflate(
+                                        R.layout.bottom_sheet_container,
+                                        contentView,
+                                        /* attachToRoot= */ false);
+        ScrimManager scrimManager =
+                new ScrimManager(this, contentView, ScrimClient.FIRST_RUN_ACTIVITY);
+        mScrimManager = scrimManager;
+        scrimManager.getStatusBarColorSupplier().addSyncObserver(this::applyScrimToStatusBar);
+        mBottomSheetController =
+                BottomSheetControllerFactory.createBottomSheetController(
+                        () -> scrimManager,
+                        getWindow(),
+                        assumeNonNull(getWindowAndroid()).getKeyboardDelegate(),
+                        () -> sheetContainer,
+                        () -> 0,
+                        /* desktopWindowStateManager= */ null,
+                        getInsetObserver(),
+                        /* enableLargeFormFactorUi= */ ChromeFeatureList
+                                .sBottomSheetOnDesktopWindowing
+                                .isEnabled());
+        contentView.addView(sheetContainer);
+        BackPressHelper.create(
+                this,
+                getOnBackPressedDispatcher(),
+                mBottomSheetController.getBottomSheetBackPressHandler());
+    }
+
+    /**
+     * Tints the status bar with the scrim color, on top of the default status bar color. The scrim
+     * is drawn in the content view, which doesn't cover the status bar.
+     *
+     * @param scrimColor The (translucent) scrim color over the status bar, transparent if none.
+     */
+    private void applyScrimToStatusBar(@ColorInt int scrimColor) {
+        // TODO(crbug.com/534388538): Handle tablets/LFF, where the FRE is shown as a modal and the
+        // status bar color is colorSurfaceContainerLow.
+        if (DialogWhenLargeContentLayout.shouldShowAsDialog(this)) return;
+
+        @ColorInt int baseColor = SemanticColorUtils.getDefaultBgColor(this);
+        @ColorInt int finalColor = ColorUtils.overlayColor(baseColor, scrimColor);
+        EdgeToEdgeSystemBarColorHelper edgeToEdgeSystemBarColorHelper =
+                getEdgeToEdgeManager() != null
+                        ? getEdgeToEdgeManager().getEdgeToEdgeSystemBarColorHelper()
+                        : null;
+        StatusBarColorController.setStatusBarColor(
+                edgeToEdgeSystemBarColorHelper, this, finalColor);
     }
 
     @Override
+    @Initializer
     public void triggerLayoutInflation() {
+        super.triggerLayoutInflation();
+
         initializeStateFromLaunchData();
-        RecordHistogram.recordTimesHistogram("MobileFre.FromLaunch.TriggerLayoutInflation",
+        RecordHistogram.recordTimesHistogram(
+                "MobileFre.FromLaunch.TriggerLayoutInflation",
                 SystemClock.elapsedRealtime() - mIntentCreationElapsedRealtimeMs);
 
-        setFinishOnTouchOutside(true);
+        View contentView = createContentView();
+        setContentView(contentView);
+        createBottomSheetController((ViewGroup) contentView);
 
-        setContentView(createContentView());
-        ViewDrawBlocker.blockViewDrawUntilReady(
-                findViewById(android.R.id.content), () -> mPages.size() > 0);
+        // SigninFirstRunFragment doesn't use getProperties() and can be shown right away, without
+        // waiting for FirstRunFlowSequencer.
+        createFirstPage();
 
-        mFirstRunFlowSequencer = new FirstRunFlowSequencer(this) {
-            @Override
-            public void onFlowIsKnown(Bundle freProperties) {
-                mFlowIsKnown = true;
-                mFreProperties = freProperties;
+        mFirstRunFlowSequencer =
+                new FirstRunFlowSequencer(
+                        getProfileProviderSupplier(),
+                        assertNonNull(getChildAccountStatusSupplier())) {
+                    @Override
+                    public void onFlowIsKnown(boolean isChild) {
+                        mFreProperties = new Bundle();
+                        RecordHistogram.recordTimesHistogram(
+                                "MobileFre.FromLaunch.ChildStatusAvailable",
+                                SystemClock.elapsedRealtime() - mIntentCreationElapsedRealtimeMs);
 
-                onInternalStateChanged();
+                        onInternalStateChanged();
 
-                recordFreProgressHistogram(mFreProgressStates.get(0));
-                long inflationCompletion = SystemClock.elapsedRealtime();
-                RecordHistogram.recordTimesHistogram("MobileFre.FromLaunch.FirstFragmentInflatedV2",
-                        inflationCompletion - mIntentCreationElapsedRealtimeMs);
-                getFirstRunAppRestrictionInfo().getCompletionElapsedRealtimeMs(
-                        restrictionsCompletion -> {
-                            if (restrictionsCompletion > inflationCompletion) {
-                                RecordHistogram.recordTimesHistogram(
-                                        "MobileFre.FragmentInflationSpeed.FasterThanAppRestriction",
-                                        restrictionsCompletion - inflationCompletion);
-                            } else {
-                                RecordHistogram.recordTimesHistogram(
-                                        "MobileFre.FragmentInflationSpeed.SlowerThanAppRestriction",
-                                        inflationCompletion - restrictionsCompletion);
-                            }
-                        });
-            }
-        };
+                        recordFreProgressHistogram(mFreProgressStates.get(0));
+                        long inflationCompletion = SystemClock.elapsedRealtime();
+                        RecordHistogram.recordTimesHistogram(
+                                "MobileFre.FromLaunch.FirstFragmentInflatedV2",
+                                inflationCompletion - mIntentCreationElapsedRealtimeMs);
+                    }
+                };
         mFirstRunFlowSequencer.start();
         FirstRunStatus.setFirstRunTriggered(true);
-        recordFreProgressHistogram(FRE_PROGRESS_STARTED);
+        recordFreProgressHistogram(MobileFreProgress.STARTED);
         onInitialLayoutInflationComplete();
 
-        RecordHistogram.recordTimesHistogram("MobileFre.FromLaunch.ActivityInflated",
+        RecordHistogram.recordTimesHistogram(
+                "MobileFre.FromLaunch.ActivityInflated",
                 SystemClock.elapsedRealtime() - mIntentCreationElapsedRealtimeMs);
-    }
-
-    @Override
-    protected void performPostInflationStartup() {
-        super.performPostInflationStartup();
-
-        FontPreloader.getInstance().onPostInflationStartupFre();
     }
 
     @Override
     public void finishNativeInitialization() {
         super.finishNativeInitialization();
 
-        Runnable onNativeFinished = new Runnable() {
-            @Override
-            public void run() {
-                if (isActivityFinishingOrDestroyed()) return;
+        Runnable onTemplateUrlServiceLoaded =
+                () -> {
+                    if (isActivityFinishingOrDestroyed()) return;
 
-                onNativeDependenciesFullyInitialized();
-            }
-        };
-        TemplateUrlServiceFactory.get().runWhenLoaded(onNativeFinished);
+                    mTemplateUrlServiceLoaded = true;
+                    onNativeDependenciesFullyInitialized();
+                };
+        Profile profile = assumeNonNull(getProfileProviderSupplier().get()).getOriginalProfile();
+        TemplateUrlServiceFactory.getForProfile(profile).runWhenLoaded(onTemplateUrlServiceLoaded);
+        // Notify feature engagement that FRE occurred.
+        TrackerFactory.getTrackerForProfile(profile)
+                .notifyEvent(EventConstants.RESTORE_TABS_ON_FIRST_RUN_SHOW_PROMO);
+        RecordHistogram.recordTimesHistogram(
+                "MobileFre.NativeInitialized", SystemClock.elapsedRealtime() - getStartTime());
+
+        assert FeatureList.isNativeInitialized()
+                : "Expected feature list to be initialized during FRE.";
+        SharedPreferencesManager prefManager = ChromeSharedPreferences.getInstance();
+        prefManager.writeBoolean(
+                ChromePreferenceKeys.CROSS_DEVICE_IMPORTED_NON_NTP_SETTINGS, false);
+        prefManager.writeBoolean(ChromePreferenceKeys.CROSS_DEVICE_IMPORTED_ALL_SETTINGS, false);
     }
 
     private void onNativeDependenciesFullyInitialized() {
-        mNativeSideIsInitialized = true;
-
+        mPager.setOffscreenPageLimit(ViewPager2.OFFSCREEN_PAGE_LIMIT_DEFAULT);
         onInternalStateChanged();
     }
 
     @Override
     protected void onPolicyLoadListenerAvailable(boolean onDevicePolicyFound) {
         super.onPolicyLoadListenerAvailable(onDevicePolicyFound);
+        RecordHistogram.recordTimesHistogram(
+                "MobileFre.FromLaunch.PoliciesLoaded",
+                SystemClock.elapsedRealtime() - mIntentCreationElapsedRealtimeMs);
 
         onInternalStateChanged();
     }
 
     private void onInternalStateChanged() {
-        if (!mFlowIsKnown) {
+        if (!isFlowKnown()) {
             return;
         }
 
-        if (mNativeSideIsInitialized && mFreProperties == null) {
-            completeFirstRunExperience();
-            return;
+        if (mTemplateUrlServiceLoaded && mNativeInitializationPromise.isPending()) {
+            // `mNativeInitializationPromise` should only be set after flow is known.
+            mNativeInitializationPromise.fulfill(null);
         }
 
         if (mPagerAdapter == null) {
-            createPageSequence();
+            createFirstPage();
         }
 
         if (!mPostNativeAndPolicyPagesCreated && areNativeAndPoliciesInitialized()) {
@@ -353,34 +690,35 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
     }
 
     private boolean areNativeAndPoliciesInitialized() {
-        return mNativeSideIsInitialized && mFlowIsKnown
+        return mNativeInitializationPromise.isFulfilled()
+                && isFlowKnown()
                 && this.getPolicyLoadListener().get() != null;
     }
 
-    // Activity:
+    /**
+     * @param smoothScroll Whether to animate transition. This should be true for user triggered
+     *     transition, and false for quick skips by software.
+     * @return Whether advancing to the next page succeeded.
+     */
+    private boolean advanceToNextPageInternal(boolean smoothScroll) {
+        // Debounce page changes while animation is in flight.
+        if (mAnimator != null) return false;
 
-    @Override
-    public void onAttachFragment(Fragment fragment) {
-        if (!(fragment instanceof FirstRunFragment)) return;
+        mFirstRunFlowSequencer.updateFirstRunProperties(assumeNonNull(mFreProperties));
 
-        FirstRunFragment page = (FirstRunFragment) fragment;
-        // Important that this check delegates to the dispatcher instead of using
-        // mNativeSideIsInitialized, the two flags are not updated atomically. The dispatcher does
-        // not call #onFinishNativeInitialization() if it already happened.
-        if (getLifecycleDispatcher().isNativeInitializationFinished()) {
-            page.onNativeInitialized();
-        } else {
-            getLifecycleDispatcher().register(new NativeInitObserver() {
-                @Override
-                public void onFinishNativeInitialization() {
-                    page.onNativeInitialized();
-                }
-            });
+        int position = mPager.getCurrentItem() + 1;
+        while (position < mPagerAdapter.getItemCount() && !mPages.get(position).shouldShow()) {
+            ++position;
         }
+        if (!setCurrentItemForPager(position, smoothScroll)) return false;
+
+        recordFreProgressHistogram(mFreProgressStates.get(position));
+        return true;
     }
 
+    // Activity:
     @Override
-    public void onRestoreInstanceState(Bundle state) {
+    public void onRestoreInstanceState(@Nullable Bundle state) {
         // Don't automatically restore state here. This is a counterpart to the override
         // of transformSavedInstanceStateForOnCreate() as the two need to be consistent.
         // The default implementation of this would restore the state of the views, which
@@ -405,43 +743,62 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
                 if (activity.getTaskId() == this.getTaskId()) {
                     activity.finish();
                 } else {
-                    ApiCompatibilityUtils.finishAndRemoveTask(activity);
-                    if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.LOLLIPOP_MR1) {
-                        // On L ApiCompatibilityUtils.finishAndRemoveTask() sometimes fails. Try one
-                        // last time, see crbug.com/781396 for origin of this approach.
-                        if (!activity.isFinishing()) {
-                            activity.finish();
-                        }
-                    }
+                    activity.finishAndRemoveTask();
                 }
             }
         }
     }
 
     @Override
-    public void onBackPressed() {
+    public @BackPressResult int handleBackPress() {
         // Terminate if we are still waiting for the native or for Android EDU / GAIA Child checks.
-        if (mPagerAdapter == null) {
+        if (!mPostNativeAndPolicyPagesCreated) {
             abortFirstRunExperience();
-            return;
+            return BackPressResult.SUCCESS;
         }
 
-        if (mPager.getCurrentItem() == 0) {
+        int position = mPager.getCurrentItem() - 1;
+
+        if (ChromeFeatureList.sDefaultBrowserPromoFre.isEnabled()
+                && position >= 0
+                && mPages.get(position).getFragmentClass() == HistorySyncFirstRunFragment.class) {
+            // The user can now go back to history sync.
+            setHistorySyncStepCompleted(false);
+        }
+
+        mFirstRunFlowSequencer.updateFirstRunProperties(assumeNonNull(mFreProperties));
+
+        while (position > 0 && !mPages.get(position).shouldShow()) {
+            --position;
+        }
+
+        if (position < 0) {
             abortFirstRunExperience();
         } else {
-            setCurrentItemForPager(mPager.getCurrentItem() - 1);
+            // Might be debounced if animation is in flight, but consider this SUCCESS anyway.
+            setCurrentItemForPager(position, true);
         }
+        return BackPressResult.SUCCESS;
+    }
+
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent ev) {
+        if (sPreventTouches && shouldPreventTouch()) {
+            // Discard the events which may be trickling down from an overlay activity above.
+            return true;
+        }
+        return super.dispatchTouchEvent(ev);
+    }
+
+    @VisibleForTesting(otherwise = PRIVATE)
+    boolean shouldPreventTouch() {
+        return ApplicationStatus.getStateForActivity(this) != ActivityState.RESUMED;
     }
 
     // FirstRunPageDelegate:
     @Override
-    public Bundle getProperties() {
-        return mFreProperties;
-    }
-
-    @Override
-    public void advanceToNextPage() {
-        jumpToPage(mPager.getCurrentItem() + 1);
+    public boolean advanceToNextPage() {
+        return advanceToNextPageInternal(true);
     }
 
     @Override
@@ -454,40 +811,15 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
 
     @Override
     public void completeFirstRunExperience() {
-        RecordHistogram.recordMediumTimesHistogram("MobileFre.FromLaunch.FreCompleted",
+        RecordHistogram.deprecatedRecordMediumTimesHistogram(
+                "MobileFre.FromLaunch.FreCompleted",
                 SystemClock.elapsedRealtime() - mIntentCreationElapsedRealtimeMs);
-        if (!TextUtils.isEmpty(mResultSignInAccountName)) {
-            final int choice;
-            if (mResultShowSignInSettings) {
-                choice = mResultIsDefaultAccount ? SIGNIN_SETTINGS_DEFAULT_ACCOUNT
-                                                 : SIGNIN_SETTINGS_ANOTHER_ACCOUNT;
-            } else {
-                choice = mResultIsDefaultAccount ? SIGNIN_ACCEPT_DEFAULT_ACCOUNT
-                                                 : SIGNIN_ACCEPT_ANOTHER_ACCOUNT;
-            }
-            recordSigninChoiceHistogram(choice);
-            recordFreProgressHistogram(FRE_PROGRESS_COMPLETED_SIGNED_IN);
-        } else {
-            recordFreProgressHistogram(FRE_PROGRESS_COMPLETED_NOT_SIGNED_IN);
-        }
 
-        FirstRunFlowSequencer.markFlowAsCompleted(
-                mResultSignInAccountName, mResultShowSignInSettings);
+        FirstRunFlowSequencer.markFlowAsCompleted();
 
-        if (DataReductionPromoUtils.getDisplayedFreOrSecondRunPromo()) {
-            if (DataReductionProxySettings.getInstance().isDataReductionProxyEnabled()) {
-                DataReductionProxyUma
-                        .dataReductionProxyUIAction(DataReductionProxyUma.ACTION_FRE_ENABLED);
-                DataReductionPromoUtils.saveFrePromoOptOut(false);
-            } else {
-                DataReductionProxyUma
-                        .dataReductionProxyUIAction(DataReductionProxyUma.ACTION_FRE_DISABLED);
-                DataReductionPromoUtils.saveFrePromoOptOut(true);
-            }
-        }
+        // LowEntropySource can't be used after the FRE has been completed.
+        LowEntropySource.markFirstRunComplete();
 
-        // Update the search engine name cached by the widget.
-        SearchWidgetProvider.updateCachedEngineName();
         if (sObserver != null) sObserver.onUpdateCachedEngineName(this);
 
         launchPendingIntentAndFinish();
@@ -498,109 +830,117 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
         // This is important because the first run, when completed, will re-launch the original
         // intent. The re-launched intent will still need to know to avoid the FRE.
         FirstRunStatus.setFirstRunSkippedByPolicy(true);
+        // The ToS were accepted as part of this flow, so subsequent full FREs (e.g. launched from
+        // the launcher, where the policy skip above doesn't apply) should skip the welcome page.
+        FirstRunStatus.setSkipWelcomePage(true);
 
         launchPendingIntentAndFinish();
     }
 
     private void launchPendingIntentAndFinish() {
-        if (!sendFirstRunCompletePendingIntent()) {
+        if (!sendFirstRunCompleteIntent()) {
             finish();
         } else {
-            ApplicationStatus.registerStateListenerForAllActivities(new ActivityStateListener() {
-                @Override
-                public void onActivityStateChange(Activity activity, int newState) {
-                    boolean shouldFinish = false;
-                    if (activity == FirstRunActivity.this) {
-                        shouldFinish = (newState == ActivityState.STOPPED
-                                || newState == ActivityState.DESTROYED);
-                    } else {
-                        shouldFinish = newState == ActivityState.RESUMED;
-                    }
-                    if (shouldFinish) {
-                        finish();
-                        ApplicationStatus.unregisterActivityStateListener(this);
-                    }
-                }
-            });
+            ApplicationStatus.registerStateListenerForAllActivities(
+                    new ActivityStateListener() {
+                        @Override
+                        public void onActivityStateChange(Activity activity, int newState) {
+                            boolean shouldFinish;
+                            if (activity == FirstRunActivity.this) {
+                                shouldFinish =
+                                        (newState == ActivityState.STOPPED
+                                                || newState == ActivityState.DESTROYED);
+                            } else {
+                                shouldFinish = newState == ActivityState.RESUMED;
+                            }
+                            if (shouldFinish) {
+                                finish();
+                                ApplicationStatus.unregisterActivityStateListener(this);
+                            }
+                        }
+                    });
         }
 
         if (sObserver != null) sObserver.onExitFirstRun(this);
     }
 
     @Override
-    public void refuseSignIn() {
-        recordSigninChoiceHistogram(SIGNIN_NO_THANKS);
-        mResultSignInAccountName = null;
-        mResultShowSignInSettings = false;
+    public boolean isLaunchedFromCct() {
+        return mLaunchedFromCct;
     }
 
     @Override
-    public void acceptSignIn(String accountName, boolean isDefaultAccount, boolean openSettings) {
-        mResultSignInAccountName = accountName;
-        mResultIsDefaultAccount = isDefaultAccount;
-        mResultShowSignInSettings = openSettings;
-    }
+    public void acceptTermsOfService(boolean allowMetricsAndCrashUploading) {
+        assert mNativeInitializationPromise.isFulfilled();
 
-    @Override
-    public boolean didAcceptTermsOfService() {
-        return FirstRunUtils.didAcceptTermsOfService();
-    }
-
-    @Override
-    public void acceptTermsOfService(boolean allowCrashUpload) {
         // If default is true then it corresponds to opt-out and false corresponds to opt-in.
         UmaUtils.recordMetricsReportingDefaultOptIn(!DEFAULT_METRICS_AND_CRASH_REPORTING);
-        RecordHistogram.recordMediumTimesHistogram("MobileFre.FromLaunch.TosAccepted",
+        RecordHistogram.deprecatedRecordMediumTimesHistogram(
+                "MobileFre.FromLaunch.TosAccepted",
                 SystemClock.elapsedRealtime() - mIntentCreationElapsedRealtimeMs);
-        FirstRunUtils.acceptTermsOfService(allowCrashUpload);
-        FirstRunStatus.setSkipWelcomePage(true);
+        FirstRunUtils.acceptTermsOfService(allowMetricsAndCrashUploading);
         flushPersistentData();
 
         if (sObserver != null) sObserver.onAcceptTermsOfService(this);
-
-        jumpToPage(mPager.getCurrentItem() + 1);
     }
 
     /** Initialize local state from launch intent and from saved instance state. */
     private void initializeStateFromLaunchData() {
+        if (ChromeFeatureList.sDefaultBrowserPromoFre.isEnabled()) {
+            // When a configuration change (like a theme toggle) occurs, the FirstRunActivity
+            // instance is destroyed and recreated. We restore the saved state from the previous
+            // instance's Bundle to ensure the user's progress in the FRE flow is preserved.
+            Bundle savedState = getSavedInstanceState();
+
+            if (savedState != null) {
+                mPromoRoleManagerDialogTriggered =
+                        savedState.getBoolean(KEY_PROMO_DIALOG_TRIGGERED, false);
+                mHistorySyncStepCompleted =
+                        savedState.getBoolean(KEY_HISTORY_SYNC_STEP_COMPLETED, false);
+            }
+        }
+
         if (getIntent() != null) {
             mLaunchedFromChromeIcon =
                     getIntent().getBooleanExtra(EXTRA_COMING_FROM_CHROME_ICON, false);
-            mLaunchedFromCCT =
+            mLaunchedFromCct =
                     getIntent().getBooleanExtra(EXTRA_CHROME_LAUNCH_INTENT_IS_CCT, false);
             mIntentCreationElapsedRealtimeMs =
                     getIntent().getLongExtra(EXTRA_FRE_INTENT_CREATION_ELAPSED_REALTIME_MS, 0);
         }
     }
 
-    /**
-     * Transitions to a given page.
-     * @param position A page index to transition to.
-     * @return Whether the transition to a given page was allowed.
-     */
-    private boolean jumpToPage(int position) {
-        if (sObserver != null) sObserver.onJumpToPage(this, position);
-
-        if (!didAcceptTermsOfService()) {
-            return position == 0;
-        }
-        if (!setCurrentItemForPager(position)) {
-            return false;
-        }
-        recordFreProgressHistogram(mFreProgressStates.get(position));
-        return true;
+    private static boolean isRtl() {
+        return LocalizationUtils.isLayoutRtl();
     }
 
-    private boolean setCurrentItemForPager(int position) {
+    /** Returns whether {@code position} is a valid index pointing to the welcome page. */
+    private boolean isWelcomePage(int position) {
+        return position >= 0
+                && position < mPages.size()
+                && mPages.get(position).getFragmentClass() == SigninFirstRunFragment.class;
+    }
+
+    /** Returns whether the set attempt will lead to transition to an existing Fragment. */
+    private boolean setCurrentItemForPager(int position, boolean smoothScroll) {
+        // Debounce page changes while animation is in flight.
+        if (mAnimator != null) return false;
+
+        if (sObserver != null) sObserver.onJumpToPage(this, position);
+
+        // The welcome page can only be skipped on subsequent launches once the user has moved past
+        // it. Going back to it means it should be shown again. This is done before the completion
+        // check below so that it's also set when there are no pages after the welcome page.
+        FirstRunStatus.setSkipWelcomePage(!isWelcomePage(position));
+
         if (position >= mPagerAdapter.getItemCount()) {
             completeFirstRunExperience();
             return false;
         }
 
         int oldPosition = mPager.getCurrentItem();
-        mPager.setCurrentItem(position, false);
 
-        // Set A11y focus if possible. See https://crbug.com/1094064 for more context.
+        // Set A11y focus if possible. See https://crbug.com/40699257 for more context.
         // The screen reader can lose focus when switching between pages with ViewPager2.
         FirstRunFragment currentFragment = mPagerAdapter.getFirstRunFragment(position);
         if (currentFragment != null) {
@@ -610,30 +950,121 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
                 currentFragment.reset();
             }
         }
+
+        if (!sIsAnimationDisabled && smoothScroll) {
+            // Use fake drags to control transition time and interpolation in ViewPager2.
+
+            // Direction of content shift: Forward -> negative; backward -> positive (assuming LTR).
+            int direction = (position > oldPosition) ? -1 : 1;
+            mPageTransformer.setDirection(direction);
+            // Direction of drag, which is flipped if RTL.
+            float dragSign = direction * (isRtl() ? -1f : 1f);
+            // Use linear interpolation to enable custom interpolators usage of various properties.
+            mAnimator = ValueAnimator.ofFloat(0f, 1f);
+            mAnimator.setInterpolator(Interpolators.LINEAR_INTERPOLATOR);
+
+            class UpdateListener implements ValueAnimator.AnimatorUpdateListener {
+                /** Previous animated value to calculate fake drag delta for transitions. */
+                private int mPrevAnimatedValue; // Initializes to 0, as desired.
+
+                @Override
+                public void onAnimationUpdate(ValueAnimator animation) {
+                    float frac = (Float) animation.getAnimatedValue();
+                    // Get the up-to-date width, which is subject to user change, e.g., by
+                    // orientation changes or window resize.
+                    int width = mPager.getWidth();
+                    int animatedValue = Math.round(frac * width);
+                    float deltaPx = dragSign * (animatedValue - mPrevAnimatedValue);
+                    mPager.fakeDragBy(deltaPx);
+                    mPrevAnimatedValue = animatedValue;
+                }
+            }
+
+            mAnimator.addUpdateListener(new UpdateListener());
+
+            mAnimator.addListener(
+                    new Animator.AnimatorListener() {
+                        @Override
+                        public void onAnimationStart(Animator animation) {
+                            mPager.beginFakeDrag();
+                        }
+
+                        @Override
+                        public void onAnimationEnd(Animator animation) {
+                            mPager.endFakeDrag();
+                            if (ChromeFeatureList.sDefaultBrowserPromoFre.isEnabled()
+                                    && mPager.getCurrentItem() != position) {
+                                // When the user stays signed out, we jump from index 0 (sign-in
+                                // page) to index 2 (promo page) and skip index 1 (History sync).
+                                // Fake dragging seems to fail in multipage jumps, so we manually
+                                // jump to the target position.
+                                mPager.setCurrentItem(position, false);
+                            }
+                            mAnimator = null;
+                            // No need to call `mPager.setCurrentItem(position, false)`.
+                        }
+
+                        @Override
+                        public void onAnimationCancel(Animator animation) {
+                            mAnimator = null;
+                        }
+
+                        @Override
+                        public void onAnimationRepeat(Animator animation) {
+                            /* Ignored */
+                        }
+                    });
+
+            mAnimator.setDuration(TRANSITION_DELAY_MS);
+            mAnimator.start();
+
+        } else {
+            mPager.setCurrentItem(position, false);
+        }
+
         return true;
     }
 
     private void skipPagesIfNecessary() {
-        boolean shouldSkip = mPages.get(mPager.getCurrentItem()).shouldSkipPageOnCreate();
-        while (shouldSkip) {
-            if (!jumpToPage(mPager.getCurrentItem() + 1)) return;
-            shouldSkip = mPages.get(mPager.getCurrentItem()).shouldSkipPageOnCreate();
-        }
+        while (!mPages.get(mPager.getCurrentItem()).shouldShow()
+                && advanceToNextPageInternal(false)) {}
     }
 
-    private void recordFreProgressHistogram(int state) {
+    @Override
+    public void recordFreProgressHistogram(@MobileFreProgress int state) {
+        assert 0 <= state && state < MobileFreProgress.MAX;
+
+        if (mFreProgressStepsRecorded.get(state)) return;
+
+        mFreProgressStepsRecorded.set(state);
         if (mLaunchedFromChromeIcon) {
             RecordHistogram.recordEnumeratedHistogram(
-                    "MobileFre.Progress.MainIntent", state, FRE_PROGRESS_MAX);
+                    "MobileFre.Progress.MainIntent", state, MobileFreProgress.MAX);
         } else {
             RecordHistogram.recordEnumeratedHistogram(
-                    "MobileFre.Progress.ViewIntent", state, FRE_PROGRESS_MAX);
+                    "MobileFre.Progress.ViewIntent", state, MobileFreProgress.MAX);
         }
     }
 
-    private static void recordSigninChoiceHistogram(int signInChoice) {
+    @Override
+    public void recordLoadCompletedHistograms(@FullscreenSigninLoadPoint int slowestLoadPoint) {
+        // TODO: crbug.com/462005651 - Remove obsolete
+        // "MobileFre.FromLaunch.NativePolicyAndChildStatusLoaded" histogram.
+        RecordHistogram.recordTimesHistogram(
+                "MobileFre.FromLaunch.NativePolicyAndChildStatusLoaded",
+                SystemClock.elapsedRealtime() - mIntentCreationElapsedRealtimeMs);
+        RecordHistogram.recordTimesHistogram(
+                "MobileFre.FromLaunch.InitialLoadCompleted",
+                SystemClock.elapsedRealtime() - mIntentCreationElapsedRealtimeMs);
         RecordHistogram.recordEnumeratedHistogram(
-                "MobileFre.SignInChoice", signInChoice, SIGNIN_MAX);
+                "MobileFre.SlowestLoadPoint", slowestLoadPoint, FullscreenSigninLoadPoint.MAX);
+    }
+
+    @Override
+    public void recordNativeInitializedHistogram() {
+        RecordHistogram.recordTimesHistogram(
+                "MobileFre.FromLaunch.NativeInitialized",
+                SystemClock.elapsedRealtime() - mIntentCreationElapsedRealtimeMs);
     }
 
     @Override
@@ -642,14 +1073,103 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
                 this, LocalizationUtils.substituteLocalePlaceholder(getString(url)));
     }
 
-    @VisibleForTesting
-    public boolean isNativeSideIsInitializedForTest() {
-        return mNativeSideIsInitialized;
+    @Override
+    public void showInfoPage(String url) {
+        assert url.startsWith("https://");
+        CustomTabActivity.showInfoPage(this, url);
     }
 
-    @VisibleForTesting
+    @Override
+    public Promise<@Nullable Void> getNativeInitializationPromise() {
+        return mNativeInitializationPromise;
+    }
+
+    public @Nullable FirstRunFragment getCurrentFragmentForTesting() {
+        return mPagerAdapter.getFirstRunFragment(mPager.getCurrentItem());
+    }
+
     public static void setObserverForTest(FirstRunActivityObserver observer) {
         assert sObserver == null;
         sObserver = observer;
+        ResettersForTesting.register(() -> sObserver = null);
+    }
+
+    public static void disableAnimationForTesting(boolean isAnimationDisabled) {
+        sIsAnimationDisabled = isAnimationDisabled;
+    }
+
+    @Override
+    @RequiresApi(Build.VERSION_CODES.R)
+    protected @Nullable AppHeaderStateProvider createAppHeaderStateProvider() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+            return super.createAppHeaderStateProvider();
+        }
+
+        var delegate =
+                new BrowserStateBrowserControlsVisibilityDelegate(
+                        ObservableSuppliers.alwaysFalse());
+        mAppHeaderCoordinator =
+                new AppHeaderCoordinator(
+                        this,
+                        getWindow().getDecorView().getRootView(),
+                        delegate,
+                        getInsetObserver(),
+                        getLifecycleDispatcher(),
+                        getSavedInstanceState(),
+                        getPersistentInstanceState(),
+                        assumeNonNull(getEdgeToEdgeStateProvider()),
+                        /* windowIdSupplier= */ null);
+        mAppHeaderCoordinator.addObserver(this);
+        mAppHeaderCoordinator.onBackgroundColorChanged(
+                SemanticColorUtils.getColorSurfaceContainerLow(this));
+        if (mAppHeaderCoordinator.getAppHeaderState() != null) {
+            setCaptionBarHeight(mAppHeaderCoordinator.getAppHeaderState().getAppHeaderHeight());
+        }
+        return mAppHeaderCoordinator;
+    }
+
+    @Override
+    @SuppressWarnings("NewApi") // AppHeaderCoordinator
+    public void onAppHeaderStateChanged(AppHeaderState newState) {
+        setCaptionBarHeight(newState.getAppHeaderHeight());
+    }
+
+    private void setCaptionBarHeight(int height) {
+        if (mContentView != null) {
+            mContentView.setPadding(
+                    mContentView.getPaddingLeft(),
+                    height,
+                    mContentView.getPaddingRight(),
+                    mContentView.getPaddingBottom());
+        }
+    }
+
+    @Override
+    public void onDestroy() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+            if (mAppHeaderCoordinator != null) {
+                mAppHeaderCoordinator.destroy();
+                mAppHeaderCoordinator = null;
+            }
+        }
+        if (mBottomSheetController != null) {
+            mBottomSheetController.destroy();
+            mBottomSheetController = null;
+        }
+        if (mScrimManager != null) {
+            mScrimManager.destroy();
+            mScrimManager = null;
+        }
+        super.onDestroy();
+    }
+
+    @Override
+    protected ActivityWindowAndroid createWindowAndroid() {
+        return new ActivityWindowAndroid(
+                this,
+                /* listenToActivityState= */ true,
+                getIntentRequestTracker(),
+                getInsetObserver(),
+                /* occlusionTrackingAllowed= */ true);
     }
 }

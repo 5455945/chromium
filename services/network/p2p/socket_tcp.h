@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,11 +10,10 @@
 #include <memory>
 #include <vector>
 
-#include "base/compiler_specific.h"
 #include "base/component_export.h"
 #include "base/containers/queue.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "net/base/ip_endpoint.h"
@@ -38,73 +37,76 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) P2PSocketTcpBase : public P2PSocket {
       mojo::PendingRemote<mojom::P2PSocketClient> client,
       mojo::PendingReceiver<mojom::P2PSocket> socket,
       P2PSocketType type,
+      const net::NetworkTrafficAnnotationTag& traffic_annotation,
       ProxyResolvingClientSocketFactory* proxy_resolving_socket_factory);
+
+  P2PSocketTcpBase(const P2PSocketTcpBase&) = delete;
+  P2PSocketTcpBase& operator=(const P2PSocketTcpBase&) = delete;
+
   ~P2PSocketTcpBase() override;
 
-  void InitAccepted(const net::IPEndPoint& remote_address,
-                    std::unique_ptr<net::StreamSocket> socket);
-
   // P2PSocket overrides.
-  void Init(const net::IPEndPoint& local_address,
-            uint16_t min_port,
-            uint16_t max_port,
-            const P2PHostAndIPEndPoint& remote_address,
-            const net::NetworkIsolationKey& network_isolation_key) override;
+  void Init(
+      const net::IPEndPoint& local_address,
+      uint16_t min_port,
+      uint16_t max_port,
+      const P2PHostAndIPEndPoint& remote_address,
+      const net::NetworkAnonymizationKey& network_anonymization_key) override;
 
   // mojom::P2PSocket implementation:
-  void Send(const std::vector<int8_t>& data,
-            const P2PPacketInfo& packet_info,
-            const net::MutableNetworkTrafficAnnotationTag& traffic_annotation)
-      override;
+  void Send(base::span<const uint8_t> data,
+            const P2PPacketInfo& packet_info) override;
+  void SendBatch(std::vector<mojom::P2PSendPacketPtr> packet_batch) override;
   void SetOption(P2PSocketOption option, int32_t value) override;
 
  protected:
   struct SendBuffer {
     SendBuffer();
-    SendBuffer(int32_t packet_id,
-               scoped_refptr<net::DrainableIOBuffer> buffer,
-               const net::NetworkTrafficAnnotationTag traffic_annotation);
+    SendBuffer(int32_t packet_id, scoped_refptr<net::DrainableIOBuffer> buffer);
     SendBuffer(const SendBuffer& rhs);
     ~SendBuffer();
 
     int32_t rtc_packet_id;
     scoped_refptr<net::DrainableIOBuffer> buffer;
-    net::MutableNetworkTrafficAnnotationTag traffic_annotation;
   };
 
   // Derived classes will provide the implementation.
-  virtual bool ProcessInput(char* input,
-                            int input_len,
+  virtual bool ProcessInput(base::span<const uint8_t> input,
                             size_t* bytes_consumed) = 0;
-  virtual void DoSend(
+  [[nodiscard]] virtual bool DoSend(
       const net::IPEndPoint& to,
-      const std::vector<int8_t>& data,
-      const rtc::PacketOptions& options,
-      const net::NetworkTrafficAnnotationTag traffic_annotation) = 0;
+      base::span<const uint8_t> data,
+      const webrtc::AsyncSocketPacketOptions& options) = 0;
 
-  void WriteOrQueue(SendBuffer& send_buffer);
-  WARN_UNUSED_RESULT bool OnPacket(std::vector<int8_t> data);
+  [[nodiscard]] bool WriteOrQueue(SendBuffer& send_buffer);
+  [[nodiscard]] bool OnPacket(base::span<const uint8_t> data);
+
+  [[nodiscard]] bool SendPacket(base::span<const uint8_t> data,
+                                const P2PPacketInfo& packet_info);
 
  private:
   friend class P2PSocketTcpTestBase;
   friend class P2PSocketTcpServerTest;
 
-  void DoRead();
-  void DoWrite();
+  // These functions return |false| in case of an error.
+  // The socket is destroyed in that case, so the caller should not use |this|.
+  [[nodiscard]] bool DoRead();
+  [[nodiscard]] bool DoWrite();
 
-  // Return |false| in case of an error. The socket is destroyed in that case,
-  // so the caller should not use |this|.
-  WARN_UNUSED_RESULT bool HandleReadResult(int result);
-  WARN_UNUSED_RESULT bool HandleWriteResult(int result);
+  [[nodiscard]] bool HandleReadResult(int result);
+  [[nodiscard]] bool HandleWriteResult(int result);
 
   // Callbacks for Connect(), Read() and Write().
+  // Socket destruction may happen in these functions, but they are
+  // invoked asynchronously, on the same thread, so we assume that
+  // socket destruction doesn't happen while a function is active.
   void OnConnected(int result);
   void OnRead(int result);
   void OnWritten(int result);
 
   // Helper method to send socket create message and start read.
-  void OnOpen();
-  bool DoSendSocketCreateMsg();
+  [[nodiscard]] bool OnOpen();
+  [[nodiscard]] bool DoSendSocketCreateMsg();
 
   P2PHostAndIPEndPoint remote_address_;
 
@@ -117,41 +119,40 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) P2PSocketTcpBase : public P2PSocket {
 
   bool connected_ = false;
   const P2PSocketType type_;
-  ProxyResolvingClientSocketFactory* proxy_resolving_socket_factory_;
-
-  DISALLOW_COPY_AND_ASSIGN(P2PSocketTcpBase);
+  const net::NetworkTrafficAnnotationTag traffic_annotation_;
+  raw_ptr<ProxyResolvingClientSocketFactory> proxy_resolving_socket_factory_;
 };
 
-class COMPONENT_EXPORT(NETWORK_SERVICE) P2PSocketTcp : public P2PSocketTcpBase {
+class COMPONENT_EXPORT(NETWORK_SERVICE) P2PSocketTcp final
+    : public P2PSocketTcpBase {
  public:
   P2PSocketTcp(
       Delegate* delegate,
       mojo::PendingRemote<mojom::P2PSocketClient> client,
       mojo::PendingReceiver<mojom::P2PSocket> socket,
       P2PSocketType type,
+      const net::NetworkTrafficAnnotationTag& traffic_annotation,
       ProxyResolvingClientSocketFactory* proxy_resolving_socket_factory);
+
+  P2PSocketTcp(const P2PSocketTcp&) = delete;
+  P2PSocketTcp& operator=(const P2PSocketTcp&) = delete;
 
   ~P2PSocketTcp() override;
 
  protected:
-  bool ProcessInput(char* input,
-                    int input_len,
+  bool ProcessInput(base::span<const uint8_t> input,
                     size_t* bytes_consumed) override;
-  void DoSend(
+  [[nodiscard]] bool DoSend(
       const net::IPEndPoint& to,
-      const std::vector<int8_t>& data,
-      const rtc::PacketOptions& options,
-      const net::NetworkTrafficAnnotationTag traffic_annotation) override;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(P2PSocketTcp);
+      base::span<const uint8_t> data,
+      const webrtc::AsyncSocketPacketOptions& options) override;
 };
 
 // P2PSocketStunTcp class provides the framing of STUN messages when used
 // with TURN. These messages will not have length at front of the packet and
 // are padded to multiple of 4 bytes.
 // Formatting of messages is defined in RFC5766.
-class COMPONENT_EXPORT(NETWORK_SERVICE) P2PSocketStunTcp
+class COMPONENT_EXPORT(NETWORK_SERVICE) P2PSocketStunTcp final
     : public P2PSocketTcpBase {
  public:
   P2PSocketStunTcp(
@@ -159,24 +160,24 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) P2PSocketStunTcp
       mojo::PendingRemote<mojom::P2PSocketClient> client,
       mojo::PendingReceiver<mojom::P2PSocket> socket,
       P2PSocketType type,
+      const net::NetworkTrafficAnnotationTag& traffic_annotation,
       ProxyResolvingClientSocketFactory* proxy_resolving_socket_factory);
+
+  P2PSocketStunTcp(const P2PSocketStunTcp&) = delete;
+  P2PSocketStunTcp& operator=(const P2PSocketStunTcp&) = delete;
 
   ~P2PSocketStunTcp() override;
 
  protected:
-  bool ProcessInput(char* input,
-                    int input_len,
+  bool ProcessInput(base::span<const uint8_t> input,
                     size_t* bytes_consumed) override;
-  void DoSend(
+  [[nodiscard]] bool DoSend(
       const net::IPEndPoint& to,
-      const std::vector<int8_t>& data,
-      const rtc::PacketOptions& options,
-      const net::NetworkTrafficAnnotationTag traffic_annotation) override;
+      base::span<const uint8_t> data,
+      const webrtc::AsyncSocketPacketOptions& options) override;
 
  private:
-  int GetExpectedPacketSize(const uint8_t* data, int len, int* pad_bytes);
-
-  DISALLOW_COPY_AND_ASSIGN(P2PSocketStunTcp);
+  int GetExpectedPacketSize(base::span<const uint8_t> data, int* pad_bytes);
 };
 
 }  // namespace network

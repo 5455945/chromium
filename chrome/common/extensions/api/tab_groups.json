@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,7 @@
       {
         "id": "Color",
         "type": "string",
-        "enum": ["grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan"],
+        "enum": ["grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange"],
         "description": "The group's color."
       },
       {
@@ -21,7 +21,8 @@
           "collapsed": {"type": "boolean", "description": "Whether the group is collapsed. A collapsed group is one whose tabs are hidden."},
           "color": {"$ref": "Color", "description": "The group's color."},
           "title": {"type": "string", "optional": true, "description": "The title of the group."},
-          "windowId": {"type": "integer", "minimum": 0, "description": "The ID of the window that contains the group."}
+          "windowId": {"type": "integer", "minimum": 0, "description": "The ID of the window that contains the group."},
+          "shared": {"type": "boolean", "description": "Whether the group is shared."}
         }
       }
     ],
@@ -73,6 +74,11 @@
                 "type": "string",
                 "optional": true,
                 "description": "Match group titles against a pattern."
+              },
+              "shared": {
+                "type": "boolean",
+                "optional": true,
+                "description": "Whether the group is shared."
               },
               "windowId": {
                 "type": "integer",

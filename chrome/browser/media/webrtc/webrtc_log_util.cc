@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,7 @@
 
 #include <vector>
 
-#include "base/bind.h"
-#include "base/task/post_task.h"
+#include "base/functional/bind.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
@@ -20,7 +19,7 @@
 
 // static
 void WebRtcLogUtil::DeleteOldWebRtcLogFilesForAllProfiles() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
   std::vector<ProfileAttributesEntry*> entries =
       g_browser_process->profile_manager()->GetProfileAttributesStorage().
@@ -28,9 +27,9 @@ void WebRtcLogUtil::DeleteOldWebRtcLogFilesForAllProfiles() {
   for (ProfileAttributesEntry* entry : entries) {
     base::ThreadPool::PostTask(
         FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
-        base::BindOnce(
-            &webrtc_logging::DeleteOldWebRtcLogFiles,
-            webrtc_logging::TextLogList::
-                GetWebRtcLogDirectoryForBrowserContextPath(entry->GetPath())));
+        base::BindOnce(&webrtc_logging::DeleteOldWebRtcLogFiles,
+                       webrtc_logging::TextLogList::
+                           GetWebRtcLogDirectoriesForBrowserContextPath(
+                               entry->GetPath())));
   }
 }

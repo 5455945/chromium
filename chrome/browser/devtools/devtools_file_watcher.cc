@@ -1,4 +1,4 @@
-// Copyright (c) 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,24 +10,31 @@
 #include <set>
 #include <unordered_map>
 
-#include "base/bind.h"
+#include "base/check_op.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/files/file_path_watcher.h"
-#include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
-#include "base/sequenced_task_runner.h"
+#include "base/memory/weak_ptr.h"
+#include "base/notimplemented.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/lazy_thread_pool_task_runner.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/time/time.h"
 #include "base/trace_event/memory_dump_manager.h"
 #include "base/trace_event/memory_dump_provider.h"
 #include "content/public/browser/browser_thread.h"
 
 using content::BrowserThread;
 
-static constexpr int kFirstThrottleTimeout = 10;
-static constexpr int kDefaultThrottleTimeout = 200;
+namespace {
+
+constexpr base::TimeDelta kFirstThrottleTimeout = base::Milliseconds(10);
+constexpr base::TimeDelta kDefaultThrottleTimeout = base::Milliseconds(200);
+
+}  // namespace
 
 // DevToolsFileWatcher::SharedFileWatcher --------------------------------------
 
@@ -56,27 +63,29 @@ class DevToolsFileWatcher::SharedFileWatcher
   void DirectoryChanged(const base::FilePath& path, bool error);
   void DispatchNotifications();
 
-  std::vector<DevToolsFileWatcher*> listeners_;
+  std::vector<raw_ptr<DevToolsFileWatcher, VectorExperimental>> listeners_;
   std::map<base::FilePath, std::unique_ptr<base::FilePathWatcher>> watchers_;
   std::map<base::FilePath, FilePathTimesMap> file_path_times_;
   std::set<base::FilePath> pending_paths_;
   base::Time last_event_time_;
   base::TimeDelta last_dispatch_cost_;
   SEQUENCE_CHECKER(sequence_checker_);
+  base::WeakPtrFactory<SharedFileWatcher> weak_factory_{this};
 };
 
 DevToolsFileWatcher::SharedFileWatcher::SharedFileWatcher()
-    : last_dispatch_cost_(
-          base::TimeDelta::FromMilliseconds(kDefaultThrottleTimeout)) {
+    : last_dispatch_cost_(kDefaultThrottleTimeout) {
+  CHECK(!DevToolsFileWatcher::s_shared_watcher_);
   DevToolsFileWatcher::s_shared_watcher_ = this;
   base::trace_event::MemoryDumpManager::GetInstance()
       ->RegisterDumpProviderWithSequencedTaskRunner(
-          this, "DevTools", base::SequencedTaskRunnerHandle::Get(),
+          this, "DevTools", base::SequencedTaskRunner::GetCurrentDefault(),
           base::trace_event::MemoryDumpProvider::Options());
 }
 
 DevToolsFileWatcher::SharedFileWatcher::~SharedFileWatcher() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK_EQ(DevToolsFileWatcher::s_shared_watcher_, this);
   base::trace_event::MemoryDumpManager::GetInstance()->UnregisterDumpProvider(
       this);
   DevToolsFileWatcher::s_shared_watcher_ = nullptr;
@@ -114,7 +123,7 @@ void DevToolsFileWatcher::SharedFileWatcher::AddListener(
 void DevToolsFileWatcher::SharedFileWatcher::RemoveListener(
     DevToolsFileWatcher* watcher) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  auto it = std::find(listeners_.begin(), listeners_.end(), watcher);
+  auto it = std::ranges::find(listeners_, watcher);
   listeners_.erase(it);
   if (listeners_.empty()) {
     file_path_times_.clear();
@@ -133,7 +142,7 @@ void DevToolsFileWatcher::SharedFileWatcher::AddWatch(
   bool success = watchers_[path]->Watch(
       path, base::FilePathWatcher::Type::kRecursive,
       base::BindRepeating(&SharedFileWatcher::DirectoryChanged,
-                          base::Unretained(this)));
+                          weak_factory_.GetWeakPtr()));
   if (!success)
     return;
 
@@ -171,16 +180,16 @@ void DevToolsFileWatcher::SharedFileWatcher::DirectoryChanged(
 
   base::Time now = base::Time::Now();
   // Quickly dispatch first chunk.
-  base::TimeDelta shedule_for =
-      now - last_event_time_ > last_dispatch_cost_ ?
-          base::TimeDelta::FromMilliseconds(kFirstThrottleTimeout) :
-          last_dispatch_cost_ * 2;
+  base::TimeDelta schedule_for = now - last_event_time_ > last_dispatch_cost_
+                                     ? kFirstThrottleTimeout
+                                     : last_dispatch_cost_ * 2;
 
-  base::SequencedTaskRunnerHandle::Get()->PostDelayedTask(
+  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE,
       base::BindOnce(
-          &DevToolsFileWatcher::SharedFileWatcher::DispatchNotifications, this),
-      shedule_for);
+          &DevToolsFileWatcher::SharedFileWatcher::DispatchNotifications,
+          weak_factory_.GetWeakPtr()),
+      schedule_for);
   last_event_time_ = now;
 }
 
@@ -193,9 +202,9 @@ void DevToolsFileWatcher::SharedFileWatcher::DispatchNotifications() {
   std::vector<std::string> removed_paths;
   std::vector<std::string> changed_paths;
 
-  for (const auto& path : pending_paths_) {
-    FilePathTimesMap& old_times = file_path_times_[path];
-    FilePathTimesMap current_times = GetModificationTimes(path);
+  for (const auto& pending_path : pending_paths_) {
+    FilePathTimesMap& old_times = file_path_times_[pending_path];
+    FilePathTimesMap current_times = GetModificationTimes(pending_path);
     for (const auto& path_time : current_times) {
       const base::FilePath& path = path_time.first;
       auto old_timestamp = old_times.find(path);
@@ -213,7 +222,7 @@ void DevToolsFileWatcher::SharedFileWatcher::DispatchNotifications() {
   }
   pending_paths_.clear();
 
-  for (auto* watcher : listeners_) {
+  for (DevToolsFileWatcher* watcher : listeners_) {
     watcher->client_task_runner_->PostTask(
         FROM_HERE, base::BindOnce(watcher->callback_, changed_paths,
                                   added_paths, removed_paths));
@@ -254,18 +263,30 @@ DevToolsFileWatcher::DevToolsFileWatcher(
 }
 
 DevToolsFileWatcher::~DevToolsFileWatcher() {
-  DCHECK(impl_task_runner()->RunsTasksInCurrentSequence());
+  CHECK(impl_task_runner()->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M161);
   shared_watcher_->RemoveListener(this);
 }
 
 void DevToolsFileWatcher::InitSharedWatcher() {
-  if (!DevToolsFileWatcher::s_shared_watcher_)
-    new SharedFileWatcher();
-  shared_watcher_ = DevToolsFileWatcher::s_shared_watcher_;
+  if (DevToolsFileWatcher::s_shared_watcher_) {
+    shared_watcher_ = DevToolsFileWatcher::s_shared_watcher_;
+  } else {
+    shared_watcher_ = base::MakeRefCounted<SharedFileWatcher>();
+  }
   shared_watcher_->AddListener(this);
 }
 
 void DevToolsFileWatcher::AddWatch(base::FilePath path) {
+#if BUILDFLAG(IS_ANDROID)
+  // DevToolsFileWatcher cannot watch files held by other Android apps.
+  // TODO(crbug.com/540021706): Implement watch logic for virtual document
+  // paths.
+  if (path.IsContentUri() || path.IsVirtualDocumentPath()) {
+    NOTIMPLEMENTED() << "Cannot watch this path: " << path.value();
+    return;
+  }
+#endif
   impl_task_runner()->PostTask(
       FROM_HERE, base::BindOnce(&DevToolsFileWatcher::AddWatchOnImpl,
                                 base::Unretained(this), std::move(path)));

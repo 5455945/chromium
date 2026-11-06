@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 #include <utility>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -26,6 +26,9 @@ class FakeSerialPort : public mojom::SerialPort {
     watcher_.set_disconnect_handler(base::BindOnce(
         [](FakeSerialPort* self) { delete self; }, base::Unretained(this)));
   }
+
+  FakeSerialPort(const FakeSerialPort&) = delete;
+  FakeSerialPort& operator=(const FakeSerialPort&) = delete;
 
   ~FakeSerialPort() override = default;
 
@@ -68,7 +71,9 @@ class FakeSerialPort : public mojom::SerialPort {
 
   void GetPortInfo(GetPortInfoCallback callback) override { NOTREACHED(); }
 
-  void Close(CloseCallback callback) override { std::move(callback).Run(); }
+  void Close(bool flush, CloseCallback callback) override {
+    std::move(callback).Run();
+  }
 
  private:
   mojo::Receiver<mojom::SerialPort> receiver_{this};
@@ -78,8 +83,6 @@ class FakeSerialPort : public mojom::SerialPort {
   mojo::ScopedDataPipeConsumerHandle in_stream_;
   mojo::ScopedDataPipeProducerHandle out_stream_;
   mojo::Remote<mojom::SerialPortClient> client_;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeSerialPort);
 };
 
 }  // namespace
@@ -103,9 +106,10 @@ void FakeSerialPortManager::AddPort(mojom::SerialPortInfoPtr port) {
 
 void FakeSerialPortManager::RemovePort(base::UnguessableToken token) {
   auto it = ports_.find(token);
-  DCHECK(it != ports_.end());
+  CHECK(it != ports_.end());
   mojom::SerialPortInfoPtr info = std::move(it->second);
   ports_.erase(it);
+  info->connected = false;
 
   for (auto& client : clients_)
     client->OnPortRemoved(info.Clone());
@@ -116,7 +120,8 @@ void FakeSerialPortManager::SetClient(
   clients_.Add(std::move(client));
 }
 
-void FakeSerialPortManager::GetDevices(GetDevicesCallback callback) {
+void FakeSerialPortManager::GetDevices(bool allow_bluetooth_system_prompt,
+                                       GetDevicesCallback callback) {
   std::vector<mojom::SerialPortInfoPtr> ports;
   for (const auto& map_entry : ports_)
     ports.push_back(map_entry.second.Clone());

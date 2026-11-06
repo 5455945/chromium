@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,17 +10,15 @@
 #include <vector>
 
 #include "base/containers/flat_set.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/sequenced_task_runner.h"
+#include "base/synchronization/lock.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "components/services/storage/public/mojom/quota_client.mojom.h"
-#include "mojo/public/cpp/bindings/pending_remote.h"
-#include "mojo/public/cpp/bindings/remote.h"
 #include "storage/browser/quota/quota_client_type.h"
 #include "storage/browser/quota/quota_manager_proxy.h"
 #include "storage/browser/test/mock_quota_manager.h"
-#include "third_party/blink/public/mojom/quota/quota_types.mojom.h"
 #include "url/origin.h"
 
 namespace storage {
@@ -35,73 +33,93 @@ class MockQuotaManagerProxy : public QuotaManagerProxy {
       MockQuotaManager* quota_manager,
       scoped_refptr<base::SequencedTaskRunner> quota_manager_task_runner);
 
-  void RegisterClient(
-      mojo::PendingRemote<mojom::QuotaClient> client,
-      QuotaClientType client_type,
-      const std::vector<blink::mojom::StorageType>& storage_types) override;
+  MockQuotaManagerProxy(const MockQuotaManagerProxy&) = delete;
+  MockQuotaManagerProxy& operator=(const MockQuotaManagerProxy&) = delete;
+
+  void UpdateOrCreateBucket(
+      const BucketInitParams& bucket_params,
+      base::OnceCallback<void(QuotaErrorOr<BucketInfo>)> callback) override;
+
+  QuotaErrorOr<BucketInfo> GetOrCreateBucketSync(
+      const BucketInitParams& params) override;
+
+  void GetBucketByNameUnsafe(
+      const blink::StorageKey& storage_key,
+      const std::string& bucket_name,
+      base::OnceCallback<void(QuotaErrorOr<BucketInfo>)>) override;
+
+  void GetBucketById(
+      const BucketId& bucket_id,
+      base::OnceCallback<void(QuotaErrorOr<BucketInfo>)> callback) override;
+
+  void GetBucketsForStorageKey(
+      const blink::StorageKey& storage_key,
+      bool delete_expired,
+      base::OnceCallback<void(QuotaErrorOr<std::set<BucketInfo>>)> callback)
+      override;
 
   // We don't mock them.
-  void NotifyStorageKeyInUse(const blink::StorageKey& storage_key) override;
-  void NotifyStorageKeyNoLongerInUse(
-      const blink::StorageKey& storage_key) override;
-  void SetUsageCacheEnabled(storage::QuotaClientType client_id,
+  void SetUsageCacheEnabled(QuotaClientType client_id,
                             const blink::StorageKey& storage_key,
-                            blink::mojom::StorageType type,
                             bool enabled) override {}
   void GetUsageAndQuota(
       const blink::StorageKey& storage_key,
-      blink::mojom::StorageType type,
-      scoped_refptr<base::SequencedTaskRunner> callback_task_runner,
       UsageAndQuotaCallback callback) override;
 
-  // Validates the `client_id` and updates the internal access count
-  // which can be accessed via notify_storage_accessed_count().
-  // The also records the `storage_key` and `type` in last_notified_storage_key_
-  // and last_notified_type_.
-  void NotifyStorageAccessed(const blink::StorageKey& storage_key,
-                             blink::mojom::StorageType type,
-                             base::Time access_time) override;
+  void GetUsageAndQuota(
+      const BucketLocator& bucket_locator,
+      UsageAndQuotaCallback callback);
 
-  // Records the `storage_key`, `type` and `delta` as
-  // last_notified_storage_key_, last_notified_type_ and last_notified_delta_
-  // respectively. If non-null MockQuotaManager is given to the constructor this
-  // also updates the manager's internal usage information.
-  void NotifyStorageModified(
-      storage::QuotaClientType client_id,
-      const blink::StorageKey& storage_key,
-      blink::mojom::StorageType type,
-      int64_t delta,
+  // Updates the internal access count which can be accessed via
+  // `notify_bucket_accessed_count()`. Also, records the `bucket_id` in
+  // `last_notified_bucket_id_`.
+  void NotifyBucketAccessed(const BucketLocator& bucket,
+                            base::Time access_time) override;
+
+  // Records the `bucket_id` and `delta` as `last_notified_bucket_id_` and
+  // `last_notified_bucket_delta_` respectively. If a non-null
+  // `MockQuotaManager` is given to the constructor, this also updates the
+  // manager's internal usage information.
+  void NotifyBucketModified(
+      QuotaClientType client_id,
+      const BucketLocator& bucket,
+      std::optional<int64_t> delta,
       base::Time modification_time,
-      scoped_refptr<base::SequencedTaskRunner> callback_task_runner,
       base::OnceClosure callback) override;
 
-  int notify_storage_accessed_count() const { return storage_accessed_count_; }
-  int notify_storage_modified_count() const { return storage_modified_count_; }
+  void CreateBucketForTesting(
+      const blink::StorageKey& storage_key,
+      const std::string& bucket_name,
+      base::OnceCallback<void(QuotaErrorOr<BucketInfo>)> callback) override;
+
   blink::StorageKey last_notified_storage_key() const {
     return last_notified_storage_key_;
   }
-  blink::mojom::StorageType last_notified_type() const {
-    return last_notified_type_;
+
+  int notify_bucket_accessed_count() const { return bucket_accessed_count_; }
+  int notify_bucket_modified_count() const { return bucket_modified_count_; }
+  BucketId last_notified_bucket_id() const { return last_notified_bucket_id_; }
+  std::optional<int64_t> last_notified_bucket_delta() const {
+    return last_notified_bucket_delta_;
   }
-  int64_t last_notified_delta() const { return last_notified_delta_; }
-  bool StorageKeyInUse(const blink::StorageKey& storage_key) const;
 
  protected:
   ~MockQuotaManagerProxy() override;
 
  private:
-  MockQuotaManager* const mock_quota_manager_;
+  const raw_ptr<MockQuotaManager, AcrossTasksDanglingUntriaged>
+      mock_quota_manager_;
 
-  int storage_accessed_count_;
-  int storage_modified_count_;
+  // The real QuotaManagerProxy is safe to call into from any thread, therefore
+  // this mock quota manager must also be safe to call into from any thread.
+  base::Lock lock_;
+
   blink::StorageKey last_notified_storage_key_;
-  blink::mojom::StorageType last_notified_type_;
-  int64_t last_notified_delta_;
-  base::flat_set<blink::StorageKey> storage_keys_in_use_;
 
-  mojo::Remote<mojom::QuotaClient> registered_client_;
-
-  DISALLOW_COPY_AND_ASSIGN(MockQuotaManagerProxy);
+  int bucket_accessed_count_ = 0;
+  int bucket_modified_count_ = 0;
+  BucketId last_notified_bucket_id_ = BucketId::FromUnsafeValue(-1);
+  std::optional<int64_t> last_notified_bucket_delta_;
 };
 
 }  // namespace storage

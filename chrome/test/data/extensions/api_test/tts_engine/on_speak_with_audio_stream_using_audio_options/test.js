@@ -1,12 +1,14 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 chrome.test.runTests([function testSendAudioData() {
   // Sends a series of audio buffers, and verifies we get events for them.
   const expectedEvents = [
-    {type: 'start', charIndex: 0}, {'type': 'word', 'charIndex': 10},
-    {type: 'word', charIndex: 20}, {type: 'end', charIndex: 39}
+    {type: 'start', charIndex: 0},
+    {'type': 'word', 'charIndex': 10},
+    {type: 'word', charIndex: 20},
+    {type: 'end', charIndex: 39},
   ];
 
   chrome.ttsEngine.onStop.addListener(() => {});
@@ -44,7 +46,7 @@ chrome.test.runTests([function testSendAudioData() {
   function onEvent(event) {
     const expected = expectedEvents.shift();
     chrome.test.assertEq(JSON.stringify(expected), JSON.stringify(event));
-    if (event.type == 'end') {
+    if (event.type === 'end') {
       chrome.test.assertEq(0, expectedEvents.length);
       chrome.test.assertEq(1, errors);
       chrome.test.succeed();

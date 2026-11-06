@@ -1,46 +1,50 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <list>
 
-#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/views/payments/payment_request_browsertest_base.h"
 #include "chrome/browser/ui/views/payments/payment_request_dialog_view_ids.h"
-#include "components/autofill/core/browser/autofill_test_utils.h"
-#include "components/autofill/core/browser/data_model/autofill_profile.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace payments {
 
-class PaymentRequestShippingOptionViewControllerTest
-    : public PaymentRequestBrowserTestBase {
- protected:
-  PaymentRequestShippingOptionViewControllerTest() {}
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(PaymentRequestShippingOptionViewControllerTest);
-};
+using PaymentRequestShippingOptionViewControllerTest =
+    PaymentRequestBrowserTestBase;
 
 IN_PROC_BROWSER_TEST_F(PaymentRequestShippingOptionViewControllerTest,
                        SelectingVariousShippingOptions) {
+  // Installs two apps so that the Payment Request UI will be shown.
+  std::string a_method_name;
+  InstallPaymentApp("a.com", "/payment_request_success_responder.js",
+                    &a_method_name);
+  std::string b_method_name;
+  InstallPaymentApp("b.com", "/payment_request_success_responder.js",
+                    &b_method_name);
+
   NavigateTo("/payment_request_dynamic_shipping_test.html");
   // In MI state, shipping is $5.00.
   autofill::AutofillProfile michigan = autofill::test::GetFullProfile2();
-  michigan.set_use_count(100U);
+  michigan.usage_history().set_use_count(100U);
   AddAutofillProfile(michigan);
   // A Canadian address will have no shipping options.
   autofill::AutofillProfile canada = autofill::test::GetFullProfile();
   canada.SetRawInfo(autofill::ADDRESS_HOME_COUNTRY, u"CA");
-  canada.set_use_count(50U);
+  canada.usage_history().set_use_count(50U);
   AddAutofillProfile(canada);
 
-  InvokePaymentRequestUI();
+  InvokePaymentRequestUIWithJs(content::JsReplace(
+      "buyWithMethods([{supportedMethods:$1}, {supportedMethods:$2}]);",
+      a_method_name, b_method_name));
 
   // There is no shipping option section, because no address has been selected.
-  PaymentRequest* request = GetPaymentRequests(GetActiveWebContents()).front();
+  PaymentRequest* request = GetPaymentRequests().front();
   EXPECT_EQ(2U, request->state()->shipping_profiles().size());
   EXPECT_EQ(nullptr, request->state()->selected_shipping_profile());
   EXPECT_EQ(nullptr, dialog_view()->GetViewByID(static_cast<int>(

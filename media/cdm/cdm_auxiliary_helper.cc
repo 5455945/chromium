@@ -1,13 +1,23 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/cdm/cdm_auxiliary_helper.h"
 
+#include "build/build_config.h"
 #include "media/base/cdm_context.h"
 #include "media/cdm/cdm_helpers.h"
 
+#if BUILDFLAG(IS_WIN)
+#include <optional>
+
+#include "media/cdm/media_foundation_cdm_data.h"
+#endif  // BUILDFLAG(IS_WIN)
+
 namespace media {
+
+CdmMetricsData::CdmMetricsData() = default;
+CdmMetricsData::~CdmMetricsData() = default;
 
 CdmAuxiliaryHelper::CdmAuxiliaryHelper() = default;
 CdmAuxiliaryHelper::~CdmAuxiliaryHelper() = default;
@@ -21,6 +31,8 @@ cdm::FileIO* CdmAuxiliaryHelper::CreateCdmFileIO(cdm::FileIOClient* client) {
 url::Origin CdmAuxiliaryHelper::GetCdmOrigin() {
   return url::Origin();
 }
+
+void CdmAuxiliaryHelper::RecordUkm(const CdmMetricsData& cdm_metrics_data) {}
 
 cdm::Buffer* CdmAuxiliaryHelper::CreateCdmBuffer(size_t capacity) {
   return nullptr;
@@ -49,10 +61,19 @@ void CdmAuxiliaryHelper::GetStorageId(uint32_t version, StorageIdCB callback) {
   std::move(callback).Run(version, std::vector<uint8_t>());
 }
 
-#if defined(OS_WIN)
-void CdmAuxiliaryHelper::GetCdmOriginId(GetCdmOriginIdCB callback) {
-  std::move(callback).Run(base::UnguessableToken::Null());
+#if BUILDFLAG(IS_WIN)
+void CdmAuxiliaryHelper::GetMediaFoundationCdmData(
+    GetMediaFoundationCdmDataCB callback) {
+  std::move(callback).Run(std::make_unique<MediaFoundationCdmData>(
+      base::UnguessableToken::Null(), base::FilePath()));
 }
-#endif  // defined(OS_WIN)
+
+void CdmAuxiliaryHelper::OnCdmEvent(CdmEvent event, HRESULT hresult) {}
+
+void CdmAuxiliaryHelper::GetContentProtectionWindow(
+    GetContentProtectionWindowCB callback) {
+  std::move(callback).Run(0u);
+}
+#endif  // BUILDFLAG(IS_WIN)
 
 }  // namespace media

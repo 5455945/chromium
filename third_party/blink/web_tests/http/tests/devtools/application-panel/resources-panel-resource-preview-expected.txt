@@ -3,132 +3,180 @@ Tests Application Panel preview for resources of different types.
 Initial state:
 Application
   Manifest (selected)
-  Service Workers
+    Identity
+    Presentation
+    Protocol handlers
+    Icons
+    Window Controls Overlay
+  Service workers
   Storage
+  WebMCPNEW
 Storage
-  Local Storage
+  Local storage
     http://127.0.0.1:8000
-  Session Storage
+  Session storage
     http://127.0.0.1:8000
+  Extension storage
   IndexedDB
-  Web SQL
   Cookies
     http://127.0.0.1:8000
-  Trust Tokens
-Cache
-  Cache Storage
-  Application Cache
-Background Services
-  Background Fetch
-  Background Sync
+  Private state tokens
+  Cache storage
+  Storage buckets
+Background services
+  Back/forward cache
+  Background fetch
+  Background sync
+  Bounce tracking mitigations
   Notifications
-  Payment Handler
-  Periodic Background Sync
-  Push Messaging
+  Payment handler
+  Periodic background sync
+  Speculative loads
+    Rules
+    Speculations
+  Push messaging
+  Reporting API
+    Crash report context
 Frames
   top
-    Images
+    Image
       image.png
-    Scripts
+    JavaScript
       json-value.js
     inspected-page.html
 log: visible view: unknown
 Revealed json-value.js:
 Application
   Manifest
-  Service Workers
+    Identity
+    Presentation
+    Protocol handlers
+    Icons
+    Window Controls Overlay
+  Service workers
   Storage
+  WebMCPNEW
 Storage
-  Local Storage
+  Local storage
     http://127.0.0.1:8000
-  Session Storage
+  Session storage
     http://127.0.0.1:8000
+  Extension storage
   IndexedDB
-  Web SQL
   Cookies
     http://127.0.0.1:8000
-  Trust Tokens
-Cache
-  Cache Storage
-  Application Cache
-Background Services
-  Background Fetch
-  Background Sync
+  Private state tokens
+  Cache storage
+  Storage buckets
+Background services
+  Back/forward cache
+  Background fetch
+  Background sync
+  Bounce tracking mitigations
   Notifications
-  Payment Handler
-  Periodic Background Sync
-  Push Messaging
+  Payment handler
+  Periodic background sync
+  Speculative loads
+    Rules
+    Speculations
+  Push messaging
+  Reporting API
+    Crash report context
 Frames
   top
-    Images
+    Image
       image.png
-    Scripts
+    JavaScript
       json-value.js (selected)
     inspected-page.html
 log: visible view: json
 Revealed image.png:
 Application
   Manifest
-  Service Workers
+    Identity
+    Presentation
+    Protocol handlers
+    Icons
+    Window Controls Overlay
+  Service workers
   Storage
+  WebMCPNEW
 Storage
-  Local Storage
+  Local storage
     http://127.0.0.1:8000
-  Session Storage
+  Session storage
     http://127.0.0.1:8000
+  Extension storage
   IndexedDB
-  Web SQL
   Cookies
     http://127.0.0.1:8000
-  Trust Tokens
-Cache
-  Cache Storage
-  Application Cache
-Background Services
-  Background Fetch
-  Background Sync
+  Private state tokens
+  Cache storage
+  Storage buckets
+Background services
+  Back/forward cache
+  Background fetch
+  Background sync
+  Bounce tracking mitigations
   Notifications
-  Payment Handler
-  Periodic Background Sync
-  Push Messaging
+  Payment handler
+  Periodic background sync
+  Speculative loads
+    Rules
+    Speculations
+  Push messaging
+  Reporting API
+    Crash report context
 Frames
   top
-    Images
+    Image
       image.png (selected)
-    Scripts
+    JavaScript
       json-value.js
     inspected-page.html
 log: visible view: image
 Revealed resources-panel-resource-preview.js:
 Application
   Manifest
-  Service Workers
+    Identity
+    Presentation
+    Protocol handlers
+    Icons
+    Window Controls Overlay
+  Service workers
   Storage
+  WebMCPNEW
 Storage
-  Local Storage
+  Local storage
     http://127.0.0.1:8000
-  Session Storage
+  Session storage
     http://127.0.0.1:8000
+  Extension storage
   IndexedDB
-  Web SQL
   Cookies
     http://127.0.0.1:8000
-  Trust Tokens
-Cache
-  Cache Storage
-  Application Cache
-Background Services
-  Background Fetch
-  Background Sync
+  Private state tokens
+  Cache storage
+  Storage buckets
+Background services
+  Back/forward cache
+  Background fetch
+  Background sync
+  Bounce tracking mitigations
   Notifications
-  Payment Handler
-  Periodic Background Sync
-  Push Messaging
+  Payment handler
+  Periodic background sync
+  Speculative loads
+    Rules
+    Speculations
+  Push messaging
+  Reporting API
+    Crash report context
 Frames
   top
-    Images
+    Image
       image.png
-    Scripts
+    JavaScript
       json-value.js (selected)
     inspected-page.html
 log: visible view: json

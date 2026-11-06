@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,8 @@
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "dbus/object_path.h"
 #include "device/bluetooth/bluetooth_remote_gatt_characteristic.h"
@@ -28,6 +28,11 @@ class BluetoothRemoteGattDescriptorBlueZ
     : public BluetoothGattDescriptorBlueZ,
       public device::BluetoothRemoteGattDescriptor {
  public:
+  BluetoothRemoteGattDescriptorBlueZ(
+      const BluetoothRemoteGattDescriptorBlueZ&) = delete;
+  BluetoothRemoteGattDescriptorBlueZ& operator=(
+      const BluetoothRemoteGattDescriptorBlueZ&) = delete;
+
   // device::BluetoothRemoteGattDescriptor overrides.
   ~BluetoothRemoteGattDescriptorBlueZ() override;
   device::BluetoothUUID GetUUID() const override;
@@ -36,7 +41,7 @@ class BluetoothRemoteGattDescriptorBlueZ
   device::BluetoothRemoteGattCharacteristic::Permissions GetPermissions()
       const override;
   void ReadRemoteDescriptor(ValueCallback callback) override;
-  void WriteRemoteDescriptor(const std::vector<uint8_t>& new_value,
+  void WriteRemoteDescriptor(base::span<const uint8_t> new_value,
                              base::OnceClosure callback,
                              ErrorCallback error_callback) override;
 
@@ -60,14 +65,12 @@ class BluetoothRemoteGattDescriptorBlueZ
                const std::string& error_message);
 
   // The GATT characteristic this descriptor belongs to.
-  BluetoothRemoteGattCharacteristicBlueZ* characteristic_;
+  raw_ptr<BluetoothRemoteGattCharacteristicBlueZ> characteristic_;
 
   // Note: This should remain the last member so it'll be destroyed and
   // invalidate its weak pointers before any other members are destroyed.
   base::WeakPtrFactory<BluetoothRemoteGattDescriptorBlueZ> weak_ptr_factory_{
       this};
-
-  DISALLOW_COPY_AND_ASSIGN(BluetoothRemoteGattDescriptorBlueZ);
 };
 
 }  // namespace bluez

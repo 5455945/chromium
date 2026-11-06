@@ -1,4 +1,4 @@
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -20,25 +20,27 @@ def _FindParameterListParen(name):
     idx = name.find('(', start_idx)
     if idx == -1:
       return -1
-    template_balance_count += (
-        name.count('<', start_idx, idx) - name.count('>', start_idx, idx))
-    # Special: operators with angle brackets.
-    operator_idx = name.find('operator<', start_idx, idx)
-    if operator_idx != -1:
-      if name[operator_idx + 9] == '<':
-        template_balance_count -= 2
-      else:
-        template_balance_count -= 1
-    else:
-      operator_idx = name.find('operator>', start_idx, idx)
+    lt_count = name.count('<', start_idx, idx)
+    gt_count = name.count('>', start_idx, idx)
+    if lt_count or gt_count:
+      template_balance_count += lt_count - gt_count
+      # Special: operators with angle brackets.
+      operator_idx = name.find('operator<', start_idx, idx) if lt_count else -1
       if operator_idx != -1:
-        if name[operator_idx + 9] == '>':
-          template_balance_count += 2
+        if name[operator_idx + 9] == '<':
+          template_balance_count -= 2
         else:
-          template_balance_count += 1
+          template_balance_count -= 1
+      elif gt_count:
+        operator_idx = name.find('operator>', start_idx, idx)
+        if operator_idx != -1:
+          if name[operator_idx + 9] == '>':
+            template_balance_count += 2
+          else:
+            template_balance_count += 1
 
-    paren_balance_count += (
-        name.count('(', start_idx, idx) - name.count(')', start_idx, idx))
+    # No need to count "(" since |idx| is the first one after |start_idx|.
+    paren_balance_count -= name.count(')', start_idx, idx)
     if template_balance_count == 0 and paren_balance_count == 0:
       # Special case: skip "(anonymous namespace)".
       if -1 != name.find('(anonymous namespace)', idx, idx + 21):
@@ -46,7 +48,7 @@ def _FindParameterListParen(name):
         continue
       # Special case: skip "decltype (...)"
       # Special case: skip "{lambda(PaintOp*)#63}"
-      if name[idx - 1] != ' ' and name[idx - 7:idx] != '{lambda':
+      if name[idx - 1] != ' ' and name[idx - 7 : idx] != '{lambda':
         return idx
     start_idx = idx + 1
     paren_balance_count += 1
@@ -56,16 +58,24 @@ def _FindLastCharOutsideOfBrackets(name, target_char, prev_idx=None):
   """Returns the last index of |target_char| that is not within ()s nor <>s."""
   paren_balance_count = 0
   template_balance_count = 0
+  has_parens = ')' in name
+  is_lt = target_char == '<'
   while True:
     idx = name.rfind(target_char, 0, prev_idx)
     if idx == -1:
       return -1
     # It is much faster to use.find() and.count() than to loop over each
     # character.
-    template_balance_count += (
-        name.count('<', idx, prev_idx) - name.count('>', idx, prev_idx))
-    paren_balance_count += (
-        name.count('(', idx, prev_idx) - name.count(')', idx, prev_idx))
+    if is_lt:
+      template_balance_count += 1 - name.count('>', idx, prev_idx)
+    else:
+      template_balance_count += name.count('<', idx, prev_idx) - name.count(
+        '>', idx, prev_idx
+      )
+    if has_parens:
+      paren_balance_count += name.count('(', idx, prev_idx) - name.count(
+        ')', idx, prev_idx
+      )
     if template_balance_count == 0 and paren_balance_count == 0:
       return idx
     prev_idx = idx
@@ -96,6 +106,20 @@ def _FindReturnValueSpace(name, paren_idx):
   return space_idx
 
 
+def _StripAbiTag(name):
+  # Clang attribute. E.g.: std::allocator<Foo[6]>construct[abi:100]<Bar[7]>()
+  start_idx = 0
+  while True:
+    start_idx = name.find('[abi:', start_idx, len(name) - 1)
+    if start_idx == -1:
+      break
+    end_idx = name.find(']', start_idx + 5)
+    if end_idx == -1:
+      break
+    name = name[:start_idx] + name[end_idx + 1 :]
+  return name
+
+
 def _StripTemplateArgs(name):
   last_right_idx = None
   while True:
@@ -105,7 +129,7 @@ def _StripTemplateArgs(name):
     left_idx = _FindLastCharOutsideOfBrackets(name, '<', last_right_idx + 1)
     if left_idx != -1:
       # Leave in empty <>s to denote that it's a template.
-      name = name[:left_idx + 1] + name[last_right_idx:]
+      name = name[: left_idx + 1] + name[last_right_idx:]
       last_right_idx = left_idx
 
 
@@ -114,18 +138,20 @@ def _NormalizeTopLevelGccLambda(name, left_paren_idx):
   left_brace_idx = name.index('{')
   hash_idx = name.index('#', left_brace_idx + 1)
   right_brace_idx = name.index('}', hash_idx + 1)
-  number = name[hash_idx + 1:right_brace_idx]
+  number = name[hash_idx + 1 : right_brace_idx]
   return '{}$lambda#{}{}'.format(
-      name[:left_brace_idx], number, name[left_paren_idx:])
+    name[:left_brace_idx], number, name[left_paren_idx:]
+  )
 
 
 def _NormalizeTopLevelClangLambda(name, left_paren_idx):
   # cc::$_21::__invoke() -> cc::$lambda#21()
   dollar_idx = name.index('$')
   colon_idx = name.index(':', dollar_idx + 1)
-  number = name[dollar_idx + 2:colon_idx]
+  number = name[dollar_idx + 2 : colon_idx]
   return '{}$lambda#{}{}'.format(
-      name[:dollar_idx], number, name[left_paren_idx:])
+    name[:dollar_idx], number, name[left_paren_idx:]
+  )
 
 
 def ParseJava(full_name):
@@ -151,10 +177,10 @@ def ParseJava(full_name):
     full_new_class_name = full_name[:hash_idx]
     colon_idx = full_name.find(':')
     if colon_idx == -1:
-      member = full_name[hash_idx + 1:]
+      member = full_name[hash_idx + 1 :]
       member_type = ''
     else:
-      member = full_name[hash_idx + 1:colon_idx]
+      member = full_name[hash_idx + 1 : colon_idx]
       member_type = full_name[colon_idx:]
   else:
     parts = full_name.split(' ')
@@ -176,12 +202,12 @@ def ParseJava(full_name):
   dot_idx = member.rfind('.')
   if dot_idx != -1:
     full_old_class_name = member[:dot_idx]
-    member = member[dot_idx + 1:]
+    member = member[dot_idx + 1 :]
 
   short_class_name = full_old_class_name
   dot_idx = full_old_class_name.rfind('.')
   if dot_idx != -1:
-    short_class_name = short_class_name[dot_idx + 1:]
+    short_class_name = short_class_name[dot_idx + 1 :]
 
   name = '{}#{}'.format(short_class_name, member)
   template_name = '{}#{}'.format(full_old_class_name, member)
@@ -206,21 +232,23 @@ def Parse(name):
     right_paren_idx = name.rindex(')')
     assert right_paren_idx > left_paren_idx
     space_idx = _FindReturnValueSpace(name, left_paren_idx)
-    name_no_params = name[space_idx + 1:left_paren_idx]
+    name_no_params = name[space_idx + 1 : left_paren_idx]
+
     # Special case for top-level lambdas.
     if name_no_params.endswith('}::_FUN'):
       # Don't use |name_no_params| in here since prior _idx will be off if
       # there was a return value.
       name = _NormalizeTopLevelGccLambda(name, left_paren_idx)
       return Parse(name)
-    elif name_no_params.endswith('::__invoke') and '$' in name_no_params:
+    if name_no_params.endswith('::__invoke') and '$' in name_no_params:
       assert '$_' in name_no_params, 'Surprising lambda: ' + name
       name = _NormalizeTopLevelClangLambda(name, left_paren_idx)
       return Parse(name)
 
-    full_name = name[space_idx + 1:]
-    name = name_no_params + name[right_paren_idx + 1:]
+    full_name = name[space_idx + 1 :]
+    name = name_no_params + name[right_paren_idx + 1 :]
 
+  name = _StripAbiTag(name)
   template_name = name
   name = _StripTemplateArgs(name)
   return full_name, template_name, name

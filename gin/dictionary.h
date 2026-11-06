@@ -1,10 +1,11 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef GIN_DICTIONARY_H_
 #define GIN_DICTIONARY_H_
 
+#include "base/memory/stack_allocated.h"
 #include "gin/converter.h"
 #include "gin/gin_export.h"
 
@@ -15,19 +16,18 @@ namespace gin {
 // arbitrary JavaScript object as a result. For example, Dictionary is useful
 // when you might use the |dictionary| type in WebIDL:
 //
-//   http://heycam.github.io/webidl/#idl-dictionaries
+//   https://webidl.spec.whatwg.org/#idl-dictionaries
 //
 // WARNING: You cannot retain a Dictionary object in the heap. The underlying
 //          storage for Dictionary is tied to the closest enclosing
-//          v8::HandleScope. Generally speaking, you should store a Dictionary
-//          on the stack.
+//          v8::HandleScope, so a Dictionary must live on the stack.
 //
 class GIN_EXPORT Dictionary {
+  STACK_ALLOCATED();
+
  public:
   explicit Dictionary(v8::Isolate* isolate);
   Dictionary(v8::Isolate* isolate, v8::Local<v8::Object> object);
-  Dictionary(const Dictionary& other);
-  ~Dictionary();
 
   static Dictionary CreateEmpty(v8::Isolate* isolate);
 

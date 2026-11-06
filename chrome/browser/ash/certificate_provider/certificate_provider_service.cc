@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,58 +10,58 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/macros.h"
 #include "base/memory/ptr_util.h"
-#include "base/strings/string_piece.h"
-#include "base/task_runner.h"
-#include "base/task_runner_util.h"
-#include "base/threading/sequenced_task_runner_handle.h"
-#include "chrome/browser/ash/certificate_provider/certificate_provider.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/task_runner.h"
+#include "chromeos/components/certificate_provider/certificate_provider.h"
+#include "extensions/common/extension_id.h"
 #include "net/base/net_errors.h"
 
-namespace ash {
+namespace chromeos {
 
 namespace {
 
 void PostSignResult(net::SSLPrivateKey::SignCallback callback,
                     net::Error error,
                     const std::vector<uint8_t>& signature) {
-  base::SequencedTaskRunnerHandle::Get()->PostTask(
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), error, signature));
 }
 
 void PostIdentities(
     base::OnceCallback<void(net::ClientCertIdentityList)> callback,
     net::ClientCertIdentityList certs) {
-  base::SequencedTaskRunnerHandle::Get()->PostTask(
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), std::move(certs)));
 }
 
 }  // namespace
 
 class CertificateProviderService::CertificateProviderImpl
-    : public CertificateProvider {
+    : public certificate_provider::CertificateProvider {
  public:
   // This provider must be used on the same thread as the
   // CertificateProviderService.
   explicit CertificateProviderImpl(
       const base::WeakPtr<CertificateProviderService>& service);
+
+  CertificateProviderImpl(const CertificateProviderImpl&) = delete;
+  CertificateProviderImpl& operator=(const CertificateProviderImpl&) = delete;
+
   ~CertificateProviderImpl() override;
 
   void GetCertificates(
       base::OnceCallback<void(net::ClientCertIdentityList)> callback) override;
 
  private:
-
   const base::WeakPtr<CertificateProviderService> service_;
   SEQUENCE_CHECKER(sequence_checker_);
-
-  DISALLOW_COPY_AND_ASSIGN(CertificateProviderImpl);
 };
 
 // Implements an SSLPrivateKey backed by the signing function exposed by an
@@ -73,6 +73,9 @@ class CertificateProviderService::SSLPrivateKey : public net::SSLPrivateKey {
                 const CertificateInfo& cert_info,
                 const base::WeakPtr<CertificateProviderService>& service);
 
+  SSLPrivateKey(const SSLPrivateKey&) = delete;
+  SSLPrivateKey& operator=(const SSLPrivateKey&) = delete;
+
   // net::SSLPrivateKey:
   std::string GetProviderName() override;
   std::vector<uint16_t> GetAlgorithmPreferences() override;
@@ -81,14 +84,12 @@ class CertificateProviderService::SSLPrivateKey : public net::SSLPrivateKey {
             SignCallback callback) override;
 
  private:
-  ~SSLPrivateKey() override = default;
+  ~SSLPrivateKey() override;
 
-  const std::string extension_id_;
+  const extensions::ExtensionId extension_id_;
   const CertificateInfo cert_info_;
   const base::WeakPtr<CertificateProviderService> service_;
   SEQUENCE_CHECKER(sequence_checker_);
-
-  DISALLOW_COPY_AND_ASSIGN(SSLPrivateKey);
 };
 
 class CertificateProviderService::ClientCertIdentity
@@ -98,6 +99,11 @@ class CertificateProviderService::ClientCertIdentity
                      base::WeakPtr<CertificateProviderService> service)
       : net::ClientCertIdentity(std::move(cert)), service_(service) {}
 
+  ClientCertIdentity(const ClientCertIdentity&) = delete;
+  ClientCertIdentity& operator=(const ClientCertIdentity&) = delete;
+
+  ~ClientCertIdentity() override;
+
   void AcquirePrivateKey(
       base::OnceCallback<void(scoped_refptr<net::SSLPrivateKey>)>
           private_key_callback) override;
@@ -105,13 +111,17 @@ class CertificateProviderService::ClientCertIdentity
  private:
   SEQUENCE_CHECKER(sequence_checker_);
   const base::WeakPtr<CertificateProviderService> service_;
-
-  DISALLOW_COPY_AND_ASSIGN(ClientCertIdentity);
 };
+
+CertificateProviderService::ClientCertIdentity::~ClientCertIdentity() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+}
 
 void CertificateProviderService::ClientCertIdentity::AcquirePrivateKey(
     base::OnceCallback<void(scoped_refptr<net::SSLPrivateKey>)>
         private_key_callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
   if (!service_) {
     std::move(private_key_callback).Run(nullptr);
     return;
@@ -138,7 +148,9 @@ CertificateProviderService::CertificateProviderImpl::CertificateProviderImpl(
     : service_(service) {}
 
 CertificateProviderService::CertificateProviderImpl::
-    ~CertificateProviderImpl() {}
+    ~CertificateProviderImpl() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+}
 
 void CertificateProviderService::CertificateProviderImpl::GetCertificates(
     base::OnceCallback<void(net::ClientCertIdentityList)> callback) {
@@ -191,7 +203,11 @@ void CertificateProviderService::SSLPrivateKey::Sign(
       /*authenticating_user_account_id=*/{}, std::move(callback));
 }
 
-CertificateProviderService::CertificateProviderService() {}
+CertificateProviderService::SSLPrivateKey::~SSLPrivateKey() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+}
+
+CertificateProviderService::CertificateProviderService() = default;
 
 CertificateProviderService::~CertificateProviderService() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -200,17 +216,19 @@ CertificateProviderService::~CertificateProviderService() {
 void CertificateProviderService::SetDelegate(
     std::unique_ptr<Delegate> delegate) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(!delegate_);
-  DCHECK(delegate);
+  CHECK(!delegate_, base::NotFatalUntil::M160);
+  CHECK(delegate, base::NotFatalUntil::M160);
 
   delegate_ = std::move(delegate);
 }
 
 void CertificateProviderService::AddObserver(Observer* observer) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   observers_.AddObserver(observer);
 }
 
 void CertificateProviderService::RemoveObserver(Observer* observer) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   observers_.RemoveObserver(observer);
 }
 
@@ -250,7 +268,7 @@ bool CertificateProviderService::ReplyToSignRequest(
     const std::vector<uint8_t>& signature) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  // TODO(crbug.com/1046860): Remove logging after stabilizing the feature.
+  // TODO(crbug.com/40671053): Remove logging after stabilizing the feature.
   LOG(WARNING) << "Extension " << extension_id
                << " replied to signature request " << sign_request_id
                << ", size " << signature.size();
@@ -261,6 +279,7 @@ bool CertificateProviderService::ReplyToSignRequest(
                                     &callback)) {
     return false;
   }
+  pin_dialog_manager_.RemoveSignRequest(extension_id, sign_request_id);
 
   const net::Error error_code = signature.empty() ? net::ERR_FAILED : net::OK;
   std::move(callback).Run(error_code, signature);
@@ -283,7 +302,7 @@ bool CertificateProviderService::LookUpCertificate(
                                             extension_id);
 }
 
-std::unique_ptr<CertificateProvider>
+std::unique_ptr<certificate_provider::CertificateProvider>
 CertificateProviderService::CreateCertificateProvider() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
@@ -318,7 +337,7 @@ void CertificateProviderService::RequestSignatureBySpki(
     const std::string& subject_public_key_info,
     uint16_t algorithm,
     base::span<const uint8_t> input,
-    const absl::optional<AccountId>& authenticating_user_account_id,
+    const std::optional<AccountId>& authenticating_user_account_id,
     net::SSLPrivateKey::SignCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   bool is_currently_provided = false;
@@ -356,6 +375,8 @@ bool CertificateProviderService::LookUpSpki(
 
 void CertificateProviderService::AbortSignatureRequestsForAuthenticatingUser(
     const AccountId& authenticating_user_account_id) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
   using ExtensionNameRequestIdPair =
       certificate_provider::SignRequests::ExtensionNameRequestIdPair;
 
@@ -368,11 +389,11 @@ void CertificateProviderService::AbortSignatureRequestsForAuthenticatingUser(
     const std::string& extension_id = sign_request.first;
     const int sign_request_id = sign_request.second;
 
-    // TODO(crbug.com/1046860): Remove logging after stabilizing the feature.
+    // TODO(crbug.com/40671053): Remove logging after stabilizing the feature.
     LOG(WARNING) << "Aborting user login signature request from extension "
                  << extension_id << " id " << sign_request_id;
 
-    pin_dialog_manager_.AbortSignRequest(extension_id, sign_request_id);
+    pin_dialog_manager_.RemoveSignRequest(extension_id, sign_request_id);
 
     scoped_refptr<net::X509Certificate> certificate;
     net::SSLPrivateKey::SignCallback sign_callback;
@@ -441,7 +462,7 @@ void CertificateProviderService::RequestSignatureFromExtension(
     const scoped_refptr<net::X509Certificate>& certificate,
     uint16_t algorithm,
     base::span<const uint8_t> input,
-    const absl::optional<AccountId>& authenticating_user_account_id,
+    const std::optional<AccountId>& authenticating_user_account_id,
     net::SSLPrivateKey::SignCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
@@ -449,7 +470,7 @@ void CertificateProviderService::RequestSignatureFromExtension(
       extension_id, certificate, authenticating_user_account_id,
       std::move(callback));
 
-  // TODO(crbug.com/1046860): Remove logging after stabilizing the feature.
+  // TODO(crbug.com/40671053): Remove logging after stabilizing the feature.
   LOG(WARNING) << "Starting signature request to extension " << extension_id
                << " id " << sign_request_id;
 
@@ -457,14 +478,15 @@ void CertificateProviderService::RequestSignatureFromExtension(
                                        authenticating_user_account_id);
   if (!delegate_->DispatchSignRequestToExtension(
           extension_id, sign_request_id, algorithm, certificate, input)) {
-    // TODO(crbug.com/1046860): Remove logging after stabilizing the feature.
+    // TODO(crbug.com/40671053): Remove logging after stabilizing the feature.
     LOG(WARNING) << "Failed to dispatch signature request to extension "
                  << extension_id << " id " << sign_request_id;
     scoped_refptr<net::X509Certificate> local_certificate;
     sign_requests_.RemoveRequest(extension_id, sign_request_id,
                                  &local_certificate, &callback);
+    pin_dialog_manager_.RemoveSignRequest(extension_id, sign_request_id);
     std::move(callback).Run(net::ERR_FAILED, std::vector<uint8_t>());
   }
 }
 
-}  // namespace ash
+}  // namespace chromeos

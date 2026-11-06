@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,12 @@
 // NOTE: The format of types has changed. 'FooType' is now
 //   'chrome.metricsPrivate.FooType'.
 // Please run the closure compiler before committing changes.
-// See https://chromium.googlesource.com/chromium/src/+/master/docs/closure_compilation.md
+// See https://chromium.googlesource.com/chromium/src/+/main/docs/closure_compilation.md
 
-/** @fileoverview Externs generated from namespace: metricsPrivate */
+/**
+ * @fileoverview Externs generated from namespace: metricsPrivate
+ * @externs
+ */
 
 /** @const */
 chrome.metricsPrivate = {};
@@ -52,16 +55,28 @@ chrome.metricsPrivate.HistogramBucket;
 chrome.metricsPrivate.Histogram;
 
 /**
+ * @enum {string}
+ */
+chrome.metricsPrivate.ExtensionUsageAction = {
+  K_PINNED: 'kPinned',
+  K_UNPINNED: 'kUnpinned',
+  K_CONTEXT_MENU_INIT: 'kContextMenuInit',
+  K_ACTION_CLICKED: 'kActionClicked',
+  K_ENABLED: 'kEnabled',
+  K_DISABLED: 'kDisabled',
+};
+
+/**
  * Get details about a histogram displayed at chrome://histogram.
  * @param {string} name Histogram name, e.g. 'Accessibility.CrosAutoclick'.
- * @param {function(!chrome.metricsPrivate.Histogram): void} callback Invoked
+ * @param {function(!chrome.metricsPrivate.Histogram): void=} callback Invoked
  *     with details.
  */
 chrome.metricsPrivate.getHistogram = function(name, callback) {};
 
 /**
  * Returns true if the user opted in to sending crash reports.
- * @param {function(boolean): void} callback
+ * @param {function(boolean): void=} callback
  */
 chrome.metricsPrivate.getIsCrashReportingEnabled = function(callback) {};
 
@@ -69,7 +84,7 @@ chrome.metricsPrivate.getIsCrashReportingEnabled = function(callback) {};
  * Returns the group name chosen for the named trial, or the empty string if the
  * trial does not exist or is not enabled.
  * @param {string} name
- * @param {function(string): void} callback
+ * @param {function(string): void=} callback
  */
 chrome.metricsPrivate.getFieldTrial = function(name, callback) {};
 
@@ -77,7 +92,7 @@ chrome.metricsPrivate.getFieldTrial = function(name, callback) {};
  * Returns variation parameters for the named trial if available, or undefined
  * otherwise.
  * @param {string} name
- * @param {function((Object|undefined)): void} callback
+ * @param {function((Object|undefined)): void=} callback
  */
 chrome.metricsPrivate.getVariationParams = function(name, callback) {};
 
@@ -86,6 +101,13 @@ chrome.metricsPrivate.getVariationParams = function(name, callback) {};
  * @param {string} name
  */
 chrome.metricsPrivate.recordUserAction = function(name) {};
+
+/**
+ * Records an extension usage UKM event triggered by user UI actions.
+ * @param {string} extensionId
+ * @param {!chrome.metricsPrivate.ExtensionUsageAction} action
+ */
+chrome.metricsPrivate.recordExtensionUsageUkm = function(extensionId, action) {};
 
 /**
  * Records a percentage value from 1 to 100.
@@ -141,11 +163,19 @@ chrome.metricsPrivate.recordLongTime = function(metricName, value) {};
 
 /**
  * Increments the count associated with the hash of |value| in the sparse
- * histogram defined by the |metricName|.
+ * histogram defined by the |metricName| using base::HashMetricName(value).
  * @param {string} metricName
  * @param {string} value
  */
-chrome.metricsPrivate.recordSparseHashable = function(metricName, value) {};
+chrome.metricsPrivate.recordSparseValueWithHashMetricName = function(metricName, value) {};
+
+/**
+ * Increments the count associated with the hash of |value| in the sparse
+ * histogram defined by the |metricName| using base::PersistentHash(value).
+ * @param {string} metricName
+ * @param {string} value
+ */
+chrome.metricsPrivate.recordSparseValueWithPersistentHash = function(metricName, value) {};
 
 /**
  * Increments the count associated with |value| in the sparse histogram defined

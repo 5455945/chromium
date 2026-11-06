@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,21 +6,33 @@
 #define NET_WEBSOCKETS_WEBSOCKET_STREAM_CREATE_TEST_BASE_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/timer/timer.h"
+#include "net/base/auth.h"
+#include "net/base/net_errors.h"
 #include "net/socket/socket_test_util.h"
 #include "net/ssl/ssl_info.h"
+#include "net/storage_access_api/status.h"
 #include "net/test/test_with_task_environment.h"
 #include "net/websockets/websocket_event_interface.h"
 #include "net/websockets/websocket_test_util.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class GURL;
+
+namespace base {
+class OneShotTimer;
+}  // namespace base
+
+namespace url {
+class Origin;
+}  // namespace url
 
 namespace net {
 
@@ -38,6 +50,11 @@ class WebSocketStreamCreateTestBase : public WithTaskEnvironment {
   using HeaderKeyValuePair = std::pair<std::string, std::string>;
 
   WebSocketStreamCreateTestBase();
+
+  WebSocketStreamCreateTestBase(const WebSocketStreamCreateTestBase&) = delete;
+  WebSocketStreamCreateTestBase& operator=(
+      const WebSocketStreamCreateTestBase&) = delete;
+
   virtual ~WebSocketStreamCreateTestBase();
 
   // A wrapper for CreateAndConnectStreamForTesting that knows about our default
@@ -45,7 +62,7 @@ class WebSocketStreamCreateTestBase : public WithTaskEnvironment {
   void CreateAndConnectStream(const GURL& socket_url,
                               const std::vector<std::string>& sub_protocols,
                               const url::Origin& origin,
-                              const SiteForCookies& site_for_cookies,
+                              StorageAccessApiStatus storage_access_api_status,
                               const IsolationInfo& isolation_info,
                               const HttpRequestHeaders& additional_headers,
                               std::unique_ptr<base::OneShotTimer> timer);
@@ -67,6 +84,10 @@ class WebSocketStreamCreateTestBase : public WithTaskEnvironment {
   // called.
   void WaitUntilOnAuthRequired();
 
+  // Runs |run_loop_waiting_on_url_request_connected_| until
+  // OnURLRequestConnected() is called.
+  void WaitUntilOnURLRequestConnected();
+
   // A simple function to make the tests more readable.
   std::vector<std::string> NoSubProtocols();
 
@@ -78,21 +99,27 @@ class WebSocketStreamCreateTestBase : public WithTaskEnvironment {
   // Only set if the connection failed.
   std::string failure_message_;
   int failure_response_code_ = -1;
-  bool has_failed_;
+  bool has_failed_ = false;
   std::unique_ptr<WebSocketHandshakeRequestInfo> request_info_;
   std::unique_ptr<WebSocketHandshakeResponseInfo> response_info_;
   std::unique_ptr<WebSocketEventInterface::SSLErrorCallbacks>
       ssl_error_callbacks_;
   SSLInfo ssl_info_;
-  bool ssl_fatal_;
-  URLRequest* url_request_;
+  bool ssl_fatal_ = false;
+  raw_ptr<URLRequest, AcrossTasksDanglingUntriaged> url_request_ = nullptr;
   AuthChallengeInfo auth_challenge_info_;
   base::OnceCallback<void(const AuthCredentials*)> on_auth_required_callback_;
 
   // This value will be copied to |*credentials| on OnAuthRequired.
-  absl::optional<AuthCredentials> auth_credentials_;
+  std::optional<AuthCredentials> auth_credentials_;
   // OnAuthRequired returns this value.
   int on_auth_required_rv_ = OK;
+
+  // Used to control the behaviour of OnURLRequestConnected()
+  CompletionOnceCallback on_url_request_connected_callback_;
+  int on_url_request_connected_rv_ = OK;
+
+  base::RunLoop run_loop_waiting_on_url_request_connected_;
 
   base::RunLoop connect_run_loop_;
 
@@ -100,7 +127,6 @@ class WebSocketStreamCreateTestBase : public WithTaskEnvironment {
 
  private:
   class TestConnectDelegate;
-  DISALLOW_COPY_AND_ASSIGN(WebSocketStreamCreateTestBase);
 };
 
 }  // namespace net

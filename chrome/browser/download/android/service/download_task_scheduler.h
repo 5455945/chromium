@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include <jni.h>
 #include <stdint.h>
 
-#include "base/macros.h"
 #include "components/download/public/task/task_scheduler.h"
 
 namespace download {
@@ -19,6 +18,10 @@ namespace android {
 class DownloadTaskScheduler : public TaskScheduler {
  public:
   DownloadTaskScheduler();
+
+  DownloadTaskScheduler(const DownloadTaskScheduler&) = delete;
+  DownloadTaskScheduler& operator=(const DownloadTaskScheduler&) = delete;
+
   ~DownloadTaskScheduler() override;
 
   // TaskScheduler implementation.
@@ -29,9 +32,6 @@ class DownloadTaskScheduler : public TaskScheduler {
                     int64_t window_start_time_seconds,
                     int64_t window_end_time_seconds) override;
   void CancelTask(DownloadTaskType task_type) override;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(DownloadTaskScheduler);
 };
 
 }  // namespace android

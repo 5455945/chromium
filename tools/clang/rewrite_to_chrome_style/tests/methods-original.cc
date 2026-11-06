@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -83,7 +83,7 @@ void Task::doTheWork() {
 template <typename T>
 class Testable {
  public:
-  typedef T Testable::*UnspecifiedBoolType;
+  typedef T Testable::* UnspecifiedBoolType;
   // This method has a reference to a member in a "member context" and a
   // "non-member context" to verify both are rewritten.
   operator UnspecifiedBoolType() { return m_ptr ? &Testable::m_ptr : 0; }
@@ -239,10 +239,10 @@ class PaintLayerStackingNode {
 
 }  // namespace get_prefix_vs_inheritance
 
-namespace blacklisting_of_method_and_function_names {
+namespace blocklisting_of_method_and_function_names {
 
 class Foo {
-  // Expecting |swap| method to be renamed to |Swap| - we blacklist renaming of
+  // Expecting |swap| method to be renamed to |Swap| - we blocklist renaming of
   // |swap| *function*, because it needs to have the same casing as std::swap,
   // so that ADL can kick-in and pull it from another namespace depending on the
   // bargument.  We have a choice to rename or not rename |swap| *methods* - we
@@ -270,7 +270,7 @@ class Foo {
 void begin(int x) {}
 void swap(Foo& x, Foo& y) {}
 
-}  // blacklisting_of_method_and_function_names
+}  // namespace blocklisting_of_method_and_function_names
 
 }  // namespace blink
 

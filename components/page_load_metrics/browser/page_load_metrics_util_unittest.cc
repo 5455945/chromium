@@ -1,164 +1,24 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/page_load_metrics/browser/page_load_metrics_util.h"
 
+#include <optional>
+
+#include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
+#include "components/page_load_metrics/browser/fake_page_load_metrics_observer_delegate.h"
+#include "components/page_load_metrics/browser/features.h"
+#include "components/page_load_metrics/browser/soft_navigation_data.h"
+#include "components/page_load_metrics/common/page_load_metrics.mojom.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
+namespace page_load_metrics {
+
 class PageLoadMetricsUtilTest : public testing::Test {};
-
-TEST_F(PageLoadMetricsUtilTest, IsGoogleHostname) {
-  struct {
-    bool expected_result;
-    const char* url;
-  } test_cases[] = {
-      {true, "https://google.com/"},
-      {true, "https://google.com/index.html"},
-      {true, "https://www.google.com/"},
-      {true, "https://www.google.com/search"},
-      {true, "https://www.google.com/a/b/c/d"},
-      {true, "https://www.google.co.uk/"},
-      {true, "https://www.google.co.in/"},
-      {true, "https://other.google.com/"},
-      {true, "https://other.www.google.com/"},
-      {true, "https://www.other.google.com/"},
-      {true, "https://www.www.google.com/"},
-      {false, ""},
-      {false, "a"},
-      {false, "*"},
-      {false, "com"},
-      {false, "co.uk"},
-      {false, "google"},
-      {false, "google.com"},
-      {false, "www.google.com"},
-      {false, "https:///"},
-      {false, "https://a/"},
-      {false, "https://*/"},
-      {false, "https://com/"},
-      {false, "https://co.uk/"},
-      {false, "https://google/"},
-      {false, "https://*.com/"},
-      {false, "https://www.*.com/"},
-      {false, "https://www.google.appspot.com/"},
-      {false, "https://www.google.example.com/"},
-  };
-  for (const auto& test : test_cases) {
-    EXPECT_EQ(test.expected_result,
-              page_load_metrics::IsGoogleHostname(GURL(test.url)))
-        << "For URL: " << test.url;
-  }
-}
-
-TEST_F(PageLoadMetricsUtilTest, GetGoogleHostnamePrefix) {
-  struct {
-    bool expected_result;
-    const char* expected_prefix;
-    const char* url;
-  } test_cases[] = {
-      {false, "", "https://example.com/"},
-      {true, "", "https://google.com/"},
-      {true, "www", "https://www.google.com/"},
-      {true, "news", "https://news.google.com/"},
-      {true, "www", "https://www.google.co.uk/"},
-      {true, "other", "https://other.google.com/"},
-      {true, "other.www", "https://other.www.google.com/"},
-      {true, "www.other", "https://www.other.google.com/"},
-      {true, "www.www", "https://www.www.google.com/"},
-  };
-  for (const auto& test : test_cases) {
-    absl::optional<std::string> result =
-        page_load_metrics::GetGoogleHostnamePrefix(GURL(test.url));
-    EXPECT_EQ(test.expected_result, result.has_value())
-        << "For URL: " << test.url;
-    if (result) {
-      EXPECT_EQ(test.expected_prefix, result.value())
-          << "Prefix for URL: " << test.url;
-    }
-  }
-}
-
-TEST_F(PageLoadMetricsUtilTest, IsGoogleSearchHostname) {
-  struct {
-    bool expected_result;
-    const char* url;
-  } test_cases[] = {
-      {true, "https://www.google.com/"},
-      {true, "https://www.google.co.uk/"},
-      {true, "https://www.google.co.in/"},
-      {false, "https://other.google.com/"},
-      {false, "https://other.www.google.com/"},
-      {false, "https://www.other.google.com/"},
-      {false, "https://www.www.google.com/"},
-      {false, "https://www.google.appspot.com/"},
-      {false, "https://www.google.example.com/"},
-      // Search results are not served from the bare google.com domain.
-      {false, "https://google.com/"},
-  };
-  for (const auto& test : test_cases) {
-    EXPECT_EQ(test.expected_result,
-              page_load_metrics::IsGoogleSearchHostname(GURL(test.url)))
-        << "for URL: " << test.url;
-  }
-}
-
-TEST_F(PageLoadMetricsUtilTest, IsGoogleSearchResultUrl) {
-  struct {
-    bool expected_result;
-    const char* url;
-  } test_cases[] = {
-      {true, "https://www.google.com/#q=test"},
-      {true, "https://www.google.com/search#q=test"},
-      {true, "https://www.google.com/search?q=test"},
-      {true, "https://www.google.com/webhp#q=test"},
-      {true, "https://www.google.com/webhp?q=test"},
-      {true, "https://www.google.com/webhp?a=b&q=test"},
-      {true, "https://www.google.com/webhp?a=b&q=test&c=d"},
-      {true, "https://www.google.com/webhp#a=b&q=test&c=d"},
-      {true, "https://www.google.com/webhp?#a=b&q=test&c=d"},
-      {false, "https://www.google.com/"},
-      {false, "https://www.google.com/about/"},
-      {false, "https://other.google.com/"},
-      {false, "https://other.google.com/webhp?q=test"},
-      {false, "http://www.example.com/"},
-      {false, "https://www.example.com/webhp?q=test"},
-      {false, "https://google.com/#q=test"},
-      // Regression test for crbug.com/805155
-      {false, "https://www.google.com/webmasters/#?modal_active=none"},
-  };
-  for (const auto& test : test_cases) {
-    EXPECT_EQ(test.expected_result,
-              page_load_metrics::IsGoogleSearchResultUrl(GURL(test.url)))
-        << "for URL: " << test.url;
-  }
-}
-
-TEST_F(PageLoadMetricsUtilTest, IsGoogleSearchRedirectorUrl) {
-  struct {
-    bool expected_result;
-    const char* url;
-  } test_cases[] = {
-      {true, "https://www.google.com/url?source=web"},
-      {true, "https://www.google.com/url?source=web#foo"},
-      {true, "https://www.google.com/searchurl/r.html#foo"},
-      {true, "https://www.google.com/url?a=b&source=web&c=d"},
-      {false, "https://www.google.com/?"},
-      {false, "https://www.google.com/?url"},
-      {false, "https://www.example.com/url?source=web"},
-      {false, "https://google.com/url?"},
-      {false, "https://www.google.com/?source=web"},
-      {false, "https://www.google.com/source=web"},
-      {false, "https://www.example.com/url?source=web"},
-      {false, "https://www.google.com/url?"},
-      {false, "https://www.google.com/url?a=b"},
-  };
-  for (const auto& test : test_cases) {
-    EXPECT_EQ(test.expected_result,
-              page_load_metrics::IsGoogleSearchRedirectorUrl(GURL(test.url)))
-        << "for URL: " << test.url;
-  }
-}
 
 TEST_F(PageLoadMetricsUtilTest, QueryContainsComponent) {
   struct {
@@ -234,3 +94,238 @@ TEST_F(PageLoadMetricsUtilTest, QueryContainsComponentPrefix) {
         << "For query: " << test.query << " with component: " << test.component;
   }
 }
+
+TEST_F(PageLoadMetricsUtilTest, UmaMaxCumulativeShiftScoreHistogram) {
+  constexpr char kTestMaxCumulativeShiftScoreSessionWindow[] = "Test";
+  const page_load_metrics::NormalizedCLSData normalized_cls_data{0.5, false};
+  base::HistogramTester histogram_tester;
+  page_load_metrics::UmaMaxCumulativeShiftScoreHistogram10000x(
+      kTestMaxCumulativeShiftScoreSessionWindow, normalized_cls_data);
+  histogram_tester.ExpectTotalCount(kTestMaxCumulativeShiftScoreSessionWindow,
+                                    1);
+  histogram_tester.ExpectBucketCount(kTestMaxCumulativeShiftScoreSessionWindow,
+                                     5000, 1);
+}
+
+TEST_F(PageLoadMetricsUtilTest, GetNonPrerenderingBackgroundStartTiming) {
+  struct {
+    PrerenderingState prerendering_state;
+    std::optional<base::TimeDelta> activation_start;
+    PageVisibility visibility_at_start_or_activation_;
+    std::optional<base::TimeDelta> time_to_first_background;
+    std::optional<base::TimeDelta> expected_result;
+  } test_cases[] = {
+      {PrerenderingState::kNoPrerendering, std::nullopt,
+       PageVisibility::kForeground, std::nullopt, std::nullopt},
+      {PrerenderingState::kNoPrerendering, std::nullopt,
+       PageVisibility::kForeground, base::Seconds(2), base::Seconds(2)},
+      {PrerenderingState::kNoPrerendering, std::nullopt,
+       PageVisibility::kBackground, std::nullopt, base::Seconds(0)},
+      {PrerenderingState::kNoPrerendering, std::nullopt,
+       PageVisibility::kBackground, base::Seconds(2), base::Seconds(0)},
+      {PrerenderingState::kInPrerendering, std::nullopt,
+       PageVisibility::kForeground, std::nullopt, std::nullopt},
+      {PrerenderingState::kInPrerendering, std::nullopt,
+       PageVisibility::kForeground, base::Seconds(10), std::nullopt},
+      {PrerenderingState::kActivatedNoActivationStart, std::nullopt,
+       PageVisibility::kForeground, base::Seconds(12), std::nullopt},
+      {PrerenderingState::kActivated, base::Seconds(10),
+       PageVisibility::kForeground, std::nullopt, std::nullopt},
+      {PrerenderingState::kActivated, base::Seconds(10),
+       PageVisibility::kForeground, base::Seconds(12), base::Seconds(12)},
+      // Invalid time_to_first_background. Not checked and may return invalid
+      // value.
+      {PrerenderingState::kActivated, base::Seconds(10),
+       PageVisibility::kForeground, base::Seconds(2), base::Seconds(2)},
+      {PrerenderingState::kActivated, base::Seconds(10),
+       PageVisibility::kBackground, std::nullopt, base::Seconds(10)},
+      {PrerenderingState::kActivated, base::Seconds(10),
+       PageVisibility::kBackground, base::Seconds(12), base::Seconds(10)},
+      // Invalid time_to_first_background. Not checked and may return invalid
+      // value.
+      {PrerenderingState::kActivated, base::Seconds(10),
+       PageVisibility::kBackground, base::Seconds(2), base::Seconds(10)},
+  };
+  for (const auto& test_case : test_cases) {
+    page_load_metrics::FakePageLoadMetricsObserverDelegate delegate;
+    delegate.prerendering_state_ = test_case.prerendering_state;
+    delegate.activation_start_ = test_case.activation_start;
+    if (test_case.time_to_first_background.has_value()) {
+      delegate.first_background_time_ =
+          delegate.navigation_start_ +
+          test_case.time_to_first_background.value();
+    } else {
+      delegate.first_background_time_ = std::nullopt;
+    }
+
+    switch (test_case.prerendering_state) {
+      case PrerenderingState::kNoPrerendering:
+        DCHECK_NE(test_case.visibility_at_start_or_activation_,
+                  PageVisibility::kNotInitialized);
+        delegate.started_in_foreground_ =
+            (test_case.visibility_at_start_or_activation_ ==
+             PageVisibility::kForeground);
+        delegate.visibility_at_activation_ = PageVisibility::kNotInitialized;
+        break;
+      case PrerenderingState::kInPrerendering:
+        delegate.started_in_foreground_ = false;
+        delegate.visibility_at_activation_ = PageVisibility::kNotInitialized;
+        break;
+      case PrerenderingState::kActivatedNoActivationStart:
+        delegate.started_in_foreground_ = false;
+        delegate.visibility_at_activation_ =
+            test_case.visibility_at_start_or_activation_;
+        break;
+      case PrerenderingState::kActivated:
+        delegate.started_in_foreground_ = false;
+        delegate.visibility_at_activation_ =
+            test_case.visibility_at_start_or_activation_;
+        break;
+    }
+
+    std::optional<base::TimeDelta> got =
+        GetNonPrerenderingBackgroundStartTiming(delegate);
+    EXPECT_EQ(test_case.expected_result, got);
+  }
+}
+
+TEST_F(PageLoadMetricsUtilTest, CorrectEventAsNavigationOrActivationOrigined) {
+  struct {
+    std::string description;
+    PrerenderingState prerendering_state;
+    std::optional<base::TimeDelta> activation_start;
+    base::TimeDelta event;
+    std::optional<base::TimeDelta> expected_result;
+  } test_cases[] = {
+      {"Not modified", PrerenderingState::kNoPrerendering, std::nullopt,
+       base::Seconds(2), base::Seconds(2)},
+      {"max(0, 2 - x), where x is time of activation start that may come in "
+       "the future and should be greater than an already occurred event.",
+       PrerenderingState::kInPrerendering, std::nullopt, base::Seconds(2),
+       base::Seconds(0)},
+      {"activation start not yet available in browser, otherwise same as above",
+       PrerenderingState::kActivatedNoActivationStart, std::nullopt,
+       base::Seconds(2), base::Seconds(0)},
+      {"crash due to incorrect data", PrerenderingState::kActivated,
+       base::Seconds(10), base::Seconds(2), base::Seconds(0)},
+      {"max(0, 12 - 10)", PrerenderingState::kActivated, base::Seconds(10),
+       base::Seconds(12), base::Seconds(2)},
+  };
+
+  for (const auto& test_case : test_cases) {
+    SCOPED_TRACE(test_case.description);
+    page_load_metrics::FakePageLoadMetricsObserverDelegate delegate;
+    delegate.prerendering_state_ = test_case.prerendering_state;
+    delegate.activation_start_ = test_case.activation_start;
+
+    EXPECT_EQ(test_case.expected_result,
+              CorrectEventAsNavigationOrActivationOrigined(delegate,
+                                                           test_case.event));
+  }
+}
+
+TEST_F(PageLoadMetricsUtilTest, CalculateLCPEntropyBucket) {
+  EXPECT_EQ(0, CalculateLCPEntropyBucket(0));
+  EXPECT_EQ(1, CalculateLCPEntropyBucket(0.000005));
+  EXPECT_EQ(17, CalculateLCPEntropyBucket(0.42));
+  EXPECT_EQ(35, CalculateLCPEntropyBucket(42.0));
+  EXPECT_EQ(42, CalculateLCPEntropyBucket(4200.0));
+  EXPECT_EQ(43, CalculateLCPEntropyBucket(42000.0));
+  EXPECT_EQ(43, CalculateLCPEntropyBucket(42000000.0));
+  // These are not expected, we're just testing them for robustness.
+  EXPECT_EQ(0, CalculateLCPEntropyBucket(-1));
+  EXPECT_EQ(43,
+            CalculateLCPEntropyBucket(std::numeric_limits<double>::infinity()));
+  EXPECT_EQ(
+      0, CalculateLCPEntropyBucket(std::numeric_limits<double>::quiet_NaN()));
+}
+
+TEST_F(PageLoadMetricsUtilTest, WasSoftNavigationStartedInForeground) {
+  SoftNavigationData data;
+  data.metrics = mojom::SoftNavigationMetrics::New();
+  data.metrics->commit = mojom::SoftNavigationCommit::New();
+  data.metrics->commit->start_time = base::Milliseconds(100);
+
+  // No event timing -> false.
+  EXPECT_FALSE(WasSoftNavigationStartedInForegroundOptionalEventInForeground(
+      std::nullopt, data));
+
+  // Event in foreground, never backgrounded -> true.
+  EXPECT_TRUE(WasSoftNavigationStartedInForegroundOptionalEventInForeground(
+      base::Milliseconds(150), data));
+
+  // Backgrounded at 500ms (after start_time = 100ms):
+  data.first_background_time = base::Milliseconds(500);
+
+  // Event before backgrounding -> true.
+  EXPECT_TRUE(WasSoftNavigationStartedInForegroundOptionalEventInForeground(
+      base::Milliseconds(200), data));
+
+  // Event exactly at backgrounding -> true.
+  EXPECT_TRUE(WasSoftNavigationStartedInForegroundOptionalEventInForeground(
+      base::Milliseconds(500), data));
+
+  // Event after backgrounding -> false.
+  EXPECT_FALSE(WasSoftNavigationStartedInForegroundOptionalEventInForeground(
+      base::Milliseconds(501), data));
+
+  // Backgrounded at 50ms (before start_time = 100ms) -> started in background:
+  data.first_background_time = base::Milliseconds(50);
+  EXPECT_FALSE(WasSoftNavigationStartedInForegroundOptionalEventInForeground(
+      base::Milliseconds(200), data));
+
+  // Backgrounded at 100ms (at start_time = 100ms) -> started in background:
+  data.first_background_time = base::Milliseconds(100);
+  EXPECT_FALSE(WasSoftNavigationStartedInForegroundOptionalEventInForeground(
+      base::Milliseconds(200), data));
+}
+
+// A type to support parameterized testing for the category of the request.
+struct UrlCategoryTestCase {
+  std::string test_case;
+  std::string url_string;
+  std::optional<uint32_t> expected;
+};
+
+class GetCategoryIdFromUrlTest
+    : public testing::Test,
+      public testing::WithParamInterface<UrlCategoryTestCase> {
+ protected:
+  using FeaturesType = std::vector<base::test::FeatureRefAndParams>;
+
+  GetCategoryIdFromUrlTest() {
+    static const FeaturesType enabled_features = {
+        {features::kBeaconLeakageLogging,
+         {{"category_prefix", "test-prefix"}}}};
+    scoped_feature_list_.InitWithFeaturesAndParameters(enabled_features, {});
+  }
+  ~GetCategoryIdFromUrlTest() override = default;
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    GetCategoryIdFromUrlTest,
+    testing::ValuesIn<UrlCategoryTestCase>({
+        {"EmptyCategory", "", std::nullopt},
+        {"InvalidCategory", "https://a.com?category=invalid-category",
+         std::nullopt},
+        {"ValidCategory0", "https://a.com?category=test-prefix0",
+         std::make_optional(0u)},
+        {"ValidCategory1", "https://a.com?param1=true&category=test-prefix1",
+         std::make_optional(1u)},
+        {"ValidCategory200", "https://a.com?category=test-prefix200",
+         std::make_optional(200u)},
+    }),
+    [](const testing::TestParamInfo<UrlCategoryTestCase>& info) {
+      return info.param.test_case;
+    });
+
+TEST_P(GetCategoryIdFromUrlTest, GetCategoryIdFromUrl) {
+  EXPECT_THAT(GetCategoryIdFromUrl(GURL(GetParam().url_string)),
+              testing::Eq(GetParam().expected));
+}
+
+}  // namespace page_load_metrics

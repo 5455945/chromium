@@ -1,56 +1,96 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/path_service.h"
 
+#include <algorithm>
+#include <string>
+
+#include "base/base_paths.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/logging.h"
+#include "base/scoped_environment_variable_override.h"
 #include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/test/gtest_util.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest-spi.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
+#include <shlobj.h>
+
 #include "base/win/windows_version.h"
+#endif
+
+#if BUILDFLAG(IS_APPLE)
+#include "base/apple/bundle_locations.h"
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/path_utils.h"
 #endif
 
 namespace base {
 
 namespace {
 
+#if BUILDFLAG(IS_ANDROID)
+// Defined in
+// //base/test/android/javatests/src/org/chromium/base/test/util/UrlUtils.java.
+// The external storage directory depends on the Android user that the test
+// runs as, e.g. /storage/emulated/0 for user 0, or /storage/emulated/10 for a
+// secondary user on devices with headless system user mode.
+std::string GetExpectedChromiumTestsRoot() {
+  FilePath external_storage_dir;
+  CHECK(android::GetExternalStorageDirectory(&external_storage_dir));
+  return external_storage_dir.Append(FILE_PATH_LITERAL("chromium_tests_root"))
+      .value();
+}
+#endif
+
 // Returns true if PathService::Get returns true and sets the path parameter
-// to non-empty for the given PathService::DirType enumeration value.
-bool ReturnsValidPath(int dir_type) {
+// to non-empty for the given PathService key enumeration value.
+bool ReturnsValidPath(int key) {
   FilePath path;
-  bool result = PathService::Get(dir_type, &path);
+  bool result = PathService::Get(key, &path);
 
   // Some paths might not exist on some platforms in which case confirming
   // |result| is true and !path.empty() is the best we can do.
   bool check_path_exists = true;
-#if defined(OS_POSIX)
+
+#if BUILDFLAG(IS_ANDROID)
+  // Returns path within the .apk. e.g.: .../base.apk!/lib/x86_64
+  if (key == DIR_MODULE) {
+    check_path_exists = false;
+  }
+#endif
+#if BUILDFLAG(IS_POSIX)
   // If chromium has never been started on this account, the cache path may not
   // exist.
-  if (dir_type == DIR_CACHE)
+  if (key == DIR_CACHE) {
     check_path_exists = false;
+  }
 #endif
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   // On the linux try-bots: a path is returned (e.g. /home/chrome-bot/Desktop),
   // but it doesn't exist.
-  if (dir_type == DIR_USER_DESKTOP)
+  if (key == DIR_USER_DESKTOP) {
     check_path_exists = false;
+  }
 #endif
-#if defined(OS_WIN)
-  if (dir_type == DIR_TASKBAR_PINS)
+#if BUILDFLAG(IS_WIN)
+  if (key == DIR_TASKBAR_PINS) {
     check_path_exists = false;
+  }
 #endif
-#if defined(OS_APPLE)
-  if (dir_type != DIR_EXE && dir_type != DIR_MODULE && dir_type != FILE_EXE &&
-      dir_type != FILE_MODULE) {
+#if BUILDFLAG(IS_MAC)
+  if (key != DIR_EXE && key != DIR_MODULE && key != FILE_EXE &&
+      key != FILE_MODULE) {
     if (path.ReferencesParent()) {
       LOG(INFO) << "Path (" << path << ") references parent.";
       return false;
@@ -61,7 +101,7 @@ bool ReturnsValidPath(int dir_type) {
     LOG(INFO) << "Path (" << path << ") references parent.";
     return false;
   }
-#endif
+#endif  // BUILDFLAG(IS_MAC)
   if (!result) {
     LOG(INFO) << "PathService::Get() returned false.";
     return false;
@@ -77,16 +117,14 @@ bool ReturnsValidPath(int dir_type) {
   return true;
 }
 
-#if defined(OS_WIN)
-// Function to test any directory keys that are not supported on some versions
-// of Windows. Checks that the function fails and that the returned path is
-// empty.
-bool ReturnsInvalidPath(int dir_type) {
+// Returns true if PathService::Get returns false and path parameter is empty
+// for the given PathService key enumeration value. Used to test path keys that
+// are not supported on the platform or on some versions of Windows.
+bool ReturnsInvalidPath(int key) {
   FilePath path;
-  bool result = PathService::Get(dir_type, &path);
+  bool result = PathService::Get(key, &path);
   return !result && path.empty();
 }
-#endif
 
 }  // namespace
 
@@ -98,48 +136,63 @@ typedef PlatformTest PathServiceTest;
 // in the development environment.  (This test was created because a few
 // later changes to Get broke the semantics of the function and yielded the
 // correct value while returning false.)
+// If this test fails for specific value(s) on a specific platform, consider not
+// defining the enum value on that platform rather than skipping or expecting
+// failure for the value(s) on that platform in this test.
 TEST_F(PathServiceTest, Get) {
+  // Contains keys that are defined but not supported on the platform.
+#if BUILDFLAG(IS_ANDROID)
+  // The following keys are not intended to be implemented on Android (see
+  // crbug.com/1257402). Current implementation is described before each key.
+  // TODO(crbug.com/40796336): Remove the definition of these keys on Android
+  // or at least fix the behavior of DIR_HOME.
+  constexpr std::array kUnsupportedKeys = {
+      // Though DIR_HOME is not intended to be supported, PathProviderPosix
+      // handles it and returns true. Thus, it is NOT included in the array.
+      /* DIR_HOME, */
+      // PathProviderAndroid and PathProviderPosix both return false.
+      FILE_MODULE,
+      // PathProviderPosix handles it but fails at some point.
+      DIR_USER_DESKTOP};
+#elif BUILDFLAG(IS_FUCHSIA)
+  constexpr std::array kUnsupportedKeys = {
+      // TODO(crbug.com/42050322): Implement DIR_USER_DESKTOP.
+      DIR_USER_DESKTOP};
+#else
+  constexpr std::array<BasePathKey, 0> kUnsupportedKeys = {};
+#endif  // BUILDFLAG(IS_ANDROID)
   for (int key = PATH_START + 1; key < PATH_END; ++key) {
-#if defined(OS_ANDROID)
-    if (key == FILE_MODULE || key == DIR_USER_DESKTOP ||
-        key == DIR_HOME)
-      continue;  // Android doesn't implement these.
-#elif defined(OS_IOS)
-    if (key == DIR_USER_DESKTOP)
-      continue;  // iOS doesn't implement DIR_USER_DESKTOP.
-#elif defined(OS_FUCHSIA)
-    if (key == DIR_USER_DESKTOP || key == FILE_MODULE || key == DIR_MODULE)
-      continue;  // Fuchsia doesn't implement DIR_USER_DESKTOP, FILE_MODULE and
-                 // DIR_MODULE.
-#endif
-    EXPECT_PRED1(ReturnsValidPath, key);
+    EXPECT_PRED1(std::ranges::contains(kUnsupportedKeys, key)
+                     ? &ReturnsInvalidPath
+                     : &ReturnsValidPath,
+                 key);
   }
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   for (int key = PATH_WIN_START + 1; key < PATH_WIN_END; ++key) {
-    bool valid = true;
-    if (key == DIR_APP_SHORTCUTS)
-      valid = base::win::GetVersion() >= base::win::Version::WIN8;
-
-    if (valid)
+    if (key == DIR_SYSTEM_TEMP) {
+      EXPECT_PRED1(::IsUserAnAdmin() ? &ReturnsValidPath : &ReturnsInvalidPath,
+                   key);
+    } else {
       EXPECT_PRED1(ReturnsValidPath, key);
-    else
-      EXPECT_PRED1(ReturnsInvalidPath, key);
+    }
   }
-#elif defined(OS_APPLE)
+#elif BUILDFLAG(IS_MAC)
   for (int key = PATH_MAC_START + 1; key < PATH_MAC_END; ++key) {
     EXPECT_PRED1(ReturnsValidPath, key);
   }
-#elif defined(OS_ANDROID)
-  for (int key = PATH_ANDROID_START + 1; key < PATH_ANDROID_END;
-       ++key) {
+#elif BUILDFLAG(IS_IOS)
+  for (int key = PATH_IOS_START + 1; key < PATH_IOS_END; ++key) {
     EXPECT_PRED1(ReturnsValidPath, key);
   }
-#elif defined(OS_POSIX)
-  for (int key = PATH_POSIX_START + 1; key < PATH_POSIX_END;
-       ++key) {
+#elif BUILDFLAG(IS_ANDROID)
+  for (int key = PATH_ANDROID_START + 1; key < PATH_ANDROID_END; ++key) {
     EXPECT_PRED1(ReturnsValidPath, key);
   }
-#endif
+#elif BUILDFLAG(IS_POSIX)
+  for (int key = PATH_POSIX_START + 1; key < PATH_POSIX_END; ++key) {
+    EXPECT_PRED1(ReturnsValidPath, key);
+  }
+#endif  // BUILDFLAG(IS_WIN)
 }
 
 // Tests that CheckedGet returns the same path as Get.
@@ -160,7 +213,7 @@ TEST_F(PathServiceTest, CheckedGetFailure) {
   EXPECT_DEATH(PathService::CheckedGet(kBadKey), "Failed to get the path");
 }
 
-#endif  // GTEST_HAS_DEATH_TEST
+#endif  // defined(GTEST_HAS_DEATH_TEST)
 
 // Test that all versions of the Override function of PathService do what they
 // are supposed to do.
@@ -176,43 +229,35 @@ TEST_F(PathServiceTest, Override) {
 
   FilePath fake_cache_dir2(temp_dir.GetPath().AppendASCII("cache2"));
   // PathService::OverrideAndCreateIfNeeded should obey the |create| parameter.
-  PathService::OverrideAndCreateIfNeeded(my_special_key,
-                                         fake_cache_dir2,
-                                         false,
+  PathService::OverrideAndCreateIfNeeded(my_special_key, fake_cache_dir2, false,
                                          false);
   EXPECT_FALSE(PathExists(fake_cache_dir2));
-  EXPECT_TRUE(PathService::OverrideAndCreateIfNeeded(my_special_key,
-                                                     fake_cache_dir2,
-                                                     false,
-                                                     true));
+  EXPECT_TRUE(PathService::OverrideAndCreateIfNeeded(
+      my_special_key, fake_cache_dir2, false, true));
   EXPECT_TRUE(PathExists(fake_cache_dir2));
 
-#if defined(OS_POSIX)
+#if BUILDFLAG(IS_POSIX)
   FilePath non_existent(
       MakeAbsoluteFilePath(temp_dir.GetPath()).AppendASCII("non_existent"));
   EXPECT_TRUE(non_existent.IsAbsolute());
   EXPECT_FALSE(PathExists(non_existent));
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
   // This fails because MakeAbsoluteFilePath fails for non-existent files.
   // Earlier versions of Bionic libc don't fail for non-existent files, so
   // skip this check on Android.
-  EXPECT_FALSE(PathService::OverrideAndCreateIfNeeded(my_special_key,
-                                                      non_existent,
-                                                      false,
-                                                      false));
-#endif
+  EXPECT_FALSE(PathService::OverrideAndCreateIfNeeded(
+      my_special_key, non_existent, false, false));
+#endif  // !BUILDFLAG(IS_ANDROID)
   // This works because indicating that |non_existent| is absolute skips the
   // internal MakeAbsoluteFilePath call.
-  EXPECT_TRUE(PathService::OverrideAndCreateIfNeeded(my_special_key,
-                                                     non_existent,
-                                                     true,
-                                                     false));
+  EXPECT_TRUE(PathService::OverrideAndCreateIfNeeded(
+      my_special_key, non_existent, true, false));
   // Check that the path has been overridden and no directory was created.
   EXPECT_FALSE(PathExists(non_existent));
   FilePath path;
   EXPECT_TRUE(PathService::Get(my_special_key, &path));
   EXPECT_EQ(non_existent, path);
-#endif
+#endif  // BUILDFLAG(IS_POSIX)
 }
 
 // Check if multiple overrides can co-exist.
@@ -260,56 +305,186 @@ TEST_F(PathServiceTest, RemoveOverride) {
   EXPECT_EQ(original_user_data_dir, new_user_data_dir);
 }
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 TEST_F(PathServiceTest, GetProgramFiles) {
   FilePath programfiles_dir;
 #if defined(_WIN64)
   // 64-bit on 64-bit.
-  EXPECT_TRUE(PathService::Get(DIR_PROGRAM_FILES,
-      &programfiles_dir));
+  EXPECT_TRUE(PathService::Get(DIR_PROGRAM_FILES, &programfiles_dir));
+  EXPECT_EQ(programfiles_dir.value(), FILE_PATH_LITERAL("C:\\Program Files"));
+  EXPECT_TRUE(PathService::Get(DIR_PROGRAM_FILESX86, &programfiles_dir));
   EXPECT_EQ(programfiles_dir.value(),
-      FILE_PATH_LITERAL("C:\\Program Files"));
-  EXPECT_TRUE(PathService::Get(DIR_PROGRAM_FILESX86,
-      &programfiles_dir));
-  EXPECT_EQ(programfiles_dir.value(),
-      FILE_PATH_LITERAL("C:\\Program Files (x86)"));
-  EXPECT_TRUE(PathService::Get(DIR_PROGRAM_FILES6432,
-      &programfiles_dir));
-  EXPECT_EQ(programfiles_dir.value(),
-      FILE_PATH_LITERAL("C:\\Program Files"));
+            FILE_PATH_LITERAL("C:\\Program Files (x86)"));
+  EXPECT_TRUE(PathService::Get(DIR_PROGRAM_FILES6432, &programfiles_dir));
+  EXPECT_EQ(programfiles_dir.value(), FILE_PATH_LITERAL("C:\\Program Files"));
 #else
-  if (base::win::OSInfo::GetInstance()->wow64_status() ==
-      base::win::OSInfo::WOW64_ENABLED) {
+  if (base::win::OSInfo::GetInstance()->IsWowX86OnAMD64() ||
+      base::win::OSInfo::GetInstance()->IsWowX86OnARM64()) {
     // 32-bit on 64-bit.
-    EXPECT_TRUE(PathService::Get(DIR_PROGRAM_FILES,
-        &programfiles_dir));
+    EXPECT_TRUE(PathService::Get(DIR_PROGRAM_FILES, &programfiles_dir));
     EXPECT_EQ(programfiles_dir.value(),
-        FILE_PATH_LITERAL("C:\\Program Files (x86)"));
-    EXPECT_TRUE(PathService::Get(DIR_PROGRAM_FILESX86,
-        &programfiles_dir));
+              FILE_PATH_LITERAL("C:\\Program Files (x86)"));
+    EXPECT_TRUE(PathService::Get(DIR_PROGRAM_FILESX86, &programfiles_dir));
     EXPECT_EQ(programfiles_dir.value(),
-        FILE_PATH_LITERAL("C:\\Program Files (x86)"));
-    EXPECT_TRUE(PathService::Get(DIR_PROGRAM_FILES6432,
-        &programfiles_dir));
-    EXPECT_EQ(programfiles_dir.value(),
-        FILE_PATH_LITERAL("C:\\Program Files"));
+              FILE_PATH_LITERAL("C:\\Program Files (x86)"));
+    EXPECT_TRUE(PathService::Get(DIR_PROGRAM_FILES6432, &programfiles_dir));
+    EXPECT_EQ(programfiles_dir.value(), FILE_PATH_LITERAL("C:\\Program Files"));
   } else {
     // 32-bit on 32-bit.
-    EXPECT_TRUE(PathService::Get(DIR_PROGRAM_FILES,
-        &programfiles_dir));
-    EXPECT_EQ(programfiles_dir.value(),
-        FILE_PATH_LITERAL("C:\\Program Files"));
-    EXPECT_TRUE(PathService::Get(DIR_PROGRAM_FILESX86,
-        &programfiles_dir));
-    EXPECT_EQ(programfiles_dir.value(),
-        FILE_PATH_LITERAL("C:\\Program Files"));
-    EXPECT_TRUE(PathService::Get(DIR_PROGRAM_FILES6432,
-        &programfiles_dir));
-    EXPECT_EQ(programfiles_dir.value(),
-        FILE_PATH_LITERAL("C:\\Program Files"));
+    EXPECT_TRUE(PathService::Get(DIR_PROGRAM_FILES, &programfiles_dir));
+    EXPECT_EQ(programfiles_dir.value(), FILE_PATH_LITERAL("C:\\Program Files"));
+    EXPECT_TRUE(PathService::Get(DIR_PROGRAM_FILESX86, &programfiles_dir));
+    EXPECT_EQ(programfiles_dir.value(), FILE_PATH_LITERAL("C:\\Program Files"));
+    EXPECT_TRUE(PathService::Get(DIR_PROGRAM_FILES6432, &programfiles_dir));
+    EXPECT_EQ(programfiles_dir.value(), FILE_PATH_LITERAL("C:\\Program Files"));
   }
+#endif  // defined(_WIN64)
+}
+
+TEST_F(PathServiceTest, GetSystemTemp) {
+  FilePath secure_system_temp;
+
+  EXPECT_EQ(PathService::Get(DIR_SYSTEM_TEMP, &secure_system_temp),
+            ::IsUserAnAdmin());
+  if (!secure_system_temp.empty()) {
+    FilePath dir_windows;
+    ASSERT_TRUE(PathService::Get(DIR_WINDOWS, &dir_windows));
+    FilePath dir_program_files;
+    ASSERT_TRUE(PathService::Get(DIR_PROGRAM_FILES, &dir_program_files));
+
+    ASSERT_TRUE((dir_windows.AppendASCII("SystemTemp") == secure_system_temp) ||
+                (dir_program_files == secure_system_temp));
+  }
+}
+#endif  // BUILDFLAG(IS_WIN)
+
+// Tests that DIR_ASSETS is
+// - the package root on Fuchsia,
+// - overridden in tests by test_support_android.cc,
+// - equals to base::apple::FrameworkBundlePath() on iOS,
+// - a sub-directory of base::apple::FrameworkBundlePath() on iOS catalyst,
+// - equals to DIR_MODULE otherwise.
+TEST_F(PathServiceTest, DIR_ASSETS) {
+  FilePath path;
+  ASSERT_TRUE(PathService::Get(DIR_ASSETS, &path));
+#if BUILDFLAG(IS_FUCHSIA)
+  EXPECT_EQ(path.value(), "/pkg");
+#elif BUILDFLAG(IS_ANDROID)
+  // This key is overridden in //base/test/test_support_android.cc.
+  EXPECT_EQ(path.value(), GetExpectedChromiumTestsRoot());
+#elif BUILDFLAG(IS_IOS_MACCATALYST)
+  EXPECT_TRUE(base::apple::FrameworkBundlePath().IsParent(path));
+#elif BUILDFLAG(IS_IOS)
+  EXPECT_EQ(path, base::apple::FrameworkBundlePath());
+#else
+  EXPECT_EQ(path, PathService::CheckedGet(DIR_MODULE));
 #endif
 }
+
+// DIR_OUT_TEST_DATA_ROOT is DIR_MODULE except on Fuchsia where it is the
+// package root, on ios where it is the resources directory and on Android
+// where it is overridden in tests by test_support_android.cc.
+TEST_F(PathServiceTest, DIR_OUT_TEST_DATA_ROOT) {
+  FilePath path;
+  ASSERT_TRUE(PathService::Get(DIR_OUT_TEST_DATA_ROOT, &path));
+#if BUILDFLAG(IS_FUCHSIA)
+  EXPECT_EQ(path.value(), "/pkg");
+#elif BUILDFLAG(IS_ANDROID)
+  // This key is overridden in //base/test/test_support_android.cc.
+  EXPECT_EQ(path.value(), GetExpectedChromiumTestsRoot());
+#elif BUILDFLAG(IS_IOS)
+  // On iOS, build output files are moved to the resources directory.
+  EXPECT_EQ(path, base::apple::FrameworkBundlePath());
+#else
+  // On other platforms all build output is in the same directory,
+  // so DIR_OUT_TEST_DATA_ROOT should match DIR_MODULE.
+  EXPECT_EQ(path, PathService::CheckedGet(DIR_MODULE));
 #endif
+}
+
+// Test that DIR_GEN_TEST_DATA_ROOT contains dummy_generated.txt which is
+// generated for this test.
+TEST_F(PathServiceTest, DIR_GEN_TEST_DATA_ROOT) {
+  FilePath path;
+  ASSERT_TRUE(PathService::Get(DIR_GEN_TEST_DATA_ROOT, &path));
+  EXPECT_TRUE(base::PathExists(
+      path.Append(FILE_PATH_LITERAL("base/generated_file_for_test.txt"))));
+}
+
+#if ((BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE) && \
+      !BUILDFLAG(IS_ANDROID)) ||                     \
+     BUILDFLAG(IS_WIN))
+
+// Test that CR_SOURCE_ROOT is being used when set.
+// By default on those platforms, this directory is set to two directories up
+// the current executable directory ("../../").
+TEST_F(PathServiceTest, SetTestDataRootAsAbsolutePath) {
+  // This is needed because on some platform `DIR_SRC_TEST_DATA_ROOT` can be
+  // cached before reaching this function.
+  PathService::DisableCache();
+  base::ScopedTempDir tempdir;
+  ASSERT_TRUE(tempdir.CreateUniqueTempDir());
+
+#if BUILDFLAG(IS_WIN)
+  auto scoped_env = base::ScopedEnvironmentVariableOverride(
+      "CR_SOURCE_ROOT", base::WideToUTF8(tempdir.GetPath().value()));
+#else
+  auto scoped_env = base::ScopedEnvironmentVariableOverride(
+      "CR_SOURCE_ROOT", tempdir.GetPath().value());
+#endif
+
+  base::FilePath test_data_root;
+  ASSERT_TRUE(PathService::Get(DIR_SRC_TEST_DATA_ROOT, &test_data_root));
+
+  ASSERT_EQ(test_data_root, tempdir.GetPath());
+}
+
+// Test that CR_SOURCE_ROOT is being used when set.
+TEST_F(PathServiceTest, SetTestDataRootAsRelativePath) {
+  // This is needed because on some platform `DIR_SRC_TEST_DATA_ROOT` can be
+  // cached before reaching this function.
+  PathService::DisableCache();
+#if BUILDFLAG(IS_WIN)
+  auto scoped_env = base::ScopedEnvironmentVariableOverride(
+      "CR_SOURCE_ROOT", base::WideToUTF8(base::FilePath::kParentDirectory));
+#else
+  auto scoped_env = base::ScopedEnvironmentVariableOverride(
+      "CR_SOURCE_ROOT", base::FilePath::kParentDirectory);
+#endif
+  base::FilePath path;
+  ASSERT_TRUE(PathService::Get(DIR_EXE, &path));
+
+  base::FilePath test_data_root;
+  ASSERT_TRUE(PathService::Get(DIR_SRC_TEST_DATA_ROOT, &test_data_root));
+
+  path = MakeAbsoluteFilePath(path.Append(base::FilePath::kParentDirectory));
+  ASSERT_EQ(test_data_root, path);
+}
+
+#endif
+
+#if BUILDFLAG(IS_FUCHSIA)
+// On Fuchsia, some keys have fixed paths that are easy to test.
+
+TEST_F(PathServiceTest, DIR_SRC_TEST_DATA_ROOT) {
+  FilePath test_binary_path;
+  EXPECT_EQ(PathService::CheckedGet(DIR_SRC_TEST_DATA_ROOT).value(), "/pkg");
+}
+
+#elif BUILDFLAG(IS_ANDROID)
+
+// These keys are overridden in //base/test/test_support_android.cc.
+TEST_F(PathServiceTest, AndroidTestOverrides) {
+  EXPECT_EQ(PathService::CheckedGet(DIR_ANDROID_APP_DATA).value(),
+            GetExpectedChromiumTestsRoot());
+  EXPECT_EQ(PathService::CheckedGet(DIR_ASSETS).value(),
+            GetExpectedChromiumTestsRoot());
+  EXPECT_EQ(PathService::CheckedGet(DIR_SRC_TEST_DATA_ROOT).value(),
+            GetExpectedChromiumTestsRoot());
+  EXPECT_EQ(PathService::CheckedGet(DIR_OUT_TEST_DATA_ROOT).value(),
+            GetExpectedChromiumTestsRoot());
+}
+
+#endif  // BUILDFLAG(IS_FUCHSIA)
 
 }  // namespace base

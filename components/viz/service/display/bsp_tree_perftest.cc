@@ -1,6 +1,8 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "components/viz/service/display/bsp_tree.h"
 
 #include <stddef.h>
 
@@ -10,19 +12,19 @@
 #include "base/containers/circular_deque.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "base/path_service.h"
-#include "base/strings/string_piece.h"
 #include "base/threading/thread.h"
 #include "base/time/time.h"
 #include "base/timer/lap_timer.h"
 #include "cc/layers/layer.h"
 #include "cc/test/fake_content_layer_client.h"
-#include "cc/test/fake_layer_tree_host_client.h"
+#include "cc/test/fake_layer_tree_host_delegate.h"
 #include "cc/test/layer_tree_json_parser.h"
 #include "cc/test/layer_tree_test.h"
 #include "cc/trees/layer_tree_impl.h"
 #include "cc/trees/transform_node.h"
-#include "components/viz/service/display/bsp_tree.h"
 #include "components/viz/service/display/draw_polygon.h"
 #include "components/viz/test/paths.h"
 #include "testing/perf/perf_result_reporter.h"
@@ -47,7 +49,7 @@ class BspTreePerfTest : public cc::LayerTreeTest {
  public:
   BspTreePerfTest()
       : timer_(kWarmupRuns,
-               base::TimeDelta::FromMilliseconds(kTimeLimitMillis),
+               base::Milliseconds(kTimeLimitMillis),
                kTimeCheckInterval) {}
 
   void SetupTree() override {
@@ -80,7 +82,8 @@ class BspTreePerfTest : public cc::LayerTreeTest {
     cc::LayerTreeImpl* active_tree = host_impl->active_tree();
     // First build the tree and then we'll start running tests on layersorter
     // itself
-    host_impl->active_tree()->UpdateDrawProperties();
+    host_impl->active_tree()->UpdateDrawProperties(
+        /*update_tiles=*/true, /*update_image_animation_controller=*/true);
 
     cc::LayerImplList base_list;
     BuildLayerImplList(active_tree->root_layer(), &base_list);
@@ -98,8 +101,8 @@ class BspTreePerfTest : public cc::LayerTreeTest {
     do {
       base::circular_deque<std::unique_ptr<DrawPolygon>> test_list;
       for (int i = 0; i < num_duplicates_; i++) {
-        for (size_t i = 0; i < polygon_list.size(); i++) {
-          test_list.push_back(polygon_list[i]->CreateCopy());
+        for (size_t j = 0; j < polygon_list.size(); j++) {
+          test_list.push_back(polygon_list[j]->CreateCopy());
         }
       }
       BspTree bsp_tree(&test_list);
@@ -129,7 +132,7 @@ class BspTreePerfTest : public cc::LayerTreeTest {
   base::LapTimer timer_;
   std::string story_;
   std::string json_;
-  cc::LayerImplList base_list_;
+  std::vector<raw_ptr<cc::LayerImpl>> base_list_;
   int num_duplicates_ = 1;
 };
 

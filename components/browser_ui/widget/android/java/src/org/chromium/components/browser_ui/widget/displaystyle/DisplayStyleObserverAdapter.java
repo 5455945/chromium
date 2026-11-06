@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,72 +6,60 @@ package org.chromium.components.browser_ui.widget.displaystyle;
 
 import android.view.View;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+
 /**
- * Implementation of {@link DisplayStyleObserver} designed to play nicely with
- * {@link androidx.recyclerview.widget.RecyclerView}. It will not notify of changes when the
- * associated view is not attached to the window.
+ * Implementation of {@link DisplayStyleObserver} designed to play nicely with {@link
+ * androidx.recyclerview.widget.RecyclerView}. It will not notify of changes when the associated
+ * view is not attached to the window.
  */
+@NullMarked
 public class DisplayStyleObserverAdapter
         implements DisplayStyleObserver, View.OnAttachStateChangeListener {
     private final DisplayStyleObserver mObserver;
+    private final View mView;
 
     /** Current display style, gets updated as the UiConfig detects changes and notifies us. */
-    private UiConfig.DisplayStyle mCurrentDisplayStyle;
-
-    /**
-     * Latest value that we transmitted to the adapted observer. If we didn't transfer any yet,
-     * the value is {@code null}.
-     * @see UiConfig.DisplayStyle
-     */
-    private UiConfig.DisplayStyle mNotifiedDisplayStyle;
+    private UiConfig.@Nullable DisplayStyle mCurrentDisplayStyle;
 
     private boolean mIsViewAttached;
 
     private final UiConfig mUiConfig;
 
     /**
-     * @param view the view whose lifecycle is tracked to determine when to not fire the
-     *             observer.
+     * @param view the view whose lifecycle is tracked to determine when to not fire the observer.
      * @param config the {@link UiConfig} object to subscribe to.
-     * @param observer the observer to adapt. It's {#onDisplayStyleChanged} will be called when
-     *                 the configuration changes, provided that {@code view} is attached to the
-     *                 window.
+     * @param observer the observer to adapt. It's {#onDisplayStyleChanged} will be called when the
+     *     configuration changes, provided that {@code view} is attached to the window.
      */
     public DisplayStyleObserverAdapter(View view, UiConfig config, DisplayStyleObserver observer) {
+        mView = view;
         mUiConfig = config;
         mObserver = observer;
+        mIsViewAttached = view.isAttachedToWindow();
 
-        // TODO(dgn): getParent() is not a good way to test that, but isAttachedToWindow()
-        // requires API 19.
-        mIsViewAttached = view.getParent() != null;
-
-        view.addOnAttachStateChangeListener(this);
+        mView.addOnAttachStateChangeListener(this);
     }
 
-    /**
-     * Attaches to the {@link #mUiConfig}.
-     */
+    /** Attaches to the {@link #mUiConfig}. */
     public void attach() {
         // This call will also assign the initial value to |mCurrentDisplayStyle|.
         mUiConfig.addObserver(this);
     }
 
-    /**
-     * Detaches from the {@link #mUiConfig}.
-     */
-    public void detach() {
+    /** Detaches from the {@link #mUiConfig} and cleans up. */
+    public void destroy() {
         mUiConfig.removeObserver(this);
+        mView.removeOnAttachStateChangeListener(this);
     }
 
     @Override
-    public void onDisplayStyleChanged(UiConfig.DisplayStyle newDisplayStyle) {
+    public void onDisplayStyleChanged(UiConfig.@Nullable DisplayStyle newDisplayStyle) {
         assert newDisplayStyle != null;
         mCurrentDisplayStyle = newDisplayStyle;
 
         if (!mIsViewAttached) return;
-
-        mNotifiedDisplayStyle = mCurrentDisplayStyle;
-
         mObserver.onDisplayStyleChanged(mCurrentDisplayStyle);
     }
 

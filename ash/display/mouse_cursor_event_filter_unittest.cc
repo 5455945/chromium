@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,19 +6,26 @@
 
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
-#include "ash/wm/cursor_manager_test_api.h"
+#include "ui/aura/client/cursor_shape_client.h"
 #include "ui/aura/env.h"
 #include "ui/aura/test/test_windows.h"
+#include "ui/base/cursor/cursor.h"
 #include "ui/display/display_layout.h"
 #include "ui/display/manager/display_manager.h"
 #include "ui/display/test/display_manager_test_api.h"
 #include "ui/events/test/event_generator.h"
+#include "ui/wm/core/cursor_manager.h"
 
 namespace ash {
 
 class MouseCursorEventFilterTest : public AshTestBase {
  public:
   MouseCursorEventFilterTest() = default;
+
+  MouseCursorEventFilterTest(const MouseCursorEventFilterTest&) = delete;
+  MouseCursorEventFilterTest& operator=(const MouseCursorEventFilterTest&) =
+      delete;
+
   ~MouseCursorEventFilterTest() override = default;
 
  protected:
@@ -30,15 +37,12 @@ class MouseCursorEventFilterTest : public AshTestBase {
     return AshTestBase::TestIfMouseWarpsAt(GetEventGenerator(),
                                            point_in_screen);
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(MouseCursorEventFilterTest);
 };
 
 // Verifies if the mouse pointer correctly moves to another display when there
 // are two displays.
 TEST_F(MouseCursorEventFilterTest, WarpMouse) {
-  UpdateDisplay("500x500,500x500");
+  UpdateDisplay("500x400,500x400");
 
   ASSERT_EQ(display::DisplayPlacement::RIGHT, Shell::Get()
                                                   ->display_manager()
@@ -63,19 +67,19 @@ TEST_F(MouseCursorEventFilterTest, WarpMouse) {
   // Touch the top edge of the primary root window.
   EXPECT_FALSE(TestIfMouseWarpsAt(gfx::Point(11, 0)));
   // Touch the bottom edge of the primary root window.
-  EXPECT_FALSE(TestIfMouseWarpsAt(gfx::Point(11, 499)));
+  EXPECT_FALSE(TestIfMouseWarpsAt(gfx::Point(11, 399)));
   // Touch the right edge of the secondary root window.
   EXPECT_FALSE(TestIfMouseWarpsAt(gfx::Point(999, 11)));
   // Touch the top edge of the secondary root window.
   EXPECT_FALSE(TestIfMouseWarpsAt(gfx::Point(11, 0)));
   // Touch the bottom edge of the secondary root window.
-  EXPECT_FALSE(TestIfMouseWarpsAt(gfx::Point(11, 499)));
+  EXPECT_FALSE(TestIfMouseWarpsAt(gfx::Point(11, 399)));
 }
 
 // Verifies if the mouse pointer correctly moves to another display even when
 // two displays are not the same size.
 TEST_F(MouseCursorEventFilterTest, WarpMouseDifferentSizeDisplays) {
-  UpdateDisplay("500x500,600x600");  // the second one is larger.
+  UpdateDisplay("500x400,600x500");  // the second one is larger.
 
   ASSERT_EQ(display::DisplayPlacement::RIGHT, Shell::Get()
                                                   ->display_manager()
@@ -85,14 +89,14 @@ TEST_F(MouseCursorEventFilterTest, WarpMouseDifferentSizeDisplays) {
 
   // Touch the left edge of the secondary root window. Pointer should NOT warp
   // because 1px left of (0, 500) is outside the primary root window.
-  EXPECT_FALSE(TestIfMouseWarpsAt(gfx::Point(501, 500)));
-  EXPECT_EQ("501,500",
+  EXPECT_FALSE(TestIfMouseWarpsAt(gfx::Point(501, 400)));
+  EXPECT_EQ("501,400",
             aura::Env::GetInstance()->last_mouse_location().ToString());
 
   // Touch the left edge of the secondary root window. Pointer should warp
   // because 1px left of (0, 480) is inside the primary root window.
-  EXPECT_TRUE(TestIfMouseWarpsAt(gfx::Point(500, 480)));
-  EXPECT_EQ("498,480",  // by 2px.
+  EXPECT_TRUE(TestIfMouseWarpsAt(gfx::Point(500, 380)));
+  EXPECT_EQ("498,380",  // by 2px.
             aura::Env::GetInstance()->last_mouse_location().ToString());
 }
 
@@ -100,7 +104,7 @@ TEST_F(MouseCursorEventFilterTest, WarpMouseDifferentSizeDisplays) {
 // different scale factors. In native coords mode, there is no
 // difference between drag and move.
 TEST_F(MouseCursorEventFilterTest, WarpMouseDifferentScaleDisplaysInNative) {
-  UpdateDisplay("500x500,600x600*2");
+  UpdateDisplay("500x400,800x500*2");
 
   ASSERT_EQ(display::DisplayPlacement::RIGHT, Shell::Get()
                                                   ->display_manager()
@@ -125,7 +129,7 @@ TEST_F(MouseCursorEventFilterTest, WarpMouseDifferentScaleDisplaysInNative) {
 // Verifies if MouseCursorEventFilter::set_mouse_warp_enabled() works as
 // expected.
 TEST_F(MouseCursorEventFilterTest, SetMouseWarpModeFlag) {
-  UpdateDisplay("500x500,500x500");
+  UpdateDisplay("500x400,500x400");
 
   event_filter()->set_mouse_warp_enabled(false);
   EXPECT_FALSE(TestIfMouseWarpsAt(gfx::Point(499, 11)));
@@ -142,17 +146,23 @@ TEST_F(MouseCursorEventFilterTest, SetMouseWarpModeFlag) {
 // across root windows with different device scale factors
 // (http://crbug.com/154183).
 TEST_F(MouseCursorEventFilterTest, CursorDeviceScaleFactor) {
-  UpdateDisplay("400x400,800x800*2");
+  UpdateDisplay("400x300,800x700*2");
   display_manager()->SetLayoutForCurrentDisplays(
       display::test::CreateDisplayLayout(display_manager(),
                                          display::DisplayPlacement::RIGHT, 0));
-  CursorManagerTestApi cursor_test_api(Shell::Get()->cursor_manager());
-
-  EXPECT_EQ(1.0f, cursor_test_api.GetCurrentCursor().image_scale_factor());
-  TestIfMouseWarpsAt(gfx::Point(399, 200));
-  EXPECT_EQ(2.0f, cursor_test_api.GetCurrentCursor().image_scale_factor());
-  TestIfMouseWarpsAt(gfx::Point(400, 200));
-  EXPECT_EQ(1.0f, cursor_test_api.GetCurrentCursor().image_scale_factor());
+  auto* cursor_manager = Shell::Get()->cursor_manager();
+  const auto& cursor_shape_client = aura::client::GetCursorShapeClient();
+  EXPECT_EQ(1.0f,
+            cursor_shape_client.GetCursorData(cursor_manager->GetCursor())
+                ->scale_factor);
+  GetEventGenerator()->MoveMouseTo(401, 200);
+  EXPECT_EQ(2.0f,
+            cursor_shape_client.GetCursorData(cursor_manager->GetCursor())
+                ->scale_factor);
+  GetEventGenerator()->MoveMouseTo(399, 200);
+  EXPECT_EQ(1.0f,
+            cursor_shape_client.GetCursorData(cursor_manager->GetCursor())
+                ->scale_factor);
 }
 
 // Verifies that pressing the key repeatedly will not hide the cursor.
@@ -161,8 +171,8 @@ TEST_F(MouseCursorEventFilterTest, CursorDeviceScaleFactor) {
 // (http://crbug.com/855163).
 TEST_F(MouseCursorEventFilterTest, CursorVisibilityWontFlip) {
   aura::test::TestWindowDelegate delegate;
-  std::unique_ptr<aura::Window> window(CreateTestWindowInShellWithDelegate(
-      &delegate, 1234, gfx::Rect(5, 5, 100, 100)));
+  std::unique_ptr<aura::Window> window(CreateTestWindowInShell(
+      {.delegate = &delegate, .bounds = {5, 5, 100, 100}, .window_id = 1234}));
   window->Show();
   window->SetCapture();
 

@@ -1,12 +1,12 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/login/test/oobe_configuration_waiter.h"
 
-namespace chromeos {
+namespace ash {
 
-OOBEConfigurationWaiter::OOBEConfigurationWaiter() {}
+OOBEConfigurationWaiter::OOBEConfigurationWaiter() = default;
 
 OOBEConfigurationWaiter::~OOBEConfigurationWaiter() {
   if (callback_) {
@@ -15,7 +15,7 @@ OOBEConfigurationWaiter::~OOBEConfigurationWaiter() {
 }
 
 void OOBEConfigurationWaiter::OnOobeConfigurationChanged() {
-  DCHECK(OobeConfiguration::Get()->CheckCompleted());
+  CHECK(OobeConfiguration::Get()->CheckCompleted(), base::NotFatalUntil::M161);
   OobeConfiguration::Get()->RemoveObserver(this);
   std::move(callback_).Run();
 }
@@ -23,7 +23,7 @@ void OOBEConfigurationWaiter::OnOobeConfigurationChanged() {
 // Wait until configuration is loaded.
 bool OOBEConfigurationWaiter::IsConfigurationLoaded(
     base::OnceClosure callback) {
-  DCHECK(!callback_);
+  CHECK(!callback_, base::NotFatalUntil::M161);
   if (OobeConfiguration::Get()->CheckCompleted()) {
     return true;
   }
@@ -32,4 +32,4 @@ bool OOBEConfigurationWaiter::IsConfigurationLoaded(
   return false;
 }
 
-}  // namespace chromeos
+}  // namespace ash

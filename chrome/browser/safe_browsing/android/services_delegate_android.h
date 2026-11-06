@@ -1,23 +1,32 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_SAFE_BROWSING_ANDROID_SERVICES_DELEGATE_ANDROID_H_
 #define CHROME_BROWSER_SAFE_BROWSING_ANDROID_SERVICES_DELEGATE_ANDROID_H_
 
-#include "base/macros.h"
 #include "chrome/browser/safe_browsing/services_delegate.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 
 namespace safe_browsing {
 
 class AndroidTelemetryService;
+class DownloadProtectionService;
 
 // Android ServicesDelegate implementation. Create via
 // ServicesDelegate::Create().
 class ServicesDelegateAndroid : public ServicesDelegate {
  public:
-  explicit ServicesDelegateAndroid(SafeBrowsingService* safe_browsing_service);
+  explicit ServicesDelegateAndroid(
+      SafeBrowsingServiceImpl* safe_browsing_service);
+
+  // Constructor for tests.
+  ServicesDelegateAndroid(SafeBrowsingServiceImpl* safe_browsing_service,
+                          ServicesDelegate::ServicesCreator* services_creator);
+
+  ServicesDelegateAndroid(const ServicesDelegateAndroid&) = delete;
+  ServicesDelegateAndroid& operator=(const ServicesDelegateAndroid&) = delete;
+
   ~ServicesDelegateAndroid() override;
 
  private:
@@ -34,24 +43,31 @@ class ServicesDelegateAndroid : public ServicesDelegate {
   void RegisterDelayedAnalysisCallback(
       DelayedAnalysisCallback callback) override;
   void AddDownloadManager(content::DownloadManager* download_manager) override;
+  DownloadProtectionService* GetDownloadService() override;
 
-  void StartOnIOThread(
-      scoped_refptr<network::SharedURLLoaderFactory> sb_url_loader_factory,
+  void StartOnUIThread(
       scoped_refptr<network::SharedURLLoaderFactory> browser_url_loader_factory,
-      const V4ProtocolConfig& v4_config) override;
-  void StopOnIOThread(bool shutdown) override;
+      const SBProtocolConfig& config) override;
+  void StopOnUIThread(bool shutdown) override;
 
   void CreateTelemetryService(Profile* profile) override;
   void RemoveTelemetryService(Profile* profile) override;
 
+  // Creates DownloadProtectionService instance and releases ownership to
+  // caller.
+  DownloadProtectionService* CreateDownloadProtectionService();
+
+  // Notifies DownloadProtectionService of profile shutdown.
+  void OnProfileWillBeDestroyed(Profile* profile) override;
+
   // The telemetry service tied to the current profile.
   std::unique_ptr<AndroidTelemetryService> telemetry_service_;
+
+  std::unique_ptr<DownloadProtectionService> download_service_;
 
   scoped_refptr<SafeBrowsingDatabaseManager> database_manager_;
   // Has the database_manager been set for tests?
   bool database_manager_set_for_tests_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(ServicesDelegateAndroid);
 };
 
 }  // namespace safe_browsing

@@ -1,12 +1,20 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/login/profile_auth_data.h"
 
+#include "ash/constants/ash_features.h"
 #include "base/barrier_closure.h"
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/check.h"
+#include "base/dcheck_is_on.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/unguessable_token.h"
+#include "chrome/browser/ash/floating_sso/floating_sso_service.h"
+#include "chrome/browser/ash/floating_sso/floating_sso_service_factory.h"
+#include "chrome/browser/net/system_network_context_manager.h"
+#include "chrome/browser/profiles/profile.h"
 #include "components/google/core/common/google_util.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/storage_partition.h"
@@ -17,11 +25,10 @@
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "url/gurl.h"
 
-using content::BrowserThread;
-
-namespace chromeos {
-
+namespace ash {
 namespace {
+
+using ::content::BrowserThread;
 
 // Callback that receives the key for from_partition's saved http auth cache
 // proxy entries.
@@ -33,26 +40,13 @@ void OnTargetHttpAuthCacheProxyEntriesSaved(
       cache_key, completion_callback);
 }
 
-// Starts tranferring `from_partition`'s http auth cache's proxy entries into
-// `to_partition`.
-void TransferHttpAuthCacheProxyEntries(
-    base::RepeatingClosure completion_callback,
-    content::StoragePartition* from_partition,
-    content::StoragePartition* to_partition) {
-  // `to_partition` will outlive the call to `completion_callback`.
-  // See ProfileAuthData::Transfer.
-  from_partition->GetNetworkContext()->SaveHttpAuthCacheProxyEntries(
-      base::BindOnce(&OnTargetHttpAuthCacheProxyEntriesSaved,
-                     completion_callback, base::Unretained(to_partition)));
-}
-
 // Given a `cookie` set during login, returns true if the cookie may have been
 // set by GAIA. The main criterion is the `cookie`'s domain. If the domain
 // is *google.<TLD> or *youtube.<TLD>, the cookie is considered to have been set
 // by GAIA as well.
 bool IsGAIACookie(const net::CanonicalCookie& cookie) {
-  GURL cookie_url =
-      net::cookie_util::CookieOriginToURL(cookie.Domain(), cookie.IsSecure());
+  GURL cookie_url = net::cookie_util::CookieOriginToURL(
+      cookie.Domain(), cookie.SecureAttribute());
 
   return google_util::IsGoogleDomainUrl(
              cookie_url, google_util::ALLOW_SUBDOMAIN,
@@ -86,7 +80,11 @@ void ImportCookies(base::RepeatingClosure completion_callback,
     // Assume secure_source - since the cookies are being restored from
     // another store, they have already gone through the strict secure check.
     // Likewise for permitting same-site marked cookies.
-    DCHECK(cookie.IsCanonical());
+    if constexpr (DCHECK_IS_ON()) {
+      net::CanonicalCookie::CanonicalizationResult result =
+          cookie.IsCanonical();
+      DCHECK(result) << result;
+    }
     net::CookieOptions options;
     options.set_include_httponly();
     options.set_same_site_cookie_context(
@@ -98,36 +96,52 @@ void ImportCookies(base::RepeatingClosure completion_callback,
 }
 
 // Callback that receives the contents of `from_partition`'s cookie jar.
-// Transfers the necessary cookies to `to_partition`'s cookie jar.
+// Transfers the necessary cookies to `to_profile`'s cookie jar.
 void OnCookiesToTransferRetrieved(base::RepeatingClosure completion_callback,
-                                  content::StoragePartition* to_partition,
+                                  Profile* to_profile,
                                   bool first_login,
                                   const net::CookieList& cookies) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
+
+  net::CookieList non_gaia_cookies;
+  ash::floating_sso::FloatingSsoService* floating_sso_service =
+      ash::features::IsFloatingSsoAllowed()
+          ? ash::floating_sso::FloatingSsoServiceFactory::GetForProfile(
+                to_profile)
+          : nullptr;
+  for (const auto& cookie : cookies) {
+    if (!IsGAIACookie(cookie)) {
+      non_gaia_cookies.push_back(cookie);
+      if (floating_sso_service) {
+        // When Floating SSO is enabled, we want to prevent it from overriding
+        // SAML cookies transferred here with entities from Sync server. No need
+        // to do it for Gaia cookies, as those are always excluded from Floating
+        // SSO.
+        floating_sso_service->MarkToNotOverride(cookie);
+      }
+    }
+  }
 
   if (first_login) {
-    ImportCookies(completion_callback, to_partition, cookies);
+    ImportCookies(completion_callback, to_profile->GetDefaultStoragePartition(),
+                  cookies);
   } else {
-    net::CookieList non_gaia_cookies;
-    for (const auto& cookie : cookies) {
-      if (!IsGAIACookie(cookie))
-        non_gaia_cookies.push_back(cookie);
-    }
-    ImportCookies(completion_callback, to_partition, non_gaia_cookies);
+    ImportCookies(completion_callback, to_profile->GetDefaultStoragePartition(),
+                  non_gaia_cookies);
   }
 }
 
-// Callback that receives the content of `to_partition`'s cookie jar. Checks
+// Callback that receives the content of `to_profile`'s cookie jar. Checks
 // whether this is the user's first login, based on the state of the cookie
-// jar, and starts retrieval of the data that should be transfered.
+// jar, and starts retrieval of the data that should be transferred.
 void OnTargetCookieJarContentsRetrieved(
     base::RepeatingClosure completion_callback,
     content::StoragePartition* from_partition,
-    content::StoragePartition* to_partition,
+    Profile* to_profile,
     bool transfer_auth_cookies_on_first_login,
     bool transfer_saml_auth_cookies_on_subsequent_login,
     const net::CookieList& target_cookies) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   bool transfer_auth_cookies;
 
   bool first_login = target_cookies.empty();
@@ -152,24 +166,25 @@ void OnTargetCookieJarContentsRetrieved(
       from_partition->GetCookieManagerForBrowserProcess();
   from_manager->GetAllCookies(
       base::BindOnce(&OnCookiesToTransferRetrieved, completion_callback,
-                     base::Unretained(to_partition), first_login));
+                     base::Unretained(to_profile), first_login));
 }
 
 // Starts the process of transferring cookies from `from_partition` to
 // `to_partition`.
 void TransferCookies(base::RepeatingClosure completion_callback,
                      content::StoragePartition* from_partition,
-                     content::StoragePartition* to_partition,
+                     Profile* to_profile,
                      bool transfer_auth_cookies_on_first_login,
                      bool transfer_saml_auth_cookies_on_subsequent_login) {
   if (transfer_auth_cookies_on_first_login ||
       transfer_saml_auth_cookies_on_subsequent_login) {
-    // Retrieve the contents of `to_partition_`'s cookie jar.
+    // Retrieve the contents of `to_profile`'s cookie jar.
     network::mojom::CookieManager* to_manager =
-        to_partition->GetCookieManagerForBrowserProcess();
+        to_profile->GetDefaultStoragePartition()
+            ->GetCookieManagerForBrowserProcess();
     to_manager->GetAllCookies(base::BindOnce(
         &OnTargetCookieJarContentsRetrieved, completion_callback,
-        base::Unretained(from_partition), base::Unretained(to_partition),
+        base::Unretained(from_partition), base::Unretained(to_profile),
         transfer_auth_cookies_on_first_login,
         transfer_saml_auth_cookies_on_subsequent_login));
   } else {
@@ -179,13 +194,23 @@ void TransferCookies(base::RepeatingClosure completion_callback,
 
 }  // namespace
 
+void TransferHttpAuthCacheToSystemNetworkContext(
+    base::RepeatingClosure completion_callback,
+    const base::UnguessableToken& cache_key) {
+  CHECK(SystemNetworkContextManager::HasInstance());
+  network::mojom::NetworkContext* system_network_context =
+      SystemNetworkContextManager::GetInstance()->GetContext();
+  system_network_context->LoadHttpAuthCacheProxyEntries(cache_key,
+                                                        completion_callback);
+}
+
 void ProfileAuthData::Transfer(
     content::StoragePartition* from_partition,
-    content::StoragePartition* to_partition,
+    Profile* to_profile,
     bool transfer_auth_cookies_on_first_login,
     bool transfer_saml_auth_cookies_on_subsequent_login,
     base::OnceClosure completion_callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
 
   // The BarrierClosure will call `completion_callback` after the 2 async
   // transfers have finished.
@@ -196,11 +221,22 @@ void ProfileAuthData::Transfer(
   // If the user was required to authenticate with a proxy during login, this
   // authentication information will be transferred into the user's session.
   TransferHttpAuthCacheProxyEntries(task_completion_callback, from_partition,
-                                    to_partition);
+                                    to_profile->GetDefaultStoragePartition());
 
-  TransferCookies(task_completion_callback, from_partition, to_partition,
+  TransferCookies(task_completion_callback, from_partition, to_profile,
                   transfer_auth_cookies_on_first_login,
                   transfer_saml_auth_cookies_on_subsequent_login);
 }
 
-}  // namespace chromeos
+void ProfileAuthData::TransferHttpAuthCacheProxyEntries(
+    base::RepeatingClosure completion_callback,
+    content::StoragePartition* from_partition,
+    content::StoragePartition* to_partition) {
+  // `to_partition` will outlive the call to `completion_callback`.
+  // See ProfileAuthData::Transfer.
+  from_partition->GetNetworkContext()->SaveHttpAuthCacheProxyEntries(
+      base::BindOnce(&OnTargetHttpAuthCacheProxyEntriesSaved,
+                     completion_callback, base::Unretained(to_partition)));
+}
+
+}  // namespace ash

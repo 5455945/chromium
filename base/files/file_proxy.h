@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,10 @@
 #include <stdint.h>
 
 #include "base/base_export.h"
-#include "base/callback_forward.h"
+#include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/weak_ptr.h"
 
 namespace base {
@@ -34,7 +34,7 @@ class Time;
 //   proxy.Write(...);
 //
 // means the second Write will always fail.
-class BASE_EXPORT FileProxy : public SupportsWeakPtr<FileProxy> {
+class BASE_EXPORT FileProxy final {
  public:
   // This callback is used by methods that report only an error code. It is
   // valid to pass a null callback to some functions that takes a
@@ -45,7 +45,7 @@ class BASE_EXPORT FileProxy : public SupportsWeakPtr<FileProxy> {
   using GetFileInfoCallback =
       OnceCallback<void(File::Error, const File::Info&)>;
   using ReadCallback =
-      OnceCallback<void(File::Error, const char* data, int bytes_read)>;
+      OnceCallback<void(File::Error, base::span<const char> data)>;
   using WriteCallback = OnceCallback<void(File::Error, int bytes_written)>;
 
   explicit FileProxy(TaskRunner* task_runner);
@@ -64,11 +64,11 @@ class BASE_EXPORT FileProxy : public SupportsWeakPtr<FileProxy> {
                     StatusCallback callback);
 
   // Creates a temporary file for writing. The path and an open file are
-  // returned. It is invalid to pass a null callback. The additional file flags
-  // will be added on top of the default file flags which are:
+  // returned. It is invalid to pass a null callback. These additional file
+  // flags will be added on top of the default file flags:
   //   File::FLAG_CREATE_ALWAYS
   //   File::FLAG_WRITE
-  //   File::FLAG_TEMPORARY.
+  //   File::FLAG_WIN_TEMPORARY.
   //
   // This returns false if task posting to |task_runner| has failed.
   bool CreateTemporary(uint32_t additional_file_flags,
@@ -110,8 +110,7 @@ class BASE_EXPORT FileProxy : public SupportsWeakPtr<FileProxy> {
   // This returns false if |bytes_to_write| is less than or equal to zero,
   // if |buffer| is NULL, or if task posting to |task_runner| has failed.
   bool Write(int64_t offset,
-             const char* buffer,
-             int bytes_to_write,
+             base::span<const uint8_t> data,
              WriteCallback callback);
 
   // Proxies File::SetTimes. The callback can be null.
@@ -134,6 +133,8 @@ class BASE_EXPORT FileProxy : public SupportsWeakPtr<FileProxy> {
 
   scoped_refptr<TaskRunner> task_runner_;
   File file_;
+
+  base::WeakPtrFactory<FileProxy> weak_ptr_factory_{this};
 };
 
 }  // namespace base

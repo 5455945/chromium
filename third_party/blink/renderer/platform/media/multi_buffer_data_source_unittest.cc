@@ -1,8 +1,8 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "third_party/blink/public/platform/media/multi_buffer_data_source.h"
+#include "third_party/blink/renderer/platform/media/multi_buffer_data_source.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -10,43 +10,41 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/cxx17_backports.h"
+#include "base/containers/heap_array.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/run_loop.h"
-#include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/test/bind.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "base/threading/thread.h"
 #include "media/base/media_switches.h"
 #include "media/base/media_util.h"
 #include "media/base/mock_filters.h"
+#include "media/base/mock_media_log.h"
 #include "media/base/test_helpers.h"
-#include "services/network/public/mojom/fetch_api.mojom.h"
-#include "third_party/blink/public/platform/media/buffered_data_source_host_impl.h"
+#include "services/network/public/mojom/fetch_api.mojom-blink.h"
 #include "third_party/blink/public/platform/web_url.h"
 #include "third_party/blink/public/platform/web_url_response.h"
+#include "third_party/blink/renderer/platform/media/buffered_data_source_host_impl.h"
 #include "third_party/blink/renderer/platform/media/multi_buffer_reader.h"
 #include "third_party/blink/renderer/platform/media/resource_multi_buffer_data_provider.h"
 #include "third_party/blink/renderer/platform/media/testing/mock_resource_fetch_context.h"
 #include "third_party/blink/renderer/platform/media/testing/mock_web_associated_url_loader.h"
 #include "third_party/blink/renderer/platform/media/testing/test_response_generator.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
+
+namespace blink {
 
 using ::testing::_;
 using ::testing::Assign;
-using ::testing::DoAll;
-using ::testing::Invoke;
-using ::testing::InvokeWithoutArgs;
 using ::testing::InSequence;
 using ::testing::NiceMock;
 using ::testing::StrictMock;
 
-using blink::WebAssociatedURLLoader;
-using blink::WebString;
-using blink::WebURLResponse;
-
-namespace media {
-
-class TestResourceMultiBuffer;
 class TestMultiBufferDataProvider;
 
 std::set<TestMultiBufferDataProvider*> test_data_providers;
@@ -133,11 +131,24 @@ class TestResourceMultiBuffer : public ResourceMultiBuffer {
 
 class TestUrlData : public UrlData {
  public:
-  TestUrlData(const GURL& url,
+  TestUrlData(const KURL& url,
               CorsMode cors_mode,
-              UrlIndex* url_index,
+              UrlData::CacheMode cache_mode,
+              scoped_refptr<const SecurityOrigin> security_origin,
+              media::DataSource::EncodingMode encoding_mode,
+              ServiceWorkerMode service_worker_mode,
+              const KURL& original_request_url,
+              base::WeakPtr<UrlIndex> url_index,
               scoped_refptr<base::SingleThreadTaskRunner> task_runner)
-      : UrlData(url, cors_mode, url_index, task_runner),
+      : UrlData(url,
+                cors_mode,
+                cache_mode,
+                std::move(security_origin),
+                encoding_mode,
+                service_worker_mode,
+                original_request_url,
+                url_index,
+                task_runner),
         block_shift_(url_index->block_shift()),
         task_runner_(std::move(task_runner)) {}
 
@@ -172,9 +183,19 @@ class TestUrlIndex : public UrlIndex {
       : UrlIndex(fetch_context, task_runner),
         task_runner_(std::move(task_runner)) {}
 
-  scoped_refptr<UrlData> NewUrlData(const GURL& url,
-                                    UrlData::CorsMode cors_mode) override {
-    last_url_data_ = new TestUrlData(url, cors_mode, this, task_runner_);
+  scoped_refptr<UrlData> NewUrlData(
+      const KURL& url,
+      UrlData::CorsMode cors_mode,
+      UrlData::CacheMode cache_mode,
+      scoped_refptr<const SecurityOrigin> security_origin,
+      media::DataSource::EncodingMode encoding_mode,
+      UrlData::ServiceWorkerMode service_worker_mode,
+      const KURL& original_request_url) override {
+    NotifyNewUrlData(url, cors_mode, cache_mode);
+    last_url_data_ = base::MakeRefCounted<TestUrlData>(
+        url, cors_mode, cache_mode, std::move(security_origin), encoding_mode,
+        service_worker_mode, original_request_url, weak_factory_.GetWeakPtr(),
+        task_runner_);
     return last_url_data_;
   }
 
@@ -183,7 +204,8 @@ class TestUrlIndex : public UrlIndex {
     return last_url_data_;
   }
 
-  size_t load_queue_size() { return loading_queue_.size(); }
+  MOCK_METHOD3(NotifyNewUrlData,
+               void(KURL, UrlData::CorsMode, UrlData::CacheMode));
 
  private:
   scoped_refptr<TestUrlData> last_url_data_;
@@ -207,14 +229,15 @@ class MockMultiBufferDataSource : public MultiBufferDataSource {
   MockMultiBufferDataSource(
       const scoped_refptr<base::SingleThreadTaskRunner>& task_runner,
       scoped_refptr<UrlData> url_data,
+      media::MediaLog* media_log,
       BufferedDataSourceHost* host)
       : MultiBufferDataSource(
             task_runner,
             std::move(url_data),
-            &media_log_,
+            media_log,
             host,
-            base::BindRepeating(&MockMultiBufferDataSource::set_downloading,
-                                base::Unretained(this))),
+            BindRepeating(&MockMultiBufferDataSource::set_downloading,
+                          Unretained(this))),
         downloading_(false) {}
 
   MockMultiBufferDataSource(const MockMultiBufferDataSource&) = delete;
@@ -229,7 +252,6 @@ class MockMultiBufferDataSource : public MultiBufferDataSource {
  private:
   // Whether the resource is downloading or deferred.
   bool downloading_;
-  NullMediaLog media_log_;
 };
 
 static const int64_t kFileSize = 5000000;
@@ -245,9 +267,9 @@ class MultiBufferDataSourceTest : public testing::Test {
  public:
   MultiBufferDataSourceTest() : preload_(MultiBufferDataSource::AUTO) {
     ON_CALL(fetch_context_, CreateUrlLoader(_))
-        .WillByDefault(Invoke([](const blink::WebAssociatedURLLoaderOptions&) {
+        .WillByDefault([](const WebAssociatedURLLoaderOptions&) {
           return std::make_unique<NiceMock<MockWebAssociatedURLLoader>>();
-        }));
+        });
   }
 
   MultiBufferDataSourceTest(const MultiBufferDataSourceTest&) = delete;
@@ -256,21 +278,24 @@ class MultiBufferDataSourceTest : public testing::Test {
 
   MOCK_METHOD1(OnInitialize, void(bool));
 
-  void InitializeWithCors(const char* url,
+  void InitializeWithCors(const char* url_string,
                           bool expected,
                           UrlData::CorsMode cors_mode,
                           size_t file_size = kFileSize) {
-    GURL gurl(url);
+    KURL url(url_string);
+    media_log_ = std::make_unique<NiceMock<media::MockMediaLog>>();
     data_source_ = std::make_unique<MockMultiBufferDataSource>(
-        task_runner_, url_index_.GetByUrl(gurl, cors_mode, UrlIndex::kNormal),
-        &host_);
+        task_runner_,
+        url_index_.GetByUrl(url, cors_mode, UrlData::kNormal, security_origin_),
+        media_log_.get(), &host_);
     data_source_->SetPreload(preload_);
 
     response_generator_ =
-        std::make_unique<TestResponseGenerator>(gurl, file_size);
+        std::make_unique<TestResponseGenerator>(url, file_size);
     EXPECT_CALL(*this, OnInitialize(expected));
-    data_source_->Initialize(base::BindOnce(
-        &MultiBufferDataSourceTest::OnInitialize, base::Unretained(this)));
+    data_source_->SetIsClientAudioElement(is_client_audio_element_);
+    data_source_->Initialize(
+        BindOnce(&MultiBufferDataSourceTest::OnInitialize, Unretained(this)));
     base::RunLoop().RunUntilIdle();
 
     // Not really loading until after OnInitialize is called.
@@ -344,10 +369,10 @@ class MultiBufferDataSourceTest : public testing::Test {
 
   void ReceiveDataLow(int size) {
     EXPECT_TRUE(active_loader());
-    std::unique_ptr<char[]> data(new char[size]);
-    memset(data.get(), 0xA5, size);  // Arbitrary non-zero value.
+    auto data = base::HeapArray<char>::Uninit(size);
+    std::ranges::fill(data, 0xA5);  // Arbitrary non-zero value.
 
-    data_provider()->DidReceiveData(data.get(), size);
+    data_provider()->DidReceiveData(data);
   }
 
   void ReceiveData(int size) {
@@ -368,10 +393,11 @@ class MultiBufferDataSourceTest : public testing::Test {
 
   MOCK_METHOD1(ReadCallback, void(int size));
 
-  void ReadAt(int64_t position, int64_t howmuch = kDataSize) {
-    data_source_->Read(position, howmuch, buffer_,
-                       base::BindOnce(&MultiBufferDataSourceTest::ReadCallback,
-                                      base::Unretained(this)));
+  void ReadAt(int64_t position, int howmuch = kDataSize) {
+    data_source_->Read(
+        position,
+        base::span(buffer_).first(base::checked_cast<size_t>(howmuch)),
+        BindOnce(&MultiBufferDataSourceTest::ReadCallback, Unretained(this)));
     base::RunLoop().RunUntilIdle();
   }
 
@@ -445,13 +471,13 @@ class MultiBufferDataSourceTest : public testing::Test {
   TestMultiBufferDataProvider* data_provider() {
     return multibuffer()->GetProvider();
   }
-  blink::WebAssociatedURLLoader* active_loader() {
+  WebAssociatedURLLoader* active_loader() {
     EXPECT_TRUE(data_provider());
     if (!data_provider())
       return nullptr;
     return data_provider()->active_loader_.get();
   }
-  blink::WebAssociatedURLLoader* active_loader_allownull() {
+  WebAssociatedURLLoader* active_loader_allownull() {
     TestMultiBufferDataProvider* data_provider =
         multibuffer()->GetProvider_allownull();
     if (!data_provider)
@@ -480,9 +506,24 @@ class MultiBufferDataSourceTest : public testing::Test {
   }
   double data_source_playback_rate() { return data_source_->playback_rate_; }
   bool is_local_source() { return data_source_->AssumeFullyBuffered(); }
+  bool is_client_audio_element() { return loader()->is_client_audio_element_; }
   scoped_refptr<UrlData> url_data() { return data_source_->url_data_; }
   void set_might_be_reused_from_cache_in_future(bool value) {
     url_data()->set_cacheable(value);
+  }
+  void set_is_client_audio_element(bool value) {
+    is_client_audio_element_ = value;
+  }
+
+  media::DataSource::Preload GetPreload(MultiBufferDataSource* source) {
+    return source->preload_;
+  }
+  bool GetIsClientAudioElement(MultiBufferDataSource* source) {
+    return source->is_client_audio_element_;
+  }
+  void CallOnRedirected(MultiBufferDataSource* source,
+                        const scoped_refptr<UrlData>& data) {
+    source->OnRedirected(data);
   }
 
  protected:
@@ -491,8 +532,11 @@ class MultiBufferDataSourceTest : public testing::Test {
   NiceMock<MockResourceFetchContext> fetch_context_;
   const scoped_refptr<base::SingleThreadTaskRunner> task_runner_ =
       task_environment_.GetMainThreadTaskRunner();
+  scoped_refptr<const SecurityOrigin> security_origin_ =
+      SecurityOrigin::CreateUniqueOpaque();
   TestUrlIndex url_index_{&fetch_context_, task_runner_};
 
+  std::unique_ptr<media::MediaLog> media_log_;
   std::unique_ptr<MockMultiBufferDataSource> data_source_;
 
   std::unique_ptr<TestResponseGenerator> response_generator_;
@@ -501,6 +545,8 @@ class MultiBufferDataSourceTest : public testing::Test {
 
   // Used for calling MultiBufferDataSource::Read().
   uint8_t buffer_[kDataSize * 2];
+
+  bool is_client_audio_element_ = false;
 };
 
 TEST_F(MultiBufferDataSourceTest, Range_Supported) {
@@ -549,14 +595,23 @@ TEST_F(MultiBufferDataSourceTest, Range_NotSatisfiable) {
   Stop();
 }
 
+TEST_F(MultiBufferDataSourceTest, Range_NotSatisfiableOpaque) {
+  Initialize(kHttpUrl, false);
+  WebURLResponse response = response_generator_->GenerateResponse(416);
+  response.SetType(network::mojom::blink::FetchResponseType::kOpaque);
+  Respond(response);
+  EXPECT_TRUE(data_source_->WouldTaintOrigin());
+  EXPECT_FALSE(loading());
+  Stop();
+}
+
 // Special carve-out for Apache versions that choose to return a 200 for
 // Range:0- ("because it's more efficient" than a 206)
 TEST_F(MultiBufferDataSourceTest, Range_SupportedButReturned200) {
   Initialize(kHttpUrl, true);
   EXPECT_CALL(host_, SetTotalBytes(response_generator_->content_length()));
   WebURLResponse response = response_generator_->Generate200();
-  response.SetHttpHeaderField(WebString::FromUTF8("Accept-Ranges"),
-                              WebString::FromUTF8("bytes"));
+  response.SetHttpHeaderField(WebString("Accept-Ranges"), WebString("bytes"));
   Respond(response);
 
   EXPECT_CALL(host_, AddBufferedByteRange(0, kDataSize));
@@ -616,6 +671,33 @@ TEST_F(MultiBufferDataSourceTest, Range_ServerLied) {
   Respond(response_generator_->Generate200());
 
   EXPECT_TRUE(loading());
+  Stop();
+}
+
+TEST_F(MultiBufferDataSourceTest, GetUrlDataOrigin_NoDataOrigin) {
+  InitializeWith200Response();
+  // Without a data origin, it should fallback to url() via
+  // GetUrlAfterRedirects().
+  EXPECT_EQ(data_source_->GetUrlDataOrigin(), GURL(kHttpUrl));
+  Stop();
+}
+
+TEST_F(MultiBufferDataSourceTest, GetUrlDataOrigin_WithDataOrigin) {
+  Initialize(kHttpUrl, true);
+
+  EXPECT_CALL(host_, SetTotalBytes(response_generator_->content_length()));
+  WebURLResponse response = response_generator_->Generate200();
+  response.SetCurrentRequestUrl(KURL(kHttpDifferentOriginUrl));
+  Respond(response);
+
+  EXPECT_CALL(host_, AddBufferedByteRange(0, kDataSize));
+  ReceiveData(kDataSize);
+
+  // Without an HTTP redirect, `GetUrlAfterRedirects()` stays at `kHttpUrl`
+  // while `GetUrlDataOrigin()` reflects `response.ResponseUrl()`.
+  EXPECT_FALSE(data_source_->DidRedirect());
+  EXPECT_EQ(data_source_->GetUrlAfterRedirects(), GURL(kHttpUrl));
+  EXPECT_EQ(data_source_->GetUrlDataOrigin(), GURL(kHttpDifferentOriginUrl));
   Stop();
 }
 
@@ -693,7 +775,7 @@ TEST_F(MultiBufferDataSourceTest, Http_RetryOnError) {
   Stop();
 }
 
-// Make sure that we prefetch across partial responses. (crbug.com/516589)
+// Make sure that we prefetch across partial responses. (crbug.com/41192138).
 TEST_F(MultiBufferDataSourceTest, Http_PartialResponsePrefetch) {
   Initialize(kHttpUrl, true);
   WebURLResponse response1 =
@@ -739,7 +821,7 @@ TEST_F(MultiBufferDataSourceTest,
       response_generator_->GeneratePartial206(0, kDataSize - 1);
   WebURLResponse response2 =
       response_generator_->GeneratePartial206(kDataSize, kDataSize * 2 - 1);
-  response2.SetCurrentRequestUrl(GURL(kHttpDifferentPathUrl));
+  response2.SetCurrentRequestUrl(KURL(kHttpDifferentPathUrl));
   // The origin URL of response1 and response2 are same. So no error should
   // occur.
   ExecuteMixedResponseSuccessTest(response1, response2);
@@ -752,7 +834,7 @@ TEST_F(MultiBufferDataSourceTest,
       response_generator_->GeneratePartial206(0, kDataSize - 1);
   WebURLResponse response2 =
       response_generator_->GeneratePartial206(kDataSize, kDataSize * 2 - 1);
-  response2.SetCurrentRequestUrl(GURL(kHttpDifferentOriginUrl));
+  response2.SetCurrentRequestUrl(KURL(kHttpDifferentOriginUrl));
   // The origin URL of response1 and response2 are different. So an error should
   // occur.
   ExecuteMixedResponseFailureTest(response1, response2);
@@ -777,7 +859,7 @@ TEST_F(MultiBufferDataSourceTest,
   WebURLResponse response1 =
       response_generator_->GeneratePartial206(0, kDataSize - 1);
   response1.SetWasFetchedViaServiceWorker(true);
-  std::vector<blink::WebURL> url_list = {GURL(kHttpUrl)};
+  std::vector<WebURL> url_list = {KURL(kHttpUrl)};
   response1.SetUrlListViaServiceWorker(url_list);
   WebURLResponse response2 =
       response_generator_->GeneratePartial206(kDataSize, kDataSize * 2 - 1);
@@ -792,7 +874,7 @@ TEST_F(MultiBufferDataSourceTest,
   WebURLResponse response1 =
       response_generator_->GeneratePartial206(0, kDataSize - 1);
   response1.SetWasFetchedViaServiceWorker(true);
-  std::vector<blink::WebURL> url_list = {GURL(kHttpDifferentPathUrl)};
+  std::vector<WebURL> url_list = {KURL(kHttpDifferentPathUrl)};
   response1.SetUrlListViaServiceWorker(url_list);
   WebURLResponse response2 =
       response_generator_->GeneratePartial206(kDataSize, kDataSize * 2 - 1);
@@ -807,7 +889,7 @@ TEST_F(MultiBufferDataSourceTest,
   WebURLResponse response1 =
       response_generator_->GeneratePartial206(0, kDataSize - 1);
   response1.SetWasFetchedViaServiceWorker(true);
-  std::vector<blink::WebURL> url_list = {GURL(kHttpDifferentOriginUrl)};
+  std::vector<WebURL> url_list = {KURL(kHttpDifferentOriginUrl)};
   response1.SetUrlListViaServiceWorker(url_list);
   WebURLResponse response2 =
       response_generator_->GeneratePartial206(kDataSize, kDataSize * 2 - 1);
@@ -822,7 +904,7 @@ TEST_F(MultiBufferDataSourceTest,
   WebURLResponse response1 =
       response_generator_->GeneratePartial206(0, kDataSize - 1);
   response1.SetWasFetchedViaServiceWorker(true);
-  std::vector<blink::WebURL> url_list = {GURL(kHttpDifferentOriginUrl)};
+  std::vector<WebURL> url_list = {KURL(kHttpDifferentOriginUrl)};
   response1.SetUrlListViaServiceWorker(url_list);
   WebURLResponse response2 =
       response_generator_->GeneratePartial206(kDataSize, kDataSize * 2 - 1);
@@ -922,9 +1004,9 @@ TEST_F(MultiBufferDataSourceTest, StopDuringRead) {
   InitializeWith206Response();
 
   uint8_t buffer[256];
-  data_source_->Read(kDataSize, base::size(buffer), buffer,
-                     base::BindOnce(&MultiBufferDataSourceTest::ReadCallback,
-                                    base::Unretained(this)));
+  data_source_->Read(
+      kDataSize, buffer,
+      BindOnce(&MultiBufferDataSourceTest::ReadCallback, Unretained(this)));
 
   // The outstanding read should fail before the stop callback runs.
   {
@@ -973,7 +1055,7 @@ TEST_F(MultiBufferDataSourceTest, SetBitrate) {
 TEST_F(MultiBufferDataSourceTest, MediaPlaybackRateChanged) {
   InitializeWith206Response();
 
-  data_source_->MediaPlaybackRateChanged(2.0);
+  data_source_->OnMediaPlaybackRateChanged(2.0);
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(2.0, data_source_playback_rate());
 
@@ -1025,11 +1107,12 @@ TEST_F(MultiBufferDataSourceTest, Http_ShareData) {
   EXPECT_TRUE(data_source_->downloading());
 
   StrictMock<MockBufferedDataSourceHost> host2;
+  media_log_ = std::make_unique<NiceMock<media::MockMediaLog>>();
   MockMultiBufferDataSource source2(
       task_runner_,
-      url_index_.GetByUrl(GURL(kHttpUrl), UrlData::CORS_UNSPECIFIED,
-                          UrlIndex::kNormal),
-      &host2);
+      url_index_.GetByUrl(KURL(kHttpUrl), UrlData::CORS_UNSPECIFIED,
+                          UrlData::kNormal, security_origin_),
+      media_log_.get(), &host2);
   source2.SetPreload(preload_);
 
   EXPECT_CALL(*this, OnInitialize(true));
@@ -1037,14 +1120,75 @@ TEST_F(MultiBufferDataSourceTest, Http_ShareData) {
   // This call would not be expected if we were not sharing data.
   EXPECT_CALL(host2, SetTotalBytes(response_generator_->content_length()));
   EXPECT_CALL(host2, AddBufferedByteRange(0, kDataSize * 2));
-  source2.Initialize(base::BindOnce(&MultiBufferDataSourceTest::OnInitialize,
-                                    base::Unretained(this)));
+  source2.Initialize(
+      BindOnce(&MultiBufferDataSourceTest::OnInitialize, Unretained(this)));
   base::RunLoop().RunUntilIdle();
 
   // Always loading after initialize.
   EXPECT_EQ(source2.downloading(), true);
 
   Stop();
+}
+
+TEST_F(MultiBufferDataSourceTest, Http_ShareData_AtLeastOneProgress) {
+  // Initialize the first provider.
+  Initialize(kHttpUrl, true, kFileSize);
+  ASSERT_EQ(test_data_providers.size(), 1u);
+  auto* provider1 = *test_data_providers.begin();
+
+  // Initialize the second provider before the first receives any response.
+  StrictMock<MockBufferedDataSourceHost> host2;
+  media_log_ = std::make_unique<NiceMock<media::MockMediaLog>>();
+  MockMultiBufferDataSource source2(
+      task_runner_,
+      url_index_.GetByUrl(KURL(kHttpUrl), UrlData::CORS_UNSPECIFIED,
+                          UrlData::kNormal, security_origin_),
+      media_log_.get(), &host2);
+  source2.SetPreload(preload_);
+  source2.Initialize(base::DoNothing());
+
+  ASSERT_EQ(test_data_providers.size(), 2u);
+  TestMultiBufferDataProvider* provider2 = nullptr;
+  for (auto* provider : test_data_providers) {
+    if (provider != provider1) {
+      provider2 = provider;
+      break;
+    }
+  }
+  ASSERT_TRUE(provider2);
+
+  // Respond to the first provider w/ a response and data.
+  const auto total_bytes = response_generator_->content_length();
+  EXPECT_CALL(host_, SetTotalBytes(total_bytes));
+  provider1->DidReceiveResponse(response_generator_->Generate206(0));
+  EXPECT_CALL(host_, AddBufferedByteRange(0, testing::Ge(total_bytes)))
+      .Times(testing::AtLeast(1));
+
+  auto data =
+      base::HeapArray<char>::Uninit(base::checked_cast<size_t>(total_bytes));
+  std::ranges::fill(data, 0xA5);  // Arbitrary non-zero value.
+  provider1->DidReceiveData(data);
+  provider1->DidFinishLoading();
+  task_environment_.RunUntilIdle();
+
+  // Now respond to the second provider, it should merge with the first since
+  // it can share the previous data. Note: MultiBuffer provides byte ranges in
+  // terms of block units, so the buffered range may exceed total bytes.
+  EXPECT_CALL(host2, AddBufferedByteRange(0, testing::Ge(total_bytes)));
+  EXPECT_CALL(host2, SetTotalBytes(total_bytes));
+  provider2->DidReceiveResponse(response_generator_->Generate206(0));
+  provider1 = provider2 = nullptr;  // May have been released at this point.
+
+  EXPECT_CALL(*this, ReadCallback(kDataSize));
+  ReadAt(0, kDataSize);
+  task_environment_.RunUntilIdle();
+
+  // Expectations should be met before Stop() is called.
+  testing::Mock::VerifyAndClear(&host_);
+  testing::Mock::VerifyAndClear(&host2);
+
+  data_source_->Stop();
+  task_environment_.RunUntilIdle();
 }
 
 TEST_F(MultiBufferDataSourceTest, Http_Read_Seek) {
@@ -1115,7 +1259,7 @@ TEST_F(MultiBufferDataSourceTest, LocalResource_DeferStrategy) {
   EXPECT_TRUE(is_local_source());
   CheckCapacityDefer();
 
-  data_source_->MediaIsPlaying();
+  data_source_->OnMediaIsPlaying();
   CheckCapacityDefer();
 
   Stop();
@@ -1129,7 +1273,7 @@ TEST_F(MultiBufferDataSourceTest, LocalResource_PreloadMetadata_DeferStrategy) {
   EXPECT_TRUE(is_local_source());
   CheckReadThenDefer();
 
-  data_source_->MediaIsPlaying();
+  data_source_->OnMediaIsPlaying();
   CheckCapacityDefer();
 
   Stop();
@@ -1143,7 +1287,7 @@ TEST_F(MultiBufferDataSourceTest, ExternalResource_Reponse200_DeferStrategy) {
   EXPECT_FALSE(data_source_->range_supported());
   CheckCapacityDefer();
 
-  data_source_->MediaIsPlaying();
+  data_source_->OnMediaIsPlaying();
   CheckCapacityDefer();
 
   Stop();
@@ -1159,7 +1303,7 @@ TEST_F(MultiBufferDataSourceTest,
   EXPECT_FALSE(data_source_->range_supported());
   CheckReadThenDefer();
 
-  data_source_->MediaIsPlaying();
+  data_source_->OnMediaIsPlaying();
   CheckCapacityDefer();
 
   Stop();
@@ -1173,11 +1317,11 @@ TEST_F(MultiBufferDataSourceTest, ExternalResource_Reponse206_DeferStrategy) {
   EXPECT_TRUE(data_source_->range_supported());
   CheckCapacityDefer();
 
-  data_source_->MediaIsPlaying();
+  data_source_->OnMediaIsPlaying();
   CheckCapacityDefer();
 
   set_might_be_reused_from_cache_in_future(true);
-  data_source_->MediaIsPlaying();
+  data_source_->OnMediaIsPlaying();
   CheckCapacityDefer();
 
   Stop();
@@ -1193,11 +1337,11 @@ TEST_F(MultiBufferDataSourceTest,
   EXPECT_TRUE(data_source_->range_supported());
   CheckReadThenDefer();
 
-  data_source_->MediaIsPlaying();
+  data_source_->OnMediaIsPlaying();
   CheckCapacityDefer();
 
   set_might_be_reused_from_cache_in_future(true);
-  data_source_->MediaIsPlaying();
+  data_source_->OnMediaIsPlaying();
   CheckCapacityDefer();
 
   set_might_be_reused_from_cache_in_future(false);
@@ -1239,7 +1383,7 @@ TEST_F(MultiBufferDataSourceTest,
 
   ReadAt(kDataSize);
 
-  data_source_->OnBufferingHaveEnough(false);
+  data_source_->StopPreloading();
   ASSERT_TRUE(active_loader());
 
   EXPECT_CALL(*this, ReadCallback(kDataSize));
@@ -1270,7 +1414,7 @@ TEST_F(MultiBufferDataSourceTest,
 
   ReadAt(kDataSize);
 
-  data_source_->OnBufferingHaveEnough(false);
+  data_source_->StopPreloading();
   ASSERT_TRUE(active_loader());
 
   EXPECT_CALL(*this, ReadCallback(kDataSize));
@@ -1318,10 +1462,11 @@ TEST_F(MultiBufferDataSourceTest,
   EXPECT_CALL(host_, AddBufferedByteRange(0, kDataSize * 4));
   ReceiveData(kDataSize);
   EXPECT_EQ(data_source_->downloading(), false);
-  data_source_->Read(kDataSize * 10, kDataSize, buffer_,
-                     base::BindOnce(&MultiBufferDataSourceTest::ReadCallback,
-                                    base::Unretained(this)));
-  data_source_->OnBufferingHaveEnough(false);
+  data_source_->Read(
+      kDataSize * 10,
+      base::span(buffer_).first(base::checked_cast<size_t>(kDataSize)),
+      BindOnce(&MultiBufferDataSourceTest::ReadCallback, Unretained(this)));
+  data_source_->StopPreloading();
   EXPECT_TRUE(active_loader_allownull());
   EXPECT_CALL(*this, ReadCallback(-1));
   Stop();
@@ -1343,8 +1488,8 @@ TEST_F(MultiBufferDataSourceTest,
   // Marking the media as playing should prevent deferral. It also tells the
   // data source to start buffering beyond the initial load.
   EXPECT_FALSE(data_source_->cancel_on_defer_for_testing());
-  data_source_->MediaIsPlaying();
-  data_source_->OnBufferingHaveEnough(false);
+  data_source_->OnMediaIsPlaying();
+  data_source_->StopPreloading();
   CheckCapacityDefer();
   ASSERT_TRUE(active_loader());
 
@@ -1353,7 +1498,7 @@ TEST_F(MultiBufferDataSourceTest,
   EXPECT_CALL(host_, AddBufferedByteRange(0, kDataSize * 2));
   ReceiveData(kDataSize);
   ASSERT_TRUE(active_loader());
-  data_source_->OnBufferingHaveEnough(true);
+  data_source_->StopPreloading();
   EXPECT_TRUE(data_source_->cancel_on_defer_for_testing());
   ASSERT_TRUE(active_loader());
   ASSERT_FALSE(data_provider()->deferred());
@@ -1370,7 +1515,7 @@ TEST_F(MultiBufferDataSourceTest,
   EXPECT_FALSE(active_loader_allownull());
 
   // Verify playback resumes correctly too.
-  data_source_->MediaIsPlaying();
+  data_source_->OnMediaIsPlaying();
   EXPECT_FALSE(data_source_->cancel_on_defer_for_testing());
 
   // A read from a previously buffered range won't create a new loader yet.
@@ -1390,19 +1535,63 @@ TEST_F(MultiBufferDataSourceTest,
   }
 }
 
+// This test triggers an edge case where request destination is not
+// properly set to "audio" (crbug.com/12345). The edge case is triggered when
+// preload omitted or is set to metadata, and a read from an unbuffered range
+// takes place.
+TEST_F(MultiBufferDataSourceTest,
+       ExternalResource_Response206_CheckIsClientAudioElement) {
+  set_preload(MultiBufferDataSource::METADATA);
+  set_is_client_audio_element(true);
+  InitializeWith206Response();
+  EXPECT_EQ(MultiBufferDataSource::METADATA, preload());
+  EXPECT_FALSE(is_local_source());
+  EXPECT_TRUE(is_client_audio_element());
+  EXPECT_TRUE(data_source_->range_supported());
+  CheckReadThenDefer();
+
+  // Reset the reader on defer. As a result, during the next unbuffered range
+  // read, a locked resource loader will be created.
+  data_source_->StopPreloading();
+
+  // Deliver data until capacity is reached and verify deferral.
+  int bytes_received = 0;
+  EXPECT_CALL(host_, AddBufferedByteRange(_, _)).Times(testing::AtLeast(1));
+  while (active_loader_allownull() && !data_provider()->deferred()) {
+    ReceiveData(kDataSize);
+    bytes_received += kDataSize;
+  }
+  EXPECT_GT(bytes_received, 0);
+  EXPECT_LT(bytes_received + kDataSize, kFileSize);
+  EXPECT_FALSE(active_loader_allownull());
+
+  // Read from an unbuffered range will create a new resource loader.
+  ReadAt(kFarReadPosition);
+  EXPECT_CALL(*this, ReadCallback(kDataSize));
+  EXPECT_CALL(host_, AddBufferedByteRange(kFarReadPosition,
+                                          kFarReadPosition + kDataSize));
+  EXPECT_TRUE(is_client_audio_element());
+  Respond(response_generator_->Generate206(kFarReadPosition));
+  ReceiveData(kDataSize);
+
+  Stop();
+}
+
 TEST_F(MultiBufferDataSourceTest, SeekPastEOF) {
-  GURL gurl(kHttpUrl);
+  KURL url(kHttpUrl);
+  media_log_ = std::make_unique<NiceMock<media::MockMediaLog>>();
   data_source_ = std::make_unique<MockMultiBufferDataSource>(
       task_runner_,
-      url_index_.GetByUrl(gurl, UrlData::CORS_UNSPECIFIED, UrlIndex::kNormal),
-      &host_);
+      url_index_.GetByUrl(url, UrlData::CORS_UNSPECIFIED, UrlData::kNormal,
+                          security_origin_),
+      media_log_.get(), &host_);
   data_source_->SetPreload(preload_);
 
   response_generator_ =
-      std::make_unique<TestResponseGenerator>(gurl, kDataSize + 1);
+      std::make_unique<TestResponseGenerator>(url, kDataSize + 1);
   EXPECT_CALL(*this, OnInitialize(true));
-  data_source_->Initialize(base::BindOnce(
-      &MultiBufferDataSourceTest::OnInitialize, base::Unretained(this)));
+  data_source_->Initialize(
+      BindOnce(&MultiBufferDataSourceTest::OnInitialize, Unretained(this)));
   base::RunLoop().RunUntilIdle();
 
   // Not really loading until after OnInitialize is called.
@@ -1443,8 +1632,8 @@ TEST_F(MultiBufferDataSourceTest, Http_RetryThenRedirect) {
   run_loop.Run();
 
   // Server responds with a redirect.
-  blink::WebURL url{GURL(kHttpDifferentPathUrl)};
-  blink::WebURLResponse response((GURL(kHttpUrl)));
+  WebURL url{KURL(kHttpDifferentPathUrl)};
+  WebURLResponse response{KURL(kHttpUrl)};
   response.SetHttpStatusCode(307);
   data_provider()->WillFollowRedirect(url, response);
 
@@ -1461,8 +1650,8 @@ TEST_F(MultiBufferDataSourceTest, Http_NotStreamingAfterRedirect) {
   Initialize(kHttpUrl, true);
 
   // Server responds with a redirect.
-  blink::WebURL url{GURL(kHttpDifferentPathUrl)};
-  blink::WebURLResponse response((GURL(kHttpUrl)));
+  WebURL url{KURL(kHttpDifferentPathUrl)};
+  WebURLResponse response{KURL(kHttpUrl)};
   response.SetHttpStatusCode(307);
   data_provider()->WillFollowRedirect(url, response);
 
@@ -1483,8 +1672,8 @@ TEST_F(MultiBufferDataSourceTest, Http_RangeNotSatisfiableAfterRedirect) {
   Initialize(kHttpUrl, true);
 
   // Server responds with a redirect.
-  blink::WebURL url{GURL(kHttpDifferentPathUrl)};
-  blink::WebURLResponse response((GURL(kHttpUrl)));
+  WebURL url{KURL(kHttpDifferentPathUrl)};
+  WebURLResponse response{KURL(kHttpUrl)};
   response.SetHttpStatusCode(307);
   data_provider()->WillFollowRedirect(url, response);
 
@@ -1497,8 +1686,8 @@ TEST_F(MultiBufferDataSourceTest, Http_404AfterRedirect) {
   Initialize(kHttpUrl, false);
 
   // Server responds with a redirect.
-  blink::WebURL url{GURL(kHttpDifferentPathUrl)};
-  blink::WebURLResponse response((GURL(kHttpUrl)));
+  WebURL url{KURL(kHttpDifferentPathUrl)};
+  WebURLResponse response{KURL(kHttpUrl)};
   response.SetHttpStatusCode(307);
   data_provider()->WillFollowRedirect(url, response);
 
@@ -1506,11 +1695,118 @@ TEST_F(MultiBufferDataSourceTest, Http_404AfterRedirect) {
   Stop();
 }
 
+TEST_F(MultiBufferDataSourceTest, PreserveCachingModeAfterRedirect) {
+  KURL start("https://start.com");
+  KURL redir("https://redir.com");
+  media_log_ = std::make_unique<NiceMock<media::MockMediaLog>>();
+  WebURL url{redir};
+  WebURLResponse redirect_response(start);
+  redirect_response.SetHttpStatusCode(307);
+  WebURLResponse data_response(redir);
+  data_response.SetHttpStatusCode(200);
+  data_response.SetExpectedContentLength(kDataSize);
+  data_response.SetHttpHeaderField(WebString("Accept-Ranges"),
+                                   WebString("bytes"));
+
+  // Create a data source for a url which redirects. This will create a new
+  // UrlData that bypasses any cache lookups (but can still be added to the
+  // cache). This will create a new UrlData object with the bypass flag set.
+  // The redirection will create another UrlData object with the new url, which
+  // will also be in bypass mode.
+  {
+    EXPECT_CALL(url_index_,
+                NotifyNewUrlData(start, _, UrlData::kCacheDisabled));
+    auto data_source = std::make_unique<MockMultiBufferDataSource>(
+        task_runner_,
+        url_index_.GetByUrl(start, UrlData::CORS_UNSPECIFIED,
+                            UrlData::kCacheDisabled, security_origin_),
+        media_log_.get(), &host_);
+    data_source->SetPreload(preload_);
+    auto response_generator =
+        std::make_unique<TestResponseGenerator>(start, kFileSize);
+    data_source->SetIsClientAudioElement(false);
+    EXPECT_CALL(*this, OnInitialize(true));
+    data_source->Initialize(
+        BindOnce(&MultiBufferDataSourceTest::OnInitialize, Unretained(this)));
+    base::RunLoop().RunUntilIdle();
+    EXPECT_EQ(data_source->downloading(), false);
+    EXPECT_CALL(url_index_,
+                NotifyNewUrlData(redir, _, UrlData::kCacheDisabled));
+    data_provider()->WillFollowRedirect(url, redirect_response);
+    EXPECT_CALL(host_, AddBufferedByteRange(0, _));
+    EXPECT_CALL(host_, SetTotalBytes(kDataSize));
+    Respond(data_response);
+    ReceiveData(kDataSize);
+    base::RunLoop().RunUntilIdle();
+  }
+
+  // Make another data source for the same URL, but this time, make it in normal
+  // cache mode. This will still create a new UrlData for the initial URL
+  // because the redirect was temporary (307). The redirect will NOT create a
+  // new UrlData however, because that one is cached, as the previous response
+  // was a 200.
+  {
+    EXPECT_CALL(url_index_, NotifyNewUrlData(start, _, UrlData::kNormal));
+    auto data_source = std::make_unique<MockMultiBufferDataSource>(
+        task_runner_,
+        url_index_.GetByUrl(start, UrlData::CORS_UNSPECIFIED, UrlData::kNormal,
+                            security_origin_),
+        media_log_.get(), &host_);
+    data_source->SetPreload(preload_);
+    auto response_generator =
+        std::make_unique<TestResponseGenerator>(start, kFileSize);
+    data_source->SetIsClientAudioElement(false);
+    EXPECT_CALL(*this, OnInitialize(true));
+    data_source->Initialize(
+        BindOnce(&MultiBufferDataSourceTest::OnInitialize, Unretained(this)));
+    base::RunLoop().RunUntilIdle();
+    EXPECT_EQ(data_source->downloading(), false);
+    EXPECT_CALL(url_index_, NotifyNewUrlData(redir, _, _)).Times(0);
+    data_provider()->WillFollowRedirect(url, redirect_response);
+    EXPECT_CALL(host_, AddBufferedByteRange(0, _)).Times(testing::AtLeast(1));
+    EXPECT_CALL(host_, SetTotalBytes(kDataSize));
+    Respond(data_response);
+    ReceiveData(kDataSize);
+    base::RunLoop().RunUntilIdle();
+  }
+
+  // Make another data source for the same URL, but again in bypass cache lookup
+  // mode. This will create another UrlData object for the first URL, but then
+  // will bypass the cached data and create another new UrlData object for the
+  // redirection url.
+  {
+    EXPECT_CALL(url_index_,
+                NotifyNewUrlData(start, _, UrlData::kCacheDisabled));
+    auto data_source = std::make_unique<MockMultiBufferDataSource>(
+        task_runner_,
+        url_index_.GetByUrl(start, UrlData::CORS_UNSPECIFIED,
+                            UrlData::kCacheDisabled, security_origin_),
+        media_log_.get(), &host_);
+    data_source->SetPreload(preload_);
+    auto response_generator =
+        std::make_unique<TestResponseGenerator>(start, kFileSize);
+    data_source->SetIsClientAudioElement(false);
+    EXPECT_CALL(*this, OnInitialize(true));
+    data_source->Initialize(
+        BindOnce(&MultiBufferDataSourceTest::OnInitialize, Unretained(this)));
+    base::RunLoop().RunUntilIdle();
+    EXPECT_EQ(data_source->downloading(), false);
+    EXPECT_CALL(url_index_,
+                NotifyNewUrlData(redir, _, UrlData::kCacheDisabled));
+    data_provider()->WillFollowRedirect(url, redirect_response);
+    EXPECT_CALL(host_, AddBufferedByteRange(0, _));
+    EXPECT_CALL(host_, SetTotalBytes(kDataSize));
+    Respond(data_response);
+    ReceiveData(kDataSize);
+    base::RunLoop().RunUntilIdle();
+  }
+}
+
 TEST_F(MultiBufferDataSourceTest, LengthKnownAtEOF) {
   Initialize(kHttpUrl, true);
   // Server responds without content-length.
   WebURLResponse response = response_generator_->Generate200();
-  response.ClearHttpHeaderField(WebString::FromUTF8("Content-Length"));
+  response.ClearHttpHeaderField(WebString("Content-Length"));
   response.SetExpectedContentLength(kPositionNotSpecified);
   Respond(response);
   EXPECT_CALL(host_, AddBufferedByteRange(0, kDataSize));
@@ -1535,12 +1831,12 @@ TEST_F(MultiBufferDataSourceTest, LengthKnownAtEOF) {
 
 TEST_F(MultiBufferDataSourceTest, FileSizeLessThanBlockSize) {
   Initialize(kHttpUrl, true);
-  GURL gurl(kHttpUrl);
-  blink::WebURLResponse response(gurl);
+  KURL url(kHttpUrl);
+  WebURLResponse response(url);
   response.SetHttpStatusCode(200);
   response.SetHttpHeaderField(
-      WebString::FromUTF8("Content-Length"),
-      WebString::FromUTF8(base::NumberToString(kDataSize / 2)));
+      WebString("Content-Length"),
+      WebString::FromUtf8(base::NumberToString(kDataSize / 2)));
   response.SetExpectedContentLength(kDataSize / 2);
   Respond(response);
   EXPECT_CALL(host_, AddBufferedByteRange(0, kDataSize / 2));
@@ -1560,7 +1856,7 @@ TEST_F(MultiBufferDataSourceTest, ResponseTypeBasic) {
   set_preload(MultiBufferDataSource::NONE);
   WebURLResponse response1 =
       response_generator_->GeneratePartial206(0, kDataSize - 1);
-  response1.SetType(network::mojom::FetchResponseType::kBasic);
+  response1.SetType(network::mojom::blink::FetchResponseType::kBasic);
 
   EXPECT_CALL(host_, SetTotalBytes(kFileSize));
   EXPECT_CALL(host_, AddBufferedByteRange(0, kDataSize));
@@ -1570,7 +1866,6 @@ TEST_F(MultiBufferDataSourceTest, ResponseTypeBasic) {
   ReceiveData(kDataSize);
   ReadAt(0);
   EXPECT_TRUE(loading());
-  EXPECT_FALSE(data_source_->IsCorsCrossOrigin());
 
   FinishLoading();
 }
@@ -1580,7 +1875,7 @@ TEST_F(MultiBufferDataSourceTest, ResponseTypeCors) {
   set_preload(MultiBufferDataSource::NONE);
   WebURLResponse response1 =
       response_generator_->GeneratePartial206(0, kDataSize - 1);
-  response1.SetType(network::mojom::FetchResponseType::kCors);
+  response1.SetType(network::mojom::blink::FetchResponseType::kCors);
 
   EXPECT_CALL(host_, SetTotalBytes(kFileSize));
   EXPECT_CALL(host_, AddBufferedByteRange(0, kDataSize));
@@ -1590,7 +1885,6 @@ TEST_F(MultiBufferDataSourceTest, ResponseTypeCors) {
   ReceiveData(kDataSize);
   ReadAt(0);
   EXPECT_TRUE(loading());
-  EXPECT_FALSE(data_source_->IsCorsCrossOrigin());
 
   FinishLoading();
 }
@@ -1600,7 +1894,7 @@ TEST_F(MultiBufferDataSourceTest, ResponseTypeDefault) {
   set_preload(MultiBufferDataSource::NONE);
   WebURLResponse response1 =
       response_generator_->GeneratePartial206(0, kDataSize - 1);
-  response1.SetType(network::mojom::FetchResponseType::kDefault);
+  response1.SetType(network::mojom::blink::FetchResponseType::kDefault);
 
   EXPECT_CALL(host_, SetTotalBytes(kFileSize));
   EXPECT_CALL(host_, AddBufferedByteRange(0, kDataSize));
@@ -1610,7 +1904,6 @@ TEST_F(MultiBufferDataSourceTest, ResponseTypeDefault) {
   ReceiveData(kDataSize);
   ReadAt(0);
   EXPECT_TRUE(loading());
-  EXPECT_FALSE(data_source_->IsCorsCrossOrigin());
 
   FinishLoading();
 }
@@ -1620,7 +1913,7 @@ TEST_F(MultiBufferDataSourceTest, ResponseTypeOpaque) {
   set_preload(MultiBufferDataSource::NONE);
   WebURLResponse response1 =
       response_generator_->GeneratePartial206(0, kDataSize - 1);
-  response1.SetType(network::mojom::FetchResponseType::kOpaque);
+  response1.SetType(network::mojom::blink::FetchResponseType::kOpaque);
 
   EXPECT_CALL(host_, SetTotalBytes(kFileSize));
   EXPECT_CALL(host_, AddBufferedByteRange(0, kDataSize));
@@ -1630,9 +1923,34 @@ TEST_F(MultiBufferDataSourceTest, ResponseTypeOpaque) {
   ReceiveData(kDataSize);
   ReadAt(0);
   EXPECT_TRUE(loading());
-  EXPECT_TRUE(data_source_->IsCorsCrossOrigin());
 
   FinishLoading();
+}
+
+TEST_F(MultiBufferDataSourceTest, ResponseTypeOpaqueOnLaterRange) {
+  base::test::ScopedFeatureList feature_list(
+      media::kDisallowMixedOpaqueMediaResponses);
+  Initialize(kHttpUrl, true);
+  WebURLResponse response1 =
+      response_generator_->GeneratePartial206(0, kDataSize - 1);
+  response1.SetType(network::mojom::blink::FetchResponseType::kCors);
+  WebURLResponse response2 =
+      response_generator_->GeneratePartial206(kDataSize, kDataSize * 2 - 1);
+  response2.SetType(network::mojom::blink::FetchResponseType::kOpaque);
+  ExecuteMixedResponseFailureTest(response1, response2);
+}
+
+TEST_F(MultiBufferDataSourceTest, ResponseTypeNonOpaqueAfterOpaqueRange) {
+  base::test::ScopedFeatureList feature_list(
+      media::kDisallowMixedOpaqueMediaResponses);
+  Initialize(kHttpUrl, true);
+  WebURLResponse response1 =
+      response_generator_->GeneratePartial206(0, kDataSize - 1);
+  response1.SetType(network::mojom::blink::FetchResponseType::kOpaque);
+  WebURLResponse response2 =
+      response_generator_->GeneratePartial206(kDataSize, kDataSize * 2 - 1);
+  response2.SetType(network::mojom::blink::FetchResponseType::kCors);
+  ExecuteMixedResponseFailureTest(response1, response2);
 }
 
 TEST_F(MultiBufferDataSourceTest, ResponseTypeOpaqueRedirect) {
@@ -1640,7 +1958,7 @@ TEST_F(MultiBufferDataSourceTest, ResponseTypeOpaqueRedirect) {
   set_preload(MultiBufferDataSource::NONE);
   WebURLResponse response1 =
       response_generator_->GeneratePartial206(0, kDataSize - 1);
-  response1.SetType(network::mojom::FetchResponseType::kOpaqueRedirect);
+  response1.SetType(network::mojom::blink::FetchResponseType::kOpaqueRedirect);
 
   EXPECT_CALL(host_, SetTotalBytes(kFileSize));
   EXPECT_CALL(host_, AddBufferedByteRange(0, kDataSize));
@@ -1650,7 +1968,6 @@ TEST_F(MultiBufferDataSourceTest, ResponseTypeOpaqueRedirect) {
   ReceiveData(kDataSize);
   ReadAt(0);
   EXPECT_TRUE(loading());
-  EXPECT_TRUE(data_source_->IsCorsCrossOrigin());
 
   FinishLoading();
 }
@@ -1661,8 +1978,7 @@ TEST_F(MultiBufferDataSourceTest, EtagTest) {
   EXPECT_CALL(host_, SetTotalBytes(response_generator_->content_length()));
   WebURLResponse response = response_generator_->Generate206(0);
   const std::string etag("\"arglebargle glop-glyf?\"");
-  response.SetHttpHeaderField(WebString::FromUTF8("Etag"),
-                              WebString::FromUTF8(etag));
+  response.SetHttpHeaderField(WebString("Etag"), WebString::FromUtf8(etag));
   Respond(response);
   EXPECT_CALL(host_, AddBufferedByteRange(0, kDataSize));
   ReceiveData(kDataSize);
@@ -1770,18 +2086,20 @@ TEST_F(MultiBufferDataSourceTest, CheckBufferSizeAfterReadingALot) {
 // Provoke an edge case where the loading state may not end up transitioning
 // back to "idle" when we're done loading.
 TEST_F(MultiBufferDataSourceTest, Http_CheckLoadingTransition) {
-  GURL gurl(kHttpUrl);
+  KURL url(kHttpUrl);
+  media_log_ = std::make_unique<NiceMock<media::MockMediaLog>>();
   data_source_ = std::make_unique<MockMultiBufferDataSource>(
       task_runner_,
-      url_index_.GetByUrl(gurl, UrlData::CORS_UNSPECIFIED, UrlIndex::kNormal),
-      &host_);
+      url_index_.GetByUrl(url, UrlData::CORS_UNSPECIFIED, UrlData::kNormal,
+                          security_origin_),
+      media_log_.get(), &host_);
   data_source_->SetPreload(preload_);
 
   response_generator_ =
-      std::make_unique<TestResponseGenerator>(gurl, kDataSize * 1);
+      std::make_unique<TestResponseGenerator>(url, kDataSize * 1);
   EXPECT_CALL(*this, OnInitialize(true));
-  data_source_->Initialize(base::BindOnce(
-      &MultiBufferDataSourceTest::OnInitialize, base::Unretained(this)));
+  data_source_->Initialize(
+      BindOnce(&MultiBufferDataSourceTest::OnInitialize, Unretained(this)));
   base::RunLoop().RunUntilIdle();
 
   // Not really loading until after OnInitialize is called.
@@ -1799,9 +2117,9 @@ TEST_F(MultiBufferDataSourceTest, Http_CheckLoadingTransition) {
   data_provider()->DidFinishLoading();
 
   EXPECT_CALL(*this, ReadCallback(1));
-  data_source_->Read(kDataSize, 2, buffer_,
-                     base::BindOnce(&MultiBufferDataSourceTest::ReadCallback,
-                                    base::Unretained(this)));
+  data_source_->Read(
+      kDataSize, base::span(buffer_).first<2u>(),
+      BindOnce(&MultiBufferDataSourceTest::ReadCallback, Unretained(this)));
   base::RunLoop().RunUntilIdle();
 
   // Make sure we're not downloading anymore.
@@ -1884,4 +2202,533 @@ TEST_F(MultiBufferDataSourceTest, Http_Seek_Back) {
   Stop();
 }
 
-}  // namespace media
+TEST_F(MultiBufferDataSourceTest, FactoryCreation) {
+  auto media_log = std::make_unique<NiceMock<media::MockMediaLog>>();
+  bool redirect_called = false;
+  MultiBufferDataSource::Factory factory(
+      std::move(media_log),
+      base::BindRepeating(
+          [](UrlIndex* url_index,
+             scoped_refptr<const SecurityOrigin> security_origin,
+             const GURL& url, media::DataSource::CacheMode cache_mode,
+             media::DataSource::EncodingMode encoding_mode,
+             base::OnceCallback<void(scoped_refptr<UrlData>)> cb) {
+            std::move(cb).Run(url_index->GetByUrl(
+                KURL(url), UrlData::CORS_UNSPECIFIED,
+                cache_mode == media::DataSource::CacheMode::kBypassCache
+                    ? UrlData::kCacheDisabled
+                    : UrlData::kNormal,
+                std::move(security_origin), encoding_mode));
+          },
+          base::Unretained(&url_index_), security_origin_),
+      /*is_audio_element=*/true,
+      /*preload=*/media::DataSource::METADATA,
+      base::BindRepeating(
+          [](bool* called, const media::DataSource* source) { *called = true; },
+          base::Unretained(&redirect_called)),
+      /*tick_clock=*/nullptr, task_runner_);
+
+  std::unique_ptr<media::CrossOriginDataSource> created_source;
+  factory.Create(
+      GURL(kHttpUrl), media::DataSource::CacheMode::kHitCache,
+      media::DataSource::EncodingMode::kIdentity,
+      base::BindOnce(
+          [](std::unique_ptr<media::CrossOriginDataSource>* out_source,
+             std::unique_ptr<media::CrossOriginDataSource> source) {
+            *out_source = std::move(source);
+          },
+          &created_source));
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(created_source);
+  MultiBufferDataSource* mb_source =
+      static_cast<MultiBufferDataSource*>(created_source.get());
+
+  EXPECT_EQ(GetPreload(mb_source), media::DataSource::METADATA);
+  EXPECT_TRUE(GetIsClientAudioElement(mb_source));
+
+  scoped_refptr<UrlData> redirected_url_data = url_index_.GetByUrl(
+      KURL(kHttpDifferentOriginUrl), UrlData::CORS_UNSPECIFIED,
+      UrlData::kNormal, security_origin_);
+  redirected_url_data->SetDataOrigin(KURL(kHttpDifferentOriginUrl),
+                                     /*is_cors_cross_origin=*/true);
+  CallOnRedirected(mb_source, redirected_url_data);
+  EXPECT_TRUE(redirect_called);
+}
+
+TEST_F(MultiBufferDataSourceTest, FactoryCreationDefault) {
+  auto media_log = std::make_unique<NiceMock<media::MockMediaLog>>();
+  MultiBufferDataSource::Factory factory(
+      /*media_log=*/std::move(media_log),
+      /*get_url_data=*/
+      base::BindRepeating(
+          [](UrlIndex* url_index,
+             scoped_refptr<const SecurityOrigin> security_origin,
+             const GURL& url, media::DataSource::CacheMode cache_mode,
+             media::DataSource::EncodingMode encoding_mode,
+             base::OnceCallback<void(scoped_refptr<UrlData>)> cb) {
+            std::move(cb).Run(url_index->GetByUrl(
+                KURL(url), UrlData::CORS_UNSPECIFIED,
+                cache_mode == media::DataSource::CacheMode::kBypassCache
+                    ? UrlData::kCacheDisabled
+                    : UrlData::kNormal,
+                std::move(security_origin), encoding_mode));
+          },
+          base::Unretained(&url_index_), security_origin_),
+      /*is_audio_element=*/false,
+      /*preload=*/media::DataSource::METADATA, base::DoNothing(), nullptr,
+      task_runner_);
+
+  std::unique_ptr<media::CrossOriginDataSource> created_source;
+  factory.Create(
+      GURL(kHttpUrl), media::DataSource::CacheMode::kHitCache,
+      media::DataSource::EncodingMode::kIdentity,
+      base::BindOnce(
+          [](std::unique_ptr<media::CrossOriginDataSource>* out_source,
+             std::unique_ptr<media::CrossOriginDataSource> source) {
+            *out_source = std::move(source);
+          },
+          &created_source));
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(created_source);
+  MultiBufferDataSource* mb_source =
+      static_cast<MultiBufferDataSource*>(created_source.get());
+
+  // Default values from media::DataSource::Factory::ClientMetadata
+  EXPECT_EQ(GetPreload(mb_source), media::DataSource::METADATA);
+  EXPECT_FALSE(GetIsClientAudioElement(mb_source));
+
+  // Should not crash if tainted_source_cb is not set.
+  CallOnRedirected(mb_source,
+                   url_index_.GetByUrl(KURL(kHttpDifferentPathUrl),
+                                       UrlData::CORS_UNSPECIFIED,
+                                       UrlData::kNormal, security_origin_));
+}
+
+TEST_F(MultiBufferDataSourceTest, Http_RedirectToCachedUrlWithStopPreloading) {
+  // Populate the cache for `kHttpDifferentPathUrl` with 2 blocks (64KB), which
+  // exceeds the METADATA preload_high threshold (48KB).
+  Initialize(kHttpDifferentPathUrl, true);
+  EXPECT_CALL(host_, SetTotalBytes(response_generator_->content_length()));
+  Respond(response_generator_->Generate206(0));
+  EXPECT_CALL(host_, AddBufferedByteRange(0, kDataSize));
+  ReceiveData(kDataSize);
+  EXPECT_CALL(host_, AddBufferedByteRange(0, kDataSize * 2));
+  ReceiveData(kDataSize);
+  Stop();
+
+  // Initialize a new data source for `kHttpUrl` with METADATA preload and
+  // receive less than one full block (1024 bytes) so `init_cb_` stays pending
+  // while `loading_` becomes true. Calling `StopPreloading()` then sets
+  // `cancel_on_defer_` without resetting `reader_`. When the partial-data retry
+  // redirects to the already-cached `kHttpDifferentPathUrl`, `RedirectTo()`
+  // synchronously resets `reader_` and deletes
+  // `ResourceMultiBufferDataProvider` while `DidReceiveResponse` is still on
+  // the stack.
+  set_preload(MultiBufferDataSource::METADATA);
+  Initialize(kHttpUrl, false);
+  Respond(response_generator_->Generate206(0));
+  EXPECT_CALL(host_, AddBufferedByteRange(0, 1024));
+  ReceiveData(1024);
+  data_source_->StopPreloading();
+  ASSERT_TRUE(active_loader());
+
+  base::RunLoop run_loop;
+  data_provider()->DidFinishLoading();
+  data_provider()->RunOnStart(run_loop.QuitClosure());
+  run_loop.Run();
+
+  WebURL redir_url{KURL(kHttpDifferentPathUrl)};
+  WebURLResponse redirect_response{KURL(kHttpUrl)};
+  redirect_response.SetHttpStatusCode(307);
+  // A Service Worker redirect preserves `ServiceWorkerMode::kAllow`, matching
+  // the directly-loaded `UrlIndex` entry for `kHttpDifferentPathUrl` above.
+  redirect_response.SetWasFetchedViaServiceWorker(true);
+  data_provider()->WillFollowRedirect(redir_url, redirect_response);
+
+  EXPECT_CALL(host_, AddBufferedByteRange(0, kDataSize * 2))
+      .Times(testing::AtLeast(1));
+  Respond(response_generator_->Generate206(0));
+
+  EXPECT_FALSE(loading());
+  Stop();
+}
+
+TEST_F(MultiBufferDataSourceTest, Http_RedirectConcurrentWithReadAndAbort) {
+  InitializeWith206Response();
+
+  scoped_refptr<UrlData> url_data1 = url_index_.GetByUrl(
+      KURL(kHttpDifferentPathUrl), UrlData::CORS_UNSPECIFIED,
+      UrlData::kCacheDisabled, security_origin_);
+  scoped_refptr<UrlData> url_data2 = url_index_.GetByUrl(
+      KURL(kHttpDifferentPathUrl), UrlData::CORS_UNSPECIFIED,
+      UrlData::kCacheDisabled, security_origin_);
+
+  base::Thread read_thread("ReadThread");
+  ASSERT_TRUE(read_thread.Start());
+  read_thread.task_runner()->PostTask(
+      FROM_HERE, base::BindLambdaForTesting([&]() {
+        for (int i = 0; i < 500; ++i) {
+          bool aborted = false;
+          data_source_->Read(
+              kFarReadPosition,
+              base::span(buffer_).first(base::checked_cast<size_t>(kDataSize)),
+              base::BindLambdaForTesting([&](int size) {
+                EXPECT_EQ(size, media::DataSource::kAborted);
+                aborted = true;
+              }));
+          data_source_->Abort();
+          EXPECT_TRUE(aborted);
+        }
+      }));
+
+  for (int i = 0; i < 500; ++i) {
+    CallOnRedirected(data_source_.get(), (i % 2 == 0) ? url_data1 : url_data2);
+  }
+
+  read_thread.Stop();
+  Stop();
+}
+
+TEST_F(MultiBufferDataSourceTest,
+       CrossOriginForwardRedirectRetargetsAndSkipsServiceWorker) {
+  base::test::ScopedFeatureList feature_list{
+      media::kDisallowMixedOpaqueMediaResponses};
+  security_origin_ = SecurityOrigin::CreateFromString(kHttpUrl);
+  bool tainted_called = false;
+  Initialize(kHttpUrl, true);
+  data_source_->SetTaintedCallback(base::BindRepeating(
+      [](bool* called, const media::DataSource*) { *called = true; },
+      base::Unretained(&tainted_called)));
+
+  WebURL redir_url{KURL(kHttpDifferentOriginUrl)};
+  WebURLResponse redirect_response{KURL(kHttpUrl)};
+  redirect_response.SetHttpStatusCode(302);
+  ASSERT_TRUE(
+      data_provider()->WillFollowRedirect(redir_url, redirect_response));
+
+  EXPECT_CALL(host_, SetTotalBytes(response_generator_->content_length()));
+  WebURLResponse response = response_generator_->Generate206(0);
+  response.SetCurrentRequestUrl(KURL(kHttpDifferentOriginUrl));
+  response.SetType(network::mojom::blink::FetchResponseType::kOpaque);
+  Respond(response);
+
+  EXPECT_CALL(host_, AddBufferedByteRange(0, kDataSize));
+  ReceiveData(kDataSize);
+
+  EXPECT_TRUE(tainted_called);
+  EXPECT_TRUE(data_source_->WouldTaintOrigin());
+  EXPECT_TRUE(data_source_->DidRedirect());
+  EXPECT_EQ(url_data()->url(), KURL(kHttpDifferentOriginUrl));
+  EXPECT_EQ(url_data()->request_url(), KURL(kHttpDifferentOriginUrl));
+  EXPECT_EQ(url_data()->service_worker_mode(),
+            UrlData::ServiceWorkerMode::kSkip);
+  EXPECT_EQ(data_source_->GetUrlAfterRedirects(),
+            GURL(kHttpDifferentOriginUrl));
+  EXPECT_EQ(data_source_->GetUrlDataOrigin(), GURL(kHttpDifferentOriginUrl));
+
+  // A subsequent unbuffered range request targets the retargeted destination
+  // directly while skipping Service Workers.
+  ReadAt(kFarReadPosition);
+  ASSERT_TRUE(data_provider());
+  EXPECT_EQ(url_data()->request_url(), KURL(kHttpDifferentOriginUrl));
+
+  WebURLResponse far_response =
+      response_generator_->Generate206(kFarReadPosition);
+  far_response.SetCurrentRequestUrl(KURL(kHttpDifferentOriginUrl));
+  far_response.SetType(network::mojom::blink::FetchResponseType::kOpaque);
+  EXPECT_CALL(*this, ReadCallback(kDataSize));
+  EXPECT_CALL(host_, AddBufferedByteRange(kFarReadPosition,
+                                          kFarReadPosition + kDataSize));
+  Respond(far_response);
+  ReceiveData(kDataSize);
+
+  Stop();
+}
+
+TEST_F(MultiBufferDataSourceTest,
+       CrossOriginBounceBackTaintsAndReplaysOriginalUrl) {
+  security_origin_ = SecurityOrigin::CreateFromString(kHttpUrl);
+  bool tainted_called = false;
+  Initialize(kHttpDifferentOriginUrl, true);
+  data_source_->SetTaintedCallback(base::BindRepeating(
+      [](bool* called, const media::DataSource*) { *called = true; },
+      base::Unretained(&tainted_called)));
+
+  WebURL redir_url{KURL(kHttpUrl)};
+  WebURLResponse redirect_response{KURL(kHttpDifferentOriginUrl)};
+  redirect_response.SetHttpStatusCode(302);
+  ASSERT_TRUE(
+      data_provider()->WillFollowRedirect(redir_url, redirect_response));
+
+  EXPECT_CALL(host_, SetTotalBytes(response_generator_->content_length()));
+  WebURLResponse response = response_generator_->Generate206(0);
+  response.SetCurrentRequestUrl(KURL(kHttpUrl));
+  response.SetType(network::mojom::blink::FetchResponseType::kBasic);
+  Respond(response);
+
+  EXPECT_CALL(host_, AddBufferedByteRange(0, kDataSize));
+  ReceiveData(kDataSize);
+
+  EXPECT_TRUE(tainted_called);
+  EXPECT_TRUE(data_source_->WouldTaintOrigin());
+  EXPECT_TRUE(data_source_->DidRedirect());
+  EXPECT_EQ(url_data()->url(), KURL(kHttpUrl));
+  EXPECT_EQ(url_data()->request_url(), KURL(kHttpDifferentOriginUrl));
+  EXPECT_EQ(data_source_->GetUrlAfterRedirects(), GURL(kHttpUrl));
+  EXPECT_EQ(data_source_->GetUrlDataOrigin(), GURL(kHttpUrl));
+
+  // Follow-up range requests replay `kHttpDifferentOriginUrl` rather than
+  // issuing direct same-origin requests to `kHttpUrl`.
+  ReadAt(kFarReadPosition);
+  ASSERT_TRUE(data_provider());
+  EXPECT_EQ(url_data()->request_url(), KURL(kHttpDifferentOriginUrl));
+  ASSERT_TRUE(
+      data_provider()->WillFollowRedirect(redir_url, redirect_response));
+
+  WebURLResponse far_response =
+      response_generator_->Generate206(kFarReadPosition);
+  far_response.SetCurrentRequestUrl(KURL(kHttpUrl));
+  far_response.SetType(network::mojom::blink::FetchResponseType::kBasic);
+  EXPECT_CALL(*this, ReadCallback(kDataSize));
+  EXPECT_CALL(host_, AddBufferedByteRange(kFarReadPosition,
+                                          kFarReadPosition + kDataSize));
+  Respond(far_response);
+  ReceiveData(kDataSize);
+
+  Stop();
+}
+
+TEST_F(MultiBufferDataSourceTest,
+       MultiHopBounceBackToSameOriginTaintsDataSource) {
+  security_origin_ = SecurityOrigin::CreateFromString(kHttpUrl);
+  bool tainted_called = false;
+  Initialize(kHttpUrl, true);
+  data_source_->SetTaintedCallback(base::BindRepeating(
+      [](bool* called, const media::DataSource*) { *called = true; },
+      base::Unretained(&tainted_called)));
+
+  WebURL bounce_url{KURL(kHttpDifferentOriginUrl)};
+  WebURL final_url{KURL(kHttpDifferentPathUrl)};
+  WebURLResponse redir1{KURL(kHttpUrl)};
+  redir1.SetHttpStatusCode(302);
+  WebURLResponse redir2{bounce_url};
+  redir2.SetHttpStatusCode(302);
+  ASSERT_TRUE(data_provider()->WillFollowRedirect(bounce_url, redir1));
+  ASSERT_TRUE(data_provider()->WillFollowRedirect(final_url, redir2));
+
+  EXPECT_CALL(host_, SetTotalBytes(response_generator_->content_length()));
+  WebURLResponse response = response_generator_->Generate206(0);
+  response.SetCurrentRequestUrl(KURL(kHttpDifferentPathUrl));
+  response.SetType(network::mojom::blink::FetchResponseType::kBasic);
+  Respond(response);
+
+  EXPECT_CALL(host_, AddBufferedByteRange(0, kDataSize));
+  ReceiveData(kDataSize);
+
+  EXPECT_TRUE(tainted_called);
+  EXPECT_TRUE(data_source_->WouldTaintOrigin());
+  EXPECT_TRUE(data_source_->DidRedirect());
+  EXPECT_EQ(data_source_->GetUrlAfterRedirects(), GURL(kHttpDifferentPathUrl));
+  EXPECT_EQ(url_data()->request_url(), KURL(kHttpUrl));
+  Stop();
+}
+
+TEST_F(MultiBufferDataSourceTest,
+       UniversalAccessCrossOriginRedirectDoesNotCrash) {
+  scoped_refptr<SecurityOrigin> origin =
+      SecurityOrigin::CreateFromString(kHttpUrl);
+  origin->GrantUniversalAccess();
+  security_origin_ = origin;
+  Initialize(kHttpUrl, true);
+
+  WebURL redir_url{KURL(kHttpDifferentOriginUrl)};
+  WebURLResponse redirect_response{KURL(kHttpUrl)};
+  redirect_response.SetHttpStatusCode(302);
+  ASSERT_TRUE(
+      data_provider()->WillFollowRedirect(redir_url, redirect_response));
+
+  EXPECT_CALL(host_, SetTotalBytes(response_generator_->content_length()));
+  WebURLResponse response = response_generator_->Generate206(0);
+  response.SetCurrentRequestUrl(KURL(kHttpDifferentOriginUrl));
+  Respond(response);
+
+  EXPECT_CALL(host_, AddBufferedByteRange(0, kDataSize));
+  ReceiveData(kDataSize);
+  EXPECT_TRUE(data_source_->WouldTaintOrigin());
+  EXPECT_TRUE(data_source_->DidRedirect());
+
+  // Follow-up range requests replay `kHttpUrl` so `CorsURLLoader` tainting
+  // stays consistent rather than mixing redirected opaque and direct basic
+  // responses under `GrantUniversalAccess()`.
+  ReadAt(kFarReadPosition);
+  ASSERT_TRUE(data_provider());
+  EXPECT_EQ(url_data()->request_url(), KURL(kHttpUrl));
+  ASSERT_TRUE(
+      data_provider()->WillFollowRedirect(redir_url, redirect_response));
+  WebURLResponse far_response =
+      response_generator_->Generate206(kFarReadPosition);
+  far_response.SetCurrentRequestUrl(KURL(kHttpDifferentOriginUrl));
+  EXPECT_CALL(*this, ReadCallback(kDataSize));
+  EXPECT_CALL(host_, AddBufferedByteRange(kFarReadPosition,
+                                          kFarReadPosition + kDataSize));
+  Respond(far_response);
+  ReceiveData(kDataSize);
+  Stop();
+}
+
+TEST_F(MultiBufferDataSourceTest,
+       MidStreamSameOriginRedirectOnCrossOriginResourceSucceeds) {
+  base::test::ScopedFeatureList feature_list{
+      media::kDisallowMixedOpaqueMediaResponses};
+  security_origin_ = SecurityOrigin::CreateFromString("http://embedder.test");
+  InitializeWith206Response();
+  EXPECT_FALSE(data_source_->DidRedirect());
+  EXPECT_EQ(data_source_->GetUrlAfterRedirects(), GURL(kHttpUrl));
+
+  ReadAt(kFarReadPosition);
+  WebURL redir_url{KURL(kHttpDifferentPathUrl)};
+  WebURLResponse redirect_response{KURL(kHttpUrl)};
+  redirect_response.SetHttpStatusCode(307);
+  EXPECT_TRUE(
+      data_provider()->WillFollowRedirect(redir_url, redirect_response));
+
+  WebURLResponse far_response =
+      response_generator_->Generate206(kFarReadPosition);
+  far_response.SetCurrentRequestUrl(KURL(kHttpDifferentPathUrl));
+  EXPECT_CALL(*this, ReadCallback(kDataSize));
+  EXPECT_CALL(host_, AddBufferedByteRange(kFarReadPosition,
+                                          kFarReadPosition + kDataSize));
+  Respond(far_response);
+  ReceiveData(kDataSize);
+  EXPECT_TRUE(data_source_->DidRedirect());
+  EXPECT_EQ(data_source_->GetUrlAfterRedirects(), GURL(kHttpDifferentPathUrl));
+  EXPECT_EQ(url_data()->service_worker_mode(),
+            UrlData::ServiceWorkerMode::kSkip);
+  Stop();
+}
+
+TEST_F(
+    MultiBufferDataSourceTest,
+    SameOriginRedirectOnCrossOriginResourceReportsRedirectAndPostRedirectUrl) {
+  base::test::ScopedFeatureList feature_list{
+      media::kDisallowMixedOpaqueMediaResponses};
+  security_origin_ = SecurityOrigin::CreateFromString("http://embedder.test");
+  InitializeWithCors(kHttpUrl, true, UrlData::CORS_ANONYMOUS);
+
+  WebURL redir_url{KURL(kHttpDifferentPathUrl)};
+  WebURLResponse redirect_response{KURL(kHttpUrl)};
+  redirect_response.SetHttpStatusCode(302);
+  ASSERT_TRUE(
+      data_provider()->WillFollowRedirect(redir_url, redirect_response));
+
+  EXPECT_CALL(host_, SetTotalBytes(response_generator_->content_length()));
+  WebURLResponse response = response_generator_->Generate206(0);
+  response.SetCurrentRequestUrl(KURL(kHttpDifferentPathUrl));
+  response.SetType(network::mojom::blink::FetchResponseType::kCors);
+  Respond(response);
+
+  EXPECT_CALL(host_, AddBufferedByteRange(0, kDataSize));
+  ReceiveData(kDataSize);
+
+  EXPECT_EQ(url_data()->url(), KURL(kHttpDifferentPathUrl));
+  EXPECT_EQ(url_data()->service_worker_mode(),
+            UrlData::ServiceWorkerMode::kSkip);
+  EXPECT_TRUE(data_source_->DidRedirect());
+  EXPECT_FALSE(data_source_->WouldTaintOrigin());
+  EXPECT_EQ(data_source_->GetUrlAfterRedirects(), GURL(kHttpDifferentPathUrl));
+  EXPECT_EQ(data_source_->GetUrlDataOrigin(), GURL(kHttpDifferentPathUrl));
+  Stop();
+}
+
+TEST_F(MultiBufferDataSourceTest,
+       MidStreamCorsCrossOriginRedirectReportsRedirectWithoutCrash) {
+  InitializeWithCors(kHttpUrl, true, UrlData::CORS_ANONYMOUS);
+  EXPECT_CALL(host_, SetTotalBytes(response_generator_->content_length()));
+  WebURLResponse init_response = response_generator_->Generate206(0);
+  init_response.SetType(network::mojom::blink::FetchResponseType::kBasic);
+  Respond(init_response);
+  EXPECT_CALL(host_, AddBufferedByteRange(0, kDataSize));
+  ReceiveData(kDataSize);
+
+  EXPECT_FALSE(data_source_->DidRedirect());
+  EXPECT_FALSE(data_source_->WouldTaintOrigin());
+
+  ReadAt(kFarReadPosition);
+  WebURL redir_url{KURL(kHttpDifferentOriginUrl)};
+  WebURLResponse redirect_response{KURL(kHttpUrl)};
+  redirect_response.SetHttpStatusCode(307);
+  ASSERT_TRUE(
+      data_provider()->WillFollowRedirect(redir_url, redirect_response));
+
+  WebURLResponse far_response =
+      response_generator_->Generate206(kFarReadPosition);
+  far_response.SetCurrentRequestUrl(KURL(kHttpDifferentOriginUrl));
+  far_response.SetType(network::mojom::blink::FetchResponseType::kCors);
+  EXPECT_CALL(*this, ReadCallback(kDataSize));
+  EXPECT_CALL(host_, AddBufferedByteRange(kFarReadPosition,
+                                          kFarReadPosition + kDataSize));
+  Respond(far_response);
+  ReceiveData(kDataSize);
+
+  EXPECT_EQ(url_data()->url(), KURL(kHttpDifferentOriginUrl));
+  EXPECT_TRUE(data_source_->DidRedirect());
+  EXPECT_FALSE(data_source_->WouldTaintOrigin());
+  EXPECT_EQ(data_source_->GetUrlAfterRedirects(),
+            GURL(kHttpDifferentOriginUrl));
+  Stop();
+}
+
+TEST_F(
+    MultiBufferDataSourceTest,
+    ServiceWorkerProxiedResponseDoesNotAffectUrlAfterRedirectsOrDidRedirect) {
+  // 1. Direct load intercepted by a Service Worker `respondWith(fetch(...))`
+  // without any HTTP redirect: `DidRedirect()` stays false and
+  // `GetUrlAfterRedirects()` stays at `kHttpUrl`, while `GetUrlDataOrigin()`
+  // returns the Service Worker's fetched URL.
+  InitializeWithCors(kHttpUrl, true, UrlData::CORS_ANONYMOUS);
+  EXPECT_CALL(host_, SetTotalBytes(response_generator_->content_length()));
+  WebURLResponse sw_response = response_generator_->Generate206(0);
+  sw_response.SetType(network::mojom::blink::FetchResponseType::kCors);
+  sw_response.SetWasFetchedViaServiceWorker(true);
+  sw_response.SetUrlListViaServiceWorker(
+      std::vector<WebURL>{KURL(kHttpDifferentOriginUrl)});
+  Respond(sw_response);
+  EXPECT_CALL(host_, AddBufferedByteRange(0, kDataSize));
+  ReceiveData(kDataSize);
+
+  EXPECT_FALSE(data_source_->DidRedirect());
+  EXPECT_EQ(data_source_->GetUrlAfterRedirects(), GURL(kHttpUrl));
+  EXPECT_EQ(data_source_->GetUrlDataOrigin(), GURL(kHttpDifferentOriginUrl));
+  Stop();
+
+  // 2. Synthetic Service Worker redirect (`Response.redirect(...)`) where a
+  // Service Worker proxies `kHttpDifferentPathUrl` from
+  // `kHttpDifferentOriginUrl`: `DidRedirect()` is true,
+  // `GetUrlAfterRedirects()` returns `kHttpDifferentPathUrl` (not the SW's
+  // internal URL), `service_worker_mode()` stays `kAllow` for offline SW
+  // caching, and `GetUrlDataOrigin()` returns `kHttpDifferentOriginUrl`.
+  constexpr char kRedirectStartUrl[] = "http://localhost/redirect_start.webm";
+  InitializeWithCors(kRedirectStartUrl, true, UrlData::CORS_ANONYMOUS);
+  WebURL redir_url{KURL(kHttpDifferentPathUrl)};
+  WebURLResponse redirect_response{KURL(kRedirectStartUrl)};
+  redirect_response.SetHttpStatusCode(302);
+  redirect_response.SetWasFetchedViaServiceWorker(true);
+  ASSERT_TRUE(
+      data_provider()->WillFollowRedirect(redir_url, redirect_response));
+
+  EXPECT_CALL(host_, SetTotalBytes(response_generator_->content_length()));
+  Respond(sw_response);
+  EXPECT_CALL(host_, AddBufferedByteRange(0, kDataSize));
+  ReceiveData(kDataSize);
+
+  EXPECT_EQ(url_data()->service_worker_mode(),
+            UrlData::ServiceWorkerMode::kAllow);
+  EXPECT_TRUE(data_source_->DidRedirect());
+  EXPECT_EQ(data_source_->GetUrlAfterRedirects(), GURL(kHttpDifferentPathUrl));
+  EXPECT_EQ(data_source_->GetUrlDataOrigin(), GURL(kHttpDifferentOriginUrl));
+  Stop();
+}
+
+}  // namespace blink

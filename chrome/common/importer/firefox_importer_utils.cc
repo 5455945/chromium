@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <map>
 #include <string>
+#include <string_view>
 
 #include "base/files/file_util.h"
 #include "base/logging.h"
@@ -27,23 +28,28 @@
 namespace {
 
 // Retrieves the file system path of the profile name.
-base::FilePath GetProfilePath(const base::DictionaryValue& root,
+base::FilePath GetProfilePath(const base::DictValue& root,
                               const std::string& profile_name) {
-  std::u16string path16;
-  std::string is_relative;
-  if (!root.GetStringASCII(profile_name + ".IsRelative", &is_relative) ||
-      !root.GetString(profile_name + ".Path", &path16))
+  std::string path_str;
+  const std::string* is_relative =
+      root.FindStringByDottedPath(profile_name + ".IsRelative");
+  if (!is_relative)
+    return base::FilePath();
+  if (const std::string* ptr =
+          root.FindStringByDottedPath(profile_name + ".Path"))
+    path_str = *ptr;
+  else
     return base::FilePath();
 
-#if defined(OS_WIN)
-  base::ReplaceSubstringsAfterOffset(&path16, 0, u"/", u"\\");
+#if BUILDFLAG(IS_WIN)
+  base::ReplaceSubstringsAfterOffset(&path_str, 0, "/", "\\");
 #endif
-  base::FilePath path = base::FilePath::FromUTF16Unsafe(path16);
+  base::FilePath path = base::FilePath::FromUTF8Unsafe(path_str);
 
   // IsRelative=1 means the folder path would be relative to the
   // path of profiles.ini. IsRelative=0 refers to a custom profile
   // location.
-  if (is_relative == "1")
+  if (*is_relative == "1")
     path = GetProfilesINI().DirName().Append(path);
 
   return path;
@@ -62,26 +68,28 @@ std::vector<FirefoxDetail> GetFirefoxDetails(
 }
 
 std::vector<FirefoxDetail> GetFirefoxDetailsFromDictionary(
-    const base::DictionaryValue& root,
+    const base::DictValue& root,
     const std::string& firefox_install_id) {
   std::vector<FirefoxDetail> profile_details;
 
   for (int i = 0; ; ++i) {
     std::string current_profile = base::StringPrintf("Profile%d", i);
-    if (!root.HasKey(current_profile)) {
+    if (!root.Find(current_profile)) {
       // Profiles are contiguously numbered. So we exit when we can't
       // find the i-th one.
       break;
     }
 
-    std::u16string path;
-    if (!root.GetString(current_profile + ".Path", &path))
+    if (!root.FindByDottedPath(current_profile + ".Path"))
       continue;
 
     FirefoxDetail details;
     details.path = GetProfilePath(root, current_profile);
     std::u16string name;
-    root.GetString(current_profile + ".Name", &name);
+    if (const std::string* name_utf8 =
+            root.FindStringByDottedPath(current_profile + ".Name")) {
+      name = base::UTF8ToUTF16(*name_utf8);
+    }
     // Make the profile name more presentable by replacing dashes with spaces.
     base::ReplaceChars(name, u"-", u" ", &name);
     details.name = name;
@@ -98,7 +106,7 @@ std::vector<FirefoxDetail> GetFirefoxDetailsFromDictionary(
   return profile_details;
 }
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 // Find the "*.app" component of the path and build up from there.
 // The resulting path will be .../Firefox.app/Contents/MacOS.
 // We do this because we don't trust LastAppDir to always be
@@ -106,17 +114,15 @@ std::vector<FirefoxDetail> GetFirefoxDetailsFromDictionary(
 // our assumption about Firefox's root being in that path explicit.
 bool ComposeMacAppPath(const std::string& path_from_file,
                        base::FilePath* output) {
-  base::FilePath path(path_from_file);
-  typedef std::vector<base::FilePath::StringType> ComponentVector;
-  ComponentVector path_components;
-  path.GetComponents(&path_components);
+  std::vector<base::FilePath::StringType> path_components =
+      base::FilePath(path_from_file).GetComponents();
   if (path_components.empty())
     return false;
   // The first path component is special because it may be absolute. Calling
   // Append with an absolute path component will trigger an assert, so we
   // must handle it differently and initialize output with it.
   *output = base::FilePath(path_components[0]);
-  // Append next path components untill we find the *.app component. When we do,
+  // Append next path components until we find the *.app component. When we do,
   // append Contents/MacOS.
   for (size_t i = 1; i < path_components.size(); ++i) {
     *output = output->Append(path_components[i]);
@@ -131,7 +137,7 @@ bool ComposeMacAppPath(const std::string& path_from_file,
              << "installation path: missing /*.app/ directory.";
   return false;
 }
-#endif  // OS_MAC
+#endif  // BUILDFLAG(IS_MAC)
 
 bool GetFirefoxVersionAndPathFromProfile(const base::FilePath& profile_path,
                                          int* version,
@@ -158,15 +164,15 @@ bool GetFirefoxVersionAndPathFromProfile(const base::FilePath& profile_path,
         // UTF-8, what does Firefox do?  If it puts raw bytes in the
         // file, we could go straight from bytes -> filepath;
         // otherwise, we're out of luck here.
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
         // Extract path from "LastAppDir=/actual/path"
         size_t separator_pos = line.find_first_of('=');
         const std::string& path_from_ini = line.substr(separator_pos + 1);
         if (!ComposeMacAppPath(path_from_ini, app_path))
           return false;
-#else  // !OS_MAC
+#else   // BUILDFLAG(IS_MAC)
         *app_path = base::FilePath::FromUTF8Unsafe(line.substr(equal + 1));
-#endif  // OS_MAC
+#endif  // BUILDFLAG(IS_MAC)
       }
     }
   }
@@ -174,7 +180,7 @@ bool GetFirefoxVersionAndPathFromProfile(const base::FilePath& profile_path,
 }
 
 bool ReadPrefFile(const base::FilePath& path, std::string* content) {
-  if (content == NULL)
+  if (content == nullptr)
     return false;
 
   base::ReadFileToString(path, content);
@@ -307,7 +313,7 @@ std::u16string GetFirefoxImporterName(const base::FilePath& app_path) {
 
     const std::string name_attr("Name=");
     bool in_app_section = false;
-    for (const base::StringPiece& line : base::SplitStringPiece(
+    for (std::string_view line : base::SplitStringPiece(
              content, "\n", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL)) {
       if (line == "[App]") {
         in_app_section = true;

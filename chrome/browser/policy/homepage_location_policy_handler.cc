@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,7 +22,7 @@ namespace {
 
 // Calls url_formatter::FixupURL.
 GURL FixUrl(const std::string& url_spec) {
-  return url_formatter::FixupURL(url_spec, std::string());
+  return url_formatter::FixupURL(url_spec);
 }
 
 }  // namespace

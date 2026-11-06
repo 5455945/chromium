@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -55,7 +55,9 @@ let testEntries = [];
 chrome.test.runTests([
   function testGetTestEntries() {
     getFileEntries('testing', [
-      'test_dir/test_file.txt', 'test_audio.mp3', 'test_image.jpg'
+      'test_dir/test_file.txt',
+      'test_audio.mp3',
+      'test_image.jpg',
     ]).then(callbackPass(entries => {
       testEntries = entries;
     }));

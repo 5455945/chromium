@@ -29,11 +29,12 @@
 #include "third_party/blink/renderer/core/accessibility/ax_object_cache.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
+#include "third_party/blink/renderer/core/layout/inline/fragment_items.h"
 #include "third_party/blink/renderer/core/layout/layout_counter.h"
 #include "third_party/blink/renderer/core/layout/layout_inline.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
+#include "third_party/blink/renderer/core/layout/layout_object_inlines.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
-#include "third_party/blink/renderer/core/layout/ng/inline/ng_fragment_items.h"
 #include "third_party/blink/renderer/core/paint/object_paint_invalidator.h"
 
 namespace blink {
@@ -64,13 +65,18 @@ void InvalidateInlineItems(LayoutObject* object) {
   // be prohibited when moved to different parent as if it were destroyed.
   if (object->FirstInlineFragmentItemIndex()) {
     if (auto* text = DynamicTo<LayoutText>(object))
-      text->DetachAbstractInlineTextBoxesIfNeeded();
-    NGFragmentItems::LayoutObjectWillBeMoved(*object);
+      text->ClearAccessibilityCacheIfNeeded();
+    FragmentItems::LayoutObjectWillBeMoved(*object);
   }
   object->SetIsInLayoutNGInlineFormattingContext(false);
 }
 
 }  // namespace
+
+void LayoutObjectChildList::Trace(Visitor* visitor) const {
+  visitor->Trace(first_child_);
+  visitor->Trace(last_child_);
+}
 
 void LayoutObjectChildList::DestroyLeftoverChildren() {
   // Destroy any anonymous children remaining in the layout tree, as well as
@@ -83,50 +89,29 @@ void LayoutObjectChildList::DestroyLeftoverChildren() {
   }
 }
 
-LayoutObject* LayoutObjectChildList::RemoveChildNode(
-    LayoutObject* owner,
-    LayoutObject* old_child,
-    bool notify_layout_object) {
+LayoutObject* LayoutObjectChildList::RemoveChildNode(LayoutObject* owner,
+                                                     LayoutObject* old_child) {
   DCHECK_EQ(old_child->Parent(), owner);
   DCHECK_EQ(this, owner->VirtualChildren());
 
-  if (old_child->IsFloatingOrOutOfFlowPositioned())
-    To<LayoutBox>(old_child)->RemoveFloatingOrPositionedChildFromBlockLists();
-
-  if (!owner->DocumentBeingDestroyed()) {
-    // So that we'll get the appropriate dirty bit set (either that a normal
-    // flow child got yanked or that a positioned child got yanked). We also
-    // issue paint invalidations, so that the area exposed when the child
-    // disappears gets paint invalidated properly.
-    if (notify_layout_object && old_child->EverHadLayout()) {
-      old_child->SetNeedsLayoutAndIntrinsicWidthsRecalc(
-          layout_invalidation_reason::kRemovedFromLayout);
-      if (old_child->IsOutOfFlowPositioned() &&
-          RuntimeEnabledFeatures::LayoutNGEnabled())
-        old_child->MarkParentForOutOfFlowPositionedChange();
+  // So that we'll get the appropriate dirty bit set (either that a normal flow
+  // child got yanked or that a positioned child got yanked). We also issue
+  // paint invalidations, so that the area exposed when the child disappears
+  // gets paint invalidated properly.
+  if (old_child->EverHadLayout()) {
+    old_child->SetNeedsLayoutAndIntrinsicWidthsRecalc(
+        layout_invalidation_reason::kRemovedFromLayout);
+    if (old_child->IsOutOfFlowPositioned() || old_child->IsColumnSpanAll()) {
+      old_child->MarkParentForSpannerOrOutOfFlowPositionedChange();
     }
-    InvalidatePaintOnRemoval(*old_child);
   }
+  InvalidatePaintOnRemoval(*old_child);
 
-  // If we have a line box wrapper, delete it.
-  if (old_child->IsBox())
-    To<LayoutBox>(old_child)->DeleteLineBoxWrapper();
+  old_child->WillBeRemovedFromTree();
 
-  if (!owner->DocumentBeingDestroyed()) {
-    owner->NotifyOfSubtreeChange();
-
-    if (notify_layout_object) {
-      LayoutCounter::LayoutObjectSubtreeWillBeDetached(old_child);
-      old_child->WillBeRemovedFromTree();
-    } else if (old_child->IsBox() &&
-               To<LayoutBox>(old_child)->IsOrthogonalWritingModeRoot()) {
-      To<LayoutBox>(old_child)->UnmarkOrthogonalWritingModeRoot();
-    }
-
-    if (old_child->IsInLayoutNGInlineFormattingContext()) {
-      owner->SetChildNeedsCollectInlines();
-      InvalidateInlineItems(old_child);
-    }
+  if (old_child->IsInLayoutNGInlineFormattingContext()) {
+    owner->SetChildNeedsCollectInlines();
+    InvalidateInlineItems(old_child);
   }
 
   // WARNING: There should be no code running between willBeRemovedFromTree and
@@ -152,17 +137,13 @@ LayoutObject* LayoutObjectChildList::RemoveChildNode(
   old_child->RegisterSubtreeChangeListenerOnDescendants(
       old_child->ConsumesSubtreeChangeNotification());
 
-  if (AXObjectCache* cache = owner->GetDocument().ExistingAXObjectCache())
-    cache->ChildrenChanged(owner);
-
   return old_child;
 }
 
 DISABLE_CFI_PERF
 void LayoutObjectChildList::InsertChildNode(LayoutObject* owner,
                                             LayoutObject* new_child,
-                                            LayoutObject* before_child,
-                                            bool notify_layout_object) {
+                                            LayoutObject* before_child) {
   DCHECK(!new_child->Parent());
   DCHECK_EQ(this, owner->VirtualChildren());
   DCHECK(!owner->IsLayoutBlockFlow() ||
@@ -178,11 +159,9 @@ void LayoutObjectChildList::InsertChildNode(LayoutObject* owner,
   // child->nextSibling()->parent() is not owner.
   if (before_child && before_child->Parent() != owner) {
     NOTREACHED();
-    return;
   }
 
-  if (!owner->DocumentBeingDestroyed() &&
-      new_child->IsInLayoutNGInlineFormattingContext()) {
+  if (new_child->IsInLayoutNGInlineFormattingContext()) {
     InvalidateInlineItems(new_child);
   }
 
@@ -205,23 +184,15 @@ void LayoutObjectChildList::InsertChildNode(LayoutObject* owner,
     last_child_ = new_child;
   }
 
-  if (!owner->DocumentBeingDestroyed()) {
-    // Run LayoutNG invalidations outside of |InsertedIntoTree| because it needs
-    // to run regardless of |notify_layout_object|. |notify_layout_object| is an
-    // optimization to skip notifications when moving within the same tree.
-    if (new_child->IsInLayoutNGInlineFormattingContext()) {
-      InvalidateInlineItems(new_child);
-    }
+  if (new_child->IsInLayoutNGInlineFormattingContext()) {
+    InvalidateInlineItems(new_child);
+  }
 
-    if (notify_layout_object) {
-      new_child->InsertedIntoTree();
-      LayoutCounter::LayoutObjectSubtreeAttached(new_child);
-    }
+  new_child->InsertedIntoTree();
 
-    if (owner->IsInLayoutNGInlineFormattingContext() ||
-        (owner->EverHadLayout() && owner->ChildrenInline())) {
-      owner->SetChildNeedsCollectInlines();
-    }
+  if (owner->IsInLayoutNGInlineFormattingContext() ||
+      (owner->EverHadLayout() && owner->ChildrenInline())) {
+    owner->SetChildNeedsCollectInlines();
   }
 
   // Propagate the need to notify ancestors down into any
@@ -229,49 +200,30 @@ void LayoutObjectChildList::InsertChildNode(LayoutObject* owner,
   if (owner->HasSubtreeChangeListenerRegistered())
     new_child->RegisterSubtreeChangeListenerOnDescendants(true);
 
-  // If the inserted node is currently marked as needing to notify children then
-  // we have to propagate that mark up the tree.
-  if (new_child->WasNotifiedOfSubtreeChange())
-    owner->NotifyAncestorsOfSubtreeChange();
-
-  if (UNLIKELY(!new_child->IsLayoutNGObject())) {
-    if (owner->ForceLegacyLayout()) {
-      new_child->SetForceLegacyLayout();
-    } else if (const auto* element = DynamicTo<Element>(new_child->GetNode())) {
-      if (element->ShouldForceLegacyLayout())
-        new_child->SetForceLegacyLayout();
-    }
-  }
-
   // Mark the ancestor chain for paint invalidation checking.
   owner->SetShouldCheckForPaintInvalidation();
 
   new_child->SetNeedsLayoutAndIntrinsicWidthsRecalc(
       layout_invalidation_reason::kAddedToLayout);
-  if (new_child->IsOutOfFlowPositioned() &&
-      RuntimeEnabledFeatures::LayoutNGEnabled())
-    new_child->MarkParentForOutOfFlowPositionedChange();
+  if (new_child->IsOutOfFlowPositioned() || new_child->IsColumnSpanAll()) {
+    new_child->MarkParentForSpannerOrOutOfFlowPositionedChange();
+  }
   new_child->SetShouldDoFullPaintInvalidation(
       PaintInvalidationReason::kAppeared);
   new_child->AddSubtreePaintPropertyUpdateReason(
       SubtreePaintPropertyUpdateReason::kContainerChainMayChange);
   new_child->SetNeedsOverflowRecalc();
 
-  if (!owner->NormalChildNeedsLayout()) {
+  if (!owner->ChildNeedsFullLayout()) {
     owner->SetChildNeedsLayout();  // We may supply the static position for an
                                    // absolute positioned child.
   }
-
-  if (!owner->DocumentBeingDestroyed())
-    owner->NotifyOfSubtreeChange();
 
   if (AXObjectCache* cache = owner->GetDocument().ExistingAXObjectCache())
     cache->ChildrenChanged(owner);
 }
 
 void LayoutObjectChildList::InvalidatePaintOnRemoval(LayoutObject& old_child) {
-  if (!old_child.IsRooted())
-    return;
   if (old_child.View() &&
       (old_child.IsBody() || old_child.IsDocumentElement())) {
     old_child.View()->SetShouldDoFullPaintInvalidation();

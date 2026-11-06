@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,8 @@
 
 #include <string>
 
+#include "gpu/config/gpu_config_export.h"
 #include "gpu/config/gpu_driver_bug_workaround_autogen.h"
-#include "gpu/gpu_export.h"
 
 namespace gpu {
 
@@ -20,7 +20,7 @@ enum GpuDriverBugWorkaroundType {
   NUMBER_OF_GPU_DRIVER_BUG_WORKAROUND_TYPES
 };
 
-GPU_EXPORT std::string GpuDriverBugWorkaroundTypeToString(
+GPU_CONFIG_EXPORT std::string GpuDriverBugWorkaroundTypeToString(
     GpuDriverBugWorkaroundType type);
 
 }  // namespace gpu

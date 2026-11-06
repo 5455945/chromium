@@ -1,13 +1,13 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.webapk.shell_apk;
 
-import android.annotation.TargetApi;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.content.Context;
 import android.os.Binder;
 import android.os.Build;
@@ -16,6 +16,9 @@ import android.os.Parcel;
 import android.os.RemoteException;
 import android.util.Log;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.webapk.lib.common.WebApkConstants;
 import org.chromium.webapk.lib.runtime_library.IWebApkApi;
 
 import java.lang.reflect.Field;
@@ -25,14 +28,18 @@ import java.lang.reflect.Method;
  * A wrapper class of {@link org.chromium.webapk.lib.runtime_library.WebApkServiceImpl} that
  * provides additional functionality when the runtime library hasn't been updated.
  */
+@NullMarked
 public class WebApkServiceImplWrapper extends IWebApkApi.Stub {
-    private static final String TAG = "cr_WebApkService";
-
-    /** The channel id of the WebAPK. */
-    private static final String DEFAULT_NOTIFICATION_CHANNEL_ID = "default_channel_id";
+    private static final String TAG = "cr_WebApkServiceImplWrapper";
 
     private static final String FUNCTION_NAME_NOTIFY_NOTIFICATION =
             "TRANSACTION_notifyNotification";
+
+    private static final String FUNCTION_NAME_CHECK_NOTIFICATION_PERMISSION =
+            "TRANSACTION_checkNotificationPermission";
+
+    private static final String FUNCTION_NAME_REQUEST_NOTIFICATION_PERMISSION =
+            "TRANSACTION_requestNotificationPermission";
 
     /**
      * Uid of only application allowed to call the service's methods. If an application with a
@@ -40,8 +47,12 @@ public class WebApkServiceImplWrapper extends IWebApkApi.Stub {
      */
     private final int mHostUid;
 
-    private IBinder mIBinderDelegate;
-    private Context mContext;
+    /**
+     * The {@link org.chromium.webapk.lib.runtime_library.WebApkServiceImpl} that this class wraps.
+     */
+    private final IBinder mIBinderDelegate;
+
+    private final Context mContext;
 
     public WebApkServiceImplWrapper(Context context, IBinder delegate, int hostBrowserUid) {
         mContext = context;
@@ -50,21 +61,26 @@ public class WebApkServiceImplWrapper extends IWebApkApi.Stub {
     }
 
     @Override
-    public boolean onTransact(int arg0, Parcel arg1, Parcel arg2, int arg3) throws RemoteException {
-        int code = getApiCode(FUNCTION_NAME_NOTIFY_NOTIFICATION);
-
-        if (arg0 == code) {
-            // This is a notifyNotification call, so defer to our parent's onTransact() which will
-            // eventually dispatch it to our notifyNotification().
-            int callingUid = Binder.getCallingUid();
-            if (mHostUid != callingUid) {
-                throw new RemoteException("Unauthorized caller " + callingUid
-                        + " does not match expected host=" + mHostUid);
-            }
-            return super.onTransact(arg0, arg1, arg2, arg3);
+    public boolean onTransact(int code, Parcel data, Parcel reply, int flags)
+            throws RemoteException {
+        int callingUid = Binder.getCallingUid();
+        if (mHostUid != callingUid) {
+            throw new RemoteException(
+                    "Unauthorized caller "
+                            + callingUid
+                            + " does not match expected host="
+                            + mHostUid);
         }
 
-        return delegateOnTransactMethod(arg0, arg1, arg2, arg3);
+        // For methods that we want to handle we defer to our parent's onTransact which will
+        // dispatch to the method implementations in this class.
+        if (code == getApiCode(FUNCTION_NAME_NOTIFY_NOTIFICATION)
+                || code == getApiCode(FUNCTION_NAME_CHECK_NOTIFICATION_PERMISSION)
+                || code == getApiCode(FUNCTION_NAME_REQUEST_NOTIFICATION_PERMISSION)) {
+            return super.onTransact(code, data, reply, flags);
+        }
+
+        return delegateOnTransactMethod(code, data, reply, flags);
     }
 
     @Override
@@ -82,13 +98,16 @@ public class WebApkServiceImplWrapper extends IWebApkApi.Stub {
     @Override
     @SuppressWarnings("NewApi")
     public void notifyNotification(String platformTag, int platformID, Notification notification) {
-        // The WebApkServiceImplWrapper was introduced at the same time when WebAPKs target SDK 26.
-        // That means, we don't need to check whether the target SDK is less than 26 in a WebAPK
-        // that has a WebApkServiceImplWrapper class.
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-            ensureNotificationChannelExists();
-            notification = rebuildNotificationWithChannelId(mContext, notification);
+        String channelId = notification.getChannelId();
+        if (channelId == null) {
+            channelId = WebApkConstants.DEFAULT_NOTIFICATION_CHANNEL_ID;
         }
+        ensureNotificationChannelExists(channelId);
+
+        Notification.Builder builder = Notification.Builder.recoverBuilder(mContext, notification);
+        builder.setChannelId(channelId);
+        notification = builder.build();
+
         delegateNotifyNotification(platformTag, platformID, notification);
     }
 
@@ -100,21 +119,53 @@ public class WebApkServiceImplWrapper extends IWebApkApi.Stub {
     @Override
     public void notifyNotificationWithChannel(
             String platformTag, int platformID, Notification notification, String channelName) {
-        Log.w(TAG,
+        Log.w(
+                TAG,
                 "Should NOT reach WebApkServiceImplWrapper#notifyNotificationWithChannel("
                         + "String, int, Notification, String)");
     }
 
-    /** Creates a WebAPK notification channel on Android O+ if one does not exist. */
-    protected void ensureNotificationChannelExists() {
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-            NotificationManager manager =
-                    (NotificationManager) mContext.getSystemService(Context.NOTIFICATION_SERVICE);
-            NotificationChannel channel = new NotificationChannel(DEFAULT_NOTIFICATION_CHANNEL_ID,
-                    WebApkUtils.getNotificationChannelName(mContext),
-                    NotificationManager.IMPORTANCE_DEFAULT);
-            manager.createNotificationChannel(channel);
+    @Override
+    public boolean finishAndRemoveTaskSdk23() {
+        Log.w(TAG, "Should NOT reach WebApkServiceImplWrapper#finishAndRemoveTaskSdk23()");
+        return false;
+    }
+
+    @Override
+    public @PermissionStatus int checkNotificationPermission() {
+        boolean enabled = getNotificationManager().areNotificationsEnabled();
+
+        @PermissionStatus int status = enabled ? PermissionStatus.ALLOW : PermissionStatus.BLOCK;
+        if (status == PermissionStatus.BLOCK
+                && !PrefUtils.hasRequestedNotificationPermission(mContext)
+                && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            status = PermissionStatus.ASK;
         }
+        return status;
+    }
+
+    @Override
+    public @Nullable PendingIntent requestNotificationPermission(
+            String channelName, String channelId) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            Log.w(TAG, "Cannot request notification permission before Android T.");
+            return null;
+        }
+
+        return NotificationPermissionRequestActivity.createPermissionRequestPendingIntent(
+                mContext, channelName, channelId);
+    }
+
+    protected void ensureNotificationChannelExists(String channelId) {
+        int importance =
+                WebApkConstants.HIGH_PRIORITY_NOTIFICATION_CHANNEL_ID.equals(channelId)
+                        ? NotificationManager.IMPORTANCE_HIGH
+                        : NotificationManager.IMPORTANCE_DEFAULT;
+
+        NotificationChannel channel =
+                new NotificationChannel(
+                        channelId, WebApkUtils.getNotificationChannelName(mContext), importance);
+        getNotificationManager().createNotificationChannel(channel);
     }
 
     protected int getApiCode(String name) {
@@ -132,29 +183,24 @@ public class WebApkServiceImplWrapper extends IWebApkApi.Stub {
     }
 
     /** Calls the delegate's {@link onTransact()} method via reflection. */
-    private boolean delegateOnTransactMethod(int arg0, Parcel arg1, Parcel arg2, int arg3)
+    private boolean delegateOnTransactMethod(int code, Parcel data, Parcel reply, int flags)
             throws RemoteException {
         if (mIBinderDelegate == null) return false;
 
         try {
-            Method onTransactMethod = mIBinderDelegate.getClass().getMethod(
-                    "onTransact", new Class[] {int.class, Parcel.class, Parcel.class, int.class});
+            Method onTransactMethod =
+                    mIBinderDelegate
+                            .getClass()
+                            .getMethod(
+                                    "onTransact",
+                                    new Class[] {int.class, Parcel.class, Parcel.class, int.class});
             onTransactMethod.setAccessible(true);
-            return (boolean) onTransactMethod.invoke(mIBinderDelegate, arg0, arg1, arg2, arg3);
+            return (boolean) onTransactMethod.invoke(mIBinderDelegate, code, data, reply, flags);
         } catch (Exception e) {
             e.printStackTrace();
         }
 
         return false;
-    }
-
-    /** Rebuilds a notification with channel ID from the given notification object. */
-    @TargetApi(Build.VERSION_CODES.O)
-    private static Notification rebuildNotificationWithChannelId(
-            Context context, Notification notification) {
-        Notification.Builder builder = Notification.Builder.recoverBuilder(context, notification);
-        builder.setChannelId(DEFAULT_NOTIFICATION_CHANNEL_ID);
-        return builder.build();
     }
 
     /** Calls the delegate's {@link notifyNotification} method via reflection. */
@@ -163,12 +209,20 @@ public class WebApkServiceImplWrapper extends IWebApkApi.Stub {
         if (mIBinderDelegate == null) return;
 
         try {
-            Method notifyMethod = mIBinderDelegate.getClass().getMethod("notifyNotification",
-                    new Class[] {String.class, int.class, Notification.class});
+            Method notifyMethod =
+                    mIBinderDelegate
+                            .getClass()
+                            .getMethod(
+                                    "notifyNotification",
+                                    new Class[] {String.class, int.class, Notification.class});
             notifyMethod.setAccessible(true);
             notifyMethod.invoke(mIBinderDelegate, platformTag, platformID, notification);
         } catch (Exception e) {
             e.printStackTrace();
         }
+    }
+
+    private NotificationManager getNotificationManager() {
+        return (NotificationManager) mContext.getSystemService(Context.NOTIFICATION_SERVICE);
     }
 }

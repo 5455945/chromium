@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,12 +9,18 @@
 #include <ostream>
 #include <string>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
 #include "components/policy/core/common/policy_details.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/policy_service.h"
 #include "components/policy/core/common/policy_types.h"
+
+#if BUILDFLAG(IS_APPLE)
+#include <CoreFoundation/CoreFoundation.h>
+
+#include "base/apple/scoped_cftyperef.h"
+#endif
 
 namespace policy {
 
@@ -26,6 +32,8 @@ struct PolicyNamespace;
 class PolicyDetailsMap {
  public:
   PolicyDetailsMap();
+  PolicyDetailsMap(const PolicyDetailsMap&) = delete;
+  PolicyDetailsMap& operator=(const PolicyDetailsMap&) = delete;
   ~PolicyDetailsMap();
 
   // The returned callback's lifetime is tied to |this| object.
@@ -35,35 +43,34 @@ class PolicyDetailsMap {
   void SetDetails(const std::string& policy, const PolicyDetails* details);
 
  private:
-  typedef std::map<std::string, const PolicyDetails*> PolicyDetailsMapping;
+  typedef std::map<std::string, raw_ptr<const PolicyDetails, CtnExperimental>>
+      PolicyDetailsMapping;
 
   const PolicyDetails* Lookup(const std::string& policy) const;
 
   PolicyDetailsMapping map_;
-
-  DISALLOW_COPY_AND_ASSIGN(PolicyDetailsMap);
 };
 
 // Returns true if |service| is not serving any policies. Otherwise logs the
 // current policies and returns false.
 bool PolicyServiceIsEmpty(const PolicyService* service);
 
-#if defined(OS_APPLE)
+#if BUILDFLAG(IS_APPLE)
 
 // Converts a base::Value to the equivalent CFPropertyListRef.
-// The returned value is owned by the caller.
-CFPropertyListRef ValueToProperty(const base::Value& value);
+base::apple::ScopedCFTypeRef<CFPropertyListRef> ValueToProperty(
+    const base::Value& value);
 
 #endif
 
-}  // namespace policy
+std::ostream& operator<<(std::ostream& os, const PolicyBundle& bundle);
+std::ostream& operator<<(std::ostream& os, PolicyScope scope);
+std::ostream& operator<<(std::ostream& os, PolicyLevel level);
+std::ostream& operator<<(std::ostream& os, PolicyDomain domain);
+std::ostream& operator<<(std::ostream& os, const PolicyMap& policies);
+std::ostream& operator<<(std::ostream& os, const PolicyMap::Entry& e);
+std::ostream& operator<<(std::ostream& os, const PolicyNamespace& ns);
 
-std::ostream& operator<<(std::ostream& os, const policy::PolicyBundle& bundle);
-std::ostream& operator<<(std::ostream& os, policy::PolicyScope scope);
-std::ostream& operator<<(std::ostream& os, policy::PolicyLevel level);
-std::ostream& operator<<(std::ostream& os, policy::PolicyDomain domain);
-std::ostream& operator<<(std::ostream& os, const policy::PolicyMap& policies);
-std::ostream& operator<<(std::ostream& os, const policy::PolicyMap::Entry& e);
-std::ostream& operator<<(std::ostream& os, const policy::PolicyNamespace& ns);
+}  // namespace policy
 
 #endif  // COMPONENTS_POLICY_CORE_COMMON_POLICY_TEST_UTILS_H_

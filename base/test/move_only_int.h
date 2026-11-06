@@ -1,11 +1,14 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef BASE_TEST_MOVE_ONLY_INT_H_
 #define BASE_TEST_MOVE_ONLY_INT_H_
 
-#include "base/macros.h"
+#include <utility>
+
+#include "base/functional/callback.h"
+#include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
 
 namespace base {
 
@@ -15,7 +18,11 @@ class MoveOnlyInt {
  public:
   explicit MoveOnlyInt(int data = 1) : data_(data) {}
   MoveOnlyInt(MoveOnlyInt&& other) : data_(other.data_) { other.data_ = 0; }
-  ~MoveOnlyInt() { data_ = 0; }
+
+  MoveOnlyInt(const MoveOnlyInt&) = delete;
+  MoveOnlyInt& operator=(const MoveOnlyInt&) = delete;
+
+  ~MoveOnlyInt();
 
   MoveOnlyInt& operator=(MoveOnlyInt&& other) {
     data_ = other.data_;
@@ -23,44 +30,39 @@ class MoveOnlyInt {
     return *this;
   }
 
-  friend bool operator==(const MoveOnlyInt& lhs, const MoveOnlyInt& rhs) {
-    return lhs.data_ == rhs.data_;
-  }
+  friend bool operator==(const MoveOnlyInt& lhs,
+                         const MoveOnlyInt& rhs) = default;
+  friend auto operator<=>(const MoveOnlyInt& lhs,
+                          const MoveOnlyInt& rhs) = default;
 
-  friend bool operator!=(const MoveOnlyInt& lhs, const MoveOnlyInt& rhs) {
-    return !operator==(lhs, rhs);
+  friend bool operator==(const MoveOnlyInt& lhs, int rhs) {
+    return lhs.data_ == rhs;
   }
-
-  friend bool operator<(const MoveOnlyInt& lhs, int rhs) {
-    return lhs.data_ < rhs;
+  friend bool operator==(int lhs, const MoveOnlyInt& rhs) {
+    return lhs == rhs.data_;
   }
-
-  friend bool operator<(int lhs, const MoveOnlyInt& rhs) {
-    return lhs < rhs.data_;
+  friend auto operator<=>(const MoveOnlyInt& lhs, int rhs) {
+    return lhs.data_ <=> rhs;
   }
-
-  friend bool operator<(const MoveOnlyInt& lhs, const MoveOnlyInt& rhs) {
-    return lhs.data_ < rhs.data_;
-  }
-
-  friend bool operator>(const MoveOnlyInt& lhs, const MoveOnlyInt& rhs) {
-    return rhs < lhs;
-  }
-
-  friend bool operator<=(const MoveOnlyInt& lhs, const MoveOnlyInt& rhs) {
-    return !(rhs < lhs);
-  }
-
-  friend bool operator>=(const MoveOnlyInt& lhs, const MoveOnlyInt& rhs) {
-    return !(lhs < rhs);
+  friend auto operator<=>(int lhs, const MoveOnlyInt& rhs) {
+    return lhs <=> rhs.data_;
   }
 
   int data() const { return data_; }
 
- private:
-  volatile int data_;
+  // Called with the value of `data()` when an instance of `MoveOnlyInt` is
+  // destroyed. Returns an `absl::Cleanup` scoper that automatically
+  // unregisters the callback when the scoper is destroyed.
+  static auto SetScopedDestructionCallback(
+      RepeatingCallback<void(int)> callback) {
+    GetDestructionCallbackStorage() = std::move(callback);
+    return absl::Cleanup([] { GetDestructionCallbackStorage().Reset(); });
+  }
 
-  DISALLOW_COPY_AND_ASSIGN(MoveOnlyInt);
+ private:
+  static RepeatingCallback<void(int)>& GetDestructionCallbackStorage();
+
+  volatile int data_;
 };
 
 }  // namespace base

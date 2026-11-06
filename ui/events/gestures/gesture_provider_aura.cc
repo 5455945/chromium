@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 
 #include "base/auto_reset.h"
 #include "base/check.h"
-#include "build/chromeos_buildflags.h"
 #include "ui/events/event.h"
 #include "ui/events/event_utils.h"
 #include "ui/events/gesture_detection/gesture_configuration.h"
@@ -19,33 +18,42 @@ namespace ui {
 
 namespace {
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 constexpr bool kDoubleTapPlatformSupport = true;
 #else
 constexpr bool kDoubleTapPlatformSupport = false;
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 }  // namespace
 
 GestureProviderAura::GestureProviderAura(GestureConsumer* consumer,
                                          GestureProviderAuraClient* client)
     : client_(client),
-      filtered_gesture_provider_(
+      filtered_gesture_provider_(base::MakeRefCounted<FilteredGestureProvider>(
           GetGestureProviderConfig(GestureProviderConfigType::CURRENT_PLATFORM),
-          this),
+          this)),
       handling_event_(false),
       gesture_consumer_(consumer) {
-  filtered_gesture_provider_.SetDoubleTapSupportForPlatformEnabled(
+  filtered_gesture_provider_->SetDoubleTapSupportForPlatformEnabled(
       kDoubleTapPlatformSupport);
 }
 
-GestureProviderAura::~GestureProviderAura() {}
+GestureProviderAura::~GestureProviderAura() {
+  filtered_gesture_provider_->Shutdown();
+  client_->OnGestureProviderAuraWillBeDestroyed(this);
+}
 
 bool GestureProviderAura::OnTouchEvent(TouchEvent* event) {
   if (!pointer_state_.OnTouch(*event))
     return false;
 
-  auto result = filtered_gesture_provider_.OnTouchEvent(pointer_state_);
+  auto weak_this = weak_ptr_factory_.GetWeakPtr();
+  scoped_refptr<FilteredGestureProvider> gesture_provider(
+      filtered_gesture_provider_);
+  auto result = gesture_provider->OnTouchEvent(pointer_state_);
+  if (!weak_this) {
+    return false;
+  }
   pointer_state_.CleanupRemovedTouchPoints(*event);
 
   if (!result.succeeded)
@@ -59,20 +67,24 @@ void GestureProviderAura::OnTouchEventAck(
     uint32_t unique_touch_event_id,
     bool event_consumed,
     bool is_source_touch_event_set_blocking) {
-  DCHECK(pending_gestures_.empty());
-  DCHECK(!handling_event_);
-  base::AutoReset<bool> handling_event(&handling_event_, true);
-  filtered_gesture_provider_.OnTouchEventAck(
-      unique_touch_event_id, event_consumed,
-      is_source_touch_event_set_blocking);
+  CHECK(pending_gestures_.empty(), base::NotFatalUntil::M163);
+  CHECK(!handling_event_, base::NotFatalUntil::M163);
+  handling_event_ = true;
+  auto weak_this = weak_ptr_factory_.GetWeakPtr();
+  scoped_refptr<FilteredGestureProvider> gesture_provider(
+      filtered_gesture_provider_);
+  gesture_provider->OnTouchEventAck(unique_touch_event_id, event_consumed,
+                                    is_source_touch_event_set_blocking);
+  if (weak_this) {
+    handling_event_ = false;
+  }
 }
 
 void GestureProviderAura::ResetGestureHandlingState() {
-  filtered_gesture_provider_.ResetGestureHandlingState();
+  filtered_gesture_provider_->ResetGestureHandlingState();
 }
-
 void GestureProviderAura::SendSynthesizedEndEvents() {
-  filtered_gesture_provider_.SendSynthesizedEndEvents();
+  filtered_gesture_provider_->SendSynthesizedEndEvents();
 }
 
 void GestureProviderAura::OnGestureEvent(const GestureEventData& gesture) {
@@ -93,6 +105,10 @@ bool GestureProviderAura::RequiresDoubleTapGestureEvents() const {
   return gesture_consumer_->RequiresDoubleTapGestureEvents();
 }
 
+void GestureProviderAura::OnUnconfirmedTapConvertedToTap() {
+  filtered_gesture_provider_->OnUnconfirmedTapConvertedToTap();
+}
+
 std::vector<std::unique_ptr<GestureEvent>>
 GestureProviderAura::GetAndResetPendingGestures() {
   std::vector<std::unique_ptr<GestureEvent>> result;
@@ -100,12 +116,11 @@ GestureProviderAura::GetAndResetPendingGestures() {
   return result;
 }
 
-void GestureProviderAura::OnTouchEnter(int pointer_id, float x, float y) {
+void GestureProviderAura::OnTouchEnter(const ui::TouchEvent& event) {
   auto touch_event = std::make_unique<TouchEvent>(
-      ET_TOUCH_PRESSED, gfx::Point(), ui::EventTimeForNow(),
-      PointerDetails(ui::EventPointerType::kTouch, pointer_id),
-      EF_IS_SYNTHESIZED);
-  gfx::PointF point(x, y);
+      EventType::kTouchPressed, gfx::Point(), ui::EventTimeForNow(),
+      event.pointer_details(), EF_IS_SYNTHESIZED);
+  gfx::PointF point(event.x(), event.y());
   touch_event->set_location_f(point);
   touch_event->set_root_location_f(point);
 
@@ -114,4 +129,8 @@ void GestureProviderAura::OnTouchEnter(int pointer_id, float x, float y) {
                   false /* is_source_touch_event_set_blocking */);
 }
 
-}  // namespace content
+base::WeakPtr<GestureProviderAura> GestureProviderAura::GetWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
+}
+
+}  // namespace ui

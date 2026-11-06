@@ -1,17 +1,18 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "v4l2_video_decoder_delegate_vp8.h"
 
-#define __LINUX_MEDIA_VP8_CTRLS_LEGACY_H
-#include <linux/media/vp8-ctrls.h>
+#include <linux/v4l2-controls.h>
 #include <linux/videodev2.h>
 
+#include <algorithm>
 #include <type_traits>
 
-#include "base/cxx17_backports.h"
+#include "base/compiler_specific.h"
 #include "base/logging.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/numerics/safe_conversions.h"
 #include "media/gpu/macros.h"
 #include "media/gpu/v4l2/v4l2_decode_surface.h"
@@ -23,23 +24,19 @@
 namespace media {
 namespace {
 
-void FillV4L2SegmentationHeader(
-    const Vp8SegmentationHeader& vp8_sgmnt_hdr,
-    struct v4l2_vp8_segment_header* v4l2_sgmnt_hdr) {
+void FillV4L2SegmentationHeader(const Vp8SegmentationHeader& vp8_sgmnt_hdr,
+                                struct v4l2_vp8_segment* v4l2_sgmnt_hdr) {
 #define SET_V4L2_SGMNT_HDR_FLAG_IF(cond, flag) \
   v4l2_sgmnt_hdr->flags |= ((vp8_sgmnt_hdr.cond) ? (flag) : 0)
   SET_V4L2_SGMNT_HDR_FLAG_IF(segmentation_enabled,
-                             V4L2_VP8_SEGMENT_HEADER_FLAG_ENABLED);
+                             V4L2_VP8_SEGMENT_FLAG_ENABLED);
   SET_V4L2_SGMNT_HDR_FLAG_IF(update_mb_segmentation_map,
-                             V4L2_VP8_SEGMENT_HEADER_FLAG_UPDATE_MAP);
+                             V4L2_VP8_SEGMENT_FLAG_UPDATE_MAP);
   SET_V4L2_SGMNT_HDR_FLAG_IF(update_segment_feature_data,
-                             V4L2_VP8_SEGMENT_HEADER_FLAG_UPDATE_FEATURE_DATA);
-  // TODO not sure about this one?
+                             V4L2_VP8_SEGMENT_FLAG_UPDATE_FEATURE_DATA);
   SET_V4L2_SGMNT_HDR_FLAG_IF(
       segment_feature_mode == Vp8SegmentationHeader::FEATURE_MODE_DELTA,
-      V4L2_VP8_SEGMENT_HEADER_FLAG_DELTA_VALUE_MODE);
-  SET_V4L2_SGMNT_HDR_FLAG_IF(segment_feature_mode,
-                             V4L2_VP8_SEGMENT_HEADER_FLAG_UPDATE_FEATURE_DATA);
+      V4L2_VP8_SEGMENT_FLAG_DELTA_VALUE_MODE);
 #undef SET_V4L2_SGMNT_HDR_FLAG_IF
 
   SafeArrayMemcpy(v4l2_sgmnt_hdr->quant_update,
@@ -49,13 +46,11 @@ void FillV4L2SegmentationHeader(
 }
 
 void FillV4L2LoopFilterHeader(const Vp8LoopFilterHeader& vp8_loopfilter_hdr,
-                              struct v4l2_vp8_loopfilter_header* v4l2_lf_hdr) {
+                              struct v4l2_vp8_loop_filter* v4l2_lf_hdr) {
 #define SET_V4L2_LF_HDR_FLAG_IF(cond, flag) \
   v4l2_lf_hdr->flags |= ((vp8_loopfilter_hdr.cond) ? (flag) : 0)
-  SET_V4L2_LF_HDR_FLAG_IF(loop_filter_adj_enable,
-                          V4L2_VP8_LF_HEADER_ADJ_ENABLE);
-  SET_V4L2_LF_HDR_FLAG_IF(mode_ref_lf_delta_update,
-                          V4L2_VP8_LF_HEADER_DELTA_UPDATE);
+  SET_V4L2_LF_HDR_FLAG_IF(loop_filter_adj_enable, V4L2_VP8_LF_ADJ_ENABLE);
+  SET_V4L2_LF_HDR_FLAG_IF(mode_ref_lf_delta_update, V4L2_VP8_LF_DELTA_UPDATE);
   SET_V4L2_LF_HDR_FLAG_IF(type == Vp8LoopFilterHeader::LOOP_FILTER_TYPE_SIMPLE,
                           V4L2_VP8_LF_FILTER_TYPE_SIMPLE);
 #undef SET_V4L2_LF_HDR_FLAG_IF
@@ -70,9 +65,8 @@ void FillV4L2LoopFilterHeader(const Vp8LoopFilterHeader& vp8_loopfilter_hdr,
   SafeArrayMemcpy(v4l2_lf_hdr->mb_mode_delta, vp8_loopfilter_hdr.mb_mode_delta);
 }
 
-void FillV4L2QuantizationHeader(
-    const Vp8QuantizationHeader& vp8_quant_hdr,
-    struct v4l2_vp8_quantization_header* v4l2_quant_hdr) {
+void FillV4L2QuantizationHeader(const Vp8QuantizationHeader& vp8_quant_hdr,
+                                struct v4l2_vp8_quantization* v4l2_quant_hdr) {
   v4l2_quant_hdr->y_ac_qi = vp8_quant_hdr.y_ac_qi;
   v4l2_quant_hdr->y_dc_delta = vp8_quant_hdr.y_dc_delta;
   v4l2_quant_hdr->y2_dc_delta = vp8_quant_hdr.y2_dc_delta;
@@ -81,14 +75,16 @@ void FillV4L2QuantizationHeader(
   v4l2_quant_hdr->uv_ac_delta = vp8_quant_hdr.uv_ac_delta;
 }
 
-void FillV4L2Vp8EntropyHeader(
-    const Vp8EntropyHeader& vp8_entropy_hdr,
-    struct v4l2_vp8_entropy_header* v4l2_entropy_hdr) {
-  SafeArrayMemcpy(v4l2_entropy_hdr->coeff_probs, vp8_entropy_hdr.coeff_probs);
-  SafeArrayMemcpy(v4l2_entropy_hdr->y_mode_probs, vp8_entropy_hdr.y_mode_probs);
-  SafeArrayMemcpy(v4l2_entropy_hdr->uv_mode_probs,
-                  vp8_entropy_hdr.uv_mode_probs);
-  SafeArrayMemcpy(v4l2_entropy_hdr->mv_probs, vp8_entropy_hdr.mv_probs);
+void FillV4L2Vp8EntropyHeader(const Vp8EntropyHeader& vp8_entropy_hdr,
+                              struct v4l2_vp8_entropy* v4l2_entropy_hdr) {
+  base::as_writable_byte_span(v4l2_entropy_hdr->coeff_probs)
+      .copy_from(base::as_byte_span(vp8_entropy_hdr.coeff_probs));
+  base::span(v4l2_entropy_hdr->y_mode_probs)
+      .copy_from(vp8_entropy_hdr.y_mode_probs);
+  base::span(v4l2_entropy_hdr->uv_mode_probs)
+      .copy_from(vp8_entropy_hdr.uv_mode_probs);
+  base::as_writable_byte_span(v4l2_entropy_hdr->mv_probs)
+      .copy_from(base::as_byte_span(vp8_entropy_hdr.mv_probs));
 }
 
 }  // namespace
@@ -98,6 +94,9 @@ class V4L2VP8Picture : public VP8Picture {
   explicit V4L2VP8Picture(scoped_refptr<V4L2DecodeSurface> dec_surface)
       : dec_surface_(std::move(dec_surface)) {}
 
+  V4L2VP8Picture(const V4L2VP8Picture&) = delete;
+  V4L2VP8Picture& operator=(const V4L2VP8Picture&) = delete;
+
   V4L2VP8Picture* AsV4L2VP8Picture() override { return this; }
   scoped_refptr<V4L2DecodeSurface> dec_surface() { return dec_surface_; }
 
@@ -105,8 +104,6 @@ class V4L2VP8Picture : public VP8Picture {
   ~V4L2VP8Picture() override {}
 
   scoped_refptr<V4L2DecodeSurface> dec_surface_;
-
-  DISALLOW_COPY_AND_ASSIGN(V4L2VP8Picture);
 };
 
 V4L2VideoDecoderDelegateVP8::V4L2VideoDecoderDelegateVP8(
@@ -116,7 +113,7 @@ V4L2VideoDecoderDelegateVP8::V4L2VideoDecoderDelegateVP8(
   DCHECK(surface_handler_);
 }
 
-V4L2VideoDecoderDelegateVP8::~V4L2VideoDecoderDelegateVP8() {}
+V4L2VideoDecoderDelegateVP8::~V4L2VideoDecoderDelegateVP8() = default;
 
 scoped_refptr<VP8Picture> V4L2VideoDecoderDelegateVP8::CreateVP8Picture() {
   scoped_refptr<V4L2DecodeSurface> dec_surface =
@@ -124,14 +121,13 @@ scoped_refptr<VP8Picture> V4L2VideoDecoderDelegateVP8::CreateVP8Picture() {
   if (!dec_surface)
     return nullptr;
 
-  return new V4L2VP8Picture(dec_surface);
+  return base::MakeRefCounted<V4L2VP8Picture>(dec_surface);
 }
 
 bool V4L2VideoDecoderDelegateVP8::SubmitDecode(
     scoped_refptr<VP8Picture> pic,
     const Vp8ReferenceFrameVector& reference_frames) {
-  struct v4l2_ctrl_vp8_frame_header v4l2_frame_hdr;
-  memset(&v4l2_frame_hdr, 0, sizeof(v4l2_frame_hdr));
+  struct v4l2_ctrl_vp8_frame v4l2_frame_hdr = {};
 
   const auto& frame_hdr = pic->frame_hdr;
 #define FHDR_TO_V4L2_FHDR(a) v4l2_frame_hdr.a = frame_hdr->a
@@ -152,29 +148,26 @@ bool V4L2VideoDecoderDelegateVP8::SubmitDecode(
 #define SET_V4L2_FRM_HDR_FLAG_IF(cond, flag) \
   v4l2_frame_hdr.flags |= ((frame_hdr->cond) ? (flag) : 0)
   SET_V4L2_FRM_HDR_FLAG_IF(frame_type == Vp8FrameHeader::KEYFRAME,
-                           V4L2_VP8_FRAME_HEADER_FLAG_KEY_FRAME);
+                           V4L2_VP8_FRAME_FLAG_KEY_FRAME);
   SET_V4L2_FRM_HDR_FLAG_IF(sign_bias_golden,
-                           V4L2_VP8_FRAME_HEADER_FLAG_SIGN_BIAS_GOLDEN);
+                           V4L2_VP8_FRAME_FLAG_SIGN_BIAS_GOLDEN);
   SET_V4L2_FRM_HDR_FLAG_IF(sign_bias_alternate,
-                           V4L2_VP8_FRAME_HEADER_FLAG_SIGN_BIAS_ALT);
-  SET_V4L2_FRM_HDR_FLAG_IF(is_experimental,
-                           V4L2_VP8_FRAME_HEADER_FLAG_EXPERIMENTAL);
-  SET_V4L2_FRM_HDR_FLAG_IF(show_frame, V4L2_VP8_FRAME_HEADER_FLAG_SHOW_FRAME);
+                           V4L2_VP8_FRAME_FLAG_SIGN_BIAS_ALT);
+  SET_V4L2_FRM_HDR_FLAG_IF(is_experimental, V4L2_VP8_FRAME_FLAG_EXPERIMENTAL);
+  SET_V4L2_FRM_HDR_FLAG_IF(show_frame, V4L2_VP8_FRAME_FLAG_SHOW_FRAME);
   SET_V4L2_FRM_HDR_FLAG_IF(mb_no_skip_coeff,
-                           V4L2_VP8_FRAME_HEADER_FLAG_MB_NO_SKIP_COEFF);
+                           V4L2_VP8_FRAME_FLAG_MB_NO_SKIP_COEFF);
 #undef SET_V4L2_FRM_HDR_FLAG_IF
 
   FillV4L2SegmentationHeader(frame_hdr->segmentation_hdr,
-                             &v4l2_frame_hdr.segment_header);
+                             &v4l2_frame_hdr.segment);
 
-  FillV4L2LoopFilterHeader(frame_hdr->loopfilter_hdr,
-                           &v4l2_frame_hdr.lf_header);
+  FillV4L2LoopFilterHeader(frame_hdr->loopfilter_hdr, &v4l2_frame_hdr.lf);
 
   FillV4L2QuantizationHeader(frame_hdr->quantization_hdr,
-                             &v4l2_frame_hdr.quant_header);
+                             &v4l2_frame_hdr.quant);
 
-  FillV4L2Vp8EntropyHeader(frame_hdr->entropy_hdr,
-                           &v4l2_frame_hdr.entropy_header);
+  FillV4L2Vp8EntropyHeader(frame_hdr->entropy_hdr, &v4l2_frame_hdr.entropy);
 
   v4l2_frame_hdr.first_part_size =
       base::checked_cast<__u32>(frame_hdr->first_part_size);
@@ -183,12 +176,13 @@ bool V4L2VideoDecoderDelegateVP8::SubmitDecode(
   v4l2_frame_hdr.num_dct_parts = frame_hdr->num_of_dct_partitions;
 
   static_assert(std::extent<decltype(v4l2_frame_hdr.dct_part_sizes)>() ==
-                    std::extent<decltype(frame_hdr->dct_partition_sizes)>(),
+                    std::tuple_size<decltype(frame_hdr->dct_partition_sizes)>(),
                 "DCT partition size arrays must have equal number of elements");
   for (size_t i = 0; i < frame_hdr->num_of_dct_partitions &&
-                     i < base::size(v4l2_frame_hdr.dct_part_sizes);
+                     i < std::size(v4l2_frame_hdr.dct_part_sizes);
        ++i)
-    v4l2_frame_hdr.dct_part_sizes[i] = frame_hdr->dct_partition_sizes[i];
+    UNSAFE_TODO(v4l2_frame_hdr.dct_part_sizes[i] =
+                    frame_hdr->dct_partition_sizes[i]);
 
   scoped_refptr<V4L2DecodeSurface> dec_surface =
       VP8PictureToV4L2DecodeSurface(pic.get());
@@ -220,14 +214,12 @@ bool V4L2VideoDecoderDelegateVP8::SubmitDecode(
     ref_surfaces.push_back(alt_frame_surface);
   }
 
-  struct v4l2_ext_control ctrl;
-  memset(&ctrl, 0, sizeof(ctrl));
-  ctrl.id = V4L2_CID_MPEG_VIDEO_VP8_FRAME_HEADER;
+  struct v4l2_ext_control ctrl = {};
+  ctrl.id = V4L2_CID_STATELESS_VP8_FRAME;
   ctrl.size = sizeof(v4l2_frame_hdr);
   ctrl.ptr = &v4l2_frame_hdr;
 
-  struct v4l2_ext_controls ext_ctrls;
-  memset(&ext_ctrls, 0, sizeof(ext_ctrls));
+  struct v4l2_ext_controls ext_ctrls = {};
   ext_ctrls.count = 1;
   ext_ctrls.controls = &ctrl;
   dec_surface->PrepareSetCtrls(&ext_ctrls);
@@ -248,10 +240,9 @@ bool V4L2VideoDecoderDelegateVP8::SubmitDecode(
 }
 
 bool V4L2VideoDecoderDelegateVP8::OutputPicture(scoped_refptr<VP8Picture> pic) {
-  // TODO(crbug.com/647725): Insert correct color space.
   surface_handler_->SurfaceReady(VP8PictureToV4L2DecodeSurface(pic.get()),
                                  pic->bitstream_id(), pic->visible_rect(),
-                                 VideoColorSpace());
+                                 pic->get_colorspace());
   return true;
 }
 

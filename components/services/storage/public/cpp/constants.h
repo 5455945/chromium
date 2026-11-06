@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,13 +14,28 @@ COMPONENT_EXPORT(STORAGE_SERVICE_PUBLIC)
 extern const base::FilePath::CharType kWebStorageDirectory[];
 
 COMPONENT_EXPORT(STORAGE_SERVICE_PUBLIC)
-extern const base::FilePath::CharType kLocalStoragePath[];
-
-COMPONENT_EXPORT(STORAGE_SERVICE_PUBLIC)
-extern const char kLocalStorageLeveldbName[];
-
-COMPONENT_EXPORT(STORAGE_SERVICE_PUBLIC)
 extern const base::FilePath::CharType kServiceWorkerDirectory[];
+
+COMPONENT_EXPORT(STORAGE_SERVICE_PUBLIC)
+extern const base::FilePath::CharType kMediaLicenseDirectory[];
+
+COMPONENT_EXPORT(STORAGE_SERVICE_PUBLIC)
+extern const base::FilePath::CharType kMediaLicenseDatabaseFileName[];
+
+COMPONENT_EXPORT(STORAGE_SERVICE_PUBLIC)
+extern const base::FilePath::CharType kFileSystemDirectory[];
+
+COMPONENT_EXPORT(STORAGE_SERVICE_PUBLIC)
+extern const base::FilePath::CharType kIndexedDbDirectory[];
+
+COMPONENT_EXPORT(STORAGE_SERVICE_PUBLIC)
+extern const base::FilePath::CharType kBackgroundFetchDirectory[];
+
+COMPONENT_EXPORT(STORAGE_SERVICE_PUBLIC)
+extern const base::FilePath::CharType kCacheStorageDirectory[];
+
+COMPONENT_EXPORT(STORAGE_SERVICE_PUBLIC)
+extern const base::FilePath::CharType kScriptCacheDirectory[];
 
 }  // namespace storage
 

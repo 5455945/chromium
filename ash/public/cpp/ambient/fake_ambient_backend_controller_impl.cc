@@ -1,25 +1,30 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/public/cpp/ambient/fake_ambient_backend_controller_impl.h"
 
+#include <algorithm>
 #include <array>
+#include <optional>
 #include <utility>
 
 #include "ash/public/cpp/ambient/ambient_backend_controller.h"
 #include "ash/public/cpp/ambient/common/ambient_settings.h"
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/threading/sequenced_task_runner_handle.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "ash/webui/personalization_app/mojom/personalization_app.mojom-shared.h"
+#include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/task/sequenced_task_runner.h"
+#include "ui/gfx/geometry/size.h"
+#include "url/gurl.h"
 
 namespace ash {
 
 namespace {
 
-constexpr AmbientModeTopicSource kTopicSource =
-    AmbientModeTopicSource::kGooglePhotos;
+constexpr personalization_app::mojom::TopicSource kTopicSource =
+    personalization_app::mojom::TopicSource::kGooglePhotos;
 
 constexpr AmbientModeTemperatureUnit kTemperatureUnit =
     AmbientModeTemperatureUnit::kCelsius;
@@ -28,8 +33,8 @@ constexpr char kFakeUrl[] = "chrome://ambient";
 
 constexpr char kFakeDetails[] = "fake-photo-attribution";
 
-constexpr std::array<const char*, 2> kFakeBackupPhotoUrls = {kFakeUrl,
-                                                             kFakeUrl};
+constexpr std::array<const char*, 2> kFakeBackupPhotoUrls = {
+    "http://fake-backup-photo-1.com", "http://fake-backup-photo-2.com"};
 
 AmbientSettings CreateFakeSettings() {
   AmbientSettings settings;
@@ -83,18 +88,32 @@ FakeAmbientBackendControllerImpl::~FakeAmbientBackendControllerImpl() = default;
 
 void FakeAmbientBackendControllerImpl::FetchScreenUpdateInfo(
     int num_topics,
+    bool show_pair_personal_portraits,
+    const gfx::Size& screen_size,
     OnScreenUpdateInfoFetchedCallback callback) {
   ash::ScreenUpdate update;
 
-  for (int i = 0; i < num_topics; i++) {
-    ash::AmbientModeTopic topic;
-    topic.url = kFakeUrl;
-    topic.details = kFakeDetails;
-    topic.is_portrait = is_portrait_;
-    topic.related_image_url = kFakeUrl;
-    topic.topic_type = AmbientModeTopicType::kCulturalInstitute;
+  if (custom_topic_generator_) {
+    update.next_topics = custom_topic_generator_.Run(num_topics, screen_size);
+  } else {
+    int num_topics_to_return =
+        custom_num_topics_to_return_.has_value()
+            ? std::min(custom_num_topics_to_return_.value(), num_topics)
+            : num_topics;
+    for (int i = 0; i < num_topics_to_return; ++i) {
+      ash::AmbientModeTopic topic;
+      topic.url = kFakeUrl;
+      topic.details = kFakeDetails;
+      topic.is_portrait = is_portrait_;
+      if ((show_pair_personal_portraits &&
+           topic_type_ == ::ambient::kPersonal && is_portrait_) ||
+          has_related_image_) {
+        topic.related_image_url = kFakeUrl;
+      }
+      topic.topic_type = topic_type_;
 
-    update.next_topics.emplace_back(topic);
+      update.next_topics.emplace_back(topic);
+    }
   }
 
   // Only respond weather info when there is no active weather testing.
@@ -107,44 +126,31 @@ void FakeAmbientBackendControllerImpl::FetchScreenUpdateInfo(
   }
 
   // Pretend to respond asynchronously.
-  base::SequencedTaskRunnerHandle::Get()->PostTask(
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), update));
 }
 
-void FakeAmbientBackendControllerImpl::GetSettings(
-    GetSettingsCallback callback) {
+void FakeAmbientBackendControllerImpl::FetchPreviewImages(
+    const gfx::Size& preview_size,
+    OnPreviewImagesFetchedCallback callback) {
+  std::vector<GURL> urls = {GURL(kFakeUrl)};
   // Pretend to respond asynchronously.
-  base::SequencedTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback), CreateFakeSettings()));
-}
-
-void FakeAmbientBackendControllerImpl::UpdateSettings(
-    const AmbientSettings& settings,
-    UpdateSettingsCallback callback) {
-  // |show_weather| should always be set to true.
-  DCHECK(settings.show_weather);
-  pending_update_callback_ = std::move(callback);
-}
-
-void FakeAmbientBackendControllerImpl::FetchSettingPreview(
-    int preview_width,
-    int preview_height,
-    OnSettingPreviewFetchedCallback callback) {
-  std::vector<std::string> urls = {kFakeUrl};
-  // Pretend to respond asynchronously.
-  base::SequencedTaskRunnerHandle::Get()->PostTask(
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), urls));
 }
 
-void FakeAmbientBackendControllerImpl::FetchPersonalAlbums(
-    int banner_width,
-    int banner_height,
-    int num_albums,
-    const std::string& resume_token,
-    OnPersonalAlbumsFetchedCallback callback) {
-  // Pretend to respond asynchronously.
-  base::SequencedTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback), CreateFakeAlbums()));
+void FakeAmbientBackendControllerImpl::UpdateSettings(
+    const AmbientSettings settings,
+    UpdateSettingsCallback callback) {
+  // |show_weather| should always be set to true.
+  DCHECK(settings.show_weather);
+  current_temperature_unit_ = settings.temperature_unit;
+  if (update_auto_reply_.has_value()) {
+    std::move(callback).Run(update_auto_reply_.value(), settings);
+    return;
+  }
+  pending_update_callback_ = std::move(callback);
+  pending_settings_ = settings;
 }
 
 void FakeAmbientBackendControllerImpl::FetchSettingsAndAlbums(
@@ -156,8 +162,13 @@ void FakeAmbientBackendControllerImpl::FetchSettingsAndAlbums(
 }
 
 void FakeAmbientBackendControllerImpl::FetchWeather(
+    std::optional<std::string> weather_client_id,
     FetchWeatherCallback callback) {
-  std::move(callback).Run(weather_info_);
+  ++fetch_weather_count_;
+  weather_client_id_ = weather_client_id;
+  if (run_fetch_weather_callback_) {
+    std::move(callback).Run(weather_info_);
+  }
 }
 
 const std::array<const char*, 2>&
@@ -165,9 +176,23 @@ FakeAmbientBackendControllerImpl::GetBackupPhotoUrls() const {
   return kFakeBackupPhotoUrls;
 }
 
+std::array<const char*, 2>
+FakeAmbientBackendControllerImpl::GetTimeOfDayVideoPreviewImageUrls(
+    AmbientVideo video) const {
+  return kFakeBackupPhotoUrls;
+}
+
+const char* FakeAmbientBackendControllerImpl::GetPromoBannerUrl() const {
+  return kFakeUrl;
+}
+
+const char* FakeAmbientBackendControllerImpl::GetTimeOfDayProductName() const {
+  return "Product Name";
+}
+
 void FakeAmbientBackendControllerImpl::ReplyFetchSettingsAndAlbums(
     bool success,
-    const absl::optional<AmbientSettings>& settings) {
+    const std::optional<AmbientSettings>& settings) {
   if (!pending_fetch_settings_albums_callback_)
     return;
 
@@ -176,8 +201,14 @@ void FakeAmbientBackendControllerImpl::ReplyFetchSettingsAndAlbums(
         .Run(settings.value_or(CreateFakeSettings()), CreateFakeAlbums());
   } else {
     std::move(pending_fetch_settings_albums_callback_)
-        .Run(/*settings=*/absl::nullopt, PersonalAlbums());
+        .Run(/*settings=*/std::nullopt, PersonalAlbums());
   }
+}
+
+void FakeAmbientBackendControllerImpl::SetFetchScreenUpdateInfoResponseSize(
+    int num_topics_to_return) {
+  DCHECK_GE(num_topics_to_return, 0);
+  custom_num_topics_to_return_.emplace(num_topics_to_return);
 }
 
 bool FakeAmbientBackendControllerImpl::IsFetchSettingsAndAlbumsPending() const {
@@ -188,20 +219,31 @@ void FakeAmbientBackendControllerImpl::ReplyUpdateSettings(bool success) {
   if (!pending_update_callback_)
     return;
 
-  std::move(pending_update_callback_).Run(success);
+  std::move(pending_update_callback_).Run(success, pending_settings_);
 }
 
 bool FakeAmbientBackendControllerImpl::IsUpdateSettingsPending() const {
   return !pending_update_callback_.is_null();
 }
 
+void FakeAmbientBackendControllerImpl::EnableUpdateSettingsAutoReply(
+    bool success) {
+  update_auto_reply_.emplace(success);
+}
+
 void FakeAmbientBackendControllerImpl::SetWeatherInfo(
-    absl::optional<WeatherInfo> info) {
+    std::optional<WeatherInfo> info) {
   weather_info_ = std::move(info);
 }
 
 void FakeAmbientBackendControllerImpl::SetPhotoOrientation(bool portrait) {
   is_portrait_ = portrait;
+}
+
+void FakeAmbientBackendControllerImpl::SetPhotoTopicType(
+    ::ambient::TopicType topic_type) {
+  has_related_image_ = false;
+  topic_type_ = topic_type;
 }
 
 }  // namespace ash

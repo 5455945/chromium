@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,27 +12,30 @@
 #include <utility>
 #include <vector>
 
+#include "base/base_switches.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/field_trial_params.h"
+#include "base/strings/escape.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/system/sys_info.h"
+#include "base/values.h"
 #include "components/variations/client_filterable_state.h"
 #include "components/variations/field_trial_config/fieldtrial_testing_config.h"
+#include "components/variations/study_filtering.h"
 #include "components/variations/variations_seed_processor.h"
-#include "net/base/escape.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "ui/base/device_form_factor.h"
+#include "components/variations/variations_switches.h"
 
 namespace variations {
 namespace {
 
 bool HasPlatform(const FieldTrialTestingExperiment& experiment,
                  Study::Platform platform) {
-  for (size_t i = 0; i < experiment.platforms_size; ++i) {
-    if (experiment.platforms[i] == platform)
+  for (Study::Platform experiment_platform : experiment.platforms) {
+    if (experiment_platform == platform) {
       return true;
+    }
   }
   return false;
 }
@@ -52,67 +55,99 @@ bool HasDeviceLevelMismatch(const FieldTrialTestingExperiment& experiment) {
 // contains the current system's form_factor. Otherwise, it is False.
 bool HasFormFactor(const FieldTrialTestingExperiment& experiment,
                    Study::FormFactor current_form_factor) {
-  for (size_t i = 0; i < experiment.form_factors_size; ++i) {
-    if (experiment.form_factors[i] == current_form_factor)
+  for (Study::FormFactor experiment_form_factor : experiment.form_factors) {
+    if (experiment_form_factor == current_form_factor) {
       return true;
+    }
   }
-  return experiment.form_factors_size == 0;
+  return experiment.form_factors.size() == 0;
 }
 
 // Returns true if the experiment config has a missing |min_os_version| or
 // GetOSVersion() >= |min_os_version|.
 bool HasMinOSVersion(const FieldTrialTestingExperiment& experiment) {
-  if (!experiment.min_os_version)
+  if (!experiment.min_os_version) {
     return true;
+  }
   return base::Version(experiment.min_os_version) <=
          ClientFilterableState::GetOSVersion();
 }
 
-// Records the override ui string config. Mainly used for testing.
-void ApplyUIStringOverrides(
-    const FieldTrialTestingExperiment& experiment,
-    const VariationsSeedProcessor::UIStringOverrideCallback& callback) {
-  for (size_t i = 0; i < experiment.override_ui_string_size; ++i) {
-    callback.Run(experiment.override_ui_string[i].name_hash,
-                 base::UTF8ToUTF16(experiment.override_ui_string[i].value));
+// Checks that if |is_benchmarking_enabled| is true that this particular
+// experiment has not been disabled for benchmarking.
+bool IsEnabledForBenchmarking(const FieldTrialTestingExperiment& experiment,
+                              const bool is_benchmarking_enabled) {
+  return !is_benchmarking_enabled ||
+         !experiment.disable_benchmarking.value_or(false);
+}
+
+// Determines whether an experiment should be skipped or not. An experiment
+// should be skipped if it enables or disables a feature that is already
+// overridden through the command line.
+bool ShouldSkipExperiment(const FieldTrialTestingExperiment& experiment,
+                          base::FeatureList* feature_list) {
+  for (const auto* enabled_feature : experiment.enable_features) {
+    if (feature_list->IsFeatureOverridden(enabled_feature)) {
+      return true;
+    }
   }
+  for (const auto* disabled_feature : experiment.disable_features) {
+    if (feature_list->IsFeatureOverridden(disabled_feature)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 void AssociateParamsFromExperiment(
     const std::string& study_name,
     const FieldTrialTestingExperiment& experiment,
-    const VariationsSeedProcessor::UIStringOverrideCallback& callback,
     base::FeatureList* feature_list) {
-  if (experiment.params_size != 0) {
+  if (ShouldSkipExperiment(experiment, feature_list)) {
+    return;
+  }
+  if (experiment.params.size() != 0) {
     base::FieldTrialParams params;
-    for (size_t i = 0; i < experiment.params_size; ++i) {
-      const FieldTrialTestingExperimentParams& param = experiment.params[i];
+    for (const FieldTrialTestingExperimentParams& param : experiment.params) {
       params[param.key] = param.value;
     }
-    base::AssociateFieldTrialParams(study_name, experiment.name, params);
+    base::AssociateFieldTrialParams(study_name, experiment.name,
+                                    std::move(params));
   }
   base::FieldTrial* trial =
       base::FieldTrialList::CreateFieldTrial(study_name, experiment.name);
 
   if (!trial) {
-    DLOG(WARNING) << "Field trial config study skipped: " << study_name
-                  << "." << experiment.name
-                  << " (it is overridden from chrome://flags)";
     return;
   }
 
-  for (size_t i = 0; i < experiment.enable_features_size; ++i) {
+  for (const auto* enabled_feature : experiment.enable_features) {
     feature_list->RegisterFieldTrialOverride(
-        experiment.enable_features[i],
-        base::FeatureList::OVERRIDE_ENABLE_FEATURE, trial);
+        enabled_feature, base::FeatureList::OVERRIDE_ENABLE_FEATURE, trial);
   }
-  for (size_t i = 0; i < experiment.disable_features_size; ++i) {
+  for (const auto* disabled_feature : experiment.disable_features) {
     feature_list->RegisterFieldTrialOverride(
-        experiment.disable_features[i],
-        base::FeatureList::OVERRIDE_DISABLE_FEATURE, trial);
+        disabled_feature, base::FeatureList::OVERRIDE_DISABLE_FEATURE, trial);
   }
+}
 
-  ApplyUIStringOverrides(experiment, callback);
+Study::Filter CreateFilter(const FieldTrialTestingExperiment& experiment) {
+  Study::Filter filter;
+  for (const auto* included_hw_class : experiment.hardware_classes) {
+    filter.add_hardware_class(included_hw_class);
+  }
+  for (const auto* excluded_hw_class : experiment.exclude_hardware_classes) {
+    filter.add_exclude_hardware_class(excluded_hw_class);
+  }
+  for (const auto* included_hw_manufacturer :
+       experiment.hardware_manufacturers) {
+    filter.add_hardware_manufacturer(included_hw_manufacturer);
+  }
+  for (const auto* excluded_hw_manufacturer :
+       experiment.exclude_hardware_manufacturers) {
+    filter.add_exclude_hardware_manufacturer(excluded_hw_manufacturer);
+  }
+  return filter;
 }
 
 // Choose an experiment to associate. The rules are:
@@ -124,34 +159,50 @@ void AssociateParamsFromExperiment(
 //   - Otherwise, If running on non low_end_device and the config specify
 //     a different experiment group for non low_end_device then pick that.
 //   - Otherwise, select the first experiment.
+// - The chosen experiment must not enable or disable a feature that is
+//   explicitly enabled or disabled through a switch, such as the
+//   |--enable-features| or |--disable-features| switches. If it does, then no
+//   experiment is associated.
 // - If no experiments match this platform, do not associate any of them.
 void ChooseExperiment(
     const FieldTrialTestingStudy& study,
-    const VariationsSeedProcessor::UIStringOverrideCallback& callback,
     Study::Platform platform,
     Study::FormFactor current_form_factor,
     base::FeatureList* feature_list) {
   const auto& command_line = *base::CommandLine::ForCurrentProcess();
+  std::string hardware_class = ClientFilterableState::GetHardwareClass();
+  std::string hardware_manufacturer =
+      ClientFilterableState::GetHardwareManufacturer();
+  const bool is_benchmarking_enabled =
+      command_line.HasSwitch(::switches::kEnableBenchmarking) ||
+      command_line.GetSwitchValueASCII(
+          switches::kEnableFieldTrialTestingConfig) == "benchmarking";
   const FieldTrialTestingExperiment* chosen_experiment = nullptr;
-  for (size_t i = 0; i < study.experiments_size; ++i) {
-    const FieldTrialTestingExperiment* experiment = study.experiments + i;
-    if (HasPlatform(*experiment, platform)) {
-      if (!chosen_experiment && !HasDeviceLevelMismatch(*experiment) &&
-          HasFormFactor(*experiment, current_form_factor) &&
-          HasMinOSVersion(*experiment)) {
-        chosen_experiment = experiment;
+  for (const FieldTrialTestingExperiment& experiment : study.experiments) {
+    if (HasPlatform(experiment, platform)) {
+      Study::Filter filter = CreateFilter(experiment);
+      // TODO(b/323589616): These Has*() functions can be replaced by their
+      // equivalent internal::CheckStudy* functions once we add the
+      // corresponding fields to |CreateFilter|.
+      if (!chosen_experiment && !HasDeviceLevelMismatch(experiment) &&
+          HasFormFactor(experiment, current_form_factor) &&
+          HasMinOSVersion(experiment) &&
+          internal::CheckStudyHardwareClass(filter, hardware_class) &&
+          internal::CheckStudyHardwareManufacturer(filter,
+                                                   hardware_manufacturer) &&
+          IsEnabledForBenchmarking(experiment, is_benchmarking_enabled)) {
+        chosen_experiment = &experiment;
       }
 
-      if (experiment->forcing_flag &&
-          command_line.HasSwitch(experiment->forcing_flag)) {
-        chosen_experiment = experiment;
+      if (experiment.forcing_flag &&
+          command_line.HasSwitch(experiment.forcing_flag)) {
+        chosen_experiment = &experiment;
         break;
       }
     }
   }
   if (chosen_experiment) {
-    AssociateParamsFromExperiment(study.name, *chosen_experiment, callback,
-                                  feature_list);
+    AssociateParamsFromExperiment(study.name, *chosen_experiment, feature_list);
   }
 }
 
@@ -161,19 +212,20 @@ std::string EscapeValue(const std::string& value) {
   // This needs to be the inverse of UnescapeValue in
   // base/metrics/field_trial_params.
   std::string net_escaped_str =
-      net::EscapeQueryParamValue(value, true /* use_plus */);
+      base::EscapeQueryParamValue(value, true /* use_plus */);
 
   // net doesn't escape '.' and '*' but base::UnescapeValue() covers those
   // cases.
   std::string escaped_str;
   escaped_str.reserve(net_escaped_str.length());
   for (const char ch : net_escaped_str) {
-    if (ch == '.')
+    if (ch == '.') {
       escaped_str.append("%2E");
-    else if (ch == '*')
+    } else if (ch == '*') {
       escaped_str.append("%2A");
-    else
+    } else {
       escaped_str.push_back(ch);
+    }
   }
   return escaped_str;
 }
@@ -185,27 +237,20 @@ bool AssociateParamsFromString(const std::string& varations_string) {
 
 void AssociateParamsFromFieldTrialConfig(
     const FieldTrialTestingConfig& config,
-    const VariationsSeedProcessor::UIStringOverrideCallback& callback,
     Study::Platform platform,
     Study::FormFactor current_form_factor,
     base::FeatureList* feature_list) {
-  for (size_t i = 0; i < config.studies_size; ++i) {
-    const FieldTrialTestingStudy& study = config.studies[i];
-    if (study.experiments_size > 0) {
-      ChooseExperiment(study, callback, platform, current_form_factor,
-                       feature_list);
-    } else {
-      DLOG(ERROR) << "Unexpected empty study: " << study.name;
-    }
+  for (const FieldTrialTestingStudy& study : config.studies) {
+    CHECK(!study.experiments.empty());
+    ChooseExperiment(study, platform, current_form_factor, feature_list);
   }
 }
 
 void AssociateDefaultFieldTrialConfig(
-    const VariationsSeedProcessor::UIStringOverrideCallback& callback,
     Study::Platform platform,
     Study::FormFactor current_form_factor,
     base::FeatureList* feature_list) {
-  AssociateParamsFromFieldTrialConfig(kFieldTrialConfig, callback, platform,
+  AssociateParamsFromFieldTrialConfig(kFieldTrialConfig, platform,
                                       current_form_factor, feature_list);
 }
 

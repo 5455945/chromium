@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,14 +12,22 @@
 namespace blink {
 
 const CSSValue* CSSInterpolationEnvironment::Resolve(
-    const PropertyHandle& property,
-    const CSSValue* value) const {
+    const CSSValue* value,
+    const TreeScope* tree_scope) const {
   DCHECK(cascade_);
   DCHECK(cascade_resolver_);
-  if (!value)
-    return value;
-  return cascade_->Resolve(property.GetCSSPropertyName(), *value,
-                           CascadeOrigin::kAnimation, *cascade_resolver_);
+  if (value) {
+    // TODO: If we support env() within @keyframe, we may need to support
+    // non-nullptr env_bindings here.
+    const CSSValue* resolved_value =
+        cascade_->Resolve(property_.GetCSSPropertyName(), *value, tree_scope,
+                          /*env_bindings=*/nullptr, CascadeOrigin::kAnimation,
+                          *cascade_resolver_);
+    if (resolved_value) {
+      return &resolved_value->EnsureScopedValue(tree_scope);
+    }
+  }
+  return nullptr;
 }
 
 }  // namespace blink

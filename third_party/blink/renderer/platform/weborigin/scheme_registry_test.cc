@@ -1,10 +1,12 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/platform/weborigin/scheme_registry.h"
 
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/scheme_registry.h"
+#include "third_party/blink/renderer/platform/wtf/threading.h"
 
 namespace blink {
 namespace {
@@ -14,8 +16,12 @@ const char kTestScheme2[] = "test-scheme-2";
 
 class SchemeRegistryTest : public testing::Test {
   void TearDown() override {
-    SchemeRegistry::RemoveURLSchemeRegisteredAsBypassingContentSecurityPolicy(
-        kTestScheme);
+#if DCHECK_IS_ON()
+    SetIsBeforeThreadCreatedForTest();  // Required for next operation:
+#endif
+    SchemeRegistry::
+        RemoveURLSchemeRegisteredAsBypassingContentSecurityPolicyForTest(
+            kTestScheme);
   }
 };
 
@@ -27,6 +33,9 @@ TEST_F(SchemeRegistryTest, NoCSPBypass) {
 }
 
 TEST_F(SchemeRegistryTest, FullCSPBypass) {
+#if DCHECK_IS_ON()
+  SetIsBeforeThreadCreatedForTest();  // Required for next operation:
+#endif
   SchemeRegistry::RegisterURLSchemeAsBypassingContentSecurityPolicy(
       kTestScheme);
   EXPECT_TRUE(
@@ -40,6 +49,9 @@ TEST_F(SchemeRegistryTest, FullCSPBypass) {
 }
 
 TEST_F(SchemeRegistryTest, PartialCSPBypass) {
+#if DCHECK_IS_ON()
+  SetIsBeforeThreadCreatedForTest();  // Required for next operation:
+#endif
   SchemeRegistry::RegisterURLSchemeAsBypassingContentSecurityPolicy(
       kTestScheme, SchemeRegistry::kPolicyAreaImage);
   EXPECT_FALSE(
@@ -61,6 +73,9 @@ TEST_F(SchemeRegistryTest, BypassSecureContextCheck) {
   EXPECT_FALSE(SchemeRegistry::SchemeShouldBypassSecureContextCheck(scheme2));
   EXPECT_FALSE(SchemeRegistry::SchemeShouldBypassSecureContextCheck(scheme3));
 
+#if DCHECK_IS_ON()
+  SetIsBeforeThreadCreatedForTest();  // Required for next operation:
+#endif
   SchemeRegistry::RegisterURLSchemeBypassingSecureContextCheck("random-scheme");
 
   EXPECT_FALSE(SchemeRegistry::SchemeShouldBypassSecureContextCheck(scheme1));
@@ -73,6 +88,9 @@ TEST_F(SchemeRegistryTest, WebUIScheme) {
   EXPECT_FALSE(SchemeRegistry::IsWebUIScheme(kTestScheme));
   EXPECT_FALSE(SchemeRegistry::IsWebUIScheme(kChromeUIScheme));
 
+#if DCHECK_IS_ON()
+  SetIsBeforeThreadCreatedForTest();  // Required for next operation:
+#endif
   SchemeRegistry::RegisterURLSchemeAsWebUI(kTestScheme);
 
   EXPECT_TRUE(SchemeRegistry::IsWebUIScheme(kTestScheme));
@@ -83,12 +101,12 @@ TEST_F(SchemeRegistryTest, WebUIScheme) {
   EXPECT_TRUE(SchemeRegistry::IsWebUIScheme(kTestScheme));
   EXPECT_TRUE(SchemeRegistry::IsWebUIScheme(kChromeUIScheme));
 
-  SchemeRegistry::RemoveURLSchemeAsWebUI(kTestScheme);
+  SchemeRegistry::RemoveURLSchemeAsWebUIForTest(kTestScheme);
 
   EXPECT_FALSE(SchemeRegistry::IsWebUIScheme(kTestScheme));
   EXPECT_TRUE(SchemeRegistry::IsWebUIScheme(kChromeUIScheme));
 
-  SchemeRegistry::RemoveURLSchemeAsWebUI(kChromeUIScheme);
+  SchemeRegistry::RemoveURLSchemeAsWebUIForTest(kChromeUIScheme);
 
   EXPECT_FALSE(SchemeRegistry::IsWebUIScheme(kTestScheme));
   EXPECT_FALSE(SchemeRegistry::IsWebUIScheme(kChromeUIScheme));
@@ -96,28 +114,104 @@ TEST_F(SchemeRegistryTest, WebUIScheme) {
 
 TEST_F(SchemeRegistryTest, ExtensionScheme) {
   const char* kExtensionScheme = "chrome-extension";
-  EXPECT_FALSE(SchemeRegistry::IsExtensionScheme(kTestScheme));
-  EXPECT_FALSE(SchemeRegistry::IsExtensionScheme(kExtensionScheme));
+  EXPECT_FALSE(CommonSchemeRegistry::IsExtensionScheme(kTestScheme));
+  EXPECT_FALSE(CommonSchemeRegistry::IsExtensionScheme(kExtensionScheme));
 
-  SchemeRegistry::RegisterURLSchemeAsExtension(kExtensionScheme);
+#if DCHECK_IS_ON()
+  SetIsBeforeThreadCreatedForTest();  // Required for next operation:
+#endif
+  CommonSchemeRegistry::RegisterURLSchemeAsExtension(kExtensionScheme);
 
-  EXPECT_FALSE(SchemeRegistry::IsExtensionScheme(kTestScheme));
-  EXPECT_TRUE(SchemeRegistry::IsExtensionScheme(kExtensionScheme));
+  EXPECT_FALSE(CommonSchemeRegistry::IsExtensionScheme(kTestScheme));
+  EXPECT_TRUE(CommonSchemeRegistry::IsExtensionScheme(kExtensionScheme));
 
-  SchemeRegistry::RegisterURLSchemeAsExtension(kTestScheme);
+  CommonSchemeRegistry::RegisterURLSchemeAsExtension(kTestScheme);
 
-  EXPECT_TRUE(SchemeRegistry::IsExtensionScheme(kTestScheme));
-  EXPECT_TRUE(SchemeRegistry::IsExtensionScheme(kExtensionScheme));
+  EXPECT_TRUE(CommonSchemeRegistry::IsExtensionScheme(kTestScheme));
+  EXPECT_TRUE(CommonSchemeRegistry::IsExtensionScheme(kExtensionScheme));
 
-  SchemeRegistry::RemoveURLSchemeAsExtension(kExtensionScheme);
+  CommonSchemeRegistry::RemoveURLSchemeAsExtensionForTest(kExtensionScheme);
 
-  EXPECT_TRUE(SchemeRegistry::IsExtensionScheme(kTestScheme));
-  EXPECT_FALSE(SchemeRegistry::IsExtensionScheme(kExtensionScheme));
+  EXPECT_TRUE(CommonSchemeRegistry::IsExtensionScheme(kTestScheme));
+  EXPECT_FALSE(CommonSchemeRegistry::IsExtensionScheme(kExtensionScheme));
 
-  SchemeRegistry::RemoveURLSchemeAsExtension(kTestScheme);
+  CommonSchemeRegistry::RemoveURLSchemeAsExtensionForTest(kTestScheme);
 
-  EXPECT_FALSE(SchemeRegistry::IsExtensionScheme(kTestScheme));
-  EXPECT_FALSE(SchemeRegistry::IsExtensionScheme(kExtensionScheme));
+  EXPECT_FALSE(CommonSchemeRegistry::IsExtensionScheme(kTestScheme));
+  EXPECT_FALSE(CommonSchemeRegistry::IsExtensionScheme(kExtensionScheme));
+}
+
+TEST_F(SchemeRegistryTest, CodeCacheWithHashing) {
+  const char* kChromeUIScheme = "chrome";
+  EXPECT_FALSE(SchemeRegistry::SchemeSupportsCodeCacheWithHashing(kTestScheme));
+  EXPECT_FALSE(
+      SchemeRegistry::SchemeSupportsCodeCacheWithHashing(kChromeUIScheme));
+
+  SchemeRegistry::RegisterURLSchemeAsCodeCacheWithHashing(kTestScheme);
+
+  EXPECT_TRUE(SchemeRegistry::SchemeSupportsCodeCacheWithHashing(kTestScheme));
+  EXPECT_FALSE(
+      SchemeRegistry::SchemeSupportsCodeCacheWithHashing(kChromeUIScheme));
+
+  SchemeRegistry::RegisterURLSchemeAsCodeCacheWithHashing(kChromeUIScheme);
+
+  EXPECT_TRUE(SchemeRegistry::SchemeSupportsCodeCacheWithHashing(kTestScheme));
+  EXPECT_TRUE(
+      SchemeRegistry::SchemeSupportsCodeCacheWithHashing(kChromeUIScheme));
+
+  SchemeRegistry::RemoveURLSchemeAsCodeCacheWithHashingForTest(kTestScheme);
+
+  EXPECT_FALSE(SchemeRegistry::SchemeSupportsCodeCacheWithHashing(kTestScheme));
+  EXPECT_TRUE(
+      SchemeRegistry::SchemeSupportsCodeCacheWithHashing(kChromeUIScheme));
+
+  SchemeRegistry::RemoveURLSchemeAsCodeCacheWithHashingForTest(kChromeUIScheme);
+
+  EXPECT_FALSE(SchemeRegistry::SchemeSupportsCodeCacheWithHashing(kTestScheme));
+  EXPECT_FALSE(
+      SchemeRegistry::SchemeSupportsCodeCacheWithHashing(kChromeUIScheme));
+}
+
+TEST_F(SchemeRegistryTest, BundledWebUIBytecode) {
+  const char* kChromeUIScheme = "chrome";
+  EXPECT_FALSE(SchemeRegistry::SchemeSupportsWebUIBundledBytecode(kTestScheme));
+  EXPECT_FALSE(
+      SchemeRegistry::SchemeSupportsWebUIBundledBytecode(kChromeUIScheme));
+
+  SchemeRegistry::RegisterURLSchemeAsWebUIBundledBytecode(kTestScheme);
+
+  EXPECT_TRUE(SchemeRegistry::SchemeSupportsWebUIBundledBytecode(kTestScheme));
+  EXPECT_FALSE(
+      SchemeRegistry::SchemeSupportsWebUIBundledBytecode(kChromeUIScheme));
+
+  SchemeRegistry::RegisterURLSchemeAsWebUIBundledBytecode(kChromeUIScheme);
+
+  EXPECT_TRUE(SchemeRegistry::SchemeSupportsWebUIBundledBytecode(kTestScheme));
+  EXPECT_TRUE(
+      SchemeRegistry::SchemeSupportsWebUIBundledBytecode(kChromeUIScheme));
+
+  SchemeRegistry::RemoveURLSchemeAsWebUIBundledBytecodeForTest(kTestScheme);
+
+  EXPECT_FALSE(SchemeRegistry::SchemeSupportsWebUIBundledBytecode(kTestScheme));
+  EXPECT_TRUE(
+      SchemeRegistry::SchemeSupportsWebUIBundledBytecode(kChromeUIScheme));
+
+  SchemeRegistry::RemoveURLSchemeAsWebUIBundledBytecodeForTest(kChromeUIScheme);
+
+  EXPECT_FALSE(SchemeRegistry::SchemeSupportsWebUIBundledBytecode(kTestScheme));
+  EXPECT_FALSE(
+      SchemeRegistry::SchemeSupportsWebUIBundledBytecode(kChromeUIScheme));
+}
+
+TEST_F(SchemeRegistryTest, DirectLaunchScheme) {
+  const String kScheme("google-chrome");
+  EXPECT_FALSE(SchemeRegistry::IsDirectLaunchScheme(kScheme));
+
+  SchemeRegistry::RegisterURLSchemeAsDirectLaunch(kScheme);
+  EXPECT_TRUE(SchemeRegistry::IsDirectLaunchScheme(kScheme));
+
+  SchemeRegistry::RemoveURLSchemeAsDirectLaunchForTest(kScheme);
+  EXPECT_FALSE(SchemeRegistry::IsDirectLaunchScheme(kScheme));
 }
 
 }  // namespace

@@ -1,42 +1,48 @@
-// Copyright (c) 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/safe_browsing/test_safe_browsing_service.h"
 
+#include "base/memory/scoped_refptr.h"
+#include "base/notimplemented.h"
 #include "base/strings/string_util.h"
-#include "chrome/browser/safe_browsing/download_protection/download_protection_service.h"
-#include "chrome/browser/safe_browsing/incident_reporting/incident_reporting_service.h"
+#include "chrome/browser/safe_browsing/interstitials/chrome_safe_browsing_blocking_page_factory.h"
+#include "chrome/browser/safe_browsing/interstitials/chrome_ui_manager_delegate.h"
 #include "chrome/browser/safe_browsing/services_delegate.h"
-#include "chrome/browser/safe_browsing/ui_manager.h"
+#include "chrome/common/url_constants.h"
 #include "components/safe_browsing/buildflags.h"
+#include "components/safe_browsing/content/browser/interstitials/ui_manager.h"
 #include "components/safe_browsing/core/browser/db/database_manager.h"
 #include "components/safe_browsing/core/browser/db/test_database_manager.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
+
+#if BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION)
+#include "chrome/browser/safe_browsing/download_protection/download_protection_service.h"
+#include "chrome/browser/safe_browsing/download_protection/download_protection_util.h"
+#endif
+
+#if BUILDFLAG(FULL_SAFE_BROWSING)
+#include "chrome/browser/safe_browsing/incident_reporting/incident_reporting_service.h"
+#endif
 
 namespace safe_browsing {
 
 // TestSafeBrowsingService functions:
 TestSafeBrowsingService::TestSafeBrowsingService()
     : test_shared_loader_factory_(
-          base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
-              &test_url_loader_factory_)) {
+          test_url_loader_factory_.GetSafeWeakWrapper()) {
 #if BUILDFLAG(FULL_SAFE_BROWSING)
   services_delegate_ = ServicesDelegate::CreateForTest(this, this);
 #endif  // BUILDFLAG(FULL_SAFE_BROWSING)
 }
 
-TestSafeBrowsingService::~TestSafeBrowsingService() {}
+TestSafeBrowsingService::~TestSafeBrowsingService() = default;
 
-V4ProtocolConfig TestSafeBrowsingService::GetV4ProtocolConfig() const {
-  if (v4_protocol_config_)
-    return *v4_protocol_config_;
-  return SafeBrowsingService::GetV4ProtocolConfig();
-}
-
-void TestSafeBrowsingService::UseV4LocalDatabaseManager() {
-  use_v4_local_db_manager_ = true;
+void TestSafeBrowsingService::UseSBLocalDatabaseManager() {
+  use_sb_local_db_manager_ = true;
 }
 
 void TestSafeBrowsingService::SetUseTestUrlLoaderFactory(
@@ -58,7 +64,7 @@ base::CallbackListSubscription TestSafeBrowsingService::RegisterStateCallback(
   return {};
 }
 
-std::string TestSafeBrowsingService::serilized_download_report() {
+std::string TestSafeBrowsingService::serialized_download_report() {
   return serialized_download_report_;
 }
 
@@ -73,7 +79,6 @@ void TestSafeBrowsingService::SetDatabaseManager(
 
 void TestSafeBrowsingService::SetUIManager(
     TestSafeBrowsingUIManager* ui_manager) {
-  ui_manager->SetSafeBrowsingService(this);
   ui_manager_ = ui_manager;
 }
 
@@ -83,11 +88,30 @@ SafeBrowsingUIManager* TestSafeBrowsingService::CreateUIManager() {
   return SafeBrowsingService::CreateUIManager();
 }
 
-void TestSafeBrowsingService::SendSerializedDownloadReport(
-    Profile* profile,
-    const std::string& report) {
-  serialized_download_report_ = report;
+#if BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION)
+void TestSafeBrowsingService::SendDownloadReport(
+    download::DownloadItem* download,
+    ClientSafeBrowsingReportRequest::ReportType report_type,
+    bool did_proceed,
+    std::optional<bool> show_download_in_folder) {
+  auto report = std::make_unique<ClientSafeBrowsingReportRequest>();
+  report->set_type(report_type);
+  report->set_download_verdict(
+      DownloadProtectionService::GetDownloadProtectionVerdict(download));
+  report->set_url(download->GetURL().spec());
+  report->set_did_proceed(did_proceed);
+  if (show_download_in_folder) {
+    report->set_show_download_in_folder(show_download_in_folder.value());
+  }
+
+  std::string token = DownloadProtectionService::GetDownloadPingToken(download);
+  if (!token.empty()) {
+    report->set_token(token);
+  }
+  report->SerializeToString(&serialized_download_report_);
+  return;
 }
+#endif
 
 const scoped_refptr<SafeBrowsingDatabaseManager>&
 TestSafeBrowsingService::database_manager() const {
@@ -96,15 +120,11 @@ TestSafeBrowsingService::database_manager() const {
   return SafeBrowsingService::database_manager();
 }
 
-void TestSafeBrowsingService::SetV4ProtocolConfig(
-    V4ProtocolConfig* v4_protocol_config) {
-  v4_protocol_config_.reset(v4_protocol_config);
-}
 // ServicesDelegate::ServicesCreator:
 bool TestSafeBrowsingService::CanCreateDatabaseManager() {
-  return !use_v4_local_db_manager_;
+  return !use_sb_local_db_manager_;
 }
-#if BUILDFLAG(FULL_SAFE_BROWSING)
+#if BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION)
 bool TestSafeBrowsingService::CanCreateDownloadProtectionService() {
   return false;
 }
@@ -113,18 +133,19 @@ bool TestSafeBrowsingService::CanCreateIncidentReportingService() {
   return true;
 }
 
-SafeBrowsingDatabaseManager* TestSafeBrowsingService::CreateDatabaseManager() {
-  DCHECK(!use_v4_local_db_manager_);
+scoped_refptr<SafeBrowsingDatabaseManager>
+TestSafeBrowsingService::CreateDatabaseManager() {
+  DCHECK(!use_sb_local_db_manager_);
 #if BUILDFLAG(FULL_SAFE_BROWSING)
-  return new TestSafeBrowsingDatabaseManager(
-      content::GetUIThreadTaskRunner({}), content::GetIOThreadTaskRunner({}));
+  return base::MakeRefCounted<TestSafeBrowsingDatabaseManager>(
+      content::GetUIThreadTaskRunner({}));
 #else
   NOTIMPLEMENTED();
   return nullptr;
 #endif  // BUILDFLAG(FULL_SAFE_BROWSING)
 }
 
-#if BUILDFLAG(FULL_SAFE_BROWSING)
+#if BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION)
 DownloadProtectionService*
 TestSafeBrowsingService::CreateDownloadProtectionService() {
   NOTIMPLEMENTED();
@@ -142,32 +163,27 @@ TestSafeBrowsingService::CreateIncidentReportingService() {
 }
 
 scoped_refptr<network::SharedURLLoaderFactory>
-TestSafeBrowsingService::GetURLLoaderFactory() {
+TestSafeBrowsingService::GetURLLoaderFactory(
+    content::BrowserContext* browser_context) {
   if (use_test_url_loader_factory_)
     return test_shared_loader_factory_;
-  return SafeBrowsingService::GetURLLoaderFactory();
-}
-
-scoped_refptr<network::SharedURLLoaderFactory>
-TestSafeBrowsingService::GetURLLoaderFactory(Profile* profile) {
-  if (use_test_url_loader_factory_)
-    return test_shared_loader_factory_;
-  return SafeBrowsingService::GetURLLoaderFactory(profile);
+  return SafeBrowsingService::GetURLLoaderFactory(browser_context);
 }
 
 // TestSafeBrowsingServiceFactory functions:
 TestSafeBrowsingServiceFactory::TestSafeBrowsingServiceFactory()
-    : test_safe_browsing_service_(nullptr), use_v4_local_db_manager_(false) {}
+    : test_safe_browsing_service_(nullptr), use_sb_local_db_manager_(false) {}
 
-TestSafeBrowsingServiceFactory::~TestSafeBrowsingServiceFactory() {}
+TestSafeBrowsingServiceFactory::~TestSafeBrowsingServiceFactory() = default;
 
 SafeBrowsingService*
 TestSafeBrowsingServiceFactory::CreateSafeBrowsingService() {
   // Instantiate TestSafeBrowsingService.
   test_safe_browsing_service_ = new TestSafeBrowsingService();
   // Plug-in test member clases accordingly.
-  if (use_v4_local_db_manager_)
-    test_safe_browsing_service_->UseV4LocalDatabaseManager();
+  if (use_sb_local_db_manager_) {
+    test_safe_browsing_service_->UseSBLocalDatabaseManager();
+  }
   if (test_ui_manager_)
     test_safe_browsing_service_->SetUIManager(test_ui_manager_.get());
   if (test_database_manager_) {
@@ -188,29 +204,32 @@ void TestSafeBrowsingServiceFactory::SetTestUIManager(
 }
 
 void TestSafeBrowsingServiceFactory::SetTestDatabaseManager(
-    TestSafeBrowsingDatabaseManager* database_manager) {
-  test_database_manager_ = database_manager;
+    scoped_refptr<TestSafeBrowsingDatabaseManager> database_manager) {
+  test_database_manager_ = std::move(database_manager);
 }
-void TestSafeBrowsingServiceFactory::UseV4LocalDatabaseManager() {
-  use_v4_local_db_manager_ = true;
+void TestSafeBrowsingServiceFactory::UseSBLocalDatabaseManager() {
+  use_sb_local_db_manager_ = true;
 }
 
 // TestSafeBrowsingUIManager functions:
 TestSafeBrowsingUIManager::TestSafeBrowsingUIManager()
-    : SafeBrowsingUIManager(nullptr) {}
+    : SafeBrowsingUIManager(
+          std::make_unique<ChromeSafeBrowsingUIManagerDelegate>(),
+          std::make_unique<ChromeSafeBrowsingBlockingPageFactory>(),
+          chrome::ChromeUINewTabURLAsGURL()) {}
 
 TestSafeBrowsingUIManager::TestSafeBrowsingUIManager(
-    const scoped_refptr<SafeBrowsingService>& service)
-    : SafeBrowsingUIManager(service) {}
+    std::unique_ptr<SafeBrowsingBlockingPageFactory> blocking_page_factory)
+    : SafeBrowsingUIManager(
+          std::make_unique<ChromeSafeBrowsingUIManagerDelegate>(),
+          std::move(blocking_page_factory),
+          chrome::ChromeUINewTabURLAsGURL()) {}
 
-void TestSafeBrowsingUIManager::SetSafeBrowsingService(
-    SafeBrowsingService* sb_service) {
-  sb_service_ = sb_service;
-}
-
-void TestSafeBrowsingUIManager::SendSerializedThreatDetails(
+void TestSafeBrowsingUIManager::SendThreatDetails(
     content::BrowserContext* browser_context,
-    const std::string& serialized) {
+    std::unique_ptr<ClientSafeBrowsingReportRequest> report) {
+  std::string serialized;
+  report->SerializeToString(&serialized);
   details_.push_back(serialized);
 }
 
@@ -218,5 +237,5 @@ std::list<std::string>* TestSafeBrowsingUIManager::GetThreatDetails() {
   return &details_;
 }
 
-TestSafeBrowsingUIManager::~TestSafeBrowsingUIManager() {}
+TestSafeBrowsingUIManager::~TestSafeBrowsingUIManager() = default;
 }  // namespace safe_browsing

@@ -1,15 +1,13 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_CONTENT_SETTINGS_CORE_TEST_CONTENT_SETTINGS_MOCK_PROVIDER_H_
 #define COMPONENTS_CONTENT_SETTINGS_CORE_TEST_CONTENT_SETTINGS_MOCK_PROVIDER_H_
 
-#include <vector>
-
-#include "base/macros.h"
 #include "components/content_settings/core/browser/content_settings_observable_provider.h"
-#include "components/content_settings/core/browser/content_settings_origin_identifier_value_map.h"
+#include "components/content_settings/core/browser/content_settings_origin_value_map.h"
+#include "components/content_settings/core/common/content_settings_metadata.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 
@@ -20,18 +18,25 @@ class MockProvider : public ObservableProvider {
  public:
   MockProvider();
   explicit MockProvider(bool read_only);
+
+  MockProvider(const MockProvider&) = delete;
+  MockProvider& operator=(const MockProvider&) = delete;
+
   ~MockProvider() override;
 
   std::unique_ptr<RuleIterator> GetRuleIterator(
       ContentSettingsType content_type,
-      bool incognito) const override;
+      bool off_the_record) const override;
+  std::unique_ptr<Rule> GetRule(const GURL& primary_url,
+                                const GURL& secondary_url,
+                                ContentSettingsType content_type,
+                                bool off_the_record) const override;
 
-  bool SetWebsiteSetting(
-      const ContentSettingsPattern& requesting_url_pattern,
-      const ContentSettingsPattern& embedding_url_pattern,
-      ContentSettingsType content_type,
-      std::unique_ptr<base::Value>&& value,
-      const ContentSettingConstraints& constraint = {}) override;
+  bool SetWebsiteSetting(const ContentSettingsPattern& requesting_url_pattern,
+                         const ContentSettingsPattern& embedding_url_pattern,
+                         ContentSettingsType content_type,
+                         const base::Value& value,
+                         const ContentSettingConstraints& constraints) override;
 
   void ClearAllContentSettingsRules(ContentSettingsType content_type) override {
   }
@@ -43,10 +48,8 @@ class MockProvider : public ObservableProvider {
   bool read_only() const { return read_only_; }
 
  private:
-  OriginIdentifierValueMap value_map_;
+  OriginValueMap value_map_;
   bool read_only_;
-
-  DISALLOW_COPY_AND_ASSIGN(MockProvider);
 };
 
 }  // namespace content_settings

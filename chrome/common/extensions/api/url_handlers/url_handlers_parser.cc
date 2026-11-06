@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,7 +17,6 @@
 #include "net/base/network_change_notifier.h"
 #include "url/gurl.h"
 
-using base::ASCIIToUTF16;
 using net::NetworkChangeNotifier;
 
 // TODO(sergeygs): Use the same strategy that externally_connectable does for
@@ -54,26 +53,24 @@ const UrlHandlerInfo* GetMatchingUrlHandler(const Extension* extension,
 namespace mkeys = manifest_keys;
 namespace merrors = manifest_errors;
 
-UrlHandlerInfo::UrlHandlerInfo() {
-}
+// static
+const char* UrlHandlers::kManifestDataKey = mkeys::kUrlHandlers;
+
+UrlHandlerInfo::UrlHandlerInfo() = default;
 
 UrlHandlerInfo::UrlHandlerInfo(UrlHandlerInfo&& other) = default;
 
-UrlHandlerInfo::~UrlHandlerInfo() {
-}
+UrlHandlerInfo::~UrlHandlerInfo() = default;
 
-UrlHandlers::UrlHandlers() {
-}
+UrlHandlers::UrlHandlers() = default;
 
-UrlHandlers::~UrlHandlers() {
-}
+UrlHandlers::~UrlHandlers() = default;
 
 // static
 const std::vector<UrlHandlerInfo>* UrlHandlers::GetUrlHandlers(
     const Extension* extension) {
-  UrlHandlers* info = static_cast<UrlHandlers*>(
-      extension->GetManifestData(mkeys::kUrlHandlers));
-  return info ? &info->handlers : NULL;
+  const UrlHandlers* info = extension->GetManifestData<UrlHandlers>();
+  return info ? &info->handlers : nullptr;
 }
 
 // static
@@ -81,13 +78,6 @@ bool UrlHandlers::CanPlatformAppHandleUrl(const Extension* app,
                                           const GURL& url) {
   DCHECK(app->is_platform_app());
   return !!GetMatchingPlatformAppUrlHandler(app, url);
-}
-
-// static
-bool UrlHandlers::CanBookmarkAppHandleUrl(const Extension* app,
-                                          const GURL& url) {
-  DCHECK(app->from_bookmark());
-  return !!GetMatchingUrlHandler(app, url);
 }
 
 // static
@@ -102,14 +92,12 @@ const UrlHandlerInfo* UrlHandlers::GetMatchingPlatformAppUrlHandler(
   return GetMatchingUrlHandler(app, url);
 }
 
-UrlHandlersParser::UrlHandlersParser() {
-}
+UrlHandlersParser::UrlHandlersParser() = default;
 
-UrlHandlersParser::~UrlHandlersParser() {
-}
+UrlHandlersParser::~UrlHandlersParser() = default;
 
 bool ParseUrlHandler(const std::string& handler_id,
-                     const base::DictionaryValue& handler_info,
+                     const base::DictValue& handler_info,
                      std::vector<UrlHandlerInfo>* url_handlers,
                      std::u16string* error,
                      Extension* extension) {
@@ -118,33 +106,29 @@ bool ParseUrlHandler(const std::string& handler_id,
   UrlHandlerInfo handler;
   handler.id = handler_id;
 
-  if (!handler_info.GetString(mkeys::kUrlHandlerTitle, &handler.title)) {
-    *error = base::ASCIIToUTF16(merrors::kInvalidURLHandlerTitle);
+  if (const std::string* ptr =
+          handler_info.FindString(mkeys::kUrlHandlerTitle)) {
+    handler.title = *ptr;
+  } else {
+    *error = merrors::kInvalidURLHandlerTitle;
     return false;
   }
 
-  const base::ListValue* manif_patterns = NULL;
-  if (!handler_info.GetList(mkeys::kMatches, &manif_patterns) ||
-      manif_patterns->GetSize() == 0) {
+  const base::ListValue* manif_patterns =
+      handler_info.FindList(mkeys::kMatches);
+  if (!manif_patterns || manif_patterns->empty()) {
     *error = ErrorUtils::FormatErrorMessageUTF16(
         merrors::kInvalidURLHandlerPattern, handler_id);
     return false;
   }
 
-  for (const auto& entry : manif_patterns->GetList()) {
-    std::string str_pattern;
-    entry.GetAsString(&str_pattern);
+  for (const auto& entry : *manif_patterns) {
+    std::string str_pattern =
+        entry.is_string() ? entry.GetString() : std::string();
     // TODO(sergeygs): Limit this to non-top-level domains.
     // TODO(sergeygs): Also add a verification to the CWS installer that the
     // URL patterns claimed here belong to the app's author verified sites.
     URLPattern pattern(URLPattern::SCHEME_HTTP | URLPattern::SCHEME_HTTPS);
-    // System Web Apps are bookmark apps that point to chrome:// URLs.
-    // TODO(calamity): Remove once Bookmark Apps are no longer on Extensions.
-    if (extension->location() == mojom::ManifestLocation::kExternalComponent &&
-        extension->from_bookmark()) {
-      pattern = URLPattern(URLPattern::SCHEME_CHROMEUI);
-    }
-
     if (pattern.Parse(str_pattern) != URLPattern::ParseResult::kSuccess) {
       *error = ErrorUtils::FormatErrorMessageUTF16(
           merrors::kInvalidURLHandlerPatternElement, handler_id);
@@ -159,38 +143,32 @@ bool ParseUrlHandler(const std::string& handler_id,
 }
 
 bool UrlHandlersParser::Parse(Extension* extension, std::u16string* error) {
-  if (extension->GetType() == Manifest::TYPE_HOSTED_APP &&
-      !extension->from_bookmark()) {
-    *error = base::ASCIIToUTF16(merrors::kUrlHandlersInHostedApps);
-    return false;
-  }
   std::unique_ptr<UrlHandlers> info(new UrlHandlers);
-  const base::DictionaryValue* all_handlers = NULL;
-  if (!extension->manifest()->GetDictionary(
-        mkeys::kUrlHandlers, &all_handlers)) {
-    *error = base::ASCIIToUTF16(merrors::kInvalidURLHandlers);
+  const base::DictValue* all_handlers =
+      extension->manifest()->available_values().FindDict(mkeys::kUrlHandlers);
+  if (!all_handlers) {
+    *error = merrors::kInvalidURLHandlers;
     return false;
   }
 
-  DCHECK(extension->is_platform_app() || extension->from_bookmark());
+  DCHECK(extension->is_platform_app());
 
-  for (base::DictionaryValue::Iterator iter(*all_handlers); !iter.IsAtEnd();
-       iter.Advance()) {
+  for (const auto item : *all_handlers) {
     // A URL handler entry is a title and a list of URL patterns to handle.
-    const base::DictionaryValue* handler = NULL;
-    if (!iter.value().GetAsDictionary(&handler)) {
-      *error = base::ASCIIToUTF16(merrors::kInvalidURLHandlerPatternElement);
+    const base::DictValue* handler = item.second.GetIfDict();
+    if (!handler) {
+      *error = merrors::kInvalidURLHandlerPatternElement16;
       return false;
     }
 
-    if (!ParseUrlHandler(iter.key(), *handler, &info->handlers, error,
+    if (!ParseUrlHandler(item.first, *handler, &info->handlers, error,
                          extension)) {
       // Text in |error| is set by ParseUrlHandler.
       return false;
     }
   }
 
-  extension->SetManifestData(mkeys::kUrlHandlers, std::move(info));
+  extension->SetManifestData(std::move(info));
 
   return true;
 }

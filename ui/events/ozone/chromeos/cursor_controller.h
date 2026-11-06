@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,17 +6,17 @@
 #define UI_EVENTS_OZONE_CHROMEOS_CURSOR_CONTROLLER_H_
 
 #include <map>
+#include <vector>
 
 #include "base/component_export.h"
-#include "base/macros.h"
 #include "base/memory/singleton.h"
-#include "base/observer_list.h"
 #include "base/synchronization/lock.h"
+#include "base/thread_annotations.h"
 #include "ui/display/display.h"
 #include "ui/events/platform_event.h"
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/vector2d_f.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace ui {
 
@@ -38,19 +38,10 @@ namespace ui {
 // TODO(spang): Don't worry, we have a plan to remove this.
 class COMPONENT_EXPORT(EVENTS_OZONE) CursorController {
  public:
-  class CursorObserver {
-   public:
-    // Called when cursor location changed.
-    virtual void OnCursorLocationChanged(const gfx::PointF& location) = 0;
-
-   protected:
-    virtual ~CursorObserver() {}
-  };
-
   static CursorController* GetInstance();
 
-  void AddCursorObserver(CursorObserver* observer);
-  void RemoveCursorObserver(CursorObserver* observer);
+  CursorController(const CursorController&) = delete;
+  CursorController& operator=(const CursorController&) = delete;
 
   // Changes the rotation & scale applied for a window.
   void SetCursorConfigForWindow(gfx::AcceleratedWidget widget,
@@ -73,9 +64,6 @@ class COMPONENT_EXPORT(EVENTS_OZONE) CursorController {
   void ApplyCursorConfigForWindow(gfx::AcceleratedWidget widget,
                                   gfx::Vector2dF* delta) const;
 
-  // Notifies controller of new cursor location.
-  void SetCursorLocation(const gfx::PointF& location);
-
  private:
   CursorController();
   ~CursorController();
@@ -89,13 +77,9 @@ class COMPONENT_EXPORT(EVENTS_OZONE) CursorController {
   typedef std::map<gfx::AcceleratedWidget, PerWindowCursorConfiguration>
       WindowToCursorConfigurationMap;
 
-  WindowToCursorConfigurationMap window_to_cursor_configuration_map_;
   mutable base::Lock window_to_cursor_configuration_map_lock_;
-
-  base::ObserverList<CursorObserver>::Unchecked cursor_observers_;
-  mutable base::Lock cursor_observers_lock_;
-
-  DISALLOW_COPY_AND_ASSIGN(CursorController);
+  WindowToCursorConfigurationMap window_to_cursor_configuration_map_
+      GUARDED_BY(window_to_cursor_configuration_map_lock_);
 };
 
 }  // namespace ui

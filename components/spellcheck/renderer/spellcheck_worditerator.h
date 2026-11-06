@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,8 +13,9 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "third_party/icu/source/common/unicode/uscript.h"
 
 namespace base {
@@ -31,6 +32,10 @@ class BreakIterator;
 class SpellcheckCharAttribute {
  public:
   SpellcheckCharAttribute();
+
+  SpellcheckCharAttribute(const SpellcheckCharAttribute&) = delete;
+  SpellcheckCharAttribute& operator=(const SpellcheckCharAttribute&) = delete;
+
   ~SpellcheckCharAttribute();
 
   // Sets the language of the spellchecker. When this function is called with an
@@ -77,8 +82,6 @@ class SpellcheckCharAttribute {
 
   // The script code used by this language.
   UScriptCode script_code_;
-
-  DISALLOW_COPY_AND_ASSIGN(SpellcheckCharAttribute);
 };
 
 // A class which extracts words that can be checked for spelling from a
@@ -106,7 +109,7 @@ class SpellcheckCharAttribute {
 //   SpellcheckWordIterator iterator;
 //   std::u16string text(u"this is a test.");
 //   iterator.Initialize(&attribute, true);
-//   iterator.SetText(text.c_str(), text_.length());
+//   iterator.SetText(text);
 //
 //   std::u16string word;
 //   int offset;
@@ -129,6 +132,10 @@ class SpellcheckWordIterator {
   };
 
   SpellcheckWordIterator();
+
+  SpellcheckWordIterator(const SpellcheckWordIterator&) = delete;
+  SpellcheckWordIterator& operator=(const SpellcheckWordIterator&) = delete;
+
   ~SpellcheckWordIterator();
 
   // Initializes a word-iterator object with the language-specific attribute. If
@@ -144,7 +151,7 @@ class SpellcheckWordIterator {
   // Set text to be iterated. (This text does not have to be NULL-terminated.)
   // This function also resets internal state so we can reuse this iterator
   // without calling Initialize().
-  bool SetText(const char16_t* text, size_t length);
+  bool SetText(std::u16string_view text);
 
   // Advances |iterator_| through |text_| and gets the current status of the
   // word iterator within |text|:
@@ -188,18 +195,15 @@ class SpellcheckWordIterator {
                  size_t input_length,
                  std::u16string* output_string) const;
 
-  // The pointer to the input string from which we are extracting words.
-  const char16_t* text_;
+  // The text from which words are extracted.
+  std::u16string_view text_;
 
   // The language-specific attributes used for filtering out non-word
   // characters.
-  const SpellcheckCharAttribute* attribute_;
+  raw_ptr<const SpellcheckCharAttribute> attribute_;
 
   // The break iterator.
   std::unique_ptr<base::i18n::BreakIterator> iterator_;
-
-  DISALLOW_COPY_AND_ASSIGN(SpellcheckWordIterator);
 };
 
 #endif  // COMPONENTS_SPELLCHECK_RENDERER_SPELLCHECK_WORDITERATOR_H_
-

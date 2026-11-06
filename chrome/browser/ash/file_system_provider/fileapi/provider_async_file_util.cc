@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,50 +6,55 @@
 
 #include <algorithm>
 #include <utility>
+#include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
-#include "base/notreached.h"
+#include "base/notimplemented.h"
 #include "chrome/browser/ash/file_system_provider/mount_path_util.h"
 #include "chrome/browser/ash/file_system_provider/provided_file_system_interface.h"
+#include "chrome/browser/ash/fileapi/fallback_copy_in_foreign_file.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
-#include "storage/browser/blob/shareable_file_reference.h"
+#include "storage/browser/blob/scoped_file.h"
+#include "storage/browser/file_system/file_system_context.h"
 #include "storage/browser/file_system/file_system_operation_context.h"
 #include "storage/browser/file_system/file_system_url.h"
 
 using content::BrowserThread;
 
-namespace ash {
-namespace file_system_provider {
-namespace internal {
+namespace ash::file_system_provider::internal {
 namespace {
 
 // Executes GetFileInfo on the UI thread.
 void GetFileInfoOnUIThread(
     std::unique_ptr<storage::FileSystemOperationContext> context,
     const storage::FileSystemURL& url,
-    int fields,
+    storage::FileSystemOperation::GetMetadataFieldSet fields,
     ProvidedFileSystemInterface::GetMetadataCallback callback) {
   util::FileSystemURLParser parser(url);
   if (!parser.Parse()) {
-    std::move(callback).Run(base::WrapUnique<EntryMetadata>(NULL),
+    std::move(callback).Run(base::WrapUnique<EntryMetadata>(nullptr),
                             base::File::FILE_ERROR_INVALID_OPERATION);
     return;
   }
 
   int fsp_fields = 0;
-  if (fields & storage::FileSystemOperation::GET_METADATA_FIELD_IS_DIRECTORY)
+  if (fields.Has(
+          storage::FileSystemOperation::GetMetadataField::kIsDirectory)) {
     fsp_fields |= ProvidedFileSystemInterface::METADATA_FIELD_IS_DIRECTORY;
-  if (fields & storage::FileSystemOperation::GET_METADATA_FIELD_SIZE)
+  }
+  if (fields.Has(storage::FileSystemOperation::GetMetadataField::kSize)) {
     fsp_fields |= ProvidedFileSystemInterface::METADATA_FIELD_SIZE;
-  if (fields & storage::FileSystemOperation::GET_METADATA_FIELD_LAST_MODIFIED)
+  }
+  if (fields.Has(
+          storage::FileSystemOperation::GetMetadataField::kLastModified)) {
     fsp_fields |= ProvidedFileSystemInterface::METADATA_FIELD_MODIFICATION_TIME;
+  }
 
   parser.file_system()->GetMetadata(parser.file_path(), fsp_fields,
                                     std::move(callback));
@@ -57,7 +62,7 @@ void GetFileInfoOnUIThread(
 
 // Routes the response of GetFileInfo back to the IO thread with a type
 // conversion.
-void OnGetFileInfo(int fields,
+void OnGetFileInfo(storage::FileSystemOperation::GetMetadataFieldSet fields,
                    storage::AsyncFileUtil::GetFileInfoCallback callback,
                    std::unique_ptr<EntryMetadata> metadata,
                    base::File::Error result) {
@@ -68,18 +73,22 @@ void OnGetFileInfo(int fields,
     return;
   }
 
-  DCHECK(metadata.get());
+  CHECK(metadata.get(), base::NotFatalUntil::M160);
   base::File::Info file_info;
 
-  if (fields & storage::FileSystemOperation::GET_METADATA_FIELD_IS_DIRECTORY)
+  if (fields.Has(
+          storage::FileSystemOperation::GetMetadataField::kIsDirectory)) {
     file_info.is_directory = *metadata->is_directory;
-  if (fields & storage::FileSystemOperation::GET_METADATA_FIELD_SIZE)
+  }
+  if (fields.Has(storage::FileSystemOperation::GetMetadataField::kSize)) {
     file_info.size = std::max(int64_t{0}, *metadata->size);
+  }
 
-  if (fields & storage::FileSystemOperation::GET_METADATA_FIELD_LAST_MODIFIED) {
+  if (fields.Has(
+          storage::FileSystemOperation::GetMetadataField::kLastModified)) {
     file_info.last_modified = *metadata->modification_time;
     // TODO(mtomasz): Add support for last modified time and creation time.
-    // See: crbug.com/388540.
+    // See: crbug.com/41116994.
     file_info.last_accessed = *metadata->modification_time;  // Not supported.
     file_info.creation_time = *metadata->modification_time;  // Not supported.
   }
@@ -99,8 +108,7 @@ void ReadDirectoryOnUIThread(
   util::FileSystemURLParser parser(url);
   if (!parser.Parse()) {
     callback.Run(base::File::FILE_ERROR_INVALID_OPERATION,
-                 storage::AsyncFileUtil::EntryList(),
-                 false /* has_more */);
+                 storage::AsyncFileUtil::EntryList(), /*has_more=*/false);
     return;
   }
 
@@ -112,22 +120,13 @@ void OnReadDirectory(storage::AsyncFileUtil::ReadDirectoryCallback callback,
                      base::File::Error result,
                      storage::AsyncFileUtil::EntryList entry_list,
                      bool has_more) {
-  auto new_end_it =
-      std::remove_if(entry_list.begin(), entry_list.end(),
-                     [](const filesystem::mojom::DirectoryEntry& entry) {
-                       if (!filesystem::mojom::IsKnownEnumValue(entry.type)) {
-                         return true;
-                       }
-                       if (entry.name.empty() || entry.name.value() == "." ||
-                           entry.name.value() == ".." ||
-                           base::Contains(entry.name.value(), '\0') ||
-                           base::Contains(entry.name.value(), '/') ||
-                           base::Contains(entry.name.value(), '\\')) {
-                         return true;
-                       }
-                       return false;
-                     });
-  entry_list.erase(new_end_it, entry_list.end());
+  std::erase_if(entry_list, [](const filesystem::mojom::DirectoryEntry& entry) {
+    return !filesystem::mojom::IsKnownEnumValue(entry.type) ||
+           entry.name.empty() || entry.name.value() == "." ||
+           entry.name.value() == ".." || entry.name.value().contains('\0') ||
+           entry.name.value().contains('/') ||
+           entry.name.value().contains('\\');
+  });
 
   content::GetIOThreadTaskRunner({})->PostTask(
       FROM_HERE,
@@ -300,16 +299,16 @@ void OnTruncate(storage::AsyncFileUtil::StatusCallback callback,
 
 }  // namespace
 
-ProviderAsyncFileUtil::ProviderAsyncFileUtil() {}
+ProviderAsyncFileUtil::ProviderAsyncFileUtil() = default;
 
-ProviderAsyncFileUtil::~ProviderAsyncFileUtil() {}
+ProviderAsyncFileUtil::~ProviderAsyncFileUtil() = default;
 
 void ProviderAsyncFileUtil::CreateOrOpen(
     std::unique_ptr<storage::FileSystemOperationContext> context,
     const storage::FileSystemURL& url,
-    int file_flags,
+    uint32_t file_flags,
     CreateOrOpenCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
   if ((file_flags & base::File::FLAG_CREATE) ||
       (file_flags & base::File::FLAG_OPEN_ALWAYS) ||
       (file_flags & base::File::FLAG_CREATE_ALWAYS) ||
@@ -328,7 +327,7 @@ void ProviderAsyncFileUtil::EnsureFileExists(
     std::unique_ptr<storage::FileSystemOperationContext> context,
     const storage::FileSystemURL& url,
     EnsureFileExistsCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE, base::BindOnce(&CreateFileOnUIThread, std::move(context), url,
                                 base::BindOnce(&OnCreateFileForEnsureFileExists,
@@ -341,7 +340,7 @@ void ProviderAsyncFileUtil::CreateDirectory(
     bool exclusive,
     bool recursive,
     StatusCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE, base::BindOnce(&CreateDirectoryOnUIThread, std::move(context),
                                 url, exclusive, recursive,
@@ -352,9 +351,9 @@ void ProviderAsyncFileUtil::CreateDirectory(
 void ProviderAsyncFileUtil::GetFileInfo(
     std::unique_ptr<storage::FileSystemOperationContext> context,
     const storage::FileSystemURL& url,
-    int fields,
+    GetMetadataFieldSet fields,
     GetFileInfoCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE,
       base::BindOnce(
@@ -366,7 +365,7 @@ void ProviderAsyncFileUtil::ReadDirectory(
     std::unique_ptr<storage::FileSystemOperationContext> context,
     const storage::FileSystemURL& url,
     ReadDirectoryCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE,
       base::BindOnce(&ReadDirectoryOnUIThread, std::move(context), url,
@@ -379,7 +378,7 @@ void ProviderAsyncFileUtil::Touch(
     const base::Time& last_access_time,
     const base::Time& last_modified_time,
     StatusCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
   std::move(callback).Run(base::File::FILE_ERROR_ACCESS_DENIED);
 }
 
@@ -388,7 +387,7 @@ void ProviderAsyncFileUtil::Truncate(
     const storage::FileSystemURL& url,
     int64_t length,
     StatusCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE,
       base::BindOnce(&TruncateOnUIThread, std::move(context), url, length,
@@ -399,10 +398,10 @@ void ProviderAsyncFileUtil::CopyFileLocal(
     std::unique_ptr<storage::FileSystemOperationContext> context,
     const storage::FileSystemURL& src_url,
     const storage::FileSystemURL& dest_url,
-    CopyOrMoveOption option,
+    CopyOrMoveOptionSet options,
     CopyFileProgressCallback progress_callback,
     StatusCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
   // TODO(mtomasz): Consier adding support for options (preserving last modified
   // time) as well as the progress callback.
   content::GetUIThreadTaskRunner({})->PostTask(
@@ -416,9 +415,9 @@ void ProviderAsyncFileUtil::MoveFileLocal(
     std::unique_ptr<storage::FileSystemOperationContext> context,
     const storage::FileSystemURL& src_url,
     const storage::FileSystemURL& dest_url,
-    CopyOrMoveOption option,
+    CopyOrMoveOptionSet options,
     StatusCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
   // TODO(mtomasz): Consier adding support for options (preserving last modified
   // time) as well as the progress callback.
   content::GetUIThreadTaskRunner({})->PostTask(
@@ -433,15 +432,17 @@ void ProviderAsyncFileUtil::CopyInForeignFile(
     const base::FilePath& src_file_path,
     const storage::FileSystemURL& dest_url,
     StatusCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  std::move(callback).Run(base::File::FILE_ERROR_ACCESS_DENIED);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
+  // TODO(b/289322939): can the FileSystemProvider accept a Blob instead?
+  ash::FallbackCopyInForeignFile(*this, std::move(context), src_file_path,
+                                 dest_url, std::move(callback));
 }
 
 void ProviderAsyncFileUtil::DeleteFile(
     std::unique_ptr<storage::FileSystemOperationContext> context,
     const storage::FileSystemURL& url,
     StatusCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE,
       base::BindOnce(&DeleteEntryOnUIThread, std::move(context), url,
@@ -453,7 +454,7 @@ void ProviderAsyncFileUtil::DeleteDirectory(
     std::unique_ptr<storage::FileSystemOperationContext> context,
     const storage::FileSystemURL& url,
     StatusCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE,
       base::BindOnce(&DeleteEntryOnUIThread, std::move(context), url,
@@ -465,7 +466,7 @@ void ProviderAsyncFileUtil::DeleteRecursively(
     std::unique_ptr<storage::FileSystemOperationContext> context,
     const storage::FileSystemURL& url,
     StatusCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE,
       base::BindOnce(&DeleteEntryOnUIThread, std::move(context), url,
@@ -477,13 +478,11 @@ void ProviderAsyncFileUtil::CreateSnapshotFile(
     std::unique_ptr<storage::FileSystemOperationContext> context,
     const storage::FileSystemURL& url,
     CreateSnapshotFileCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
   NOTIMPLEMENTED();
   std::move(callback).Run(base::File::FILE_ERROR_INVALID_OPERATION,
                           base::File::Info(), base::FilePath(),
-                          scoped_refptr<storage::ShareableFileReference>());
+                          storage::ScopedFile());
 }
 
-}  // namespace internal
-}  // namespace file_system_provider
-}  // namespace ash
+}  // namespace ash::file_system_provider::internal

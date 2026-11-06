@@ -1,11 +1,9 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_DOWNLOAD_PUBLIC_COMMON_DOWNLOAD_FILE_IMPL_H_
 #define COMPONENTS_DOWNLOAD_PUBLIC_COMMON_DOWNLOAD_FILE_IMPL_H_
-
-#include "components/download/public/common/download_file.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -17,20 +15,27 @@
 
 #include "base/cancelable_callback.h"
 #include "base/files/file.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
-#include "base/task_runner.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/task/task_runner.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "build/build_config.h"
 #include "components/download/public/common/base_file.h"
+#include "components/download/public/common/download_file.h"
 #include "components/download/public/common/download_item.h"
 #include "components/download/public/common/download_save_info.h"
 #include "components/download/public/common/rate_estimator.h"
+#include "components/enterprise/buildflags/buildflags.h"
 #include "components/services/quarantine/public/mojom/quarantine.mojom.h"
 #include "mojo/public/cpp/system/simple_watcher.h"
+
+#if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
+#include "components/enterprise/obfuscation/core/download_obfuscator.h"  // nogncheck
+#endif  // BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
 
 namespace download {
 
@@ -52,13 +57,15 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadFileImpl : public DownloadFile {
                    uint32_t download_id,
                    base::WeakPtr<DownloadDestinationObserver> observer);
 
+  DownloadFileImpl(const DownloadFileImpl&) = delete;
+  DownloadFileImpl& operator=(const DownloadFileImpl&) = delete;
+
   ~DownloadFileImpl() override;
 
   // DownloadFile functions.
   void Initialize(InitializeCallback initialize_callback,
                   CancelRequestCallback cancel_request_callback,
-                  const DownloadItem::ReceivedSlices& received_slices,
-                  bool is_parallelizable) override;
+                  const DownloadItem::ReceivedSlices& received_slices) override;
   void AddInputStream(std::unique_ptr<InputStream> stream,
                       int64_t offset) override;
   void RenameAndUniquify(const base::FilePath& full_path,
@@ -68,6 +75,7 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadFileImpl : public DownloadFile {
       const std::string& client_guid,
       const GURL& source_url,
       const GURL& referrer_url,
+      const std::optional<url::Origin>& request_initiator,
       mojo::PendingRemote<quarantine::mojom::Quarantine> remote_quarantine,
       RenameCompletionCallback callback) override;
   void Detach() override;
@@ -78,16 +86,9 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadFileImpl : public DownloadFile {
   void Pause() override;
   void Resume() override;
 
-#if defined(OS_ANDROID)
-  void RenameToIntermediateUri(const GURL& original_url,
-                               const GURL& referrer_url,
-                               const base::FilePath& file_name,
-                               const std::string& mime_type,
-                               const base::FilePath& current_path,
-                               RenameCompletionCallback callback) override;
+#if BUILDFLAG(IS_ANDROID)
   void PublishDownload(RenameCompletionCallback callback) override;
-  base::FilePath GetDisplayName() override;
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
 
   // Wrapper of a ByteStreamReader or ScopedDataPipeConsumerHandle, and the meta
   // data needed to write to a slice of the target file.
@@ -102,6 +103,10 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadFileImpl : public DownloadFile {
     SourceStream(int64_t offset,
                  int64_t starting_file_write_offset,
                  std::unique_ptr<InputStream> stream);
+
+    SourceStream(const SourceStream&) = delete;
+    SourceStream& operator=(const SourceStream&) = delete;
+
     ~SourceStream();
 
     void Initialize();
@@ -132,9 +137,10 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadFileImpl : public DownloadFile {
     // DownloadItem/DownloadFile somewhere.
     DownloadInterruptReason GetCompletionStatus() const;
 
-    using CompletionCallback = base::OnceCallback<void(SourceStream*)>;
-    // Register an callback to be called when download completes.
-    void RegisterCompletionCallback(CompletionCallback callback);
+    // Requests that on completion, `StreamSource` invokes
+    // `DownloadFileImpl::OnStreamCompleted` with `this`.
+    void RequestCompletionNotification(
+        base::WeakPtr<DownloadFileImpl> download_file);
 
     InputStream::StreamState Read(scoped_refptr<net::IOBuffer>* data,
                                   size_t* length);
@@ -191,8 +197,6 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadFileImpl : public DownloadFile {
 
     // Cancelable callback to read from the |input_stream_|.
     base::CancelableOnceClosure read_stream_callback_;
-
-    DISALLOW_COPY_AND_ASSIGN(SourceStream);
   };
 
   // Sets the task runner for testing purpose, must be called before
@@ -202,13 +206,12 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadFileImpl : public DownloadFile {
 
  protected:
   // For test class overrides.
-  // Validate the first |bytes_to_validate| bytes and write the next
-  // |bytes_to_write| bytes of data from the offset to the file.
+  // Validate that |to_validate| exists at |offset| in the file, then write
+  // |to_write| after it.
   virtual DownloadInterruptReason ValidateAndWriteDataToFile(
       int64_t offset,
-      const char* data,
-      size_t bytes_to_validate,
-      size_t bytes_to_write);
+      base::span<const uint8_t> to_validate,
+      base::span<const uint8_t> to_write);
 
   virtual base::TimeDelta GetRetryDelayForFailedRename(int attempt_number);
 
@@ -239,6 +242,8 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadFileImpl : public DownloadFile {
     std::string client_guid;  // See BaseFile::AnnotateWithSourceInformation()
     GURL source_url;          // See BaseFile::AnnotateWithSourceInformation()
     GURL referrer_url;        // See BaseFile::AnnotateWithSourceInformation()
+    std::optional<url::Origin>
+        request_initiator;  // See BaseFile::AnnotateWithSourceInformation()
     mojo::PendingRemote<quarantine::mojom::Quarantine> remote_quarantine;
     int retries_left;         // RenameWithRetryInternal() will
                               // automatically retry until this
@@ -363,12 +368,6 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadFileImpl : public DownloadFile {
   base::TimeTicks download_start_;
   RateEstimator rate_estimator_;
   int num_active_streams_;
-  bool record_stream_bandwidth_;
-  base::TimeTicks last_update_time_;
-  size_t bytes_seen_with_parallel_streams_;
-  size_t bytes_seen_without_parallel_streams_;
-  base::TimeDelta download_time_with_parallel_streams_;
-  base::TimeDelta download_time_without_parallel_streams_;
 
   // The slices received, this is being updated when new data are written.
   std::vector<DownloadItem::ReceivedSlice> received_slices_;
@@ -390,16 +389,14 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadFileImpl : public DownloadFile {
   // TaskRunner this object lives on after initialization.
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
 
-#if defined(OS_ANDROID)
-  base::FilePath display_name_;
-#endif  // defined(OS_ANDROID)
-
   SEQUENCE_CHECKER(sequence_checker_);
+
+#if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
+  std::unique_ptr<enterprise_obfuscation::DownloadObfuscator> obfuscator_;
+#endif
 
   base::WeakPtr<DownloadDestinationObserver> observer_;
   base::WeakPtrFactory<DownloadFileImpl> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(DownloadFileImpl);
 };
 
 }  // namespace download

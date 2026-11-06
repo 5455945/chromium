@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -8,7 +8,7 @@
 //    clang-format -i -style=chromium filename
 // DO NOT EDIT!
 
-#include <string.h>
+#include <string_view>
 
 #include "base/notreached.h"
 #include "ui/gl/egl_mock.h"
@@ -23,6 +23,13 @@ void MakeEglMockFunctionUnique(const char* func_name) {
 }  // namespace
 
 namespace gl {
+
+void GL_BINDING_CALL
+MockEGLInterface::Mock_eglAcquireExternalContextANGLE(EGLDisplay dpy,
+                                                      EGLSurface readAndDraw) {
+  MakeEglMockFunctionUnique("eglAcquireExternalContextANGLE");
+  interface_->AcquireExternalContextANGLE(dpy, readAndDraw);
+}
 
 EGLBoolean GL_BINDING_CALL MockEGLInterface::Mock_eglBindAPI(EGLenum api) {
   MakeEglMockFunctionUnique("eglBindAPI");
@@ -49,6 +56,15 @@ MockEGLInterface::Mock_eglChooseConfig(EGLDisplay dpy,
 }
 
 EGLint GL_BINDING_CALL
+MockEGLInterface::Mock_eglClientWaitSync(EGLDisplay dpy,
+                                         EGLSync sync,
+                                         EGLint flags,
+                                         EGLTime timeout) {
+  MakeEglMockFunctionUnique("eglClientWaitSync");
+  return interface_->ClientWaitSync(dpy, sync, flags, timeout);
+}
+
+EGLint GL_BINDING_CALL
 MockEGLInterface::Mock_eglClientWaitSyncKHR(EGLDisplay dpy,
                                             EGLSyncKHR sync,
                                             EGLint flags,
@@ -65,6 +81,13 @@ MockEGLInterface::Mock_eglCopyBuffers(EGLDisplay dpy,
   return interface_->CopyBuffers(dpy, surface, target);
 }
 
+void* GL_BINDING_CALL
+MockEGLInterface::Mock_eglCopyMetalSharedEventANGLE(EGLDisplay dpy,
+                                                    EGLSync sync) {
+  MakeEglMockFunctionUnique("eglCopyMetalSharedEventANGLE");
+  return interface_->CopyMetalSharedEventANGLE(dpy, sync);
+}
+
 EGLContext GL_BINDING_CALL
 MockEGLInterface::Mock_eglCreateContext(EGLDisplay dpy,
                                         EGLConfig config,
@@ -72,6 +95,16 @@ MockEGLInterface::Mock_eglCreateContext(EGLDisplay dpy,
                                         const EGLint* attrib_list) {
   MakeEglMockFunctionUnique("eglCreateContext");
   return interface_->CreateContext(dpy, config, share_context, attrib_list);
+}
+
+EGLImage GL_BINDING_CALL
+MockEGLInterface::Mock_eglCreateImage(EGLDisplay dpy,
+                                      EGLContext ctx,
+                                      EGLenum target,
+                                      EGLClientBuffer buffer,
+                                      const EGLAttrib* attrib_list) {
+  MakeEglMockFunctionUnique("eglCreateImage");
+  return interface_->CreateImage(dpy, ctx, target, buffer, attrib_list);
 }
 
 EGLImageKHR GL_BINDING_CALL
@@ -113,6 +146,28 @@ MockEGLInterface::Mock_eglCreatePixmapSurface(EGLDisplay dpy,
   return interface_->CreatePixmapSurface(dpy, config, pixmap, attrib_list);
 }
 
+EGLSurface GL_BINDING_CALL
+MockEGLInterface::Mock_eglCreatePlatformPixmapSurface(
+    EGLDisplay dpy,
+    EGLConfig config,
+    void* native_pixmap,
+    const EGLAttrib* attrib_list) {
+  MakeEglMockFunctionUnique("eglCreatePlatformPixmapSurface");
+  return interface_->CreatePlatformPixmapSurface(dpy, config, native_pixmap,
+                                                 attrib_list);
+}
+
+EGLSurface GL_BINDING_CALL
+MockEGLInterface::Mock_eglCreatePlatformWindowSurface(
+    EGLDisplay dpy,
+    EGLConfig config,
+    void* native_window,
+    const EGLAttrib* attrib_list) {
+  MakeEglMockFunctionUnique("eglCreatePlatformWindowSurface");
+  return interface_->CreatePlatformWindowSurface(dpy, config, native_window,
+                                                 attrib_list);
+}
+
 EGLStreamKHR GL_BINDING_CALL
 MockEGLInterface::Mock_eglCreateStreamKHR(EGLDisplay dpy,
                                           const EGLint* attrib_list) {
@@ -128,6 +183,14 @@ MockEGLInterface::Mock_eglCreateStreamProducerD3DTextureANGLE(
   MakeEglMockFunctionUnique("eglCreateStreamProducerD3DTextureANGLE");
   return interface_->CreateStreamProducerD3DTextureANGLE(dpy, stream,
                                                          attrib_list);
+}
+
+EGLSync GL_BINDING_CALL
+MockEGLInterface::Mock_eglCreateSync(EGLDisplay dpy,
+                                     EGLenum type,
+                                     const EGLAttrib* attrib_list) {
+  MakeEglMockFunctionUnique("eglCreateSync");
+  return interface_->CreateSync(dpy, type, attrib_list);
 }
 
 EGLSyncKHR GL_BINDING_CALL
@@ -161,6 +224,12 @@ MockEGLInterface::Mock_eglDestroyContext(EGLDisplay dpy, EGLContext ctx) {
 }
 
 EGLBoolean GL_BINDING_CALL
+MockEGLInterface::Mock_eglDestroyImage(EGLDisplay dpy, EGLImage image) {
+  MakeEglMockFunctionUnique("eglDestroyImage");
+  return interface_->DestroyImage(dpy, image);
+}
+
+EGLBoolean GL_BINDING_CALL
 MockEGLInterface::Mock_eglDestroyImageKHR(EGLDisplay dpy, EGLImageKHR image) {
   MakeEglMockFunctionUnique("eglDestroyImageKHR");
   return interface_->DestroyImageKHR(dpy, image);
@@ -177,6 +246,12 @@ EGLBoolean GL_BINDING_CALL
 MockEGLInterface::Mock_eglDestroySurface(EGLDisplay dpy, EGLSurface surface) {
   MakeEglMockFunctionUnique("eglDestroySurface");
   return interface_->DestroySurface(dpy, surface);
+}
+
+EGLBoolean GL_BINDING_CALL MockEGLInterface::Mock_eglDestroySync(EGLDisplay dpy,
+                                                                 EGLSync sync) {
+  MakeEglMockFunctionUnique("eglDestroySync");
+  return interface_->DestroySync(dpy, sync);
 }
 
 EGLBoolean GL_BINDING_CALL
@@ -211,6 +286,16 @@ MockEGLInterface::Mock_eglExportDMABUFImageQueryMESA(EGLDisplay dpy,
   MakeEglMockFunctionUnique("eglExportDMABUFImageQueryMESA");
   return interface_->ExportDMABUFImageQueryMESA(dpy, image, fourcc, num_planes,
                                                 modifiers);
+}
+
+EGLBoolean GL_BINDING_CALL
+MockEGLInterface::Mock_eglExportVkImageANGLE(EGLDisplay dpy,
+                                             EGLImageKHR image,
+                                             void* vk_image,
+                                             void* vk_image_create_info) {
+  MakeEglMockFunctionUnique("eglExportVkImageANGLE");
+  return interface_->ExportVkImageANGLE(dpy, image, vk_image,
+                                        vk_image_create_info);
 }
 
 EGLBoolean GL_BINDING_CALL
@@ -338,6 +423,15 @@ MockEGLInterface::Mock_eglGetProcAddress(const char* procname) {
 }
 
 EGLBoolean GL_BINDING_CALL
+MockEGLInterface::Mock_eglGetSyncAttrib(EGLDisplay dpy,
+                                        EGLSync sync,
+                                        EGLint attribute,
+                                        EGLAttrib* value) {
+  MakeEglMockFunctionUnique("eglGetSyncAttrib");
+  return interface_->GetSyncAttrib(dpy, sync, attribute, value);
+}
+
+EGLBoolean GL_BINDING_CALL
 MockEGLInterface::Mock_eglGetSyncAttribKHR(EGLDisplay dpy,
                                            EGLSyncKHR sync,
                                            EGLint attribute,
@@ -386,6 +480,12 @@ MockEGLInterface::Mock_eglLabelObjectKHR(EGLDisplay display,
   return interface_->LabelObjectKHR(display, objectType, object, label);
 }
 
+void GL_BINDING_CALL
+MockEGLInterface::Mock_eglLockVulkanQueueANGLE(EGLDisplay dpy) {
+  MakeEglMockFunctionUnique("eglLockVulkanQueueANGLE");
+  interface_->LockVulkanQueueANGLE(dpy);
+}
+
 EGLBoolean GL_BINDING_CALL
 MockEGLInterface::Mock_eglMakeCurrent(EGLDisplay dpy,
                                       EGLSurface draw,
@@ -406,6 +506,14 @@ MockEGLInterface::Mock_eglPostSubBufferNV(EGLDisplay dpy,
   return interface_->PostSubBufferNV(dpy, surface, x, y, width, height);
 }
 
+EGLBoolean GL_BINDING_CALL
+MockEGLInterface::Mock_eglPresentationTimeANDROID(EGLDisplay dpy,
+                                                  EGLSurface surface,
+                                                  EGLnsecsANDROID time) {
+  MakeEglMockFunctionUnique("eglPresentationTimeANDROID");
+  return interface_->PresentationTimeANDROID(dpy, surface, time);
+}
+
 EGLenum GL_BINDING_CALL MockEGLInterface::Mock_eglQueryAPI(void) {
   MakeEglMockFunctionUnique("eglQueryAPI");
   return interface_->QueryAPI();
@@ -424,6 +532,14 @@ EGLBoolean GL_BINDING_CALL
 MockEGLInterface::Mock_eglQueryDebugKHR(EGLint attribute, EGLAttrib* value) {
   MakeEglMockFunctionUnique("eglQueryDebugKHR");
   return interface_->QueryDebugKHR(attribute, value);
+}
+
+EGLBoolean GL_BINDING_CALL
+MockEGLInterface::Mock_eglQueryDeviceAttribEXT(EGLDeviceEXT device,
+                                               EGLint attribute,
+                                               EGLAttrib* value) {
+  MakeEglMockFunctionUnique("eglQueryDeviceAttribEXT");
+  return interface_->QueryDeviceAttribEXT(device, attribute, value);
 }
 
 const char* GL_BINDING_CALL
@@ -447,6 +563,36 @@ MockEGLInterface::Mock_eglQueryDisplayAttribANGLE(EGLDisplay dpy,
                                                   EGLAttrib* value) {
   MakeEglMockFunctionUnique("eglQueryDisplayAttribANGLE");
   return interface_->QueryDisplayAttribANGLE(dpy, attribute, value);
+}
+
+EGLBoolean GL_BINDING_CALL
+MockEGLInterface::Mock_eglQueryDisplayAttribEXT(EGLDisplay dpy,
+                                                EGLint attribute,
+                                                EGLAttrib* value) {
+  MakeEglMockFunctionUnique("eglQueryDisplayAttribEXT");
+  return interface_->QueryDisplayAttribEXT(dpy, attribute, value);
+}
+
+EGLBoolean GL_BINDING_CALL
+MockEGLInterface::Mock_eglQueryDmaBufFormatsEXT(EGLDisplay dpy,
+                                                EGLint max_formats,
+                                                EGLint* formats,
+                                                EGLint* num_formats) {
+  MakeEglMockFunctionUnique("eglQueryDmaBufFormatsEXT");
+  return interface_->QueryDmaBufFormatsEXT(dpy, max_formats, formats,
+                                           num_formats);
+}
+
+EGLBoolean GL_BINDING_CALL
+MockEGLInterface::Mock_eglQueryDmaBufModifiersEXT(EGLDisplay dpy,
+                                                  EGLint format,
+                                                  EGLint max_modifiers,
+                                                  EGLuint64KHR* modifiers,
+                                                  EGLBoolean* external_only,
+                                                  EGLint* num_modifiers) {
+  MakeEglMockFunctionUnique("eglQueryDmaBufModifiersEXT");
+  return interface_->QueryDmaBufModifiersEXT(
+      dpy, format, max_modifiers, modifiers, external_only, num_modifiers);
 }
 
 EGLBoolean GL_BINDING_CALL
@@ -507,6 +653,12 @@ MockEGLInterface::Mock_eglReacquireHighPowerGPUANGLE(EGLDisplay dpy,
 }
 
 void GL_BINDING_CALL
+MockEGLInterface::Mock_eglReleaseExternalContextANGLE(EGLDisplay dpy) {
+  MakeEglMockFunctionUnique("eglReleaseExternalContextANGLE");
+  interface_->ReleaseExternalContextANGLE(dpy);
+}
+
+void GL_BINDING_CALL
 MockEGLInterface::Mock_eglReleaseHighPowerGPUANGLE(EGLDisplay dpy,
                                                    EGLContext ctx) {
   MakeEglMockFunctionUnique("eglReleaseHighPowerGPUANGLE");
@@ -532,6 +684,12 @@ MockEGLInterface::Mock_eglSetBlobCacheFuncsANDROID(EGLDisplay dpy,
                                                    EGLGetBlobFuncANDROID get) {
   MakeEglMockFunctionUnique("eglSetBlobCacheFuncsANDROID");
   interface_->SetBlobCacheFuncsANDROID(dpy, set, get);
+}
+
+void GL_BINDING_CALL MockEGLInterface::Mock_eglSetValidationEnabledANGLE(
+    EGLBoolean validationState) {
+  MakeEglMockFunctionUnique("eglSetValidationEnabledANGLE");
+  interface_->SetValidationEnabledANGLE(validationState);
 }
 
 EGLBoolean GL_BINDING_CALL
@@ -620,6 +778,12 @@ EGLBoolean GL_BINDING_CALL MockEGLInterface::Mock_eglTerminate(EGLDisplay dpy) {
   return interface_->Terminate(dpy);
 }
 
+void GL_BINDING_CALL
+MockEGLInterface::Mock_eglUnlockVulkanQueueANGLE(EGLDisplay dpy) {
+  MakeEglMockFunctionUnique("eglUnlockVulkanQueueANGLE");
+  interface_->UnlockVulkanQueueANGLE(dpy);
+}
+
 EGLBoolean GL_BINDING_CALL MockEGLInterface::Mock_eglWaitClient(void) {
   MakeEglMockFunctionUnique("eglWaitClient");
   return interface_->WaitClient();
@@ -635,11 +799,24 @@ EGLBoolean GL_BINDING_CALL MockEGLInterface::Mock_eglWaitNative(EGLint engine) {
   return interface_->WaitNative(engine);
 }
 
+EGLint GL_BINDING_CALL MockEGLInterface::Mock_eglWaitSync(EGLDisplay dpy,
+                                                          EGLSync sync,
+                                                          EGLint flags) {
+  MakeEglMockFunctionUnique("eglWaitSync");
+  return interface_->WaitSync(dpy, sync, flags);
+}
+
 EGLint GL_BINDING_CALL MockEGLInterface::Mock_eglWaitSyncKHR(EGLDisplay dpy,
                                                              EGLSyncKHR sync,
                                                              EGLint flags) {
   MakeEglMockFunctionUnique("eglWaitSyncKHR");
   return interface_->WaitSyncKHR(dpy, sync, flags);
+}
+
+void GL_BINDING_CALL
+MockEGLInterface::Mock_eglWaitUntilWorkScheduledANGLE(EGLDisplay dpy) {
+  MakeEglMockFunctionUnique("eglWaitUntilWorkScheduledANGLE");
+  interface_->WaitUntilWorkScheduledANGLE(dpy);
 }
 
 static void MockEglInvalidFunction() {
@@ -648,192 +825,251 @@ static void MockEglInvalidFunction() {
 
 GLFunctionPointerType GL_BINDING_CALL
 MockEGLInterface::GetGLProcAddress(const char* name) {
-  if (strcmp(name, "eglBindAPI") == 0)
+  std::string_view name_view(name);
+  if (name_view == "eglAcquireExternalContextANGLE")
+    return reinterpret_cast<GLFunctionPointerType>(
+        Mock_eglAcquireExternalContextANGLE);
+  if (name_view == "eglBindAPI")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglBindAPI);
-  if (strcmp(name, "eglBindTexImage") == 0)
+  if (name_view == "eglBindTexImage")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglBindTexImage);
-  if (strcmp(name, "eglChooseConfig") == 0)
+  if (name_view == "eglChooseConfig")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglChooseConfig);
-  if (strcmp(name, "eglClientWaitSyncKHR") == 0)
+  if (name_view == "eglClientWaitSync")
+    return reinterpret_cast<GLFunctionPointerType>(Mock_eglClientWaitSync);
+  if (name_view == "eglClientWaitSyncKHR")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglClientWaitSyncKHR);
-  if (strcmp(name, "eglCopyBuffers") == 0)
+  if (name_view == "eglCopyBuffers")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglCopyBuffers);
-  if (strcmp(name, "eglCreateContext") == 0)
+  if (name_view == "eglCopyMetalSharedEventANGLE")
+    return reinterpret_cast<GLFunctionPointerType>(
+        Mock_eglCopyMetalSharedEventANGLE);
+  if (name_view == "eglCreateContext")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglCreateContext);
-  if (strcmp(name, "eglCreateImageKHR") == 0)
+  if (name_view == "eglCreateImage")
+    return reinterpret_cast<GLFunctionPointerType>(Mock_eglCreateImage);
+  if (name_view == "eglCreateImageKHR")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglCreateImageKHR);
-  if (strcmp(name, "eglCreatePbufferFromClientBuffer") == 0)
+  if (name_view == "eglCreatePbufferFromClientBuffer")
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglCreatePbufferFromClientBuffer);
-  if (strcmp(name, "eglCreatePbufferSurface") == 0)
+  if (name_view == "eglCreatePbufferSurface")
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglCreatePbufferSurface);
-  if (strcmp(name, "eglCreatePixmapSurface") == 0)
+  if (name_view == "eglCreatePixmapSurface")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglCreatePixmapSurface);
-  if (strcmp(name, "eglCreateStreamKHR") == 0)
+  if (name_view == "eglCreatePlatformPixmapSurface")
+    return reinterpret_cast<GLFunctionPointerType>(
+        Mock_eglCreatePlatformPixmapSurface);
+  if (name_view == "eglCreatePlatformWindowSurface")
+    return reinterpret_cast<GLFunctionPointerType>(
+        Mock_eglCreatePlatformWindowSurface);
+  if (name_view == "eglCreateStreamKHR")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglCreateStreamKHR);
-  if (strcmp(name, "eglCreateStreamProducerD3DTextureANGLE") == 0)
+  if (name_view == "eglCreateStreamProducerD3DTextureANGLE")
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglCreateStreamProducerD3DTextureANGLE);
-  if (strcmp(name, "eglCreateSyncKHR") == 0)
+  if (name_view == "eglCreateSync")
+    return reinterpret_cast<GLFunctionPointerType>(Mock_eglCreateSync);
+  if (name_view == "eglCreateSyncKHR")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglCreateSyncKHR);
-  if (strcmp(name, "eglCreateWindowSurface") == 0)
+  if (name_view == "eglCreateWindowSurface")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglCreateWindowSurface);
-  if (strcmp(name, "eglDebugMessageControlKHR") == 0)
+  if (name_view == "eglDebugMessageControlKHR")
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglDebugMessageControlKHR);
-  if (strcmp(name, "eglDestroyContext") == 0)
+  if (name_view == "eglDestroyContext")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglDestroyContext);
-  if (strcmp(name, "eglDestroyImageKHR") == 0)
+  if (name_view == "eglDestroyImage")
+    return reinterpret_cast<GLFunctionPointerType>(Mock_eglDestroyImage);
+  if (name_view == "eglDestroyImageKHR")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglDestroyImageKHR);
-  if (strcmp(name, "eglDestroyStreamKHR") == 0)
+  if (name_view == "eglDestroyStreamKHR")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglDestroyStreamKHR);
-  if (strcmp(name, "eglDestroySurface") == 0)
+  if (name_view == "eglDestroySurface")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglDestroySurface);
-  if (strcmp(name, "eglDestroySyncKHR") == 0)
+  if (name_view == "eglDestroySync")
+    return reinterpret_cast<GLFunctionPointerType>(Mock_eglDestroySync);
+  if (name_view == "eglDestroySyncKHR")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglDestroySyncKHR);
-  if (strcmp(name, "eglDupNativeFenceFDANDROID") == 0)
+  if (name_view == "eglDupNativeFenceFDANDROID")
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglDupNativeFenceFDANDROID);
-  if (strcmp(name, "eglExportDMABUFImageMESA") == 0)
+  if (name_view == "eglExportDMABUFImageMESA")
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglExportDMABUFImageMESA);
-  if (strcmp(name, "eglExportDMABUFImageQueryMESA") == 0)
+  if (name_view == "eglExportDMABUFImageQueryMESA")
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglExportDMABUFImageQueryMESA);
-  if (strcmp(name, "eglGetCompositorTimingANDROID") == 0)
+  if (name_view == "eglExportVkImageANGLE")
+    return reinterpret_cast<GLFunctionPointerType>(Mock_eglExportVkImageANGLE);
+  if (name_view == "eglGetCompositorTimingANDROID")
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglGetCompositorTimingANDROID);
-  if (strcmp(name, "eglGetCompositorTimingSupportedANDROID") == 0)
+  if (name_view == "eglGetCompositorTimingSupportedANDROID")
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglGetCompositorTimingSupportedANDROID);
-  if (strcmp(name, "eglGetConfigAttrib") == 0)
+  if (name_view == "eglGetConfigAttrib")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglGetConfigAttrib);
-  if (strcmp(name, "eglGetConfigs") == 0)
+  if (name_view == "eglGetConfigs")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglGetConfigs);
-  if (strcmp(name, "eglGetCurrentContext") == 0)
+  if (name_view == "eglGetCurrentContext")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglGetCurrentContext);
-  if (strcmp(name, "eglGetCurrentDisplay") == 0)
+  if (name_view == "eglGetCurrentDisplay")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglGetCurrentDisplay);
-  if (strcmp(name, "eglGetCurrentSurface") == 0)
+  if (name_view == "eglGetCurrentSurface")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglGetCurrentSurface);
-  if (strcmp(name, "eglGetDisplay") == 0)
+  if (name_view == "eglGetDisplay")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglGetDisplay);
-  if (strcmp(name, "eglGetError") == 0)
+  if (name_view == "eglGetError")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglGetError);
-  if (strcmp(name, "eglGetFrameTimestampSupportedANDROID") == 0)
+  if (name_view == "eglGetFrameTimestampSupportedANDROID")
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglGetFrameTimestampSupportedANDROID);
-  if (strcmp(name, "eglGetFrameTimestampsANDROID") == 0)
+  if (name_view == "eglGetFrameTimestampsANDROID")
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglGetFrameTimestampsANDROID);
-  if (strcmp(name, "eglGetMscRateANGLE") == 0)
+  if (name_view == "eglGetMscRateANGLE")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglGetMscRateANGLE);
-  if (strcmp(name, "eglGetNativeClientBufferANDROID") == 0)
+  if (name_view == "eglGetNativeClientBufferANDROID")
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglGetNativeClientBufferANDROID);
-  if (strcmp(name, "eglGetNextFrameIdANDROID") == 0)
+  if (name_view == "eglGetNextFrameIdANDROID")
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglGetNextFrameIdANDROID);
-  if (strcmp(name, "eglGetPlatformDisplay") == 0)
+  if (name_view == "eglGetPlatformDisplay")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglGetPlatformDisplay);
-  if (strcmp(name, "eglGetProcAddress") == 0)
+  if (name_view == "eglGetProcAddress")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglGetProcAddress);
-  if (strcmp(name, "eglGetSyncAttribKHR") == 0)
+  if (name_view == "eglGetSyncAttrib")
+    return reinterpret_cast<GLFunctionPointerType>(Mock_eglGetSyncAttrib);
+  if (name_view == "eglGetSyncAttribKHR")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglGetSyncAttribKHR);
-  if (strcmp(name, "eglGetSyncValuesCHROMIUM") == 0)
+  if (name_view == "eglGetSyncValuesCHROMIUM")
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglGetSyncValuesCHROMIUM);
-  if (strcmp(name, "eglHandleGPUSwitchANGLE") == 0)
+  if (name_view == "eglHandleGPUSwitchANGLE")
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglHandleGPUSwitchANGLE);
-  if (strcmp(name, "eglImageFlushExternalEXT") == 0)
+  if (name_view == "eglImageFlushExternalEXT")
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglImageFlushExternalEXT);
-  if (strcmp(name, "eglInitialize") == 0)
+  if (name_view == "eglInitialize")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglInitialize);
-  if (strcmp(name, "eglLabelObjectKHR") == 0)
+  if (name_view == "eglLabelObjectKHR")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglLabelObjectKHR);
-  if (strcmp(name, "eglMakeCurrent") == 0)
+  if (name_view == "eglLockVulkanQueueANGLE")
+    return reinterpret_cast<GLFunctionPointerType>(
+        Mock_eglLockVulkanQueueANGLE);
+  if (name_view == "eglMakeCurrent")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglMakeCurrent);
-  if (strcmp(name, "eglPostSubBufferNV") == 0)
+  if (name_view == "eglPostSubBufferNV")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglPostSubBufferNV);
-  if (strcmp(name, "eglQueryAPI") == 0)
+  if (name_view == "eglPresentationTimeANDROID")
+    return reinterpret_cast<GLFunctionPointerType>(
+        Mock_eglPresentationTimeANDROID);
+  if (name_view == "eglQueryAPI")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglQueryAPI);
-  if (strcmp(name, "eglQueryContext") == 0)
+  if (name_view == "eglQueryContext")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglQueryContext);
-  if (strcmp(name, "eglQueryDebugKHR") == 0)
+  if (name_view == "eglQueryDebugKHR")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglQueryDebugKHR);
-  if (strcmp(name, "eglQueryDeviceStringEXT") == 0)
+  if (name_view == "eglQueryDeviceAttribEXT")
+    return reinterpret_cast<GLFunctionPointerType>(
+        Mock_eglQueryDeviceAttribEXT);
+  if (name_view == "eglQueryDeviceStringEXT")
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglQueryDeviceStringEXT);
-  if (strcmp(name, "eglQueryDevicesEXT") == 0)
+  if (name_view == "eglQueryDevicesEXT")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglQueryDevicesEXT);
-  if (strcmp(name, "eglQueryDisplayAttribANGLE") == 0)
+  if (name_view == "eglQueryDisplayAttribANGLE")
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglQueryDisplayAttribANGLE);
-  if (strcmp(name, "eglQueryStreamKHR") == 0)
+  if (name_view == "eglQueryDisplayAttribEXT")
+    return reinterpret_cast<GLFunctionPointerType>(
+        Mock_eglQueryDisplayAttribEXT);
+  if (name_view == "eglQueryDmaBufFormatsEXT")
+    return reinterpret_cast<GLFunctionPointerType>(
+        Mock_eglQueryDmaBufFormatsEXT);
+  if (name_view == "eglQueryDmaBufModifiersEXT")
+    return reinterpret_cast<GLFunctionPointerType>(
+        Mock_eglQueryDmaBufModifiersEXT);
+  if (name_view == "eglQueryStreamKHR")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglQueryStreamKHR);
-  if (strcmp(name, "eglQueryStreamu64KHR") == 0)
+  if (name_view == "eglQueryStreamu64KHR")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglQueryStreamu64KHR);
-  if (strcmp(name, "eglQueryString") == 0)
+  if (name_view == "eglQueryString")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglQueryString);
-  if (strcmp(name, "eglQueryStringiANGLE") == 0)
+  if (name_view == "eglQueryStringiANGLE")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglQueryStringiANGLE);
-  if (strcmp(name, "eglQuerySurface") == 0)
+  if (name_view == "eglQuerySurface")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglQuerySurface);
-  if (strcmp(name, "eglQuerySurfacePointerANGLE") == 0)
+  if (name_view == "eglQuerySurfacePointerANGLE")
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglQuerySurfacePointerANGLE);
-  if (strcmp(name, "eglReacquireHighPowerGPUANGLE") == 0)
+  if (name_view == "eglReacquireHighPowerGPUANGLE")
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglReacquireHighPowerGPUANGLE);
-  if (strcmp(name, "eglReleaseHighPowerGPUANGLE") == 0)
+  if (name_view == "eglReleaseExternalContextANGLE")
+    return reinterpret_cast<GLFunctionPointerType>(
+        Mock_eglReleaseExternalContextANGLE);
+  if (name_view == "eglReleaseHighPowerGPUANGLE")
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglReleaseHighPowerGPUANGLE);
-  if (strcmp(name, "eglReleaseTexImage") == 0)
+  if (name_view == "eglReleaseTexImage")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglReleaseTexImage);
-  if (strcmp(name, "eglReleaseThread") == 0)
+  if (name_view == "eglReleaseThread")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglReleaseThread);
-  if (strcmp(name, "eglSetBlobCacheFuncsANDROID") == 0)
+  if (name_view == "eglSetBlobCacheFuncsANDROID")
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglSetBlobCacheFuncsANDROID);
-  if (strcmp(name, "eglStreamAttribKHR") == 0)
+  if (name_view == "eglSetValidationEnabledANGLE")
+    return reinterpret_cast<GLFunctionPointerType>(
+        Mock_eglSetValidationEnabledANGLE);
+  if (name_view == "eglStreamAttribKHR")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglStreamAttribKHR);
-  if (strcmp(name, "eglStreamConsumerAcquireKHR") == 0)
+  if (name_view == "eglStreamConsumerAcquireKHR")
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglStreamConsumerAcquireKHR);
-  if (strcmp(name, "eglStreamConsumerGLTextureExternalAttribsNV") == 0)
+  if (name_view == "eglStreamConsumerGLTextureExternalAttribsNV")
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglStreamConsumerGLTextureExternalAttribsNV);
-  if (strcmp(name, "eglStreamConsumerGLTextureExternalKHR") == 0)
+  if (name_view == "eglStreamConsumerGLTextureExternalKHR")
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglStreamConsumerGLTextureExternalKHR);
-  if (strcmp(name, "eglStreamConsumerReleaseKHR") == 0)
+  if (name_view == "eglStreamConsumerReleaseKHR")
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglStreamConsumerReleaseKHR);
-  if (strcmp(name, "eglStreamPostD3DTextureANGLE") == 0)
+  if (name_view == "eglStreamPostD3DTextureANGLE")
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglStreamPostD3DTextureANGLE);
-  if (strcmp(name, "eglSurfaceAttrib") == 0)
+  if (name_view == "eglSurfaceAttrib")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglSurfaceAttrib);
-  if (strcmp(name, "eglSwapBuffers") == 0)
+  if (name_view == "eglSwapBuffers")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglSwapBuffers);
-  if (strcmp(name, "eglSwapBuffersWithDamageKHR") == 0)
+  if (name_view == "eglSwapBuffersWithDamageKHR")
     return reinterpret_cast<GLFunctionPointerType>(
         Mock_eglSwapBuffersWithDamageKHR);
-  if (strcmp(name, "eglSwapInterval") == 0)
+  if (name_view == "eglSwapInterval")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglSwapInterval);
-  if (strcmp(name, "eglTerminate") == 0)
+  if (name_view == "eglTerminate")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglTerminate);
-  if (strcmp(name, "eglWaitClient") == 0)
+  if (name_view == "eglUnlockVulkanQueueANGLE")
+    return reinterpret_cast<GLFunctionPointerType>(
+        Mock_eglUnlockVulkanQueueANGLE);
+  if (name_view == "eglWaitClient")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglWaitClient);
-  if (strcmp(name, "eglWaitGL") == 0)
+  if (name_view == "eglWaitGL")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglWaitGL);
-  if (strcmp(name, "eglWaitNative") == 0)
+  if (name_view == "eglWaitNative")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglWaitNative);
-  if (strcmp(name, "eglWaitSyncKHR") == 0)
+  if (name_view == "eglWaitSync")
+    return reinterpret_cast<GLFunctionPointerType>(Mock_eglWaitSync);
+  if (name_view == "eglWaitSyncKHR")
     return reinterpret_cast<GLFunctionPointerType>(Mock_eglWaitSyncKHR);
+  if (name_view == "eglWaitUntilWorkScheduledANGLE")
+    return reinterpret_cast<GLFunctionPointerType>(
+        Mock_eglWaitUntilWorkScheduledANGLE);
   return reinterpret_cast<GLFunctionPointerType>(&MockEglInvalidFunction);
 }
 

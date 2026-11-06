@@ -1,8 +1,9 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <windows.h>
+
 #include <mmsystem.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -10,9 +11,13 @@
 #include <memory>
 
 #include "base/base_paths.h"
+#include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/memory/aligned_memory.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ptr_exclusion.h"
+#include "base/memory/raw_span.h"
 #include "base/run_loop.h"
 #include "base/sync_socket.h"
 #include "base/test/task_environment.h"
@@ -25,6 +30,7 @@
 #include "media/audio/mock_audio_source_callback.h"
 #include "media/audio/simple_sources.h"
 #include "media/audio/test_audio_thread.h"
+#include "media/base/audio_bus.h"
 #include "media/base/limits.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -33,7 +39,6 @@ using ::testing::_;
 using ::testing::AnyNumber;
 using ::testing::DoAll;
 using ::testing::Field;
-using ::testing::Invoke;
 using ::testing::InSequence;
 using ::testing::NiceMock;
 using ::testing::NotNull;
@@ -43,7 +48,7 @@ namespace media {
 
 static int ClearData(base::TimeDelta /* delay */,
                      base::TimeTicks /* delay_timestamp */,
-                     int /* prior_frames_skipped */,
+                     const AudioGlitchInfo& /* glitch_info */,
                      AudioBus* dest) {
   dest->Zero();
   return dest->frames();
@@ -53,14 +58,11 @@ static int ClearData(base::TimeDelta /* delay */,
 // expected and if any error has been reported.
 class TestSourceBasic : public AudioOutputStream::AudioSourceCallback {
  public:
-  TestSourceBasic()
-      : callback_count_(0),
-        had_error_(0) {
-  }
+  TestSourceBasic() = default;
   // AudioSourceCallback::OnMoreData implementation:
   int OnMoreData(base::TimeDelta /* delay */,
                  base::TimeTicks /* delay_timestamp */,
-                 int /* prior_frames_skipped */,
+                 const AudioGlitchInfo& /* glitch_info */,
                  AudioBus* dest) override {
     ++callback_count_;
     // Touch the channel memory value to make sure memory is good.
@@ -83,11 +85,11 @@ class TestSourceBasic : public AudioOutputStream::AudioSourceCallback {
   }
 
  private:
-  int callback_count_;
-  int had_error_;
+  int callback_count_ = 0;
+  int had_error_ = 0;
 };
 
-const int kMaxNumBuffers = 3;
+constexpr int kMaxNumBuffers = 3;
 // Specializes TestSourceBasic to simulate a source that blocks for some time
 // in the OnMoreData callback.
 class TestSourceLaggy : public TestSourceBasic {
@@ -97,60 +99,18 @@ class TestSourceLaggy : public TestSourceBasic {
   }
   int OnMoreData(base::TimeDelta delay,
                  base::TimeTicks delay_timestamp,
-                 int prior_frames_skipped,
+                 const AudioGlitchInfo& glitch_info,
                  AudioBus* dest) override {
     // Call the base, which increments the callback_count_.
-    TestSourceBasic::OnMoreData(delay, delay_timestamp, prior_frames_skipped,
-                                dest);
+    TestSourceBasic::OnMoreData(delay, delay_timestamp, glitch_info, dest);
     if (callback_count() > kMaxNumBuffers) {
       ::Sleep(lag_in_ms_);
     }
     return dest->frames();
   }
+
  private:
   int lag_in_ms_;
-};
-
-// Helper class to memory map an entire file. The mapping is read-only. Don't
-// use for gigabyte-sized files. Attempts to write to this memory generate
-// memory access violations.
-class ReadOnlyMappedFile {
- public:
-  explicit ReadOnlyMappedFile(const wchar_t* file_name)
-      : fmap_(NULL), start_(nullptr), size_(0) {
-    HANDLE file = ::CreateFileW(file_name, GENERIC_READ, FILE_SHARE_READ, NULL,
-                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (INVALID_HANDLE_VALUE == file)
-      return;
-    fmap_ = ::CreateFileMappingW(file, NULL, PAGE_READONLY, 0, 0, NULL);
-    ::CloseHandle(file);
-    if (!fmap_)
-      return;
-    start_ = reinterpret_cast<char*>(::MapViewOfFile(fmap_, FILE_MAP_READ,
-                                                     0, 0, 0));
-    if (!start_)
-      return;
-    MEMORY_BASIC_INFORMATION mbi = {0};
-    ::VirtualQuery(start_, &mbi, sizeof(mbi));
-    size_ = mbi.RegionSize;
-  }
-  ~ReadOnlyMappedFile() {
-    if (start_) {
-      ::UnmapViewOfFile(start_);
-      ::CloseHandle(fmap_);
-    }
-  }
-  // Returns true if the file was successfully mapped.
-  bool is_valid() const { return (start_ && (size_ > 0)); }
-  // Returns the size in bytes of the mapped memory.
-  uint32_t size() const { return size_; }
-  // Returns the memory backing the file.
-  const void* GetChunkAt(uint32_t offset) { return &start_[offset]; }
-
- private:
-  HANDLE fmap_;
-  char* start_;
-  uint32_t size_;
 };
 
 class WinAudioTest : public ::testing::Test {
@@ -183,8 +143,8 @@ TEST_F(WinAudioTest, PCMWaveStreamGetAndClose) {
   ABORT_AUDIO_TEST_IF_NOT(audio_manager_device_info_->HasAudioOutputDevices());
 
   AudioOutputStream* oas = audio_manager_->MakeAudioOutputStream(
-      AudioParameters(AudioParameters::AUDIO_PCM_LINEAR, CHANNEL_LAYOUT_STEREO,
-                      8000, 256),
+      AudioParameters(AudioParameters::AUDIO_PCM_LINEAR,
+                      ChannelLayoutConfig::Stereo(), 8000, 256),
       std::string(), AudioManager::LogCallback());
   ASSERT_TRUE(NULL != oas);
   oas->Close();
@@ -195,8 +155,8 @@ TEST_F(WinAudioTest, PCMWaveStreamOpenAndClose) {
   ABORT_AUDIO_TEST_IF_NOT(audio_manager_device_info_->HasAudioOutputDevices());
 
   AudioOutputStream* oas = audio_manager_->MakeAudioOutputStream(
-      AudioParameters(AudioParameters::AUDIO_PCM_LINEAR, CHANNEL_LAYOUT_STEREO,
-                      8000, 256),
+      AudioParameters(AudioParameters::AUDIO_PCM_LINEAR,
+                      ChannelLayoutConfig::Stereo(), 8000, 256),
       std::string(), AudioManager::LogCallback());
   ASSERT_TRUE(NULL != oas);
   EXPECT_TRUE(oas->Open());
@@ -210,8 +170,8 @@ TEST_F(WinAudioTest, PCMWaveSlowSource) {
   ABORT_AUDIO_TEST_IF_NOT(audio_manager_device_info_->HasAudioOutputDevices());
 
   AudioOutputStream* oas = audio_manager_->MakeAudioOutputStream(
-      AudioParameters(AudioParameters::AUDIO_PCM_LINEAR, CHANNEL_LAYOUT_MONO,
-                      16000, 256),
+      AudioParameters(AudioParameters::AUDIO_PCM_LINEAR,
+                      ChannelLayoutConfig::Mono(), 16000, 256),
       std::string(), AudioManager::LogCallback());
   ASSERT_TRUE(NULL != oas);
   TestSourceLaggy test_laggy(90);
@@ -235,7 +195,8 @@ TEST_F(WinAudioTest, PCMWaveStreamPlaySlowLoop) {
 
   uint32_t samples_100_ms = AudioParameters::kAudioCDSampleRate / 10;
   AudioOutputStream* oas = audio_manager_->MakeAudioOutputStream(
-      AudioParameters(AudioParameters::AUDIO_PCM_LINEAR, CHANNEL_LAYOUT_MONO,
+      AudioParameters(AudioParameters::AUDIO_PCM_LINEAR,
+                      ChannelLayoutConfig::Mono(),
                       AudioParameters::kAudioCDSampleRate, samples_100_ms),
       std::string(), AudioManager::LogCallback());
   ASSERT_TRUE(NULL != oas);
@@ -265,7 +226,8 @@ TEST_F(WinAudioTest, PCMWaveStreamPlay200HzTone44Kss) {
 
   uint32_t samples_100_ms = AudioParameters::kAudioCDSampleRate / 10;
   AudioOutputStream* oas = audio_manager_->MakeAudioOutputStream(
-      AudioParameters(AudioParameters::AUDIO_PCM_LINEAR, CHANNEL_LAYOUT_MONO,
+      AudioParameters(AudioParameters::AUDIO_PCM_LINEAR,
+                      ChannelLayoutConfig::Mono(),
                       AudioParameters::kAudioCDSampleRate, samples_100_ms),
       std::string(), AudioManager::LogCallback());
   ASSERT_TRUE(NULL != oas);
@@ -289,7 +251,8 @@ TEST_F(WinAudioTest, PCMWaveStreamPlay200HzTone22Kss) {
 
   uint32_t samples_100_ms = AudioParameters::kAudioCDSampleRate / 20;
   AudioOutputStream* oas = audio_manager_->MakeAudioOutputStream(
-      AudioParameters(AudioParameters::AUDIO_PCM_LINEAR, CHANNEL_LAYOUT_MONO,
+      AudioParameters(AudioParameters::AUDIO_PCM_LINEAR,
+                      ChannelLayoutConfig::Mono(),
                       AudioParameters::kAudioCDSampleRate / 2, samples_100_ms),
       std::string(), AudioManager::LogCallback());
   ASSERT_TRUE(NULL != oas);
@@ -317,16 +280,16 @@ TEST_F(WinAudioTest, PCMWaveStreamPlay200HzTone22Kss) {
 TEST_F(WinAudioTest, PushSourceFile16KHz) {
   ABORT_AUDIO_TEST_IF_NOT(audio_manager_device_info_->HasAudioOutputDevices());
 
-  static const int kSampleRate = 16000;
+  static constexpr int kSampleRate = 16000;
   SineWaveAudioSource source(1, 200.0, kSampleRate);
   // Compute buffer size for 100ms of audio.
-  const uint32_t kSamples100ms = (kSampleRate / 1000) * 100;
+  constexpr uint32_t kSamples100ms = (kSampleRate / 1000) * 100;
   // Restrict SineWaveAudioSource to 100ms of samples.
   source.CapSamples(kSamples100ms);
 
   AudioOutputStream* oas = audio_manager_->MakeAudioOutputStream(
-      AudioParameters(AudioParameters::AUDIO_PCM_LINEAR, CHANNEL_LAYOUT_MONO,
-                      kSampleRate, kSamples100ms),
+      AudioParameters(AudioParameters::AUDIO_PCM_LINEAR,
+                      ChannelLayoutConfig::Mono(), kSampleRate, kSamples100ms),
       std::string(), AudioManager::LogCallback());
   ASSERT_TRUE(NULL != oas);
 
@@ -358,7 +321,8 @@ TEST_F(WinAudioTest, PCMWaveStreamPlayTwice200HzTone44Kss) {
 
   uint32_t samples_100_ms = AudioParameters::kAudioCDSampleRate / 10;
   AudioOutputStream* oas = audio_manager_->MakeAudioOutputStream(
-      AudioParameters(AudioParameters::AUDIO_PCM_LINEAR, CHANNEL_LAYOUT_MONO,
+      AudioParameters(AudioParameters::AUDIO_PCM_LINEAR,
+                      ChannelLayoutConfig::Mono(),
                       AudioParameters::kAudioCDSampleRate, samples_100_ms),
       std::string(), AudioManager::LogCallback());
   ASSERT_TRUE(NULL != oas);
@@ -391,13 +355,15 @@ TEST_F(WinAudioTest, PCMWaveStreamPlay200HzToneLowLatency) {
 
   // Use 10 ms buffer size for WASAPI and 50 ms buffer size for Wave.
   // Take the existing native sample rate into account.
+  std::string default_device_id =
+      audio_manager_device_info_->GetDefaultOutputDeviceID();
   const AudioParameters params =
-      audio_manager_device_info_->GetDefaultOutputStreamParameters();
+      audio_manager_device_info_->GetOutputStreamParameters(default_device_id);
   int sample_rate = params.sample_rate();
   uint32_t samples_10_ms = sample_rate / 100;
   AudioOutputStream* oas = audio_manager_->MakeAudioOutputStream(
       AudioParameters(AudioParameters::AUDIO_PCM_LOW_LATENCY,
-                      CHANNEL_LAYOUT_MONO, sample_rate, samples_10_ms),
+                      ChannelLayoutConfig::Mono(), sample_rate, samples_10_ms),
       std::string(), AudioManager::LogCallback());
   ASSERT_TRUE(NULL != oas);
 
@@ -426,7 +392,8 @@ TEST_F(WinAudioTest, PCMWaveStreamPendingBytes) {
 
   uint32_t samples_100_ms = AudioParameters::kAudioCDSampleRate / 10;
   AudioOutputStream* oas = audio_manager_->MakeAudioOutputStream(
-      AudioParameters(AudioParameters::AUDIO_PCM_LINEAR, CHANNEL_LAYOUT_MONO,
+      AudioParameters(AudioParameters::AUDIO_PCM_LINEAR,
+                      ChannelLayoutConfig::Mono(),
                       AudioParameters::kAudioCDSampleRate, samples_100_ms),
       std::string(), AudioManager::LogCallback());
   ASSERT_TRUE(NULL != oas);
@@ -434,8 +401,8 @@ TEST_F(WinAudioTest, PCMWaveStreamPendingBytes) {
   NiceMock<MockAudioSourceCallback> source;
   EXPECT_TRUE(oas->Open());
 
-  const base::TimeDelta delay_100_ms = base::TimeDelta::FromMilliseconds(100);
-  const base::TimeDelta delay_200_ms = base::TimeDelta::FromMilliseconds(200);
+  constexpr base::TimeDelta delay_100_ms = base::Milliseconds(100);
+  constexpr base::TimeDelta delay_200_ms = base::Milliseconds(200);
 
   // Audio output stream has either a double or triple buffer scheme. We expect
   // the delay to reach up to 200 ms depending on the number of buffers used.
@@ -444,22 +411,24 @@ TEST_F(WinAudioTest, PCMWaveStreamPendingBytes) {
   // pending bytes will go down and eventually read zero.
   InSequence s;
 
-  EXPECT_CALL(source, OnMoreData(base::TimeDelta(), _, 0, NotNull()))
-      .WillOnce(Invoke(ClearData));
+  EXPECT_CALL(source,
+              OnMoreData(base::TimeDelta(), _, AudioGlitchInfo(), NotNull()))
+      .WillOnce(ClearData);
 
   // Note: If AudioManagerWin::NumberOfWaveOutBuffers() ever changes, or if this
   // test is run on Vista, these expectations will fail.
-  EXPECT_CALL(source, OnMoreData(delay_100_ms, _, 0, NotNull()))
-      .WillOnce(Invoke(ClearData));
-  EXPECT_CALL(source, OnMoreData(delay_200_ms, _, 0, NotNull()))
-      .WillOnce(Invoke(ClearData));
-  EXPECT_CALL(source, OnMoreData(delay_200_ms, _, 0, NotNull()))
+  EXPECT_CALL(source, OnMoreData(delay_100_ms, _, AudioGlitchInfo(), NotNull()))
+      .WillOnce(ClearData);
+  EXPECT_CALL(source, OnMoreData(delay_200_ms, _, AudioGlitchInfo(), NotNull()))
+      .WillOnce(ClearData);
+  EXPECT_CALL(source, OnMoreData(delay_200_ms, _, AudioGlitchInfo(), NotNull()))
       .Times(AnyNumber())
       .WillRepeatedly(Return(0));
-  EXPECT_CALL(source, OnMoreData(delay_100_ms, _, 0, NotNull()))
+  EXPECT_CALL(source, OnMoreData(delay_100_ms, _, AudioGlitchInfo(), NotNull()))
       .Times(AnyNumber())
       .WillRepeatedly(Return(0));
-  EXPECT_CALL(source, OnMoreData(base::TimeDelta(), _, 0, NotNull()))
+  EXPECT_CALL(source,
+              OnMoreData(base::TimeDelta(), _, AudioGlitchInfo(), NotNull()))
       .Times(AnyNumber())
       .WillRepeatedly(Return(0));
 
@@ -481,31 +450,32 @@ class SyncSocketSource : public AudioOutputStream::AudioSourceCallback {
         expected_packet_count_(expected_packet_count) {
     // Setup AudioBus wrapping data we'll receive over the sync socket.
     packet_size_ = AudioBus::CalculateMemorySize(params);
-    data_.reset(static_cast<float*>(
-        base::AlignedAlloc(packet_size_ + sizeof(AudioOutputBufferParameters),
-                           AudioBus::kChannelAlignment)));
-    audio_bus_ = AudioBus::WrapMemory(params, output_buffer()->audio);
+    data_ = base::AlignedUninit<uint8_t>(
+        packet_size_ + sizeof(AudioOutputBufferParameters),
+        AudioBus::kChannelAlignment);
+    audio_data_ =
+        data_.as_span().subspan<sizeof(AudioOutputBufferParameters)>();
+    audio_bus_ = AudioBus::WrapMemory(params, audio_data_);
   }
   ~SyncSocketSource() override {}
 
   // AudioSourceCallback::OnMoreData implementation:
   int OnMoreData(base::TimeDelta delay,
                  base::TimeTicks delay_timestamp,
-                 int /* prior_frames_skipped */,
+                 const AudioGlitchInfo& glitch_info,
                  AudioBus* dest) override {
     // If we ask for more data once the producer has shutdown, we will hang
     // on |socket_->Receive()|.
     if (current_packet_count_ < expected_packet_count_) {
       uint32_t control_signal = 0;
-      socket_->Send(&control_signal, sizeof(control_signal));
+      socket_->Send(base::byte_span_from_ref(control_signal));
       output_buffer()->params.delay_us = delay.InMicroseconds();
       output_buffer()->params.delay_timestamp_us =
           (delay_timestamp - base::TimeTicks()).InMicroseconds();
-      uint32_t size = socket_->Receive(data_.get(), packet_size_);
+      uint32_t size = socket_->Receive(audio_data_);
       ++current_packet_count_;
 
-      DCHECK_EQ(static_cast<size_t>(size) % sizeof(*audio_bus_->channel(0)),
-                0U);
+      DCHECK_EQ(static_cast<size_t>(size) % sizeof(float), 0U);
       audio_bus_->CopyTo(dest);
       return audio_bus_->frames();
     }
@@ -516,17 +486,19 @@ class SyncSocketSource : public AudioOutputStream::AudioSourceCallback {
   int packet_size() const { return packet_size_; }
 
   AudioOutputBuffer* output_buffer() const {
-    return reinterpret_cast<AudioOutputBuffer*>(data_.get());
+    return reinterpret_cast<AudioOutputBuffer*>(
+        const_cast<uint8_t*>(data_.data()));
   }
 
   // AudioSourceCallback::OnError implementation:
   void OnError(ErrorType type) override {}
 
  private:
-  base::SyncSocket* socket_;
+  raw_ptr<base::SyncSocket> socket_;
   const AudioParameters params_;
-  int packet_size_;
-  std::unique_ptr<float, base::AlignedFreeDeleter> data_;
+  size_t packet_size_;
+  base::AlignedHeapArray<uint8_t> data_;
+  base::raw_span<uint8_t> audio_data_;
   std::unique_ptr<AudioBus> audio_bus_;
 
   // This test produces a fixed number of packets, we need these so we know
@@ -536,13 +508,17 @@ class SyncSocketSource : public AudioOutputStream::AudioSourceCallback {
 };
 
 struct SyncThreadContext {
-  base::SyncSocket* socket;
+  // This field is not a raw_ptr<> because it was filtered by the rewriter for:
+  // #reinterpret-cast-trivial-type
+  RAW_PTR_EXCLUSION base::SyncSocket* socket;
   int sample_rate;
   int channels;
   int frames;
   double sine_freq;
   uint32_t packet_size_bytes;
-  AudioOutputBuffer* buffer;
+  // This field is not a raw_ptr<> because it was filtered by the rewriter for:
+  // #reinterpret-cast-trivial-type
+  RAW_PTR_EXCLUSION AudioOutputBuffer* buffer;
   int total_packets;
 };
 
@@ -556,10 +532,11 @@ DWORD __stdcall SyncSocketThread(void* context) {
   SyncThreadContext& ctx = *(reinterpret_cast<SyncThreadContext*>(context));
 
   // Setup AudioBus wrapping data we'll pass over the sync socket.
-  std::unique_ptr<float, base::AlignedFreeDeleter> data(static_cast<float*>(
-      base::AlignedAlloc(ctx.packet_size_bytes, AudioBus::kChannelAlignment)));
+  CHECK_EQ(ctx.packet_size_bytes % sizeof(float), 0U);
+  auto data = base::AlignedUninit<float>(ctx.packet_size_bytes / sizeof(float),
+                                         AudioBus::kChannelAlignment);
   std::unique_ptr<AudioBus> audio_bus =
-      AudioBus::WrapMemory(ctx.channels, ctx.frames, data.get());
+      AudioBus::WrapMemory(ctx.channels, ctx.frames, data);
 
   SineWaveAudioSource sine(1, ctx.sine_freq, ctx.sample_rate);
 
@@ -567,17 +544,18 @@ DWORD __stdcall SyncSocketThread(void* context) {
   for (int ix = 0; ix < ctx.total_packets; ++ix) {
     // Listen for a signal from the Audio Stream that it wants data. This is a
     // blocking call and will not proceed until we receive the signal.
-    if (ctx.socket->Receive(&control_signal, sizeof(control_signal)) == 0)
+    if (ctx.socket->Receive(base::byte_span_from_ref(control_signal)) == 0) {
       break;
-    base::TimeDelta delay =
-        base::TimeDelta::FromMicroseconds(ctx.buffer->params.delay_us);
+    }
+    base::TimeDelta delay = base::Microseconds(ctx.buffer->params.delay_us);
     base::TimeTicks delay_timestamp =
-        base::TimeTicks() + base::TimeDelta::FromMicroseconds(
-                                ctx.buffer->params.delay_timestamp_us);
-    sine.OnMoreData(delay, delay_timestamp, 0, audio_bus.get());
+        base::TimeTicks() +
+        base::Microseconds(ctx.buffer->params.delay_timestamp_us);
+    sine.OnMoreData(delay, delay_timestamp, {}, audio_bus.get());
 
     // Send the audio data to the Audio Stream.
-    ctx.socket->Send(data.get(), ctx.packet_size_bytes);
+    ctx.socket->Send(
+        base::as_bytes(base::allow_nonunique_obj, base::span(data)));
   }
 
   return 0;
@@ -594,13 +572,14 @@ DWORD __stdcall SyncSocketThread(void* context) {
 TEST_F(WinAudioTest, SyncSocketBasic) {
   ABORT_AUDIO_TEST_IF_NOT(audio_manager_device_info_->HasAudioOutputDevices());
 
-  static const int sample_rate = AudioParameters::kAudioCDSampleRate;
-  static const uint32_t kSamples20ms = sample_rate / 50;
+  static constexpr int sample_rate = AudioParameters::kAudioCDSampleRate;
+  static constexpr uint32_t kSamples20ms = sample_rate / 50;
   // We want 2 seconds of audio, which means we need 100 packets as each packet
   // contains 20ms worth of audio samples.
-  static const int kPackets2s = 100;
-  AudioParameters params(AudioParameters::AUDIO_PCM_LINEAR, CHANNEL_LAYOUT_MONO,
-                         sample_rate, kSamples20ms);
+  static constexpr int kPackets2s = 100;
+  AudioParameters params(AudioParameters::AUDIO_PCM_LINEAR,
+                         ChannelLayoutConfig::Mono(), sample_rate,
+                         kSamples20ms);
 
   AudioOutputStream* oas = audio_manager_->MakeAudioOutputStream(
       params, std::string(), AudioManager::LogCallback());

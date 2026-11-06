@@ -1,69 +1,134 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.ui.appmenu;
 
+import android.content.Context;
 import android.os.Bundle;
-import android.view.Menu;
-import android.view.MenuItem;
+import android.view.LayoutInflater;
 import android.view.View;
 
+import androidx.annotation.DrawableRes;
+import androidx.annotation.IdRes;
 import androidx.annotation.Nullable;
 import androidx.appcompat.content.res.AppCompatResources;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.test.util.CallbackHelper;
-import org.chromium.chrome.browser.ui.appmenu.test.R;
-
-import java.util.List;
+import org.chromium.chrome.browser.ui.appmenu.AppMenuHandler.AppMenuItemType;
+import org.chromium.ui.modelutil.MVCListAdapter;
+import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
+import org.chromium.ui.modelutil.PropertyModel;
 
 class TestAppMenuPropertiesDelegate implements AppMenuPropertiesDelegate {
+    private final Context mContext;
+
     public final CallbackHelper menuDismissedCallback = new CallbackHelper();
-    public final CallbackHelper footerInflatedCallback = new CallbackHelper();
-    public final CallbackHelper headerInflatedCallback = new CallbackHelper();
     public int footerResourceId;
     public int headerResourceId;
-    public int groupDividerId;
     public boolean enableAppIconRow;
     public boolean iconBeforeItem;
+
+    TestAppMenuPropertiesDelegate(Context context) {
+        mContext = context;
+    }
 
     @Override
     public void destroy() {}
 
     @Override
-    public int getAppMenuLayoutId() {
-        return R.menu.test_menu;
-    }
+    public ModelList getMenuItems() {
+        ModelList modelList = new ModelList();
 
-    @Nullable
-    @Override
-    public List<CustomViewBinder> getCustomViewBinders() {
-        return null;
-    }
+        modelList.add(
+                new MVCListAdapter.ListItem(
+                        AppMenuItemType.STANDARD,
+                        buildModelForTextItem(
+                                R.id.menu_item_one, "Menu Item One", true, modelList.size())));
+        modelList.add(
+                new MVCListAdapter.ListItem(
+                        AppMenuItemType.STANDARD,
+                        buildModelForTextItem(
+                                R.id.menu_item_two, "Menu Item Two", false, modelList.size())));
+        modelList.add(
+                new MVCListAdapter.ListItem(
+                        AppMenuItemType.STANDARD,
+                        buildModelForTextItem(
+                                R.id.menu_item_three, "Menu Item Three", true, modelList.size())));
 
-    @Override
-    public void prepareMenu(Menu menu, AppMenuHandler handler) {
-        menu.findItem(R.id.menu_item_two).setEnabled(false);
-
-        menu.findItem(R.id.icon_row_menu_id).setVisible(enableAppIconRow);
         if (enableAppIconRow) {
-            menu.findItem(R.id.icon_one)
-                    .setIcon(AppCompatResources.getDrawable(ContextUtils.getApplicationContext(),
-                            R.drawable.test_ic_arrow_forward_black_24dp));
-            menu.findItem(R.id.icon_two)
-                    .setIcon(AppCompatResources.getDrawable(ContextUtils.getApplicationContext(),
-                            R.drawable.test_ic_arrow_forward_black_24dp));
-            menu.findItem(R.id.icon_three)
-                    .setIcon(AppCompatResources.getDrawable(ContextUtils.getApplicationContext(),
-                            R.drawable.test_ic_arrow_forward_black_24dp));
-            menu.findItem(R.id.icon_three).setEnabled(false);
+            ModelList icons = new ModelList();
+            icons.add(
+                    new MVCListAdapter.ListItem(
+                            0,
+                            buildModelForIcon(
+                                    R.id.icon_one,
+                                    R.drawable.test_ic_arrow_forward_black_24dp,
+                                    "Icon One",
+                                    null,
+                                    true)));
+            icons.add(
+                    new MVCListAdapter.ListItem(
+                            0,
+                            buildModelForIcon(
+                                    R.id.icon_two,
+                                    R.drawable.test_ic_arrow_forward_black_24dp,
+                                    "Icon Two",
+                                    "2",
+                                    true)));
+            icons.add(
+                    new MVCListAdapter.ListItem(
+                            0,
+                            buildModelForIcon(
+                                    R.id.icon_three,
+                                    R.drawable.test_ic_arrow_forward_black_24dp,
+                                    "Icon Three",
+                                    null,
+                                    false)));
+            modelList.add(
+                    new MVCListAdapter.ListItem(
+                            AppMenuItemType.BUTTON_ROW,
+                            new PropertyModel.Builder(AppMenuItemProperties.ALL_KEYS)
+                                    .with(AppMenuItemProperties.MENU_ITEM_ID, R.id.icon_row_menu_id)
+                                    .with(AppMenuItemProperties.ADDITIONAL_ICONS, icons)
+                                    .with(AppMenuItemProperties.POSITION, modelList.size())
+                                    .build()));
         }
+        return modelList;
+    }
+
+    private PropertyModel buildModelForTextItem(
+            @IdRes int id, String title, boolean enabled, int position) {
+        return new PropertyModel.Builder(AppMenuItemProperties.ALL_KEYS)
+                .with(AppMenuItemProperties.MENU_ITEM_ID, id)
+                .with(AppMenuItemProperties.ENABLED, enabled)
+                .with(AppMenuItemProperties.TITLE, title)
+                .with(AppMenuItemProperties.POSITION, position)
+                .build();
+    }
+
+    private PropertyModel buildModelForIcon(
+            @IdRes int id,
+            @DrawableRes int iconId,
+            String title,
+            @Nullable String titleCondensed,
+            boolean enabled) {
+        return new PropertyModel.Builder(AppMenuItemProperties.ALL_ICON_KEYS)
+                .with(AppMenuItemProperties.MENU_ITEM_ID, id)
+                .with(AppMenuItemProperties.ENABLED, enabled)
+                .with(
+                        AppMenuItemProperties.ICON,
+                        AppCompatResources.getDrawable(
+                                ContextUtils.getApplicationContext(), iconId))
+                .with(AppMenuItemProperties.TITLE, title)
+                .with(AppMenuItemProperties.TITLE_CONDENSED, titleCondensed)
+                .build();
     }
 
     @Nullable
     @Override
-    public Bundle getBundleForMenuItem(MenuItem item) {
+    public Bundle getBundleForMenuItem(PropertyModel model) {
         return null;
     }
 
@@ -76,38 +141,15 @@ class TestAppMenuPropertiesDelegate implements AppMenuPropertiesDelegate {
     }
 
     @Override
-    public int getFooterResourceId() {
-        return footerResourceId;
+    public @Nullable View buildFooterView(AppMenuHandler appMenuHandler) {
+        if (footerResourceId == 0) return null;
+        return LayoutInflater.from(mContext).inflate(footerResourceId, null);
     }
 
     @Override
-    public int getHeaderResourceId() {
-        return headerResourceId;
-    }
-
-    @Override
-    public int getGroupDividerId() {
-        return groupDividerId;
-    }
-
-    @Override
-    public boolean shouldShowFooter(int maxMenuHeight) {
-        return footerResourceId != 0;
-    }
-
-    @Override
-    public boolean shouldShowHeader(int maxMenuHeight) {
-        return headerResourceId != 0;
-    }
-
-    @Override
-    public void onFooterViewInflated(AppMenuHandler appMenuHandler, View view) {
-        footerInflatedCallback.notifyCalled();
-    }
-
-    @Override
-    public void onHeaderViewInflated(AppMenuHandler appMenuHandler, View view) {
-        headerInflatedCallback.notifyCalled();
+    public @Nullable View buildHeaderView() {
+        if (headerResourceId == 0) return null;
+        return LayoutInflater.from(mContext).inflate(headerResourceId, null);
     }
 
     @Override
@@ -116,8 +158,20 @@ class TestAppMenuPropertiesDelegate implements AppMenuPropertiesDelegate {
     }
 
     @Override
-    public void recordHighlightedMenuItemShown(Integer menuItemId) {}
+    public boolean isMenuIconAtStart() {
+        return false;
+    }
 
     @Override
-    public void recordHighlightedMenuItemClicked(Integer menuItemId) {}
+    public boolean shouldShowIconRow() {
+        return false;
+    }
+
+    @Override
+    public boolean shouldKeepMenuBelowTopControls() {
+        return false;
+    }
+
+    @Override
+    public void onMenuShown() {}
 }

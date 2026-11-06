@@ -1,37 +1,39 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/spdy/header_coalescer.h"
 
 #include <string>
+#include <string_view>
 #include <vector>
 
+#include "net/log/net_log.h"
 #include "net/log/test_net_log.h"
 #include "net/log/test_net_log_util.h"
 #include "net/spdy/spdy_test_util_common.h"
+#include "net/third_party/quiche/src/quiche/common/http/http_header_block.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using ::testing::ElementsAre;
 using ::testing::Pair;
 
-namespace net {
-namespace test {
+namespace net::test {
 
 class HeaderCoalescerTest : public ::testing::Test {
  public:
   HeaderCoalescerTest()
-      : header_coalescer_(kMaxHeaderListSizeForTest, net_log_.bound()) {}
+      : header_coalescer_(kMaxHeaderListSizeForTest, net_log_with_source_) {}
 
-  void ExpectEntry(base::StringPiece expected_header_name,
-                   base::StringPiece expected_header_value,
-                   base::StringPiece expected_error_message) {
-    auto entry_list = net_log_.GetEntries();
+  void ExpectEntry(std::string_view expected_header_name,
+                   std::string_view expected_header_value,
+                   std::string_view expected_error_message) {
+    auto entry_list = net_log_observer_.GetEntries();
     ASSERT_EQ(1u, entry_list.size());
     EXPECT_EQ(entry_list[0].type,
               NetLogEventType::HTTP2_SESSION_RECV_INVALID_HEADER);
-    EXPECT_EQ(entry_list[0].source.id, net_log_.bound().source().id);
+    EXPECT_EQ(entry_list[0].source.id, net_log_with_source_.source().id);
     std::string value;
     EXPECT_EQ(expected_header_name,
               GetStringValueFromParams(entry_list[0], "header_name"));
@@ -42,7 +44,9 @@ class HeaderCoalescerTest : public ::testing::Test {
   }
 
  protected:
-  RecordingBoundTestNetLog net_log_;
+  NetLogWithSource net_log_with_source_{
+      NetLogWithSource::Make(NetLog::Get(), NetLogSourceType::NONE)};
+  RecordingNetLogObserver net_log_observer_;
   HeaderCoalescer header_coalescer_;
 };
 
@@ -51,7 +55,7 @@ TEST_F(HeaderCoalescerTest, CorrectHeaders) {
   header_coalescer_.OnHeader("baz", "qux");
   EXPECT_FALSE(header_coalescer_.error_seen());
 
-  spdy::Http2HeaderBlock header_block = header_coalescer_.release_headers();
+  quiche::HttpHeaderBlock header_block = header_coalescer_.release_headers();
   EXPECT_THAT(header_block,
               ElementsAre(Pair(":foo", "bar"), Pair("baz", "qux")));
 }
@@ -90,14 +94,14 @@ TEST_F(HeaderCoalescerTest, Append) {
   header_coalescer_.OnHeader("cookie", "qux");
   EXPECT_FALSE(header_coalescer_.error_seen());
 
-  spdy::Http2HeaderBlock header_block = header_coalescer_.release_headers();
+  quiche::HttpHeaderBlock header_block = header_coalescer_.release_headers();
   EXPECT_THAT(header_block,
-              ElementsAre(Pair("foo", absl::string_view("bar\0quux", 8)),
+              ElementsAre(Pair("foo", std::string_view("bar\0quux", 8)),
                           Pair("cookie", "baz; qux")));
 }
 
 TEST_F(HeaderCoalescerTest, HeaderNameNotValid) {
-  absl::string_view header_name("\x1\x7F\x80\xFF");
+  std::string_view header_name("\x1\x7F\x80\xFF");
   header_coalescer_.OnHeader(header_name, "foo");
   EXPECT_TRUE(header_coalescer_.error_seen());
   ExpectEntry("%ESCAPED:\xE2\x80\x8B \x1\x7F%80%FF", "foo",
@@ -106,7 +110,7 @@ TEST_F(HeaderCoalescerTest, HeaderNameNotValid) {
 
 // RFC 7540 Section 8.1.2.6. Uppercase in header name is invalid.
 TEST_F(HeaderCoalescerTest, HeaderNameHasUppercase) {
-  absl::string_view header_name("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+  std::string_view header_name("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
   header_coalescer_.OnHeader(header_name, "foo");
   EXPECT_TRUE(header_coalescer_.error_seen());
   ExpectEntry("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "foo",
@@ -120,12 +124,12 @@ TEST_F(HeaderCoalescerTest, HeaderNameHasUppercase) {
 //                  "^" / "_" / "`" / "|" / "~" / DIGIT / ALPHA
 TEST_F(HeaderCoalescerTest, HeaderNameValid) {
   // Due to RFC 7540 Section 8.1.2.6. Uppercase characters are not included.
-  absl::string_view header_name(
+  std::string_view header_name(
       "abcdefghijklmnopqrstuvwxyz0123456789!#$%&'*+-."
       "^_`|~");
   header_coalescer_.OnHeader(header_name, "foo");
   EXPECT_FALSE(header_coalescer_.error_seen());
-  spdy::Http2HeaderBlock header_block = header_coalescer_.release_headers();
+  quiche::HttpHeaderBlock header_block = header_coalescer_.release_headers();
   EXPECT_THAT(header_block, ElementsAre(Pair(header_name, "foo")));
 }
 
@@ -154,6 +158,4 @@ TEST_F(HeaderCoalescerTest, HeaderValueContains0x7f) {
   ExpectEntry("foo", "bar\x7F baz", "Invalid character 0x7F in header value.");
 }
 
-}  // namespace test
-
-}  // namespace net
+}  // namespace net::test

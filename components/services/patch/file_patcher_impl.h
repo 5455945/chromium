@@ -1,15 +1,18 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_SERVICES_PATCH_FILE_PATCHER_IMPL_H_
 #define COMPONENTS_SERVICES_PATCH_FILE_PATCHER_IMPL_H_
 
-#include "base/files/file.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
 #include "components/services/patch/public/mojom/file_patcher.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
+
+namespace base {
+class File;
+}  // namespace base
 
 namespace patch {
 
@@ -22,22 +25,25 @@ class FilePatcherImpl : public mojom::FilePatcher {
   // Constructs a FilePatcherImpl bound to |receiver|.
   explicit FilePatcherImpl(mojo::PendingReceiver<mojom::FilePatcher> receiver);
 
+  FilePatcherImpl(const FilePatcherImpl&) = delete;
+  FilePatcherImpl& operator=(const FilePatcherImpl&) = delete;
+
   ~FilePatcherImpl() override;
 
  private:
   // patch::mojom::FilePatcher:
-  void PatchFileBsdiff(base::File input_file,
-                       base::File patch_file,
-                       base::File output_file,
-                       PatchFileBsdiffCallback callback) override;
-  void PatchFileCourgette(base::File input_file,
-                          base::File patch_file,
-                          base::File output_file,
-                          PatchFileCourgetteCallback callback) override;
+  void PatchFilePuffPatch(base::File input_file_path,
+                          base::File patch_file_path,
+                          base::File output_file_path,
+                          PatchFilePuffPatchCallback callback) override;
+
+  void PatchFileZucchini(
+      base::File input_file_path,
+      base::File patch_file_path,
+      base::File output_file_path,
+      base::OnceCallback<void(zucchini::status::Code)> callback) override;
 
   mojo::Receiver<mojom::FilePatcher> receiver_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(FilePatcherImpl);
 };
 
 }  // namespace patch

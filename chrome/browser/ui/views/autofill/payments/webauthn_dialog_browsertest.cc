@@ -1,37 +1,40 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/callback_helpers.h"
+#include "chrome/browser/ui/autofill/payments/webauthn_dialog.h"
+
+#include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
 #include "chrome/browser/ui/autofill/payments/webauthn_dialog_controller_impl.h"
-#include "chrome/browser/ui/autofill/payments/webauthn_dialog_view.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
-#include "chrome/browser/ui/views/autofill/payments/webauthn_dialog_view_impl.h"
+#include "chrome/browser/ui/views/autofill/payments/webauthn_dialog_view.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/test/browser_test.h"
 
 namespace autofill {
-
 namespace {
+
 // If ShowAndVerifyUi() is used, the tests must be named as "InvokeUi_"
 // appending these names.
 constexpr char kOfferDialogName[] = "Offer";
 constexpr char kVerifyDialogName[] = "Verify";
-}  // namespace
 
 class WebauthnDialogBrowserTest : public DialogBrowserTest {
  public:
   WebauthnDialogBrowserTest() = default;
 
+  WebauthnDialogBrowserTest(const WebauthnDialogBrowserTest&) = delete;
+  WebauthnDialogBrowserTest& operator=(const WebauthnDialogBrowserTest&) =
+      delete;
+
   // DialogBrowserTest:
   void ShowUi(const std::string& name) override {
-    content::WebContents* web_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
-
     // Do lazy initialization of WebauthnDialogControllerImpl.
-    WebauthnDialogControllerImpl::CreateForWebContents(web_contents);
+    WebauthnDialogControllerImpl::CreateForPage(
+        web_contents()->GetPrimaryPage());
 
     if (name == kOfferDialogName) {
       controller()->ShowOfferDialog(base::DoNothing());
@@ -40,28 +43,33 @@ class WebauthnDialogBrowserTest : public DialogBrowserTest {
     }
   }
 
-  WebauthnDialogViewImpl* GetWebauthnDialog() {
-    if (!controller())
+  WebauthnDialogView* GetWebauthnDialogView() {
+    if (!controller()) {
       return nullptr;
+    }
 
-    WebauthnDialogView* dialog_view = controller()->dialog_view();
-    if (!dialog_view)
+    WebauthnDialog* dialog = controller()->dialog();
+    if (!dialog) {
       return nullptr;
+    }
 
-    return static_cast<WebauthnDialogViewImpl*>(dialog_view);
+    return static_cast<WebauthnDialogView*>(dialog);
   }
 
   WebauthnDialogControllerImpl* controller() {
-    if (!browser() || !browser()->tab_strip_model() ||
-        !browser()->tab_strip_model()->GetActiveWebContents())
+    if (!browser() || !web_contents()) {
       return nullptr;
+    }
 
-    return WebauthnDialogControllerImpl::FromWebContents(
-        browser()->tab_strip_model()->GetActiveWebContents());
+    return WebauthnDialogControllerImpl::GetForPage(
+        web_contents()->GetPrimaryPage());
   }
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(WebauthnDialogBrowserTest);
+  content::WebContents* web_contents() {
+    return browser()->GetActiveTabInterface()
+               ? browser()->GetActiveTabInterface()->GetContents()
+               : nullptr;
+  }
 };
 
 IN_PROC_BROWSER_TEST_F(WebauthnDialogBrowserTest, InvokeUi_Offer) {
@@ -74,7 +82,7 @@ IN_PROC_BROWSER_TEST_F(WebauthnDialogBrowserTest,
                        OfferDialog_CanCloseTabWhileDialogShowing) {
   ShowUi(kOfferDialogName);
   VerifyUi();
-  browser()->tab_strip_model()->GetActiveWebContents()->Close();
+  web_contents()->Close();
   base::RunLoop().RunUntilIdle();
 }
 
@@ -83,7 +91,7 @@ IN_PROC_BROWSER_TEST_F(WebauthnDialogBrowserTest,
                        OfferDialog_CanCloseBrowserWhileDialogShowing) {
   ShowUi(kOfferDialogName);
   VerifyUi();
-  browser()->window()->Close();
+  browser()->GetWindow()->Close();
   base::RunLoop().RunUntilIdle();
 }
 
@@ -92,7 +100,7 @@ IN_PROC_BROWSER_TEST_F(WebauthnDialogBrowserTest,
                        OfferDialog_ClickCancelButton) {
   ShowUi(kOfferDialogName);
   VerifyUi();
-  GetWebauthnDialog()->CancelDialog();
+  GetWebauthnDialogView()->CancelDialog();
   base::RunLoop().RunUntilIdle();
 }
 
@@ -104,7 +112,7 @@ IN_PROC_BROWSER_TEST_F(WebauthnDialogBrowserTest,
                        VerifyPendingDialog_CanCloseTabWhileDialogShowing) {
   ShowUi(kVerifyDialogName);
   VerifyUi();
-  browser()->tab_strip_model()->GetActiveWebContents()->Close();
+  web_contents()->Close();
   base::RunLoop().RunUntilIdle();
 }
 
@@ -113,7 +121,7 @@ IN_PROC_BROWSER_TEST_F(WebauthnDialogBrowserTest,
                        VerifyPendingDialog_CanCloseBrowserWhileDialogShowing) {
   ShowUi(kVerifyDialogName);
   VerifyUi();
-  browser()->window()->Close();
+  browser()->GetWindow()->Close();
   base::RunLoop().RunUntilIdle();
 }
 
@@ -131,8 +139,9 @@ IN_PROC_BROWSER_TEST_F(WebauthnDialogBrowserTest,
                        VerifyPendingDialog_ClickCancelButton) {
   ShowUi(kVerifyDialogName);
   VerifyUi();
-  GetWebauthnDialog()->CancelDialog();
+  GetWebauthnDialogView()->CancelDialog();
   base::RunLoop().RunUntilIdle();
 }
 
+}  // namespace
 }  // namespace autofill

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,9 +12,7 @@ chrome.test.runTests([
     chrome.test.succeed();
   },
   function setSystemProxy() {
-    var config = { mode: "system" };
-    chrome.proxy.settings.set(
-        {'value': config},
-        chrome.test.callbackPass());
-  }
+    const config = {mode: 'system'};
+    chrome.proxy.settings.set({value: config}, chrome.test.callbackPass());
+  },
 ]);

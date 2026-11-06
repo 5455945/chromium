@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,12 @@
 
 #include <string>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/singleton.h"
+#include "base/scoped_observation.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/ash/app_mode/kiosk_app_manager_observer.h"
 #include "chrome/browser/ash/system/automatic_reboot_manager_observer.h"
-#include "components/keyed_service/content/browser_context_keyed_service_factory.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "extensions/browser/update_observer.h"
 
@@ -21,6 +20,7 @@ class Profile;
 
 namespace extensions {
 class Extension;
+class ExtensionUpdater;
 }
 
 namespace ash {
@@ -38,6 +38,8 @@ class KioskAppUpdateService : public KeyedService,
   KioskAppUpdateService(
       Profile* profile,
       system::AutomaticRebootManager* automatic_reboot_manager);
+  KioskAppUpdateService(const KioskAppUpdateService&) = delete;
+  KioskAppUpdateService& operator=(const KioskAppUpdateService&) = delete;
   ~KioskAppUpdateService() override;
 
   void Init(const std::string& app_id);
@@ -54,7 +56,7 @@ class KioskAppUpdateService : public KeyedService,
   void Shutdown() override;
 
   // extensions::UpdateObserver overrides:
-  void OnAppUpdateAvailable(const extensions::Extension* extension) override;
+  void OnAppUpdateAvailable(const extensions::Extension& extension) override;
   void OnChromeUpdateAvailable() override {}
 
   // system::AutomaticRebootManagerObserver overrides:
@@ -64,37 +66,18 @@ class KioskAppUpdateService : public KeyedService,
   // KioskAppManagerObserver overrides:
   void OnKioskAppCacheUpdated(const std::string& app_id) override;
 
-  Profile* profile_;
+  raw_ptr<Profile> profile_;
   std::string app_id_;
 
   // After we detect an upgrade we start a one-short timer to force restart.
   base::OneShotTimer restart_timer_;
 
-  system::AutomaticRebootManager* automatic_reboot_manager_;  // Not owned.
+  raw_ptr<system::AutomaticRebootManager>
+      automatic_reboot_manager_;  // Not owned.
 
-  DISALLOW_COPY_AND_ASSIGN(KioskAppUpdateService);
-};
-
-// Singleton that owns all KioskAppUpdateServices and associates them with
-// profiles.
-class KioskAppUpdateServiceFactory : public BrowserContextKeyedServiceFactory {
- public:
-  // Returns the KioskAppUpdateService for |profile|, creating it if it is not
-  // yet created.
-  static KioskAppUpdateService* GetForProfile(Profile* profile);
-
-  // Returns the KioskAppUpdateServiceFactory instance.
-  static KioskAppUpdateServiceFactory* GetInstance();
-
- private:
-  friend struct base::DefaultSingletonTraits<KioskAppUpdateServiceFactory>;
-
-  KioskAppUpdateServiceFactory();
-  ~KioskAppUpdateServiceFactory() override;
-
-  // BrowserContextKeyedServiceFactory overrides:
-  KeyedService* BuildServiceInstanceFor(
-      content::BrowserContext* profile) const override;
+  base::ScopedObservation<extensions::ExtensionUpdater,
+                          extensions::UpdateObserver>
+      update_observation_{this};
 };
 
 }  // namespace ash

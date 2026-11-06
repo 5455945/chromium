@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +8,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <list>
 #include <string>
-#include <vector>
+#include <string_view>
 
-#include "base/macros.h"
+#include "base/byte_size.h"
+#include "base/containers/flat_set.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/strings/string_piece.h"
+#include "base/time/time.h"
 #include "net/base/completion_once_callback.h"
 #include "net/base/idempotency.h"
 #include "net/base/io_buffer.h"
@@ -26,8 +27,8 @@
 #include "net/quic/quic_chromium_client_session.h"
 #include "net/quic/quic_chromium_client_stream.h"
 #include "net/spdy/multiplexed_http_stream.h"
-#include "net/third_party/quiche/src/quic/core/http/quic_client_push_promise_index.h"
-#include "net/third_party/quiche/src/quic/core/quic_packets.h"
+#include "net/third_party/quiche/src/quiche/common/http/http_header_block.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_packets.h"
 
 namespace net {
 
@@ -43,13 +44,16 @@ class NET_EXPORT_PRIVATE QuicHttpStream : public MultiplexedHttpStream {
  public:
   explicit QuicHttpStream(
       std::unique_ptr<QuicChromiumClientSession::Handle> session,
-      std::vector<std::string> dns_aliases);
+      base::flat_set<std::string> dns_aliases);
+
+  QuicHttpStream(const QuicHttpStream&) = delete;
+  QuicHttpStream& operator=(const QuicHttpStream&) = delete;
 
   ~QuicHttpStream() override;
 
   // HttpStream implementation.
-  int InitializeStream(const HttpRequestInfo* request_info,
-                       bool can_send_early,
+  void RegisterRequest(const HttpRequestInfo* request_info) override;
+  int InitializeStream(bool can_send_early,
                        RequestPriority priority,
                        const NetLogWithSource& net_log,
                        CompletionOnceCallback callback) override;
@@ -63,18 +67,22 @@ class NET_EXPORT_PRIVATE QuicHttpStream : public MultiplexedHttpStream {
   void Close(bool not_reusable) override;
   bool IsResponseBodyComplete() const override;
   bool IsConnectionReused() const override;
-  int64_t GetTotalReceivedBytes() const override;
-  int64_t GetTotalSentBytes() const override;
+  base::ByteSize GetTotalReceivedBytes() const override;
+  base::ByteSize GetTotalSentBytes() const override;
   bool GetLoadTimingInfo(LoadTimingInfo* load_timing_info) const override;
   bool GetAlternativeService(
       AlternativeService* alternative_service) const override;
   void PopulateNetErrorDetails(NetErrorDetails* details) override;
+  void PopulateLoadTimingInternalInfo(
+      LoadTimingInternalInfo* load_timing_internal_info) const override;
   void SetPriority(RequestPriority priority) override;
   void SetRequestIdempotency(Idempotency idempotency) override;
-  const std::vector<std::string>& GetDnsAliases() const override;
-  base::StringPiece GetAcceptChViaAlps() const override;
+  const base::flat_set<std::string>& GetDnsAliases() const override;
+  std::string_view GetAcceptChViaAlps() const override;
+  std::optional<QuicConnectionDetails> GetQuicConnectionDetails()
+      const override;
 
-  static HttpResponseInfo::ConnectionInfo ConnectionInfoFromQuicVersion(
+  static HttpConnectionInfo ConnectionInfoFromQuicVersion(
       quic::ParsedQuicVersion quic_version);
 
  private:
@@ -82,8 +90,6 @@ class NET_EXPORT_PRIVATE QuicHttpStream : public MultiplexedHttpStream {
 
   enum State {
     STATE_NONE,
-    STATE_HANDLE_PROMISE,
-    STATE_HANDLE_PROMISE_COMPLETE,
     STATE_REQUEST_STREAM,
     STATE_REQUEST_STREAM_COMPLETE,
     STATE_SET_REQUEST_PRIORITY,
@@ -100,8 +106,6 @@ class NET_EXPORT_PRIVATE QuicHttpStream : public MultiplexedHttpStream {
   void DoCallback(int rv);
 
   int DoLoop(int rv);
-  int DoHandlePromise();
-  int DoHandlePromiseComplete(int rv);
   int DoRequestStream();
   int DoRequestStreamComplete(int rv);
   int DoSetRequestPriority();
@@ -113,7 +117,7 @@ class NET_EXPORT_PRIVATE QuicHttpStream : public MultiplexedHttpStream {
   int DoSendBodyComplete(int rv);
 
   void OnReadResponseHeadersComplete(int rv);
-  int ProcessResponseHeaders(const spdy::Http2HeaderBlock& headers);
+  int ProcessResponseHeaders(const quiche::HttpHeaderBlock& headers);
   void ReadTrailingHeaders();
   void OnReadTrailingHeadersComplete(int rv);
 
@@ -148,7 +152,7 @@ class NET_EXPORT_PRIVATE QuicHttpStream : public MultiplexedHttpStream {
     return static_cast<const QuicChromiumClientSession::Handle*>(session());
   }
 
-  State next_state_;
+  State next_state_ = STATE_NONE;
 
   std::unique_ptr<QuicChromiumClientStream::Handle> stream_;
 
@@ -157,56 +161,61 @@ class NET_EXPORT_PRIVATE QuicHttpStream : public MultiplexedHttpStream {
 
   // The request to send.
   // Only valid before the response body is read.
-  const HttpRequestInfo* request_info_;
+  raw_ptr<const HttpRequestInfo> request_info_ = nullptr;
 
   // Whether this request can be sent without confirmation.
-  bool can_send_early_;
+  bool can_send_early_ = false;
 
   // The request body to send, if any, owned by the caller.
-  UploadDataStream* request_body_stream_;
+  raw_ptr<UploadDataStream> request_body_stream_ = nullptr;
   // Time the request was issued.
   base::Time request_time_;
   // The priority of the request.
-  RequestPriority priority_;
+  RequestPriority priority_ = MINIMUM_PRIORITY;
   // |response_info_| is the HTTP response data object which is filled in
   // when a the response headers are read.  It is not owned by this stream.
-  HttpResponseInfo* response_info_;
-  bool has_response_status_;  // true if response_status_ as been set.
+  raw_ptr<HttpResponseInfo> response_info_ = nullptr;
+  bool has_response_status_ = false;  // true if response_status_ as been set.
   // Because response data is buffered, also buffer the response status if the
   // stream is explicitly closed via OnError or OnClose with an error.
   // Once all buffered data has been returned, this will be used as the final
   // response.
-  int response_status_;
+  int response_status_ = ERR_UNEXPECTED;
 
   // Serialized request headers.
-  spdy::Http2HeaderBlock request_headers_;
+  quiche::HttpHeaderBlock request_headers_;
 
-  spdy::Http2HeaderBlock response_header_block_;
-  bool response_headers_received_;
+  quiche::HttpHeaderBlock response_header_block_;
+  bool response_headers_received_ = false;
 
-  spdy::Http2HeaderBlock trailing_header_block_;
-  bool trailing_headers_received_;
+  quiche::HttpHeaderBlock trailing_header_block_;
+  bool trailing_headers_received_ = false;
 
   // Number of bytes received by the headers stream on behalf of this stream.
-  int64_t headers_bytes_received_;
+  int64_t headers_bytes_received_ = 0;
   // Number of bytes sent by the headers stream on behalf of this stream.
-  int64_t headers_bytes_sent_;
+  int64_t headers_bytes_sent_ = 0;
 
   // Number of bytes received when the stream was closed.
-  int64_t closed_stream_received_bytes_;
+  base::ByteSize closed_stream_received_bytes_;
   // Number of bytes sent when the stream was closed.
-  int64_t closed_stream_sent_bytes_;
+  base::ByteSize closed_stream_sent_bytes_;
   // True if the stream is the first stream negotiated on the session. Set when
   // the stream was closed. If |stream_| is failed to be created, this takes on
   // the default value of false.
-  bool closed_is_first_stream_;
+  bool closed_is_first_stream_ = false;
+
+  quic::QuicErrorCode connection_error_ = quic::QUIC_NO_ERROR;
+  quic::QuicRstStreamErrorCode stream_error_ = quic::QUIC_STREAM_NO_ERROR;
+  uint64_t connection_wire_error_ = 0;
+  uint64_t ietf_application_error_ = 0;
 
   // The caller's callback to be used for asynchronous operations.
   CompletionOnceCallback callback_;
 
   // Caller provided buffer for the ReadResponseBody() response.
   scoped_refptr<IOBuffer> user_buffer_;
-  int user_buffer_len_;
+  int user_buffer_len_ = 0;
 
   // Temporary buffer used to read the request body from UploadDataStream.
   scoped_refptr<IOBufferWithSize> raw_request_body_buf_;
@@ -215,25 +224,22 @@ class NET_EXPORT_PRIVATE QuicHttpStream : public MultiplexedHttpStream {
 
   NetLogWithSource stream_net_log_;
 
-  int session_error_;  // Error code from the connection shutdown.
-
-  bool found_promise_;
+  int session_error_ =
+      ERR_UNEXPECTED;  // Error code from the connection shutdown.
 
   // Set to true when DoLoop() is being executed, false otherwise.
-  bool in_loop_;
+  bool in_loop_ = false;
 
   // Session connect timing info.
   LoadTimingInfo::ConnectTiming connect_timing_;
 
-  // Stores any DNS aliases for the remote endpoint. The alias chain is
-  // preserved in reverse order, from canonical name (i.e. address record name)
-  // through to query name. These are stored in the stream instead of the
-  // session due to complications related to IP-pooling.
-  std::vector<std::string> dns_aliases_;
+  // Stores any DNS aliases for the remote endpoint. Includes all known
+  // aliases, e.g. from A, AAAA, or HTTPS, not just from the address used for
+  // the connection, in no particular order. These are stored in the stream
+  // instead of the session due to complications related to IP-pooling.
+  base::flat_set<std::string> dns_aliases_;
 
   base::WeakPtrFactory<QuicHttpStream> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(QuicHttpStream);
 };
 
 }  // namespace net

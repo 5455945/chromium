@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,9 @@
 
 namespace extensions {
 
-ManifestPermission::ManifestPermission() {}
+ManifestPermission::ManifestPermission() = default;
 
-ManifestPermission::~ManifestPermission() { }
+ManifestPermission::~ManifestPermission() = default;
 
 std::unique_ptr<ManifestPermission> ManifestPermission::Clone() const {
   return Union(this);
@@ -19,7 +19,7 @@ bool ManifestPermission::Contains(const ManifestPermission* rhs) const {
 }
 
 bool ManifestPermission::Equal(const ManifestPermission* rhs) const {
-  return *ToValue() == *rhs->ToValue();
+  return ToValue() == rhs->ToValue();
 }
 
 bool ManifestPermission::RequiresManagedSessionFullLoginWarning() const {

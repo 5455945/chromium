@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -14,7 +14,6 @@
 #include <string>
 
 #include "base/files/file.h"
-#include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "third_party/protobuf/src/google/protobuf/repeated_field.h"
 
@@ -37,6 +36,9 @@ class BinaryFeatureExtractor
   static const ExtractHeadersOption kOmitExports = 1U << 0;
 
   BinaryFeatureExtractor();
+
+  BinaryFeatureExtractor(const BinaryFeatureExtractor&) = delete;
+  BinaryFeatureExtractor& operator=(const BinaryFeatureExtractor&) = delete;
 
   // Fills in the DownloadRequest_SignatureInfo for the given file path.
   // This method may be called on any thread.
@@ -66,7 +68,7 @@ class BinaryFeatureExtractor
   // As above, but works on a byte array containing image data. This does not
   // take ownership of the data.
   virtual bool ExtractImageFeaturesFromData(
-      const uint8_t* data, size_t data_size,
+      base::span<const uint8_t> data,
       ExtractHeadersOption options,
       ClientDownloadRequest_ImageHeaders* image_headers,
       google::protobuf::RepeatedPtrField<std::string>* signed_data);
@@ -78,9 +80,6 @@ class BinaryFeatureExtractor
  protected:
   friend class base::RefCountedThreadSafe<BinaryFeatureExtractor>;
   virtual ~BinaryFeatureExtractor();
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(BinaryFeatureExtractor);
 };
 }  // namespace safe_browsing
 

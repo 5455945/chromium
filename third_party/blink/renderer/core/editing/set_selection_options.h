@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,8 +22,9 @@ class CORE_EXPORT SetSelectionOptions final {
  public:
   class CORE_EXPORT Builder;
 
-  SetSelectionOptions(const SetSelectionOptions&);
   SetSelectionOptions();
+  SetSelectionOptions(const SetSelectionOptions&);
+  SetSelectionOptions& operator=(const SetSelectionOptions&);
 
   CursorAlignOnScroll GetCursorAlignOnScroll() const {
     return cursor_align_on_scroll_;
@@ -37,6 +38,9 @@ class CORE_EXPORT SetSelectionOptions final {
   bool ShouldShowHandle() const { return should_show_handle_; }
   bool ShouldShrinkNextTap() const { return should_shrink_next_tap_; }
   bool IsDirectional() const { return is_directional_; }
+  bool ShouldNotifySelectionControllerOfUnchangedSelection() const {
+    return should_notify_selection_controller_of_unchanged_selection_;
+  }
 
  private:
   CursorAlignOnScroll cursor_align_on_scroll_ = CursorAlignOnScroll::kIfNeeded;
@@ -49,6 +53,7 @@ class CORE_EXPORT SetSelectionOptions final {
   bool should_show_handle_ = false;
   bool should_shrink_next_tap_ = false;
   bool is_directional_ = false;
+  bool should_notify_selection_controller_of_unchanged_selection_ = false;
 };
 
 // This class is used for building |SelectionData| object.
@@ -73,6 +78,7 @@ class CORE_EXPORT SetSelectionOptions::Builder final {
   Builder& SetShouldShowHandle(bool);
   Builder& SetShouldShrinkNextTap(bool);
   Builder& SetIsDirectional(bool);
+  Builder& SetShouldNotifySelectionControllerOfUnchangedSelection(bool);
 
  private:
   SetSelectionOptions data_;

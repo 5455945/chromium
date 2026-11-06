@@ -1,10 +1,10 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/browser_ui/site_settings/android/storage_info_fetcher.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
@@ -39,19 +39,16 @@ void StorageInfoFetcher::FetchStorageInfo(FetchCallback fetch_callback) {
 }
 
 void StorageInfoFetcher::ClearStorage(const std::string& host,
-                                      blink::mojom::StorageType type,
                                       ClearCallback clear_callback) {
   // Balanced in OnUsageCleared.
   AddRef();
 
   clear_callback_ = std::move(clear_callback);
-  type_to_delete_ = type;
 
   content::GetIOThreadTaskRunner({})->PostTask(
       FROM_HERE,
       base::BindOnce(
-          &storage::QuotaManager::DeleteHostData, quota_manager_, host, type,
-          storage::AllQuotaClientTypes(),
+          &storage::QuotaManager::DeleteHostData, quota_manager_, host,
           base::BindOnce(&StorageInfoFetcher::OnUsageClearedInternal, this)));
 }
 
@@ -82,7 +79,7 @@ void StorageInfoFetcher::OnUsageClearedInternal(
     blink::mojom::QuotaStatusCode code) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
 
-  quota_manager_->ResetUsageTracker(type_to_delete_);
+  quota_manager_->ResetUsageTracker();
 
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE,

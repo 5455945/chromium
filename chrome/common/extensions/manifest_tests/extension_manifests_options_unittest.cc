@@ -1,19 +1,22 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/cxx17_backports.h"
 #include "base/strings/stringprintf.h"
 #include "chrome/common/extensions/manifest_tests/chrome_manifest_test.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/error_utils.h"
 #include "extensions/common/feature_switch.h"
 #include "extensions/common/manifest_constants.h"
 #include "extensions/common/manifest_handlers/options_page_info.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
 using extensions::FeatureSwitch;
 using extensions::OptionsPageInfo;
 
+namespace extensions {
 namespace {
 
 class OptionsPageManifestTest : public ChromeManifestTest {
@@ -76,7 +79,7 @@ TEST_F(OptionsPageManifestTest, OptionsPageInApps) {
   extension = LoadAndExpectSuccess("platform_app_with_options_page.json");
   EXPECT_TRUE(!OptionsPageInfo::HasOptionsPage(extension.get()));
 
-  Testcase testcases[] = {
+  const Testcase testcases[] = {
       // Forbid options page with relative URL in hosted apps.
       Testcase("hosted_app_relative_options.json",
                extensions::manifest_errors::kInvalidOptionsPageInHostedApp),
@@ -86,10 +89,9 @@ TEST_F(OptionsPageManifestTest, OptionsPageInApps) {
                extensions::manifest_errors::kInvalidOptionsPageInHostedApp),
 
       // Forbid absolute URL for options page in packaged apps.
-      Testcase(
-          "packaged_app_absolute_options.json",
-          extensions::manifest_errors::kInvalidOptionsPageExpectUrlInPackage)};
-  RunTestcases(testcases, base::size(testcases), EXPECT_TYPE_ERROR);
+      Testcase("packaged_app_absolute_options.json",
+               extensions::manifest_errors::kInvalidOptionsPage)};
+  RunTestcases(testcases, ExpectType::kError);
 }
 
 // Tests for the options_ui.page manifest field.
@@ -108,9 +110,9 @@ TEST_F(OptionsPageManifestTest, OptionsUIPage) {
                                extension->id().c_str()),
             OptionsPageInfo::GetOptionsPage(extension.get()).spec());
 
-  Testcase testcases[] = {Testcase("options_ui_page_bad_url.json",
-                                   "'page': expected page, got null")};
-  RunTestcases(testcases, base::size(testcases), EXPECT_TYPE_WARNING);
+  RunTestcase(Testcase("options_ui_page_bad_url.json",
+                       "'page': expected page, got null"),
+              ExpectType::kWarning);
 }
 
 // Runs TestOptionsUIChromeStyleAndOpenInTab with and without the
@@ -150,3 +152,4 @@ TEST_F(OptionsPageManifestTest, OptionsPageChromeStyleManifestV3) {
 }
 
 }  // namespace
+}  // namespace extensions

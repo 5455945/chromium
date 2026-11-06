@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,15 @@
 #include <map>
 
 #include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/timer/timer.h"
+#include "components/fcm/engine/fcm_stats_recorder_impl.h"
 #include "components/gcm_driver/gcm_client.h"
-#include "components/gcm_driver/gcm_stats_recorder_impl.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
+
+namespace fcm {
+enum class FcmDecryptionResult;
+}  // namespace fcm
 
 namespace base {
 class SequencedTaskRunner;
@@ -36,18 +39,22 @@ class FakeGCMClient : public GCMClient {
   static std::string GenerateGCMRegistrationID(
       const std::vector<std::string>& sender_ids);
   static std::string GenerateInstanceIDToken(
-      const std::string& authorized_entity, const std::string& scope);
+      const std::string& authorized_entity,
+      const std::string& scope);
 
   FakeGCMClient(const scoped_refptr<base::SequencedTaskRunner>& ui_thread,
                 const scoped_refptr<base::SequencedTaskRunner>& io_thread);
+
+  FakeGCMClient(const FakeGCMClient&) = delete;
+  FakeGCMClient& operator=(const FakeGCMClient&) = delete;
+
   ~FakeGCMClient() override;
 
   // Overridden from GCMClient:
   // Called on IO thread.
   void Initialize(
-      const ChromeBuildInfo& chrome_build_info,
+      const fcm::ChromeBuildInfo& chrome_build_info,
       const base::FilePath& store_path,
-      bool remove_account_mappings_with_email_key,
       const scoped_refptr<base::SequencedTaskRunner>& blocking_task_runner,
       scoped_refptr<base::SequencedTaskRunner> io_task_runner,
       base::RepeatingCallback<void(
@@ -67,17 +74,10 @@ class FakeGCMClient : public GCMClient {
             const std::string& receiver_id,
             const OutgoingMessage& message) override;
   void RecordDecryptionFailure(const std::string& app_id,
-                               GCMDecryptionResult result) override;
+                               fcm::FcmDecryptionResult result) override;
   void SetRecording(bool recording) override;
   void ClearActivityLogs() override;
   GCMStatistics GetStatistics() const override;
-  void SetAccountTokens(
-      const std::vector<AccountTokenInfo>& account_tokens) override;
-  void UpdateAccountMapping(const AccountMapping& account_mapping) override;
-  void RemoveAccountMapping(const CoreAccountId& account_id) override;
-  void SetLastTokenFetchTime(const base::Time& time) override;
-  void UpdateHeartbeatTimer(
-      std::unique_ptr<base::RetainingOneShotTimer> timer) override;
   void AddInstanceIDData(const std::string& app_id,
                          const std::string& instance_id,
                          const std::string& extra_data) override;
@@ -85,8 +85,6 @@ class FakeGCMClient : public GCMClient {
   void GetInstanceIDData(const std::string& app_id,
                          std::string* instance_id,
                          std::string* extra_data) override;
-  void AddHeartbeatInterval(const std::string& scope, int interval_ms) override;
-  void RemoveHeartbeatInterval(const std::string& scope) override;
 
   // Initiate the start that has been delayed.
   // Called on UI thread.
@@ -115,10 +113,8 @@ class FakeGCMClient : public GCMClient {
   void MessagesDeleted(const std::string& app_id);
   void MessageSendError(const std::string& app_id,
                         const SendErrorDetails& send_error_details);
-  void SendAcknowledgement(const std::string& app_id,
-                           const std::string& message_id);
 
-  Delegate* delegate_;
+  raw_ptr<Delegate> delegate_;
   std::string product_category_for_subtypes_;
   bool started_;
   StartMode start_mode_;
@@ -126,10 +122,8 @@ class FakeGCMClient : public GCMClient {
   scoped_refptr<base::SequencedTaskRunner> ui_thread_;
   scoped_refptr<base::SequencedTaskRunner> io_thread_;
   std::map<std::string, std::pair<std::string, std::string>> instance_id_data_;
-  GCMStatsRecorderImpl recorder_;
+  fcm::FcmStatsRecorderImpl recorder_;
   base::WeakPtrFactory<FakeGCMClient> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(FakeGCMClient);
 };
 
 }  // namespace gcm

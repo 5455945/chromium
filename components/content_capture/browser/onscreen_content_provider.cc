@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,11 @@
 
 #include <utility>
 
+#include "base/memory/ptr_util.h"
 #include "base/notreached.h"
 #include "components/content_capture/browser/content_capture_consumer.h"
 #include "components/content_capture/browser/content_capture_receiver.h"
+#include "components/content_capture/common/content_capture_features.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/navigation_entry.h"
@@ -18,36 +20,36 @@
 #include "third_party/blink/public/mojom/favicon/favicon_url.mojom.h"
 
 namespace content_capture {
-namespace {
 
-const void* const kUserDataKey = &kUserDataKey;
-
-}  // namespace
+WEB_CONTENTS_USER_DATA_KEY_IMPL(OnscreenContentProvider);
 
 OnscreenContentProvider::OnscreenContentProvider(
     content::WebContents* web_contents)
-    : content::WebContentsObserver(web_contents) {
-  const std::vector<content::RenderFrameHost*> frames =
-      web_contents->GetAllFrames();
-  for (content::RenderFrameHost* frame : frames)
-    RenderFrameCreated(frame);
-
-  web_contents->SetUserData(kUserDataKey, base::WrapUnique(this));
+    : content::WebContentsObserver(web_contents),
+      content::WebContentsUserData<OnscreenContentProvider>(*web_contents) {
+  web_contents->ForEachRenderFrameHostWithAction(
+      [this](content::RenderFrameHost* render_frame_host) {
+        // Don't cross into inner WebContents since we wouldn't be notified of
+        // its changes.
+        if (content::WebContents::FromRenderFrameHost(render_frame_host) !=
+            this->web_contents()) {
+          return content::RenderFrameHost::FrameIterationAction::kSkipChildren;
+        }
+        if (render_frame_host->IsRenderFrameLive()) {
+          RenderFrameCreated(render_frame_host);
+        }
+        return content::RenderFrameHost::FrameIterationAction::kContinue;
+      });
 }
 
 OnscreenContentProvider::~OnscreenContentProvider() = default;
 
 // static
-OnscreenContentProvider* OnscreenContentProvider::FromWebContents(
-    content::WebContents* contents) {
-  return static_cast<OnscreenContentProvider*>(
-      contents->GetUserData(kUserDataKey));
-}
-
 OnscreenContentProvider* OnscreenContentProvider::Create(
     content::WebContents* web_contents) {
   DCHECK(!FromWebContents(web_contents));
-  return new OnscreenContentProvider(web_contents);
+  CreateForWebContents(web_contents);
+  return FromWebContents(web_contents);
 }
 
 // static
@@ -91,7 +93,7 @@ void OnscreenContentProvider::RemoveConsumer(ContentCaptureConsumer& consumer) {
 
 ContentCaptureReceiver* OnscreenContentProvider::ContentCaptureReceiverForFrame(
     content::RenderFrameHost* render_frame_host) const {
-  auto mapping = frame_map_.find(render_frame_host);
+  auto mapping = frame_map_.find(render_frame_host->GetGlobalId());
   return mapping == frame_map_.end() ? nullptr : mapping->second.get();
 }
 
@@ -103,7 +105,7 @@ void OnscreenContentProvider::RenderFrameCreated(
   if (ContentCaptureReceiverForFrame(render_frame_host))
     return;
   frame_map_.insert(std::make_pair(
-      render_frame_host,
+      render_frame_host->GetGlobalId(),
       std::make_unique<ContentCaptureReceiver>(render_frame_host)));
 }
 
@@ -113,7 +115,7 @@ void OnscreenContentProvider::RenderFrameDeleted(
           ContentCaptureReceiverForFrame(render_frame_host)) {
     content_capture_receiver->RemoveSession();
   }
-  frame_map_.erase(render_frame_host);
+  frame_map_.erase(render_frame_host->GetGlobalId());
 }
 
 void OnscreenContentProvider::ReadyToCommitNavigation(
@@ -141,11 +143,22 @@ void OnscreenContentProvider::ReadyToCommitNavigation(
 
 void OnscreenContentProvider::TitleWasSet(content::NavigationEntry* entry) {
   // Set the title to the mainframe.
-  if (auto* receiver =
-          ContentCaptureReceiverForFrame(web_contents()->GetMainFrame())) {
+  if (auto* receiver = ContentCaptureReceiverForFrame(
+          web_contents()->GetPrimaryMainFrame())) {
     // To match what the user sees, intentionally get the title from WebContents
     // instead of NavigationEntry, though they might be same.
     receiver->SetTitle(web_contents()->GetTitle());
+  }
+}
+
+void OnscreenContentProvider::FlushCaptureContent(
+    ContentCaptureReceiver* content_capture_receiver,
+    const ContentCaptureFrame& data) {
+  ContentCaptureSession parent_session;
+  BuildContentCaptureSession(content_capture_receiver, true /* ancestor_only */,
+                             &parent_session);
+  for (content_capture::ContentCaptureConsumer* consumer : consumers_) {
+    consumer->FlushCaptureContent(parent_session, data);
   }
 }
 
@@ -156,8 +169,9 @@ void OnscreenContentProvider::DidCaptureContent(
   ContentCaptureSession parent_session;
   BuildContentCaptureSession(content_capture_receiver, true /* ancestor_only */,
                              &parent_session);
-  for (auto* consumer : consumers_)
+  for (content_capture::ContentCaptureConsumer* consumer : consumers_) {
     consumer->DidCaptureContent(parent_session, data);
+  }
 }
 
 void OnscreenContentProvider::DidUpdateContent(
@@ -166,8 +180,9 @@ void OnscreenContentProvider::DidUpdateContent(
   ContentCaptureSession parent_session;
   BuildContentCaptureSession(content_capture_receiver, true /* ancestor_only */,
                              &parent_session);
-  for (auto* consumer : consumers_)
+  for (content_capture::ContentCaptureConsumer* consumer : consumers_) {
     consumer->DidUpdateContent(parent_session, data);
+  }
 }
 
 void OnscreenContentProvider::DidRemoveContent(
@@ -178,8 +193,9 @@ void OnscreenContentProvider::DidRemoveContent(
   // |content_capture_receiver| associated frame.
   BuildContentCaptureSession(content_capture_receiver,
                              false /* ancestor_only */, &session);
-  for (auto* consumer : consumers_)
+  for (content_capture::ContentCaptureConsumer* consumer : consumers_) {
     consumer->DidRemoveContent(session, data);
+  }
 }
 
 void OnscreenContentProvider::DidRemoveSession(
@@ -197,8 +213,9 @@ void OnscreenContentProvider::DidRemoveSession(
   if (!BuildContentCaptureSessionLastSeen(content_capture_receiver, &session))
     return;
 
-  for (auto* consumer : consumers_)
+  for (content_capture::ContentCaptureConsumer* consumer : consumers_) {
     consumer->DidRemoveSession(session);
+  }
 }
 
 void OnscreenContentProvider::DidUpdateTitle(
@@ -210,13 +227,15 @@ void OnscreenContentProvider::DidUpdateTitle(
   // Shall only update mainframe's title.
   DCHECK(session.size() == 1);
 
-  for (auto* consumer : consumers_)
+  for (content_capture::ContentCaptureConsumer* consumer : consumers_) {
     consumer->DidUpdateTitle(*session.begin());
+  }
 }
 
 void OnscreenContentProvider::DidUpdateFaviconURL(
     content::RenderFrameHost* render_frame_host,
-    const std::vector<blink::mojom::FaviconURLPtr>& candidates) {
+    const std::vector<blink::mojom::FaviconURLPtr>& candidates,
+    blink::mojom::FaviconUpdateReason reason) {
   if (ContentCaptureReceiver::
           disable_get_favicon_from_web_contents_for_testing()) {
     return;
@@ -227,10 +246,7 @@ void OnscreenContentProvider::DidUpdateFaviconURL(
 void OnscreenContentProvider::NotifyFaviconURLUpdated(
     content::RenderFrameHost* render_frame_host,
     const std::vector<blink::mojom::FaviconURLPtr>& candidates) {
-  // Only set the favicons for the mainframe.
-  if (render_frame_host != web_contents()->GetMainFrame())
-    return;
-
+  DCHECK(render_frame_host->IsInPrimaryMainFrame());
   if (auto* receiver = ContentCaptureReceiverForFrame(render_frame_host)) {
     receiver->UpdateFaviconURL(candidates);
   }
@@ -244,8 +260,51 @@ void OnscreenContentProvider::DidUpdateFavicon(
 
   // Shall only update mainframe's title.
   DCHECK(session.size() == 1);
-  for (auto* consumer : consumers_)
+  for (content_capture::ContentCaptureConsumer* consumer : consumers_) {
     consumer->DidUpdateFavicon(*session.begin());
+  }
+}
+
+void OnscreenContentProvider::DidUpdateSensitivityScore(
+    float sensitivity_score) {
+  if (!content_capture::features::ShouldSendMetadataForDataShare() ||
+      !ShouldCapture(web_contents()->GetLastCommittedURL())) {
+    return;
+  }
+  for (content_capture::ContentCaptureConsumer* consumer : consumers_) {
+    consumer->DidUpdateSensitivityScore(web_contents()->GetLastCommittedURL(),
+                                        sensitivity_score);
+  }
+}
+
+void OnscreenContentProvider::DidUpdateLanguageDetails(
+    const std::string& detected_language,
+    float language_confidence) {
+  if (!content_capture::features::ShouldSendMetadataForDataShare() ||
+      !ShouldCapture(web_contents()->GetLastCommittedURL())) {
+    return;
+  }
+  for (content_capture::ContentCaptureConsumer* consumer : consumers_) {
+    consumer->DidUpdateLanguageDetails(web_contents()->GetLastCommittedURL(),
+                                       detected_language, language_confidence);
+  }
+}
+
+void OnscreenContentProvider::ClearContentCaptureMetadata() {
+  if (!content_capture::features::ShouldSendMetadataForDataShare()) {
+    return;
+  }
+
+  for (content_capture::ContentCaptureConsumer* consumer : consumers_) {
+    consumer->ClearContentCaptureMetadata();
+  }
+}
+
+void OnscreenContentProvider::DidFinishNavigation(
+    content::NavigationHandle* navigation_handle) {
+  // This signal comes when a navigation finished in the WebContents. Clearing
+  // the Java-side builder.
+  ClearContentCaptureMetadata();
 }
 
 void OnscreenContentProvider::BuildContentCaptureSession(
@@ -255,7 +314,8 @@ void OnscreenContentProvider::BuildContentCaptureSession(
   if (!ancestor_only)
     session->push_back(content_capture_receiver->GetContentCaptureFrame());
 
-  content::RenderFrameHost* rfh = content_capture_receiver->rfh()->GetParent();
+  content::RenderFrameHost* rfh =
+      content_capture_receiver->rfh()->GetParentOrOuterDocument();
   while (rfh) {
     ContentCaptureReceiver* receiver = ContentCaptureReceiverForFrame(rfh);
     // TODO(michaelbai): Only creates ContentCaptureReceiver here, clean up the
@@ -266,7 +326,7 @@ void OnscreenContentProvider::BuildContentCaptureSession(
       DCHECK(receiver);
     }
     session->push_back(receiver->GetContentCaptureFrame());
-    rfh = receiver->rfh()->GetParent();
+    rfh = receiver->rfh()->GetParentOrOuterDocument();
   }
 }
 
@@ -275,21 +335,22 @@ bool OnscreenContentProvider::BuildContentCaptureSessionLastSeen(
     ContentCaptureSession* session) {
   session->push_back(
       content_capture_receiver->GetContentCaptureFrameLastSeen());
-  content::RenderFrameHost* rfh = content_capture_receiver->rfh()->GetParent();
+  content::RenderFrameHost* rfh =
+      content_capture_receiver->rfh()->GetParentOrOuterDocument();
   while (rfh) {
     ContentCaptureReceiver* receiver = ContentCaptureReceiverForFrame(rfh);
     if (!receiver)
       return false;
     session->push_back(receiver->GetContentCaptureFrameLastSeen());
-    rfh = receiver->rfh()->GetParent();
+    rfh = receiver->rfh()->GetParentOrOuterDocument();
   }
   return true;
 }
 
 bool OnscreenContentProvider::BuildContentCaptureSessionForMainFrame(
     ContentCaptureSession* session) {
-  if (auto* receiver =
-          ContentCaptureReceiverForFrame(web_contents()->GetMainFrame())) {
+  if (auto* receiver = ContentCaptureReceiverForFrame(
+          web_contents()->GetPrimaryMainFrame())) {
     session->push_back(receiver->GetContentCaptureFrame());
     return true;
   }
@@ -297,7 +358,7 @@ bool OnscreenContentProvider::BuildContentCaptureSessionForMainFrame(
 }
 
 bool OnscreenContentProvider::ShouldCapture(const GURL& url) {
-  for (auto* consumer : consumers_) {
+  for (content_capture::ContentCaptureConsumer* consumer : consumers_) {
     if (consumer->ShouldCapture(url))
       return true;
   }

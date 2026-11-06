@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,13 @@
 
 #include <windows.h>
 
+#include "base/check_op.h"
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace gfx {
-namespace win {
+namespace gfx::win {
 
 namespace {
 
@@ -19,9 +20,12 @@ class SystemFontsWinTest : public testing::Test {
  public:
   SystemFontsWinTest() = default;
 
+  SystemFontsWinTest(const SystemFontsWinTest&) = delete;
+  SystemFontsWinTest& operator=(const SystemFontsWinTest&) = delete;
+
  protected:
   void SetUp() override {
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
     // System fonts is keeping a cache of loaded system fonts. These fonts are
     // scaled based on global callbacks configured on startup. The tests in this
     // file are testing these callbacks and need to be sure we cleared the
@@ -29,16 +33,13 @@ class SystemFontsWinTest : public testing::Test {
     win::ResetSystemFontsForTesting();
 #endif
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(SystemFontsWinTest);
 };
 
-LOGFONT CreateLOGFONT(const wchar_t* name, LONG height) {
+LOGFONT CreateLOGFONT(std::wstring_view name, LONG height) {
   LOGFONT logfont = {};
   logfont.lfHeight = height;
-  auto result = wcscpy_s(logfont.lfFaceName, name);
-  DCHECK_EQ(0, result);
+
+  base::wcslcpy(logfont.lfFaceName, name);
   return logfont;
 }
 
@@ -168,5 +169,4 @@ TEST_F(SystemFontsWinTest, GetDefaultSystemFont) {
   EXPECT_EQ(base::WideToUTF8(kSegoeUI), system_font.GetFontName());
 }
 
-}  // namespace win
-}  // namespace gfx
+}  // namespace gfx::win

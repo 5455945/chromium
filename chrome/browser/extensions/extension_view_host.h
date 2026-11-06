@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,19 +7,20 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
 #include "build/build_config.h"
-#include "components/web_modal/web_contents_modal_dialog_host.h"
-#include "components/web_modal/web_contents_modal_dialog_manager_delegate.h"
-#include "content/public/browser/notification_observer.h"
-#include "content/public/browser/notification_registrar.h"
 #include "extensions/browser/extension_host.h"
-#include "extensions/common/mojom/view_type.mojom.h"
+#include "extensions/browser/extension_host_registry.h"
+#include "extensions/buildflags/buildflags.h"
 
-class Browser;
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/extensions/extension_view_host_web_modal_handler.h"
+#endif  // !BUILDFLAG(IS_ANDROID)
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace content {
-class SiteInstance;
 class WebContents;
 }
 
@@ -32,110 +33,120 @@ class ExtensionView;
 // page.
 class ExtensionViewHost
     : public ExtensionHost,
-      public web_modal::WebContentsModalDialogManagerDelegate,
-      public web_modal::WebContentsModalDialogHost,
-      public content::NotificationObserver {
+      public ExtensionHostRegistry::Observer {
  public:
-  // |browser| may be null, since extension views may be bound to TabContents
-  // hosted in ExternalTabContainer objects, which do not instantiate Browsers.
+  class Delegate {
+   public:
+    Delegate(const Delegate&) = delete;
+    Delegate& operator=(const Delegate&) = delete;
+    virtual ~Delegate();
+
+    // Opens a URL with the given disposition.
+    virtual content::WebContents* OpenURL(
+        const content::OpenURLParams& params,
+        base::OnceCallback<void(content::NavigationHandle&)>
+            navigation_handle_callback) = 0;
+
+    // Allows handling keyboard events before sending to the renderer.
+    virtual content::KeyboardEventProcessingResult PreHandleKeyboardEvent(
+        content::WebContents* source,
+        const input::NativeWebKeyboardEvent& event) = 0;
+
+    // Called when an eye dropper should open. Returns the eye dropper window.
+    virtual std::unique_ptr<content::EyeDropper> OpenEyeDropper(
+        content::RenderFrameHost* frame,
+        content::EyeDropperListener* listener) = 0;
+
+    // Returns the WindowController associated with this ExtensionViewHost, or
+    // nullptr if no window is associated with the delegate.
+    virtual WindowController* GetExtensionWindowController() = 0;
+
+   protected:
+    Delegate();
+  };
+
   ExtensionViewHost(const Extension* extension,
-                    content::SiteInstance* site_instance,
+                    content::BrowserContext* browser_context,
                     const GURL& url,
                     mojom::ViewType host_type,
-                    Browser* browser);
-  ~ExtensionViewHost() override;
+                    std::unique_ptr<Delegate> delegate);
 
-  Browser* browser() { return browser_; }
+  ExtensionViewHost(const ExtensionViewHost&) = delete;
+  ExtensionViewHost& operator=(const ExtensionViewHost&) = delete;
+
+  ~ExtensionViewHost() override;
 
   void set_view(ExtensionView* view) { view_ = view; }
   ExtensionView* view() { return view_; }
-
-  void SetAssociatedWebContents(content::WebContents* web_contents);
-
-  // Handles keyboard events that were not handled by HandleKeyboardEvent().
-  // Platform specific implementation may override this method to handle the
-  // event in platform specific way. Returns whether the events are handled.
-  virtual bool UnhandledKeyboardEvent(
-      content::WebContents* source,
-      const content::NativeWebKeyboardEvent& event);
 
   // ExtensionHost
   void OnDidStopFirstLoad() override;
   void LoadInitialURL() override;
   bool IsBackgroundPage() const override;
 
+  // content::WebContentsObserver:
+  void ReadyToCommitNavigation(
+      content::NavigationHandle* navigation_handle) override;
+
   // content::WebContentsDelegate
   content::WebContents* OpenURLFromTab(
       content::WebContents* source,
-      const content::OpenURLParams& params) override;
+      const content::OpenURLParams& params,
+      base::OnceCallback<void(content::NavigationHandle&)>
+          navigation_handle_callback) override;
   bool ShouldAllowRendererInitiatedCrossProcessNavigation(
-      bool is_main_frame_navigation) override;
+      bool is_outermost_main_frame_navigation) override;
   content::KeyboardEventProcessingResult PreHandleKeyboardEvent(
       content::WebContents* source,
-      const content::NativeWebKeyboardEvent& event) override;
-  bool HandleKeyboardEvent(
-      content::WebContents* source,
-      const content::NativeWebKeyboardEvent& event) override;
-  bool PreHandleGestureEvent(content::WebContents* source,
-                             const blink::WebGestureEvent& event) override;
-  std::unique_ptr<content::ColorChooser> OpenColorChooser(
-      content::WebContents* web_contents,
-      SkColor color,
-      const std::vector<blink::mojom::ColorSuggestionPtr>& suggestions)
-      override;
+      const input::NativeWebKeyboardEvent& event) override;
+  bool HandleKeyboardEvent(content::WebContents* source,
+                           const input::NativeWebKeyboardEvent& event) override;
   void RunFileChooser(content::RenderFrameHost* render_frame_host,
                       scoped_refptr<content::FileSelectListener> listener,
                       const blink::mojom::FileChooserParams& params) override;
+  void EnumerateDirectory(content::WebContents* web_contents,
+                          scoped_refptr<content::FileSelectListener> listener,
+                          const base::FilePath& path) override;
+  std::unique_ptr<content::EyeDropper> OpenEyeDropper(
+      content::RenderFrameHost* frame,
+      content::EyeDropperListener* listener) override;
   void ResizeDueToAutoResize(content::WebContents* source,
                              const gfx::Size& new_size) override;
 
   // content::WebContentsObserver
   void RenderFrameCreated(content::RenderFrameHost* frame_host) override;
 
-  // web_modal::WebContentsModalDialogManagerDelegate
-  web_modal::WebContentsModalDialogHost* GetWebContentsModalDialogHost()
-      override;
-  bool IsWebContentsVisible(content::WebContents* web_contents) override;
-
-  // web_modal::WebContentsModalDialogHost
-  gfx::NativeView GetHostView() const override;
-  gfx::Point GetDialogPosition(const gfx::Size& size) override;
-  gfx::Size GetMaximumDialogSize() override;
-  void AddObserver(web_modal::ModalDialogHostObserver* observer) override;
-  void RemoveObserver(web_modal::ModalDialogHostObserver* observer) override;
-
   // extensions::ExtensionFunctionDispatcher::Delegate
-  WindowController* GetExtensionWindowController() const override;
-  content::WebContents* GetAssociatedWebContents() const override;
-  content::WebContents* GetVisibleWebContents() const override;
+  WindowController* GetExtensionWindowController() override;
 
-  // content::NotificationObserver
-  void Observe(int type,
-               const content::NotificationSource& source,
-               const content::NotificationDetails& details) override;
+  // ExtensionHostRegistry::Observer:
+  void OnExtensionHostDocumentElementAvailable(
+      content::BrowserContext* browser_context,
+      ExtensionHost* extension_host) override;
 
  private:
-  // Returns whether the provided event is a raw escape keypress in a
+  // Returns whether the provided event is an escape keypress in a
   // mojom::ViewType::kExtensionPopup.
-  bool IsEscapeInPopup(const content::NativeWebKeyboardEvent& event) const;
+  bool IsEscapeInPopup(const input::NativeWebKeyboardEvent& event) const;
 
-  // The browser associated with the ExtensionView, if any.
-  Browser* browser_;
+  // Handles keyboard events that were not handled by HandleKeyboardEvent().
+  // Platform specific implementation may override this method to handle the
+  // event in platform specific way. Returns whether the events are handled.
+  bool UnhandledKeyboardEvent(content::WebContents* source,
+                              const input::NativeWebKeyboardEvent& event);
+
+  std::unique_ptr<Delegate> delegate_;
 
   // View that shows the rendered content in the UI.
-  ExtensionView* view_;
+  raw_ptr<ExtensionView, DanglingUntriaged> view_ = nullptr;
 
-  // The relevant WebContents associated with this ExtensionViewHost, if any.
-  content::WebContents* associated_web_contents_ = nullptr;
+#if !BUILDFLAG(IS_ANDROID)
+  std::unique_ptr<ExtensionViewHostWebModalHandler> web_modal_handler_;
+#endif  // !BUILDFLAG(IS_ANDROID)
 
-  // Observer to detect when the associated web contents is destroyed.
-  class AssociatedWebContentsObserver;
-  std::unique_ptr<AssociatedWebContentsObserver>
-      associated_web_contents_observer_;
-
-  content::NotificationRegistrar registrar_;
-
-  DISALLOW_COPY_AND_ASSIGN(ExtensionViewHost);
+  base::ScopedObservation<ExtensionHostRegistry,
+                          ExtensionHostRegistry::Observer>
+      host_registry_observation_{this};
 };
 
 }  // namespace extensions

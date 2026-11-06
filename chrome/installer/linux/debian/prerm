@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Copyright (c) 2009 The Chromium Authors. All rights reserved.
+# Copyright 2009 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -19,7 +19,7 @@ fi
 @@include@@../common/prerm.include
 
 # Remove from the alternatives system
-update-alternatives --remove x-www-browser /usr/bin/@@USR_BIN_SYMLINK_NAME@@
-update-alternatives --remove gnome-www-browser /usr/bin/@@USR_BIN_SYMLINK_NAME@@
+update-alternatives --remove x-www-browser /usr/bin/@@usr_bin_symlink_name
+update-alternatives --remove gnome-www-browser /usr/bin/@@usr_bin_symlink_name
 
-update-alternatives --remove @@PACKAGE_ORIG@@ /usr/bin/@@USR_BIN_SYMLINK_NAME@@
+update-alternatives --remove @@package_orig /usr/bin/@@usr_bin_symlink_name

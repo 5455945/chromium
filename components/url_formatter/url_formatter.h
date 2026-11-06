@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,28 +19,28 @@
 #include <stdint.h>
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/containers/flat_set.h"
-#include "base/strings/string_piece.h"
+#include "base/strings/escape.h"
 #include "base/strings/utf_offset_string_conversions.h"
-#include "components/url_formatter/spoof_checks/idn_spoof_checker.h"
-#include "net/base/escape.h"
+#include "components/url_formatter/spoof_checks/idn_spoof_checker_types.h"
 
 class GURL;
 
 namespace url {
 struct Component;
 struct Parsed;
-}
+}  // namespace url
 
 namespace url_formatter {
 
 using Skeletons = base::flat_set<std::string>;
 
 // Used by FormatUrl to specify handling of certain parts of the url.
-typedef uint32_t FormatUrlType;
-typedef uint32_t FormatUrlTypes;
+using FormatUrlType = uint32_t;
+using FormatUrlTypes = uint32_t;
 
 // The result of an IDN to Unicode conversion.
 struct IDNConversionResult {
@@ -61,7 +61,7 @@ struct IDNConversionResult {
   // for the domain component (i.e. label) that failed the spoof checks. If
   // multiple labels fail the checks, this will be the result of the first
   // component that failed, counting from the left in the punycode form.
-  IDNSpoofChecker::Result spoof_check_result = IDNSpoofChecker::Result::kNone;
+  IDNSpoofCheckerResult spoof_check_result = IDNSpoofCheckerResult::kNone;
 };
 
 // Nothing is omitted.
@@ -80,7 +80,7 @@ extern const FormatUrlType kFormatUrlOmitTrailingSlashOnBareHostname;
 // If the scheme is 'https://', it's removed. Not in kFormatUrlOmitDefaults.
 extern const FormatUrlType kFormatUrlOmitHTTPS;
 
-// Omits some trivially informative subdomains such as "www" or "m". Not in
+// Omits some trivially informative subdomains such as "www". Not in
 // kFormatUrlOmitDefaults.
 extern const FormatUrlType kFormatUrlOmitTrivialSubdomains;
 
@@ -93,6 +93,9 @@ extern const FormatUrlType kFormatUrlOmitFileScheme;
 
 // If the scheme is 'mailto:', it's removed. Not in kFormatUrlOmitDefaults.
 extern const FormatUrlType kFormatUrlOmitMailToScheme;
+
+// Omits the mobile prefix "m". Not in kFormatUrlOmitDefaults.
+extern const FormatUrlType kFormatUrlOmitMobilePrefix;
 
 // Convenience for omitting all unnecessary types. Does not include HTTPS scheme
 // removal, or experimental flags.
@@ -131,7 +134,7 @@ extern const FormatUrlType kFormatUrlOmitDefaults;
 // components are adjacent.
 std::u16string FormatUrl(const GURL& url,
                          FormatUrlTypes format_types,
-                         net::UnescapeRule::Type unescape_rules,
+                         base::UnescapeRule::Type unescape_rules,
                          url::Parsed* new_parsed,
                          size_t* prefix_end,
                          size_t* offset_for_adjustment);
@@ -139,7 +142,7 @@ std::u16string FormatUrl(const GURL& url,
 std::u16string FormatUrlWithOffsets(
     const GURL& url,
     FormatUrlTypes format_types,
-    net::UnescapeRule::Type unescape_rules,
+    base::UnescapeRule::Type unescape_rules,
     url::Parsed* new_parsed,
     size_t* prefix_end,
     std::vector<size_t>* offsets_for_adjustment);
@@ -151,7 +154,7 @@ std::u16string FormatUrlWithOffsets(
 std::u16string FormatUrlWithAdjustments(
     const GURL& url,
     FormatUrlTypes format_types,
-    net::UnescapeRule::Type unescape_rules,
+    base::UnescapeRule::Type unescape_rules,
     url::Parsed* new_parsed,
     size_t* prefix_end,
     base::OffsetAdjuster::Adjustments* adjustments);
@@ -162,7 +165,7 @@ std::u16string FormatUrlWithAdjustments(
 // cautious about using this for URLs which will be parsed or sent to other
 // applications.
 inline std::u16string FormatUrl(const GURL& url) {
-  return FormatUrl(url, kFormatUrlOmitDefaults, net::UnescapeRule::SPACES,
+  return FormatUrl(url, kFormatUrlOmitDefaults, base::UnescapeRule::SPACES,
                    nullptr, nullptr, nullptr);
 }
 
@@ -179,18 +182,21 @@ void AppendFormattedHost(const GURL& url, std::u16string* output);
 //
 // The input should be the canonicalized ASCII host name from GURL. This
 // function does NOT accept UTF-8!
-std::u16string IDNToUnicode(base::StringPiece host);
+std::u16string IDNToUnicode(std::string_view host);
 
 // Same as IDNToUnicode, but disables spoof checks and returns more details.
 // In particular, it doesn't fall back to punycode if |host| fails spoof checks
 // in IDN spoof checker or is a lookalike of a top domain.
 // DO NOT use this for displaying URLs.
-IDNConversionResult UnsafeIDNToUnicodeWithDetails(base::StringPiece host);
+IDNConversionResult UnsafeIDNToUnicodeWithDetails(std::string_view host);
 
 // Strips a "www." prefix from |host| if present and if |host| is eligible.
 // |host| is only eligible for www-stripping if it is not a private or intranet
 // hostname, and if "www." is part of the subdomain (not the eTLD+1).
 std::string StripWWW(const std::string& host);
+
+// Strips a "m." prefix from |host| if present.
+std::string StripMobilePrefix(const std::string& text);
 
 // If the |host| component of |url| begins with a "www." prefix (and meets the
 // conditions described for StripWWW), then updates |host| to strip the "www."
@@ -200,15 +206,30 @@ void StripWWWFromHostComponent(const std::string& url, url::Component* host);
 // Returns skeleton strings computed from |host| for spoof checking.
 Skeletons GetSkeletons(const std::u16string& host);
 
-// Returns a domain from the top 10K list matching the given skeleton. Used for
-// spoof checking. Different types of skeletons are saved in the skeleton trie.
-// Providing |type| makes sure the right type of skeletons are looked up. For
-// example if |skeleton|="googlecorn", |type|="kFull", no match would be found
-// even though the skeleton is saved in the trie, because the type of this
-// skeleton in the trie is "kSeparatorsRemoved".
+// Returns true if the domain given by |url|is one of the top domains listed in
+// the hardcoded top domains list or a subdomain.
+bool IsTopDomain(const GURL& url);
+
+// Checks if the given |domain_and_registry| is one of the top domains listed
+// in hardcoded top domains list or is a subdomain of one of the top domains.
+// This functions calculates the skeleton of |domain_and_registry| and looks it
+// up in the pre-calculated skeleton list of top domains.
+bool IsDomainAndRegistryATopDomain(const std::string& domain_and_registry);
+
+// Returns a domain from the hardcoded top domains list matching the given
+// skeleton. Used for spoof checking. Different types of skeletons are saved in
+// the skeleton trie. Providing |type| makes sure the right type of skeletons
+// are looked up. For example if |skeleton|="googlecorn", |type|="kFull", no
+// match would be found even though the skeleton is saved in the trie, because
+// the type of this skeleton in the trie is "kSeparatorsRemoved".
 TopDomainEntry LookupSkeletonInTopDomains(
     const std::string& skeleton,
     const SkeletonType type = SkeletonType::kFull);
+
+// Removes diacritics from `host` and returns the new string if the input
+// only contains Latin-Greek-Cyrillic characters. Otherwise, returns the
+// input string.
+std::u16string MaybeRemoveDiacritics(const std::u16string& host);
 
 }  // namespace url_formatter
 

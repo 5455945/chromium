@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,6 @@
 #include <utility>
 
 #include "base/files/scoped_temp_dir.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -50,10 +49,11 @@ class InspectionResultsCacheTest : public testing::Test {
   InspectionResultsCacheTest()
       : task_environment_(base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
 
-  void SetUp() override {
-    ASSERT_TRUE(scoped_temp_dir_.CreateUniqueTempDir());
-    scoped_feature_list_.InitAndEnableFeature(kInspectionResultsCache);
-  }
+  InspectionResultsCacheTest(const InspectionResultsCacheTest&) = delete;
+  InspectionResultsCacheTest& operator=(const InspectionResultsCacheTest&) =
+      delete;
+
+  void SetUp() override { ASSERT_TRUE(scoped_temp_dir_.CreateUniqueTempDir()); }
 
   void RunUntilIdle() { task_environment_.RunUntilIdle(); }
 
@@ -62,13 +62,9 @@ class InspectionResultsCacheTest : public testing::Test {
   }
 
  private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-
   base::test::TaskEnvironment task_environment_;
 
   base::ScopedTempDir scoped_temp_dir_;
-
-  DISALLOW_COPY_AND_ASSIGN(InspectionResultsCacheTest);
 };
 
 TEST_F(InspectionResultsCacheTest, ReadMissingCache) {

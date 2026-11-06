@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,17 +6,29 @@
 
 #include <utility>
 
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
+#include "base/i18n/language_tag.h"
+#include "base/i18n/language_tag_value_converters.h"
+#include "base/json/values_util.h"
 #include "base/location.h"
-#include "base/threading/sequenced_task_runner_handle.h"
-#include "base/util/values/values_util.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
+#include "components/prefs/pref_member_language_tag.h"
 #include "components/prefs/pref_service.h"
 
 using base::SequencedTaskRunner;
 
 namespace subtle {
+namespace {
+
+// Returns a copy of `view`.
+std::string CopyStringView(std::string_view view) {
+  return std::string(view);
+}
+
+}  // namespace
 
 PrefMemberBase::PrefMemberBase() : prefs_(nullptr), setting_value_(false) {}
 
@@ -24,30 +36,40 @@ PrefMemberBase::~PrefMemberBase() {
   Destroy();
 }
 
-void PrefMemberBase::Init(const std::string& pref_name,
+void PrefMemberBase::Init(std::string pref_name,
                           PrefService* prefs,
-                          const NamedChangeCallback& observer) {
-  observer_ = observer;
-  Init(pref_name, prefs);
+                          NamedChangeCallback observer) {
+  if (observer) {
+    observer_ = base::BindRepeating(&CopyStringView).Then(std::move(observer));
+  }
+  Init(std::move(pref_name), prefs);
 }
 
-void PrefMemberBase::Init(const std::string& pref_name, PrefService* prefs) {
+void PrefMemberBase::Init(std::string pref_name,
+                          PrefService* prefs,
+                          NamedChangeAsViewCallback observer) {
+  observer_ = std::move(observer);
+  Init(std::move(pref_name), prefs);
+}
+
+void PrefMemberBase::Init(std::string pref_name, PrefService* prefs) {
   DCHECK(prefs);
   DCHECK(pref_name_.empty());  // Check that Init is only called once.
   prefs_ = prefs;
-  pref_name_ = pref_name;
+  pref_name_ = std::move(pref_name);
   // Check that the preference is registered.
-  DCHECK(prefs_->FindPreference(pref_name_)) << pref_name << " not registered.";
+  DCHECK(prefs_->FindPreference(pref_name_))
+      << pref_name_ << " not registered.";
 
   // Add ourselves as a pref observer so we can keep our local value in sync.
-  prefs_->AddPrefObserver(pref_name, this);
+  prefs_->AddPrefObserver(pref_name_, this);
 }
 
 void PrefMemberBase::Destroy() {
   if (prefs_ && !pref_name_.empty()) {
     prefs_->RemovePrefObserver(pref_name_, this);
-    prefs_ = nullptr;
   }
+  prefs_ = nullptr;
 }
 
 void PrefMemberBase::MoveToSequence(
@@ -59,8 +81,12 @@ void PrefMemberBase::MoveToSequence(
   internal()->MoveToSequence(std::move(task_runner));
 }
 
+void PrefMemberBase::OnServiceDestroyed(PrefService* service) {
+  Destroy();
+}
+
 void PrefMemberBase::OnPreferenceChanged(PrefService* service,
-                                         const std::string& pref_name) {
+                                         std::string_view pref_name) {
   VerifyValuePrefName();
   UpdateValueFromPref((!setting_value_ && !observer_.is_null())
                           ? base::BindOnce(observer_, pref_name)
@@ -92,7 +118,7 @@ void PrefMemberBase::InvokeUnnamedCallback(
 }
 
 PrefMemberBase::Internal::Internal()
-    : owning_task_runner_(base::SequencedTaskRunnerHandle::Get()) {}
+    : owning_task_runner_(base::SequencedTaskRunner::GetCurrentDefault()) {}
 PrefMemberBase::Internal::~Internal() = default;
 
 bool PrefMemberBase::Internal::IsOnCorrectSequence() const {
@@ -208,10 +234,32 @@ template <>
 bool PrefMember<base::FilePath>::Internal::UpdateValueInternal(
     const base::Value& value)
     const {
-  absl::optional<base::FilePath> path = util::ValueToFilePath(value);
+  std::optional<base::FilePath> path = base::ValueToFilePath(value);
   if (!path)
     return false;
   value_ = *path;
+  return true;
+}
+
+template <>
+PrefMember<base::i18n::LanguageTag>::Internal::Internal()
+    : value_(base::i18n::GetKnownLanguageTag("und")) {}
+
+template <>
+void PrefMember<base::i18n::LanguageTag>::UpdatePref(
+    const base::i18n::LanguageTag& value) {
+  prefs()->SetLanguageTag(pref_name(), value);
+}
+
+template <>
+bool PrefMember<base::i18n::LanguageTag>::Internal::UpdateValueInternal(
+    const base::Value& value) const {
+  std::optional<base::i18n::LanguageTag> tag =
+      base::i18n::ValueToLanguageTag(value);
+  if (!tag) {
+    return false;
+  }
+  value_ = *tag;
   return true;
 }
 
@@ -222,7 +270,7 @@ void PrefMember<std::vector<std::string> >::UpdatePref(
   for (const std::string& val : value)
     list_value.Append(val);
 
-  prefs()->Set(pref_name(), list_value);
+  prefs()->SetList(pref_name(), std::move(list_value));
 }
 
 template <>

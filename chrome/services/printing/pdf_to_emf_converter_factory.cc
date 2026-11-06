@@ -1,12 +1,14 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/services/printing/pdf_to_emf_converter_factory.h"
 
+#include <memory>
 #include <utility>
 
 #include "chrome/services/printing/pdf_to_emf_converter.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "mojo/public/cpp/system/platform_handle.h"
 
@@ -19,10 +21,9 @@ PdfToEmfConverterFactory::~PdfToEmfConverterFactory() = default;
 void PdfToEmfConverterFactory::CreateConverter(
     base::ReadOnlySharedMemoryRegion pdf_region,
     const PdfRenderSettings& render_settings,
-    mojo::PendingRemote<mojom::PdfToEmfConverterClient> client,
     CreateConverterCallback callback) {
-  auto converter = std::make_unique<PdfToEmfConverter>(
-      std::move(pdf_region), render_settings, std::move(client));
+  auto converter = std::make_unique<PdfToEmfConverter>(std::move(pdf_region),
+                                                       render_settings);
   uint32_t page_count = converter->total_page_count();
   mojo::PendingRemote<mojom::PdfToEmfConverter> converter_remote;
   mojo::MakeSelfOwnedReceiver(
@@ -37,4 +38,5 @@ void PdfToEmfConverterFactory::Create(
   mojo::MakeSelfOwnedReceiver(std::make_unique<PdfToEmfConverterFactory>(),
                               std::move(receiver));
 }
+
 }  // namespace printing

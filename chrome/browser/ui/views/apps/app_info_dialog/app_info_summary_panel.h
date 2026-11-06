@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ui/views/apps/app_info_dialog/app_info_panel.h"
 #include "extensions/common/constants.h"
@@ -27,14 +27,14 @@ namespace views {
 class Combobox;
 class Label;
 class View;
-}
+}  // namespace views
 
 // The summary panel of the app info dialog, which provides basic information
 // and controls related to the app.
-class AppInfoSummaryPanel : public AppInfoPanel,
-                            public base::SupportsWeakPtr<AppInfoSummaryPanel> {
+class AppInfoSummaryPanel : public AppInfoPanel {
+  METADATA_HEADER(AppInfoSummaryPanel, AppInfoPanel)
+
  public:
-  METADATA_HEADER(AppInfoSummaryPanel);
   AppInfoSummaryPanel(Profile* profile, const extensions::Extension* app);
   AppInfoSummaryPanel(const AppInfoSummaryPanel&) = delete;
   AppInfoSummaryPanel& operator=(const AppInfoSummaryPanel&) = delete;
@@ -72,13 +72,13 @@ class AppInfoSummaryPanel : public AppInfoPanel,
   // CanDisplayLicenses() returns true.
   void DisplayLicenses();
   bool CanDisplayLicenses() const;
-  const std::vector<GURL> GetLicenseUrls() const;
+  std::vector<GURL> GetLicenseUrls() const;
 
   // UI elements on the dialog.
-  views::Label* size_value_ = nullptr;
+  raw_ptr<views::Label, DanglingUntriaged> size_value_ = nullptr;
 
   std::unique_ptr<LaunchOptionsComboboxModel> launch_options_combobox_model_;
-  views::Combobox* launch_options_combobox_ = nullptr;
+  raw_ptr<views::Combobox> launch_options_combobox_ = nullptr;
 
   base::WeakPtrFactory<AppInfoSummaryPanel> weak_ptr_factory_{this};
 };

@@ -1,16 +1,20 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_BROWSER_RENDERER_HOST_MEDIA_SERVICE_VIDEO_CAPTURE_PROVIDER_H_
 #define CONTENT_BROWSER_RENDERER_HOST_MEDIA_SERVICE_VIDEO_CAPTURE_PROVIDER_H_
 
+#include <vector>
+
 #include "base/threading/sequence_bound.h"
 #include "base/threading/thread_checker.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "content/browser/renderer_host/media/ref_counted_video_source_provider.h"
 #include "content/browser/renderer_host/media/video_capture_provider.h"
+#include "content/common/content_export.h"
+#include "content/public/browser/gpu_data_manager_observer.h"
 #include "content/public/browser/service_process_host.h"
 #include "services/video_capture/public/mojom/video_capture_service.mojom.h"
 
@@ -24,14 +28,14 @@ namespace content {
 // been released and no more answers to GetDeviceInfosAsync() calls are pending.
 class CONTENT_EXPORT ServiceVideoCaptureProvider
     : public VideoCaptureProvider,
-      public ServiceProcessHost::Observer {
+      public content::GpuDataManagerObserver {
  public:
   // This constructor uses a default factory for instances of
   // viz::mojom::Gpu which produces instances of class content::GpuClient.
   explicit ServiceVideoCaptureProvider(
       base::RepeatingCallback<void(const std::string&)> emit_log_message_cb);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   using CreateAcceleratorFactoryCallback = base::RepeatingCallback<
       std::unique_ptr<video_capture::mojom::AcceleratorFactory>()>;
   // Lets clients provide a custom factory method for creating instances of
@@ -39,17 +43,42 @@ class CONTENT_EXPORT ServiceVideoCaptureProvider
   ServiceVideoCaptureProvider(
       CreateAcceleratorFactoryCallback create_accelerator_factory_cb,
       base::RepeatingCallback<void(const std::string&)> emit_log_message_cb);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   ~ServiceVideoCaptureProvider() override;
 
   // VideoCaptureProvider implementation.
-  void GetDeviceInfosAsync(GetDeviceInfosCallback result_callback) override;
+  void GetDeviceInfosAsync(
+      media::mojom::VideoCaptureDeviceEnumerationMode enumeration_mode,
+      GetDeviceInfosCallback result_callback) override;
   std::unique_ptr<VideoCaptureDeviceLauncher> CreateDeviceLauncher() override;
+  void OpenNativeScreenCapturePicker(
+      DesktopMediaID::Type type,
+      base::OnceCallback<void(DesktopMediaID::Id)> created_callback,
+      base::OnceCallback<void(webrtc::DesktopCapturer::Source)> picker_callback,
+      base::OnceCallback<void()> cancel_callback,
+      base::OnceCallback<void()> error_callback,
+      base::OnceCallback<void(DesktopMediaID::Id)> stop_audio_callback)
+      override;
+  void CloseNativeScreenCapturePicker(DesktopMediaID device_id) override;
+
+#if BUILDFLAG(IS_MAC)
+  void GetApplicationAudioCaptureId(
+      DesktopMediaID::Id session_id,
+      base::OnceCallback<void(
+          const std::optional<desktop_capture::ApplicationAudioCaptureId>&)>
+          callback) override;
+#endif
+
+  // content::GpuDataManagerObserver implementation.
+
+  void OnGpuInfoUpdate() override;
 
  private:
   void OnServiceStarted();
   void OnServiceStopped();
+
+  void RegisterWithGpuDataManager();
 
   enum class ReasonForDisconnect { kShutdown, kUnused, kConnectionLost };
 
@@ -58,26 +87,32 @@ class CONTENT_EXPORT ServiceVideoCaptureProvider
   // Discarding the returned RefCountedVideoSourceProvider indicates that the
   // caller no longer requires the connection to the service and allows it to
   // disconnect.
-  scoped_refptr<RefCountedVideoSourceProvider> LazyConnectToService()
-      WARN_UNUSED_RESULT;
+  [[nodiscard]] scoped_refptr<RefCountedVideoSourceProvider>
+  LazyConnectToService();
 
-  void GetDeviceInfosAsyncForRetry(GetDeviceInfosCallback result_callback,
-                                   int retry_count);
+  // A pending GetDeviceInfosAsync() request. `enumeration_mode` is used to
+  // (a) pick the mode for the retry issued after the service stops
+  // (b) complete only the requests that a received result can satisfy
+  struct PendingDeviceInfosRequest {
+    media::mojom::VideoCaptureDeviceEnumerationMode enumeration_mode;
+    GetDeviceInfosCallback callback;
+  };
+
+  void GetDeviceInfosAsyncForRetry(
+      media::mojom::VideoCaptureDeviceEnumerationMode enumeration_mode);
   void OnDeviceInfosReceived(
+      media::mojom::VideoCaptureDeviceEnumerationMode enumeration_mode,
       scoped_refptr<RefCountedVideoSourceProvider> service_connection,
-      GetDeviceInfosCallback result_callback,
-      int retry_count,
+      video_capture::mojom::VideoSourceProvider::GetSourceInfosResult result,
       const std::vector<media::VideoCaptureDeviceInfo>& infos);
   void OnDeviceInfosRequestDropped(
-      scoped_refptr<RefCountedVideoSourceProvider> service_connection,
-      GetDeviceInfosCallback result_callback,
-      int retry_count);
+      scoped_refptr<RefCountedVideoSourceProvider> service_connection);
   void OnLostConnectionToSourceProvider();
   void OnServiceConnectionClosed(ReasonForDisconnect reason);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   CreateAcceleratorFactoryCallback create_accelerator_factory_cb_;
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
   base::RepeatingCallback<void(const std::string&)> emit_log_message_cb_;
 
   base::WeakPtr<RefCountedVideoSourceProvider> weak_service_connection_;
@@ -86,15 +121,11 @@ class CONTENT_EXPORT ServiceVideoCaptureProvider
   base::TimeTicks time_of_last_connect_;
   base::TimeTicks time_of_last_uninitialize_;
 
-#if defined(OS_MAC)
-  GetDeviceInfosCallback stashed_result_callback_for_retry_;
-  int stashed_retry_count_;
-#endif
+  std::vector<PendingDeviceInfosRequest> pending_device_infos_requests_;
 
   // We own this but it must operate on the UI thread.
   class ServiceProcessObserver;
-  absl::optional<base::SequenceBound<ServiceProcessObserver>>
-      service_process_observer_;
+  base::SequenceBound<ServiceProcessObserver> service_process_observer_;
 
   base::WeakPtrFactory<ServiceVideoCaptureProvider> weak_ptr_factory_{this};
 };

@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,40 +6,52 @@
 
 #include <limits.h>  // for INT_MAX
 #include <stddef.h>
+#include <stdint.h>
+#include <string.h>
 
 #include <algorithm>
+#include <array>
+#include <iterator>
+#include <optional>
+#include <ostream>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include "base/big_endian.h"
-#include "base/bind.h"
-#include "base/containers/circular_deque.h"
-#include "base/cxx17_backports.h"
+#include "base/check.h"
+#include "base/check_op.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/memory/weak_ptr.h"
-#include "base/metrics/histogram_functions.h"
+#include "base/logging.h"
+#include "base/memory/raw_ptr.h"
+#include "base/notreached.h"
+#include "base/numerics/byte_conversions.h"
 #include "base/numerics/safe_conversions.h"
-#include "base/single_thread_task_runner.h"
 #include "base/strings/stringprintf.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
-#include "net/base/auth.h"
+#include "base/values.h"
 #include "net/base/io_buffer.h"
-#include "net/base/ip_endpoint.h"
-#include "net/http/http_request_headers.h"
+#include "net/base/net_errors.h"
 #include "net/http/http_response_headers.h"
-#include "net/http/http_util.h"
+#include "net/log/net_log_capture_mode.h"
+#include "net/log/net_log_event_type.h"
+#include "net/log/net_log_source_type.h"
 #include "net/log/net_log_with_source.h"
+#include "net/storage_access_api/status.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
+#include "net/url_request/url_request_context.h"
 #include "net/websockets/websocket_errors.h"
 #include "net/websockets/websocket_event_interface.h"
 #include "net/websockets/websocket_frame.h"
 #include "net/websockets/websocket_handshake_request_info.h"
 #include "net/websockets/websocket_handshake_response_info.h"
 #include "net/websockets/websocket_stream.h"
-#include "url/origin.h"
 
 namespace net {
+class AuthChallengeInfo;
+class AuthCredentials;
+class SSLInfo;
 
 namespace {
 
@@ -66,30 +78,27 @@ constexpr size_t kMaximumCloseReasonLength = 125 - kWebSocketCloseCodeLength;
 
 // Check a close status code for strict compliance with RFC6455. This is only
 // used for close codes received from a renderer that we are intending to send
-// out over the network. See ParseClose() for the restrictions on incoming close
-// codes. The |code| parameter is type int for convenience of implementation;
-// the real type is uint16_t. Code 1005 is treated specially; it cannot be set
-// explicitly by Javascript but the renderer uses it to indicate we should send
-// a Close frame with no payload.
+// out over the network. See ParseCloseFrame() for the restrictions on incoming
+// close codes. The |code| parameter is type int for convenience of
+// implementation; the real type is uint16_t. Code 1005 is treated specially; it
+// cannot be set explicitly by Javascript but the renderer uses it to indicate
+// we should send a Close frame with no payload.
 bool IsStrictlyValidCloseStatusCode(int code) {
-  static const int kInvalidRanges[] = {
+  static constexpr auto kInvalidRanges = std::array{
       // [BAD, OK)
       0,    1000,   // 1000 is the first valid code
       1006, 1007,   // 1006 MUST NOT be set.
       1014, 3000,   // 1014 unassigned; 1015 up to 2999 are reserved.
       5000, 65536,  // Codes above 5000 are invalid.
   };
-  const int* const kInvalidRangesEnd =
-      kInvalidRanges + base::size(kInvalidRanges);
 
   DCHECK_GE(code, 0);
   DCHECK_LT(code, 65536);
-  const int* upper = std::upper_bound(kInvalidRanges, kInvalidRangesEnd, code);
-  DCHECK_NE(kInvalidRangesEnd, upper);
-  DCHECK_GT(upper, kInvalidRanges);
+  const auto upper = std::ranges::upper_bound(kInvalidRanges, code);
+  DCHECK(upper != kInvalidRanges.end());
   DCHECK_GT(*upper, code);
   DCHECK_LE(*(upper - 1), code);
-  return ((upper - kInvalidRanges) % 2) == 0;
+  return ((upper - kInvalidRanges.begin()) % 2) == 0;
 }
 
 // Sets |name| to the name of the frame type for the given |opcode|. Note that
@@ -124,67 +133,14 @@ void GetFrameTypeForOpcode(WebSocketFrameHeader::OpCode opcode,
   return;
 }
 
-class DependentIOBuffer : public WrappedIOBuffer {
- public:
-  DependentIOBuffer(scoped_refptr<IOBuffer> buffer, size_t offset)
-      : WrappedIOBuffer(buffer->data() + offset), buffer_(std::move(buffer)) {}
-
- private:
-  ~DependentIOBuffer() override = default;
-  scoped_refptr<IOBuffer> buffer_;
-};
-
-void LogCloseCodeForUma(uint16_t code) {
-  // From RFC6455: "The status code is an integer number between 1000 and 4999
-  // (inclusive)". In practice, any 16-bit unsigned integer may be sent. For UMA
-  // purposes, we bucket codes whose meanings are not standardised. This enum is
-  // emitted to UMA, so don't remove entries or renumber it. It's better not to
-  // add new entries at all, since it will make older records incompatible with
-  // newer records.
-  enum class BucketedCloseCode {
-    kNormalClosure = 0,            // 1000
-    kGoingAway = 1,                // 1001
-    kProtocolError = 2,            // 1002
-    kUnsupportedData = 3,          // 1003
-    kReserved = 4,                 // 1004
-    kNoStatusRcvd = 5,             // 1005
-    kAbnormalClosure = 6,          // 1006
-    kInvalidFramePayloadData = 7,  // 1007
-    kPolicyViolation = 8,          // 1008
-    kMessageTooBig = 9,            // 1009
-    kMandatoryExt = 10,            // 1010
-    kInternalError = 11,           // 1011
-    kServiceRestart = 12,          // 1012
-    kTryAgainLater = 13,           // 1013
-    kBadGateway = 14,              // 1014
-    kTlsHandshake = 15,            // 1015
-    kOther1000Range = 16,          // 1016-1999
-    k2000Range = 17,               // 2000-2999
-    k3000Range = 18,               // 3000-3999
-    k4000Range = 19,               // 4000-4999
-    kUnder1000 = 20,               // 0-999
-    k5000AndOver = 21,             // 5000-65535
-    kMaxValue = k5000AndOver
-  };
-
-  BucketedCloseCode bucketed_code;
-  if (code >= 1000 && code <= 1015) {
-    bucketed_code = static_cast<BucketedCloseCode>(code - 1000);
-  } else if (code < 1000) {
-    bucketed_code = BucketedCloseCode::kUnder1000;
-  } else if (code < 2000) {
-    bucketed_code = BucketedCloseCode::kOther1000Range;
-  } else if (code < 3000) {
-    bucketed_code = BucketedCloseCode::k2000Range;
-  } else if (code < 4000) {
-    bucketed_code = BucketedCloseCode::k3000Range;
-  } else if (code < 5000) {
-    bucketed_code = BucketedCloseCode::k4000Range;
-  } else {
-    bucketed_code = BucketedCloseCode::k5000AndOver;
-  }
-
-  base::UmaHistogramEnumeration("Net.WebSocket.CloseCode", bucketed_code);
+base::DictValue NetLogFailParam(uint16_t code,
+                                std::string_view reason,
+                                std::string_view message) {
+  base::DictValue dict;
+  dict.Set("code", code);
+  dict.Set("reason", reason);
+  dict.Set("internal_reason", message);
+  return dict;
 }
 
 }  // namespace
@@ -193,7 +149,7 @@ void LogCloseCodeForUma(uint16_t code) {
 // those frames.
 class WebSocketChannel::SendBuffer {
  public:
-  SendBuffer() : total_bytes_(0) {}
+  SendBuffer() = default;
 
   // Add a WebSocketFrame to the buffer and increase total_bytes_.
   void AddFrame(std::unique_ptr<WebSocketFrame> chunk,
@@ -203,15 +159,16 @@ class WebSocketChannel::SendBuffer {
   std::vector<std::unique_ptr<WebSocketFrame>>* frames() { return &frames_; }
 
  private:
-  // The frames_ that will be sent in the next call to WriteFrames().
-  std::vector<std::unique_ptr<WebSocketFrame>> frames_;
   // References of each WebSocketFrame.data;
   std::vector<scoped_refptr<IOBuffer>> buffers_;
+  // The frames_ that will be sent in the next call to WriteFrames().
+  // Note: The frames_ can contain non-owning pointers to buffers_.
+  std::vector<std::unique_ptr<WebSocketFrame>> frames_;
 
   // The total size of the payload data in |frames_|. This will be used to
   // measure the throughput of the link.
   // TODO(ricea): Measure the throughput of the link.
-  uint64_t total_bytes_;
+  uint64_t total_bytes_ = 0;
 };
 
 void WebSocketChannel::SendBuffer::AddFrame(
@@ -229,8 +186,17 @@ class WebSocketChannel::ConnectDelegate
  public:
   explicit ConnectDelegate(WebSocketChannel* creator) : creator_(creator) {}
 
+  ConnectDelegate(const ConnectDelegate&) = delete;
+  ConnectDelegate& operator=(const ConnectDelegate&) = delete;
+
   void OnCreateRequest(URLRequest* request) override {
     creator_->OnCreateURLRequest(request);
+  }
+
+  int OnURLRequestConnected(URLRequest* request,
+                            const TransportInfo& info,
+                            CompletionOnceCallback callback) override {
+    return creator_->OnURLRequestConnected(request, info, std::move(callback));
   }
 
   void OnSuccess(
@@ -242,7 +208,7 @@ class WebSocketChannel::ConnectDelegate
 
   void OnFailure(const std::string& message,
                  int net_error,
-                 absl::optional<int> response_code) override {
+                 std::optional<int> response_code) override {
     creator_->OnConnectFailure(message, net_error, response_code);
     // |this| has been deleted.
   }
@@ -266,7 +232,7 @@ class WebSocketChannel::ConnectDelegate
                      scoped_refptr<HttpResponseHeaders> headers,
                      const IPEndPoint& remote_endpoint,
                      base::OnceCallback<void(const AuthCredentials*)> callback,
-                     absl::optional<AuthCredentials>* credentials) override {
+                     std::optional<AuthCredentials>* credentials) override {
     return creator_->OnAuthRequired(auth_info, std::move(headers),
                                     remote_endpoint, std::move(callback),
                                     credentials);
@@ -277,9 +243,7 @@ class WebSocketChannel::ConnectDelegate
   // danger of this pointer being stale, because deleting the WebSocketChannel
   // cancels the connect process, deleting this object and preventing its
   // callbacks from being called.
-  WebSocketChannel* const creator_;
-
-  DISALLOW_COPY_AND_ASSIGN(ConnectDelegate);
+  const raw_ptr<WebSocketChannel> creator_;
 };
 
 WebSocketChannel::WebSocketChannel(
@@ -288,18 +252,20 @@ WebSocketChannel::WebSocketChannel(
     : event_interface_(std::move(event_interface)),
       url_request_context_(url_request_context),
       closing_handshake_timeout_(
-          base::TimeDelta::FromSeconds(kClosingHandshakeTimeoutSeconds)),
-      underlying_connection_close_timeout_(base::TimeDelta::FromSeconds(
-          kUnderlyingConnectionCloseTimeoutSeconds)),
-      has_received_close_frame_(false),
-      received_close_code_(0),
-      state_(FRESHLY_CONSTRUCTED),
-      sending_text_message_(false),
-      receiving_text_message_(false),
-      expecting_to_handle_continuation_(false),
-      initial_frame_forwarded_(false) {}
+          base::Seconds(kClosingHandshakeTimeoutSeconds)),
+      underlying_connection_close_timeout_(
+          base::Seconds(kUnderlyingConnectionCloseTimeoutSeconds)),
+      creation_time_(base::TimeTicks::Now()),
+      net_log_(NetLogWithSource::Make(url_request_context->net_log(),
+                                      NetLogSourceType::WEBSOCKET_CHANNEL)) {
+  net_log_.BeginEvent(NetLogEventType::WEBSOCKET_ALIVE,
+                      [&](NetLogCaptureMode capture_mode) {
+                        return GetStateAsValue(capture_mode);
+                      });
+}
 
 WebSocketChannel::~WebSocketChannel() {
+  net_log_.EndEvent(NetLogEventType::WEBSOCKET_ALIVE);
   // The stream may hold a pointer to read_frames_, and so it needs to be
   // destroyed first.
   stream_.reset();
@@ -308,24 +274,62 @@ WebSocketChannel::~WebSocketChannel() {
   close_timer_.Stop();
 }
 
+// static
+const char* WebSocketChannel::StateToString(State state) {
+  switch (state) {
+    case FRESHLY_CONSTRUCTED:
+      return "FRESHLY_CONSTRUCTED";
+    case CONNECTING:
+      return "CONNECTING";
+    case CONNECTED:
+      return "CONNECTED";
+    case SEND_CLOSED:
+      return "SEND_CLOSED";
+    case RECV_CLOSED:
+      return "RECV_CLOSED";
+    case CLOSE_WAIT:
+      return "CLOSE_WAIT";
+    case CLOSED:
+      return "CLOSED";
+  }
+  NOTREACHED();
+}
+
+base::DictValue WebSocketChannel::GetStateAsValue(
+    NetLogCaptureMode capture_mode) const {
+  return base::DictValue()
+      .Set("url", SanitizeUrlForNetLog(socket_url_, capture_mode))
+      .Set("state", StateToString(state_));
+}
+
 void WebSocketChannel::SendAddChannelRequest(
     const GURL& socket_url,
     const std::vector<std::string>& requested_subprotocols,
     const url::Origin& origin,
-    const SiteForCookies& site_for_cookies,
+    StorageAccessApiStatus storage_access_api_status,
     const IsolationInfo& isolation_info,
     const HttpRequestHeaders& additional_headers,
-    NetworkTrafficAnnotationTag traffic_annotation) {
+    WebSocketPriorityHint priority_hint,
+    NetworkTrafficAnnotationTag traffic_annotation,
+    handles::NetworkHandle target_network) {
   SendAddChannelRequestWithSuppliedCallback(
-      socket_url, requested_subprotocols, origin, site_for_cookies,
-      isolation_info, additional_headers, traffic_annotation,
-      base::BindOnce(&WebSocketStream::CreateAndConnectStream));
+      socket_url, requested_subprotocols, origin, storage_access_api_status,
+      isolation_info, additional_headers, priority_hint, traffic_annotation,
+      base::BindOnce(&WebSocketStream::CreateAndConnectStream), target_network);
 }
 
 void WebSocketChannel::SetState(State new_state) {
   DCHECK_NE(state_, new_state);
 
+  State old_state = state_;
   state_ = new_state;
+
+  net_log_.AddEvent(NetLogEventType::WEBSOCKET_STATE_CHANGED,
+                    [old_state, new_state] {
+                      return base::DictValue()
+                          .Set("old_state", StateToString(old_state))
+                          .Set("new_state", StateToString(new_state));
+                    });
 }
 
 bool WebSocketChannel::InClosingState() const {
@@ -362,7 +366,7 @@ WebSocketChannel::ChannelState WebSocketChannel::SendFrame(
       (op_code == WebSocketFrameHeader::kOpCodeContinuation &&
        sending_text_message_)) {
     StreamingUtf8Validator::State state =
-        outgoing_utf8_validator_.AddBytes(buffer->data(), buffer_size);
+        outgoing_utf8_validator_.AddBytes(buffer->first(buffer_size));
     if (state == StreamingUtf8Validator::INVALID ||
         (state == StreamingUtf8Validator::VALID_MIDPOINT && fin)) {
       // TODO(ricea): Kill renderer.
@@ -441,15 +445,17 @@ void WebSocketChannel::SendAddChannelRequestForTesting(
     const GURL& socket_url,
     const std::vector<std::string>& requested_subprotocols,
     const url::Origin& origin,
-    const SiteForCookies& site_for_cookies,
+    StorageAccessApiStatus storage_access_api_status,
     const IsolationInfo& isolation_info,
     const HttpRequestHeaders& additional_headers,
+    WebSocketPriorityHint priority_hint,
     NetworkTrafficAnnotationTag traffic_annotation,
-    WebSocketStreamRequestCreationCallback callback) {
+    WebSocketStreamRequestCreationCallback callback,
+    handles::NetworkHandle target_network) {
   SendAddChannelRequestWithSuppliedCallback(
-      socket_url, requested_subprotocols, origin, site_for_cookies,
-      isolation_info, additional_headers, traffic_annotation,
-      std::move(callback));
+      socket_url, requested_subprotocols, origin, storage_access_api_status,
+      isolation_info, additional_headers, priority_hint, traffic_annotation,
+      std::move(callback), target_network);
 }
 
 void WebSocketChannel::SetClosingHandshakeTimeoutForTesting(
@@ -466,31 +472,35 @@ void WebSocketChannel::SendAddChannelRequestWithSuppliedCallback(
     const GURL& socket_url,
     const std::vector<std::string>& requested_subprotocols,
     const url::Origin& origin,
-    const SiteForCookies& site_for_cookies,
+    StorageAccessApiStatus storage_access_api_status,
     const IsolationInfo& isolation_info,
     const HttpRequestHeaders& additional_headers,
+    WebSocketPriorityHint priority_hint,
     NetworkTrafficAnnotationTag traffic_annotation,
-    WebSocketStreamRequestCreationCallback callback) {
+    WebSocketStreamRequestCreationCallback callback,
+    handles::NetworkHandle target_network) {
   DCHECK_EQ(FRESHLY_CONSTRUCTED, state_);
-  if (!socket_url.SchemeIsWSOrWSS()) {
-    // TODO(ricea): Kill the renderer (this error should have been caught by
-    // Javascript).
-    event_interface_->OnFailChannel("Invalid scheme", ERR_FAILED,
-                                    absl::nullopt);
-    // |this| is deleted here.
-    return;
-  }
+  CHECK(socket_url.SchemeIsWSOrWSS());
+
   socket_url_ = socket_url;
   auto connect_delegate = std::make_unique<ConnectDelegate>(this);
   stream_request_ = std::move(callback).Run(
-      socket_url_, requested_subprotocols, origin, site_for_cookies,
-      isolation_info, additional_headers, url_request_context_,
-      NetLogWithSource(), traffic_annotation, std::move(connect_delegate));
+      socket_url_, requested_subprotocols, origin, storage_access_api_status,
+      isolation_info, additional_headers, url_request_context_.get(),
+      NetLogWithSource(), priority_hint, traffic_annotation,
+      std::move(connect_delegate), target_network);
   SetState(CONNECTING);
 }
 
 void WebSocketChannel::OnCreateURLRequest(URLRequest* request) {
   event_interface_->OnCreateURLRequest(request);
+}
+
+int WebSocketChannel::OnURLRequestConnected(URLRequest* request,
+                                            const TransportInfo& info,
+                                            CompletionOnceCallback callback) {
+  return event_interface_->OnURLRequestConnected(request, info,
+                                                 std::move(callback));
 }
 
 void WebSocketChannel::OnConnectSuccess(
@@ -513,7 +523,7 @@ void WebSocketChannel::OnConnectSuccess(
 
 void WebSocketChannel::OnConnectFailure(const std::string& message,
                                         int net_error,
-                                        absl::optional<int> response_code) {
+                                        std::optional<int> response_code) {
   DCHECK_EQ(CONNECTING, state_);
 
   // Copy the message before we delete its owner.
@@ -541,7 +551,7 @@ int WebSocketChannel::OnAuthRequired(
     scoped_refptr<HttpResponseHeaders> response_headers,
     const IPEndPoint& remote_endpoint,
     base::OnceCallback<void(const AuthCredentials*)> callback,
-    absl::optional<AuthCredentials>* credentials) {
+    std::optional<AuthCredentials>* credentials) {
   return event_interface_->OnAuthRequired(
       auth_info, std::move(response_headers), remote_endpoint,
       std::move(callback), credentials);
@@ -618,7 +628,7 @@ ChannelState WebSocketChannel::ReadFrames() {
     }
   }
 
-  // TODO(crbug.com/999235): Remove this CHECK.
+  // TODO(crbug.com/41479064): Remove this CHECK.
   CHECK(event_interface_);
   while (!event_interface_->HasPendingDataFrames()) {
     DCHECK(stream_);
@@ -637,7 +647,7 @@ ChannelState WebSocketChannel::ReadFrames() {
       return CHANNEL_DELETED;
     }
     DCHECK_NE(CLOSED, state_);
-    // TODO(crbug.com/999235): Remove this CHECK.
+    // TODO(crbug.com/41479064): Remove this CHECK.
     CHECK(event_interface_);
   }
   return CHANNEL_ALIVE;
@@ -656,8 +666,8 @@ ChannelState WebSocketChannel::OnReadDone(bool synchronous, int result) {
       // with no data read, not an empty response.
       DCHECK(!read_frames_.empty())
           << "ReadFrames() returned OK, but nothing was read.";
-      for (size_t i = 0; i < read_frames_.size(); ++i) {
-        if (HandleFrame(std::move(read_frames_[i])) == CHANNEL_DELETED)
+      for (auto& read_frame : read_frames_) {
+        if (HandleFrame(std::move(read_frame)) == CHANNEL_DELETED)
           return CHANNEL_DELETED;
       }
       read_frames_.clear();
@@ -726,9 +736,8 @@ ChannelState WebSocketChannel::HandleFrame(
   }
 
   // Respond to the frame appropriately to its type.
-  return HandleFrameByState(
-      opcode, frame->header.final,
-      base::make_span(frame->payload, frame->header.payload_length));
+  return HandleFrameByState(opcode, frame->header.final,
+                            base::as_chars(frame->payload));
 }
 
 ChannelState WebSocketChannel::HandleFrameByState(
@@ -757,8 +766,8 @@ ChannelState WebSocketChannel::HandleFrameByState(
     case WebSocketFrameHeader::kOpCodePing:
       DVLOG(1) << "Got Ping of size " << payload.size();
       if (state_ == CONNECTED) {
-        auto buffer = base::MakeRefCounted<IOBuffer>(payload.size());
-        memcpy(buffer->data(), payload.data(), payload.size());
+        auto buffer = base::MakeRefCounted<VectorIOBuffer>(
+            std::vector<uint8_t>(payload.begin(), payload.end()));
         return SendFrameInternal(true, WebSocketFrameHeader::kOpCodePong,
                                  std::move(buffer), payload.size());
       }
@@ -833,8 +842,8 @@ ChannelState WebSocketChannel::HandleDataFrame(
        receiving_text_message_)) {
     // This call is not redundant when size == 0 because it tells us what
     // the current state is.
-    StreamingUtf8Validator::State state = incoming_utf8_validator_.AddBytes(
-        payload.data(), static_cast<size_t>(payload.size()));
+    StreamingUtf8Validator::State state =
+        incoming_utf8_validator_.AddBytes(base::as_byte_span(payload));
     if (state == StreamingUtf8Validator::INVALID ||
         (state == StreamingUtf8Validator::VALID_MIDPOINT && final)) {
       FailChannel("Could not decode a text frame as UTF-8.",
@@ -927,7 +936,7 @@ ChannelState WebSocketChannel::SendFrameInternal(
   header.final = fin;
   header.masked = true;
   header.payload_length = buffer_size;
-  frame->payload = buffer->data();
+  frame->payload = buffer->first(base::checked_cast<size_t>(buffer_size));
 
   if (data_being_sent_) {
     // Either the link to the WebSocket server is saturated, or several messages
@@ -950,7 +959,10 @@ void WebSocketChannel::FailChannel(const std::string& message,
   DCHECK_NE(CONNECTING, state_);
   DCHECK_NE(CLOSED, state_);
 
-  // TODO(ricea): Logging.
+  stream_->GetNetLogWithSource().AddEvent(
+      net::NetLogEventType::WEBSOCKET_INVALID_FRAME,
+      [&] { return NetLogFailParam(code, reason, message); });
+
   if (state_ == CONNECTED) {
     if (SendClose(code, reason) == CHANNEL_DELETED)
       return;
@@ -961,7 +973,7 @@ void WebSocketChannel::FailChannel(const std::string& message,
   // handshake.
   stream_->Close();
   SetState(CLOSED);
-  event_interface_->OnFailChannel(message, ERR_FAILED, absl::nullopt);
+  event_interface_->OnFailChannel(message, ERR_FAILED, std::nullopt);
 }
 
 ChannelState WebSocketChannel::SendClose(uint16_t code,
@@ -974,16 +986,17 @@ ChannelState WebSocketChannel::SendClose(uint16_t code,
     // Special case: translate kWebSocketErrorNoStatusReceived into a Close
     // frame with no payload.
     DCHECK(reason.empty());
-    body = base::MakeRefCounted<IOBuffer>(0);
+    body = base::MakeRefCounted<IOBufferWithSize>();
   } else {
     const size_t payload_length = kWebSocketCloseCodeLength + reason.length();
-    body = base::MakeRefCounted<IOBuffer>(payload_length);
+    body = base::MakeRefCounted<IOBufferWithSize>(payload_length);
     size = payload_length;
-    base::WriteBigEndian(body->data(), code);
+    auto [code_span, body_span] =
+        body->span().split_at<kWebSocketCloseCodeLength>();
+    code_span.copy_from(base::U16ToBigEndian(code));
     static_assert(sizeof(code) == kWebSocketCloseCodeLength,
                   "they should both be two");
-    std::copy(
-        reason.begin(), reason.end(), body->data() + kWebSocketCloseCodeLength);
+    body_span.copy_from(base::as_byte_span(reason));
   }
 
   return SendFrameInternal(true, WebSocketFrameHeader::kOpCodeClose,
@@ -994,66 +1007,32 @@ bool WebSocketChannel::ParseClose(base::span<const char> payload,
                                   uint16_t* code,
                                   std::string* reason,
                                   std::string* message) {
-  const uint64_t size = static_cast<uint64_t>(payload.size());
-  reason->clear();
-  if (size < kWebSocketCloseCodeLength) {
-    if (size == 0U) {
-      *code = kWebSocketErrorNoStatusReceived;
-      return true;
-    }
-
-    DVLOG(1) << "Close frame with payload size " << size << " received "
-             << "(the first byte is " << std::hex
-             << static_cast<int>(payload.data()[0]) << ")";
-    *code = kWebSocketErrorProtocolError;
-    *message =
-        "Received a broken close frame containing an invalid size body.";
+  auto result = ParseCloseFrame(payload);
+  *code = result.code;
+  *reason = result.reason;
+  if (result.error.has_value()) {
+    *message = result.error.value();
     return false;
   }
-
-  const char* data = payload.data();
-  uint16_t unchecked_code = 0;
-  base::ReadBigEndian(data, &unchecked_code);
-  static_assert(sizeof(unchecked_code) == kWebSocketCloseCodeLength,
-                "they should both be two bytes");
-
-  switch (unchecked_code) {
-    case kWebSocketErrorNoStatusReceived:
-    case kWebSocketErrorAbnormalClosure:
-    case kWebSocketErrorTlsHandshake:
-      *code = kWebSocketErrorProtocolError;
-      *message =
-          "Received a broken close frame containing a reserved status code.";
-      return false;
-
-    default:
-      *code = unchecked_code;
-      break;
-  }
-
-  std::string text(data + kWebSocketCloseCodeLength, data + size);
-  if (StreamingUtf8Validator::Validate(text)) {
-    reason->swap(text);
-    return true;
-  }
-
-  *code = kWebSocketErrorProtocolError;
-  *reason = "Invalid UTF-8 in Close frame";
-  *message = "Received a broken close frame containing invalid UTF-8.";
-  return false;
+  return true;
 }
 
 void WebSocketChannel::DoDropChannel(bool was_clean,
                                      uint16_t code,
                                      const std::string& reason) {
-  LogCloseCodeForUma(code);
   event_interface_->OnDropChannel(was_clean, code, reason);
 }
 
 void WebSocketChannel::CloseTimeout() {
+  stream_->GetNetLogWithSource().AddEvent(
+      net::NetLogEventType::WEBSOCKET_CLOSE_TIMEOUT);
   stream_->Close();
   SetState(CLOSED);
-  DoDropChannel(false, kWebSocketErrorAbnormalClosure, "");
+  if (has_received_close_frame_) {
+    DoDropChannel(true, received_close_code_, received_close_reason_);
+  } else {
+    DoDropChannel(false, kWebSocketErrorAbnormalClosure, "");
+  }
   // |this| has been deleted.
 }
 

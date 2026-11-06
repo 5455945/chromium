@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,19 +7,20 @@
 #include <iostream>
 #include <memory>
 
-#include "base/bind.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/logging.h"
 #include "base/run_loop.h"
-#include "base/single_thread_task_runner.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/common/task_annotator.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/threading/thread_restrictions.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "cc/base/switches.h"
 #include "components/network_session_configurator/common/network_switches.h"
@@ -28,7 +29,6 @@
 #include "content/public/browser/browser_main_runner.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/url_constants.h"
-#include "content/public/test/ppapi_test_utils.h"
 #include "content/shell/browser/shell.h"
 #include "content/shell/common/shell_switches.h"
 #include "content/test/gpu_browsertest_helpers.h"
@@ -40,32 +40,103 @@
 #include "gpu/ipc/client/gpu_channel_host.h"
 #include "media/base/media_switches.h"
 #include "net/base/filename_util.h"
-#include "ppapi/buildflags/buildflags.h"
+#include "net/base/ip_address.h"
+#include "net/base/ip_endpoint.h"
+#include "net/base/url_util.h"
 #include "services/network/public/cpp/network_switches.h"
 #include "ui/base/ui_base_switches.h"
 #include "ui/display/display_switches.h"
 #include "ui/gl/gl_implementation.h"
 #include "ui/gl/gl_switches.h"
 
+#if BUILDFLAG(IS_MAC)
+#include "base/mac/mac_util.h"
+#endif
+
+#if BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_IOS)
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+
+#if BUILDFLAG(IS_FUCHSIA)
+#include <lib/sys/cpp/component_context.h>
+
+#include "base/fuchsia/fuchsia_logging.h"
+#include "base/fuchsia/process_context.h"
+#include "ui/ozone/public/ozone_switches.h"
+#endif
+
 namespace content {
 
 namespace {
 
-bool RunOneTest(const content::TestInfo& test_info,
+#if BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_IOS)
+// Fuchsia doesn't support stdin stream for packaged apps, and stdout from
+// run-test-suite not only has extra emissions from the Fuchsia test
+// infrastructure, it also merges stderr and stdout together. Combined, these
+// mean that when running content_shell on Fuchsia it's not possible to use
+// stdin to pass list of tests or to reliably use stdout to emit results. To
+// workaround this issue for web tests we redirect stdin and stdout to a TCP
+// socket connected to the web test runner. The runner uses --stdio-redirect to
+// specify address and port for stdin and stdout redirection.
+//
+// iOS is in a similar situation where the simulator does not support the use of
+// the stdin stream for applications. Therefore, iOS also redirects stdin and
+// stdout to a TCP socket that is connected to the web test runner.
+constexpr char kStdioRedirectSwitch[] = "stdio-redirect";
+
+void ConnectStdioSocket(const std::string& host_and_port) {
+  std::string host;
+  int port;
+  net::IPAddress address;
+  if (!net::ParseHostAndPort(host_and_port, &host, &port) ||
+      !address.AssignFromIPLiteral(host)) {
+    LOG(FATAL) << "Invalid stdio address: " << host_and_port;
+  }
+
+  sockaddr_storage sockaddr_storage;
+  sockaddr* addr = reinterpret_cast<sockaddr*>(&sockaddr_storage);
+  socklen_t addr_len = sizeof(sockaddr_storage);
+  net::IPEndPoint endpoint(address, port);
+  bool converted = endpoint.ToSockAddr(addr, &addr_len);
+  CHECK(converted);
+
+  int fd = socket(addr->sa_family, SOCK_STREAM, 0);
+  PCHECK(fd >= 0);
+  int result = connect(fd, addr, addr_len);
+  PCHECK(result == 0) << "Failed to connect to " << host_and_port;
+
+  result = dup2(fd, STDIN_FILENO);
+  PCHECK(result == STDIN_FILENO) << "Failed to dup socket to stdin";
+
+  result = dup2(fd, STDOUT_FILENO);
+  PCHECK(result == STDOUT_FILENO) << "Failed to dup socket to stdout";
+
+  PCHECK(close(fd) == 0);
+}
+
+#endif  // BUILDFLAG(IS_FUCHSIA)
+
+void RunOneTest(const content::TestInfo& test_info,
                 content::WebTestControlHost* web_test_control_host,
                 content::BrowserMainRunner* main_runner) {
   TRACE_EVENT0("shell", "WebTestBrowserMainRunner::RunOneTest");
   DCHECK(web_test_control_host);
 
-  if (!web_test_control_host->PrepareForWebTest(test_info))
-    return false;
+  web_test_control_host->PrepareForWebTest(test_info);
 
   main_runner->Run();
 
-  return web_test_control_host->ResetBrowserAfterWebTest();
+  web_test_control_host->ResetBrowserAfterWebTest();
 }
 
 void RunTests(content::BrowserMainRunner* main_runner) {
+#if BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_IOS)
+  if (auto& cmd_line = *base::CommandLine::ForCurrentProcess();
+      cmd_line.HasSwitch(kStdioRedirectSwitch)) {
+    ConnectStdioSocket(cmd_line.GetSwitchValueASCII(kStdioRedirectSwitch));
+  }
+#endif  // BUILDFLAG(IS_FUCHSIA)
   TRACE_EVENT0("shell", "WebTestBrowserMainRunner::RunTests");
   content::WebTestControlHost test_controller;
   {
@@ -92,25 +163,16 @@ void RunTests(content::BrowserMainRunner* main_runner) {
 
   content::TestInfoExtractor test_extractor(
       *base::CommandLine::ForCurrentProcess());
-  bool ran_at_least_once = false;
   std::unique_ptr<content::TestInfo> test_info;
   while ((test_info = test_extractor.GetNextTest())) {
-    ran_at_least_once = true;
-    if (!RunOneTest(*test_info, &test_controller, main_runner))
-      break;
-  }
-  if (!ran_at_least_once) {
-    // CloseAllWindows will cause the |main_runner| loop to quit.
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
-        FROM_HERE, base::BindOnce(&content::Shell::CloseAllWindows));
-    main_runner->Run();
+    RunOneTest(*test_info, &test_controller, main_runner);
   }
 }
 
 }  // namespace
 
 void WebTestBrowserMainRunner::Initialize() {
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   bool layout_system_deps_ok = content::WebTestBrowserCheckLayoutSystemDeps();
   CHECK(layout_system_deps_ok);
 #endif
@@ -120,7 +182,7 @@ void WebTestBrowserMainRunner::Initialize() {
   CHECK(browser_context_path_for_web_tests_.CreateUniqueTempDir());
   CHECK(!browser_context_path_for_web_tests_.GetPath().MaybeAsASCII().empty());
   command_line.AppendSwitchASCII(
-      switches::kContentShellDataPath,
+      switches::kContentShellUserDataDir,
       browser_context_path_for_web_tests_.GetPath().MaybeAsASCII());
 
   command_line.AppendSwitch(switches::kIgnoreCertificateErrors);
@@ -136,23 +198,24 @@ void WebTestBrowserMainRunner::Initialize() {
   // interference. This GPU process is launched 120 seconds after chrome starts.
   command_line.AppendSwitch(switches::kDisableGpuProcessForDX12InfoCollection);
 
-#if BUILDFLAG(ENABLE_PLUGINS)
-  bool ppapi_ok = ppapi::RegisterBlinkTestPlugin(&command_line);
-  CHECK(ppapi_ok);
-#endif
+  // Disable IgnoreDuplicateNavs by default to ensure tests run with predictable
+  // navigation behavior and don't have navigations unintentionally ignored.
+  command_line.AppendSwitch(switches::kDisableIgnoreDuplicateNavsForTesting);
 
-  command_line.AppendSwitch(cc::switches::kEnableGpuBenchmarking);
+  command_line.AppendSwitch(switches::kEnableGpuBenchmarking);
   command_line.AppendSwitch(switches::kEnableLogging);
   command_line.AppendSwitch(switches::kAllowFileAccessFromFiles);
-  // only default to a software GL if the flag isn't already specified.
-  if (!command_line.HasSwitch(switches::kUseGpuInTests) &&
-      !command_line.HasSwitch(switches::kUseGL)) {
-    bool legacy_software_gl = true;
-#if defined(OS_LINUX) || defined(OS_WIN)
-    // This setting makes web tests run on SwANGLE instead of SwiftShader GL.
-    legacy_software_gl = false;
-#endif
-    gl::SetSoftwareGLCommandLineSwitches(&command_line, legacy_software_gl);
+
+  // On IOS, we always use hardware GL for the web test as content_browsertests.
+  // See also https://crrev.com/c/4885954.
+  if constexpr (!BUILDFLAG(IS_IOS)) {
+    // only default to a software GL if the flag isn't already specified.
+    if (!command_line.HasSwitch(switches::kUseGpuInTests) &&
+        !command_line.HasSwitch(switches::kUseGL)) {
+      gl::SetGLImplementationCommandLineSwitches(
+          gl::GLImplementationParts(gl::ANGLEImplementation::kSwiftShader),
+          &command_line);
+    }
   }
   command_line.AppendSwitchASCII(switches::kTouchEventFeatureDetection,
                                  switches::kTouchEventFeatureDetectionEnabled);
@@ -170,34 +233,28 @@ void WebTestBrowserMainRunner::Initialize() {
     command_line.AppendSwitch(switches::kEnableBlinkTestFeatures);
   }
 
-  if (!command_line.HasSwitch(switches::kEnableThreadedCompositing)) {
-    command_line.AppendSwitch(switches::kDisableThreadedCompositing);
-    command_line.AppendSwitch(cc::switches::kDisableThreadedAnimation);
-  }
-
-  // With display compositor pixel dumps, we ensure that we complete all
-  // stages of compositing before draw. We also can't have checker imaging,
+  // With display compositor pixel dumps, we can't have checker imaging,
   // since it's incompatible with single threaded compositor and display
   // compositor pixel dumps.
-  //
-  // TODO(crbug.com/894613) Add kRunAllCompositorStagesBeforeDraw back here
-  // once you figure out why it causes so much web test flakiness.
-  // command_line.AppendSwitch(switches::kRunAllCompositorStagesBeforeDraw);
-  command_line.AppendSwitch(cc::switches::kDisableCheckerImaging);
+  command_line.AppendSwitch(switches::kDisableCheckerImaging);
 
   command_line.AppendSwitch(switches::kMuteAudio);
 
   command_line.AppendSwitch(switches::kEnablePreciseMemoryInfo);
 
   command_line.AppendSwitchASCII(network::switches::kHostResolverRules,
-                                 "MAP nonexistent.*.test ~NOTFOUND,"
+                                 "MAP nonexistent.*.test ^NOTFOUND,"
+                                 "MAP web-platform.test:443 127.0.0.1:8444,"
+                                 "MAP not-web-platform.test:443 127.0.0.1:8444,"
+                                 "MAP devtools.test:443 127.0.0.1:8443,"
                                  "MAP *.test. 127.0.0.1,"
                                  "MAP *.test 127.0.0.1");
 
-  // These must be kept in sync with //third_party/wpt_tools/wpt.config.json.
+  // These must be kept in sync with
+  // //third_party/blink/web_tests/external/wpt/config.json.
   command_line.AppendSwitchASCII(network::switches::kIpAddressSpaceOverrides,
                                  "127.0.0.1:8082=private,"
-                                 "127.0.0.1:8083=public,"
+                                 "127.0.0.1:8093=public,"
                                  "127.0.0.1:8446=private,"
                                  "127.0.0.1:8447=public");
 
@@ -210,6 +267,22 @@ void WebTestBrowserMainRunner::Initialize() {
   if (!command_line.HasSwitch(switches::kEnableGpuRasterization))
     command_line.AppendSwitch(switches::kDisableGpuRasterization);
 
+#if BUILDFLAG(IS_MAC)
+  // If Graphite is not explicitly disabled, enable it. This is to use
+  // Graphite as the renderer for web tests on all bots for this platform
+  // except those explicitly testing Ganesh.
+  if (!command_line.HasSwitch(switches::kDisableSkiaGraphite)) {
+    command_line.AppendSwitch(switches::kEnableSkiaGraphite);
+  }
+#else
+  // If Graphite is not explicitly enabled, disable it. This is to keep using
+  // Ganesh as renderer for web tests for now until we finish rebaselining all
+  // images for Graphite renderer.
+  if (!command_line.HasSwitch(switches::kEnableSkiaGraphite)) {
+    command_line.AppendSwitch(switches::kDisableSkiaGraphite);
+  }
+#endif
+
   // If the virtual test suite didn't specify a display color space, then
   // force sRGB.
   if (!command_line.HasSwitch(switches::kForceDisplayColorProfile))
@@ -218,21 +291,29 @@ void WebTestBrowserMainRunner::Initialize() {
   // We want stable/baseline results when running web tests.
   command_line.AppendSwitch(switches::kDisableSkiaRuntimeOpts);
 
+  // Suppress GL_DEBUG_TYPE_PERFORMANCE log messages that can get sent to the JS
+  // console and cause unnecessary test failures due test output log expectation
+  // comparisons.
+  command_line.AppendSwitch(switches::kSuppressPerformanceLogs);
+
   command_line.AppendSwitch(switches::kDisallowNonExactResourceReuse);
 
   // Always run with fake media devices.
   command_line.AppendSwitch(switches::kUseFakeUIForMediaStream);
-  command_line.AppendSwitch(switches::kUseFakeDeviceForMediaStream);
 
-  // Enable the deprecated WebAuthn Mojo Testing API.
-  command_line.AppendSwitch(switches::kEnableWebAuthDeprecatedMojoTestingApi);
+  // The check here ensures that a test's custom value for the switch is not
+  // overwritten by the default one.
+  if (!command_line.HasSwitch(switches::kUseFakeDeviceForMediaStream))
+    command_line.AppendSwitch(switches::kUseFakeDeviceForMediaStream);
 
-  // Always disable the unsandbox GPU process for DX12 Info collection to avoid
-  // interference. This GPU process is launched 120 seconds after chrome starts.
-  command_line.AppendSwitch(switches::kDisableGpuProcessForDX12InfoCollection);
+  // Always run with fake FedCM UI.
+  command_line.AppendSwitch(switches::kUseFakeUIForFedCM);
 
-#if defined(OS_WIN) || defined(OS_MAC) || defined(OS_LINUX) || \
-    defined(OS_CHROMEOS)
+  // Disable the backgrounding of renderers to make running tests faster.
+  command_line.AppendSwitch(switches::kDisableRendererBackgrounding);
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) || \
+    BUILDFLAG(IS_CHROMEOS)
   content::WebTestBrowserPlatformInitialize();
 #endif
 
@@ -240,17 +321,19 @@ void WebTestBrowserMainRunner::Initialize() {
 }
 
 void WebTestBrowserMainRunner::RunBrowserMain(
-    const content::MainFunctionParams& parameters) {
+    content::MainFunctionParams parameters) {
   std::unique_ptr<content::BrowserMainRunner> main_runner =
       content::BrowserMainRunner::Create();
-  int initialize_exit_code = main_runner->Initialize(parameters);
+  int initialize_exit_code = main_runner->Initialize(std::move(parameters));
   DCHECK_LT(initialize_exit_code, 0)
       << "BrowserMainRunner::Initialize failed in WebTestBrowserMainRunner";
 
   RunTests(main_runner.get());
-  base::RunLoop().RunUntilIdle();
 
-  content::Shell::CloseAllWindows();
+  // Shell::Shutdown() will cause the |main_runner| loop to quit.
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(&Shell::Shutdown));
+  main_runner->Run();
 
   main_runner->Shutdown();
 }

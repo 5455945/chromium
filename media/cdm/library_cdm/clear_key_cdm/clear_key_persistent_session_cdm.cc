@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,8 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
 #include "media/base/cdm_promise.h"
 #include "media/cdm/json_web_key.h"
@@ -31,6 +30,12 @@ class NewPersistentSessionCdmPromise : public NewSessionCdmPromise {
                                  std::unique_ptr<NewSessionCdmPromise> promise)
       : session_created_cb_(std::move(session_created_cb)),
         promise_(std::move(promise)) {}
+
+  NewPersistentSessionCdmPromise(const NewPersistentSessionCdmPromise&) =
+      delete;
+  NewPersistentSessionCdmPromise& operator=(
+      const NewPersistentSessionCdmPromise&) = delete;
+
   ~NewPersistentSessionCdmPromise() override = default;
 
   // NewSessionCdmPromise implementation.
@@ -50,8 +55,6 @@ class NewPersistentSessionCdmPromise : public NewSessionCdmPromise {
  private:
   SessionCreatedCB session_created_cb_;
   std::unique_ptr<NewSessionCdmPromise> promise_;
-
-  DISALLOW_COPY_AND_ASSIGN(NewPersistentSessionCdmPromise);
 };
 
 // When a session has been loaded, we need to call FinishUpdate() to complete
@@ -64,6 +67,10 @@ class FinishLoadCdmPromise : public SimpleCdmPromise {
   FinishLoadCdmPromise(const std::string& session_id,
                        std::unique_ptr<NewSessionCdmPromise> promise)
       : session_id_(session_id), promise_(std::move(promise)) {}
+
+  FinishLoadCdmPromise(const FinishLoadCdmPromise&) = delete;
+  FinishLoadCdmPromise& operator=(const FinishLoadCdmPromise&) = delete;
+
   ~FinishLoadCdmPromise() override = default;
 
   // CdmSimplePromise implementation.
@@ -83,8 +90,6 @@ class FinishLoadCdmPromise : public SimpleCdmPromise {
  private:
   std::string session_id_;
   std::unique_ptr<NewSessionCdmPromise> promise_;
-
-  DISALLOW_COPY_AND_ASSIGN(FinishLoadCdmPromise);
 };
 
 }  // namespace
@@ -141,7 +146,7 @@ void ClearKeyPersistentSessionCdm::LoadSession(
   DCHECK_EQ(CdmSessionType::kPersistentLicense, session_type);
 
   // Load the saved state for |session_id| and then create the session.
-  std::unique_ptr<CdmFileAdapter> file(new CdmFileAdapter(cdm_host_proxy_));
+  auto file = std::make_unique<CdmFileAdapter>(cdm_host_proxy_);
   CdmFileAdapter* file_ref = file.get();
   file_ref->Open(
       session_id,
@@ -201,14 +206,11 @@ void ClearKeyPersistentSessionCdm::OnFileReadForLoadSession(
                                   &key_added, &exception, &error_message)) {
     NOTREACHED() << "Saved session data is not usable, error = "
                  << error_message;
-    // Return an empty string to indicate that the session was not found.
-    promise->resolve(std::string());
-    return;
   }
 
   // FinishUpdate() needs a SimpleCdmPromise, so create a wrapper promise.
-  std::unique_ptr<SimpleCdmPromise> simple_promise(
-      new FinishLoadCdmPromise(session_id, std::move(promise)));
+  auto simple_promise =
+      std::make_unique<FinishLoadCdmPromise>(session_id, std::move(promise));
   cdm_->FinishUpdate(session_id, key_added, std::move(simple_promise));
 }
 
@@ -236,7 +238,7 @@ void ClearKeyPersistentSessionCdm::UpdateSession(
   }
 
   // Persistent session has been updated, so save the current state.
-  std::unique_ptr<CdmFileAdapter> file(new CdmFileAdapter(cdm_host_proxy_));
+  auto file = std::make_unique<CdmFileAdapter>(cdm_host_proxy_);
   CdmFileAdapter* file_ref = file.get();
   file_ref->Open(
       session_id,
@@ -303,7 +305,7 @@ void ClearKeyPersistentSessionCdm::RemoveSession(
   }
 
   // Remove the saved state for |session_id| first.
-  std::unique_ptr<CdmFileAdapter> file(new CdmFileAdapter(cdm_host_proxy_));
+  auto file = std::make_unique<CdmFileAdapter>(cdm_host_proxy_);
   CdmFileAdapter* file_ref = file.get();
   file_ref->Open(
       session_id,
@@ -339,7 +341,7 @@ void ClearKeyPersistentSessionCdm::OnFileWrittenForRemoveSession(
     std::unique_ptr<CdmFileAdapter> file,
     std::unique_ptr<SimpleCdmPromise> promise,
     bool success) {
-  DCHECK(success);
+  CHECK(success);
 }
 
 CdmContext* ClearKeyPersistentSessionCdm::GetCdmContext() {

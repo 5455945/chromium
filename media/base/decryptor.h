@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,8 @@
 
 #include <list>
 
-#include "base/callback.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
 #include "media/base/audio_buffer.h"
 #include "media/base/media_export.h"
 
@@ -38,10 +37,13 @@ class MEDIA_EXPORT Decryptor {
 
   static const char* GetStatusName(Status status);
 
-  // TODO(xhwang): Unify this with DemuxerStream::Type.
   enum StreamType { kAudio, kVideo, kStreamTypeMax = kVideo };
 
   Decryptor();
+
+  Decryptor(const Decryptor&) = delete;
+  Decryptor& operator=(const Decryptor&) = delete;
+
   virtual ~Decryptor();
 
   // Indicates completion of a decryption operation.
@@ -55,9 +57,8 @@ class MEDIA_EXPORT Decryptor {
   //   decrypted buffer must be NULL.
   // - This parameter should not be set to kNeedMoreData.
   // Second parameter: The decrypted buffer.
-  // - Only |data|, |data_size| and |timestamp| are set in the returned
-  //   DecoderBuffer. The callback handler is responsible for setting other
-  //   fields as appropriate.
+  // - The decrypted buffer has its metadata (timestamp, duration,
+  //   is_key_frame, side_data) copied from the encrypted buffer.
   using DecryptCB =
       base::OnceCallback<void(Status, scoped_refptr<DecoderBuffer>)>;
 
@@ -148,9 +149,6 @@ class MEDIA_EXPORT Decryptor {
 
   // Returns whether or not the decryptor implementation supports decrypt-only.
   virtual bool CanAlwaysDecrypt();
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(Decryptor);
 };
 
 }  // namespace media

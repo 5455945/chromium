@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,6 +13,7 @@ namespace download {
 enum class BatteryStatus {
   CHARGING = 0,
   NOT_CHARGING = 1,
+  UNKNOWN = 2,
 };
 
 // NetworkStatus should mostly one to one map to
@@ -49,8 +50,7 @@ struct DeviceStatus {
 
   NetworkStatus network_status;
 
-  bool operator==(const DeviceStatus& rhs) const;
-  bool operator!=(const DeviceStatus& rhs) const;
+  friend bool operator==(const DeviceStatus&, const DeviceStatus&) = default;
 
   // Returns if the current device status meets all the conditions defined in
   // the scheduling parameters.

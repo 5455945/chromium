@@ -27,6 +27,7 @@
 
 #include "third_party/blink/renderer/core/editing/iterators/backwards_character_iterator.h"
 
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/editing/ephemeral_range.h"
 
 namespace blink {
@@ -36,10 +37,7 @@ BackwardsCharacterIteratorAlgorithm<Strategy>::
     BackwardsCharacterIteratorAlgorithm(
         const EphemeralRangeTemplate<Strategy>& range,
         const TextIteratorBehavior& behavior)
-    : offset_(0),
-      run_offset_(0),
-      at_break_(true),
-      text_iterator_(range, behavior) {
+    : text_iterator_(range, behavior) {
   while (!AtEnd() && !text_iterator_.length())
     text_iterator_.Advance();
 }
@@ -59,15 +57,13 @@ BackwardsCharacterIteratorAlgorithm<Strategy>::EndPosition() const {
 }
 
 template <typename Strategy>
-void BackwardsCharacterIteratorAlgorithm<Strategy>::Advance(int count) {
+void BackwardsCharacterIteratorAlgorithm<Strategy>::Advance(wtf_size_t count) {
   if (count <= 0) {
     DCHECK(!count);
     return;
   }
 
-  at_break_ = false;
-
-  int remaining = text_iterator_.length() - run_offset_;
+  wtf_size_t remaining = text_iterator_.length() - run_offset_;
   if (count < remaining) {
     run_offset_ += count;
     offset_ += count;
@@ -78,22 +74,17 @@ void BackwardsCharacterIteratorAlgorithm<Strategy>::Advance(int count) {
   offset_ += remaining;
 
   for (text_iterator_.Advance(); !AtEnd(); text_iterator_.Advance()) {
-    int run_length = text_iterator_.length();
-    if (!run_length) {
-      at_break_ = true;
-    } else {
-      if (count < run_length) {
-        run_offset_ = count;
-        offset_ += count;
-        return;
-      }
-
-      count -= run_length;
-      offset_ += run_length;
+    wtf_size_t run_length = text_iterator_.length();
+    if (count < run_length) {
+      run_offset_ = count;
+      offset_ += count;
+      return;
     }
+
+    count -= run_length;
+    offset_ += run_length;
   }
 
-  at_break_ = true;
   run_offset_ = 0;
 }
 

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -26,6 +26,8 @@ class SharedWorkerClient final : public mojom::blink::SharedWorkerClient {
   void OnCreated(mojom::SharedWorkerCreationContextType) override;
   void OnConnected(const Vector<mojom::WebFeature>& features_used) override;
   void OnScriptLoadFailed(const String& error_message) override;
+  void OnReportException(
+      mojom::blink::SharedWorkerExceptionDetailsPtr details) override;
   void OnFeatureUsed(mojom::WebFeature feature) override;
 
  private:

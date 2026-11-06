@@ -1,10 +1,11 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_MATHML_MATHML_RADICAL_ELEMENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_MATHML_MATHML_RADICAL_ELEMENT_H_
 
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/mathml/mathml_row_element.h"
 
 namespace blink {
@@ -14,18 +15,18 @@ class Document;
 class CORE_EXPORT MathMLRadicalElement : public MathMLRowElement {
  public:
   MathMLRadicalElement(const QualifiedName&, Document&);
+  ElementType GetElementType() const final {
+    return ElementType::kMathMLRadicalElement;
+  }
 
   bool HasIndex() const;
 
  private:
-  LayoutObject* CreateLayoutObject(const ComputedStyle&,
-                                   LegacyLayout legacy) override;
+  LayoutObject* CreateLayoutObject(const ComputedStyle&) override;
+
+  bool IsGroupingElement() const final { return false; }
 };
 
-template <>
-inline bool IsElementOfType<const MathMLRadicalElement>(const Node& node) {
-  return IsA<MathMLRadicalElement>(node);
-}
 template <>
 struct DowncastTraits<MathMLRadicalElement> {
   static bool AllowFrom(const Node& node) {

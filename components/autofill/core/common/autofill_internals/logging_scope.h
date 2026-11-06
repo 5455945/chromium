@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,6 +14,7 @@ class LogBuffer;
 // Generator for source code related to logging scopes. Pass a template T which
 // takes a single parameter, the name of the scope the log messages are related
 // to.
+// LINT.IfChange(LoggingScope)
 #define AUTOFILL_LOGGING_SCOPE_TEMPLATES(T)                            \
   /* Information about the sync status, existence of profiles, etc. */ \
   T(Context)                                                           \
@@ -36,7 +37,25 @@ class LogBuffer;
   /* If credit card upload is either enabled or disabled. */           \
   T(CreditCardUploadStatus)                                            \
   /* Whether or not card upload was offered to the user. */            \
-  T(CardUploadDecision)
+  T(CardUploadDecision)                                                \
+  /* The website modified a field */                                   \
+  T(WebsiteModifiedFieldValue)                                         \
+  /* Touch To Fill UI. */                                              \
+  T(TouchToFill)                                                       \
+  /* Autofill with AI. */                                              \
+  T(AutofillAi)                                                        \
+  /* Autofill Actor. */                                                \
+  T(AutofillActor)                                                     \
+  /* One Time Token. */                                                \
+  T(OneTimeTokens)                                                     \
+  /* AtMemory. */                                                      \
+  T(AtMemory)                                                          \
+  /* Email Verification Protocol (EVP). */                             \
+  T(EmailVerification)
+// LINT.ThenChange(
+//     //components/autofill/core/browser/autofill_and_password_manager_internals/autofill_and_password_manager_internals.html:LoggingScope,
+//     //components/autofill/core/browser/autofill_and_password_manager_internals/autofill_and_password_manager_internals.ts:LoggingScope
+// )
 
 // Define a bunch of logging scopes: kContext, kParsing, ...
 #define AUTOFILL_TEMPLATE(NAME) k##NAME,

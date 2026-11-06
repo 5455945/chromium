@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,14 @@
 
 #include <memory>
 
-#include "ash/constants/ash_features.h"
 #include "base/run_loop.h"
 #include "base/test/gmock_callback_support.h"
 #include "base/test/scoped_feature_list.h"
-#include "base/test/task_environment.h"
-#include "chromeos/components/drivefs/mojom/drivefs.mojom-test-utils.h"
-#include "chromeos/components/drivefs/mojom/drivefs.mojom.h"
+#include "chrome/test/base/testing_profile.h"
+#include "content/public/test/browser_task_environment.h"
 #include "extensions/browser/api/messaging/native_message_host.h"
+#include "extensions/browser/extension_registry.h"
+#include "extensions/common/extension_builder.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -24,11 +24,13 @@ namespace {
 
 using base::test::RunOnceClosure;
 using testing::_;
-using testing::InvokeWithoutArgs;
 
 class MockClient : public extensions::NativeMessageHost::Client {
  public:
-  MockClient() {}
+  MockClient() = default;
+
+  MockClient(const MockClient&) = delete;
+  MockClient& operator=(const MockClient&) = delete;
 
   MOCK_METHOD(void,
               PostMessageFromNativeHost,
@@ -38,25 +40,17 @@ class MockClient : public extensions::NativeMessageHost::Client {
               CloseChannel,
               (const std::string& error_message),
               (override));
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(MockClient);
 };
 
 class DriveFsNativeMessageHostTest
     : public testing::Test,
-      public drivefs::mojom::DriveFsInterceptorForTesting,
       public drivefs::mojom::NativeMessagingHost {
  public:
-  DriveFsNativeMessageHostTest() {
-    scoped_feature_list_.InitAndEnableFeature(
-        chromeos::features::kDriveFsBidirectionalNativeMessaging);
-  }
+  DriveFsNativeMessageHostTest() = default;
 
-  DriveFs* GetForwardingInterface() override {
-    NOTREACHED();
-    return nullptr;
-  }
+  DriveFsNativeMessageHostTest(const DriveFsNativeMessageHostTest&) = delete;
+  DriveFsNativeMessageHostTest& operator=(const DriveFsNativeMessageHostTest&) =
+      delete;
 
   void CreateNativeHostSession(
       drivefs::mojom::ExtensionConnectionParamsPtr params,
@@ -72,30 +66,31 @@ class DriveFsNativeMessageHostTest
               (const std::string& message),
               (override));
 
-  base::test::TaskEnvironment task_environment_;
+  content::BrowserTaskEnvironment task_environment_;
+  TestingProfile profile_;
+
   drivefs::mojom::ExtensionConnectionParamsPtr params_;
   mojo::Receiver<drivefs::mojom::NativeMessagingHost> receiver_{this};
   mojo::Remote<drivefs::mojom::NativeMessagingPort> extension_port_;
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
-
-  DISALLOW_COPY_AND_ASSIGN(DriveFsNativeMessageHostTest);
 };
 
 TEST_F(DriveFsNativeMessageHostTest, DriveFsInitiatedMessaging) {
   base::RunLoop run_loop;
 
   std::unique_ptr<extensions::NativeMessageHost> host =
-      CreateDriveFsInitiatedNativeMessageHost(
-          extension_port_.BindNewPipeAndPassReceiver(),
+      CreateDriveFsInitiatedNativeMessageHostInternal(
+          &profile_, extension_port_.BindNewPipeAndPassReceiver(),
           receiver_.BindNewPipeAndPassRemote());
   MockClient client;
-  EXPECT_CALL(client, PostMessageFromNativeHost("foo"))
-      .WillOnce(InvokeWithoutArgs([&host]() { host->OnMessage("bar"); }));
-  EXPECT_CALL(*this, HandleMessageFromExtension("bar"))
-      .WillOnce(InvokeWithoutArgs(
-          [this]() { extension_port_->PostMessageToExtension("baz"); }));
+  EXPECT_CALL(client, PostMessageFromNativeHost("foo")).WillOnce([&host]() {
+    host->OnMessage("bar");
+  });
+  EXPECT_CALL(*this, HandleMessageFromExtension("bar")).WillOnce([this]() {
+    extension_port_->PostMessageToExtension("baz");
+  });
   EXPECT_CALL(client, PostMessageFromNativeHost("baz"))
       .WillOnce(RunOnceClosure(run_loop.QuitClosure()));
 
@@ -108,12 +103,14 @@ TEST_F(DriveFsNativeMessageHostTest, ExtensionInitiatedMessaging) {
   base::RunLoop run_loop;
 
   std::unique_ptr<extensions::NativeMessageHost> host =
-      CreateDriveFsNativeMessageHostForTesting(this);
+      CreateDriveFsNativeMessageHost(
+          base::BindOnce(&DriveFsNativeMessageHostTest::CreateNativeHostSession,
+                         base::Unretained(this)));
   MockClient client;
   host->Start(&client);
-  EXPECT_CALL(*this, HandleMessageFromExtension("foo"))
-      .WillOnce(InvokeWithoutArgs(
-          [this]() { extension_port_->PostMessageToExtension("bar"); }));
+  EXPECT_CALL(*this, HandleMessageFromExtension("foo")).WillOnce([this]() {
+    extension_port_->PostMessageToExtension("bar");
+  });
   EXPECT_CALL(client, PostMessageFromNativeHost("bar"))
       .WillOnce(RunOnceClosure(run_loop.QuitClosure()));
   host->OnMessage("foo");
@@ -122,8 +119,8 @@ TEST_F(DriveFsNativeMessageHostTest, ExtensionInitiatedMessaging) {
 
 TEST_F(DriveFsNativeMessageHostTest, NativeHostSendsMessageBeforeStart) {
   std::unique_ptr<extensions::NativeMessageHost> host =
-      CreateDriveFsInitiatedNativeMessageHost(
-          extension_port_.BindNewPipeAndPassReceiver(),
+      CreateDriveFsInitiatedNativeMessageHostInternal(
+          &profile_, extension_port_.BindNewPipeAndPassReceiver(),
           receiver_.BindNewPipeAndPassRemote());
   MockClient client;
 
@@ -133,8 +130,9 @@ TEST_F(DriveFsNativeMessageHostTest, NativeHostSendsMessageBeforeStart) {
 
   {
     base::RunLoop run_loop;
-    EXPECT_CALL(client, PostMessageFromNativeHost("foo"))
-        .WillOnce(InvokeWithoutArgs([&host]() { host->OnMessage("bar"); }));
+    EXPECT_CALL(client, PostMessageFromNativeHost("foo")).WillOnce([&host]() {
+      host->OnMessage("bar");
+    });
     EXPECT_CALL(*this, HandleMessageFromExtension("bar"))
         .WillOnce(RunOnceClosure(run_loop.QuitClosure()));
     host->Start(&client);
@@ -146,8 +144,8 @@ TEST_F(DriveFsNativeMessageHostTest, Error) {
   base::RunLoop run_loop;
 
   std::unique_ptr<extensions::NativeMessageHost> host =
-      CreateDriveFsInitiatedNativeMessageHost(
-          extension_port_.BindNewPipeAndPassReceiver(),
+      CreateDriveFsInitiatedNativeMessageHostInternal(
+          &profile_, extension_port_.BindNewPipeAndPassReceiver(),
           receiver_.BindNewPipeAndPassRemote());
   MockClient client;
   EXPECT_CALL(*this, HandleMessageFromExtension).Times(0);
@@ -164,25 +162,26 @@ TEST_F(DriveFsNativeMessageHostTest, Error) {
   base::RunLoop().RunUntilIdle();
 }
 
-class DriveFsNativeMessageHostTestWithoutFlag
-    : public DriveFsNativeMessageHostTest {
- public:
-  DriveFsNativeMessageHostTestWithoutFlag() {
-    scoped_feature_list_.InitAndDisableFeature(
-        chromeos::features::kDriveFsBidirectionalNativeMessaging);
-  }
+TEST_F(DriveFsNativeMessageHostTest,
+       ConnectToDriveFsNativeMessageExtensionVerification) {
+  // Create a non-Drive extension with nativeMessaging permission.
+  scoped_refptr<const extensions::Extension> extension =
+      extensions::ExtensionBuilder("Test Extension")
+          .SetID("abcdefghijklmnopqrstuvwxyzabcdef")
+          .AddAPIPermission("nativeMessaging")
+          .Build();
+  extensions::ExtensionRegistry::Get(&profile_)->AddEnabled(extension);
 
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
+  mojo::PendingRemote<drivefs::mojom::NativeMessagingPort> extension_port;
+  mojo::PendingReceiver<drivefs::mojom::NativeMessagingHost> drivefs_host;
 
-  DISALLOW_COPY_AND_ASSIGN(DriveFsNativeMessageHostTestWithoutFlag);
-};
+  auto status = ConnectToDriveFsNativeMessageExtension(
+      &profile_, extension->id(),
+      extension_port.InitWithNewPipeAndPassReceiver(),
+      drivefs_host.InitWithNewPipeAndPassRemote());
 
-TEST_F(DriveFsNativeMessageHostTestWithoutFlag,
-       DriveFsCannotInitiateMessaging) {
-  ASSERT_FALSE(CreateDriveFsInitiatedNativeMessageHost(
-      extension_port_.BindNewPipeAndPassReceiver(),
-      receiver_.BindNewPipeAndPassRemote()));
+  EXPECT_EQ(status,
+            drivefs::mojom::ExtensionConnectionStatus::kExtensionNotFound);
 }
 
 }  // namespace

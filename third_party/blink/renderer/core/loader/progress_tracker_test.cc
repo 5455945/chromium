@@ -1,10 +1,11 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/loader/progress_tracker.h"
 
 #include "base/auto_reset.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/core/frame/frame_test_helpers.h"
@@ -12,6 +13,7 @@
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
 #include "third_party/blink/renderer/core/testing/fake_local_frame_host.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_response.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 
 namespace blink {
@@ -20,7 +22,7 @@ class ProgressTrackerTest : public testing::Test, public FakeLocalFrameHost {
  public:
   ProgressTrackerTest()
       : response_(KURL("http://example.com")), last_progress_(0.0) {
-    response_.SetMimeType("text/html");
+    response_.SetMimeType(AtomicString("text/html"));
     response_.SetExpectedContentLength(1024);
   }
 
@@ -62,7 +64,9 @@ class ProgressTrackerTest : public testing::Test, public FakeLocalFrameHost {
 
   double WaitForNextProgressChange() const {
     base::RunLoop run_loop;
-    base::AutoReset<base::RunLoop*> current_loop(&current_run_loop_, &run_loop);
+    base::AutoReset<
+        raw_ptr<base::RunLoop, UnprotectedInRelease | DanglingUntriaged>>
+        current_loop(&current_run_loop_, &run_loop);
     run_loop.Run();
     return last_progress_;
   }
@@ -74,7 +78,9 @@ class ProgressTrackerTest : public testing::Test, public FakeLocalFrameHost {
   }
 
  private:
-  mutable base::RunLoop* current_run_loop_ = nullptr;
+  test::TaskEnvironment task_environment_;
+  mutable raw_ptr<base::RunLoop, UnprotectedInRelease | DanglingUntriaged>
+      current_run_loop_ = nullptr;
   frame_test_helpers::TestWebFrameClient web_frame_client_;
   frame_test_helpers::WebViewHelper web_view_helper_;
   ResourceResponse response_;
@@ -174,6 +180,33 @@ TEST_F(ProgressTrackerTest, ContentfulPaintBeforeFinishParsing) {
   EXPECT_EQ(0.8, WaitForNextProgressChange());
 
   Progress().FinishedParsing();
+  EXPECT_EQ(1.0, WaitForNextProgressChange());
+}
+
+TEST_F(ProgressTrackerTest, NavigationApiInterceptBeforeCompletion) {
+  Progress().ProgressStarted();
+  EXPECT_EQ(0.0, LastProgress());
+
+  Progress().DidFirstContentfulPaint();
+  EXPECT_EQ(0.8, WaitForNextProgressChange());
+
+  Progress().DidNavigationApiIntercept();
+  EXPECT_EQ(0.8, LastProgress());
+
+  Progress().ProgressCompleted();
+  EXPECT_EQ(1.0, WaitForNextProgressChange());
+}
+
+TEST_F(ProgressTrackerTest, NavigationApiInterceptAfterCompletion) {
+  Progress().ProgressStarted();
+  EXPECT_EQ(0.0, LastProgress());
+  Progress().ProgressCompleted();
+  EXPECT_EQ(1.0, WaitForNextProgressChange());
+
+  Progress().ProgressStarted();
+  Progress().DidNavigationApiIntercept();
+  EXPECT_EQ(0.7, WaitForNextProgressChange());
+  Progress().ProgressCompleted();
   EXPECT_EQ(1.0, WaitForNextProgressChange());
 }
 

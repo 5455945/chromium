@@ -1,27 +1,37 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/views/web_apps/frame_toolbar/web_app_content_settings_container.h"
 
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/content_settings/content_setting_image_model.h"
+#include "chrome/browser/ui/layout_constants.h"
 #include "ui/base/hit_test.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
+#include "ui/views/border.h"
 #include "ui/views/layout/box_layout.h"
-#include "ui/views/window/custom_frame_view.h"
+#include "ui/views/layout/layout_types.h"
+#include "ui/views/style/typography_provider.h"
 #include "ui/views/window/hit_test_utils.h"
 
 namespace {
 
 constexpr base::TimeDelta kContentSettingsFadeInDuration =
-    base::TimeDelta::FromMilliseconds(500);
+    base::Milliseconds(500);
+
+// Additional horizontal padding applied when a content setting icon's
+// explanatory label is expanded in the titlebar.
+constexpr views::Inset1D kExpandedLabelAdditionalInsets(4, 8);
 
 }  // namespace
 
 WebAppContentSettingsContainer::WebAppContentSettingsContainer(
+    BrowserWindowInterface* browser,
     IconLabelBubbleView::Delegate* icon_label_bubble_delegate,
-    ContentSettingImageView::Delegate* content_setting_image_delegate) {
+    ContentSettingImageViewDelegate* content_setting_image_delegate) {
   views::BoxLayout& layout =
       *SetLayoutManager(std::make_unique<views::BoxLayout>(
           views::BoxLayout::Orientation::kHorizontal, gfx::Insets(),
@@ -33,31 +43,48 @@ WebAppContentSettingsContainer::WebAppContentSettingsContainer(
   std::vector<std::unique_ptr<ContentSettingImageModel>> models =
       ContentSettingImageModel::GenerateContentSettingImageModels();
   for (auto& model : models) {
+    model->SetIconSize(
+        GetLayoutConstant(LayoutConstant::kWebAppPageActionIconSize));
     auto image_view = std::make_unique<ContentSettingImageView>(
         std::move(model), icon_label_bubble_delegate,
-        content_setting_image_delegate,
-        views::CustomFrameView::GetWindowTitleFontList());
+        content_setting_image_delegate, browser,
+        views::TypographyProvider::Get().GetWindowTitleFontList());
     // Padding around content setting icons.
     constexpr auto kContentSettingIconInteriorPadding = gfx::Insets(4);
     image_view->SetBorder(
         views::CreateEmptyBorder(kContentSettingIconInteriorPadding));
-    image_view->disable_animation();
+    image_view->SetExpandedLabelAdditionalInsets(
+        kExpandedLabelAdditionalInsets);
+    image_view->SetTextSubpixelRenderingEnabled(false);
+    // Web app titlebars suppress transient label animations, while
+    // `kNotifications` only animates persistent expanded labels (for
+    // system-level notification blocks).
+    if (image_view->GetType() !=
+        ContentSettingImageModel::ImageType::kNotifications) {
+      image_view->disable_animation();
+    }
     views::SetHitTestComponent(image_view.get(), static_cast<int>(HTCLIENT));
     content_setting_views_.push_back(image_view.get());
-    AddChildView(image_view.release());
+    AddChildViewRaw(image_view.release());
   }
 }
 
 WebAppContentSettingsContainer::~WebAppContentSettingsContainer() = default;
 
 void WebAppContentSettingsContainer::UpdateContentSettingViewsVisibility() {
-  for (auto* v : content_setting_views_)
+  for (ContentSettingImageView* v : content_setting_views_) {
     v->Update();
+    if (v->GetVisible() && (v->ShouldShowLabel() || v->IsBubbleShowing()) &&
+        layer() && layer()->GetTargetOpacity() == 0) {
+      EnsureVisible();
+    }
+  }
 }
 
 void WebAppContentSettingsContainer::SetIconColor(SkColor icon_color) {
-  for (auto* v : content_setting_views_)
+  for (ContentSettingImageView* v : content_setting_views_) {
     v->SetIconColor(icon_color);
+  }
 }
 
 void WebAppContentSettingsContainer::SetUpForFadeIn() {
@@ -68,10 +95,14 @@ void WebAppContentSettingsContainer::SetUpForFadeIn() {
 }
 
 void WebAppContentSettingsContainer::FadeIn() {
-  if (GetVisible())
+  if (GetVisible()) {
     return;
+  }
+
+  // The layer may have been destroyed since SetUpForFadeIn() was called.
+  SetPaintToLayer();
+
   SetVisible(true);
-  DCHECK_EQ(layer()->opacity(), 0);
   ui::ScopedLayerAnimationSettings settings(layer()->GetAnimator());
   settings.SetTransitionDuration(kContentSettingsFadeInDuration);
   layer()->SetOpacity(1);
@@ -79,9 +110,30 @@ void WebAppContentSettingsContainer::FadeIn() {
 
 void WebAppContentSettingsContainer::EnsureVisible() {
   SetVisible(true);
-  if (layer())
+  if (layer()) {
     layer()->SetOpacity(1);
+  }
 }
 
-BEGIN_METADATA(WebAppContentSettingsContainer, views::View)
+gfx::Size WebAppContentSettingsContainer::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
+  gfx::Size preferred = views::View::CalculatePreferredSize(
+      views::SizeBounds(available_size.width(), views::SizeBound()));
+  preferred.set_height(
+      GetLayoutConstant(LayoutConstant::kWebAppMenuButtonSize));
+  return preferred;
+}
+
+void WebAppContentSettingsContainer::ChildPreferredSizeChanged(
+    views::View* child) {
+  PreferredSizeChanged();
+}
+
+void WebAppContentSettingsContainer::ChildVisibilityChanged(
+    views::View* child) {
+  views::View::ChildVisibilityChanged(child);
+  PreferredSizeChanged();
+}
+
+BEGIN_METADATA(WebAppContentSettingsContainer)
 END_METADATA

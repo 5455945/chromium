@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,9 @@
 
 #import <Foundation/Foundation.h>
 
-#include "base/macros.h"
-#include "components/autofill/core/browser/personal_data_manager_observer.h"
+#import "base/scoped_observation.h"
+#import "components/autofill/core/browser/data_manager/personal_data_manager.h"
+#import "components/autofill/core/browser/data_manager/personal_data_manager_observer.h"
 
 // PersonalDataManagerObserver is used by PersonalDataManager to informs its
 // client implemented in Objective-C when it has finished loading personal data
@@ -18,11 +19,6 @@
 // Called when the PersonalDataManager changed in some way.
 - (void)onPersonalDataChanged;
 
-@optional
-
-// Called when there is insufficient data to fill a form.
-- (void)onInsufficientFormData;
-
 @end
 
 namespace autofill {
@@ -31,18 +27,23 @@ namespace autofill {
 // to an Objective-C delegate.
 class PersonalDataManagerObserverBridge : public PersonalDataManagerObserver {
  public:
-  explicit PersonalDataManagerObserverBridge(
-      id<PersonalDataManagerObserver> delegate);
+  PersonalDataManagerObserverBridge(PersonalDataManager* personal_data_manager,
+                                    id<PersonalDataManagerObserver> delegate);
+
+  PersonalDataManagerObserverBridge(const PersonalDataManagerObserverBridge&) =
+      delete;
+  PersonalDataManagerObserverBridge& operator=(
+      const PersonalDataManagerObserverBridge&) = delete;
+
   ~PersonalDataManagerObserverBridge() override;
 
   // PersonalDataManagerObserver implementation.
   void OnPersonalDataChanged() override;
-  void OnInsufficientFormData() override;
 
  private:
   __weak id<PersonalDataManagerObserver> delegate_;
-
-  DISALLOW_COPY_AND_ASSIGN(PersonalDataManagerObserverBridge);
+  base::ScopedObservation<PersonalDataManager, PersonalDataManagerObserver>
+      scoped_observation_{this};
 };
 
 }  // namespace autofill

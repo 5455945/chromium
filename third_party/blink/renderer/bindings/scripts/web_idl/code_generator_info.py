@@ -1,4 +1,4 @@
-# Copyright 2019 The Chromium Authors. All rights reserved.
+# Copyright 2019 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -6,8 +6,8 @@
 # attributes are auto-generated from this list because they're boilerplated.
 _CODE_GENERATOR_INFO_ATTRIBUTES = (
     'blink_headers',
-    'defined_in_mixin',  # [LegacyTreatAsPartialInterface] makes this False
-    'defined_in_partial',  # [LegacyTreatAsPartialInterface] makes this True
+    'defined_across_component',
+    'defined_in_partial',
     'for_testing',
     'is_active_script_wrappable',
     'is_legacy_unenumerable_named_properties',
@@ -15,11 +15,13 @@ _CODE_GENERATOR_INFO_ATTRIBUTES = (
     'receiver_implemented_as',
 )
 
-_CGI_ATTRS = tuple([
-    # attribute name (_foo of self._foo), getter name, setter name
-    ('_{}'.format(attr), '{}'.format(attr), 'set_{}'.format(attr))
-    for attr in _CODE_GENERATOR_INFO_ATTRIBUTES
-])
+_CGI_ATTRS = tuple(
+    [
+        # attribute name (_foo of self._foo), getter name, setter name
+        ('_{}'.format(attr), '{}'.format(attr), 'set_{}'.format(attr))
+        for attr in _CODE_GENERATOR_INFO_ATTRIBUTES
+    ]
+)
 
 
 class CodeGeneratorInfo(object):
@@ -68,10 +70,14 @@ class CodeGeneratorInfoMutable(CodeGeneratorInfo):
 
 
 for attr_name, getter_name, setter_name in _CGI_ATTRS:
-    setattr(CodeGeneratorInfo, getter_name,
-            CodeGeneratorInfo.make_getter(attr_name))
-    setattr(CodeGeneratorInfoMutable, setter_name,
-            CodeGeneratorInfoMutable.make_setter(attr_name))
+    setattr(
+        CodeGeneratorInfo, getter_name, CodeGeneratorInfo.make_getter(attr_name)
+    )
+    setattr(
+        CodeGeneratorInfoMutable,
+        setter_name,
+        CodeGeneratorInfoMutable.make_setter(attr_name),
+    )
 
 CodeGeneratorInfo.make_getter = None
 CodeGeneratorInfoMutable.make_setter = None

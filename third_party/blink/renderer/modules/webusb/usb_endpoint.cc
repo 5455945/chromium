@@ -1,10 +1,12 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/webusb/usb_endpoint.h"
 
 #include "services/device/public/mojom/usb_device.mojom-blink.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_usb_direction.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_usb_endpoint_type.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/modules/webusb/usb_alternate_interface.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
@@ -16,30 +18,30 @@ namespace blink {
 
 namespace {
 
-String ConvertDirectionToEnum(const UsbTransferDirection& direction) {
+V8USBDirection::Enum ConvertDirectionToEnum(
+    const UsbTransferDirection& direction) {
   switch (direction) {
     case UsbTransferDirection::INBOUND:
-      return "in";
+      return V8USBDirection::Enum::kIn;
     case UsbTransferDirection::OUTBOUND:
-      return "out";
-    default:
-      NOTREACHED();
-      return "";
+      return V8USBDirection::Enum::kOut;
   }
+  NOTREACHED();
 }
 
-String ConvertTypeToEnum(const UsbTransferType& type) {
+V8USBEndpointType::Enum ConvertTypeToEnum(const UsbTransferType& type) {
   switch (type) {
     case UsbTransferType::BULK:
-      return "bulk";
+      return V8USBEndpointType::Enum::kBulk;
     case UsbTransferType::INTERRUPT:
-      return "interrupt";
+      return V8USBEndpointType::Enum::kInterrupt;
     case UsbTransferType::ISOCHRONOUS:
-      return "isochronous";
-    default:
-      NOTREACHED();
-      return "";
+      return V8USBEndpointType::Enum::kIsochronous;
+    case UsbTransferType::CONTROL:
+      // Should not happen.
+      break;
   }
+  NOTREACHED();
 }
 
 }  // namespace
@@ -51,9 +53,9 @@ USBEndpoint* USBEndpoint::Create(const USBAlternateInterface* alternate,
 
 USBEndpoint* USBEndpoint::Create(const USBAlternateInterface* alternate,
                                  uint8_t endpoint_number,
-                                 const String& direction,
+                                 const V8USBDirection& direction,
                                  ExceptionState& exception_state) {
-  UsbTransferDirection mojo_direction = direction == "in"
+  UsbTransferDirection mojo_direction = direction == V8USBDirection::Enum::kIn
                                             ? UsbTransferDirection::INBOUND
                                             : UsbTransferDirection::OUTBOUND;
   const auto& endpoints = alternate->Info().endpoints;
@@ -82,12 +84,12 @@ const device::mojom::blink::UsbEndpointInfo& USBEndpoint::Info() const {
   return *alternate_info.endpoints[endpoint_index_];
 }
 
-String USBEndpoint::direction() const {
-  return ConvertDirectionToEnum(Info().direction);
+V8USBDirection USBEndpoint::direction() const {
+  return V8USBDirection(ConvertDirectionToEnum(Info().direction));
 }
 
-String USBEndpoint::type() const {
-  return ConvertTypeToEnum(Info().type);
+V8USBEndpointType USBEndpoint::type() const {
+  return V8USBEndpointType(ConvertTypeToEnum(Info().type));
 }
 
 void USBEndpoint::Trace(Visitor* visitor) const {

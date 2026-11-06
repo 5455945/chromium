@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,8 +15,7 @@
 
 using extensions::mojom::APIPermissionID;
 
-namespace extensions {
-namespace api_permissions {
+namespace extensions::api_permissions {
 
 namespace {
 
@@ -30,6 +29,7 @@ std::unique_ptr<APIPermission> CreateAPIPermission(
 // add the corresponding permission message rule to
 // ChromePermissionMessageRule::GetAllRules as well.
 constexpr APIPermissionInfo::InitInfo permissions_to_register[] = {
+    {APIPermissionID::kActiveTab, "activeTab"},
     {APIPermissionID::kAlarms, "alarms",
      APIPermissionInfo::kFlagDoesNotRequireManagedSessionFullLoginWarning},
     {APIPermissionID::kAlphaEnabled, "app.window.alpha",
@@ -53,12 +53,25 @@ constexpr APIPermissionInfo::InitInfo permissions_to_register[] = {
     {APIPermissionID::kClipboardWrite, "clipboardWrite",
      APIPermissionInfo::kFlagSupportsContentCapabilities |
          APIPermissionInfo::kFlagDoesNotRequireManagedSessionFullLoginWarning},
+    {APIPermissionID::kCookie, "cookies"},
     {APIPermissionID::kCrashReportPrivate, "crashReportPrivate"},
+    {APIPermissionID::kDeclarativeNetRequest,
+     declarative_net_request::kDeclarativeNetRequestPermission,
+     APIPermissionInfo::kFlagCannotBeOptional},
+    {APIPermissionID::kDeclarativeNetRequestFeedback,
+     declarative_net_request::kFeedbackAPIPermission,
+     APIPermissionInfo::kFlagRequiresManagementUIWarning},
+    {APIPermissionID::kDeclarativeNetRequestWithHostAccess,
+     "declarativeNetRequestWithHostAccess"},
     {APIPermissionID::kDeclarativeWebRequest, "declarativeWebRequest"},
+    {APIPermissionID::kDevtools, "devtools",
+     APIPermissionInfo::kFlagImpliesFullURLAccess |
+         APIPermissionInfo::kFlagCannotBeOptional |
+         APIPermissionInfo::kFlagInternal},
     {APIPermissionID::kDiagnostics, "diagnostics",
      APIPermissionInfo::kFlagCannotBeOptional},
     {APIPermissionID::kDns, "dns"},
-    {APIPermissionID::kExternallyConnectableAllUrls,
+    {APIPermissionID::kDeprecated_ExternallyConnectableAllUrls,
      "externally_connectable.all_urls",
      APIPermissionInfo::kFlagDoesNotRequireManagedSessionFullLoginWarning},
     {APIPermissionID::kFeedbackPrivate, "feedbackPrivate",
@@ -81,7 +94,6 @@ constexpr APIPermissionInfo::InitInfo permissions_to_register[] = {
      APIPermissionInfo::kFlagDoesNotRequireManagedSessionFullLoginWarning},
     {APIPermissionID::kFileSystemWrite, "fileSystem.write",
      APIPermissionInfo::kFlagDoesNotRequireManagedSessionFullLoginWarning},
-
     {APIPermissionID::kHid, "hid"},
     {APIPermissionID::kImeWindowEnabled, "app.window.ime"},
     {APIPermissionID::kOverrideEscFullscreen,
@@ -89,14 +101,8 @@ constexpr APIPermissionInfo::InitInfo permissions_to_register[] = {
      APIPermissionInfo::kFlagDoesNotRequireManagedSessionFullLoginWarning},
     {APIPermissionID::kIdle, "idle",
      APIPermissionInfo::kFlagDoesNotRequireManagedSessionFullLoginWarning},
-    {APIPermissionID::kLockScreen, "lockScreen"},
     {APIPermissionID::kLockWindowFullscreenPrivate,
      "lockWindowFullscreenPrivate", APIPermissionInfo::kFlagCannotBeOptional},
-    {APIPermissionID::kLogin, "login"},
-    {APIPermissionID::kLoginScreenStorage, "loginScreenStorage"},
-    {APIPermissionID::kLoginScreenUi, "loginScreenUi"},
-    {APIPermissionID::kLoginState, "loginState",
-     APIPermissionInfo::kFlagDoesNotRequireManagedSessionFullLoginWarning},
     {APIPermissionID::kMediaPerceptionPrivate, "mediaPerceptionPrivate"},
     {APIPermissionID::kMetricsPrivate, "metricsPrivate",
      APIPermissionInfo::kFlagCannotBeOptional},
@@ -106,16 +112,20 @@ constexpr APIPermissionInfo::InitInfo permissions_to_register[] = {
     {APIPermissionID::kNetworkingPrivate, "networkingPrivate",
      APIPermissionInfo::kFlagCannotBeOptional},
     {APIPermissionID::kNewTabPageOverride, "newTabPageOverride",
-     APIPermissionInfo::kFlagCannotBeOptional |
+     APIPermissionInfo::kFlagInternal |
+         APIPermissionInfo::kFlagCannotBeOptional |
          APIPermissionInfo::kFlagRequiresManagementUIWarning},
+    {APIPermissionID::kOffscreen, "offscreen",
+     APIPermissionInfo::kFlagDoesNotRequireManagedSessionFullLoginWarning},
     {APIPermissionID::kPower, "power",
      APIPermissionInfo::kFlagDoesNotRequireManagedSessionFullLoginWarning},
     {APIPermissionID::kPrinterProvider, "printerProvider",
      APIPermissionInfo::kFlagDoesNotRequireManagedSessionFullLoginWarning},
-    {APIPermissionID::kPrinting, "printing",
-     APIPermissionInfo::kFlagRequiresManagementUIWarning},
-    {APIPermissionID::kPrintingMetrics, "printingMetrics",
-     APIPermissionInfo::kFlagRequiresManagementUIWarning},
+    {APIPermissionID::kProxy, "proxy",
+     APIPermissionInfo::kFlagImpliesFullURLAccess |
+         APIPermissionInfo::kFlagCannotBeOptional},
+    {APIPermissionID::kPublicSuffix, "publicSuffix",
+     APIPermissionInfo::kFlagDoesNotRequireManagedSessionFullLoginWarning},
     {APIPermissionID::kSerial, "serial",
      APIPermissionInfo::kFlagDoesNotRequireManagedSessionFullLoginWarning},
     {APIPermissionID::kSocket, "socket",
@@ -138,6 +148,8 @@ constexpr APIPermissionInfo::InitInfo permissions_to_register[] = {
      APIPermissionInfo::kFlagCannotBeOptional |
          APIPermissionInfo::kFlagSupportsContentCapabilities |
          APIPermissionInfo::kFlagDoesNotRequireManagedSessionFullLoginWarning},
+    {APIPermissionID::kUserScripts, "userScripts",
+     APIPermissionInfo::kFlagDoesNotRequireManagedSessionFullLoginWarning},
     {APIPermissionID::kUsb, "usb", APIPermissionInfo::kFlagNone},
     {APIPermissionID::kUsbDevice, "usbDevices",
      extensions::APIPermissionInfo::kFlagNone,
@@ -145,28 +157,18 @@ constexpr APIPermissionInfo::InitInfo permissions_to_register[] = {
     {APIPermissionID::kVideoCapture, "videoCapture",
      APIPermissionInfo::kFlagRequiresManagementUIWarning},
     {APIPermissionID::kVirtualKeyboard, "virtualKeyboard"},
-    {APIPermissionID::kVpnProvider, "vpnProvider",
-     APIPermissionInfo::kFlagCannotBeOptional |
-         APIPermissionInfo::kFlagDoesNotRequireManagedSessionFullLoginWarning},
     {APIPermissionID::kWebRequest, "webRequest"},
+    {APIPermissionID::kWebRequestAuthProvider, "webRequestAuthProvider"},
     {APIPermissionID::kWebRequestBlocking, "webRequestBlocking"},
-    {APIPermissionID::kDeclarativeNetRequest,
-     declarative_net_request::kAPIPermission,
-     APIPermissionInfo::kFlagCannotBeOptional},
     {APIPermissionID::kWebView, "webview",
      APIPermissionInfo::kFlagCannotBeOptional},
     {APIPermissionID::kWindowShape, "app.window.shape"},
-    {APIPermissionID::kFileSystemRequestDownloads,
-     "fileSystem.requestDownloads"},
-    {APIPermissionID::kDeclarativeNetRequestFeedback,
-     declarative_net_request::kFeedbackAPIPermission,
-     APIPermissionInfo::kFlagRequiresManagementUIWarning},
 };
 
 }  // namespace
 
 base::span<const APIPermissionInfo::InitInfo> GetPermissionInfos() {
-  return base::make_span(permissions_to_register);
+  return base::span(permissions_to_register);
 }
 
 base::span<const Alias> GetPermissionAliases() {
@@ -178,8 +180,7 @@ base::span<const Alias> GetPermissionAliases() {
       Alias("overrideEscFullscreen", "app.window.fullscreen.overrideEsc"),
       Alias("unlimited_storage", "unlimitedStorage")};
 
-  return base::make_span(aliases);
+  return base::span(aliases);
 }
 
-}  // namespace api_permissions
-}  // namespace extensions
+} // namespace extensions::api_permissions

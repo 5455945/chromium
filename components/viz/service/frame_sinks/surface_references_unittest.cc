@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,6 @@
 #include "base/containers/flat_set.h"
 #include "base/test/test_mock_time_task_runner.h"
 #include "components/viz/common/surfaces/surface_id.h"
-#include "components/viz/service/display_embedder/server_shared_bitmap_manager.h"
 #include "components/viz/service/frame_sinks/compositor_frame_sink_support.h"
 #include "components/viz/service/frame_sinks/frame_sink_manager_impl.h"
 #include "components/viz/service/surfaces/surface.h"
@@ -79,7 +78,7 @@ class SurfaceReferencesTest : public testing::Test {
     auto support_ptr = supports_.find(frame_sink_id);
     ASSERT_NE(support_ptr, supports_.end());
     supports_.erase(support_ptr);
-    manager_->InvalidateFrameSinkId(frame_sink_id);
+    manager_->InvalidateFrameSinkId(frame_sink_id, {});
   }
 
   void RemoveSurfaceReference(const SurfaceId& parent_id,
@@ -124,7 +123,8 @@ class SurfaceReferencesTest : public testing::Test {
   // testing::Test:
   void SetUp() override {
     // Start each test with a fresh SurfaceManager instance.
-    manager_ = std::make_unique<FrameSinkManagerImpl>(&shared_bitmap_manager_);
+    manager_ = std::make_unique<FrameSinkManagerImpl>(
+        FrameSinkManagerImpl::InitParams());
   }
   void TearDown() override {
     supports_.clear();
@@ -135,7 +135,6 @@ class SurfaceReferencesTest : public testing::Test {
   scoped_refptr<base::TestMockTimeTaskRunner> task_runner_;
   base::TestMockTimeTaskRunner::ScopedContext scoped_context_;
 
-  ServerSharedBitmapManager shared_bitmap_manager_;
   std::unique_ptr<FrameSinkManagerImpl> manager_;
   std::unordered_map<FrameSinkId,
                      std::unique_ptr<CompositorFrameSinkSupport>,
@@ -521,7 +520,7 @@ TEST_F(SurfaceReferencesTest, InvalidateHasNoEffectOnSurfaceReferences) {
 // Check that old temporary references are deleted, but only for surfaces marked
 // as destroyed.
 TEST_F(SurfaceReferencesTest, MarkOldTemporaryReferences) {
-  constexpr base::TimeDelta kFastForwardTime = base::TimeDelta::FromSeconds(30);
+  constexpr base::TimeDelta kFastForwardTime = base::Seconds(30);
 
   // There are no temporary references so the timer should be stopped.
   EXPECT_FALSE(IsTemporaryReferenceTimerRunning());

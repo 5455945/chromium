@@ -1,11 +1,14 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/network/test/test_url_loader_factory.h"
 
+#include "base/byte_size.h"
+#include "base/test/bind.h"
 #include "base/test/task_environment.h"
 #include "mojo/public/cpp/system/data_pipe_utils.h"
+#include "net/http/http_response_headers.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "services/network/test/test_url_loader_client.h"
 #include "services/network/test/test_utils.h"
@@ -24,12 +27,10 @@ class TestURLLoaderFactoryTest : public testing::Test {
 
   void StartRequest(const std::string& url,
                     TestURLLoaderClient* client,
-                    int load_flags = 0,
-                    bool report_raw_headers = false) {
+                    int load_flags = 0) {
     ResourceRequest request;
     request.url = GURL(url);
     request.load_flags = load_flags;
-    request.report_raw_headers = report_raw_headers;
     loader_.reset();
     factory_.CreateLoaderAndStart(
         loader_.BindNewPipeAndPassReceiver(), 0, 0, request,
@@ -42,9 +43,8 @@ class TestURLLoaderFactoryTest : public testing::Test {
     EXPECT_TRUE(client->response_body().is_valid());
     EXPECT_TRUE(
         mojo::BlockingCopyToString(client->response_body_release(), &response));
-    EXPECT_EQ(
-        static_cast<size_t>(client->completion_status().decoded_body_length),
-        response.length());
+    EXPECT_EQ(client->completion_status().decoded_body_length.InBytes(),
+              response.length());
     return response;
   }
 
@@ -139,7 +139,7 @@ TEST_F(TestURLLoaderFactoryTest, Redirects) {
   redirect_info.status_code = 301;
   redirect_info.new_url = GURL("http://example2.test/");
   TestURLLoaderFactory::Redirects redirects;
-  redirects.push_back({redirect_info, mojom::URLResponseHead::New()});
+  redirects.emplace_back(redirect_info, mojom::URLResponseHead::New());
   URLLoaderCompletionStatus status;
   std::string content = "foo";
   factory()->AddResponse(url, mojom::URLResponseHead::New(), content, status,
@@ -265,14 +265,27 @@ TEST_F(TestURLLoaderFactoryTest, SimulateResponse) {
   EXPECT_EQ(net::HTTP_NOT_FOUND,
             client()->response_head()->headers->response_code());
   // Our header should be set.
-  std::string value;
-  EXPECT_TRUE(
-      client()->response_head()->headers->GetNormalizedHeader("Foo", &value));
-  EXPECT_EQ("Bar", value);
+  EXPECT_EQ(client()->response_head()->headers->GetNormalizedHeader("Foo"),
+            "Bar");
   std::string response;
   EXPECT_TRUE(
       mojo::BlockingCopyToString(client()->response_body_release(), &response));
   EXPECT_EQ("hello", response);
+}
+
+TEST_F(TestURLLoaderFactoryTest, SimulateResponseWait) {
+  std::string url = "http://foo/";
+  network::URLLoaderCompletionStatus ok_status(net::OK);
+  mojom::URLResponseHeadPtr response_head =
+      CreateURLResponseHead(net::HTTP_NOT_FOUND);
+  response_head->headers->SetHeader("Foo", "Bar");
+
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindLambdaForTesting([&]() { StartRequest(url); }));
+
+  EXPECT_TRUE(factory()->SimulateResponseForPendingRequest(
+      GURL(url), ok_status, response_head.Clone(), /*content=*/"",
+      TestURLLoaderFactory::ResponseMatchFlags::kWaitForRequest));
 }
 
 TEST_F(TestURLLoaderFactoryTest, SimulateResponseMultipleRequests) {
@@ -360,33 +373,6 @@ TEST_F(TestURLLoaderFactoryTest, SimulateResponseNoRawHeadersByDefault) {
   EXPECT_TRUE(factory()->SimulateResponseForPendingRequest(
       GURL(url), ok_status, std::move(response_head), /*content=*/""));
   EXPECT_TRUE(client()->has_received_completion());
-  EXPECT_FALSE(client()->response_head()->raw_request_response_info);
-}
-
-TEST_F(TestURLLoaderFactoryTest, SimulateResponseReportRawHeaders) {
-  std::string url = "http://foo/";
-  std::string cookie_line = "my_cookie=myvalue";
-
-  TestURLLoaderClient client;
-  StartRequest(url, &client, /*load_flags=*/0, /*report_raw_headers=*/true);
-  network::URLLoaderCompletionStatus ok_status(net::OK);
-  mojom::URLResponseHeadPtr response_head =
-      CreateURLResponseHead(net::HTTP_NOT_FOUND, /*report_raw_headers=*/true);
-  AddCookiesToURLResponseHead({cookie_line}, response_head.get());
-  EXPECT_TRUE(factory()->SimulateResponseForPendingRequest(
-      GURL(url), ok_status, std::move(response_head), /*content=*/"hello"));
-  EXPECT_TRUE(client.has_received_completion());
-  auto& raw_response_info = client.response_head()->raw_request_response_info;
-  ASSERT_TRUE(raw_response_info);
-  EXPECT_EQ(net::HTTP_NOT_FOUND, raw_response_info->http_status_code);
-  auto& headers = raw_response_info->response_headers;
-  int cookie_count = 0;
-  for (auto iter = headers.begin(); iter != headers.end(); ++iter) {
-    if ((*iter)->key == "Set-Cookie") {
-      cookie_count++;
-      EXPECT_EQ(cookie_line, (*iter)->value);
-    }
-  }
 }
 
 TEST_F(TestURLLoaderFactoryTest,

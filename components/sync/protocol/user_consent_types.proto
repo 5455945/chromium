@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -33,8 +33,8 @@ message UserConsentTypes {
   // ===========================================================================
   // Keep sorted alphabetically.
   // Don't forget to update proto_visitors.h and potentially
-  // proto_enum_conversions.{h, cc}. Never TBR proto changes, because they need
-  // to be manually imported on the Sync server.
+  // proto_enum_conversions.{h, cc}. Proto changes need to be manually
+  // imported on the Sync server.
   // ===========================================================================
 
   // The user consent for the ARC Backup And Restore feature. The consent
@@ -138,6 +138,10 @@ message UserConsentTypes {
 
     // Enum denoting different Assistant activity control setting type.
     enum SettingType {
+      // Legacy clients (< M93) did not set a SettingType; for those,
+      // UNSPECIFIED should be interpreted as ALL. Newer clients should always
+      // set it explicitly.
+      SETTING_TYPE_UNSPECIFIED = 0;
       // All Settings.
       ALL = 1;
       WEB_AND_APP_ACTIVITY = 2;
@@ -145,7 +149,8 @@ message UserConsentTypes {
     }
 
     // The activity control setting which the consent was given or not given to.
-    // If not set, it means the consent is for all settings.
+    // Clients before M93 did not set this field. Such consents should be
+    // treated as applying to ALL.
     optional SettingType setting_type = 3;
   }
 
@@ -162,5 +167,31 @@ message UserConsentTypes {
     // The status of the consent. This specifies whether the consent was given
     // or not given/revoked.
     optional ConsentStatus status = 3;
+  }
+
+  // The User Consent for enabling or disabling speaker label feature in
+  // Recorder app.
+  message RecorderSpeakerLabelConsent {
+    // Ids of the strings of the Recorder speaker label consent text presented
+    // to the user.
+    repeated int32 description_grd_ids = 1;
+
+    // Id of the string of the UI element the user clicked in order to give or
+    // not give the consent and close the Recorder speaker label consent
+    // dialog.
+    optional int32 confirmation_grd_id = 2;
+
+    // The status of the Recorder speaker label consent. This specifies whether
+    // the consent was given or not given/revoked.
+    optional ConsentStatus status = 3;
+  }
+
+  // The User Consent for saving a new private pass to Google Wallet.
+  message WalletPrivatePassConsent {
+    // Ids of the strings in the save prompt presented to the user.
+    repeated int32 description_grd_ids = 1;
+
+    // Id of the string of the UI element the user clicked when consenting.
+    optional int32 confirmation_grd_id = 2;
   }
 }

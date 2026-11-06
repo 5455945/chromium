@@ -1,24 +1,31 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/viz/service/frame_sinks/video_detector.h"
 
+#include <array>
 #include <memory>
 #include <utility>
 #include <vector>
 
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
+#include "components/viz/common/features.h"
 #include "components/viz/common/quads/compositor_frame.h"
+#include "components/viz/common/quads/draw_quad.h"
+#include "components/viz/common/quads/texture_draw_quad.h"
 #include "components/viz/service/surfaces/surface.h"
 #include "components/viz/service/surfaces/surface_manager.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_conversions.h"
+#include "ui/latency/latency_info.h"
 
 namespace viz {
 
-constexpr base::TimeDelta VideoDetector::kVideoTimeout;
+constexpr base::TimeDelta VideoDetector::kMaxVideoTimeout;
+constexpr base::TimeDelta VideoDetector::kMinVideoTimeout;
 constexpr base::TimeDelta VideoDetector::kMinVideoDuration;
 
 // Stores information about updates to a client and determines whether it's
@@ -27,10 +34,13 @@ class VideoDetector::ClientInfo {
  public:
   ClientInfo() = default;
 
+  ClientInfo(const ClientInfo&) = delete;
+  ClientInfo& operator=(const ClientInfo&) = delete;
+
   // Called when a Surface belonging to this client is drawn. Returns true if we
   // determine that video is playing in this client.
   bool ReportDrawnAndCheckForVideo(Surface* surface, base::TimeTicks now) {
-    uint64_t frame_index = surface->GetActiveFrameIndex();
+    uint32_t frame_index = surface->GetActiveFrameIndex();
 
     // If |frame_index| hasn't increased, then no new frame was submitted since
     // the last draw.
@@ -41,9 +51,26 @@ class VideoDetector::ClientInfo {
 
     const CompositorFrame& frame = surface->GetActiveFrame();
 
-    gfx::Rect damage =
-        gfx::ScaleToEnclosingRect(frame.render_pass_list.back()->damage_rect,
-                                  1.f / frame.device_scale_factor());
+    if (!frame.metadata.may_contain_video) {
+      return false;
+    }
+
+    gfx::Rect damage = frame.render_pass_list.back()->damage_rect;
+    if (frame.render_pass_list.back()->has_per_quad_damage) {
+      for (auto* quad : frame.render_pass_list.back()->quad_list) {
+        if (quad->material != DrawQuad::Material::kTextureContent)
+          continue;
+
+        auto* texture_quad = TextureDrawQuad::MaterialCast(quad);
+        if (!texture_quad->damage_rect)
+          continue;
+
+        damage.Union(*texture_quad->damage_rect);
+      }
+    }
+
+    damage =
+        gfx::ScaleToEnclosingRect(damage, 1.f / frame.device_scale_factor());
 
     if (damage.width() < kMinDamageWidth || damage.height() < kMinDamageHeight)
       return false;
@@ -59,7 +86,7 @@ class VideoDetector::ClientInfo {
 
     const bool in_video =
         (buffer_size_ == kMinFramesPerSecond) &&
-        (now - update_times_[buffer_start_] <= base::TimeDelta::FromSeconds(1));
+        (now - update_times_[buffer_start_] <= base::Seconds(1));
 
     if (in_video && video_start_time_.is_null())
       video_start_time_ = update_times_[buffer_start_];
@@ -73,7 +100,7 @@ class VideoDetector::ClientInfo {
  private:
   // Circular buffer containing update times of the last (up to
   // |kMinFramesPerSecond|) video-sized updates to this client.
-  base::TimeTicks update_times_[kMinFramesPerSecond];
+  std::array<base::TimeTicks, kMinFramesPerSecond> update_times_;
 
   // Time at which the current sequence of updates that looks like video
   // started. Empty if video isn't currently playing.
@@ -88,9 +115,7 @@ class VideoDetector::ClientInfo {
   // Frame index of the last drawn Surface. We use this number to determine
   // whether a new frame was submitted since the last time the Surface was
   // drawn.
-  uint64_t last_drawn_frame_index_ = 0;
-
-  DISALLOW_COPY_AND_ASSIGN(ClientInfo);
+  uint32_t last_drawn_frame_index_ = 0;
 };
 
 VideoDetector::VideoDetector(
@@ -113,7 +138,7 @@ VideoDetector::~VideoDetector() {
 }
 
 void VideoDetector::OnVideoActivityEnded() {
-  DCHECK(video_is_playing_);
+  CHECK(video_is_playing_);
   video_is_playing_ = false;
   for (auto& observer : observers_) {
     observer->OnVideoActivityEnded();
@@ -130,7 +155,7 @@ void VideoDetector::AddObserver(
 }
 
 void VideoDetector::OnFrameSinkIdRegistered(const FrameSinkId& frame_sink_id) {
-  DCHECK(!client_infos_.count(frame_sink_id));
+  CHECK(!client_infos_.count(frame_sink_id));
   client_infos_[frame_sink_id] = std::make_unique<ClientInfo>();
 }
 
@@ -138,8 +163,11 @@ void VideoDetector::OnFrameSinkIdInvalidated(const FrameSinkId& frame_sink_id) {
   client_infos_.erase(frame_sink_id);
 }
 
-bool VideoDetector::OnSurfaceDamaged(const SurfaceId& surface_id,
-                                     const BeginFrameAck& ack) {
+bool VideoDetector::OnSurfaceDamaged(
+    const SurfaceId& surface_id,
+    const BeginFrameAck& ack,
+    HandleInteraction handle_interaction,
+    const std::vector<ui::LatencyInfo>& latency_info) {
   return false;
 }
 
@@ -163,8 +191,13 @@ void VideoDetector::OnSurfaceWillBeDrawn(Surface* surface) {
   base::TimeTicks now = tick_clock_->NowTicks();
 
   if (it->second->ReportDrawnAndCheckForVideo(surface, now)) {
-    video_inactive_timer_.Start(FROM_HERE, kVideoTimeout, this,
-                                &VideoDetector::OnVideoActivityEnded);
+    // Avoid (re)starting the timer every frame since it has considerable
+    // overhead.
+    if (!video_inactive_timer_.IsRunning() ||
+        (video_inactive_timer_.desired_run_time() - now) < kMinVideoTimeout) {
+      video_inactive_timer_.Start(FROM_HERE, kMaxVideoTimeout, this,
+                                  &VideoDetector::OnVideoActivityEnded);
+    }
     if (!video_is_playing_) {
       video_is_playing_ = true;
       for (auto& observer : observers_) {

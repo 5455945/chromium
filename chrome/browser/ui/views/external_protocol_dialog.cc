@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,40 +6,45 @@
 
 #include <utility>
 
-#include "base/stl_util.h"
 #include "base/strings/string_util.h"
+#include "base/types/optional_util.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/external_protocol/external_protocol_handler.h"
+#include "chrome/browser/picture_in_picture/picture_in_picture_occlusion_observer.h"
+#include "chrome/browser/picture_in_picture/scoped_picture_in_picture_occlusion_observation.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/shell_integration.h"
 #include "chrome/browser/tab_contents/tab_util.h"
-#include "chrome/browser/ui/browser_dialogs.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/grit/chromium_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/constrained_window/constrained_window_views.h"
 #include "components/prefs/pref_service.h"
 #include "components/url_formatter/elide_url.h"
+#include "content/public/browser/weak_document_ptr.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/gfx/text_elider.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/message_box_view.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/widget/widget.h"
+#include "ui/views/window/dialog_client_view.h"
 
 using content::WebContents;
 
 namespace {
 
 std::u16string GetMessageTextForOrigin(
-    const absl::optional<url::Origin>& origin) {
-  if (!origin || origin->opaque())
+    const std::optional<url::Origin>& origin) {
+  if (!origin || origin->opaque()) {
     return l10n_util::GetStringUTF16(IDS_EXTERNAL_PROTOCOL_MESSAGE);
+  }
   return l10n_util::GetStringFUTF16(
       IDS_EXTERNAL_PROTOCOL_MESSAGE_WITH_INITIATING_ORIGIN,
       url_formatter::FormatOriginForSecurityDisplay(*origin));
@@ -47,44 +52,85 @@ std::u16string GetMessageTextForOrigin(
 
 }  // namespace
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+class ExternalProtocolDialog::PictureInPictureWatcher
+    : public PictureInPictureOcclusionObserver {
+ public:
+  explicit PictureInPictureWatcher(ExternalProtocolDialog* dialog)
+      : dialog_(dialog) {
+    CHECK(dialog_);
+    occlusion_observation_.Observe(dialog_->GetWidget());
+  }
+
+  PictureInPictureWatcher(const PictureInPictureWatcher&) = delete;
+  PictureInPictureWatcher& operator=(const PictureInPictureWatcher&) = delete;
+  ~PictureInPictureWatcher() override = default;
+
+  // Returns true whenever `dialog_` is occluded by Picture-in-Picture windows,
+  // false otherwise.
+  bool OccludedByPictureInPicture() { return occluded_by_picture_in_picture_; }
+
+  // Simulates Picture-in-Picture occlussion changed for testing.
+  void SimulateOcclusionStateChangedForTesting(bool occluded) {
+    OnOcclusionStateChanged(occluded);
+  }
+
+ private:
+  // PictureInPictureOcclusionObserver:
+  void OnOcclusionStateChanged(bool occluded) override {
+    // Protect from immediate input if the dialog has just become unoccluded.
+    if (occluded_by_picture_in_picture_ && !occluded) {
+      dialog_->TriggerInputProtection();
+    }
+
+    occluded_by_picture_in_picture_ = occluded;
+  }
+
+  ScopedPictureInPictureOcclusionObservation occlusion_observation_{this};
+  bool occluded_by_picture_in_picture_ = false;
+  const raw_ptr<ExternalProtocolDialog> dialog_;
+};
+
+#if !BUILDFLAG(IS_CHROMEOS)
 // static
 void ExternalProtocolHandler::RunExternalProtocolDialog(
     const GURL& url,
     WebContents* web_contents,
     ui::PageTransition ignored_page_transition,
     bool ignored_has_user_gesture,
-    const absl::optional<url::Origin>& initiating_origin) {
-  DCHECK(web_contents);
+    bool ignored_is_in_fenced_frame_tree,
+    const std::optional<url::Origin>& initiating_origin,
+    content::WeakDocumentPtr initiator_document,
+    const std::u16string& program_name) {
+  CHECK(web_contents, base::NotFatalUntil::M162);
 
-  std::u16string program_name =
-      shell_integration::GetApplicationNameForProtocol(url);
   if (program_name.empty()) {
     // ShellExecute won't do anything. Don't bother warning the user.
     return;
   }
 
   // Windowing system takes ownership.
-  new ExternalProtocolDialog(web_contents, url, program_name,
-                             initiating_origin);
+  new ExternalProtocolDialog(web_contents, url, program_name, initiating_origin,
+                             std::move(initiator_document));
 }
-#endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
 ExternalProtocolDialog::ExternalProtocolDialog(
     WebContents* web_contents,
     const GURL& url,
     const std::u16string& program_name,
-    const absl::optional<url::Origin>& initiating_origin)
-    : content::WebContentsObserver(web_contents),
+    const std::optional<url::Origin>& initiating_origin,
+    content::WeakDocumentPtr initiator_document)
+    : web_contents_(web_contents->GetWeakPtr()),
       url_(url),
       program_name_(program_name),
-      initiating_origin_(initiating_origin) {
-  SetDefaultButton(ui::DIALOG_BUTTON_CANCEL);
-  SetButtonLabel(ui::DIALOG_BUTTON_OK,
+      initiating_origin_(initiating_origin),
+      initiator_document_(std::move(initiator_document)) {
+  SetDefaultButton(static_cast<int>(ui::mojom::DialogButton::kCancel));
+  SetButtonLabel(ui::mojom::DialogButton::kOk,
                  l10n_util::GetStringFUTF16(
                      IDS_EXTERNAL_PROTOCOL_OK_BUTTON_TEXT, program_name_));
   SetButtonLabel(
-      ui::DIALOG_BUTTON_CANCEL,
+      ui::mojom::DialogButton::kCancel,
       l10n_util::GetStringUTF16(IDS_EXTERNAL_PROTOCOL_CANCEL_BUTTON_TEXT));
 
   SetAcceptCallback(base::BindOnce(&ExternalProtocolDialog::OnDialogAccepted,
@@ -95,16 +141,18 @@ ExternalProtocolDialog::ExternalProtocolDialog(
   SetCloseCallback(base::BindOnce(
       &ExternalProtocolHandler::RecordHandleStateMetrics,
       false /* checkbox_selected */, ExternalProtocolHandler::BLOCK));
-  SetModalType(ui::MODAL_TYPE_CHILD);
+  SetModalType(ui::mojom::ModalType::kChild);
 
-  message_box_view_ =
-      new views::MessageBoxView(GetMessageTextForOrigin(initiating_origin_));
+  message_box_view_ = AddChildView(std::make_unique<views::MessageBoxView>(
+      GetMessageTextForOrigin(initiating_origin_)));
 
   ChromeLayoutProvider* provider = ChromeLayoutProvider::Get();
-  set_margins(provider->GetDialogInsetsForContentType(
-      views::DialogContentType::kText, views::DialogContentType::kText));
+  gfx::Insets dialog_insets = provider->GetDialogInsetsForContentType(
+      views::DialogContentType::kText, views::DialogContentType::kText);
+  dialog_insets.set_left(0);
+  set_margins(dialog_insets);
 
-  SetLayoutManager(std::make_unique<views::FillLayout>());
+  SetUseDefaultFillLayout(true);
 
   Profile* profile =
       Profile::FromBrowserContext(web_contents->GetBrowserContext());
@@ -118,7 +166,7 @@ ExternalProtocolDialog::ExternalProtocolDialog(
       profile->GetPrefs()->GetBoolean(
           prefs::kExternalProtocolDialogShowAlwaysOpenCheckbox) &&
       ExternalProtocolHandler::MayRememberAllowDecisionsForThisOrigin(
-          base::OptionalOrNullptr(initiating_origin_));
+          base::OptionalToPtr(initiating_origin_));
 
   if (show_remember_selection_checkbox) {
     message_box_view_->SetCheckBoxLabel(l10n_util::GetStringFUTF16(
@@ -130,15 +178,18 @@ ExternalProtocolDialog::ExternalProtocolDialog(
   }
 
   constrained_window::ShowWebModalDialogViews(this, web_contents);
-  chrome::RecordDialogCreation(chrome::DialogIdentifier::EXTERNAL_PROTOCOL);
+  picture_in_picture_watcher_ = std::make_unique<PictureInPictureWatcher>(this);
+  // Observe the top-level widget hosting the WebContents (the browser
+  // window), not the web-modal child widget: only top-level widgets receive
+  // native activation changes.
+  if (views::Widget* host_widget =
+          views::Widget::GetTopLevelWidgetForNativeView(
+              web_contents->GetNativeView())) {
+    widget_observation_.Observe(host_widget);
+  }
 }
 
 ExternalProtocolDialog::~ExternalProtocolDialog() = default;
-
-gfx::Size ExternalProtocolDialog::CalculatePreferredSize() const {
-  constexpr int kDialogContentWidth = 400;
-  return gfx::Size(kDialogContentWidth, GetHeightForWidth(kDialogContentWidth));
-}
 
 bool ExternalProtocolDialog::ShouldShowCloseButton() const {
   return false;
@@ -156,34 +207,65 @@ void ExternalProtocolDialog::OnDialogAccepted() {
   ExternalProtocolHandler::RecordHandleStateMetrics(
       remember, ExternalProtocolHandler::DONT_BLOCK);
 
-  if (!web_contents()) {
+  if (!web_contents_) {
     // Dialog outlasted the WebContents.
     return;
   }
 
   if (remember) {
-    DCHECK(initiating_origin_);
+    CHECK(initiating_origin_, base::NotFatalUntil::M162);
     Profile* profile =
-        Profile::FromBrowserContext(web_contents()->GetBrowserContext());
+        Profile::FromBrowserContext(web_contents_->GetBrowserContext());
 
-    ExternalProtocolHandler::SetBlockState(url_.scheme(), *initiating_origin_,
-                                           ExternalProtocolHandler::DONT_BLOCK,
-                                           profile);
+    ExternalProtocolHandler::SetBlockState(
+        url_.GetScheme(), *initiating_origin_,
+        ExternalProtocolHandler::DONT_BLOCK, profile);
   }
 
-  ExternalProtocolHandler::LaunchUrlWithoutSecurityCheck(url_, web_contents());
+  ExternalProtocolHandler::LaunchUrlWithoutSecurityCheck(
+      url_, web_contents_.get(), initiator_document_);
 }
 
-views::View* ExternalProtocolDialog::GetContentsView() {
-  return message_box_view_;
+void ExternalProtocolDialog::TriggerInputProtection() {
+  GetDialogClientView()->TriggerInputProtection();
 }
 
-views::Widget* ExternalProtocolDialog::GetWidget() {
-  return message_box_view_ ? message_box_view_->GetWidget() : nullptr;
+void ExternalProtocolDialog::OnWidgetActivationChanged(views::Widget* widget,
+                                                       bool active) {
+  // Re-arm the input protector whenever the dialog's widget becomes active
+  // again. Without this, a background window hosting this dialog can be
+  // raised under the user's cursor (e.g. via an opener's popup.focus() call)
+  // and the first click ever delivered to the dialog is accepted against the
+  // stale protection timestamp from the original show.
+  if (active) {
+    GetDialogClientView()->TriggerInputProtection(/*force_early=*/true);
+  }
 }
 
-const views::Widget* ExternalProtocolDialog::GetWidget() const {
-  return message_box_view_ ? message_box_view_->GetWidget() : nullptr;
+void ExternalProtocolDialog::OnWidgetDestroying(views::Widget* widget) {
+  widget_observation_.Reset();
+}
+
+bool ExternalProtocolDialog::ShouldIgnoreButtonPressedEventHandling(
+    View* button,
+    const ui::Event& event) const {
+  // Ignore button pressed events whenever we are occluded by a
+  // Picture-in-Picture window.
+  return picture_in_picture_watcher_
+             ? picture_in_picture_watcher_->OccludedByPictureInPicture()
+             : false;
+}
+
+bool ExternalProtocolDialog::ShouldAllowKeyEventsDuringInputProtection() const {
+  return false;
+}
+
+void ExternalProtocolDialog::SimulateOcclusionStateChangedForTesting(
+    bool occluded) {
+  CHECK(picture_in_picture_watcher_);
+  picture_in_picture_watcher_
+      ->SimulateOcclusionStateChangedForTesting(  // IN-TEST
+          occluded);
 }
 
 void ExternalProtocolDialog::SetRememberSelectionCheckboxCheckedForTesting(
@@ -191,5 +273,5 @@ void ExternalProtocolDialog::SetRememberSelectionCheckboxCheckedForTesting(
   message_box_view_->SetCheckBoxSelected(checked);
 }
 
-BEGIN_METADATA(ExternalProtocolDialog, views::DialogDelegateView)
+BEGIN_METADATA(ExternalProtocolDialog)
 END_METADATA

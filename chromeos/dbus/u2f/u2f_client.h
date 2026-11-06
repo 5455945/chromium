@@ -1,13 +1,13 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROMEOS_DBUS_U2F_U2F_CLIENT_H_
 #define CHROMEOS_DBUS_U2F_U2F_CLIENT_H_
 
-#include "base/callback.h"
 #include "base/component_export.h"
-#include "chromeos/dbus/dbus_method_call_status.h"
+#include "base/functional/callback.h"
+#include "chromeos/dbus/common/dbus_callback.h"
 #include "chromeos/dbus/u2f/u2f_interface.pb.h"
 
 namespace dbus {
@@ -19,6 +19,10 @@ namespace chromeos {
 // U2FClient is used to communicate with the org.chromium.U2F service. The
 // browser uses the U2F service to interface with the ChromeOS WebAuthn platform
 // authenticator.
+//
+// The u2fd daemon implementing the U2F service is currently only available on
+// devices with an H1 security chip. Callers should invoke
+// IsU2FServiceAvailable() before calling any other methods.
 class COMPONENT_EXPORT(CHROMEOS_DBUS_U2F) U2FClient {
  public:
   U2FClient(const U2FClient&) = delete;
@@ -36,9 +40,11 @@ class COMPONENT_EXPORT(CHROMEOS_DBUS_U2F) U2FClient {
   // Returns the global instance which may be null if not initialized.
   static U2FClient* Get();
 
-  // Runs the callback as soon as the service becomes available.
-  virtual void WaitForServiceToBeAvailable(
-      WaitForServiceToBeAvailableCallback callback) = 0;
+  // IsU2FServiceAvailable checks with |TpmManagerClient| whether the device has
+  // an H1 security chip (which is a proxy for "does it run u2fd?"). It runs
+  // |callback| with the result.
+  static void IsU2FServiceAvailable(
+      base::OnceCallback<void(bool is_supported)> callback);
 
   // Returns whether the platform authenticator is configured (i.e. PIN is set
   // or fingerprint is enrolled). The name is short for
@@ -51,8 +57,8 @@ class COMPONENT_EXPORT(CHROMEOS_DBUS_U2F) U2FClient {
   // that requires a power button press to register or sign with a credential is
   // enabled.
   virtual void IsU2FEnabled(
-      const u2f::IsUvpaaRequest& request,
-      DBusMethodCallback<u2f::IsUvpaaResponse> callback) = 0;
+      const u2f::IsU2fEnabledRequest& request,
+      DBusMethodCallback<u2f::IsU2fEnabledResponse> callback) = 0;
 
   // Registers a new credential.
   virtual void MakeCredential(
@@ -76,12 +82,35 @@ class COMPONENT_EXPORT(CHROMEOS_DBUS_U2F) U2FClient {
       const u2f::HasCredentialsRequest& request,
       DBusMethodCallback<u2f::HasCredentialsResponse> callback) = 0;
 
-  // Aborts a pending MakeCredential() or GetAssertion() request. Also dismisses
-  // the OS UI dialog prompting the user to confirm the request with a PIN or
-  // fingerprint.
+  // Returns the number of credentials created within the specified time range.
+  virtual void CountCredentials(
+      const u2f::CountCredentialsInTimeRangeRequest& request,
+      DBusMethodCallback<u2f::CountCredentialsInTimeRangeResponse>
+          callback) = 0;
+
+  // Deletes the credentials created within the specified time range and returns
+  // the number of credentials deleted.
+  virtual void DeleteCredentials(
+      const u2f::DeleteCredentialsInTimeRangeRequest& request,
+      DBusMethodCallback<u2f::DeleteCredentialsInTimeRangeResponse>
+          callback) = 0;
+
+  // Aborts a pending MakeCredential() or GetAssertion() request. Also
+  // dismisses the OS UI dialog prompting the user to confirm the request
+  // with a PIN or fingerprint.
   virtual void CancelWebAuthnFlow(
       const u2f::CancelWebAuthnFlowRequest& request,
       DBusMethodCallback<u2f::CancelWebAuthnFlowResponse> callback) = 0;
+
+  virtual void GetAlgorithms(
+      const u2f::GetAlgorithmsRequest& request,
+      DBusMethodCallback<u2f::GetAlgorithmsResponse> callback) = 0;
+
+  // Get supported features of u2fd. Currently only "whether lacros WebAuthn is
+  // supported".
+  virtual void GetSupportedFeatures(
+      const u2f::GetSupportedFeaturesRequest& request,
+      DBusMethodCallback<u2f::GetSupportedFeaturesResponse> callback) = 0;
 
  protected:
   U2FClient();

@@ -1,4 +1,4 @@
-// Copyright (c) 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,15 @@
 #include <stddef.h>
 #include <string.h>
 
+#include <algorithm>
 #include <cmath>
+#include <numeric>
 
+#include "base/containers/span.h"
 #include "base/logging.h"
-#include "base/macros.h"
 #include "base/memory/singleton.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/events/base_event_utils.h"
@@ -22,17 +23,21 @@
 #include "ui/events/devices/x11/device_list_cache_x11.h"
 #include "ui/events/devices/x11/touch_factory_x11.h"
 #include "ui/events/devices/x11/xinput_util.h"
+#include "ui/events/event_constants.h"
 #include "ui/events/keycodes/keyboard_code_conversion_x.h"
+#include "ui/events/pointer_details.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/x/atom_cache.h"
 #include "ui/gfx/x/extension_manager.h"
-#include "ui/gfx/x/x11_atom_cache.h"
 #include "ui/gfx/x/xproto.h"
 
 namespace {
 
-// Scroll amount for each wheelscroll event. 53 is also the value used for GTK+.
-const int kWheelScrollAmount = 53;
+// Scroll amount for each wheelscroll event.  120 is what Chrome uses on
+// Windows, Fuchsia WHEEL_DELTA, and also it roughly matches Firefox on Linux.
+// See https://crbug.com/1270089 for the detailed reasoning.
+const int kWheelScrollAmount = 120;
 
 const int kMinWheelButton = 4;
 const int kMaxWheelButton = 7;
@@ -45,6 +50,9 @@ class XModifierStateWatcher {
   static XModifierStateWatcher* GetInstance() {
     return base::Singleton<XModifierStateWatcher>::get();
   }
+
+  XModifierStateWatcher(const XModifierStateWatcher&) = delete;
+  XModifierStateWatcher& operator=(const XModifierStateWatcher&) = delete;
 
   x11::KeyButMask StateFromKeyboardCode(ui::KeyboardCode keyboard_code) {
     switch (keyboard_code) {
@@ -74,10 +82,12 @@ class XModifierStateWatcher {
       else
         state_ = static_cast<int>(key->state) & ~mask;
     } else if (auto* device = xev.As<x11::Input::DeviceEvent>()) {
-      if (device->opcode == x11::Input::DeviceEvent::KeyPress)
-        state_ = device->mods.effective | mask;
-      else if (device->opcode == x11::Input::DeviceEvent::KeyPress)
-        state_ = device->mods.effective & ~mask;
+      uint32_t state = ui::GetXI2StateFromEvent(*device);
+      if (device->opcode == x11::Input::DeviceEvent::KeyPress) {
+        state_ = state | mask;
+      } else if (device->opcode == x11::Input::DeviceEvent::KeyRelease) {
+        state_ = state & ~mask;
+      }
     }
   }
 
@@ -91,8 +101,6 @@ class XModifierStateWatcher {
   XModifierStateWatcher() = default;
 
   unsigned int state_{};
-
-  DISALLOW_COPY_AND_ASSIGN(XModifierStateWatcher);
 };
 
 // Detects if a touch event is a driver-generated 'special event'.
@@ -157,42 +165,17 @@ int GetEventFlagsFromXState(uint32_t state) {
   return GetEventFlagsFromXState(static_cast<x11::KeyButMask>(state));
 }
 
-int GetEventFlagsFromXKeyEvent(const x11::Event& xev) {
-  auto* key = xev.As<x11::KeyEvent>();
-  DCHECK(key);
-  const auto state = static_cast<int>(key->state);
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  const int ime_fabricated_flag = 0;
-#else
-  // XIM fabricates key events for the character compositions by XK_Multi_key.
-  // For example, when a user hits XK_Multi_key, XK_apostrophe, and XK_e in
-  // order to input "é", then XIM generates a key event with keycode=0 and
-  // state=0 for the composition, and the sequence of X11 key events will be
-  // XK_Multi_key, XK_apostrophe, **NoSymbol**, and XK_e.  If the user used
-  // shift key and/or caps lock key, state can be ShiftMask, LockMask or both.
-  //
-  // We have to send these fabricated key events to XIM so it can correctly
-  // handle the character compositions.
-  const auto detail = static_cast<uint8_t>(key->detail);
-  const auto shift_lock_mask =
-      static_cast<int>(x11::KeyButMask::Shift | x11::KeyButMask::Lock);
-  const bool fabricated_by_xim = detail == 0 && (state & ~shift_lock_mask) == 0;
-  const int ime_fabricated_flag =
-      fabricated_by_xim ? ui::EF_IME_FABRICATED_KEY : 0;
-#endif
-
-  return GetEventFlagsFromXState(state) | (key->send_event ? ui::EF_FINAL : 0) |
-         ime_fabricated_flag;
-}
-
 int GetEventFlagsFromXGenericEvent(const x11::Event& x11_event) {
   auto* xievent = x11_event.As<x11::Input::DeviceEvent>();
-  DCHECK(xievent);
-  DCHECK(xievent->opcode == x11::Input::DeviceEvent::KeyPress ||
-         xievent->opcode == x11::Input::DeviceEvent::KeyRelease);
-  return GetEventFlagsFromXState(xievent->mods.effective) |
-         (xievent->send_event ? ui::EF_FINAL : 0);
+  CHECK(xievent, base::NotFatalUntil::M163);
+  CHECK(xievent->opcode == x11::Input::DeviceEvent::KeyPress ||
+            xievent->opcode == x11::Input::DeviceEvent::KeyRelease,
+        base::NotFatalUntil::M163);
+  bool is_repeat =
+      static_cast<bool>(xievent->flags & x11::Input::KeyEventFlags::KeyRepeat);
+  uint32_t state = ui::GetXI2StateFromEvent(*xievent);
+  return GetEventFlagsFromXState(state) | (is_repeat ? ui::EF_IS_REPEAT : 0) |
+         (x11_event.send_event() ? ui::EF_FINAL : 0);
 }
 
 // Get the event flag for the button in XButtonEvent. During a ButtonPress
@@ -227,7 +210,7 @@ int GetEventFlagsForButton(x11::Button button) {
 int GetButtonMaskForX2Event(const x11::Input::DeviceEvent& xievent) {
   int buttonflags = 0;
   for (size_t i = 0; i < 32 * xievent.button_mask.size(); i++) {
-    if (ui::IsXinputMaskSet(xievent.button_mask.data(), i)) {
+    if (ui::IsXinputMaskSet(base::as_byte_span(xievent.button_mask), i)) {
       int button =
           (xievent.sourceid == xievent.deviceid)
               ? ui::DeviceDataManagerX11::GetInstance()->GetMappedButton(i)
@@ -244,44 +227,46 @@ ui::EventType GetTouchEventType(const x11::Event& x11_event) {
     // This is either a crossing event (which are handled by
     // PlatformEventDispatcher directly) or a device changed event (which can
     // happen when --touch-devices flag is used).
-    return ui::ET_UNKNOWN;
+    return ui::EventType::kUnknown;
   }
   switch (event->opcode) {
     case x11::Input::DeviceEvent::TouchBegin:
-      return TouchEventIsGeneratedHack(x11_event) ? ui::ET_UNKNOWN
-                                                  : ui::ET_TOUCH_PRESSED;
+      return TouchEventIsGeneratedHack(x11_event)
+                 ? ui::EventType::kUnknown
+                 : ui::EventType::kTouchPressed;
     case x11::Input::DeviceEvent::TouchUpdate:
-      return TouchEventIsGeneratedHack(x11_event) ? ui::ET_UNKNOWN
-                                                  : ui::ET_TOUCH_MOVED;
+      return TouchEventIsGeneratedHack(x11_event) ? ui::EventType::kUnknown
+                                                  : ui::EventType::kTouchMoved;
     case x11::Input::DeviceEvent::TouchEnd:
-      return TouchEventIsGeneratedHack(x11_event) ? ui::ET_TOUCH_CANCELLED
-                                                  : ui::ET_TOUCH_RELEASED;
+      return TouchEventIsGeneratedHack(x11_event)
+                 ? ui::EventType::kTouchCancelled
+                 : ui::EventType::kTouchReleased;
     default:;
   }
 
-  DCHECK(ui::TouchFactory::GetInstance()->IsTouchDevice(event->sourceid));
+  CHECK(ui::TouchFactory::GetInstance()->IsTouchDevice(event->sourceid),
+        base::NotFatalUntil::M163);
   switch (event->opcode) {
     case x11::Input::DeviceEvent::ButtonPress:
-      return ui::ET_TOUCH_PRESSED;
+      return ui::EventType::kTouchPressed;
     case x11::Input::DeviceEvent::ButtonRelease:
-      return ui::ET_TOUCH_RELEASED;
+      return ui::EventType::kTouchReleased;
     case x11::Input::DeviceEvent::Motion:
       // Should not convert any emulated Motion event from touch device to
       // touch event.
       if (!static_cast<bool>(event->flags &
                              x11::Input::KeyEventFlags::KeyRepeat) &&
           GetButtonMaskForX2Event(*event))
-        return ui::ET_TOUCH_MOVED;
-      return ui::ET_UNKNOWN;
+        return ui::EventType::kTouchMoved;
+      return ui::EventType::kUnknown;
     default:
       NOTREACHED();
   }
-  return ui::ET_UNKNOWN;
 }
 
-double GetTouchParamFromXEvent(const x11::Event& xev,
-                               ui::DeviceDataManagerX11::DataType val,
-                               double default_value) {
+double GetParamFromXEvent(const x11::Event& xev,
+                          ui::DeviceDataManagerX11::DataType val,
+                          double default_value) {
   ui::DeviceDataManagerX11::GetInstance()->GetEventData(xev, val,
                                                         &default_value);
   return default_value;
@@ -289,7 +274,7 @@ double GetTouchParamFromXEvent(const x11::Event& xev,
 
 void ScaleTouchRadius(const x11::Event& x11_event, double* radius) {
   auto* xiev = x11_event.As<x11::Input::DeviceEvent>();
-  DCHECK(xiev);
+  CHECK(xiev, base::NotFatalUntil::M163);
   ui::DeviceDataManagerX11::GetInstance()->ApplyTouchRadiusScale(
       static_cast<uint16_t>(xiev->sourceid), radius);
 }
@@ -334,8 +319,7 @@ base::TimeTicks TimeTicksFromXEventTime(x11::Time timestamp) {
 
   g_last_seen_timestamp_ms = timestamp64;
   if (!had_recent_rollover)
-    return base::TimeTicks() +
-           base::TimeDelta::FromMilliseconds(g_rollover_ms + timestamp32);
+    return base::TimeTicks() + base::Milliseconds(g_rollover_ms + timestamp32);
 
   DCHECK(timestamp64 <= UINT32_MAX)
       << "X11 Time does not roll over 32 bit, the below logic is likely wrong";
@@ -345,7 +329,7 @@ base::TimeTicks TimeTicksFromXEventTime(x11::Time timestamp) {
 
   g_rollover_ms = now_ms & ~static_cast<int64_t>(UINT32_MAX);
   uint32_t delta = static_cast<uint32_t>(now_ms - timestamp32);
-  return base::TimeTicks() + base::TimeDelta::FromMilliseconds(now_ms - delta);
+  return base::TimeTicks() + base::Milliseconds(now_ms - delta);
 }
 
 base::TimeTicks TimeTicksFromXEvent(const x11::Event& xev) {
@@ -371,7 +355,6 @@ base::TimeTicks TimeTicksFromXEvent(const x11::Event& xev) {
     return TimeTicksFromXEventTime(device->time);
   }
   NOTREACHED();
-  return base::TimeTicks();
 }
 
 // This is ported from libxi's FP1616toDBL in XExtInt.c
@@ -386,123 +369,164 @@ namespace ui {
 
 EventType EventTypeFromXEvent(const x11::Event& xev) {
   // Allow the DeviceDataManager to block the event. If blocked return
-  // ET_UNKNOWN as the type so this event will not be further processed.
-  // NOTE: During some events unittests there is no device data manager.
+  // EventType::kUnknown as the type so this event will not be further
+  // processed. NOTE: During some events unittests there is no device data
+  // manager.
   if (DeviceDataManager::HasInstance() &&
       DeviceDataManagerX11::GetInstance()->IsEventBlocked(xev)) {
-    return ET_UNKNOWN;
+    return EventType::kUnknown;
   }
 
   if (auto* key = xev.As<x11::KeyEvent>()) {
-    return key->opcode == x11::KeyEvent::Press ? ET_KEY_PRESSED
-                                               : ET_KEY_RELEASED;
+    return key->opcode == x11::KeyEvent::Press ? EventType::kKeyPressed
+                                               : EventType::kKeyReleased;
   }
-  if (auto* xbutton = xev.As<x11::ButtonEvent>()) {
-    int button = static_cast<int>(xbutton->detail);
-    bool wheel = button >= kMinWheelButton && button <= kMaxWheelButton;
-    if (xbutton->opcode == x11::ButtonEvent::Press) {
-      return wheel ? ET_MOUSEWHEEL : ET_MOUSE_PRESSED;
-    }
-    // Drop wheel events; we should've already scrolled on the press.
-    return wheel ? ET_UNKNOWN : ET_MOUSE_RELEASED;
-  }
-  if (auto* motion = xev.As<x11::MotionNotifyEvent>()) {
-    bool primary_button = static_cast<bool>(
-        motion->state & (x11::KeyButMask::Button1 | x11::KeyButMask::Button2 |
-                         x11::KeyButMask::Button3));
-    return primary_button ? ET_MOUSE_DRAGGED : ET_MOUSE_MOVED;
-  }
-  if (auto* crossing = xev.As<x11::CrossingEvent>()) {
-    bool enter = crossing->opcode == x11::CrossingEvent::EnterNotify;
-    // The standard on Windows is to send a MouseMove event when the mouse
-    // first enters a window instead of sending a special mouse enter event.
-    // To be consistent we follow the same style.
-    return enter ? ET_MOUSE_MOVED : ET_MOUSE_EXITED;
-  }
-  if (auto* xievent = xev.As<x11::Input::DeviceEvent>()) {
-    TouchFactory* factory = TouchFactory::GetInstance();
-    if (!factory->ShouldProcessDeviceEvent(*xievent))
-      return ET_UNKNOWN;
+  TouchFactory* touch_factory = TouchFactory::GetInstance();
+  auto* xievent = xev.As<x11::Input::DeviceEvent>();
 
-    // This check works only for master and floating slave devices. That is
-    // why it is necessary to check for the Touch events in the following
-    // switch statement to account for attached-slave touchscreens.
-    if (factory->IsTouchDevice(xievent->sourceid))
+  // This check works only for master and floating non-master devices. That is
+  // why it is still necessary to check for the Touch events in the following
+  // switch statement to account for attached-non-master touchscreens.
+  x11::Input::DeviceId device_id =
+      xievent ? xievent->sourceid : static_cast<x11::Input::DeviceId>(0);
+  bool is_touch_device = touch_factory->IsTouchDevice(device_id);
+
+  if (!is_touch_device) {
+    if (auto* xbutton = xev.As<x11::ButtonEvent>()) {
+      int button = static_cast<int>(xbutton->detail);
+      bool wheel = button >= kMinWheelButton && button <= kMaxWheelButton;
+      if (xbutton->opcode == x11::ButtonEvent::Press) {
+        return wheel ? EventType::kMousewheel : EventType::kMousePressed;
+      }
+      // Drop wheel events; we should've already scrolled on the press.
+      return wheel ? EventType::kUnknown : EventType::kMouseReleased;
+    }
+    if (auto* motion = xev.As<x11::MotionNotifyEvent>()) {
+      bool primary_button = static_cast<bool>(
+          motion->state & (x11::KeyButMask::Button1 | x11::KeyButMask::Button2 |
+                           x11::KeyButMask::Button3));
+      return primary_button ? EventType::kMouseDragged : EventType::kMouseMoved;
+    }
+    if (auto* crossing = xev.As<x11::CrossingEvent>()) {
+      bool enter = crossing->opcode == x11::CrossingEvent::EnterNotify;
+      // The standard on Windows is to send a MouseMove event when the mouse
+      // first enters a window instead of sending a special mouse enter event.
+      // To be consistent we follow the same style.
+      return enter ? EventType::kMouseMoved : EventType::kMouseExited;
+    }
+  }
+  if (xievent) {
+    if (!touch_factory->ShouldProcessDeviceEvent(*xievent)) {
+      return EventType::kUnknown;
+    }
+
+    if (is_touch_device) {
       return GetTouchEventType(xev);
+    }
 
     switch (xievent->opcode) {
       case x11::Input::DeviceEvent::TouchBegin:
-        return ui::ET_TOUCH_PRESSED;
+        return ui::EventType::kTouchPressed;
       case x11::Input::DeviceEvent::TouchUpdate:
-        return ui::ET_TOUCH_MOVED;
+        return ui::EventType::kTouchMoved;
       case x11::Input::DeviceEvent::TouchEnd:
-        return ui::ET_TOUCH_RELEASED;
+        return ui::EventType::kTouchReleased;
       case x11::Input::DeviceEvent::ButtonPress: {
         int button = EventButtonFromXEvent(xev);
         if (button >= kMinWheelButton && button <= kMaxWheelButton)
-          return ET_MOUSEWHEEL;
-        return ET_MOUSE_PRESSED;
+          return EventType::kMousewheel;
+        return EventType::kMousePressed;
       }
       case x11::Input::DeviceEvent::ButtonRelease: {
         int button = EventButtonFromXEvent(xev);
         // Drop wheel events; we should've already scrolled on the press.
         if (button >= kMinWheelButton && button <= kMaxWheelButton)
-          return ET_UNKNOWN;
-        return ET_MOUSE_RELEASED;
+          return EventType::kUnknown;
+        return EventType::kMouseReleased;
       }
       case x11::Input::DeviceEvent::Motion: {
         bool is_cancel;
         DeviceDataManagerX11* devices = DeviceDataManagerX11::GetInstance();
         if (GetFlingDataFromXEvent(xev, nullptr, nullptr, nullptr, nullptr,
                                    &is_cancel))
-          return is_cancel ? ET_SCROLL_FLING_CANCEL : ET_SCROLL_FLING_START;
+          return is_cancel ? EventType::kScrollFlingCancel
+                           : EventType::kScrollFlingStart;
         if (devices->IsScrollEvent(xev)) {
-          return devices->IsTouchpadXInputEvent(xev) ? ET_SCROLL
-                                                     : ET_MOUSEWHEEL;
+          return devices->IsTouchpadXInputEvent(xev) ? EventType::kScroll
+                                                     : EventType::kMousewheel;
         }
         if (devices->GetScrollClassEventDetail(xev) != SCROLL_TYPE_NO_SCROLL) {
-          return devices->IsTouchpadXInputEvent(xev) ? ET_SCROLL
-                                                     : ET_MOUSEWHEEL;
+          return devices->IsTouchpadXInputEvent(xev) ? EventType::kScroll
+                                                     : EventType::kMousewheel;
         }
         if (devices->IsCMTMetricsEvent(xev))
-          return ET_UMA_DATA;
+          return EventType::kUmaData;
         if (GetButtonMaskForX2Event(*xievent))
-          return ET_MOUSE_DRAGGED;
+          return EventType::kMouseDragged;
         if (DeviceDataManagerX11::GetInstance()->HasEventData(
                 xev, DeviceDataManagerX11::DT_CMT_SCROLL_X) ||
             DeviceDataManagerX11::GetInstance()->HasEventData(
                 xev, DeviceDataManagerX11::DT_CMT_SCROLL_Y)) {
           // Don't produce mouse move events for mousewheel scrolls.
-          return ET_UNKNOWN;
+          return EventType::kUnknown;
         }
 
-        return ET_MOUSE_MOVED;
+        return EventType::kMouseMoved;
       }
       case x11::Input::DeviceEvent::KeyPress:
-        return ET_KEY_PRESSED;
+        return EventType::kKeyPressed;
       case x11::Input::DeviceEvent::KeyRelease:
-        return ET_KEY_RELEASED;
+        return EventType::kKeyReleased;
     }
   }
-  return ET_UNKNOWN;
+  return EventType::kUnknown;
+}
+
+int GetEventFlagsFromXEvent(x11::KeyCode keycode,
+                            uint32_t state,
+                            bool send_event) {
+#if BUILDFLAG(IS_CHROMEOS)
+  const int ime_fabricated_flag = 0;
+#else
+  // XIM fabricates key events for the character compositions by XK_Multi_key.
+  // For example, when a user hits XK_Multi_key, XK_apostrophe, and XK_e in
+  // order to input "é", then XIM generates a key event with keycode=0 and
+  // state=0 for the composition, and the sequence of X11 key events will be
+  // XK_Multi_key, XK_apostrophe, **NoSymbol**, and XK_e.  If the user used
+  // shift key and/or caps lock key, state can be ShiftMask, LockMask or both.
+  //
+  // We have to send these fabricated key events to XIM so it can correctly
+  // handle the character compositions.
+  const auto shift_lock_mask =
+      static_cast<uint32_t>(x11::KeyButMask::Shift | x11::KeyButMask::Lock);
+  const bool fabricated_by_xim =
+      keycode == x11::KeyCode{} && (state & ~shift_lock_mask) == 0;
+  const int ime_fabricated_flag =
+      fabricated_by_xim ? ui::EF_IME_FABRICATED_KEY : 0;
+#endif
+
+  return GetEventFlagsFromXState(state) | (send_event ? ui::EF_FINAL : 0) |
+         ime_fabricated_flag;
 }
 
 int EventFlagsFromXEvent(const x11::Event& xev) {
-  if (xev.As<x11::KeyEvent>()) {
+  if (auto* key = xev.As<x11::KeyEvent>()) {
     XModifierStateWatcher::GetInstance()->UpdateStateFromXEvent(xev);
-    return GetEventFlagsFromXKeyEvent(xev);
+    return GetEventFlagsFromXEvent(
+        key->detail, static_cast<uint32_t>(key->state), xev.send_event());
   }
   if (auto* button = xev.As<x11::ButtonEvent>()) {
     int flags = GetEventFlagsFromXState(button->state);
     const EventType type = EventTypeFromXEvent(xev);
-    if (type == ET_MOUSE_PRESSED || type == ET_MOUSE_RELEASED)
+    if (type == EventType::kMousePressed || type == EventType::kMouseReleased) {
       flags |= GetEventFlagsForButton(button->detail);
+    }
     return flags;
   }
   if (auto* crossing = xev.As<x11::CrossingEvent>()) {
     int state = GetEventFlagsFromXState(crossing->state);
-    // EnterNotify creates ET_MOUSE_MOVED. Mark as synthesized as this is not
-    // a real mouse move event.
+    // EnterNotify creates EventType::kMouseMoved. Mark as synthesized as this
+    // is not a real mouse move event.
     if (crossing->opcode == x11::CrossingEvent::EnterNotify)
       state |= EF_IS_SYNTHESIZED;
     return state;
@@ -531,8 +555,11 @@ int EventFlagsFromXEvent(const x11::Event& xev) {
 
         const EventType type = EventTypeFromXEvent(xev);
         int button = EventButtonFromXEvent(xev);
-        if ((type == ET_MOUSE_PRESSED || type == ET_MOUSE_RELEASED) && !touch)
+        if ((type == EventType::kMousePressed ||
+             type == EventType::kMouseReleased) &&
+            !touch) {
           flags |= GetEventFlagsForButton(button);
+        }
         return flags;
       }
       case x11::Input::DeviceEvent::Motion:
@@ -564,7 +591,7 @@ gfx::Point EventLocationFromXEvent(const x11::Event& xev) {
   if (auto* xievent = xev.As<x11::Input::DeviceEvent>()) {
     float x = Fp1616ToDouble(xievent->event_x);
     float y = Fp1616ToDouble(xievent->event_y);
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     switch (xievent->opcode) {
       case x11::Input::DeviceEvent::TouchBegin:
       case x11::Input::DeviceEvent::TouchUpdate:
@@ -575,7 +602,7 @@ gfx::Point EventLocationFromXEvent(const x11::Event& xev) {
       default:
         break;
     }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
     return gfx::Point(static_cast<int>(x), static_cast<int>(y));
   }
   return gfx::Point();
@@ -588,6 +615,10 @@ gfx::Point EventSystemLocationFromXEvent(const x11::Event& xev) {
     return gfx::Point(button->root_x, button->root_y);
   if (auto* motion = xev.As<x11::MotionNotifyEvent>())
     return gfx::Point(motion->root_x, motion->root_y);
+  if (auto* crossing = xev.As<x11::Input::CrossingEvent>()) {
+    return gfx::Point(Fp1616ToDouble(crossing->root_x),
+                      Fp1616ToDouble(crossing->root_y));
+  }
   if (auto* xievent = xev.As<x11::Input::DeviceEvent>()) {
     return gfx::Point(Fp1616ToDouble(xievent->root_x),
                       Fp1616ToDouble(xievent->root_y));
@@ -597,7 +628,7 @@ gfx::Point EventSystemLocationFromXEvent(const x11::Event& xev) {
 
 int EventButtonFromXEvent(const x11::Event& xev) {
   auto* xievent = xev.As<x11::Input::DeviceEvent>();
-  DCHECK(xievent);
+  CHECK(xievent, base::NotFatalUntil::M163);
   int button = xievent->detail;
 
   return (xievent->sourceid == xievent->deviceid)
@@ -649,6 +680,47 @@ gfx::Vector2d GetMouseWheelOffsetFromXEvent(const x11::Event& xev) {
   }
 }
 
+float GetStylusForceFromXEvent(const x11::Event& x11_event) {
+  auto* event = x11_event.As<x11::Input::DeviceEvent>();
+  if (event->opcode == x11::Input::DeviceEvent::ButtonRelease)
+    return 0.0;
+  double force = GetParamFromXEvent(
+      x11_event, ui::DeviceDataManagerX11::DT_STYLUS_PRESSURE, 0.0);
+  auto deviceid = event->sourceid;
+  // Force is normalized to fall into [0, 1]
+  if (!ui::DeviceDataManagerX11::GetInstance()->NormalizeData(
+          deviceid, ui::DeviceDataManagerX11::DT_STYLUS_PRESSURE, &force)) {
+    force = 0.0;
+  }
+  return force;
+}
+
+float GetStylusTiltXFromXEvent(const x11::Event& x11_event) {
+  double tilt = GetParamFromXEvent(
+      x11_event, ui::DeviceDataManagerX11::DT_STYLUS_TILT_X, 0.0);
+  return std::clamp<float>(tilt, -90, 90);
+}
+
+float GetStylusTiltYFromXEvent(const x11::Event& x11_event) {
+  double tilt = GetParamFromXEvent(
+      x11_event, ui::DeviceDataManagerX11::DT_STYLUS_TILT_Y, 0.0);
+  return std::clamp<float>(tilt, -90, 90);
+}
+
+PointerDetails GetStylusPointerDetailsFromXEvent(const x11::Event& xev) {
+  if (!ui::DeviceDataManagerX11::HasInstance() ||
+      !ui::DeviceDataManagerX11::GetInstance()->IsStylusXInputEvent(xev)) {
+    // default: empty details with kMouse
+    return PointerDetails(EventPointerType::kMouse);
+  }
+  PointerDetails p(EventPointerType::kPen);
+  // NOTE: id is not set here
+  p.force = GetStylusForceFromXEvent(xev);
+  p.tilt_x = GetStylusTiltXFromXEvent(xev);
+  p.tilt_y = GetStylusTiltYFromXEvent(xev);
+  return p;
+}
+
 int GetTouchIdFromXEvent(const x11::Event& xev) {
   double slot = 0;
   ui::DeviceDataManagerX11* manager = ui::DeviceDataManagerX11::GetInstance();
@@ -664,24 +736,24 @@ int GetTouchIdFromXEvent(const x11::Event& xev) {
 }
 
 float GetTouchRadiusXFromXEvent(const x11::Event& xev) {
-  double radius = GetTouchParamFromXEvent(
-                      xev, ui::DeviceDataManagerX11::DT_TOUCH_MAJOR, 0.0) /
-                  2.0;
+  double radius =
+      GetParamFromXEvent(xev, ui::DeviceDataManagerX11::DT_TOUCH_MAJOR, 0.0) /
+      2.0;
   ScaleTouchRadius(xev, &radius);
   return radius;
 }
 
 float GetTouchRadiusYFromXEvent(const x11::Event& xev) {
-  double radius = GetTouchParamFromXEvent(
-                      xev, ui::DeviceDataManagerX11::DT_TOUCH_MINOR, 0.0) /
-                  2.0;
+  double radius =
+      GetParamFromXEvent(xev, ui::DeviceDataManagerX11::DT_TOUCH_MINOR, 0.0) /
+      2.0;
   ScaleTouchRadius(xev, &radius);
   return radius;
 }
 
 float GetTouchAngleFromXEvent(const x11::Event& xev) {
-  return GetTouchParamFromXEvent(
-             xev, ui::DeviceDataManagerX11::DT_TOUCH_ORIENTATION, 0.0) /
+  return GetParamFromXEvent(xev, ui::DeviceDataManagerX11::DT_TOUCH_ORIENTATION,
+                            0.0) /
          2.0;
 }
 
@@ -690,8 +762,8 @@ float GetTouchForceFromXEvent(const x11::Event& x11_event) {
   if (event->opcode == x11::Input::DeviceEvent::TouchEnd)
     return 0.0;
   double force = 0.0;
-  force = GetTouchParamFromXEvent(
-      x11_event, ui::DeviceDataManagerX11::DT_TOUCH_PRESSURE, 0.0);
+  force = GetParamFromXEvent(x11_event,
+                             ui::DeviceDataManagerX11::DT_TOUCH_PRESSURE, 0.0);
   auto deviceid = event->sourceid;
   // Force is normalized to fall into [0, 1]
   if (!ui::DeviceDataManagerX11::GetInstance()->NormalizeData(
@@ -701,10 +773,17 @@ float GetTouchForceFromXEvent(const x11::Event& x11_event) {
 }
 
 PointerDetails GetTouchPointerDetailsFromXEvent(const x11::Event& xev) {
+  auto* event = xev.As<x11::Input::DeviceEvent>();
+
+  // Use touch as the default pointer type if `event` is null.
+  EventPointerType pointer_type =
+      event ? ui::TouchFactory::GetInstance()->GetTouchDevicePointerType(
+                  event->sourceid)
+            : EventPointerType::kTouch;
   return PointerDetails(
-      EventPointerType::kTouch, GetTouchIdFromXEvent(xev),
-      GetTouchRadiusXFromXEvent(xev), GetTouchRadiusYFromXEvent(xev),
-      GetTouchForceFromXEvent(xev), GetTouchAngleFromXEvent(xev));
+      pointer_type, GetTouchIdFromXEvent(xev), GetTouchRadiusXFromXEvent(xev),
+      GetTouchRadiusYFromXEvent(xev), GetTouchForceFromXEvent(xev),
+      GetTouchAngleFromXEvent(xev));
 }
 
 bool GetScrollOffsetsFromXEvent(const x11::Event& xev,
@@ -737,11 +816,11 @@ bool GetScrollOffsetsFromXEvent(const x11::Event& xev,
 
   if (DeviceDataManagerX11::GetInstance()->GetScrollClassEventDetail(xev) !=
       SCROLL_TYPE_NO_SCROLL) {
-    double x_scroll_offset, y_scroll_offset;
+    double x_scroll_offset_dbl, y_scroll_offset_dbl;
     DeviceDataManagerX11::GetInstance()->GetScrollClassOffsets(
-        xev, &x_scroll_offset, &y_scroll_offset);
-    *x_offset = x_scroll_offset * kWheelScrollAmount;
-    *y_offset = y_scroll_offset * kWheelScrollAmount;
+        xev, &x_scroll_offset_dbl, &y_scroll_offset_dbl);
+    *x_offset = x_scroll_offset_dbl * kWheelScrollAmount;
+    *y_offset = y_scroll_offset_dbl * kWheelScrollAmount;
 
     if (DeviceDataManagerX11::GetInstance()->IsTouchpadXInputEvent(xev)) {
       *x_offset_ordinal = *x_offset;
@@ -791,6 +870,18 @@ bool IsAltPressed() {
 
 int GetModifierKeyState() {
   return XModifierStateWatcher::GetInstance()->state();
+}
+
+uint32_t XkbStateFromXI2Event(const x11::Input::DeviceEvent& xievent) {
+  uint32_t mods = xievent.mods.effective & 0xff;
+  uint8_t buttons = std::reduce(xievent.button_mask.begin(),
+                                xievent.button_mask.end(), 0, std::bit_or<>());
+  // For some reason, the XInput2 button mask needs to be right-shifted by one
+  // to match the XKB button mask.
+  buttons = (buttons >> 1) & 0x1f;
+  // The group (bits 13-14 of the XKB state) is deliberately omitted because
+  // it's not used by GdkModifierType.
+  return (static_cast<uint32_t>(buttons) << 8) | mods;
 }
 
 void ResetTimestampRolloverCountersForTesting() {

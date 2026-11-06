@@ -1,73 +1,69 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef MOJO_CORE_BROKER_HOST_H_
 #define MOJO_CORE_BROKER_HOST_H_
 
+#include <stddef.h>
 #include <stdint.h>
-#include <vector>
 
-#include "base/macros.h"
-#include "base/process/process.h"
-#include "base/process/process_handle.h"
-#include "base/strings/string_piece.h"
+#include <memory>
+
+#include "base/files/scoped_file.h"
+#include "base/message_loop/io_watcher.h"
 #include "base/task/current_thread.h"
-#include "build/build_config.h"
-#include "mojo/core/channel.h"
-#include "mojo/core/connection_params.h"
-#include "mojo/core/embedder/process_error_callback.h"
-#include "mojo/core/platform_handle_in_transit.h"
-#include "mojo/public/cpp/platform/platform_handle.h"
+#include "mojo/core/broker_messages.h"
+#include "mojo/core/system_impl_export.h"
 
-namespace mojo {
-namespace core {
+namespace mojo::core {
 
-// The BrokerHost is a channel to a broker client process, servicing synchronous
-// IPCs issued by the client.
-class BrokerHost : public Channel::Delegate,
-                   public base::CurrentThread::DestructionObserver {
+// Services shared memory allocation requests from a client process's Broker
+// over a dedicated socket, using the protocol in broker_messages.h.
+//
+// The client is untrusted: the kernel discards any file descriptors the client
+// sends, and the BrokerHost closes the connection as soon as a response cannot
+// be written without blocking. The client created the socket and can change its
+// blocking mode at any time through a duplicate descriptor, so every read and
+// write uses MSG_DONTWAIT.
+//
+// A BrokerHost must be created on an IO thread. It owns itself and is
+// destroyed on that thread when the connection is closed, or when the thread's
+// message loop is destroyed.
+class MOJO_SYSTEM_IMPL_EXPORT BrokerHost final
+    : public base::IOWatcher::FdWatcher,
+      public base::CurrentThread::DestructionObserver {
  public:
-  BrokerHost(base::Process client_process,
-             ConnectionParams connection_params,
-             const ProcessErrorCallback& process_error_callback);
+  explicit BrokerHost(base::ScopedFD socket);
 
-  // Send |handle| to the client, to be used to establish a NodeChannel to us.
-  bool SendChannel(PlatformHandle handle);
-
-#if defined(OS_WIN)
-  // Sends a named channel to the client. Like above, but for named pipes.
-  void SendNamedChannel(base::WStringPiece pipe_name);
-#endif
+  BrokerHost(const BrokerHost&) = delete;
+  BrokerHost& operator=(const BrokerHost&) = delete;
 
  private:
   ~BrokerHost() override;
 
-  bool PrepareHandlesForClient(std::vector<PlatformHandleInTransit>* handles);
-
-  // Channel::Delegate:
-  void OnChannelMessage(const void* payload,
-                        size_t payload_size,
-                        std::vector<PlatformHandle> handles) override;
-  void OnChannelError(Channel::Error error) override;
+  // base::IOWatcher::FdWatcher:
+  void OnFdReadable(int fd) override;
+  void OnFdWritable(int fd) override;
 
   // base::CurrentThread::DestructionObserver:
   void WillDestroyCurrentMessageLoop() override;
 
-  void OnBufferRequest(uint32_t num_bytes);
+  // Creates a region of `num_bytes` and sends it to the client. Returns false
+  // if the response could not be sent.
+  bool OnBufferRequest(uint32_t num_bytes);
 
-  const ProcessErrorCallback process_error_callback_;
+  base::ScopedFD socket_;
 
-#if defined(OS_WIN)
-  base::Process client_process_;
-#endif
+  // Declared after `socket_` so that the watch is removed before the socket is
+  // closed.
+  std::unique_ptr<base::IOWatcher::FdWatch> read_watch_;
 
-  scoped_refptr<Channel> channel_;
-
-  DISALLOW_COPY_AND_ASSIGN(BrokerHost);
+  // The request being received, and how many of its bytes have arrived.
+  BrokerBufferRequest request_ = {};
+  size_t request_bytes_received_ = 0;
 };
 
-}  // namespace core
-}  // namespace mojo
+}  // namespace mojo::core
 
 #endif  // MOJO_CORE_BROKER_HOST_H_

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,9 @@
 #define COMPONENTS_GUEST_VIEW_BROWSER_GUEST_VIEW_EVENT_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/macros.h"
 #include "base/values.h"
 
 namespace guest_view {
@@ -21,8 +21,11 @@ class GuestViewBase;
 // on attachment. GuestViewEvents are owned by GuestViewBase.
 class GuestViewEvent {
  public:
-  GuestViewEvent(const std::string& name,
-                 std::unique_ptr<base::DictionaryValue> args);
+  GuestViewEvent(const std::string& name, base::DictValue args);
+
+  GuestViewEvent(const GuestViewEvent&) = delete;
+  GuestViewEvent& operator=(const GuestViewEvent&) = delete;
+
   ~GuestViewEvent();
 
   // This method will dispatch the event to the specified |guest|'s embedder and
@@ -31,9 +34,7 @@ class GuestViewEvent {
 
 private:
   const std::string name_;
-  std::unique_ptr<base::DictionaryValue> args_;
-
-  DISALLOW_COPY_AND_ASSIGN(GuestViewEvent);
+  std::optional<base::DictValue> args_;
 };
 
 }  // namespace guest_view

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,8 +10,7 @@ AXActionTarget::Type NullAXActionTarget::GetType() const {
   return AXActionTarget::Type::kNull;
 }
 
-bool NullAXActionTarget::PerformAction(
-    const ui::AXActionData& action_data) const {
+bool NullAXActionTarget::PerformAction(const AXActionData& action_data) const {
   return false;
 }
 
@@ -33,10 +32,6 @@ gfx::Point NullAXActionTarget::MaximumScrollOffset() const {
 
 void NullAXActionTarget::SetScrollOffset(const gfx::Point& point) const {}
 
-bool NullAXActionTarget::SetSelected(bool selected) const {
-  return false;
-}
-
 bool NullAXActionTarget::SetSelection(const AXActionTarget* anchor_object,
                                       int anchor_offset,
                                       const AXActionTarget* focus_object,
@@ -44,7 +39,10 @@ bool NullAXActionTarget::SetSelection(const AXActionTarget* anchor_object,
   return false;
 }
 
-bool NullAXActionTarget::ScrollToMakeVisible() const {
+bool NullAXActionTarget::ScrollToMakeVisible(
+    ax::mojom::ScrollAlignment horizontal_scroll_alignment,
+    ax::mojom::ScrollAlignment vertical_scroll_alignment,
+    ax::mojom::ScrollBehavior scroll_behavior) const {
   return false;
 }
 

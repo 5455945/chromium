@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 
 #include <stdint.h>
 
-#include <map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -18,7 +17,10 @@
 #include "ash/wm/overview/overview_observer.h"
 #include "ash/wm/splitview/split_view_controller.h"
 #include "ash/wm/splitview/split_view_observer.h"
-#include "base/macros.h"
+#include "base/containers/flat_map.h"
+#include "base/containers/flat_set.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "ui/aura/window_observer.h"
 #include "ui/compositor/layer_animation_observer.h"
 #include "ui/display/display_observer.h"
@@ -29,6 +31,7 @@ class Window;
 
 namespace ash {
 class TabletModeController;
+class TabletModeMultitaskMenuController;
 class TabletModeToggleFullscreenEventHandler;
 class TabletModeWindowState;
 
@@ -44,17 +47,31 @@ class ASH_EXPORT TabletModeWindowManager : public aura::WindowObserver,
                                            public SplitViewObserver,
                                            public SessionObserver {
  public:
+  // There are two reasons that we would destroy `this`.
+  enum class ShutdownReason {
+    kSystemShutdown,
+    kExitTabletUIMode,
+  };
+
   // This should only be created or deleted by the creator
   // (TabletModeController).
   TabletModeWindowManager();
+
+  TabletModeWindowManager(const TabletModeWindowManager&) = delete;
+  TabletModeWindowManager& operator=(const TabletModeWindowManager&) = delete;
+
   ~TabletModeWindowManager() override;
+
+  TabletModeMultitaskMenuController* tablet_mode_multitask_menu_controller() {
+    return tablet_mode_multitask_menu_controller_.get();
+  }
 
   void Init();
 
   // Stops tracking windows and returns them to their clamshell mode state. Work
   // is done here instead of the destructor because TabletModeController may
   // still need this object alive during shutdown.
-  void Shutdown();
+  void Shutdown(ShutdownReason shutdown_reason);
 
   // True if |window| is in |window_state_map_|.
   bool IsTrackingWindow(aura::Window* window);
@@ -98,13 +115,15 @@ class ASH_EXPORT TabletModeWindowManager : public aura::WindowObserver,
 
   // display::DisplayObserver:
   void OnDisplayAdded(const display::Display& display) override;
-  void OnDisplayRemoved(const display::Display& display) override;
+  void OnDisplaysRemoved(const display::Displays& removed_displays) override;
 
   // SessionObserver:
   void OnActiveUserSessionChanged(const AccountId& account_id) override;
 
  private:
-  using WindowToState = std::map<aura::Window*, TabletModeWindowState*>;
+  using WindowToState =
+      base::flat_map<aura::Window*,
+                     raw_ptr<TabletModeWindowState, CtnExperimental>>;
   using WindowAndStateTypeList =
       std::vector<std::pair<aura::Window*, chromeos::WindowStateType>>;
 
@@ -136,9 +155,13 @@ class ASH_EXPORT TabletModeWindowManager : public aura::WindowObserver,
   // entering clamshell mode, and if clamshell split view is enabled, these
   // windows will be carried over to clamshell split view. |was_in_overview|
   // indicates whether overview is active before entering clamshell mode.
+  // `windows_to_skip_animation` contains the windows that were not visible in
+  // tablet mode, whose bounds change should not be animated unless
+  // `was_in_overview` is true.
   void ArrangeWindowsForClamshellMode(
       WindowAndStateTypeList windows_in_splitview,
-      bool was_in_overview);
+      bool was_in_overview,
+      const base::flat_set<aura::Window*>& windows_to_skip_animation);
 
   // If the given window should be handled by us, this function will add it to
   // the list of known windows (remembering the initial show state).
@@ -149,13 +172,11 @@ class ASH_EXPORT TabletModeWindowManager : public aura::WindowObserver,
                    bool snap = false,
                    bool animate_bounds_on_attach = true);
 
-  // Removes a window from our tracking list. |was_in_overview| used when
-  // |destroyed| is false to help handle leaving tablet mode. If the window is
-  // going to be destroyed, do not restore its old previous window state object
-  // as it will send unnecessary window state change event.
-  void ForgetWindow(aura::Window* window,
-                    bool destroyed,
-                    bool was_in_overview = false);
+  // Removes a window from our tracking list. `animate` is used when
+  // |destroyed| is false to animate the bounds change when leaving tablet mode.
+  // If the window is going to be destroyed, do not restore its old previous
+  // window state object as it will send unnecessary window state change event.
+  void ForgetWindow(aura::Window* window, bool destroyed, bool animate = false);
 
   // Returns true when the given window should be modified in any way by us.
   bool ShouldHandleWindow(aura::Window* window);
@@ -177,23 +198,28 @@ class ASH_EXPORT TabletModeWindowManager : public aura::WindowObserver,
   WindowToState window_state_map_;
 
   // All container windows which have to be tracked.
-  std::unordered_set<aura::Window*> observed_container_windows_;
+  std::unordered_set<raw_ptr<aura::Window, CtnExperimental>>
+      observed_container_windows_;
 
   // Windows added to the container, but not yet shown or tracked. They will be
   // attempted to be tracked when the window is shown.
-  std::unordered_set<aura::Window*> windows_to_track_;
+  std::unordered_set<raw_ptr<aura::Window, CtnExperimental>> windows_to_track_;
 
   // All accounts that have been active at least once since tablet mode started.
   base::flat_set<AccountId> accounts_since_entering_tablet_;
 
   std::unique_ptr<TabletModeToggleFullscreenEventHandler> event_handler_;
 
-  absl::optional<display::ScopedDisplayObserver> display_observer_;
+  // Handles gestures that may show or hide the multitask menu.
+  std::unique_ptr<TabletModeMultitaskMenuController>
+      tablet_mode_multitask_menu_controller_;
+
+  std::optional<display::ScopedDisplayObserver> display_observer_;
 
   // True when tablet mode is about to end.
   bool is_exiting_ = false;
 
-  DISALLOW_COPY_AND_ASSIGN(TabletModeWindowManager);
+  base::WeakPtrFactory<TabletModeWindowManager> weak_ptr_factory_{this};
 };
 
 }  // namespace ash

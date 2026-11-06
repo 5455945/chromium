@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,18 @@
 
 #include <stddef.h>
 
-#include "base/bind.h"
 #include "base/files/file_path.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "url/gurl.h"
+
+namespace network {
+class SharedURLLoaderFactory;
+}  // namespace network
 
 namespace ash {
 
@@ -23,6 +27,8 @@ namespace ash {
 // finished (either successful or failed) wallpaper download.
 class CustomizationWallpaperDownloader {
  public:
+  // `shared_url_loader_factory` must be the one associated with the browser
+  // process. `shared_url_loader_factory` may be null in unit tests.
   // - |wallpaper_url| - wallpaper URL to download.
   // - |wallpaper_dir| - directory, where wallpaper will be downloaded
   // (it will be created).
@@ -32,11 +38,17 @@ class CustomizationWallpaperDownloader {
   // After download is completed, temporary file will be renamed to
   // |wallpaper_downloaded_file|.
   CustomizationWallpaperDownloader(
+      scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
       const GURL& wallpaper_url,
       const base::FilePath& wallpaper_dir,
       const base::FilePath& wallpaper_downloaded_file,
       base::OnceCallback<void(bool success, const GURL&)>
           on_wallpaper_fetch_completed);
+
+  CustomizationWallpaperDownloader(const CustomizationWallpaperDownloader&) =
+      delete;
+  CustomizationWallpaperDownloader& operator=(
+      const CustomizationWallpaperDownloader&) = delete;
 
   ~CustomizationWallpaperDownloader();
 
@@ -67,6 +79,9 @@ class CustomizationWallpaperDownloader {
 
   // Called on UI thread.
   void OnTemporaryFileRenamed(std::unique_ptr<bool> success);
+
+  const scoped_refptr<network::SharedURLLoaderFactory>
+      shared_url_loader_factory_;
 
   // This loader is used to download wallpaper file.
   std::unique_ptr<network::SimpleURLLoader> simple_loader_;
@@ -101,8 +116,6 @@ class CustomizationWallpaperDownloader {
       on_wallpaper_fetch_completed_;
 
   base::WeakPtrFactory<CustomizationWallpaperDownloader> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(CustomizationWallpaperDownloader);
 };
 
 }  // namespace ash

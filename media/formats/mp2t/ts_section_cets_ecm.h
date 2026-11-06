@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,7 @@
 
 #include <string>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "media/formats/mp2t/ts_section.h"
 
 namespace media {
@@ -29,19 +28,20 @@ class TsSectionCetsEcm : public TsSection {
 
   explicit TsSectionCetsEcm(
       const RegisterNewKeyIdAndIvCB& register_new_key_id_and_iv_cb);
+
+  TsSectionCetsEcm(const TsSectionCetsEcm&) = delete;
+  TsSectionCetsEcm& operator=(const TsSectionCetsEcm&) = delete;
+
   ~TsSectionCetsEcm() override;
 
   // TsSection implementation.
   bool Parse(bool payload_unit_start_indicator,
-             const uint8_t* buf,
-             int size) override;
+             base::span<const uint8_t> buf) override;
   void Flush() override;
   void Reset() override;
 
  private:
   RegisterNewKeyIdAndIvCB register_new_key_id_and_iv_cb_;
-
-  DISALLOW_COPY_AND_ASSIGN(TsSectionCetsEcm);
 };
 
 }  // namespace mp2t

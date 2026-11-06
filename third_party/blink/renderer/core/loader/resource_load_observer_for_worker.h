@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -33,7 +33,8 @@ class ResourceLoadObserverForWorker final : public ResourceLoadObserver {
                        const ResourceResponse& redirect_response,
                        ResourceType,
                        const ResourceLoaderOptions&,
-                       RenderBlockingBehavior) override;
+                       RenderBlockingBehavior,
+                       const Resource*) override;
   void DidChangePriority(uint64_t identifier,
                          ResourceLoadPriority,
                          int intra_priority_value) override;
@@ -43,20 +44,24 @@ class ResourceLoadObserverForWorker final : public ResourceLoadObserver {
                           const Resource* resource,
                           ResponseSource) override;
   void DidReceiveData(uint64_t identifier,
-                      base::span<const char> chunk) override;
+                      base::SpanOrSize<const char> chunk) override;
   void DidReceiveTransferSizeUpdate(uint64_t identifier,
                                     int transfer_size_diff) override;
   void DidDownloadToBlob(uint64_t identifier, BlobDataHandle*) override;
   void DidFinishLoading(uint64_t identifier,
                         base::TimeTicks finish_time,
                         int64_t encoded_data_length,
-                        int64_t decoded_body_length,
-                        bool should_report_corb_blocking) override;
+                        uint64_t encoded_body_length,
+                        int64_t decoded_body_length) override;
   void DidFailLoading(const KURL&,
                       uint64_t identifier,
                       const ResourceError&,
                       int64_t encoded_data_length,
                       IsInternalRequest) override;
+  void DidChangeRenderBlockingBehavior(Resource* resource,
+                                       const FetchParameters& params) override {
+  }
+  bool InterestedInAllRequests() override;
   void Trace(Visitor*) const override;
 
  private:

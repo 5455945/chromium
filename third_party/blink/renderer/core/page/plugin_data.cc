@@ -28,8 +28,6 @@
 #include "third_party/blink/public/mojom/plugins/plugin_registry.mojom-blink.h"
 #include "third_party/blink/public/platform/file_path_conversion.h"
 #include "third_party/blink/public/platform/platform.h"
-#include "third_party/blink/public/platform/web_security_origin.h"
-#include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 
 namespace blink {
 
@@ -39,8 +37,12 @@ void MimeClassInfo::Trace(Visitor* visitor) const {
 
 MimeClassInfo::MimeClassInfo(const String& type,
                              const String& description,
-                             PluginInfo& plugin)
-    : type_(type), description_(description), plugin_(&plugin) {}
+                             PluginInfo& plugin,
+                             const Vector<String> extensions)
+    : type_(type),
+      description_(description),
+      extensions_(std::move(extensions)),
+      plugin_(&plugin) {}
 
 void PluginInfo::Trace(Visitor* visitor) const {
   visitor->Trace(mimes_);
@@ -64,7 +66,7 @@ void PluginInfo::AddMimeType(MimeClassInfo* info) {
 const MimeClassInfo* PluginInfo::GetMimeClassInfo(wtf_size_t index) const {
   if (index >= mimes_.size())
     return nullptr;
-  return mimes_[index];
+  return mimes_[index].Get();
 }
 
 const MimeClassInfo* PluginInfo::GetMimeClassInfo(const String& type) const {
@@ -85,34 +87,30 @@ void PluginData::Trace(Visitor* visitor) const {
   visitor->Trace(mimes_);
 }
 
-// static
-void PluginData::RefreshBrowserSidePluginCache() {
-  mojo::Remote<mojom::blink::PluginRegistry> registry;
-  Platform::Current()->GetBrowserInterfaceBroker()->GetInterface(
-      registry.BindNewPipeAndPassReceiver());
-  Vector<mojom::blink::PluginInfoPtr> plugins;
-  registry->GetPlugins(true, SecurityOrigin::CreateUniqueOpaque(), &plugins);
-}
+void PluginData::UpdatePluginList() {
+  if (updated_) {
+    return;
+  }
 
-void PluginData::UpdatePluginList(const SecurityOrigin* main_frame_origin) {
   ResetPluginData();
-  main_frame_origin_ = main_frame_origin;
+  updated_ = true;
 
   mojo::Remote<mojom::blink::PluginRegistry> registry;
   Platform::Current()->GetBrowserInterfaceBroker()->GetInterface(
       registry.BindNewPipeAndPassReceiver());
   Vector<mojom::blink::PluginInfoPtr> plugins;
-  registry->GetPlugins(false, main_frame_origin_, &plugins);
+  registry->GetPlugins(&plugins);
   for (const auto& plugin : plugins) {
     auto* plugin_info = MakeGarbageCollected<PluginInfo>(
-        plugin->name, FilePathToWebString(plugin->filename),
-        plugin->description, plugin->background_color,
+        std::move(plugin->name), FilePathToString(plugin->filename),
+        std::move(plugin->description),
+        Color::FromRGBA32(plugin->background_color),
         plugin->may_use_external_handler);
     plugins_.push_back(plugin_info);
     for (const auto& mime : plugin->mime_types) {
       auto* mime_info = MakeGarbageCollected<MimeClassInfo>(
-          mime->mime_type, mime->description, *plugin_info);
-      mime_info->extensions_ = mime->file_extensions;
+          std::move(mime->mime_type), std::move(mime->description),
+          *plugin_info, std::move(mime->file_extensions));
       plugin_info->AddMimeType(mime_info);
       mimes_.push_back(mime_info);
     }
@@ -121,19 +119,19 @@ void PluginData::UpdatePluginList(const SecurityOrigin* main_frame_origin) {
   std::sort(
       plugins_.begin(), plugins_.end(),
       [](const Member<PluginInfo>& lhs, const Member<PluginInfo>& rhs) -> bool {
-        return WTF::CodeUnitCompareLessThan(lhs->Name(), rhs->Name());
+        return CodeUnitCompareLessThan(lhs->Name(), rhs->Name());
       });
   std::sort(mimes_.begin(), mimes_.end(),
             [](const Member<MimeClassInfo>& lhs,
                const Member<MimeClassInfo>& rhs) -> bool {
-              return WTF::CodeUnitCompareLessThan(lhs->Type(), rhs->Type());
+              return CodeUnitCompareLessThan(lhs->Type(), rhs->Type());
             });
 }
 
 void PluginData::ResetPluginData() {
   plugins_.clear();
   mimes_.clear();
-  main_frame_origin_ = nullptr;
+  updated_ = false;
 }
 
 bool PluginData::SupportsMimeType(const String& mime_type) const {
@@ -152,7 +150,6 @@ Color PluginData::PluginBackgroundColorForMimeType(
       return info->Plugin()->BackgroundColor();
   }
   NOTREACHED();
-  return Color();
 }
 
 bool PluginData::IsExternalPluginMimeType(const String& mime_type) const {

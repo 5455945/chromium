@@ -1,13 +1,15 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_LANGUAGE_CONTENT_BROWSER_TEST_UTILS_H_
 #define COMPONENTS_LANGUAGE_CONTENT_BROWSER_TEST_UTILS_H_
 
+#include "base/memory/raw_ptr.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "services/device/public/mojom/geolocation.mojom.h"
+#include "services/device/public/mojom/geolocation_client_id.mojom.h"
 #include "services/device/public/mojom/geoposition.mojom.h"
 #include "services/device/public/mojom/public_ip_address_geolocation_provider.mojom.h"
 
@@ -21,7 +23,7 @@ class MockGeoLocation : public device::mojom::Geolocation {
   ~MockGeoLocation() override;
 
   // device::mojom::Geolocation implementation:
-  void SetHighAccuracy(bool high_accuracy) override;
+  void SetHighAccuracyHint(bool high_accuracy) override;
   void QueryNextPosition(QueryNextPositionCallback callback) override;
 
   void BindGeoLocation(
@@ -34,7 +36,7 @@ class MockGeoLocation : public device::mojom::Geolocation {
 
  private:
   int query_next_position_called_times_ = 0;
-  device::mojom::Geoposition position_;
+  device::mojom::GeopositionResultPtr result_;
   mojo::Receiver<device::mojom::Geolocation> receiver_{this};
 };
 
@@ -51,10 +53,11 @@ class MockIpGeoLocationProvider
 
   void CreateGeolocation(
       const net::MutablePartialNetworkTrafficAnnotationTag& /* unused */,
-      mojo::PendingReceiver<device::mojom::Geolocation> receiver) override;
+      mojo::PendingReceiver<device::mojom::Geolocation> receiver,
+      device::mojom::GeolocationClientId client_id) override;
 
  private:
-  MockGeoLocation* mock_geo_location_;
+  raw_ptr<MockGeoLocation> mock_geo_location_;
   mojo::Receiver<device::mojom::PublicIpAddressGeolocationProvider> receiver_{
       this};
 };

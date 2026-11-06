@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,10 @@
 #include <memory>
 
 #include "ash/constants/ash_features.h"
-#include "ash/public/cpp/ash_pref_names.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
-#include "base/macros.h"
 #include "base/test/scoped_feature_list.h"
 #include "components/prefs/testing_pref_service.h"
 #include "services/media_session/public/cpp/test/test_media_controller.h"
@@ -21,6 +20,10 @@ namespace ash {
 class MediaControllerTest : public AshTestBase {
  public:
   MediaControllerTest() = default;
+
+  MediaControllerTest(const MediaControllerTest&) = delete;
+  MediaControllerTest& operator=(const MediaControllerTest&) = delete;
+
   ~MediaControllerTest() override = default;
 
   // AshTestBase
@@ -90,8 +93,6 @@ class MediaControllerTest : public AshTestBase {
 
  private:
   std::unique_ptr<media_session::test::TestMediaController> controller_;
-
-  DISALLOW_COPY_AND_ASSIGN(MediaControllerTest);
 };
 
 TEST_F(MediaControllerTest, EnableMediaKeysWhenUnlocked) {
@@ -115,9 +116,6 @@ TEST_F(MediaControllerTest, EnableMediaKeysWhenUnlocked) {
 }
 
 TEST_F(MediaControllerTest, EnableLockScreenMediaKeys) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(features::kLockScreenMediaControls);
-
   PrefService* prefs =
       Shell::Get()->session_controller()->GetLastActiveUserPrefService();
   prefs->SetBoolean(prefs::kLockScreenMediaControlsEnabled, true);
@@ -126,27 +124,7 @@ TEST_F(MediaControllerTest, EnableLockScreenMediaKeys) {
       Shell::Get()->media_controller()->AreLockScreenMediaKeysEnabled());
 }
 
-TEST_F(MediaControllerTest, DisableLockScreenMediaKeysIfFeatureDisabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndDisableFeature(features::kLockScreenMediaControls);
-
-  PrefService* prefs =
-      Shell::Get()->session_controller()->GetPrimaryUserPrefService();
-  prefs->SetBoolean(prefs::kLockScreenMediaControlsEnabled, true);
-
-  EXPECT_FALSE(
-      Shell::Get()->media_controller()->AreLockScreenMediaKeysEnabled());
-
-  prefs->SetBoolean(prefs::kLockScreenMediaControlsEnabled, false);
-
-  EXPECT_FALSE(
-      Shell::Get()->media_controller()->AreLockScreenMediaKeysEnabled());
-}
-
 TEST_F(MediaControllerTest, DisableLockScreenMediaKeysIfPreferenceDisabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(features::kLockScreenMediaControls);
-
   PrefService* prefs =
       Shell::Get()->session_controller()->GetPrimaryUserPrefService();
   prefs->SetBoolean(prefs::kLockScreenMediaControlsEnabled, false);
@@ -156,9 +134,6 @@ TEST_F(MediaControllerTest, DisableLockScreenMediaKeysIfPreferenceDisabled) {
 }
 
 TEST_F(MediaControllerTest, EnableMediaKeysWhenLockedAndControlsEnabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(features::kLockScreenMediaControls);
-
   PrefService* prefs =
       Shell::Get()->session_controller()->GetPrimaryUserPrefService();
   prefs->SetBoolean(prefs::kLockScreenMediaControlsEnabled, true);

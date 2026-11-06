@@ -26,6 +26,9 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_LINK_HASH_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_LINK_HASH_H_
 
+#include "base/check_op.h"
+#include "net/base/schemeful_site.h"
+#include "third_party/blink/public/platform/web_security_origin.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
@@ -38,21 +41,8 @@ class KURL;
 typedef uint64_t LinkHash;
 
 // Use the low 32-bits of the 64-bit LinkHash as the key for HashSets.
-struct LinkHashHash {
-  STATIC_ONLY(LinkHashHash);
-  static unsigned GetHash(LinkHash key) { return static_cast<unsigned>(key); }
-  static bool Equal(LinkHash a, LinkHash b) { return a == b; }
-  static const bool safe_to_compare_to_empty_or_deleted = true;
-
-  // See AlreadyHashed::avoidDeletedValue.
-  static unsigned AvoidDeletedValue(LinkHash hash64) {
-    DCHECK(hash64);
-    unsigned hash = static_cast<unsigned>(hash64);
-    unsigned new_hash = hash | (!(hash + 1) << 31);
-    DCHECK(new_hash);
-    DCHECK_NE(new_hash, 0xFFFFFFFF);
-    return new_hash;
-  }
+struct LinkHashHashTraits : GenericHashTraits<LinkHash> {
+  static uint32_t GetHash(LinkHash key) { return static_cast<uint32_t>(key); }
 };
 
 // Resolves the potentially relative URL "attributeURL" relative to the given
@@ -62,6 +52,15 @@ struct LinkHashHash {
 PLATFORM_EXPORT LinkHash VisitedLinkHash(const KURL& base,
                                          const AtomicString& attribute_url);
 
+// Returns the fingerprint representing this triple-partition key that will be
+// used for visited link coloring. It will return the special value of 0 ("the
+// null fingerprint") if the key has invalid elements or a fingerprint could not
+// be computed.
+PLATFORM_EXPORT LinkHash
+PartitionedVisitedLinkFingerprint(const KURL& base_link_url,
+                                  const AtomicString& relative_link_url,
+                                  const net::SchemefulSite& top_level_site,
+                                  const SecurityOrigin* frame_origin);
 }  // namespace blink
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_LINK_HASH_H_

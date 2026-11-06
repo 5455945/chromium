@@ -30,8 +30,10 @@
 #include "third_party/blink/renderer/core/editing/serializers/styled_markup_serializer.h"
 
 #include "third_party/blink/renderer/core/css/css_property_value_set.h"
+#include "third_party/blink/renderer/core/css/style_engine.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
+#include "third_party/blink/renderer/core/dom/element_traversal.h"
 #include "third_party/blink/renderer/core/dom/text.h"
 #include "third_party/blink/renderer/core/editing/editing_style.h"
 #include "third_party/blink/renderer/core/editing/editing_style_utilities.h"
@@ -42,9 +44,19 @@
 #include "third_party/blink/renderer/core/editing/visible_position.h"
 #include "third_party/blink/renderer/core/editing/visible_selection.h"
 #include "third_party/blink/renderer/core/editing/visible_units.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/html/forms/html_text_area_element.h"
 #include "third_party/blink/renderer/core/html/html_body_element.h"
+#include "third_party/blink/renderer/core/html/html_dlist_element.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
+#include "third_party/blink/renderer/core/html/html_iframe_element.h"
+#include "third_party/blink/renderer/core/html/html_olist_element.h"
+#include "third_party/blink/renderer/core/html/html_table_element.h"
+#include "third_party/blink/renderer/core/html/html_ulist_element.h"
+#include "third_party/blink/renderer/core/layout/layout_object.h"
+#include "third_party/blink/renderer/core/mathml/mathml_element.h"
+#include "third_party/blink/renderer/core/mathml_names.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
@@ -79,6 +91,17 @@ bool HandleSelectionBoundary<EditingInFlatTreeStrategy>(const Node& node) {
 
 }  // namespace
 
+template <typename... ElementTypes>
+inline Node* FirstAncestorOfTypes(const Node& current) {
+  for (ContainerNode* ancestor = current.parentNode(); ancestor;
+       ancestor = ancestor->parentNode()) {
+    if (((DynamicTo<ElementTypes>(*ancestor)) || ...)) {
+      return ancestor;
+    }
+  }
+  return nullptr;
+}
+
 template <typename Strategy>
 class StyledMarkupTraverser {
   STACK_ALLOCATED();
@@ -97,6 +120,7 @@ class StyledMarkupTraverser {
   bool ShouldAnnotate() const;
   bool ShouldConvertBlocksToInlines() const;
   bool IsForMarkupSanitization() const;
+  bool ShouldSkipUnselectableContent() const;
   void AppendStartMarkup(Node&);
   void AppendEndMarkup(Node&);
   EditingStyle* CreateInlineStyle(Element&);
@@ -104,6 +128,9 @@ class StyledMarkupTraverser {
   bool ShouldApplyWrappingStyle(const Node&) const;
   bool ContainsOnlyBRElement(const Element&) const;
   bool ShouldSerializeUnrenderedElement(const Node&) const;
+  bool IsSelectableOrHasSelectableDescendants(
+      const Node&,
+      HeapHashMap<Member<const Node>, bool>&) const;
 
   StyledMarkupAccumulator* accumulator_;
   Node* last_closed_;
@@ -118,6 +145,11 @@ bool StyledMarkupTraverser<Strategy>::ShouldAnnotate() const {
 template <typename Strategy>
 bool StyledMarkupTraverser<Strategy>::IsForMarkupSanitization() const {
   return accumulator_ && accumulator_->IsForMarkupSanitization();
+}
+
+template <typename Strategy>
+bool StyledMarkupTraverser<Strategy>::ShouldSkipUnselectableContent() const {
+  return accumulator_ && accumulator_->ShouldSkipUnselectableContent();
 }
 
 template <typename Strategy>
@@ -183,7 +215,13 @@ String StyledMarkupSerializer<Strategy>::CreateMarkup() {
       CreateVisiblePosition(start_);
   const VisiblePositionTemplate<Strategy> visible_end =
       CreateVisiblePosition(end_);
-  if (ShouldAnnotate() && NeedInterchangeNewlineAfter(visible_start)) {
+  const bool start_in_foreign_content =
+      RuntimeEnabledFeatures::SkipHtmlInterchangeInForeignContentEnabled() &&
+      visible_start.DeepEquivalent().AnchorNode() &&
+      IsInForeignContentForSerialization(
+          *visible_start.DeepEquivalent().AnchorNode());
+  if (ShouldAnnotate() && !start_in_foreign_content &&
+      NeedInterchangeNewlineAfter(visible_start)) {
     markup_accumulator.AppendInterchangeNewline();
     if (visible_start.DeepEquivalent() ==
         PreviousPositionOf(visible_end).DeepEquivalent())
@@ -197,22 +235,35 @@ String StyledMarkupSerializer<Strategy>::CreateMarkup() {
       // This condition hits in editing/pasteboard/copy-display-none.html.
       return markup_accumulator.TakeResults();
     }
+
+    if (RuntimeEnabledFeatures::SkipHtmlInterchangeInForeignContentEnabled() &&
+        first_node && IsInForeignContentForSerialization(*first_node)) {
+      Node* highest_math_node = nullptr;
+      for (Node& runner : Strategy::InclusiveAncestorsOf(*first_node)) {
+        if (auto* mathml_element = DynamicTo<MathMLElement>(runner)) {
+          if (mathml_element->HasTagName(mathml_names::kMathTag)) {
+            highest_math_node = mathml_element;
+          }
+        }
+      }
+      if (highest_math_node) {
+        first_node = highest_math_node;
+      }
+    }
   }
 
   // If there is no the highest node in the selected nodes, |last_closed_| can
   // be #text when its parent is a formatting tag. In this case, #text is
   // wrapped by <span> tag, but this text should be wrapped by the formatting
   // tag. See http://crbug.com/634482
-  bool should_append_parent_tag = false;
-  if (!last_closed_) {
-    last_closed_ =
-        StyledMarkupTraverser<Strategy>().Traverse(first_node, past_end);
-    if (last_closed_ && last_closed_->IsTextNode() &&
-        IsPresentationalHTMLElement(last_closed_->parentNode())) {
-      last_closed_ = last_closed_->parentElement();
-      should_append_parent_tag = true;
-    }
-  }
+  bool should_append_parent_tag =
+      DetermineParentTagAndUpdateLastClosed(first_node, past_end);
+
+  // `UpdateViewportSize` ensures viewport_size_ is defined.
+  // See comment on viewport_size_ in style_engine.h
+  // without `UpdateViewportSize` call to `GetViewportsize()` while
+  // resolving style causes crash  in other unit tests and resize scenarios.
+  start_.GetDocument()->GetStyleEngine().UpdateViewportSize();
 
   StyledMarkupTraverser<Strategy> traverser(&markup_accumulator, last_closed_);
   Node* last_closed = traverser.Traverse(first_node, past_end);
@@ -232,8 +283,32 @@ String StyledMarkupSerializer<Strategy>::CreateMarkup() {
     // Also include all of the ancestors of lastClosed up to this special
     // ancestor.
     // FIXME: What is ancestor?
-    for (ContainerNode* ancestor = Strategy::Parent(*last_closed); ancestor;
+    for (ContainerNode* ancestor = Strategy::Parent(*last_closed);
+         ancestor && (!RuntimeEnabledFeatures::
+                          SkipHtmlInterchangeInForeignContentEnabled() ||
+                      Strategy::IsDescendantOf(
+                          *last_closed, *highest_node_to_be_serialized_));
          ancestor = Strategy::Parent(*ancestor)) {
+      // Skip wrapping with <mtr> (MathML table row) during ancestor wrapping
+      // when it was already serialized during the traversal phase,
+      // so wrapping them again as ancestors creates duplicate wrapping <mtr>
+      // that was not originally present.
+      // This is specific to MathML - HTML tables use a different pattern
+      // where HighestAncestorToWrapMarkup returns the table itself as the
+      // special ancestor, avoiding this issue.
+      // This may also be needed for <mlabeledtr> and <matrixrow> but these
+      // elements are currently not supported - absent in mathml_names.h
+      auto* mathml_element = DynamicTo<MathMLElement>(ancestor);
+      if (mathml_element && mathml_element->HasTagName(mathml_names::kMtrTag) &&
+          (!RuntimeEnabledFeatures::
+               SkipHtmlInterchangeInForeignContentEnabled() ||
+           !first_node || !Strategy::IsDescendantOf(*first_node, *ancestor))) {
+        if (ancestor == highest_node_to_be_serialized_) {
+          break;
+        }
+        continue;
+      }
+
       if (ancestor == fully_selected_root &&
           !markup_accumulator.ShouldConvertBlocksToInlines()) {
         EditingStyle* fully_selected_root_style =
@@ -247,12 +322,12 @@ String StyledMarkupSerializer<Strategy>::CreateMarkup() {
                  CSSPropertyID::kBackgroundImage)) &&
             fully_selected_root->FastHasAttribute(
                 html_names::kBackgroundAttr)) {
-          fully_selected_root_style->Style()->SetProperty(
+          fully_selected_root_style->Style()->ParseAndSetProperty(
               CSSPropertyID::kBackgroundImage,
-              "url('" +
-                  fully_selected_root->getAttribute(
-                      html_names::kBackgroundAttr) +
-                  "')",
+              StrCat({"url('",
+                      fully_selected_root->getAttribute(
+                          html_names::kBackgroundAttr),
+                      "')"}),
               /* important */ false,
               fully_selected_root->GetExecutionContext()
                   ->GetSecureContextMode());
@@ -265,13 +340,13 @@ String StyledMarkupSerializer<Strategy>::CreateMarkup() {
           // "inherit", and copy it.
           if (!PropertyMissingOrEqualToNone(fully_selected_root_style->Style(),
                                             CSSPropertyID::kTextDecoration)) {
-            fully_selected_root_style->Style()->SetProperty(
+            fully_selected_root_style->Style()->SetLonghandProperty(
                 CSSPropertyID::kTextDecoration, CSSValueID::kNone);
           }
           if (!PropertyMissingOrEqualToNone(
                   fully_selected_root_style->Style(),
                   CSSPropertyID::kWebkitTextDecorationsInEffect)) {
-            fully_selected_root_style->Style()->SetProperty(
+            fully_selected_root_style->Style()->SetLonghandProperty(
                 CSSPropertyID::kWebkitTextDecorationsInEffect,
                 CSSValueID::kNone);
           }
@@ -293,18 +368,57 @@ String StyledMarkupSerializer<Strategy>::CreateMarkup() {
       if (ancestor == highest_node_to_be_serialized_)
         break;
     }
-  } else if (should_append_parent_tag) {
+  } else if (should_append_parent_tag && last_closed_) {
     EditingStyle* style = traverser.CreateInlineStyleIfNeeded(*last_closed_);
     traverser.WrapWithNode(To<ContainerNode>(*last_closed_), style);
   }
 
+  const bool end_in_foreign_content =
+      RuntimeEnabledFeatures::SkipHtmlInterchangeInForeignContentEnabled() &&
+      ((visible_end.DeepEquivalent().AnchorNode() &&
+        IsInForeignContentForSerialization(
+            *visible_end.DeepEquivalent().AnchorNode())) ||
+       (last_closed && IsInForeignContentForSerialization(*last_closed)));
   // FIXME: The interchange newline should be placed in the block that it's in,
   // not after all of the content, unconditionally.
   if (!(last_closed && IsA<HTMLBRElement>(*last_closed)) && ShouldAnnotate() &&
-      NeedInterchangeNewlineAt(visible_end))
+      !end_in_foreign_content && NeedInterchangeNewlineAt(visible_end)) {
     markup_accumulator.AppendInterchangeNewline();
+  }
 
   return markup_accumulator.TakeResults();
+}
+
+template <typename Strategy>
+bool StyledMarkupSerializer<Strategy>::DetermineParentTagAndUpdateLastClosed(
+    Node* first_node,
+    Node* past_end) {
+  if (last_closed_) {
+    return false;
+  }
+  last_closed_ =
+      StyledMarkupTraverser<Strategy>().Traverse(first_node, past_end);
+  if (last_closed_ && last_closed_->IsTextNode() &&
+      IsPresentationalHtmlElement(last_closed_->parentNode())) {
+    last_closed_ = last_closed_->parentElement();
+    return true;
+  }
+  if (last_closed_ && IsTablePartElement(last_closed_)) {
+    if (auto* first_ancestor_table_traversal =
+            Traversal<HTMLTableElement>::FirstAncestor(*last_closed_)) {
+      last_closed_ = first_ancestor_table_traversal;
+      return true;
+    }
+  }
+  if (last_closed_ && IsListItemTag(last_closed_)) {
+    if (Node* ancestor =
+            FirstAncestorOfTypes<HTMLUListElement, HTMLOListElement,
+                                 HTMLDListElement>(*last_closed_)) {
+      last_closed_ = ancestor;
+      return true;
+    }
+  }
+  return false;
 }
 
 template <typename Strategy>
@@ -324,7 +438,7 @@ StyledMarkupTraverser<Strategy>::StyledMarkupTraverser(
   }
   if (!last_closed_)
     return;
-  ContainerNode* parent = Strategy::Parent(*last_closed_);
+  Element* parent = DynamicTo<Element>(Strategy::Parent(*last_closed_));
   if (!parent)
     return;
   if (ShouldAnnotate()) {
@@ -341,6 +455,7 @@ template <typename Strategy>
 Node* StyledMarkupTraverser<Strategy>::Traverse(Node* start_node,
                                                 Node* past_end) {
   HeapVector<Member<ContainerNode>> ancestors_to_close;
+  HeapHashMap<Member<const Node>, bool> has_selectable_descendants;
   Node* next;
   Node* last_closed = nullptr;
   for (Node* n = start_node; n && n != past_end; n = next) {
@@ -354,14 +469,23 @@ Node* StyledMarkupTraverser<Strategy>::Traverse(Node* start_node,
     } else {
       next = Strategy::Next(*n);
       if (IsEnclosingBlock(n) && CanHaveChildrenForEditing(n) &&
-          next == past_end && !ContainsOnlyBRElement(To<Element>(*n))) {
+          next == past_end && !ContainsOnlyBRElement(To<Element>(*n)) &&
+          !IsTablePartElement(n)) {
         // Don't write out empty block containers that aren't fully selected
-        // unless the block container only contains br element.
+        // unless the block container only contains br element or is a part of
+        // table.
         continue;
+      }
+      bool should_skip_unselectable_node = false;
+      if (ShouldSkipUnselectableContent() && n->GetLayoutObject() &&
+          !n->GetLayoutObject()->IsSelectable()) {
+        should_skip_unselectable_node = !IsSelectableOrHasSelectableDescendants(
+            *n, has_selectable_descendants);
       }
 
       auto* element = DynamicTo<Element>(n);
-      if (n->GetLayoutObject() || ShouldSerializeUnrenderedElement(*n)) {
+      if ((n->GetLayoutObject() || ShouldSerializeUnrenderedElement(*n)) &&
+          !should_skip_unselectable_node) {
         // Add the node to the markup if we're not skipping the descendants
         AppendStartMarkup(*n);
 
@@ -395,7 +519,7 @@ Node* StyledMarkupTraverser<Strategy>::Traverse(Node* start_node,
       continue;
 
     // Close up the ancestors.
-    while (!ancestors_to_close.IsEmpty()) {
+    while (!ancestors_to_close.empty()) {
       ContainerNode* ancestor = ancestors_to_close.back();
       DCHECK(ancestor);
       if (next && next != past_end &&
@@ -436,6 +560,16 @@ Node* StyledMarkupTraverser<Strategy>::Traverse(Node* start_node,
     }
   }
 
+  // If traversal stopped exactly at past_end, any ancestors that were opened
+  // and never revisited remain in ancestors_to_close. Close them to keep markup
+  // balanced for partial selections (e.g. nested MathML containers).
+  while (!ancestors_to_close.empty()) {
+    ContainerNode* ancestor = ancestors_to_close.back();
+    AppendEndMarkup(*ancestor);
+    last_closed = ancestor;
+    ancestors_to_close.pop_back();
+  }
+
   return last_closed;
 }
 
@@ -455,7 +589,7 @@ void StyledMarkupTraverser<Strategy>::WrapWithNode(ContainerNode& node,
     return;
   StringBuilder markup;
   if (auto* document = DynamicTo<Document>(node)) {
-    MarkupFormatter::AppendXMLDeclaration(markup, *document);
+    MarkupFormatter::AppendXmlDeclaration(*document, markup);
     accumulator_->PushMarkup(markup.ToString());
     return;
   }
@@ -463,9 +597,9 @@ void StyledMarkupTraverser<Strategy>::WrapWithNode(ContainerNode& node,
   if (!element)
     return;
   if (ShouldApplyWrappingStyle(*element) || NeedsInlineStyle(*element))
-    accumulator_->AppendElementWithInlineStyle(markup, *element, style);
+    accumulator_->AppendElementWithInlineStyle(*element, style, markup);
   else
-    accumulator_->AppendElement(markup, *element);
+    accumulator_->AppendElement(*element, markup);
   accumulator_->PushMarkup(markup.ToString());
   accumulator_->AppendEndTag(*element);
 }
@@ -505,8 +639,8 @@ void StyledMarkupTraverser<Strategy>::AppendStartMarkup(Node& node) {
         // block }.
         inline_style->ForceInline();
         // FIXME: Should this be included in forceInline?
-        inline_style->Style()->SetProperty(CSSPropertyID::kFloat,
-                                           CSSValueID::kNone);
+        inline_style->Style()->SetLonghandProperty(CSSPropertyID::kFloat,
+                                                   CSSValueID::kNone);
 
         if (IsForMarkupSanitization()) {
           EditingStyleUtilities::StripUAStyleRulesForMarkupSanitization(
@@ -544,6 +678,10 @@ void StyledMarkupTraverser<Strategy>::AppendEndMarkup(Node& node) {
 template <typename Strategy>
 bool StyledMarkupTraverser<Strategy>::ShouldApplyWrappingStyle(
     const Node& node) const {
+  if (RuntimeEnabledFeatures::SkipHtmlInterchangeInForeignContentEnabled() &&
+      node.IsTextNode() && IsInForeignContentForSerialization(node)) {
+    return false;
+  }
   return last_closed_ &&
          Strategy::Parent(*last_closed_) == Strategy::Parent(node) &&
          wrapping_style_ && wrapping_style_->Style();
@@ -601,6 +739,30 @@ bool StyledMarkupTraverser<Strategy>::ShouldSerializeUnrenderedElement(
     if (IsA<HTMLIFrameElement>(node))
       return true;
   }
+  return false;
+}
+
+template <typename Strategy>
+bool StyledMarkupTraverser<Strategy>::IsSelectableOrHasSelectableDescendants(
+    const Node& node,
+    HeapHashMap<Member<const Node>, bool>& has_selectable_descendants) const {
+  if (!node.GetLayoutObject() || node.GetLayoutObject()->IsSelectable()) {
+    return true;
+  }
+  auto it = has_selectable_descendants.find(&node);
+  if (it != has_selectable_descendants.end()) {
+    return it->value;
+  }
+
+  for (Node* child = Strategy::FirstChild(node); child;
+       child = Strategy::NextSibling(*child)) {
+    if (IsSelectableOrHasSelectableDescendants(*child,
+                                               has_selectable_descendants)) {
+      has_selectable_descendants.insert(&node, true);
+      return true;
+    }
+  }
+  has_selectable_descendants.insert(&node, false);
   return false;
 }
 

@@ -1,20 +1,21 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.privacy.settings;
 
+import androidx.annotation.UiThread;
+
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.components.minidump_uploader.util.CrashReportingPermissionManager;
 
 /**
  * Manages preferences related to privacy, metrics reporting, prerendering, and network prediction.
+ * Provides interfaces to observe changes over {@link #isUsageAndCrashReportingPermitted()}.
  */
+@NullMarked
 public interface PrivacyPreferencesManager extends CrashReportingPermissionManager {
-    /**
-     * Checks whether prerender should be allowed and updates the preference if it is not set yet.
-     * @return Whether prerendering should be allowed.
-     */
-    boolean shouldPrerender();
 
     /**
      * Sets the usage and crash reporting preference ON or OFF.
@@ -30,19 +31,33 @@ public interface PrivacyPreferencesManager extends CrashReportingPermissionManag
     void syncUsageAndCrashReportingPrefs();
 
     /**
-     * Sets whether this client is in-sample for usage metrics and crash reporting. See
-     * {@link org.chromium.chrome.browser.metrics.UmaUtils#isClientInMetricsSample} for details.
+     * Sets whether this client is in-sample for usage metrics reporting. See {@link
+     * org.chromium.chrome.browser.metrics.UmaUtils#isClientInSampleForMetrics} for details.
      */
-    void setClientInMetricsSample(boolean inSample);
+    void setClientInSampleForMetrics(boolean inSample);
 
     /**
-     * Checks whether this client is in-sample for usage metrics and crash reporting. See
-     * {@link org.chromium.chrome.browser.metrics.UmaUtils#isClientInMetricsSample} for details.
+     * Checks whether this client is in-sample for usage metrics. See {@link
+     * org.chromium.chrome.browser.metrics.UmaUtils#isClientInSampleForMetrics} for details.
      *
-     * @returns boolean Whether client is in-sample.
+     * @return boolean Whether client is in-sample for metrics.
+     */
+    boolean isClientInSampleForMetrics();
+
+    /**
+     * Sets whether this client is in-sample for crash reporting. See {@link
+     * org.chromium.chrome.browser.metrics.UmaUtils#isClientInSampleForCrashes} for details.
+     */
+    void setClientInSampleForCrashes(boolean inSample);
+
+    /**
+     * Checks whether this client is in-sample for crash reporting. See {@link
+     * org.chromium.chrome.browser.metrics.UmaUtils#isClientInSampleForCrashes} for details.
+     *
+     * @return boolean Whether client is in-sample for crash reporting.
      */
     @Override
-    boolean isClientInMetricsSample();
+    boolean isClientInSampleForCrashes();
 
     /**
      * Checks whether uploading of crash dumps is permitted for the available network(s).
@@ -52,15 +67,17 @@ public interface PrivacyPreferencesManager extends CrashReportingPermissionManag
     @Override
     boolean isNetworkAvailableForCrashUploads();
 
+    @Override
+    boolean isUsageAndCrashReportingPermittedByPolicy();
+
     /**
      * Checks whether uploading of usage metrics and crash dumps is currently permitted, based on
      * user consent only. This doesn't take network condition or experimental state (i.e. disabling
      * upload) into consideration. A crash dump may be retried if this check passes.
      *
      * @return whether the user has consented to reporting usage metrics and crash dumps.
-     *
-     * Do not use this API because it doesn't abide by the constraint imposed by the native API.
-     * (crbug.com/1203437)
+     *     <p>Do not use this API because it doesn't abide by the constraint imposed by the native
+     *     API. (crbug.com/40763535)
      */
     @Override
     boolean isUsageAndCrashReportingPermittedByUser();
@@ -84,28 +101,13 @@ public interface PrivacyPreferencesManager extends CrashReportingPermissionManag
      */
     boolean isMetricsReportingEnabled();
 
-    /**
-     * Sets whether the usage and crash reporting pref should be enabled.
-     */
+    /** Sets whether the usage and crash reporting pref should be enabled. */
     void setMetricsReportingEnabled(boolean enabled);
 
     /**
-     * @return Whether usage and crash report pref is managed.
+     * Return a observable supplier which provides {@link #isUsageAndCrashReportingPermitted()}.
+     * Must be used on UI thread.
      */
-    boolean isMetricsReportingManaged();
-
-    /**
-     * @return Network predictions preference.
-     */
-    boolean getNetworkPredictionEnabled();
-
-    /**
-     * Sets network predictions preference.
-     */
-    void setNetworkPredictionEnabled(boolean enabled);
-
-    /**
-     * @return Whether Network Predictions is configured by policy.
-     */
-    boolean isNetworkPredictionManaged();
+    @UiThread
+    MonotonicObservableSupplier<Boolean> getUsageAndCrashReportingPermittedObservableSupplier();
 }

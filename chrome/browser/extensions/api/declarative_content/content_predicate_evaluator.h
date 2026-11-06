@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,10 @@
 #include <map>
 #include <vector>
 
-#include "base/macros.h"
 #include "chrome/browser/extensions/api/declarative_content/content_predicate.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace content {
 class BrowserContext;
@@ -60,6 +62,10 @@ class ContentPredicateEvaluator : public ContentPredicateFactory {
  public:
   class Delegate;
 
+  ContentPredicateEvaluator(const ContentPredicateEvaluator&) = delete;
+  ContentPredicateEvaluator& operator=(const ContentPredicateEvaluator&) =
+      delete;
+
   ~ContentPredicateEvaluator() override;
 
   // Returns the attribute name in the API for this evaluator's predicates.
@@ -67,7 +73,7 @@ class ContentPredicateEvaluator : public ContentPredicateFactory {
 
   // Notifies the evaluator that the grouped predicates should be tracked. This
   // function must always be called after creating a set of predicates. If the
-  // predicates should be tracked, |predicates| must contain all the created
+  // predicates should be tracked, `predicates` must contain all the created
   // predicates. Otherwise, it will be called with an empty map and the created
   // predicates should not be tracked.
   virtual void TrackPredicates(
@@ -75,14 +81,14 @@ class ContentPredicateEvaluator : public ContentPredicateFactory {
                      std::vector<const ContentPredicate*>>& predicates) = 0;
 
   // Notifies the evaluator that it should stop tracking the predicates
-  // associated with |predicate_groups|.
+  // associated with `predicate_groups`.
   virtual void StopTrackingPredicates(
       const std::vector<const void*>& predicate_groups) = 0;
 
-  // Requests that predicates be tracked for |contents|.
+  // Requests that predicates be tracked for `contents`.
   virtual void TrackForWebContents(content::WebContents* contents) = 0;
 
-  // Handles navigation of |contents|. We depend on the caller to notify us of
+  // Handles navigation of `contents`. We depend on the caller to notify us of
   // this event rather than having each evaluator listen to it, so that the
   // caller can coordinate evaluation with all the evaluators that respond to
   // it. If an evaluator listened and requested rule evaluation before another
@@ -93,49 +99,44 @@ class ContentPredicateEvaluator : public ContentPredicateFactory {
       content::WebContents* contents,
       content::NavigationHandle* navigation_handle) = 0;
 
-  // Applies the given content rules to |contents| when the render process
+  // Applies the given content rules to `contents` when the render process
   // notifies that a tab has started or stopped matching certain conditions.
   virtual void OnWatchedPageChanged(
       content::WebContents* contents,
       const std::vector<std::string>& css_selectors) = 0;
 
-  // Returns true if |predicate| evaluates to true on the state associated with
-  // |tab|. It must be the case that predicate->GetEvaluator() == this object,
-  // |predicate| was previously passed to TrackPredicates(), and
+  // Returns true if `predicate` evaluates to true on the state associated with
+  // `tab`. It must be the case that predicate->GetEvaluator() == this object,
+  // `predicate` was previously passed to TrackPredicates(), and
   // StopTrackingPredicates has not yet been called with the group containing
-  // |predicate|.
+  // `predicate`.
   virtual bool EvaluatePredicate(const ContentPredicate* predicate,
                                  content::WebContents* tab) const = 0;
 
  protected:
   ContentPredicateEvaluator();
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ContentPredicateEvaluator);
 };
 
 // Allows an evaluator to notify that predicate evaluation state has been
 // updated, and determine whether it should manage predicates for a context.
 class ContentPredicateEvaluator::Delegate {
  public:
+  Delegate(const Delegate&) = delete;
+  Delegate& operator=(const Delegate&) = delete;
+
   // Notifies that predicate evaluation state has been updated for
-  // |contents|. This must be called whenever the URL or page state changes,
+  // `contents`. This must be called whenever the URL or page state changes,
   // even if the value of the predicate evaluation itself doesn't change.
-  // TODO(wittman): rename to something like NotifyPredicateStateUpdated.
-  virtual void RequestEvaluation(content::WebContents* contents) = 0;
+  virtual void NotifyPredicateStateUpdated(content::WebContents* contents) = 0;
 
   // Returns true if the evaluator should manage condition state for
-  // |context|.  TODO(wittman): rename to something like
-  // ShouldManagePredicatesForBrowserContext.
-  virtual bool ShouldManageConditionsForBrowserContext(
+  // `context`.
+  virtual bool ShouldManagePredicatesForBrowserContext(
       content::BrowserContext* context) = 0;
 
  protected:
   Delegate();
   virtual ~Delegate();
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(Delegate);
 };
 
 }  // namespace extensions

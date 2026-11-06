@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,8 +21,8 @@ struct COMPONENT_EXPORT(UI_BASE_IME_TYPES) CompositionText {
   CompositionText(const CompositionText& other);
   ~CompositionText();
 
-  bool operator==(const CompositionText& other) const;
-  bool operator!=(const CompositionText& other) const;
+  friend bool operator==(const CompositionText&,
+                         const CompositionText&) = default;
 
   // Content of the composition text.
   std::u16string text;

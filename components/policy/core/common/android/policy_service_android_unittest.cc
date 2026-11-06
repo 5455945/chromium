@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,9 +9,13 @@
 #include "base/android/java_exception_reporter.h"
 #include "base/android/jni_android.h"
 #include "base/android/scoped_java_ref.h"
-#include "components/policy/android/test_jni_headers/PolicyServiceTestSupporter_jni.h"
+#include "base/memory/raw_ptr.h"
 #include "components/policy/core/common/mock_policy_service.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/policy/android/test_jni_headers/PolicyServiceTestSupporter_jni.h"
+
 using ::testing::Return;
 using ::testing::ReturnRef;
 
@@ -35,7 +39,7 @@ class PolicyServiceAndroidTest : public ::testing::Test {
     Java_PolicyServiceTestSupporter_verifyNoMoreInteractions(env_, j_support_);
   }
 
-  JNIEnv* env_ = base::android::AttachCurrentThread();
+  raw_ptr<JNIEnv> env_ = base::android::AttachCurrentThread();
   MockPolicyService policy_service_;
   policy::PolicyMap policies;
   std::unique_ptr<PolicyServiceAndroid> policy_service_android_;
@@ -150,3 +154,5 @@ TEST_F(PolicyServiceAndroidTest, PolicyUpdateEvent) {
 
 }  // namespace android
 }  // namespace policy
+
+DEFINE_JNI(PolicyServiceTestSupporter)

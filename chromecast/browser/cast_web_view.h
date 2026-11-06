@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +8,11 @@
 #include <cstdint>
 #include <string>
 
-#include "base/macros.h"
 #include "base/observer_list_types.h"
 #include "base/time/time.h"
 #include "chromecast/browser/cast_content_window.h"
 #include "chromecast/browser/cast_web_contents.h"
 #include "chromecast/ui/mojom/ui_service.mojom.h"
-#include "url/gurl.h"
 
 namespace content {
 class WebContents;
@@ -27,78 +25,17 @@ class CastWebService;
 // A simplified interface for loading and displaying WebContents in cast_shell.
 class CastWebView {
  public:
-  class Delegate : public CastWebContents::Delegate,
-                   public CastContentWindow::Delegate {};
-
   // When the unique_ptr is reset, the CastWebView may not necessarily be
   // destroyed. In some cases ownership will be passed to the CastWebService,
   // which eventually handles destruction.
   using Scoped =
       std::unique_ptr<CastWebView, std::function<void(CastWebView*)>>;
 
-  enum class RendererPool {
-    // Don't use a renderer pool for prelaunching. This means launching the
-    // render process eagerly is un-restricted and will always succeed.
-    NONE,
-    // Pool for overlay apps, which allows up to one pre-cached site.
-    OVERLAY,
-  };
-
-  // The parameters used to create a CastWebView instance. Passed to
-  // CastWebService::CreateWebView().
-  struct CreateParams {
-    // The delegate for the CastWebView. Must be non-null. If the delegate is
-    // destroyed before CastWebView, the WeakPtr will be invalidated on the main
-    // UI thread.
-    base::WeakPtr<Delegate> delegate = nullptr;
-
-    // Parameters for initializing CastWebContents. These will be passed as-is
-    // to a CastWebContents instance, which should be used by all CastWebView
-    // implementations.
-    CastWebContents::InitParams web_contents_params;
-
-    // Parameters for creating the content window for this CastWebView.
-    CastContentWindow::CreateParams window_params;
-
-    // Identifies the activity that is hosted by this CastWebView.
-    std::string activity_id = "";
-
-    // Sdk version of the application (if available) hosted by this CastWebView.
-    std::string sdk_version = "";
-
-    // Whether this CastWebView is granted media access.
-    bool allow_media_access = false;
-
-    // Enable/Force 720p resolution for this CastWebView instance.
-    bool force_720p_resolution = false;
-
-    // Whether this CastWebView should be managed by web ui window manager.
-    bool managed = true;
-
-    // Whether JS console logs should be appended to the device logs.
-    bool log_js_console_messages = false;
-
-    // Prefix for JS console logs. This can be used to help identify the source
-    // of console log messages.
-    std::string log_prefix = "";
-
-    // Delays CastWebView deletion after CastWebView::Scoped is reset. The
-    // default value is zero, which means the CastWebView will be deleted
-    // immediately and synchronously.
-    base::TimeDelta shutdown_delay = base::TimeDelta();
-
-    // Pool for pre-launched renderers.
-    RendererPool renderer_pool = RendererPool::NONE;
-
-    // Eagerly pre-launches a render process for |prelaunch_url| if it is valid.
-    GURL prelaunch_url;
-
-    CreateParams();
-    CreateParams(const CreateParams& other);
-    ~CreateParams();
-  };
-
   CastWebView() = default;
+
+  CastWebView(const CastWebView&) = delete;
+  CastWebView& operator=(const CastWebView&) = delete;
+
   virtual ~CastWebView() = default;
 
   virtual CastContentWindow* window() const = 0;
@@ -109,8 +46,12 @@ class CastWebView {
 
   virtual base::TimeDelta shutdown_delay() const = 0;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(CastWebView);
+  // Called when the owning handle to CastWebView is destroyed.
+  virtual void OwnerDestroyed() = 0;
+
+  void BindReceivers(
+      mojo::PendingReceiver<mojom::CastWebContents> web_contents_receiver,
+      mojo::PendingReceiver<mojom::CastContentWindow> window_receiver);
 };
 
 }  // namespace chromecast

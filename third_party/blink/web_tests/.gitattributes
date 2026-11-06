@@ -68,6 +68,8 @@ external/wpt/html/form-elements/the-textarea-element/multiline-placeholder-cr.ht
 external/wpt/html/form-elements/the-textarea-element/multiline-placeholder-crlf.html -text
 external/wpt/html/input/the-placeholder-attribute/multiline-cr.html -text
 external/wpt/html/input/the-placeholder-attribute/multiline-crlf.html -text
+external/wpt/html/syntax/charset/after-head-after-1kb-crlf.html -text
+external/wpt/html/syntax/charset/after-head-in-1kb-crlf.html -text
 fast/backgrounds/background-position-rounding.html -crlf
 fast/backgrounds/repeat/resources/background-repeat-shorthand.js -crlf
 fast/backgrounds/repeat/resources/margin-shorthand.js -crlf
@@ -126,7 +128,6 @@ fast/text/international/thai-baht-space.html -crlf
 fast/text/resources/line-breaks-crlf.txt -crlf
 fast/text/text-large-negative-letter-spacing-with-opacity.html -crlf
 fast/text/text-letter-spacing.html -crlf
-http/tests/appcache/max-size.html -crlf
 http/tests/misc/location-test-xsl-style-sheet.xml -crlf
 http/tests/misc/resources/location-test-xsl-style-sheet.xsl -crlf
 http/tests/misc/single-character-pi-stylesheet.xhtml -crlf
@@ -141,6 +142,7 @@ http/tests/security/isolatedWorld/resources/iframe.html -crlf
 http/tests/security/isolatedWorld/resources/userGestureEvents-second-window.html -crlf
 http/tests/security/isolatedWorld/userGestureEvents.html -crlf
 http/tests/security/resources/empty-svg.php -crlf
+inspector-protocol/page/capture-snapshot-expected.txt binary
 media/controls/*.mht -crlf
 media/track/captions-webvtt/captions-multiline-lf.vtt -crlf
 mhtml/*.mht -crlf

@@ -28,14 +28,13 @@
 
 #include "third_party/blink/renderer/bindings/core/v8/iterable.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/css_font_selector.h"
-#include "third_party/blink/renderer/core/css/font_face.h"
 #include "third_party/blink/renderer/core/css/font_face_set.h"
-#include "third_party/blink/renderer/core/css/style_engine.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/events/event_listener.h"
 #include "third_party/blink/renderer/core/dom/events/event_target.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
 namespace blink {
@@ -52,9 +51,7 @@ class CORE_EXPORT FontFaceSetDocument final : public FontFaceSet,
   FontFaceSetDocument& operator=(const FontFaceSetDocument&) = delete;
   ~FontFaceSetDocument() override;
 
-  ScriptPromise ready(ScriptState*) override;
-
-  AtomicString status() const override;
+  ScriptPromise<FontFaceSet> ready(ScriptState*) override;
 
   void DidLayout();
   void BeginFontLoading(FontFace*);
@@ -80,12 +77,9 @@ class CORE_EXPORT FontFaceSetDocument final : public FontFaceSet,
 
  protected:
   bool InActiveContext() const override;
-  FontSelector* GetFontSelector() const override {
-    DCHECK(IsMainThread());
-    return GetDocument()->GetStyleEngine().GetFontSelector();
-  }
+  FontSelector* GetFontSelector() const override;
 
-  bool ResolveFontStyle(const String&, Font&) override;
+  const Font* ResolveFontStyle(const String&) override;
 
  private:
   Document* GetDocument() const;
@@ -110,22 +104,6 @@ class CORE_EXPORT FontFaceSetDocument final : public FontFaceSet,
     Status status_;
   };
   FontLoadHistogram font_load_histogram_;
-
-  class FontDisplayAutoAlignHistogram {
-    DISALLOW_NEW();
-
-   public:
-    void SetHasFontDisplayAuto() { has_font_display_auto_ = true; }
-    void CountAffected() { ++affected_count_; }
-
-    void Record();
-
-   private:
-    unsigned affected_count_ = 0;
-    bool has_font_display_auto_ = false;
-    bool reported_ = false;
-  };
-  FontDisplayAutoAlignHistogram font_display_auto_align_histogram_;
 
   HeapTaskRunnerTimer<FontFaceSetDocument> lcp_limit_timer_;
 

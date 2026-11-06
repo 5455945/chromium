@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,7 @@
 #include "base/component_export.h"
 #include "ui/base/class_property.h"
 #include "ui/base/ui_base_types.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/platform_window/platform_window_delegate.h"
 
 template <class T>
@@ -20,7 +20,6 @@ class scoped_refptr;
 
 namespace gfx {
 class ImageSkia;
-class Insets;
 class Point;
 class Rect;
 class SizeF;
@@ -52,9 +51,18 @@ class COMPONENT_EXPORT(PLATFORM_WINDOW) PlatformWindow
   virtual void PrepareForShutdown() = 0;
 
   // Sets and gets the bounds of the platform-window. Note that the bounds is in
-  // physical pixel coordinates.
-  virtual void SetBounds(const gfx::Rect& bounds) = 0;
-  virtual gfx::Rect GetBounds() const = 0;
+  // physical pixel coordinates. The implementation should use
+  // `PlatformWindowDelegate::ConvertRectToPixels|DIP` if conversion is
+  // necessary.
+  virtual void SetBoundsInPixels(const gfx::Rect& bounds) = 0;
+  virtual gfx::Rect GetBoundsInPixels() const = 0;
+
+  // Sets and gets the bounds of the platform-window. Note that the bounds is in
+  // device-independent-pixel (dip) coordinates. The implementation should use
+  // `PlatformWindowDelegate::ConvertRectToPixels|DIP` if conversion is
+  // necessary.
+  virtual void SetBoundsInDIP(const gfx::Rect& bounds) = 0;
+  virtual gfx::Rect GetBoundsInDIP() const = 0;
 
   virtual void SetTitle(const std::u16string& title) = 0;
 
@@ -62,10 +70,23 @@ class COMPONENT_EXPORT(PLATFORM_WINDOW) PlatformWindow
   virtual void ReleaseCapture() = 0;
   virtual bool HasCapture() const = 0;
 
-  virtual void ToggleFullscreen() = 0;
+  // Sets and releases video capture state for the platform-window.
+  virtual void SetVideoCapture();
+  // NOTE: This may not be called if the platform-window is deleted while
+  // video capture is still active.
+  virtual void ReleaseVideoCapture();
+
+  // Enters or exits fullscreen when `fullscreen` is true or false respectively.
+  // This operation may have no effect if the window is already in the specified
+  // state. `target_display_id` indicates the display where the window should be
+  // shown fullscreen when entering into fullscreen; display::kInvalidDisplayId
+  // indicates that no display was specified, so the current display may be
+  // used.
+  virtual void SetFullscreen(bool fullscreen, int64_t target_display_id) = 0;
   virtual void Maximize() = 0;
   virtual void Minimize() = 0;
   virtual void Restore() = 0;
+  virtual void ShowWindowControlsMenu(const gfx::Point& point);
   virtual PlatformWindowState GetPlatformWindowState() const = 0;
 
   virtual void Activate() = 0;
@@ -93,8 +114,8 @@ class COMPONENT_EXPORT(PLATFORM_WINDOW) PlatformWindow
   virtual void ConfineCursorToBounds(const gfx::Rect& bounds) = 0;
 
   // Sets and gets the restored bounds of the platform-window.
-  virtual void SetRestoredBoundsInPixels(const gfx::Rect& bounds) = 0;
-  virtual gfx::Rect GetRestoredBoundsInPixels() const = 0;
+  virtual void SetRestoredBoundsInDIP(const gfx::Rect& bounds) = 0;
+  virtual gfx::Rect GetRestoredBoundsInDIP() const = 0;
 
   // Sets the Window icons. |window_icon| is a 16x16 icon suitable for use in
   // a title bar. |app_icon| is a larger size for use in the host environment
@@ -141,15 +162,21 @@ class COMPONENT_EXPORT(PLATFORM_WINDOW) PlatformWindow
   // animations.
   virtual bool IsAnimatingClosed() const;
 
-  // Returns true if the window supports translucency.
-  virtual bool IsTranslucentWindowOpacitySupported() const;
-
   // Sets opacity of the platform window.
   virtual void SetOpacity(float opacity);
 
   // Enables or disables platform provided animations of the PlatformWindow.
   // If |enabled| is set to false, animations are disabled.
   virtual void SetVisibilityChangedAnimationsEnabled(bool enabled);
+
+  // Changes the identity that the window manager uses to associate the window
+  // with an application, which is initially set from
+  // PlatformWindowInitProperties::wm_class_name, wm_class_class and
+  // wayland_app_id. X11 uses the WM_CLASS res_name and res_class, and Wayland
+  // uses the app_id. Overriding this method is optional.
+  virtual void SetWindowClass(const std::string& wm_class_name,
+                              const std::string& wm_class_class,
+                              const std::string& wayland_app_id);
 
   // Returns a unique ID for the window. The interpretation of the ID is
   // platform specific. Overriding this method is optional.
@@ -165,19 +192,25 @@ class COMPONENT_EXPORT(PLATFORM_WINDOW) PlatformWindow
   // specifying the decoration insets.
   virtual bool CanSetDecorationInsets() const;
 
-  // Lets the WM know which portion of the window is the frame decoration.  The
-  // WM may use this to eg. snap windows to each other starting where the window
-  // begins rather than starting where the shadow begins.
-  virtual void SetDecorationInsets(gfx::Insets insets_px);
-
   // Sets a hint for the compositor so it can avoid unnecessarily redrawing
-  // occluded portions of windows.
-  virtual void SetOpaqueRegion(std::vector<gfx::Rect> region_px);
+  // occluded portions of windows.  If |region_px| is nullopt or empty, then any
+  // existing region will be reset.
+  virtual void SetOpaqueRegion(std::optional<std::vector<gfx::Rect>> region_px);
 
   // Sets the clickable region of a window.  This is useful for trimming down a
   // potentially large (24px) hit area for window resizing on the window shadow
-  // to a more reasonable (10px) area.
-  virtual void SetInputRegion(gfx::Rect region_px);
+  // to a more reasonable (10px) area.  If |region_px| is nullopt, then any
+  // existing region will be reset.
+  virtual void SetInputRegion(std::optional<std::vector<gfx::Rect>> region_px);
+
+  // Whether the platform supports client-controlled window movement. Under
+  // Wayland, for example, this returns false, unless the required protocol
+  // extension is supported by the compositor.
+  virtual bool IsClientControlledWindowMovementSupported() const;
+
+  // Notifies the DE that the app is done loading, so that it can dismiss any
+  // loading animations.
+  virtual void NotifyStartupComplete(const std::string& startup_id);
 };
 
 }  // namespace ui

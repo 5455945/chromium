@@ -1,19 +1,25 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_DOWNLOAD_PUBLIC_BACKGROUND_SERVICE_CLIENT_H_
 #define COMPONENTS_DOWNLOAD_PUBLIC_BACKGROUND_SERVICE_CLIENT_H_
 
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/component_export.h"
+#include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
+#include "net/base/isolation_info.h"
 #include "net/http/http_response_headers.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 
 namespace network {
 class ResourceRequestBody;
+class SharedURLLoaderFactory;
 }  // namespace network
 
 namespace download {
@@ -21,13 +27,42 @@ namespace download {
 struct CompletionInfo;
 struct DownloadMetaData;
 
+// Contains request parameters that are not persisted and need to be re-provided
+// by the client when a download is resumed after a restart.
+struct COMPONENT_EXPORT(COMPONENTS_DOWNLOAD_PUBLIC_BACKGROUND_SERVICE)
+    DownloadRequestParameters {
+  DownloadRequestParameters();
+  ~DownloadRequestParameters();
+  DownloadRequestParameters(const DownloadRequestParameters&) = delete;
+  DownloadRequestParameters& operator=(const DownloadRequestParameters&) = delete;
+  DownloadRequestParameters(DownloadRequestParameters&& other);
+  DownloadRequestParameters& operator=(DownloadRequestParameters&& other);
+
+  // The request body to use for the download.
+  scoped_refptr<network::ResourceRequestBody> post_body;
+
+  // The custom URLLoaderFactory to use for the request.
+  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory;
+
+  // The initiator of the request.
+  std::optional<url::Origin> initiator;
+
+  // The IsolationInfo to use for the request.
+  std::optional<net::IsolationInfo> isolation_info;
+};
+
+// TODO(crbug.com/455486148): Rename to GetRequestParametersCallback.
 using GetUploadDataCallback =
-    base::OnceCallback<void(scoped_refptr<network::ResourceRequestBody>)>;
+    base::OnceCallback<void(DownloadRequestParameters)>;
 
 // The Client interface required by any feature that wants to start a download
 // through the DownloadService.  Should be registered immediately at startup
 // when the DownloadService is created (see the factory).
-class Client {
+//
+// Clients must track their own download state and ignore callbacks that are
+// no longer relevant, including callbacks received after cancellation.
+// See BackgroundDownloadService::CancelDownload().
+class COMPONENT_EXPORT(COMPONENTS_DOWNLOAD_PUBLIC_BACKGROUND_SERVICE) Client {
  public:
   // Used by OnDownloadFailed to determine the reason of the abort.
   enum class FailureReason {
@@ -102,9 +137,11 @@ class Client {
   // Called when a download has been successfully completed.
   // The file and the database record will be automatically removed if it is not
   // renamed or deleted after a window of time (12 hours, but finch
-  // configurable).
-  // The timeout is meant to be a failsafe to ensure that we clean up properly.
+  // configurable). The timeout is meant to be a failsafe to ensure that we
+  // clean up properly.
   // TODO(dtrainor): Point to finch configurable timeout when it is added.
+  // On iOS, the client needs to move the file immediately, and
+  // the file is supposed to be deleted on next Chrome launch.
   virtual void OnDownloadSucceeded(const std::string& guid,
                                    const CompletionInfo& completion_info) = 0;
 
@@ -119,9 +156,14 @@ class Client {
 
   // Called by the service to ask the client to provide the upload data.
   // The client is responsible for posting the callback with an appropriate
-  // ResourceRequestBody or nullptr, if it is a regular download.
+  // ResourceRequestBody or nullptr, if it is a regular download. Not supported
+  // on iOS.
   virtual void GetUploadData(const std::string& guid,
                              GetUploadDataCallback callback) = 0;
+
+  // Called by the service to ask whether the client needs to repopulate request
+  // parameters (e.g. re-providing URLLoaderFactory) upon a restart.
+  virtual bool RequiresCustomRequestParameters() const;
 };
 
 }  // namespace download

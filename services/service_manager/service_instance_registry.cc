@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -180,7 +180,7 @@ ServiceInstance* ServiceInstanceRegistry::FindMatching(
 
 ServiceInstance* ServiceInstanceRegistry::FindMatchInEntries(
     const std::vector<Entry>& entries,
-    const absl::optional<base::Token>& guid) const {
+    const std::optional<base::Token>& guid) const {
   DCHECK(!entries.empty());
   if (!guid.has_value())
     return entries.front().instance;
@@ -195,9 +195,7 @@ ServiceInstance* ServiceInstanceRegistry::FindMatchInEntries(
 
 bool ServiceInstanceRegistry::EraseEntry(const base::Token& guid,
                                          std::vector<Entry>* entries) {
-  auto it =
-      std::find_if(entries->begin(), entries->end(),
-                   [&guid](const Entry& entry) { return entry.guid == guid; });
+  auto it = std::ranges::find(*entries, guid, &Entry::guid);
   if (it == entries->end())
     return false;
 

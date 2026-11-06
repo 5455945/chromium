@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,21 +13,21 @@ var MockInputMethodPrivate = {
 
   /**
    * Gets the current input method.
-   * @param {function<string>} callback
+   * @return {Promise<string>}
    */
-  getCurrentInputMethod(callback) {
-    callback(this.currentInputMethod_);
+  getCurrentInputMethod() {
+    return Promise.resolve(this.currentInputMethod_);
   },
 
 
   /**
    * Sets the current input method.
    * @param {string} inputMethodId The input method to set.
-   * @param {function<>} callback Callback called on success.
+   * @return {Promise<void>}
    */
-  setCurrentInputMethod(inputMethodId, callback) {
+  setCurrentInputMethod(inputMethodId) {
     MockInputMethodPrivate.currentInputMethod_ = inputMethodId;
-    callback && callback();
+    return Promise.resolve();
   },
 
   // Methods for testing. //

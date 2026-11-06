@@ -1,8 +1,6 @@
-# Copyright 2021 The Chromium Authors. All rights reserved.
+# Copyright 2021 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
-import("//build/config/features.gni")
 
 source_set("download_stats") {
   sources = [
@@ -13,7 +11,7 @@ source_set("download_stats") {
   deps = [
     "//base",
     "//components/download/public/common:public",
-    "//components/safe_browsing/content/common:file_type_policies",
+    "//components/safe_browsing/content/common/file_type_policies",
   ]
 }
 
@@ -24,6 +22,8 @@ source_set("unittests") {
   deps = [
     ":download_stats",
     "//base/test:test_support",
+    "//components/download/public/common:public",
+    "//components/safe_browsing/content/common/file_type_policies",
     "//testing/gtest",
   ]
 }

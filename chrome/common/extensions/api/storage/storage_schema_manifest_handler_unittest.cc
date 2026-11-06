@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,13 +10,17 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/logging.h"
 #include "base/values.h"
 #include "components/version_info/version_info.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/features/feature_channel.h"
 #include "extensions/common/file_util.h"
 #include "extensions/common/manifest.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -25,18 +29,18 @@ class StorageSchemaManifestHandlerTest : public testing::Test {
   StorageSchemaManifestHandlerTest()
       : scoped_channel_(version_info::Channel::DEV) {}
 
-  ~StorageSchemaManifestHandlerTest() override {}
+  ~StorageSchemaManifestHandlerTest() override = default;
 
   void SetUp() override {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
 
-    manifest_.SetString("name", "test");
-    manifest_.SetString("version", "1.2.3.4");
-    manifest_.SetInteger("manifest_version", 2);
+    manifest_.Set("name", "test");
+    manifest_.Set("version", "1.2.3.4");
+    manifest_.Set("manifest_version", 2);
   }
 
   scoped_refptr<Extension> CreateExtension(const std::string& schema) {
-    std::string error;
+    std::u16string error;
     scoped_refptr<Extension> extension = Extension::Create(
         temp_dir_.GetPath(), mojom::ManifestLocation::kUnpacked, manifest_,
         Extension::NO_FLAGS, "", &error);
@@ -46,8 +50,7 @@ class StorageSchemaManifestHandlerTest : public testing::Test {
     if (schema.empty()) {
       base::DeleteFile(schema_path);
     } else {
-      if (base::WriteFile(schema_path, schema.data(), schema.size()) !=
-          static_cast<int>(schema.size())) {
+      if (!base::WriteFile(schema_path, schema)) {
         return nullptr;
       }
     }
@@ -58,7 +61,7 @@ class StorageSchemaManifestHandlerTest : public testing::Test {
     scoped_refptr<Extension> extension = CreateExtension(schema);
     if (!extension.get())
       return testing::AssertionFailure() << "Failed to create test extension";
-    std::string error;
+    std::u16string error;
     std::vector<InstallWarning> warnings;
     if (file_util::ValidateExtension(extension.get(), &error, &warnings))
       return testing::AssertionSuccess();
@@ -67,7 +70,7 @@ class StorageSchemaManifestHandlerTest : public testing::Test {
 
   base::ScopedTempDir temp_dir_;
   ScopedCurrentChannel scoped_channel_;
-  base::DictionaryValue manifest_;
+  base::DictValue manifest_;
 };
 
 TEST_F(StorageSchemaManifestHandlerTest, Parse) {
@@ -75,35 +78,36 @@ TEST_F(StorageSchemaManifestHandlerTest, Parse) {
   ASSERT_TRUE(extension.get());
 
   // Not a string.
-  manifest_.SetInteger("storage.managed_schema", 123);
+  manifest_.SetByDottedPath("storage.managed_schema", 123);
   extension = CreateExtension("");
   EXPECT_FALSE(extension.get());
 
   // All good now.
-  manifest_.SetString("storage.managed_schema", "schema.json");
+  manifest_.SetByDottedPath("storage.managed_schema", "schema.json");
   extension = CreateExtension("");
   ASSERT_TRUE(extension.get());
 }
 
 TEST_F(StorageSchemaManifestHandlerTest, Validate) {
   base::ListValue permissions;
-  permissions.AppendString("storage");
-  manifest_.SetKey("permissions", permissions.Clone());
+  permissions.Append("storage");
+  manifest_.Set("permissions", std::move(permissions));
 
   // Absolute path.
-  manifest_.SetString("storage.managed_schema", "/etc/passwd");
+  manifest_.SetByDottedPath("storage.managed_schema", "/etc/passwd");
   EXPECT_FALSE(Validates(""));
 
   // Path with ..
-  manifest_.SetString("storage.managed_schema", "../../../../../etc/passwd");
+  manifest_.SetByDottedPath("storage.managed_schema",
+                            "../../../../../etc/passwd");
   EXPECT_FALSE(Validates(""));
 
   // Does not exist.
-  manifest_.SetString("storage.managed_schema", "not-there");
+  manifest_.SetByDottedPath("storage.managed_schema", "not-there");
   EXPECT_FALSE(Validates(""));
 
   // Invalid JSON.
-  manifest_.SetString("storage.managed_schema", "schema.json");
+  manifest_.SetByDottedPath("storage.managed_schema", "schema.json");
   EXPECT_FALSE(Validates("-invalid-"));
 
   // No version.

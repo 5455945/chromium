@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,21 +16,28 @@ namespace policies {
 
 class MockWorkingSetTrimmerPolicy : public WorkingSetTrimmerPolicy {
  public:
-  MockWorkingSetTrimmerPolicy() {}
-  ~MockWorkingSetTrimmerPolicy() override {}
+  MockWorkingSetTrimmerPolicy() = default;
 
-  MOCK_METHOD1(TrimWorkingSet, bool(const ProcessNode*));
+  MockWorkingSetTrimmerPolicy(const MockWorkingSetTrimmerPolicy&) = delete;
+  MockWorkingSetTrimmerPolicy& operator=(const MockWorkingSetTrimmerPolicy&) =
+      delete;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(MockWorkingSetTrimmerPolicy);
+  ~MockWorkingSetTrimmerPolicy() override = default;
+
+  MOCK_METHOD1(TrimWorkingSet, void(const ProcessNode*));
 };
 
 class WorkingSetTrimmerPolicyTest : public GraphTestHarness {
  public:
   using Super = GraphTestHarness;
 
-  WorkingSetTrimmerPolicyTest() {}
-  ~WorkingSetTrimmerPolicyTest() override {}
+  WorkingSetTrimmerPolicyTest() = default;
+
+  WorkingSetTrimmerPolicyTest(const WorkingSetTrimmerPolicyTest&) = delete;
+  WorkingSetTrimmerPolicyTest& operator=(const WorkingSetTrimmerPolicyTest&) =
+      delete;
+
+  ~WorkingSetTrimmerPolicyTest() override = default;
 
   void SetUp() override {
     Super::SetUp();
@@ -47,9 +54,6 @@ class WorkingSetTrimmerPolicyTest : public GraphTestHarness {
 
  protected:
   std::unique_ptr<WorkingSetTrimmerPolicy> policy_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(WorkingSetTrimmerPolicyTest);
 };
 
 // Validate that we can set and get the last trim time on a ProcessNode.

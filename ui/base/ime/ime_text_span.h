@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -48,52 +48,38 @@ struct COMPONENT_EXPORT(UI_BASE_IME_TYPES) ImeTextSpan {
 
   explicit ImeTextSpan(
       Type type = Type::kComposition,
-      uint32_t start_offset = 0,
-      uint32_t end_offset = 0,
+      size_t start_offset = 0,
+      size_t end_offset = 0,
       Thickness thickness = Thickness::kThin,
       UnderlineStyle underline_style = UnderlineStyle::kSolid,
       SkColor background_color = SK_ColorTRANSPARENT,
       SkColor suggestion_highlight_color = SK_ColorTRANSPARENT,
-      const std::vector<std::string>& suggestions = std::vector<std::string>());
+      const std::vector<std::string>& suggestions = std::vector<std::string>(),
+      SkColor text_color = SK_ColorTRANSPARENT,
+      bool should_hide_suggestion_menu = false);
 
   ImeTextSpan(const ImeTextSpan& rhs);
 
   ~ImeTextSpan();
 
-  bool operator==(const ImeTextSpan& rhs) const {
-    return (this->type == rhs.type) &&
-           (this->start_offset == rhs.start_offset) &&
-           (this->end_offset == rhs.end_offset) &&
-           (this->underline_color == rhs.underline_color) &&
-           (this->thickness == rhs.thickness) &&
-           (this->underline_style == rhs.underline_style) &&
-           (this->text_color == rhs.text_color) &&
-           (this->background_color == rhs.background_color) &&
-           (this->suggestion_highlight_color ==
-            rhs.suggestion_highlight_color) &&
-           (this->remove_on_finish_composing ==
-            rhs.remove_on_finish_composing) &&
-           (this->interim_char_selection == rhs.interim_char_selection) &&
-           (this->suggestions == rhs.suggestions);
-  }
-
-  bool operator!=(const ImeTextSpan& rhs) const { return !(*this == rhs); }
+  friend bool operator==(const ImeTextSpan&, const ImeTextSpan&) = default;
 
   Type type;
-  uint32_t start_offset;
-  uint32_t end_offset;
+  size_t start_offset;
+  size_t end_offset;
   SkColor underline_color = SK_ColorTRANSPARENT;
   Thickness thickness;
   UnderlineStyle underline_style;
-  SkColor text_color = SK_ColorTRANSPARENT;
+  SkColor text_color;
   SkColor background_color;
   SkColor suggestion_highlight_color;
   bool remove_on_finish_composing = false;
   bool interim_char_selection = false;
   std::vector<std::string> suggestions;
+  bool should_hide_suggestion_menu = false;
 };
 
-typedef std::vector<ImeTextSpan> ImeTextSpans;
+using ImeTextSpans = std::vector<ImeTextSpan>;
 
 }  // namespace ui
 

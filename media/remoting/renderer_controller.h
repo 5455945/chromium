@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,8 @@
 
 #include <memory>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/threading/thread_checker.h"
 #include "base/timer/timer.h"
@@ -22,10 +23,10 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 #if BUILDFLAG(ENABLE_MEDIA_REMOTING_RPC)
-#include "media/remoting/rpc_broker.h"  // nogncheck
+#include "third_party/openscreen/src/cast/streaming/public/rpc_messenger.h"  // nogncheck
+#include "third_party/openscreen/src/util/weak_ptr.h"  // nogncheck
 #endif
 
 namespace base {
@@ -44,6 +45,10 @@ class RendererController final : public mojom::RemotingSource,
   RendererController(
       mojo::PendingReceiver<mojom::RemotingSource> source_receiver,
       mojo::PendingRemote<mojom::Remoter> remoter);
+
+  RendererController(const RendererController&) = delete;
+  RendererController& operator=(const RendererController&) = delete;
+
   ~RendererController() override;
 
   // mojom::RemotingSource implementations.
@@ -58,8 +63,10 @@ class RendererController final : public mojom::RemotingSource,
   void OnBecameDominantVisibleContent(bool is_dominant) override;
   void OnMetadataChanged(const PipelineMetadata& metadata) override;
   void OnRemotePlaybackDisabled(bool disabled) override;
+  void OnMediaRemotingRequested() override;
   void OnPlaying() override;
   void OnPaused() override;
+  void OnFrozen() override;
   void OnDataSourceInitialized(const GURL& url_after_redirects) override;
   void OnHlsManifestDetected() override;
   void SetClient(MediaObserverClient* client) override;
@@ -90,7 +97,7 @@ class RendererController final : public mojom::RemotingSource,
                      DataPipeStartCallback done_callback);
 
 #if BUILDFLAG(ENABLE_MEDIA_REMOTING_RPC)
-  base::WeakPtr<RpcBroker> GetRpcBroker();
+  openscreen::WeakPtr<openscreen::cast::RpcMessenger> GetRpcMessenger();
 #endif
 
   // Called by CourierRenderer when it encountered a fatal error. This will
@@ -142,40 +149,31 @@ class RendererController final : public mojom::RemotingSource,
   // the element is compatible with Remote Playback API.
   void UpdateRemotePlaybackAvailabilityMonitoringState();
 
-  // Start |delayed_start_stability_timer_| to ensure all preconditions are met
-  // and held stable for a short time before starting remoting.
-  void WaitForStabilityBeforeStart(StartTrigger start_trigger);
-  // Cancel the start of remoting.
-  void CancelDelayedStart();
-  // Called when the delayed start ends. |decoded_frame_count_before_delay| is
-  // the total number of frames decoded before the delayed start began.
-  // |delayed_start_time| is the time that the delayed start began.
-  void OnDelayedStartTimerFired(StartTrigger start_trigger,
-                                unsigned decoded_frame_count_before_delay,
-                                base::TimeTicks delayed_start_time);
-
-  // Records in a histogram and returns whether the receiver supports the given
-  // pixel rate.
-  bool RecordPixelRateSupport(double pixels_per_second);
-
   // Queries on remoting sink capabilities.
   bool HasVideoCapability(mojom::RemotingSinkVideoCapability capability) const;
   bool HasAudioCapability(mojom::RemotingSinkAudioCapability capability) const;
   bool HasFeatureCapability(mojom::RemotingSinkFeature capability) const;
   bool SinkSupportsRemoting() const;
+  bool ShouldBeRemoting();
 
-  // Callback from RpcBroker when sending message to remote sink.
-  void SendMessageToSink(std::unique_ptr<std::vector<uint8_t>> message);
+  // Start `pixel_rate_timer_` to calculate pixel rate.
+  void MaybeStartCalculatePixelRateTimer();
+  void DoCalculatePixelRate(int decoded_frame_count_before_delay,
+                            base::TimeTicks delayed_start_time);
+  PixelRateSupport GetPixelRateSupport() const;
 
-#if defined(OS_ANDROID)
+  // Callback from RpcMessenger when sending message to remote sink.
+  void SendMessageToSink(std::vector<uint8_t> message);
+
+#if BUILDFLAG(IS_ANDROID)
   bool IsAudioRemotePlaybackSupported() const;
   bool IsVideoRemotePlaybackSupported() const;
   bool IsRemotePlaybackSupported() const;
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(ENABLE_MEDIA_REMOTING_RPC)
   // Handles dispatching of incoming and outgoing RPC messages.
-  RpcBroker rpc_broker_;
+  openscreen::cast::RpcMessenger rpc_messenger_;
 #endif
 
   const mojo::Receiver<mojom::RemotingSource> receiver_;
@@ -183,7 +181,7 @@ class RendererController final : public mojom::RemotingSource,
 
   // When the sink is available for remoting, this describes its metadata. When
   // not available, this is empty. Updated by OnSinkAvailable/Gone().
-  mojom::RemotingSinkMetadata sink_metadata_;
+  mojom::RemotingSinkMetadataPtr sink_metadata_;
 
   // Indicates whether remoting is started.
   bool remote_rendering_started_ = false;
@@ -213,10 +211,6 @@ class RendererController final : public mojom::RemotingSource,
   // visible content in the tab.
   bool encountered_renderer_fatal_error_ = false;
 
-  // When this is true, remoting will never start again for the lifetime of this
-  // controller.
-  bool permanently_disable_remoting_ = false;
-
   // This is used to check all the methods are called on the current thread in
   // debug builds.
   base::ThreadChecker thread_checker_;
@@ -229,24 +223,29 @@ class RendererController final : public mojom::RemotingSource,
 
   bool is_hls_ = false;
 
+  // True if the browser has requested to start remoting without fullscreening
+  // the media content. The value is reset to False when it switches back to
+  // local rendering.
+  bool is_media_remoting_requested_ = false;
+
   // Records session events of interest.
   SessionMetricsRecorder metrics_recorder_;
 
   // Not owned by this class. Can only be set once by calling SetClient().
-  MediaObserverClient* client_ = nullptr;
+  raw_ptr<MediaObserverClient> client_ = nullptr;
 
-  // When this is running, it indicates that remoting will be started later
-  // when the timer gets fired. The start will be canceled if there is any
-  // precondition change that does not allow for remoting duting this period.
-  // TODO(xjz): Estimate whether the transmission bandwidth is sufficient to
-  // remote the content while this timer is running.
-  base::OneShotTimer delayed_start_stability_timer_;
+  // This timer is used to calculate the media content's pixel rate. The timer
+  // is stopped when the media playback is paused or when the media metadata
+  // changed.
+  base::OneShotTimer pixel_rate_timer_;
 
-  const base::TickClock* clock_;
+  // Current pixel rate. Its value is reset to 0 when
+  // pipeline_metadata_.natural_size changes.
+  double pixels_per_second_ = 0;
+
+  raw_ptr<const base::TickClock> clock_;
 
   base::WeakPtrFactory<RendererController> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(RendererController);
 };
 
 }  // namespace remoting

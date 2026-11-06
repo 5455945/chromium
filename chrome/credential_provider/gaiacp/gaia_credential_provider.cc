@@ -1,19 +1,26 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/credential_provider/gaiacp/gaia_credential_provider.h"
 
+#include <credentialprovider.h>
+#include <shlguid.h>
+
+#include <algorithm>
+#include <array>
 #include <iomanip>
 #include <map>
 #include <string>
 #include <utility>
 
-#include "base/cxx17_backports.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/json/json_reader.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "base/values.h"
+#include "base/win/scoped_bstr.h"
 #include "chrome/common/chrome_version.h"
 #include "chrome/credential_provider/common/gcp_strings.h"
 #include "chrome/credential_provider/gaiacp/associated_user_validator.h"
@@ -24,6 +31,7 @@
 #include "chrome/credential_provider/gaiacp/gaia_credential_provider_i.h"
 #include "chrome/credential_provider/gaiacp/logging.h"
 #include "chrome/credential_provider/gaiacp/mdm_utils.h"
+#include "chrome/credential_provider/gaiacp/os_gaia_user_manager.h"
 #include "chrome/credential_provider/gaiacp/os_user_manager.h"
 #include "chrome/credential_provider/gaiacp/reauth_credential.h"
 #include "chrome/credential_provider/gaiacp/reg_utils.h"
@@ -32,20 +40,21 @@ namespace credential_provider {
 
 #define W2CW(p) const_cast<wchar_t*>(p)
 
-static const CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR g_field_desc[] = {
-    {FID_DESCRIPTION, CPFT_LARGE_TEXT, W2CW(L"Description"), GUID_NULL},
-    {FID_CURRENT_PASSWORD_FIELD, CPFT_PASSWORD_TEXT, W2CW(L"Windows Password"),
-     GUID_NULL},
-    {FID_SUBMIT, CPFT_SUBMIT_BUTTON, W2CW(L"Submit button"), GUID_NULL},
-    {FID_FORGOT_PASSWORD_LINK, CPFT_COMMAND_LINK, W2CW(L"Forgot Password"),
-     GUID_NULL},
-    {FID_PROVIDER_LOGO, CPFT_TILE_IMAGE, W2CW(L"Provider logo"),
-     CPFG_CREDENTIAL_PROVIDER_LOGO},
-    {FID_PROVIDER_LABEL, CPFT_LARGE_TEXT, W2CW(L"Provider label"),
-     CPFG_CREDENTIAL_PROVIDER_LABEL},
-};
+static const auto g_field_desc =
+    std::to_array<CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR>({
+        {FID_DESCRIPTION, CPFT_LARGE_TEXT, W2CW(L"Description"), GUID_NULL},
+        {FID_CURRENT_PASSWORD_FIELD, CPFT_PASSWORD_TEXT,
+         W2CW(L"Windows Password"), GUID_NULL},
+        {FID_SUBMIT, CPFT_SUBMIT_BUTTON, W2CW(L"Submit button"), GUID_NULL},
+        {FID_FORGOT_PASSWORD_LINK, CPFT_COMMAND_LINK, W2CW(L"Forgot Password"),
+         GUID_NULL},
+        {FID_PROVIDER_LOGO, CPFT_TILE_IMAGE, W2CW(L"Provider logo"),
+         CPFG_CREDENTIAL_PROVIDER_LOGO},
+        {FID_PROVIDER_LABEL, CPFT_LARGE_TEXT, W2CW(L"Provider label"),
+         CPFG_CREDENTIAL_PROVIDER_LABEL},
+    });
 
-static_assert(base::size(g_field_desc) == FIELD_COUNT,
+static_assert(std::size(g_field_desc) == FIELD_COUNT,
               "g_field_desc does not match FIELDID enum");
 
 namespace {
@@ -74,21 +83,21 @@ HRESULT InitializeReauthCredential(
   // effect is that the user will need to enter their email address manually
   // instead of it being pre-filled.
   wchar_t email[64];
-  ULONG email_length = base::size(email);
+  ULONG email_length = std::size(email);
   hr = GetUserProperty(sid.c_str(), kUserEmail, email, &email_length);
   if (FAILED(hr))
     email[0] = 0;
 
-  hr = reauth->SetOSUserInfo(CComBSTR(W2COLE(sid.c_str())),
-                             CComBSTR(W2COLE(domain.c_str())),
-                             CComBSTR(W2COLE(username.c_str())));
+  hr = reauth->SetOSUserInfo(base::win::ScopedBstr(sid.c_str()).Get(),
+                             base::win::ScopedBstr(domain.c_str()).Get(),
+                             base::win::ScopedBstr(username.c_str()).Get());
   if (FAILED(hr)) {
     LOGFN(ERROR) << "cred->SetOSUserInfo hr=" << putHR(hr);
     return hr;
   }
 
   if (email[0]) {
-    hr = reauth->SetEmailForReauth(CComBSTR(email));
+    hr = reauth->SetEmailForReauth(base::win::ScopedBstr(email).Get());
     if (FAILED(hr))
       LOGFN(ERROR) << "reauth->SetEmailForReauth hr=" << putHR(hr);
   } else {
@@ -132,8 +141,8 @@ class BackgroundTokenHandleUpdater {
   // to notify that token handle validity has changed. Any instance of this
   // class should be owned by the CGaiaCredentialProvider to ensure that
   // this pointer outlives the updater.
-  ICredentialUpdateEventsHandler* event_handler_;
-  const std::vector<std::wstring>* reauth_sids_;
+  raw_ptr<ICredentialUpdateEventsHandler> event_handler_;
+  raw_ptr<const std::vector<std::wstring>> reauth_sids_;
 
   base::win::ScopedHandle token_update_thread_;
   base::WaitableEvent token_update_quit_event_;
@@ -154,11 +163,11 @@ BackgroundTokenHandleUpdater::BackgroundTokenHandleUpdater(
 }
 
 BackgroundTokenHandleUpdater::~BackgroundTokenHandleUpdater() {
-  if (token_update_thread_.IsValid()) {
+  if (token_update_thread_.is_valid()) {
     // Tell the background thread to quit and then make sure it does.  This
     // prevents it from accessing data members that have been freed.
     token_update_quit_event_.Signal();
-    ::WaitForSingleObject(token_update_thread_.Get(), INFINITE);
+    ::WaitForSingleObject(token_update_thread_.get(), INFINITE);
   }
 }
 
@@ -174,10 +183,9 @@ bool BackgroundTokenHandleUpdater::IsAuthEnforcedOnAssociatedUsers() {
     const std::wstring& sid = sid_to_association.first;
     // Checks if the login UI was already refreshed due to
     // auth enforcements on this sid.
-    if (reauth_sids_ != nullptr &&
-        (std::find(reauth_sids_->begin(), reauth_sids_->end(), sid) !=
-         reauth_sids_->end()))
+    if (reauth_sids_ != nullptr && std::ranges::contains(*reauth_sids_, sid)) {
       continue;
+    }
 
     // Return true if the associated user sid has auth enforced.
     if (AssociatedUserValidator::Get()->IsAuthEnforcedForUser(sid)) {
@@ -311,9 +319,9 @@ void CGaiaCredentialProvider::ProviderConcurrentState::InternalReset() {
   auto_logon_credential_.Reset();
 }
 
-CGaiaCredentialProvider::CGaiaCredentialProvider() {}
+CGaiaCredentialProvider::CGaiaCredentialProvider() = default;
 
-CGaiaCredentialProvider::~CGaiaCredentialProvider() {}
+CGaiaCredentialProvider::~CGaiaCredentialProvider() = default;
 
 HRESULT CGaiaCredentialProvider::FinalConstruct() {
   LOGFN(VERBOSE);
@@ -387,8 +395,6 @@ HRESULT CGaiaCredentialProvider::CreateReauthCredentials(
     GaiaCredentialComPtrStorage* auto_logon_credential) {
   std::map<std::wstring, std::pair<std::wstring, std::wstring>> sid_to_username;
 
-  OSUserManager* manager = OSUserManager::Get();
-
   // Get the SIDs of all users being shown in the logon UI.
   if (!users) {
     LOGFN(ERROR) << "hr=" << putHR(E_INVALIDARG);
@@ -433,8 +439,8 @@ HRESULT CGaiaCredentialProvider::CreateReauthCredentials(
     wchar_t username[kWindowsUsernameBufferLength];
     wchar_t domain[kWindowsDomainBufferLength];
 
-    hr = manager->FindUserBySID(sid.c_str(), username, base::size(username),
-                                domain, base::size(domain));
+    hr = OSUserManager::Get()->FindUserBySidWithFallback(
+        sid.c_str(), username, std::size(username), domain, std::size(domain));
     if (FAILED(hr)) {
       LOGFN(ERROR) << "Can't get sid or username hr=" << putHR(hr);
       continue;
@@ -443,7 +449,7 @@ HRESULT CGaiaCredentialProvider::CreateReauthCredentials(
     // Get the user's gaia id from registry stored against the sid if it
     // exists.
     wchar_t user_id[64];
-    ULONG user_id_length = base::size(user_id);
+    ULONG user_id_length = std::size(user_id);
     hr = GetUserProperty(sid.c_str(), kUserId, user_id, &user_id_length);
     if (FAILED(hr))
       user_id[0] = L'\0';
@@ -476,8 +482,7 @@ HRESULT CGaiaCredentialProvider::CreateReauthCredentials(
     }
 
     GaiaCredentialComPtrStorage cred;
-    HRESULT hr =
-        CreateCredentialObject<CReauthCredential>(reauth_cred_creator_, &cred);
+    hr = CreateCredentialObject<CReauthCredential>(reauth_cred_creator_, &cred);
     if (FAILED(hr)) {
       LOG(ERROR) << "Could not create credential hr=" << putHR(hr);
       return hr;
@@ -510,7 +515,6 @@ void CGaiaCredentialProvider::AddCredentialAndCheckAutoLogon(
     const Microsoft::WRL::ComPtr<IGaiaCredential>& cred,
     const std::wstring& sid,
     GaiaCredentialComPtrStorage* auto_logon_credential) {
-  USES_CONVERSION;
   users_.emplace_back(cred);
 
   if (!auto_logon_credential)
@@ -598,7 +602,7 @@ HRESULT CGaiaCredentialProvider::OnUserAuthenticatedImpl(
       events_->CredentialsChanged(advise_context_);
   }
 
-  LOGFN(VERBOSE) << "Signing in authenticated sid=" << OLE2CW(sid);
+  LOGFN(VERBOSE) << "Signing in authenticated sid=" << sid;
   return S_OK;
 }
 
@@ -698,7 +702,16 @@ HRESULT CGaiaCredentialProvider::SetUsageScenario(
   cpus_flags_ = flags;
 
   LOGFN(VERBOSE) << " cpu=" << cpus << " flags=" << std::setbase(16) << flags;
-  return IsUsageScenarioSupported(cpus_) ? S_OK : E_NOTIMPL;
+  if (IsUsageScenarioSupported(cpus_)) {
+    HRESULT hr = credential_provider::OSGaiaUserManager::Get()
+                     ->ChangeGaiaUserPasswordIfNeeded();
+    if (FAILED(hr)) {
+      LOGFN(ERROR) << "ChangeGaiaUserPasswordIfNeeded failed. hr=" << putHR(hr);
+    }
+    return S_OK;
+  }
+
+  return E_NOTIMPL;
 }
 
 HRESULT CGaiaCredentialProvider::SetSerialization(
@@ -746,6 +759,8 @@ HRESULT CGaiaCredentialProvider::Advise(ICredentialProviderEvents* pcpe,
 }
 
 HRESULT CGaiaCredentialProvider::UnAdvise() {
+  LOGFN(VERBOSE);
+
   // Kill the updater thread (if any).
   token_handle_updater_.reset();
 

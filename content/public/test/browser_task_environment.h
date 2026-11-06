@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,12 @@
 #include <memory>
 
 #include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/task/sequence_manager/sequence_manager.h"
 #include "base/test/task_environment.h"
 #include "build/build_config.h"
 
 namespace base {
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 namespace win {
 class ScopedCOMInitializer;
 }  // namespace win
@@ -42,7 +42,7 @@ class TestBrowserThread;
 // To synchronously run tasks from the shared message loop:
 //
 // ... until there are no undelayed tasks in the shared message loop:
-//    base::RunLoop::RunUntilIdle();
+//    base::RunLoop().RunUntilIdle();
 //
 // ... until there are no undelayed tasks in the shared message loop, in
 // ThreadPool (excluding tasks not posted from the shared message loop's thread
@@ -101,7 +101,7 @@ class TestBrowserThread;
 //     template <typename... TaskEnvironmentTraits>
 //     explicit FooBase(TaskEnvironmentTraits&&... traits)
 //         : task_environment_(
-//               base::in_place,
+//               std::in_place,
 //               std::forward<TaskEnvironmentTraits>(traits)...) {}
 //
 //     // Alternatively a subclass may pass this tag to ask this FooBase not to
@@ -113,7 +113,7 @@ class TestBrowserThread;
 //    protected:
 //     // Use this protected member directly from the test body to drive tasks
 //     // posted within a FooBase-based test.
-//     absl::optional<base::test::TaskEnvironment> task_environment_;
+//     std::optional<base::test::TaskEnvironment> task_environment_;
 //   };
 //
 //   class ChromeFooBase : public FooBase {
@@ -139,23 +139,21 @@ class BrowserTaskEnvironment : public base::test::TaskEnvironment {
   // remove this.
   static constexpr MainThreadType IO_MAINLOOP = MainThreadType::IO;
 
-  struct ValidTraits {
-    ValidTraits(TaskEnvironment::ValidTraits);
-    ValidTraits(Options);
-  };
+  using ValidTraits =
+      base::ConcatParameterPacks<base::test::TaskEnvironment::ValidTraits,
+                                 base::ParameterPack<Options>>;
 
   // Constructor which accepts zero or more traits to configure the
   // TaskEnvironment and optionally request a real IO thread. Unlike
   // TaskEnvironment the default MainThreadType for
   // BrowserTaskEnvironment is MainThreadType::UI.
-  template <
-      typename... TaskEnvironmentTraits,
-      class CheckArgumentsAreValid = std::enable_if_t<
-          base::trait_helpers::AreValidTraits<ValidTraits,
-                                              TaskEnvironmentTraits...>::value>>
+  template <typename... TaskEnvironmentTraits>
+    requires base::trait_helpers::AreValidTraits<ValidTraits,
+                                                 TaskEnvironmentTraits...>
   NOINLINE explicit BrowserTaskEnvironment(TaskEnvironmentTraits... traits)
       : BrowserTaskEnvironment(
-            base::test::TaskEnvironment(
+            CreateTaskEnvironmentWithPriorities(
+                CreateBrowserTaskPrioritySettings(),
                 SubclassCreatesDefaultTaskRunner{},
                 base::trait_helpers::GetEnum<MainThreadType,
                                              MainThreadType::UI>(traits...),
@@ -169,9 +167,20 @@ class BrowserTaskEnvironment : public base::test::TaskEnvironment {
   // RunLoop+QuitClosure() to await an async condition.
   void RunIOThreadUntilIdle();
 
+  // Winds down the BrowserTaskExecutor. After this no tasks posted to browser
+  // task queues will be executed. This is normally handled by the destructor,
+  // but tests can call this early to test shutdown behaviour.
+  void ShutdownBrowserTaskExecutor();
+
+  BrowserTaskEnvironment(const BrowserTaskEnvironment&) = delete;
+  BrowserTaskEnvironment& operator=(const BrowserTaskEnvironment&) = delete;
+
   ~BrowserTaskEnvironment() override;
 
  private:
+  static base::sequence_manager::SequenceManager::PrioritySettings
+  CreateBrowserTaskPrioritySettings();
+
   // The template constructor has to be in the header but it delegates to this
   // constructor to initialize all other members out-of-line.
   BrowserTaskEnvironment(base::test::TaskEnvironment&& scoped_task_environment,
@@ -179,7 +188,7 @@ class BrowserTaskEnvironment : public base::test::TaskEnvironment {
 
   void Init();
 
-  static constexpr bool UseRealIOThread(absl::optional<Options> options) {
+  static constexpr bool UseRealIOThread(std::optional<Options> options) {
     if (!options)
       return false;
     return *options == Options::REAL_IO_THREAD;
@@ -193,11 +202,9 @@ class BrowserTaskEnvironment : public base::test::TaskEnvironment {
   std::unique_ptr<TestBrowserThread> ui_thread_;
   std::unique_ptr<TestBrowserThread> io_thread_;
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   std::unique_ptr<base::win::ScopedCOMInitializer> com_initializer_;
 #endif
-
-  DISALLOW_COPY_AND_ASSIGN(BrowserTaskEnvironment);
 };
 
 }  // namespace content

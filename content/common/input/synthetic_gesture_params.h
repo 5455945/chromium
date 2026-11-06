@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,6 +24,7 @@ struct CONTENT_EXPORT SyntheticGestureParams {
   content::mojom::GestureSourceType gesture_source_type;
 
   enum GestureType {
+    SMOOTH_MOVE_GESTURE,
     SMOOTH_SCROLL_GESTURE,
     SMOOTH_DRAG_GESTURE,
     PINCH_GESTURE,
@@ -44,6 +45,10 @@ struct CONTENT_EXPORT SyntheticGestureParams {
   // platform.
   static bool IsGestureSourceTypeSupported(
       content::mojom::GestureSourceType gesture_source_type);
+  bool from_devtools_debugger = false;
+  float vsync_offset_ms = 0.0f;
+  content::mojom::InputEventPattern input_event_pattern =
+      content::mojom::InputEventPattern::kDefaultPattern;
 };
 
 }  // namespace content

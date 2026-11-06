@@ -14,10 +14,15 @@
 
 #include "absl/time/civil_time.h"
 
+#include <cerrno>
 #include <cstdlib>
+#include <limits>
+#include <ostream>
 #include <string>
 
+#include "absl/base/config.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
 #include "absl/time/time.h"
 
 namespace absl {
@@ -53,13 +58,28 @@ bool ParseYearAnd(string_view fmt, string_view s, CivilT* c) {
   const civil_year_t y =
       std::strtoll(np, &endp, 10);  // NOLINT(runtime/deprecated_fn)
   if (endp == np || errno == ERANGE) return false;
-  const std::string norm = StrCat(NormalizeYear(y), endp);
+  const civil_year_t normalized_year = NormalizeYear(y);
+  const std::string norm = StrCat(normalized_year, endp);
 
   const TimeZone utc = UTCTimeZone();
   Time t;
   if (ParseTime(StrCat("%Y", fmt), norm, utc, &t, nullptr)) {
     const auto cs = ToCivilSecond(t, utc);
-    *c = CivilT(y, cs.month(), cs.day(), cs.hour(), cs.minute(), cs.second());
+    // Field normalization while parsing (e.g. a ":60" leap second or an
+    // end-of-year rollover) can carry into the year. The other fields are taken
+    // from `cs`, so the same carry must be applied to the original year;
+    // otherwise the reconstructed value would use the wrong (un-carried) year.
+    // `cs.year()` and `normalized_year` both lie in the normalized range, so
+    // the carry is small, but applying it to `y` can overflow civil_year_t when
+    // `y` is at the extreme representable year; reject that rather than wrap.
+    const civil_year_t carry = cs.year() - normalized_year;
+    if ((carry > 0 && y > (std::numeric_limits<civil_year_t>::max)() - carry) ||
+        (carry < 0 && y < (std::numeric_limits<civil_year_t>::min)() - carry)) {
+      return false;
+    }
+    const civil_year_t year = y + carry;
+    *c =
+        CivilT(year, cs.month(), cs.day(), cs.hour(), cs.minute(), cs.second());
     return true;
   }
 
@@ -166,6 +186,31 @@ std::ostream& operator<<(std::ostream& os, CivilMinute m) {
 std::ostream& operator<<(std::ostream& os, CivilSecond s) {
   return os << FormatCivilTime(s);
 }
+
+bool AbslParseFlag(string_view s, CivilSecond* c, std::string*) {
+  return ParseLenientCivilTime(s, c);
+}
+bool AbslParseFlag(string_view s, CivilMinute* c, std::string*) {
+  return ParseLenientCivilTime(s, c);
+}
+bool AbslParseFlag(string_view s, CivilHour* c, std::string*) {
+  return ParseLenientCivilTime(s, c);
+}
+bool AbslParseFlag(string_view s, CivilDay* c, std::string*) {
+  return ParseLenientCivilTime(s, c);
+}
+bool AbslParseFlag(string_view s, CivilMonth* c, std::string*) {
+  return ParseLenientCivilTime(s, c);
+}
+bool AbslParseFlag(string_view s, CivilYear* c, std::string*) {
+  return ParseLenientCivilTime(s, c);
+}
+std::string AbslUnparseFlag(CivilSecond c) { return FormatCivilTime(c); }
+std::string AbslUnparseFlag(CivilMinute c) { return FormatCivilTime(c); }
+std::string AbslUnparseFlag(CivilHour c) { return FormatCivilTime(c); }
+std::string AbslUnparseFlag(CivilDay c) { return FormatCivilTime(c); }
+std::string AbslUnparseFlag(CivilMonth c) { return FormatCivilTime(c); }
+std::string AbslUnparseFlag(CivilYear c) { return FormatCivilTime(c); }
 
 }  // namespace time_internal
 

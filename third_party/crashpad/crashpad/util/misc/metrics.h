@@ -1,4 +1,4 @@
-// Copyright 2016 The Crashpad Authors. All rights reserved.
+// Copyright 2016 The Crashpad Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,11 +17,10 @@
 
 #include <inttypes.h>
 
-#include "base/macros.h"
 #include "build/build_config.h"
 #include "util/file/file_io.h"
 
-#if defined(OS_IOS)
+#if BUILDFLAG(IS_IOS)
 #include "util/ios/ios_intermediate_dump_format.h"
 #endif
 
@@ -35,6 +34,10 @@ namespace crashpad {
 //! Chromium's base, they allow integration with its metrics system.
 class Metrics {
  public:
+  Metrics() = delete;
+  Metrics(const Metrics&) = delete;
+  Metrics& operator=(const Metrics&) = delete;
+
   //! \brief Values for CrashReportPending().
   //!
   //! \note These are used as metrics enumeration values, so new values should
@@ -46,8 +49,8 @@ class Metrics {
     //! \brief The user manually requested the report be uploaded.
     kUserInitiated = 1,
 
-    //! \brief The number of values in this enumeration; not a valid value.
-    kMaxValue
+    //! \brief The highest valid value in this enumeration.
+    kMaxValue = kUserInitiated,
   };
 
   //! \brief Reports when a crash upload has entered the pending state.
@@ -59,6 +62,12 @@ class Metrics {
 
   //! \brief Reports on a crash upload attempt, and if it succeeded.
   static void CrashUploadAttempted(bool successful);
+
+#if BUILDFLAG(IS_APPLE) || DOXYGEN
+  //! \brief Records error codes from
+  //!     `+[NSURLConnection sendSynchronousRequest:returningResponse:error:]`.
+  static void CrashUploadErrorCode(int error_code);
+#endif
 
   //! \brief Values for CrashUploadSkipped().
   //!
@@ -86,8 +95,12 @@ class Metrics {
     //!     and uploading it to the crash server.
     kPrepareForUploadFailed = 5,
 
-    //! \brief The number of values in this enumeration; not a valid value.
-    kMaxValue
+    //! \brief The upload of the crash failed during communication with the
+    //!     server, but the upload can be retried later.
+    kUploadFailedButCanRetry = 6,
+
+    //! \brief The highest valid value in this enumeration.
+    kMaxValue = kUploadFailedButCanRetry,
   };
 
   //! \brief Reports when a report is moved to the completed state in the
@@ -147,8 +160,8 @@ class Metrics {
     //! \brief Failure to open a memfd caused this crash dump to be skipped.
     kOpenMemfdFailed = 12,
 
-    //! \brief The number of values in this enumeration; not a valid value.
-    kMaxValue
+    //! \brief The highest valid value in this enumeration.
+    kMaxValue = kOpenMemfdFailed,
   };
 
   //! \brief Reports on the outcome of capturing a report in the exception
@@ -188,8 +201,8 @@ class Metrics {
     //! \brief The handler process crashed.
     kCrashed,
 
-    //! \brief The number of values in this enumeration; not a valid value.
-    kMaxValue
+    //! \brief The highest valid value in this enumeration.
+    kMaxValue = kCrashed,
   };
 
   //! \brief Records a handler start/exit/crash event.
@@ -200,7 +213,7 @@ class Metrics {
   //! This is currently only reported on Windows.
   static void HandlerCrashed(uint32_t exception_code);
 
-#if defined(OS_IOS) || DOXYGEN
+#if BUILDFLAG(IS_IOS) || DOXYGEN
   //! \brief Records a missing key from an intermediate dump.
   static void MissingIntermediateDumpKey(
       const internal::IntermediateDumpKey& key);
@@ -209,9 +222,6 @@ class Metrics {
   static void InvalidIntermediateDumpKeySize(
       const internal::IntermediateDumpKey& key);
 #endif
-
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(Metrics);
 };
 
 }  // namespace crashpad

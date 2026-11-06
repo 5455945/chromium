@@ -1,8 +1,8 @@
-# Copyright 2014 The Chromium Authors. All rights reserved.
+# Copyright 2014 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
+import("//build/config/cast.gni")
 import("//build/config/ui.gni")
 import("//gpu/vulkan/features.gni")
 import("//media/media_options.gni")
@@ -36,8 +36,6 @@ target(link_target_type, "gpu_sources") {
     "gpu_child_thread.h",
     "gpu_child_thread_receiver_bindings.cc",
     "gpu_main.cc",
-    "gpu_process.cc",
-    "gpu_process.h",
     "gpu_service_factory.cc",
     "gpu_service_factory.h",
     "in_process_gpu_thread.cc",
@@ -48,9 +46,8 @@ target(link_target_type, "gpu_sources") {
 
   deps = [
     "//base",
-    "//base/third_party/dynamic_annotations",
     "//build:branding_buildflags",
-    "//build:chromeos_buildflags",
+    "//components/performance_manager/scenario_api",
     "//components/viz/service",
     "//content:export",
     "//content/child",
@@ -58,44 +55,44 @@ target(link_target_type, "gpu_sources") {
     "//content/common:mojo_bindings",
     "//content/public/child:child_sources",
     "//content/public/common:common_sources",
-    "//gpu:gpu",
-    "//gpu/ipc/common:command_buffer_traits",
     "//gpu/ipc/service",
     "//ipc",
     "//media:media_buildflags",
     "//media/gpu",
     "//media/mojo:buildflags",
+    "//sandbox/policy",
 
     # TODO(jrummell): As //media/gpu/ipc/service is a source_set in a
     # component build, determine if it should not be included here.
     # http://crbug.com/702833.
     "//components/viz/service/main",
     "//media/gpu/ipc/service",
-    "//media/mojo/clients:clients",
+    "//media/mojo/clients",
+    "//sandbox:sandbox_buildflags",
     "//sandbox/policy:chromecast_sandbox_allowlist_buildflags",
     "//services/service_manager/public/cpp",
     "//services/service_manager/public/mojom",
     "//services/tracing/public/cpp",
     "//services/viz/privileged/mojom",
+    "//services/webnn/public/mojom",
     "//skia",
     "//third_party/angle:angle_gpu_info_util",
     "//ui/gfx/ipc",
     "//ui/gl",
     "//ui/gl/init",
-    "//ui/latency/ipc",
   ]
 
-  if (!is_chromeos_ash || !is_chrome_branded) {
+  if (!is_chromeos || !is_chrome_branded) {
     deps += [
       "//services/shape_detection:lib",
       "//services/shape_detection/public/mojom",
     ]
   }
 
-  if (is_linux || is_chromeos) {
-    sources += [
-      "gpu_sandbox_hook_linux.cc",
-      "gpu_sandbox_hook_linux.h",
+  if (is_chromeos) {
+    deps += [
+      "//components/services/font/public/cpp",
+      "//components/services/font/public/mojom",
     ]
   }
 
@@ -103,6 +100,7 @@ target(link_target_type, "gpu_sources") {
     deps += [
       "//components/tracing:graphics_provider",
       "//media",
+      "//sandbox/linux:sandbox_services",
     ]
   }
 
@@ -110,20 +108,12 @@ target(link_target_type, "gpu_sources") {
     deps += [ "//media/mojo/services" ]
   }
 
-  if (is_linux || is_chromeos || is_mac || is_win) {
+  if (is_linux || is_chromeos || is_mac || is_win || is_android) {
     deps += [ "//sandbox" ]
   }
 
   if (is_mac) {
     deps += [ "//components/metal_util" ]
-  }
-
-  if (use_x11) {
-    deps += [
-      "//ui/events/platform/x11",
-      "//ui/gfx/linux:gpu_memory_buffer_support_x11",
-      "//ui/gfx/x",
-    ]
   }
 
   if (use_ozone) {
@@ -136,7 +126,7 @@ target(link_target_type, "gpu_sources") {
 
   # Use DRI on desktop Linux builds.
   if (current_cpu != "s390x" && current_cpu != "ppc64" && is_linux &&
-      (!is_chromecast || is_cast_desktop_build)) {
+      !is_castos) {
     configs += [ "//build/config/linux/dri" ]
   }
 }

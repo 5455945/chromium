@@ -1,10 +1,11 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CC_LAYERS_NINE_PATCH_LAYER_IMPL_H_
 #define CC_LAYERS_NINE_PATCH_LAYER_IMPL_H_
 
+#include <memory>
 #include <string>
 
 #include "base/memory/ptr_util.h"
@@ -33,13 +34,17 @@ class CC_EXPORT NinePatchLayerImpl : public UIResourceLayerImpl {
   void SetLayout(const gfx::Rect& image_aperture,
                  const gfx::Rect& border,
                  const gfx::Rect& layer_occlusion,
-                 bool fill_center,
-                 bool nearest_neighbor);
+                 bool fill_center);
 
-  std::unique_ptr<LayerImpl> CreateLayerImpl(LayerTreeImpl* tree_impl) override;
-  void PushPropertiesTo(LayerImpl* layer) override;
+  const NinePatchGenerator& quad_generator() const { return quad_generator_; }
 
-  void AppendQuads(viz::CompositorRenderPass* render_pass,
+  mojom::LayerType GetLayerType() const override;
+  std::unique_ptr<LayerImpl> CreateLayerImpl(
+      LayerTreeImpl* tree_impl) const override;
+  void CopyPropertiesTo(LayerImpl* layer) const override;
+
+  void AppendQuads(const AppendQuadsContext& context,
+                   viz::CompositorRenderPass* render_pass,
                    AppendQuadsData* append_quads_data) override;
 
   void AsValueInto(base::trace_event::TracedValue* state) const override;
@@ -48,8 +53,6 @@ class CC_EXPORT NinePatchLayerImpl : public UIResourceLayerImpl {
   NinePatchLayerImpl(LayerTreeImpl* tree_impl, int id);
 
  private:
-  const char* LayerTypeAsString() const override;
-
   NinePatchGenerator quad_generator_;
 };
 

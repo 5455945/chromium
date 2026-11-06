@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,32 +14,36 @@ namespace extensions {
 
 TEST_F(ValueCounterTest, TestAddingSameValue) {
   ValueCounter vc;
-  base::ListValue value;
+  base::Value value(base::Value::Type::LIST);
   ASSERT_TRUE(vc.Add(value));
   ASSERT_FALSE(vc.Add(value));
 }
 
 TEST_F(ValueCounterTest, TestAddingDifferentValue) {
   ValueCounter vc;
-  base::ListValue value1;
-  base::DictionaryValue value2;
+  base::Value value1(base::Value::Type::LIST);
+  base::Value value2(base::Value::Type::DICT);
   ASSERT_TRUE(vc.Add(value1));
   ASSERT_TRUE(vc.Add(value2));
 }
 
 TEST_F(ValueCounterTest, TestRemovingSameValue) {
   ValueCounter vc;
-  base::ListValue value;
+  base::Value value(base::Value::Type::LIST);
   vc.Add(value);
   vc.Add(value);
+  EXPECT_EQ(2u, vc.total_count());
+  EXPECT_EQ(1u, vc.distinct_count());
   ASSERT_FALSE(vc.Remove(value));
+  EXPECT_EQ(1u, vc.total_count());
   ASSERT_TRUE(vc.Remove(value));
   ASSERT_FALSE(vc.Remove(value));
+  EXPECT_EQ(0u, vc.total_count());
 }
 
 TEST_F(ValueCounterTest, TestReAddingSameValue) {
   ValueCounter vc;
-  base::ListValue value;
+  base::Value value(base::Value::Type::LIST);
   ASSERT_FALSE(vc.Remove(value));
   ASSERT_TRUE(vc.Add(value));
   ASSERT_TRUE(vc.Remove(value));
@@ -50,8 +54,8 @@ TEST_F(ValueCounterTest, TestReAddingSameValue) {
 
 TEST_F(ValueCounterTest, TestIsEmpty) {
   ValueCounter vc;
-  base::ListValue value1;
-  base::DictionaryValue value2;
+  base::Value value1(base::Value::Type::LIST);
+  base::Value value2(base::Value::Type::DICT);
   ASSERT_TRUE(vc.is_empty());
   vc.Add(value1);
   ASSERT_FALSE(vc.is_empty());

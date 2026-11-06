@@ -37,8 +37,10 @@
 #include <cstdint>
 #include <istream>
 #include <limits>
+#include <ostream>
 #include <type_traits>
 
+#include "absl/base/config.h"
 #include "absl/meta/type_traits.h"
 #include "absl/random/internal/fast_uniform_bits.h"
 #include "absl/random/internal/generate_real.h"
@@ -73,12 +75,12 @@ class uniform_real_distribution {
         : lo_(lo), hi_(hi), range_(hi - lo) {
       // [rand.dist.uni.real] preconditions 2 & 3
       assert(lo <= hi);
+
       // NOTE: For integral types, we can promote the range to an unsigned type,
       // which gives full width of the range. However for real (fp) types, this
       // is not possible, so value generation cannot use the full range of the
       // real type.
       assert(range_ <= (std::numeric_limits<result_type>::max)());
-      assert(std::isfinite(range_));
     }
 
     result_type a() const { return lo_; }
@@ -96,7 +98,7 @@ class uniform_real_distribution {
     friend class uniform_real_distribution;
     result_type lo_, hi_, range_;
 
-    static_assert(std::is_floating_point<RealType>::value,
+    static_assert(std::is_floating_point_v<RealType>,
                   "Class-template absl::uniform_real_distribution<> must be "
                   "parameterized using a floating-point type.");
   };
@@ -157,7 +159,7 @@ uniform_real_distribution<RealType>::operator()(
   using random_internal::GeneratePositiveTag;
   using random_internal::GenerateRealFromBits;
   using real_type =
-      absl::conditional_t<std::is_same<RealType, float>::value, float, double>;
+      std::conditional_t<std::is_same_v<RealType, float>, float, double>;
 
   while (true) {
     const result_type sample =

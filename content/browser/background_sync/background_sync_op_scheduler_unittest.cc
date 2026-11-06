@@ -1,14 +1,15 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/background_sync/background_sync_op_scheduler.h"
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/scoped_feature_list.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -30,7 +31,7 @@ class TestTask {
   base::RunLoop& run_loop() { return run_loop_; }
 
  protected:
-  BackgroundSyncOpScheduler* scheduler_;
+  raw_ptr<BackgroundSyncOpScheduler> scheduler_;
   base::RunLoop run_loop_;
   int callback_count_;
 };
@@ -38,7 +39,8 @@ class TestTask {
 class TestScheduler : public BackgroundSyncOpScheduler {
  public:
   TestScheduler()
-      : BackgroundSyncOpScheduler(base::ThreadTaskRunnerHandle::Get()) {}
+      : BackgroundSyncOpScheduler(
+            base::SingleThreadTaskRunner::GetCurrentDefault()) {}
 
   void SetDoneStartingClosure(base::OnceClosure done_closure) {
     CHECK(!done_closure_);
@@ -48,8 +50,8 @@ class TestScheduler : public BackgroundSyncOpScheduler {
  protected:
   void DoneStartingAvailableOperations() override {
     if (done_closure_) {
-      base::ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE,
-                                                    std::move(done_closure_));
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, std::move(done_closure_));
     }
     BackgroundSyncOpScheduler::DoneStartingAvailableOperations();
   }

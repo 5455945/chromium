@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,35 +16,34 @@
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "content/public/browser/browser_context.h"
+#include "extensions/buildflags/buildflags.h"
+#include "google_apis/gaia/gaia_id.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
-IdentityGetAccountsFunction::IdentityGetAccountsFunction() {
-}
+IdentityGetAccountsFunction::IdentityGetAccountsFunction() = default;
 
-IdentityGetAccountsFunction::~IdentityGetAccountsFunction() {
-}
+IdentityGetAccountsFunction::~IdentityGetAccountsFunction() = default;
 
 ExtensionFunction::ResponseAction IdentityGetAccountsFunction::Run() {
   if (browser_context()->IsOffTheRecord()) {
     return RespondNow(Error(identity_constants::kOffTheRecord));
   }
 
+  Profile* profile = Profile::FromBrowserContext(browser_context());
+  IdentityAPI* identity_api = IdentityAPI::GetFactoryInstance()->Get(profile);
   std::vector<CoreAccountInfo> accounts =
-      IdentityManagerFactory::GetForProfile(
-          Profile::FromBrowserContext(browser_context()))
-          ->GetAccountsWithRefreshTokens();
-  std::unique_ptr<base::ListValue> infos(new base::ListValue());
+      identity_api->GetAccountsWithRefreshTokensForExtensions();
+  base::ListValue infos;
 
   if (accounts.empty()) {
-    return RespondNow(
-        OneArgument(base::Value::FromUniquePtrValue(std::move(infos))));
+    return RespondNow(WithArguments(std::move(infos)));
   }
 
-  Profile* profile = Profile::FromBrowserContext(browser_context());
-  bool primary_account_only = IdentityAPI::GetFactoryInstance()
-                                  ->Get(profile)
-                                  ->AreExtensionsRestrictedToPrimaryAccount();
+  bool primary_account_only =
+      identity_api->AreExtensionsRestrictedToPrimaryAccount();
 
   auto* identity_manager = IdentityManagerFactory::GetForProfile(profile);
   api::identity::AccountInfo account_info;
@@ -53,27 +52,27 @@ ExtensionFunction::ResponseAction IdentityGetAccountsFunction::Run() {
   // semantics isn't documented, the implementation has always ensured it and it
   // shouldn't be changed without determining that it is safe to do so.
   if (identity_manager->HasPrimaryAccountWithRefreshToken(
-          signin::ConsentLevel::kSync)) {
+          signin::ConsentLevel::kSignin)) {
     account_info.id =
-        identity_manager->GetPrimaryAccountInfo(signin::ConsentLevel::kSync)
-            .gaia;
-    infos->Append(account_info.ToValue());
+        identity_manager->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin)
+            .gaia.ToString();
+    infos.Append(base::Value(account_info.ToValue()));
   }
 
   // If secondary accounts are supported, add all the secondary accounts as
   // well.
   if (!primary_account_only) {
     for (const auto& account : accounts) {
-      if (account.account_id ==
-          identity_manager->GetPrimaryAccountId(signin::ConsentLevel::kSync))
+      if (account.account_id == identity_manager->GetPrimaryAccountId(
+                                    signin::ConsentLevel::kSignin)) {
         continue;
-      account_info.id = account.gaia;
-      infos->Append(account_info.ToValue());
+      }
+      account_info.id = account.gaia.ToString();
+      infos.Append(base::Value(account_info.ToValue()));
     }
   }
 
-  return RespondNow(
-      OneArgument(base::Value::FromUniquePtrValue(std::move(infos))));
+  return RespondNow(WithArguments(std::move(infos)));
 }
 
 }  // namespace extensions

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,9 @@
 #define CHROMECAST_BASE_STATISTICS_WEIGHTED_MOVING_LINEAR_REGRESSION_H_
 
 #include <stdint.h>
-#include <queue>
 
-#include "base/macros.h"
+#include <deque>
+
 #include "chromecast/base/statistics/weighted_mean.h"
 
 namespace chromecast {
@@ -31,6 +31,12 @@ class WeightedMovingLinearRegression {
   };
 
   explicit WeightedMovingLinearRegression(int64_t max_x_range);
+
+  WeightedMovingLinearRegression(const WeightedMovingLinearRegression&) =
+      delete;
+  WeightedMovingLinearRegression& operator=(
+      const WeightedMovingLinearRegression&) = delete;
+
   ~WeightedMovingLinearRegression();
 
   // Returns the current number of samples that are in the regression.
@@ -81,8 +87,6 @@ class WeightedMovingLinearRegression {
   double intercept_variance_ = 0.0;
 
   bool has_estimate_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(WeightedMovingLinearRegression);
 };
 
 }  // namespace chromecast

@@ -1,8 +1,10 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "cc/layers/tile_size_calculator.h"
+
+#include <algorithm>
 
 #include "cc/base/math_util.h"
 #include "cc/layers/picture_layer_impl.h"
@@ -35,6 +37,29 @@ gfx::Size ApplyDsfAdjustment(const gfx::Size& device_pixels_size, float dsf) {
   return content_size_in_dps;
 }
 
+gfx::Size AdjustGpuTileSize(int tile_width,
+                            int tile_height,
+                            const gfx::Size& max_tile_size,
+                            int min_height_for_gpu_raster_tile) {
+  // Grow default sizes to account for overlapping border texels.
+  tile_width += 2 * PictureLayerTiling::kBorderTexels;
+  tile_height += 2 * PictureLayerTiling::kBorderTexels;
+
+  // Round GPU default tile sizes to a multiple of |kGpuDefaultTileRoundUp|.
+  // This helps prevent rounding errors in our CA path. https://crbug.com/632274
+  tile_width = MathUtil::UncheckedRoundUp(tile_width, kGpuDefaultTileRoundUp);
+  tile_height = MathUtil::UncheckedRoundUp(tile_height, kGpuDefaultTileRoundUp);
+
+  tile_height = std::max(tile_height, min_height_for_gpu_raster_tile);
+
+  if (!max_tile_size.IsEmpty()) {
+    tile_width = std::min(tile_width, max_tile_size.width());
+    tile_height = std::min(tile_height, max_tile_size.height());
+  }
+
+  return gfx::Size(tile_width, tile_height);
+}
+
 // For GPU rasterization, we pick an ideal tile size using the viewport so we
 // don't need any settings. The current approach uses 4 tiles to cover the
 // viewport vertically.
@@ -54,46 +79,22 @@ gfx::Size CalculateGpuTileSize(const gfx::Size& base_tile_size,
   int tile_height =
       MathUtil::UncheckedRoundUp(base_tile_size.height(), divisor) / divisor;
 
-  // Grow default sizes to account for overlapping border texels.
-  tile_width += 2 * PictureLayerTiling::kBorderTexels;
-  tile_height += 2 * PictureLayerTiling::kBorderTexels;
-
-  // Round GPU default tile sizes to a multiple of kGpuDefaultTileAlignment.
-  // This helps prevent rounding errors in our CA path. https://crbug.com/632274
-  tile_width = MathUtil::UncheckedRoundUp(tile_width, kGpuDefaultTileRoundUp);
-  tile_height = MathUtil::UncheckedRoundUp(tile_height, kGpuDefaultTileRoundUp);
-
-  tile_height = std::max(tile_height, min_height_for_gpu_raster_tile);
-
-  if (!max_tile_size.IsEmpty()) {
-    tile_width = std::min(tile_width, max_tile_size.width());
-    tile_height = std::min(tile_height, max_tile_size.height());
-  }
-
-  return gfx::Size(tile_width, tile_height);
+  return AdjustGpuTileSize(tile_width, tile_height, max_tile_size,
+                           min_height_for_gpu_raster_tile);
 }
 
 }  // namespace
 
 // AffectingParams.
 bool TileSizeCalculator::AffectingParams::operator==(
-    const AffectingParams& other) {
-  return max_texture_size == other.max_texture_size &&
-         use_gpu_rasterization == other.use_gpu_rasterization &&
-         device_scale_factor == other.device_scale_factor &&
-         max_tile_size == other.max_tile_size &&
-         gpu_raster_max_texture_size == other.gpu_raster_max_texture_size &&
-         max_untiled_layer_size == other.max_untiled_layer_size &&
-         default_tile_size == other.default_tile_size &&
-         layer_content_bounds == other.layer_content_bounds;
-}
+    const AffectingParams& other) const = default;
 
 // TileSizeCalculator.
 TileSizeCalculator::TileSizeCalculator(PictureLayerImpl* layer_impl)
     : layer_impl_(layer_impl) {}
 
-bool TileSizeCalculator::IsAffectingParamsChanged() {
-  AffectingParams new_params = GetAffectingParams();
+bool TileSizeCalculator::UpdateAffectingParams(gfx::Size content_bounds) {
+  AffectingParams new_params = GetAffectingParams(content_bounds);
 
   if (affecting_params_ == new_params)
     return false;
@@ -102,11 +103,13 @@ bool TileSizeCalculator::IsAffectingParamsChanged() {
   return true;
 }
 
-TileSizeCalculator::AffectingParams TileSizeCalculator::GetAffectingParams() {
+TileSizeCalculator::AffectingParams TileSizeCalculator::GetAffectingParams(
+    gfx::Size content_bounds) const {
   AffectingParams params;
   LayerTreeImpl* layer_tree_impl = layer_impl()->layer_tree_impl();
   params.max_texture_size = layer_tree_impl->max_texture_size();
-  params.use_gpu_rasterization = layer_tree_impl->use_gpu_rasterization();
+  params.use_gpu_rasterization =
+      layer_tree_impl->raster_caps().use_gpu_rasterization;
   params.max_tile_size = layer_tree_impl->settings().max_gpu_raster_tile_size;
   params.min_height_for_gpu_raster_tile =
       layer_tree_impl->settings().min_height_for_gpu_raster_tile;
@@ -116,13 +119,11 @@ TileSizeCalculator::AffectingParams TileSizeCalculator::GetAffectingParams() {
   params.max_untiled_layer_size =
       layer_tree_impl->settings().max_untiled_layer_size;
   params.default_tile_size = layer_tree_impl->settings().default_tile_size;
-  params.layer_content_bounds = layer_impl()->content_bounds();
+  params.content_bounds = content_bounds;
   return params;
 }
 
-gfx::Size TileSizeCalculator::CalculateTileSize() {
-  gfx::Size content_bounds = layer_impl()->content_bounds();
-
+gfx::Size TileSizeCalculator::CalculateTileSize(gfx::Size content_bounds) {
   if (layer_impl()->is_backdrop_filter_mask()) {
     // Backdrop filter masks are not tiled, so if we can't cover the whole mask
     // with one tile, we shouldn't have such a tiling at all.
@@ -135,13 +136,14 @@ gfx::Size TileSizeCalculator::CalculateTileSize() {
 
   // If |affecting_params_| is already computed and not changed, return
   // pre-calculated tile size.
-  if (!IsAffectingParamsChanged())
+  if (!UpdateAffectingParams(content_bounds)) {
     return tile_size_;
+  }
 
   int default_tile_width = 0;
   int default_tile_height = 0;
   if (affecting_params_.use_gpu_rasterization) {
-    gfx::Size max_tile_size = affecting_params_.max_tile_size;
+    const gfx::Size& max_tile_size = affecting_params_.max_tile_size;
 
     // Calculate |base_tile_size| based on |gpu_raster_max_texture_size|,
     // adjusting for ceil operations that may occur due to DSF.
@@ -195,13 +197,13 @@ gfx::Size TileSizeCalculator::CalculateTileSize() {
 
   // Clamp the tile width/height to the content width/height to save space.
   if (content_bounds.width() < default_tile_width) {
-    tile_width = std::min(tile_width, content_bounds.width());
-    tile_width = MathUtil::UncheckedRoundUp(tile_width, kTileRoundUp);
+    tile_width =
+        MathUtil::UncheckedRoundUp(content_bounds.width(), kTileRoundUp);
     tile_width = std::min(tile_width, default_tile_width);
   }
   if (content_bounds.height() < default_tile_height) {
-    tile_height = std::min(tile_height, content_bounds.height());
-    tile_height = MathUtil::UncheckedRoundUp(tile_height, kTileRoundUp);
+    tile_height =
+        MathUtil::UncheckedRoundUp(content_bounds.height(), kTileRoundUp);
     tile_height = std::min(tile_height, default_tile_height);
   }
 

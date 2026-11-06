@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,24 +8,36 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/types/optional_ref.h"
+#include "base/types/pass_key.h"
 #include "components/download/public/common/download_interrupt_reasons.h"
 #include "components/download/public/common/download_save_info.h"
 #include "components/download/public/common/download_source.h"
 #include "net/base/isolation_info.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "net/url_request/referrer_policy.h"
+#include "services/network/public/cpp/permissions_policy/permissions_policy.h"
 #include "services/network/public/cpp/resource_request_body.h"
 #include "services/network/public/mojom/fetch_api.mojom-shared.h"
-#include "storage/browser/blob/blob_data_handle.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 #include "url/origin.h"
+
+namespace content {
+// `RenderFrameHostImpl` is a `//content`-internal type, but it's okay, because:
+// * This forward-declaration only leaks the name of the type
+// * This is needed for `PassKey`-based visibility delegation/restriction below
+class RenderFrameHostImpl;
+}  // namespace content
+
+namespace network {
+class PendingSharedURLLoaderFactory;
+}  // namespace network
 
 namespace download {
 
@@ -57,14 +69,11 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
   // are not created when a resource throttle or a resource handler blocks the
   // download request. I.e. the download triggered a warning of some sort and
   // the user chose to not to proceed with the download as a result.
-  typedef base::OnceCallback<void(DownloadItem*, DownloadInterruptReason)>
-      OnStartedCallback;
-
-  typedef std::pair<std::string, std::string> RequestHeadersNameValuePair;
-  typedef std::vector<RequestHeadersNameValuePair> RequestHeadersType;
-
-  using BlobStorageContextGetter =
-      base::OnceCallback<storage::BlobStorageContext*()>;
+  using OnStartedCallback =
+      base::OnceCallback<void(DownloadItem*, DownloadInterruptReason)>;
+  using RequestHeadersNameValuePair = std::pair<std::string, std::string>;
+  using RequestHeadersType = std::vector<RequestHeadersNameValuePair>;
+  using RangeRequestOffsets = std::pair<int64_t, int64_t>;
   using UploadProgressCallback =
       base::RepeatingCallback<void(uint64_t bytes_uploaded)>;
 
@@ -82,11 +91,18 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
       const GURL& url,
       const net::NetworkTrafficAnnotationTag& traffic_annotation);
 
+  // `base::PassKey` to shepherd potential callers to instead go through
+  // `content::RenderFrameHost::CreateDownloadUrlParameters`.
   DownloadUrlParameters(
+      base::PassKey<content::RenderFrameHostImpl>,
       const GURL& url,
+      std::optional<url::Origin> initiator,
       int render_process_host_id,
       int render_frame_host_routing_id,
       const net::NetworkTrafficAnnotationTag& traffic_annotation);
+
+  DownloadUrlParameters(const DownloadUrlParameters&) = delete;
+  DownloadUrlParameters& operator=(const DownloadUrlParameters&) = delete;
 
   ~DownloadUrlParameters();
 
@@ -111,9 +127,13 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
 
   // The origin of the context which initiated the request. See
   // net::URLRequest::initiator().
-  void set_initiator(const absl::optional<url::Origin>& initiator) {
-    initiator_ = initiator;
+  void set_initiator(std::optional<url::Origin> initiator) {
+    initiator_ = std::move(initiator);
   }
+
+  void set_url_loader_factory(
+      std::unique_ptr<network::PendingSharedURLLoaderFactory>
+          url_loader_factory);
 
   // If this is a request for resuming an HTTP/S download, |last_modified|
   // should be the value of the last seen Last-Modified response header.
@@ -131,14 +151,21 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
   // HTTP method to use.
   void set_method(const std::string& method) { method_ = method; }
 
+  // The requests' credentials mode.
+  void set_credentials_mode(
+      ::network::mojom::CredentialsMode credentials_mode) {
+    credentials_mode_ = credentials_mode;
+  }
+
+  // The requests' fetch request mode.
+  void set_fetch_request_mode(
+      ::network::mojom::RequestMode fetch_request_mode) {
+    fetch_request_mode_ = fetch_request_mode;
+  }
+
   // Body of the HTTP POST request.
   void set_post_body(scoped_refptr<network::ResourceRequestBody> post_body) {
     post_body_ = post_body;
-  }
-
-  // The blob storage context to be used for uploading blobs, if any.
-  void set_blob_storage_context_getter(BlobStorageContextGetter blob_getter) {
-    blob_storage_context_getter_ = std::move(blob_getter);
   }
 
   // If |prefer_cache| is true and the response to |url| is in the HTTP cache,
@@ -169,6 +196,14 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
     save_info_.suggested_name = suggested_name;
   }
 
+  // Sets the range request header offset. Can use -1 for open ended request.
+  // e.g, "bytes:100-".
+  // TODO(xingliu): Use net::HttpByteRange instead of two integer.
+  void set_range_request_offset(int64_t from, int64_t to) {
+    save_info_.range_request_from = from;
+    save_info_.range_request_to = to;
+  }
+
   // If |offset| is non-zero, then a byte range request will be issued to fetch
   // the range of bytes starting at |offset|.
   void set_offset(int64_t offset) { save_info_.offset = offset; }
@@ -191,7 +226,7 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
   // of the first |offset| bytes of the target file. In this case, the prefix
   // hash will be ignored since the |hash_state| is assumed to be correct if
   // provided.
-  void set_hash_state(std::unique_ptr<crypto::SecureHash> hash_state) {
+  void set_hash_state(std::optional<crypto::hash::Hasher> hash_state) {
     save_info_.hash_state = std::move(hash_state);
   }
 
@@ -260,23 +295,59 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
     isolation_info_ = isolation_info;
   }
 
+  void set_has_user_gesture(bool has_user_gesture) {
+    has_user_gesture_ = has_user_gesture;
+  }
+
+  void set_render_process_host_id(int render_process_host_id) {
+    render_process_host_id_ = render_process_host_id;
+  }
+
+  void set_update_first_party_url_on_redirect(
+      bool update_first_party_url_on_redirect) {
+    update_first_party_url_on_redirect_ = update_first_party_url_on_redirect;
+  }
+
+  void set_permissions_policy(
+      const base::optional_ref<const network::PermissionsPolicy>
+          permissions_policy) {
+    permissions_policy_ = permissions_policy.CopyAsOptional();
+  }
+
+  // When true, the Service Worker download interceptor (gated by
+  // features::kServiceWorkerInterceptDownloads) must not run for this request.
+  // Set on resumes of network-fetched downloads so the resume continues
+  // against the network factory rather than being intercepted by a SW that
+  // would return an unrelated full response.
+  void set_skip_service_worker_interception(bool skip) {
+    skip_service_worker_interception_ = skip;
+  }
+
   OnStartedCallback& callback() { return callback_; }
   bool content_initiated() const { return content_initiated_; }
   const std::string& last_modified() const { return last_modified_; }
   const std::string& etag() const { return etag_; }
   bool use_if_range() const { return use_if_range_; }
   const std::string& method() const { return method_; }
+  ::network::mojom::CredentialsMode credentials_mode() const {
+    return credentials_mode_;
+  }
+  ::network::mojom::RequestMode fetch_request_mode() const {
+    return fetch_request_mode_;
+  }
   scoped_refptr<network::ResourceRequestBody> post_body() { return post_body_; }
   int64_t post_id() const { return post_id_; }
   bool prefer_cache() const { return prefer_cache_; }
   const GURL& referrer() const { return referrer_; }
   net::ReferrerPolicy referrer_policy() const { return referrer_policy_; }
   const std::string& referrer_encoding() const { return referrer_encoding_; }
-  const absl::optional<url::Origin>& initiator() const { return initiator_; }
-  const std::string& request_origin() const { return request_origin_; }
-  BlobStorageContextGetter get_blob_storage_context_getter() {
-    return std::move(blob_storage_context_getter_);
+  const std::optional<url::Origin>& initiator() const { return initiator_; }
+  std::unique_ptr<network::PendingSharedURLLoaderFactory>
+  take_url_loader_factory();
+  network::PendingSharedURLLoaderFactory* url_loader_factory() {
+    return url_loader_factory_.get();
   }
+  const std::string& request_origin() const { return request_origin_; }
 
   // These will be -1 if the request is not associated with a frame. See
   // the constructors for more.
@@ -289,6 +360,10 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
   const base::FilePath& file_path() const { return save_info_.file_path; }
   const std::u16string& suggested_name() const {
     return save_info_.suggested_name;
+  }
+  RangeRequestOffsets range_request_offset() const {
+    return std::make_pair(save_info_.range_request_from,
+                          save_info_.range_request_to);
   }
   int64_t offset() const { return save_info_.offset; }
   const std::string& hash_of_partial_file() const {
@@ -305,13 +380,23 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
   bool is_transient() const { return transient_; }
   std::string guid() const { return guid_; }
   bool require_safety_checks() const { return require_safety_checks_; }
-  const absl::optional<net::IsolationInfo>& isolation_info() const {
+  const std::optional<net::IsolationInfo>& isolation_info() const {
     return isolation_info_;
+  }
+  bool has_user_gesture() const { return has_user_gesture_; }
+  bool update_first_party_url_on_redirect() const {
+    return update_first_party_url_on_redirect_;
+  }
+  std::optional<network::PermissionsPolicy> permissions_policy() const {
+    return permissions_policy_;
+  }
+  bool skip_service_worker_interception() const {
+    return skip_service_worker_interception_;
   }
 
   // STATE CHANGING: All save_info_ sub-objects will be in an indeterminate
   // state following this call.
-  DownloadSaveInfo GetSaveInfo() { return std::move(save_info_); }
+  DownloadSaveInfo TakeSaveInfo() { return std::move(save_info_); }
 
   const net::NetworkTrafficAnnotationTag& GetNetworkTrafficAnnotation() {
     return traffic_annotation_;
@@ -324,6 +409,13 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
   }
 
  private:
+  DownloadUrlParameters(
+      const GURL& url,
+      std::optional<url::Origin> initiator,
+      int render_process_host_id,
+      int render_frame_host_routing_id,
+      const net::NetworkTrafficAnnotationTag& traffic_annotation);
+
   OnStartedCallback callback_;
   bool content_initiated_;
   RequestHeadersType request_headers_;
@@ -331,13 +423,15 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
   std::string etag_;
   bool use_if_range_;
   std::string method_;
+  ::network::mojom::CredentialsMode credentials_mode_;
+  ::network::mojom::RequestMode fetch_request_mode_;
   scoped_refptr<network::ResourceRequestBody> post_body_;
-  BlobStorageContextGetter blob_storage_context_getter_;
   int64_t post_id_;
   bool prefer_cache_;
   GURL referrer_;
   net::ReferrerPolicy referrer_policy_;
-  absl::optional<url::Origin> initiator_;
+  std::optional<url::Origin> initiator_;
+  std::unique_ptr<network::PendingSharedURLLoaderFactory> url_loader_factory_;
   std::string referrer_encoding_;
   int render_process_host_id_;
   int render_frame_host_routing_id_;
@@ -353,9 +447,11 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadUrlParameters {
   DownloadSource download_source_;
   UploadProgressCallback upload_callback_;
   bool require_safety_checks_;
-  absl::optional<net::IsolationInfo> isolation_info_;
-
-  DISALLOW_COPY_AND_ASSIGN(DownloadUrlParameters);
+  std::optional<net::IsolationInfo> isolation_info_;
+  bool has_user_gesture_;
+  bool update_first_party_url_on_redirect_;
+  std::optional<network::PermissionsPolicy> permissions_policy_;
+  bool skip_service_worker_interception_;
 };
 
 }  // namespace download

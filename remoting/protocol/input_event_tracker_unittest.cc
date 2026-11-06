@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,12 +16,11 @@ using ::testing::_;
 using ::testing::ExpectationSet;
 using ::testing::InSequence;
 
-namespace remoting {
-namespace protocol {
+namespace remoting::protocol {
 
 using test::EqualsKeyEventWithCapsLock;
-using test::EqualsMouseEvent;
 using test::EqualsKeyEventWithoutLockStates;
+using test::EqualsMouseEvent;
 
 namespace {
 
@@ -29,8 +28,9 @@ static const MouseEvent::MouseButton BUTTON_LEFT = MouseEvent::BUTTON_LEFT;
 static const MouseEvent::MouseButton BUTTON_RIGHT = MouseEvent::BUTTON_RIGHT;
 
 MATCHER_P2(TouchPointIdsAndTypeEqual, ids, type, "") {
-  if (arg.event_type() != type)
+  if (arg.event_type() != type) {
     return false;
+  }
 
   std::set<uint32_t> touch_ids;
   for (const TouchEventPoint& point : arg.touch_points()) {
@@ -131,10 +131,12 @@ TEST(InputEventTrackerTest, ReleaseAllKeys) {
   }
 
   // The key should be released but |lock_states| should not be set.
-  EXPECT_CALL(mock_stub, InjectKeyEvent(EqualsKeyEventWithoutLockStates(
-                             3, false))).After(injects);
-  EXPECT_CALL(mock_stub, InjectMouseEvent(EqualsMouseEvent(
-                             1, 1, BUTTON_RIGHT, false))).After(injects);
+  EXPECT_CALL(mock_stub,
+              InjectKeyEvent(EqualsKeyEventWithoutLockStates(3, false)))
+      .After(injects);
+  EXPECT_CALL(mock_stub,
+              InjectMouseEvent(EqualsMouseEvent(1, 1, BUTTON_RIGHT, false)))
+      .After(injects);
 
   input_tracker.InjectKeyEvent(NewUsbEvent(3, true));
   PressAndReleaseUsb(&input_tracker, 1);
@@ -147,7 +149,7 @@ TEST(InputEventTrackerTest, ReleaseAllKeys) {
   EXPECT_FALSE(input_tracker.IsKeyPressed(static_cast<ui::DomCode>(1)));
   EXPECT_FALSE(input_tracker.IsKeyPressed(static_cast<ui::DomCode>(2)));
   EXPECT_TRUE(input_tracker.IsKeyPressed(static_cast<ui::DomCode>(3)));
-  EXPECT_EQ(1, input_tracker.PressedKeyCount());
+  EXPECT_EQ(input_tracker.PressedKeyCount(), 1);
 
   input_tracker.ReleaseAll();
 }
@@ -204,7 +206,7 @@ TEST(InputEventTrackerTest, TrackUsbKeyEvents) {
   EXPECT_TRUE(input_tracker.IsKeyPressed(static_cast<ui::DomCode>(5)));
   EXPECT_TRUE(input_tracker.IsKeyPressed(static_cast<ui::DomCode>(6)));
   EXPECT_TRUE(input_tracker.IsKeyPressed(static_cast<ui::DomCode>(7)));
-  EXPECT_EQ(4, input_tracker.PressedKeyCount());
+  EXPECT_EQ(input_tracker.PressedKeyCount(), 4);
 
   input_tracker.ReleaseAll();
 }
@@ -251,7 +253,7 @@ TEST(InputEventTrackerTest, InvalidEventsNotTracked) {
   EXPECT_FALSE(input_tracker.IsKeyPressed(static_cast<ui::DomCode>(1)));
   EXPECT_FALSE(input_tracker.IsKeyPressed(static_cast<ui::DomCode>(2)));
   EXPECT_TRUE(input_tracker.IsKeyPressed(static_cast<ui::DomCode>(3)));
-  EXPECT_EQ(1, input_tracker.PressedKeyCount());
+  EXPECT_EQ(input_tracker.PressedKeyCount(), 1);
 
   input_tracker.ReleaseAll();
 }
@@ -353,5 +355,4 @@ TEST(InputEventTrackerTest, ReleaseAllRemainingTouchPoints) {
   input_tracker.ReleaseAll();
 }
 
-}  // namespace protocol
-}  // namespace remoting
+}  // namespace remoting::protocol

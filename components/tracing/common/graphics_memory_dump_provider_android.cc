@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,13 +11,17 @@
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/un.h>
+#include <unistd.h>
 
+#include <string_view>
+
+#include "base/compiler_specific.h"
 #include "base/files/scoped_file.h"
 #include "base/logging.h"
+#include "base/memory/singleton.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_tokenizer.h"
 #include "base/trace_event/process_memory_dump.h"
 
@@ -40,8 +44,9 @@ bool GraphicsMemoryDumpProvider::OnMemoryDump(
     const base::trace_event::MemoryDumpArgs& args,
     base::trace_event::ProcessMemoryDump* pmd) {
   if (args.level_of_detail !=
-      base::trace_event::MemoryDumpLevelOfDetail::DETAILED)
+      base::trace_event::MemoryDumpLevelOfDetail::kDetailed) {
     return true;  // Dump on detailed memory dumps only.
+  }
 
   const char kAbstractSocketName[] = "chrome_tracing_memtrack_helper";
   struct sockaddr_un addr;
@@ -59,9 +64,10 @@ bool GraphicsMemoryDumpProvider::OnMemoryDump(
   setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
   // Connect to the UNIX abstract (i.e. no physical filesystem link) socket.
-  memset(&addr, 0, sizeof(addr));
+  UNSAFE_TODO(memset(&addr, 0, sizeof(addr)));
   addr.sun_family = AF_UNIX;
-  strncpy(&addr.sun_path[1], kAbstractSocketName, sizeof(addr.sun_path) - 2);
+  UNSAFE_TODO(strncpy(&addr.sun_path[1], kAbstractSocketName,
+                      sizeof(addr.sun_path) - 2));
 
   if (connect(sock, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr))) {
     LOG(WARNING) << "Could not connect to the memtrack_helper daemon. Please "
@@ -83,7 +89,8 @@ bool GraphicsMemoryDumpProvider::OnMemoryDump(
 
   // Send the trace(PID) request.
   char buf[4096];
-  const int buf_pid_len = snprintf(buf, sizeof(buf) - 1, "%d", getpid());
+  const int buf_pid_len =
+      UNSAFE_TODO(snprintf(buf, sizeof(buf) - 1, "%d", getpid()));
   if (HANDLE_EINTR(send(sock, buf, buf_pid_len + 1, 0)) <= 0)
     return false;
 
@@ -105,14 +112,15 @@ void GraphicsMemoryDumpProvider::ParseResponseAndAddToDump(
     const char* response,
     size_t length,
     base::trace_event::ProcessMemoryDump* pmd) {
-  base::CStringTokenizer tokenizer(response, response + length, " \n");
+  base::CStringTokenizer tokenizer(response, UNSAFE_TODO(response + length),
+                                   " \n");
   while (true) {
     if (!tokenizer.GetNext())
       break;
-    base::StringPiece row_name = tokenizer.token_piece();
+    std::string_view row_name = tokenizer.token_piece();
     if (!tokenizer.GetNext())
       break;
-    base::StringPiece value_str = tokenizer.token_piece();
+    std::string_view value_str = tokenizer.token_piece();
     int64_t value;
     if (!base::StringToInt64(value_str, &value) || value < 0)
       continue;  // Skip invalid or negative values.
@@ -138,8 +146,8 @@ void GraphicsMemoryDumpProvider::ParseResponseAndAddToDump(
   }
 }
 
-GraphicsMemoryDumpProvider::GraphicsMemoryDumpProvider() {}
+GraphicsMemoryDumpProvider::GraphicsMemoryDumpProvider() = default;
 
-GraphicsMemoryDumpProvider::~GraphicsMemoryDumpProvider() {}
+GraphicsMemoryDumpProvider::~GraphicsMemoryDumpProvider() = default;
 
 }  // namespace tracing

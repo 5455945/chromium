@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,7 +18,7 @@ struct AttributionGroup {
   explicit AttributionGroup(WebInputEventAttribution attribution)
       : attribution(attribution) {}
 
-  explicit AttributionGroup(WTF::HashTableDeletedValueType)
+  explicit AttributionGroup(HashTableDeletedValueType)
       : is_deleted_value(true) {}
 
   AttributionGroup() = default;
@@ -34,36 +34,17 @@ struct AttributionGroup {
   bool is_deleted_value = false;
 };
 
-struct AttributionGroupHash {
-  STATIC_ONLY(AttributionGroupHash);
-
-  static unsigned GetHash(const AttributionGroup& group) {
-    return group.attribution.GetHash();
-  }
-
-  static bool Equal(const AttributionGroup& a, const AttributionGroup& b) {
-    return a == b;
-  }
-
-  static const bool safe_to_compare_to_empty_or_deleted = true;
-};
-
 }  // namespace scheduler
-}  // namespace blink
-
-namespace WTF {
 
 template <>
-struct DefaultHash<blink::scheduler::AttributionGroup> {
-  using Hash = blink::scheduler::AttributionGroupHash;
-};
-
-template <>
-struct HashTraits<blink::scheduler::AttributionGroup>
-    : SimpleClassHashTraits<blink::scheduler::AttributionGroup> {
+struct HashTraits<scheduler::AttributionGroup>
+    : SimpleClassHashTraits<scheduler::AttributionGroup> {
+  static uint32_t GetHash(const scheduler::AttributionGroup& group) {
+    return static_cast<uint32_t>(group.attribution.GetHash());
+  }
   static const bool kEmptyValueIsZero = false;
 };
 
-}  // namespace WTF
+}  // namespace blink
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_SCHEDULER_MAIN_THREAD_ATTRIBUTION_GROUP_H_

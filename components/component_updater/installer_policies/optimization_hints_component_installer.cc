@@ -1,50 +1,51 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/component_updater/installer_policies/optimization_hints_component_installer.h"
 
+#include <stdint.h>
+
+#include <memory>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/path_service.h"
-#include "base/task/post_task.h"
+#include "base/values.h"
 #include "base/version.h"
 #include "components/component_updater/component_updater_paths.h"
-#include "components/optimization_guide/core/optimization_guide_constants.h"
+#include "components/optimization_guide/core/filters/optimization_hints_component_update_listener.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
-#include "components/optimization_guide/core/optimization_hints_component_update_listener.h"
-
-using component_updater::ComponentUpdateService;
 
 namespace component_updater {
 
 namespace {
 
-const char kDisableInstallerUpdate[] = "optimization-guide-disable-installer";
+constexpr char kDisableInstallerUpdate[] =
+    "optimization-guide-disable-installer";
+
+constexpr char kRulesetFormatVersionString[] = "1.0.0";
 
 // The extension id is: lmelglejhemejginpboagddgdfbepgmp
-const uint8_t kOptimizationHintsPublicKeySHA256[32] = {
+constexpr uint8_t kOptimizationHintsPublicKeySHA256[32] = {
     0xbc, 0x4b, 0x6b, 0x49, 0x74, 0xc4, 0x96, 0x8d, 0xf1, 0xe0, 0x63,
     0x36, 0x35, 0x14, 0xf6, 0xcf, 0x86, 0x92, 0xe6, 0x06, 0x03, 0x76,
     0x70, 0xaf, 0x8b, 0xd4, 0x47, 0x2c, 0x42, 0x59, 0x38, 0xef};
 
-const char kOptimizationHintsSetFetcherManifestName[] = "Optimization Hints";
+constexpr char kOptimizationHintsSetFetcherManifestName[] =
+    "Optimization Hints";
 
 }  // namespace
 
-// static
-const char
-    OptimizationHintsComponentInstallerPolicy::kManifestRulesetFormatKey[] =
-        "ruleset_format";
-
 OptimizationHintsComponentInstallerPolicy::
     OptimizationHintsComponentInstallerPolicy()
-    : ruleset_format_version_(
-          base::Version(optimization_guide::kRulesetFormatVersionString)) {
+    : ruleset_format_version_(base::Version(kRulesetFormatVersionString)) {
   DCHECK(ruleset_format_version_.IsValid());
 }
 
@@ -53,7 +54,7 @@ OptimizationHintsComponentInstallerPolicy::
 
 bool OptimizationHintsComponentInstallerPolicy::
     SupportsGroupPolicyEnabledComponentUpdates() const {
-  return false;
+  return true;
 }
 
 bool OptimizationHintsComponentInstallerPolicy::RequiresNetworkEncryption()
@@ -63,7 +64,7 @@ bool OptimizationHintsComponentInstallerPolicy::RequiresNetworkEncryption()
 
 update_client::CrxInstaller::Result
 OptimizationHintsComponentInstallerPolicy::OnCustomInstall(
-    const base::DictionaryValue& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) {
   return update_client::CrxInstaller::Result(0);  // Nothing custom here.
 }
@@ -73,35 +74,23 @@ void OptimizationHintsComponentInstallerPolicy::OnCustomUninstall() {}
 void OptimizationHintsComponentInstallerPolicy::ComponentReady(
     const base::Version& version,
     const base::FilePath& install_dir,
-    std::unique_ptr<base::DictionaryValue> manifest) {
+    base::DictValue manifest) {
   DCHECK(!install_dir.empty());
   DVLOG(1) << "Optimization Hints Version Ready: " << version.GetString();
-  std::string ruleset_format;
-  if (!manifest->GetString(kManifestRulesetFormatKey, &ruleset_format)) {
-    DVLOG(1) << "No ruleset_format present in manifest";
-    return;
-  }
-  base::Version ruleset_format_version = base::Version(ruleset_format);
-  if (!ruleset_format_version.IsValid() ||
-      ruleset_format_version.CompareTo(ruleset_format_version_) > 0) {
-    DVLOG(1) << "Got incompatible ruleset_format. Bailing out.";
-    return;
-  }
   optimization_guide::OptimizationHintsComponentUpdateListener*
       update_listener = optimization_guide::
           OptimizationHintsComponentUpdateListener::GetInstance();
   if (update_listener && !base::CommandLine::ForCurrentProcess()->HasSwitch(
                              kDisableInstallerUpdate)) {
     optimization_guide::HintsComponentInfo info(
-        version,
-        install_dir.Append(optimization_guide::kUnindexedHintsFileName));
+        version, install_dir.Append(kUnindexedHintsFileName));
     update_listener->MaybeUpdateHintsComponent(info);
   }
 }
 
 // Called during startup and installation before ComponentReady().
 bool OptimizationHintsComponentInstallerPolicy::VerifyInstallation(
-    const base::DictionaryValue& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) const {
   return base::PathExists(install_dir);
 }
@@ -116,8 +105,7 @@ void OptimizationHintsComponentInstallerPolicy::GetHash(
   if (!hash) {
     return;
   }
-  hash->assign(std::begin(kOptimizationHintsPublicKeySHA256),
-               std::end(kOptimizationHintsPublicKeySHA256));
+  hash->assign_range(kOptimizationHintsPublicKeySHA256);
 }
 
 std::string OptimizationHintsComponentInstallerPolicy::GetName() const {
@@ -130,8 +118,9 @@ OptimizationHintsComponentInstallerPolicy::GetInstallerAttributes() const {
 }
 
 void RegisterOptimizationHintsComponent(ComponentUpdateService* cus) {
-  if (!optimization_guide::features::IsOptimizationHintsEnabled())
+  if (!optimization_guide::features::IsOptimizationHintsEnabled()) {
     return;
+  }
 
   auto installer = base::MakeRefCounted<ComponentInstaller>(
       std::make_unique<OptimizationHintsComponentInstallerPolicy>());

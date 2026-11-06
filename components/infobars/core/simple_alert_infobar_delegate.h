@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include <string>
 
 #include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "components/infobars/core/confirm_infobar_delegate.h"
 
 namespace gfx {
@@ -22,25 +22,35 @@ class SimpleAlertInfoBarDelegate : public ConfirmInfoBarDelegate {
       const gfx::VectorIcon* vector_icon,
       const std::u16string& message,
       bool auto_expire,
-      bool should_animate);
+      bool should_animate,
+      bool closeable = true,
+      infobars::InfoBarDelegate::InfobarPriority infobar_priority =
+          infobars::InfoBarDelegate::InfobarPriority::kDefault);
+
+  SimpleAlertInfoBarDelegate(const SimpleAlertInfoBarDelegate&) = delete;
+  SimpleAlertInfoBarDelegate& operator=(const SimpleAlertInfoBarDelegate&) =
+      delete;
+
   ~SimpleAlertInfoBarDelegate() override;
 
  private:
   // ConfirmInfoBarDelegate:
   infobars::InfoBarDelegate::InfoBarIdentifier GetIdentifier() const override;
+  infobars::InfoBarDelegate::InfobarPriority GetPriority() const override;
   const gfx::VectorIcon& GetVectorIcon() const override;
   bool ShouldExpire(const NavigationDetails& details) const override;
   bool ShouldAnimate() const override;
   std::u16string GetMessageText() const override;
   int GetButtons() const override;
+  bool IsCloseable() const override;
 
   infobars::InfoBarDelegate::InfoBarIdentifier infobar_identifier_;
-  const gfx::VectorIcon* vector_icon_;
+  raw_ptr<const gfx::VectorIcon> vector_icon_;
   std::u16string message_;
   bool auto_expire_;  // Should it expire automatically on navigation?
   bool should_animate_;
-
-  DISALLOW_COPY_AND_ASSIGN(SimpleAlertInfoBarDelegate);
+  bool closeable_;
+  const infobars::InfoBarDelegate::InfobarPriority infobar_priority_;
 };
 
 #endif  // COMPONENTS_INFOBARS_CORE_SIMPLE_ALERT_INFOBAR_DELEGATE_H_

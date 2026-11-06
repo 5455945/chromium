@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,18 +10,16 @@
 
 #include <memory>
 
+#include "base/apple/foundation_util.h"
 #include "base/files/file_path.h"
-#include "base/guid.h"
-#include "base/mac/foundation_util.h"
 #include "base/strings/sys_string_conversions.h"
+#include "base/uuid.h"
 #include "components/bookmarks/browser/bookmark_node.h"
 #include "ui/base/clipboard/clipboard.h"
+#include "ui/base/clipboard/clipboard_constants.h"
 #include "ui/base/clipboard/clipboard_util_mac.h"
 
 namespace bookmarks {
-
-NSString* const kUTTypeChromiumBookmarkDictionaryList =
-    @"org.chromium.bookmark-dictionary-list";
 
 namespace {
 
@@ -35,6 +33,10 @@ NSString* const kChromiumBookmarkIdKey = @"ChromiumBookmarkId";
 
 // Internal bookmark meta info dictionary for a bookmark node.
 NSString* const kChromiumBookmarkMetaInfoKey = @"ChromiumBookmarkMetaInfo";
+
+// Maximum nesting depth for recursive bookmark operations. Matches the limit
+// in bookmark_node_data.cc for consistency across platforms.
+constexpr size_t kMaxBookmarkNestingDepth = 500;
 
 // Keys for the type of node in kUTTypeChromiumBookmarkDictionaryList.
 NSString* const kWebBookmarkTypeKey = @"WebBookmarkType";
@@ -51,8 +53,8 @@ BookmarkNode::MetaInfoMap MetaInfoMapFromDictionary(NSDictionary* dictionary) {
 
   [dictionary
       enumerateKeysAndObjectsUsingBlock:^(id key, id value, BOOL* stop) {
-        NSString* key_ns = base::mac::ObjCCast<NSString>(key);
-        NSString* value_ns = base::mac::ObjCCast<NSString>(value);
+        NSString* key_ns = base::apple::ObjCCast<NSString>(key);
+        NSString* value_ns = base::apple::ObjCCast<NSString>(value);
         if (key_ns && value_ns) {
           meta_info_map[base::SysNSStringToUTF8(key_ns)] =
               base::SysNSStringToUTF8(value_ns);
@@ -74,12 +76,15 @@ NSDictionary* DictionaryFromBookmarkMetaInfo(
   return dictionary;
 }
 
-void ConvertNSArrayToElements(
-    NSArray* input,
-    std::vector<BookmarkNodeData::Element>* elements) {
+bool ConvertNSArrayToElements(NSArray* input,
+                              std::vector<BookmarkNodeData::Element>* elements,
+                              size_t depth) {
+  if (depth >= kMaxBookmarkNestingDepth) {
+    return false;
+  }
   for (NSDictionary* bookmark_dict in input) {
     NSString* type =
-        base::mac::ObjCCast<NSString>(bookmark_dict[kWebBookmarkTypeKey]);
+        base::apple::ObjCCast<NSString>(bookmark_dict[kWebBookmarkTypeKey]);
     if (!type)
       continue;
 
@@ -88,26 +93,26 @@ void ConvertNSArrayToElements(
     GURL url = GURL();
     if (!is_folder) {
       NSString* url_string =
-          base::mac::ObjCCast<NSString>(bookmark_dict[kURLStringKey]);
+          base::apple::ObjCCast<NSString>(bookmark_dict[kURLStringKey]);
       if (!url_string)
         continue;
       url = GURL(base::SysNSStringToUTF8(url_string));
     }
 
     auto new_node = std::make_unique<BookmarkNode>(
-        /*id=*/0, base::GUID::GenerateRandomV4(), url);
+        /*id=*/0, base::Uuid::GenerateRandomV4(), url);
 
     NSNumber* node_id =
-        base::mac::ObjCCast<NSNumber>(bookmark_dict[kChromiumBookmarkIdKey]);
+        base::apple::ObjCCast<NSNumber>(bookmark_dict[kChromiumBookmarkIdKey]);
     if (node_id)
-      new_node->set_id([node_id longLongValue]);
+      new_node->set_id(node_id.longLongValue);
 
-    NSDictionary* meta_info = base::mac::ObjCCast<NSDictionary>(
+    NSDictionary* meta_info = base::apple::ObjCCast<NSDictionary>(
         bookmark_dict[kChromiumBookmarkMetaInfoKey]);
     if (meta_info)
       new_node->SetMetaInfoMap(MetaInfoMapFromDictionary(meta_info));
 
-    NSString* title = base::mac::ObjCCast<NSString>(bookmark_dict[kTitleKey]);
+    NSString* title = base::apple::ObjCCast<NSString>(bookmark_dict[kTitleKey]);
     new_node->SetTitle(base::SysNSStringToUTF16(title));
 
     BookmarkNodeData::Element e = BookmarkNodeData::Element(new_node.get());
@@ -118,40 +123,49 @@ void ConvertNSArrayToElements(
     e.date_added = base::Time();
     e.date_folder_modified = base::Time();
 
-    if (is_folder) {
-      ConvertNSArrayToElements(bookmark_dict[kChildrenKey], &e.children);
+    if (is_folder && !ConvertNSArrayToElements(bookmark_dict[kChildrenKey],
+                                               &e.children, depth + 1)) {
+      return false;
     }
 
     elements->push_back(e);
   }
-}
-
-bool ReadBookmarkDictionaryListType(
-    NSPasteboard* pb,
-    std::vector<BookmarkNodeData::Element>* elements) {
-  id bookmarks = [pb propertyListForType:kUTTypeChromiumBookmarkDictionaryList];
-  if (!bookmarks)
-    return false;
-  NSArray* bookmarks_array = base::mac::ObjCCast<NSArray>(bookmarks);
-  if (!bookmarks_array)
-    return false;
-
-  ConvertNSArrayToElements(bookmarks_array, elements);
   return true;
 }
 
-bool ReadWebURLsWithTitlesPboardType(
-    NSPasteboard* pb,
-    std::vector<BookmarkNodeData::Element>* elements) {
-  NSArray* urls = nil;
-  NSArray* titles = nil;
-  if (!ui::ClipboardUtil::URLsAndTitlesFromPasteboard(pb, &urls, &titles))
+bool ReadChromiumBookmarks(NSPasteboard* pb,
+                           std::vector<BookmarkNodeData::Element>* elements) {
+  id bookmarks =
+      [pb propertyListForType:ui::kUTTypeChromiumBookmarkDictionaryList];
+  if (!bookmarks)
     return false;
 
-  NSUInteger len = [titles count];
-  for (NSUInteger i = 0; i < len; ++i) {
-    std::u16string title = base::SysNSStringToUTF16(titles[i]);
-    std::string url = base::SysNSStringToUTF8(urls[i]);
+  NSArray* bookmarks_array = base::apple::ObjCCast<NSArray>(bookmarks);
+  if (!bookmarks_array)
+    return false;
+
+  std::vector<BookmarkNodeData::Element> tmp_elements;
+  if (!ConvertNSArrayToElements(bookmarks_array, &tmp_elements, 0)) {
+    return false;
+  }
+
+  elements->swap(tmp_elements);
+  return true;
+}
+
+bool ReadStandardBookmarks(NSPasteboard* pb,
+                           std::vector<BookmarkNodeData::Element>* elements) {
+  NSArray<URLAndTitle*>* urls_and_titles =
+      ui::clipboard_util::URLsAndTitlesFromPasteboard(pb,
+                                                      /*include_files=*/false);
+
+  if (!urls_and_titles.count) {
+    return false;
+  }
+
+  for (URLAndTitle* url_and_title in urls_and_titles) {
+    std::string url = base::SysNSStringToUTF8(url_and_title.URL);
+    std::u16string title = base::SysNSStringToUTF16(url_and_title.title);
     if (!url.empty()) {
       BookmarkNodeData::Element element;
       element.is_url = true;
@@ -163,8 +177,15 @@ bool ReadWebURLsWithTitlesPboardType(
   return true;
 }
 
+// Transforms a list of bookmark nodes into an `NSArray` of `NSDictionaries`
+// encoding them. Returns nil if the maximum nesting depth is exceeded.
 NSArray* GetNSArrayForBookmarkList(
-    const std::vector<BookmarkNodeData::Element>& elements) {
+    const std::vector<BookmarkNodeData::Element>& elements,
+    size_t depth) {
+  if (depth >= kMaxBookmarkNestingDepth) {
+    return nil;
+  }
+
   NSMutableArray* array = [NSMutableArray array];
   for (const auto& element : elements) {
     NSDictionary* meta_info =
@@ -183,7 +204,11 @@ NSArray* GetNSArrayForBookmarkList(
         kChromiumBookmarkMetaInfoKey : meta_info
       };
     } else {
-      NSArray* children = GetNSArrayForBookmarkList(element.children);
+      NSArray* children =
+          GetNSArrayForBookmarkList(element.children, depth + 1);
+      if (!children) {
+        return nil;
+      }
       object = @{
         kTitleKey : title,
         kChildrenKey : children,
@@ -197,72 +222,76 @@ NSArray* GetNSArrayForBookmarkList(
   return array;
 }
 
-void WriteBookmarkDictionaryListType(
-    NSPasteboardItem* item,
-    const std::vector<BookmarkNodeData::Element>& elements) {
-  NSArray* array = GetNSArrayForBookmarkList(elements);
-  [item setPropertyList:array forType:kUTTypeChromiumBookmarkDictionaryList];
-}
-
-void FillFlattenedArraysForBookmarks(
+void CollectUrlsAndTitlesOfBookmarks(
     const std::vector<BookmarkNodeData::Element>& elements,
     NSMutableArray* url_titles,
     NSMutableArray* urls,
-    NSMutableArray* toplevel_string_data) {
+    size_t depth) {
+  if (depth >= kMaxBookmarkNestingDepth) {
+    return;
+  }
   for (const auto& element : elements) {
     NSString* title = base::SysUTF16ToNSString(element.title);
     if (element.is_url) {
       NSString* url = base::SysUTF8ToNSString(element.url.spec());
       [url_titles addObject:title];
       [urls addObject:url];
-      if (toplevel_string_data)
-        [toplevel_string_data addObject:url];
     } else {
-      if (toplevel_string_data)
-        [toplevel_string_data addObject:title];
-      FillFlattenedArraysForBookmarks(element.children, url_titles, urls, nil);
+      CollectUrlsAndTitlesOfBookmarks(element.children, url_titles, urls,
+                                      depth + 1);
     }
   }
 }
 
-base::scoped_nsobject<NSPasteboardItem> WriteSimplifiedBookmarkTypes(
-    const std::vector<BookmarkNodeData::Element>& elements) {
-  NSMutableArray* url_titles = [NSMutableArray array];
-  NSMutableArray* urls = [NSMutableArray array];
-  NSMutableArray* toplevel_string_data = [NSMutableArray array];
-  FillFlattenedArraysForBookmarks(
-      elements, url_titles, urls, toplevel_string_data);
-
-  base::scoped_nsobject<NSPasteboardItem> item;
-  if ([urls count] > 0) {
-    if ([urls count] == 1) {
-      item = ui::ClipboardUtil::PasteboardItemFromUrl([urls firstObject],
-                                                      [url_titles firstObject]);
-    } else {
-      item = ui::ClipboardUtil::PasteboardItemFromUrls(urls, url_titles);
-    }
-  }
-
-  if (!item) {
-    item.reset([[NSPasteboardItem alloc] init]);
-  }
-
-  [item setString:[toplevel_string_data componentsJoinedByString:@"\n"]
-          forType:base::mac::CFToNSCast(kUTTypeUTF8PlainText)];
-  return item;
-}
-
-NSPasteboardItem* PasteboardItemFromBookmarks(
+// Generates a list of pasteboard items representing bookmarks. Returns nil if
+// the elements exceed the maximum nesting depth. Note that the special items
+// are included only on the first of the items.
+NSArray<NSPasteboardItem*>* PasteboardItemsFromBookmarks(
     const std::vector<BookmarkNodeData::Element>& elements,
     const base::FilePath& profile_path) {
-  base::scoped_nsobject<NSPasteboardItem> item =
-      WriteSimplifiedBookmarkTypes(elements);
+  // Bookmarks are encoded into pasteboard items in two ways:
+  //
+  // 1. As a flat array of pasteboard items, one for each of the bookmarks. This
+  //    loses the hierarchical information, but this makes the bookmark drags
+  //    interoperable with other applications on the system.
+  // 2. As a plist and path containing full information about everything.
+  //
+  // The OS pasteboard provides support for multiple items, so the array of
+  // items created as part of step 1 is set to be the items on the pasteboard.
+  // Blobs of data that are only useful to Chromium are added to the first item
+  // to go along for the ride.
 
-  WriteBookmarkDictionaryListType(item, elements);
+  // 1. The flat array of URLs for interoperability.
 
-  [item setString:base::SysUTF8ToNSString(profile_path.value())
-          forType:kUTTypeChromiumProfilePath];
-  return item.autorelease();
+  NSMutableArray* url_titles = [NSMutableArray array];
+  NSMutableArray* urls = [NSMutableArray array];
+  CollectUrlsAndTitlesOfBookmarks(elements, url_titles, urls, 0);
+
+  NSArray* bookmarks = GetNSArrayForBookmarkList(elements, 0);
+  if (!bookmarks) {
+    return nil;
+  }
+
+  NSArray<NSPasteboardItem*>* items =
+      ui::clipboard_util::PasteboardItemsFromUrls(urls, url_titles);
+
+  // 2. The plist and path for Chromium use.
+
+  if (!items.count) {
+    // There were no bookmark URLs encoded, therefore the elements being encoded
+    // consist of bookmark folders. The data for those folders will be contained
+    // in the Chromium-specific data, so make a single pasteboard item to hold
+    // it.
+    items = @[ [[NSPasteboardItem alloc] init] ];
+  }
+
+  [items.firstObject setPropertyList:bookmarks
+                             forType:ui::kUTTypeChromiumBookmarkDictionaryList];
+
+  [items.firstObject setString:base::SysUTF8ToNSString(profile_path.value())
+                       forType:kUTTypeChromiumProfilePath];
+
+  return items;
 }
 
 }  // namespace
@@ -270,13 +299,25 @@ NSPasteboardItem* PasteboardItemFromBookmarks(
 void WriteBookmarksToPasteboard(
     NSPasteboard* pb,
     const std::vector<BookmarkNodeData::Element>& elements,
-    const base::FilePath& profile_path) {
-  if (elements.empty())
+    const base::FilePath& profile_path,
+    bool is_off_the_record) {
+  if (elements.empty()) {
     return;
+  }
 
-  NSPasteboardItem* item = PasteboardItemFromBookmarks(elements, profile_path);
+  NSArray<NSPasteboardItem*>* items =
+      PasteboardItemsFromBookmarks(elements, profile_path);
+  // `items` is nil when the nesting depth is exceeded; nil.count returns 0.
+  if (!items.count) {
+    return;
+  }
+
   [pb clearContents];
-  [pb writeObjects:@[ item ]];
+  if (is_off_the_record) {
+    // Make the pasteboard content current host only.
+    [pb prepareForNewContentsWithOptions:NSPasteboardContentsCurrentHostOnly];
+  }
+  [pb writeObjects:items];
 }
 
 bool ReadBookmarksFromPasteboard(
@@ -286,14 +327,21 @@ bool ReadBookmarksFromPasteboard(
   elements->clear();
   NSString* profile = [pb stringForType:kUTTypeChromiumProfilePath];
   *profile_path = base::FilePath(base::SysNSStringToUTF8(profile));
-  return ReadBookmarkDictionaryListType(pb, elements) ||
-         ReadWebURLsWithTitlesPboardType(pb, elements);
+
+  // Corresponding to the two types of data written above in
+  // `PasteboardItemsFromBookmarks()`, first attempt to read the Chromium-only
+  // data that has more fidelity, and then fall back to reading standard URL
+  // types.
+
+  return ReadChromiumBookmarks(pb, elements) ||
+         ReadStandardBookmarks(pb, elements);
 }
 
 bool PasteboardContainsBookmarks(NSPasteboard* pb) {
   NSArray* availableTypes = @[
-    ui::ClipboardUtil::UTIForWebURLsAndTitles(),
-    kUTTypeChromiumBookmarkDictionaryList
+    ui::kUTTypeWebKitWebUrlsWithTitles,
+    ui::kUTTypeChromiumBookmarkDictionaryList,
+    NSPasteboardTypeURL,
   ];
   return [pb availableTypeFromArray:availableTypes] != nil;
 }

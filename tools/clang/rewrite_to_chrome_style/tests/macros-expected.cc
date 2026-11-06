@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -32,8 +32,10 @@ void F() {
   }
 }
 
-#define CALL_METHOD_FROM_MACRO()           \
-  void CallMethodFromMacro() { Method(); } \
+#define CALL_METHOD_FROM_MACRO() \
+  void CallMethodFromMacro() {   \
+    Method();                    \
+  }                              \
   void Pmethod() override {}
 
 struct WithMacroP {

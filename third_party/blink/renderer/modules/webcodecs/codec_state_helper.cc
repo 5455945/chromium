@@ -1,8 +1,10 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/webcodecs/codec_state_helper.h"
+
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 
 namespace blink {
 
@@ -15,7 +17,7 @@ bool ThrowIfCodecStateClosed(V8CodecState state,
 
   exception_state.ThrowDOMException(
       DOMExceptionCode::kInvalidStateError,
-      "Cannot call '" + operation + "' on a closed codec.");
+      StrCat({"Cannot call '", operation, "' on a closed codec."}));
   return true;
 }
 
@@ -28,7 +30,7 @@ bool ThrowIfCodecStateUnconfigured(V8CodecState state,
 
   exception_state.ThrowDOMException(
       DOMExceptionCode::kInvalidStateError,
-      "Cannot call '" + operation + "' on an unconfigured codec.");
+      StrCat({"Cannot call '", operation, "' on an unconfigured codec."}));
   return true;
 }
 

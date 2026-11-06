@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -31,7 +31,7 @@ class PLATFORM_EXPORT HyphenationMinikin final : public Hyphenation {
   // Extract the word to hyphenate by skipping leading and trailing spaces and
   // punctuations.
   static StringView WordToHyphenate(const StringView& text,
-                                    unsigned* num_leading_chars_out);
+                                    wtf_size_t* num_leading_chars_out);
 
   static AtomicString MapLocale(const AtomicString& locale);
 

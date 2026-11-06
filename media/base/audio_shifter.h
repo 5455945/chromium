@@ -1,4 +1,4 @@
-// Copyright (c) 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -59,9 +59,6 @@ class MEDIA_EXPORT AudioShifter {
                int channels);
   ~AudioShifter();
 
-  int sample_rate() const { return rate_; }
-  int channels() const { return channels_; }
-
   // Push Audio into the shifter. All inputs must have the same number of
   // channels, but bus size can vary. The playout time can be noisy and
   // does not have to line up perfectly with the number of samples pushed
@@ -81,7 +78,9 @@ class MEDIA_EXPORT AudioShifter {
   // calculate playout_time would be now + audio pipeline delay.
   void Pull(AudioBus* output, base::TimeTicks playout_time);
 
-private:
+  int frames_pushed_for_testing() { return frames_pushed_for_testing_; }
+
+ private:
   struct AudioQueueEntry {
     AudioQueueEntry(base::TimeTicks target_playout_time,
                     std::unique_ptr<AudioBus> audio);
@@ -112,7 +111,7 @@ private:
   bool running_;
 
   // Number of frames already consumed from |queue_|.
-  size_t position_;
+  size_t position_ = 0;
 
   // Queue of data provided to us.
   base::circular_deque<AudioQueueEntry> queue_;
@@ -121,7 +120,7 @@ private:
   base::TimeTicks previous_playout_time_;
 
   // Number of frames requested in last Pull call.
-  int previous_requested_samples_;
+  int previous_requested_samples_ = 0;
 
   // Timestamp at the end of last audio bus
   // consumed by resampler.
@@ -135,7 +134,9 @@ private:
   MultiChannelResampler resampler_;
 
   // Current resampler ratio.
-  double current_ratio_;
+  double current_ratio_ = 1.0;
+
+  int frames_pushed_for_testing_ = 0;
 };
 
 }  // namespace media

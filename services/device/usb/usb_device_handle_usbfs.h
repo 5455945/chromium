@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,21 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <optional>
 #include <vector>
 
+#include "base/files/file_descriptor_watcher_posix.h"
 #include "base/files/scoped_file.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
-#include "base/single_thread_task_runner.h"
+#include "base/memory/weak_ptr.h"
+#include "base/sequence_checker.h"
+#include "base/threading/sequence_bound.h"
 #include "services/device/usb/usb_device_handle.h"
+
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX)
+#include "base/containers/flat_set.h"
+#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX)
 
 struct usbdevfs_urb;
 
@@ -27,6 +36,8 @@ namespace device {
 // interface available on Linux, Chrome OS and Android.
 class UsbDeviceHandleUsbfs : public UsbDeviceHandle {
  public:
+  class BlockingTaskRunnerHelper;
+
   // Constructs a new device handle from an existing |device| and open file
   // descriptor to that device. |blocking_task_runner| must run tasks on a
   // thread that supports FileDescriptorWatcher.
@@ -34,7 +45,18 @@ class UsbDeviceHandleUsbfs : public UsbDeviceHandle {
       scoped_refptr<UsbDevice> device,
       base::ScopedFD fd,
       base::ScopedFD lifeline_fd,
+      const std::string& client_id,
       scoped_refptr<base::SequencedTaskRunner> blocking_task_runner);
+
+  // Takes a pre-constructed BlockingTaskRunnerHelper,
+  // it is used to inject a mock helper for testing
+  UsbDeviceHandleUsbfs(
+      scoped_refptr<UsbDevice> device,
+      base::ScopedFD fd,
+      base::ScopedFD lifeline_fd,
+      const std::string& client_id,
+      scoped_refptr<base::SequencedTaskRunner> blocking_task_runner,
+      std::unique_ptr<BlockingTaskRunnerHelper> helper);
 
   // UsbDeviceHandle implementation.
   scoped_refptr<UsbDevice> GetDevice() const override;
@@ -83,32 +105,54 @@ class UsbDeviceHandleUsbfs : public UsbDeviceHandle {
     return task_runner_;
   }
 
-  // Destroys |helper_| and releases ownership of |fd_| without closing it.
-  void ReleaseFileDescriptor();
+#if BUILDFLAG(IS_ANDROID)
+  // Releases ownership of |fd_| on the blocking task runner without closing it,
+  // then resets |helper_|. Used only on Android where the file descriptor is
+  // owned and closed by the Java UsbDeviceConnection object.
+  void ReleaseFileDescriptor(base::OnceClosure callback);
+#endif  // BUILDFLAG(IS_ANDROID)
 
-  // Destroys |helper_| and closes |fd_|. Override to call
-  // ReleaseFileDescriptor() if necessary.
-  virtual void CloseBlocking();
+  // Closes |fd_| and |lifeline_fd_| on the blocking task runner, then resets
+  // |helper_|. Used on Linux and ChromeOS. Subclasses (such as
+  // UsbDeviceHandleAndroid) override to call ReleaseFileDescriptor() instead.
+  virtual void FinishClose();
+
+  // Submits |urb| via USBDEVFS_SUBMITURB. Virtual for testing.
+  virtual int SubmitUrb(usbdevfs_urb* urb);
 
  private:
-  class BlockingTaskRunnerHelper;
+  friend class MockBlockingTaskRunnerHelper;
+
   struct Transfer;
   struct InterfaceInfo {
     uint8_t alternate_setting;
   };
   struct EndpointInfo {
     mojom::UsbTransferType type;
-    const mojom::UsbInterfaceInfo* interface;
+    raw_ptr<const mojom::UsbInterfaceInfo> interface;
   };
 
+  // Clears remaining |transfers_| after |helper_| has finished releasing or
+  // closing |fd_| on the blocking task runner.
+  void FinishCloseComplete();
+
   void SetConfigurationComplete(int configuration_value,
-                                bool success,
-                                ResultCallback callback);
+                                ResultCallback callback,
+                                bool success);
   void SetAlternateInterfaceSettingComplete(int interface_number,
                                             int alternate_setting,
-                                            bool success,
-                                            ResultCallback callback);
-  void ReleaseInterfaceComplete(int interface_number, ResultCallback callback);
+                                            ResultCallback callback,
+                                            bool success);
+  void DetachInterfaceComplete(int interface_number,
+                               ResultCallback callback,
+                               bool success);
+  void ReleaseInterfaceComplete(int interface_number,
+                                ResultCallback callback,
+                                bool success);
+  void ClaimInterfaceComplete(int interface_number,
+                              ResultCallback callback,
+                              bool success);
+  void ResetDeviceComplete(ResultCallback callback, bool success);
   void IsochronousTransferInternal(uint8_t endpoint_address,
                                    scoped_refptr<base::RefCountedBytes> buffer,
                                    size_t total_length,
@@ -129,10 +173,17 @@ class UsbDeviceHandleUsbfs : public UsbDeviceHandle {
   void DiscardUrbBlocking(Transfer* transfer);
   void UrbDiscarded(Transfer* transfer);
 
+  // Check if this interface claimed by this handler.
+  bool IsInterfaceClaimedByThis(int interface_number) const;
+
+  // Check if this interface claimed by any handler of this USB device.
+  bool IsInterfaceClaimedByAny(int interface_number) const;
+
   scoped_refptr<UsbDevice> device_;
-  int fd_;  // Copy of the base::ScopedFD held by |helper_| valid if |device_|.
+  int fd_;  // Copy of the base::ScopedFD held by |helper_|. Valid if |device_|.
+  std::optional<std::string>
+      client_id_;  // Client ID assigned by the Permission Broker.
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
-  scoped_refptr<base::SequencedTaskRunner> blocking_task_runner_;
 
   // Maps claimed interfaces by interface number to their current alternate
   // setting.
@@ -145,10 +196,78 @@ class UsbDeviceHandleUsbfs : public UsbDeviceHandle {
 
   // Helper object exists on the blocking task thread and all calls to it and
   // its destruction must be posted there.
-  std::unique_ptr<BlockingTaskRunnerHelper> helper_;
+  base::SequenceBound<std::unique_ptr<BlockingTaskRunnerHelper>> helper_;
 
   std::list<std::unique_ptr<Transfer>> transfers_;
-  base::SequenceChecker sequence_checker_;
+
+  SEQUENCE_CHECKER(sequence_checker_);
+
+  base::WeakPtrFactory<UsbDeviceHandleUsbfs> weak_factory_{this};
+};
+
+class UsbDeviceHandleUsbfs::BlockingTaskRunnerHelper {
+ public:
+  BlockingTaskRunnerHelper();
+
+  BlockingTaskRunnerHelper(const BlockingTaskRunnerHelper&) = delete;
+  BlockingTaskRunnerHelper& operator=(const BlockingTaskRunnerHelper&) = delete;
+
+  virtual ~BlockingTaskRunnerHelper();
+
+  virtual void Initialize(base::ScopedFD fd,
+                          base::ScopedFD lifeline_fd,
+                          base::WeakPtr<UsbDeviceHandleUsbfs> device_handle,
+                          scoped_refptr<base::SequencedTaskRunner> task_runner);
+
+#if BUILDFLAG(IS_ANDROID)
+  // Stops watching and releases ownership of |fd_| without closing it.
+  // Used only on Android where the file descriptor is owned and closed
+  // by the Java UsbDeviceConnection object via JNI.
+  void ReleaseFileDescriptor();
+#endif  // BUILDFLAG(IS_ANDROID)
+
+  // Stops watching and closes |fd_| and |lifeline_fd_|. Used on Linux and
+  // ChromeOS where Chromium owns and must close the file descriptors.
+  void CloseFileDescriptor();
+
+  bool SetConfiguration(int configuration_value);
+  virtual bool ClaimInterface(int interface_number);
+  virtual bool ReleaseInterface(int interface_number);
+  virtual bool SetInterface(int interface_number, int alternate_setting);
+  virtual bool ResetDevice();
+  bool ClearHalt(uint8_t endpoint_address);
+  virtual void DiscardUrb(Transfer* transfer);
+
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX)
+  // Detach the interface from a kernel driver before ClaimInterface
+  virtual bool DetachInterface(int interface_number,
+                               const CombinedInterfaceInfo& interfaceInfo,
+                               bool allow_unrestricted_detach);
+
+  // Reattach the interface to a kernel driver after ReleaseInterface
+  virtual bool ReattachInterface(int interface_number);
+#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX)
+
+ private:
+  // Called when |fd_| is writable without blocking.
+  void OnFileCanWriteWithoutBlocking();
+
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX)
+  // Called from |DetachInterface|.
+  std::string GetKernelDriver(int interface_number) const;
+#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX)
+
+  base::ScopedFD fd_;
+  base::ScopedFD lifeline_fd_;
+  base::WeakPtr<UsbDeviceHandleUsbfs> device_handle_;
+  scoped_refptr<base::SequencedTaskRunner> task_runner_;
+  std::unique_ptr<base::FileDescriptorWatcher::Controller> watch_controller_;
+  SEQUENCE_CHECKER(sequence_checker_);
+
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX)
+  // All interfaces that have been detached from kernel drivers
+  base::flat_set<int> detached_interfaces_;
+#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX)
 };
 
 }  // namespace device

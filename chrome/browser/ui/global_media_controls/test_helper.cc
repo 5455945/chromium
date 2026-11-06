@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,51 +7,53 @@
 #include <memory>
 #include <string>
 
-#include "chrome/browser/ui/global_media_controls/media_notification_service.h"
-#include "chrome/browser/ui/global_media_controls/overlay_media_notification.h"
+#include "content/public/browser/presentation_observer.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
-MockMediaNotificationItem::MockMediaNotificationItem() = default;
-MockMediaNotificationItem::~MockMediaNotificationItem() = default;
+MockWebContentsPresentationManager::MockWebContentsPresentationManager() =
+    default;
+MockWebContentsPresentationManager::~MockWebContentsPresentationManager() =
+    default;
 
-base::WeakPtr<MockMediaNotificationItem>
-MockMediaNotificationItem::GetWeakPtr() {
-  return weak_ptr_factory_.GetWeakPtr();
+bool MockWebContentsPresentationManager::HasDefaultPresentationRequest() const {
+  return default_presentation_request_.has_value();
 }
 
-MockMediaDialogDelegate::MockMediaDialogDelegate() = default;
-MockMediaDialogDelegate::~MockMediaDialogDelegate() {
-  Close();
+const content::PresentationRequest&
+MockWebContentsPresentationManager::GetDefaultPresentationRequest() const {
+  return *default_presentation_request_;
 }
 
-void MockMediaDialogDelegate::Open(MediaNotificationService* service) {
-  ASSERT_TRUE(service);
-  service_ = service;
-  service_->SetDialogDelegate(this);
+void MockWebContentsPresentationManager::SetDefaultPresentationRequest(
+    const content::PresentationRequest& request) {
+  default_presentation_request_ = request;
 }
 
-void MockMediaDialogDelegate::OpenForWebContents(
-    MediaNotificationService* service,
-    content::WebContents* content) {
-  ASSERT_TRUE(service);
-  service_ = service;
-  service_->SetDialogDelegateForWebContents(this, content);
+void MockWebContentsPresentationManager::NotifyDefaultPresentationChanged(
+    const content::PresentationRequest* request) {
+  for (auto& observer : observers_) {
+    observer.OnDefaultPresentationChanged(request);
+  }
 }
 
-void MockMediaDialogDelegate::Close() {
-  if (!service_)
-    return;
-
-  service_->SetDialogDelegate(nullptr);
-  service_ = nullptr;
+void MockWebContentsPresentationManager::NotifyMediaRoutesChanged(
+    const std::vector<media_router::MediaRoute>& routes) {
+  for (auto& observer : observers_) {
+    observer.OnPresentationsChanged(!routes.empty());
+  }
 }
 
-std::unique_ptr<OverlayMediaNotification> MockMediaDialogDelegate::PopOut(
-    const std::string& id,
-    gfx::Rect bounds) {
-  return std::unique_ptr<OverlayMediaNotification>(PopOutProxy(id, bounds));
+void MockWebContentsPresentationManager::AddObserver(
+    content::PresentationObserver* observer) {
+  observers_.AddObserver(observer);
 }
 
-void MockMediaDialogDelegate::HideMediaDialog() {
-  Close();
+void MockWebContentsPresentationManager::RemoveObserver(
+    content::PresentationObserver* observer) {
+  observers_.RemoveObserver(observer);
+}
+
+base::WeakPtr<WebContentsPresentationManager>
+MockWebContentsPresentationManager::GetWeakPtr() {
+  return weak_factory_.GetWeakPtr();
 }

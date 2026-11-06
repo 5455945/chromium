@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -71,6 +71,11 @@ TEST(VideoCaptureTypesTest, SuggestsConstraints) {
   ExpectEqualConstraints(
       SuggestedConstraints({gfx::Size(160, 90), gfx::Size(160, 90), true}),
       params.SuggestConstraints());
+}
+
+TEST(VideoCaptureTypesTest, VideoCaptureParams) {
+  VideoCaptureParams params;
+  EXPECT_FALSE(params.is_secure);
 }
 
 }  // namespace media

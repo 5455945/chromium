@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,13 @@
 #include "base/dcheck_is_on.h"
 
 #if DCHECK_IS_ON()
-// We can see logs with |--v=N| or |--vmodule=ResourceLoadingLog=N| where N is a
-// verbose level, as well as the |--enable-logging=stderr| CLI argument.
+// We can see logs with |--v=N| or |--vmodule=resource_loading_log=N| where N is
+// a verbose level, as well as the |--enable-logging=stderr| CLI argument.
+inline constexpr const char kResourceLoadingDVLOGPath[] = __FILE__;
 #define RESOURCE_LOADING_DVLOG(verbose_level) \
   LAZY_STREAM(                                \
       VLOG_STREAM(verbose_level),             \
-      ((verbose_level) <= ::logging::GetVlogLevel("ResourceLoadingLog.h")))
+      ((verbose_level) <= ::logging::GetVlogLevel(kResourceLoadingDVLOGPath)))
 #else
 #define RESOURCE_LOADING_DVLOG(verbose_level) EAT_STREAM_PARAMETERS
 #endif

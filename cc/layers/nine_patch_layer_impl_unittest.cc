@@ -1,6 +1,8 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "cc/layers/nine_patch_layer_impl.h"
 
 #include <stddef.h>
 
@@ -9,21 +11,23 @@
 #include <utility>
 
 #include "base/numerics/safe_conversions.h"
+#include "cc/layers/append_quads_context.h"
 #include "cc/layers/append_quads_data.h"
-#include "cc/layers/nine_patch_layer_impl.h"
+#include "cc/layers/draw_mode.h"
 #include "cc/resources/ui_resource_bitmap.h"
 #include "cc/resources/ui_resource_client.h"
 #include "cc/test/fake_impl_task_runner_provider.h"
 #include "cc/test/fake_layer_tree_frame_sink.h"
 #include "cc/test/fake_ui_resource_layer_tree_host_impl.h"
-#include "cc/test/geometry_test_utils.h"
 #include "cc/test/layer_tree_impl_test_base.h"
 #include "cc/trees/single_thread_proxy.h"
 #include "components/viz/common/quads/texture_draw_quad.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gfx/geometry/rect_conversions.h"
-#include "ui/gfx/transform.h"
+#include "ui/gfx/geometry/size.h"
+#include "ui/gfx/geometry/transform.h"
 
 namespace cc {
 namespace {
@@ -68,12 +72,14 @@ void NinePatchLayerLayoutTest(const gfx::Size& bitmap_size,
   host_impl.CreateUIResource(uid, bitmap);
   layer->SetUIResourceId(uid);
   layer->SetImageBounds(bitmap_size);
-  layer->SetLayout(aperture_rect, border, gfx::Rect(), fill_center, false);
+  layer->SetLayout(aperture_rect, border, gfx::Rect(), fill_center);
   host_impl.active_tree()->SetRootLayerForTesting(std::move(layer));
   UpdateDrawProperties(host_impl.active_tree());
 
   AppendQuadsData data;
-  host_impl.active_tree()->root_layer()->AppendQuads(render_pass.get(), &data);
+  host_impl.active_tree()->root_layer()->AppendQuads(
+      AppendQuadsContext{DRAW_MODE_HARDWARE, {}, false}, render_pass.get(),
+      &data);
 
   // Verify quad rects
   const auto& quads = render_pass->quad_list;
@@ -104,9 +110,7 @@ void NinePatchLayerLayoutTest(const gfx::Size& bitmap_size,
   for (auto* quad : quads) {
     const viz::TextureDrawQuad* tex_quad =
         viz::TextureDrawQuad::MaterialCast(quad);
-    gfx::RectF tex_rect =
-        gfx::BoundingRect(tex_quad->uv_top_left, tex_quad->uv_bottom_right);
-    tex_rect.Scale(bitmap_size.width(), bitmap_size.height());
+    gfx::RectF tex_rect = tex_quad->GetUnnormalizedTexCoords(bitmap_size);
     tex_remaining.Subtract(Region(ToRoundedIntRect(tex_rect)));
   }
 
@@ -180,12 +184,14 @@ void NinePatchLayerLayoutTestWithOcclusion(const gfx::Size& bitmap_size,
   host_impl.CreateUIResource(uid, bitmap);
   layer->SetUIResourceId(uid);
   layer->SetImageBounds(bitmap_size);
-  layer->SetLayout(aperture_rect, border, occlusion, false, false);
+  layer->SetLayout(aperture_rect, border, occlusion, false);
   host_impl.active_tree()->SetRootLayerForTesting(std::move(layer));
   UpdateDrawProperties(host_impl.active_tree());
 
   AppendQuadsData data;
-  host_impl.active_tree()->root_layer()->AppendQuads(render_pass.get(), &data);
+  host_impl.active_tree()->root_layer()->AppendQuads(
+      AppendQuadsContext{DRAW_MODE_HARDWARE, {}, false}, render_pass.get(),
+      &data);
 
   // Verify quad rects
   const auto& quads = render_pass->quad_list;
@@ -212,9 +218,7 @@ void NinePatchLayerLayoutTestWithOcclusion(const gfx::Size& bitmap_size,
   for (auto* quad : quads) {
     const viz::TextureDrawQuad* tex_quad =
         viz::TextureDrawQuad::MaterialCast(quad);
-    gfx::RectF tex_rect =
-        gfx::BoundingRect(tex_quad->uv_top_left, tex_quad->uv_bottom_right);
-    tex_rect.Scale(bitmap_size.width(), bitmap_size.height());
+    gfx::RectF tex_rect = tex_quad->GetUnnormalizedTexCoords(bitmap_size);
     tex_remaining.Subtract(Region(ToRoundedIntRect(tex_rect)));
   }
 
@@ -253,7 +257,7 @@ TEST(NinePatchLayerImplTest, VerifyDrawQuads) {
   aperture_rect = gfx::Rect(20, 30, 40, 50);
   border = gfx::Rect(20, 30, 40, 50);
   fill_center = true;
-  expected_quad_size = 9;
+  expected_quad_size = 3;
   NinePatchLayerLayoutTest(bitmap_size, aperture_rect, layer_size, border,
                            fill_center, expected_quad_size);
 }
@@ -361,7 +365,7 @@ TEST(NinePatchLayerImplTest, Occlusion) {
   impl.host_impl()->CreateUIResource(uid, bitmap);
 
   NinePatchLayerImpl* nine_patch_layer_impl =
-      impl.AddLayer<NinePatchLayerImpl>();
+      impl.AddLayerInActiveTree<NinePatchLayerImpl>();
   nine_patch_layer_impl->SetBounds(layer_size);
   nine_patch_layer_impl->SetDrawsContent(true);
   nine_patch_layer_impl->SetUIResourceId(uid);
@@ -370,7 +374,7 @@ TEST(NinePatchLayerImplTest, Occlusion) {
 
   gfx::Rect aperture = gfx::Rect(3, 3, 4, 4);
   gfx::Rect border = gfx::Rect(300, 300, 400, 400);
-  nine_patch_layer_impl->SetLayout(aperture, border, gfx::Rect(), true, false);
+  nine_patch_layer_impl->SetLayout(aperture, border, gfx::Rect(), true);
 
   impl.CalcDrawProps(viewport_size);
 
@@ -433,7 +437,7 @@ TEST(NinePatchLayerImplTest, OpaqueRect) {
   impl.host_impl()->CreateUIResource(uid_alpha, bitmap_alpha);
 
   NinePatchLayerImpl* nine_patch_layer_impl =
-      impl.AddLayer<NinePatchLayerImpl>();
+      impl.AddLayerInActiveTree<NinePatchLayerImpl>();
   nine_patch_layer_impl->SetBounds(layer_size);
   nine_patch_layer_impl->SetDrawsContent(true);
   CopyProperties(impl.root_layer(), nine_patch_layer_impl);
@@ -448,8 +452,7 @@ TEST(NinePatchLayerImplTest, OpaqueRect) {
 
     gfx::Rect aperture = gfx::Rect(3, 3, 4, 4);
     gfx::Rect border = gfx::Rect(300, 300, 400, 400);
-    nine_patch_layer_impl->SetLayout(aperture, border, gfx::Rect(), true,
-                                     false);
+    nine_patch_layer_impl->SetLayout(aperture, border, gfx::Rect(), true);
 
     impl.AppendQuadsWithOcclusion(nine_patch_layer_impl, gfx::Rect());
 

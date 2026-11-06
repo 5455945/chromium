@@ -1,6 +1,6 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
-# Copyright 2015 The Chromium Authors. All rights reserved.
+# Copyright 2015 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -14,10 +14,9 @@ import os
 import sys
 import threading
 
-import customtabs_benchmark
-
-_SRC_PATH = os.path.abspath(os.path.join(
-    os.path.dirname(__file__), '..', '..', '..', '..'))
+_SRC_PATH = os.path.abspath(
+  os.path.join(os.path.dirname(__file__), '..', '..', '..', '..')
+)
 
 sys.path.append(os.path.join(_SRC_PATH, 'third_party', 'catapult', 'devil'))
 from devil.android import device_utils
@@ -25,11 +24,25 @@ from devil.android import device_utils
 sys.path.append(os.path.join(_SRC_PATH, 'build', 'android'))
 import devil_chromium
 
+sys.path.append(
+  os.path.join(_SRC_PATH, 'tools', 'android', 'customtabs_benchmark', 'scripts')
+)
+import customtabs_benchmark
 
-_KEYS = ['url', 'warmup', 'skip_launcher_activity', 'speculation_mode',
-         'delay_to_may_launch_url', 'delay_to_launch_url', 'cold',
-         'pinning_benchmark', 'extra_brief_memory_mb', 'pin_filename',
-         'pin_offset', 'pin_length']
+_KEYS = [
+  'url',
+  'warmup',
+  'skip_launcher_activity',
+  'speculation_mode',
+  'delay_to_may_launch_url',
+  'delay_to_launch_url',
+  'cold',
+  'pinning_benchmark',
+  'extra_brief_memory_mb',
+  'pin_filename',
+  'pin_offset',
+  'pin_length',
+]
 
 
 def _ParseConfiguration(filename):
@@ -59,6 +72,15 @@ def _ParseConfiguration(filename):
     A list of configurations, where each value is specified.
   """
   config = json.load(open(filename, 'r'))
+
+  # Set defaults for optional keys.
+  config.setdefault('pinning_benchmark', False)
+  config.setdefault('pin_filename', '')
+  config.setdefault('pin_offset', -1)
+  config.setdefault('pin_length', -1)
+  config.setdefault('extra_brief_memory_mb', 0)
+  config.setdefault('delay_to_may_launch_url', -1)
+
   has_all_values = all(k in config for k in _KEYS)
   assert has_all_values
   config['url'] = str(config['url'])  # Intents don't like unicode.
@@ -77,15 +99,21 @@ def _ParseConfiguration(filename):
 
 
 def _CreateOptionParser():
-  parser = optparse.OptionParser(description='Loops tests on all attached '
-                                 'devices, with randomly selected '
-                                 'configurations, and outputs the results in '
-                                 'CSV files.')
+  parser = optparse.OptionParser(
+    description='Loops tests on all attached '
+    'devices, with randomly selected '
+    'configurations, and outputs the results in '
+    'CSV files.'
+  )
   parser.add_option('--config', help='JSON configuration file. Required.')
-  parser.add_option('--output_file_prefix', help='Output file prefix. Actual '
-                    'output file is prefix_<device ID>.csv', default='result')
-  parser.add_option('--once', help='Run only once.', default=False,
-                    action='store_true')
+  parser.add_option(
+    '--output_file_prefix',
+    help='Output file prefix. Actual output file is prefix_<device ID>.csv',
+    default='result',
+  )
+  parser.add_option(
+    '--once', help='Run only once.', default=False, action='store_true'
+  )
   parser.add_option('--adb_path', help='Path to ADB', default=None)
   return parser
 
@@ -103,16 +131,17 @@ def _Run(output_file_prefix, configs):
   for device in devices:
     output_filename = '%s_%s.csv' % (output_file_prefix, str(device))
     thread = threading.Thread(
-        target=customtabs_benchmark.LoopOnDevice,
-        args=(device, configs, output_filename),
-        kwargs={'should_stop': stop_event})
+      target=customtabs_benchmark.LoopOnDevice,
+      args=(device, configs, output_filename),
+      kwargs={'should_stop': stop_event},
+    )
     thread.start()
     threads.append(thread)
   while any(thread.is_alive() for thread in threads):
     try:
       for thread in threads:
         if thread.is_alive():
-          thread.join(1.)
+          thread.join(1.0)
     except KeyboardInterrupt as _:
       logging.warning('Stopping now.')
       stop_event.set()

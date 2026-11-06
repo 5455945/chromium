@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <string>
 
-#include "base/macros.h"
-#include "base/strings/string_piece.h"
 #include "media/base/media_export.h"
 
 namespace media {
@@ -35,6 +34,10 @@ class AudioBus;
 class MEDIA_EXPORT AudioHash {
  public:
   AudioHash();
+
+  AudioHash(const AudioHash&) = delete;
+  AudioHash& operator=(const AudioHash&) = delete;
+
   ~AudioHash();
 
   // Update current hash with the contents of the provided AudioBus.
@@ -52,13 +55,11 @@ class MEDIA_EXPORT AudioHash {
   // Storage for the audio hash.  The number of buckets controls the importance
   // of position in the hash.  A higher number reduces the chance of false
   // positives related to incorrect sample position.  Value chosen by dice roll.
-  float audio_hash_[6];
+  std::array<float, 6> audio_hash_;
 
   // The total number of samples processed per channel.  Uses a uint32_t instead
   // of size_t so overflows on 64-bit and 32-bit machines are equivalent.
   uint32_t sample_count_;
-
-  DISALLOW_COPY_AND_ASSIGN(AudioHash);
 };
 
 }  // namespace media

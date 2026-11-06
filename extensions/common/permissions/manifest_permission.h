@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,8 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
+#include "base/values.h"
 #include "extensions/common/permissions/api_permission_set.h"
-
-namespace base {
-class Value;
-}
 
 namespace extensions {
 
@@ -22,6 +18,10 @@ namespace extensions {
 class ManifestPermission {
  public:
   ManifestPermission();
+
+  ManifestPermission(const ManifestPermission&) = delete;
+  ManifestPermission& operator=(const ManifestPermission&) = delete;
+
   virtual ~ManifestPermission();
 
   // The manifest key this permission applies to.
@@ -35,25 +35,25 @@ class ManifestPermission {
   // for the app.
   virtual PermissionIDSet GetPermissions() const = 0;
 
-  // Parses the ManifestPermission from |value|. Returns false if error happens.
+  // Parses the ManifestPermission from `value`. Returns false if error happens.
   virtual bool FromValue(const base::Value* value) = 0;
 
-  // Stores this into a new created Value.
-  virtual std::unique_ptr<base::Value> ToValue() const = 0;
+  // Stores this into a Value.
+  virtual base::Value ToValue() const = 0;
 
   // Clones this.
   std::unique_ptr<ManifestPermission> Clone() const;
 
-  // Returns a new manifest permission which equals this - |rhs|.
+  // Returns a new manifest permission which equals this - `rhs`.
   virtual std::unique_ptr<ManifestPermission> Diff(
       const ManifestPermission* rhs) const = 0;
 
-  // Returns a new manifest permission which equals the union of this and |rhs|.
+  // Returns a new manifest permission which equals the union of this and `rhs`.
   virtual std::unique_ptr<ManifestPermission> Union(
       const ManifestPermission* rhs) const = 0;
 
   // Returns a new manifest permission which equals the intersect of this and
-  // |rhs|.
+  // `rhs`.
   virtual std::unique_ptr<ManifestPermission> Intersect(
       const ManifestPermission* rhs) const = 0;
 
@@ -67,14 +67,11 @@ class ManifestPermission {
   // privacy team before setting this function to return false.
   virtual bool RequiresManagedSessionFullLoginWarning() const;
 
-  // Returns true if |rhs| is a subset of this.
+  // Returns true if `rhs` is a subset of this.
   bool Contains(const ManifestPermission* rhs) const;
 
-  // Returns true if |rhs| is equal to this.
+  // Returns true if `rhs` is equal to this.
   bool Equal(const ManifestPermission* rhs) const;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ManifestPermission);
 };
 
 }  // namespace extensions

@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,21 +11,19 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/macros.h"
-#include "base/single_thread_task_runner.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/stringprintf.h"
 #include "base/synchronization/atomic_flag.h"
 #include "base/synchronization/waitable_event.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/threading/thread.h"
 #include "base/threading/thread_checker.h"
 #include "base/threading/thread_restrictions.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/trace_event/trace_event.h"
 #include "net/base/ip_address.h"
 #include "net/base/net_errors.h"
 #include "net/base/network_interfaces.h"
-#include "net/base/network_isolation_key.h"
 #include "net/base/trace_constants.h"
 #include "net/log/net_log_with_source.h"
 #include "net/proxy_resolution/proxy_info.h"
@@ -33,6 +31,7 @@
 #include "net/proxy_resolution/proxy_resolver_error_observer.h"
 #include "services/proxy_resolver/proxy_host_resolver.h"
 #include "services/proxy_resolver/proxy_resolver_v8.h"
+#include "url/gurl.h"
 
 // The intent of this class is explained in the design document:
 // https://docs.google.com/a/chromium.org/document/d/16Ij5OcVnR3s0MH4Z5XkhI9VTPoMJdaBn9rKreAmGOdE/edit
@@ -96,9 +95,9 @@ class Job : public base::RefCountedThreadSafe<Job>,
           worker_task_runner(worker_task_runner),
           num_outstanding_callbacks(num_outstanding_callbacks) {}
 
-    ProxyResolverV8* v8_resolver;
+    raw_ptr<ProxyResolverV8, DanglingUntriaged> v8_resolver;
     scoped_refptr<base::SingleThreadTaskRunner> worker_task_runner;
-    int* num_outstanding_callbacks;
+    raw_ptr<int> num_outstanding_callbacks;
   };
   // |params| is non-owned. It contains the parameters for this Job, and must
   // outlive it.
@@ -111,11 +110,9 @@ class Job : public base::RefCountedThreadSafe<Job>,
                              net::CompletionOnceCallback callback);
 
   // Called from origin thread.
-  void StartGetProxyForURL(
-      const GURL& url,
-      const net::NetworkIsolationKey& network_isolation_key,
-      net::ProxyInfo* results,
-      net::CompletionOnceCallback callback);
+  void StartGetProxyForURL(const GURL& url,
+                           net::ProxyInfo* results,
+                           net::CompletionOnceCallback callback);
 
   // Called from origin thread.
   void Cancel();
@@ -179,10 +176,9 @@ class Job : public base::RefCountedThreadSafe<Job>,
                              std::string* output,
                              bool* terminate);
 
-  bool PostDnsOperationAndWait(const std::string& host,
-                               net::ProxyResolveDnsOperation op,
-                               bool* completed_synchronously)
-      WARN_UNUSED_RESULT;
+  [[nodiscard]] bool PostDnsOperationAndWait(const std::string& host,
+                                             net::ProxyResolveDnsOperation op,
+                                             bool* completed_synchronously);
 
   void DoDnsOperation();
   void OnDnsOperationComplete(int result);
@@ -218,7 +214,7 @@ class Job : public base::RefCountedThreadSafe<Job>,
 
   // The Parameters for this Job.
   // Initialized on origin thread and then accessed from both threads.
-  const Params* const params_;
+  const raw_ptr<const Params, AcrossTasksDanglingUntriaged> params_;
 
   std::unique_ptr<ProxyResolverV8Tracing::Bindings> bindings_;
 
@@ -255,15 +251,16 @@ class Job : public base::RefCountedThreadSafe<Job>,
   // -------------------------------------------------------
 
   scoped_refptr<net::PacFileData> script_data_;
-  std::unique_ptr<ProxyResolverV8>* resolver_out_;
+  raw_ptr<std::unique_ptr<ProxyResolverV8>, AcrossTasksDanglingUntriaged>
+      resolver_out_;
 
   // -------------------------------------------------------
   // State specific to GET_PROXY_FOR_URL.
   // -------------------------------------------------------
 
-  net::ProxyInfo* user_results_;  // Owned by caller, lives on origin thread.
+  raw_ptr<net::ProxyInfo, AcrossTasksDanglingUntriaged>
+      user_results_;  // Owned by caller, lives on origin thread.
   GURL url_;
-  net::NetworkIsolationKey network_isolation_key_;
   net::ProxyInfo results_;
 
   // ---------------------------------------------------------------------------
@@ -313,11 +310,14 @@ class ProxyResolverV8TracingImpl : public ProxyResolverV8Tracing {
                              std::unique_ptr<ProxyResolverV8> resolver,
                              std::unique_ptr<Job::Params> job_params);
 
+  ProxyResolverV8TracingImpl(const ProxyResolverV8TracingImpl&) = delete;
+  ProxyResolverV8TracingImpl& operator=(const ProxyResolverV8TracingImpl&) =
+      delete;
+
   ~ProxyResolverV8TracingImpl() override;
 
   // ProxyResolverV8Tracing overrides.
   void GetProxyForURL(const GURL& url,
-                      const net::NetworkIsolationKey& network_isolation_key,
                       net::ProxyInfo* results,
                       net::CompletionOnceCallback callback,
                       std::unique_ptr<net::ProxyResolver::Request>* request,
@@ -344,13 +344,11 @@ class ProxyResolverV8TracingImpl : public ProxyResolverV8Tracing {
   int num_outstanding_callbacks_;
 
   THREAD_CHECKER(thread_checker_);
-
-  DISALLOW_COPY_AND_ASSIGN(ProxyResolverV8TracingImpl);
 };
 
 Job::Job(const Job::Params* params,
          std::unique_ptr<ProxyResolverV8Tracing::Bindings> bindings)
-    : origin_runner_(base::ThreadTaskRunnerHandle::Get()),
+    : origin_runner_(base::SingleThreadTaskRunner::GetCurrentDefault()),
       params_(params),
       bindings_(std::move(bindings)),
       event_(base::WaitableEvent::ResetPolicy::MANUAL,
@@ -365,13 +363,6 @@ void Job::StartCreateV8Resolver(
     net::CompletionOnceCallback callback) {
   CheckIsOnOriginThread();
 
-  // |network_isolation_key_| is not populated, so any resolutions done while
-  // loading the PAC sript will be done with an empty net::NetworkIsolationKey.
-  // Since a PAC script is considered trusted, and is loaded once and then
-  // handles requests made by multiple NetworkIsolationKeys, using an empty key
-  // makes sense.
-  DCHECK(network_isolation_key_.IsEmpty());
-
   resolver_out_ = resolver;
   script_data_ = script_data;
 
@@ -382,15 +373,12 @@ void Job::StartCreateV8Resolver(
   Start(CREATE_V8_RESOLVER, true /*blocking*/, std::move(callback));
 }
 
-void Job::StartGetProxyForURL(
-    const GURL& url,
-    const net::NetworkIsolationKey& network_isolation_key,
-    net::ProxyInfo* results,
-    net::CompletionOnceCallback callback) {
+void Job::StartGetProxyForURL(const GURL& url,
+                              net::ProxyInfo* results,
+                              net::CompletionOnceCallback callback) {
   CheckIsOnOriginThread();
 
   url_ = url;
-  network_isolation_key_ = network_isolation_key;
   user_results_ = results;
 
   Start(GET_PROXY_FOR_URL, false /*non-blocking*/, std::move(callback));
@@ -456,7 +444,9 @@ Job::~Job() {
 }
 
 void Job::CheckIsOnWorkerThread() const {
-  DCHECK(params_->worker_task_runner->BelongsToCurrentThread());
+  // A CHECK since worker-side state isn't synchronized, and other threads don't
+  // hold a reference to the Job, so could use it after it's freed.
+  CHECK(params_->worker_task_runner->BelongsToCurrentThread());
 }
 
 void Job::CheckIsOnOriginThread() const {
@@ -614,6 +604,8 @@ bool Job::ResolveDns(const std::string& host,
                      net::ProxyResolveDnsOperation op,
                      std::string* output,
                      bool* terminate) {
+  CheckIsOnWorkerThread();
+
   if (cancelled_.IsSet()) {
     *terminate = true;
     return false;
@@ -753,8 +745,7 @@ void Job::DoDnsOperation() {
       pending_dns_op_ == net::ProxyResolveDnsOperation::MY_IP_ADDRESS_EX;
   pending_dns_ = host_resolver()->CreateRequest(
       is_my_ip_request ? net::GetHostName() : pending_dns_host_,
-      pending_dns_op_,
-      is_my_ip_request ? net::NetworkIsolationKey() : network_isolation_key_);
+      pending_dns_op_);
   int result =
       pending_dns_->Start(base::BindOnce(&Job::OnDnsOperationComplete, this));
 
@@ -858,7 +849,7 @@ void Job::SaveDnsToLocalCache(const std::string& host,
 
 std::string Job::MakeDnsCacheKey(const std::string& host,
                                  net::ProxyResolveDnsOperation op) {
-  return base::StringPrintf("%d:%s", op, host.c_str());
+  return base::StringPrintf("%d:%s", static_cast<int>(op), host.c_str());
 }
 
 void Job::HandleAlertOrError(bool is_alert,
@@ -969,7 +960,6 @@ net::LoadState ProxyResolverV8TracingImpl::RequestImpl::GetLoadState() {
 
 void ProxyResolverV8TracingImpl::GetProxyForURL(
     const GURL& url,
-    const net::NetworkIsolationKey& network_isolation_key,
     net::ProxyInfo* results,
     net::CompletionOnceCallback callback,
     std::unique_ptr<net::ProxyResolver::Request>* request,
@@ -981,13 +971,18 @@ void ProxyResolverV8TracingImpl::GetProxyForURL(
 
   *request = std::make_unique<RequestImpl>(job);
 
-  job->StartGetProxyForURL(url, network_isolation_key, results,
-                           std::move(callback));
+  job->StartGetProxyForURL(url, results, std::move(callback));
 }
 
 class ProxyResolverV8TracingFactoryImpl : public ProxyResolverV8TracingFactory {
  public:
   ProxyResolverV8TracingFactoryImpl();
+
+  ProxyResolverV8TracingFactoryImpl(const ProxyResolverV8TracingFactoryImpl&) =
+      delete;
+  ProxyResolverV8TracingFactoryImpl& operator=(
+      const ProxyResolverV8TracingFactoryImpl&) = delete;
+
   ~ProxyResolverV8TracingFactoryImpl() override;
 
   void CreateProxyResolverV8Tracing(
@@ -1002,9 +997,7 @@ class ProxyResolverV8TracingFactoryImpl : public ProxyResolverV8TracingFactory {
 
   void RemoveJob(CreateJob* job);
 
-  std::set<CreateJob*> jobs_;
-
-  DISALLOW_COPY_AND_ASSIGN(ProxyResolverV8TracingFactoryImpl);
+  std::set<raw_ptr<CreateJob, SetExperimental>> jobs_;
 };
 
 class ProxyResolverV8TracingFactoryImpl::CreateJob
@@ -1021,9 +1014,7 @@ class ProxyResolverV8TracingFactoryImpl::CreateJob
         callback_(std::move(callback)),
         num_outstanding_callbacks_(0) {
     // Start up the thread.
-    base::Thread::Options options;
-    options.timer_slack = base::TIMER_SLACK_MAXIMUM;
-    CHECK(thread_->StartWithOptions(std::move(options)));
+    CHECK(thread_->Start());
     job_params_ = std::make_unique<Job::Params>(thread_->task_runner(),
                                                 &num_outstanding_callbacks_);
     create_resolver_job_ = new Job(job_params_.get(), std::move(bindings));
@@ -1033,6 +1024,9 @@ class ProxyResolverV8TracingFactoryImpl::CreateJob
             &ProxyResolverV8TracingFactoryImpl::CreateJob::OnV8ResolverCreated,
             base::Unretained(this)));
   }
+
+  CreateJob(const CreateJob&) = delete;
+  CreateJob& operator=(const CreateJob&) = delete;
 
   ~CreateJob() override {
     if (factory_) {
@@ -1074,23 +1068,21 @@ class ProxyResolverV8TracingFactoryImpl::CreateJob
     thread_.reset();
   }
 
-  ProxyResolverV8TracingFactoryImpl* factory_;
+  raw_ptr<ProxyResolverV8TracingFactoryImpl> factory_;
   std::unique_ptr<base::Thread> thread_;
   std::unique_ptr<Job::Params> job_params_;
   scoped_refptr<Job> create_resolver_job_;
   std::unique_ptr<ProxyResolverV8> v8_resolver_;
-  std::unique_ptr<ProxyResolverV8Tracing>* resolver_out_;
+  raw_ptr<std::unique_ptr<ProxyResolverV8Tracing>> resolver_out_;
   net::CompletionOnceCallback callback_;
   int num_outstanding_callbacks_;
-
-  DISALLOW_COPY_AND_ASSIGN(CreateJob);
 };
 
 ProxyResolverV8TracingFactoryImpl::ProxyResolverV8TracingFactoryImpl() =
     default;
 
 ProxyResolverV8TracingFactoryImpl::~ProxyResolverV8TracingFactoryImpl() {
-  for (auto* job : jobs_) {
+  for (CreateJob* job : jobs_) {
     job->FactoryDestroyed();
   }
 }

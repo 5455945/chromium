@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,14 @@
 
 #include <stddef.h>
 
+#include <optional>
 #include <string>
 
+#include "base/memory/raw_ptr.h"
 #include "components/omnibox/common/omnibox_focus_state.h"
 #include "components/security_state/core/security_state.h"
 #include "third_party/metrics_proto/omnibox_event.pb.h"
+#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 #include "url/gurl.h"
 
 namespace gfx {
@@ -23,7 +26,22 @@ struct VectorIcon;
 // account for the state of the omnibox, which is tracked by OmniboxEditModel.
 class LocationBarModel {
  public:
-  virtual ~LocationBarModel() = default;
+  DECLARE_USER_DATA(LocationBarModel);
+
+  template <typename T>
+  static LocationBarModel* From(T* window) {
+    return window ? Get(window->GetUnownedUserDataHost()) : nullptr;
+  }
+
+  template <typename T>
+  static const LocationBarModel* From(const T* window) {
+    return window ? Get(window->GetUnownedUserDataHost()) : nullptr;
+  }
+
+  LocationBarModel(const LocationBarModel&) = delete;
+  LocationBarModel& operator=(const LocationBarModel&) = delete;
+
+  virtual ~LocationBarModel();
 
   // Returns the formatted full URL for the toolbar. The formatting includes:
   //   - Some characters may be unescaped.
@@ -41,15 +59,28 @@ class LocationBarModel {
   // Returns the URL of the current navigation entry.
   virtual GURL GetURL() const = 0;
 
+  // Returns true if the current page is a contextual tasks UI page (i.e.
+  // chrome://contextual-tasks/).
+  virtual bool IsContextualTasksPage() const = 0;
+
+  // Returns the URL for the current contextual tasks page.
+  virtual GURL GetContextualTasksInnerFrameURL() const = 0;
+
   // Returns the security level that the toolbar should display.
   virtual security_state::SecurityLevel GetSecurityLevel() const = 0;
+
+  // Returns the cert status of the current navigation entry.
+  virtual net::CertStatus GetCertStatus() const = 0;
 
   // Classify the current page being viewed as, for example, the new tab
   // page or a normal web page.  Used for logging omnibox events for
   // UMA opted-in users.  Examines the user's profile to determine if the
   // current page is the user's home page.
   virtual metrics::OmniboxEventProto::PageClassification GetPageClassification(
-      OmniboxFocusSource focus_source) = 0;
+      bool is_prefetch = false) const = 0;
+
+  // Classify the current page for the omnibox composebox.
+  virtual metrics::OmniboxEventProto::PageClassification GetOmniboxComposeboxPageClassification() const = 0;
 
   // Returns the id of the icon to show to the left of the address, based on the
   // current URL.  When search term replacement is active, this returns a search
@@ -77,10 +108,15 @@ class LocationBarModel {
   virtual bool ShouldPreventElision() const = 0;
 
  protected:
-  LocationBarModel() = default;
+  LocationBarModel();
+  explicit LocationBarModel(ui::UnownedUserDataHost& host);
 
-  LocationBarModel(const LocationBarModel&) = delete;
-  LocationBarModel& operator=(const LocationBarModel&) = delete;
+ private:
+  raw_ptr<ui::UnownedUserDataHost> host_ = nullptr;
+  raw_ptr<LocationBarModel> previous_model_ = nullptr;
+  raw_ptr<LocationBarModel> next_model_ = nullptr;
+  std::optional<ui::ScopedUnownedUserData<LocationBarModel>>
+      scoped_unowned_user_data_;
 };
 
 #endif  // COMPONENTS_OMNIBOX_BROWSER_LOCATION_BAR_MODEL_H_

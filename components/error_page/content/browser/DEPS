@@ -5,10 +5,13 @@ include_rules = [
 ]
 
 specific_include_rules = {
-  ".*_browsertest\.cc": [
+  ".*_browsertest\\.cc": [
+    "+content/public/common/content_features.h",
     "+content/public/test",
     "+content/shell/browser/shell.h",
     "+content/shell/browser/shell_content_browser_client.h",
+    "+net/dns/mock_host_resolver.h",
+    "+net/test/embedded_test_server",
     "+services/network/test",
   ]
 }

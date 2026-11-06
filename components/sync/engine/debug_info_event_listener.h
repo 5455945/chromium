@@ -1,42 +1,46 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_SYNC_ENGINE_DEBUG_INFO_EVENT_LISTENER_H_
 #define COMPONENTS_SYNC_ENGINE_DEBUG_INFO_EVENT_LISTENER_H_
 
-#include <string>
-#include <vector>
-
 #include "base/containers/circular_deque.h"
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
-#include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
-#include "components/sync/base/model_type.h"
+#include "components/sync/base/data_type.h"
 #include "components/sync/engine/cycle/debug_info_getter.h"
 #include "components/sync/engine/cycle/sync_cycle_snapshot.h"
-#include "components/sync/engine/data_type_debug_info_listener.h"
 #include "components/sync/engine/sync_encryption_handler.h"
 #include "components/sync/engine/sync_manager.h"
-#include "components/sync/protocol/sync.pb.h"
+
+namespace sync_pb {
+class DebugEventInfo;
+class DebugInfo;
+enum SyncEnums_SingletonDebugEventType : int;
+}  // namespace sync_pb
 
 namespace syncer {
 
-// In order to track datatype association results, we need at least as many
-// entries as datatypes. Reserve additional space for other kinds of events that
-// are likely to happen during first sync or startup.
-const unsigned int kMaxEntries = GetNumModelTypes() + 10;
+class CustomPassphraseBootstrapToken;
+class RequiredPassphraseVerifier;
 
 // Listens to events and records them in a queue. And passes the events to
 // syncer when requested.
 // This class is not thread safe and should only be accessed on the sync thread.
 class DebugInfoEventListener : public SyncManager::Observer,
                                public SyncEncryptionHandler::Observer,
-                               public DebugInfoGetter,
-                               public DataTypeDebugInfoListener {
+                               public DebugInfoGetter {
  public:
+  // Keep a few more events than there are data types, to ensure that any
+  // data-type-specific events during first sync or startup aren't dropped.
+  static constexpr const size_t kMaxEvents = GetNumDataTypes() + 10;
+
   DebugInfoEventListener();
+
+  DebugInfoEventListener(const DebugInfoEventListener&) = delete;
+  DebugInfoEventListener& operator=(const DebugInfoEventListener&) = delete;
+
   ~DebugInfoEventListener() override;
 
   void InitializationComplete();
@@ -44,21 +48,21 @@ class DebugInfoEventListener : public SyncManager::Observer,
   // SyncManager::Observer implementation.
   void OnSyncCycleCompleted(const SyncCycleSnapshot& snapshot) override;
   void OnConnectionStatusChange(ConnectionStatus connection_status) override;
-  void OnActionableError(const SyncProtocolError& sync_error) override;
-  void OnMigrationRequested(ModelTypeSet types) override;
+  void OnActionableProtocolError(const SyncProtocolError& sync_error) override;
+  void OnMigrationRequested(DataTypeSet types) override;
   void OnProtocolEvent(const ProtocolEvent& event) override;
   void OnSyncStatusChanged(const SyncStatus& status) override;
 
   // SyncEncryptionHandler::Observer implementation.
   void OnPassphraseRequired(
-      const KeyDerivationParams& key_derivation_params,
-      const sync_pb::EncryptedData& pending_keys) override;
-  void OnPassphraseAccepted() override;
+      std::unique_ptr<RequiredPassphraseVerifier> verifier) override;
+  void OnPassphraseAccepted(
+      const CustomPassphraseBootstrapToken& bootstrap_token) override;
   void OnTrustedVaultKeyRequired() override;
   void OnTrustedVaultKeyAccepted() override;
-  void OnBootstrapTokenUpdated(const std::string& bootstrap_token,
-                               BootstrapTokenType type) override;
-  void OnEncryptedTypesChanged(ModelTypeSet encrypted_types,
+  void OnKeystoreKeysRequired() override;
+  void OnKeystoreKeysAccepted() override;
+  void OnEncryptedTypesChanged(DataTypeSet encrypted_types,
                                bool encrypt_everything) override;
   void OnCryptographerStateChanged(Cryptographer* cryptographer,
                                    bool has_pending_keys) override;
@@ -66,21 +70,13 @@ class DebugInfoEventListener : public SyncManager::Observer,
                                base::Time explicit_passphrase_time) override;
 
   // Sync manager events.
-  void OnNudgeFromDatatype(ModelType datatype);
+  void OnNudgeFromDatatype(DataType datatype);
 
   // DebugInfoGetter implementation.
   sync_pb::DebugInfo GetDebugInfo() const override;
 
   // DebugInfoGetter implementation.
   void ClearDebugInfo() override;
-
-  // DataTypeDebugInfoListener implementation.
-  void OnDataTypeConfigureComplete(
-      const std::vector<DataTypeConfigurationStats>& configuration_stats)
-      override;
-
-  // Returns a weak pointer to this object.
-  base::WeakPtr<DataTypeDebugInfoListener> GetWeakPtr();
 
  private:
   FRIEND_TEST_ALL_PREFIXES(DebugInfoEventListenerTest, VerifyEventsAdded);
@@ -89,27 +85,23 @@ class DebugInfoEventListener : public SyncManager::Observer,
   FRIEND_TEST_ALL_PREFIXES(DebugInfoEventListenerTest, VerifyClearEvents);
 
   void AddEventToQueue(const sync_pb::DebugEventInfo& event_info);
-  void CreateAndAddEvent(sync_pb::SyncEnums::SingletonDebugEventType type);
+  void CreateAndAddEvent(sync_pb::SyncEnums_SingletonDebugEventType type);
 
-  using DebugEventInfoQueue = base::circular_deque<sync_pb::DebugEventInfo>;
-  DebugEventInfoQueue events_;
+  // Stores the most recent events, up to some limit.
+  base::circular_deque<sync_pb::DebugEventInfo> events_;
 
-  // True indicates we had to drop one or more events to keep our limit of
-  // |kMaxEntries|.
-  bool events_dropped_;
+  // Indicates whether any events had to be dropped because there were more than
+  // the limit.
+  bool events_dropped_ = false;
 
   // Cryptographer has keys that are not yet decrypted.
-  bool cryptographer_has_pending_keys_;
+  bool cryptographer_has_pending_keys_ = false;
 
   // Cryptographer is able to encrypt data, which usually means it's initialized
   // and does not have pending keys.
-  bool cryptographer_can_encrypt_;
+  bool cryptographer_can_encrypt_ = false;
 
   SEQUENCE_CHECKER(sequence_checker_);
-
-  base::WeakPtrFactory<DebugInfoEventListener> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(DebugInfoEventListener);
 };
 
 }  // namespace syncer

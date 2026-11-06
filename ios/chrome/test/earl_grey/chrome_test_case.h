@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,10 +15,13 @@ namespace net {
 namespace test_server {
 class EmbeddedTestServer;
 }
-}
+}  // namespace net
 
 // Base class for all Chrome Earl Grey tests.
 @interface ChromeTestCase : BaseEarlGreyTestCase
+
+// Invoked upon the end of each test method in a test case.
+- (void)tearDownHelper NS_REQUIRES_SUPER;
 
 // Removes any UI elements that are present, to ensure it is in a clean state.
 + (void)removeAnyOpenMenusAndInfoBars;
@@ -47,12 +50,21 @@ class EmbeddedTestServer;
 // Turns mock authentication back on.
 - (void)enableMockAuthentication;
 
-// Returns YES if the test method name extracted from |selector| matches the
+// Returns YES if the test method name extracted from `selector` matches the
 // name of the currently running test method.
 - (BOOL)isRunningTest:(SEL)selector;
 
-// Configure the fixture for startup testing.
+// Forces reloading the current session by restarting the app. This restarts
+// the app with the same configuration as used by -setUp.
+- (void)triggerRestoreByRestartingApplication;
+
+// Deprecated no-op.
+// TODO(crbug.com/446122860): Remove once internal callers are removed.
 + (void)testForStartup;
+
+// Backgrounds then foregrounds the app safely.
+// Fixes a keyboard-related bug on iOS-18.
+- (void)backgroundAndForegroundApp;
 
 @end
 

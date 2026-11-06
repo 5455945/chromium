@@ -1,4 +1,4 @@
-// Copyright 2018 The Crashpad Authors. All rights reserved.
+// Copyright 2018 The Crashpad Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -39,6 +39,10 @@ uint64_t ThreadSnapshotSanitized::ThreadID() const {
   return snapshot_->ThreadID();
 }
 
+std::string ThreadSnapshotSanitized::ThreadName() const {
+  return snapshot_->ThreadName();
+}
+
 int ThreadSnapshotSanitized::SuspendCount() const {
   return snapshot_->SuspendCount();
 }
@@ -53,9 +57,8 @@ uint64_t ThreadSnapshotSanitized::ThreadSpecificDataAddress() const {
 
 std::vector<const MemorySnapshot*> ThreadSnapshotSanitized::ExtraMemory()
     const {
-  // TODO(jperaza): If/when ExtraMemory() is used, decide whether and how it
-  // should be sanitized.
-  DCHECK(snapshot_->ExtraMemory().empty());
+  // ExtraMemory() corresponds to memory pointed to by registers or the stack,
+  // which may contain sensitive data that has not been sanitized.
   return std::vector<const MemorySnapshot*>();
 }
 

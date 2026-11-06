@@ -1,138 +1,40 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/browser/api/declarative_net_request/file_sequence_helper.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <set>
 #include <utility>
+#include <vector>
 
-#include "base/barrier_closure.h"
-#include "base/bind.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/files/file_util.h"
-#include "base/memory/ref_counted.h"
+#include "base/files/important_file_writer.h"
+#include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
-#include "base/strings/string_number_conversions.h"
+#include "base/timer/elapsed_timer.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "extensions/browser/api/declarative_net_request/constants.h"
 #include "extensions/browser/api/declarative_net_request/parse_info.h"
-#include "extensions/browser/api/declarative_net_request/rules_count_pair.h"
+#include "extensions/browser/api/declarative_net_request/rule_counts.h"
 #include "extensions/browser/api/declarative_net_request/utils.h"
 #include "extensions/browser/extension_file_task_runner.h"
 #include "extensions/common/api/declarative_net_request.h"
 #include "extensions/common/error_utils.h"
-#include "services/data_decoder/public/cpp/data_decoder.h"
+#include "extensions/common/extension_features.h"
 
-namespace extensions {
-namespace declarative_net_request {
+namespace extensions::declarative_net_request {
 
 namespace {
 
 namespace dnr_api = extensions::api::declarative_net_request;
 
-// A class to help in re-indexing multiple rulesets.
-class ReindexHelper : public base::RefCountedThreadSafe<ReindexHelper> {
- public:
-  using ReindexCallback = base::OnceCallback<void(LoadRequestData)>;
-  ReindexHelper(LoadRequestData data, ReindexCallback callback)
-      : data_(std::move(data)), callback_(std::move(callback)) {}
-
-  // Starts re-indexing rulesets. Must be called on the extension file task
-  // runner.
-  void Start() {
-    DCHECK(GetExtensionFileTaskRunner()->RunsTasksInCurrentSequence());
-
-    std::vector<RulesetInfo*> rulesets_to_reindex;
-    for (auto& ruleset : data_.rulesets) {
-      if (ruleset.did_load_successfully())
-        continue;
-
-      rulesets_to_reindex.push_back(&ruleset);
-    }
-
-    // |done_closure| will be invoked once |barrier_closure| is run
-    // |rulesets_to_reindex.size()| times.
-    base::OnceClosure done_closure =
-        base::BindOnce(&ReindexHelper::OnAllRulesetsReindexed, this);
-    base::RepeatingClosure barrier_closure = base::BarrierClosure(
-        rulesets_to_reindex.size(), std::move(done_closure));
-
-    // Post tasks to reindex individual rulesets.
-    for (RulesetInfo* ruleset : rulesets_to_reindex) {
-      auto callback = base::BindOnce(&ReindexHelper::OnReindexCompleted, this,
-                                     ruleset, barrier_closure);
-      ruleset->source().IndexAndPersistJSONRuleset(&decoder_,
-                                                   std::move(callback));
-    }
-  }
-
- private:
-  friend class base::RefCountedThreadSafe<ReindexHelper>;
-  ~ReindexHelper() = default;
-
-  // Callback invoked when reindexing of all rulesets is completed.
-  void OnAllRulesetsReindexed() {
-    DCHECK(GetExtensionFileTaskRunner()->RunsTasksInCurrentSequence());
-
-    // Our job is done.
-    std::move(callback_).Run(std::move(data_));
-  }
-
-  // Callback invoked when a single ruleset is re-indexed.
-  void OnReindexCompleted(RulesetInfo* ruleset,
-                          base::OnceClosure done_closure,
-                          IndexAndPersistJSONRulesetResult result) {
-    using IndexStatus = IndexAndPersistJSONRulesetResult::Status;
-    DCHECK(ruleset);
-
-    // The checksum of the reindexed ruleset should have been the same as the
-    // expected checksum obtained from prefs, in all cases except when the
-    // ruleset version changes. If this is not the case, then there is some
-    // other issue (like the JSON rules file has been modified from the one used
-    // during installation or preferences are corrupted). But taking care of
-    // these is beyond our scope here, so simply signal a failure.
-    bool reindexing_success =
-        result.status == IndexStatus::kSuccess &&
-        ruleset->expected_checksum() == result.ruleset_checksum;
-
-    // In case of updates to the ruleset version, the change of ruleset checksum
-    // is expected.
-    if (result.status == IndexStatus::kSuccess &&
-        ruleset->load_ruleset_result() ==
-            LoadRulesetResult::kErrorVersionMismatch) {
-      ruleset->set_new_checksum(result.ruleset_checksum);
-
-      // Also change the |expected_checksum| so that any subsequent load
-      // succeeds.
-      ruleset->set_expected_checksum(result.ruleset_checksum);
-      reindexing_success = true;
-    }
-
-    ruleset->set_reindexing_successful(reindexing_success);
-
-    UMA_HISTOGRAM_BOOLEAN(
-        "Extensions.DeclarativeNetRequest.RulesetReindexSuccessful",
-        reindexing_success);
-
-    std::move(done_closure).Run();
-  }
-
-  LoadRequestData data_;
-  ReindexCallback callback_;
-
-  // We use a single shared Data Decoder service instance to process all of the
-  // rulesets for this ReindexHelper.
-  data_decoder::DataDecoder decoder_;
-
-  DISALLOW_COPY_AND_ASSIGN(ReindexHelper);
-};
 
 UpdateDynamicRulesStatus GetUpdateDynamicRuleStatus(LoadRulesetResult result) {
   switch (result) {
@@ -150,10 +52,12 @@ UpdateDynamicRulesStatus GetUpdateDynamicRuleStatus(LoadRulesetResult result) {
       // Updating dynamic rules shouldn't require looking up checksum from
       // prefs.
       break;
+    case LoadRulesetResult::kErrorRulesetFileSizeLimitExceeded:
+      return UpdateDynamicRulesStatus::
+          kErrorCreateMatcher_RulesetFileSizeLimitExceeded;
   }
 
   NOTREACHED();
-  return UpdateDynamicRulesStatus::kSuccess;
 }
 
 // Helper to create the new list of dynamic rules. Returns false on failure and
@@ -161,7 +65,7 @@ UpdateDynamicRulesStatus GetUpdateDynamicRuleStatus(LoadRulesetResult result) {
 bool GetNewDynamicRules(const FileBackedRulesetSource& source,
                         std::vector<int> rule_ids_to_remove,
                         std::vector<dnr_api::Rule> rules_to_add,
-                        const RulesCountPair& rule_limit,
+                        const RuleCounts& rule_limit,
                         std::vector<dnr_api::Rule>* new_rules,
                         std::string* error,
                         UpdateDynamicRulesStatus* status) {
@@ -171,7 +75,7 @@ bool GetNewDynamicRules(const FileBackedRulesetSource& source,
 
   // Read the current set of rules. Note: this is trusted JSON and hence it is
   // ok to parse in the browser itself.
-  ReadJSONRulesResult result = source.ReadJSONRulesUnsafe();
+  ReadJSONRulesResult result = source.ReadJSONRules();
   LogReadDynamicRulesStatus(result.status);
   DCHECK(result.status == ReadJSONRulesResult::Status::kSuccess ||
          result.rules.empty());
@@ -183,7 +87,9 @@ bool GetNewDynamicRules(const FileBackedRulesetSource& source,
   // - kFileReadError: Throw an internal error.
   // - kJSONParseError, kJSONIsNotList: These denote JSON ruleset corruption.
   //   Assume the current set of rules is empty.
-  if (result.status == ReadJSONRulesResult::Status::kFileReadError) {
+  if (result.status == ReadJSONRulesResult::Status::kFileReadError ||
+      result.status ==
+          ReadJSONRulesResult::Status::kRulesetFileSizeLimitExceeded) {
     *status = UpdateDynamicRulesStatus::kErrorReadJSONRules;
     *error = kInternalErrorUpdatingDynamicRules;
     return false;
@@ -193,8 +99,8 @@ bool GetNewDynamicRules(const FileBackedRulesetSource& source,
 
   // Remove old rules
   std::set<int> ids_to_remove(rule_ids_to_remove.begin(), rule_ids_to_remove.end());
-  base::EraseIf(*new_rules, [&ids_to_remove](const dnr_api::Rule& rule) {
-    return base::Contains(ids_to_remove, rule.id);
+  std::erase_if(*new_rules, [&ids_to_remove](const dnr_api::Rule& rule) {
+    return ids_to_remove.contains(rule.id);
   });
 
   // Add new rules
@@ -208,8 +114,20 @@ bool GetNewDynamicRules(const FileBackedRulesetSource& source,
     return false;
   }
 
-  size_t regex_rule_count = std::count_if(
-      new_rules->begin(), new_rules->end(),
+  if (base::FeatureList::IsEnabled(
+          extensions_features::kDeclarativeNetRequestSafeRuleLimits)) {
+    size_t unsafe_rule_count = std::ranges::count_if(
+        *new_rules,
+        [](const dnr_api::Rule& rule) { return !IsRuleSafe(rule); });
+    if (unsafe_rule_count > rule_limit.unsafe_rule_count) {
+      *status = UpdateDynamicRulesStatus::kErrorUnsafeRuleCountExceeded;
+      *error = kDynamicUnsafeRuleCountExceeded;
+      return false;
+    }
+  }
+
+  size_t regex_rule_count = std::ranges::count_if(
+      *new_rules,
       [](const dnr_api::Rule& rule) { return !!rule.condition.regex_filter; });
   if (regex_rule_count > rule_limit.regex_rule_count) {
     *status = UpdateDynamicRulesStatus::kErrorRegexRuleCountExceeded;
@@ -225,7 +143,7 @@ bool GetNewDynamicRules(const FileBackedRulesetSource& source,
 bool UpdateAndIndexDynamicRules(const FileBackedRulesetSource& source,
                                 std::vector<int> rule_ids_to_remove,
                                 std::vector<dnr_api::Rule> rules_to_add,
-                                const RulesCountPair& rule_limit,
+                                const RuleCounts& rule_limit,
                                 int* ruleset_checksum,
                                 std::string* error,
                                 UpdateDynamicRulesStatus* status) {
@@ -233,9 +151,14 @@ bool UpdateAndIndexDynamicRules(const FileBackedRulesetSource& source,
   DCHECK(error);
   DCHECK(status);
 
+  // Dynamic JSON and indexed rulesets for an extension are stored in the same
+  // directory.
+  DCHECK_EQ(source.indexed_path().DirName(), source.json_path().DirName());
+
   std::set<int> rule_ids_to_add;
-  for (const dnr_api::Rule& rule : rules_to_add)
+  for (const dnr_api::Rule& rule : rules_to_add) {
     rule_ids_to_add.insert(rule.id);
+  }
 
   std::vector<dnr_api::Rule> new_rules;
   if (!GetNewDynamicRules(source, std::move(rule_ids_to_remove),
@@ -244,90 +167,161 @@ bool UpdateAndIndexDynamicRules(const FileBackedRulesetSource& source,
     return false;  // |error| and |status| already populated.
   }
 
-  // Initially write the new JSON and indexed rulesets to temporary files to
-  // ensure we don't leave the actual files in an inconsistent state.
-  std::unique_ptr<FileBackedRulesetSource> temporary_source =
-      FileBackedRulesetSource::CreateTemporarySource(
-          source.id(), source.rule_count_limit(), source.extension_id());
-  if (!temporary_source) {
+  // Serialize rules to JSON.
+  std::string json;
+  if (!source.SerializeRulesToJSON(new_rules, &json)) {
     *error = kInternalErrorUpdatingDynamicRules;
-    *status = UpdateDynamicRulesStatus::kErrorCreateTemporarySource;
+    *status = UpdateDynamicRulesStatus::kErrorSerializeToJson;
     return false;
   }
 
-  // Persist JSON.
-  if (!temporary_source->WriteRulesToJSON(new_rules)) {
-    *error = kInternalErrorUpdatingDynamicRules;
-    *status = UpdateDynamicRulesStatus::kErrorWriteTemporaryJSONRuleset;
-    return false;
-  }
+  // Index rules.
+  auto parse_flags = RulesetSource::kRaiseErrorOnInvalidRules |
+                     RulesetSource::kRaiseWarningOnLargeRegexRules;
+  ParseInfo info = source.IndexRules(std::move(new_rules), parse_flags);
 
-  // Index and persist the indexed ruleset.
-  ParseInfo info = temporary_source->IndexAndPersistRules(std::move(new_rules));
   if (info.has_error()) {
     *error = info.error();
-    *status = info.error_reason() == ParseResult::ERROR_PERSISTING_RULESET
-                  ? UpdateDynamicRulesStatus::kErrorWriteTemporaryIndexedRuleset
-                  : UpdateDynamicRulesStatus::kErrorInvalidRules;
+    *status = UpdateDynamicRulesStatus::kErrorInvalidRules;
     return false;
   }
-
-  *ruleset_checksum = info.ruleset_checksum();
 
   // Treat rules which exceed the regex memory limit as errors if these are new
   // rules. Just surface an error for the first such rule.
-  for (int rule_id : info.regex_limit_exceeded_rules()) {
-    if (!base::Contains(rule_ids_to_add, rule_id)) {
+  for (const auto& warning : info.rule_ignored_warnings()) {
+    if (!rule_ids_to_add.contains(warning.rule_id)) {
       // Any rule added earlier which is ignored now (say due to exceeding the
       // regex memory limit), will be silently ignored.
-      // TODO(crbug.com/1050780): Notify the extension about the same.
+      // TODO(crbug.com/40118204): Notify the extension about the same.
       continue;
     }
 
-    *error = ErrorUtils::FormatErrorMessage(
-        kErrorRegexTooLarge, base::NumberToString(rule_id), kRegexFilterKey);
+    *error = warning.message;
     *status = UpdateDynamicRulesStatus::kErrorRegexTooLarge;
     return false;
   }
 
-  // Dynamic JSON and indexed rulesets for an extension are stored in the same
-  // directory.
-  DCHECK_EQ(source.indexed_path().DirName(), source.json_path().DirName());
-
-  // Place the indexed ruleset at the correct location. base::ReplaceFile should
-  // involve a rename and ideally be atomic at the system level. Before doing so
-  // ensure that the destination directory exists, since this is not handled by
-  // base::ReplaceFile.
+  // Ensure that the destination directory exists.
   if (!base::CreateDirectory(source.indexed_path().DirName())) {
     *error = kInternalErrorUpdatingDynamicRules;
     *status = UpdateDynamicRulesStatus::kErrorCreateDynamicRulesDirectory;
     return false;
   }
 
-  // TODO(karandeepb): ReplaceFile can fail if the source and destination files
-  // are on different volumes. Investigate if temporary files can be created on
-  // a different volume than the profile path.
-  if (!base::ReplaceFile(temporary_source->indexed_path(),
-                         source.indexed_path(), nullptr /* error */)) {
+  // Persist indexed ruleset. Use `ImportantFileWriter` to make this atomic and
+  // decrease the likelihood of file corruption.
+  if (!base::ImportantFileWriter::WriteFileAtomically(
+          source.indexed_path(), GetIndexedRulesetData(info.GetBuffer()),
+          "DNRDynamicRulesFlatbuffer")) {
+    // If this fails, we might have corrupted the existing indexed ruleset file.
+    // However the JSON source of truth hasn't been modified. The next time the
+    // extension is loaded, the indexed ruleset will fail checksum verification
+    // leading to reindexing of the JSON ruleset.
     *error = kInternalErrorUpdatingDynamicRules;
-    *status = UpdateDynamicRulesStatus::kErrorReplaceIndexedFile;
+    *status = UpdateDynamicRulesStatus::kErrorWriteFlatbuffer;
     return false;
   }
 
-  // Place the json ruleset at the correct location.
-  if (!base::ReplaceFile(temporary_source->json_path(), source.json_path(),
-                         nullptr /* error */)) {
+  // Persist JSON. Since the JSON ruleset is the source of truth, use
+  // `ImportantFileWriter` to make this atomic and decrease the likelihood of
+  // file corruption.
+  if (!base::ImportantFileWriter::WriteFileAtomically(
+          source.json_path(), json, "DNRDynamicRulesetJson")) {
     // We have entered into an inconsistent state where the indexed ruleset was
     // updated but not the JSON ruleset. This should be extremely rare. However
     // if we get here, the next time the extension is loaded, we'll identify
-    // that the indexed ruleset checksum is inconsistent and reindex the JSON
+    // that the indexed ruleset checksum is inconsistent and re-index the JSON
     // ruleset.
+    // If the JSON ruleset is corrupted here though, loading the dynamic ruleset
+    // subsequently will fail. A call by extension to `updateDynamicRules`
+    // should help it start from a clean slate in this case (See
+    // `GetNewDynamicRules` above).
     *error = kInternalErrorUpdatingDynamicRules;
-    *status = UpdateDynamicRulesStatus::kErrorReplaceJSONFile;
+    *status = UpdateDynamicRulesStatus::kErrorWriteJson;
     return false;
   }
 
-  return true;  // |ruleset_checksum| already populated.
+  *ruleset_checksum = info.ruleset_checksum();
+  return true;
+}
+
+void LoadRuleset(RulesetInfo& ruleset, uint8_t parse_flags) {
+  IndexAndPersistJSONRulesetResult result =
+      ruleset.source().IndexAndPersistJSONRuleset(parse_flags);
+
+  using IndexStatus = IndexAndPersistJSONRulesetResult::Status;
+  bool indexing_success = result.status == IndexStatus::kSuccess;
+  bool is_reindexing = ruleset.expected_checksum().has_value();
+  if (indexing_success) {
+    // Update the checksum if either:
+    // - this is the first time that the ruleset is being indexed and there's
+    //   no expected checksum.
+    // - there is a checksum mismatch between indexing and what's in prefs.
+    //   Use the checksum that was just derived from reindexing.
+    // - the ruleset's version has updated, so the old checksum is invalid
+    bool update_checksum = !is_reindexing ||
+                           ruleset.load_ruleset_result() ==
+                               LoadRulesetResult::kErrorChecksumMismatch ||
+                           ruleset.load_ruleset_result() ==
+                               LoadRulesetResult::kErrorVersionMismatch;
+    if (update_checksum) {
+      ruleset.set_new_checksum(result.ruleset_checksum);
+
+      // Also change the `expected_checksum` so that any subsequent load
+      // succeeds.
+      ruleset.set_expected_checksum(result.ruleset_checksum);
+    } else {
+      // Otherwise, the checksum of the re-indexed ruleset should match the
+      // expected checksum. If this is not the case, then there is some other
+      // issue (like the JSON rules file has been modified from the one used
+      // during installation or preferences are corrupted). But taking care of
+      // these is beyond our scope here, so simply signal a failure.
+      indexing_success = ruleset.expected_checksum() == result.ruleset_checksum;
+    }
+  }
+
+  if (is_reindexing) {
+    UMA_HISTOGRAM_BOOLEAN(
+        "Extensions.DeclarativeNetRequest.RulesetReindexSuccessful",
+        indexing_success);
+  }
+
+  if (indexing_success) {
+    DCHECK(!ruleset.did_load_successfully());
+    ruleset.CreateVerifiedMatcher();
+  }
+}
+
+void IndexRulesetsTimeSliced(
+    LoadRequestData load_data,
+    FileSequenceHelper::LoadRulesetsUICallback ui_callback,
+    size_t start_index = 0) {
+  base::ElapsedTimer timer;
+
+  for (size_t i = start_index; i < load_data.rulesets.size(); ++i) {
+    RulesetInfo& ruleset = load_data.rulesets[i];
+    if (ruleset.did_load_successfully()) {
+      continue;
+    }
+
+    // Ignore invalid static rules during deferred indexing or while
+    // re-indexing.
+    constexpr auto parse_flags = RulesetSource::kNone;
+    LoadRuleset(ruleset, parse_flags);
+
+    if (i + 1 < load_data.rulesets.size() && timer.Elapsed() >= kMaxTimeSlice) {
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(&IndexRulesetsTimeSliced, std::move(load_data),
+                         std::move(ui_callback), i + 1));
+      return;
+    }
+  }
+
+  // Set priority explicitly to avoid unwanted task priority inheritance.
+  content::GetUIThreadTaskRunner({base::TaskPriority::USER_BLOCKING})
+      ->PostTask(FROM_HERE,
+                 base::BindOnce(std::move(ui_callback), std::move(load_data)));
 }
 
 }  // namespace
@@ -343,7 +337,7 @@ std::unique_ptr<RulesetMatcher> RulesetInfo::TakeMatcher() {
   return std::move(matcher_);
 }
 
-const absl::optional<LoadRulesetResult>& RulesetInfo::load_ruleset_result()
+const std::optional<LoadRulesetResult>& RulesetInfo::load_ruleset_result()
     const {
   // |matcher_| is valid only on success.
   DCHECK_EQ(load_ruleset_result_ == LoadRulesetResult::kSuccess, !!matcher_);
@@ -362,8 +356,13 @@ void RulesetInfo::CreateVerifiedMatcher() {
       source_.CreateVerifiedMatcher(*expected_checksum_, &matcher_);
 }
 
-LoadRequestData::LoadRequestData(ExtensionId extension_id)
-    : extension_id(std::move(extension_id)) {}
+LoadRequestData::LoadRequestData(ExtensionId extension_id,
+                                 base::Version extension_version,
+                                 LoadRulesetRequestSource request_source)
+    : extension_id(std::move(extension_id)),
+      extension_version(std::move(extension_version)),
+      request_source(request_source),
+      load_request_id(base::Token::CreateRandom()) {}
 LoadRequestData::~LoadRequestData() = default;
 LoadRequestData::LoadRequestData(LoadRequestData&&) = default;
 LoadRequestData& LoadRequestData::operator=(LoadRequestData&&) = default;
@@ -381,6 +380,12 @@ void FileSequenceHelper::LoadRulesets(
 
   bool success = true;
   for (auto& ruleset : load_data.rulesets) {
+    if (!ruleset.expected_checksum()) {
+      // This ruleset hasn't been indexed yet.
+      success = false;
+      continue;
+    }
+
     ruleset.CreateVerifiedMatcher();
     success &= ruleset.did_load_successfully();
   }
@@ -393,24 +398,20 @@ void FileSequenceHelper::LoadRulesets(
     return;
   }
 
-  // Loading one or more rulesets failed. Re-index them.
-
-  // Using a WeakPtr is safe since |reindex_callback| will be called on this
-  // sequence itself.
-  auto reindex_callback =
-      base::BindOnce(&FileSequenceHelper::OnRulesetsReindexed,
-                     weak_factory_.GetWeakPtr(), std::move(ui_callback));
-
-  auto reindex_helper = base::MakeRefCounted<ReindexHelper>(
-      std::move(load_data), std::move(reindex_callback));
-  reindex_helper->Start();
+  // Not all rulesets were loaded. This can be because some rulesets haven't
+  // been indexed previously or because indexing failed for a ruleset. Try
+  // indexing these rulesets now.
+  // TODO(crbug.com/380434972): Kick off content verification job to guard
+  // against the possibility that the extension's ruleset JSON files were
+  // corrupted.
+  IndexRulesetsTimeSliced(std::move(load_data), std::move(ui_callback));
 }
 
 void FileSequenceHelper::UpdateDynamicRules(
     LoadRequestData load_data,
     std::vector<int> rule_ids_to_remove,
     std::vector<api::declarative_net_request::Rule> rules_to_add,
-    const RulesCountPair& rule_limit,
+    const RuleCounts& rule_limit,
     UpdateDynamicRulesUICallback ui_callback) const {
   DCHECK(GetExtensionFileTaskRunner()->RunsTasksInCurrentSequence());
   DCHECK_EQ(1u, load_data.rulesets.size());
@@ -419,7 +420,7 @@ void FileSequenceHelper::UpdateDynamicRules(
   DCHECK(!dynamic_ruleset.expected_checksum());
 
   auto log_status_and_dispatch_callback = [&ui_callback, &load_data](
-                                              absl::optional<std::string> error,
+                                              std::optional<std::string> error,
                                               UpdateDynamicRulesStatus status) {
     base::UmaHistogramEnumeration(kUpdateDynamicRulesStatusHistogram, status);
 
@@ -456,27 +457,7 @@ void FileSequenceHelper::UpdateDynamicRules(
   }
 
   // Success.
-  log_status_and_dispatch_callback(absl::nullopt, status);
+  log_status_and_dispatch_callback(std::nullopt, status);
 }
 
-void FileSequenceHelper::OnRulesetsReindexed(LoadRulesetsUICallback ui_callback,
-                                             LoadRequestData load_data) const {
-  DCHECK(GetExtensionFileTaskRunner()->RunsTasksInCurrentSequence());
-
-  // Load rulesets for which reindexing succeeded.
-  for (auto& ruleset : load_data.rulesets) {
-    if (ruleset.reindexing_successful().value_or(false)) {
-      // Only rulesets which can't be loaded are re-indexed.
-      DCHECK(!ruleset.did_load_successfully());
-      ruleset.CreateVerifiedMatcher();
-    }
-  }
-
-  // The UI thread will handle success or failure.
-  content::GetUIThreadTaskRunner({base::TaskPriority::USER_BLOCKING})
-      ->PostTask(FROM_HERE,
-                 base::BindOnce(std::move(ui_callback), std::move(load_data)));
-}
-
-}  // namespace declarative_net_request
-}  // namespace extensions
+}  // namespace extensions::declarative_net_request

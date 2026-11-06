@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 
 #include <stdint.h>
 
-#include "base/macros.h"
 #include "ui/ozone/platform/drm/gpu/hardware_display_plane_manager.h"
 
 namespace gfx {
@@ -19,6 +18,12 @@ namespace ui {
 class HardwareDisplayPlaneManagerLegacy : public HardwareDisplayPlaneManager {
  public:
   explicit HardwareDisplayPlaneManagerLegacy(DrmDevice* device);
+
+  HardwareDisplayPlaneManagerLegacy(const HardwareDisplayPlaneManagerLegacy&) =
+      delete;
+  HardwareDisplayPlaneManagerLegacy& operator=(
+      const HardwareDisplayPlaneManagerLegacy&) = delete;
+
   ~HardwareDisplayPlaneManagerLegacy() override;
 
   // HardwareDisplayPlaneManager:
@@ -27,11 +32,9 @@ class HardwareDisplayPlaneManagerLegacy : public HardwareDisplayPlaneManager {
   bool Commit(HardwareDisplayPlaneList* plane_list,
               scoped_refptr<PageFlipRequest> page_flip_request,
               gfx::GpuFenceHandle* release_fence) override;
-  bool DisableOverlayPlanes(HardwareDisplayPlaneList* plane_list) override;
+  bool TestSeamlessMode(int32_t crtc_id, const drmModeModeInfo& mode) override;
 
-  bool SetColorCorrectionOnAllCrtcPlanes(
-      uint32_t crtc_id,
-      ScopedDrmColorCtmPtr ctm_blob_data) override;
+  bool DisableOverlayPlanes(HardwareDisplayPlaneList* plane_list) override;
 
   bool ValidatePrimarySize(const DrmOverlayPlane& primary,
                            const drmModeModeInfo& mode) override;
@@ -46,15 +49,12 @@ class HardwareDisplayPlaneManagerLegacy : public HardwareDisplayPlaneManager {
                     HardwareDisplayPlane* hw_plane,
                     const DrmOverlayPlane& overlay,
                     uint32_t crtc_id,
+                    std::optional<gfx::Point> crtc_offset,
                     const gfx::Rect& src_rect) override;
   bool IsCompatible(HardwareDisplayPlane* plane,
                     const DrmOverlayPlane& overlay,
-                    uint32_t crtc_index) const override;
-  bool CommitColorMatrix(const CrtcProperties& crtc_props) override;
-  bool CommitGammaCorrection(const CrtcProperties& crtc_props) override;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(HardwareDisplayPlaneManagerLegacy);
+                    uint32_t crtc_id) const override;
+  bool CommitPendingCrtcState(CrtcState& state) override;
 };
 
 }  // namespace ui

@@ -1,26 +1,25 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef SERVICES_NETWORK_COOKIE_ACCESS_DELEGATE_IMPL_H_
 #define SERVICES_NETWORK_COOKIE_ACCESS_DELEGATE_IMPL_H_
 
+#include <optional>
+
 #include "base/component_export.h"
+#include "base/memory/raw_ptr.h"
 #include "net/cookies/cookie_access_delegate.h"
 #include "net/cookies/cookie_constants.h"
 #include "services/network/cookie_settings.h"
 #include "services/network/public/mojom/cookie_manager.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 
 namespace net {
 class CanonicalCookie;
-class SchemefulSite;
 }  // namespace net
 
 namespace network {
-
-class FirstPartySets;
 
 // This class acts as a delegate for the CookieStore to query the
 // CookieManager's CookieSettings for instructions on how to handle a given
@@ -32,11 +31,10 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) CookieAccessDelegateImpl
   // If |type| is USE_CONTENT_SETTINGS, a non-null |cookie_settings| is
   // expected. |cookie_settings| contains the set of content settings that
   // describes which cookies should be subject to legacy access rules.
-  // If non-null, |cookie_settings| is expected to outlive this class. If
-  // non-null, `first_party_sets` must outlive `this`.
-  CookieAccessDelegateImpl(mojom::CookieAccessDelegateType type,
-                           const FirstPartySets* first_party_sets,
-                           const CookieSettings* cookie_settings = nullptr);
+  // If non-null, |cookie_settings| is expected to outlive this class.
+  explicit CookieAccessDelegateImpl(
+      mojom::CookieAccessDelegateType type,
+      const CookieSettings* cookie_settings = nullptr);
 
   ~CookieAccessDelegateImpl() override;
 
@@ -44,26 +42,16 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) CookieAccessDelegateImpl
   bool ShouldTreatUrlAsTrustworthy(const GURL& url) const override;
   net::CookieAccessSemantics GetAccessSemantics(
       const net::CanonicalCookie& cookie) const override;
+  net::CookieScopeSemantics GetScopeSemantics(
+      const std::string_view domain) const override;
   bool ShouldIgnoreSameSiteRestrictions(
       const GURL& url,
-      const net::SiteForCookies& site_for_cookies) const override;
-  bool IsContextSamePartyWithSite(
-      const net::SchemefulSite& site,
-      const absl::optional<net::SchemefulSite>& top_frame_site,
-      const std::set<net::SchemefulSite>& party_context) const override;
-  net::FirstPartySetsContextType ComputeFirstPartySetsContextType(
-      const net::SchemefulSite& site,
-      const absl::optional<net::SchemefulSite>& top_frame_site,
-      const std::set<net::SchemefulSite>& party_context) const override;
-  bool IsInNontrivialFirstPartySet(
-      const net::SchemefulSite& site) const override;
-  base::flat_map<net::SchemefulSite, std::set<net::SchemefulSite>>
-  RetrieveFirstPartySets() const override;
+      const net::SiteForCookies& site_for_cookies,
+      const url::Origin& top_level_origin) const override;
 
  private:
   const mojom::CookieAccessDelegateType type_;
-  const CookieSettings* const cookie_settings_;
-  const FirstPartySets* const first_party_sets_;
+  const raw_ptr<const CookieSettings> cookie_settings_;
 };
 
 }  // namespace network

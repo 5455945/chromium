@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,8 +14,8 @@ namespace {
 using mojo::test::SerializeAndDeserialize;
 
 TEST(StructTraitsTest, ScreenInfosRoundtripValid) {
-  display::ScreenInfos i, o;
-  i.screen_infos = {display::ScreenInfo()};
+  display::ScreenInfos i{display::ScreenInfo()};
+  display::ScreenInfos o;
   EXPECT_EQ(i.current_display_id, i.screen_infos[0].display_id);
   ASSERT_TRUE(SerializeAndDeserialize<display::mojom::ScreenInfos>(i, o));
   EXPECT_EQ(i, o);

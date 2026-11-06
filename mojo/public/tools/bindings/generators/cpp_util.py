@@ -1,4 +1,4 @@
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """Implement the common methods used in mojom_cpp_generator.py and
@@ -8,5 +8,6 @@ import mojom.generate.module as mojom
 
 
 def IsNativeOnlyKind(kind):
-  return (mojom.IsStructKind(kind) or mojom.IsEnumKind(kind)) and \
-      kind.native_only
+  return (
+    mojom.IsStructKind(kind) or mojom.IsEnumKind(kind)
+  ) and kind.native_only

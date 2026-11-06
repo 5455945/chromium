@@ -1,10 +1,12 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/web_modal/web_contents_modal_dialog_manager_delegate.h"
 
 #include <string.h>
+
+#include "content/public/browser/web_contents.h"
 
 namespace web_modal {
 
@@ -13,7 +15,8 @@ void WebContentsModalDialogManagerDelegate::SetWebContentsBlocked(
 }
 
 WebContentsModalDialogHost*
-    WebContentsModalDialogManagerDelegate::GetWebContentsModalDialogHost() {
+WebContentsModalDialogManagerDelegate::GetWebContentsModalDialogHost(
+    content::WebContents* web_contents) {
   return nullptr;
 }
 

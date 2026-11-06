@@ -1,16 +1,18 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.strictmode;
 
-import org.chromium.base.Function;
+import org.chromium.build.annotations.NullMarked;
 
 import java.util.List;
+import java.util.function.Function;
 
 /** Violation that occurred. */
+@NullMarked
 public class Violation {
-    public static final int DETECT_UNKNOWN = 0x00;
+    public static final int DETECT_FAILED = 0x00;
     // Taken from android.os.StrictMode
     public static final int DETECT_DISK_WRITE = 0x01;
     public static final int DETECT_DISK_READ = 0x02;
@@ -34,7 +36,7 @@ public class Violation {
     boolean isInWhitelist(List<Function<Violation, Integer>> whitelist) {
         for (Function<Violation, Integer> whitelistEntry : whitelist) {
             Integer mask = whitelistEntry.apply(this);
-            if (mask != null && (~mask & violationType()) == 0) {
+            if (mask != null && (mViolationType & mask) != 0) {
                 return true;
             }
         }
@@ -43,6 +45,8 @@ public class Violation {
 
     /**
      * Type of violation occurred, bitmask containing 0 or more of the DETECT_* constants from AOSP.
+     *
+     * Returns DETECT_ALL_KNOWN if the violation type should be ignored.
      */
     public int violationType() {
         return mViolationType;

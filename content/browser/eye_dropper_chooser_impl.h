@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,9 @@
 
 #include <memory>
 
-#include "content/public/browser/document_service_base.h"
+#include "base/memory/weak_ptr.h"
+#include "content/common/content_export.h"
+#include "content/public/browser/document_service.h"
 #include "content/public/browser/eye_dropper_listener.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "third_party/blink/public/mojom/choosers/color_chooser.mojom.h"
@@ -17,12 +19,18 @@ namespace content {
 class EyeDropper;
 class EyeDropperListener;
 
-class EyeDropperChooserImpl final
-    : public DocumentServiceBase<blink::mojom::EyeDropperChooser>,
+class CONTENT_EXPORT EyeDropperChooserImpl final
+    : public DocumentService<blink::mojom::EyeDropperChooser>,
       public EyeDropperListener {
  public:
   static void Create(RenderFrameHost*,
                      mojo::PendingReceiver<blink::mojom::EyeDropperChooser>);
+
+  EyeDropperChooserImpl(RenderFrameHost&,
+                        mojo::PendingReceiver<blink::mojom::EyeDropperChooser>,
+                        base::SelfDeletingPassKey key);
+  EyeDropperChooserImpl(const EyeDropperChooserImpl&) = delete;
+  EyeDropperChooserImpl& operator=(const EyeDropperChooserImpl&) = delete;
 
   // EyeDropperChooser:
   void Choose(ChooseCallback) override;
@@ -32,15 +40,15 @@ class EyeDropperChooserImpl final
   void ColorSelectionCanceled() override;
 
  private:
-  EyeDropperChooserImpl(RenderFrameHost*,
-                        mojo::PendingReceiver<blink::mojom::EyeDropperChooser>);
-
   ~EyeDropperChooserImpl() override;
+
+  // Clears this instance as its WebContents' active eye dropper, if it is the
+  // active one.
+  void ClearActiveEyeDropper();
 
   ChooseCallback callback_;
   std::unique_ptr<EyeDropper> eye_dropper_;
-
-  DISALLOW_COPY_AND_ASSIGN(EyeDropperChooserImpl);
+  base::WeakPtrFactory<EyeDropperChooserImpl> weak_ptr_factory_{this};
 };
 
 }  // namespace content

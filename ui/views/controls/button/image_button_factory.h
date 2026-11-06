@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -6,9 +6,10 @@
 #define UI_VIEWS_CONTROLS_BUTTON_IMAGE_BUTTON_FACTORY_H_
 
 #include <memory>
+#include <optional>
 
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/color/color_id.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/views_export.h"
 
@@ -27,7 +28,10 @@ VIEWS_EXPORT std::unique_ptr<ImageButton>
 CreateVectorImageButtonWithNativeTheme(
     Button::PressedCallback callback,
     const gfx::VectorIcon& icon,
-    absl::optional<int> dip_size = absl::nullopt);
+    std::optional<int> dip_size = std::nullopt,
+    ui::ColorId icon_color_id = ui::kColorIcon,
+    ui::ColorId icon_disabled_color_id = ui::kColorIconDisabled,
+    ui::ColorId icon_hovered_color_id = ui::kColorIconHovered);
 
 // Creates an ImageButton with an ink drop and a centered image in preparation
 // for applying a vector icon with SetImageFromVectorIcon below.
@@ -43,31 +47,34 @@ VIEWS_EXPORT std::unique_ptr<ToggleImageButton> CreateVectorToggleImageButton(
 // preparation for applying a vector icon with SetImageFromVectorIcon below.
 VIEWS_EXPORT void ConfigureVectorImageButton(ImageButton* button);
 
-// Sets images on |button| for STATE_NORMAL and STATE_DISABLED from the given
-// vector icon and color. |related_text_color| is normally the main text color
-// used in the parent view, and the actual color used is derived from that. Call
-// again to update the button if |related_text_color| is changing.
-VIEWS_EXPORT void SetImageFromVectorIcon(ImageButton* button,
-                                         const gfx::VectorIcon& icon,
-                                         SkColor related_text_color);
+struct VIEWS_EXPORT IconColors {
+  IconColors(ui::ColorVariant color,
+             ui::ColorVariant disabled_color,
+             ui::ColorId hovered_color = ui::kColorIconHovered);
+  IconColors(const IconColors&);
+  IconColors& operator=(const IconColors&);
+  ~IconColors();
 
-// As above, but creates the images at the given size.
-VIEWS_EXPORT void SetImageFromVectorIcon(ImageButton* button,
-                                         const gfx::VectorIcon& icon,
-                                         int dip_size,
-                                         SkColor related_text_color);
-
-// Sets images on |button| for STATE_NORMAL and STATE_DISABLED from the given
-// vector icon and color.
-VIEWS_EXPORT void SetImageFromVectorIconWithColor(ImageButton* button,
-                                                  const gfx::VectorIcon& icon,
-                                                  SkColor icon_color);
+  ui::ColorVariant color;
+  ui::ColorVariant disabled_color;
+  // Hovered color used for STATE_HOVERED and STATE_PRESSED.
+  // Defaults to ui::kColorIconHovered for proper high contrast mode support.
+  ui::ColorId hovered_color;
+};
 
 // As above, but creates the images at the given size.
 VIEWS_EXPORT void SetImageFromVectorIconWithColor(ImageButton* button,
                                                   const gfx::VectorIcon& icon,
                                                   int dip_size,
-                                                  SkColor icon_color);
+                                                  IconColors colors);
+
+// Sets images on |button| for STATE_NORMAL and STATE_DISABLED with the default
+// size from the given vector icon and colors,
+VIEWS_EXPORT void SetImageFromVectorIconWithColor(
+    ImageButton* button,
+    const gfx::VectorIcon& icon,
+    IconColors colors,
+    std::optional<int> icon_size = std::nullopt);
 
 // As above, but sets the toggled images for a toggled image button
 // with a given icon color instead of deriving from a text color.
@@ -75,8 +82,15 @@ VIEWS_EXPORT void SetToggledImageFromVectorIconWithColor(
     ToggleImageButton* button,
     const gfx::VectorIcon& icon,
     int dip_size,
-    SkColor icon_color,
-    SkColor disabled_color);
+    IconColors colors);
+
+// Sets images on a `ToggleImageButton` |button| for STATE_NORMAL and
+// STATE_DISABLED with the default size from the given vector icon and colors.
+VIEWS_EXPORT void SetToggledImageFromVectorIconWithColor(
+    ToggleImageButton* button,
+    const gfx::VectorIcon& icon,
+    IconColors colors,
+    std::optional<int> icon_size = std::nullopt);
 
 }  // namespace views
 

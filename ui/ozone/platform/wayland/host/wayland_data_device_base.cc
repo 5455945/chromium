@@ -1,106 +1,105 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/ozone/platform/wayland/host/wayland_data_device_base.h"
 
+#include <algorithm>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/logging.h"
+#include "base/task/task_traits.h"
+#include "base/task/thread_pool.h"
 #include "ui/ozone/platform/wayland/common/wayland_util.h"
 #include "ui/ozone/platform/wayland/host/wayland_connection.h"
+#include "ui/ozone/platform/wayland/host/wayland_data_offer_base.h"
 
 namespace ui {
+
+namespace {
+
+PlatformClipboard::Data ReadFromFD(base::ScopedFD fd) {
+  std::vector<uint8_t> contents;
+  wl::ReadDataFromFD(std::move(fd), &contents);
+  return base::MakeRefCounted<base::RefCountedBytes>(std::move(contents));
+}
+
+}  // namespace
 
 WaylandDataDeviceBase::WaylandDataDeviceBase(WaylandConnection* connection)
     : connection_(connection) {}
 
 WaylandDataDeviceBase::~WaylandDataDeviceBase() = default;
 
-const std::vector<std::string>& WaylandDataDeviceBase::GetAvailableMimeTypes()
+base::span<const std::string> WaylandDataDeviceBase::GetAvailableMimeTypes()
     const {
   if (!data_offer_) {
-    static std::vector<std::string> dummy;
-    return dummy;
+    return {};
   }
-
   return data_offer_->mime_types();
 }
 
-bool WaylandDataDeviceBase::RequestSelectionData(const std::string& mime_type) {
-  if (!data_offer_)
-    return false;
-
-  base::ScopedFD fd = data_offer_->Receive(mime_type);
-  if (!fd.is_valid()) {
-    LOG(ERROR) << "Failed to open file descriptor.";
-    return false;
+PlatformClipboard::Data WaylandDataDeviceBase::ReadSelectionData(
+    const std::string& mime_type) {
+  if (!data_offer_) {
+    return {};
   }
 
-  // Ensure there is not pending operation to be performed by the compositor,
-  // otherwise read(..) can block awaiting data to be sent to pipe.
-  RegisterDeferredReadClosure(
-      base::BindOnce(&WaylandDataDeviceBase::ReadClipboardDataFromFD,
-                     base::Unretained(this), std::move(fd), mime_type));
-  RegisterDeferredReadCallback();
-  return true;
+  if (!std::ranges::contains(GetAvailableMimeTypes(), mime_type)) {
+    return {};
+  }
+
+  base::ScopedFD fd = data_offer_->Receive(mime_type);
+  connection_->Flush();
+
+  if (!fd.is_valid()) {
+    DPLOG(ERROR) << "Failed to open file descriptor.";
+    return {};
+  }
+
+  // Do a roundtrip to ensure the above request reaches the server and the
+  // resulting events get processed. Otherwise, the source client won’t send any
+  // data, thus getting the owning thread stuck at the blocking read call below.
+  connection_->RoundTripQueue();
+
+  return ReadFromFD(std::move(fd));
+}
+
+void WaylandDataDeviceBase::RequestSelectionData(
+    const std::string& mime_type,
+    PlatformClipboard::RequestDataClosure callback) {
+  if (!data_offer_) {
+    std::move(callback).Run({});
+    return;
+  }
+
+  if (!std::ranges::contains(GetAvailableMimeTypes(), mime_type)) {
+    std::move(callback).Run({});
+    return;
+  }
+
+  base::ScopedFD fd = data_offer_->Receive(mime_type);
+  connection_->Flush();
+
+  if (!fd.is_valid()) {
+    DPLOG(ERROR) << "Failed to open file descriptor.";
+    std::move(callback).Run({});
+    return;
+  }
+
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+      base::BindOnce(&ReadFromFD, std::move(fd)), std::move(callback));
 }
 
 void WaylandDataDeviceBase::ResetDataOffer() {
   data_offer_.reset();
 }
 
-void WaylandDataDeviceBase::ReadClipboardDataFromFD(
-    base::ScopedFD fd,
-    const std::string& mime_type) {
-  std::vector<uint8_t> contents;
-  wl::ReadDataFromFD(std::move(fd), &contents);
-  if (!selection_delegate_)
-    return;
-  selection_delegate_->OnSelectionDataReceived(
-      mime_type, base::RefCountedBytes::TakeVector(&contents));
-}
-
-void WaylandDataDeviceBase::RegisterDeferredReadCallback() {
-  DCHECK(!deferred_read_callback_);
-
-  deferred_read_callback_.reset(
-      wl_display_sync(connection_->display_wrapper()));
-
-  static const wl_callback_listener kListener = {
-      WaylandDataDeviceBase::DeferredReadCallback};
-
-  wl_callback_add_listener(deferred_read_callback_.get(), &kListener, this);
-
-  connection_->ScheduleFlush();
-}
-
-void WaylandDataDeviceBase::RegisterDeferredReadClosure(
-    base::OnceClosure closure) {
-  deferred_read_closure_ = std::move(closure);
-}
-
-// static
-void WaylandDataDeviceBase::DeferredReadCallback(void* data,
-                                                 struct wl_callback* cb,
-                                                 uint32_t time) {
-  auto* data_device = static_cast<WaylandDataDeviceBase*>(data);
-  DCHECK(data_device);
-  data_device->DeferredReadCallbackInternal(cb, time);
-}
-
-void WaylandDataDeviceBase::DeferredReadCallbackInternal(struct wl_callback* cb,
-                                                         uint32_t time) {
-  DCHECK(!deferred_read_closure_.is_null());
-
-  // The callback must be reset before invoking the closure because the latter
-  // may want to set another callback.  That typically happens when non-trivial
-  // data types are dropped; they have fallbacks to plain text so several
-  // roundtrips to data are chained.
-  deferred_read_callback_.reset();
-
-  std::move(deferred_read_closure_).Run();
+void WaylandDataDeviceBase::NotifySelectionOffer(
+    WaylandDataOfferBase* offer) const {
+  if (selection_offer_callback_)
+    selection_offer_callback_.Run(offer);
 }
 
 }  // namespace ui

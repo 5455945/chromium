@@ -1,21 +1,28 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_DOWNLOAD_DOWNLOAD_HISTORY_H_
 #define CHROME_BROWSER_DOWNLOAD_DOWNLOAD_HISTORY_H_
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include <set>
+#include <string>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/auto_reset.h"
+#include "base/files/file_path.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
+#include "base/time/time.h"
+#include "build/build_config.h"
 #include "components/download/content/public/all_download_item_notifier.h"
 #include "components/download/public/common/download_item.h"
+#include "components/download/public/common/download_utils.h"
 #include "components/history/core/browser/history_service.h"
 #include "content/public/browser/download_manager.h"
 
@@ -33,6 +40,10 @@ class DownloadHistory : public download::AllDownloadItemNotifier::Observer {
   class HistoryAdapter {
    public:
     explicit HistoryAdapter(history::HistoryService* history);
+
+    HistoryAdapter(const HistoryAdapter&) = delete;
+    HistoryAdapter& operator=(const HistoryAdapter&) = delete;
+
     virtual ~HistoryAdapter();
 
     virtual void QueryDownloads(
@@ -48,8 +59,7 @@ class DownloadHistory : public download::AllDownloadItemNotifier::Observer {
     virtual void RemoveDownloads(const std::set<uint32_t>& ids);
 
    private:
-    history::HistoryService* history_;
-    DISALLOW_COPY_AND_ASSIGN(HistoryAdapter);
+    raw_ptr<history::HistoryService> history_;
   };
 
   class Observer {
@@ -82,11 +92,24 @@ class DownloadHistory : public download::AllDownloadItemNotifier::Observer {
   // restored from history.
   static bool IsPersisted(const download::DownloadItem* item);
 
+  // Returns `path` (as UTF-8) with any trailing " (1)".." (100)" or
+  // " - YYYY-MM-DDTHHMMSS.mmm" uniquifier before the extension removed (e.g.
+  // "/foo/bar (1).pdf" -> "/foo/bar.pdf").
+  static std::string GetPathWithoutUniquifier(const base::FilePath& path);
+
+  // Overrides the minimum number of loaded downloads required to emit
+  // Download.History.HeavyProfile.* histograms.
+  static base::AutoReset<size_t> SetHeavyProfileThresholdForTesting(
+      size_t threshold);
+
   // Neither |manager| nor |history| may be NULL.
   // DownloadService creates DownloadHistory some time after DownloadManager is
   // created and destroys DownloadHistory as DownloadManager is shutting down.
   DownloadHistory(content::DownloadManager* manager,
                   std::unique_ptr<HistoryAdapter> history);
+
+  DownloadHistory(const DownloadHistory&) = delete;
+  DownloadHistory& operator=(const DownloadHistory&) = delete;
 
   ~DownloadHistory() override;
 
@@ -98,8 +121,15 @@ class DownloadHistory : public download::AllDownloadItemNotifier::Observer {
   // table.
   void QueryCallback(std::vector<history::DownloadRow> rows);
 
+#if BUILDFLAG(IS_ANDROID)
+  void RetrieveDisplayNamesAndLoadHistoryDownloads(
+      std::vector<history::DownloadRow> rows);
+  void LoadHistoryDownloads(const std::vector<history::DownloadRow>& rows,
+                            download::DisplayNames display_names);
+#else
   // Called to create all history downloads.
   void LoadHistoryDownloads(const std::vector<history::DownloadRow>& rows);
+#endif
 
   // May add |item| to |history_|.
   void MaybeAddToHistory(download::DownloadItem* item);
@@ -153,11 +183,11 @@ class DownloadHistory : public download::AllDownloadItemNotifier::Observer {
 
   bool initial_history_query_complete_;
 
+  const base::TimeTicks load_start_time_{base::TimeTicks::Now()};
+
   base::ObserverList<Observer>::Unchecked observers_;
 
   base::WeakPtrFactory<DownloadHistory> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(DownloadHistory);
 };
 
 #endif  // CHROME_BROWSER_DOWNLOAD_DOWNLOAD_HISTORY_H_

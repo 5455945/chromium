@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -36,7 +36,7 @@ void VisualRectPerfTest::RunPerfTest(unsigned iteration_count,
   start = base::TimeTicks::Now();
   for (unsigned count = 0; count < iteration_count; count++) {
     object.MapToVisualRectInAncestorSpace(&ancestor, test_rect,
-                                          kUseGeometryMapper);
+                                          {VisualRectFlag::kUseGeometryMapper});
     GeometryMapper::ClearCache();
   }
 

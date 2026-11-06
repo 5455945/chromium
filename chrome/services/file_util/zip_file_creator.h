@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 
 #include "base/memory/ref_counted.h"
 #include "base/synchronization/atomic_flag.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "chrome/services/file_util/public/mojom/zip_file_creator.mojom.h"
 #include "components/services/filesystem/public/mojom/directory.mojom.h"
@@ -33,6 +34,9 @@ class ZipFileCreator : public base::RefCountedThreadSafe<ZipFileCreator>,
 
   explicit ZipFileCreator(PendingCreator receiver);
 
+  ZipFileCreator(const ZipFileCreator&) = delete;
+  ZipFileCreator& operator=(const ZipFileCreator&) = delete;
+
   REQUIRE_ADOPTION_FOR_REFCOUNTED_TYPE();
 
  private:
@@ -47,12 +51,11 @@ class ZipFileCreator : public base::RefCountedThreadSafe<ZipFileCreator>,
   void CreateZipFile(PendingDirectory src_dir,
                      const std::vector<base::FilePath>& relative_paths,
                      base::File zip_file,
-                     PendingListener listener,
-                     CreateZipFileCallback callback) override;
+                     PendingListener listener) override;
 
   // Zips |src_dir| files given by |relative_paths| into |zip_file|.
   // Must be run in a separate task runner.
-  bool WriteZipFile(PendingDirectory src_dir,
+  void WriteZipFile(PendingDirectory src_dir,
                     const std::vector<base::FilePath>& relative_paths,
                     base::File zip_file,
                     PendingListener listener) const;
@@ -78,8 +81,6 @@ class ZipFileCreator : public base::RefCountedThreadSafe<ZipFileCreator>,
 
   // Flag used to cancel an ongoing ZIP creation.
   base::AtomicFlag cancelled_;
-
-  DISALLOW_COPY_AND_ASSIGN(ZipFileCreator);
 };
 
 }  // namespace chrome

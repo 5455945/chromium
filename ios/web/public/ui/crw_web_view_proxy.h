@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,6 @@
 
 // Provides an interface for embedders to access the WebState's web view in a
 // limited and controlled manner.
-// TODO(crbug.com/546152): rename protocol to CRWContentViewProxy.
 @protocol CRWWebViewProxy <NSObject>
 
 // The web view's bounding rectangle (relative to its parent).
@@ -19,6 +18,35 @@
 
 // The web view's frame rectangle.
 @property(readonly, assign) CGRect frame;
+
+// Whether to ignore the value of `obscuredInsets`. If set to `YES` then
+// setting the `obscuredInsets` property will not have any effect.
+@property(nonatomic, assign) BOOL ignoreObscuredInsets;
+
+// Web view's obscured insets. Setting this property also updates
+// `UIScrollView.contentInset` and `contentOffset` (on iOS 26+) or resizes the
+// web view's frame (on earlier iOS versions) in addition to updating the
+// underlying web view's `obscuredContentInsets`. The value persists across
+// content view changes: it is also applied to content views set later, e.g.
+// when the web view is created after this is set. If `ignoreObscuredInsets` is
+// set to `YES` then setting this property will not have any effect.
+@property(nonatomic, assign) UIEdgeInsets obscuredInsets;
+
+// Sets the obscured insets with an initial velocity for spring animations.
+- (void)setObscuredInsets:(UIEdgeInsets)obscuredInsets
+          initialVelocity:(CGFloat)initialVelocity;
+
+// The insets that specify the portion of the web view that is obscured by UI
+// elements. Unlike `obscuredInsets`, this property is forwarded directly to the
+// underlying web view's `obscuredContentInsets` without modifying
+// `UIScrollView.contentInset`, `contentOffset`, or the web view's frame.
+@property(nonatomic) UIEdgeInsets obscuredContentInsets API_AVAILABLE(ios(26));
+
+// Sets the web view's min and max viewport insets. The values persist across
+// content view changes: they are also applied to content views set later,
+// e.g. when the web view is created after this is called.
+- (void)setMinimumViewportInset:(UIEdgeInsets)minInset
+           maximumViewportInset:(UIEdgeInsets)maxInset;
 
 // Adds an offset to the scrollable content's frame.
 @property(nonatomic, assign) CGPoint contentOffset;
@@ -28,8 +56,8 @@
 // via resizing a subview's frame. Changing this property may impact performance
 // if implementation resizes its subview. Can be used as a workaround for
 // WKWebView bug, where UIScrollView.content inset does not work
-// (rdar://23584409). TODO(crbug.com/569349) remove this property once radar is
-// fixed.
+// (rdar://23584409). TODO(crbug.com/41228596) remove this property once radar
+// is fixed.
 @property(nonatomic, assign) UIEdgeInsets contentInset;
 
 // Gives the embedder access to the web view's UIScrollView in a limited and
@@ -40,19 +68,29 @@
 // back-forward list navigations.
 @property(nonatomic) BOOL allowsBackForwardNavigationGestures;
 
+// Whether or not long pressing a link in the web view renders a link preview.
+@property(nonatomic) BOOL allowsLinkPreview;
+
 // Returns the webview's gesture recognizers.
 @property(nonatomic, readonly) NSArray* gestureRecognizers;
 
-// Adds a webview gesture recognizers.
-- (void)addGestureRecognizer:(UIGestureRecognizer*)gestureRecognizer;
-
-// Removes a webview gesture recognizers.
-- (void)removeGestureRecognizer:(UIGestureRecognizer*)gestureRecognizer;
+// A Boolean value indicating whether or not the web page is in fullscreen mode.
+@property(nonatomic, readonly) BOOL isWebPageInFullscreenMode;
 
 // Whether or not the content view should use the content inset when setting
-// |contentInset|. Implementations may or may not respect the setting of this
-// property.
+// `contentInset`. Implementations may or may not respect the setting of this
+// property. The value set persists across content view changes: it is also
+// applied to content views set later, e.g. when the web view is created after
+// this is set. Reading it returns the current content view's value (`NO` if
+// there is no web view).
 @property(nonatomic, assign) BOOL shouldUseViewContentInset;
+
+// YES if the keyboard is currently visible for use in the web view.
+@property(nonatomic, readonly, getter=isKeyboardVisible) BOOL keyboardVisible;
+
+// Whether input views (the software keyboard, input accessory views, and
+// tablet shortcut bar) should be suppressed. Defaults to `NO`.
+@property(nonatomic, assign) BOOL shouldSuppressInputViews;
 
 // Register the given insets for the given caller.
 - (void)registerInsets:(UIEdgeInsets)insets forCaller:(id)caller;
@@ -63,15 +101,8 @@
 // Wrapper around the addSubview method of the webview.
 - (void)addSubview:(UIView*)view;
 
-// Returns the currently visible keyboard accessory, or nil.
-- (UIView*)keyboardAccessory;
-
 // Wrapper around the becomeFirstResponder method of the webview.
 - (BOOL)becomeFirstResponder;
-
-// Notifies the web view controller that the surface size has changed due to
-// multiwindow action or orientation change.
-- (void)surfaceSizeChanged;
 
 @end
 

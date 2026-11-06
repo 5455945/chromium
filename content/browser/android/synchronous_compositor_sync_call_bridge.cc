@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "content/browser/android/synchronous_compositor_host.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -19,11 +19,11 @@ namespace content {
 SynchronousCompositorSyncCallBridge::SynchronousCompositorSyncCallBridge(
     SynchronousCompositorHost* host)
     : host_(host), begin_frame_condition_(&lock_) {
-  DCHECK(host);
+  CHECK(host, base::NotFatalUntil::M159);
 }
 
 SynchronousCompositorSyncCallBridge::~SynchronousCompositorSyncCallBridge() {
-  DCHECK(frame_futures_.empty());
+  CHECK(frame_futures_.empty(), base::NotFatalUntil::M159);
 }
 
 void SynchronousCompositorSyncCallBridge::RemoteReady() {
@@ -34,7 +34,7 @@ void SynchronousCompositorSyncCallBridge::RemoteReady() {
 }
 
 void SynchronousCompositorSyncCallBridge::RemoteClosedOnIOThread() {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M159);
   base::AutoLock lock(lock_);
   SignalRemoteClosedToAllWaitersOnIOThread();
 }
@@ -42,10 +42,10 @@ void SynchronousCompositorSyncCallBridge::RemoteClosedOnIOThread() {
 bool SynchronousCompositorSyncCallBridge::ReceiveFrameOnIOThread(
     int layer_tree_frame_sink_id,
     uint32_t metadata_version,
-    absl::optional<viz::LocalSurfaceId> local_surface_id,
-    absl::optional<viz::CompositorFrame> compositor_frame,
-    absl::optional<viz::HitTestRegionList> hit_test_region_list) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+    std::optional<viz::LocalSurfaceId> local_surface_id,
+    std::optional<viz::CompositorFrame> compositor_frame,
+    std::optional<viz::HitTestRegionList> hit_test_region_list) {
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M159);
   base::AutoLock lock(lock_);
   if (remote_state_ != RemoteState::READY || frame_futures_.empty())
     return false;
@@ -53,16 +53,18 @@ bool SynchronousCompositorSyncCallBridge::ReceiveFrameOnIOThread(
   frame_ptr->layer_tree_frame_sink_id = layer_tree_frame_sink_id;
   scoped_refptr<SynchronousCompositor::FrameFuture> future =
       std::move(frame_futures_.front());
-  DCHECK(future);
+  CHECK(future, base::NotFatalUntil::M159);
   frame_futures_.pop_front();
 
   if (compositor_frame) {
-    DCHECK(local_surface_id);
+    if (!local_surface_id)
+      return false;
     GetUIThreadTaskRunner({})->PostTask(
         FROM_HERE, base::BindOnce(&SynchronousCompositorSyncCallBridge::
                                       ProcessFrameMetadataOnUIThread,
                                   this, metadata_version,
-                                  compositor_frame->metadata.Clone()));
+                                  compositor_frame->metadata.Clone(),
+                                  local_surface_id.value()));
     frame_ptr->frame = std::make_unique<viz::CompositorFrame>();
     *frame_ptr->frame = std::move(*compositor_frame);
     frame_ptr->local_surface_id = local_surface_id.value();
@@ -74,7 +76,7 @@ bool SynchronousCompositorSyncCallBridge::ReceiveFrameOnIOThread(
 
 bool SynchronousCompositorSyncCallBridge::BeginFrameResponseOnIOThread(
     blink::mojom::SyncCompositorCommonRendererParamsPtr render_params) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M159);
   base::AutoLock lock(lock_);
   if (begin_frame_response_valid_)
     return false;
@@ -85,7 +87,7 @@ bool SynchronousCompositorSyncCallBridge::BeginFrameResponseOnIOThread(
 }
 
 bool SynchronousCompositorSyncCallBridge::WaitAfterVSyncOnUIThread() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   base::AutoLock lock(lock_);
   if (remote_state_ != RemoteState::READY)
     return false;
@@ -98,8 +100,8 @@ bool SynchronousCompositorSyncCallBridge::WaitAfterVSyncOnUIThread() {
 
 bool SynchronousCompositorSyncCallBridge::SetFrameFutureOnUIThread(
     scoped_refptr<SynchronousCompositor::FrameFuture> frame_future) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(frame_future);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+  CHECK(frame_future, base::NotFatalUntil::M159);
   base::AutoLock lock(lock_);
   if (remote_state_ != RemoteState::READY)
     return false;
@@ -109,14 +111,16 @@ bool SynchronousCompositorSyncCallBridge::SetFrameFutureOnUIThread(
   // can be at most 2 pending frames. Here, we rely on Android to do the
   // necessary blocking, which allows more parallelism without increasing
   // latency. But DCHECK Android blocking is working.
+  // TODO(crbug.com/563133377): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK_LT(frame_futures_.size(), 2u);
   frame_futures_.emplace_back(std::move(frame_future));
   return true;
 }
 
 void SynchronousCompositorSyncCallBridge::HostDestroyedOnUIThread() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(host_);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+  CHECK(host_, base::NotFatalUntil::M159);
   host_ = nullptr;
   GetIOThreadTaskRunner({})->PostTask(
       FROM_HERE,
@@ -126,13 +130,13 @@ void SynchronousCompositorSyncCallBridge::HostDestroyedOnUIThread() {
 }
 
 bool SynchronousCompositorSyncCallBridge::IsRemoteReadyOnUIThread() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   base::AutoLock lock(lock_);
   return remote_state_ == RemoteState::READY;
 }
 
 void SynchronousCompositorSyncCallBridge::BeginFrameCompleteOnUIThread() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 
   blink::mojom::SyncCompositorCommonRendererParamsPtr render_params;
   {
@@ -149,27 +153,32 @@ void SynchronousCompositorSyncCallBridge::BeginFrameCompleteOnUIThread() {
         begin_frame_condition_.Wait();
       }
     }
-    DCHECK(begin_frame_response_valid_ || remote_state_ != RemoteState::READY);
+    CHECK(begin_frame_response_valid_ || remote_state_ != RemoteState::READY,
+          base::NotFatalUntil::M159);
     begin_frame_response_valid_ = false;
     if (remote_state_ == RemoteState::READY) {
       render_params = last_render_params_.Clone();
     }
   }
-  if (render_params)
-    host_->UpdateState(std::move(render_params));
+  if (render_params) {
+    host_->BeginFrameComplete(std::move(render_params));
+  }
 }
 
 void SynchronousCompositorSyncCallBridge::ProcessFrameMetadataOnUIThread(
     uint32_t metadata_version,
-    viz::CompositorFrameMetadata metadata) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  if (host_)
-    host_->UpdateFrameMetaData(metadata_version, std::move(metadata));
+    viz::CompositorFrameMetadata metadata,
+    const viz::LocalSurfaceId& local_surface_id) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+  if (host_) {
+    host_->UpdateFrameMetaData(metadata_version, std::move(metadata),
+                               local_surface_id);
+  }
 }
 
 void SynchronousCompositorSyncCallBridge::
     SignalRemoteClosedToAllWaitersOnIOThread() {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M159);
   lock_.AssertAcquired();
   remote_state_ = RemoteState::CLOSED;
   for (auto& future_ptr : frame_futures_) {
@@ -182,12 +191,12 @@ void SynchronousCompositorSyncCallBridge::
 void SynchronousCompositorSyncCallBridge::SetHostControlReceiverOnIOThread(
     mojo::SelfOwnedReceiverRef<blink::mojom::SynchronousCompositorControlHost>
         host_control_receiver) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M159);
   host_control_receiver_ = host_control_receiver;
 }
 
 void SynchronousCompositorSyncCallBridge::CloseHostControlOnIOThread() {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M159);
   if (host_control_receiver_) {
     host_control_receiver_->Close();
     host_control_receiver_.reset();

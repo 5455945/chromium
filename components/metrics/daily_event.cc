@@ -1,9 +1,10 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/metrics/daily_event.h"
 
+#include <memory>
 #include <utility>
 
 #include "base/logging.h"
@@ -12,23 +13,35 @@
 #include "components/prefs/pref_service.h"
 
 namespace metrics {
-
 namespace {
+
+class CallbackObserver : public DailyEvent::Observer {
+ public:
+  explicit CallbackObserver(base::RepeatingClosure closure)
+      : closure_(std::move(closure)) {}
+  ~CallbackObserver() override = default;
+
+  CallbackObserver(const CallbackObserver&) = delete;
+  CallbackObserver& operator=(const CallbackObserver&) = delete;
+
+  void OnDailyEvent(DailyEvent::IntervalType _) override { closure_.Run(); }
+
+ private:
+  base::RepeatingClosure closure_;
+};
 
 void RecordIntervalTypeHistogram(const std::string& histogram_name,
                                  DailyEvent::IntervalType type) {
-  if (histogram_name.empty())
+  if (histogram_name.empty()) {
     return;
+  }
   base::UmaHistogramEnumeration(histogram_name, type);
 }
 
 }  // namespace
 
-DailyEvent::Observer::Observer() {
-}
-
-DailyEvent::Observer::~Observer() {
-}
+DailyEvent::Observer::Observer() = default;
+DailyEvent::Observer::~Observer() = default;
 
 DailyEvent::DailyEvent(PrefService* pref_service,
                        const char* pref_name,
@@ -38,8 +51,7 @@ DailyEvent::DailyEvent(PrefService* pref_service,
       histogram_name_(histogram_name) {
 }
 
-DailyEvent::~DailyEvent() {
-}
+DailyEvent::~DailyEvent() = default;
 
 // static
 void DailyEvent::RegisterPref(PrefRegistrySimple* registry,
@@ -53,12 +65,16 @@ void DailyEvent::AddObserver(std::unique_ptr<DailyEvent::Observer> observer) {
   observers_.push_back(std::move(observer));
 }
 
+void DailyEvent::AddObserverClosure(base::RepeatingClosure closure) {
+  AddObserver(std::make_unique<CallbackObserver>(std::move(closure)));
+}
+
 void DailyEvent::CheckInterval() {
   base::Time now = base::Time::Now();
   if (last_fired_.is_null()) {
     // The first time we call CheckInterval, we read the time stored in prefs.
-    last_fired_ = base::Time() + base::TimeDelta::FromMicroseconds(
-                                     pref_service_->GetInt64(pref_name_));
+    last_fired_ =
+        base::Time() + base::Microseconds(pref_service_->GetInt64(pref_name_));
 
     DVLOG(1) << "DailyEvent time loaded: " << last_fired_;
     if (last_fired_.is_null()) {
@@ -84,6 +100,7 @@ void DailyEvent::CheckInterval() {
 
 void DailyEvent::OnInterval(base::Time now, IntervalType type) {
   DCHECK(!now.is_null());
+  DCHECK(pref_service_);
   last_fired_ = now;
   pref_service_->SetInt64(pref_name_,
                           last_fired_.since_origin().InMicroseconds());

@@ -1,27 +1,27 @@
 {
   "layers": [
     {
-      "name": "Scrolling Contents Layer",
-      "bounds": [1200, 900],
+      "name": "Scrolling background of LayoutView #document",
+      "bounds": [800, 600],
       "contentsOpaque": true,
       "backgroundColor": "#FFFFFF"
     },
     {
-      "name": "LayoutNGTableSection TBODY id='target'",
-      "bounds": [271, 195],
+      "name": "LayoutTableSection TBODY id='target'",
+      "bounds": [182, 130],
       "invalidations": [
-        [0, 0, 271, 195]
+        [0, 0, 182, 130]
       ],
       "transform": 1
     },
     {
-      "name": "LayoutNGTableRow TR",
-      "bounds": [271, 96],
+      "name": "LayoutTableRow TR",
+      "bounds": [182, 64],
       "transform": 2
     },
     {
-      "name": "LayoutNGTableCellNew TD",
-      "bounds": [88, 96],
+      "name": "LayoutTableCell (children-inline) TD",
+      "bounds": [59, 64],
       "transform": 3
     }
   ],
@@ -32,7 +32,7 @@
         [1, 0, 0, 0],
         [0, 1, 0, 0],
         [0, 0, 1, 0],
-        [15, 42, 0, 1]
+        [10, 30, 0, 1]
       ]
     },
     {
@@ -42,7 +42,7 @@
         [1, 0, 0, 0],
         [0, 1, 0, 0],
         [0, 0, 1, 0],
-        [0, 99, 0, 1]
+        [0, 66, 0, 1]
       ]
     },
     {
@@ -52,7 +52,7 @@
         [1, 0, 0, 0],
         [0, 1, 0, 0],
         [0, 0, 1, 0],
-        [92, 0, 0, 1]
+        [62, 0, 0, 1]
       ]
     }
   ]

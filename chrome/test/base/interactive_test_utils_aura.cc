@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,11 @@
 #include "build/build_config.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "ui/aura/window.h"
+#include "ui/views/widget/widget.h"
 
 namespace ui_test_utils {
 
-#if !defined(OS_WIN)
+#if !BUILDFLAG(IS_WIN)
 void HideNativeWindow(gfx::NativeWindow window) {
   HideNativeWindowAura(window);
 }
@@ -26,6 +27,9 @@ void HideNativeWindowAura(gfx::NativeWindow window) {
 
 bool ShowAndFocusNativeWindowAura(gfx::NativeWindow window) {
   window->Show();
+  if (views::Widget* widget = views::Widget::GetWidgetForNativeWindow(window)) {
+    widget->Activate();
+  }
   window->Focus();
   return true;
 }

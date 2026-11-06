@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,16 +9,17 @@
 
 #include <stddef.h>
 
-#include "base/compiler_specific.h"
+#include <memory>
+
 #include "base/files/file_path.h"
-#include "base/macros.h"
+#include "base/strings/cstring_view.h"
 #include "build/build_config.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include <jni.h>
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include <windows.h>
 #endif
 
@@ -35,10 +36,30 @@ bool EvictFileFromSystemCacheWithRetry(const FilePath& file);
 // success.
 bool DieFileDie(const FilePath& file, bool recurse);
 
+// Convenience wrapper for `base::GetTempDir()` that returns the temp dir as a
+// `base::FilePath`.
+FilePath GetTempDirForTesting();
+
+#if BUILDFLAG(IS_WIN)
+// Returns the collection of sub-paths that, if found within the path to files
+// that cannot be deleted at test end, do not trigger test failure.
+// The goal is get rid of the leaking paths one by one, and ultimately the need
+// for this function, but allows us to get back our test coverage for the many
+// browser and interactive_ui_tests that have been disabled because of leaking
+// files, while still catching new leaks.  See crbug.com/410751413 for more
+// details. Note that the sub-path name comparisons are case-sensitive.
+std::vector<std::wstring>& GetPathsAllowedToLeak();
+#endif  // BUILDFLAG(IS_WIN)
+
 // Creates a a new unique directory and returns the generated path. The
 // directory will be automatically deleted when the test completes. Failure
 // upon creation or deletion will cause a test failure.
 FilePath CreateUniqueTempDirectoryScopedToTest();
+
+// Creates a new unique temporary directory in `dir` and returns the generated
+// path. The directory will be automatically deleted when the test completes.
+// Failure upon creation or deletion will cause a test failure.
+FilePath CreateUniqueTempDirectoryScopedToTestInDir(const base::FilePath& dir);
 
 // Synchronize all the dirty pages from the page cache to disk (on POSIX
 // systems). The Windows analogy for this operation is to 'Flush file buffers'.
@@ -49,39 +70,52 @@ void SyncPageCacheToDisk();
 // to access this file will result in a cold load from the hard drive.
 bool EvictFileFromSystemCache(const FilePath& file);
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 // Deny |permission| on the file |path| for the current user. |permission| is an
 // ACCESS_MASK structure which is defined in
 // https://msdn.microsoft.com/en-us/library/windows/desktop/aa374892.aspx
 // Refer to https://msdn.microsoft.com/en-us/library/aa822867.aspx for a list of
 // possible values.
 bool DenyFilePermission(const FilePath& path, DWORD permission);
-#endif  // defined(OS_WIN)
+
+// Gets the DACL object serialized to security descriptor string
+// for the provided path, or an empty string in case of failure.
+std::wstring GetFileDacl(const FilePath& path);
+
+// Create a file or a directory setting DACL using the given security
+// descriptor.
+bool CreateWithDacl(const FilePath& path, wcstring_view sddl, bool directory);
+#endif  // BUILDFLAG(IS_WIN)
 
 // For testing, make the file unreadable or unwritable.
 // In POSIX, this does not apply to the root user.
-bool MakeFileUnreadable(const FilePath& path) WARN_UNUSED_RESULT;
-bool MakeFileUnwritable(const FilePath& path) WARN_UNUSED_RESULT;
+[[nodiscard]] bool MakeFileUnreadable(const FilePath& path);
+[[nodiscard]] bool MakeFileUnwritable(const FilePath& path);
 
 // Saves the current permissions for a path, and restores it on destruction.
 class FilePermissionRestorer {
  public:
   explicit FilePermissionRestorer(const FilePath& path);
+
+  FilePermissionRestorer(const FilePermissionRestorer&) = delete;
+  FilePermissionRestorer& operator=(const FilePermissionRestorer&) = delete;
+
   ~FilePermissionRestorer();
 
  private:
-  const FilePath path_;
-  void* info_;  // The opaque stored permission information.
-  size_t length_;  // The length of the stored permission information.
+  // Forward definition for a structure to hold the file permissions. Will
+  // be defined separately in the Windows and POSIX source code.
+  struct SavedFilePermissions;
 
-  DISALLOW_COPY_AND_ASSIGN(FilePermissionRestorer);
+  const FilePath path_;
+  std::unique_ptr<SavedFilePermissions> permissions_;
 };
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 // Insert an image file into the MediaStore, and retrieve the content URI for
 // testing purpose.
 FilePath InsertImageIntoMediaStore(const FilePath& path);
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
 
 }  // namespace base
 

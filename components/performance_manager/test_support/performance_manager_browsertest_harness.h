@@ -1,15 +1,29 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_PERFORMANCE_MANAGER_TEST_SUPPORT_PERFORMANCE_MANAGER_BROWSERTEST_HARNESS_H_
 #define COMPONENTS_PERFORMANCE_MANAGER_TEST_SUPPORT_PERFORMANCE_MANAGER_BROWSERTEST_HARNESS_H_
 
-#include "base/run_loop.h"
-#include "base/test/bind.h"
-#include "components/performance_manager/embedder/graph_features_helper.h"
-#include "components/performance_manager/public/performance_manager.h"
+#include <set>
+#include <string_view>
+
+#include "base/memory/raw_ptr.h"
+#include "components/performance_manager/embedder/graph_features.h"
 #include "content/public/test/content_browser_test.h"
+#include "testing/gtest/include/gtest/gtest.h"
+
+class GURL;
+
+namespace base {
+class CommandLine;
+}
+
+namespace content {
+class BrowserContext;
+class Shell;
+class WebContents;
+}  // namespace content
 
 namespace performance_manager {
 
@@ -34,11 +48,12 @@ class PerformanceManagerBrowserTestHarness
 
   // content::BrowserTestBase:
   void PreRunTestOnMainThread() override;
+  void PostRunTestOnMainThread() override;
   void SetUpCommandLine(base::CommandLine* command_line) override;
 
   // An additional seam that gets invoked as part of the PM initialization. This
   // will be invoked on the PM sequence. This will be called after graph
-  // features have been configured (see "graph_features_helper").
+  // features have been configured (see "GetGraphFeatures").
   virtual void OnGraphCreated(Graph* graph);
 
   // Creates a content shell with its own window, hosting a single tab that is
@@ -51,37 +66,34 @@ class PerformanceManagerBrowserTestHarness
   // Starts a navigation for the given |contents|.
   void StartNavigation(content::WebContents* contents, const GURL& url);
 
+  // Navigates the given |contents| to |url|, and waits for |console_pattern|
+  // to appear on the console. This can be used with test files like
+  // components/test/data/performance_manager/a_embeds_a.html, to wait for both
+  // the main frame and the embedded subframe to load. Returns
+  // ::testing::AssertionFailure if the navigation fails. If the navigation
+  // succeeds, will wait (potentially forever) for |console_pattern| to appear
+  // and then return ::testing::AssertionSuccess.
+  ::testing::AssertionResult NavigateAndWaitForConsoleMessage(
+      content::WebContents* contents,
+      const GURL& url,
+      std::string_view console_pattern);
+
   // Waits for an ongoing navigation to terminate on the given |contents|.
   void WaitForLoad(content::WebContents* contents);
-
-  // Helper function for running a task on the graph, and waiting for it to
-  // complete. The signature of OnGraphCallback is expected to be void(Graph*).
-  template <typename OnGraphCallback>
-  void RunInGraph(OnGraphCallback on_graph_callback) {
-    base::RunLoop run_loop;
-    PerformanceManager::CallOnGraph(
-        FROM_HERE,
-        base::BindLambdaForTesting([quit_loop = run_loop.QuitClosure(),
-                                    &on_graph_callback](Graph* graph) {
-          on_graph_callback(graph);
-          quit_loop.Run();
-        }));
-    run_loop.Run();
-  }
 
   // Allows configuring which Graph features are initialized during "SetUp".
   // This defaults to initializing no features. Features will be initialized
   // before "OnGraphCreated" is called.
-  GraphFeaturesHelper& GetGraphFeaturesHelper() {
-    return graph_features_helper_;
-  }
+  GraphFeatures& GetGraphFeatures() { return graph_features_; }
 
  private:
   // This is called during "SetUp". It installs features on the graph and then
   // delegates to "OnGraphCreated".
   void OnGraphCreatedImpl(Graph* graph);
 
-  GraphFeaturesHelper graph_features_helper_;
+  GraphFeatures graph_features_ = GraphFeatures::WithDefault();
+
+  std::set<raw_ptr<content::BrowserContext>> tracked_browser_contexts_;
 };
 
 }  // namespace performance_manager

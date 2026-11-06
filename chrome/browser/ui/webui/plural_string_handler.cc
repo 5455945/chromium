@@ -1,20 +1,19 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/webui/plural_string_handler.h"
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/values.h"
-#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/web_ui.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/strings/grit/ui_strings.h"
 
-PluralStringHandler::PluralStringHandler() {}
+PluralStringHandler::PluralStringHandler() = default;
 
-PluralStringHandler::~PluralStringHandler() {}
+PluralStringHandler::~PluralStringHandler() = default;
 
 void PluralStringHandler::RegisterMessages() {
   web_ui()->RegisterMessageCallback(
@@ -39,58 +38,46 @@ void PluralStringHandler::AddLocalizedString(const std::string& name, int id) {
   name_to_id_[name] = id;
 }
 
-void PluralStringHandler::HandleGetPluralString(const base::ListValue* args) {
+void PluralStringHandler::HandleGetPluralString(const base::ListValue& args) {
   AllowJavascript();
-  CHECK_EQ(3U, args->GetSize());
-  const base::Value* callback_id;
-  CHECK(args->Get(0, &callback_id));
+  CHECK_EQ(3U, args.size());
 
-  std::string message_name;
-  CHECK(args->GetString(1, &message_name));
-
-  int count;
-  CHECK(args->GetInteger(2, &count));
+  const base::Value& callback_id = args[0];
+  const std::string& message_name = args[1].GetString();
+  int count = args[2].GetInt();
 
   auto string = GetPluralizedStringForMessageName(message_name, count);
 
-  ResolveJavascriptCallback(*callback_id, base::Value(string));
+  ResolveJavascriptCallback(callback_id, base::Value(string));
 }
 
 void PluralStringHandler::HandleGetPluralStringTupleWithComma(
-    const base::ListValue* args) {
+    const base::ListValue& args) {
   GetPluralStringTuple(args, IDS_CONCAT_TWO_STRINGS_WITH_COMMA);
 }
 
 void PluralStringHandler::HandleGetPluralStringTupleWithPeriods(
-    const base::ListValue* args) {
+    const base::ListValue& args) {
   GetPluralStringTuple(args, IDS_CONCAT_TWO_STRINGS_WITH_PERIODS);
 }
 
-void PluralStringHandler::GetPluralStringTuple(const base::ListValue* args,
+void PluralStringHandler::GetPluralStringTuple(const base::ListValue& args,
                                                int string_tuple_id) {
   AllowJavascript();
-  CHECK_EQ(5U, args->GetSize());
-  const base::Value* callback_id;
-  CHECK(args->Get(0, &callback_id));
+  CHECK_EQ(5U, args.size());
 
-  std::string message_name1;
-  CHECK(args->GetString(1, &message_name1));
-
-  int count1;
-  CHECK(args->GetInteger(2, &count1));
-
-  std::string message_name2;
-  CHECK(args->GetString(3, &message_name2));
-
-  int count2;
-  CHECK(args->GetInteger(4, &count2));
+  const base::Value& callback_id = args[0];
+  const std::string& message_name1 = args[1].GetString();
+  int count1 = args[2].GetInt();
+  const std::string& message_name2 = args[3].GetString();
+  int count2 = args[4].GetInt();
 
   auto string1 = GetPluralizedStringForMessageName(message_name1, count1);
   auto string2 = GetPluralizedStringForMessageName(message_name2, count2);
 
   ResolveJavascriptCallback(
-      *callback_id, base::Value(l10n_util::GetStringFUTF8(string_tuple_id,
-                                                          string1, string2)));
+      callback_id, base::Value(l10n_util::GetStringFUTF8(string_tuple_id,
+                                                         string1, string2)));
 }
 
 std::u16string PluralStringHandler::GetPluralizedStringForMessageName(

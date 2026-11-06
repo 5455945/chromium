@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,12 +17,13 @@ FormatSupportChecker::~FormatSupportChecker() {
 }
 
 bool FormatSupportChecker::Initialize() {
-  ComD3D11VideoDevice v_device;
   if (!device_)
     return false;
 
-  if (!SUCCEEDED(device_.As(&v_device)))
+  ComD3D11VideoDevice1 video_device;
+  if (!SUCCEEDED(device_.As(&video_device))) {
     return false;
+  }
 
   // The values here should have _no_ effect on supported profiles, but they
   // are needed anyway for initialization.
@@ -38,8 +39,10 @@ bool FormatSupportChecker::Initialize() {
   desc.OutputHeight = 1080;
   desc.Usage = D3D11_VIDEO_USAGE_PLAYBACK_NORMAL;
 
-  if (!SUCCEEDED(v_device->CreateVideoProcessorEnumerator(&desc, &enumerator_)))
+  if (!SUCCEEDED(
+          video_device->CreateVideoProcessorEnumerator(&desc, &enumerator_))) {
     return false;
+  }
 
   // For tests, which don't provide one (successfully).
   if (!enumerator_)
@@ -60,7 +63,7 @@ bool FormatSupportChecker::Initialize() {
 }
 
 bool FormatSupportChecker::CheckOutputFormatSupport(DXGI_FORMAT format) const {
-  if (!device_)
+  if (!device_ || !enumerator_)
     return false;
 
   DCHECK(initialized_);

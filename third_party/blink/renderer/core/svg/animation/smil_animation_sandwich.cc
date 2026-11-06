@@ -27,6 +27,7 @@
 
 #include <algorithm>
 
+#include "base/compiler_specific.h"
 #include "third_party/blink/renderer/core/svg/animation/smil_animation_value.h"
 #include "third_party/blink/renderer/core/svg/svg_animation_element.h"
 
@@ -38,7 +39,7 @@ struct PriorityCompare {
   PriorityCompare(SMILTime elapsed) : elapsed_(elapsed) {}
   bool operator()(const Member<SVGSMILElement>& a,
                   const Member<SVGSMILElement>& b) {
-    return b->IsHigherPriorityThan(a, elapsed_);
+    return b->IsHigherPriorityThan(a.Get(), elapsed_);
   }
   SMILTime elapsed_;
 };
@@ -53,12 +54,12 @@ void SMILAnimationSandwich::Add(SVGAnimationElement* animation) {
 }
 
 void SMILAnimationSandwich::Remove(SVGAnimationElement* animation) {
-  auto* position = std::find(sandwich_.begin(), sandwich_.end(), animation);
-  DCHECK(sandwich_.end() != position);
+  auto position = std::ranges::find(sandwich_, animation);
+  CHECK(sandwich_.end() != position);
   sandwich_.erase(position);
   // Clear the animated value when there are active animation elements but the
   // sandwich is empty.
-  if (!active_.IsEmpty() && sandwich_.IsEmpty()) {
+  if (!active_.empty() && sandwich_.empty()) {
     animation->ClearAnimationValue();
     active_.Shrink(0);
   }
@@ -66,15 +67,13 @@ void SMILAnimationSandwich::Remove(SVGAnimationElement* animation) {
 
 void SMILAnimationSandwich::UpdateActiveAnimationStack(
     SMILTime presentation_time) {
-  if (!std::is_sorted(sandwich_.begin(), sandwich_.end(),
-                      PriorityCompare(presentation_time))) {
-    std::sort(sandwich_.begin(), sandwich_.end(),
-              PriorityCompare(presentation_time));
+  if (!std::ranges::is_sorted(sandwich_, PriorityCompare(presentation_time))) {
+    std::ranges::sort(sandwich_, PriorityCompare(presentation_time));
   }
 
-  const bool was_active = !active_.IsEmpty();
+  const bool was_active = !active_.empty();
   active_.Shrink(0);
-  active_.ReserveCapacity(sandwich_.size());
+  active_.reserve(sandwich_.size());
   // Build the contributing/active sandwich.
   for (auto& animation : sandwich_) {
     if (!animation->IsContributing(presentation_time))
@@ -84,12 +83,12 @@ void SMILAnimationSandwich::UpdateActiveAnimationStack(
   }
   // If the sandwich was previously active but no longer is, clear any animated
   // value.
-  if (was_active && active_.IsEmpty())
+  if (was_active && active_.empty())
     sandwich_.front()->ClearAnimationValue();
 }
 
 bool SMILAnimationSandwich::ApplyAnimationValues() {
-  if (active_.IsEmpty())
+  if (active_.empty())
     return false;
 
   // Animations have to be applied lowest to highest prio.
@@ -97,11 +96,11 @@ bool SMILAnimationSandwich::ApplyAnimationValues() {
   // Only calculate the relevant animations. If we actually set the
   // animation value, we don't need to calculate what is beneath it
   // in the sandwich.
-  auto* sandwich_start = active_.end();
-  while (sandwich_start != active_.begin()) {
-    --sandwich_start;
-    if ((*sandwich_start)->OverwritesUnderlyingAnimationValue())
+  wtf_size_t sandwich_start = active_.size();
+  while (sandwich_start != 0) {
+    if (active_[--sandwich_start]->OverwritesUnderlyingAnimationValue()) {
       break;
+    }
   }
 
   // For now we need an element to setup and apply an animation. Any animation
@@ -113,9 +112,8 @@ bool SMILAnimationSandwich::ApplyAnimationValues() {
   // contributes to a particular element/attribute pair.
   SMILAnimationValue animation_value = animation->CreateAnimationValue();
 
-  for (auto* sandwich_it = sandwich_start; sandwich_it != active_.end();
-       sandwich_it++) {
-    (*sandwich_it)->ApplyAnimation(animation_value);
+  for (; sandwich_start < active_.size(); ++sandwich_start) {
+    active_[sandwich_start]->ApplyAnimation(animation_value);
   }
 
   animation->ApplyResultsToTarget(animation_value);

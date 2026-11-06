@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "base/memory/scoped_refptr.h"
+#include "base/synchronization/lock.h"
 #include "third_party/blink/public/platform/web_media_source.h"
 #include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
@@ -17,12 +18,12 @@
 #include "third_party/blink/renderer/core/html/time_ranges.h"
 #include "third_party/blink/renderer/modules/event_target_modules.h"
 #include "third_party/blink/renderer/modules/mediasource/media_source_attachment_supplement.h"
+#include "third_party/blink/renderer/modules/mediasource/media_source_handle_impl.h"
 #include "third_party/blink/renderer/modules/mediasource/source_buffer.h"
 #include "third_party/blink/renderer/modules/mediasource/source_buffer_list.h"
 #include "third_party/blink/renderer/platform/bindings/exception_code.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
-#include "third_party/blink/renderer/platform/wtf/threading_primitives.h"
 
 namespace media {
 class AudioDecoderConfig;
@@ -38,6 +39,7 @@ class CrossThreadMediaSourceAttachment;
 class SameThreadMediaSourceAttachment;
 class SourceBufferConfig;
 class TrackBase;
+class V8EndOfStreamError;
 class WebSourceBuffer;
 
 // Media Source Extensions (MSE) API's MediaSource object implementation (see
@@ -45,10 +47,11 @@ class WebSourceBuffer;
 // HTMLMediaElement's instance to use the MSE API (also known as "attaching MSE
 // to a media element") by using a Media Source object URL as the media
 // element's src attribute or the src attribute of a <source> inside the media
-// element. A MediaSourceAttachmentSupplement encapsulates the linkage of that
-// object URL to a MediaSource instance, and allows communication between the
-// media element and the MSE API.
-class MediaSource final : public EventTargetWithInlineData,
+// element, or by using a MediaSourceHandle for a worker-owned MediaSource as
+// the srcObject of the media element. A MediaSourceAttachmentSupplement
+// encapsulates the linkage of that object URL or handle to a MediaSource
+// instance, and allows communication between the media element and the MSE API.
+class MediaSource final : public EventTarget,
                           public ActiveScriptWrappable<MediaSource>,
                           public ExecutionContextLifecycleObserver {
   DEFINE_WRAPPERTYPEINFO();
@@ -64,6 +67,8 @@ class MediaSource final : public EventTargetWithInlineData,
   static void LogAndThrowDOMException(ExceptionState&,
                                       DOMExceptionCode error,
                                       const String& message);
+  static void LogAndThrowQuotaExceededError(ExceptionState&,
+                                            const String& message);
   static void LogAndThrowTypeError(ExceptionState&, const String&);
 
   // Web-exposed methods from media_source.idl
@@ -73,7 +78,8 @@ class MediaSource final : public EventTargetWithInlineData,
   }
   SourceBuffer* addSourceBuffer(const String& type, ExceptionState&)
       LOCKS_EXCLUDED(attachment_link_lock_);
-  SourceBuffer* AddSourceBufferUsingConfig(const SourceBufferConfig*,
+  SourceBuffer* AddSourceBufferUsingConfig(ExecutionContext* execution_context,
+                                           const SourceBufferConfig*,
                                            ExceptionState&)
       LOCKS_EXCLUDED(attachment_link_lock_);
   void removeSourceBuffer(SourceBuffer*, ExceptionState&)
@@ -87,13 +93,15 @@ class MediaSource final : public EventTargetWithInlineData,
   DEFINE_ATTRIBUTE_EVENT_LISTENER(sourceclose, kSourceclose)
 
   AtomicString readyState() const;
-  void endOfStream(const AtomicString& error, ExceptionState&)
-      LOCKS_EXCLUDED(attachment_link_lock_);
   void endOfStream(ExceptionState&) LOCKS_EXCLUDED(attachment_link_lock_);
+  void endOfStream(std::optional<V8EndOfStreamError> error, ExceptionState&)
+      LOCKS_EXCLUDED(attachment_link_lock_);
   void setLiveSeekableRange(double start, double end, ExceptionState&)
       LOCKS_EXCLUDED(attachment_link_lock_);
   void clearLiveSeekableRange(ExceptionState&)
       LOCKS_EXCLUDED(attachment_link_lock_);
+
+  MediaSourceHandleImpl* handle() LOCKS_EXCLUDED(attachment_link_lock_);
 
   static bool isTypeSupported(ExecutionContext* context, const String& type);
 
@@ -106,7 +114,7 @@ class MediaSource final : public EventTargetWithInlineData,
                                       const String& type,
                                       bool enforce_codec_specificity);
 
-  static bool canConstructInDedicatedWorker();
+  static bool canConstructInDedicatedWorker(ExecutionContext* context);
 
   // Methods needed by a MediaSourceAttachmentSupplement to service operations
   // proxied from an HTMLMediaElement.
@@ -181,6 +189,10 @@ class MediaSource final : public EventTargetWithInlineData,
   void AssertAttachmentsMutexHeldIfCrossThreadForDebugging() const
       LOCKS_EXCLUDED(attachment_link_lock_);
 
+  // Helper to tell the attachment to send updated buffered and seekable
+  // information to the media element if cross-thread.
+  void SendUpdatedInfoToMainThreadCache() LOCKS_EXCLUDED(attachment_link_lock_);
+
   void Trace(Visitor*) const override LOCKS_EXCLUDED(attachment_link_lock_);
 
  private:
@@ -198,6 +210,14 @@ class MediaSource final : public EventTargetWithInlineData,
       LOCKS_EXCLUDED(attachment_link_lock_);
   void RemoveSourceBuffer_Locked(
       SourceBuffer* buffer /* in */,
+      MediaSourceAttachmentSupplement::ExclusiveKey /* passkey */)
+      LOCKS_EXCLUDED(attachment_link_lock_);
+  void SetLiveSeekableRange_Locked(
+      double start,
+      double end,
+      MediaSourceAttachmentSupplement::ExclusiveKey /* passkey */)
+      LOCKS_EXCLUDED(attachment_link_lock_);
+  void ClearLiveSeekableRange_Locked(
       MediaSourceAttachmentSupplement::ExclusiveKey /* passkey */)
       LOCKS_EXCLUDED(attachment_link_lock_);
   void DetachWorkerOnContextDestruction_Locked(
@@ -221,9 +241,6 @@ class MediaSource final : public EventTargetWithInlineData,
       std::unique_ptr<media::VideoDecoderConfig> video_config,
       ExceptionState&) LOCKS_EXCLUDED(attachment_link_lock_);
   void ScheduleEvent(const AtomicString& event_name);
-  static void RecordIdentifiabilityMetric(ExecutionContext* context,
-                                          const String& type,
-                                          bool result);
 
   // Implements the duration change algorithm.
   // http://w3c.github.io/media-source/#duration-change-algorithm
@@ -257,45 +274,55 @@ class MediaSource final : public EventTargetWithInlineData,
   // and reset: the actual derived type of the attachment (same-thread vs
   // cross-thread, for instance) must be the same semantic as the actual derived
   // type of the tracer. Further, if there is no attachment, then there must be
-  // no tracer that's tracking an active attachment.
+  // no tracer that's tracking an active attachment. For
+  // SameThreadMediaSourceAttachment, both are set in
+  // StartAttachingToMediaElement(). For CrossThreadMediaSourceAttachment,
+  // |media_source_attachment_| is set in handle() when the attachment is
+  // created so that ContextDestroyed() can notify the attachment even before
+  // attachment starts on the main thread (and |attachment_tracer_| is always
+  // null).
   scoped_refptr<MediaSourceAttachmentSupplement> media_source_attachment_
       GUARDED_BY(attachment_link_lock_);
   Member<MediaSourceTracer> attachment_tracer_
       GUARDED_BY(attachment_link_lock_);
   bool context_already_destroyed_ GUARDED_BY(attachment_link_lock_);
 
+  Member<MediaSourceHandleImpl> worker_media_source_handle_;
+
   // |attachment_link_lock_| protects read/write of |media_source_attachment_|,
-  // |attachment_tracer_|, |context_already_destroyed_|, and
-  // |*live_seekable_range*_|.  It is only truly necessary for
-  // CrossThreadAttachment usage of worker MSE, to prevent read/write collision
-  // on main thread versus worker thread. Note that |attachment_link_lock_| must
-  // be released before attempting CrossThreadMediaSourceAttachment
-  // RunExclusively() to avoid deadlock. Many scenarios initiated by worker
-  // thread need to get the attachment to be able to invoke operations on it.
-  // The attachment then takes internal |attachment_state_lock_|and verifies
-  // state. Note that between releasing |attachment_link_lock_| and the
-  // RunExclusively() operation on the attachment taking its internal
-  // |attachment_state_lock_|, the attachment state could have changed, but the
-  // attachment understands how to resolve such cases.  Note that
-  // |web_media_source_| and child SourceBuffers' |web_source_buffer_|s usage
-  // are protected by only being attempted in scope of a RunExclusively callback
-  // (to prevent usage of them if the underlying demuxer owned by the main
-  // thread is no longer available).
+  // |attachment_tracer_|, |context_already_destroyed_|, and execution of
+  // handle().
+  // It is only truly necessary for CrossThreadAttachment usage of worker MSE,
+  // to prevent read/write collision on main thread versus worker thread. Note
+  // that |attachment_link_lock_| must be released before attempting
+  // CrossThreadMediaSourceAttachment RunExclusively() to avoid deadlock. Many
+  // scenarios initiated by worker thread need to get the attachment to be able
+  // to invoke operations on it. The attachment then takes internal
+  // |attachment_state_lock_|and verifies state. Note that between releasing
+  // |attachment_link_lock_| and the RunExclusively() operation on the
+  // attachment taking its internal |attachment_state_lock_|, the attachment
+  // state could have changed, but the attachment understands how to resolve
+  // such cases.  Note that |web_media_source_| and child SourceBuffers'
+  // |web_source_buffer_|s usage are protected by only being attempted in scope
+  // of a RunExclusively callback (to prevent usage of them if the underlying
+  // demuxer owned by the main thread is no longer available).
   // TODO(https://crbug.com/878133): Consider optimizing away (e.g., using
   // macros, conditional logic, or virtual implementations) usage of
   // |attachment_link_lock_| and
   // callbacks for RunExclusively, when using SameThreadMediaSourceAttachment,
   // on main thread).
-  mutable Mutex attachment_link_lock_;
+  mutable base::Lock attachment_link_lock_;
 
   Member<SourceBufferList> source_buffers_;
   Member<SourceBufferList> active_source_buffers_;
 
   // These are kept as raw data (not an Oilpan managed GC-able TimeRange) to
-  // avoid need to take lock during ::Trace, which could lead to deadlock.
-  bool has_live_seekable_range_ GUARDED_BY(attachment_link_lock_);
-  double live_seekable_range_start_ GUARDED_BY(attachment_link_lock_);
-  double live_seekable_range_end_ GUARDED_BY(attachment_link_lock_);
+  // avoid need to take lock during ::Trace, which could lead to deadlock. They
+  // are updated or read only while the attachment's internal lock is held
+  // (during the scope of a RunExclusively callback, for example).
+  bool has_live_seekable_range_;
+  double live_seekable_range_start_;
+  double live_seekable_range_end_;
 };
 
 }  // namespace blink

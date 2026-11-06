@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,16 @@
 #define MEDIA_AUDIO_WIN_WAVEOUT_OUTPUT_WIN_H_
 
 #include <windows.h>
-#include <mmsystem.h>
-#include <mmreg.h>
-#include <stddef.h>
-#include <stdint.h>
 
+#include <mmreg.h>
+#include <mmsystem.h>
+#include <stddef.h>
+
+#include <cstdint>
 #include <memory>
 
-#include "base/macros.h"
+#include "base/containers/heap_array.h"
+#include "base/memory/raw_ptr.h"
 #include "base/synchronization/lock.h"
 #include "base/win/scoped_handle.h"
 #include "media/audio/audio_io.h"
@@ -22,6 +24,11 @@
 namespace media {
 
 class AudioManagerWin;
+
+struct WaveBuffer {
+  WAVEHDR header = {};
+  base::HeapArray<char> audio_data;
+};
 
 // Implements PCM audio output support for Windows using the WaveXXX API.
 // While not as nice as the DirectSound-based API, it should work in all target
@@ -41,6 +48,11 @@ class PCMWaveOutAudioOutputStream : public AudioOutputStream {
                               const AudioParameters& params,
                               int num_buffers,
                               UINT device_id);
+
+  PCMWaveOutAudioOutputStream(const PCMWaveOutAudioOutputStream&) = delete;
+  PCMWaveOutAudioOutputStream& operator=(const PCMWaveOutAudioOutputStream&) =
+      delete;
+
   ~PCMWaveOutAudioOutputStream() override;
 
   // Implementation of AudioOutputStream.
@@ -53,7 +65,7 @@ class PCMWaveOutAudioOutputStream : public AudioOutputStream {
   void GetVolume(double* volume) override;
 
   // Sends a buffer to the audio driver for playback.
-  void QueueNextPacket(WAVEHDR* buffer);
+  void QueueNextPacket(WaveBuffer* buffer);
 
  private:
   enum State {
@@ -64,10 +76,7 @@ class PCMWaveOutAudioOutputStream : public AudioOutputStream {
     PCMA_CLOSED        // Device has been released.
   };
 
-  // Returns pointer to the n-th buffer.
-  inline WAVEHDR* GetBuffer(int n) const;
-
-  // Size of one buffer in bytes, rounded up if necessary.
+  // Size of one audio data buffer in bytes.
   inline size_t BufferSize() const;
 
   // Windows calls us back asking for more data when buffer_event_ signalled.
@@ -91,10 +100,10 @@ class PCMWaveOutAudioOutputStream : public AudioOutputStream {
 
   // The audio manager that created this output stream. We notify it when
   // we close so it can release its own resources.
-  AudioManagerWin* manager_;
+  raw_ptr<AudioManagerWin> manager_;
 
   // We use the callback mostly to periodically request more audio data.
-  AudioSourceCallback* callback_;
+  raw_ptr<AudioSourceCallback> callback_;
 
   // The number of buffers of size |buffer_size_| each to use.
   const int num_buffers_;
@@ -127,17 +136,14 @@ class PCMWaveOutAudioOutputStream : public AudioOutputStream {
   // Handle returned by RegisterWaitForSingleObject().
   HANDLE waiting_handle_;
 
-  // Pointer to the allocated audio buffers, we allocate all buffers in one big
-  // chunk. This object owns them.
-  std::unique_ptr<char[]> buffers_;
+  // Owned wave headers and audio data buffers.
+  base::HeapArray<WaveBuffer> buffers_;
 
   // Lock used to avoid the conflict when callbacks are called simultaneously.
   base::Lock lock_;
 
   // Container for retrieving data from AudioSourceCallback::OnMoreData().
   std::unique_ptr<AudioBus> audio_bus_;
-
-  DISALLOW_COPY_AND_ASSIGN(PCMWaveOutAudioOutputStream);
 };
 
 }  // namespace media

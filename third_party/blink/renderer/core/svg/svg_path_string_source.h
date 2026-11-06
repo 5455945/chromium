@@ -21,7 +21,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_SVG_SVG_PATH_STRING_SOURCE_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_SVG_SVG_PATH_STRING_SOURCE_H_
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/svg/svg_parsing_error.h"
 #include "third_party/blink/renderer/core/svg/svg_path_data.h"
@@ -34,11 +34,12 @@ class CORE_EXPORT SVGPathStringSource {
 
  public:
   explicit SVGPathStringSource(StringView);
+  SVGPathStringSource(const SVGPathStringSource&) = delete;
+  SVGPathStringSource& operator=(const SVGPathStringSource&) = delete;
 
   bool HasMoreData() const {
-    if (is_8bit_source_)
-      return current_.character8_ < end_.character8_;
-    return current_.character16_ < end_.character16_;
+    return is_8bit_source_ ? !remaining_.span8_.empty()
+                           : !remaining_.span16_.empty();
   }
   PathSegmentData ParseSegment();
 
@@ -53,19 +54,15 @@ class CORE_EXPORT SVGPathStringSource {
   bool is_8bit_source_;
 
   union {
-    const LChar* character8_;
-    const UChar* character16_;
-  } current_;
-  union {
-    const LChar* character8_;
-    const UChar* character16_;
-  } end_;
+    // RAW_PTR_EXCLUSION: #union
+    RAW_PTR_EXCLUSION base::span<const LChar> span8_{};
+    // RAW_PTR_EXCLUSION: #union
+    RAW_PTR_EXCLUSION base::span<const UChar> span16_;
+  } remaining_;
 
   SVGPathSegType previous_command_;
   SVGParsingError error_;
   StringView source_;
-
-  DISALLOW_COPY_AND_ASSIGN(SVGPathStringSource);
 };
 
 }  // namespace blink

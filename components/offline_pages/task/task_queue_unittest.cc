@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,12 @@
 
 #include <memory>
 #include <utility>
-#include "base/logging.h"
 
-#include "base/bind.h"
-#include "base/callback_forward.h"
+#include "base/functional/bind.h"
+#include "base/logging.h"
+#include "base/memory/raw_ptr.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/test_simple_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "components/offline_pages/task/test_task.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -29,7 +29,7 @@ class SimpleTask : public Task {
   using Task::TaskComplete;
 
  protected:
-  std::vector<std::string>* events_;
+  raw_ptr<std::vector<std::string>> events_;
   std::string name_;
 };
 
@@ -89,15 +89,16 @@ class OfflineTaskQueueTest : public testing::Test, public TaskQueue::Delegate {
   bool on_idle_called() { return on_idle_called_; }
 
  private:
-  Task* completed_task_ = nullptr;
+  raw_ptr<Task> completed_task_ = nullptr;
   scoped_refptr<base::TestSimpleTaskRunner> task_runner_;
-  base::ThreadTaskRunnerHandle task_runner_handle_;
+  base::SingleThreadTaskRunner::CurrentDefaultHandle
+      task_runner_current_default_handle_;
   bool on_idle_called_ = false;
 };
 
 OfflineTaskQueueTest::OfflineTaskQueueTest()
     : task_runner_(new base::TestSimpleTaskRunner),
-      task_runner_handle_(task_runner_) {}
+      task_runner_current_default_handle_(task_runner_) {}
 
 void OfflineTaskQueueTest::PumpLoop() {
   task_runner_->RunUntilIdle();

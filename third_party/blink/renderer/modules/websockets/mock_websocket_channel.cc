@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,16 @@
 
 namespace blink {
 
-MockWebSocketChannel::MockWebSocketChannel() = default;
+using ::testing::_;
+
+MockWebSocketChannel::MockWebSocketChannel() {
+  ON_CALL(*this, Connect(_, _, _))
+      .WillByDefault([this](const KURL& url, const String& protocol,
+                            network::mojom::blink::IPAddressSpace) {
+        return Connect(url, protocol);
+      });
+  ON_CALL(*this, Connect(_, _)).WillByDefault(testing::Return(true));
+}
 MockWebSocketChannel::~MockWebSocketChannel() = default;
 
 }  // namespace blink

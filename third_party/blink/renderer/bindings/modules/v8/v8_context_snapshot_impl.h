@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,7 +24,6 @@ class MODULES_EXPORT V8ContextSnapshotImpl {
   static v8::Local<v8::Context> CreateContext(
       v8::Isolate* isolate,
       const DOMWrapperWorld& world,
-      v8::ExtensionConfiguration* extension_config,
       v8::Local<v8::Object> global_proxy,
       Document* document);
 
@@ -32,7 +31,7 @@ class MODULES_EXPORT V8ContextSnapshotImpl {
 
   static void InstallInterfaceTemplates(v8::Isolate* isolate);
 
-  static v8::StartupData TakeSnapshot();
+  static v8::StartupData TakeSnapshot(v8::Isolate* isolate);
 
   static const intptr_t* GetReferenceTable();
 };

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,9 @@
 
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "extensions/buildflags/buildflags.h"
 #include "third_party/widevine/cdm/buildflags.h"
+#include "ui/webui/buildflags.h"
 
 namespace base {
 class FilePath;
@@ -22,11 +23,12 @@ namespace chrome {
 enum {
   PATH_START = 1000,
 
-  DIR_APP = PATH_START,  // Directory where dlls and data reside.
-  DIR_LOGS,              // Directory where logs should be written.
-  DIR_USER_DATA,         // Directory where user data can be written.
-  DIR_CRASH_DUMPS,       // Directory where crash dumps are written.
-#if defined(OS_WIN)
+  DIR_LOGS = PATH_START,  // Directory where logs should be written.
+  DIR_USER_DATA,          // Directory where user data can be written.
+  DIR_CRASH_METRICS,      // Directory where crash metrics are written.
+  DIR_CRASH_DUMPS,        // Directory where crash dumps are written.
+  DIR_LOCAL_TRACES,       // Directory where local traces are written.
+#if BUILDFLAG(IS_WIN)
   DIR_WATCHER_DATA,       // Directory where the Chrome watcher stores
                           // data.
   DIR_ROAMING_USER_DATA,  // Directory where user data is stored that
@@ -43,21 +45,19 @@ enum {
                                // "My Documents/Downloads", (Windows) or
                                // "Downloads". (Linux)
   DIR_DEFAULT_DOWNLOADS,       // Directory for a user's downloads.
-  DIR_INTERNAL_PLUGINS,        // Directory where internal plugins reside.
   DIR_COMPONENTS,              // Directory where built-in implementations of
                                // component-updated libraries or data reside.
-#if defined(OS_POSIX) && !defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
+  DIR_OUTER_BUNDLE,  // Directory that is the outermost Chromium bundle.
+#endif
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC)
   DIR_POLICY_FILES,  // Directory for system-wide read-only
                      // policy files that allow sys-admins
                      // to set policies for chrome. This directory
                      // contains subdirectories.
 #endif
-// TODO(crbug.com/1052397): Revisit once build flag switch of lacros-chrome is
-// complete.
-#if BUILDFLAG(IS_CHROMEOS_ASH) ||                            \
-    ((defined(OS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)) && \
-     BUILDFLAG(CHROMIUM_BRANDING)) ||                        \
-    defined(OS_MAC)
+#if BUILDFLAG(IS_CHROMEOS) || \
+    (BUILDFLAG(IS_LINUX) && BUILDFLAG(CHROMIUM_BRANDING)) || BUILDFLAG(IS_MAC)
   DIR_USER_EXTERNAL_EXTENSIONS,  // Directory for per-user external extensions
                                  // on Chrome Mac and Chromium Linux.
                                  // On Chrome OS, this path is used for OEM
@@ -65,7 +65,7 @@ enum {
                                  // create it.
 #endif
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   DIR_STANDALONE_EXTERNAL_EXTENSIONS,  // Directory for 'per-extension'
                                        // definition manifest files that
                                        // describe extensions which are to be
@@ -73,26 +73,19 @@ enum {
 #endif
   DIR_EXTERNAL_EXTENSIONS,  // Directory where installer places .crx files.
 
-  DIR_DEFAULT_APPS,      // Directory where installer places .crx files
-                         // to be installed when chrome is first run.
-  FILE_RESOURCE_MODULE,  // Full path and filename of the module that
-                         // contains embedded resources (version,
-                         // strings, images, etc.).
   FILE_LOCAL_STATE,      // Path and filename to the file in which
                          // machine/installation-specific state is saved.
   FILE_RECORDED_SCRIPT,  // Full path to the script.log file that
                          // contains recorded browser events for
                          // playback.
-  DIR_PNACL_BASE,        // Full path to the base dir for PNaCl.
-  DIR_PNACL_COMPONENT,   // Full path to the latest PNaCl version
-                         // (subdir of DIR_PNACL_BASE).
 #if BUILDFLAG(ENABLE_WIDEVINE)
   DIR_BUNDLED_WIDEVINE_CDM,  // Full path to the directory containing the
                              // bundled Widevine CDM.
   DIR_COMPONENT_UPDATED_WIDEVINE_CDM,  // Base directory of the Widevine CDM
                                        // downloaded by the component updater.
-  FILE_COMPONENT_WIDEVINE_CDM_HINT,    // A file in a known location that points
-                                       // to the component updated Widevine CDM.
+  FILE_COMPONENT_WIDEVINE_CDM_HINT,    // A file in a known location that
+                                       // points to the component updated
+                                       // Widevine CDM.
 #endif
   FILE_RESOURCES_PACK,  // Full path to the .pak file containing binary data.
                         // This includes data for internal pages (e.g., html
@@ -101,21 +94,26 @@ enum {
   FILE_DEV_UI_RESOURCES_PACK,  // Full path to the .pak file containing
                                // binary data for internal pages (e.g., html
                                // files and images).
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  DIR_CHROMEOS_WALLPAPERS,            // Directory where downloaded chromeos
-                                      // wallpapers reside.
-  DIR_CHROMEOS_WALLPAPER_THUMBNAILS,  // Directory where downloaded chromeos
-                                      // wallpaper thumbnails reside.
-  DIR_CHROMEOS_CUSTOM_WALLPAPERS,     // Directory where custom wallpapers
-                                      // reside.
+#if BUILDFLAG(IS_MAC) && BUILDFLAG(ENABLE_WEBUI_GENERATE_CODE_CACHE)
+  FILE_WEBUI_CODE_CACHE_PACK,  // Full path to the per-architecture .pak file
+                               // with the bundled WebUI code cache.
 #endif
-#if defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_MAC)
+
+#if BUILDFLAG(IS_CHROMEOS)
+  DIR_CHROMEOS_CRD_DATA,  // Directory where Chrome Remote Desktop can store
+                          // data that must persist a Chrome restart but that
+                          // must be cleared on device reboot.
+#endif
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE) &&                                   \
+    (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || \
+     BUILDFLAG(IS_ANDROID))
   DIR_NATIVE_MESSAGING,       // System directory where native messaging host
                               // manifest files are stored.
   DIR_USER_NATIVE_MESSAGING,  // Directory with Native Messaging Hosts
                               // installed per-user.
 #endif
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
   DIR_GLOBAL_GCM_STORE,  // Directory where the global GCM instance
                          // stores its data.
 #endif
@@ -124,17 +122,17 @@ enum {
   DIR_GEN_TEST_DATA,  // Directory where generated test data resides.
   DIR_TEST_DATA,      // Directory where unit test data resides.
   DIR_TEST_TOOLS,     // Directory where unit test tools reside.
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  // File containing the location of the updated TPM firmware binary in the file
-  // system.
-  FILE_CHROME_OS_TPM_FIRMWARE_UPDATE_LOCATION,
 
-  // Flag file indicating SRK ROCA vulnerability status.
-  FILE_CHROME_OS_TPM_FIRMWARE_UPDATE_SRK_VULNERABLE_ROCA,
-#endif                                       // BUILDFLAG(IS_CHROMEOS_ASH)
   DIR_OPTIMIZATION_GUIDE_PREDICTION_MODELS,  // Directory where verified models
                                              // downloaded by the Optimization
                                              // Guide are stored.
+#if !BUILDFLAG(IS_ANDROID)
+  DIR_CHILD_MODULE_ROOT,  // Directory in which child module versions (e.g.,
+                          // dynamic patches) for the running browser are
+                          // staged. Set by the browser process at startup if
+                          // dynamic patching is enabled; not available in
+                          // other processes.
+#endif
   PATH_END
 };
 

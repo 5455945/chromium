@@ -1,15 +1,15 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chromecast/bindings/bindings_manager_cast.h"
 
 #include <memory>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "components/cast/message_port/cast/message_port_cast.h"
 
 namespace chromecast {
@@ -30,9 +30,18 @@ mojo::PendingRemote<mojom::ApiBindings> BindingsManagerCast::CreateRemote() {
   return pending_remote;
 }
 
-void BindingsManagerCast::AddBinding(base::StringPiece binding_name,
-                                     base::StringPiece binding_script) {
-  bindings_[std::string(binding_name)] = std::string(binding_script);
+void BindingsManagerCast::AddBinding(std::string_view binding_name,
+                                     std::string_view binding_script) {
+  std::pair<std::string, std::string> new_entry = {std::string(binding_name),
+                                                   std::string(binding_script)};
+  for (auto it = bindings_.begin(); it != bindings_.end(); ++it) {
+    if (it->first == new_entry.first) {
+      *it = std::move(new_entry);
+      return;
+    }
+  }
+
+  bindings_.emplace_back(std::move(new_entry));
 }
 
 void BindingsManagerCast::OnClientDisconnected() {
@@ -41,9 +50,9 @@ void BindingsManagerCast::OnClientDisconnected() {
 
 void BindingsManagerCast::GetAll(GetAllCallback callback) {
   std::vector<chromecast::mojom::ApiBindingPtr> bindings_vector;
-  for (const auto& bindings_name_and_script : bindings_) {
+  for (const auto& entry : bindings_) {
     bindings_vector.emplace_back(
-        chromecast::mojom::ApiBinding::New(bindings_name_and_script.second));
+        chromecast::mojom::ApiBinding::New(entry.second));
   }
   std::move(callback).Run(std::move(bindings_vector));
 }

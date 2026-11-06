@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "base/json/json_reader.h"
 #include "third_party/re2/src/re2/re2.h"
@@ -35,7 +36,7 @@ std::string GetLastSegment(const std::string& path) {
 
 int CountMatches(const std::string& s, const std::string& p) {
   // return len(re.findall(p, s))
-  re2::StringPiece sp(s);
+  std::string_view sp(s);
   re2::RE2 regexp(p);
   int count = 0;
   while (re2::RE2::FindAndConsume(&sp, regexp))
@@ -70,7 +71,7 @@ std::vector<double> CalculateDerivedFeatures(bool isOGArticle,
                                              const std::string& innerHTML) {
   // In the training pipeline, the strings are explicitly encoded in utf-8 (as
   // they are here).
-  const std::string& path = url.path();
+  const std::string& path = url.GetPath();
   int innerTextWords = GetWordCount(innerText);
   int textContentWords = GetWordCount(textContent);
   int innerHTMLWords = GetWordCount(innerHTML);
@@ -147,45 +148,38 @@ std::vector<double> CalculateDerivedFeatures(bool isOGArticle,
 
 std::vector<double> CalculateDerivedFeaturesFromJSON(
     const base::Value* stringified_json) {
-  std::string stringified;
-  if (!stringified_json->GetAsString(&stringified)) {
+  if (!stringified_json->is_string()) {
     return std::vector<double>();
   }
 
-  std::unique_ptr<base::Value> json =
-      base::JSONReader::ReadDeprecated(stringified);
-  if (!json) {
+  std::optional<base::DictValue> dict = base::JSONReader::ReadDict(
+      stringified_json->GetString(), base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!dict) {
     return std::vector<double>();
   }
 
-  const base::DictionaryValue* dict;
-  if (!json->GetAsDictionary(&dict)) {
+  std::optional<double> numElements = dict->FindDouble("numElements");
+  std::optional<double> numAnchors = dict->FindDouble("numAnchors");
+  std::optional<double> numForms = dict->FindDouble("numForms");
+  std::optional<bool> isOGArticle = dict->FindBool("opengraph");
+
+  std::string* url = dict->FindString("url");
+  std::string* innerText = dict->FindString("innerText");
+  std::string* textContent = dict->FindString("textContent");
+  std::string* innerHTML = dict->FindString("innerHTML");
+  if (!(isOGArticle.has_value() && url && numElements && numAnchors &&
+        numForms && innerText && textContent && innerHTML)) {
     return std::vector<double>();
   }
 
-  bool isOGArticle = false;
-  std::string url, innerText, textContent, innerHTML;
-  double numElements = 0.0, numAnchors = 0.0, numForms = 0.0;
-
-  if (!(dict->GetBoolean("opengraph", &isOGArticle) &&
-        dict->GetString("url", &url) &&
-        dict->GetDouble("numElements", &numElements) &&
-        dict->GetDouble("numAnchors", &numAnchors) &&
-        dict->GetDouble("numForms", &numForms) &&
-        dict->GetString("innerText", &innerText) &&
-        dict->GetString("textContent", &textContent) &&
-        dict->GetString("innerHTML", &innerHTML))) {
-    return std::vector<double>();
-  }
-
-  GURL parsed_url(url);
+  GURL parsed_url(*url);
   if (!parsed_url.is_valid()) {
     return std::vector<double>();
   }
 
-  return CalculateDerivedFeatures(isOGArticle, parsed_url, numElements,
-                                  numAnchors, numForms, innerText, textContent,
-                                  innerHTML);
+  return CalculateDerivedFeatures(isOGArticle.value(), parsed_url, *numElements,
+                                  *numAnchors, *numForms, *innerText,
+                                  *textContent, *innerHTML);
 }
 
 std::vector<double> CalculateDerivedFeatures(bool openGraph,
@@ -196,7 +190,7 @@ std::vector<double> CalculateDerivedFeatures(bool openGraph,
                                              double mozScore,
                                              double mozScoreAllSqrt,
                                              double mozScoreAllLinear) {
-  const std::string& path = url.path();
+  const std::string& path = url.GetPath();
   std::vector<double> features;
   // 'opengraph', opengraph,
   features.push_back(openGraph);

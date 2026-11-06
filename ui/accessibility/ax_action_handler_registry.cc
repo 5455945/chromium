@@ -1,18 +1,21 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/accessibility/ax_action_handler_registry.h"
 
-#include "base/memory/singleton.h"
+#include "base/no_destructor.h"
+#include "base/observer_list.h"
 #include "base/strings/string_number_conversions.h"
+#include "ui/accessibility/ax_action_data.h"
 #include "ui/accessibility/ax_action_handler_base.h"
 
 namespace ui {
 
 // static
 AXActionHandlerRegistry* AXActionHandlerRegistry::GetInstance() {
-  return base::Singleton<AXActionHandlerRegistry>::get();
+  static base::NoDestructor<AXActionHandlerRegistry> registry;
+  return registry.get();
 }
 
 void AXActionHandlerRegistry::SetFrameIDForAXTreeID(
@@ -21,7 +24,6 @@ void AXActionHandlerRegistry::SetFrameIDForAXTreeID(
   auto it = frame_to_ax_tree_id_map_.find(frame_id);
   if (it != frame_to_ax_tree_id_map_.end()) {
     NOTREACHED();
-    return;
   }
 
   frame_to_ax_tree_id_map_[frame_id] = ax_tree_id;
@@ -37,11 +39,8 @@ void AXActionHandlerRegistry::RemoveObserver(
   observers_.RemoveObserver(observer);
 }
 
-void AXActionHandlerRegistry::PerformAction(
-    const ui::AXActionData& action_data) {
-  for (AXActionHandlerObserver& observer : observers_) {
-    observer.PerformAction(action_data);
-  }
+void AXActionHandlerRegistry::PerformAction(const AXActionData& action_data) {
+  observers_.Notify(&AXActionHandlerObserver::PerformAction, action_data);
 }
 
 AXActionHandlerRegistry::FrameID AXActionHandlerRegistry::GetFrameID(
@@ -59,7 +58,7 @@ AXTreeID AXActionHandlerRegistry::GetAXTreeID(
   if (it != frame_to_ax_tree_id_map_.end())
     return it->second;
 
-  return ui::AXTreeIDUnknown();
+  return AXTreeIDUnknown();
 }
 
 AXTreeID AXActionHandlerRegistry::GetOrCreateAXTreeID(
@@ -81,9 +80,10 @@ AXActionHandlerBase* AXActionHandlerRegistry::GetActionHandler(
   return it->second;
 }
 
-void AXActionHandlerRegistry::SetAXTreeID(const ui::AXTreeID& id,
+void AXActionHandlerRegistry::SetAXTreeID(const AXTreeID& id,
                                           AXActionHandlerBase* action_handler) {
-  DCHECK(id_to_action_handler_.find(id) == id_to_action_handler_.end());
+  CHECK(id_to_action_handler_.find(id) == id_to_action_handler_.end(),
+        base::NotFatalUntil::M163);
   id_to_action_handler_[id] = action_handler;
 }
 
@@ -97,10 +97,12 @@ void AXActionHandlerRegistry::RemoveAXTreeID(AXTreeID ax_tree_id) {
   auto action_it = id_to_action_handler_.find(ax_tree_id);
   if (action_it != id_to_action_handler_.end())
     id_to_action_handler_.erase(action_it);
+
+  observers_.Notify(&AXActionHandlerObserver::TreeRemoved, ax_tree_id);
 }
 
-AXActionHandlerRegistry::AXActionHandlerRegistry() {}
+AXActionHandlerRegistry::AXActionHandlerRegistry() = default;
 
-AXActionHandlerRegistry::~AXActionHandlerRegistry() {}
+AXActionHandlerRegistry::~AXActionHandlerRegistry() = default;
 
 }  // namespace ui

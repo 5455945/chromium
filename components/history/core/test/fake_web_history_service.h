@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/macros.h"
 #include "base/time/time.h"
 #include "components/history/core/browser/web_history_service.h"
 #include "url/gurl.h"
@@ -29,7 +28,13 @@ namespace history {
 // TODO(msramek): This class might need its own set of tests.
 class FakeWebHistoryService : public WebHistoryService {
  public:
+  static constexpr char kDefaultClientId[] = "default_client_id";
+
   FakeWebHistoryService();
+
+  FakeWebHistoryService(const FakeWebHistoryService&) = delete;
+  FakeWebHistoryService& operator=(const FakeWebHistoryService&) = delete;
+
   ~FakeWebHistoryService() override;
 
   // Sets up the behavior of the fake response returned when calling
@@ -40,7 +45,8 @@ class FakeWebHistoryService : public WebHistoryService {
   // Adds a fake visit.
   void AddSyncedVisit(const std::string& url,
                       base::Time timestamp,
-                      const std::string& icon_url = std::string(""));
+                      const std::string& icon_url = std::string(""),
+                      const std::string& client_id = kDefaultClientId);
 
   // Clears all fake visits.
   void ClearSyncedVisits();
@@ -57,10 +63,18 @@ class FakeWebHistoryService : public WebHistoryService {
   struct Visit {
     Visit(const std::string& url,
           base::Time timestamp,
-          const std::string& icon_url);
+          const std::string& icon_url,
+          const std::string& client_id = kDefaultClientId);
+    Visit(const Visit&);
+    Visit& operator=(const Visit&);
+    Visit(Visit&&) noexcept;
+    Visit& operator=(Visit&&) noexcept;
+    ~Visit();
+
     std::string url;
     base::Time timestamp;
     std::string icon_url;
+    std::string client_id;
   };
 
   // Returns up to `count` results from `visits_` between `begin` and `end`.
@@ -73,18 +87,18 @@ class FakeWebHistoryService : public WebHistoryService {
       base::Time begin,
       base::Time end,
       size_t count,
+      const std::vector<std::string>& client_ids,
       bool* more_results_left);
 
  private:
   class FakeRequest;
 
-  base::Time GetTimeForKeyInQuery(const GURL& url, const std::string& key);
-
   // WebHistoryService implementation.
-  Request* CreateRequest(const GURL& url,
-                         CompletionCallback callback,
-                         const net::PartialNetworkTrafficAnnotationTag&
-                             partial_traffic_annotation) override;
+  std::unique_ptr<Request> CreateRequest(
+      const GURL& url,
+      CompletionCallback callback,
+      const net::PartialNetworkTrafficAnnotationTag& partial_traffic_annotation)
+      override;
 
   // Parameters for the fake request.
   bool emulate_success_;
@@ -96,8 +110,6 @@ class FakeWebHistoryService : public WebHistoryService {
 
   // Fake visits storage.
   std::vector<Visit> visits_;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeWebHistoryService);
 };
 
 }  // namespace history

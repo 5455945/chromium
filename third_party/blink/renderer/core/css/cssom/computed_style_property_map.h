@@ -1,15 +1,16 @@
-// Copyright 2016 the Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_CSS_CSSOM_COMPUTED_STYLE_PROPERTY_MAP_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_CSSOM_COMPUTED_STYLE_PROPERTY_MAP_H_
 
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/css_computed_style_declaration.h"
 #include "third_party/blink/renderer/core/css/css_selector.h"
 #include "third_party/blink/renderer/core/css/cssom/style_property_map_read_only_main_thread.h"
 #include "third_party/blink/renderer/core/css/parser/css_selector_parser.h"
-#include "third_party/blink/renderer/core/dom/node.h"
+#include "third_party/blink/renderer/core/dom/element.h"
 
 namespace blink {
 
@@ -25,14 +26,17 @@ namespace blink {
 class CORE_EXPORT ComputedStylePropertyMap
     : public StylePropertyMapReadOnlyMainThread {
  public:
-  ComputedStylePropertyMap(Node* node, const String& pseudo_element = String())
-      : pseudo_id_(CSSSelectorParser::ParsePseudoElement(pseudo_element, node)),
-        node_(node) {}
+  explicit ComputedStylePropertyMap(Element* element,
+                                    const String& pseudo_element = String())
+      : pseudo_id_(CSSSelectorParser::ParsePseudoElement(pseudo_element,
+                                                         element,
+                                                         pseudo_argument_)),
+        element_(element) {}
   ComputedStylePropertyMap(const ComputedStylePropertyMap&) = delete;
   ComputedStylePropertyMap& operator=(const ComputedStylePropertyMap&) = delete;
 
   void Trace(Visitor* visitor) const override {
-    visitor->Trace(node_);
+    visitor->Trace(element_);
     StylePropertyMapReadOnlyMainThread::Trace(visitor);
   }
 
@@ -46,8 +50,8 @@ class CORE_EXPORT ComputedStylePropertyMap
 
  protected:
   const CSSValue* GetProperty(CSSPropertyID) const override;
-  const CSSValue* GetCustomProperty(AtomicString) const override;
-  void ForEachProperty(const IterationCallback&) override;
+  const CSSValue* GetCustomProperty(const AtomicString&) const override;
+  void ForEachProperty(IterationFunction visitor) override;
 
   String SerializationForShorthand(const CSSProperty&) const final;
 
@@ -56,10 +60,21 @@ class CORE_EXPORT ComputedStylePropertyMap
   // See
   // https://github.com/w3c/css-houdini-drafts/issues/350#issuecomment-294690156
   PseudoId pseudo_id_;
-  Member<Node> node_;
+  AtomicString pseudo_argument_;
+  Member<Element> element_;
 
-  Node* StyledNode() const;
+  Element* StyledElement() const;
   const ComputedStyle* UpdateStyle() const;
+
+  // A property-specific use counter is triggered when the computed value for a
+  // border-*-width, column-rule-width, and outline-width property is non-zero
+  // and the corresponding style property is set to "none" or "hidden". This
+  // will be used to assess web compatibility risks, as the computed value for
+  // border-*-width, column-rule-width, and outline-width properties should not
+  // be influenced by the corresponding style property being set to "none" or
+  // "hidden".
+  void RecordUseCounterForWidthStyleValues(CSSPropertyID,
+                                           const ComputedStyle&) const;
 };
 
 }  // namespace blink

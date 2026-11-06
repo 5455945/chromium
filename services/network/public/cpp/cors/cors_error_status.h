@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,23 +9,18 @@
 #include <string>
 
 #include "base/component_export.h"
-#include "base/memory/scoped_refptr.h"
 #include "base/unguessable_token.h"
-#include "net/http/http_response_headers.h"
+#include "mojo/public/cpp/bindings/default_construct_tag.h"
 #include "services/network/public/mojom/cors.mojom-shared.h"
 #include "services/network/public/mojom/ip_address_space.mojom-shared.h"
 
 namespace network {
 
-// WARNING: When adding fields to this truct, do not forget to add them in
-// services/network/public/cpp/network_ipc_param_traits.h too.
+// Type-mapped to `network::mojom::CorsErrorStatus`.
+// See
+// https://source.chromium.org/chromium/chromium/src/+/main:services/network/public/mojom/cors.mojom
+// for documentation on individual fields.
 struct COMPONENT_EXPORT(NETWORK_CPP_BASE) CorsErrorStatus {
-  // This constructor is used by generated IPC serialization code.
-  // Should not use this explicitly.
-  // TODO(toyoshim, yhirano): Exploring a way to make this private, and allows
-  // only serialization code for mojo can access.
-  CorsErrorStatus();
-
   // Instances of this type are copyable and efficiently movable.
   CorsErrorStatus(const CorsErrorStatus&);
   CorsErrorStatus& operator=(const CorsErrorStatus&);
@@ -36,31 +31,30 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE) CorsErrorStatus {
   CorsErrorStatus(mojom::CorsError cors_error,
                   const std::string& failed_parameter);
 
-  // Constructor for CORS-RFC1918 errors.
-  // Sets `cors_error` to `kInsecurePrivateNetwork`.
-  explicit CorsErrorStatus(mojom::IPAddressSpace resource_address_space);
+  // Constructors for Local Network Access errors.
+  CorsErrorStatus(mojom::CorsError cors_error,
+                  mojom::IPAddressSpace resource_address_space);
+
+  CorsErrorStatus(mojom::CorsError cors_error,
+                  mojom::IPAddressSpace resource_address_space,
+                  mojom::IPAddressSpace inconsistent_address_space);
 
   ~CorsErrorStatus();
 
   bool operator==(const CorsErrorStatus& rhs) const;
-  bool operator!=(const CorsErrorStatus& rhs) const { return !(*this == rhs); }
+
+  // This constructor is used by generated IPC serialization code.
+  explicit CorsErrorStatus(mojo::DefaultConstruct::Tag);
 
   // NOTE: This value is meaningless and should be overridden immediately either
-  // by a constructor or by IPC deserialization code.
+  // by a constructor or by Mojo deserialization code.
   mojom::CorsError cors_error = mojom::CorsError::kMaxValue;
 
-  // Contains request method name, or header name that didn't pass a CORS check.
   std::string failed_parameter;
-
-  // The address space of the requested resource.
-  //
-  // Only set if `cors_error == kInsecurePrivateNetwork`.
   mojom::IPAddressSpace resource_address_space =
       mojom::IPAddressSpace::kUnknown;
-
-  // True when there is an "authorization" header on the request and it is
-  // covered by the wildcard in the preflight response.
-  // TODO(crbug.com/1176753): Remove this once the investigation is done.
+  mojom::IPAddressSpace inconsistent_address_space =
+      mojom::IPAddressSpace::kUnknown;
   bool has_authorization_covered_by_wildcard_on_preflight = false;
   base::UnguessableToken issue_id = base::UnguessableToken::Create();
 };

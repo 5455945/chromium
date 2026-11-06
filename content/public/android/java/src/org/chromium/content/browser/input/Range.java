@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,10 @@ package org.chromium.content.browser.input;
 
 import androidx.annotation.VisibleForTesting;
 
-/**
- * A simple class to set start and end in int type.
- * TODO(changwan): replace this with android.util.Range when the default SDK
- * version becomes 21 or higher.
- */
+import org.chromium.build.annotations.NullMarked;
+
+/** A simple class to set start and end in int type. */
+@NullMarked
 public class Range {
     private int mStart; // guaranteed to be smaller than or equal to mEnd
     private int mEnd;

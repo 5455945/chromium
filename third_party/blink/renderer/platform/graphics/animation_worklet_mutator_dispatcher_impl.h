@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,17 +8,14 @@
 #include <memory>
 #include <utility>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/single_thread_task_runner.h"
-#include "base/time/tick_clock.h"
+#include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/renderer/platform/graphics/animation_worklet_mutator.h"
 #include "third_party/blink/renderer/platform/graphics/animation_worklet_mutator_dispatcher.h"
 #include "third_party/blink/renderer/platform/graphics/mutator_client.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
-#include "third_party/blink/renderer/platform/heap/persistent.h"
-#include "third_party/blink/renderer/platform/heap/visitor.h"
+#include "third_party/blink/renderer/platform/heap/cross_thread_persistent.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
-#include "third_party/blink/renderer/platform/wtf/hash_set.h"
 #include "third_party/blink/renderer/platform/wtf/thread_safe_ref_counted.h"
 
 namespace blink {
@@ -83,10 +80,6 @@ class PLATFORM_EXPORT AnimationWorkletMutatorDispatcherImpl final
     return weak_factory_.GetWeakPtr();
   }
 
-  void SetClockForTesting(std::unique_ptr<base::TickClock> tick_clock) {
-    tick_clock_ = std::move(tick_clock);
-  }
-
  private:
   class OutputVectorRef;
   struct AsyncMutationRequest;
@@ -104,27 +97,18 @@ class PLATFORM_EXPORT AnimationWorkletMutatorDispatcherImpl final
   // thread associated with the last mutation to complete.
   void RequestMutations(CrossThreadOnceClosure done_callback);
 
-  // Dispatches mutation update requests. The request time includes time
-  // in the queue. In the event that a queued request is replaced, the
-  // replacement uses the original request time.
+  // Dispatches mutation update requests.
   // |done_callback| is called on the impl thread on completion of the mutation
   // cycle.
   void MutateAsynchronouslyInternal(
-      base::TimeTicks request_time,
       AsyncMutationCompleteCallback done_callback);
 
   // Called when the asynchronous mutation cycle is complete. The mutation id
-  // is used for asynchronous task monitoring and request time is used for
-  // collecting UMA stats of the total time between mutation request and
-  // completion.
-  void AsyncMutationsDone(int async_mutation_id, base::TimeTicks request_time);
+  // is used for asynchronous task monitoring.
+  void AsyncMutationsDone(int async_mutation_id);
 
   // Returns true if any updates were applied.
   bool ApplyMutationsOnHostThread();
-
-  // Timing function used for UMA metrics. Uses a tick clock that may be
-  // overridden for testing purposes.
-  base::TimeTicks NowTicks() const;
 
   // The AnimationWorkletProxyClients are also owned by the WorkerClients
   // dictionary.
@@ -140,7 +124,7 @@ class PLATFORM_EXPORT AnimationWorkletMutatorDispatcherImpl final
 
   // The MutatorClient owns (std::unique_ptr) us, so this pointer is
   // valid as long as this class exists.
-  MutatorClient* client_;
+  raw_ptr<MutatorClient> client_;
 
   // Map of mutator scope IDs to mutator input. The Mutate methods safeguards
   // against concurrent calls (important once async mutations are introduced) by
@@ -168,8 +152,6 @@ class PLATFORM_EXPORT AnimationWorkletMutatorDispatcherImpl final
   // entry cannot, as each priority request is required to run.
   std::unique_ptr<AsyncMutationRequest> queued_priority_request;
   std::unique_ptr<AsyncMutationRequest> queued_replaceable_request;
-
-  std::unique_ptr<base::TickClock> tick_clock_;
 
   base::WeakPtrFactory<AnimationWorkletMutatorDispatcherImpl> weak_factory_{
       this};

@@ -1,12 +1,12 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -15,8 +15,8 @@
 #include "mojo/public/cpp/bindings/tests/pickled_types_blink.h"
 #include "mojo/public/cpp/bindings/tests/pickled_types_chromium.h"
 #include "mojo/public/cpp/bindings/tests/variant_test_util.h"
-#include "mojo/public/interfaces/bindings/tests/test_native_types.mojom-blink.h"
-#include "mojo/public/interfaces/bindings/tests/test_native_types.mojom.h"
+#include "mojo/public/interfaces/bindings/tests/test_native_types.test-mojom-blink.h"
+#include "mojo/public/interfaces/bindings/tests/test_native_types.test-mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace mojo {
@@ -74,7 +74,9 @@ void ExpectError(Remote<T>* proxy, base::OnceClosure callback) {
 }
 
 template <typename Func, typename Arg>
-void RunSimpleLambda(Func func, Arg arg) { func(std::move(arg)); }
+void RunSimpleLambda(Func func, Arg arg) {
+  func(std::move(arg));
+}
 
 template <typename Arg, typename Func>
 base::OnceCallback<void(Arg)> BindSimpleLambda(Func func) {
@@ -135,13 +137,13 @@ class BlinkPicklePasserImpl : public blink::PicklePasser {
     std::move(callback).Run(std::move(container));
   }
 
-  void PassPickles(WTF::Vector<PickledStructBlink> pickles,
+  void PassPickles(::blink::Vector<PickledStructBlink> pickles,
                    PassPicklesCallback callback) override {
     std::move(callback).Run(std::move(pickles));
   }
 
   void PassPickleArrays(
-      WTF::Vector<WTF::Vector<PickledStructBlink>> pickle_arrays,
+      ::blink::Vector<::blink::Vector<PickledStructBlink>> pickle_arrays,
       PassPickleArraysCallback callback) override {
     std::move(callback).Run(std::move(pickle_arrays));
   }
@@ -170,25 +172,6 @@ class PickleTest : public testing::Test {
                              proxy.BindNewPipeAndPassReceiver()));
     return proxy;
   }
-
- protected:
-  static void ForceMessageSerialization(bool forced) {
-    // Force messages to be serialized in this test since it intentionally
-    // exercises StructTraits logic.
-    Connector::OverrideDefaultSerializationBehaviorForTesting(
-        forced ? Connector::OutgoingSerializationMode::kEager
-               : Connector::OutgoingSerializationMode::kLazy,
-        Connector::IncomingSerializationMode::kDispatchAsIs);
-  }
-
-  class ScopedForceMessageSerialization {
-   public:
-    ScopedForceMessageSerialization() { ForceMessageSerialization(true); }
-    ~ScopedForceMessageSerialization() { ForceMessageSerialization(false); }
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(ScopedForceMessageSerialization);
-  };
 
  private:
   base::test::SingleThreadTaskEnvironment task_environment_;
@@ -313,7 +296,6 @@ TEST_F(PickleTest, BlinkProxyToChromiumService) {
 }
 
 TEST_F(PickleTest, PickleArray) {
-  ScopedForceMessageSerialization force_serialization;
   auto proxy = ConnectToChromiumService();
   auto pickles = std::vector<PickledStructChromium>(2);
   pickles[0].set_foo(1);
@@ -345,11 +327,11 @@ TEST_F(PickleTest, PickleArray) {
 }
 
 TEST_F(PickleTest, PickleArrayArray) {
-  ScopedForceMessageSerialization force_serialization;
   auto proxy = ConnectToChromiumService();
   auto pickle_arrays = std::vector<std::vector<PickledStructChromium>>(2);
-  for (size_t i = 0; i < 2; ++i)
+  for (size_t i = 0; i < 2; ++i) {
     pickle_arrays[i] = std::vector<PickledStructChromium>(2);
+  }
 
   pickle_arrays[0][0].set_foo(1);
   pickle_arrays[0][0].set_bar(2);
@@ -392,7 +374,6 @@ TEST_F(PickleTest, PickleArrayArray) {
 }
 
 TEST_F(PickleTest, PickleContainer) {
-  ScopedForceMessageSerialization force_serialization;
   auto proxy = ConnectToChromiumService();
   PickleContainerPtr pickle_container = PickleContainer::New();
   pickle_container->f_struct.set_foo(42);
@@ -403,17 +384,16 @@ TEST_F(PickleTest, PickleContainer) {
   EXPECT_FALSE(pickle_container.Equals(PickleContainer::New()));
   {
     base::RunLoop run_loop;
-    proxy->PassPickleContainer(std::move(pickle_container),
-                               BindSimpleLambda<PickleContainerPtr>(
-                                   [&](PickleContainerPtr passed) {
-                                     ASSERT_FALSE(passed.is_null());
-                                     EXPECT_EQ(42, passed->f_struct.foo());
-                                     EXPECT_EQ(43, passed->f_struct.bar());
-                                     EXPECT_EQ(0, passed->f_struct.baz());
-                                     EXPECT_EQ(PickledEnumChromium::VALUE_1,
-                                               passed->f_enum);
-                                     run_loop.Quit();
-                                   }));
+    proxy->PassPickleContainer(
+        std::move(pickle_container),
+        BindSimpleLambda<PickleContainerPtr>([&](PickleContainerPtr passed) {
+          ASSERT_FALSE(passed.is_null());
+          EXPECT_EQ(42, passed->f_struct.foo());
+          EXPECT_EQ(43, passed->f_struct.bar());
+          EXPECT_EQ(0, passed->f_struct.baz());
+          EXPECT_EQ(PickledEnumChromium::VALUE_1, passed->f_enum);
+          run_loop.Quit();
+        }));
     run_loop.Run();
   }
 }

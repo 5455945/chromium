@@ -1,11 +1,15 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/viz/service/surfaces/surface_allocation_group.h"
 
+#include <algorithm>
+#include <numeric>
 #include <utility>
 
+#include "base/containers/adapters.h"
+#include "base/memory/raw_ptr.h"
 #include "components/viz/service/surfaces/surface.h"
 #include "components/viz/service/surfaces/surface_manager.h"
 
@@ -40,8 +44,8 @@ void SurfaceAllocationGroup::RegisterSurface(Surface* surface) {
 }
 
 void SurfaceAllocationGroup::UnregisterSurface(Surface* surface) {
-  auto it = std::find(surfaces_.begin(), surfaces_.end(), surface);
-  DCHECK(it != surfaces_.end());
+  auto it = std::ranges::find(surfaces_, surface);
+  CHECK(it != surfaces_.end());
   surfaces_.erase(it);
   MaybeMarkForDestruction();
 }
@@ -65,6 +69,43 @@ void SurfaceAllocationGroup::UnregisterBlockedEmbedder(Surface* surface,
 
 bool SurfaceAllocationGroup::HasBlockedEmbedder() const {
   return !blocked_embedders_.empty();
+}
+
+bool SurfaceAllocationGroup::HasActiveEmbedderAwaitingNewerSurface() const {
+  if (active_embedders_.empty() || !last_active_reference_.is_valid()) {
+    return false;
+  }
+  const Surface* latest_active = nullptr;
+  // Normally there is at most one pending surface, so this loop shouldn't take
+  // more than two iterations.
+  for (const Surface* surface : base::Reversed(surfaces_)) {
+    if (surface->HasActiveFrame()) {
+      latest_active = surface;
+      break;
+    }
+  }
+  if (!latest_active) {
+    return true;
+  }
+  const SurfaceId& latest_id = latest_active->surface_id();
+  // References in a group are ordered in practice, so covering the newest one
+  // so far covers every current one.
+  if (latest_id.IsSameOrNewerThan(last_active_reference_)) {
+    return false;
+  }
+  // `last_active_reference_` never moves backward, so it can outlive the
+  // reference that set it while another reference keeps `active_embedders_`
+  // non-empty. Check what live active frames currently reference.
+  for (const Surface* embedder : active_embedders_) {
+    for (const SurfaceRange& range :
+         embedder->GetActiveFrameMetadata().referenced_surfaces) {
+      const SurfaceId reference = GetReferenceFromRange(range);
+      if (reference.is_valid() && !latest_id.IsSameOrNewerThan(reference)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 void SurfaceAllocationGroup::RegisterActiveEmbedder(Surface* surface) {
@@ -157,8 +198,11 @@ void SurfaceAllocationGroup::TakeAggregatedLatencyInfoUpTo(
 }
 
 void SurfaceAllocationGroup::OnFirstSurfaceActivation(Surface* surface) {
-  for (Surface* embedder : active_embedders_)
+  // Copy container as it can be mutated during iteration.
+  auto active_embedders = active_embedders_;
+  for (Surface* embedder : active_embedders) {
     embedder->OnChildActivatedForActiveFrame(surface->surface_id());
+  }
   base::flat_map<Surface*, SurfaceId> embedders_to_notify;
   for (const auto& entry : blocked_embedders_) {
     if (!entry.second.IsNewerThan(surface->surface_id()))
@@ -190,7 +234,7 @@ void SurfaceAllocationGroup::AckLastestActiveUnAckedFrame() {
     lastest_active->SendAckToClient();
 }
 
-std::vector<Surface*>::const_iterator
+std::vector<raw_ptr<Surface, VectorExperimental>>::const_iterator
 SurfaceAllocationGroup::FindLatestSurfaceUpTo(
     const SurfaceId& surface_id) const {
   DCHECK_EQ(submitter_, surface_id.frame_sink_id());
@@ -210,7 +254,7 @@ SurfaceAllocationGroup::FindLatestSurfaceUpTo(
   int begin = 0;
   int end = surfaces_.size();
   while (end - begin > 1) {
-    int avg = (begin + end) / 2;
+    int avg = std::midpoint(begin, end);
     if (!surface_id.IsSameOrNewerThan(surfaces_[avg]->surface_id()))
       end = avg;
     else
@@ -221,7 +265,7 @@ SurfaceAllocationGroup::FindLatestSurfaceUpTo(
   return surfaces_.begin() + begin;
 }
 
-std::vector<Surface*>::const_iterator
+std::vector<raw_ptr<Surface, VectorExperimental>>::const_iterator
 SurfaceAllocationGroup::FindLatestActiveSurfaceUpTo(
     const SurfaceId& surface_id) const {
   // Start from the last older or equal surface and keep iterating back until we
@@ -261,6 +305,24 @@ void SurfaceAllocationGroup::UpdateLastReferenceAndMaybeActivate(
   // because fallback surfaces never block.
   if ((*it)->surface_id() != surface_id)
     (*it)->SetIsFallbackAndMaybeActivate();
+}
+
+SurfaceId SurfaceAllocationGroup::GetReferenceFromRange(
+    const SurfaceRange& range) const {
+  auto in_group = [this](const SurfaceId& id) {
+    return id.frame_sink_id() == submitter_ &&
+           id.local_surface_id().embed_token() == embed_token_;
+  };
+  if (in_group(range.end())) {
+    return range.end();
+  }
+  if (!range.start() || !in_group(*range.start())) {
+    return SurfaceId();
+  }
+  const Surface* in_flight = surface_manager_->GetLatestInFlightSurface(range);
+  return Surface::ReferencesStartAllocationGroup(range, in_flight)
+             ? *range.start()
+             : SurfaceId();
 }
 
 }  // namespace viz

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,6 +12,7 @@
 #include "extensions/browser/app_window/native_app_window.h"
 #include "extensions/test/extension_test_message_listener.h"
 #include "extensions/test/result_catcher.h"
+#include "ui/display/display_switches.h"
 
 FullscreenChangeWaiter::FullscreenChangeWaiter(
     extensions::NativeAppWindow* window)
@@ -22,9 +23,18 @@ void FullscreenChangeWaiter::Wait() {
     content::RunAllPendingInMessageLoop();
 }
 
+// Some of these tests fail if run on a machine with a non 1.0 device scale
+// factor, so make the test override the device scale factor.
+void AppWindowInteractiveTest::SetUpCommandLine(
+    base::CommandLine* command_line) {
+  extensions::PlatformAppBrowserTest::SetUpCommandLine(command_line);
+  command_line->AppendSwitchASCII(switches::kForceDeviceScaleFactor, "1");
+}
+
 bool AppWindowInteractiveTest::RunAppWindowInteractiveTest(
     const char* testName) {
-  ExtensionTestMessageListener launched_listener("Launched", true);
+  ExtensionTestMessageListener launched_listener("Launched",
+                                                 ReplyBehavior::kWillReply);
   LoadAndLaunchPlatformApp("window_api_interactive", &launched_listener);
 
   extensions::ResultCatcher catcher;
@@ -44,7 +54,7 @@ bool AppWindowInteractiveTest::SimulateKeyPress(ui::KeyboardCode key) {
 }
 
 void AppWindowInteractiveTest::WaitUntilKeyFocus() {
-  ExtensionTestMessageListener key_listener("KeyReceived", false);
+  ExtensionTestMessageListener key_listener("KeyReceived");
 
   while (!key_listener.was_satisfied()) {
     ASSERT_TRUE(SimulateKeyPress(ui::VKEY_Z));

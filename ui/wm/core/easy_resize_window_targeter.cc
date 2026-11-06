@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -30,7 +30,7 @@ bool EasyResizeWindowTargeter::EventLocationInsideBounds(
 
 bool EasyResizeWindowTargeter::ShouldUseExtendedBounds(
     const aura::Window* w) const {
-  DCHECK(window());
+  CHECK(window(), base::NotFatalUntil::M163);
   // Use the extended bounds only for immediate child windows of window().
   // Use the default targeter otherwise.
   if (w->parent() != window())

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,6 +19,13 @@ extern const char kBorealisInstalledOnDevice[];
 extern const char kBorealisAllowedForUser[];
 
 extern const char kEngagementPrefsPrefix[];
+
+extern const char kBorealisMicAllowed[];
+
+// A string pref which records the current value of the BorealisLaunchOptions.
+// The string is formatted as documented in
+// chrome/browser/ash/borealis/borealis_launch_options.h.
+extern const char kExtraLaunchOptions[];
 
 void RegisterProfilePrefs(PrefRegistrySimple* registry);
 

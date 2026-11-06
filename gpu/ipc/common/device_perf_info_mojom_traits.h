@@ -1,40 +1,38 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef GPU_IPC_COMMON_DEVICE_PERF_INFO_MOJOM_TRAITS_H_
 #define GPU_IPC_COMMON_DEVICE_PERF_INFO_MOJOM_TRAITS_H_
 
-#include "gpu/ipc/common/device_perf_info.mojom-shared.h"
-
 #include "build/build_config.h"
 #include "gpu/config/device_perf_info.h"
-#include "gpu/gpu_export.h"
+#include "gpu/ipc/common/device_perf_info.mojom-shared.h"
+#include "gpu/ipc/common/gpu_ipc_common_export.h"
 
 namespace mojo {
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 template <>
-struct GPU_EXPORT
-    EnumTraits<gpu::mojom::Direct3DFeatureLevel, D3D_FEATURE_LEVEL> {
+struct GPU_IPC_COMMON_EXPORT EnumTraits<gpu::mojom::Direct3DFeatureLevel,
+                                        D3D_FEATURE_LEVEL> {
   static gpu::mojom::Direct3DFeatureLevel ToMojom(
       D3D_FEATURE_LEVEL d3d_feature_level);
-  static bool FromMojom(gpu::mojom::Direct3DFeatureLevel input,
-                        D3D_FEATURE_LEVEL* out);
+  static D3D_FEATURE_LEVEL FromMojom(gpu::mojom::Direct3DFeatureLevel input);
 };
-#endif  // OS_WIN
+#endif  // BUILDFLAG(IS_WIN)
 
 template <>
-struct GPU_EXPORT EnumTraits<gpu::mojom::HasDiscreteGpu, gpu::HasDiscreteGpu> {
+struct GPU_IPC_COMMON_EXPORT EnumTraits<gpu::mojom::HasDiscreteGpu,
+                                        gpu::HasDiscreteGpu> {
   static gpu::mojom::HasDiscreteGpu ToMojom(
       gpu::HasDiscreteGpu has_discrete_gpu);
-  static bool FromMojom(gpu::mojom::HasDiscreteGpu input,
-                        gpu::HasDiscreteGpu* out);
+  static gpu::HasDiscreteGpu FromMojom(gpu::mojom::HasDiscreteGpu input);
 };
 
 template <>
-struct GPU_EXPORT
-    StructTraits<gpu::mojom::DevicePerfInfoDataView, gpu::DevicePerfInfo> {
+struct GPU_IPC_COMMON_EXPORT StructTraits<gpu::mojom::DevicePerfInfoDataView,
+                                          gpu::DevicePerfInfo> {
   static bool Read(gpu::mojom::DevicePerfInfoDataView data,
                    gpu::DevicePerfInfo* out);
 
@@ -50,7 +48,7 @@ struct GPU_EXPORT
     return info.hardware_concurrency;
   }
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   static uint32_t system_commit_limit_mb(const gpu::DevicePerfInfo& info) {
     return info.system_commit_limit_mb;
   }

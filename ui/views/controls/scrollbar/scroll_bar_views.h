@@ -1,12 +1,11 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_VIEWS_CONTROLS_SCROLLBAR_SCROLL_BAR_VIEWS_H_
 #define UI_VIEWS_CONTROLS_SCROLLBAR_SCROLL_BAR_VIEWS_H_
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/scrollbar/scroll_bar.h"
@@ -20,11 +19,15 @@ namespace views {
 
 // Views implementation for the scrollbar.
 class VIEWS_EXPORT ScrollBarViews : public ScrollBar {
- public:
-  METADATA_HEADER(ScrollBarViews);
+  METADATA_HEADER(ScrollBarViews, ScrollBar)
 
+ public:
   // Creates new scrollbar, either horizontal or vertical.
-  explicit ScrollBarViews(bool horizontal = true);
+  explicit ScrollBarViews(Orientation orientation = Orientation::kHorizontal);
+
+  ScrollBarViews(const ScrollBarViews&) = delete;
+  ScrollBarViews& operator=(const ScrollBarViews&) = delete;
+
   ~ScrollBarViews() override;
 
   static int GetVerticalScrollBarWidth(const ui::NativeTheme* theme);
@@ -42,14 +45,11 @@ class VIEWS_EXPORT ScrollBarViews : public ScrollBar {
 
  private:
   // The scroll bar buttons (Up/Down, Left/Right).
-  Button* prev_button_;
-  Button* next_button_;
+  raw_ptr<Button> prev_button_;
+  raw_ptr<Button> next_button_;
 
-  ui::NativeTheme::ExtraParams params_;
   ui::NativeTheme::Part part_;
   ui::NativeTheme::State state_;
-
-  DISALLOW_COPY_AND_ASSIGN(ScrollBarViews);
 };
 
 }  // namespace views

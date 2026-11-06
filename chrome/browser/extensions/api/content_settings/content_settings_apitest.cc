@@ -1,56 +1,70 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
-#include "base/single_thread_task_runner.h"
+#include "base/memory/raw_ptr.h"
+#include "base/path_service.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
-#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/content_settings/cookie_settings_factory.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/extensions/api/content_settings/content_settings_api.h"
-#include "chrome/browser/extensions/api/content_settings/content_settings_api_constants.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/permissions/permission_manager_factory.h"
+#include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
+#include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_keep_alive_types.h"
-#include "chrome/browser/profiles/scoped_profile_keep_alive.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
+#include "components/content_settings/core/browser/content_settings_uma_util.h"
 #include "components/content_settings/core/browser/cookie_settings.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/content_settings.h"
-#include "components/content_settings/core/common/features.h"
-#include "components/keep_alive_registry/keep_alive_types.h"
-#include "components/keep_alive_registry/scoped_keep_alive.h"
-#include "components/permissions/features.h"
 #include "components/permissions/permission_manager.h"
-#include "components/permissions/permission_result.h"
 #include "components/prefs/pref_service.h"
-#include "content/public/browser/notification_service.h"
-#include "content/public/browser/plugin_service.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/webplugininfo.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_utils.h"
+#include "extensions/browser/extension_host.h"
+#include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/browser/process_manager.h"
 #include "extensions/browser/test_extension_registry_observer.h"
+#include "extensions/common/extension_features.h"
+#include "extensions/test/test_extension_dir.h"
+#include "net/base/schemeful_site.h"
+#include "net/dns/mock_host_resolver.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "components/keep_alive_registry/keep_alive_types.h"
+#include "components/keep_alive_registry/scoped_keep_alive.h"
+#endif
+
+#if BUILDFLAG(ENABLE_PLUGINS)
+#include "content/public/browser/plugin_service.h"
+#endif
 
 namespace extensions {
 
-using ContextType = ExtensionApiTest::ContextType;
+using ContextType = extensions::browser_test_util::ContextType;
 
 class ExtensionContentSettingsApiTest : public ExtensionApiTest {
  public:
-  ExtensionContentSettingsApiTest() = default;
+  explicit ExtensionContentSettingsApiTest(
+      ContextType context_type = ContextType::kNone)
+      : ExtensionApiTest(context_type) {}
   ~ExtensionContentSettingsApiTest() override = default;
   ExtensionContentSettingsApiTest(const ExtensionContentSettingsApiTest&) =
       delete;
@@ -62,25 +76,29 @@ class ExtensionContentSettingsApiTest : public ExtensionApiTest {
 
     // The browser might get closed later (and therefore be destroyed), so we
     // save the profile.
-    profile_ = browser()->profile();
-
+    profile_ = profile();
+#if !BUILDFLAG(IS_ANDROID)
     // Closing the last browser window also releases a KeepAlive. Make
     // sure it's not the last one, so the message loop doesn't quit
     // unexpectedly.
     keep_alive_ = std::make_unique<ScopedKeepAlive>(
         KeepAliveOrigin::BROWSER, KeepAliveRestartOption::DISABLED);
+#endif
+
     profile_keep_alive_ = std::make_unique<ScopedProfileKeepAlive>(
         profile_, ProfileKeepAliveOrigin::kBrowserWindow);
   }
 
   void TearDownOnMainThread() override {
     profile_keep_alive_.reset();
+#if !BUILDFLAG(IS_ANDROID)
     // BrowserProcess::Shutdown() needs to be called in a message loop, so we
     // post a task to release the keep alive, then run the message loop.
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&std::unique_ptr<ScopedKeepAlive>::reset,
                                   base::Unretained(&keep_alive_), nullptr));
     content::RunAllPendingInMessageLoop();
+#endif
 
     ExtensionApiTest::TearDownOnMainThread();
   }
@@ -94,8 +112,10 @@ class ExtensionContentSettingsApiTest : public ExtensionApiTest {
 
     // Check default content settings by using an unknown URL.
     GURL example_url("http://www.example.com");
-    EXPECT_TRUE(
-        cookie_settings->IsFullCookieAccessAllowed(example_url, example_url));
+    EXPECT_TRUE(cookie_settings->IsFullCookieAccessAllowed(
+        example_url, net::SiteForCookies::FromUrl(example_url),
+        url::Origin::Create(example_url), net::CookieSettingOverrides(),
+        /*cookie_partition_key=*/std::nullopt));
     EXPECT_TRUE(cookie_settings->IsCookieSessionOnly(example_url));
     EXPECT_EQ(CONTENT_SETTING_ALLOW,
               map->GetContentSetting(example_url, example_url,
@@ -124,10 +144,22 @@ class ExtensionContentSettingsApiTest : public ExtensionApiTest {
     EXPECT_EQ(CONTENT_SETTING_ALLOW,
               map->GetContentSetting(example_url, example_url,
                                      ContentSettingsType::AUTOPLAY));
+    EXPECT_EQ(CONTENT_SETTING_ALLOW,
+              map->GetContentSetting(example_url, example_url,
+                                     ContentSettingsType::SOUND));
+    EXPECT_EQ(CONTENT_SETTING_BLOCK,
+              map->GetContentSetting(example_url, example_url,
+                                     ContentSettingsType::ANTI_ABUSE));
+    EXPECT_EQ(
+        CONTENT_SETTING_ASK,
+        map->GetContentSetting(example_url, example_url,
+                               ContentSettingsType::CLIPBOARD_READ_WRITE));
 
     // Check content settings for www.google.com
     GURL url("http://www.google.com");
-    EXPECT_FALSE(cookie_settings->IsFullCookieAccessAllowed(url, url));
+    EXPECT_FALSE(cookie_settings->IsFullCookieAccessAllowed(
+        url, net::SiteForCookies::FromUrl(url), url::Origin::Create(url),
+        net::CookieSettingOverrides(), /*cookie_partition_key=*/std::nullopt));
     EXPECT_EQ(CONTENT_SETTING_ALLOW,
               map->GetContentSetting(url, url, ContentSettingsType::IMAGES));
     EXPECT_EQ(
@@ -152,6 +184,17 @@ class ExtensionContentSettingsApiTest : public ExtensionApiTest {
                                      ContentSettingsType::AUTOMATIC_DOWNLOADS));
     EXPECT_EQ(CONTENT_SETTING_ALLOW,
               map->GetContentSetting(url, url, ContentSettingsType::AUTOPLAY));
+    EXPECT_EQ(CONTENT_SETTING_BLOCK,
+              map->GetContentSetting(url, url, ContentSettingsType::SOUND));
+    EXPECT_EQ(
+        CONTENT_SETTING_BLOCK,
+        map->GetContentSetting(url, url, ContentSettingsType::ANTI_ABUSE));
+    EXPECT_EQ(base::FeatureList::IsEnabled(
+                  extensions_features::kApiContentSettingsClipboard)
+                  ? CONTENT_SETTING_BLOCK
+                  : CONTENT_SETTING_ASK,
+              map->GetContentSetting(
+                  url, url, ContentSettingsType::CLIPBOARD_READ_WRITE));
   }
 
   void CheckContentSettingsDefault() {
@@ -162,7 +205,9 @@ class ExtensionContentSettingsApiTest : public ExtensionApiTest {
 
     // Check content settings for www.google.com
     GURL url("http://www.google.com");
-    EXPECT_TRUE(cookie_settings->IsFullCookieAccessAllowed(url, url));
+    EXPECT_TRUE(cookie_settings->IsFullCookieAccessAllowed(
+        url, net::SiteForCookies::FromUrl(url), url::Origin::Create(url),
+        net::CookieSettingOverrides(), /*cookie_partition_key=*/std::nullopt));
     EXPECT_FALSE(cookie_settings->IsCookieSessionOnly(url));
     EXPECT_EQ(CONTENT_SETTING_ALLOW,
               map->GetContentSetting(url, url, ContentSettingsType::IMAGES));
@@ -188,6 +233,14 @@ class ExtensionContentSettingsApiTest : public ExtensionApiTest {
                                      ContentSettingsType::AUTOMATIC_DOWNLOADS));
     EXPECT_EQ(CONTENT_SETTING_ALLOW,
               map->GetContentSetting(url, url, ContentSettingsType::AUTOPLAY));
+    EXPECT_EQ(CONTENT_SETTING_ALLOW,
+              map->GetContentSetting(url, url, ContentSettingsType::SOUND));
+    EXPECT_EQ(
+        CONTENT_SETTING_ALLOW,
+        map->GetContentSetting(url, url, ContentSettingsType::ANTI_ABUSE));
+    EXPECT_EQ(CONTENT_SETTING_ASK,
+              map->GetContentSetting(
+                  url, url, ContentSettingsType::CLIPBOARD_READ_WRITE));
   }
 
   // Returns a snapshot of content settings for a given URL.
@@ -199,8 +252,9 @@ class ExtensionContentSettingsApiTest : public ExtensionApiTest {
     content_settings::CookieSettings* cookie_settings =
         CookieSettingsFactory::GetForProfile(profile_).get();
 
-    content_settings.push_back(
-        cookie_settings->IsFullCookieAccessAllowed(url, url));
+    content_settings.push_back(cookie_settings->IsFullCookieAccessAllowed(
+        url, net::SiteForCookies::FromUrl(url), url::Origin::Create(url),
+        net::CookieSettingOverrides(), /*cookie_partition_key=*/std::nullopt));
     content_settings.push_back(cookie_settings->IsCookieSessionOnly(url));
     content_settings.push_back(
         map->GetContentSetting(url, url, ContentSettingsType::IMAGES));
@@ -220,48 +274,50 @@ class ExtensionContentSettingsApiTest : public ExtensionApiTest {
         url, url, ContentSettingsType::AUTOMATIC_DOWNLOADS));
     content_settings.push_back(
         map->GetContentSetting(url, url, ContentSettingsType::AUTOPLAY));
+    content_settings.push_back(map->GetContentSetting(
+        url, url, ContentSettingsType::CLIPBOARD_READ_WRITE));
     return content_settings;
   }
 
  private:
-  Profile* profile_ = nullptr;
+  raw_ptr<Profile, AcrossTasksDanglingUntriaged> profile_ = nullptr;
+
+#if !BUILDFLAG(IS_ANDROID)
+  // KeepAlive is not supported nor required on Android.
   std::unique_ptr<ScopedKeepAlive> keep_alive_;
+#endif
   std::unique_ptr<ScopedProfileKeepAlive> profile_keep_alive_;
 };
 
-class ExtensionContentSettingsApiTestWithContextType
+class ExtensionContentSettingsApiTestWithClipboard
     : public ExtensionContentSettingsApiTest,
-      public testing::WithParamInterface<ContextType> {
+      public testing::WithParamInterface<bool> {
  public:
-  ExtensionContentSettingsApiTestWithContextType() = default;
-  ~ExtensionContentSettingsApiTestWithContextType() override = default;
-  ExtensionContentSettingsApiTestWithContextType(
-      const ExtensionContentSettingsApiTestWithContextType&) = delete;
-  ExtensionContentSettingsApiTestWithContextType& operator=(
-      const ExtensionContentSettingsApiTestWithContextType&) = delete;
-
- protected:
-  bool RunLazyTest(const char* extension_name) {
-    return RunExtensionTest(
-        extension_name, {},
-        {.load_as_service_worker = GetParam() == ContextType::kServiceWorker});
+  ExtensionContentSettingsApiTestWithClipboard()
+      : ExtensionContentSettingsApiTest() {
+    scoped_feature_list_.InitWithFeatureState(
+        extensions_features::kApiContentSettingsClipboard, GetParam());
   }
+  ~ExtensionContentSettingsApiTestWithClipboard() override = default;
+  ExtensionContentSettingsApiTestWithClipboard(
+      const ExtensionContentSettingsApiTestWithClipboard&) = delete;
+  ExtensionContentSettingsApiTestWithClipboard& operator=(
+      const ExtensionContentSettingsApiTestWithClipboard&) = delete;
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-INSTANTIATE_TEST_SUITE_P(PersistentBackground,
-                         ExtensionContentSettingsApiTestWithContextType,
-                         ::testing::Values(ContextType::kPersistentBackground));
-INSTANTIATE_TEST_SUITE_P(ServiceWorker,
-                         ExtensionContentSettingsApiTestWithContextType,
-                         ::testing::Values(ContextType::kServiceWorker));
+INSTANTIATE_TEST_SUITE_P(All,
+                         ExtensionContentSettingsApiTestWithClipboard,
+                         ::testing::Bool());
 
-IN_PROC_BROWSER_TEST_P(ExtensionContentSettingsApiTestWithContextType,
-                       Standard) {
+IN_PROC_BROWSER_TEST_P(ExtensionContentSettingsApiTestWithClipboard, Standard) {
   CheckContentSettingsDefault();
 
   static constexpr char kExtensionPath[] = "content_settings/standard";
 
-  EXPECT_TRUE(RunExtensionTest(kExtensionPath, {.page_url = "test.html"}))
+  EXPECT_TRUE(RunExtensionTest(kExtensionPath, {.extension_url = "test.html"}))
       << message_;
   CheckContentSettingsSet();
 
@@ -281,7 +337,26 @@ IN_PROC_BROWSER_TEST_P(ExtensionContentSettingsApiTestWithContextType,
   CheckContentSettingsDefault();
 }
 
-IN_PROC_BROWSER_TEST_P(ExtensionContentSettingsApiTestWithContextType,
+// Tests that content settings controlled by an extension are removed when
+// the extension is blocklisted.
+IN_PROC_BROWSER_TEST_F(ExtensionContentSettingsApiTest,
+                       SettingsRemovedOnBlocklist) {
+  CheckContentSettingsDefault();
+
+  static constexpr char kExtensionPath[] = "content_settings/standard";
+  ASSERT_TRUE(RunExtensionTest(kExtensionPath, {.extension_url = "test.html"}))
+      << message_;
+  CheckContentSettingsSet();
+
+  // Blocklist the extension.
+  extension_registrar()->BlocklistExtensionForTest(last_loaded_extension_id());
+
+  // Content settings should be reset to default while the extension is
+  // blocklisted.
+  CheckContentSettingsDefault();
+}
+
+IN_PROC_BROWSER_TEST_F(ExtensionContentSettingsApiTest,
                        UnsupportedDefaultSettings) {
   const char kExtensionPath[] = "content_settings/unsupporteddefaultsettings";
   EXPECT_TRUE(RunExtensionTest(kExtensionPath)) << message_;
@@ -289,10 +364,9 @@ IN_PROC_BROWSER_TEST_P(ExtensionContentSettingsApiTestWithContextType,
 
 // Tests if an extension clearing content settings for one content type leaves
 // the others unchanged.
-IN_PROC_BROWSER_TEST_P(ExtensionContentSettingsApiTestWithContextType,
-                       ClearProperlyGranular) {
+IN_PROC_BROWSER_TEST_F(ExtensionContentSettingsApiTest, ClearProperlyGranular) {
   const char kExtensionPath[] = "content_settings/clearproperlygranular";
-  EXPECT_TRUE(RunLazyTest(kExtensionPath)) << message_;
+  EXPECT_TRUE(RunExtensionTest(kExtensionPath)) << message_;
 }
 
 // Tests if changing permissions in incognito mode keeps the previous state of
@@ -305,7 +379,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionContentSettingsApiTest, IncognitoIsolation) {
 
   // Run extension, set all permissions to allow, and check if they are changed.
   ASSERT_TRUE(RunExtensionTest("content_settings/incognitoisolation",
-                               {.page_url = "test.html",
+                               {.extension_url = "test.html",
                                 .custom_arg = "allow",
                                 .open_in_incognito = true},
                                {.allow_in_incognito = true}))
@@ -317,7 +391,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionContentSettingsApiTest, IncognitoIsolation) {
 
   // Run extension, set all permissions to block, and check if they are changed.
   ASSERT_TRUE(RunExtensionTest("content_settings/incognitoisolation",
-                               {.page_url = "test.html",
+                               {.extension_url = "test.html",
                                 .custom_arg = "block",
                                 .open_in_incognito = true},
                                {.allow_in_incognito = true}))
@@ -333,23 +407,25 @@ IN_PROC_BROWSER_TEST_F(ExtensionContentSettingsApiTest,
                        IncognitoNotAllowedInRegular) {
   EXPECT_FALSE(
       RunExtensionTest("content_settings/incognitoisolation",
-                       {.page_url = "test.html", .custom_arg = "allow"}))
+                       {.extension_url = "test.html", .custom_arg = "allow"}))
       << message_;
 }
 
-IN_PROC_BROWSER_TEST_P(ExtensionContentSettingsApiTestWithContextType,
+IN_PROC_BROWSER_TEST_F(ExtensionContentSettingsApiTest,
                        EmbeddedSettingsMetric) {
   base::HistogramTester histogram_tester;
   const char kExtensionPath[] = "content_settings/embeddedsettingsmetric";
-  EXPECT_TRUE(RunLazyTest(kExtensionPath)) << message_;
+  EXPECT_TRUE(RunExtensionTest(kExtensionPath)) << message_;
 
-  size_t num_values = 0;
-  int images_type = ContentSettingTypeToHistogramValue(
-      ContentSettingsType::IMAGES, &num_values);
-  int geolocation_type = ContentSettingTypeToHistogramValue(
-      ContentSettingsType::GEOLOCATION, &num_values);
-  int cookies_type = ContentSettingTypeToHistogramValue(
-      ContentSettingsType::COOKIES, &num_values);
+  int images_type =
+      content_settings_uma_util::ContentSettingTypeToHistogramValue(
+          ContentSettingsType::IMAGES);
+  int geolocation_type =
+      content_settings_uma_util::ContentSettingTypeToHistogramValue(
+          ContentSettingsType::GEOLOCATION);
+  int cookies_type =
+      content_settings_uma_util::ContentSettingTypeToHistogramValue(
+          ContentSettingsType::COOKIES);
 
   histogram_tester.ExpectBucketCount(
       "ContentSettings.ExtensionEmbeddedSettingSet", images_type, 1);
@@ -366,8 +442,8 @@ IN_PROC_BROWSER_TEST_P(ExtensionContentSettingsApiTestWithContextType,
       "ContentSettings.ExtensionNonEmbeddedSettingSet", 2);
 }
 
-IN_PROC_BROWSER_TEST_P(ExtensionContentSettingsApiTestWithContextType,
-                       ConsoleErrorTest) {
+#if BUILDFLAG(ENABLE_PLUGINS)
+IN_PROC_BROWSER_TEST_F(ExtensionContentSettingsApiTest, ConsoleErrorTest) {
   constexpr char kExtensionPath[] = "content_settings/disablepluginsapi";
   const extensions::Extension* extension =
       LoadExtension(test_data_dir_.AppendASCII(kExtensionPath));
@@ -377,10 +453,104 @@ IN_PROC_BROWSER_TEST_P(ExtensionContentSettingsApiTestWithContextType,
                            ->host_contents();
   content::WebContentsConsoleObserver console_observer(web_contents);
   console_observer.SetPattern("*contentSettings.plugins is deprecated.*");
-  browsertest_util::ExecuteScriptInBackgroundPageNoWait(
-      profile(), extension->id(), "setPluginsSetting()");
-  console_observer.Wait();
+  ExecuteScriptInBackgroundPageNoWait(extension->id(), "setPluginsSetting()");
+  ASSERT_TRUE(console_observer.Wait());
   EXPECT_EQ(1u, console_observer.messages().size());
+}
+#endif  // BUILDFLAG(ENABLE_PLUGINS)
+
+class ImageContentSettingApiTest : public ExtensionApiTest {
+ public:
+  void LoadImageContentSettingExtension() {
+    static constexpr char kManifest[] =
+        R"({
+             "name": "MV3 ImageContentSetting",
+             "version": "0.1",
+             "manifest_version": 3,
+             "permissions": ["contentSettings"],
+             "background": {"service_worker": "background.js"}
+           })";
+    static constexpr char kBackgroundJs[] =
+        R"(
+           chrome.contentSettings['images'].set({
+             primaryPattern: 'http://*.example1.com/*',
+             setting: 'block',
+             scope: 'regular'
+           });
+          )";
+
+    test_extension_dir_.WriteManifest(kManifest);
+    test_extension_dir_.WriteFile(FILE_PATH_LITERAL("background.js"),
+                                  kBackgroundJs);
+
+    const Extension* extension =
+        LoadExtension(test_extension_dir_.UnpackedPath());
+    ASSERT_TRUE(extension);
+  }
+
+  void SetUpOnMainThread() override {
+    ExtensionApiTest::SetUpOnMainThread();
+    host_resolver()->AddRule("*", "127.0.0.1");
+
+    ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
+    embedded_test_server()->ServeFilesFromDirectory(temp_dir_.GetPath());
+    ASSERT_TRUE(StartEmbeddedTestServer());
+  }
+
+ protected:
+  base::ScopedTempDir temp_dir_;
+  TestExtensionDir test_extension_dir_;
+};
+
+// Tests that image content setting primary pattern can be used to block image
+// loads.
+IN_PROC_BROWSER_TEST_F(ImageContentSettingApiTest, OriginBlocking) {
+  LoadImageContentSettingExtension();
+  std::string page_js =
+      R"(
+         <body onload="console.log('body load');">
+         <img src=$2 onload="console.log('example2 load');">
+         <img src=$1 onload="console.log('example1 load');">
+         </body>
+           )";
+  GURL example1_img =
+      embedded_test_server()->GetURL("example1.com", "/test.png");
+  GURL example2_img =
+      embedded_test_server()->GetURL("example2.com", "/test.png");
+  page_js = content::JsReplace(page_js, example1_img, example2_img);
+
+  {
+    base::ScopedAllowBlockingForTesting allow_blocking;
+    ASSERT_TRUE(base::WriteFile(temp_dir_.GetPath().AppendASCII("index.html"),
+                                page_js));
+
+    base::FilePath test_data_dir;
+    base::PathService::Get(chrome::DIR_TEST_DATA, &test_data_dir);
+
+    ASSERT_TRUE(
+        base::CopyFile(test_data_dir.AppendASCII("extensions/icon1.png"),
+                       temp_dir_.GetPath().AppendASCII("test.png")));
+  }
+
+  content::WebContents* web_contents = GetActiveWebContents();
+  content::WebContentsConsoleObserver body_load_observer(web_contents);
+  body_load_observer.SetPattern("body load");
+  content::WebContentsConsoleObserver observer(web_contents);
+
+  GURL example1_index =
+      embedded_test_server()->GetURL("example1.com", "/index.html");
+  ASSERT_TRUE(NavigateToURL(GetActiveWebContents(), example1_index));
+
+  // The onload event will fire when there are no more pending image loads. We
+  // should then have one messages -- one for the onload event. Neither "example
+  // 1" nor "example 2" should have loaded.
+  EXPECT_TRUE(body_load_observer.Wait());
+
+  std::vector<std::u16string> message_strings;
+  for (const auto& message : observer.messages()) {
+    message_strings.push_back(message.message);
+  }
+  EXPECT_THAT(message_strings, testing::UnorderedElementsAre(u"body load"));
 }
 
 }  // namespace extensions

@@ -1,19 +1,21 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <memory>
+#include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/message_loop/message_pump_type.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/metrics/histogram_samples.h"
 #include "base/run_loop.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/thread_restrictions.h"
+#include "base/time/time.h"
 #include "dbus/bus.h"
 #include "dbus/message.h"
 #include "dbus/object_proxy.h"
@@ -31,9 +33,6 @@ class SignalSenderVerificationTest : public testing::Test {
   }
 
   void SetUp() override {
-    // Make the main thread not to allow IO.
-    base::ThreadRestrictions::SetIOAllowed(false);
-
     // Start the D-Bus thread.
     dbus_thread_ = std::make_unique<base::Thread>("D-Bus Thread");
     base::Thread::Options thread_options;
@@ -50,7 +49,7 @@ class SignalSenderVerificationTest : public testing::Test {
     bus_options.bus_type = Bus::SESSION;
     bus_options.connection_type = Bus::PRIVATE;
     bus_options.dbus_task_runner = dbus_thread_->task_runner();
-    bus_ = new Bus(bus_options);
+    bus_ = new Bus(std::move(bus_options));
     object_proxy_ = bus_->GetObjectProxy(
         test_service_->service_name(),
         ObjectPath("/org/chromium/TestObject"));
@@ -102,13 +101,8 @@ class SignalSenderVerificationTest : public testing::Test {
     test_service_->ShutdownAndBlock();
     test_service2_->ShutdownAndBlock();
 
-    // Reset to the default.
-    base::ThreadRestrictions::SetIOAllowed(true);
-
-    // Stopping a thread is considered an IO operation, so do this after
-    // allowing IO.
-    test_service_->Stop();
-    test_service2_->Stop();
+    SafeServiceStop(test_service_.get());
+    SafeServiceStop(test_service2_.get());
   }
 
   void OnOwnership(bool expected, bool success) {
@@ -157,19 +151,20 @@ class SignalSenderVerificationTest : public testing::Test {
     run_loop_->Run();
   }
 
-  // Stopping a thread is considered an IO operation, so we need to fiddle with
-  // thread restrictions before and after calling Stop() on a TestService.
+  // Stopping a thread is a blocking IO operation, so we need to fiddle with
+  // thread restrictions to call Stop() on a TestService.
   void SafeServiceStop(TestService* test_service) {
-    base::ThreadRestrictions::SetIOAllowed(true);
+    base::ScopedAllowBlockingForTesting allow_blocking;
     test_service->Stop();
-    base::ThreadRestrictions::SetIOAllowed(false);
   }
 
   base::test::SingleThreadTaskEnvironment task_environment_;
+  // Make the main thread not to allow IO.
+  base::ScopedDisallowBlocking disallow_blocking_;
   std::unique_ptr<base::RunLoop> run_loop_;
   std::unique_ptr<base::Thread> dbus_thread_;
   scoped_refptr<Bus> bus_;
-  ObjectProxy* object_proxy_;
+  raw_ptr<ObjectProxy, AcrossTasksDanglingUntriaged> object_proxy_;
   std::unique_ptr<TestService> test_service_;
   std::unique_ptr<TestService> test_service2_;
   // Text message from "Test" signal.

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,25 +6,24 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/auto_reset.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/hash/hash.h"
 #include "base/json/json_writer.h"
-#include "base/macros.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/unsafe_shared_memory_region.h"
 #include "base/no_destructor.h"
-#include "base/single_thread_task_runner.h"
+#include "base/observer_list.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
+#include "base/values.h"
 #include "build/build_config.h"
 #include "gpu/command_buffer/common/constants.h"
-#include "gpu/command_buffer/common/gpu_memory_buffer_support.h"
 #include "gpu/command_buffer/common/sync_token.h"
 #include "gpu/command_buffer/service/decoder_context.h"
-#include "gpu/command_buffer/service/gpu_command_buffer_memory_tracker.h"
 #include "gpu/command_buffer/service/logger.h"
-#include "gpu/command_buffer/service/mailbox_manager.h"
 #include "gpu/command_buffer/service/memory_tracking.h"
 #include "gpu/command_buffer/service/query_manager.h"
 #include "gpu/command_buffer/service/scheduler.h"
@@ -32,21 +31,21 @@
 #include "gpu/command_buffer/service/service_utils.h"
 #include "gpu/command_buffer/service/sync_point_manager.h"
 #include "gpu/config/gpu_crash_keys.h"
+#include "gpu/ipc/common/command_buffer_trace_utils.h"
 #include "gpu/ipc/service/gpu_channel.h"
 #include "gpu/ipc/service/gpu_channel_manager.h"
 #include "gpu/ipc/service/gpu_channel_manager_delegate.h"
 #include "gpu/ipc/service/gpu_watchdog_thread.h"
 #include "gpu/ipc/service/image_transport_surface.h"
 #include "ipc/ipc_mojo_bootstrap.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 #include "ui/gl/gl_bindings.h"
 #include "ui/gl/gl_context.h"
-#include "ui/gl/gl_image.h"
 #include "ui/gl/gl_implementation.h"
 #include "ui/gl/gl_switches.h"
-#include "ui/gl/gl_workarounds.h"
 #include "ui/gl/init/gl_factory.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "base/win/win_util.h"
 #endif
 
@@ -78,26 +77,39 @@ class DevToolsChannelData : public base::trace_event::ConvertableToTraceFormat {
  public:
   static std::unique_ptr<base::trace_event::ConvertableToTraceFormat>
   CreateForChannel(GpuChannel* channel);
+
+  DevToolsChannelData(const DevToolsChannelData&) = delete;
+  DevToolsChannelData& operator=(const DevToolsChannelData&) = delete;
+
   ~DevToolsChannelData() override = default;
 
   void AppendAsTraceFormat(std::string* out) const override {
-    std::string tmp;
-    base::JSONWriter::Write(*value_, &tmp);
-    *out += tmp;
+    *out += base::WriteJson(value_).value_or("");
   }
 
  private:
-  explicit DevToolsChannelData(base::Value* value) : value_(value) {}
-  std::unique_ptr<base::Value> value_;
-  DISALLOW_COPY_AND_ASSIGN(DevToolsChannelData);
+  explicit DevToolsChannelData(base::Value value) : value_(std::move(value)) {}
+  base::Value value_;
 };
 
 std::unique_ptr<base::trace_event::ConvertableToTraceFormat>
 DevToolsChannelData::CreateForChannel(GpuChannel* channel) {
-  std::unique_ptr<base::DictionaryValue> res(new base::DictionaryValue);
-  res->SetInteger("renderer_pid", channel->client_pid());
-  res->SetDouble("used_bytes", channel->GetMemoryUsage());
-  return base::WrapUnique(new DevToolsChannelData(res.release()));
+  base::DictValue res;
+  res.Set("renderer_pid", static_cast<int>(channel->client_pid()));
+  res.Set("used_bytes", static_cast<double>(channel->GetMemoryUsage()));
+  return base::WrapUnique(new DevToolsChannelData(base::Value(std::move(res))));
+}
+
+bool IsStateful(const mojom::ContextCreationAttribs& attribs) {
+  switch (attribs.which()) {
+    case mojom::ContextCreationAttribs::Tag::kWebgpu:
+      return true;
+    case mojom::ContextCreationAttribs::Tag::kGles:
+      return attribs.get_gles()->context_type == CONTEXT_TYPE_WEBGL1 ||
+             attribs.get_gles()->context_type == CONTEXT_TYPE_WEBGL2;
+    case mojom::ContextCreationAttribs::Tag::kRaster:
+      return false;
+  }
 }
 
 }  // namespace
@@ -110,11 +122,9 @@ CommandBufferStub::CommandBufferStub(
     int32_t stream_id,
     int32_t route_id)
     : channel_(channel),
-      context_type_(init_params.attribs.context_type),
       active_url_(init_params.active_url),
+      context_label_(init_params.label),
       initialized_(false),
-      surface_handle_(init_params.surface_handle),
-      use_virtualized_gl_context_(false),
       command_buffer_id_(command_buffer_id),
       sequence_id_(sequence_id),
       scheduler_task_runner_(
@@ -124,16 +134,25 @@ CommandBufferStub::CommandBufferStub(
       route_id_(route_id),
       last_flush_id_(0),
       previous_processed_num_(0),
-      wait_set_get_buffer_count_(0) {}
+      wait_set_get_buffer_count_(0),
+      has_stateful_context_(IsStateful(*init_params.attribs)) {
+  process_delayed_work_timer_.SetTaskRunner(channel_->task_runner());
+}
 
 CommandBufferStub::~CommandBufferStub() {
   Destroy();
 }
 
 void CommandBufferStub::ExecuteDeferredRequest(
-    mojom::DeferredCommandBufferRequestParams& params) {
+    mojom::DeferredCommandBufferRequestParams& params,
+    FenceSyncReleaseDelegate* release_delegate) {
   TRACE_EVENT1(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"), "GPUTask",
                "data", DevToolsChannelData::CreateForChannel(channel()));
+
+  // Reentrant call is not supported.
+  CHECK(!release_delegate_);
+  base::AutoReset<raw_ptr<FenceSyncReleaseDelegate>> auto_reset(
+      &release_delegate_, release_delegate);
 
   // Ensure the appropriate GL context is current before handling any IPC
   // messages directed at the command buffer. This ensures that the message
@@ -142,6 +161,10 @@ void CommandBufferStub::ExecuteDeferredRequest(
   ScopedContextOperation operation(*this);
   if (!operation.is_context_current())
     return;
+
+  if (!context_label_.empty()) {
+    TRACE_EVENT_BEGIN("gpu", TRACE_STR_COPY(context_label_.c_str()));
+  }
 
   switch (params.which()) {
     case mojom::DeferredCommandBufferRequestParams::Tag::kAsyncFlush: {
@@ -153,16 +176,10 @@ void CommandBufferStub::ExecuteDeferredRequest(
     case mojom::DeferredCommandBufferRequestParams::Tag::kDestroyTransferBuffer:
       OnDestroyTransferBuffer(params.get_destroy_transfer_buffer());
       break;
+  }
 
-    case mojom::DeferredCommandBufferRequestParams::Tag::kTakeFrontBuffer:
-      OnTakeFrontBuffer(params.get_take_front_buffer());
-      break;
-
-    case mojom::DeferredCommandBufferRequestParams::Tag::kReturnFrontBuffer: {
-      OnReturnFrontBuffer(params.get_return_front_buffer()->mailbox,
-                          params.get_return_front_buffer()->is_lost);
-      break;
-    }
+  if (!context_label_.empty()) {
+    TRACE_EVENT_END("gpu");
   }
 }
 
@@ -171,30 +188,17 @@ bool CommandBufferStub::IsScheduled() {
 }
 
 void CommandBufferStub::PollWork() {
-  // Post another delayed task if we have not yet reached the time at which
-  // we should process delayed work.
-  base::TimeTicks current_time = base::TimeTicks::Now();
-  DCHECK(!process_delayed_work_time_.is_null());
-  if (process_delayed_work_time_ > current_time) {
-    channel_->task_runner()->PostDelayedTask(
-        FROM_HERE, base::BindOnce(&CommandBufferStub::PollWork, AsWeakPtr()),
-        process_delayed_work_time_ - current_time);
-    return;
-  }
-  process_delayed_work_time_ = base::TimeTicks();
-
   PerformWork();
 }
 
 void CommandBufferStub::PerformWork() {
   TRACE_EVENT0("gpu", "CommandBufferStub::PerformWork");
   UpdateActiveUrl();
-  // TODO(sunnyps): Should this use ScopedCrashKey instead?
-  crash_keys::gpu_gl_context_is_virtual.Set(use_virtualized_gl_context_ ? "1"
-                                                                        : "0");
+
   if (decoder_context_.get() && !MakeCurrent())
     return;
-  auto cache_use = CreateCacheUse();
+  std::optional<gles2::ProgramCache::ScopedCacheUse> cache_use;
+  CreateCacheUse(cache_use);
 
   if (decoder_context_) {
     uint32_t current_unprocessed_num =
@@ -205,7 +209,7 @@ void CommandBufferStub::PerformWork() {
       base::TimeDelta time_since_idle =
           base::TimeTicks::Now() - last_idle_time_;
       base::TimeDelta max_time_since_idle =
-          base::TimeDelta::FromMilliseconds(kMaxTimeSinceIdleMs);
+          base::Milliseconds(kMaxTimeSinceIdleMs);
 
       // Force idle when it's been too long since last time we were idle.
       if (time_since_idle > max_time_since_idle)
@@ -221,8 +225,7 @@ void CommandBufferStub::PerformWork() {
     decoder_context_->PerformPollingWork();
   }
 
-  ScheduleDelayedWork(
-      base::TimeDelta::FromMilliseconds(kHandleMoreWorkPeriodBusyMs));
+  ScheduleDelayedWork(base::Milliseconds(kHandleMoreWorkPeriodBusyMs));
 }
 
 bool CommandBufferStub::HasUnprocessedCommands() {
@@ -245,10 +248,13 @@ void CommandBufferStub::ScheduleDelayedWork(base::TimeDelta delay) {
   }
 
   base::TimeTicks current_time = base::TimeTicks::Now();
-  // |process_delayed_work_time_| is set if processing of delayed work is
-  // already scheduled. Just update the time if already scheduled.
-  if (!process_delayed_work_time_.is_null()) {
-    process_delayed_work_time_ = current_time + delay;
+  // Just update the time if already scheduled.
+  if (process_delayed_work_timer_.IsRunning()) {
+    process_delayed_work_timer_.Stop();
+    process_delayed_work_timer_.Start(
+        FROM_HERE, current_time + delay,
+        base::BindOnce(&CommandBufferStub::PollWork, AsWeakPtr()),
+        base::subtle::DelayPolicy::kPrecise);
     return;
   }
 
@@ -269,10 +275,10 @@ void CommandBufferStub::ScheduleDelayedWork(base::TimeDelta delay) {
     delay = base::TimeDelta();
   }
 
-  process_delayed_work_time_ = current_time + delay;
-  channel_->task_runner()->PostDelayedTask(
-      FROM_HERE, base::BindOnce(&CommandBufferStub::PollWork, AsWeakPtr()),
-      delay);
+  process_delayed_work_timer_.Start(
+      FROM_HERE, current_time + delay,
+      base::BindOnce(&CommandBufferStub::PollWork, AsWeakPtr()),
+      base::subtle::DelayPolicy::kPrecise);
 }
 
 bool CommandBufferStub::MakeCurrent() {
@@ -284,17 +290,18 @@ bool CommandBufferStub::MakeCurrent() {
   return false;
 }
 
-gles2::ProgramCache::ScopedCacheUse CommandBufferStub::CreateCacheUse() {
-  return gles2::ProgramCache::ScopedCacheUse(
-      channel_->gpu_channel_manager()->program_cache(),
-      base::BindRepeating(&DecoderClient::CacheShader, base::Unretained(this)));
+void CommandBufferStub::CreateCacheUse(
+    std::optional<gles2::ProgramCache::ScopedCacheUse>& cache_use) {
+  if (auto* cache = channel_->gpu_channel_manager()->program_cache()) {
+    cache_use.emplace(
+        cache,
+        base::BindRepeating(&DecoderClient::CacheBlob, base::Unretained(this),
+                            gpu::GpuDiskCacheType::kGlShaders));
+  }
 }
 
 void CommandBufferStub::Destroy() {
   UpdateActiveUrl();
-  // TODO(sunnyps): Should this use ScopedCrashKey instead?
-  crash_keys::gpu_gl_context_is_virtual.Set(use_virtualized_gl_context_ ? "1"
-                                                                        : "0");
   if (wait_for_token_) {
     std::move(wait_for_token_->callback).Run(gpu::CommandBuffer::State());
     wait_for_token_.reset();
@@ -306,34 +313,23 @@ void CommandBufferStub::Destroy() {
 
   if (initialized_) {
     GpuChannelManager* gpu_channel_manager = channel_->gpu_channel_manager();
-    // If we are currently shutting down the GPU process to help with recovery
-    // (exit_on_context_lost workaround), then don't tell the browser about
-    // offscreen context destruction here since it's not client-invoked, and
-    // might bypass the 3D API blocking logic.
-    if ((surface_handle_ == gpu::kNullSurfaceHandle) &&
-        !active_url_.is_empty() &&
+    if (!active_url_.is_empty() &&
         !gpu_channel_manager->delegate()->IsExiting()) {
       gpu_channel_manager->delegate()->DidDestroyOffscreenContext(
           active_url_.url());
     }
   }
 
-  if (sync_point_client_state_) {
-    sync_point_client_state_->Destroy();
-    sync_point_client_state_ = nullptr;
-  }
+  scoped_sync_point_client_state_.Reset();
 
-  bool have_context = false;
-  if (decoder_context_ && decoder_context_->GetGLContext()) {
-    // Try to make the context current regardless of whether it was lost, so we
-    // don't leak resources.
-    have_context =
-        decoder_context_->GetGLContext()->MakeCurrent(surface_.get());
-  }
+  // Try to make the context current regardless of whether it was lost, so we
+  // don't leak resources. Don't use GetGLContext()->MakeCurrent() since that
+  // will make |have_context| false when RasterDecoder doesn't use GL.
+  const bool have_context = decoder_context_ && decoder_context_->MakeCurrent();
 
-  absl::optional<gles2::ProgramCache::ScopedCacheUse> cache_use;
+  std::optional<gles2::ProgramCache::ScopedCacheUse> cache_use;
   if (have_context)
-    cache_use.emplace(CreateCacheUse());
+    CreateCacheUse(cache_use);
 
   for (auto& observer : destruction_observers_)
     observer.OnWillDestroyStub(have_context);
@@ -346,6 +342,11 @@ void CommandBufferStub::Destroy() {
   surface_ = nullptr;
 
   if (decoder_context_) {
+    auto* gr_shader_cache = channel_->gpu_channel_manager()->gr_shader_cache();
+    std::optional<raster::GrShaderCache::ScopedCacheUse> gr_cache_use;
+    if (gr_shader_cache)
+      gr_cache_use.emplace(gr_shader_cache, channel_->client_id());
+
     decoder_context_->Destroy(have_context);
     decoder_context_.reset();
   }
@@ -393,9 +394,8 @@ void CommandBufferStub::OnParseError() {
   // determine whether client APIs like WebGL need to be immediately
   // blocked from automatically running.
   GpuChannelManager* gpu_channel_manager = channel_->gpu_channel_manager();
-  gpu_channel_manager->delegate()->DidLoseContext(
-      (surface_handle_ == kNullSurfaceHandle), state.context_lost_reason,
-      active_url_.url());
+  gpu_channel_manager->delegate()->DidLoseContext(state.context_lost_reason,
+                                                  active_url_.url());
 
   CheckContextLost();
 }
@@ -411,8 +411,8 @@ void CommandBufferStub::WaitForTokenInRange(int32_t start,
   CheckContextLost();
   if (wait_for_token_)
     LOG(ERROR) << "Got WaitForToken command while currently waiting for token.";
-  channel_->scheduler()->RaisePriorityForClientWait(sequence_id_,
-                                                    command_buffer_id_);
+  channel_->scheduler()->SetSequencePriority(sequence_id_,
+                                             SchedulingPriority::kHigh);
   wait_for_token_ =
       std::make_unique<WaitForCommandState>(start, end, std::move(callback));
   CheckCompleteWaits();
@@ -432,8 +432,8 @@ void CommandBufferStub::WaitForGetOffsetInRange(uint32_t set_get_buffer_count,
     LOG(ERROR)
         << "Got WaitForGetOffset command while currently waiting for offset.";
   }
-  channel_->scheduler()->RaisePriorityForClientWait(sequence_id_,
-                                                    command_buffer_id_);
+  channel_->scheduler()->SetSequencePriority(sequence_id_,
+                                             SchedulingPriority::kHigh);
   wait_for_get_offset_ =
       std::make_unique<WaitForCommandState>(start, end, std::move(callback));
   wait_set_get_buffer_count_ = set_get_buffer_count;
@@ -464,8 +464,9 @@ void CommandBufferStub::CheckCompleteWaits() {
     }
   }
   if (has_wait && !(wait_for_token_ || wait_for_get_offset_)) {
-    channel_->scheduler()->ResetPriorityForClientWait(sequence_id_,
-                                                      command_buffer_id_);
+    channel_->scheduler()->SetSequencePriority(
+        sequence_id_,
+        channel_->scheduler()->GetSequenceDefaultPriority(sequence_id_));
   }
 }
 
@@ -473,18 +474,19 @@ void CommandBufferStub::OnAsyncFlush(
     int32_t put_offset,
     uint32_t flush_id,
     const std::vector<SyncToken>& sync_token_fences) {
-  TRACE_EVENT1("gpu", "CommandBufferStub::OnAsyncFlush", "put_offset",
-               put_offset);
   DCHECK(command_buffer_);
   // We received this message out-of-order. This should not happen but is here
   // to catch regressions. Ignore the message.
   DVLOG_IF(0, flush_id - last_flush_id_ >= 0x8000000U)
       << "Received a Flush message out-of-order";
-  // Check if sync token waits are invalid or already complete. Do not use
-  // SyncPointManager::IsSyncTokenReleased() as it can't say if the wait is
-  // invalid.
-  for (const auto& sync_token : sync_token_fences)
-    DCHECK(!sync_point_client_state_->Wait(sync_token, base::DoNothing()));
+
+  const uint64_t global_flush_id =
+      GlobalFlushTracingId(channel_->client_id(), flush_id);
+  TRACE_EVENT("gpu,toplevel.flow", "CommandBuffer::Flush",
+              perfetto::Flow::Global(global_flush_id, "CommandBuffer::Flush"));
+
+  TRACE_EVENT1("gpu", "CommandBufferStub::OnAsyncFlush", "put_offset",
+               put_offset);
 
   last_flush_id_ = flush_id;
   gpu::CommandBuffer::State pre_state = command_buffer_->GetState();
@@ -492,7 +494,7 @@ void CommandBufferStub::OnAsyncFlush(
 
   {
     auto* gr_shader_cache = channel_->gpu_channel_manager()->gr_shader_cache();
-    absl::optional<raster::GrShaderCache::ScopedCacheUse> cache_use;
+    std::optional<raster::GrShaderCache::ScopedCacheUse> cache_use;
     if (gr_shader_cache)
       cache_use.emplace(gr_shader_cache, channel_->client_id());
     command_buffer_->Flush(put_offset, decoder_context_.get());
@@ -503,10 +505,15 @@ void CommandBufferStub::OnAsyncFlush(
   if (pre_state.get_offset != post_state.get_offset)
     ReportState();
 
-#if defined(OS_ANDROID)
-  GpuChannelManager* manager = channel_->gpu_channel_manager();
-  manager->DidAccessGpu();
+#if BUILDFLAG(IS_ANDROID)
+  channel_->gpu_channel_manager()->DidAccessGpu();
 #endif
+
+  if (!HasUnprocessedCommands()) {
+    TRACE_EVENT("gpu,toplevel.flow", "CommandBuffer::FlushComplete",
+                perfetto::TerminatingFlow::Global(global_flush_id,
+                                                  "CommandBuffer::Flush"));
+  }
 }
 
 void CommandBufferStub::RegisterTransferBuffer(
@@ -543,14 +550,6 @@ void CommandBufferStub::GetGpuFenceHandle(uint32_t id,
   std::move(callback).Run(gfx::GpuFenceHandle());
 }
 
-void CommandBufferStub::CreateImage(mojom::CreateImageParamsPtr params) {
-  DLOG(ERROR) << "CreateImage unsupported.";
-}
-
-void CommandBufferStub::DestroyImage(int32_t id) {
-  DLOG(ERROR) << "DestroyImage unsupported.";
-}
-
 void CommandBufferStub::OnDestroyTransferBuffer(int32_t id) {
   TRACE_EVENT0("gpu", "CommandBufferStub::OnDestroyTransferBuffer");
 
@@ -565,12 +564,19 @@ void CommandBufferStub::ReportState() {
 void CommandBufferStub::SignalSyncToken(const SyncToken& sync_token,
                                         uint32_t id) {
   UpdateActiveUrl();
+
+  if (channel_->scheduler()
+          ->task_graph()
+          ->sync_point_manager()
+          ->IsSyncTokenReleased(sync_token)) {
+    OnSignalAck(id);
+    return;
+  }
+
   auto callback =
       base::BindOnce(&CommandBufferStub::OnSignalAck, this->AsWeakPtr(), id);
-  if (!sync_point_client_state_->WaitNonThreadSafe(
-          sync_token, channel_->task_runner(), std::move(callback))) {
-    OnSignalAck(id);
-  }
+  channel_->scheduler()->ScheduleTask(Scheduler::Task(
+      sequence_id_, std::move(callback), {sync_token}, SyncToken()));
 }
 
 void CommandBufferStub::OnSignalAck(uint32_t id) {
@@ -593,20 +599,11 @@ void CommandBufferStub::SignalQuery(uint32_t query_id, uint32_t id) {
   }
 }
 
-void CommandBufferStub::BindMediaReceiver(
-    mojo::GenericPendingAssociatedReceiver receiver,
-    BindMediaReceiverCallback callback) {
-  const auto& binder = channel_->command_buffer_media_binder();
-  if (binder)
-    binder.Run(this, std::move(receiver));
-  std::move(callback).Run();
-}
-
 void CommandBufferStub::OnFenceSyncRelease(uint64_t release) {
-  SyncToken sync_token(CommandBufferNamespace::GPU_IO, command_buffer_id_,
-                       release);
   command_buffer_->SetReleaseCount(release);
-  sync_point_client_state_->ReleaseFenceSync(release);
+
+  CHECK(release_delegate_);
+  release_delegate_->Release(release);
 }
 
 void CommandBufferStub::OnDescheduleUntilFinished() {
@@ -637,9 +634,10 @@ void CommandBufferStub::OnConsoleMessage(int32_t id,
   client_->OnConsoleMessage(message);
 }
 
-void CommandBufferStub::CacheShader(const std::string& key,
-                                    const std::string& shader) {
-  channel_->CacheShader(key, shader);
+void CommandBufferStub::CacheBlob(gpu::GpuDiskCacheType type,
+                                  const std::string& key,
+                                  const std::string& shader) {
+  channel_->CacheBlob(type, key, shader);
 }
 
 void CommandBufferStub::AddDestructionObserver(DestructionObserver* observer) {
@@ -651,15 +649,15 @@ void CommandBufferStub::RemoveDestructionObserver(
   destruction_observers_.RemoveObserver(observer);
 }
 
-std::unique_ptr<MemoryTracker> CommandBufferStub::CreateMemoryTracker() const {
+scoped_refptr<MemoryTracker> CommandBufferStub::CreateMemoryTracker() const {
   MemoryTrackerFactory current_factory = GetMemoryTrackerFactory();
   if (current_factory)
     return current_factory.Run();
 
-  return std::make_unique<GpuCommandBufferMemoryTracker>(
+  return base::MakeRefCounted<MemoryTracker>(
       command_buffer_id_, channel_->client_tracing_id(),
-      channel_->task_runner(),
-      channel_->gpu_channel_manager()->peak_memory_monitor());
+      channel_->gpu_channel_manager()->peak_memory_monitor(),
+      GpuPeakMemoryAllocationSource::COMMAND_BUFFER);
 }
 
 // static
@@ -706,7 +704,9 @@ void CommandBufferStub::CheckContextLost() {
     bool was_lost_by_robustness =
         decoder_context_ &&
         decoder_context_->WasContextLostByRobustnessExtension();
-    channel_->gpu_channel_manager()->OnContextLost(!was_lost_by_robustness);
+    channel_->gpu_channel_manager()->OnContextLost(/*context_lost_count=*/-1,
+                                                   !was_lost_by_robustness,
+                                                   state.context_lost_reason);
   }
 
   CheckCompleteWaits();
@@ -755,17 +755,17 @@ CommandBufferStub::ScopedContextOperation::ScopedContextOperation(
   stub_.UpdateActiveUrl();
   if (stub_.decoder_context_ && stub_.MakeCurrent()) {
     have_context_ = true;
-    cache_use_.emplace(stub_.CreateCacheUse());
+    stub_.CreateCacheUse(cache_use_);
   }
 }
 
 CommandBufferStub::ScopedContextOperation::~ScopedContextOperation() {
   stub_.CheckCompleteWaits();
   if (have_context_) {
-    if (stub_.decoder_context_)
+    if (stub_.decoder_context_) {
       stub_.decoder_context_->ProcessPendingQueries(/*did_finish=*/false);
-    stub_.ScheduleDelayedWork(
-        base::TimeDelta::FromMilliseconds(kHandleMoreWorkPeriodMs));
+    }
+    stub_.ScheduleDelayedWork(base::Milliseconds(kHandleMoreWorkPeriodMs));
   }
 }
 

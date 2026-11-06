@@ -1,14 +1,13 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef BASE_TASK_COMMON_CHECKED_LOCK_IMPL_H_
 #define BASE_TASK_COMMON_CHECKED_LOCK_IMPL_H_
 
-#include <memory>
+#include <optional>
 
 #include "base/base_export.h"
-#include "base/macros.h"
 #include "base/synchronization/lock.h"
 
 namespace base {
@@ -30,16 +29,23 @@ class BASE_EXPORT CheckedLockImpl {
   explicit CheckedLockImpl(const CheckedLockImpl* predecessor);
   explicit CheckedLockImpl(UniversalPredecessor);
   explicit CheckedLockImpl(UniversalSuccessor);
+
+  CheckedLockImpl(const CheckedLockImpl&) = delete;
+  CheckedLockImpl& operator=(const CheckedLockImpl&) = delete;
+
   ~CheckedLockImpl();
 
   static void AssertNoLockHeldOnCurrentThread();
 
-  void Acquire() EXCLUSIVE_LOCK_FUNCTION(lock_);
+  void Acquire(subtle::LockTracking tracking = subtle::LockTracking::kDisabled)
+      EXCLUSIVE_LOCK_FUNCTION(lock_);
   void Release() UNLOCK_FUNCTION(lock_);
 
   void AssertAcquired() const;
+  void AssertNotHeld() const;
 
-  std::unique_ptr<ConditionVariable> CreateConditionVariable();
+  ConditionVariable CreateConditionVariable();
+  void CreateConditionVariableAndEmplace(std::optional<ConditionVariable>& opt);
 
   bool is_universal_predecessor() const { return is_universal_predecessor_; }
   bool is_universal_successor() const { return is_universal_successor_; }
@@ -48,8 +54,6 @@ class BASE_EXPORT CheckedLockImpl {
   Lock lock_;
   const bool is_universal_predecessor_ = false;
   const bool is_universal_successor_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(CheckedLockImpl);
 };
 
 }  // namespace internal

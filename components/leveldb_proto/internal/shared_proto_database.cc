@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,10 @@
 #include <memory>
 #include <utility>
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
-#include "base/sequenced_task_runner.h"
 #include "base/synchronization/lock.h"
-#include "base/task/post_task.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "components/leveldb_proto/internal/leveldb_database.h"
 #include "components/leveldb_proto/internal/proto_database_selector.h"
@@ -37,8 +36,6 @@ const int kMaxInitMetaDatabaseAttempts = 3;
 const int kMaxSharedDbFailuresBeforeDestroy = 5;
 
 const char kGlobalMetadataKey[] = "__global";
-
-const char kSharedProtoDatabaseUmaName[] = "SharedDb";
 
 }  // namespace
 
@@ -91,11 +88,12 @@ SharedProtoDatabase::SharedProtoDatabase(const std::string& client_db_id,
 void SharedProtoDatabase::GetDatabaseInitStatusAsync(
     const std::string& client_db_id,
     Callbacks::InitStatusCallback callback) {
-  DCHECK(base::SequencedTaskRunnerHandle::IsSet());
+  DCHECK(base::SequencedTaskRunner::HasCurrentDefault());
   task_runner_->PostTask(
-      FROM_HERE, base::BindOnce(&SharedProtoDatabase::RunInitCallback, this,
-                                std::move(callback),
-                                base::SequencedTaskRunnerHandle::Get()));
+      FROM_HERE,
+      base::BindOnce(&SharedProtoDatabase::RunInitCallback, this,
+                     std::move(callback),
+                     base::SequencedTaskRunner::GetCurrentDefault()));
 }
 
 void SharedProtoDatabase::RunInitCallback(
@@ -109,7 +107,7 @@ void SharedProtoDatabase::UpdateClientMetadataAsync(
     const std::string& client_db_id,
     SharedDBMetadataProto::MigrationStatus migration_status,
     base::OnceCallback<void(bool)> callback) {
-  if (base::SequencedTaskRunnerHandle::Get() != task_runner_) {
+  if (base::SequencedTaskRunner::GetCurrentDefault() != task_runner_) {
     task_runner_->PostTask(
         FROM_HERE,
         base::BindOnce(&SharedProtoDatabase::UpdateClientMetadataAsync, this,
@@ -349,7 +347,7 @@ void SharedProtoDatabase::OnGetGlobalMetadata(
 
     if (metadata_->failure_count() >= kMaxSharedDbFailuresBeforeDestroy) {
       ProtoLevelDBWrapper::Destroy(
-          db_dir_, /*client_id=*/std::string(), task_runner_,
+          db_dir_, task_runner_,
           base::BindOnce(&SharedProtoDatabase::OnDestroySharedDatabase, this));
       return;
     }
@@ -410,7 +408,6 @@ void SharedProtoDatabase::InitDatabase() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(on_task_runner_);
   auto options = CreateSimpleOptions();
   options.create_if_missing = create_if_missing_;
-  db_wrapper_->SetMetricsId(kSharedProtoDatabaseUmaName);
   // |db_wrapper_| uses the same SequencedTaskRunner that Init is called on,
   // so OnDatabaseInit will be called on the same sequence after Init.
   // This means any callers to Init using the same TaskRunner can guarantee that
@@ -474,8 +471,7 @@ void SharedProtoDatabase::OnDatabaseInit(bool create_if_missing,
     // Hold on to shared db until the remove operation is done or Shutdown()
     // clears the task.
     Callbacks::UpdateCallback keep_shared_db_alive =
-        base::BindOnce([](scoped_refptr<SharedProtoDatabase>, bool) {},
-                       base::WrapRefCounted<>(this));
+        base::DoNothingWithBoundArgs(base::WrapRefCounted<>(this));
     delete_obsolete_task_.Reset(base::BindOnce(
         &SharedProtoDatabase::DestroyObsoleteSharedProtoDatabaseClients, this,
         std::move(keep_shared_db_alive)));
@@ -527,6 +523,9 @@ void SharedProtoDatabase::CommitUpdatedGlobalMetadata(
 }
 
 SharedProtoDatabase::~SharedProtoDatabase() {
+  // Need to release `db_wrapper_` now since it holds an unowned pointer to
+  // `db_`.
+  db_wrapper_.reset();
   task_runner_->DeleteSoon(FROM_HERE, std::move(db_));
   task_runner_->DeleteSoon(FROM_HERE, std::move(metadata_db_wrapper_));
 }
@@ -540,8 +539,8 @@ void GetClientInitCallback(
   // |current_task_runner| is valid because Init already takes the current
   // TaskRunner as a parameter and uses that to trigger this callback when it's
   // finished.
-  DCHECK(base::SequencedTaskRunnerHandle::IsSet());
-  auto current_task_runner = base::SequencedTaskRunnerHandle::Get();
+  DCHECK(base::SequencedTaskRunner::HasCurrentDefault());
+  auto current_task_runner = base::SequencedTaskRunner::GetCurrentDefault();
   if (status != Enums::InitStatus::kOK && status != Enums::InitStatus::kCorrupt)
     client.reset();
   // Set migration status of client. The metadata database was already updated.
@@ -558,8 +557,8 @@ void SharedProtoDatabase::GetClientAsync(
     base::OnceCallback<void(std::unique_ptr<SharedProtoDatabaseClient>,
                             Enums::InitStatus)> callback) {
   auto client = GetClientInternal(db_type);
-  DCHECK(base::SequencedTaskRunnerHandle::IsSet());
-  auto current_task_runner = base::SequencedTaskRunnerHandle::Get();
+  DCHECK(base::SequencedTaskRunner::HasCurrentDefault());
+  auto current_task_runner = base::SequencedTaskRunner::GetCurrentDefault();
   SharedProtoDatabaseClient* client_ptr = client.get();
   task_runner_->PostTask(
       FROM_HERE,
@@ -576,8 +575,8 @@ std::unique_ptr<SharedProtoDatabaseClient>
 SharedProtoDatabase::GetClientForTesting(ProtoDbType db_type,
                                          bool create_if_missing,
                                          SharedClientInitCallback callback) {
-  DCHECK(base::SequencedTaskRunnerHandle::IsSet());
-  auto current_task_runner = base::SequencedTaskRunnerHandle::Get();
+  DCHECK(base::SequencedTaskRunner::HasCurrentDefault());
+  auto current_task_runner = base::SequencedTaskRunner::GetCurrentDefault();
   auto client = GetClientInternal(db_type);
   task_runner_->PostTask(
       FROM_HERE,

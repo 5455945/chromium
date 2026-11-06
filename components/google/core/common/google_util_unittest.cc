@@ -1,15 +1,17 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/google/core/common/google_util.h"
 
 #include "base/command_line.h"
-#include "base/macros.h"
-#include "base/strings/stringprintf.h"
+#include "base/i18n/language_tag.h"
+#include "base/strings/strcat.h"
+#include "base/test/scoped_feature_list.h"
 #include "components/google/core/common/google_switches.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
+#include "url/url_constants.h"
 
 using google_util::IsGoogleDomainUrl;
 
@@ -17,9 +19,9 @@ using google_util::IsGoogleDomainUrl;
 
 namespace {
 
-const std::string kValidSearchSchemes[] = {"http", "https"};
+constexpr const char* kValidSearchSchemes[] = {"http", "https"};
 
-const std::string kValidSearchQueryParams[] = {
+constexpr const char* kValidSearchQueryParams[] = {
     "q",
     "as_q"  // Advanced search uses "as_q" instead of "q" as the query param.
 };
@@ -132,57 +134,88 @@ TEST(GoogleUtilTest, BadHomePages) {
 }
 
 TEST(GoogleUtilTest, GoodSearches) {
-  const std::string patterns[] = {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(google_util::kIsViewerGoogleSearchUrl);
+  constexpr struct {
+    const char* before_query_param;
+    const char* after_query_param;
+  } kPatterns[] = {
       // Queries with path "/search" need to have the query parameter in either
       // the url parameter or the hash fragment.
-      "%s://www.google.com/search?%s=something",
-      "%s://www.google.com/search#%s=something",
-      "%s://www.google.com/search?name=bob&%s=something",
-      "%s://www.google.com/search?name=bob#%s=something",
-      "%s://www.google.com/search?name=bob#age=24&%s=thng",
-      "%s://www.google.co.uk/search?%s=something",
+      {"www.google.com/search?", "=something"},
+      {"www.google.com/search#", "=something"},
+      {"www.google.com/search?name=bob&", "=something"},
+      {"www.google.com/search?name=bob#", "=something"},
+      {"www.google.com/search?name=bob#age=24&", "=thng"},
+      {"www.google.co.uk/search?", "=something"},
       // It's actually valid for both to have the query parameter.
-      "%s://www.google.com/search?%s=something#q=other",
+      {"www.google.com/search?", "=something#q=other"},
       // Also valid to have an empty query parameter
-      "%s://www.google.com/search?%s=",
+      {"www.google.com/search?", "="},
 
       // Queries with path "/webhp", "/" or "" need to have the query parameter
       // in the hash fragment.
-      "%s://www.google.com/webhp#%s=something",
-      "%s://www.google.com/webhp#name=bob&%s=something",
-      "%s://www.google.com/webhp?name=bob#%s=something",
-      "%s://www.google.com/webhp?name=bob#age=24&%s=thing",
+      {"www.google.com/webhp#", "=something"},
+      {"www.google.com/webhp#name=bob&", "=something"},
+      {"www.google.com/webhp?name=bob#", "=something"},
+      {"www.google.com/webhp?name=bob#age=24&", "=thing"},
 
-      "%s://www.google.com/#%s=something",
-      "%s://www.google.com/#name=bob&%s=something",
-      "%s://www.google.com/?name=bob#%s=something",
-      "%s://www.google.com/?name=bob#age=24&%s=something",
+      // Viewing a google search card is still considered a search
+      {"www.google.com/viewer/places?", "=something"},
 
-      "%s://www.google.com#%s=something",
-      "%s://www.google.com#name=bob&%s=something",
-      "%s://www.google.com?name=bob#%s=something",
-      "%s://www.google.com?name=bob#age=24&%s=something",
+      {"www.google.com/#", "=something"},
+      {"www.google.com/#name=bob&", "=something"},
+      {"www.google.com/?name=bob#", "=something"},
+      {"www.google.com/?name=bob#age=24&", "=something"},
+
+      {"www.google.com#", "=something"},
+      {"www.google.com#name=bob&", "=something"},
+      {"www.google.com?name=bob#", "=something"},
+      {"www.google.com?name=bob#age=24&", "=something"},
 
       // Google subdomain queries.
-      "%s://ipv4.google.com/search?%s=something",
-      "%s://ipv4.google.com#name=bob&%s=something",
-      "%s://ipv6.google.com?name=bob#%s=something",
-      "%s://ipv6.google.com?name=bob#age=24&%s=something",
+      {"ipv4.google.com/search?", "=something"},
+      {"ipv4.google.com#name=bob&", "=something"},
+      {"ipv6.google.com?name=bob#", "=something"},
+      {"ipv6.google.com?name=bob#age=24&", "=something"},
 
       // Trailing dots in the hosts.
-      "%s://www.google.com./#%s=something",
-      "%s://www.google.de./#%s=something",
-      "%s://ipv4.google.com./#%s=something",
-      "%s://ipv6.google.com./#%s=something",
-  };
+      {"www.google.com./#", "=something"},
+      {"www.google.de./#", "=something"},
+      {"ipv4.google.com./#", "=something"},
+      {"ipv6.google.com./#", "=something"}};
 
-  for (const std::string& pattern : patterns) {
-    for (const std::string& scheme : kValidSearchSchemes) {
-      for (const std::string& query_param : kValidSearchQueryParams) {
-        EXPECT_TRUE(IsSearch(base::StringPrintf(pattern.c_str(), scheme.c_str(),
-                                                query_param.c_str())));
+  for (const auto& pattern : kPatterns) {
+    for (const char* scheme : kValidSearchSchemes) {
+      for (const char* query_param : kValidSearchQueryParams) {
+        EXPECT_TRUE(IsSearch(base::StrCat(
+            {scheme, url::kStandardSchemeSeparator, pattern.before_query_param,
+             query_param, pattern.after_query_param})));
       }
     }
+  }
+}
+
+TEST(GoogleUtilTest, GoodSearchesWithEscapedQueryParam) {
+  constexpr const char* kEscapedQueryParams[] = {
+      "%71",      // 'q' percent-encoded
+      "%51",      // 'Q' percent-encoded
+      "Q",        // uppercase 'Q'
+      "as%5Fq",   // 'as_q' percent-encoded ('_' = %5F)
+      "as%5fq",   // 'as_q' percent-encoded lowercase hex
+      "AS_Q",     // uppercase 'AS_Q'
+      "img%75rl", // 'imgurl' percent-encoded ('u' = %75)
+      "%69mgurl", // 'imgurl' percent-encoded ('i' = %69)
+      "IMGURL",   // uppercase 'IMGURL'
+  };
+
+  for (const char* query_param : kEscapedQueryParams) {
+    EXPECT_TRUE(IsSearch(
+        base::StrCat({"https://www.google.com/search?", query_param, "=term"})));
+    EXPECT_TRUE(IsSearch(
+        base::StrCat({"https://www.google.com/webhp#", query_param, "=term"})));
+    EXPECT_TRUE(IsSearch(
+        base::StrCat({"https://www.google.com/#", query_param, "=term"})));
   }
 }
 
@@ -199,42 +232,54 @@ TEST(GoogleUtilTest, BadSearches) {
   // Empty URL is invalid.
   EXPECT_FALSE(IsSearch(std::string()));
 
-  const std::string patterns[] = {"%s://google.com", "%s://www.google.com",
-                                  "%s://www.google.com/search",
-                                  "%s://www.google.com/search?"};
+  constexpr const char* kPatterns[] = {"google.com", "www.google.com",
+                                       "www.google.com/search",
+                                       "www.google.com/search?"};
 
-  for (const std::string& pattern : patterns) {
-    for (const std::string& scheme : kValidSearchSchemes) {
-      EXPECT_FALSE(
-          IsSearch(base::StringPrintf(pattern.c_str(), scheme.c_str())));
+  for (const char* pattern : kPatterns) {
+    for (const char* scheme : kValidSearchSchemes) {
+      EXPECT_FALSE(IsSearch(
+          base::StrCat({scheme, url::kStandardSchemeSeparator, pattern})));
     }
   }
 
-  const std::string patterns_q[] = {
+  constexpr struct {
+    const char* before_query_param;
+    const char* after_query_param;
+  } kPatternsQ[] = {
       // Home page searches without a hash fragment query parameter are invalid.
-      "%s://www.google.com/webhp?%s=something",
-      "%s://www.google.com/webhp?%s=something#no=good",
-      "%s://www.google.com/webhp?name=bob&%s=something",
-      "%s://www.google.com/?%s=something", "%s://www.google.com?%s=something",
+      {"www.google.com/webhp?", "=something"},
+      {"www.google.com/webhp?", "=something#no=good"},
+      {"www.google.com/webhp?name=bob&", "=something"},
+      {"www.google.com/?", "=something"},
+      {"www.google.com?", "=something"},
 
       // Some paths are outright invalid as searches.
-      "%s://www.google.com/notreal?%s=something",
-      "%s://www.google.com/chrome?%s=something",
-      "%s://www.google.com/search/nogood?%s=something",
-      "%s://www.google.com/webhp/nogood#%s=something",
+      {"www.google.com/notreal?", "=something"},
+      {"www.google.com/chrome?", "=something"},
+      {"www.google.com/search/nogood?", "=something"},
+      {"www.google.com/webhp/nogood#", "=something"},
 
       // Case sensitive paths.
-      "%s://www.google.com/SEARCH?%s=something",
-      "%s://www.google.com/WEBHP#%s=something"};
+      {"www.google.com/SEARCH?", "=something"},
+      {"www.google.com/WEBHP#", "=something"}};
 
-  for (const std::string& pattern : patterns_q) {
-    for (const std::string& scheme : kValidSearchSchemes) {
-      for (const std::string& query_param : kValidSearchQueryParams) {
-        EXPECT_FALSE(IsSearch(base::StringPrintf(
-            pattern.c_str(), scheme.c_str(), query_param.c_str())));
+  for (const auto& pattern : kPatternsQ) {
+    for (const char* scheme : kValidSearchSchemes) {
+      for (const char* query_param : kValidSearchQueryParams) {
+        EXPECT_FALSE(IsSearch(base::StrCat(
+            {scheme, url::kStandardSchemeSeparator, pattern.before_query_param,
+             query_param, pattern.after_query_param})));
       }
     }
   }
+}
+
+TEST(GoogleUtilTest, GoodSearchesWithoutViewer) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(google_util::kIsViewerGoogleSearchUrl);
+  EXPECT_FALSE(IsSearch("https://www.google.com/viewer/places?q=something"));
+  EXPECT_TRUE(IsSearch("https://www.google.com/search?q=something"));
 }
 
 TEST(GoogleUtilTest, GoogleDomains) {
@@ -388,6 +433,59 @@ TEST(GoogleUtilTest, GoogleBaseURLFixup) {
             google_util::CommandLineGoogleBaseURL().spec());
 }
 
+TEST(GoogleUtilTest, GoogleBaseSuggestionURLNotSpecified) {
+  // By default, none of the IsGoogleXXX functions should return true for a
+  // "foo.com" URL.
+  EXPECT_FALSE(google_util::CommandLineGoogleBaseSuggestionURL().is_valid());
+  EXPECT_FALSE(
+      IsGoogleHostname("www.foo.com", google_util::DISALLOW_SUBDOMAIN));
+  EXPECT_FALSE(IsGoogleDomainUrl(GURL("http://www.foo.com/xyz"),
+                                 google_util::DISALLOW_SUBDOMAIN,
+                                 google_util::DISALLOW_NON_STANDARD_PORTS));
+  EXPECT_FALSE(IsGoogleDomainUrl(GURL("https://www.foo.com/"),
+                                 google_util::DISALLOW_SUBDOMAIN,
+                                 google_util::DISALLOW_NON_STANDARD_PORTS));
+  EXPECT_FALSE(IsHomePage("https://www.foo.com/webhp"));
+  EXPECT_FALSE(IsSearch("http://www.foo.com/search?q=a"));
+
+  // Override the Google base suggestion URL on the command line.
+  base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
+      switches::kGoogleBaseSuggestionURL, "http://www.foo.com/");
+
+  // The various IsGoogleXXX functions should respect the command-line flag.
+  EXPECT_TRUE(IsGoogleHostname("www.foo.com", google_util::DISALLOW_SUBDOMAIN));
+  EXPECT_FALSE(IsGoogleHostname("foo.com", google_util::ALLOW_SUBDOMAIN));
+  EXPECT_TRUE(IsGoogleDomainUrl(GURL("http://www.foo.com/xyz"),
+                                google_util::DISALLOW_SUBDOMAIN,
+                                google_util::DISALLOW_NON_STANDARD_PORTS));
+  EXPECT_TRUE(IsGoogleDomainUrl(GURL("https://www.foo.com/"),
+                                google_util::DISALLOW_SUBDOMAIN,
+                                google_util::DISALLOW_NON_STANDARD_PORTS));
+  EXPECT_TRUE(IsHomePage("https://www.foo.com/webhp"));
+  EXPECT_FALSE(IsHomePage("http://www.foo.com/xyz"));
+  EXPECT_TRUE(IsSearch("http://www.foo.com/search?q=a"));
+}
+
+TEST(GoogleUtilTest, GoogleBaseSuggestionURLDisallowQuery) {
+  base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
+      switches::kGoogleBaseSuggestionURL, "http://www.foo.com/?q=");
+  EXPECT_FALSE(google_util::CommandLineGoogleBaseSuggestionURL().is_valid());
+}
+
+TEST(GoogleUtilTest, GoogleBaseSuggestionURLDisallowRef) {
+  base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
+      switches::kGoogleBaseSuggestionURL, "http://www.foo.com/#q=");
+  EXPECT_FALSE(google_util::CommandLineGoogleBaseSuggestionURL().is_valid());
+}
+
+TEST(GoogleUtilTest, GoogleBaseSuggestionURLFixup) {
+  base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
+      switches::kGoogleBaseSuggestionURL, "www.foo.com");
+  ASSERT_TRUE(google_util::CommandLineGoogleBaseSuggestionURL().is_valid());
+  EXPECT_EQ("http://www.foo.com/",
+            google_util::CommandLineGoogleBaseSuggestionURL().spec());
+}
+
 TEST(GoogleUtilTest, YoutubeDomains) {
   EXPECT_TRUE(IsYoutubeDomainUrl(GURL("http://www.youtube.com"),
                                  google_util::ALLOW_SUBDOMAIN,
@@ -402,10 +500,13 @@ TEST(GoogleUtilTest, YoutubeDomains) {
                                   google_util::ALLOW_SUBDOMAIN,
                                   google_util::DISALLOW_NON_STANDARD_PORTS));
 
-  // YouTube Kids
-  EXPECT_TRUE(IsYoutubeDomainUrl(GURL("http://www.youtubekids.com"),
-                                 google_util::ALLOW_SUBDOMAIN,
-                                 google_util::DISALLOW_NON_STANDARD_PORTS));
+  // YouTube Kids is not a youtube domain as it does not use the standard Google
+  // auth stack.
+  //
+  // Regression test for b/247647476
+  EXPECT_FALSE(IsYoutubeDomainUrl(GURL("http://www.youtubekids.com"),
+                                  google_util::ALLOW_SUBDOMAIN,
+                                  google_util::DISALLOW_NON_STANDARD_PORTS));
 
   // TLD checks.
   EXPECT_TRUE(IsYoutubeDomainUrl(GURL("http://www.youtube.ca"),
@@ -490,4 +591,91 @@ TEST(GoogleUtilTest, AppendToAsyncQueryParam) {
   EXPECT_EQ(GURL("https://foo.com?async=bar:baz,bar:buz"),
             google_util::AppendToAsyncQueryParam(
                 GURL("https://foo.com?async=bar:baz"), "bar", "buz"));
+}
+
+TEST(GoogleUtilTest, GoogleSearchMode) {
+  EXPECT_EQ(
+      google_util::GoogleSearchModeFromUrl(GURL("https://www.google.com/")),
+      google_util::GoogleSearchMode::kWeb);
+  EXPECT_EQ(google_util::GoogleSearchModeFromUrl(
+                GURL("https://www.google.com/search?q=foo")),
+            google_util::GoogleSearchMode::kWeb);
+  EXPECT_EQ(google_util::GoogleSearchModeFromUrl(
+                GURL("https://www.google.com/search?q=foo&tbm=web")),
+            google_util::GoogleSearchMode::kWeb);
+
+  EXPECT_EQ(google_util::GoogleSearchModeFromUrl(
+                GURL("https://www.google.com/search?q=foo&tbm=isch")),
+            google_util::GoogleSearchMode::kImages);
+
+  EXPECT_EQ(google_util::GoogleSearchModeFromUrl(
+                GURL("https://www.google.com/search?q=foo&tbm=vid")),
+            google_util::GoogleSearchMode::kVideos);
+
+  EXPECT_EQ(google_util::GoogleSearchModeFromUrl(
+                GURL("https://www.google.com/search?q=foo&tbm=shop")),
+            google_util::GoogleSearchMode::kShopping);
+
+  EXPECT_EQ(google_util::GoogleSearchModeFromUrl(
+                GURL("https://www.google.com/search?q=foo&tbm=flm")),
+            google_util::GoogleSearchMode::kFlights);
+
+  EXPECT_EQ(google_util::GoogleSearchModeFromUrl(
+                GURL("https://www.google.com/search?q=foo&tbm=bks")),
+            google_util::GoogleSearchMode::kBooks);
+
+  EXPECT_EQ(google_util::GoogleSearchModeFromUrl(
+                GURL("https://www.google.com/search?q=foo&tbm=nws")),
+            google_util::GoogleSearchMode::kNews);
+
+  EXPECT_EQ(google_util::GoogleSearchModeFromUrl(
+                GURL("https://www.google.com/search?q=foo&tbm=lcl")),
+            google_util::GoogleSearchMode::kLocal);
+
+  EXPECT_EQ(google_util::GoogleSearchModeFromUrl(
+                GURL("https://www.google.com/search?q=foo&tbm=invalid")),
+            google_util::GoogleSearchMode::kUnknown);
+
+  EXPECT_EQ(google_util::GoogleSearchModeFromUrl(
+                GURL("https://www.google.com/search?q=foo&tbm=lcl&tbm=nws")),
+            google_util::GoogleSearchMode::kUnknown);
+}
+
+TEST(GoogleUtilTest, IsGoogleSearchPrewarmUrl) {
+  EXPECT_TRUE(google_util::IsGoogleSearchPrewarmUrl(
+      GURL("https://www.google.com/search/warmup.html")));
+  EXPECT_TRUE(google_util::IsGoogleSearchPrewarmUrl(
+      GURL("https://google.com/search/warmup.html")));
+  EXPECT_TRUE(google_util::IsGoogleSearchPrewarmUrl(
+      GURL("https://www.google.co.uk/search/warmup.html")));
+  EXPECT_TRUE(google_util::IsGoogleSearchPrewarmUrl(
+      GURL("https://www.google.co.jp/search/warmup.html")));
+  EXPECT_TRUE(google_util::IsGoogleSearchPrewarmUrl(
+      GURL("http://www.google.com/search/warmup.html")));
+
+  EXPECT_FALSE(google_util::IsGoogleSearchPrewarmUrl(
+      GURL("https://www.google.com/search")));
+  EXPECT_FALSE(google_util::IsGoogleSearchPrewarmUrl(
+      GURL("https://www.google.com/search?q=test")));
+  EXPECT_FALSE(
+      google_util::IsGoogleSearchPrewarmUrl(GURL("https://www.google.com/")));
+  EXPECT_FALSE(google_util::IsGoogleSearchPrewarmUrl(
+      GURL("https://www.example.com/search/warmup.html")));
+  EXPECT_FALSE(google_util::IsGoogleSearchPrewarmUrl(
+      GURL("https://subdomain.google.com/search/warmup.html")));
+}
+
+TEST(GoogleUtilTest, GetGoogleLocaleFromLanguageTag) {
+  // Google uses "no" instead of "nb" for Norwegian Bokmal.
+  EXPECT_EQ(
+      base::i18n::GetKnownLanguageTag("no"),
+      google_util::GetGoogleLocale(base::i18n::GetKnownLanguageTag("nb")));
+
+  // Other language tags are returned unchanged.
+  EXPECT_EQ(
+      base::i18n::GetKnownLanguageTag("no"),
+      google_util::GetGoogleLocale(base::i18n::GetKnownLanguageTag("no")));
+  EXPECT_EQ(
+      base::i18n::GetKnownLanguageTag("en-US"),
+      google_util::GetGoogleLocale(base::i18n::GetKnownLanguageTag("en-US")));
 }

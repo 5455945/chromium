@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,12 +9,12 @@
 #include <stdint.h>
 #include <sys/syscall.h>
 
+#include <array>
+#include <bit>
 #include <limits>
 #include <ostream>
 
-#include "base/bits.h"
 #include "base/check_op.h"
-#include "base/cxx17_backports.h"
 #include "sandbox/linux/bpf_dsl/bpf_dsl.h"
 #include "sandbox/linux/bpf_dsl/bpf_dsl_impl.h"
 #include "sandbox/linux/bpf_dsl/codegen.h"
@@ -41,7 +41,7 @@ const bool kIsX32 = true;
 const bool kIsX32 = false;
 #endif
 
-const int kSyscallsRequiredForUnsafeTraps[] = {
+constexpr auto kSyscallsRequiredForUnsafeTraps = std::to_array<int>({
     __NR_rt_sigprocmask,
     __NR_rt_sigreturn,
 #if defined(__NR_sigprocmask)
@@ -50,7 +50,7 @@ const int kSyscallsRequiredForUnsafeTraps[] = {
 #if defined(__NR_sigreturn)
     __NR_sigreturn,
 #endif
-};
+});
 
 ResultExpr DefaultPanic(const char* error) {
   return Kill();
@@ -400,7 +400,7 @@ CodeGen::Node PolicyCompiler::MaskedEqualHalf(int argno,
   // For (arg & x) == x where x is a single-bit value, emit:
   //   LDW  [idx]
   //   JSET mask, passed, failed
-  if (mask == value && base::bits::IsPowerOfTwo(mask)) {
+  if (mask == value && std::has_single_bit(mask)) {
     return gen_.MakeInstruction(
         BPF_LD + BPF_W + BPF_ABS,
         idx,
@@ -436,22 +436,20 @@ CodeGen::Node PolicyCompiler::Return(uint32_t ret) {
     // The performance penalty for this extra round-trip to user-space is not
     // actually that bad, as we only ever pay it for denied system calls; and a
     // typical program has very few of these.
-    return Trap(ReturnErrno, reinterpret_cast<void*>(ret & SECCOMP_RET_DATA),
-                true);
+    return Trap(
+        {ReturnErrno, reinterpret_cast<void*>(ret & SECCOMP_RET_DATA), true});
   }
 
   return gen_.MakeInstruction(BPF_RET + BPF_K, ret);
 }
 
-CodeGen::Node PolicyCompiler::Trap(TrapRegistry::TrapFnc fnc,
-                                   const void* aux,
-                                   bool safe) {
-  uint16_t trap_id = registry_->Add(fnc, aux, safe);
+CodeGen::Node PolicyCompiler::Trap(const TrapRegistry::Handler& handler) {
+  uint16_t trap_id = registry_->Add(handler);
   return gen_.MakeInstruction(BPF_RET + BPF_K, SECCOMP_RET_TRAP + trap_id);
 }
 
 bool PolicyCompiler::IsRequiredForUnsafeTrap(int sysno) {
-  for (size_t i = 0; i < base::size(kSyscallsRequiredForUnsafeTraps); ++i) {
+  for (size_t i = 0; i < std::size(kSyscallsRequiredForUnsafeTraps); ++i) {
     if (sysno == kSyscallsRequiredForUnsafeTraps[i]) {
       return true;
     }

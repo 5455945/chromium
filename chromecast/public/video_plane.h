@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -26,10 +26,8 @@ class VideoPlane {
   virtual ~VideoPlane() {}
 
   // Updates the video plane geometry.
-  // |screen_rect| specifies the rectangle that the video should occupy,
-  // in screen resolution coordinates.
-  // |transform| specifies how the video should be transformed within that
-  // rectangle.
+  // |screen_rect| specifies the rectangle that the video should occupy, in
+  // graphics coordinates.
   virtual void SetGeometry(const RectF& screen_rect, Transform transform) = 0;
 };
 

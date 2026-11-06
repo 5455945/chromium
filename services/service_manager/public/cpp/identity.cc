@@ -1,11 +1,10 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/service_manager/public/cpp/identity.h"
 
-#include <tuple>
-
+#include "base/check.h"
 #include "base/strings/stringprintf.h"
 
 namespace service_manager {
@@ -30,18 +29,6 @@ Identity::Identity(const Identity& other) = default;
 Identity::~Identity() = default;
 
 Identity& Identity::operator=(const Identity& other) = default;
-
-bool Identity::operator<(const Identity& other) const {
-  return std::tie(name_, instance_group_, instance_id_, globally_unique_id_) <
-         std::tie(other.name_, other.instance_group_, other.instance_id_,
-                  other.globally_unique_id_);
-}
-
-bool Identity::operator==(const Identity& other) const {
-  return name_ == other.name_ && instance_group_ == other.instance_group_ &&
-         instance_id_ == other.instance_id_ &&
-         globally_unique_id_ == other.globally_unique_id_;
-}
 
 bool Identity::IsValid() const {
   return !name_.empty() && !instance_group_.is_zero() &&

@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,18 +7,18 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <vector>
 
+#include "base/containers/flat_map.h"
+#include "base/memory/raw_ptr.h"
 #include "components/viz/common/resources/release_callback.h"
 #include "components/viz/common/resources/resource_id.h"
 #include "components/viz/common/resources/transferable_resource.h"
-#include "components/viz/service/display/shared_bitmap_manager.h"
 #include "components/viz/service/surfaces/surface_saved_frame.h"
 #include "components/viz/service/viz_service_export.h"
 #include "gpu/command_buffer/common/mailbox.h"
 #include "gpu/command_buffer/common/sync_token.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "ui/gfx/geometry/size.h"
 
 namespace viz {
 
@@ -29,12 +29,11 @@ class VIZ_SERVICE_EXPORT TransferableResourceTracker {
   // This represents a resource that is positioned somewhere on screen.
   struct VIZ_SERVICE_EXPORT PositionedResource {
     TransferableResource resource;
-    SurfaceSavedFrame::RenderPassDrawData draw_data;
+    gfx::Vector2dF pixel_alignment_offset;
   };
 
-  // A resource frame consists of a root PositionedResource and a set of
-  // optional shared PositionedResources. A SurfaceSavedFrame can be converted
-  // to a ResourceFrame via ImportResources.
+  // A SurfaceSavedFrame can be converted to a ResourceFrame via
+  // ImportResources.
   struct VIZ_SERVICE_EXPORT ResourceFrame {
     ResourceFrame();
     ResourceFrame(ResourceFrame&& other);
@@ -42,12 +41,20 @@ class VIZ_SERVICE_EXPORT TransferableResourceTracker {
 
     ResourceFrame& operator=(ResourceFrame&& other);
 
-    PositionedResource root;
-    std::vector<absl::optional<PositionedResource>> shared;
+    // The cached resource for each shared element. The entries here are
+    // optional since copy request for an element may fail or a
+    // [src_element, dst_element] has a null src_element.
+    std::vector<std::optional<PositionedResource>> shared;
+
+    // A map from renderer generated ViewTransitionElementResourceId to the
+    // corresponding cached resource. The resources are the same as |shared|
+    // above.
+    base::flat_map<ViewTransitionElementResourceId, PositionedResource>
+        element_id_to_resource;
   };
 
   explicit TransferableResourceTracker(
-      SharedBitmapManager* shared_bitmap_manager);
+      ReservedResourceIdTracker* id_tracker);
   TransferableResourceTracker(const TransferableResourceTracker&) = delete;
   ~TransferableResourceTracker();
 
@@ -66,21 +73,22 @@ class VIZ_SERVICE_EXPORT TransferableResourceTracker {
   // TODO(vmpstr): Instead of providing a convenience function, we should
   // convert ResourceFrame to be RAII so that it can be automatically
   // "returned".
-  ResourceFrame ImportResources(std::unique_ptr<SurfaceSavedFrame> saved_frame);
+  ResourceFrame ImportResources(SurfaceSavedFrame::FrameResult frame_result,
+                                CompositorFrameTransitionDirective directive);
 
   // Return a frame back to the tracker. This unrefs all of the resources.
   void ReturnFrame(const ResourceFrame& frame);
 
   // Ref count management for the resources returned by `ImportResources`.
-  void RefResource(ResourceId id);
-  void UnrefResource(ResourceId id, int count);
+  bool RefResource(ResourceId id);
+  bool UnrefResource(ResourceId id,
+                     int count,
+                     const gpu::SyncToken& sync_token);
 
   bool is_empty() const { return managed_resources_.empty(); }
 
  private:
   friend class TransferableResourceTrackerTest;
-
-  ResourceId GetNextAvailableResourceId();
 
   PositionedResource ImportResource(
       SurfaceSavedFrame::OutputCopyResult output_copy);
@@ -89,14 +97,10 @@ class VIZ_SERVICE_EXPORT TransferableResourceTracker {
                              uint32_t>::value,
                 "ResourceId underlying type should be uint32_t");
 
-  const uint32_t starting_id_;
-  uint32_t next_id_;
-
-  SharedBitmapManager* const shared_bitmap_manager_;
-
   struct TransferableResourceHolder {
     using ResourceReleaseCallback =
-        base::OnceCallback<void(const TransferableResource&)>;
+        base::OnceCallback<void(const TransferableResource&,
+                                const gpu::SyncToken&)>;
 
     TransferableResourceHolder();
     TransferableResourceHolder(const TransferableResource& resource,
@@ -107,8 +111,10 @@ class VIZ_SERVICE_EXPORT TransferableResourceTracker {
 
     TransferableResource resource;
     ResourceReleaseCallback release_callback;
-    uint8_t ref_count = 0u;
+    gpu::SyncToken release_sync_token;
   };
+
+  raw_ptr<ReservedResourceIdTracker> id_tracker_;
 
   std::map<ResourceId, TransferableResourceHolder> managed_resources_;
 };

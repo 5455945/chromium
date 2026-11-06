@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,26 +6,26 @@
 #define CHROME_BROWSER_PAINT_PREVIEW_SERVICES_PAINT_PREVIEW_TAB_SERVICE_H_
 
 #include <memory>
+#include <optional>
 #include <vector>
 
-#include "base/callback_forward.h"
 #include "base/containers/flat_set.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/memory_coordinator/memory_consumer.h"
 #include "base/sequence_checker.h"
-#include "base/strings/string_piece.h"
 #include "build/build_config.h"
 #include "components/paint_preview/browser/paint_preview_base_service.h"
 #include "components/paint_preview/browser/paint_preview_policy.h"
 #include "components/paint_preview/common/proto/paint_preview.pb.h"
 #include "content/public/browser/global_routing_id.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
-#if defined(os_android)
+#if BUILDFLAG(IS_ANDROID)
 #include "base/android/jni_android.h"
 #include "base/android/scoped_java_ref.h"
-#endif  // defined(os_android)
+#endif  // BUILDFLAG(IS_ANDROID)
 
 namespace content {
 class WebContents;
@@ -36,7 +36,8 @@ namespace paint_preview {
 // A service for capturing and using Paint Previews per Tab. Captures are stored
 // using Tab IDs as the key such that the data can be accessed even if the
 // browser is restarted.
-class PaintPreviewTabService : public PaintPreviewBaseService {
+class PaintPreviewTabService : public PaintPreviewBaseService,
+                               public base::PassiveMemoryConsumer {
  public:
   PaintPreviewTabService(std::unique_ptr<PaintPreviewFileMixin> file_mixin,
                          std::unique_ptr<PaintPreviewPolicy> policy,
@@ -64,6 +65,9 @@ class PaintPreviewTabService : public PaintPreviewBaseService {
   void CaptureTab(int tab_id,
                   content::WebContents* contents,
                   bool accessibility_enabled,
+                  float page_scale_factor,
+                  int scroll_offset_x,
+                  int scroll_offset_y,
                   FinishedCallback callback);
 
   // Destroys the Paint Preview associated with |tab_id|. This MUST be called
@@ -80,24 +84,26 @@ class PaintPreviewTabService : public PaintPreviewBaseService {
   // occurred.
   void AuditArtifacts(const std::vector<int>& active_tab_ids);
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   // JNI wrapped versions of the above methods
-  void CaptureTabAndroid(
-      JNIEnv* env,
-      jint j_tab_id,
-      const base::android::JavaParamRef<jobject>& j_web_contents,
-      jboolean accessibility_enabled,
-      const base::android::JavaParamRef<jobject>& j_callback);
-  void TabClosedAndroid(JNIEnv* env, jint j_tab_id);
-  jboolean HasCaptureForTabAndroid(JNIEnv* env, jint j_tab_id);
+  void CaptureTabAndroid(JNIEnv* env,
+                         int32_t j_tab_id,
+                         const base::android::JavaRef<jobject>& j_web_contents,
+                         bool j_accessibility_enabled,
+                         float j_page_scale_factor,
+                         int32_t j_x,
+                         int32_t j_y,
+                         const base::android::JavaRef<jobject>& j_callback);
+  void TabClosedAndroid(JNIEnv* env, int32_t j_tab_id);
+  bool HasCaptureForTabAndroid(JNIEnv* env, int32_t j_tab_id);
   void AuditArtifactsAndroid(
       JNIEnv* env,
-      const base::android::JavaParamRef<jintArray>& j_tab_ids);
-  jboolean IsCacheInitializedAndroid(JNIEnv* env);
-  base::android::ScopedJavaLocalRef<jstring> GetPathAndroid(JNIEnv* env);
+      const base::android::JavaRef<jintArray>& j_tab_ids);
+  bool IsCacheInitializedAndroid(JNIEnv* env);
+  std::string GetPathAndroid(JNIEnv* env);
 
   base::android::ScopedJavaGlobalRef<jobject> GetJavaRef() { return java_ref_; }
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
 
  private:
   class TabServiceTask {
@@ -106,8 +112,11 @@ class PaintPreviewTabService : public PaintPreviewBaseService {
 
     TabServiceTask(int tab_id,
                    const DirectoryKey& key,
-                   int frame_tree_node_id,
+                   content::FrameTreeNodeId frame_tree_node_id,
                    content::GlobalRenderFrameHostId frame_routing_id,
+                   float page_scale_factor,
+                   int x,
+                   int y,
                    base::ScopedClosureRunner capture_handle);
     ~TabServiceTask();
 
@@ -116,10 +125,15 @@ class PaintPreviewTabService : public PaintPreviewBaseService {
 
     int tab_id() const { return tab_id_; }
     const DirectoryKey& key() const { return key_; }
-    int frame_tree_node_id() const { return frame_tree_node_id_; }
+    content::FrameTreeNodeId frame_tree_node_id() const {
+      return frame_tree_node_id_;
+    }
     content::GlobalRenderFrameHostId frame_routing_id() const {
       return frame_routing_id_;
     }
+    float page_scale_factor() const { return page_scale_factor_; }
+    int scroll_offset_x() const { return scroll_offset_x_; }
+    int scroll_offset_y() const { return scroll_offset_y_; }
 
     void SetWaitForAccessibility() { wait_for_accessibility_ = true; }
 
@@ -150,8 +164,11 @@ class PaintPreviewTabService : public PaintPreviewBaseService {
    private:
     int tab_id_;
     DirectoryKey key_;
-    int frame_tree_node_id_;
+    content::FrameTreeNodeId frame_tree_node_id_;
     content::GlobalRenderFrameHostId frame_routing_id_;
+    float page_scale_factor_;
+    int scroll_offset_x_;
+    int scroll_offset_y_;
 
     bool wait_for_accessibility_{false};
     Status status_{kInvalid};
@@ -171,7 +188,7 @@ class PaintPreviewTabService : public PaintPreviewBaseService {
   // The FTN ID is to look-up the content::WebContents.
   void CaptureTabInternal(base::WeakPtr<TabServiceTask> task,
                           bool accessibility_enabled,
-                          const absl::optional<base::FilePath>& file_path);
+                          const std::optional<base::FilePath>& file_path);
 
   void OnAXTreeWritten(base::WeakPtr<TabServiceTask> task, bool result);
 
@@ -189,9 +206,12 @@ class PaintPreviewTabService : public PaintPreviewBaseService {
   bool cache_ready_;
   base::flat_set<int> captured_tab_ids_;
   base::flat_map<int, std::unique_ptr<TabServiceTask>> tasks_;
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   base::android::ScopedJavaGlobalRef<jobject> java_ref_;
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
+
+  base::MemoryConsumerRegistration memory_consumer_registration_;
+
   SEQUENCE_CHECKER(sequence_checker_);
   base::WeakPtrFactory<PaintPreviewTabService> weak_ptr_factory_{this};
 };

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,20 +18,21 @@
 #include <array>
 #include <iomanip>
 #include <iostream>
+#include <string_view>
 #include <type_traits>
 
 #include "base/atomic_sequence_num.h"
-#include "base/cxx17_backports.h"
+#include "base/compiler_specific.h"
 #include "base/debug/elf_reader.h"
 #include "base/logging.h"
-#include "base/no_destructor.h"
+#include "base/memory/raw_ptr.h"
 
 namespace base {
 namespace debug {
 namespace {
 
 struct BacktraceData {
-  void** trace_array;
+  const void** trace_array;
   size_t* count;
   size_t max;
 };
@@ -40,10 +41,11 @@ _Unwind_Reason_Code UnwindStore(struct _Unwind_Context* context,
                                 void* user_data) {
   BacktraceData* data = reinterpret_cast<BacktraceData*>(user_data);
   uintptr_t pc = _Unwind_GetIP(context);
-  data->trace_array[*data->count] = reinterpret_cast<void*>(pc);
+  UNSAFE_TODO(data->trace_array[*data->count]) = reinterpret_cast<void*>(pc);
   *data->count += 1;
-  if (*data->count == data->max)
+  if (*data->count == data->max) {
     return _URC_END_OF_STACK;
+  }
   return _URC_NO_REASON;
 }
 
@@ -53,14 +55,17 @@ _Unwind_Reason_Code UnwindStore(struct _Unwind_Context* context,
 const char* PermissionFlagsToString(int flags, char permission_buf[4]) {
   char* permission = permission_buf;
 
-  if (flags & PF_R)
-    (*permission++) = 'r';
+  if (flags & PF_R) {
+    (*UNSAFE_TODO(permission++)) = 'r';
+  }
 
-  if (flags & PF_W)
-    (*permission++) = 'w';
+  if (flags & PF_W) {
+    (*UNSAFE_TODO(permission++)) = 'w';
+  }
 
-  if (flags & PF_X)
-    (*permission++) = 'x';
+  if (flags & PF_X) {
+    (*UNSAFE_TODO(permission++)) = 'x';
+  }
 
   *permission = '\0';
 
@@ -71,7 +76,7 @@ const char* PermissionFlagsToString(int flags, char permission_buf[4]) {
 class SymbolMap {
  public:
   struct Segment {
-    const void* addr = nullptr;
+    raw_ptr<const void> addr = nullptr;
     size_t relative_addr = 0;
     int permission_flags = 0;
     size_t size = 0;
@@ -82,18 +87,22 @@ class SymbolMap {
     // binaries have only 2-3 such segments.
     static constexpr size_t kMaxSegmentCount = 8;
 
-    const void* addr = nullptr;
+    raw_ptr<const void> addr = nullptr;
     std::array<Segment, kMaxSegmentCount> segments;
     size_t segment_count = 0;
-    char name[ZX_MAX_NAME_LEN + 1] = {0};
-    char build_id[kMaxBuildIdStringLength + 1] = {0};
+    char name[ZX_MAX_NAME_LEN + 1] = {};
+    std::string build_id;
   };
 
   SymbolMap();
+
+  SymbolMap(const SymbolMap&) = delete;
+  SymbolMap& operator=(const SymbolMap&) = delete;
+
   ~SymbolMap() = default;
 
   // Gets all entries for the symbol map.
-  span<Module> GetModules() { return {modules_.data(), count_}; }
+  span<Module> GetModules() { return UNSAFE_TODO({modules_.data(), count_}); }
 
  private:
   // Component builds of Chrome pull about 250 shared libraries (on Linux), so
@@ -107,8 +116,6 @@ class SymbolMap {
 
   size_t count_ = 0;
   bool valid_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(SymbolMap);
 };
 
 SymbolMap::SymbolMap() {
@@ -118,36 +125,10 @@ SymbolMap::SymbolMap() {
 void SymbolMap::Populate() {
   zx_handle_t process = zx_process_self();
 
-  // Try to fetch the name of the process' main executable, which was set as the
-  // name of the |process| kernel object.
-  // TODO(crbug.com/1131250): Object names can only have up to ZX_MAX_NAME_LEN
-  // characters, so if we keep hitting problems with truncation, find a way to
-  // plumb argv[0] through to here instead, e.g. using
-  // CommandLine::GetProgramName().
-  char app_name[std::extent<decltype(SymbolMap::Module::name)>()];
-  zx_status_t status =
-      zx_object_get_property(process, ZX_PROP_NAME, app_name, sizeof(app_name));
-  if (status == ZX_OK) {
-    // The process name may have a process type suffix at the end (e.g.
-    // "context", "renderer", gpu"), which doesn't belong in the module list.
-    // Trim the suffix from the name.
-    for (size_t i = 0; i < base::size(app_name) && app_name[i] != '\0'; ++i) {
-      if (app_name[i] == ':') {
-        app_name[i] = 0;
-        break;
-      }
-    }
-  } else {
-    DPLOG(WARNING)
-        << "Couldn't get name, falling back to 'app' for program name: "
-        << status;
-    strlcat(app_name, "app", sizeof(app_name));
-  }
-
   // Retrieve the debug info struct.
   uintptr_t debug_addr;
-  status = zx_object_get_property(process, ZX_PROP_PROCESS_DEBUG_ADDR,
-                                  &debug_addr, sizeof(debug_addr));
+  zx_status_t status = zx_object_get_property(
+      process, ZX_PROP_PROCESS_DEBUG_ADDR, &debug_addr, sizeof(debug_addr));
   if (status != ZX_OK) {
     DPLOG(ERROR) << "Couldn't get symbol map for process: " << status;
     return;
@@ -163,8 +144,9 @@ void SymbolMap::Populate() {
 
   // Populate ELF binary metadata into |modules_|.
   while (lmap != nullptr) {
-    if (count_ >= kMaxMapEntries)
+    if (count_ >= kMaxMapEntries) {
       break;
+    }
 
     SymbolMap::Module& next_entry = modules_[count_];
     ++count_;
@@ -174,9 +156,16 @@ void SymbolMap::Populate() {
     // Create Segment sub-entries for all PT_LOAD headers.
     // Each Segment corresponds to a "mmap" line in the output.
     next_entry.segment_count = 0;
-    for (const Elf64_Phdr& phdr : GetElfProgramHeaders(next_entry.addr)) {
-      if (phdr.p_type != PT_LOAD)
+    // SAFETY: `lmap` is an entry of the dynamic linker's list of loaded
+    // modules, so the module is fully mapped into memory. `l_addr` is its load
+    // bias, which is also the address of its ELF header since Fuchsia modules
+    // are position-independent and linked at address 0 (this is also assumed
+    // when computing `segment.addr` below).
+    for (const Elf64_Phdr& phdr :
+         UNSAFE_BUFFERS(GetElfProgramHeaders(next_entry.addr))) {
+      if (phdr.p_type != PT_LOAD) {
         continue;
+      }
 
       if (next_entry.segment_count > Module::kMaxSegmentCount) {
         LOG(WARNING) << "Exceeded the maximum number of segments.";
@@ -184,11 +173,11 @@ void SymbolMap::Populate() {
       }
 
       Segment segment;
-      segment.addr =
-          reinterpret_cast<const char*>(next_entry.addr) + phdr.p_vaddr;
+      segment.addr = UNSAFE_TODO(
+          reinterpret_cast<const char*>(next_entry.addr.get()) + phdr.p_vaddr);
       segment.relative_addr = phdr.p_vaddr;
       segment.size = phdr.p_memsz;
-      segment.permission_flags = phdr.p_flags;
+      segment.permission_flags = static_cast<int>(phdr.p_flags);
 
       next_entry.segments[next_entry.segment_count] = std::move(segment);
       ++next_entry.segment_count;
@@ -196,26 +185,32 @@ void SymbolMap::Populate() {
 
     // Get the human-readable library name from the ELF header, falling back on
     // using names from the link map for binaries that aren't shared libraries.
-    absl::optional<StringPiece> elf_library_name =
-        ReadElfLibraryName(next_entry.addr);
+    // SAFETY: See the call to `GetElfProgramHeaders()` above.
+    std::optional<std::string_view> elf_library_name =
+        UNSAFE_BUFFERS(ReadElfLibraryName(next_entry.addr));
     if (elf_library_name) {
-      strlcpy(next_entry.name, elf_library_name->data(),
-              elf_library_name->size() + 1);
+      UNSAFE_TODO(strlcpy(next_entry.name, elf_library_name->data(),
+                          elf_library_name->size() + 1));
     } else {
-      StringPiece link_map_name(lmap->l_name[0] ? lmap->l_name : app_name);
+      std::string_view link_map_name(lmap->l_name[0] ? lmap->l_name
+                                                     : "<executable>");
 
       // The "module" stack trace annotation doesn't allow for strings which
       // resemble paths, so extract the filename portion from |link_map_name|.
       size_t directory_prefix_idx = link_map_name.find_last_of("/");
-      if (directory_prefix_idx != StringPiece::npos) {
+      if (directory_prefix_idx != std::string_view::npos) {
         link_map_name = link_map_name.substr(
             directory_prefix_idx + 1,
             link_map_name.size() - directory_prefix_idx - 1);
       }
-      strlcpy(next_entry.name, link_map_name.data(), link_map_name.size() + 1);
+      UNSAFE_TODO(strlcpy(next_entry.name, link_map_name.data(),
+                          link_map_name.size() + 1));
     }
 
-    if (!ReadElfBuildId(next_entry.addr, false, next_entry.build_id)) {
+    // SAFETY: See the call to `GetElfProgramHeaders()` above.
+    next_entry.build_id =
+        UNSAFE_BUFFERS(ReadElfBuildId(next_entry.addr, false));
+    if (next_entry.build_id.empty()) {
       LOG(WARNING) << "Couldn't read build ID.";
       continue;
     }
@@ -224,6 +219,22 @@ void SymbolMap::Populate() {
   }
 
   valid_ = true;
+}
+
+// Returns true if |address| is contained by any of the memory regions
+// mapped for |module_entry|.
+bool ModuleContainsFrameAddress(const void* address,
+                                const SymbolMap::Module& module_entry) {
+  for (size_t i = 0; i < module_entry.segment_count; ++i) {
+    const SymbolMap::Segment& segment = module_entry.segments[i];
+    const void* segment_end = reinterpret_cast<const void*>(UNSAFE_TODO(
+        reinterpret_cast<const char*>(segment.addr.get()) + segment.size - 1));
+
+    if (address >= segment.addr && address <= segment_end) {
+      return true;
+    }
+  }
+  return false;
 }
 
 }  // namespace
@@ -238,46 +249,65 @@ bool EnableInProcessStackDumping() {
   return true;
 }
 
-size_t CollectStackTrace(void** trace, size_t count) {
+size_t CollectStackTrace(span<const void*> trace) {
   size_t frame_count = 0;
-  BacktraceData data = {trace, &frame_count, count};
+  BacktraceData data = {trace.data(), &frame_count, trace.size()};
   _Unwind_Backtrace(&UnwindStore, &data);
   return frame_count;
 }
 
-void StackTrace::PrintWithPrefix(const char* prefix_string) const {
-  OutputToStreamWithPrefix(&std::cerr, prefix_string);
+// static
+void StackTrace::PrintMessageWithPrefix(cstring_view prefix_string,
+                                        cstring_view message) {
+  std::cerr << prefix_string << message;
+}
+
+void StackTrace::PrintWithPrefixImpl(cstring_view prefix_string) const {
+  OutputToStreamWithPrefixImpl(&std::cerr, prefix_string);
 }
 
 // Emits stack trace data using the symbolizer markup format specified at:
 // https://fuchsia.googlesource.com/zircon/+/master/docs/symbolizer_markup.md
-void StackTrace::OutputToStreamWithPrefix(std::ostream* os,
-                                          const char* prefix_string) const {
+void StackTrace::OutputToStreamWithPrefixImpl(
+    std::ostream* os,
+    cstring_view prefix_string) const {
   SymbolMap map;
 
   int module_id = 0;
-  *os << "{{{reset}}}\n";
-  for (const SymbolMap::Module& entry : map.GetModules()) {
-    *os << "{{{module:" << module_id << ":" << entry.name
-        << ":elf:" << entry.build_id << "}}}\n";
+  for (const SymbolMap::Module& module_entry : map.GetModules()) {
+    // Don't emit information on modules that aren't useful for the actual
+    // stack trace, so as to reduce the load on the symbolizer and syslog.
+    bool should_emit_module = false;
+    for (size_t i = 0; i < count_ && !should_emit_module; ++i) {
+      should_emit_module = ModuleContainsFrameAddress(trace_[i], module_entry);
+    }
+    if (!should_emit_module) {
+      continue;
+    }
 
-    for (size_t i = 0; i < entry.segment_count; ++i) {
-      const SymbolMap::Segment& segment = entry.segments[i];
+    *os << "{{{module:" << module_id << ":" << module_entry.name
+        << ":elf:" << module_entry.build_id << "}}}\n";
+
+    for (size_t i = 0; i < module_entry.segment_count; ++i) {
+      const SymbolMap::Segment& segment = module_entry.segments[i];
 
       char permission_string[4] = {};
       *os << "{{{mmap:" << segment.addr << ":0x" << std::hex << segment.size
           << std::dec << ":load:" << module_id << ":"
           << PermissionFlagsToString(segment.permission_flags,
                                      permission_string)
-          << ":"
-          << "0x" << std::hex << segment.relative_addr << std::dec << "}}}\n";
+          << ":" << "0x" << std::hex << segment.relative_addr << std::dec
+          << "}}}\n";
     }
 
     ++module_id;
   }
 
-  for (size_t i = 0; i < count_; ++i)
+  for (size_t i = 0; i < count_; ++i) {
     *os << "{{{bt:" << i << ":" << trace_[i] << "}}}\n";
+  }
+
+  *os << "{{{reset}}}\n";
 }
 
 }  // namespace debug

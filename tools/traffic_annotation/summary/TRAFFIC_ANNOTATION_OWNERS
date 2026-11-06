@@ -1,3 +1,4 @@
+
 # Eastern Time
 nicolaso@chromium.org
 
@@ -5,18 +6,16 @@ nicolaso@chromium.org
 # Please pick a random reviewer:
 #
 # cat tools/traffic_annotation/summary/TRAFFIC_ANNOTATION_OWNERS \
-#   | tail -n+10 | shuf | head -n 1
+#   | tail -n+11 | shuf | head -n 1
 #
-andzaytsev@google.com
-bsep@chromium.org
 dullweber@chromium.org
-eokoyomon@chromium.org
 harrisonsean@chromium.org
 mkwst@chromium.org
 msramek@chromium.org
-olesiamarukhno@chromium.org
+olesiamarukhno@google.com
+radchuk@google.com
 rainhard@chromium.org
-rhalavati@chromium.org
-roagarwal@chromium.org
-sauski@google.com
 sideyilmaz@chromium.org
+
+# Temporary for API annotation project bulk approvals
+jani@google.com

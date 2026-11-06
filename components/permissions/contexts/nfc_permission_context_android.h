@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,13 @@
 #include "components/permissions/android/nfc/nfc_system_level_setting.h"
 #include "components/permissions/contexts/nfc_permission_context.h"
 
-namespace permissions {
+namespace content {
+struct PermissionResult;
+}
 
-class PermissionRequestID;
+namespace permissions {
+struct PermissionPromptDecision;
+struct PermissionRequestData;
 
 class NfcPermissionContextAndroid : public NfcPermissionContext {
  public:
@@ -22,20 +26,19 @@ class NfcPermissionContextAndroid : public NfcPermissionContext {
   friend class NfcPermissionContextTests;
 
   // NfcPermissionContext:
-  void NotifyPermissionSet(const PermissionRequestID& id,
-                           const GURL& requesting_origin,
-                           const GURL& embedding_origin,
-                           BrowserPermissionCallback callback,
-                           bool persist,
-                           ContentSetting content_setting,
-                           bool is_one_time) override;
+  void NotifyPermissionSet(
+      const PermissionRequestData& request_data,
+      BrowserPermissionCallback callback,
+      bool persist,
+      const content::PermissionResult* permission_result,
+      const permissions::PermissionPromptDecision& decision) override;
 
-  void OnNfcSystemLevelSettingPromptClosed(const PermissionRequestID& id,
-                                           const GURL& requesting_origin,
-                                           const GURL& embedding_origin,
-                                           BrowserPermissionCallback callback,
-                                           bool persist,
-                                           ContentSetting content_setting);
+  void OnNfcSystemLevelSettingPromptClosed(
+      const PermissionRequestData& request_data,
+      BrowserPermissionCallback callback,
+      bool persist,
+      std::unique_ptr<content::PermissionResult> permission_result,
+      const permissions::PermissionPromptDecision& decision);
 
   // Overrides the NfcSystemLevelSetting object used to determine whether NFC is
   // enabled system-wide on the device.

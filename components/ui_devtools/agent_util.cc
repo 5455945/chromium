@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,6 @@
 #include "base/logging.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
-#include "base/task/post_task.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 
@@ -25,6 +24,23 @@ void OnSourceFile(base::OnceClosure quit_closure,
   std::move(quit_closure).Run();
 }
 
+bool ReadSourceFile(const base::FilePath& root_dir,
+                    const base::FilePath& src_dir,
+                    std::string* source_code) {
+  // Ensure that the parsed path is strictly contained within the intended
+  // source directory.
+  base::FilePath absolute_root_dir = base::MakeAbsoluteFilePath(root_dir);
+  base::FilePath absolute_src_dir = base::MakeAbsoluteFilePath(src_dir);
+  if (absolute_root_dir.empty() || absolute_src_dir.empty()) {
+    return false;
+  }
+  if (absolute_root_dir != absolute_src_dir &&
+      !absolute_root_dir.IsParent(absolute_src_dir)) {
+    return false;
+  }
+  return base::ReadFileToString(absolute_src_dir, source_code);
+}
+
 }  // namespace
 
 const char kChromiumCodeSearchURL[] = "https://cs.chromium.org/";
@@ -32,9 +48,17 @@ const char kChromiumCodeSearchSrcURL[] =
     "https://cs.chromium.org/chromium/src/";
 
 bool GetSourceCode(std::string path, std::string* source_code) {
-  base::FilePath src_dir;
-  base::PathService::Get(base::DIR_SOURCE_ROOT, &src_dir);
-  src_dir = src_dir.AppendASCII(path);
+  // Prevent directory traversal. This has been a security concern since
+  // this function can otherwise be used to read arbitrary files on the disk.
+  if (path.find("..") != std::string::npos) {
+    return false;
+  }
+
+  base::FilePath root_dir;
+  if (!base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &root_dir)) {
+    return false;
+  }
+  base::FilePath src_dir = root_dir.AppendASCII(path);
 
   base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
 
@@ -43,7 +67,7 @@ bool GetSourceCode(std::string path, std::string* source_code) {
       FROM_HERE,
       {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
        base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
-      base::BindOnce(&base::ReadFileToString, src_dir, source_code),
+      base::BindOnce(&ReadSourceFile, root_dir, src_dir, source_code),
       base::BindOnce(&OnSourceFile, run_loop.QuitClosure(), &return_value));
 
   run_loop.Run();

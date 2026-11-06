@@ -1,11 +1,11 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/renderer/bindings/api_binding_bridge.h"
 
-#include "base/cxx17_backports.h"
 #include "base/values.h"
+#include "extensions/common/extension_id.h"
 #include "extensions/renderer/bindings/api_binding_hooks.h"
 #include "extensions/renderer/bindings/api_binding_util.h"
 #include "extensions/renderer/bindings/js_runner.h"
@@ -26,21 +26,19 @@ v8::Local<v8::Private> GetPrivatePropertyName(v8::Isolate* isolate,
 
 }  // namespace
 
-gin::WrapperInfo APIBindingBridge::kWrapperInfo = {gin::kEmbedderNativeGin};
-
 APIBindingBridge::APIBindingBridge(APIBindingHooks* hooks,
                                    v8::Local<v8::Context> context,
                                    v8::Local<v8::Value> api_object,
-                                   const std::string& extension_id,
+                                   const ExtensionId& extension_id,
                                    const std::string& context_type)
-    : extension_id_(extension_id), context_type_(context_type) {
-  v8::Isolate* isolate = context->GetIsolate();
+    : extension_id_(extension_id),
+      context_type_(context_type) {
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
   v8::Local<v8::Object> wrapper = GetWrapper(isolate).ToLocalChecked();
   v8::Maybe<bool> result = wrapper->SetPrivate(
       context, GetPrivatePropertyName(isolate, kApiObjectKey), api_object);
   if (!result.IsJust() || !result.FromJust()) {
     NOTREACHED();
-    return;
   }
   v8::Local<v8::Object> js_hook_interface = hooks->GetJSHookInterface(context);
   result = wrapper->SetPrivate(context,
@@ -50,12 +48,12 @@ APIBindingBridge::APIBindingBridge(APIBindingHooks* hooks,
   DCHECK(result.IsJust() && result.FromJust());
 }
 
-APIBindingBridge::~APIBindingBridge() {}
+APIBindingBridge::~APIBindingBridge() = default;
 
 gin::ObjectTemplateBuilder APIBindingBridge::GetObjectTemplateBuilder(
     v8::Isolate* isolate) {
-  return Wrappable<APIBindingBridge>::GetObjectTemplateBuilder(isolate)
-      .SetMethod("registerCustomHook", &APIBindingBridge::RegisterCustomHook);
+  return gin::Wrappable<APIBindingBridge>::GetObjectTemplateBuilder(isolate)
+      .SetMethod<&APIBindingBridge::RegisterCustomHook>("registerCustomHook");
 }
 
 void APIBindingBridge::RegisterCustomHook(v8::Isolate* isolate,
@@ -89,10 +87,6 @@ void APIBindingBridge::RegisterCustomHook(v8::Isolate* isolate,
   if (!result.IsJust() || !result.FromJust())
     return;
 
-  // TODO(devlin): The binding.js version of these hooks also has a 'schema'
-  // property. I wonder if we can factor that out? If not, we'll need to add it
-  // here.
-
   result = hook_object->SetPrototype(context, v8::Null(isolate));
   if (!result.IsJust() || !result.FromJust())
     return;
@@ -105,11 +99,14 @@ void APIBindingBridge::RegisterCustomHook(v8::Isolate* isolate,
 
   // TODO(devlin): The context should still be valid at this point - nothing
   // above should be able to invalidate it. But let's make extra sure.
-  // This CHECK is helping to track down https://crbug.com/819968, and should be
-  // removed when that's fixed.
+  // This CHECK is helping to track down https://crbug.com/41375376, and should
+  // be removed when that's fixed.
   CHECK(binding::IsContextValid(context));
-  JSRunner::Get(context)->RunJSFunction(function, context, base::size(args),
-                                        args);
+  JSRunner::Get(context)->RunJSFunction(function, context, args);
+}
+
+const gin::WrapperInfo* APIBindingBridge::wrapper_info() const {
+  return &kWrapperInfo;
 }
 
 }  // namespace extensions

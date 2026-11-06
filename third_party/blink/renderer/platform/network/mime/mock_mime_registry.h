@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,9 +21,8 @@ class MockMimeRegistry : public mojom::blink::MimeRegistry {
       const String& ext,
       GetMimeTypeFromExtensionCallback callback) override {
     std::string mime_type;
-    net::GetMimeTypeFromExtension(WebStringToFilePath(ext).value(), &mime_type);
-    std::move(callback).Run(
-        String::FromUTF8(mime_type.data(), mime_type.length()));
+    net::GetMimeTypeFromExtension(StringToFilePath(ext).value(), &mime_type);
+    std::move(callback).Run(String::FromUtf8(mime_type));
   }
 };
 

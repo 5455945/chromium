@@ -1,10 +1,10 @@
-# Copyright 2014 The Chromium Authors. All rights reserved.
+# Copyright 2014 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-from mod_pywebsocket import common
-from mod_pywebsocket.extensions import PerMessageDeflateExtensionProcessor
-from mod_pywebsocket.stream import create_header
+from pywebsocket3 import common
+from pywebsocket3.extensions import PerMessageDeflateExtensionProcessor
+from pywebsocket3.stream import create_header
 
 
 def _get_permessage_deflate_extension_processor(request):
@@ -23,7 +23,7 @@ def web_socket_do_extra_handshake(request):
 
 
 def web_socket_transfer_data(request):
-    line = request.ws_stream.receive_message()
+    line = request.ws_stream.receive_message()  # noqa: F841
     # Hello
     payload = b'\xf2\x48\xcd\xc9\xc9\x07\x00\x00\x00\xff\xff'
     # Strip \x00\x00\xff\xff
@@ -36,7 +36,8 @@ def web_socket_transfer_data(request):
         rsv1=1,
         rsv2=0,
         rsv3=0,
-        mask=False)
+        mask=False,
+    )
     request.ws_stream._write(header + payload)
 
     header = create_header(
@@ -46,7 +47,8 @@ def web_socket_transfer_data(request):
         rsv1=0,
         rsv2=0,
         rsv3=0,
-        mask=False)
+        mask=False,
+    )
     request.ws_stream._write(header + stripped)
 
 

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,9 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/notreached.h"
 
 namespace safe_browsing {
 
@@ -33,26 +35,8 @@ void AllowlistCheckerClient::StartCheckCsdAllowlist(
   }
 
   AsyncMatch match = database_manager->CheckCsdAllowlistUrl(url, client.get());
-  InvokeCallbackOrRelease(match, std::move(client));
-}
-
-// static
-void AllowlistCheckerClient::StartCheckHighConfidenceAllowlist(
-    scoped_refptr<SafeBrowsingDatabaseManager> database_manager,
-    const GURL& url,
-    base::OnceCallback<void(bool)> callback_for_result) {
-  // On timeout or if the list is unavailable, report no match.
-  const bool kDefaultDoesMatchAllowlist = false;
-
-  std::unique_ptr<AllowlistCheckerClient> client = GetAllowlistCheckerClient(
-      database_manager, url, &callback_for_result, kDefaultDoesMatchAllowlist);
-  if (!client) {
-    std::move(callback_for_result).Run(kDefaultDoesMatchAllowlist);
-    return;
-  }
-
-  AsyncMatch match =
-      database_manager->CheckUrlForHighConfidenceAllowlist(url, client.get());
+  base::UmaHistogramEnumeration(
+      "SafeBrowsing.ClientSidePhishingDetection.AllowlistMatchResult", match);
   InvokeCallbackOrRelease(match, std::move(client));
 }
 
@@ -81,12 +65,10 @@ void AllowlistCheckerClient::InvokeCallbackOrRelease(
     std::unique_ptr<AllowlistCheckerClient> client) {
   switch (match) {
     case AsyncMatch::MATCH:
-      std::move(client->callback_for_result_)
-          .Run(true /* did_match_allowlist */);
+      client->OnCheckCompleted(true /* did_match_allowlist */);
       break;
     case AsyncMatch::NO_MATCH:
-      std::move(client->callback_for_result_)
-          .Run(false /* did_match_allowlist */);
+      client->OnCheckCompleted(false /* did_match_allowlist */);
       break;
     case AsyncMatch::ASYNC:
       // Client is now self-owned. When it gets called back with the result,
@@ -100,21 +82,23 @@ AllowlistCheckerClient::AllowlistCheckerClient(
     base::OnceCallback<void(bool)> callback_for_result,
     scoped_refptr<SafeBrowsingDatabaseManager> database_manager,
     bool default_does_match_allowlist)
-    : callback_for_result_(std::move(callback_for_result)),
+    : SafeBrowsingDatabaseManager::Client(GetPassKey()),
+      callback_for_result_(std::move(callback_for_result)),
       database_manager_(database_manager),
-      default_does_match_allowlist_(default_does_match_allowlist) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+      default_does_match_allowlist_(default_does_match_allowlist),
+      start_time_(base::TimeTicks::Now()) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   // Set a timer to fail open, i.e. call it "allowlisted", if the full
   // check takes too long.
   auto timeout_callback = base::BindOnce(&AllowlistCheckerClient::OnTimeout,
                                          weak_factory_.GetWeakPtr());
-  timer_.Start(FROM_HERE, base::TimeDelta::FromMilliseconds(kLookupTimeoutMS),
+  timer_.Start(FROM_HERE, base::Milliseconds(kLookupTimeoutMS),
                std::move(timeout_callback));
 }
 
 AllowlistCheckerClient::~AllowlistCheckerClient() {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 }
 
 // SafeBrowsingDatabaseMananger::Client impl
@@ -122,27 +106,44 @@ void AllowlistCheckerClient::OnCheckAllowlistUrlResult(
     bool did_match_allowlist) {
   OnCheckUrlResult(did_match_allowlist);
 }
-
-void AllowlistCheckerClient::OnCheckUrlForHighConfidenceAllowlist(
-    bool did_match_allowlist) {
-  OnCheckUrlResult(did_match_allowlist);
+base::WeakPtr<V5GetHashProtocolManager>
+AllowlistCheckerClient::GetV5GetHashProtocolManager() {
+  // Allowlist checks just check the local database; they don't make get hash
+  // requests. So, there's no need to provide a V5GetHashProtocolManager.
+  // TODO(crbug.com/372395685): Refactor so this override is unneeded once the
+  // v4 code is deprecated.
+  NOTREACHED();
 }
 
 void AllowlistCheckerClient::OnCheckUrlResult(bool did_match_allowlist) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   timer_.Stop();
+
+  base::UmaHistogramEnumeration(
+      "SafeBrowsing.ClientSidePhishingDetection.AllowlistAsyncMatchResult",
+      timed_out_ ? AllowlistAsyncMatchResult::kTimeout
+                 : (did_match_allowlist ? AllowlistAsyncMatchResult::kMatch
+                                        : AllowlistAsyncMatchResult::kNoMatch));
 
   // The callback can only be invoked by other code paths if this object is not
   // self-owned. Because this method is only invoked when we're self-owned, we
   // know the callback must still be valid, and it must be safe to delete
   // |this|.
   DCHECK(callback_for_result_);
-  std::move(callback_for_result_).Run(did_match_allowlist);
+  OnCheckCompleted(did_match_allowlist);
   delete this;
 }
 
+void AllowlistCheckerClient::OnCheckCompleted(bool did_match_allowlist) {
+  base::UmaHistogramTimes(
+      "SafeBrowsing.ClientSidePhishingDetection.AllowlistCheckDuration",
+      base::TimeTicks::Now() - start_time_);
+  std::move(callback_for_result_).Run(did_match_allowlist);
+}
+
 void AllowlistCheckerClient::OnTimeout() {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  timed_out_ = true;
   database_manager_->CancelCheck(this);
   OnCheckUrlResult(default_does_match_allowlist_);
 }

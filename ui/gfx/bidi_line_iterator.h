@@ -1,17 +1,18 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_GFX_BIDI_LINE_ITERATOR_H_
 #define UI_GFX_BIDI_LINE_ITERATOR_H_
 
-#include <string>
+#include <memory>
+#include <string_view>
 
+#include "base/component_export.h"
 #include "base/i18n/rtl.h"
-#include "base/macros.h"
 #include "third_party/icu/source/common/unicode/ubidi.h"
 #include "third_party/icu/source/common/unicode/uchar.h"
-#include "ui/gfx/gfx_export.h"
+#include "ui/gfx/ubidi_deleter.h"
 
 namespace ui {
 namespace gfx {
@@ -19,14 +20,18 @@ namespace gfx {
 // A simple wrapper class for the bidirectional iterator of ICU.
 // This class uses the bidirectional iterator of ICU to split a line of
 // bidirectional texts into visual runs in its display order.
-class GFX_EXPORT BiDiLineIterator {
+class COMPONENT_EXPORT(GFX) BiDiLineIterator {
  public:
   BiDiLineIterator();
+
+  BiDiLineIterator(const BiDiLineIterator&) = delete;
+  BiDiLineIterator& operator=(const BiDiLineIterator&) = delete;
+
   ~BiDiLineIterator();
 
   // Initializes the bidirectional iterator with the specified text.  Returns
   // whether initialization succeeded.
-  bool Open(const std::u16string& text, base::i18n::TextDirection direction);
+  bool Open(std::u16string_view text, base::i18n::TextDirection direction);
 
   // Returns the number of visual runs in the text, or zero on error.
   int CountRuns() const;
@@ -38,9 +43,7 @@ class GFX_EXPORT BiDiLineIterator {
   void GetLogicalRun(int start, int* end, UBiDiLevel* level) const;
 
  private:
-  UBiDi* bidi_;
-
-  DISALLOW_COPY_AND_ASSIGN(BiDiLineIterator);
+  std::unique_ptr<UBiDi, UBiDiDeleter> bidi_;
 };
 
 }  // namespace gfx

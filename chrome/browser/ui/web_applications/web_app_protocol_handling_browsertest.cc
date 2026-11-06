@@ -1,26 +1,23 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "base/test/metrics/histogram_tester.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/ui/web_applications/test/web_app_navigation_browsertest.h"
-#include "chrome/browser/ui/web_applications/web_app_controller_browsertest.h"
-#include "chrome/browser/web_applications/components/os_integration_manager.h"
-#include "chrome/browser/web_applications/components/protocol_handler_manager.h"
+#include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
+#include "chrome/browser/web_applications/os_integration/web_app_protocol_handler_manager.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "components/page_load_metrics/browser/page_load_metrics_test_waiter.h"
 #include "components/services/app_service/public/cpp/protocol_handler_info.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_navigation_observer.h"
-#include "third_party/blink/public/common/features.h"
-#include "third_party/blink/public/mojom/web_feature/web_feature.mojom.h"
+#include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom.h"
 
 namespace {
 
@@ -35,12 +32,7 @@ namespace web_app {
 
 class WebAppProtocolHandlingBrowserTest : public WebAppNavigationBrowserTest {
  public:
-  WebAppProtocolHandlingBrowserTest() {
-    os_hooks_supress_ = OsIntegrationManager::ScopedSuppressOsHooksForTesting();
-    scoped_feature_list_.InitAndEnableFeature(
-        blink::features::kWebAppEnableProtocolHandlers);
-  }
-
+  WebAppProtocolHandlingBrowserTest() = default;
   ~WebAppProtocolHandlingBrowserTest() override = default;
 
   void SetUpOnMainThread() override {
@@ -48,25 +40,28 @@ class WebAppProtocolHandlingBrowserTest : public WebAppNavigationBrowserTest {
     ASSERT_TRUE(embedded_test_server()->Start());
   }
 
-  AppId InstallTestApp(const char* path, bool await_metric) {
+  webapps::AppId InstallTestApp(const char* path, bool await_metric) {
     GURL start_url = embedded_test_server()->GetURL(path);
     page_load_metrics::PageLoadMetricsTestWaiter metrics_waiter(
-        browser()->tab_strip_model()->GetActiveWebContents());
-    if (await_metric)
+        browser()->GetTabStripModel()->GetActiveWebContents());
+    if (await_metric) {
       metrics_waiter.AddWebFeatureExpectation(protocol_handling_feature);
+    }
 
-    AppId app_id = web_app::InstallWebAppFromPage(browser(), start_url);
-    if (await_metric)
+    webapps::AppId app_id =
+        web_app::InstallWebAppFromPage(browser(), start_url);
+    if (await_metric) {
       metrics_waiter.Wait();
+    }
 
     return app_id;
   }
 
-  web_app::WebAppProviderBase* provider() {
-    return WebAppProviderBase::GetProviderBase(browser()->profile());
+  web_app::WebAppProvider* provider() {
+    return WebAppProvider::GetForTest(browser()->GetProfile());
   }
 
-  web_app::ProtocolHandlerManager& protocol_handler_manager() {
+  web_app::WebAppProtocolHandlerManager& protocol_handler_manager() {
     return provider()
         ->os_integration_manager()
         .protocol_handler_manager_for_testing();
@@ -74,15 +69,11 @@ class WebAppProtocolHandlingBrowserTest : public WebAppNavigationBrowserTest {
 
  protected:
   base::HistogramTester histogram_tester_;
-
- private:
-  ScopedOsHooksSuppress os_hooks_supress_;
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_F(WebAppProtocolHandlingBrowserTest,
                        BasicProtocolHandlers) {
-  AppId app_id = InstallTestApp(
+  webapps::AppId app_id = InstallTestApp(
       "/banners/"
       "manifest_test_page.html?manifest=manifest_protocol_handlers.json",
       /*await_metric=*/true);
@@ -101,15 +92,15 @@ IN_PROC_BROWSER_TEST_F(WebAppProtocolHandlingBrowserTest,
       "/banners/manifest_protocol_handlers.json?testing=%s"));
 
   ASSERT_EQ(2u, protocol_handlers.size());
-  EXPECT_TRUE(base::Contains(protocol_handlers, protocol_handler1));
-  EXPECT_TRUE(base::Contains(protocol_handlers, protocol_handler2));
+  EXPECT_TRUE(std::ranges::contains(protocol_handlers, protocol_handler1));
+  EXPECT_TRUE(std::ranges::contains(protocol_handlers, protocol_handler2));
 
   histogram_tester_.ExpectBucketCount(kUseCounterHistogram,
                                       protocol_handling_feature, 1);
 }
 
 IN_PROC_BROWSER_TEST_F(WebAppProtocolHandlingBrowserTest, NoProtocolHandlers) {
-  AppId app_id =
+  webapps::AppId app_id =
       InstallTestApp("/banners/manifest_test_page.html?manifest=manifest.json",
                      /*await_metric=*/false);
   std::vector<apps::ProtocolHandlerInfo> protocol_handlers =

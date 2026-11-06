@@ -1,4 +1,4 @@
-// Copyright (c) 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,13 @@
 #define SERVICES_DEVICE_HID_HID_CONNECTION_WIN_H_
 
 #include <windows.h>
+
 #include <stddef.h>
 #include <stdint.h>
 
 #include <list>
 
 #include "base/containers/flat_set.h"
-#include "base/macros.h"
 #include "base/win/scoped_handle.h"
 #include "services/device/hid/hid_connection.h"
 
@@ -41,7 +41,11 @@ class HidConnectionWin : public HidConnection {
   static scoped_refptr<HidConnection> Create(
       scoped_refptr<HidDeviceInfo> device_info,
       std::vector<std::unique_ptr<HidDeviceEntry>> file_handles,
-      bool allow_protected_reports);
+      bool allow_protected_reports,
+      bool allow_fido_reports);
+
+  HidConnectionWin(HidConnectionWin&) = delete;
+  HidConnectionWin& operator=(HidConnectionWin&) = delete;
 
  private:
   friend class HidServiceWin;
@@ -49,7 +53,8 @@ class HidConnectionWin : public HidConnection {
 
   HidConnectionWin(scoped_refptr<HidDeviceInfo> device_info,
                    std::vector<std::unique_ptr<HidDeviceEntry>> file_handles,
-                   bool allow_protected_reports);
+                   bool allow_protected_reports,
+                   bool allow_fido_reports);
   ~HidConnectionWin() override;
 
   // HidConnection implementation.
@@ -88,8 +93,6 @@ class HidConnectionWin : public HidConnection {
   std::vector<std::unique_ptr<HidDeviceEntry>> file_handles_;
 
   std::list<std::unique_ptr<PendingHidTransfer>> transfers_;
-
-  DISALLOW_COPY_AND_ASSIGN(HidConnectionWin);
 };
 
 }  // namespace device

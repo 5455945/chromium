@@ -1,9 +1,10 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/renderer_host/policy_container_host.h"
 
+#include "base/command_line.h"
 #include "content/browser/renderer_host/navigation_request.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
@@ -24,6 +25,7 @@ namespace content {
 
 using ::testing::ByRef;
 using ::testing::Eq;
+using ::testing::IsNull;
 using ::testing::Pointee;
 
 namespace {
@@ -40,7 +42,7 @@ class PolicyContainerHostBrowserTest : public content::ContentBrowserTest {
   }
 
   RenderFrameHostImpl* current_frame_host() {
-    return web_contents()->GetMainFrame();
+    return web_contents()->GetPrimaryMainFrame();
   }
 };
 }  // namespace
@@ -99,7 +101,7 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest, CopiedFromPopupOpener) {
       "Content-Security-Policy: img-src 'self'; style-src 'self'");
   ASSERT_TRUE(NavigateToURL(shell(), policies_b_url));
 
-  std::unique_ptr<PolicyContainerPolicies> main_document_policies =
+  PolicyContainerPolicies main_document_policies =
       current_frame_host()->policy_container_host()->policies().Clone();
 
   {
@@ -110,10 +112,10 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest, CopiedFromPopupOpener) {
     WebContentsImpl* popup_webcontents = static_cast<WebContentsImpl*>(
         shell_observer.GetShell()->web_contents());
     RenderFrameHostImpl* popup_frame =
-        popup_webcontents->GetFrameTree()->root()->current_frame_host();
+        popup_webcontents->GetPrimaryFrameTree().root()->current_frame_host();
     EXPECT_EQ(network::mojom::ReferrerPolicy::kOrigin,
               popup_frame->policy_container_host()->referrer_policy());
-    EXPECT_EQ(*main_document_policies,
+    EXPECT_EQ(main_document_policies,
               popup_frame->policy_container_host()->policies());
   }
   {
@@ -130,7 +132,7 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest, CopiedFromPopupOpener) {
         shell_observer.GetShell()->web_contents());
     WaitForLoadStop(popup_webcontents);
     RenderFrameHostImpl* popup_frame =
-        popup_webcontents->GetFrameTree()->root()->current_frame_host();
+        popup_webcontents->GetPrimaryFrameTree().root()->current_frame_host();
     EXPECT_EQ(network::mojom::ReferrerPolicy::kNever,
               popup_frame->policy_container_host()->referrer_policy());
     EXPECT_EQ(0u, popup_frame->policy_container_host()
@@ -151,7 +153,7 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest, CopiedFromParent) {
       "Content-Security-Policy: img-src 'self'; style-src 'self'");
   ASSERT_TRUE(NavigateToURL(shell(), policies_b_url));
 
-  std::unique_ptr<PolicyContainerPolicies> main_document_policies =
+  PolicyContainerPolicies main_document_policies =
       current_frame_host()->policy_container_host()->policies().Clone();
 
   std::string create_srcdoc_iframe_script(
@@ -171,7 +173,7 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest, CopiedFromParent) {
                   ->policy_container_host()
                   ->referrer_policy());
     EXPECT_EQ(
-        *main_document_policies,
+        main_document_policies,
         iframe_node->current_frame_host()->policy_container_host()->policies());
 
     // Navigate the document and verify the policies are updated and the
@@ -199,9 +201,8 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest, CopiedFromParent) {
   // could occur if the renderer was compromised.
   // This will enable the following test, which verifies that the copied policy
   // comes from the browser.
-  static_cast<blink::mojom::PolicyContainerHost*>(
-      current_frame_host()->policy_container_host())
-      ->SetReferrerPolicy(network::mojom::ReferrerPolicy::kSameOrigin);
+  current_frame_host()->policy_container_host()->SetReferrerPolicyForTesting(
+      network::mojom::ReferrerPolicy::kSameOrigin);
   // Repeat the previous test with the tainted policy container:
   {
     // Add an iframe and verify its Policy Container value.
@@ -250,7 +251,7 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest,
       "a.com", "/set-header?Referrer-Policy: no-referrer");
   ASSERT_TRUE(NavigateToURL(shell(), origin_referrer_page));
 
-  std::unique_ptr<PolicyContainerPolicies> main_document_policies =
+  PolicyContainerPolicies main_document_policies =
       current_frame_host()->policy_container_host()->policies().Clone();
 
   {
@@ -263,7 +264,7 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest,
                          "document.body.appendChild(iframe);",
                          same_origin_referrer_page)));
     ASSERT_EQ(1U, current_frame_host()->child_count());
-    WaitForLoadStop(web_contents());
+    EXPECT_TRUE(WaitForLoadStop(web_contents()));
     FrameTreeNode* first_iframe_node =
         current_frame_host()->child_at(current_frame_host()->child_count() - 1);
     EXPECT_EQ(network::mojom::ReferrerPolicy::kSameOrigin,
@@ -277,6 +278,7 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest,
                        "iframe.srcdoc = 'hello world';"
                        "iframe.name = 'second';"
                        "parent.document.body.appendChild(iframe);"));
+    EXPECT_TRUE(WaitForLoadStop(web_contents()));
     ASSERT_EQ(2U, current_frame_host()->child_count());
     FrameTreeNode* second_iframe_node =
         current_frame_host()->child_at(current_frame_host()->child_count() - 1);
@@ -288,9 +290,9 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest,
                   ->policy_container_host()
                   ->referrer_policy())
         << "Sibling policy container inherited from parent.";
-    EXPECT_EQ(*main_document_policies, second_iframe_node->current_frame_host()
-                                           ->policy_container_host()
-                                           ->policies());
+    EXPECT_EQ(main_document_policies, second_iframe_node->current_frame_host()
+                                          ->policy_container_host()
+                                          ->policies());
 
     // The second iframe navigates its sibling, the first iframe, the inherited
     // referrer policy of second (from the main frame) is applied.
@@ -298,14 +300,14 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest,
     // the initiator, the second iframe.
     ASSERT_TRUE(ExecJs(second_iframe_node->current_frame_host(),
                        "window.open('about:blank', 'first');"));
-    WaitForLoadStop(web_contents());
+    EXPECT_TRUE(WaitForLoadStop(web_contents()));
     EXPECT_EQ(network::mojom::ReferrerPolicy::kOrigin,
               first_iframe_node->current_frame_host()
                   ->policy_container_host()
                   ->referrer_policy());
-    EXPECT_EQ(*main_document_policies, first_iframe_node->current_frame_host()
-                                           ->policy_container_host()
-                                           ->policies());
+    EXPECT_EQ(main_document_policies, first_iframe_node->current_frame_host()
+                                          ->policy_container_host()
+                                          ->policies());
     EXPECT_EQ(
         origin_referrer_page.GetWithEmptyPath(),
         EvalJs(first_iframe_node->current_frame_host(), "document.referrer;"))
@@ -318,7 +320,7 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest,
     ASSERT_TRUE(
         ExecJs(second_iframe_node->current_frame_host(),
                JsReplace("document.location.href = $1", no_referrer_page)));
-    WaitForLoadStop(web_contents());
+    EXPECT_TRUE(WaitForLoadStop(web_contents()));
     EXPECT_EQ(network::mojom::ReferrerPolicy::kNever,
               second_iframe_node->current_frame_host()
                   ->policy_container_host()
@@ -350,14 +352,13 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest, HistoryForMainFrame) {
   ASSERT_EQ(1, controller.GetEntryCount());
   EXPECT_EQ(network::mojom::ReferrerPolicy::kNever,
             current_frame_host()->policy_container_host()->referrer_policy());
-  std::unique_ptr<PolicyContainerPolicies> policies_a =
+  PolicyContainerPolicies policies_a =
       current_frame_host()->policy_container_host()->policies().Clone();
-  ASSERT_TRUE(policies_a);
 
   // Now navigate to a local scheme.
   ASSERT_TRUE(ExecJs(current_frame_host(), "window.location = 'about:blank'"));
   EXPECT_TRUE(WaitForLoadStop(web_contents()));
-  ASSERT_EQ(*policies_a,
+  ASSERT_EQ(policies_a,
             current_frame_host()->policy_container_host()->policies());
 
   ASSERT_EQ(2, controller.GetEntryCount());
@@ -366,18 +367,18 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest, HistoryForMainFrame) {
   // Check that RendererDidNavigateToNewEntry stored the correct policy
   // container in the FrameNavigationEntry.
   EXPECT_THAT(entry2->root_node()->frame_entry->policy_container_policies(),
-              Pointee(Eq(ByRef(*policies_a))));
+              Pointee(Eq(ByRef(policies_a))));
 
   // Same document navigation.
   ASSERT_TRUE(ExecJs(current_frame_host(), "window.location.href = '#top'"));
   EXPECT_TRUE(WaitForLoadStop(web_contents()));
-  EXPECT_EQ(*policies_a,
+  EXPECT_EQ(policies_a,
             current_frame_host()->policy_container_host()->policies());
 
   ASSERT_EQ(3, controller.GetEntryCount());
   NavigationEntryImpl* entry3 = controller.GetEntryAtIndex(2);
   EXPECT_THAT(entry3->root_node()->frame_entry->policy_container_policies(),
-              Pointee(Eq(ByRef(*policies_a))));
+              Pointee(Eq(ByRef(policies_a))));
 
   // Navigate to a third page.
   ASSERT_TRUE(NavigateToURL(shell(), policies_b_url));
@@ -390,31 +391,31 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest, HistoryForMainFrame) {
   EXPECT_TRUE(WaitForLoadStop(web_contents()));
 
   // The correct policies should be restored from history.
-  EXPECT_EQ(*policies_a,
+  EXPECT_EQ(policies_a,
             current_frame_host()->policy_container_host()->policies());
 
   // The function RendererDidNavigateToExistingEntry should not have changed
   // anything.
   EXPECT_THAT(entry3->root_node()->frame_entry->policy_container_policies(),
-              Pointee(Eq(ByRef(*policies_a))));
+              Pointee(Eq(ByRef(policies_a))));
 
   // Go back to "about:blank".
   controller.GoBack();
   EXPECT_TRUE(WaitForLoadStop(web_contents()));
 
   // The correct policies should be restored from history.
-  EXPECT_EQ(*policies_a,
+  EXPECT_EQ(policies_a,
             current_frame_host()->policy_container_host()->policies());
 
   // The function RendererDidNavigateToExistingEntry should not have changed
   // anything.
   EXPECT_THAT(entry2->root_node()->frame_entry->policy_container_policies(),
-              Pointee(Eq(ByRef(*policies_a))));
+              Pointee(Eq(ByRef(policies_a))));
 
   // Same URL navigation, which gets converted to a reload.
   ASSERT_TRUE(NavigateFrameToURL(current_frame_host()->frame_tree_node(),
                                  GURL("about:blank")));
-  EXPECT_EQ(*policies_a,
+  EXPECT_EQ(policies_a,
             current_frame_host()->policy_container_host()->policies());
 
   ASSERT_EQ(4, controller.GetEntryCount());
@@ -422,8 +423,22 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest, HistoryForMainFrame) {
   // Check that after RendererDidNavigateToExistingEntry the policy container in
   // the FrameNavigationEntry is still correct.
   EXPECT_THAT(entry2->root_node()->frame_entry->policy_container_policies(),
-              Pointee(Eq(ByRef(*policies_a))));
+              Pointee(Eq(ByRef(policies_a))));
 }
+
+namespace {
+
+bool EqualsExceptCOOPAndTopNavigation(const PolicyContainerPolicies& lhs,
+                                      const PolicyContainerPolicies& rhs) {
+  PolicyContainerPolicies rhs_modulo_coop = rhs.Clone();
+  rhs_modulo_coop.cross_origin_opener_policy = lhs.cross_origin_opener_policy;
+  rhs_modulo_coop.can_navigate_top_without_user_gesture =
+      lhs.can_navigate_top_without_user_gesture;
+
+  return lhs == rhs_modulo_coop;
+}
+
+}  // namespace
 
 IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest, HistoryForChildFrame) {
   NavigationControllerImpl& controller = web_contents()->GetController();
@@ -436,7 +451,7 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest, HistoryForChildFrame) {
           "/set-header?Referrer-Policy: strict-origin-when-cross-origin"));
 
   GURL main_url(embedded_test_server()->GetURL("/page_with_blank_iframe.html"));
-  FrameTreeNode* root = web_contents()->GetFrameTree()->root();
+  FrameTreeNode* root = web_contents()->GetPrimaryFrameTree().root();
   ASSERT_TRUE(NavigateToURL(shell(), main_url));
 
   ASSERT_EQ(1U, root->child_count());
@@ -474,7 +489,7 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest, HistoryForChildFrame) {
                     ->policy_container_host()
                     ->policies()
                     .content_security_policies.size());
-  std::unique_ptr<PolicyContainerPolicies> main_frame_new_policies =
+  PolicyContainerPolicies main_frame_new_policies =
       current_frame_host()->policy_container_host()->policies().Clone();
 
   // 1) Navigate the child frame to a local scheme url.
@@ -482,9 +497,10 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest, HistoryForChildFrame) {
                      "window.open('data:text/html,Hello', 'test_iframe');"));
   EXPECT_TRUE(WaitForLoadStop(web_contents()));
 
-  // The new document inherits from the navigation initiator.
-  EXPECT_EQ(*main_frame_new_policies,
-            child->current_frame_host()->policy_container_host()->policies());
+  // The new document inherits from the navigation initiator, except for COOP.
+  EXPECT_TRUE(EqualsExceptCOOPAndTopNavigation(
+      main_frame_new_policies,
+      child->current_frame_host()->policy_container_host()->policies()));
 
   // The new page replaces the initial about:blank page in the subframe, so no
   // new navigation entry is created.
@@ -493,8 +509,10 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest, HistoryForChildFrame) {
   // The policy container of the FrameNavigationEntry should have been
   // updated. Test that the function RendererDidNavigateAutoSubframe updates the
   // FrameNavigationEntry properly.
-  EXPECT_THAT(entry1->GetFrameEntry(child)->policy_container_policies(),
-              Pointee(Eq(ByRef(*main_frame_new_policies))));
+  EXPECT_THAT(
+      entry1->GetFrameEntry(child)->policy_container_policies(),
+      Pointee(Eq(ByRef(
+          child->current_frame_host()->policy_container_host()->policies()))));
 
   // 2) Same document navigation.
   ASSERT_TRUE(
@@ -502,12 +520,15 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest, HistoryForChildFrame) {
   ASSERT_TRUE(WaitForLoadStop(web_contents()));
 
   // The policies have not changed.
-  EXPECT_EQ(*main_frame_new_policies,
-            child->current_frame_host()->policy_container_host()->policies());
+  EXPECT_TRUE(EqualsExceptCOOPAndTopNavigation(
+      main_frame_new_policies,
+      child->current_frame_host()->policy_container_host()->policies()));
   ASSERT_EQ(2, controller.GetEntryCount());
   NavigationEntryImpl* entry2 = controller.GetEntryAtIndex(1);
-  EXPECT_THAT(entry1->GetFrameEntry(child)->policy_container_policies(),
-              Pointee(Eq(ByRef(*main_frame_new_policies))));
+  EXPECT_THAT(
+      entry1->GetFrameEntry(child)->policy_container_policies(),
+      Pointee(Eq(ByRef(
+          child->current_frame_host()->policy_container_host()->policies()))));
 
   // 3) Navigate the child frame to a network scheme url.
   ASSERT_TRUE(NavigateFrameToURL(child, policies_a_url));
@@ -516,7 +537,7 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest, HistoryForChildFrame) {
   EXPECT_EQ(
       network::mojom::ReferrerPolicy::kAlways,
       child->current_frame_host()->policy_container_host()->referrer_policy());
-  std::unique_ptr<PolicyContainerPolicies> policies_a =
+  PolicyContainerPolicies policies_a =
       child->current_frame_host()->policy_container_host()->policies().Clone();
 
   // 4) Navigate the child frame to another local scheme url.
@@ -525,15 +546,18 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest, HistoryForChildFrame) {
   EXPECT_TRUE(WaitForLoadStop(web_contents()));
 
   // The new document inherits from the navigation initiator.
-  EXPECT_EQ(*policies_a,
-            child->current_frame_host()->policy_container_host()->policies());
+  EXPECT_TRUE(EqualsExceptCOOPAndTopNavigation(
+      policies_a,
+      child->current_frame_host()->policy_container_host()->policies()));
 
   // Now test that the function RendererDidNavigateNewSubframe properly stored
   // the policy container in the FrameNavigationEntry.
   ASSERT_EQ(4, controller.GetEntryCount());
   NavigationEntryImpl* entry4 = controller.GetEntryAtIndex(3);
-  EXPECT_THAT(entry4->GetFrameEntry(child)->policy_container_policies(),
-              Pointee(Eq(ByRef(*policies_a))));
+  EXPECT_THAT(
+      entry4->GetFrameEntry(child)->policy_container_policies(),
+      Pointee(Eq(ByRef(
+          child->current_frame_host()->policy_container_host()->policies()))));
 
   // 5) Navigate the child frame to another network scheme url.
   ASSERT_TRUE(
@@ -561,16 +585,19 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest, HistoryForChildFrame) {
   controller.GoBack();
   EXPECT_TRUE(WaitForLoadStop(web_contents()));
 
-  child = web_contents()->GetFrameTree()->root()->child_at(0);
+  child = web_contents()->GetPrimaryFrameTree().root()->child_at(0);
   ASSERT_NE(nullptr, child);
 
   // The correct referrer policy should be restored from history.
-  EXPECT_EQ(*policies_a,
-            child->current_frame_host()->policy_container_host()->policies());
+  EXPECT_TRUE(EqualsExceptCOOPAndTopNavigation(
+      policies_a,
+      child->current_frame_host()->policy_container_host()->policies()));
 
   // The frame entry should not have changed.
-  EXPECT_THAT(entry4->GetFrameEntry(child)->policy_container_policies(),
-              Pointee(Eq(ByRef(*policies_a))));
+  EXPECT_THAT(
+      entry4->GetFrameEntry(child)->policy_container_policies(),
+      Pointee(Eq(ByRef(
+          child->current_frame_host()->policy_container_host()->policies()))));
 
   controller.GoBack();
   EXPECT_TRUE(WaitForLoadStop(web_contents()));
@@ -579,23 +606,124 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest, HistoryForChildFrame) {
   EXPECT_TRUE(WaitForLoadStop(web_contents()));
 
   // The correct referrer policy should be restored from history.
-  EXPECT_EQ(*main_frame_new_policies,
-            child->current_frame_host()->policy_container_host()->policies());
+  EXPECT_TRUE(EqualsExceptCOOPAndTopNavigation(
+      main_frame_new_policies,
+      child->current_frame_host()->policy_container_host()->policies()));
 
   // The frame entry should not have changed.
-  EXPECT_THAT(entry2->GetFrameEntry(child)->policy_container_policies(),
-              Pointee(Eq(ByRef(*main_frame_new_policies))));
+  EXPECT_THAT(
+      entry2->GetFrameEntry(child)->policy_container_policies(),
+      Pointee(Eq(ByRef(
+          child->current_frame_host()->policy_container_host()->policies()))));
 
   controller.GoBack();
   EXPECT_TRUE(WaitForLoadStop(web_contents()));
 
   // The correct referrer policy should be restored from history.
-  EXPECT_EQ(*main_frame_new_policies,
-            child->current_frame_host()->policy_container_host()->policies());
+  EXPECT_TRUE(EqualsExceptCOOPAndTopNavigation(
+      main_frame_new_policies,
+      child->current_frame_host()->policy_container_host()->policies()));
 
   // The frame entry should not have changed.
-  EXPECT_THAT(entry1->GetFrameEntry(child)->policy_container_policies(),
-              Pointee(Eq(ByRef(*main_frame_new_policies))));
+  EXPECT_THAT(
+      entry1->GetFrameEntry(child)->policy_container_policies(),
+      Pointee(Eq(ByRef(
+          child->current_frame_host()->policy_container_host()->policies()))));
+}
+
+// Test for https://crbug.com/364773822.
+IN_PROC_BROWSER_TEST_F(
+    PolicyContainerHostBrowserTest,
+    PoliciesAreNotReloadedFromHistoryIfNavigationEncounteredError) {
+  NavigationControllerImpl& controller = web_contents()->GetController();
+  GURL main_url(embedded_test_server()->GetURL("/page_with_blank_iframe.html"));
+
+  FrameTreeNode* root = web_contents()->GetPrimaryFrameTree().root();
+  ASSERT_TRUE(NavigateToURL(shell(), main_url));
+
+  ASSERT_EQ(1U, root->child_count());
+  FrameTreeNode* child = root->child_at(0);
+  ASSERT_NE(nullptr, child);
+
+  GURL child_frame_url(
+      embedded_test_server()->GetURL("/page_with_srcdoc_iframe_and_csp.html"));
+  ASSERT_TRUE(NavigateFrameToURL(child, child_frame_url));
+
+  ASSERT_EQ(1, controller.GetEntryCount());
+
+  PolicyContainerPolicies child_frame_policies =
+      child->current_frame_host()->policy_container_host()->policies().Clone();
+  EXPECT_EQ(1u, child_frame_policies.content_security_policies.size());
+  NavigationEntryImpl* entry1 = controller.GetEntryAtIndex(0);
+  EXPECT_THAT(
+      entry1->GetFrameEntry(child)->policy_container_policies(),
+      Pointee(Eq(ByRef(
+          child->current_frame_host()->policy_container_host()->policies()))));
+
+  // The srcdoc document inherits from the parent, except for COOP.
+  ASSERT_EQ(1U, child->child_count());
+  FrameTreeNode* grandchild = child->child_at(0);
+  ASSERT_NE(nullptr, grandchild);
+  EXPECT_TRUE(EqualsExceptCOOPAndTopNavigation(
+      child_frame_policies,
+      grandchild->current_frame_host()->policy_container_host()->policies()));
+
+  ASSERT_EQ(1, controller.GetEntryCount());
+
+  GURL about_blank("about:blank#1");
+  ASSERT_TRUE(NavigateFrameToURL(grandchild, about_blank));
+
+  // Add a sandbox to the child iframe and navigate away and back to recompute
+  // the sandbox flag, so that it gets reloaded with an opaque origin.
+  ASSERT_TRUE(ExecJs(current_frame_host(), R"(
+    document.getElementById('test_iframe').sandbox = 'allow-scripts';
+  )"));
+  ASSERT_TRUE(NavigateFrameToURL(child, about_blank));
+  controller.GoBack();
+  EXPECT_TRUE(WaitForLoadStop(web_contents()));
+  EXPECT_TRUE(child->current_origin().opaque());
+
+  // Trying to navigate the grandchild back to about:srcdoc is disallowed by
+  // https://source.chromium.org/chromium/chromium/src/+/main:content/browser/renderer_host/navigation_request.cc;l=6957-6967;drc=580a3da6e0ea94caa1f127e4455fbdbd05625065.
+  controller.GoBack();
+  EXPECT_TRUE(WaitForLoadStop(web_contents()));
+  EXPECT_TRUE(child->child_at(0)->current_frame_host()->IsErrorDocument());
+
+  // The error page should be loaded without inheriting the parent policies.
+  EXPECT_FALSE(EqualsExceptCOOPAndTopNavigation(child_frame_policies,
+                                                child->child_at(0)
+                                                    ->current_frame_host()
+                                                    ->policy_container_host()
+                                                    ->policies()));
+
+  // The policy container of the FrameNavigationEntry should have been cleared
+  // so that the error page's policies are not used on later successful loads.
+  EXPECT_THAT(
+      entry1->GetFrameEntry(child->child_at(0))->policy_container_policies(),
+      IsNull());
+
+  controller.GoForward();
+  EXPECT_TRUE(WaitForLoadStop(web_contents()));
+  controller.GoForward();
+  EXPECT_TRUE(WaitForLoadStop(web_contents()));
+
+  // Remove the sandbox flag so that the srcdoc frame can successfully load
+  // again.
+  ASSERT_TRUE(ExecJs(current_frame_host(), R"(
+    document.getElementById('test_iframe').removeAttribute('sandbox');
+  )"));
+
+  controller.GoBack();
+  EXPECT_TRUE(WaitForLoadStop(web_contents()));
+  controller.GoBack();
+  EXPECT_TRUE(WaitForLoadStop(web_contents()));
+
+  // The srcdoc document inherits again from the parent, except for COOP.
+  EXPECT_TRUE(EqualsExceptCOOPAndTopNavigation(child_frame_policies,
+                                               child->child_at(0)
+                                                   ->current_frame_host()
+                                                   ->policy_container_host()
+                                                   ->policies()));
 }
 
 // Check that the FrameNavigationEntry for the initial empty document is
@@ -608,7 +736,7 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest,
                                      "Referrer-Policy: origin&"
                                      "Content-Security-Policy: img-src 'none'");
   ASSERT_TRUE(NavigateToURL(shell(), policies_a_url));
-  std::unique_ptr<PolicyContainerPolicies> policies_a =
+  PolicyContainerPolicies policies_a =
       current_frame_host()->policy_container_host()->policies().Clone();
 
   {
@@ -618,12 +746,12 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest,
                        "frame.name = 'test_iframe';"
                        "document.body.appendChild(frame);"));
 
-    FrameTreeNode* root = web_contents()->GetFrameTree()->root();
+    FrameTreeNode* root = web_contents()->GetPrimaryFrameTree().root();
     ASSERT_EQ(1U, root->child_count());
     FrameTreeNode* child = root->child_at(0);
     ASSERT_NE(nullptr, child);
     // The child inherits from the parent.
-    EXPECT_EQ(*policies_a,
+    EXPECT_EQ(policies_a,
               child->current_frame_host()->policy_container_host()->policies());
 
     // The right policy is stored in the FrameNavigationEntry.
@@ -631,7 +759,7 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest,
     ASSERT_EQ(1, controller.GetEntryCount());
     NavigationEntryImpl* entry1 = controller.GetEntryAtIndex(0);
     EXPECT_THAT(entry1->GetFrameEntry(child)->policy_container_policies(),
-                Pointee(Eq(ByRef(*policies_a))));
+                Pointee(Eq(ByRef(policies_a))));
   }
 
   {
@@ -641,16 +769,16 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest,
     WebContentsImpl* popup_webcontents = static_cast<WebContentsImpl*>(
         shell_observer.GetShell()->web_contents());
     RenderFrameHostImpl* popup_frame =
-        popup_webcontents->GetFrameTree()->root()->current_frame_host();
+        popup_webcontents->GetPrimaryFrameTree().root()->current_frame_host();
 
     // The popup inherits from the creator.
-    EXPECT_EQ(*policies_a, popup_frame->policy_container_host()->policies());
+    EXPECT_EQ(policies_a, popup_frame->policy_container_host()->policies());
 
     // The right policy is stored in the FrameNavigationEntry.
     NavigationEntryImpl* entry1 =
         popup_webcontents->GetController().GetEntryAtIndex(0);
     EXPECT_THAT(entry1->root_node()->frame_entry->policy_container_policies(),
-                Pointee(Eq(ByRef(*policies_a))));
+                Pointee(Eq(ByRef(policies_a))));
   }
 }
 
@@ -665,7 +793,7 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest,
       "/set-header?Referrer-Policy: unsafe-url"));
   ASSERT_TRUE(NavigateToURL(shell(), always_referrer_url));
 
-  FrameTreeNode* root = web_contents()->GetFrameTree()->root();
+  FrameTreeNode* root = web_contents()->GetPrimaryFrameTree().root();
 
   // Create child frame
   ASSERT_TRUE(ExecJs(current_frame_host(), R"(
@@ -810,14 +938,14 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest,
   NavigationRequest* navigation_request =
       NavigationRequest::From(manager.GetNavigationHandle());
   if (ShouldSkipEarlyCommitPendingForCrashedFrame()) {
-    EXPECT_EQ(navigation_request->associated_site_instance_type(),
-              NavigationRequest::AssociatedSiteInstanceType::SPECULATIVE);
+    EXPECT_EQ(navigation_request->GetAssociatedRFHType(),
+              NavigationRequest::AssociatedRenderFrameHostType::SPECULATIVE);
   } else {
     // Policy container is properly initialized in the early committed
-    // render frame host.
+    // RenderFrameHost.
     EXPECT_TRUE(current_frame_host()->policy_container_host());
-    EXPECT_EQ(navigation_request->associated_site_instance_type(),
-              NavigationRequest::AssociatedSiteInstanceType::CURRENT);
+    EXPECT_EQ(navigation_request->GetAssociatedRFHType(),
+              NavigationRequest::AssociatedRenderFrameHostType::CURRENT);
 
     // The policy is copied from the previous RFH following the crash.
     EXPECT_EQ(network::mojom::ReferrerPolicy::kNever,
@@ -837,9 +965,10 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest,
   }
 
   // Let the navigation finish.
-  manager.WaitForNavigationFinished();
+  ASSERT_TRUE(manager.WaitForNavigationFinished());
 
-  EXPECT_EQ(url_b, web_contents()->GetMainFrame()->GetLastCommittedURL());
+  EXPECT_EQ(url_b,
+            web_contents()->GetPrimaryMainFrame()->GetLastCommittedURL());
 
   // The referrer policy is initialized to default during the navigation (no
   // referrer-policy header in the response).
@@ -881,7 +1010,7 @@ IN_PROC_BROWSER_TEST_F(PolicyContainerHostBrowserTest, FailedNavigation) {
       popup_webcontents->GetController().GetLastCommittedEntry();
   EXPECT_EQ(PAGE_TYPE_ERROR, entry->GetPageType());
   RenderFrameHostImpl* popup_frame =
-      popup_webcontents->GetFrameTree()->root()->current_frame_host();
+      popup_webcontents->GetPrimaryFrameTree().root()->current_frame_host();
   EXPECT_EQ(network::mojom::ReferrerPolicy::kDefault,
             popup_frame->policy_container_host()->referrer_policy());
 }

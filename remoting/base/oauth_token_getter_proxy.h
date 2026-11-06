@@ -1,13 +1,12 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef REMOTING_BASE_OAUTH_TOKEN_GETTER_PROXY_H_
 #define REMOTING_BASE_OAUTH_TOKEN_GETTER_PROXY_H_
 
-#include "base/callback.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "remoting/base/oauth_token_getter.h"
 
@@ -31,17 +30,20 @@ class OAuthTokenGetterProxy : public OAuthTokenGetter {
   // sequence where this constructor is called.
   explicit OAuthTokenGetterProxy(base::WeakPtr<OAuthTokenGetter> token_getter);
 
+  OAuthTokenGetterProxy(const OAuthTokenGetterProxy&) = delete;
+  OAuthTokenGetterProxy& operator=(const OAuthTokenGetterProxy&) = delete;
+
   ~OAuthTokenGetterProxy() override;
 
   // OAuthTokenGetter overrides.
   void CallWithToken(TokenCallback on_access_token) override;
   void InvalidateCache() override;
+  base::WeakPtr<OAuthTokenGetter> GetWeakPtr() override;
 
  private:
   base::WeakPtr<OAuthTokenGetter> token_getter_;
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
-
-  DISALLOW_COPY_AND_ASSIGN(OAuthTokenGetterProxy);
+  base::WeakPtrFactory<OAuthTokenGetterProxy> weak_factory_{this};
 };
 
 }  // namespace remoting

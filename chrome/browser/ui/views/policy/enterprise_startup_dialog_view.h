@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,8 @@
 #include <memory>
 #include <string>
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ui/enterprise_startup_dialog.h"
 #include "ui/base/metadata/metadata_header_macros.h"
@@ -20,8 +20,9 @@
 namespace policy {
 
 class EnterpriseStartupDialogView : public views::DialogDelegateView {
+  METADATA_HEADER(EnterpriseStartupDialogView, views::DialogDelegateView)
+
  public:
-  METADATA_HEADER(EnterpriseStartupDialogView);
   EnterpriseStartupDialogView(
       EnterpriseStartupDialog::DialogResultCallback callback);
   EnterpriseStartupDialogView(const EnterpriseStartupDialogView&) = delete;
@@ -32,11 +33,13 @@ class EnterpriseStartupDialogView : public views::DialogDelegateView {
   void DisplayLaunchingInformationWithThrobber(
       const std::u16string& information);
   void DisplayErrorMessage(const std::u16string& error_message,
-                           const absl::optional<std::u16string>& accept_button);
+                           const std::optional<std::u16string>& accept_button);
   void CloseDialog();
 
   void AddWidgetObserver(views::WidgetObserver* observer);
   void RemoveWidgetObserver(views::WidgetObserver* observer);
+
+  bool IsShowing();
 
  private:
   // Run the dialog modally for MacOSX.
@@ -50,13 +53,15 @@ class EnterpriseStartupDialogView : public views::DialogDelegateView {
   bool ShouldShowWindowTitle() const override;
 
   // override views::View
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
 
-  // Remove all existing child views from the dialog, show/hide dialog buttons.
-  void ResetDialog(bool show_accept_button);
-  // Append child views to the content area, setup the layout.
-  void SetupLayout(std::unique_ptr<views::View> icon,
-                   std::unique_ptr<views::View> text);
+  // Removes all existing child views from the dialog and sets the dialog
+  // buttons.
+  void ResetDialog(const std::optional<std::u16string>& accept_button);
+  // Append child views to the content area.
+  void AddContent(std::unique_ptr<views::View> icon,
+                  std::unique_ptr<views::View> text);
 
   EnterpriseStartupDialog::DialogResultCallback callback_;
   bool can_show_browser_window_ = false;
@@ -78,15 +83,15 @@ class EnterpriseStartupDialogImpl : public EnterpriseStartupDialog,
       const std::u16string& information) override;
   void DisplayErrorMessage(
       const std::u16string& error_message,
-      const absl::optional<std::u16string>& accept_button) override;
+      const std::optional<std::u16string>& accept_button) override;
   bool IsShowing() override;
 
   // views::WidgetObserver:
-  void OnWidgetClosing(views::Widget* widget) override;
+  void OnWidgetDestroying(views::Widget* widget) override;
 
  private:
   // The dialog_view_ is owned by itself.
-  EnterpriseStartupDialogView* dialog_view_;
+  raw_ptr<EnterpriseStartupDialogView> dialog_view_;
 };
 
 }  // namespace policy

@@ -1,88 +1,80 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.omnibox.suggestions.mostvisited;
 
-import android.content.Context;
-import android.graphics.Bitmap;
-import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
-import android.view.LayoutInflater;
-import android.view.ViewGroup;
+import android.text.TextUtils;
+import android.view.View;
 
-import androidx.annotation.NonNull;
+import androidx.annotation.Px;
 
-import org.chromium.base.ApiCompatibilityUtils;
-import org.chromium.base.supplier.Supplier;
-import org.chromium.chrome.browser.omnibox.OmniboxSuggestionType;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.omnibox.OmniboxMetrics;
 import org.chromium.chrome.browser.omnibox.R;
+import org.chromium.chrome.browser.omnibox.styles.OmniboxImageSupplier;
 import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
-import org.chromium.chrome.browser.omnibox.styles.OmniboxTheme;
-import org.chromium.chrome.browser.omnibox.suggestions.OmniboxSuggestionUiType;
+import org.chromium.chrome.browser.omnibox.suggestions.AutocompleteUIContext;
+import org.chromium.chrome.browser.omnibox.suggestions.SuggestionCommonProperties;
 import org.chromium.chrome.browser.omnibox.suggestions.SuggestionHost;
+import org.chromium.chrome.browser.omnibox.suggestions.base.DynamicSpacingRecyclerViewItemDecoration;
+import org.chromium.chrome.browser.omnibox.suggestions.carousel.BaseCarouselSuggestionItemViewBuilder;
 import org.chromium.chrome.browser.omnibox.suggestions.carousel.BaseCarouselSuggestionProcessor;
-import org.chromium.chrome.browser.omnibox.suggestions.carousel.BaseCarouselSuggestionView;
 import org.chromium.chrome.browser.omnibox.suggestions.carousel.BaseCarouselSuggestionViewProperties;
-import org.chromium.components.browser_ui.widget.RoundedIconGenerator;
-import org.chromium.components.browser_ui.widget.tile.TileView;
-import org.chromium.components.browser_ui.widget.tile.TileViewBinder;
+import org.chromium.components.browser_ui.styles.ChromeColors;
 import org.chromium.components.browser_ui.widget.tile.TileViewProperties;
-import org.chromium.components.favicon.LargeIconBridge;
+import org.chromium.components.omnibox.AutocompleteInput;
 import org.chromium.components.omnibox.AutocompleteMatch;
+import org.chromium.components.omnibox.OmniboxSuggestionType;
+import org.chromium.components.omnibox.suggestions.OmniboxSuggestionUiType;
 import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
-import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 import org.chromium.ui.modelutil.PropertyModel;
-import org.chromium.ui.modelutil.SimpleRecyclerViewAdapter;
 import org.chromium.url.GURL;
 
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * SuggestionProcessor for Most Visited URL tiles.
- * TODO(crbug.com/1106109): Write unit tests.
- */
+/** SuggestionProcessor for Most Visited URL tiles. */
+@NullMarked
 public class MostVisitedTilesProcessor extends BaseCarouselSuggestionProcessor {
-    private final @NonNull Context mContext;
-    private final @NonNull SuggestionHost mSuggestionHost;
-    private final @NonNull Supplier<LargeIconBridge> mIconBridgeSupplier;
-    private final int mMinCarouselItemViewHeight;
-    private final int mDesiredFaviconWidthPx;
-    private final RoundedIconGenerator mIconGenerator;
-    private static final int DEFAULT_TILE_TYPE = 0;
+    private final SuggestionHost mSuggestionHost;
+    private final @Nullable OmniboxImageSupplier mImageSupplier;
+    private final @Px int mCarouselItemViewWidth;
+    private final @Px int mCarouselItemViewHeight;
+    private final @Px int mInitialSpacing;
+    private final @Px int mElementSpacing;
+    private final OmniboxResourceProvider mResourceProvider;
 
     /**
-     * Constructor.
-     *
-     * @param context An Android context.
-     * @param host SuggestionHost receiving notifications about user actions.
-     * @param iconBridgeSupplier Supplier of the LargeIconBridge used to fetch site favicons.
+     * @param uiContext Context object containing common UI dependencies.
      */
-    public MostVisitedTilesProcessor(@NonNull Context context, @NonNull SuggestionHost host,
-            @NonNull Supplier<LargeIconBridge> iconBridgeSupplier) {
-        super(context);
-        mContext = context;
-        mSuggestionHost = host;
-        mIconBridgeSupplier = iconBridgeSupplier;
-        mMinCarouselItemViewHeight =
-                mContext.getResources().getDimensionPixelSize(R.dimen.tile_view_min_height);
-        mDesiredFaviconWidthPx = mContext.getResources().getDimensionPixelSize(
-                R.dimen.omnibox_suggestion_favicon_size);
+    public MostVisitedTilesProcessor(AutocompleteUIContext uiContext) {
+        super(uiContext.context);
+        mSuggestionHost = uiContext.host;
+        mImageSupplier = uiContext.imageSupplier;
+        mResourceProvider = uiContext.resourceProvider;
+        mCarouselItemViewWidth = mResourceProvider.getDimen(R.dimen.tile_view_width);
+        mCarouselItemViewHeight = mResourceProvider.getDimen(R.dimen.tile_view_min_height);
 
-        int fallbackIconSize =
-                mContext.getResources().getDimensionPixelSize(R.dimen.tile_view_icon_size);
-        int fallbackIconColor = ApiCompatibilityUtils.getColor(
-                mContext.getResources(), R.color.default_favicon_background_color);
-        int fallbackIconTextSize =
-                mContext.getResources().getDimensionPixelSize(R.dimen.tile_view_icon_text_size);
-        mIconGenerator = new RoundedIconGenerator(fallbackIconSize, fallbackIconSize,
-                fallbackIconSize / 2, fallbackIconColor, fallbackIconTextSize);
+        mInitialSpacing =
+                mResourceProvider.getHeaderStartPadding()
+                        - mResourceProvider.getDimen(R.dimen.tile_view_padding);
+        mElementSpacing =
+                mResourceProvider.getDimen(
+                        R.dimen.omnibox_carousel_suggestion_minimum_item_spacing);
     }
 
     @Override
-    public boolean doesProcessSuggestion(AutocompleteMatch suggestion, int position) {
-        return suggestion.getType() == OmniboxSuggestionType.TILE_NAVSUGGEST;
+    public boolean doesProcessSuggestion(AutocompleteMatch match, int matchIndex) {
+        switch (match.getType()) {
+            case OmniboxSuggestionType.TILE_MOST_VISITED_SITE:
+            case OmniboxSuggestionType.TILE_REPEATABLE_QUERY:
+                return true;
+            default:
+                return false;
+        }
     }
 
     @Override
@@ -92,86 +84,135 @@ public class MostVisitedTilesProcessor extends BaseCarouselSuggestionProcessor {
 
     @Override
     public PropertyModel createModel() {
-        return new PropertyModel(BaseCarouselSuggestionViewProperties.ALL_KEYS);
+        PropertyModel model =
+                new PropertyModel.Builder(BaseCarouselSuggestionViewProperties.ALL_KEYS)
+                        .with(SuggestionCommonProperties.RESOURCE_PROVIDER, mResourceProvider)
+                        .with(BaseCarouselSuggestionViewProperties.TILES, new ArrayList<>())
+                        .with(
+                                BaseCarouselSuggestionViewProperties.CONTENT_DESCRIPTION,
+                                mContext.getString(
+                                        R.string.accessibility_omnibox_most_visited_list))
+                        .with(
+                                BaseCarouselSuggestionViewProperties.TOP_PADDING,
+                                mResourceProvider.getMostVisitedCarouselTopPadding())
+                        .with(
+                                BaseCarouselSuggestionViewProperties.BOTTOM_PADDING,
+                                mResourceProvider.getMostVisitedCarouselBottomPadding())
+                        .with(BaseCarouselSuggestionViewProperties.APPLY_BACKGROUND, false)
+                        .with(
+                                BaseCarouselSuggestionViewProperties.ITEM_DECORATION,
+                                new DynamicSpacingRecyclerViewItemDecoration(
+                                        mInitialSpacing,
+                                        mElementSpacing / 2,
+                                        mCarouselItemViewWidth))
+                        .build();
+
+        return model;
     }
 
     @Override
-    public int getMinimumCarouselItemViewHeight() {
-        return mMinCarouselItemViewHeight;
+    public int getCarouselItemViewHeight() {
+        return mCarouselItemViewHeight;
     }
 
     @Override
-    public void populateModel(AutocompleteMatch suggestion, PropertyModel model, int position) {
-        final List<AutocompleteMatch.NavsuggestTile> tiles = suggestion.getNavsuggestTiles();
-        final int tilesCount = tiles.size();
-        final List<ListItem> tileList = new ArrayList<>(tilesCount);
-        final LargeIconBridge iconBridge = mIconBridgeSupplier.get();
+    public void populateModel(
+            AutocompleteInput input, AutocompleteMatch match, PropertyModel model, int matchIndex) {
+        super.populateModel(input, match, model, matchIndex);
 
-        for (int index = 0; index < tilesCount; index++) {
-            final PropertyModel tileModel = new PropertyModel(TileViewProperties.ALL_KEYS);
-            final String title = tiles.get(index).title;
-            final GURL url = tiles.get(index).url;
-            tileModel.set(TileViewProperties.TITLE, title);
-            tileModel.set(TileViewProperties.TITLE_LINES, 1);
-            tileModel.set(TileViewProperties.ON_FOCUS_VIA_SELECTION,
-                    () -> mSuggestionHost.setOmniboxEditingText(url.getSpec()));
-            tileModel.set(TileViewProperties.ON_CLICK,
-                    v -> mSuggestionHost.onSuggestionClicked(suggestion, position, url));
-            tileModel.set(TileViewProperties.CONTENT_DESCRIPTION,
-                    mContext.getString(R.string.accessibility_omnibox_most_visited_tile, title,
-                            url.getHost()));
+        List<ListItem> tileList = model.get(BaseCarouselSuggestionViewProperties.TILES);
+        String title =
+                TextUtils.isEmpty(match.getDescription())
+                        ? match.getUrl().getHost()
+                        : match.getDescription();
+        int tileIndex = tileList.size();
 
-            // TODO(https://crbug.com/1106109): Cache the generated bitmaps.
-            // This is not needed for the experimentation purposes (this block is currently
-            // used very infrequently - only to offer zero-prefix URL suggestions on URL visit).
-            // This must be addressed before MV Carousel can be offered in more contexts.
-            // Consider unifying cache with LargeIconBridge if possible.
-            Bitmap fallbackIcon = mIconGenerator.generateIconForUrl(url);
-            tileModel.set(TileViewProperties.ICON, new BitmapDrawable(fallbackIcon));
-
-            if (iconBridge != null) {
-                iconBridge.getLargeIconForUrl(tiles.get(index).url, mDesiredFaviconWidthPx,
-                        (Bitmap icon, int fallbackColor, boolean isFallbackColorDefault,
-                                int iconType) -> {
-                            if (icon == null) return;
-                            tileModel.set(TileViewProperties.ICON, new BitmapDrawable(icon));
+        var tileModel =
+                createTile(
+                        title,
+                        match.getUrl(),
+                        match.isSearchSuggestion(),
+                        v -> {
+                            OmniboxMetrics.recordSuggestTileTypeUsed(
+                                    tileIndex, match.isSearchSuggestion());
+                            mSuggestionHost.onSuggestionClicked(
+                                    match, matchIndex, match.getUrl(), /* modifiers= */ 0);
+                        },
+                        v -> {
+                            mSuggestionHost.confirmDeleteMatch(match, title);
+                            return true;
                         });
-            }
 
-            tileList.add(new ListItem(DEFAULT_TILE_TYPE, tileModel));
+        tileList.add(
+                new ListItem(BaseCarouselSuggestionItemViewBuilder.ViewType.TILE_VIEW, tileModel));
+    }
+
+    private PropertyModel createTile(
+            String title,
+            GURL url,
+            boolean isSearch,
+            View.OnClickListener onClick,
+            View.OnLongClickListener onLongClick) {
+        String contentDescription;
+        Drawable decoration;
+
+        if (isSearch) {
+            decoration = mResourceProvider.getDrawable(R.drawable.ic_suggestion_magnifier);
+            contentDescription =
+                    mResourceProvider.getString(
+                            R.string.accessibility_omnibox_most_visited_tile_search, title);
+        } else {
+            decoration = mResourceProvider.getDrawable(R.drawable.ic_globe_24dp);
+            contentDescription =
+                    mResourceProvider.getString(
+                            R.string.accessibility_omnibox_most_visited_tile_navigate,
+                            title,
+                            url.getHost());
         }
 
-        model.set(BaseCarouselSuggestionViewProperties.TILES, tileList);
-        model.set(BaseCarouselSuggestionViewProperties.SHOW_TITLE, false);
-    }
+        var model =
+                new PropertyModel.Builder(MostVisitedTileViewProperties.ALL_KEYS)
+                        .with(TileViewProperties.TITLE, title)
+                        .with(TileViewProperties.TITLE_LINES, 1)
+                        .with(
+                                TileViewProperties.ON_FOCUS_VIA_SELECTION,
+                                () -> mSuggestionHost.setOmniboxEditingText(url.getSpec()))
+                        .with(TileViewProperties.ON_CLICK, onClick)
+                        .with(TileViewProperties.ON_LONG_CLICK, onLongClick)
+                        .with(
+                                TileViewProperties.ICON_TINT,
+                                ChromeColors.getSecondaryIconTint(
+                                        mContext, /* forceLightIconTint= */ false))
+                        .with(TileViewProperties.CONTENT_DESCRIPTION, contentDescription)
+                        .with(TileViewProperties.ICON, decoration)
+                        .with(
+                                TileViewProperties.SMALL_ICON_ROUNDING_RADIUS,
+                                mResourceProvider.getDimen(
+                                        R.dimen.omnibox_small_icon_rounding_radius))
+                        .build();
 
-    /**
-     * Create Carousel Suggestion View presenting the Most Visited URL tiles.
-     *
-     * @param parent ViewGroup that will host the Carousel view.
-     * @return BaseCarouselSuggestionView for the Most Visited URL suggestions.
-     */
-    public static BaseCarouselSuggestionView createView(ViewGroup parent) {
-        SimpleRecyclerViewAdapter adapter = new SimpleRecyclerViewAdapter(new ModelList());
-        adapter.registerType(
-                DEFAULT_TILE_TYPE, MostVisitedTilesProcessor::buildTile, TileViewBinder::bind);
-        return new BaseCarouselSuggestionView(parent.getContext(), adapter);
-    }
+        // Fetch site favicon for MV tiles.
+        if (!isSearch) {
+            if (mImageSupplier != null) {
+                mImageSupplier.fetchFavicon(
+                        url,
+                        icon -> {
+                            if (icon == null) {
+                                mImageSupplier.generateFavicon(
+                                        url,
+                                        fallback -> {
+                                            if (fallback == null) return;
+                                            model.set(TileViewProperties.ICON, fallback);
+                                            model.set(TileViewProperties.ICON_TINT, null);
+                                        });
+                                return;
+                            }
+                            model.set(TileViewProperties.ICON, icon);
+                            model.set(TileViewProperties.ICON_TINT, null);
+                        });
+            }
+        }
 
-    /**
-     * Create a Tile element for the Most Visited URL suggestions.
-     *
-     * @param parent ViewGroup that will host the Tile.
-     * @return A TileView element for the individual URL suggestion.
-     */
-    private static TileView buildTile(ViewGroup parent) {
-        TileView tile = (TileView) LayoutInflater.from(parent.getContext())
-                                .inflate(R.layout.suggestions_tile_view, parent, false);
-        tile.setClickable(true);
-
-        Drawable background = OmniboxResourceProvider.resolveAttributeToDrawable(
-                parent.getContext(), OmniboxTheme.LIGHT_THEME, R.attr.selectableItemBackground);
-        tile.setBackgroundDrawable(background);
-        return tile;
+        return model;
     }
 }

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,14 +15,24 @@ namespace mojo {
 template <>
 struct StructTraits<audio::mojom::AudioDeviceDescriptionDataView,
                     media::AudioDeviceDescription> {
-  static std::string device_name(const media::AudioDeviceDescription& input) {
+  static const std::string& device_name(
+      const media::AudioDeviceDescription& input) {
     return input.device_name;
   }
-  static std::string unique_id(const media::AudioDeviceDescription& input) {
+  static const std::string& unique_id(
+      const media::AudioDeviceDescription& input) {
     return input.unique_id;
   }
-  static std::string group_id(const media::AudioDeviceDescription& input) {
+  static const std::string& group_id(
+      const media::AudioDeviceDescription& input) {
     return input.group_id;
+  }
+  static bool is_system_default(const media::AudioDeviceDescription& input) {
+    return input.is_system_default;
+  }
+  static bool is_communications_device(
+      const media::AudioDeviceDescription& input) {
+    return input.is_communications_device;
   }
 
   static bool Read(audio::mojom::AudioDeviceDescriptionDataView data,

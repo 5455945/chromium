@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "chromecast/media/cma/base/buffering_defs.h"
 #include "chromecast/media/cma/base/coded_frame_provider.h"
@@ -25,12 +25,22 @@ namespace media {
 namespace {
 const size_t kMaxAudioFrameSize = 32 * 1024;
 
+// Returns true if we should decrypt audio data before sending it to the
+// decoder.
+//
+// To maintain backwards compatibility with existing behavior, this will return
+// true if MediaPipelineBackend::AudioDecoder::RequiresDecryption is not
+// implemented.
+bool AudioDecoderRequiresDecryption() {
+  return !MediaPipelineBackend::AudioDecoder::RequiresDecryption ||
+         MediaPipelineBackend::AudioDecoder::RequiresDecryption();
+}
 }
 
 AudioPipelineImpl::AudioPipelineImpl(CmaBackend::AudioDecoder* decoder,
                                      AvPipelineClient client)
     : AvPipelineImpl(decoder, std::move(client)), audio_decoder_(decoder) {
-  DCHECK(audio_decoder_);
+  CHECK(audio_decoder_, base::NotFatalUntil::M163);
 }
 
 AudioPipelineImpl::~AudioPipelineImpl() = default;
@@ -44,11 +54,14 @@ AudioPipelineImpl::~AudioPipelineImpl() = default;
                           kMaxAudioFrameSize);
   }
 
-  DCHECK(audio_config.IsValidConfig());
+  CHECK(audio_config.IsValidConfig(), base::NotFatalUntil::M163);
   AudioConfig config =
       DecoderConfigAdapter::ToCastAudioConfig(kPrimary, audio_config);
   encryption_scheme_ = config.encryption_scheme;
-  config.encryption_scheme = EncryptionScheme::kUnencrypted;
+
+  if (AudioDecoderRequiresDecryption()) {
+    config.encryption_scheme = EncryptionScheme::kUnencrypted;
+  }
 
   if (!audio_decoder_->SetConfig(config)) {
     return ::media::PIPELINE_ERROR_INITIALIZATION_FAILED;
@@ -72,7 +85,10 @@ void AudioPipelineImpl::OnUpdateConfig(
     AudioConfig config =
         DecoderConfigAdapter::ToCastAudioConfig(id, audio_config);
     encryption_scheme_ = config.encryption_scheme;
-    config.encryption_scheme = EncryptionScheme::kUnencrypted;
+
+    if (AudioDecoderRequiresDecryption()) {
+      config.encryption_scheme = EncryptionScheme::kUnencrypted;
+    }
     bool success = audio_decoder_->SetConfig(config);
     if (!success && !client().playback_error_cb.is_null())
       client().playback_error_cb.Run(::media::PIPELINE_ERROR_DECODE);
@@ -85,7 +101,8 @@ EncryptionScheme AudioPipelineImpl::GetEncryptionScheme(StreamId id) const {
 
 std::unique_ptr<StreamDecryptor> AudioPipelineImpl::CreateDecryptor() {
   if (MediaPipelineBackend::CreateAudioDecryptor) {
-    DCHECK_NE(encryption_scheme_, EncryptionScheme::kUnencrypted);
+    CHECK_NE(encryption_scheme_, EncryptionScheme::kUnencrypted,
+             base::NotFatalUntil::M163);
     LOG(INFO) << __func__ << " Create backend decryptor for audio.";
     return std::make_unique<BackendDecryptor>(encryption_scheme_);
   }

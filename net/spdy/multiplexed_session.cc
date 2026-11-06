@@ -1,8 +1,10 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/spdy/multiplexed_session.h"
+
+#include <string_view>
 
 namespace net {
 
@@ -14,9 +16,9 @@ MultiplexedSessionHandle::MultiplexedSessionHandle(
 
 MultiplexedSessionHandle::~MultiplexedSessionHandle() = default;
 
-bool MultiplexedSessionHandle::GetRemoteEndpoint(IPEndPoint* endpoint) {
+int MultiplexedSessionHandle::GetRemoteEndpoint(IPEndPoint* endpoint) {
   if (!session_)
-    return false;
+    return ERR_SOCKET_NOT_CONNECTED;
 
   return session_->GetRemoteEndpoint(endpoint);
 }
@@ -30,13 +32,15 @@ bool MultiplexedSessionHandle::GetSSLInfo(SSLInfo* ssl_info) const {
 }
 
 void MultiplexedSessionHandle::SaveSSLInfo() {
-  has_ssl_info_ = session_->GetSSLInfo(&ssl_info_);
+  if (session_) {
+    has_ssl_info_ = session_->GetSSLInfo(&ssl_info_);
+  }
 }
 
-base::StringPiece MultiplexedSessionHandle::GetAcceptChViaAlpsForOrigin(
-    const url::Origin& origin) const {
-  return session_ ? session_->GetAcceptChViaAlpsForOrigin(origin)
-                  : base::StringPiece();
+std::string_view MultiplexedSessionHandle::GetAcceptChViaAlps(
+    const url::SchemeHostPort& scheme_host_port) const {
+  return session_ ? session_->GetAcceptChViaAlps(scheme_host_port)
+                  : std::string_view();
 }
 
 }  // namespace net

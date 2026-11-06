@@ -1,19 +1,15 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ios/net/cookies/cookie_creation_time_manager.h"
+#import "ios/net/cookies/cookie_creation_time_manager.h"
 
 #import <Foundation/Foundation.h>
-#include <stdint.h>
+#import <stdint.h>
 
-#include "base/time/time.h"
-#include "testing/gtest/include/gtest/gtest.h"
-#include "testing/platform_test.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "base/time/time.h"
+#import "testing/gtest/include/gtest/gtest.h"
+#import "testing/platform_test.h"
 
 namespace net {
 
@@ -21,10 +17,11 @@ class CookieCreationTimeManagerTest : public PlatformTest {
  public:
   NSHTTPCookie* GetCookie(NSString* cookie_line) {
     NSArray* cookies = [NSHTTPCookie
-        cookiesWithResponseHeaderFields:@{ @"Set-Cookie" : cookie_line }
+        cookiesWithResponseHeaderFields:@{@"Set-Cookie" : cookie_line}
                                  forURL:[NSURL URLWithString:@"http://foo"]];
-    if ([cookies count] != 1)
+    if ([cookies count] != 1) {
       return nil;
+    }
 
     return [cookies objectAtIndex:0];
   }
@@ -82,8 +79,8 @@ TEST_F(CookieCreationTimeManagerTest, MakeUniqueCreationTime) {
   creation_time_manager_.SetCreationTime(GetCookie(@"C=D"), creation_time);
   // Override |C| with a cookie that has a different time, to make |now|
   // available again.
-  creation_time_manager_.SetCreationTime(
-      GetCookie(@"C=E"), now - base::TimeDelta::FromMilliseconds(1));
+  creation_time_manager_.SetCreationTime(GetCookie(@"C=E"),
+                                         now - base::Milliseconds(1));
   // |now| is available again because |C| was overriden.
   creation_time = creation_time_manager_.MakeUniqueCreationTime(now);
   EXPECT_EQ(now, creation_time);

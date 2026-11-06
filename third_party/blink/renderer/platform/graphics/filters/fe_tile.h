@@ -31,16 +31,16 @@ class PLATFORM_EXPORT FETile final : public FilterEffect {
  public:
   FETile(Filter*);
 
-  WTF::TextStream& ExternalRepresentation(WTF::TextStream&,
-                                          int indention) const override;
+  StringBuilder& ExternalRepresentation(StringBuilder&,
+                                        wtf_size_t indent) const override;
 
  private:
   FilterEffectType GetFilterEffectType() const override {
     return kFilterEffectTypeTile;
   }
 
-  FloatRect MapInputs(const FloatRect&) const final;
-  FloatRect GetSourceRect() const;
+  gfx::RectF MapInputs(const gfx::RectF&) const final;
+  gfx::RectF GetSourceRect() const;
 
   sk_sp<PaintFilter> CreateImageFilter() override;
 };

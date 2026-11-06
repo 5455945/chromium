@@ -1,4 +1,4 @@
-// Copyright (c) 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -43,10 +43,6 @@ class GCMAppHandler {
   virtual void OnSendError(
       const std::string& app_id,
       const GCMClient::SendErrorDetails& send_error_details) = 0;
-
-  // Called when a GCM message was received by GCM server.
-  virtual void OnSendAcknowledged(const std::string& app_id,
-                                  const std::string& message_id) = 0;
 
   // Called when a GCM message has been received but decryption failed.
   // |message_id| is a message identifier sent by the GCM server.

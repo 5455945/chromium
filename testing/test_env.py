@@ -1,8 +1,7 @@
-#!/usr/bin/env python
-# Copyright (c) 2012 The Chromium Authors. All rights reserved.
+#!/usr/bin/env vpython3
+# Copyright 2012 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """Sets environment variables needed to run a chromium unit test."""
 
 from __future__ import print_function
@@ -13,36 +12,177 @@ import subprocess
 import sys
 import time
 
-
 # This is hardcoded to be src/ relative to this script.
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-CHROME_SANDBOX_ENV = 'CHROME_DEVEL_SANDBOX'
-CHROME_SANDBOX_PATH = '/opt/chromium/chrome_sandbox'
+
+def setup_job_object():
+  """Configures a Windows Job Object for test_env.py and its child processes.
+
+  Assigns the current process to a Job Object configured with
+  JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE. Child and grandchild processes spawned
+  by test executables automatically inherit this Job Object and will be
+  terminated when test_env.py exits.
+
+  References:
+    https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects
+    https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_extended_limit_information
+  """
+  if sys.platform != 'win32':
+    return None
+
+  try:
+    import win32api
+    import win32job
+  except ImportError:
+    print('Warning: Failed to import win32 libraries', file=sys.stderr)
+    return None
+
+  try:
+    hjob = win32job.CreateJobObject(None, '')
+    info = win32job.QueryInformationJobObject(
+      hjob, win32job.JobObjectExtendedLimitInformation
+    )
+    info['BasicLimitInformation']['LimitFlags'] |= (
+      win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    )
+    win32job.SetInformationJobObject(
+      hjob, win32job.JobObjectExtendedLimitInformation, info
+    )
+    # Assign the current process (test_env.py). Child processes will
+    # automatically inherit this Job Object when spawned.
+    try:
+      win32job.AssignProcessToJobObject(hjob, win32api.GetCurrentProcess())
+    except Exception as e:
+      print(
+        'Warning: Failed to assign test_env.py to JobObject: %s' % e,
+        file=sys.stderr,
+      )
+      return None
+
+    # Detach the handle so Python's GC does not close it before sys.exit() sets
+    # the process exit code; the OS will close it when test_env.py exits.
+    return hjob.Detach()
+  except Exception as e:
+    print('Warning: Failed to set up JobObject: %s' % e, file=sys.stderr)
+    return None
 
 
-def get_sandbox_env(env):
-  """Returns the environment flags needed for the SUID sandbox to work."""
-  extra_env = {}
-  chrome_sandbox_path = env.get(CHROME_SANDBOX_ENV, CHROME_SANDBOX_PATH)
-  # The above would silently disable the SUID sandbox if the env value were
-  # an empty string. We don't want to allow that. http://crbug.com/245376
-  # TODO(jln): Remove this check once it's no longer possible to disable the
-  # sandbox that way.
-  if not chrome_sandbox_path:
-    chrome_sandbox_path = CHROME_SANDBOX_PATH
-  extra_env[CHROME_SANDBOX_ENV] = chrome_sandbox_path
+def cleanup_child_processes(hjob):
+  """Resumes and terminates any lingering test processes in a job object.
 
-  return extra_env
+  A child process can have termination initiated while one of its threads is
+  suspended. Such a process is dropped from JobObjectBasicProcessIdList and
+  refuses subsequent TerminateProcess calls, remaining stuck in the OS process
+  table holding file locks until its suspended threads are resumed.
+  IsProcessInJob() still reports True for these processes until kernel rundown
+  completes.
+  """
+  if sys.platform != 'win32' or not hjob:
+    return
+
+  try:
+    import psutil
+    import win32api
+    import win32con
+    import win32job
+    import win32process
+  except ImportError:
+    print('Warning: Failed to import win32 libraries', file=sys.stderr)
+    return
+
+  test_env_pid = os.getpid()
+  lingering = []
+  for proc in psutil.process_iter(['pid', 'exe']):
+    if proc.pid == test_env_pid:
+      continue
+
+    # IsProcessInJob requires a Win32 process HANDLE, as psutil only exposes
+    # PIDs.
+    hproc = None
+    try:
+      hproc = win32api.OpenProcess(
+        win32con.PROCESS_QUERY_LIMITED_INFORMATION, False, proc.pid
+      )
+      in_job = win32job.IsProcessInJob(hproc, hjob)
+    except win32api.error:
+      continue
+    finally:
+      if hproc:
+        win32api.CloseHandle(hproc)
+
+    if not in_job:
+      continue
+
+    print(
+      'Warning: Found lingering process PID=%d (%s); resuming and killing.'
+      % (proc.pid, proc.info.get('exe')),
+      file=sys.stderr,
+    )
+    lingering.append(proc)
+    try:
+      threads = proc.threads()
+    except psutil.Error as e:
+      print(
+        'Warning: Failed to enumerate threads for PID=%d: %s' % (proc.pid, e),
+        file=sys.stderr,
+      )
+      threads = []
+
+    # Resume any suspended threads so the process can finish exiting. Each
+    # ResumeThread() call decrements the thread's suspend count by 1, so loop
+    # until the previous count is <= 1 (meaning the thread is now running).
+    for t in threads:
+      hthread = None
+      try:
+        hthread = win32api.OpenThread(
+          win32con.THREAD_SUSPEND_RESUME, False, t.id
+        )
+        while win32process.ResumeThread(hthread) > 1:
+          pass
+      except win32api.error as e:
+        print(
+          'Warning: Failed to resume TID=%d for PID=%d: %s'
+          % (t.id, proc.pid, e),
+          file=sys.stderr,
+        )
+      finally:
+        if hthread:
+          win32api.CloseHandle(hthread)
+
+    try:
+      proc.kill()
+    except psutil.Error as e:
+      print(
+        'Warning: Failed to kill lingering PID=%d: %s' % (proc.pid, e),
+        file=sys.stderr,
+      )
+
+  if lingering:
+    _, alive = psutil.wait_procs(lingering, timeout=5)
+    if alive:
+      print(
+        'Warning: Processes still alive after cleanup wait: %r'
+        % [p.pid for p in alive],
+        file=sys.stderr,
+      )
 
 
 def trim_cmd(cmd):
   """Removes internal flags from cmd since they're just used to communicate from
   the host machine to this script running on the swarm slaves."""
-  sanitizers = ['asan', 'lsan', 'msan', 'tsan']
-  internal_flags = frozenset('--%s=%d' % (name, value)
-                             for name in sanitizers
-                             for value in [0, 1])
+  sanitizers = [
+    'asan',
+    'lsan',
+    'msan',
+    'tsan',
+    'coverage-continuous-mode',
+    'skip-set-lpac-acls',
+    'skip-symbolization-script',
+  ]
+  internal_flags = frozenset(
+    '--%s=%d' % (name, value) for name in sanitizers for value in [0, 1]
+  )
   return [i for i in cmd if i not in internal_flags]
 
 
@@ -56,8 +196,15 @@ def fix_python_path(cmd):
   return out
 
 
-def get_sanitizer_env(cmd, asan, lsan, msan, tsan, cfi_diag):
-  """Returns the envirnoment flags needed for sanitizer tools."""
+def get_sanitizer_env(
+  asan: bool,
+  lsan: bool,
+  msan: bool,
+  tsan: bool,
+  cfi_diag: bool,
+  detect_odr_violation: bool,
+):
+  """Returns the environment flags needed for sanitizer tools."""
 
   extra_env = {}
 
@@ -69,14 +216,22 @@ def get_sanitizer_env(cmd, asan, lsan, msan, tsan, cfi_diag):
 
   # TODO(glider): remove the symbolizer path once
   # https://code.google.com/p/address-sanitizer/issues/detail?id=134 is fixed.
-  symbolizer_path = os.path.join(ROOT_DIR,
-      'third_party', 'llvm-build', 'Release+Asserts', 'bin', 'llvm-symbolizer')
+  symbolizer_path = os.path.join(
+    ROOT_DIR,
+    'third_party',
+    'llvm-build',
+    'Release+Asserts',
+    'bin',
+    'llvm-symbolizer',
+  )
 
   if lsan or tsan:
     # LSan is not sandbox-compatible, so we can use online symbolization. In
     # fact, it needs symbolization to be able to apply suppressions.
-    symbolization_options = ['symbolize=1',
-                             'external_symbolizer_path=%s' % symbolizer_path]
+    symbolization_options = [
+      'symbolize=1',
+      'external_symbolizer_path=%s' % symbolizer_path,
+    ]
   elif (asan or msan or cfi_diag) and sys.platform not in ['win32', 'cygwin']:
     # ASan uses a script for offline symbolization, except on Windows.
     # Important note: when running ASan with leak detection enabled, we must use
@@ -99,15 +254,11 @@ def get_sanitizer_env(cmd, asan, lsan, msan, tsan, cfi_diag):
       if 'linux' in sys.platform:
         asan_options.append('intercept_tls_get_addr=0')
 
+    if not detect_odr_violation:
+      asan_options.append('detect_odr_violation=0')
+
     if asan_options:
       extra_env['ASAN_OPTIONS'] = ' '.join(asan_options)
-
-    if sys.platform == 'darwin':
-      isolate_output_dir = os.path.abspath(os.path.dirname(cmd[0]))
-      # This is needed because the test binary has @executable_path embedded in
-      # it that the OS tries to resolve to the cache directory and not the
-      # mapped directory.
-      extra_env['DYLD_LIBRARY_PATH'] = str(isolate_output_dir)
 
   if lsan:
     if asan or msan:
@@ -126,6 +277,9 @@ def get_sanitizer_env(cmd, asan, lsan, msan, tsan, cfi_diag):
     if lsan:
       msan_options.append('detect_leaks=1')
     extra_env['MSAN_OPTIONS'] = ' '.join(msan_options)
+    extra_env['VK_ICD_FILENAMES'] = ''
+    extra_env['VK_LOADER_DRIVERS_DISABLE'] = '*lvp*'
+    extra_env['LIBGL_DRIVERS_PATH'] = ''
 
   if tsan:
     tsan_options = symbolization_options[:]
@@ -139,10 +293,30 @@ def get_sanitizer_env(cmd, asan, lsan, msan, tsan, cfi_diag):
   return extra_env
 
 
+def get_coverage_continuous_mode_env(env):
+  """Append %c (clang code coverage continuous mode) flag to LLVM_PROFILE_FILE
+  pattern string."""
+  llvm_profile_file = env.get('LLVM_PROFILE_FILE')
+  if not llvm_profile_file:
+    return {}
+
+  # Do not insert %c into LLVM_PROFILE_FILE if it's already there as that'll
+  # cause the coverage instrumentation to write coverage data to default.profraw
+  # instead of LLVM_PROFILE_FILE.
+  if '%c' in llvm_profile_file:
+    return {'LLVM_PROFILE_FILE': llvm_profile_file}
+
+  dirname, basename = os.path.split(llvm_profile_file)
+  root, ext = os.path.splitext(basename)
+
+  return {'LLVM_PROFILE_FILE': os.path.join(dirname, root + '%c' + ext)}
+
+
 def get_sanitizer_symbolize_command(json_path=None, executable_path=None):
   """Construct the command to invoke offline symbolization script."""
   script_path = os.path.join(
-      ROOT_DIR, 'tools', 'valgrind', 'asan', 'asan_symbolize.py')
+    ROOT_DIR, 'tools', 'valgrind', 'asan', 'asan_symbolize.py'
+  )
   cmd = [sys.executable, script_path]
   if json_path is not None:
     cmd.append('--test-summary-json-file=%s' % json_path)
@@ -168,7 +342,8 @@ def symbolize_snippets_in_json(cmd, env):
 
   try:
     symbolize_command = get_sanitizer_symbolize_command(
-        json_path=json_path, executable_path=cmd[0])
+      json_path=json_path, executable_path=cmd[0]
+    )
     p = subprocess.Popen(symbolize_command, stderr=subprocess.PIPE, env=env)
     (_, stderr) = p.communicate()
   except OSError as e:
@@ -176,9 +351,49 @@ def symbolize_snippets_in_json(cmd, env):
     raise
 
   if p.returncode != 0:
-    print("Error: failed to symbolize snippets in JSON:\n", file=sys.stderr)
+    print('Error: failed to symbolize snippets in JSON:\n', file=sys.stderr)
     print(stderr, file=sys.stderr)
     raise subprocess.CalledProcessError(p.returncode, symbolize_command)
+
+
+def get_escalate_sanitizer_warnings_command(json_path):
+  """Construct the command to invoke sanitizer warnings script."""
+  script_path = os.path.join(
+    ROOT_DIR, 'tools', 'memory', 'sanitizer', 'escalate_sanitizer_warnings.py'
+  )
+  cmd = [sys.executable, script_path]
+  cmd.append('--test-summary-json-file=%s' % json_path)
+  return cmd
+
+
+def escalate_sanitizer_warnings_in_json(cmd, env):
+  """Escalate sanitizer warnings inside the JSON test summary."""
+  json_path = get_json_path(cmd)
+  if json_path is None:
+    print(
+      'Warning: Cannot escalate sanitizer warnings without a json summary '
+      'file:\n',
+      file=sys.stderr,
+    )
+    return 0
+
+  try:
+    escalate_command = get_escalate_sanitizer_warnings_command(json_path)
+    p = subprocess.Popen(escalate_command, stderr=subprocess.PIPE, env=env)
+    (_, stderr) = p.communicate()
+  except OSError as e:
+    print(
+      'Exception while escalating sanitizer warnings: %s' % e, file=sys.stderr
+    )
+    raise
+
+  if p.returncode != 0:
+    print(
+      'Error: failed to escalate sanitizer warnings status in JSON:\n',
+      file=sys.stderr,
+    )
+    print(stderr, file=sys.stderr)
+  return p.returncode
 
 
 def run_command_with_output(argv, stdoutfile, env=None, cwd=None):
@@ -190,21 +405,27 @@ def run_command_with_output(argv, stdoutfile, env=None, cwd=None):
   Returns:
     integer returncode of the subprocess.
   """
-  print('Running %r in %r (env: %r)' % (argv, cwd, env))
+  print('Running %r in %r (env: %r)' % (argv, cwd, env), file=sys.stderr)
   assert stdoutfile
-  with io.open(stdoutfile, 'wb') as writer, \
-      io.open(stdoutfile, 'rb', 1) as reader:
-    process = _popen(argv, env=env, cwd=cwd, stdout=writer,
-                     stderr=subprocess.STDOUT)
+  with (
+    io.open(stdoutfile, 'wb') as writer,
+    io.open(stdoutfile, 'rb', 1) as reader,
+  ):
+    process = _popen(
+      argv, env=env, cwd=cwd, stdout=writer, stderr=subprocess.STDOUT
+    )
     forward_signals([process])
     while process.poll() is None:
-      sys.stdout.write(reader.read())
+      sys.stdout.write(reader.read().decode('utf-8'))
       # This sleep is needed for signal propagation. See the
       # wait_with_signals() docstring.
       time.sleep(0.1)
     # Read the remaining.
-    sys.stdout.write(reader.read())
-    print('Command %r returned exit code %d' % (argv, process.returncode))
+    sys.stdout.write(reader.read().decode('utf-8'))
+    print(
+      'Command %r returned exit code %d' % (argv, process.returncode),
+      file=sys.stderr,
+    )
     return process.returncode
 
 
@@ -218,10 +439,13 @@ def run_command(argv, env=None, cwd=None, log=True):
     integer returncode of the subprocess.
   """
   if log:
-    print('Running %r in %r (env: %r)' % (argv, cwd, env))
+    print('Running %r in %r (env: %r)' % (argv, cwd, env), file=sys.stderr)
   process = _popen(argv, env=env, cwd=cwd, stderr=subprocess.STDOUT)
   forward_signals([process])
-  return wait_with_signals(process)
+  exit_code = wait_with_signals(process)
+  if log:
+    print('Command returned exit code %d' % exit_code, file=sys.stderr)
+  return exit_code
 
 
 def run_command_output_to_handle(argv, file_handle, env=None, cwd=None):
@@ -235,7 +459,8 @@ def run_command_output_to_handle(argv, file_handle, env=None, cwd=None):
   """
   print('Running %r in %r (env: %r)' % (argv, cwd, env))
   process = _popen(
-      argv, env=env, cwd=cwd, stderr=file_handle, stdout=file_handle)
+    argv, env=env, cwd=cwd, stderr=file_handle, stdout=file_handle
+  )
   forward_signals([process])
   exit_code = wait_with_signals(process)
   print('Command returned exit code %d' % exit_code)
@@ -274,6 +499,7 @@ def forward_signals(procs):
       procs: A list of subprocess.Popen objects representing child processes.
   """
   assert all(isinstance(p, subprocess.Popen) for p in procs)
+
   def _sig_handler(sig, _):
     for p in procs:
       if p.poll() is not None:
@@ -282,7 +508,9 @@ def forward_signals(procs):
       if sys.platform == 'win32' and sig == signal.SIGBREAK:
         p.send_signal(signal.CTRL_BREAK_EVENT)
       else:
+        print('Forwarding signal(%d) to process %d' % (sig, p.pid))
         p.send_signal(sig)
+
   if sys.platform == 'win32':
     signal.signal(signal.SIGBREAK, _sig_handler)
   else:
@@ -290,28 +518,26 @@ def forward_signals(procs):
     signal.signal(signal.SIGINT, _sig_handler)
 
 
-def run_executable(cmd, env, stdoutfile=None):
+def run_executable(cmd, env, stdoutfile=None, cwd=None):
   """Runs an executable with:
-    - CHROME_HEADLESS set to indicate that the test is running on a
-      bot and shouldn't do anything interactive like show modal dialogs.
-    - environment variable CR_SOURCE_ROOT set to the root directory.
-    - environment variable LANGUAGE to en_US.UTF-8.
-    - environment variable CHROME_DEVEL_SANDBOX set
-    - Reuses sys.executable automatically.
+  - CHROME_HEADLESS set to indicate that the test is running on a
+    bot and shouldn't do anything interactive like show modal dialogs.
+  - environment variable CR_SOURCE_ROOT set to the root directory.
+  - environment variable LANGUAGE to en_US.UTF-8.
+  - environment variable CHROME_DEVEL_SANDBOX set
+  - Reuses sys.executable automatically.
   """
   extra_env = {
-      # Set to indicate that the executable is running non-interactively on
-      # a bot.
-      'CHROME_HEADLESS': '1',
-
-       # Many tests assume a English interface...
-      'LANG': 'en_US.UTF-8',
+    # Set to indicate that the executable is running non-interactively on
+    # a bot.
+    'CHROME_HEADLESS': '1',
+    # Many tests assume a English interface...
+    'LANG': 'en_US.UTF-8',
   }
 
   # Used by base/base_paths_linux.cc as an override. Just make sure the default
   # logic is used.
   env.pop('CR_SOURCE_ROOT', None)
-  extra_env.update(get_sandbox_env(env))
 
   # Copy logic from  tools/build/scripts/slave/runtest.py.
   asan = '--asan=1' in cmd
@@ -319,20 +545,40 @@ def run_executable(cmd, env, stdoutfile=None):
   msan = '--msan=1' in cmd
   tsan = '--tsan=1' in cmd
   cfi_diag = '--cfi-diag=1' in cmd
-  if stdoutfile or sys.platform in ['win32', 'cygwin']:
+  detect_odr_violation = '--asan-detect-odr-violation=0' not in cmd
+  # Treat sanitizer warnings as test case failures.
+  use_sanitizer_warnings_script = '--fail-san=1' in cmd
+  if '--skip-symbolization-script=1' in cmd:
+    use_symbolization_script = False
+  elif stdoutfile or sys.platform in ['win32', 'cygwin']:
     # Symbolization works in-process on Windows even when sandboxed.
     use_symbolization_script = False
   else:
     # If any sanitizer is enabled, we print unsymbolized stack trace
     # that is required to run through symbolization script.
-    use_symbolization_script = (asan or msan or cfi_diag or lsan or tsan)
+    use_symbolization_script = asan or msan or cfi_diag or lsan or tsan
 
   if asan or lsan or msan or tsan or cfi_diag:
-    extra_env.update(get_sanitizer_env(cmd, asan, lsan, msan, tsan, cfi_diag))
+    extra_env.update(
+      get_sanitizer_env(asan, lsan, msan, tsan, cfi_diag, detect_odr_violation)
+    )
 
   if lsan or tsan:
     # LSan and TSan are not sandbox-friendly.
     cmd.append('--no-sandbox')
+
+  # Enable clang code coverage continuous mode.
+  if '--coverage-continuous-mode=1' in cmd:
+    extra_env.update(get_coverage_continuous_mode_env(env))
+
+  if '--skip-set-lpac-acls=1' not in cmd and sys.platform == 'win32':
+    # //testing imports.
+    sys.path.insert(
+      0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'scripts')
+    )
+    from scripts import common
+
+    common.set_lpac_acls(ROOT_DIR, is_test_script=True)
 
   cmd = trim_cmd(cmd)
 
@@ -347,34 +593,49 @@ def run_executable(cmd, env, stdoutfile=None):
     if env_var_name in env:
       env_to_print[env_var_name] = env[env_var_name]
 
-  print('Additional test environment:\n%s\n'
-        'Command: %s\n' % (
-        '\n'.join('    %s=%s' % (k, v)
-                  for k, v in sorted(env_to_print.items())),
-        ' '.join(cmd)))
+  print(
+    'Additional test environment:\n%s\n'
+    'Command: %s\n'
+    % (
+      '\n'.join('    %s=%s' % (k, v) for k, v in sorted(env_to_print.items())),
+      ' '.join(cmd),
+    )
+  )
   sys.stdout.flush()
   env.update(extra_env or {})
   try:
     if stdoutfile:
       # Write to stdoutfile and poll to produce terminal output.
-      return run_command_with_output(cmd, env=env, stdoutfile=stdoutfile)
-    elif use_symbolization_script:
+      return run_command_with_output(
+        cmd, env=env, stdoutfile=stdoutfile, cwd=cwd
+      )
+    if use_symbolization_script:
       # See above comment regarding offline symbolization.
       # Need to pipe to the symbolizer script.
-      p1 = _popen(cmd, env=env, stdout=subprocess.PIPE,
-                  stderr=sys.stdout)
+      p1 = _popen(
+        cmd, env=env, stdout=subprocess.PIPE, cwd=cwd, stderr=sys.stdout
+      )
       p2 = _popen(
-          get_sanitizer_symbolize_command(executable_path=cmd[0]),
-          env=env, stdin=p1.stdout)
+        get_sanitizer_symbolize_command(executable_path=cmd[0]),
+        env=env,
+        stdin=p1.stdout,
+      )
       p1.stdout.close()  # Allow p1 to receive a SIGPIPE if p2 exits.
       forward_signals([p1, p2])
       wait_with_signals(p1)
       wait_with_signals(p2)
       # Also feed the out-of-band JSON output to the symbolizer script.
       symbolize_snippets_in_json(cmd, env)
-      return p1.returncode
+      returncode = p1.returncode
     else:
-      return run_command(cmd, env=env, log=False)
+      returncode = run_command(cmd, env=env, cwd=cwd, log=False)
+    # Check if we should post-process sanitizer warnings.
+    if use_sanitizer_warnings_script:
+      escalate_returncode = escalate_sanitizer_warnings_in_json(cmd, env)
+      if not returncode and escalate_returncode:
+        print('Tests with sanitizer warnings led to task failure.')
+        returncode = escalate_returncode
+    return returncode
   except OSError:
     print('Failed to start %s' % cmd, file=sys.stderr)
     raise
@@ -383,19 +644,20 @@ def run_executable(cmd, env, stdoutfile=None):
 def _popen(*args, **kwargs):
   assert 'creationflags' not in kwargs
   if sys.platform == 'win32':
-    # Necessary for signal handling. See crbug.com/733612#c6.
+    # Necessary for signal handling (CTRL_BREAK_EVENT). See crbug.com/733612#c6.
+    # Job Objects and cleanup_child_processes() handle process tree cleanup on
+    # exit.
     kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
   return subprocess.Popen(*args, **kwargs)
 
 
 def main():
-  return run_executable(sys.argv[1:], os.environ.copy())
+  hjob = setup_job_object()
+  try:
+    return run_executable(sys.argv[1:], os.environ.copy())
+  finally:
+    cleanup_child_processes(hjob)
 
 
 if __name__ == '__main__':
-  if sys.platform == 'win32':
-    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
-        'scripts'))
-    import common
-    common.set_lpac_acls(ROOT_DIR)
   sys.exit(main())

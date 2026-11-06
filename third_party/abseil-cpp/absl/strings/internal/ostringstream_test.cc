@@ -14,10 +14,12 @@
 
 #include "absl/strings/internal/ostringstream.h"
 
+#include <ios>
 #include <memory>
 #include <ostream>
 #include <string>
 #include <type_traits>
+#include <utility>
 
 #include "gtest/gtest.h"
 
@@ -25,28 +27,54 @@ namespace {
 
 TEST(OStringStream, IsOStream) {
   static_assert(
-      std::is_base_of<std::ostream, absl::strings_internal::OStringStream>(),
-      "");
+      std::is_base_of<std::ostream, absl::strings_internal::OStringStream>());
 }
 
-TEST(OStringStream, ConstructDestroy) {
+TEST(OStringStream, ConstructNullptr) {
+  absl::strings_internal::OStringStream strm(nullptr);
+  EXPECT_EQ(nullptr, strm.str());
+}
+
+TEST(OStringStream, ConstructStr) {
+  std::string s = "abc";
   {
-    absl::strings_internal::OStringStream strm(nullptr);
-    EXPECT_EQ(nullptr, strm.str());
+    absl::strings_internal::OStringStream strm(&s);
+    EXPECT_EQ(&s, strm.str());
   }
+  EXPECT_EQ("abc", s);
+}
+
+TEST(OStringStream, Destroy) {
+  std::unique_ptr<std::string> s(new std::string);
+  absl::strings_internal::OStringStream strm(s.get());
+  s.reset();
+}
+
+TEST(OStringStream, MoveConstruct) {
+  std::string s = "abc";
   {
-    std::string s = "abc";
-    {
-      absl::strings_internal::OStringStream strm(&s);
-      EXPECT_EQ(&s, strm.str());
-    }
-    EXPECT_EQ("abc", s);
+    absl::strings_internal::OStringStream strm1(&s);
+    strm1 << std::hex << 16;
+    EXPECT_EQ(&s, strm1.str());
+    absl::strings_internal::OStringStream strm2(std::move(strm1));
+    strm2 << 16;  // We should still be in base 16.
+    EXPECT_EQ(&s, strm2.str());
   }
+  EXPECT_EQ("abc1010", s);
+}
+
+TEST(OStringStream, MoveAssign) {
+  std::string s = "abc";
   {
-    std::unique_ptr<std::string> s(new std::string);
-    absl::strings_internal::OStringStream strm(s.get());
-    s.reset();
+    absl::strings_internal::OStringStream strm1(&s);
+    strm1 << std::hex << 16;
+    EXPECT_EQ(&s, strm1.str());
+    absl::strings_internal::OStringStream strm2(nullptr);
+    strm2 = std::move(strm1);
+    strm2 << 16;  // We should still be in base 16.
+    EXPECT_EQ(&s, strm2.str());
   }
+  EXPECT_EQ("abc1010", s);
 }
 
 TEST(OStringStream, Str) {
@@ -54,8 +82,8 @@ TEST(OStringStream, Str) {
   absl::strings_internal::OStringStream strm(&s1);
   const absl::strings_internal::OStringStream& c_strm(strm);
 
-  static_assert(std::is_same<decltype(strm.str()), std::string*>(), "");
-  static_assert(std::is_same<decltype(c_strm.str()), const std::string*>(), "");
+  static_assert(std::is_same<decltype(strm.str()), std::string*>());
+  static_assert(std::is_same<decltype(c_strm.str()), const std::string*>());
 
   EXPECT_EQ(&s1, strm.str());
   EXPECT_EQ(&s1, c_strm.str());

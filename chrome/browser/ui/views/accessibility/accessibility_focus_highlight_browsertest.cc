@@ -1,33 +1,40 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "math.h"
+#include "chrome/browser/ui/views/accessibility/accessibility_focus_highlight.h"
+
+#include <math.h>
 
 #include "base/files/file_util.h"
 #include "base/path_service.h"
+#include "base/test/test_future.h"
+#include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 #include "cc/test/pixel_comparator.h"
 #include "cc/test/pixel_test_utils.h"
-#include "chrome/browser/ui/views/accessibility/accessibility_focus_highlight.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/color/chrome_color_id.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/prefs/pref_service.h"
 #include "components/viz/common/frame_sinks/copy_output_request.h"
 #include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "content/public/browser/focused_node_details.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
 #include "content/public/test/focus_changed_observer.h"
 #include "third_party/skia/include/core/SkBitmap.h"
-#include "ui/accessibility/accessibility_features.h"
-#include "ui/compositor/compositor_switches.h"
 #include "ui/compositor/layer.h"
+#include "ui/gfx/image/image.h"
 #include "ui/snapshot/snapshot.h"
 #include "ui/views/widget/widget.h"
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 #include "base/mac/mac_util.h"
 #endif
 
@@ -52,8 +59,6 @@ class AccessibilityFocusHighlightBrowserTest : public InProcessBrowserTest {
   // InProcessBrowserTest overrides:
   void SetUp() override {
     EnablePixelOutput();
-    scoped_feature_list_.InitAndEnableFeature(
-        features::kAccessibilityFocusHighlight);
     InProcessBrowserTest::SetUp();
   }
 
@@ -71,8 +76,9 @@ class AccessibilityFocusHighlightBrowserTest : public InProcessBrowserTest {
     int count = 0;
     for (int x = 0; x < bitmap.width(); ++x) {
       for (int y = 0; y < bitmap.height(); ++y) {
-        if (ColorsApproximatelyEqual(color, bitmap.getColor(x, y)))
+        if (ColorsApproximatelyEqual(color, bitmap.getColor(x, y))) {
           count++;
+        }
       }
     }
     return count * 100.0f / (bitmap.width() * bitmap.height());
@@ -88,21 +94,9 @@ class AccessibilityFocusHighlightBrowserTest : public InProcessBrowserTest {
 
     // Keep trying until we get a successful capture.
     while (true) {
-      // First try sync. If that fails, try async.
-      gfx::Image result_image;
-      if (!ui::GrabViewSnapshot(native_view, bounds, &result_image)) {
-        const auto on_got_snapshot = [](base::RunLoop* run_loop,
-                                        gfx::Image* image,
-                                        gfx::Image got_image) {
-          *image = got_image;
-          run_loop->Quit();
-        };
-        base::RunLoop run_loop;
-        ui::GrabViewSnapshotAsync(
-            native_view, bounds,
-            base::BindOnce(on_got_snapshot, &run_loop, &result_image));
-        run_loop.Run();
-      }
+      base::test::TestFuture<gfx::Image> future;
+      ui::GrabViewSnapshot(native_view, bounds, future.GetCallback());
+      gfx::Image result_image = future.Take();
 
       if (result_image.Size().IsEmpty()) {
         LOG(INFO) << "Bitmap not correct size, trying to capture again";
@@ -131,27 +125,24 @@ class AccessibilityFocusHighlightBrowserTest : public InProcessBrowserTest {
       return result_image;
     }
   }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 // Smoke test that ensures that when a node gets focus, the layer with the
 // focus highlight actually gets drawn.
 //
-// Flaky on all platforms. TODO(crbug.com/1083806): Enable this test.
+// Flaky on all platforms. TODO(crbug.com/40692704): Enable this test.
 IN_PROC_BROWSER_TEST_F(AccessibilityFocusHighlightBrowserTest,
                        DISABLED_DrawsHighlight) {
-  ui_test_utils::NavigateToURL(
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), GURL("data:text/html,"
                       "<body style='background-color: rgb(204, 255, 255);'>"
-                      "<div tabindex=0 id='div'>Focusable div</div>"));
+                      "<div tabindex=0 id='div'>Focusable div</div>")));
 
   AccessibilityFocusHighlight::SetNoFadeForTesting();
   AccessibilityFocusHighlight::SkipActivationCheckForTesting();
   AccessibilityFocusHighlight::UseDefaultColorForTesting();
 
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       prefs::kAccessibilityFocusHighlightEnabled, true);
 
   // The web page has a background with a specific color. Keep looping until we
@@ -163,7 +154,9 @@ IN_PROC_BROWSER_TEST_F(AccessibilityFocusHighlightBrowserTest,
   } while (CountPercentPixelsWithColor(image, SkColorSetRGB(204, 255, 255)) <
            90.0f);
 
-  SkColor highlight_color = AccessibilityFocusHighlight::default_color_;
+  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
+  SkColor highlight_color =
+      browser_view->GetColorProvider()->GetColor(kColorFocusHighlightDefault);
 
   // Initially less than 0.05% of the image should be the focus ring's highlight
   // color.
@@ -171,9 +164,9 @@ IN_PROC_BROWSER_TEST_F(AccessibilityFocusHighlightBrowserTest,
 
   // Focus something.
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   std::string script("document.getElementById('div').focus();");
-  EXPECT_TRUE(content::ExecuteScript(web_contents, script));
+  EXPECT_TRUE(content::ExecJs(web_contents, script));
 
   // Now wait until at least 0.1% of the image has the focus ring's highlight
   // color. If it never does, the test will time out.
@@ -185,18 +178,18 @@ IN_PROC_BROWSER_TEST_F(AccessibilityFocusHighlightBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(AccessibilityFocusHighlightBrowserTest,
                        FocusBoundsIncludeImages) {
-  ui_test_utils::NavigateToURL(browser(),
-                               GURL("data:text/html,"
-                                    "<a id='link' href=''>"
-                                    "<img id='image' width='220' height='147' "
-                                    "style='vertical-align: middle;'>"
-                                    "</a>"));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), GURL("data:text/html,"
+                      "<a id='link' href=''>"
+                      "<img id='image' width='220' height='147' "
+                      "style='vertical-align: middle;'>"
+                      "</a>")));
 
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   content::FocusChangedObserver observer(web_contents);
   std::string script("document.getElementById('link').focus();");
-  ASSERT_TRUE(content::ExecuteScript(web_contents, script));
+  ASSERT_TRUE(content::ExecJs(web_contents, script));
   auto details = observer.Wait();
 
   gfx::Rect bounds = details.node_bounds_in_screen;
@@ -235,9 +228,12 @@ class ReadbackHolder : public base::RefCountedThreadSafe<ReadbackHolder> {
   std::unique_ptr<base::RunLoop> run_loop_;
 };
 
-const cc::ExactPixelComparator pixel_comparator(/*discard_alpha=*/false);
+const cc::ExactPixelComparator pixel_comparator;
 
-#if defined(OS_MAC) && MAC_OS_VERSION_MIN_REQUIRED < MAC_OS_X_VERSION_10_15
+// TODO(crbug.com/40924319): Fix flaky test on Mac.
+// TODO(crbug.com/373535999): Fix flaky test on Windows.
+// TODO(crbug.com/446071321): Fix flaky test on Linux.
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
 #define MAYBE_FocusAppearance DISABLED_FocusAppearance
 #else
 #define MAYBE_FocusAppearance FocusAppearance
@@ -250,19 +246,20 @@ IN_PROC_BROWSER_TEST_F(AccessibilityFocusHighlightBrowserTest,
   AccessibilityFocusHighlight::SetNoFadeForTesting();
   AccessibilityFocusHighlight::SkipActivationCheckForTesting();
 
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       prefs::kAccessibilityFocusHighlightEnabled, true);
 
-  ui_test_utils::NavigateToURL(browser(), GURL("data:text/html,"
-                                               "<a id='link' href=''>"
-                                               "<img width='10' height='10'>"
-                                               "</a>"));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(),
+                                           GURL("data:text/html,"
+                                                "<a id='link' href=''>"
+                                                "<img width='10' height='10'>"
+                                                "</a>")));
 
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   content::FocusChangedObserver observer(web_contents);
   std::string script("document.getElementById('link').focus();");
-  ASSERT_TRUE(content::ExecuteScript(web_contents, script));
+  ASSERT_TRUE(content::ExecJs(web_contents, script));
   observer.Wait();
   BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
   AccessibilityFocusHighlight* highlight =
@@ -273,7 +270,8 @@ IN_PROC_BROWSER_TEST_F(AccessibilityFocusHighlightBrowserTest,
   scoped_refptr<ReadbackHolder> holder(new ReadbackHolder);
   std::unique_ptr<viz::CopyOutputRequest> request =
       std::make_unique<viz::CopyOutputRequest>(
-          viz::CopyOutputRequest::ResultFormat::RGBA_BITMAP,
+          viz::CopyOutputRequest::ResultFormat::RGBA,
+          viz::CopyOutputRequest::ResultDestination::kSystemMemory,
           base::BindOnce(&ReadbackHolder::OutputRequestCallback, holder));
   request->set_area(source_rect);
   layer->RequestCopyOfOutput(std::move(request));
@@ -286,9 +284,9 @@ IN_PROC_BROWSER_TEST_F(AccessibilityFocusHighlightBrowserTest,
 
   std::string screenshot_filename = "focus_highlight_appearance";
   std::string platform_suffix;
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   platform_suffix = "_mac";
-#elif defined(OS_WIN)
+#elif BUILDFLAG(IS_WIN)
   platform_suffix = "_win";
 #endif
 

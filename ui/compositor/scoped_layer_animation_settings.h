@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 
 #include <set>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "ui/compositor/compositor_export.h"
 #include "ui/compositor/layer_animation_element.h"
@@ -25,6 +25,11 @@ class ImplicitAnimationObserver;
 class COMPOSITOR_EXPORT ScopedLayerAnimationSettings {
  public:
   explicit ScopedLayerAnimationSettings(scoped_refptr<LayerAnimator> animator);
+
+  ScopedLayerAnimationSettings(const ScopedLayerAnimationSettings&) = delete;
+  ScopedLayerAnimationSettings& operator=(const ScopedLayerAnimationSettings&) =
+      delete;
+
   virtual ~ScopedLayerAnimationSettings();
 
   void AddObserver(ImplicitAnimationObserver* observer);
@@ -52,10 +57,6 @@ class COMPOSITOR_EXPORT ScopedLayerAnimationSettings {
   // request will be removed at the end of the animation.
   void DeferPaint();
 
-  // This will request trilinear filtering on the animating layer. The filtering
-  // request will be removed at the end of the animation.
-  void TrilinearFiltering();
-
   LayerAnimator* GetAnimator() { return animator_.get(); }
 
  private:
@@ -64,9 +65,7 @@ class COMPOSITOR_EXPORT ScopedLayerAnimationSettings {
   base::TimeDelta old_transition_duration_;
   gfx::Tween::Type old_tween_type_;
   LayerAnimator::PreemptionStrategy old_preemption_strategy_;
-  std::set<ImplicitAnimationObserver*> observers_;
-
-  DISALLOW_COPY_AND_ASSIGN(ScopedLayerAnimationSettings);
+  std::set<raw_ptr<ImplicitAnimationObserver, SetExperimental>> observers_;
 };
 
 }  // namespace ui

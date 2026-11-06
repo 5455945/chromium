@@ -1,4 +1,4 @@
-// Copyright (c) 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,36 +7,36 @@
 #include <utility>
 
 #include "base/base64.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
-#include "base/guid.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/sequenced_task_runner.h"
-#include "base/single_thread_task_runner.h"
-#include "base/task/post_task.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/device_identity/device_oauth2_token_service.h"
 #include "chrome/browser/device_identity/device_oauth2_token_service_factory.h"
-#include "chrome/browser/policy/enrollment_status.h"
-#include "chrome/browser/profiles/profile.h"
 #include "components/policy/core/common/cloud/dm_auth.h"
 #include "google_apis/gaia/gaia_auth_util.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "net/http/http_status_code.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
-#include "components/policy/core/common/cloud/dm_auth.h"
-
 namespace em = enterprise_management;
 
 namespace policy {
 
-DeviceAccountInitializer::DeviceAccountInitializer(CloudPolicyClient* client,
-                                                   Delegate* delegate)
-    : client_(client), delegate_(delegate), handling_request_(false) {
+DeviceAccountInitializer::DeviceAccountInitializer(
+    scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
+    CloudPolicyClient* client,
+    Delegate* delegate)
+    : shared_url_loader_factory_(std::move(shared_url_loader_factory)),
+      client_(client),
+      delegate_(delegate),
+      handling_request_(false) {
+  CHECK(shared_url_loader_factory_);
+
   client_->AddObserver(this);
 }
 
@@ -60,8 +60,7 @@ void DeviceAccountInitializer::OnRobotAuthCodesFetched(
     const std::string& auth_code) {
   if (status != DM_STATUS_SUCCESS) {
     handling_request_ = false;
-    delegate_->OnDeviceAccountTokenError(
-        EnrollmentStatus::ForRobotAuthFetchError(status));
+    delegate_->OnDeviceAccountTokenFetchError(status);
     return;
   }
   if (auth_code.empty()) {
@@ -79,11 +78,9 @@ void DeviceAccountInitializer::OnRobotAuthCodesFetched(
       GaiaUrls::GetInstance()->oauth2_chrome_client_secret();
   client_info.redirect_uri = "oob";
 
-  DCHECK(delegate_->GetURLLoaderFactory());
-
   // Use the system request context to avoid sending user cookies.
   gaia_oauth_client_ =
-      std::make_unique<gaia::GaiaOAuthClient>(delegate_->GetURLLoaderFactory());
+      std::make_unique<gaia::GaiaOAuthClient>(shared_url_loader_factory_);
   gaia_oauth_client_->GetTokensFromAuthCode(client_info, auth_code,
                                             0 /* max_retries */, this);
 }
@@ -113,8 +110,7 @@ void DeviceAccountInitializer::OnOAuthError() {
   // response is bad (empty access token returned).
   LOG(ERROR) << "OAuth protocol error while fetching API refresh token.";
   handling_request_ = false;
-  delegate_->OnDeviceAccountTokenError(
-      EnrollmentStatus::ForRobotRefreshFetchError(net::HTTP_BAD_REQUEST));
+  delegate_->OnDeviceAccountTokenFetchError(/*dm_status=*/std::nullopt);
 }
 
 // GaiaOAuthClient::Delegate network error when fetching refresh token.
@@ -122,8 +118,7 @@ void DeviceAccountInitializer::OnNetworkError(int response_code) {
   LOG(ERROR) << "Network error while fetching API refresh token: "
              << response_code;
   handling_request_ = false;
-  delegate_->OnDeviceAccountTokenError(
-      EnrollmentStatus::ForRobotRefreshFetchError(response_code));
+  delegate_->OnDeviceAccountTokenFetchError(/*dm_status=*/std::nullopt);
 }
 
 void DeviceAccountInitializer::StoreToken() {
@@ -138,8 +133,7 @@ void DeviceAccountInitializer::HandleStoreRobotAuthTokenResult(bool result) {
   handling_request_ = false;
   if (!result) {
     LOG(ERROR) << "Failed to store API refresh token.";
-    delegate_->OnDeviceAccountTokenError(EnrollmentStatus::ForStatus(
-        EnrollmentStatus::ROBOT_REFRESH_STORE_FAILED));
+    delegate_->OnDeviceAccountTokenStoreError();
     return;
   }
   delegate_->OnDeviceAccountTokenStored();
@@ -150,17 +144,12 @@ void DeviceAccountInitializer::Stop() {
   weak_ptr_factory_.InvalidateWeakPtrs();
 }
 
-void DeviceAccountInitializer::OnPolicyFetched(CloudPolicyClient* client) {}
-
-void DeviceAccountInitializer::OnRegistrationStateChanged(
-    CloudPolicyClient* client) {}
-
 void DeviceAccountInitializer::OnClientError(CloudPolicyClient* client) {
   if (!handling_request_)
     return;
-  DCHECK_EQ(client_, client);
+  CHECK_EQ(client_, client, base::NotFatalUntil::M162);
   handling_request_ = false;
-  delegate_->OnDeviceAccountClientError(client->status());
+  delegate_->OnDeviceAccountClientError(client->last_dm_status());
 }
 
 }  // namespace policy

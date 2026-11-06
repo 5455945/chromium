@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,17 +9,17 @@
 #include <cstdint>
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/check_op.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/numerics/safe_conversions.h"
-#include "base/single_thread_task_runner.h"
 #include "base/task/current_thread.h"
+#include "base/task/single_thread_task_runner.h"
 #include "net/base/ip_address.h"
 #include "net/base/ip_endpoint.h"
 #include "remoting/base/typed_buffer.h"
-#include "remoting/host/screen_resolution.h"
+#include "remoting/host/base/screen_resolution.h"
 #include "remoting/host/win/rdp_client_window.h"
 
 namespace remoting {
@@ -28,21 +28,22 @@ namespace {
 
 // 127.0.0.1 is explicitly blocked by the RDP ActiveX control, so we use
 // 127.0.0.2 instead.
-const unsigned char kRdpLoopbackAddress[] = { 127, 0, 0, 2 };
+const unsigned char kRdpLoopbackAddress[] = {127, 0, 0, 2};
 
 }  // namespace
 
 // The core of RdpClient is ref-counted since it services calls and notifies
 // events on the caller task runner, but runs the ActiveX control on the UI
 // task runner.
-class RdpClient::Core
-    : public base::RefCountedThreadSafe<Core>,
-      public RdpClientWindow::EventHandler {
+class RdpClient::Core : public base::RefCountedThreadSafe<Core>,
+                        public RdpClientWindow::EventHandler {
  public:
-  Core(
-      scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner,
-      scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
-      RdpClient::EventHandler* event_handler);
+  Core(scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner,
+       scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
+       RdpClient::EventHandler* event_handler);
+
+  Core(const Core&) = delete;
+  Core& operator=(const Core&) = delete;
 
   // Initiates a loopback RDP connection.
   void Connect(const ScreenResolution& resolution,
@@ -79,15 +80,13 @@ class RdpClient::Core
 
   // Event handler receiving notification about connection state. The pointer is
   // cleared when Disconnect() methods is called, stopping any further updates.
-  RdpClient::EventHandler* event_handler_;
+  raw_ptr<RdpClient::EventHandler> event_handler_;
 
   // Hosts the RDP ActiveX control.
   std::unique_ptr<RdpClientWindow> rdp_client_window_;
 
   // A self-reference to keep the object alive during connection shutdown.
   scoped_refptr<Core> self_;
-
-  DISALLOW_COPY_AND_ASSIGN(Core);
 };
 
 RdpClient::RdpClient(
@@ -127,8 +126,7 @@ RdpClient::Core::Core(
     RdpClient::EventHandler* event_handler)
     : caller_task_runner_(caller_task_runner),
       ui_task_runner_(ui_task_runner),
-      event_handler_(event_handler) {
-}
+      event_handler_(event_handler) {}
 
 void RdpClient::Core::Connect(const ScreenResolution& resolution,
                               const std::string& terminal_id,
@@ -230,8 +228,9 @@ void RdpClient::Core::NotifyConnected() {
     return;
   }
 
-  if (event_handler_)
+  if (event_handler_) {
     event_handler_->OnRdpConnected();
+  }
 }
 
 void RdpClient::Core::NotifyClosed() {

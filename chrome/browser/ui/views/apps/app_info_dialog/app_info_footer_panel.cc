@@ -1,33 +1,30 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/views/apps/app_info_dialog/app_info_footer_panel.h"
 
-#include "base/callback_helpers.h"
-#include "base/memory/ptr_util.h"
-#include "build/chromeos_buildflags.h"
+#include "base/functional/callback_helpers.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_dialogs.h"
+#include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/app_constants/constants.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/management_policy.h"
 #include "extensions/browser/uninstall_reason.h"
-#include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/events/event.h"
-#include "ui/gfx/geometry/insets.h"
 #include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-// gn check complains on Linux Ozone.
-#include "ash/public/cpp/shelf_model.h"  // nogncheck
+#if BUILDFLAG(IS_CHROMEOS)
+#include "ash/public/cpp/shelf_model.h"
+#include "ash/strings/grit/ash_strings.h"
+#include "chrome/browser/ui/ash/shelf/app_shortcut_shelf_item_controller.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller_util.h"
 #endif
@@ -45,15 +42,14 @@ AppInfoFooterPanel::AppInfoFooterPanel(Profile* profile,
   CreateButtons();
 }
 
-AppInfoFooterPanel::~AppInfoFooterPanel() {
-}
+AppInfoFooterPanel::~AppInfoFooterPanel() = default;
 
 // static
 std::unique_ptr<AppInfoFooterPanel> AppInfoFooterPanel::CreateFooterPanel(
     Profile* profile,
     const extensions::Extension* app) {
   if (CanCreateShortcuts(app) ||
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
       CanSetPinnedToShelf(profile, app) ||
 #endif
       CanUninstallApp(profile, app))
@@ -71,7 +67,7 @@ void AppInfoFooterPanel::CreateButtons() {
                 IDS_APPLICATION_INFO_CREATE_SHORTCUTS_BUTTON_TEXT)));
   }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   if (CanSetPinnedToShelf(profile_, app_)) {
     pin_to_shelf_button_ = AddChildView(std::make_unique<views::MdTextButton>(
         base::BindRepeating(&AppInfoFooterPanel::SetPinnedToShelf,
@@ -94,7 +90,7 @@ void AppInfoFooterPanel::CreateButtons() {
   }
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 void AppInfoFooterPanel::UpdatePinButtons(bool focus_visible_button) {
   if (pin_to_shelf_button_ && unpin_from_shelf_button_) {
     const bool was_pinned =
@@ -104,8 +100,8 @@ void AppInfoFooterPanel::UpdatePinButtons(bool focus_visible_button) {
     unpin_from_shelf_button_->SetVisible(was_pinned);
 
     if (focus_visible_button) {
-      views::View* button_to_focus =
-          was_pinned ? unpin_from_shelf_button_ : pin_to_shelf_button_;
+      views::View* button_to_focus = was_pinned ? unpin_from_shelf_button_.get()
+                                                : pin_to_shelf_button_.get();
       button_to_focus->RequestFocus();
     }
   }
@@ -124,54 +120,55 @@ void AppInfoFooterPanel::OnExtensionUninstallDialogClosed(
 }
 
 void AppInfoFooterPanel::CreateShortcuts() {
-  DCHECK(CanCreateShortcuts(app_));
+  CHECK(CanCreateShortcuts(app_), base::NotFatalUntil::M162);
   chrome::ShowCreateChromeAppShortcutsDialog(GetWidget()->GetNativeWindow(),
                                              profile_, app_, base::DoNothing());
 }
 
 // static
 bool AppInfoFooterPanel::CanCreateShortcuts(const extensions::Extension* app) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Ash platforms can't create shortcuts.
   return false;
 #else
   // Extensions and the Chrome component app can't have shortcuts.
-  return app->id() != extension_misc::kChromeAppId && !app->is_extension();
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+  return app->id() != app_constants::kChromeAppId && !app->is_extension();
+#endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 void AppInfoFooterPanel::SetPinnedToShelf(bool value) {
-  DCHECK(CanSetPinnedToShelf(profile_, app_));
+  CHECK(CanSetPinnedToShelf(profile_, app_), base::NotFatalUntil::M162);
   ash::ShelfModel* shelf_model =
       ChromeShelfController::instance()->shelf_model();
-  DCHECK(shelf_model);
+  CHECK(shelf_model, base::NotFatalUntil::M162);
   ash::ShelfModel::ScopedUserTriggeredMutation user_triggered(shelf_model);
-  if (value)
-    shelf_model->PinAppWithID(app_->id());
-  else
-    shelf_model->UnpinAppWithID(app_->id());
+  if (value) {
+    PinAppWithIDToShelf(app_->id());
+  } else {
+    UnpinAppWithIDFromShelf(app_->id());
+  }
 
   UpdatePinButtons(true);
-  Layout();
+  DeprecatedLayoutImmediately();
 }
 
 // static
 bool AppInfoFooterPanel::CanSetPinnedToShelf(Profile* profile,
                                              const extensions::Extension* app) {
   // The Chrome app can't be unpinned, and extensions can't be pinned.
-  return app->id() != extension_misc::kChromeAppId && !app->is_extension() &&
+  return app->id() != app_constants::kChromeAppId && !app->is_extension() &&
          (GetPinnableForAppID(app->id(), profile) ==
           AppListControllerDelegate::PIN_EDITABLE);
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 void AppInfoFooterPanel::UninstallApp() {
-  DCHECK(CanUninstallApp(profile_, app_));
+  CHECK(CanUninstallApp(profile_, app_), base::NotFatalUntil::M162);
   extension_uninstall_dialog_ = extensions::ExtensionUninstallDialog::Create(
       profile_, GetWidget()->GetNativeWindow(), this);
   extension_uninstall_dialog_->ConfirmUninstall(
-      app_, extensions::UNINSTALL_REASON_USER_INITIATED,
+      app_.get(), extensions::UNINSTALL_REASON_USER_INITIATED,
       extensions::UNINSTALL_SOURCE_APP_INFO_DIALOG);
 }
 
@@ -184,5 +181,5 @@ bool AppInfoFooterPanel::CanUninstallApp(Profile* profile,
          !policy->MustRemainInstalled(app, nullptr);
 }
 
-BEGIN_METADATA(AppInfoFooterPanel, AppInfoPanel)
+BEGIN_METADATA(AppInfoFooterPanel)
 END_METADATA

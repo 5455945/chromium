@@ -1,8 +1,10 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/extensions/extension_apitest.h"
+#include "chrome/browser/profiles/profile.h"
 
 #include "base/check.h"
 #include "base/scoped_observation.h"
@@ -34,11 +36,11 @@ class ExtensionPermissionUpdater : public ExtensionRegistryObserver {
   // ExtensionRegistryObserver overrides:
   void OnExtensionLoaded(content::BrowserContext* browser_context,
                          const Extension* extension) override {
-    DCHECK(extension);
+    CHECK(extension, base::NotFatalUntil::M161);
 
     NotifierStateTracker* notifier_state_tracker =
         NotifierStateTrackerFactory::GetForProfile(profile_);
-    DCHECK(notifier_state_tracker);
+    CHECK(notifier_state_tracker, base::NotFatalUntil::M161);
 
     notifier_state_tracker->SetNotifierEnabled(
         message_center::NotifierId(message_center::NotifierType::APPLICATION,
@@ -47,7 +49,7 @@ class ExtensionPermissionUpdater : public ExtensionRegistryObserver {
   }
 
  private:
-  Profile* profile_;
+  raw_ptr<Profile> profile_;
   bool enabled_;
 
   base::ScopedObservation<ExtensionRegistry, ExtensionRegistryObserver>

@@ -6,7 +6,14 @@ include_rules = [
   "+components/keyed_service/core",
   "+components/safe_browsing/buildflags.h",
   "+content/public/browser",
+  "+content/test",
   "+net",
   "+services/service_manager/public/cpp",
   "+third_party/blink/public/common",
 ]
+
+specific_include_rules = {
+  ".*browsertest\\.cc": [
+    "+content/shell/browser/shell.h",
+  ],
+}

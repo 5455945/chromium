@@ -1,29 +1,32 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-{%- set header_guard = "%s_PARAMS_DATA_H_"|format(
-        module.path|upper|replace("/","_")|replace(".","_")|
-            replace("-", "_")) %}
+{%- from 'cpp_macros.tmpl' import
+  include_guard, namespace_begin, namespace_end %}
+
+{%- set header_guard = include_guard('PARAMS_DATA', module.path, variant) %}
 
 #ifndef {{header_guard}}
 #define {{header_guard}}
 
-#include "base/macros.h"
-#include "mojo/public/cpp/bindings/lib/bindings_internal.h"
-#include "mojo/public/cpp/bindings/lib/buffer.h"
+{%- if interfaces|length %}
+#include "mojo/public/cpp/bindings/array_data_view.h"
+#include "mojo/public/cpp/bindings/map_data_view.h"
+#include "mojo/public/cpp/bindings/string_data_view.h"
+{%- endif %}
 
 #if defined(__clang__)
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-private-field"
 #endif
 
-{%- for namespace in namespaces_as_array %}
-namespace {{namespace}} {
-{%- endfor %}
-namespace internal {
-
+namespace mojo::internal {
 class ValidationContext;
+}
+
+{{namespace_begin(namespaces_as_array)}}
+namespace internal {
 
 {#--- Interface parameter definitions #}
 {%- for interface in interfaces %}
@@ -62,9 +65,7 @@ class ValidationContext;
 {%-   endfor %}
 {%- endfor %}
 
-{%- for namespace in namespaces_as_array|reverse %}
-}  // namespace {{namespace}}
-{%- endfor %}
+{{namespace_end(namespaces_as_array)}}
 
 #if defined(__clang__)
 #pragma clang diagnostic pop

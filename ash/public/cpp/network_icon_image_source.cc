@@ -1,17 +1,20 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/public/cpp/network_icon_image_source.h"
 
+#include <array>
+
 #include "third_party/skia/include/core/SkPath.h"
+#include "third_party/skia/include/core/SkPathBuilder.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_f.h"
+#include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/gfx/scoped_canvas.h"
-#include "ui/gfx/skia_util.h"
 #include "ui/gfx/vector_icon_types.h"
 #include "ui/gfx/vector_icon_utils.h"
 
@@ -24,16 +27,23 @@ constexpr int kIconStrokeWidth = 2;
 constexpr int kCellularIconOffset = 1;
 
 SkPath CreateArcPath(gfx::RectF oval, float start_angle, float sweep_angle) {
-  SkPath path;
-  path.setIsVolatile(true);
-  path.setFillType(SkPathFillType::kWinding);
-  path.moveTo(oval.CenterPoint().x(), oval.CenterPoint().y());
-  path.arcTo(gfx::RectFToSkRect(oval), start_angle, sweep_angle, false);
-  path.close();
-  return path;
+  return SkPathBuilder()
+      .setIsVolatile(true)
+      .moveTo(oval.CenterPoint().x(), oval.CenterPoint().y())
+      .arcTo(gfx::RectFToSkRect(oval), start_angle, sweep_angle, false)
+      .close()
+      .detach();
 }
 
 }  // namespace
+
+//------------------------------------------------------------------------------
+// Badges
+
+Badges::Badges() = default;
+Badges::~Badges() = default;
+Badges::Badges(const Badges&) = default;
+Badges& Badges::operator=(const Badges&) = default;
 
 //------------------------------------------------------------------------------
 // NetworkIconImageSource
@@ -67,13 +77,6 @@ void NetworkIconImageSource::Draw(gfx::Canvas* canvas) {
   // The center badge is scaled and centered over the icon.
   if (badges_.center.icon)
     paint_badge(badges_.center, icon_x, icon_y, icon_.width());
-
-  if (badges_.center_left.icon) {
-    paint_badge(
-        badges_.center_left, 0,
-        (height - gfx::GetDefaultSizeOfVectorIcon(*badges_.center_left.icon)) /
-            2);
-  }
 
   if (badges_.top_left.icon)
     paint_badge(badges_.top_left, 0, icon_y);
@@ -131,11 +134,12 @@ bool SignalStrengthImageSource::HasRepresentationAtAllScales() const {
 
 void SignalStrengthImageSource::DrawArcs(gfx::Canvas* canvas) {
   gfx::RectF oval_bounds((gfx::Rect(size())));
-  oval_bounds.Inset(gfx::Insets(padding_));
+  oval_bounds.Inset(padding_);
   // Double the width and height. The new midpoint should be the former
   // bottom center.
-  oval_bounds.Inset(-oval_bounds.width() / 2, 0, -oval_bounds.width() / 2,
-                    -oval_bounds.height());
+  oval_bounds.Inset(gfx::InsetsF::TLBR(0, -oval_bounds.width() / 2,
+                                       -oval_bounds.height(),
+                                       -oval_bounds.width() / 2));
 
   constexpr SkScalar kAngleAboveHorizontal = 51.f;
   constexpr SkScalar kStartAngle = 180.f + kAngleAboveHorizontal;
@@ -156,8 +160,8 @@ void SignalStrengthImageSource::DrawArcs(gfx::Canvas* canvas) {
     flags.setStyle(cc::PaintFlags::kFill_Style);
     // Percent of the height of the background wedge that we draw the
     // foreground wedge, indexed by signal strength.
-    static constexpr float kWedgeHeightPercentages[] = {0.f, 0.375f, 0.5833f,
-                                                        0.75f, 1.f};
+    static constexpr std::array<float, 5> kWedgeHeightPercentages = {
+        0.f, 0.375f, 0.5833f, 0.75f, 1.f};
     const float wedge_percent = kWedgeHeightPercentages[signal_strength_];
     oval_bounds.Inset(
         gfx::InsetsF((oval_bounds.height() / 2) * (1.f - wedge_percent)));
@@ -179,13 +183,13 @@ void SignalStrengthImageSource::DrawBars(gfx::Canvas* canvas) {
       SkIntToScalar(size().width()) - padding_ * 2;
 
   auto make_triangle = [scale, kFullTriangleSide, this](SkScalar side) {
-    SkPath triangle;
-    triangle.moveTo(scale(padding_ + kCellularIconOffset),
-                    scale(padding_ + kFullTriangleSide + kCellularIconOffset));
-    triangle.rLineTo(scale(side), 0);
-    triangle.rLineTo(0, -scale(side));
-    triangle.close();
-    return triangle;
+    return SkPathBuilder()
+        .moveTo(scale(padding_ + kCellularIconOffset),
+                scale(padding_ + kFullTriangleSide + kCellularIconOffset))
+        .rLineTo(scale(side), 0)
+        .rLineTo(0, -scale(side))
+        .close()
+        .detach();
   };
 
   cc::PaintFlags flags;
@@ -203,8 +207,8 @@ void SignalStrengthImageSource::DrawBars(gfx::Canvas* canvas) {
     flags.setStyle(cc::PaintFlags::kFill_Style);
     // As a percentage of the bg triangle, the length of one of the short
     // sides of the fg triangle, indexed by signal strength.
-    static constexpr float kTriangleSidePercents[] = {0.f, 0.375f, 0.5833f,
-                                                      0.75f, 1.f};
+    static constexpr std::array<float, 5> kTriangleSidePercents = {
+        0.f, 0.375f, 0.5833f, 0.75f, 1.f};
     canvas->DrawPath(make_triangle(kTriangleSidePercents[signal_strength_] *
                                    kFullTriangleSide),
                      flags);

@@ -13,15 +13,11 @@ Take frames coming from various sources and check that:
   <script type="text/javascript">
     'use strict';
     async function main(arg) {
+      // Use 16x16 aligned resolution since some platforms require that.
+      // See https://crbug.com/1084702.
       const width = 640;
       const height = 480;
       const frames_in_one_pass = 15;
-      let source = await createFrameSource(arg.source_type, width, height);
-      if (!source) {
-        TEST.log('Skipping unsupported source: ' + arg.source_type);
-        return;
-      }
-
       let errors = 0;
       let chunks = [];
       let decoder_configs = [];
@@ -35,9 +31,19 @@ Take frames coming from various sources and check that:
         framerate: 24
       };
 
-      let support = await VideoEncoder.isConfigSupported(encoder_config);
-      if (!support.supported) {
-        TEST.log('Skipping unsupported codec: ' + arg.codec);
+      TEST.log('Starting test with arguments: ' + JSON.stringify(arg));
+      let supported = false;
+      try {
+        supported = (await VideoEncoder.isConfigSupported(encoder_config)).supported;
+      } catch (e) {}
+      if (!supported) {
+        TEST.skip('Unsupported codec: ' + arg.codec);
+        return;
+      }
+
+      let source = await createFrameSource(arg.source_type, width, height);
+      if (!source) {
+        TEST.skip('Unsupported source: ' + arg.source_type);
         return;
       }
 
@@ -66,9 +72,11 @@ Take frames coming from various sources and check that:
 
       TEST.log('First pass completed');
 
-      // Reconfigure on-the-fly
-      encoder_config.width += 100;
-      encoder_config.height += 100;
+      // Reconfigure on-the-fly. Use 16x16 aligned resolution since some
+      // platforms require that. See https://crbug.com/1084702. 720x576 is
+      // the maximum supported by AVC level 3.0.
+      encoder_config.width = 720;
+      encoder_config.height = 576;
       encoder_config.bitrate += encoder_config.bitrate / 2;
       encoder.configure(encoder_config);
 
@@ -81,17 +89,48 @@ Take frames coming from various sources and check that:
 
       await encoder.flush();
       encoder.close();
+      source.close();
 
       TEST.assert(
         decoder_configs.length >= 2,
         'There should be 2 configs, for each configure()');
+
+      if (arg.codec.startsWith('avc1.')) {
+        // Check that h.264 in the config matches the codec string
+        for (const configs of decoder_configs) {
+          if (configs.description) {
+            const profile = readProfileFromAvcExtraData(
+                              new DataView(configs.description));
+            if (!profile) {
+              TEST.reportFailure("Invalid AVC extra data");
+              return;
+            }
+            const hex_profile = profile.toString(16);
+            TEST.assert_eq(arg.codec.substring(5, 7), hex_profile);
+          } else {
+            TEST.reportFailure("Missing AVC extra data");
+          }
+
+        }
+      }
 
       TEST.assert(
         chunks.length == frames_in_one_pass * 2,
         'Output count mismatch: ' + chunks.length);
 
       TEST.assert(errors == 0, 'Encoding errors occurred during the test');
+      TEST.log('Test completed');
     }
+    addManualTestButton([{
+      'source_type': 'offscreen',
+      'codec': 'avc1.42001E',
+      'acceleration':'prefer-software'
+    },
+    {
+      'source_type': 'offscreen',
+      'codec': 'avc1.64001E',
+      'acceleration':'prefer-hardware'
+    }]);
   </script>
 </head>
 

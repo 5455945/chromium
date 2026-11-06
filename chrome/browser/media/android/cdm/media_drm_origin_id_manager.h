@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,21 @@
 #define CHROME_BROWSER_MEDIA_ANDROID_CDM_MEDIA_DRM_ORIGIN_ID_MANAGER_H_
 
 #include <memory>
+#include <optional>
 
-#include "base/callback.h"
 #include "base/containers/queue.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/threading/thread_checker.h"
+#include "base/types/pass_key.h"
 #include "base/unguessable_token.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "media/base/media_drm_storage.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+
+namespace base {
+class TickClock;
+}
 
 class MediaDrmOriginIdManagerFactory;
 class PrefRegistrySimple;
@@ -45,10 +51,15 @@ class MediaDrmOriginIdManager : public KeyedService {
   using ProvisionedOriginIdCB =
       base::OnceCallback<void(GetOriginIdStatus status,
                               const MediaDrmOriginId& origin_id)>;
-  using ProvisioningResultCB = base::RepeatingCallback<bool()>;
+  using ProvisioningResultCB = base::RepeatingCallback<MediaDrmOriginId()>;
 
   static void RegisterProfilePrefs(PrefRegistrySimple* registry);
 
+  // MediaDrmOriginIdManager should only be created by
+  // MediaDrmOriginIdManagerFactory.
+  explicit MediaDrmOriginIdManager(
+      PrefService* pref_service,
+      base::PassKey<MediaDrmOriginIdManagerFactory>);
   // Destructor must be public as it's used in std::unique_ptr<>.
   ~MediaDrmOriginIdManager() override;
 
@@ -58,8 +69,6 @@ class MediaDrmOriginIdManager : public KeyedService {
   // Asynchronously returns a preprovisioned origin ID using |callback|, if one
   // is available. If none are available, an un-provisioned origin ID is
   // returned.
-  // TODO(crbug.com/917527): Return an empty origin ID once callers
-  // can handle it.
   void GetOriginId(ProvisionedOriginIdCB callback);
 
   // When testing, use the provided |cb| instead of calling MediaDrm.
@@ -67,28 +76,29 @@ class MediaDrmOriginIdManager : public KeyedService {
     provisioning_result_cb_for_testing_ = cb;
   }
 
+  // Overrides the clock used by `backoff_entry_` for testing purposes, allowing
+  // unit tests to simulate advancing mock time under time-based backoff.
+  void SetTickClockForTesting(const base::TickClock* clock);  // IN-TEST
+
  private:
   class NetworkObserver;
   friend class MediaDrmOriginIdManagerFactory;
 
-  // MediaDrmOriginIdManager should only be created by
-  // MediaDrmOriginIdManagerFactory.
-  explicit MediaDrmOriginIdManager(PrefService* pref_service);
+  // Complete the pre-provisioning steps.
+  void ResumePreProvisionIfNecessary();
 
-  // Asynchronously call StartProvisioning().
-  void StartProvisioningAsync();
-
-  // Pre-provision one origin ID, calling OriginIdProvisioned() when done.
-  void StartProvisioning();
+  // Asynchronously call StartProvisioning() on a sequence using different
+  // priorities, depending on |run_in_background|.
+  void StartProvisioningAsync(bool run_in_background);
 
   // Called when provisioning of |origin_id| is done. The provisioning of
-  // |origin_id| was successful if |success| is true.
-  void OriginIdProvisioned(bool success, const MediaDrmOriginId& origin_id);
+  // |origin_id| was successful if |origin_id| is not nullopt.
+  void OriginIdProvisioned(const MediaDrmOriginId& origin_id);
 
   // If called, record the current number of pre-provisioned origin IDs to UMA.
   void RecordCountOfPreprovisionedOriginIds();
 
-  PrefService* const pref_service_;
+  const raw_ptr<PrefService> pref_service_;
 
   // Callback to be used when the next origin ID is provisioned.
   base::queue<ProvisionedOriginIdCB> pending_provisioned_origin_id_cbs_;
@@ -102,8 +112,9 @@ class MediaDrmOriginIdManager : public KeyedService {
   // failed so that tests can verify that the preference is used correctly.
   ProvisioningResultCB provisioning_result_cb_for_testing_;
 
-  // When set, watch for network changes and call PreProvisionIfNecessary()
-  // when connected to a network.
+  // When set, watches for network changes to attempt pre-provisioning when
+  // connected, managing exponential backoff and scheduled retries if attempts
+  // fail.
   std::unique_ptr<NetworkObserver> network_observer_;
 
   THREAD_CHECKER(thread_checker_);

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,21 +12,22 @@
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check_op.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/i18n/case_conversion.h"
 #include "base/i18n/string_search.h"
+#include "base/i18n/time_formatting.h"
+#include "base/memory/raw_ref.h"
 #include "base/notreached.h"
 #include "base/strings/string_split.h"
+#include "base/strings/utf_ostream_operators.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
-#include "base/time/time_to_iso8601.h"
 #include "base/values.h"
 #include "components/download/public/common/download_item.h"
 #include "components/url_formatter/url_formatter.h"
-#include "content/public/browser/content_browser_client.h"
 #include "third_party/re2/src/re2/re2.h"
 #include "url/gurl.h"
 
@@ -46,28 +47,38 @@ template<> bool GetAs(const base::Value& in, bool* out) {
 }
 template <>
 bool GetAs(const base::Value& in, double* out) {
-  return in.GetAsDouble(out);
+  // `GetIfDouble()` incapsulates type verification logic.
+  const std::optional<double> maybe_value = in.GetIfDouble();
+  if (maybe_value.has_value()) {
+    *out = maybe_value.value();
+    return true;
+  }
+  return false;
 }
 template<> bool GetAs(const base::Value& in, std::string* out) {
-  return in.GetAsString(out);
+  auto is_string = in.is_string();
+  if (is_string)
+    *out = in.GetString();
+  return is_string;
 }
 template <>
 bool GetAs(const base::Value& in, std::u16string* out) {
-  return in.GetAsString(out);
+  auto is_string = in.is_string();
+  if (is_string)
+    *out = base::UTF8ToUTF16(in.GetString());
+  return is_string;
 }
 template <>
 bool GetAs(const base::Value& in, std::vector<std::u16string>* out) {
   out->clear();
-  const base::ListValue* list = NULL;
-  if (!in.GetAsList(&list))
+  if (!in.is_list())
     return false;
-  for (size_t i = 0; i < list->GetSize(); ++i) {
-    std::u16string element;
-    if (!list->GetString(i, &element)) {
+  for (const auto& value : in.GetList()) {
+    if (!value.is_string()) {
       out->clear();
       return false;
     }
-    out->push_back(element);
+    out->push_back(base::UTF8ToUTF16(value.GetString()));
   }
   return true;
 }
@@ -84,11 +95,11 @@ int64_t GetEndTimeMsEpoch(const DownloadItem& item) {
 }
 
 std::string GetStartTime(const DownloadItem& item) {
-  return base::TimeToISO8601(item.GetStartTime());
+  return base::TimeFormatAsIso8601(item.GetStartTime());
 }
 
 std::string GetEndTime(const DownloadItem& item) {
-  return base::TimeToISO8601(item.GetEndTime());
+  return base::TimeFormatAsIso8601(item.GetEndTime());
 }
 
 bool GetDangerAccepted(const DownloadItem& item) {
@@ -160,7 +171,6 @@ bool FieldMatches(
     case GT: return accessor.Run(item) > value;
   }
   NOTREACHED();
-  return false;
 }
 
 // Helper for building a Callback to FieldMatches<>().
@@ -204,11 +214,73 @@ ComparisonType Compare(
   ValueType right_value = accessor.Run(right);
   if (left_value > right_value) return GT;
   if (left_value < right_value) return LT;
-  DCHECK_EQ(left_value, right_value);
+  CHECK_EQ(left_value, right_value, base::NotFatalUntil::M161);
   return EQ;
 }
 
 }  // anonymous namespace
+
+// AddSorter() creates a Sorter and pushes it onto sorters_. A Sorter is a
+// direction and a Callback to Compare<>(). After filtering, Search() makes a
+// DownloadComparator functor from the sorters_ and passes the
+// DownloadComparator to std::partial_sort. std::partial_sort calls the
+// DownloadComparator with different pairs of DownloadItems.  DownloadComparator
+// iterates over the sorters until a callback returns ComparisonType LT or GT.
+// DownloadComparator returns true or false depending on that ComparisonType and
+// the sorter's direction in order to indicate to std::partial_sort whether the
+// left item is after or before the right item. If all sorters return EQ, then
+// DownloadComparator compares GetId. A DownloadQuery may have zero or more
+// Sorters, but there is one DownloadComparator per call to Search().
+
+struct DownloadQuery::Sorter {
+  using SortType = base::RepeatingCallback<ComparisonType(const DownloadItem&,
+                                                          const DownloadItem&)>;
+
+  template <typename ValueType>
+  static Sorter Build(DownloadQuery::SortDirection adirection,
+                      ValueType (*accessor)(const DownloadItem&)) {
+    return Sorter(adirection,
+                  base::BindRepeating(&Compare<ValueType>,
+                                      base::BindRepeating(accessor)));
+  }
+
+  Sorter(DownloadQuery::SortDirection adirection, const SortType& asorter)
+      : direction(adirection), sorter(asorter) {}
+  ~Sorter() = default;
+
+  DownloadQuery::SortDirection direction;
+  SortType sorter;
+};
+
+class DownloadQuery::DownloadComparator {
+ public:
+  explicit DownloadComparator(const DownloadQuery::SorterVector& terms)
+      : terms_(terms) {}
+
+  // Returns true if |left| sorts before |right|.
+  bool operator()(const DownloadItem* left, const DownloadItem* right);
+
+ private:
+  const raw_ref<const DownloadQuery::SorterVector> terms_;
+
+  // std::sort requires this class to be copyable.
+};
+
+bool DownloadQuery::DownloadComparator::operator()(const DownloadItem* left,
+                                                   const DownloadItem* right) {
+  for (auto term = terms_->begin(); term != terms_->end(); ++term) {
+    switch (term->sorter.Run(*left, *right)) {
+      case LT:
+        return term->direction == DownloadQuery::ASCENDING;
+      case GT:
+        return term->direction == DownloadQuery::DESCENDING;
+      case EQ:
+        break;  // break the switch but not the loop
+    }
+  }
+  CHECK(left == right || left->GetId() != right->GetId());
+  return left->GetId() < right->GetId();
+}
 
 // static
 bool DownloadQuery::MatchesQuery(const std::vector<std::u16string>& query_terms,
@@ -231,16 +303,16 @@ bool DownloadQuery::MatchesQuery(const std::vector<std::u16string>& query_terms,
 
   for (auto it = query_terms.begin(); it != query_terms.end(); ++it) {
     std::u16string term = base::i18n::ToLower(*it);
-    if (!base::i18n::StringSearchIgnoringCaseAndAccents(
-            term, original_url_raw, NULL, NULL) &&
+    if (!base::i18n::StringSearchIgnoringCaseAndAccents(term, original_url_raw,
+                                                        nullptr, nullptr) &&
         !base::i18n::StringSearchIgnoringCaseAndAccents(
-            term, original_url_formatted, NULL, NULL) &&
-        !base::i18n::StringSearchIgnoringCaseAndAccents(
-            term, url_raw, NULL, NULL) &&
-        !base::i18n::StringSearchIgnoringCaseAndAccents(
-            term, url_formatted, NULL, NULL) &&
-        !base::i18n::StringSearchIgnoringCaseAndAccents(
-            term, path, NULL, NULL)) {
+            term, original_url_formatted, nullptr, nullptr) &&
+        !base::i18n::StringSearchIgnoringCaseAndAccents(term, url_raw, nullptr,
+                                                        nullptr) &&
+        !base::i18n::StringSearchIgnoringCaseAndAccents(term, url_formatted,
+                                                        nullptr, nullptr) &&
+        !base::i18n::StringSearchIgnoringCaseAndAccents(term, path, nullptr,
+                                                        nullptr)) {
       return false;
     }
   }
@@ -248,7 +320,7 @@ bool DownloadQuery::MatchesQuery(const std::vector<std::u16string>& query_terms,
 }
 
 DownloadQuery::DownloadQuery() : limit_(std::numeric_limits<uint32_t>::max()) {}
-DownloadQuery::~DownloadQuery() {}
+DownloadQuery::~DownloadQuery() = default;
 
 // AddFilter() pushes a new FilterCallback to filters_. Most FilterCallbacks are
 // Callbacks to FieldMatches<>(). Search() iterates over given DownloadItems,
@@ -292,7 +364,8 @@ bool DownloadQuery::AddFilter(DownloadQuery::FilterType type,
       std::vector<std::u16string> query_terms;
       return GetAs(value, &query_terms) &&
              (query_terms.empty() ||
-              AddFilter(base::BindRepeating(&MatchesQuery, query_terms)));
+              AddFilter(
+                  base::BindRepeating(&MatchesQuery, std::move(query_terms))));
     }
     case FILTER_ENDED_AFTER:
       return AddFilter(BuildFilter<std::string>(value, GT, &GetEndTime));
@@ -330,66 +403,6 @@ bool DownloadQuery::Matches(const DownloadItem& item) const {
       return false;
   }
   return true;
-}
-
-// AddSorter() creates a Sorter and pushes it onto sorters_. A Sorter is a
-// direction and a Callback to Compare<>(). After filtering, Search() makes a
-// DownloadComparator functor from the sorters_ and passes the
-// DownloadComparator to std::partial_sort. std::partial_sort calls the
-// DownloadComparator with different pairs of DownloadItems.  DownloadComparator
-// iterates over the sorters until a callback returns ComparisonType LT or GT.
-// DownloadComparator returns true or false depending on that ComparisonType and
-// the sorter's direction in order to indicate to std::partial_sort whether the
-// left item is after or before the right item. If all sorters return EQ, then
-// DownloadComparator compares GetId. A DownloadQuery may have zero or more
-// Sorters, but there is one DownloadComparator per call to Search().
-
-struct DownloadQuery::Sorter {
-  using SortType = base::RepeatingCallback<ComparisonType(const DownloadItem&,
-                                                          const DownloadItem&)>;
-
-  template<typename ValueType>
-  static Sorter Build(DownloadQuery::SortDirection adirection,
-                         ValueType (*accessor)(const DownloadItem&)) {
-    return Sorter(adirection,
-                  base::BindRepeating(&Compare<ValueType>,
-                                      base::BindRepeating(accessor)));
-  }
-
-  Sorter(DownloadQuery::SortDirection adirection, const SortType& asorter)
-      : direction(adirection), sorter(asorter) {}
-  ~Sorter() = default;
-
-  DownloadQuery::SortDirection direction;
-  SortType sorter;
-};
-
-class DownloadQuery::DownloadComparator {
- public:
-  explicit DownloadComparator(const DownloadQuery::SorterVector& terms)
-    : terms_(terms) {
-  }
-
-  // Returns true if |left| sorts before |right|.
-  bool operator() (const DownloadItem* left, const DownloadItem* right);
-
- private:
-  const DownloadQuery::SorterVector& terms_;
-
-  // std::sort requires this class to be copyable.
-};
-
-bool DownloadQuery::DownloadComparator::operator() (
-    const DownloadItem* left, const DownloadItem* right) {
-  for (auto term = terms_.begin(); term != terms_.end(); ++term) {
-    switch (term->sorter.Run(*left, *right)) {
-      case LT: return term->direction == DownloadQuery::ASCENDING;
-      case GT: return term->direction == DownloadQuery::DESCENDING;
-      case EQ: break;  // break the switch but not the loop
-    }
-  }
-  CHECK_NE(left->GetId(), right->GetId());
-  return left->GetId() < right->GetId();
 }
 
 void DownloadQuery::AddSorter(DownloadQuery::SortType type,

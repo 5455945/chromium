@@ -1,7 +1,21 @@
-# Copyright 2016 The Chromium Authors. All rights reserved.
+# Copyright 2016 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 assert(is_linux || is_chromeos)
+
+generated_static_table_fourcc_file =
+    "$target_gen_dir/src/generated_static_table_fourcc.h"
+fourcc_file = "src/include/drm/drm_fourcc.h"
+
+action("make_generated_static_table_fourcc") {
+  script = "src/gen_table_fourcc.py"
+  args = [
+    rebase_path(fourcc_file, root_build_dir),
+    rebase_path(generated_static_table_fourcc_file, root_build_dir),
+  ]
+  outputs = [ generated_static_table_fourcc_file ]
+  inputs = [ fourcc_file ]
+}
 
 config("libdrm_config") {
   # TODO(thomasanderson): Remove this hack once
@@ -13,7 +27,9 @@ config("libdrm_config") {
     "src/include",
     "src/include/drm",
   ]
+}
 
+config("libdrm_private_config") {
   # libdrm uses macros defined by <sys/types.h> which are being moved to
   # <sys/sysmacros.h>.  GLIBC headers give a pragma warning in this case.
   # Suppress this warning for now.  This may be removed once
@@ -29,8 +45,16 @@ config("libdrm_config") {
 
       # TODO(crbug.com/932060) fix unused result from asprintf in modetest.c.
       "-Wno-unused-result",
+
+      # modetest.c has an improper conversion in a printf statement.
+      "-Wno-format",
     ]
   }
+}
+
+config("libdrm_private_test_config") {
+  # Unused function 'swap32' in test-only code.
+  cflags = [ "-Wno-unused-function" ]
 }
 
 static_library("libdrm") {
@@ -41,12 +65,16 @@ static_library("libdrm") {
     "src/xf86drmRandom.c",
   ]
 
+  deps = [ ":make_generated_static_table_fourcc" ]
+
   include_dirs = [
+    get_path_info(generated_static_table_fourcc_file, "dir"),
     "src",
     "src/include",
   ]
   configs -= [ "//build/config/compiler:chromium_code" ]
   configs += [ "//build/config/compiler:no_chromium_code" ]
+  configs += [ ":libdrm_private_config" ]
   cflags = [
     # xf86drm.c uses readdir_r, which has been deprecated as of
     # glibc-2.24.  This causes a build error when using the Debian
@@ -80,5 +108,11 @@ executable("modetest") {
 
   configs -= [ "//build/config/compiler:chromium_code" ]
   configs += [ "//build/config/compiler:no_chromium_code" ]
+  configs += [
+    ":libdrm_config",
+    ":libdrm_private_config",
+    ":libdrm_private_test_config",
+  ]
+
   deps = [ ":libdrm" ]
 }

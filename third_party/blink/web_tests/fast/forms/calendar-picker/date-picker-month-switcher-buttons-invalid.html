@@ -1,13 +1,13 @@
 <!DOCTYPE html>
-<html>
-<head>
+<meta name=fuzzy content="maxDifference=0-3; totalPixels=0-1000">
 <script src="../../../resources/testharness.js"></script>
 <script src="../../../resources/testharnessreport.js"></script>
+<script src="../../../resources/testdriver.js"></script>
+<script src="../../../resources/testdriver-vendor.js"></script>
 <script src="../resources/common.js"></script>
 <script src="../resources/picker-common.js"></script>
 <script src="../calendar-picker/resources/calendar-picker-common.js"></script>
-</head>
-<body>
+
 <input type="date" id="date-0" value="2019-05-22" max="2019-06-15">
 <input type="date" id="date-1" value="2019-11-20" min="2019-10-29">
 <input type="date" id="date-2" value="2019-03-15" step="7">
@@ -17,7 +17,7 @@
 
 promise_test(() => {
   let dateElement = document.getElementById('date-0');
-  return openPickerWithPromise(dateElement)
+  return openPicker(dateElement)
   .then(() => {
     // Make the picker dismiss synchronously so we don't need to insert
     // an artificial delay in the test
@@ -34,7 +34,7 @@ promise_test(() => {
 
 promise_test(() => {
   let dateElement = document.getElementById('date-1');
-  return openPickerWithPromise(dateElement)
+  return openPicker(dateElement)
   .then(() => {
     // Make the picker dismiss synchronously so we don't need to insert
     // an artificial delay in the test
@@ -51,7 +51,7 @@ promise_test(() => {
 
 promise_test(() => {
   let dateElement = document.getElementById('date-2');
-  return openPickerWithPromise(dateElement)
+  return openPicker(dateElement)
   .then(() => {
     // Make the picker dismiss synchronously so we don't need to insert
     // an artificial delay in the test
@@ -68,7 +68,7 @@ promise_test(() => {
 
 promise_test(() => {
   let dateElement = document.getElementById('date-3');
-  return openPickerWithPromise(dateElement)
+  return openPicker(dateElement)
   .then(() => {
     // Make the picker dismiss synchronously so we don't need to insert
     // an artificial delay in the test
@@ -85,7 +85,7 @@ promise_test(() => {
 
 promise_test(() => {
   let dateElement = document.getElementById('date-4');
-  return openPickerWithPromise(dateElement)
+  return openPicker(dateElement)
   .then(() => {
     // Make the picker dismiss synchronously so we don't need to insert
     // an artificial delay in the test
@@ -101,5 +101,3 @@ promise_test(() => {
 }, "Date picker: If closest target date is back in the current month, still jump to the value in the next month");
 
 </script>
-</body>
-</html>

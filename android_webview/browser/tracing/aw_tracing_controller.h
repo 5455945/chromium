@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,22 +6,29 @@
 #define ANDROID_WEBVIEW_BROWSER_TRACING_AW_TRACING_CONTROLLER_H_
 
 #include "base/android/jni_weak_ref.h"
-#include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 
 namespace android_webview {
 
 class AwTracingController {
  public:
-  AwTracingController(JNIEnv* env, jobject obj);
+  AwTracingController(JNIEnv* env, const jni_zero::JavaRef<jobject>& obj);
 
-  bool Start(JNIEnv* env,
-             const base::android::JavaParamRef<jobject>& obj,
-             const base::android::JavaParamRef<jstring>& categories,
-             jint mode);
-  bool StopAndFlush(JNIEnv* env,
-                    const base::android::JavaParamRef<jobject>& obj);
-  bool IsTracing(JNIEnv* env, const base::android::JavaParamRef<jobject>& obj);
+  AwTracingController(const AwTracingController&) = delete;
+  AwTracingController& operator=(const AwTracingController&) = delete;
+
+  bool Start(JNIEnv* env, const std::string& jcategories, int32_t mode);
+  bool StopAndFlush(JNIEnv* env);
+  bool IsTracing(JNIEnv* env);
+
+  // LINT.IfChange(WebViewApiCallTracingController)
+  enum class ApiCall {
+    kTracingStart = 0,
+    kTracingStartWithMemoryDump = 1,
+
+    kMaxValue = kTracingStartWithMemoryDump
+  };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/android/enums.xml:WebViewApiCallTracingController)
 
  private:
   ~AwTracingController();
@@ -31,8 +38,6 @@ class AwTracingController {
 
   JavaObjectWeakGlobalRef weak_java_object_;
   base::WeakPtrFactory<AwTracingController> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(AwTracingController);
 };
 
 }  // namespace android_webview

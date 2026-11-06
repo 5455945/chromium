@@ -1,119 +1,168 @@
-# Copyright 2021 The Chromium Authors. All rights reserved.
+# Copyright 2021 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//base/allocator/partition_allocator/partition_alloc.gni")
 import("//chromecast/chromecast.gni")
 
-cast_source_set("grpc_support") {
-  sources = [
-    "grpc_method.cc",
-    "grpc_method.h",
-    "grpc_server.cc",
-    "grpc_server.h",
-    "simple_async_grpc.h",
-  ]
-
-  public_deps = [
-    "//base",
-    "//third_party/grpc:grpc++",
-  ]
+cast_source_set("cast_core_switches") {
+  sources = [ "cast_core_switches.h" ]
 }
 
-cast_source_set("grpc_impl") {
-  sources = [
-    "runtime_application_service_grpc_impl.cc",
-    "runtime_application_service_grpc_impl.h",
-    "runtime_message_port_application_service_grpc_impl.cc",
-    "runtime_message_port_application_service_grpc_impl.h",
-    "runtime_service_grpc_impl.cc",
-    "runtime_service_grpc_impl.h",
-  ]
-
-  public_deps = [
-    ":grpc_support",
-    "//base",
-    "//third_party/grpc:grpc++",
-    "//third_party/openscreen/src/cast/cast_core/api:runtime_application_service_proto",
-    "//third_party/openscreen/src/cast/cast_core/api:runtime_message_port_application_service_proto",
-    "//third_party/openscreen/src/cast/cast_core/api:runtime_service_proto",
-  ]
-}
-
-cast_source_set("renderer") {
-  sources = [
-    "cast_runtime_content_renderer_client.cc",
-    "cast_runtime_content_renderer_client.h",
-  ]
+cast_source_set("core_runtime_lib_simple") {
+  data_deps = [ "//chromecast:cast_shell_pak" ]
 
   deps = [
-    "//base",
-    "//chromecast/renderer",
-    "//components/cast_streaming/renderer",
-    "//content/public/renderer",
-    "//media",
+    "//chromecast:cast_shell_lib_base",
+    "//chromecast/base:default_create_sys_info",
+    "//chromecast/browser:prefs_simple",
+    "//chromecast/browser:simple_main_parts",
+    "//chromecast/cast_core/runtime/browser:browser_simple",
+    "//chromecast/cast_core/runtime/renderer:renderer_simple",
   ]
 }
 
-cast_source_set("browser") {
-  sources = [
-    "cast_runtime_content_browser_client.cc",
-    "cast_runtime_content_browser_client.h",
-  ]
+if (is_linux) {
+  cast_source_set("core_runtime_lib_starboard") {
+    data_deps = [ "//chromecast:cast_shell_pak" ]
 
-  deps = [
-    ":runtime_service",
-    "//base",
-    "//chromecast/browser",
-    "//chromecast/common:cors_exempt_headers",
-  ]
-
-  if (chromecast_branding == "public") {
-    sources += [ "cast_runtime_content_browser_client_simple.cc" ]
-  }
-}
-
-cast_source_set("runtime_service") {
-  sources = [
-    "cast_runtime_service.cc",
-    "cast_runtime_service.h",
-  ]
-
-  if (chromecast_branding == "public") {
-    sources += [ "cast_runtime_service_simple.cc" ]
-  }
-
-  deps = [
-    "//base",
-    "//chromecast:chromecast_buildflags",
-    "//chromecast/service",
-  ]
-
-  public_deps = [ "//chromecast/media/cma/backend/proxy:headers" ]
-}
-
-cast_source_set("cast_core") {
-  sources = []
-  deps = [ ":runtime_service" ]
-
-  if (enable_cast_media_runtime) {
-    deps += [
-      ":browser",
-      ":renderer",
+    deps = [
+      "//chromecast:cast_shell_lib_base",
+      "//chromecast/base:default_create_sys_info",
+      "//chromecast/browser:prefs_simple",
+      "//chromecast/browser:simple_main_parts",
+      "//chromecast/cast_core/runtime/browser:browser_starboard",
+      "//chromecast/cast_core/runtime/renderer:renderer_simple",
     ]
   }
 }
 
-if (enable_cast_media_runtime) {
-  cast_executable("core_runtime_simple") {
-    sources = [ "cast_runtime_main.cc" ]
+cast_source_set("cast_runtime_main") {
+  sources = [ "cast_runtime_main.cc" ]
+
+  deps = [
+    "//chromecast/app",
+    "//content/public/app",
+  ]
+}
+
+if (is_linux) {
+  cast_source_set("cast_starboard_runtime_main") {
+    sources = [
+      "cast_starboard_runtime_main.cc",
+      "cast_starboard_runtime_main.h",
+    ]
 
     deps = [
-      ":cast_core",
+      ":child_log_process",
+      "//base",
       "//chromecast/app",
-      "//chromecast/base:default_create_sys_info",
-      "//chromecast/browser:simple_main_parts",
-      "//chromecast/utility:simple_client",
+      "//chromecast/base:chromecast_switches",
+      "//chromecast/public",
       "//content/public/app",
     ]
   }
+}
+
+cast_executable("core_runtime_simple") {
+  deps = [
+    ":cast_runtime_main",
+    ":core_runtime_lib_simple",
+    "//chromecast:chromecast_locales_pak",
+  ]
+}
+
+if (is_linux) {
+  cast_shared_library("core_runtime_starboard_lib") {
+    output_name = "core_runtime_starboard"
+    public_deps = [ ":cast_starboard_runtime_main" ]
+    deps = [
+      ":core_runtime_lib_starboard",
+      "//chromecast:chromecast_locales_pak",
+    ]
+    if (!use_partition_alloc_as_malloc) {
+      # Makes all symbols local.
+      #
+      # This cannot be done if use_partition_alloc_as_malloc is true, since that
+      # can cause issues with conflicting malloc/free implementations. This
+      # restriction can be removed once https://crbug.com/375680879 is resolved.
+      ldflags = [ "-Wl,--version-script=" +
+                  rebase_path("core_runtime_starboard.sym", root_build_dir) ]
+    }
+  }
+
+  group("core_runtime_starboard_shared_library") {
+    public_deps = [ ":core_runtime_starboard_lib" ]
+  }
+
+  cast_executable("core_runtime_starboard_loader") {
+    sources = [ "core_runtime_starboard_main.cc" ]
+    deps = [
+      ":core_runtime_starboard_lib",
+      "//chromecast/public",
+    ]
+    ldflags = [
+      "-Wl,--disable-new-dtags",
+      "-Wl,-rpath=\$ORIGIN/oem_lib:\$ORIGIN/lib:\$ORIGIN/../lib",
+    ]
+  }
+
+  cast_executable("core_runtime_starboard") {
+    sources = [ "core_runtime_starboard_main.cc" ]
+    deps = [
+      ":cast_starboard_runtime_main",
+      ":core_runtime_lib_starboard",
+      "//chromecast:chromecast_locales_pak",
+      "//chromecast/public",
+    ]
+    if (!use_partition_alloc_as_malloc) {
+      # Makes all symbols local.
+      #
+      # This cannot be done if use_partition_alloc_as_malloc is true, since that
+      # can cause issues with conflicting malloc/free implementations. This
+      # restriction can be removed once https://crbug.com/375680879 is resolved.
+      ldflags = [ "-Wl,--version-script=" +
+                  rebase_path("core_runtime_starboard.sym", root_build_dir) ]
+    }
+  }
+}
+
+cast_source_set("child_log_process") {
+  sources = [
+    "child_log_process.cc",
+    "child_log_process.h",
+  ]
+
+  deps = [ "//base" ]
+}
+
+group("all_unit_tests") {
+  testonly = true
+
+  deps = [
+    "//chromecast/cast_core/grpc:unit_tests",
+    "//chromecast/cast_core/runtime/browser:unit_tests",
+    "//chromecast/cast_core/runtime/browser/url_rewrite:unit_tests",
+  ]
+}
+
+test("cast_cast_core_unittests") {
+  deps = [
+    ":all_unit_tests",
+    ":core_runtime_lib_simple",
+    "//mojo/core/test:run_all_unittests",
+  ]
+}
+
+group("cast_core_integration_test") {
+  testonly = true
+  data = [
+    "//chromecast/cast_core/test/",
+    "//testing/scripts/run_cast_core_tests.py",
+    "//third_party/cast_core/prebuilts/",
+    "//third_party/cast_web_runtime/",
+  ]
+  data_deps = [
+    "//tools/perf/chrome_telemetry_build:telemetry_chrome_test_without_chrome",
+  ]
 }

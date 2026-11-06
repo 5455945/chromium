@@ -1,14 +1,23 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_PEERCONNECTION_RTC_DTLS_TRANSPORT_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_PEERCONNECTION_RTC_DTLS_TRANSPORT_H_
 
-#include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
+#include <memory>
+
+#include "third_party/blink/renderer/core/dom/events/event_target.h"
+#include "third_party/blink/renderer/core/event_type_names.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
 #include "third_party/blink/renderer/modules/event_target_modules.h"
+#include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/modules/peerconnection/adapters/dtls_transport_proxy.h"
+#include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
+#include "third_party/blink/renderer/platform/heap/visitor.h"
+#include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "third_party/webrtc/api/dtls_transport_interface.h"
 #include "third_party/webrtc/api/scoped_refptr.h"
 
@@ -17,6 +26,7 @@ namespace blink {
 class DtlsTransportProxy;
 class DOMArrayBuffer;
 class RTCIceTransport;
+class V8RTCDtlsTransportState;
 
 enum class RTCDtlsTransportState {
   kNew,
@@ -31,7 +41,7 @@ enum class RTCDtlsTransportState {
 // Blink bindings for the RTCDtlsTransport JavaScript object.
 //
 class MODULES_EXPORT RTCDtlsTransport final
-    : public EventTargetWithInlineData,
+    : public EventTarget,
       public ExecutionContextClient,
       public DtlsTransportProxy::Delegate {
   DEFINE_WRAPPERTYPEINFO();
@@ -39,13 +49,13 @@ class MODULES_EXPORT RTCDtlsTransport final
  public:
   RTCDtlsTransport(
       ExecutionContext* context,
-      rtc::scoped_refptr<webrtc::DtlsTransportInterface> native_context,
+      webrtc::scoped_refptr<webrtc::DtlsTransportInterface> native_context,
       RTCIceTransport* ice_transport);
   ~RTCDtlsTransport() override;
 
   // rtc_dtls_transport.idl
   RTCIceTransport* iceTransport() const;
-  String state() const;
+  V8RTCDtlsTransportState state() const;
   const HeapVector<Member<DOMArrayBuffer>>& getRemoteCertificates() const;
 
   DEFINE_ATTRIBUTE_EVENT_LISTENER(statechange, kStatechange)
@@ -68,7 +78,7 @@ class MODULES_EXPORT RTCDtlsTransport final
  private:
   webrtc::DtlsTransportInformation current_state_;
   HeapVector<Member<DOMArrayBuffer>> remote_certificates_;
-  rtc::scoped_refptr<webrtc::DtlsTransportInterface> native_transport_;
+  webrtc::scoped_refptr<webrtc::DtlsTransportInterface> native_transport_;
   std::unique_ptr<DtlsTransportProxy> proxy_;
   Member<RTCIceTransport> ice_transport_;
   bool closed_from_owner_ = false;

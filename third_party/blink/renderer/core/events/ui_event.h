@@ -33,6 +33,7 @@
 namespace blink {
 
 class InputDeviceCapabilities;
+class Node;
 
 // FIXME: Get rid of this type alias.
 using AbstractView = DOMWindow;
@@ -76,11 +77,13 @@ class CORE_EXPORT UIEvent : public Event {
                            int detail,
                            InputDeviceCapabilities* source_capabilities);
 
-  AbstractView* view() const { return view_; }
+  AbstractView* view() const { return view_.Get(); }
   int detail() const { return detail_; }
   InputDeviceCapabilities* sourceCapabilities() const {
-    return source_capabilities_;
+    return source_capabilities_.Get();
   }
+
+  CSSPseudoElement* pseudoTarget() const { return Event::pseudoTarget(); }
 
   const AtomicString& InterfaceName() const override;
   bool IsUIEvent() const final;
@@ -88,6 +91,12 @@ class CORE_EXPORT UIEvent : public Event {
   virtual unsigned which() const;
 
   void Trace(Visitor*) const override;
+
+ protected:
+  // Defense in depth: an event must never hand an EventTarget of a
+  // cross-origin ExecutionContext to the target's context via `relatedTarget`.
+  void CheckCrossOriginRelatedTarget(const Node& target,
+                                     EventTarget* related_target);
 
  private:
   Member<AbstractView> view_;

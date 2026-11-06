@@ -1,21 +1,39 @@
 # Lint
 
-Android's [**lint**](https://developer.android.com/tools/help/lint.html) is a
-static analysis tool that Chromium uses to catch possible issues in Java code.
+[Android Lint] is [one of the static analysis tools] that Chromium uses to catch
+possible issues in Java code.
 
-This is a list of [**checks**](http://tools.android.com/tips/lint-checks) that
-you might encounter.
+This is a [list of checks] that you might encounter.
+
+[Android Lint]: https://googlesamples.github.io/android-custom-lint-rules/book.md.html
+[one of the static analysis tools]: static_analysis.md
+[list of checks]: https://googlesamples.github.io/android-custom-lint-rules/checks/index.md.html
 
 [TOC]
 
 ## How Chromium uses lint
 
 Chromium only runs lint on apk or bundle targets that explicitly set
-`enable_lint = true`. Some example targets that have this set are:
+`enable_lint = true`. You can run lint by compiling the apk or bundle target
+with ninja; once the code finishes compiling, ninja will automatically run lint
+on the code.
 
- - `//chrome/android:monochrome_public_bundle`
+Some example targets that have lint enabled are:
+
+ - `//chrome/android:chrome_public_apk`
  - `//android_webview/support_library/boundary_interfaces:boundary_interface_example_apk`
- - `//remoting/android:remoting_apk`
+ - Other targets with `enable_lint` enabled: https://source.chromium.org/search?q=lang:gn%20enable_lint%5C%20%3D%5C%20true&ss=chromium
+
+If you think lint is not running and already verified your GN
+target has `enable_lint = true`, then you can double check that
+`android_static_analysis` is set to `"on"` (this is the default value):
+
+```shell
+$ gn args out/Default --list=android_static_analysis
+android_static_analysis
+    Current value (from the default) = "on"
+      From //build/config/android/config.gni:85
+```
 
 ## My code has a lint error
 
@@ -104,8 +122,25 @@ Here is an example of how to structure a suppressions XML file:
     <!-- TODO(crbug.com/###): Remove the following line.  -->
     <ignore regexp="The resource `R.string.soon_to_be_used` appears to be unused"/>
   </issue>
+  <!-- Ignore all warnings from //third_party. -->
+  <issue id="all">
+    <ignore regexp="^$SRC/third_party/"/>
+  </issue>
 </lint>
 ```
+
+Each `regexp` is matched against both the warning message and the absolute path
+of the file it is in. Use `$SRC` to refer to the source root in a path: lint
+spells it differently for source files and for resource files, and
+[build/android/gyp/lint.py](https://source.chromium.org/chromium/chromium/src/+/main:build/android/gyp/lint.py)
+expands `$SRC` to match either form.
+
+
+### Per-target cache
+
+To avoid race conditions and IO-related flakes when running Lint in parallel,
+Chromium uses a per-target cache directory located in the target's generated
+directory (e.g., `gen/.../android_lint_cache`).
 
 ## What are `lint-baseline.xml` files for?
 
@@ -115,26 +150,18 @@ they are generated files, they should **not** be used to suppress lint warnings.
 One of the approaches above should be used instead. Eventually all the errors in
 baseline files should be either fixed or ignored permanently.
 
-The following are some common scenarios where you may need to update baseline
-files.
-
-### I updated `cmdline-tools` and now there are tons of new errors!
-
-This happens every time lint is updated, since lint is provided by
-`cmdline-tools`.
+Most devs do not need to update baseline files and should not need the script
+below. Occasionally when making large build configuration changes it may be
+necessary to update baseline files (e.g. increasing the min_sdk_version).
 
 Baseline files are defined via the `lint_baseline_file` gn variable. It is
-usually defined near a target's `enable_lint` gn variable. To regenerate the
-baseline file, delete it and re-run the lint target. The command will fail, but
-the baseline file will have been generated.
+usually defined near a target's `enable_lint` gn variable. To regenerate all
+baseline files, run:
 
-This may need to be repeated for all targets that have set `enable_lint = true`,
-including downstream targets. Downstream baseline files should be updated and
-first to avoid build breakages. Each target has its own `lint_baseline_file`
-defined and so all these files can be removed and regenerated as needed.
+```
+$ third_party/android_build_tools/lint/rebuild_baselines.py
+```
 
-### I updated `library X` and now there are tons of new errors!
-
-This is usually because `library X`'s aar contains custom lint checks and/or
-custom annotation definition. Follow the same procedure as updates to
-`cmdline-tools`.
+This script will also update baseline files in downstream //clank if needed.
+Since downstream and upstream use separate lint binaries, it is usually safe
+to simply land the update CLs in any order.

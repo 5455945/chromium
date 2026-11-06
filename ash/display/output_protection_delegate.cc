@@ -1,13 +1,12 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/display/output_protection_delegate.h"
 
 #include "ash/capture_mode/capture_mode_controller.h"
-#include "ash/constants/ash_features.h"
 #include "ash/shell.h"
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "ui/display/display.h"
 #include "ui/display/manager/content_protection_manager.h"
 #include "ui/display/manager/display_configurator.h"
@@ -24,10 +23,14 @@ display::ContentProtectionManager* manager() {
 
 void MaybeSetCaptureModeWindowProtection(aura::Window* window,
                                          uint32_t protection_mask) {
-  if (features::IsCaptureModeEnabled()) {
-    CaptureModeController::Get()->SetWindowProtectionMask(window,
-                                                          protection_mask);
-  }
+  // `OutputProtectionDelegate` is not owned by ash. It is created by
+  // `OutputProtectionImpl` which exists in Chrome, and can invoke the delegate
+  // even after `Shell` has been destroyed. See b/256706119.
+  if (!Shell::HasInstance())
+    return;
+
+  CaptureModeController::Get()->SetWindowProtectionMask(window,
+                                                        protection_mask);
 }
 
 }  // namespace
@@ -42,7 +45,7 @@ struct OutputProtectionDelegate::ClientIdHolder {
 OutputProtectionDelegate::OutputProtectionDelegate(aura::Window* window)
     : window_(window),
       display_id_(
-          display::Screen::GetScreen()->GetDisplayNearestWindow(window).id()) {
+          display::Screen::Get()->GetDisplayNearestWindow(window).id()) {
   // TODO(domlaskowski): OutputProtectionImpl passes null if the RenderFrameHost
   // no longer exists. Investigate removing this check in crbug.com/997270.
   if (!window_)
@@ -74,12 +77,12 @@ void OutputProtectionDelegate::OnDisplayMetricsChanged(
     return;
   }
 
-  OnWindowMayHaveMovedToAnotherDisplay();
+  OnWindowMayHaveMovedToAnotherDisplayOrWindow();
 }
 
 void OutputProtectionDelegate::OnWindowHierarchyChanged(
     const aura::WindowObserver::HierarchyChangeParams& params) {
-  OnWindowMayHaveMovedToAnotherDisplay();
+  OnWindowMayHaveMovedToAnotherDisplayOrWindow();
 }
 
 void OutputProtectionDelegate::OnWindowDestroying(aura::Window* window) {
@@ -121,11 +124,16 @@ void OutputProtectionDelegate::SetProtection(uint32_t protection_mask,
                                     std::move(callback));
 }
 
-void OutputProtectionDelegate::OnWindowMayHaveMovedToAnotherDisplay() {
+void OutputProtectionDelegate::OnWindowMayHaveMovedToAnotherDisplayOrWindow() {
   DCHECK(window_);
-  int64_t new_display_id =
-      display::Screen::GetScreen()->GetDisplayNearestWindow(window_).id();
 
+  // The window may have moved to a display that is currently being recorded, or
+  // to be hosted by a browser window that is being recorded when a tab becomes
+  // active, so we need to refresh Capture Mode's content protection.
+  CaptureModeController::Get()->RefreshContentProtection();
+
+  const int64_t new_display_id =
+      display::Screen::Get()->GetDisplayNearestWindow(window_).id();
   if (display_id_ == new_display_id)
     return;
 
@@ -136,12 +144,8 @@ void OutputProtectionDelegate::OnWindowMayHaveMovedToAnotherDisplay() {
     manager()->ApplyContentProtection(client_->id, display_id_,
                                       display::CONTENT_PROTECTION_METHOD_NONE,
                                       base::DoNothing());
-
-    // The window may have moved to a display that is currently being recorded,
-    // so we need to refresh Capture Mode's content protection.
-    if (features::IsCaptureModeEnabled())
-      CaptureModeController::Get()->RefreshContentProtection();
   }
+
   display_id_ = new_display_id;
 }
 

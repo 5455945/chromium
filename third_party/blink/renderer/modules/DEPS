@@ -1,9 +1,14 @@
 include_rules = [
     "+base/atomic_sequence_num.h",
     "+base/memory/scoped_refptr.h",
-    "+base/strings/char_traits.h",
+    "+base/memory/values_equivalent.h",
+    "+base/containers/heap_array.h",
+    "+base/containers/span.h",
+    "+base/threading/platform_thread.h",
+    "+mojo/public/cpp/base",
     "+mojo/public/cpp/bindings",
     "+mojo/public/cpp/system",
+    "+mojo/public/cpp/test_support",
     "+net/base/net_errors.h",
     "+services/device/public/mojom",
     "+services/network/public/cpp/shared_url_loader_factory.h",
@@ -20,10 +25,14 @@ include_rules = [
     "!third_party/blink/renderer/core/frame/web_local_frame_impl.h",
     "!third_party/blink/renderer/core/frame/web_remote_frame_impl.h",
     "+third_party/blink/renderer/modules",
+    "+ui/accessibility/accessibility_features.h",
     "+ui/accessibility/ax_mode.h",
+    "+ui/accessibility/ax_action_data.h",
     "+ui/display/screen_info.h",
     "+ui/display/screen_infos.h",
     "+ui/display/mojom",
+    "+ui/color",
+    "+ui/gfx/animation/keyframe/timing_function.h",
     "+ui/gfx/geometry",
     "-web",
 ]
@@ -36,19 +45,48 @@ specific_include_rules = {
         "+testing/libfuzzer/proto/lpm_interface.h",
         "+third_party/protobuf/src/google/protobuf/repeated_field.h",
     ],
+    "modules_initializer.cc": [
+        "+cc/raster/categorized_worker_pool.h",
+    ],
     ".*_decoder_fuzzer.cc": [
         "+base/run_loop.h",
-        "+testing/libfuzzer/proto/lpm_interface.h",
     ],
     ".*_encoder_fuzzer.cc": [
         "+base/at_exit.h",
         "+base/run_loop.h",
-        "+testing/libfuzzer/proto/lpm_interface.h",
+    ],
+    ".*_fuzzer.cc": [
+        "+testing/libfuzzer",
+    ],
+    ".*_(unit)?test\\.cc": [
+        "+base/run_loop.h",
     ],
     "canvas_fuzzer.cc": [
         "+base/test/bind.h",
     ],
     "web_ax_object.cc": [
         "+ui/accessibility/ax_action_data.h",
+    ],
+    "tcp_writable_stream_wrapper.h": [
+        "+partition_alloc/partition_root.h",
+    ],
+    ".*_stream_wrapper.cc": [
+        "+net/base/ip_endpoint.h",
+    ],
+    ".*_web_transport.cc": [
+        "+net/base/ip_endpoint.h",
+    ],
+    ".*socket.cc": [
+        "+base/functional/identity.h",
+        "+net/base/ip_endpoint.h",
+    ],
+    "web_printing_manager.cc": [
+      "+printing/buildflags/buildflags.h",
+    ],
+    "multicast_controller.*": [
+        "+net/base/ip_address.h",
+    ],
+    "ai_page_content_agent.cc": [
+        "+third_party/blink/renderer/core/exported/web_view_impl.h",
     ],
 }

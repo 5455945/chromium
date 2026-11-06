@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -30,16 +30,18 @@ class AXActionTarget {
   virtual gfx::Point MinimumScrollOffset() const = 0;
   virtual gfx::Point MaximumScrollOffset() const = 0;
   virtual void SetScrollOffset(const gfx::Point& point) const = 0;
-  virtual bool SetSelected(bool selected) const = 0;
   virtual bool SetSelection(const AXActionTarget* anchor_object,
                             int anchor_offset,
                             const AXActionTarget* focus_object,
                             int focus_offset) const = 0;
   // Make this object visible by scrolling as many nested scrollable views as
   // needed.
-  virtual bool ScrollToMakeVisible() const = 0;
-  // Same, but if the whole object can't be made visible, try for this subrect,
-  // in local coordinates.
+  virtual bool ScrollToMakeVisible(
+      ax::mojom::ScrollAlignment horizontal_scroll_alignment,
+      ax::mojom::ScrollAlignment vertical_scroll_alignment,
+      ax::mojom::ScrollBehavior scroll_behavior) const = 0;
+  // Scrolls the given `rect` (in node-local coordinates) into view by
+  // scrolling as many nested scrollable views as needed.
   virtual bool ScrollToMakeVisibleWithSubFocus(
       const gfx::Rect& rect,
       ax::mojom::ScrollAlignment horizontal_scroll_alignment,

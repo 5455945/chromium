@@ -1,8 +1,8 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-(async function(testRunner) {
+(async function(/** @type {import('test_runner').TestRunner} */ testRunner) {
   const {dp} = await testRunner.startBlank(
   'Tests errors when finding DOM nodes by accessible name.');
 
@@ -27,6 +27,17 @@
   // Expected: error because object ID is wrong.
   testRunner.log(await dp.Accessibility.queryAXTree({
     objectId: wrongObjectId,
+    accessibleName: 'name',
+  }));
+
+  // Expected: error because the document is no longer active after reload.
+  await dp.Page.enable();
+  const {result: {root}} = await dp.DOM.getDocument({depth: 0});
+  const loadPromise = dp.Page.onceLoadEventFired();
+  await dp.Page.reload();
+  await loadPromise;
+  testRunner.log(await dp.Accessibility.queryAXTree({
+    backendNodeId: root.backendNodeId,
     accessibleName: 'name',
   }));
 

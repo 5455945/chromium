@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,12 @@
 #include <stdint.h>
 
 #include <memory>
+#include <string_view>
 #include <vector>
 
-#include "base/strings/string_piece.h"
+#include "base/bits.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "build/build_config.h"
 #include "ui/display/display.h"
 #include "ui/events/base_event_utils.h"
@@ -20,10 +23,10 @@
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/events/platform_event.h"
 #include "ui/events/types/event_type.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
-#if defined(OS_WIN)
-#include <windows.h>
+#if BUILDFLAG(IS_WIN)
+#include "base/win/windows_types.h"
 #endif
 
 namespace gfx {
@@ -40,31 +43,19 @@ namespace ui {
 
 class Event;
 class MouseEvent;
-enum class DomCode;
+enum class DomCode : uint32_t;
 
-// Key used to store keyboard 'group' values in Event::Properties
+// Key used to store keyboard 'state' values in Event::Properties.
+constexpr char kPropertyKeyboardState[] = "_keyevent_kbd_state_";
+
+// Key used to store keyboard 'group' values in Event::Properties.
 constexpr char kPropertyKeyboardGroup[] = "_keyevent_kbd_group_";
 
-// Key used to store 'hardware key code' values in Event::Properties
+// Key used to store 'hardware key code' values in Event::Properties.
 constexpr char kPropertyKeyboardHwKeyCode[] = "_keyevent_kbd_hw_keycode_";
 
-// Event::Properties constants for IBus-GTK and fcitx-GTK.
-// Both of them in async mode use gtk-specific XKeyEvent::state bits 24 and 25.
-// 24 is handled and 25 is ignored.
-// Note that they use more bits, but Chrome does not handle it now.
-// cf)
-// https://github.com/ibus/ibus/blob/dd4cc5b028c35f9bb8fa9d3bdc8f26bcdfc43d40/src/ibustypes.h#L88
-// https://github.com/fcitx/fcitx/blob/289b2f674d95651d4e0d0c77a48e3a2f0da40efe/src/lib/fcitx-utils/keysym.h#L47
-// https://mail.gnome.org/archives/gtk-devel-list/2013-June/msg00003.html
-constexpr char kPropertyKeyboardImeFlag[] = "_keyevent_kbd_ime_flags_";
-constexpr unsigned int kPropertyKeyboardImeFlagOffset = 24;
-constexpr unsigned int kPropertyKeyboardImeFlagMask = 0x03;
-// Ignored is the 25-th bit.
-constexpr unsigned int kPropertyKeyboardImeIgnoredFlag =
-    1 << (25 - kPropertyKeyboardImeFlagOffset);
-
-// Key used to store mouse event flag telling ET_MOUSE_EXITED must actually be
-// interpreted as "crossing intermediate window" in blink context.
+// Key used to store mouse event flag telling EventType::kMouseExited must
+// actually be interpreted as "crossing intermediate window" in blink context.
 constexpr char kPropertyMouseCrossedIntermediateWindow[] =
     "_mouseevent_cros_window_";
 
@@ -138,12 +129,14 @@ EVENTS_EXPORT gfx::Vector2d GetMouseWheelOffset(
 EVENTS_EXPORT gfx::Vector2d GetMouseWheelTick120ths(
     const PlatformEvent& native_event);
 
-// Returns a copy of |native_event|. Depending on the platform, this copy may
-// need to be deleted with ReleaseCopiedNativeEvent().
-PlatformEvent CopyNativeEvent(const PlatformEvent& native_event);
+// Returns whether platform events should be copied when ui::Events are copied.
+EVENTS_EXPORT bool ShouldCopyPlatformEvents();
 
-// Delete a |native_event| previously created by CopyNativeEvent().
-void ReleaseCopiedNativeEvent(const PlatformEvent& native_event);
+// Creates a new, invalid event.
+EVENTS_EXPORT PlatformEvent CreateInvalidPlatformEvent();
+
+// Returns if the platform event is valid.
+EVENTS_EXPORT bool IsPlatformEventValid(const PlatformEvent& platform_event);
 
 // Returns the detailed pointer information for touch events.
 EVENTS_EXPORT PointerDetails
@@ -180,7 +173,7 @@ EVENTS_EXPORT void ComputeEventLatencyOS(ui::EventType type,
                                          base::TimeTicks time_stamp,
                                          base::TimeTicks current_time);
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 // Like ComputeEventLatencyOS, but for events whose timestamp comes from a
 // TOUCHINPUT structure instead of PlatformEvent.
 EVENTS_EXPORT void ComputeEventLatencyOSFromTOUCHINPUT(
@@ -206,13 +199,14 @@ EVENTS_EXPORT bool IsMouseEventFromTouch(UINT message);
 EVENTS_EXPORT uint16_t GetScanCodeFromLParam(LPARAM lParam);
 EVENTS_EXPORT LPARAM GetLParamFromScanCode(uint16_t scan_code);
 
-// Creates an MSG from the given KeyEvent if there is no native_event.
-EVENTS_EXPORT MSG MSGFromKeyEvent(KeyEvent* key_event, HWND hwnd = nullptr);
-EVENTS_EXPORT KeyEvent KeyEventFromMSG(const MSG& msg);
-EVENTS_EXPORT MouseEvent MouseEventFromMSG(const MSG& msg);
-EVENTS_EXPORT MouseWheelEvent MouseWheelEventFromMSG(const MSG& msg);
+// Creates a CHROME_MSG from the given KeyEvent if there is no native_event.
+EVENTS_EXPORT CHROME_MSG MSGFromKeyEvent(KeyEvent* key_event,
+                                         HWND hwnd = nullptr);
+EVENTS_EXPORT KeyEvent KeyEventFromMSG(const CHROME_MSG& msg);
+EVENTS_EXPORT MouseEvent MouseEventFromMSG(const CHROME_MSG& msg);
+EVENTS_EXPORT MouseWheelEvent MouseWheelEventFromMSG(const CHROME_MSG& msg);
 
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
 // Registers a custom event type.
 EVENTS_EXPORT int RegisterCustomEventType();
@@ -225,20 +219,27 @@ EVENTS_EXPORT void ConvertEventLocationToTargetWindowLocation(
     const gfx::Point& current_window_origin,
     ui::LocatedEvent* located_event);
 
+// Converts a value of an unsigned integer type to an Event::PropertyValue.
+template <base::bits::UnsignedInteger T>
+Event::PropertyValue ConvertToEventPropertyValue(const T& value) {
+  Event::PropertyValue property_value(sizeof(T));
+  base::span(property_value).copy_from(base::byte_span_from_ref(value));
+  return property_value;
+}
+
 // The following utilities are useful for debugging and tracing.
 
 // Returns a string description of an event type.
-EVENTS_EXPORT base::StringPiece EventTypeName(EventType type);
+EVENTS_EXPORT std::string_view EventTypeName(EventType type);
 
 // Returns a vector of string representations of EventFlags.
-EVENTS_EXPORT std::vector<base::StringPiece> EventFlagsNames(int event_flags);
+EVENTS_EXPORT std::vector<std::string_view> EventFlagsNames(int event_flags);
 
 // Returns a a vector of string representations of KeyEventFlags.
-EVENTS_EXPORT std::vector<base::StringPiece> KeyEventFlagsNames(
-    int event_flags);
+EVENTS_EXPORT std::vector<std::string_view> KeyEventFlagsNames(int event_flags);
 
 // Returns a a vector of string representations of MouseEventFlags.
-EVENTS_EXPORT std::vector<base::StringPiece> MouseEventFlagsNames(
+EVENTS_EXPORT std::vector<std::string_view> MouseEventFlagsNames(
     int event_flags);
 }  // namespace ui
 

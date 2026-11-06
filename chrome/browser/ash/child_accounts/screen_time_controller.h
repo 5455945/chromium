@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,21 +6,24 @@
 #define CHROME_BROWSER_ASH_CHILD_ACCOUNTS_SCREEN_TIME_CONTROLLER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
+#include "ash/constants/ash_pref_names.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
 #include "base/time/time.h"
+#include "base/values.h"
 #include "chrome/browser/ash/child_accounts/parent_access_code/parent_access_service.h"
 #include "chrome/browser/ash/child_accounts/time_limit_notifier.h"
 #include "chrome/browser/ash/child_accounts/usage_time_limit_processor.h"
 #include "chrome/browser/ash/child_accounts/usage_time_state_notifier.h"
-#include "chromeos/dbus/system_clock/system_clock_client.h"
+#include "chromeos/ash/components/dbus/system_clock/system_clock_client.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/session_manager/core/session_manager_observer.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class PrefRegistrySimple;
 class PrefService;
@@ -62,6 +65,10 @@ class ScreenTimeController
   static void RegisterProfilePrefs(PrefRegistrySimple* registry);
 
   explicit ScreenTimeController(content::BrowserContext* context);
+
+  ScreenTimeController(const ScreenTimeController&) = delete;
+  ScreenTimeController& operator=(const ScreenTimeController&) = delete;
+
   ~ScreenTimeController() override;
 
   // Returns the child's screen time duration. This is how long the child has
@@ -112,12 +119,12 @@ class ScreenTimeController
   // Schedule a call for UsageTimeLimitWarning.
   void ScheduleUsageTimeLimitWarning(const usage_time_limit::State& state);
 
-  // Save the |state| to |prefs::kScreenTimeLastState|.
+  // Save the |state| to |ash::prefs::kScreenTimeLastState|.
   void SaveCurrentStateToPref(const usage_time_limit::State& state);
 
-  // Get the last calculated |state| from |prefs::kScreenTimeLastState|, if it
-  // exists.
-  absl::optional<usage_time_limit::State> GetLastStateFromPref();
+  // Get the last calculated |state| from |ash::prefs::kScreenTimeLastState|, if
+  // it exists.
+  std::optional<usage_time_limit::State> GetLastStateFromPref();
 
   // Called when the usage time limit is |kUsageTimeLimitWarningTime| or less to
   // finish. It should call the method UsageTimeLimitWarning for each observer.
@@ -125,12 +132,12 @@ class ScreenTimeController
 
   // Converts a usage_time_limit::PolicyType to its TimeLimitNotifier::LimitType
   // equivalent.
-  absl::optional<TimeLimitNotifier::LimitType> ConvertPolicyType(
+  std::optional<TimeLimitNotifier::LimitType> ConvertPolicyType(
       usage_time_limit::PolicyType policy_type);
 
   // parent_access::ParentAccessService::Observer:
   void OnAccessCodeValidation(ParentCodeValidationResult result,
-                              absl::optional<AccountId> account_id) override;
+                              std::optional<AccountId> account_id) override;
 
   // session_manager::SessionManagerObserver:
   void OnSessionStateChanged() override;
@@ -142,16 +149,16 @@ class ScreenTimeController
   // system::TimezoneSettings::Observer:
   void TimezoneChanged(const icu::TimeZone& timezone) override;
 
-  // chromeos::SystemClockClient::Observer:
+  // SystemClockClient::Observer:
   void SystemClockUpdated() override;
 
-  content::BrowserContext* context_;
-  PrefService* pref_service_;
+  raw_ptr<content::BrowserContext> context_;
+  raw_ptr<PrefService> pref_service_;
 
   base::ObserverList<Observer> observers_;
 
   // Points to the base::DefaultClock by default.
-  const base::Clock* clock_;
+  raw_ptr<const base::Clock> clock_;
 
   // Timer scheduled for when the next lock screen state change event is
   // expected to happen, e.g. when bedtime is over or the usage limit ends.
@@ -165,14 +172,12 @@ class ScreenTimeController
 
   // Contains the last time limit policy processed by this class. Used to
   // generate notifications when the policy changes.
-  std::unique_ptr<base::DictionaryValue> last_policy_;
+  base::DictValue last_policy_;
 
   // Used to set up timers when a time limit is approaching.
   TimeLimitNotifier time_limit_notifier_;
 
   PrefChangeRegistrar pref_change_registrar_;
-
-  DISALLOW_COPY_AND_ASSIGN(ScreenTimeController);
 };
 
 }  // namespace ash

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,14 @@
 
 #include <memory>
 
-#include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 
 namespace content {
 class StoragePartition;
 }  // namespace content
+
+class Profile;
 
 class NotificationTriggerScheduler {
  public:
@@ -27,22 +28,19 @@ class NotificationTriggerScheduler {
       delete;
   virtual ~NotificationTriggerScheduler();
 
-  // Schedules a trigger at |timestamp| that calls TriggerNotifications on each
-  // StoragePartition of profiles that have pending notifications at that time.
-  // If there is an existing earlier trigger set, this is a nop. Otherwise this
-  // overwrites the existing trigger so only the earliest is set at any time.
-  virtual void ScheduleTrigger(base::Time timestamp);
+ protected:
+  // Use NotificationTriggerScheduler::Create() to get an instance of this.
+  NotificationTriggerScheduler();
 
-  // Triggers pending notifications for |partition|.
-  // TODO(knollr): Mock the actual storage partitions to observe this call in
-  // tests and make this static in the implementation.
+  // Triggers pending notifications for |partition|. Virtual so we can observe
+  // PlatformNotificationContextImpl::TriggerNotifications() calls in tests.
   virtual void TriggerNotificationsForStoragePartition(
       content::StoragePartition* partition);
 
- protected:
-  NotificationTriggerScheduler();
-
  private:
+  // Triggers pending notifications for |profile|.
+  static void TriggerNotificationsForProfile(Profile* profile);
+
   base::OneShotTimer trigger_timer_;
 };
 

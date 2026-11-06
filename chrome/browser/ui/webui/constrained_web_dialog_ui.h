@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,9 @@
 
 #include <memory>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
 #include "content/public/browser/web_ui_controller.h"
-#include "ui/gfx/native_widget_types.h"
+#include "content/public/browser/webui_config.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace gfx {
 class Size;
@@ -19,11 +18,23 @@ class Size;
 namespace content {
 class BrowserContext;
 class WebContents;
-}
+}  // namespace content
 
 namespace ui {
 class WebDialogDelegate;
 }
+
+namespace views {
+class WidgetDelegate;
+}
+
+class ConstrainedWebDialogUI;
+
+class ConstrainedWebDialogUIConfig
+    : public content::DefaultWebUIConfig<ConstrainedWebDialogUI> {
+ public:
+  ConstrainedWebDialogUIConfig();
+};
 
 class ConstrainedWebDialogDelegate {
  public:
@@ -55,7 +66,7 @@ class ConstrainedWebDialogDelegate {
   virtual gfx::Size GetConstrainedWebDialogPreferredSize() const = 0;
 
  protected:
-  virtual ~ConstrainedWebDialogDelegate() {}
+  virtual ~ConstrainedWebDialogDelegate() = default;
 };
 
 // ConstrainedWebDialogUI is a facility to show HTML WebUI content
@@ -87,7 +98,7 @@ class ConstrainedWebDialogUI : public content::WebUIController {
 
  private:
   // JS Message Handler
-  void OnDialogCloseMessage(const base::ListValue* args);
+  void OnDialogCloseMessage(const base::ListValue& args);
 };
 
 // Create and show a constrained HTML dialog. The actual object that gets
@@ -116,5 +127,10 @@ ConstrainedWebDialogDelegate* ShowConstrainedWebDialogWithAutoResize(
     content::WebContents* overshadowed,
     const gfx::Size& min_size,
     const gfx::Size& max_size);
+
+views::WidgetDelegate* GetConstrainedWebDialogForAccessibilityTesting(
+    content::BrowserContext* browser_context,
+    std::unique_ptr<ui::WebDialogDelegate> delegate,
+    content::WebContents* overshadowed);
 
 #endif  // CHROME_BROWSER_UI_WEBUI_CONSTRAINED_WEB_DIALOG_UI_H_

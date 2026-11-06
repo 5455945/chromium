@@ -1,4 +1,4 @@
-# Copyright 2013 The Chromium Authors. All rights reserved.
+# Copyright 2013 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -14,18 +14,21 @@ class GdbDebugger(cr.Debugger):
 
   @property
   def enabled(self):
-    return (cr.LinuxPlatform.GetInstance().is_active and
-            self.DETECTED.Find('CR_GDB'))
+    return cr.LinuxPlatform.GetInstance().is_active and self.DETECTED.Find(
+      'CR_GDB'
+    )
 
   def Invoke(self, targets, arguments):
     for target in targets:
       with target:
         cr.Host.Execute(
-            '{CR_GDB}', '--eval-command=run', '--args',
-            '{CR_BINARY}',
-            '{CR_RUN_ARGUMENTS}',
-            *arguments
-      )
+          '{CR_GDB}',
+          '--eval-command=run',
+          '--args',
+          '{CR_BINARY}',
+          '{CR_RUN_ARGUMENTS}',
+          *arguments,
+        )
 
   def Attach(self, targets, arguments):
     raise NotImplementedError('Attach not currently supported for gdb.')

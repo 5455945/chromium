@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,19 @@
 
 #include <memory>
 
+#include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
-#include "net/http/http_response_info.h"
+#include "base/time/time.h"
+#include "net/http/http_connection_info.h"
 #include "services/network/public/mojom/fetch_api.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_response.mojom-blink-forward.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/fetch/body_stream_buffer.h"
 #include "third_party/blink/renderer/core/fetch/fetch_request_data.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_response.h"
+#include "third_party/blink/renderer/platform/loader/fetch/url_loader/cached_metadata_handler.h"
 #include "third_party/blink/renderer/platform/network/http_header_set.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
@@ -56,9 +59,9 @@ class CORE_EXPORT FetchResponseData final
   FetchResponseData* CreateOpaqueFilteredResponse() const;
   FetchResponseData* CreateOpaqueRedirectFilteredResponse() const;
 
-  FetchResponseData* InternalResponse() { return internal_response_; }
+  FetchResponseData* InternalResponse() { return internal_response_.Get(); }
   const FetchResponseData* InternalResponse() const {
-    return internal_response_;
+    return internal_response_.Get();
   }
 
   FetchResponseData* Clone(ScriptState*, ExceptionState& exception_state);
@@ -73,7 +76,7 @@ class CORE_EXPORT FetchResponseData final
   AtomicString StatusMessage() const { return status_message_; }
   FetchHeaderList* HeaderList() const { return header_list_.Get(); }
   FetchHeaderList* InternalHeaderList() const;
-  BodyStreamBuffer* Buffer() const { return buffer_; }
+  BodyStreamBuffer* Buffer() const { return buffer_.Get(); }
   String MimeType() const;
   // Returns the BodyStreamBuffer of |m_internalResponse| if any. Otherwise,
   // returns |m_buffer|.
@@ -81,11 +84,14 @@ class CORE_EXPORT FetchResponseData final
   String InternalMIMEType() const;
   base::Time ResponseTime() const { return response_time_; }
   String CacheStorageCacheName() const { return cache_storage_cache_name_; }
+  mojo::PendingRemote<network::mojom::blink::CacheStorageSideDataWriter>
+  TakeCacheStorageSideDataWriter();
   const HTTPHeaderSet& CorsExposedHeaderNames() const {
     return cors_exposed_header_names_;
   }
   bool HasRangeRequested() const { return has_range_requested_; }
   bool RequestIncludeCredentials() const;
+  bool TimingAllowPassed() const;
 
   int64_t GetPadding() const { return padding_; }
   void SetPadding(int64_t padding) { padding_ = padding; }
@@ -93,6 +99,7 @@ class CORE_EXPORT FetchResponseData final
     response_source_ = response_source;
   }
   void SetURLList(const Vector<KURL>&);
+  void SetTimingAllowPassed(bool);
   const Vector<KURL>& UrlList() const { return url_list_; }
   const Vector<KURL>& InternalURLList() const;
 
@@ -110,11 +117,16 @@ class CORE_EXPORT FetchResponseData final
   void SetCacheStorageCacheName(const String& cache_storage_cache_name) {
     cache_storage_cache_name_ = cache_storage_cache_name;
   }
+  void SetCacheStorageSideDataWriter(
+      mojo::PendingRemote<network::mojom::blink::CacheStorageSideDataWriter>
+          cache_storage_side_data_writer) {
+    cache_storage_side_data_writer_->data =
+        std::move(cache_storage_side_data_writer);
+  }
   void SetCorsExposedHeaderNames(const HTTPHeaderSet& header_names) {
     cors_exposed_header_names_ = header_names;
   }
-  void SetConnectionInfo(
-      net::HttpResponseInfo::ConnectionInfo connection_info) {
+  void SetConnectionInfo(net::HttpConnectionInfo connection_info) {
     connection_info_ = connection_info;
   }
   void SetAlpnNegotiatedProtocol(AtomicString alpn_negotiated_protocol) {
@@ -127,7 +139,7 @@ class CORE_EXPORT FetchResponseData final
     has_range_requested_ = has_range_requested;
   }
   void SetAuthChallengeInfo(
-      const absl::optional<net::AuthChallengeInfo>& auth_challenge_info);
+      const std::optional<net::AuthChallengeInfo>& auth_challenge_info);
   void SetRequestIncludeCredentials(bool request_include_credentials);
 
   // If the type is Default, replaces |buffer_|.
@@ -166,10 +178,13 @@ class CORE_EXPORT FetchResponseData final
   AtomicString request_method_;
   base::Time response_time_;
   String cache_storage_cache_name_;
+  scoped_refptr<CacheStorageSideDataWriterHolder>
+      cache_storage_side_data_writer_ =
+          base::MakeRefCounted<CacheStorageSideDataWriterHolder>();
   HTTPHeaderSet cors_exposed_header_names_;
-  net::HttpResponseInfo::ConnectionInfo connection_info_;
+  net::HttpConnectionInfo connection_info_ = net::HttpConnectionInfo::kUNKNOWN;
   AtomicString alpn_negotiated_protocol_;
-  // |auth_challenge_info_| is a std::unique_ptr instead of absl::optional
+  // |auth_challenge_info_| is a std::unique_ptr instead of std::optional
   // |because this member is empty in most cases.
   std::unique_ptr<net::AuthChallengeInfo> auth_challenge_info_;
 
@@ -179,6 +194,7 @@ class CORE_EXPORT FetchResponseData final
   // algorithm.
   // See: https://fetch.spec.whatwg.org/#concept-http-network-fetch
   bool request_include_credentials_ : 1;
+  bool timing_allow_passed_ : 1;
 };
 
 }  // namespace blink

@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,174 +6,130 @@ package org.chromium.net.urlconnection;
 
 import static com.google.common.truth.Truth.assertThat;
 
-import android.support.test.runner.AndroidJUnit4;
+import static org.junit.Assert.assertThrows;
 
+import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.filters.SmallTest;
 
-import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.ArgumentMatchers;
-import org.mockito.Mock;
-import org.mockito.Mockito;
-import org.mockito.invocation.InvocationOnMock;
-import org.mockito.stubbing.Answer;
 
-import org.chromium.base.StrictModeContext;
-import org.chromium.base.test.util.Feature;
-import org.chromium.net.CronetTestRule;
+import org.chromium.base.test.util.Batch;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.concurrent.Callable;
 
-/**
- * Test for {@link CronetInputStream}.
- */
+/** Test for {@link CronetInputStream}. */
+@Batch(Batch.UNIT_TESTS)
 @RunWith(AndroidJUnit4.class)
 public class CronetInputStreamTest {
-    @Rule
-    public final CronetTestRule mTestRule = new CronetTestRule();
-
-    @Mock
-    private CronetHttpURLConnection mMockConnection;
-
-    @Before
-    public void setUp() throws Exception {
-        // Disable StrictMode constraints for mock initialization.
-        try (StrictModeContext ignored = StrictModeContext.allowAllVmPolicies()) {
-            mMockConnection = Mockito.mock(CronetHttpURLConnection.class);
-        }
-    }
+    // public to squelch lint warning about naming
+    public CronetInputStream underTest;
 
     @Test
     @SmallTest
-    @Feature({"Cronet"})
     public void testAvailable_closed_withoutException() throws Exception {
-        runTestCase(underTest -> {
-            underTest.setResponseDataCompleted(null);
+        underTest = new CronetInputStream(new MockHttpURLConnection());
 
-            assertThat(underTest.available()).isEqualTo(0);
-        });
+        underTest.setResponseDataCompleted(null);
+
+        assertThat(underTest.available()).isEqualTo(0);
     }
 
     @Test
     @SmallTest
-    @Feature({"Cronet"})
     public void testAvailable_closed_withException() throws Exception {
-        runTestCase(underTest -> {
-            IOException expected = new IOException();
-            underTest.setResponseDataCompleted(expected);
+        underTest = new CronetInputStream(new MockHttpURLConnection());
+        IOException expected = new IOException();
+        underTest.setResponseDataCompleted(expected);
 
-            IOException actual = assertThrowsIoException(() -> underTest.available());
+        IOException actual = assertThrows(IOException.class, underTest::available);
 
-            assertThat(actual).isSameInstanceAs(expected);
-        });
+        assertThat(actual).isSameInstanceAs(expected);
     }
 
     @Test
     @SmallTest
-    @Feature({"Cronet"})
     public void testAvailable_noReads() throws Exception {
-        runTestCase(underTest -> { assertThat(underTest.available()).isEqualTo(0); });
+        underTest = new CronetInputStream(new MockHttpURLConnection());
+
+        assertThat(underTest.available()).isEqualTo(0);
     }
 
     @Test
     @SmallTest
-    @Feature({"Cronet"})
     public void testAvailable_everythingRead() throws Exception {
-        runTestCase(underTest -> {
-            int bytesInBuffer = 10;
+        int bytesInBuffer = 10;
 
-            Mockito.doAnswer(addZerosToBuffer(bytesInBuffer))
-                    .when(mMockConnection)
-                    .getMoreData(ArgumentMatchers.any());
+        underTest = new CronetInputStream(new MockHttpURLConnection(bytesInBuffer));
 
-            for (int i = 0; i < bytesInBuffer; i++) {
-                underTest.read();
-            }
+        for (int i = 0; i < bytesInBuffer; i++) {
+            underTest.read();
+        }
 
-            assertThat(underTest.available()).isEqualTo(0);
-        });
+        assertThat(underTest.available()).isEqualTo(0);
     }
 
     @Test
     @SmallTest
-    @Feature({"Cronet"})
     public void testAvailable_partiallyRead() throws Exception {
-        runTestCase(underTest -> {
-            int bytesInBuffer = 10;
-            int consumed = 3;
+        int bytesInBuffer = 10;
+        int consumed = 3;
 
-            Mockito.doAnswer(addZerosToBuffer(bytesInBuffer))
-                    .when(mMockConnection)
-                    .getMoreData(ArgumentMatchers.any());
+        underTest = new CronetInputStream(new MockHttpURLConnection(bytesInBuffer));
 
-            for (int i = 0; i < consumed; i++) {
-                underTest.read();
-            }
+        for (int i = 0; i < consumed; i++) {
+            underTest.read();
+        }
 
-            assertThat(underTest.available()).isEqualTo(bytesInBuffer - consumed);
-        });
+        assertThat(underTest.available()).isEqualTo(bytesInBuffer - consumed);
     }
 
     @Test
     @SmallTest
-    @Feature({"Cronet"})
     public void testRead_afterDataCompleted() throws Exception {
-        runTestCase(underTest -> {
-            int bytesInBuffer = 10;
-            int consumed = 3;
+        int bytesInBuffer = 10;
+        int consumed = 3;
 
-            Mockito.doAnswer(addZerosToBuffer(bytesInBuffer))
-                    .when(mMockConnection)
-                    .getMoreData(ArgumentMatchers.any());
+        underTest = new CronetInputStream(new MockHttpURLConnection(bytesInBuffer));
 
-            for (int i = 0; i < consumed; i++) {
-                underTest.read();
-            }
-
-            IOException expected = new IOException();
-            underTest.setResponseDataCompleted(expected);
-
-            IOException actual = assertThrowsIoException(() -> underTest.read());
-
-            assertThat(actual).isSameInstanceAs(expected);
-        });
-    }
-
-    private void runTestCase(CronetInputStreamTestCase testCase) throws Exception {
-        try (CronetInputStream underTest = new CronetInputStream(mMockConnection)) {
-            testCase.runTestCase(underTest);
+        for (int i = 0; i < consumed; i++) {
+            underTest.read();
         }
+
+        IOException expected = new IOException();
+        underTest.setResponseDataCompleted(expected);
+
+        IOException actual = assertThrows(IOException.class, underTest::read);
+
+        assertThat(actual).isSameInstanceAs(expected);
     }
 
-    private static Answer<Void> addZerosToBuffer(int count) {
-        return new Answer<Void>() {
-            @Override
-            public Void answer(InvocationOnMock invocation) {
-                ByteBuffer arg = (ByteBuffer) invocation.getArguments()[0];
-                for (int i = 0; i < count; i++) {
-                    arg.put((byte) 0);
-                }
-                return null;
-            }
-        };
-    }
+    private static class MockHttpURLConnection extends CronetHttpURLConnection {
+        private final int mBytesToFill;
+        private boolean mGetMoreDataExpected;
 
-    private static IOException assertThrowsIoException(Callable<?> callable) throws Exception {
-        try {
-            callable.call();
-        } catch (IOException e) {
-            return e;
-        } catch (Exception e) {
-            throw e;
+        MockHttpURLConnection() {
+            super(null, null);
+            this.mBytesToFill = 0;
+            mGetMoreDataExpected = false;
         }
-        throw new AssertionError("No exception was thrown!");
-    }
 
-    private static interface CronetInputStreamTestCase {
-        void runTestCase(CronetInputStream underTest) throws Exception;
+        MockHttpURLConnection(int bytesToFill) {
+            super(null, null);
+            this.mBytesToFill = bytesToFill;
+            mGetMoreDataExpected = true;
+        }
+
+        @Override
+        public void getMoreData(ByteBuffer buffer) {
+            if (!mGetMoreDataExpected) {
+                throw new IllegalStateException("getMoreData call not expected!");
+            }
+            mGetMoreDataExpected = false;
+            for (int i = 0; i < mBytesToFill; i++) {
+                buffer.put((byte) 0);
+            }
+        }
     }
 }

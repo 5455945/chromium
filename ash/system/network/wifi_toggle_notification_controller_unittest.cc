@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,11 +9,11 @@
 #include "ash/system/network/tray_network_state_model.h"
 #include "ash/system/tray/system_tray_notifier.h"
 #include "ash/test/ash_test_base.h"
-#include "base/run_loop.h"
-#include "chromeos/dbus/shill/shill_clients.h"
-#include "chromeos/network/network_handler.h"
-#include "chromeos/services/network_config/public/cpp/cros_network_config_test_helper.h"
-#include "components/prefs/testing_pref_service.h"
+#include "base/test/run_until.h"
+#include "chromeos/ash/components/dbus/shill/shill_clients.h"
+#include "chromeos/ash/components/network/network_handler.h"
+#include "chromeos/ash/services/network_config/public/cpp/cros_network_config_test_helper.h"
+#include "chromeos/services/network_config/public/mojom/network_types.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/message_center/message_center.h"
 
@@ -24,6 +24,12 @@ namespace ash {
 class WifiToggleNotificationControllerTest : public AshTestBase {
  public:
   WifiToggleNotificationControllerTest() = default;
+
+  WifiToggleNotificationControllerTest(
+      const WifiToggleNotificationControllerTest&) = delete;
+  WifiToggleNotificationControllerTest& operator=(
+      const WifiToggleNotificationControllerTest&) = delete;
+
   ~WifiToggleNotificationControllerTest() override = default;
 
   // testing::Test:
@@ -32,15 +38,16 @@ class WifiToggleNotificationControllerTest : public AshTestBase {
 
     // NOTE: This is necessary to give the TrayNetworkStateModel a chance to
     // sync its list of network devices.
-    base::RunLoop().RunUntilIdle();
+    ASSERT_TRUE(base::test::RunUntil([]() {
+      return Shell::Get()
+          ->system_tray_model()
+          ->network_state_model()
+          ->GetDevice(chromeos::network_config::mojom::NetworkType::kWiFi);
+    }));
   }
 
  private:
-  chromeos::network_config::CrosNetworkConfigTestHelper network_config_helper_;
-  TestingPrefServiceSimple profile_prefs_;
-  TestingPrefServiceSimple local_state_;
-
-  DISALLOW_COPY_AND_ASSIGN(WifiToggleNotificationControllerTest);
+  network_config::CrosNetworkConfigTestHelper network_config_helper_;
 };
 
 // Verifies that toggling Wi-Fi (usually via keyboard) shows a notification.

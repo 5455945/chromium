@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,41 +8,45 @@
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "build/build_config.h"
-#include "chrome/common/importer/importer_data_types.h"
-#include "chrome/common/importer/importer_url_row.h"
 #include "components/favicon_base/favicon_usage_data.h"
+#include "components/user_data_importer/common/importer_data_types.h"
+#include "components/user_data_importer/common/importer_url_row.h"
 
 class GURL;
-struct ImportedBookmarkEntry;
 struct ImporterAutofillFormDataEntry;
 
-namespace importer {
-struct SearchEngineInfo;
-}
+namespace user_data_importer {
+struct ImportedBookmarkEntry;
+}  // namespace user_data_importer
 
 class ImporterBridge : public base::RefCountedThreadSafe<ImporterBridge> {
  public:
   ImporterBridge();
 
-  virtual void AddBookmarks(const std::vector<ImportedBookmarkEntry>& bookmarks,
-                            const std::u16string& first_folder_name) = 0;
+  ImporterBridge(const ImporterBridge&) = delete;
+  ImporterBridge& operator=(const ImporterBridge&) = delete;
+
+  virtual void AddBookmarks(
+      const std::vector<user_data_importer::ImportedBookmarkEntry>& bookmarks,
+      const std::u16string& first_folder_name) = 0;
 
   virtual void AddHomePage(const GURL& home_page) = 0;
 
   virtual void SetFavicons(
       const favicon_base::FaviconUsageDataList& favicons) = 0;
 
-  virtual void SetHistoryItems(const std::vector<ImporterURLRow>& rows,
-                               importer::VisitSource visit_source) = 0;
+  virtual void SetHistoryItems(
+      const std::vector<user_data_importer::ImporterURLRow>& rows,
+      user_data_importer::VisitSource visit_source) = 0;
 
   virtual void SetKeywords(
-      const std::vector<importer::SearchEngineInfo>& search_engines,
+      const std::vector<user_data_importer::SearchEngineInfo>& search_engines,
       bool unique_on_host_and_path) = 0;
 
-  virtual void SetPasswordForm(const importer::ImportedPasswordForm& form) = 0;
+  virtual void SetPasswordForm(
+      const user_data_importer::ImportedPasswordForm& form) = 0;
 
   virtual void SetAutofillFormData(
       const std::vector<ImporterAutofillFormDataEntry>& entries) = 0;
@@ -52,11 +56,11 @@ class ImporterBridge : public base::RefCountedThreadSafe<ImporterBridge> {
 
   // Notifies the coordinator that the collection of data for the specified
   // item has begun.
-  virtual void NotifyItemStarted(importer::ImportItem item) = 0;
+  virtual void NotifyItemStarted(user_data_importer::ImportItem item) = 0;
 
   // Notifies the coordinator that the collection of data for the specified
   // item has completed.
-  virtual void NotifyItemEnded(importer::ImportItem item) = 0;
+  virtual void NotifyItemEnded(user_data_importer::ImportItem item) = 0;
 
   // Notifies the coordinator that the entire import operation has completed.
   virtual void NotifyEnded() = 0;
@@ -71,8 +75,6 @@ class ImporterBridge : public base::RefCountedThreadSafe<ImporterBridge> {
   friend class base::RefCountedThreadSafe<ImporterBridge>;
 
   virtual ~ImporterBridge();
-
-  DISALLOW_COPY_AND_ASSIGN(ImporterBridge);
 };
 
 #endif  // CHROME_COMMON_IMPORTER_IMPORTER_BRIDGE_H_

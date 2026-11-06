@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 
 #include "ash/fast_ink/view_tree_host_root_view.h"
 #include "ash/fast_ink/view_tree_host_widget.h"
-#include "ash/frame/non_client_frame_view_ash.h"
+#include "ash/frame/frame_view_ash.h"
 #include "ash/hud_display/graphs_container_view.h"
 #include "ash/hud_display/hud_constants.h"
 #include "ash/hud_display/hud_header_view.h"
@@ -16,18 +16,19 @@
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/root_window_controller.h"
 #include "ash/shell.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
-#include "components/vector_icons/vector_icons.h"
 #include "ui/aura/window.h"
 #include "ui/base/hit_test.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
+#include "ui/views/view.h"
 #include "ui/views/widget/native_widget.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
@@ -36,16 +37,33 @@ namespace ash {
 namespace hud_display {
 namespace {
 
-constexpr size_t kHUDGraphsInset = 5;
+// Header height.
+constexpr int kHUDHeaderHeight =
+    kHUDSettingsIconSize + 2 * kHUDSettingsIconBorder;
 
-// Default HUDDisplayView height.
-constexpr size_t kDefaultHUDGraphHeight = 300;
-constexpr size_t kDefaultHUDSettingHeight = 400;
+// Margin below header.
+constexpr int kHUDHeaderMargin = 5;
 
-// Top border + Header height + margin + graph height + bottom border..
-constexpr int kHUDViewDefaultHeight =
-    kHUDInset + (kHUDSettingsIconSize + 2 * kSettingsIconBorder) +
-    kHUDGraphsInset + kDefaultHUDGraphHeight + kHUDInset;
+// Graph height.
+constexpr int kHUDGraphHeight = 300;
+
+// Graph width/height including bordering reference lines.
+constexpr int kHUDGraphWidthWithReferenceLines =
+    kHUDGraphWidth + 2 * kHUDGraphReferenceLineWidth;
+constexpr int kHUDGraphHeightWithReferenceLines =
+    kHUDGraphHeight + 2 * kHUDGraphReferenceLineWidth;
+
+// HUD window width.
+constexpr int kHUDWidth = kHUDGraphWidthWithReferenceLines + 2 * kHUDInset;
+
+// Top inset + header + header margin + bottom inset. Used to compute the HUD
+// window height. Just add the graph height or settings height as appropriate.
+constexpr int kHUDFrameHeight =
+    kHUDInset + kHUDHeaderHeight + kHUDHeaderMargin + kHUDInset;
+
+// HUD window height with graph.
+constexpr int kHUDHeightWithGraph =
+    kHUDFrameHeight + kHUDGraphHeightWithReferenceLines;
 
 views::Widget* g_hud_widget = nullptr;
 
@@ -55,9 +73,9 @@ bool g_hud_overlay_mode = true;
 // ClientView that return HTNOWHERE by default. A child view can receive event
 // by setting kHitTestComponentKey property to HTCLIENT.
 class HTClientView : public views::ClientView {
- public:
-  METADATA_HEADER(HTClientView);
+  METADATA_HEADER(HTClientView, views::ClientView)
 
+ public:
   HTClientView(HUDDisplayView* hud_display,
                views::Widget* widget,
                views::View* contents_view)
@@ -75,32 +93,18 @@ class HTClientView : public views::ClientView {
   HUDDisplayView* GetHUDDisplayViewForTesting() { return hud_display_; }
 
  private:
-  HUDDisplayView* hud_display_;
+  raw_ptr<HUDDisplayView> hud_display_;
 };
 
-BEGIN_METADATA(HTClientView, views::ClientView)
+BEGIN_METADATA(HTClientView)
 END_METADATA
-
-std::unique_ptr<views::ClientView> MakeClientView(views::Widget* widget) {
-  auto view = std::make_unique<HUDDisplayView>();
-  auto* weak_view = view.get();
-  return std::make_unique<HTClientView>(weak_view, widget, view.release());
-}
-
-void InitializeFrameView(views::WidgetDelegate* delegate) {
-  auto* frame_view = static_cast<NonClientFrameViewAsh*>(
-      delegate->GetWidget()->non_client_view()->frame_view());
-  // TODO(oshima): support component type with TYPE_WINDOW_FLAMELESS widget.
-  if (frame_view)
-    frame_view->SetFrameEnabled(false);
-}
 
 }  // namespace
 
 ////////////////////////////////////////////////////////////////////////////////
 // HUDDisplayView, public:
 
-BEGIN_METADATA(HUDDisplayView, views::View)
+BEGIN_METADATA(HUDDisplayView)
 END_METADATA
 
 // static
@@ -117,24 +121,32 @@ void HUDDisplayView::Toggle() {
   }
 
   auto delegate = std::make_unique<views::WidgetDelegate>();
-  delegate->SetClientViewFactory(base::BindOnce(&MakeClientView));
-  delegate->RegisterWidgetInitializedCallback(
-      base::BindOnce(&InitializeFrameView, base::Unretained(delegate.get())));
-  delegate->SetOwnedByWidget(true);
+  delegate->SetContentsView(std::make_unique<HUDDisplayView>());
+  delegate->SetOwnedByWidget(views::WidgetDelegate::OwnedByWidgetPassKey());
+  delegate->SetClientViewFactory(base::BindOnce(
+      [](views::Widget* widget,
+         views::View* contents_view) -> std::unique_ptr<views::ClientView> {
+        return std::make_unique<HTClientView>(
+            /*hud_display=*/static_cast<HUDDisplayView*>(contents_view), widget,
+            contents_view);
+      }));
 
-  views::Widget::InitParams params(views::Widget::InitParams::TYPE_WINDOW);
+  views::Widget::InitParams params(
+      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
+      views::Widget::InitParams::TYPE_WINDOW);
   params.delegate = delegate.release();
+  params.name = "HUDDisplay";
   params.parent = Shell::GetContainer(Shell::GetPrimaryRootWindow(),
                                       kShellWindowId_OverlayContainer);
-  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
-  // Adjust for 1px grid width around the graph.
-  params.bounds =
-      gfx::Rect(kDefaultGraphWidth + 2 * kHUDInset + 2 * kGridLineWidth,
-                kHUDViewDefaultHeight + 2 * kGridLineWidth);
+  params.bounds = gfx::Rect(kHUDWidth, kHUDHeightWithGraph);
+  params.remove_standard_frame = true;
   auto* widget = CreateViewTreeHostWidget(std::move(params));
   widget->GetLayer()->SetName("HUDDisplayView");
-  static_cast<ViewTreeHostRootView*>(widget->GetRootView())
-      ->SetIsOverlayCandidate(g_hud_overlay_mode);
+
+  ViewTreeHostRootView* root_view =
+      static_cast<ViewTreeHostRootView*>(widget->GetRootView());
+  root_view->SetIsOverlayCandidate(g_hud_overlay_mode);
+  root_view->Init(widget->GetNativeView());
   widget->Show();
 
   g_hud_widget = widget;
@@ -172,14 +184,14 @@ HUDDisplayView::HUDDisplayView() {
 
   // Setup header.
 
-  header_view_->tab_strip()->AddTabButton(DisplayMode::CPU_DISPLAY, u"CPU");
-  header_view_->tab_strip()->AddTabButton(DisplayMode::MEMORY_DISPLAY, u"RAM");
-  header_view_->tab_strip()->AddTabButton(DisplayMode::FPS_DISPLAY, u"FPS");
+  header_view_->tab_strip()->AddTabButton(HUDDisplayMode::CPU, u"CPU");
+  header_view_->tab_strip()->AddTabButton(HUDDisplayMode::MEMORY, u"RAM");
+  header_view_->tab_strip()->AddTabButton(HUDDisplayMode::FPS, u"FPS");
 
   // Setup data.
   data->SetBackground(views::CreateSolidBackground(kHUDBackground));
   data->SetBorder(views::CreateEmptyBorder(
-      gfx::Insets(kHUDGraphsInset, kHUDInset, kHUDInset, kHUDInset)));
+      gfx::Insets::TLBR(kHUDHeaderMargin, kHUDInset, kHUDInset, kHUDInset)));
 
   // We have two child views z-stacked.
   // The bottom one is GraphsContainerView with all the graph lines.
@@ -191,7 +203,7 @@ HUDDisplayView::HUDDisplayView() {
   settings_view_->SetVisible(false);
 
   // CPU display is active by default.
-  SetDisplayMode(DisplayMode::CPU_DISPLAY);
+  SetDisplayMode(HUDDisplayMode::CPU);
 }
 
 HUDDisplayView::~HUDDisplayView() {
@@ -201,11 +213,12 @@ HUDDisplayView::~HUDDisplayView() {
 // There is only one button.
 void HUDDisplayView::OnSettingsToggle() {
   gfx::Rect bounds = g_hud_widget->GetWindowBoundsInScreen();
-  constexpr int settings_height_addition =
-      kDefaultHUDSettingHeight - kDefaultHUDGraphHeight;
-  // Adjust window height.
-  bounds.set_height(bounds.height() + (settings_view_->GetVisible() ? -1 : 1) *
-                                          settings_height_addition);
+  // Here we are checking the settings visibility before we toggle it. We must
+  // keep in mind that it is the opposite of what it will be.
+  bounds.set_height(settings_view_->GetVisible()
+                        ? kHUDHeightWithGraph
+                        : kHUDFrameHeight +
+                              settings_view_->GetPreferredSize().height());
   g_hud_widget->SetBounds(bounds);
 
   settings_view_->ToggleVisibility();
@@ -253,7 +266,7 @@ int HUDDisplayView::NonClientHitTest(const gfx::Point& point) {
   return view->GetProperty(kHUDClickHandler);
 }
 
-void HUDDisplayView::SetDisplayMode(DisplayMode display_mode) {
+void HUDDisplayView::SetDisplayMode(HUDDisplayMode display_mode) {
   graphs_container_->SetMode(display_mode);
   header_view_->tab_strip()->ActivateTab(display_mode);
 }

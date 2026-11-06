@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,32 +7,45 @@
 
 #include <string>
 
+#include "build/build_config.h"
 #include "components/safe_browsing/core/common/proto/client_model.pb.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "ui/gfx/geometry/size.h"
 
-namespace safe_browsing {
-namespace visual_utils {
+namespace gfx {
+class Image;
+}
 
-using QuantizedColor = uint32_t;
+namespace safe_browsing::visual_utils {
 
-// Utility methods for working with QuantizedColors.
-QuantizedColor SkColorToQuantizedColor(SkColor color);
-int GetQuantizedR(QuantizedColor color);
-int GetQuantizedG(QuantizedColor color);
-int GetQuantizedB(QuantizedColor color);
-
-// Computes the color histogram for the image. This buckets the pixels according
-// to their QuantizedColor, then reports their weight and centroid.
-bool GetHistogramForImage(const SkBitmap& image,
-                          VisualFeatures::ColorHistogram* histogram);
+// Enum used to represent the result of the function |CanExtractVisualFeatures|.
+enum class CanExtractVisualFeaturesResult {
+  kCanExtractVisualFeatures = 0,
+  kUserNotOptedIn = 1,
+  kOffTheRecord = 2,
+  kBelowMinFrame = 3,
+  kAboveZoomLevel = 4,
+  kMaxValue = kAboveZoomLevel,
+};
 
 // Computes the BlurredImage for the given input image. This involves
 // downsampling the image to a certain fixed resolution, then blurring
 // by taking an average over fixed-size blocks of pixels.
 bool GetBlurredImage(const SkBitmap& image,
                      VisualFeatures::BlurredImage* blurred_image);
+
+// Returns true if `blurred_image` is uniform, defined as the difference between
+// the 99.5th and 0.5th percentile pixel values (ignoring the top and bottom
+// 0.5% of pixels as outliers) in each RGB channel being at most
+// `max_color_range`. Returns false if `blurred_image` has invalid dimensions or
+// empty/mismatched data.
+bool IsUniformImage(const VisualFeatures::BlurredImage& blurred_image,
+                    int max_color_range = 10);
+
+// Generates VisualFeatures::Screenshot for the passed-in `screenshot`.
+void EncodeScreenshot(const SkBitmap& screenshot,
+                      VisualFeatures::Screenshot* encoded_screenshot);
 
 // Downsizes an image by averaging all the pixels in the source image that
 // contribute to the target image. Groups pixels into squares of size
@@ -41,21 +54,42 @@ bool GetBlurredImage(const SkBitmap& image,
 std::unique_ptr<SkBitmap> BlockMeanAverage(const SkBitmap& image,
                                            int block_size);
 
-// Returns the hash used to compare blurred images.
-std::string GetHashFromBlurredImage(VisualFeatures::BlurredImage blurred_image);
+// Whether we can extract visual features from a page with a given size and zoom
+// level. For password protection, the safe browsing preference that allows the
+// extraction are extended reporting and enhanced safe browsing, whereas for
+// client side detection, it's just enhanced safe browsing.
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+CanExtractVisualFeaturesResult CanExtractVisualFeatures(bool is_user_opted_in,
+                                                        bool is_off_the_record,
+                                                        gfx::Size size);
+#else
+CanExtractVisualFeaturesResult CanExtractVisualFeatures(bool is_user_opted_in,
+                                                        bool is_off_the_record,
+                                                        gfx::Size size,
+                                                        double zoom_level);
+#endif
 
-// Returns whether the given |image| is a match for the |target|.
-// |blurred_image_hash| should be obtained by applying GetBlurredImage()
-// and then GetHashFromBlurredImage() to |image|. |histogram| should be obtained
-// by applying GetHistogramForImage() to |image|. Returns nullopt in the case of
-// no match, and the VisionMatchResult if it is a match.
-absl::optional<VisionMatchResult> IsVisualMatch(
-    const SkBitmap& image,
-    const std::string& blurred_image_hash,
-    const VisualFeatures::ColorHistogram& histogram,
-    const VisualTarget& target);
+// Converts and prepares a `gfx::Image` into an `SkBitmap` for visual feature
+// extraction. Must be called on the sequence that owns `image`.
+// On iOS, this uses platform-native hardware downscaling before bitmap
+// conversion to avoid allocating full-resolution intermediate bitmaps. On other
+// platforms, this returns the image's `SkBitmap` representation directly
+// without performing any downscaling.
+SkBitmap GetBitmapForVisualFeatures(const gfx::Image& image);
 
-}  // namespace visual_utils
-}  // namespace safe_browsing
+// Extracts a `VisualFeatures` proto from the given `bitmap` (used by password
+// protection and client-side phishing detection).
+std::unique_ptr<VisualFeatures> ExtractVisualFeatures(const SkBitmap& bitmap);
+
+#if BUILDFLAG(IS_IOS)
+// Resizes `image` to `size` (in pixels) using CoreGraphics and returns the
+// result directly as an `SkBitmap` without routing through `Image::AsBitmap()`
+// (which upsamples by the maximum supported resource scale factor).
+// Must be called on the main UI thread.
+SkBitmap GetResizedImageAsSkBitmap(const gfx::Image& image,
+                                   const gfx::Size& size);
+#endif  // BUILDFLAG(IS_IOS)
+
+}  // namespace safe_browsing::visual_utils
 
 #endif  // COMPONENTS_SAFE_BROWSING_CORE_COMMON_VISUAL_UTILS_H_

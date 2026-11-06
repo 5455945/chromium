@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,10 @@
 
 #include "base/check_op.h"
 #include "base/sequence_checker.h"
+#include "components/services/storage/public/cpp/buckets/bucket_locator.h"
 #include "components/services/storage/public/mojom/quota_client.mojom.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
-#include "third_party/blink/public/mojom/quota/quota_types.mojom.h"
 
 namespace storage {
 
@@ -26,58 +26,42 @@ QuotaClientCallbackWrapper::~QuotaClientCallbackWrapper() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 }
 
-void QuotaClientCallbackWrapper::GetStorageKeyUsage(
-    const blink::StorageKey& storage_key,
-    blink::mojom::StorageType type,
-    GetStorageKeyUsageCallback callback) {
+void QuotaClientCallbackWrapper::GetBucketUsage(
+    const BucketLocator& bucket,
+    GetBucketUsageCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  wrapped_client_->GetStorageKeyUsage(
-      storage_key, type,
+  wrapped_client_->GetBucketUsage(
+      bucket,
       mojo::WrapCallbackWithDefaultInvokeIfNotRun(std::move(callback), 0));
 }
 
-void QuotaClientCallbackWrapper::GetStorageKeysForType(
-    blink::mojom::StorageType type,
-    GetStorageKeysForTypeCallback callback) {
+void QuotaClientCallbackWrapper::GetDefaultStorageKeys(
+    GetDefaultStorageKeysCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  wrapped_client_->GetStorageKeysForType(
-      type, mojo::WrapCallbackWithDefaultInvokeIfNotRun(
-                std::move(callback), std::vector<blink::StorageKey>()));
-}
-
-void QuotaClientCallbackWrapper::GetStorageKeysForHost(
-    blink::mojom::StorageType type,
-    const std::string& host,
-    GetStorageKeysForHostCallback callback) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  wrapped_client_->GetStorageKeysForHost(
-      type, host,
+  wrapped_client_->GetDefaultStorageKeys(
       mojo::WrapCallbackWithDefaultInvokeIfNotRun(
           std::move(callback), std::vector<blink::StorageKey>()));
 }
 
-void QuotaClientCallbackWrapper::DeleteStorageKeyData(
-    const blink::StorageKey& storage_key,
-    blink::mojom::StorageType type,
-    DeleteStorageKeyDataCallback callback) {
+void QuotaClientCallbackWrapper::DeleteBucketData(
+    const BucketLocator& bucket,
+    DeleteBucketDataCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  wrapped_client_->DeleteStorageKeyData(
-      storage_key, type,
+  wrapped_client_->DeleteBucketData(
+      bucket,
       mojo::WrapCallbackWithDefaultInvokeIfNotRun(
           std::move(callback), blink::mojom::QuotaStatusCode::kErrorAbort));
 }
 
 void QuotaClientCallbackWrapper::PerformStorageCleanup(
-    blink::mojom::StorageType type,
     PerformStorageCleanupCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   wrapped_client_->PerformStorageCleanup(
-      type, mojo::WrapCallbackWithDefaultInvokeIfNotRun(std::move(callback)));
+      mojo::WrapCallbackWithDefaultInvokeIfNotRun(std::move(callback)));
 }
 
 }  // namespace storage

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,22 +7,15 @@
 
 #include <memory>
 
-#include "base/macros.h"
-#include "base/scoped_observation.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
-#include "ui/compositor/compositor.h"
-#include "ui/compositor/compositor_animation_observer.h"
 #include "ui/compositor/layer_delegate.h"
+#include "ui/compositor/layer_textured.h"
 #include "ui/gfx/geometry/rect.h"
 
 namespace aura {
 class Window;
-}
-
-namespace ui {
-class Compositor;
-class Layer;
-}  // namespace ui
+}  // namespace aura
 
 namespace ash {
 
@@ -32,20 +25,19 @@ class AccessibilityLayerDelegate {
  public:
   virtual void OnDeviceScaleFactorChanged() = 0;
 
-  // Called by a layer during animation observation on its compositor. Returns
-  // true when animation has finished.
-  virtual bool OnAnimationStep(base::TimeTicks timestamp) = 0;
-
  protected:
   virtual ~AccessibilityLayerDelegate() {}
 };
 
 // AccessibilityLayer manages a global always-on-top layer used to
 // highlight or annotate UI elements for accessibility.
-class AccessibilityLayer : public ui::LayerDelegate,
-                           public ui::CompositorAnimationObserver {
+class AccessibilityLayer : public ui::LayerDelegate {
  public:
   explicit AccessibilityLayer(AccessibilityLayerDelegate* delegate);
+
+  AccessibilityLayer(const AccessibilityLayer&) = delete;
+  AccessibilityLayer& operator=(const AccessibilityLayer&) = delete;
+
   ~AccessibilityLayer() override;
 
   // Move the accessibility layer to the given bounds in the coordinates of
@@ -60,18 +52,11 @@ class AccessibilityLayer : public ui::LayerDelegate,
   // Set the layer's offset from parent layer.
   void SetSubpixelPositionOffset(const gfx::Vector2dF& offset);
 
-  // Returns true if this layer is in a composited window with an
-  // animation observer.
-  bool CanAnimate() const;
-
-  // Returns true if a layer needs to animate.
-  virtual bool NeedToAnimate() const = 0;
-
   // Gets the inset for this layer in DIPs. This is used to increase
   // the bounding box to provide space for any margins or padding.
   virtual int GetInset() const = 0;
 
-  ui::Layer* layer() { return layer_.get(); }
+  ui::LayerTextured* layer() { return layer_.get(); }
   aura::Window* root_window() { return root_window_; }
 
  protected:
@@ -84,10 +69,10 @@ class AccessibilityLayer : public ui::LayerDelegate,
                            bool stack_at_top);
 
   // The current root window containing the focused object.
-  aura::Window* root_window_ = nullptr;
+  raw_ptr<aura::Window, DanglingUntriaged> root_window_ = nullptr;
 
   // The current layer.
-  std::unique_ptr<ui::Layer> layer_;
+  std::unique_ptr<ui::LayerTextured> layer_;
 
   // The bounding rectangle of the focused object, in |root_window_|
   // coordinates.
@@ -98,20 +83,8 @@ class AccessibilityLayer : public ui::LayerDelegate,
   void OnDeviceScaleFactorChanged(float old_device_scale_factor,
                                   float new_device_scale_factor) override;
 
-  // CompositorAnimationObserver overrides:
-  void OnAnimationStep(base::TimeTicks timestamp) override;
-  void OnCompositingShuttingDown(ui::Compositor* compositor) override;
-
   // The object that owns this layer.
-  AccessibilityLayerDelegate* delegate_;
-
-  base::ScopedObservation<ui::Compositor,
-                          ui::CompositorAnimationObserver,
-                          &ui::Compositor::AddAnimationObserver,
-                          &ui::Compositor::RemoveAnimationObserver>
-      animation_observation_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(AccessibilityLayer);
+  raw_ptr<AccessibilityLayerDelegate> delegate_;
 };
 
 }  // namespace ash

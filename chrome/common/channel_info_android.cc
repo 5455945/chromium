@@ -1,10 +1,9 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/common/channel_info.h"
 
-#include "base/android/build_info.h"
 #include "base/notreached.h"
 #include "base/strings/string_util.h"
 #include "components/version_info/android/channel_getter.h"
@@ -21,7 +20,6 @@ std::string GetChannelName(WithExtendedStable with_extended_stable) {
     case version_info::Channel::STABLE: return std::string();
   }
   NOTREACHED() << "Unknown channel " << static_cast<int>(GetChannel());
-  return std::string();
 }
 
 version_info::Channel GetChannel() {

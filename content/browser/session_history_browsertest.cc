@@ -1,21 +1,21 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "content/browser/web_contents/web_contents_impl.h"
+#include "content/common/content_navigation_policy.h"
 #include "content/public/browser/navigation_controller.h"
-#include "content/public/browser/notification_service.h"
-#include "content/public/browser/notification_types.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/url_constants.h"
+#include "content/public/test/back_forward_cache_util.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
@@ -92,7 +92,8 @@ class SessionHistoryTest : public ContentBrowserTest {
   // Navigate session history using history.go(distance).
   void JavascriptGo(const std::string& distance) {
     TestNavigationObserver observer(shell()->web_contents());
-    shell()->LoadURL(GURL("javascript:history.go('" + distance + "')"));
+    EXPECT_TRUE(ExecJs(ToRenderFrameHost(shell()->web_contents()),
+                       "history.go('" + distance + "')"));
     observer.Wait();
   }
 
@@ -126,17 +127,13 @@ class SessionHistoryTest : public ContentBrowserTest {
   }
 
   void GoBack() {
-    WindowedNotificationObserver load_stop_observer(
-        NOTIFICATION_LOAD_STOP,
-        NotificationService::AllSources());
+    LoadStopObserver load_stop_observer(shell()->web_contents());
     shell()->web_contents()->GetController().GoBack();
     load_stop_observer.Wait();
   }
 
   void GoForward() {
-    WindowedNotificationObserver load_stop_observer(
-        NOTIFICATION_LOAD_STOP,
-        NotificationService::AllSources());
+    LoadStopObserver load_stop_observer(shell()->web_contents());
     shell()->web_contents()->GetController().GoForward();
     load_stop_observer.Wait();
   }
@@ -305,46 +302,49 @@ IN_PROC_BROWSER_TEST_F(SessionHistoryTest, FrameFormBackForward) {
   EXPECT_EQ(frames, GetTabURL());
 }
 
-// TODO(mpcomplete): enable this when Bug 734372 is fixed:
-// "Doing a session history navigation does not restore newly-created subframe
-// document state"
-// Test that back/forward preserves POST data and document state when navigating
-// across frames (ie, from frame -> nonframe).
-// Hangs, see http://crbug.com/45058.
-// https://crbug.com/1219373 fails with BFCache field trial testing config.
-#if defined(OS_ANDROID)
-#define MAYBE_CrossFrameFormBackForward DISABLED_CrossFrameFormBackForward
-#else
-#define MAYBE_CrossFrameFormBackForward CrossFrameFormBackForward
-#endif
-IN_PROC_BROWSER_TEST_F(SessionHistoryTest, MAYBE_CrossFrameFormBackForward) {
+IN_PROC_BROWSER_TEST_F(SessionHistoryTest, CrossFrameFormBackForward) {
   ASSERT_FALSE(CanGoBack());
 
   GURL frames(GetURL("frames.html"));
+  // Open a page with "ftop" and  "fbot" iframe.
+  // The title of the main frame follows the title of the "fbot" iframe.
   ASSERT_NO_FATAL_FAILURE(NavigateAndCheckTitle("frames.html", "bot1"));
 
+  // Click link in the "fbot" iframe. This updates the title of the main frame
+  // to "form".
   ClickLink("aform");
   EXPECT_EQ("form", GetTabTitle());
   EXPECT_EQ(frames, GetTabURL());
 
+  // Submit form in the "fbot" iframe. This submits to /echotitle which sets the
+  // title to the submission content of the form.
   SubmitForm("isubmit");
   EXPECT_EQ("text=&select=a", GetTabTitle());
   EXPECT_EQ(frames, GetTabURL());
 
+  // Go back, navigating the "fbot"  iframe. This updates the title of the main
+  // frame back to "form".
   GoBack();
   EXPECT_EQ("form", GetTabTitle());
   EXPECT_EQ(frames, GetTabURL());
 
   // history is [blank, bot1, *form, post]
 
+  // Navigate the main frame.
   ASSERT_NO_FATAL_FAILURE(NavigateAndCheckTitle("bot2.html", "bot2"));
 
   // history is [blank, bot1, form, *bot2]
 
+  // Navigate the main frame back. If back/forward cache is enabled, the page
+  // will be restored as it was before we navigated away from it, with the title
+  // set to "form". If not, the page will be reloaded from scratch, setting the
+  // title to "bot1" again.
   GoBack();
-  EXPECT_EQ("bot1", GetTabTitle());
+  EXPECT_EQ(IsBackForwardCacheEnabled() ? "form" : "bot1", GetTabTitle());
   EXPECT_EQ(frames, GetTabURL());
 
+  // Submit the form in the "fbot" iframe again . This submits to /echotitle
+  // which sets the title to the submission content of the form.
   SubmitForm("isubmit");
   EXPECT_EQ("text=&select=a", GetTabTitle());
   EXPECT_EQ(frames, GetTabURL());
@@ -396,9 +396,6 @@ IN_PROC_BROWSER_TEST_F(SessionHistoryTest, FragmentBackForward) {
 // back/forward list (such as trigger our start/stop loading events).  This
 // means the test will hang if it attempts to navigate too far forward or back,
 // since we'll be waiting forever for a load stop event.
-//
-// TODO(brettw) bug 50648: fix flakyness. This test seems like it was failing
-// about 1/4 of the time on Vista by failing to execute JavascriptGo (see bug).
 IN_PROC_BROWSER_TEST_F(SessionHistoryTest, JavascriptHistory) {
   ASSERT_FALSE(CanGoBack());
 
@@ -460,8 +457,7 @@ IN_PROC_BROWSER_TEST_F(SessionHistoryTest, JavascriptHistory) {
   // types.  For example, load about:network in a tab, then a real page, then
   // try to go back and forward with JavaScript.  Bug 1136715.
   // (Hard to test right now, because pages like about:network cause the
-  // TabProxy to hang.  This is because they do not appear to use the
-  // NotificationService.)
+  // TabProxy to hang.)
 }
 
 IN_PROC_BROWSER_TEST_F(SessionHistoryTest, LocationReplace) {
@@ -479,8 +475,8 @@ IN_PROC_BROWSER_TEST_F(SessionHistoryTest, LocationChangeInSubframe) {
       "location_redirect.html", "Default Title"));
 
   FrameTreeNode* root = static_cast<WebContentsImpl*>(shell()->web_contents())
-                            ->GetFrameTree()
-                            ->root();
+                            ->GetPrimaryFrameTree()
+                            .root();
   TestFrameNavigationObserver observer(root->child_at(0));
   shell()->LoadURL(GURL("javascript:void(frames[0].navigate())"));
   observer.Wait();
@@ -498,8 +494,8 @@ IN_PROC_BROWSER_TEST_F(SessionHistoryScrollAnchorTest,
       NavigateAndCheckTitle("location_redirect.html", "Default Title"));
 
   FrameTreeNode* root = static_cast<WebContentsImpl*>(shell()->web_contents())
-                            ->GetFrameTree()
-                            ->root();
+                            ->GetPrimaryFrameTree()
+                            .root();
   TestFrameNavigationObserver observer(root->child_at(0));
   shell()->LoadURL(GURL("javascript:void(frames[0].navigate())"));
   observer.Wait();

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,9 @@
 
 #include <atomic>
 
-#include "third_party/nearby/src/cpp/platform/api/atomic_reference.h"
+#include "third_party/nearby/src/internal/platform/implementation/atomic_reference.h"
 
-namespace location {
-namespace nearby {
-namespace chrome {
+namespace nearby::chrome {
 
 // Concrete AtomicUint32 implementation.
 class AtomicUint32 : public api::AtomicUint32 {
@@ -30,8 +28,6 @@ class AtomicUint32 : public api::AtomicUint32 {
   std::atomic<std::uint32_t> value_;
 };
 
-}  // namespace chrome
-}  // namespace nearby
-}  // namespace location
+}  // namespace nearby::chrome
 
 #endif  // CHROME_SERVICES_SHARING_NEARBY_PLATFORM_ATOMIC_UINT32_H_

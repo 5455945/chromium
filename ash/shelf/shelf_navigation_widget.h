@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 
 #include "ash/ash_export.h"
 #include "ash/shelf/shelf_component.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/views/accessible_pane_view.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
@@ -27,6 +28,7 @@ class HomeButton;
 enum class HotseatState;
 class NavigationButtonAnimationMetricsReporter;
 class Shelf;
+class ShelfNavigationWidgetDelegate;
 class ShelfView;
 
 // The shelf navigation widget holds the home button and (when in tablet mode)
@@ -47,11 +49,17 @@ class ASH_EXPORT ShelfNavigationWidget : public ShelfComponent,
 
     views::BoundsAnimator* GetBoundsAnimator();
 
+    views::View* GetWidgetDelegateView();
+
    private:
-    ShelfNavigationWidget* navigation_widget_;
+    raw_ptr<ShelfNavigationWidget> navigation_widget_;
   };
 
   ShelfNavigationWidget(Shelf* shelf, ShelfView* shelf_view);
+
+  ShelfNavigationWidget(const ShelfNavigationWidget&) = delete;
+  ShelfNavigationWidget& operator=(const ShelfNavigationWidget&) = delete;
+
   ~ShelfNavigationWidget() override;
 
   // Initializes the widget, sets its contents view and basic properties.
@@ -96,8 +104,6 @@ class ASH_EXPORT ShelfNavigationWidget : public ShelfComponent,
   }
 
  private:
-  class Delegate;
-
   void UpdateButtonVisibility(
       views::View* button,
       bool visible,
@@ -116,8 +122,8 @@ class ASH_EXPORT ShelfNavigationWidget : public ShelfComponent,
   // Returns the number of visible control buttons.
   int CalculateButtonCount() const;
 
-  Shelf* shelf_ = nullptr;
-  Delegate* delegate_ = nullptr;
+  raw_ptr<Shelf> shelf_ = nullptr;
+  raw_ptr<ShelfNavigationWidgetDelegate> delegate_ = nullptr;
 
   // In tablet mode with hotseat enabled, `clip_rect_after_rtl_` is used to hide
   // the invisible widget part. We try best to avoid changing the widget's
@@ -139,8 +145,6 @@ class ASH_EXPORT ShelfNavigationWidget : public ShelfComponent,
   // Widget to ensure it outlives the HomeButton view.
   std::unique_ptr<NavigationButtonAnimationMetricsReporter>
       home_button_metrics_reporter_;
-
-  DISALLOW_COPY_AND_ASSIGN(ShelfNavigationWidget);
 };
 
 }  // namespace ash

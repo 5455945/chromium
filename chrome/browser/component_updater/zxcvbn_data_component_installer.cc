@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,28 +6,33 @@
 
 #include <stdint.h>
 
+#include <algorithm>
 #include <array>
+#include <bit>
 #include <memory>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/containers/flat_map.h"
+#include "base/feature_list.h"
+#include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/files/memory_mapped_file.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/ranges/algorithm.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
-#include "base/task/post_task.h"
 #include "base/task/thread_pool.h"
 #include "base/values.h"
 #include "base/version.h"
 #include "components/component_updater/component_installer.h"
 #include "components/component_updater/component_updater_service.h"
+#include "components/password_manager/core/common/password_manager_features.h"
 #include "components/update_client/update_client.h"
 #include "components/update_client/update_client_errors.h"
 #include "components/update_client/utils.h"
@@ -35,54 +40,43 @@
 
 namespace component_updater {
 
-constexpr base::FilePath::StringPieceType
+constexpr base::FilePath::StringViewType
     ZxcvbnDataComponentInstallerPolicy::kEnglishWikipediaTxtFileName;
-constexpr base::FilePath::StringPieceType
+constexpr base::FilePath::StringViewType
     ZxcvbnDataComponentInstallerPolicy::kFemaleNamesTxtFileName;
-constexpr base::FilePath::StringPieceType
+constexpr base::FilePath::StringViewType
     ZxcvbnDataComponentInstallerPolicy::kMaleNamesTxtFileName;
-constexpr base::FilePath::StringPieceType
+constexpr base::FilePath::StringViewType
     ZxcvbnDataComponentInstallerPolicy::kPasswordsTxtFileName;
-constexpr base::FilePath::StringPieceType
+constexpr base::FilePath::StringViewType
     ZxcvbnDataComponentInstallerPolicy::kSurnamesTxtFileName;
-constexpr base::FilePath::StringPieceType
+constexpr base::FilePath::StringViewType
     ZxcvbnDataComponentInstallerPolicy::kUsTvAndFilmTxtFileName;
+
+constexpr base::FilePath::StringViewType
+    ZxcvbnDataComponentInstallerPolicy::kCombinedRankedDictsFileName;
 
 namespace {
 
-constexpr std::array<base::FilePath::StringPieceType, 6> kFileNames = {{
-    ZxcvbnDataComponentInstallerPolicy::kEnglishWikipediaTxtFileName,
-    ZxcvbnDataComponentInstallerPolicy::kFemaleNamesTxtFileName,
-    ZxcvbnDataComponentInstallerPolicy::kMaleNamesTxtFileName,
-    ZxcvbnDataComponentInstallerPolicy::kPasswordsTxtFileName,
-    ZxcvbnDataComponentInstallerPolicy::kSurnamesTxtFileName,
-    ZxcvbnDataComponentInstallerPolicy::kUsTvAndFilmTxtFileName,
-}};
+constexpr char kFirstMemoryMappedVersion[] = "2";
 
-zxcvbn::RankedDicts ParseRankedDictionaries(const base::FilePath& install_dir) {
-  std::vector<std::string> raw_dicts;
-  for (const auto& file_name : kFileNames) {
-    base::FilePath dictionary_path = install_dir.Append(file_name);
-    DVLOG(1) << "Reading Dictionary from file: " << dictionary_path;
+// The size (in bytes) of the marker at the beginning of the (memory mapped)
+// combined ranked dictionaries file.
+constexpr int kNumMarkerBytes = 1;
+// The marker bit - see also `zxcvbn::MarkedBigEndianU15::MARKER_BIT`.
+constexpr uint8_t kMarkerBit = 0x80;
 
-    std::string dictionary;
-    if (base::ReadFileToString(dictionary_path, &dictionary)) {
-      raw_dicts.push_back(std::move(dictionary));
-    } else {
-      VLOG(1) << "Failed reading from " << dictionary_path;
-    }
+zxcvbn::RankedDicts MemoryMapRankedDictionaries(
+    const base::FilePath& install_dir) {
+  base::FilePath dictionary_path = install_dir.Append(
+      ZxcvbnDataComponentInstallerPolicy::kCombinedRankedDictsFileName);
+  DVLOG(1) << "Memory mapping dictionary from file: " << dictionary_path;
+  auto map = std::make_unique<base::MemoryMappedFile>();
+  if (!map->Initialize(dictionary_path)) {
+    VLOG(1) << "Failed to memory map file from " << dictionary_path;
+    return zxcvbn::RankedDicts(nullptr);
   }
-
-  // The contained StringPieces hold references to the strings in raw_dicts.
-  std::vector<std::vector<base::StringPiece>> dicts;
-  for (const auto& raw_dict : raw_dicts) {
-    dicts.push_back(base::SplitStringPiece(
-        raw_dict, "\r\n", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY));
-  }
-
-  // This copies the words; after this call, the original strings can be
-  // discarded.
-  return zxcvbn::RankedDicts(dicts);
+  return zxcvbn::RankedDicts(std::move(map));
 }
 
 // The SHA256 of the SubjectPublicKeyInfo used to sign the extension.
@@ -96,16 +90,50 @@ constexpr std::array<uint8_t, 32> kZxcvbnDataPublicKeySha256 = {
 }  // namespace
 
 bool ZxcvbnDataComponentInstallerPolicy::VerifyInstallation(
-    const base::DictionaryValue& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) const {
-  return base::ranges::all_of(kFileNames, [&](const auto& file_name) {
-    return base::PathExists(install_dir.Append(file_name));
-  });
+  const std::string* version_string = manifest.FindString("version");
+  if (!version_string) {
+    return false;
+  }
+
+  base::Version version(*version_string);
+  if (!version.IsValid()) {
+    return false;
+  }
+
+  if (std::ranges::any_of(kFileNames, [&install_dir](const auto& file_name) {
+        return !base::PathExists(install_dir.Append(file_name));
+      })) {
+    return false;
+  }
+
+  if (version < base::Version(kFirstMemoryMappedVersion)) {
+    return false;
+  }
+
+  // If the version supports memory mapping, then the binary file that contains
+  // the combined ranked dictionaries must exist, too.
+  const base::FilePath combined_ranked_dicts_path = install_dir.Append(
+      ZxcvbnDataComponentInstallerPolicy::kCombinedRankedDictsFileName);
+  if (!base::PathExists(combined_ranked_dicts_path)) {
+    return false;
+  }
+
+  // Perform a minimal check that the file has not been corrupted - otherwise
+  // the client will run into a failing CHECK when using the library.
+  // See (crbug.com/40945968) for instances where this occurred.
+  char local_buffer[kNumMarkerBytes] = {};
+  if (base::ReadFile(combined_ranked_dicts_path, local_buffer,
+                     /*max_size=*/kNumMarkerBytes) != kNumMarkerBytes) {
+    return false;
+  }
+  return std::bit_cast<uint8_t>(local_buffer[0]) & kMarkerBit;
 }
 
 bool ZxcvbnDataComponentInstallerPolicy::
     SupportsGroupPolicyEnabledComponentUpdates() const {
-  return false;
+  return true;
 }
 
 bool ZxcvbnDataComponentInstallerPolicy::RequiresNetworkEncryption() const {
@@ -114,7 +142,7 @@ bool ZxcvbnDataComponentInstallerPolicy::RequiresNetworkEncryption() const {
 
 update_client::CrxInstaller::Result
 ZxcvbnDataComponentInstallerPolicy::OnCustomInstall(
-    const base::DictionaryValue& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) {
   return update_client::CrxInstaller::Result(update_client::InstallError::NONE);
 }
@@ -124,14 +152,18 @@ void ZxcvbnDataComponentInstallerPolicy::OnCustomUninstall() {}
 void ZxcvbnDataComponentInstallerPolicy::ComponentReady(
     const base::Version& version,
     const base::FilePath& install_dir,
-    std::unique_ptr<base::DictionaryValue> manifest) {
+    base::DictValue manifest) {
   DVLOG(1) << "Zxcvbn Data Component ready, version " << version.GetString()
            << " in " << install_dir;
 
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
-      base::BindOnce(&ParseRankedDictionaries, install_dir),
-      base::BindOnce(&zxcvbn::SetRankedDicts));
+  if (version >= base::Version(kFirstMemoryMappedVersion)) {
+    base::ThreadPool::PostTaskAndReplyWithResult(
+        FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
+        base::BindOnce(&MemoryMapRankedDictionaries, install_dir),
+        base::BindOnce(&zxcvbn::SetRankedDicts));
+  } else {
+    DVLOG(1) << "Zxcvbn Data Component failed, old version";
+  }
 }
 
 base::FilePath ZxcvbnDataComponentInstallerPolicy::GetRelativeInstallDir()
@@ -141,8 +173,7 @@ base::FilePath ZxcvbnDataComponentInstallerPolicy::GetRelativeInstallDir()
 
 void ZxcvbnDataComponentInstallerPolicy::GetHash(
     std::vector<uint8_t>* hash) const {
-  hash->assign(kZxcvbnDataPublicKeySha256.begin(),
-               kZxcvbnDataPublicKeySha256.end());
+  hash->assign_range(kZxcvbnDataPublicKeySha256);
 }
 
 std::string ZxcvbnDataComponentInstallerPolicy::GetName() const {

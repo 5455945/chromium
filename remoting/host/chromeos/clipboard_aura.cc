@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,10 +25,7 @@ const int64_t kClipboardPollingIntervalMs = 500;
 namespace remoting {
 
 ClipboardAura::ClipboardAura()
-    : current_change_count_(0),
-      polling_interval_(
-          base::TimeDelta::FromMilliseconds(kClipboardPollingIntervalMs)) {
-}
+    : polling_interval_(base::Milliseconds(kClipboardPollingIntervalMs)) {}
 
 ClipboardAura::~ClipboardAura() {
   DCHECK(thread_checker_.CalledOnValidThread());
@@ -58,9 +55,9 @@ void ClipboardAura::InjectClipboardEvent(
   ui::ScopedClipboardWriter clipboard_writer(ui::ClipboardBuffer::kCopyPaste);
   clipboard_writer.WriteText(base::UTF8ToUTF16(event.data()));
 
-  // Update local change-count to prevent this change from being picked up by
+  // Update local change-token to prevent this change from being picked up by
   // CheckClipboardForChanges.
-  current_change_count_++;
+  current_change_token_ = ui::ClipboardSequenceNumberToken();
 }
 
 void ClipboardAura::SetPollingIntervalForTesting(
@@ -74,22 +71,28 @@ void ClipboardAura::CheckClipboardForChanges() {
   DCHECK(thread_checker_.CalledOnValidThread());
 
   ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
-  uint64_t change_count =
+  ui::ClipboardSequenceNumberToken change_token =
       clipboard->GetSequenceNumber(ui::ClipboardBuffer::kCopyPaste);
 
-  if (change_count == current_change_count_) {
+  if (change_token == current_change_token_) {
     return;
   }
 
-  current_change_count_ = change_count;
+  current_change_token_ = change_token;
+
+  ui::DataTransferEndpoint data_dst = ui::DataTransferEndpoint(
+      ui::EndpointType::kDefault, {.notify_if_restricted = false});
+  clipboard->ReadAsciiText(ui::ClipboardBuffer::kCopyPaste, std::move(data_dst),
+                           base::BindOnce(&ClipboardAura::OnReadAsciiText,
+                                          weak_factory_.GetWeakPtr()));
+}
+
+void ClipboardAura::OnReadAsciiText(std::string data) {
+  DCHECK(thread_checker_.CalledOnValidThread());
 
   protocol::ClipboardEvent event;
-  std::string data;
-  ui::DataTransferEndpoint data_dst = ui::DataTransferEndpoint(
-      ui::EndpointType::kDefault, /*notify_if_restricted=*/false);
-  clipboard->ReadAsciiText(ui::ClipboardBuffer::kCopyPaste, &data_dst, &data);
   event.set_mime_type(kMimeTypeTextUtf8);
-  event.set_data(data);
+  event.set_data(std::move(data));
 
   client_clipboard_->InjectClipboardEvent(event);
 }

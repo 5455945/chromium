@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,12 @@
 
 #include "base/check_op.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/notreached.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/safe_browsing/download_protection/download_protection_delegate_android.h"
+#include "chrome/browser/safe_browsing/download_protection/download_protection_service.h"
 #include "chrome/browser/safe_browsing/telemetry/android/android_telemetry_service.h"
-#include "chrome/browser/safe_browsing/telemetry/telemetry_service.h"
 #include "components/safe_browsing/android/remote_database_manager.h"
 #include "components/safe_browsing/buildflags.h"
 #include "components/safe_browsing/core/common/features.h"
@@ -23,26 +25,33 @@ namespace safe_browsing {
 
 // static
 std::unique_ptr<ServicesDelegate> ServicesDelegate::Create(
-    SafeBrowsingService* safe_browsing_service) {
+    SafeBrowsingServiceImpl* safe_browsing_service) {
   return base::WrapUnique(new ServicesDelegateAndroid(safe_browsing_service));
 }
 
 // static
 std::unique_ptr<ServicesDelegate> ServicesDelegate::CreateForTest(
-    SafeBrowsingService* safe_browsing_service,
+    SafeBrowsingServiceImpl* safe_browsing_service,
     ServicesDelegate::ServicesCreator* services_creator) {
-  NOTREACHED();
-  return base::WrapUnique(new ServicesDelegateAndroid(safe_browsing_service));
+  return base::WrapUnique(
+      new ServicesDelegateAndroid(safe_browsing_service, services_creator));
 }
 
 ServicesDelegateAndroid::ServicesDelegateAndroid(
-    SafeBrowsingService* safe_browsing_service)
+    SafeBrowsingServiceImpl* safe_browsing_service)
     : ServicesDelegate(safe_browsing_service, /*services_creator=*/nullptr) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+}
+
+ServicesDelegateAndroid::ServicesDelegateAndroid(
+    SafeBrowsingServiceImpl* safe_browsing_service,
+    ServicesDelegate::ServicesCreator* services_creator)
+    : ServicesDelegate(safe_browsing_service, services_creator) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 }
 
 ServicesDelegateAndroid::~ServicesDelegateAndroid() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 }
 
 const scoped_refptr<SafeBrowsingDatabaseManager>&
@@ -53,8 +62,14 @@ ServicesDelegateAndroid::database_manager() const {
 void ServicesDelegateAndroid::Initialize() {
   if (!database_manager_set_for_tests_) {
     database_manager_ =
-        base::WrapRefCounted(new RemoteSafeBrowsingDatabaseManager());
+        base::MakeRefCounted<RemoteSafeBrowsingDatabaseManager>();
   }
+
+  download_service_.reset(
+      (services_creator_ &&
+       services_creator_->CanCreateDownloadProtectionService())
+          ? services_creator_->CreateDownloadProtectionService()
+          : CreateDownloadProtectionService());
 }
 
 void ServicesDelegateAndroid::SetDatabaseManagerForTest(
@@ -65,10 +80,15 @@ void ServicesDelegateAndroid::SetDatabaseManagerForTest(
 
 void ServicesDelegateAndroid::ShutdownServices() {
   telemetry_service_.reset();
+  download_service_.reset();
   ServicesDelegate::ShutdownServices();
 }
 
-void ServicesDelegateAndroid::RefreshState(bool enable) {}
+void ServicesDelegateAndroid::RefreshState(bool enable) {
+  if (download_service_) {
+    download_service_->SetEnabled(enable);
+  }
+}
 
 std::unique_ptr<prefs::mojom::TrackedPreferenceValidationDelegate>
 ServicesDelegateAndroid::CreatePreferenceValidationDelegate(Profile* profile) {
@@ -81,37 +101,50 @@ void ServicesDelegateAndroid::RegisterDelayedAnalysisCallback(
 void ServicesDelegateAndroid::AddDownloadManager(
     content::DownloadManager* download_manager) {}
 
-void ServicesDelegateAndroid::StartOnIOThread(
-    scoped_refptr<network::SharedURLLoaderFactory> sb_url_loader_factory,
-    scoped_refptr<network::SharedURLLoaderFactory> browser_url_loader_factory,
-    const V4ProtocolConfig& v4_config) {
-  if (base::FeatureList::IsEnabled(kSafeBrowsingRemoveCookies)) {
-    database_manager_->StartOnIOThread(browser_url_loader_factory, v4_config);
-  } else {
-    database_manager_->StartOnIOThread(sb_url_loader_factory, v4_config);
-  }
+DownloadProtectionService* ServicesDelegateAndroid::GetDownloadService() {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+  return download_service_.get();
 }
 
-void ServicesDelegateAndroid::StopOnIOThread(bool shutdown) {
-  database_manager_->StopOnIOThread(shutdown);
+void ServicesDelegateAndroid::StartOnUIThread(
+    scoped_refptr<network::SharedURLLoaderFactory> browser_url_loader_factory,
+    const SBProtocolConfig& config) {
+  database_manager_->StartOnUIThread(browser_url_loader_factory, config);
+}
+
+void ServicesDelegateAndroid::StopOnUIThread(bool shutdown) {
+  database_manager_->StopOnUIThread(shutdown);
 }
 
 void ServicesDelegateAndroid::CreateTelemetryService(Profile* profile) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(profile);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+  CHECK(profile, base::NotFatalUntil::M162);
 
   if (profile->IsOffTheRecord())
     return;
 
-  DCHECK(!telemetry_service_);
-  telemetry_service_ = std::make_unique<AndroidTelemetryService>(
-      safe_browsing_service_, profile);
+  CHECK(!telemetry_service_, base::NotFatalUntil::M162);
+  telemetry_service_ = std::make_unique<AndroidTelemetryService>(profile);
 }
 
 void ServicesDelegateAndroid::RemoveTelemetryService(Profile* profile) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   if (telemetry_service_ && telemetry_service_->profile() == profile)
     telemetry_service_.reset();
+}
+
+DownloadProtectionService*
+ServicesDelegateAndroid::CreateDownloadProtectionService() {
+  auto delegate = std::make_unique<DownloadProtectionDelegateAndroid>();
+  auto download_service = std::make_unique<DownloadProtectionService>(
+      safe_browsing_service_, std::move(delegate));
+  return download_service.release();
+}
+
+void ServicesDelegateAndroid::OnProfileWillBeDestroyed(Profile* profile) {
+  if (download_service_) {
+    download_service_->RemovePendingDownloadRequests(profile);
+  }
 }
 
 }  // namespace safe_browsing

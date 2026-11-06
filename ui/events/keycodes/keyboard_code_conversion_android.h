@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,6 +12,9 @@
 namespace ui {
 
 EVENTS_BASE_EXPORT KeyboardCode KeyboardCodeFromAndroidKeyCode(int keycode);
+
+EVENTS_BASE_EXPORT int AndroidKeyCodeFromKeyboardCode(
+    KeyboardCode keyboard_code);
 
 // Returns DomKey from an Android character and keycode.
 EVENTS_BASE_EXPORT DomKey GetDomKeyFromAndroidEvent(int keycode,

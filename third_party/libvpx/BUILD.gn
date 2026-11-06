@@ -1,71 +1,93 @@
-# Copyright 2014 The Chromium Authors. All rights reserved.
+# Copyright 2014 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/android/config.gni")
+import("//build/buildflag_header.gni")
 import("//build/config/arm.gni")
-import("//build/config/chromeos/ui_mode.gni")
-import("//build/config/ios/config.gni")
-import("//build/config/sanitizers/sanitizers.gni")
+import("//build/config/chrome_build.gni")
+import("//testing/test.gni")
 import("//third_party/libvpx/libvpx_srcs.gni")
+import("//third_party/libvpx/libvpx_test_srcs.gni")
 import("//third_party/nasm/nasm_assemble.gni")
 
-# Sets the architecture name for building libvpx.
+# Sets the architecture name and whether high bit depth is supported for
+# building libvpx.
 if (current_cpu == "x86") {
   cpu_arch_full = "ia32"
+  libvpx_high_bit_depth = true
 } else if (current_cpu == "x64") {
   if (is_msan) {
     cpu_arch_full = "generic"
   } else {
     cpu_arch_full = "x64"
   }
+  libvpx_high_bit_depth = true
 } else if (current_cpu == "arm") {
-  if (is_chromeos_ash) {
+  if (is_chromeos) {
     # ChromeOS gets highbd vp9 but other arm targets do not.
+    # TODO(thakis): ChromeOS no longer ships a 32-bit arm build, remove this.
     cpu_arch_full = "arm-neon-highbd"
-  } else if (arm_use_neon) {
+    libvpx_high_bit_depth = true
+  } else {
     cpu_arch_full = "arm-neon"
-  } else if (is_android) {
-    cpu_arch_full = "arm-neon-cpu-detect"
-  } else {
-    cpu_arch_full = "arm"
+    libvpx_high_bit_depth = false
   }
-} else if (current_cpu == "arm64") {
-  if (is_chromeos_ash || is_mac) {
+} else if (current_cpu == "arm64" || current_cpu == "arm64e") {
+  # We support vp9 profile 2 for SW decoding on all platforms except mobile
+  # Android or Fuchsia.
+  if ((is_android && !is_desktop_android) || is_fuchsia) {
+    cpu_arch_full = "arm64"
+    libvpx_high_bit_depth = false
+  } else {
     cpu_arch_full = "arm64-highbd"
-  } else {
-    cpu_arch_full = current_cpu
+    libvpx_high_bit_depth = true
   }
+} else if (current_cpu == "riscv64") {
+  cpu_arch_full = "generic"
+  libvpx_high_bit_depth = true
+} else if (current_cpu == "loong64") {
+  cpu_arch_full = "loongarch"
+  libvpx_high_bit_depth = false
 } else {
   cpu_arch_full = current_cpu
+  libvpx_high_bit_depth = false
 }
 
-if (is_nacl) {
-  platform_include_dir = "source/config/nacl"
-} else {
-  # The mac configurations are currently a relic. They were useful when
-  # x86inc.asm did not work for MACH_O but now the build is identical to the
-  # linux config. iOS for arm on the other hand needs an apple-specific twist in
-  # vpx_config.asm
-  if (is_ios && current_cpu == "arm") {
-    os_category = current_os
-  } else if (is_posix || is_fuchsia) {
-    # Should cover linux, fuchsia, mac, and the ios simulator.
-    os_category = "linux"
-  } else {  # This should only match windows.
-    os_category = current_os
-  }
-  platform_include_dir = "source/config/$os_category/$cpu_arch_full"
+buildflag_header("libvpx_buildflags") {
+  header = "libvpx_buildflags.h"
+  flags = [ "LIBVPX_HIGH_BIT_DEPTH=$libvpx_high_bit_depth" ]
 }
+
+# The mac configurations are currently a relic. They were useful when
+# x86inc.asm did not work for MACH_O but now the build is identical to the
+# linux config. iOS for arm on the other hand needs an apple-specific twist in
+# vpx_config.asm
+if (is_ios && current_cpu == "arm") {
+  os_category = current_os
+} else if (is_posix || is_fuchsia) {
+  # Should cover linux, fuchsia, mac, and the ios simulator.
+  os_category = "linux"
+} else {  # This should only match windows.
+  os_category = current_os
+}
+platform_include_dir = "source/config/$os_category/$cpu_arch_full"
 
 libvpx_include_dirs = [
   "source/config",
-  platform_include_dir,
   "source/libvpx",
+  platform_include_dir,
 ]
 
+# Private configuration used in building libvpx.
 config("libvpx_config") {
   include_dirs = libvpx_include_dirs
+  defines = [
+    "CHROMIUM",
+
+    # Maximum allowed for a direct mapping,
+    # see partition_alloc::MaxAllocationSize()
+    "VPX_MAX_ALLOCABLE_MEMORY=((1ULL << 31) - (1 << 21))",
+  ]
 
   # gn orders flags on a target before flags from configs. The default config
   # adds -Wall, and these flags have to be after -Wall -- so they need to come
@@ -81,16 +103,6 @@ config("libvpx_config") {
       # libvpx has many static functions in header, which trigger this warning.
       "-Wno-unused-function",
     ]
-
-    # Fixes a mac / ios simulator link error for vpx_scaled_2d:
-    # Undefined symbols for architecture x86_64:
-    # "_vpx_scaled_2d", referenced from:
-    # _vp9_scale_and_extend_frame_c in libvpx.a(vp9_frame_scale.o)
-    # (maybe you meant: _vpx_scaled_2d_ssse3)
-    # ld: symbol(s) not found for architecture x86_64
-    if (is_mac || (is_ios && (current_cpu == "x86" || current_cpu == "x64"))) {
-      cflags += [ "-fno-common" ]
-    }
   } else if (!is_win) {
     cflags = [
       "-Wno-unused-function",
@@ -100,8 +112,45 @@ config("libvpx_config") {
 }
 
 # This config is applied to targets that depend on libvpx.
-config("libvpx_external_config") {
-  include_dirs = [ "source/libvpx" ]
+config("libvpx_public_config") {
+  include_dirs = [
+    # libvpx_public_config does not have "source/config" (which gives access to
+    # the private header vpx_version.h) because code outside the libvpx library
+    # should use the vpx_codec_version*() functions and macros declared in the
+    # public header vpx_codec.h.
+    "source/libvpx",
+    platform_include_dir,
+  ]
+}
+
+source_set("libvpx_test_generic_headers") {
+  deps = [ ":libvpx" ]
+  sources = libvpx_test_srcs_generic_headers
+}
+
+executable("decode_encode_profile_test") {
+  configs -= [ "//build/config/compiler:chromium_code" ]
+  configs += [ "//build/config/compiler:no_chromium_code" ]
+  include_dirs = [ "source/libvpx/third_party/libwebm/" ]
+
+  testonly = true
+  sources = [
+    "source/libvpx/test/decode_test_driver.cc",
+    "source/libvpx/test/encode_test_driver.cc",
+    "source/libvpx/test/init_vpx_test.cc",
+    "source/libvpx/test/test_libvpx.cc",
+    "source/libvpx/test/test_vectors.cc",
+    "source/libvpx/third_party/libwebm/mkvparser/mkvparser.cc",
+    "source/libvpx/third_party/libwebm/mkvparser/mkvreader.cc",
+    "source/libvpx/webmdec.cc",
+    "source/libvpx/y4minput.c",
+    "tests/pgo/decode_encode_profile_test.cc",
+  ]
+  deps = [
+    ":libvpx",
+    ":libvpx_test_generic_headers",
+    "//testing/gtest",
+  ]
 }
 
 if (current_cpu == "x86" || (current_cpu == "x64" && !is_msan)) {
@@ -111,7 +160,12 @@ if (current_cpu == "x86" || (current_cpu == "x64" && !is_msan)) {
     } else if (current_cpu == "x64") {
       sources = libvpx_srcs_x86_64_assembly
     }
-
+    inputs = [
+      "$platform_include_dir/vpx_config.asm",
+      "source/libvpx/third_party/x86inc/x86inc.asm",
+      "source/libvpx/vpx_dsp/x86/bitdepth_conversion_sse2.asm",
+      "source/libvpx/vpx_ports/x86_abi_support.asm",
+    ]
     defines = [ "CHROMIUM" ]
     if (is_android) {
       # On Android, define __ANDROID__ to use alternative standard library
@@ -138,11 +192,10 @@ if (current_cpu == "x86" || (current_cpu == "x64" && !is_msan)) {
     }
     if (current_cpu == "x86") {
       sources = libvpx_srcs_x86_mmx
-      deps = [ ":libvpx_x86_headers" ]
     } else if (current_cpu == "x64") {
       sources = libvpx_srcs_x86_64_mmx
-      deps = [ ":libvpx_x86_64_headers" ]
     }
+    deps = [ ":libvpx_headers" ]
   }
 
   source_set("libvpx_intrinsics_sse2") {
@@ -154,11 +207,10 @@ if (current_cpu == "x86" || (current_cpu == "x64" && !is_msan)) {
     }
     if (current_cpu == "x86") {
       sources = libvpx_srcs_x86_sse2
-      deps = [ ":libvpx_x86_headers" ]
     } else if (current_cpu == "x64") {
       sources = libvpx_srcs_x86_64_sse2
-      deps = [ ":libvpx_x86_64_headers" ]
     }
+    deps = [ ":libvpx_headers" ]
   }
 
   source_set("libvpx_intrinsics_ssse3") {
@@ -170,11 +222,10 @@ if (current_cpu == "x86" || (current_cpu == "x64" && !is_msan)) {
     }
     if (current_cpu == "x86") {
       sources = libvpx_srcs_x86_ssse3
-      deps = [ ":libvpx_x86_headers" ]
     } else if (current_cpu == "x64") {
       sources = libvpx_srcs_x86_64_ssse3
-      deps = [ ":libvpx_x86_64_headers" ]
     }
+    deps = [ ":libvpx_headers" ]
   }
 
   source_set("libvpx_intrinsics_sse4_1") {
@@ -185,12 +236,11 @@ if (current_cpu == "x86" || (current_cpu == "x64" && !is_msan)) {
       cflags = [ "-msse4.1" ]
     }
     if (current_cpu == "x86") {
-      deps = [ ":libvpx_x86_headers" ]
       sources = libvpx_srcs_x86_sse4_1
     } else if (current_cpu == "x64") {
-      deps = [ ":libvpx_x86_64_headers" ]
       sources = libvpx_srcs_x86_64_sse4_1
     }
+    deps = [ ":libvpx_headers" ]
   }
 
   source_set("libvpx_intrinsics_avx") {
@@ -203,12 +253,11 @@ if (current_cpu == "x86" || (current_cpu == "x64" && !is_msan)) {
       cflags = [ "-mavx" ]
     }
     if (current_cpu == "x86") {
-      deps = [ ":libvpx_x86_headers" ]
       sources = libvpx_srcs_x86_avx
     } else if (current_cpu == "x64") {
-      deps = [ ":libvpx_x86_64_headers" ]
       sources = libvpx_srcs_x86_64_avx
     }
+    deps = [ ":libvpx_headers" ]
   }
 
   source_set("libvpx_intrinsics_avx2") {
@@ -221,12 +270,11 @@ if (current_cpu == "x86" || (current_cpu == "x64" && !is_msan)) {
       cflags = [ "-mavx2" ]
     }
     if (current_cpu == "x86") {
-      deps = [ ":libvpx_x86_headers" ]
       sources = libvpx_srcs_x86_avx2
     } else if (current_cpu == "x64") {
-      deps = [ ":libvpx_x86_64_headers" ]
       sources = libvpx_srcs_x86_64_avx2
     }
+    deps = [ ":libvpx_headers" ]
   }
 
   source_set("libvpx_intrinsics_avx512") {
@@ -247,34 +295,121 @@ if (current_cpu == "x86" || (current_cpu == "x64" && !is_msan)) {
       ]
     }
     if (current_cpu == "x86") {
-      deps = [ ":libvpx_x86_headers" ]
       sources = libvpx_srcs_x86_avx512
     } else if (current_cpu == "x64") {
-      deps = [ ":libvpx_x86_64_headers" ]
       sources = libvpx_srcs_x86_64_avx512
+    }
+    deps = [ ":libvpx_headers" ]
+  }
+}
+
+if (current_cpu == "loong64") {
+  source_set("libvpx_loongarch_lsx") {
+    configs -= [ "//build/config/compiler:chromium_code" ]
+    configs += [ "//build/config/compiler:no_chromium_code" ]
+    configs += [ ":libvpx_config" ]
+    cflags = [ "-mlsx" ]
+    sources = libvpx_srcs_loongarch_lsx
+  }
+}
+
+if (current_cpu == "arm" || current_cpu == "arm64" || current_cpu == "arm64e") {
+  source_set("libvpx_intrinsics_neon") {
+    check_includes = false
+    configs -= [ "//build/config/compiler:chromium_code" ]
+    configs += [ "//build/config/compiler:no_chromium_code" ]
+    configs += [ ":libvpx_config" ]
+    if (current_cpu == "arm") {
+      configs -= [ "//build/config/compiler:compiler_arm_fpu" ]
+      cflags = [ "-mfpu=neon" ]
+    }
+    if (cpu_arch_full == "arm-neon") {
+      sources = libvpx_srcs_arm_neon_neon
+    } else if (cpu_arch_full == "arm-neon-highbd") {
+      # TODO(thakis): ChromeOS no longer ships a 32-bit arm build, remove this.
+      sources = libvpx_srcs_arm_neon_highbd_neon
+    } else if (cpu_arch_full == "arm64") {
+      sources = libvpx_srcs_arm64_neon
+    } else if (cpu_arch_full == "arm64-highbd") {
+      sources = libvpx_srcs_arm64_highbd_neon
+    }
+    deps = [ ":libvpx_headers" ]
+  }
+}
+
+if (current_cpu == "arm64" || current_cpu == "arm64e") {
+  source_set("libvpx_intrinsics_neon_dotprod") {
+    check_includes = false
+    configs -= [ "//build/config/compiler:chromium_code" ]
+    configs += [ "//build/config/compiler:no_chromium_code" ]
+    configs += [ ":libvpx_config" ]
+    if (!is_win || is_clang) {
+      cflags = [ "-march=armv8.2-a+dotprod" ]
+    }
+    if (cpu_arch_full == "arm64") {
+      sources = libvpx_srcs_arm64_neon_dotprod
+    } else if (cpu_arch_full == "arm64-highbd") {
+      sources = libvpx_srcs_arm64_highbd_neon_dotprod
+    }
+    deps = [ ":libvpx_headers" ]
+  }
+
+  source_set("libvpx_intrinsics_neon_i8mm") {
+    check_includes = false
+    configs -= [ "//build/config/compiler:chromium_code" ]
+    configs += [ "//build/config/compiler:no_chromium_code" ]
+    configs += [ ":libvpx_config" ]
+    if (!is_win || is_clang) {
+      cflags = [ "-march=armv8.2-a+i8mm" ]
+    }
+    if (cpu_arch_full == "arm64") {
+      sources = libvpx_srcs_arm64_neon_i8mm
+    } else if (cpu_arch_full == "arm64-highbd") {
+      sources = libvpx_srcs_arm64_highbd_neon_i8mm
+    }
+    deps = [ ":libvpx_headers" ]
+  }
+
+  # SVE is disabled for Windows due to a limitation with clang-cl-18:
+  # third_party\llvm-build\Release+Asserts\lib\clang\18\include\arm_sve.h(271,1):
+  # error: cannot mangle this built-in __SVInt8_t type yet
+  if (!is_win) {
+    source_set("libvpx_intrinsics_sve") {
+      check_includes = false
+      configs -= [ "//build/config/compiler:chromium_code" ]
+      configs += [ "//build/config/compiler:no_chromium_code" ]
+      configs += [ ":libvpx_config" ]
+      cflags = [ "-march=armv8.2-a+dotprod+i8mm+sve" ]
+      if (cpu_arch_full == "arm64") {
+        sources = libvpx_srcs_arm64_sve
+      } else if (cpu_arch_full == "arm64-highbd") {
+        sources = libvpx_srcs_arm64_highbd_sve
+      }
+      deps = [ ":libvpx_headers" ]
+    }
+
+    source_set("libvpx_intrinsics_sve2") {
+      check_includes = false
+      configs -= [ "//build/config/compiler:chromium_code" ]
+      configs += [ "//build/config/compiler:no_chromium_code" ]
+      configs += [ ":libvpx_config" ]
+      cflags = [ "-march=armv9-a+sve2" ]
+      if (cpu_arch_full == "arm64") {
+        sources = libvpx_srcs_arm64_sve2
+      } else if (cpu_arch_full == "arm64-highbd") {
+        sources = libvpx_srcs_arm64_highbd_sve2
+      }
+      deps = [ ":libvpx_headers" ]
     }
   }
 }
 
-if (cpu_arch_full == "arm-neon-cpu-detect") {
-  static_library("libvpx_intrinsics_neon") {
-    configs -= [ "//build/config/compiler:compiler_arm_fpu" ]
-    configs += [ ":libvpx_config" ]
-    cflags = [ "-mfpu=neon" ]
-    sources = libvpx_srcs_arm_neon_cpu_detect_neon
-    deps = [ ":libvpx_arm_neon_cpu_detect_headers" ]
-  }
-}
-
 if (current_cpu == "arm") {
-  if (cpu_arch_full == "arm-neon") {
-    arm_assembly_sources = libvpx_srcs_arm_neon_assembly
-  } else if (cpu_arch_full == "arm-neon-highbd") {
+  if (cpu_arch_full == "arm-neon-highbd") {
+    # TODO(thakis): ChromeOS no longer ships a 32-bit arm build, remove this.
     arm_assembly_sources = libvpx_srcs_arm_neon_highbd_assembly
-  } else if (cpu_arch_full == "arm-neon-cpu-detect") {
-    arm_assembly_sources = libvpx_srcs_arm_neon_cpu_detect_assembly
   } else {
-    arm_assembly_sources = libvpx_srcs_arm_assembly
+    arm_assembly_sources = libvpx_srcs_arm_neon_assembly
   }
 }
 
@@ -308,8 +443,7 @@ if (current_cpu == "arm" && arm_assembly_sources != []) {
     sources = get_target_outputs(":convert_arm_assembly")
     configs -= [ "//build/config/compiler:compiler_arm_fpu" ]
     configs += [ ":libvpx_config" ]
-    if (cpu_arch_full == "arm-neon" || cpu_arch_full == "arm-neon-cpu-detect" ||
-        cpu_arch_full == "arm-neon-highbd") {
+    if (cpu_arch_full == "arm-neon" || cpu_arch_full == "arm-neon-highbd") {
       asmflags = [ "-mfpu=neon" ]
 
       # allow asm files to include generated sources which match the source
@@ -321,48 +455,38 @@ if (current_cpu == "arm" && arm_assembly_sources != []) {
   }
 }
 
-source_set("libvpx_x86_headers") {
-  sources = libvpx_srcs_x86_headers
-}
-
-source_set("libvpx_x86_64_headers") {
-  sources = libvpx_srcs_x86_64_headers
-}
-
-source_set("libvpx_arm_headers") {
-  sources = libvpx_srcs_arm_headers
-}
-
-source_set("libvpx_arm_neon_headers") {
-  sources = libvpx_srcs_arm_neon_headers
-}
-
-source_set("libvpx_arm_neon_cpu_detect_headers") {
-  sources = libvpx_srcs_arm_neon_cpu_detect_headers
-}
-
-source_set("libvpx_arm64_headers") {
-  sources = libvpx_srcs_arm64_headers
-}
-
-source_set("libvpx_arm_neon_highbd_headers") {
-  sources = libvpx_srcs_arm_neon_highbd_headers
-}
-
-source_set("libvpx_arm64_highbd_headers") {
-  sources = libvpx_srcs_arm64_highbd_headers
-}
-
-source_set("libvpx_mips_headers") {
-  sources = libvpx_srcs_mips_headers
-}
-
-source_set("libvpx_nacl_headers") {
-  sources = libvpx_srcs_nacl_headers
-}
-
-source_set("libvpx_generic_headers") {
-  sources = libvpx_srcs_generic_headers
+source_set("libvpx_headers") {
+  visibility = [ ":*" ]
+  if (current_cpu == "x86") {
+    sources = libvpx_srcs_x86_headers
+  } else if (current_cpu == "x64") {
+    if (is_msan) {
+      sources = libvpx_srcs_generic_headers
+    } else {
+      sources = libvpx_srcs_x86_64_headers
+    }
+  } else if (current_cpu == "mipsel" || current_cpu == "mips64el") {
+    sources = libvpx_srcs_mips_headers
+  } else if (current_cpu == "arm") {
+    if (is_chromeos) {
+      # TODO(thakis): ChromeOS no longer ships a 32-bit arm build, remove this.
+      sources = libvpx_srcs_arm_neon_highbd_headers
+    } else {
+      sources = libvpx_srcs_arm_neon_headers
+    }
+  } else if (current_cpu == "arm64" || current_cpu == "arm64e") {
+    if (is_chromeos || is_win || is_mac || is_ios) {
+      sources = libvpx_srcs_arm64_highbd_headers
+    } else {
+      sources = libvpx_srcs_arm64_headers
+    }
+  } else if (current_cpu == "ppc64") {
+    sources = libvpx_srcs_ppc64_headers
+  } else if (current_cpu == "riscv64") {
+    sources = libvpx_srcs_generic_headers
+  } else if (current_cpu == "loong64") {
+    sources = libvpx_srcs_loongarch_headers
+  }
 }
 
 static_library("libvpx") {
@@ -371,95 +495,94 @@ static_library("libvpx") {
     configs += [ "//build/config/compiler:optimize_max" ]
   }
 
-  # As "nasm" does not embed the required LC_BUILD_VERSION section in object
-  # files, it is not possible to build optimised version of the code if the
-  # target is iOS under "catalyst" environment. This version is not shipped,
-  # so there is no concern about performance.
-  # TODO(crbug.com/1145197): Remove this exception once "nasm" has support
-  # for embedding the correct LD_BUILD_VERSION section.
-  _force_generic_srcs = is_ios && target_environment == "catalyst"
+  public_deps = [ ":libvpx_headers" ]
 
-  if (is_nacl || _force_generic_srcs) {
-    sources = libvpx_srcs_generic
-    public_deps = [ ":libvpx_generic_headers" ]
-  } else if (current_cpu == "x86") {
+  if (current_cpu == "x86") {
     sources = libvpx_srcs_x86
-    public_deps = [ ":libvpx_x86_headers" ]
   } else if (current_cpu == "x64") {
     if (is_msan) {
       sources = libvpx_srcs_generic
-      public_deps = [ ":libvpx_generic_headers" ]
     } else {
       sources = libvpx_srcs_x86_64
-      public_deps = [ ":libvpx_x86_64_headers" ]
     }
   } else if (current_cpu == "mipsel" || current_cpu == "mips64el") {
     sources = libvpx_srcs_mips
-    public_deps = [ ":libvpx_mips_headers" ]
   } else if (current_cpu == "arm") {
-    if (is_chromeos_ash) {
+    if (is_chromeos) {
+      # TODO(thakis): ChromeOS no longer ships a 32-bit arm build, remove this.
       sources = libvpx_srcs_arm_neon_highbd
-      public_deps = [ ":libvpx_arm_neon_highbd_headers" ]
-    } else if (arm_use_neon) {
-      sources = libvpx_srcs_arm_neon
-      public_deps = [ ":libvpx_arm_neon_headers" ]
-    } else if (is_android) {
-      sources = libvpx_srcs_arm_neon_cpu_detect
-      public_deps = [ ":libvpx_arm_neon_cpu_detect_headers" ]
     } else {
-      sources = libvpx_srcs_arm
-      public_deps = [ ":libvpx_arm_headers" ]
+      sources = libvpx_srcs_arm_neon
     }
-  } else if (current_cpu == "arm64") {
-    if (is_chromeos_ash || is_win || is_mac) {
+  } else if (current_cpu == "arm64" || current_cpu == "arm64e") {
+    if (is_chromeos || is_win || is_mac || is_ios) {
       sources = libvpx_srcs_arm64_highbd
-      public_deps = [ ":libvpx_arm64_highbd_headers" ]
     } else {
       sources = libvpx_srcs_arm64
-      public_deps = [ ":libvpx_arm64_headers" ]
     }
+  } else if (current_cpu == "ppc64") {
+    sources = libvpx_srcs_ppc64
+  } else if (current_cpu == "riscv64") {
+    sources = libvpx_srcs_generic
+  } else if (current_cpu == "loong64") {
+    sources = libvpx_srcs_loongarch
   }
 
   configs -= [ "//build/config/compiler:chromium_code" ]
   configs += [ "//build/config/compiler:no_chromium_code" ]
   configs += [ ":libvpx_config" ]
   deps = []
-  if (!_force_generic_srcs) {
-    if (current_cpu == "x86" || (current_cpu == "x64" && !is_msan)) {
+  if (current_cpu == "x86" || (current_cpu == "x64" && !is_msan)) {
+    deps += [
+      ":libvpx_asm",
+      ":libvpx_intrinsics_avx",
+      ":libvpx_intrinsics_avx2",
+      ":libvpx_intrinsics_avx512",
+      ":libvpx_intrinsics_mmx",
+      ":libvpx_intrinsics_sse2",
+      ":libvpx_intrinsics_sse4_1",
+      ":libvpx_intrinsics_ssse3",
+    ]
+  }
+  if (cpu_arch_full == "arm-neon-highbd" || cpu_arch_full == "arm-neon" ||
+      current_cpu == "arm64" || current_cpu == "arm64e") {
+    deps += [ ":libvpx_intrinsics_neon" ]
+  }
+  if (current_cpu == "arm64" || current_cpu == "arm64e") {
+    deps += [ ":libvpx_intrinsics_neon_dotprod" ]
+    deps += [ ":libvpx_intrinsics_neon_i8mm" ]
+    if (!is_win) {
       deps += [
-        ":libvpx_asm",
-        ":libvpx_intrinsics_avx",
-        ":libvpx_intrinsics_avx2",
-        ":libvpx_intrinsics_avx512",
-        ":libvpx_intrinsics_mmx",
-        ":libvpx_intrinsics_sse2",
-        ":libvpx_intrinsics_sse4_1",
-        ":libvpx_intrinsics_ssse3",
+        ":libvpx_intrinsics_sve",
+        ":libvpx_intrinsics_sve2",
       ]
     }
   }
-  if (cpu_arch_full == "arm-neon-cpu-detect") {
-    deps += [ ":libvpx_intrinsics_neon" ]
-  }
   if (is_android) {
-    deps += [ "//third_party/android_ndk:cpu_features" ]
+    deps += [ "//third_party/cpu_features:ndk_compat" ]
   }
   if (current_cpu == "arm" && arm_assembly_sources != []) {
     deps += [ ":libvpx_assembly_arm" ]
   }
+  if (current_cpu == "loong64") {
+    deps += [ ":libvpx_loongarch_lsx" ]
+  }
 
-  public_configs = [ ":libvpx_external_config" ]
+  public_configs = [ ":libvpx_public_config" ]
 }
 
-static_library("libvp9rc") {
+static_library("libvpxrc") {
   if (!is_debug && is_win) {
     configs -= [ "//build/config/compiler:default_optimization" ]
     configs += [ "//build/config/compiler:optimize_max" ]
   }
 
   sources = [
+    "//third_party/libvpx/source/libvpx/vp8/vp8_ratectrl_rtc.cc",
+    "//third_party/libvpx/source/libvpx/vp8/vp8_ratectrl_rtc.h",
     "//third_party/libvpx/source/libvpx/vp9/ratectrl_rtc.cc",
     "//third_party/libvpx/source/libvpx/vp9/ratectrl_rtc.h",
+    "//third_party/libvpx/source/libvpx/vpx/internal/vpx_ratectrl_rtc.h",
   ]
 
   configs -= [ "//build/config/compiler:chromium_code" ]
@@ -467,5 +590,70 @@ static_library("libvp9rc") {
   configs += [ ":libvpx_config" ]
   public_deps = [ ":libvpx" ]
 
-  public_configs = [ ":libvpx_external_config" ]
+  public_configs = [ ":libvpx_public_config" ]
+
+  if (is_apple) {
+    # TODO(https://crbug.com/434866376): macOS/iOS builds require more
+    # modulemaps from Apple SDKs for this, e.g. Darwin.modulemap,
+    # Darwin_Mach.modulemap.
+    # Currently disable clang module for target to enable clang module by
+    # default in other places first.
+    use_libcxx_modules = false
+  }
+}
+
+test("vp8_encoder_fuzz_test") {
+  sources = [ "tests/fuzzer/vp8_encoder_fuzz_test.cc" ]
+
+  fuzztests = [
+    "VP8EncodeFuzzTest.VP8EncodeArbitraryCallSequenceSucceeds",
+    "VP8EncodeFuzzTest.VP8EncodeSucceeds",
+  ]
+
+  deps = [
+    ":libvpx",
+    "//third_party/fuzztest:fuzztest_gtest_main",
+  ]
+}
+
+test("vp9_encoder_fuzz_test") {
+  sources = [ "tests/fuzzer/vp9_encoder_fuzz_test.cc" ]
+
+  fuzztests = [
+    "VP9EncodeFuzzTest.VP9EncodeArbitraryCallSequenceSucceeds",
+    "VP9EncodeFuzzTest.VP9EncodeSucceeds",
+  ]
+
+  deps = [
+    ":libvpx",
+    "//third_party/fuzztest:fuzztest_gtest_main",
+  ]
+}
+
+test("test_libvpx") {
+  sources = libvpx_test_srcs_generic
+  sources += libvpx_test_srcs_generic_cc
+
+  include_dirs = [ "source/libvpx/third_party/libwebm/" ]
+
+  deps = [
+    ":libvpx",
+    ":libvpx_test_generic_headers",
+    "//testing/gtest",
+  ]
+
+  if (is_android) {
+    use_raw_android_executable = true
+    defines = [ "LIBVPX_TEST_DATA_PATH=/data/local/tmp/chromium_tests_root/third_party/libvpx/testdata" ]
+    data = [ "testdata/" ]
+  } else {
+    defines = [ string_join("",
+                            [
+                              "LIBVPX_TEST_DATA_PATH=",
+                              rebase_path("testdata", root_build_dir),
+                            ]) ]
+  }
+
+  configs -= [ "//build/config/compiler:chromium_code" ]
+  configs += [ "//build/config/compiler:no_chromium_code" ]
 }

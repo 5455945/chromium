@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,12 +11,18 @@
 #include <string>
 
 #include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "ipc/ipc_listener.h"
+#include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/system/message_pipe.h"
 #include "remoting/host/desktop_session_agent.h"
+#include "remoting/host/mojom/desktop_session.mojom.h"
+
+namespace base {
+class Location;
+}
 
 namespace IPC {
 class ChannelProxy;
@@ -29,22 +35,39 @@ class DesktopEnvironmentFactory;
 class DesktopSessionAgent;
 
 class DesktopProcess : public DesktopSessionAgent::Delegate,
-                       public IPC::Listener {
+                       public IPC::Listener,
+                       public mojom::WorkerProcessControl,
+                       public mojom::DesktopProcessControl {
  public:
   DesktopProcess(scoped_refptr<AutoThreadTaskRunner> caller_task_runner,
                  scoped_refptr<AutoThreadTaskRunner> input_task_runner,
                  scoped_refptr<AutoThreadTaskRunner> io_task_runner,
                  mojo::ScopedMessagePipeHandle daemon_channel_handle);
+
+  DesktopProcess(const DesktopProcess&) = delete;
+  DesktopProcess& operator=(const DesktopProcess&) = delete;
+
   ~DesktopProcess() override;
 
   // DesktopSessionAgent::Delegate implementation.
   DesktopEnvironmentFactory& desktop_environment_factory() override;
   void OnNetworkProcessDisconnected() override;
+  void CrashNetworkProcess(const base::Location& location) override;
 
   // IPC::Listener implementation.
-  bool OnMessageReceived(const IPC::Message& message) override;
   void OnChannelConnected(int32_t peer_pid) override;
   void OnChannelError() override;
+  void OnAssociatedInterfaceRequest(
+      const std::string& interface_name,
+      mojo::ScopedInterfaceEndpointHandle handle) override;
+
+  // mojom::WorkerProcessControl implementation.
+  void CrashProcess(const std::string& function_name,
+                    const std::string& file_name,
+                    int line_number) override;
+
+  // mojom::DesktopProcessControl implementation.
+  void ReconnectNetworkChannel() override;
 
   // Injects Secure Attention Sequence.
   void InjectSas();
@@ -57,13 +80,17 @@ class DesktopProcess : public DesktopSessionAgent::Delegate,
   bool Start(
       std::unique_ptr<DesktopEnvironmentFactory> desktop_environment_factory);
 
+  // Sets a callback that will be run once the network process has disconnected
+  // for testing purposes.
+  void SetOnNetworkProcessDisconnectedCallbackForTesting(
+      base::OnceClosure callback);
+
+  // Sets a callback that will be run once the desktop agent is created for
+  // testing purposes.
+  void SetOnDesktopAgentCreatedCallbackForTesting(base::OnceClosure callback);
+
  private:
-  // Crashes the process in response to a daemon's request. The daemon passes
-  // the location of the code that detected the fatal error resulted in this
-  // request. See the declaration of ChromotingDaemonMsg_Crash message.
-  void OnCrash(const std::string& function_name,
-               const std::string& file_name,
-               const int& line_number);
+  mojo::ScopedMessagePipeHandle CreateDesktopAgent();
 
   // Task runner on which public methods of this class should be called.
   scoped_refptr<AutoThreadTaskRunner> caller_task_runner_;
@@ -73,6 +100,9 @@ class DesktopProcess : public DesktopSessionAgent::Delegate,
 
   // Used for IPC communication with Daemon process.
   scoped_refptr<AutoThreadTaskRunner> io_task_runner_;
+
+  // Used for audio capturing and encoding.
+  scoped_refptr<AutoThreadTaskRunner> audio_task_runner_;
 
   // Factory used to create integration components for use by |desktop_agent_|.
   std::unique_ptr<DesktopEnvironmentFactory> desktop_environment_factory_;
@@ -88,9 +118,18 @@ class DesktopProcess : public DesktopSessionAgent::Delegate,
   // the network process.
   scoped_refptr<DesktopSessionAgent> desktop_agent_;
 
-  base::WeakPtrFactory<DesktopProcess> weak_factory_{this};
+  mojo::AssociatedRemote<mojom::DesktopSessionRequestHandler>
+      desktop_session_request_handler_;
 
-  DISALLOW_COPY_AND_ASSIGN(DesktopProcess);
+  mojo::AssociatedReceiver<mojom::WorkerProcessControl> worker_process_control_{
+      this};
+  mojo::AssociatedReceiver<mojom::DesktopProcessControl>
+      desktop_process_control_{this};
+
+  base::OnceClosure on_network_process_disconnected_callback_;
+  base::OnceClosure on_desktop_agent_created_callback_;
+
+  base::WeakPtrFactory<DesktopProcess> weak_factory_{this};
 };
 
 }  // namespace remoting

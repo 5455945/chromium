@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,14 +8,13 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
-#include "base/macros.h"
 #include "base/memory/ptr_util.h"
-#include "base/sequenced_task_runner.h"
-#include "base/task_runner.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/task_runner.h"
 #include "base/time/time.h"
 #include "storage/browser/blob/blob_data_snapshot.h"
 #include "storage/browser/blob/blob_reader.h"
@@ -30,15 +29,13 @@ namespace storage {
 BlobDataHandle::BlobDataHandleShared::BlobDataHandleShared(
     const std::string& uuid,
     const std::string& content_type,
-    const std::string& content_disposition,
     uint64_t size,
     BlobStorageContext* context)
     : uuid_(uuid),
       content_type_(content_type),
-      content_disposition_(content_disposition),
       size_(size),
       context_(context->AsWeakPtr()) {
-  context_->IncrementBlobRefCount(uuid);
+  context_->IncrementBlobHandleCount(uuid);
 }
 
 std::unique_ptr<BlobReader> BlobDataHandle::CreateReader() const {
@@ -47,21 +44,16 @@ std::unique_ptr<BlobReader> BlobDataHandle::CreateReader() const {
 
 BlobDataHandle::BlobDataHandleShared::~BlobDataHandleShared() {
   if (context_.get())
-    context_->DecrementBlobRefCount(uuid_);
+    context_->DecrementBlobHandleCount(uuid_);
 }
 
 BlobDataHandle::BlobDataHandle(const std::string& uuid,
                                const std::string& content_type,
-                               const std::string& content_disposition,
                                uint64_t size,
                                BlobStorageContext* context,
                                base::SequencedTaskRunner* io_task_runner)
     : io_task_runner_(io_task_runner),
-      shared_(new BlobDataHandleShared(uuid,
-                                       content_type,
-                                       content_disposition,
-                                       size,
-                                       context)) {
+      shared_(new BlobDataHandleShared(uuid, content_type, size, context)) {
   DCHECK(io_task_runner_.get());
   DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
 }
@@ -129,10 +121,6 @@ const std::string& BlobDataHandle::uuid() const {
 
 const std::string& BlobDataHandle::content_type() const {
   return shared_->content_type_;
-}
-
-const std::string& BlobDataHandle::content_disposition() const {
-  return shared_->content_disposition_;
 }
 
 uint64_t BlobDataHandle::size() const {

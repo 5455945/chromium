@@ -1,8 +1,10 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/display/win/scaling_util.h"
+
+#include <optional>
 
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/display/win/test/screen_util_win.h"
@@ -15,13 +17,18 @@ namespace {
 
 const wchar_t kFakeDisplayName[] = L"Fake Display";
 
-DisplayInfo CreateDisplayInfo(int x, int y, int width, int height,
-                              float scale_factor) {
+internal::DisplayInfo CreateDisplayInfo(int x,
+                                        int y,
+                                        int width,
+                                        int height,
+                                        float scale_factor) {
   MONITORINFOEX monitor_info = CreateMonitorInfo(gfx::Rect(x, y, width, height),
                                                  gfx::Rect(x, y, width, height),
                                                  kFakeDisplayName);
-  return DisplayInfo(monitor_info, scale_factor, 1.0f, Display::ROTATE_0, 60,
-                     gfx::Vector2dF(), DISPLAYCONFIG_OUTPUT_TECHNOLOGY_OTHER);
+  return internal::DisplayInfo(
+      std::nullopt, monitor_info, scale_factor, /*text_scale_multiplier=*/1.0f,
+      Display::kDefaultBitsPerPixel, 1.0f, Display::ROTATE_0, 60.0f,
+      gfx::Vector2dF(), DISPLAYCONFIG_OUTPUT_TECHNOLOGY_OTHER, std::string());
 }
 
 ::testing::AssertionResult AssertOffsetsEqual(
@@ -150,6 +157,12 @@ TEST(ScalingUtilTest, CalculateDisplayPlacementNoScaleRight) {
                        DisplayPlacement::BOTTOM_RIGHT),
       CalculateDisplayPlacement(CreateDisplayInfo(0, 0, 800, 600, 1.0f),
                                 CreateDisplayInfo(800, -168, 1024, 768, 1.0f)));
+
+  // Top and bottom edge aligned.
+  EXPECT_OFFSET_EQ(
+      DisplayPlacement(DisplayPlacement::RIGHT, 0, DisplayPlacement::TOP_LEFT),
+      CalculateDisplayPlacement(CreateDisplayInfo(0, 0, 800, 600, 1.0f),
+                                CreateDisplayInfo(800, 0, 800, 600, 1.0f)));
 
   // Offset to the top
   EXPECT_OFFSET_EQ(
@@ -368,6 +381,12 @@ TEST(ScalingUtilTest, CalculateDisplayPlacement2xScale) {
                        DisplayPlacement::TOP_LEFT),
       CalculateDisplayPlacement(CreateDisplayInfo(100, 50, 800, 600, 1.0f),
                                 CreateDisplayInfo(900, 50, 1000, 700, 2.0f)));
+
+  // Side by side same height to the right.
+  EXPECT_OFFSET_EQ(
+      DisplayPlacement(DisplayPlacement::RIGHT, 0, DisplayPlacement::TOP_LEFT),
+      CalculateDisplayPlacement(CreateDisplayInfo(100, 50, 800, 600, 1.0f),
+                                CreateDisplayInfo(900, 50, 800, 600, 2.0f)));
 
   // Side-by-side to the left.
   EXPECT_OFFSET_EQ(

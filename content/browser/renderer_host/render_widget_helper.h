@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,18 +10,14 @@
 #include <map>
 
 #include "base/atomic_sequence_num.h"
-#include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/process/process.h"
 #include "base/synchronization/lock.h"
 #include "base/thread_annotations.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/global_request_id.h"
 #include "content/public/common/widget_type.h"
-#include "mojo/public/cpp/bindings/pending_remote.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
-#include "ui/gfx/native_widget_types.h"
 
 namespace content {
 
@@ -35,17 +31,22 @@ class RenderWidgetHelper
  public:
   RenderWidgetHelper();
 
+  RenderWidgetHelper(const RenderWidgetHelper&) = delete;
+  RenderWidgetHelper& operator=(const RenderWidgetHelper&) = delete;
+
   void Init(int render_process_id);
 
   // Gets the next available routing id.  This is thread safe.
   int GetNextRoutingID();
 
-  // Retrieve a previously stored frame tokens. Returns true if the tokens
+  // Retrieve a previously stored data. Returns true if the tokens
   // were found.
-  bool TakeFrameTokensForFrameRoutingID(
-      int32_t routing_id,
-      blink::LocalFrameToken& frame_token,
-      base::UnguessableToken& devtools_frame_token);
+  bool TakeStoredDataForFrameToken(
+      const blink::LocalFrameToken& frame_token,
+      int32_t& routing_id,
+      base::UnguessableToken& devtools_frame_token,
+      blink::DocumentToken& document_token,
+      std::unique_ptr<base::UnguessableToken>& sandbox_origin_token);
 
   // Store a set of frame tokens given a routing id. This is usually called on
   // the IO thread, and |GetFrameTokensForFrameRoutingID| will be called on the
@@ -53,14 +54,11 @@ class RenderWidgetHelper
   void StoreNextFrameRoutingID(
       int32_t routing_id,
       const blink::LocalFrameToken& frame_token,
-      const base::UnguessableToken& devtools_frame_token);
+      const base::UnguessableToken& devtools_frame_token,
+      const blink::DocumentToken& document_token,
+      std::unique_ptr<base::UnguessableToken> sandbox_origin_token);
 
   // IO THREAD ONLY -----------------------------------------------------------
-
-  // Lookup the RenderWidgetHelper from the render_process_host_id. Returns NULL
-  // if not found. NOTE: The raw pointer is for temporary use only. To retain,
-  // store in a scoped_refptr.
-  static RenderWidgetHelper* FromProcessHostID(int render_process_host_id);
 
  private:
   friend class base::RefCountedThreadSafe<RenderWidgetHelper>;
@@ -72,30 +70,32 @@ class RenderWidgetHelper
   int render_process_id_;
 
   struct FrameTokens {
-    FrameTokens(const blink::LocalFrameToken& frame_token,
-                const base::UnguessableToken& devtools_frame_token);
-    FrameTokens(const FrameTokens& other);
-    FrameTokens& operator=(const FrameTokens& other);
+    FrameTokens(int32_t routing_id,
+                const base::UnguessableToken& devtools_frame_token,
+                const blink::DocumentToken& document_token,
+                std::unique_ptr<base::UnguessableToken> sandbox_origin_token);
+    FrameTokens(FrameTokens&&);
+    FrameTokens& operator=(FrameTokens&&);
     ~FrameTokens();
 
-    blink::LocalFrameToken frame_token;
+    int32_t routing_id;
     base::UnguessableToken devtools_frame_token;
+    blink::DocumentToken document_token;
+    std::unique_ptr<base::UnguessableToken> sandbox_origin_token;
   };
 
-  // Lock that is used to provide access to |frame_token_routing_id_map_|
+  // Lock that is used to provide access to `frame_storage_map_`
   // from the IO and UI threads.
   base::Lock frame_token_map_lock_;
 
   // Map that stores handed out routing IDs and frame tokens. Items
-  // will be removed from this table in GetFrameTokensForRoutingID.
+  // will be removed from this table in TakeStoredDataForFrameToken.
   // Locked by |lock_|
-  std::map<int32_t, FrameTokens> frame_token_routing_id_map_
+  std::map<blink::LocalFrameToken, FrameTokens> frame_storage_map_
       GUARDED_BY(frame_token_map_lock_);
 
   // The next routing id to use.
   base::AtomicSequenceNumber next_routing_id_;
-
-  DISALLOW_COPY_AND_ASSIGN(RenderWidgetHelper);
 };
 
 }  // namespace content

@@ -9,6 +9,7 @@
 <translation id="1591070050619849194">Disable all image animation.</translation>
 <translation id="1703735871906654364">Caret Browsing</translation>
 <translation id="1791496371305830581">Allow all animated images.</translation>
+<translation id="1974060860693918893">Advanced</translation>
 <translation id="1996252509865389616">Enable?</translation>
 <translation id="2079545284768500474">Undo</translation>
 <translation id="2179565792157161713">Open Long Description In New Tab</translation>
@@ -26,6 +27,7 @@
 <translation id="3812541808639806898">Image Alt Text Viewer</translation>
 <translation id="381767806621926835">Right-click on anything with a "longdesc" or "aria-describedat" attribute to access its long description.</translation>
 <translation id="4023902424053835668">Browse the text of web pages using arrow keys.</translation>
+<translation id="4384008284958619421">Modern screen readers and Google Chrome now support accessible element descriptions and ARIA standards natively.</translation>
 <translation id="4388820049312272371">Highlight the cursor position with a quick flash.</translation>
 <translation id="4394049700291259645">Disable</translation>
 <translation id="4769065380738716500">Images have been replaced by their alt text.</translation>
@@ -51,6 +53,7 @@
 <translation id="6170146920149900756">Colour Enhancer</translation>
 <translation id="633394792577263429">Hold down &lt;span class='key'&gt;Control&lt;/span&gt; to move by words.</translation>
 <translation id="6550675742724504774">Options</translation>
+<translation id="6699630355767768222">Step 3: Override the colour axis for the correction.</translation>
 <translation id="6838518108677880446">Set-up:</translation>
 <translation id="690628312087070417">When the caret jumps by a large distance:</translation>
 <translation id="6965382102122355670">OK</translation>
@@ -61,9 +64,11 @@
 <translation id="7658239707568436148">Cancel</translation>
 <translation id="786423340267544509">Add border to elements with aria-describedat or longdesc attributes.</translation>
 <translation id="7942349550061667556">Red</translation>
+<translation id="8081200409424070383">Long descriptions is being deprecated on 20 November 2026.</translation>
 <translation id="8260673944985561857">Caret Browsing Options</translation>
 <translation id="8321034316479930120">Animation Policy</translation>
 <translation id="8480209185614411573">High Contrast</translation>
 <translation id="8609925175482059018">Press &lt;span class='key'&gt;F7&lt;/span&gt; to turn on Caret Browsing. Press it again to turn it off.</translation>
+<translation id="8798099450830957504">Default</translation>
 <translation id="894241283505723656">Long Descriptions in Context Menu</translation>
 </translationbundle>

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,7 @@
 #include "base/containers/span.h"
 #include "base/memory/scoped_refptr.h"
 #include "mojo/public/cpp/system/data_pipe.h"
-#include "third_party/blink/public/mojom/frame/back_forward_cache_controller.mojom-blink-forward.h"
-#include "third_party/blink/public/platform/web_back_forward_cache_loader_helper.h"
+#include "third_party/blink/public/mojom/navigation/renderer_eviction_reason.mojom-blink-forward.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/heap/member.h"
 #include "third_party/blink/renderer/platform/loader/fetch/bytes_consumer.h"
@@ -121,36 +120,35 @@ class PLATFORM_EXPORT ResponseBodyLoader final
 
   void Trace(Visitor*) const override;
 
-  // The maximal number of bytes consumed in a task. When there are more bytes
-  // in the data pipe, they will be consumed in following tasks. Setting a too
-  // small number will generate ton of tasks but setting a too large number will
-  // lead to thread janks. Also, some clients cannot handle too large chunks
-  // (512k for example).
-  static constexpr size_t kMaxNumConsumedBytesInTask = 64 * 1024;
-
  private:
   class Buffer;
   class DelegatingBytesConsumer;
 
   // ResponseBodyLoaderClient implementation.
   void DidReceiveData(base::span<const char> data) override;
+  void DidReceiveDecodedData(
+      const String& data,
+      std::unique_ptr<SecureStringDigest> digest) override;
   void DidFinishLoadingBody() override;
   void DidFailLoadingBody() override;
   void DidCancelLoadingBody() override;
+  void WillCreateBlobFromDrainedDataPipe() override;
+  void DidCreateBlobFromDrainedDataPipe(
+      const scoped_refptr<BlobDataHandle>&) override;
+
   void EvictFromBackForwardCache(mojom::blink::RendererEvictionReason);
   void DidBufferLoadWhileInBackForwardCache(size_t num_bytes);
-  bool CanContinueBufferingWhileInBackForwardCache();
 
   // BytesConsumer::Client implementation.
   void OnStateChange() override;
   String DebugName() const override { return "ResponseBodyLoader"; }
 
+  const scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
   Member<Buffer> body_buffer_;
   Member<BytesConsumer> bytes_consumer_;
   Member<DelegatingBytesConsumer> delegating_bytes_consumer_;
   const Member<ResponseBodyLoaderClient> client_;
   WeakMember<BackForwardCacheLoaderHelper> back_forward_cache_loader_helper_;
-  const scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
   LoaderFreezeMode suspended_state_ = LoaderFreezeMode::kNone;
   bool started_ = false;
   bool aborted_ = false;

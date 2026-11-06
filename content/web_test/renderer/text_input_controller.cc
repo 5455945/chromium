@@ -1,19 +1,18 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/web_test/renderer/text_input_controller.h"
 
-#include "base/macros.h"
 #include "content/web_test/renderer/web_frame_test_proxy.h"
 #include "gin/arguments.h"
-#include "gin/handle.h"
 #include "gin/object_template_builder.h"
+#include "gin/public/wrappable_pointer_tags.h"
 #include "gin/wrappable.h"
 #include "third_party/blink/public/common/input/web_coalesced_input_event.h"
 #include "third_party/blink/public/common/input/web_keyboard_event.h"
+#include "third_party/blink/public/platform/scheduler/web_agent_group_scheduler.h"
 #include "third_party/blink/public/platform/web_input_event_result.h"
-#include "third_party/blink/public/web/blink.h"
 #include "third_party/blink/public/web/web_frame_widget.h"
 #include "third_party/blink/public/web/web_input_method_controller.h"
 #include "third_party/blink/public/web/web_local_frame.h"
@@ -22,6 +21,8 @@
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/ime/ime_text_span.h"
 #include "ui/events/base_event_utils.h"
+#include "v8/include/cppgc/allocation.h"
+#include "v8/include/v8-cppgc.h"
 #include "v8/include/v8.h"
 
 namespace content {
@@ -29,16 +30,22 @@ namespace content {
 class TextInputControllerBindings
     : public gin::Wrappable<TextInputControllerBindings> {
  public:
-  static gin::WrapperInfo kWrapperInfo;
+  static constexpr gin::WrapperInfo kWrapperInfo = {
+      {gin::kEmbedderNativeGin},
+      gin::kTextInputControllerBindings};
 
+  const gin::WrapperInfo* wrapper_info() const override;
+
+  TextInputControllerBindings(const TextInputControllerBindings&) = delete;
+  TextInputControllerBindings& operator=(const TextInputControllerBindings&) =
+      delete;
+
+  explicit TextInputControllerBindings(
+      base::WeakPtr<TextInputController> controller);
   static void Install(base::WeakPtr<TextInputController> controller,
                       blink::WebLocalFrame* frame);
 
  private:
-  explicit TextInputControllerBindings(
-      base::WeakPtr<TextInputController> controller);
-  ~TextInputControllerBindings() override;
-
   // gin::Wrappable:
   gin::ObjectTemplateBuilder GetObjectTemplateBuilder(
       v8::Isolate* isolate) override;
@@ -49,29 +56,27 @@ class TextInputControllerBindings
   void DoCommand(const std::string& text);
   void ExtendSelectionAndDelete(int before, int after);
   void DeleteSurroundingText(int before, int after);
-  void SetMarkedText(const std::string& text, int start, int length);
-  void SetMarkedTextFromExistingText(int start, int length);
+  void SetMarkedText(const std::string& text, uint32_t start, uint32_t length);
+  void SetMarkedTextFromExistingText(uint32_t start, uint32_t end);
   bool HasMarkedText();
   std::vector<int> MarkedRange();
   std::vector<int> SelectedRange();
-  std::vector<int> FirstRectForCharacterRange(unsigned location,
-                                              unsigned length);
+  std::vector<int> FirstRectForCharacterRange(uint32_t location,
+                                              uint32_t length);
   void SetComposition(const std::string& text);
+  void SetCompositionWithReplacementRange(const std::string& text,
+                                          int replacement_start,
+                                          int replacement_end);
   void ForceTextInputStateUpdate();
 
   base::WeakPtr<TextInputController> controller_;
-
-  DISALLOW_COPY_AND_ASSIGN(TextInputControllerBindings);
 };
-
-gin::WrapperInfo TextInputControllerBindings::kWrapperInfo = {
-    gin::kEmbedderNativeGin};
 
 // static
 void TextInputControllerBindings::Install(
     base::WeakPtr<TextInputController> controller,
     blink::WebLocalFrame* frame) {
-  v8::Isolate* isolate = blink::MainThreadIsolate();
+  v8::Isolate* isolate = frame->GetAgentGroupScheduler()->Isolate();
   v8::HandleScope handle_scope(isolate);
   v8::Local<v8::Context> context = frame->MainWorldScriptContext();
   if (context.IsEmpty())
@@ -79,14 +84,14 @@ void TextInputControllerBindings::Install(
 
   v8::Context::Scope context_scope(context);
 
-  gin::Handle<TextInputControllerBindings> bindings =
-      gin::CreateHandle(isolate, new TextInputControllerBindings(controller));
-  if (bindings.IsEmpty())
+  auto* bindings = cppgc::MakeGarbageCollected<TextInputControllerBindings>(
+      isolate->GetCppHeap()->GetAllocationHandle(), controller);
+  v8::Local<v8::Object> wrapper;
+  if (!bindings->GetWrapper(isolate).ToLocal(&wrapper)) {
     return;
+  }
   v8::Local<v8::Object> global = context->Global();
-  global
-      ->Set(context, gin::StringToV8(isolate, "textInputController"),
-            bindings.ToV8())
+  global->Set(context, gin::StringToV8(isolate, "textInputController"), wrapper)
       .Check();
 }
 
@@ -94,32 +99,37 @@ TextInputControllerBindings::TextInputControllerBindings(
     base::WeakPtr<TextInputController> controller)
     : controller_(controller) {}
 
-TextInputControllerBindings::~TextInputControllerBindings() {}
+const gin::WrapperInfo* TextInputControllerBindings::wrapper_info() const {
+  return &kWrapperInfo;
+}
 
 gin::ObjectTemplateBuilder
 TextInputControllerBindings::GetObjectTemplateBuilder(v8::Isolate* isolate) {
   return gin::Wrappable<TextInputControllerBindings>::GetObjectTemplateBuilder(
              isolate)
-      .SetMethod("insertText", &TextInputControllerBindings::InsertText)
-      .SetMethod("unmarkText", &TextInputControllerBindings::UnmarkText)
-      .SetMethod("unmarkAndUnselectText",
-                 &TextInputControllerBindings::UnmarkAndUnselectText)
-      .SetMethod("doCommand", &TextInputControllerBindings::DoCommand)
-      .SetMethod("extendSelectionAndDelete",
-                 &TextInputControllerBindings::ExtendSelectionAndDelete)
-      .SetMethod("deleteSurroundingText",
-                 &TextInputControllerBindings::DeleteSurroundingText)
-      .SetMethod("setMarkedText", &TextInputControllerBindings::SetMarkedText)
-      .SetMethod("setMarkedTextFromExistingText",
-                 &TextInputControllerBindings::SetMarkedTextFromExistingText)
-      .SetMethod("hasMarkedText", &TextInputControllerBindings::HasMarkedText)
-      .SetMethod("markedRange", &TextInputControllerBindings::MarkedRange)
-      .SetMethod("selectedRange", &TextInputControllerBindings::SelectedRange)
-      .SetMethod("firstRectForCharacterRange",
-                 &TextInputControllerBindings::FirstRectForCharacterRange)
-      .SetMethod("setComposition", &TextInputControllerBindings::SetComposition)
-      .SetMethod("forceTextInputStateUpdate",
-                 &TextInputControllerBindings::ForceTextInputStateUpdate);
+      .SetMethod<&TextInputControllerBindings::InsertText>("insertText")
+      .SetMethod<&TextInputControllerBindings::UnmarkText>("unmarkText")
+      .SetMethod<&TextInputControllerBindings::UnmarkAndUnselectText>(
+          "unmarkAndUnselectText")
+      .SetMethod<&TextInputControllerBindings::DoCommand>("doCommand")
+      .SetMethod<&TextInputControllerBindings::ExtendSelectionAndDelete>(
+          "extendSelectionAndDelete")
+      .SetMethod<&TextInputControllerBindings::DeleteSurroundingText>(
+          "deleteSurroundingText")
+      .SetMethod<&TextInputControllerBindings::SetMarkedText>("setMarkedText")
+      .SetMethod<&TextInputControllerBindings::SetMarkedTextFromExistingText>(
+          "setMarkedTextFromExistingText")
+      .SetMethod<&TextInputControllerBindings::HasMarkedText>("hasMarkedText")
+      .SetMethod<&TextInputControllerBindings::MarkedRange>("markedRange")
+      .SetMethod<&TextInputControllerBindings::SelectedRange>("selectedRange")
+      .SetMethod<&TextInputControllerBindings::FirstRectForCharacterRange>(
+          "firstRectForCharacterRange")
+      .SetMethod<&TextInputControllerBindings::SetComposition>("setComposition")
+      .SetMethod<
+          &TextInputControllerBindings::SetCompositionWithReplacementRange>(
+          "setCompositionWithReplacementRange")
+      .SetMethod<&TextInputControllerBindings::ForceTextInputStateUpdate>(
+          "forceTextInputStateUpdate");
 }
 
 void TextInputControllerBindings::InsertText(const std::string& text) {
@@ -154,14 +164,14 @@ void TextInputControllerBindings::DeleteSurroundingText(int before, int after) {
 }
 
 void TextInputControllerBindings::SetMarkedText(const std::string& text,
-                                                int start,
-                                                int length) {
+                                                uint32_t start,
+                                                uint32_t length) {
   if (controller_)
     controller_->SetMarkedText(text, start, length);
 }
 
-void TextInputControllerBindings::SetMarkedTextFromExistingText(int start,
-                                                                int end) {
+void TextInputControllerBindings::SetMarkedTextFromExistingText(uint32_t start,
+                                                                uint32_t end) {
   if (controller_)
     controller_->SetMarkedTextFromExistingText(start, end);
 }
@@ -179,15 +189,22 @@ std::vector<int> TextInputControllerBindings::SelectedRange() {
 }
 
 std::vector<int> TextInputControllerBindings::FirstRectForCharacterRange(
-    unsigned location,
-    unsigned length) {
+    uint32_t location,
+    uint32_t length) {
   return controller_ ? controller_->FirstRectForCharacterRange(location, length)
                      : std::vector<int>();
 }
 
 void TextInputControllerBindings::SetComposition(const std::string& text) {
   if (controller_)
-    controller_->SetComposition(text);
+    controller_->SetComposition(text, -1, -1);
+}
+void TextInputControllerBindings::SetCompositionWithReplacementRange(
+    const std::string& text,
+    int replacement_start,
+    int replacement_end) {
+  if (controller_)
+    controller_->SetComposition(text, replacement_start, replacement_end);
 }
 void TextInputControllerBindings::ForceTextInputStateUpdate() {
   if (controller_)
@@ -207,7 +224,7 @@ void TextInputController::Install(blink::WebLocalFrame* frame) {
 
 void TextInputController::InsertText(const std::string& text) {
   if (auto* controller = GetInputMethodController()) {
-    controller->CommitText(blink::WebString::FromUTF8(text),
+    controller->CommitText(blink::WebString::FromUtf8(text),
                            std::vector<ui::ImeTextSpan>(), blink::WebRange(),
                            0);
   }
@@ -233,7 +250,7 @@ void TextInputController::DoCommand(const std::string& text) {
                                                      "called if the main frame "
                                                      "is not a local frame.";
     view()->MainFrame()->ToWebLocalFrame()->ExecuteCommand(
-        blink::WebString::FromUTF8(text));
+        blink::WebString::FromUtf8(text));
   }
 }
 
@@ -258,39 +275,43 @@ void TextInputController::DeleteSurroundingText(int before, int after) {
 }
 
 void TextInputController::SetMarkedText(const std::string& text,
-                                        int start,
-                                        int length) {
-  blink::WebString web_text(blink::WebString::FromUTF8(text));
+                                        uint32_t start,
+                                        uint32_t length) {
+  blink::WebString web_text(blink::WebString::FromUtf8(text));
 
   // Split underline into up to 3 elements (before, selection, and after).
   std::vector<ui::ImeTextSpan> ime_text_spans;
-  ui::ImeTextSpan ime_text_span;
-  if (!start) {
-    ime_text_span.end_offset = length;
+  ui::ImeTextSpan selection;
+  if (start) {
+    ui::ImeTextSpan before;
+    before.end_offset = start;
+    ime_text_spans.push_back(before);
+
+    selection.start_offset = start;
+    selection.end_offset = base::ClampedNumeric(start) + length;
   } else {
-    ime_text_span.end_offset = start;
-    ime_text_spans.push_back(ime_text_span);
-    ime_text_span.start_offset = start;
-    ime_text_span.end_offset = start + length;
+    selection.end_offset = length;
   }
-  ime_text_span.thickness = ui::ImeTextSpan::Thickness::kThick;
-  ime_text_span.underline_style = ui::ImeTextSpan::UnderlineStyle::kSolid;
-  ime_text_spans.push_back(ime_text_span);
-  if (start + length < static_cast<int>(web_text.length())) {
-    ime_text_span.start_offset = ime_text_span.end_offset;
-    ime_text_span.end_offset = web_text.length();
-    ime_text_span.thickness = ui::ImeTextSpan::Thickness::kThin;
-    ime_text_span.underline_style = ui::ImeTextSpan::UnderlineStyle::kSolid;
-    ime_text_spans.push_back(ime_text_span);
+  if (selection.end_offset != selection.start_offset) {
+    selection.thickness = ui::ImeTextSpan::Thickness::kThick;
+    selection.underline_style = ui::ImeTextSpan::UnderlineStyle::kSolid;
+    ime_text_spans.push_back(selection);
+  }
+  if (selection.end_offset < web_text.length()) {
+    ui::ImeTextSpan after;
+    after.start_offset = selection.end_offset;
+    after.end_offset = web_text.length();
+    ime_text_spans.push_back(after);
   }
 
   if (auto* controller = GetInputMethodController()) {
     controller->SetComposition(web_text, ime_text_spans, blink::WebRange(),
-                               start, start + length);
+                               selection.start_offset, selection.end_offset);
   }
 }
 
-void TextInputController::SetMarkedTextFromExistingText(int start, int end) {
+void TextInputController::SetMarkedTextFromExistingText(uint32_t start,
+                                                        uint32_t end) {
   if (!view()->MainFrame())
     return;
 
@@ -349,8 +370,8 @@ std::vector<int> TextInputController::SelectedRange() {
 }
 
 std::vector<int> TextInputController::FirstRectForCharacterRange(
-    unsigned location,
-    unsigned length) {
+    uint32_t location,
+    uint32_t length) {
   gfx::Rect rect;
   if (!view()->FocusedFrame() ||
       !view()->FocusedFrame()->FirstRectForCharacterRange(location, length,
@@ -367,7 +388,9 @@ std::vector<int> TextInputController::FirstRectForCharacterRange(
   return int_array;
 }
 
-void TextInputController::SetComposition(const std::string& text) {
+void TextInputController::SetComposition(const std::string& text,
+                                         int replacement_range_start,
+                                         int replacement_range_end) {
   // Sends a keydown event with key code = 0xE5 to emulate input method
   // behavior.
   blink::WebKeyboardEvent key_down(blink::WebInputEvent::Type::kRawKeyDown,
@@ -381,7 +404,7 @@ void TextInputController::SetComposition(const std::string& text) {
   // The value returned by std::string::length() may not correspond to the
   // actual number of encoded characters in sequences of multi-byte or
   // variable-length characters.
-  blink::WebString newText = blink::WebString::FromUTF8(text);
+  blink::WebString newText = blink::WebString::FromUtf8(text);
   size_t textLength = newText.length();
 
   std::vector<ui::ImeTextSpan> ime_text_spans;
@@ -389,10 +412,15 @@ void TextInputController::SetComposition(const std::string& text) {
       ui::ImeTextSpan::Type::kComposition, 0, textLength,
       ui::ImeTextSpan::Thickness::kThin,
       ui::ImeTextSpan::UnderlineStyle::kSolid, SK_ColorTRANSPARENT));
+  blink::WebRange replacement_range =
+      (replacement_range_start == -1 && replacement_range_end == -1)
+          ? blink::WebRange()
+          : blink::WebRange(replacement_range_start,
+                            replacement_range_end - replacement_range_start);
   if (auto* controller = GetInputMethodController()) {
     controller->SetComposition(
-        newText, blink::WebVector<ui::ImeTextSpan>(std::move(ime_text_spans)),
-        blink::WebRange(), textLength, textLength);
+        newText, std::vector<ui::ImeTextSpan>(std::move(ime_text_spans)),
+        replacement_range, textLength, textLength);
   }
 }
 

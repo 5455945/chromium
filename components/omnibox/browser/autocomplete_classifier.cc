@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,18 +8,32 @@
 
 #include "base/auto_reset.h"
 #include "base/feature_list.h"
-#include "base/ios/ios_util.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/trace_event/trace_event.h"
+#include "build/android_buildflags.h"
 #include "build/build_config.h"
 #include "components/omnibox/browser/autocomplete_controller.h"
 #include "components/omnibox/browser/autocomplete_input.h"
 #include "components/omnibox/browser/autocomplete_match.h"
 #include "components/omnibox/browser/autocomplete_provider.h"
-#include "components/omnibox/browser/document_provider.h"
 #include "components/omnibox/browser/omnibox_field_trial.h"
+#include "components/omnibox/common/omnibox_feature_configs.h"
 #include "components/omnibox/common/omnibox_features.h"
-#include "components/query_tiles/switches.h"
+#include "extensions/buildflags/buildflags.h"
 #include "third_party/metrics_proto/omnibox_event.pb.h"
 #include "url/gurl.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/device_info.h"
+#endif
+
+#if !BUILDFLAG(IS_IOS)
+#include "components/history_clusters/core/config.h"  // nogncheck
+#endif
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "extensions/common/extension_features.h"  // nogncheck
+#endif
 
 AutocompleteClassifier::AutocompleteClassifier(
     std::unique_ptr<AutocompleteController> controller,
@@ -38,58 +52,112 @@ void AutocompleteClassifier::Shutdown() {
 }
 
 // static
-int AutocompleteClassifier::DefaultOmniboxProviders() {
-  return
-#if !defined(OS_ANDROID) && !defined(OS_IOS)
+int AutocompleteClassifier::DefaultOmniboxProviders(bool is_low_memory_device) {
+  return static_cast<int>(
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
       // Custom search engines cannot be used on mobile.
-      AutocompleteProvider::TYPE_KEYWORD |
-#else
-      AutocompleteProvider::TYPE_CLIPBOARD |
-      AutocompleteProvider::TYPE_MOST_VISITED_SITES |
-      AutocompleteProvider::TYPE_VERBATIM_MATCH |
+      AutocompleteProvider::Type::kKeyword |
+      AutocompleteProvider::Type::kOpenTab |
+      AutocompleteProvider::Type::kFeaturedSearch |
+      // Most visited sites for desktop.
+      (omnibox_feature_configs::OmniboxUrlSuggestionsOnFocus::Get().enabled
+           ? AutocompleteProvider::Type::kMostVisitedSites
+           : AutocompleteProvider::Type::kNone) |
+      (omnibox_feature_configs::OmniboxUrlSuggestionsOnFocus::Get()
+               .show_recently_closed_tabs
+           ? AutocompleteProvider::Type::kRecentlyClosedTabs
+           : AutocompleteProvider::Type::kNone) |
+      AutocompleteProvider::Type::kContextualSearch |
+#elif !BUILDFLAG(IS_DESKTOP_ANDROID)
+      AutocompleteProvider::Type::kClipboard |
+      AutocompleteProvider::Type::kMostVisitedSites |
 #endif
-#if defined(OS_ANDROID)
-      AutocompleteProvider::TYPE_VOICE_SUGGEST |
+#if BUILDFLAG(IS_ANDROID)
+      AutocompleteProvider::Type::kVoiceSuggest |
+      // For Desktop Android's Lens Overlay integration.
+      AutocompleteProvider::Type::kContextualSearch |
+      // Only enabled for hub search.
+      AutocompleteProvider::Type::kOpenTab |
+      // Only enabled for hub search.
+      AutocompleteProvider::Type::kTabGroup |
+      // Only enabled for the Tab Search overlay.
+      (base::FeatureList::IsEnabled(omnibox::kAndroidTabSearchRecentTabs)
+           ? AutocompleteProvider::Type::kRecentlyClosedTabs
+           : AutocompleteProvider::Type::kNone) |
+      // Keyword search for Android.
+      (base::FeatureList::IsEnabled(omnibox::kOmniboxSiteSearch)
+           ? AutocompleteProvider::Type::kKeyword |
+                 AutocompleteProvider::Type::kFeaturedSearch
+           : AutocompleteProvider::Type::kNone) |
 #endif
-      AutocompleteProvider::TYPE_ZERO_SUGGEST |
-      AutocompleteProvider::TYPE_ZERO_SUGGEST_LOCAL_HISTORY |
+#if !BUILDFLAG(IS_IOS)
+      (history_clusters::GetConfig().is_journeys_enabled_no_locale_check &&
+               history_clusters::GetConfig().omnibox_history_cluster_provider
+           ? AutocompleteProvider::Type::kHistoryClusterProvider
+           : AutocompleteProvider::Type::kNone) |
+      AutocompleteProvider::Type::kEnterpriseSearchAggregator |
+#endif
+      AutocompleteProvider::Type::kZeroSuggest |
+      AutocompleteProvider::Type::kZeroSuggestLocalHistory |
       (base::FeatureList::IsEnabled(omnibox::kDocumentProvider)
-           ? AutocompleteProvider::TYPE_DOCUMENT
-           : 0) |
+#if BUILDFLAG(IS_ANDROID)
+               && base::android::device_info::is_desktop()
+#endif
+           ? AutocompleteProvider::Type::kDocument
+           : AutocompleteProvider::Type::kNone) |
       (OmniboxFieldTrial::IsOnDeviceHeadSuggestEnabledForAnyMode()
-           ? AutocompleteProvider::TYPE_ON_DEVICE_HEAD
-           : 0) |
-      AutocompleteProvider::TYPE_BOOKMARK | AutocompleteProvider::TYPE_BUILTIN |
-      AutocompleteProvider::TYPE_HISTORY_QUICK |
-      AutocompleteProvider::TYPE_HISTORY_URL |
-      AutocompleteProvider::TYPE_SEARCH | AutocompleteProvider::TYPE_SHORTCUTS |
-      (query_tiles::features::IsEnabledQueryTilesInOmnibox()
-           ? AutocompleteProvider::TYPE_QUERY_TILE
-           : 0);
+           ? AutocompleteProvider::Type::kOnDeviceHead
+           : AutocompleteProvider::Type::kNone) |
+      (base::FeatureList::IsEnabled(omnibox::kOmniboxCrossDeviceTabZeroSuggest)
+           ? AutocompleteProvider::Type::kCrossDeviceTab
+           : AutocompleteProvider::Type::kNone) |
+      AutocompleteProvider::Type::kBookmark |
+      AutocompleteProvider::Type::kBuiltin |
+      AutocompleteProvider::Type::kHistoryQuick |
+      AutocompleteProvider::Type::kHistoryUrl |
+      AutocompleteProvider::Type::kSearch |
+      AutocompleteProvider::Type::kShortcuts |
+      AutocompleteProvider::Type::kHistoryFuzzy |
+      AutocompleteProvider::Type::kCalculator |
+      AutocompleteProvider::Type::kVerbatimMatch |
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  // The `chrome.omnibox` extension API uses
+  // `AutocompleteProvider::Type::kKeyword`, including on desktop Android.
+#if BUILDFLAG(IS_ANDROID)
+      (base::FeatureList::IsEnabled(omnibox::kOmniboxSiteSearch)
+           ? AutocompleteProvider::Type::kKeyword
+           : AutocompleteProvider::Type::kNone) |
+#else
+      AutocompleteProvider::Type::kKeyword |
+#endif
+      // `UnscopedExtensionProvider` should only be included when extensions are
+      // enabled and the `ExperimentalOmniboxLabs` feature is enabled.
+      (base::FeatureList::IsEnabled(
+           extensions_features::kExperimentalOmniboxLabs)
+           ? AutocompleteProvider::Type::kUnscopedExtension
+           : AutocompleteProvider::Type::kNone)
+#else
+      AutocompleteProvider::Type::kNone
+#endif
+  );
 }
 
 void AutocompleteClassifier::Classify(
     const std::u16string& text,
-    bool prefer_keyword,
+    bool in_keyword_mode,
     bool allow_exact_keyword_match,
     metrics::OmniboxEventProto::PageClassification page_classification,
     AutocompleteMatch* match,
     GURL* alternate_nav_url) {
+  TRACE_EVENT1("omnibox", "AutocompleteClassifier::Classify", "text",
+               base::UTF16ToUTF8(text));
   DCHECK(!inside_classify_);
   base::AutoReset<bool> reset(&inside_classify_, true);
   AutocompleteInput input(text, page_classification, *scheme_classifier_);
   input.set_prevent_inline_autocomplete(true);
-  // If the user in keyword mode (which is often the case when |prefer_keyword|
-  // is true), ideally we'd set |input|'s keyword_mode_entry_method field.
-  // However, in the context of this code, we don't know how the keyword mode
-  // was entered. Moreover, we cannot add that as a parameter to Classify()
-  // because many callers do not know how keyword mode was entered. Luckily,
-  // Classify()'s purpose is to determine the default match, and at this time
-  // |keyword_mode_entry_method| only ends up affecting the ranking of
-  // lower-down suggestions.
-  input.set_prefer_keyword(prefer_keyword);
+  input.set_in_keyword_mode(in_keyword_mode);
   input.set_allow_exact_keyword_match(allow_exact_keyword_match);
-  input.set_want_asynchronous_matches(false);
+  input.set_omit_asynchronous_matches(true);
   controller_->Start(input);
   DCHECK(controller_->done());
 

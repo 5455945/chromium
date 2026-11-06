@@ -1,13 +1,14 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "device/bluetooth/dbus/fake_bluetooth_le_advertising_manager_client.h"
 
+#include <algorithm>
+
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/single_thread_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "dbus/bus.h"
 #include "dbus/message.h"
 #include "dbus/object_proxy.h"
@@ -34,7 +35,32 @@ FakeBluetoothLEAdvertisingManagerClient::
 
 void FakeBluetoothLEAdvertisingManagerClient::Init(
     dbus::Bus* bus,
-    const std::string& bluetooth_service_name) {}
+    const std::string& bluetooth_service_name) {
+  InitializeProperties();
+}
+
+BluetoothLEAdvertisingManagerClient::Properties*
+FakeBluetoothLEAdvertisingManagerClient::GetProperties(
+    const dbus::ObjectPath& object_path) {
+  return properties_.get();
+}
+
+void FakeBluetoothLEAdvertisingManagerClient::InitializeProperties() {
+  properties_ = std::make_unique<Properties>(
+      nullptr,
+      bluetooth_advertising_manager::kBluetoothAdvertisingManagerInterface,
+      base::BindRepeating(
+          &FakeBluetoothLEAdvertisingManagerClient::OnPropertyChanged,
+          weak_ptr_factory_.GetWeakPtr(),
+          /*object_path=*/dbus::ObjectPath("")));
+}
+
+void FakeBluetoothLEAdvertisingManagerClient::OnPropertyChanged(
+    const dbus::ObjectPath& object_path,
+    const std::string& property_name) {
+  DVLOG(2) << "Bluetooth Advertising Manager Client property changed: "
+           << object_path.value() << ": " << property_name;
+}
 
 void FakeBluetoothLEAdvertisingManagerClient::AddObserver(Observer* observer) {}
 
@@ -65,8 +91,8 @@ void FakeBluetoothLEAdvertisingManagerClient::RegisterAdvertisement(
              "Maximum advertisements reached");
   } else {
     currently_registered_.push_back(advertisement_object_path);
-    base::ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE,
-                                                  std::move(callback));
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, std::move(callback));
   }
 }
 
@@ -85,8 +111,7 @@ void FakeBluetoothLEAdvertisingManagerClient::UnregisterAdvertisement(
 
   auto service_iter = service_provider_map_.find(advertisement_object_path);
   auto reg_iter =
-      std::find(currently_registered_.begin(), currently_registered_.end(),
-                advertisement_object_path);
+      std::ranges::find(currently_registered_, advertisement_object_path);
 
   if (service_iter == service_provider_map_.end()) {
     std::move(error_callback)
@@ -98,8 +123,8 @@ void FakeBluetoothLEAdvertisingManagerClient::UnregisterAdvertisement(
              "Does not exist");
   } else {
     currently_registered_.erase(reg_iter);
-    base::ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE,
-                                                  std::move(callback));
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, std::move(callback));
   }
 }
 

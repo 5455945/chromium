@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,26 +6,32 @@
 
 #include <stddef.h>
 
+#include <array>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/cxx17_backports.h"
+#include "base/functional/bind.h"
 #include "base/synchronization/atomic_flag.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "build/build_config.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/browsing_data/chrome_browsing_data_remover_constants.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/extensions/extension_service.h"
-#include "chrome/browser/profile_resetter/brandcoded_default_settings.h"
+#include "chrome/browser/file_system_access/chrome_file_system_access_permission_context.h"
+#include "chrome/browser/file_system_access/file_system_access_permission_context_factory.h"
+#include "chrome/browser/google/google_brand.h"
+#include "chrome/browser/net/system_network_context_manager.h"
+#include "chrome/browser/profile_resetter/brandcode_config_fetcher.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/search/instant_service_factory.h"
+#include "chrome/browser/search/background/ntp_custom_background_service.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/translate/chrome_translate_client.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/new_tab_page/new_tab_page_ui.h"
 #include "chrome/common/pref_names.h"
@@ -38,19 +44,31 @@
 #include "components/language/core/browser/language_prefs.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
+#include "components/search_engines/enterprise/enterprise_search_manager.h"
 #include "components/search_engines/search_engines_pref_names.h"
 #include "components/search_engines/template_url_prepopulate_data.h"
 #include "components/search_engines/template_url_service.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/browsing_data_remover.h"
+#include "content/public/browser/storage_partition.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/management_policy.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/manifest.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_pref_names.h"
+#include "chrome/browser/ash/input_method/input_method_manager_impl.h"
+#include "chromeos/ash/components/network/managed_network_configuration_handler.h"
+#include "chromeos/ash/components/network/network_state_handler.h"
+#include "components/language/core/browser/pref_names.h"
+#include "components/proxy_config/proxy_config_pref_names.h"
+#include "components/spellcheck/browser/pref_names.h"
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+#if BUILDFLAG(IS_WIN)
 #include "base/base_paths.h"
 #include "base/path_service.h"
 #include "chrome/installer/util/shell_util.h"
@@ -66,7 +84,7 @@ void ResetShortcutsOnBlockingThread() {
   base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
                                                 base::BlockingType::MAY_BLOCK);
   for (int location = ShellUtil::SHORTCUT_LOCATION_FIRST;
-       location < ShellUtil::NUM_SHORTCUT_LOCATIONS; ++location) {
+       location <= ShellUtil::SHORTCUT_LOCATION_LAST; ++location) {
     ShellUtil::ShortcutListMaybeRemoveUnknownArgs(
         static_cast<ShellUtil::ShortcutLocation>(location),
         ShellUtil::CURRENT_USER, chrome_exe, true, nullptr, nullptr);
@@ -77,16 +95,31 @@ void ResetShortcutsOnBlockingThread() {
 }
 
 }  // namespace
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
 ProfileResetter::ProfileResetter(Profile* profile)
     : profile_(profile),
       template_url_service_(TemplateURLServiceFactory::GetForProfile(profile_)),
       pending_reset_flags_(0),
-      cookies_remover_(nullptr),
-      ntp_service_(InstantServiceFactory::GetForProfile(profile)) {
+      cookies_remover_(nullptr) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(profile_);
+  CHECK(profile_, base::NotFatalUntil::M163);
+
+  google_brand::GetBrand(&brandcode_);
+  if (brandcode_.empty()) {
+    return;
+  }
+  config_fetcher_ = std::make_unique<BrandcodeConfigFetcher>(
+      g_browser_process->system_network_context_manager()
+          ->GetURLLoaderFactory(),
+      base::BindOnce(&ProfileResetter::OnDefaultSettingsFetched,
+                     base::Unretained(this)),
+      GURL("https://tools.google.com/service/update2"), brandcode_);
+}
+
+void ProfileResetter::OnDefaultSettingsFetched() {
+  CHECK(config_fetcher_);
+  CHECK(!config_fetcher_->IsActive(), base::NotFatalUntil::M163);
 }
 
 ProfileResetter::~ProfileResetter() {
@@ -95,12 +128,48 @@ ProfileResetter::~ProfileResetter() {
     cookies_remover_->RemoveObserver(this);
 }
 
-void ProfileResetter::Reset(
+void ProfileResetter::ResetSettings(
+    ProfileResetter::ResettableFlags resettable_flags,
+    std::unique_ptr<BrandcodedDefaultSettings> master_settings,
+    base::OnceClosure callback) {
+  // TODO(b/364615847) remove master_settings parameter, it is only used in
+  // tests.
+  // TODO(crbug.com/580636758): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
+  DCHECK(brandcode_.empty() || config_fetcher_);
+  if (config_fetcher_ && config_fetcher_->IsActive()) {
+    // Reset once the prefs are fetched.
+    config_fetcher_->SetCallback(base::BindOnce(
+        &ProfileResetter::ResetSettings, base::Unretained(this),
+        resettable_flags, std::move(master_settings), std::move(callback)));
+    return;
+  }
+  if (!master_settings) {
+    if (config_fetcher_) {
+      CHECK(!config_fetcher_->IsActive(), base::NotFatalUntil::M163);
+      master_settings = config_fetcher_->GetSettings();
+      config_fetcher_.reset();
+    } else {
+      CHECK(brandcode_.empty(), base::NotFatalUntil::M163);
+    }
+
+    // If failed to fetch BrandcodedDefaultSettings or this is an organic
+    // installation, use default settings.
+    if (!master_settings) {
+      master_settings = std::make_unique<BrandcodedDefaultSettings>();
+    }
+  }
+
+  ResetSettingsImpl(resettable_flags, std::move(master_settings),
+                    std::move(callback));
+}
+
+void ProfileResetter::ResetSettingsImpl(
     ProfileResetter::ResettableFlags resettable_flags,
     std::unique_ptr<BrandcodedDefaultSettings> master_settings,
     base::OnceClosure callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(master_settings);
+  CHECK(master_settings, base::NotFatalUntil::M163);
 
   // We should never be called with unknown flags.
   CHECK_EQ(static_cast<ResettableFlags>(0), resettable_flags & ~ALL);
@@ -120,10 +189,14 @@ void ProfileResetter::Reset(
   // These flags are set to false by the individual reset functions.
   pending_reset_flags_ = resettable_flags;
 
-  struct {
+  struct FlagToMethod {
     Resettable flag;
     void (ProfileResetter::*method)();
-  } flagToMethod[] = {
+  };
+  auto flagToMethod = std::to_array<FlagToMethod>({
+      // Ordering of resets does matter here, extensions resets should
+      // always precede DNS and proxy resets as the former can impact
+      // the latter.
       {DEFAULT_SEARCH_ENGINE, &ProfileResetter::ResetDefaultSearchEngine},
       {HOMEPAGE, &ProfileResetter::ResetHomepage},
       {CONTENT_SETTINGS, &ProfileResetter::ResetContentSettings},
@@ -134,17 +207,23 @@ void ProfileResetter::Reset(
       {SHORTCUTS, &ProfileResetter::ResetShortcuts},
       {NTP_CUSTOMIZATIONS, &ProfileResetter::ResetNtpCustomizations},
       {LANGUAGES, &ProfileResetter::ResetLanguages},
-  };
+#if BUILDFLAG(IS_CHROMEOS)
+      {DNS_CONFIGURATIONS, &ProfileResetter::ResetDnsConfigurations},
+      {PROXY_SETTINGS, &ProfileResetter::ResetProxySettings},
+      {KEYBOARD_SETTINGS, &ProfileResetter::ResetKeyboardInputSettings},
+#endif  // BUILDFLAG(IS_CHROMEOS)
+  });
 
   ResettableFlags reset_triggered_for_flags = 0;
-  for (size_t i = 0; i < base::size(flagToMethod); ++i) {
+  for (size_t i = 0; i < std::size(flagToMethod); ++i) {
     if (resettable_flags & flagToMethod[i].flag) {
       reset_triggered_for_flags |= flagToMethod[i].flag;
       (this->*flagToMethod[i].method)();
     }
   }
 
-  DCHECK_EQ(resettable_flags, reset_triggered_for_flags);
+  CHECK_EQ(resettable_flags, reset_triggered_for_flags,
+           base::NotFatalUntil::M163);
 }
 
 bool ProfileResetter::IsActive() const {
@@ -170,24 +249,30 @@ void ProfileResetter::MarkAsDone(Resettable resettable) {
 
 void ProfileResetter::ResetDefaultSearchEngine() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(template_url_service_);
+  CHECK(template_url_service_, base::NotFatalUntil::M163);
   // If TemplateURLServiceFactory is ready we can clean it right now.
   // Otherwise, load it and continue from ProfileResetter::Observe.
   if (template_url_service_->loaded()) {
     PrefService* prefs = profile_->GetPrefs();
-    DCHECK(prefs);
+    CHECK(prefs, base::NotFatalUntil::M163);
     TemplateURLPrepopulateData::ClearPrepopulatedEnginesInPrefs(
         profile_->GetPrefs());
-    std::unique_ptr<base::ListValue> search_engines(
+    std::optional<base::ListValue> search_engines(
         master_settings_->GetSearchProviderOverrides());
-    if (search_engines) {
+    if (search_engines.has_value()) {
       // This Chrome distribution channel provides a custom search engine. We
       // must reset to it.
-      ListPrefUpdate update(prefs, prefs::kSearchProviderOverrides);
-      update->Swap(search_engines.get());
+      prefs->SetList(prefs::kSearchProviderOverrides,
+                     std::move(search_engines).value());
     }
 
     template_url_service_->RepairPrepopulatedSearchEngines();
+    template_url_service_->RepairStarterPackEngines();
+    template_url_service_->RemoveUserAddedTemplateURLs();
+    // Clearing user overrides restores recommended policy-defined site search
+    // engines that were deleted or modified by the user.
+    prefs->ClearPref(
+        EnterpriseSearchManager::kSiteSearchSettingsOverriddenKeywordsPrefName);
 
     MarkAsDone(DEFAULT_SEARCH_ENGINE);
   } else {
@@ -202,20 +287,21 @@ void ProfileResetter::ResetDefaultSearchEngine() {
 void ProfileResetter::ResetHomepage() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   PrefService* prefs = profile_->GetPrefs();
-  DCHECK(prefs);
+  CHECK(prefs, base::NotFatalUntil::M163);
   std::string homepage;
-  bool homepage_is_ntp, show_home_button;
 
   if (master_settings_->GetHomepage(&homepage))
     prefs->SetString(prefs::kHomePage, homepage);
 
-  if (master_settings_->GetHomepageIsNewTab(&homepage_is_ntp))
-    prefs->SetBoolean(prefs::kHomePageIsNewTabPage, homepage_is_ntp);
+  std::optional<bool> homepage_is_ntp = master_settings_->GetHomepageIsNewTab();
+  if (homepage_is_ntp.has_value())
+    prefs->SetBoolean(prefs::kHomePageIsNewTabPage, *homepage_is_ntp);
   else
     prefs->ClearPref(prefs::kHomePageIsNewTabPage);
 
-  if (master_settings_->GetShowHomeButton(&show_home_button))
-    prefs->SetBoolean(prefs::kShowHomeButton, show_home_button);
+  std::optional<bool> show_home_button = master_settings_->GetShowHomeButton();
+  if (show_home_button.has_value())
+    prefs->SetBoolean(prefs::kShowHomeButton, *show_home_button);
   else
     prefs->ClearPref(prefs::kShowHomeButton);
   MarkAsDone(HOMEPAGE);
@@ -238,23 +324,34 @@ void ProfileResetter::ResetContentSettings() {
     map->SetDefaultContentSetting(info->website_settings_info()->type(),
                                   CONTENT_SETTING_DEFAULT);
   }
+
+  // Active File System Access grants are kept in memory by the permission
+  // context rather than in HostContentSettingsMap, so they need to be revoked
+  // explicitly.
+  if (auto* permission_context =
+          FileSystemAccessPermissionContextFactory::GetForProfile(profile_)) {
+    permission_context->RevokeAllActiveGrants();
+  }
+
+  profile_->ForEachLoadedStoragePartition(
+      [](content::StoragePartition* partition) {
+        partition->ClearBluetoothAllowedDevicesMap();
+      });
+
   MarkAsDone(CONTENT_SETTINGS);
 }
 
 void ProfileResetter::ResetCookiesAndSiteData() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(!cookies_remover_);
+  CHECK(!cookies_remover_, base::NotFatalUntil::M163);
 
   cookies_remover_ = profile_->GetBrowsingDataRemover();
   cookies_remover_->AddObserver(this);
   uint64_t remove_mask = chrome_browsing_data_remover::DATA_TYPE_SITE_DATA |
                          content::BrowsingDataRemover::DATA_TYPE_CACHE;
   PrefService* prefs = profile_->GetPrefs();
-  DCHECK(prefs);
+  CHECK(prefs, base::NotFatalUntil::M163);
 
-  // Don't try to clear LSO data if it's not supported.
-  if (!prefs->GetBoolean(prefs::kClearPluginLSODataEnabled))
-    remove_mask &= ~chrome_browsing_data_remover::DATA_TYPE_PLUGIN_DATA;
   cookies_remover_->RemoveAndReply(
       base::Time(), base::Time::Max(), remove_mask,
       content::BrowsingDataRemover::ORIGIN_TYPE_UNPROTECTED_WEB, this);
@@ -268,7 +365,7 @@ void ProfileResetter::ResetExtensions() {
 
   extensions::ExtensionService* extension_service =
       extensions::ExtensionSystem::Get(profile_)->extension_service();
-  DCHECK(extension_service);
+  CHECK(extension_service, base::NotFatalUntil::M163);
   extension_service->DisableUserExtensionsExcept(brandcode_extensions);
 
   // Reenable all disabled external component extensions.
@@ -279,15 +376,16 @@ void ProfileResetter::ResetExtensions() {
   // registry anyway.
   extensions::ExtensionRegistry* extension_registry =
       extensions::ExtensionRegistry::Get(profile_);
-  DCHECK(extension_registry);
+  CHECK(extension_registry, base::NotFatalUntil::M163);
   std::vector<extensions::ExtensionId> extension_ids_to_reenable;
   for (const auto& extension : extension_registry->disabled_extensions()) {
     if (extension->location() ==
         extensions::mojom::ManifestLocation::kExternalComponent)
       extension_ids_to_reenable.push_back(extension->id());
   }
+  auto* extension_registrar = extensions::ExtensionRegistrar::Get(profile_);
   for (const auto& extension_id : extension_ids_to_reenable) {
-    extension_service->EnableExtension(extension_id);
+    extension_registrar->EnableExtension(extension_id);
   }
 
   MarkAsDone(EXTENSIONS);
@@ -296,11 +394,12 @@ void ProfileResetter::ResetExtensions() {
 void ProfileResetter::ResetStartupPages() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   PrefService* prefs = profile_->GetPrefs();
-  DCHECK(prefs);
-  std::unique_ptr<base::ListValue> url_list(
+  CHECK(prefs, base::NotFatalUntil::M163);
+  std::optional<base::ListValue> url_list(
       master_settings_->GetUrlsToRestoreOnStartup());
-  if (url_list)
-    ListPrefUpdate(prefs, prefs::kURLsToRestoreOnStartup)->Swap(url_list.get());
+  if (url_list.has_value()) {
+    prefs->SetList(prefs::kURLsToRestoreOnStartup, std::move(url_list).value());
+  }
 
   int restore_on_startup;
   if (master_settings_->GetRestoreOnStartup(&restore_on_startup))
@@ -313,23 +412,27 @@ void ProfileResetter::ResetStartupPages() {
 
 void ProfileResetter::ResetPinnedTabs() {
   // Unpin all the tabs.
-  for (auto* browser : *BrowserList::GetInstance()) {
-    if (browser->is_type_normal() && browser->profile() == profile_) {
-      TabStripModel* tab_model = browser->tab_strip_model();
-      // Here we assume that indexof(any mini tab) < indexof(any normal tab).
-      // If we unpin the tab, it can be moved to the right. Thus traversing in
-      // reverse direction is correct.
-      for (int i = tab_model->count() - 1; i >= 0; --i) {
-        if (tab_model->IsTabPinned(i))
-          tab_model->SetTabPinned(i, false);
-      }
-    }
-  }
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [this](BrowserWindowInterface* browser) {
+        if (browser->GetType() == BrowserWindowInterface::TYPE_NORMAL &&
+            browser->GetProfile() == profile_) {
+          TabStripModel* const tab_model = browser->GetTabStripModel();
+          // Here we assume that indexof(any mini tab) < indexof(any normal
+          // tab). If we unpin the tab, it can be moved to the right. Thus
+          // traversing in reverse direction is correct.
+          for (int i = tab_model->count() - 1; i >= 0; --i) {
+            if (tab_model->IsTabPinned(i)) {
+              tab_model->SetTabPinned(i, false);
+            }
+          }
+        }
+        return true;
+      });
   MarkAsDone(PINNED_TABS);
 }
 
 void ProfileResetter::ResetShortcuts() {
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   base::ThreadPool::CreateCOMSTATaskRunner(
       {base::MayBlock(), base::TaskPriority::USER_VISIBLE})
       ->PostTaskAndReply(
@@ -342,7 +445,7 @@ void ProfileResetter::ResetShortcuts() {
 }
 
 void ProfileResetter::ResetNtpCustomizations() {
-  ntp_service_->ResetToDefault();
+  NtpCustomBackgroundService::ResetProfilePrefs(profile_);
   NewTabPageUI::ResetProfilePrefs(profile_->GetPrefs());
   MarkAsDone(NTP_CUSTOMIZATIONS);
 }
@@ -350,7 +453,7 @@ void ProfileResetter::ResetNtpCustomizations() {
 void ProfileResetter::ResetLanguages() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   PrefService* prefs = profile_->GetPrefs();
-  DCHECK(prefs);
+  CHECK(prefs, base::NotFatalUntil::M163);
 
   auto translate_prefs = ChromeTranslateClient::CreateTranslatePrefs(prefs);
   translate_prefs->ResetToDefaults();
@@ -375,7 +478,117 @@ void ProfileResetter::OnBrowsingDataRemoverDone(uint64_t failed_data_types) {
   MarkAsDone(COOKIES_AND_SITE_DATA);
 }
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_CHROMEOS)
+void ProfileResetter::ResetDnsConfigurations() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // Since certain extensions can modify DNS configurations we want
+  // extensions to be reset beforehand.
+  CHECK(!(pending_reset_flags_ & EXTENSIONS));
+
+  ash::ManagedNetworkConfigurationHandler* network_configuration_handler =
+      ash::NetworkHandler::Get()->managed_network_configuration_handler();
+  if (!network_configuration_handler) {
+    MarkAsDone(DNS_CONFIGURATIONS);
+    return;
+  }
+
+  ash::NetworkStateHandler* network_state_handler =
+      ash::NetworkHandler::Get()->network_state_handler();
+  if (!network_state_handler) {
+    MarkAsDone(DNS_CONFIGURATIONS);
+    return;
+  }
+
+  // Fetch a list of all configured devices (Wifi, ethernet, etc.) for
+  // a given profile.
+  ash::NetworkStateHandler::NetworkStateList network_list;
+  network_state_handler->GetNetworkListByType(
+      ash::NetworkTypePattern::Default(), true /*configured_only*/,
+      false /*visible_only*/, 0 /*no_limit*/, &network_list);
+
+  // Use the list to reset DNS Configurations back to their default.
+  for (const ash::NetworkState* network : network_list) {
+    // Skip the network if the policy is managed. Unlikely to happen in
+    // the backend, but still good to have as an extra check.
+    if (network->IsManagedByPolicy()) {
+      LOG(WARNING) << "Network is managed by policy: " << network->path();
+      continue;
+    }
+
+    network_configuration_handler->ResetDNSProperties(network->path());
+  }
+  MarkAsDone(DNS_CONFIGURATIONS);
+}
+
+void ProfileResetter::ResetProxySettings() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // Since certain extensions can modify proxy settings we want
+  // extensions to be reset beforehand.
+  CHECK(!(pending_reset_flags_ & EXTENSIONS));
+
+  PrefService* prefs = profile_->GetPrefs();
+  CHECK(prefs);
+
+  // Check that user profile isn't managed. Unlikely to happen in
+  // the backend, but still good to have as an extra check.
+  if (prefs->FindPreference(proxy_config::prefs::kUseSharedProxies)
+          ->IsManaged()) {
+    MarkAsDone(PROXY_SETTINGS);
+    return;
+  }
+
+  // Call to reset Proxy prefs set by disabling "Allow proxies for shared
+  // networks" in chrome://settings. Will always write to User Prefs (the only
+  // modifiable store). If a value is already set in a PrefStore with precedence
+  // over User Prefs, re-reading the value might not return the value you just
+  // set. A list of known sources that override User Prefs:
+  // Managed Prefs (cloud policy)
+  // Supervised User Prefs (parental controls)
+  // Extension Prefs (extension overrides)
+  // Command-line Prefs (command-line overrides)
+  prefs->SetBoolean(proxy_config::prefs::kUseSharedProxies, false);
+  MarkAsDone(PROXY_SETTINGS);
+}
+
+void ProfileResetter::ResetKeyboardInputSettings() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // Since spellcheck settings depend on preferred languages, user language
+  // preferences need to be reset beforehand.
+  CHECK(!(pending_reset_flags_ & LANGUAGES));
+
+  PrefService* prefs = profile_->GetPrefs();
+  CHECK(prefs);
+
+  // 1. Call to reset the language of the Input methods, from the current device
+  // language.
+  if (g_browser_process && g_browser_process->local_state()) {
+    // Assume that the session will use the current UI locale.
+    std::string locale = g_browser_process->GetApplicationLocale();
+
+    // Derive kLanguagePreloadEngines from `locale`.
+    // Uses the first input method as the most popular one.
+    std::vector<std::string> input_method_ids;
+    ash::input_method::InputMethodManager* manager =
+        ash::input_method::InputMethodManager::Get();
+    manager->GetInputMethodUtil()->GetInputMethodIdsFromLanguageCode(
+        locale, ash::input_method::kAllInputMethods, &input_method_ids);
+    // Save the input method in the user's preference kLanguagePreloadEngines.
+    prefs->SetString(
+        ash::prefs::kLanguagePreloadEngines,
+        input_method_ids.empty() ? std::string() : input_method_ids[0]);
+  }
+
+  // 2. Call to reset spell check languages, matching the default language and
+  // clearing the other options.
+  prefs->SetList(spellcheck::prefs::kSpellCheckDictionaries,
+                 base::ListValue().Append(
+                     prefs->GetString(language::prefs::kPreferredLanguages)));
+
+  MarkAsDone(KEYBOARD_SETTINGS);
+}
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+#if BUILDFLAG(IS_WIN)
 std::vector<ShortcutCommand> GetChromeLaunchShortcuts(
     const scoped_refptr<SharedCancellationFlag>& cancel) {
   base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
@@ -386,7 +599,7 @@ std::vector<ShortcutCommand> GetChromeLaunchShortcuts(
     return std::vector<ShortcutCommand>();
   std::vector<ShortcutCommand> shortcuts;
   for (int location = ShellUtil::SHORTCUT_LOCATION_FIRST;
-       location < ShellUtil::NUM_SHORTCUT_LOCATIONS; ++location) {
+       location <= ShellUtil::SHORTCUT_LOCATION_LAST; ++location) {
     if (cancel.get() && cancel->data.IsSet())
       break;
     ShellUtil::ShortcutListMaybeRemoveUnknownArgs(
@@ -399,4 +612,4 @@ std::vector<ShortcutCommand> GetChromeLaunchShortcuts(
   }
   return shortcuts;
 }
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)

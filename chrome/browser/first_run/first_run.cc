@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,25 +6,26 @@
 
 #include <algorithm>
 #include <memory>
+#include <string>
+#include <tuple>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
-#include "base/macros.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/logging.h"
 #include "base/metrics/user_metrics.h"
 #include "base/no_destructor.h"
-#include "base/one_shot_event.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/extensions/updater/extension_updater.h"
+#include "chrome/browser/first_run/first_run_features.h"
 #include "chrome/browser/first_run/first_run_internal.h"
 #include "chrome/browser/google/google_brand.h"
+#include "chrome/browser/headless/headless_mode_util.h"
 #include "chrome/browser/importer/external_process_importer_host.h"
 #include "chrome/browser/importer/importer_list.h"
 #include "chrome/browser/importer/importer_progress_observer.h"
@@ -34,24 +35,21 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profiles_state.h"
 #include "chrome/browser/shell_integration.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/chrome_pages.h"
-#include "chrome/browser/ui/global_error/global_error_service.h"
-#include "chrome/browser/ui/global_error/global_error_service_factory.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/url_constants.h"
 #include "chrome/installer/util/initial_preferences.h"
 #include "chrome/installer/util/initial_preferences_constants.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
-#include "content/public/browser/web_contents.h"
-#include "google_apis/gaia/gaia_auth_util.h"
+#include "components/startup_metric_utils/browser/startup_metric_utils.h"
+#include "extensions/buildflags/buildflags.h"
 #include "url/gurl.h"
+
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+#include "chrome/browser/browser_features.h"
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 namespace content {
 class BrowserContext;
@@ -65,10 +63,6 @@ namespace {
 // AutoImport. This is used in testing to verify import startup actions that
 // occur before an observer can be registered in the test.
 uint16_t g_auto_import_state = first_run::AUTO_IMPORT_NONE;
-
-// Flags for functions of similar name.
-bool g_should_show_welcome_page = false;
-bool g_should_do_autofill_personal_data_manager_first_run = false;
 
 // Indicates whether this is first run. Populated when IsChromeFirstRun
 // is invoked, then used as a cache on subsequent calls.
@@ -85,13 +79,15 @@ base::Time g_cached_sentinel_creation_time;
 // ImportEnded() is called asynchronously. Thus we have to handle both cases.
 class ImportEndedObserver : public importer::ImporterProgressObserver {
  public:
-  ImportEndedObserver() : ended_(false) {}
-  ~ImportEndedObserver() override {}
+  ImportEndedObserver() = default;
+
+  ImportEndedObserver(const ImportEndedObserver&) = delete;
+  ImportEndedObserver& operator=(const ImportEndedObserver&) = delete;
 
   // importer::ImporterProgressObserver:
   void ImportStarted() override {}
-  void ImportItemStarted(importer::ImportItem item) override {}
-  void ImportItemEnded(importer::ImportItem item) override {}
+  void ImportItemStarted(user_data_importer::ImportItem item) override {}
+  void ImportItemEnded(user_data_importer::ImportItem item) override {}
   void ImportEnded() override {
     ended_ = true;
     if (callback_for_import_end_)
@@ -108,20 +104,19 @@ class ImportEndedObserver : public importer::ImporterProgressObserver {
 
  private:
   // Set if the import has ended.
-  bool ended_;
+  bool ended_ = false;
 
   base::OnceClosure callback_for_import_end_;
-
-  DISALLOW_COPY_AND_ASSIGN(ImportEndedObserver);
 };
 
 // Launches the import, via |importer_host|, from |source_profile| into
 // |target_profile| for the items specified in the |items_to_import| bitfield.
 // This may be done in a separate process depending on the platform, but it will
 // always block until done.
-void ImportFromSourceProfile(const importer::SourceProfile& source_profile,
-                             Profile* target_profile,
-                             uint16_t items_to_import) {
+void ImportFromSourceProfile(
+    const user_data_importer::SourceProfile& source_profile,
+    Profile* target_profile,
+    uint16_t items_to_import) {
   // Deletes itself.
   ExternalProcessImporterHost* importer_host =
       new ExternalProcessImporterHost;
@@ -146,18 +141,19 @@ void ImportFromSourceProfile(const importer::SourceProfile& source_profile,
 // |import_bookmarks_path|.
 void ImportFromFile(Profile* profile,
                     const std::string& import_bookmarks_path) {
-  importer::SourceProfile source_profile;
-  source_profile.importer_type = importer::TYPE_BOOKMARKS_FILE;
+  user_data_importer::SourceProfile source_profile;
+  source_profile.importer_type = user_data_importer::TYPE_BOOKMARKS_FILE;
 
   const base::FilePath::StringType& import_bookmarks_path_str =
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
       base::UTF8ToWide(import_bookmarks_path);
 #else
       import_bookmarks_path;
 #endif
   source_profile.source_path = base::FilePath(import_bookmarks_path_str);
 
-  ImportFromSourceProfile(source_profile, profile, importer::FAVORITES);
+  ImportFromSourceProfile(source_profile, profile,
+                          user_data_importer::FAVORITES);
   g_auto_import_state |= first_run::AUTO_IMPORT_BOOKMARKS_FILE_IMPORTED;
 }
 
@@ -165,8 +161,8 @@ void ImportFromFile(Profile* profile,
 void ImportSettings(Profile* profile,
                     std::unique_ptr<ImporterList> importer_list,
                     uint16_t items_to_import) {
-  DCHECK(items_to_import);
-  const importer::SourceProfile& source_profile =
+  CHECK(items_to_import, base::NotFatalUntil::M161);
+  const user_data_importer::SourceProfile& source_profile =
       importer_list->GetSourceProfileAt(0);
 
   // Ensure that importers aren't requested to import items that they do not
@@ -186,7 +182,7 @@ void ConvertStringVectorToGURLVector(
     const std::vector<std::string>& src,
     std::vector<GURL>* ret) {
   ret->resize(src.size());
-  std::transform(src.begin(), src.end(), ret->begin(), &UrlFromString);
+  std::ranges::transform(src, ret->begin(), &UrlFromString);
 }
 
 base::FilePath& GetInitialPrefsPathForTesting() {
@@ -199,7 +195,7 @@ base::FilePath& GetInitialPrefsPathForTesting() {
 void ProcessDefaultBrowserPolicy(bool make_chrome_default_for_user) {
   // Only proceed if chrome can be made default unattended. In other cases, this
   // is handled by the first run default browser prompt (on Windows 8+).
-  if (shell_integration::GetDefaultWebClientSetPermission() ==
+  if (shell_integration::GetDefaultBrowserSetPermission() ==
       shell_integration::SET_DEFAULT_UNATTENDED) {
     // The policy has precedence over the user's choice.
     if (g_browser_process->local_state()->IsManagedPreference(
@@ -223,11 +219,25 @@ bool GetFirstRunSentinelFilePath(base::FilePath* path) {
   return true;
 }
 
-// Create the first run sentinel file; returns false on failure.
-bool CreateSentinel() {
+// Create the first run sentinel file; returns the status of the operation.
+startup_metric_utils::FirstRunSentinelCreationResult CreateSentinel() {
   base::FilePath first_run_sentinel;
-  return GetFirstRunSentinelFilePath(&first_run_sentinel) &&
-         base::WriteFile(first_run_sentinel, "");
+  if (!GetFirstRunSentinelFilePath(&first_run_sentinel)) {
+    return startup_metric_utils::FirstRunSentinelCreationResult::
+        kFailedToGetPath;
+  }
+
+  if (base::PathExists(first_run_sentinel)) {
+    return startup_metric_utils::FirstRunSentinelCreationResult::
+        kFilePathExists;
+  }
+
+  if (!base::WriteFile(first_run_sentinel, "")) {
+    return startup_metric_utils::FirstRunSentinelCreationResult::
+        kFileSystemError;
+  }
+
+  return startup_metric_utils::FirstRunSentinelCreationResult::kSuccess;
 }
 
 // Reads the creation time of the first run sentinel file. If the first run
@@ -274,11 +284,40 @@ void SetupInitialPrefsFromInstallPrefs(
   install_prefs.GetString(
       installer::initial_preferences::kDistroSuppressDefaultBrowserPromptPref,
       &out_prefs->suppress_default_browser_prompt_for_version);
+
+  if (base::FeatureList::IsEnabled(features::kBookmarksImportOnFirstRun)) {
+    const base::DictValue* bookmarks_dict = install_prefs.GetBookmarksBlock();
+    if (bookmarks_dict) {
+      out_prefs->import_bookmarks_dict = bookmarks_dict->Clone();
+    }
+  }
+
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+  if (base::FeatureList::IsEnabled(features::kInitialExternalExtensions)) {
+    out_prefs->initial_extensions_provider_name =
+        install_prefs.GetInitialExtensionsProviderName();
+
+    if (const base::ListValue* initial_extensions =
+            install_prefs.GetInitialExtensionsList()) {
+      out_prefs->initial_extensions = initial_extensions->Clone();
+    }
+  }
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+
+#if BUILDFLAG(IS_MAC)
+  if (install_prefs.GetBool(prefs::kConfirmToQuitEnabled, &value) && value)
+    out_prefs->confirm_to_quit = true;
+#endif  // BUILDFLAG(IS_MAC)
+
+#if BUILDFLAG(IS_LINUX)
+  install_prefs.GetBool(installer::initial_preferences::kRequireEula,
+                        &out_prefs->eula_required);
+#endif  // BUILDFLAG(IS_LINUX)
 }
 
 // -- Platform-specific functions --
 
-#if !defined(OS_LINUX) && !defined(OS_CHROMEOS) && !defined(OS_BSD)
+#if !BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_BSD)
 bool IsOrganicFirstRun() {
   std::string brand;
   google_brand::GetBrand(&brand);
@@ -322,26 +361,22 @@ bool IsChromeFirstRun() {
   return g_first_run == internal::FIRST_RUN_TRUE;
 }
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 bool IsFirstRunSuppressed(const base::CommandLine& command_line) {
   return command_line.HasSwitch(switches::kNoFirstRun);
 }
 #endif
 
-bool IsMetricsReportingOptIn() {
-  // Metrics reporting is opt-out by default for all platforms and channels.
-  // However, user will have chance to modify metrics reporting state during
-  // first run.
-  return false;
-}
-
 void CreateSentinelIfNeeded() {
-  if (IsChromeFirstRun())
-    CreateSentinel();
+  if (IsChromeFirstRun()) {
+    auto sentinel_creation_result = CreateSentinel();
+    startup_metric_utils::GetBrowser().RecordFirstRunSentinelCreation(
+        sentinel_creation_result);
+  }
 
   // Causes the first run sentinel creation time to be read and cached, while
   // I/O is still allowed.
-  ignore_result(GetFirstRunSentinelCreationTime());
+  std::ignore = GetFirstRunSentinelCreationTime();
 }
 
 base::Time GetFirstRunSentinelCreationTime() {
@@ -355,42 +390,18 @@ void ResetCachedSentinelDataForTesting() {
   g_first_run = first_run::internal::FIRST_RUN_UNKNOWN;
 }
 
-void SetShouldShowWelcomePage() {
-  g_should_show_welcome_page = true;
-}
-
-bool ShouldShowWelcomePage() {
-  bool retval = g_should_show_welcome_page;
-  g_should_show_welcome_page = false;
-  return retval;
-}
-
-bool IsOnWelcomePage(content::WebContents* contents) {
-  return contents->GetURL().GetWithEmptyPath() ==
-         GURL(chrome::kChromeUIWelcomeURL);
-}
-
-void SetShouldDoPersonalDataManagerFirstRun() {
-  g_should_do_autofill_personal_data_manager_first_run = true;
-}
-
-bool ShouldDoPersonalDataManagerFirstRun() {
-  bool retval = g_should_do_autofill_personal_data_manager_first_run;
-  g_should_do_autofill_personal_data_manager_first_run = false;
-  return retval;
-}
-
 void SetInitialPrefsPathForTesting(const base::FilePath& initial_prefs) {
   GetInitialPrefsPathForTesting() = initial_prefs;
 }
 
 std::unique_ptr<installer::InitialPreferences> LoadInitialPrefs() {
   base::FilePath initial_prefs_path;
-  if (!GetInitialPrefsPathForTesting().empty())
+  if (!GetInitialPrefsPathForTesting().empty()) {
     initial_prefs_path = GetInitialPrefsPathForTesting();
-  else
+  } else {
     initial_prefs_path =
         base::FilePath(first_run::internal::InitialPrefsPath());
+  }
 
   if (initial_prefs_path.empty())
     return nullptr;
@@ -405,30 +416,40 @@ ProcessInitialPreferencesResult ProcessInitialPreferences(
     const base::FilePath& user_data_dir,
     std::unique_ptr<installer::InitialPreferences> initial_prefs,
     MasterPrefs* out_prefs) {
-  DCHECK(!user_data_dir.empty());
+  CHECK(!user_data_dir.empty(), base::NotFatalUntil::M161);
 
   if (initial_prefs.get()) {
-    if (!internal::ShowPostInstallEULAIfNeeded(initial_prefs.get()))
+    // Don't show EULA when running in headless mode since this would
+    // effectively block the UI because there is no one to accept it.
+    // On Linux, the EULA dialog is shown in ShowEulaDialog after
+    // UI is initialized.
+    if (!headless::IsHeadlessMode() &&
+        !internal::ShowPostInstallEULAIfNeeded(initial_prefs.get())) {
       return EULA_EXIT_NOW;
+    }
 
-    std::unique_ptr<base::DictionaryValue> initial_dictionary =
-        initial_prefs->initial_dictionary().CreateDeepCopy();
+    base::DictValue initial_dictionary =
+        initial_prefs->initial_dictionary().Clone();
     // The distribution dictionary (and any prefs below it) are never registered
     // for use in Chrome's PrefService. Strip them from the initial dictionary
     // before mapping it to prefs.
-    initial_dictionary->RemoveWithoutPathExpansion(
-        installer::initial_preferences::kDistroDict, nullptr);
+    initial_dictionary.Remove(installer::initial_preferences::kDistroDict);
+
+    initial_dictionary.Remove(installer::initial_preferences::kBookmarksBlock);
+
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+    // Extensions are not copied verbatim into prefs. Their installation
+    // is managed by the `InitialExternalExtensionsLoader` which will load
+    // extension ids from the local prefs.
+    initial_dictionary.RemoveByDottedPath(
+        installer::initial_preferences::kExtensionsBlock);
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
     if (!chrome_prefs::InitializePrefsFromMasterPrefs(
             profiles::GetDefaultProfileDir(user_data_dir),
-            std::move(initial_dictionary))) {
+            std::move(initial_dictionary),
+            g_browser_process->os_crypt_async())) {
       DLOG(ERROR) << "Failed to initialize from initial preferences.";
-    }
-
-    base::DictionaryValue* extensions = 0;
-    if (initial_prefs->GetExtensionsBlock(&extensions)) {
-      DVLOG(1) << "Extensions block found in initial preferences";
-      extensions::ExtensionUpdater::UpdateImmediatelyForFirstRun();
     }
 
     internal::SetupInitialPrefsFromInstallPrefs(*initial_prefs, out_prefs);
@@ -436,6 +457,12 @@ ProcessInitialPreferencesResult ProcessInitialPreferences(
 
   return FIRST_RUN_PROCEED;
 }
+
+#if BUILDFLAG(IS_LINUX)
+bool ShowEulaDialog() {
+  return internal::ShowEulaDialog();
+}
+#endif
 
 void AutoImport(
     Profile* profile,
@@ -453,14 +480,14 @@ void AutoImport(
   uint16_t items_to_import = 0;
   static constexpr struct {
     const char* pref_path;
-    importer::ImportItem bit;
+    user_data_importer::ImportItem bit;
   } kImportItems[] = {
-      {prefs::kImportAutofillFormData, importer::AUTOFILL_FORM_DATA},
-      {prefs::kImportBookmarks, importer::FAVORITES},
-      {prefs::kImportHistory, importer::HISTORY},
-      {prefs::kImportHomepage, importer::HOME_PAGE},
-      {prefs::kImportSavedPasswords, importer::PASSWORDS},
-      {prefs::kImportSearchEngine, importer::SEARCH_ENGINES},
+      {prefs::kImportAutofillFormData, user_data_importer::AUTOFILL_FORM_DATA},
+      {prefs::kImportBookmarks, user_data_importer::FAVORITES},
+      {prefs::kImportHistory, user_data_importer::HISTORY},
+      {prefs::kImportHomepage, user_data_importer::HOME_PAGE},
+      {prefs::kImportSavedPasswords, user_data_importer::PASSWORDS},
+      {prefs::kImportSearchEngine, user_data_importer::SEARCH_ENGINES},
   };
 
   for (const auto& import_item : kImportItems) {
@@ -470,7 +497,7 @@ void AutoImport(
 
   if (items_to_import) {
     // It may be possible to do the if block below asynchronously. In which
-    // case, get rid of this RunLoop. http://crbug.com/366116.
+    // case, get rid of this RunLoop. http://crbug.com/41103081.
     base::RunLoop run_loop;
     auto importer_list = std::make_unique<ImporterList>();
     importer_list->DetectSourceProfiles(
@@ -491,15 +518,12 @@ void AutoImport(
     ImportFromFile(profile, import_bookmarks_path);
 }
 
-void DoPostImportTasks(Profile* profile, bool make_chrome_default_for_user) {
+void DoPostImportTasks(bool make_chrome_default_for_user) {
   // Only set default browser after import as auto import relies on the current
   // default browser to know what to import from.
   ProcessDefaultBrowserPolicy(make_chrome_default_for_user);
 
-  SetShouldShowWelcomePage();
-  SetShouldDoPersonalDataManagerFirstRun();
-
-  internal::DoPostImportPlatformSpecificTasks(profile);
+  internal::DoPostImportPlatformSpecificTasks();
 }
 
 uint16_t auto_import_state() {

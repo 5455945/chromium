@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,13 +11,24 @@ namespace storage {
 
 // The quota for each storage area.
 // This value is enforced by clients and by the storage service.
-extern const size_t kPerStorageAreaQuota;
+inline constexpr size_t kPerStorageAreaQuota = 10 * 1024 * 1024;
 
 // In the storage service we allow some overage to
 // accommodate concurrent writes from different clients
 // that were allowed because the limit imposed in the client
 // wasn't exceeded.
-extern const size_t kPerStorageAreaOverQuotaAllowance;
+inline constexpr size_t kPerStorageAreaOverQuotaAllowance = 100 * 1024;
+
+// Storage keys become eligible for deletion after 400 days of inactivity.
+inline constexpr int kLocalStorageStaleBucketCutoffInDays = 400;
+
+// After this many consecutive commit errors we'll throw away the entire
+// database.
+inline constexpr int kCommitErrorThreshold = 8;
+
+// Extension for the temporary SQLite database built during migration. It is
+// moved to the final path only after migration succeeds.
+inline constexpr char kSqliteMigrationStagingExtension[] = "Migrating";
 
 }  // namespace storage
 

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,7 +20,12 @@ class DevToolsFrontendHost;
 class DevToolsProtocolTestBindings : public WebContentsObserver,
                                      public DevToolsAgentHostClient {
  public:
-  explicit DevToolsProtocolTestBindings(WebContents* devtools);
+  explicit DevToolsProtocolTestBindings(WebContents* devtools, std::string log);
+
+  DevToolsProtocolTestBindings(const DevToolsProtocolTestBindings&) = delete;
+  DevToolsProtocolTestBindings& operator=(const DevToolsProtocolTestBindings&) =
+      delete;
+
   ~DevToolsProtocolTestBindings() override;
   static GURL MapTestURLIfNeeded(const GURL& test_url, bool* is_protocol_test);
 
@@ -29,21 +34,33 @@ class DevToolsProtocolTestBindings : public WebContentsObserver,
   void AgentHostClosed(DevToolsAgentHost* agent_host) override;
   void DispatchProtocolMessage(DevToolsAgentHost* agent_host,
                                base::span<const uint8_t> message) override;
+  bool AllowUnsafeOperations() override;
+  bool IsTrusted() override;
 
   // WebContentsObserver overrides
   void ReadyToCommitNavigation(NavigationHandle* navigation_handle) override;
   void WebContentsDestroyed() override;
 
-  void HandleMessageFromTest(base::Value);
+  void ParseLog(std::string_view log);
+  void HandleMessagesFromLog(std::string_view protocol_message_string);
+  void HandleMessageFromTest(base::DictValue message);
 
   scoped_refptr<DevToolsAgentHost> agent_host_;
-#if !defined(OS_ANDROID)
-  // DevToolsFrontendHost does not exist on Android, but we also don't run web
-  // tests natively on Android.
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_FUCHSIA)
+  // DevToolsFrontendHost does not exist on Android and iOS, but we also don't
+  // run web tests natively on Android.
   std::unique_ptr<DevToolsFrontendHost> frontend_host_;
 #endif
-
-  DISALLOW_COPY_AND_ASSIGN(DevToolsProtocolTestBindings);
+  // Log of protocol messages, used to script the bindings behavior.
+  std::vector<base::DictValue> log_;
+  // The index of the next message in the log.
+  size_t log_pos_ = 0;
+  // If true, the binding is using the log instead of sending real messages.
+  // The log is enabled if a non-empty log is provided via the constructor.
+  bool log_enabled_ = false;
+  // Whether CDP has access to unsafe operations.
+  bool allow_unsafe_operations_ = true;
+  bool is_trusted_ = true;
 };
 
 }  // namespace content

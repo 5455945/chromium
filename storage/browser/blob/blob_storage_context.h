@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,12 +13,10 @@
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
 #include "base/component_export.h"
 #include "base/files/file_path.h"
-#include "base/gtest_prod_util.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/trace_event/memory_dump_provider.h"
 #include "components/services/storage/public/mojom/blob_storage_context.mojom.h"
@@ -35,7 +33,6 @@
 namespace content {
 
 class ChromeBlobStorageContext;
-class ShareableBlobDataItem;
 
 namespace indexed_db_backing_store_unittest {
 class BlobStorageContextShim;
@@ -48,6 +45,7 @@ namespace storage {
 class BlobDataBuilder;
 class BlobDataHandle;
 class BlobDataSnapshot;
+class ShareableBlobDataItem;
 
 // This class handles the logistics of blob storage within the browser process.
 // This class is not threadsafe, access on IO thread. In Chromium there is one
@@ -65,13 +63,27 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobStorageContext
   BlobStorageContext(const base::FilePath& profile_directory,
                      const base::FilePath& blob_storage_directory,
                      scoped_refptr<base::TaskRunner> file_runner);
+
+  BlobStorageContext(const BlobStorageContext&) = delete;
+  BlobStorageContext& operator=(const BlobStorageContext&) = delete;
+
   ~BlobStorageContext() override;
 
   // The following three methods all lookup a BlobDataHandle based on some
   // input. If no blob matching the input exists these methods return null.
+  //
+  // Note: Blob UUIDs are considered unguessable secrets. Possession of the
+  // UUID is proof of authority to access the blob. These lookups do not
+  // enforce origin checks because the security model relies on the secrecy of
+  // the UUID. See storage/browser/blob/SECURITY.md.
   std::unique_ptr<BlobDataHandle> GetBlobDataFromUUID(const std::string& uuid);
   // If this BlobStorageContext is deleted before this method finishes, the
   // callback will still be called with null.
+  //
+  // Note: This method calls GetInternalUUID on the remote to retrieve the UUID
+  // for lookup. If the remote is renderer-hosted, it can return any UUID. This
+  // is not considered a confused deputy vulnerability because the renderer must
+  // already know the UUID to forge it. See storage/browser/blob/SECURITY.md.
   void GetBlobDataFromBlobRemote(
       mojo::PendingRemote<blink::mojom::Blob> blob,
       base::OnceCallback<void(std::unique_ptr<BlobDataHandle>)> callback);
@@ -85,14 +97,11 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobStorageContext
   std::unique_ptr<BlobDataHandle> AddFinishedBlob(
       const std::string& uuid,
       const std::string& content_type,
-      const std::string& content_disposition,
       std::vector<scoped_refptr<ShareableBlobDataItem>> items);
 
-  std::unique_ptr<BlobDataHandle> AddBrokenBlob(
-      const std::string& uuid,
-      const std::string& content_type,
-      const std::string& content_disposition,
-      BlobStatus reason);
+  std::unique_ptr<BlobDataHandle> AddBrokenBlob(const std::string& uuid,
+                                                const std::string& content_type,
+                                                BlobStatus reason);
 
   size_t blob_count() const { return registry_.blob_count(); }
 
@@ -128,7 +137,6 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobStorageContext
   std::unique_ptr<BlobDataHandle> AddFutureBlob(
       const std::string& uuid,
       const std::string& content_type,
-      const std::string& content_disposition,
       BuildAbortedCallback build_aborted_callback);
 
   // Same as BuildBlob, but for a blob that was previously registered by calling
@@ -180,8 +188,8 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobStorageContext
 
   enum class TransportQuotaType { MEMORY, FILE };
 
-  void IncrementBlobRefCount(const std::string& uuid);
-  void DecrementBlobRefCount(const std::string& uuid);
+  void IncrementBlobHandleCount(const std::string& uuid);
+  void DecrementBlobHandleCount(const std::string& uuid);
 
   // This will return an empty snapshot until the blob is complete.
   // TODO(dmurph): After we make the snapshot method in BlobHandle private, then
@@ -207,21 +215,22 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobStorageContext
 
  private:
   std::unique_ptr<BlobDataHandle> BuildBlobInternal(
-      BlobEntry* entry,
+      scoped_refptr<BlobEntry> entry,
       std::unique_ptr<BlobDataBuilder> input_builder,
       TransportAllowedCallback transport_allowed_callback);
 
   std::unique_ptr<BlobDataHandle> CreateHandle(const std::string& uuid,
-                                               BlobEntry* entry);
+                                               scoped_refptr<BlobEntry> entry);
 
-  void NotifyTransportCompleteInternal(BlobEntry* entry);
+  void NotifyTransportCompleteInternal(scoped_refptr<BlobEntry> entry);
 
-  void CancelBuildingBlobInternal(BlobEntry* entry, BlobStatus reason);
+  void CancelBuildingBlobInternal(scoped_refptr<BlobEntry> entry,
+                                  BlobStatus reason);
 
-  void FinishBuilding(BlobEntry* entry);
+  void FinishBuilding(scoped_refptr<BlobEntry> entry);
 
   void RequestTransport(
-      BlobEntry* entry,
+      scoped_refptr<BlobEntry> entry,
       std::vector<BlobMemoryController::FileCreationInfo> files);
 
   // The files array is empty for memory quota request responses.
@@ -235,8 +244,6 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobStorageContext
   void OnDependentBlobFinished(const std::string& owning_blob_uuid,
                                BlobStatus reason);
 
-  void ClearAndFreeMemory(BlobEntry* entry);
-
   // base::trace_event::MemoryDumpProvider implementation.
   bool OnMemoryDump(const base::trace_event::MemoryDumpArgs& args,
                     base::trace_event::ProcessMemoryDump* pmd) override;
@@ -245,22 +252,19 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobStorageContext
   void RegisterFromDataItem(mojo::PendingReceiver<blink::mojom::Blob> blob,
                             const std::string& uuid,
                             mojom::BlobDataItemPtr item) override;
-  void RegisterFromMemory(mojo::PendingReceiver<::blink::mojom::Blob> blob,
-                          const std::string& uuid,
-                          mojo_base::BigBuffer data) override;
   void WriteBlobToFile(mojo::PendingRemote<::blink::mojom::Blob> blob,
                        const base::FilePath& path,
                        bool flush_on_write,
-                       absl::optional<base::Time> last_modified,
+                       std::optional<base::Time> last_modified,
+                       uint64_t expected_size,
                        WriteBlobToFileCallback callback) override;
+  void Clone(mojo::PendingReceiver<mojom::BlobStorageContext> cloned) override;
 
   base::FilePath profile_directory_;
   BlobStorageRegistry registry_;
   BlobMemoryController memory_controller_;
   mojo::ReceiverSet<mojom::BlobStorageContext> receivers_;
   base::WeakPtrFactory<BlobStorageContext> ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(BlobStorageContext);
 };
 
 }  // namespace storage

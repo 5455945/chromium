@@ -61,11 +61,11 @@ shouldBeEqualToString('flexbox.style.justifyContent', '');
 
 flexbox.style.justifyContent = 'flex-start';
 shouldBeEqualToString('flexbox.style.justifyContent', 'flex-start');
-shouldBeEqualToString('window.getComputedStyle(flexbox, null).justifyContent', 'flex-start');
+shouldBeEqualToString('window.getComputedStyle(flexbox, null).justifyContent', 'flow-start');
 
 flexbox.style.justifyContent = 'flex-end';
 shouldBeEqualToString('flexbox.style.justifyContent', 'flex-end');
-shouldBeEqualToString('window.getComputedStyle(flexbox, null).justifyContent', 'flex-end');
+shouldBeEqualToString('window.getComputedStyle(flexbox, null).justifyContent', 'flow-end');
 
 flexbox.style.justifyContent = 'center';
 shouldBeEqualToString('flexbox.style.justifyContent', 'center');
@@ -98,11 +98,11 @@ shouldBeEqualToString('window.getComputedStyle(flexbox, null).alignSelf', 'auto'
 
 flexbox.style.alignSelf = 'flex-start';
 shouldBeEqualToString('flexbox.style.alignSelf', 'flex-start');
-shouldBeEqualToString('window.getComputedStyle(flexbox, null).alignSelf', 'flex-start');
+shouldBeEqualToString('window.getComputedStyle(flexbox, null).alignSelf', 'flow-start');
 
 flexbox.style.alignSelf = 'flex-end';
 shouldBeEqualToString('flexbox.style.alignSelf', 'flex-end');
-shouldBeEqualToString('window.getComputedStyle(flexbox, null).alignSelf', 'flex-end');
+shouldBeEqualToString('window.getComputedStyle(flexbox, null).alignSelf', 'flow-end');
 
 flexbox.style.alignSelf = 'center';
 shouldBeEqualToString('flexbox.style.alignSelf', 'center');
@@ -142,12 +142,12 @@ shouldBeEqualToString('window.getComputedStyle(flexitem, null).alignSelf', 'auto
 flexbox.style.alignItems = 'flex-start';
 shouldBeEqualToString('flexbox.style.alignItems', 'flex-start');
 shouldBeEqualToString('flexitem.style.alignSelf', '');
-shouldBeEqualToString('window.getComputedStyle(flexbox, null).alignItems', 'flex-start');
+shouldBeEqualToString('window.getComputedStyle(flexbox, null).alignItems', 'flow-start');
 shouldBeEqualToString('window.getComputedStyle(flexitem, null).alignSelf', 'auto');
 
 flexbox.style.alignItems = 'flex-end';
 shouldBeEqualToString('flexbox.style.alignItems', 'flex-end');
-shouldBeEqualToString('window.getComputedStyle(flexbox, null).alignItems', 'flex-end');
+shouldBeEqualToString('window.getComputedStyle(flexbox, null).alignItems', 'flow-end');
 shouldBeEqualToString('window.getComputedStyle(flexitem, null).alignSelf', 'auto');
 
 flexbox.style.alignItems = 'center';
@@ -245,7 +245,12 @@ var wraps = ['', 'nowrap', 'wrap', 'wrap-reverse'];
 directions.forEach(function(direction) {
     wraps.forEach(function(wrap) {
         var expectedComputed = (direction || 'row') + ' ' + (wrap || 'nowrap');
-        var expected = direction + ' ' + wrap;
+        var expected = (direction == 'row') ? '' : direction;
+        if (expected.length)
+            expected += ' '
+        expected += (wrap == 'nowrap') ? '' : wrap;
+        if (!expected.length && (direction.length || wrap.length))
+            expected = 'row'
         testFlexFlowValue(direction + ' ' + wrap, expected, expectedComputed);
         testFlexFlowValue(wrap + ' ' + direction, expected, expectedComputed);
     });
@@ -263,7 +268,7 @@ shouldBeEqualToString('flexbox.style.flexFlow', '');
 shouldBeEqualToString('window.getComputedStyle(flexbox, null).flexFlow', 'row nowrap');
 flexbox.style.flexDirection = 'column';
 flexbox.style.flexWrap = 'initial';
-shouldBeEqualToString('flexbox.style.flexFlow', 'column');
+shouldBeEqualToString('flexbox.style.flexFlow', '');
 shouldBeEqualToString('window.getComputedStyle(flexbox, null).flexFlow', 'column nowrap');
 flexbox.style.flexWrap = 'wrap';
 shouldBeEqualToString('flexbox.style.flexFlow', 'column wrap');
@@ -287,11 +292,11 @@ shouldBeEqualToString('window.getComputedStyle(flexbox, null).alignContent', 'no
 
 flexbox.style.alignContent = 'flex-start';
 shouldBeEqualToString('flexbox.style.alignContent', 'flex-start');
-shouldBeEqualToString('window.getComputedStyle(flexbox, null).alignContent', 'flex-start');
+shouldBeEqualToString('window.getComputedStyle(flexbox, null).alignContent', 'flow-start');
 
 flexbox.style.alignContent = 'flex-end';
 shouldBeEqualToString('flexbox.style.alignContent', 'flex-end');
-shouldBeEqualToString('window.getComputedStyle(flexbox, null).alignContent', 'flex-end');
+shouldBeEqualToString('window.getComputedStyle(flexbox, null).alignContent', 'flow-end');
 
 flexbox.style.alignContent = 'center';
 shouldBeEqualToString('flexbox.style.alignContent', 'center');

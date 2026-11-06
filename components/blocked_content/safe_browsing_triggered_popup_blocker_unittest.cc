@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,9 +9,8 @@
 #include <utility>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
-#include "base/task/post_task.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "components/blocked_content/popup_blocker.h"
@@ -22,36 +21,49 @@
 #include "components/content_settings/browser/test_page_specific_content_settings_delegate.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/subresource_filter/content/browser/fake_safe_browsing_database_manager.h"
+#include "components/subresource_filter/content/browser/safe_browsing_page_activation_throttle.h"
 #include "components/subresource_filter/content/browser/subresource_filter_observer_manager.h"
-#include "components/subresource_filter/content/browser/subresource_filter_safe_browsing_activation_throttle.h"
 #include "components/subresource_filter/content/browser/subresource_filter_safe_browsing_client.h"
+#include "components/subresource_filter/content/browser/utils.h"
 #include "components/subresource_filter/core/browser/subresource_filter_constants.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
+#include "components/tabs/public/mock_tab_interface.h"
+#include "components/tabs/public/tab_interface.h"
 #include "components/user_prefs/user_prefs.h"
 #include "components/variations/scoped_variations_ids_provider.h"
 #include "content/public/browser/browser_context.h"
-#include "content/public/browser/browser_task_traits.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/navigation_throttle.h"
+#include "content/public/browser/render_process_host.h"
+#include "content/public/test/mock_navigation_handle.h"
+#include "content/public/test/mock_navigation_throttle_registry.h"
 #include "content/public/test/navigation_simulator.h"
 #include "content/public/test/test_navigation_throttle_inserter.h"
 #include "content/public/test/test_renderer_host.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/frame/frame.mojom.h"
 #include "third_party/blink/public/mojom/window_features/window_features.mojom.h"
+#include "ui/base/mojom/window_open_disposition.mojom.h"
 #include "ui/base/page_transition_types.h"
-#include "ui/base/window_open_disposition.h"
+#include "ui/base/unowned_user_data/unowned_user_data_host.h"
 #include "url/gurl.h"
 
 namespace blocked_content {
-const char kNumBlockedHistogram[] =
-    "ContentSettings.Popups.StrongBlocker.NumBlocked";
 
-class SafeBrowsingTriggeredPopupBlockerTest
+class SafeBrowsingTriggeredPopupBlockerTestBase
     : public content::RenderViewHostTestHarness {
  public:
-  SafeBrowsingTriggeredPopupBlockerTest() = default;
-  ~SafeBrowsingTriggeredPopupBlockerTest() override {
+  SafeBrowsingTriggeredPopupBlockerTestBase() = default;
+
+  SafeBrowsingTriggeredPopupBlockerTestBase(
+      const SafeBrowsingTriggeredPopupBlockerTestBase&) = delete;
+  SafeBrowsingTriggeredPopupBlockerTestBase& operator=(
+      const SafeBrowsingTriggeredPopupBlockerTestBase&) = delete;
+
+  ~SafeBrowsingTriggeredPopupBlockerTestBase() override {
     settings_map_->ShutdownOnUIThread();
   }
 
@@ -68,12 +80,16 @@ class SafeBrowsingTriggeredPopupBlockerTest
     HostContentSettingsMap::RegisterProfilePrefs(pref_service_.registry());
     settings_map_ = base::MakeRefCounted<HostContentSettingsMap>(
         &pref_service_, false /* is_off_the_record */,
-        false /* store_last_modified */, false /* restore_session*/);
+        false /* store_last_modified */, false /* restore_session*/,
+        false /* should_record_metrics */);
 
-    scoped_feature_list_ = DefaultFeatureList();
     subresource_filter::SubresourceFilterObserverManager::CreateForWebContents(
         web_contents());
-    PopupBlockerTabHelper::CreateForWebContents(web_contents());
+    tabs::TabLookupFromWebContents::CreateForWebContents(web_contents(), &tab_);
+    ON_CALL(tab_, GetUnownedUserDataHost())
+        .WillByDefault(::testing::ReturnRef(user_data_host_));
+    popup_blocker_tab_helper_ =
+        std::make_unique<PopupBlockerTabHelper>(tab_, web_contents());
     content_settings::PageSpecificContentSettings::CreateForWebContents(
         web_contents(),
         std::make_unique<
@@ -86,28 +102,22 @@ class SafeBrowsingTriggeredPopupBlockerTest
         std::make_unique<content::TestNavigationThrottleInserter>(
             web_contents(),
             base::BindRepeating(
-                &SafeBrowsingTriggeredPopupBlockerTest::CreateThrottle,
+                &SafeBrowsingTriggeredPopupBlockerTestBase::CreateThrottle,
                 base::Unretained(this)));
   }
-
-  virtual std::unique_ptr<base::test::ScopedFeatureList> DefaultFeatureList() {
-    auto feature_list = std::make_unique<base::test::ScopedFeatureList>();
-    feature_list->InitAndEnableFeature(kAbusiveExperienceEnforce);
-    return feature_list;
+  void TearDown() override {
+    popup_blocker_tab_helper_.reset();
+    popup_blocker_ = nullptr;
+    content::RenderViewHostTestHarness::TearDown();
   }
-
   FakeSafeBrowsingDatabaseManager* fake_safe_browsing_database() {
     return fake_safe_browsing_database_.get();
-  }
-
-  base::test::ScopedFeatureList* ResetFeatureAndGet() {
-    scoped_feature_list_ = std::make_unique<base::test::ScopedFeatureList>();
-    return scoped_feature_list_.get();
   }
 
   SafeBrowsingTriggeredPopupBlocker* popup_blocker() { return popup_blocker_; }
 
   void SimulateDeleteContents() {
+    popup_blocker_tab_helper_.reset();
     DeleteContents();
     popup_blocker_ = nullptr;
   }
@@ -118,7 +128,8 @@ class SafeBrowsingTriggeredPopupBlockerTest
     metadata.subresource_filter_match
         [safe_browsing::SubresourceFilterType::ABUSIVE] = level;
     fake_safe_browsing_database()->AddBlocklistedUrl(
-        url, safe_browsing::SB_THREAT_TYPE_SUBRESOURCE_FILTER, metadata);
+        url, safe_browsing::SBThreatType::SB_THREAT_TYPE_SUBRESOURCE_FILTER,
+        metadata);
   }
 
   void MarkUrlAsAbusiveEnforce(const GURL& url) {
@@ -138,25 +149,39 @@ class SafeBrowsingTriggeredPopupBlockerTest
 
   HostContentSettingsMap* settings_map() { return settings_map_.get(); }
 
- private:
-  std::unique_ptr<content::NavigationThrottle> CreateThrottle(
-      content::NavigationHandle* handle) {
-    return std::make_unique<
-        subresource_filter::SubresourceFilterSafeBrowsingActivationThrottle>(
-        handle, /*delegate=*/nullptr, content::GetIOThreadTaskRunner({}),
-        fake_safe_browsing_database_);
+ protected:
+  void CreateThrottle(content::NavigationThrottleRegistry& registry) {
+    // Activation is only computed when navigating a subresource filter root
+    // (see content_subresource_filter_throttle_manager.h for the definition of
+    // a root).
+    auto& handle = registry.GetNavigationHandle();
+    if (subresource_filter::IsInSubresourceFilterRoot(&handle)) {
+      registry.AddThrottle(
+          std::make_unique<
+              subresource_filter::SafeBrowsingPageActivationThrottle>(
+              registry, /*delegate=*/nullptr, fake_safe_browsing_database_));
+    }
   }
 
-  std::unique_ptr<base::test::ScopedFeatureList> scoped_feature_list_;
-  variations::ScopedVariationsIdsProvider scoped_variations_ids_provider_{
+  base::test::ScopedFeatureList scoped_feature_list_;
+  variations::test::ScopedVariationsIdsProvider scoped_variations_ids_provider_{
       variations::VariationsIdsProvider::Mode::kUseSignedInState};
   scoped_refptr<FakeSafeBrowsingDatabaseManager> fake_safe_browsing_database_;
-  SafeBrowsingTriggeredPopupBlocker* popup_blocker_ = nullptr;
+  ui::UnownedUserDataHost user_data_host_;
+  tabs::MockTabInterface tab_;
+  std::unique_ptr<PopupBlockerTabHelper> popup_blocker_tab_helper_;
+  raw_ptr<SafeBrowsingTriggeredPopupBlocker> popup_blocker_ = nullptr;
   std::unique_ptr<content::TestNavigationThrottleInserter> throttle_inserter_;
   sync_preferences::TestingPrefServiceSyncable pref_service_;
   scoped_refptr<HostContentSettingsMap> settings_map_;
+};
 
-  DISALLOW_COPY_AND_ASSIGN(SafeBrowsingTriggeredPopupBlockerTest);
+class SafeBrowsingTriggeredPopupBlockerTest
+    : public SafeBrowsingTriggeredPopupBlockerTestBase {
+ public:
+  SafeBrowsingTriggeredPopupBlockerTest() {
+    scoped_feature_list_.InitAndEnableFeature(kAbusiveExperienceEnforce);
+  }
 };
 
 struct RedirectSamplesAndResults {
@@ -183,12 +208,13 @@ TEST_F(SafeBrowsingTriggeredPopupBlockerTest,
   for (const auto& test_case : kTestCases) {
     std::unique_ptr<content::NavigationSimulator> simulator =
         content::NavigationSimulator::CreateRendererInitiated(
-            test_case.initial_url, web_contents()->GetMainFrame());
+            test_case.initial_url, web_contents()->GetPrimaryMainFrame());
     simulator->Start();
     simulator->Redirect(test_case.redirect_url);
     simulator->Commit();
     EXPECT_EQ(test_case.expect_strong_blocker,
-              popup_blocker()->ShouldApplyAbusivePopupBlocker());
+              popup_blocker()->ShouldApplyAbusivePopupBlocker(
+                  web_contents()->GetPrimaryPage()));
   }
 }
 
@@ -198,7 +224,8 @@ TEST_F(SafeBrowsingTriggeredPopupBlockerTest, MatchingURL_BlocksPopupAndLogs) {
   NavigateAndCommit(url);
   EXPECT_TRUE(GetMainFrameConsoleMessages().empty());
 
-  EXPECT_TRUE(popup_blocker()->ShouldApplyAbusivePopupBlocker());
+  EXPECT_TRUE(popup_blocker()->ShouldApplyAbusivePopupBlocker(
+      web_contents()->GetPrimaryPage()));
   EXPECT_EQ(1u, GetMainFrameConsoleMessages().size());
   EXPECT_EQ(GetMainFrameConsoleMessages().front(), kAbusiveEnforceMessage);
 }
@@ -213,12 +240,16 @@ TEST_F(SafeBrowsingTriggeredPopupBlockerTest,
   // only going to look at the triggering event info. It will only block the
   // popup if we know the triggering event is untrusted.
   GURL popup_url("https://example.popup/");
-  content::OpenURLParams params(
-      popup_url, content::Referrer(), WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui::PAGE_TRANSITION_LINK, true /* is_renderer_initiated */);
+  content::OpenURLParams params =
+      content::OpenURLParams::CreateRendererInitiated(
+          popup_url, ui::mojom::WindowOpenDisposition::kNewForegroundTab,
+          ui::PAGE_TRANSITION_LINK, content::Referrer(),
+          main_rfh()->GetCurrentInitiatorNavigationState());
   params.user_gesture = true;
   params.triggering_event_info =
       blink::mojom::TriggeringEventInfo::kFromUntrustedEvent;
+  params.source_render_frame_id = main_rfh()->GetRoutingID();
+  params.source_render_process_id = main_rfh()->GetProcess()->GetDeprecatedID();
 
   MaybeBlockPopup(web_contents(), nullptr,
                   std::make_unique<TestPopupNavigationDelegate>(
@@ -239,9 +270,11 @@ TEST_F(SafeBrowsingTriggeredPopupBlockerTest,
   // only going to look at the triggering event info. It will only block the
   // popup if we know the triggering event is untrusted.
   GURL popup_url("https://example.popup/");
-  content::OpenURLParams params(
-      popup_url, content::Referrer(), WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui::PAGE_TRANSITION_LINK, true /* is_renderer_initiated */);
+  content::OpenURLParams params =
+      content::OpenURLParams::CreateRendererInitiated(
+          popup_url, ui::mojom::WindowOpenDisposition::kNewForegroundTab,
+          ui::PAGE_TRANSITION_LINK, content::Referrer(),
+          main_rfh()->GetCurrentInitiatorNavigationState());
   params.user_gesture = true;
   params.triggering_event_info =
       blink::mojom::TriggeringEventInfo::kFromTrustedEvent;
@@ -258,12 +291,15 @@ TEST_F(SafeBrowsingTriggeredPopupBlockerTest,
 TEST_F(SafeBrowsingTriggeredPopupBlockerTest, NoMatch_NoBlocking) {
   const GURL url("https://example.test/");
   NavigateAndCommit(url);
-  EXPECT_FALSE(popup_blocker()->ShouldApplyAbusivePopupBlocker());
+  EXPECT_FALSE(popup_blocker()->ShouldApplyAbusivePopupBlocker(
+      web_contents()->GetPrimaryPage()));
   EXPECT_TRUE(GetMainFrameConsoleMessages().empty());
 }
 
-TEST_F(SafeBrowsingTriggeredPopupBlockerTest, FeatureEnabledByDefault) {
-  ResetFeatureAndGet();
+class SafeBrowsingTriggeredPopupBlockerDefaultTest
+    : public SafeBrowsingTriggeredPopupBlockerTestBase {};
+
+TEST_F(SafeBrowsingTriggeredPopupBlockerDefaultTest, FeatureEnabledByDefault) {
   SafeBrowsingTriggeredPopupBlocker::MaybeCreate(web_contents());
   EXPECT_NE(nullptr,
             SafeBrowsingTriggeredPopupBlocker::FromWebContents(web_contents()));
@@ -277,16 +313,20 @@ TEST_F(SafeBrowsingTriggeredPopupBlockerTest, OnlyBlockOnMatchingUrls) {
   MarkUrlAsAbusiveEnforce(url2);
 
   NavigateAndCommit(url1);
-  EXPECT_FALSE(popup_blocker()->ShouldApplyAbusivePopupBlocker());
+  EXPECT_FALSE(popup_blocker()->ShouldApplyAbusivePopupBlocker(
+      web_contents()->GetPrimaryPage()));
 
   NavigateAndCommit(url2);
-  EXPECT_TRUE(popup_blocker()->ShouldApplyAbusivePopupBlocker());
+  EXPECT_TRUE(popup_blocker()->ShouldApplyAbusivePopupBlocker(
+      web_contents()->GetPrimaryPage()));
 
   NavigateAndCommit(url3);
-  EXPECT_FALSE(popup_blocker()->ShouldApplyAbusivePopupBlocker());
+  EXPECT_FALSE(popup_blocker()->ShouldApplyAbusivePopupBlocker(
+      web_contents()->GetPrimaryPage()));
 
   NavigateAndCommit(url1);
-  EXPECT_FALSE(popup_blocker()->ShouldApplyAbusivePopupBlocker());
+  EXPECT_FALSE(popup_blocker()->ShouldApplyAbusivePopupBlocker(
+      web_contents()->GetPrimaryPage()));
 }
 
 TEST_F(SafeBrowsingTriggeredPopupBlockerTest,
@@ -296,11 +336,13 @@ TEST_F(SafeBrowsingTriggeredPopupBlockerTest,
 
   MarkUrlAsAbusiveEnforce(url);
   NavigateAndCommit(url);
-  EXPECT_TRUE(popup_blocker()->ShouldApplyAbusivePopupBlocker());
+  EXPECT_TRUE(popup_blocker()->ShouldApplyAbusivePopupBlocker(
+      web_contents()->GetPrimaryPage()));
 
   // This is merely a same document navigation, keep the popup blocker.
   NavigateAndCommit(hash_url);
-  EXPECT_TRUE(popup_blocker()->ShouldApplyAbusivePopupBlocker());
+  EXPECT_TRUE(popup_blocker()->ShouldApplyAbusivePopupBlocker(
+      web_contents()->GetPrimaryPage()));
 }
 
 TEST_F(SafeBrowsingTriggeredPopupBlockerTest,
@@ -310,18 +352,21 @@ TEST_F(SafeBrowsingTriggeredPopupBlockerTest,
 
   MarkUrlAsAbusiveEnforce(url);
   NavigateAndCommit(url);
-  EXPECT_TRUE(popup_blocker()->ShouldApplyAbusivePopupBlocker());
+  EXPECT_TRUE(popup_blocker()->ShouldApplyAbusivePopupBlocker(
+      web_contents()->GetPrimaryPage()));
 
   // Abort the navigation before it commits.
   content::NavigationSimulator::NavigateAndFailFromDocument(
       fail_url, net::ERR_ABORTED, main_rfh());
-  EXPECT_TRUE(popup_blocker()->ShouldApplyAbusivePopupBlocker());
+  EXPECT_TRUE(popup_blocker()->ShouldApplyAbusivePopupBlocker(
+      web_contents()->GetPrimaryPage()));
 
   // Committing an error page should probably reset the blocker though, despite
   // the fact that it is probably a bug for an error page to spawn popups.
   content::NavigationSimulator::NavigateAndFailFromDocument(
       fail_url, net::ERR_CONNECTION_RESET, main_rfh());
-  EXPECT_FALSE(popup_blocker()->ShouldApplyAbusivePopupBlocker());
+  EXPECT_FALSE(popup_blocker()->ShouldApplyAbusivePopupBlocker(
+      web_contents()->GetPrimaryPage()));
 }
 
 TEST_F(SafeBrowsingTriggeredPopupBlockerTest, LogActions) {
@@ -350,29 +395,28 @@ TEST_F(SafeBrowsingTriggeredPopupBlockerTest, LogActions) {
   histogram_tester.ExpectTotalCount(kActionHistogram, total_count);
 
   // Block two popups.
-  EXPECT_TRUE(popup_blocker()->ShouldApplyAbusivePopupBlocker());
+  EXPECT_TRUE(popup_blocker()->ShouldApplyAbusivePopupBlocker(
+      web_contents()->GetPrimaryPage()));
   check_histogram(SafeBrowsingTriggeredPopupBlocker::Action::kConsidered, 1);
   check_histogram(SafeBrowsingTriggeredPopupBlocker::Action::kBlocked, 1);
   histogram_tester.ExpectTotalCount(kActionHistogram, total_count);
 
-  EXPECT_TRUE(popup_blocker()->ShouldApplyAbusivePopupBlocker());
+  EXPECT_TRUE(popup_blocker()->ShouldApplyAbusivePopupBlocker(
+      web_contents()->GetPrimaryPage()));
   check_histogram(SafeBrowsingTriggeredPopupBlocker::Action::kConsidered, 2);
   check_histogram(SafeBrowsingTriggeredPopupBlocker::Action::kBlocked, 2);
   histogram_tester.ExpectTotalCount(kActionHistogram, total_count);
 
-  // Only log the num blocked histogram after navigation.
-  histogram_tester.ExpectTotalCount(kNumBlockedHistogram, 0);
-
   // Navigate to a warn site.
   NavigateAndCommit(url_warn);
-  histogram_tester.ExpectBucketCount(kNumBlockedHistogram, 2, 1);
 
   check_histogram(SafeBrowsingTriggeredPopupBlocker::Action::kNavigation, 2);
   check_histogram(SafeBrowsingTriggeredPopupBlocker::Action::kWarningSite, 1);
   histogram_tester.ExpectTotalCount(kActionHistogram, total_count);
 
   // Let one popup through.
-  EXPECT_FALSE(popup_blocker()->ShouldApplyAbusivePopupBlocker());
+  EXPECT_FALSE(popup_blocker()->ShouldApplyAbusivePopupBlocker(
+      web_contents()->GetPrimaryPage()));
   check_histogram(SafeBrowsingTriggeredPopupBlocker::Action::kConsidered, 3);
   histogram_tester.ExpectTotalCount(kActionHistogram, total_count);
 
@@ -382,33 +426,26 @@ TEST_F(SafeBrowsingTriggeredPopupBlockerTest, LogActions) {
   histogram_tester.ExpectTotalCount(kActionHistogram, total_count);
 
   // Let one popup through.
-  EXPECT_FALSE(popup_blocker()->ShouldApplyAbusivePopupBlocker());
+  EXPECT_FALSE(popup_blocker()->ShouldApplyAbusivePopupBlocker(
+      web_contents()->GetPrimaryPage()));
   check_histogram(SafeBrowsingTriggeredPopupBlocker::Action::kConsidered, 4);
   histogram_tester.ExpectTotalCount(kActionHistogram, total_count);
-
-  histogram_tester.ExpectTotalCount(kNumBlockedHistogram, 1);
 }
 
-TEST_F(SafeBrowsingTriggeredPopupBlockerTest, LogBlockMetricsOnClose) {
-  base::HistogramTester histogram_tester;
-  const GURL url_enforce("https://example.enforce/");
-  MarkUrlAsAbusiveEnforce(url_enforce);
+class SafeBrowsingTriggeredPopupBlockerFilterAdsDisabledTest
+    : public SafeBrowsingTriggeredPopupBlockerTestBase {
+ public:
+  SafeBrowsingTriggeredPopupBlockerFilterAdsDisabledTest() {
+    scoped_feature_list_.InitAndDisableFeature(
+        subresource_filter::kFilterAdsOnAbusiveSites);
+  }
 
-  NavigateAndCommit(url_enforce);
-  EXPECT_TRUE(popup_blocker()->ShouldApplyAbusivePopupBlocker());
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
 
-  histogram_tester.ExpectTotalCount(kNumBlockedHistogram, 0);
-  // Simulate deleting the web contents.
-  SimulateDeleteContents();
-  histogram_tester.ExpectUniqueSample(kNumBlockedHistogram, 1, 1);
-}
-
-TEST_F(SafeBrowsingTriggeredPopupBlockerTest,
+TEST_F(SafeBrowsingTriggeredPopupBlockerFilterAdsDisabledTest,
        WarningMatchWithoutAdBlockOnAbusiveSites_OnlyLogs) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndDisableFeature(
-      subresource_filter::kFilterAdsOnAbusiveSites);
-
   const GURL url("https://example.test/");
   MarkUrlAsAbusiveWarning(url);
   NavigateAndCommit(url);
@@ -417,15 +454,24 @@ TEST_F(SafeBrowsingTriggeredPopupBlockerTest,
   EXPECT_EQ(1u, GetMainFrameConsoleMessages().size());
   EXPECT_EQ(GetMainFrameConsoleMessages().front(), kAbusiveWarnMessage);
 
-  EXPECT_FALSE(popup_blocker()->ShouldApplyAbusivePopupBlocker());
+  EXPECT_FALSE(popup_blocker()->ShouldApplyAbusivePopupBlocker(
+      web_contents()->GetPrimaryPage()));
 }
 
-TEST_F(SafeBrowsingTriggeredPopupBlockerTest,
-       WarningMatchWithAdBlockOnAbusiveSites_OnlyLogs) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(
-      subresource_filter::kFilterAdsOnAbusiveSites);
+class SafeBrowsingTriggeredPopupBlockerFilterAdsEnabledTest
+    : public SafeBrowsingTriggeredPopupBlockerTestBase {
+ public:
+  SafeBrowsingTriggeredPopupBlockerFilterAdsEnabledTest() {
+    scoped_feature_list_.InitAndEnableFeature(
+        subresource_filter::kFilterAdsOnAbusiveSites);
+  }
 
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+TEST_F(SafeBrowsingTriggeredPopupBlockerFilterAdsEnabledTest,
+       WarningMatchWithAdBlockOnAbusiveSites_OnlyLogs) {
   const GURL url("https://example.test/");
   MarkUrlAsAbusiveWarning(url);
   NavigateAndCommit(url);
@@ -436,7 +482,92 @@ TEST_F(SafeBrowsingTriggeredPopupBlockerTest,
   EXPECT_EQ(GetMainFrameConsoleMessages().back(),
             subresource_filter::kActivationWarningConsoleMessage);
 
-  EXPECT_FALSE(popup_blocker()->ShouldApplyAbusivePopupBlocker());
+  EXPECT_FALSE(popup_blocker()->ShouldApplyAbusivePopupBlocker(
+      web_contents()->GetPrimaryPage()));
+}
+
+TEST_F(SafeBrowsingTriggeredPopupBlockerTest, NonPrimaryFrameTree) {
+  const GURL url1("https://example.first/");
+  const GURL url2("https://example.second/");
+  // Only mark url2 as abusive.
+  MarkUrlAsAbusiveEnforce(url2);
+
+  {
+    // Simulate a navigation in the primary main frame to an url not marked as
+    // abusive.
+    content::MockNavigationHandle handle(url1, main_rfh());
+    handle.set_has_committed(true);
+    content::MockNavigationThrottleRegistry registry(
+        &handle,
+        content::MockNavigationThrottleRegistry::RegistrationMode::kHold);
+    CreateThrottle(registry);
+    ASSERT_EQ(registry.throttles().size(), 1u);
+    auto throttle = registry.throttles().back().get();
+    auto result = throttle->WillProcessResponse();
+    if (result.action() == content::NavigationThrottle::ThrottleAction::DEFER) {
+      base::RunLoop loop;
+      throttle->set_resume_callback_for_testing(loop.QuitClosure());
+      loop.Run();
+    }
+    popup_blocker()->DidFinishNavigation(&handle);
+    EXPECT_FALSE(
+        popup_blocker()->ShouldApplyAbusivePopupBlocker(main_rfh()->GetPage()));
+  }
+
+  {
+    // Reset the state.
+    NavigateAndCommit(url1);
+    EXPECT_FALSE(
+        popup_blocker()->ShouldApplyAbusivePopupBlocker(main_rfh()->GetPage()));
+
+    // Simulate a navigation in the primary main frame to an url marked as
+    // abusive.
+    content::MockNavigationHandle handle(url2, main_rfh());
+    handle.set_has_committed(true);
+    content::MockNavigationThrottleRegistry registry(
+        &handle,
+        content::MockNavigationThrottleRegistry::RegistrationMode::kHold);
+    CreateThrottle(registry);
+    ASSERT_EQ(registry.throttles().size(), 1u);
+    auto throttle = registry.throttles().back().get();
+    auto result = throttle->WillProcessResponse();
+    if (result.action() == content::NavigationThrottle::ThrottleAction::DEFER) {
+      base::RunLoop loop;
+      throttle->set_resume_callback_for_testing(loop.QuitClosure());
+      loop.Run();
+    }
+    popup_blocker()->DidFinishNavigation(&handle);
+    EXPECT_TRUE(
+        popup_blocker()->ShouldApplyAbusivePopupBlocker(main_rfh()->GetPage()));
+  }
+
+  {
+    // Reset the state.
+    NavigateAndCommit(url1);
+    EXPECT_FALSE(
+        popup_blocker()->ShouldApplyAbusivePopupBlocker(main_rfh()->GetPage()));
+
+    // Simulate a navigation in a non-primary main frame to an url marked as
+    // abusive.
+    content::MockNavigationHandle handle(url2, main_rfh());
+    handle.set_has_committed(true);
+    handle.set_is_in_primary_main_frame(false);
+    content::MockNavigationThrottleRegistry registry(
+        &handle,
+        content::MockNavigationThrottleRegistry::RegistrationMode::kHold);
+    CreateThrottle(registry);
+    ASSERT_EQ(registry.throttles().size(), 1u);
+    auto throttle = registry.throttles().back().get();
+    auto result = throttle->WillProcessResponse();
+    if (result.action() == content::NavigationThrottle::ThrottleAction::DEFER) {
+      base::RunLoop loop;
+      throttle->set_resume_callback_for_testing(loop.QuitClosure());
+      loop.Run();
+    }
+    popup_blocker()->DidFinishNavigation(&handle);
+    EXPECT_TRUE(
+        popup_blocker()->ShouldApplyAbusivePopupBlocker(main_rfh()->GetPage()));
+  }
 }
 
 }  // namespace blocked_content

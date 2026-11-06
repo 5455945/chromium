@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -7,23 +7,27 @@
 #ifndef GPU_VULKAN_VULKAN_UTIL_H_
 #define GPU_VULKAN_VULKAN_UTIL_H_
 
-#include <vulkan/vulkan.h>
+#include <vulkan/vulkan_core.h>
 
 #include <memory>
 #include <vector>
 
 #include "base/component_export.h"
+#include "base/containers/flat_map.h"
 #include "base/containers/span.h"
 #include "gpu/vulkan/semaphore_handle.h"
+#include "gpu/vulkan/vulkan_device_queue.h"
+#include "ui/gl/gl_switches.h"
 
 namespace gpu {
 
-constexpr uint32_t kVendorARM = 0x13b5;
-constexpr uint32_t kVendorQualcomm = 0x5143;
-constexpr uint32_t kVendorImagination = 0x1010;
-
 struct GPUInfo;
-class VulkanInfo;
+
+using VulkanPhysicalDeviceProperties = features::VulkanPhysicalDeviceProperties;
+
+COMPONENT_EXPORT(VULKAN)
+VulkanPhysicalDeviceProperties MakeVulkanPhysicalDeviceProperties(
+    const VkPhysicalDeviceProperties& properties);
 
 // Submits semaphores to be signaled to the vulkan queue. Semaphores are
 // signaled once this submission is executed. vk_fence is an optional handle
@@ -79,12 +83,6 @@ COMPONENT_EXPORT(VULKAN)
 std::string VkVersionToString(uint32_t version);
 
 COMPONENT_EXPORT(VULKAN)
-VKAPI_ATTR VkResult VKAPI_CALL QueueSubmitHook(VkQueue queue,
-                                               uint32_t submitCount,
-                                               const VkSubmitInfo* pSubmits,
-                                               VkFence fence);
-
-COMPONENT_EXPORT(VULKAN)
 VKAPI_ATTR VkResult VKAPI_CALL
 CreateGraphicsPipelinesHook(VkDevice device,
                             VkPipelineCache pipelineCache,
@@ -93,12 +91,70 @@ CreateGraphicsPipelinesHook(VkDevice device,
                             const VkAllocationCallbacks* pAllocator,
                             VkPipeline* pPipelines);
 
-COMPONENT_EXPORT(VULKAN) void ReportUMAPerSwapBuffers();
+// Below vulkanQueue*Hook methods are used to ensure that Skia calls the correct
+// version of those methods which are made thread safe by using locks. See
+// vulkan_function_pointers.h vkQueue* method references for more details.
+COMPONENT_EXPORT(VULKAN)
+VKAPI_ATTR VkResult VKAPI_CALL
+VulkanQueueSubmitHook(VkQueue queue,
+                      uint32_t submitCount,
+                      const VkSubmitInfo* pSubmits,
+                      VkFence fence);
 
 COMPONENT_EXPORT(VULKAN)
-bool CheckVulkanCompabilities(const VulkanInfo& vulkan_info,
-                              const GPUInfo& gpu_info,
-                              std::string enable_by_device_name);
+VKAPI_ATTR VkResult VKAPI_CALL VulkanQueueWaitIdleHook(VkQueue queue);
+
+COMPONENT_EXPORT(VULKAN)
+VKAPI_ATTR VkResult VKAPI_CALL
+VulkanQueuePresentKHRHook(VkQueue queue, const VkPresentInfoKHR* pPresentInfo);
+
+COMPONENT_EXPORT(VULKAN)
+bool CheckVulkanCompatibilities(
+    const VulkanPhysicalDeviceProperties& device_properties,
+    const GPUInfo& gpu_info);
+
+COMPONENT_EXPORT(VULKAN)
+VkImageLayout GLImageLayoutToVkImageLayout(uint32_t layout);
+
+COMPONENT_EXPORT(VULKAN)
+uint32_t VkImageLayoutToGLImageLayout(VkImageLayout layout);
+
+COMPONENT_EXPORT(VULKAN)
+bool IsVkExternalSemaphoreHandleTypeSupported(
+    VulkanDeviceQueue* device_queue,
+    VkExternalSemaphoreHandleTypeFlagBits handle_type);
+
+COMPONENT_EXPORT(VULKAN)
+VkResult QueryVkExternalMemoryProperties(
+    VkPhysicalDevice physical_device,
+    VkFormat format,
+    VkImageType type,
+    VkImageTiling tiling,
+    VkImageUsageFlags usage,
+    VkImageCreateFlags flags,
+    VkExternalMemoryHandleTypeFlagBits handle_type,
+    VkExternalMemoryProperties* external_memory_properties);
+
+COMPONENT_EXPORT(VULKAN)
+bool IsVkOpaqueExternalSemaphoreSupported(VulkanDeviceQueue* device_queue);
+
+COMPONENT_EXPORT(VULKAN)
+VkSemaphore CreateVkOpaqueExternalSemaphore(VkDevice vk_device);
+
+COMPONENT_EXPORT(VULKAN)
+SemaphoreHandle ExportVkOpaqueExternalSemaphore(VkDevice vk_device,
+                                                VkSemaphore vk_semaphore);
+
+COMPONENT_EXPORT(VULKAN)
+std::vector<VkDrmFormatModifierPropertiesEXT>
+QueryVkDrmFormatModifierPropertiesEXT(VkPhysicalDevice physical_device,
+                                      VkFormat format);
+
+COMPONENT_EXPORT(VULKAN)
+void EmitVkCreateGraphicsPipelinesUMA(base::TimeDelta sample);
+
+COMPONENT_EXPORT(VULKAN)
+void EmitVkQueueSubmitUMA(base::TimeDelta sample);
 
 }  // namespace gpu
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,10 +10,9 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "components/download/public/common/download_interrupt_reasons.h"
-#include "url/gurl.h"
 
 namespace content {
 
@@ -79,6 +78,9 @@ class TestFileErrorInjector
   static scoped_refptr<TestFileErrorInjector> Create(
       DownloadManager* download_manager);
 
+  TestFileErrorInjector(const TestFileErrorInjector&) = delete;
+  TestFileErrorInjector& operator=(const TestFileErrorInjector&) = delete;
+
   // Injects the errors such that new download files will be affected.
   // The download system must already be initialized before calling this.
   // Multiple calls are allowed, but only useful if the errors have changed.
@@ -126,12 +128,15 @@ class TestFileErrorInjector
   size_t total_file_count_ = 0;
 
   // The factory we created. May outlive this class.
-  DownloadFileWithErrorFactory* created_factory_ = nullptr;
+  // This dangling raw_ptr occurred in:
+  // browser_tests: DownloadTest.DownloadHistoryCheck
+  // https://ci.chromium.org/ui/p/chromium/builders/try/linux-chromeos-rel/1540091/test-results?q=ExactID%3Aninja%3A%2F%2Fchrome%2Ftest%3Abrowser_tests%2FDownloadTest.DownloadHistoryCheck+VHash%3A282db19e8ac0a6be
+  raw_ptr<DownloadFileWithErrorFactory, FlakyDanglingUntriaged>
+      created_factory_ = nullptr;
 
   // The download manager we set the factory on.
-  DownloadManagerImpl* download_manager_ = nullptr;
-
-  DISALLOW_COPY_AND_ASSIGN(TestFileErrorInjector);
+  raw_ptr<DownloadManagerImpl, FlakyDanglingUntriaged> download_manager_ =
+      nullptr;
 };
 
 }  // namespace content

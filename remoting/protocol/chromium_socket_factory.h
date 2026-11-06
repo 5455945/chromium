@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,46 +7,52 @@
 
 #include <stdint.h>
 
+#include <memory>
+
 #include "base/compiler_specific.h"
-#include "base/macros.h"
 #include "base/memory/weak_ptr.h"
+#include "third_party/webrtc/api/environment/environment.h"
 #include "third_party/webrtc/api/packet_socket_factory.h"
 
-namespace remoting {
-namespace protocol {
+namespace remoting::protocol {
 
 class SessionOptionsProvider;
 
-class ChromiumPacketSocketFactory : public rtc::PacketSocketFactory {
+class ChromiumPacketSocketFactory : public webrtc::PacketSocketFactory {
  public:
   explicit ChromiumPacketSocketFactory(
       base::WeakPtr<SessionOptionsProvider> session_options_provider);
+
+  ChromiumPacketSocketFactory(const ChromiumPacketSocketFactory&) = delete;
+  ChromiumPacketSocketFactory& operator=(const ChromiumPacketSocketFactory&) =
+      delete;
+
   ~ChromiumPacketSocketFactory() override;
 
-  rtc::AsyncPacketSocket* CreateUdpSocket(
-      const rtc::SocketAddress& local_address,
+  // webrtc::PacketSocketFactory implementation.
+  std::unique_ptr<webrtc::AsyncPacketSocket> CreateUdpSocket(
+      const webrtc::Environment& env,
+      const webrtc::SocketAddress& local_address,
       uint16_t min_port,
       uint16_t max_port) override;
-  rtc::AsyncPacketSocket* CreateServerTcpSocket(
-      const rtc::SocketAddress& local_address,
+  std::unique_ptr<webrtc::AsyncListenSocket> CreateServerTcpSocket(
+      const webrtc::Environment& env,
+      const webrtc::SocketAddress& local_address,
       uint16_t min_port,
       uint16_t max_port,
       int opts) override;
-  rtc::AsyncPacketSocket* CreateClientTcpSocket(
-      const rtc::SocketAddress& local_address,
-      const rtc::SocketAddress& remote_address,
-      const rtc::ProxyInfo& proxy_info,
-      const std::string& user_agent,
-      const rtc::PacketSocketTcpOptions& opts) override;
-  rtc::AsyncResolverInterface* CreateAsyncResolver() override;
+  std::unique_ptr<webrtc::AsyncPacketSocket> CreateClientTcpSocket(
+      const webrtc::Environment& env,
+      const webrtc::SocketAddress& local_address,
+      const webrtc::SocketAddress& remote_address,
+      const webrtc::PacketSocketTcpOptions& opts) override;
+  std::unique_ptr<webrtc::AsyncDnsResolverInterface> CreateAsyncDnsResolver()
+      override;
 
  private:
   base::WeakPtr<SessionOptionsProvider> session_options_provider_;
-
-  DISALLOW_COPY_AND_ASSIGN(ChromiumPacketSocketFactory);
 };
 
-}  // namespace protocol
-}  // namespace remoting
+}  // namespace remoting::protocol
 
 #endif  // REMOTING_PROTOCOL_CHROMIUM_SOCKET_FACTORY_H_

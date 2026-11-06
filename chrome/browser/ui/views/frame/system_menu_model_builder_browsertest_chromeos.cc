@@ -1,30 +1,146 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/containers/contains.h"
+#include "ash/public/cpp/autotest_desks_api.h"
+#include "base/test/scoped_feature_list.h"
 #include "chrome/app/chrome_command_ids.h"
+#include "chrome/browser/ash/boca/on_task/on_task_locked_controller.h"
 #include "chrome/browser/ash/login/login_manager_test.h"
 #include "chrome/browser/ash/login/test/login_manager_mixin.h"
-#include "chrome/browser/ash/login/ui/user_adding_screen.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
+#include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/ash/login/user_adding_screen.h"
+#include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/chromeos/locked_state/locked_state_controller.h"
 #include "chrome/browser/ui/settings_window_manager_chromeos.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/web_applications/system_web_app_ui_utils.h"
-#include "chrome/browser/web_applications/system_web_apps/system_web_app_manager.h"
-#include "chrome/browser/web_applications/web_app_provider.h"
+#include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
+#include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
+#include "chrome/common/chrome_features.h"
+#include "chrome/test/base/in_process_browser_test.h"
+#include "chrome/test/base/ui_test_utils.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "chromeos/ui/frame/desks/move_to_desks_menu_model.h"
 #include "components/account_id/account_id.h"
 #include "components/user_manager/user_manager.h"
+#include "components/webapps/common/web_app_id.h"
 #include "content/public/test/browser_test.h"
 #include "ui/base/models/menu_model.h"
+#include "url/gurl.h"
 
 using chrome::SettingsWindowManager;
-using chromeos::ProfileHelper;
 using user_manager::UserManager;
 
 namespace {
 
-class SystemMenuModelBuilderMultiUserTest : public chromeos::LoginManagerTest {
+// Returns true if there exists a command with specified id in the given menu.
+// False otherwise.
+bool ContainsCommandIdInMenu(int command_id, const ui::MenuModel* menu) {
+  CHECK(menu);
+  for (size_t index = 0; index < menu->GetItemCount(); index++) {
+    if (menu->GetCommandIdAt(index) == command_id) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Browser tests for verifying `SystemMenuModelBuilder` behavior for apps when
+// locked (and not locked) for OnTask. Only relevant for non-web browser
+// scenarios.
+class SystemMenuModelBuilderWithOnTaskTest
+    : public InProcessBrowserTest,
+      public testing::WithParamInterface<bool> {
+ public:
+  SystemMenuModelBuilderWithOnTaskTest() {
+    scoped_feature_list_.InitWithFeatureState(
+        features::kUseUnifiedLockedStateController, GetParam());
+  }
+
+ protected:
+  webapps::AppId InstallMockApp() {
+    return web_app::test::InstallDummyWebApp(
+        browser()->GetProfile(), /*app_name=*/"Mock app",
+        /*app_url=*/GURL("https://www.example.com/"));
+  }
+
+  void SetLockedForOnTask(BrowserWindowInterface* app_browser, bool locked) {
+    if (features::IsUseUnifiedLockedStateControllerEnabled()) {
+      auto* controller = chromeos::LockedStateController::From(app_browser);
+      if (locked) {
+        controller->Lock(chromeos::LockedState::kOnTaskPrepared);
+      } else {
+        controller->Unlock(chromeos::LockedState::kOnTaskLocked);
+      }
+    } else {
+      ash::boca::OnTaskLockedController::From(app_browser)
+          ->set_locked_for_on_task(locked);
+    }
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_P(SystemMenuModelBuilderWithOnTaskTest,
+                       SystemMenuWhenNotLockedForOnTask) {
+  // Install and launch app.
+  webapps::AppId app_id = InstallMockApp();
+  BrowserWindowInterface* const app_browser =
+      web_app::LaunchWebAppBrowser(browser()->GetProfile(), app_id);
+  SetLockedForOnTask(app_browser, false);
+
+  // Create a new desk so we can verify desk menu options visibility.
+  ASSERT_TRUE(ash::AutotestDesksApi().CreateNewDesk());
+
+  // Retrieve system menu.
+  const BrowserView* const browser_view =
+      BrowserView::GetBrowserViewForBrowser(app_browser);
+  const ui::MenuModel* const menu =
+      browser_view->browser_widget()->GetSystemMenuModel();
+
+  // Verify system menu command availability.
+  EXPECT_TRUE(ContainsCommandIdInMenu(IDC_BACK, menu));
+  EXPECT_TRUE(ContainsCommandIdInMenu(IDC_FORWARD, menu));
+  EXPECT_TRUE(ContainsCommandIdInMenu(IDC_RELOAD, menu));
+  EXPECT_TRUE(ContainsCommandIdInMenu(IDC_TASK_MANAGER, menu));
+  EXPECT_TRUE(ContainsCommandIdInMenu(
+      chromeos::MoveToDesksMenuModel::kMenuCommandId, menu));
+}
+
+IN_PROC_BROWSER_TEST_P(SystemMenuModelBuilderWithOnTaskTest,
+                       SystemMenuWhenLockedForOnTask) {
+  // Install and launch app.
+  webapps::AppId app_id = InstallMockApp();
+  BrowserWindowInterface* const app_browser =
+      web_app::LaunchWebAppBrowser(browser()->GetProfile(), app_id);
+  SetLockedForOnTask(app_browser, true);
+
+  // Create a new desk so we can verify desk menu options visibility.
+  ASSERT_TRUE(ash::AutotestDesksApi().CreateNewDesk());
+
+  // Retrieve system menu.
+  const BrowserView* const browser_view =
+      BrowserView::GetBrowserViewForBrowser(app_browser);
+  const ui::MenuModel* const menu =
+      browser_view->browser_widget()->GetSystemMenuModel();
+
+  // Verify system menu command availability.
+  EXPECT_TRUE(ContainsCommandIdInMenu(IDC_BACK, menu));
+  EXPECT_TRUE(ContainsCommandIdInMenu(IDC_FORWARD, menu));
+  EXPECT_TRUE(ContainsCommandIdInMenu(IDC_RELOAD, menu));
+  EXPECT_FALSE(ContainsCommandIdInMenu(IDC_TASK_MANAGER, menu));
+  EXPECT_FALSE(ContainsCommandIdInMenu(
+      chromeos::MoveToDesksMenuModel::kMenuCommandId, menu));
+}
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         SystemMenuModelBuilderWithOnTaskTest,
+                         testing::Bool());
+
+class SystemMenuModelBuilderMultiUserTest : public ash::LoginManagerTest {
  public:
   SystemMenuModelBuilderMultiUserTest() : LoginManagerTest() {
     login_mixin_.AppendRegularUsers(2);
@@ -36,55 +152,53 @@ class SystemMenuModelBuilderMultiUserTest : public chromeos::LoginManagerTest {
  protected:
   AccountId account_id1_;
   AccountId account_id2_;
-  chromeos::LoginManagerMixin login_mixin_{&mixin_host_};
+  ash::LoginManagerMixin login_mixin_{&mixin_host_};
 };
 
-// Regression test for https://crbug.com/1023043
+// Regression test for https://crbug.com/40657933
 IN_PROC_BROWSER_TEST_F(SystemMenuModelBuilderMultiUserTest,
                        MultiUserSettingsWindowFrameMenu) {
   // Log in 2 users.
   LoginUser(account_id1_);
   base::RunLoop().RunUntilIdle();
-  chromeos::UserAddingScreen::Get()->Start();
+  ash::UserAddingScreen::Get()->Start();
   AddUser(account_id2_);
   base::RunLoop().RunUntilIdle();
 
   // Install the Settings App.
-  Profile* profile = ProfileHelper::Get()->GetProfileByUser(
-      UserManager::Get()->FindUser(account_id1_));
-  web_app::WebAppProvider::Get(profile)
-      ->system_web_app_manager()
-      .InstallSystemAppsForTesting();
+  Profile* profile = Profile::FromBrowserContext(
+      ash::BrowserContextHelper::Get()->GetBrowserContextByUser(
+          UserManager::Get()->FindUser(account_id1_)));
+  ash::SystemWebAppManager::GetForTest(profile)->InstallSystemAppsForTesting();
 
   // Open the settings window and record the |settings_browser|.
   auto* manager = SettingsWindowManager::GetInstance();
+  ui_test_utils::BrowserCreatedObserver browser_created_observer;
   manager->ShowOSSettings(profile);
-
-  // The above ShowOSSettings() should trigger an asynchronous call to launch
-  // OS Settings SWA. Flush Mojo calls so the browser window is created.
-  web_app::FlushSystemWebAppLaunchesForTesting(profile);
+  browser_created_observer.Wait();
 
   auto* settings_browser = manager->FindBrowserForProfile(profile);
   ASSERT_TRUE(settings_browser);
 
-  // Copy the command ids from the system menu.
-  BrowserView* browser_view =
+  // Retrieve the system menu so we can verify command availability.
+  const BrowserView* const browser_view =
       BrowserView::GetBrowserViewForBrowser(settings_browser);
-  ui::MenuModel* menu = browser_view->frame()->GetSystemMenuModel();
-  std::set<int> commands;
-  for (int i = 0; i < menu->GetItemCount(); i++)
-    commands.insert(menu->GetCommandIdAt(i));
+  const ui::MenuModel* const menu =
+      browser_view->browser_widget()->GetSystemMenuModel();
 
   // Standard WebUI commands are available.
-  EXPECT_TRUE(base::Contains(commands, IDC_BACK));
-  EXPECT_TRUE(base::Contains(commands, IDC_FORWARD));
-  EXPECT_TRUE(base::Contains(commands, IDC_RELOAD));
+  EXPECT_TRUE(ContainsCommandIdInMenu(IDC_BACK, menu));
+  EXPECT_TRUE(ContainsCommandIdInMenu(IDC_FORWARD, menu));
+  EXPECT_TRUE(ContainsCommandIdInMenu(IDC_RELOAD, menu));
+
+  // Task manager should also be available.
+  EXPECT_TRUE(ContainsCommandIdInMenu(IDC_TASK_MANAGER, menu));
 
   // Settings window cannot be teleported.
-  EXPECT_FALSE(base::Contains(commands, IDC_VISIT_DESKTOP_OF_LRU_USER_2));
-  EXPECT_FALSE(base::Contains(commands, IDC_VISIT_DESKTOP_OF_LRU_USER_3));
-  EXPECT_FALSE(base::Contains(commands, IDC_VISIT_DESKTOP_OF_LRU_USER_4));
-  EXPECT_FALSE(base::Contains(commands, IDC_VISIT_DESKTOP_OF_LRU_USER_5));
+  EXPECT_FALSE(ContainsCommandIdInMenu(IDC_VISIT_DESKTOP_OF_LRU_USER_2, menu));
+  EXPECT_FALSE(ContainsCommandIdInMenu(IDC_VISIT_DESKTOP_OF_LRU_USER_3, menu));
+  EXPECT_FALSE(ContainsCommandIdInMenu(IDC_VISIT_DESKTOP_OF_LRU_USER_4, menu));
+  EXPECT_FALSE(ContainsCommandIdInMenu(IDC_VISIT_DESKTOP_OF_LRU_USER_5, menu));
 }
 
 }  // namespace

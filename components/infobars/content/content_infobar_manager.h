@@ -1,17 +1,16 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_INFOBARS_CONTENT_CONTENT_INFOBAR_MANAGER_H_
 #define COMPONENTS_INFOBARS_CONTENT_CONTENT_INFOBAR_MANAGER_H_
 
-#include "base/macros.h"
 #include "build/build_config.h"
 #include "components/infobars/core/infobar_manager.h"
 #include "content/public/browser/reload_type.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
-#include "ui/base/window_open_disposition.h"
+#include "ui/base/mojom/window_open_disposition.mojom-forward.h"
 
 namespace content {
 struct LoadCommittedDetails;
@@ -30,6 +29,10 @@ class ContentInfoBarManager
       public content::WebContentsUserData<ContentInfoBarManager> {
  public:
   explicit ContentInfoBarManager(content::WebContents* web_contents);
+
+  ContentInfoBarManager(const ContentInfoBarManager&) = delete;
+  ContentInfoBarManager& operator=(const ContentInfoBarManager&) = delete;
+
   ~ContentInfoBarManager() override;
 
   static InfoBarDelegate::NavigationDetails
@@ -50,7 +53,9 @@ class ContentInfoBarManager
   void set_ignore_next_reload() { ignore_next_reload_ = true; }
 
   // InfoBarManager:
-  void OpenURL(const GURL& url, WindowOpenDisposition disposition) override;
+  void OpenURL(const GURL& url,
+               ui::mojom::WindowOpenDisposition disposition,
+               const std::string& text_fragment) override;
 
  private:
   friend class content::WebContentsUserData<ContentInfoBarManager>;
@@ -61,17 +66,15 @@ class ContentInfoBarManager
   int GetActiveEntryID() override;
 
   // content::WebContentsObserver:
-  void RenderProcessGone(base::TerminationStatus status) override;
+  void PrimaryMainFrameRenderProcessGone(
+      base::TerminationStatus status) override;
   void DidStartNavigation(
       content::NavigationHandle* navigation_handle) override;
   void NavigationEntryCommitted(
       const content::LoadCommittedDetails& load_details) override;
-  void WebContentsDestroyed() override;
 
   // See description in set_ignore_next_reload().
-  bool ignore_next_reload_;
-
-  DISALLOW_COPY_AND_ASSIGN(ContentInfoBarManager);
+  bool ignore_next_reload_ = false;
 };
 
 }  // namespace infobars

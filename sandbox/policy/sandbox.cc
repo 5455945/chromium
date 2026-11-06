@@ -1,45 +1,54 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "sandbox/policy/sandbox.h"
 
 #include "base/command_line.h"
+#include "base/functional/callback.h"
+#include "base/metrics/histogram_functions.h"
 #include "build/build_config.h"
+#include "sandbox/policy/mojom/sandbox.mojom.h"
 #include "sandbox/policy/switches.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
+#include <unistd.h>
+
 #include "base/android/jni_android.h"
-#endif  // defined(OS_ANDROID)
+#include "third_party/jni_zero/jni_zero.h"
+#endif  // BUILDFLAG(IS_ANDROID)
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #include "sandbox/policy/linux/sandbox_linux.h"
-#endif  // defined(OS_LINUX) || defined(OS_CHROMEOS)
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 #include "sandbox/mac/seatbelt.h"
-#endif  // defined(OS_MAC)
+#endif  // BUILDFLAG(IS_MAC)
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
+#include "base/check_op.h"
 #include "base/process/process_info.h"
 #include "sandbox/policy/win/sandbox_win.h"
 #include "sandbox/win/src/sandbox.h"
-#endif  // defined(OS_WIN)
+#include "sandbox/win/src/sandbox_factory.h"
+#include "sandbox/win/src/target_services.h"
+#endif  // BUILDFLAG(IS_WIN)
 
 namespace sandbox {
 namespace policy {
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
-bool Sandbox::Initialize(SandboxType sandbox_type,
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+bool Sandbox::Initialize(sandbox::mojom::Sandbox sandbox_type,
                          SandboxLinux::PreSandboxHook hook,
                          const SandboxLinux::Options& options) {
   return SandboxLinux::GetInstance()->InitializeSandbox(
       sandbox_type, std::move(hook), options);
 }
-#endif  // defined(OS_LINUX) || defined(OS_CHROMEOS)
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 
-#if defined(OS_WIN)
-bool Sandbox::Initialize(SandboxType sandbox_type,
+#if BUILDFLAG(IS_WIN)
+bool Sandbox::Initialize(sandbox::mojom::Sandbox sandbox_type,
                          SandboxInterfaceInfo* sandbox_info) {
   BrokerServices* broker_services = sandbox_info->broker_services;
   if (broker_services) {
@@ -51,20 +60,22 @@ bool Sandbox::Initialize(SandboxType sandbox_type,
     // Only pre-create alternate desktop if there will be sandboxed processes in
     // the future.
     if (!command_line.HasSwitch(switches::kNoSandbox)) {
-      scoped_refptr<TargetPolicy> policy = broker_services->CreatePolicy();
       // IMPORTANT: This piece of code needs to run as early as possible in the
       // process because it will initialize the sandbox broker, which requires
       // the process to swap its window station. During this time all the UI
       // will be broken. This has to run before threads and windows are created.
-      ResultCode result = policy->CreateAlternateDesktop(true);
-      CHECK(SBOX_ERROR_FAILED_TO_SWITCH_BACK_WINSTATION != result);
+      ResultCode result = broker_services->CreateAlternateDesktop(
+          Desktop::kAlternateWinstation);
+      // This failure is usually caused by third-party software or by the host
+      // system exhausting its desktop heap.
+      CHECK(result == SBOX_ALL_OK);
     }
     return true;
   }
   return IsUnsandboxedSandboxType(sandbox_type) ||
          SandboxWin::InitTargetServices(sandbox_info->target_services);
 }
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
 // static
 bool Sandbox::IsProcessSandboxed() {
@@ -79,22 +90,25 @@ bool Sandbox::IsProcessSandboxed() {
     return true;
   }
 
-#if defined(OS_ANDROID)
-  // Note that this does not check the status of the Seccomp sandbox. Call
-  // https://developer.android.com/reference/android/os/Process#isIsolated().
-  JNIEnv* env = base::android::AttachCurrentThread();
-  base::android::ScopedJavaLocalRef<jclass> process_class =
-      base::android::GetClass(env, "android/os/Process");
-  jmethodID is_isolated =
-      base::android::MethodID::Get<base::android::MethodID::TYPE_STATIC>(
-          env, process_class.obj(), "isIsolated", "()Z");
-  return env->CallStaticBooleanMethod(process_class.obj(), is_isolated);
-#elif defined(OS_FUCHSIA)
-  // TODO(https://crbug.com/1071420): Figure out what to do here. Process
+#if BUILDFLAG(IS_ANDROID)
+  // Note that this does not check the status of the Seccomp sandbox.
+  if (base::android::IsJavaAvailable()) {
+    JNIEnv* env = base::android::AttachCurrentThread();
+    return jni_zero::ProcessIsIsolated(env);
+  }
+
+  // Fallback for javaless processes where JVM is not initialized.
+  // Check the UID range matching Android's Process.isIsolatedUid
+  // implementation.
+  uid_t uid = getuid();
+  uid_t app_id = uid % 100000;
+  return (app_id >= 90000 && app_id <= 99999);
+#elif BUILDFLAG(IS_FUCHSIA)
+  // TODO(crbug.com/40126761): Figure out what to do here. Process
   // launching controls the sandbox and there are no ambient capabilities, so
   // basically everything but the browser is considered sandboxed.
   return !is_browser;
-#elif defined(OS_LINUX) || defined(OS_CHROMEOS)
+#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   int status = SandboxLinux::GetInstance()->GetStatus();
   constexpr int kLayer1Flags = SandboxLinux::Status::kSUID |
                                SandboxLinux::Status::kPIDNS |
@@ -102,10 +116,23 @@ bool Sandbox::IsProcessSandboxed() {
   constexpr int kLayer2Flags =
       SandboxLinux::Status::kSeccompBPF | SandboxLinux::Status::kSeccompTSYNC;
   return (status & kLayer1Flags) != 0 && (status & kLayer2Flags) != 0;
-#elif defined(OS_MAC)
+#elif BUILDFLAG(IS_MAC)
   return Seatbelt::IsSandboxed();
-#elif defined(OS_WIN)
-  return base::GetCurrentProcessIntegrityLevel() < base::MEDIUM_INTEGRITY;
+#elif BUILDFLAG(IS_IOS)
+  // Process launching on iOS is only supported via BrowserEngineKit which
+  // will automatically sandbox processes.
+  return !is_browser;
+#elif BUILDFLAG(IS_WIN)
+#if !defined(COMPONENT_BUILD)
+  // Target services is not available in the component build.
+  auto* target_services = sandbox::SandboxFactory::GetTargetServices();
+  if (!target_services || !target_services->GetState()->InitCompleted()) {
+    return false;
+  }
+#endif  // !defined(COMPONENT_BUILD)
+  const auto integrity_level = base::GetCurrentProcessIntegrityLevel();
+  return integrity_level != base::INTEGRITY_UNKNOWN &&
+         integrity_level < base::MEDIUM_INTEGRITY;
 #else
   return false;
 #endif

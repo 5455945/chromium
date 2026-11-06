@@ -1,67 +1,116 @@
-# Copyright 2019 The Chromium Authors. All rights reserved.
+# Copyright 2019 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 import("//build/util/process_version.gni")
-import("//chrome/process_version_rc_template.gni")
 import("//chrome/updater/branding.gni")
+import("//chrome/updater/updater.gni")
+import("//chrome/updater/updater_process_version_rc_template.gni")
+import("//chrome/updater/zip.gni")
 import("//testing/libfuzzer/fuzzer_test.gni")
 import("//testing/test.gni")
 
 # This target builds the updater executable, its installer, and unittests.
 group("win") {
   deps = [
+    ":signing",
     ":updater",
-    "//chrome/updater/win/installer:installer",
-    "//chrome/updater/win/signing",
+    ":updater_zip",
+    "//chrome/updater/win/installer",
   ]
 }
 
 config("wrl_strict") {
-  # This definition is used in <wrl/module.h> to specify that only COM
-  # support is provided by WRL, and thus, avoid a dependency on WinRT, which
-  # is not available in Windows 7.
+  # This definition is used in <wrl/module.h> to specify that only COM support
+  # is required in WRL and avoid a dependency on WinRT.
   defines = [ "__WRL_CLASSIC_COM_STRICT__" ]
 }
 
-executable("updater") {
+source_set("updater_executable") {
   sources = [
     "main.cc",
     "updater.rc",
   ]
 
-  configs -= [ "//build/config/compiler:cet_shadow_stack" ]
-  configs += [ "//build/config/win:windowed" ]
-
   deps = [
-    ":version_resources",
-    "//build/win:default_exe_manifest",
     "//chrome/updater:base",
-    "//chrome/updater:updater_version_cc",
-    "//chrome/updater/win/ui:ui_resources",
+    "//chrome/updater/win/ui/resources",
   ]
+
+  public_configs = [ "//build/config/win:windowed" ]
+  public_deps = [ "//build/win:default_exe_manifest" ]
 
   data_deps = [ ":uninstall.cmd" ]
 }
 
-executable("updater_exe_test_v2") {
-  sources = [
-    "main.cc",
-    "updater.rc",
+executable("updater") {
+  deps = [
+    ":updater_executable",
+    ":version_resources",
+    "//chrome/updater:constants_prod",
   ]
+  assert_no_deps = updater_assert_no_deps
+}
 
-  configs -= [ "//build/config/compiler:cet_shadow_stack" ]
-  configs += [ "//build/config/win:windowed" ]
+executable("updater_test") {
+  deps = [
+    ":updater_executable",
+    ":version_resources_test",
+    "//chrome/updater:constants_test",
+  ]
+}
+
+copy("signing") {
+  sources = [
+    "$root_out_dir/msi_custom_action.dll",
+    "$root_out_dir/tag.exe",
+    "//chrome/tools/build/win/resedit.py",
+    "//third_party/lzma_sdk/bin/win64/7zr.exe",
+    "signing/enterprise_standalone_installer.wxs.xml",
+    "signing/msi_from_standalone.py",
+    "signing/sign.py",
+  ]
 
   deps = [
-    ":version_resources",
-    "//build/win:default_exe_manifest",
-    "//chrome/updater:base",
-    "//chrome/updater:updater_version_cc_offset",
-    "//chrome/updater/win/ui:ui_resources",
+    "//chrome/updater/tools:tag",
+    "//chrome/updater/win/installer:msi_custom_action",
   ]
 
-  data_deps = [ ":uninstall.cmd" ]
+  outputs = [ "$root_out_dir/UpdaterSigning/{{source_file_part}}" ]
+}
+
+artifact_zip("updater_zip") {
+  output = "$root_build_dir/updater.zip"
+  inputs =
+      [
+        "$root_build_dir/UpdaterSetup.exe",
+        "$root_build_dir/UpdaterSetup_test.exe",
+        "$root_build_dir/qualification_app.exe",
+        "$root_build_dir/${updater_product_full_name}Util.exe",
+        "$root_gen_dir/chrome/updater/app/server/win/updater_idl.h",
+        "$root_gen_dir/chrome/updater/app/server/win/updater_internal_idl.h",
+        "$root_out_dir/LICENSE.${updater_product_full_name_dashed_lowercase}",
+      ] + get_target_outputs(":signing")
+  deps = [
+    ":signing",
+    "//chrome/updater:updater_license",
+    "//chrome/updater/app/server/win:updater_idl",
+    "//chrome/updater/app/server/win:updater_internal_idl",
+    "//chrome/updater/test/qualification_app",
+    "//chrome/updater/tools:${updater_product_full_name}Util",
+    "//chrome/updater/win/installer",
+    "//chrome/updater/win/installer:installer_test",
+  ]
+  if (is_chrome_branded) {
+    inputs += [
+      "$root_build_dir/GoogleUpdateAdmx.zip",
+      "$root_build_dir/GoogleCloudManagementAdmx.zip",
+    ]
+    deps += [
+      "//chrome/updater/enterprise/win/google:GoogleCloudManagementAdmxZip",
+      "//chrome/updater/enterprise/win/google:GoogleUpdateAdmxZip",
+    ]
+  }
 }
 
 process_version("uninstall.cmd") {
@@ -76,52 +125,13 @@ process_version("uninstall.cmd") {
   ]
 }
 
-process_version_rc_template("version_resources") {
-  sources = [ "updater.ver" ]
-  output = "$target_gen_dir/updater_exe.rc"
+updater_process_version_rc_template("version_resources") {
+  original_filename = "updater.exe"
+  rc = "updater_exe.rc"
 }
 
-# This build target is defined to minimize the impact of -Wno-missing-braces
-# compiler switch. In the future it might be possible to isolate the
-# dependency of ATL in the UI so ATL headers are not visible in the
-# compilation units outside the UI itself.
-# TODO(sorin): https://crbug.com/1014311
-source_set("app_install_controller") {
-  cflags_cc = [ "-Wno-missing-braces" ]
-
-  sources = [ "app_install_controller.cc" ]
-
-  deps = [
-    "//base",
-    "//base:i18n",
-    "//chrome/updater:version_header",
-    "//chrome/updater/win/ui",
-  ]
-}
-
-source_set("tag_extractor") {
-  public = [ "tag_extractor.h" ]
-
-  sources = [
-    "tag_extractor.cc",
-    "tag_extractor_impl.h",
-  ]
-
-  friend = [
-    "//chrome/updater:updater_test_sources",
-    ":updater_fuzzer",
-  ]
-
-  # In the future, we want to rely on the base numerics headers and
-  # PeImageReader directly, but right now that isn't possible due to the
-  # visibility of the lib, so we depend on the entire base temporarily.
-  deps = [ "//base" ]
-}
-
-fuzzer_test("updater_fuzzer") {
-  sources = [ "tag_extractor_fuzzer.cc" ]
-
-  deps = [ ":tag_extractor" ]
-
-  seed_corpus = "../test/data/tag_extractor_corpus/"
+updater_process_version_rc_template("version_resources_test") {
+  original_filename = "updater_test.exe"
+  rc = "updater_test_exe.rc"
+  suffix = "(test)"
 }

@@ -1,18 +1,16 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_VR_DATABINDING_BINDING_H_
 #define CHROME_BROWSER_VR_DATABINDING_BINDING_H_
 
-#include "base/bind.h"
-
 #include <memory>
+#include <optional>
 
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "base/strings/stringprintf.h"
 #include "chrome/browser/vr/databinding/binding_base.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace vr {
 
@@ -39,7 +37,7 @@ class Binding : public BindingBase {
 
   Binding(const base::RepeatingCallback<T()>& getter,
           const std::string& getter_text,
-          const base::RepeatingCallback<void(const absl::optional<T>&,
+          const base::RepeatingCallback<void(const std::optional<T>&,
                                              const T&)>& setter,
           const std::string& setter_text)
       : getter_(getter),
@@ -52,10 +50,13 @@ class Binding : public BindingBase {
       : getter_(getter), setter_(setter) {}
 
   Binding(const base::RepeatingCallback<T()>& getter,
-          const base::RepeatingCallback<void(const absl::optional<T>&,
+          const base::RepeatingCallback<void(const std::optional<T>&,
                                              const T&)>& setter)
       : getter_(getter), historic_setter_(setter) {}
 #endif
+
+  Binding(const Binding&) = delete;
+  Binding& operator=(const Binding&) = delete;
 
   ~Binding() override = default;
 
@@ -89,16 +90,14 @@ class Binding : public BindingBase {
  private:
   base::RepeatingCallback<T()> getter_;
   base::RepeatingCallback<void(const T&)> setter_;
-  base::RepeatingCallback<void(const absl::optional<T>&, const T&)>
+  base::RepeatingCallback<void(const std::optional<T>&, const T&)>
       historic_setter_;
-  absl::optional<T> last_value_;
+  std::optional<T> last_value_;
 
 #ifndef NDEBUG
   std::string getter_text_;
   std::string setter_text_;
 #endif
-
-  DISALLOW_COPY_AND_ASSIGN(Binding);
 };
 
 // These macros are sugar for constructing a simple binding. It is meant to make

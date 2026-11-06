@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,6 +16,16 @@ TEST(ComparatorTest, Any) {
   EXPECT_TRUE(Comparator(ANY, 10).MeetsCriteria(9));
   EXPECT_TRUE(Comparator(ANY, 10).MeetsCriteria(10));
   EXPECT_TRUE(Comparator(ANY, 10).MeetsCriteria(11));
+}
+
+TEST(ComparatorTest, AnyRelaxed) {
+  EXPECT_TRUE(Comparator(ANY_RELAXED, 0).MeetsCriteria(0));
+  EXPECT_TRUE(Comparator(ANY_RELAXED, 1).MeetsCriteria(0));
+  EXPECT_TRUE(Comparator(ANY_RELAXED, 1).MeetsCriteria(1));
+  EXPECT_TRUE(Comparator(ANY_RELAXED, 1).MeetsCriteria(2));
+  EXPECT_TRUE(Comparator(ANY_RELAXED, 10).MeetsCriteria(9));
+  EXPECT_TRUE(Comparator(ANY_RELAXED, 10).MeetsCriteria(10));
+  EXPECT_TRUE(Comparator(ANY_RELAXED, 10).MeetsCriteria(11));
 }
 
 TEST(ComparatorTest, LessThan) {

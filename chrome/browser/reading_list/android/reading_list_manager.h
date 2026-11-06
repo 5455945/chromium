@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,6 +16,8 @@ struct QueryFields;
 }  // namespace bookmarks
 
 class GURL;
+
+namespace reading_list {
 
 // Owns a reading list model and converts reading list data to bookmark nodes.
 // The bookmark nodes won't be persisted across sessions.
@@ -76,6 +78,9 @@ class ReadingListManager : public KeyedService {
   // Deletes a reading list article.
   virtual void Delete(const GURL& url) = 0;
 
+  // Deletes all reading list articles.
+  virtual void DeleteAll() = 0;
+
   // Returns the root bookmark node for the reading list article. The bookmark
   // node tree is owned by this class. All reading list articles are children of
   // this root.
@@ -88,6 +93,10 @@ class ReadingListManager : public KeyedService {
   // Returns the total number of unread articles.
   virtual size_t unread_size() const = 0;
 
+  // Sets the title for a reading list article. No op if such reading list
+  // article doesn't exist.
+  virtual void SetTitle(const GURL& url, const std::u16string& title) = 0;
+
   // Sets the read status for a reading list article. No op if such reading list
   // article doesn't exist.
   virtual void SetReadStatus(const GURL& url, bool read) = 0;
@@ -99,5 +108,7 @@ class ReadingListManager : public KeyedService {
   // Returns whether the reading list manager is loaded.
   virtual bool IsLoaded() const = 0;
 };
+
+}  // namespace reading_list
 
 #endif  // CHROME_BROWSER_READING_LIST_ANDROID_READING_LIST_MANAGER_H_

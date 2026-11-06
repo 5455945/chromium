@@ -1,9 +1,12 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/formats/mp2t/es_parser.h"
 
+#include "base/logging.h"
+#include "media/base/byte_queue.h"
+#include "media/base/stream_parser_buffer.h"
 #include "media/base/timestamp_constants.h"
 #include "media/formats/common/offset_byte_queue.h"
 
@@ -11,7 +14,7 @@ namespace media {
 namespace mp2t {
 
 EsParser::TimingDesc::TimingDesc()
-    : dts(kNoDecodeTimestamp()), pts(kNoTimestamp) {}
+    : dts(kNoDecodeTimestamp), pts(kNoTimestamp) {}
 
 EsParser::TimingDesc::TimingDesc(
     DecodeTimestamp dts_in, base::TimeDelta pts_in)
@@ -26,25 +29,26 @@ EsParser::EsParser()
 EsParser::~EsParser() {
 }
 
-bool EsParser::Parse(const uint8_t* buf,
-                     int size,
+bool EsParser::Parse(base::span<const uint8_t> buf,
                      base::TimeDelta pts,
                      DecodeTimestamp dts) {
-  DCHECK(buf);
-  DCHECK_GE(size, 0);
   // TS parser may try to give us zero-size data.
-  if (size == 0)
+  if (buf.empty()) {
     return false;
+  }
 
   if (pts != kNoTimestamp) {
     // Link the end of the byte queue with the incoming timing descriptor.
     TimingDesc timing_desc(dts, pts);
-    timing_desc_list_.push_back(
-        std::pair<int64_t, TimingDesc>(es_queue_->tail(), timing_desc));
+    timing_desc_list_.emplace_back(es_queue_->tail(), timing_desc);
   }
 
   // Add the incoming bytes to the ES queue.
-  es_queue_->Push(buf, size);
+  if (!es_queue_->Push(buf)) {
+    DVLOG(2) << "Failed to push buf of size " << buf.size();
+    return false;
+  }
+
   return ParseFromEsQueue();
 }
 

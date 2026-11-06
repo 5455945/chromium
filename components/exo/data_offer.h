@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,15 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
-#include "base/callback_forward.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/files/scoped_file.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "ui/base/class_property.h"
 #include "url/gurl.h"
@@ -48,6 +50,10 @@ class DataOffer final : public ui::PropertyHandler {
   using AsyncSendDataCallback = base::OnceCallback<void(SendDataCallback)>;
 
   DataOffer(DataOfferDelegate* delegate);
+
+  DataOffer(const DataOffer&) = delete;
+  DataOffer& operator=(const DataOffer&) = delete;
+
   ~DataOffer() override;
 
   void AddObserver(DataOfferObserver* observer);
@@ -104,7 +110,7 @@ class DataOffer final : public ui::PropertyHandler {
   void OnPickledUrlsResolved(SendDataCallback callback,
                              const std::vector<GURL>& urls);
 
-  DataOfferDelegate* const delegate_;
+  base::WeakPtr<DataOfferDelegate> delegate_;
 
   // Data for a given mime type may not ever be requested, or may be requested
   // more than once. Using callbacks and a cache allows us to delay any
@@ -126,21 +132,21 @@ class DataOffer final : public ui::PropertyHandler {
   bool finished_;
 
   base::WeakPtrFactory<DataOffer> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(DataOffer);
 };
 
 class ScopedDataOffer {
  public:
   ScopedDataOffer(DataOffer* data_offer, DataOfferObserver* observer);
+
+  ScopedDataOffer(const ScopedDataOffer&) = delete;
+  ScopedDataOffer& operator=(const ScopedDataOffer&) = delete;
+
   ~ScopedDataOffer();
   DataOffer* get() { return data_offer_; }
 
  private:
-  DataOffer* const data_offer_;
-  DataOfferObserver* const observer_;
-
-  DISALLOW_COPY_AND_ASSIGN(ScopedDataOffer);
+  const raw_ptr<DataOffer> data_offer_;
+  const raw_ptr<DataOfferObserver> observer_;
 };
 
 }  // namespace exo

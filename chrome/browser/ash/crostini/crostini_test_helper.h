@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,15 +8,13 @@
 #include <map>
 #include <string>
 
+#include "base/memory/raw_ref.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ash/crostini/crostini_util.h"
-#include "chromeos/dbus/vm_applications/apps.pb.h"
+#include "chromeos/ash/components/dbus/vm_applications/apps.pb.h"
+#include "components/user_manager/scoped_user_manager.h"
 
-class TestingProfile;
-
-namespace user_manager {
-class ScopedUserManager;
-}  // namespace user_manager
+class Profile;
 
 namespace crostini {
 
@@ -26,8 +24,8 @@ class CrostiniTestHelper {
  public:
   // For convenience, instantiating this allows Crostini, and enables it
   // unless enable_crostini is false. The destructor resets these.
-  explicit CrostiniTestHelper(TestingProfile* profile,
-                              bool enable_crostini = true);
+  // `profile` must outlive this instance.
+  explicit CrostiniTestHelper(Profile* profile, bool enable_crostini = true);
   ~CrostiniTestHelper();
 
   // Creates the apps named "dummy1" and "dummy2" in the default container.
@@ -51,8 +49,8 @@ class CrostiniTestHelper {
   void ReInitializeAppServiceIntegration();
 
   // Set/unset the the CrostiniEnabled pref
-  static void EnableCrostini(TestingProfile* profile);
-  static void DisableCrostini(TestingProfile* profile);
+  static void EnableCrostini(Profile* profile);
+  static void DisableCrostini(Profile* profile);
 
   // Returns the app id that the registry would use for the given desktop file.
   static std::string GenerateAppId(
@@ -69,17 +67,16 @@ class CrostiniTestHelper {
   // Returns an ApplicationList with a single desktop file.
   static vm_tools::apps::ApplicationList BasicAppList(
       const std::string& desktop_file_id,
-      const std::string& vm_name,
-      const std::string& container_name);
+      const std::string& vm_name = kCrostiniDefaultVmName,
+      const std::string& container_name = kCrostiniDefaultContainerName);
 
  private:
   void UpdateRegistry();
 
-  TestingProfile* profile_;
+  const raw_ref<Profile> profile_;
   vm_tools::apps::ApplicationList current_apps_;
 
   // This are used to allow Crostini.
-  std::unique_ptr<user_manager::ScopedUserManager> scoped_user_manager_;
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,23 +21,21 @@ TEST_F(RasterImplementationTest, Flush) {
   expected.cmd.Init();
 
   gl_->Flush();
-  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
+  EXPECT_EQ(0, UNSAFE_TODO(memcmp(&expected, commands_, sizeof(expected))));
 }
 
 TEST_F(RasterImplementationTest, GenQueriesEXT) {
-  GLuint ids[2] = {
-      0,
-  };
+  GLuint ids[2] = {};
   struct Cmds {
     cmds::GenQueriesEXTImmediate gen;
     GLuint data[2];
   };
   Cmds expected;
-  expected.gen.Init(base::size(ids), &ids[0]);
+  expected.gen.Init(std::size(ids), &ids[0]);
   expected.data[0] = kQueriesStartId;
   expected.data[1] = kQueriesStartId + 1;
-  gl_->GenQueriesEXT(base::size(ids), &ids[0]);
-  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
+  gl_->GenQueriesEXT(std::size(ids), &ids[0]);
+  EXPECT_EQ(0, UNSAFE_TODO(memcmp(&expected, commands_, sizeof(expected))));
   EXPECT_EQ(kQueriesStartId, ids[0]);
   EXPECT_EQ(kQueriesStartId + 1, ids[1]);
 }
@@ -49,11 +47,11 @@ TEST_F(RasterImplementationTest, DeleteQueriesEXT) {
     GLuint data[2];
   };
   Cmds expected;
-  expected.del.Init(base::size(ids), &ids[0]);
+  expected.del.Init(std::size(ids), &ids[0]);
   expected.data[0] = kQueriesStartId;
   expected.data[1] = kQueriesStartId + 1;
-  gl_->DeleteQueriesEXT(base::size(ids), &ids[0]);
-  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
+  gl_->DeleteQueriesEXT(std::size(ids), &ids[0]);
+  EXPECT_EQ(0, UNSAFE_TODO(memcmp(&expected, commands_, sizeof(expected))));
 }
 
 TEST_F(RasterImplementationTest, LoseContextCHROMIUM) {
@@ -61,10 +59,9 @@ TEST_F(RasterImplementationTest, LoseContextCHROMIUM) {
     cmds::LoseContextCHROMIUM cmd;
   };
   Cmds expected;
-  expected.cmd.Init(GL_GUILTY_CONTEXT_RESET_ARB, GL_GUILTY_CONTEXT_RESET_ARB);
+  expected.cmd.Init(GL_GUILTY_CONTEXT_RESET, GL_GUILTY_CONTEXT_RESET);
 
-  gl_->LoseContextCHROMIUM(GL_GUILTY_CONTEXT_RESET_ARB,
-                           GL_GUILTY_CONTEXT_RESET_ARB);
-  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
+  gl_->LoseContextCHROMIUM(GL_GUILTY_CONTEXT_RESET, GL_GUILTY_CONTEXT_RESET);
+  EXPECT_EQ(0, UNSAFE_TODO(memcmp(&expected, commands_, sizeof(expected))));
 }
 #endif  // GPU_COMMAND_BUFFER_CLIENT_RASTER_IMPLEMENTATION_UNITTEST_AUTOGEN_H_

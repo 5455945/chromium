@@ -1,24 +1,27 @@
 /*
- * Copyright 2016 The Chromium Authors. All rights reserved.
+ * Copyright 2016 The Chromium Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
 
-/* global PaymentRequest:false */
-
 /**
  * Launches the PaymentRequest UI that requests contact details.
  */
-function buy() { // eslint-disable-line no-unused-vars
+function buy() {
+  buyWithMethods([
+    {supportedMethods: 'https://bobpay.test'},
+  ]);
+}
+
+/**
+ * Launches the PaymentRequest UI that requests contact details.
+ * @param {sequence<PaymentMethodData>} methodData An array of payment method
+ *        objects.
+ */
+function buyWithMethods(methodData) {
   try {
     new PaymentRequest(
-        [
-          {supportedMethods: 'https://bobpay.com'},
-          {
-            supportedMethods: 'basic-card',
-            data: {supportedNetworks: ['amex', 'visa']},
-          },
-        ],
+        methodData,
         {total: {label: 'Total', amount: {currency: 'USD', value: '5.00'}}}, {
           requestPayerName: true,
           requestPayerEmail: true,

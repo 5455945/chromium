@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,11 +10,13 @@
 #include "components/feed/core/proto/v2/wire/action_diagnostic_info.pb.h"
 #include "components/feed/core/proto/v2/wire/action_payload.pb.h"
 #include "components/feed/core/proto/v2/wire/client_info.pb.h"
+#include "components/feed/core/proto/v2/wire/client_user_profiles.pb.h"
 #include "components/feed/core/proto/v2/wire/consistency_token.pb.h"
 #include "components/feed/core/proto/v2/wire/content_id.pb.h"
 #include "components/feed/core/proto/v2/wire/feed_action.pb.h"
 #include "components/feed/core/proto/v2/wire/upload_actions_request.pb.h"
 #include "components/feed/core/proto/v2/wire/upload_actions_response.pb.h"
+#include "components/feed/core/proto/v2/xsurface.pb.h"
 #include "components/feed/core/v2/protocol_translator.h"
 
 namespace feed {
@@ -26,7 +28,8 @@ struct IsFieldSetHelper {
   static bool IsSet(const T& v) { return true; }
 };
 template <typename T>
-struct IsFieldSetHelper<T, std::enable_if_t<std::is_scalar<T>::value>> {
+  requires(std::is_scalar_v<T>)
+struct IsFieldSetHelper<T> {
   static bool IsSet(const T& v) { return !!v; }
 };
 template <>
@@ -127,7 +130,6 @@ class TextProtoPrinter {
     ss_ << base::GetQuotedJSONString(v);
     return *this;
   }
-
   TextProtoPrinter& operator<<(const feedwire::ContentId& v) {
     BeginMessage();
     PRINT_FIELD(content_domain);
@@ -146,13 +148,12 @@ class TextProtoPrinter {
     PRINT_FIELD(display_info);
     PRINT_FIELD(client_instance_id);
     PRINT_FIELD(advertising_id);
-    PRINT_FIELD(device_country);
     EndMessage();
     return *this;
   }
   TextProtoPrinter& operator<<(const feedwire::ActionPayload& v) {
     BeginMessage();
-    PRINT_FIELD(action_payload_data);
+    PRINT_FIELD(batched_action_payload_data);
     EndMessage();
     return *this;
   }
@@ -176,6 +177,7 @@ class TextProtoPrinter {
     EndMessage();
     return *this;
   }
+
   TextProtoPrinter& operator<<(const feedstore::Record& v) {
     BeginMessage();
     PRINT_ONEOF(stream_data);
@@ -183,17 +185,25 @@ class TextProtoPrinter {
     PRINT_ONEOF(content);
     PRINT_ONEOF(local_action);
     PRINT_ONEOF(shared_state);
+    PRINT_ONEOF(doc_view);
+    EndMessage();
+    return *this;
+  }
+  TextProtoPrinter& operator<<(const feedstore::StreamContentHashList& v) {
+    BeginMessage();
+    PRINT_FIELD(hashes);
     EndMessage();
     return *this;
   }
   TextProtoPrinter& operator<<(const feedstore::StreamData& v) {
     BeginMessage();
     PRINT_FIELD(content_id);
+    PRINT_FIELD(root_event_id);
     PRINT_FIELD(next_page_token);
     PRINT_FIELD(last_added_time_millis);
     PRINT_FIELD(shared_state_ids);
-    PRINT_FIELD(stream_id);
-    PRINT_FIELD(content_ids);
+    PRINT_FIELD(stream_key);
+    PRINT_FIELD(content_hashes);
     EndMessage();
     return *this;
   }
@@ -207,7 +217,7 @@ class TextProtoPrinter {
   }
   TextProtoPrinter& operator<<(const feedstore::StreamStructureSet& v) {
     BeginMessage();
-    PRINT_FIELD(stream_id);
+    PRINT_FIELD(stream_key);
     PRINT_FIELD(sequence_number);
     PRINT_FIELD(structures);
     EndMessage();
@@ -232,64 +242,6 @@ class TextProtoPrinter {
     EndMessage();
     return *this;
   }
-  TextProtoPrinter& operator<<(const feedstore::WebFeedInfo& v) {
-    BeginMessage();
-    PRINT_FIELD(web_feed_id);
-    PRINT_FIELD(title);
-    PRINT_FIELD(subtitle);
-    PRINT_FIELD(detail_text);
-    PRINT_FIELD(visit_uri);
-    PRINT_FIELD(rss_uri);
-    PRINT_FIELD(favicon);
-    PRINT_FIELD(follower_count);
-    PRINT_FIELD(state);
-    PRINT_FIELD(matchers);
-    EndMessage();
-    return *this;
-  }
-  TextProtoPrinter& operator<<(
-      const feedstore::RecommendedWebFeedIndex::Entry& v) {
-    BeginMessage();
-    PRINT_FIELD(matchers);
-    PRINT_FIELD(web_feed_id);
-    EndMessage();
-    return *this;
-  }
-  TextProtoPrinter& operator<<(const feedstore::Image& v) {
-    BeginMessage();
-    PRINT_FIELD(url);
-    EndMessage();
-    return *this;
-  }
-  TextProtoPrinter& operator<<(const feedstore::RecommendedWebFeedIndex& v) {
-    BeginMessage();
-    PRINT_FIELD(entries);
-    PRINT_FIELD(update_time_millis);
-    EndMessage();
-    return *this;
-  }
-  TextProtoPrinter& operator<<(const feedstore::SubscribedWebFeeds& v) {
-    BeginMessage();
-    PRINT_FIELD(feeds);
-    PRINT_FIELD(update_time_millis);
-    EndMessage();
-    return *this;
-  }
-  TextProtoPrinter& operator<<(
-      const feedwire::webfeed::WebFeedMatcher::Criteria& v) {
-    BeginMessage();
-    PRINT_FIELD(text);
-    PRINT_FIELD(partial_match_regex);
-    PRINT_FIELD(criteria_type);
-    EndMessage();
-    return *this;
-  }
-  TextProtoPrinter& operator<<(const feedwire::webfeed::WebFeedMatcher& v) {
-    BeginMessage();
-    PRINT_FIELD(criteria);
-    EndMessage();
-    return *this;
-  }
 
   TextProtoPrinter& operator<<(const feedstore::ContentInfo& v) {
     BeginMessage();
@@ -304,7 +256,7 @@ class TextProtoPrinter {
     BeginMessage();
     PRINT_FIELD(content_id);
     PRINT_FIELD(frame);
-    PRINT_FIELD(stream_id);
+    PRINT_FIELD(stream_key);
     EndMessage();
     return *this;
   }
@@ -312,7 +264,7 @@ class TextProtoPrinter {
     BeginMessage();
     PRINT_FIELD(content_id);
     PRINT_FIELD(shared_state_data);
-    PRINT_FIELD(stream_id);
+    PRINT_FIELD(stream_key);
     EndMessage();
     return *this;
   }
@@ -321,6 +273,13 @@ class TextProtoPrinter {
     PRINT_FIELD(id);
     PRINT_FIELD(upload_attempt_count);
     // PRINT_FIELD(action);
+    EndMessage();
+    return *this;
+  }
+  TextProtoPrinter& operator<<(const feedstore::DocView& v) {
+    BeginMessage();
+    PRINT_FIELD(docid);
+    PRINT_FIELD(view_time_millis);
     EndMessage();
     return *this;
   }
@@ -415,49 +374,51 @@ class TextProtoPrinter {
     return *this;
   }
   TextProtoPrinter& operator<<(
-      const feedwire::webfeed::ListRecommendedWebFeedsRequest& v) {
+      const feedwire::ViewDemotionProfileExtension& v) {
     BeginMessage();
+    PRINT_FIELD(tables);
     EndMessage();
     return *this;
   }
-  TextProtoPrinter& operator<<(
-      const feedwire::webfeed::ListRecommendedWebFeedsResponse& v) {
+  TextProtoPrinter& operator<<(const feedwire::Table& v) {
     BeginMessage();
-    PRINT_FIELD(recommended_web_feeds);
+    PRINT_FIELD(name);
+    PRINT_FIELD(num_rows);
+    PRINT_FIELD(columns);
+    EndMessage();
+    return *this;
+  }
+  TextProtoPrinter& operator<<(const feedwire::Table::Column& v) {
+    BeginMessage();
+    PRINT_FIELD(type);
+    PRINT_FIELD(name);
+    PRINT_FIELD(int64_values);
+    PRINT_FIELD(uint64_values);
+    EndMessage();
+    return *this;
+  }
+  TextProtoPrinter& operator<<(const feedwire::ClientUserProfiles& v) {
+    BeginMessage();
+    PRINT_FIELD(view_demotion_profile);
     EndMessage();
     return *this;
   }
 
-  TextProtoPrinter& operator<<(
-      const feedwire::webfeed::ListWebFeedsRequest& v) {
+  TextProtoPrinter& operator<<(const feedwire::ViewDemotionProfile& v) {
     BeginMessage();
+    PRINT_FIELD(view_demotion_profile);
     EndMessage();
     return *this;
   }
-  TextProtoPrinter& operator<<(
-      const feedwire::webfeed::ListWebFeedsResponse& v) {
+
+  TextProtoPrinter& operator<<(const feedwire::InfoCardTrackingState& v) {
     BeginMessage();
-    PRINT_FIELD(web_feeds);
-    EndMessage();
-    return *this;
-  }
-  TextProtoPrinter& operator<<(const feedwire::webfeed::Image& v) {
-    BeginMessage();
-    PRINT_FIELD(uri);
-    EndMessage();
-    return *this;
-  }
-  TextProtoPrinter& operator<<(const feedwire::webfeed::WebFeed& v) {
-    BeginMessage();
-    PRINT_FIELD(name);
-    PRINT_FIELD(title);
-    PRINT_FIELD(subtitle);
-    PRINT_FIELD(detail_text);
-    PRINT_FIELD(visit_uri);
-    PRINT_FIELD(rss_uri);
-    PRINT_FIELD(favicon);
-    PRINT_FIELD(follower_count);
-    PRINT_FIELD(state);
+    PRINT_FIELD(type);
+    PRINT_FIELD(explicitly_dismissed_count);
+    PRINT_FIELD(view_count);
+    PRINT_FIELD(click_count);
+    PRINT_FIELD(first_view_timestamp);
+    PRINT_FIELD(last_view_timestamp);
     EndMessage();
     return *this;
   }
@@ -486,39 +447,36 @@ class TextProtoPrinter {
   std::stringstream ss_;
 };  // namespace feed
 
-#define DECLARE_PRINTER(PROTO_TYPE)              \
-  std::string ToTextProto(const PROTO_TYPE& v) { \
-    return TextProtoPrinter::ToString(v);        \
+#define DECLARE_PRINTER(NS, PROTO_TYPE)              \
+  std::string ToTextProto(const NS::PROTO_TYPE& v) { \
+    return TextProtoPrinter::ToString(v);            \
   }
 
-DECLARE_PRINTER(feedstore::Content)
-DECLARE_PRINTER(feedstore::DataOperation)
-DECLARE_PRINTER(feedstore::Image)
-DECLARE_PRINTER(feedstore::Metadata)
-DECLARE_PRINTER(feedstore::RecommendedWebFeedIndex)
-DECLARE_PRINTER(feedstore::Record)
-DECLARE_PRINTER(feedstore::StoredAction)
-DECLARE_PRINTER(feedstore::StreamData)
-DECLARE_PRINTER(feedstore::StreamSharedState)
-DECLARE_PRINTER(feedstore::StreamStructure)
-DECLARE_PRINTER(feedstore::StreamStructureSet)
-DECLARE_PRINTER(feedstore::SubscribedWebFeeds)
-DECLARE_PRINTER(feedstore::WebFeedInfo)
-DECLARE_PRINTER(feedui::StreamUpdate)
-DECLARE_PRINTER(feedwire::ActionPayload)
-DECLARE_PRINTER(feedwire::ClientInfo)
-DECLARE_PRINTER(feedwire::ContentId)
-DECLARE_PRINTER(feedwire::DisplayInfo)
-DECLARE_PRINTER(feedwire::UploadActionsRequest)
-DECLARE_PRINTER(feedwire::UploadActionsResponse)
-DECLARE_PRINTER(feedwire::Version)
-DECLARE_PRINTER(feedwire::webfeed::Image)
-DECLARE_PRINTER(feedwire::webfeed::ListRecommendedWebFeedsRequest)
-DECLARE_PRINTER(feedwire::webfeed::ListRecommendedWebFeedsResponse)
-DECLARE_PRINTER(feedwire::webfeed::ListWebFeedsRequest)
-DECLARE_PRINTER(feedwire::webfeed::ListWebFeedsResponse)
-DECLARE_PRINTER(feedwire::webfeed::WebFeed)
-DECLARE_PRINTER(feedwire::webfeed::WebFeedMatcher)
+DECLARE_PRINTER(feedstore, Content)
+DECLARE_PRINTER(feedstore, DataOperation)
+DECLARE_PRINTER(feedstore, Metadata)
+DECLARE_PRINTER(feedstore, Record)
+DECLARE_PRINTER(feedstore, StoredAction)
+DECLARE_PRINTER(feedstore, StreamContentHashList)
+DECLARE_PRINTER(feedstore, StreamData)
+DECLARE_PRINTER(feedstore, StreamSharedState)
+DECLARE_PRINTER(feedstore, StreamStructure)
+DECLARE_PRINTER(feedstore, StreamStructureSet)
+DECLARE_PRINTER(feedstore, DocView)
+DECLARE_PRINTER(feedui, StreamUpdate)
+DECLARE_PRINTER(feedwire, ActionPayload)
+DECLARE_PRINTER(feedwire, ClientInfo)
+DECLARE_PRINTER(feedwire, ContentId)
+DECLARE_PRINTER(feedwire, DisplayInfo)
+DECLARE_PRINTER(feedwire, InfoCardTrackingState)
+DECLARE_PRINTER(feedwire, UploadActionsRequest)
+DECLARE_PRINTER(feedwire, UploadActionsResponse)
+DECLARE_PRINTER(feedwire, ViewDemotionProfileExtension)
+DECLARE_PRINTER(feedwire, ViewDemotionProfile)
+DECLARE_PRINTER(feedwire, Table)
+DECLARE_PRINTER(feedwire, Table::Column)
+DECLARE_PRINTER(feedwire, Version)
+DECLARE_PRINTER(feedwire, ClientUserProfiles)
 
 #undef DECLARE_PRINTER
 

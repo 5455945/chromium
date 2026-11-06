@@ -1,20 +1,22 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CC_PAINT_PAINT_CACHE_H_
 #define CC_PAINT_PAINT_CACHE_H_
 
+#include <array>
 #include <map>
 #include <set>
 #include <utility>
 #include <vector>
 
-#include "base/containers/mru_cache.h"
-#include "base/containers/stack_container.h"
+#include "base/containers/lru_cache.h"
 #include "cc/paint/paint_export.h"
+#include "third_party/abseil-cpp/absl/container/inlined_vector.h"
 #include "third_party/skia/include/core/SkPath.h"
 #include "third_party/skia/include/core/SkTextBlob.h"
+#include "third_party/skia/include/effects/SkRuntimeEffect.h"
 
 namespace cc {
 
@@ -36,9 +38,13 @@ namespace cc {
 // since it avoids the need for cross-process ref-counting required by the
 // TransferCache.
 
-using PaintCacheId = uint32_t;
+using PaintCacheId = uint64_t;
 using PaintCacheIds = std::vector<PaintCacheId>;
-enum class PaintCacheDataType : uint32_t { kTextBlob, kPath, kLast = kPath };
+enum class PaintCacheDataType : uint32_t {
+  kPath,
+  kSkRuntimeEffect,
+  kLast = kSkRuntimeEffect
+};
 enum class PaintCacheEntryState : uint32_t {
   kEmpty,
   kCached,
@@ -68,7 +74,7 @@ class CC_PAINT_EXPORT ClientPaintCache {
 
   // Populates |purged_data| with the list of ids which should be purged from
   // the ServicePaintCache.
-  using PurgedData = PaintCacheIds[PaintCacheDataTypeCount];
+  using PurgedData = std::array<PaintCacheIds, PaintCacheDataTypeCount>;
   void Purge(PurgedData* purged_data);
 
   // Finalize the state of pending entries, which were sent to the service-side
@@ -87,7 +93,7 @@ class CC_PAINT_EXPORT ClientPaintCache {
 
  private:
   using CacheKey = std::pair<PaintCacheDataType, PaintCacheId>;
-  using CacheMap = base::MRUCache<CacheKey, size_t>;
+  using CacheMap = base::LRUCache<CacheKey, size_t>;
 
   template <typename Iterator>
   void EraseFromMap(Iterator it);
@@ -99,7 +105,7 @@ class CC_PAINT_EXPORT ClientPaintCache {
   // List of entries added to the map but not committed since we might fail to
   // send them to the service-side cache. This is necessary to ensure we
   // maintain an accurate mirror of the service-side state.
-  base::StackVector<CacheKey, 1> pending_entries_;
+  absl::InlinedVector<CacheKey, 1> pending_entries_;
 };
 
 class CC_PAINT_EXPORT ServicePaintCache {
@@ -107,31 +113,26 @@ class CC_PAINT_EXPORT ServicePaintCache {
   ServicePaintCache();
   ~ServicePaintCache();
 
-  // Stores the |blob| received from the client in the cache.
-  void PutTextBlob(PaintCacheId id, sk_sp<SkTextBlob> blob);
-
-  // Retrieves an entry for |id| stored in the cache. Or nullptr if the entry
-  // is not found.
-  sk_sp<SkTextBlob> GetTextBlob(PaintCacheId id) const;
-
-  // Stores |path| received from the client in the cache.
+  // Stores an entry received from the client in the cache.
   void PutPath(PaintCacheId, SkPath path);
+  void PutEffect(PaintCacheId id, sk_sp<SkRuntimeEffect> effect);
 
   // Retrieves an entry for |id| stored in the cache. The path data is stored in
   // |path| pointed memory. Returns false, if the entry is not found.
   bool GetPath(PaintCacheId id, SkPath* path) const;
+  bool GetEffect(PaintCacheId id, sk_sp<SkRuntimeEffect>* effect) const;
 
   void Purge(PaintCacheDataType type,
              size_t n,
              const volatile PaintCacheId* ids);
   void PurgeAll();
-  bool empty() const { return cached_blobs_.empty() && cached_paths_.empty(); }
+  bool IsEmpty() const;
 
  private:
-  using BlobMap = std::map<PaintCacheId, sk_sp<SkTextBlob>>;
-  BlobMap cached_blobs_;
   using PathMap = std::map<PaintCacheId, SkPath>;
   PathMap cached_paths_;
+  using EffectMap = std::map<PaintCacheId, sk_sp<SkRuntimeEffect>>;
+  EffectMap cached_effects_;
 };
 
 }  // namespace cc

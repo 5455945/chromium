@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "base/atomicops.h"
+#include "base/compiler_specific.h"
 #include "base/numerics/checked_math.h"
 #include "gpu/command_buffer/common/cmd_buffer_common.h"
 
@@ -69,7 +70,7 @@ struct SizedResult {
   }
 
   // Copy the result.
-  void CopyResult(void* dst) const { memcpy(dst, &data, size); }
+  void CopyResult(void* dst) const { UNSAFE_TODO(memcpy(dst, &data, size)); }
 
   uint32_t size;  // in bytes.
   int32_t data;   // this is just here to get an offset.

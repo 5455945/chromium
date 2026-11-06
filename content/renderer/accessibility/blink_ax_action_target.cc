@@ -1,11 +1,11 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/renderer/accessibility/blink_ax_action_target.h"
-#include "skia/ext/skia_matrix_44.h"
 #include "third_party/blink/public/platform/web_string.h"
 #include "ui/gfx/geometry/rect_conversions.h"
+#include "ui/gfx/geometry/transform.h"
 
 using blink::WebAXObject;
 
@@ -44,7 +44,7 @@ bool BlinkAXActionTarget::PerformAction(
 gfx::Rect BlinkAXActionTarget::GetRelativeBounds() const {
   blink::WebAXObject offset_container;
   gfx::RectF bounds;
-  skia::Matrix44 container_transform;
+  gfx::Transform container_transform;
   web_ax_object_.GetRelativeBounds(offset_container, bounds,
                                    container_transform);
   return gfx::ToEnclosedRect(bounds);
@@ -66,10 +66,6 @@ void BlinkAXActionTarget::SetScrollOffset(const gfx::Point& point) const {
   web_ax_object_.SetScrollOffset(point);
 }
 
-bool BlinkAXActionTarget::SetSelected(bool selected) const {
-  return web_ax_object_.SetSelected(selected);
-}
-
 bool BlinkAXActionTarget::SetSelection(const ui::AXActionTarget* anchor_object,
                                        int anchor_offset,
                                        const ui::AXActionTarget* focus_object,
@@ -86,8 +82,12 @@ bool BlinkAXActionTarget::SetSelection(const ui::AXActionTarget* anchor_object,
       blink_focus_object->WebAXObject(), focus_offset);
 }
 
-bool BlinkAXActionTarget::ScrollToMakeVisible() const {
-  return web_ax_object_.ScrollToMakeVisible();
+bool BlinkAXActionTarget::ScrollToMakeVisible(
+    ax::mojom::ScrollAlignment horizontal_scroll_alignment,
+    ax::mojom::ScrollAlignment vertical_scroll_alignment,
+    ax::mojom::ScrollBehavior scroll_behavior) const {
+  return web_ax_object_.ScrollToMakeVisible(
+      horizontal_scroll_alignment, vertical_scroll_alignment, scroll_behavior);
 }
 
 bool BlinkAXActionTarget::ScrollToMakeVisibleWithSubFocus(

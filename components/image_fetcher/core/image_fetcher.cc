@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,6 @@ ImageFetcherParams::ImageFetcherParams(
     std::string uma_client_name)
     : network_traffic_annotation_tag_(network_traffic_annotation_tag),
       uma_client_name_(uma_client_name),
-      skip_transcoding_(false),
       skip_disk_cache_read_(false),
       allow_needs_transcoding_file_(false) {}
 

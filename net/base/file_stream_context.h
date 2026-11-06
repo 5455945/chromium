@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -31,15 +31,16 @@
 
 #include "base/files/file.h"
 #include "base/logging.h"
-#include "base/memory/weak_ptr.h"
 #include "base/message_loop/message_pump_for_io.h"
-#include "base/single_thread_task_runner.h"
-#include "base/task_runner.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/task/task_runner.h"
+#include "base/types/expected.h"
 #include "build/build_config.h"
 #include "net/base/completion_once_callback.h"
 #include "net/base/file_stream.h"
+#include "net/base/net_errors.h"
 
-#if defined(OS_POSIX) || defined(OS_FUCHSIA)
+#if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
 #include <errno.h>
 #endif
 
@@ -51,9 +52,10 @@ namespace net {
 
 class IOBuffer;
 
-#if defined(OS_WIN)
+// Implementation for a FileStream. See file_stream.h for documentation.
+#if BUILDFLAG(IS_WIN)
 class FileStream::Context : public base::MessagePumpForIO::IOHandler {
-#elif defined(OS_POSIX) || defined(OS_FUCHSIA)
+#elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
 class FileStream::Context {
 #endif
 
@@ -67,15 +69,19 @@ class FileStream::Context {
   Context(base::File file, scoped_refptr<base::TaskRunner> task_runner);
   Context(const Context&) = delete;
   Context& operator=(const Context&) = delete;
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   ~Context() override;
-#elif defined(OS_POSIX) || defined(OS_FUCHSIA)
+#elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
   ~Context();
 #endif
 
   int Read(IOBuffer* buf, int buf_len, CompletionOnceCallback callback);
 
   int Write(IOBuffer* buf, int buf_len, CompletionOnceCallback callback);
+
+#if BUILDFLAG(IS_WIN)
+  int ConnectNamedPipe(CompletionOnceCallback callback);
+#endif
 
   bool async_in_progress() const { return async_in_progress_; }
 
@@ -95,7 +101,7 @@ class FileStream::Context {
   void Close(CompletionOnceCallback callback);
 
   // Seeks |offset| bytes from the start of the file.
-  void Seek(int64_t offset, Int64CompletionOnceCallback callback);
+  void Seek(int64_t offset, FileStream::SeekCallback callback);
 
   void GetFileInfo(base::File::Info* file_info,
                    CompletionOnceCallback callback);
@@ -143,12 +149,15 @@ class FileStream::Context {
 
   void CloseAndDelete();
 
-  Int64CompletionOnceCallback IntToInt64(CompletionOnceCallback callback);
-
-  // Called when Open() or Seek() completes. |result| contains the result or a
-  // network error code.
-  void OnAsyncCompleted(Int64CompletionOnceCallback callback,
+  // Called when Open(), Close(), GetFileInfo(), or Flush() completes.
+  // |result| contains the result or a network error code.
+  void OnAsyncCompleted(CompletionOnceCallback callback,
                         const IOResult& result);
+
+  // Called when Seek() completes. Creates a base::expected result from the
+  // IOResult and runs the callback.
+  void OnSeekCompleted(FileStream::SeekCallback callback,
+                       const IOResult& result);
 
   ////////////////////////////////////////////////////////////////////////////
   // Platform-dependent methods implemented in
@@ -160,7 +169,7 @@ class FileStream::Context {
 
   void OnFileOpened();
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   void IOCompletionIsPending(CompletionOnceCallback callback, IOBuffer* buf);
 
   // Implementation of MessagePumpForIO::IOHandler.
@@ -207,7 +216,7 @@ class FileStream::Context {
   // the ReadFile API.
   void ReadAsyncResult(BOOL read_file_ret, DWORD bytes_read, DWORD os_error);
 
-#elif defined(OS_POSIX) || defined(OS_FUCHSIA)
+#elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
   // ReadFileImpl() is a simple wrapper around read() that handles EINTR
   // signals and calls RecordAndMapError() to map errno to net error codes.
   IOResult ReadFileImpl(scoped_refptr<IOBuffer> buf, int buf_len);
@@ -216,7 +225,7 @@ class FileStream::Context {
   // signals and calls MapSystemError() to map errno to net error codes.
   // It tries to write to completion.
   IOResult WriteFileImpl(scoped_refptr<IOBuffer> buf, int buf_len);
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
   base::File file_;
   bool async_in_progress_ = false;
@@ -224,7 +233,7 @@ class FileStream::Context {
   bool orphaned_ = false;
   const scoped_refptr<base::TaskRunner> task_runner_;
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   base::MessagePumpForIO::IOContext io_context_;
   CompletionOnceCallback callback_;
   scoped_refptr<IOBuffer> in_flight_buf_;

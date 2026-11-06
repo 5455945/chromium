@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,23 +10,27 @@ bool UnionTraits<blink::mojom::PolicyValueDataView, blink::PolicyValue>::Read(
     blink::mojom::PolicyValueDataView in,
     blink::PolicyValue* out) {
   switch (in.tag()) {
-    case blink::mojom::PolicyValueDataView::Tag::BOOL_VALUE:
-      out->SetType(blink::mojom::PolicyValueType::kBool);
-      out->SetBoolValue(in.bool_value());
+    case blink::mojom::PolicyValueDataView::Tag::kBoolValue:
+      *out = blink::PolicyValue::CreateBool(in.bool_value());
       return true;
-    case blink::mojom::PolicyValueDataView::Tag::DEC_DOUBLE_VALUE:
-      out->SetType(blink::mojom::PolicyValueType::kDecDouble);
-      out->SetDoubleValue(in.dec_double_value());
+    case blink::mojom::PolicyValueDataView::Tag::kDecDoubleValue:
+      *out = blink::PolicyValue::CreateDecDouble(in.dec_double_value());
       return true;
-    case blink::mojom::PolicyValueDataView::Tag::ENUM_VALUE:
-      out->SetType(blink::mojom::PolicyValueType::kEnum);
-      out->SetIntValue(in.enum_value());
+    case blink::mojom::PolicyValueDataView::Tag::kEnumValue:
+      *out = blink::PolicyValue::CreateEnum(in.enum_value());
       return true;
-    case blink::mojom::PolicyValueDataView::Tag::NULL_VALUE:
-      break;
   }
-  NOTREACHED();
   return false;
+}
+
+bool UnionTraits<blink::mojom::PolicyValueDataView, blink::PolicyValue>::IsNull(
+    const blink::PolicyValue& in) {
+  return in.Type() == blink::mojom::PolicyValueType::kNull;
+}
+
+void UnionTraits<blink::mojom::PolicyValueDataView,
+                 blink::PolicyValue>::SetToNull(blink::PolicyValue* out) {
+  *out = blink::PolicyValue();
 }
 
 }  // namespace mojo

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@ module ui.mojom;
 // Cross platform keyboard codes.
 //
 // Because the web has standardized on Win32 keyboard codes, so does mojo.
-// TODO: shouldn't need extensible, see http://crbug.com/582279
 [Extensible]
 enum KeyboardCode {
   BACK                      = 0x08,
@@ -44,7 +43,7 @@ enum KeyboardCode {
   EXECUTE                   = 0x2B,
   SNAPSHOT                  = 0x2C,
   INSERT                    = 0x2D,
-  KEY_DELETE                = 0x2E,
+  DELETE_KEY                = 0x2E,
   HELP                      = 0x2F,
   NUM_0                     = 0x30,
   NUM_1                     = 0x31,
@@ -180,7 +179,7 @@ enum KeyboardCode {
   NONAME                    = 0xFC,
   PA1                       = 0xFD,
   OEM_CLEAR                 = 0xFE,
-  UNKNOWN                   = 0,
+  [Default] UNKNOWN         = 0,
 
   // POSIX specific VKEYs. Note that as of Windows SDK 7.1, 0x97-9F, 0xD8-DA,
   // and 0xE8 are unassigned.

@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,36 +8,75 @@
 #include "components/content_settings/core/browser/cookie_settings.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_utils.h"
+#include "components/content_settings/core/common/cookie_settings_base.h"
+#include "content/public/browser/browser_thread.h"
+#include "net/cookies/cookie_partition_key.h"
+#include "net/cookies/cookie_setting_override.h"
+#include "net/cookies/site_for_cookies.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
 namespace embedder_support {
 
-bool AllowAppCache(const GURL& manifest_url,
-                   const GURL& site_for_cookies,
-                   const absl::optional<url::Origin>& top_frame_origin,
-                   const content_settings::CookieSettings* cookie_settings) {
-  return cookie_settings->IsFullCookieAccessAllowed(
-      manifest_url, site_for_cookies, top_frame_origin);
+using StorageType =
+    content_settings::mojom::ContentSettingsManager::StorageType;
+
+namespace {
+
+bool AllowWorkerStorageAccess(
+    StorageType storage_type,
+    const GURL& url,
+    const std::vector<content::GlobalRenderFrameHostId>& render_frames,
+    const content_settings::CookieSettings* cookie_settings,
+    const blink::StorageKey& storage_key) {
+  // TODO(crbug.com/40247160): Consider whether the following check should
+  // somehow determine real CookieSettingOverrides rather than default to none.
+  std::optional<url::Origin> top_frame_origin =
+      storage_key.IsFirstPartyContext()
+          ? storage_key.origin()
+          : url::Origin::Create(storage_key.top_level_site().GetURL());
+
+  bool allow = cookie_settings->IsAnyStorageAccessAllowed(
+      url, storage_key.ToNetSiteForCookies(), top_frame_origin,
+      net::CookieSettingOverrides(), storage_key.ToCookiePartitionKey());
+
+  for (const auto& it : render_frames) {
+    auto* rfh = content::RenderFrameHost::FromID(it);
+    if (!rfh) {
+      continue;
+    }
+    content_settings::PageSpecificContentSettings::StorageAccessed(
+        storage_type, it, rfh->GetStorageKey(), !allow);
+  }
+
+  return allow;
 }
+}  // namespace
 
 content::AllowServiceWorkerResult AllowServiceWorker(
     const GURL& scope,
-    const GURL& site_for_cookies,
-    const absl::optional<url::Origin>& top_frame_origin,
+    const net::SiteForCookies& site_for_cookies,
+    const std::optional<url::Origin>& top_frame_origin,
+    const blink::StorageKey& storage_key,
     const content_settings::CookieSettings* cookie_settings,
     const HostContentSettingsMap* settings_map) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  // TODO(crbug.com/40847840): Remove this check once we figure out what is
+  // wrong.
+  DCHECK(settings_map);
   GURL first_party_url = top_frame_origin ? top_frame_origin->GetURL() : GURL();
   // Check if JavaScript is allowed.
   content_settings::SettingInfo info;
-  std::unique_ptr<base::Value> value = settings_map->GetWebsiteSetting(
+  ContentSetting setting = settings_map->GetContentSetting(
       first_party_url, first_party_url, ContentSettingsType::JAVASCRIPT, &info);
-  ContentSetting setting = content_settings::ValueToContentSetting(value.get());
   bool allow_javascript = setting == CONTENT_SETTING_ALLOW;
 
-  // Check if cookies are allowed.
-  bool allow_cookies = cookie_settings->IsFullCookieAccessAllowed(
-      scope, site_for_cookies, top_frame_origin);
+  // Check if cookies/storage are allowed.
+  // TODO(crbug.com/40247160): Consider whether the following check should
+  // also consider the third-party cookie user bypass override.
+  bool allow_cookies = cookie_settings->IsAnyStorageAccessAllowed(
+      scope, site_for_cookies, top_frame_origin, net::CookieSettingOverrides(),
+      storage_key.ToCookiePartitionKey());
 
   return content::AllowServiceWorkerResult::FromPolicy(!allow_javascript,
                                                        !allow_cookies);
@@ -45,68 +84,57 @@ content::AllowServiceWorkerResult AllowServiceWorker(
 
 bool AllowSharedWorker(
     const GURL& worker_url,
-    const GURL& site_for_cookies,
-    const absl::optional<url::Origin>& top_frame_origin,
+    const net::SiteForCookies& site_for_cookies,
+    const std::optional<url::Origin>& top_frame_origin,
     const std::string& name,
     const blink::StorageKey& storage_key,
+    const blink::mojom::SharedWorkerSameSiteCookies same_site_cookies,
     int render_process_id,
     int render_frame_id,
     const content_settings::CookieSettings* cookie_settings) {
-  bool allow = cookie_settings->IsFullCookieAccessAllowed(
-      worker_url, site_for_cookies, top_frame_origin);
+  bool allow = cookie_settings->IsAnyStorageAccessAllowed(
+      worker_url, site_for_cookies, top_frame_origin,
+      net::CookieSettingOverrides(), storage_key.ToCookiePartitionKey());
 
   content_settings::PageSpecificContentSettings::SharedWorkerAccessed(
       render_process_id, render_frame_id, worker_url, name, storage_key,
-      !allow);
+      same_site_cookies, !allow);
   return allow;
 }
 
 bool AllowWorkerFileSystem(
     const GURL& url,
     const std::vector<content::GlobalRenderFrameHostId>& render_frames,
-    const content_settings::CookieSettings* cookie_settings) {
-  bool allow = cookie_settings->IsFullCookieAccessAllowed(
-      url, url, url::Origin::Create(url));
-  for (const auto& it : render_frames) {
-    content_settings::PageSpecificContentSettings::FileSystemAccessed(
-        it.child_id, it.frame_routing_id, url, !allow);
-  }
-  return allow;
+    const content_settings::CookieSettings* cookie_settings,
+    const blink::StorageKey& storage_key) {
+  return AllowWorkerStorageAccess(StorageType::FILE_SYSTEM, url, render_frames,
+                                  cookie_settings, storage_key);
 }
 
 bool AllowWorkerIndexedDB(
     const GURL& url,
     const std::vector<content::GlobalRenderFrameHostId>& render_frames,
-    const content_settings::CookieSettings* cookie_settings) {
-  bool allow = cookie_settings->IsFullCookieAccessAllowed(
-      url, url, url::Origin::Create(url));
-
-  for (const auto& it : render_frames) {
-    content_settings::PageSpecificContentSettings::IndexedDBAccessed(
-        it.child_id, it.frame_routing_id, url, !allow);
-  }
-  return allow;
+    const content_settings::CookieSettings* cookie_settings,
+    const blink::StorageKey& storage_key) {
+  return AllowWorkerStorageAccess(StorageType::INDEXED_DB, url, render_frames,
+                                  cookie_settings, storage_key);
 }
 
 bool AllowWorkerCacheStorage(
     const GURL& url,
     const std::vector<content::GlobalRenderFrameHostId>& render_frames,
-    const content_settings::CookieSettings* cookie_settings) {
-  bool allow = cookie_settings->IsFullCookieAccessAllowed(
-      url, url, url::Origin::Create(url));
-
-  for (const auto& it : render_frames) {
-    content_settings::PageSpecificContentSettings::CacheStorageAccessed(
-        it.child_id, it.frame_routing_id, url, !allow);
-  }
-  return allow;
+    const content_settings::CookieSettings* cookie_settings,
+    const blink::StorageKey& storage_key) {
+  return AllowWorkerStorageAccess(StorageType::CACHE, url, render_frames,
+                                  cookie_settings, storage_key);
 }
 
 bool AllowWorkerWebLocks(
     const GURL& url,
-    const content_settings::CookieSettings* cookie_settings) {
-  return cookie_settings->IsFullCookieAccessAllowed(url, url,
-                                                    url::Origin::Create(url));
+    const content_settings::CookieSettings* cookie_settings,
+    const blink::StorageKey& storage_key) {
+  return AllowWorkerStorageAccess(StorageType::WEB_LOCKS, url, {},
+                                  cookie_settings, storage_key);
 }
 
 }  // namespace embedder_support

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,19 +9,17 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/macros.h"
-#include "base/memory/ptr_util.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "content/public/test/browser_task_environment.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace ash {
-namespace file_system_provider {
+namespace ash::file_system_provider {
 namespace {
 
 // Size of the intermediate buffer in bytes.
@@ -53,16 +51,20 @@ class FakeFileStreamWriter : public storage::FileStreamWriter {
         flush_log_(flush_log),
         cancel_counter_(cancel_counter),
         write_error_(write_error) {}
-  ~FakeFileStreamWriter() override {}
+
+  FakeFileStreamWriter(const FakeFileStreamWriter&) = delete;
+  FakeFileStreamWriter& operator=(const FakeFileStreamWriter&) = delete;
+
+  ~FakeFileStreamWriter() override = default;
 
   // storage::FileStreamWriter overrides.
   int Write(net::IOBuffer* buf,
             int buf_len,
             net::CompletionOnceCallback callback) override {
     DCHECK(write_log_);
-    write_log_->push_back(std::string(buf->data(), buf_len));
+    write_log_->emplace_back(buf->data(), buf_len);
     pending_bytes_ += buf_len;
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
         base::BindOnce(std::move(callback),
                        write_error_ == net::OK ? buf_len : write_error_));
@@ -73,34 +75,34 @@ class FakeFileStreamWriter : public storage::FileStreamWriter {
     DCHECK(cancel_counter_);
     DCHECK_EQ(net::OK, write_error_);
     ++(*cancel_counter_);
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(callback), net::OK));
     return net::ERR_IO_PENDING;
   }
 
-  int Flush(net::CompletionOnceCallback callback) override {
+  int Flush(storage::FlushMode /*flush_mode*/,
+            net::CompletionOnceCallback callback) override {
     DCHECK(flush_log_);
     flush_log_->push_back(pending_bytes_);
     pending_bytes_ = 0;
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(callback), net::OK));
     return net::ERR_IO_PENDING;
   }
 
  private:
   int pending_bytes_;
-  std::vector<std::string>* write_log_;  // Not owned.
-  std::vector<int>* flush_log_;          // Not owned.
-  int* cancel_counter_;                  // Not owned.
+  raw_ptr<std::vector<std::string>> write_log_;  // Not owned.
+  raw_ptr<std::vector<int>> flush_log_;          // Not owned.
+  raw_ptr<int> cancel_counter_;                  // Not owned.
   net::Error write_error_;
-  DISALLOW_COPY_AND_ASSIGN(FakeFileStreamWriter);
 };
 
 }  // namespace
 
 class FileSystemProviderBufferingFileStreamWriterTest : public testing::Test {
  protected:
-  FileSystemProviderBufferingFileStreamWriterTest() {}
+  FileSystemProviderBufferingFileStreamWriterTest() = default;
 
   void SetUp() override {
     short_text_buffer_ =
@@ -110,7 +112,7 @@ class FileSystemProviderBufferingFileStreamWriterTest : public testing::Test {
     ASSERT_LT(short_text_buffer_->size(), long_text_buffer_->size());
   }
 
-  ~FileSystemProviderBufferingFileStreamWriterTest() override {}
+  ~FileSystemProviderBufferingFileStreamWriterTest() override = default;
 
   content::BrowserTaskEnvironment task_environment_;
   scoped_refptr<net::StringIOBuffer> short_text_buffer_;
@@ -121,8 +123,8 @@ TEST_F(FileSystemProviderBufferingFileStreamWriterTest, Write) {
   std::vector<std::string> inner_write_log;
   std::vector<int> inner_flush_log;
   BufferingFileStreamWriter writer(
-      base::WrapUnique(new FakeFileStreamWriter(
-          &inner_write_log, &inner_flush_log, NULL, net::OK)),
+      std::make_unique<FakeFileStreamWriter>(&inner_write_log, &inner_flush_log,
+                                             nullptr, net::OK),
       kIntermediateBufferLength);
 
   ASSERT_LT(kIntermediateBufferLength, 2 * short_text_buffer_->size());
@@ -172,7 +174,8 @@ TEST_F(FileSystemProviderBufferingFileStreamWriterTest, Write) {
     inner_flush_log.clear();
 
     std::vector<int> flush_log;
-    const int result = writer.Flush(base::BindOnce(&LogValue<int>, &flush_log));
+    const int result = writer.Flush(storage::FlushMode::kEndOfFile,
+                                    base::BindOnce(&LogValue<int>, &flush_log));
     base::RunLoop().RunUntilIdle();
 
     EXPECT_EQ(net::ERR_IO_PENDING, result);
@@ -191,12 +194,33 @@ TEST_F(FileSystemProviderBufferingFileStreamWriterTest, Write) {
   }
 }
 
+TEST_F(FileSystemProviderBufferingFileStreamWriterTest, Write_NegativeLength) {
+  std::vector<std::string> inner_write_log;
+  std::vector<int> inner_flush_log;
+  BufferingFileStreamWriter writer(
+      std::make_unique<FakeFileStreamWriter>(&inner_write_log, &inner_flush_log,
+                                             nullptr, net::ERR_FAILED),
+      kIntermediateBufferLength);
+
+  {
+    std::vector<int> write_log;
+    const int result = writer.Write(short_text_buffer_.get(), -123456,
+                                    base::BindOnce(&LogValue<int>, &write_log));
+    base::RunLoop().RunUntilIdle();
+
+    EXPECT_EQ(net::ERR_INVALID_ARGUMENT, result);
+    EXPECT_EQ(0u, write_log.size());
+    EXPECT_EQ(0u, inner_write_log.size());
+    EXPECT_EQ(0u, inner_flush_log.size());
+  }
+}
+
 TEST_F(FileSystemProviderBufferingFileStreamWriterTest, Write_WithError) {
   std::vector<std::string> inner_write_log;
   std::vector<int> inner_flush_log;
   BufferingFileStreamWriter writer(
-      std::unique_ptr<storage::FileStreamWriter>(new FakeFileStreamWriter(
-          &inner_write_log, &inner_flush_log, NULL, net::ERR_FAILED)),
+      std::make_unique<FakeFileStreamWriter>(&inner_write_log, &inner_flush_log,
+                                             nullptr, net::ERR_FAILED),
       kIntermediateBufferLength);
 
   ASSERT_LT(kIntermediateBufferLength, 2 * short_text_buffer_->size());
@@ -245,8 +269,8 @@ TEST_F(FileSystemProviderBufferingFileStreamWriterTest, Write_Directly) {
   std::vector<std::string> inner_write_log;
   std::vector<int> inner_flush_log;
   BufferingFileStreamWriter writer(
-      std::unique_ptr<storage::FileStreamWriter>(new FakeFileStreamWriter(
-          &inner_write_log, &inner_flush_log, NULL, net::OK)),
+      std::make_unique<FakeFileStreamWriter>(&inner_write_log, &inner_flush_log,
+                                             nullptr, net::OK),
       kIntermediateBufferLength);
 
   ASSERT_GT(kIntermediateBufferLength, short_text_buffer_->size());
@@ -313,8 +337,8 @@ TEST_F(FileSystemProviderBufferingFileStreamWriterTest, Cancel) {
   int inner_cancel_counter = 0;
 
   BufferingFileStreamWriter writer(
-      std::unique_ptr<storage::FileStreamWriter>(new FakeFileStreamWriter(
-          &inner_write_log, &inner_flush_log, &inner_cancel_counter, net::OK)),
+      std::make_unique<FakeFileStreamWriter>(&inner_write_log, &inner_flush_log,
+                                             &inner_cancel_counter, net::OK),
       kIntermediateBufferLength);
 
   // Write directly, so there is something to actually cancel. Note, that
@@ -341,8 +365,8 @@ TEST_F(FileSystemProviderBufferingFileStreamWriterTest, Flush) {
   std::vector<std::string> inner_write_log;
   std::vector<int> inner_flush_log;
   BufferingFileStreamWriter writer(
-      std::unique_ptr<storage::FileStreamWriter>(new FakeFileStreamWriter(
-          &inner_write_log, &inner_flush_log, NULL, net::OK)),
+      std::make_unique<FakeFileStreamWriter>(&inner_write_log, &inner_flush_log,
+                                             nullptr, net::OK),
       kIntermediateBufferLength);
 
   // Write less bytes than size of the intermediate buffer.
@@ -361,7 +385,8 @@ TEST_F(FileSystemProviderBufferingFileStreamWriterTest, Flush) {
   // filled out.
   std::vector<int> flush_log;
   const int flush_result =
-      writer.Flush(base::BindOnce(&LogValue<int>, &flush_log));
+      writer.Flush(storage::FlushMode::kEndOfFile,
+                   base::BindOnce(&LogValue<int>, &flush_log));
   base::RunLoop().RunUntilIdle();
 
   EXPECT_EQ(net::ERR_IO_PENDING, flush_result);
@@ -379,8 +404,8 @@ TEST_F(FileSystemProviderBufferingFileStreamWriterTest, Flush_AfterWriteError) {
   std::vector<std::string> inner_write_log;
   std::vector<int> inner_flush_log;
   BufferingFileStreamWriter writer(
-      std::unique_ptr<storage::FileStreamWriter>(new FakeFileStreamWriter(
-          &inner_write_log, &inner_flush_log, NULL, net::ERR_FAILED)),
+      std::make_unique<FakeFileStreamWriter>(&inner_write_log, &inner_flush_log,
+                                             nullptr, net::ERR_FAILED),
       kIntermediateBufferLength);
 
   // Write less bytes than size of the intermediate buffer. This should succeed
@@ -400,7 +425,8 @@ TEST_F(FileSystemProviderBufferingFileStreamWriterTest, Flush_AfterWriteError) {
   // filled out. That should cause failing.
   std::vector<int> flush_log;
   const int flush_result =
-      writer.Flush(base::BindOnce(&LogValue<int>, &flush_log));
+      writer.Flush(storage::FlushMode::kEndOfFile,
+                   base::BindOnce(&LogValue<int>, &flush_log));
   base::RunLoop().RunUntilIdle();
 
   EXPECT_EQ(net::ERR_IO_PENDING, flush_result);
@@ -415,5 +441,4 @@ TEST_F(FileSystemProviderBufferingFileStreamWriterTest, Flush_AfterWriteError) {
   EXPECT_EQ(0u, inner_flush_log.size());
 }
 
-}  // namespace file_system_provider
-}  // namespace ash
+}  // namespace ash::file_system_provider

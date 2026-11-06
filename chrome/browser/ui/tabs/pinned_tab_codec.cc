@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,71 +10,59 @@
 
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
 
 using content::NavigationEntry;
 
+namespace {
+
 // Key used in dictionaries for the url.
-static const char kURL[] = "url";
+const char kURL[] = "url";
 
-// Returns true if |browser| has any pinned tabs.
-static bool HasPinnedTabs(Browser* browser) {
-  TabStripModel* tab_model = browser->tab_strip_model();
-  for (int i = 0; i < tab_model->count(); ++i) {
-    if (tab_model->IsTabPinned(i))
-      return true;
-  }
-  return false;
+// Returns a base::DictValue representing the supplied StartupTab.
+base::DictValue EncodeTab(const GURL& url) {
+  base::DictValue dict;
+  dict.Set(kURL, url.spec());
+  return dict;
 }
 
-// Adds a DictionaryValue to |values| representing |tab|.
-static void EncodeTab(const StartupTab& tab, base::ListValue* values) {
-  std::unique_ptr<base::DictionaryValue> value(new base::DictionaryValue);
-  value->SetString(kURL, tab.url.spec());
-  values->Append(std::move(value));
-}
+// Encodes all the pinned tabs from `browser` into `serialized_tabs`.
+void EncodePinnedTabs(BrowserWindowInterface* browser,
+                      base::ListValue& serialized_tabs) {
+  const TabStripModel* const tab_model = browser->GetTabStripModel();
+  for (const tabs::TabInterface* tab : *tab_model) {
+    if (!tab->IsPinned()) {
+      break;
+    }
 
-// Adds a base::DictionaryValue to |values| representing the pinned tab at the
-// specified index.
-static void EncodePinnedTab(TabStripModel* model,
-                            int index,
-                            base::ListValue* values) {
-  std::unique_ptr<base::DictionaryValue> value(new base::DictionaryValue());
-
-  content::WebContents* web_contents = model->GetWebContentsAt(index);
-  NavigationEntry* entry =
-      web_contents->GetController().GetLastCommittedEntry();
-  if (entry) {
-    value->SetString(kURL, entry->GetURL().spec());
-    values->Append(std::move(value));
+    content::WebContents* web_contents = tab->GetContents();
+    NavigationEntry* entry =
+        web_contents->GetController().GetLastCommittedEntry();
+    if (entry) {
+      serialized_tabs.Append(EncodeTab(entry->GetURL()));
+    }
   }
 }
 
-// Invokes EncodePinnedTab for each pinned tab in browser.
-static void EncodePinnedTabs(Browser* browser, base::ListValue* values) {
-  TabStripModel* tab_model = browser->tab_strip_model();
-  for (int i = 0; i < tab_model->count() && tab_model->IsTabPinned(i); ++i)
-    EncodePinnedTab(tab_model, i, values);
-}
-
-// Decodes the previously written values in |value| to |tab|, returning true
+// Decodes the previously written values in `value` to `tab`, returning true
 // on success.
-static bool DecodeTab(const base::DictionaryValue& value, StartupTab* tab) {
-  std::string url_string;
-  if (!value.GetString(kURL, &url_string))
-    return false;
-  tab->url = GURL(url_string);
-
-  return true;
+std::optional<StartupTab> DecodeTab(const base::DictValue& value) {
+  const std::string* const url_string = value.FindString(kURL);
+  return url_string ? std::make_optional(StartupTab(GURL(*url_string),
+                                                    StartupTab::Type::kPinned))
+                    : std::nullopt;
 }
+
+}  // namespace
 
 // static
 void PinnedTabCodec::RegisterProfilePrefs(
@@ -85,56 +73,56 @@ void PinnedTabCodec::RegisterProfilePrefs(
 // static
 void PinnedTabCodec::WritePinnedTabs(Profile* profile) {
   PrefService* prefs = profile->GetPrefs();
-  if (!prefs)
+  if (!prefs) {
     return;
+  }
 
   base::ListValue values;
-  for (auto* browser : *BrowserList::GetInstance()) {
-    if (browser->is_type_normal() && browser->profile() == profile &&
-        HasPinnedTabs(browser)) {
-      EncodePinnedTabs(browser, &values);
-    }
-  }
-  prefs->Set(prefs::kPinnedTabs, values);
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [profile, &values](BrowserWindowInterface* browser) {
+        if (browser->GetType() == BrowserWindowInterface::TYPE_NORMAL &&
+            browser->GetProfile() == profile) {
+          EncodePinnedTabs(browser, values);
+        }
+        return true;
+      });
+  prefs->SetList(prefs::kPinnedTabs, std::move(values));
 }
 
 // static
 void PinnedTabCodec::WritePinnedTabs(Profile* profile,
                                      const StartupTabs& tabs) {
   PrefService* prefs = profile->GetPrefs();
-  if (!prefs)
+  if (!prefs) {
     return;
+  }
 
-  ListPrefUpdate update(prefs, prefs::kPinnedTabs);
-  base::ListValue* values = update.Get();
-  values->Clear();
-  for (auto i = tabs.begin(); i != tabs.end(); ++i)
-    EncodeTab(*i, values);
+  ScopedListPrefUpdate update(prefs, prefs::kPinnedTabs);
+  base::ListValue& values = update.Get();
+  values.clear();
+  for (const auto& tab : tabs) {
+    values.Append(EncodeTab(tab.url));
+  }
 }
 
 // static
 StartupTabs PinnedTabCodec::ReadPinnedTabs(Profile* profile) {
   PrefService* prefs = profile->GetPrefs();
-  if (!prefs)
-    return StartupTabs();
-  return ReadPinnedTabs(prefs->GetList(prefs::kPinnedTabs));
-}
+  if (!prefs) {
+    return {};
+  }
 
-// static
-StartupTabs PinnedTabCodec::ReadPinnedTabs(const base::Value* value) {
   StartupTabs results;
 
-  const base::ListValue* tabs_list = NULL;
-  if (!value->GetAsList(&tabs_list))
-    return results;
-
-  for (size_t i = 0, max = tabs_list->GetSize(); i < max; ++i) {
-    const base::DictionaryValue* tab_values = NULL;
-    if (tabs_list->GetDictionary(i, &tab_values)) {
-      StartupTab tab;
-      if (DecodeTab(*tab_values, &tab))
-        results.push_back(tab);
+  for (const auto& serialized_tab : prefs->GetList(prefs::kPinnedTabs)) {
+    if (!serialized_tab.is_dict()) {
+      continue;
+    }
+    std::optional<StartupTab> tab = DecodeTab(serialized_tab.GetDict());
+    if (tab.has_value()) {
+      results.push_back(tab.value());
     }
   }
+
   return results;
 }

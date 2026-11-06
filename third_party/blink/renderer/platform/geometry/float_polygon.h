@@ -30,11 +30,15 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_GEOMETRY_FLOAT_POLYGON_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GEOMETRY_FLOAT_POLYGON_H_
 
-#include "third_party/blink/renderer/platform/geometry/float_point.h"
-#include "third_party/blink/renderer/platform/geometry/float_rect.h"
+#include "base/check_op.h"
+#include "base/memory/raw_ptr.h"
+#include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/pod_interval_tree.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
+#include "ui/gfx/geometry/point_f.h"
+#include "ui/gfx/geometry/rect_f.h"
 
 namespace blink {
 
@@ -44,30 +48,28 @@ class PLATFORM_EXPORT FloatPolygon {
   USING_FAST_MALLOC(FloatPolygon);
 
  public:
-  explicit FloatPolygon(Vector<FloatPoint> vertices);
+  explicit FloatPolygon(Vector<gfx::PointF> vertices);
   FloatPolygon(const FloatPolygon&) = delete;
   FloatPolygon& operator=(const FloatPolygon&) = delete;
 
-  const FloatPoint& VertexAt(unsigned index) const { return vertices_[index]; }
+  const gfx::PointF& VertexAt(unsigned index) const { return vertices_[index]; }
   unsigned NumberOfVertices() const { return vertices_.size(); }
 
   const FloatPolygonEdge& EdgeAt(unsigned index) const { return edges_[index]; }
   unsigned NumberOfEdges() const { return edges_.size(); }
 
-  FloatRect BoundingBox() const { return bounding_box_; }
+  gfx::RectF BoundingBox() const { return bounding_box_; }
   bool OverlappingEdges(float min_y,
                         float max_y,
                         Vector<const FloatPolygonEdge*>& result) const;
-  bool ContainsNonZero(const FloatPoint&) const;
-  bool ContainsEvenOdd(const FloatPoint&) const;
   bool IsEmpty() const { return empty_; }
 
  private:
-  typedef WTF::PODInterval<float, FloatPolygonEdge*> EdgeInterval;
-  typedef WTF::PODIntervalTree<float, FloatPolygonEdge*> EdgeIntervalTree;
+  using EdgeInterval = PodInterval<float, FloatPolygonEdge*>;
+  using EdgeIntervalTree = PodIntervalTree<float, FloatPolygonEdge*>;
 
-  Vector<FloatPoint> vertices_;
-  FloatRect bounding_box_;
+  Vector<gfx::PointF> vertices_;
+  gfx::RectF bounding_box_;
   bool empty_;
   Vector<FloatPolygonEdge> edges_;
   EdgeIntervalTree edge_tree_;  // Each EdgeIntervalTree node stores minY, maxY,
@@ -81,15 +83,15 @@ class PLATFORM_EXPORT VertexPair {
  public:
   virtual ~VertexPair() = default;
 
-  virtual const FloatPoint& Vertex1() const = 0;
-  virtual const FloatPoint& Vertex2() const = 0;
+  virtual const gfx::PointF& Vertex1() const = 0;
+  virtual const gfx::PointF& Vertex2() const = 0;
 
-  float MinX() const { return std::min(Vertex1().X(), Vertex2().X()); }
-  float MinY() const { return std::min(Vertex1().Y(), Vertex2().Y()); }
-  float MaxX() const { return std::max(Vertex1().X(), Vertex2().X()); }
-  float MaxY() const { return std::max(Vertex1().Y(), Vertex2().Y()); }
+  float MinX() const { return std::min(Vertex1().x(), Vertex2().x()); }
+  float MinY() const { return std::min(Vertex1().y(), Vertex2().y()); }
+  float MaxX() const { return std::max(Vertex1().x(), Vertex2().x()); }
+  float MaxY() const { return std::max(Vertex1().y(), Vertex2().y()); }
 
-  bool Intersection(const VertexPair&, FloatPoint&) const;
+  bool Intersection(const VertexPair&, gfx::PointF&) const;
 };
 
 class PLATFORM_EXPORT FloatPolygonEdge final : public VertexPair {
@@ -97,12 +99,12 @@ class PLATFORM_EXPORT FloatPolygonEdge final : public VertexPair {
   friend class FloatPolygon;
 
  public:
-  const FloatPoint& Vertex1() const override {
+  const gfx::PointF& Vertex1() const override {
     DCHECK(polygon_);
     return polygon_->VertexAt(vertex_index1_);
   }
 
-  const FloatPoint& Vertex2() const override {
+  const gfx::PointF& Vertex2() const override {
     DCHECK(polygon_);
     return polygon_->VertexAt(vertex_index2_);
   }
@@ -132,24 +134,21 @@ class PLATFORM_EXPORT FloatPolygonEdge final : public VertexPair {
   unsigned vertex_index1_;
   unsigned vertex_index2_;
   unsigned edge_index_;
-  const FloatPolygon* polygon_;
+  raw_ptr<const FloatPolygon> polygon_;
 };
 
-}  // namespace blink
-
-namespace WTF {
-// These structures are used by PODIntervalTree for debugging.
+// These structures are used by PodIntervalTree for debugging.
 #ifndef NDEBUG
 template <>
-struct ValueToString<blink::FloatPolygonEdge*> {
+struct ValueToString<FloatPolygonEdge*> {
   STATIC_ONLY(ValueToString);
-  static String ToString(const blink::FloatPolygonEdge* edge) {
-    return String::Format("%p (%f,%f %f,%f)", edge, edge->Vertex1().X(),
-                          edge->Vertex1().Y(), edge->Vertex2().X(),
-                          edge->Vertex2().Y());
+  static String ToString(const FloatPolygonEdge* edge) {
+    return Format("{:p} ({:f},{:f} {:f},{:f})", edge, edge->Vertex1().x(),
+                  edge->Vertex1().y(), edge->Vertex2().x(),
+                  edge->Vertex2().y());
   }
 };
 #endif
-}  // namespace WTF
+}  // namespace blink
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_GEOMETRY_FLOAT_POLYGON_H_

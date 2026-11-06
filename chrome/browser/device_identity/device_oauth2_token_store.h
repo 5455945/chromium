@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,9 @@
 
 #include <string>
 
-#include "base/callback_forward.h"
-#include "build/chromeos_buildflags.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
+#include "build/build_config.h"
 #include "google_apis/gaia/core_account_id.h"
 
 // An interface to be implemented per-platform that represents an
@@ -19,7 +20,7 @@ class DeviceOAuth2TokenStore {
   // related to the state of the token storage.
   class Observer {
    public:
-    virtual ~Observer() {}
+    virtual ~Observer() = default;
 
     // Called when the refresh token becomes available, at which point it'll be
     // returned by a call to |GetRefreshToken()|.
@@ -45,7 +46,7 @@ class DeviceOAuth2TokenStore {
   using TrustedAccountIdCallback =
       base::RepeatingCallback<void(bool /* trusted_account_present */)>;
 
-  virtual ~DeviceOAuth2TokenStore() {}
+  virtual ~DeviceOAuth2TokenStore() = default;
 
   // Initialize this storage object and perform necessary setup to be able to
   // store/load and encrypt/decrypt the relevant data. Calls
@@ -74,7 +75,7 @@ class DeviceOAuth2TokenStore {
   // Invokes |callback| when the operation completes.
   virtual void PrepareTrustedAccountId(TrustedAccountIdCallback callback) = 0;
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS)
   // Requests that this store persist the current service account's associated
   // email.
   // On ChromeOS, the account email comes from CrosSettings so this should never
@@ -86,7 +87,7 @@ class DeviceOAuth2TokenStore {
   Observer* observer() { return observer_; }
 
  private:
-  Observer* observer_ = nullptr;
+  raw_ptr<Observer> observer_ = nullptr;
 };
 
 #endif  // CHROME_BROWSER_DEVICE_IDENTITY_DEVICE_OAUTH2_TOKEN_STORE_H_

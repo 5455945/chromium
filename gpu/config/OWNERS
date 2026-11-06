@@ -1,6 +1,5 @@
 kbr@chromium.org
 zmo@chromium.org
+magchen@chromium.org
 
-# Gpu info collection
-per-file *info*=magchen@chromium.org
-per-file *dx_diag*=magchen@chromium.org
+per-file webgpu*=file://third_party/blink/renderer/modules/webgpu/OWNERS

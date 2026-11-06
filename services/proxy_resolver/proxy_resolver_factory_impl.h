@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,6 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
-#include "base/macros.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/unique_receiver_set.h"
@@ -25,6 +23,10 @@ class ProxyResolverFactoryImpl : public mojom::ProxyResolverFactory {
  public:
   explicit ProxyResolverFactoryImpl(
       mojo::PendingReceiver<mojom::ProxyResolverFactory> receiver);
+
+  ProxyResolverFactoryImpl(const ProxyResolverFactoryImpl&) = delete;
+  ProxyResolverFactoryImpl& operator=(const ProxyResolverFactoryImpl&) = delete;
+
   ~ProxyResolverFactoryImpl() override;
 
   // Used by jobs to pass ownership of a newly bound ProxyResolver to this
@@ -57,8 +59,6 @@ class ProxyResolverFactoryImpl : public mojom::ProxyResolverFactory {
 
   mojo::Receiver<mojom::ProxyResolverFactory> receiver_;
   mojo::UniqueReceiverSet<mojom::ProxyResolver> resolvers_;
-
-  DISALLOW_COPY_AND_ASSIGN(ProxyResolverFactoryImpl);
 };
 
 }  // namespace proxy_resolver

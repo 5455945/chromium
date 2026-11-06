@@ -1,16 +1,18 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef MOJO_PUBLIC_CPP_BINDINGS_MESSAGE_DUMPER_H_
 #define MOJO_PUBLIC_CPP_BINDINGS_MESSAGE_DUMPER_H_
 
+#include "base/component_export.h"
 #include "base/files/file_path.h"
 #include "mojo/public/cpp/bindings/message.h"
 
 namespace mojo {
 
-class MessageDumper : public mojo::MessageReceiver {
+class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) MessageDumper
+    : public mojo::MessageReceiver {
  public:
   MessageDumper();
   ~MessageDumper() override;

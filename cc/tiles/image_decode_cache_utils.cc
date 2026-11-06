@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,47 +7,47 @@
 
 #include "cc/tiles/image_decode_cache_utils.h"
 
-#include "base/check.h"
-#include "cc/paint/paint_flags.h"
-#include "third_party/skia/include/core/SkCanvas.h"
-#include "third_party/skia/include/core/SkSurface.h"
+#include "base/byte_size.h"
+#include "base/system/sys_info.h"
+#include "build/build_config.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/device_info.h"
+#include "base/feature_list.h"
+#include "cc/base/features.h"
+#endif
 
 namespace cc {
 
-bool ImageDecodeCacheUtils::ScaleToHalfFloatPixmapUsingN32Intermediate(
-    const SkPixmap& source_pixmap,
-    SkPixmap* scaled_pixmap,
-    SkFilterQuality filter_quality) {
-  // Target pixmap should be half float backed.
-  DCHECK(scaled_pixmap->colorType() == kRGBA_F16_SkColorType);
-  // Filter quality should be medium or high. This is needed if the device
-  // (Android KitKat and lower) does not support mipmaps properly. Mipmaps are
-  // used only for medium and high filter qualities.
-  DCHECK(filter_quality >= kMedium_SkFilterQuality);
+// static
+size_t ImageDecodeCacheUtils::GetWorkingSetBytesForImageDecode(
+    bool for_renderer) {
+  // Note: Android WebView does not use the increased working set budget on
+  // Desktop Android and uses `kDefaultWorkingSet` (see
+  // `layer_tree_settings.cc`).
+  base::ByteSize decoded_image_working_set_budget = kDefaultWorkingSet;
+#if BUILDFLAG(IS_ANDROID)
+  const bool use_desktop_limits =
+      base::android::device_info::is_desktop() &&
+      base::FeatureList::IsEnabled(
+          features::kDesktopAndroidUnifiedCompositorLimits);
+#else
+  constexpr bool use_desktop_limits = true;
+#endif  // BUILDFLAG(IS_ANDROID)
 
-  // Convert to kN32 color type if necessary
-  SkPixmap n32_pixmap = source_pixmap;
-  SkBitmap n32_bitmap;
-  if (source_pixmap.info().colorType() == kRGBA_F16_SkColorType) {
-    SkImageInfo n32_image_info =
-        source_pixmap.info().makeColorType(kN32_SkColorType);
-    if (!n32_bitmap.tryAllocPixels(n32_image_info))
-      return false;
-    n32_pixmap = n32_bitmap.pixmap();
-    source_pixmap.readPixels(n32_pixmap, 0, 0);
+  if (use_desktop_limits && for_renderer) {
+    const bool using_low_memory_policy = base::SysInfo::IsLowEndDevice();
+    // If there's over 4GB of RAM, increase the working set size to 256MB for
+    // both gpu and software.
+    constexpr base::ByteSize kImageDecodeMemoryThreshold = base::GiB(4);
+    if (using_low_memory_policy) {
+      decoded_image_working_set_budget = base::MiB(32);
+    } else if (base::SysInfo::AmountOfTotalPhysicalMemory() >=
+               kImageDecodeMemoryThreshold) {
+      decoded_image_working_set_budget = base::MiB(256);
+    }
   }
-  // Scale
-  SkBitmap n32_resized_bitmap;
-  SkImageInfo n32_resize_info =
-      n32_pixmap.info().makeWH(scaled_pixmap->width(), scaled_pixmap->height());
-  if (!n32_resized_bitmap.tryAllocPixels(n32_resize_info))
-    return false;
-  if (!n32_pixmap.scalePixels(
-          n32_resized_bitmap.pixmap(),
-          PaintFlags::FilterQualityToSkSamplingOptions(filter_quality)))
-    return false;
-  // Convert back to f16 and return
-  return n32_resized_bitmap.readPixels(*scaled_pixmap, 0, 0);
+  return decoded_image_working_set_budget.InBytes();
 }
 
 }  // namespace cc

@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,15 +8,14 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
-#include "base/threading/thread_task_runner_handle.h"
-#include "net/url_request/url_request.h"
+#include "base/test/test_future.h"
 #include "storage/browser/blob/blob_storage_context.h"
 #include "storage/browser/file_system/file_system_context.h"
 #include "storage/browser/file_system/file_system_file_util.h"
@@ -27,6 +26,7 @@
 #include "storage/browser/test/mock_blob_util.h"
 #include "storage/browser/test/mock_file_change_observer.h"
 #include "storage/browser/test/mock_quota_manager.h"
+#include "storage/browser/test/mock_special_storage_policy.h"
 #include "storage/browser/test/test_file_system_backend.h"
 #include "storage/browser/test/test_file_system_context.h"
 #include "storage/common/file_system/file_system_util.h"
@@ -42,16 +42,15 @@ namespace {
 const char kOrigin[] = "http://example.com";
 const FileSystemType kFileSystemType = kFileSystemTypeTest;
 
-void AssertStatusEq(base::File::Error expected, base::File::Error actual) {
-  ASSERT_EQ(expected, actual);
-}
-
 }  // namespace
 
 class FileSystemOperationImplWriteTest : public testing::Test {
  public:
   FileSystemOperationImplWriteTest()
-      : task_environment_(base::test::TaskEnvironment::MainThreadType::IO),
+      : special_storage_policy_(
+            base::MakeRefCounted<MockSpecialStoragePolicy>()),
+        task_environment_(base::test::TaskEnvironment::MainThreadType::IO),
+        virtual_path_(FILE_PATH_LITERAL("temporary file")),
         status_(base::File::FILE_OK),
         cancel_status_(base::File::FILE_ERROR_FAILED),
         bytes_written_(0),
@@ -59,28 +58,34 @@ class FileSystemOperationImplWriteTest : public testing::Test {
     change_observers_ = MockFileChangeObserver::CreateList(&change_observer_);
   }
 
+  FileSystemOperationImplWriteTest(const FileSystemOperationImplWriteTest&) =
+      delete;
+  FileSystemOperationImplWriteTest& operator=(
+      const FileSystemOperationImplWriteTest&) = delete;
+
   void SetUp() override {
-    ASSERT_TRUE(dir_.CreateUniqueTempDir());
+    ASSERT_TRUE(data_dir_.CreateUniqueTempDir());
 
     quota_manager_ = base::MakeRefCounted<MockQuotaManager>(
-        /* is_incognito= */ false, dir_.GetPath(),
-        base::ThreadTaskRunnerHandle::Get().get(),
-        /* special storage policy= */ nullptr);
-    virtual_path_ = base::FilePath(FILE_PATH_LITERAL("temporary file"));
+        /* is_incognito= */ false, data_dir_.GetPath(),
+        base::SingleThreadTaskRunner::GetCurrentDefault(),
+        special_storage_policy_);
 
     file_system_context_ = CreateFileSystemContextForTesting(
-        quota_manager_->proxy(), dir_.GetPath());
+        quota_manager_->proxy(), data_dir_.GetPath());
     blob_storage_context_ = std::make_unique<BlobStorageContext>();
 
+    base::test::TestFuture<base::File::Error> future;
     file_system_context_->operation_runner()->CreateFile(
-        URLForPath(virtual_path_), true /* exclusive */,
-        base::BindOnce(&AssertStatusEq, base::File::FILE_OK));
+        URLForPath(virtual_path_), true /* exclusive */, future.GetCallback());
+    ASSERT_EQ(base::File::FILE_OK, future.Get());
 
     static_cast<TestFileSystemBackend*>(
         file_system_context_->GetFileSystemBackend(kFileSystemType))
         ->AddFileChangeObserver(change_observer());
   }
-
+  void RunUntilIdle() { loop_.RunUntilIdle(); }
+  void Run() { loop_.Run(); }
   void TearDown() override {
     quota_manager_ = nullptr;
     file_system_context_ = nullptr;
@@ -106,7 +111,8 @@ class FileSystemOperationImplWriteTest : public testing::Test {
 
   FileSystemURL URLForPath(const base::FilePath& path) const {
     return file_system_context_->CreateCrackedFileSystemURL(
-        url::Origin::Create(GURL(kOrigin)), kFileSystemType, path);
+        blink::StorageKey::CreateFromStringForTesting(kOrigin), kFileSystemType,
+        path);
   }
 
   // Callback function for recording test results.
@@ -123,15 +129,19 @@ class FileSystemOperationImplWriteTest : public testing::Test {
   void DidWrite(base::File::Error status, int64_t bytes, bool complete) {
     if (status == base::File::FILE_OK) {
       add_bytes_written(bytes, complete);
-      if (complete)
-        base::RunLoop::QuitCurrentWhenIdleDeprecated();
+      if (complete) {
+        ASSERT_FALSE(loop_.AnyQuitCalled());
+        loop_.QuitWhenIdle();
+      }
     } else {
       EXPECT_FALSE(complete_);
       EXPECT_EQ(status_, base::File::FILE_OK);
       complete_ = true;
       status_ = status;
-      if (base::RunLoop::IsRunningOnCurrentThread())
-        base::RunLoop::QuitCurrentWhenIdleDeprecated();
+      if (base::RunLoop::IsRunningOnCurrentThread()) {
+        ASSERT_FALSE(loop_.AnyQuitCalled());
+        loop_.QuitWhenIdle();
+      }
     }
   }
 
@@ -141,13 +151,16 @@ class FileSystemOperationImplWriteTest : public testing::Test {
     return blob_storage_context_.get();
   }
 
+  scoped_refptr<MockSpecialStoragePolicy> special_storage_policy_;
+
+  base::ScopedTempDir data_dir_;
   base::test::TaskEnvironment task_environment_;
+  base::RunLoop loop_;
 
   scoped_refptr<FileSystemContext> file_system_context_;
   scoped_refptr<MockQuotaManager> quota_manager_;
 
-  base::ScopedTempDir dir_;
-  base::FilePath virtual_path_;
+  const base::FilePath virtual_path_;
 
   // For post-operation status.
   base::File::Error status_;
@@ -161,8 +174,6 @@ class FileSystemOperationImplWriteTest : public testing::Test {
   ChangeObserverList change_observers_;
 
   base::WeakPtrFactory<FileSystemOperationImplWriteTest> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(FileSystemOperationImplWriteTest);
 };
 
 TEST_F(FileSystemOperationImplWriteTest, TestWriteSuccess) {
@@ -171,7 +182,7 @@ TEST_F(FileSystemOperationImplWriteTest, TestWriteSuccess) {
   file_system_context_->operation_runner()->Write(URLForPath(virtual_path_),
                                                   blob.GetBlobDataHandle(), 0,
                                                   RecordWriteCallback());
-  base::RunLoop().Run();
+  Run();
 
   EXPECT_EQ(14, bytes_written());
   EXPECT_EQ(base::File::FILE_OK, status());
@@ -185,7 +196,7 @@ TEST_F(FileSystemOperationImplWriteTest, TestWriteZero) {
   file_system_context_->operation_runner()->Write(URLForPath(virtual_path_),
                                                   blob.GetBlobDataHandle(), 0,
                                                   RecordWriteCallback());
-  base::RunLoop().Run();
+  Run();
 
   EXPECT_EQ(0, bytes_written());
   EXPECT_EQ(base::File::FILE_OK, status());
@@ -199,7 +210,7 @@ TEST_F(FileSystemOperationImplWriteTest, TestWriteInvalidBlob) {
   file_system_context_->operation_runner()->Write(URLForPath(virtual_path_),
                                                   std::move(null_handle), 0,
                                                   RecordWriteCallback());
-  base::RunLoop().Run();
+  Run();
 
   EXPECT_EQ(0, bytes_written());
   EXPECT_EQ(base::File::FILE_ERROR_FAILED, status());
@@ -214,7 +225,7 @@ TEST_F(FileSystemOperationImplWriteTest, TestWriteInvalidFile) {
   file_system_context_->operation_runner()->Write(
       URLForPath(base::FilePath(FILE_PATH_LITERAL("nonexist"))),
       blob.GetBlobDataHandle(), 0, RecordWriteCallback());
-  base::RunLoop().Run();
+  Run();
 
   EXPECT_EQ(0, bytes_written());
   EXPECT_EQ(base::File::FILE_ERROR_NOT_FOUND, status());
@@ -225,16 +236,19 @@ TEST_F(FileSystemOperationImplWriteTest, TestWriteInvalidFile) {
 
 TEST_F(FileSystemOperationImplWriteTest, TestWriteDir) {
   base::FilePath virtual_dir_path(FILE_PATH_LITERAL("d"));
+
+  base::test::TestFuture<base::File::Error> future;
   file_system_context_->operation_runner()->CreateDirectory(
       URLForPath(virtual_dir_path), true /* exclusive */, false /* recursive */,
-      base::BindOnce(&AssertStatusEq, base::File::FILE_OK));
+      future.GetCallback());
+  ASSERT_EQ(base::File::FILE_OK, future.Get());
 
   ScopedTextBlob blob(blob_storage_context(), "blob:writedir",
                       "It\'ll not be written, too.");
   file_system_context_->operation_runner()->Write(URLForPath(virtual_dir_path),
                                                   blob.GetBlobDataHandle(), 0,
                                                   RecordWriteCallback());
-  base::RunLoop().Run();
+  Run();
 
   EXPECT_EQ(0, bytes_written());
   // TODO(kinuko): This error code is platform- or fileutil- dependent
@@ -251,12 +265,11 @@ TEST_F(FileSystemOperationImplWriteTest, TestWriteFailureByQuota) {
   ScopedTextBlob blob(blob_storage_context(), "blob:success",
                       "Hello, world!\n");
   quota_manager_->SetQuota(
-      blink::StorageKey::CreateFromStringForTesting(kOrigin),
-      FileSystemTypeToQuotaStorageType(kFileSystemType), 10);
+      blink::StorageKey::CreateFromStringForTesting(kOrigin), 10);
   file_system_context_->operation_runner()->Write(URLForPath(virtual_path_),
                                                   blob.GetBlobDataHandle(), 0,
                                                   RecordWriteCallback());
-  base::RunLoop().Run();
+  Run();
 
   EXPECT_EQ(10, bytes_written());
   EXPECT_EQ(base::File::FILE_ERROR_NO_SPACE, status());
@@ -276,7 +289,7 @@ TEST_F(FileSystemOperationImplWriteTest, TestImmediateCancelSuccessfulWrite) {
   // We use RunAllPendings() instead of Run() here, because we won't dispatch
   // callbacks after Cancel() is issued (so no chance to Quit) nor do we need
   // to run another write cycle.
-  base::RunLoop().RunUntilIdle();
+  RunUntilIdle();
 
   // Issued Cancel() before receiving any response from Write(),
   // so nothing should have happen.
@@ -299,7 +312,7 @@ TEST_F(FileSystemOperationImplWriteTest, TestImmediateCancelFailingWrite) {
   // We use RunAllPendings() instead of Run() here, because we won't dispatch
   // callbacks after Cancel() is issued (so no chance to Quit) nor do we need
   // to run another write cycle.
-  base::RunLoop().RunUntilIdle();
+  RunUntilIdle();
 
   // Issued Cancel() before receiving any response from Write(),
   // so nothing should have happen.

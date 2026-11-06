@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,15 +8,21 @@
 #include <stddef.h>
 
 #include <string>
+#include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
-#include "chrome/browser/extensions/extension_service_test_base.h"
+#include "chrome/browser/extensions/extension_service_user_test_base.h"
+#include "components/sync/model/sync_data.h"
+#include "components/sync/test/fake_sync_change_processor.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_registry_observer.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/feature_switch.h"
 #include "extensions/common/mojom/manifest.mojom-shared.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace base {
 class FilePath;
@@ -28,19 +34,27 @@ class BrowserTaskEnvironment;
 
 namespace extensions {
 
-// An enhancement of ExtensionServiceTestBase that provides helpers to install,
-// update, and uninstall extensions.
-class ExtensionServiceTestWithInstall : public ExtensionServiceTestBase,
+// An enhancement of ExtensionServiceUserTestBase that provides helpers to
+// install, update, and uninstall extensions.
+class ExtensionServiceTestWithInstall : public ExtensionServiceUserTestBase,
                                         public ExtensionRegistryObserver {
  public:
   ExtensionServiceTestWithInstall();
   explicit ExtensionServiceTestWithInstall(
       std::unique_ptr<content::BrowserTaskEnvironment> task_environment);
+
+  ExtensionServiceTestWithInstall(const ExtensionServiceTestWithInstall&) =
+      delete;
+  ExtensionServiceTestWithInstall& operator=(
+      const ExtensionServiceTestWithInstall&) = delete;
+
   ~ExtensionServiceTestWithInstall() override;
 
+  // ExtensionServiceUserTestBase overrides:
+  void TearDown() override;
+
  protected:
-  void InitializeExtensionService(
-      const ExtensionServiceInitParams& params) override;
+  void InitializeExtensionService(ExtensionServiceInitParams params) override;
 
   static std::vector<std::u16string> GetErrors();
 
@@ -85,16 +99,16 @@ class ExtensionServiceTestWithInstall : public ExtensionServiceTestBase,
                                           InstallState install_state);
 
   // Verifies the result of a CRX installation. Used by InstallCRX. Set the
-  // |install_state| to INSTALL_FAILED if the installation is expected to fail.
+  // `install_state` to INSTALL_FAILED if the installation is expected to fail.
   // Returns an Extension pointer if the install succeeded, null otherwise.
   const Extension* VerifyCrxInstall(const base::FilePath& path,
                                     InstallState install_state);
 
   // Verifies the result of a CRX installation. Used by InstallCRX. Set the
-  // |install_state| to INSTALL_FAILED if the installation is expected to fail.
-  // If |install_state| is INSTALL_UPDATED, and |expected_old_name| is
+  // `install_state` to INSTALL_FAILED if the installation is expected to fail.
+  // If `install_state` is INSTALL_UPDATED, and `expected_old_name` is
   // non-empty, expects that the existing extension's title was
-  // |expected_old_name|.
+  // `expected_old_name`.
   // Returns an Extension pointer if the install succeeded, null otherwise.
   const Extension* VerifyCrxInstall(const base::FilePath& path,
                                     InstallState install_state,
@@ -118,9 +132,31 @@ class ExtensionServiceTestWithInstall : public ExtensionServiceTestBase,
                        const base::FilePath& in_path,
                        UpdateState expected_state);
 
-  void UninstallExtension(const std::string& id);
+  enum UninstallExtensionFileDeleteType {
+    kDeletePath,         // Delete the exact path of the extension install.
+    kDeleteAllVersions,  // Delete all version of the extension (e.g. delete the
+                         // root of the install folder).
+    kDoNotDelete,        // Do not delete any of the extension's files.
+  };
+
+  // Uninstalls extension with `id` and expects deletion of the extension's
+  // files according to `delete_type`.
+  void UninstallExtension(
+      const std::string& id,
+      UninstallExtensionFileDeleteType delete_type = kDeleteAllVersions,
+      extensions::UninstallReason reason =
+          extensions::UNINSTALL_REASON_FOR_TESTING);
 
   void TerminateExtension(const std::string& id);
+
+  void BlockAllExtensions();
+
+  void ClearLoadedExtensions();
+
+  const ExtensionList& loaded_extensions() const { return loaded_extensions_; }
+  const Extension* installed_extension() const { return installed_extension_; }
+  bool was_update() const { return was_update_; }
+  UnloadedExtensionReason unloaded_reason() const { return unloaded_reason_; }
 
   // ExtensionRegistryObserver:
   void OnExtensionLoaded(content::BrowserContext* browser_context,
@@ -133,28 +169,60 @@ class ExtensionServiceTestWithInstall : public ExtensionServiceTestBase,
                                   bool is_update,
                                   const std::string& old_name) override;
 
-  // TODO(treib,devlin): Make these private and add accessors as needed.
-  extensions::ExtensionList loaded_;
-  const Extension* installed_;
-  bool was_update_;
-  std::string old_name_;
-  std::string unloaded_id_;
-  UnloadedExtensionReason unloaded_reason_;
-
  private:
   void InstallCRXInternal(const base::FilePath& crx_path,
                           mojom::ManifestLocation install_location,
                           InstallState install_state,
                           int creation_flags);
 
+  extensions::ExtensionList loaded_extensions_;
+  raw_ptr<const Extension, DanglingUntriaged> installed_extension_;
+  bool was_update_;
+  std::string old_name_;
+  std::string unloaded_id_;
+  UnloadedExtensionReason unloaded_reason_;
   size_t expected_extensions_count_;
 
   FeatureSwitch::ScopedOverride override_external_install_prompt_;
 
   base::ScopedObservation<ExtensionRegistry, ExtensionRegistryObserver>
       registry_observation_{this};
+};
 
-  DISALLOW_COPY_AND_ASSIGN(ExtensionServiceTestWithInstall);
+// This is a FakeSyncChangeProcessor specialization that maintains a store of
+// SyncData items, treating it like a map keyed by the extension id from the
+// SyncData. Each instance of this class should only be used for one data type
+// (which should be either extensions or apps) to match how the real sync
+// system handles things.
+class StatefulChangeProcessor : public syncer::FakeSyncChangeProcessor {
+ public:
+  explicit StatefulChangeProcessor(syncer::DataType expected_type);
+
+  StatefulChangeProcessor(const StatefulChangeProcessor&) = delete;
+  StatefulChangeProcessor& operator=(const StatefulChangeProcessor&) = delete;
+
+  ~StatefulChangeProcessor() override;
+
+  // We let our parent class, FakeSyncChangeProcessor, handle saving the
+  // changes for us, but in addition we "apply" these changes by treating
+  // the FakeSyncChangeProcessor's SyncDataList as a map keyed by extension
+  // id.
+  std::optional<syncer::ModelError> ProcessSyncChanges(
+      const base::Location& from_here,
+      const syncer::SyncChangeList& change_list) override;
+
+  // This is a helper which offers a wrapped version of this object suitable for
+  // passing in to MergeDataAndStartSyncing, which takes a
+  // std::unique_ptr<SyncChangeProcessor>, since in tests we typically don't
+  // want to give up ownership of a local change processor.
+  std::unique_ptr<syncer::SyncChangeProcessor> GetWrapped();
+
+  const syncer::SyncDataList& data() const { return data_; }
+
+ private:
+  // The expected DataType of changes that this processor will see.
+  const syncer::DataType expected_type_;
+  syncer::SyncDataList data_;
 };
 
 }  // namespace extensions

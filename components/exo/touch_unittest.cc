@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,6 +18,8 @@
 #include "components/exo/test/exo_test_data_exchange_delegate.h"
 #include "components/exo/test/exo_test_helper.h"
 #include "components/exo/test/shell_surface_builder.h"
+#include "components/exo/test/test_data_device_delegate.h"
+#include "components/exo/test/test_data_source_delegate.h"
 #include "components/exo/touch_delegate.h"
 #include "components/exo/touch_stylus_delegate.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -30,10 +32,11 @@ namespace exo {
 namespace {
 
 using TouchTest = test::ExoTestBase;
+using test::TestDataSourceDelegate;
 
 class MockTouchDelegate : public TouchDelegate {
  public:
-  MockTouchDelegate() {}
+  MockTouchDelegate() = default;
 
   // Overridden from TouchDelegate:
   MOCK_METHOD1(OnTouchDestroying, void(Touch*));
@@ -49,32 +52,13 @@ class MockTouchDelegate : public TouchDelegate {
 
 class MockTouchStylusDelegate : public TouchStylusDelegate {
  public:
-  MockTouchStylusDelegate() {}
+  MockTouchStylusDelegate() = default;
 
   // Overridden from TouchStylusDelegate:
   MOCK_METHOD1(OnTouchDestroying, void(Touch*));
   MOCK_METHOD2(OnTouchTool, void(int, ui::EventPointerType));
   MOCK_METHOD3(OnTouchForce, void(base::TimeTicks, int, float));
   MOCK_METHOD3(OnTouchTilt, void(base::TimeTicks, int, const gfx::Vector2dF&));
-};
-
-class TestDataSourceDelegate : public DataSourceDelegate {
- public:
-  TestDataSourceDelegate() {}
-
-  // Overridden from DataSourceDelegate:
-  void OnDataSourceDestroying(DataSource* device) override {}
-  void OnTarget(const absl::optional<std::string>& mime_type) override {}
-  void OnSend(const std::string& mime_type, base::ScopedFD fd) override {}
-  void OnCancelled() override {}
-  void OnDndDropPerformed() override {}
-  void OnDndFinished() override {}
-  void OnAction(DndAction dnd_action) override {}
-  bool CanAcceptDataEventsForSurface(Surface* surface) const override {
-    return true;
-  }
-
-  DISALLOW_COPY_AND_ASSIGN(TestDataSourceDelegate);
 };
 
 TEST_F(TouchTest, OnTouchDown) {
@@ -255,7 +239,7 @@ TEST_F(TouchTest, OnTouchCancel) {
   EXPECT_CALL(delegate, OnTouchCancel());
   EXPECT_CALL(delegate, OnTouchFrame());
   ui::TouchEvent cancel_event(
-      ui::ET_TOUCH_CANCELLED, gfx::Point(), ui::EventTimeForNow(),
+      ui::EventType::kTouchCancelled, gfx::Point(), ui::EventTimeForNow(),
       ui::PointerDetails(ui::EventPointerType::kTouch, 1));
   generator.Dispatch(&cancel_event);
 
@@ -530,7 +514,8 @@ TEST_F(TouchTest, OnTouchTilt) {
 
 TEST_F(TouchTest, DragDropAbort) {
   Seat seat(std::make_unique<TestDataExchangeDelegate>());
-
+  test::TestDataDeviceDelegate data_device_delegate;
+  DataDevice data_device(&data_device_delegate, &seat);
   MockTouchDelegate touch_delegate;
   std::unique_ptr<Touch> touch(new Touch(&touch_delegate, &seat));
   TestDataSourceDelegate data_source_delegate;
@@ -539,8 +524,8 @@ TEST_F(TouchTest, DragDropAbort) {
 
   // Make origin into a real window so the touch can click it
   ShellSurface shell_surface(&origin);
-  Buffer buffer(exo_test_helper()->CreateGpuMemoryBuffer(gfx::Size(10, 10)));
-  origin.Attach(&buffer);
+  auto buffer = test::ExoTestHelper::CreateBuffer(gfx::Size(10, 10));
+  origin.Attach(buffer.get());
   origin.Commit();
 
   ui::test::EventGenerator generator(ash::Shell::GetPrimaryRootWindow());
@@ -550,7 +535,8 @@ TEST_F(TouchTest, DragDropAbort) {
   EXPECT_CALL(touch_delegate, OnTouchFrame()).Times(2);
   generator.MoveTouch(origin.window()->GetBoundsInScreen().origin());
 
-  seat.StartDrag(&source, &origin, &icon, ui::mojom::DragEventSource::kMouse);
+  data_device.StartDrag(&source, &origin, &icon,
+                        ui::mojom::DragEventSource::kMouse);
   EXPECT_TRUE(seat.get_drag_drop_operation_for_testing());
 
   EXPECT_CALL(touch_delegate, OnTouchDown).Times(1);
@@ -625,6 +611,39 @@ TEST_F(TouchTest, TouchMultiple2Surfaces) {
 
   EXPECT_CALL(delegate, OnTouchDestroying(touch.get()));
   touch.reset();
+}
+
+TEST_F(TouchTest, IgnoresHandledEvents) {
+  // A very dumb handler that simply marks all events as handled. This is needed
+  // allows us to mark a mouse event as handled as it gets processed by the
+  // event processor.
+  class SetHandledHandler : public ui::EventHandler {
+    void OnTouchEvent(ui::TouchEvent* event) override { event->SetHandled(); }
+  };
+  SetHandledHandler handler;
+  ash::Shell::Get()->AddPreTargetHandler(&handler);
+
+  Seat seat(std::make_unique<TestDataExchangeDelegate>());
+
+  testing::NiceMock<MockTouchDelegate> touch_delegate;
+  std::unique_ptr<Touch> touch(new Touch(&touch_delegate, &seat));
+
+  // Make origin into a real window so the touch can click it
+  std::unique_ptr<ShellSurface> shell_surface =
+      test::ShellSurfaceBuilder({10, 10}).BuildShellSurface();
+
+  ui::test::EventGenerator generator(ash::Shell::GetPrimaryRootWindow());
+
+  // The SetHandlerHandler should have marked the event as processed. Therefore
+  // the event should simply be ignored.
+  EXPECT_CALL(touch_delegate, OnTouchFrame()).Times(0);
+
+  generator.GestureTapAt(shell_surface->surface_for_testing()
+                             ->window()
+                             ->GetBoundsInScreen()
+                             .CenterPoint());
+
+  ash::Shell::Get()->RemovePreTargetHandler(&handler);
 }
 
 }  // namespace

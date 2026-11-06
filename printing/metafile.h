@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,16 +11,15 @@
 
 #include "base/component_export.h"
 #include "base/containers/span.h"
+#include "base/memory/read_only_shared_memory_region.h"
 #include "build/build_config.h"
 #include "printing/mojom/print.mojom-forward.h"
 #include "printing/native_drawing_context.h"
 
-#if defined(OS_WIN)
-#include <windows.h>
-#elif defined(OS_MAC)
-#include <ApplicationServices/ApplicationServices.h>
-#include <CoreFoundation/CoreFoundation.h>
-#include "base/mac/scoped_cftyperef.h"
+#if BUILDFLAG(IS_WIN)
+#include "base/win/windows_types.h"
+#elif BUILDFLAG(IS_APPLE)
+#include <CoreGraphics/CoreGraphics.h>
 #endif
 
 namespace base {
@@ -35,21 +34,21 @@ class Size;
 namespace printing {
 
 // This class plays metafiles from data stream (usually PDF or EMF).
-class COMPONENT_EXPORT(PRINTING) MetafilePlayer {
+class COMPONENT_EXPORT(PRINTING_METAFILE) MetafilePlayer {
  public:
   MetafilePlayer();
   MetafilePlayer(const MetafilePlayer&) = delete;
   MetafilePlayer& operator=(const MetafilePlayer&) = delete;
   virtual ~MetafilePlayer();
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   // The slow version of Playback(). It enumerates all the records and play them
   // back in the HDC. The trick is that it skip over the records known to have
   // issue with some printers. See Emf::Record::SafePlayback implementation for
   // details.
   virtual bool SafePlayback(printing::NativeDrawingContext hdc) const = 0;
 
-#elif defined(OS_MAC)
+#elif BUILDFLAG(IS_APPLE)
   // Renders the given page into `rect` in the given context.
   // Pages use a 1-based index. `autorotate` determines whether the source PDF
   // should be autorotated to fit on the destination page. `fit_to_page`
@@ -60,13 +59,31 @@ class COMPONENT_EXPORT(PRINTING) MetafilePlayer {
                           const CGRect& rect,
                           bool autorotate,
                           bool fit_to_page) const = 0;
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
   // Populates the buffer with the underlying data. This function should ONLY be
   // called after the metafile is closed. Returns true if writing succeeded.
   virtual bool GetDataAsVector(std::vector<char>* buffer) const = 0;
 
-#if defined(OS_ANDROID)
+  // Generates a read-only shared memory region for the underlying data. This
+  // function should ONLY be called after the metafile is closed.  The returned
+  // region will be invalid if there is an error trying to generate the mapping.
+  virtual base::MappedReadOnlyRegion GetDataAsSharedMemoryRegion() const = 0;
+
+  // Determine if a copy of the data should be explicitly made before operating
+  // on metafile data.  For security purposes it is important to not operate
+  // directly on the metafile data shared across processes, but instead work on
+  // a local copy made of such data.  This query determines if such a copy needs
+  // to be made by the caller, since not all implementations are required to
+  // automatically do so.
+  // TODO(crbug.com/40151989)  Eliminate concern about making a copy when the
+  // shared memory can't be written by the sender.
+  virtual bool ShouldCopySharedMemoryRegionData() const = 0;
+
+  // Identifies the type of encapsulated.
+  virtual mojom::MetafileDataType GetDataType() const = 0;
+
+#if BUILDFLAG(IS_ANDROID)
   // Similar to bool SaveTo(base::File* file) const, but write the data to the
   // file descriptor directly. This is because Android doesn't allow file
   // ownership exchange. This function should ONLY be called after the metafile
@@ -76,12 +93,12 @@ class COMPONENT_EXPORT(PRINTING) MetafilePlayer {
   // Saves the underlying data to the given file. This function should ONLY be
   // called after the metafile is closed. Returns true if writing succeeded.
   virtual bool SaveTo(base::File* file) const = 0;
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
 };
 
 // This class creates a graphics context that renders into a data stream
 // (usually PDF or EMF).
-class COMPONENT_EXPORT(PRINTING) Metafile : public MetafilePlayer {
+class COMPONENT_EXPORT(PRINTING_METAFILE) Metafile : public MetafilePlayer {
  public:
   Metafile();
   Metafile(const Metafile&) = delete;
@@ -94,7 +111,6 @@ class COMPONENT_EXPORT(PRINTING) Metafile : public MetafilePlayer {
   virtual bool Init() = 0;
 
   // Initializes the metafile with `data`. Returns true on success.
-  // Note: It should only be called from within the browser process.
   virtual bool InitFromData(base::span<const uint8_t> data) = 0;
 
   // Prepares a context for rendering a new page with the given `page_size`,
@@ -128,7 +144,7 @@ class COMPONENT_EXPORT(PRINTING) Metafile : public MetafilePlayer {
 
   virtual printing::NativeDrawingContext context() const = 0;
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   // "Plays" the EMF buffer in a HDC. It is the same effect as calling the
   // original GDI function that were called when recording the EMF. `rect` is in
   // "logical units" and is optional. If `rect` is NULL, the natural EMF bounds
@@ -139,13 +155,14 @@ class COMPONENT_EXPORT(PRINTING) Metafile : public MetafilePlayer {
   // it requires user intervention.
   virtual bool Playback(printing::NativeDrawingContext hdc,
                         const RECT* rect) const = 0;
-#endif  // OS_WIN
+#endif  // BUILDFLAG(IS_WIN)
 
-  // MetfilePlayer
+  // MetfilePlayer implementation.
   bool GetDataAsVector(std::vector<char>* buffer) const override;
-#if !defined(OS_ANDROID)
+  base::MappedReadOnlyRegion GetDataAsSharedMemoryRegion() const override;
+#if !BUILDFLAG(IS_ANDROID)
   bool SaveTo(base::File* file) const override;
-#endif  // !defined(OS_ANDROID)
+#endif  // !BUILDFLAG(IS_ANDROID)
 };
 
 }  // namespace printing

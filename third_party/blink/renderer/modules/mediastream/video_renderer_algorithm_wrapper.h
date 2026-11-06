@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "media/base/media_util.h"
 #include "media/base/time_source.h"
@@ -21,6 +20,8 @@ namespace blink {
 
 class VideoRendererAlgorithmWrapper {
  public:
+  enum RendererAlgorithm { kDefault, kLowLatency };
+
   VideoRendererAlgorithmWrapper(
       const media::TimeSource::WallClockTimeCB& wall_clock_time_cb,
       media::MediaLog* media_log);
@@ -33,24 +34,24 @@ class VideoRendererAlgorithmWrapper {
                  media::VideoRendererAlgorithm::ResetFlag::kEverything);
 
   size_t frames_queued() const {
-    return renderer_algorithm_ == RendererAlgorithm::Default
+    return renderer_algorithm_ == RendererAlgorithm::kDefault
                ? default_rendering_frame_buffer_->frames_queued()
                : low_latency_rendering_frame_buffer_->frames_queued();
   }
 
   base::TimeDelta average_frame_duration() const {
-    return renderer_algorithm_ == RendererAlgorithm::Default
+    return renderer_algorithm_ == RendererAlgorithm::kDefault
                ? default_rendering_frame_buffer_->average_frame_duration()
                : low_latency_rendering_frame_buffer_->average_frame_duration();
   }
 
   bool NeedsReferenceTime() const;
 
- private:
-  enum RendererAlgorithm { Default, LowLatency };
+  RendererAlgorithm renderer_algorithm() const { return renderer_algorithm_; }
 
+ private:
   const media::TimeSource::WallClockTimeCB wall_clock_time_cb_;
-  media::MediaLog* media_log_;
+  raw_ptr<media::MediaLog> media_log_;
   RendererAlgorithm renderer_algorithm_;
   std::unique_ptr<media::VideoRendererAlgorithm>
       default_rendering_frame_buffer_;

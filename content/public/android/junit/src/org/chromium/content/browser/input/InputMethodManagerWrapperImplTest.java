@@ -1,9 +1,12 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.content.browser.input;
 
+import static com.google.common.truth.Truth.assertThat;
+
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.when;
 
@@ -12,33 +15,34 @@ import android.content.Context;
 import android.os.Build;
 import android.view.View;
 import android.view.Window;
-import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
 
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.InOrder;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowLog;
 
+import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.content_public.browser.InputMethodManagerWrapper;
+import org.chromium.content_public.common.ContentFeatures;
 import org.chromium.ui.base.WindowAndroid;
 
 import java.lang.ref.WeakReference;
 
-/**
- * A robolectric test for {@link InputMethodManagerWrapperImpl} class.
- */
+/** A robolectric test for {@link InputMethodManagerWrapperImpl} class. */
 @RunWith(BaseRobolectricTestRunner.class)
-// Any VERSION_CODE >= O is fine.
-@Config(manifest = Config.NONE, sdk = Build.VERSION_CODES.O)
 public class InputMethodManagerWrapperImplTest {
-    private static final boolean DEBUG = false;
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     private class TestInputMethodManagerWrapperImpl extends InputMethodManagerWrapperImpl {
         public TestInputMethodManagerWrapperImpl(
@@ -49,35 +53,25 @@ public class InputMethodManagerWrapperImplTest {
         @Override
         protected int getDisplayId(Context context) {
             if (context == mContext) {
-                assert mContextDisplayId != -1;
+                assertThat(mContextDisplayId).isNotEqualTo(-1);
                 return mContextDisplayId;
             }
             if (context == mActivity) {
-                assert mActivityDisplayId != -1;
+                assertThat(mActivityDisplayId).isNotEqualTo(-1);
                 return mActivityDisplayId;
             }
             return super.getDisplayId(context);
         }
     }
 
-    @Mock
-    private Context mContext;
-    @Mock
+    @Mock private Context mContext;
+    @Mock private Window mWindow;
+    @Mock private WindowAndroid mWindowAndroid;
+    @Mock private InputMethodManagerWrapper.Delegate mDelegate;
+    @Mock private InputMethodManager mInputMethodManager;
+
+    private final View mView = new View(ContextUtils.getApplicationContext());
     private Activity mActivity;
-    @Mock
-    private Window mWindow;
-    @Mock
-    private WindowAndroid mWindowAndroid;
-    @Mock
-    private InputMethodManagerWrapper.Delegate mDelegate;
-    @Mock
-    private View mView;
-    @Mock
-    private InputMethodManager mInputMethodManager;
-    @Mock
-    private WindowManager mContextWindowManager;
-    @Mock
-    private WindowManager mActivityWindowManager;
 
     private int mContextDisplayId = -1; // uninitialized
     private int mActivityDisplayId = -1; // uninitialized
@@ -86,19 +80,28 @@ public class InputMethodManagerWrapperImplTest {
 
     private InputMethodManagerWrapperImpl mImmw;
 
-    public InputMethodManagerWrapperImplTest() {
-        if (DEBUG) ShadowLog.stream = System.out;
-    }
+    public InputMethodManagerWrapperImplTest() {}
 
     @Before
     public void setUp() throws Exception {
-        MockitoAnnotations.initMocks(this);
         mImmw = new TestInputMethodManagerWrapperImpl(mContext, mWindowAndroid, mDelegate);
         when(mContext.getSystemService(Context.INPUT_METHOD_SERVICE))
                 .thenReturn(mInputMethodManager);
-        when(mActivity.getSystemService(Context.INPUT_METHOD_SERVICE))
-                .thenReturn(mInputMethodManager);
-        when(mActivity.getWindow()).thenReturn(mWindow);
+        mActivity =
+                new Activity() {
+                    @Override
+                    public Object getSystemService(String name) {
+                        if (Context.INPUT_METHOD_SERVICE.equals(name)) {
+                            return mInputMethodManager;
+                        }
+                        return super.getSystemService(name);
+                    }
+
+                    @Override
+                    public Window getWindow() {
+                        return mWindow;
+                    }
+                };
 
         mInOrder = inOrder(mInputMethodManager, mWindow);
     }
@@ -133,6 +136,9 @@ public class InputMethodManagerWrapperImplTest {
     }
 
     @Test
+    @Config(
+            minSdk = BaseRobolectricTestRunner.MIN_SDK,
+            maxSdk = Build.VERSION_CODES.VANILLA_ICE_CREAM)
     public void testMultiDisplaysWithInputConnection() throws Exception {
         when(mWindowAndroid.getActivity()).thenReturn(new WeakReference<Activity>(mActivity));
         setDisplayIds(0, 1); // context and activity have different display IDs
@@ -148,6 +154,9 @@ public class InputMethodManagerWrapperImplTest {
     }
 
     @Test
+    @Config(
+            minSdk = BaseRobolectricTestRunner.MIN_SDK,
+            maxSdk = Build.VERSION_CODES.VANILLA_ICE_CREAM)
     public void testMultiDisplaysWithoutInputConnection() throws Exception {
         when(mWindowAndroid.getActivity()).thenReturn(new WeakReference<Activity>(mActivity));
         setDisplayIds(0, 1); // context and activity have different display Ids
@@ -163,6 +172,7 @@ public class InputMethodManagerWrapperImplTest {
         mInOrder.verifyNoMoreInteractions();
 
         mImmw.onInputConnectionCreated();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         // Post task: note that PostTask actually does not require
         // Robolectric.getForegroundThreadScheduler().runOneTask() to be called.
@@ -174,11 +184,15 @@ public class InputMethodManagerWrapperImplTest {
     }
 
     @Test
+    @Config(
+            minSdk = BaseRobolectricTestRunner.MIN_SDK,
+            maxSdk = Build.VERSION_CODES.VANILLA_ICE_CREAM)
     public void testMultiDisplaysWithoutInputConnection_hideKeyboard() throws Exception {
         when(mWindowAndroid.getActivity()).thenReturn(new WeakReference<Activity>(mActivity));
         setDisplayIds(0, 1); // context and activity have different display Ids
         when(mDelegate.hasInputConnection()).thenReturn(false);
         when(mInputMethodManager.isActive(mView)).thenReturn(true);
+        doReturn(true).when(mInputMethodManager).isAcceptingText();
 
         mImmw.showSoftInput(mView, 0, null);
 
@@ -192,12 +206,16 @@ public class InputMethodManagerWrapperImplTest {
         mImmw.hideSoftInputFromWindow(null, 0, null);
 
         mImmw.onInputConnectionCreated();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         mInOrder.verify(mInputMethodManager).hideSoftInputFromWindow(null, 0, null);
         // Do not call showSoftInput.
     }
 
     @Test
+    @Config(
+            minSdk = BaseRobolectricTestRunner.MIN_SDK,
+            maxSdk = Build.VERSION_CODES.VANILLA_ICE_CREAM)
     public void testMultiDisplaysWithoutInputConnection_notActive() throws Exception {
         when(mWindowAndroid.getActivity()).thenReturn(new WeakReference<Activity>(mActivity));
         setDisplayIds(0, 1); // context and activity have different display Ids
@@ -216,6 +234,7 @@ public class InputMethodManagerWrapperImplTest {
         mImmw.showSoftInput(mView, 1, null);
 
         mImmw.onInputConnectionCreated();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         // Post task: note that PostTask actually does not require
         // Robolectric.getForegroundThreadScheduler().runOneTask() to be called.
@@ -227,6 +246,9 @@ public class InputMethodManagerWrapperImplTest {
     }
 
     @Test
+    @Config(
+            minSdk = BaseRobolectricTestRunner.MIN_SDK,
+            maxSdk = Build.VERSION_CODES.VANILLA_ICE_CREAM)
     public void testMultiDisplaysWithoutInputConnection_showSoftInputAgain() throws Exception {
         when(mWindowAndroid.getActivity()).thenReturn(new WeakReference<Activity>(mActivity));
         setDisplayIds(0, 1); // context and activity have different display Ids
@@ -245,6 +267,7 @@ public class InputMethodManagerWrapperImplTest {
         mImmw.showSoftInput(mView, 1, null);
 
         mImmw.onInputConnectionCreated();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         // Post task: note that PostTask actually does not require
         // Robolectric.getForegroundThreadScheduler().runOneTask() to be called.
@@ -254,5 +277,38 @@ public class InputMethodManagerWrapperImplTest {
 
         // Note that the first call to showSoftInput was ignored.
         mInOrder.verify(mInputMethodManager).showSoftInput(mView, 1, null);
+    }
+
+    @Test
+    @Config(minSdk = Build.VERSION_CODES.BAKLAVA)
+    @EnableFeatures(ContentFeatures.ANDROID_REMOVE_SET_LOCAL_FOCUS_WORKAROUND_ON_BAKLAVA)
+    public void testMultiDisplaysOnBaklavaAndAbove() throws Exception {
+        when(mWindowAndroid.getActivity()).thenReturn(new WeakReference<Activity>(mActivity));
+        setDisplayIds(0, 1); // context and activity have different display IDs
+        when(mDelegate.hasInputConnection()).thenReturn(false);
+        when(mInputMethodManager.isActive(mView)).thenReturn(true);
+
+        mImmw.showSoftInput(mView, 0, null);
+
+        // On Baklava and above, when the feature is enabled, the multi-display workaround and delay
+        // are skipped, so showSoftInput is called immediately even without an InputConnection.
+        mInOrder.verify(mInputMethodManager).showSoftInput(mView, 0, null);
+    }
+
+    @Test
+    @Config(minSdk = Build.VERSION_CODES.BAKLAVA)
+    @DisableFeatures(ContentFeatures.ANDROID_REMOVE_SET_LOCAL_FOCUS_WORKAROUND_ON_BAKLAVA)
+    public void testMultiDisplaysOnBaklavaAndAbove_featureDisabled() throws Exception {
+        when(mWindowAndroid.getActivity()).thenReturn(new WeakReference<Activity>(mActivity));
+        setDisplayIds(0, 1); // context and activity have different display IDs
+        when(mDelegate.hasInputConnection()).thenReturn(false);
+        when(mInputMethodManager.isActive(mView)).thenReturn(true);
+
+        mImmw.showSoftInput(mView, 0, null);
+
+        // On Baklava and above, when the feature is disabled, we still run the multi-display
+        // workaround and delay waiting for InputConnection.
+        mInOrder.verify(mWindow).setLocalFocus(true, true);
+        mInOrder.verifyNoMoreInteractions();
     }
 }

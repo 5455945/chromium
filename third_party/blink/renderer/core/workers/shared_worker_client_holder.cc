@@ -32,15 +32,16 @@
 
 #include <memory>
 #include <utility>
+
 #include "base/check.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/common/messaging/message_port_channel.h"
 #include "third_party/blink/public/common/security_context/insecure_request_policy.h"
 #include "third_party/blink/public/mojom/blob/blob_url_store.mojom-blink.h"
 #include "third_party/blink/public/mojom/loader/fetch_client_settings_object.mojom-blink.h"
 #include "third_party/blink/public/mojom/security_context/insecure_request_policy.mojom-blink.h"
 #include "third_party/blink/public/mojom/worker/shared_worker_info.mojom-blink.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/public/platform/web_url.h"
 #include "third_party/blink/public/web/blink.h"
@@ -49,6 +50,7 @@
 #include "third_party/blink/renderer/core/fetch/request.h"
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
 #include "third_party/blink/renderer/core/script/script.h"
+#include "third_party/blink/renderer/core/workers/outside_settings_csp_violation_reporter.h"
 #include "third_party/blink/renderer/core/workers/shared_worker.h"
 #include "third_party/blink/renderer/core/workers/shared_worker_client.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_client_settings_object_snapshot.h"
@@ -88,7 +90,11 @@ void SharedWorkerClientHolder::Connect(
     const KURL& url,
     mojo::PendingRemote<mojom::blink::BlobURLToken> blob_url_token,
     mojom::blink::WorkerOptionsPtr options,
-    ukm::SourceId client_ukm_source_id) {
+    mojom::blink::SharedWorkerSameSiteCookies same_site_cookies,
+    const HeapMojoRemote<mojom::blink::SharedWorkerConnector>*
+        connector_override,
+    bool extended_lifetime,
+    const network::PermissionsPolicyFeaturesBitset& permissions_policy) {
   DCHECK(IsMainThread());
   DCHECK(options);
 
@@ -115,18 +121,23 @@ void SharedWorkerClientHolder::Connect(
       mojo::Clone(worker->GetExecutionContext()
                       ->GetContentSecurityPolicy()
                       ->GetParsedPolicies()),
-      worker->GetExecutionContext()->AddressSpace(),
       mojom::blink::FetchClientSettingsObject::New(
-          outside_fetch_client_settings_object->GetReferrerPolicy(),
+          outside_fetch_client_settings_object->GetPolicyContainerPolicies()
+              .Clone(),
           KURL(outside_fetch_client_settings_object->GetOutgoingReferrer()),
-          insecure_requests_policy));
+          insecure_requests_policy),
+      OutsideSettingsCSPViolationReporter::BindNewRemote(
+          *worker->GetExecutionContext()),
+      same_site_cookies, extended_lifetime, permissions_policy);
 
-  connector_->Connect(
+  const HeapMojoRemote<mojom::blink::SharedWorkerConnector>& connector =
+      connector_override ? *connector_override : connector_;
+  connector->Connect(
       std::move(info), std::move(client),
       worker->GetExecutionContext()->IsSecureContext()
           ? mojom::blink::SharedWorkerCreationContextType::kSecure
           : mojom::blink::SharedWorkerCreationContextType::kNonsecure,
-      port.ReleaseHandle(), std::move(blob_url_token), client_ukm_source_id);
+      port.ReleaseHandle(), std::move(blob_url_token));
 }
 
 void SharedWorkerClientHolder::Trace(Visitor* visitor) const {

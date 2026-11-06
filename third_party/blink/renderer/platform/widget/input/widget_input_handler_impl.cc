@@ -1,18 +1,26 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/platform/widget/input/widget_input_handler_impl.h"
 
 #include <utility>
+#include <variant>
 
-#include "base/bind.h"
 #include "base/check.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/task/current_thread.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/trace_event/trace_event.h"
+#include "build/build_config.h"
 #include "mojo/public/cpp/bindings/self_owned_associated_receiver.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/input/web_coalesced_input_event.h"
 #include "third_party/blink/public/common/input/web_keyboard_event.h"
+#include "third_party/blink/public/mojom/input/input_handler.mojom-blink.h"
 #include "third_party/blink/public/platform/platform.h"
-#include "third_party/blink/public/platform/scheduler/web_thread_scheduler.h"
+#include "third_party/blink/renderer/platform/graphics/dom_node_id.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread.h"
 #include "third_party/blink/renderer/platform/widget/input/frame_widget_input_handler_impl.h"
 #include "third_party/blink/renderer/platform/widget/input/widget_input_handler_manager.h"
@@ -32,33 +40,54 @@ void RunClosureIfNotSwappedOut(base::WeakPtr<WidgetBase> widget,
   std::move(closure).Run();
 }
 
+void RunPingCallback(
+    scoped_refptr<base::SingleThreadTaskRunner> callback_task_runner,
+    WidgetInputHandlerImpl::PingMainThreadCallback callback) {
+  callback_task_runner->PostTask(FROM_HERE, std::move(callback));
+}
+
 }  // namespace
 
 WidgetInputHandlerImpl::WidgetInputHandlerImpl(
     scoped_refptr<WidgetInputHandlerManager> manager,
-    scoped_refptr<base::SingleThreadTaskRunner> main_thread_task_runner,
     scoped_refptr<MainThreadEventQueue> input_event_queue,
     base::WeakPtr<WidgetBase> widget,
     base::WeakPtr<mojom::blink::FrameWidgetInputHandler>
         frame_widget_input_handler)
-    : main_thread_task_runner_(main_thread_task_runner),
-      input_handler_manager_(manager),
+    : input_handler_manager_(manager),
       input_event_queue_(input_event_queue),
       widget_(std::move(widget)),
-      frame_widget_input_handler_(std::move(frame_widget_input_handler)) {}
+      frame_widget_input_handler_(std::move(frame_widget_input_handler)) {
+  // NOTE: DirectReceiver must be bound on an IO thread, so input handlers which
+  // live on the main thread (e.g. for popups) cannot use direct IPC for now.
+  if (base::CurrentIOThread::IsSet() && mojo::IsDirectReceiverSupported()) {
+    receiver_.emplace<DirectReceiver>(mojo::DirectReceiverKey{}, this);
+  } else {
+    receiver_.emplace<Receiver>(this);
+  }
+}
 
 WidgetInputHandlerImpl::~WidgetInputHandlerImpl() = default;
 
 void WidgetInputHandlerImpl::SetReceiver(
     mojo::PendingReceiver<mojom::blink::WidgetInputHandler>
         interface_receiver) {
-  receiver_.Bind(std::move(interface_receiver));
-  receiver_.set_disconnect_handler(
-      base::BindOnce(&WidgetInputHandlerImpl::Release, base::Unretained(this)));
+  if (std::holds_alternative<Receiver>(receiver_)) {
+    auto& receiver = std::get<Receiver>(receiver_);
+    receiver.Bind(std::move(interface_receiver));
+    receiver.set_disconnect_handler(base::BindOnce(
+        &WidgetInputHandlerImpl::Release, base::Unretained(this)));
+  } else {
+    CHECK(std::holds_alternative<DirectReceiver>(receiver_));
+    auto& receiver = std::get<DirectReceiver>(receiver_);
+    receiver.Bind(std::move(interface_receiver));
+    receiver.set_disconnect_handler(base::BindOnce(
+        &WidgetInputHandlerImpl::Release, base::Unretained(this)));
+  }
 }
 
-void WidgetInputHandlerImpl::SetFocus(bool focused) {
-  RunOnMainThread(base::BindOnce(&WidgetBase::SetFocus, widget_, focused));
+void WidgetInputHandlerImpl::SetFocus(mojom::blink::FocusState focus_state) {
+  RunOnMainThread(base::BindOnce(&WidgetBase::SetFocus, widget_, focus_state));
 }
 
 void WidgetInputHandlerImpl::MouseCaptureLost() {
@@ -76,15 +105,40 @@ void WidgetInputHandlerImpl::CursorVisibilityChanged(bool visible) {
       base::BindOnce(&WidgetBase::CursorVisibilityChange, widget_, visible));
 }
 
+static void ImeSetCompositionOnMainThread(
+    base::WeakPtr<WidgetBase> widget,
+    scoped_refptr<base::SingleThreadTaskRunner> callback_task_runner,
+    const String& text,
+    const Vector<ui::ImeTextSpan>& ime_text_spans,
+    const gfx::Range& range,
+    int32_t start,
+    int32_t end,
+    mojom::blink::ImeState ime_state,
+    DOMNodeIdType target_dom_node_id,
+    WidgetInputHandlerImpl::ImeSetCompositionCallback callback) {
+  gfx::Range composition_range = widget->ImeSetComposition(
+      text, ime_text_spans, range, start, end, ime_state, target_dom_node_id);
+  callback_task_runner->PostTask(
+      FROM_HERE, base::BindOnce(std::move(callback), composition_range));
+}
+
 void WidgetInputHandlerImpl::ImeSetComposition(
     const String& text,
     const Vector<ui::ImeTextSpan>& ime_text_spans,
     const gfx::Range& range,
     int32_t start,
-    int32_t end) {
-  RunOnMainThread(base::BindOnce(&WidgetBase::ImeSetComposition, widget_,
-                                 text.IsolatedCopy(), ime_text_spans, range,
-                                 start, end));
+    int32_t end,
+    mojom::blink::ImeState ime_state,
+    mojom::blink::DOMNodeIdPtr target_dom_node_id,
+    WidgetInputHandlerImpl::ImeSetCompositionCallback callback) {
+  // TODO(470910193): Avoid use of GetCurrentDefault() in Blink.
+  RunOnMainThread(base::BindOnce(
+      &ImeSetCompositionOnMainThread, widget_,
+      base::SingleThreadTaskRunner::GetCurrentDefault(), text, ime_text_spans,
+      range, start, end, ime_state,
+      target_dom_node_id ? DOMNodeIdType(target_dom_node_id->value)
+                         : DOMNodeIdType(),
+      std::move(callback)));
 }
 
 static void ImeCommitTextOnMainThread(
@@ -94,8 +148,10 @@ static void ImeCommitTextOnMainThread(
     const Vector<ui::ImeTextSpan>& ime_text_spans,
     const gfx::Range& range,
     int32_t relative_cursor_position,
+    DOMNodeIdType target_dom_node_id,
     WidgetInputHandlerImpl::ImeCommitTextCallback callback) {
-  widget->ImeCommitText(text, ime_text_spans, range, relative_cursor_position);
+  widget->ImeCommitText(text, ime_text_spans, range, relative_cursor_position,
+                        target_dom_node_id);
   callback_task_runner->PostTask(FROM_HERE, std::move(callback));
 }
 
@@ -104,11 +160,25 @@ void WidgetInputHandlerImpl::ImeCommitText(
     const Vector<ui::ImeTextSpan>& ime_text_spans,
     const gfx::Range& range,
     int32_t relative_cursor_position,
+    mojom::blink::DOMNodeIdPtr target_dom_node_id,
     ImeCommitTextCallback callback) {
+  // TODO(470910193): Avoid use of GetCurrentDefault() in Blink.
   RunOnMainThread(base::BindOnce(
-      &ImeCommitTextOnMainThread, widget_, base::ThreadTaskRunnerHandle::Get(),
-      text.IsolatedCopy(), ime_text_spans, range, relative_cursor_position,
+      &ImeCommitTextOnMainThread, widget_,
+      base::SingleThreadTaskRunner::GetCurrentDefault(), text, ime_text_spans,
+      range, relative_cursor_position,
+      target_dom_node_id ? DOMNodeIdType(target_dom_node_id->value)
+                         : DOMNodeIdType(),
       std::move(callback)));
+}
+
+void WidgetInputHandlerImpl::PasteIntoNode(
+    const String& text,
+    mojom::blink::DOMNodeIdPtr target_dom_node_id) {
+  RunOnMainThread(base::BindOnce(&WidgetBase::PasteIntoNode, widget_, text,
+                                 target_dom_node_id
+                                     ? DOMNodeIdType(target_dom_node_id->value)
+                                     : DOMNodeIdType()));
 }
 
 void WidgetInputHandlerImpl::ImeFinishComposingText(bool keep_selection) {
@@ -129,14 +199,21 @@ void WidgetInputHandlerImpl::RequestCompositionUpdates(bool immediate_request,
 
 void WidgetInputHandlerImpl::DispatchEvent(
     std::unique_ptr<WebCoalescedInputEvent> event,
+    std::optional<std::unique_ptr<blink::WebCoalescedInputEvent>>
+        original_event_for_gesture,
     DispatchEventCallback callback) {
-  TRACE_EVENT0("input", "WidgetInputHandlerImpl::DispatchEvent");
+  TRACE_EVENT("input,input.scrolling", "WidgetInputHandlerImpl::DispatchEvent");
+  if (original_event_for_gesture.has_value()) {
+    input_handler_manager_->DispatchEvent(
+        std::move(original_event_for_gesture.value()), DispatchEventCallback());
+  }
   input_handler_manager_->DispatchEvent(std::move(event), std::move(callback));
 }
 
 void WidgetInputHandlerImpl::DispatchNonBlockingEvent(
     std::unique_ptr<WebCoalescedInputEvent> event) {
-  TRACE_EVENT0("input", "WidgetInputHandlerImpl::DispatchNonBlockingEvent");
+  TRACE_EVENT0("input,input.scrolling",
+               "WidgetInputHandlerImpl::DispatchNonBlockingEvent");
   input_handler_manager_->DispatchEvent(std::move(event),
                                         DispatchEventCallback());
 }
@@ -153,6 +230,16 @@ void WidgetInputHandlerImpl::WaitForInputProcessed(
                      weak_ptr_factory_.GetWeakPtr()));
 }
 
+void WidgetInputHandlerImpl::PingMainThread(PingMainThreadCallback callback) {
+  // TODO(470910193): Avoid use of GetCurrentDefault() in Blink.
+  auto main_thread_task = base::BindOnce(
+      &RunPingCallback, base::SingleThreadTaskRunner::GetCurrentDefault(),
+      std::move(callback));
+
+  // Queue the task onto the MainThreadEventQueue via RunOnMainThread.
+  RunOnMainThread(std::move(main_thread_task));
+}
+
 void WidgetInputHandlerImpl::InputWasProcessed() {
   // The callback can be be invoked when the renderer is hidden and then again
   // when it's shown. We can also be called after Release is called so always
@@ -161,7 +248,7 @@ void WidgetInputHandlerImpl::InputWasProcessed() {
     std::move(input_processed_ack_).Run();
 }
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 void WidgetInputHandlerImpl::AttachSynchronousCompositor(
     mojo::PendingRemote<mojom::blink::SynchronousCompositorControlHost>
         control_host,
@@ -178,13 +265,22 @@ void WidgetInputHandlerImpl::GetFrameWidgetInputHandler(
         frame_receiver) {
   mojo::MakeSelfOwnedAssociatedReceiver(
       std::make_unique<FrameWidgetInputHandlerImpl>(
-          widget_, frame_widget_input_handler_, main_thread_task_runner_,
-          input_event_queue_),
+          widget_, frame_widget_input_handler_, input_event_queue_),
       std::move(frame_receiver));
 }
 
+void WidgetInputHandlerImpl::UpdateBrowserControlsState(
+    cc::BrowserControlsState constraints,
+    cc::BrowserControlsState current,
+    bool animate,
+    const std::optional<cc::BrowserControlsOffsetTagModifications>&
+        offset_tag_modifications) {
+  input_handler_manager_->UpdateBrowserControlsState(
+      constraints, current, animate, offset_tag_modifications);
+}
+
 void WidgetInputHandlerImpl::RunOnMainThread(base::OnceClosure closure) {
-  if (input_event_queue_) {
+  if (ThreadedCompositingEnabled()) {
     input_event_queue_->QueueClosure(base::BindOnce(
         &RunClosureIfNotSwappedOut, widget_, std::move(closure)));
   } else {
@@ -202,15 +298,6 @@ void WidgetInputHandlerImpl::Release() {
   if (input_processed_ack_)
     std::move(input_processed_ack_).Run();
 
-  if (!main_thread_task_runner_->BelongsToCurrentThread()) {
-    // Close the binding on the compositor thread first before telling the main
-    // thread to delete this object.
-    receiver_.reset();
-    main_thread_task_runner_->PostTask(
-        FROM_HERE, base::BindOnce(&WidgetInputHandlerImpl::Release,
-                                  base::Unretained(this)));
-    return;
-  }
   delete this;
 }
 

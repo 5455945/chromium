@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 namespace {
 
 constexpr base::TimeDelta kDefaultSeekTime =
-    base::TimeDelta::FromSeconds(media_session::mojom::kDefaultSeekTimeSeconds);
+    base::Seconds(media_session::mojom::kDefaultSeekTimeSeconds);
 
 }  // namespace
 
@@ -58,10 +58,21 @@ void PerformMediaSessionAction(
     case mojom::MediaSessionAction::kRaise:
       media_controller_remote->Raise();
       break;
+    case mojom::MediaSessionAction::kEnterAutoPictureInPicture:
+      media_controller_remote->EnterAutoPictureInPicture();
+      break;
+    case mojom::MediaSessionAction::kSaveVideoFrame:
+      media_controller_remote->SaveVideoFrame();
+      break;
     case mojom::MediaSessionAction::kSkipAd:
+      media_controller_remote->SkipAd();
+      break;
+    case mojom::MediaSessionAction::kSetMute:
     case mojom::MediaSessionAction::kSeekTo:
     case mojom::MediaSessionAction::kScrubTo:
     case mojom::MediaSessionAction::kSwitchAudioDevice:
+    case mojom::MediaSessionAction::kPreviousSlide:
+    case mojom::MediaSessionAction::kNextSlide:
       break;
   }
 }

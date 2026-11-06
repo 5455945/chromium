@@ -1,43 +1,51 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_PERFORMANCE_MANAGER_GRAPH_PROCESS_NODE_IMPL_H_
 #define COMPONENTS_PERFORMANCE_MANAGER_GRAPH_PROCESS_NODE_IMPL_H_
 
-#include <memory>
+#include <optional>
 #include <string>
+#include <variant>
 
-#include "base/containers/flat_set.h"
-#include "base/macros.h"
+#include "base/byte_size.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/process/process.h"
 #include "base/process/process_handle.h"
 #include "base/time/time.h"
 #include "base/types/pass_key.h"
-#include "components/performance_manager/graph/node_attached_data.h"
+#include "components/performance_manager/decorators/process_priority_aggregator_data.h"
+#include "components/performance_manager/freezing/frozen_data.h"
+#include "components/performance_manager/graph/node_attached_data_storage.h"
 #include "components/performance_manager/graph/node_base.h"
+#include "components/performance_manager/graph/node_inline_data.h"
 #include "components/performance_manager/graph/properties.h"
+#include "components/performance_manager/public/browser_child_process_host_proxy.h"
 #include "components/performance_manager/public/graph/process_node.h"
 #include "components/performance_manager/public/mojom/coordination_unit.mojom.h"
 #include "components/performance_manager/public/mojom/v8_contexts.mojom.h"
 #include "components/performance_manager/public/render_process_host_proxy.h"
+#include "components/performance_manager/resource_attribution/cpu_measurement_data.h"
+#include "components/performance_manager/scenarios/loading_scenario_data.h"
+#include "components/performance_manager/scenarios/performance_scenario_data.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
-
-namespace content {
-class BackgroundTracingManager;
-}  // namespace content
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 namespace performance_manager {
 
 class FrameNodeImpl;
+class FrozenFrameAggregator;
 class ProcessNodeImpl;
 class WorkerNodeImpl;
 
-// A process node follows the lifetime of a RenderProcessHost.
+// Tag used to create a process node for the browser process.
+struct BrowserProcessNodeTag {};
+
+// A process node follows the lifetime of a chrome process.
 // It may reference zero or one processes at a time, but during its lifetime, it
 // may reference more than one process. This can happen if the associated
 // renderer crashes, and an associated frame is then reloaded or re-navigated.
@@ -50,18 +58,43 @@ class WorkerNodeImpl;
 class ProcessNodeImpl
     : public PublicNodeImpl<ProcessNodeImpl, ProcessNode>,
       public TypedNodeBase<ProcessNodeImpl, ProcessNode, ProcessNodeObserver>,
-      public mojom::ProcessCoordinationUnit {
+      public mojom::ProcessCoordinationUnit,
+      public mojom::ChildProcessCoordinationUnit,
+      public SupportsNodeInlineData<
+          ProcessPriorityAggregatorData,
+          FrozenData,
+          PerformanceScenarioData,
+          resource_attribution::CPUMeasurementData,
+          resource_attribution::SharedCPUTimeResultData,
+          LoadingScenarioCounts,
+          // Keep this last to avoid merge conflicts.
+          NodeAttachedDataStorage> {
  public:
   using PassKey = base::PassKey<ProcessNodeImpl>;
 
-  static constexpr NodeTypeEnum Type() { return NodeTypeEnum::kProcess; }
+  using TypedNodeBase<ProcessNodeImpl, ProcessNode, ProcessNodeObserver>::
+      FromNode;
 
+  // Constructor for the browser process.
+  explicit ProcessNodeImpl(BrowserProcessNodeTag tag);
+
+  // Constructor for a renderer process.
+  ProcessNodeImpl(RenderProcessHostProxy proxy,
+                  base::Process::Priority priority);
+
+  // Constructor for a non-renderer child process.
   ProcessNodeImpl(content::ProcessType process_type,
-                  RenderProcessHostProxy render_process_proxy);
+                  BrowserChildProcessHostProxy proxy);
+
+  ProcessNodeImpl(const ProcessNodeImpl&) = delete;
+  ProcessNodeImpl& operator=(const ProcessNodeImpl&) = delete;
 
   ~ProcessNodeImpl() override;
 
-  void Bind(mojo::PendingReceiver<mojom::ProcessCoordinationUnit> receiver);
+  void BindRenderProcessCoordinationUnit(
+      mojo::PendingReceiver<mojom::ProcessCoordinationUnit> receiver);
+  void BindChildProcessCoordinationUnit(
+      mojo::PendingReceiver<mojom::ChildProcessCoordinationUnit> receiver);
 
   // mojom::ProcessCoordinationUnit implementation:
   void SetMainThreadTaskLoadIsLow(bool main_thread_task_load_is_low) override;
@@ -79,76 +112,50 @@ class ProcessNodeImpl
   void OnRemoteIframeDetached(
       const blink::LocalFrameToken& parent_frame_token,
       const blink::RemoteFrameToken& remote_frame_token) override;
-  void FireBackgroundTracingTrigger(const std::string& trigger_name) override;
 
-  void SetProcessExitStatus(int32_t exit_status);
-  void SetProcess(base::Process process, base::Time launch_time);
+  // mojom::ChildProcessCoordinationUnit implementation:
+  void InitializeChildProcessCoordination(
+      InitializeChildProcessCoordinationCallback callback) override;
+
+  // Partial ProcessNode implementation:
+  content::ProcessType GetProcessType() const override;
+  base::ProcessId GetProcessId() const override;
+  const base::Process& GetProcess() const override;
+  resource_attribution::ProcessContext GetResourceContext() const override;
+  base::TimeTicks GetLaunchTime() const override;
+  std::optional<int32_t> GetExitStatus() const override;
+  const std::string& GetMetricsName() const override;
+  bool GetMainThreadTaskLoadIsLow() const override;
+  base::ByteSize GetPrivateFootprint() const override;
+  base::ByteSize GetResidentSet() const override;
+  base::ByteSize GetPrivateSwap() const override;
+  RenderProcessHostId GetRenderProcessHostId() const override;
+  const RenderProcessHostProxy& GetRenderProcessHostProxy() const override;
+  const BrowserChildProcessHostProxy& GetBrowserChildProcessHostProxy()
+      const override;
+  base::Process::Priority GetPriority() const override;
+  ContentTypes GetHostedContentTypes() const override;
 
   // Private implementation properties.
-  void set_private_footprint_kb(uint64_t private_footprint_kb) {
-    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    private_footprint_kb_ = private_footprint_kb;
-  }
-  uint64_t private_footprint_kb() const {
-    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    return private_footprint_kb_;
-  }
-  uint64_t resident_set_kb() const {
-    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    return resident_set_kb_;
-  }
-  void set_resident_set_kb(uint64_t resident_set_kb) {
-    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  NodeSetView<FrameNodeImpl*> frame_nodes() const;
+  NodeSetView<WorkerNodeImpl*> worker_nodes() const;
+  perfetto::Track tracing_track() const;
 
-    resident_set_kb_ = resident_set_kb;
-  }
+  void SetProcessExitStatus(int32_t exit_status);
+  void SetProcessMetricsName(const std::string& metrics_name);
+  void SetProcess(base::Process process, base::TimeTicks launch_time);
 
-  const base::flat_set<FrameNodeImpl*>& frame_nodes() const;
-
-  // Returns the render process id (equivalent to RenderProcessHost::GetID()),
-  // or ChildProcessHost::kInvalidUniqueID if this is not a renderer.
-  RenderProcessHostId GetRenderProcessId() const;
-
-  // If this process is associated with only one page, returns that page.
-  // Otherwise, returns nullptr.
-  PageNodeImpl* GetPageNodeIfExclusive() const;
-
-  content::ProcessType process_type() const {
+  void set_private_footprint(base::ByteSize private_footprint) {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    return process_type_;
+    private_footprint_ = private_footprint;
   }
-  // Use process_id() in preference to process().Pid(). It's always valid to
-  // access, but will return kNullProcessId when the process is not valid. It
-  // will also retain the process ID for a process that has exited.
-  base::ProcessId process_id() const {
+  void set_resident_set(base::ByteSize resident_set) {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    return process_id_;
+    resident_set_ = resident_set;
   }
-  const base::Process& process() const {
+  void set_private_swap(base::ByteSize private_swap) {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    return process_.value();
-  }
-  base::Time launch_time() const {
-    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    return launch_time_;
-  }
-  absl::optional<int32_t> exit_status() const {
-    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    return exit_status_;
-  }
-
-  bool main_thread_task_load_is_low() const {
-    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    return main_thread_task_load_is_low_.value();
-  }
-
-  const RenderProcessHostProxy& render_process_host_proxy() const {
-    return render_process_host_proxy_;
-  }
-
-  base::TaskPriority priority() const {
-    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    return priority_.value();
+    private_swap_ = private_swap;
   }
 
   // Add |frame_node| to this process.
@@ -163,14 +170,17 @@ class ProcessNodeImpl
   // Invoked when the worker is removed from the graph.
   void RemoveWorker(WorkerNodeImpl* worker_node);
 
-  void set_priority(base::TaskPriority priority);
+  void set_priority(base::Process::Priority priority);
+
+  // Adds a new type of hosted content to the |hosted_content_types| bit field.
+  void add_hosted_content_type(ContentType content_type);
+
+  void OnAllFramesInProcessFrozen(base::PassKey<FrozenFrameAggregator>) {
+    OnAllFramesInProcessFrozen();
+  }
 
   void OnAllFramesInProcessFrozenForTesting() { OnAllFramesInProcessFrozen(); }
-  static void FireBackgroundTracingTriggerOnUIForTesting(
-      const std::string& trigger_name,
-      content::BackgroundTracingManager* manager);
 
-  base::WeakPtr<ProcessNodeImpl> GetWeakPtrOnUIThread();
   base::WeakPtr<ProcessNodeImpl> GetWeakPtr();
 
   static PassKey CreatePassKeyForTesting() { return PassKey(); }
@@ -178,41 +188,45 @@ class ProcessNodeImpl
  protected:
   void SetProcessImpl(base::Process process,
                       base::ProcessId process_id,
-                      base::Time launch_time);
+                      base::TimeTicks launch_time);
 
  private:
-  friend class FrozenFrameAggregatorAccess;
   friend class ProcessMetricsDecoratorAccess;
-  friend class ProcessPriorityAggregatorAccess;
 
-  // ProcessNode implementation. These are private so that users of the impl use
-  // the private getters rather than the public interface.
-  content::ProcessType GetProcessType() const override;
-  base::ProcessId GetProcessId() const override;
-  const base::Process& GetProcess() const override;
-  base::Time GetLaunchTime() const override;
-  absl::optional<int32_t> GetExitStatus() const override;
-  bool VisitFrameNodes(const FrameNodeVisitor& visitor) const override;
-  base::flat_set<const FrameNode*> GetFrameNodes() const override;
-  base::flat_set<const WorkerNode*> GetWorkerNodes() const override;
-  bool GetMainThreadTaskLoadIsLow() const override;
-  uint64_t GetPrivateFootprintKb() const override;
-  uint64_t GetResidentSetKb() const override;
-  RenderProcessHostId GetRenderProcessHostId() const override;
-  const RenderProcessHostProxy& GetRenderProcessHostProxy() const override;
-  base::TaskPriority GetPriority() const override;
+  using AnyChildProcessHostProxy =
+      std::variant<RenderProcessHostProxy, BrowserChildProcessHostProxy>;
+
+  static perfetto::Track GetTracingTrack(content::ProcessType process_type,
+                                         const AnyChildProcessHostProxy& proxy);
+
+  // Shared constructor for all process types.
+  ProcessNodeImpl(content::ProcessType process_type,
+                  AnyChildProcessHostProxy proxy,
+                  base::Process::Priority priority);
+
+  // Rest of ProcessNode implementation. These are private so that users of the
+  // impl use the private getters rather than the public interface.
+  NodeSetView<const FrameNode*> GetFrameNodes() const override;
+  NodeSetView<const WorkerNode*> GetWorkerNodes() const override;
 
   void OnAllFramesInProcessFrozen();
 
   // NodeBase:
-  void OnBeforeLeavingGraph() override;
-  void RemoveNodeAttachedData() override;
+  void OnInitializingProperties() override;
+  void OnUninitializingEdges() override;
+  void CleanUpNodeState() override;
 
-  mojo::Receiver<mojom::ProcessCoordinationUnit> receiver_
+  // Receiver for renderer-only messages.
+  mojo::Receiver<mojom::ProcessCoordinationUnit> render_process_receiver_
       GUARDED_BY_CONTEXT(sequence_checker_){this};
 
-  uint64_t private_footprint_kb_ GUARDED_BY_CONTEXT(sequence_checker_) = 0u;
-  uint64_t resident_set_kb_ GUARDED_BY_CONTEXT(sequence_checker_) = 0;
+  // Receiver for messages from all child processes.
+  mojo::Receiver<mojom::ChildProcessCoordinationUnit> child_process_receiver_
+      GUARDED_BY_CONTEXT(sequence_checker_){this};
+
+  base::ByteSize private_footprint_ GUARDED_BY_CONTEXT(sequence_checker_);
+  base::ByteSize resident_set_ GUARDED_BY_CONTEXT(sequence_checker_);
+  base::ByteSize private_swap_ GUARDED_BY_CONTEXT(sequence_checker_);
 
   base::ProcessId process_id_ GUARDED_BY_CONTEXT(sequence_checker_) =
       base::kNullProcessId;
@@ -221,15 +235,20 @@ class ProcessNodeImpl
       &ProcessNodeObserver::OnProcessLifetimeChange>
       process_ GUARDED_BY_CONTEXT(sequence_checker_);
 
-  base::Time launch_time_ GUARDED_BY_CONTEXT(sequence_checker_);
-  absl::optional<int32_t> exit_status_ GUARDED_BY_CONTEXT(sequence_checker_);
+  base::TimeTicks launch_time_ GUARDED_BY_CONTEXT(sequence_checker_);
+  std::optional<int32_t> exit_status_ GUARDED_BY_CONTEXT(sequence_checker_);
+  std::string metrics_name_ GUARDED_BY_CONTEXT(sequence_checker_);
 
-  const content::ProcessType process_type_
-      GUARDED_BY_CONTEXT(sequence_checker_);
+  // The type of the process that this node represents.
+  const content::ProcessType process_type_;
 
-  // This is used during frame node initialization.
-  // TODO(siggi): It seems unnecessary to initialize this at creation time?
-  const RenderProcessHostProxy render_process_host_proxy_;
+  // The proxy that allows access to either the RenderProcessHost or the
+  // BrowserChildProcessHost associated with this process, if `this` is a
+  // process node for a child process (process_type() != PROCESS_TYPE_BROWSER).
+  const AnyChildProcessHostProxy child_process_host_proxy_;
+
+  // The Perfetto ProcessTrack for this process.
+  perfetto::Track tracing_track_ GUARDED_BY_CONTEXT(sequence_checker_);
 
   ObservedProperty::NotifiesOnlyOnChanges<
       bool,
@@ -238,33 +257,25 @@ class ProcessNodeImpl
           false};
 
   // Process priority information. This is aggregated from the priority of
-  // all workers and frames in a given process.
+  // all workers and frames in a given process by the ProcessPriorityAggregator.
+  // Initially high priority until the first execution context it hosts
+  // determine the right priority.
   ObservedProperty::NotifiesOnlyOnChangesWithPreviousValue<
-      base::TaskPriority,
-      base::TaskPriority,
-      &ProcessNodeObserver::OnPriorityChanged>
-      priority_ GUARDED_BY_CONTEXT(sequence_checker_){
-          base::TaskPriority::LOWEST};
+      base::Process::Priority,
+      &ProcessNodeObserver::OnPriorityChanged,
+      TracedWrapper<base::Process::Priority>>
+      priority_ GUARDED_BY_CONTEXT(sequence_checker_);
 
-  base::flat_set<FrameNodeImpl*> frame_nodes_
-      GUARDED_BY_CONTEXT(sequence_checker_);
+  // A bit field that indicates which type of content this process has hosted,
+  // either currently or in the past.
+  ContentTypes hosted_content_types_ GUARDED_BY_CONTEXT(sequence_checker_);
 
-  base::flat_set<WorkerNodeImpl*> worker_nodes_
-      GUARDED_BY_CONTEXT(sequence_checker_);
+  NodeSet frame_nodes_ GUARDED_BY_CONTEXT(sequence_checker_);
 
-  // Inline storage for FrozenFrameAggregator user data.
-  InternalNodeAttachedDataStorage<sizeof(uintptr_t) + 8> frozen_frame_data_
-      GUARDED_BY_CONTEXT(sequence_checker_);
+  NodeSet worker_nodes_ GUARDED_BY_CONTEXT(sequence_checker_);
 
-  // Inline storage for ProcessPriorityAggregator user data.
-  std::unique_ptr<NodeAttachedData> process_priority_data_
-      GUARDED_BY_CONTEXT(sequence_checker_);
-
-  base::WeakPtr<ProcessNodeImpl> weak_this_;
   base::WeakPtrFactory<ProcessNodeImpl> weak_factory_
       GUARDED_BY_CONTEXT(sequence_checker_){this};
-
-  DISALLOW_COPY_AND_ASSIGN(ProcessNodeImpl);
 };
 
 }  // namespace performance_manager

@@ -1,12 +1,13 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_GFX_ANIMATION_SLIDE_ANIMATION_H_
 #define UI_GFX_ANIMATION_SLIDE_ANIMATION_H_
 
-#include "base/macros.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include <optional>
+
+#include "base/memory/raw_ptr.h"
 #include "ui/gfx/animation/linear_animation.h"
 #include "ui/gfx/animation/tween.h"
 
@@ -21,34 +22,32 @@ namespace gfx {
 // class MyClass : public AnimationDelegate {
 //  public:
 //   MyClass() {
-//     animation_ = std::make_unique<SlideAnimation>(this);
-//     animation_->SetSlideDuration(base::TimeDelta::FromMilliseconds(500));
+//     animation_.SetSlideDuration(base::Milliseconds(500));
 //   }
-//   void OnMouseOver() {
-//     animation_->Show();
+//
+//   void OnMouseEntered(const ui::MouseEvent& event) {
+//     animation_.Show();
 //   }
-//   void OnMouseOut() {
-//     animation_->Hide();
+//
+//   void OnMouseExited(const ui::MouseEvent& event) {
+//     animation_.Hide();
 //   }
+//
 //   void AnimationProgressed(const Animation* animation) {
-//     if (animation == animation_.get()) {
-//       Layout();
-//       SchedulePaint();
-//     } else if (animation == other_animation_.get()) {
-//       ...
-//     }
+//     CHECK_EQ(animation, &animation_);
+//     hover_image_.SetOpacity(animation_.GetCurrentValue());
 //   }
-//   void Layout() {
-//     if (animation_->is_animating()) {
-//       hover_image_.SetOpacity(animation_->GetCurrentValue());
-//     }
-//   }
+//
 //  private:
-//   std::unique_ptr<SlideAnimation> animation_;
+//   SlideAnimation animation_{this};
 // }
 class ANIMATION_EXPORT SlideAnimation : public LinearAnimation {
  public:
   explicit SlideAnimation(AnimationDelegate* target);
+
+  SlideAnimation(const SlideAnimation&) = delete;
+  SlideAnimation& operator=(const SlideAnimation&) = delete;
+
   ~SlideAnimation() override;
 
   // Set the animation to some state.
@@ -104,12 +103,12 @@ class ANIMATION_EXPORT SlideAnimation : public LinearAnimation {
   // Overridden from Animation.
   void AnimateToState(double state) override;
 
-  AnimationDelegate* target_;
+  raw_ptr<AnimationDelegate, DanglingUntriaged> target_;
 
   Tween::Type tween_type_ = Tween::EASE_OUT;
 
   // Current animation direction, or nullopt if not animating.
-  absl::optional<Direction> direction_;
+  std::optional<Direction> direction_;
 
   // Animation values. These are a layer on top of Animation::state_ to
   // provide the reversability.
@@ -119,12 +118,10 @@ class ANIMATION_EXPORT SlideAnimation : public LinearAnimation {
 
   // How long a hover in/out animation will last for. This can be overridden
   // with SetSlideDuration().
-  base::TimeDelta slide_duration_ = base::TimeDelta::FromMilliseconds(120);
+  base::TimeDelta slide_duration_ = base::Milliseconds(120);
 
   // Dampens the reduction in duration for animations which start partway.
   double dampening_value_ = 1.0;
-
-  DISALLOW_COPY_AND_ASSIGN(SlideAnimation);
 };
 
 }  // namespace gfx

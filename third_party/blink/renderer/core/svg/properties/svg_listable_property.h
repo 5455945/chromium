@@ -32,6 +32,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_SVG_PROPERTIES_SVG_LISTABLE_PROPERTY_H_
 
 #include "third_party/blink/renderer/core/svg/properties/svg_property.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
 
 namespace blink {
 
@@ -44,7 +45,7 @@ class SVGListablePropertyBase : public SVGPropertyBase {
   SVGListablePropertyBase(const SVGListablePropertyBase&) = delete;
   SVGListablePropertyBase& operator=(const SVGListablePropertyBase&) = delete;
 
-  SVGListPropertyBase* OwnerList() const { return owner_list_; }
+  SVGListPropertyBase* OwnerList() const { return owner_list_.Get(); }
 
   void SetOwnerList(SVGListPropertyBase* owner_list) {
     // Previous owner list must be cleared before setting new owner list.

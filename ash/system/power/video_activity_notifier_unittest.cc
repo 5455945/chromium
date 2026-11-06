@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 
 #include "ash/test/ash_test_base.h"
 #include "ash/wm/video_detector.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "chromeos/dbus/power/fake_power_manager_client.h"
 
 namespace ash {
@@ -16,6 +16,11 @@ namespace ash {
 class VideoActivityNotifierTest : public AshTestBase {
  public:
   VideoActivityNotifierTest() = default;
+
+  VideoActivityNotifierTest(const VideoActivityNotifierTest&) = delete;
+  VideoActivityNotifierTest& operator=(const VideoActivityNotifierTest&) =
+      delete;
+
   ~VideoActivityNotifierTest() override = default;
 
   void SetUp() override {
@@ -29,16 +34,15 @@ class VideoActivityNotifierTest : public AshTestBase {
   void TearDown() override {
     notifier_.reset();
     detector_.reset();
+    power_client_ = nullptr;
     AshTestBase::TearDown();
   }
 
  protected:
-  chromeos::FakePowerManagerClient* power_client_;  // Not owned.
+  raw_ptr<chromeos::FakePowerManagerClient> power_client_;  // Not owned.
 
   std::unique_ptr<VideoDetector> detector_;
   std::unique_ptr<VideoActivityNotifier> notifier_;
-
-  DISALLOW_COPY_AND_ASSIGN(VideoActivityNotifierTest);
 };
 
 // Test that powerd is notified immediately when video changes to a new playing

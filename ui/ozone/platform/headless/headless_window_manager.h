@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,9 @@
 #include <stdint.h>
 
 #include "base/containers/id_map.h"
-#include "base/macros.h"
 #include "base/threading/thread_checker.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/geometry/point.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/ozone/public/surface_factory_ozone.h"
 
 namespace ui {
@@ -20,22 +20,28 @@ class HeadlessWindow;
 class HeadlessWindowManager {
  public:
   HeadlessWindowManager();
+
+  HeadlessWindowManager(const HeadlessWindowManager&) = delete;
+  HeadlessWindowManager& operator=(const HeadlessWindowManager&) = delete;
+
   ~HeadlessWindowManager();
 
   // Register a new window. Returns the window id.
-  int32_t AddWindow(HeadlessWindow* window);
+  gfx::AcceleratedWidget AddWindow(HeadlessWindow* window);
 
   // Remove a window.
-  void RemoveWindow(int32_t window_id, HeadlessWindow* window);
+  void RemoveWindow(gfx::AcceleratedWidget widget, HeadlessWindow* window);
 
   // Find a window object by id;
-  HeadlessWindow* GetWindow(int32_t window_id);
+  HeadlessWindow* GetWindow(gfx::AcceleratedWidget widget);
+
+  // Return an accelerated widget at screen point.
+  gfx::AcceleratedWidget GetAcceleratedWidgetAtScreenPoint(
+      const gfx::Point& point);
 
  private:
   base::IDMap<HeadlessWindow*> windows_;
   base::ThreadChecker thread_checker_;
-
-  DISALLOW_COPY_AND_ASSIGN(HeadlessWindowManager);
 };
 
 }  // namespace ui

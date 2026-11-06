@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,7 @@
 #include <memory>
 
 #include "base/containers/circular_deque.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "media/base/demuxer_stream.h"
 #include "media/mojo/mojom/media_types.mojom.h"
 #include "mojo/public/cpp/system/data_pipe.h"
@@ -44,6 +43,9 @@ class MojoDecoderBufferReader {
   // Hold the consumer handle to read DecoderBuffer data.
   explicit MojoDecoderBufferReader(
       mojo::ScopedDataPipeConsumerHandle consumer_handle);
+
+  MojoDecoderBufferReader(const MojoDecoderBufferReader&) = delete;
+  MojoDecoderBufferReader& operator=(const MojoDecoderBufferReader&) = delete;
 
   ~MojoDecoderBufferReader();
 
@@ -96,9 +98,7 @@ class MojoDecoderBufferReader {
   base::OnceClosure flush_cb_;
 
   // Number of bytes already read into the current buffer.
-  uint32_t bytes_read_;
-
-  DISALLOW_COPY_AND_ASSIGN(MojoDecoderBufferReader);
+  size_t bytes_read_;
 };
 
 // Converts media::DecoderBuffers to mojom::DecoderBuffers, writing the data
@@ -122,6 +122,9 @@ class MojoDecoderBufferWriter {
   // Hold the producer handle to write DecoderBuffer data.
   explicit MojoDecoderBufferWriter(
       mojo::ScopedDataPipeProducerHandle producer_handle);
+
+  MojoDecoderBufferWriter(const MojoDecoderBufferWriter&) = delete;
+  MojoDecoderBufferWriter& operator=(const MojoDecoderBufferWriter&) = delete;
 
   ~MojoDecoderBufferWriter();
 
@@ -149,9 +152,7 @@ class MojoDecoderBufferWriter {
   base::circular_deque<scoped_refptr<DecoderBuffer>> pending_buffers_;
 
   // Number of bytes already written from the current buffer.
-  uint32_t bytes_written_;
-
-  DISALLOW_COPY_AND_ASSIGN(MojoDecoderBufferWriter);
+  size_t bytes_written_;
 };
 
 }  // namespace media

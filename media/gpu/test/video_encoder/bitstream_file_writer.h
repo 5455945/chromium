@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -27,7 +27,9 @@ class BitstreamFileWriter : public BitstreamProcessor {
       const gfx::Size& resolution,
       uint32_t frame_rate,
       uint32_t num_frames,
-      absl::optional<size_t> num_vp9_temporal_layers_to_write = absl::nullopt);
+      std::optional<size_t> spatial_layer_index_to_write = std::nullopt,
+      std::optional<size_t> temporal_layer_index_to_write = std::nullopt,
+      const std::vector<gfx::Size>& spatial_layer_resolutions = {});
   BitstreamFileWriter(const BitstreamFileWriter&) = delete;
   BitstreamFileWriter operator=(const BitstreamFileWriter&) = delete;
   ~BitstreamFileWriter() override;
@@ -39,12 +41,23 @@ class BitstreamFileWriter : public BitstreamProcessor {
  private:
   class FrameFileWriter;
   BitstreamFileWriter(std::unique_ptr<FrameFileWriter> frame_file_writer,
-                      absl::optional<size_t> num_vp9_temporal_layers_to_write_);
+                      std::optional<size_t> spatial_layer_index_to_write,
+                      std::optional<size_t> temporal_layer_index_to_write,
+                      const std::vector<gfx::Size>& spatial_layer_resolutions);
   void WriteBitstreamTask(scoped_refptr<BitstreamRef> bitstream,
                           size_t frame_index);
 
+  // Construct the spatial index conversion table |original_spatial_indices_|
+  // from |spatial_layer_resolutions|.
+  void ConstructSpatialIndices(
+      const std::vector<gfx::Size>& spatial_layer_resolutions);
+
   const std::unique_ptr<FrameFileWriter> frame_file_writer_;
-  const absl::optional<size_t> num_vp9_temporal_layers_to_write_;
+  const std::optional<size_t> spatial_layer_index_to_write_;
+  const std::optional<size_t> temporal_layer_index_to_write_;
+  const std::vector<gfx::Size> spatial_layer_resolutions_;
+
+  uint8_t begin_active_spatial_layer_index_ = 0;
 
   // The number of buffers currently queued for writing.
   size_t num_buffers_writing_ GUARDED_BY(writer_lock_);

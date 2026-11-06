@@ -1,7 +1,7 @@
 {
   "name": "chrome.extension.settings_override",
   "version": "0.1",
-  "manifest_version": 2,
+  "manifest_version": 3,
   "description": "end-to-end browser test for chrome.settings_override API",
   "chrome_settings_overrides": {
     "homepage": "http://www.homepage.__MSG_url_domain__/?param=__PARAM__",
@@ -22,7 +22,7 @@
           "http://www.noo.__MSG_url_domain__/s?q={searchTerms}&id=__PARAM__"
         ],
         "encoding": "UTF-8",
-        "prepopulated_id": 3,
+        "prepopulated_id": 83,
         "is_default": true
     },
     "startup_pages": ["http://www.startup.__MSG_url_domain__/?param=__PARAM__"]

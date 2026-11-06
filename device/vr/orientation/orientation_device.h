@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,8 @@
 
 #include <memory>
 
-#include "base/callback_forward.h"
 #include "base/component_export.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
 #include "base/threading/simple_thread.h"
 #include "build/build_config.h"
 #include "device/vr/public/mojom/vr_service.mojom.h"
@@ -28,10 +27,10 @@ class VROrientationSession;
 // ABSOLUTE_ORIENTATION_QUATERNION because compass readings can be inacurate
 // when used indoors, unless we're on Windows which doesn't support
 // RELATIVE_ORIENTATION_QUATERNION.
-// TODO(crbug.com/730440) If RELATIVE_ORIENTATION_QUATERNION is ever
+// TODO(crbug.com/41323676) If RELATIVE_ORIENTATION_QUATERNION is ever
 // implemented on Windows, use that instead.
 static constexpr mojom::SensorType kOrientationSensorType =
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
     mojom::SensorType::ABSOLUTE_ORIENTATION_QUATERNION;
 #else
     mojom::SensorType::RELATIVE_ORIENTATION_QUATERNION;
@@ -50,6 +49,7 @@ class COMPONENT_EXPORT(VR_ORIENTATION) VROrientationDevice
   void RequestSession(
       mojom::XRRuntimeSessionOptionsPtr options,
       mojom::XRRuntime::RequestSessionCallback callback) override;
+  void ShutdownSession(mojom::XRRuntime::ShutdownSessionCallback) override;
 
   // Indicates whether the device was able to connect to orientation events.
   bool IsAvailable() const { return available_; }
@@ -76,7 +76,7 @@ class COMPONENT_EXPORT(VR_ORIENTATION) VROrientationDevice
   base::OnceClosure ready_callback_;
 
   // The initial state of the world used to define forwards.
-  absl::optional<gfx::Quaternion> base_pose_;
+  std::optional<gfx::Quaternion> base_pose_;
   gfx::Quaternion latest_pose_;
 
   mojo::Remote<mojom::Sensor> sensor_;

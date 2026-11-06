@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -27,7 +27,7 @@ struct PaymentDetailsValidationTestCase {
       : details(details),
         require_total(require_total),
         expect_valid(expect_valid) {}
-  ~PaymentDetailsValidationTestCase() {}
+  ~PaymentDetailsValidationTestCase() = default;
 
   const char* const details;
   const bool require_total;
@@ -44,13 +44,13 @@ class PaymentDetailsValidationTest
     : public ::testing::TestWithParam<PaymentDetailsValidationTestCase> {};
 
 TEST_P(PaymentDetailsValidationTest, Test) {
-  auto value = base::JSONReader::ReadDeprecated(GetParam().details);
-  ASSERT_NE(nullptr, value.get()) << "Should be in JSON format";
-  auto dictionary = base::DictionaryValue::From(std::move(value));
-  ASSERT_NE(nullptr, dictionary.get()) << "Should be a dictionary";
+  std::optional<base::Value> value = base::JSONReader::Read(
+      GetParam().details, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  ASSERT_TRUE(value.has_value()) << "Should be in JSON format";
+  ASSERT_TRUE(value->is_dict());
   PaymentDetails details;
   ASSERT_TRUE(
-      details.FromDictionaryValue(*dictionary, GetParam().require_total));
+      details.FromValueDict(value->GetDict(), GetParam().require_total));
   std::string unused;
 
   EXPECT_EQ(GetParam().expect_valid, ValidatePaymentDetails(details, &unused));

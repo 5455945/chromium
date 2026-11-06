@@ -3,6 +3,7 @@
 dictionary GPUBindGroupLayoutEntry {
     required GPUIndex32 binding;
     required GPUShaderStageFlags visibility;
+    [RuntimeEnabled=WebGPUExperimentalFeatures] GPUSize32 bindingArraySize = 1;
 
     GPUBufferBindingLayout buffer;
     GPUSamplerBindingLayout sampler;
@@ -19,13 +20,5 @@ enum GPUBindingType {
     "comparison-sampler",
     "sampled-texture",
     "multisampled-texture",
-    "readonly-storage-texture",
     "writeonly-storage-texture",
-};
-
-enum GPUTextureComponentType {
-    "float",
-    "sint",
-    "uint",
-    "depth-comparison"
 };

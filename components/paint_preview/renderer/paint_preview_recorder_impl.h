@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -28,8 +28,11 @@ class PaintPreviewRecorderImpl : public content::RenderFrameObserver,
   PaintPreviewRecorderImpl(content::RenderFrame* render_frame);
   ~PaintPreviewRecorderImpl() override;
 
+  // mojom::PaintPreviewRecorder:
   void CapturePaintPreview(mojom::PaintPreviewCaptureParamsPtr params,
                            CapturePaintPreviewCallback callback) override;
+  void GetGeometryMetadata(mojom::GeometryMetadataParamsPtr params,
+                           GetGeometryMetadataCallback callback) override;
 
  private:
   // RenderFrameObserver implementation --------------------------------------
@@ -44,7 +47,6 @@ class PaintPreviewRecorderImpl : public content::RenderFrameObserver,
   // Handles the bulk of the capture.
   void CapturePaintPreviewInternal(
       const mojom::PaintPreviewCaptureParamsPtr& params,
-      mojom::PaintPreviewCaptureResponsePtr region,
       CapturePaintPreviewCallback callback);
 
   bool is_painting_preview_;

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,15 +8,14 @@
 #include <memory>
 
 #include "build/build_config.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/input/web_gesture_event.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/input/web_touch_event.h"
 #include "ui/events/event_constants.h"
-#include "ui/events/gesture_detection/motion_event.h"
 #include "ui/events/types/event_type.h"
 #include "ui/events/types/scroll_input_type.h"
 #include "ui/events/types/scroll_types.h"
+#include "ui/events/velocity_tracker/motion_event.h"
 
 namespace gfx {
 class PointF;
@@ -24,7 +23,7 @@ class Vector2dF;
 }
 
 namespace ui {
-enum class DomCode;
+enum class DomCode : uint32_t;
 class GestureEventAndroid;
 struct GestureEventData;
 struct GestureEventDetails;
@@ -50,7 +49,8 @@ int EventFlagsToWebEventModifiers(int flags);
 
 std::unique_ptr<blink::WebInputEvent> ScaleWebInputEvent(
     const blink::WebInputEvent& event,
-    float scale);
+    float scale,
+    std::optional<int64_t> trace_id = std::nullopt);
 
 // Transforms coordinates and other properties of |event|, by
 // 1) translating / shifting by |delta| and
@@ -60,7 +60,8 @@ std::unique_ptr<blink::WebInputEvent> ScaleWebInputEvent(
 std::unique_ptr<blink::WebInputEvent> TranslateAndScaleWebInputEvent(
     const blink::WebInputEvent& event,
     const gfx::Vector2dF& delta,
-    float scale);
+    float scale,
+    std::optional<int64_t> trace_id = std::nullopt);
 
 blink::WebInputEvent::Type ToWebMouseEventType(MotionEvent::Action action);
 
@@ -90,14 +91,15 @@ EventPointerType WebPointerTypeToEventPointerType(
 
 inline const blink::WebGestureEvent& ToWebGestureEvent(
     const blink::WebInputEvent& event) {
-  DCHECK(blink::WebInputEvent::IsGestureEventType(event.GetType()));
+  CHECK(blink::WebInputEvent::IsGestureEventType(event.GetType()),
+        base::NotFatalUntil::M163);
   return static_cast<const blink::WebGestureEvent&>(event);
 }
 
 blink::WebGestureEvent ScrollBeginFromScrollUpdate(
     const blink::WebGestureEvent& scroll_update);
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 // Convenience method that converts an instance to blink event.
 std::unique_ptr<blink::WebGestureEvent>
 CreateWebGestureEventFromGestureEventAndroid(const GestureEventAndroid& event);

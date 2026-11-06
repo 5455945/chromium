@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,44 +7,29 @@
 //    ../../third_party/xcbproto/src \
 //    gen/ui/gfx/x \
 //    bigreq \
-//    composite \
-//    damage \
-//    dpms \
-//    dri2 \
 //    dri3 \
-//    ge \
 //    glx \
-//    present \
 //    randr \
-//    record \
 //    render \
-//    res \
 //    screensaver \
 //    shape \
 //    shm \
 //    sync \
-//    xc_misc \
-//    xevie \
-//    xf86dri \
-//    xf86vidmode \
 //    xfixes \
-//    xinerama \
 //    xinput \
 //    xkb \
-//    xprint \
 //    xproto \
-//    xselinux \
-//    xtest \
-//    xv \
-//    xvmc
+//    xtest
 
 #include "xfixes.h"
 
+#include <unistd.h>
 #include <xcb/xcb.h>
 #include <xcb/xcbext.h>
 
 #include "base/logging.h"
 #include "base/posix/eintr_wrapper.h"
+#include "ui/gfx/x/connection.h"
 #include "ui/gfx/x/xproto_internal.h"
 
 namespace x11 {
@@ -97,7 +82,7 @@ void ReadEvent<XFixes::SelectionNotifyEvent>(
   // pad0
   Pad(&buf, 8);
 
-  DCHECK_LE(buf.offset, 32ul);
+  CHECK_LE(buf.offset, 32ul);
 }
 
 template <>
@@ -140,13 +125,16 @@ void ReadEvent<XFixes::CursorNotifyEvent>(XFixes::CursorNotifyEvent* event_,
   // pad0
   Pad(&buf, 12);
 
-  DCHECK_LE(buf.offset, 32ul);
+  CHECK_LE(buf.offset, 32ul);
 }
 
 std::string XFixes::BadRegionError::ToString() const {
   std::stringstream ss_;
   ss_ << "XFixes::BadRegionError{";
-  ss_ << ".sequence = " << static_cast<uint64_t>(sequence);
+  ss_ << ".sequence = " << static_cast<uint64_t>(sequence) << ", ";
+  ss_ << ".bad_value = " << static_cast<uint64_t>(bad_value) << ", ";
+  ss_ << ".minor_opcode = " << static_cast<uint64_t>(minor_opcode) << ", ";
+  ss_ << ".major_opcode = " << static_cast<uint64_t>(major_opcode);
   ss_ << "}";
   return ss_.str();
 }
@@ -157,6 +145,9 @@ void ReadError<XFixes::BadRegionError>(XFixes::BadRegionError* error_,
   auto& buf = *buffer;
 
   auto& sequence = (*error_).sequence;
+  auto& bad_value = (*error_).bad_value;
+  auto& minor_opcode = (*error_).minor_opcode;
+  auto& major_opcode = (*error_).major_opcode;
 
   // response_type
   uint8_t response_type;
@@ -169,8 +160,18 @@ void ReadError<XFixes::BadRegionError>(XFixes::BadRegionError* error_,
   // sequence
   Read(&sequence, &buf);
 
-  DCHECK_LE(buf.offset, 32ul);
+  // bad_value
+  Read(&bad_value, &buf);
+
+  // minor_opcode
+  Read(&minor_opcode, &buf);
+
+  // major_opcode
+  Read(&major_opcode, &buf);
+
+  CHECK_LE(buf.offset, 32ul);
 }
+
 Future<XFixes::QueryVersionReply> XFixes::QueryVersion(
     const XFixes::QueryVersionRequest& request) {
   if (!connection_->Ready() || !present())
@@ -247,7 +248,7 @@ std::unique_ptr<XFixes::QueryVersionReply> detail::ReadReply<
   Pad(&buf, 16);
 
   Align(&buf, 4);
-  DCHECK_EQ(buf.offset < 32 ? 0 : buf.offset - 32, 4 * length);
+  CHECK_EQ(buf.offset < 32 ? 0 : buf.offset - 32, 4 * length);
 
   return reply;
 }
@@ -445,7 +446,6 @@ std::unique_ptr<XFixes::GetCursorImageReply> detail::ReadReply<
   auto& yhot = (*reply).yhot;
   auto& cursor_serial = (*reply).cursor_serial;
   auto& cursor_image = (*reply).cursor_image;
-  size_t cursor_image_len = cursor_image.size();
 
   // response_type
   uint8_t response_type;
@@ -493,7 +493,7 @@ std::unique_ptr<XFixes::GetCursorImageReply> detail::ReadReply<
   }
 
   Align(&buf, 4);
-  DCHECK_EQ(buf.offset < 32 ? 0 : buf.offset - 32, 4 * length);
+  CHECK_EQ(buf.offset < 32 ? 0 : buf.offset - 32, 4 * length);
 
   return reply;
 }
@@ -524,7 +524,7 @@ Future<void> XFixes::CreateRegion(const XFixes::CreateRegionRequest& request) {
   buf.Write(&region);
 
   // rectangles
-  DCHECK_EQ(static_cast<size_t>(rectangles_len), rectangles.size());
+  CHECK_EQ(static_cast<size_t>(rectangles_len), rectangles.size());
   for (auto& rectangles_elem : rectangles) {
     // rectangles_elem
     {
@@ -786,7 +786,7 @@ Future<void> XFixes::SetRegion(const XFixes::SetRegionRequest& request) {
   buf.Write(&region);
 
   // rectangles
-  DCHECK_EQ(static_cast<size_t>(rectangles_len), rectangles.size());
+  CHECK_EQ(static_cast<size_t>(rectangles_len), rectangles.size());
   for (auto& rectangles_elem : rectangles) {
     // rectangles_elem
     {
@@ -1174,7 +1174,6 @@ std::unique_ptr<XFixes::FetchRegionReply> detail::ReadReply<
   auto& sequence = (*reply).sequence;
   auto& extents = (*reply).extents;
   auto& rectangles = (*reply).rectangles;
-  size_t rectangles_len = rectangles.size();
 
   // response_type
   uint8_t response_type;
@@ -1238,7 +1237,7 @@ std::unique_ptr<XFixes::FetchRegionReply> detail::ReadReply<
   }
 
   Align(&buf, 4);
-  DCHECK_EQ(buf.offset < 32 ? 0 : buf.offset - 32, 4 * length);
+  CHECK_EQ(buf.offset < 32 ? 0 : buf.offset - 32, 4 * length);
 
   return reply;
 }
@@ -1437,7 +1436,7 @@ Future<void> XFixes::SetCursorName(
   Pad(&buf, 2);
 
   // name
-  DCHECK_EQ(static_cast<size_t>(nbytes), name.size());
+  CHECK_EQ(static_cast<size_t>(nbytes), name.size());
   for (auto& name_elem : name) {
     // name_elem
     buf.Write(&name_elem);
@@ -1498,7 +1497,6 @@ std::unique_ptr<XFixes::GetCursorNameReply> detail::ReadReply<
   auto& atom = (*reply).atom;
   uint16_t nbytes{};
   auto& name = (*reply).name;
-  size_t name_len = name.size();
 
   // response_type
   uint8_t response_type;
@@ -1531,7 +1529,7 @@ std::unique_ptr<XFixes::GetCursorNameReply> detail::ReadReply<
   }
 
   Align(&buf, 4);
-  DCHECK_EQ(buf.offset < 32 ? 0 : buf.offset - 32, 4 * length);
+  CHECK_EQ(buf.offset < 32 ? 0 : buf.offset - 32, 4 * length);
 
   return reply;
 }
@@ -1583,9 +1581,7 @@ std::unique_ptr<XFixes::GetCursorImageAndNameReply> detail::ReadReply<
   auto& cursor_atom = (*reply).cursor_atom;
   uint16_t nbytes{};
   auto& cursor_image = (*reply).cursor_image;
-  size_t cursor_image_len = cursor_image.size();
   auto& name = (*reply).name;
-  size_t name_len = name.size();
 
   // response_type
   uint8_t response_type;
@@ -1646,7 +1642,7 @@ std::unique_ptr<XFixes::GetCursorImageAndNameReply> detail::ReadReply<
   }
 
   Align(&buf, 4);
-  DCHECK_EQ(buf.offset < 32 ? 0 : buf.offset - 32, 4 * length);
+  CHECK_EQ(buf.offset < 32 ? 0 : buf.offset - 32, 4 * length);
 
   return reply;
 }
@@ -1723,7 +1719,7 @@ Future<void> XFixes::ChangeCursorByName(
   Pad(&buf, 2);
 
   // name
-  DCHECK_EQ(static_cast<size_t>(nbytes), name.size());
+  CHECK_EQ(static_cast<size_t>(nbytes), name.size());
   for (auto& name_elem : name) {
     // name_elem
     buf.Write(&name_elem);
@@ -1924,7 +1920,7 @@ Future<void> XFixes::CreatePointerBarrier(
   buf.Write(&num_devices);
 
   // devices
-  DCHECK_EQ(static_cast<size_t>(num_devices), devices.size());
+  CHECK_EQ(static_cast<size_t>(num_devices), devices.size());
   for (auto& devices_elem : devices) {
     // devices_elem
     buf.Write(&devices_elem);
@@ -1982,6 +1978,112 @@ Future<void> XFixes::DeletePointerBarrier(
 Future<void> XFixes::DeletePointerBarrier(const Barrier& barrier) {
   return XFixes::DeletePointerBarrier(
       XFixes::DeletePointerBarrierRequest{barrier});
+}
+
+Future<void> XFixes::SetClientDisconnectMode(
+    const XFixes::SetClientDisconnectModeRequest& request) {
+  if (!connection_->Ready() || !present())
+    return {};
+
+  WriteBuffer buf;
+
+  auto& disconnect_mode = request.disconnect_mode;
+
+  // major_opcode
+  uint8_t major_opcode = info_.major_opcode;
+  buf.Write(&major_opcode);
+
+  // minor_opcode
+  uint8_t minor_opcode = 33;
+  buf.Write(&minor_opcode);
+
+  // length
+  // Caller fills in length for writes.
+  Pad(&buf, sizeof(uint16_t));
+
+  // disconnect_mode
+  uint32_t tmp10;
+  tmp10 = static_cast<uint32_t>(disconnect_mode);
+  buf.Write(&tmp10);
+
+  Align(&buf, 4);
+
+  return connection_->SendRequest<void>(&buf, "XFixes::SetClientDisconnectMode",
+                                        false);
+}
+
+Future<void> XFixes::SetClientDisconnectMode(
+    const ClientDisconnectFlags& disconnect_mode) {
+  return XFixes::SetClientDisconnectMode(
+      XFixes::SetClientDisconnectModeRequest{disconnect_mode});
+}
+
+Future<XFixes::GetClientDisconnectModeReply> XFixes::GetClientDisconnectMode(
+    const XFixes::GetClientDisconnectModeRequest& request) {
+  if (!connection_->Ready() || !present())
+    return {};
+
+  WriteBuffer buf;
+
+  // major_opcode
+  uint8_t major_opcode = info_.major_opcode;
+  buf.Write(&major_opcode);
+
+  // minor_opcode
+  uint8_t minor_opcode = 34;
+  buf.Write(&minor_opcode);
+
+  // length
+  // Caller fills in length for writes.
+  Pad(&buf, sizeof(uint16_t));
+
+  Align(&buf, 4);
+
+  return connection_->SendRequest<XFixes::GetClientDisconnectModeReply>(
+      &buf, "XFixes::GetClientDisconnectMode", false);
+}
+
+Future<XFixes::GetClientDisconnectModeReply> XFixes::GetClientDisconnectMode() {
+  return XFixes::GetClientDisconnectMode(
+      XFixes::GetClientDisconnectModeRequest{});
+}
+
+template <>
+COMPONENT_EXPORT(X11)
+std::unique_ptr<XFixes::GetClientDisconnectModeReply> detail::ReadReply<
+    XFixes::GetClientDisconnectModeReply>(ReadBuffer* buffer) {
+  auto& buf = *buffer;
+  auto reply = std::make_unique<XFixes::GetClientDisconnectModeReply>();
+
+  auto& sequence = (*reply).sequence;
+  auto& disconnect_mode = (*reply).disconnect_mode;
+
+  // response_type
+  uint8_t response_type;
+  Read(&response_type, &buf);
+
+  // pad0
+  Pad(&buf, 1);
+
+  // sequence
+  Read(&sequence, &buf);
+
+  // length
+  uint32_t length;
+  Read(&length, &buf);
+
+  // disconnect_mode
+  uint32_t tmp11;
+  Read(&tmp11, &buf);
+  disconnect_mode = static_cast<XFixes::ClientDisconnectFlags>(tmp11);
+
+  // pad1
+  Pad(&buf, 20);
+
+  Align(&buf, 4);
+  CHECK_EQ(buf.offset < 32 ? 0 : buf.offset - 32, 4 * length);
+
+  return reply;
 }
 
 }  // namespace x11

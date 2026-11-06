@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,44 +10,44 @@
 
 namespace soda {
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 
-constexpr base::FilePath::CharType kSodaResourcePath[] =
+inline constexpr base::FilePath::CharType kSodaResourcePath[] =
     FILE_PATH_LITERAL("third_party/soda-mac64/resources");
 
-constexpr base::FilePath::CharType kSodaTestBinaryRelativePath[] =
+inline constexpr base::FilePath::CharType kSodaTestBinaryRelativePath[] =
     FILE_PATH_LITERAL("libsoda_for_testing.so");
 
-#elif defined(OS_WIN) && defined(ARCH_CPU_64_BITS)
+#elif BUILDFLAG(IS_WIN) && defined(ARCH_CPU_64_BITS)
 
-constexpr base::FilePath::CharType kSodaResourcePath[] =
+inline constexpr base::FilePath::CharType kSodaResourcePath[] =
     FILE_PATH_LITERAL("third_party/soda-win64/resources");
 
-constexpr base::FilePath::CharType kSodaTestBinaryRelativePath[] =
+inline constexpr base::FilePath::CharType kSodaTestBinaryRelativePath[] =
     FILE_PATH_LITERAL("SODA_for_testing.dll");
 
-#elif defined(OS_WIN) && defined(ARCH_CPU_32_BITS)
+#elif BUILDFLAG(IS_WIN) && defined(ARCH_CPU_32_BITS)
 
-constexpr base::FilePath::CharType kSodaResourcePath[] =
+inline constexpr base::FilePath::CharType kSodaResourcePath[] =
     FILE_PATH_LITERAL("third_party/soda-win32/resources");
 
-constexpr base::FilePath::CharType kSodaTestBinaryRelativePath[] =
+inline constexpr base::FilePath::CharType kSodaTestBinaryRelativePath[] =
     FILE_PATH_LITERAL("SODA_for_testing.dll");
 
-#elif defined(OS_LINUX)
+#elif BUILDFLAG(IS_LINUX)
 
-constexpr base::FilePath::CharType kSodaResourcePath[] =
+inline constexpr base::FilePath::CharType kSodaResourcePath[] =
     FILE_PATH_LITERAL("third_party/soda/resources");
 
-constexpr base::FilePath::CharType kSodaTestBinaryRelativePath[] =
+inline constexpr base::FilePath::CharType kSodaTestBinaryRelativePath[] =
     FILE_PATH_LITERAL("libsoda_for_testing.so");
 
 #endif
 
-constexpr base::FilePath::CharType kSodaLanguagePackRelativePath[] =
+inline constexpr base::FilePath::CharType kSodaLanguagePackRelativePath[] =
     FILE_PATH_LITERAL("en_us");
 
-constexpr base::FilePath::CharType kSodaTestAudioRelativePath[] =
+inline constexpr base::FilePath::CharType kSodaTestAudioRelativePath[] =
     FILE_PATH_LITERAL("hey_google.wav");
 
 }  // namespace soda

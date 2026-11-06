@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,14 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/observer_list.h"
 #include "base/rand_util.h"
-#include "base/single_thread_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
-#include "build/chromeos_buildflags.h"
 #include "device/bluetooth/dbus/bluez_dbus_manager.h"
 #include "device/bluetooth/dbus/fake_bluetooth_device_client.h"
 #include "device/bluetooth/dbus/fake_bluetooth_gatt_descriptor_client.h"
@@ -171,8 +171,7 @@ void FakeBluetoothGattCharacteristicClient::ReadValue(
     return;
   }
 
-  if (action_extra_requests_.find("ReadValue") !=
-      action_extra_requests_.end()) {
+  if (action_extra_requests_.contains("ReadValue")) {
     DelayedCallback* delayed = action_extra_requests_["ReadValue"];
     delayed->delay_--;
     std::move(error_callback)
@@ -209,8 +208,8 @@ void FakeBluetoothGattCharacteristicClient::ReadValue(
 
 void FakeBluetoothGattCharacteristicClient::WriteValue(
     const dbus::ObjectPath& object_path,
-    const std::vector<uint8_t>& value,
-    base::StringPiece type_option,
+    base::span<const uint8_t> value,
+    std::string_view type_option,
     base::OnceClosure callback,
     ErrorCallback error_callback) {
   if (!authenticated_) {
@@ -245,8 +244,7 @@ void FakeBluetoothGattCharacteristicClient::WriteValue(
   }
 
   DCHECK(heart_rate_control_point_properties_.get());
-  if (action_extra_requests_.find("WriteValue") !=
-      action_extra_requests_.end()) {
+  if (action_extra_requests_.contains("WriteValue")) {
     DelayedCallback* delayed = action_extra_requests_["WriteValue"];
     delayed->delay_--;
     std::move(error_callback)
@@ -286,7 +284,7 @@ void FakeBluetoothGattCharacteristicClient::WriteValue(
 
 void FakeBluetoothGattCharacteristicClient::PrepareWriteValue(
     const dbus::ObjectPath& object_path,
-    const std::vector<uint8_t>& value,
+    base::span<const uint8_t> value,
     base::OnceClosure callback,
     ErrorCallback error_callback) {
   if (!authenticated_) {
@@ -329,9 +327,9 @@ void FakeBluetoothGattCharacteristicClient::PrepareWriteValue(
 
 void FakeBluetoothGattCharacteristicClient::StartNotify(
     const dbus::ObjectPath& object_path,
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     device::BluetoothGattCharacteristic::NotificationType notification_type,
-#endif
+#endif  // BUILDFLAG(IS_CHROMEOS)
     base::OnceClosure callback,
     ErrorCallback error_callback) {
   if (!IsHeartRateVisible()) {
@@ -357,9 +355,9 @@ void FakeBluetoothGattCharacteristicClient::StartNotify(
   ScheduleHeartRateMeasurementValueChange();
 
   // Respond asynchronously.
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE, std::move(callback),
-      base::TimeDelta::FromMilliseconds(kStartNotifyResponseIntervalMs));
+      base::Milliseconds(kStartNotifyResponseIntervalMs));
 }
 
 void FakeBluetoothGattCharacteristicClient::StopNotify(
@@ -558,13 +556,12 @@ void FakeBluetoothGattCharacteristicClient::
   std::vector<uint8_t> measurement = GetHeartRateMeasurementValue();
   heart_rate_measurement_properties_->value.ReplaceValue(measurement);
 
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE,
       base::BindOnce(&FakeBluetoothGattCharacteristicClient::
                          ScheduleHeartRateMeasurementValueChange,
                      weak_ptr_factory_.GetWeakPtr()),
-      base::TimeDelta::FromMilliseconds(
-          kHeartRateMeasurementNotificationIntervalMs));
+      base::Milliseconds(kHeartRateMeasurementNotificationIntervalMs));
 }
 
 void FakeBluetoothGattCharacteristicClient::DelayedReadValueCallback(
@@ -575,7 +572,7 @@ void FakeBluetoothGattCharacteristicClient::DelayedReadValueCallback(
   DCHECK(properties);
 
   properties->value.ReplaceValue(value);
-  std::move(callback).Run(/*error_code=*/absl::nullopt, value);
+  std::move(callback).Run(/*error_code=*/std::nullopt, value);
 }
 
 std::vector<uint8_t>
@@ -603,7 +600,7 @@ FakeBluetoothGattCharacteristicClient::GetHeartRateMeasurementValue() {
   value.flags |= (0x01 << 4);
 
   // Pick a value between 117 bpm and 153 bpm for heart rate.
-  value.bpm = static_cast<uint8_t>(base::RandInt(117, 153));
+  value.bpm = static_cast<uint8_t>(base::RandIntInclusive(117, 153));
 
   // Total calories burned in kJoules since the last reset. Increment this by 1
   // every time. It's fine if it overflows: it becomes 0 when the user resets
@@ -616,7 +613,7 @@ FakeBluetoothGattCharacteristicClient::GetHeartRateMeasurementValue() {
   // Return the bytes in an array.
   uint8_t* bytes = reinterpret_cast<uint8_t*>(&value);
   std::vector<uint8_t> return_value;
-  return_value.assign(bytes, bytes + sizeof(value));
+  return_value.assign(bytes, UNSAFE_TODO(bytes + sizeof(value)));
   return return_value;
 }
 

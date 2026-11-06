@@ -1,9 +1,10 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/share/share_history.h"
 #include "base/cancelable_callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "base/time/time.h"
@@ -46,6 +47,17 @@ sharing::mojom::ShareHistory BuildTestProto() {
     baz->set_count(1);
   }
 
+  {
+    // An old entry that will be expired when the history is loaded from the
+    // backing DB.
+    auto* long_ago = proto.mutable_day_histories()->Add();
+    long_ago->set_day(DaysSinceUnixEpoch() - 365);
+
+    auto* foo = long_ago->mutable_target_histories()->Add();
+    foo->mutable_target()->set_component_name(kTarget0Name);
+    foo->set_count(2);
+  }
+
   return proto;
 }
 
@@ -62,7 +74,13 @@ class ShareHistoryTest : public testing::Test {
  public:
   using FakeDB = leveldb_proto::test::FakeDB<mojom::ShareHistory>;
 
-  ShareHistoryTest() { Init(); }
+  ShareHistoryTest() {
+    // These tests often want to place events/history "in the past", but the
+    // mock time source starts at the epoch, which breaks a bunch of those
+    // computations; give ourselves some margin to work with here.
+    environment_.FastForwardBy(base::Days(7));
+    Init();
+  }
 
   void Init(bool do_default_init = true) {
     auto backing_db = std::make_unique<FakeDB>(&backing_entries_);
@@ -131,7 +149,8 @@ class ShareHistoryTest : public testing::Test {
   TestingProfile profile_;
   std::unique_ptr<ShareHistory> db_;
   leveldb_proto::test::FakeDB<mojom::ShareHistory>::EntryMap backing_entries_;
-  leveldb_proto::test::FakeDB<mojom::ShareHistory>* backing_db_ = nullptr;
+  raw_ptr<leveldb_proto::test::FakeDB<mojom::ShareHistory>> backing_db_ =
+      nullptr;
   base::CancelableOnceClosure backing_init_callback_;
 };
 
@@ -204,6 +223,48 @@ TEST_F(ShareHistoryTest, OffTheRecordProfileHasNoInstance) {
       Profile::OTRProfileID::CreateUniqueForTesting(), true);
   ShareHistory* db = ShareHistory::Get(otr_profile);
   ASSERT_FALSE(db);
+}
+
+TEST_F(ShareHistoryTest, ClearYesterdayOnly) {
+  // After rewriting backing_entries(), to simulate having stored data on disk,
+  // reinitialize the database to cause it to reread the backing DB.
+  (*backing_entries())["share_history"] = BuildTestProto();
+  Init();
+
+  {
+    auto result = GetFlatShareHistory();
+    ASSERT_EQ(result.size(), 2U);
+    EXPECT_EQ(result[0].component_name, kTarget0Name);
+    EXPECT_EQ(result[0].count, 5);
+    EXPECT_EQ(result[1].component_name, kTarget1Name);
+    EXPECT_EQ(result[1].count, 2);
+  }
+
+  auto start_offset = base::Days(DaysSinceUnixEpoch() - 1);
+  auto end_offset = start_offset + base::Seconds(3600);
+  db()->Clear(base::Time::UnixEpoch() + start_offset,
+              base::Time::UnixEpoch() + end_offset);
+
+  {
+    auto result = GetFlatShareHistory();
+    ASSERT_EQ(result.size(), 2U);
+    EXPECT_EQ(result[0].component_name, kTarget0Name);
+    EXPECT_EQ(result[0].count, 4);
+    EXPECT_EQ(result[1].component_name, kTarget1Name);
+    EXPECT_EQ(result[1].count, 2);
+  }
+}
+
+TEST_F(ShareHistoryTest, OldEntriesExpired) {
+  (*backing_entries())["share_history"] = BuildTestProto();
+  Init();
+
+  auto result = GetFlatShareHistory();
+  EXPECT_EQ(result[0].component_name, kTarget0Name);
+
+  // There are 4 entries today, 1 day yesterday, and 2 entries a year ago; the
+  // latter should be expired on load.
+  EXPECT_EQ(result[0].count, 5);
 }
 
 }  // namespace sharing

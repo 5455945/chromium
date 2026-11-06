@@ -1,10 +1,13 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_PAGE_LOAD_METRICS_BROWSER_LAYOUT_SHIFT_NORMALIZATION_H_
 #define COMPONENTS_PAGE_LOAD_METRICS_BROWSER_LAYOUT_SHIFT_NORMALIZATION_H_
 
+#include <vector>
+
+#include "base/containers/span.h"
 #include "base/time/time.h"
 #include "components/page_load_metrics/browser/page_load_metrics_observer.h"
 
@@ -17,15 +20,18 @@ namespace page_load_metrics {
 class LayoutShiftNormalization {
  public:
   LayoutShiftNormalization();
+  LayoutShiftNormalization(const LayoutShiftNormalization&);
+  LayoutShiftNormalization(LayoutShiftNormalization&&);
+  LayoutShiftNormalization& operator=(const LayoutShiftNormalization&);
+  LayoutShiftNormalization& operator=(LayoutShiftNormalization&& other);
   ~LayoutShiftNormalization();
+
   const NormalizedCLSData& normalized_cls_data() const {
     return normalized_cls_data_;
   }
 
-  void AddNewLayoutShifts(
-      const std::vector<page_load_metrics::mojom::LayoutShiftPtr>& new_shifts,
-      base::TimeTicks current_time,
-      /*Whole page CLS*/ float cumulative_layout_shift_score);
+  void AddNewLayoutShifts(base::span<const mojom::LayoutShiftPtr> new_shifts,
+                          base::TimeTicks current_time);
 
   void ClearAllLayoutShifts();
 
@@ -37,12 +43,10 @@ class LayoutShiftNormalization {
   };
 
   void UpdateWindowCLS(
-      base::TimeTicks current_time,
       std::vector<std::pair<base::TimeTicks, double>>::const_iterator first,
       std::vector<std::pair<base::TimeTicks, double>>::const_iterator
           first_non_stale,
-      std::vector<std::pair<base::TimeTicks, double>>::const_iterator last,
-      float cumulative_layout_shift_score);
+      std::vector<std::pair<base::TimeTicks, double>>::const_iterator last);
 
   void UpdateSessionWindow(
       SessionWindow* session_window,
@@ -50,8 +54,7 @@ class LayoutShiftNormalization {
       base::TimeDelta max_duration,
       std::vector<std::pair<base::TimeTicks, double>>::const_iterator begin,
       std::vector<std::pair<base::TimeTicks, double>>::const_iterator end,
-      float& max_score,
-      uint32_t& count);
+      float& max_score);
 
   // CLS normalization
   NormalizedCLSData normalized_cls_data_;
@@ -60,8 +63,6 @@ class LayoutShiftNormalization {
   std::vector<std::pair<base::TimeTicks, double>> recent_layout_shifts_;
 
   SessionWindow session_gap1000ms_max5000ms_;
-
-  DISALLOW_COPY_AND_ASSIGN(LayoutShiftNormalization);
 };
 
 }  // namespace page_load_metrics

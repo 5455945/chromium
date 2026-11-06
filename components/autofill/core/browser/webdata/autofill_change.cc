@@ -1,17 +1,16 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/autofill/core/browser/webdata/autofill_change.h"
 
+#include "components/autofill/core/browser/webdata/autocomplete/autocomplete_entry.h"
 
 namespace autofill {
 
-AutofillChange::AutofillChange(Type type, const AutofillKey& key)
-    : GenericAutofillChange<AutofillKey>(type, key) {
-}
+AutocompleteChange::AutocompleteChange(Type type, const AutocompleteKey& key)
+    : type_(type), key_(key) {}
 
-AutofillChange::~AutofillChange() {
-}
+AutocompleteChange::~AutocompleteChange() = default;
 
 }  // namespace autofill

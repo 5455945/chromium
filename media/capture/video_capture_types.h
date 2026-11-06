@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,7 +13,6 @@
 #include "build/build_config.h"
 #include "media/base/video_types.h"
 #include "media/capture/capture_export.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/gfx/geometry/size.h"
 
 namespace media {
@@ -48,30 +47,27 @@ enum class ResolutionChangePolicy {
 // Potential values of the googPowerLineFrequency optional constraint passed to
 // getUserMedia. Note that the numeric values are currently significant, and are
 // used to map enum values to corresponding frequency values.
-// TODO(ajose): http://crbug.com/525167 Consider making this a class.
 enum class PowerLineFrequency {
-  FREQUENCY_DEFAULT = 0,
-  FREQUENCY_50HZ = 50,
-  FREQUENCY_60HZ = 60,
-  FREQUENCY_MAX = FREQUENCY_60HZ
+  kDefault = 0,
+  k50Hz = 50,
+  k60Hz = 60,
 };
 
 enum class VideoCaptureBufferType {
   kSharedMemory,
-  kSharedMemoryViaRawFileDescriptor,
-  kMailboxHolder,
-  kGpuMemoryBuffer
+  kGpuMemoryBuffer,
+  kSharedImage,
 };
 
-// WARNING: Do not change the values assigned to the entries. They are used for
-// UMA logging.
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
 enum class VideoCaptureError {
   kNone = 0,
   kVideoCaptureControllerInvalidOrUnsupportedVideoCaptureParametersRequested =
       1,
   kVideoCaptureControllerIsAlreadyInErrorState = 2,
   kVideoCaptureManagerDeviceConnectionLost = 3,
-  kFrameSinkVideoCaptureDeviceAleradyEndedOnFatalError = 4,
+  kFrameSinkVideoCaptureDeviceAlreadyEndedOnFatalError = 4,
   kFrameSinkVideoCaptureDeviceEncounteredFatalError = 5,
   kV4L2FailedToOpenV4L2DeviceDriverFile = 6,
   kV4L2ThisIsNotAV4L2VideoCaptureDevice = 7,
@@ -112,11 +108,11 @@ enum class VideoCaptureError {
   kCrosHalV3DeviceDelegateWrongNumberOfStreamsConfigured = 43,
   kCrosHalV3DeviceDelegateFailedToGetDefaultRequestSettings = 44,
   kCrosHalV3BufferManagerHalRequestedTooManyBuffers = 45,
-  kCrosHalV3BufferManagerFailedToCreateGpuMemoryBuffer = 46,
+  kCrosHalV3BufferManagerFailedToCreateMappableSI = 46,
   kCrosHalV3BufferManagerFailedToMapGpuMemoryBuffer = 47,
   kCrosHalV3BufferManagerUnsupportedVideoPixelFormat = 48,
   kCrosHalV3BufferManagerFailedToDupFd = 49,
-  kCrosHalV3BufferManagerFailedToWrapGpuMemoryHandle = 50,
+  // kCrosHalV3BufferManagerFailedToWrapGpuMemoryHandle = 50,  // Removed.
   kCrosHalV3BufferManagerFailedToRegisterBuffer = 51,
   kCrosHalV3BufferManagerProcessCaptureRequestFailed = 52,
   kCrosHalV3BufferManagerInvalidPendingResultId = 53,
@@ -128,7 +124,7 @@ enum class VideoCaptureError {
   kCrosHalV3BufferManagerReceivedInvalidShutterTime = 59,
   kCrosHalV3BufferManagerFatalDeviceError = 60,
   kCrosHalV3BufferManagerReceivedFrameIsOutOfOrder = 61,
-  kCrosHalV3BufferManagerFailedToUnwrapReleaseFenceFd = 62,
+  // kCrosHalV3BufferManagerFailedToUnwrapReleaseFenceFd = 62,  // Removed.
   kCrosHalV3BufferManagerSyncWaitOnReleaseFenceTimedOut = 63,
   kCrosHalV3BufferManagerInvalidJpegBlob = 64,
   kAndroidFailedToAllocate = 65,
@@ -193,7 +189,33 @@ enum class VideoCaptureError {
   kDesktopCaptureDeviceMacFailedStreamCreate = 124,
   kDesktopCaptureDeviceMacFailedStreamStart = 125,
   kCrosHalV3BufferManagerFailedToReserveBuffers = 126,
-  kMaxValue = 126
+  kWinMediaFoundationSystemPermissionDenied = 127,
+  kVideoCaptureImplTimedOutOnStart = 128,
+  kLacrosVideoCaptureDeviceProxyAlreadyEndedOnFatalError = 129,
+  kLacrosVideoCaptureDeviceProxyEncounteredFatalError = 130,
+  kScreenCaptureKitFailedGetShareableContent = 131,
+  kScreenCaptureKitFailedAddStreamOutput = 132,
+  kScreenCaptureKitFailedStartCapture = 133,
+  kScreenCaptureKitFailedStopCapture = 134,
+  kScreenCaptureKitStreamError = 135,
+  kScreenCaptureKitFailedToFindSCDisplay = 136,
+  kVideoCaptureControllerUnsupportedPixelFormat = 137,
+  kVideoCaptureControllerInvalid = 138,
+  kVideoCaptureDeviceFactoryChromeOSCreateDeviceFailed = 139,
+  kVideoCaptureDeviceAlreadyReleased = 140,
+  kVideoCaptureSystemDeviceIdNotFound = 141,
+  kVideoCaptureDeviceFactoryWinUnknownError = 142,
+  kWinMediaFoundationDeviceInitializationFailed = 143,
+  kWinMediaFoundationSourceCreationFailed = 144,
+  kWinDirectShowDeviceFilterCreationFailed = 145,
+  kWinDirectShowDeviceInitializationFailed = 146,
+  kVideoCaptureDeviceFactorySecondCreateDenied = 147,
+  kScreenCaptureKitResetStreamError = 148,
+  kWinMediaFoundationCameraBusy = 149,
+  kWebRtcStartCaptureFailed = 150,
+  kDesktopCaptureDeviceGpuAdapterChanged = 151,
+  kVideoCaptureHostDuplicateDeviceId = 152,
+  kMaxValue = 152
 };
 
 // WARNING: Do not change the values assigned to the entries. They are used for
@@ -220,21 +242,29 @@ enum class VideoCaptureFrameDropReason {
   kVideoTrackAdapterHasNoResolutionAdapters = 19,
   kResolutionAdapterFrameIsNotValid = 20,
   kResolutionAdapterWrappingFrameForCroppingFailed = 21,
-  kResolutionAdapterTimestampTooCloseToPrevious = 22,
+  // kResolutionAdapterTimestampTooCloseToPrevious = 22, // combined into 23.
   kResolutionAdapterFrameRateIsHigherThanRequested = 23,
   kResolutionAdapterHasNoCallbacks = 24,
   kVideoTrackFrameDelivererNotEnabledReplacingWithBlackFrame = 25,
   kRendererSinkFrameDelivererIsNotStarted = 26,
-  kMaxValue = 26
+  kCropVersionNotCurrent_DEPRECATED = 27,
+  kGpuMemoryBufferMapFailed = 28,
+  kSubCaptureTargetVersionNotCurrent_DEPRECATED = 29,
+  kPostProcessingFailed = 30,
+  kResolutionAdapterFrameIsNotMappable = 31,
+  kResolutionAdapterCannotCreateConvertFrame = 32,
+  kResolutionAdapterConvertAndScaleFailed = 33,
+  kOldCaptureVersion = 34,
+  kMaxValue = kOldCaptureVersion
 };
 
 // Assert that the int:frequency mapping is correct.
-static_assert(static_cast<int>(PowerLineFrequency::FREQUENCY_DEFAULT) == 0,
-              "static_cast<int>(FREQUENCY_DEFAULT) must equal 0.");
-static_assert(static_cast<int>(PowerLineFrequency::FREQUENCY_50HZ) == 50,
-              "static_cast<int>(FREQUENCY_DEFAULT) must equal 50.");
-static_assert(static_cast<int>(PowerLineFrequency::FREQUENCY_60HZ) == 60,
-              "static_cast<int>(FREQUENCY_DEFAULT) must equal 60.");
+static_assert(static_cast<int>(PowerLineFrequency::kDefault) == 0,
+              "static_cast<int>(PowerLineFrequency::kDefault) must equal 0.");
+static_assert(static_cast<int>(PowerLineFrequency::k50Hz) == 50,
+              "static_cast<int>(PowerLineFrequency::k50Hz) must equal 50.");
+static_assert(static_cast<int>(PowerLineFrequency::k60Hz) == 60,
+              "static_cast<int>(PowerLineFrequency::k60Hz) must equal 60.");
 
 // Some drivers use rational time per frame instead of float frame rate, this
 // constant k is used to convert between both: A fps -> [k/k*A] seconds/frame.
@@ -273,16 +303,31 @@ struct CAPTURE_EXPORT VideoCaptureFormat {
 
 typedef std::vector<VideoCaptureFormat> VideoCaptureFormats;
 
+// Identifies the type of request that created this capture.
+enum class CaptureSourceRequestType {
+  kUnknown = 0,
+  kGetUserMedia = 1,
+  kGetDisplayMedia = 2
+};
+
 // Parameters for starting video capture.
 // This class is used by the client of a video capture device to specify the
 // format of frames in which the client would like to have captured frames
 // returned.
 struct CAPTURE_EXPORT VideoCaptureParams {
-  // Result struct for SuggestContraints() method.
+  // Result struct for SuggestConstraints() method.
   struct SuggestedConstraints {
     gfx::Size min_frame_size;
     gfx::Size max_frame_size;
     bool fixed_aspect_ratio;
+
+    std::string ToString() const;
+
+    bool operator==(const SuggestedConstraints& other) const {
+      return min_frame_size == other.min_frame_size &&
+             max_frame_size == other.max_frame_size &&
+             fixed_aspect_ratio == other.fixed_aspect_ratio;
+    }
   };
 
   VideoCaptureParams();
@@ -299,7 +344,9 @@ struct CAPTURE_EXPORT VideoCaptureParams {
   bool operator==(const VideoCaptureParams& other) const {
     return requested_format == other.requested_format &&
            resolution_change_policy == other.resolution_change_policy &&
-           power_line_frequency == other.power_line_frequency;
+           power_line_frequency == other.power_line_frequency &&
+           is_high_dpi_enabled == other.is_high_dpi_enabled &&
+           capture_version_source == other.capture_version_source;
   }
 
   // Requests a resolution and format at which the capture will occur.
@@ -317,8 +364,31 @@ struct CAPTURE_EXPORT VideoCaptureParams {
   // allowing the driver to apply appropriate settings for optimal
   // exposures around the face area. Currently only applicable on
   // Android platform with Camera2 driver support.
-  bool enable_face_detection;
+  bool enable_face_detection = false;
+
+  // Flag indicating whether HiDPI mode should be enabled for tab capture
+  // sessions.
+  bool is_high_dpi_enabled = true;
+
+  // Starts at 0 when the capture starts, and is incremented whenever the target
+  // of the capture is dynamically changed, as for example when using
+  // share-this-tab-instead.
+  uint32_t capture_version_source = 0;
+
+  // The request type of the capture source.
+  CaptureSourceRequestType request_type = CaptureSourceRequestType::kUnknown;
+
+  // Whether this video capture is secure.
+  // A capture is considered secure if the captured content is not easily
+  // accessible to JavaScript or users, and cannot be trivially shared or
+  // streamed out of the device. Used for capture prevention, e.g. for protected
+  // content or by enterprise policy.
+  bool is_secure = false;
 };
+
+CAPTURE_EXPORT std::ostream& operator<<(
+    std::ostream& os,
+    const VideoCaptureParams::SuggestedConstraints& constraints);
 
 }  // namespace media
 

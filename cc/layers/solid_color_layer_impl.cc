@@ -1,11 +1,14 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "cc/layers/solid_color_layer_impl.h"
 
 #include <algorithm>
+#include <limits>
 
+#include "base/feature_list.h"
+#include "cc/base/features.h"
 #include "cc/layers/append_quads_data.h"
 #include "cc/trees/effect_node.h"
 #include "cc/trees/layer_tree_impl.h"
@@ -14,14 +17,70 @@
 
 namespace cc {
 
+namespace {
+
+bool TransparentSourceChangesDestination(SkBlendMode mode) {
+  if (!base::FeatureList::IsEnabled(
+          features::kOmitTransparentSolidQuadsForNoopBlendModes)) {
+    return mode != SkBlendMode::kSrcOver;
+  }
+  switch (mode) {
+    // Porter-Duff modes where the destination coefficient f_dst evaluates to 0
+    // when the premultiplied source is transparent (s = 0, sa = 0), so
+    // result = s * f_src + d * f_dst = 0 (wiping the destination to 0).
+    case SkBlendMode::kClear:
+    case SkBlendMode::kSrc:
+    case SkBlendMode::kSrcIn:
+    case SkBlendMode::kDstIn:
+    case SkBlendMode::kSrcOut:
+    case SkBlendMode::kDstATop:
+    case SkBlendMode::kModulate:
+      return true;
+    // Remaining Porter-Duff modes have f_dst = 1 (kOne, kISA = 1 - sa, or
+    // kISC = 1 - s) when s = 0, sa = 0, leaving the destination unchanged.
+    case SkBlendMode::kDst:
+    case SkBlendMode::kSrcOver:
+    case SkBlendMode::kDstOver:
+    case SkBlendMode::kDstOut:
+    case SkBlendMode::kSrcATop:
+    case SkBlendMode::kXor:
+    case SkBlendMode::kPlus:
+    case SkBlendMode::kScreen:
+    // Separable and non-separable blend modes are always alpha-composited as:
+    //   result = (1 - da) * s + (1 - sa) * d + sa * da * B(d, s)
+    // which reduces to d when s = 0, sa = 0.
+    case SkBlendMode::kOverlay:
+    case SkBlendMode::kDarken:
+    case SkBlendMode::kLighten:
+    case SkBlendMode::kColorDodge:
+    case SkBlendMode::kColorBurn:
+    case SkBlendMode::kHardLight:
+    case SkBlendMode::kSoftLight:
+    case SkBlendMode::kDifference:
+    case SkBlendMode::kExclusion:
+    case SkBlendMode::kMultiply:
+    case SkBlendMode::kHue:
+    case SkBlendMode::kSaturation:
+    case SkBlendMode::kColor:
+    case SkBlendMode::kLuminosity:
+      return false;
+  }
+}
+
+}  // namespace
+
 SolidColorLayerImpl::SolidColorLayerImpl(LayerTreeImpl* tree_impl, int id)
     : LayerImpl(tree_impl, id) {
 }
 
 SolidColorLayerImpl::~SolidColorLayerImpl() = default;
 
+mojom::LayerType SolidColorLayerImpl::GetLayerType() const {
+  return mojom::LayerType::kSolidColor;
+}
+
 std::unique_ptr<LayerImpl> SolidColorLayerImpl::CreateLayerImpl(
-    LayerTreeImpl* tree_impl) {
+    LayerTreeImpl* tree_impl) const {
   return SolidColorLayerImpl::Create(tree_impl, id());
 }
 
@@ -30,22 +89,21 @@ void SolidColorLayerImpl::AppendSolidQuads(
     const Occlusion& occlusion_in_layer_space,
     viz::SharedQuadState* shared_quad_state,
     const gfx::Rect& visible_layer_rect,
-    SkColor color,
+    SkColor4f color,
     bool force_anti_aliasing_off,
     SkBlendMode effect_blend_mode,
     AppendQuadsData* append_quads_data) {
-  // Transparent, solid quads can be omitted if the effect blend mode is
-  // kSrcOver. Note that |effect_blend_mode| may be different than
-  // |shared_quad_state->blend_mode|, if the blend is applied by a render
-  // surface. This is because a layer that induces an effect node emits
-  // two quads, one for the layer, and one for the render surface, and in
-  // this situation the blend mode is lifted up to the render surface.
-  // This will work for situations where there is only one layer under the
-  // mask, but will not work in complex blend mode situations. This bug is
-  // tracked in crbug.com/939168.
-  if (effect_blend_mode == SkBlendMode::kSrcOver) {
-    float alpha =
-        (SkColorGetA(color) * (1.0f / 255.0f)) * shared_quad_state->opacity;
+  // Transparent, solid quads can be omitted if a transparent source does not
+  // change the destination for the effect blend mode. Note that
+  // |effect_blend_mode| may be different than |shared_quad_state->blend_mode|,
+  // if the blend is applied by a render surface. This is because a layer that
+  // induces an effect node emits two quads, one for the layer, and one for the
+  // render surface, and in this situation the blend mode is lifted up to the
+  // render surface. This will work for situations where there is only one layer
+  // under the mask, but will not work in complex blend mode situations. This
+  // bug is tracked in crbug.com/939168.
+  if (!TransparentSourceChangesDestination(effect_blend_mode)) {
+    float alpha = color.fA * shared_quad_state->opacity;
 
     if (alpha < std::numeric_limits<float>::epsilon())
       return;
@@ -61,7 +119,8 @@ void SolidColorLayerImpl::AppendSolidQuads(
                force_anti_aliasing_off);
 }
 
-void SolidColorLayerImpl::AppendQuads(viz::CompositorRenderPass* render_pass,
+void SolidColorLayerImpl::AppendQuads(const AppendQuadsContext& context,
+                                      viz::CompositorRenderPass* render_pass,
                                       AppendQuadsData* append_quads_data) {
   viz::SharedQuadState* shared_quad_state =
       render_pass->CreateAndAppendSharedQuadState();
@@ -72,15 +131,11 @@ void SolidColorLayerImpl::AppendQuads(viz::CompositorRenderPass* render_pass,
 
   // TODO(hendrikw): We need to pass the visible content rect rather than
   // |bounds()| here.
-  EffectNode* effect_node = GetEffectTree().Node(effect_tree_index());
+  const EffectNode& effect_node = GetEffectTree().Node(effect_tree_index());
   AppendSolidQuads(render_pass, draw_properties().occlusion_in_content_space,
                    shared_quad_state, gfx::Rect(bounds()), background_color(),
                    !layer_tree_impl()->settings().enable_edge_anti_aliasing,
-                   effect_node->blend_mode, append_quads_data);
-}
-
-const char* SolidColorLayerImpl::LayerTypeAsString() const {
-  return "cc::SolidColorLayerImpl";
+                   effect_node.blend_mode, append_quads_data);
 }
 
 }  // namespace cc

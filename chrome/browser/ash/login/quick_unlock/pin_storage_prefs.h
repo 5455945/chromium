@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,26 +7,28 @@
 
 #include <string>
 
-#include "base/gtest_prod_util.h"
-#include "base/macros.h"
-#include "chromeos/login/auth/key.h"
+#include "base/memory/raw_ptr.h"
+#include "chromeos/ash/components/login/auth/public/key.h"
 
 class PrefRegistrySimple;
 class PrefService;
 
-namespace chromeos {
+namespace ash {
 namespace quick_unlock {
+enum class Purpose;
 
 class PinStoragePrefs {
  public:
-  // TODO(sammiequon): Pull this value in from policy. See
-  // https://crbug.com/612271.
   static const int kMaximumUnlockAttempts = 3;
 
   // Registers profile prefs.
   static void RegisterProfilePrefs(PrefRegistrySimple* registry);
 
   explicit PinStoragePrefs(PrefService* pref_service);
+
+  PinStoragePrefs(const PinStoragePrefs&) = delete;
+  PinStoragePrefs& operator=(const PinStoragePrefs&) = delete;
+
   ~PinStoragePrefs();
 
   // Add a PIN unlock attempt count.
@@ -44,24 +46,22 @@ class PinStoragePrefs {
   void RemovePin();
 
   // Is PIN entry currently available?
-  bool IsPinAuthenticationAvailable() const;
+  bool IsPinAuthenticationAvailable(Purpose purpose) const;
 
   // Tries to authenticate the given pin. This will consume an unlock attempt.
   // This always returns false if IsPinAuthenticationAvailable returns false.
-  bool TryAuthenticatePin(const Key& key);
+  bool TryAuthenticatePin(const Key& key, Purpose purpose);
 
   // Return the stored salt/secret. This is fetched directly from pref_service_.
   std::string PinSalt() const;
   std::string PinSecret() const;
 
  private:
-  PrefService* pref_service_;
+  raw_ptr<PrefService> pref_service_;
   int unlock_attempt_count_ = 0;
-
-  DISALLOW_COPY_AND_ASSIGN(PinStoragePrefs);
 };
 
 }  // namespace quick_unlock
-}  // namespace chromeos
+}  // namespace ash
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_QUICK_UNLOCK_PIN_STORAGE_PREFS_H_

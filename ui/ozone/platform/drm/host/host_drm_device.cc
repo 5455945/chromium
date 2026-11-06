@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +8,13 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
-#include "base/single_thread_task_runner.h"
-#include "base/task_runner.h"
-#include "base/threading/sequenced_task_runner_handle.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/task/task_runner.h"
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
+#include "ui/display/types/display_configuration_params.h"
 #include "ui/display/types/display_snapshot.h"
 #include "ui/ozone/platform/drm/common/display_types.h"
 #include "ui/ozone/platform/drm/common/drm_util.h"
@@ -24,24 +24,20 @@
 
 namespace ui {
 
-HostDrmDevice::HostDrmDevice(DrmCursor* cursor) : cursor_(cursor) {
-  DETACH_FROM_THREAD(on_io_thread_);
-}
+HostDrmDevice::HostDrmDevice(DrmCursor* cursor) : cursor_(cursor) {}
 
 HostDrmDevice::~HostDrmDevice() {
   DCHECK_CALLED_ON_VALID_THREAD(on_ui_thread_);
-  for (GpuThreadObserver& observer : gpu_thread_observers_)
-    observer.OnGpuThreadRetired();
+  gpu_thread_observers_.Notify(&GpuThreadObserver::OnGpuThreadRetired);
 }
 
 void HostDrmDevice::OnDrmServiceStarted() {
   DCHECK_CALLED_ON_VALID_THREAD(on_ui_thread_);
-  DCHECK(!connected_);
+  CHECK(!connected_, base::NotFatalUntil::M163);
 
   connected_ = true;
 
-  for (GpuThreadObserver& observer : gpu_thread_observers_)
-    observer.OnGpuThreadReady();
+  gpu_thread_observers_.Notify(&GpuThreadObserver::OnGpuThreadReady);
 
   DCHECK(cursor_proxy_)
       << "We should have already created a cursor proxy previously";
@@ -131,23 +127,27 @@ bool HostDrmDevice::GpuRefreshNativeDisplays() {
 
 void HostDrmDevice::GpuConfigureNativeDisplays(
     const std::vector<display::DisplayConfigurationParams>& config_requests,
-    display::ConfigureCallback callback) {
+    display::ConfigureCallback callback,
+    display::ModesetFlags modeset_flags) {
   DCHECK_CALLED_ON_VALID_THREAD(on_ui_thread_);
   if (IsConnected()) {
-    drm_device_->ConfigureNativeDisplays(config_requests, std::move(callback));
+    drm_device_->ConfigureNativeDisplays(config_requests, modeset_flags,
+                                         std::move(callback));
   } else {
     // Post this task to protect the callstack from accumulating too many
     // recursive calls to ConfigureDisplaysTask::Run() in cases in which the GPU
     // process crashes repeatedly.
-    base::SequencedTaskRunnerHandle::Get()->PostTask(
-        FROM_HERE, base::BindOnce(std::move(callback), false));
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback), config_requests, false));
   }
 }
 
 bool HostDrmDevice::GpuTakeDisplayControl() {
   DCHECK_CALLED_ON_VALID_THREAD(on_ui_thread_);
-  if (!IsConnected())
+  if (!IsConnected()) {
+    LOG(WARNING) << __func__ << " GPU service not connected.";
     return false;
+  }
   auto callback =
       base::BindOnce(&HostDrmDevice::GpuTakeDisplayControlCallback, this);
 
@@ -158,8 +158,10 @@ bool HostDrmDevice::GpuTakeDisplayControl() {
 
 bool HostDrmDevice::GpuRelinquishDisplayControl() {
   DCHECK_CALLED_ON_VALID_THREAD(on_ui_thread_);
-  if (!IsConnected())
+  if (!IsConnected()) {
+    LOG(WARNING) << __func__ << " GPU service not connected.";
     return false;
+  }
   auto callback =
       base::BindOnce(&HostDrmDevice::GpuRelinquishDisplayControlCallback, this);
 
@@ -168,24 +170,13 @@ bool HostDrmDevice::GpuRelinquishDisplayControl() {
   return true;
 }
 
-bool HostDrmDevice::GpuAddGraphicsDeviceOnUIThread(const base::FilePath& path,
-                                                   base::ScopedFD fd) {
+void HostDrmDevice::GpuAddGraphicsDevice(const base::FilePath& path,
+                                         base::ScopedFD fd) {
   DCHECK_CALLED_ON_VALID_THREAD(on_ui_thread_);
-  if (!IsConnected())
-    return false;
-  base::File file(std::move(fd));
+  if (!drm_device_.is_bound())
+    return;
 
-  drm_device_->AddGraphicsDevice(path, std::move(file));
-
-  return true;
-}
-
-void HostDrmDevice::GpuAddGraphicsDeviceOnIOThread(const base::FilePath& path,
-                                                   base::ScopedFD fd) {
-  DCHECK_CALLED_ON_VALID_THREAD(on_io_thread_);
-  DCHECK(drm_device_on_io_thread_.is_bound());
-  base::File file(std::move(fd));
-  drm_device_on_io_thread_->AddGraphicsDevice(path, std::move(file));
+  drm_device_->AddGraphicsDevice(path, mojo::PlatformHandle(std::move(fd)));
 }
 
 bool HostDrmDevice::GpuRemoveGraphicsDevice(const base::FilePath& path) {
@@ -194,6 +185,37 @@ bool HostDrmDevice::GpuRemoveGraphicsDevice(const base::FilePath& path) {
     return false;
 
   drm_device_->RemoveGraphicsDevice(std::move(path));
+
+  return true;
+}
+
+void HostDrmDevice::GpuShouldDisplayEventTriggerConfiguration(
+    const EventPropertyMap& event_props) {
+  DCHECK_CALLED_ON_VALID_THREAD(on_ui_thread_);
+
+  // No connection to DRM device. Block the event since the entire configuration
+  // will most likely fail.
+  if (!IsConnected()) {
+    GpuShouldDisplayEventTriggerConfigurationCallback(/*should_trigger=*/false);
+    return;
+  }
+
+  auto callback = base::BindOnce(
+      &HostDrmDevice::GpuShouldDisplayEventTriggerConfigurationCallback, this);
+  drm_device_->ShouldDisplayEventTriggerConfiguration(event_props,
+                                                      std::move(callback));
+}
+
+bool HostDrmDevice::GpuSetHdcpKeyProp(int64_t display_id,
+                                      const std::string& key) {
+  DCHECK_CALLED_ON_VALID_THREAD(on_ui_thread_);
+  if (!IsConnected()) {
+    return false;
+  }
+
+  auto callback =
+      base::BindOnce(&HostDrmDevice::GpuSetHdcpKeyPropCallback, this);
+  drm_device_->SetHdcpKeyProp(display_id, key, std::move(callback));
 
   return true;
 }
@@ -224,35 +246,56 @@ bool HostDrmDevice::GpuSetHDCPState(
   return true;
 }
 
-bool HostDrmDevice::GpuSetColorMatrix(int64_t display_id,
-                                      const std::vector<float>& color_matrix) {
-  DCHECK_CALLED_ON_VALID_THREAD(on_ui_thread_);
-  if (!IsConnected())
-    return false;
-
-  drm_device_->SetColorMatrix(display_id, color_matrix);
-  return true;
-}
-
-bool HostDrmDevice::GpuSetGammaCorrection(
+void HostDrmDevice::GpuSetColorTemperatureAdjustment(
     int64_t display_id,
-    const std::vector<display::GammaRampRGBEntry>& degamma_lut,
-    const std::vector<display::GammaRampRGBEntry>& gamma_lut) {
-  DCHECK_CALLED_ON_VALID_THREAD(on_ui_thread_);
-  if (!IsConnected())
-    return false;
-
-  drm_device_->SetGammaCorrection(display_id, degamma_lut, gamma_lut);
-  return true;
+    const display::ColorTemperatureAdjustment& cta) {
+  if (!IsConnected()) {
+    return;
+  }
+  drm_device_->SetColorTemperatureAdjustment(display_id, cta);
 }
 
-bool HostDrmDevice::GpuSetPrivacyScreen(int64_t display_id, bool enabled) {
-  DCHECK_CALLED_ON_VALID_THREAD(on_ui_thread_);
-  if (!IsConnected())
-    return false;
+void HostDrmDevice::GpuSetColorCalibration(
+    int64_t display_id,
+    const display::ColorCalibration& calibration) {
+  if (!IsConnected()) {
+    return;
+  }
+  drm_device_->SetColorCalibration(display_id, calibration);
+}
 
-  drm_device_->SetPrivacyScreen(display_id, enabled);
-  return true;
+void HostDrmDevice::GpuSetGammaAdjustment(
+    int64_t display_id,
+    const display::GammaAdjustment& adjustment) {
+  if (!IsConnected()) {
+    return;
+  }
+  drm_device_->SetGammaAdjustment(display_id, adjustment);
+}
+
+void HostDrmDevice::GpuSetPrivacyScreen(
+    int64_t display_id,
+    bool enabled,
+    display::SetPrivacyScreenCallback callback) {
+  DCHECK_CALLED_ON_VALID_THREAD(on_ui_thread_);
+  if (IsConnected()) {
+    drm_device_->SetPrivacyScreen(display_id, enabled, std::move(callback));
+  } else {
+    // There's no connection to the DRM device, so trigger Chrome's callback
+    // with a failed state.
+    std::move(callback).Run(/*success=*/false);
+  }
+}
+
+void HostDrmDevice::GpuGetSeamlessRefreshRates(
+    int64_t display_id,
+    display::GetSeamlessRefreshRatesCallback callback) {
+  DCHECK_CALLED_ON_VALID_THREAD(on_ui_thread_);
+  if (!IsConnected()) {
+    std::move(callback).Run(std::nullopt);
+    return;
+  }
+  drm_device_->GetSeamlessRefreshRates(display_id, std::move(callback));
 }
 
 void HostDrmDevice::GpuRefreshNativeDisplaysCallback(
@@ -271,6 +314,18 @@ void HostDrmDevice::GpuRelinquishDisplayControlCallback(bool success) const {
   display_manager_->GpuRelinquishedDisplayControl(success);
 }
 
+void HostDrmDevice::GpuShouldDisplayEventTriggerConfigurationCallback(
+    bool should_trigger) const {
+  DCHECK_CALLED_ON_VALID_THREAD(on_ui_thread_);
+  display_manager_->GpuShouldDisplayEventTriggerConfiguration(should_trigger);
+}
+
+void HostDrmDevice::GpuSetHdcpKeyPropCallback(int64_t display_id,
+                                              bool success) const {
+  DCHECK_CALLED_ON_VALID_THREAD(on_ui_thread_);
+  display_manager_->GpuSetHdcpKeyProp(display_id, success);
+}
+
 void HostDrmDevice::GpuGetHDCPStateCallback(
     int64_t display_id,
     bool success,
@@ -287,28 +342,7 @@ void HostDrmDevice::GpuSetHDCPStateCallback(int64_t display_id,
   display_manager_->GpuUpdatedHDCPState(display_id, success);
 }
 
-void HostDrmDevice::OnGpuServiceLaunchedOnProcessThread(
-    mojo::PendingRemote<ui::ozone::mojom::DrmDevice> drm_device,
-    scoped_refptr<base::SingleThreadTaskRunner> ui_runner) {
-  // The observers might send IPC messages from the IO thread during the call to
-  // OnGpuProcessLaunched.
-  drm_device_on_io_thread_.Bind(std::move(drm_device));
-  for (GpuThreadObserver& observer : gpu_thread_observers_)
-    observer.OnGpuProcessLaunched();
-  // In the single-threaded mode or when GpuProcessHost lives on the UI thread,
-  // there won't be separate UI and IO threads.
-  if (ui_runner->BelongsToCurrentThread()) {
-    OnGpuServiceLaunchedOnUIThread(drm_device_on_io_thread_.Unbind());
-  } else {
-    DCHECK_CALLED_ON_VALID_THREAD(on_io_thread_);
-    ui_runner->PostTask(
-        FROM_HERE,
-        base::BindOnce(&HostDrmDevice::OnGpuServiceLaunchedOnUIThread, this,
-                       drm_device_on_io_thread_.Unbind()));
-  }
-}
-
-void HostDrmDevice::OnGpuServiceLaunchedOnUIThread(
+void HostDrmDevice::OnGpuServiceLaunched(
     mojo::PendingRemote<ui::ozone::mojom::DrmDevice> drm_device) {
   DCHECK_CALLED_ON_VALID_THREAD(on_ui_thread_);
 
@@ -318,6 +352,7 @@ void HostDrmDevice::OnGpuServiceLaunchedOnUIThread(
     OnGpuServiceLost();
 
   drm_device_.Bind(std::move(drm_device));
+  gpu_thread_observers_.Notify(&GpuThreadObserver::OnGpuProcessLaunched);
 
   // Create two DeviceCursor connections: one for the UI thread and one for the
   // IO thread.
@@ -341,8 +376,7 @@ void HostDrmDevice::OnGpuServiceLost() {
   connected_ = false;
   drm_device_.reset();
   // TODO(rjkroege): OnGpuThreadRetired is not currently used.
-  for (GpuThreadObserver& observer : gpu_thread_observers_)
-    observer.OnGpuThreadRetired();
+  gpu_thread_observers_.Notify(&GpuThreadObserver::OnGpuThreadRetired);
 }
 
 }  // namespace ui

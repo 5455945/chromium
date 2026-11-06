@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,7 @@
 
 #include "base/check_op.h"
 
-namespace ash {
-namespace file_system_provider {
+namespace ash::file_system_provider {
 
 ProviderId::ProviderId(const std::string& internal_id,
                        ProviderType provider_type)
@@ -63,10 +62,6 @@ std::string ProviderId::ToString() const {
   }
 }
 
-bool ProviderId::operator==(const ProviderId& other) const {
-  return type_ == other.type_ && internal_id_ == other.internal_id_;
-}
-
 bool ProviderId::operator<(const ProviderId& other) const {
   return std::tie(type_, internal_id_) <
          std::tie(other.type_, other.internal_id_);
@@ -88,6 +83,8 @@ MountOptions::MountOptions(const std::string& file_system_id,
       persistent(true) {}
 
 MountOptions::MountOptions(const MountOptions& source) = default;
+
+MountOptions& MountOptions::operator=(const MountOptions& source) = default;
 
 ProvidedFileSystemInfo::ProvidedFileSystemInfo()
     : writable_(false),
@@ -115,7 +112,7 @@ ProvidedFileSystemInfo::ProvidedFileSystemInfo(
       watchable_(watchable),
       source_(source),
       icon_set_(icon_set) {
-  DCHECK_LE(0, mount_options.opened_files_limit);
+  CHECK_LE(0, mount_options.opened_files_limit, base::NotFatalUntil::M160);
 }
 
 ProvidedFileSystemInfo::ProvidedFileSystemInfo(
@@ -137,7 +134,20 @@ ProvidedFileSystemInfo::ProvidedFileSystemInfo(
 ProvidedFileSystemInfo::ProvidedFileSystemInfo(
     const ProvidedFileSystemInfo& other) = default;
 
-ProvidedFileSystemInfo::~ProvidedFileSystemInfo() {}
+ProvidedFileSystemInfo::~ProvidedFileSystemInfo() = default;
 
-}  // namespace file_system_provider
-}  // namespace ash
+bool ProvidedFileSystemInfo::operator==(
+    const ProvidedFileSystemInfo& other) const {
+  return provider_id() == other.provider_id() &&
+         file_system_id() == other.file_system_id() &&
+         display_name() == other.display_name() &&
+         writable() == other.writable() &&
+         supports_notify_tag() == other.supports_notify_tag() &&
+         opened_files_limit() == other.opened_files_limit() &&
+         mount_path() == other.mount_path() &&
+         configurable() == other.configurable() &&
+         watchable() == other.watchable() && source() == other.source() &&
+         icon_set() == other.icon_set();
+}
+
+}  // namespace ash::file_system_provider

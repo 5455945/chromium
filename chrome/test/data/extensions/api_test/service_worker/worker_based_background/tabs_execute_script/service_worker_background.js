@@ -1,15 +1,15 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-var urlToLoad;
+let urlToLoad;
 
 chrome.test.runTests([
   function setup() {
     chrome.test.getConfig(function(config) {
-      urlToLoad = "http://a.com:" + config.testServer.port +
-          "/extensions/api_test/service_worker/worker_based_background/" +
-          "tabs_execute_script/empty.html";
+      urlToLoad = `http://a.com:${config.testServer.port}` +
+          '/extensions/api_test/service_worker/worker_based_background/' +
+          'tabs_execute_script/empty.html';
       chrome.test.succeed();
     });
   },

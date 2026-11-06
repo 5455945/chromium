@@ -1,20 +1,25 @@
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-from blinkpy.w3c.wpt_github import MergeError, WPTGitHub
+from blinkpy.w3c.common import CHANGE_ID_KEY, LINK_KEY, parse_footers
+from blinkpy.w3c.wpt_github import (
+    MergeError,
+    PullRequest,
+    PullRequestState,
+)
 
 
 class MockWPTGitHub(object):
-
     # Some unused arguments may be included to match the real class's API.
-    # pylint: disable=unused-argument
 
-    def __init__(self,
-                 pull_requests,
-                 unsuccessful_merge_index=-1,
-                 create_pr_fail_index=-1,
-                 merged_index=-1):
+    def __init__(
+        self,
+        pull_requests,
+        unsuccessful_merge_index=-1,
+        create_pr_fail_index=-1,
+        merged_index=-1,
+    ):
         """Initializes a mock WPTGitHub.
 
         Args:
@@ -36,6 +41,14 @@ class MockWPTGitHub(object):
         self.create_pr_fail_index = create_pr_fail_index
         self.merged_index = merged_index
         self.check_runs = []
+        self.skipped_revisions = ['77578ccb4082ae20a9326d9e673225f1189ebb63']
+        self.url = 'https://github.com/web-platform-tests/wpt/'
+        self.provisional_pr_label = 'do not merge yet'
+        self.export_pr_label = 'chromium-export'
+
+    def all_provisional_pull_requests(self):
+        self.calls.append('all_provisional_pull_requests')
+        return self.pull_requests
 
     def all_pull_requests(self, limit=30):
         self.calls.append('all_pull_requests')
@@ -64,11 +77,13 @@ class MockWPTGitHub(object):
         self.calls.append('create_pr')
 
         if self.create_pr_fail_index != self.create_pr_index:
-            self.pull_requests_created.append((remote_branch_name, desc_title,
-                                               body))
+            self.pull_requests_created.append(
+                (remote_branch_name, desc_title, body)
+            )
 
+        pr_number = 5678 + self.create_pr_index
         self.create_pr_index += 1
-        return 5678
+        return pr_number
 
     def update_pr(self, pr_number, desc_title=None, body=None, state=None):
         self.calls.append('update_pr')
@@ -96,17 +111,37 @@ class MockWPTGitHub(object):
 
     def pr_for_chromium_commit(self, commit):
         self.calls.append('pr_for_chromium_commit')
-        for pr in self.pull_requests:
-            if commit.change_id() in pr.body:
-                return pr
+        if not self.pull_requests:
+            return None
+        if change_id := commit.change_id():
+            return self._pr_with_footer(CHANGE_ID_KEY, change_id)
+        if link := commit.link():
+            return self._pr_with_footer(LINK_KEY, link)
         return None
 
-    def pr_with_change_id(self, change_id):
+    def pr_with_change_id(self, target_change_id: str) -> PullRequest | None:
         self.calls.append('pr_with_change_id')
-        for pr in self.pull_requests:
-            if change_id in pr.body:
-                return pr
-        return None
+        return self._pr_with_footer(CHANGE_ID_KEY, target_change_id)
 
-    def extract_metadata(self, tag, commit_body, all_matches=False):
-        return WPTGitHub.extract_metadata(tag, commit_body, all_matches)
+    def pr_with_link(self, target_link: str) -> PullRequest | None:
+        self.calls.append('pr_with_link')
+        return self._pr_with_footer(LINK_KEY, target_link)
+
+    def _pr_with_footer(
+        self, footer_key: str, target_value: str
+    ) -> PullRequest | None:
+        if not self.pull_requests or not target_value:
+            return None
+        closed_pr = None
+        for pull_request in self.pull_requests:
+            footers = parse_footers(pull_request.body)
+            matches_footer = footers.get(footer_key) == target_value
+            matches_body = target_value in pull_request.body
+            if matches_footer or matches_body:
+                if pull_request.state != PullRequestState.CLOSED:
+                    return pull_request
+                # Prioritize open PRs before falling back to the latest closed
+                # PR.
+                if not closed_pr:
+                    closed_pr = pull_request
+        return closed_pr

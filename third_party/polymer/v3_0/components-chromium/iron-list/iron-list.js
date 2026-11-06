@@ -207,19 +207,6 @@ to previous and next items in the list:
 </iron-list>
 ```
 
-### Styling
-
-You can use the `--iron-list-items-container` mixin to style the container of
-items:
-
-```css
-iron-list {
- --iron-list-items-container: {
-    margin: auto;
-  };
-}
-```
-
 ### Resizing
 
 `iron-list` lays out the items when it receives a notification via the
@@ -267,7 +254,6 @@ Polymer({
       }
 
       #items {
-        @apply --iron-list-items-container;
         position: relative;
       }
 
@@ -1912,13 +1898,7 @@ Polymer({
     if (!targetModel) {
       return;
     }
-    if (focusedModel === targetModel) {
-      // If the user focused the same item, then bring it into view if it's not
-      // visible.
-      if (!this._isIndexVisible(fidx)) {
-        this.scrollToIndex(fidx);
-      }
-    } else {
+    if (focusedModel !== targetModel) {
       this._restoreFocusedItem();
       // Restore tabIndex for the currently focused item.
       if (focusedModel) {

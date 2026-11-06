@@ -1,27 +1,26 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "device/fido/auth_token_requester.h"
 
+#include <algorithm>
 #include <list>
+#include <optional>
 #include <string>
 
-#include "testing/gmock/include/gmock/gmock.h"
-#include "testing/gtest/include/gtest/gtest.h"
-
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/task_environment.h"
-#include "device/fido/fido_constants.h"
 #include "device/fido/fido_device_authenticator.h"
 #include "device/fido/pin.h"
+#include "device/fido/public/fido_constants.h"
 #include "device/fido/virtual_ctap2_device.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "testing/gmock/include/gmock/gmock.h"
+#include "testing/gtest/include/gtest/gtest.h"
 
 namespace device {
 namespace {
@@ -59,17 +58,22 @@ class TestAuthTokenRequesterDelegate : public AuthTokenRequester::Delegate {
       : expectations_(std::move(expectations)) {}
 
   void WaitForResult() { wait_for_result_loop_.Run(); }
-  absl::optional<AuthTokenRequester::Result>& result() { return result_; }
-  absl::optional<pin::TokenResponse>& response() { return response_; }
+  std::optional<AuthTokenRequester::Result>& result() { return result_; }
+  std::optional<pin::TokenResponse>& response() { return response_; }
   bool internal_uv_was_retried() { return internal_uv_num_retries_ > 0u; }
   size_t internal_uv_num_retries() { return internal_uv_num_retries_; }
   std::list<TestExpectation> expectations() { return expectations_; }
+  void set_selectable(bool selectable) { selectable_ = selectable; }
 
  private:
   // AuthTokenRequester::Delegate:
-  void AuthenticatorSelectedForPINUVAuthToken(
+  bool AuthenticatorSelectedForPINUVAuthToken(
       FidoAuthenticator* authenticator) override {
-    authenticator_selected_ = true;
+    DCHECK(!authenticator_selected_);
+    if (selectable_) {
+      authenticator_selected_ = true;
+    }
+    return selectable_;
   }
   void CollectPIN(pin::PINEntryReason reason,
                   pin::PINEntryError error,
@@ -95,8 +99,8 @@ class TestAuthTokenRequesterDelegate : public AuthTokenRequester::Delegate {
   void HavePINUVAuthTokenResultForAuthenticator(
       FidoAuthenticator* authenticator,
       AuthTokenRequester::Result result,
-      absl::optional<pin::TokenResponse> response) override {
-    if (!base::Contains(
+      std::optional<pin::TokenResponse> response) override {
+    if (!std::ranges::contains(
             std::vector<AuthTokenRequester::Result>{
                 AuthTokenRequester::Result::
                     kPreTouchAuthenticatorResponseInvalid,
@@ -112,11 +116,12 @@ class TestAuthTokenRequesterDelegate : public AuthTokenRequester::Delegate {
 
   std::list<TestExpectation> expectations_;
 
-  absl::optional<AuthTokenRequester::Result> result_;
-  absl::optional<pin::TokenResponse> response_;
+  std::optional<AuthTokenRequester::Result> result_;
+  std::optional<pin::TokenResponse> response_;
 
   bool authenticator_selected_ = false;
   size_t internal_uv_num_retries_ = 0u;
+  bool selectable_ = true;
 
   base::RunLoop wait_for_result_loop_;
 };
@@ -173,7 +178,11 @@ class AuthTokenRequesterTest : public ::testing::Test {
     delegate_->WaitForResult();
   }
 
-  void TearDown() override { EXPECT_EQ(delegate_->expectations().size(), 0u); }
+  void TearDown() override {
+    if (delegate_) {
+      EXPECT_EQ(delegate_->expectations().size(), 0u);
+    }
+  }
 
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
@@ -506,6 +515,35 @@ TEST_F(AuthTokenRequesterTest, ForcePINChangeSameAsCurrent) {
 
   EXPECT_EQ(*delegate_->result(), AuthTokenRequester::Result::kSuccess);
   EXPECT_TRUE(delegate_->response());
+}
+
+TEST_F(AuthTokenRequesterTest, NoCallsIfNotSelected) {
+  // Test that a failure to select an authenticator stops processing.
+
+  auto state = base::MakeRefCounted<VirtualFidoDevice::State>();
+  VirtualCtap2Device::Config config;
+
+  config.pin_support = true;
+  state->pin = kTestPIN;
+  config.internal_uv_support = true;
+  state->fingerprints_enrolled = true;
+
+  auto authenticator = std::make_unique<FidoDeviceAuthenticator>(
+      std::make_unique<VirtualCtap2Device>(state, std::move(config)));
+
+  base::RunLoop init_loop;
+  authenticator->InitializeAuthenticator(init_loop.QuitClosure());
+  init_loop.Run();
+
+  auto delegate = std::make_unique<TestAuthTokenRequesterDelegate>(
+      std::list<TestExpectation>());
+  delegate->set_selectable(false);
+  AuthTokenRequester::Options options;
+  options.token_permissions = {pin::Permissions::kMakeCredential};
+  options.rp_id = "foobar.com";
+  AuthTokenRequester requester(delegate.get(), authenticator.get(),
+                               std::move(options));
+  requester.ObtainPINUVAuthToken();
 }
 
 }  // namespace

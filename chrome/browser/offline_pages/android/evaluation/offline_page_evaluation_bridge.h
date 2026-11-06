@@ -1,13 +1,16 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_OFFLINE_PAGES_ANDROID_EVALUATION_OFFLINE_PAGE_EVALUATION_BRIDGE_H_
 #define CHROME_BROWSER_OFFLINE_PAGES_ANDROID_EVALUATION_OFFLINE_PAGE_EVALUATION_BRIDGE_H_
 
+#include <cstdint>
+#include <string>
+#include <vector>
+
 #include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/macros.h"
 #include "components/offline_pages/core/background/request_coordinator.h"
 #include "components/offline_pages/core/background/request_notifier.h"
 #include "components/offline_pages/core/offline_event_logger.h"
@@ -29,13 +32,16 @@ class OfflinePageEvaluationBridge : public OfflinePageModel::Observer,
                                     public OfflineEventLogger::Client {
  public:
   OfflinePageEvaluationBridge(JNIEnv* env,
-                              const base::android::JavaParamRef<jobject>& obj,
+                              const base::android::JavaRef<jobject>& obj,
                               content::BrowserContext* browser_context,
                               OfflinePageModel* offline_page_model,
                               RequestCoordinator* request_coordinator);
 
+  OfflinePageEvaluationBridge(const OfflinePageEvaluationBridge&) = delete;
+  OfflinePageEvaluationBridge& operator=(const OfflinePageEvaluationBridge&) =
+      delete;
+
   ~OfflinePageEvaluationBridge() override;
-  void Destroy(JNIEnv* env, const base::android::JavaParamRef<jobject>& obj);
 
   // OfflinePageModel::Observer implementation.
   void OfflinePageModelLoaded(OfflinePageModel* model) override;
@@ -56,36 +62,29 @@ class OfflinePageEvaluationBridge : public OfflinePageModel::Observer,
 
   // Gets all pages in offline page model.
   void GetAllPages(JNIEnv* env,
-                   const base::android::JavaParamRef<jobject>& obj,
-                   const base::android::JavaParamRef<jobject>& j_result_obj,
-                   const base::android::JavaParamRef<jobject>& j_callback_obj);
+                   const base::android::JavaRef<jobject>& j_result_obj,
+                   const base::android::JavaRef<jobject>& j_callback_obj);
 
   // Return true if processing starts and callback is expected to be called.
   // False otherwise.
   bool PushRequestProcessing(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj,
-      const base::android::JavaParamRef<jobject>& j_callback_obj);
+      const base::android::JavaRef<jobject>& j_callback_obj);
 
   // Gets all the requests in the queue.
   void GetRequestsInQueue(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj,
-      const base::android::JavaParamRef<jobject>& j_callback_obj);
+      const base::android::JavaRef<jobject>& j_callback_obj);
 
   // Removes the requests from the queue.
   void RemoveRequestsFromQueue(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj,
-      const base::android::JavaParamRef<jlongArray>& j_request_ids,
-      const base::android::JavaParamRef<jobject>& j_callback_obj);
+      const std::vector<int64_t>& request_ids,
+      const base::android::JavaRef<jobject>& j_callback_obj);
 
-  void SavePageLater(JNIEnv* env,
-                     const base::android::JavaParamRef<jobject>& obj,
-                     const base::android::JavaParamRef<jstring>& url,
-                     const base::android::JavaParamRef<jstring>& j_namespace,
-                     const base::android::JavaParamRef<jstring>& j_client_id,
-                     jboolean user_requested);
+  void SavePageLater(const std::string& url,
+                     const std::string& name_space,
+                     const std::string& client_id,
+                     bool user_requested);
 
  private:
   void NotifyIfDoneLoading() const;
@@ -101,8 +100,6 @@ class OfflinePageEvaluationBridge : public OfflinePageModel::Observer,
   OfflinePageModel* offline_page_model_;
   // Not owned.
   RequestCoordinator* request_coordinator_;
-
-  DISALLOW_COPY_AND_ASSIGN(OfflinePageEvaluationBridge);
 };
 
 }  // namespace android

@@ -1,9 +1,8 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/files/file_path.h"
-#include "base/macros.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "build/build_config.h"
@@ -13,7 +12,7 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "ui/gfx/image/image.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "ui/display/win/dpi.h"
 #endif
 
@@ -23,6 +22,9 @@ class TestIconLoader {
  public:
   explicit TestIconLoader(base::OnceClosure quit_closure)
       : quit_closure_(std::move(quit_closure)) {}
+
+  TestIconLoader(const TestIconLoader&) = delete;
+  TestIconLoader& operator=(const TestIconLoader&) = delete;
 
   ~TestIconLoader() {
     if (!quit_closure_.is_null()) {
@@ -35,12 +37,9 @@ class TestIconLoader {
   bool TryLoadIcon(const base::FilePath& file_path,
                    IconLoader::IconSize size,
                    float scale) {
-    // |loader| is self deleting. |this| will live as long as the
-    // test.
-    auto* loader = IconLoader::Create(
+    IconLoader::LoadIcon(
         file_path, size, scale,
         base::BindOnce(&TestIconLoader::OnIconLoaded, base::Unretained(this)));
-    loader->Start();
     return true;
   }
 
@@ -58,18 +57,18 @@ class TestIconLoader {
 
   bool load_succeeded_ = false;
   base::OnceClosure quit_closure_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestIconLoader);
 };
 
-#if !((defined(OS_LINUX) || defined(OS_CHROMEOS)) && defined(MEMORY_SANITIZER))
-const base::FilePath::CharType kGroupOnlyFilename[] =
-    FILE_PATH_LITERAL("unlikely-to-exist-file.txt");
-
 // Under GTK, the icon providing functions do not return icons.
+#if !((BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)) && \
+      defined(MEMORY_SANITIZER))
+
 IN_PROC_BROWSER_TEST_F(IconLoaderBrowserTest, LoadGroup) {
   float scale = 1.0;
-#if defined(OS_WIN)
+  constexpr base::FilePath::CharType kGroupOnlyFilename[] =
+      FILE_PATH_LITERAL("unlikely-to-exist-file.txt");
+
+#if BUILDFLAG(IS_WIN)
   scale = display::win::GetDPIScale();
 #endif
 
@@ -83,10 +82,11 @@ IN_PROC_BROWSER_TEST_F(IconLoaderBrowserTest, LoadGroup) {
   runner.Run();
   EXPECT_TRUE(test_loader.load_succeeded());
 }
-#endif  // !((defined(OS_LINUX) || defined(OS_CHROMEOS)) &&
+
+#endif  // !((BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)) &&
         // defined(MEMORY_SANITIZER))
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 IN_PROC_BROWSER_TEST_F(IconLoaderBrowserTest, LoadExeIcon) {
   float scale = display::win::GetDPIScale();
   base::RunLoop runner;
@@ -117,4 +117,4 @@ IN_PROC_BROWSER_TEST_F(IconLoaderBrowserTest, LoadDefaultExeIcon) {
   runner.Run();
   EXPECT_TRUE(test_loader.load_succeeded());
 }
-#endif  // OS_WIN
+#endif  // BUILDFLAG(IS_WIN)

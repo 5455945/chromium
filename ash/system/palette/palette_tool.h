@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,21 +7,19 @@
 
 #include "ash/ash_export.h"
 #include "ash/system/palette/palette_ids.h"
-#include "base/callback.h"
-#include "base/macros.h"
-#include "ui/gfx/vector_icon_types.h"
+#include "base/memory/raw_ptr.h"
 
 namespace aura {
 class Window;
-}
+}  // namespace aura
 
 namespace gfx {
 struct VectorIcon;
-}
+}  // namespace gfx
 
 namespace views {
 class View;
-}
+}  // namespace views
 
 namespace ash {
 
@@ -51,13 +49,6 @@ class ASH_EXPORT PaletteTool {
     // Returns the root window.
     virtual aura::Window* GetWindow() = 0;
 
-    // Record usage of each pen palette option.
-    virtual void RecordPaletteOptionsUsage(PaletteTrayOptions option,
-                                           PaletteInvocationMethod method) = 0;
-
-    // Record mode cancellation of pen palette.
-    virtual void RecordPaletteModeCancellation(PaletteModeCancelType type) = 0;
-
    protected:
     virtual ~Delegate() {}
   };
@@ -67,6 +58,10 @@ class ASH_EXPORT PaletteTool {
 
   // |delegate| must outlive this tool instance.
   explicit PaletteTool(Delegate* delegate);
+
+  PaletteTool(const PaletteTool&) = delete;
+  PaletteTool& operator=(const PaletteTool&) = delete;
+
   virtual ~PaletteTool();
 
   // The group this tool belongs to. Only one tool per group can be active at
@@ -93,7 +88,9 @@ class ASH_EXPORT PaletteTool {
   virtual void OnViewDestroyed() = 0;
 
   // Returns an icon to use in the tray if this tool is active. Only one tool
-  // (per-group) should ever have an active icon at any given time.
+  // (per-group) should ever have an active icon at any given time. The icon
+  // will be the same as that used in the palette tray on the left-most edge of
+  // the tool i.e. CommonPaletteTool::GetPaletteIcon().
   virtual const gfx::VectorIcon& GetActiveTrayIcon() const;
 
   void SetExternalDisplayForTest() { external_display_for_test_ = true; }
@@ -110,9 +107,7 @@ class ASH_EXPORT PaletteTool {
   bool enabled_ = false;
 
   // Unowned pointer to the delegate. The delegate should outlive this instance.
-  Delegate* delegate_;
-
-  DISALLOW_COPY_AND_ASSIGN(PaletteTool);
+  raw_ptr<Delegate> delegate_;
 };
 
 }  // namespace ash

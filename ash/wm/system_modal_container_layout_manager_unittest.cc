@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,17 +20,18 @@
 #include "ash/wm/window_util.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
-#include "base/run_loop.h"
+#include "base/test/run_until.h"
 #include "components/session_manager/session_manager_types.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/test/test_window_delegate.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_event_dispatcher.h"
 #include "ui/base/hit_test.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/compositor/layer.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/compositor/test/layer_animator_test_controller.h"
 #include "ui/events/test/event_generator.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/views/test/capture_tracking_view.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
@@ -67,12 +68,37 @@ bool AllRootWindowsHaveModalBackgrounds() {
       kShellWindowId_SystemModalContainer);
 }
 
+class TransientWindowObserver : public aura::WindowObserver {
+ public:
+  TransientWindowObserver() : destroyed_(false) {}
+
+  TransientWindowObserver(const TransientWindowObserver&) = delete;
+  TransientWindowObserver& operator=(const TransientWindowObserver&) = delete;
+
+  ~TransientWindowObserver() override = default;
+
+  bool destroyed() const { return destroyed_; }
+
+  // Overridden from aura::WindowObserver:
+  void OnWindowDestroyed(aura::Window* window) override { destroyed_ = true; }
+
+ private:
+  bool destroyed_;
+};
+
+}  // namespace
+
 class TestWindow : public views::WidgetDelegateView {
  public:
   explicit TestWindow(bool modal) {
-    SetModalType(modal ? ui::MODAL_TYPE_SYSTEM : ui::MODAL_TYPE_NONE);
+    SetModalType(modal ? ui::mojom::ModalType::kSystem
+                       : ui::mojom::ModalType::kNone);
     SetPreferredSize(gfx::Size(50, 50));
   }
+
+  TestWindow(const TestWindow&) = delete;
+  TestWindow& operator=(const TestWindow&) = delete;
+
   ~TestWindow() override = default;
 
   // The window needs be closed from widget in order for
@@ -80,14 +106,15 @@ class TestWindow : public views::WidgetDelegateView {
   static void CloseTestWindow(aura::Window* window) {
     views::Widget::GetWidgetForNativeWindow(window)->Close();
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(TestWindow);
 };
 
 class EventTestWindow : public TestWindow {
  public:
   explicit EventTestWindow(bool modal) : TestWindow(modal), mouse_presses_(0) {}
+
+  EventTestWindow(const EventTestWindow&) = delete;
+  EventTestWindow& operator=(const EventTestWindow&) = delete;
+
   ~EventTestWindow() override = default;
 
   aura::Window* ShowTestWindowWithContext(aura::Window* context) {
@@ -114,27 +141,7 @@ class EventTestWindow : public TestWindow {
 
  private:
   int mouse_presses_;
-
-  DISALLOW_COPY_AND_ASSIGN(EventTestWindow);
 };
-
-class TransientWindowObserver : public aura::WindowObserver {
- public:
-  TransientWindowObserver() : destroyed_(false) {}
-  ~TransientWindowObserver() override = default;
-
-  bool destroyed() const { return destroyed_; }
-
-  // Overridden from aura::WindowObserver:
-  void OnWindowDestroyed(aura::Window* window) override { destroyed_ = true; }
-
- private:
-  bool destroyed_;
-
-  DISALLOW_COPY_AND_ASSIGN(TransientWindowObserver);
-};
-
-}  // namespace
 
 class SystemModalContainerLayoutManagerTest : public AshTestBase {
  public:
@@ -168,7 +175,7 @@ class SystemModalContainerLayoutManagerTest : public AshTestBase {
 
     if (show) {
       keyboard->ShowKeyboard(true /* lock */);
-      ASSERT_TRUE(keyboard::WaitUntilShown());
+      ASSERT_TRUE(keyboard::test::WaitUntilShown());
     } else {
       keyboard->HideKeyboardByUser();
     }
@@ -295,10 +302,9 @@ TEST_F(SystemModalContainerLayoutManagerTest, CanActivateAfterEndModalSession) {
   transient->Hide();
   TestWindow::CloseTestWindow(transient.release());
 
-  base::RunLoop().RunUntilIdle();
-
-  // parent should now be active again.
-  EXPECT_TRUE(wm::IsActiveWindow(parent.get()));
+  // Closing the transient restores activation to its parent asynchronously.
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return wm::IsActiveWindow(parent.get()); }));
 
   // Attempting to click unrelated should activate it.
   ui::test::EventGenerator e2(Shell::GetPrimaryRootWindow(), unrelated.get());
@@ -663,11 +669,11 @@ TEST_F(SystemModalContainerLayoutManagerTest, ShowNormalBackgroundOrLocked) {
 
     // Normal system modal window while blocked, but it belongs to the normal
     // window.  Shouldn't show blocked system modal background, but normal.
-    std::unique_ptr<aura::Window> modal_window(
+    std::unique_ptr<aura::Window> modal_window_while_blocked(
         ShowTestWindowWithParent(parent.get(), true));
     EXPECT_TRUE(AllRootWindowsHaveModalBackgrounds());
     EXPECT_FALSE(AllRootWindowsHaveLockedModalBackgrounds());
-    TestWindow::CloseTestWindow(modal_window.release());
+    TestWindow::CloseTestWindow(modal_window_while_blocked.release());
 
     // Close |lock_parent| before unlocking so that Shell::OnLockStateChanged
     // does not DCHECK on finding a system modal in Lock layer when unlocked.
@@ -682,7 +688,7 @@ TEST_F(SystemModalContainerLayoutManagerTest, ShowNormalBackgroundOrLocked) {
 }
 
 TEST_F(SystemModalContainerLayoutManagerTest, MultiDisplays) {
-  UpdateDisplay("500x500,500x500");
+  UpdateDisplay("600x500,600x500");
 
   std::unique_ptr<aura::Window> normal(ShowToplevelTestWindow(false));
   normal->SetBounds(gfx::Rect(100, 100, 50, 50));
@@ -720,11 +726,11 @@ TEST_F(SystemModalContainerLayoutManagerTest, MultiDisplays) {
   EXPECT_TRUE(AllRootWindowsHaveModalBackgrounds());
   EXPECT_TRUE(wm::IsActiveWindow(modal1.get()));
 
-  UpdateDisplay("500x500");
+  UpdateDisplay("600x500");
   EXPECT_TRUE(AllRootWindowsHaveModalBackgrounds());
   EXPECT_TRUE(wm::IsActiveWindow(modal1.get()));
 
-  UpdateDisplay("500x500,600x600");
+  UpdateDisplay("600x500,700x600");
   EXPECT_TRUE(AllRootWindowsHaveModalBackgrounds());
   EXPECT_TRUE(wm::IsActiveWindow(modal1.get()));
 
@@ -834,17 +840,17 @@ TEST_F(SystemModalContainerLayoutManagerTest, UpdateModalType) {
   aura::Window* window = ShowTestWindowWithParent(modal_container, false);
   EXPECT_FALSE(Shell::IsSystemModalWindowOpen());
 
-  window->SetProperty(aura::client::kModalKey, ui::MODAL_TYPE_SYSTEM);
+  window->SetProperty(aura::client::kModalKey, ui::mojom::ModalType::kSystem);
   EXPECT_TRUE(Shell::IsSystemModalWindowOpen());
 
   // Setting twice should not cause error.
-  window->SetProperty(aura::client::kModalKey, ui::MODAL_TYPE_SYSTEM);
+  window->SetProperty(aura::client::kModalKey, ui::mojom::ModalType::kSystem);
   EXPECT_TRUE(Shell::IsSystemModalWindowOpen());
 
-  window->SetProperty(aura::client::kModalKey, ui::MODAL_TYPE_NONE);
+  window->SetProperty(aura::client::kModalKey, ui::mojom::ModalType::kNone);
   EXPECT_FALSE(Shell::IsSystemModalWindowOpen());
 
-  window->SetProperty(aura::client::kModalKey, ui::MODAL_TYPE_SYSTEM);
+  window->SetProperty(aura::client::kModalKey, ui::mojom::ModalType::kSystem);
   EXPECT_TRUE(Shell::IsSystemModalWindowOpen());
 
   window_util::CloseWidgetForWindow(window);
@@ -891,12 +897,17 @@ namespace {
 class InputTestDelegate : public aura::test::TestWindowDelegate {
  public:
   InputTestDelegate() = default;
+
+  InputTestDelegate(const InputTestDelegate&) = delete;
+  InputTestDelegate& operator=(const InputTestDelegate&) = delete;
+
   ~InputTestDelegate() override = default;
 
   void RunTest(AshTestBase* test_base) {
     std::unique_ptr<aura::Window> window(
-        test_base->CreateTestWindowInShellWithDelegate(
-            this, 0, gfx::Rect(0, 0, 100, 100)));
+        test_base->CreateTestWindowInShell({.delegate = this,
+                                            .bounds = gfx::Rect(0, 0, 100, 100),
+                                            .window_id = 0}));
     window->Show();
 
     GenerateEvents(window.get());
@@ -964,8 +975,6 @@ class InputTestDelegate : public aura::test::TestWindowDelegate {
   int scroll_event_count_ = 0;
   int touch_event_count_ = 0;
   int gesture_event_count_ = 0;
-
-  DISALLOW_COPY_AND_ASSIGN(InputTestDelegate);
 };
 
 }  // namespace
@@ -977,7 +986,7 @@ TEST_F(SystemModalContainerLayoutManagerTest, BlockAllEvents) {
 
 // Make sure that events are properly blocked in multi displays environment.
 TEST_F(SystemModalContainerLayoutManagerTest, BlockEventsInMultiDisplays) {
-  UpdateDisplay("500x500, 500x500");
+  UpdateDisplay("600x500, 600x500");
   InputTestDelegate delegate;
   delegate.RunTest(this);
 }

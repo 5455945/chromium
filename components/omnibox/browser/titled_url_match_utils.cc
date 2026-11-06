@@ -1,10 +1,11 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/omnibox/browser/titled_url_match_utils.h"
 
 #include <numeric>
+#include <string_view>
 #include <vector>
 
 #include "base/metrics/field_trial_params.h"
@@ -13,42 +14,49 @@
 #include "components/bookmarks/browser/titled_url_node.h"
 #include "components/omnibox/browser/autocomplete_match.h"
 #include "components/omnibox/browser/autocomplete_match_classification.h"
+#include "components/omnibox/browser/autocomplete_scoring_signals_annotator.h"
 #include "components/omnibox/browser/history_provider.h"
 #include "components/omnibox/browser/omnibox_field_trial.h"
 #include "components/omnibox/browser/url_prefix.h"
-#include "components/omnibox/common/omnibox_features.h"
+#include "components/query_parser/snippet.h"
 #include "components/url_formatter/url_formatter.h"
+#include "third_party/metrics_proto/omnibox_scoring_signals.pb.h"
 
+namespace bookmarks {
 namespace {
+
+using ScoringSignals = ::metrics::OmniboxScoringSignals;
 
 // Concatenates |ancestors| in reverse order and using '/' as the delimiter.
 std::u16string ConcatAncestorsTitles(
-    std::vector<base::StringPiece16> ancestors) {
+    std::vector<std::u16string_view> ancestors) {
   return ancestors.empty()
              ? std::u16string()
-             : std::accumulate(std::next(ancestors.rbegin()), ancestors.rend(),
-                               std::u16string(*ancestors.rbegin()),
-                               [](std::u16string& a, base::StringPiece16& b) {
-                                 return a + u"/" + std::u16string(b);
-                               });
+             : std::accumulate(
+                   std::next(ancestors.rbegin()), ancestors.rend(),
+                   std::u16string(*ancestors.rbegin()),
+                   [](const std::u16string& a, std::u16string_view b) {
+                     return a + u"/" + std::u16string(b);
+                   });
 }
 
 }  // namespace
 
-namespace bookmarks {
-
 AutocompleteMatch TitledUrlMatchToAutocompleteMatch(
     const TitledUrlMatch& titled_url_match,
-    AutocompleteMatchType::Type type,
+    omnibox::AutocompleteMatchType type,
     int relevance,
+    int bookmark_count,
     AutocompleteProvider* provider,
     const AutocompleteSchemeClassifier& scheme_classifier,
     const AutocompleteInput& input,
     const std::u16string& fixed_up_input_text) {
-  const std::u16string title = titled_url_match.node->GetTitledUrlNodeTitle();
+  const std::u16string title = AutocompleteMatch::SanitizeString(
+      titled_url_match.node->GetTitledUrlNodeTitle());
   const GURL& url = titled_url_match.node->GetTitledUrlNodeUrl();
-  const std::u16string path = ConcatAncestorsTitles(
-      titled_url_match.node->GetTitledUrlNodeAncestorTitles());
+  const std::u16string path =
+      AutocompleteMatch::SanitizeString(ConcatAncestorsTitles(
+          titled_url_match.node->GetTitledUrlNodeAncestorTitles()));
 
   // The AutocompleteMatch we construct is non-deletable because the only way to
   // support this would be to delete the underlying object that created the
@@ -66,20 +74,20 @@ AutocompleteMatch TitledUrlMatchToAutocompleteMatch(
                                         titled_url_match.url_match_positions,
                                         &match_in_scheme, &match_in_subdomain);
   auto format_types = AutocompleteMatch::GetFormatTypes(
-      input.parts().scheme.len > 0 || match_in_scheme, match_in_subdomain);
+      input.parts().scheme.is_nonempty() || match_in_scheme,
+      match_in_subdomain);
   const std::u16string formatted_url = url_formatter::FormatUrl(
-      url, format_types, net::UnescapeRule::SPACES, nullptr, nullptr, nullptr);
+      url, format_types, base::UnescapeRule::SPACES, nullptr, nullptr, nullptr);
 
-  if (OmniboxFieldTrial::kBookmarkPathsUiReplaceUrl.Get()) {
-    match.contents = path;
-  } else if (OmniboxFieldTrial::kBookmarkPathsUiDynamicReplaceUrl.Get()) {
-    match.contents = !titled_url_match.has_ancestor_match &&
-                             !titled_url_match.url_match_positions.empty()
-                         ? formatted_url
-                         : path;
-  } else {
-    match.contents = formatted_url;
-  }
+  // Display the URL only if the input matches the URL but not the path.
+  // Otherwise, display the path, even if the input matches both or neither.
+  bool show_path = titled_url_match.has_ancestor_match ||
+                   titled_url_match.url_match_positions.empty();
+  match.contents = show_path ? path : formatted_url;
+  // The path can become stale (when the bookmark is moved). So persist the URL
+  // instead when creating shortcuts.
+  if (show_path)
+    match.description_for_shortcuts = formatted_url;
 
   // Bookmark classification diverges from relevance scoring. Specifically,
   // 1) All occurrences of the input contribute to relevance; e.g. for the input
@@ -98,16 +106,15 @@ AutocompleteMatch TitledUrlMatchToAutocompleteMatch(
       ACMatchClassification::MATCH | ACMatchClassification::URL,
       ACMatchClassification::URL);
 
-  if (OmniboxFieldTrial::kBookmarkPathsUiReplaceTitle.Get()) {
-    match.description = path + u"/" + title;
-  } else if (OmniboxFieldTrial::kBookmarkPathsUiAppendAfterTitle.Get()) {
-    match.description = title + u" : " + path;
-  } else {
-    match.description = title;
+  if (show_path) {
+    auto terms = FindTermMatches(input.text(), match.description_for_shortcuts);
+    match.description_class_for_shortcuts = ClassifyTermMatches(
+        terms, match.description_for_shortcuts.length(),
+        ACMatchClassification::MATCH | ACMatchClassification::URL,
+        ACMatchClassification::URL);
   }
 
-  base::TrimWhitespace(match.description, base::TRIM_LEADING,
-                       &match.description);
+  match.description = title;
   auto description_terms = FindTermMatches(input.text(), match.description);
   match.description_class = ClassifyTermMatches(
       description_terms, match.description.length(),
@@ -124,11 +131,11 @@ AutocompleteMatch TitledUrlMatchToAutocompleteMatch(
       AutocompleteInput::FormattedStringWithEquivalentMeaning(
           url,
           url_formatter::FormatUrl(url, fill_into_edit_format_types,
-                                   net::UnescapeRule::SPACES, nullptr, nullptr,
+                                   base::UnescapeRule::SPACES, nullptr, nullptr,
                                    &inline_autocomplete_offset),
           scheme_classifier, &inline_autocomplete_offset);
 
-  if (match.TryRichAutocompletion(match.contents, match.description, input)) {
+  if (match.TryRichAutocompletion(input, match.contents, match.description)) {
     // If rich autocompletion applies, we skip trying the alternatives below.
   } else if (inline_autocomplete_offset != std::u16string::npos) {
     match.inline_autocompletion =
@@ -136,7 +143,36 @@ AutocompleteMatch TitledUrlMatchToAutocompleteMatch(
     match.SetAllowedToBeDefault(input);
   }
 
+  if (input.in_keyword_mode()) {
+    match.from_keyword = true;
+  }
+
+  if (OmniboxFieldTrial::IsPopulatingUrlScoringSignalsEnabled() &&
+      match.IsMlSignalLoggingEligible()) {
+    match.scoring_signals = std::make_optional<ScoringSignals>();
+    // Populate ACMatches with signals for ML model scoring and training.
+    if (!titled_url_match.title_match_positions.empty())
+      match.scoring_signals->set_first_bookmark_title_match_position(
+          titled_url_match.title_match_positions[0].first);
+    match.scoring_signals->set_total_bookmark_title_match_length(
+        GetTotalTitleMatchLength(titled_url_match.title_match_positions));
+    match.scoring_signals->set_allowed_to_be_default_match(
+        match.allowed_to_be_default_match);
+    match.scoring_signals->set_length_of_url(url.spec().length());
+    match.scoring_signals->set_num_bookmarks_of_url(bookmark_count);
+  }
+
   return match;
+}
+
+// Computes the total length of matched strings in the bookmark title.
+int GetTotalTitleMatchLength(
+    const query_parser::Snippet::MatchPositions& title_match_positions) {
+  int len = 0;
+  for (const auto& title_match : title_match_positions) {
+    len += title_match.second - title_match.first;
+  }
+  return len;
 }
 
 }  // namespace bookmarks

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,11 @@ package org.chromium.components.download;
 
 import android.net.Uri;
 
-/**
- * Helper class for providering some helper method needed by DownloadCollectionBridge.
- */
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+
+/** Helper class for providering some helper method needed by DownloadCollectionBridge. */
+@NullMarked
 public class DownloadDelegate {
     public DownloadDelegate() {}
 
@@ -32,7 +34,7 @@ public class DownloadDelegate {
      * @param originalUrl String representation of the originating URL.
      * @return A valid Uri that can be accepted by DownloadManager.
      */
-    public Uri parseOriginalUrl(String originalUrl) {
+    public @Nullable Uri parseOriginalUrl(String originalUrl) {
         return Uri.parse(originalUrl);
     }
 

@@ -1,21 +1,23 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_WEB_APPLICATIONS_MANIFEST_UPDATE_MANAGER_H_
 #define CHROME_BROWSER_WEB_APPLICATIONS_MANIFEST_UPDATE_MANAGER_H_
 
-#include <memory>
-
-#include "base/callback.h"
-#include "base/containers/flat_map.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
-#include "chrome/browser/web_applications/components/app_registrar.h"
-#include "chrome/browser/web_applications/components/app_registrar_observer.h"
-#include "chrome/browser/web_applications/components/web_app_id.h"
-#include "chrome/browser/web_applications/manifest_update_task.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/types/pass_key.h"
+#include "chrome/browser/web_applications/web_app_install_manager.h"
+#include "chrome/browser/web_applications/web_app_install_manager_observer.h"
+#include "components/webapps/common/web_app_id.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
+
+namespace blink {
+class Manifest;
+}
 
 namespace content {
 class WebContents;
@@ -23,87 +25,57 @@ class WebContents;
 
 namespace web_app {
 
-class WebAppUiManager;
-class InstallManager;
-class OsIntegrationManager;
-class SystemWebAppManager;
+struct FetchManifestAndUpdateCompletionInfo;
+struct ManifestSilentUpdateCompletionInfo;
+class WebAppProvider;
+class WebAppTabHelper;
 
+// Documentation: docs/webapps/manifest_update_process.md
+//
 // Checks for updates to a web app's manifest and triggers a reinstall if the
 // current installation is out of date.
-//
-// Update checks are throttled per app (see MaybeConsumeUpdateCheck()) to avoid
-// excessive updating on pathological sites.
-//
-// Each update check is performed by a |ManifestUpdateTask|, see that class for
-// details about what happens during a check.
-//
-// TODO(crbug.com/926083): Replace MaybeUpdate() with a background check instead
-// of being triggered by page loads.
-class ManifestUpdateManager final : public AppRegistrarObserver {
+class ManifestUpdateManager final : public WebAppInstallManagerObserver {
  public:
   ManifestUpdateManager();
   ~ManifestUpdateManager() override;
 
-  void SetSubsystems(AppRegistrar* registrar,
-                     AppIconManager* icon_manager,
-                     WebAppUiManager* ui_manager,
-                     InstallManager* install_manager,
-                     SystemWebAppManager* system_web_app_manager,
-                     OsIntegrationManager* os_integration_manager);
+  void SetProvider(base::PassKey<WebAppProvider>, WebAppProvider& provider);
   void Start();
   void Shutdown();
 
-  void MaybeUpdate(const GURL& url,
-                   const AppId& app_id,
-                   content::WebContents* web_contents);
-  bool IsUpdateConsumed(const AppId& app_id);
+  // Called by WebAppTabHelper when a developer-specified manifest is seen on
+  // the primary page.
+  void OnManifestSeenOnPrimaryPage(content::WebContents& web_contents,
+                                   const blink::Manifest& manifest,
+                                   base::PassKey<WebAppTabHelper>);
+  void TriggerManifestUpdateProcess(content::WebContents& web_contents,
+                                    const webapps::AppId& app_id);
 
-  // AppRegistrarObserver:
-  void OnWebAppWillBeUninstalled(const AppId& app_id) override;
-
-  // |app_id| will be nullptr when |result| is kNoAppInScope.
-  using ResultCallback =
-      base::OnceCallback<void(const GURL& url, ManifestUpdateResult result)>;
-  void SetResultCallbackForTesting(ResultCallback callback);
-  void set_time_override_for_testing(base::Time time_override) {
-    time_override_for_testing_ = time_override;
-  }
-
-  void hang_update_checks_for_testing() {
-    hang_update_checks_for_testing_ = true;
-  }
+  // WebAppInstallManagerObserver:
+  void OnWebAppWillBeUninstalled(const webapps::AppId& app_id) override;
+  void OnWebAppInstallManagerDestroyed() override;
 
  private:
-  bool MaybeConsumeUpdateCheck(const GURL& origin, const AppId& app_id);
-  absl::optional<base::Time> GetLastUpdateCheckTime(const AppId& app_id) const;
-  void SetLastUpdateCheckTime(const GURL& origin,
-                              const AppId& app_id,
-                              base::Time time);
-  void OnUpdateStopped(const ManifestUpdateTask& task,
-                       ManifestUpdateResult result);
-  void NotifyResult(const GURL& url,
-                    const AppId& app_id,
-                    ManifestUpdateResult result);
+  void OnManifestSilentUpdateComplete(
+      base::WeakPtr<content::WebContents> contents,
+      const webapps::AppId& app_id,
+      ManifestSilentUpdateCompletionInfo completion_info);
+  void OnMigrationFetchManifestAndUpdateComplete(
+      const webapps::AppId& app_id,
+      FetchManifestAndUpdateCompletionInfo completion_info);
 
-  AppRegistrar* registrar_ = nullptr;
-  AppIconManager* icon_manager_ = nullptr;
-  WebAppUiManager* ui_manager_ = nullptr;
-  InstallManager* install_manager_ = nullptr;
-  SystemWebAppManager* system_web_app_manager_ = nullptr;
-  OsIntegrationManager* os_integration_manager_ = nullptr;
-
-  base::ScopedObservation<AppRegistrar, AppRegistrarObserver>
-      registrar_observation_{this};
-
-  base::flat_map<AppId, std::unique_ptr<ManifestUpdateTask>> tasks_;
-
-  base::flat_map<AppId, base::Time> last_update_check_;
-
-  absl::optional<base::Time> time_override_for_testing_;
-  ResultCallback result_callback_for_testing_;
-
+  raw_ptr<WebAppProvider> provider_ = nullptr;
+  base::ScopedObservation<WebAppInstallManager, WebAppInstallManagerObserver>
+      install_manager_observation_{this};
+  // Stores the last time a manifest update was silently made for an app based
+  // on the small icon difference as per the new predictable app update
+  // algorithm. Used to throttle silent icon updates to once every 24 hours.
+  // Please see https://bit.ly/predictable-webapp-updating-prd for more
+  // information.
+  absl::flat_hash_map<webapps::AppId, base::Time>
+      update_check_for_silent_updates_;
   bool started_ = false;
-  bool hang_update_checks_for_testing_ = false;
+  base::WeakPtrFactory<ManifestUpdateManager> weak_factory_{this};
 };
 
 }  // namespace web_app

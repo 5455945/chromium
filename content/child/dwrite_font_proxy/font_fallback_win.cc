@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,6 @@
 #include <algorithm>
 #include <string>
 
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/utf_string_conversion_utils.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/trace_event/trace_event.h"
@@ -22,23 +21,6 @@ namespace content {
 namespace {
 
 const size_t kMaxFamilyCacheSize = 10;
-
-// This enum is used to define the buckets for an enumerated UMA histogram.
-// Hence,
-//   (a) existing enumerated constants should never be deleted or reordered, and
-//   (b) new constants should only be appended at the end of the enumeration.
-enum DirectWriteFontFallbackResult {
-  FAILED_NO_FONT = 0,
-  SUCCESS_CACHE = 1,
-  SUCCESS_IPC = 2,
-
-  FONT_FALLBACK_RESULT_MAX_VALUE
-};
-
-void LogFallbackResult(DirectWriteFontFallbackResult fallback_result) {
-  UMA_HISTOGRAM_ENUMERATION("DirectWrite.Fonts.Proxy.FallbackResult",
-                            fallback_result, FONT_FALLBACK_RESULT_MAX_VALUE);
-}
 
 std::wstring MakeCacheKey(const wchar_t* base_family_name,
                           const wchar_t* locale) {
@@ -97,11 +79,13 @@ HRESULT FontFallback::MapCharacters(IDWriteTextAnalysisSource* source,
 
   locale = locale ? locale : L"";
 
+  size_t mapped_length_size_t = *mapped_length;
   if (GetCachedFont(text_chunk, base_family_name, locale, base_weight,
-                    base_style, base_stretch, mapped_font, mapped_length)) {
+                    base_style, base_stretch, mapped_font,
+                    &mapped_length_size_t)) {
     DCHECK(*mapped_font);
-    DCHECK_GT(*mapped_length, 0u);
-    LogFallbackResult(SUCCESS_CACHE);
+    DCHECK_GT(mapped_length_size_t, 0u);
+    *mapped_length = base::checked_cast<UINT32>(mapped_length_size_t);
     return S_OK;
   }
 
@@ -115,7 +99,7 @@ HRESULT FontFallback::MapCharacters(IDWriteTextAnalysisSource* source,
                                              base_stretch),
           base::WideToUTF16(locale), source->GetParagraphReadingDirection(),
           base::WideToUTF16(base_family_name), &result)) {
-    DCHECK(false);
+    collection_->SetFontServiceDisconnected();
     return E_FAIL;
   }
 
@@ -128,7 +112,6 @@ HRESULT FontFallback::MapCharacters(IDWriteTextAnalysisSource* source,
   *scale = result->scale;
 
   if (result->family_index == UINT32_MAX) {
-    LogFallbackResult(FAILED_NO_FONT);
     return S_OK;
   }
 
@@ -155,7 +138,6 @@ HRESULT FontFallback::MapCharacters(IDWriteTextAnalysisSource* source,
 
   DCHECK(*mapped_font);
   AddCachedFamily(std::move(family), base_family_name, locale);
-  LogFallbackResult(SUCCESS_IPC);
   return S_OK;
 }
 
@@ -172,7 +154,8 @@ bool FontFallback::GetCachedFont(const std::u16string& text,
                                  DWRITE_FONT_STYLE base_style,
                                  DWRITE_FONT_STRETCH base_stretch,
                                  IDWriteFont** font,
-                                 uint32_t* mapped_length) {
+                                 size_t* mapped_length) {
+  base::AutoLock guard(lock_);
   std::map<std::wstring, std::list<mswr::ComPtr<IDWriteFontFamily>>>::iterator
       it = fallback_family_cache_.find(MakeCacheKey(base_family_name, locale));
   if (it == fallback_family_cache_.end())
@@ -196,14 +179,14 @@ bool FontFallback::GetCachedFont(const std::u16string& text,
     // different from |mapped_length| because ReadUnicodeCharacter can advance
     // |character_index| even if the character cannot be mapped (invalid
     // surrogate pair or font does not contain a matching glyph).
-    int32_t character_index = 0;
-    uint32_t length = 0;  // How much of the text can actually be mapped.
-    while (static_cast<uint32_t>(character_index) < text.length()) {
+    size_t character_index = 0;
+    size_t length = 0;  // How much of the text can actually be mapped.
+    while (character_index < text.length()) {
       BOOL exists = false;
-      uint32_t character = 0;
-      if (!base::ReadUnicodeCharacter(text.c_str(), text.length(),
-                                      &character_index, &character))
+      base_icu::UChar32 character = 0;
+      if (!base::ReadUnicodeCharacter(text, &character_index, &character)) {
         break;
+      }
       if (FAILED(matched_font->HasCharacter(character, &exists)) || !exists)
         break;
       character_index++;
@@ -227,6 +210,7 @@ void FontFallback::AddCachedFamily(
     Microsoft::WRL::ComPtr<IDWriteFontFamily> family,
     const wchar_t* base_family_name,
     const wchar_t* locale) {
+  base::AutoLock guard(lock_);
   // Note: If the requested locale does not disambiguate Han ideographs, caching
   // by locale may prime the cache with one CJK font for the first request,
   // which may be unsuitable for the next request. For example: While specifying
@@ -237,9 +221,6 @@ void FontFallback::AddCachedFamily(
   std::list<mswr::ComPtr<IDWriteFontFamily>>& family_list =
       fallback_family_cache_[MakeCacheKey(base_family_name, locale)];
   family_list.push_front(std::move(family));
-
-  UMA_HISTOGRAM_COUNTS_100("DirectWrite.Fonts.Proxy.Fallback.CacheSize",
-                           family_list.size());
 
   while (family_list.size() > kMaxFamilyCacheSize)
     family_list.pop_back();

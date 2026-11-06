@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,9 @@
 
 #include <utility>
 
-#include "base/macros.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "device/fido/fido_discovery_factory.h"
 #include "device/fido/fido_test_data.h"
@@ -26,14 +25,15 @@ using ::testing::_;
 class FakeFidoDiscoveryTest : public ::testing::Test {
  public:
   FakeFidoDiscoveryTest() = default;
+
+  FakeFidoDiscoveryTest(const FakeFidoDiscoveryTest&) = delete;
+  FakeFidoDiscoveryTest& operator=(const FakeFidoDiscoveryTest&) = delete;
+
   ~FakeFidoDiscoveryTest() override = default;
 
  protected:
   FakeFidoDiscoveryFactory fake_fido_discovery_factory_;
   base::test::TaskEnvironment task_environment_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(FakeFidoDiscoveryTest);
 };
 
 using FakeFidoDiscoveryFactoryTest = FakeFidoDiscoveryTest;
@@ -76,7 +76,7 @@ TEST_F(FakeFidoDiscoveryTest, WaitThenStartStopDiscovery) {
   MockFidoDiscoveryObserver observer;
   discovery.set_observer(&observer);
 
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindLambdaForTesting([&]() { discovery.Start(); }));
 
   discovery.WaitForCallToStart();
@@ -124,8 +124,7 @@ TEST_F(FakeFidoDiscoveryTest, AddDevice) {
   discovery.AddDevice(std::move(device0));
 
   EXPECT_CALL(observer, DiscoveryStarted(&discovery, true, testing::SizeIs(1)))
-      .WillOnce(testing::InvokeWithoutArgs(
-          [&device0_done]() { device0_done.Quit(); }));
+      .WillOnce([&device0_done]() { device0_done.Quit(); });
   discovery.SimulateStarted(true);
   device0_done.Run();
   ::testing::Mock::VerifyAndClearExpectations(&observer);
@@ -134,14 +133,13 @@ TEST_F(FakeFidoDiscoveryTest, AddDevice) {
   EXPECT_CALL(*device1, GetId()).WillOnce(::testing::Return("device1"));
   base::RunLoop device1_done;
   EXPECT_CALL(observer, AuthenticatorAdded(&discovery, _))
-      .WillOnce(testing::InvokeWithoutArgs(
-          [&device1_done]() { device1_done.Quit(); }));
+      .WillOnce([&device1_done]() { device1_done.Quit(); });
   discovery.AddDevice(std::move(device1));
   device1_done.Run();
   ::testing::Mock::VerifyAndClearExpectations(&observer);
 }
 
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
 TEST_F(FakeFidoDiscoveryFactoryTest, ForgesUsbFactoryFunction) {
   auto* injected_fake_discovery =
       fake_fido_discovery_factory_.ForgeNextHidDiscovery();

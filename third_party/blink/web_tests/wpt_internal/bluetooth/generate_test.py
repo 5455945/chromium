@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-# Copyright 2016 The Chromium Authors. All rights reserved.
+# Copyright 2016 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 #
@@ -16,7 +16,8 @@ import generate
 
 UPDATE_TIP = (
     'To update the generated tests, run:\n'
-    '$ python third_party/blink/web_tests/wpt_internal/bluetooth/generate.py')
+    '$ python third_party/blink/web_tests/wpt_internal/bluetooth/generate.py'
+)
 
 
 def main():
@@ -25,7 +26,7 @@ def main():
     for generated_test in generate.GetGeneratedTests():
         generated_files.add(generated_test.path)
         try:
-            with open(generated_test.path) as f:
+            with open(generated_test.path, 'rb') as f:
                 data = f.read().decode('utf-8')
                 if data != generated_test.data:
                     print(generated_test.path + ' does not match template.')
@@ -33,8 +34,11 @@ def main():
                     return -1
         except IOError as e:
             if e.errno == 2:
-                print('Missing generated test:\n{}\nFor template:\n{}'.format(
-                    generated_test.path, generated_test.template))
+                print(
+                    'Missing generated test:\n{}\nFor template:\n{}'.format(
+                        generated_test.path, generated_test.template
+                    )
+                )
                 print(UPDATE_TIP)
                 return -1
 

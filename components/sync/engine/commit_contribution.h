@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,14 @@
 
 #include <stddef.h>
 
-#include "components/sync/base/syncer_error.h"
 #include "components/sync/engine/commit_and_get_updates_types.h"
 #include "components/sync/engine/cycle/status_controller.h"
-#include "components/sync/protocol/sync.pb.h"
+#include "components/sync/engine/syncer_error.h"
+
+namespace sync_pb {
+class ClientToServerMessage;
+class ClientToServerResponse;
+}  // namespace sync_pb
 
 namespace syncer {
 
@@ -25,7 +29,7 @@ class CommitContribution {
   CommitContribution() = default;
   virtual ~CommitContribution() = default;
 
-  // Serialize this contribution's entries to the given commit request |msg|.
+  // Serialize this contribution's entries to the given commit request `msg`.
   //
   // This function is not const.  It may update some state in this contribution
   // that will be used when processing the associated commit response.  This
@@ -33,7 +37,7 @@ class CommitContribution {
   virtual void AddToCommitMessage(sync_pb::ClientToServerMessage* msg) = 0;
 
   // Updates this contribution's contents in accordance with the provided
-  // |response|.
+  // `response`.
   //
   // It is not valid to call this function unless AddToCommitMessage() was
   // called earlier.  This function should not be called more than once.
@@ -49,6 +53,15 @@ class CommitContribution {
 
   // Returns the number of entries included in this contribution.
   virtual size_t GetNumEntries() const = 0;
+
+  // Returns the post-encryption size in bytes of `EntitySpecifics` included in
+  // this contribution, measured as the sum of serialized `EntitySpecifics`
+  // sizes.
+  virtual size_t GetPostEncryptionSpecificsByteSize() const = 0;
+
+  // Returns whether the contributor has additional local changes that were not
+  // included in this contribution due to reaching batch limits.
+  virtual bool HasMoreLocalChanges() const = 0;
 };
 
 }  // namespace syncer

@@ -1,15 +1,19 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_MIRRORING_SERVICE_CAPTURED_AUDIO_INPUT_H_
 #define COMPONENTS_MIRRORING_SERVICE_CAPTURED_AUDIO_INPUT_H_
 
-#include "base/callback.h"
+#include <string_view>
+
 #include "base/component_export.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
 #include "components/mirroring/mojom/resource_provider.mojom.h"
+#include "components/mirroring/mojom/session_observer.mojom-forward.h"
+#include "components/mirroring/service/mirroring_logger.h"
 #include "media/audio/audio_input_ipc.h"
 #include "media/mojo/mojom/audio_input_stream.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -30,7 +34,12 @@ class COMPONENT_EXPORT(MIRRORING_SERVICE) CapturedAudioInput final
       mojo::PendingRemote<mojom::AudioStreamCreatorClient> client,
       const media::AudioParameters& params,
       uint32_t total_segments)>;
-  explicit CapturedAudioInput(StreamCreatorCallback callback);
+  CapturedAudioInput(StreamCreatorCallback callback,
+                     mojo::Remote<mojom::SessionObserver>& observer);
+
+  CapturedAudioInput(const CapturedAudioInput&) = delete;
+  CapturedAudioInput& operator=(const CapturedAudioInput&) = delete;
+
   ~CapturedAudioInput() override;
 
  private:
@@ -45,10 +54,11 @@ class COMPONENT_EXPORT(MIRRORING_SERVICE) CapturedAudioInput final
   void SetOutputDeviceForAec(const std::string& output_device_id) override;
 
   // mojom::AudioStreamCreatorClient implementation
-  void StreamCreated(mojo::PendingRemote<media::mojom::AudioInputStream> stream,
-                     mojo::PendingReceiver<media::mojom::AudioInputStreamClient>
-                         client_receiver,
-                     media::mojom::ReadOnlyAudioDataPipePtr data_pipe) override;
+  void StreamCreated(
+      mojo::PendingRemote<media::mojom::AudioInputStream> stream,
+      mojo::PendingReceiver<media::mojom::AudioInputStreamClient>
+          client_receiver,
+      media::mojom::ReadWriteAudioDataPipePtr data_pipe) override;
 
   // media::mojom::AudioInputStreamClient implementation.
   void OnError(media::mojom::InputStreamErrorCode code) override;
@@ -61,10 +71,9 @@ class COMPONENT_EXPORT(MIRRORING_SERVICE) CapturedAudioInput final
       this};
   mojo::Receiver<mojom::AudioStreamCreatorClient>
       stream_creator_client_receiver_{this};
-  media::AudioInputIPCDelegate* delegate_ = nullptr;
+  raw_ptr<media::AudioInputIPCDelegate> delegate_ = nullptr;
   mojo::Remote<media::mojom::AudioInputStream> stream_;
-
-  DISALLOW_COPY_AND_ASSIGN(CapturedAudioInput);
+  MirroringLogger logger_;
 };
 
 }  // namespace mirroring

@@ -1,126 +1,129 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.omnibox.suggestions.carousel;
 
 import android.content.Context;
-import android.graphics.Rect;
+import android.content.res.Configuration;
 import android.view.KeyEvent;
-import android.view.View;
-import android.widget.LinearLayout;
-import android.widget.TextView;
 
+import androidx.annotation.VisibleForTesting;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
-import androidx.recyclerview.widget.RecyclerView.ItemDecoration;
 
-import org.chromium.chrome.browser.omnibox.R;
-import org.chromium.chrome.browser.omnibox.suggestions.header.HeaderView;
-import org.chromium.chrome.browser.util.KeyNavigationUtil;
+import org.chromium.build.annotations.CheckDiscard;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.omnibox.suggestions.ActivatableSuggestionView;
+import org.chromium.chrome.browser.omnibox.suggestions.RecyclerViewSelectionController;
+import org.chromium.chrome.browser.omnibox.suggestions.SelectionController.TraversalMode;
+import org.chromium.chrome.browser.omnibox.suggestions.base.SpacingRecyclerViewItemDecoration;
+import org.chromium.ui.base.KeyNavigationUtil;
 import org.chromium.ui.modelutil.SimpleRecyclerViewAdapter;
 
-/**
- * View for Carousel Suggestions.
- */
-public class BaseCarouselSuggestionView extends LinearLayout {
-    private final HeaderView mHeader;
-    private final RecyclerView mRecyclerView;
-    private final BaseCarouselSuggestionSelectionManager mSelectionManager;
+/** View for Carousel Suggestions. */
+@NullMarked
+public class BaseCarouselSuggestionView extends RecyclerView {
+    private RecyclerViewSelectionController mSelectionController;
+    private @Nullable SpacingRecyclerViewItemDecoration mDecoration;
 
     /**
      * Constructs a new carousel suggestion view.
      *
      * @param context Current context.
+     * @param adapter Adapter to use for the RecyclerView which can be null if async view inflation
+     *     is enabled b/c the adapter creation will be delayed to when control is returned to the UI
+     *     thread during binding.
      */
-    public BaseCarouselSuggestionView(Context context, SimpleRecyclerViewAdapter adapter) {
+    public BaseCarouselSuggestionView(
+            Context context, @Nullable SimpleRecyclerViewAdapter adapter) {
         super(context);
-        setClickable(false);
-        setFocusable(false);
-        setOrientation(VERTICAL);
-        final int verticalPad =
-                getResources().getDimensionPixelSize(R.dimen.omnibox_carousel_suggestion_padding);
-        setPaddingRelative(0, verticalPad, 0, verticalPad);
 
-        mHeader = new HeaderView(context);
-        mHeader.setLayoutParams(
-                new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
-        mHeader.getIconView().setVisibility(GONE);
-        mHeader.setClickable(false);
-        mHeader.setFocusable(false);
-        mHeader.setVisibility(View.GONE);
-        addView(mHeader);
+        setLayoutParams(new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
+        setFocusable(true);
+        setFocusableInTouchMode(true);
+        setItemAnimator(null);
+        LayoutManager layoutManager =
+                new LinearLayoutManager(context, LinearLayoutManager.HORIZONTAL, false);
+        setLayoutManager(layoutManager);
 
-        mRecyclerView = new RecyclerView(context);
-        mRecyclerView.setLayoutParams(
-                new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
-        mRecyclerView.setFocusable(true);
-        mRecyclerView.setFocusableInTouchMode(true);
-        mRecyclerView.setItemAnimator(null);
-        mRecyclerView.setLayoutManager(
-                new LinearLayoutManager(context, LinearLayoutManager.HORIZONTAL, false));
+        mSelectionController =
+                new RecyclerViewSelectionController(
+                        layoutManager, TraversalMode.SATURATING_WITH_SENTINEL);
+        addOnChildAttachStateChangeListener(mSelectionController);
 
-        mSelectionManager =
-                new BaseCarouselSuggestionSelectionManager(mRecyclerView.getLayoutManager());
-        mRecyclerView.addOnChildAttachStateChangeListener(mSelectionManager);
-
-        final int itemSpacing = context.getResources().getDimensionPixelOffset(
-                R.dimen.omnibox_suggestion_carousel_horizontal_spacing);
-
-        mRecyclerView.addItemDecoration(new ItemDecoration() {
-            @Override
-            public void getItemOffsets(
-                    Rect outRect, View view, RecyclerView parent, RecyclerView.State state) {
-                outRect.left = itemSpacing;
-                outRect.right = itemSpacing;
-            }
-        });
-
-        mRecyclerView.setAdapter(adapter);
-        addView(mRecyclerView);
+        if (adapter != null) {
+            setAdapter(adapter);
+        }
     }
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
-        boolean isRtl = getLayoutDirection() == LAYOUT_DIRECTION_RTL;
-        if ((!isRtl && KeyNavigationUtil.isGoRight(event))
-                || (isRtl && KeyNavigationUtil.isGoLeft(event))) {
-            mSelectionManager.selectNextItem();
-            return true;
-        } else if ((isRtl && KeyNavigationUtil.isGoRight(event))
-                || (!isRtl && KeyNavigationUtil.isGoLeft(event))) {
-            mSelectionManager.selectPreviousItem();
-            return true;
+        if (keyCode == KeyEvent.KEYCODE_TAB && event.isShiftPressed()) {
+            return mSelectionController.selectPreviousItem();
+        } else if (keyCode == KeyEvent.KEYCODE_TAB) {
+            return mSelectionController.selectNextItem();
+        } else if (KeyNavigationUtil.isEnter(event)) {
+            var tile = mSelectionController.getSelectedView();
+            if (tile != null) {
+                if (tile instanceof ActivatableSuggestionView) {
+                    return ((ActivatableSuggestionView) tile).activate(event.getMetaState());
+                }
+                return tile.performClick();
+            }
         }
+        return superOnKeyDown(keyCode, event);
+    }
+
+    /**
+     * Proxy calls to super.onKeyDown; call exposed for testing purposes. There is no way to detect
+     * calls to super using robolectric.
+     */
+    @CheckDiscard("Should be inlined except for testing")
+    @VisibleForTesting
+    public boolean superOnKeyDown(int keyCode, KeyEvent event) {
         return super.onKeyDown(keyCode, event);
+    }
+
+    void resetSelection() {
+        mSelectionController.reset();
     }
 
     @Override
     public void setSelected(boolean isSelected) {
-        if (isSelected) {
-            mSelectionManager.setSelectedItem(0, true);
-        } else {
-            mSelectionManager.setSelectedItem(RecyclerView.NO_POSITION, false);
+        resetSelection();
+        if (isSelected) mSelectionController.selectNextItem();
+    }
+
+    @Override
+    @VisibleForTesting(otherwise = VisibleForTesting.PROTECTED)
+    public void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+        if (mDecoration != null
+                && mDecoration.notifyViewSizeChanged(
+                        getResources().getConfiguration().orientation
+                                == Configuration.ORIENTATION_PORTRAIT,
+                        getMeasuredWidth(),
+                        getMeasuredHeight())) {
+            invalidateItemDecorations();
         }
     }
 
-    /** @return Header TextView element. */
-    TextView getHeaderTextView() {
-        return mHeader.getTextView();
+    /* package */ void setItemDecoration(SpacingRecyclerViewItemDecoration decoration) {
+        if (mDecoration != null) {
+            removeItemDecoration(mDecoration);
+        }
+        mDecoration = decoration;
+        if (mDecoration != null) {
+            addItemDecoration(mDecoration);
+        }
     }
 
-    /** @return Header element. */
-    View getHeaderView() {
-        return mHeader;
-    }
-
-    /** @return Adapter used with the embedded RecyclerView. */
-    SimpleRecyclerViewAdapter getAdapter() {
-        return (SimpleRecyclerViewAdapter) mRecyclerView.getAdapter();
-    }
-
-    /** @return Recycler view used by the Carousel suggestion. */
-    public RecyclerView getRecyclerViewForTest() {
-        return mRecyclerView;
+    /* package */ void setSelectionControllerForTesting(
+            RecyclerViewSelectionController controller) {
+        removeOnChildAttachStateChangeListener(mSelectionController);
+        mSelectionController = controller;
+        addOnChildAttachStateChangeListener(mSelectionController);
     }
 }

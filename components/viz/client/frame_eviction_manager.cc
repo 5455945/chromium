@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,19 +6,54 @@
 
 #include <algorithm>
 
-#include "base/bind.h"
+#include "base/byte_size.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
-#include "base/memory/memory_pressure_listener.h"
-#include "base/memory/memory_pressure_monitor.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/location.h"
+#include "base/memory/singleton.h"
+#include "base/memory_coordinator/traits.h"
 #include "base/system/sys_info.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/trace_event/memory_dump_manager.h"
 #include "build/build_config.h"
+#include "components/viz/common/features.h"
 
 namespace viz {
+
 namespace {
 
-const int kModeratePressurePercentage = 50;
-const int kCriticalPressurePercentage = 10;
+constexpr base::MemoryConsumerTraits kMemoryConsumerTraits(
+    base::MemoryConsumerTraits::EstimatedMemoryUsage::kMedium,
+    base::MemoryConsumerTraits::ReleaseMemoryDataAccess::kNone,
+    base::MemoryConsumerTraits::InformationRetention::kLossless,
+    base::MemoryConsumerTraits::ExecutionType::kSynchronous,
+    base::MemoryConsumerTraits::IsStateful::kYes);
+
+// Returns the baseline maximum number of saved frames. This value is computed
+// once based on the device's physical memory and cached to avoid redundant
+// system queries.
+size_t GetBaselineMaxSavedFrames() {
+  static const size_t baseline = []() -> size_t {
+#if BUILDFLAG(IS_ANDROID)
+    // If the amount of memory on the device is >= 3.5 GB, save up to 5
+    // frames.
+    return base::SysInfo::AmountOfTotalPhysicalMemory().InGiBF() < 3.5f ? 1 : 5;
+#else
+    return std::min<size_t>(
+        5, 2 + (base::SysInfo::AmountOfTotalPhysicalMemory().InMiB() / 256));
+#endif
+  }();
+  return baseline;
+}
+
+size_t CalculateTargetMaxSavedFrames(size_t baseline,
+                                     base::MemoryLimit memory_limit) {
+  // Scale the baseline capacity so that 100% memory limit corresponds to
+  // 2x baseline capacity, and 50% corresponds to 1x baseline capacity.
+  return std::max(baseline, memory_limit.Scale(baseline * 2));
+}
 
 }  // namespace
 
@@ -42,21 +77,22 @@ void FrameEvictionManager::AddFrame(FrameEvictionManagerClient* frame,
   if (locked)
     locked_frames_[frame] = 1;
   else
-    unlocked_frames_.push_front(frame);
-  CullUnlockedFrames(GetMaxNumberOfSavedFrames());
+    RegisterUnlockedFrame(frame);
+  CullUnlockedFrames(max_number_of_saved_frames_);
 }
 
 void FrameEvictionManager::RemoveFrame(FrameEvictionManagerClient* frame) {
   auto locked_iter = locked_frames_.find(frame);
   if (locked_iter != locked_frames_.end())
     locked_frames_.erase(locked_iter);
-  unlocked_frames_.remove(frame);
+  unlocked_frames_.remove_if([&](const auto& p) { return p.first == frame; });
 }
 
 void FrameEvictionManager::LockFrame(FrameEvictionManagerClient* frame) {
-  if (base::Contains(unlocked_frames_, frame)) {
+  if (std::ranges::contains(unlocked_frames_, frame,
+                            [](const auto& p) { return p.first; })) {
     DCHECK(locked_frames_.find(frame) == locked_frames_.end());
-    unlocked_frames_.remove(frame);
+    unlocked_frames_.remove_if([&](const auto& p) { return p.first == frame; });
     locked_frames_[frame] = 1;
   } else {
     DCHECK(locked_frames_.find(frame) != locked_frames_.end());
@@ -72,48 +108,48 @@ void FrameEvictionManager::UnlockFrame(FrameEvictionManagerClient* frame) {
     locked_frames_[frame]--;
   } else {
     RemoveFrame(frame);
-    unlocked_frames_.push_front(frame);
-    CullUnlockedFrames(GetMaxNumberOfSavedFrames());
+    RegisterUnlockedFrame(frame);
+    CullUnlockedFrames(max_number_of_saved_frames_);
+  }
+}
+
+void FrameEvictionManager::StartFrameCullingTimer() {
+  // Unretained: `idle_frames_culling_timer_` is a member of `this`, doesn't
+  // outlive it, and cancels the task in its destructor.
+  idle_frame_culling_timer_.Start(
+      FROM_HERE, kPeriodicCullingDelay,
+      base::BindOnce(&FrameEvictionManager::CullOldUnlockedFrames,
+                     base::Unretained(this)));
+}
+
+void FrameEvictionManager::RegisterUnlockedFrame(
+    FrameEvictionManagerClient* frame) {
+  unlocked_frames_.emplace_front(frame, clock_->NowTicks());
+  if (!idle_frame_culling_timer_.IsRunning()) {
+    StartFrameCullingTimer();
   }
 }
 
 size_t FrameEvictionManager::GetMaxNumberOfSavedFrames() const {
-  int percentage = 100;
-  base::MemoryPressureMonitor* monitor = base::MemoryPressureMonitor::Get();
-
-  if (!monitor)
-    return max_number_of_saved_frames_;
-
-  // Until we have a global OnMemoryPressureChanged event we need to query the
-  // value from our specific pressure monitor.
-  switch (monitor->GetCurrentPressureLevel()) {
-    case base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_NONE:
-      percentage = 100;
-      break;
-    case base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE:
-      percentage = kModeratePressurePercentage;
-      break;
-    case base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_CRITICAL:
-      percentage = kCriticalPressurePercentage;
-      break;
-  }
-  size_t frames = (max_number_of_saved_frames_ * percentage) / 100;
-  return std::max(static_cast<size_t>(1), frames);
+  return max_number_of_saved_frames_;
 }
 
-FrameEvictionManager::FrameEvictionManager()
-    : memory_pressure_listener_(new base::MemoryPressureListener(
-          FROM_HERE,
-          base::BindRepeating(&FrameEvictionManager::OnMemoryPressure,
-                              base::Unretained(this)))) {
-  max_number_of_saved_frames_ =
-#if defined(OS_ANDROID)
-      // If the amount of memory on the device is >= 3.5 GB, save up to 5
-      // frames.
-      base::SysInfo::AmountOfPhysicalMemoryMB() < 1024 * 3.5f ? 1 : 5;
-#else
-      std::min(5, 2 + (base::SysInfo::AmountOfPhysicalMemoryMB() / 256));
-#endif
+FrameEvictionManager::FrameEvictionManager() {
+  if (base::FeatureList::IsEnabled(features::kScalableFrameEviction)) {
+    memory_consumer_registration_.emplace(
+        "FrameEvictionManager", kMemoryConsumerTraits, this,
+        base::MemoryConsumerRegistration::CheckUnregister::kDisabled);
+    OnUpdateMemoryLimit();
+  } else {
+    max_number_of_saved_frames_ = GetBaselineMaxSavedFrames();
+  }
+
+  // For WebView, we may not have a default task runner.
+  if (base::SingleThreadTaskRunner::HasCurrentDefault()) {
+    base::trace_event::MemoryDumpManager::GetInstance()->RegisterDumpProvider(
+        this, "FrameEvictionManager",
+        base::SingleThreadTaskRunner::GetCurrentDefault());
+  }
 }
 
 void FrameEvictionManager::CullUnlockedFrames(size_t saved_frame_limit) {
@@ -126,36 +162,61 @@ void FrameEvictionManager::CullUnlockedFrames(size_t saved_frame_limit) {
          unlocked_frames_.size() + locked_frames_.size() > saved_frame_limit) {
     size_t old_size = unlocked_frames_.size();
     // Should remove self from list.
-    unlocked_frames_.back()->EvictCurrentFrame();
+    auto* frame = unlocked_frames_.back().first;
+    frame->EvictCurrentFrame();
     if (unlocked_frames_.size() == old_size)
       break;
   }
 }
 
-void FrameEvictionManager::OnMemoryPressure(
-    base::MemoryPressureListener::MemoryPressureLevel memory_pressure_level) {
-  switch (memory_pressure_level) {
-    case base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE:
-      PurgeMemory(kModeratePressurePercentage);
-      break;
-    case base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_CRITICAL:
-      PurgeMemory(kCriticalPressurePercentage);
-      break;
-    case base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_NONE:
-      // No need to change anything when there is no pressure.
-      return;
-  }
-}
+#if BUILDFLAG(IS_ANDROID)
+void FrameEvictionManager::CullOldUnlockedFrames(
+    base::MemoryReductionTaskContext task_type) {
+  const bool should_cull_all =
+      task_type == base::MemoryReductionTaskContext::kProactive;
+#else
+void FrameEvictionManager::CullOldUnlockedFrames() {
+  const bool should_cull_all = false;
+#endif
+  DCHECK(std::is_sorted(
+      unlocked_frames_.begin(), unlocked_frames_.end(),
+      [](const auto& a, const auto& b) { return a.second >= b.second; }));
 
-void FrameEvictionManager::PurgeMemory(int percentage) {
-  int saved_frame_limit = max_number_of_saved_frames_;
-  if (saved_frame_limit <= 1)
+  // Try again later, since the timer is not cancelled.
+  if (pause_count_)
     return;
-  CullUnlockedFrames(std::max(1, (saved_frame_limit * percentage) / 100));
+
+  auto now = clock_->NowTicks();
+  while (!unlocked_frames_.empty() &&
+         (should_cull_all ||
+          now - unlocked_frames_.back().second >= kPeriodicCullingDelay)) {
+    size_t old_size = unlocked_frames_.size();
+    auto* frame = unlocked_frames_.back().first;
+    frame->EvictCurrentFrame();
+    // Should remove self from list. If it's not possible, give up and try again
+    // later. This should be a rare case, so don't bother rescheduling earlier
+    // than the next timer tick.
+    //
+    // See https://chromium-review.googlesource.com/c/chromium/src/+/2585790 for
+    // an example where this can happen.
+    if (old_size - 1 != unlocked_frames_.size())
+      break;
+  }
+
+  if (!unlocked_frames_.empty()) {
+    StartFrameCullingTimer();
+  }
 }
 
 void FrameEvictionManager::PurgeAllUnlockedFrames() {
   CullUnlockedFrames(0);
+}
+
+void FrameEvictionManager::SetOverridesForTesting(
+    scoped_refptr<base::SingleThreadTaskRunner> task_runner,
+    const base::TickClock* clock) {
+  idle_frame_culling_timer_.SetTaskRunner(task_runner);
+  clock_ = clock;
 }
 
 void FrameEvictionManager::Pause() {
@@ -170,6 +231,31 @@ void FrameEvictionManager::Unpause() {
     CullUnlockedFrames(pending_unlocked_frame_limit_.value());
     pending_unlocked_frame_limit_.reset();
   }
+}
+
+bool FrameEvictionManager::OnMemoryDump(
+    const base::trace_event::MemoryDumpArgs& args,
+    base::trace_event::ProcessMemoryDump* pmd) {
+  auto* dump = pmd->CreateAllocatorDump("frame_evictor");
+  dump->AddScalar("locked_frames", "count", locked_frames_.size());
+  dump->AddScalar("unlocked_frames", "count", unlocked_frames_.size());
+
+  return true;
+}
+
+void FrameEvictionManager::OnReleaseMemory() {
+  max_number_of_saved_frames_ = CalculateTargetMaxSavedFrames(
+      GetBaselineMaxSavedFrames(), memory_limit());
+  CullUnlockedFrames(max_number_of_saved_frames_);
+}
+
+void FrameEvictionManager::OnUpdateMemoryLimit() {
+  // Do not drop the effective limit below the current number of frames to
+  // avoid freeing memory during the limit update.
+  size_t current_frames = unlocked_frames_.size() + locked_frames_.size();
+  max_number_of_saved_frames_ = std::max(
+      current_frames, CalculateTargetMaxSavedFrames(GetBaselineMaxSavedFrames(),
+                                                    memory_limit()));
 }
 
 }  // namespace viz

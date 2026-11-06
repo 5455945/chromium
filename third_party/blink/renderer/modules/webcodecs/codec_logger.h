@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,25 @@
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_WEBCODECS_CODEC_LOGGER_H_
 
 #include <memory>
+#include <string>
 
+#include "base/check.h"
+#include "base/location.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/sequence_checker.h"
 #include "media/base/media_log.h"
-#include "media/base/status.h"
+#include "media/base/media_util.h"
+#include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
+#include "third_party/blink/renderer/core/dom/quota_exceeded_error.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/core/inspector/inspector_media_context_impl.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
+#include "third_party/blink/renderer/platform/bindings/exception_code.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
+#include "third_party/blink/renderer/platform/wtf/wtf.h"
 
 namespace base {
 class SingleThreadTaskRunner;
@@ -18,7 +32,13 @@ class SingleThreadTaskRunner;
 
 namespace blink {
 
-class ExecutionContext;
+namespace internal {
+
+void SendPlayerNameInformationInternal(media::MediaLog* media_log,
+                                       const ExecutionContext& context,
+                                       std::string_view name);
+
+}  // namespace internal
 
 // Simple wrapper around MediaLog instances, to manage the lifetime safety of
 // said MediaLogs. |parent_media_log_| must be destroyed and created on the
@@ -28,26 +48,115 @@ class ExecutionContext;
 // silently stop logging.
 // Note: Owners of this class should be ExecutionLifeCycleObservers, and should
 // call Neuter() if the ExecutionContext passed to the constructor is destroyed.
+template <typename StatusImpl>
 class MODULES_EXPORT CodecLogger final {
  public:
   // Attempts to create CodecLogger backed by a BatchingMediaLog. Falls back to
   // a NullMediaLog on failure.
-  CodecLogger(ExecutionContext*,
-              scoped_refptr<base::SingleThreadTaskRunner> task_runner);
-  ~CodecLogger();
+  CodecLogger(ExecutionContext* context,
+              scoped_refptr<base::SingleThreadTaskRunner> task_runner) {
+    DCHECK(context);
+
+    // Owners of |this| should be ExecutionLifeCycleObservers, and should call
+    // Neuter() if |context| is destroyed. The MediaInspectorContextImpl must
+    // outlive |parent_media_log_|. If |context| is already destroyed, owners
+    // might never call Neuter(), and MediaInspectorContextImpl* could be
+    // garbage collected before |parent_media_log_| is destroyed.
+    if (!context->IsContextDestroyed()) {
+      parent_media_log_ = Platform::Current()->GetMediaLog(
+          MediaInspectorContextImpl::From(*context), task_runner,
+          /*is_on_worker=*/!IsMainThread());
+    }
+
+    // NullMediaLog silently and safely does nothing.
+    if (!parent_media_log_)
+      parent_media_log_ = std::make_unique<media::NullMediaLog>();
+
+    // This allows us to destroy |parent_media_log_| and stop logging,
+    // without causing problems to |media_log_| users.
+    media_log_ = parent_media_log_->Clone();
+
+    task_runner_ = task_runner;
+  }
+
+  ~CodecLogger() {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    // media logs must be posted for destruction, since they can cause the
+    // garbage collector to trigger an immediate cleanup and delete the owning
+    // instance of |CodecLogger|.
+    if (parent_media_log_) {
+      parent_media_log_->Stop();
+      task_runner_->DeleteSoon(FROM_HERE, std::move(parent_media_log_));
+    }
+  }
+
+  void SendPlayerNameInformation(const ExecutionContext& context,
+                                 std::string_view name) {
+    internal::SendPlayerNameInformationInternal(media_log_.get(), context,
+                                                name);
+  }
 
   // Creates an OperationError DOMException with the given |error_msg|, and logs
   // the given |status| in |media_log_|.
   // Since |status| can come from platform codecs, its contents won't be
   // surfaced to JS, since we could leak important information.
-  DOMException* MakeException(std::string error_msg, media::Status status);
+  DOMException* MakeOperationError(std::string error_msg, StatusImpl status) {
+    return MakeAndLogException(DOMExceptionCode::kOperationError,
+                               std::move(error_msg), status,
+                               /*can_log_status_message=*/false);
+  }
 
-  // Convenience wrapper for MakeException(), where |error_msg| is shared for
-  // both the exception message and the status message.
-  DOMException* MakeException(
+  // Similar to MakeOperationError(), but since the error comes from a bundled
+  // software codec the error message can include the status message.
+  DOMException* MakeSoftwareCodecOperationError(std::string error_msg,
+                                                StatusImpl status) {
+    return MakeAndLogException(DOMExceptionCode::kOperationError,
+                               std::move(error_msg), status,
+                               /*can_log_status_message=*/true);
+  }
+
+  // Convenience wrapper for MakeOperationError(), where |error_msg| is shared
+  // for both the exception message and the status message.
+  DOMException* MakeOperationError(
       std::string error_msg,
-      media::StatusCode code,
-      const base::Location& location = base::Location::Current());
+      typename StatusImpl::Codes code,
+      const base::Location& location = base::Location::Current()) {
+    return MakeOperationError(error_msg, StatusImpl(code, error_msg, location));
+  }
+
+  // Creates an EncodingError DOMException with the given |error_msg|, and logs
+  // the given |status| in |media_log_|.
+  // Since |status| can come from platform codecs, its contents won't be
+  // surfaced to JS, since we could leak important information.
+  DOMException* MakeEncodingError(std::string error_msg, StatusImpl status) {
+    return MakeAndLogException(DOMExceptionCode::kEncodingError,
+                               std::move(error_msg), status,
+                               /*can_log_status_message=*/false);
+  }
+
+  // Convenience wrapper for MakeEncodingError(), where |error_msg| is shared
+  // for both the exception message and the status message.
+  DOMException* MakeEncodingError(
+      std::string error_msg,
+      typename StatusImpl::Codes code,
+      const base::Location& location = base::Location::Current()) {
+    return MakeEncodingError(error_msg, StatusImpl(code, error_msg, location));
+  }
+
+  DOMException* MakeQuotaError(std::string error_msg, StatusImpl status) {
+    return MakeAndLogException(DOMExceptionCode::kQuotaExceededError,
+                               std::move(error_msg), std::move(status),
+                               /*can_log_status_message=*/false);
+  }
+
+  // Similar to MakeEncodingError(), but since the error comes from a bundled
+  // software codec the error message can include the status message.
+  DOMException* MakeSoftwareCodecEncodingError(std::string error_msg,
+                                               StatusImpl status) {
+    return MakeAndLogException(DOMExceptionCode::kEncodingError,
+                               std::move(error_msg), status,
+                               /*can_log_status_message=*/true);
+  }
 
   // Safe to use on any thread. |this| should still outlive users of log().
   media::MediaLog* log() { return media_log_.get(); }
@@ -56,13 +165,50 @@ class MODULES_EXPORT CodecLogger final {
   // logging in a thread safe way.
   // Must be called if the ExecutionContext passed into the constructor is
   // destroyed.
-  void Neuter();
+  void Neuter() {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    parent_media_log_ = nullptr;
+  }
 
   // Records the first media::Status passed to MakeException.
-  media::StatusCode status_code() const { return status_code_; }
+  typename StatusImpl::Codes status_code() const {
+    return status_code_.value_or(StatusImpl::Codes::kOk);
+  }
 
  private:
-  media::StatusCode status_code_ = media::StatusCode::kOk;
+  DOMException* MakeAndLogException(DOMExceptionCode code,
+                                    std::string error_msg,
+                                    StatusImpl status,
+                                    bool can_log_status_message) {
+    media_log_->NotifyError(status);
+    if (!status_code_) {
+      status_code_ = status.code();
+    }
+
+    String sanitized_message(std::move(error_msg));
+    String unsanitized_message;
+    if (!status.message().empty()) {
+      // If the message comes from a bundled codec we can log it to JS.
+      auto msg =
+          StrCat({sanitized_message, " (", String(status.message()), ")"});
+      if (can_log_status_message) {
+        sanitized_message = msg;
+      } else {
+        // If not we can only set it as the unsanitized message which the
+        // console will show in some circumstances.
+        unsanitized_message = msg;
+      }
+    }
+
+    if (code == DOMExceptionCode::kQuotaExceededError &&
+        RuntimeEnabledFeatures::QuotaExceededErrorUpdateEnabled()) {
+      return MakeGarbageCollected<QuotaExceededError>(sanitized_message);
+    }
+    return MakeGarbageCollected<DOMException>(code, sanitized_message,
+                                              unsanitized_message);
+  }
+
+  std::optional<typename StatusImpl::Codes> status_code_;
 
   // |parent_media_log_| must be destroyed if ever the ExecutionContext is
   // destroyed, since the blink::MediaInspectorContext* pointer given to
@@ -73,6 +219,9 @@ class MODULES_EXPORT CodecLogger final {
   // We might destroy |parent_media_log_| at any point, so keep a clone which
   // can be safely accessed, and whose raw pointer can be given callbacks.
   std::unique_ptr<media::MediaLog> media_log_;
+
+  // Keep task runner around for posting the media log to upon destruction.
+  scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 };

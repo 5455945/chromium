@@ -1,10 +1,11 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_EDITING_COMMANDS_SET_CHARACTER_DATA_COMMAND_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_EDITING_COMMANDS_SET_CHARACTER_DATA_COMMAND_H_
 
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/editing/commands/edit_command.h"
 
 namespace blink {
@@ -12,22 +13,27 @@ namespace blink {
 class CORE_EXPORT SetCharacterDataCommand final : public SimpleEditCommand {
  public:
   SetCharacterDataCommand(Text* node,
-                          unsigned offset,
-                          unsigned count,
-                          const String& text);
+                          wtf_size_t offset,
+                          wtf_size_t count,
+                          const String& text,
+                          PasswordEchoBehavior);
 
   void Trace(Visitor*) const override;
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(SetCharacterDataCommandTest, ShouldEchoPassword);
   // EditCommand implementation
   void DoApply(EditingState*) final;
   void DoUnapply() final;
+  String ToString() const final;
+  bool ShouldEchoPassword() const;
 
   const Member<Text> node_;
-  const unsigned offset_;
-  const unsigned count_;
+  const wtf_size_t offset_;
+  const wtf_size_t count_;
   String previous_text_for_undo_;
   const String new_text_;
+  PasswordEchoBehavior password_echo_behavior_;
 };
 
 }  // namespace blink

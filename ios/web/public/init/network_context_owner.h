@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,6 @@
 #include <string>
 #include <vector>
 
-#include "base/gtest_prod_util.h"
 #include "ios/web/public/thread/web_thread.h"
 #include "net/url_request/url_request_context_getter.h"
 #include "net/url_request/url_request_context_getter_observer.h"
@@ -31,7 +30,7 @@ namespace web {
 class NetworkContextOwner : public net::URLRequestContextGetterObserver {
  public:
   // This initiates creation of the NetworkContext object on I/O thread and
-  // connects the pipe in |network_context_client| to it.
+  // connects the pipe in `network_context_client` to it.
   NetworkContextOwner(
       net::URLRequestContextGetter* request_context,
       const std::vector<std::string>& cors_exempt_header_list,

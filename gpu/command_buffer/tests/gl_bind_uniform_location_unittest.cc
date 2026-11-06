@@ -1,8 +1,8 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <GLES2/gl2.h>
+#include <GLES2/gl2chromium.h>
 #include <GLES2/gl2ext.h>
 #include <GLES2/gl2extchromium.h>
 #include <stdint.h>
@@ -152,7 +152,13 @@ TEST_P(BindUniformLocationTest, ConflictsDetection) {
   GLTestHelper::CheckGLError("no errors", __LINE__);
 }
 
-TEST_P(BindUniformLocationTest, Compositor) {
+// TODO(crbug.com/40246425): Flaky on Asan/Lsan builds.
+#if defined(ADDRESS_SANITIZER) && defined(LEAK_SANITIZER)
+#define MAYBE_Compositor DISABLED_Compositor
+#else
+#define MAYBE_Compositor Compositor
+#endif
+TEST_P(BindUniformLocationTest, MAYBE_Compositor) {
   ASSERT_TRUE(
       GLTestHelper::HasExtension("GL_CHROMIUM_bind_uniform_location"));
 
@@ -266,7 +272,6 @@ TEST_P(BindUniformLocationTest, Compositor) {
                                         expected, nullptr));
 
   GLTestHelper::CheckGLError("no errors", __LINE__);
-
 }
 
 TEST_P(BindUniformLocationTest, UnusedUniformUpdate) {

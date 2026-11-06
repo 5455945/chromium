@@ -16,12 +16,18 @@
 
 #include "absl/strings/str_cat.h"
 
+#include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <limits>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "gtest/gtest.h"
-#include "absl/strings/substitute.h"
+#include "absl/base/config.h"
+#include "absl/strings/str_format.h"
+#include "absl/strings/string_view.h"
 
 #ifdef __ANDROID__
 // Android assert messages only go to system log, so death tests cannot inspect
@@ -69,7 +75,7 @@ TEST(StrCat, Ints) {
 TEST(StrCat, Enums) {
   enum SmallNumbers { One = 1, Ten = 10 } e = Ten;
   EXPECT_EQ("10", absl::StrCat(e));
-  EXPECT_EQ("-5", absl::StrCat(SmallNumbers(-5)));
+  EXPECT_EQ("1", absl::StrCat(One));
 
   enum class Option { Boxers = 1, Briefs = -1 };
 
@@ -134,6 +140,9 @@ TEST(StrCat, Basics) {
   result = absl::StrCat(-1);
   EXPECT_EQ(result, "-1");
 
+  result = absl::StrCat(absl::HighPrecision(0.5));
+  EXPECT_EQ(result, "0.5");
+
   result = absl::StrCat(absl::SixDigits(0.5));
   EXPECT_EQ(result, "0.5");
 
@@ -176,16 +185,27 @@ TEST(StrCat, Basics) {
   EXPECT_EQ(result, "To output a char by ASCII/numeric value, use +: 33");
 
   float f = 100000.5;
+  result = absl::StrCat("A hundred K and a half is ", absl::HighPrecision(f));
+  EXPECT_EQ(result, "A hundred K and a half is 100000.5");
+
   result = absl::StrCat("A hundred K and a half is ", absl::SixDigits(f));
   EXPECT_EQ(result, "A hundred K and a half is 100000");
 
   f = 100001.5;
+  result = absl::StrCat("A hundred K and one and a half is ",
+                        absl::HighPrecision(f));
+  EXPECT_EQ(result, "A hundred K and one and a half is 100001.5");
+
   result =
       absl::StrCat("A hundred K and one and a half is ", absl::SixDigits(f));
   EXPECT_EQ(result, "A hundred K and one and a half is 100002");
 
   double d = 100000.5;
   d *= d;
+  result = absl::StrCat("A hundred K and a half squared is ",
+                        absl::HighPrecision(d));
+  EXPECT_EQ(result, "A hundred K and a half squared is 10000100000.25");
+
   result =
       absl::StrCat("A hundred K and a half squared is ", absl::SixDigits(d));
   EXPECT_EQ(result, "A hundred K and a half squared is 1.00001e+10");
@@ -208,6 +228,17 @@ TEST(StrCat, CornerCases) {
   EXPECT_EQ(result, "");
   result = absl::StrCat("", "", "", "", "");
   EXPECT_EQ(result, "");
+}
+
+TEST(StrCat, StdStringView) {
+  std::string_view pieces[] = {"Hello", ", ", "World", "!"};
+  EXPECT_EQ(absl::StrCat(pieces[0], pieces[1], pieces[2], pieces[3]),
+                         "Hello, World!");
+}
+
+TEST(StrCat, NullConstCharPtr) {
+  const char* null = nullptr;
+  EXPECT_EQ(absl::StrCat("mon", null, "key"), "monkey");
 }
 
 // A minimal allocator that uses malloc().
@@ -391,6 +422,20 @@ TEST(StrAppend, Basics) {
   EXPECT_EQ(result.substr(old_size),
             "To output a char by ASCII/numeric value, use +: 33");
 
+  float f = 100000.5;
+  old_size = result.size();
+  absl::StrAppend(&result, "A hundred K and a half is ",
+                  absl::HighPrecision(f));
+  EXPECT_EQ(result.substr(old_size), "A hundred K and a half is 100000.5");
+
+  double d = f;
+  d *= d;
+  old_size = result.size();
+  absl::StrAppend(&result, "A hundred K and a half squared is ",
+                  absl::HighPrecision(d));
+  EXPECT_EQ(result.substr(old_size),
+            "A hundred K and a half squared is 10000100000.25");
+
   // Test 9 arguments, the old maximum
   old_size = result.size();
   absl::StrAppend(&result, 1, 22, 333, 4444, 55555, 666666, 7777777, 88888888,
@@ -437,7 +482,7 @@ TEST(StrCat, AvoidsMemcpyWithNullptr) {
   EXPECT_EQ(result, "12345");
 }
 
-#ifdef GTEST_HAS_DEATH_TEST
+#if GTEST_HAS_DEATH_TEST
 TEST(StrAppend, Death) {
   std::string s = "self";
   // on linux it's "assertion", on mac it's "Assertion",
@@ -605,6 +650,71 @@ void TestFastPrints() {
 
 TEST(Numbers, TestFunctionsMovedOverFromNumbersMain) {
   TestFastPrints();
+}
+
+struct PointStringify {
+  template <typename FormatSink>
+  friend void AbslStringify(FormatSink& sink, const PointStringify& p) {
+    sink.Append("(");
+    sink.Append(absl::StrCat(p.x));
+    sink.Append(", ");
+    sink.Append(absl::StrCat(p.y));
+    sink.Append(")");
+  }
+
+  double x = 10.0;
+  double y = 20.0;
+};
+
+TEST(StrCat, AbslStringifyExample) {
+  PointStringify p;
+  EXPECT_EQ(absl::StrCat(p), "(10, 20)");
+  EXPECT_EQ(absl::StrCat("a ", p, " z"), "a (10, 20) z");
+}
+
+struct PointStringifyUsingFormat {
+  template <typename FormatSink>
+  friend void AbslStringify(FormatSink& sink,
+                            const PointStringifyUsingFormat& p) {
+    absl::Format(&sink, "(%g, %g)", p.x, p.y);
+  }
+
+  double x = 10.0;
+  double y = 20.0;
+};
+
+TEST(StrCat, AbslStringifyExampleUsingFormat) {
+  PointStringifyUsingFormat p;
+  EXPECT_EQ(absl::StrCat(p), "(10, 20)");
+  EXPECT_EQ(absl::StrCat("a ", p, " z"), "a (10, 20) z");
+}
+
+enum class EnumWithStringify { Many = 0, Choices = 1 };
+
+template <typename Sink>
+void AbslStringify(Sink& sink, EnumWithStringify e) {
+  absl::Format(&sink, "%s", e == EnumWithStringify::Many ? "Many" : "Choices");
+}
+
+TEST(StrCat, AbslStringifyWithEnum) {
+  const auto e = EnumWithStringify::Choices;
+  EXPECT_EQ(absl::StrCat(e), "Choices");
+}
+
+template <typename Integer>
+void CheckSingleArgumentIntegerLimits() {
+  Integer max = std::numeric_limits<Integer>::max();
+  Integer min = std::numeric_limits<Integer>::min();
+
+  EXPECT_EQ(absl::StrCat(max), std::to_string(max));
+  EXPECT_EQ(absl::StrCat(min), std::to_string(min));
+}
+
+TEST(StrCat, SingleArgumentLimits) {
+  CheckSingleArgumentIntegerLimits<int32_t>();
+  CheckSingleArgumentIntegerLimits<uint32_t>();
+  CheckSingleArgumentIntegerLimits<int64_t>();
+  CheckSingleArgumentIntegerLimits<uint64_t>();
 }
 
 }  // namespace

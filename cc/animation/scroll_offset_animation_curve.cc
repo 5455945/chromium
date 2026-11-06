@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,15 +10,36 @@
 
 #include "base/check_op.h"
 #include "base/memory/ptr_util.h"
-#include "base/numerics/ranges.h"
+#include "cc/base/features.h"
 #include "ui/gfx/animation/keyframe/timing_function.h"
 #include "ui/gfx/animation/tween.h"
 
 const double kConstantDuration = 9.0;
 const double kDurationDivisor = 60.0;
 
-// 0.7 seconds limit for long-distance programmatic scrolls
-const double kDeltaBasedMaxDuration = 0.7 * kDurationDivisor;
+struct CubicBezierPoints {
+  double x1;
+  double y1;
+  double x2;
+  double y2;
+};
+
+// See `ui/gfx/animation/keyframe/timing_function.cc`
+static constexpr CubicBezierPoints kEaseInOutControlPoints{
+    .x1 = 0.42,
+    .y1 = 0,
+    .x2 = 0.58,
+    .y2 = 1,
+};
+
+CubicBezierPoints GetCubicBezierPointsForProgrammaticScroll() {
+  return {
+      .x1 = features::kCubicBezierX1.Get(),
+      .y1 = features::kCubicBezierY1.Get(),
+      .x2 = features::kCubicBezierX2.Get(),
+      .y2 = features::kCubicBezierY2.Get(),
+  };
+}
 
 const double kInverseDeltaRampStartPx = 120.0;
 const double kInverseDeltaRampEndPx = 480.0;
@@ -40,68 +61,21 @@ namespace cc {
 
 namespace {
 
-constexpr double kImpulseCurveX1 = 0.25;
-constexpr double kImpulseCurveX2 = 0.0;
-constexpr double kImpulseCurveY2 = 1.0;
-
-constexpr double kImpulseMinDurationMs = 200.0;
-constexpr double kImpulseMaxDurationMs = 500.0;
-constexpr double kImpulseMillisecondsPerPixel = 1.5;
-
 const double kEpsilon = 0.01f;
 
 static float MaximumDimension(const gfx::Vector2dF& delta) {
   return std::abs(delta.x()) > std::abs(delta.y()) ? delta.x() : delta.y();
 }
 
-static std::unique_ptr<TimingFunction> EaseInOutWithInitialSlope(double slope) {
+std::unique_ptr<TimingFunction> EaseInOutWithInitialSlope(
+    const CubicBezierPoints& control_points,
+    double slope) {
   // Clamp slope to a sane value.
-  slope = base::ClampToRange(slope, -1000.0, 1000.0);
-
-  // Based on CubicBezierTimingFunction::EaseType::EASE_IN_OUT preset
-  // with first control point scaled.
-  const double x1 = 0.42;
-  const double y1 = slope * x1;
-  return CubicBezierTimingFunction::Create(x1, y1, 0.58, 1);
-}
-
-std::unique_ptr<TimingFunction> ImpulseCurveWithInitialSlope(double slope) {
-  DCHECK_GE(slope, 0);
-
-  double x1 = kImpulseCurveX1;
-  double y1 = 1.0;
-  if (x1 * slope < 1.0) {
-    y1 = x1 * slope;
-  } else {
-    x1 = y1 / slope;
-  }
-
-  const double x2 = kImpulseCurveX2;
-  const double y2 = kImpulseCurveY2;
-  return CubicBezierTimingFunction::Create(x1, y1, x2, y2);
-}
-
-bool IsNewTargetInOppositeDirection(const gfx::ScrollOffset& current_position,
-                                    const gfx::ScrollOffset& old_target,
-                                    const gfx::ScrollOffset& new_target) {
-  gfx::Vector2dF old_delta = old_target.DeltaFrom(current_position);
-  gfx::Vector2dF new_delta = new_target.DeltaFrom(current_position);
-
-  // We only declare the new target to be in the "opposite" direction when
-  // one of the dimensions doesn't change at all. This may sound a bit strange,
-  // but it avoids lots of issues.
-  // For instance, if we are moving to the down & right and we are updated to
-  // move down & left, then are we moving in the opposite direction? If we don't
-  // do the check this way, then it would be considered in the opposite
-  // direction and the velocity gets set to 0. The update would therefore look
-  // pretty janky.
-  if (std::abs(old_delta.x() - new_delta.x()) < kEpsilon) {
-    return (old_delta.y() >= 0.0f) != (new_delta.y() >= 0.0f);
-  } else if (std::abs(old_delta.y() - new_delta.y()) < kEpsilon) {
-    return (old_delta.x() >= 0.0f) != (new_delta.x() >= 0.0f);
-  } else {
-    return false;
-  }
+  slope = std::clamp(slope, -1000.0, 1000.0);
+  // Scale the first control point with `slope`.
+  return CubicBezierTimingFunction::Create(
+      control_points.x1, control_points.x1 * slope, control_points.x2,
+      control_points.y2);
 }
 
 base::TimeDelta VelocityBasedDurationBound(gfx::Vector2dF old_delta,
@@ -123,58 +97,54 @@ base::TimeDelta VelocityBasedDurationBound(gfx::Vector2dF old_delta,
   double bound = (new_delta_max_dimension / velocity) * 2.5f;
 
   // If bound < 0 we are moving in the opposite direction.
-  return bound < 0 ? base::TimeDelta::Max()
-                   : base::TimeDelta::FromSecondsD(bound);
+  return bound < 0 ? base::TimeDelta::Max() : base::Seconds(bound);
 }
 
 }  // namespace
 
-absl::optional<double>
+std::optional<double>
     ScrollOffsetAnimationCurve::animation_duration_for_testing_;
 
 ScrollOffsetAnimationCurve::ScrollOffsetAnimationCurve(
-    const gfx::ScrollOffset& target_value,
+    const gfx::PointF& target_value,
     AnimationType animation_type,
-    absl::optional<DurationBehavior> duration_behavior)
+    ScrollType scroll_type,
+    std::optional<DurationBehavior> duration_behavior)
     : target_value_(target_value),
       animation_type_(animation_type),
+      scroll_type_(scroll_type),
       duration_behavior_(duration_behavior),
       has_set_initial_value_(false) {
-  DCHECK_EQ((animation_type == AnimationType::kEaseInOut ||
-             animation_type == AnimationType::kImpulse),
+  DCHECK_EQ(animation_type == AnimationType::kEaseInOut,
             duration_behavior.has_value());
   switch (animation_type) {
     case AnimationType::kEaseInOut:
-      timing_function_ = CubicBezierTimingFunction::CreatePreset(
-          CubicBezierTimingFunction::EaseType::EASE_IN_OUT);
+      timing_function_ = GetEasingFunction(/*slope=*/std::nullopt);
       break;
     case AnimationType::kLinear:
       timing_function_ = LinearTimingFunction::Create();
-      break;
-    case AnimationType::kImpulse:
-      timing_function_ = ImpulseCurveWithInitialSlope(0);
       break;
   }
 }
 
 ScrollOffsetAnimationCurve::ScrollOffsetAnimationCurve(
-    const gfx::ScrollOffset& target_value,
+    const gfx::PointF& target_value,
     std::unique_ptr<TimingFunction> timing_function,
     AnimationType animation_type,
-    absl::optional<DurationBehavior> duration_behavior)
+    ScrollType scroll_type,
+    std::optional<DurationBehavior> duration_behavior)
     : target_value_(target_value),
       timing_function_(std::move(timing_function)),
       animation_type_(animation_type),
+      scroll_type_(scroll_type),
       duration_behavior_(duration_behavior),
       has_set_initial_value_(false) {
-  DCHECK_EQ((animation_type == AnimationType::kEaseInOut ||
-             animation_type == AnimationType::kImpulse),
+  DCHECK_EQ(animation_type == AnimationType::kEaseInOut,
             duration_behavior.has_value());
 }
 
 ScrollOffsetAnimationCurve::~ScrollOffsetAnimationCurve() = default;
 
-// static
 base::TimeDelta ScrollOffsetAnimationCurve::EaseInOutSegmentDuration(
     const gfx::Vector2dF& delta,
     DurationBehavior duration_behavior,
@@ -182,19 +152,22 @@ base::TimeDelta ScrollOffsetAnimationCurve::EaseInOutSegmentDuration(
   double duration = kConstantDuration;
   if (!animation_duration_for_testing_) {
     switch (duration_behavior) {
-      case DurationBehavior::CONSTANT:
+      case DurationBehavior::kConstant:
         duration = kConstantDuration;
         break;
-      case DurationBehavior::DELTA_BASED:
-        duration =
-            std::min<double>(std::sqrt(std::abs(MaximumDimension(delta))),
-                             kDeltaBasedMaxDuration);
+      case DurationBehavior::kDeltaBased: {
+        CHECK_EQ(scroll_type_, ScrollType::kProgrammatic);
+        duration = std::min<double>(
+            std::sqrt(std::abs(MaximumDimension(delta))),
+            features::kMaxAnimationDuration.Get().InSecondsF() *
+                kDurationDivisor);
         break;
-      case DurationBehavior::INVERSE_DELTA:
+      }
+      case DurationBehavior::kInverseDelta:
         duration = kInverseDeltaOffset +
                    std::abs(MaximumDimension(delta)) * kInverseDeltaSlope;
-        duration = base::ClampToRange(duration, kInverseDeltaMinDuration,
-                                      kInverseDeltaMaxDuration);
+        duration = std::clamp(duration, kInverseDeltaMinDuration,
+                              kInverseDeltaMaxDuration);
         break;
     }
     duration /= kDurationDivisor;
@@ -203,7 +176,7 @@ base::TimeDelta ScrollOffsetAnimationCurve::EaseInOutSegmentDuration(
   }
 
   base::TimeDelta delay_adjusted_duration =
-      base::TimeDelta::FromSecondsD(duration) - delayed_by;
+      base::Seconds(duration) - delayed_by;
   return (delay_adjusted_duration >= base::TimeDelta())
              ? delay_adjusted_duration
              : base::TimeDelta();
@@ -213,7 +186,7 @@ base::TimeDelta ScrollOffsetAnimationCurve::EaseInOutBoundedSegmentDuration(
     const gfx::Vector2dF& new_delta,
     base::TimeDelta t,
     base::TimeDelta delayed_by) {
-  gfx::Vector2dF old_delta = target_value_.DeltaFrom(initial_value_);
+  gfx::Vector2dF old_delta = target_value_ - initial_value_;
   double velocity = CalculateVelocity(t);
 
   // Use the velocity-based duration bound when it is less than the constant
@@ -227,7 +200,7 @@ base::TimeDelta ScrollOffsetAnimationCurve::EaseInOutBoundedSegmentDuration(
 base::TimeDelta ScrollOffsetAnimationCurve::SegmentDuration(
     const gfx::Vector2dF& delta,
     base::TimeDelta delayed_by,
-    absl::optional<double> velocity) {
+    std::optional<double> velocity) {
   switch (animation_type_) {
     case AnimationType::kEaseInOut:
       DCHECK(duration_behavior_.has_value());
@@ -236,8 +209,6 @@ base::TimeDelta ScrollOffsetAnimationCurve::SegmentDuration(
     case AnimationType::kLinear:
       DCHECK(velocity.has_value());
       return LinearSegmentDuration(delta, delayed_by, velocity.value());
-    case AnimationType::kImpulse:
-      return ImpulseSegmentDuration(delta, delayed_by);
   }
 }
 
@@ -251,40 +222,20 @@ base::TimeDelta ScrollOffsetAnimationCurve::LinearSegmentDuration(
           ? animation_duration_for_testing_.value()
           : std::abs(MaximumDimension(delta) / velocity);
   base::TimeDelta delay_adjusted_duration =
-      base::TimeDelta::FromSecondsD(duration_in_seconds) - delayed_by;
+      base::Seconds(duration_in_seconds) - delayed_by;
   return (delay_adjusted_duration >= base::TimeDelta())
              ? delay_adjusted_duration
              : base::TimeDelta();
 }
 
-// static
-base::TimeDelta ScrollOffsetAnimationCurve::ImpulseSegmentDuration(
-    const gfx::Vector2dF& delta,
-    base::TimeDelta delayed_by) {
-  base::TimeDelta duration;
-  if (animation_duration_for_testing_.has_value()) {
-    duration =
-        base::TimeDelta::FromSecondsD(animation_duration_for_testing_.value());
-  } else {
-    double duration_in_milliseconds =
-        kImpulseMillisecondsPerPixel * std::abs(MaximumDimension(delta));
-    duration_in_milliseconds = base::ClampToRange(
-        duration_in_milliseconds, kImpulseMinDurationMs, kImpulseMaxDurationMs);
-    duration = base::TimeDelta::FromMillisecondsD(duration_in_milliseconds);
-  }
-
-  duration -= delayed_by;
-  return (duration >= base::TimeDelta()) ? duration : base::TimeDelta();
-}
-
 void ScrollOffsetAnimationCurve::SetInitialValue(
-    const gfx::ScrollOffset& initial_value,
+    const gfx::PointF& initial_value,
     base::TimeDelta delayed_by,
     float velocity) {
   initial_value_ = initial_value;
   has_set_initial_value_ = true;
 
-  gfx::Vector2dF delta = target_value_.DeltaFrom(initial_value);
+  gfx::Vector2dF delta = target_value_ - initial_value;
   total_animation_duration_ = SegmentDuration(delta, delayed_by, velocity);
 }
 
@@ -294,12 +245,11 @@ bool ScrollOffsetAnimationCurve::HasSetInitialValue() const {
 
 void ScrollOffsetAnimationCurve::ApplyAdjustment(
     const gfx::Vector2dF& adjustment) {
-  initial_value_ = ScrollOffsetWithDelta(initial_value_, adjustment);
-  target_value_ = ScrollOffsetWithDelta(target_value_, adjustment);
+  initial_value_ = initial_value_ + adjustment;
+  target_value_ = target_value_ + adjustment;
 }
 
-gfx::ScrollOffset ScrollOffsetAnimationCurve::GetValue(
-    base::TimeDelta t) const {
+gfx::PointF ScrollOffsetAnimationCurve::GetValue(base::TimeDelta t) const {
   const base::TimeDelta duration = total_animation_duration_ - last_retarget_;
   t -= last_retarget_;
 
@@ -308,12 +258,12 @@ gfx::ScrollOffset ScrollOffsetAnimationCurve::GetValue(
   if (t <= base::TimeDelta())
     return initial_value_;
 
-  const double progress = timing_function_->GetValue(t / duration);
-  return gfx::ScrollOffset(
-      gfx::Tween::FloatValueBetween(progress, initial_value_.x(),
-                                    target_value_.x()),
-      gfx::Tween::FloatValueBetween(progress, initial_value_.y(),
-                                    target_value_.y()));
+  const double progress = timing_function_->GetValue(
+      t / duration, TimingFunction::LimitDirection::RIGHT);
+  return gfx::PointF(gfx::Tween::FloatValueBetween(progress, initial_value_.x(),
+                                                   target_value_.x()),
+                     gfx::Tween::FloatValueBetween(progress, initial_value_.y(),
+                                                   target_value_.y()));
 }
 
 base::TimeDelta ScrollOffsetAnimationCurve::Duration() const {
@@ -335,7 +285,8 @@ std::unique_ptr<gfx::AnimationCurve> ScrollOffsetAnimationCurve::Clone() const {
 void ScrollOffsetAnimationCurve::Tick(
     base::TimeDelta t,
     int property_id,
-    gfx::KeyframeModel* keyframe_model) const {
+    gfx::KeyframeModel* keyframe_model,
+    gfx::TimingFunction::LimitDirection unused) const {
   if (target_) {
     target_->OnScrollOffsetAnimated(GetValue(t), property_id, keyframe_model);
   }
@@ -345,9 +296,10 @@ std::unique_ptr<ScrollOffsetAnimationCurve>
 ScrollOffsetAnimationCurve::CloneToScrollOffsetAnimationCurve() const {
   std::unique_ptr<TimingFunction> timing_function(
       static_cast<TimingFunction*>(timing_function_->Clone().release()));
-  std::unique_ptr<ScrollOffsetAnimationCurve> curve_clone = base::WrapUnique(
-      new ScrollOffsetAnimationCurve(target_value_, std::move(timing_function),
-                                     animation_type_, duration_behavior_));
+  std::unique_ptr<ScrollOffsetAnimationCurve> curve_clone =
+      base::WrapUnique(new ScrollOffsetAnimationCurve(
+          target_value_, std::move(timing_function), animation_type_,
+          scroll_type_, duration_behavior_));
   curve_clone->initial_value_ = initial_value_;
   curve_clone->total_animation_duration_ = total_animation_duration_;
   curve_clone->last_retarget_ = last_retarget_;
@@ -365,16 +317,29 @@ double ScrollOffsetAnimationCurve::CalculateVelocity(base::TimeDelta t) {
   const double slope =
       timing_function_->Velocity((t - last_retarget_) / duration);
 
-  gfx::Vector2dF delta = target_value_.DeltaFrom(initial_value_);
+  gfx::Vector2dF delta = target_value_ - initial_value_;
 
   // TimingFunction::Velocity just gives the slope of the curve. Convert it to
   // units of pixels per second.
   return slope * (MaximumDimension(delta) / duration.InSecondsF());
 }
 
-void ScrollOffsetAnimationCurve::UpdateTarget(
-    base::TimeDelta t,
-    const gfx::ScrollOffset& new_target) {
+std::unique_ptr<TimingFunction> ScrollOffsetAnimationCurve::GetEasingFunction(
+    std::optional<double> slope) {
+  CubicBezierPoints control_points = kEaseInOutControlPoints;
+  if (scroll_type_ == ScrollType::kProgrammatic) {
+    control_points = GetCubicBezierPointsForProgrammaticScroll();
+  }
+  if (slope) {
+    return EaseInOutWithInitialSlope(control_points, *slope);
+  }
+  return CubicBezierTimingFunction::Create(control_points.x1, control_points.y1,
+                                           control_points.x2,
+                                           control_points.y2);
+}
+
+void ScrollOffsetAnimationCurve::UpdateTarget(base::TimeDelta t,
+                                              const gfx::PointF& new_target) {
   DCHECK_NE(animation_type_, AnimationType::kLinear)
       << "UpdateTarget is not supported on linear scroll animations.";
 
@@ -390,8 +355,7 @@ void ScrollOffsetAnimationCurve::UpdateTarget(
   t = std::max(t, last_retarget_);
 
   if (animation_type_ == AnimationType::kEaseInOut &&
-      std::abs(MaximumDimension(target_value_.DeltaFrom(new_target))) <
-          kEpsilon) {
+      std::abs(MaximumDimension(target_value_ - new_target)) < kEpsilon) {
     // Don't update the animation if the new target is the same as the old one.
     // This is done for EaseInOut-style animation curves, since the duration is
     // inversely proportional to the distance, and it may cause an animation
@@ -403,8 +367,8 @@ void ScrollOffsetAnimationCurve::UpdateTarget(
     return;
   }
 
-  gfx::ScrollOffset current_position = GetValue(t);
-  gfx::Vector2dF new_delta = new_target.DeltaFrom(current_position);
+  gfx::PointF current_position = GetValue(t);
+  gfx::Vector2dF new_delta = new_target - current_position;
 
   // We are already at or very close to the new target. Stop animating.
   if (std::abs(MaximumDimension(new_delta)) < kEpsilon) {
@@ -438,17 +402,7 @@ void ScrollOffsetAnimationCurve::UpdateTarget(
   double new_slope =
       velocity * (new_duration.InSecondsF() / MaximumDimension(new_delta));
 
-  DCHECK(animation_type_ == AnimationType::kImpulse ||
-         animation_type_ == AnimationType::kEaseInOut);
-  if (animation_type_ == AnimationType::kImpulse &&
-      IsNewTargetInOppositeDirection(current_position, target_value_,
-                                     new_target)) {
-    // Prevent any rubber-banding by setting the velocity (and subsequently, the
-    // slope) to 0 when moving in the opposite direciton.
-    new_slope = 0;
-  }
-
-  timing_function_ = EaseInOutWithInitialSlope(new_slope);
+  timing_function_ = GetEasingFunction(new_slope);
   initial_value_ = current_position;
   target_value_ = new_target;
   total_animation_duration_ = t + new_duration;
@@ -458,13 +412,13 @@ void ScrollOffsetAnimationCurve::UpdateTarget(
 const ScrollOffsetAnimationCurve*
 ScrollOffsetAnimationCurve::ToScrollOffsetAnimationCurve(
     const AnimationCurve* c) {
-  DCHECK_EQ(ScrollOffsetAnimationCurve::SCROLL_OFFSET, c->Type());
+  CHECK_EQ(ScrollOffsetAnimationCurve::SCROLL_OFFSET, c->Type());
   return static_cast<const ScrollOffsetAnimationCurve*>(c);
 }
 
 ScrollOffsetAnimationCurve*
 ScrollOffsetAnimationCurve::ToScrollOffsetAnimationCurve(AnimationCurve* c) {
-  DCHECK_EQ(ScrollOffsetAnimationCurve::SCROLL_OFFSET, c->Type());
+  CHECK_EQ(ScrollOffsetAnimationCurve::SCROLL_OFFSET, c->Type());
   return static_cast<ScrollOffsetAnimationCurve*>(c);
 }
 

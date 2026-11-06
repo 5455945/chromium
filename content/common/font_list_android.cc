@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,8 +10,8 @@
 
 namespace content {
 
-std::unique_ptr<base::ListValue> GetFontList_SlowBlocking() {
-  return std::make_unique<base::ListValue>();
+base::ListValue GetFontList_SlowBlocking() {
+  return base::ListValue();
 }
 
 }  // namespace content

@@ -1,4 +1,4 @@
-// Copyright (c) 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,10 @@
 #define CHROME_BROWSER_ASH_LOGIN_OOBE_SCREEN_H_
 
 #include <iosfwd>
+#include <optional>
 #include <string>
 
-namespace chromeos {
+namespace ash {
 
 // Lists the priority of the OOBE screens with the highest priority at the top
 // and the lowest priority at the bottom. This is used to check if screen
@@ -28,16 +29,17 @@ struct StaticOobeScreenId;
 // Identifiers an OOBE screen.
 struct OobeScreenId {
   // Create an identifier from a string.
+  // TODO(https://crbug.com/1312880): Remove this.
   explicit OobeScreenId(const std::string& id);
+
   // Create an identifier from a statically created identifier. This is implicit
   // to make StaticOobeScreenId act more like OobeScreenId.
   OobeScreenId(const StaticOobeScreenId& id);
 
-  // Name of the screen.
   std::string name;
+  std::string external_api_prefix;
 
   bool operator==(const OobeScreenId& rhs) const;
-  bool operator!=(const OobeScreenId& rhs) const;
   bool operator<(const OobeScreenId& rhs) const;
   friend std::ostream& operator<<(std::ostream& stream, const OobeScreenId& id);
 };
@@ -47,27 +49,31 @@ struct OobeScreenId {
 // the data in the binary instead of std::string.
 struct StaticOobeScreenId {
   const char* name;
+  const char* external_api_prefix = nullptr;
 
   OobeScreenId AsId() const;
 };
 
-struct OobeScreen {
-  constexpr static StaticOobeScreenId
-      SCREEN_CREATE_SUPERVISED_USER_FLOW_DEPRECATED{"supervised-user-creation"};
-  constexpr static StaticOobeScreenId SCREEN_CONFIRM_PASSWORD{
-      "saml-confirm-password"};
+struct ScreenSummary {
+  ScreenSummary();
+  ~ScreenSummary();
+  ScreenSummary(const ScreenSummary& summary);
 
-  constexpr static StaticOobeScreenId SCREEN_UNKNOWN{"unknown"};
+  StaticOobeScreenId screen_id;
+  std::string icon_id;
+  std::string title_id;
+  std::optional<std::string> subtitle_resource;
+  bool is_synced;
+  bool is_revisitable;
+  std::optional<bool> is_completed;
 };
 
-}  // namespace chromeos
+/* Keep it as `inline constexpr` (do not add `static`) so it exists as `inline
+ * variable` and have the same address in every translation unit (more at
+ * https://en.cppreference.com/w/cpp/language/inline).
+ **/
+inline constexpr StaticOobeScreenId OOBE_SCREEN_UNKNOWN{"unknown"};
 
-// TODO(https://crbug.com/1164001): remove when moved to ash.
-namespace ash {
-using ::chromeos::OobeScreen;
-using ::chromeos::OobeScreenId;
-using ::chromeos::OobeScreenPriority;
-using ::chromeos::StaticOobeScreenId;
-}
+}  // namespace ash
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_OOBE_SCREEN_H_

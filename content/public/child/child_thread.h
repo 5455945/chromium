@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,13 @@
 
 #include <string>
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "build/build_config.h"
+#include "content/common/buildflags.h"
 #include "content/common/content_export.h"
-#include "ipc/ipc_sender.h"
 #include "mojo/public/cpp/bindings/generic_pending_receiver.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include <windows.h>
 #endif
 
@@ -26,13 +26,13 @@ namespace content {
 
 // An abstract base class that contains logic shared between most child
 // processes of the embedder.
-class CONTENT_EXPORT ChildThread : public IPC::Sender {
+class CONTENT_EXPORT ChildThread {
  public:
   // Returns the one child thread for this process.  Note that this can only be
   // accessed when running on the child thread itself.
   static ChildThread* Get();
 
-  ~ChildThread() override {}
+  virtual ~ChildThread() = default;
 
   // Sends over a base::UserMetricsAction to be recorded by user metrics as
   // an action. Once a new user metric is added, run
@@ -66,7 +66,7 @@ class CONTENT_EXPORT ChildThread : public IPC::Sender {
   //       2. Main thread, RenderProcessHostImpl::BindHostReceiver.
   //       3. Main thread, ContentBrowserClient::BindHostReceiverForRenderer.
   //
-  // TODO(crbug.com/977637): Document behavior for other process types when
+  // TODO(crbug.com/40633267): Document behavior for other process types when
   // their support is added.
   virtual void BindHostReceiver(mojo::GenericPendingReceiver receiver) = 0;
 
@@ -76,7 +76,7 @@ class CONTENT_EXPORT ChildThread : public IPC::Sender {
   virtual void SetFieldTrialGroup(const std::string& trial_name,
                                   const std::string& group_name) = 0;
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   // Request that the given font be loaded by the browser so it's cached by the
   // OS. Please see ChildProcessHost::PreCacheFont for details.
   virtual void PreCacheFont(const LOGFONT& log_font) = 0;

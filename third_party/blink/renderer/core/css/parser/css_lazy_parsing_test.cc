@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,26 @@
 #include "third_party/blink/renderer/core/css/parser/css_lazy_parsing_state.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser_context.h"
+#include "third_party/blink/renderer/core/css/pending_sheet_type.h"
+#include "third_party/blink/renderer/core/css/style_engine.h"
 #include "third_party/blink/renderer/core/css/style_rule.h"
 #include "third_party/blink/renderer/core/css/style_sheet_contents.h"
 #include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/execution_context/security_context.h"
+#include "third_party/blink/renderer/core/html/html_style_element.h"
 #include "third_party/blink/renderer/core/loader/document_loader.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/testing/dummy_page_holder.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/thread_state.h"
+#include "third_party/blink/renderer/platform/loader/fetch/render_blocking_behavior.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
+
+#if defined(__SSE2__) || defined(__ARM_NEON__)
 
 class CSSLazyParsingTest : public testing::Test {
  public:
@@ -29,6 +39,7 @@ class CSSLazyParsingTest : public testing::Test {
   }
 
  protected:
+  test::TaskEnvironment task_environment_;
   Persistent<StyleSheetContents> cached_contents_;
 };
 
@@ -37,7 +48,7 @@ TEST_F(CSSLazyParsingTest, Simple) {
       kHTMLStandardMode, SecureContextMode::kInsecureContext);
   auto* style_sheet = MakeGarbageCollected<StyleSheetContents>(context);
 
-  String sheet_text = "body { background-color: red; }";
+  String sheet_text = "body { background-color: red; }/*padding1234567890*/";
   CSSParser::ParseSheet(context, style_sheet, sheet_text,
                         CSSDeferPropertyParsing::kYes);
   StyleRule* rule = RuleAt(style_sheet, 0);
@@ -52,7 +63,8 @@ TEST_F(CSSLazyParsingTest, LazyParseBeforeAfter) {
   auto* style_sheet = MakeGarbageCollected<StyleSheetContents>(context);
 
   String sheet_text =
-      "p::before { content: 'foo' } p .class::after { content: 'bar' } ";
+      "p::before { content: 'foo' } p .class::after { content: 'bar' } "
+      "/*padding1234567890*/";
   CSSParser::ParseSheet(context, style_sheet, sheet_text,
                         CSSDeferPropertyParsing::kYes);
 
@@ -60,67 +72,25 @@ TEST_F(CSSLazyParsingTest, LazyParseBeforeAfter) {
   EXPECT_FALSE(HasParsedProperties(RuleAt(style_sheet, 1)));
 }
 
-// Test for crbug.com/664115 where |shouldConsiderForMatchingRules| would flip
-// from returning false to true if the lazy property was parsed. This is a
-// dangerous API because callers will expect the set of matching rules to be
-// identical if the stylesheet is not mutated.
-TEST_F(CSSLazyParsingTest, ShouldConsiderForMatchingRulesDoesntChange1) {
-  auto* context = MakeGarbageCollected<CSSParserContext>(
-      kHTMLStandardMode, SecureContextMode::kInsecureContext);
-  auto* style_sheet = MakeGarbageCollected<StyleSheetContents>(context);
-
-  String sheet_text = "p::first-letter { ,badness, } ";
-  CSSParser::ParseSheet(context, style_sheet, sheet_text,
-                        CSSDeferPropertyParsing::kYes);
-
-  StyleRule* rule = RuleAt(style_sheet, 0);
-  EXPECT_FALSE(HasParsedProperties(rule));
-  EXPECT_TRUE(
-      rule->ShouldConsiderForMatchingRules(false /* includeEmptyRules */));
-
-  // Parse the rule.
-  rule->Properties();
-
-  // Now, we should still consider this for matching rules even if it is empty.
-  EXPECT_TRUE(HasParsedProperties(rule));
-  EXPECT_TRUE(
-      rule->ShouldConsiderForMatchingRules(false /* includeEmptyRules */));
-}
-
-// Test the same thing as above with lazy parsing off to ensure that we perform
-// the optimization where possible.
-TEST_F(CSSLazyParsingTest, ShouldConsiderForMatchingRulesSimple) {
-  auto* context = MakeGarbageCollected<CSSParserContext>(
-      kHTMLStandardMode, SecureContextMode::kInsecureContext);
-  auto* style_sheet = MakeGarbageCollected<StyleSheetContents>(context);
-
-  String sheet_text = "p::before { ,badness, } ";
-  CSSParser::ParseSheet(context, style_sheet, sheet_text,
-                        CSSDeferPropertyParsing::kNo);
-
-  StyleRule* rule = RuleAt(style_sheet, 0);
-  EXPECT_TRUE(HasParsedProperties(rule));
-  EXPECT_FALSE(
-      rule->ShouldConsiderForMatchingRules(false /* includeEmptyRules */));
-}
-
 // Regression test for crbug.com/660290 where we change the underlying owning
 // document from the StyleSheetContents without changing the UseCounter. This
 // test ensures that the new UseCounter is used when doing new parsing work.
 TEST_F(CSSLazyParsingTest, ChangeDocuments) {
-  auto dummy_holder = std::make_unique<DummyPageHolder>(IntSize(500, 500));
+  auto dummy_holder = std::make_unique<DummyPageHolder>(gfx::Size(500, 500));
   Page::InsertOrdinaryPageForTesting(&dummy_holder->GetPage());
 
   auto* context = MakeGarbageCollected<CSSParserContext>(
       kHTMLStandardMode, SecureContextMode::kInsecureContext,
-      CSSParserContext::kLiveProfile, &dummy_holder->GetDocument());
+      &dummy_holder->GetDocument());
   cached_contents_ = MakeGarbageCollected<StyleSheetContents>(context);
   {
     auto* sheet = MakeGarbageCollected<CSSStyleSheet>(
         cached_contents_, dummy_holder->GetDocument());
     DCHECK(sheet);
 
-    String sheet_text = "body { background-color: red; } p { color: orange;  }";
+    String sheet_text =
+        "body { background-color: red; } p { color: orange;  "
+        "}/*padding1234567890*/";
     CSSParser::ParseSheet(context, cached_contents_, sheet_text,
                           CSSDeferPropertyParsing::kYes);
 
@@ -147,7 +117,7 @@ TEST_F(CSSLazyParsingTest, ChangeDocuments) {
   // Ensure no stack references to oilpan objects.
   ThreadState::Current()->CollectAllGarbageForTesting();
 
-  auto dummy_holder2 = std::make_unique<DummyPageHolder>(IntSize(500, 500));
+  auto dummy_holder2 = std::make_unique<DummyPageHolder>(gfx::Size(500, 500));
   Page::InsertOrdinaryPageForTesting(&dummy_holder2->GetPage());
   auto* sheet2 = MakeGarbageCollected<CSSStyleSheet>(
       cached_contents_, dummy_holder2->GetDocument());
@@ -171,5 +141,88 @@ TEST_F(CSSLazyParsingTest, ChangeDocuments) {
       use_counter2.IsCounted(CSSPropertyID::kBackgroundColor,
                              UseCounterImpl::CSSPropertyType::kDefault));
 }
+
+TEST_F(CSSLazyParsingTest, NoLazyParsingForNestedRules) {
+  auto* context = MakeGarbageCollected<CSSParserContext>(
+      kHTMLStandardMode, SecureContextMode::kInsecureContext);
+  auto* style_sheet = MakeGarbageCollected<StyleSheetContents>(context);
+
+  String sheet_text = "body { color: green; & div { color: red; } }";
+  CSSParser::ParseSheet(context, style_sheet, sheet_text,
+                        CSSDeferPropertyParsing::kYes);
+  StyleRule* rule = RuleAt(style_sheet, 0);
+  EXPECT_TRUE(HasParsedProperties(rule));
+  EXPECT_EQ("color: green;", rule->Properties().AsText());
+  EXPECT_TRUE(HasParsedProperties(rule));
+}
+
+TEST_F(CSSLazyParsingTest, NoLazyParsingForNestedAtRules) {
+  ScopedCSSMixinsForTest mixins(true);
+  auto* context = MakeGarbageCollected<CSSParserContext>(
+      kHTMLStandardMode, SecureContextMode::kInsecureContext);
+  auto* style_sheet = MakeGarbageCollected<StyleSheetContents>(context);
+
+  String sheet_text = "body { color: green; @apply --m1; } div { color: red; }";
+  CSSParser::ParseSheet(context, style_sheet, sheet_text,
+                        CSSDeferPropertyParsing::kYes);
+  StyleRule* rule = RuleAt(style_sheet, 0);
+  EXPECT_TRUE(HasParsedProperties(rule));
+  EXPECT_EQ("color: green;", rule->Properties().AsText());
+  ASSERT_TRUE(rule->ChildRules());
+  EXPECT_EQ(1u, rule->ChildRules()->size());
+  EXPECT_TRUE((*rule->ChildRules())[0]->IsApplyMixinRule());
+}
+
+TEST_F(CSSLazyParsingTest, NoLazyParsingForNestedAtRulesWithBlock) {
+  ScopedCSSMixinsForTest mixins(true);
+  auto* context = MakeGarbageCollected<CSSParserContext>(
+      kHTMLStandardMode, SecureContextMode::kInsecureContext);
+  auto* style_sheet = MakeGarbageCollected<StyleSheetContents>(context);
+
+  String sheet_text =
+      "body { color: green; @apply --m1 { color: blue; } } div { color: red; }";
+  CSSParser::ParseSheet(context, style_sheet, sheet_text,
+                        CSSDeferPropertyParsing::kYes);
+  StyleRule* rule = RuleAt(style_sheet, 0);
+  EXPECT_TRUE(HasParsedProperties(rule));
+  EXPECT_EQ("color: green;", rule->Properties().AsText());
+  ASSERT_TRUE(rule->ChildRules());
+  EXPECT_EQ(1u, rule->ChildRules()->size());
+  EXPECT_TRUE((*rule->ChildRules())[0]->IsApplyMixinRule());
+}
+
+// StyleEngine::CreateSheet is the inline <style> path. Unlike network
+// stylesheets it parses eagerly by default; LazyParseInlineStyleSheets opts it
+// into the same deferred treatment.
+TEST_F(CSSLazyParsingTest, InlineStyleElementEagerWhenFeatureDisabled) {
+  ScopedLazyParseInlineStyleSheetsForTest scoped_feature(false);
+  auto dummy_holder = std::make_unique<DummyPageHolder>(gfx::Size(500, 500));
+  Document& document = dummy_holder->GetDocument();
+  auto* element = MakeGarbageCollected<HTMLStyleElement>(document);
+
+  CSSStyleSheet* sheet = document.GetStyleEngine().CreateSheet(
+      *element, "body { color: red; }/*padding1234567890*/",
+      TextPosition::MinimumPosition(), PendingSheetType::kNonBlocking,
+      RenderBlockingBehavior::kNonBlocking);
+  EXPECT_TRUE(HasParsedProperties(RuleAt(sheet->Contents(), 0)));
+}
+
+TEST_F(CSSLazyParsingTest, InlineStyleElementLazyWhenFeatureEnabled) {
+  ScopedLazyParseInlineStyleSheetsForTest scoped_feature(true);
+  auto dummy_holder = std::make_unique<DummyPageHolder>(gfx::Size(500, 500));
+  Document& document = dummy_holder->GetDocument();
+  auto* element = MakeGarbageCollected<HTMLStyleElement>(document);
+
+  CSSStyleSheet* sheet = document.GetStyleEngine().CreateSheet(
+      *element, "body { color: blue; }/*padding1234567890*/",
+      TextPosition::MinimumPosition(), PendingSheetType::kNonBlocking,
+      RenderBlockingBehavior::kNonBlocking);
+  StyleRule* rule = RuleAt(sheet->Contents(), 0);
+  EXPECT_FALSE(HasParsedProperties(rule));
+  EXPECT_EQ("color: blue;", rule->Properties().AsText());
+  EXPECT_TRUE(HasParsedProperties(rule));
+}
+
+#endif  // SIMD
 
 }  // namespace blink

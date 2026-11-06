@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,13 @@
 
 #include <set>
 #include <string>
+#include <string_view>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/containers/span.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
+#include "ui/gfx/x/connection.h"
 #include "ui/gfx/x/event.h"
 #include "ui/gfx/x/xfixes.h"
 #include "ui/gfx/x/xproto.h"
@@ -35,6 +38,10 @@ class XServerClipboard {
       ClipboardChangedCallback;
 
   XServerClipboard();
+
+  XServerClipboard(const XServerClipboard&) = delete;
+  XServerClipboard& operator=(const XServerClipboard&) = delete;
+
   ~XServerClipboard();
 
   // Start monitoring |connection|'s selections, and invoke |callback| whenever
@@ -73,27 +80,24 @@ class XServerClipboard {
   // request for information about a selection.
   // |event| is the raw X event from the notification.
   // |type|, |format| etc are the results from XGetWindowProperty(), or 0 if
-  // there is no associated data.
+  // there is no associated data. |data| holds the raw property bytes.
   void HandleSelectionNotify(const x11::SelectionNotifyEvent& event,
                              x11::Atom type,
                              int format,
-                             int item_count,
-                             const void* data);
+                             base::span<const uint8_t> data);
 
   // These methods return true if selection processing is complete, false
   // otherwise. They are called from HandleSelectionNotify(), and take the same
   // arguments.
   bool HandleSelectionTargetsEvent(const x11::SelectionNotifyEvent& event,
                                    int format,
-                                   int item_count,
-                                   const void* data);
+                                   base::span<const uint8_t> data);
   bool HandleSelectionStringEvent(const x11::SelectionNotifyEvent& event,
                                   int format,
-                                  int item_count,
-                                  const void* data);
+                                  base::span<const uint8_t> data);
 
   // Notify the registered callback of new clipboard text.
-  void NotifyClipboardText(const std::string& text);
+  void NotifyClipboardText(std::string_view text);
 
   // These methods trigger the X server or selection owner to send back an
   // event containing the requested information.
@@ -104,8 +108,10 @@ class XServerClipboard {
   void AssertSelectionOwnership(x11::Atom selection);
   bool IsSelectionOwner(x11::Atom selection);
 
+  x11::Connection* connection() { return connection_; }
+
   // Stores the connection supplied to Init().
-  x11::Connection* connection_ = nullptr;
+  raw_ptr<x11::Connection> connection_ = nullptr;
 
   // Window through which clipboard events are received, or BadValue if the
   // window could not be created.
@@ -138,8 +144,6 @@ class XServerClipboard {
 
   // |callback| argument supplied to Init().
   ClipboardChangedCallback callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(XServerClipboard);
 };
 
 }  // namespace remoting

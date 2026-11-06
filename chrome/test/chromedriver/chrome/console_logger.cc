@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,9 +9,7 @@
 #include <string>
 
 #include "base/json/json_writer.h"
-#include "base/macros.h"
 #include "base/strings/stringprintf.h"
-#include "base/values.h"
 #include "chrome/test/chromedriver/chrome/devtools_client.h"
 #include "chrome/test/chromedriver/chrome/log.h"
 #include "chrome/test/chromedriver/chrome/status.h"
@@ -39,7 +37,11 @@ ConsoleLogger::ConsoleLogger(Log* log)
     : log_(log) {}
 
 Status ConsoleLogger::OnConnected(DevToolsClient* client) {
-  base::DictionaryValue params;
+  if (client->IsTabTarget()) {
+    // Tab targets do not support the commands ConsoleLogger needs.
+    return Status(kOk);
+  }
+  base::DictValue params;
   Status status = client->SendCommand("Log.enable", params);
   if (status.IsError()) {
     return status;
@@ -47,10 +49,9 @@ Status ConsoleLogger::OnConnected(DevToolsClient* client) {
   return client->SendCommand("Runtime.enable", params);
 }
 
-Status ConsoleLogger::OnEvent(
-    DevToolsClient* client,
-    const std::string& method,
-    const base::DictionaryValue& params) {
+Status ConsoleLogger::OnEvent(DevToolsClient* client,
+                              const std::string& method,
+                              const base::DictValue& params) {
   if (method == "Log.entryAdded")
     return OnLogEntryAdded(params);
   if (method == "Runtime.consoleAPICalled")
@@ -60,28 +61,27 @@ Status ConsoleLogger::OnEvent(
   return Status(kOk);
 }
 
-Status ConsoleLogger::OnLogEntryAdded(const base::DictionaryValue& params) {
-  const base::DictionaryValue* entry = nullptr;
-  if (!params.GetDictionary("entry", &entry))
+Status ConsoleLogger::OnLogEntryAdded(const base::DictValue& params) {
+  const base::DictValue* entry = params.FindDict("entry");
+  if (!entry)
     return Status(kUnknownError, "missing or invalid 'entry'");
 
-  std::string level_name;
+  const std::string* level_name = entry->FindString("level");
   Log::Level level;
-  if (!entry->GetString("level", &level_name) ||
-      !ConsoleLevelToLogLevel(level_name, &level))
+  if (!level_name || !ConsoleLevelToLogLevel(*level_name, &level))
     return Status(kUnknownError, "missing or invalid 'entry.level'");
 
-  std::string source;
-  if (!entry->GetString("source", &source))
+  const std::string* source = entry->FindString("source");
+  if (!source)
     return Status(kUnknownError, "missing or invalid 'entry.source'");
 
-  std::string origin;
-  if (!entry->GetString("url", &origin))
+  const std::string* origin = entry->FindString("url");
+  if (!origin)
     origin = source;
 
   std::string line_number;
-  int line = -1;
-  if (entry->GetInteger("lineNumber", &line)) {
+  int line = entry->FindInt("lineNumber").value_or(-1);
+  if (line >= 0) {
     line_number = base::StringPrintf("%d", line);
   } else {
     // No line number, but print anyway, just to maintain the number of fields
@@ -89,79 +89,80 @@ Status ConsoleLogger::OnLogEntryAdded(const base::DictionaryValue& params) {
     line_number = "-";
   }
 
-  std::string text;
-  if (!entry->GetString("text", &text))
+  const std::string* text = entry->FindString("text");
+  if (!text)
     return Status(kUnknownError, "missing or invalid 'entry.text'");
 
-  log_->AddEntry(level, source, base::StringPrintf("%s %s %s",
-                                                   origin.c_str(),
-                                                   line_number.c_str(),
-                                                   text.c_str()));
+  log_->AddEntry(level, *source,
+                 base::StringPrintf("%s %s %s", origin->c_str(),
+                                    line_number.c_str(), text->c_str()));
   return Status(kOk);
 }
 
-Status ConsoleLogger::OnRuntimeConsoleApiCalled(
-    const base::DictionaryValue& params) {
-  std::string type;
-  if (!params.GetString("type", &type))
+Status ConsoleLogger::OnRuntimeConsoleApiCalled(const base::DictValue& params) {
+  const std::string* type = params.FindString("type");
+  if (!type)
     return Status(kUnknownError, "missing or invalid type");
   Log::Level level;
-  if (!ConsoleLevelToLogLevel(type, &level))
+  if (!ConsoleLevelToLogLevel(*type, &level))
     return Status(kOk);
 
   std::string origin = "console-api";
   std::string line_column = "-";
-  const base::DictionaryValue* stack_trace = nullptr;
-  if (params.GetDictionary("stackTrace", &stack_trace)) {
-    const base::ListValue* call_frames = nullptr;
-    if (!stack_trace->GetList("callFrames", &call_frames))
+  const base::DictValue* stack_trace = params.FindDict("stackTrace");
+  if (stack_trace) {
+    const base::ListValue* call_frames = stack_trace->FindList("callFrames");
+    if (!call_frames)
       return Status(kUnknownError, "missing or invalid callFrames");
-    const base::DictionaryValue* call_frame = nullptr;
-    if (call_frames->GetDictionary(0, &call_frame)) {
-      std::string url;
-      if (!call_frame->GetString("url", &url))
+    const base::Value& call_frame_value = call_frames->front();
+    const base::DictValue* call_frame = call_frame_value.GetIfDict();
+    if (call_frame) {
+      const std::string* url = call_frame->FindString("url");
+      if (!url)
         return Status(kUnknownError, "missing or invalid url");
-      if (!url.empty())
-        origin = url;
-      int line = -1;
-      if (!call_frame->GetInteger("lineNumber", &line))
+      if (!url->empty())
+        origin = *url;
+      int line = call_frame->FindInt("lineNumber").value_or(-1);
+      if (line < 0)
         return Status(kUnknownError, "missing or invalid lineNumber");
-      int column = -1;
-      if (!call_frame->GetInteger("columnNumber", &column))
+      int column = call_frame->FindInt("columnNumber").value_or(-1);
+      if (column < 0)
         return Status(kUnknownError, "missing or invalid columnNumber");
       line_column = base::StringPrintf("%d:%d", line, column);
     }
   }
 
+  const base::ListValue* args = params.FindList("args");
+  if (!args || args->empty())
+    return Status(kUnknownError, "missing or invalid args");
+
   std::string text;
-  const base::ListValue* args = nullptr;
-
-  std::string arg_type;
-  if (!params.GetList("args", &args) || args->GetSize() < 1) {
-       return Status(kUnknownError, "missing or invalid args");
-  }
-
-  int arg_count = args->GetSize();
-  const base::DictionaryValue* current_arg = nullptr;
+  int arg_count = args->size();
   for (int i = 0; i < arg_count; i++) {
-    if (!args->GetDictionary(i, &current_arg)) {
+    const base::DictValue* current_arg = (*args)[i].GetIfDict();
+    if (!current_arg) {
       std::string error_message = base::StringPrintf("Argument %d is missing or invalid", i);
-      return Status(kUnknownError, error_message );
+      return Status(kUnknownError, error_message);
     }
     std::string temp_text;
-    std::string arg_type;
-    if (current_arg->GetString("type", &arg_type) && arg_type == "undefined") {
+    const std::string* arg_type = current_arg->FindString("type");
+    if (arg_type && *arg_type == "undefined") {
       temp_text = "undefined";
-    } else if (!current_arg->GetString("description", &temp_text)) {
-      const base::Value* value = nullptr;
-      if (!current_arg->Get("value", &value)) {
-        return Status(kUnknownError, "missing or invalid arg value");
-      }
-      if (!base::JSONWriter::Write(*value, &temp_text)) {
-        return Status(kUnknownError, "failed to convert value to text");
+    } else {
+      const std::string* description = current_arg->FindString("description");
+      if (description) {
+        temp_text = *description;
+      } else {
+        const base::Value* value = current_arg->Find("value");
+        if (!value) {
+          return Status(kUnknownError, "missing or invalid arg value");
+        }
+        if (!base::JSONWriter::Write(*value, &temp_text)) {
+          return Status(kUnknownError, "failed to convert value to text");
+        }
       }
     }
-    // add spaces between the arguments
+    // Add spaces between the arguments.
     if (i != 0)
       text += " ";
     text += temp_text;
@@ -174,43 +175,47 @@ Status ConsoleLogger::OnRuntimeConsoleApiCalled(
   return Status(kOk);
 }
 
-Status ConsoleLogger::OnRuntimeExceptionThrown(
-    const base::DictionaryValue& params) {
-  const base::DictionaryValue* exception_details = nullptr;
-
-  if (!params.GetDictionary("exceptionDetails", &exception_details))
-      return Status(kUnknownError, "missing or invalid exception details");
+Status ConsoleLogger::OnRuntimeExceptionThrown(const base::DictValue& params) {
+  const base::DictValue* exception_details =
+      params.FindDict("exceptionDetails");
+  ;
+  if (!exception_details)
+    return Status(kUnknownError, "missing or invalid exception details");
 
   std::string origin;
-  if (!exception_details->GetString("url", &origin))
+  if (const std::string* temp_origin = exception_details->FindString("url"))
+    origin = *temp_origin;
+  else
     origin = "javascript";
 
-  int line = -1;
-  if (!exception_details->GetInteger("lineNumber", &line))
+  int line = exception_details->FindInt("lineNumber").value_or(-1);
+  if (line < 0)
     return Status(kUnknownError, "missing or invalid lineNumber");
-  int column = -1;
-  if (!exception_details->GetInteger("columnNumber", &column))
+  int column = exception_details->FindInt("columnNumber").value_or(-1);
+  if (column < 0)
     return Status(kUnknownError, "missing or invalid columnNumber");
   std::string line_column = base::StringPrintf("%d:%d", line, column);
 
   std::string text;
-  const base::DictionaryValue* exception = nullptr;
-  const base::DictionaryValue* preview = nullptr;
-  const base::ListValue* properties = nullptr;
-  if (exception_details->GetDictionary("exception", &exception) &&
-      exception->GetDictionary("preview", &preview) &&
-      preview->GetList("properties", &properties)) {
+  const base::DictValue* exception = exception_details->FindDict("exception");
+  const base::DictValue* preview =
+      exception ? exception->FindDict("preview") : nullptr;
+  const base::ListValue* properties =
+      preview ? preview->FindList("properties") : nullptr;
+  if (properties) {
     // If the event contains an object which is an instance of the JS Error
     // class, attempt to get the message property for the exception.
-    for (size_t i = 0; i < properties->GetSize(); i++) {
-      const base::DictionaryValue* property = nullptr;
-      if (properties->GetDictionary(i, &property)) {
-        std::string name;
-        if (property->GetString("name", &name) && name == "message") {
-          if (property->GetString("value", &text)) {
-            std::string class_name;
-            if (exception->GetString("className", &class_name))
-              text = "Uncaught " + class_name + ": " + text;
+    for (const base::Value& property_value : *properties) {
+      const base::DictValue* dict = property_value.GetIfDict();
+      if (dict) {
+        const std::string* name = dict->FindString("name");
+        if (name && *name == "message") {
+          const std::string* value = dict->FindString("value");
+          if (value) {
+            text = *value;
+            const std::string* class_name = exception->FindString("className");
+            if (class_name)
+              text = "Uncaught " + *class_name + ": " + text;
             break;
           }
         }
@@ -219,7 +224,9 @@ Status ConsoleLogger::OnRuntimeExceptionThrown(
   } else {
     // Since |exception.preview.properties| is optional, fall back to |text|
     // (which is required) if we don't find anything.
-    if (!exception_details->GetString("text", &text))
+    if (const std::string* temp_text = exception_details->FindString("text"))
+      text = *temp_text;
+    else
       return Status(kUnknownError, "missing or invalid exception message text");
   }
 

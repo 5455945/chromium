@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,19 +7,29 @@
 
 #include <memory>
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
-#include "chrome/browser/ui/browser_list_observer.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "components/javascript_dialogs/tab_modal_dialog_manager_delegate.h"
 
+class BrowserWindowInterface;
+
 class JavaScriptTabModalDialogManagerDelegateDesktop
     : public javascript_dialogs::TabModalDialogManagerDelegate,
-      public BrowserListObserver,
+      public BrowserCollectionObserver,
       public TabStripModelObserver {
  public:
   explicit JavaScriptTabModalDialogManagerDelegateDesktop(
       content::WebContents* web_contents);
+
+  JavaScriptTabModalDialogManagerDelegateDesktop(
+      const JavaScriptTabModalDialogManagerDelegateDesktop&) = delete;
+  JavaScriptTabModalDialogManagerDelegateDesktop& operator=(
+      const JavaScriptTabModalDialogManagerDelegateDesktop&) = delete;
+
   ~JavaScriptTabModalDialogManagerDelegateDesktop() override;
 
   // javascript_dialogs::TabModalDialogManagerDelegate
@@ -36,9 +46,11 @@ class JavaScriptTabModalDialogManagerDelegateDesktop
   void SetTabNeedsAttention(bool attention) override;
   bool IsWebContentsForemost() override;
   bool IsApp() override;
+  bool CanShowModalUI() override;
 
-  // BrowserListObserver:
-  void OnBrowserSetLastActive(Browser* browser) override;
+  // BrowserCollectionObserver:
+  void OnBrowserActivated(BrowserWindowInterface* browser) override;
+  void OnBrowserDeactivated(BrowserWindowInterface* browser) override;
 
   // TabStripModelObserver:
   void OnTabStripModelChanged(
@@ -50,7 +62,7 @@ class JavaScriptTabModalDialogManagerDelegateDesktop
   // Marks the tab as needing attention.
   void SetTabNeedsAttentionImpl(bool attention,
                                 TabStripModel* tab_strip_model,
-                                int index);
+                                content::WebContents* web_contents);
 
   // If this instance is observing a TabStripModel, then this member is not
   // nullptr.
@@ -64,14 +76,15 @@ class JavaScriptTabModalDialogManagerDelegateDesktop
   //
   // A TabStripModel cannot be destroyed without first detaching all of its
   // WebContents.
-  TabStripModel* tab_strip_model_being_observed_ = nullptr;
+  raw_ptr<TabStripModel> tab_strip_model_being_observed_ = nullptr;
 
   // The WebContents for the tab over which the dialog will be modal. This may
   // be different from the WebContents that requested the dialog, such as with
   // Chrome app <webview>s.
-  content::WebContents* web_contents_;
+  raw_ptr<content::WebContents> web_contents_;
 
-  DISALLOW_COPY_AND_ASSIGN(JavaScriptTabModalDialogManagerDelegateDesktop);
+  base::ScopedObservation<ProfileBrowserCollection, BrowserCollectionObserver>
+      browser_collection_observer_{this};
 };
 
 #endif  // CHROME_BROWSER_UI_JAVASCRIPT_DIALOGS_JAVASCRIPT_TAB_MODAL_DIALOG_MANAGER_DELEGATE_DESKTOP_H_

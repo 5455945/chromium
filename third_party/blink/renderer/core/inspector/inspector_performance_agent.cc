@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,16 +6,17 @@
 
 #include <utility>
 
-#include "base/cxx17_backports.h"
 #include "base/process/process.h"
 #include "base/process/process_metrics.h"
 #include "base/time/time_override.h"
+#include "base/types/expected.h"
 #include "build/build_config.h"
 #include "third_party/blink/public/platform/platform.h"
+#include "third_party/blink/renderer/core/execution_context/agent.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/inspector/inspected_frames.h"
 #include "third_party/blink/renderer/core/loader/document_loader.h"
-#include "third_party/blink/renderer/core/paint/paint_timing.h"
+#include "third_party/blink/renderer/core/paint/timing/paint_timing.h"
 #include "third_party/blink/renderer/core/probe/core_probes.h"
 #include "third_party/blink/renderer/platform/bindings/v8_per_isolate_data.h"
 #include "third_party/blink/renderer/platform/instrumentation/instance_counters.h"
@@ -25,23 +26,20 @@ namespace blink {
 
 namespace TimeDomain = protocol::Performance::SetTimeDomain::TimeDomainEnum;
 
-using protocol::Response;
-
 namespace {
-constexpr bool isPlural(const char* str, int len) {
-  return len > 1 && str[len - 2] == 's';
+constexpr bool IsPlural(std::string_view str) {
+  return !str.empty() && str.back() == 's';
 }
 
-static constexpr const char* kInstanceCounterNames[] = {
-#define INSTANCE_COUNTER_NAME(name) \
-  (isPlural(#name, sizeof(#name)) ? #name : #name "s"),
+static constexpr auto kInstanceCounterNames = std::to_array<const char*>({
+#define INSTANCE_COUNTER_NAME(name) (IsPlural(#name) ? #name : #name "s"),
     INSTANCE_COUNTERS_LIST(INSTANCE_COUNTER_NAME)
 #undef INSTANCE_COUNTER_NAME
-};
+});
 
 std::unique_ptr<base::ProcessMetrics> GetCurrentProcessMetrics() {
   base::ProcessHandle handle = base::Process::Current().Handle();
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   // Port provider can be null if querying the current process.
   return base::ProcessMetrics::CreateProcessMetrics(handle, nullptr);
 #else
@@ -52,8 +50,7 @@ std::unique_ptr<base::ProcessMetrics> GetCurrentProcessMetrics() {
 base::TimeDelta GetCurrentProcessTime() {
   std::unique_ptr<base::ProcessMetrics> process_metrics =
       GetCurrentProcessMetrics();
-  base::TimeDelta process_time = process_metrics->GetCumulativeCPUUsage();
-  return process_time;
+  return process_metrics->GetCumulativeCPUUsage().value_or(base::TimeDelta());
 }
 
 }  // namespace
@@ -84,33 +81,33 @@ void InspectorPerformanceAgent::InnerEnable() {
 }
 
 protocol::Response InspectorPerformanceAgent::enable(
-    Maybe<String> optional_time_domain) {
-  String time_domain = optional_time_domain.fromMaybe(TimeDomain::TimeTicks);
+    std::optional<String> optional_time_domain) {
+  String time_domain = optional_time_domain.value_or(TimeDomain::TimeTicks);
   if (enabled_.Get()) {
     if (!HasTimeDomain(time_domain)) {
-      return Response::ServerError(
+      return protocol::Response::ServerError(
           "Cannot change time domain while performance metrics collection is "
           "enabled.");
     }
-    return Response::Success();
+    return protocol::Response::Success();
   }
 
-  Response response = InnerSetTimeDomain(time_domain);
+  protocol::Response response = InnerSetTimeDomain(time_domain);
   if (!response.IsSuccess())
     return response;
 
   enabled_.Set(true);
   InnerEnable();
-  return Response::Success();
+  return protocol::Response::Success();
 }
 
 protocol::Response InspectorPerformanceAgent::disable() {
   if (!enabled_.Get())
-    return Response::Success();
+    return protocol::Response::Success();
   enabled_.Clear();
   instrumenting_agents_->RemoveInspectorPerformanceAgent(this);
   Thread::Current()->RemoveTaskTimeObserver(this);
-  return Response::Success();
+  return protocol::Response::Success();
 }
 
 namespace {
@@ -125,9 +122,10 @@ void AppendMetric(protocol::Array<protocol::Performance::Metric>* container,
 }  // namespace
 
 // TODO(crbug.com/1056306): remove this redundant API.
-Response InspectorPerformanceAgent::setTimeDomain(const String& time_domain) {
+protocol::Response InspectorPerformanceAgent::setTimeDomain(
+    const String& time_domain) {
   if (enabled_.Get()) {
-    return Response::ServerError(
+    return protocol::Response::ServerError(
         "Cannot set time domain while performance metrics collection"
         " is enabled.");
   }
@@ -146,7 +144,7 @@ base::TimeTicks InspectorPerformanceAgent::GetTimeTicksNow() {
 
 base::TimeTicks InspectorPerformanceAgent::GetThreadTimeNow() {
   return base::TimeTicks() +
-         base::TimeDelta::FromMicroseconds(
+         base::Microseconds(
              base::ThreadTicks::Now().since_origin().InMicroseconds());
 }
 
@@ -155,35 +153,35 @@ bool InspectorPerformanceAgent::HasTimeDomain(const String& time_domain) {
                                  : time_domain == TimeDomain::TimeTicks;
 }
 
-Response InspectorPerformanceAgent::InnerSetTimeDomain(
+protocol::Response InspectorPerformanceAgent::InnerSetTimeDomain(
     const String& time_domain) {
   DCHECK(!enabled_.Get());
 
   if (time_domain == TimeDomain::TimeTicks) {
     use_thread_ticks_.Clear();
-    return Response::Success();
+    return protocol::Response::Success();
   }
 
   if (time_domain == TimeDomain::ThreadTicks) {
     if (!base::ThreadTicks::IsSupported()) {
-      return Response::ServerError(
+      return protocol::Response::ServerError(
           "Thread time is not supported on this platform.");
     }
     base::ThreadTicks::WaitUntilInitialized();
     use_thread_ticks_.Set(true);
-    return Response::Success();
+    return protocol::Response::Success();
   }
 
-  return Response::ServerError("Invalid time domain specification.");
+  return protocol::Response::ServerError("Invalid time domain specification.");
 }
 
-Response InspectorPerformanceAgent::getMetrics(
+protocol::Response InspectorPerformanceAgent::getMetrics(
     std::unique_ptr<protocol::Array<protocol::Performance::Metric>>*
         out_result) {
   if (!enabled_.Get()) {
     *out_result =
         std::make_unique<protocol::Array<protocol::Performance::Metric>>();
-    return Response::Success();
+    return protocol::Response::Success();
   }
 
   auto result =
@@ -193,7 +191,7 @@ Response InspectorPerformanceAgent::getMetrics(
                base::TimeTicks::Now().since_origin().InSecondsF());
 
   // Renderer instance counters.
-  for (size_t i = 0; i < base::size(kInstanceCounterNames); ++i) {
+  for (size_t i = 0; i < std::size(kInstanceCounterNames); ++i) {
     AppendMetric(result.get(), kInstanceCounterNames[i],
                  InstanceCounters::CounterValue(
                      static_cast<InstanceCounters::CounterType>(i)));
@@ -244,16 +242,16 @@ Response InspectorPerformanceAgent::getMetrics(
   base::TimeDelta process_time = GetCurrentProcessTime();
   AppendMetric(result.get(), "ProcessTime", process_time.InSecondsF());
 
-  v8::HeapStatistics heap_statistics;
-  V8PerIsolateData::MainThreadIsolate()->GetHeapStatistics(&heap_statistics);
-  AppendMetric(result.get(), "JSHeapUsedSize",
-               heap_statistics.used_heap_size());
-  AppendMetric(result.get(), "JSHeapTotalSize",
-               heap_statistics.total_heap_size());
-
   // Performance timings.
   Document* document = inspected_frames_->Root()->GetDocument();
   if (document) {
+    v8::HeapStatistics heap_statistics;
+    document->GetAgent().isolate()->GetHeapStatistics(&heap_statistics);
+    AppendMetric(result.get(), "JSHeapUsedSize",
+                 heap_statistics.used_heap_size());
+    AppendMetric(result.get(), "JSHeapTotalSize",
+                 heap_statistics.total_heap_size());
+
     AppendMetric(result.get(), "FirstMeaningfulPaint",
                  PaintTiming::From(*document)
                      .FirstMeaningfulPaint()
@@ -264,24 +262,26 @@ Response InspectorPerformanceAgent::getMetrics(
                      .DomContentLoadedEventStart()
                      .since_origin()
                      .InSecondsF());
-    AppendMetric(result.get(), "NavigationStart",
-                 document->Loader()
-                     ->GetTiming()
-                     .NavigationStart()
-                     .since_origin()
-                     .InSecondsF());
+    // Loader() can be null if the document is not associated with a frame at
+    // this point in time.
+    if (DocumentLoader* loader = document->Loader()) {
+      AppendMetric(
+          result.get(), "NavigationStart",
+          loader->GetTiming().NavigationStart().since_origin().InSecondsF());
+    }
   }
 
   *out_result = std::move(result);
-  return Response::Success();
+  return protocol::Response::Success();
 }
 
-void InspectorPerformanceAgent::ConsoleTimeStamp(const String& title) {
+void InspectorPerformanceAgent::ConsoleTimeStamp(v8::Isolate* isolate,
+                                                 v8::Local<v8::String> label) {
   if (!enabled_.Get())
     return;
   std::unique_ptr<protocol::Array<protocol::Performance::Metric>> metrics;
   getMetrics(&metrics);
-  GetFrontend()->metrics(std::move(metrics), title);
+  GetFrontend()->metrics(std::move(metrics), ToCoreString(isolate, label));
 }
 
 void InspectorPerformanceAgent::ScriptStarts() {
@@ -401,8 +401,10 @@ void InspectorPerformanceAgent::WillProcessTask(base::TimeTicks start_time) {
   task_start_ticks_ = GetTimeTicksNow();
 }
 
-void InspectorPerformanceAgent::DidProcessTask(base::TimeTicks start_time,
-                                               base::TimeTicks end_time) {
+void InspectorPerformanceAgent::DidProcessTask(
+    base::TimeTicks start_time,
+    base::TimeTicks end_time,
+    base::TimeTicks /*desired_execution_time*/) {
   if (task_start_ticks_.is_null())
     return;
 

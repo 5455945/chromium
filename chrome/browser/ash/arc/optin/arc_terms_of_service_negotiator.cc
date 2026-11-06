@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,13 +14,13 @@ ArcTermsOfServiceNegotiator::~ArcTermsOfServiceNegotiator() = default;
 
 void ArcTermsOfServiceNegotiator::StartNegotiation(
     NegotiationCallback callback) {
-  DCHECK(pending_callback_.is_null());
+  CHECK(pending_callback_.is_null(), base::NotFatalUntil::M160);
   pending_callback_ = std::move(callback);
   StartNegotiationImpl();
 }
 
 void ArcTermsOfServiceNegotiator::ReportResult(bool accepted) {
-  DCHECK(!pending_callback_.is_null());
+  CHECK(!pending_callback_.is_null(), base::NotFatalUntil::M160);
   std::move(pending_callback_).Run(accepted);
 }
 

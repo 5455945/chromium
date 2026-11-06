@@ -1,15 +1,16 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef MOJO_PUBLIC_CPP_SYSTEM_DATA_PIPE_DRAINER_H_
 #define MOJO_PUBLIC_CPP_SYSTEM_DATA_PIPE_DRAINER_H_
 
-#include <stddef.h>
+#include <stdint.h>
 
-#include "base/macros.h"
+#include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "mojo/public/cpp/system/core.h"
+#include "mojo/public/cpp/system/data_pipe.h"
 #include "mojo/public/cpp/system/simple_watcher.h"
 #include "mojo/public/cpp/system/system_export.h"
 
@@ -19,27 +20,33 @@ class MOJO_CPP_SYSTEM_EXPORT DataPipeDrainer {
  public:
   class Client {
    public:
-    virtual void OnDataAvailable(const void* data, size_t num_bytes) = 0;
+    // The memory backing `data` is transitively owned by the `DataPipeDrainer`
+    // and is guaranteed to be valid until `OnDataAvailable()` returns, or until
+    // the `DataPipeDrainer` is destroyed.
+    virtual void OnDataAvailable(base::span<const uint8_t> data) = 0;
     virtual void OnDataComplete() = 0;
 
    protected:
     virtual ~Client() {}
   };
 
-  DataPipeDrainer(Client*, mojo::ScopedDataPipeConsumerHandle source);
+  // `client` must outlive this `DataPipeDrainer`.
+  DataPipeDrainer(Client* client, mojo::ScopedDataPipeConsumerHandle source);
+
+  DataPipeDrainer(const DataPipeDrainer&) = delete;
+  DataPipeDrainer& operator=(const DataPipeDrainer&) = delete;
+
   ~DataPipeDrainer();
 
  private:
   void ReadData();
   void WaitComplete(MojoResult result);
 
-  Client* client_;
+  raw_ptr<Client> client_;
   mojo::ScopedDataPipeConsumerHandle source_;
   mojo::SimpleWatcher handle_watcher_;
 
   base::WeakPtrFactory<DataPipeDrainer> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(DataPipeDrainer);
 };
 
 }  // namespace mojo

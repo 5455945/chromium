@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,9 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/strings/string_util.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "net/base/net_errors.h"
@@ -17,8 +17,7 @@
 #include "net/dns/public/dns_protocol.h"
 #include "net/dns/record_rdata.h"
 
-namespace ash {
-namespace smb_client {
+namespace ash::smb_client {
 
 namespace {
 
@@ -37,14 +36,12 @@ constexpr int32_t kATransactionFlags =
 }  // namespace
 
 Hostname RemoveLocal(const std::string& raw_hostname) {
-  if (!base::EndsWith(raw_hostname, kMdnsLocalString,
-                      base::CompareCase::INSENSITIVE_ASCII)) {
+  auto consumed = base::RemoveSuffix(raw_hostname, kMdnsLocalString,
+                                     base::CompareCase::INSENSITIVE_ASCII);
+  if (!consumed) {
     return raw_hostname;
   }
-
-  DCHECK_GE(raw_hostname.size(), strlen(kMdnsLocalString));
-  size_t ending_pos = raw_hostname.size() - strlen(kMdnsLocalString);
-  return raw_hostname.substr(0, ending_pos);
+  return std::string(*consumed);
 }
 
 class MDnsHostLocator::Impl {
@@ -55,6 +52,9 @@ class MDnsHostLocator::Impl {
     // and let it re-attach the first time we are run on the IO thread.
     DETACH_FROM_SEQUENCE(sequence_checker_);
   }
+
+  Impl(const Impl&) = delete;
+  Impl& operator=(const Impl&) = delete;
 
   ~Impl() { DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_); }
 
@@ -118,8 +118,6 @@ class MDnsHostLocator::Impl {
   std::vector<std::unique_ptr<net::MDnsTransaction>> transactions_;
 
   SEQUENCE_CHECKER(sequence_checker_);
-
-  DISALLOW_COPY_AND_ASSIGN(Impl);
 };
 
 MDnsHostLocator::MDnsHostLocator()
@@ -138,10 +136,11 @@ void MDnsHostLocator::FindHosts(FindHostsCallback callback) {
   impl_.reset(new Impl(io_task_runner_));
 
   callback_ = std::move(callback);
-  impl_->FindHosts(base::BindOnce(
-      &MDnsHostLocator::PostFindHostsDone, base::ThreadTaskRunnerHandle::Get(),
-      base::BindOnce(&MDnsHostLocator::OnFindHostsDone,
-                     weak_factory_.GetWeakPtr())));
+  impl_->FindHosts(
+      base::BindOnce(&MDnsHostLocator::PostFindHostsDone,
+                     base::SingleThreadTaskRunner::GetCurrentDefault(),
+                     base::BindOnce(&MDnsHostLocator::OnFindHostsDone,
+                                    weak_factory_.GetWeakPtr())));
 }
 
 // static
@@ -164,7 +163,7 @@ void MDnsHostLocator::OnFindHostsDone(bool success, const HostMap& hosts) {
 }
 
 void MDnsHostLocator::Impl::FindHosts(FindHostsCallback callback) {
-  DCHECK(callback_.is_null());
+  CHECK(callback_.is_null(), base::NotFatalUntil::M160);
   callback_ = std::move(callback);
   task_runner_->PostTask(
       FROM_HERE, base::BindOnce(&MDnsHostLocator::Impl::FindHostsOnIOThread,
@@ -262,10 +261,10 @@ void MDnsHostLocator::Impl::OnPtrTransactionResponse(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (result == MDnsTransaction::Result::RESULT_RECORD) {
-    DCHECK(record);
+    CHECK(record, base::NotFatalUntil::M160);
 
     const net::PtrRecordRdata* data = record->rdata<net::PtrRecordRdata>();
-    DCHECK(data);
+    CHECK(data, base::NotFatalUntil::M160);
 
     services_.push_back(data->ptrdomain());
   } else if (result == MDnsTransaction::Result::RESULT_DONE) {
@@ -290,9 +289,9 @@ void MDnsHostLocator::Impl::OnSrvTransactionResponse(
     return;
   }
 
-  DCHECK(record);
+  CHECK(record, base::NotFatalUntil::M160);
   const net::SrvRecordRdata* srv = record->rdata<net::SrvRecordRdata>();
-  DCHECK(srv);
+  CHECK(srv, base::NotFatalUntil::M160);
 
   CreateATransaction(srv->target());
 }
@@ -304,10 +303,10 @@ void MDnsHostLocator::Impl::OnATransactionResponse(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (result == MDnsTransaction::Result::RESULT_RECORD) {
-    DCHECK(record);
+    CHECK(record, base::NotFatalUntil::M160);
 
     const net::ARecordRdata* ip = record->rdata<net::ARecordRdata>();
-    DCHECK(ip);
+    CHECK(ip, base::NotFatalUntil::M160);
 
     results_[RemoveLocal(raw_hostname)] = ip->address();
   }
@@ -333,7 +332,7 @@ void MDnsHostLocator::Impl::ResolveServicesFound() {
 void MDnsHostLocator::Impl::FireCallbackIfFinished() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  DCHECK_GT(remaining_transactions_, 0u);
+  CHECK_GT(remaining_transactions_, 0u, base::NotFatalUntil::M160);
   if (--remaining_transactions_ == 0) {
     FireCallback(true /* success */);
   }
@@ -343,10 +342,9 @@ void MDnsHostLocator::Impl::FireCallback(bool success) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   // DCHECK to ensure that remaining_transactions_ is at 0 if success is true.
-  DCHECK(!success || (remaining_transactions_ == 0));
+  CHECK(!success || (remaining_transactions_ == 0), base::NotFatalUntil::M160);
 
   std::move(callback_).Run(success, std::move(results_));
 }
 
-}  // namespace smb_client
-}  // namespace ash
+}  // namespace ash::smb_client

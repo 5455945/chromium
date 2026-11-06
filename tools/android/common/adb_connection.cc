@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,9 +14,10 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <iterator>
+
 #include "base/logging.h"
 #include "base/posix/eintr_wrapper.h"
-#include "base/stl_util.h"
 #include "tools/android/common/net.h"
 
 namespace tools {
@@ -39,25 +40,25 @@ int ConnectAdbHostSocket(const char* forward_to) {
   const size_t kLengthOfLength = 4;
 
   const char kAddressPrefix[] = { 't', 'c', 'p', ':' };
-  size_t address_length = base::size(kAddressPrefix) + strlen(forward_to);
+  size_t address_length = std::size(kAddressPrefix) + strlen(forward_to);
   if (address_length > kBufferMaxLength - kLengthOfLength) {
     LOG(ERROR) << "Forward to address is too long: " << forward_to;
     return -1;
   }
 
   char request[kBufferMaxLength];
-  memcpy(request + kLengthOfLength, kAddressPrefix, base::size(kAddressPrefix));
-  memcpy(request + kLengthOfLength + base::size(kAddressPrefix), forward_to,
+  memcpy(request + kLengthOfLength, kAddressPrefix, std::size(kAddressPrefix));
+  memcpy(request + kLengthOfLength + std::size(kAddressPrefix), forward_to,
          strlen(forward_to));
 
   char length_buffer[kLengthOfLength + 1];
-  snprintf(length_buffer, base::size(length_buffer), "%04X",
+  snprintf(length_buffer, std::size(length_buffer), "%04X",
            static_cast<int>(address_length));
   memcpy(request, length_buffer, kLengthOfLength);
 
   int host_socket = socket(AF_INET, SOCK_STREAM, 0);
   if (host_socket < 0) {
-    LOG(ERROR) << "Failed to create adb socket: " << strerror(errno);
+    PLOG(ERROR) << "Failed to create adb socket";
     return -1;
   }
 
@@ -71,7 +72,7 @@ int ConnectAdbHostSocket(const char* forward_to) {
   addr.sin_port = htons(kAdbPort);
   if (HANDLE_EINTR(connect(host_socket, reinterpret_cast<sockaddr*>(&addr),
                            sizeof(addr))) < 0) {
-    LOG(ERROR) << "Failed to connect adb socket: " << strerror(errno);
+    PLOG(ERROR) << "Failed to connect adb socket";
     CloseSocket(host_socket);
     return -1;
   }
@@ -82,7 +83,7 @@ int ConnectAdbHostSocket(const char* forward_to) {
     int ret = HANDLE_EINTR(send(host_socket, request + bytes_sent,
                                 bytes_remaining, 0));
     if (ret < 0) {
-      LOG(ERROR) << "Failed to send request: " << strerror(errno);
+      PLOG(ERROR) << "Failed to send request";
       CloseSocket(host_socket);
       return -1;
     }

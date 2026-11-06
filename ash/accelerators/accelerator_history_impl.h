@@ -1,10 +1,11 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ASH_ACCELERATORS_ACCELERATOR_HISTORY_IMPL_H_
 #define ASH_ACCELERATORS_ACCELERATOR_HISTORY_IMPL_H_
 
+#include <optional>
 #include <set>
 
 #include "ash/ash_export.h"
@@ -52,6 +53,9 @@ class ASH_EXPORT AcceleratorHistoryImpl : public AcceleratorHistory,
   ui::Accelerator previous_accelerator_;
 
   std::set<ui::KeyboardCode> currently_pressed_keys_;
+
+  // The most recently logged KeyboardCode, saved to prevent spammy logs.
+  std::optional<ui::KeyboardCode> last_logged_key_code_;
 };
 
 }  // namespace ash

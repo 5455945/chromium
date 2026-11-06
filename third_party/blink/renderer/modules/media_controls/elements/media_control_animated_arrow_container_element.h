@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,6 @@
 #include "third_party/blink/renderer/modules/media_controls/elements/media_control_animation_event_listener.h"
 #include "third_party/blink/renderer/modules/media_controls/elements/media_control_div_element.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
-
-namespace WTF {
-class AtomicString;
-}
 
 namespace blink {
 

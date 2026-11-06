@@ -26,102 +26,98 @@
 #include "third_party/blink/renderer/platform/transforms/matrix_3d_transform_operation.h"
 
 #include "third_party/blink/renderer/platform/transforms/rotation.h"
+#include "ui/gfx/geometry/decomposed_transform.h"
 #include "ui/gfx/geometry/quaternion.h"
 
 #include <algorithm>
 
 namespace blink {
 
-scoped_refptr<TransformOperation> Matrix3DTransformOperation::Accumulate(
+TransformOperation* Matrix3DTransformOperation::Accumulate(
     const TransformOperation& other_op) {
   DCHECK(other_op.IsSameType(*this));
   const auto& other = To<Matrix3DTransformOperation>(other_op);
 
-  // If either matrix is non-invertible, fail and fallback to replace.
-  if (!matrix_.IsInvertible() || !other.matrix_.IsInvertible())
+  gfx::Transform result = matrix_;
+  if (!result.Accumulate(other.matrix_))
     return nullptr;
 
-  // Similar to interpolation, accumulating 3D matrices is done by decomposing
-  // them, accumulating the individual functions, and then recomposing.
-
-  TransformationMatrix::DecomposedType from_decomp;
-  TransformationMatrix::DecomposedType to_decomp;
-  if (!matrix_.Decompose(from_decomp) || !other.matrix_.Decompose(to_decomp))
-    return nullptr;
-
-  // Scale is accumulated using 1-based addition.
-  from_decomp.scale_x += to_decomp.scale_x - 1;
-  from_decomp.scale_y += to_decomp.scale_y - 1;
-  from_decomp.scale_z += to_decomp.scale_z - 1;
-
-  // Skew can be added.
-  from_decomp.skew_xy += to_decomp.skew_xy;
-  from_decomp.skew_xz += to_decomp.skew_xz;
-  from_decomp.skew_yz += to_decomp.skew_yz;
-
-  // To accumulate quaternions, we multiply them. This is equivalent to 'adding'
-  // the rotations that they represent.
-  gfx::Quaternion from_quaternion(
-      from_decomp.quaternion_x, from_decomp.quaternion_y,
-      from_decomp.quaternion_z, from_decomp.quaternion_w);
-  gfx::Quaternion to_quaternion(to_decomp.quaternion_x, to_decomp.quaternion_y,
-                                to_decomp.quaternion_z, to_decomp.quaternion_w);
-
-  gfx::Quaternion result_quaternion = from_quaternion * to_quaternion;
-  from_decomp.quaternion_x = result_quaternion.x();
-  from_decomp.quaternion_y = result_quaternion.y();
-  from_decomp.quaternion_z = result_quaternion.z();
-  from_decomp.quaternion_w = result_quaternion.w();
-
-  // Translate is a simple addition.
-  from_decomp.translate_x += to_decomp.translate_x;
-  from_decomp.translate_y += to_decomp.translate_y;
-  from_decomp.translate_z += to_decomp.translate_z;
-
-  // We sum the perspective components; note that w is 1-based.
-  from_decomp.perspective_x += to_decomp.perspective_x;
-  from_decomp.perspective_y += to_decomp.perspective_y;
-  from_decomp.perspective_z += to_decomp.perspective_z;
-  from_decomp.perspective_w += to_decomp.perspective_w - 1;
-
-  TransformationMatrix result;
-  result.Recompose(from_decomp);
-  return Matrix3DTransformOperation::Create(result);
+  return MakeGarbageCollected<Matrix3DTransformOperation>(result);
 }
 
-scoped_refptr<TransformOperation> Matrix3DTransformOperation::Blend(
+// static
+std::optional<gfx::Transform> Matrix3DTransformOperation::AccumulateTransforms(
+    const gfx::Transform& base,
+    const gfx::Transform& delta,
+    int n) {
+  std::optional<gfx::DecomposedTransform> base_decomp = base.Decompose();
+  if (!base_decomp) {
+    return std::nullopt;
+  }
+  std::optional<gfx::DecomposedTransform> delta_decomp = delta.Decompose();
+  if (!delta_decomp) {
+    return std::nullopt;
+  }
+
+  // Calculate the accumulated value for each component over |n| iterations.
+  // See: https://www.w3.org/TR/css-transforms-2/#combining-transform-lists
+  gfx::DecomposedTransform out;
+  for (size_t i = 0; i < 3u; i++) {
+    out.translate[i] =
+        base_decomp->translate[i] + n * delta_decomp->translate[i];
+    out.scale[i] = base_decomp->scale[i] + n * (delta_decomp->scale[i] - 1);
+    out.skew[i] = base_decomp->skew[i] + n * delta_decomp->skew[i];
+    out.perspective[i] =
+        base_decomp->perspective[i] + n * delta_decomp->perspective[i];
+  }
+  out.perspective[3] =
+      base_decomp->perspective[3] + n * (delta_decomp->perspective[3] - 1);
+
+  gfx::Quaternion delta_q_n =
+      gfx::Quaternion().Slerp(delta_decomp->quaternion, static_cast<double>(n));
+  out.quaternion = base_decomp->quaternion * delta_q_n;
+
+  return gfx::Transform::Compose(out);
+}
+
+TransformOperation* Matrix3DTransformOperation::AccumulateN(
+    const TransformOperation& other_op,
+    int n) {
+  DCHECK(other_op.IsSameType(*this));
+  const auto& other = To<Matrix3DTransformOperation>(other_op);
+
+  std::optional<gfx::Transform> result =
+      AccumulateTransforms(matrix_, other.matrix_, n);
+  if (!result) {
+    return nullptr;
+  }
+  return MakeGarbageCollected<Matrix3DTransformOperation>(*result);
+}
+
+TransformOperation* Matrix3DTransformOperation::Blend(
     const TransformOperation* from,
     double progress,
     bool blend_to_identity) {
   DCHECK(!from || CanBlendWith(*from));
 
-  // Convert the TransformOperations into matrices. Fail the blend operation
-  // if either of the matrices is non-invertible.
-  FloatSize size;
-  TransformationMatrix from_t;
-  TransformationMatrix to_t;
-  if (from) {
-    from->Apply(from_t, size);
-    if (!from_t.IsInvertible())
-      return nullptr;
-  }
+  gfx::Transform from_t;
+  if (from)
+    from_t = To<Matrix3DTransformOperation>(from)->matrix_;
 
-  Apply(to_t, size);
-  if (!to_t.IsInvertible())
-    return nullptr;
-
+  gfx::Transform to_t = matrix_;
   if (blend_to_identity)
     std::swap(from_t, to_t);
 
-  to_t.Blend(from_t, progress);
-  return Matrix3DTransformOperation::Create(to_t);
+  if (!to_t.Blend(from_t, progress))
+    return nullptr;
+
+  return MakeGarbageCollected<Matrix3DTransformOperation>(to_t);
 }
 
-scoped_refptr<TransformOperation> Matrix3DTransformOperation::Zoom(
-    double factor) {
-  TransformationMatrix result = matrix_;
+TransformOperation* Matrix3DTransformOperation::Zoom(double factor) {
+  gfx::Transform result = matrix_;
   result.Zoom(factor);
-  return Create(result);
+  return MakeGarbageCollected<Matrix3DTransformOperation>(result);
 }
 
 }  // namespace blink

@@ -1,25 +1,46 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "chrome/browser/platform_util.h"
 
 #include <jni.h>
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
-#include "base/notreached.h"
-#include "chrome/browser/platform_util.h"
-#include "chrome/browser/util/jni_headers/PlatformUtil_jni.h"
+#include "base/files/file_path.h"
+#include "base/files/file_util.h"
+#include "base/notimplemented.h"
+#include "chrome/browser/platform_util_internal.h"
 #include "ui/android/view_android.h"
+#include "ui/android/window_android.h"
 #include "url/gurl.h"
 
-using base::android::ScopedJavaLocalRef;
+// Must come after headers that provide symbols used by @JniType.
+#include "chrome/browser/util/jni_headers/PlatformUtil_jni.h"
 
 namespace platform_util {
+namespace internal {
+namespace {
+bool g_shell_operations_allowed = true;
+}  // namespace
 
-// TODO: crbug/115682 to track implementation of the following methods.
+}  // namespace internal
+
+// TODO: crbug.com/40736101 to track implementation of the following methods.
 
 void ShowItemInFolder(Profile* profile, const base::FilePath& full_path) {
-  NOTIMPLEMENTED();
+  // Skip opening the folder in some browser tests.
+  if (!internal::g_shell_operations_allowed) {
+    return;
+  }
+  JNIEnv* env = base::android::AttachCurrentThread();
+  std::optional<base::FilePath> contentUri =
+      base::ResolveToContentUri(full_path);
+  if (!contentUri) {
+    return;
+  }
+  PlatformUtilJni::showItemInFolder(env, contentUri->value());
 }
 
 void OpenItem(Profile* profile,
@@ -29,11 +50,9 @@ void OpenItem(Profile* profile,
   NOTIMPLEMENTED();
 }
 
-void OpenExternal(Profile* profile, const GURL& url) {
+void OpenExternal(const GURL& url) {
   JNIEnv* env = base::android::AttachCurrentThread();
-  ScopedJavaLocalRef<jstring> j_url =
-      base::android::ConvertUTF8ToJavaString(env, url.spec());
-  Java_PlatformUtil_launchExternalProtocol(env, j_url);
+  PlatformUtilJni::launchExternalProtocol(env, url.spec());
 }
 
 gfx::NativeWindow GetTopLevel(gfx::NativeView view) {
@@ -61,3 +80,5 @@ bool IsVisible(gfx::NativeView view) {
 }
 
 } // namespace platform_util
+
+DEFINE_JNI(PlatformUtil)

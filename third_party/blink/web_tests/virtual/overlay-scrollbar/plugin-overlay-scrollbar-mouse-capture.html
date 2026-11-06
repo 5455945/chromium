@@ -1,5 +1,6 @@
 <head>
     <script src="../../resources/js-test.js"></script>
+    <script src="../../resources/gesture-util.js"></script>
     <style>
         body {
             /* Hide the horizontal-scrollbar so that clicking right at the
@@ -55,7 +56,7 @@
         }
 
         var plugin = document.createElement('object');
-        plugin.type = 'application/x-blink-test-plugin';
+        plugin.type = 'application/x-webkit-test-webplugin';
         plugin.width = window.innerWidth * 2;
         plugin.height = window.innerHeight * 2;
         plugin.addEventListener('mousedown', function(e) {
@@ -74,6 +75,6 @@
         var d = document.getElementById('container');
         d.appendChild(plugin);
 
-        runTest();
+        waitForCompositorCommit().then(runTest);
     }
 </script>

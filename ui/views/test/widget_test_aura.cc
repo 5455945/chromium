@@ -1,101 +1,110 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ui/views/test/widget_test.h"
-
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ptr_exclusion.h"
+#include "base/no_destructor.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "ui/aura/client/focus_client.h"
 #include "ui/aura/test/aura_test_helper.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_delegate.h"
 #include "ui/aura/window_tree_host.h"
 #include "ui/compositor/layer.h"
+#include "ui/views/test/widget_test.h"
 #include "ui/views/widget/widget.h"
 #include "ui/wm/core/shadow_controller.h"
 
-#if (defined(OS_LINUX) || defined(OS_CHROMEOS)) && \
-    BUILDFLAG(ENABLE_DESKTOP_AURA)
-#include "ui/views/widget/desktop_aura/desktop_window_tree_host_linux.h"
+#if BUILDFLAG(ENABLE_DESKTOP_AURA)
+#include "ui/views/widget/desktop_aura/desktop_window_tree_host_platform.h"
 #endif
 
-#if defined(USE_X11)
-#include "ui/base/x/x11_util.h"  // nogncheck
-#endif
-
-namespace views {
-namespace test {
+namespace views::test {
 
 namespace {
+
+base::NoDestructor<WidgetTest::RootWindowProvider> g_root_window_provider;
 
 // Perform a pre-order traversal of |children| and all descendants, looking for
 // |first| and |second|. If |first| is found before |second|, return true.
 // When a layer is found, it is set to null. Returns once |second| is found, or
 // when there are no children left.
 // Note that ui::Layer children are bottom-to-top stacking order.
-bool FindLayersInOrder(const std::vector<ui::Layer*>& children,
-                       const ui::Layer** first,
-                       const ui::Layer** second) {
+bool FindLayersInOrder(
+    const std::vector<raw_ptr<ui::Layer, VectorExperimental>>& children,
+    const ui::Layer** first,
+    const ui::Layer** second) {
   for (const ui::Layer* child : children) {
     if (child == *second) {
       *second = nullptr;
       return *first == nullptr;
     }
 
-    if (child == *first)
+    if (child == *first) {
       *first = nullptr;
+    }
 
-    if (FindLayersInOrder(child->children(), first, second))
+    if (FindLayersInOrder(child->children(), first, second)) {
       return true;
+    }
 
     // If second is cleared without success, exit early with failure.
-    if (!*second)
+    if (!*second) {
       return false;
+    }
   }
   return false;
 }
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 
 struct FindAllWindowsData {
-  std::vector<aura::Window*>* windows;
+  // This field is not a raw_ptr<> because it was filtered by the rewriter for:
+  // #reinterpret-cast-trivial-type
+  RAW_PTR_EXCLUSION aura::Window::Windows* windows;
 };
 
 BOOL CALLBACK FindAllWindowsCallback(HWND hwnd, LPARAM param) {
   FindAllWindowsData* data = reinterpret_cast<FindAllWindowsData*>(param);
   if (aura::WindowTreeHost* host =
-          aura::WindowTreeHost::GetForAcceleratedWidget(hwnd))
+          aura::WindowTreeHost::GetForAcceleratedWidget(hwnd)) {
     data->windows->push_back(host->window());
+  }
   return TRUE;
 }
 
-#endif  // OS_WIN
+#endif  // BUILDFLAG(IS_WIN)
 
-std::vector<aura::Window*> GetAllTopLevelWindows() {
-  std::vector<aura::Window*> roots;
-#if (defined(OS_LINUX) || defined(OS_CHROMEOS)) && \
-    BUILDFLAG(ENABLE_DESKTOP_AURA)
-  roots = DesktopWindowTreeHostLinux::GetAllOpenWindows();
-#elif defined(OS_WIN)
+aura::Window::Windows GetAllTopLevelWindows() {
+  aura::Window::Windows roots;
+  if (*g_root_window_provider) {
+    return g_root_window_provider->Run();
+  }
+
+#if BUILDFLAG(IS_WIN)
   {
     FindAllWindowsData data = {&roots};
     EnumThreadWindows(GetCurrentThreadId(), FindAllWindowsCallback,
                       reinterpret_cast<LPARAM>(&data));
   }
+#elif BUILDFLAG(ENABLE_DESKTOP_AURA)
+  roots = DesktopWindowTreeHostPlatform::GetAllOpenWindows();
 #endif
   aura::test::AuraTestHelper* aura_test_helper =
       aura::test::AuraTestHelper::GetInstance();
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  // Chrome OS browser tests must use ash::Shell::GetAllRootWindows.
-  DCHECK(aura_test_helper) << "Can't find all widgets without a test helper";
-#endif
-  if (aura_test_helper)
+  if (aura_test_helper) {
     roots.push_back(aura_test_helper->GetContext());
+  }
   return roots;
 }
 
 }  // namespace
+
+// static
+void WidgetTest::SetRootWindowProvider(RootWindowProvider provider) {
+  *g_root_window_provider = std::move(provider);
+}
 
 // static
 void WidgetTest::SimulateNativeActivate(Widget* widget) {
@@ -126,27 +135,11 @@ gfx::Size WidgetTest::GetNativeWidgetMinimumContentSize(Widget* widget) {
   // the window manager is interested in knowing the size constraints. On
   // ChromeOS, it's handled internally. Elsewhere, the size constraints need to
   // be pushed to the window server when they change.
-#if !BUILDFLAG(ENABLE_DESKTOP_AURA) || defined(OS_WIN)
+#if !BUILDFLAG(ENABLE_DESKTOP_AURA) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
   return widget->GetNativeWindow()->delegate()->GetMinimumSize();
-// TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
-// of lacros-chrome is complete.
-#elif defined(OS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
-#if defined(USE_OZONE)
-  if (features::IsUsingOzonePlatform())
-    return widget->GetNativeWindow()->delegate()->GetMinimumSize();
-#endif  // USE_OZONE
-#if defined(USE_X11)
-  EXPECT_FALSE(features::IsUsingOzonePlatform());
-  ui::SizeHints hints;
-  ui::GetWmNormalHints(
-      static_cast<x11::Window>(
-          widget->GetNativeWindow()->GetHost()->GetAcceleratedWidget()),
-      &hints);
-  return gfx::Size(hints.min_width, hints.min_height);
-#endif  // USE_X11
-#endif  // OS_LINUX && !OS_CHROMEOS
+#else
   NOTREACHED();
-  return gfx::Size();
+#endif
 }
 
 // static
@@ -155,7 +148,7 @@ ui::EventSink* WidgetTest::GetEventSink(Widget* widget) {
 }
 
 // static
-ui::internal::InputMethodDelegate* WidgetTest::GetInputMethodDelegateForWidget(
+ui::ImeKeyEventDispatcher* WidgetTest::GetImeKeyEventDispatcherForWidget(
     Widget* widget) {
   return widget->GetNativeWindow()->GetRootWindow()->GetHost();
 }
@@ -168,14 +161,17 @@ bool WidgetTest::IsNativeWindowTransparent(gfx::NativeWindow window) {
 // static
 bool WidgetTest::WidgetHasInProcessShadow(Widget* widget) {
   aura::Window* window = widget->GetNativeWindow();
-  if (wm::ShadowController::GetShadowForWindow(window))
+  if (wm::ShadowController::GetShadowDecorationForWindow(window)) {
     return true;
+  }
 
   // If the Widget's native window is the content window for a
   // DesktopWindowTreeHost, then giving the root window a shadow also has the
   // effect of drawing a shadow around the window.
-  if (window->parent() == window->GetRootWindow())
-    return wm::ShadowController::GetShadowForWindow(window->GetRootWindow());
+  if (window->parent() == window->GetRootWindow()) {
+    return wm::ShadowController::GetShadowDecorationForWindow(
+        window->GetRootWindow());
+  }
 
   return false;
 }
@@ -183,13 +179,13 @@ bool WidgetTest::WidgetHasInProcessShadow(Widget* widget) {
 // static
 Widget::Widgets WidgetTest::GetAllWidgets() {
   Widget::Widgets all_widgets;
-  for (aura::Window* window : GetAllTopLevelWindows())
-    Widget::GetAllChildWidgets(window->GetRootWindow(), &all_widgets);
+  for (aura::Window* window : GetAllTopLevelWindows()) {
+    all_widgets.merge(Widget::GetAllChildWidgets(window->GetRootWindow()));
+  }
   return all_widgets;
 }
 
 // static
 void WidgetTest::WaitForSystemAppActivation() {}
 
-}  // namespace test
-}  // namespace views
+}  // namespace views::test

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 #define COMPONENTS_POLICY_CORE_COMMON_ANDROID_POLICY_MAP_ANDROID_H_
 
 #include "base/android/scoped_java_ref.h"
+#include "base/memory/raw_ref.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/policy_export.h"
 
@@ -25,36 +26,28 @@ class POLICY_EXPORT PolicyMapAndroid {
 
   ~PolicyMapAndroid();
 
-  jboolean HasValue(JNIEnv* env,
-                    const base::android::JavaParamRef<jobject>& caller,
-                    const base::android::JavaRef<jstring>& policy) const;
+  bool HasValue(JNIEnv* env,
+                const base::android::JavaRef<jstring>& policy) const;
 
-  jint GetIntValue(JNIEnv* env,
-                   const base::android::JavaParamRef<jobject>& caller,
-                   const base::android::JavaRef<jstring>& policy) const;
+  int32_t GetIntValue(JNIEnv* env,
+                      const base::android::JavaRef<jstring>& policy) const;
 
-  jboolean GetBooleanValue(JNIEnv* env,
-                           const base::android::JavaParamRef<jobject>& caller,
-                           const base::android::JavaRef<jstring>& policy) const;
+  bool GetBooleanValue(JNIEnv* env,
+                       const base::android::JavaRef<jstring>& policy) const;
 
   base::android::ScopedJavaLocalRef<jstring> GetStringValue(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& caller,
       const base::android::JavaRef<jstring>& policy) const;
 
   base::android::ScopedJavaLocalRef<jstring> GetListValue(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& caller,
       const base::android::JavaRef<jstring>& policy) const;
 
   base::android::ScopedJavaLocalRef<jstring> GetDictValue(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& caller,
       const base::android::JavaRef<jstring>& policy) const;
 
-  jboolean Equals(JNIEnv* env,
-                  const base::android::JavaParamRef<jobject>& caller,
-                  jlong other) const;
+  bool Equals(JNIEnv* env, int64_t other) const;
 
   base::android::ScopedJavaLocalRef<jobject> GetJavaObject();
 
@@ -68,7 +61,7 @@ class POLICY_EXPORT PolicyMapAndroid {
       JNIEnv* env,
       const base::android::JavaRef<jstring>& policy) const;
 
-  const PolicyMap& policy_map_;
+  const raw_ref<const PolicyMap> policy_map_;
 
   base::android::ScopedJavaGlobalRef<jobject> java_ref_;
 };

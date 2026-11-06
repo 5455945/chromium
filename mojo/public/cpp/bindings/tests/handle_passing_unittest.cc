@@ -1,11 +1,14 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <stdint.h>
+
+#include <string_view>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -13,8 +16,8 @@
 #include "mojo/public/cpp/bindings/unique_receiver_set.h"
 #include "mojo/public/cpp/system/wait.h"
 #include "mojo/public/cpp/test_support/test_utils.h"
-#include "mojo/public/interfaces/bindings/tests/sample_factory.mojom.h"
-#include "mojo/public/interfaces/bindings/tests/sample_import.mojom.h"
+#include "mojo/public/interfaces/bindings/tests/sample_factory.test-mojom.h"
+#include "mojo/public/interfaces/bindings/tests/sample_import.test-mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace mojo {
@@ -80,8 +83,9 @@ class SampleFactoryImpl : public sample::Factory {
                ScopedMessagePipeHandle pipe,
                DoStuffCallback callback) override {
     std::string text1;
-    if (pipe.is_valid())
+    if (pipe.is_valid()) {
       EXPECT_TRUE(ReadTextMessage(pipe.get(), &text1));
+    }
 
     std::string text2;
     if (request->pipe.is_valid()) {
@@ -111,21 +115,22 @@ class SampleFactoryImpl : public sample::Factory {
     // Read the data from the pipe, writing the response (as a string) to
     // DidStuff2().
     ASSERT_TRUE(pipe.is_valid());
-    uint32_t data_size = 0;
+    size_t data_size = 0;
 
     MojoHandleSignalsState state;
     ASSERT_EQ(MOJO_RESULT_OK,
               mojo::Wait(pipe.get(), MOJO_HANDLE_SIGNAL_READABLE, &state));
     ASSERT_TRUE(state.satisfied_signals & MOJO_HANDLE_SIGNAL_READABLE);
+    ASSERT_EQ(MOJO_RESULT_OK, pipe->ReadData(MOJO_READ_DATA_FLAG_QUERY,
+                                             base::span<uint8_t>(), data_size));
+    ASSERT_NE(0u, data_size);
+    std::string data(data_size, '\0');
+    ASSERT_LT(data_size, 64u);
     ASSERT_EQ(MOJO_RESULT_OK,
-              pipe->ReadData(nullptr, &data_size, MOJO_READ_DATA_FLAG_QUERY));
-    ASSERT_NE(0, static_cast<int>(data_size));
-    char data[64];
-    ASSERT_LT(static_cast<int>(data_size), 64);
-    ASSERT_EQ(MOJO_RESULT_OK, pipe->ReadData(data, &data_size,
-                                             MOJO_READ_DATA_FLAG_ALL_OR_NONE));
+              pipe->ReadData(MOJO_READ_DATA_FLAG_ALL_OR_NONE,
+                             base::as_writable_byte_span(data), data_size));
 
-    std::move(callback).Run(data);
+    std::move(callback).Run(data.substr(0, data_size));
   }
 
   void CreateNamedObject(
@@ -158,7 +163,6 @@ class HandlePassingTest : public BindingsTestBase {
   void TearDown() override { PumpMessages(); }
 
   void PumpMessages() { base::RunLoop().RunUntilIdle(); }
-
 };
 
 void DoStuff(bool* got_response,
@@ -196,7 +200,7 @@ void DoStuff2(bool* got_response,
   std::move(closure).Run();
 }
 
-TEST_P(HandlePassingTest, Basic) {
+TEST_F(HandlePassingTest, Basic) {
   Remote<sample::Factory> factory;
   SampleFactoryImpl factory_impl(factory.BindNewPipeAndPassReceiver());
 
@@ -212,7 +216,7 @@ TEST_P(HandlePassingTest, Basic) {
                                       run_loop.QuitClosure());
 
   sample::RequestPtr request(sample::Request::New(
-      1, std::move(pipe1.handle0), absl::nullopt, std::move(imported)));
+      1, std::move(pipe1.handle0), std::nullopt, std::move(imported)));
   bool got_response = false;
   std::string got_text_reply;
   base::RunLoop run_loop2;
@@ -231,12 +235,12 @@ TEST_P(HandlePassingTest, Basic) {
   EXPECT_EQ(1, ImportedInterfaceImpl::do_something_count() - count_before);
 }
 
-TEST_P(HandlePassingTest, PassInvalid) {
+TEST_F(HandlePassingTest, PassInvalid) {
   Remote<sample::Factory> factory;
   SampleFactoryImpl factory_impl(factory.BindNewPipeAndPassReceiver());
 
   sample::RequestPtr request(sample::Request::New(1, ScopedMessagePipeHandle(),
-                                                  absl::nullopt, NullRemote()));
+                                                  std::nullopt, NullRemote()));
 
   bool got_response = false;
   std::string got_text_reply;
@@ -253,7 +257,7 @@ TEST_P(HandlePassingTest, PassInvalid) {
 }
 
 // Verifies DataPipeConsumer can be passed and read from.
-TEST_P(HandlePassingTest, DataPipe) {
+TEST_F(HandlePassingTest, DataPipe) {
   Remote<sample::Factory> factory;
   SampleFactoryImpl factory_impl(factory.BindNewPipeAndPassReceiver());
 
@@ -266,12 +270,13 @@ TEST_P(HandlePassingTest, DataPipe) {
                                        1024};
   ASSERT_EQ(MOJO_RESULT_OK,
             CreateDataPipe(&options, producer_handle, consumer_handle));
-  std::string expected_text_reply = "got it";
-  // +1 for \0.
-  uint32_t data_size = static_cast<uint32_t>(expected_text_reply.size() + 1);
+  std::string_view expected_text_reply = "got it";
+  size_t bytes_written = 0;
   ASSERT_EQ(MOJO_RESULT_OK,
-            producer_handle->WriteData(expected_text_reply.c_str(), &data_size,
-                                       MOJO_WRITE_DATA_FLAG_ALL_OR_NONE));
+            producer_handle->WriteData(base::as_byte_span(expected_text_reply),
+                                       MOJO_WRITE_DATA_FLAG_ALL_OR_NONE,
+                                       bytes_written));
+  EXPECT_EQ(bytes_written, 6u);
 
   bool got_response = false;
   std::string got_text_reply;
@@ -288,7 +293,7 @@ TEST_P(HandlePassingTest, DataPipe) {
   EXPECT_EQ(expected_text_reply, got_text_reply);
 }
 
-TEST_P(HandlePassingTest, CreateNamedObject) {
+TEST_F(HandlePassingTest, CreateNamedObject) {
   Remote<sample::Factory> factory;
   SampleFactoryImpl factory_impl(factory.BindNewPipeAndPassReceiver());
 
@@ -320,8 +325,6 @@ TEST_P(HandlePassingTest, CreateNamedObject) {
   EXPECT_EQ(std::string("object1"), name1);
   EXPECT_EQ(std::string("object2"), name2);
 }
-
-INSTANTIATE_MOJO_BINDINGS_TEST_SUITE_P(HandlePassingTest);
 
 }  // namespace
 }  // namespace test

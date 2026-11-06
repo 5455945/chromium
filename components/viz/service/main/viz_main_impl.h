@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,17 +6,19 @@
 #define COMPONENTS_VIZ_SERVICE_MAIN_VIZ_MAIN_IMPL_H_
 
 #include <memory>
-#include <vector>
 
-#include "base/single_thread_task_runner.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/unsafe_shared_memory_region.h"
+#include "base/process/process_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/threading/thread.h"
 #include "build/build_config.h"
 #include "components/discardable_memory/client/client_discardable_shared_memory_manager.h"
 #include "components/viz/common/buildflags.h"
+#include "components/viz/service/gl/gpu_log_message_manager.h"
 #include "components/viz/service/gl/gpu_service_impl.h"
 #include "components/viz/service/main/viz_compositor_thread_runner_impl.h"
-#include "gpu/ipc/gpu_in_process_thread_service.h"
-#include "gpu/ipc/in_process_command_buffer.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -24,36 +26,33 @@
 #include "services/viz/privileged/mojom/viz_main.mojom.h"
 #include "ui/gfx/font_render_params.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "components/viz/service/gl/info_collection_gpu_service_impl.h"
 #include "services/viz/privileged/mojom/gl/info_collection_gpu_service.mojom.h"
 #endif
 
 namespace base {
 class PowerMonitorSource;
+class WaitableEvent;
 }
 
 namespace gpu {
 class GpuInit;
-class SyncPointManager;
+class Scheduler;
 class SharedImageManager;
+class SyncPointManager;
 }  // namespace gpu
 
 namespace ukm {
 class MojoUkmRecorder;
 }
 
-namespace gfx {
-class RenderingPipeline;
-}
-
 namespace viz {
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 class InfoCollectionGpuServiceImpl;
 #endif
 
-class VizMainImpl : public mojom::VizMain,
-                    public gpu::GpuInProcessThreadServiceDelegate {
+class VizMainImpl : public mojom::VizMain {
  public:
   class Delegate {
    public:
@@ -63,6 +62,8 @@ class VizMainImpl : public mojom::VizMain,
     virtual void OnGpuServiceConnection(GpuServiceImpl* gpu_service) = 0;
     virtual void PostCompositorThreadCreated(
         base::SingleThreadTaskRunner* task_runner) = 0;
+    virtual void PostDisplayCompositorGpuThreadCreated(
+        base::SingleThreadTaskRunner* task_runner) = 0;
     virtual void QuitMainMessageLoop() = 0;
   };
 
@@ -70,6 +71,10 @@ class VizMainImpl : public mojom::VizMain,
    public:
     ExternalDependencies();
     ExternalDependencies(ExternalDependencies&& other);
+
+    ExternalDependencies(const ExternalDependencies&) = delete;
+    ExternalDependencies& operator=(const ExternalDependencies&) = delete;
+
     ~ExternalDependencies();
 
     ExternalDependencies& operator=(ExternalDependencies&& other);
@@ -91,20 +96,37 @@ class VizMainImpl : public mojom::VizMain,
     // We use a |PowerMonitorSource| here instead of a boolean flag so that
     // tests can use mocks and fakes for testing.
     mutable std::unique_ptr<base::PowerMonitorSource> power_monitor_source;
-    gpu::SyncPointManager* sync_point_manager = nullptr;
-    gpu::SharedImageManager* shared_image_manager = nullptr;
-    base::WaitableEvent* shutdown_event = nullptr;
+    raw_ptr<base::WaitableEvent> shutdown_event = nullptr;
     scoped_refptr<base::SingleThreadTaskRunner> io_thread_task_runner;
     std::unique_ptr<ukm::MojoUkmRecorder> ukm_recorder;
-    VizCompositorThreadRunner* viz_compositor_thread_runner = nullptr;
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(ExternalDependencies);
+    // Binds a receiver for the interface the WebNN service uses to broker
+    // operations through the browser process (see
+    // webnn::mojom::WebNNBrowserHost). Forwarded to the GpuServiceImpl, which
+    // invokes it on demand when WebNN is first used. Mutable because
+    // `dependencies_` is held by const value in VizMainImpl but this callback
+    // is moved out of it.
+    mutable base::OnceCallback<void(
+        mojo::PendingReceiver<webnn::mojom::WebNNBrowserHost>)>
+        bind_webnn_browser_host;
+#if BUILDFLAG(IS_ANDROID)
+    // GpuServiceImpl normally creates the below objects internally. However,
+    // on Android WebView it is created by the embedder.
+    raw_ptr<gpu::SyncPointManager> sync_point_manager = nullptr;
+    raw_ptr<gpu::SharedImageManager> shared_image_manager = nullptr;
+    raw_ptr<gpu::Scheduler> scheduler = nullptr;
+    raw_ptr<VizCompositorThreadRunner> viz_compositor_thread_runner = nullptr;
+    raw_ptr<const gpu::SharedContextState::GrContextOptionsProvider>
+        gr_context_options_provider = nullptr;
+#endif
   };
 
   VizMainImpl(Delegate* delegate,
               ExternalDependencies dependencies,
               std::unique_ptr<gpu::GpuInit> gpu_init);
+
+  VizMainImpl(const VizMainImpl&) = delete;
+  VizMainImpl& operator=(const VizMainImpl&) = delete;
+
   // Destruction must happen on the GPU thread.
   ~VizMainImpl() override;
 
@@ -114,28 +136,32 @@ class VizMainImpl : public mojom::VizMain,
   void CreateGpuService(
       mojo::PendingReceiver<mojom::GpuService> pending_receiver,
       mojo::PendingRemote<mojom::GpuHost> pending_gpu_host,
+      mojo::PendingRemote<mojom::GpuLogging> pending_gpu_loggging,
       mojo::PendingRemote<
           discardable_memory::mojom::DiscardableSharedMemoryManager>
           discardable_memory_manager,
-      mojo::ScopedSharedBufferHandle activity_flags,
-      gfx::FontRenderParams::SubpixelRendering subpixel_rendering) override;
-#if defined(OS_WIN)
+      base::UnsafeSharedMemoryRegion use_shader_cache_shm_region,
+      mojom::GpuServiceCreationParamsPtr params) override;
+  void SetRenderParams(
+      gfx::FontRenderParams::SubpixelRendering subpixel_rendering,
+      float text_contrast,
+      float text_gamma) override;
+#if BUILDFLAG(IS_WIN)
   void CreateInfoCollectionGpuService(
       mojo::PendingReceiver<mojom::InfoCollectionGpuService> pending_receiver)
       override;
 #endif
+#if BUILDFLAG(IS_ANDROID)
+  void SetHostProcessId(int32_t pid) override;
+  void NotifyWorkloadIncrease() override;
+#endif
   void CreateFrameSinkManager(mojom::FrameSinkManagerParamsPtr params) override;
-  void CreateVizDevTools(mojom::VizDevToolsParamsPtr params) override;
 #if BUILDFLAG(USE_VIZ_DEBUGGER)
-  void FilterDebugStream(base::Value filter_data) override;
+  void FilterDebugStream(base::DictValue filter_data) override;
   void StartDebugStream(
       mojo::PendingRemote<mojom::VizDebugOutput> debug_output) override;
   void StopDebugStream() override;
 #endif
-
-  // gpu::GpuInProcessThreadServiceDelegate implementation:
-  scoped_refptr<gpu::SharedContextState> GetSharedContextState() override;
-  scoped_refptr<gl::GLShareGroup> GetShareGroup() override;
 
   GpuServiceImpl* gpu_service() { return gpu_service_.get(); }
   const GpuServiceImpl* gpu_service() const { return gpu_service_.get(); }
@@ -153,13 +179,14 @@ class VizMainImpl : public mojom::VizMain,
 
  private:
   void CreateFrameSinkManagerInternal(mojom::FrameSinkManagerParamsPtr params);
+  void RequestBeginFrameForGpuService(bool toggle);
 
   scoped_refptr<base::SingleThreadTaskRunner> io_task_runner() const {
     return io_thread_ ? io_thread_->task_runner()
                       : dependencies_.io_thread_task_runner;
   }
 
-  Delegate* const delegate_;
+  const raw_ptr<Delegate> delegate_;
 
   const ExternalDependencies dependencies_;
 
@@ -170,27 +197,24 @@ class VizMainImpl : public mojom::VizMain,
 
   std::unique_ptr<gpu::GpuInit> gpu_init_;
   std::unique_ptr<GpuServiceImpl> gpu_service_;
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   std::unique_ptr<InfoCollectionGpuServiceImpl> info_collection_gpu_service_;
 #endif
-
-  // Allows the display compositor to use InProcessCommandBuffer to send GPU
-  // commands to the GPU thread from the compositor thread. This must outlive
-  // |viz_compositor_thread_runner_|.
-  std::unique_ptr<gpu::CommandBufferTaskExecutor> task_executor_;
 
   // If the gpu service is not yet ready then we stash pending
   // FrameSinkManagerParams.
   mojom::FrameSinkManagerParamsPtr pending_frame_sink_manager_params_;
+
+  bool has_created_frame_sink_manager_ = false;
 
   // Runs the VizCompositorThread for the display compositor.
   std::unique_ptr<VizCompositorThreadRunnerImpl>
       viz_compositor_thread_runner_impl_;
   // Note under Android WebView where VizCompositorThreadRunner is not created
   // and owned by this, Viz does not interact with other objects in this class,
-  // such as GpuServiceImpl or CommandBufferTaskExecutor. Code should take care
-  // to avoid introducing such assumptions.
-  VizCompositorThreadRunner* viz_compositor_thread_runner_ = nullptr;
+  // such as GpuServiceImpl. Code should take care to avoid introducing such
+  // assumptions.
+  raw_ptr<VizCompositorThreadRunner> viz_compositor_thread_runner_ = nullptr;
 
   const scoped_refptr<base::SingleThreadTaskRunner> gpu_thread_task_runner_;
 
@@ -198,10 +222,6 @@ class VizMainImpl : public mojom::VizMain,
 
   scoped_refptr<discardable_memory::ClientDiscardableSharedMemoryManager>
       discardable_shared_memory_manager_;
-
-  std::unique_ptr<gfx::RenderingPipeline> gpu_pipeline_;
-
-  DISALLOW_COPY_AND_ASSIGN(VizMainImpl);
 };
 
 }  // namespace viz

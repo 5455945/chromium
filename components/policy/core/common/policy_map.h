@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,19 +9,19 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 
-#include "base/callback.h"
 #include "base/containers/flat_set.h"
+#include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
-#include "base/stl_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/values.h"
 #include "components/policy/core/common/external_data_fetcher.h"
+#include "components/policy/core/common/policy_details.h"
 #include "components/policy/core/common/policy_types.h"
 #include "components/policy/policy_export.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace policy {
 
@@ -56,13 +56,18 @@ class POLICY_EXPORT PolicyMap {
     PolicySource source = POLICY_SOURCE_ENTERPRISE_DEFAULT;
     std::unique_ptr<ExternalDataFetcher> external_data_fetcher;
     std::vector<EntryConflict> conflicts;
+    // RAW_PTR_EXCLUSION: Never allocated by PartitionAlloc (pointer to a
+    // global), so there is no benefit to using a raw_ptr, only cost.
+    // See kChromePolicyDetails in gen/components/policy/policy_constants.cc
+    RAW_PTR_EXCLUSION const PolicyDetails* details = nullptr;
 
     Entry();
     Entry(PolicyLevel level,
           PolicyScope scope,
           PolicySource source,
-          absl::optional<base::Value> value,
-          std::unique_ptr<ExternalDataFetcher> external_data_fetcher);
+          std::optional<base::Value> value,
+          std::unique_ptr<ExternalDataFetcher> external_data_fetcher,
+          const PolicyDetails* details = nullptr);
     ~Entry();
 
     Entry(Entry&&) noexcept;
@@ -71,14 +76,17 @@ class POLICY_EXPORT PolicyMap {
     // Returns a copy of |this|.
     Entry DeepCopy() const;
 
-    base::Value* value() { return base::OptionalOrNullptr(value_); }
-    const base::Value* value() const { return base::OptionalOrNullptr(value_); }
+    // Retrieves the stored value if its type matches the desired type,
+    // otherwise returns |nullptr|.
+    const base::Value* value(base::Value::Type value_type) const;
+    base::Value* value(base::Value::Type value_type);
 
-    void set_value(absl::optional<base::Value> val);
+    // Retrieves the stored value without performing type checking. Use the
+    // type-checking versions above where possible.
+    const base::Value* value_unsafe() const;
+    base::Value* value_unsafe();
 
-    // Returns true if |this| has higher priority than |other|. The priority of
-    // the fields are |level| > |scope| > |source|.
-    bool has_higher_priority_than(const Entry& other) const;
+    void set_value(std::optional<base::Value> val);
 
     // Returns true if |this| equals |other|.
     bool Equals(const Entry& other) const;
@@ -101,10 +109,17 @@ class POLICY_EXPORT PolicyMap {
     // Removes all the conflicts.
     void ClearConflicts();
 
+    // Whether the policy has conflicting policies.
+    bool HasConflicts();
+
     // Getter for |ignored_|.
     bool ignored() const;
     // Sets |ignored_| to true.
     void SetIgnored();
+
+    // Returns true if the policy values from both machine and user scopes
+    // should be stored in prefs.
+    bool UsesLocalStateAndProfilePrefs() const;
 
     // Marks the policy as blocked because it is not supported in the current
     // environment.
@@ -138,13 +153,13 @@ class POLICY_EXPORT PolicyMap {
                                         L10nLookupFunction lookup) const;
 
    private:
-    absl::optional<base::Value> value_;
+    std::optional<base::Value> value_;
     bool ignored_ = false;
     bool is_default_value_ = false;
 
     // Stores all message IDs separated by message types.
     std::map<MessageType,
-             std::map<int, absl::optional<std::vector<std::u16string>>>>
+             std::map<int, std::optional<std::vector<std::u16string>>>>
         message_ids_;
   };
 
@@ -171,6 +186,7 @@ class POLICY_EXPORT PolicyMap {
   };
 
   typedef std::map<std::string, Entry> PolicyMapType;
+  typedef PolicyMapType::const_reference const_reference;
   typedef PolicyMapType::const_iterator const_iterator;
   typedef PolicyMapType::iterator iterator;
 
@@ -186,11 +202,24 @@ class POLICY_EXPORT PolicyMap {
   const Entry* Get(const std::string& policy) const;
   Entry* GetMutable(const std::string& policy);
 
-  // Returns a weak reference to the value currently stored for key
-  // |policy|, or NULL if not found. Ownership is retained by the PolicyMap.
-  // This is equivalent to Get(policy)->value, when it doesn't return NULL.
-  const base::Value* GetValue(const std::string& policy) const;
-  base::Value* GetMutableValue(const std::string& policy);
+  // Returns a weak reference to the value currently stored for key |policy| if
+  // the value type matches the requested type, otherwise returns |nullptr| if
+  // not found or there is a type mismatch. Ownership is retained by the
+  // |PolicyMap|.
+  const base::Value* GetValue(const std::string& policy,
+                              base::Value::Type value_type) const;
+  base::Value* GetMutableValue(const std::string& policy,
+                               base::Value::Type value_type);
+
+  // Returns a weak reference to the value currently stored for key |policy|
+  // without performing type checking, otherwise returns |nullptr| if not found.
+  // Ownership is retained by the |PolicyMap|. Use the type-checking versions
+  // above where possible.
+  const base::Value* GetValueUnsafe(const std::string& policy) const;
+  base::Value* GetMutableValueUnsafe(const std::string& policy);
+
+  // Returns true if the policy has a non-null value set.
+  bool IsPolicySet(const std::string& policy) const;
 
   // Overwrites any existing information stored in the map for the key |policy|.
   // Resets the error for that policy to the empty string.
@@ -198,7 +227,7 @@ class POLICY_EXPORT PolicyMap {
            PolicyLevel level,
            PolicyScope scope,
            PolicySource source,
-           absl::optional<base::Value> value,
+           std::optional<base::Value> value,
            std::unique_ptr<ExternalDataFetcher> external_data_fetcher);
 
   void Set(const std::string& policy, Entry entry);
@@ -238,25 +267,26 @@ class POLICY_EXPORT PolicyMap {
   // could be `map_.end()`).
   iterator EraseIt(const_iterator it);
 
-  // Erase all entries for which |filter| returns true.
-  void EraseMatching(
-      const base::RepeatingCallback<bool(const const_iterator)>& filter);
-
-  // Erase all entries for which |filter| returns false.
-  void EraseNonmatching(
-      const base::RepeatingCallback<bool(const const_iterator)>& filter);
-
   // Swaps the internal representation of |this| with |other|.
   void Swap(PolicyMap* other);
 
   // Returns a copy of |this|.
   PolicyMap Clone() const;
 
+  // Returns a copy of |this| that contains only the entries matching |filter|.
+  PolicyMap CloneIf(
+      const base::RepeatingCallback<bool(const_reference)>& filter) const;
+
   // Merges policies from |other| into |this|. Existing policies are only
   // overridden by those in |other| if they have a higher priority, as defined
-  // by Entry::has_higher_priority_than(). If a policy is contained in both
-  // maps with the same priority, the current value in |this| is preserved.
+  // by EntryHasHigherPriority(). If a policy is contained in both maps with the
+  // same priority, the current value in |this| is preserved.
   void MergeFrom(const PolicyMap& other);
+
+  // Merges policies from |other| into |this|, transferring ownership of
+  // entries instead of copying them. The caller must not rely on the contents
+  // of |other| after this call.
+  void MergeFrom(PolicyMap&& other);
 
   // Merge the policy values that are coming from different sources.
   void MergeValues(const std::vector<PolicyMerger*>& mergers);
@@ -264,10 +294,25 @@ class POLICY_EXPORT PolicyMap {
   // Loads the values in |policies| into this PolicyMap. All policies loaded
   // will have |level|, |scope| and |source| in their entries. Existing entries
   // are replaced.
-  void LoadFrom(const base::DictionaryValue* policies,
+  void LoadFrom(const base::DictValue& policies,
                 PolicyLevel level,
                 PolicyScope scope,
                 PolicySource source);
+
+  // Returns true if |lhs| has higher priority than |rhs|. The priority of the
+  // fields are |level| > |PolicyPriority| for browser and |level| > |scope| >
+  // |source| for OS. External factors such as metapolicy values are considered
+  // by default for browser policies.
+  bool EntryHasHigherPriority(const PolicyMap::Entry& lhs,
+                              const PolicyMap::Entry& rhs) const;
+
+  // Returns true if |lhs| has higher priority than |rhs|. The priority of the
+  // fields are |level| > |PolicyPriority| for browser and |level| > |scope| >
+  // |source| for OS. External factors such as metapolicy values and user
+  // affiliation are optionally considered.
+  bool EntryHasHigherPriority(const PolicyMap::Entry& lhs,
+                              const PolicyMap::Entry& rhs,
+                              bool using_default_precedence) const;
 
   // Returns True if at least one shared ID is found in the user and device
   // affiliation ID sets.
@@ -284,6 +329,15 @@ class POLICY_EXPORT PolicyMap {
 
   // Returns the set containing device affiliation ID strings.
   const base::flat_set<std::string>& GetDeviceAffiliationIds() const;
+
+  // Returns the PolicyDetails which is generated with the yaml definition of
+  // the `policy`.
+  const PolicyDetails* GetPolicyDetails(const std::string& policy) const;
+
+  // Sets the ChromePolicyDetailsCallback, which is used in
+  // IsPolicyExternal(), in test environments
+  void set_chrome_policy_details_callback_for_test(
+      const GetChromePolicyDetailsCallback& details_callback);
 
   bool Equals(const PolicyMap& other) const;
   bool empty() const;
@@ -305,19 +359,37 @@ class POLICY_EXPORT PolicyMap {
   const Entry* GetUntrusted(const std::string& policy) const;
   Entry* GetMutableUntrusted(const std::string& policy);
 
-  // Helper function for Equals().
-  static bool MapEntryEquals(const PolicyMapType::value_type& a,
-                             const PolicyMapType::value_type& b);
+  // Merges a single incoming entry. If |movable_other_policy| is non-null,
+  // ownership is transferred from it whenever the entry must be retained.
+  void MergePolicy(const std::string& policy_name,
+                   const Entry& other_policy,
+                   Entry* movable_other_policy,
+                   bool using_default_precedence);
 
-  // Erase all entries for which |filter| returns |deletion_value|.
-  void FilterErase(
-      const base::RepeatingCallback<bool(const const_iterator)>& filter,
-      bool deletion_value);
+  void MergeFromInternal(const PolicyMap& other, PolicyMap* movable_other);
+
+  // Helper function for Equals().
+  static bool MapEntryEquals(const_reference& a, const_reference& b);
+
+#if !BUILDFLAG(IS_CHROMEOS)
+  // Updates the stored state of computed metapolicies.
+  void UpdateStoredComputedMetapolicies();
+#endif
+
+  // Updates the stored state of user affiliation.
+  void UpdateStoredUserAffiliation();
+
+  // Returns True if the passed policy has a max_external_data_size > 0
+  bool IsPolicyExternal(const std::string& policy);
 
   PolicyMapType map_;
 
+  GetChromePolicyDetailsCallback details_callback_;
+
   // Affiliation
   bool is_user_affiliated_ = false;
+  bool cloud_policy_overrides_platform_policy_ = false;
+  bool cloud_user_policy_overrides_cloud_machine_policy_ = false;
   base::flat_set<std::string> user_affiliation_ids_;
   base::flat_set<std::string> device_affiliation_ids_;
 };

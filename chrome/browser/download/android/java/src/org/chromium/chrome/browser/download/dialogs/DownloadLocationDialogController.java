@@ -1,21 +1,22 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.download.dialogs;
 
-/**
- * Receives events from download location dialog.
- */
+import org.chromium.build.annotations.NullMarked;
+
+/** Receives events from download location dialog. */
+@NullMarked
 public interface DownloadLocationDialogController {
     /**
-     * Called when the user finished download location selection flow.
-     * @param returnedPath The download file path picked by the user.
+     * Called when the download location selection flow finished.
+     *
+     * @param returnedPath The download file path selected.
+     * @param didUserConfirm Whether the result was actively confirmed by user action.
      */
-    void onDownloadLocationDialogComplete(String returnedPath);
+    void onDownloadLocationDialogComplete(String returnedPath, boolean didUserConfirm);
 
-    /**
-     * Called when the user cancel or dismiss the download location dialog.
-     */
+    /** Called when the user cancel or dismiss the download location dialog. */
     void onDownloadLocationDialogCanceled();
 }

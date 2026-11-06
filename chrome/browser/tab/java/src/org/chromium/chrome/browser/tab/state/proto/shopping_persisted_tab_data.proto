@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -28,4 +28,18 @@ message ShoppingPersistedTabDataProto {
 
   // The id of the main offer on the page.
   optional string main_offer_id = 6;
+
+  // The gurl associated with the price drop.
+  optional string serialized_gurl = 7;
+
+  // Whether the user has seen the current price drop in the tab switcher grid.
+  // Project which used this field was deprecated see
+  // go/tab-based-price-tracking-presentation.
+  optional bool is_current_price_drop_seen = 8 [deprecated = true];
+
+  // The title of the product.
+  optional string product_title = 9;
+
+  // The gurl of the product image.
+  optional string product_image_url = 10;
 }

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,38 +6,24 @@
 
 #include <utility>
 
-#include "base/files/file_path.h"
-#include "base/files/file_util.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
+#include "chrome/browser/global_features.h"
+#include "chrome/test/base/testing_browser_process.h"
+#include "chromeos/ash/experiences/arc/dlc_installer/arc_dlc_installer.h"
 
 namespace arc {
-namespace {
-
-bool CreateFilesAndDirectories(const base::FilePath& temp_dir,
-                               base::FilePath* source_dir,
-                               base::FilePath* dest_dir) {
-  if (!base::CreateTemporaryDirInDir(temp_dir, "source", source_dir))
-    return false;
-
-  // Create empty prop files so ArcSessionManager's property expansion code
-  // works like production.
-  for (const char* filename :
-       {"default.prop", "build.prop", "vendor_build.prop",
-        "system_ext_build.prop", "product_build.prop", "odm_build.prop"}) {
-    if (base::WriteFile(source_dir->Append(filename), "", 1) != 1)
-      return false;
-  }
-
-  return base::CreateTemporaryDirInDir(temp_dir, "dest", dest_dir);
-}
-
-}  // namespace
-
 std::unique_ptr<ArcSessionManager> CreateTestArcSessionManager(
-    std::unique_ptr<ArcSessionRunner> arc_session_runner) {
+    std::unique_ptr<ArcSessionRunner> arc_session_runner,
+    ArcDlcInstaller* arc_dlc_installer) {
   auto manager = std::make_unique<ArcSessionManager>(
+      TestingBrowserProcess::GetGlobal()->local_state(),
+      TestingBrowserProcess::GetGlobal()
+          ->GetFeatures()
+          ->application_locale_storage(),
+      TestingBrowserProcess::GetGlobal()->metrics_service(),
       std::move(arc_session_runner),
-      std::make_unique<AdbSideloadingAvailabilityDelegateImpl>());
+      std::make_unique<AdbSideloadingAvailabilityDelegateImpl>(),
+      arc_dlc_installer);
   // Our unit tests the ArcSessionManager::ExpandPropertyFiles() function won't
   // be automatically called. Because of that, we can call
   // OnExpandPropertyFilesForTesting() instead with |true| for easier unit

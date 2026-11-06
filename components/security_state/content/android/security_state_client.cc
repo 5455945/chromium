@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,9 +16,27 @@ SecurityStateClient* GetSecurityStateClient() {
   return g_client;
 }
 
+SecurityStateClient::SecurityStateClient() = default;
+
+SecurityStateClient::~SecurityStateClient() = default;
+
 std::unique_ptr<SecurityStateModelDelegate>
 SecurityStateClient::MaybeCreateSecurityStateModelDelegate() {
   return nullptr;
+}
+
+SecurityStateModelDelegate*
+SecurityStateClient::GetSecurityStateModelDelegate() {
+  if (!delegate_created_) {
+    delegate_created_ = true;
+    delegate_ = MaybeCreateSecurityStateModelDelegate();
+  }
+  return delegate_.get();
+}
+
+SecurityStateModelDelegate* GetSecurityStateModelDelegate() {
+  SecurityStateClient* client = GetSecurityStateClient();
+  return client ? client->GetSecurityStateModelDelegate() : nullptr;
 }
 
 }  // namespace security_state

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,27 +9,27 @@
 
 namespace mojo {
 
-#if defined(OS_POSIX)
+#if BUILDFLAG(IS_POSIX)
 mojo::PlatformHandle
 StructTraits<gfx::mojom::GpuFenceHandleDataView,
              gfx::GpuFenceHandle>::native_fd(gfx::GpuFenceHandle& handle) {
-  return mojo::PlatformHandle(std::move(handle.owned_fd));
+  return mojo::PlatformHandle(handle.Release());
 }
-#elif defined(OS_WIN)
+#elif BUILDFLAG(IS_WIN)
 mojo::PlatformHandle
 StructTraits<gfx::mojom::GpuFenceHandleDataView,
              gfx::GpuFenceHandle>::native_handle(gfx::GpuFenceHandle& handle) {
-  return mojo::PlatformHandle(std::move(handle.owned_handle));
+  return mojo::PlatformHandle(handle.Release());
 }
 #endif
 
 bool StructTraits<gfx::mojom::GpuFenceHandleDataView, gfx::GpuFenceHandle>::
     Read(gfx::mojom::GpuFenceHandleDataView data, gfx::GpuFenceHandle* out) {
-#if defined(OS_POSIX)
-  out->owned_fd = data.TakeNativeFd().TakeFD();
+#if BUILDFLAG(IS_POSIX)
+  out->Adopt(data.TakeNativeFd().TakeFD());
   return true;
-#elif defined(OS_WIN)
-  out->owned_handle = data.TakeNativeHandle().TakeHandle();
+#elif BUILDFLAG(IS_WIN)
+  out->Adopt(data.TakeNativeHandle().TakeHandle());
   return true;
 #else
   return false;
@@ -38,10 +38,8 @@ bool StructTraits<gfx::mojom::GpuFenceHandleDataView, gfx::GpuFenceHandle>::
 
 void StructTraits<gfx::mojom::GpuFenceHandleDataView,
                   gfx::GpuFenceHandle>::SetToNull(gfx::GpuFenceHandle* handle) {
-#if defined(OS_POSIX)
-  handle->owned_fd.reset();
-#elif defined(OS_WIN)
-  handle->owned_handle.Close();
+#if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_WIN)
+  handle->Reset();
 #endif
 }
 

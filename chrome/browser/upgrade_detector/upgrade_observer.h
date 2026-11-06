@@ -1,14 +1,15 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UPGRADE_DETECTOR_UPGRADE_OBSERVER_H_
 #define CHROME_BROWSER_UPGRADE_DETECTOR_UPGRADE_OBSERVER_H_
 
-#include "base/macros.h"
-
 class UpgradeObserver {
  public:
+  // Triggered when a software update is downloaded but deferred.
+  virtual void OnUpdateDeferred(bool use_notification) {}
+
   // Triggered when a software update is available, but downloading requires
   // user's agreement as current connection is cellular.
   virtual void OnUpdateOverCellularAvailable() {}
@@ -39,7 +40,7 @@ class UpgradeObserver {
   virtual void OnRelaunchOverriddenToRequired(bool overridden) {}
 
  protected:
-  virtual ~UpgradeObserver() {}
+  virtual ~UpgradeObserver() = default;
 };
 
 #endif  // CHROME_BROWSER_UPGRADE_DETECTOR_UPGRADE_OBSERVER_H_

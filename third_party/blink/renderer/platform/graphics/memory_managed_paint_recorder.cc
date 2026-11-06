@@ -25,17 +25,88 @@
 
 #include "third_party/blink/renderer/platform/graphics/memory_managed_paint_recorder.h"
 
+#include "base/types/optional_ref.h"
+
 namespace blink {
 
-MemoryManagedPaintRecorder::MemoryManagedPaintRecorder(
-    base::RepeatingClosure set_needs_flush_callback)
-    : set_needs_flush_callback_(std::move(set_needs_flush_callback)) {}
+MemoryManagedPaintRecorder::MemoryManagedPaintRecorder(gfx::Size size,
+                                                       Client* client)
+    : client_(client), size_(size), main_canvas_(size) {
+  if (client_) {
+    client_->InitializeForRecording(&main_canvas_);
+  }
+}
 
-std::unique_ptr<cc::RecordPaintCanvas> MemoryManagedPaintRecorder::CreateCanvas(
-    cc::DisplayItemList* list,
-    const SkRect& bounds) {
-  return std::make_unique<MemoryManagedPaintCanvas>(list, bounds,
-                                                    set_needs_flush_callback_);
+MemoryManagedPaintRecorder::~MemoryManagedPaintRecorder() = default;
+
+void MemoryManagedPaintRecorder::DisableLineDrawingAsPaths() {
+  main_canvas_.DisableLineDrawingAsPaths();
+  if (side_canvas_) {
+    side_canvas_->DisableLineDrawingAsPaths();
+  }
+}
+
+cc::PaintRecord MemoryManagedPaintRecorder::ReleaseMainRecording() {
+  cc::PaintRecord record = main_canvas_.ReleaseAsRecord();
+  // ReleaseAsRecord() clears the paint ops, so we need initialize the recording
+  // for subsequent draw calls.
+  if (client_) {
+    client_->InitializeForRecording(&main_canvas_);
+  }
+  return record;
+}
+
+cc::PaintRecord MemoryManagedPaintRecorder::CopyMainRecording() {
+  // CopyAsRecord() does not clear the paint ops, so we do not need to call
+  // InitializeForRecording().
+  return main_canvas_.CopyAsRecord();
+}
+
+void MemoryManagedPaintRecorder::RestartCurrentLayer() {
+  if (HasSideRecording()) {
+    // We are recording in the side canvas, which groups together all layers
+    // into a single recording. We therefore do not know where the child-most
+    // layer starts in this side recording and therefore cannot drop it.
+    // This could be improved by keeping a stack of canvas, one per layers.
+    return;
+  }
+
+  // If no draw calls have been recorded, we have nothing to skip. The recoding
+  // could still contain layers or matrix clip stack levels. As an optimization,
+  // we can keep the recording untouched as there is no need to discard the
+  // layer matrix clip stack just to rebuild it again.
+  if (HasRecordedDrawOps()) {
+    ReleaseMainRecording();
+  }
+
+  if (client_) {
+    client_->RecordingCleared();
+  }
+}
+
+void MemoryManagedPaintRecorder::RestartRecording() {
+  current_canvas_ = &main_canvas_;
+  side_canvas_ = nullptr;
+  ReleaseMainRecording();
+  if (client_) {
+    client_->RecordingCleared();
+  }
+}
+
+void MemoryManagedPaintRecorder::BeginSideRecording() {
+  CHECK(!side_canvas_) << "BeginSideRecording() can't be called when side "
+                          "recording is already active.";
+  side_canvas_ = main_canvas_.CreateChildCanvas();
+  current_canvas_ = side_canvas_.get();
+}
+
+void MemoryManagedPaintRecorder::EndSideRecording() {
+  CHECK(side_canvas_) << "EndSideRecording() can't be called without "
+                         "first calling BeginSideRecording().";
+  main_canvas_.drawPicture(side_canvas_->ReleaseAsRecord(),
+                           /*local_ctm=*/false);
+  current_canvas_ = &main_canvas_;
+  side_canvas_ = nullptr;
 }
 
 }  // namespace blink

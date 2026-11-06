@@ -1,11 +1,5 @@
-if (is_android) {
-  import("//build/config/android/rules.gni")
-}
-
 static_library("page_info") {
   sources = [
-    "features.cc",
-    "features.h",
     "page_info.cc",
     "page_info.h",
     "page_info_delegate.h",
@@ -16,32 +10,39 @@ static_library("page_info") {
 
   deps = [
     "//base",
-    "//build:chromeos_buildflags",
     "//components/browsing_data/content",
+    "//components/browsing_data/core",
     "//components/content_settings/browser",
+    "//components/content_settings/browser/ui",
     "//components/content_settings/core/browser",
-    "//components/omnibox/common",
+    "//components/keyed_service/core",
+    "//components/optimization_guide/core",
+    "//components/page_info/core",
     "//components/password_manager/core/browser",
     "//components/permissions",
     "//components/prefs",
+    "//components/privacy_sandbox",
     "//components/safe_browsing:buildflags",
     "//components/safe_browsing/content/browser/password_protection",
+    "//components/safe_browsing/core/browser:safe_browsing_metrics_collector",
     "//components/safe_browsing/core/browser/password_protection:password_protection_metrics_util",
+    "//components/safe_browsing/core/common",
     "//components/safe_browsing/core/common/proto:csd_proto",
     "//components/security_interstitials/content:security_interstitial_page",
     "//components/security_interstitials/core",
     "//components/security_state/core",
     "//components/signin/public/identity_manager",
-    "//components/ssl_errors:ssl_errors",
-    "//components/strings:components_chromium_strings_grit",
+    "//components/ssl_errors",
+    "//components/strings:components_branded_strings_grit",
     "//components/strings:components_strings_grit",
     "//components/subresource_filter/core/browser",
     "//components/ukm/content",
     "//components/url_formatter",
-    "//components/vector_icons:vector_icons",
-    "//content/public/browser:browser",
+    "//components/vector_icons",
+    "//content/public/browser",
     "//services/device/public/cpp:device_features",
     "//services/metrics/public/cpp:ukm_builders",
+    "//third_party/blink/public:buildflags",
   ]
 
   if (is_android) {
@@ -55,8 +56,18 @@ static_library("page_info") {
   }
 }
 
-if (is_android) {
-  java_cpp_enum("page_info_action_javagen") {
-    sources = [ "page_info.h" ]
-  }
+source_set("unit_tests") {
+  testonly = true
+
+  sources = [ "page_info_ui_unittest.cc" ]
+
+  deps = [
+    ":page_info",
+    "//base",
+    "//components/content_settings/core/browser",
+    "//components/strings:components_strings_grit",
+    "//testing/gmock",
+    "//testing/gtest",
+    "//ui/base",
+  ]
 }

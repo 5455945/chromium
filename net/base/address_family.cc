@@ -1,8 +1,10 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/base/address_family.h"
+
+#include <string_view>
 
 #include "base/notreached.h"
 #include "net/base/ip_address.h"
@@ -30,7 +32,30 @@ int ConvertAddressFamily(AddressFamily address_family) {
       return AF_INET6;
   }
   NOTREACHED();
-  return AF_UNSPEC;
+}
+
+AddressFamily ToAddressFamily(int family) {
+  switch (family) {
+    case AF_INET:
+      return ADDRESS_FAMILY_IPV4;
+    case AF_INET6:
+      return ADDRESS_FAMILY_IPV6;
+    case AF_UNSPEC:
+      return ADDRESS_FAMILY_UNSPECIFIED;
+  }
+  NOTREACHED();
+}
+
+std::string_view AddressFamilyToString(AddressFamily address_family) {
+  switch (address_family) {
+    case ADDRESS_FAMILY_UNSPECIFIED:
+      return "Unspecified";
+    case ADDRESS_FAMILY_IPV4:
+      return "IPv4";
+    case ADDRESS_FAMILY_IPV6:
+      return "IPv6";
+  }
+  NOTREACHED();
 }
 
 }  // namespace net

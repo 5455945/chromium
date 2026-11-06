@@ -1,10 +1,11 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_LOG_NET_LOG_WITH_SOURCE_H_
 #define NET_LOG_NET_LOG_WITH_SOURCE_H_
 
+#include "base/memory/raw_ptr.h"
 #include "net/base/net_export.h"
 #include "net/log/net_log.h"
 #include "net/log/net_log_event_type.h"
@@ -19,7 +20,6 @@ class NetLog;
 class NET_EXPORT NetLogWithSource {
  public:
   NetLogWithSource();
-  ~NetLogWithSource();
 
   // Adds a log entry to the NetLog for the bound source.
   void AddEntry(NetLogEventType type, NetLogEventPhase phase) const;
@@ -62,28 +62,28 @@ class NET_EXPORT NetLogWithSource {
   }
 
   void AddEventWithStringParams(NetLogEventType type,
-                                base::StringPiece name,
-                                base::StringPiece value) const;
+                                std::string_view name,
+                                std::string_view value) const;
 
   void AddEventWithIntParams(NetLogEventType type,
-                             base::StringPiece name,
+                             std::string_view name,
                              int value) const;
 
   void BeginEventWithIntParams(NetLogEventType type,
-                               base::StringPiece name,
+                               std::string_view name,
                                int value) const;
 
   void EndEventWithIntParams(NetLogEventType type,
-                             base::StringPiece name,
+                             std::string_view name,
                              int value) const;
 
   void AddEventWithInt64Params(NetLogEventType type,
-                               base::StringPiece name,
+                               std::string_view name,
                                int64_t value) const;
 
   void BeginEventWithStringParams(NetLogEventType type,
-                                  base::StringPiece name,
-                                  base::StringPiece value) const;
+                                  std::string_view name,
+                                  std::string_view value) const;
 
   void AddEventReferencingSource(NetLogEventType type,
                                  const NetLogSource& source) const;
@@ -107,11 +107,17 @@ class NET_EXPORT NetLogWithSource {
 
   void AddEntryWithBoolParams(NetLogEventType type,
                               NetLogEventPhase phase,
-                              base::StringPiece name,
+                              std::string_view name,
                               bool value) const;
 
   // Logs a byte transfer event to the NetLog.  Determines whether to log the
   // received bytes or not based on the current logging level.
+  void AddByteTransferEvent(NetLogEventType event_type,
+                            base::span<const uint8_t> bytes) const;
+
+  // DEPRECATED: Use the above `base::span` variant to avoid unsafe buffer
+  // usage.
+  // TODO(https://crbug.com/40284755): Remove this once the callers are gone.
   void AddByteTransferEvent(NetLogEventType event_type,
                             int byte_count,
                             const char* bytes) const;
@@ -119,9 +125,23 @@ class NET_EXPORT NetLogWithSource {
   bool IsCapturing() const { return non_null_net_log_->IsCapturing(); }
 
   // Helper to create a NetLogWithSource given a NetLog and a NetLogSourceType.
-  // Takes care of creating a unique source ID, and handles
-  //  the case of NULL net_log.
+  // Takes care of creating a unique source ID, and handles the case of NULL
+  // net_log.
   static NetLogWithSource Make(NetLog* net_log, NetLogSourceType source_type);
+
+  // Helper to create a NetLogWithSource given a NetLogSourceType.
+  // Equivalent to calling Make(NetLog*, NetLogSourceType) with NetLog::Get()
+  static NetLogWithSource Make(NetLogSourceType source_type);
+
+  // Creates a NetLogWithSource with an already initialized NetLogSource. If
+  // |net_log| is null or |source| is not valid, creates an unbound
+  // NetLogWithSource.
+  static NetLogWithSource Make(NetLog* net_log, const NetLogSource& source);
+
+  // Creates a NetLogWithSource with an already initialized NetLogSource.
+  // Equivalent to calling Make(NetLog*, NetLogSource&) with NetLog::Get().
+  // If |source| is not valid, creates an unbound NetLogWithSource.
+  static NetLogWithSource Make(const NetLogSource& source);
 
   const NetLogSource& source() const { return source_; }
 
@@ -145,7 +165,7 @@ class NET_EXPORT NetLogWithSource {
   // As an optimization, both types internally store a non-null NetLog*. This
   // way no null checks are needed before dispatching to the (possibly dummy)
   // NetLog
-  NetLog* non_null_net_log_;
+  raw_ptr<NetLog> non_null_net_log_;
 };
 
 }  // namespace net

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,42 +7,36 @@
 
 #include <utility>
 
+#include "base/callback_list.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/scoped_multi_source_observation.h"
-#include "base/timer/timer.h"
 #include "base/values.h"
-#include "chrome/browser/ash/cert_provisioning/cert_provisioning_scheduler.h"
 #include "content/public/browser/web_ui_message_handler.h"
 
 class Profile;
 
+namespace ash::cert_provisioning {
+class CertProvisioningScheduler;
+}  // namespace ash::cert_provisioning
+
 namespace chromeos {
 namespace cert_provisioning {
 
-class CertificateProvisioningUiHandler
-    : public content::WebUIMessageHandler,
-      public ash::cert_provisioning::CertProvisioningSchedulerObserver {
+class CertificateProvisioningUiHandler : public content::WebUIMessageHandler {
  public:
-  // Creates a CertificateProvisioningUiHandler for |user_profile|, which uses:
-  // (*) The CertProvisioningScheduler associated with |user_profile|, if any.
-  // (*) The device-wide CertProvisioningScheduler, if it exists and the
-  //     |user_profile| is affiliated.
+  // Creates a CertificateProvisioningUiHandler for |profile|.
+  // If the |profile| should be able to see and control cert provisioning
+  // processes, CertificateProvisioningUiHandler will be created with a correct
+  // |cert_provisioning_interface|. Otherwise |cert_provisioning_interface| will
+  // be nullptr and the related UI elements will show and do nothing.
   static std::unique_ptr<CertificateProvisioningUiHandler> CreateForProfile(
-      Profile* user_profile);
+      Profile* profile);
 
-  // The constructed CertificateProvisioningUiHandler will use
-  // |scheduler_for_user| to list certificate provisioning processes that belong
-  // to the user, and |scheduler_for_device|, to list certificatge provisioning
-  // processes that are device-wide. Both can be nullptr. Note: Intended to be
-  // called directly for testing. Use CreateForProfile in production code
-  // instead.
-  // |user_profile| is used to determine if the current user is affiliated and
-  // decide if |scheduler_for_device| should be used based on that. This pattern
-  // is useful for unit-testing the affiliation detection logic.
+  // The constructor is public for testing, prefer using CreateForProfile when
+  // possible.
   CertificateProvisioningUiHandler(
-      Profile* user_profile,
-      ash::cert_provisioning::CertProvisioningScheduler* scheduler_for_user,
-      ash::cert_provisioning::CertProvisioningScheduler* scheduler_for_device);
+      ash::cert_provisioning::CertProvisioningScheduler* user_scheduler,
+      ash::cert_provisioning::CertProvisioningScheduler* device_scheduler);
 
   CertificateProvisioningUiHandler(
       const CertificateProvisioningUiHandler& other) = delete;
@@ -51,11 +45,9 @@ class CertificateProvisioningUiHandler
 
   ~CertificateProvisioningUiHandler() override;
 
-  // content::WebUIMessageHandler.
+  // content::WebUIMessageHandler
   void RegisterMessages() override;
 
-  // CertProvisioningSchedulerObserver:
-  void OnVisibleStateChanged() override;
 
   // For testing: Reads the count of UI refreshes sent to the WebUI (since
   // instantiation or the last call to this function) and resets it to 0.
@@ -66,7 +58,7 @@ class CertificateProvisioningUiHandler
   // the UI when it loads.
   // |args| is expected to be empty.
   void HandleRefreshCertificateProvisioningProcesses(
-      const base::ListValue* args);
+      const base::ListValue& args);
 
   // Trigger an update / refresh on a certificate provisioning process.
   // |args| is expected to contain two arguments:
@@ -75,45 +67,35 @@ class CertificateProvisioningUiHandler
   // index 1 is a boolean specifying whether the process is a user-specific
   // (false) or a device-wide (true) certificate provisioning process.
   void HandleTriggerCertificateProvisioningProcessUpdate(
-      const base::ListValue* args);
+      const base::ListValue& args);
+
+  // Triggers a reset to a particular certificate provisioning process.
+  // |args| is expected to contain two arguments:
+  // The argument at index 0 is a string specifying the certificate profile id
+  // of the process that an update should be triggered for. The argument at
+  // index 1 is a boolean specifying whether the process is a user-specific
+  // (false) or a device-wide (true) certificate provisioning process.
+  void HandleTriggerCertificateProvisioningProcessReset(
+      const base::ListValue& args);
 
   // Send the list of certificate provisioning processes to the UI.
   void RefreshCertificateProvisioningProcesses();
 
-  // Called when the |hold_back_updates_timer_| expires.
-  void OnHoldBackUpdatesTimerExpired();
+  // Called on updates of schedulers.
+  void OnStateChanged();
 
-  // Returns true if device-wide certificate provisioning processes should be
-  // displayed, i.e. if the |user_profile| is affiliated.
-  static bool ShouldUseDeviceWideProcesses(Profile* user_profile);
+  // Schedulers for the given profile.
+  const raw_ptr<ash::cert_provisioning::CertProvisioningScheduler>
+      user_scheduler_;
+  const raw_ptr<ash::cert_provisioning::CertProvisioningScheduler>
+      device_scheduler_;
 
-  // The user-specific CertProvisioningScheduler. Can be nullptr.
-  // Unowned.
-  ash::cert_provisioning::CertProvisioningScheduler* const scheduler_for_user_;
-
-  // The device-wide CertProvisioningScheduler. Can be nullptr.
-  // Unowned.
-  ash::cert_provisioning::CertProvisioningScheduler* const
-      scheduler_for_device_;
-
-  // When this timer is running, updates provided by the schedulers should not
-  // be forwarded to the UI until it fires. Used to prevent spamming the UI if
-  // many events come in in rapid succession.
-  base::OneShotTimer hold_back_updates_timer_;
-
-  // When this is true, an update should be sent to the UI when
-  // |hold_back_updates_timer_| fires.
-  bool update_after_hold_back_ = false;
+  // Subscribes schedulers.
+  base::CallbackListSubscription user_subscription_;
+  base::CallbackListSubscription device_subscription_;
 
   // Keeps track of the count of UI refreshes sent to the WebUI.
   unsigned int ui_refresh_count_for_testing_ = 0;
-
-  // Keeps track of the CertProvisioningSchedulers that this UI handler
-  // observes.
-  base::ScopedMultiSourceObservation<
-      ash::cert_provisioning::CertProvisioningScheduler,
-      ash::cert_provisioning::CertProvisioningSchedulerObserver>
-      observed_schedulers_{this};
 
   base::WeakPtrFactory<CertificateProvisioningUiHandler> weak_ptr_factory_{
       this};

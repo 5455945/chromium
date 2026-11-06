@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@ import androidx.test.filters.SmallTest;
 
 import org.junit.After;
 import org.junit.Before;
-import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -18,30 +17,23 @@ import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
-import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.chrome.browser.tab.TabTestUtils;
+import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
-import org.chromium.chrome.test.batch.BlankCTATabInitialStateRule;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
+import org.chromium.chrome.test.transit.ChromeTransitTestRules;
+import org.chromium.chrome.test.util.ByteBufferTestUtils;
 
 import java.nio.ByteBuffer;
 import java.util.concurrent.TimeoutException;
 
-/**
- * Tests relating to {@link LevelDBPersistedDataStorage}
- */
+/** Tests relating to {@link LevelDBPersistedDataStorage} */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @Batch(Batch.PER_CLASS)
 public class LevelDBPersistedDataStorageTest {
-    @ClassRule
-    public static ChromeTabbedActivityTestRule sActivityTestRule =
-            new ChromeTabbedActivityTestRule();
-
     @Rule
-    public BlankCTATabInitialStateRule mBlankCTATabInitialStateRule =
-            new BlankCTATabInitialStateRule(sActivityTestRule, false);
+    public AutoResetCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.fastAutoResetCtaActivityRule();
 
     private static final String KEY_1 = "key1";
     private static final String KEY_2 = "key2";
@@ -50,28 +42,33 @@ public class LevelDBPersistedDataStorageTest {
     private static final byte[] DATA_B = {9, 10};
     private static final byte[] EMPTY_BYTE_ARRAY = {};
 
-    private static final String NAMESPACES[] = {"namespace1", "namesapce2"};
+    private static final String[] NAMESPACES = {"namespace1", "namesapce2"};
 
-    private LevelDBPersistedDataStorage[] mPersistedDataStorage =
+    private final LevelDBPersistedDataStorage[] mPersistedDataStorage =
             new LevelDBPersistedDataStorage[2];
 
     @Before
     public void setUp() throws Exception {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            for (int i = 0; i < mPersistedDataStorage.length; i++) {
-                mPersistedDataStorage[i] = new LevelDBPersistedDataStorage(
-                        Profile.getLastUsedRegularProfile(), NAMESPACES[i]);
-            }
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    for (int i = 0; i < mPersistedDataStorage.length; i++) {
+                        mPersistedDataStorage[i] =
+                                new LevelDBPersistedDataStorage(
+                                        ProfileManager.getLastUsedRegularProfile(), NAMESPACES[i]);
+                    }
+                });
     }
 
     @After
     public void tearDown() throws Exception {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            for (int i = 0; i < mPersistedDataStorage.length; i++) {
-                mPersistedDataStorage[i].destroy();
-            }
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    for (LevelDBPersistedDataStorage storage : mPersistedDataStorage) {
+                        if (storage != null) {
+                            storage.destroy();
+                        }
+                    }
+                });
     }
 
     @SmallTest
@@ -141,9 +138,7 @@ public class LevelDBPersistedDataStorageTest {
         loadAndCheckResult1(KEY_1, EMPTY_BYTE_ARRAY);
     }
 
-    /**
-     * Functions for first namespace
-     */
+    /** Functions for first namespace */
     private void save0(String key, byte[] data) throws TimeoutException {
         save(key, data, mPersistedDataStorage[0]);
     }
@@ -156,9 +151,7 @@ public class LevelDBPersistedDataStorageTest {
         delete(key, mPersistedDataStorage[0]);
     }
 
-    /**
-     * Functions for second namespace
-     */
+    /** Functions for second namespace */
     private void save1(String key, byte[] data) throws TimeoutException {
         save(key, data, mPersistedDataStorage[1]);
     }
@@ -175,40 +168,53 @@ public class LevelDBPersistedDataStorageTest {
             throws TimeoutException {
         CallbackHelper ch = new CallbackHelper();
         int chCount = ch.getCallCount();
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            persistedDataStorage.saveForTesting(key, data, new Runnable() {
-                @Override
-                public void run() {
-                    ch.notifyCalled();
-                }
-            });
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    persistedDataStorage.saveForTesting(
+                            key,
+                            data,
+                            new Runnable() {
+                                @Override
+                                public void run() {
+                                    ch.notifyCalled();
+                                }
+                            });
+                });
         ch.waitForCallback(chCount);
     }
 
-    private void loadAndCheckResult(String key, byte[] expected,
-            LevelDBPersistedDataStorage persistedDataStorage) throws TimeoutException {
+    private void loadAndCheckResult(
+            String key, byte[] expected, LevelDBPersistedDataStorage persistedDataStorage)
+            throws TimeoutException {
         LoadCallbackHelper ch = new LoadCallbackHelper();
         int chCount = ch.getCallCount();
-        ThreadUtils.runOnUiThreadBlocking(() -> {
-            persistedDataStorage.load(key, (res) -> { ch.notifyCalled(ByteBuffer.wrap(res)); });
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    persistedDataStorage.load(
+                            key,
+                            (res) -> {
+                                ch.notifyCalled(ByteBuffer.wrap(res));
+                            });
+                });
         ch.waitForCallback(chCount);
-        TabTestUtils.verifyByteBuffer(expected, ch.getRes());
+        ByteBufferTestUtils.verifyByteBuffer(expected, ch.getRes());
     }
 
     private void delete(String key, LevelDBPersistedDataStorage persistedDataStorage)
             throws TimeoutException {
         CallbackHelper ch = new CallbackHelper();
         int chCount = ch.getCallCount();
-        ThreadUtils.runOnUiThreadBlocking(() -> {
-            persistedDataStorage.deleteForTesting(key, new Runnable() {
-                @Override
-                public void run() {
-                    ch.notifyCalled();
-                }
-            });
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    persistedDataStorage.deleteForTesting(
+                            key,
+                            new Runnable() {
+                                @Override
+                                public void run() {
+                                    ch.notifyCalled();
+                                }
+                            });
+                });
         ch.waitForCallback(chCount);
     }
 }

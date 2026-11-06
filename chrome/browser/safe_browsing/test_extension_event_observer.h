@@ -1,10 +1,11 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_SAFE_BROWSING_TEST_EXTENSION_EVENT_OBSERVER_H_
 #define CHROME_BROWSER_SAFE_BROWSING_TEST_EXTENSION_EVENT_OBSERVER_H_
 
+#include "base/values.h"
 #include "extensions/browser/test_event_router.h"
 
 class GURL;
@@ -16,6 +17,10 @@ class TestExtensionEventObserver
  public:
   explicit TestExtensionEventObserver(
       extensions::TestEventRouter* event_router);
+
+  TestExtensionEventObserver(const TestExtensionEventObserver&) = delete;
+  TestExtensionEventObserver& operator=(const TestExtensionEventObserver&) =
+      delete;
 
   ~TestExtensionEventObserver() override = default;
 
@@ -34,10 +39,8 @@ class TestExtensionEventObserver
 
  private:
   // The arguments passed for the last observed event.
-  base::Value latest_event_args_;
+  base::ListValue latest_event_args_;
   std::string latest_event_name_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestExtensionEventObserver);
 };
 
 std::unique_ptr<KeyedService> BuildSafeBrowsingPrivateEventRouter(

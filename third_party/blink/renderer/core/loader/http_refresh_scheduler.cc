@@ -33,17 +33,20 @@
 #include "third_party/blink/renderer/core/loader/http_refresh_scheduler.h"
 
 #include <memory>
+
+#include "base/trace_event/trace_event.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/core/events/current_input_event.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
+#include "third_party/blink/renderer/core/loader/document_loader.h"
 #include "third_party/blink/renderer/core/loader/frame_load_request.h"
 #include "third_party/blink/renderer/core/loader/frame_loader.h"
 #include "third_party/blink/renderer/core/probe/core_probes.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread_scheduler.h"
 
 static constexpr base::TimeDelta kMaxScheduledDelay =
-    base::TimeDelta::FromSeconds(INT32_MAX / 1000);
+    base::Seconds(INT32_MAX / 1000);
 
 namespace blink {
 
@@ -58,7 +61,6 @@ static ClientNavigationReason ToReason(
       break;
   }
   NOTREACHED();
-  return ClientNavigationReason::kMetaTagRefresh;
 }
 
 HttpRefreshScheduler::HttpRefreshScheduler(Document* document)
@@ -75,7 +77,7 @@ void HttpRefreshScheduler::Schedule(
   DCHECK(document_->GetFrame());
   if (!document_->GetFrame()->IsNavigationAllowed())
     return;
-  if (delay < base::TimeDelta() || delay > kMaxScheduledDelay)
+  if (delay.is_negative() || delay > kMaxScheduledDelay)
     return;
   if (url.IsEmpty())
     return;
@@ -89,6 +91,9 @@ void HttpRefreshScheduler::Schedule(
   Cancel();
   refresh_ = std::make_unique<ScheduledHttpRefresh>(
       delay, url, ToReason(http_refresh_type), timestamp);
+  refresh_->async_task_context.Schedule(
+      document_->GetExecutionContext(), "HttpRefreshScheduler::Schedule",
+      probe::AsyncTaskContext::StackOptions::kScan);
   MaybeStartTimer();
 }
 
@@ -99,11 +104,13 @@ void HttpRefreshScheduler::NavigateTask() {
 
   DCHECK(document_->GetFrame());
   std::unique_ptr<ScheduledHttpRefresh> refresh(refresh_.release());
+  probe::AsyncTask async_task(document_->GetExecutionContext(),
+                              &refresh->async_task_context);
 
   FrameLoadRequest request(document_->domWindow(),
                            ResourceRequest(refresh->url));
   request.SetInputStartTime(refresh->input_timestamp);
-  request.SetClientRedirectReason(refresh->reason);
+  request.SetClientNavigationReason(refresh->reason);
 
   WebFrameLoadType load_type = WebFrameLoadType::kStandard;
   // If the urls match, process the refresh as a reload. However, if an initial
@@ -112,11 +119,14 @@ void HttpRefreshScheduler::NavigateTask() {
   // in a frame where there hasn't actually been a navigation yet. Therefore,
   // don't treat as a reload if all this frame has ever seen is empty documents.
   if (EqualIgnoringFragmentIdentifier(document_->Url(), refresh->url) &&
-      document_->GetFrame()->Loader().HasLoadedNonEmptyDocument()) {
+      document_->GetFrame()->Loader().HasLoadedNonInitialEmptyDocument()) {
     request.GetResourceRequest().SetCacheMode(
         mojom::FetchCacheMode::kValidateCache);
-    load_type = WebFrameLoadType::kReload;
-  } else if (refresh->delay <= base::TimeDelta::FromSeconds(1)) {
+    // Fragment-only navigation is handled by ShouldPerformFragmentNavigation().
+    if (!refresh->url.HasFragmentIdentifier()) {
+      load_type = WebFrameLoadType::kReload;
+    }
+  } else if (refresh->delay <= base::Seconds(1)) {
     load_type = WebFrameLoadType::kReplaceCurrentItem;
   }
 
@@ -136,7 +146,7 @@ void HttpRefreshScheduler::MaybeStartTimer() {
   // task handle is destroyed on the dtor of this HttpRefreshScheduler.
   navigate_task_handle_ = PostDelayedCancellableTask(
       *document_->GetTaskRunner(TaskType::kInternalLoading), FROM_HERE,
-      WTF::Bind(&HttpRefreshScheduler::NavigateTask, WrapWeakPersistent(this)),
+      BindOnce(&HttpRefreshScheduler::NavigateTask, WrapWeakPersistent(this)),
       refresh_->delay);
 
   probe::FrameScheduledNavigation(document_->GetFrame(), refresh_->url,

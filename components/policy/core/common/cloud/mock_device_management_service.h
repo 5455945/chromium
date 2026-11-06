@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,17 +7,13 @@
 
 #include <string>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "components/policy/core/common/cloud/device_management_service.h"
 #include "components/policy/core/common/cloud/dm_auth.h"
 #include "components/policy/core/common/cloud/dmserver_job_configurations.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 #include "testing/gmock/include/gmock/gmock.h"
-
-namespace network {
-class SharedURLLoaderFactory;
-}
 
 namespace policy {
 
@@ -27,6 +23,10 @@ class MockDeviceManagementServiceConfiguration
   MockDeviceManagementServiceConfiguration();
   explicit MockDeviceManagementServiceConfiguration(
       const std::string& server_url);
+  MockDeviceManagementServiceConfiguration(
+      const MockDeviceManagementServiceConfiguration&) = delete;
+  MockDeviceManagementServiceConfiguration& operator=(
+      const MockDeviceManagementServiceConfiguration&) = delete;
   ~MockDeviceManagementServiceConfiguration() override;
 
   std::string GetDMServerUrl() const override;
@@ -34,13 +34,9 @@ class MockDeviceManagementServiceConfiguration
   std::string GetPlatformParameter() const override;
   std::string GetRealtimeReportingServerUrl() const override;
   std::string GetEncryptedReportingServerUrl() const override;
-  std::string GetReportingConnectorServerUrl(
-      content::BrowserContext* context) const override;
 
  private:
   const std::string server_url_;
-
-  DISALLOW_COPY_AND_ASSIGN(MockDeviceManagementServiceConfiguration);
 };
 
 class MockJobCreationHandler {
@@ -78,6 +74,8 @@ class FakeDeviceManagementService : public DeviceManagementService {
       std::map<std::string, std::string>* query_params);
   JobAction CaptureRequest(
       enterprise_management::DeviceManagementRequest* request);
+  JobAction CaptureTimeout(base::TimeDelta* timeout);
+  JobAction CaptureSendsCookies(bool* sends_cookies);
 
   // Convenience actions to post a task which will call |SetResponseForTesting|
   // on the job.
@@ -128,7 +126,7 @@ class FakeDeviceManagementService : public DeviceManagementService {
   std::unique_ptr<Job> CreateJob(
       std::unique_ptr<JobConfiguration> config) override;
 
-  MockJobCreationHandler* creation_handler_;
+  raw_ptr<MockJobCreationHandler> creation_handler_;
 };
 
 // A fake implementation of DMServerJobConfiguration that can be used in tests
@@ -145,22 +143,15 @@ class FakeJobConfiguration : public DMServerJobConfiguration {
                                        const std::string& response_body)>
       RetryCallback;
 
-  explicit FakeJobConfiguration(DeviceManagementService* service);
-  FakeJobConfiguration(
-      DeviceManagementService* service,
-      JobType type,
-      const std::string& client_id,
-      bool critical,
-      DMAuth auth_data,
-      absl::optional<std::string> oauth_token,
-      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-      FakeCallback callback,
-      RetryCallback retry_callback,
-      RetryCallback should_retry_callback);
+  FakeJobConfiguration(DMServerJobConfiguration::CreateParams params,
+                       FakeCallback callback,
+                       RetryCallback retry_callback,
+                       RetryCallback should_retry_callback);
   ~FakeJobConfiguration() override;
 
   void SetRequestPayload(const std::string& request_payload);
   void SetShouldRetryResponse(DeviceManagementService::Job::RetryMethod method);
+  void SetTimeoutDuration(base::TimeDelta timeout);
 
  private:
   DeviceManagementService::Job::RetryMethod ShouldRetry(

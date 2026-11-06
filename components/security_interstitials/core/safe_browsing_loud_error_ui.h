@@ -1,11 +1,10 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_SECURITY_INTERSTITIALS_CORE_SAFE_BROWSING_LOUD_ERROR_UI_H_
 #define COMPONENTS_SECURITY_INTERSTITIALS_CORE_SAFE_BROWSING_LOUD_ERROR_UI_H_
 
-#include "base/macros.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "components/security_interstitials/core/base_safe_browsing_error_ui.h"
@@ -28,7 +27,6 @@ class SafeBrowsingLoudErrorUI
  public:
   SafeBrowsingLoudErrorUI(
       const GURL& request_url,
-      const GURL& main_frame_url,
       BaseSafeBrowsingErrorUI::SBInterstitialReason reason,
       const BaseSafeBrowsingErrorUI::SBErrorDisplayOptions& display_options,
       const std::string& app_locale,
@@ -36,10 +34,13 @@ class SafeBrowsingLoudErrorUI
       ControllerClient* controller,
       bool created_prior_to_navigation);
 
+  SafeBrowsingLoudErrorUI(const SafeBrowsingLoudErrorUI&) = delete;
+  SafeBrowsingLoudErrorUI& operator=(const SafeBrowsingLoudErrorUI&) = delete;
+
   ~SafeBrowsingLoudErrorUI() override;
 
   // Implement BaseSafeBrowsingErrorUI.
-  void PopulateStringsForHtml(base::Value* load_time_data) override;
+  void PopulateStringsForHtml(base::DictValue& load_time_data) override;
   void HandleCommand(SecurityInterstitialCommand command) override;
 
   int GetHTMLTemplateId() const override;
@@ -47,16 +48,21 @@ class SafeBrowsingLoudErrorUI
  private:
   // Fills the passed dictionary with the values to be passed to the template
   // when creating the HTML.
-  void PopulateExtendedReportingOption(base::Value* load_time_data);
-  void PopulateMalwareLoadTimeData(base::Value* load_time_data);
-  void PopulateHarmfulLoadTimeData(base::Value* load_time_data);
-  void PopulatePhishingLoadTimeData(base::Value* load_time_data);
-  void PopulateBillingLoadTimeData(base::Value* load_time_data);
-  void PopulateEnhancedProtectionMessage(base::Value* load_time_data);
+  void PopulateExtendedReportingOption(base::DictValue& load_time_data);
+  void PopulateMalwareLoadTimeData(base::DictValue& load_time_data);
+  void PopulateHarmfulLoadTimeData(base::DictValue& load_time_data);
+  void PopulatePhishingLoadTimeData(base::DictValue& load_time_data);
+  void PopulateBillingLoadTimeData(base::DictValue& load_time_data);
+  void PopulateEnhancedProtectionMessage(base::DictValue& load_time_data);
+
+  // Handle update to interstitial_interaction_data_ when a command occurs.
+  void UpdateInterstitialInteractionData(SecurityInterstitialCommand command);
+
+  void OpenHelpCenter(bool always_open_in_new_tab);
+  void OpenDiagnostic(bool always_open_in_new_tab);
+  void ReportPhishingError(bool always_open_in_new_tab);
 
   const bool created_prior_to_navigation_;
-
-  DISALLOW_COPY_AND_ASSIGN(SafeBrowsingLoudErrorUI);
 };
 
 }  // security_interstitials

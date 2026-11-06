@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,9 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_LOADER_IDLENESS_DETECTOR_H_
 
 #include "base/task/sequence_manager/task_time_observer.h"
-#include "base/time/default_tick_clock.h"
+#include "base/time/time.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/timer.h"
 
 namespace blink {
@@ -16,24 +16,27 @@ namespace blink {
 class LocalFrame;
 class ResourceFetcher;
 
-// IdlenessDetector observes the resource request count every time a load is
-// finshed after DOMContentLoadedEventEnd is fired. It emits a network almost
-// idle signal when there are no more than 2 network connections active in 0.5
-// seconds, and a network idle signal when there are 0 network connections
-// active in 0.5 seconds.
+// Once started, IdlenessDetector observes the resource request count every time
+// a resource load is finished. It emits a network almost idle signal when there
+// are no more than 2 network connections active in 0.5 seconds, and a network
+// idle signal when there are 0 network connections active in 0.5 seconds and
+// then stops observing. The detector is always run after a
+// DOMContentLoadedEventEnd is fired but can also be re-started explicitly after
+// it finishes observation.
 class CORE_EXPORT IdlenessDetector
     : public GarbageCollected<IdlenessDetector>,
       public base::sequence_manager::TaskTimeObserver {
  public:
-  IdlenessDetector(
-      LocalFrame*,
-      const base::TickClock* = base::DefaultTickClock::GetInstance());
+  explicit IdlenessDetector(LocalFrame*);
   IdlenessDetector(const IdlenessDetector&) = delete;
   IdlenessDetector& operator=(const IdlenessDetector&) = delete;
 
   void Shutdown();
   void WillCommitLoad();
   void DomContentLoadedEventFired();
+  void DidDropNavigation();
+  void StartIfNeeded();
+
   // TODO(lpy) Don't need to pass in fetcher once the command line of disabling
   // PlzNavigate is removed.
   void OnWillSendRequest(ResourceFetcher*);
@@ -41,7 +44,6 @@ class CORE_EXPORT IdlenessDetector
 
   base::TimeTicks GetNetworkAlmostIdleTime();
   base::TimeTicks GetNetworkIdleTime();
-  bool NetworkIsAlmostIdle();
 
   void Trace(Visitor*) const;
 
@@ -51,17 +53,21 @@ class CORE_EXPORT IdlenessDetector
   // The page is quiet if there are no more than 2 active network requests for
   // this duration of time.
   static constexpr base::TimeDelta kNetworkQuietWindow =
-      base::TimeDelta::FromMilliseconds(500);
-  static constexpr base::TimeDelta kNetworkQuietWatchdog =
-      base::TimeDelta::FromSeconds(2);
+      base::Milliseconds(500);
+  static constexpr base::TimeDelta kNetworkQuietWatchdog = base::Seconds(2);
   static constexpr int kNetworkQuietMaximumConnections = 2;
 
   // TaskTimeObserver implementation.
   void WillProcessTask(base::TimeTicks start_time) override;
   void DidProcessTask(base::TimeTicks start_time,
-                      base::TimeTicks end_time) override;
+                      base::TimeTicks end_time,
+                      base::TimeTicks desired_execution_time) override;
 
+  void Start();
   void Stop();
+  bool HasCompleted() const {
+    return !in_network_0_quiet_period_ && !in_network_2_quiet_period_;
+  }
 
   // This method and the associated timer appear to have no effect, but they
   // have the side effect of triggering a task, which will send WillProcessTask
@@ -69,12 +75,10 @@ class CORE_EXPORT IdlenessDetector
   void NetworkQuietTimerFired(TimerBase*);
 
   Member<LocalFrame> local_frame_;
-  bool task_observer_added_;
+  bool task_observer_added_ = false;
 
   bool in_network_0_quiet_period_ = true;
   bool in_network_2_quiet_period_ = true;
-
-  const base::TickClock* clock_;
 
   base::TimeDelta network_quiet_window_ = kNetworkQuietWindow;
   // Store the accumulated time of network quiet.

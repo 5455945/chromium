@@ -1,45 +1,54 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/peerconnection/rtc_sctp_transport.h"
 
+#include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 
+#include "base/check.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/notreached.h"
+#include "base/task/single_thread_task_runner.h"
+#include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/public/web/web_local_frame.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_sctp_transport_state.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
+#include "third_party/blink/renderer/core/event_type_names.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
-#include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer.h"
 #include "third_party/blink/renderer/modules/peerconnection/adapters/sctp_transport_proxy.h"
 #include "third_party/blink/renderer/modules/peerconnection/peer_connection_dependency_factory.h"
 #include "third_party/blink/renderer/modules/peerconnection/rtc_dtls_transport.h"
-#include "third_party/blink/renderer/modules/peerconnection/rtc_error_util.h"
-#include "third_party/blink/renderer/platform/scheduler/public/thread.h"
-#include "third_party/webrtc/api/peer_connection_interface.h"
+#include "third_party/blink/renderer/platform/heap/visitor.h"
+#include "third_party/blink/renderer/platform/wtf/casting.h"
+#include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
+#include "third_party/webrtc/api/scoped_refptr.h"
 #include "third_party/webrtc/api/sctp_transport_interface.h"
 
 namespace blink {
 
 namespace {
-String TransportStateToString(webrtc::SctpTransportState state) {
+V8RTCSctpTransportState::Enum TransportStateToEnum(
+    webrtc::SctpTransportState state) {
   switch (state) {
-    case webrtc::SctpTransportState::kNew:
-      // Not supposed to happen. DtlsTransport should
-      // only be visible after reaching "connecting" state.
-      NOTREACHED();
-      return String("new");
     case webrtc::SctpTransportState::kConnecting:
-      return String("connecting");
+      return V8RTCSctpTransportState::Enum::kConnecting;
     case webrtc::SctpTransportState::kConnected:
-      return String("connected");
+      return V8RTCSctpTransportState::Enum::kConnected;
     case webrtc::SctpTransportState::kClosed:
-      return String("closed");
-    default:
-      NOTREACHED();
-      return String("failed");
+      return V8RTCSctpTransportState::Enum::kClosed;
+    case webrtc::SctpTransportState::kNew:
+    case webrtc::SctpTransportState::kNumValues:
+      // These shouldn't occur.
+      break;
   }
+  NOTREACHED();
 }
 
 std::unique_ptr<SctpTransportProxy> CreateProxy(
@@ -52,15 +61,17 @@ std::unique_ptr<SctpTransportProxy> CreateProxy(
   DCHECK(worker_thread);
   LocalFrame* frame = To<LocalDOMWindow>(context)->GetFrame();
   DCHECK(frame);
-  return SctpTransportProxy::Create(*frame, main_thread, worker_thread,
-                                    native_transport, delegate);
+  return SctpTransportProxy::Create(
+      *frame, main_thread, worker_thread,
+      webrtc::scoped_refptr<webrtc::SctpTransportInterface>(native_transport),
+      delegate);
 }
 
 }  // namespace
 
 RTCSctpTransport::RTCSctpTransport(
     ExecutionContext* context,
-    rtc::scoped_refptr<webrtc::SctpTransportInterface> native_transport)
+    webrtc::scoped_refptr<webrtc::SctpTransportInterface> native_transport)
     : RTCSctpTransport(context,
                        native_transport,
                        context->GetTaskRunner(TaskType::kNetworking),
@@ -69,25 +80,25 @@ RTCSctpTransport::RTCSctpTransport(
 
 RTCSctpTransport::RTCSctpTransport(
     ExecutionContext* context,
-    rtc::scoped_refptr<webrtc::SctpTransportInterface> native_transport,
+    webrtc::scoped_refptr<webrtc::SctpTransportInterface> native_transport,
     scoped_refptr<base::SingleThreadTaskRunner> main_thread,
     scoped_refptr<base::SingleThreadTaskRunner> worker_thread)
     : ExecutionContextClient(context),
       current_state_(webrtc::SctpTransportState::kNew),
       native_transport_(native_transport),
       proxy_(CreateProxy(context,
-                         native_transport,
+                         native_transport.get(),
                          this,
                          main_thread,
                          worker_thread)) {}
 
 RTCSctpTransport::~RTCSctpTransport() {}
 
-String RTCSctpTransport::state() const {
+V8RTCSctpTransportState RTCSctpTransport::state() const {
   if (closed_from_owner_) {
-    return TransportStateToString(webrtc::SctpTransportState::kClosed);
+    return V8RTCSctpTransportState(V8RTCSctpTransportState::Enum::kClosed);
   }
-  return TransportStateToString(current_state_.state());
+  return V8RTCSctpTransportState(TransportStateToEnum(current_state_.state()));
 }
 
 double RTCSctpTransport::maxMessageSize() const {
@@ -100,17 +111,17 @@ double RTCSctpTransport::maxMessageSize() const {
   return std::numeric_limits<double>::infinity();
 }
 
-absl::optional<int16_t> RTCSctpTransport::maxChannels() const {
+std::optional<int16_t> RTCSctpTransport::maxChannels() const {
   if (!current_state_.MaxChannels())
-    return absl::nullopt;
+    return std::nullopt;
   return current_state_.MaxChannels().value();
 }
 
 RTCDtlsTransport* RTCSctpTransport::transport() const {
-  return dtls_transport_;
+  return dtls_transport_.Get();
 }
 
-rtc::scoped_refptr<webrtc::SctpTransportInterface>
+webrtc::scoped_refptr<webrtc::SctpTransportInterface>
 RTCSctpTransport::native_transport() {
   return native_transport_;
 }
@@ -159,7 +170,7 @@ ExecutionContext* RTCSctpTransport::GetExecutionContext() const {
 
 void RTCSctpTransport::Trace(Visitor* visitor) const {
   visitor->Trace(dtls_transport_);
-  EventTargetWithInlineData::Trace(visitor);
+  EventTarget::Trace(visitor);
   ExecutionContextClient::Trace(visitor);
   SctpTransportProxy::Delegate::Trace(visitor);
 }

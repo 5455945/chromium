@@ -1,4 +1,4 @@
-# Copyright 2019 The Chromium Authors. All rights reserved.
+# Copyright 2019 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -14,11 +14,17 @@ class _Feature(str):
     def __init__(self, value):
         str.__init__(self)
         self._is_context_dependent = (
-            RuntimeEnabledFeatures.is_context_dependent(self))
+            RuntimeEnabledFeatures.is_context_dependent(self)
+        )
+        self._is_origin_trial = RuntimeEnabledFeatures.is_origin_trial(self)
 
     @property
     def is_context_dependent(self):
         return self._is_context_dependent
+
+    @property
+    def is_origin_trial(self):
+        return self._is_origin_trial
 
 
 class _GlobalNameAndFeature(object):
@@ -44,32 +50,81 @@ class _GlobalNameAndFeature(object):
 class Exposure(object):
     """Represents a set of conditions under which the construct is exposed."""
 
+    _REQUIRE_INIT_MESSAGE = "Exposure.init must be called in advance."
+    _is_initialized = False
+    _global_name_to_global_scopes = {}
+
+    @classmethod
+    def init(cls, global_name_to_global_scopes):
+        """
+        Args:
+            global_name_to_global_scopes: A dict from a global name to the
+                identifiers of the interfaces that implement it.
+        """
+        assert isinstance(global_name_to_global_scopes, dict)
+        assert all(
+            isinstance(name, str)
+            and isinstance(scopes, (frozenset, list, set, tuple))
+            and all(isinstance(scope, str) for scope in scopes)
+            for name, scopes in global_name_to_global_scopes.items()
+        )
+        cls._global_name_to_global_scopes = {
+            name: frozenset(scopes)
+            for name, scopes in global_name_to_global_scopes.items()
+        }
+        cls._is_initialized = True
+
+    @classmethod
+    def get_global_name_to_global_scopes(cls):
+        """
+        Returns a dict from a global name (e.g. "Worker") to the frozenset of
+        identifiers of the [Global] or [TargetOfExposed] interfaces that
+        implement it (e.g.
+        {"DedicatedWorkerGlobalScope", "SharedWorkerGlobalScope", ...}).
+        """
+        assert cls._is_initialized, cls._REQUIRE_INIT_MESSAGE
+        return cls._global_name_to_global_scopes
+
     def __init__(self, other=None):
         assert other is None or isinstance(other, Exposure)
 
         if other:
             self._global_names_and_features = tuple(
-                other.global_names_and_features)
+                other.global_names_and_features
+            )
             self._runtime_enabled_features = tuple(
-                other.runtime_enabled_features)
+                other.runtime_enabled_features
+            )
             self._context_independent_runtime_enabled_features = tuple(
-                other.context_independent_runtime_enabled_features)
+                other.context_independent_runtime_enabled_features
+            )
             self._context_dependent_runtime_enabled_features = tuple(
-                other.context_dependent_runtime_enabled_features)
+                other.context_dependent_runtime_enabled_features
+            )
+            self._origin_trial_features = tuple(other._origin_trial_features)
             self._context_enabled_features = tuple(
-                other.context_enabled_features)
+                other.context_enabled_features
+            )
             self._only_in_coi_contexts = other.only_in_coi_contexts
-            self._only_in_direct_socket_contexts = (
-                other.only_in_direct_socket_contexts)
+            self._only_in_coi_contexts_or_runtime_enabled_features = tuple(
+                other.only_in_coi_contexts_or_runtime_enabled_features
+            )
+            self._only_in_injection_mitigated_contexts = (
+                other.only_in_injection_mitigated_contexts
+            )
+            self._only_in_isolated_contexts = other.only_in_isolated_contexts
             self._only_in_secure_contexts = other.only_in_secure_contexts
         else:
             self._global_names_and_features = tuple()
             self._runtime_enabled_features = tuple()
             self._context_independent_runtime_enabled_features = tuple()
             self._context_dependent_runtime_enabled_features = tuple()
+            self._origin_trial_features = tuple()
             self._context_enabled_features = tuple()
             self._only_in_coi_contexts = False
-            self._only_in_direct_socket_contexts = False
+            self._only_in_coi_contexts_or_runtime_enabled_features = tuple()
+            self._only_in_injection_mitigated_contexts = False
+            self._only_in_isolated_contexts = False
             self._only_in_secure_contexts = None
 
     @property
@@ -99,6 +154,13 @@ class Exposure(object):
         return self._context_dependent_runtime_enabled_features
 
     @property
+    def origin_trial_features(self):
+        """
+        Returns a list of origin trial features.
+        """
+        return self._origin_trial_features
+
+    @property
     def context_enabled_features(self):
         """
         Returns a list of context enabled features.  This construct is exposed
@@ -113,20 +175,41 @@ class Exposure(object):
         isolated contexts. The returned value is a boolean: True if the
         construct is restricted to COI contexts, or False if not.
 
-        https://heycam.github.io/webidl/#CrossOriginIsolated
+        https://webidl.spec.whatwg.org/#CrossOriginIsolated
         """
         return self._only_in_coi_contexts
 
     @property
-    def only_in_direct_socket_contexts(self):
+    def only_in_coi_contexts_or_runtime_enabled_features(self):
         """
-        Returns whether this construct is available only in contexts deemed
-        suitable to host Direct Sockets. The returned value is a boolean:
-        True if the construct is restricted to these contexts, False if not.
+        Returns a list of runtime enabled features that affects cross-origin
+        isolation.
+
+        If the list is not empty, this construct is available only in
+        cross-origin isolated contexts or when any of the specified runtime
+        enabled features (supposed to be origin trials) gets enabled.
+        """
+        return self._only_in_coi_contexts_or_runtime_enabled_features
+
+    @property
+    def only_in_injection_mitigated_contexts(self):
+        """
+        Returns whether this construct is available only in contexts with
+        sufficient injection attack mitigations. The returned value is a
+        boolean: True if the construct is restricted, False otherwise.
+        """
+        return self._only_in_injection_mitigated_contexts
+
+    @property
+    def only_in_isolated_contexts(self):
+        """
+        Returns whether this construct is available only in isolated app
+        contexts. The returned value is a boolean: True if the construct
+        is restricted to isolated application contexts, False if not.
 
         TODO(crbug.com/1206150): This needs a specification (and definition).
         """
-        return self._only_in_direct_socket_contexts
+        return self._only_in_isolated_contexts
 
     @property
     def only_in_secure_contexts(self):
@@ -136,7 +219,7 @@ class Exposure(object):
         restricted in secure contexts, or False: never restricted) or a list of
         flag names (restricted only when all flags are enabled).
 
-        https://heycam.github.io/webidl/#dfn-available-only-in-secure-contexts
+        https://webidl.spec.whatwg.org/#dfn-available-only-in-secure-contexts
         """
         if self._only_in_secure_contexts is None:
             return False
@@ -150,14 +233,19 @@ class Exposure(object):
             global_names: When specified, it's taken into account that the
                 global object implements |global_names|.
         """
-        assert (global_names is None
-                or (isinstance(global_names, (list, tuple))
-                    and all(isinstance(name, str) for name in global_names)))
+        assert global_names is None or (
+            isinstance(global_names, (list, tuple))
+            and all(isinstance(name, str) for name in global_names)
+        )
 
-        if (self.context_dependent_runtime_enabled_features
-                or self.context_enabled_features or self.only_in_coi_contexts
-                or self.only_in_direct_socket_contexts
-                or self.only_in_secure_contexts):
+        if (
+            self.context_dependent_runtime_enabled_features
+            or self.context_enabled_features
+            or self.only_in_coi_contexts
+            or self.only_in_injection_mitigated_contexts
+            or self.only_in_isolated_contexts
+            or self.only_in_secure_contexts
+        ):
             return True
 
         if not global_names:
@@ -171,6 +259,35 @@ class Exposure(object):
                 is_context_dependent = True
         return is_context_dependent
 
+    def unconditional_global_scopes(self):
+        """
+        Returns the frozenset of identifiers of the [Global] or
+        [TargetOfExposed] interfaces on which this construct is exposed
+        according to its [Exposed] alone, with global names such as "Worker"
+        resolved into the concrete global scopes that implement them.
+
+        Returns None if this cannot be determined statically, i.e. there is no
+        [Exposed], or [Exposed] is conditional on a feature
+        ([Exposed=(Window Feature)]), or it refers to a name that no [Global]
+        or [TargetOfExposed] interface implements.
+        """
+        entries = self.global_names_and_features
+        if not entries:
+            return None
+        name_to_scopes = Exposure.get_global_name_to_global_scopes()
+        scopes = set()
+        for entry in entries:
+            if entry.feature is not None:
+                return None
+            if entry.global_name == "*":
+                for name_scopes in name_to_scopes.values():
+                    scopes.update(name_scopes)
+                continue
+            if entry.global_name not in name_to_scopes:
+                return None
+            scopes.update(name_to_scopes[entry.global_name])
+        return frozenset(scopes)
+
 
 class ExposureMutable(Exposure):
     def __init__(self):
@@ -180,9 +297,12 @@ class ExposureMutable(Exposure):
         self._runtime_enabled_features = []
         self._context_independent_runtime_enabled_features = []
         self._context_dependent_runtime_enabled_features = []
+        self._origin_trial_features = []
         self._context_enabled_features = []
         self._only_in_coi_contexts = False
-        self._only_in_direct_socket_contexts = False
+        self._only_in_coi_contexts_or_runtime_enabled_features = []
+        self._only_in_injection_mitigated_contexts = False
+        self._only_in_isolated_contexts = False
         self._only_in_secure_contexts = None
 
     def __getstate__(self):
@@ -193,7 +313,8 @@ class ExposureMutable(Exposure):
 
     def add_global_name_and_feature(self, global_name, feature_name=None):
         self._global_names_and_features.append(
-            _GlobalNameAndFeature(global_name, feature_name))
+            _GlobalNameAndFeature(global_name, feature_name)
+        )
 
     def add_runtime_enabled_feature(self, name):
         assert isinstance(name, str)
@@ -202,6 +323,8 @@ class ExposureMutable(Exposure):
             self._context_dependent_runtime_enabled_features.append(feature)
         else:
             self._context_independent_runtime_enabled_features.append(feature)
+        if feature.is_origin_trial:
+            self._origin_trial_features.append(feature)
         self._runtime_enabled_features.append(feature)
 
     def add_context_enabled_feature(self, name):
@@ -212,18 +335,29 @@ class ExposureMutable(Exposure):
         assert isinstance(value, bool)
         self._only_in_coi_contexts = value
 
-    def set_only_in_direct_socket_contexts(self, value):
+    def add_only_in_coi_contexts_or_runtime_enabled_feature(self, name):
+        assert isinstance(name, str)
+        self._only_in_coi_contexts_or_runtime_enabled_features.append(
+            _Feature(name)
+        )
+
+    def set_only_in_injection_mitigated_contexts(self, value):
         assert isinstance(value, bool)
-        self._only_in_direct_socket_contexts = value
+        self._only_in_injection_mitigated_contexts = value
+
+    def set_only_in_isolated_contexts(self, value):
+        assert isinstance(value, bool)
+        self._only_in_isolated_contexts = value
 
     def set_only_in_secure_contexts(self, value):
-        assert (isinstance(value, (bool, str))
-                or (isinstance(value, (list, tuple))
-                    and all(isinstance(name, str) for name in value)))
+        assert isinstance(value, (bool, str)) or (
+            isinstance(value, (list, tuple))
+            and all(isinstance(name, str) for name in value)
+        )
         assert self._only_in_secure_contexts is None
         if isinstance(value, bool):
             self._only_in_secure_contexts = value
         elif isinstance(value, str):
-            self._only_in_secure_contexts = (_Feature(value), )
+            self._only_in_secure_contexts = (_Feature(value),)
         else:
             self._only_in_secure_contexts = tuple(map(_Feature, value))

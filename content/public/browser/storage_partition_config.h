@@ -1,16 +1,17 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_PUBLIC_BROWSER_STORAGE_PARTITION_CONFIG_H_
 #define CONTENT_PUBLIC_BROWSER_STORAGE_PARTITION_CONFIG_H_
 
+#include <optional>
 #include <string>
+#include <string_view>
 
 #include "base/check.h"
 #include "base/gtest_prod_util.h"
 #include "content/common/content_export.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace content {
 class BrowserContext;
@@ -22,6 +23,7 @@ class BrowserContext;
 // uniqueness key to lookup StoragePartition objects in the global map.
 class CONTENT_EXPORT StoragePartitionConfig {
  public:
+  StoragePartitionConfig();  // Needed by the SiteInfo default constructor
   StoragePartitionConfig(const StoragePartitionConfig&);
   StoragePartitionConfig& operator=(const StoragePartitionConfig&);
 
@@ -40,12 +42,12 @@ class CONTENT_EXPORT StoragePartitionConfig {
   // the |in_memory| parameter. This is because these profiles are not allowed
   // to persist information on disk.
   static StoragePartitionConfig Create(BrowserContext* browser_context,
-                                       const std::string& partition_domain,
-                                       const std::string& partition_name,
+                                       std::string_view partition_domain,
+                                       std::string_view partition_name,
                                        bool in_memory);
 
-  std::string partition_domain() const { return partition_domain_; }
-  std::string partition_name() const { return partition_name_; }
+  const std::string& partition_domain() const { return partition_domain_; }
+  const std::string& partition_name() const { return partition_name_; }
   bool in_memory() const { return in_memory_; }
 
   // Returns true if this config was created by CreateDefault() or is
@@ -66,10 +68,11 @@ class CONTENT_EXPORT StoragePartitionConfig {
     if (fallback != FallbackMode::kNone) {
       DCHECK(!is_default());
       DCHECK(!partition_domain_.empty());
-      // TODO(acollwell): Ideally we shouldn't have storage partition configs
-      // that differ only in their fallback mode, but unfortunately that isn't
-      // true. When that is fixed this can be made more robust by disallowing
-      // fallback from storage partitions with an empty partition name.
+      // TODO(crbug.com/40208586): Ideally we shouldn't have storage
+      // partition configs that differ only in their fallback mode, but
+      // unfortunately that isn't true. When that is fixed this can be made more
+      // robust by disallowing fallback from storage partitions with an empty
+      // partition name.
       // DCHECK(!partition_name_.empty());
     }
     fallback_to_partition_domain_for_blob_urls_ = fallback;
@@ -77,17 +80,22 @@ class CONTENT_EXPORT StoragePartitionConfig {
   FallbackMode fallback_to_partition_domain_for_blob_urls() const {
     return fallback_to_partition_domain_for_blob_urls_;
   }
-  absl::optional<StoragePartitionConfig> GetFallbackForBlobUrls() const;
+  std::optional<StoragePartitionConfig> GetFallbackForBlobUrls() const;
 
-  bool operator<(const StoragePartitionConfig& rhs) const;
-  bool operator==(const StoragePartitionConfig& rhs) const;
-  bool operator!=(const StoragePartitionConfig& rhs) const;
+  friend bool operator==(const StoragePartitionConfig&,
+                         const StoragePartitionConfig&) = default;
+  friend auto operator<=>(const StoragePartitionConfig&,
+                          const StoragePartitionConfig&) = default;
 
  private:
+  friend StoragePartitionConfig CreateStoragePartitionConfigForTesting(
+      bool,
+      const std::string&,
+      const std::string&);
   FRIEND_TEST_ALL_PREFIXES(StoragePartitionConfigTest, OperatorLess);
 
-  StoragePartitionConfig(const std::string& partition_domain,
-                         const std::string& partition_name,
+  StoragePartitionConfig(std::string_view partition_domain,
+                         std::string_view partition_name,
                          bool in_memory);
 
   std::string partition_domain_;
@@ -99,42 +107,6 @@ class CONTENT_EXPORT StoragePartitionConfig {
 
 CONTENT_EXPORT std::ostream& operator<<(std::ostream& out,
                                         const StoragePartitionConfig& config);
-
-// Represents the storage partition ID that is used as the key for the
-// SessionStorageNamespaceMap. This type is to help facilitate migrating the
-// map key away from a string to a StoragePartitionConfig.
-class CONTENT_EXPORT StoragePartitionId {
- public:
-  explicit StoragePartitionId(BrowserContext* browser_context);
-  StoragePartitionId(const std::string& partition_id,
-                     const StoragePartitionConfig& config);
-  StoragePartitionId(const StoragePartitionId&) = default;
-  StoragePartitionId& operator=(const StoragePartitionId&) = default;
-
-  const StoragePartitionConfig& config() const { return config_; }
-
-  bool operator==(const StoragePartitionId& rhs) const {
-    return config_ == rhs.config_;
-  }
-  bool operator!=(const StoragePartitionId& rhs) const {
-    return config_ != rhs.config_;
-  }
-  bool operator<(const StoragePartitionId& rhs) const {
-    return config_ < rhs.config_;
-  }
-
-  // String representation of this object for debug logging purposes.
-  std::string ToString() const;
-
- private:
-  std::string id_;
-
-  // Config generated with the same information used to generate |id_|.
-  // Currently this field is being used to determine if we can replace the
-  // string representation with a StoragePartitionConfig, and |id_| is ignored
-  // in favor of |config_|, but the results are expected to be equivalent.
-  StoragePartitionConfig config_;
-};
 
 }  // namespace content
 

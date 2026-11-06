@@ -1,27 +1,21 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/chrome_elf/nt_registry/nt_registry.h"
 
 #include <assert.h>
+#include <ntstatus.h>
+#include <stdint.h>
 #include <stdlib.h>
 
 #include <memory>
 #include <string>
 
-namespace {
+#include "base/compiler_specific.h"
+#include "chrome/chrome_elf/nt_registry/nt_registry_functions.h"
 
-// Function pointers used for registry access.
-RtlInitUnicodeStringFunction g_rtl_init_unicode_string = nullptr;
-NtCreateKeyFunction g_nt_create_key = nullptr;
-NtDeleteKeyFunction g_nt_delete_key = nullptr;
-NtOpenKeyExFunction g_nt_open_key_ex = nullptr;
-NtCloseFunction g_nt_close = nullptr;
-NtQueryKeyFunction g_nt_query_key = nullptr;
-NtEnumerateKeyFunction g_nt_enumerate_key = nullptr;
-NtQueryValueKeyFunction g_nt_query_value_key = nullptr;
-NtSetValueKeyFunction g_nt_set_value_key = nullptr;
+namespace {
 
 // Lazy init.  No concern about concurrency in chrome_elf.
 bool g_initialized = false;
@@ -29,7 +23,6 @@ bool g_system_install = false;
 bool g_wow64_proc = false;
 wchar_t g_kRegPathHKLM[] = L"\\Registry\\Machine\\";
 wchar_t g_kRegPathHKCU[nt::g_kRegMaxPathLen + 1] = L"";
-wchar_t g_current_user_sid_string[nt::g_kRegMaxPathLen + 1] = L"";
 
 // Max number of tries for system API calls when STATUS_BUFFER_OVERFLOW or
 // STATUS_BUFFER_TOO_SMALL can be returned.
@@ -50,12 +43,16 @@ bool IsThisProcSystem() {
   // If our command line starts with the "Program Files" or
   // "Program Files (x86)" path, we're system.
   DWORD ret = ::GetEnvironmentVariable(L"PROGRAMFILES", program_dir, MAX_PATH);
-  if (ret && ret < MAX_PATH && !::wcsncmp(cmd_line, program_dir, ret))
+  if (ret && ret < MAX_PATH &&
+      !UNSAFE_TODO(::wcsncmp(cmd_line, program_dir, ret))) {
     return true;
+  }
 
   ret = ::GetEnvironmentVariable(L"PROGRAMFILES(X86)", program_dir, MAX_PATH);
-  if (ret && ret < MAX_PATH && !::wcsncmp(cmd_line, program_dir, ret))
+  if (ret && ret < MAX_PATH &&
+      !UNSAFE_TODO(::wcsncmp(cmd_line, program_dir, ret))) {
     return true;
+  }
 
   return false;
 }
@@ -73,70 +70,22 @@ bool IsThisProcWow64() {
     return false;
   if (!is_wow64_process(::GetCurrentProcess(), &is_wow64))
     return false;
-  return is_wow64 ? true : false;
+  return !!is_wow64;
 }
 
 bool InitNativeRegApi() {
-  HMODULE ntdll = ::GetModuleHandleW(L"ntdll.dll");
-
-  // Setup the global function pointers for registry access.
-  g_rtl_init_unicode_string = reinterpret_cast<RtlInitUnicodeStringFunction>(
-      ::GetProcAddress(ntdll, "RtlInitUnicodeString"));
-
-  g_nt_create_key = reinterpret_cast<NtCreateKeyFunction>(
-      ::GetProcAddress(ntdll, "NtCreateKey"));
-
-  g_nt_delete_key = reinterpret_cast<NtDeleteKeyFunction>(
-      ::GetProcAddress(ntdll, "NtDeleteKey"));
-
-  g_nt_open_key_ex = reinterpret_cast<NtOpenKeyExFunction>(
-      ::GetProcAddress(ntdll, "NtOpenKeyEx"));
-
-  g_nt_close =
-      reinterpret_cast<NtCloseFunction>(::GetProcAddress(ntdll, "NtClose"));
-
-  g_nt_query_key = reinterpret_cast<NtQueryKeyFunction>(
-      ::GetProcAddress(ntdll, "NtQueryKey"));
-
-  g_nt_enumerate_key = reinterpret_cast<NtEnumerateKeyFunction>(
-      ::GetProcAddress(ntdll, "NtEnumerateKey"));
-
-  g_nt_query_value_key = reinterpret_cast<NtQueryValueKeyFunction>(
-      ::GetProcAddress(ntdll, "NtQueryValueKey"));
-
-  g_nt_set_value_key = reinterpret_cast<NtSetValueKeyFunction>(
-      ::GetProcAddress(ntdll, "NtSetValueKey"));
-
-  if (!g_rtl_init_unicode_string || !g_nt_create_key || !g_nt_open_key_ex ||
-      !g_nt_delete_key || !g_nt_close || !g_nt_query_key ||
-      !g_nt_enumerate_key || !g_nt_query_value_key || !g_nt_set_value_key)
-    return false;
-
   // We need to set HKCU based on the sid of the current user account.
-  RtlFormatCurrentUserKeyPathFunction rtl_current_user_string =
-      reinterpret_cast<RtlFormatCurrentUserKeyPathFunction>(
-          ::GetProcAddress(ntdll, "RtlFormatCurrentUserKeyPath"));
-
-  RtlFreeUnicodeStringFunction rtl_free_unicode_str =
-      reinterpret_cast<RtlFreeUnicodeStringFunction>(
-          ::GetProcAddress(ntdll, "RtlFreeUnicodeString"));
-
-  if (!rtl_current_user_string || !rtl_free_unicode_str)
-    return false;
-
   UNICODE_STRING current_user_reg_path;
-  if (!NT_SUCCESS(rtl_current_user_string(&current_user_reg_path)))
+  if (!NT_SUCCESS(::RtlFormatCurrentUserKeyPath(&current_user_reg_path))) {
     return false;
+  }
 
   // Finish setting up global HKCU path.
-  ::wcsncat(g_kRegPathHKCU, current_user_reg_path.Buffer, nt::g_kRegMaxPathLen);
-  ::wcsncat(g_kRegPathHKCU, L"\\",
-            (nt::g_kRegMaxPathLen - ::wcslen(g_kRegPathHKCU)));
-  // Keep the sid string as well.
-  wchar_t* ptr = ::wcsrchr(current_user_reg_path.Buffer, L'\\');
-  ptr++;
-  ::wcsncpy(g_current_user_sid_string, ptr, nt::g_kRegMaxPathLen);
-  rtl_free_unicode_str(&current_user_reg_path);
+  UNSAFE_TODO(::wcsncat(g_kRegPathHKCU, current_user_reg_path.Buffer,
+                        nt::g_kRegMaxPathLen));
+  UNSAFE_TODO(::wcsncat(g_kRegPathHKCU, L"\\",
+                        (nt::g_kRegMaxPathLen - ::wcslen(g_kRegPathHKCU))));
+  ::RtlFreeUnicodeString(&current_user_reg_path);
 
   // Figure out if this is a system or user install.
   g_system_install = IsThisProcSystem();
@@ -391,8 +340,8 @@ void ProcessRedirection(nt::ROOT_KEY root,
       // Do case insensitive comparisons.
       if (!::wcsnicmp(position, current_node->to_match, current_to_match_len)) {
         // Make sure not to match on a substring.
-        if (*(position + current_to_match_len) == L'\\' ||
-            *(position + current_to_match_len) == L'\0') {
+        if (UNSAFE_TODO(position[current_to_match_len]) == L'\\' ||
+            UNSAFE_TODO(position[current_to_match_len]) == L'\0') {
           // MATCH!
           // -------------------------------------------------------------------
           // 1) Update state of redirection.
@@ -403,15 +352,15 @@ void ProcessRedirection(nt::ROOT_KEY root,
             insertion_point = position;
             insert_string = kRedirectBefore;
           } else if (redirect_state == REDIRECTED_AFTER) {
-            insertion_point = position + current_to_match_len;
+            UNSAFE_TODO(insertion_point = position + current_to_match_len);
             insert_string = kRedirectAfter;
           }
           // 2) Adjust |position| along the subkey path.
-          position += current_to_match_len;
+          UNSAFE_TODO(position += current_to_match_len);
           chars_left -= current_to_match_len;
           // 2.5) Increment the position, to move past path seperator(s).
           while (*position == L'\\') {
-            ++position;
+            UNSAFE_TODO(++position);
             --chars_left;
           }
           // 3) Move our loop parameters to the |next| array of Nodes.
@@ -425,7 +374,7 @@ void ProcessRedirection(nt::ROOT_KEY root,
     }
 
     // Move to the next node in the array if we didn't match this loop.
-    ++current_node;
+    UNSAFE_TODO(++current_node);
     ++node_index;
   }
 
@@ -433,7 +382,8 @@ void ProcessRedirection(nt::ROOT_KEY root,
     return;
 
   // Insert the redirection into |subkey_path|, at |insertion_point|.
-  subkey_path->insert((insertion_point - subkey_path->c_str()), insert_string);
+  subkey_path->insert(UNSAFE_TODO(insertion_point - subkey_path->c_str()),
+                      insert_string);
 }
 
 //------------------------------------------------------------------------------
@@ -481,7 +431,7 @@ void SanitizeSubkeyPath(std::wstring* input) {
   // Remove leading backslashes.
   input->erase(0, input->find_first_not_of(L'\\'));
 
-  // Replace any occurances of more than 1 backslash in a row with just 1.
+  // Replace any occurrences of more than 1 backslash in a row with just 1.
   size_t index = input->find_first_of(L"\\");
   while (index != std::wstring::npos) {
     // Remove a second consecutive backslash, and leave index where it is,
@@ -605,14 +555,14 @@ NTSTATUS CreateKeyWrapper(const std::wstring& key_path,
                           HANDLE* out_handle,
                           ULONG* create_or_open OPTIONAL) {
   UNICODE_STRING key_path_uni = {};
-  g_rtl_init_unicode_string(&key_path_uni, key_path.c_str());
+  ::RtlInitUnicodeString(&key_path_uni, key_path.c_str());
 
   OBJECT_ATTRIBUTES obj = {};
   InitializeObjectAttributes(&obj, &key_path_uni, OBJ_CASE_INSENSITIVE, NULL,
                              nullptr);
 
-  return g_nt_create_key(out_handle, access, &obj, 0, nullptr,
-                         REG_OPTION_NON_VOLATILE, create_or_open);
+  return ::NtCreateKey(out_handle, access, &obj, 0, nullptr,
+                       REG_OPTION_NON_VOLATILE, create_or_open);
 }
 
 }  // namespace
@@ -629,9 +579,10 @@ bool CreateRegKey(ROOT_KEY root,
                   HANDLE* out_handle OPTIONAL) {
   // |key_path| can be null or empty, but it can't be longer than
   // |g_kRegMaxPathLen| at this point.
-  if (key_path &&
-      ::wcsnlen(key_path, g_kRegMaxPathLen + 1) == g_kRegMaxPathLen + 1)
+  if (key_path && UNSAFE_TODO(::wcsnlen(key_path, g_kRegMaxPathLen + 1)) ==
+                      g_kRegMaxPathLen + 1) {
     return false;
+  }
 
   if (!g_initialized && !InitNativeRegApi())
     return false;
@@ -661,7 +612,7 @@ bool CreateRegKey(ROOT_KEY root,
 
   size_t subkeys_size = subkeys.size();
   if (subkeys_size != 0)
-    g_nt_close(last_handle);
+    ::NtClose(last_handle);
 
   // Recursively open/create each subkey.
   std::vector<HANDLE> rollback;
@@ -687,19 +638,19 @@ bool CreateRegKey(ROOT_KEY root,
       if (created == REG_CREATED_NEW_KEY)
         rollback.push_back(key_handle);
       else
-        g_nt_close(key_handle);
+        ::NtClose(key_handle);
     }
   }
 
   if (!success) {
     // Delete any subkeys created.
     for (HANDLE handle : rollback) {
-      g_nt_delete_key(handle);
+      ::NtDeleteKey(handle);
     }
   }
   for (HANDLE handle : rollback) {
     // Close the rollback handles, on success or failure.
-    g_nt_close(handle);
+    ::NtClose(handle);
   }
   if (!success)
     return false;
@@ -708,7 +659,7 @@ bool CreateRegKey(ROOT_KEY root,
   if (out_handle)
     *out_handle = last_handle;
   else
-    g_nt_close(last_handle);
+    ::NtClose(last_handle);
 
   return true;
 }
@@ -720,9 +671,10 @@ bool OpenRegKey(ROOT_KEY root,
                 NTSTATUS* error_code OPTIONAL) {
   // |key_path| can be null or empty, but it can't be longer than
   // |g_kRegMaxPathLen| at this point.
-  if (key_path &&
-      ::wcsnlen(key_path, g_kRegMaxPathLen + 1) == g_kRegMaxPathLen + 1)
+  if (key_path && UNSAFE_TODO(::wcsnlen(key_path, g_kRegMaxPathLen + 1)) ==
+                      g_kRegMaxPathLen + 1) {
     return false;
+  }
 
   if (!g_initialized && !InitNativeRegApi())
     return false;
@@ -743,11 +695,11 @@ bool OpenRegKey(ROOT_KEY root,
   }
   full_path.insert(0, ConvertRootKey(root));
 
-  g_rtl_init_unicode_string(&key_path_uni, full_path.c_str());
+  ::RtlInitUnicodeString(&key_path_uni, full_path.c_str());
   InitializeObjectAttributes(&obj, &key_path_uni, OBJ_CASE_INSENSITIVE, NULL,
                              NULL);
 
-  status = g_nt_open_key_ex(out_handle, access, &obj, 0);
+  status = ::NtOpenKeyEx(out_handle, access, &obj, 0);
   // See if caller wants the NTSTATUS.
   if (error_code)
     *error_code = status;
@@ -762,7 +714,7 @@ bool DeleteRegKey(HANDLE key) {
   if (!g_initialized && !InitNativeRegApi())
     return false;
 
-  NTSTATUS status = g_nt_delete_key(key);
+  NTSTATUS status = ::NtDeleteKey(key);
 
   return NT_SUCCESS(status);
 }
@@ -788,7 +740,7 @@ bool DeleteRegKey(ROOT_KEY root,
 void CloseRegKey(HANDLE key) {
   if (!g_initialized)
     InitNativeRegApi();
-  g_nt_close(key);
+  ::NtClose(key);
 }
 
 //------------------------------------------------------------------------------
@@ -803,7 +755,7 @@ bool QueryRegKeyValue(HANDLE key,
     return false;
 
   UNICODE_STRING value_uni = {};
-  g_rtl_init_unicode_string(&value_uni, value_name);
+  ::RtlInitUnicodeString(&value_uni, value_name);
 
   // Use a loop here, to be a little more tolerant of concurrent registry
   // changes.
@@ -814,10 +766,11 @@ bool QueryRegKeyValue(HANDLE key,
   std::vector<BYTE> buffer(size_needed);
   do {
     buffer.resize(size_needed);
-    value_info = reinterpret_cast<KEY_VALUE_FULL_INFORMATION*>(buffer.data());
+    UNSAFE_TODO(value_info = reinterpret_cast<KEY_VALUE_FULL_INFORMATION*>(
+                    buffer.data()));
 
-    ntstatus = g_nt_query_value_key(key, &value_uni, KeyValueFullInformation,
-                                    value_info, size_needed, &size_needed);
+    ntstatus = ::NtQueryValueKey(key, &value_uni, KeyValueFullInformation,
+                                 value_info, size_needed, &size_needed);
   } while ((ntstatus == STATUS_BUFFER_OVERFLOW ||
             ntstatus == STATUS_BUFFER_TOO_SMALL) &&
            ++tries < kMaxTries);
@@ -830,8 +783,9 @@ bool QueryRegKeyValue(HANDLE key,
 
   if (data_size) {
     // Move the data into |out_buffer| vector.
-    BYTE* data = reinterpret_cast<BYTE*>(value_info) + value_info->DataOffset;
-    out_buffer->assign(data, data + data_size);
+    BYTE* data = UNSAFE_TODO(reinterpret_cast<BYTE*>(value_info) +
+                             value_info->DataOffset);
+    out_buffer->assign(data, UNSAFE_TODO(data + data_size));
   } else {
     out_buffer->clear();
   }
@@ -854,7 +808,7 @@ bool QueryRegValueDWORD(HANDLE key,
   if (value_bytes.size() < sizeof(*out_dword))
     return false;
 
-  *out_dword = *(reinterpret_cast<DWORD*>(value_bytes.data()));
+  *out_dword = UNSAFE_TODO(*(reinterpret_cast<DWORD*>(value_bytes.data())));
 
   return true;
 }
@@ -893,7 +847,7 @@ bool QueryRegValueSZ(HANDLE key,
 
   EnsureTerminatedSZ(&value_bytes, false);
 
-  *out_sz = reinterpret_cast<wchar_t*>(value_bytes.data());
+  UNSAFE_TODO(*out_sz = reinterpret_cast<wchar_t*>(value_bytes.data()));
 
   return true;
 }
@@ -935,12 +889,13 @@ bool QueryRegValueMULTISZ(HANDLE key,
   // Make sure the out vector is empty to start.
   out_multi_sz->clear();
 
-  wchar_t* pointer = reinterpret_cast<wchar_t*>(value_bytes.data());
+  wchar_t* pointer =
+      UNSAFE_TODO(reinterpret_cast<wchar_t*>(value_bytes.data()));
   std::wstring temp = pointer;
   // Loop.  Each string is separated by '\0'.  Another '\0' at very end (so 2 in
   // a row).
   while (!temp.empty()) {
-    pointer += temp.length() + 1;
+    UNSAFE_TODO(pointer += temp.length() + 1);
     out_multi_sz->push_back(std::move(temp));
     temp = pointer;
   }
@@ -982,11 +937,11 @@ bool SetRegKeyValue(HANDLE key,
 
   NTSTATUS ntstatus = STATUS_UNSUCCESSFUL;
   UNICODE_STRING value_uni = {};
-  g_rtl_init_unicode_string(&value_uni, value_name);
+  ::RtlInitUnicodeString(&value_uni, value_name);
 
   BYTE* non_const_data = const_cast<BYTE*>(data);
   ntstatus =
-      g_nt_set_value_key(key, &value_uni, 0, type, non_const_data, data_size);
+      ::NtSetValueKey(key, &value_uni, 0, type, non_const_data, data_size);
 
   if (NT_SUCCESS(ntstatus))
     return true;
@@ -1103,98 +1058,8 @@ bool SetRegValueMULTISZ(ROOT_KEY root,
 }
 
 //------------------------------------------------------------------------------
-// Enumeration Support
-//------------------------------------------------------------------------------
-
-bool QueryRegEnumerationInfo(HANDLE key, ULONG* out_subkey_count) {
-  if (!g_initialized && !InitNativeRegApi())
-    return false;
-
-  // Use a loop here, to be a little more tolerant of concurrent registry
-  // changes.
-  NTSTATUS ntstatus = STATUS_UNSUCCESSFUL;
-  int tries = 0;
-  // Start with sizeof the structure.  It's very common for the variable sized
-  // "Class" element to be of length 0.
-  KEY_FULL_INFORMATION* key_info = nullptr;
-  DWORD size_needed = sizeof(*key_info);
-  std::vector<BYTE> buffer(size_needed);
-  do {
-    buffer.resize(size_needed);
-    key_info = reinterpret_cast<KEY_FULL_INFORMATION*>(buffer.data());
-
-    ntstatus = g_nt_query_key(key, KeyFullInformation, key_info, size_needed,
-                              &size_needed);
-  } while ((ntstatus == STATUS_BUFFER_OVERFLOW ||
-            ntstatus == STATUS_BUFFER_TOO_SMALL) &&
-           ++tries < kMaxTries);
-
-  if (!NT_SUCCESS(ntstatus))
-    return false;
-
-  // Move desired information to out variables.
-  *out_subkey_count = key_info->SubKeys;
-
-  return true;
-}
-
-bool QueryRegSubkey(HANDLE key,
-                    ULONG subkey_index,
-                    std::wstring* out_subkey_name) {
-  if (!g_initialized && !InitNativeRegApi())
-    return false;
-
-  // Use a loop here, to be a little more tolerant of concurrent registry
-  // changes.
-  NTSTATUS ntstatus = STATUS_UNSUCCESSFUL;
-  int tries = 0;
-  // Start with sizeof the structure, plus 12 characters.  It's very common for
-  // key names to be < 12 characters (without being inefficient as an initial
-  // allocation).
-  KEY_BASIC_INFORMATION* subkey_info = nullptr;
-  DWORD size_needed = sizeof(*subkey_info) + (12 * sizeof(wchar_t));
-  std::vector<BYTE> buffer(size_needed);
-  do {
-    buffer.resize(size_needed);
-    subkey_info = reinterpret_cast<KEY_BASIC_INFORMATION*>(buffer.data());
-
-    ntstatus = g_nt_enumerate_key(key, subkey_index, KeyBasicInformation,
-                                  subkey_info, size_needed, &size_needed);
-  } while ((ntstatus == STATUS_BUFFER_OVERFLOW ||
-            ntstatus == STATUS_BUFFER_TOO_SMALL) &&
-           ++tries < kMaxTries);
-
-  if (!NT_SUCCESS(ntstatus))
-    return false;
-
-  // Move desired information to out variables.
-  // NOTE: NameLength is size of Name array in bytes.  Name array is also
-  //       NOT null terminated!
-  BYTE* name = reinterpret_cast<BYTE*>(subkey_info->Name);
-  std::vector<BYTE> content(name, name + subkey_info->NameLength);
-  EnsureTerminatedSZ(&content, false);
-  out_subkey_name->assign(reinterpret_cast<wchar_t*>(content.data()));
-
-  return true;
-}
-
-//------------------------------------------------------------------------------
 // Utils
 //------------------------------------------------------------------------------
-
-const wchar_t* GetCurrentUserSidString() {
-  if (!g_initialized && !InitNativeRegApi())
-    return nullptr;
-
-  return g_current_user_sid_string;
-}
-
-bool IsCurrentProcWow64() {
-  if (!g_initialized && !InitNativeRegApi())
-    return false;
-
-  return g_wow64_proc;
-}
 
 bool SetTestingOverride(ROOT_KEY root, const std::wstring& new_path) {
   if (!g_initialized && !InitNativeRegApi())
@@ -1206,9 +1071,11 @@ bool SetTestingOverride(ROOT_KEY root, const std::wstring& new_path) {
     return false;
 
   if (root == HKCU || (root == AUTO && !g_system_install))
-    ::wcsncpy(g_HKCU_override, sani_new_path.c_str(), nt::g_kRegMaxPathLen);
+    UNSAFE_TODO(::wcsncpy(g_HKCU_override, sani_new_path.c_str(),
+                          nt::g_kRegMaxPathLen));
   else
-    ::wcsncpy(g_HKLM_override, sani_new_path.c_str(), nt::g_kRegMaxPathLen);
+    UNSAFE_TODO(::wcsncpy(g_HKLM_override, sani_new_path.c_str(),
+                          nt::g_kRegMaxPathLen));
 
   return true;
 }

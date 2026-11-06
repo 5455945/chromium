@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,9 +9,10 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
+#include "remoting/base/logging.h"
 #include "remoting/host/security_key/security_key_ipc_client.h"
 #include "remoting/host/security_key/security_key_ipc_constants.h"
 #include "remoting/host/security_key/security_key_message_reader_impl.h"
@@ -74,37 +75,30 @@ void SecurityKeyMessageHandler::ProcessSecurityKeyMessage(
   DCHECK(thread_checker_.CalledOnValidThread());
 
   SecurityKeyMessageType message_type = message->type();
+  HOST_LOG << "Received message from pipe. type="
+           << static_cast<int>(message_type);
   if (message_type == SecurityKeyMessageType::CONNECT) {
     HandleConnectRequest(message->payload());
   } else if (message_type == SecurityKeyMessageType::REQUEST) {
     HandleSecurityKeyRequest(message->payload());
   } else {
+    // uint8_t is handled as char, so we use uint16_t to show number here.
     LOG(ERROR) << "Unknown message type: "
-               << static_cast<uint8_t>(message_type);
+               << static_cast<uint16_t>(message_type);
     SendMessage(SecurityKeyMessageType::UNKNOWN_COMMAND);
   }
 }
 
-void SecurityKeyMessageHandler::HandleIpcConnectionChange(
-    bool connection_established) {
+void SecurityKeyMessageHandler::HandleIpcConnectionChange() {
   DCHECK(thread_checker_.CalledOnValidThread());
-  if (connection_established) {
-    SendMessageWithPayload(SecurityKeyMessageType::CONNECT_RESPONSE,
-                           std::string(1, kConnectResponseActiveSession));
-  } else {
-    SendMessageWithPayload(SecurityKeyMessageType::CONNECT_RESPONSE,
-                           std::string(1, kConnectResponseNoSession));
-    // We expect the server to close the IPC channel in this scenario.
-    expect_ipc_channel_close_ = true;
-  }
+  SendMessageWithPayload(SecurityKeyMessageType::CONNECT_RESPONSE,
+                         std::string(1, kConnectResponseActiveSession));
 }
 
 void SecurityKeyMessageHandler::HandleIpcConnectionError() {
   DCHECK(thread_checker_.CalledOnValidThread());
-  if (!expect_ipc_channel_close_) {
-    SendMessageWithPayload(SecurityKeyMessageType::CONNECT_ERROR,
-                           "Unknown error occurred during connection.");
-  }
+  SendMessageWithPayload(SecurityKeyMessageType::CONNECT_ERROR,
+                         "Unknown error occurred during connection.");
 }
 
 void SecurityKeyMessageHandler::HandleSecurityKeyResponse(
@@ -177,7 +171,12 @@ void SecurityKeyMessageHandler::SendMessageWithPayload(
     SecurityKeyMessageType message_type,
     const std::string& message_payload) {
   if (!writer_->WriteMessageWithPayload(message_type, message_payload)) {
+    HOST_LOG << "Failed to send message to pipe. type="
+             << static_cast<int>(message_type);
     OnError();
+  } else {
+    HOST_LOG << "Successfully sent message to pipe. type="
+             << static_cast<int>(message_type);
   }
 }
 

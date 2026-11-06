@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,16 @@
 #define CHROME_BROWSER_SPELLCHECKER_SPELLCHECK_HUNSPELL_DICTIONARY_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "base/files/file.h"
 #include "base/files/file_path.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
 #include "build/build_config.h"
 #include "components/spellcheck/browser/spellcheck_dictionary.h"
 #include "components/spellcheck/spellcheck_buildflags.h"
@@ -28,9 +29,7 @@ class BrowserContext;
 }  // namespace content
 
 // Defines the browser-side hunspell dictionary and provides access to it.
-class SpellcheckHunspellDictionary
-    : public SpellcheckDictionary,
-      public base::SupportsWeakPtr<SpellcheckHunspellDictionary> {
+class SpellcheckHunspellDictionary : public SpellcheckDictionary {
  public:
   // Interface to implement for observers of the Hunspell dictionary.
   class Observer {
@@ -56,6 +55,11 @@ class SpellcheckHunspellDictionary
                                const std::string& platform_spellcheck_language,
                                content::BrowserContext* browser_context,
                                SpellcheckService* spellcheck_service);
+
+  SpellcheckHunspellDictionary(const SpellcheckHunspellDictionary&) = delete;
+  SpellcheckHunspellDictionary& operator=(const SpellcheckHunspellDictionary&) =
+      delete;
+
   ~SpellcheckHunspellDictionary() override;
 
   // SpellcheckDictionary implementation:
@@ -85,6 +89,11 @@ class SpellcheckHunspellDictionary
   // Whether dictionary download failed.
   bool IsDownloadFailure();
 
+  // Get a WeakPtr to the instance.
+  base::WeakPtr<SpellcheckHunspellDictionary> AsWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+
   // Tests use this method to set a custom URL for downloading dictionaries.
   static void SetDownloadURLForTesting(const GURL url);
 
@@ -101,6 +110,10 @@ class SpellcheckHunspellDictionary
   struct DictionaryFile {
    public:
     explicit DictionaryFile(base::TaskRunner* task_runner);
+
+    DictionaryFile(const DictionaryFile&) = delete;
+    DictionaryFile& operator=(const DictionaryFile&) = delete;
+
     ~DictionaryFile();
 
     DictionaryFile(DictionaryFile&& other);
@@ -115,11 +128,9 @@ class SpellcheckHunspellDictionary
    private:
     // Task runner where the file is created.
     scoped_refptr<base::TaskRunner> task_runner_;
-
-    DISALLOW_COPY_AND_ASSIGN(DictionaryFile);
   };
 
-  void OnSimpleLoaderComplete(std::unique_ptr<std::string> response_body);
+  void OnSimpleLoaderComplete(std::optional<std::string> response_body);
 
   // Determine the correct url to download the dictionary.
   GURL GetDictionaryURL();
@@ -127,7 +138,7 @@ class SpellcheckHunspellDictionary
   // Attempt to download the dictionary.
   void DownloadDictionary(GURL url);
 
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
   // Figures out the location for the dictionary, verifies its contents, and
   // opens it.
   static DictionaryFile OpenDictionaryFile(base::TaskRunner* task_runner,
@@ -176,12 +187,12 @@ class SpellcheckHunspellDictionary
 
   // Used for downloading the dictionary file. SpellcheckHunspellDictionary does
   // not hold a reference, and it is only valid to use it on the UI thread.
-  content::BrowserContext* browser_context_;
+  raw_ptr<content::BrowserContext> browser_context_;
 
   // Used for downloading the dictionary file.
   std::unique_ptr<network::SimpleURLLoader> simple_loader_;
 
-  SpellcheckService* const spellcheck_service_;
+  const raw_ptr<SpellcheckService> spellcheck_service_;
 
   // Observers of Hunspell dictionary events.
   base::ObserverList<Observer>::Unchecked observers_;
@@ -193,8 +204,6 @@ class SpellcheckHunspellDictionary
   DictionaryFile dictionary_file_;
 
   base::WeakPtrFactory<SpellcheckHunspellDictionary> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(SpellcheckHunspellDictionary);
 };
 
 #endif  // CHROME_BROWSER_SPELLCHECKER_SPELLCHECK_HUNSPELL_DICTIONARY_H_

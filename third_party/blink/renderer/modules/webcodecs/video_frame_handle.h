@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,12 @@
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_WEBCODECS_VIDEO_FRAME_HANDLE_H_
 
 #include "base/memory/scoped_refptr.h"
+#include "base/synchronization/lock.h"
+#include "base/thread_annotations.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/modules/webcodecs/webcodecs_logger.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/thread_safe_ref_counted.h"
-#include "third_party/blink/renderer/platform/wtf/threading_primitives.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
 
 // Note: Don't include "media/base/video_frame.h" here without good reason,
@@ -34,16 +36,36 @@ class ExecutionContext;
 // fast enough through the GC to keep a pipeline running smoothly. In that case
 // report an unclosed frame through |close_auditor_|.
 class MODULES_EXPORT VideoFrameHandle
-    : public WTF::ThreadSafeRefCounted<VideoFrameHandle> {
+    : public ThreadSafeRefCounted<VideoFrameHandle> {
  public:
-  VideoFrameHandle(scoped_refptr<media::VideoFrame>, ExecutionContext*);
-  VideoFrameHandle(scoped_refptr<media::VideoFrame>,
+  // 1. Full constructor with auditor (primary implementation)
+  VideoFrameHandle(
+      scoped_refptr<media::VideoFrame> frame,
+      sk_sp<SkImage> sk_image,
+      std::optional<base::TimeDelta> timestamp,
+      scoped_refptr<WebCodecsLogger::VideoFrameCloseAuditor> close_auditor,
+      std::string monitoring_source_id = std::string());
+
+  // 2. Constructor with ExecutionContext (looks up auditor and delegates to 1)
+  VideoFrameHandle(scoped_refptr<media::VideoFrame> frame,
                    sk_sp<SkImage> sk_image,
-                   ExecutionContext*);
-  VideoFrameHandle(scoped_refptr<media::VideoFrame>,
-                   sk_sp<SkImage> sk_image,
-                   scoped_refptr<WebCodecsLogger::VideoFrameCloseAuditor>);
-  VideoFrameHandle(scoped_refptr<media::VideoFrame>, sk_sp<SkImage> sk_image);
+                   std::optional<base::TimeDelta> timestamp,
+                   ExecutionContext* context,
+                   std::string monitoring_source_id = std::string());
+
+  // 3. Convenience constructor with ExecutionContext (no sk_image, no
+  // timestamp)
+  VideoFrameHandle(scoped_refptr<media::VideoFrame> frame,
+                   ExecutionContext* context,
+                   std::string monitoring_source_id = std::string());
+
+  VideoFrameHandle(const VideoFrameHandle&) = delete;
+  VideoFrameHandle& operator=(const VideoFrameHandle&) = delete;
+
+  // Expire all GPUExternalTextures which are generated from
+  // importExternalTexture and using VideoFrame as source. This callback should
+  // be called when VideoFrameHandle is destroyed/Invalidate.
+  using WebGPUExternalTextureExpireCallback = CrossThreadOnceFunction<void()>;
 
   // Returns a copy of |frame_|, which should be re-used throughout the scope
   // of a function call, instead of calling frame() multiple times. Otherwise
@@ -71,21 +93,46 @@ class MODULES_EXPORT VideoFrameHandle
   // close auditor so warning messages aren't created for unclosed frames.
   scoped_refptr<VideoFrameHandle> CloneForInternalUse();
 
+  // GPUExternalTexture generated with VideoFrame source needs to listen to
+  // the VideoFrameHandle to expire themselves. Return false if the
+  // VideoFrameHandle has been destroyed.
+  bool WebGPURegisterExternalTextureExpireCallback(
+      WebGPUExternalTextureExpireCallback
+          webgpu_external_texture_expire_callback);
+
+  base::TimeDelta timestamp() const { return timestamp_; }
+  std::optional<base::TimeDelta> duration() const { return duration_; }
+
  private:
-  friend class WTF::ThreadSafeRefCounted<VideoFrameHandle>;
+  friend class ThreadSafeRefCounted<VideoFrameHandle>;
   ~VideoFrameHandle();
 
-  // |mutex_| must be held before calling into this.
-  void InvalidateLocked();
+  void InvalidateLocked() EXCLUSIVE_LOCKS_REQUIRED(lock_);
+
+  // Inform the GPUExternalTexture that VideoFrame is closed and expire the
+  // external texture. |mutex_| must be held before calling into this.
+  void NotifyExpiredLocked() EXCLUSIVE_LOCKS_REQUIRED(lock_);
+
+  void MaybeMonitorOpenFrame() EXCLUSIVE_LOCKS_REQUIRED(lock_);
+  void MaybeMonitorCloseFrame() EXCLUSIVE_LOCKS_REQUIRED(lock_);
 
   // Flag that prevents the creation of a new handle during the next Clone()
   // call. Used as a temporary workaround for crbug.com/1182497.
-  bool close_on_clone_ = false;
+  bool close_on_clone_ GUARDED_BY(lock_) = false;
 
-  WTF::Mutex mutex_;
-  sk_sp<SkImage> sk_image_;
-  scoped_refptr<media::VideoFrame> frame_;
+  base::Lock lock_;
+  sk_sp<SkImage> sk_image_ GUARDED_BY(lock_);
+  scoped_refptr<media::VideoFrame> frame_ GUARDED_BY(lock_);
   scoped_refptr<WebCodecsLogger::VideoFrameCloseAuditor> close_auditor_;
+  Vector<WebGPUExternalTextureExpireCallback>
+      webgpu_external_texture_expire_callbacks_;
+  std::string monitoring_source_id_;
+
+  // Timestamp and duration must remain valid after close(). If the timestamp or
+  // duration of the underlying media::VideoFrame are modified after
+  // blink::VideoFrame construction, those updates won't appear here.
+  const base::TimeDelta timestamp_;
+  const std::optional<base::TimeDelta> duration_;
 };
 
 }  // namespace blink

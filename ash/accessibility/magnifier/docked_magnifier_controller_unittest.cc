@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,14 @@
 #include <vector>
 
 #include "ash/accessibility/magnifier/magnifier_test_utils.h"
+#include "ash/capture_mode/capture_mode_controller.h"
+#include "ash/capture_mode/capture_mode_metrics.h"
+#include "ash/capture_mode/capture_mode_session.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/display/display_util.h"
 #include "ash/display/window_tree_host_manager.h"
 #include "ash/host/ash_window_tree_host.h"
-#include "ash/public/cpp/ash_pref_names.h"
 #include "ash/public/cpp/shelf_config.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/session/test_session_controller_client.h"
@@ -20,21 +23,26 @@
 #include "ash/test/ash_test_base.h"
 #include "ash/test/ash_test_helper.h"
 #include "ash/test/test_window_builder.h"
-#include "ash/wm/desks/desks_bar_view.h"
-#include "ash/wm/desks/zero_state_button.h"
+#include "ash/wm/desks/overview_desk_bar_view.h"
 #include "ash/wm/overview/overview_controller.h"
 #include "ash/wm/overview/overview_grid.h"
 #include "ash/wm/overview/overview_item.h"
 #include "ash/wm/overview/overview_item_view.h"
 #include "ash/wm/overview/overview_test_util.h"
+#include "ash/wm/overview/overview_utils.h"
 #include "ash/wm/splitview/split_view_controller.h"
-#include "ash/wm/tablet_mode/tablet_mode_controller.h"
+#include "ash/wm/tablet_mode/tablet_mode_controller_test_api.h"
+#include "ash/wm/window_mini_view_header_view.h"
 #include "ash/wm/window_state.h"
 #include "base/command_line.h"
+#include "base/test/run_until.h"
+#include "chromeos/constants/chromeos_features.h"
+#include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
 #include "components/session_manager/session_manager_types.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/window.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/compositor/layer.h"
 #include "ui/display/display.h"
 #include "ui/display/manager/managed_display_info.h"
@@ -53,9 +61,11 @@ constexpr char kUser2Email[] = "user2@dockedmagnifier";
 // Returns the magnifier area height given the display height.
 int GetMagnifierHeight(int display_height) {
   return (display_height /
-          DockedMagnifierController::kScreenHeightDivisor) +
+          DockedMagnifierController::kDefaultScreenHeightDivisor) +
          DockedMagnifierController::kSeparatorHeight;
 }
+
+}  // namespace
 
 class DockedMagnifierTest : public NoSessionAshTestBase {
  public:
@@ -89,11 +99,10 @@ class DockedMagnifierTest : public NoSessionAshTestBase {
 
     NoSessionAshTestBase::SetUp();
 
-    // Create user 1 session and simulate its login.
-    SimulateUserLogin(kUser1Email);
-
-    // Create user 2 session.
-    GetSessionControllerClient()->AddUserSession(kUser2Email);
+    // Create user 2 session its login.
+    SimulateUserLogin(AccountId::FromUserEmail(kUser2Email));
+    // Create user 1 session and switch to it.
+    SimulateUserLogin(AccountId::FromUserEmail(kUser1Email));
 
     // Place the cursor in the first display.
     GetEventGenerator()->MoveMouseTo(gfx::Point(0, 0));
@@ -127,7 +136,8 @@ class DockedMagnifierTest : public NoSessionAshTestBase {
     // The magnifier layer's transform, when applied to the point of interest
     // (in root coordinates), should take it to the point at the center of the
     // viewport widget (also in root coordinates).
-    magnifier_layer->transform().TransformPoint(&point_of_interest_in_root_f);
+    point_of_interest_in_root_f =
+        magnifier_layer->transform().MapPoint(point_of_interest_in_root_f);
     const views::Widget* viewport_widget =
         controller()->GetViewportWidgetForTesting();
     const gfx::Point viewport_center_in_root =
@@ -148,10 +158,12 @@ class DockedMagnifierTest : public NoSessionAshTestBase {
 
   std::unique_ptr<views::Widget> CreateLockSystemModalWindow(
       const gfx::Rect& bounds) {
-    auto* widget_delegate_view = new views::WidgetDelegateView();
-    widget_delegate_view->SetModalType(ui::MODAL_TYPE_SYSTEM);
-    return CreateTestWidget(widget_delegate_view,
-                            kShellWindowId_LockSystemModalContainer, bounds);
+    auto* widget_delegate_view = new views::WidgetDelegateView(
+        views::WidgetDelegateView::CreatePassKey());
+    widget_delegate_view->SetModalType(ui::mojom::ModalType::kSystem);
+    return CreateTestWidget(
+        views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
+        widget_delegate_view, kShellWindowId_LockSystemModalContainer, bounds);
   }
 
   // Test that display work area and a modal window is adjusted correctly
@@ -172,7 +184,7 @@ class DockedMagnifierTest : public NoSessionAshTestBase {
     const gfx::Rect modal_bounds =
         lock_system_modal_widget->GetWindowBoundsInScreen();
     const gfx::Rect valid_area =
-        display::Screen::GetScreen()
+        display::Screen::Get()
             ->GetDisplayNearestWindow(Shell::GetPrimaryRootWindow())
             .work_area();
     const gfx::Rect docked_magnifier_bounds =
@@ -192,7 +204,7 @@ class DockedMagnifierTest : public NoSessionAshTestBase {
 
     // Expect that the window stays inside the valid area.
     const gfx::Rect valid_area_no_magnifier =
-        display::Screen::GetScreen()
+        display::Screen::Get()
             ->GetDisplayNearestWindow(Shell::GetPrimaryRootWindow())
             .work_area();
     EXPECT_TRUE(valid_area_no_magnifier.Contains(modal_bounds_no_magnifier));
@@ -238,7 +250,7 @@ class DockedMagnifierTest : public NoSessionAshTestBase {
     const gfx::Rect modal_bounds_update_case =
         lock_system_modal_widget_update_case->GetWindowBoundsInScreen();
     const gfx::Rect valid_area =
-        display::Screen::GetScreen()
+        display::Screen::Get()
             ->GetDisplayNearestWindow(Shell::GetPrimaryRootWindow())
             .work_area();
     const gfx::Rect docked_magnifier_bounds =
@@ -372,7 +384,8 @@ TEST_F(DockedMagnifierTest, DisplaysWorkAreas) {
   const gfx::Rect disp_1_bounds(0, 0, 800, 600);
   EXPECT_EQ(disp_1_bounds, display_1.bounds());
   gfx::Rect disp_1_workarea_no_magnifier = disp_1_bounds;
-  disp_1_workarea_no_magnifier.Inset(0, 0, 0, ShelfConfig::Get()->shelf_size());
+  disp_1_workarea_no_magnifier.Inset(
+      gfx::Insets::TLBR(0, 0, ShelfConfig::Get()->shelf_size(), 0));
   EXPECT_EQ(disp_1_workarea_no_magnifier, display_1.work_area());
   // At this point, normal mouse cursor confinement should be used.
   AshWindowTreeHost* host1 =
@@ -386,7 +399,8 @@ TEST_F(DockedMagnifierTest, DisplaysWorkAreas) {
   const gfx::Rect disp_2_bounds(800, 0, 400, 300);
   EXPECT_EQ(disp_2_bounds, display_2.bounds());
   gfx::Rect disp_2_workarea_no_magnifier = disp_2_bounds;
-  disp_2_workarea_no_magnifier.Inset(0, 0, 0, ShelfConfig::Get()->shelf_size());
+  disp_2_workarea_no_magnifier.Inset(
+      gfx::Insets::TLBR(0, 0, ShelfConfig::Get()->shelf_size(), 0));
   EXPECT_EQ(disp_2_workarea_no_magnifier, display_2.work_area());
   AshWindowTreeHost* host2 =
       Shell::Get()
@@ -409,14 +423,17 @@ TEST_F(DockedMagnifierTest, DisplaysWorkAreas) {
   gfx::Rect disp_1_workspace_with_magnifier = disp_1_workarea_no_magnifier;
   const int disp_1_magnifier_height =
       GetMagnifierHeight(disp_1_bounds.height());
-  disp_1_workspace_with_magnifier.Inset(0, disp_1_magnifier_height, 0, 0);
+  disp_1_workspace_with_magnifier.Inset(
+      gfx::Insets::TLBR(disp_1_magnifier_height, 0, 0, 0));
   EXPECT_EQ(disp_1_bounds, display_1.bounds());
   EXPECT_EQ(disp_1_workspace_with_magnifier, display_1.work_area());
   // The first display should confine the mouse movement outside of the
   // viewport.
-  const gfx::Rect disp_1_confine_bounds(
+  gfx::Rect disp_1_confine_bounds(
       0, disp_1_magnifier_height, disp_1_bounds.width(),
       disp_1_bounds.height() - disp_1_magnifier_height);
+  disp_1_confine_bounds.Inset(
+      gfx::Insets().set_top(-DockedMagnifierController::kSeparatorHeight));
   EXPECT_EQ(host1->GetLastCursorConfineBoundsInPixels(), disp_1_confine_bounds);
 
   // The second display should remain unaffected.
@@ -444,12 +461,15 @@ TEST_F(DockedMagnifierTest, DisplaysWorkAreas) {
   gfx::Rect disp_2_workspace_with_magnifier = disp_2_workarea_no_magnifier;
   const int disp_2_magnifier_height =
       GetMagnifierHeight(disp_2_bounds.height());
-  disp_2_workspace_with_magnifier.Inset(0, disp_2_magnifier_height, 0, 0);
+  disp_2_workspace_with_magnifier.Inset(
+      gfx::Insets().set_top(disp_2_magnifier_height));
   EXPECT_EQ(disp_2_workspace_with_magnifier, display_2.work_area());
   // Display 2's mouse is confined outside the viewport.
-  const gfx::Rect disp_2_confine_bounds(
+  gfx::Rect disp_2_confine_bounds(
       0, disp_2_magnifier_height, disp_2_bounds.width(),
       disp_2_bounds.height() - disp_2_magnifier_height);
+  disp_2_confine_bounds.Inset(
+      gfx::Insets().set_top(-DockedMagnifierController::kSeparatorHeight));
   EXPECT_EQ(host2->GetLastCursorConfineBoundsInPixels(), disp_2_confine_bounds);
 
   // Now, disable the magnifier, and expect both displays to return back to
@@ -490,59 +510,19 @@ TEST_F(DockedMagnifierTest, DisplaysWorkAreasOverviewMode) {
   const display::Display& display = display_manager()->GetDisplayAt(0);
   gfx::Rect workarea = display.bounds();
   const int magnifier_height = GetMagnifierHeight(display.bounds().height());
-  workarea.Inset(0, magnifier_height, 0, ShelfConfig::Get()->shelf_size());
+  workarea.Inset(gfx::Insets::TLBR(magnifier_height, 0,
+                                   ShelfConfig::Get()->shelf_size(), 0));
   EXPECT_EQ(workarea, display.work_area());
   EXPECT_EQ(workarea, window->bounds());
   EXPECT_TRUE(WindowState::Get(window.get())->IsMaximized());
-}
-
-TEST_F(DockedMagnifierTest, OverviewTabbing) {
-  auto window = CreateTestWindow();
-  controller()->SetEnabled(true);
-
-  EnterOverview();
-  EXPECT_TRUE(Shell::Get()->overview_controller()->InOverviewSession());
-
-  auto* root_window = Shell::GetPrimaryRootWindow();
-  const auto* desk_bar_view = GetOverviewSession()
-                                  ->GetGridWithRootWindow(root_window)
-                                  ->desks_bar_view();
-  ASSERT_TRUE(desk_bar_view->IsZeroState());
-
-  // Tab once. The viewport should be centered on the beginning of the overview
-  // item's title.
-  SendKey(ui::VKEY_TAB);
-  OverviewItem* item = GetOverviewItemForWindow(window.get());
-  ASSERT_TRUE(item);
-  const auto label_bounds_in_screen =
-      item->overview_item_view()->title_label()->GetBoundsInScreen();
-  const gfx::Point expected_point_of_interest(
-      label_bounds_in_screen.x(), label_bounds_in_screen.CenterPoint().y());
-  TestMagnifierLayerTransform(expected_point_of_interest, root_window);
-
-  // Tab one more time. The viewport should be centered on the center of the
-  // default desk button in the zero state desks bar.
-  SendKey(ui::VKEY_TAB);
-  TestMagnifierLayerTransform(desk_bar_view->zero_state_default_desk_button()
-                                  ->GetBoundsInScreen()
-                                  .CenterPoint(),
-                              root_window);
-
-  // Tab one more time. The viewport should be centered on the center of the
-  // new desk button in the zero state desks bar.
-  SendKey(ui::VKEY_TAB);
-  TestMagnifierLayerTransform(desk_bar_view->zero_state_new_desk_button()
-                                  ->GetBoundsInScreen()
-                                  .CenterPoint(),
-                              root_window);
 }
 
 // Test that we exist split view and over view modes when a single window is
 // snapped and the other snap region is hosting overview mode.
 TEST_F(DockedMagnifierTest, DisplaysWorkAreasSingleSplitView) {
   // Verify that we're in tablet mode.
-  Shell::Get()->tablet_mode_controller()->SetEnabledForTest(true);
-  EXPECT_TRUE(Shell::Get()->tablet_mode_controller()->InTabletMode());
+  ash::TabletModeControllerTestApi().EnterTabletMode();
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 
   std::unique_ptr<aura::Window> window =
       TestWindowBuilder()
@@ -560,10 +540,10 @@ TEST_F(DockedMagnifierTest, DisplaysWorkAreasSingleSplitView) {
   auto* overview_controller = Shell::Get()->overview_controller();
   EnterOverview();
   EXPECT_TRUE(overview_controller->InOverviewSession());
-  split_view_controller()->SnapWindow(window.get(), SplitViewController::LEFT);
+  split_view_controller()->SnapWindow(window.get(), SnapPosition::kPrimary);
   EXPECT_EQ(split_view_controller()->state(),
-            SplitViewController::State::kLeftSnapped);
-  EXPECT_EQ(split_view_controller()->left_window(), window.get());
+            SplitViewController::State::kPrimarySnapped);
+  EXPECT_EQ(split_view_controller()->primary_window(), window.get());
   EXPECT_TRUE(overview_controller->InOverviewSession());
 
   // Enable the docked magnifier and expect that both overview and split view
@@ -578,7 +558,8 @@ TEST_F(DockedMagnifierTest, DisplaysWorkAreasSingleSplitView) {
   const display::Display& display = display_manager()->GetDisplayAt(0);
   const int magnifier_height = GetMagnifierHeight(display.bounds().height());
   gfx::Rect work_area = display.bounds();
-  work_area.Inset(0, magnifier_height, 0, ShelfConfig::Get()->shelf_size());
+  work_area.Inset(gfx::Insets::TLBR(magnifier_height, 0,
+                                    ShelfConfig::Get()->shelf_size(), 0));
   EXPECT_EQ(work_area, display.work_area());
   EXPECT_EQ(work_area, window->bounds());
   EXPECT_TRUE(WindowState::Get(window.get())->IsMaximized());
@@ -588,8 +569,8 @@ TEST_F(DockedMagnifierTest, DisplaysWorkAreasSingleSplitView) {
 // when we enable the docked magnifier, but rather their bounds are updated.
 TEST_F(DockedMagnifierTest, DisplaysWorkAreasDoubleSplitView) {
   // Verify that we're in tablet mode.
-  Shell::Get()->tablet_mode_controller()->SetEnabledForTest(true);
-  EXPECT_TRUE(Shell::Get()->tablet_mode_controller()->InTabletMode());
+  ash::TabletModeControllerTestApi().EnterTabletMode();
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
 
   std::unique_ptr<aura::Window> window1 =
       TestWindowBuilder()
@@ -607,9 +588,8 @@ TEST_F(DockedMagnifierTest, DisplaysWorkAreasDoubleSplitView) {
   EXPECT_TRUE(overview_controller->InOverviewSession());
 
   EXPECT_EQ(split_view_controller()->InSplitViewMode(), false);
-  split_view_controller()->SnapWindow(window1.get(), SplitViewController::LEFT);
-  split_view_controller()->SnapWindow(window2.get(),
-                                      SplitViewController::RIGHT);
+  split_view_controller()->SnapWindow(window1.get(), SnapPosition::kPrimary);
+  split_view_controller()->SnapWindow(window2.get(), SnapPosition::kSecondary);
   EXPECT_EQ(split_view_controller()->InSplitViewMode(), true);
   EXPECT_EQ(split_view_controller()->state(),
             SplitViewController::State::kBothSnapped);
@@ -628,7 +608,8 @@ TEST_F(DockedMagnifierTest, DisplaysWorkAreasDoubleSplitView) {
   const display::Display& display = display_manager()->GetDisplayAt(0);
   const int magnifier_height = GetMagnifierHeight(display.bounds().height());
   gfx::Rect work_area = display.bounds();
-  work_area.Inset(0, magnifier_height, 0, ShelfConfig::Get()->shelf_size());
+  work_area.Inset(gfx::Insets::TLBR(magnifier_height, 0,
+                                    ShelfConfig::Get()->shelf_size(), 0));
   EXPECT_EQ(work_area, display.work_area());
   EXPECT_EQ(work_area.height(), window1->bounds().height());
   EXPECT_EQ(work_area.height(), window2->bounds().height());
@@ -683,7 +664,7 @@ TEST_F(DockedMagnifierTest, AddRemoveDisplays) {
   ASSERT_NE(nullptr, viewport_widget);
   EXPECT_EQ(root_windows[0], viewport_widget->GetNativeView()->GetRootWindow());
   const int viewport_1_height =
-      800 / DockedMagnifierController::kScreenHeightDivisor;
+      800 / DockedMagnifierController::kDefaultScreenHeightDivisor;
   EXPECT_EQ(gfx::Rect(0, 0, 600, viewport_1_height),
             viewport_widget->GetWindowBoundsInScreen());
 
@@ -708,7 +689,7 @@ TEST_F(DockedMagnifierTest, AddRemoveDisplays) {
   viewport_widget = controller()->GetViewportWidgetForTesting();
   EXPECT_EQ(root_windows[1], viewport_widget->GetNativeView()->GetRootWindow());
   const int viewport_2_height =
-      600 / DockedMagnifierController::kScreenHeightDivisor;
+      600 / DockedMagnifierController::kDefaultScreenHeightDivisor;
   EXPECT_EQ(gfx::Rect(600, 0, 400, viewport_2_height),
             viewport_widget->GetWindowBoundsInScreen());
 
@@ -718,14 +699,15 @@ TEST_F(DockedMagnifierTest, AddRemoveDisplays) {
   info_list.clear();
   info_list.push_back(disp_1_info);
   display_manager()->OnNativeDisplaysChanged(info_list);
-  // We need to spin this run loop to wait for a new mouse event to be
-  // dispatched so that the viewport widget is re-created.
-  base::RunLoop().RunUntilIdle();
-  root_windows = Shell::GetAllRootWindows();
-  ASSERT_EQ(1u, root_windows.size());
-  viewport_widget = controller()->GetViewportWidgetForTesting();
-  ASSERT_NE(nullptr, viewport_widget);
-  EXPECT_EQ(root_windows[0], viewport_widget->GetNativeView()->GetRootWindow());
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    root_windows = Shell::GetAllRootWindows();
+    if (root_windows.size() != 1u) {
+      return false;
+    }
+    viewport_widget = controller()->GetViewportWidgetForTesting();
+    return viewport_widget &&
+           viewport_widget->GetNativeView()->GetRootWindow() == root_windows[0];
+  }));
   EXPECT_EQ(gfx::Rect(0, 0, 600, viewport_1_height),
             viewport_widget->GetWindowBoundsInScreen());
 }
@@ -733,7 +715,7 @@ TEST_F(DockedMagnifierTest, AddRemoveDisplays) {
 // Tests various magnifier layer transform in the simple cases (i.e. no device
 // scale factors or screen rotations).
 TEST_F(DockedMagnifierTest, TransformSimple) {
-  UpdateDisplay("800x800");
+  UpdateDisplay("800x700");
   const auto root_windows = Shell::GetAllRootWindows();
   ASSERT_EQ(1u, root_windows.size());
 
@@ -747,7 +729,8 @@ TEST_F(DockedMagnifierTest, TransformSimple) {
   ASSERT_NE(nullptr, viewport_widget);
   EXPECT_EQ(root_windows[0], viewport_widget->GetNativeView()->GetRootWindow());
   const int viewport_height =
-      800 / DockedMagnifierController::kScreenHeightDivisor;
+      root_windows[0]->bounds().height() /
+      DockedMagnifierController::kDefaultScreenHeightDivisor;
   EXPECT_EQ(gfx::Rect(0, 0, 800, viewport_height),
             viewport_widget->GetWindowBoundsInScreen());
 
@@ -778,8 +761,8 @@ TEST_F(DockedMagnifierTest, TransformSimple) {
   viewport_top_edge_center.set_y(0);
   const ui::Layer* magnifier_layer =
       controller()->GetViewportMagnifierLayerForTesting();
-  magnifier_layer->transform().TransformPoint(&point_of_interest);
-  EXPECT_EQ(viewport_top_edge_center, point_of_interest);
+  EXPECT_EQ(viewport_top_edge_center,
+            magnifier_layer->transform().MapPoint(point_of_interest));
   // The minimum height for the point of interest is the bottom of the viewport
   // + the height of the separator + half the height of the viewport when scaled
   // back to the non-magnified space.
@@ -797,8 +780,8 @@ TEST_F(DockedMagnifierTest, TransformSimple) {
   TestMagnifierLayerTransform(point_of_interest, root_windows[0]);
   point_of_interest.set_y(viewport_height +
                           DockedMagnifierController::kSeparatorHeight);
-  magnifier_layer->transform().TransformPoint(&point_of_interest);
-  EXPECT_EQ(viewport_top_edge_center, point_of_interest);
+  EXPECT_EQ(viewport_top_edge_center,
+            magnifier_layer->transform().MapPoint(point_of_interest));
 
   EXPECT_FLOAT_EQ(viewport_height +
                       DockedMagnifierController::kSeparatorHeight +
@@ -806,42 +789,147 @@ TEST_F(DockedMagnifierTest, TransformSimple) {
                   controller()->GetMinimumPointOfInterestHeightForTesting());
 }
 
-// Tests that the magnifier viewport follows text fields focus and input caret
-// bounds changes events.
-TEST_F(DockedMagnifierTest, TextInputFieldEvents) {
-  UpdateDisplay("600x900");
+// Tests resizing docked magnifier by dragging the separator.
+TEST_F(DockedMagnifierTest, ResizeDockedMagnifier) {
+  UpdateDisplay("800x600");
   const auto root_windows = Shell::GetAllRootWindows();
   ASSERT_EQ(1u, root_windows.size());
 
-  MagnifierTextInputTestHelper text_input_helper;
-  text_input_helper.CreateAndShowTextInputView(gfx::Rect(500, 400, 80, 80));
-
-  // Enable the docked magnifier.
   controller()->SetEnabled(true);
-  const float scale1 = 2.0f;
-  controller()->SetScale(scale1);
   EXPECT_TRUE(controller()->GetEnabled());
-  EXPECT_FLOAT_EQ(scale1, controller()->GetScale());
+  const views::Widget* viewport_widget =
+      controller()->GetViewportWidgetForTesting();
+  ASSERT_NE(nullptr, viewport_widget);
+  EXPECT_EQ(root_windows[0], viewport_widget->GetNativeView()->GetRootWindow());
+  const int viewport_height =
+      root_windows[0]->bounds().height() /
+      DockedMagnifierController::kDefaultScreenHeightDivisor;
+  EXPECT_EQ(gfx::Rect(0, 0, 800, viewport_height),
+            viewport_widget->GetWindowBoundsInScreen());
 
-  // Focus on the text input field.
-  text_input_helper.FocusOnTextInputView();
+  ::wm::CursorManager* cursor_manager = Shell::Get()->cursor_manager();
+  EXPECT_NE(ui::mojom::CursorType::kNorthSouthResize,
+            cursor_manager->GetCursor().type());
+  EXPECT_FALSE(cursor_manager->IsCursorLocked());
 
-  // The text input caret center point will be our point of interest. When it
-  // goes through the magnifier layer transform, it should end up being in the
-  // center of the viewport.
-  gfx::Point caret_center(text_input_helper.GetCaretBounds().CenterPoint());
-  gfx::Point caret_screen_point =
-      controller()->GetLastCaretScreenPointForTesting();
-  ASSERT_EQ(caret_center, caret_screen_point);
+  // Move cursor over docked magnifier separator (to drag for resizing).
+  gfx::Point mouse_location(400, viewport_height);
+  GetEventGenerator()->MoveMouseTo(mouse_location);
+  EXPECT_EQ(ui::mojom::CursorType::kNorthSouthResize,
+            cursor_manager->GetCursor().type());
+  EXPECT_TRUE(cursor_manager->IsCursorLocked());
 
-  // Simulate typing by pressing some keys while focus is in the text field. The
-  // transformed caret center should always go to the viewport center.
-  GetEventGenerator()->PressKey(ui::VKEY_A, 0);
-  GetEventGenerator()->ReleaseKey(ui::VKEY_A, 0);
-  gfx::Point new_caret_center(text_input_helper.GetCaretBounds().CenterPoint());
-  gfx::Point new_caret_screen_point =
-      controller()->GetLastCaretScreenPointForTesting();
-  ASSERT_EQ(new_caret_center, new_caret_screen_point);
+  // Drag separator 100 pixels down.
+  mouse_location = gfx::Point(400, viewport_height + 100);
+  GetEventGenerator()->DragMouseTo(mouse_location);
+  EXPECT_EQ(ui::mojom::CursorType::kNorthSouthResize,
+            cursor_manager->GetCursor().type());
+  EXPECT_TRUE(cursor_manager->IsCursorLocked());
+
+  // Assert docked magnifier viewport is now taller.
+  EXPECT_EQ(gfx::Rect(0, 0, 800, viewport_height + 100),
+            viewport_widget->GetWindowBoundsInScreen());
+
+  // Move off of the separator. The cursor should reset.
+  GetEventGenerator()->MoveMouseTo(400, viewport_height + 200);
+  EXPECT_NE(ui::mojom::CursorType::kNorthSouthResize,
+            cursor_manager->GetCursor().type());
+  EXPECT_FALSE(cursor_manager->IsCursorLocked());
+
+  // Drag again, but turn off docked magnifier during drag (simulating keyboard
+  // shortcut). The cursor should reset.
+  GetEventGenerator()->MoveMouseTo(400, viewport_height + 100);
+  GetEventGenerator()->DragMouseTo(gfx::Point(400, viewport_height));
+  EXPECT_EQ(ui::mojom::CursorType::kNorthSouthResize,
+            cursor_manager->GetCursor().type());
+  EXPECT_TRUE(cursor_manager->IsCursorLocked());
+  controller()->SetEnabled(false);
+  EXPECT_NE(ui::mojom::CursorType::kNorthSouthResize,
+            cursor_manager->GetCursor().type());
+  EXPECT_FALSE(cursor_manager->IsCursorLocked());
+}
+
+// Tests to verify dragging above separator does not resize docked magnifier.
+TEST_F(DockedMagnifierTest, DragAboveSeparatorDoesNotResizeDockedMagnifier) {
+  UpdateDisplay("800x600");
+  const auto root_windows = Shell::GetAllRootWindows();
+  ASSERT_EQ(1u, root_windows.size());
+
+  controller()->SetEnabled(true);
+  EXPECT_TRUE(controller()->GetEnabled());
+  const views::Widget* viewport_widget =
+      controller()->GetViewportWidgetForTesting();
+  ASSERT_NE(nullptr, viewport_widget);
+  EXPECT_EQ(root_windows[0], viewport_widget->GetNativeView()->GetRootWindow());
+  const int viewport_height =
+      root_windows[0]->bounds().height() /
+      DockedMagnifierController::kDefaultScreenHeightDivisor;
+  EXPECT_EQ(gfx::Rect(0, 0, 800, viewport_height),
+            viewport_widget->GetWindowBoundsInScreen());
+
+  // Move cursor 2px above the docked magnifier separator, in the viewport area,
+  // where dragging should not work.
+  gfx::Point mouse_location(400, viewport_height - 2);
+  GetEventGenerator()->MoveMouseTo(mouse_location);
+
+  // Drag 100 pixels down.
+  mouse_location = gfx::Point(400, viewport_height + 100);
+  GetEventGenerator()->DragMouseTo(mouse_location);
+
+  // Assert docked magnifier viewport size remains at old height.
+  EXPECT_EQ(gfx::Rect(0, 0, 800, viewport_height),
+            viewport_widget->GetWindowBoundsInScreen());
+}
+
+// Tests to verify hovering and resizing the docked magnifier moves the cursor
+// in front of the viewport.
+TEST_F(DockedMagnifierTest, HoverAndResizeDockedMagnifierMovesCursorInFront) {
+  UpdateDisplay("800x600");
+  const auto root_windows = Shell::GetAllRootWindows();
+  ASSERT_EQ(1u, root_windows.size());
+
+  controller()->SetEnabled(true);
+  EXPECT_TRUE(controller()->GetEnabled());
+  const views::Widget* viewport_widget =
+      controller()->GetViewportWidgetForTesting();
+  ASSERT_NE(nullptr, viewport_widget);
+  EXPECT_EQ(root_windows[0], viewport_widget->GetNativeView()->GetRootWindow());
+  const int viewport_height =
+      root_windows[0]->bounds().height() /
+      DockedMagnifierController::kDefaultScreenHeightDivisor;
+  EXPECT_EQ(gfx::Rect(0, 0, 800, viewport_height),
+            viewport_widget->GetWindowBoundsInScreen());
+
+  CursorWindowController* cursor_window_controller =
+      Shell::Get()->window_tree_host_manager()->cursor_window_controller();
+
+  // Verify mouse is in layer behind separator.
+  EXPECT_EQ(cursor_window_controller->GetContainerForTest()->GetId(),
+            ash::kShellWindowId_MouseCursorContainer);
+
+  // Move cursor over the docked magnifier separator.
+  gfx::Point mouse_location(400, viewport_height);
+  GetEventGenerator()->MoveMouseTo(mouse_location);
+
+  // Verify mouse is in layer on top of separator
+  EXPECT_EQ(cursor_window_controller->GetContainerForTest()->GetId(),
+            ash::kShellWindowId_DockedMagnifierContainer);
+
+  // Drag mouse 100 pixels down.
+  mouse_location = gfx::Point(400, viewport_height + 100);
+  GetEventGenerator()->DragMouseTo(mouse_location);
+
+  // Assert mouse is still in layer on top of separator.
+  EXPECT_EQ(cursor_window_controller->GetContainerForTest()->GetId(),
+            ash::kShellWindowId_DockedMagnifierContainer);
+
+  // Move mouse 50 pixels down.
+  mouse_location = gfx::Point(400, viewport_height + 50);
+  GetEventGenerator()->MoveMouseTo(mouse_location);
+
+  // Assert mouse is back in layer behind separator.
+  EXPECT_EQ(cursor_window_controller->GetContainerForTest()->GetId(),
+            ash::kShellWindowId_MouseCursorContainer);
 }
 
 // Tests that there are no crashes observed when the docked magnifier switches
@@ -866,51 +954,96 @@ TEST_F(DockedMagnifierTest, NoCrashDueToRecursion) {
   EXPECT_TRUE(controller()->GetEnabled());
   EXPECT_FLOAT_EQ(scale1, controller()->GetScale());
 
-  // Focus on the text input field.
-  text_input_helper.FocusOnTextInputView();
-  gfx::Point caret_center(text_input_helper.GetCaretBounds().CenterPoint());
-  gfx::Point caret_screen_point =
-      controller()->GetLastCaretScreenPointForTesting();
-  ASSERT_EQ(caret_center, caret_screen_point);
-
   // Move the mouse to the second display and expect no crashes.
   GetEventGenerator()->MoveMouseTo(1000, 300);
 }
 
-TEST_F(DockedMagnifierTest, FocusChangeEvents) {
+TEST_F(DockedMagnifierTest, CaptureMode) {
   UpdateDisplay("600x900");
-  const auto root_windows = Shell::GetAllRootWindows();
-  ASSERT_EQ(1u, root_windows.size());
 
-  MagnifierFocusTestHelper focus_test_helper;
-  focus_test_helper.CreateAndShowFocusTestView(gfx::Point(70, 500));
-
-  // Enable the docked magnifier.
   controller()->SetEnabled(true);
-  const float scale = 2.0f;
-  controller()->SetScale(scale);
-  EXPECT_TRUE(controller()->GetEnabled());
-  EXPECT_FLOAT_EQ(scale, controller()->GetScale());
+  controller()->SetScale(2.f);
 
-  // Focus on the first button and expect the magnifier to be centered around
-  // its center.
-  focus_test_helper.FocusFirstButton();
-  gfx::Point button_1_center(
-      focus_test_helper.GetFirstButtonBoundsInRoot().CenterPoint());
-  TestMagnifierLayerTransform(button_1_center, root_windows[0]);
+  auto* capture_mode_controller = CaptureModeController::Get();
+  capture_mode_controller->Start(CaptureModeEntryType::kQuickSettings);
 
-  // Similarly if we focus on the second button.
-  focus_test_helper.FocusSecondButton();
-  gfx::Point button_2_center(
-      focus_test_helper.GetSecondButtonBoundsInRoot().CenterPoint());
-  TestMagnifierLayerTransform(button_2_center, root_windows[0]);
+  // Test that the magnifier viewport follows the cursor when it moves to
+  // various points even though capture mode consumes mouse events.
+  auto* event_generator = GetEventGenerator();
+  gfx::Point point_of_interest{10, 20};
+  event_generator->MoveMouseTo(point_of_interest);
+  auto* root = Shell::GetPrimaryRootWindow();
+  TestMagnifierLayerTransform(point_of_interest, root);
+  point_of_interest = gfx::Point{510, 820};
+  event_generator->MoveMouseTo(point_of_interest);
+  TestMagnifierLayerTransform(point_of_interest, root);
+
+  // And the magnifier viewport follows the cursor when it's above the capture
+  // mode bar.
+  const auto* bar_widget = capture_mode_controller->capture_mode_session()
+                               ->GetCaptureModeBarWidget();
+  point_of_interest = bar_widget->GetWindowBoundsInScreen().CenterPoint();
+  event_generator->MoveMouseTo(point_of_interest);
+  TestMagnifierLayerTransform(point_of_interest, root);
 }
+
+namespace {
+
+class DockedMagnifierRegisterProfilePrefsTest
+    : public testing::TestWithParam<bool> {
+ public:
+  DockedMagnifierRegisterProfilePrefsTest() {
+    if (GetParam()) {
+      scoped_feature_list_.InitAndEnableFeature(
+          ash::features::kOsSyncAccessibilitySettingsBatch3);
+    } else {
+      scoped_feature_list_.InitAndDisableFeature(
+          ash::features::kOsSyncAccessibilitySettingsBatch3);
+    }
+  }
+
+ protected:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+}  // namespace
+
+TEST_P(DockedMagnifierRegisterProfilePrefsTest,
+       DockedMagnifierPrefsRespectBatch3FeatureFlag) {
+  constexpr std::array<const char*, 2> kCaptionPrefs = {
+      prefs::kDockedMagnifierEnabled,
+      prefs::kDockedMagnifierScale,
+  };
+
+  scoped_refptr<user_prefs::PrefRegistrySyncable> registry =
+      base::MakeRefCounted<user_prefs::PrefRegistrySyncable>();
+  DockedMagnifierController::RegisterProfilePrefs(registry.get());
+
+  const bool expect_sync = GetParam();
+  for (const char* pref_name : kCaptionPrefs) {
+    const uint32_t flags = registry->GetRegistrationFlags(pref_name);
+    if (expect_sync) {
+      EXPECT_NE(0u, flags & user_prefs::PrefRegistrySyncable::SYNCABLE_OS_PREF)
+          << pref_name;
+    } else {
+      EXPECT_EQ(0u, flags & user_prefs::PrefRegistrySyncable::SYNCABLE_OS_PREF)
+          << pref_name;
+    }
+  }
+
+  // This setting must never be synced.
+  EXPECT_EQ(0u, registry->GetRegistrationFlags(
+                    prefs::kDockedMagnifierScreenHeightDivisor) &
+                    user_prefs::PrefRegistrySyncable::SYNCABLE_OS_PREF);
+}
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         DockedMagnifierRegisterProfilePrefsTest,
+                         ::testing::Values(true, false));
 
 // TODO(afakhry): Expand tests:
 // - Test magnifier viewport's layer transforms with screen rotation,
 //   multi display, and unified mode.
 // - Test adjust scale using scroll events.
-
-}  // namespace
 
 }  // namespace ash

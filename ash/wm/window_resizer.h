@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,9 @@
 #include <memory>
 
 #include "ash/ash_export.h"
-#include "ash/public/cpp/presentation_time_recorder.h"
 #include "ash/wm/drag_details.h"
 #include "ash/wm/window_state.h"
-#include "base/macros.h"
-#include "base/memory/weak_ptr.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/wm/public/window_move_client.h"
 
 namespace aura {
@@ -28,12 +26,28 @@ class GestureEvent;
 }
 
 namespace ash {
+class PresentationTimeRecorder;
 
-// WindowResizer is used by ToplevelWindowEventFilter to handle dragging, moving
-// or resizing a window. All coordinates passed to this are in the parent
+// WindowResizer is used by ToplevelWindowEventHandler to handle dragging,
+// moving or resizing a window. All coordinates passed to this are in the parent
 // windows coordinates.
 class ASH_EXPORT WindowResizer {
  public:
+  // ScopedDeleteBlocker prevents the WindowResizer from being deleted while
+  // it is in scope.
+  class ASH_EXPORT ScopedDeleteBlocker {
+   public:
+    explicit ScopedDeleteBlocker(WindowResizer* resizer) : resizer_(resizer) {
+      resizer_->delete_block_count_++;
+    }
+    ScopedDeleteBlocker(const ScopedDeleteBlocker&) = delete;
+    ScopedDeleteBlocker& operator=(const ScopedDeleteBlocker&) = delete;
+    ~ScopedDeleteBlocker() { resizer_->delete_block_count_--; }
+
+   private:
+    raw_ptr<WindowResizer> resizer_;
+  };
+
   // Constants to identify the type of resize.
   static const int kBoundsChange_None;
   static const int kBoundsChange_Repositions;
@@ -45,18 +59,27 @@ class ASH_EXPORT WindowResizer {
   static const int kBoundsChangeDirection_Vertical;
 
   explicit WindowResizer(WindowState* window_state);
+
+  WindowResizer(const WindowResizer&) = delete;
+  WindowResizer& operator=(const WindowResizer&) = delete;
+
   virtual ~WindowResizer();
 
-  // Returns a bitmask of the kBoundsChange_ values.
+  // Returns a bitmask of the `kBoundsChange_*` values.
   static int GetBoundsChangeForWindowComponent(int component);
 
-  // Returns a bitmask of the kBoundsChange_ values.
+  // Returns a bitmask of the `kBoundsChangeDirection_*` values.
   static int GetPositionChangeDirectionForWindowComponent(int window_component);
 
   // Invoked to drag/move/resize the window. |location| is in the coordinates
   // of the window supplied to the constructor. |event_flags| is the event
   // flags from the event.
   virtual void Drag(const gfx::PointF& location, int event_flags) = 0;
+
+  // Invoked during pinch to move and resize the window. `location` is in the
+  // coordinates of the window supplied to the constructor. `scale` is the
+  // the scale change since last gesture event.
+  virtual void Pinch(const gfx::PointF& location, float scale) {}
 
   // Invoked to complete the drag.
   virtual void CompleteDrag() = 0;
@@ -78,17 +101,31 @@ class ASH_EXPORT WindowResizer {
   // Drag parameters established when drag starts.
   const DragDetails& details() const { return *window_state_->drag_details(); }
 
+  // Called by ToplevelWindowEventHandler when the drag completes. The drag may
+  // complete while `Drag()` is still on the stack, e.g. when a bounds change
+  // made by `Drag()` makes the client transfer capture or merge the dragged
+  // tab(s) into another browser window. The resizer is kept alive until the
+  // outermost event dispatch returns, so `Drag()` implementations must check
+  // `IsDragCompleted()` after any call that may end the drag and return early.
+  virtual void OnDragCompleted();
+  bool IsDragCompleted() const { return drag_completed_; }
+
  protected:
   gfx::Rect CalculateBoundsForDrag(const gfx::PointF& location);
-
-  static bool IsBottomEdge(int component);
 
   // Call during an active resize to change the bounds of the window. This
   // should not be called as the result of a revert.
   void SetBoundsDuringResize(const gfx::Rect& bounds);
 
+  // Called during an active resize to change the transform of the
+  // window.
+  void SetTransformDuringResize(const gfx::Transform& transform);
+
+  void SetPresentationTimeRecorder(
+      std::unique_ptr<PresentationTimeRecorder> recorder);
+
   // WindowState of the drag target.
-  WindowState* window_state_;
+  raw_ptr<WindowState> window_state_;
 
  private:
   // In case of touch resizing, adjusts deltas so that the border is positioned
@@ -103,13 +140,13 @@ class ASH_EXPORT WindowResizer {
                               const gfx::PointF& event_location);
 
   // Returns the size of the window for the drag.
-  gfx::Size GetSizeForDrag(int* delta_x, int* delta_y);
+  gfx::Size GetSizeForDrag(int* delta_x, int* delta_y) const;
 
-  // Returns the width of the window.
-  int GetWidthForDrag(int min_width, int* delta_x);
+  // Called by `GetSizeForDrag` to get the width of the window for the drag.
+  int GetWidthForDrag(int min_width, int* delta_x) const;
 
-  // Returns the height of the drag.
-  int GetHeightForDrag(int min_height, int* delta_y);
+  // Called by `GetSizeForDrag` to get the height of the window for the drag.
+  int GetHeightForDrag(int min_height, int* delta_y) const;
 
   // Updates |new_bounds| to adhere to the aspect ratio.
   void CalculateBoundsWithAspectRatio(float aspect_ratio,
@@ -117,9 +154,10 @@ class ASH_EXPORT WindowResizer {
 
   std::unique_ptr<PresentationTimeRecorder> recorder_;
 
-  base::WeakPtrFactory<WindowResizer> weak_ptr_factory_{this};
+  uint32_t delete_block_count_ = 0;
 
-  DISALLOW_COPY_AND_ASSIGN(WindowResizer);
+  // See `IsDragCompleted()`.
+  bool drag_completed_ = false;
 };
 
 // Creates a WindowResizer for |window|. Returns a unique_ptr with null if
@@ -128,7 +166,8 @@ ASH_EXPORT std::unique_ptr<WindowResizer> CreateWindowResizer(
     aura::Window* window,
     const gfx::PointF& point_in_parent,
     int window_component,
-    ::wm::WindowMoveSource source);
+    ::wm::WindowMoveSource source,
+    bool for_pinch = false);
 
 }  // namespace ash
 

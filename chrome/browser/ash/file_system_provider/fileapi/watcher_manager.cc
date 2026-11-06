@@ -1,11 +1,11 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/file_system_provider/fileapi/watcher_manager.h"
 
-#include "base/bind.h"
 #include "base/files/file.h"
+#include "base/functional/bind.h"
 #include "chrome/browser/ash/file_system_provider/mount_path_util.h"
 #include "chrome/browser/ash/file_system_provider/provided_file_system_info.h"
 #include "chrome/browser/ash/file_system_provider/provided_file_system_interface.h"
@@ -15,8 +15,7 @@
 
 using content::BrowserThread;
 
-namespace ash {
-namespace file_system_provider {
+namespace ash::file_system_provider {
 
 namespace {
 
@@ -26,14 +25,14 @@ using ChangeType = storage::WatcherManager::ChangeType;
 
 void CallStatusCallbackOnIOThread(StatusCallback callback,
                                   base::File::Error error) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   content::GetIOThreadTaskRunner({})->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), error));
 }
 
 void CallNotificationCallbackOnIOThread(NotificationCallback callback,
                                         ChangeType type) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   content::GetIOThreadTaskRunner({})->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), type));
 }
@@ -42,7 +41,7 @@ void AddWatcherOnUIThread(const storage::FileSystemURL& url,
                           bool recursive,
                           StatusCallback callback,
                           NotificationCallback notification_callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
   util::FileSystemURLParser parser(url);
   if (!parser.Parse()) {
@@ -56,7 +55,7 @@ void AddWatcherOnUIThread(const storage::FileSystemURL& url,
   }
 
   parser.file_system()->AddWatcher(url.origin().GetURL(), parser.file_path(),
-                                   recursive, false /* persistent */,
+                                   recursive, /*persistent=*/false,
                                    std::move(callback),
                                    std::move(notification_callback));
 }
@@ -64,7 +63,7 @@ void AddWatcherOnUIThread(const storage::FileSystemURL& url,
 void RemoveWatcherOnUIThread(const storage::FileSystemURL& url,
                              bool recursive,
                              StatusCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
   util::FileSystemURLParser parser(url);
   if (!parser.Parse()) {
@@ -90,7 +89,7 @@ void WatcherManager::AddWatcher(const storage::FileSystemURL& url,
                                 bool recursive,
                                 StatusCallback callback,
                                 NotificationCallback notification_callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE,
       base::BindOnce(
@@ -103,12 +102,11 @@ void WatcherManager::AddWatcher(const storage::FileSystemURL& url,
 void WatcherManager::RemoveWatcher(const storage::FileSystemURL& url,
                                    bool recursive,
                                    StatusCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE, base::BindOnce(&RemoveWatcherOnUIThread, url, recursive,
                                 base::BindOnce(&CallStatusCallbackOnIOThread,
                                                std::move(callback))));
 }
 
-}  // namespace file_system_provider
-}  // namespace ash
+}  // namespace ash::file_system_provider

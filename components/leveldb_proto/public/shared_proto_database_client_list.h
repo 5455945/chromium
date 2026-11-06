@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 
 #include <stddef.h>
 
+#include <array>
 #include <string>
 
 #include "base/component_export.h"
@@ -17,9 +18,7 @@ const char* const kFeatureEngagementName = "FeatureEngagement";
 
 // The enum values are used to index into the shared database. Do not rearrange
 // or reuse the integer values. Add new database types at the end of the enum,
-// and update the string mapping in ProtoDbTypeToString(). Also update the
-// suffix LevelDBClients in histogram_suffixes_list.xml to match the strings for
-// the types.
+// and update the string mapping in ProtoDbTypeToString().
 enum class ProtoDbType {
   TEST_DATABASE0 = 0,
   TEST_DATABASE1 = 1,
@@ -63,25 +62,46 @@ enum class ProtoDbType {
   SEGMENT_INFO_DATABASE = 37,
   SIGNAL_DATABASE = 38,
   SIGNAL_STORAGE_CONFIG_DATABASE = 39,
+  VIDEO_TUTORIALS_V2_DATABASE = 40,
+  COUPON_DATABASE = 41,
+  PAGE_ENTITY_METADATA_STORE = 42,
+  WEBRTC_VIDEO_STATS_DB = 43,
+  PERSISTENT_ORIGIN_TRIALS = 44,
+  NEARBY_PRESENCE_LOCAL_PUBLIC_CREDENTIAL_DATABASE = 45,
+  NEARBY_PRESENCE_PRIVATE_CREDENTIAL_DATABASE = 46,
+  NEARBY_PRESENCE_REMOTE_PUBLIC_CREDENTIAL_DATABASE = 47,
+  DISCOUNTS_DATABASE = 48,
+  COMMERCE_PARCEL_TRACKING_DATABASE = 49,
+  CLIENT_CERTIFICATES_DATABASE = 50,
+  AUTOFILL_AI_MODEL_CACHE = 51,
+  DISCOUNT_INFOS_DATABASE = 52,
+  NOTIFICATION_TELEMETRY_STORE = 53,
+  RECORD_REPLAY_STORE = 54,
   LAST,
 };
 
 // List of databases that need to keep using unique db instances. New databases
 // shouldn't be here unless they have a good reason.
-constexpr ProtoDbType kBlocklistedDbForSharedImpl[]{
+constexpr auto kBlocklistedDbForSharedImpl = std::to_array<ProtoDbType>({
     // DB is not tied to a profile, will always be unique.
     ProtoDbType::GCM_KEY_STORE,
     // DB Used by shared database, will always be unique.
     ProtoDbType::SHARED_DB_METADATA,
     // Marks the end of list.
     ProtoDbType::LAST,
-};
+});
 
 // Add any obsolete databases in this list so that, if the data is no longer
 // needed.
 constexpr ProtoDbType kObsoleteSharedProtoDbTypeClients[] = {
-    ProtoDbType::DOM_DISTILLER_STORE, ProtoDbType::FEED_CONTENT_DATABASE,
+    ProtoDbType::DOM_DISTILLER_STORE,
+    ProtoDbType::FEED_CONTENT_DATABASE,
     ProtoDbType::FEED_JOURNAL_DATABASE,
+    ProtoDbType::VIDEO_TUTORIALS_DATABASE,
+    ProtoDbType::VIDEO_TUTORIALS_V2_DATABASE,
+    ProtoDbType::NEARBY_PRESENCE_LOCAL_PUBLIC_CREDENTIAL_DATABASE,
+    ProtoDbType::NEARBY_PRESENCE_PRIVATE_CREDENTIAL_DATABASE,
+    ProtoDbType::NEARBY_PRESENCE_REMOTE_PUBLIC_CREDENTIAL_DATABASE,
     ProtoDbType::LAST,  // Marks the end of list.
 };
 

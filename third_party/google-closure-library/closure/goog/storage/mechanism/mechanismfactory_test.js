@@ -1,47 +1,98 @@
-// Copyright 2011 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 goog.module('goog.storage.mechanism.mechanismfactoryTest');
 goog.setTestOnly();
 
+const iterableMechanismTests = goog.require('goog.storage.mechanism.iterableMechanismTests');
+const mechanismSeparationTests = goog.require('goog.storage.mechanism.mechanismSeparationTests');
+const mechanismSharingTests = goog.require('goog.storage.mechanism.mechanismSharingTests');
+const mechanismTests = goog.require('goog.storage.mechanism.mechanismTests');
 const mechanismfactory = goog.require('goog.storage.mechanism.mechanismfactory');
 const testSuite = goog.require('goog.testing.testSuite');
 
-testSuite({
-  testAvailability() {
-    let mechanism = mechanismfactory.create('test');
-    let mechanism_shared = mechanismfactory.create('test');
-    let mechanism_separate = mechanismfactory.create('test2');
+let mechanism;
+let mechanismShared;
+let mechanismSeparate;
 
+testSuite({
+
+  setUp() {
+    mechanism = mechanismfactory.create('test');
+    mechanismShared = mechanismfactory.create('test');
+    mechanismSeparate = mechanismfactory.create('test2');
+  },
+
+  tearDown() {
+    if (!!mechanism) {
+      mechanism.clear();
+      mechanism = null;
+    }
+    if (!!mechanismShared) {
+      mechanismShared.clear();
+      mechanismShared = null;
+    }
+    if (!!mechanismSeparate) {
+      mechanismSeparate.clear();
+      mechanismSeparate = null;
+    }
+  },
+
+  testAvailability() {
     const probe = mechanismfactory.create();
     if (!!probe) {
       assertNotNull(mechanism);
-      assertNotNull(mechanism_shared);
-      assertNotNull(mechanism_separate);
+      assertNotNull(mechanismShared);
+      assertNotNull(mechanismSeparate);
     }
 
     if (!!mechanism) {
       mechanism.clear();
       mechanism = null;
     }
-    if (!!mechanism_shared) {
-      mechanism_shared.clear();
-      mechanism_shared = null;
+    if (!!mechanismShared) {
+      mechanismShared.clear();
+      mechanismShared = null;
     }
-    if (!!mechanism_separate) {
-      mechanism_separate.clear();
-      mechanism_separate = null;
+    if (!!mechanismSeparate) {
+      mechanismSeparate.clear();
+      mechanismSeparate = null;
     }
   },
+
+  ...mechanismTests.register({
+    getMechanism: function() {
+      return mechanism;
+    },
+    getMinimumQuota: function() {
+      return 0;
+    },
+  }),
+
+  ...iterableMechanismTests.register({
+    getMechanism: function() {
+      return mechanism;
+    },
+  }),
+
+  ...mechanismSharingTests.register({
+    getMechanism: function() {
+      return mechanism;
+    },
+    getMechanismShared: function() {
+      return mechanismShared;
+    },
+  }),
+
+  ...mechanismSeparationTests.register({
+    getMechanism: function() {
+      return mechanism;
+    },
+    getMechanismSeparate: function() {
+      return mechanismSeparate;
+    },
+  }),
 });

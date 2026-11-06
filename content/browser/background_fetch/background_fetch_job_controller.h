@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,15 @@
 #define CONTENT_BROWSER_BACKGROUND_FETCH_BACKGROUND_FETCH_JOB_CONTROLLER_H_
 
 #include <stdint.h>
+
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "content/browser/background_fetch/background_fetch_delegate_proxy.h"
 #include "content/browser/background_fetch/background_fetch_registration_id.h"
@@ -21,12 +23,15 @@
 #include "content/common/background_fetch/background_fetch_types.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/browser_thread.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
+#include "services/network/public/mojom/data_pipe_getter.mojom-forward.h"
+#include "third_party/blink/public/common/service_worker/service_worker_status_code.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
 namespace content {
 
 class BackgroundFetchDataManager;
+class ServiceWorkerRegistration;
 
 // The JobController will be responsible for coordinating communication with the
 // DownloadManager. It will get requests from the RequestManager and dispatch
@@ -68,6 +73,11 @@ class CONTENT_EXPORT BackgroundFetchJobController
       uint64_t upload_total,
       ProgressCallback progress_callback,
       FinishedCallback finished_callback);
+
+  BackgroundFetchJobController(const BackgroundFetchJobController&) = delete;
+  BackgroundFetchJobController& operator=(const BackgroundFetchJobController&) =
+      delete;
+
   ~BackgroundFetchJobController() override;
 
   // Initializes the job controller with the status of the active and completed
@@ -78,7 +88,8 @@ class CONTENT_EXPORT BackgroundFetchJobController
       int total_downloads,
       std::vector<scoped_refptr<BackgroundFetchRequestInfo>>
           active_fetch_requests,
-      bool start_paused);
+      bool start_paused,
+      std::optional<net::IsolationInfo> isolation_info);
 
   // Gets the number of bytes downloaded/uploaded for jobs that are currently
   // running.
@@ -122,6 +133,17 @@ class CONTENT_EXPORT BackgroundFetchJobController
       RequestFinishedCallback request_finished_callback,
       blink::mojom::BackgroundFetchError error,
       scoped_refptr<BackgroundFetchRequestInfo> request_info);
+  void DidGetRegistrationForRequest(
+      RequestStartedCallback request_started_callback,
+      RequestFinishedCallback request_finished_callback,
+      scoped_refptr<BackgroundFetchRequestInfo> request_info,
+      blink::ServiceWorkerStatusCode status,
+      scoped_refptr<ServiceWorkerRegistration> registration);
+  void DidGetRegistrationForUploadData(
+      const std::string& guid,
+      BackgroundFetchDelegate::GetUploadDataCallback callback,
+      blink::ServiceWorkerStatusCode status,
+      scoped_refptr<ServiceWorkerRegistration> registration);
   void StartRequest(scoped_refptr<BackgroundFetchRequestInfo> request,
                     RequestFinishedCallback request_finished_callback);
   void MarkRequestAsComplete(scoped_refptr<BackgroundFetchRequestInfo> request);
@@ -137,6 +159,22 @@ class CONTENT_EXPORT BackgroundFetchJobController
     uint64_t downloaded = 0u;
   };
 
+  struct ActiveRequestState {
+    ActiveRequestState();
+    ActiveRequestState(ActiveRequestState&&);
+    ActiveRequestState& operator=(ActiveRequestState&&);
+    ~ActiveRequestState();
+
+    scoped_refptr<BackgroundFetchRequestInfo> request;
+    InProgressRequestBytes in_progress_bytes;
+    RequestFinishedCallback finished_callback;
+  };
+
+  // Ensures that `url_loader_factory_` is initialized for the given
+  // `registration`.
+  void InitializeUrlLoaderFactory(
+      scoped_refptr<ServiceWorkerRegistration> registration);
+
   // Called after the request is completely processed, and the next one can be
   // started.
   void DidMarkRequestAsComplete(blink::mojom::BackgroundFetchError error);
@@ -151,24 +189,22 @@ class CONTENT_EXPORT BackgroundFetchJobController
   void Finish(blink::mojom::BackgroundFetchFailureReason reason_to_abort,
               ErrorCallback callback);
 
-  void DidGetUploadData(BackgroundFetchDelegate::GetUploadDataCallback callback,
-                        blink::mojom::BackgroundFetchError error,
-                        blink::mojom::SerializedBlobPtr blob);
+  void DidGetUploadData(
+      BackgroundFetchDelegate::GetUploadDataCallback callback,
+      uint64_t size,
+      blink::mojom::BackgroundFetchError error,
+      mojo::PendingRemote<network::mojom::DataPipeGetter> data_pipe_getter);
 
   // Manager for interacting with the DB. It is owned by the
   // BackgroundFetchContext.
-  BackgroundFetchDataManager* data_manager_;
+  raw_ptr<BackgroundFetchDataManager> data_manager_;
 
   // Proxy for interacting with the BackgroundFetchDelegate across thread
   // boundaries. It is owned by the BackgroundFetchContext.
-  BackgroundFetchDelegateProxy* delegate_proxy_;
+  raw_ptr<BackgroundFetchDelegateProxy> delegate_proxy_;
 
-  // A map from the download GUID to the active request.
-  std::map<std::string, scoped_refptr<BackgroundFetchRequestInfo>>
-      active_request_map_;
-
-  // A map from the download GUID to the in-progress bytes.
-  std::map<std::string, InProgressRequestBytes> active_bytes_map_;
+  // A map from the download GUID to the active request state.
+  std::map<std::string, ActiveRequestState> active_requests_;
 
   // The registration ID of the fetch this controller represents.
   BackgroundFetchRegistrationId registration_id_;
@@ -178,11 +214,6 @@ class CONTENT_EXPORT BackgroundFetchJobController
 
   // Icon for the represented background fetch registration.
   SkBitmap icon_;
-
-  // Finished callback to invoke when the active request has finished mapped by
-  // its download GUID.
-  std::map<std::string, RequestFinishedCallback>
-      active_request_finished_callbacks_;
 
   // Cache of downloaded byte count stored by the DataManager, to enable
   // delivering progress events without having to read from the database.
@@ -210,12 +241,16 @@ class CONTENT_EXPORT BackgroundFetchJobController
   blink::mojom::BackgroundFetchFailureReason failure_reason_ =
       blink::mojom::BackgroundFetchFailureReason::NONE;
 
+  // Whether one of the requests handled by the controller failed
+  // the CORS checks and should not have its response exposed.
+  bool has_failed_cors_request_ = false;
+
   // Custom callback that runs after the controller is finished.
   FinishedCallback finished_callback_;
 
-  base::WeakPtrFactory<BackgroundFetchJobController> weak_ptr_factory_{this};
+  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
 
-  DISALLOW_COPY_AND_ASSIGN(BackgroundFetchJobController);
+  base::WeakPtrFactory<BackgroundFetchJobController> weak_ptr_factory_{this};
 };
 
 }  // namespace content

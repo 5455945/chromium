@@ -1,14 +1,14 @@
 <!DOCTYPE html>
-<html>
-<head>
+<meta name=fuzzy content="maxDifference=0-3; totalPixels=0-1000">
 <script>
 testRunner.waitUntilDone();
 </script>
 <script src='../../../resources/testharness.js'></script>
 <script src='../../../resources/testharnessreport.js'></script>
+<script src="../../../resources/testdriver.js"></script>
+<script src="../../../resources/testdriver-vendor.js"></script>
 <script src='../../../fast/forms/resources/picker-common.js'></script>
-</head>
-<body>
+
 <input type='color' id='color' value='#EA5FB0'>
 
 <p id='description' style='opacity: 0'></p>
@@ -18,9 +18,10 @@ testRunner.waitUntilDone();
 let t = async_test('Color picker: Moving the color well\'s selection ring using the keyboard after a drag.');
 t.step(() => {
   let colorControl = document.getElementById('color');
-  openPicker(colorControl, t.step_func_done(() => {
-    popupWindow.focus();
-    const popupDocument = popupWindow.document;
+  openPicker(colorControl)
+  .then(t.step_func_done(() => {
+    internals.pagePopupWindow.focus();
+    const popupDocument = internals.pagePopupWindow.document;
     const colorWell = popupDocument.querySelector('color-well');
     const colorWellRect = colorWell.getBoundingClientRect();
     const colorWellSelectionRing = popupDocument.querySelector('color-well > color-selection-ring');
@@ -45,5 +46,3 @@ t.step(() => {
   }));
 });
 </script>
-</body>
-</html>

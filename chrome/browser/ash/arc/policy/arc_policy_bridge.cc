@@ -1,55 +1,69 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/arc/policy/arc_policy_bridge.h"
 
+#include <optional>
+#include <string>
+#include <string_view>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/guid.h"
+#include "ash/constants/ash_switches.h"
+#include "ash/constants/chrome_pref_names.h"
+#include "base/check_deref.h"
+#include "base/command_line.h"
+#include "base/containers/fixed_flat_set.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_string_value_serializer.h"
 #include "base/logging.h"
-#include "base/memory/singleton.h"
-#include "base/metrics/histogram_macros.h"
-#include "base/strings/string_number_conversions.h"
-#include "base/strings/string_util.h"
+#include "base/no_destructor.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/uuid.h"
 #include "base/values.h"
 #include "chrome/browser/ash/arc/enterprise/cert_store/cert_store_service.h"
+#include "chrome/browser/ash/arc/enterprise/cert_store/cert_store_service_factory.h"
+#include "chrome/browser/ash/arc/policy/arc_policy_util.h"
+#include "chrome/browser/ash/arc/policy/managed_configuration_variables.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
+#include "chrome/browser/ash/policy/core/device_attributes_impl.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/platform_keys/extension_key_permissions_service.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/browser_process_platform_part_ash.h"
+#include "chrome/browser/chromeos/platform_keys/extension_key_permissions_service.h"
 #include "chrome/browser/policy/developer_tools_policy_handler.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/common/pref_names.h"
-#include "chromeos/network/onc/onc_utils.h"
-#include "components/arc/arc_browser_context_keyed_service_factory_base.h"
-#include "components/arc/arc_prefs.h"
-#include "components/arc/enterprise/arc_data_snapshotd_manager.h"
-#include "components/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/experiences/arc/arc_browser_context_keyed_service_factory_base.h"
+#include "chromeos/ash/experiences/arc/arc_prefs.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
+#include "chromeos/components/onc/onc_utils.h"
 #include "components/onc/onc_constants.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/policy_namespace.h"
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_service.h"
 #include "components/user_manager/user.h"
-#include "crypto/sha2.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+
+// Enable VLOG level 1.
+#undef ENABLED_VLOG_LEVEL
+#define ENABLED_VLOG_LEVEL 1
 
 namespace arc {
 
 namespace {
 
-constexpr char kArcCaCerts[] = "caCerts";
 constexpr char kPolicyCompliantJson[] = "{ \"policyCompliant\": true }";
-constexpr char kArcRequiredKeyPairs[] = "requiredKeyPairs";
-constexpr char kPlayStorePackageName[] = "com.android.vending";
-constexpr char kPrivateKeySelectionEnabled[] = "privateKeySelectionEnabled";
-constexpr char kChoosePrivateKeyRules[] = "choosePrivateKeyRules";
+constexpr char kPolicyAppInstallType[] = "installType";
+constexpr char kPolicyAppInstallTypeForceInstalled[] = "FORCE_INSTALLED";
+constexpr char kPolicyCaCertType[] = "X509";
+constexpr char kPolicyRequiredKeyAlias[] = "alias";
+constexpr char kPolicyPrivateKeyAlias[] = "privateKeyAlias";
+constexpr char kPolicyPrivateKeyPackageNames[] = "packageNames";
+constexpr char kPolicyPlayStoreModeSupervised[] = "SUPERVISED";
+constexpr char kPolicyPlayStoreModeAllowList[] = "WHITELIST"; // nocheck
 
 // invert_bool_value: If the Chrome policy and the ARC policy with boolean value
 // have opposite semantics, set this to true so the bool is inverted before
@@ -58,16 +72,18 @@ void MapBoolToBool(const std::string& arc_policy_name,
                    const std::string& policy_name,
                    const policy::PolicyMap& policy_map,
                    bool invert_bool_value,
-                   base::Value* filtered_policies) {
-  const base::Value* const policy_value = policy_map.GetValue(policy_name);
-  if (!policy_value)
-    return;
-  if (!policy_value->is_bool()) {
-    NOTREACHED() << "Policy " << policy_name << " is not a boolean.";
+                   base::DictValue* filtered_policies) {
+  if (!policy_map.IsPolicySet(policy_name)) {
     return;
   }
-  filtered_policies->SetBoolKey(arc_policy_name,
-                                policy_value->GetBool() != invert_bool_value);
+
+  const base::Value* const policy_value =
+      policy_map.GetValue(policy_name, base::Value::Type::BOOLEAN);
+  if (!policy_value) {
+    NOTREACHED() << "Policy " << policy_name << " is not a boolean.";
+  }
+  filtered_policies->Set(arc_policy_name,
+                         policy_value->GetBool() != invert_bool_value);
 }
 
 // int_true: value of Chrome OS policy for which arc policy is set to true.
@@ -76,16 +92,17 @@ void MapIntToBool(const std::string& arc_policy_name,
                   const std::string& policy_name,
                   const policy::PolicyMap& policy_map,
                   int int_true,
-                  base::Value* filtered_policies) {
-  const base::Value* const policy_value = policy_map.GetValue(policy_name);
-  if (!policy_value)
-    return;
-  if (!policy_value->is_int()) {
-    NOTREACHED() << "Policy " << policy_name << " is not an integer.";
+                  base::DictValue* filtered_policies) {
+  if (!policy_map.IsPolicySet(policy_name)) {
     return;
   }
-  filtered_policies->SetBoolKey(arc_policy_name,
-                                policy_value->GetInt() == int_true);
+
+  const base::Value* const policy_value =
+      policy_map.GetValue(policy_name, base::Value::Type::INTEGER);
+  if (!policy_value) {
+    NOTREACHED() << "Policy " << policy_name << " is not an integer.";
+  }
+  filtered_policies->Set(arc_policy_name, policy_value->GetInt() == int_true);
 }
 
 // |arc_policy_name| is only set if the |pref_name| pref is managed.
@@ -95,12 +112,13 @@ void MapManagedIntPrefToBool(const std::string& arc_policy_name,
                              const std::string& pref_name,
                              const PrefService* profile_prefs,
                              int int_true,
-                             base::Value* filtered_policies) {
-  if (!profile_prefs->IsManagedPreference(pref_name))
+                             base::DictValue* filtered_policies) {
+  if (!profile_prefs->IsManagedPreference(pref_name)) {
     return;
+  }
 
-  filtered_policies->SetBoolKey(
-      arc_policy_name, profile_prefs->GetInteger(pref_name) == int_true);
+  filtered_policies->Set(arc_policy_name,
+                         profile_prefs->GetInteger(pref_name) == int_true);
 }
 
 // Checks whether |policy_name| is present as an object and has all |fields|,
@@ -108,42 +126,46 @@ void MapManagedIntPrefToBool(const std::string& arc_policy_name,
 void MapObjectToPresenceBool(const std::string& arc_policy_name,
                              const std::string& policy_name,
                              const policy::PolicyMap& policy_map,
-                             base::Value* filtered_policies,
+                             base::DictValue* filtered_policies,
                              const std::vector<std::string>& fields) {
-  const base::Value* const policy_value = policy_map.GetValue(policy_name);
-  if (!policy_value)
+  if (!policy_map.IsPolicySet(policy_name)) {
     return;
-  if (!policy_value->is_dict()) {
+  }
+
+  const base::Value* const policy_value =
+      policy_map.GetValue(policy_name, base::Value::Type::DICT);
+  if (!policy_value) {
     NOTREACHED() << "Policy " << policy_name << " is not an object.";
-    return;
   }
   for (const auto& field : fields) {
-    if (!policy_value->FindKey(field))
+    if (!policy_value->GetDict().contains(field)) {
       return;
+    }
   }
-  filtered_policies->SetBoolKey(arc_policy_name, true);
+  filtered_policies->Set(arc_policy_name, true);
 }
 
 void AddOncCaCertsToPolicies(const policy::PolicyMap& policy_map,
-                             base::Value* filtered_policies) {
-  const base::Value* const policy_value =
-      policy_map.GetValue(policy::key::kArcCertificatesSyncMode);
+                             base::DictValue* filtered_policies) {
+  const base::Value* const policy_value = policy_map.GetValue(
+      policy::key::kArcCertificatesSyncMode, base::Value::Type::INTEGER);
   // Old certs should be uninstalled if the sync is disabled or policy is not
   // set.
-  if (!policy_value || !policy_value->is_int() ||
+  if (!policy_value ||
       policy_value->GetInt() != ArcCertsSyncMode::COPY_CA_CERTS) {
+    return;
+  }
+
+  if (!policy_map.IsPolicySet(policy::key::kOpenNetworkConfiguration)) {
+    VLOG(1) << "onc policy is not set.";
     return;
   }
 
   // Importing CA certificates from device policy is not allowed.
   // Import only from user policy.
-  const base::Value* onc_policy_value =
-      policy_map.GetValue(policy::key::kOpenNetworkConfiguration);
+  const base::Value* onc_policy_value = policy_map.GetValue(
+      policy::key::kOpenNetworkConfiguration, base::Value::Type::STRING);
   if (!onc_policy_value) {
-    VLOG(1) << "onc policy is not set.";
-    return;
-  }
-  if (!onc_policy_value->is_string()) {
     LOG(ERROR) << "Value of onc policy has invalid format.";
     return;
   }
@@ -152,37 +174,41 @@ void AddOncCaCertsToPolicies(const policy::PolicyMap& policy_map,
   base::ListValue certificates;
   {
     base::ListValue unused_network_configs;
-    base::DictionaryValue unused_global_network_config;
+    base::DictValue unused_global_network_config;
     if (!chromeos::onc::ParseAndValidateOncForImport(
             onc_blob, onc::ONCSource::ONC_SOURCE_USER_POLICY,
-            "" /* no passphrase */, &unused_network_configs,
-            &unused_global_network_config, &certificates)) {
+            &unused_network_configs, &unused_global_network_config,
+            &certificates)) {
       LOG(ERROR) << "Value of onc policy has invalid format =" << onc_blob;
     }
   }
 
-  base::Value ca_certs(base::Value::Type::LIST);
-  for (const auto& certificate : certificates.GetList()) {
+  base::ListValue ca_certs;
+  for (const auto& certificate : certificates) {
     if (!certificate.is_dict()) {
       DLOG(FATAL) << "Value of a certificate entry is not a dictionary "
                   << "value.";
       continue;
     }
 
+    const base::DictValue& cert_dict = certificate.GetDict();
     const std::string* const cert_type =
-        certificate.FindStringKey(::onc::certificate::kType);
-    if (!cert_type || *cert_type != ::onc::certificate::kAuthority)
+        cert_dict.FindString(::onc::certificate::kType);
+    if (!cert_type || *cert_type != ::onc::certificate::kAuthority) {
       continue;
+    }
 
-    const base::Value* const trust_list =
-        certificate.FindListKey(::onc::certificate::kTrustBits);
-    if (!trust_list)
+    const base::ListValue* const trust_list =
+        cert_dict.FindList(::onc::certificate::kTrustBits);
+    if (!trust_list) {
       continue;
+    }
 
     bool web_trust_flag = false;
-    for (const auto& list_val : trust_list->GetList()) {
-      if (!list_val.is_string())
+    for (const auto& list_val : *trust_list) {
+      if (!list_val.is_string()) {
         NOTREACHED();
+      }
 
       if (list_val.GetString() == ::onc::certificate::kWeb) {
         // "Web" implies that the certificate is to be trusted for SSL
@@ -191,88 +217,153 @@ void AddOncCaCertsToPolicies(const policy::PolicyMap& policy_map,
         break;
       }
     }
-    if (!web_trust_flag)
+    if (!web_trust_flag) {
       continue;
+    }
 
     const std::string* const x509_data =
-        certificate.FindStringKey(::onc::certificate::kX509);
-    if (!x509_data)
+        cert_dict.FindString(::onc::certificate::kX509);
+    if (!x509_data) {
       continue;
+    }
 
-    base::Value data(base::Value::Type::DICTIONARY);
-    data.SetStringKey("X509", *x509_data);
+    base::DictValue data;
+    data.Set(kPolicyCaCertType, *x509_data);
     ca_certs.Append(std::move(data));
   }
-  if (!ca_certs.GetList().empty())
-    filtered_policies->SetKey("credentialsConfigDisabled", base::Value(true));
-  filtered_policies->SetKey(kArcCaCerts, std::move(ca_certs));
+  if (!ca_certs.empty()) {
+    filtered_policies->Set(policy_util::kArcPolicyKeyCredentialsConfigDisabled,
+                           base::Value(true));
+  }
+  filtered_policies->Set(policy_util::kArcPolicyKeyCaCerts,
+                         std::move(ca_certs));
 }
 
 void AddRequiredKeyPairs(const CertStoreService* cert_store_service,
-                         base::Value* filtered_policies) {
-  if (!cert_store_service)
+                         base::DictValue* filtered_policies) {
+  if (!cert_store_service) {
     return;
-  base::Value cert_names(base::Value::Type::LIST);
+  }
+  base::ListValue cert_names;
   for (const auto& name : cert_store_service->get_required_cert_names()) {
-    base::Value value(base::Value::Type::DICTIONARY);
-    value.SetStringKey("alias", name);
+    base::DictValue value;
+    value.Set(kPolicyRequiredKeyAlias, name);
     cert_names.Append(std::move(value));
   }
-  filtered_policies->SetKey(kArcRequiredKeyPairs, std::move(cert_names));
-}
-
-bool LooksLikeAndroidPackageName(const std::string& name) {
-  return name.find(".") != std::string::npos;
+  filtered_policies->Set(policy_util::kArcPolicyKeyRequiredKeyPairs,
+                         std::move(cert_names));
 }
 
 void AddChoosePrivateKeyRuleToPolicy(
     policy::PolicyService* const policy_service,
     const CertStoreService* cert_store_service,
-    base::Value* filtered_policies) {
-  if (!cert_store_service)
+    base::DictValue* filtered_policies) {
+  if (!cert_store_service) {
     return;
+  }
 
   auto app_ids = chromeos::platform_keys::ExtensionKeyPermissionsService::
-      GetCorporateKeyUsageAllowedAppIds(policy_service);
-  base::Value arc_app_ids(base::Value::Type::LIST);
+      GetCorporateKeyUsageAllowedAndroidAppIds(policy_service);
+  base::ListValue arc_app_ids;
   for (const auto& app_id : app_ids) {
-    if (LooksLikeAndroidPackageName(app_id))
-      arc_app_ids.Append(app_id);
+    arc_app_ids.Append(app_id);
   }
-  if (arc_app_ids.GetList().empty() ||
+  if (arc_app_ids.empty() ||
       cert_store_service->get_required_cert_names().empty()) {
     return;
   }
 
-  base::Value rules(base::Value::Type::LIST);
+  base::ListValue rules;
   for (const auto& name : cert_store_service->get_required_cert_names()) {
-    base::Value value(base::Value::Type::DICTIONARY);
-    value.SetStringKey("privateKeyAlias", name);
-    value.SetKey("packageNames", arc_app_ids.Clone());
+    base::DictValue value;
+    value.Set(kPolicyPrivateKeyAlias, name);
+    value.Set(kPolicyPrivateKeyPackageNames, arc_app_ids.Clone());
     rules.Append(std::move(value));
   }
 
-  filtered_policies->SetBoolKey(kPrivateKeySelectionEnabled, true);
-  filtered_policies->SetKey(kChoosePrivateKeyRules, std::move(rules));
+  filtered_policies->Set(policy_util::kArcPolicyKeyPrivateKeySelectionEnabled,
+                         true);
+  filtered_policies->Set(policy_util::kArcPolicyKeyChoosePrivateKeyRules,
+                         std::move(rules));
 }
 
-std::string GetFilteredJSONPolicies(policy::PolicyService* const policy_service,
-                                    const std::string& guid,
-                                    bool is_affiliated,
-                                    const CertStoreService* cert_store_service,
-                                    const Profile* profile) {
-  const policy::PolicyNamespace policy_namespace(policy::POLICY_DOMAIN_CHROME,
-                                                 std::string());
-  const policy::PolicyMap& policy_map =
-      policy_service->GetPolicies(policy_namespace);
+// Finds managed configurations of applications in |arc_policy| and replace
+// string values that refer to template variables.
+void ReplaceManagedConfigurationVariables(
+    const user_manager::User& user,
+    const policy::DeviceAttributes& device_attributes,
+    base::DictValue* arc_policy) {
+  // Replace template variables in application managed configuration.
+  base::ListValue* applications =
+      arc_policy->FindList(policy_util::kArcPolicyKeyApplications);
+  if (applications) {
+    for (base::Value& entry : *applications) {
+      base::DictValue* config =
+          entry.GetDict().FindDict(ArcPolicyBridge::kManagedConfiguration);
+      if (config) {
+        RecursivelyReplaceManagedConfigurationVariables(user, device_attributes,
+                                                        *config);
+      }
+    }
+  }
+}
 
-  base::Value filtered_policies(base::Value::Type::DICTIONARY);
+void FilterAppsOnReven(base::DictValue* arc_policy) {
+  base::ListValue* applications =
+      arc_policy->FindList(policy_util::kArcPolicyKeyApplications);
+
+  if (!applications) {
+    return;
+  }
+
+  applications->EraseIf([](const base::Value& val) {
+    const base::DictValue& application = val.GetDict();
+    const std::string* package_name =
+        application.FindString(ArcPolicyBridge::kPackageName);
+    if (!package_name) {
+      return true;
+    }
+
+    // Define a set of certified package names for Android VPN apps on Reven.
+    static constexpr auto kAllowedPackages =
+        base::MakeFixedFlatSet<std::string_view>({
+            "com.paloaltonetworks.globalprotect",
+            "com.cisco.anyconnect.vpn.android.avf",
+            "zscaler.com.zschromeosapp",
+            "com.f5.edge.client_ics",
+            "com.netskope.netskopeclient",
+            "com.zimperium.zips",
+            "com.fortinet.forticlient_vpn",
+            "com.fortinet.forticlient_fa",
+            "com.forcepoint.sslvpn",
+            "com.cloudflare.cloudflareoneagent",
+        });
+
+    bool is_allowed = kAllowedPackages.contains(*package_name);
+    bool is_zscaler = package_name->starts_with("zscaler.com.");
+    return !is_allowed && !is_zscaler;
+  });
+}
+
+void ConfigureRevenPolicies(base::DictValue* arc_policy) {
+  // The policy value is used to restrict the user from being able to
+  // toggle between different accounts in ARC++.
+  arc_policy->Set(policy_util::kArcPolicyKeyPlayStoreMode,
+                  kPolicyPlayStoreModeAllowList);
+
+  FilterAppsOnReven(arc_policy);
+}
+
+base::DictValue ParseArcPoliciesToDict(const policy::PolicyMap& policy_map) {
+  base::DictValue filtered_policies;
+  // It is safe to use `GetValueUnsafe()` because type checking is performed
+  // before the value is used.
   // Parse ArcPolicy as JSON string before adding other policies to the
   // dictionary.
   const base::Value* const app_policy_value =
-      policy_map.GetValue(policy::key::kArcPolicy);
+      policy_map.GetValueUnsafe(policy::key::kArcPolicy);
   if (app_policy_value) {
-    absl::optional<base::Value> app_policy_dict;
+    std::optional<base::Value> app_policy_dict;
     if (app_policy_value->is_string()) {
       app_policy_dict = base::JSONReader::Read(
           app_policy_value->GetString(),
@@ -281,8 +372,8 @@ std::string GetFilteredJSONPolicies(policy::PolicyService* const policy_service,
     if (app_policy_dict.has_value() && app_policy_dict.value().is_dict()) {
       // Need a deep copy of all values here instead of doing a swap, because
       // JSONReader::Read constructs a dictionary whose StringValues are
-      // JSONStringValues which are based on StringPiece instead of string.
-      filtered_policies.MergeDictionary(&app_policy_dict.value());
+      // JSONStringValues which are based on std::string_view instead of string.
+      filtered_policies.Merge(std::move(app_policy_dict.value().GetDict()));
     } else {
       std::string app_policy_string =
           app_policy_value->is_string() ? app_policy_value->GetString() : "";
@@ -290,93 +381,133 @@ std::string GetFilteredJSONPolicies(policy::PolicyService* const policy_service,
                  << app_policy_string;
     }
   }
+  return filtered_policies;
+}
 
-  // Disable all required/force-installed apps when ARC data snapshot update is
-  // in progress.
-  if (arc::data_snapshotd::ArcDataSnapshotdManager::Get() &&
-      arc::data_snapshotd::ArcDataSnapshotdManager::Get()
-          ->IsSnapshotInProgress()) {
-    base::Value* applications_value =
-        filtered_policies.FindListKey(ArcPolicyBridge::kApplications);
-    if (applications_value) {
-      base::Value::ListView list_view = applications_value->GetList();
-      for (base::Value& entry : list_view) {
-        auto* installType = entry.FindStringKey("installType");
-        if (installType &&
-            (*installType == "REQUIRED" || *installType == "FORCE_INSTALLED")) {
-          entry.SetBoolKey("disabled", true);
-        }
-      }
-    }
-    // Always reset android_id if ARC data snapshot update is in progress.
-    filtered_policies.SetBoolKey(ArcPolicyBridge::kResetAndroidIdEnabled, true);
-  }
-
-  if (profile->IsSupervised() &&
-      chromeos::ProfileHelper::Get()->IsPrimaryProfile(profile)) {
-    // Adds "playStoreMode" policy. The policy value is used to restrict the
-    // user from being able to toggle between different accounts in ARC++.
-    filtered_policies.SetStringKey("playStoreMode", "SUPERVISED");
-
-    // Updates "applications" policy value for PlayStore to include the child's
-    // primary email account.
-    base::Value* applications_value =
-        filtered_policies.FindListKey(ArcPolicyBridge::kApplications);
-    if (applications_value) {
-      base::Value::ListView list_view = applications_value->GetList();
-      for (base::Value& entry : list_view) {
-        const std::string* packageName = entry.FindStringKey("packageName");
-        if (packageName && *packageName != kPlayStorePackageName)
-          continue;
-        base::Value management_entry(base::Value::Type::DICTIONARY);
-        management_entry.SetStringKey("allowed_accounts",
-                                      profile->GetProfileUserName());
-        entry.SetKey("managedConfiguration", std::move(management_entry));
-      }
-    }
-  }
-
+void MapChromeToArcPolicies(base::DictValue& filtered_policies,
+                            const Profile* profile,
+                            const policy::PolicyMap& policy_map) {
   const PrefService* profile_prefs = profile->GetPrefs();
 
   // Keep them sorted by the ARC policy names.
-  MapBoolToBool("cameraDisabled", policy::key::kVideoCaptureAllowed, policy_map,
+  MapBoolToBool(policy_util::kArcPolicyKeyCameraDisabled,
+                policy::key::kVideoCaptureAllowed, policy_map,
                 /* invert_bool_value */ true, &filtered_policies);
-  // Use the pref for "debuggingFeaturesDisabled" to avoid duplicating the logic
-  // of handling DeveloperToolsDisabled / DeveloperToolsAvailability policies.
+  // Use the pref for "debuggingFeaturesDisabled" to avoid duplicating the
+  // logic of handling DeveloperToolsDisabled / DeveloperToolsAvailability
+  // policies.
   MapManagedIntPrefToBool(
-      "debuggingFeaturesDisabled", ::prefs::kDevToolsAvailability,
-      profile_prefs,
+      policy_util::kArcPolicyKeyDebuggingFeaturesDisabled,
+      ash::chrome_prefs::kDevToolsAvailability, profile_prefs,
       static_cast<int>(
-          policy::DeveloperToolsPolicyHandler::Availability::kDisallowed),
+          policy::DeveloperToolsAvailability::kDisallowed),
       &filtered_policies);
-  MapBoolToBool("printingDisabled", policy::key::kPrintingEnabled, policy_map,
+  MapBoolToBool(policy_util::kArcPolicyKeyPrintingDisabled,
+                policy::key::kPrintingEnabled, policy_map,
                 /* invert_bool_value */ true, &filtered_policies);
-  MapBoolToBool("screenCaptureDisabled", policy::key::kDisableScreenshots,
-                policy_map, false, &filtered_policies);
-  MapIntToBool("shareLocationDisabled", policy::key::kDefaultGeolocationSetting,
-               policy_map, 2 /*BlockGeolocation*/, &filtered_policies);
-  MapBoolToBool("unmuteMicrophoneDisabled", policy::key::kAudioCaptureAllowed,
-                policy_map, /* invert_bool_value */ true, &filtered_policies);
-  MapBoolToBool("mountPhysicalMediaDisabled",
-                policy::key::kExternalStorageDisabled, policy_map,
-                /* invert_bool_value */ false, &filtered_policies);
-  MapObjectToPresenceBool("setWallpaperDisabled", policy::key::kWallpaperImage,
-                          policy_map, &filtered_policies, {"url", "hash"});
-  MapBoolToBool("vpnConfigDisabled", policy::key::kVpnConfigAllowed, policy_map,
+  MapBoolToBool(policy_util::kArcPolicyKeyScreenCaptureDisabled,
+                policy::key::kDisableScreenshots, policy_map, false,
+                &filtered_policies);
+  MapIntToBool(policy_util::kArcPolicyKeyShareLocationDisabled,
+               policy::key::kDefaultGeolocationSetting, policy_map,
+               2 /*BlockGeolocation*/, &filtered_policies);
+  MapBoolToBool(policy_util::kArcPolicyKeyUnmuteMicrophoneDisabled,
+                policy::key::kAudioCaptureAllowed, policy_map,
                 /* invert_bool_value */ true, &filtered_policies);
+  MapObjectToPresenceBool(policy_util::kArcPolicyKeySetWallpaperDisabled,
+                          policy::key::kWallpaperImage, policy_map,
+                          &filtered_policies, {"url", "hash"});
+  MapBoolToBool(policy_util::kArcPolicyKeyVpnConfigDisabled,
+                policy::key::kVpnConfigAllowed, policy_map,
+                /* invert_bool_value */ true, &filtered_policies);
+}
+
+void OverrideArcPolicies(base::DictValue& filtered_policies,
+                         const policy::PolicyMap& policy_map,
+                         const std::string& guid,
+                         bool is_affiliated,
+                         const Profile* profile) {
+  MapChromeToArcPolicies(filtered_policies, profile, policy_map);
+
+  // If kForceDevToolsAvailable is set, then force debugging features to be
+  // available for ARC as well. This must be after the initial writing of
+  // "debuggingFeaturesDisabled".
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          ash::switches::kForceDevToolsAvailable)) {
+    filtered_policies.Set(policy_util::kArcPolicyKeyDebuggingFeaturesDisabled,
+                          false);
+  }
+
+  // Always enable APK Cache for affiliated users, and always disable it for
+  // not affiliated ones.
+  filtered_policies.Set(policy_util::kArcPolicyKeyApkCacheEnabled,
+                        is_affiliated);
+
+  filtered_policies.Set(policy_util::kArcPolicyKeyGuid, guid);
+
+  // Always allow mounting physical media because mounts are controlled
+  // outside of ARC based on policy in file_manager::VolumeManager. Since this
+  // Android policy used to be mapped from Chrome-side policy
+  // policy::key::kExternalStoragePolicy before, we hard-code it to false to
+  // ensure that the old policy setting does not remain on the ARC side.
+  // See b/217531658 for details.
+  filtered_policies.Set(policy_util::kArcPolicyKeyMountPhysicalMediaDisabled,
+                        false);
+
+  if (profile->IsChild() &&
+      ash::ProfileHelper::Get()->IsPrimaryProfile(profile)) {
+    // Adds "playStoreMode" policy. The policy value is used to restrict the
+    // user from being able to toggle between different accounts in ARC++.
+    filtered_policies.Set(policy_util::kArcPolicyKeyPlayStoreMode,
+                          kPolicyPlayStoreModeSupervised);
+  }
+
+  if (ash::switches::IsRevenBranding()) {
+    ConfigureRevenPolicies(&filtered_policies);
+  }
+}
+
+base::DictValue GetFilteredDictPolicies(
+    const user_manager::User& user,
+    policy::PolicyService* const policy_service,
+    const std::string& guid,
+    bool is_affiliated,
+    const CertStoreService* cert_store_service,
+    const Profile* profile,
+    const policy::DeviceAttributes& device_attributes) {
+  const policy::PolicyNamespace policy_namespace(policy::POLICY_DOMAIN_CHROME,
+                                                 std::string());
+  const policy::PolicyMap& policy_map =
+      policy_service->GetPolicies(policy_namespace);
+
+  base::DictValue filtered_policies = ParseArcPoliciesToDict(policy_map);
 
   // Add CA certificates.
   AddOncCaCertsToPolicies(policy_map, &filtered_policies);
 
-  // Always enable APK Cache for affiliated users, and always disable it for not
-  // affiliated ones.
-  filtered_policies.SetBoolKey("apkCacheEnabled", is_affiliated);
-
-  filtered_policies.SetStringKey("guid", guid);
-
   AddRequiredKeyPairs(cert_store_service, &filtered_policies);
   AddChoosePrivateKeyRuleToPolicy(policy_service, cert_store_service,
                                   &filtered_policies);
+
+  ReplaceManagedConfigurationVariables(user, device_attributes,
+                                       &filtered_policies);
+
+  OverrideArcPolicies(filtered_policies, policy_map, guid, is_affiliated,
+                      profile);
+  return filtered_policies;
+}
+
+std::string GetFilteredJSONPolicies(
+    const user_manager::User& user,
+    policy::PolicyService* const policy_service,
+    const std::string& guid,
+    bool is_affiliated,
+    const CertStoreService* cert_store_service,
+    const Profile* profile,
+    const policy::DeviceAttributes& device_attributes) {
+  base::DictValue filtered_policies =
+      GetFilteredDictPolicies(user, policy_service, guid, is_affiliated,
+                              cert_store_service, profile, device_attributes);
 
   std::string policy_json;
   JSONStringValueSerializer serializer(&policy_json);
@@ -384,35 +515,18 @@ std::string GetFilteredJSONPolicies(policy::PolicyService* const policy_service,
   return policy_json;
 }
 
-void UpdateFirstComplianceSinceSignInTiming(
-    const base::TimeDelta& elapsed_time) {
-  UMA_HISTOGRAM_CUSTOM_TIMES("Arc.FirstComplianceReportTime.SinceSignIn",
-                             elapsed_time, base::TimeDelta::FromSeconds(1),
-                             base::TimeDelta::FromMinutes(10), 50);
-}
+void RecordPolicyMetrics(const policy::PolicyMap& policy) {
+  const base::Value* const arc_enabled =
+      policy.GetValue(policy::key::kArcEnabled, base::Value::Type::BOOLEAN);
+  if (!arc_enabled || !arc_enabled->GetBool()) {
+    return;
+  }
 
-void UpdateFirstComplianceSinceStartupTiming(
-    const base::TimeDelta& elapsed_time) {
-  UMA_HISTOGRAM_CUSTOM_TIMES("Arc.FirstComplianceReportTime.SinceStartup",
-                             elapsed_time, base::TimeDelta::FromSeconds(1),
-                             base::TimeDelta::FromMinutes(10), 50);
-}
-
-void UpdateComplianceSinceUpdateTiming(const base::TimeDelta& elapsed_time) {
-  UMA_HISTOGRAM_CUSTOM_TIMES("Arc.ComplianceReportSinceUpdateNotificationTime",
-                             elapsed_time,
-                             base::TimeDelta::FromMilliseconds(100),
-                             base::TimeDelta::FromMinutes(10), 50);
-}
-
-// Returns the SHA-256 hash of the JSON dump of the ARC policies, in the textual
-// hex dump format.  Note that no specific JSON normalization is performed, as
-// the spurious hash mismatches, even if they occur (which is unlikely), would
-// only result in some UMA metrics not being sent.
-std::string GetPoliciesHash(const std::string& json_policies) {
-  const std::string hash_bits = crypto::SHA256HashString(json_policies);
-  return base::ToLowerASCII(
-      base::HexEncode(hash_bits.c_str(), hash_bits.length()));
+  const base::Value* const arc_policy =
+      policy.GetValue(policy::key::kArcPolicy, base::Value::Type::STRING);
+  if (arc_policy) {
+    policy_util::RecordPolicyMetrics(arc_policy->GetString());
+  }
 }
 
 // Singleton factory for ArcPolicyBridge.
@@ -425,23 +539,24 @@ class ArcPolicyBridgeFactory
   static constexpr const char* kName = "ArcPolicyBridgeFactory";
 
   static ArcPolicyBridgeFactory* GetInstance() {
-    return base::Singleton<ArcPolicyBridgeFactory>::get();
+    static base::NoDestructor<ArcPolicyBridgeFactory> instance;
+    return instance.get();
   }
 
  private:
-  friend base::DefaultSingletonTraits<ArcPolicyBridgeFactory>;
+  friend base::NoDestructor<ArcPolicyBridgeFactory>;
 
-  ArcPolicyBridgeFactory() {}
+  ArcPolicyBridgeFactory() = default;
   ~ArcPolicyBridgeFactory() override = default;
 };
 
 }  // namespace
 
 // static
-const char ArcPolicyBridge::kApplications[] = "applications";
+const char ArcPolicyBridge::kPackageName[] = "packageName";
 
 // static
-const char ArcPolicyBridge::kResetAndroidIdEnabled[] = "resetAndroidIdEnabled";
+const char ArcPolicyBridge::kManagedConfiguration[] = "managedConfiguration";
 
 // static
 ArcPolicyBridge* ArcPolicyBridge::GetForBrowserContext(
@@ -466,22 +581,44 @@ base::WeakPtr<ArcPolicyBridge> ArcPolicyBridge::GetWeakPtr() {
 
 ArcPolicyBridge::ArcPolicyBridge(content::BrowserContext* context,
                                  ArcBridgeService* bridge_service)
-    : ArcPolicyBridge(context, bridge_service, nullptr /* policy_service */) {}
+    : ArcPolicyBridge(context,
+                      bridge_service,
+                      /*policy_service=*/nullptr,
+                      // TODO(crbug.com/404130092): Avoid g_browser_process.
+                      std::make_unique<policy::DeviceAttributesImpl>(
+                          g_browser_process->platform_part()
+                              ->browser_policy_connector_ash())) {}
 
-ArcPolicyBridge::ArcPolicyBridge(content::BrowserContext* context,
-                                 ArcBridgeService* bridge_service,
-                                 policy::PolicyService* policy_service)
+ArcPolicyBridge::ArcPolicyBridge(
+    content::BrowserContext* context,
+    ArcBridgeService* bridge_service,
+    policy::PolicyService* policy_service,
+    std::unique_ptr<policy::DeviceAttributes> device_attributes)
     : context_(context),
       arc_bridge_service_(bridge_service),
       policy_service_(policy_service),
-      instance_guid_(base::GenerateGUID()) {
+      instance_guid_(base::Uuid::GenerateRandomV4().AsLowercaseString()),
+      device_attributes_(std::move(device_attributes)) {
+  CHECK(device_attributes_);
   VLOG(2) << "ArcPolicyBridge::ArcPolicyBridge";
   arc_bridge_service_->policy()->SetHost(this);
   arc_bridge_service_->policy()->AddObserver(this);
+  arc::ArcSessionManager* arc_session_manager = arc::ArcSessionManager::Get();
+  arc_session_manager->AddObserver(this);
 }
 
 ArcPolicyBridge::~ArcPolicyBridge() {
   VLOG(2) << "ArcPolicyBridge::~ArcPolicyBridge";
+  if (is_policy_service_observed) {
+    policy_service_->RemoveObserver(policy::POLICY_DOMAIN_CHROME, this);
+    is_policy_service_observed = false;
+    policy_service_ = nullptr;
+  }
+  arc::ArcSessionManager* arc_session_manager = arc::ArcSessionManager::Get();
+  // It can be null in unittests
+  if (arc_session_manager) {
+    arc_session_manager->RemoveObserver(this);
+  }
   arc_bridge_service_->policy()->RemoveObserver(this);
   arc_bridge_service_->policy()->SetHost(nullptr);
 }
@@ -504,11 +641,8 @@ void ArcPolicyBridge::OverrideIsManagedForTesting(bool is_managed) {
 
 void ArcPolicyBridge::OnConnectionReady() {
   VLOG(1) << "ArcPolicyBridge::OnConnectionReady";
-  if (policy_service_ == nullptr) {
-    InitializePolicyService();
-  }
-  policy_service_->AddObserver(policy::POLICY_DOMAIN_CHROME, this);
-  initial_policies_hash_ = GetPoliciesHash(GetCurrentJSONPolicies());
+  InitializePolicyService();
+  policy_util::RecordPolicyMetrics(GetCurrentJSONPolicies());
 
   if (!on_arc_instance_ready_callback_.is_null()) {
     std::move(on_arc_instance_ready_callback_).Run();
@@ -518,13 +652,17 @@ void ArcPolicyBridge::OnConnectionReady() {
 void ArcPolicyBridge::OnConnectionClosed() {
   VLOG(1) << "ArcPolicyBridge::OnConnectionClosed";
   policy_service_->RemoveObserver(policy::POLICY_DOMAIN_CHROME, this);
+  is_policy_service_observed = false;
   policy_service_ = nullptr;
-  initial_policies_hash_.clear();
 }
 
 void ArcPolicyBridge::GetPolicies(GetPoliciesCallback callback) {
   VLOG(1) << "ArcPolicyBridge::GetPolicies";
-  arc_policy_for_reporting_ = GetCurrentJSONPolicies();
+  std::string new_policy = GetCurrentJSONPolicies();
+  if (arc_policy_for_reporting_ != new_policy) {
+    arc_policy_for_reporting_ = new_policy;
+    VLOG(1) << "Policy updated. Current policy: " << new_policy;
+  }
   for (Observer& observer : observers_) {
     observer.OnPolicySent(arc_policy_for_reporting_);
   }
@@ -534,72 +672,70 @@ void ArcPolicyBridge::GetPolicies(GetPoliciesCallback callback) {
 void ArcPolicyBridge::ReportCompliance(const std::string& request,
                                        ReportComplianceCallback callback) {
   VLOG(1) << "ArcPolicyBridge::ReportCompliance";
-  data_decoder::DataDecoder::ParseJsonIsolated(
-      request,
-      base::BindOnce(&ArcPolicyBridge::OnReportComplianceParse,
-                     weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
+  if(!is_dpc_first_compliance_reported_) {
+      VLOG(1) << "Reporting DPC compliance for the first time";
+      CertStoreService* cert_store_service =
+        CertStoreServiceFactory::GetForBrowserContext(context_);
+      if(cert_store_service != nullptr) {
+        VLOG(1) << "Calling OnClientCertStoreChanged to update certificates";
+        cert_store_service->OnClientCertStoreChanged();
+      }
+      is_dpc_first_compliance_reported_ = true;
+  }
+
+  // JSONReader is now safe for rule of 2.
+  OnReportComplianceParse(
+      std::move(callback),
+      base::JSONReader::Read(request, base::JSON_PARSE_RFC));
 }
 
-void ArcPolicyBridge::ReportCloudDpsRequested(
+void ArcPolicyBridge::ReportDPCVersion(const std::string& version) {
+  arc_dpc_version_ = version;
+
+  for (Observer& observer : observers_) {
+    observer.OnReportDPCVersion(version);
+  }
+}
+
+void ArcPolicyBridge::ReportPlayStoreLocalPolicySet(
     base::Time time,
     const std::vector<std::string>& package_names) {
   const std::set<std::string> packages_set(package_names.begin(),
                                            package_names.end());
-  for (Observer& observer : observers_)
-    observer.OnCloudDpsRequested(time, packages_set);
-}
-
-void ArcPolicyBridge::ReportCloudDpsSucceeded(
-    base::Time time,
-    const std::vector<std::string>& package_names) {
-  const std::set<std::string> packages_set(package_names.begin(),
-                                           package_names.end());
-  for (Observer& observer : observers_)
-    observer.OnCloudDpsSucceeded(time, packages_set);
-}
-
-void ArcPolicyBridge::ReportCloudDpsFailed(base::Time time,
-                                           const std::string& package_name,
-                                           mojom::InstallErrorReason reason) {
-  for (Observer& observer : observers_)
-    observer.OnCloudDpsFailed(time, package_name, reason);
-}
-
-void ArcPolicyBridge::ReportDirectInstall(
-    base::Time time,
-    const std::vector<std::string>& package_names) {
-  const std::set<std::string> packages_set(package_names.begin(),
-                                           package_names.end());
-  for (Observer& observer : observers_)
-    observer.OnReportDirectInstall(time, packages_set);
-}
-
-void ArcPolicyBridge::ReportForceInstallMainLoopFailed(
-    base::Time time,
-    const std::vector<std::string>& package_names) {
-  const std::set<std::string> packages_set(package_names.begin(),
-                                           package_names.end());
-  for (Observer& observer : observers_)
-    observer.OnReportForceInstallMainLoopFailed(time, packages_set);
+  for (Observer& observer : observers_) {
+    observer.OnPlayStoreLocalPolicySet(time, packages_set);
+  }
 }
 
 void ArcPolicyBridge::OnPolicyUpdated(const policy::PolicyNamespace& ns,
                                       const policy::PolicyMap& previous,
                                       const policy::PolicyMap& current) {
   VLOG(1) << "ArcPolicyBridge::OnPolicyUpdated";
+
+  // Allow ARC activation if any app needs to be force installed when ARC on
+  // demand is enabled. As ARC on demand will only be enabled if there are no
+  // apps being installed, only current is checked here instead of the delta
+  // between previous and current.
+  ActivateArcIfRequiredByPolicy(current);
+
   auto* instance = ARC_GET_INSTANCE_FOR_METHOD(arc_bridge_service_->policy(),
                                                OnPolicyUpdated);
-  if (!instance)
+  if (!instance) {
     return;
-
-  const std::string policies_hash = GetPoliciesHash(GetCurrentJSONPolicies());
-  if (policies_hash != update_notification_policies_hash_) {
-    update_notification_policies_hash_ = policies_hash;
-    update_notification_time_ = base::TimeTicks::Now();
-    compliance_since_update_timing_reported_ = false;
   }
 
   instance->OnPolicyUpdated();
+  RecordPolicyMetrics(current);
+}
+
+void ArcPolicyBridge::OnArcStartDelayed() {
+  InitializePolicyService();
+  const policy::PolicyNamespace policy_namespace(
+      policy::POLICY_DOMAIN_CHROME,
+      /*component_id=*/std::string());
+  const policy::PolicyMap& policy_map =
+      policy_service_->GetPolicies(policy_namespace);
+  ActivateArcIfRequiredByPolicy(policy_map);
 }
 
 void ArcPolicyBridge::OnCommandReceived(
@@ -611,6 +747,8 @@ void ArcPolicyBridge::OnCommandReceived(
 
   if (!instance) {
     VLOG(1) << "ARC not ready yet, will retry remote command once it is ready.";
+    // TODO(crbug.com/569687178): CHECK-exclusion: Convert to a CHECK once we
+    // are confident it won't be triggered.
     DCHECK(on_arc_instance_ready_callback_.is_null());
 
     // base::Unretained is safe here since this class owns the callback's
@@ -626,83 +764,91 @@ void ArcPolicyBridge::OnCommandReceived(
 }
 
 void ArcPolicyBridge::InitializePolicyService() {
-  auto* profile_policy_connector =
-      Profile::FromBrowserContext(context_)->GetProfilePolicyConnector();
-  policy_service_ = profile_policy_connector->policy_service();
-  is_managed_ = profile_policy_connector->IsManaged();
+  if (policy_service_ == nullptr) {
+    auto* profile_policy_connector =
+        Profile::FromBrowserContext(context_)->GetProfilePolicyConnector();
+    policy_service_ = profile_policy_connector->policy_service();
+    is_managed_ = profile_policy_connector->IsManaged();
+  }
+  if (!is_policy_service_observed) {
+    policy_service_->AddObserver(policy::POLICY_DOMAIN_CHROME, this);
+    is_policy_service_observed = true;
+  }
 }
 
 std::string ArcPolicyBridge::GetCurrentJSONPolicies() const {
-  if (!is_managed_)
+  if (!is_managed_) {
     return std::string();
+  }
   const Profile* const profile = Profile::FromBrowserContext(context_);
   const user_manager::User* const user =
-      chromeos::ProfileHelper::Get()->GetUserByProfile(profile);
+      ash::ProfileHelper::Get()->GetUserByProfile(profile);
   const CertStoreService* cert_store_service =
-      CertStoreService::GetForBrowserContext(context_);
+      CertStoreServiceFactory::GetForBrowserContext(context_);
 
-  return GetFilteredJSONPolicies(policy_service_, instance_guid_,
-                                 user->IsAffiliated(), cert_store_service,
-                                 profile);
+  return GetFilteredJSONPolicies(
+      CHECK_DEREF(user), policy_service_, instance_guid_, user->IsAffiliated(),
+      cert_store_service, profile, *device_attributes_);
 }
 
 void ArcPolicyBridge::OnReportComplianceParse(
     base::OnceCallback<void(const std::string&)> callback,
-    data_decoder::DataDecoder::ValueOrError result) {
-  if (!result.value) {
-    // TODO(poromov@): Report to histogram.
+    std::optional<base::Value> result) {
+  std::move(callback).Run(kPolicyCompliantJson);
+  if (!result.has_value()) {
     DLOG(ERROR) << "Can't parse policy compliance report";
-    std::move(callback).Run(kPolicyCompliantJson);
     return;
   }
 
-  // Always returns "compliant".
-  std::move(callback).Run(kPolicyCompliantJson);
   Profile::FromBrowserContext(context_)->GetPrefs()->SetBoolean(
       prefs::kArcPolicyComplianceReported, true);
 
-  const base::DictionaryValue* dict = nullptr;
-  if (result.value->GetAsDictionary(&dict)) {
-    UpdateComplianceReportMetrics(dict);
+  if (result->is_dict()) {
+    JSONStringValueSerializer serializer(&arc_policy_compliance_report_);
+    serializer.Serialize(*result);
     for (Observer& observer : observers_) {
-      observer.OnComplianceReportReceived(&result.value.value());
+      observer.OnComplianceReportReceived(&*result);
     }
   }
 }
 
-void ArcPolicyBridge::UpdateComplianceReportMetrics(
-    const base::DictionaryValue* report) {
-  JSONStringValueSerializer serializer(&arc_policy_compliance_report_);
-  serializer.Serialize(*report);
-  bool is_arc_plus_plus_report_successful = false;
-  report->GetBoolean("isArcPlusPlusReportSuccessful",
-                     &is_arc_plus_plus_report_successful);
-  std::string reported_policies_hash;
-  report->GetString("policyHash", &reported_policies_hash);
-  if (!is_arc_plus_plus_report_successful || reported_policies_hash.empty())
+// static
+void ArcPolicyBridge::ActivateArcIfRequiredByPolicy(
+    const policy::PolicyMap& policy_map) {
+  VLOG(1) << "ArcPolicyBridge::ActivateArcIfRequiredByPolicy";
+  base::DictValue filtered_policies = ParseArcPoliciesToDict(policy_map);
+  base::ListValue* apps =
+      filtered_policies.FindList(policy_util::kArcPolicyKeyApplications);
+  if (apps == nullptr) {
     return;
-
-  const base::TimeTicks now = base::TimeTicks::Now();
-  ArcSessionManager* const session_manager = ArcSessionManager::Get();
-
-  if (reported_policies_hash == initial_policies_hash_ &&
-      !first_compliance_timing_reported_) {
-    const base::TimeTicks sign_in_start_time =
-        session_manager->sign_in_start_time();
-    if (!sign_in_start_time.is_null()) {
-      UpdateFirstComplianceSinceSignInTiming(now - sign_in_start_time);
-    } else {
-      UpdateFirstComplianceSinceStartupTiming(now -
-                                              session_manager->start_time());
-    }
-    first_compliance_timing_reported_ = true;
   }
-
-  if (reported_policies_hash == update_notification_policies_hash_ &&
-      !compliance_since_update_timing_reported_) {
-    UpdateComplianceSinceUpdateTiming(now - update_notification_time_);
-    compliance_since_update_timing_reported_ = true;
+  bool hasForceInstallApps =
+      std::any_of(apps->cbegin(), apps->cend(), [](const auto& app) {
+        const std::string* install_type =
+            app.GetDict().FindString(kPolicyAppInstallType);
+        return install_type != nullptr &&
+               *install_type == kPolicyAppInstallTypeForceInstalled;
+      });
+  if (hasForceInstallApps) {
+    VLOG(1) << "Force install apps found, allowing ARC activation.";
+    // PostTask is used here to avoid re-entrancy issues with ArcSessionManager
+    // observers, as this function can be called from within an observer
+    // callback.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce([]() {
+          auto* manager = arc::ArcSessionManager::Get();
+          if (manager) {
+            manager->AllowActivation(
+                arc::ArcSessionManager::AllowActivationReason::
+                    kForcedByPolicy);
+          }
+        }));
   }
+}
+
+// static
+void ArcPolicyBridge::EnsureFactoryBuilt() {
+  ArcPolicyBridgeFactory::GetInstance();
 }
 
 }  // namespace arc

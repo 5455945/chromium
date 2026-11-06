@@ -1,4 +1,4 @@
-# Copyright 2018 The Chromium Authors. All rights reserved.
+# Copyright 2018 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 import datetime
@@ -10,10 +10,9 @@ from core import gsutil
 def VerboseLevel(count):
   if count == 0:
     return logging.WARNING
-  elif count == 1:
+  if count == 1:
     return logging.INFO
-  else:
-    return logging.DEBUG
+  return logging.DEBUG
 
 
 def ConfigureLogging(verbose_count):
@@ -24,8 +23,7 @@ def OpenWrite(filepath):
   """Open file for writing, optionally supporting cloud storage paths."""
   if filepath.startswith('gs://'):
     return gsutil.OpenWrite(filepath)
-  else:
-    return open(filepath, 'w')
+  return open(filepath, 'w')
 
 
 def DaysAgoToTimestamp(num_days):
@@ -37,15 +35,15 @@ def DaysAgoToTimestamp(num_days):
 def MergeIndexRanges(section_list):
   """Given a list of (begin, end) ranges, return the merged ranges.
 
-    Args:
-      range_list: a list of index ranges as (begin, end)
-    Return:
-      a list of merged index ranges.
+  Args:
+    range_list: a list of index ranges as (begin, end)
+  Return:
+    a list of merged index ranges.
   """
   actions = []
   for section in section_list:
     if section[0] >= section[1]:
-      raise ValueError('Invalid range: (%d, %d)', section[0], section[1])
+      raise ValueError('Invalid range: (%d, %d)' % (section[0], section[1]))
     actions.append((section[0], 1))
     actions.append((section[1], -1))
 

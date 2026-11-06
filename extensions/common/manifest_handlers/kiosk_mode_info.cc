@@ -1,11 +1,10 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/common/manifest_handlers/kiosk_mode_info.h"
 
 #include <memory>
-#include <set>
 #include <string>
 #include <utility>
 
@@ -19,6 +18,7 @@
 #include "extensions/common/features/feature.h"
 #include "extensions/common/features/feature_provider.h"
 #include "extensions/common/manifest_constants.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
 namespace extensions {
 
@@ -32,13 +32,15 @@ namespace {
 // respected or not. If false, secondary apps that specify this property will
 // be ignored.
 bool AllowSecondaryAppEnabledOnLaunch(const Extension* extension) {
-  if (!extension)
+  if (!extension) {
     return false;
+  }
 
   const Feature* feature = FeatureProvider::GetBehaviorFeatures()->GetFeature(
       behavior_feature::kAllowSecondaryKioskAppEnabledOnLaunch);
-  if (!feature)
+  if (!feature) {
     return false;
+  }
 
   return feature->IsAvailableToExtension(extension).is_available();
 }
@@ -47,13 +49,16 @@ bool AllowSecondaryAppEnabledOnLaunch(const Extension* extension) {
 
 SecondaryKioskAppInfo::SecondaryKioskAppInfo(
     const extensions::ExtensionId& id,
-    const absl::optional<bool>& enabled_on_launch)
+    const std::optional<bool>& enabled_on_launch)
     : id(id), enabled_on_launch(enabled_on_launch) {}
 
 SecondaryKioskAppInfo::SecondaryKioskAppInfo(
     const SecondaryKioskAppInfo& other) = default;
 
 SecondaryKioskAppInfo::~SecondaryKioskAppInfo() = default;
+
+// static
+const char* KioskModeInfo::kManifestDataKey = keys::kKioskMode;
 
 KioskModeInfo::KioskModeInfo(
     KioskStatus kiosk_status,
@@ -65,30 +70,28 @@ KioskModeInfo::KioskModeInfo(
       required_platform_version(required_platform_version),
       always_update(always_update) {}
 
-KioskModeInfo::~KioskModeInfo() {
-}
+KioskModeInfo::~KioskModeInfo() = default;
 
 // static
-KioskModeInfo* KioskModeInfo::Get(const Extension* extension) {
-  return static_cast<KioskModeInfo*>(
-      extension->GetManifestData(keys::kKioskMode));
+const KioskModeInfo* KioskModeInfo::Get(const Extension* extension) {
+  return extension->GetManifestData<KioskModeInfo>();
 }
 
 // static
 bool KioskModeInfo::IsKioskEnabled(const Extension* extension) {
-  KioskModeInfo* info = Get(extension);
-  return info ? info->kiosk_status != NONE : false;
+  const KioskModeInfo* info = Get(extension);
+  return info && info->kiosk_status != NONE;
 }
 
 // static
 bool KioskModeInfo::IsKioskOnly(const Extension* extension) {
-  KioskModeInfo* info = Get(extension);
-  return info ? info->kiosk_status == ONLY : false;
+  const KioskModeInfo* info = Get(extension);
+  return info && info->kiosk_status == ONLY;
 }
 
 // static
 bool KioskModeInfo::HasSecondaryApps(const Extension* extension) {
-  KioskModeInfo* info = Get(extension);
+  const KioskModeInfo* info = Get(extension);
   return info && !info->secondary_apps.empty();
 }
 
@@ -98,52 +101,49 @@ bool KioskModeInfo::IsValidPlatformVersion(const std::string& version_string) {
   return version.IsValid() && version.components().size() <= 3u;
 }
 
-KioskModeHandler::KioskModeHandler() {
-}
-
-KioskModeHandler::~KioskModeHandler() {
-}
+KioskModeHandler::KioskModeHandler() = default;
+KioskModeHandler::~KioskModeHandler() = default;
 
 bool KioskModeHandler::Parse(Extension* extension, std::u16string* error) {
   const Manifest* manifest = extension->manifest();
-  DCHECK(manifest->HasKey(keys::kKioskEnabled) ||
-         manifest->HasKey(keys::kKioskOnly));
+  DCHECK(manifest->FindKey(keys::kKioskEnabled) ||
+         manifest->FindKey(keys::kKioskOnly));
 
   bool kiosk_enabled = false;
-  if (manifest->HasKey(keys::kKioskEnabled) &&
-      !manifest->GetBoolean(keys::kKioskEnabled, &kiosk_enabled)) {
-    *error = base::ASCIIToUTF16(manifest_errors::kInvalidKioskEnabled);
-    return false;
+  if (const base::Value* temp = manifest->FindKey(keys::kKioskEnabled)) {
+    if (!temp->is_bool()) {
+      *error = manifest_errors::kInvalidKioskEnabled;
+      return false;
+    }
+    kiosk_enabled = temp->GetBool();
   }
 
   bool kiosk_only = false;
-  if (manifest->HasKey(keys::kKioskOnly) &&
-      !manifest->GetBoolean(keys::kKioskOnly, &kiosk_only)) {
-    *error = base::ASCIIToUTF16(manifest_errors::kInvalidKioskOnly);
-    return false;
+  if (const base::Value* temp = manifest->FindKey(keys::kKioskOnly)) {
+    if (!temp->is_bool()) {
+      *error = manifest_errors::kInvalidKioskOnly;
+      return false;
+    }
+    kiosk_only = temp->GetBool();
   }
 
   if (kiosk_only && !kiosk_enabled) {
-    *error = base::ASCIIToUTF16(
-        manifest_errors::kInvalidKioskOnlyButNotEnabled);
+    *error = manifest_errors::kInvalidKioskOnlyButNotEnabled;
     return false;
   }
 
-  // All other use cases should be already filtered out by manifest feature
-  // checks.
-  DCHECK(extension->is_platform_app());
-
   KioskModeInfo::KioskStatus kiosk_status = KioskModeInfo::NONE;
-  if (kiosk_enabled)
+  if (kiosk_enabled) {
     kiosk_status = kiosk_only ? KioskModeInfo::ONLY : KioskModeInfo::ENABLED;
+  }
 
   // Kiosk secondary apps key is optional.
   std::vector<SecondaryKioskAppInfo> secondary_apps;
-  std::set<std::string> secondary_app_ids;
-  if (manifest->HasKey(keys::kKioskSecondaryApps)) {
+  absl::flat_hash_set<std::string> secondary_app_ids;
+  if (manifest->FindKey(keys::kKioskSecondaryApps)) {
     const base::Value* secondary_apps_value = nullptr;
     if (!manifest->GetList(keys::kKioskSecondaryApps, &secondary_apps_value)) {
-      *error = base::ASCIIToUTF16(manifest_errors::kInvalidKioskSecondaryApps);
+      *error = manifest_errors::kInvalidKioskSecondaryApps;
       return false;
     }
 
@@ -151,15 +151,13 @@ bool KioskModeHandler::Parse(Extension* extension, std::u16string* error) {
         AllowSecondaryAppEnabledOnLaunch(extension);
 
     for (const auto& value : secondary_apps_value->GetList()) {
-      std::unique_ptr<KioskSecondaryAppsType> app =
-          KioskSecondaryAppsType::FromValue(value, error);
-      if (!app) {
-        *error = base::ASCIIToUTF16(
-            manifest_errors::kInvalidKioskSecondaryAppsBadAppEntry);
+      auto app = KioskSecondaryAppsType::FromValue(value);
+      if (!app.has_value()) {
+        *error = manifest_errors::kInvalidKioskSecondaryAppsBadAppEntry;
         return false;
       }
 
-      if (secondary_app_ids.count(app->id)) {
+      if (secondary_app_ids.contains(app->id)) {
         *error = ErrorUtils::FormatErrorMessageUTF16(
             manifest_errors::kInvalidKioskSecondaryAppsDuplicateApp, app->id);
         return false;
@@ -172,9 +170,10 @@ bool KioskModeHandler::Parse(Extension* extension, std::u16string* error) {
         return false;
       }
 
-      absl::optional<bool> enabled_on_launch;
-      if (app->enabled_on_launch)
+      std::optional<bool> enabled_on_launch;
+      if (app->enabled_on_launch) {
         enabled_on_launch = *app->enabled_on_launch;
+      }
 
       secondary_apps.emplace_back(app->id, enabled_on_launch);
       secondary_app_ids.insert(app->id);
@@ -183,27 +182,29 @@ bool KioskModeHandler::Parse(Extension* extension, std::u16string* error) {
 
   // Optional kiosk.required_platform_version key.
   std::string required_platform_version;
-  if (manifest->HasPath(keys::kKioskRequiredPlatformVersion) &&
-      (!manifest->GetString(keys::kKioskRequiredPlatformVersion,
-                            &required_platform_version) ||
-       !KioskModeInfo::IsValidPlatformVersion(required_platform_version))) {
-    *error = base::ASCIIToUTF16(
-        manifest_errors::kInvalidKioskRequiredPlatformVersion);
-    return false;
+  if (const base::Value* temp =
+          manifest->FindPath(keys::kKioskRequiredPlatformVersion)) {
+    if (!temp->is_string() ||
+        !KioskModeInfo::IsValidPlatformVersion(temp->GetString())) {
+      *error = manifest_errors::kInvalidKioskRequiredPlatformVersion;
+      return false;
+    }
+    required_platform_version = temp->GetString();
   }
 
   // Optional kiosk.always_update key.
   bool always_update = false;
-  if (manifest->HasPath(keys::kKioskAlwaysUpdate) &&
-      !manifest->GetBoolean(keys::kKioskAlwaysUpdate, &always_update)) {
-    *error = base::ASCIIToUTF16(manifest_errors::kInvalidKioskAlwaysUpdate);
-    return false;
+  if (const base::Value* temp = manifest->FindPath(keys::kKioskAlwaysUpdate)) {
+    if (!temp->is_bool()) {
+      *error = manifest_errors::kInvalidKioskAlwaysUpdate;
+      return false;
+    }
+    always_update = temp->GetBool();
   }
 
-  extension->SetManifestData(keys::kKioskMode,
-                             std::make_unique<KioskModeInfo>(
-                                 kiosk_status, std::move(secondary_apps),
-                                 required_platform_version, always_update));
+  extension->SetManifestData(std::make_unique<KioskModeInfo>(
+      kiosk_status, std::move(secondary_apps), required_platform_version,
+      always_update));
 
   return true;
 }

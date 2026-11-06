@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -98,38 +98,45 @@ void FrameBackground::PaintRestored(gfx::Canvas* canvas,
 
 void FrameBackground::PaintMaximized(gfx::Canvas* canvas,
                                      const View* view) const {
-  PaintMaximized(canvas, view->GetNativeTheme(), view->x(), view->y(),
-                 view->width());
+  PaintMaximized(canvas, view->GetNativeTheme(), view->GetColorProvider(),
+                 view->x(), view->y(), view->width());
 }
 
 void FrameBackground::PaintMaximized(gfx::Canvas* canvas,
                                      const ui::NativeTheme* native_theme,
+                                     const ui::ColorProvider* color_provider,
                                      int x,
                                      int y,
                                      int width) const {
 // Fill the top with the frame color first so we have a constant background
 // for areas not covered by the theme image.
-#if (defined(OS_LINUX) || defined(OS_CHROMEOS)) && \
+#if (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)) && \
     BUILDFLAG(ENABLE_DESKTOP_AURA)
-  ui::NativeTheme::ExtraParams params;
-  params.frame_top_area.use_custom_frame = use_custom_frame_;
-  params.frame_top_area.is_active = is_active_;
-  params.frame_top_area.default_background_color = frame_color_;
-  native_theme->Paint(canvas->sk_canvas(), ui::NativeTheme::kFrameTopArea,
-                      ui::NativeTheme::kNormal,
+  ui::NativeTheme::FrameTopAreaExtraParams frame_top_area;
+  frame_top_area.use_custom_frame = use_custom_frame_;
+  frame_top_area.is_active = is_active_;
+  frame_top_area.default_background_color = frame_color_;
+  ui::NativeTheme::ExtraParams params(frame_top_area);
+  native_theme->Paint(canvas->sk_canvas(), color_provider,
+                      ui::NativeTheme::kFrameTopArea, ui::NativeTheme::kNormal,
                       gfx::Rect(x, y, width, top_area_height_), params);
 #else
   canvas->FillRect(gfx::Rect(x, y, width, top_area_height_), frame_color_);
 #endif
 
   // Draw the theme frame and overlay, if available.
+  // See ThemedBackground::PaintThemeCustomImage for details on the
+  // positioning logic.
   if (!theme_image_.isNull()) {
-    canvas->TileImageInt(theme_image_, 0, theme_image_y_inset_, x, y, width,
+    int x_offset = theme_image_inset_.x() + x;
+    int y_offset = theme_image_inset_.y() + y;
+    canvas->TileImageInt(theme_image_, x_offset, y_offset, x, y, width,
                          top_area_height_, 1.0f, SkTileMode::kRepeat,
                          SkTileMode::kMirror);
   }
-  if (!theme_overlay_image_.isNull())
+  if (!theme_overlay_image_.isNull()) {
     canvas->DrawImageInt(theme_overlay_image_, x, y - maximized_top_inset_);
+  }
 }
 
 void FrameBackground::FillFrameBorders(gfx::Canvas* canvas,
@@ -139,8 +146,9 @@ void FrameBackground::FillFrameBorders(gfx::Canvas* canvas,
                                        int bottom_edge_height) const {
   // If the window is very short, we don't need to fill any borders.
   int remaining_height = view->height() - top_area_height_;
-  if (remaining_height <= 0)
+  if (remaining_height <= 0) {
     return;
+  }
 
   // Fill down the sides.
   canvas->FillRect(
@@ -152,8 +160,9 @@ void FrameBackground::FillFrameBorders(gfx::Canvas* canvas,
 
   // If the window is very narrow, we're done.
   int center_width = view->width() - left_edge_width - right_edge_width;
-  if (center_width <= 0)
+  if (center_width <= 0) {
     return;
+  }
 
   // Fill the bottom area.
   canvas->FillRect(

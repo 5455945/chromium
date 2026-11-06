@@ -1,18 +1,21 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/public/web/web_document.h"
 
+#include <algorithm>
 #include <string>
 
-#include "base/cxx17_backports.h"
+#include "base/functional/callback_helpers.h"
+#include "services/network/public/cpp/web_sandbox_flags.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/origin_trials/scoped_test_origin_trial_policy.h"
+#include "third_party/blink/public/platform/web_runtime_features.h"
 #include "third_party/blink/public/web/web_origin_trials.h"
 #include "third_party/blink/renderer/core/css/css_property_names.h"
+#include "third_party/blink/renderer/core/css/properties/longhands.h"
 #include "third_party/blink/renderer/core/css/style_engine.h"
-#include "third_party/blink/renderer/core/dom/node_computed_style.h"
 #include "third_party/blink/renderer/core/frame/frame_test_helpers.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
@@ -21,7 +24,9 @@
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
+#include "third_party/blink/renderer/core/testing/mock_policy_container_host.h"
 #include "third_party/blink/renderer/platform/graphics/color.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/url_test_helpers.h"
 #include "third_party/blink/renderer/platform/weborigin/scheme_registry.h"
@@ -34,27 +39,28 @@ using blink::frame_test_helpers::WebViewHelper;
 using blink::url_test_helpers::ToKURL;
 
 const char kDefaultOrigin[] = "https://example.test/";
-const char kOriginTrialDummyFilePath[] = "origin-trial-dummy.html";
-const char kNoOriginTrialDummyFilePath[] = "simple_div.html";
+const char kOriginTrialTestFilePath[] = "origin-trial-enabled.html";
+const char kNoOriginTrialTestFilePath[] = "simple_div.html";
 
 class WebDocumentTest : public testing::Test {
  protected:
-  static void SetUpTestCase();
+  static void SetUpTestSuite();
 
   void LoadURL(const std::string& url);
   Document* TopDocument() const;
   WebDocument TopWebDocument() const;
 
+  test::TaskEnvironment task_environment_;
   WebViewHelper web_view_helper_;
 };
 
-void WebDocumentTest::SetUpTestCase() {
+void WebDocumentTest::SetUpTestSuite() {
   url_test_helpers::RegisterMockedURLLoad(
-      ToKURL(std::string(kDefaultOrigin) + kNoOriginTrialDummyFilePath),
-      test::CoreTestDataPath(kNoOriginTrialDummyFilePath));
+      ToKURL(std::string(kDefaultOrigin) + kNoOriginTrialTestFilePath),
+      test::CoreTestDataPath(kNoOriginTrialTestFilePath));
   url_test_helpers::RegisterMockedURLLoad(
-      ToKURL(std::string(kDefaultOrigin) + kOriginTrialDummyFilePath),
-      test::CoreTestDataPath(kOriginTrialDummyFilePath));
+      ToKURL(std::string(kDefaultOrigin) + kOriginTrialTestFilePath),
+      test::CoreTestDataPath(kOriginTrialTestFilePath));
 }
 
 void WebDocumentTest::LoadURL(const std::string& url) {
@@ -131,19 +137,29 @@ TEST_F(WebDocumentTest, OriginTrialDisabled) {
   blink::ScopedTestOriginTrialPolicy policy;
 
   // Load a document with no origin trial token.
-  LoadURL(std::string(kDefaultOrigin) + kNoOriginTrialDummyFilePath);
+  LoadURL(std::string(kDefaultOrigin) + kNoOriginTrialTestFilePath);
   WebDocument web_doc = TopWebDocument();
-  EXPECT_FALSE(WebOriginTrials::isTrialEnabled(&web_doc, "Frobulate"));
+  EXPECT_FALSE(WebOriginTrials::IsOriginTrialsSampleAPIEnabled(&web_doc));
+  EXPECT_FALSE(
+      blink::WebRuntimeFeatures::IsOriginTrialsSampleAPIEnabledByRuntimeFlag());
 }
 
 TEST_F(WebDocumentTest, OriginTrialEnabled) {
   blink::ScopedTestOriginTrialPolicy policy;
   // Load a document with a valid origin trial token for the test trial.
-  LoadURL(std::string(kDefaultOrigin) + kOriginTrialDummyFilePath);
+  LoadURL(std::string(kDefaultOrigin) + kOriginTrialTestFilePath);
   WebDocument web_doc = TopWebDocument();
-  EXPECT_TRUE(WebOriginTrials::isTrialEnabled(&web_doc, "Frobulate"));
-  // Ensure that other trials are not also enabled
-  EXPECT_FALSE(WebOriginTrials::isTrialEnabled(&web_doc, "NotATrial"));
+  // Verify the runtime feature is only enabled by the origin trial, not also by
+  // the static flag.
+  EXPECT_TRUE(WebOriginTrials::IsOriginTrialsSampleAPIEnabled(&web_doc));
+  EXPECT_FALSE(
+      blink::WebRuntimeFeatures::IsOriginTrialsSampleAPIEnabledByRuntimeFlag());
+  // Ensure that other runtime features with origin trial configured are not
+  // also enabled.
+  EXPECT_FALSE(
+      WebOriginTrials::IsOriginTrialsSampleAPIDeprecationEnabled(&web_doc));
+  EXPECT_FALSE(WebRuntimeFeatures::
+                   IsOriginTrialsSampleAPIDeprecationEnabledByRuntimeFlag());
 }
 
 namespace {
@@ -196,7 +212,7 @@ void RegisterMockedURLLoad(const KURL& url, const char* path) {
 
 class WebDocumentFirstPartyTest : public WebDocumentTest {
  public:
-  static void SetUpTestCase();
+  static void SetUpTestSuite();
 
  protected:
   void Load(const char*);
@@ -204,7 +220,7 @@ class WebDocumentFirstPartyTest : public WebDocumentTest {
   Document* NestedNestedDocument() const;
 };
 
-void WebDocumentFirstPartyTest::SetUpTestCase() {
+void WebDocumentFirstPartyTest::SetUpTestSuite() {
   RegisterMockedURLLoad(ToOriginA(g_empty_file), g_empty_file);
   RegisterMockedURLLoad(ToOriginA(g_nested_data), g_nested_data);
   RegisterMockedURLLoad(ToOriginA(g_nested_origin_a), g_nested_origin_a);
@@ -265,7 +281,8 @@ bool SiteForCookiesEqual(const char* path,
                          const net::SiteForCookies& site_for_cookies) {
   KURL ref_url = ToOriginA(path);
   ref_url.SetPort(80);  // url::Origin takes exception with :0.
-  return net::SiteForCookies::FromUrl(ref_url).IsEquivalent(site_for_cookies);
+  return net::SiteForCookies::FromUrl(GURL(ref_url))
+      .IsEquivalent(site_for_cookies);
 }
 
 TEST_F(WebDocumentFirstPartyTest, Empty) {
@@ -279,9 +296,19 @@ TEST_F(WebDocumentFirstPartyTest, Empty) {
 TEST_F(WebDocumentFirstPartyTest, EmptySandbox) {
   web_view_helper_.Initialize();
   WebLocalFrameImpl* frame = web_view_helper_.GetWebView()->MainFrameImpl();
-  auto params = WebNavigationParams::CreateWithHTMLStringForTesting(
-      /*html=*/"", KURL("https://a.com"));
-  params->sandbox_flags = network::mojom::blink::WebSandboxFlags::kAll;
+  auto params =
+      WebNavigationParams::CreateWithEmptyHTMLForTesting(KURL("https://a.com"));
+  MockPolicyContainerHost mock_policy_container_host;
+  params->policy_container = std::make_unique<blink::WebPolicyContainer>(
+      blink::WebPolicyContainerPolicies(),
+      mock_policy_container_host.BindNewEndpointAndPassDedicatedRemote());
+  params->policy_container->policies.sandbox_flags =
+      network::mojom::blink::WebSandboxFlags::kAll;
+  if ((params->policy_container->policies.sandbox_flags &
+       network::mojom::blink::WebSandboxFlags::kOrigin) !=
+      network::mojom::blink::WebSandboxFlags::kNone) {
+    params->origin_to_commit = SecurityOrigin::CreateUniqueOpaque();
+  }
   frame->CommitNavigation(std::move(params), nullptr /* extra_data */);
   frame_test_helpers::PumpPendingRequestsForFrameToLoad(frame);
 
@@ -460,7 +487,16 @@ TEST_F(WebDocumentFirstPartyTest,
        NestedOriginAInOriginBWithFirstPartyOverride) {
   Load(g_nested_origin_a_in_origin_b);
 
+#if DCHECK_IS_ON()
+  // TODO(crbug.com/1329535): Remove if threaded preload scanner doesn't launch.
+  // This is needed because the preload scanner creates a thread when loading a
+  // page.
+  SetIsBeforeThreadCreatedForTest();
+#endif
   SchemeRegistry::RegisterURLSchemeAsFirstPartyWhenTopLevel("http");
+  base::ScopedClosureRunner cleanup(base::BindOnce([]() {
+    SchemeRegistry::RemoveURLSchemeAsFirstPartyWhenTopLevelForTest("http");
+  }));
 
   ASSERT_TRUE(SiteForCookiesEqual(g_nested_origin_a_in_origin_b,
                                   TopDocument()->SiteForCookies()));

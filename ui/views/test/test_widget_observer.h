@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,17 +7,20 @@
 
 #include <stddef.h>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
 #include "ui/views/widget/widget_observer.h"
 
-namespace views {
-namespace test {
+namespace views::test {
 
 // A Widget observer class used in the tests below to observe bubbles closing.
 class TestWidgetObserver : public WidgetObserver {
  public:
   explicit TestWidgetObserver(Widget* widget);
+
+  TestWidgetObserver(const TestWidgetObserver&) = delete;
+  TestWidgetObserver& operator=(const TestWidgetObserver&) = delete;
+
   ~TestWidgetObserver() override;
 
   bool widget_closed() const { return widget_ == nullptr; }
@@ -26,12 +29,10 @@ class TestWidgetObserver : public WidgetObserver {
   // WidgetObserver overrides:
   void OnWidgetDestroying(Widget* widget) override;
 
-  Widget* widget_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestWidgetObserver);
+  raw_ptr<Widget> widget_;
+  base::ScopedObservation<Widget, TestWidgetObserver> widget_observation_{this};
 };
 
-}  // namespace test
-}  // namespace views
+}  // namespace views::test
 
 #endif  // UI_VIEWS_TEST_TEST_WIDGET_OBSERVER_H_

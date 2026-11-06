@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,7 +20,7 @@ namespace content {
 // This class is the video consumer to FrameSinkVideoCapturerImpl. This class,
 // in turn sends video frames to its host via the OnFrameCapturedCallback. Used
 // when the VizDisplayCompositor feature is enabled.
-// TODO(crbug.com/846811): This class can probably be merged into
+// TODO(crbug.com/41391202): This class can probably be merged into
 // viz::ClientFrameSinkVideoCapturer.
 class CONTENT_EXPORT DevToolsVideoConsumer
     : public viz::mojom::FrameSinkVideoConsumer {
@@ -29,6 +29,10 @@ class CONTENT_EXPORT DevToolsVideoConsumer
       base::RepeatingCallback<void(scoped_refptr<media::VideoFrame> frame)>;
 
   explicit DevToolsVideoConsumer(OnFrameCapturedCallback callback);
+
+  DevToolsVideoConsumer(const DevToolsVideoConsumer&) = delete;
+  DevToolsVideoConsumer& operator=(const DevToolsVideoConsumer&) = delete;
+
   ~DevToolsVideoConsumer() override;
 
   // Copies |frame| onto a SkBitmap and returns it.
@@ -46,7 +50,7 @@ class CONTENT_EXPORT DevToolsVideoConsumer
   void SetMinCapturePeriod(base::TimeDelta min_capture_period);
   void SetMinAndMaxFrameSize(gfx::Size min_frame_size,
                              gfx::Size max_frame_size);
-  void SetFormat(media::VideoPixelFormat format, gfx::ColorSpace color_space);
+  void SetFormat(media::VideoPixelFormat format);
 
  private:
   friend class DevToolsVideoConsumerTest;
@@ -63,11 +67,14 @@ class CONTENT_EXPORT DevToolsVideoConsumer
 
   // viz::mojom::FrameSinkVideoConsumer:
   void OnFrameCaptured(
-      base::ReadOnlySharedMemoryRegion data,
+      ::media::mojom::VideoBufferHandlePtr data,
       ::media::mojom::VideoFrameInfoPtr info,
       const gfx::Rect& content_rect,
       mojo::PendingRemote<viz::mojom::FrameSinkVideoConsumerFrameCallbacks>
           callbacks) override;
+  void OnNewCaptureVersion(
+      const media::CaptureVersion& capture_version) override {}
+  void OnFrameWithEmptyRegionCapture() override {}
   void OnStopped() override;
   void OnLog(const std::string& /*message*/) override {}
 
@@ -86,12 +93,9 @@ class CONTENT_EXPORT DevToolsVideoConsumer
   gfx::Size max_frame_size_;
   viz::FrameSinkId frame_sink_id_;
   media::VideoPixelFormat pixel_format_;
-  gfx::ColorSpace color_space_;
 
   // If |capturer_| is alive, then we are currently capturing.
   std::unique_ptr<viz::ClientFrameSinkVideoCapturer> capturer_;
-
-  DISALLOW_COPY_AND_ASSIGN(DevToolsVideoConsumer);
 };
 
 }  // namespace content

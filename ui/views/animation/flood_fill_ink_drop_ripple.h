@@ -1,32 +1,29 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_VIEWS_ANIMATION_FLOOD_FILL_INK_DROP_RIPPLE_H_
 #define UI_VIEWS_ANIMATION_FLOOD_FILL_INK_DROP_RIPPLE_H_
 
-
-#include "base/macros.h"
+#include "base/callback_list.h"
 #include "base/time/time.h"
 #include "third_party/skia/include/core/SkColor.h"
-#include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animator.h"
+#include "ui/compositor/layer_not_drawn.h"
+#include "ui/compositor/layer_textured.h"
 #include "ui/gfx/animation/tween.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/size.h"
-#include "ui/gfx/transform.h"
+#include "ui/gfx/geometry/transform.h"
 #include "ui/views/animation/ink_drop_painted_layer_delegates.h"
 #include "ui/views/animation/ink_drop_ripple.h"
 #include "ui/views/animation/ink_drop_state.h"
 #include "ui/views/views_export.h"
 
-namespace ui {
-class Layer;
-}  // namespace ui
-
 namespace views {
 class CircleLayerDelegate;
+class InkDropHost;
 
 namespace test {
 class FloodFillInkDropRippleTestApi;
@@ -52,19 +49,22 @@ class FloodFillInkDropRippleTestApi;
 //
 class VIEWS_EXPORT FloodFillInkDropRipple : public InkDropRipple {
  public:
-  FloodFillInkDropRipple(const gfx::Size& host_size,
+  FloodFillInkDropRipple(InkDropHost* ink_drop_host,
+                         const gfx::Size& host_size,
                          const gfx::Insets& clip_insets,
                          const gfx::Point& center_point,
                          SkColor color,
                          float visible_opacity);
-  FloodFillInkDropRipple(const gfx::Size& host_size,
+  FloodFillInkDropRipple(InkDropHost* ink_drop_host,
+                         const gfx::Size& host_size,
                          const gfx::Point& center_point,
                          SkColor color,
                          float visible_opacity);
+  FloodFillInkDropRipple(const FloodFillInkDropRipple&) = delete;
+  FloodFillInkDropRipple& operator=(const FloodFillInkDropRipple&) = delete;
   ~FloodFillInkDropRipple() override;
 
   // InkDropRipple:
-  void SnapToActivated() override;
   ui::Layer* GetRootLayer() override;
 
   void set_use_hide_transform_duration_for_hide_fade_out(bool value) {
@@ -78,50 +78,75 @@ class VIEWS_EXPORT FloodFillInkDropRipple : public InkDropRipple {
  private:
   friend class test::FloodFillInkDropRippleTestApi;
 
+  // All the sub animations that are used to animate each of the InkDropStates.
+  // These are used to get time durations with
+  // GetAnimationDuration(InkDropSubAnimations). Note that in general a sub
+  // animation defines the duration for either a transformation animation or an
+  // opacity animation but there are some exceptions where an entire
+  // InkDropState animation consists of only 1 sub animation and it defines the
+  // duration for both the transformation and opacity animations.
+  enum AnimationSubState {
+    // HIDDEN sub animations.
+
+    // The HIDDEN sub animation that is fading out to a hidden opacity.
+    HIDDEN_FADE_OUT,
+
+    // The HIDDEN sub animation that transform the circle to a small one.
+    HIDDEN_TRANSFORM,
+
+    // ACTION_PENDING sub animations.
+
+    // The ACTION_PENDING sub animation that fades in to the visible opacity.
+    ACTION_PENDING_FADE_IN,
+
+    // The ACTION_PENDING sub animation that transforms the circle to fill the
+    // bounds.
+    ACTION_PENDING_TRANSFORM,
+
+    // ACTION_TRIGGERED sub animations.
+
+    // The ACTION_TRIGGERED sub animation that is fading out to a hidden
+    // opacity.
+    ACTION_TRIGGERED_FADE_OUT,
+
+    // ALTERNATE_ACTION_PENDING sub animations.
+
+    // The ALTERNATE_ACTION_PENDING animation has only one sub animation which
+    // animates
+    // the circleto fill the bounds at visible opacity.
+    ALTERNATE_ACTION_PENDING,
+
+    // ALTERNATE_ACTION_TRIGGERED sub animations.
+
+    // The ALTERNATE_ACTION_TRIGGERED sub animation that is fading out to a
+    // hidden opacity.
+    ALTERNATE_ACTION_TRIGGERED_FADE_OUT,
+
+    // ACTIVATED sub animations.
+
+    // The ACTIVATED sub animation that is fading in to the visible opacity.
+    ACTIVATED_FADE_IN,
+
+    // The ACTIVATED sub animation that transforms the circle to fill the entire
+    // bounds.
+    ACTIVATED_TRANSFORM,
+
+    // DEACTIVATED sub animations.
+
+    // The DEACTIVATED sub animation that is fading out to a hidden opacity.
+    DEACTIVATED_FADE_OUT,
+  };
+
   // InkDropRipple:
   void AnimateStateChange(InkDropState old_ink_drop_state,
-                          InkDropState new_ink_drop_state,
-                          ui::LayerAnimationObserver* observer) override;
+                          InkDropState new_ink_drop_state) override;
+  void SetStateToActivated() override;
   void SetStateToHidden() override;
   void AbortAllAnimations() override;
-
-  // Animates the |painted_layer_| to the specified |transform|. The animation
-  // will be configured with the given |duration|, |tween|, and
-  // |preemption_strategy| values. The |observer| will be added to all
-  // LayerAnimationSequences if not null.
-  void AnimateToTransform(
-      const gfx::Transform& transform,
-      base::TimeDelta duration,
-      ui::LayerAnimator::PreemptionStrategy preemption_strategy,
-      gfx::Tween::Type tween,
-      ui::LayerAnimationObserver* observer);
-
-  // Creates a pause animation for transform property.
-  void PauseTransformAnimation(
-      base::TimeDelta duration,
-      ui::LayerAnimator::PreemptionStrategy preemption_strategy,
-      ui::LayerAnimationObserver* observer);
 
   // Sets the opacity of the ink drop. Note that this does not perform any
   // animation.
   void SetOpacity(float opacity);
-
-  // Animates the |painted_layer_| to the specified |opacity|. The animation
-  // will be configured with the given |duration|, |tween|, and
-  // |preemption_strategy| values. The |observer| will be added to all
-  // LayerAnimationSequences if not null.
-  void AnimateToOpacity(
-      float opacity,
-      base::TimeDelta duration,
-      ui::LayerAnimator::PreemptionStrategy preemption_strategy,
-      gfx::Tween::Type tween,
-      ui::LayerAnimationObserver* observer);
-
-  // Creates a pause animation for opacity property.
-  void PauseOpacityAnimation(
-      base::TimeDelta duration,
-      ui::LayerAnimator::PreemptionStrategy preemption_strategy,
-      ui::LayerAnimationObserver* observer);
 
   // Returns the Transform to be applied to the |painted_layer_| for the given
   // |target_radius|.
@@ -135,7 +160,11 @@ class VIEWS_EXPORT FloodFillInkDropRipple : public InkDropRipple {
   float MaxDistanceToCorners(const gfx::Point& point) const;
 
   // Returns the InkDropState sub animation duration for the given |state|.
-  base::TimeDelta GetAnimationDuration(int state);
+  base::TimeDelta GetAnimationDuration(AnimationSubState state);
+
+  // Called from LayerAnimator when a new LayerAnimationSequence is scheduled
+  // which allows for assigning the observer to the sequence.
+  void OnLayerAnimationSequenceScheduled(ui::LayerAnimationSequence* sequence);
 
   // Insets of the clip area relative to the host bounds.
   gfx::Insets clip_insets_;
@@ -156,19 +185,23 @@ class VIEWS_EXPORT FloodFillInkDropRipple : public InkDropRipple {
   // The root layer that parents the animating layer. The root layer is used to
   // manipulate opacity and clipping bounds, and it child is used to manipulate
   // the different shape of the ink drop.
-  ui::Layer root_layer_;
+  ui::LayerNotDrawn root_layer_;
+
+  // Sequence scheduled callback subscription for the root layer.
+  base::CallbackListSubscription root_callback_subscription_;
 
   // ui::LayerDelegate to paint the |painted_layer_|.
   CircleLayerDelegate circle_layer_delegate_;
 
   // Child ui::Layer of |root_layer_|. Used to  manipulate the different size
   // and shape of the ink drop.
-  ui::Layer painted_layer_;
+  ui::LayerTextured painted_layer_;
+
+  // Sequence scheduled callback subscriptions for the painted layer.
+  base::CallbackListSubscription painted_layer_callback_subscription_;
 
   // The current ink drop state.
-  InkDropState ink_drop_state_;
-
-  DISALLOW_COPY_AND_ASSIGN(FloodFillInkDropRipple);
+  InkDropState ink_drop_state_ = InkDropState::HIDDEN;
 };
 
 }  // namespace views

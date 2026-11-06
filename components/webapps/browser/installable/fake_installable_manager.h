@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,14 @@
 #define COMPONENTS_WEBAPPS_BROWSER_INSTALLABLE_FAKE_INSTALLABLE_MANAGER_H_
 
 #include <memory>
+#include <optional>
 
 #include "base/memory/weak_ptr.h"
 #include "components/webapps/browser/installable/installable_logging.h"
 #include "components/webapps/browser/installable/installable_manager.h"
+#include "components/webapps/common/web_page_metadata.mojom.h"
+#include "third_party/blink/public/common/manifest/manifest.h"
 #include "url/gurl.h"
-
-namespace blink {
-struct Manifest;
-}
 
 namespace content {
 class WebContents;
@@ -44,11 +43,12 @@ class FakeInstallableManager : public InstallableManager {
       content::WebContents* web_contents,
       InstallableStatusCode installable_code,
       const GURL& manifest_url,
-      std::unique_ptr<blink::Manifest> manifest);
+      std::optional<blink::Manifest> manifest = std::nullopt);
 
  private:
   GURL manifest_url_;
-  std::unique_ptr<blink::Manifest> manifest_;
+  std::optional<blink::Manifest> manifest_;
+  mojom::WebPageMetadataPtr web_page_metadata_;
   std::unique_ptr<InstallableData> data_;
 
   base::WeakPtrFactory<FakeInstallableManager> weak_factory_{this};

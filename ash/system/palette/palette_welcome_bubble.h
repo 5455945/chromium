@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,10 @@
 
 #include "ash/ash_export.h"
 #include "ash/public/cpp/session/session_observer.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/events/event_handler.h"
+#include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/widget/widget_observer.h"
 
 class PrefRegistrySimple;
@@ -21,6 +23,20 @@ class View;
 namespace ash {
 class PaletteTray;
 
+// Controlled by PaletteWelcomeBubble and anchored to a PaletteTray.
+class PaletteWelcomeBubbleView : public views::BubbleDialogDelegateView {
+  METADATA_HEADER(PaletteWelcomeBubbleView, views::BubbleDialogDelegateView)
+
+ public:
+  PaletteWelcomeBubbleView(views::View* anchor,
+                           views::BubbleBorder::Arrow arrow);
+  PaletteWelcomeBubbleView(const PaletteWelcomeBubbleView&) = delete;
+  PaletteWelcomeBubbleView& operator=(const PaletteWelcomeBubbleView&) = delete;
+  ~PaletteWelcomeBubbleView() override = default;
+
+  void Init() override;
+};
+
 // The PaletteWelcomeBubble handles displaying a warm welcome bubble letting
 // users know about the PaletteTray the first time a stylus is ejected, or if an
 // external stylus is detected. PaletteTray controls the visibility of the
@@ -30,6 +46,10 @@ class ASH_EXPORT PaletteWelcomeBubble : public SessionObserver,
                                         public ui::EventHandler {
  public:
   explicit PaletteWelcomeBubble(PaletteTray* tray);
+
+  PaletteWelcomeBubble(const PaletteWelcomeBubble&) = delete;
+  PaletteWelcomeBubble& operator=(const PaletteWelcomeBubble&) = delete;
+
   ~PaletteWelcomeBubble() override;
 
   static void RegisterProfilePrefs(PrefRegistrySimple* registry);
@@ -48,18 +68,20 @@ class ASH_EXPORT PaletteWelcomeBubble : public SessionObserver,
   void OnActiveUserPrefServiceChanged(PrefService* pref_service) override;
 
   // views::WidgetObserver:
-  void OnWidgetClosing(views::Widget* widget) override;
+  void OnWidgetDestroying(views::Widget* widget) override;
 
   // Returns the bubble view for tests, or null when the bubble is not showing.
   views::View* GetBubbleViewForTesting();
 
  private:
   friend class PaletteWelcomeBubbleTest;
-  class WelcomeBubbleView;
 
   // Shows or hides the welcome bubble.
   void Show();
   void Hide();
+
+  // Disconnects from the observers and pre-target handlers.
+  void DisconnectObservers();
 
   // ui::EventHandler:
   void OnMouseEvent(ui::MouseEvent* event) override;
@@ -67,13 +89,11 @@ class ASH_EXPORT PaletteWelcomeBubble : public SessionObserver,
 
   // The PaletteTray this bubble is associated with. Serves as the anchor for
   // the bubble. Not owned.
-  PaletteTray* tray_ = nullptr;
+  raw_ptr<PaletteTray> tray_ = nullptr;
 
-  PrefService* active_user_pref_service_ = nullptr;  // Not owned.
+  raw_ptr<PrefService> active_user_pref_service_ = nullptr;  // Not owned.
 
-  WelcomeBubbleView* bubble_view_ = nullptr;
-
-  DISALLOW_COPY_AND_ASSIGN(PaletteWelcomeBubble);
+  raw_ptr<PaletteWelcomeBubbleView> bubble_view_ = nullptr;
 };
 
 }  // namespace ash

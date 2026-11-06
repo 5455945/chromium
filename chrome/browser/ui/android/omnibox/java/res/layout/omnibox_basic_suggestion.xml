@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Copyright 2019 The Chromium Authors. All rights reserved.
-    Use of this source code is governed by a BSD-style license that can be
-    found in the LICENSE file. -->
-<LinearLayout
+<!--
+Copyright 2019 The Chromium Authors
+Use of this source code is governed by a BSD-style license that can be
+found in the LICENSE file.
+-->
+<org.chromium.chrome.browser.omnibox.suggestions.basic.TwoLineSuggestionView
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
@@ -30,4 +32,4 @@
         android:ellipsize="end"
         android:textAlignment="viewStart" />
 
-</LinearLayout>
+</org.chromium.chrome.browser.omnibox.suggestions.basic.TwoLineSuggestionView>

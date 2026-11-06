@@ -1,15 +1,22 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file
+// found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/launch/launch_params.h"
 
+#include "base/time/time.h"
 #include "third_party/blink/renderer/modules/file_system_access/file_system_handle.h"
 
 namespace blink {
 
-LaunchParams::LaunchParams(HeapVector<Member<FileSystemHandle>> files)
-    : files_(std::move(files)) {}
+LaunchParams::LaunchParams(KURL target_url,
+                           base::TimeTicks time_navigation_started_in_browser,
+                           bool navigation_started,
+                           HeapVector<Member<FileSystemHandle>> optional_files)
+    : target_url_(std::move(target_url)),
+      files_(std::move(optional_files)),
+      time_navigation_started_in_browser_(time_navigation_started_in_browser),
+      navigation_started_(navigation_started) {}
 
 LaunchParams::~LaunchParams() = default;
 

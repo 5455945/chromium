@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,13 +11,12 @@
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
-#include "base/task/post_task.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
-#include "base/timer/elapsed_timer.h"
+#include "build/build_config.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/common/content_client.h"
@@ -31,12 +30,13 @@ struct Dictionaries {
     return dictionaries.get();
   }
 
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
   void SetDirectory(const base::FilePath& new_dir) {
     DVLOG(1) << __func__ << " " << new_dir;
-    DCHECK(hyphenation::HyphenationImpl::GetTaskRunner()
-               ->RunsTasksInCurrentSequence());
-    DCHECK(!new_dir.empty());
+    CHECK(hyphenation::HyphenationImpl::GetTaskRunner()
+              ->RunsTasksInCurrentSequence(),
+          base::NotFatalUntil::M160);
+    CHECK(!new_dir.empty(), base::NotFatalUntil::M160);
     if (new_dir == dir || !base::PathExists(new_dir))
       return;
     dir = new_dir;
@@ -51,16 +51,17 @@ struct Dictionaries {
 };
 
 bool IsValidLocale(const std::string& locale) {
-  return std::all_of(locale.cbegin(), locale.cend(), [](const char ch) {
+  return std::ranges::all_of(locale, [](const char ch) {
     return base::IsAsciiAlpha(ch) || base::IsAsciiDigit(ch) || ch == '-';
   });
 }
 
 base::File GetDictionaryFile(const std::string& locale) {
-  DCHECK(hyphenation::HyphenationImpl::GetTaskRunner()
-             ->RunsTasksInCurrentSequence());
+  CHECK(hyphenation::HyphenationImpl::GetTaskRunner()
+            ->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M160);
   Dictionaries* dictionaries = Dictionaries::Get();
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
   const base::FilePath& dir = dictionaries->dir;
   if (dir.empty())
     return base::File();
@@ -72,16 +73,14 @@ base::File GetDictionaryFile(const std::string& locale) {
   // If the |locale| is already in the cache, duplicate the file and return it.
   if (!inserted.second)
     return file.Duplicate();
-  DCHECK(!file.IsValid());
+  CHECK(!file.IsValid(), base::NotFatalUntil::M160);
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   base::FilePath dir("/system/usr/hyphen-data");
 #endif
-  std::string filename = base::StringPrintf("hyph-%s.hyb", locale.c_str());
+  std::string filename = base::StringPrintf("hyph-%s.hyb", locale);
   base::FilePath path = dir.AppendASCII(filename);
-  base::ElapsedTimer timer;
   file.Initialize(path, base::File::FLAG_OPEN | base::File::FLAG_READ);
-  UMA_HISTOGRAM_TIMES("Hyphenation.Open.File", timer.Elapsed());
   return file.Duplicate();
 }
 
@@ -109,13 +108,13 @@ scoped_refptr<base::SequencedTaskRunner> HyphenationImpl::GetTaskRunner() {
   return *runner;
 }
 
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
 // static
 void HyphenationImpl::RegisterGetDictionary() {
   content::ContentBrowserClient* content_browser_client =
       content::GetContentClient()->browser();
-  DCHECK(content_browser_client);
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK(content_browser_client, base::NotFatalUntil::M160);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   static bool registered = false;
   if (registered)
     return;
@@ -137,7 +136,8 @@ void HyphenationImpl::SetDirectory(const base::FilePath& dir) {
 
 void HyphenationImpl::OpenDictionary(const std::string& locale,
                                      OpenDictionaryCallback callback) {
-  DCHECK(GetTaskRunner()->RunsTasksInCurrentSequence());
+  CHECK(GetTaskRunner()->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M160);
   if (IsValidLocale(locale))
     std::move(callback).Run(GetDictionaryFile(locale));
   else

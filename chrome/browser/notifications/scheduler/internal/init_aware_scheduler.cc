@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "chrome/browser/notifications/scheduler/public/notification_params.h"
 
 namespace notifications {
@@ -18,7 +18,7 @@ InitAwareNotificationScheduler::InitAwareNotificationScheduler(
 InitAwareNotificationScheduler::~InitAwareNotificationScheduler() = default;
 
 void InitAwareNotificationScheduler::Init(InitCallback init_callback) {
-  DCHECK(!init_success_.has_value());
+  CHECK(!init_success_.has_value(), base::NotFatalUntil::M161);
   impl_->Init(base::BindOnce(&InitAwareNotificationScheduler::OnInitialized,
                              weak_ptr_factory_.GetWeakPtr(),
                              std::move(init_callback)));
@@ -112,7 +112,7 @@ bool InitAwareNotificationScheduler::IsReady() const {
 
 void InitAwareNotificationScheduler::MaybeCacheClosure(
     base::OnceClosure closure) {
-  DCHECK(closure);
+  CHECK(closure, base::NotFatalUntil::M161);
 
   // Drop the call if initialization failed.
   if (init_success_.has_value() && !*init_success_)

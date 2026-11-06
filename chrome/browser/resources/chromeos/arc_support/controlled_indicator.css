@@ -1,4 +1,4 @@
-/* Copyright 2013 The Chromium Authors. All rights reserved.
+/* Copyright 2013 The Chromium Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file. */
 
@@ -35,11 +35,9 @@
   background-image: url(../../../../../ui/webui/resources/images/extension.svg);
 }
 
-<if expr="chromeos">
 .controlled-setting-indicator[controlled-by='shared'] > div {
   background-image: url(../../../../../ui/webui/resources/images/group.svg);
 }
-</if>
 
 .controlled-setting-indicator[controlled-by='child-custodian'] > div {
   background-image: url(../../../../../ui/webui/resources/images/account_child_invert.svg);

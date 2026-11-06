@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,9 @@
 #define BASE_TASK_THREAD_POOL_CAN_RUN_POLICY_TEST_H_
 
 #include "base/synchronization/atomic_flag.h"
+#include "base/task/task_runner.h"
 #include "base/task/thread_pool/task_tracker.h"
 #include "base/task/thread_pool/test_utils.h"
-#include "base/task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/test_timeouts.h"
 #include "base/test/test_waitable_event.h"
@@ -38,13 +38,13 @@ void TestCanRunPolicyBasic(Target* target,
 
   const auto user_visible_task_runner =
       create_task_runner(TaskPriority::USER_VISIBLE);
-  user_visible_task_runner->PostTask(FROM_HERE, BindLambdaForTesting([&]() {
+  user_visible_task_runner->PostTask(FROM_HERE, BindLambdaForTesting([&] {
                                        EXPECT_TRUE(foreground_can_run.IsSet());
                                        foreground_did_run.Signal();
                                      }));
   const auto best_effort_task_runner =
       create_task_runner(TaskPriority::BEST_EFFORT);
-  best_effort_task_runner->PostTask(FROM_HERE, BindLambdaForTesting([&]() {
+  best_effort_task_runner->PostTask(FROM_HERE, BindLambdaForTesting([&] {
                                       EXPECT_TRUE(best_effort_can_run.IsSet());
                                       best_effort_did_run.Signal();
                                     }));
@@ -105,12 +105,11 @@ void TestCanRunPolicyChangedBeforeRun(Target* target,
     target->DidUpdateCanRunPolicy();
 
     const auto task_runner = create_task_runner(test_case.priority);
-    task_runner->PostTask(
-        FROM_HERE, BindLambdaForTesting([&]() {
-          first_task_started.Signal();
-          first_task_blocked.Wait();
-        }));
-    task_runner->PostTask(FROM_HERE, BindLambdaForTesting([&]() {
+    task_runner->PostTask(FROM_HERE, BindLambdaForTesting([&] {
+                            first_task_started.Signal();
+                            first_task_blocked.Wait();
+                          }));
+    task_runner->PostTask(FROM_HERE, BindLambdaForTesting([&] {
                             EXPECT_TRUE(second_task_can_run.IsSet());
                           }));
 
@@ -162,13 +161,14 @@ void TestCanRunPolicyLoad(Target* target,
 
     // Post less tasks on iOS to avoid timeouts.
     const size_t kLargeNumber =
-#if defined(OS_IOS)
+#if BUILDFLAG(IS_IOS)
         16;
 #else
         256;
 #endif
-    for (size_t i = 0; i < kLargeNumber; ++i)
+    for (size_t i = 0; i < kLargeNumber; ++i) {
       task_runner->PostTask(FROM_HERE, DoNothing());
+    }
 
     // Change the CanRunPolicy concurrently with running tasks.
     // This should not cause crashes.

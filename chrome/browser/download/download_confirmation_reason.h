@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,12 +25,15 @@ enum class DownloadConfirmationReason {
   // There were unresolved conflicts with the target path.
   TARGET_CONFLICT,
 
-  // The target path isn't writeable. Also may indicate that a previous attempt
+  // The target path isn't writable. Also may indicate that a previous attempt
   // to write to the path failed.
   TARGET_PATH_NOT_WRITEABLE,
 
   // The target path cannot accommodate a file of this size.
   TARGET_NO_SPACE,
+
+  // The target is blocked by DLP so a dialog should be shown.
+  DLP_BLOCKED,
 };
 
 #endif  // CHROME_BROWSER_DOWNLOAD_DOWNLOAD_CONFIRMATION_REASON_H_

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,16 +11,16 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
 #include "base/threading/thread.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "components/leveldb_proto/internal/leveldb_database.h"
 #include "components/leveldb_proto/internal/proto_database_impl.h"
 #include "components/leveldb_proto/public/proto_database_provider.h"
@@ -35,7 +35,6 @@ using base::ScopedTempDir;
 using base::test::TaskEnvironment;
 using leveldb_env::Options;
 using testing::_;
-using testing::Invoke;
 using testing::MakeMatcher;
 using testing::Matcher;
 using testing::MatcherInterface;
@@ -84,6 +83,11 @@ class MockDB : public LevelDB {
                     std::map<std::string, std::string>*,
                     const leveldb::ReadOptions&,
                     const std::string&));
+  MOCK_METHOD4(LoadKeysAndEntriesWhile,
+               bool(std::map<std::string, std::string>*,
+                    const leveldb::ReadOptions&,
+                    const std::string&,
+                    const KeyIteratorController&));
   MOCK_METHOD5(LoadKeysAndEntriesWhile,
                bool(const KeyFilter&,
                     std::map<std::string, std::string>*,
@@ -126,6 +130,9 @@ class OptionsEqMatcher : public MatcherInterface<const Options&> {
  public:
   explicit OptionsEqMatcher(const Options& expected) : expected_(expected) {}
 
+  OptionsEqMatcher(const OptionsEqMatcher&) = delete;
+  OptionsEqMatcher& operator=(const OptionsEqMatcher&) = delete;
+
   bool MatchAndExplain(const Options& actual,
                        MatchResultListener* listener) const override {
     return actual.comparator == expected_.comparator &&
@@ -155,8 +162,6 @@ class OptionsEqMatcher : public MatcherInterface<const Options&> {
 
  private:
   Options expected_;
-
-  DISALLOW_COPY_AND_ASSIGN(OptionsEqMatcher);
 };
 
 Matcher<const Options&> OptionsEq(const Options& expected) {
@@ -225,7 +230,7 @@ class UniqueProtoDatabaseTest : public testing::Test {
   void SetUp() override {
     db_ = std::make_unique<ProtoDatabaseImpl<TestProto>>(
         ProtoDbType::TEST_DATABASE0, base::FilePath(),
-        base::ThreadTaskRunnerHandle::Get());
+        base::SingleThreadTaskRunner::GetCurrentDefault());
   }
 
   void TearDown() override {
@@ -332,7 +337,7 @@ ACTION_P(AppendLoadEntries, model) {
 }
 
 ACTION_P(AppendLoadKeysAndEntries, model) {
-  std::map<std::string, std::string>* output = arg1;
+  std::map<std::string, std::string>* output = arg0;
   for (const auto& pair : model)
     output->insert(std::make_pair(pair.first, pair.second.SerializeAsString()));
 
@@ -369,7 +374,7 @@ TEST_F(UniqueProtoDatabaseTest, TestDBLoadSuccess) {
                         base::BindOnce(&MockDatabaseCaller::InitStatusCallback,
                                        base::Unretained(&caller)));
 
-  EXPECT_CALL(*mock_db, LoadKeysAndEntriesWhile(_, _, _, _, _))
+  EXPECT_CALL(*mock_db, LoadKeysAndEntriesWhile(_, _, _, _))
       .WillOnce(AppendLoadKeysAndEntries(model));
   EXPECT_CALL(caller, LoadKeysAndEntriesCallback1(true, _))
       .WillOnce(VerifyLoadKeysAndEntries(testing::ByRef(model)));

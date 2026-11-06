@@ -1,26 +1,25 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// https://github.com/rsolomakhin/secure-payment-confirmation
-
-enum SecurePaymentConfirmationAction {
-    "authenticate",
-};
+// https://w3c.github.io/secure-payment-confirmation/#sctn-securepaymentconfirmationrequest-dictionary
 
 dictionary SecurePaymentConfirmationRequest {
-    SecurePaymentConfirmationAction action;
-    required FrozenArray<BufferSource> credentialIds;
-    // Opaque data about the current transaction provided by the issuer. As the
-    // issuer is the RP of the credential, `networkData` provides protection
-    // against replay attacks.
-    BufferSource networkData;
-
-    // Equivalent to `networkData`. Used when the SecurePaymentConfirmationAPIV2
-    // flag is enabled.
-    [RuntimeEnabled=SecurePaymentConfirmationAPIV2] required BufferSource challenge;
-
-    [RuntimeEnabled=SecurePaymentConfirmationAPIV2] required PaymentCredentialInstrument instrument;
-
+    required BufferSource challenge;
+    required USVString rpId;
+    required sequence<BufferSource> credentialIds;
+    required PaymentCredentialInstrument instrument;
     unsigned long timeout;
+    USVString payeeName;
+    USVString payeeOrigin;
+    AuthenticationExtensionsClientInputs extensions;
+    sequence<PublicKeyCredentialParameters> browserBoundPubKeyCredParams;
+    sequence<USVString> locale;
+
+    // Whether or not to show an opt-out flow in the SPC UX.
+    [RuntimeEnabled=SecurePaymentConfirmationOptOut, MeasureAs=SecurePaymentConfirmationOptOut] boolean showOptOut;
+
+    // A list of logos representing entities that are facilitating the payment
+    // that this SPC call is for.
+    sequence<PaymentEntityLogo> paymentEntitiesLogos;
 };

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,10 @@
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
 #include "base/containers/flat_set.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
 #include "components/feed/core/proto/v2/store.pb.h"
 #include "components/feed/core/v2/public/feed_api.h"
 #include "components/feed/core/v2/types.h"
@@ -51,10 +51,6 @@ class FeedStore {
     std::unique_ptr<feedstore::Metadata> metadata;
     std::vector<feedstore::StreamData> stream_data;
   };
-  struct WebFeedStartupData {
-    feedstore::SubscribedWebFeeds subscribed_web_feeds;
-    feedstore::RecommendedWebFeedIndex recommended_feed_index;
-  };
 
   explicit FeedStore(
       std::unique_ptr<leveldb_proto::ProtoDatabase<feedstore::Record>>
@@ -88,6 +84,8 @@ class FeedStore {
   void ClearStreamData(const StreamType& stream_type,
                        base::OnceCallback<void(bool)> callback);
 
+  void ClearAllStreamData(StreamKind stream_kind,
+                          base::OnceCallback<void(bool)> callback);
   void WriteOperations(const StreamType& stream_type,
                        int32_t sequence_number,
                        std::vector<feedstore::DataOperation> operations);
@@ -124,18 +122,12 @@ class FeedStore {
   void UpgradeFromStreamSchemaV0(
       feedstore::Metadata old_metadata,
       base::OnceCallback<void(feedstore::Metadata)> callback);
-  void ReadWebFeedStartupData(
-      base::OnceCallback<void(WebFeedStartupData)> callback);
   void ReadStartupData(base::OnceCallback<void(StartupData)> callback);
-  void WriteRecommendedFeeds(feedstore::RecommendedWebFeedIndex index,
-                             std::vector<feedstore::WebFeedInfo> web_feed_info,
-                             base::OnceClosure callback);
-  void WriteSubscribedFeeds(feedstore::SubscribedWebFeeds index,
-                            base::OnceClosure callback);
-  void ReadRecommendedWebFeedInfo(
-      const std::string& web_feed_id,
-      base::OnceCallback<void(std::unique_ptr<feedstore::WebFeedInfo>)>
-          callback);
+
+  void WriteDocView(feedstore::DocView doc_view);
+  void RemoveDocViews(std::vector<feedstore::DocView> doc_ids);
+  void ReadDocViews(
+      base::OnceCallback<void(std::vector<feedstore::DocView>)> callback);
 
   bool IsInitializedForTesting() const;
 
@@ -190,19 +182,10 @@ class FeedStore {
       base::OnceCallback<void(std::unique_ptr<feedstore::Metadata>)> callback,
       bool read_ok,
       std::unique_ptr<feedstore::Record> record);
-  void OnReadWebFeedStartupDataFinished(
-      base::OnceCallback<void(WebFeedStartupData)> callback,
-      bool read_ok,
-      std::unique_ptr<std::vector<feedstore::Record>> records);
   void OnReadStartupDataFinished(
       base::OnceCallback<void(StartupData)> callback,
       bool read_ok,
       std::unique_ptr<std::vector<feedstore::Record>> records);
-  void ReadRecommendedWebFeedInfoFinished(
-      base::OnceCallback<void(std::unique_ptr<feedstore::WebFeedInfo>)>
-          callback,
-      bool read_ok,
-      std::unique_ptr<feedstore::Record> record);
 
   base::OnceClosure initialize_callback_;
   leveldb_proto::Enums::InitStatus database_status_;

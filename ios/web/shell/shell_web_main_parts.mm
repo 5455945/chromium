@@ -1,21 +1,28 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ios/web/shell/shell_web_main_parts.h"
+#import "ios/web/shell/shell_web_main_parts.h"
 
-#include "ios/web/shell/shell_browser_state.h"
+#import "ios/web/shell/shell_browser_state.h"
+#import "ui/display/screen.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
+#if DCHECK_IS_ON()
+#import "ui/display/screen_base.h"
 #endif
 
 namespace web {
 
-ShellWebMainParts::ShellWebMainParts() {
-}
+ShellWebMainParts::ShellWebMainParts()
+    : screen_(std::make_unique<display::ScopedNativeScreen>()) {}
 
 ShellWebMainParts::~ShellWebMainParts() {
+#if DCHECK_IS_ON()
+  // Make sure that all display observers are removed at the end.
+  display::ScreenBase* screen =
+      static_cast<display::ScreenBase*>(display::Screen::Get());
+  DCHECK(!screen->HasDisplayObservers());
+#endif
 }
 
 void ShellWebMainParts::PreMainMessageLoopRun() {

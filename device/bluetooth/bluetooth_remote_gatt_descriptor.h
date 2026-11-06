@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,15 @@
 #define DEVICE_BLUETOOTH_BLUETOOTH_REMOTE_GATT_DESCRIPTOR_H_
 
 #include <stdint.h>
+
+#include <optional>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/callback_forward.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_forward.h"
 #include "device/bluetooth/bluetooth_export.h"
 #include "device/bluetooth/bluetooth_gatt_descriptor.h"
 #include "device/bluetooth/public/cpp/bluetooth_uuid.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace device {
 
@@ -30,6 +30,10 @@ class BluetoothRemoteGattCharacteristic;
 class DEVICE_BLUETOOTH_EXPORT BluetoothRemoteGattDescriptor
     : public virtual BluetoothGattDescriptor {
  public:
+  BluetoothRemoteGattDescriptor(const BluetoothRemoteGattDescriptor&) = delete;
+  BluetoothRemoteGattDescriptor& operator=(
+      const BluetoothRemoteGattDescriptor&) = delete;
+
   ~BluetoothRemoteGattDescriptor() override;
 
   // The ValueCallback is used to return the value of a remote characteristic
@@ -39,7 +43,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothRemoteGattDescriptor
   // will contain a value and |value| should be ignored. When successful
   // |error_code| will have no value and |value| may be used.
   using ValueCallback = base::OnceCallback<void(
-      absl::optional<BluetoothGattService::GattErrorCode> error_code,
+      std::optional<BluetoothGattService::GattErrorCode> error_code,
       const std::vector<uint8_t>& value)>;
 
   // Returns the value of the descriptor. For remote descriptors, this is the
@@ -61,15 +65,12 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothRemoteGattDescriptor
   // called to signal success and |error_callback| for failures. This method
   // only applies to remote descriptors and will fail for those that are locally
   // hosted.
-  virtual void WriteRemoteDescriptor(const std::vector<uint8_t>& new_value,
+  virtual void WriteRemoteDescriptor(base::span<const uint8_t> new_value,
                                      base::OnceClosure callback,
                                      ErrorCallback error_callback) = 0;
 
  protected:
   BluetoothRemoteGattDescriptor();
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(BluetoothRemoteGattDescriptor);
 };
 
 }  // namespace device

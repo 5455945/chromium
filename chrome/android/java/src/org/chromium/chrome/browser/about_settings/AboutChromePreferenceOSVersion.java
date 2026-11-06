@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,9 +9,9 @@ import android.util.AttributeSet;
 import android.view.LayoutInflater;
 import android.view.ViewGroup;
 
-import androidx.preference.Preference;
 import androidx.preference.PreferenceViewHolder;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.omaha.VersionNumberGetter;
 
@@ -19,10 +19,9 @@ import org.chromium.chrome.browser.omaha.VersionNumberGetter;
  * Preference specifically made for the Android OS version. It supports displaying a warning when
  * the current OS version is unsupported.
  */
-public class AboutChromePreferenceOSVersion extends Preference {
-    /**
-     * Constructor for inflating from XML.
-     */
+@NullMarked
+public class AboutChromePreferenceOSVersion extends LongClickCopySummaryPreference {
+    /** Constructor for inflating from XML. */
     public AboutChromePreferenceOSVersion(Context context, AttributeSet attrs) {
         super(context, attrs);
     }

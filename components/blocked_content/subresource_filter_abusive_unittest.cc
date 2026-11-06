@@ -1,10 +1,11 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
+
 #include "base/check_op.h"
-#include "base/containers/contains.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/test/scoped_feature_list.h"
 #include "components/blocked_content/safe_browsing_triggered_popup_blocker.h"
@@ -63,13 +64,18 @@ class SubresourceFilterAbusiveTest
   SubresourceFilterAbusiveTest() {
     std::tie(abusive_level_, bas_level_, enable_adblock_on_abusive_sites_) =
         GetParam();
-    std::vector<base::Feature> enabled_features{
+    std::vector<base::test::FeatureRef> enabled_features{
         blocked_content::kAbusiveExperienceEnforce};
-    std::vector<base::Feature> disabled_features;
+    std::vector<base::test::FeatureRef> disabled_features;
     (enable_adblock_on_abusive_sites_ ? enabled_features : disabled_features)
         .push_back(subresource_filter::kFilterAdsOnAbusiveSites);
     scoped_features_.InitWithFeatures(enabled_features, disabled_features);
   }
+
+  SubresourceFilterAbusiveTest(const SubresourceFilterAbusiveTest&) = delete;
+  SubresourceFilterAbusiveTest& operator=(const SubresourceFilterAbusiveTest&) =
+      delete;
+
   ~SubresourceFilterAbusiveTest() override {}
 
   // SubresourceFilterTestHarness:
@@ -91,7 +97,10 @@ class SubresourceFilterAbusiveTest
         blocked_content::SafeBrowsingTriggeredPopupBlocker::FromWebContents(
             web_contents());
   }
-
+  void TearDown() override {
+    popup_blocker_ = nullptr;
+    subresource_filter::SubresourceFilterTestHarness::TearDown();
+  }
   void ConfigureUrl(const GURL& url) {
     safe_browsing::ThreatMetadata metadata;
     metadata.subresource_filter_match = GetMatch(abusive_level_, bas_level_);
@@ -104,7 +113,7 @@ class SubresourceFilterAbusiveTest
   bool DidSendConsoleMessage(const std::string& message) {
     const auto& messages =
         content::RenderFrameHostTester::For(main_rfh())->GetConsoleMessages();
-    return base::Contains(messages, message);
+    return std::ranges::contains(messages, message);
   }
 
  protected:
@@ -112,11 +121,11 @@ class SubresourceFilterAbusiveTest
   MetadataLevel bas_level_ = METADATA_NONE;
   bool enable_adblock_on_abusive_sites_ = false;
 
-  blocked_content::SafeBrowsingTriggeredPopupBlocker* popup_blocker_ = nullptr;
+  raw_ptr<blocked_content::SafeBrowsingTriggeredPopupBlocker> popup_blocker_ =
+      nullptr;
 
  private:
   base::test::ScopedFeatureList scoped_features_;
-  DISALLOW_COPY_AND_ASSIGN(SubresourceFilterAbusiveTest);
 };
 
 TEST_P(SubresourceFilterAbusiveTest, ConfigCombination) {
@@ -129,7 +138,8 @@ TEST_P(SubresourceFilterAbusiveTest, ConfigCombination) {
   SimulateNavigateAndCommit(url, main_rfh());
 
   bool disallow_requests = !CreateAndNavigateDisallowedSubframe(main_rfh());
-  bool disallow_popups = popup_blocker_->ShouldApplyAbusivePopupBlocker();
+  bool disallow_popups =
+      popup_blocker_->ShouldApplyAbusivePopupBlocker(main_rfh()->GetPage());
 
   bool any_activation_enforce =
       bas_level_ == METADATA_ENFORCE ||

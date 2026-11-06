@@ -1,14 +1,15 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_AURA_TEST_TEST_CURSOR_CLIENT_H_
 #define UI_AURA_TEST_TEST_CURSOR_CLIENT_H_
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "ui/aura/client/cursor_client.h"
+#include "ui/display/display.h"
 
 namespace ui {
 class KeyEvent;
@@ -21,6 +22,10 @@ namespace test {
 class TestCursorClient : public aura::client::CursorClient {
  public:
   explicit TestCursorClient(aura::Window* root_window);
+
+  TestCursorClient(const TestCursorClient&) = delete;
+  TestCursorClient& operator=(const TestCursorClient&) = delete;
+
   ~TestCursorClient() override;
 
   // Used to track the number of times SetCursor() was called.
@@ -32,7 +37,7 @@ class TestCursorClient : public aura::client::CursorClient {
     should_hide_cursor_on_key_event_ = hide;
   }
 
-  // Overridden from aura::client::CursorClient:
+  // aura::client::CursorClient:
   void SetCursor(gfx::NativeCursor cursor) override;
   gfx::NativeCursor GetCursor() const override;
   void SetCursorForced(gfx::NativeCursor cursor) override;
@@ -40,6 +45,10 @@ class TestCursorClient : public aura::client::CursorClient {
   void HideCursor() override;
   void SetCursorSize(ui::CursorSize cursor_size) override;
   ui::CursorSize GetCursorSize() const override;
+  void SetLargeCursorSizeInDip(int large_cursor_size_in_dip) override;
+  int GetLargeCursorSizeInDip() const override;
+  void SetCursorColor(SkColor color) override;
+  SkColor GetCursorColor() const override;
   bool IsCursorVisible() const override;
   void EnableMouseEvents() override;
   void DisableMouseEvents() override;
@@ -52,6 +61,8 @@ class TestCursorClient : public aura::client::CursorClient {
   void AddObserver(aura::client::CursorClientObserver* observer) override;
   void RemoveObserver(aura::client::CursorClientObserver* observer) override;
   bool ShouldHideCursorOnKeyEvent(const ui::KeyEvent& event) const override;
+  bool ShouldHideCursorOnTouchEvent(const ui::TouchEvent& event) const override;
+  gfx::Size GetSystemCursorSize() const override;
 
  private:
   bool visible_;
@@ -60,12 +71,11 @@ class TestCursorClient : public aura::client::CursorClient {
   int cursor_lock_count_;
   int calls_to_set_cursor_;
   base::ObserverList<aura::client::CursorClientObserver>::Unchecked observers_;
-  aura::Window* root_window_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestCursorClient);
+  raw_ptr<aura::Window> root_window_;
+  const display::Display display_;
 };
 
 }  // namespace test
 }  // namespace aura
 
-#endif // UI_AURA_TEST_TEST_CURSOR_CLIENT_H_
+#endif  // UI_AURA_TEST_TEST_CURSOR_CLIENT_H_

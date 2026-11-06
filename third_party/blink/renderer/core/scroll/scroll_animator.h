@@ -31,14 +31,14 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_SCROLL_SCROLL_ANIMATOR_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_SCROLL_SCROLL_ANIMATOR_H_
 
-#include <memory>
+#include "base/memory/raw_ptr.h"
 #include "base/time/default_tick_clock.h"
-
+#include "base/time/time.h"
 #include "build/build_config.h"
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/scroll/scroll_animator_base.h"
 #include "third_party/blink/renderer/platform/animation/compositor_animation_client.h"
 #include "third_party/blink/renderer/platform/animation/compositor_animation_delegate.h"
-#include "third_party/blink/renderer/platform/animation/compositor_scroll_offset_animation_curve.h"
 #include "third_party/blink/renderer/platform/timer.h"
 
 namespace blink {
@@ -105,35 +105,31 @@ class CORE_EXPORT ScrollAnimator : public ScrollAnimatorBase {
                               base::DefaultTickClock::GetInstance());
   ~ScrollAnimator() override;
 
-  bool HasRunningAnimation() const override;
   ScrollOffset ComputeDeltaToConsume(const ScrollOffset& delta) const override;
 
   // The callback will be run if the animation is updated by another
   // UserScroll, otherwise it is called when the animation is finished,
   // cancelled or reset.
-  ScrollResult UserScroll(ScrollGranularity,
-                          const ScrollOffset& delta,
-                          ScrollableArea::ScrollCallback on_finish) override;
-  void ScrollToOffsetWithoutAnimation(const ScrollOffset&) override;
+  ScrollConsumption UserScroll(
+      ui::ScrollGranularity,
+      const ScrollOffset& delta,
+      cc::ScrollSourceType source_type,
+      ScrollableArea::ScrollCallback on_finish) override;
+  void ScrollToOffsetWithoutAnimation(const ScrollOffset&,
+                                      cc::ScrollSourceType) override;
   ScrollOffset DesiredTargetOffset() const override;
+  void AdjustAnimation(const gfx::Vector2d& adjustment) override;
 
   // ScrollAnimatorCompositorCoordinator implementation.
-  void TickAnimation(double monotonic_time) override;
+  void TickAnimation(base::TimeTicks monotonic_time) override;
   void CancelAnimation() override;
-  void AdjustAnimationAndSetScrollOffset(const ScrollOffset&,
-                                         mojom::blink::ScrollType) override;
   void TakeOverCompositorAnimation() override;
   void ResetAnimationState() override;
   void UpdateCompositorAnimations() override;
   void NotifyCompositorAnimationFinished(int group_id) override;
   void NotifyCompositorAnimationAborted(int group_id) override;
-  void MainThreadScrollingDidChange() override;
 
   void Trace(Visitor*) const override;
-
-#if defined(OS_MAC)
-  bool HaveScrolledSincePageLoad() { return have_scrolled_since_page_load_; }
-#endif
 
  protected:
   // Returns whether or not the animation was sent to the compositor.
@@ -152,24 +148,16 @@ class CORE_EXPORT ScrollAnimator : public ScrollAnimatorBase {
   // because we are already at targetPos.
   bool WillAnimateToOffset(const ScrollOffset& target_pos);
 
-  std::unique_ptr<CompositorScrollOffsetAnimationCurve> animation_curve_;
-  const base::TickClock* const tick_clock_;
+  const raw_ptr<const base::TickClock, UnprotectedInRelease | DanglingUntriaged>
+      tick_clock_;
   base::TimeTicks start_time_;
 
   ScrollOffset target_offset_;
-  ScrollGranularity last_granularity_;
+  ui::ScrollGranularity last_granularity_;
 
   // on_finish_ is a callback to call on animation finished, cancelled, or
   // otherwise interrupted in any way.
   ScrollableArea::ScrollCallback on_finish_;
-
-  // TODO(crbug.com/1183387): investigate usage scenarios of this flag to verify
-  // if it is still useful.
-  // TODO(crbug.com/1122682): This is necessary for fade-in/out animations
-  // on Mac scrollbars. Remove this when MacScrollbarAnimatorImpl is removed.
-#if defined(OS_MAC)
-  bool have_scrolled_since_page_load_;
-#endif
 };
 
 }  // namespace blink

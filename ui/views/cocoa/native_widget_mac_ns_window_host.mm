@@ -1,41 +1,70 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/views/cocoa/native_widget_mac_ns_window_host.h"
 
+#include <algorithm>
+#include <tuple>
 #include <utility>
 
+#include "base/apple/foundation_util.h"
 #include "base/base64.h"
-#include "base/mac/foundation_util.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/no_destructor.h"
+#include "base/numerics/ranges.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/sys_string_conversions.h"
+#include "base/time/time.h"
+#include "base/trace_event/trace_event.h"
+#include "components/remote_cocoa/app_shim/immersive_mode_controller_cocoa.h"
 #include "components/remote_cocoa/app_shim/mouse_capture.h"
 #include "components/remote_cocoa/app_shim/native_widget_mac_nswindow.h"
 #include "components/remote_cocoa/app_shim/native_widget_ns_window_bridge.h"
 #include "components/remote_cocoa/browser/ns_view_ids.h"
 #include "components/remote_cocoa/browser/window.h"
+#include "components/remote_cocoa/common/native_widget_ns_window.mojom.h"
 #include "mojo/public/cpp/bindings/self_owned_associated_receiver.h"
 #include "ui/accelerated_widget_mac/window_resize_helper_mac.h"
+#include "ui/accessibility/accessibility_features.h"
 #include "ui/base/cocoa/animation_utils.h"
+#include "ui/base/cocoa/nswindow_test_util.h"
 #include "ui/base/cocoa/remote_accessibility_api.h"
 #include "ui/base/cocoa/remote_layer_api.h"
+#include "ui/base/cocoa/window_size_constants.h"
 #include "ui/base/hit_test.h"
 #include "ui/base/ime/input_method.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
+#include "ui/base/ui_base_features.h"
+#include "ui/color/color_provider_key.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/recyclable_compositor_mac.h"
 #include "ui/display/screen.h"
 #include "ui/events/cocoa/cocoa_event_utils.h"
 #include "ui/gfx/geometry/dip_util.h"
+#include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size_conversions.h"
 #include "ui/gfx/mac/coordinate_conversion.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/native_theme/native_theme_mac.h"
+#include "ui/views/bubble/bubble_dialog_delegate_view.h"
+#include "ui/views/cocoa/immersive_mode_reveal_client.h"
+#include "ui/views/cocoa/native_widget_mac_event_monitor.h"
 #include "ui/views/cocoa/text_input_host.h"
 #include "ui/views/cocoa/tooltip_manager_mac.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/menu/menu_config.h"
 #include "ui/views/controls/menu/menu_controller.h"
+#include "ui/views/controls/native/native_view_host.h"
+#include "ui/views/view_class_properties.h"
+#include "ui/views/view_utils.h"
 #include "ui/views/views_delegate.h"
+#include "ui/views/views_features.h"
 #include "ui/views/widget/native_widget_mac.h"
+#include "ui/views/widget/widget.h"
+#include "ui/views/widget/widget_activation_delegate.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "ui/views/window/dialog_delegate.h"
 #include "ui/views/word_lookup_client.h"
@@ -46,6 +75,11 @@ using remote_cocoa::mojom::WindowVisibilityState;
 namespace views {
 
 namespace {
+
+BASE_FEATURE(kAlwaysMoveWindowsToOriginalSpaces,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+bool g_move_windows_to_original_spaces_upon_restoration = false;
 
 // Dummy implementation of the BridgedNativeWidgetHost interface. This structure
 // exists to work around a bug wherein synchronous mojo calls to an associated
@@ -61,6 +95,8 @@ class BridgedNativeWidgetHostDummy
 
  private:
   void OnVisibilityChanged(bool visible) override {}
+  void OnSpaceActivationChanged(bool is_space_active) override {}
+  void OnWindowOcclusionChanged(bool occluded) override {}
   void OnWindowNativeThemeChanged() override {}
   void OnViewSizeChanged(const gfx::Size& new_size) override {}
   void SetKeyboardAccessible(bool enabled) override {}
@@ -72,10 +108,15 @@ class BridgedNativeWidgetHostDummy
   void OnWindowGeometryChanged(
       const gfx::Rect& window_bounds_in_screen_dips,
       const gfx::Rect& content_bounds_in_screen_dips) override {}
+  void OnWindowWillMove() override {}
+  void OnWindowDidEndMove() override {}
+  void OnWindowWillStartLiveResize() override {}
+  void OnWindowDidEndLiveResize() override {}
   void OnWindowFullscreenTransitionStart(
       bool target_fullscreen_state) override {}
   void OnWindowFullscreenTransitionComplete(bool is_fullscreen) override {}
   void OnWindowMiniaturizedChanged(bool miniaturized) override {}
+  void OnWindowZoomedChanged(bool zoomed) override {}
   void OnWindowDisplayChanged(const display::Display& display) override {}
   void OnWindowWillClose() override {}
   void OnWindowHasClosed() override {}
@@ -84,7 +125,16 @@ class BridgedNativeWidgetHostDummy
                                 bool full_keyboard_access_enabled) override {}
   void OnWindowStateRestorationDataChanged(
       const std::vector<uint8_t>& data) override {}
-  void DoDialogButtonAction(ui::DialogButton button) override {}
+  void OnVisibleOnAllWorkspacesChanged(bool visible) override {}
+  void OnSheetModalShown() override {}
+  void OnSheetModalClosed() override {}
+  void OnImmersiveFullscreenToolbarRevealChanged(bool is_revealed) override {}
+  void OnImmersiveFullscreenMenuBarRevealChanged(
+      double reveal_amount) override {}
+  void OnAutohidingMenuBarHeightChanged(int menu_bar_height) override {}
+  void OnImmersiveFullscreenTitlebarFrameChanged(
+      const gfx::Rect& frame) override {}
+  void DoDialogButtonAction(ui::mojom::DialogButton button) override {}
   void OnFocusWindowToolbar() override {}
   void SetRemoteAccessibilityTokens(
       const std::vector<uint8_t>& window_token,
@@ -106,15 +156,21 @@ class BridgedNativeWidgetHostDummy
     bool event_swallowed = false;
     std::move(callback).Run(event_swallowed, key_event->handled());
   }
+  void DispatchMonitorEvent(std::unique_ptr<ui::Event> event,
+                            bool target_is_this_window,
+                            DispatchMonitorEventCallback callback) override {
+    bool event_handled = false;
+    std::move(callback).Run(event_handled);
+  }
   void GetHasMenuController(GetHasMenuControllerCallback callback) override {
     bool has_menu_controller = false;
     std::move(callback).Run(has_menu_controller);
   }
-  void GetIsDraggableBackgroundAt(
-      const gfx::Point& location_in_content,
-      GetIsDraggableBackgroundAtCallback callback) override {
-    bool is_draggable_background = false;
-    std::move(callback).Run(is_draggable_background);
+  void GetHitTestResult(const gfx::Point& location_in_content,
+                        GetHitTestResultCallback callback) override {
+    remote_cocoa::mojom::HitTestResult hit_test_result =
+        remote_cocoa::mojom::HitTestResult::kOther;
+    std::move(callback).Run(hit_test_result);
   }
   void GetTooltipTextAt(const gfx::Point& location_in_content,
                         GetTooltipTextAtCallback callback) override {
@@ -130,7 +186,7 @@ class BridgedNativeWidgetHostDummy
     bool widget_is_modal = false;
     std::move(callback).Run(widget_is_modal);
   }
-  void GetDialogButtonInfo(ui::DialogButton button,
+  void GetDialogButtonInfo(ui::mojom::DialogButton button,
                            GetDialogButtonInfoCallback callback) override {
     bool exists = false;
     std::u16string label;
@@ -171,17 +227,26 @@ class BridgedNativeWidgetHostDummy
   void GetRootViewAccessibilityToken(
       GetRootViewAccessibilityTokenCallback callback) override {
     std::vector<uint8_t> token;
-    int64_t pid = 0;
+    base::ProcessId pid = base::kNullProcessId;
     std::move(callback).Run(pid, token);
   }
   void ValidateUserInterfaceItem(
       int32_t command,
       ValidateUserInterfaceItemCallback callback) override {
-    remote_cocoa::mojom::ValidateUserInterfaceItemResultPtr result;
+    remote_cocoa::mojom::ValidateUserInterfaceItemResultPtr result =
+        remote_cocoa::mojom::ValidateUserInterfaceItemResult::New();
     std::move(callback).Run(std::move(result));
   }
+  void WillExecuteCommand(
+      int32_t command,
+      ui::mojom::WindowOpenDisposition window_open_disposition,
+      bool is_before_first_responder,
+      ExecuteCommandCallback callback) override {
+    bool will_execute = false;
+    std::move(callback).Run(will_execute);
+  }
   void ExecuteCommand(int32_t command,
-                      WindowOpenDisposition window_open_disposition,
+                      ui::mojom::WindowOpenDisposition window_open_disposition,
                       bool is_before_first_responder,
                       ExecuteCommandCallback callback) override {
     bool was_executed = false;
@@ -209,25 +274,52 @@ uint64_t g_last_bridged_native_widget_id = 0;
 NativeWidgetMacNSWindowHost* NativeWidgetMacNSWindowHost::GetFromNativeWindow(
     gfx::NativeWindow native_window) {
   NSWindow* window = native_window.GetNativeNSWindow();
+
   if (NativeWidgetMacNSWindow* widget_window =
-          base::mac::ObjCCast<NativeWidgetMacNSWindow>(window)) {
+          base::apple::ObjCCast<NativeWidgetMacNSWindow>(window)) {
     return GetFromId([widget_window bridgedNativeWidgetId]);
   }
+
+  // If the window is a system created NSToolbarFullScreenWindow we need to do
+  // some additional work to find the original window.
+  // TODO(mek): Figure out how to make this work with remote remote_cocoa
+  // windows.
+  if (remote_cocoa::IsNSToolbarFullScreenWindow(window)) {
+    NSWindow* original =
+        remote_cocoa::OriginalHostingWindowFromFullScreenWindow(window);
+    if (NativeWidgetMacNSWindow* widget_window =
+            base::apple::ObjCCast<NativeWidgetMacNSWindow>(original)) {
+      return GetFromId([widget_window bridgedNativeWidgetId]);
+    }
+  }
+
   return nullptr;  // Not created by NativeWidgetMac.
 }
 
 // static
 NativeWidgetMacNSWindowHost* NativeWidgetMacNSWindowHost::GetFromNativeView(
     gfx::NativeView native_view) {
-  return GetFromNativeWindow([native_view.GetNativeNSView() window]);
+  return GetFromNativeWindow(
+      gfx::NativeWindow(native_view.GetNativeNSView().window));
+}
+
+// static
+const char NativeWidgetMacNSWindowHost::kMovedContentNSView[] =
+    "kMovedContentNSView";
+
+// static
+void NativeWidgetMacNSWindowHost::SetMoveWindowsToOriginalSpacesUponRestoration(
+    bool move) {
+  g_move_windows_to_original_spaces_upon_restoration = move;
 }
 
 // static
 NativeWidgetMacNSWindowHost* NativeWidgetMacNSWindowHost::GetFromId(
     uint64_t bridged_native_widget_id) {
   auto found = GetIdToWidgetHostImplMap().find(bridged_native_widget_id);
-  if (found == GetIdToWidgetHostImplMap().end())
+  if (found == GetIdToWidgetHostImplMap().end()) {
     return nullptr;
+  }
   return found->second;
 }
 
@@ -237,14 +329,15 @@ NativeWidgetMacNSWindowHost::NativeWidgetMacNSWindowHost(NativeWidgetMac* owner)
       root_view_id_(remote_cocoa::GetNewNSViewId()),
       accessibility_focus_overrider_(this),
       text_input_host_(new TextInputHost(this)) {
-  DCHECK(GetIdToWidgetHostImplMap().find(widget_id_) ==
-         GetIdToWidgetHostImplMap().end());
+  CHECK(GetIdToWidgetHostImplMap().find(widget_id_) ==
+            GetIdToWidgetHostImplMap().end(),
+        base::NotFatalUntil::M163);
   GetIdToWidgetHostImplMap().emplace(widget_id_, this);
-  DCHECK(owner);
+  CHECK(owner, base::NotFatalUntil::M163);
 }
 
 NativeWidgetMacNSWindowHost::~NativeWidgetMacNSWindowHost() {
-  DCHECK(children_.empty());
+  CHECK(children_.empty(), base::NotFatalUntil::M163);
   native_window_mapping_.reset();
   if (application_host_) {
     remote_ns_window_remote_.reset();
@@ -264,8 +357,8 @@ NativeWidgetMacNSWindowHost::~NativeWidgetMacNSWindowHost() {
 
   // Ensure that |this| cannot be reached by its id while it is being destroyed.
   auto found = GetIdToWidgetHostImplMap().find(widget_id_);
-  DCHECK(found != GetIdToWidgetHostImplMap().end());
-  DCHECK_EQ(found->second, this);
+  CHECK(found != GetIdToWidgetHostImplMap().end(), base::NotFatalUntil::M163);
+  CHECK_EQ(found->second, this, base::NotFatalUntil::M163);
   GetIdToWidgetHostImplMap().erase(found);
 
   // Destroy the bridge first to prevent any calls back into this during
@@ -276,41 +369,60 @@ NativeWidgetMacNSWindowHost::~NativeWidgetMacNSWindowHost() {
   DestroyCompositor();
 }
 
+Widget* NativeWidgetMacNSWindowHost::GetWidget() {
+  return native_widget_mac_ ? native_widget_mac_->GetWidget() : nullptr;
+}
+
 NativeWidgetMacNSWindow* NativeWidgetMacNSWindowHost::GetInProcessNSWindow()
     const {
-  return in_process_ns_window_.get();
+  return in_process_ns_window_;
 }
 
 gfx::NativeViewAccessible
 NativeWidgetMacNSWindowHost::GetNativeViewAccessibleForNSView() const {
-  if (in_process_ns_window_bridge_)
-    return in_process_ns_window_bridge_->ns_view();
-  return remote_view_accessible_.get();
+  if (in_process_ns_window_bridge_) {
+    return gfx::NativeViewAccessible(in_process_ns_window_bridge_->ns_view());
+  }
+  return gfx::NativeViewAccessible(
+      (id<NSAccessibility>)remote_view_accessible_);
 }
 
 gfx::NativeViewAccessible
 NativeWidgetMacNSWindowHost::GetNativeViewAccessibleForNSWindow() const {
-  if (in_process_ns_window_bridge_)
-    return in_process_ns_window_bridge_->ns_window();
-  return remote_window_accessible_.get();
+  if (in_process_ns_window_bridge_) {
+    // AppKit requires the return of the NSWindow that contains `ns_view()`,
+    // Failure to do so will result in VoiceOver not announcing focus changes.
+    // Typically, this would be `ns_window()`, but in fullscreen mode,
+    // the overlay window's contentView is moved to NSToolbarFullScreenWindow.
+    // Regardless of the mode (fullscreen or not), `[ns_view() window]` would
+    // always yield the correct NSWindow that contains `ns_view()`.
+    return gfx::NativeViewAccessible(
+        [in_process_ns_window_bridge_->ns_view() window]);
+  }
+
+  return gfx::NativeViewAccessible(
+      (id<NSAccessibility>)remote_window_accessible_);
 }
 
 remote_cocoa::mojom::NativeWidgetNSWindow*
 NativeWidgetMacNSWindowHost::GetNSWindowMojo() const {
-  if (remote_ns_window_remote_)
+  if (remote_ns_window_remote_) {
     return remote_ns_window_remote_.get();
-  if (in_process_ns_window_bridge_)
+  }
+  if (in_process_ns_window_bridge_) {
     return in_process_ns_window_bridge_.get();
+  }
   return nullptr;
 }
 
 void NativeWidgetMacNSWindowHost::CreateInProcessNSWindowBridge(
-    base::scoped_nsobject<NativeWidgetMacNSWindow> window) {
+    NativeWidgetMacNSWindow* window) {
   in_process_ns_window_ = window;
+  ns_window_style_mask_ = window.styleMask;
   in_process_ns_window_bridge_ =
       std::make_unique<remote_cocoa::NativeWidgetNSWindowBridge>(
           widget_id_, this, this, text_input_host_.get());
-  in_process_ns_window_bridge_->SetWindow(window);
+  in_process_ns_window_bridge_->SetWindow(in_process_ns_window_);
 }
 
 void NativeWidgetMacNSWindowHost::CreateRemoteNSWindow(
@@ -319,13 +431,15 @@ void NativeWidgetMacNSWindowHost::CreateRemoteNSWindow(
   accessibility_focus_overrider_.SetAppIsRemote(true);
   application_host_ = application_host;
   application_host_->AddObserver(this);
+  ns_window_style_mask_ = window_create_params->style_mask;
 
   // Create a local invisible window that will be used as the gfx::NativeWindow
   // handle to track this window in this process.
   {
     auto in_process_ns_window_create_params =
         remote_cocoa::mojom::CreateWindowParams::New();
-    in_process_ns_window_create_params->style_mask = NSBorderlessWindowMask;
+    in_process_ns_window_create_params->style_mask =
+        NSWindowStyleMaskBorderless;
     in_process_ns_window_ =
         remote_cocoa::NativeWidgetNSWindowBridge::CreateNSWindow(
             in_process_ns_window_create_params.get());
@@ -358,21 +472,21 @@ void NativeWidgetMacNSWindowHost::InitWindow(
     const gfx::Rect& initial_bounds_in_screen) {
   native_window_mapping_ =
       std::make_unique<remote_cocoa::ScopedNativeWindowMapping>(
-          gfx::NativeWindow(in_process_ns_window_.get()), application_host_,
+          gfx::NativeWindow(in_process_ns_window_), application_host_,
           in_process_ns_window_bridge_.get(), GetNSWindowMojo());
 
-  Widget* widget = native_widget_mac_->GetWidget();
-  // Tooltip Widgets shouldn't have their own tooltip manager, but tooltips are
-  // native on Mac, so nothing should ever want one in Widget form.
-  DCHECK_NE(params.type, Widget::InitParams::TYPE_TOOLTIP);
+  Widget* widget = GetWidget();
   widget_type_ = params.type;
-  tooltip_manager_ = std::make_unique<TooltipManagerMac>(GetNSWindowMojo());
+  bool is_tooltip = params.type == Widget::InitParams::TYPE_TOOLTIP;
+  if (!is_tooltip) {
+    tooltip_manager_ = std::make_unique<TooltipManagerMac>(GetNSWindowMojo());
+  }
 
   if (params.workspace.length()) {
-    std::string restoration_data;
-    if (base::Base64Decode(params.workspace, &restoration_data)) {
-      state_restoration_data_ = std::vector<uint8_t>(restoration_data.begin(),
-                                                     restoration_data.end());
+    if (std::optional<std::vector<uint8_t>> restoration_data =
+            base::Base64Decode(params.workspace);
+        restoration_data.has_value()) {
+      state_restoration_data_ = restoration_data.value();
     } else {
       DLOG(ERROR) << "Failed to decode a window's state restoration data.";
     }
@@ -384,11 +498,12 @@ void NativeWidgetMacNSWindowHost::InitWindow(
     window_params->modal_type = widget->widget_delegate()->GetModalType();
     window_params->is_translucent =
         params.opacity == Widget::InitParams::WindowOpacity::kTranslucent;
+    window_params->is_tooltip = is_tooltip;
 
-    // OSX likes to put shadows on most things. However, frameless windows (with
-    // styleMask = NSBorderlessWindowMask) default to no shadow. So change that.
-    // ShadowType::kDrop is used for Menus, which get the same shadow style on
-    // Mac.
+    // macOS likes to put shadows on most things. However, frameless windows
+    // (with styleMask = NSWindowStyleMaskBorderless) default to no shadow. So
+    // change that. ShadowType::kDrop is used for Menus, which get the same
+    // shadow style on Mac.
     switch (params.shadow_type) {
       case Widget::InitParams::ShadowType::kNone:
         window_params->has_window_server_shadow = false;
@@ -404,11 +519,19 @@ void NativeWidgetMacNSWindowHost::InitWindow(
     }  // No default case, to pick up new types.
 
     // Include "regular" windows without the standard frame in the window cycle.
-    // These use NSBorderlessWindowMask so do not get it by default.
+    // These use NSWindowStyleMaskBorderless so do not get it by default.
     window_params->force_into_collection_cycle =
         widget_type_ == Widget::InitParams::TYPE_WINDOW &&
         params.remove_standard_frame;
-    window_params->state_restoration_data = state_restoration_data_;
+    if (!state_restoration_data_.empty()) {
+      window_params->state_restoration_data =
+          remote_cocoa::mojom::StateRestorationData::New();
+      window_params->state_restoration_data->appkit_restoration_data =
+          state_restoration_data_;
+      window_params->state_restoration_data->restore_space =
+          g_move_windows_to_original_spaces_upon_restoration ||
+          base::FeatureList::IsEnabled(kAlwaysMoveWindowsToOriginalSpaces);
+    }
 
     GetNSWindowMojo()->InitWindow(std::move(window_params));
   }
@@ -419,52 +542,122 @@ void NativeWidgetMacNSWindowHost::InitWindow(
   // set at all, the creator of the Widget is expected to call SetBounds()
   // before calling Widget::Show() to avoid a kWindowSizeDeterminedLater-sized
   // (i.e. 1x1) window appearing.
-  UpdateLocalWindowFrame(initial_bounds_in_screen);
-  GetNSWindowMojo()->SetInitialBounds(initial_bounds_in_screen,
-                                      widget->GetMinimumSize());
-
-  // TODO(ccameron): Correctly set these based |in_process_ns_window_|.
-  window_bounds_in_screen_ = initial_bounds_in_screen;
-  content_bounds_in_screen_ = initial_bounds_in_screen;
+  gfx::Rect initial_bounds = initial_bounds_in_screen;
+  if (initial_bounds.IsEmpty()) {
+    CHECK(initial_bounds.origin().IsOrigin())
+        << "Mac only supports zero-sized windows at 0x0.";
+    initial_bounds.set_size(GetWindowSizeForContentSize(
+        gfx::Size(NSWidth(ui::kWindowSizeDeterminedLater),
+                  NSHeight(ui::kWindowSizeDeterminedLater))));
+  }
+  UpdateLocalWindowFrame(initial_bounds);
+  GetNSWindowMojo()->SetBounds(initial_bounds.origin(), initial_bounds.size(),
+                               widget->GetMinimumSize(), std::nullopt);
 
   // Widgets for UI controls (usually layered above web contents) start visible.
-  if (widget_type_ == Widget::InitParams::TYPE_CONTROL)
-    GetNSWindowMojo()->SetVisibilityState(WindowVisibilityState::kShowInactive);
+  if (widget_type_ == Widget::InitParams::TYPE_CONTROL) {
+    SetVisibilityState(WindowVisibilityState::kShowInactive);
+  }
 }
 
 void NativeWidgetMacNSWindowHost::CloseWindowNow() {
   bool is_out_of_process = !in_process_ns_window_bridge_;
   // Note that CloseWindowNow may delete |this| for in-process windows.
-  if (GetNSWindowMojo())
+  if (GetNSWindowMojo()) {
     GetNSWindowMojo()->CloseWindowNow();
+  }
 
   // If it is out-of-process, then simulate the calls that would have been
-  // during window closure.
+  // received during window closure. Because the window closure is initiated
+  // synchronously from the browser process, we immediately run the window
+  // tear-down notifications.
   if (is_out_of_process) {
     OnWindowWillClose();
-    while (!children_.empty())
+    while (!children_.empty()) {
       children_.front()->CloseWindowNow();
+    }
     OnWindowHasClosed();
   }
 }
 
 void NativeWidgetMacNSWindowHost::SetBoundsInScreen(const gfx::Rect& bounds) {
+  Widget* widget = GetWidget();
+  if (!widget) {
+    return;
+  }
+  DCHECK(!bounds.IsEmpty() || !widget->GetMinimumSize().IsEmpty())
+      << "Zero-sized windows are not supported on Mac";
   UpdateLocalWindowFrame(bounds);
-  GetNSWindowMojo()->SetBounds(
-      bounds, native_widget_mac_->GetWidget()->GetMinimumSize());
+
+  // `SetBounds()` accepts an optional maximum size, while
+  // `Widget::GetMaximumSize()` uses an empty size to represent "no maximum
+  // size", so we convert between those here.
+  std::optional<gfx::Size> maximum_size = widget->GetMaximumSize();
+  if (maximum_size->IsEmpty()) {
+    maximum_size = std::nullopt;
+  }
+
+  GetNSWindowMojo()->SetBounds(bounds.origin(), bounds.size(),
+                               widget->GetMinimumSize(), maximum_size);
 
   if (remote_ns_window_remote_) {
     gfx::Rect window_in_screen =
         gfx::ScreenRectFromNSRect([in_process_ns_window_ frame]);
-    gfx::Rect content_in_screen =
-        gfx::ScreenRectFromNSRect([in_process_ns_window_
-            contentRectForFrameRect:[in_process_ns_window_ frame]]);
+    gfx::Rect content_in_screen = GetAdjustedContentBoundsInScreen();
 
     OnWindowGeometryChanged(window_in_screen, content_in_screen);
   }
 }
 
-void NativeWidgetMacNSWindowHost::SetFullscreen(bool fullscreen, bool delay) {
+void NativeWidgetMacNSWindowHost::SetSize(const gfx::Size& size) {
+  Widget* widget = GetWidget();
+  if (!widget) {
+    return;
+  }
+  DCHECK(!size.IsEmpty() || !widget->GetMinimumSize().IsEmpty())
+      << "Zero-sized windows are not supported on Mac";
+  GetNSWindowMojo()->SetBounds(std::nullopt, size, widget->GetMinimumSize(),
+                               std::nullopt);
+
+  if (remote_ns_window_remote_) {
+    // Reflecting the logic above in SetBoundsInScreen, update our local
+    // version of what we think the bounds of the window are. These bounds
+    // are going to be not quite correct until OnWindowGeometryChanged is
+    // called by the remote process but this is better than keeping the old
+    // bounds around as code might try to make decisions based on the current
+    // perceived bounds of the window.
+    gfx::Rect bounds(GetWindowBoundsInScreen().origin(), size);
+    UpdateLocalWindowFrame(bounds);
+
+    gfx::Rect window_in_screen =
+        gfx::ScreenRectFromNSRect([in_process_ns_window_ frame]);
+    gfx::Rect content_in_screen = GetAdjustedContentBoundsInScreen();
+
+    OnWindowGeometryChanged(window_in_screen, content_in_screen);
+  }
+}
+
+void NativeWidgetMacNSWindowHost::CenterWindow(const gfx::Size& content_size) {
+  Widget* widget = GetWidget();
+  if (!widget) {
+    return;
+  }
+  // Apply the size constraints before centering, rather than leaving that to
+  // the NSWindow, so that the window is centered at its final size.
+  gfx::Size clamped_content_size = content_size;
+  clamped_content_size.SetToMax(widget->GetMinimumSize());
+  if (const gfx::Size maximum_size = widget->GetMaximumSize();
+      !maximum_size.IsEmpty()) {
+    clamped_content_size.SetToMin(maximum_size);
+  }
+  const gfx::Size window_size =
+      GetWindowSizeForContentSize(clamped_content_size);
+  SetBoundsInScreen(
+      gfx::Rect(GetCenteredWindowOrigin(window_size), window_size));
+}
+
+void NativeWidgetMacNSWindowHost::SetFullscreen(bool fullscreen,
+                                                int64_t target_display_id) {
   // Note that when the NSWindow begins a fullscreen transition, the value of
   // |target_fullscreen_state_| updates via OnWindowFullscreenTransitionStart.
   // The update here is necessary for the case where we are currently in
@@ -472,82 +665,76 @@ void NativeWidgetMacNSWindowHost::SetFullscreen(bool fullscreen, bool delay) {
   // called until the current transition completes).
   target_fullscreen_state_ = fullscreen;
 
-  if (delay) {
-    // Synchronously requesting fullscreen after moving the window to another
-    // display causes the window to resign key. Workaround this OS-specific
-    // quirk by delaying the fullscreen request, after setting the target state,
-    // to encapsulate some of these details from the calling client window code,
-    // i.e. so BrowserView::ProcessFullscreen will still hide its frame, etc.
-    // TODO(crbug.com/1034783): Refine cross-display fullscreen implementations.
-    // Maybe add fullscreen-on-target-display helpers on views::Widget, etc. to
-    // better encapsulate per-platform complexity, or at least wait for the
-    // window move before entering fullscreen, instead of posting a task with a
-    // locally-tested delay.
-    auto callback = base::BindOnce(
-        &remote_cocoa::mojom::NativeWidgetNSWindow::SetFullscreen,
-        base::Unretained(GetNSWindowMojo()), target_fullscreen_state_);
-    base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
-        FROM_HERE, std::move(callback), base::TimeDelta::FromMilliseconds(1));
-    return;
+  if (target_fullscreen_state_) {
+    GetNSWindowMojo()->EnterFullscreen(target_display_id);
+  } else {
+    GetNSWindowMojo()->ExitFullscreen();
   }
-
-  GetNSWindowMojo()->SetFullscreen(target_fullscreen_state_);
 }
 
 void NativeWidgetMacNSWindowHost::SetRootView(views::View* root_view) {
+  if (root_view_) {
+    DropRootViewReferences();
+  }
   root_view_ = root_view;
   if (root_view_) {
+    root_view_observation_.Observe(root_view);
     // TODO(ccameron): Drag-drop functionality does not yet run over mojo.
     if (in_process_ns_window_bridge_) {
       drag_drop_client_ = std::make_unique<DragDropClientMac>(
           in_process_ns_window_bridge_.get(), root_view_);
     }
-  } else {
-    drag_drop_client_.reset();
   }
 }
 
 void NativeWidgetMacNSWindowHost::CreateCompositor(
     const Widget::InitParams& params) {
-  DCHECK(!compositor_);
-  DCHECK(!layer());
-  DCHECK(ViewsDelegate::GetInstance());
+  CHECK(!compositor_, base::NotFatalUntil::M163);
+  CHECK(!layer(), base::NotFatalUntil::M163);
+  CHECK(ViewsDelegate::GetInstance(), base::NotFatalUntil::M163);
 
   // "Infer" must be handled by ViewsDelegate::OnBeforeWidgetInit().
-  DCHECK_NE(Widget::InitParams::WindowOpacity::kInferred, params.opacity);
+  CHECK_NE(Widget::InitParams::WindowOpacity::kInferred, params.opacity,
+           base::NotFatalUntil::M163);
   bool translucent =
       params.opacity == Widget::InitParams::WindowOpacity::kTranslucent;
 
   // Create the layer.
-  SetLayer(std::make_unique<ui::Layer>(params.layer_type));
+  SetLayer(ui::Layer::Create(params.layer_type));
+  layer()->SetName(params.name.empty() ? "NativeWidgetMacNSWindowHost"
+                                       : params.name);
   layer()->set_delegate(this);
   layer()->SetFillsBoundsOpaquely(!translucent);
 
   // Create the compositor and attach the layer to it.
   ui::ContextFactory* context_factory =
       ViewsDelegate::GetInstance()->GetContextFactory();
-  DCHECK(context_factory);
-  compositor_ = ui::RecyclableCompositorMacFactory::Get()->CreateCompositor(
-      context_factory);
+  CHECK(context_factory, base::NotFatalUntil::M163);
+  compositor_ = std::make_unique<ui::RecyclableCompositorMac>(context_factory);
   compositor_->widget()->SetNSView(this);
   compositor_->compositor()->SetBackgroundColor(
       translucent ? SK_ColorTRANSPARENT : SK_ColorWHITE);
   compositor_->compositor()->SetRootLayer(layer());
 
   // The compositor is locked (prevented from producing frames) until the widget
-  // is made visible.
+  // is made visible unless the window was created in headless mode in which
+  // case it will never become visible but we want its compositor to produce
+  // frames for screenshooting and screencasting.
   UpdateCompositorProperties();
-  layer()->SetVisible(is_visible_);
-  if (is_visible_)
+  layer()->SetVisible(is_visible_ || video_capture_count_ > 0);
+  if (is_visible_ || display::Screen::Get()->IsHeadless() ||
+      video_capture_count_ > 0) {
     compositor_->Unsuspend();
+  }
 
   // Register the CGWindowID (used to identify this window for video capture)
   // when it is received. Note that this is done at this moment (as opposed to
   // as a callback to CreateWindow) so that we can associate the CGWindowID with
   // the (now existing) compositor.
   auto lambda = [](NativeWidgetMacNSWindowHost* host, uint32_t cg_window_id) {
-    if (!host->compositor_)
+    if (!host->compositor_) {
       return;
+    }
     host->scoped_cg_window_id_ =
         std::make_unique<remote_cocoa::ScopedCGWindowID>(
             cg_window_id, host->compositor_->compositor()->frame_sink_id());
@@ -557,55 +744,63 @@ void NativeWidgetMacNSWindowHost::CreateCompositor(
 }
 
 void NativeWidgetMacNSWindowHost::UpdateCompositorProperties() {
-  if (!compositor_)
+  if (!compositor_) {
     return;
+  }
   layer()->SetBounds(gfx::Rect(content_bounds_in_screen_.size()));
   // Mac device scale factor is always an integer so the result here is an
   // integer pixel size.
   gfx::Size content_bounds_in_pixels =
       gfx::ToRoundedSize(gfx::ConvertSizeToPixels(
           content_bounds_in_screen_.size(), display_.device_scale_factor()));
-  compositor_->UpdateSurface(content_bounds_in_pixels,
-                             display_.device_scale_factor(),
-                             display_.color_spaces());
+  compositor_->UpdateSurface(
+      content_bounds_in_pixels, display_.device_scale_factor(),
+      display_.GetColorSpaces(), display_.id(), display_.display_frequency());
 }
 
 void NativeWidgetMacNSWindowHost::DestroyCompositor() {
+  occlusion_hide_timer_.Stop();
   if (layer()) {
     // LayerOwner supports a change in ownership, e.g., to animate a closing
     // window, but that won't work as expected for the root layer in
     // NativeWidgetNSWindowBridge.
-    DCHECK_EQ(this, layer()->owner());
+    CHECK_EQ(this, layer()->owner(), base::NotFatalUntil::M163);
     layer()->CompleteAllAnimations();
   }
   DestroyLayer();
-  if (!compositor_)
+  if (!compositor_) {
     return;
+  }
   compositor_->widget()->ResetNSView();
   compositor_->compositor()->SetRootLayer(nullptr);
-  ui::RecyclableCompositorMacFactory::Get()->RecycleCompositor(
-      std::move(compositor_));
+  compositor_.reset();
 }
 
 bool NativeWidgetMacNSWindowHost::SetWindowTitle(const std::u16string& title) {
-  if (window_title_ == title)
+  if (window_title_ == title) {
     return false;
+  }
   window_title_ = title;
   GetNSWindowMojo()->SetWindowTitle(window_title_);
   return true;
 }
 
 void NativeWidgetMacNSWindowHost::OnWidgetInitDone() {
-  Widget* widget = native_widget_mac_->GetWidget();
-  if (DialogDelegate* dialog = widget->widget_delegate()->AsDialogDelegate())
-    dialog->AddObserver(this);
+  Widget* widget = GetWidget();
+  if (widget) {
+    if (DialogDelegate* dialog =
+            widget->widget_delegate()->AsDialogDelegate()) {
+      dialog->AddObserver(this);
+    }
+  }
 }
 
 bool NativeWidgetMacNSWindowHost::RedispatchKeyEvent(NSEvent* event) {
   // If the target window is in-process, then redispatch the event directly,
   // and give an accurate return value.
-  if (in_process_ns_window_bridge_)
+  if (in_process_ns_window_bridge_) {
     return in_process_ns_window_bridge_->RedispatchKeyEvent(event);
+  }
 
   // If the target window is out of process then always report the event as
   // handled (because it should never be handled in this process).
@@ -613,9 +808,14 @@ bool NativeWidgetMacNSWindowHost::RedispatchKeyEvent(NSEvent* event) {
   return true;
 }
 
+gfx::Rect NativeWidgetMacNSWindowHost::GetContentBoundsInScreen() const {
+  return content_bounds_in_screen_;
+}
+
 gfx::Rect NativeWidgetMacNSWindowHost::GetRestoredBounds() const {
-  if (target_fullscreen_state_ || in_fullscreen_transition_)
+  if (target_fullscreen_state_ || in_fullscreen_transition_) {
     return window_bounds_before_fullscreen_;
+  }
   return window_bounds_in_screen_;
 }
 
@@ -626,29 +826,31 @@ NativeWidgetMacNSWindowHost::GetWindowStateRestorationData() const {
 
 void NativeWidgetMacNSWindowHost::SetNativeWindowProperty(const char* name,
                                                           void* value) {
-  if (value)
+  if (value) {
     native_window_properties_[name] = value;
-  else
+  } else {
     native_window_properties_.erase(name);
+  }
 }
 
 void* NativeWidgetMacNSWindowHost::GetNativeWindowProperty(
     const char* name) const {
   auto found = native_window_properties_.find(name);
-  if (found == native_window_properties_.end())
+  if (found == native_window_properties_.end()) {
     return nullptr;
+  }
   return found->second;
 }
 
 void NativeWidgetMacNSWindowHost::SetParent(
     NativeWidgetMacNSWindowHost* new_parent) {
-  if (new_parent == parent_)
+  if (new_parent == parent_) {
     return;
+  }
 
   if (parent_) {
-    auto found =
-        std::find(parent_->children_.begin(), parent_->children_.end(), this);
-    DCHECK(found != parent_->children_.end());
+    auto found = std::ranges::find(parent_->children_, this);
+    CHECK(found != parent_->children_.end(), base::NotFatalUntil::M163);
     parent_->children_.erase(found);
     parent_ = nullptr;
   }
@@ -658,7 +860,7 @@ void NativeWidgetMacNSWindowHost::SetParent(
   // close the Widget.
   // https://crbug.com/957927
   remote_cocoa::ApplicationHost* new_application_host =
-      new_parent ? new_parent->application_host() : application_host_;
+      new_parent ? new_parent->application_host() : application_host_.get();
   if (new_application_host != application_host_) {
     DLOG(ERROR) << "Cannot migrate views::NativeWidget to another process, "
                    "closing it instead.";
@@ -677,26 +879,29 @@ void NativeWidgetMacNSWindowHost::SetParent(
 
 void NativeWidgetMacNSWindowHost::OnNativeViewHostAttach(const View* view,
                                                          NSView* native_view) {
-  DCHECK_EQ(0u, attached_native_view_host_views_.count(view));
+  CHECK_EQ(0u, attached_native_view_host_views_.count(view),
+           base::NotFatalUntil::M163);
   attached_native_view_host_views_[view] = native_view;
-  native_widget_mac_->GetWidget()->ReorderNativeViews();
+  if (Widget* widget = GetWidget()) {
+    widget->ReorderNativeViews();
+  }
 }
 
 void NativeWidgetMacNSWindowHost::OnNativeViewHostDetach(const View* view) {
   auto it = attached_native_view_host_views_.find(view);
-  DCHECK(it != attached_native_view_host_views_.end());
+  CHECK(it != attached_native_view_host_views_.end(),
+        base::NotFatalUntil::M163);
   attached_native_view_host_views_.erase(it);
 }
 
 void NativeWidgetMacNSWindowHost::ReorderChildViews() {
-  Widget* widget = native_widget_mac_->GetWidget();
-  if (!widget->GetRootView())
+  if (!root_view_) {
     return;
+  }
 
   // Get the ordering for the NSViews in |attached_native_view_host_views_|.
   std::vector<NSView*> attached_subviews;
-  GetAttachedNativeViewHostViewsRecursive(widget->GetRootView(),
-                                          &attached_subviews);
+  GetAttachedNativeViewHostViewsRecursive(root_view_, &attached_subviews);
 
   // Convert to NSView ids that can go over mojo. If need be, create temporary
   // NSView ids.
@@ -707,7 +912,7 @@ void NativeWidgetMacNSWindowHost::ReorderChildViews() {
     if (!ns_view_id) {
       // Subviews that do not already have an id will not work if the target is
       // in a different process.
-      DCHECK(in_process_ns_window_bridge_);
+      CHECK(in_process_ns_window_bridge_, base::NotFatalUntil::M163);
       ns_view_id = remote_cocoa::GetNewNSViewId();
       temp_ids.emplace_back(ns_view_id, subview);
     }
@@ -716,23 +921,157 @@ void NativeWidgetMacNSWindowHost::ReorderChildViews() {
   GetNSWindowMojo()->SortSubviews(attached_subview_ids);
 }
 
+bool NativeWidgetMacNSWindowHost::IsWindowKey() const {
+  if (WidgetActivationDelegate::Get()) {
+    auto* widget =
+        native_widget_mac_ ? native_widget_mac_->GetWidget() : nullptr;
+    return WidgetActivationDelegate::Get()->IsActive(widget);
+  }
+  return is_window_key_;
+}
+
+void NativeWidgetMacNSWindowHost::SetVisibilityState(
+    remote_cocoa::mojom::WindowVisibilityState new_state) {
+  // On macOS 14 an application can't generally activate themselves. If we're
+  // trying to activate a window in a remote application host, this yield
+  // should make sure this works as long as chrome is the currently active
+  // application.
+  if (@available(macOS 14, *)) {
+    if (application_host_ &&
+        new_state == WindowVisibilityState::kShowAndActivateWindow) {
+      [NSApp yieldActivationToApplicationWithBundleIdentifier:
+                 base::SysUTF8ToNSString(application_host_->bundle_id())];
+    }
+  }
+
+  GetNSWindowMojo()->SetVisibilityState(new_state);
+
+  if (WidgetActivationDelegate::Get()) {
+    WidgetActivationDelegate::Get()->MaybeActivate(
+        GetWidget(),
+        new_state == WindowVisibilityState::kShowAndActivateWindow);
+  }
+}
+
 void NativeWidgetMacNSWindowHost::GetAttachedNativeViewHostViewsRecursive(
     View* view,
     std::vector<NSView*>* order) const {
   auto found = attached_native_view_host_views_.find(view);
-  if (found != attached_native_view_host_views_.end())
+  if (found != attached_native_view_host_views_.end()) {
     order->push_back(found->second);
-  for (View* child : view->children())
+  }
+  for (View* child : view->children()) {
     GetAttachedNativeViewHostViewsRecursive(child, order);
+  }
 }
 
 void NativeWidgetMacNSWindowHost::UpdateLocalWindowFrame(
     const gfx::Rect& frame) {
-  if (!remote_ns_window_remote_)
+  if (!remote_ns_window_remote_) {
     return;
+  }
   [in_process_ns_window_ setFrame:gfx::ScreenRectToNSRect(frame)
                           display:NO
                           animate:NO];
+}
+
+void NativeWidgetMacNSWindowHost::DropRootViewReferences() {
+  root_view_ = nullptr;
+  root_view_observation_.Reset();
+  drag_drop_client_.reset();
+}
+
+gfx::Rect NativeWidgetMacNSWindowHost::GetAdjustedContentBoundsInScreen() {
+  gfx::Rect content_in_screen = gfx::ScreenRectFromNSRect([in_process_ns_window_
+      contentRectForFrameRect:[in_process_ns_window_ frame]]);
+  gfx::Size content_in_screen_size = content_in_screen.size();
+
+  const std::optional<gfx::Size> maximum_size =
+      native_widget_mac_->GetWidget()->GetMaximumSize();
+  if (maximum_size.has_value() && !maximum_size->IsEmpty()) {
+    content_in_screen_size.SetToMin(maximum_size.value());
+  }
+
+  const std::optional<gfx::Size> minimum_size =
+      native_widget_mac_->GetWidget()->GetMinimumSize();
+  if (minimum_size.has_value() && !minimum_size->IsEmpty()) {
+    content_in_screen_size.SetToMax(minimum_size.value());
+  }
+
+  content_in_screen.set_size(content_in_screen_size);
+  return content_in_screen;
+}
+
+gfx::Size NativeWidgetMacNSWindowHost::GetWindowSizeForContentSize(
+    const gfx::Size& content_size) const {
+  NSRect frame_rect =
+      [NSWindow frameRectForContentRect:NSMakeRect(0, 0, content_size.width(),
+                                                   content_size.height())
+                              styleMask:ns_window_style_mask_];
+  return gfx::Size(NSWidth(frame_rect), NSHeight(frame_rect));
+}
+
+gfx::Point NativeWidgetMacNSWindowHost::GetCenteredWindowOrigin(
+    const gfx::Size& window_size) const {
+  // Like on other platforms, center the window over its parent, or, if it has
+  // no parent, on the display that it is on. Only consider the work area of
+  // the display (i.e. not under the menu bar or the Dock).
+  const gfx::Rect reference_bounds =
+      parent_ ? parent_->GetWindowBoundsInScreen()
+              : gfx::ScreenRectFromNSRect([in_process_ns_window_ frame]);
+  const gfx::Rect work_area =
+      display::Screen::Get()->GetDisplayMatching(reference_bounds).work_area();
+  const gfx::Rect center_bounds =
+      parent_ ? gfx::IntersectRects(reference_bounds, work_area) : work_area;
+  gfx::Point origin =
+      center_bounds.CenterPoint() -
+      gfx::Vector2d(window_size.width() / 2, window_size.height() / 2);
+
+  // Keep the window within the work area. If the window does not fit, keep
+  // its right and top edges in the work area.
+  origin.set_x(std::min(std::max(origin.x(), work_area.x()),
+                        work_area.right() - window_size.width()));
+  origin.set_y(
+      std::max(std::min(origin.y(), work_area.bottom() - window_size.height()),
+               work_area.y()));
+  return origin;
+}
+
+std::unique_ptr<NativeWidgetMacEventMonitor>
+NativeWidgetMacNSWindowHost::AddEventMonitor(
+    NativeWidgetMacEventMonitor::Client* client) {
+  // Enable the local event monitor if this is the first registered monitor.
+  if (event_monitors_.empty()) {
+    GetNSWindowMojo()->SetLocalEventMonitorEnabled(true);
+  }
+
+  // Add the new monitor to `event_monitors_`.
+  auto* monitor = new NativeWidgetMacEventMonitor(client);
+  event_monitors_.push_back(monitor);
+
+  // Set up `monitor`'s remove closure to remove it from `event_monitors_`.
+  auto remove_lambda = [](base::WeakPtr<NativeWidgetMacNSWindowHost> weak_this,
+                          NativeWidgetMacEventMonitor* monitor) {
+    if (!weak_this) {
+      return;
+    }
+    auto found = std::ranges::find(weak_this->event_monitors_, monitor);
+    CHECK(found != weak_this->event_monitors_.end());
+    weak_this->event_monitors_.erase(found);
+
+    // Disable the local event monitor when the last one is removed. The bridge
+    // may already be gone if this runs during host teardown, where the
+    // monitor's owner outlives the bridge.
+    if (weak_this->event_monitors_.empty()) {
+      if (auto* mojo = weak_this->GetNSWindowMojo()) {
+        mojo->SetLocalEventMonitorEnabled(false);
+      }
+    }
+  };
+  monitor->remove_closure_runner_.ReplaceClosure(
+      base::BindOnce(remove_lambda, weak_factory_.GetWeakPtr(), monitor));
+
+  return base::WrapUnique<NativeWidgetMacEventMonitor>(monitor);
 }
 
 // static
@@ -742,38 +1081,59 @@ NSView* NativeWidgetMacNSWindowHost::GetGlobalCaptureView() {
       [remote_cocoa::CocoaMouseCapture::GetGlobalCaptureWindow() contentView];
 }
 
-void NativeWidgetMacNSWindowHost::AddRemoteWindowControlsOverlayView(
-    remote_cocoa::mojom::WindowControlsOverlayNSViewType overlay_type) {
-  GetNSWindowMojo()->CreateWindowControlsOverlayNSView(overlay_type);
+void NativeWidgetMacNSWindowHost::CanGoBack(bool can_go_back) {
+  GetNSWindowMojo()->SetCanGoBack(can_go_back);
 }
 
-void NativeWidgetMacNSWindowHost::UpdateRemoteWindowControlsOverlayView(
-    const gfx::Rect& bounds,
-    remote_cocoa::mojom::WindowControlsOverlayNSViewType overlay_type) {
-  GetNSWindowMojo()->UpdateWindowControlsOverlayNSView(bounds, overlay_type);
+void NativeWidgetMacNSWindowHost::CanGoForward(bool can_go_forward) {
+  GetNSWindowMojo()->SetCanGoForward(can_go_forward);
 }
 
-void NativeWidgetMacNSWindowHost::RemoveRemoteWindowControlsOverlayView(
-    remote_cocoa::mojom::WindowControlsOverlayNSViewType overlay_type) {
-  GetNSWindowMojo()->RemoveWindowControlsOverlayNSView(overlay_type);
+void NativeWidgetMacNSWindowHost::SetAllowScreenshots(bool allow) {
+  GetNSWindowMojo()->SetAllowScreenshots(allow);
+  allow_screenshots_ = allow;
 }
+
+bool NativeWidgetMacNSWindowHost::AllowScreenshots() const {
+  // The `setSharingType` call in `SetAllowScreenshots()` doesn't actually
+  // change the value returned by NSWindow::sharingType. The official
+  // documentation doesn't even mention setSharingType, see
+  // https://developer.apple.com/documentation/appkit/nswindow/1419729-sharingtype
+  //
+  // Using `allow_screenshots_` is a workaround to be able to know the actual
+  // value `SetAllowScreenshots()` was called with. Note that, as on Windows,
+  // this is the state requested for this window: the window may still be
+  // excluded from capture because one of its ancestors is.
+  return allow_screenshots_;
+}
+
+void NativeWidgetMacNSWindowHost::SetColorMode(
+    ui::ColorProviderKey::ColorMode color_mode) {
+  GetNSWindowMojo()->SetColorMode(color_mode);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // NativeWidgetMacNSWindowHost, remote_cocoa::BridgedNativeWidgetHostHelper:
 
 id NativeWidgetMacNSWindowHost::GetNativeViewAccessible() {
-  return root_view_ ? root_view_->GetNativeViewAccessible() : nil;
+  return root_view_ ? root_view_->GetNativeViewAccessible().Get() : nil;
 }
 
 void NativeWidgetMacNSWindowHost::DispatchKeyEvent(ui::KeyEvent* event) {
-  ignore_result(
-      root_view_->GetWidget()->GetInputMethod()->DispatchKeyEvent(event));
+  if (root_view_) {
+    std::ignore =
+        root_view_->GetWidget()->GetInputMethod()->DispatchKeyEvent(event);
+  }
 }
 
 bool NativeWidgetMacNSWindowHost::DispatchKeyEventToMenuController(
     ui::KeyEvent* event) {
-  MenuController* menu_controller = MenuController::GetActiveInstance();
-  if (menu_controller && root_view_ &&
-      menu_controller->owner() == root_view_->GetWidget()) {
+  if (!root_view_) {
+    return false;
+  }
+  MenuController* menu_controller =
+      MenuController::GetForOwnerWidget(root_view_->GetWidget());
+  if (menu_controller) {
     return menu_controller->OnWillDispatchKeyEvent(event) ==
            ui::POST_DISPATCH_NONE;
   }
@@ -788,24 +1148,118 @@ ui::TextInputClient* NativeWidgetMacNSWindowHost::GetTextInputClient() {
   return text_input_host_->GetTextInputClient();
 }
 
+void NativeWidgetMacNSWindowHost::SetLayerAndCompositorOpaque(bool opaque) {
+  if (layer()) {
+    layer()->SetFillsBoundsOpaquely(opaque);
+  }
+  if (compositor_) {
+    compositor_->compositor()->SetBackgroundColor(opaque ? SK_ColorWHITE
+                                                         : SK_ColorTRANSPARENT);
+  }
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // NativeWidgetMacNSWindowHost, remote_cocoa::ApplicationHost::Observer:
 void NativeWidgetMacNSWindowHost::OnApplicationHostDestroying(
     remote_cocoa::ApplicationHost* host) {
-  DCHECK_EQ(host, application_host_);
+  CHECK_EQ(host, application_host_, base::NotFatalUntil::M163);
   application_host_->RemoveObserver(this);
   application_host_ = nullptr;
 
-  // Because the process hosting this window has ended, close the window by
-  // sending the window close messages that the bridge would have sent.
+  // Because the process hosting this window has ended/disconnected, we will
+  // never receive the asynchronous window close message from the helper
+  // process. We must immediately and synchronously run the window tear-down
+  // notifications.
   OnWindowWillClose();
   // Explicitly propagate this message to all children (they are also observers,
   // but may not be destroyed before |this| is destroyed, which would violate
   // tear-down assumptions). This would have been done by the bridge, had it
   // shut down cleanly.
-  while (!children_.empty())
+  while (!children_.empty()) {
     children_.front()->OnApplicationHostDestroying(host);
+  }
+  // Allow the process hosting this window to clean away any window state in its
+  // environment before the mojo remote is destroyed and the host process is
+  // terminated.
+  if (GetNSWindowMojo()) {
+    GetNSWindowMojo()->CloseWindowNow();
+  }
   OnWindowHasClosed();
+}
+
+base::ScopedClosureRunner
+NativeWidgetMacNSWindowHost::CreateVideoCaptureLock() {
+  ++video_capture_count_;
+  if (video_capture_count_ == 1) {
+    UpdateCompositorVisibility();
+  }
+  return base::ScopedClosureRunner(
+      base::BindOnce(&NativeWidgetMacNSWindowHost::OnVideoCaptureLockDestroyed,
+                     weak_factory_.GetWeakPtr()));
+}
+
+void NativeWidgetMacNSWindowHost::OnVideoCaptureLockDestroyed() {
+  CHECK_GT(video_capture_count_, 0u);
+  --video_capture_count_;
+  if (video_capture_count_ == 0) {
+    UpdateCompositorVisibility();
+  }
+}
+
+void NativeWidgetMacNSWindowHost::UpdateCompositorVisibility() {
+  if (!compositor_) {
+    return;
+  }
+  const bool notify_window = base::FeatureList::IsEnabled(
+      views::features::kNotifyCompositorOfWindowVisibilityOnMacOs);
+  const bool notify_space = base::FeatureList::IsEnabled(
+      views::features::kNotifyCompositorOfSpaceVisibilityOnMacOs);
+  const bool notify_occlusion = base::FeatureList::IsEnabled(
+      views::features::kNotifyCompositorOfWindowOcclusionOnMacOs);
+
+  // Space changes and occlusion only toggle `Compositor::SetVisible()` (when
+  // `notify_space` / `notify_occlusion` are enabled) rather than hiding the
+  // root layer or calling `compositor_->Suspend()`. `SetVisible(false)` already
+  // stops frame production in cc and tells Viz to release backbuffers, without
+  // acquiring an indefinite `ui::CompositorLock` or altering behavior when the
+  // features are disabled. Occlusion is debounced before it gets here (see
+  // `OnWindowOcclusionChanged()`).
+  const bool layer_visible = is_visible_ || video_capture_count_ > 0;
+  const bool was_layer_visible = layer()->visible();
+  const bool was_compositor_visible = compositor_->compositor()->IsVisible();
+  layer()->SetVisible(layer_visible);
+
+  const bool is_headless = display::Screen::Get()->IsHeadless();
+  if (!is_headless && (notify_window || notify_space || notify_occlusion)) {
+    // Note: AppKit sets `-[NSWindow isOnActiveSpace]` to NO when a window is
+    // hidden (`orderOut:`) or minimized (`miniaturize:`), so `notify_space`
+    // also hides the compositor on window hide/minimize even if `notify_window`
+    // is false.
+    const bool window_visible = !notify_window || is_visible_;
+    const bool space_visible = !notify_space || is_on_active_space_;
+    // TODO(crbug.com/560122536): Window capture (ScreenCaptureKit / CGWindow)
+    // doesn't take a video capture lock on Mac, so the browser UI of an
+    // occluded window freezes in a window capture stream.
+    const bool occlusion_visible = !notify_occlusion || !is_occluded_;
+    const bool should_be_visible =
+        (window_visible && space_visible && occlusion_visible) ||
+        video_capture_count_ > 0;
+    if (should_be_visible != was_compositor_visible) {
+      compositor_->compositor()->SetVisible(should_be_visible);
+    }
+  }
+
+  if (layer_visible) {
+    compositor_->Unsuspend();
+    if (compositor_->compositor()->IsVisible() &&
+        (!was_layer_visible || !was_compositor_visible)) {
+      layer()->SchedulePaint(layer()->bounds());
+    }
+  } else {
+    if (!is_headless) {
+      compositor_->Suspend();
+    }
+  }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -813,31 +1267,132 @@ void NativeWidgetMacNSWindowHost::OnApplicationHostDestroying(
 // remote_cocoa::mojom::NativeWidgetNSWindowHost:
 
 void NativeWidgetMacNSWindowHost::OnVisibilityChanged(bool window_visible) {
+  TRACE_EVENT("ui", __PRETTY_FUNCTION__, "window_visible", window_visible);
+  if (is_visible_ == window_visible) {
+    return;
+  }
+  const bool was_visible_on_screen = IsVisibleOnScreen();
   is_visible_ = window_visible;
-  if (compositor_) {
-    layer()->SetVisible(window_visible);
-    if (window_visible) {
-      compositor_->Unsuspend();
-      layer()->SchedulePaint(layer()->bounds());
-    } else {
-      compositor_->Suspend();
+  // On hide, cancel a pending hide; occluded reports are ignored while hidden
+  // (see OnWindowOcclusionChanged()), while an already-applied state is kept.
+  // Becoming visible (show, restore from minimize) invalidates any occlusion
+  // state computed while the window was hidden; WindowOcclusionCheckerMac will
+  // report the current state on its next update pass.
+  occlusion_hide_timer_.Stop();
+  if (window_visible) {
+    ResetOcclusion(/*update_compositor=*/false);
+  }
+  UpdateCompositorVisibility();
+
+  Widget* widget = GetWidget();
+  if (!widget) {
+    return;
+  }
+
+  widget->OnNativeWidgetVisibilityChanged(window_visible);
+
+  if (was_visible_on_screen != IsVisibleOnScreen()) {
+    widget->OnNativeWidgetVisibilityOnScreenChanged(IsVisibleOnScreen());
+  }
+}
+
+void NativeWidgetMacNSWindowHost::OnSpaceActivationChanged(
+    bool is_on_active_space) {
+  TRACE_EVENT("ui", __PRETTY_FUNCTION__);
+  if (is_on_active_space_ == is_on_active_space) {
+    return;
+  }
+  const bool was_visible_on_screen = IsVisibleOnScreen();
+  is_on_active_space_ = is_on_active_space;
+  const bool is_visible_on_screen = IsVisibleOnScreen();
+
+  UpdateCompositorVisibility();
+
+  if (Widget* widget = GetWidget()) {
+    if (was_visible_on_screen != is_visible_on_screen) {
+      widget->OnNativeWidgetVisibilityOnScreenChanged(is_visible_on_screen);
     }
   }
-  native_widget_mac_->GetWidget()->OnNativeWidgetVisibilityChanged(
-      window_visible);
+}
+
+void NativeWidgetMacNSWindowHost::OnWindowOcclusionChanged(bool occluded) {
+  // Note: WindowOcclusionCheckerMac sends `occluded = true` on every update
+  // pass while the window is occluded, so redundant `true` calls are expected
+  // here.
+  if (!base::FeatureList::IsEnabled(
+          views::features::kNotifyCompositorOfWindowOcclusionOnMacOs)) {
+    return;
+  }
+  if (!occluded) {
+    ResetOcclusion(/*update_compositor=*/true);
+    return;
+  }
+  // Ignore occluded reports while the window is hidden (e.g. minimized windows
+  // are reported as occluded on every pass): window visibility already covers
+  // that case. Becoming visible resets the state, and the checker's next pass
+  // reports it again if the window is still covered.
+  if (!is_visible_) {
+    return;
+  }
+  if (is_occluded_ || occlusion_hide_timer_.IsRunning()) {
+    return;
+  }
+  TRACE_EVENT("ui", "NativeWidgetMacNSWindowHost::StartOcclusionHideTimer");
+  // The hide delay should stay longer than the delay WebContentsViewCocoa uses
+  // before marking web contents occluded (`kOcclusionUpdateDelayInSeconds`,
+  // 1s), with some margin since the two timers are independent. Renderers then
+  // stop producing frames before the display stops drawing: otherwise their
+  // frames are wasted, and tiles from the last drawn frame are not returned to
+  // the renderer until the next draw.
+  constexpr base::TimeDelta kOcclusionHideDelay = base::Milliseconds(1500);
+  // Unretained is safe because `this` owns the timer.
+  occlusion_hide_timer_.Start(
+      FROM_HERE, kOcclusionHideDelay,
+      base::BindOnce(&NativeWidgetMacNSWindowHost::ApplyOcclusion,
+                     base::Unretained(this)));
+}
+
+void NativeWidgetMacNSWindowHost::ApplyOcclusion() {
+  TRACE_EVENT("ui", __PRETTY_FUNCTION__);
+  is_occluded_ = true;
+  UpdateCompositorVisibility();
+}
+
+void NativeWidgetMacNSWindowHost::ResetOcclusion(bool update_compositor) {
+  occlusion_hide_timer_.Stop();
+  if (!is_occluded_) {
+    return;
+  }
+  TRACE_EVENT("ui", __PRETTY_FUNCTION__);
+  is_occluded_ = false;
+  if (update_compositor) {
+    UpdateCompositorVisibility();
+  }
 }
 
 void NativeWidgetMacNSWindowHost::OnWindowNativeThemeChanged() {
-  ui::NativeTheme::GetInstanceForNativeUi()->NotifyOnNativeThemeUpdated();
+  if (base::FeatureList::IsEnabled(::features::kThemeChangeOptimization)) {
+    if (Widget* widget = GetWidget()) {
+      widget->ResetLastColorProviderKey();
+      widget->ScheduleThemeChanged();
+    }
+  } else {
+    ui::NativeTheme::GetInstanceForNativeUi()->NotifyOnNativeThemeUpdated();
+  }
 }
 
 void NativeWidgetMacNSWindowHost::OnScrollEvent(
     std::unique_ptr<ui::Event> event) {
-  root_view_->GetWidget()->OnScrollEvent(event->AsScrollEvent());
+  if (root_view_) {
+    root_view_->GetWidget()->OnScrollEvent(event->AsScrollEvent());
+  }
 }
 
 void NativeWidgetMacNSWindowHost::OnMouseEvent(
     std::unique_ptr<ui::Event> event) {
+  if (!root_view_) {
+    return;
+  }
   ui::MouseEvent* mouse_event = event->AsMouseEvent();
   if (scoped_cg_window_id_) {
     scoped_cg_window_id_->OnMouseMoved(mouse_event->location_f(),
@@ -850,7 +1405,9 @@ void NativeWidgetMacNSWindowHost::OnMouseEvent(
 
 void NativeWidgetMacNSWindowHost::OnGestureEvent(
     std::unique_ptr<ui::Event> event) {
-  root_view_->GetWidget()->OnGestureEvent(event->AsGestureEvent());
+  if (root_view_) {
+    root_view_->GetWidget()->OnGestureEvent(event->AsGestureEvent());
+  }
 }
 
 bool NativeWidgetMacNSWindowHost::DispatchKeyEventRemote(
@@ -870,18 +1427,52 @@ bool NativeWidgetMacNSWindowHost::DispatchKeyEventToMenuControllerRemote(
   return true;
 }
 
+bool NativeWidgetMacNSWindowHost::DispatchMonitorEvent(
+    std::unique_ptr<ui::Event> event,
+    bool target_is_this_window,
+    bool* event_handled) {
+  // The calls to NativeWidgetMacEventMonitorOnEvent can add or remove monitors,
+  // so take a snapshot of `event_monitors_` before making any calls.
+  auto event_monitors_snapshot = event_monitors_;
+
+  // The calls to NativeWidgetMacEventMonitorOnEvent can delete `this`. Use
+  // `weak_this` to detect that.
+  auto weak_this = weak_factory_.GetWeakPtr();
+
+  *event_handled = false;
+  for (NativeWidgetMacEventMonitor* event_monitor : event_monitors_snapshot) {
+    // Ensure `event_monitor` was not removed from `event_monitors_` by a
+    // previous call to NativeWidgetMacEventMonitorOnEvent.
+    if (!std::ranges::contains(event_monitors_, event_monitor)) {
+      continue;
+    }
+    event_monitor->client_->NativeWidgetMacEventMonitorOnEvent(
+        event.get(), target_is_this_window, event_handled);
+    if (!weak_this) {
+      return true;
+    }
+  }
+  return true;
+}
+
 bool NativeWidgetMacNSWindowHost::GetHasMenuController(
     bool* has_menu_controller) {
-  MenuController* menu_controller = MenuController::GetActiveInstance();
-  *has_menu_controller = menu_controller && root_view_ &&
-                         menu_controller->owner() == root_view_->GetWidget() &&
+  if (!root_view_) {
+    *has_menu_controller = false;
+    return true;
+  }
+  MenuController* menu_controller =
+      MenuController::GetForOwnerWidget(root_view_->GetWidget());
+  *has_menu_controller = menu_controller &&
                          // The editable combobox menu does not swallow keys.
                          !menu_controller->IsEditableCombobox();
   return true;
 }
 
 void NativeWidgetMacNSWindowHost::OnViewSizeChanged(const gfx::Size& new_size) {
-  root_view_->SetSize(new_size);
+  if (root_view_) {
+    root_view_->SetSize(new_size);
+  }
 }
 
 bool NativeWidgetMacNSWindowHost::GetSheetOffsetY(int32_t* offset_y) {
@@ -890,14 +1481,21 @@ bool NativeWidgetMacNSWindowHost::GetSheetOffsetY(int32_t* offset_y) {
 }
 
 void NativeWidgetMacNSWindowHost::SetKeyboardAccessible(bool enabled) {
+  if (!root_view_) {
+    return;
+  }
   views::FocusManager* focus_manager =
       root_view_->GetWidget()->GetFocusManager();
-  if (focus_manager)
+  if (focus_manager) {
     focus_manager->SetKeyboardAccessible(enabled);
+  }
 }
 
 void NativeWidgetMacNSWindowHost::OnIsFirstResponderChanged(
     bool is_first_responder) {
+  if (!root_view_) {
+    return;
+  }
   accessibility_focus_overrider_.SetViewIsFirstResponder(is_first_responder);
 
   FocusManager* focus_manager = root_view_->GetWidget()->GetFocusManager();
@@ -909,6 +1507,16 @@ void NativeWidgetMacNSWindowHost::OnIsFirstResponderChanged(
   }
 
   if (is_first_responder) {
+    // If the window isn't key, this first responder change wasn't initiated by
+    // the user (clicks make the window key first), e.g. it came from
+    // FocusManager::ClearNativeFocus() during a tab switch. Restoring focus now
+    // would activate the window (see FocusManager::SetFocusedViewWithReason()),
+    // so defer it until the window becomes key, which restores focus anyway.
+    if (!IsWindowKey() &&
+        base::FeatureList::IsEnabled(
+            views::features::kMacActivateWidgetOnFocusRequest)) {
+      return;
+    }
     focus_manager->RestoreFocusedView();
   } else {
     // Do not call ClearNativeFocus because that will re-make the
@@ -919,32 +1527,50 @@ void NativeWidgetMacNSWindowHost::OnIsFirstResponderChanged(
 }
 
 void NativeWidgetMacNSWindowHost::OnMouseCaptureActiveChanged(bool is_active) {
-  DCHECK_NE(is_mouse_capture_active_, is_active);
+  CHECK_NE(is_mouse_capture_active_, is_active, base::NotFatalUntil::M163);
   is_mouse_capture_active_ = is_active;
-  if (!is_mouse_capture_active_)
-    native_widget_mac_->GetWidget()->OnMouseCaptureLost();
+  if (!is_mouse_capture_active_ && GetWidget()) {
+    GetWidget()->OnMouseCaptureLost();
+  }
 }
 
-bool NativeWidgetMacNSWindowHost::GetIsDraggableBackgroundAt(
+bool NativeWidgetMacNSWindowHost::GetHitTestResult(
     const gfx::Point& location_in_content,
-    bool* is_draggable_background) {
+    remote_cocoa::mojom::HitTestResult* hit_test_result) {
+  if (!root_view_) {
+    return false;
+  }
   int component =
       root_view_->GetWidget()->GetNonClientComponent(location_in_content);
-  *is_draggable_background = component == HTCAPTION;
-  return true;
-}
-
-bool NativeWidgetMacNSWindowHost::GetTooltipTextAt(
-    const gfx::Point& location_in_content,
-    std::u16string* new_tooltip_text) {
-  views::View* view =
-      root_view_->GetTooltipHandlerForPoint(location_in_content);
-  if (view) {
-    gfx::Point view_point = location_in_content;
-    views::View::ConvertPointToScreen(root_view_, &view_point);
-    views::View::ConvertPointFromScreen(view, &view_point);
-    *new_tooltip_text = view->GetTooltipText(view_point);
+  if (component == HTCAPTION) {
+    *hit_test_result = remote_cocoa::mojom::HitTestResult::kDraggableBackground;
+    return true;
   }
+
+  views::View* target_view =
+      root_view_->GetEventHandlerForPoint(location_in_content);
+
+  if (!target_view) {
+    // No View is under this location. This means the event is likely in
+    // a non-client area like the resize handles or native title bar.
+    *hit_test_result = remote_cocoa::mojom::HitTestResult::kOther;
+    return true;
+  }
+
+  // If `target_view` is a NativeViewHost, an embedded child NSView (e.g.
+  // a WebView) is at this location. The event needs to be sent to that NSView
+  // directly. It will eventually handled by the owner of that NSView, e.g.
+  // RenderWidgetHostViewCocoa.
+  if (views::IsViewClass<views::NativeViewHost>(target_view)) {
+    if (target_view->GetProperty(kIsBlockedByModalKey)) {
+      *hit_test_result = remote_cocoa::mojom::HitTestResult::kBlockedSubView;
+    } else {
+      *hit_test_result = remote_cocoa::mojom::HitTestResult::kSubView;
+    }
+    return true;
+  }
+
+  *hit_test_result = remote_cocoa::mojom::HitTestResult::kRootView;
   return true;
 }
 
@@ -954,30 +1580,39 @@ void NativeWidgetMacNSWindowHost::GetWordAt(
     gfx::DecoratedText* decorated_word,
     gfx::Point* baseline_point) {
   *found_word = false;
-
+  if (!root_view_) {
+    return;
+  }
   views::View* target =
       root_view_->GetEventHandlerForPoint(location_in_content);
-  if (!target)
-    return;
-
-  views::WordLookupClient* word_lookup_client = target->GetWordLookupClient();
-  if (!word_lookup_client)
-    return;
-
-  gfx::Point location_in_target = location_in_content;
-  views::View::ConvertPointToTarget(root_view_, target, &location_in_target);
-  if (!word_lookup_client->GetWordLookupDataAtPoint(
-          location_in_target, decorated_word, baseline_point)) {
+  if (!target) {
     return;
   }
 
+  views::WordLookupClient* word_lookup_client = target->GetWordLookupClient();
+  if (!word_lookup_client) {
+    return;
+  }
+
+  gfx::Point location_in_target = location_in_content;
+  views::View::ConvertPointToTarget(root_view_, target, &location_in_target);
+  gfx::Rect rect;
+  if (!word_lookup_client->GetWordLookupDataAtPoint(location_in_target,
+                                                    decorated_word, &rect)) {
+    return;
+  }
+
+  // We only care about the baseline of the glyph, not the space it occupies.
+  *baseline_point = rect.origin();
   // Convert |baselinePoint| to the coordinate system of |root_view_|.
   views::View::ConvertPointToTarget(target, root_view_, baseline_point);
   *found_word = true;
 }
 
 bool NativeWidgetMacNSWindowHost::GetWidgetIsModal(bool* widget_is_modal) {
-  *widget_is_modal = native_widget_mac_->GetWidget()->IsModal();
+  if (Widget* widget = GetWidget()) {
+    *widget_is_modal = widget->IsModal();
+  }
   return true;
 }
 
@@ -985,8 +1620,7 @@ bool NativeWidgetMacNSWindowHost::GetIsFocusedViewTextual(bool* is_textual) {
   views::FocusManager* focus_manager =
       root_view_ ? root_view_->GetWidget()->GetFocusManager() : nullptr;
   *is_textual = focus_manager && focus_manager->GetFocusedView() &&
-                focus_manager->GetFocusedView()->GetClassName() ==
-                    views::Label::kViewClassName;
+                IsViewClass<views::Label>(focus_manager->GetFocusedView());
   return true;
 }
 
@@ -1003,20 +1637,47 @@ void NativeWidgetMacNSWindowHost::OnWindowGeometryChanged(
   window_bounds_in_screen_ = new_window_bounds_in_screen;
   content_bounds_in_screen_ = new_content_bounds_in_screen;
 
-  // When a window grows vertically, the AppKit origin changes, but as far as
-  // tookit-views is concerned, the window hasn't moved. Suppress these.
-  if (window_has_moved)
-    native_widget_mac_->GetWidget()->OnNativeWidgetMove();
+  Widget* widget = GetWidget();
+  auto weak_this = weak_factory_.GetWeakPtr();
 
+  // Notify size changed first to prevent running OnNativeWidgetMove callbacks
+  // with outdated size.
   // Note we can't use new_window_bounds_in_screen.size(), since it includes the
   // titlebar for the purposes of detecting a window move.
-  if (content_has_resized) {
-    native_widget_mac_->GetWidget()->OnNativeWidgetSizeChanged(
-        content_bounds_in_screen_.size());
+  if (content_has_resized && widget) {
+    widget->OnNativeWidgetSizeChanged(content_bounds_in_screen_.size());
 
     // Update the compositor surface and layer size.
     UpdateCompositorProperties();
   }
+
+  // Changing the size may destroy this.
+  if (!weak_this) {
+    return;
+  }
+
+  widget = GetWidget();
+  // When a window grows vertically, the AppKit origin changes, but as far as
+  // toolkit-views is concerned, the window hasn't moved. Suppress these.
+  if (window_has_moved && widget) {
+    widget->OnNativeWidgetMove();
+  }
+}
+
+void NativeWidgetMacNSWindowHost::OnWindowWillMove() {
+  native_widget_mac_->OnWindowWillMove();
+}
+
+void NativeWidgetMacNSWindowHost::OnWindowDidEndMove() {
+  native_widget_mac_->OnWindowDidEndMove();
+}
+
+void NativeWidgetMacNSWindowHost::OnWindowWillStartLiveResize() {
+  native_widget_mac_->OnWindowWillStartLiveResize();
+}
+
+void NativeWidgetMacNSWindowHost::OnWindowDidEndLiveResize() {
+  native_widget_mac_->OnWindowDidEndLiveResize();
 }
 
 void NativeWidgetMacNSWindowHost::OnWindowFullscreenTransitionStart(
@@ -1025,8 +1686,9 @@ void NativeWidgetMacNSWindowHost::OnWindowFullscreenTransitionStart(
   in_fullscreen_transition_ = true;
 
   // If going into fullscreen, store an answer for GetRestoredBounds().
-  if (target_fullscreen_state)
+  if (target_fullscreen_state) {
     window_bounds_before_fullscreen_ = window_bounds_in_screen_;
+  }
 
   // Notify that fullscreen state is changing.
   native_widget_mac_->OnWindowFullscreenTransitionStart();
@@ -1036,48 +1698,83 @@ void NativeWidgetMacNSWindowHost::OnWindowFullscreenTransitionComplete(
     bool actual_fullscreen_state) {
   in_fullscreen_transition_ = false;
 
+  // `target_fullscreen_state_` might be different from
+  // `actual_fullscreen_state` if the window failed to enter or exit fullscreen.
+  target_fullscreen_state_ = actual_fullscreen_state;
+
   // Notify that fullscreen state has changed.
   native_widget_mac_->OnWindowFullscreenTransitionComplete();
 
   // Ensure constraints are re-applied when completing a transition.
   native_widget_mac_->OnSizeConstraintsChanged();
+
+  ui::NSWindowFullscreenNotificationWaiter::NotifyFullscreenTransitionComplete(
+      native_widget_mac_->GetNativeWindow(), actual_fullscreen_state);
+
+  if (Widget* widget = GetWidget()) {
+    widget->OnNativeWidgetWindowShowStateChanged();
+  }
 }
 
 void NativeWidgetMacNSWindowHost::OnWindowMiniaturizedChanged(
     bool miniaturized) {
+  if (is_miniaturized_ == miniaturized) {
+    return;
+  }
   is_miniaturized_ = miniaturized;
-  if (native_widget_mac_)
-    native_widget_mac_->GetWidget()->OnNativeWidgetWindowShowStateChanged();
+  if (Widget* widget = GetWidget()) {
+    widget->OnNativeWidgetWindowShowStateChanged();
+  }
+}
+
+void NativeWidgetMacNSWindowHost::OnWindowZoomedChanged(bool zoomed) {
+  if (is_zoomed_ == zoomed) {
+    return;
+  }
+  is_zoomed_ = zoomed;
+  if (Widget* widget = GetWidget()) {
+    widget->OnNativeWidgetWindowShowStateChanged();
+  }
+}
+
+void NativeWidgetMacNSWindowHost::OnVisibleOnAllWorkspacesChanged(
+    bool visible) {
+  if (is_visible_on_all_workspaces_ == visible) {
+    return;
+  }
+  is_visible_on_all_workspaces_ = visible;
+  if (Widget* widget = GetWidget()) {
+    widget->OnNativeWidgetWorkspaceChanged();
+  }
 }
 
 void NativeWidgetMacNSWindowHost::OnWindowDisplayChanged(
     const display::Display& new_display) {
-  bool display_id_changed = display_.id() != new_display.id();
   display_ = new_display;
-  if (compositor_) {
-    // Mac device scale factor is always an integer so the result here is an
-    // integer pixel size.
-    gfx::Size content_bounds_in_pixels =
-        gfx::ToRoundedSize(gfx::ConvertSizeToPixels(
-            content_bounds_in_screen_.size(), display_.device_scale_factor()));
-    compositor_->UpdateSurface(content_bounds_in_pixels,
-                               display_.device_scale_factor(),
-                               display_.color_spaces());
+  if (!compositor_) {
+    return;
   }
-  if (display_id_changed) {
-    display_link_ = ui::DisplayLinkMac::GetForDisplay(display_.id());
-    if (!display_link_) {
-      // Note that on some headless systems, the display link will fail to be
-      // created, so this should not be a fatal error.
-      LOG(ERROR) << "Failed to create display link.";
-    }
-  }
+  // Mac device scale factor is always an integer so the result here is an
+  // integer pixel size.
+  gfx::Size content_bounds_in_pixels =
+      gfx::ToRoundedSize(gfx::ConvertSizeToPixels(
+          content_bounds_in_screen_.size(), display_.device_scale_factor()));
+  compositor_->UpdateSurface(
+      content_bounds_in_pixels, display_.device_scale_factor(),
+      display_.GetColorSpaces(), display_.id(), display_.display_frequency());
 }
 
 void NativeWidgetMacNSWindowHost::OnWindowWillClose() {
-  Widget* widget = native_widget_mac_->GetWidget();
-  if (DialogDelegate* dialog = widget->widget_delegate()->AsDialogDelegate())
-    dialog->RemoveObserver(this);
+  if (window_will_close_called_) {
+    return;
+  }
+  window_will_close_called_ = true;
+
+  Widget* widget = GetWidget();
+  if (widget && widget->widget_delegate() &&
+      widget->widget_delegate()->AsDialogDelegate()) {
+    widget->widget_delegate()->AsDialogDelegate()->RemoveObserver(this);
+  }
   native_widget_mac_->WindowDestroying();
   // Remove |this| from the parent's list of children.
   SetParent(nullptr);
@@ -1086,7 +1783,7 @@ void NativeWidgetMacNSWindowHost::OnWindowWillClose() {
 void NativeWidgetMacNSWindowHost::OnWindowHasClosed() {
   // OnWindowHasClosed will be called only after all child windows have had
   // OnWindowWillClose called on them.
-  DCHECK(children_.empty());
+  CHECK(children_.empty(), base::NotFatalUntil::M163);
   native_widget_mac_->WindowDestroyed();
 }
 
@@ -1094,57 +1791,128 @@ void NativeWidgetMacNSWindowHost::OnWindowKeyStatusChanged(
     bool is_key,
     bool is_content_first_responder,
     bool full_keyboard_access_enabled) {
+  if (WidgetActivationDelegate::Get()) {
+    // Do not propagate the native activation state.
+    return;
+  }
+
+  // We need `setRemoteUIApp` to YES to support some accessibility
+  // features on out-of-process remote cocoa windows like those used
+  // for PWAs. However this breaks accessibility on in-process windows,
+  // so set it back to NO when a local window gains focus. See
+  // https://crbug.com/41485830.
+  if (is_key && ::features::IsAccessibilityRemoteUIAppEnabled()) {
+    [NSAccessibilityRemoteUIElement setRemoteUIApp:!!application_host_];
+  }
   // Explicitly set the keyboard accessibility state on regaining key
   // window status.
-  if (is_key && is_content_first_responder)
+  if (is_key && is_content_first_responder) {
     SetKeyboardAccessible(full_keyboard_access_enabled);
+  }
   accessibility_focus_overrider_.SetWindowIsKey(is_key);
   is_window_key_ = is_key;
   native_widget_mac_->OnWindowKeyStatusChanged(is_key,
                                                is_content_first_responder);
 }
 
+void NativeWidgetMacNSWindowHost::OnSheetModalShown() {
+  if (Widget* widget = GetWidget()) {
+    widget->OnWindowModalVisibilityChanged(true);
+  }
+}
+
+void NativeWidgetMacNSWindowHost::OnSheetModalClosed() {
+  if (Widget* widget = GetWidget()) {
+    widget->OnWindowModalVisibilityChanged(false);
+  }
+}
+
 void NativeWidgetMacNSWindowHost::OnWindowStateRestorationDataChanged(
     const std::vector<uint8_t>& data) {
   state_restoration_data_ = data;
-  native_widget_mac_->GetWidget()->OnNativeWidgetWorkspaceChanged();
+  if (Widget* widget = GetWidget()) {
+    widget->OnNativeWidgetWorkspaceChanged();
+  }
+}
+
+void NativeWidgetMacNSWindowHost::OnImmersiveFullscreenToolbarRevealChanged(
+    bool is_revealed) {
+  if (immersive_mode_reveal_client_) {
+    immersive_mode_reveal_client_->OnImmersiveModeToolbarRevealChanged(
+        is_revealed);
+  }
+}
+
+void NativeWidgetMacNSWindowHost::OnImmersiveFullscreenMenuBarRevealChanged(
+    double reveal_amount) {
+  if (immersive_mode_reveal_client_) {
+    immersive_mode_reveal_client_->OnImmersiveModeMenuBarRevealChanged(
+        reveal_amount);
+  }
+}
+
+void NativeWidgetMacNSWindowHost::OnAutohidingMenuBarHeightChanged(
+    int menu_bar_height) {
+  if (immersive_mode_reveal_client_) {
+    immersive_mode_reveal_client_->OnAutohidingMenuBarHeightChanged(
+        menu_bar_height);
+  }
+}
+
+void NativeWidgetMacNSWindowHost::OnImmersiveFullscreenTitlebarFrameChanged(
+    const gfx::Rect& frame) {
+  // The frame is in the content view's coordinates, which are the same as the
+  // root view's coordinates.
+  if (immersive_mode_reveal_client_) {
+    immersive_mode_reveal_client_->OnImmersiveModeTitlebarFrameChanged(frame);
+  }
 }
 
 void NativeWidgetMacNSWindowHost::DoDialogButtonAction(
-    ui::DialogButton button) {
+    ui::mojom::DialogButton button) {
+  if (!root_view_) {
+    return;
+  }
   views::DialogDelegate* dialog =
       root_view_->GetWidget()->widget_delegate()->AsDialogDelegate();
-  DCHECK(dialog);
-  if (button == ui::DIALOG_BUTTON_OK) {
+  CHECK(dialog, base::NotFatalUntil::M163);
+  if (button == ui::mojom::DialogButton::kOk) {
     dialog->AcceptDialog();
   } else {
-    DCHECK_EQ(button, ui::DIALOG_BUTTON_CANCEL);
+    CHECK_EQ(button, ui::mojom::DialogButton::kCancel,
+             base::NotFatalUntil::M163);
     dialog->CancelDialog();
   }
 }
 
 bool NativeWidgetMacNSWindowHost::GetDialogButtonInfo(
-    ui::DialogButton button,
+    ui::mojom::DialogButton button,
     bool* button_exists,
     std::u16string* button_label,
     bool* is_button_enabled,
     bool* is_button_default) {
   *button_exists = false;
   views::DialogDelegate* dialog =
-      root_view_->GetWidget()->widget_delegate()->AsDialogDelegate();
-  if (!dialog || !(dialog->GetDialogButtons() & button))
+      root_view_
+          ? root_view_->GetWidget()->widget_delegate()->AsDialogDelegate()
+          : nullptr;
+  if (!dialog || !(dialog->buttons() & static_cast<int>(button))) {
     return true;
+  }
   *button_exists = true;
   *button_label = dialog->GetDialogButtonLabel(button);
   *is_button_enabled = dialog->IsDialogButtonEnabled(button);
-  *is_button_default = button == dialog->GetDefaultDialogButton();
+  *is_button_default =
+      static_cast<int>(button) == dialog->GetDefaultDialogButton();
   return true;
 }
 
 bool NativeWidgetMacNSWindowHost::GetDoDialogButtonsExist(bool* buttons_exist) {
   views::DialogDelegate* dialog =
-      root_view_->GetWidget()->widget_delegate()->AsDialogDelegate();
-  *buttons_exist = dialog && dialog->GetDialogButtons();
+      root_view_
+          ? root_view_->GetWidget()->widget_delegate()->AsDialogDelegate()
+          : nullptr;
+  *buttons_exist = dialog && dialog->buttons();
   return true;
 }
 
@@ -1176,9 +1944,10 @@ bool NativeWidgetMacNSWindowHost::OnWindowCloseRequested(
   *can_window_close = true;
   views::NonClientView* non_client_view =
       root_view_ ? root_view_->GetWidget()->non_client_view() : nullptr;
-  if (non_client_view)
+  if (non_client_view) {
     *can_window_close = non_client_view->OnWindowCloseRequested() ==
                         CloseRequestResult::kCanClose;
+  }
   return true;
 }
 
@@ -1201,16 +1970,24 @@ void NativeWidgetMacNSWindowHost::SetRemoteAccessibilityTokens(
       ui::RemoteAccessibility::GetRemoteElementFromToken(window_token);
   remote_view_accessible_ =
       ui::RemoteAccessibility::GetRemoteElementFromToken(view_token);
-  [remote_view_accessible_ setWindowUIElement:remote_window_accessible_.get()];
-  [remote_view_accessible_
-      setTopLevelUIElement:remote_window_accessible_.get()];
+  [remote_view_accessible_ setWindowUIElement:remote_window_accessible_];
+  [remote_view_accessible_ setTopLevelUIElement:remote_window_accessible_];
 }
 
 bool NativeWidgetMacNSWindowHost::GetRootViewAccessibilityToken(
-    int64_t* pid,
+    base::ProcessId* pid,
     std::vector<uint8_t>* token) {
   *pid = getpid();
   id element_id = GetNativeViewAccessible();
+
+  if (::features::IsAccessibilityRemoteUIAppEnabled()) {
+    pid_t client_pid = [remote_view_accessible_ processIdentifier];
+    if ([element_id respondsToSelector:@selector
+                    (accessibilitySetPresenterProcessIdentifier:)]) {
+      [element_id accessibilitySetPresenterProcessIdentifier:client_pid];
+    }
+  }
+
   *token = ui::RemoteAccessibility::GetTokenForLocalElement(element_id);
   return true;
 }
@@ -1223,9 +2000,19 @@ bool NativeWidgetMacNSWindowHost::ValidateUserInterfaceItem(
   return true;
 }
 
+bool NativeWidgetMacNSWindowHost::WillExecuteCommand(
+    int32_t command,
+    ui::mojom::WindowOpenDisposition window_open_disposition,
+    bool is_before_first_responder,
+    bool* will_execute) {
+  *will_execute = native_widget_mac_->WillExecuteCommand(
+      command, window_open_disposition, is_before_first_responder);
+  return true;
+}
+
 bool NativeWidgetMacNSWindowHost::ExecuteCommand(
     int32_t command,
-    WindowOpenDisposition window_open_disposition,
+    ui::mojom::WindowOpenDisposition window_open_disposition,
     bool is_before_first_responder,
     bool* was_executed) {
   *was_executed = native_widget_mac_->ExecuteCommand(
@@ -1238,7 +2025,7 @@ bool NativeWidgetMacNSWindowHost::HandleAccelerator(
     bool require_priority_handler,
     bool* was_handled) {
   *was_handled = false;
-  if (Widget* widget = native_widget_mac_->GetWidget()) {
+  if (Widget* widget = GetWidget()) {
     if (require_priority_handler &&
         !widget->GetFocusManager()->HasPriorityHandler(accelerator)) {
       return true;
@@ -1275,6 +2062,15 @@ void NativeWidgetMacNSWindowHost::DispatchKeyEventToMenuControllerRemote(
   std::move(callback).Run(event_swallowed, key_event->handled());
 }
 
+void NativeWidgetMacNSWindowHost::DispatchMonitorEvent(
+    std::unique_ptr<ui::Event> event,
+    bool target_is_this_window,
+    DispatchMonitorEventCallback callback) {
+  bool event_handled = false;
+  DispatchMonitorEvent(std::move(event), target_is_this_window, &event_handled);
+  std::move(callback).Run(event_handled);
+}
+
 void NativeWidgetMacNSWindowHost::GetHasMenuController(
     GetHasMenuControllerCallback callback) {
   bool has_menu_controller = false;
@@ -1282,19 +2078,28 @@ void NativeWidgetMacNSWindowHost::GetHasMenuController(
   std::move(callback).Run(has_menu_controller);
 }
 
-void NativeWidgetMacNSWindowHost::GetIsDraggableBackgroundAt(
+void NativeWidgetMacNSWindowHost::GetHitTestResult(
     const gfx::Point& location_in_content,
-    GetIsDraggableBackgroundAtCallback callback) {
-  bool is_draggable_background = false;
-  GetIsDraggableBackgroundAt(location_in_content, &is_draggable_background);
-  std::move(callback).Run(is_draggable_background);
+    GetHitTestResultCallback callback) {
+  remote_cocoa::mojom::HitTestResult hit_test_result =
+      remote_cocoa::mojom::HitTestResult::kOther;
+  GetHitTestResult(location_in_content, &hit_test_result);
+  std::move(callback).Run(hit_test_result);
 }
 
 void NativeWidgetMacNSWindowHost::GetTooltipTextAt(
     const gfx::Point& location_in_content,
     GetTooltipTextAtCallback callback) {
   std::u16string new_tooltip_text;
-  GetTooltipTextAt(location_in_content, &new_tooltip_text);
+  views::View* view =
+      root_view_ ? root_view_->GetTooltipHandlerForPoint(location_in_content)
+                 : nullptr;
+  if (view) {
+    gfx::Point view_point = location_in_content;
+    views::View::ConvertPointToScreen(root_view_, &view_point);
+    views::View::ConvertPointFromScreen(view, &view_point);
+    new_tooltip_text = view->GetRenderedTooltipText(view_point);
+  }
   std::move(callback).Run(new_tooltip_text);
 }
 
@@ -1313,7 +2118,7 @@ void NativeWidgetMacNSWindowHost::GetWidgetIsModal(
 }
 
 void NativeWidgetMacNSWindowHost::GetDialogButtonInfo(
-    ui::DialogButton button,
+    ui::mojom::DialogButton button,
     GetDialogButtonInfoCallback callback) {
   bool exists = false;
   std::u16string label;
@@ -1369,7 +2174,7 @@ void NativeWidgetMacNSWindowHost::GetWindowFrameTitlebarHeight(
 void NativeWidgetMacNSWindowHost::GetRootViewAccessibilityToken(
     GetRootViewAccessibilityTokenCallback callback) {
   std::vector<uint8_t> token;
-  int64_t pid;
+  base::ProcessId pid;
   GetRootViewAccessibilityToken(&pid, &token);
   std::move(callback).Run(pid, token);
 }
@@ -1382,9 +2187,20 @@ void NativeWidgetMacNSWindowHost::ValidateUserInterfaceItem(
   std::move(callback).Run(std::move(result));
 }
 
+void NativeWidgetMacNSWindowHost::WillExecuteCommand(
+    int32_t command,
+    ui::mojom::WindowOpenDisposition window_open_disposition,
+    bool is_before_first_responder,
+    ExecuteCommandCallback callback) {
+  bool will_execute = false;
+  WillExecuteCommand(command, window_open_disposition,
+                     is_before_first_responder, &will_execute);
+  std::move(callback).Run(will_execute);
+}
+
 void NativeWidgetMacNSWindowHost::ExecuteCommand(
     int32_t command,
-    WindowOpenDisposition window_open_disposition,
+    ui::mojom::WindowOpenDisposition window_open_disposition,
     bool is_before_first_responder,
     ExecuteCommandCallback callback) {
   bool was_executed = false;
@@ -1423,34 +2239,40 @@ id NativeWidgetMacNSWindowHost::GetAccessibilityFocusedUIElement() {
 
 void NativeWidgetMacNSWindowHost::OnPaintLayer(
     const ui::PaintContext& context) {
-  native_widget_mac_->GetWidget()->OnNativeWidgetPaint(context);
+  if (Widget* widget = GetWidget()) {
+    widget->OnNativeWidgetPaint(context);
+  }
 }
 
 void NativeWidgetMacNSWindowHost::OnDeviceScaleFactorChanged(
     float old_device_scale_factor,
     float new_device_scale_factor) {
-  native_widget_mac_->GetWidget()->DeviceScaleFactorChanged(
-      old_device_scale_factor, new_device_scale_factor);
+  if (Widget* widget = GetWidget()) {
+    widget->DeviceScaleFactorChanged(old_device_scale_factor,
+                                     new_device_scale_factor);
+  }
 }
 
 void NativeWidgetMacNSWindowHost::UpdateVisualState() {
-  native_widget_mac_->GetWidget()->LayoutRootViewIfNecessary();
+  if (Widget* widget = GetWidget()) {
+    widget->LayoutRootViewIfNecessary();
+  }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // NativeWidgetMacNSWindowHost, AcceleratedWidgetMac:
 
-void NativeWidgetMacNSWindowHost::AcceleratedWidgetCALayerParamsUpdated() {
-  if (const auto* ca_layer_params = compositor_->widget()->GetCALayerParams())
-    GetNSWindowMojo()->SetCALayerParams(*ca_layer_params);
+void NativeWidgetMacNSWindowHost::AcceleratedWidgetCALayerParamsUpdated(
+    gfx::CALayerParams ca_layer_params) {
+  GetNSWindowMojo()->SetCALayerParams(std::move(ca_layer_params));
+}
 
-  // Take this opportunity to update the VSync parameters, if needed.
-  if (display_link_) {
-    base::TimeTicks timebase;
-    base::TimeDelta interval;
-    if (display_link_->GetVSyncParameters(&timebase, &interval))
-      compositor_->compositor()->SetDisplayVSyncParameters(timebase, interval);
-  }
+////////////////////////////////////////////////////////////////////////////////
+// NativeWidgetMacNSWindowHost, ViewObserver:
+
+void NativeWidgetMacNSWindowHost::OnViewIsDeleting(View* observed_view) {
+  CHECK_EQ(observed_view, root_view_);
+  DropRootViewReferences();
 }
 
 }  // namespace views

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,59 +6,58 @@
 #define CHROME_BROWSER_UI_VIEWS_EXTENSIONS_EXTENSIONS_MENU_BUTTON_H_
 
 #include <memory>
+#include <string_view>
 
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/toolbar/toolbar_actions_model.h"
-#include "chrome/browser/ui/views/extensions/extension_context_menu_controller.h"
-#include "chrome/browser/ui/views/hover_button.h"
-#include "chrome/browser/ui/views/toolbar/toolbar_action_view_delegate_views.h"
+#include "base/callback_list.h"
+#include "base/memory/raw_ptr.h"
+#include "chrome/browser/ui/views/controls/hover_button.h"
 #include "ui/base/metadata/metadata_header_macros.h"
-#include "ui/views/bubble/bubble_dialog_delegate_view.h"
+#include "ui/views/metadata/view_factory.h"
 
-namespace views {
-class Button;
-}  // namespace views
+class BrowserWindowInterface;
+class ToolbarActionViewModel;
+
+namespace content {
+class WebContents;
+}  // namespace content
 
 // ExtensionsMenuButton is the single extension action button within a row in
 // the extensions menu. This includes the extension icon and name and triggers
 // the extension action.
-class ExtensionsMenuButton : public HoverButton,
-                             public ToolbarActionViewDelegateViews {
+class ExtensionsMenuButton : public HoverButton {
+  METADATA_HEADER(ExtensionsMenuButton, HoverButton)
+
  public:
-  METADATA_HEADER(ExtensionsMenuButton);
-  ExtensionsMenuButton(Browser* browser,
-                       ToolbarActionViewController* controller,
-                       bool allow_pinning);
+  ExtensionsMenuButton(BrowserWindowInterface* browser,
+                       ToolbarActionViewModel* model);
   ExtensionsMenuButton(const ExtensionsMenuButton&) = delete;
   ExtensionsMenuButton& operator=(const ExtensionsMenuButton&) = delete;
   ~ExtensionsMenuButton() override;
 
   // HoverButton:
-  bool CanShowIconInToolbar() const override;
   void AddedToWidget() override;
-  void OnThemeChanged() override;
 
-  const std::u16string& label_text_for_testing() const {
+  std::u16string_view label_text_for_testing() const {
     return label()->GetText();
   }
 
  private:
-  // ToolbarActionViewDelegateViews:
-  views::View* GetAsView() override;
-  views::FocusManager* GetFocusManagerForAccelerator() override;
-  views::Button* GetReferenceButtonForPopup() override;
-  content::WebContents* GetCurrentWebContents() const override;
-  void UpdateState() override;
-  void ShowContextMenuAsFallback() override;
-
+  void UpdateState();
+  content::WebContents* GetCurrentWebContents() const;
   void ButtonPressed();
 
-  Browser* const browser_;
+  const raw_ptr<BrowserWindowInterface, DanglingUntriaged> browser_;
 
   // Responsible for executing the extension's actions.
-  ToolbarActionViewController* const controller_;
+  const raw_ptr<ToolbarActionViewModel, DanglingUntriaged> model_;
 
-  bool allow_pinning_;
+  // Subscription to model updates.
+  base::CallbackListSubscription model_subscription_;
 };
+
+BEGIN_VIEW_BUILDER(/* no export */, ExtensionsMenuButton, HoverButton)
+END_VIEW_BUILDER
+
+DEFINE_VIEW_BUILDER(/* no export */, ExtensionsMenuButton)
 
 #endif  // CHROME_BROWSER_UI_VIEWS_EXTENSIONS_EXTENSIONS_MENU_BUTTON_H_

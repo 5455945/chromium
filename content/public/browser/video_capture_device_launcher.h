@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +8,16 @@
 #include <memory>
 #include <string>
 
+#include "base/functional/callback_forward.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/token.h"
 #include "content/common/content_export.h"
+#include "media/capture/mojom/video_capture_types.mojom.h"
 #include "media/capture/video/video_capture_device.h"
 #include "media/capture/video/video_capture_device_info.h"
 #include "media/capture/video/video_frame_receiver.h"
 #include "media/capture/video_capture_types.h"
 #include "third_party/blink/public/common/mediastream/media_stream_request.h"
-#include "ui/gfx/native_widget_types.h"
 
 namespace content {
 
@@ -38,10 +41,9 @@ class CONTENT_EXPORT VideoCaptureDeviceLauncher {
 
   // Creates an InProcessVideoCaptureDeviceLauncher.
   static std::unique_ptr<VideoCaptureDeviceLauncher>
-  CreateInProcessVideoCaptureDeviceLauncher(
-      scoped_refptr<base::SingleThreadTaskRunner> device_task_runner);
+  CreateDeviceLauncherFromMediaStreamManager();
 
-  // The passed-in |done_cb| must guarantee that the context relevant
+  // The passed-in `done_cb` must guarantee that the context relevant
   // during the asynchronous processing stays alive.
   virtual void LaunchDeviceAsync(
       const std::string& device_id,
@@ -68,11 +70,14 @@ class CONTENT_EXPORT LaunchedVideoCaptureDevice
       media::VideoCaptureDevice::TakePhotoCallback callback) = 0;
   virtual void MaybeSuspendDevice() = 0;
   virtual void ResumeDevice() = 0;
+  virtual void ApplySubCaptureTarget(
+      media::mojom::SubCaptureTargetType type,
+      const base::Token& target,
+      uint32_t sub_capture_target_version,
+      base::OnceCallback<void(media::mojom::ApplySubCaptureTargetResult)>
+          callback) = 0;
   virtual void RequestRefreshFrame() = 0;
-
-  // Methods for specific types of devices.
-  virtual void SetDesktopCaptureWindowIdAsync(gfx::NativeViewId window_id,
-                                              base::OnceClosure done_cb) = 0;
+  virtual void InvalidateBuffers() = 0;
 };
 
 }  // namespace content

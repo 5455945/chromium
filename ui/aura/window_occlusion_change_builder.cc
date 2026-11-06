@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,6 @@
 
 #include "base/check_op.h"
 #include "base/containers/flat_map.h"
-#include "base/macros.h"
 #include "components/viz/client/frame_eviction_manager.h"
 #include "third_party/skia/include/core/SkRegion.h"
 #include "ui/aura/window_tracker.h"
@@ -17,7 +16,14 @@ namespace aura {
 class DefaultWindowOcclusionChangeBuilder
     : public WindowOcclusionChangeBuilder {
  public:
-  DefaultWindowOcclusionChangeBuilder() = default;
+  explicit DefaultWindowOcclusionChangeBuilder(bool disallow_unknown)
+      : disallow_unknown_state_(disallow_unknown) {}
+
+  DefaultWindowOcclusionChangeBuilder(
+      const DefaultWindowOcclusionChangeBuilder&) = delete;
+  DefaultWindowOcclusionChangeBuilder& operator=(
+      const DefaultWindowOcclusionChangeBuilder&) = delete;
+
   ~DefaultWindowOcclusionChangeBuilder() override {
     // No frame eviction until all occlusion state changes are applied.
     viz::FrameEvictionManager::ScopedPause scoped_frame_eviction_pause;
@@ -43,8 +49,12 @@ class DefaultWindowOcclusionChangeBuilder
   void Add(Window* window,
            Window::OcclusionState occlusion_state,
            SkRegion occluded_region) override {
-    // Change back to UNKNOWN is not allowed.
-    DCHECK_NE(occlusion_state, Window::OcclusionState::UNKNOWN);
+    if (disallow_unknown_state_) {
+      // Change back to UNKNOWN is not allowed by default.
+      // TODO(crbug.com/436906707): change this to CHECK.
+      CHECK_NE(occlusion_state, Window::OcclusionState::UNKNOWN,
+               base::NotFatalUntil::M163);
+    }
 
     windows_.Add(window);
     changes_[window] = {occlusion_state, occluded_region};
@@ -58,13 +68,14 @@ class DefaultWindowOcclusionChangeBuilder
   // Stores the accumulated occlusion changes.
   base::flat_map<Window*, OcclusionData> changes_;
 
-  DISALLOW_COPY_AND_ASSIGN(DefaultWindowOcclusionChangeBuilder);
+  const bool disallow_unknown_state_;
 };
 
 // static
 std::unique_ptr<WindowOcclusionChangeBuilder>
-WindowOcclusionChangeBuilder::Create() {
-  return std::make_unique<DefaultWindowOcclusionChangeBuilder>();
+WindowOcclusionChangeBuilder::Create(bool disallow_unknown) {
+  return std::make_unique<DefaultWindowOcclusionChangeBuilder>(
+      disallow_unknown);
 }
 
 }  // namespace aura

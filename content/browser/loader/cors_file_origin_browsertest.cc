@@ -1,16 +1,14 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/path_service.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/waitable_event.h"
@@ -51,6 +49,11 @@ using net::test_server::HttpResponse;
 class CorsFileOriginBrowserTest : public ContentBrowserTest {
  public:
   CorsFileOriginBrowserTest() : pass_string_(u"PASS"), fail_string_(u"FAIL") {}
+
+  CorsFileOriginBrowserTest(const CorsFileOriginBrowserTest&) = delete;
+  CorsFileOriginBrowserTest& operator=(const CorsFileOriginBrowserTest&) =
+      delete;
+
   ~CorsFileOriginBrowserTest() override = default;
 
  protected:
@@ -109,8 +112,6 @@ class CorsFileOriginBrowserTest : public ContentBrowserTest {
     if (AllowFileAccessFromFiles()) {
       command_line->AppendSwitch(switches::kAllowFileAccessFromFiles);
     }
-
-    ContentBrowserTest::SetUpCommandLine(command_line);
   }
   void SetUpOnMainThread() override {
     base::AutoLock lock(lock_);
@@ -160,8 +161,9 @@ class CorsFileOriginBrowserTest : public ContentBrowserTest {
       // Return the request origin header as the body so that JavaScript can
       // check if it sent the expected origin header.
       auto origin = request.headers.find(net::HttpRequestHeaders::kOrigin);
-      if (origin != request.headers.end())
+      if (origin != request.headers.end()) {
         response->set_content(origin->second);
+      }
     }
     return response;
   }
@@ -173,8 +175,6 @@ class CorsFileOriginBrowserTest : public ContentBrowserTest {
 
   const std::u16string pass_string_;
   const std::u16string fail_string_;
-
-  DISALLOW_COPY_AND_ASSIGN(CorsFileOriginBrowserTest);
 };
 
 // Tests end to end Origin header and CORS check behaviors with
@@ -243,7 +243,7 @@ IN_PROC_BROWSER_TEST_F(CorsFileOriginBrowserTest, AccessToAnotherFileUrl) {
 
 // TODO(lukasza, nasko): https://crbug.com/981018: Enable this test on Macs
 // after understanding what makes it flakily fail on the mac-rel trybot.
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 #define MAYBE_UniversalAccessFromFileUrls DISABLED_UniversalAccessFromFileUrls
 #else
 #define MAYBE_UniversalAccessFromFileUrls UniversalAccessFromFileUrls
@@ -267,7 +267,7 @@ IN_PROC_BROWSER_TEST_F(CorsFileOriginBrowserTest,
 
   // Navigate to a file: test page.
   GURL page_url = GetTestUrl(nullptr, "title1.html");
-  EXPECT_EQ(url::kFileScheme, page_url.scheme());
+  EXPECT_EQ(url::kFileScheme, page_url.GetScheme());
   EXPECT_TRUE(NavigateToURL(shell(), page_url));
 
   // Fetching http resources should be allowed by CORS when

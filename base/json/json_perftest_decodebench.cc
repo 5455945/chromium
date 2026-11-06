@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,6 +18,7 @@
 // work well with the 'ministat' tool: https://github.com/thorduri/ministat
 
 #include <inttypes.h>
+
 #include <iomanip>
 #include <iostream>
 
@@ -64,18 +65,20 @@ int main(int argc, char* argv[]) {
     std::string error_message;
     for (int i = 0; i < iterations; ++i) {
       auto start = base::ThreadTicks::Now();
-      auto v = base::JSONReader::ReadAndReturnValueWithError(src);
+      auto v = base::JSONReader::ReadAndReturnValueWithError(
+          src, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
       auto end = base::ThreadTicks::Now();
       int64_t iteration_time = (end - start).InMicroseconds();
       total_time += iteration_time;
 
       if (i == 0) {
         if (average) {
-          error_message = std::move(v.error_message);
+          error_message =
+              !v.has_value() ? std::move(v.error().message) : std::string();
         } else {
           std::cout << "# " << filename;
-          if (!v.error_message.empty()) {
-            std::cout << ": " << v.error_message;
+          if (!v.has_value() && !v.error().message.empty()) {
+            std::cout << ": " << v.error().message;
           }
           std::cout << std::endl;
         }

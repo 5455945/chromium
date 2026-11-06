@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,34 +14,41 @@
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 
 namespace metrics {
-
 namespace {
 
 class MojoSingleSampleMetric : public mojom::SingleSampleMetric {
  public:
   MojoSingleSampleMetric(const std::string& histogram_name,
-                         base::HistogramBase::Sample min,
-                         base::HistogramBase::Sample max,
+                         base::HistogramBase::Sample32 min,
+                         base::HistogramBase::Sample32 max,
                          uint32_t bucket_count,
                          int32_t flags)
       : metric_(histogram_name, min, max, bucket_count, flags) {}
-  ~MojoSingleSampleMetric() override {}
+
+  MojoSingleSampleMetric(const MojoSingleSampleMetric&) = delete;
+  MojoSingleSampleMetric& operator=(const MojoSingleSampleMetric&) = delete;
+
+  ~MojoSingleSampleMetric() override = default;
 
  private:
   // mojom::SingleSampleMetric:
-  void SetSample(base::HistogramBase::Sample sample) override {
+  void SetSample(base::HistogramBase::Sample32 sample) override {
     metric_.SetSample(sample);
   }
 
   base::DefaultSingleSampleMetric metric_;
-
-  DISALLOW_COPY_AND_ASSIGN(MojoSingleSampleMetric);
 };
 
 class MojoSingleSampleMetricsProvider
     : public mojom::SingleSampleMetricsProvider {
  public:
-  MojoSingleSampleMetricsProvider() {}
+  MojoSingleSampleMetricsProvider() = default;
+
+  MojoSingleSampleMetricsProvider(const MojoSingleSampleMetricsProvider&) =
+      delete;
+  MojoSingleSampleMetricsProvider& operator=(
+      const MojoSingleSampleMetricsProvider&) = delete;
+
   ~MojoSingleSampleMetricsProvider() override {
     DCHECK(thread_checker_.CalledOnValidThread());
   }
@@ -50,8 +57,8 @@ class MojoSingleSampleMetricsProvider
   // mojom::SingleSampleMetricsProvider:
   void AcquireSingleSampleMetric(
       const std::string& histogram_name,
-      base::HistogramBase::Sample min,
-      base::HistogramBase::Sample max,
+      base::HistogramBase::Sample32 min,
+      base::HistogramBase::Sample32 max,
       uint32_t bucket_count,
       int32_t flags,
       mojo::PendingReceiver<mojom::SingleSampleMetric> receiver) override {
@@ -64,8 +71,6 @@ class MojoSingleSampleMetricsProvider
 
   // Providers must be created, used on, and destroyed on the same thread.
   base::ThreadChecker thread_checker_;
-
-  DISALLOW_COPY_AND_ASSIGN(MojoSingleSampleMetricsProvider);
 };
 
 }  // namespace

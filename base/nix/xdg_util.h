@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,42 +7,97 @@
 
 // XDG refers to http://en.wikipedia.org/wiki/Freedesktop.org .
 // This file contains utilities found across free desktop environments.
-//
-// TODO(brettw) this file should be in app/x11, but is currently used by
-// net. We should have a net API to allow the embedder to specify the behavior
-// that it uses XDG for, and then move this file.
+
+#include <optional>
+#include <string>
+#include <vector>
 
 #include "base/base_export.h"
-
-#ifdef nix
-#error asdf
-#endif
+#include "base/functional/callback.h"
+#include "base/strings/cstring_view.h"
 
 namespace base {
 
+class CommandLine;
 class Environment;
 class FilePath;
+struct LaunchOptions;
 
 namespace nix {
 
+enum DesktopEnvironment {
+  DESKTOP_ENVIRONMENT_OTHER = 0,
+  DESKTOP_ENVIRONMENT_CINNAMON = 1,
+  DESKTOP_ENVIRONMENT_DEEPIN = 2,
+  DESKTOP_ENVIRONMENT_GNOME = 3,
+  // KDE{3,4,5,6} are sufficiently different that we count
+  // them as different desktop environments here.
+  DESKTOP_ENVIRONMENT_KDE3 = 4,
+  DESKTOP_ENVIRONMENT_KDE4 = 5,
+  DESKTOP_ENVIRONMENT_KDE5 = 6,
+  DESKTOP_ENVIRONMENT_KDE6 = 12,
+  DESKTOP_ENVIRONMENT_PANTHEON = 7,
+  DESKTOP_ENVIRONMENT_UKUI = 8,
+  DESKTOP_ENVIRONMENT_UNITY = 9,
+  DESKTOP_ENVIRONMENT_XFCE = 10,
+  DESKTOP_ENVIRONMENT_LXQT = 11,
+  DESKTOP_ENVIRONMENT_COSMIC = 13,
+};
+
+// Values based on valid types indicated in:
+// https://www.freedesktop.org/software/systemd/man/pam_systemd.html; though
+// "Unset" and "Other" are provided by us to distinguish between the potentially
+// valid "Unspecified" and other cases where we may not be able to find the
+// value.
+enum class SessionType {
+  kUnset = 0,
+  kOther = 1,
+  kUnspecified = 2,
+  kTty = 3,
+  kX11 = 4,
+  kWayland = 5,
+  kMir = 6,
+};
+
+using XdgActivationTokenCallback = base::OnceCallback<void(std::string token)>;
+using XdgActivationTokenCreator =
+    base::RepeatingCallback<void(XdgActivationTokenCallback callback)>;
+using XdgActivationLaunchOptionsCallback =
+    base::OnceCallback<void(LaunchOptions)>;
+
 // The default XDG config directory name.
-BASE_EXPORT extern const char kDotConfigDir[];
+inline constexpr char kDotConfigDir[] = ".config";
 
 // The XDG config directory environment variable.
-BASE_EXPORT extern const char kXdgConfigHomeEnvVar[];
+inline constexpr char kXdgConfigHomeEnvVar[] = "XDG_CONFIG_HOME";
 
 // The XDG current desktop environment variable.
-BASE_EXPORT extern const char kXdgCurrentDesktopEnvVar[];
+inline constexpr char kXdgCurrentDesktopEnvVar[] = "XDG_CURRENT_DESKTOP";
 
 // The XDG session type environment variable.
-BASE_EXPORT extern const char kXdgSessionTypeEnvVar[];
+inline constexpr char kXdgSessionTypeEnvVar[] = "XDG_SESSION_TYPE";
+
+// The XDG activation token environment variable.
+inline constexpr char kXdgActivationTokenEnvVar[] = "XDG_ACTIVATION_TOKEN";
+
+// Desktop startup ID environment variable.
+inline constexpr char kDesktopStartupIdEnvVar[] = "DESKTOP_STARTUP_ID";
+
+// Internally used to communicate the activation token between a newly launched
+// process and an existing browser process.
+inline constexpr char kXdgActivationTokenSwitch[] = "xdg-activation-token";
+
+// Legacy switch through which X11 launchers can pass a startup ID. Chromium no
+// longer sets it itself but still accepts it.
+inline constexpr char kDesktopStartupIdSwitch[] = "desktop-startup-id";
 
 // Utility function for getting XDG directories.
 // |env_name| is the name of an environment variable that we want to use to get
 // a directory path. |fallback_dir| is the directory relative to $HOME that we
 // use if |env_name| cannot be found or is empty. |fallback_dir| may be NULL.
 // Examples of |env_name| are XDG_CONFIG_HOME and XDG_DATA_HOME.
-BASE_EXPORT FilePath GetXDGDirectory(Environment* env, const char* env_name,
+BASE_EXPORT FilePath GetXDGDirectory(Environment* env,
+                                     cstring_view env_name,
                                      const char* fallback_dir);
 
 // Wrapper around xdg_user_dir_lookup() from src/base/third_party/xdg-user-dirs
@@ -51,19 +106,16 @@ BASE_EXPORT FilePath GetXDGDirectory(Environment* env, const char* env_name,
 BASE_EXPORT FilePath GetXDGUserDirectory(const char* dir_name,
                                          const char* fallback_dir);
 
-enum DesktopEnvironment {
-  DESKTOP_ENVIRONMENT_OTHER,
-  DESKTOP_ENVIRONMENT_CINNAMON,
-  DESKTOP_ENVIRONMENT_GNOME,
-  // KDE3, KDE4 and KDE5 are sufficiently different that we count
-  // them as different desktop environments here.
-  DESKTOP_ENVIRONMENT_KDE3,
-  DESKTOP_ENVIRONMENT_KDE4,
-  DESKTOP_ENVIRONMENT_KDE5,
-  DESKTOP_ENVIRONMENT_PANTHEON,
-  DESKTOP_ENVIRONMENT_UNITY,
-  DESKTOP_ENVIRONMENT_XFCE,
-};
+// Get the path to write user-specific application data files to, as specified
+// in the XDG Base Directory Specification:
+// http://standards.freedesktop.org/basedir-spec/latest/
+BASE_EXPORT FilePath GetXDGDataWriteLocation(Environment* env);
+
+// Get the list of paths to search for application data files, in order of
+// preference, as specified in the XDG Base Directory Specification:
+// http://standards.freedesktop.org/basedir-spec/latest/
+// Called on the FILE thread.
+BASE_EXPORT std::vector<FilePath> GetXDGDataSearchLocations(Environment* env);
 
 // Return an entry from the DesktopEnvironment enum with a best guess
 // of which desktop environment we're using.  We use this to know when
@@ -76,6 +128,94 @@ BASE_EXPORT DesktopEnvironment GetDesktopEnvironment(Environment* env);
 BASE_EXPORT const char* GetDesktopEnvironmentName(DesktopEnvironment env);
 // Convenience wrapper that calls GetDesktopEnvironment() first.
 BASE_EXPORT const char* GetDesktopEnvironmentName(Environment* env);
+
+// Return an entry from the SessionType enum with a best guess
+// of which session type we're using.
+BASE_EXPORT SessionType GetSessionType(Environment& env);
+
+// Sets the global activation token from the environment and returns it if it
+// exists, and removes it from the environment to prevent it from leaking into
+// child processes.
+BASE_EXPORT std::optional<std::string> ExtractXdgActivationTokenFromEnv(
+    Environment& env);
+
+// Reads kXdgActivationTokenSwitch, falling back to kDesktopStartupIdSwitch.
+// Returns nullopt if neither supplies a nonempty token.
+[[nodiscard]] BASE_EXPORT std::optional<std::string>
+GetXdgActivationTokenFromCommandLine(const CommandLine& command_line);
+
+// Sets the global activation token, e.g. from a notification D-Bus event.
+BASE_EXPORT void SetActivationToken(std::string token);
+
+// Transfers ownership of the currently set global activation token if set.
+BASE_EXPORT std::optional<std::string> TakeXdgActivationToken();
+
+// Sets the global token creator.
+BASE_EXPORT void SetXdgActivationTokenCreator(
+    XdgActivationTokenCreator token_creator);
+
+// Tries to create an xdg-activation token and invokes the `callback` with
+// `LaunchOptions` containing the token if available, or empty `LaunchOptions`.
+// This must be called on UI thread.
+BASE_EXPORT void CreateLaunchOptionsWithXdgActivation(
+    XdgActivationLaunchOptionsCallback callback);
+
+// Tries to create an xdg-activation token and invokes the `callback` with the
+// token if available, or an empty string.
+// This must be called on UI thread.
+BASE_EXPORT void CreateXdgActivationToken(XdgActivationTokenCallback callback);
+
+// Returns a request path as specified in v0.9 of xdg-desktop-portal:
+// https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Request.html
+BASE_EXPORT
+std::string XdgDesktopPortalRequestPath(const std::string& sender,
+                                        const std::string& token);
+
+// Returns a session path as specified in v0.9 of xdg-desktop-portal:
+// https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Session.html
+BASE_EXPORT
+std::string XdgDesktopPortalSessionPath(const std::string& sender,
+                                        const std::string& token);
+
+// Application sandboxes (packaging formats) that the browser may be running
+// inside of. This is unrelated to Chromium's own process sandbox.
+enum class AppSandbox {
+  kNone,
+  kFlatpak,
+  kSnap,
+};
+
+// Returns the application sandbox that the current process is running in.
+// The result is computed on the first call and cached, since it can't change
+// during the lifetime of the process. Safe to call from any thread.
+//
+// Flatpak is detected by the existence of `/.flatpak-info`, which Flatpak
+// creates in every sandbox, falling back to $FLATPAK_ID. Environment variables
+// alone aren't relied on for Flatpak, since they may be inherited by host
+// processes launched from a sandboxed app (e.g. via `flatpak-spawn --host`).
+// Snap is detected by $SNAP and $SNAP_NAME, which snapd sets for all confined
+// apps.
+BASE_EXPORT AppSandbox GetAppSandbox();
+
+// Uncached version of GetAppSandbox() that reads from `env` and checks
+// `flatpak_info_path` instead of `/.flatpak-info`.
+BASE_EXPORT AppSandbox
+DetectAppSandboxForTesting(Environment& env, const FilePath& flatpak_info_path);
+
+// Makes GetAppSandbox() return `sandbox` while in scope. Must not be used
+// while other threads may be calling GetAppSandbox().
+class BASE_EXPORT ScopedAppSandboxOverrideForTesting {
+ public:
+  explicit ScopedAppSandboxOverrideForTesting(AppSandbox sandbox);
+  ScopedAppSandboxOverrideForTesting(
+      const ScopedAppSandboxOverrideForTesting&) = delete;
+  ScopedAppSandboxOverrideForTesting& operator=(
+      const ScopedAppSandboxOverrideForTesting&) = delete;
+  ~ScopedAppSandboxOverrideForTesting();
+
+ private:
+  const std::optional<AppSandbox> previous_;
+};
 
 }  // namespace nix
 }  // namespace base

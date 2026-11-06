@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,152 +9,122 @@
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/run_loop.h"
+#include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
+#include "base/test/bind.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/test/test_future.h"
 #include "base/threading/thread_restrictions.h"
+#include "build/build_config.h"
 #include "content/browser/loader/prefetch_browsertest_base.h"
+#include "content/browser/loader/prefetch_url_loader_service_context.h"
+#include "content/browser/loader/subresource_proxying_url_loader_service.h"
+#include "content/browser/renderer_host/render_frame_host_impl.h"
+#include "content/browser/storage_partition_impl.h"
 #include "content/browser/web_package/mock_signed_exchange_handler.h"
+#include "content/browser/web_package/prefetched_signed_exchange_cache.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
+#include "content/public/test/test_frame_navigation_observer.h"
 #include "content/public/test/url_loader_monitor.h"
 #include "content/shell/browser/shell.h"
+#include "mojo/public/cpp/test_support/test_utils.h"
 #include "net/base/features.h"
 #include "net/base/filename_util.h"
 #include "net/base/isolation_info.h"
+#include "net/base/load_flags.h"
 #include "net/dns/mock_host_resolver.h"
+#include "net/test/embedded_test_server/default_handlers.h"
+#include "net/test/scoped_mutually_exclusive_feature_list.h"
+#include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/resource_request.h"
+#include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
+#include "services/network/test/test_url_loader_client.h"
+#include "services/network/test/test_url_loader_factory.h"
 #include "third_party/blink/public/common/features.h"
 
 namespace content {
 
+namespace {
+
+enum class SplitCacheTestCase {
+  kDisabled,
+  kEnabledTripleKeyed,
+  kEnabledTriplePlusCredsBool,
+};
+
+const struct {
+  const SplitCacheTestCase test_case;
+  base::test::FeatureRef feature;
+} kTestCaseToFeatureMapping[] = {
+    {SplitCacheTestCase::kEnabledTriplePlusCredsBool,
+     net::features::kSplitCacheByIncludeCredentials}};
+
+}  // namespace
+
 class PrefetchBrowserTest
     : public PrefetchBrowserTestBase,
-      public testing::WithParamInterface<std::tuple<bool, bool>> {
+      public testing::WithParamInterface<SplitCacheTestCase> {
  public:
   PrefetchBrowserTest()
       : cross_origin_server_(std::make_unique<net::EmbeddedTestServer>()),
-        signed_exchange_enabled_(std::get<0>(GetParam())),
-        split_cache_enabled_(std::get<1>(GetParam())) {}
-  ~PrefetchBrowserTest() = default;
+        split_cache_test_case_(GetParam()),
+        split_cache_experiment_feature_list_(GetParam(),
+                                             kTestCaseToFeatureMapping) {
+    std::vector<base::test::FeatureRefAndParams> enabled_features;
+    std::vector<base::test::FeatureRef> disabled_features;
+    if (IsSplitCacheEnabled()) {
+      enabled_features.emplace_back(
+          net::features::kSplitCacheByNetworkIsolationKey,
+          base::FieldTrialParams());
+    } else {
+      disabled_features.emplace_back(
+          net::features::kSplitCacheByNetworkIsolationKey);
+    }
+    enabled_features.emplace_back(net::features::kHttpCacheNoVarySearch,
+                                  base::FieldTrialParams());
+    enabled_features.emplace_back(
+        blink::features::kRestrictLinkHeaderOnSubresource,
+        base::FieldTrialParams{{"disable_resource_load", "false"}});
+    split_cache_enabled_feature_list_.InitWithFeaturesAndParameters(
+        enabled_features, disabled_features);
+  }
+
+  PrefetchBrowserTest(const PrefetchBrowserTest&) = delete;
+  PrefetchBrowserTest& operator=(const PrefetchBrowserTest&) = delete;
+
+  ~PrefetchBrowserTest() override = default;
 
   void SetUpOnMainThread() override {
     PrefetchBrowserTestBase::SetUpOnMainThread();
     host_resolver()->AddRule("*", "127.0.0.1");
   }
 
-  void SetUp() override {
-    std::vector<base::Feature> enable_features;
-    std::vector<base::Feature> disabled_features;
-    if (signed_exchange_enabled_) {
-      enable_features.push_back(features::kSignedHTTPExchange);
-    } else {
-      disabled_features.push_back(features::kSignedHTTPExchange);
-    }
-
-    if (split_cache_enabled_) {
-      enable_features.push_back(
-          net::features::kSplitCacheByNetworkIsolationKey);
-    } else {
-      disabled_features.push_back(
-          net::features::kSplitCacheByNetworkIsolationKey);
-    }
-
-    feature_list_.InitWithFeatures(enable_features, disabled_features);
-    PrefetchBrowserTestBase::SetUp();
+  bool IsSplitCacheEnabled() const {
+    return split_cache_test_case_ != SplitCacheTestCase::kDisabled;
   }
 
  protected:
   std::unique_ptr<net::EmbeddedTestServer> cross_origin_server_;
-  const bool signed_exchange_enabled_;
-  const bool split_cache_enabled_;
+  const SplitCacheTestCase split_cache_test_case_;
 
  private:
-  base::test::ScopedFeatureList feature_list_;
-
-  DISALLOW_COPY_AND_ASSIGN(PrefetchBrowserTest);
+  net::test::ScopedMutuallyExclusiveFeatureList
+      split_cache_experiment_feature_list_;
+  base::test::ScopedFeatureList split_cache_enabled_feature_list_;
 };
 
-class PrefetchBrowserTestPrivacyChanges
-    : public PrefetchBrowserTestBase,
-      public testing::WithParamInterface<bool> {
- public:
-  PrefetchBrowserTestPrivacyChanges()
-      : privacy_changes_enabled_(GetParam()),
-        cross_origin_server_(std::make_unique<net::EmbeddedTestServer>()) {}
-  ~PrefetchBrowserTestPrivacyChanges() override = default;
-
-  void SetUp() override {
-    std::vector<base::Feature> enable_features;
-    std::vector<base::Feature> disabled_features;
-    if (privacy_changes_enabled_) {
-      enable_features.push_back(blink::features::kPrefetchPrivacyChanges);
-    } else {
-      disabled_features.push_back(blink::features::kPrefetchPrivacyChanges);
-    }
-    feature_list_.InitWithFeatures(enable_features, disabled_features);
-    PrefetchBrowserTestBase::SetUp();
-  }
-
- protected:
-  const bool privacy_changes_enabled_;
-  std::unique_ptr<net::EmbeddedTestServer> cross_origin_server_;
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-
-  DISALLOW_COPY_AND_ASSIGN(PrefetchBrowserTestPrivacyChanges);
-};
-
-IN_PROC_BROWSER_TEST_P(PrefetchBrowserTestPrivacyChanges, RedirectNotFollowed) {
-  const char* prefetch_path = "/prefetch.html";
-  const char* redirect_path = "/redirect.html";
-  const char* destination_path = "/destination.html";
-  RegisterResponse(
-      prefetch_path,
-      ResponseEntry(base::StringPrintf(
-          "<body><link rel='prefetch' href='%s'></body>", redirect_path)));
-  RegisterResponse(
-      redirect_path,
-      ResponseEntry("", "", {{"location", std::string(destination_path)}},
-                    net::HTTP_MOVED_PERMANENTLY));
-  RegisterResponse(destination_path,
-                   ResponseEntry("<head><title>Prefetch Target</title></head>",
-                                 "text/html", {{"cache-control", "no-store"}}));
-
-  base::RunLoop prefetch_waiter;
-  auto main_page_counter = RequestCounter::CreateAndMonitor(
-      embedded_test_server(), prefetch_path, &prefetch_waiter);
-  auto destination_counter = RequestCounter::CreateAndMonitor(
-      embedded_test_server(), destination_path);
-  RegisterRequestHandler(embedded_test_server());
-  ASSERT_TRUE(embedded_test_server()->Start());
-  EXPECT_EQ(0, main_page_counter->GetRequestCount());
-  EXPECT_EQ(0, destination_counter->GetRequestCount());
-  EXPECT_EQ(0, GetPrefetchURLLoaderCallCount());
-
-  const GURL destination_url = embedded_test_server()->GetURL(destination_path);
-  // Loading a page that prefetches the redirect resource only follows the
-  // redirect when the mode is follow.
-  EXPECT_TRUE(
-      NavigateToURL(shell(), embedded_test_server()->GetURL(prefetch_path)));
-  prefetch_waiter.Run();
-  EXPECT_EQ(1, main_page_counter->GetRequestCount());
-
-  NavigateToURLAndWaitTitle(destination_url, "Prefetch Target");
-  const int expected_request_count = privacy_changes_enabled_ ? 1 : 2;
-  EXPECT_EQ(expected_request_count, destination_counter->GetRequestCount());
-  EXPECT_TRUE(embedded_test_server()->ShutdownAndWaitUntilComplete());
-}
-
+// TODO(crbug.com/40256279): De-flake and re-enable.
 IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest,
-                       CrossOriginDocumentHasNoSameSiteCookies) {
+                       DISABLED_CrossOriginDocumentHasNoSameSiteCookies) {
   const char* prefetch_path = "/prefetch.html";
   const char* target_path = "/target.html";
   RegisterResponse(
@@ -190,25 +160,28 @@ IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest,
   EXPECT_EQ(1, GetPrefetchURLLoaderCallCount());
 
   monitor.WaitForUrls();
-  absl::optional<network::ResourceRequest> request =
+  std::optional<network::ResourceRequest> request =
       monitor.GetRequestInfo(cross_origin_target_url);
   ASSERT_TRUE(request);
   ASSERT_TRUE(request->site_for_cookies.IsNull());
   ASSERT_TRUE(request->trusted_params);
   url::Origin cross_origin = url::Origin::Create(cross_origin_target_url);
   EXPECT_TRUE(net::IsolationInfo::Create(
-                  net::IsolationInfo::RequestType::kOther, cross_origin,
+                  net::IsolationInfo::RequestType::kMainFrame, cross_origin,
                   cross_origin, net::SiteForCookies())
                   .IsEqualForTesting(request->trusted_params->isolation_info));
 }
 
+// TODO(crbug.com/40256279): De-flake and re-enable.
 IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest,
-                       CrossOriginDocumentReusedAsNavigation) {
+                       DISABLED_CrossOriginDocumentReusedAsNavigation) {
   const char* prefetch_path = "/prefetch.html";
   const char* target_path = "/target.html";
-  RegisterResponse(
-      target_path,
-      ResponseEntry("<head><title>Prefetch Target</title></head>"));
+  RegisterResponse(target_path,
+                   ResponseEntry("<head><title>Prefetch Target</title></head>",
+                                 // The empty content type prevents this
+                                 // response from being blocked by ORB.
+                                 /*content_types=*/""));
 
   base::RunLoop prefetch_waiter;
   auto request_counter = RequestCounter::CreateAndMonitor(
@@ -245,8 +218,9 @@ IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest,
   NavigateToURLAndWaitTitle(cross_origin_target_url, "Prefetch Target");
 }
 
+// TODO(crbug.com/40256279): De-flake and re-enable.
 IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest,
-                       CrossOriginDocumentFromOpaqueOrigin) {
+                       DISABLED_CrossOriginDocumentFromOpaqueOrigin) {
   // Prefetching as=document from a data: URL does not crash the renderer.
   EXPECT_TRUE(NavigateToURL(
       shell(),
@@ -254,13 +228,15 @@ IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest,
            "rel=prefetch as=document href=https://google.com>")));
 }
 
-IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest,
-                       CrossOriginDocumentNotReusedAsNestedFrameNavigation) {
-  // This test is relevant only with SplitCache.
-  // TODO(crbug.com/910708): Remove this early-return when SplitCache is enabled
-  // by default.
-  if (!split_cache_enabled_)
-    return;
+// TODO(crbug.com/40256279): De-flake and re-enable.
+IN_PROC_BROWSER_TEST_P(
+    PrefetchBrowserTest,
+    DISABLED_CrossOriginDocumentNotReusedAsNestedFrameNavigation) {
+  // TODO(crbug.com/40093267): Remove this early-return when SplitCache is
+  // enabled by default.
+  if (!IsSplitCacheEnabled()) {
+    GTEST_SKIP() << "This test is relevant only with SplitCache.";
+  }
   const char* prefetch_path = "/prefetch.html";
   const char* host_path = "/host.html";
   const char* iframe_path = "/iframe.html";
@@ -314,12 +290,14 @@ IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest,
   EXPECT_TRUE(cross_origin_server_->ShutdownAndWaitUntilComplete());
 }
 
-IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest, CrossOriginSubresourceNotReused) {
-  // This test is relevant only with SplitCache.
-  // TODO(crbug.com/910708): Remove this early-return when SplitCache is enabled
-  // by default.
-  if (!split_cache_enabled_)
-    return;
+// TODO(crbug.com/40256279): De-flake and re-enable.
+IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest,
+                       DISABLED_CrossOriginSubresourceNotReused) {
+  // TODO(crbug.com/40093267): Remove this early-return when SplitCache is
+  // enabled by default.
+  if (!IsSplitCacheEnabled()) {
+    GTEST_SKIP() << "This test is relevant only with SplitCache.";
+  }
   const char* prefetch_path = "/prefetch.html";
   const char* host_path = "/host.html";
   const char* subresource_path = "/subresource.js";
@@ -371,8 +349,9 @@ IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest, CrossOriginSubresourceNotReused) {
   EXPECT_TRUE(cross_origin_server_->ShutdownAndWaitUntilComplete());
 }
 
+// TODO(crbug.com/40256279): De-flake and re-enable.
 IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest,
-                       CrossOriginSubresourceReusedByCurrentFrame) {
+                       DISABLED_CrossOriginSubresourceReusedByCurrentFrame) {
   const char* prefetch_path = "/prefetch.html";
   const char* use_prefetch_path = "/use-prefetch.html";
   const char* subresource_path = "/subresource.js";
@@ -422,17 +401,18 @@ IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest,
 
 // This tests more of an implementation detail than anything. A single resource
 // must be committed to the cache partition corresponding to a single
-// NetworkIsolationKey. This means that even though it is considered "safe" to
-// reused cross-origin subresource prefetches for top-level navigations, we
+// NetworkAnonymizationKey. This means that even though it is considered "safe"
+// to reused cross-origin subresource prefetches for top-level navigations, we
 // can't actually do this, because the subresource is only reusable from the
 // frame that fetched it.
+// TODO(crbug.com/40256279): De-flake and re-enable.
 IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest,
-                       CrossOriginSubresourceNotReusedAsNavigation) {
-  // This test is relevant only with SplitCache.
-  // TODO(crbug.com/910708): Remove this early-return when SplitCache is enabled
-  // by default.
-  if (!split_cache_enabled_)
-    return;
+                       DISABLED_CrossOriginSubresourceNotReusedAsNavigation) {
+  // TODO(crbug.com/40093267): Remove this early-return when SplitCache is
+  // enabled by default.
+  if (!IsSplitCacheEnabled()) {
+    GTEST_SKIP() << "This test is relevant only with SplitCache.";
+  }
   const char* prefetch_path = "/prefetch.html";
   const char* subresource_path = "/subresource.js";
   RegisterResponse(subresource_path, ResponseEntry("console.log('I loaded');"));
@@ -484,7 +464,8 @@ IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest, Simple) {
           "<body><link rel='prefetch' href='%s'></body>", target_path)));
   RegisterResponse(
       target_path,
-      ResponseEntry("<head><title>Prefetch Target</title></head>"));
+      ResponseEntry("<head><title>Prefetch Target</title></head>", "text/html",
+                    {{"cache-control", "public, max-age=3600"}}));
 
   base::RunLoop prefetch_waiter;
   auto request_counter = RequestCounter::CreateAndMonitor(
@@ -521,7 +502,8 @@ IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest, DoublePrefetch) {
                                       target_path, target_path)));
   RegisterResponse(
       target_path,
-      ResponseEntry("<head><title>Prefetch Target</title></head>"));
+      ResponseEntry("<head><title>Prefetch Target</title></head>", "text/html",
+                    {{"cache-control", "public, max-age=3600"}}));
 
   base::RunLoop prefetch_waiter;
   auto request_counter = RequestCounter::CreateAndMonitor(
@@ -586,14 +568,14 @@ IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest, NoCacheAndNoStore) {
   EXPECT_EQ(1, nostore_request_counter->GetRequestCount());
   EXPECT_EQ(2, GetPrefetchURLLoaderCallCount());
 
-  // Subsequent navigation to the no-cache URL wouldn't hit the network, because
-  // no-cache resource is kept available up to kPrefetchReuseMins.
+  // Subsequent navigation to the no-cache URL do hit the network, because
+  // prefetch respects cache semantics.
   NavigateToURLAndWaitTitle(embedded_test_server()->GetURL(nocache_path),
                             "NoCache Target");
-  EXPECT_EQ(1, nocache_request_counter->GetRequestCount());
+  EXPECT_EQ(2, nocache_request_counter->GetRequestCount());
 
-  // Subsequent navigation to the no-store URL hit the network again, because
-  // no-store resource is not cached even for prefetch.
+  // Subsequent navigation to the no-store URL hit the network again, for the
+  // same reason.
   NavigateToURLAndWaitTitle(embedded_test_server()->GetURL(nostore_path),
                             "NoStore Target");
   EXPECT_EQ(2, nostore_request_counter->GetRequestCount());
@@ -614,7 +596,8 @@ IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest, WithPreload) {
       ResponseEntry("<head><title>Prefetch Target</title><script "
                     "src=\"./preload.js\"></script></head>",
                     "text/html",
-                    {{"link", "</preload.js>;rel=\"preload\";as=\"script\""}}));
+                    {{"link", "</preload.js>;rel=\"preload\";as=\"script\""},
+                     {"cache-control", "public, max-age=600"}}));
   RegisterResponse(preload_path,
                    ResponseEntry("document.title=\"done\";", "text/javascript",
                                  {{"cache-control", "public, max-age=600"}}));
@@ -647,8 +630,9 @@ IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest, WithPreload) {
   NavigateToURLAndWaitTitle(target_url, "done");
 }
 
+// TODO(crbug.com/40256279): De-flake and re-enable.
 IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest,
-                       CrossOriginWithPreloadHasNoSameSiteCookies) {
+                       DISABLED_CrossOriginWithPreloadHasNoSameSiteCookies) {
   const char* target_path = "/target.html";
   const char* preload_path = "/preload.js";
   RegisterResponse(
@@ -700,19 +684,24 @@ IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest,
   WaitUntilLoaded(cross_origin_preload_url);
 
   monitor.WaitForUrls();
-  absl::optional<network::ResourceRequest> request =
+  std::optional<network::ResourceRequest> request =
       monitor.GetRequestInfo(cross_origin_target_url);
   ASSERT_TRUE(request);
   ASSERT_TRUE(request->site_for_cookies.IsNull());
   ASSERT_TRUE(request->trusted_params);
   url::Origin cross_origin = url::Origin::Create(cross_origin_target_url);
   EXPECT_TRUE(net::IsolationInfo::Create(
-                  net::IsolationInfo::RequestType::kOther, cross_origin,
+                  net::IsolationInfo::RequestType::kMainFrame, cross_origin,
                   cross_origin, net::SiteForCookies())
                   .IsEqualForTesting(request->trusted_params->isolation_info));
 }
 
-IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest, CrossOriginWithPreload) {
+// Variants of this test:
+// - PrefetchBrowserTest.CrossOriginWithPreloadAnonymous
+// - PrefetchBrowserTest.CrossOriginWithPreloadCredentialled
+// TODO(crbug.com/40256279): De-flake and re-enable.
+IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest,
+                       DISABLED_CrossOriginWithPreloadAnonymous) {
   const char* target_path = "/target.html";
   const char* preload_path = "/preload.js";
   RegisterResponse(
@@ -766,11 +755,11 @@ IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest, CrossOriginWithPreload) {
   WaitUntilLoaded(cross_origin_preload_url);
 
   // When SplitCache is enabled and the prefetch resource and its headers are
-  // fetched with a modified NetworkIsolationKey, the preload header resource
-  // must not be reusable by any other origin but its parent prefetch's.
-  // TODO(crbug.com/910708): When SplitCache is enabled by default, get rid of
+  // fetched with a modified IsolationInfo, the preload header resource must
+  // not be reusable by any other origin but its parent prefetch's.
+  // TODO(crbug.com/40093267): When SplitCache is enabled by default, get rid of
   // the below conditional.
-  if (split_cache_enabled_) {
+  if (IsSplitCacheEnabled()) {
     // Spin up another server, hosting a page with a preload header identical to
     // the one in |target_path|.
     const char* reuse_preload_attempt_path = "/reuse.html";
@@ -804,6 +793,163 @@ IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest, CrossOriginWithPreload) {
     EXPECT_TRUE(other_cross_origin_server->ShutdownAndWaitUntilComplete());
   }
 
+  if (split_cache_test_case_ ==
+      SplitCacheTestCase::kEnabledTriplePlusCredsBool) {
+    // The navigation is requested with credentials, but the prefetch is
+    // requested anonymously. As a result of "SplitCacheByIncludeCredentials",
+    // those aren't considered the same for the HTTP cache. Early return.
+    // See the variant of this test in:
+    // PrefetchBrowserTest.CrossOriginWithPreloadCredentialled
+    return;
+  }
+
+  // Shutdown the servers.
+  EXPECT_TRUE(embedded_test_server()->ShutdownAndWaitUntilComplete());
+  EXPECT_TRUE(cross_origin_server_->ShutdownAndWaitUntilComplete());
+
+  EXPECT_TRUE(ExecJs(shell()->web_contents(), "document.title = 'not done';"));
+
+  // Subsequent navigation to the target URL wouldn't hit the network for
+  // the target URL. The target content should still be read correctly.
+  NavigateToURLAndWaitTitle(cross_origin_target_url, "done");
+}
+
+// Regression test for crbug.com/357325599 - If a Link header with
+// rel="preload" has as="document" (which is invalid), we shouldn't attempt to
+// treat this as a rel="prefetch" as="document" and instead should just ignore
+// the header.
+// TODO(crbug.com/40256279): De-flake and enable.
+IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest,
+                       DISABLED_CrossOriginWithInvalidPreloadAsDocument) {
+  const char* target_path = "/target.html";
+  const char* preload_path = "/preload.js";
+  RegisterResponse(
+      target_path,
+      ResponseEntry("<head><title>Prefetch Target</title><script "
+                    "src=\"./preload.js\"></script></head>",
+                    "text/html",
+                    {{"link", "</preload.js>;rel=\"preload\";as=\"document\""},
+                     {"access-control-allow-origin", "*"}}));
+  RegisterResponse(preload_path,
+                   ResponseEntry("document.title=\"done\";", "text/javascript",
+                                 {{"cache-control", "public, max-age=600"}}));
+
+  auto target_request_counter =
+      RequestCounter::CreateAndMonitor(cross_origin_server_.get(), target_path);
+  auto preload_request_counter = RequestCounter::CreateAndMonitor(
+      cross_origin_server_.get(), preload_path);
+  RegisterRequestHandler(cross_origin_server_.get());
+  base::RunLoop preload_waiter_second_request;
+  auto preload_request_counter_second_request =
+      RequestCounter::CreateAndMonitor(cross_origin_server_.get(), preload_path,
+                                       &preload_waiter_second_request);
+
+  ASSERT_TRUE(cross_origin_server_->Start());
+
+  const GURL cross_origin_target_url =
+      cross_origin_server_->GetURL("3p.example", target_path);
+
+  const char* prefetch_path = "/prefetch.html";
+  RegisterResponse(prefetch_path,
+                   ResponseEntry(base::StringPrintf(
+                       "<body><link rel='prefetch' href='%s' as='document' "
+                       "crossorigin='anonymous'></body>",
+                       cross_origin_target_url.spec().c_str())));
+  RegisterRequestHandler(embedded_test_server());
+  ASSERT_TRUE(embedded_test_server()->Start());
+  EXPECT_EQ(0, GetPrefetchURLLoaderCallCount());
+
+  // Loading a page that prefetches the target URL would increment
+  // `target_request_counter` but not `preload_request_counter` because the
+  // preload header should be ignored.
+  base::test::TestFuture<void> prefetch_future;
+  RegisterPrefetchLoaderCallback(prefetch_future.GetCallback());
+
+  EXPECT_TRUE(
+      NavigateToURL(shell(), embedded_test_server()->GetURL(prefetch_path)));
+  EXPECT_TRUE(prefetch_future.Wait());
+  EXPECT_EQ(1, target_request_counter->GetRequestCount());
+  EXPECT_EQ(1, GetPrefetchURLLoaderCallCount());
+  EXPECT_EQ(0, preload_request_counter->GetRequestCount());
+
+  // Subsequent navigation to the target URL should result in the preloaded JS
+  // being served from the network.
+  NavigateToURLAndWaitTitle(cross_origin_target_url, "done");
+  EXPECT_EQ(1, preload_request_counter->GetRequestCount());
+}
+
+// Variants of this test:
+// - PrefetchBrowserTest.CrossOriginWithPreloadAnonymous
+// - PrefetchBrowserTest.CrossOriginWithPreloadCredentialled
+// TODO(crbug.com/40256279): De-flake and re-enable.
+IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest,
+                       DISABLED_CrossOriginWithPreloadCredentialled) {
+  ASSERT_TRUE(embedded_test_server()->InitializeAndListen());
+  const auto port = embedded_test_server()->port();
+  const char target_path[] = "/target.html";
+  const char preload_path[] = "/preload.js";
+  RegisterResponse(
+      target_path,
+      ResponseEntry("<head><title>Prefetch Target</title><script "
+                    "src=\"./preload.js\"></script></head>",
+                    "text/html",
+                    {
+                        {
+                            "link",
+                            "</preload.js>;rel=\"preload\";as=\"script\"",
+                        },
+                        {
+                            "Access-Control-Allow-Origin",
+                            "http://prefetch.com:" + base::NumberToString(port),
+                        },
+                        {
+                            "Access-Control-Allow-Credentials",
+                            "true",
+                        },
+                    }));
+  RegisterResponse(preload_path,
+                   ResponseEntry("document.title=\"done\";", "text/javascript",
+                                 {{"cache-control", "public, max-age=600"}}));
+
+  base::RunLoop preload_waiter;
+  auto target_request_counter =
+      RequestCounter::CreateAndMonitor(cross_origin_server_.get(), target_path);
+  auto preload_request_counter = RequestCounter::CreateAndMonitor(
+      cross_origin_server_.get(), preload_path, &preload_waiter);
+  RegisterRequestHandler(cross_origin_server_.get());
+  base::RunLoop preload_waiter_second_request;
+  auto preload_request_counter_second_request =
+      RequestCounter::CreateAndMonitor(cross_origin_server_.get(), preload_path,
+                                       &preload_waiter_second_request);
+
+  ASSERT_TRUE(cross_origin_server_->Start());
+
+  const GURL cross_origin_target_url =
+      cross_origin_server_->GetURL("3p.example", target_path);
+
+  const char* prefetch_path = "/prefetch.html";
+  RegisterResponse(prefetch_path,
+                   ResponseEntry(base::StringPrintf(
+                       "<body><link rel='prefetch' href='%s' as='document' "
+                       "crossorigin='use-credentials'></body>",
+                       cross_origin_target_url.spec().c_str())));
+  RegisterRequestHandler(embedded_test_server());
+  embedded_test_server()->StartAcceptingConnections();
+  EXPECT_EQ(0, GetPrefetchURLLoaderCallCount());
+
+  // Loading a page that prefetches the target URL would increment both
+  // |target_request_counter| and |preload_request_counter|.
+  EXPECT_TRUE(NavigateToURL(
+      shell(), embedded_test_server()->GetURL("prefetch.com", prefetch_path)));
+  preload_waiter.Run();
+  EXPECT_EQ(1, target_request_counter->GetRequestCount());
+  EXPECT_EQ(1, preload_request_counter->GetRequestCount());
+  EXPECT_EQ(2, GetPrefetchURLLoaderCallCount());
+
+  GURL cross_origin_preload_url =
+      cross_origin_server_->GetURL("3p.example", preload_path);
+  WaitUntilLoaded(cross_origin_preload_url);
+
   // Shutdown the servers.
   EXPECT_TRUE(embedded_test_server()->ShutdownAndWaitUntilComplete());
   EXPECT_TRUE(cross_origin_server_->ShutdownAndWaitUntilComplete());
@@ -827,8 +973,10 @@ IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest, SignedExchangeWithPreload) {
       target_sxg_path,
       // We mock the SignedExchangeHandler, so just return a HTML content
       // as "application/signed-exchange;v=b3".
-      ResponseEntry("<head><title>Prefetch Target (SXG)</title><script "
-                    "src=\"./preload.js\"></script></head>",
+      ResponseEntry(base::StrCat({MockSignedExchangeHandler::kMockSxgPrefix,
+                                  "<head><title>Prefetch Target (SXG)</title>"
+                                  "<script src=\"./preload.js\"></script>"
+                                  "</head>"}),
                     "application/signed-exchange;v=b3",
                     {{"x-content-type-options", "nosniff"}}));
   RegisterResponse(preload_path_in_sxg,
@@ -864,10 +1012,6 @@ IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest, SignedExchangeWithPreload) {
   prefetch_waiter.Run();
   EXPECT_EQ(1, target_request_counter->GetRequestCount());
 
-  // Test after this point requires SignedHTTPExchange support
-  if (!signed_exchange_enabled_)
-    return;
-
   // If the header in the .sxg file is correctly extracted, we should
   // be able to also see the preload.
   preload_waiter.Run();
@@ -882,8 +1026,9 @@ IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest, SignedExchangeWithPreload) {
   NavigateToURLAndWaitTitle(target_sxg_url, "done");
 }
 
+// TODO(crbug.com/40256279): De-flake and re-enable.
 IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest,
-                       CrossOriginSignedExchangeWithPreload) {
+                       DISABLED_CrossOriginSignedExchangeWithPreload) {
   const char* prefetch_path = "/prefetch.html";
   const char* target_sxg_path = "/target.sxg";
   const char* target_path = "/target.html";
@@ -893,8 +1038,10 @@ IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest,
       target_sxg_path,
       // We mock the SignedExchangeHandler, so just return a HTML content
       // as "application/signed-exchange;v=b3".
-      ResponseEntry("<head><title>Prefetch Target (SXG)</title><script "
-                    "src=\"./preload.js\"></script></head>",
+      ResponseEntry(base::StrCat({MockSignedExchangeHandler::kMockSxgPrefix,
+                                  "<head><title>Prefetch Target (SXG)</title>"
+                                  "<script src=\"./preload.js\"></script>"
+                                  "</head>"}),
                     "application/signed-exchange;v=b3",
                     {{"x-content-type-options", "nosniff"}}));
   RegisterResponse(preload_path_in_sxg,
@@ -940,9 +1087,6 @@ IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest,
   prefetch_waiter.Run();
   EXPECT_EQ(1, target_request_counter->GetRequestCount());
 
-  // Test after this point requires SignedHTTPExchange support
-  if (!signed_exchange_enabled_)
-    return;
   // If the header in the .sxg file is correctly extracted, we should
   // be able to also see the preload.
   preload_waiter.Run();
@@ -965,7 +1109,11 @@ IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest, FileToHttp) {
   const char* target_path = "/target.html";
   RegisterResponse(
       target_path,
-      ResponseEntry("<head><title>Prefetch Target</title></head>"));
+      ResponseEntry("<head><title>Prefetch Target</title></head>",
+                    // The empty content type prevents this
+                    // response from being blocked by ORB.
+                    /*content_types=*/"",
+                    {{"cache-control", "public, max-age=31536000"}}));
 
   base::RunLoop prefetch_waiter;
   auto request_counter = RequestCounter::CreateAndMonitor(
@@ -1004,12 +1152,563 @@ IN_PROC_BROWSER_TEST_P(PrefetchBrowserTest, FileToHttp) {
   NavigateToURLAndWaitTitle(target_url, "Prefetch Target");
 }
 
-INSTANTIATE_TEST_SUITE_P(PrefetchBrowserTest,
-                         PrefetchBrowserTest,
-                         testing::Combine(testing::Bool(), testing::Bool()));
+class PrefetchLoadFlagsBrowserTest : public PrefetchBrowserTestBase {
+ public:
+  PrefetchLoadFlagsBrowserTest()
+      : cross_origin_server_(std::make_unique<net::EmbeddedTestServer>()) {}
 
-INSTANTIATE_TEST_SUITE_P(PrefetchBrowserTestPrivacyChanges,
-                         PrefetchBrowserTestPrivacyChanges,
-                         testing::Values(false, true));
+  void SetUpOnMainThread() override {
+    PrefetchBrowserTestBase::SetUpOnMainThread();
+    host_resolver()->AddRule("*", "127.0.0.1");
+  }
+
+ protected:
+  // Binds a remote to the browser-side `SubresourceProxyingURLLoaderService`
+  // for the current main frame, mirroring the binding that the renderer would
+  // receive at navigation commit time.
+  mojo::Remote<network::mojom::URLLoaderFactory> BindFactoryForMainFrame() {
+    RenderFrameHostImpl* rfh = static_cast<RenderFrameHostImpl*>(
+        shell()->web_contents()->GetPrimaryMainFrame());
+    StoragePartitionImpl* partition =
+        static_cast<StoragePartitionImpl*>(rfh->GetStoragePartition());
+    mojo::Remote<network::mojom::URLLoaderFactory> remote;
+    partition->GetSubresourceProxyingURLLoaderService()->GetFactory(
+        remote.BindNewPipeAndPassReceiver(), rfh->GetFrameTreeNodeId(),
+        proxied_factory_.GetSafeWeakWrapper(), rfh->GetWeakPtr(),
+        /*prefetched_signed_exchange_cache=*/nullptr);
+    return remote;
+  }
+
+  network::ResourceRequest CreateCrossOriginPrefetchRequest(
+      const GURL& target_url) {
+    network::ResourceRequest request;
+    request.url = target_url;
+    request.load_flags =
+        net::LOAD_PREFETCH | net::LOAD_RESTRICTED_PREFETCH_FOR_MAIN_FRAME;
+    request.request_initiator = shell()
+                                    ->web_contents()
+                                    ->GetPrimaryMainFrame()
+                                    ->GetLastCommittedOrigin();
+    return request;
+  }
+
+  std::unique_ptr<net::EmbeddedTestServer> cross_origin_server_;
+  network::TestURLLoaderFactory proxied_factory_;
+};
+
+// Verifies that a cross-origin prefetch request from the renderer is rejected
+// if it carries load flags that are not permitted on requests originating from
+// an untrusted process. The request reaches the network service via a trusted
+// loader factory, so the browser must validate the flags before forwarding.
+IN_PROC_BROWSER_TEST_F(PrefetchLoadFlagsBrowserTest,
+                       CrossOriginPrefetchRejectsRestrictedLoadFlags) {
+  const char* prefetch_path = "/prefetch.html";
+  const char* target_path = "/target.html";
+  RegisterResponse(prefetch_path, ResponseEntry("<body></body>"));
+  RegisterResponse(target_path,
+                   ResponseEntry("<head><title>Target</title></head>",
+                                 /*content_types=*/""));
+  RegisterRequestHandler(embedded_test_server());
+  RegisterRequestHandler(cross_origin_server_.get());
+  ASSERT_TRUE(embedded_test_server()->Start());
+  ASSERT_TRUE(cross_origin_server_->Start());
+
+  EXPECT_TRUE(
+      NavigateToURL(shell(), embedded_test_server()->GetURL(prefetch_path)));
+
+  const GURL target_url =
+      cross_origin_server_->GetURL("3p.example", target_path);
+
+  mojo::Remote<network::mojom::URLLoaderFactory> factory =
+      BindFactoryForMainFrame();
+
+  for (int restricted_flag :
+       {net::LOAD_BYPASS_PROXY, net::LOAD_DISABLE_CERT_NETWORK_FETCHES}) {
+    SCOPED_TRACE(testing::Message() << "restricted_flag=" << restricted_flag);
+
+    network::ResourceRequest request =
+        CreateCrossOriginPrefetchRequest(target_url);
+    request.load_flags |= restricted_flag;
+
+    mojo::test::BadMessageObserver bad_message_observer;
+    network::TestURLLoaderClient client;
+    mojo::Remote<network::mojom::URLLoader> loader;
+    factory->CreateLoaderAndStart(
+        loader.BindNewPipeAndPassReceiver(), /*request_id=*/0,
+        network::mojom::kURLLoadOptionNone, request, client.CreateRemote(),
+        net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS));
+
+    client.RunUntilComplete();
+    EXPECT_EQ(net::ERR_INVALID_ARGUMENT, client.completion_status().error_code);
+    EXPECT_EQ("Prefetch/CreatePrefetchLoaderAndStart: restricted load flag",
+              bad_message_observer.WaitForBadMessage());
+
+    // The receiver is removed when a bad message is reported, so rebind for
+    // the next iteration.
+    factory.reset();
+    factory = BindFactoryForMainFrame();
+  }
+}
+
+// Verifies that a cross-origin prefetch request carrying only load flags that
+// are permitted on requests from an untrusted process is forwarded to the
+// network service.
+IN_PROC_BROWSER_TEST_F(PrefetchLoadFlagsBrowserTest,
+                       CrossOriginPrefetchAllowsRendererLoadFlags) {
+  const char* prefetch_path = "/prefetch.html";
+  const char* target_path = "/target.html";
+  RegisterResponse(prefetch_path, ResponseEntry("<body></body>"));
+  RegisterResponse(target_path,
+                   ResponseEntry("<head><title>Target</title></head>",
+                                 /*content_types=*/""));
+  RegisterRequestHandler(embedded_test_server());
+
+  base::RunLoop prefetch_waiter;
+  auto request_counter = RequestCounter::CreateAndMonitor(
+      cross_origin_server_.get(), target_path, &prefetch_waiter);
+  RegisterRequestHandler(cross_origin_server_.get());
+  ASSERT_TRUE(embedded_test_server()->Start());
+  ASSERT_TRUE(cross_origin_server_->Start());
+
+  EXPECT_TRUE(
+      NavigateToURL(shell(), embedded_test_server()->GetURL(prefetch_path)));
+
+  const GURL target_url =
+      cross_origin_server_->GetURL("3p.example", target_path);
+
+  mojo::Remote<network::mojom::URLLoaderFactory> factory =
+      BindFactoryForMainFrame();
+
+  network::ResourceRequest request =
+      CreateCrossOriginPrefetchRequest(target_url);
+  request.load_flags |= net::LOAD_SUPPORT_ASYNC_REVALIDATION;
+
+  network::TestURLLoaderClient client;
+  mojo::Remote<network::mojom::URLLoader> loader;
+  factory->CreateLoaderAndStart(
+      loader.BindNewPipeAndPassReceiver(), /*request_id=*/0,
+      network::mojom::kURLLoadOptionNone, request, client.CreateRemote(),
+      net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS));
+
+  client.RunUntilComplete();
+  EXPECT_EQ(net::OK, client.completion_status().error_code);
+  prefetch_waiter.Run();
+  EXPECT_EQ(1, request_counter->GetRequestCount());
+}
+
+class PrefetchRecursiveBrowserTest : public PrefetchBrowserTestBase {
+ public:
+  PrefetchRecursiveBrowserTest() = default;
+
+  void SetUpOnMainThread() override {
+    PrefetchBrowserTestBase::SetUpOnMainThread();
+    host_resolver()->AddRule("*", "127.0.0.1");
+  }
+
+ protected:
+  mojo::Remote<network::mojom::URLLoaderFactory> BindFactoryForMainFrame() {
+    RenderFrameHostImpl* rfh = static_cast<RenderFrameHostImpl*>(
+        shell()->web_contents()->GetPrimaryMainFrame());
+    StoragePartitionImpl* partition =
+        static_cast<StoragePartitionImpl*>(rfh->GetStoragePartition());
+    mojo::Remote<network::mojom::URLLoaderFactory> remote;
+    bind_context_ =
+        partition->GetSubresourceProxyingURLLoaderService()->GetFactory(
+            remote.BindNewPipeAndPassReceiver(), rfh->GetFrameTreeNodeId(),
+            proxied_factory_.GetSafeWeakWrapper(), rfh->GetWeakPtr(),
+            /*prefetched_signed_exchange_cache=*/nullptr);
+    return remote;
+  }
+
+  // Registers a recursive-prefetch token on the current `BindContext` bound to
+  // the given origin, and points the context's cross-origin factory at
+  // `cross_origin_factory_` so forwarded requests can be observed.
+  base::UnguessableToken RegisterRecursivePrefetchToken(
+      const url::Origin& origin) {
+    CHECK(bind_context_);
+    bind_context_->cross_origin_factory =
+        cross_origin_factory_.GetSafeWeakWrapper();
+    base::UnguessableToken token = base::UnguessableToken::Create();
+    bind_context_->total_tokens_generated++;
+    bind_context_->prefetch_isolation_infos.Put(
+        token,
+        net::IsolationInfo::Create(net::IsolationInfo::RequestType::kOther,
+                                   origin, origin, net::SiteForCookies()));
+    return token;
+  }
+
+  network::TestURLLoaderFactory proxied_factory_;
+  network::TestURLLoaderFactory cross_origin_factory_;
+  base::WeakPtr<SubresourceProxyingURLLoaderService::BindContext> bind_context_;
+};
+
+// Verifies that a recursive prefetch whose request URL is cross-origin with
+// the initiating document is forwarded via the cross-origin factory using the
+// `IsolationInfo` associated with its `recursive_prefetch_token`.
+IN_PROC_BROWSER_TEST_F(PrefetchRecursiveBrowserTest,
+                       RecursivePrefetchAllowsCrossOriginTarget) {
+  base::HistogramTester histogram_tester;
+  const char* prefetch_path = "/prefetch.html";
+  RegisterResponse(prefetch_path, ResponseEntry("<body></body>"));
+  RegisterRequestHandler(embedded_test_server());
+  ASSERT_TRUE(embedded_test_server()->Start());
+
+  EXPECT_TRUE(
+      NavigateToURL(shell(), embedded_test_server()->GetURL(prefetch_path)));
+
+  mojo::Remote<network::mojom::URLLoaderFactory> factory =
+      BindFactoryForMainFrame();
+
+  const url::Origin token_origin =
+      url::Origin::Create(GURL("https://3p.example"));
+  base::UnguessableToken token = RegisterRecursivePrefetchToken(token_origin);
+
+  const GURL target_url("https://3p.example/subresource.js");
+  network::ResourceRequest request;
+  request.url = target_url;
+  request.load_flags = net::LOAD_PREFETCH;
+  request.request_initiator = shell()
+                                  ->web_contents()
+                                  ->GetPrimaryMainFrame()
+                                  ->GetLastCommittedOrigin();
+  request.recursive_prefetch_token = token;
+
+  network::TestURLLoaderClient client;
+  mojo::Remote<network::mojom::URLLoader> loader;
+  factory->CreateLoaderAndStart(
+      loader.BindNewPipeAndPassReceiver(), /*request_id=*/0,
+      network::mojom::kURLLoadOptionNone, request, client.CreateRemote(),
+      net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS));
+  factory.FlushForTesting();
+
+  ASSERT_EQ(1, cross_origin_factory_.NumPending());
+  const network::ResourceRequest& forwarded =
+      cross_origin_factory_.GetPendingRequest(0)->request;
+  EXPECT_EQ(target_url, forwarded.url);
+  ASSERT_TRUE(forwarded.trusted_params);
+  EXPECT_EQ(token_origin,
+            forwarded.trusted_params->isolation_info.top_frame_origin());
+  EXPECT_EQ(token_origin,
+            forwarded.trusted_params->isolation_info.frame_origin());
+
+  histogram_tester.ExpectUniqueSample(
+      "Prefetch.RecursivePrefetch.TokenLookupResult",
+      RecursivePrefetchTokenLookupResult::kSuccess, 1);
+}
+
+// Verifies that a recursive prefetch whose request URL is same-origin with the
+// initiating document is rejected as a bad message and not forwarded to the
+// network.
+IN_PROC_BROWSER_TEST_F(PrefetchRecursiveBrowserTest,
+                       RecursivePrefetchRejectsInitiatorOriginTarget) {
+  base::HistogramTester histogram_tester;
+  const char* prefetch_path = "/prefetch.html";
+  RegisterResponse(prefetch_path, ResponseEntry("<body></body>"));
+  RegisterRequestHandler(embedded_test_server());
+  ASSERT_TRUE(embedded_test_server()->Start());
+
+  EXPECT_TRUE(
+      NavigateToURL(shell(), embedded_test_server()->GetURL(prefetch_path)));
+
+  mojo::Remote<network::mojom::URLLoaderFactory> factory =
+      BindFactoryForMainFrame();
+
+  const url::Origin token_origin =
+      url::Origin::Create(GURL("https://3p.example"));
+  base::UnguessableToken token = RegisterRecursivePrefetchToken(token_origin);
+
+  // Use a target URL that matches the initiating document's origin.
+  const GURL same_origin_target_url =
+      embedded_test_server()->GetURL("/subresource.js");
+  network::ResourceRequest request;
+  request.url = same_origin_target_url;
+  request.load_flags = net::LOAD_PREFETCH;
+  request.request_initiator = shell()
+                                  ->web_contents()
+                                  ->GetPrimaryMainFrame()
+                                  ->GetLastCommittedOrigin();
+  request.recursive_prefetch_token = token;
+
+  mojo::test::BadMessageObserver bad_message_observer;
+  network::TestURLLoaderClient client;
+  mojo::Remote<network::mojom::URLLoader> loader;
+  factory->CreateLoaderAndStart(
+      loader.BindNewPipeAndPassReceiver(), /*request_id=*/0,
+      network::mojom::kURLLoadOptionNone, request, client.CreateRemote(),
+      net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS));
+
+  client.RunUntilComplete();
+  EXPECT_EQ(net::ERR_INVALID_ARGUMENT, client.completion_status().error_code);
+  EXPECT_EQ("Prefetch/CreatePrefetchLoaderAndStart: initiator origin",
+            bad_message_observer.WaitForBadMessage());
+  EXPECT_EQ(0, cross_origin_factory_.NumPending());
+
+  histogram_tester.ExpectUniqueSample(
+      "Prefetch.RecursivePrefetch.TokenLookupResult",
+      RecursivePrefetchTokenLookupResult::kRejectedSameOrigin, 1);
+}
+
+// Verifies that presenting an invalid or evicted recursive prefetch token fails
+// gracefully with ERR_INVALID_ARGUMENT and logs kTokenNotFound without crashing
+// or reporting a bad message.
+IN_PROC_BROWSER_TEST_F(PrefetchRecursiveBrowserTest,
+                       RecursivePrefetchRejectsInvalidOrEvictedToken) {
+  base::HistogramTester histogram_tester;
+  const char* prefetch_path = "/prefetch.html";
+  RegisterResponse(prefetch_path, ResponseEntry("<body></body>"));
+  RegisterRequestHandler(embedded_test_server());
+  ASSERT_TRUE(embedded_test_server()->Start());
+
+  EXPECT_TRUE(
+      NavigateToURL(shell(), embedded_test_server()->GetURL(prefetch_path)));
+
+  mojo::Remote<network::mojom::URLLoaderFactory> factory =
+      BindFactoryForMainFrame();
+  bind_context_->cross_origin_factory =
+      cross_origin_factory_.GetSafeWeakWrapper();
+
+  const GURL target_url("https://3p.example/subresource.js");
+  network::ResourceRequest request;
+  request.url = target_url;
+  request.load_flags = net::LOAD_PREFETCH;
+  request.request_initiator = shell()
+                                  ->web_contents()
+                                  ->GetPrimaryMainFrame()
+                                  ->GetLastCommittedOrigin();
+  request.recursive_prefetch_token = base::UnguessableToken::Create();
+
+  network::TestURLLoaderClient client;
+  mojo::Remote<network::mojom::URLLoader> loader;
+  factory->CreateLoaderAndStart(
+      loader.BindNewPipeAndPassReceiver(), /*request_id=*/0,
+      network::mojom::kURLLoadOptionNone, request, client.CreateRemote(),
+      net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS));
+
+  client.RunUntilComplete();
+  EXPECT_EQ(net::ERR_INVALID_ARGUMENT, client.completion_status().error_code);
+  EXPECT_EQ(0, cross_origin_factory_.NumPending());
+
+  histogram_tester.ExpectUniqueSample(
+      "Prefetch.RecursivePrefetch.TokenLookupResult",
+      RecursivePrefetchTokenLookupResult::kTokenNotFound, 1);
+}
+
+// Verifies that stored isolation infos for recursive prefetch tokens are managed
+// by an LRU cache, evicting older tokens when the limit is exceeded.
+IN_PROC_BROWSER_TEST_F(PrefetchRecursiveBrowserTest,
+                       RecursivePrefetchTokenLRUEviction) {
+  const char* prefetch_path = "/prefetch.html";
+  RegisterResponse(prefetch_path, ResponseEntry("<body></body>"));
+  RegisterRequestHandler(embedded_test_server());
+  ASSERT_TRUE(embedded_test_server()->Start());
+
+  EXPECT_TRUE(
+      NavigateToURL(shell(), embedded_test_server()->GetURL(prefetch_path)));
+
+  mojo::Remote<network::mojom::URLLoaderFactory> factory =
+      BindFactoryForMainFrame();
+  ASSERT_TRUE(bind_context_);
+
+  std::vector<base::UnguessableToken> tokens;
+  constexpr size_t kNumTokens =
+      SubresourceProxyingURLLoaderService::BindContext::
+          kMaxPrefetchIsolationInfoEntries +
+      5;
+  for (size_t i = 0; i < kNumTokens; ++i) {
+    tokens.push_back(RegisterRecursivePrefetchToken(
+        url::Origin::Create(GURL(base::StringPrintf("https://%zu.example", i)))));
+  }
+
+  EXPECT_EQ(
+      SubresourceProxyingURLLoaderService::BindContext::
+          kMaxPrefetchIsolationInfoEntries,
+      bind_context_->prefetch_isolation_infos.size());
+
+  // The earliest 5 tokens should have been evicted.
+  for (size_t i = 0; i < 5; ++i) {
+    EXPECT_EQ(bind_context_->prefetch_isolation_infos.end(),
+              bind_context_->prefetch_isolation_infos.Peek(tokens[i]));
+  }
+
+  // The latest tokens should still be present.
+  for (size_t i = 5; i < kNumTokens; ++i) {
+    EXPECT_NE(bind_context_->prefetch_isolation_infos.end(),
+              bind_context_->prefetch_isolation_infos.Peek(tokens[i]));
+  }
+}
+
+// Verifies that a prefetch carrying both LOAD_RESTRICTED_PREFETCH_FOR_MAIN_FRAME
+// and a recursive_prefetch_token is rejected with a bad message.
+IN_PROC_BROWSER_TEST_F(PrefetchRecursiveBrowserTest,
+                       RejectsRestrictedMainFrameWithRecursiveToken) {
+  const char* prefetch_path = "/prefetch.html";
+  RegisterResponse(prefetch_path, ResponseEntry("<body></body>"));
+  RegisterRequestHandler(embedded_test_server());
+  ASSERT_TRUE(embedded_test_server()->Start());
+
+  EXPECT_TRUE(
+      NavigateToURL(shell(), embedded_test_server()->GetURL(prefetch_path)));
+
+  mojo::Remote<network::mojom::URLLoaderFactory> factory =
+      BindFactoryForMainFrame();
+
+  const url::Origin token_origin =
+      url::Origin::Create(GURL("https://3p.example"));
+  base::UnguessableToken token = RegisterRecursivePrefetchToken(token_origin);
+
+  network::ResourceRequest request;
+  request.url = GURL("https://3p.example/target.html");
+  request.load_flags =
+      net::LOAD_PREFETCH | net::LOAD_RESTRICTED_PREFETCH_FOR_MAIN_FRAME;
+  request.request_initiator = shell()
+                                  ->web_contents()
+                                  ->GetPrimaryMainFrame()
+                                  ->GetLastCommittedOrigin();
+  request.recursive_prefetch_token = token;
+
+  mojo::test::BadMessageObserver bad_message_observer;
+  network::TestURLLoaderClient client;
+  mojo::Remote<network::mojom::URLLoader> loader;
+  factory->CreateLoaderAndStart(
+      loader.BindNewPipeAndPassReceiver(), /*request_id=*/0,
+      network::mojom::kURLLoadOptionNone, request, client.CreateRemote(),
+      net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS));
+
+  client.RunUntilComplete();
+  EXPECT_EQ(net::ERR_INVALID_ARGUMENT, client.completion_status().error_code);
+  EXPECT_EQ("Prefetch/CreatePrefetchLoaderAndStart: recursive token with "
+            "restricted main frame prefetch",
+            bad_message_observer.WaitForBadMessage());
+  EXPECT_EQ(0, cross_origin_factory_.NumPending());
+}
+
+// Verifies that a recursive prefetch request missing request_initiator is
+// rejected with a bad message.
+IN_PROC_BROWSER_TEST_F(PrefetchRecursiveBrowserTest,
+                       RejectsRecursivePrefetchWithoutRequestInitiator) {
+  const char* prefetch_path = "/prefetch.html";
+  RegisterResponse(prefetch_path, ResponseEntry("<body></body>"));
+  RegisterRequestHandler(embedded_test_server());
+  ASSERT_TRUE(embedded_test_server()->Start());
+
+  EXPECT_TRUE(
+      NavigateToURL(shell(), embedded_test_server()->GetURL(prefetch_path)));
+
+  mojo::Remote<network::mojom::URLLoaderFactory> factory =
+      BindFactoryForMainFrame();
+
+  const url::Origin token_origin =
+      url::Origin::Create(GURL("https://3p.example"));
+  base::UnguessableToken token = RegisterRecursivePrefetchToken(token_origin);
+
+  network::ResourceRequest request;
+  request.url = GURL("https://3p.example/subresource.js");
+  request.load_flags = net::LOAD_PREFETCH;
+  request.request_initiator = std::nullopt;
+  request.recursive_prefetch_token = token;
+
+  mojo::test::BadMessageObserver bad_message_observer;
+  network::TestURLLoaderClient client;
+  mojo::Remote<network::mojom::URLLoader> loader;
+  factory->CreateLoaderAndStart(
+      loader.BindNewPipeAndPassReceiver(), /*request_id=*/0,
+      network::mojom::kURLLoadOptionNone, request, client.CreateRemote(),
+      net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS));
+
+  client.RunUntilComplete();
+  EXPECT_EQ(net::ERR_INVALID_ARGUMENT, client.completion_status().error_code);
+  EXPECT_EQ("Prefetch/CreatePrefetchLoaderAndStart: no request_initiator",
+            bad_message_observer.WaitForBadMessage());
+  EXPECT_EQ(0, cross_origin_factory_.NumPending());
+}
+
+// Verifies that a recursive prefetch request whose request_initiator does not
+// match the frame's committed origin is rejected with a bad message.
+IN_PROC_BROWSER_TEST_F(PrefetchRecursiveBrowserTest,
+                       RejectsRecursivePrefetchWithFrameOriginMismatch) {
+  const char* prefetch_path = "/prefetch.html";
+  RegisterResponse(prefetch_path, ResponseEntry("<body></body>"));
+  RegisterRequestHandler(embedded_test_server());
+  ASSERT_TRUE(embedded_test_server()->Start());
+
+  EXPECT_TRUE(
+      NavigateToURL(shell(), embedded_test_server()->GetURL(prefetch_path)));
+
+  mojo::Remote<network::mojom::URLLoaderFactory> factory =
+      BindFactoryForMainFrame();
+
+  const url::Origin token_origin =
+      url::Origin::Create(GURL("https://3p.example"));
+  base::UnguessableToken token = RegisterRecursivePrefetchToken(token_origin);
+
+  network::ResourceRequest request;
+  request.url = GURL("https://3p.example/subresource.js");
+  request.load_flags = net::LOAD_PREFETCH;
+  request.request_initiator =
+      url::Origin::Create(GURL("https://attacker.example"));
+  request.recursive_prefetch_token = token;
+
+  mojo::test::BadMessageObserver bad_message_observer;
+  network::TestURLLoaderClient client;
+  mojo::Remote<network::mojom::URLLoader> loader;
+  factory->CreateLoaderAndStart(
+      loader.BindNewPipeAndPassReceiver(), /*request_id=*/0,
+      network::mojom::kURLLoadOptionNone, request, client.CreateRemote(),
+      net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS));
+
+  client.RunUntilComplete();
+  EXPECT_EQ(net::ERR_INVALID_ARGUMENT, client.completion_status().error_code);
+  EXPECT_EQ("Prefetch/CreatePrefetchLoaderAndStart: frame origin mismatch",
+            bad_message_observer.WaitForBadMessage());
+  EXPECT_EQ(0, cross_origin_factory_.NumPending());
+}
+
+// Verifies that Prefetch.RecursivePrefetch.TokensPerDocument is recorded upon
+// document navigation when tokens were generated.
+IN_PROC_BROWSER_TEST_F(PrefetchRecursiveBrowserTest,
+                       TokensPerDocumentHistogramRecordedOnNavigation) {
+  base::HistogramTester histogram_tester;
+  const char* prefetch_path = "/prefetch.html";
+  RegisterResponse(prefetch_path, ResponseEntry("<body></body>"));
+  RegisterRequestHandler(embedded_test_server());
+  ASSERT_TRUE(embedded_test_server()->Start());
+
+  EXPECT_TRUE(
+      NavigateToURL(shell(), embedded_test_server()->GetURL(prefetch_path)));
+
+  mojo::Remote<network::mojom::URLLoaderFactory> factory =
+      BindFactoryForMainFrame();
+  ASSERT_TRUE(bind_context_);
+
+  for (int i = 0; i < 3; ++i) {
+    RegisterRecursivePrefetchToken(
+        url::Origin::Create(GURL(base::StringPrintf("https://%d.example", i))));
+  }
+
+  factory.reset();
+  EXPECT_TRUE(NavigateToURL(shell(), GURL("about:blank")));
+
+  histogram_tester.ExpectUniqueSample(
+      "Prefetch.RecursivePrefetch.TokensPerDocument", /*sample=*/3,
+      /*expected_bucket_count=*/1);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    PrefetchBrowserTest,
+    testing::ValuesIn({SplitCacheTestCase::kDisabled,
+                       SplitCacheTestCase::kEnabledTripleKeyed,
+                       SplitCacheTestCase::kEnabledTriplePlusCredsBool}),
+
+    [](const testing::TestParamInfo<SplitCacheTestCase>& info) {
+      switch (info.param) {
+        case SplitCacheTestCase::kDisabled:
+          return "SplitCacheDisabled";
+        case SplitCacheTestCase::kEnabledTripleKeyed:
+          return "SplitCacheEnabledTripleKeyed";
+        case SplitCacheTestCase::kEnabledTriplePlusCredsBool:
+          return "SplitCacheEnabledTriplePlusCredsBool";
+      }
+    });
 
 }  // namespace content

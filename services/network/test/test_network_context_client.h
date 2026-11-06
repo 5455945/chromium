@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,10 @@
 #define SERVICES_NETWORK_TEST_TEST_NETWORK_CONTEXT_CLIENT_H_
 
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
-#include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "services/network/public/cpp/network_service_buildflags.h"
-#include "services/network/public/mojom/network_context.mojom.h"
+#include "services/network/public/mojom/network_context_client.mojom.h"
+#include "services/network/public/mojom/trust_tokens.mojom.h"
 
 namespace network {
 
@@ -30,17 +29,18 @@ class TestNetworkContextClient : public network::mojom::NetworkContextClient {
     ignore_last_upload_file_ = ignore_last_upload_file;
   }
 
-  void OnFileUploadRequested(int32_t process_id,
+  void OnFileUploadRequested(const OriginatingProcessId& process_id,
                              bool async,
                              const std::vector<base::FilePath>& file_paths,
+                             const GURL& destination_url,
                              OnFileUploadRequestedCallback callback) override;
   void OnCanSendReportingReports(
       const std::vector<url::Origin>& origins,
       OnCanSendReportingReportsCallback callback) override {}
   void OnCanSendDomainReliabilityUpload(
-      const GURL& origin,
+      const url::Origin& origin,
       OnCanSendDomainReliabilityUploadCallback callback) override {}
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   void OnGenerateHttpNegotiateAuthToken(
       const std::string& server_auth_token,
       bool can_delegate,
@@ -48,14 +48,11 @@ class TestNetworkContextClient : public network::mojom::NetworkContextClient {
       const std::string& spn,
       OnGenerateHttpNegotiateAuthTokenCallback callback) override {}
 #endif
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  void OnTrustAnchorUsed() override {}
-#endif
 #if BUILDFLAG(IS_CT_SUPPORTED)
+  void OnCanSendSCTAuditingReport(
+      OnCanSendSCTAuditingReportCallback callback) override;
+  void OnNewSCTAuditingReportSent() override {}
 #endif
-  void OnTrustTokenIssuanceDivertedToSystem(
-      mojom::FulfillTrustTokenIssuanceRequestPtr request,
-      OnTrustTokenIssuanceDivertedToSystemCallback callback) override {}
 
  private:
   mojo::Receiver<mojom::NetworkContextClient> receiver_;

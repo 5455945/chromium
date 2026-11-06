@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -122,6 +122,7 @@ TEST(DisplayLayoutTest, SwapPrimaryDisplayThreeDisplays) {
   EXPECT_EQ(Position::RIGHT, layout->placement_list[1].position);
 }
 
+#if BUILDFLAG(IS_CHROMEOS)
 // Makes sure that only the least significant 8 bits of the display IDs in the
 // placement lists are used to validate their sort order.
 TEST(DisplayLayoutTest, PlacementSortOrder) {
@@ -148,6 +149,8 @@ TEST(DisplayLayoutTest, PlacementSortOrder) {
   EXPECT_TRUE(DisplayLayout::Validate({456, 0x0504, 0x0605, 0x0406}, *layout));
 }
 
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
 namespace {
 
 class TwoDisplays
@@ -169,8 +172,8 @@ class TwoDisplays
  public:
   TwoDisplays() = default;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(TwoDisplays);
+  TwoDisplays(const TwoDisplays&) = delete;
+  TwoDisplays& operator=(const TwoDisplays&) = delete;
 };
 
 }  // namespace
@@ -521,8 +524,10 @@ class TwoDisplaysBottomRightReference
  public:
   TwoDisplaysBottomRightReference() = default;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(TwoDisplaysBottomRightReference);
+  TwoDisplaysBottomRightReference(const TwoDisplaysBottomRightReference&) =
+      delete;
+  TwoDisplaysBottomRightReference& operator=(
+      const TwoDisplaysBottomRightReference&) = delete;
 };
 
 }  // namespace

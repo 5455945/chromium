@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,16 +6,19 @@
 
 #include "base/base64.h"
 #include "base/json/json_reader.h"
-#include "base/no_destructor.h"
+#include "base/json/json_writer.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/bind.h"
+#include "base/test/fuzztest_support.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "mojo/public/cpp/bindings/struct_ptr.h"
 #include "services/network/public/mojom/trust_tokens.mojom.h"
+#include "services/network/trust_tokens/types.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/fuzztest/src/fuzztest/fuzztest.h"
 
 using ::testing::ElementsAre;
 using ::testing::Truly;
@@ -50,7 +53,8 @@ TEST(TrustTokenKeyCommitmentParser, RejectsNonemptyMalformed) {
   const char input[] = "certainly not valid JSON";
 
   // Sanity check that the input is not valid JSON.
-  ASSERT_FALSE(base::JSONReader::Read(input));
+  ASSERT_FALSE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   EXPECT_FALSE(TrustTokenKeyCommitmentParser().Parse(input));
 }
@@ -62,23 +66,27 @@ TEST(TrustTokenKeyCommitmentParser, RejectsNonDictionaryInput) {
   const char input[] = "5";
 
   // Sanity check that the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   EXPECT_FALSE(TrustTokenKeyCommitmentParser().Parse(input));
 }
 
 TEST(TrustTokenKeyCommitmentParser, AcceptsMinimal) {
   std::string input =
-      R"( { "TrustTokenV3PMB": {"protocol_version": "TrustTokenV3PMB", "id": 1,
-            "batchsize": 5
+      R"( { "PrivateStateTokenV1VOPRF": {
+                "protocol_version": "PrivateStateTokenV1VOPRF",
+                "id": 1,
+                "batchsize": 5
         }} )";
 
   // Sanity check that the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   auto expectation = mojom::TrustTokenKeyCommitmentResult::New();
   expectation->protocol_version =
-      mojom::TrustTokenProtocolVersion::kTrustTokenV3Pmb;
+      mojom::TrustTokenProtocolVersion::kPrivateStateTokenV1Voprf;
   expectation->id = 1;
   expectation->batch_size = 5;
 
@@ -87,13 +95,16 @@ TEST(TrustTokenKeyCommitmentParser, AcceptsMinimal) {
 }
 
 TEST(TrustTokenKeyCommitmentParser, RejectsKeyWithTypeUnsafeValue) {
-  const std::string input = R"({ "TrustTokenV3PMB": {
-            "protocol_version": "TrustTokenV3PMB", "id": 1, "batchsize": 5,
+  const std::string input = R"({ "PrivateStateTokenV1VOPRF": {
+            "protocol_version": "PrivateStateTokenV1VOPRF",
+            "id": 1,
+            "batchsize": 5,
             "keys": 42
          }})";
 
   // Sanity check that the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   // Keys should be a dictionary, so this result shouldn't parse.
   EXPECT_FALSE(TrustTokenKeyCommitmentParser().Parse(input));
@@ -103,16 +114,17 @@ TEST(TrustTokenKeyCommitmentParser, RejectsKeyWithTypeUnsafeKeyLabel) {
   base::test::TaskEnvironment env(
       base::test::TaskEnvironment::TimeSource::MOCK_TIME);
 
-  base::Time one_minute_from_now =
-      base::Time::Now() + base::TimeDelta::FromMinutes(1);
+  base::Time one_minute_from_now = base::Time::Now() + base::Minutes(1);
   int64_t one_minute_from_now_in_micros =
       (one_minute_from_now - base::Time::UnixEpoch()).InMicroseconds();
 
   // (The expiry will likely exceed the JSON spec's maximum integer value, so
   // it's encoded as a string.)
   const std::string input = base::StringPrintf(
-      R"({ "TrustTokenV3PMB": {
-            "protocol_version": "TrustTokenV3PMB", "id": 1, "batchsize": 5,
+      R"({ "PrivateStateTokenV1VOPRF": {
+            "protocol_version": "PrivateStateTokenV1VOPRF",
+            "id": 1,
+            "batchsize": 5,
             "keys": {
               "this label is not an integer": {
                 "Y": "akey",
@@ -123,7 +135,8 @@ TEST(TrustTokenKeyCommitmentParser, RejectsKeyWithTypeUnsafeKeyLabel) {
       base::NumberToString(one_minute_from_now_in_micros).c_str());
 
   // Sanity check that the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   // Key labels must be integers in the representable range of uint32_t, so this
   // result shouldn't parse.
@@ -134,14 +147,15 @@ TEST(TrustTokenKeyCommitmentParser, RejectsKeyWithKeyLabelTooSmall) {
   base::test::TaskEnvironment env(
       base::test::TaskEnvironment::TimeSource::MOCK_TIME);
 
-  base::Time one_minute_from_now =
-      base::Time::Now() + base::TimeDelta::FromMinutes(1);
+  base::Time one_minute_from_now = base::Time::Now() + base::Minutes(1);
   int64_t one_minute_from_now_in_micros =
       (one_minute_from_now - base::Time::UnixEpoch()).InMicroseconds();
 
   const std::string input = base::StringPrintf(
-      R"({ "TrustTokenV3PMB": {
-            "protocol_version": "TrustTokenV3PMB", "id": 1, "batchsize": 5,
+      R"({ "PrivateStateTokenV1VOPRF": {
+            "protocol_version": "PrivateStateTokenV1VOPRF",
+            "id": 1,
+            "batchsize": 5,
             "keys": {
               "-1": {
                 "Y": "akey",
@@ -152,7 +166,8 @@ TEST(TrustTokenKeyCommitmentParser, RejectsKeyWithKeyLabelTooSmall) {
       base::NumberToString(one_minute_from_now_in_micros).c_str());
 
   // Sanity check that the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   // Key labels must be integers in the representable range of uint32_t, so this
   // result shouldn't parse.
@@ -163,14 +178,14 @@ TEST(TrustTokenKeyCommitmentParser, RejectsKeyWithKeyLabelTooLarge) {
   base::test::TaskEnvironment env(
       base::test::TaskEnvironment::TimeSource::MOCK_TIME);
 
-  base::Time one_minute_from_now =
-      base::Time::Now() + base::TimeDelta::FromMinutes(1);
+  base::Time one_minute_from_now = base::Time::Now() + base::Minutes(1);
   int64_t one_minute_from_now_in_micros =
       (one_minute_from_now - base::Time::UnixEpoch()).InMicroseconds();
 
   const std::string input = base::StringPrintf(
-      R"({ "TrustTokenV3PMB": {
-            "protocol_version": "TrustTokenV3PMB", "id": 1, "batchsize": 5,
+      R"({ "PrivateStateTokenV1VOPRF": {
+            "protocol_version": "PrivateStateTokenV1VOPRF", "id": 1,
+            "batchsize": 5,
             "keys": {
               "1000000000000": {
                 "Y": "akey",
@@ -181,7 +196,8 @@ TEST(TrustTokenKeyCommitmentParser, RejectsKeyWithKeyLabelTooLarge) {
       base::NumberToString(one_minute_from_now_in_micros).c_str());
 
   // Sanity check that the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   // Key labels must be integers in the representable range of uint32_t, so this
   // result shouldn't parse.
@@ -192,14 +208,14 @@ TEST(TrustTokenKeyCommitmentParser, RejectsOtherwiseValidButNonBase64Key) {
   base::test::TaskEnvironment env(
       base::test::TaskEnvironment::TimeSource::MOCK_TIME);
 
-  base::Time one_minute_from_now =
-      base::Time::Now() + base::TimeDelta::FromMinutes(1);
+  base::Time one_minute_from_now = base::Time::Now() + base::Minutes(1);
   int64_t one_minute_from_now_in_micros =
       (one_minute_from_now - base::Time::UnixEpoch()).InMicroseconds();
 
   const std::string input = base::StringPrintf(
-      R"({ "TrustTokenV3PMB": {
-            "protocol_version": "TrustTokenV3PMB", "id": 1, "batchsize": 5,
+      R"({ "PrivateStateTokenV1VOPRF": {
+            "protocol_version": "PrivateStateTokenV1VOPRF", "id": 1,
+            "batchsize": 5,
             "keys": {
               "1": {
                 "Y": "this key isn't valid base64, so it should be rejected",
@@ -211,7 +227,8 @@ TEST(TrustTokenKeyCommitmentParser, RejectsOtherwiseValidButNonBase64Key) {
 
   // Sanity check that the input is actually valid JSON,
   // and that the given time is valid.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   EXPECT_FALSE(TrustTokenKeyCommitmentParser().Parse(input));
 }
@@ -220,21 +237,22 @@ TEST(TrustTokenKeyCommitmentParser, AcceptsKeyWithExpiryAndBody) {
   base::test::TaskEnvironment env(
       base::test::TaskEnvironment::TimeSource::MOCK_TIME);
 
-  base::Time one_minute_from_now =
-      base::Time::Now() + base::TimeDelta::FromMinutes(1);
+  base::Time one_minute_from_now = base::Time::Now() + base::Minutes(1);
   int64_t one_minute_from_now_in_micros =
       (one_minute_from_now - base::Time::UnixEpoch()).InMicroseconds();
 
   const std::string input = base::StringPrintf(
-      R"({ "TrustTokenV3PMB": {
-            "protocol_version": "TrustTokenV3PMB", "id": 1, "batchsize": 5,
+      R"({ "PrivateStateTokenV1VOPRF": {
+            "protocol_version": "PrivateStateTokenV1VOPRF", "id": 1,
+            "batchsize": 5,
             "keys": {"1": { "Y": "akey", "expiry": "%s" }}
          }})",
       base::NumberToString(one_minute_from_now_in_micros).c_str());
 
   // Sanity check that the input is actually valid JSON,
   // and that the given time is valid.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   auto my_key = mojom::TrustTokenVerificationKey::New();
   ASSERT_TRUE(base::Base64Decode("akey", &my_key->body));
@@ -249,19 +267,18 @@ TEST(TrustTokenKeyCommitmentParser, AcceptsMultipleKeys) {
   base::test::TaskEnvironment env(
       base::test::TaskEnvironment::TimeSource::MOCK_TIME);
 
-  base::Time one_minute_from_now =
-      base::Time::Now() + base::TimeDelta::FromMinutes(1);
+  base::Time one_minute_from_now = base::Time::Now() + base::Minutes(1);
   int64_t one_minute_from_now_in_micros =
       (one_minute_from_now - base::Time::UnixEpoch()).InMicroseconds();
 
-  base::Time two_minutes_from_now =
-      base::Time::Now() + base::TimeDelta::FromMinutes(2);
+  base::Time two_minutes_from_now = base::Time::Now() + base::Minutes(2);
   int64_t two_minutes_from_now_in_micros =
       (two_minutes_from_now - base::Time::UnixEpoch()).InMicroseconds();
 
   const std::string input = base::StringPrintf(
-      R"({ "TrustTokenV3PMB": {
-            "protocol_version": "TrustTokenV3PMB", "id": 1, "batchsize": 5,
+      R"({ "PrivateStateTokenV1VOPRF": {
+            "protocol_version": "PrivateStateTokenV1VOPRF", "id": 1,
+            "batchsize": 5,
             "keys": {
               "1": { "Y": "akey", "expiry": "%s" },
               "2": { "Y": "aaaa", "expiry": "%s" }}
@@ -271,7 +288,8 @@ TEST(TrustTokenKeyCommitmentParser, AcceptsMultipleKeys) {
 
   // Sanity check that the input is actually valid JSON,
   // and that the given time is valid.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   auto a_key = mojom::TrustTokenVerificationKey::New();
   ASSERT_TRUE(base::Base64Decode("akey", &a_key->body));
@@ -291,11 +309,13 @@ TEST(TrustTokenKeyCommitmentParser, RejectsKeyWithNoExpiry) {
   // If a key has a missing "expiry" field, we should reject the entire
   // record.
   const std::string input =
-      R"( {"TrustTokenV3PMB": { "protocol_version": "TrustTokenV3PMB", "id": 1,
+      R"( {"PrivateStateTokenV1VOPRF": {
+          "protocol_version": "PrivateStateTokenV1VOPRF", "id": 1,
           "batchsize": 5, "keys": {"1": { "Y": "akey" }} }})";
 
   // Sanity check that the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   // Since the key doesn't have an expiry, reject it.
   EXPECT_FALSE(TrustTokenKeyCommitmentParser().Parse(input));
@@ -306,8 +326,8 @@ TEST(TrustTokenKeyCommitmentParser, RejectsKeyWithMalformedExpiry) {
   // record.
   const std::string input =
       R"(
-   { "TrustTokenV3PMB": {
-     "protocol_version": "TrustTokenV3PMB", "id": 1, "batchsize": 5,
+   { "PrivateStateTokenV1VOPRF": {
+     "protocol_version": "PrivateStateTokenV1VOPRF", "id": 1, "batchsize": 5,
      "keys": {
        "1": {
          "Y": "akey",
@@ -317,7 +337,8 @@ TEST(TrustTokenKeyCommitmentParser, RejectsKeyWithMalformedExpiry) {
    }})";
 
   // Sanity check that the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   // Since the key doesn't have an expiry, reject it.
   EXPECT_FALSE(TrustTokenKeyCommitmentParser().Parse(input));
@@ -330,28 +351,28 @@ TEST(TrustTokenKeyCommitmentParser, IgnoreKeyWithExpiryInThePast) {
   // Ensure that "one minute ago" yields a nonnegative number of microseconds
   // past the Unix epoch.
   env.AdvanceClock(std::max<base::TimeDelta>(
-      base::TimeDelta(), base::Time::UnixEpoch() +
-                             base::TimeDelta::FromMinutes(1) -
-                             base::Time::Now()));
+      base::TimeDelta(),
+      base::Time::UnixEpoch() + base::Minutes(1) - base::Time::Now()));
 
-  base::Time one_minute_before_now =
-      base::Time::Now() - base::TimeDelta::FromMinutes(1);
+  base::Time one_minute_before_now = base::Time::Now() - base::Minutes(1);
   int64_t one_minute_before_now_in_micros =
       (one_minute_before_now - base::Time::UnixEpoch()).InMicroseconds();
 
   // If the time has passed a key's "expiry" field, we should reject the entire
   // record.
   const std::string input = base::StringPrintf(
-      R"( { "TrustTokenV3PMB": {"protocol_version": "TrustTokenV3PMB", "id": 1,
-            "batchsize": 5, "keys": {"1": { "Y": "akey", "expiry": "%s" }} }})",
+      R"( { "PrivateStateTokenV1VOPRF": {
+            "protocol_version": "PrivateStateTokenV1VOPRF", "id": 1,
+          "batchsize": 5, "keys": {"1": { "Y": "akey", "expiry": "%s" }} }})",
       base::NumberToString(one_minute_before_now_in_micros).c_str());
 
   // Sanity check that the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   auto expectation = mojom::TrustTokenKeyCommitmentResult::New();
   expectation->protocol_version =
-      mojom::TrustTokenProtocolVersion::kTrustTokenV3Pmb;
+      mojom::TrustTokenProtocolVersion::kPrivateStateTokenV1Voprf;
   expectation->id = 1;
   expectation->batch_size = 5;
 
@@ -363,21 +384,22 @@ TEST(TrustTokenKeyCommitmentParser, RejectsKeyWithNoBody) {
   base::test::TaskEnvironment env(
       base::test::TaskEnvironment::TimeSource::MOCK_TIME);
 
-  base::Time one_minute_from_now =
-      base::Time::Now() + base::TimeDelta::FromMinutes(1);
+  base::Time one_minute_from_now = base::Time::Now() + base::Minutes(1);
   int64_t one_minute_from_now_in_micros =
       (one_minute_from_now - base::Time::UnixEpoch()).InMicroseconds();
 
   // If a key has an expiry but is missing its body,
   // we should reject the entire result.
   const std::string input = base::StringPrintf(
-      R"( { "TrustTokenV3PMB": {"protocol_version": "TrustTokenV3PMB", "id": 1,
+      R"( { "PrivateStateTokenV1VOPRF": {
+            "protocol_version": "PrivateStateTokenV1VOPRF", "id": 1,
             "batchsize": 5, "keys": {"1": { "expiry": "%s" }} }} )",
       base::NumberToString(one_minute_from_now_in_micros).c_str());
 
   // Sanity check that the input is actually valid JSON,
   // and that the date is valid.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   // Since the key doesn't have a body, reject it.
   EXPECT_FALSE(TrustTokenKeyCommitmentParser().Parse(input));
@@ -388,12 +410,14 @@ TEST(TrustTokenKeyCommitmentParser, RejectsEmptyKey) {
   // we should reject the entire result.
 
   const std::string input =
-      R"( { "TrustTokenV3PMB": {"protocol_version": "TrustTokenV3PMB", "id": 1,
+      R"( { "PrivateStateTokenV1VOPRF": {
+            "protocol_version": "PrivateStateTokenV1VOPRF", "id": 1,
             "batchsize": 5, "keys": {"1": { }} }})";
 
   // Sanity check that the input is actually valid JSON,
   // and that the date is valid.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   // Since the key doesn't have an expiry or a body, reject it.
   EXPECT_FALSE(TrustTokenKeyCommitmentParser().Parse(input));
@@ -401,11 +425,12 @@ TEST(TrustTokenKeyCommitmentParser, RejectsEmptyKey) {
 
 TEST(TrustTokenKeyCommitmentParser, ParsesBatchSize) {
   std::string input =
-      R"({ "TrustTokenV3PMB": {
-     "protocol_version": "TrustTokenV3PMB", "id": 1, "batchsize": 5
+      R"({ "PrivateStateTokenV1VOPRF": {
+     "protocol_version": "PrivateStateTokenV1VOPRF", "id": 1, "batchsize": 5
    }})";
   // Double-check that the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   mojom::TrustTokenKeyCommitmentResultPtr result =
       TrustTokenKeyCommitmentParser().Parse(input);
@@ -416,11 +441,12 @@ TEST(TrustTokenKeyCommitmentParser, ParsesBatchSize) {
 
 TEST(TrustTokenKeyCommitmentParser, RejectsMissingBatchSize) {
   std::string input =
-      R"({ "TrustTokenV3PMB": {
-     "protocol_version": "TrustTokenV3PMB", "id": 1
+      R"({ "PrivateStateTokenV1VOPRF": {
+     "protocol_version": "PrivateStateTokenV1VOPRF", "id": 1
    }})";
   // Double-check that the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   mojom::TrustTokenKeyCommitmentResultPtr result =
       TrustTokenKeyCommitmentParser().Parse(input);
@@ -429,12 +455,13 @@ TEST(TrustTokenKeyCommitmentParser, RejectsMissingBatchSize) {
 
 TEST(TrustTokenKeyCommitmentParser, RejectsNonpositiveBatchSize) {
   std::string input =
-      R"({ "TrustTokenV3PMB": {
-     "protocol_version": "TrustTokenV3PMB", "id": 1,
+      R"({ "PrivateStateTokenV1VOPRF": {
+     "protocol_version": "PrivateStateTokenV1VOPRF", "id": 1,
      "batchsize": 0
    }})";
   // Double-check that the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   mojom::TrustTokenKeyCommitmentResultPtr result =
       TrustTokenKeyCommitmentParser().Parse(input);
@@ -443,287 +470,80 @@ TEST(TrustTokenKeyCommitmentParser, RejectsNonpositiveBatchSize) {
 
 TEST(TrustTokenKeyCommitmentParser, RejectsTypeUnsafeBatchSize) {
   std::string input =
-      R"({ "TrustTokenV3PMB": {
-     "protocol_version": "TrustTokenV3PMB", "id": 1,
+      R"({ "PrivateStateTokenV1VOPRF": {
+     "protocol_version": "PrivateStateTokenV1VOPRF", "id": 1,
      "batchsize": "not a number"
    }})";
   // Double-check that the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   mojom::TrustTokenKeyCommitmentResultPtr result =
       TrustTokenKeyCommitmentParser().Parse(input);
   EXPECT_FALSE(result);
 }
 
-TEST(TrustTokenKeyCommitmentParser, RequestIssuanceLocallyOn) {
+TEST(TrustTokenKeyCommitmentParser, IgnoresRequestIssuanceLocallyOn) {
   std::string input =
-      R"({ "TrustTokenV3PMB": {
+      R"({ "PrivateStateTokenV1VOPRF": {
      "srrkey": "aaaa",
      "batchsize": 1,
-     "protocol_version": "TrustTokenV3PMB",
+     "protocol_version": "PrivateStateTokenV1VOPRF",
      "id": 1,
      "request_issuance_locally_on": ["android"],
      "unavailable_local_operation_fallback": "web_issuance"
    }})";
   // Double-check that the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   mojom::TrustTokenKeyCommitmentResultPtr result =
       TrustTokenKeyCommitmentParser().Parse(input);
   ASSERT_TRUE(result);
-  EXPECT_THAT(result->request_issuance_locally_on,
-              ElementsAre(mojom::TrustTokenKeyCommitmentResult::Os::kAndroid));
-}
-
-TEST(TrustTokenKeyCommitmentParser, DeduplicatesRequestIssuanceLocallyOn) {
-  std::string input =
-      R"({ "TrustTokenV3PMB": {
-     "srrkey": "aaaa",
-     "batchsize": 1,
-     "protocol_version": "TrustTokenV3PMB",
-     "id": 1,
-     "request_issuance_locally_on": ["android", "android", "android"],
-     "unavailable_local_operation_fallback": "web_issuance"
-   }})";
-  // Double-check that the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
-
-  mojom::TrustTokenKeyCommitmentResultPtr result =
-      TrustTokenKeyCommitmentParser().Parse(input);
-  ASSERT_TRUE(result);
-  EXPECT_THAT(result->request_issuance_locally_on,
-              ElementsAre(mojom::TrustTokenKeyCommitmentResult::Os::kAndroid));
-}
-
-TEST(TrustTokenKeyCommitmentParser, NoRequestIssuanceLocallyOn) {
-  std::string input =
-      R"({ "TrustTokenV3PMB": {
-     "srrkey": "aaaa",
-     "batchsize": 1,
-     "protocol_version": "TrustTokenV3PMB",
-     "id": 1
-   }})";
-  // Double-check that the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
-
-  mojom::TrustTokenKeyCommitmentResultPtr result =
-      TrustTokenKeyCommitmentParser().Parse(input);
-  ASSERT_TRUE(result);
-  EXPECT_TRUE(result->request_issuance_locally_on.empty());
-}
-
-TEST(TrustTokenKeyCommitmentParser, RejectsTypeUnsafeRequestIssuanceLocallyOn) {
-  std::string input =
-      R"({ "TrustTokenV3PMB": {
-     "srrkey": "aaaa",
-     "batchsize": 1,
-     "protocol_version": "TrustTokenV3PMB",
-     "id": 1,
-     "request_issuance_locally_on": "not an array",
-     "unavailable_local_operation_fallback": "web_issuance"
-   }})";
-  // Double-check that the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
-
-  mojom::TrustTokenKeyCommitmentResultPtr result =
-      TrustTokenKeyCommitmentParser().Parse(input);
-  EXPECT_FALSE(result);
-}
-
-TEST(TrustTokenKeyCommitmentParser,
-     RejectsTypeUnsafeRequestIssuanceLocallyOnMember) {
-  std::string input =
-      R"({ "TrustTokenV3PMB": {
-     "srrkey": "aaaa",
-     "batchsize": 1,
-     "protocol_version": "TrustTokenV3PMB",
-     "id": 1,
-     "request_issuance_locally_on": ["android", 47],
-     "unavailable_local_operation_fallback": "web_issuance"
-   }})";
-  // Double-check that the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
-
-  mojom::TrustTokenKeyCommitmentResultPtr result =
-      TrustTokenKeyCommitmentParser().Parse(input);
-  EXPECT_FALSE(result);
-}
-
-TEST(TrustTokenKeyCommitmentParser,
-     RejectsUnrecognizedOsInRequestIssuanceLocallyOn) {
-  std::string input =
-      R"({ "TrustTokenV3PMB": {
-     "srrkey": "aaaa",
-     "batchsize": 1,
-     "protocol_version": "TrustTokenV3PMB",
-     "id": 1,
-     "request_issuance_locally_on": ["android", "imaginaryOS"],
-     "unavailable_local_operation_fallback": "web_issuance"
-   }})";
-  // Double-check that the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
-
-  mojom::TrustTokenKeyCommitmentResultPtr result =
-      TrustTokenKeyCommitmentParser().Parse(input);
-  EXPECT_FALSE(result);
-}
-
-TEST(TrustTokenKeyCommitmentParser,
-     ProvidingLocalOperationOsRequiresSpecifyingIssuanceFallback) {
-  std::string input =
-      R"({ "TrustTokenV3PMB": {
-     "srrkey": "aaaa",
-     "batchsize": 1,
-     "protocol_version": "TrustTokenV3PMB",
-     "id": 1,
-     "request_issuance_locally_on": ["android"]
-   }})";
-  // Double-check that the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
-
-  mojom::TrustTokenKeyCommitmentResultPtr result =
-      TrustTokenKeyCommitmentParser().Parse(input);
-  EXPECT_FALSE(result);
-}
-
-TEST(TrustTokenKeyCommitmentParser,
-     RejectsTypeUnsafeUnavailableLocalOperationFallback) {
-  std::string input =
-      R"({ "TrustTokenV3PMB": {
-     "srrkey": "aaaa",
-     "batchsize": 1,
-     "protocol_version": "TrustTokenV3PMB",
-     "id": 1,
-     "request_issuance_locally_on": ["android"],
-     "unavailable_local_operation_fallback": 57
-   }})";
-  // Double-check that the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
-
-  mojom::TrustTokenKeyCommitmentResultPtr result =
-      TrustTokenKeyCommitmentParser().Parse(input);
-  EXPECT_FALSE(result);
-}
-
-TEST(TrustTokenKeyCommitmentParser,
-     RejectsUnrecognizedUnavailableLocalOperationFallback) {
-  std::string input =
-      R"({ "TrustTokenV3PMB": {
-     "srrkey": "aaaa",
-     "batchsize": 1,
-     "protocol_version": "TrustTokenV3PMB",
-     "id": 1,
-     "request_issuance_locally_on": ["android"],
-     "unavailable_local_operation_fallback": "not a valid enum value"
-   }})";
-  // Double-check that the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
-
-  mojom::TrustTokenKeyCommitmentResultPtr result =
-      TrustTokenKeyCommitmentParser().Parse(input);
-  EXPECT_FALSE(result);
-}
-
-TEST(TrustTokenKeyCommitmentParser, ParsesLocalOperationFallbackWebIssuance) {
-  std::string input =
-      R"({ "TrustTokenV3PMB": {
-     "srrkey": "aaaa",
-     "batchsize": 1,
-     "protocol_version": "TrustTokenV3PMB",
-     "id": 1,
-     "request_issuance_locally_on": ["android"],
-     "unavailable_local_operation_fallback": "web_issuance"
-   }})";
-  // Double-check that the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
-
-  mojom::TrustTokenKeyCommitmentResultPtr result =
-      TrustTokenKeyCommitmentParser().Parse(input);
-  ASSERT_TRUE(result);
-  EXPECT_EQ(result->unavailable_local_operation_fallback,
-            mojom::TrustTokenKeyCommitmentResult::
-                UnavailableLocalOperationFallback::kWebIssuance);
-}
-
-TEST(TrustTokenKeyCommitmentParser,
-     ParsesLocalOperationFallbackReturnWithError) {
-  std::string input =
-      R"({ "TrustTokenV3PMB": {
-     "srrkey": "aaaa",
-     "batchsize": 1,
-     "protocol_version": "TrustTokenV3PMB",
-     "id": 1,
-     "request_issuance_locally_on": ["android"],
-     "unavailable_local_operation_fallback": "return_with_error"
-   }})";
-  // Double-check that the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
-
-  mojom::TrustTokenKeyCommitmentResultPtr result =
-      TrustTokenKeyCommitmentParser().Parse(input);
-  ASSERT_TRUE(result);
-  EXPECT_EQ(result->unavailable_local_operation_fallback,
-            mojom::TrustTokenKeyCommitmentResult::
-                UnavailableLocalOperationFallback::kReturnWithError);
 }
 
 TEST(TrustTokenKeyCommitmentParser, ParsesProtocolVersion) {
   std::string input =
-      R"({ "TrustTokenV3PMB": {
-     "protocol_version": "TrustTokenV3PMB", "id": 1, "batchsize": 5,
+      R"({ "PrivateStateTokenV1VOPRF": {
+     "protocol_version": "PrivateStateTokenV1VOPRF", "id": 1, "batchsize": 5,
      "srrkey": "aaaa"
    }})";
   // Make sure the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   mojom::TrustTokenKeyCommitmentResultPtr result =
       TrustTokenKeyCommitmentParser().Parse(input);
   ASSERT_TRUE(result);
   EXPECT_EQ(result->protocol_version,
-            mojom::TrustTokenProtocolVersion::kTrustTokenV3Pmb);
-}
-
-TEST(TrustTokenKeyCommitmentParser, ParsesMultipleProtocolVersion) {
-  std::string input =
-      R"({ "TrustTokenV3PMB": {
-     "protocol_version": "TrustTokenV3PMB", "id": 1, "batchsize": 5,
-     "srrkey": "aaaa"
-     }, "TrustTokenV3VOPRF": {
-     "protocol_version": "TrustTokenV3VOPRF", "id": 1, "batchsize": 5
-     }})";
-  // Make sure the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
-
-  mojom::TrustTokenKeyCommitmentResultPtr result =
-      TrustTokenKeyCommitmentParser().Parse(input);
-  ASSERT_TRUE(result);
-  EXPECT_EQ(result->protocol_version,
-            mojom::TrustTokenProtocolVersion::kTrustTokenV3Voprf);
+            mojom::TrustTokenProtocolVersion::kPrivateStateTokenV1Voprf);
 }
 
 TEST(TrustTokenKeyCommitmentParser,
      ParsesMultipleIgnoreUnknownProtocolVersion) {
   std::string input =
-      R"({ "TrustTokenV3PMB": {
-     "protocol_version": "TrustTokenV3PMB", "id": 1, "batchsize": 5,
+      R"({ "PrivateStateTokenV1VOPRF": {
+     "protocol_version": "PrivateStateTokenV1VOPRF", "id": 1, "batchsize": 5,
      "srrkey": "aaaa"
-     }, "TrustTokenJunk": {
-     "protocol_version": "TrustTokenJunk", "id": 1, "batchsize": 5
+     }, "PrivateStateTokenJunk": {
+     "protocol_version": "PrivateStateTokenJunk", "id": 1, "batchsize": 5
      }})";
   // Make sure the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   mojom::TrustTokenKeyCommitmentResultPtr result =
       TrustTokenKeyCommitmentParser().Parse(input);
   ASSERT_TRUE(result);
   EXPECT_EQ(result->protocol_version,
-            mojom::TrustTokenProtocolVersion::kTrustTokenV3Pmb);
+            mojom::TrustTokenProtocolVersion::kPrivateStateTokenV1Voprf);
 }
 
 TEST(TrustTokenKeyCommitmentParser, RejectsBadVersionCommitmentType) {
-  std::string input = R"({ "TrustTokenV3PMB": 3})";
+  std::string input = R"({ "PrivateStateTokenV1VOPRF": 3})";
   // Make sure the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   mojom::TrustTokenKeyCommitmentResultPtr result =
       TrustTokenKeyCommitmentParser().Parse(input);
@@ -732,11 +552,12 @@ TEST(TrustTokenKeyCommitmentParser, RejectsBadVersionCommitmentType) {
 
 TEST(TrustTokenKeyCommitmentParser, RejectsMissingProtocolVersion) {
   std::string input =
-      R"({ "TrustTokenV3PMB": {
+      R"({ "PrivateStateTokenV1VOPRF": {
      "id": 1, "batchsize": 5, "srrkey": "aaaa"
    }})";
   // Make sure the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   mojom::TrustTokenKeyCommitmentResultPtr result =
       TrustTokenKeyCommitmentParser().Parse(input);
@@ -745,11 +566,12 @@ TEST(TrustTokenKeyCommitmentParser, RejectsMissingProtocolVersion) {
 
 TEST(TrustTokenKeyCommitmentParser, RejectsMismatchedProtocolVersion) {
   std::string input =
-      R"({ "TrustTokenV3PMB": {
-     "protocol_version": "TrustTokenV3VOPRF", "id": 1, "batchsize": 5
+      R"({ "PrivateStateTokenV1PMB": {
+     "protocol_version": "PrivateStateTokenV1VOPRF", "id": 1, "batchsize": 5
    }})";
   // Make sure the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   mojom::TrustTokenKeyCommitmentResultPtr result =
       TrustTokenKeyCommitmentParser().Parse(input);
@@ -758,12 +580,13 @@ TEST(TrustTokenKeyCommitmentParser, RejectsMismatchedProtocolVersion) {
 
 TEST(TrustTokenKeyCommitmentParser, RejectsUnknownProtocolVersion) {
   std::string input =
-      R"({ "TrustTokenJunk": {
-     "protocol_version": "TrustTokenJunk", "id": 1, "srrkey": "aaaa",
+      R"({ "PrivateStateTokenJunk": {
+     "protocol_version": "PrivateStateTokenJunk", "id": 1, "srrkey": "aaaa",
      "batchsize": 5
    }})";
   // Make sure the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   mojom::TrustTokenKeyCommitmentResultPtr result =
       TrustTokenKeyCommitmentParser().Parse(input);
@@ -772,12 +595,13 @@ TEST(TrustTokenKeyCommitmentParser, RejectsUnknownProtocolVersion) {
 
 TEST(TrustTokenKeyCommitmentParser, RejectsTypeUnsafeProtocolVersion) {
   std::string input =
-      R"({ "TrustTokenV3PMB": {
+      R"({ "PrivateStateTokenV1VOPRF": {
      "protocol_version": 5, "id": 1, "srrkey": "aaaa",
      "batchsize": 5
    }})";
   // Make sure the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   mojom::TrustTokenKeyCommitmentResultPtr result =
       TrustTokenKeyCommitmentParser().Parse(input);
@@ -786,12 +610,13 @@ TEST(TrustTokenKeyCommitmentParser, RejectsTypeUnsafeProtocolVersion) {
 
 TEST(TrustTokenKeyCommitmentParser, ParsesID) {
   std::string input =
-      R"({ "TrustTokenV3PMB": {
-     "protocol_version": "TrustTokenV3PMB", "id": 1, "batchsize": 5,
+      R"({ "PrivateStateTokenV1VOPRF": {
+     "protocol_version": "PrivateStateTokenV1VOPRF", "id": 1, "batchsize": 5,
      "srrkey": "aaaa"
    }})";
   // Make sure the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   mojom::TrustTokenKeyCommitmentResultPtr result =
       TrustTokenKeyCommitmentParser().Parse(input);
@@ -802,11 +627,13 @@ TEST(TrustTokenKeyCommitmentParser, ParsesID) {
 
 TEST(TrustTokenKeyCommitmentParser, RejectsMissingID) {
   std::string input =
-      R"({ "TrustTokenV3PMB": {
-     "protocol_version": "TrustTokenV3PMB", "batchsize": 5, "srrkey": "aaaa"
+      R"({ "PrivateStateTokenV1VOPRF": {
+     "protocol_version": "PrivateStateTokenV1VOPRF", "batchsize": 5,
+     "srrkey": "aaaa"
    }})";
   // Make sure the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   mojom::TrustTokenKeyCommitmentResultPtr result =
       TrustTokenKeyCommitmentParser().Parse(input);
@@ -815,13 +642,51 @@ TEST(TrustTokenKeyCommitmentParser, RejectsMissingID) {
 
 TEST(TrustTokenKeyCommitmentParser, RejectsTypeUnsafeID) {
   std::string input =
-      R"({ "TrustTokenV3PMB": {
-     "protocol_version": "TrustTokenV3PMB", "id": "foo", "srrkey": "aaaa",
+      R"({ "PrivateStateTokenV1VOPRF": {
+     "protocol_version": "PrivateStateTokenV1VOPRF", "id": "foo",
+     "srrkey": "aaaa",
      "batchsize": 5
    }})";
   // Make sure the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
+  mojom::TrustTokenKeyCommitmentResultPtr result =
+      TrustTokenKeyCommitmentParser().Parse(input);
+  EXPECT_FALSE(result);
+}
+
+TEST(TrustTokenKeyCommitmentParser, ParseRejectsPrivateStateTokenV3PMB) {
+  std::string input = R"({ "PrivateStateTokenV3PMB": {
+            "protocol_version": "PrivateStateTokenV3PMB", "id": 1,
+            "batchsize": 5
+         }})";
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
+  mojom::TrustTokenKeyCommitmentResultPtr result =
+      TrustTokenKeyCommitmentParser().Parse(input);
+  EXPECT_FALSE(result);
+}
+
+TEST(TrustTokenKeyCommitmentParser, ParseRejectsPrivateStateTokenV3VOPRF) {
+  std::string input = R"({ "PrivateStateTokenV3VOPRF": {
+            "protocol_version": "PrivateStateTokenV3VOPRF", "id": 1,
+            "batchsize": 5
+         }})";
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
+  mojom::TrustTokenKeyCommitmentResultPtr result =
+      TrustTokenKeyCommitmentParser().Parse(input);
+  EXPECT_FALSE(result);
+}
+
+TEST(TrustTokenKeyCommitmentParser, ParseRejectsPrivateStateTokenV1PMB) {
+  std::string input = R"({ "PrivateStateTokenV1PMB": {
+            "protocol_version": "PrivateStateTokenV1PMB", "id": 1,
+            "batchsize": 5
+         }})";
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
   mojom::TrustTokenKeyCommitmentResultPtr result =
       TrustTokenKeyCommitmentParser().Parse(input);
   EXPECT_FALSE(result);
@@ -829,8 +694,9 @@ TEST(TrustTokenKeyCommitmentParser, RejectsTypeUnsafeID) {
 
 TEST(TrustTokenKeyCommitmentParserMultipleIssuers, InvalidJson) {
   std::string input = "";
+  // Make sure it's really not valid JSON.
   ASSERT_FALSE(
-      base::JSONReader::Read(input));  // Make sure it's really not valid JSON.
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   auto result = TrustTokenKeyCommitmentParser().ParseMultipleIssuers(input);
   EXPECT_FALSE(result);
@@ -839,7 +705,8 @@ TEST(TrustTokenKeyCommitmentParserMultipleIssuers, InvalidJson) {
 TEST(TrustTokenKeyCommitmentParserMultipleIssuers, NotADictionary) {
   std::string input = "3";
   // Make sure the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   auto result = TrustTokenKeyCommitmentParser().ParseMultipleIssuers(input);
   EXPECT_FALSE(result);
@@ -849,7 +716,8 @@ TEST(TrustTokenKeyCommitmentParserMultipleIssuers, Empty) {
   std::string input = "{}";
 
   // Make sure the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   auto result = TrustTokenKeyCommitmentParser().ParseMultipleIssuers(input);
   ASSERT_TRUE(result);
@@ -860,11 +728,13 @@ TEST(TrustTokenKeyCommitmentParserMultipleIssuers, UnsuitableKey) {
   // Test that a key with an unsuitable Trust Tokens origin gets skipped.
   std::string input =
       R"( { "http://insecure.example/":
-             { "protocol_version": "TrustTokenV3PMB", "id": 1, "batchsize": 5
+             { "protocol_version": "PrivateStateTokenV1VOPRF", "id": 1,
+               "batchsize": 5
                  } } )";
 
   // Make sure the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   auto result = TrustTokenKeyCommitmentParser().ParseMultipleIssuers(input);
   ASSERT_TRUE(result);
@@ -878,7 +748,8 @@ TEST(TrustTokenKeyCommitmentParserMultipleIssuers, SuitableKeyInvalidValue) {
               "not a valid encoding of a key commitment result" } )";
 
   // Make sure the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   auto result = TrustTokenKeyCommitmentParser().ParseMultipleIssuers(input);
   ASSERT_TRUE(result);
@@ -887,12 +758,14 @@ TEST(TrustTokenKeyCommitmentParserMultipleIssuers, SuitableKeyInvalidValue) {
 
 TEST(TrustTokenKeyCommitmentParserMultipleIssuers, SingleIssuer) {
   std::string input =
-      R"( { "https://issuer.example/": {  "TrustTokenV3PMB": {
-              "protocol_version": "TrustTokenV3PMB", "id": 1, "batchsize": 5
+      R"( { "https://issuer.example/": {  "PrivateStateTokenV1VOPRF": {
+              "protocol_version": "PrivateStateTokenV1VOPRF",
+              "id": 1, "batchsize": 5
               }} } )";
 
   // Make sure the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   TrustTokenKeyCommitmentParser parser;
 
@@ -901,26 +774,30 @@ TEST(TrustTokenKeyCommitmentParserMultipleIssuers, SingleIssuer) {
   auto issuer =
       *SuitableTrustTokenOrigin::Create(GURL("https://issuer.example"));
   ASSERT_TRUE(result->count(issuer));
-  EXPECT_TRUE(mojo::Equals(
-      result->at(issuer),
-      parser.Parse(
-          R"({  "TrustTokenV3PMB": {"protocol_version": "TrustTokenV3PMB",
+  EXPECT_TRUE(
+      mojo::Equals(result->at(issuer), parser.Parse(
+                                           R"({  "PrivateStateTokenV1VOPRF": {
+             "protocol_version": "PrivateStateTokenV1VOPRF",
              "id": 1, "batchsize": 5 }})")));
 }
 
 TEST(TrustTokenKeyCommitmentParserMultipleIssuers, DuplicateIssuer) {
   std::string input =
-      R"( { "https://issuer.example/": {  "TrustTokenV3PMB": {
-            "protocol_version": "TrustTokenV3PMB", "id": 1, "batchsize": 5 }},
-    "https://other.example/": {  "TrustTokenV3PMB": {
-             "protocol_version": "TrustTokenV3PMB", "id": 1, "batchsize": 5 }},
+      R"( { "https://issuer.example/": {  "PrivateStateTokenV1VOPRF": {
+            "protocol_version": "PrivateStateTokenV1VOPRF", "id": 1,
+            "batchsize": 5 }},
+    "https://other.example/": {  "PrivateStateTokenV1VOPRF": {
+             "protocol_version": "PrivateStateTokenV1VOPRF", "id": 1,
+             "batchsize": 5 }},
     "https://issuer.example/this-is-really-the-same-issuer-as-the-first-entry":
-      { "TrustTokenV3PMB": {"protocol_version": "TrustTokenV3PMB", "id": 1,
+      { "PrivateStateTokenV1VOPRF": {
+        "protocol_version": "PrivateStateTokenV1VOPRF", "id": 1,
         "batchsize": 3 }}
     } )";
 
   // Make sure the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   TrustTokenKeyCommitmentParser parser;
 
@@ -934,9 +811,10 @@ TEST(TrustTokenKeyCommitmentParserMultipleIssuers, DuplicateIssuer) {
   auto issuer =
       *SuitableTrustTokenOrigin::Create(GURL("https://issuer.example"));
   ASSERT_TRUE(result->count(issuer));
-  EXPECT_TRUE(mojo::Equals(result->at(issuer), parser.Parse(
-                                                   R"({ "TrustTokenV3PMB": {
-        "protocol_version": "TrustTokenV3PMB", "id": 1, "batchsize": 3
+  EXPECT_TRUE(
+      mojo::Equals(result->at(issuer), parser.Parse(
+                                           R"({ "PrivateStateTokenV1VOPRF": {
+        "protocol_version": "PrivateStateTokenV1VOPRF", "id": 1, "batchsize": 3
         }})")));
 }
 
@@ -947,17 +825,19 @@ TEST(TrustTokenKeyCommitmentParserMultipleIssuers, DuplicateIssuerFirstWins) {
 
   std::string input =
       R"( {
-    "https://issuer.example/longer": {  "TrustTokenV3PMB": {
-      "protocol_version": "TrustTokenV3PMB", "id": 1, "batchsize": 5 }},
-    "https://other.example/": {  "TrustTokenV3PMB": {
-      "protocol_version": "TrustTokenV3PMB", "id": 1, "batchsize": 5 }},
+    "https://issuer.example/longer": {  "PrivateStateTokenV1VOPRF": {
+      "protocol_version": "PrivateStateTokenV1VOPRF", "id": 1, "batchsize": 5 }},
+    "https://other.example/": {  "PrivateStateTokenV1VOPRF": {
+      "protocol_version": "PrivateStateTokenV1VOPRF", "id": 1, "batchsize": 5 }},
     "https://issuer.example/":
-      { "TrustTokenV3PMB": {"protocol_version": "TrustTokenV3PMB", "id": 1,
+      { "PrivateStateTokenV1VOPRF": {
+        "protocol_version": "PrivateStateTokenV1VOPRF", "id": 1,
         "batchsize": 3 }
     }} )";
 
   // Make sure the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   TrustTokenKeyCommitmentParser parser;
 
@@ -971,23 +851,25 @@ TEST(TrustTokenKeyCommitmentParserMultipleIssuers, DuplicateIssuerFirstWins) {
   auto issuer =
       *SuitableTrustTokenOrigin::Create(GURL("https://issuer.example"));
   ASSERT_TRUE(result->count(issuer));
-  EXPECT_TRUE(mojo::Equals(
-      result->at(issuer),
-      parser.Parse(
-          R"({ "TrustTokenV3PMB": {"protocol_version": "TrustTokenV3PMB",
+  EXPECT_TRUE(
+      mojo::Equals(result->at(issuer), parser.Parse(
+                                           R"({ "PrivateStateTokenV1VOPRF": {
+               "protocol_version": "PrivateStateTokenV1VOPRF",
                "id": 1, "batchsize": 5 }})")));
 }
 
 TEST(TrustTokenKeyCommitmentParserMultipleIssuers,
      MixOfSuitableAndUnsuitableIssuers) {
   std::string input = R"( {
-    "https://issuer.example/": { "TrustTokenV3PMB": {
-      "protocol_version": "TrustTokenV3PMB", "id": 1, "batchsize": 5 }},
-    "http://insecure.example": { "TrustTokenV3PMB": {
-      "protocol_version": "TrustTokenV3PMB", "id": 1, "batchsize": 5 } }} )";
+    "https://issuer.example/": { "PrivateStateTokenV1VOPRF": {
+      "protocol_version": "PrivateStateTokenV1VOPRF", "id": 1, "batchsize": 5 }},
+    "http://insecure.example": { "PrivateStateTokenV1VOPRF": {
+      "protocol_version": "PrivateStateTokenV1VOPRF",
+      "id": 1, "batchsize": 5 } }} )";
 
   // Make sure the input is actually valid JSON.
-  ASSERT_TRUE(base::JSONReader::Read(input));
+  ASSERT_TRUE(
+      base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   TrustTokenKeyCommitmentParser parser;
 
@@ -998,11 +880,23 @@ TEST(TrustTokenKeyCommitmentParserMultipleIssuers,
   auto issuer =
       *SuitableTrustTokenOrigin::Create(GURL("https://issuer.example"));
   ASSERT_TRUE(result->count(issuer));
-  EXPECT_TRUE(mojo::Equals(
-      result->at(issuer),
-      parser.Parse(
-          R"({  "TrustTokenV3PMB": {"protocol_version": "TrustTokenV3PMB",
+  EXPECT_TRUE(
+      mojo::Equals(result->at(issuer), parser.Parse(
+                                           R"({  "PrivateStateTokenV1VOPRF": {
+        "protocol_version": "PrivateStateTokenV1VOPRF",
         "id": 1, "batchsize": 5}})")));
 }
+
+void ParsesOneIssuerCorrectly(base::Value value) {
+  TrustTokenKeyCommitmentParser().Parse(base::WriteJson(value).value_or(""));
+}
+
+void ParsesMultipleIssuersCorrectly(base::Value value) {
+  TrustTokenKeyCommitmentParser().ParseMultipleIssuers(
+      base::WriteJson(value).value_or(""));
+}
+
+FUZZ_TEST(TrustTokenKeyCommitmentFuzzer, ParsesOneIssuerCorrectly);
+FUZZ_TEST(TrustTokenKeyCommitmentFuzzer, ParsesMultipleIssuersCorrectly);
 
 }  // namespace network

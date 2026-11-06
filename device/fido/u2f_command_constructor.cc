@@ -1,17 +1,47 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "device/fido/u2f_command_constructor.h"
 
+#include <algorithm>
 #include <string>
 #include <utility>
 
+#include "base/containers/extend.h"
+#include "base/containers/span.h"
+#include "base/feature_list.h"
 #include "components/apdu/apdu_command.h"
-#include "device/fido/fido_constants.h"
-#include "device/fido/fido_parsing_utils.h"
+#include "crypto/hash.h"
+#include "device/fido/authenticator_get_info_response.h"
+#include "device/fido/public/features.h"
+#include "device/fido/public/fido_constants.h"
 
 namespace device {
+
+namespace {
+
+// Returns true if ES256 is the first algorithm in |request|'s pubKeyCredParams
+// that is also in |authenticator_algorithms|.
+bool IsEs256PreferredCommonAlgorithm(
+    const CtapMakeCredentialRequest& request,
+    base::span<const int32_t> authenticator_algorithms) {
+  for (const auto& param :
+       request.public_key_credential_params.public_key_credential_params()) {
+    if (param.type != CredentialType::kPublicKey) {
+      continue;
+    }
+    if (std::ranges::contains(authenticator_algorithms, param.algorithm)) {
+      return param.algorithm ==
+             static_cast<int32_t>(CoseAlgorithmIdentifier::kEs256);
+    }
+  }
+  // No common algorithm. MakeCredentialRequestHandler normally filters these
+  // authenticators out already, so let CTAP2 report the error.
+  return false;
+}
+
+}  // namespace
 
 bool IsConvertibleToU2fRegisterCommand(
     const CtapMakeCredentialRequest& request) {
@@ -19,24 +49,27 @@ bool IsConvertibleToU2fRegisterCommand(
       request.resident_key_required)
     return false;
 
-  const auto& public_key_credential_info =
-      request.public_key_credential_params.public_key_credential_params();
-  return std::any_of(
-      public_key_credential_info.begin(), public_key_credential_info.end(),
-      [](const auto& credential_info) {
-        return credential_info.algorithm ==
-               base::strict_cast<int>(CoseAlgorithmIdentifier::kEs256);
-      });
+  return std::ranges::contains(
+      request.public_key_credential_params.public_key_credential_params(),
+      static_cast<int32_t>(CoseAlgorithmIdentifier::kEs256),
+      &PublicKeyCredentialParams::CredentialInfo::algorithm);
 }
 
 bool ShouldPreferCTAP2EvenIfItNeedsAPIN(
-    const CtapMakeCredentialRequest& request) {
-  return request.hmac_secret ||
-         // U2F devices can only support |kEnterpriseApprovedByBrowser| so
-         // |kEnterpriseIfRPListedOnAuthenticator| should go over CTAP2.
-         request.attestation_preference ==
-             AttestationConveyancePreference::
-                 kEnterpriseIfRPListedOnAuthenticator;
+    const CtapMakeCredentialRequest& request,
+    const AuthenticatorGetInfoResponse& device_info) {
+  if (request.hmac_secret ||
+      // U2F devices can only support |kEnterpriseApprovedByBrowser| so
+      // |kEnterpriseIfRPListedOnAuthenticator| should go over CTAP2.
+      request.attestation_preference ==
+          AttestationConveyancePreference::
+              kEnterpriseIfRPListedOnAuthenticator) {
+    return true;
+  }
+  return base::FeatureList::IsEnabled(
+             kWebAuthnU2fFallbackRequiresPreferredEs256) &&
+         device_info.algorithms &&
+         !IsEs256PreferredCommonAlgorithm(request, *device_info.algorithms);
 }
 
 bool IsConvertibleToU2fSignCommand(const CtapGetAssertionRequest& request) {
@@ -44,10 +77,10 @@ bool IsConvertibleToU2fSignCommand(const CtapGetAssertionRequest& request) {
          !request.allow_list.empty();
 }
 
-absl::optional<std::vector<uint8_t>> ConvertToU2fRegisterCommand(
+std::optional<std::vector<uint8_t>> ConvertToU2fRegisterCommand(
     const CtapMakeCredentialRequest& request) {
   if (!IsConvertibleToU2fRegisterCommand(request))
-    return absl::nullopt;
+    return std::nullopt;
 
   if (request.pin_auth && request.pin_auth->size() == 0) {
     // An empty pin_auth in CTAP2 indicates that the device should just wait
@@ -55,32 +88,31 @@ absl::optional<std::vector<uint8_t>> ConvertToU2fRegisterCommand(
     return ConstructBogusU2fRegistrationCommand();
   }
 
-  const bool is_invidual_attestation =
+  const bool is_individual_attestation =
       request.attestation_preference ==
       AttestationConveyancePreference::kEnterpriseApprovedByBrowser;
-  return ConstructU2fRegisterCommand(
-      fido_parsing_utils::CreateSHA256Hash(request.rp.id),
-      request.client_data_hash, is_invidual_attestation);
+  return ConstructU2fRegisterCommand(crypto::hash::Sha256(request.rp.id),
+                                     request.client_data_hash,
+                                     is_individual_attestation);
 }
 
-absl::optional<std::vector<uint8_t>> ConvertToU2fSignCommandWithBogusChallenge(
+std::optional<std::vector<uint8_t>> ConvertToU2fSignCommandWithBogusChallenge(
     const CtapMakeCredentialRequest& request,
     base::span<const uint8_t> key_handle) {
-  return ConstructU2fSignCommand(
-      fido_parsing_utils::CreateSHA256Hash(request.rp.id),
-      kBogusChallenge, key_handle);
+  return ConstructU2fSignCommand(crypto::hash::Sha256(request.rp.id),
+                                 kBogusChallenge, key_handle);
 }
 
-absl::optional<std::vector<uint8_t>> ConvertToU2fSignCommand(
+std::optional<std::vector<uint8_t>> ConvertToU2fSignCommand(
     const CtapGetAssertionRequest& request,
     ApplicationParameterType application_parameter_type,
     base::span<const uint8_t> key_handle) {
   if (!IsConvertibleToU2fSignCommand(request))
-    return absl::nullopt;
+    return std::nullopt;
 
   const auto& application_parameter =
       application_parameter_type == ApplicationParameterType::kPrimary
-          ? fido_parsing_utils::CreateSHA256Hash(request.rp_id)
+          ? crypto::hash::Sha256(request.rp_id)
           : request.alternative_application_parameter.value_or(
                 std::array<uint8_t, kRpIdHashLength>());
 
@@ -94,8 +126,8 @@ std::vector<uint8_t> ConstructU2fRegisterCommand(
     bool is_individual_attestation) {
   std::vector<uint8_t> data;
   data.reserve(kU2fChallengeParamLength + kU2fApplicationParamLength);
-  fido_parsing_utils::Append(&data, challenge_parameter);
-  fido_parsing_utils::Append(&data, application_parameter);
+  base::Extend(data, challenge_parameter);
+  base::Extend(data, application_parameter);
 
   apdu::ApduCommand command;
   command.set_ins(base::strict_cast<uint8_t>(U2fApduInstruction::kRegister));
@@ -106,21 +138,21 @@ std::vector<uint8_t> ConstructU2fRegisterCommand(
   return command.GetEncodedCommand();
 }
 
-absl::optional<std::vector<uint8_t>> ConstructU2fSignCommand(
+std::optional<std::vector<uint8_t>> ConstructU2fSignCommand(
     base::span<const uint8_t, kU2fApplicationParamLength> application_parameter,
     base::span<const uint8_t, kU2fChallengeParamLength> challenge_parameter,
     base::span<const uint8_t> key_handle) {
   if (key_handle.size() > kMaxKeyHandleLength) {
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   std::vector<uint8_t> data;
   data.reserve(kU2fChallengeParamLength + kU2fApplicationParamLength + 1 +
                key_handle.size());
-  fido_parsing_utils::Append(&data, challenge_parameter);
-  fido_parsing_utils::Append(&data, application_parameter);
+  base::Extend(data, challenge_parameter);
+  base::Extend(data, application_parameter);
   data.push_back(static_cast<uint8_t>(key_handle.size()));
-  fido_parsing_utils::Append(&data, key_handle);
+  base::Extend(data, key_handle);
 
   apdu::ApduCommand command;
   command.set_ins(base::strict_cast<uint8_t>(U2fApduInstruction::kSign));

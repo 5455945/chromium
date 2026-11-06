@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,8 @@
 
 #include <memory>
 #include <string>
-#include <vector>
+#include <string_view>
 
-#include "base/macros.h"
-#include "base/strings/string_piece_forward.h"
 #include "base/values.h"
 
 namespace cloud_devices {
@@ -21,31 +19,31 @@ namespace cloud_devices {
 class CloudDeviceDescription {
  public:
   CloudDeviceDescription();
+
+  CloudDeviceDescription(const CloudDeviceDescription&) = delete;
+  CloudDeviceDescription& operator=(const CloudDeviceDescription&) = delete;
+
   ~CloudDeviceDescription();
 
   bool InitFromString(const std::string& json);
-  bool InitFromValue(base::Value value);
+  bool InitFromValue(base::DictValue value);
 
-  static bool IsValidTicket(const base::Value& value);
-
-  std::string ToString() const;
+  std::string ToStringForTesting() const;
 
   base::Value ToValue() &&;
 
   // Returns item of given type with capability/option.
   // Returns nullptr if missing.
-  const base::Value* GetItem(const std::vector<base::StringPiece>& path,
-                             base::Value::Type type) const;
+  const base::DictValue* GetDictItem(std::string_view path) const;
+  const base::ListValue* GetListItem(std::string_view path) const;
 
-  // Creates item with given type for capability/option.
-  // Returns nullptr if an intermediate Value in the path is not a dictionary.
-  base::Value* CreateItem(const std::vector<base::StringPiece>& path,
-                          base::Value::Type type);
+  // Sets item with given type for capability/option. Returns false if an
+  // intermediate Value in the path is not a dictionary.
+  bool SetDictItem(std::string_view path, base::DictValue dict);
+  bool SetListItem(std::string_view path, base::ListValue list);
 
  private:
-  base::Value root_;
-
-  DISALLOW_COPY_AND_ASSIGN(CloudDeviceDescription);
+  base::DictValue root_;
 };
 
 }  // namespace cloud_devices

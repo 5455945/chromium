@@ -26,105 +26,129 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_SCRIPT_SCRIPT_RUNNER_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_SCRIPT_SCRIPT_RUNNER_H_
 
-#include "base/location.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_state_observer.h"
+#include "third_party/blink/renderer/core/script/pending_script.h"
 #include "third_party/blink/renderer/platform/bindings/name_client.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_deque.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/deque.h"
-#include "third_party/blink/renderer/platform/wtf/hash_map.h"
 
 namespace blink {
 
 class Document;
-class PendingScript;
-class ScriptLoader;
 
-class CORE_EXPORT ScriptRunner final
-    : public GarbageCollected<ScriptRunner>,
-      public NameClient {
+class CORE_EXPORT ScriptRunner final : public GarbageCollected<ScriptRunner>,
+                                       public PendingScriptClient,
+                                       public NameClient {
  public:
   explicit ScriptRunner(Document*);
   ~ScriptRunner() override = default;
   ScriptRunner(const ScriptRunner&) = delete;
   ScriptRunner& operator=(const ScriptRunner&) = delete;
 
-  void QueueScriptForExecution(PendingScript*);
-  bool HasPendingScripts() const {
-    return !pending_in_order_scripts_.IsEmpty() ||
-           !pending_async_scripts_.IsEmpty();
-  }
-  void NotifyScriptReady(PendingScript*);
-  void NotifyDelayedAsyncScriptsMilestoneReached();
+  // Delays script evaluation after `ScriptRunnerDelayer::Activate()` until
+  // `ScriptRunnerDelayer::Deactivate()`.
+  //
+  // Each `DelayReason` value represents one reason to delay, and for each
+  // `ScriptRunner` there should be at most one active `ScriptRunnerDelayer` for
+  // each `DelayReason`.
+  //
+  // Each script can choose to wait or not to wait for each `DelayReason`, and
+  // are evaluated after all of its relevant `ScriptRunnerDelayer`s are
+  // deactivated.
+  //
+  // This can be spec-conformant (pretending that the loading of async scripts
+  // are not completed until `ScriptRunnerDelayer`s are deactivated), but be
+  // careful to avoid deadlocks and infinite delays.
+  //
+  // Currently this only affects async scripts and not in-order scripts.
+  enum class DelayReason : uint8_t {
+    // Script is loaded. Should be enabled for all scripts.
+    kLoad = 1 << 0,
+    // Milestone is reached as defined by https://crbug.com/1340837.
+    kMilestone = 1 << 1,
 
-  static void MovePendingScript(Document&, Document&, ScriptLoader*);
+    // Paused all JavasScript execution on prerendering pags until activation.
+    // It is an opt-in setting that triggers can specify. One of the triggers is
+    // prerender-until-script: see https://crbug.com/428500219 for details.
+    kPausedForPrerender = 1 << 2,
+
+    kTest1 = 1 << 6,
+    kTest2 = 1 << 7,
+  };
+  using DelayReasons = std::underlying_type<DelayReason>::type;
+
+  void QueueScriptForExecution(PendingScript*, DelayReasons);
+  bool IsActive(DelayReason delay_reason) const {
+    return active_delay_reasons_ & static_cast<DelayReasons>(delay_reason);
+  }
 
   void SetTaskRunnerForTesting(base::SingleThreadTaskRunner* task_runner) {
     task_runner_ = task_runner;
   }
 
-  void Trace(Visitor*) const;
-  const char* NameInHeapSnapshot() const override { return "ScriptRunner"; }
+  void Trace(Visitor*) const override;
+  const char* GetHumanReadableName() const override { return "ScriptRunner"; }
 
-  // HTML parser can defer async scripts until after it's processed sequential
-  // sync <script> tags.
-  void PauseAsyncScriptExecution();
-  void ResumeAsyncScriptExecution();
-  bool AsyncScriptExecutionPaused() const {
-    return async_script_execution_paused_;
-  }
+  // PendingScriptClient
+  void PendingScriptFinished(PendingScript*) override;
+
+  void ExecuteAsyncPendingScript(PendingScript* pending_script,
+                                 base::TimeTicks ready_to_evaluate_time);
 
  private:
-  class Task;
+  // Execute the given pending script.
+  void ExecutePendingScript(PendingScript*);
 
-  void MovePendingScript(ScriptRunner*, PendingScript*);
-  bool RemovePendingInOrderScript(PendingScript*);
-  void ScheduleReadyInOrderScripts();
-  void ScheduleDelayedAsyncScripts();
+  friend class ScriptRunnerDelayer;
+  void AddDelayReason(DelayReason);
+  void RemoveDelayReason(DelayReason);
+  void RemoveDelayReasonFromScript(PendingScript*, DelayReason);
 
-  // Used to delay async scripts. These scripts are delayed until
-  // |NotifyDelayedAsyncScriptsMilestoneReached()| is called.
-  bool CanDelayAsyncScripts();
-  void DelayAsyncScript(PendingScript*);
-
-  void PostTask(const base::Location&);
-
-  // Execute the first task in in_order_scripts_to_execute_soon_.
-  // Returns true if task was run, and false otherwise.
-  bool ExecuteInOrderTask();
-
-  // Execute any task in async_scripts_to_execute_soon_.
-  // Returns true if task was run, and false otherwise.
-  bool ExecuteAsyncTask();
-
-  void ExecuteTask();
-
-  bool IsExecutionSuspended();
+  // https://html.spec.whatwg.org/C/#list-of-scripts-that-will-execute-in-order-as-soon-as-possible
+  HeapDeque<Member<PendingScript>> pending_in_order_scripts_;
+  // https://html.spec.whatwg.org/C/#set-of-scripts-that-will-execute-as-soon-as-possible
+  // The value represents the `DelayReason`s that the script is waiting for
+  // before its evaluation.
+  HeapHashMap<Member<PendingScript>, DelayReasons> pending_async_scripts_;
 
   Member<Document> document_;
 
-  HeapDeque<Member<PendingScript>> pending_in_order_scripts_;
-  HeapHashSet<Member<PendingScript>> pending_async_scripts_;
-  HeapDeque<Member<PendingScript>> pending_delayed_async_scripts_;
-
-  // http://www.whatwg.org/specs/web-apps/current-work/#set-of-scripts-that-will-execute-as-soon-as-possible
-  HeapDeque<Member<PendingScript>> async_scripts_to_execute_soon_;
-  HeapDeque<Member<PendingScript>> in_order_scripts_to_execute_soon_;
-
   scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
+  scoped_refptr<base::SingleThreadTaskRunner> low_priority_task_runner_;
 
-  int number_of_in_order_scripts_with_pending_notification_ = 0;
-
-  // Scripts in |pending_delayed_async_scripts_| are delayed until the
-  // |NotifyDelayedAsyncScriptsMilestoneReached()| is called. After this point,
-  // the ScriptRunner no longer delays async scripts. This bool is used to
-  // ensure we don't continue delaying async scripts after this point. See the
-  // design doc:
-  // https://docs.google.com/document/u/1/d/1G-IUrT4enARZlsIrFQ4d4cRVe9MRTJASfWwolV09JZE/edit.
-  bool delay_async_script_milestone_reached_ = false;
-  bool async_script_execution_paused_ = false;
+  DelayReasons active_delay_reasons_ = 0;
 };
+
+class CORE_EXPORT ScriptRunnerDelayer final
+    : public GarbageCollected<ScriptRunnerDelayer> {
+ public:
+  ScriptRunnerDelayer(ScriptRunner*, ScriptRunner::DelayReason);
+  ~ScriptRunnerDelayer() = default;
+  void Activate();
+  void Deactivate();
+
+  ScriptRunnerDelayer(const ScriptRunnerDelayer&) = delete;
+  ScriptRunnerDelayer& operator=(const ScriptRunnerDelayer&) = delete;
+
+  void Trace(Visitor*) const;
+
+ private:
+  WeakMember<ScriptRunner> script_runner_;
+  const ScriptRunner::DelayReason delay_reason_;
+  bool activated_ = false;
+};
+
+// This function is exported for testing purposes only.
+void CORE_EXPORT PostTaskWithLowPriorityUntilTimeoutForTesting(
+    const base::Location& from_here,
+    base::OnceClosure task,
+    base::TimeDelta timeout,
+    scoped_refptr<base::SingleThreadTaskRunner> lower_priority_task_runner,
+    scoped_refptr<base::SingleThreadTaskRunner> normal_priority_task_runner);
 
 }  // namespace blink
 

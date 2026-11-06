@@ -1,14 +1,14 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_DARK_MODE_IMAGE_CLASSIFIER_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_DARK_MODE_IMAGE_CLASSIFIER_H_
 
+#include <optional>
 #include <vector>
 
 #include "base/gtest_prod_util.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/renderer/platform/graphics/dark_mode_types.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/skia/include/core/SkPixmap.h"
@@ -39,6 +39,21 @@ class PLATFORM_EXPORT DarkModeImageClassifier {
     // background.
     float transparency_ratio;
     float background_ratio;
+
+    // Ratio of high luminance pixels to all sampled pixels in the image.
+    float high_luminance_ratio;
+
+    // Ratio of highly saturated (vivid) pixels to all sampled pixels in the
+    // image. Used to detect images dominated by vivid flat colors whose
+    // colors carry meaning and should be preserved rather than inverted.
+    float saturated_pixel_ratio;
+
+    // Ratio of chromatic (non-near-gray) pixels to all sampled pixels in the
+    // image. Uses a low chroma threshold so it counts both vivid colors and
+    // muted / mid-tone colors that still carry hue information. Distinct
+    // from |saturated_pixel_ratio|, which counts only highly saturated
+    // pixels.
+    float chromatic_pixel_ratio;
   };
 
   DarkModeResult Classify(const SkPixmap& pixmap, const SkIRect& src) const;
@@ -49,8 +64,8 @@ class PLATFORM_EXPORT DarkModeImageClassifier {
 
   enum class ColorMode { kColor = 0, kGrayscale = 1 };
 
-  absl::optional<Features> GetFeatures(const SkPixmap& pixmap,
-                                       const SkIRect& src) const;
+  std::optional<Features> GetFeatures(const SkPixmap& pixmap,
+                                      const SkIRect& src) const;
   // Extracts a sample set of pixels (|sampled_pixels|), |transparency_ratio|,
   // and |background_ratio|.
   void GetSamples(const SkPixmap& pixmap,

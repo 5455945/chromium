@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,9 +11,9 @@ namespace favicon_base {
 // ---------------------------------------------------------
 // FaviconImageResult
 
-FaviconImageResult::FaviconImageResult() {}
+FaviconImageResult::FaviconImageResult() = default;
 
-FaviconImageResult::~FaviconImageResult() {}
+FaviconImageResult::~FaviconImageResult() = default;
 
 // --------------------------------------------------------
 // FaviconRawBitmapResult
@@ -24,7 +24,7 @@ FaviconRawBitmapResult::FaviconRawBitmapResult()
 FaviconRawBitmapResult::FaviconRawBitmapResult(
     const FaviconRawBitmapResult& other) = default;
 
-FaviconRawBitmapResult::~FaviconRawBitmapResult() {}
+FaviconRawBitmapResult::~FaviconRawBitmapResult() = default;
 
 // --------------------------------------------------------
 // LargeIconResult
@@ -32,10 +32,16 @@ FaviconRawBitmapResult::~FaviconRawBitmapResult() {}
 LargeIconResult::LargeIconResult(const FaviconRawBitmapResult& bitmap_in)
     : bitmap(bitmap_in) {}
 
-LargeIconResult::LargeIconResult(FallbackIconStyle* fallback_icon_style_in)
-    : fallback_icon_style(fallback_icon_style_in) {}
+LargeIconResult::LargeIconResult(
+    std::unique_ptr<FallbackIconStyle> fallback_icon_style_in)
+    : fallback_icon_style(std::move(fallback_icon_style_in)) {}
 
-LargeIconResult::~LargeIconResult() {}
+LargeIconResult::~LargeIconResult() = default;
+
+LargeIconResult::LargeIconResult(LargeIconResult&& result) noexcept = default;
+
+LargeIconResult& LargeIconResult::operator=(LargeIconResult&& result) noexcept =
+    default;
 
 // --------------------------------------------------------
 // LargeIconImageResult
@@ -45,9 +51,15 @@ LargeIconImageResult::LargeIconImageResult(const gfx::Image& image_in,
     : image(image_in), icon_url(icon_url_in) {}
 
 LargeIconImageResult::LargeIconImageResult(
-    FallbackIconStyle* fallback_icon_style_in)
-    : fallback_icon_style(fallback_icon_style_in) {}
+    std::unique_ptr<FallbackIconStyle> fallback_icon_style_in)
+    : fallback_icon_style(std::move(fallback_icon_style_in)) {}
 
-LargeIconImageResult::~LargeIconImageResult() {}
+LargeIconImageResult::~LargeIconImageResult() = default;
+
+LargeIconImageResult::LargeIconImageResult(
+    LargeIconImageResult&& result) noexcept = default;
+
+LargeIconImageResult& LargeIconImageResult::operator=(
+    LargeIconImageResult&& result) noexcept = default;
 
 }  // namespace favicon_base

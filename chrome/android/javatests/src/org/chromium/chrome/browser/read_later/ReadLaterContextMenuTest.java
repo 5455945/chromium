@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,31 +6,24 @@ package org.chromium.chrome.browser.read_later;
 
 import static androidx.test.espresso.Espresso.onView;
 import static androidx.test.espresso.assertion.ViewAssertions.matches;
-import static androidx.test.espresso.matcher.ViewMatchers.isRoot;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
 import static androidx.test.espresso.matcher.ViewMatchers.withText;
 
-import static org.hamcrest.Matchers.is;
-import static org.hamcrest.Matchers.not;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
-import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import static org.chromium.base.test.transit.RootSpec.anyRoot;
+import static org.chromium.base.test.transit.ViewElement.rootSpecOption;
+import static org.chromium.base.test.transit.ViewFinder.waitForView;
 import static org.chromium.chrome.browser.toolbar.top.ButtonHighlightMatcher.withHighlight;
-import static org.chromium.ui.test.util.ViewUtils.waitForView;
 
-import android.support.test.InstrumentationRegistry;
-import android.view.View;
-
-import androidx.test.espresso.ViewInteraction;
-import androidx.test.espresso.matcher.RootMatchers;
 import androidx.test.filters.MediumTest;
+import androidx.test.platform.app.InstrumentationRegistry;
 
-import org.hamcrest.Matcher;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
@@ -41,46 +34,46 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.Callback;
+import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
-import org.chromium.base.test.util.JniMocker;
+import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.app.ChromeActivity;
+import org.chromium.chrome.browser.bookmarks.BookmarkModel;
 import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.offlinepages.RequestCoordinatorBridge;
 import org.chromium.chrome.browser.offlinepages.RequestCoordinatorBridgeJni;
+import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
-import org.chromium.chrome.test.util.browser.Features;
+import org.chromium.chrome.test.transit.ChromeTransitTestRules;
+import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
+import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.chrome.test.util.browser.contextmenu.ContextMenuUtils;
+import org.chromium.components.bookmarks.BookmarkId;
+import org.chromium.components.bookmarks.BookmarkItem;
 import org.chromium.components.feature_engagement.FeatureConstants;
 import org.chromium.components.feature_engagement.Tracker;
-import org.chromium.net.test.EmbeddedTestServerRule;
-import org.chromium.ui.test.util.UiRestriction;
+import org.chromium.components.feature_engagement.TriggerDetails;
+import org.chromium.net.test.EmbeddedTestServer;
+import org.chromium.ui.base.DeviceFormFactor;
 
 /** Integration tests for showing IPH bubbles for read later. */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
-@Features.EnableFeatures(ChromeFeatureList.READ_LATER)
 @Batch(Batch.PER_CLASS)
 public class ReadLaterContextMenuTest {
     @Rule
-    public ChromeTabbedActivityTestRule mActivityTestRule = new ChromeTabbedActivityTestRule();
-    @Rule
-    public EmbeddedTestServerRule mTestServer = new EmbeddedTestServerRule();
-    @Rule
-    public MockitoRule mMockitoRule = MockitoJUnit.rule();
-    @Rule
-    public JniMocker mocker = new JniMocker();
-    @Mock
-    private Tracker mTracker;
-    @Mock
-    RequestCoordinatorBridge.Natives mRequestCoordinatorBridgeJniMock;
+    public FreshCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.freshChromeTabbedActivityRule();
+
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Mock private Tracker mTracker;
+    @Mock RequestCoordinatorBridge.Natives mRequestCoordinatorBridgeJniMock;
 
     private static final String CONTEXT_MENU_TEST_URL =
             "/chrome/test/data/android/contextmenu/context_menu_test.html";
@@ -88,63 +81,143 @@ public class ReadLaterContextMenuTest {
             "/chrome/test/data/android/contextmenu/test_link.html";
     private static final String CONTEXT_MENU_LINK_DOM_ID = "testLink";
 
+    private EmbeddedTestServer mTestServer;
+    private WebPageStation mPage;
+
     @Before
     public void setUp() {
+        mTestServer = mActivityTestRule.getTestServer();
+
         // Pretend the feature engagement feature is already initialized. Otherwise
-        // UserEducationHelper#requestShowIPH() calls get dropped during test.
-        doAnswer(invocation -> {
-            invocation.<Callback<Boolean>>getArgument(0).onResult(true);
-            return null;
-        })
+        // UserEducationHelper#requestShowIph() calls get dropped during test.
+        doAnswer(
+                        invocation -> {
+                            invocation.<Callback<Boolean>>getArgument(0).onResult(true);
+                            return null;
+                        })
                 .when(mTracker)
                 .addOnInitializedCallback(any());
         TrackerFactory.setTrackerForTests(mTracker);
-        mActivityTestRule.startMainActivityOnBlankPage();
-        mocker.mock(RequestCoordinatorBridgeJni.TEST_HOOKS, mRequestCoordinatorBridgeJniMock);
+        when(mTracker.shouldTriggerHelpUiWithSnooze(any()))
+                .thenReturn(new TriggerDetails(false, false));
+        mPage = mActivityTestRule.startOnBlankPage();
+        RequestCoordinatorBridgeJni.setInstanceForTesting(mRequestCoordinatorBridgeJniMock);
     }
 
     @After
-    public void tearDown() throws Exception {
-        TrackerFactory.setTrackerForTests(null);
+    public void tearDown() {
+        // This class is batched and only the Activity is recreated between tests, so the reading
+        // list would otherwise leak from one test into the next. That would let
+        // waitForReadingListEntry() succeed on a stale entry before the tap under test had done
+        // anything, silently disarming the assertions that follow it.
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    BookmarkModel model =
+                            BookmarkModel.getForProfile(ProfileManager.getLastUsedRegularProfile());
+                    if (model.isBookmarkModelLoaded()) {
+                        model.removeAllUserBookmarks();
+                    }
+                });
+        // Wait for the removal to land so the next test starts from a known-empty reading list.
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    BookmarkModel model =
+                            BookmarkModel.getForProfile(ProfileManager.getLastUsedRegularProfile());
+                    if (!model.isBookmarkModelLoaded()) return true;
+                    BookmarkId readingListFolder = model.getDefaultReadingListFolder();
+                    return readingListFolder == null
+                            || model.getChildIds(readingListFolder).isEmpty();
+                });
     }
 
     @Test
     @MediumTest
-    @Restriction({UiRestriction.RESTRICTION_TYPE_PHONE})
-    public void testShowIPHOnContextMenuLinkCopied() throws Throwable {
-        when(mTracker.shouldTriggerHelpUI(
-                     FeatureConstants.READ_LATER_APP_MENU_BOOKMARK_THIS_PAGE_FEATURE))
+    @Restriction({DeviceFormFactor.PHONE})
+    @DisabledTest(message = "https://crbug.com/358177365")
+    public void testShowIphOnContextMenuLinkCopied() throws Throwable {
+        when(mTracker.shouldTriggerHelpUi(
+                        FeatureConstants.READ_LATER_APP_MENU_BOOKMARK_THIS_PAGE_FEATURE))
                 .thenReturn(true);
-        mActivityTestRule.loadUrlInNewTab(mTestServer.getServer().getURL(CONTEXT_MENU_TEST_URL));
+        when(mTracker.shouldTriggerHelpUiWithSnooze(
+                        FeatureConstants.READ_LATER_APP_MENU_BOOKMARK_THIS_PAGE_FEATURE))
+                .thenReturn(new TriggerDetails(true, false));
+
+        mActivityTestRule.loadUrlInNewTab(mTestServer.getURL(CONTEXT_MENU_TEST_URL));
 
         ChromeActivity activity = mActivityTestRule.getActivity();
-        Tab tab = activity.getActivityTab();
-        ContextMenuUtils.selectContextMenuItem(InstrumentationRegistry.getInstrumentation(),
-                activity, tab, CONTEXT_MENU_LINK_DOM_ID, R.id.contextmenu_copy_link_address);
+        Tab tab = mActivityTestRule.getActivityTab();
+        ContextMenuUtils.selectContextMenuItem(
+                InstrumentationRegistry.getInstrumentation(),
+                activity,
+                tab,
+                CONTEXT_MENU_LINK_DOM_ID,
+                R.id.contextmenu_copy_link_address);
 
         onView(withId(R.id.menu_button_wrapper)).check(matches(withHighlight(true)));
-        waitForHelpBubble(withText(R.string.reading_list_save_pages_for_later));
+        waitForView(
+                withText(R.string.reading_list_save_pages_for_later), rootSpecOption(anyRoot()));
     }
 
     @Test
     @MediumTest
-    @Restriction({UiRestriction.RESTRICTION_TYPE_PHONE})
-    public void testContextMenuAddToOfflinePage() throws Throwable {
-        String url = mTestServer.getServer().getURL(CONTEXT_MENU_TEST_URL);
+    @Restriction({DeviceFormFactor.PHONE})
+    public void testContextMenuAddToReadingList() throws Throwable {
+        String url = mTestServer.getURL(CONTEXT_MENU_TEST_URL);
         mActivityTestRule.loadUrlInNewTab(url);
         ChromeActivity activity = mActivityTestRule.getActivity();
-        Tab tab = activity.getActivityTab();
-        ContextMenuUtils.selectContextMenuItem(InstrumentationRegistry.getInstrumentation(),
-                activity, tab, CONTEXT_MENU_LINK_DOM_ID, R.id.contextmenu_read_later);
-        String linkUrl = mTestServer.getServer().getURL(CONTEXT_MENU_LINK_URL);
-        verify(mRequestCoordinatorBridgeJniMock, timeout(CriteriaHelper.DEFAULT_MAX_TIME_TO_POLL))
-                .savePageLater(any(), any(), eq(linkUrl), any(), any(), any(), anyBoolean());
+        Tab tab = mActivityTestRule.getActivityTab();
+        ContextMenuUtils.selectContextMenuItem(
+                InstrumentationRegistry.getInstrumentation(),
+                activity,
+                tab,
+                CONTEXT_MENU_LINK_DOM_ID,
+                R.id.contextmenu_read_later);
+        String linkUrl = mTestServer.getURL(CONTEXT_MENU_LINK_URL);
+        waitForReadingListEntry(tab, linkUrl);
+        verify(mRequestCoordinatorBridgeJniMock, never())
+                .savePageLater(any(), any(), any(), any(), any(), any(), anyBoolean());
     }
 
-    private ViewInteraction waitForHelpBubble(Matcher<View> matcher) {
-        View mainDecorView = mActivityTestRule.getActivity().getWindow().getDecorView();
-        return onView(isRoot())
-                .inRoot(RootMatchers.withDecorView(not(is(mainDecorView))))
-                .check(waitForView(matcher));
+    @Test
+    @MediumTest
+    @Restriction({DeviceFormFactor.PHONE})
+    public void testContextMenuAddToReadingList_Incognito() throws Throwable {
+        String url = mTestServer.getURL(CONTEXT_MENU_TEST_URL);
+        mActivityTestRule.loadUrlInNewTab(url, /* incognito= */ true);
+        ChromeActivity activity = mActivityTestRule.getActivity();
+        Tab tab = mActivityTestRule.getActivityTab();
+        ContextMenuUtils.selectContextMenuItem(
+                InstrumentationRegistry.getInstrumentation(),
+                activity,
+                tab,
+                CONTEXT_MENU_LINK_DOM_ID,
+                R.id.contextmenu_read_later);
+        String linkUrl = mTestServer.getURL(CONTEXT_MENU_LINK_URL);
+        waitForReadingListEntry(tab, linkUrl);
+        verify(mRequestCoordinatorBridgeJniMock, never())
+                .savePageLater(any(), any(), any(), any(), any(), any(), anyBoolean());
+    }
+
+    /**
+     * Waits until {@code url} shows up in the reading list. Waiting for this before asserting that
+     * no offline save happened is what keeps that assertion meaningful: it proves onReadLater
+     * actually ran, rather than the menu tap having silently done nothing.
+     */
+    private void waitForReadingListEntry(Tab tab, String url) {
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    BookmarkModel model =
+                            BookmarkModel.getForProfile(tab.getProfile().getOriginalProfile());
+                    if (!model.isBookmarkModelLoaded()) return false;
+                    BookmarkId readingListFolder = model.getDefaultReadingListFolder();
+                    if (readingListFolder == null) return false;
+                    for (BookmarkId childId : model.getChildIds(readingListFolder)) {
+                        BookmarkItem item = model.getBookmarkById(childId);
+                        if (item != null && item.getUrl().getSpec().equals(url)) {
+                            return true;
+                        }
+                    }
+                    return false;
+                });
     }
 }

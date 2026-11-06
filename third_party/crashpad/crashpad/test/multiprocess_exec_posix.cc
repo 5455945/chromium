@@ -1,4 +1,4 @@
-// Copyright 2014 The Crashpad Authors. All rights reserved.
+// Copyright 2014 The Crashpad Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,6 +19,9 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+#include <set>
+#include <vector>
+
 #include "base/posix/eintr_wrapper.h"
 #include "build/build_config.h"
 #include "gtest/gtest.h"
@@ -26,11 +29,11 @@
 #include "util/misc/scoped_forbid_return.h"
 #include "util/posix/close_multiple.h"
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #include <stdio_ext.h>
 #endif
 
-#if defined(OS_APPLE)
+#if BUILDFLAG(IS_APPLE)
 #include "util/mach/task_for_pid.h"
 #endif
 
@@ -90,7 +93,7 @@ void MultiprocessExec::MultiprocessChild() {
 
   int rv;
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   __fpurge(stdin);
 #else
   rv = fpurge(stdin);
@@ -124,7 +127,8 @@ void MultiprocessExec::MultiprocessChild() {
   rv = HANDLE_EINTR(dup2(write_handle, STDOUT_FILENO));
   ASSERT_EQ(rv, STDOUT_FILENO) << ErrnoMessage("dup2");
 
-  CloseMultipleNowOrOnExec(STDERR_FILENO + 1, dup_orig_stdout_fd);
+  CloseMultipleNowOrOnExec(STDERR_FILENO + 1,
+                           std::set<int>{dup_orig_stdout_fd});
 
   // Start the new program, replacing this one. execv() has a weird declaration
   // where its argv argument is declared as char* const*. In reality, the
@@ -154,7 +158,7 @@ void MultiprocessExec::MultiprocessChild() {
 }
 
 ProcessType MultiprocessExec::ChildProcess() {
-#if defined(OS_APPLE)
+#if BUILDFLAG(IS_APPLE)
   return TaskForPID(ChildPID());
 #else
   return ChildPID();

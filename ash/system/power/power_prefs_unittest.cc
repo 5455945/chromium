@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,16 +9,22 @@
 #include <utility>
 #include <vector>
 
-#include "ash/public/cpp/ash_pref_names.h"
+#include "ash/constants/ash_pref_names.h"
+#include "ash/constants/ash_switches.h"
 #include "ash/public/cpp/test/shell_test_api.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/session/test_session_controller_client.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
-#include "base/callback_helpers.h"
+#include "base/command_line.h"
+#include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/test/scoped_command_line.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_tick_clock.h"
+#include "chromeos/ash/components/dbus/human_presence/fake_human_presence_dbus_client.h"
+#include "chromeos/ash/components/human_presence/human_presence_configuration.h"
 #include "chromeos/dbus/power/fake_power_manager_client.h"
 #include "chromeos/dbus/power/power_policy_controller.h"
 #include "chromeos/dbus/power_manager/idle.pb.h"
@@ -135,7 +141,7 @@ std::string GetExpectedPeakShiftPolicyForPrefs(PrefService* prefs) {
 
   std::vector<power_manager::PowerManagementPolicy::PeakShiftDayConfig> configs;
   EXPECT_TRUE(chromeos::PowerPolicyController::GetPeakShiftDayConfigs(
-      *prefs->GetDictionary(prefs::kPowerPeakShiftDayConfig), &configs));
+      prefs->GetDict(prefs::kPowerPeakShiftDayConfig), &configs));
 
   power_manager::PowerManagementPolicy expected_policy;
   expected_policy.set_peak_shift_battery_percent_threshold(
@@ -156,7 +162,7 @@ std::string GetExpectedAdvancedBatteryChargeModePolicyForPrefs(
       configs;
   EXPECT_TRUE(
       chromeos::PowerPolicyController::GetAdvancedBatteryChargeModeDayConfigs(
-          *prefs->GetDictionary(prefs::kAdvancedBatteryChargeModeDayConfig),
+          prefs->GetDict(prefs::kAdvancedBatteryChargeModeDayConfig),
           &configs));
 
   power_manager::PowerManagementPolicy expected_policy;
@@ -169,30 +175,73 @@ std::string GetExpectedAdvancedBatteryChargeModePolicyForPrefs(
 
 void DecodeJsonStringAndNormalize(const std::string& json_string,
                                   base::Value* value) {
-  base::JSONReader::ValueWithError parsed_json =
-      base::JSONReader::ReadAndReturnValueWithError(
-          json_string, base::JSON_ALLOW_TRAILING_COMMAS);
-  ASSERT_EQ(parsed_json.error_message, "");
-  ASSERT_TRUE(parsed_json.value);
-  *value = std::move(*parsed_json.value);
+  auto parsed_json = base::JSONReader::ReadAndReturnValueWithError(
+      json_string, base::JSON_ALLOW_TRAILING_COMMAS);
+  ASSERT_TRUE(parsed_json.has_value()) << parsed_json.error().message;
+  *value = std::move(*parsed_json);
 }
+
+void SetQuickDimPreference(bool enabled) {
+  PrefService* prefs =
+      Shell::Get()->session_controller()->GetActivePrefService();
+  if (!prefs) {
+    return;
+  }
+
+  prefs->SetBoolean(prefs::kPowerQuickDimEnabled, enabled);
+}
+
+void SetAdaptiveChargingPreference(bool enabled) {
+  PrefService* prefs =
+      Shell::Get()->session_controller()->GetActivePrefService();
+  if (!prefs) {
+    return;
+  }
+
+  prefs->SetBoolean(prefs::kPowerAdaptiveChargingEnabled, enabled);
+}
+
+void SetChargeLimitPreference(bool enabled) {
+  PrefService* prefs =
+      Shell::Get()->session_controller()->GetActivePrefService();
+  if (!prefs) {
+    return;
+  }
+
+  prefs->SetBoolean(prefs::kPowerChargeLimitEnabled, enabled);
+}
+
 
 }  // namespace
 
 class PowerPrefsTest : public NoSessionAshTestBase {
+ public:
+  PowerPrefsTest(const PowerPrefsTest&) = delete;
+  PowerPrefsTest& operator=(const PowerPrefsTest&) = delete;
+
  protected:
   PowerPrefsTest() = default;
   ~PowerPrefsTest() override = default;
 
   // NoSessionAshTestBase:
   void SetUp() override {
+    feature_list_.InitWithFeatures({features::kQuickDim}, {});
+    base::CommandLine::ForCurrentProcess()->AppendSwitch(switches::kHasHps);
+    HumanPresenceDBusClient::InitializeFake();
+    FakeHumanPresenceDBusClient::Get()->Reset();
+    FakeHumanPresenceDBusClient::Get()->set_hps_service_is_available(true);
     NoSessionAshTestBase::SetUp();
+
+    // Initializes adaptive charging hardware support to false.
+    power_manager::PowerSupplyProperties power_props;
+    power_props.set_adaptive_charging_supported(false);
+    power_manager_client()->UpdatePowerProperties(power_props);
 
     power_policy_controller_ = chromeos::PowerPolicyController::Get();
     power_prefs_ = ShellTestApi().power_prefs();
 
     // Advance the clock an arbitrary amount of time so it won't report zero.
-    tick_clock_.Advance(base::TimeDelta::FromSeconds(1));
+    tick_clock_.Advance(base::Seconds(1));
     power_prefs_->set_tick_clock_for_test(&tick_clock_);
 
     // Get to Login screen.
@@ -203,17 +252,18 @@ class PowerPrefsTest : public NoSessionAshTestBase {
 
   void TearDown() override {
     power_prefs_->local_state_ = nullptr;
-
+    power_prefs_ = nullptr;
+    power_policy_controller_ = nullptr;
     NoSessionAshTestBase::TearDown();
   }
 
   void SetUpLocalState() {
     auto pref_notifier = std::make_unique<PrefNotifierImpl>();
     auto pref_value_store = std::make_unique<PrefValueStore>(
-        managed_pref_store_.get() /* managed_prefs */,
+        managed_pref_store_ /* managed_prefs */,
         nullptr /* supervised_user_prefs */, nullptr /* extension_prefs */,
-        nullptr /* command_line_prefs */, user_pref_store_.get(),
-        nullptr /* recommended_prefs */, pref_registry_->defaults().get(),
+        nullptr /* command_line_prefs */, user_pref_store_,
+        nullptr /* recommended_prefs */, pref_registry_->defaults(),
         pref_notifier.get());
     local_state_ = std::make_unique<PrefService>(
         std::move(pref_notifier), std::move(pref_value_store), user_pref_store_,
@@ -255,9 +305,9 @@ class PowerPrefsTest : public NoSessionAshTestBase {
 
   PrefService* local_state() { return local_state_.get(); }
 
-  chromeos::PowerPolicyController* power_policy_controller_ =
-      nullptr;                         // Not owned.
-  PowerPrefs* power_prefs_ = nullptr;  // Not owned.
+  raw_ptr<chromeos::PowerPolicyController> power_policy_controller_ =
+      nullptr;                                 // Not owned.
+  raw_ptr<PowerPrefs> power_prefs_ = nullptr;  // Not owned.
   base::SimpleTestTickClock tick_clock_;
 
   scoped_refptr<TestingPrefStore> user_pref_store_ =
@@ -268,9 +318,8 @@ class PowerPrefsTest : public NoSessionAshTestBase {
       base::MakeRefCounted<PrefRegistrySimple>();
 
   std::unique_ptr<PrefService> local_state_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(PowerPrefsTest);
+  base::test::ScopedFeatureList feature_list_;
+  base::test::ScopedCommandLine scoped_command_line_;
 };
 
 TEST_F(PowerPrefsTest, LoginScreen) {
@@ -295,7 +344,7 @@ TEST_F(PowerPrefsTest, LoginScreen) {
 
 TEST_F(PowerPrefsTest, UserSession) {
   const char kUserEmail[] = "user@example.net";
-  SimulateUserLogin(kUserEmail);
+  SimulateUserLogin(AccountId::FromUserEmail(kUserEmail));
   PrefService* prefs = GetUserPrefService(kUserEmail);
   ASSERT_TRUE(prefs);
   EXPECT_EQ(GetExpectedPowerPolicyForPrefs(prefs, ScreenLockState::UNLOCKED),
@@ -307,7 +356,7 @@ TEST_F(PowerPrefsTest, UserSession) {
 TEST_F(PowerPrefsTest, PrimaryUserPrefs) {
   // Add a user with restrictive prefs.
   const char kFirstUserEmail[] = "user1@example.net";
-  SimulateUserLogin(kFirstUserEmail);
+  SimulateUserLogin(AccountId::FromUserEmail(kFirstUserEmail));
   PrefService* first_prefs = GetUserPrefService(kFirstUserEmail);
   ASSERT_TRUE(first_prefs);
   first_prefs->SetBoolean(prefs::kPowerAllowScreenWakeLocks, false);
@@ -316,7 +365,7 @@ TEST_F(PowerPrefsTest, PrimaryUserPrefs) {
 
   // Add a second user with lenient prefs.
   const char kSecondUserEmail[] = "user2@example.net";
-  SimulateUserLogin(kSecondUserEmail);
+  SimulateUserLogin(AccountId::FromUserEmail(kSecondUserEmail));
   PrefService* second_prefs = GetUserPrefService(kSecondUserEmail);
   ASSERT_TRUE(second_prefs);
   second_prefs->SetBoolean(prefs::kPowerAllowScreenWakeLocks, true);
@@ -334,7 +383,7 @@ TEST_F(PowerPrefsTest, PrimaryUserPrefs) {
 
 TEST_F(PowerPrefsTest, AvoidLockDelaysAfterInactivity) {
   const char kUserEmail[] = "user@example.net";
-  SimulateUserLogin(kUserEmail);
+  SimulateUserLogin(AccountId::FromUserEmail(kUserEmail));
   PrefService* prefs = GetUserPrefService(kUserEmail);
   ASSERT_TRUE(prefs);
   EXPECT_EQ(GetExpectedPowerPolicyForPrefs(prefs, ScreenLockState::UNLOCKED),
@@ -343,19 +392,19 @@ TEST_F(PowerPrefsTest, AvoidLockDelaysAfterInactivity) {
   // If the screen was already off due to inactivity when it was locked, we
   // should continue using the unlocked delays.
   NotifyScreenIdleOffChanged(true);
-  tick_clock_.Advance(base::TimeDelta::FromSeconds(5));
+  tick_clock_.Advance(base::Seconds(5));
   SetLockedState(ScreenLockState::LOCKED);
   EXPECT_EQ(GetExpectedPowerPolicyForPrefs(prefs, ScreenLockState::UNLOCKED),
             GetCurrentPowerPolicy());
 
   // If the screen turns on while still locked, we should switch to the locked
   // delays.
-  tick_clock_.Advance(base::TimeDelta::FromSeconds(5));
+  tick_clock_.Advance(base::Seconds(5));
   NotifyScreenIdleOffChanged(false);
   EXPECT_EQ(GetExpectedPowerPolicyForPrefs(prefs, ScreenLockState::LOCKED),
             GetCurrentPowerPolicy());
 
-  tick_clock_.Advance(base::TimeDelta::FromSeconds(5));
+  tick_clock_.Advance(base::Seconds(5));
   SetLockedState(ScreenLockState::UNLOCKED);
   EXPECT_EQ(GetExpectedPowerPolicyForPrefs(prefs, ScreenLockState::UNLOCKED),
             GetCurrentPowerPolicy());
@@ -363,7 +412,7 @@ TEST_F(PowerPrefsTest, AvoidLockDelaysAfterInactivity) {
 
 TEST_F(PowerPrefsTest, DisabledLockScreen) {
   const char kUserEmail[] = "user@example.net";
-  SimulateUserLogin(kUserEmail);
+  SimulateUserLogin(AccountId::FromUserEmail(kUserEmail));
   PrefService* prefs = GetUserPrefService(kUserEmail);
   ASSERT_TRUE(prefs);
 
@@ -442,9 +491,8 @@ TEST_F(PowerPrefsTest, PeakShift) {
 
   managed_pref_store_->SetBoolean(prefs::kPowerPeakShiftEnabled, true);
   managed_pref_store_->SetInteger(prefs::kPowerPeakShiftBatteryThreshold, 50);
-  managed_pref_store_->SetValue(
-      prefs::kPowerPeakShiftDayConfig,
-      std::make_unique<base::Value>(std::move(day_configs)), 0);
+  managed_pref_store_->SetValue(prefs::kPowerPeakShiftDayConfig,
+                                std::move(day_configs), 0);
 
   EXPECT_EQ(chromeos::PowerPolicyController::GetPeakShiftPolicyDebugString(
                 power_manager_client()->policy()),
@@ -484,9 +532,8 @@ TEST_F(PowerPrefsTest, AdvancedBatteryChargeMode) {
 
   managed_pref_store_->SetBoolean(prefs::kAdvancedBatteryChargeModeEnabled,
                                   true);
-  managed_pref_store_->SetValue(
-      prefs::kAdvancedBatteryChargeModeDayConfig,
-      std::make_unique<base::Value>(std::move(day_configs)), 0);
+  managed_pref_store_->SetValue(prefs::kAdvancedBatteryChargeModeDayConfig,
+                                std::move(day_configs), 0);
 
   EXPECT_EQ(chromeos::PowerPolicyController::
                 GetAdvancedBatteryChargeModePolicyDebugString(
@@ -534,4 +581,90 @@ TEST_F(PowerPrefsTest, AlsLoggingEnabled) {
   EXPECT_FALSE(prefs->GetBoolean(prefs::kPowerAlsLoggingEnabled));
 }
 
+TEST_F(PowerPrefsTest, SetQuickDimParams) {
+  // Check that DisableHpsSense is called on initialization.
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(FakeHumanPresenceDBusClient::Get()->disable_hps_sense_count(), 1);
+  EXPECT_EQ(FakeHumanPresenceDBusClient::Get()->enable_hps_sense_count(), 0);
+
+  // This will trigger UpdatePowerPolicyFromPrefs and set correct parameters.
+  SetQuickDimPreference(true);
+
+  const auto policy = power_manager_client()->policy();
+  EXPECT_EQ(policy.ac_delays().quick_dim_ms(),
+            hps::GetQuickDimDelay().InMilliseconds());
+  EXPECT_EQ(policy.battery_delays().quick_dim_ms(),
+            hps::GetQuickDimDelay().InMilliseconds());
+
+  EXPECT_EQ(policy.ac_delays().quick_lock_ms(),
+            hps::GetQuickLockDelay().InMilliseconds());
+  EXPECT_EQ(policy.battery_delays().quick_lock_ms(),
+            hps::GetQuickLockDelay().InMilliseconds());
+
+  EXPECT_EQ(policy.send_feedback_if_undimmed(),
+            hps::GetQuickDimFeedbackEnabled());
+
+  // EnableHpsSense should be called when kPowerQuickDimEnabled becomes true.
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(FakeHumanPresenceDBusClient::Get()->enable_hps_sense_count(), 1);
+
+  // DisableHpsSense should be called when kPowerQuickDimEnabled becomes false.
+  SetQuickDimPreference(false);
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(FakeHumanPresenceDBusClient::Get()->disable_hps_sense_count(), 2);
+}
+
+TEST_F(PowerPrefsTest, AdaptiveCharging_NoHardwareSupport_Disabled) {
+  // Adaptive charging should be disabled initially, even with the preference
+  // enabled, because there is no hardware support.
+  EXPECT_FALSE(power_manager_client()->policy().adaptive_charging_enabled());
+}
+
+TEST_F(PowerPrefsTest, AdaptiveCharging_HardwareSupported_EnabledByPref) {
+  // Enable adaptive charging hardware support.
+  power_manager::PowerSupplyProperties power_props;
+  power_props.set_adaptive_charging_supported(true);
+  power_manager_client()->UpdatePowerProperties(power_props);
+
+  // Adaptive charging should be enabled/disabled according to the preference.
+  SetAdaptiveChargingPreference(true);
+  EXPECT_TRUE(power_manager_client()->policy().adaptive_charging_enabled());
+
+  SetAdaptiveChargingPreference(false);
+  EXPECT_FALSE(power_manager_client()->policy().adaptive_charging_enabled());
+}
+
+TEST_F(PowerPrefsTest, ChargeLimit_EnabledByPrefWhenAdaptiveChargingDisabled) {
+  // Enable the hardware support needed for both adaptive charging and
+  // charge limit. They share the same underlying hardware.
+  power_manager::PowerSupplyProperties power_props;
+  power_props.set_adaptive_charging_supported(true);
+  power_manager_client()->UpdatePowerProperties(power_props);
+
+  // Charge limit should be enabled/disabled according to the preference
+  // when adaptive charging is disabled, as these features are mutually
+  // exclusive.
+  SetAdaptiveChargingPreference(false);
+  EXPECT_FALSE(power_manager_client()->policy().adaptive_charging_enabled());
+
+  SetChargeLimitPreference(true);
+  EXPECT_TRUE(power_manager_client()->policy().charge_limit_enabled());
+
+  SetChargeLimitPreference(false);
+  EXPECT_FALSE(power_manager_client()->policy().charge_limit_enabled());
+}
+
+TEST_F(PowerPrefsTest, AdaptiveChargingAndChargeLimit_MutuallyExclusive) {
+  // Enable adaptive charging hardware support.
+  power_manager::PowerSupplyProperties power_props;
+  power_props.set_adaptive_charging_supported(true);
+  power_manager_client()->UpdatePowerProperties(power_props);
+
+  // When both adaptive charging and charge limit enabled, adaptive charging
+  // should be disabled. This ensures that the two features do not conflict.
+  SetAdaptiveChargingPreference(true);
+  SetChargeLimitPreference(true);
+  EXPECT_FALSE(power_manager_client()->policy().adaptive_charging_enabled());
+  EXPECT_TRUE(power_manager_client()->policy().charge_limit_enabled());
+}
 }  // namespace ash

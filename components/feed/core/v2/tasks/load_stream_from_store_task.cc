@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <utility>
 
+#include "base/check.h"
 #include "base/time/time.h"
 #include "components/feed/core/proto/v2/store.pb.h"
 #include "components/feed/core/proto/v2/wire/reliability_logging_enums.pb.h"
@@ -36,7 +37,7 @@ LoadStreamFromStoreTask::LoadStreamFromStoreTask(
     bool missed_last_refresh,
     base::OnceCallback<void(Result)> callback)
     : load_type_(load_type),
-      feed_stream_(*feed_stream),
+      feed_stream_(feed_stream),
       stream_type_(stream_type),
       store_(store),
       missed_last_refresh_(missed_last_refresh),
@@ -65,20 +66,33 @@ void LoadStreamFromStoreTask::LoadStreamDone(
              feedwire::DiscoverCardReadCacheResult::EMPTY_SESSION);
     return;
   }
+  if (!ignore_account_) {
+    if (result.stream_data.signed_in()) {
+      const AccountInfo& account_info = feed_stream_->GetAccountInfo();
+      if (result.stream_data.gaia() != account_info.gaia.ToString() ||
+          result.stream_data.email() != account_info.email) {
+        Complete(LoadStreamStatus::kDataInStoreIsForAnotherUser,
+                 feedwire::DiscoverCardReadCacheResult::FAILED);
+        return;
+      }
+    }
+  }
+
   content_ids_ = feedstore::GetContentIds(result.stream_data);
   if (!ignore_staleness_) {
     content_age_ =
         base::Time::Now() - feedstore::GetLastAddedTime(result.stream_data);
 
-    if (content_age_ > GetFeedConfig().content_expiration_threshold) {
+    const feedstore::Metadata& metadata = feed_stream_->GetMetadata();
+
+    if (ContentInvalidFromAge(metadata, result.stream_type, content_age_)) {
       Complete(LoadStreamStatus::kDataInStoreIsExpired,
                feedwire::DiscoverCardReadCacheResult::STALE);
       return;
     }
-    if (content_age_ < base::TimeDelta()) {
+    if (content_age_.is_negative()) {
       stale_reason_ = LoadStreamStatus::kDataInStoreIsStaleTimestampInFuture;
-    } else if (ShouldWaitForNewContent(feed_stream_.GetMetadata(),
-                                       result.stream_type, true,
+    } else if (ShouldWaitForNewContent(metadata, result.stream_type,
                                        content_age_)) {
       stale_reason_ = LoadStreamStatus::kDataInStoreIsStale;
     } else if (missed_last_refresh_) {

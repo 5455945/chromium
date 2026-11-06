@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include <stdint.h>
 
 #include "base/time/time.h"
-#include "media/base/audio_bus.h"
+#include "media/base/audio_glitch_info.h"
 #include "media/base/media_export.h"
 
 // Low-level audio output support. To make sound there are 3 objects involved:
@@ -50,6 +50,8 @@
 
 namespace media {
 
+class AudioBus;
+
 class MEDIA_EXPORT AudioOutputStream {
  public:
   // Audio sources must implement AudioSourceCallback. This interface will be
@@ -58,7 +60,7 @@ class MEDIA_EXPORT AudioOutputStream {
   // itself such as creating Windows or initializing COM.
   class MEDIA_EXPORT AudioSourceCallback {
    public:
-    virtual ~AudioSourceCallback() {}
+    virtual ~AudioSourceCallback() = default;
 
     // Provide more data by fully filling |dest|. The source will return the
     // number of frames it filled. |delay| is the duration of audio written to
@@ -67,12 +69,18 @@ class MEDIA_EXPORT AudioOutputStream {
     // when the first sample added to |dest| is expected to be played out can be
     // calculated by adding |delay| to |delay_timestamp|. The accuracy of
     // |delay| and |delay_timestamp| may vary depending on the platform and
-    // implementation. |prior_frames_skipped| is the number of frames skipped by
-    // the consumer.
+    // implementation. |glitch_info| contains information about all
+    // glitches which have occurred since the last call to OnMoreData().
     virtual int OnMoreData(base::TimeDelta delay,
                            base::TimeTicks delay_timestamp,
-                           int prior_frames_skipped,
+                           const AudioGlitchInfo& glitch_info,
                            AudioBus* dest) = 0;
+
+    virtual int OnMoreData(base::TimeDelta delay,
+                           base::TimeTicks delay_timestamp,
+                           const AudioGlitchInfo& glitch_info,
+                           AudioBus* dest,
+                           bool is_mixing);
 
     // There was an error while playing a buffer. Audio source cannot be
     // destroyed yet. No direct action needed by the AudioStream, but it is
@@ -83,14 +91,20 @@ class MEDIA_EXPORT AudioOutputStream {
     // unhandled kDeviceChange type error is likely to result in further errors;
     // so it's recommended that sources close their existing output stream and
     // request a new one when this error is sent.
+    //
+    // Note: Calls should not be made directly to `AudioOutputStream` from the
+    // `OnError` callback, as some implementations are holding locks. Calls
+    // should be posted instead.
     enum class ErrorType { kUnknown, kDeviceChange };
     virtual void OnError(ErrorType type) = 0;
   };
 
-  virtual ~AudioOutputStream() {}
+  virtual ~AudioOutputStream() = default;
 
-  // Open the stream. false is returned if the stream cannot be opened.  Open()
-  // must always be followed by a call to Close() even if Open() fails.
+  // Opens the stream. Returns `false` if the stream cannot be opened. This
+  // method should not be called more than once, and must always be eventually
+  // followed by a call to `Close()`, even if `Open()` fails and returns
+  // `false`.
   virtual bool Open() = 0;
 
   // Starts playing audio and generating AudioSourceCallback::OnMoreData().
@@ -123,6 +137,11 @@ class MEDIA_EXPORT AudioOutputStream {
   // Flushes the stream. This should only be called if the stream is not
   // playing. (i.e. called after Stop or Open)
   virtual void Flush() = 0;
+
+  // Constrains a timedelta representing a delay to between 0 and 10 seconds.
+  // This is used by OS implementations to prevent miscalculated delay values
+  // from creating large amounts of noise in the delay stats.
+  static base::TimeDelta BoundedDelay(base::TimeDelta delay);
 };
 
 // Models an audio sink receiving recorded audio from the audio driver.
@@ -130,6 +149,13 @@ class MEDIA_EXPORT AudioInputStream {
  public:
   class MEDIA_EXPORT AudioInputCallback {
    public:
+    enum class Error {
+      // The stream failed to start.
+      kStartupFailed,
+      // A mid-stream error occurred during active audio capturing.
+      kRuntimeError,
+    };
+
     // Called by the audio recorder when a full packet of audio data is
     // available. This is called from a special audio thread and the
     // implementation should return as soon as possible.
@@ -140,19 +166,23 @@ class MEDIA_EXPORT AudioInputStream {
     // monotonically increasing.
     virtual void OnData(const AudioBus* source,
                         base::TimeTicks capture_time,
-                        double volume) = 0;
+                        double volume,
+                        const AudioGlitchInfo& audio_glitch_info) = 0;
 
-    // There was an error while recording audio. The audio sink cannot be
-    // destroyed yet. No direct action needed by the AudioInputStream, but it
-    // is a good place to stop accumulating sound data since is is likely that
-    // recording will not continue.
-    virtual void OnError() = 0;
+    // Called when an error occurs.
+    // |error_code| indicates the specific type of error (e.g., a startup
+    // failure, or a mid-stream runtime error).
+    //
+    // Note: Calls should not be made directly to `AudioInputStream` from the
+    // `OnError` callback, as some implementations are holding locks. Calls
+    // should be posted instead.
+    virtual void OnError(Error error_code) = 0;
 
    protected:
-    virtual ~AudioInputCallback() {}
+    virtual ~AudioInputCallback() = default;
   };
 
-  virtual ~AudioInputStream() {}
+  virtual ~AudioInputStream() = default;
 
   enum class OpenOutcome {
     kSuccess,
@@ -163,6 +193,8 @@ class MEDIA_EXPORT AudioInputStream {
     kFailedSystemPermissions,
     // Failed to open as the device is exclusively opened by another app.
     kFailedInUse,
+    // Failed to open as the device has been removed.
+    kFailedDeviceRemoved,
   };
 
   // Open the stream and prepares it for recording. Call Start() to actually

@@ -1,5 +1,5 @@
-#!/usr/bin/env python
-# Copyright 2015 The Chromium Authors. All rights reserved.
+#!/usr/bin/env python3
+# Copyright 2015 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -16,27 +16,46 @@ image, it will not get smaller. 256x256 icons should be PNG-formatted first.
 """
 
 import argparse
+import io
 import logging
 import os
-import StringIO
 import sys
 
 import ico_tools
+
 
 def main(args=None):
   if args is None:
     args = sys.argv[1:]
 
   parser = argparse.ArgumentParser(description='Crush Windows ICO files.')
-  parser.add_argument('files', metavar='ICO', type=argparse.FileType('r+b'),
-                      nargs='+', help='.ico files to be crushed')
-  parser.add_argument('-o', dest='optimization_level', metavar='OPT', type=int,
-                      help='optimization level')
-  parser.add_argument('--lint', dest='lint', action='store_true',
-                      help='test the ICO file without modifying (set status '
-                      'to 1 on error)')
-  parser.add_argument('-d', '--debug', dest='debug', action='store_true',
-                      help='enable debug logging')
+  parser.add_argument(
+    'files',
+    metavar='ICO',
+    type=argparse.FileType('r+b'),
+    nargs='+',
+    help='.ico files to be crushed',
+  )
+  parser.add_argument(
+    '-o',
+    dest='optimization_level',
+    metavar='OPT',
+    type=int,
+    help='optimization level',
+  )
+  parser.add_argument(
+    '--lint',
+    dest='lint',
+    action='store_true',
+    help='test the ICO file without modifying (set status to 1 on error)',
+  )
+  parser.add_argument(
+    '-d',
+    '--debug',
+    dest='debug',
+    action='store_true',
+    help='enable debug logging',
+  )
 
   args = parser.parse_args()
 
@@ -45,7 +64,7 @@ def main(args=None):
 
   failed = False
   for file in args.files:
-    buf = StringIO.StringIO()
+    buf = io.BytesIO()
     file.seek(0, os.SEEK_END)
     old_length = file.tell()
     file.seek(0, os.SEEK_SET)
@@ -72,10 +91,17 @@ def main(args=None):
     else:
       saving = old_length - new_length
       saving_percent = float(saving) / old_length
-      logging.info('%s : %d => %d (%d bytes : %d %%)', file.name, old_length,
-                   new_length, saving, int(saving_percent * 100))
+      logging.info(
+        '%s : %d => %d (%d bytes : %d %%)',
+        file.name,
+        old_length,
+        new_length,
+        saving,
+        int(saving_percent * 100),
+      )
 
   return failed
+
 
 if __name__ == '__main__':
   sys.exit(main())

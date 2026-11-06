@@ -1,11 +1,10 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_MEDIA_ROUTER_CHROME_MEDIA_ROUTER_FACTORY_H_
 #define CHROME_BROWSER_MEDIA_ROUTER_CHROME_MEDIA_ROUTER_FACTORY_H_
 
-#include "base/gtest_prod_util.h"
 #include "base/lazy_instance.h"
 #include "components/media_router/browser/media_router_factory.h"
 
@@ -15,8 +14,8 @@ class BrowserContext;
 
 namespace media_router {
 
-// A version of MediaRouterFactory for Chrome, which refers incognito contexts
-// to their parent Profile. It also adds support for desktop features.
+// A version of MediaRouterFactory for Chrome. It adds support for desktop
+// features.
 class ChromeMediaRouterFactory : public MediaRouterFactory {
  public:
   ChromeMediaRouterFactory(const ChromeMediaRouterFactory&) = delete;
@@ -29,8 +28,6 @@ class ChromeMediaRouterFactory : public MediaRouterFactory {
 
  private:
   friend struct base::LazyInstanceTraitsBase<ChromeMediaRouterFactory>;
-  FRIEND_TEST_ALL_PREFIXES(MediaRouterFactoryTest,
-                           IncognitoBrowserContextShutdown);
 
   ChromeMediaRouterFactory();
   ~ChromeMediaRouterFactory() override;
@@ -38,9 +35,8 @@ class ChromeMediaRouterFactory : public MediaRouterFactory {
   // BrowserContextKeyedServiceFactory interface.
   content::BrowserContext* GetBrowserContextToUse(
       content::BrowserContext* context) const override;
-  KeyedService* BuildServiceInstanceFor(
+  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
       content::BrowserContext* context) const override;
-  void BrowserContextShutdown(content::BrowserContext* context) override;
 };
 
 }  // namespace media_router

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,58 +6,49 @@ package org.chromium.chrome.browser.lens;
 
 import android.net.Uri;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+
 /**
  * A wrapper class for the Lens intent params (e.g. used in LensController.startLens)
  * to provide a more consistent and extensible API.
  */
+@NullMarked
 public class LensIntentParams {
-    private Uri mImageUri;
-    private String mSrcUrl;
-    private String mImageTitleOrAltText;
-    private String mPageUrl;
+    private @Nullable Uri mImageUri;
+    private @Nullable String mSrcUrl;
+    private @Nullable String mImageTitleOrAltText;
+    private @Nullable String mPageUrl;
     private boolean mIsIncognito;
-    // TODO(b/182675578): Remove requiresConfirmation from LensIntentParams.
-    private boolean mRequiresConfirmation;
     private int mIntentType;
-    private String mProactiveSessionId;
+    private @Nullable String mProactiveSessionId;
     private int mProactiveQueryId;
     private @LensEntryPoint int mLensEntryPoint;
+    private @Nullable String mAccountName;
+    private boolean mForceUnlockOrientation;
 
-    /**
-     * Builder class for LensIntentParams.
-     */
+    /** Builder class for LensIntentParams. */
     public static class Builder {
         private Uri mImageUri = Uri.EMPTY;
-        private String mSrcUrl;
-        private String mImageTitleOrAltText;
-        private String mPageUrl;
+        private @Nullable String mSrcUrl;
+        private @Nullable String mImageTitleOrAltText;
+        private @Nullable String mPageUrl;
         private boolean mIsIncognito;
-        private boolean mRequiresConfirmation;
         private int mIntentType;
-        private String mProactiveSessionId;
+        private @Nullable String mProactiveSessionId;
         private int mProactiveQueryId;
         private @LensEntryPoint int mLensEntryPoint;
+        private @Nullable String mAccountName;
+        private boolean mForceUnlockOrientation;
 
         public Builder() {}
 
-        // TODO(b/180967190): remove the with* methods for the required params once
-        // downstream references are updated.
         // lensEntryPoint and isIncognito are required params when creating the
         // LensIntentParams.
         public Builder(@LensEntryPoint int lensEntryPoint, boolean isIncognito) {
             this();
             this.mLensEntryPoint = lensEntryPoint;
             this.mIsIncognito = isIncognito;
-        }
-
-        /**
-         * Sets the Lens entry point.
-         *
-         * @param lensEntryPoint The entry point to set as a parameter
-         */
-        public Builder withLensEntryPoint(@LensEntryPoint int lensEntryPoint) {
-            this.mLensEntryPoint = lensEntryPoint;
-            return this;
         }
 
         /**
@@ -101,27 +92,6 @@ public class LensIntentParams {
         }
 
         /**
-         * Sets whether the client is incognito.
-         *
-         * @param isIncognito Whether the client is incognito as a boolean parameter
-         */
-        public Builder withIsIncognito(boolean isIncognito) {
-            this.mIsIncognito = isIncognito;
-            return this;
-        }
-
-        /**
-         * Sets whether the client requires account confirmation.
-         *
-         * @param requiresConfirmation Whether the client requires account confirmation as a boolean
-         *         parameter
-         */
-        public Builder withRequiresConfirmation(boolean requiresConfirmation) {
-            this.mRequiresConfirmation = requiresConfirmation;
-            return this;
-        }
-
-        /**
          * Sets the intent type.
          *
          * @param intentType The intent type to set as a parameter
@@ -153,16 +123,36 @@ public class LensIntentParams {
         }
 
         /**
-         * Build LensIntentParams object from parameters set.
+         * Sets the account name.
+         *
+         * @param accountName The account name to set as a parameter
          */
+        public Builder withAccountName(@Nullable String accountName) {
+            this.mAccountName = accountName;
+            return this;
+        }
+
+        /**
+         * Sets whether to force unlock orientation in Lens which causes Lens to enter landscape
+         * mode when the device is rotated.
+         *
+         * @param forceUnlockOrientation Whether to force unlock orientation.
+         */
+        public Builder withForceUnlockOrientation(boolean forceUnlockOrientation) {
+            this.mForceUnlockOrientation = forceUnlockOrientation;
+            return this;
+        }
+
+        /** Build LensIntentParams object from parameters set. */
         public LensIntentParams build() {
             LensIntentParams lensIntentParams = new LensIntentParams();
             lensIntentParams.mIsIncognito = mIsIncognito;
             lensIntentParams.mLensEntryPoint = mLensEntryPoint;
             lensIntentParams.mIntentType = mIntentType;
-            lensIntentParams.mRequiresConfirmation = mRequiresConfirmation;
             lensIntentParams.mProactiveSessionId = mProactiveSessionId;
             lensIntentParams.mProactiveQueryId = mProactiveQueryId;
+            lensIntentParams.mAccountName = mAccountName;
+            lensIntentParams.mForceUnlockOrientation = mForceUnlockOrientation;
             if (!Uri.EMPTY.equals(mImageUri)) {
                 lensIntentParams.mImageUri = mImageUri;
                 if (mSrcUrl != null) {
@@ -180,22 +170,22 @@ public class LensIntentParams {
     }
 
     /** Returns the imageUri for this set of params. */
-    public Uri getImageUri() {
+    public @Nullable Uri getImageUri() {
         return mImageUri;
     }
 
     /** Returns the pageUrl for this set of params. */
-    public String getPageUrl() {
+    public @Nullable String getPageUrl() {
         return mPageUrl;
     }
 
     /** Returns the srcUrl for this set of params. */
-    public String getSrcUrl() {
+    public @Nullable String getSrcUrl() {
         return mSrcUrl;
     }
 
     /** Returns the imageTitleOrAltText for this set of params. */
-    public String getImageTitleOrAltText() {
+    public @Nullable String getImageTitleOrAltText() {
         return mImageTitleOrAltText;
     }
 
@@ -204,18 +194,13 @@ public class LensIntentParams {
         return mIsIncognito;
     }
 
-    /** Returns the requiresConfirmation for this set of params. */
-    public boolean getRequiresConfirmation() {
-        return mRequiresConfirmation;
-    }
-
     /** Returns the intentType for this set of params. */
     public int getIntentType() {
         return mIntentType;
     }
 
     /** Returns the sessionId for this set of params. */
-    public String getProactiveSessionId() {
+    public @Nullable String getProactiveSessionId() {
         return mProactiveSessionId;
     }
 
@@ -227,5 +212,15 @@ public class LensIntentParams {
     /** Returns the {@link LensEntryPoint} for this set of params. */
     public @LensEntryPoint int getLensEntryPoint() {
         return mLensEntryPoint;
+    }
+
+    /** Returns the accountName for this set of params. */
+    public @Nullable String getAccountName() {
+        return mAccountName;
+    }
+
+    /** Returns the forceUnlockOrientation for this set of params. */
+    public boolean getForceUnlockOrientation() {
+        return mForceUnlockOrientation;
     }
 }

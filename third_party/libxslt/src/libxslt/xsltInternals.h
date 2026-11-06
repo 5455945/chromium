@@ -21,7 +21,6 @@
 #include <libxml/xmlstring.h>
 #include <libxslt/xslt.h>
 #include "xsltexports.h"
-#include "xsltlocale.h"
 #include "numbersInternals.h"
 
 #ifdef __cplusplus
@@ -291,6 +290,9 @@ struct _xsltTemplate {
     int              templMax;		/* Size of the templtes stack */
     xsltTemplatePtr *templCalledTab;	/* templates called */
     int             *templCountTab;  /* .. and how often */
+
+    /* Conflict resolution */
+    int position;
 };
 
 /**
@@ -1044,7 +1046,6 @@ struct _xsltStyleItemSort {
     int      descending;	/* sort */
     const xmlChar *lang;	/* sort */
     int      has_lang;		/* sort */
-    xsltLocale locale;		/* sort */
     const xmlChar *case_order;	/* sort */
     int      lower_first;	/* sort */
 
@@ -1374,7 +1375,6 @@ struct _xsltStylePreComp {
     int      descending;	/* sort */
     const xmlChar *lang;	/* sort */
     int      has_lang;		/* sort */
-    xsltLocale locale;		/* sort */
     const xmlChar *case_order;	/* sort */
     int      lower_first;	/* sort */
 
@@ -1410,6 +1410,8 @@ struct _xsltStylePreComp {
 
 #endif /* XSLT_REFACTORED */
 
+typedef struct _xsltRVTList xsltRVTList;
+typedef xsltRVTList *xsltRVTListPtr;
 
 /*
  * The in-memory structure corresponding to an XSLT Variable
@@ -1427,7 +1429,7 @@ struct _xsltStackElem {
     xmlNodePtr tree;		/* the sequence constructor if no eval
 				    string or the location */
     xmlXPathObjectPtr value;	/* The value if computed */
-    xmlDocPtr fragment;		/* The Result Tree Fragments (needed for XSLT 1.0)
+    xsltRVTListPtr fragment;	/* The Result Tree Fragments (needed for XSLT 1.0)
 				   which are bound to the variable's lifetime. */
     int level;                  /* the depth in the tree;
                                    -1 if persistent (e.g. a given xsl:with-param) */
@@ -1500,17 +1502,18 @@ struct _xsltStylesheet {
     /*
      * Template descriptions.
      */
-    xsltTemplatePtr templates;	/* the ordered list of templates */
-    void *templatesHash;	/* hash table or wherever compiled templates
-				   information is stored */
-    void *rootMatch;		/* template based on / */
-    void *keyMatch;		/* template based on key() */
-    void *elemMatch;		/* template based on * */
-    void *attrMatch;		/* template based on @* */
-    void *parentMatch;		/* template based on .. */
-    void *textMatch;		/* template based on text() */
-    void *piMatch;		/* template based on processing-instruction() */
-    void *commentMatch;		/* template based on comment() */
+    xsltTemplatePtr templates;           /* the ordered list of templates */
+    xmlHashTablePtr templatesHash;       /* hash table or wherever compiled
+                                            templates information is stored */
+    struct _xsltCompMatch *rootMatch;    /* template based on / */
+    struct _xsltCompMatch *keyMatch;     /* template based on key() */
+    struct _xsltCompMatch *elemMatch;    /* template based on * */
+    struct _xsltCompMatch *attrMatch;    /* template based on @* */
+    struct _xsltCompMatch *parentMatch;  /* template based on .. */
+    struct _xsltCompMatch *textMatch;    /* template based on text() */
+    struct _xsltCompMatch *piMatch;      /* template based on
+                                            processing-instruction() */
+    struct _xsltCompMatch *commentMatch; /* template based on comment() */
 
     /*
      * Namespace aliases.
@@ -1633,12 +1636,20 @@ struct _xsltStylesheet {
     xmlHashTablePtr namedTemplates; /* hash table of named templates */
 
     xmlXPathContextPtr xpathCtxt;
+
+    unsigned long opLimit;
+    unsigned long opCount;
+};
+
+struct _xsltRVTList {
+  xmlDocPtr RVT;
+  xsltRVTListPtr next;
 };
 
 typedef struct _xsltTransformCache xsltTransformCache;
 typedef xsltTransformCache *xsltTransformCachePtr;
 struct _xsltTransformCache {
-    xmlDocPtr RVT;
+    xsltRVTListPtr rvtList;
     int nbRVT;
     xsltStackElemPtr stackItems;
     int nbStackItems;
@@ -1658,6 +1669,13 @@ typedef enum {
     XSLT_OUTPUT_HTML,
     XSLT_OUTPUT_TEXT
 } xsltOutputType;
+
+typedef void *
+(*xsltNewLocaleFunc)(const xmlChar *lang, int lowerFirst);
+typedef void
+(*xsltFreeLocaleFunc)(void *locale);
+typedef xmlChar *
+(*xsltGenSortKeyFunc)(void *locale, const xmlChar *lang);
 
 typedef enum {
     XSLT_STATE_OK = 0,
@@ -1738,8 +1756,8 @@ struct _xsltTransformContext {
      * handling of temporary Result Value Tree
      * (XSLT 1.0 term: "Result Tree Fragment")
      */
-    xmlDocPtr       tmpRVT;		/* list of RVT without persistance */
-    xmlDocPtr       persistRVT;		/* list of persistant RVTs */
+    xsltRVTListPtr  tmpRVTList;	        /* list of RVT without persistance */
+    xsltRVTListPtr  persistRVTList;     /* list of persistant RVTs */
     int             ctxtflags;          /* context processing flags */
 
     /*
@@ -1772,7 +1790,7 @@ struct _xsltTransformContext {
     xmlDocPtr initialContextDoc;
     xsltTransformCachePtr cache;
     void *contextVariable; /* the current variable item */
-    xmlDocPtr localRVT; /* list of local tree fragments; will be freed when
+    xsltRVTListPtr localRVTList; /* list of local tree fragments; will be freed when
 			   the instruction which created the fragment
                            exits */
     xmlDocPtr localRVTBase; /* Obsolete */
@@ -1782,6 +1800,12 @@ struct _xsltTransformContext {
     int maxTemplateVars;
     unsigned long opLimit;
     unsigned long opCount;
+    int sourceDocDirty;
+    unsigned long currentId; /* For generate-id() */
+
+    xsltNewLocaleFunc newLocale;
+    xsltFreeLocaleFunc freeLocale;
+    xsltGenSortKeyFunc genSortKey;
 };
 
 /**
@@ -1911,12 +1935,15 @@ XSLTPUBFUN int XSLTCALL
 			xsltFlagRVTs(
 						 xsltTransformContextPtr ctxt,
 						 xmlXPathObjectPtr obj,
-						 void *val);
+						 int val);
 XSLTPUBFUN void XSLTCALL
 			xsltFreeRVTs		(xsltTransformContextPtr ctxt);
 XSLTPUBFUN void XSLTCALL
-			xsltReleaseRVT		(xsltTransformContextPtr ctxt,
+			xsltReleaseRVT          (xsltTransformContextPtr ctxt,
 						 xmlDocPtr RVT);
+XSLTPUBFUN void XSLTCALL
+			xsltReleaseRVTList	(xsltTransformContextPtr ctxt,
+						 xsltRVTListPtr list);
 /*
  * Extra functions for Attribute Value Templates
  */
@@ -1975,4 +2002,3 @@ XSLTPUBFUN int XSLTCALL
 #endif
 
 #endif /* __XML_XSLT_H__ */
-

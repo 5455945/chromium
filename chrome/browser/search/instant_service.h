@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,31 +11,26 @@
 #include <vector>
 
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
+#include "base/scoped_multi_source_observation.h"
 #include "base/scoped_observation.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
-#include "chrome/browser/search/background/ntp_background_service.h"
-#include "chrome/browser/search/background/ntp_background_service_observer.h"
-#include "chrome/browser/themes/theme_service_observer.h"
 #include "components/history/core/browser/history_types.h"
-#include "components/image_fetcher/core/image_fetcher_impl.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/ntp_tiles/most_visited_sites.h"
 #include "components/ntp_tiles/ntp_tile.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_registry_simple.h"
-#include "content/public/browser/notification_observer.h"
-#include "content/public/browser/notification_registrar.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "content/public/browser/render_process_host_observer.h"
 #include "ui/native_theme/native_theme.h"
 #include "ui/native_theme/native_theme_observer.h"
 #include "url/gurl.h"
 
-#if defined(OS_ANDROID)
-#error "Instant is only used on desktop";
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/themes/theme_service_observer.h"
 #endif
 
 class InstantServiceObserver;
@@ -53,33 +48,36 @@ class BrowserContext;
 class RenderProcessHost;
 }  // namespace content
 
-extern const char kNtpCustomBackgroundMainColor[];
-
 // Tracks render process host IDs that are associated with Instant, i.e.
 // processes that are used to render an NTP. Also responsible for keeping
 // necessary information (most visited tiles and theme info) updated in those
 // renderer processes.
 class InstantService : public KeyedService,
-                       public NtpBackgroundServiceObserver,
-                       public content::NotificationObserver,
+                       public content::RenderProcessHostObserver,
                        public ntp_tiles::MostVisitedSites::Observer,
-                       public ui::NativeThemeObserver,
-                       public ThemeServiceObserver {
+                       public ui::NativeThemeObserver
+// TODO(b/562623656): Support ThemeService for on Desktop Android.
+#if !BUILDFLAG(IS_ANDROID)
+    ,
+                       public ThemeServiceObserver
+#endif
+{
  public:
   explicit InstantService(Profile* profile);
+
+  InstantService(const InstantService&) = delete;
+  InstantService& operator=(const InstantService&) = delete;
+
   ~InstantService() override;
 
-  // Add, remove, and query RenderProcessHost IDs that are associated with
-  // Instant processes.
-  void AddInstantProcess(int process_id);
+  // Add RenderProcessHosts that are associated with Instant processes and query
+  // based on PID.
+  void AddInstantProcess(content::RenderProcessHost* host);
   bool IsInstantProcess(int process_id) const;
 
   // Adds/Removes InstantService observers.
   virtual void AddObserver(InstantServiceObserver* observer);
   void RemoveObserver(InstantServiceObserver* observer);
-
-  // Register prefs associated with the NTP.
-  static void RegisterProfilePrefs(PrefRegistrySimple* registry);
 
   // Determine if this chrome-search: request is coming from an Instant render
   // process.
@@ -97,8 +95,10 @@ class InstantService : public KeyedService,
   // items.
   void OnNewTabPageOpened();
 
+#if !BUILDFLAG(IS_ANDROID)
   // ThemeServiceObserver implementation.
   void OnThemeChanged() override;
+#endif
 
   // Most visited item APIs.
   //
@@ -112,99 +112,33 @@ class InstantService : public KeyedService,
   // Invoked to update theme information for the NTP.
   virtual void UpdateNtpTheme();
 
-  // Invoked when a background pref update is received via sync, triggering
-  // an update of theme info.
-  void UpdateBackgroundFromSync();
-
   // Invoked by the InstantController to update most visited items details for
   // NTP.
   void UpdateMostVisitedInfo();
 
-  // Invoked when the background is reset on the NTP.
-  void ResetCustomBackgroundInfo();
-
-  // Invoked when a custom background is configured on the NTP.
-  void SetCustomBackgroundInfo(const GURL& background_url,
-                               const std::string& attribution_line_1,
-                               const std::string& attribution_line_2,
-                               const GURL& action_url,
-                               const std::string& collection_id);
-
-  // Invoked when a user selected the "Upload an image" option on the NTP.
-  void SelectLocalBackgroundImage(const base::FilePath& path);
-
   // Getter for |theme_| that will also initialize it if necessary.
   NtpTheme* GetInitializedNtpTheme();
 
-  // Used for testing.
-  void SetNativeThemeForTesting(ui::NativeTheme* theme);
-
-  // Used for testing.
-  void AddValidBackdropUrlForTesting(const GURL& url) const;
-
-  // Used for testing.
-  void AddValidBackdropCollectionForTesting(
-      const std::string& collection_id) const;
-
-  // Used for testing.
-  void SetNextCollectionImageForTesting(const CollectionImage& image) const;
-
-  // Returns whether having a custom background is disabled by policy.
-  bool IsCustomBackgroundDisabledByPolicy();
-
-  // Returns whether a custom background has been set by the user.
-  bool IsCustomBackgroundSet();
-
-  // Reset all NTP customizations to default. Marked virtual for mocking in
-  // tests.
-  virtual void ResetToDefault();
-
-  // Calculates the most frequent color of the image and stores it in prefs.
-  void UpdateCustomBackgroundColorAsync(
-      base::TimeTicks timestamp,
-      const gfx::Image& fetched_image,
-      const image_fetcher::RequestMetadata& metadata);
-
-  // Fetches the image for the given |fetch_url|.
-  void FetchCustomBackground(base::TimeTicks timestamp, const GURL& fetch_url);
-
  private:
   friend class InstantExtendedTest;
-  friend class InstantUnitTestBase;
-  friend class LocalNTPBackgroundsAndDarkModeTest;
+  friend class InstantBrowserTestBase;
   friend class TestInstantService;
 
-  FRIEND_TEST_ALL_PREFIXES(InstantExtendedTest, ProcessIsolation);
   FRIEND_TEST_ALL_PREFIXES(InstantServiceTest, GetNTPTileSuggestion);
-  FRIEND_TEST_ALL_PREFIXES(InstantServiceTest, DoesToggleShortcutsVisibility);
   FRIEND_TEST_ALL_PREFIXES(InstantServiceTest, TestNoNtpTheme);
-  FRIEND_TEST_ALL_PREFIXES(InstantServiceTest, TestUpdateCustomBackgroundColor);
-  FRIEND_TEST_ALL_PREFIXES(InstantServiceTest,
-                           LocalImageDoesNotUpdateCustomBackgroundColor);
-  FRIEND_TEST_ALL_PREFIXES(InstantServiceTest, RefreshesBackgroundAfter24Hours);
 
   // KeyedService:
   void Shutdown() override;
 
-  // NtpBackgroundServiceObserver:
-  void OnCollectionInfoAvailable() override {}
-  void OnCollectionImagesAvailable() override {}
-  void OnNextCollectionImageAvailable() override;
-  void OnNtpBackgroundServiceShuttingDown() override;
-
-  // content::NotificationObserver:
-  void Observe(int type,
-               const content::NotificationSource& source,
-               const content::NotificationDetails& details) override;
-
-  // Called when a renderer process is terminated.
-  void OnRendererProcessTerminated(int process_id);
+  // content::RenderProcessHostObserver:
+  void RenderProcessHostDestroyed(content::RenderProcessHost* host) override;
 
   // ui::NativeThemeObserver:
   void OnNativeThemeUpdated(ui::NativeTheme* observed_theme) override;
 
   // ntp_tiles::MostVisitedSites::Observer implementation.
   void OnURLsAvailable(
+      bool is_user_triggered,
       const std::map<ntp_tiles::SectionType, ntp_tiles::NTPTilesVector>&
           sections) override;
   void OnIconMadeAvailable(const GURL& site_url) override;
@@ -214,46 +148,15 @@ class InstantService : public KeyedService,
 
   void BuildNtpTheme();
 
-  void ApplyOrResetCustomBackgroundNtpTheme();
-
-  void ApplyCustomBackgroundNtpTheme();
-
-  // Marked virtual for mocking in tests.
-  virtual void ResetCustomBackgroundNtpTheme();
-
-  void FallbackToDefaultNtpTheme();
-
-  void RemoveLocalBackgroundImageCopy();
-
-  // Returns false if the custom background pref cannot be parsed, otherwise
-  // returns true and sets custom_background_url to the value in the pref.
-  bool IsCustomBackgroundPrefValid(GURL& custom_background_url);
-
-  // Update the background pref to point to
-  // chrome://new-tab-page/background.jpg.
-  void SetBackgroundToLocalResource();
-
-  // Updates custom background prefs with color if the background hasn't changed
-  // since the calculation started.
-  void UpdateCustomBackgroundPrefsWithColor(base::TimeTicks timestamp,
-                                            SkColor color);
-
-  void SetImageFetcherForTesting(image_fetcher::ImageFetcher* image_fetcher);
-
-  void SetClockForTesting(base::Clock* clock);
-
   base::TimeTicks GetBackgroundUpdatedTimestampForTesting() {
     return background_updated_timestamp_;
   }
-
-  // Requests a new background image if it hasn't been updated in >24 hours.
-  void RefreshBackgroundIfNeeded();
 
   // Sets NTP elements theme info that are overridden when custom
   // background is used.
   void SetNtpElementsNtpTheme();
 
-  Profile* const profile_;
+  const raw_ptr<Profile> profile_;
 
   // The process ids associated with Instant processes.
   std::set<int> process_ids_;
@@ -267,34 +170,23 @@ class InstantService : public KeyedService,
 
   base::ObserverList<InstantServiceObserver>::Unchecked observers_;
 
-  content::NotificationRegistrar registrar_;
-
   // Data source for NTP tiles (aka Most Visited tiles). May be null.
   std::unique_ptr<ntp_tiles::MostVisitedSites> most_visited_sites_;
 
   PrefChangeRegistrar pref_change_registrar_;
 
-  PrefService* pref_service_;
+  raw_ptr<PrefService> pref_service_;
+
+  base::ScopedMultiSourceObservation<content::RenderProcessHost,
+                                     content::RenderProcessHostObserver>
+      host_observation_{this};
 
   base::ScopedObservation<ui::NativeTheme, ui::NativeThemeObserver>
       theme_observation_{this};
 
-  base::ScopedObservation<NtpBackgroundService, NtpBackgroundServiceObserver>
-      background_service_observation_{this};
-
-  ui::NativeTheme* native_theme_;
-
-  NtpBackgroundService* background_service_;
-
-  std::unique_ptr<image_fetcher::ImageFetcher> image_fetcher_;
-
   base::TimeTicks background_updated_timestamp_;
 
-  base::Clock* clock_;
-
   base::WeakPtrFactory<InstantService> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(InstantService);
 };
 
 #endif  // CHROME_BROWSER_SEARCH_INSTANT_SERVICE_H_

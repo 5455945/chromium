@@ -1,11 +1,11 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_CREDENTIAL_PROVIDER_TEST_COM_FAKES_H_
 #define CHROME_CREDENTIAL_PROVIDER_TEST_COM_FAKES_H_
 
-#include <atlcomcli.h>
+
 #include <credentialprovider.h>
 #include <propkey.h>
 
@@ -13,6 +13,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "base/win/atl.h"
+#include "base/win/scoped_bstr.h"
 #include "chrome/credential_provider/gaiacp/gaia_credential_provider.h"
 #include "chrome/credential_provider/gaiacp/gaia_credential_provider_i.h"
 #include "chrome/credential_provider/test/test_credential_provider.h"
@@ -142,12 +144,19 @@ class FakeCredentialProviderCredentialEvents
   CREDENTIAL_PROVIDER_FIELD_STATE GetFieldState(
       ICredentialProviderCredential* pcpc,
       DWORD dwFieldID);
+  CREDENTIAL_PROVIDER_FIELD_INTERACTIVE_STATE GetFieldInteractiveState(
+      ICredentialProviderCredential* pcpc,
+      DWORD dwFieldID);
   LPCWSTR GetFieldString(ICredentialProviderCredential* pcpc, DWORD dwFieldID);
 
  private:
   std::unordered_map<ICredentialProviderCredential*,
                      std::unordered_map<DWORD, CREDENTIAL_PROVIDER_FIELD_STATE>>
       field_states_;
+  std::unordered_map<
+      ICredentialProviderCredential*,
+      std::unordered_map<DWORD, CREDENTIAL_PROVIDER_FIELD_INTERACTIVE_STATE>>
+      field_interactive_states_;
   std::unordered_map<ICredentialProviderCredential*,
                      std::unordered_map<DWORD, std::wstring>>
       field_string_;
@@ -160,9 +169,9 @@ class FakeCredentialProviderCredentialEvents
 class CTestGaiaCredentialProvider : public CGaiaCredentialProvider,
                                     public ITestCredentialProvider {
  public:
-  const CComBSTR& STDMETHODCALLTYPE username() const override;
-  const CComBSTR& STDMETHODCALLTYPE password() const override;
-  const CComBSTR& STDMETHODCALLTYPE sid() const override;
+  const base::win::ScopedBstr& STDMETHODCALLTYPE username() const override;
+  const base::win::ScopedBstr& STDMETHODCALLTYPE password() const override;
+  const base::win::ScopedBstr& STDMETHODCALLTYPE sid() const override;
   bool STDMETHODCALLTYPE credentials_changed_fired() const override;
   void STDMETHODCALLTYPE ResetCredentialsChangedFired() override;
 
@@ -186,9 +195,9 @@ class CTestGaiaCredentialProvider : public CGaiaCredentialProvider,
   ~CTestGaiaCredentialProvider() override;
 
  private:
-  CComBSTR username_;
-  CComBSTR password_;
-  CComBSTR sid_;
+  base::win::ScopedBstr username_;
+  base::win::ScopedBstr password_;
+  base::win::ScopedBstr sid_;
   BOOL credentials_changed_fired_ = FALSE;
 };
 

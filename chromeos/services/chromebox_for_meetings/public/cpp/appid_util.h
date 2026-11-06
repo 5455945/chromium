@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,14 @@
 
 #include <string>
 
+#include "base/component_export.h"
+
 namespace chromeos {
 namespace cfm {
 
 // Returns true if the id provided matches a valid CfM PA/PWA appid.
-bool IsChromeboxForMeetingsAppId(const std::string& app_id);
+COMPONENT_EXPORT(CHROMEOS_CFMSERVICE)
+bool IsChromeboxForMeetingsHashedAppId(const std::string& app_id);
 
 }  // namespace cfm
 }  // namespace chromeos

@@ -1,8 +1,10 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/device/public/cpp/generic_sensor/sensor_traits.h"
+
+#include <cmath>
 
 namespace device {
 
@@ -12,8 +14,6 @@ double GetSensorMaxAllowedFrequency(SensorType type) {
   switch (type) {
     case SensorType::AMBIENT_LIGHT:
       return SensorTraits<SensorType::AMBIENT_LIGHT>::kMaxAllowedFrequency;
-    case SensorType::PROXIMITY:
-      return SensorTraits<SensorType::PROXIMITY>::kMaxAllowedFrequency;
     case SensorType::ACCELEROMETER:
       return SensorTraits<SensorType::ACCELEROMETER>::kMaxAllowedFrequency;
     case SensorType::LINEAR_ACCELERATION:
@@ -25,8 +25,6 @@ double GetSensorMaxAllowedFrequency(SensorType type) {
       return SensorTraits<SensorType::GYROSCOPE>::kMaxAllowedFrequency;
     case SensorType::MAGNETOMETER:
       return SensorTraits<SensorType::MAGNETOMETER>::kMaxAllowedFrequency;
-    case SensorType::PRESSURE:
-      return SensorTraits<SensorType::PRESSURE>::kMaxAllowedFrequency;
     case SensorType::ABSOLUTE_ORIENTATION_EULER_ANGLES:
       return SensorTraits<
           SensorType::ABSOLUTE_ORIENTATION_EULER_ANGLES>::kMaxAllowedFrequency;
@@ -41,16 +39,12 @@ double GetSensorMaxAllowedFrequency(SensorType type) {
           SensorType::RELATIVE_ORIENTATION_QUATERNION>::kMaxAllowedFrequency;
     // No default so the compiler will warn us if a new type is added.
   }
-  NOTREACHED() << "Unknown sensor type " << type;
-  return SensorTraits<SensorType::kMaxValue>::kMaxAllowedFrequency;
 }
 
 double GetSensorDefaultFrequency(mojom::SensorType type) {
   switch (type) {
     case SensorType::AMBIENT_LIGHT:
       return SensorTraits<SensorType::AMBIENT_LIGHT>::kDefaultFrequency;
-    case SensorType::PROXIMITY:
-      return SensorTraits<SensorType::PROXIMITY>::kDefaultFrequency;
     case SensorType::ACCELEROMETER:
       return SensorTraits<SensorType::ACCELEROMETER>::kDefaultFrequency;
     case SensorType::LINEAR_ACCELERATION:
@@ -61,8 +55,6 @@ double GetSensorDefaultFrequency(mojom::SensorType type) {
       return SensorTraits<SensorType::GYROSCOPE>::kDefaultFrequency;
     case SensorType::MAGNETOMETER:
       return SensorTraits<SensorType::MAGNETOMETER>::kDefaultFrequency;
-    case SensorType::PRESSURE:
-      return SensorTraits<SensorType::PRESSURE>::kDefaultFrequency;
     case SensorType::ABSOLUTE_ORIENTATION_EULER_ANGLES:
       return SensorTraits<
           SensorType::ABSOLUTE_ORIENTATION_EULER_ANGLES>::kDefaultFrequency;
@@ -77,8 +69,11 @@ double GetSensorDefaultFrequency(mojom::SensorType type) {
           SensorType::RELATIVE_ORIENTATION_QUATERNION>::kDefaultFrequency;
     // No default so the compiler will warn us if a new type is added.
   }
-  NOTREACHED() << "Unknown sensor type " << type;
-  return SensorTraits<SensorType::kMaxValue>::kDefaultFrequency;
+}
+
+bool IsValidSensorFrequency(double frequency) {
+  // Rejects NaN, +/-inf, zero and negative frequencies.
+  return std::isfinite(frequency) && frequency > 0;
 }
 
 }  // namespace device

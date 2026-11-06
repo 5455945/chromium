@@ -1,9 +1,10 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/frame/csp/csp_source.h"
 
+#include "base/memory/raw_ptr_exclusion.h"
 #include "services/network/public/mojom/content_security_policy.mojom-blink.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/core/dom/document.h"
@@ -322,26 +323,6 @@ TEST(CSPSourceTest, HostMatches) {
     EXPECT_FALSE(
         CSPSourceMatches(*source, "http", KURL(base, "http://.foo.bar")));
   }
-
-  // Host matching is case-insensitive.
-  {
-    auto source = network::mojom::blink::CSPSource::New(
-        "", "FoO.BaR", url::PORT_UNSPECIFIED, "", false, false);
-    EXPECT_TRUE(
-        CSPSourceMatches(*source, "http", KURL(base, "http://foo.bar")));
-    EXPECT_FALSE(
-        CSPSourceMatches(*source, "http", KURL(base, "http://sub.foo.bar")));
-  }
-
-  // Wildcarded host matching is case-insensitive.
-  {
-    auto source = network::mojom::blink::CSPSource::New(
-        "", "FoO.BaR", url::PORT_UNSPECIFIED, "", true, false);
-    EXPECT_TRUE(
-        CSPSourceMatches(*source, "http", KURL(base, "http://sub.foo.bar")));
-    EXPECT_FALSE(
-        CSPSourceMatches(*source, "http", KURL(base, "http://foo.bar")));
-  }
 }
 
 TEST(CSPSourceTest, MatchingAsSelf) {
@@ -357,7 +338,8 @@ TEST(CSPSourceTest, MatchingAsSelf) {
   };
   struct TestCase {
     const Source self_source;
-    const String& url;
+    // RAW_PTR_EXCLUSION: Stack-scoped.
+    RAW_PTR_EXCLUSION const String& url;
     bool expected;
   } cases[] = {
       // Same origin

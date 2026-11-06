@@ -1,11 +1,10 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.customtabs;
 
-import static junit.framework.Assert.assertEquals;
-
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -17,24 +16,27 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.Mockito;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.ParameterizedRobolectricTestRunner;
 import org.robolectric.ParameterizedRobolectricTestRunner.Parameter;
 import org.robolectric.ParameterizedRobolectricTestRunner.Parameters;
-import org.robolectric.annotation.Config;
 
+import org.chromium.base.Callback;
+import org.chromium.base.test.BaseRobolectricTestRule;
 import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
 import org.chromium.chrome.browser.browserservices.intents.WebappExtras;
+import org.chromium.chrome.browser.customtabs.content.CustomTabActivityNavigationController.FinishReason;
 import org.chromium.chrome.browser.customtabs.content.CustomTabActivityTabController;
 import org.chromium.chrome.browser.customtabs.content.CustomTabActivityTabProvider;
+import org.chromium.chrome.browser.customtabs.features.minimizedcustomtab.CustomTabMinimizationManagerHolder;
 import org.chromium.chrome.browser.flags.ActivityType;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.tab.state.CriticalPersistedTabData;
-import org.chromium.chrome.browser.tasks.tab_management.TabUiUnitTestUtils;
 import org.chromium.content_public.browser.NavigationController;
 import org.chromium.content_public.browser.NavigationEntry;
 import org.chromium.content_public.browser.NavigationHistory;
@@ -42,38 +44,40 @@ import org.chromium.content_public.browser.WebContents;
 import org.chromium.url.GURL;
 import org.chromium.url.JUnitTestGURLs;
 
+import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.Stack;
+import java.util.Deque;
 
-/**
- * Tests for {@link CloseButtonNavigator}.
- */
+/** Tests for {@link CloseButtonNavigator}. */
 @RunWith(ParameterizedRobolectricTestRunner.class)
-@Config(sdk = 21, manifest = Config.NONE)
 public class CloseButtonNavigatorTest {
-
     @Parameters
     public static Collection<Object[]> data() {
         return Arrays.asList(new Object[][] {{true}, {false}});
     }
+
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
+
+    @Rule(order = -2)
+    public BaseRobolectricTestRule mBaseRule = new BaseRobolectricTestRule();
 
     @Parameter(0)
     public boolean mIsWebapp;
 
     @Mock public CustomTabActivityTabController mTabController;
     @Mock public CustomTabActivityTabProvider mTabProvider;
-    @Mock
-    public WebappExtras mWebappExtras;
-    @Mock
-    public BrowserServicesIntentDataProvider mIntentDataProvider;
+    @Mock public WebappExtras mWebappExtras;
+    @Mock public BrowserServicesIntentDataProvider mIntentDataProvider;
+    @Mock public CustomTabMinimizationManagerHolder mMinimizationManagerHolder;
 
-    private final Stack<Tab> mTabs = new Stack<>();
+    private final Deque<Tab> mTabs = new ArrayDeque<>();
     private CloseButtonNavigator mCloseButtonNavigator;
+    private Callback<@FinishReason Integer> mFinishCallback;
 
     @Before
+    @SuppressWarnings("DirectInvocationOnMock")
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
 
         if (!mIsWebapp) {
             mWebappExtras = null;
@@ -82,29 +86,53 @@ public class CloseButtonNavigatorTest {
         doReturn(mIsWebapp ? ActivityType.WEBAPP : ActivityType.CUSTOM_TAB)
                 .when(mIntentDataProvider)
                 .getActivityType();
-
+        mFinishCallback =
+                reason -> {
+                    // FinishCallback is invoked only if there is a single tab left to close.
+                    assertTrue(mTabController.onlyOneTabRemaining());
+                    mTabs.removeFirst();
+                };
         mCloseButtonNavigator =
-                new CloseButtonNavigator(mTabController, mTabProvider, mIntentDataProvider);
+                new CloseButtonNavigator(
+                        mTabController,
+                        mTabProvider,
+                        mIntentDataProvider,
+                        mMinimizationManagerHolder);
 
         // Set up our mTabs to act as the mock tab model:
         // - mTabController.closeTab removes the top tab.
+        // - mTabController.onlyOneTabRemaining tells when the last tab is being removed.
         // - mTabProvider.getTab returns the top tab.
-        Mockito.doAnswer((invocation) -> {
-            mTabs.pop();
-            return null;  // Annoyingly we have to return something.
-        }).when(mTabController).closeTab();
-        when(mTabProvider.getTab()).thenAnswer(invocation -> {
-            if (mTabs.empty()) return null;
-            return mTabs.peek();
-        });
+        Mockito.doAnswer(
+                        (invocation) -> {
+                            mTabs.removeFirst();
+                            return null; // Annoyingly we have to return something.
+                        })
+                .when(mTabController)
+                .closeTab();
+        when(mTabController.onlyOneTabRemaining()).thenAnswer(invocation -> mTabs.size() == 1);
+        when(mTabProvider.getTab())
+                .thenAnswer(
+                        invocation -> {
+                            return mTabs.peekFirst();
+                        });
     }
 
     private Tab createTabWithNavigationHistory(GURL... urls) {
         NavigationHistory history = new NavigationHistory();
 
         for (GURL url : urls) {
-            history.addEntry(new NavigationEntry(
-                    0, url, GURL.emptyGURL(), GURL.emptyGURL(), GURL.emptyGURL(), "", null, 0, 0));
+            history.addEntry(
+                    new NavigationEntry(
+                            0,
+                            url,
+                            GURL.emptyGURL(),
+                            GURL.emptyGURL(),
+                            "",
+                            null,
+                            0,
+                            0,
+                            /* isInitialEntry= */ false));
         }
 
         // Point to the most recent entry in history.
@@ -115,8 +143,9 @@ public class CloseButtonNavigatorTest {
         NavigationController navigationController = mock(NavigationController.class);
 
         when(tab.getUrl())
-                .thenAnswer(invocation
-                        -> history.getEntryAtIndex(history.getCurrentEntryIndex()).getUrl());
+                .thenAnswer(
+                        invocation ->
+                                history.getEntryAtIndex(history.getCurrentEntryIndex()).getUrl());
         when(tab.getWebContents()).thenReturn(webContents);
         when(webContents.getNavigationController()).thenReturn(navigationController);
         when(navigationController.getNavigationHistory()).thenReturn(history);
@@ -126,16 +155,12 @@ public class CloseButtonNavigatorTest {
     }
 
     private void setParentTabId(Tab childTab, int parentTabId) {
-        CriticalPersistedTabData criticalPersistedTabData =
-                CriticalPersistedTabData.build(childTab);
-        criticalPersistedTabData.setParentId(parentTabId);
-        TabUiUnitTestUtils.prepareTab(
-                childTab, CriticalPersistedTabData.class, criticalPersistedTabData);
+        doReturn(parentTabId).when(childTab).getParentId();
     }
 
     private NavigationController currentTabsNavigationController() {
         // The navigation controller will be a mock object created in the above method.
-        return mTabs.peek().getWebContents().getNavigationController();
+        return mTabs.peekFirst().getWebContents().getNavigationController();
     }
 
     /** Example criteria. */
@@ -145,67 +170,69 @@ public class CloseButtonNavigatorTest {
 
     @Test
     public void noCriteria_singleTab() {
-        mTabs.push(createTabWithNavigationHistory(JUnitTestGURLs.getGURL(JUnitTestGURLs.BLUE_1),
-                JUnitTestGURLs.getGURL(JUnitTestGURLs.BLUE_2)));
+        mTabs.addFirst(
+                createTabWithNavigationHistory(JUnitTestGURLs.BLUE_1, JUnitTestGURLs.BLUE_2));
 
-        mCloseButtonNavigator.navigateOnClose();
+        mCloseButtonNavigator.navigateOnClose(mFinishCallback);
 
-        assertTrue(mTabs.empty());
+        assertTrue(mTabs.isEmpty());
     }
 
     @Test
     public void noCriteria_multipleTabs() {
-        mTabs.push(createTabWithNavigationHistory(JUnitTestGURLs.getGURL(JUnitTestGURLs.BLUE_1)));
-        mTabs.push(createTabWithNavigationHistory(JUnitTestGURLs.getGURL(JUnitTestGURLs.BLUE_2)));
-        setParentTabId(mTabs.get(1), mTabs.get(0).getId());
+        mTabs.addFirst(createTabWithNavigationHistory(JUnitTestGURLs.BLUE_1));
+        mTabs.addFirst(createTabWithNavigationHistory(JUnitTestGURLs.BLUE_2));
+        setParentTabId(mTabs.peekFirst(), mTabs.peekLast().getId());
 
-        mCloseButtonNavigator.navigateOnClose();
+        mCloseButtonNavigator.navigateOnClose(mFinishCallback);
 
         if (mIsWebapp) {
             assertEquals(1, mTabs.size());
             verify(currentTabsNavigationController(), never()).goToNavigationIndex(anyInt());
         } else {
-            assertTrue(mTabs.empty());
+            assertTrue(mTabs.isEmpty());
         }
     }
 
     @Test
     public void noMatchingUrl_singleTab() {
         mCloseButtonNavigator.setLandingPageCriteria(CloseButtonNavigatorTest::isRed);
-        mTabs.push(createTabWithNavigationHistory(JUnitTestGURLs.getGURL(JUnitTestGURLs.BLUE_1),
-                JUnitTestGURLs.getGURL(JUnitTestGURLs.BLUE_2)));
+        mTabs.addFirst(
+                createTabWithNavigationHistory(JUnitTestGURLs.BLUE_1, JUnitTestGURLs.BLUE_2));
 
-        mCloseButtonNavigator.navigateOnClose();
+        mCloseButtonNavigator.navigateOnClose(mFinishCallback);
 
-        assertTrue(mTabs.empty());
+        assertTrue(mTabs.isEmpty());
     }
 
     @Test
     public void noMatchingUrl_multipleTabs() {
         mCloseButtonNavigator.setLandingPageCriteria(CloseButtonNavigatorTest::isRed);
-        mTabs.push(createTabWithNavigationHistory(JUnitTestGURLs.getGURL(JUnitTestGURLs.BLUE_1)));
-        mTabs.push(createTabWithNavigationHistory(JUnitTestGURLs.getGURL(JUnitTestGURLs.BLUE_2)));
-        setParentTabId(mTabs.get(1), mTabs.get(0).getId());
+        mTabs.addFirst(createTabWithNavigationHistory(JUnitTestGURLs.BLUE_1));
+        mTabs.addFirst(createTabWithNavigationHistory(JUnitTestGURLs.BLUE_2));
+        setParentTabId(mTabs.peekFirst(), mTabs.peekLast().getId());
 
-        mCloseButtonNavigator.navigateOnClose();
+        mCloseButtonNavigator.navigateOnClose(mFinishCallback);
 
         if (mIsWebapp) {
             assertEquals(1, mTabs.size());
             verify(currentTabsNavigationController(), never()).goToNavigationIndex(anyInt());
         } else {
-            assertTrue(mTabs.empty());
+            assertTrue(mTabs.isEmpty());
         }
     }
 
     @Test
     public void matchingUrl_singleTab() {
         mCloseButtonNavigator.setLandingPageCriteria(CloseButtonNavigatorTest::isRed);
-        mTabs.push(createTabWithNavigationHistory(JUnitTestGURLs.getGURL(JUnitTestGURLs.RED_1),
-                JUnitTestGURLs.getGURL(JUnitTestGURLs.RED_2),
-                JUnitTestGURLs.getGURL(JUnitTestGURLs.BLUE_1),
-                JUnitTestGURLs.getGURL(JUnitTestGURLs.BLUE_2)));
+        mTabs.addFirst(
+                createTabWithNavigationHistory(
+                        JUnitTestGURLs.RED_1,
+                        JUnitTestGURLs.RED_2,
+                        JUnitTestGURLs.BLUE_1,
+                        JUnitTestGURLs.BLUE_2));
 
-        mCloseButtonNavigator.navigateOnClose();
+        mCloseButtonNavigator.navigateOnClose(mFinishCallback);
 
         assertFalse(mTabs.isEmpty());
         verify(currentTabsNavigationController()).goToNavigationIndex(eq(1));
@@ -216,13 +243,12 @@ public class CloseButtonNavigatorTest {
     @Test
     public void matchingUrl_startOfNextTab() {
         mCloseButtonNavigator.setLandingPageCriteria(CloseButtonNavigatorTest::isRed);
-        mTabs.push(createTabWithNavigationHistory(JUnitTestGURLs.getGURL(JUnitTestGURLs.RED_1),
-                JUnitTestGURLs.getGURL(JUnitTestGURLs.RED_2)));
-        mTabs.push(createTabWithNavigationHistory(JUnitTestGURLs.getGURL(JUnitTestGURLs.BLUE_1),
-                JUnitTestGURLs.getGURL(JUnitTestGURLs.BLUE_2)));
-        setParentTabId(mTabs.get(1), mTabs.get(0).getId());
+        mTabs.addFirst(createTabWithNavigationHistory(JUnitTestGURLs.RED_1, JUnitTestGURLs.RED_2));
+        mTabs.addFirst(
+                createTabWithNavigationHistory(JUnitTestGURLs.BLUE_1, JUnitTestGURLs.BLUE_2));
+        setParentTabId(mTabs.peekFirst(), mTabs.peekLast().getId());
 
-        mCloseButtonNavigator.navigateOnClose();
+        mCloseButtonNavigator.navigateOnClose(mFinishCallback);
 
         assertEquals(1, mTabs.size());
         verify(currentTabsNavigationController(), never()).goToNavigationIndex(anyInt());
@@ -231,13 +257,12 @@ public class CloseButtonNavigatorTest {
     @Test
     public void matchingUrl_middleOfNextTab() {
         mCloseButtonNavigator.setLandingPageCriteria(CloseButtonNavigatorTest::isRed);
-        mTabs.push(createTabWithNavigationHistory(JUnitTestGURLs.getGURL(JUnitTestGURLs.RED_1),
-                JUnitTestGURLs.getGURL(JUnitTestGURLs.BLUE_1)));
-        mTabs.push(createTabWithNavigationHistory(JUnitTestGURLs.getGURL(JUnitTestGURLs.BLUE_2),
-                JUnitTestGURLs.getGURL(JUnitTestGURLs.BLUE_3)));
-        setParentTabId(mTabs.get(1), mTabs.get(0).getId());
+        mTabs.addFirst(createTabWithNavigationHistory(JUnitTestGURLs.RED_1, JUnitTestGURLs.BLUE_1));
+        mTabs.addFirst(
+                createTabWithNavigationHistory(JUnitTestGURLs.BLUE_2, JUnitTestGURLs.BLUE_3));
+        setParentTabId(mTabs.peekFirst(), mTabs.peekLast().getId());
 
-        mCloseButtonNavigator.navigateOnClose();
+        mCloseButtonNavigator.navigateOnClose(mFinishCallback);
 
         assertEquals(1, mTabs.size());
         if (mIsWebapp) {
@@ -251,16 +276,21 @@ public class CloseButtonNavigatorTest {
     @Test
     public void middleOfHistory() {
         mCloseButtonNavigator.setLandingPageCriteria(CloseButtonNavigatorTest::isRed);
-        mTabs.push(createTabWithNavigationHistory(JUnitTestGURLs.getGURL(JUnitTestGURLs.RED_1),
-                JUnitTestGURLs.getGURL(JUnitTestGURLs.RED_2),
-                JUnitTestGURLs.getGURL(JUnitTestGURLs.BLUE_1),
-                JUnitTestGURLs.getGURL(JUnitTestGURLs.BLUE_2),
-                JUnitTestGURLs.getGURL(JUnitTestGURLs.RED_3)));
+        mTabs.addFirst(
+                createTabWithNavigationHistory(
+                        JUnitTestGURLs.RED_1,
+                        JUnitTestGURLs.RED_2,
+                        JUnitTestGURLs.BLUE_1,
+                        JUnitTestGURLs.BLUE_2,
+                        JUnitTestGURLs.RED_3));
 
-        mTabs.peek().getWebContents().getNavigationController().getNavigationHistory()
+        mTabs.peekFirst()
+                .getWebContents()
+                .getNavigationController()
+                .getNavigationHistory()
                 .setCurrentEntryIndex(3);
 
-        mCloseButtonNavigator.navigateOnClose();
+        mCloseButtonNavigator.navigateOnClose(mFinishCallback);
 
         assertEquals(1, mTabs.size());
         verify(currentTabsNavigationController()).goToNavigationIndex(eq(1));
@@ -270,13 +300,15 @@ public class CloseButtonNavigatorTest {
     @Test
     public void navigateFromLandingPage() {
         mCloseButtonNavigator.setLandingPageCriteria(CloseButtonNavigatorTest::isRed);
-        mTabs.push(createTabWithNavigationHistory(JUnitTestGURLs.getGURL(JUnitTestGURLs.RED_1),
-                JUnitTestGURLs.getGURL(JUnitTestGURLs.RED_2),
-                JUnitTestGURLs.getGURL(JUnitTestGURLs.BLUE_1),
-                JUnitTestGURLs.getGURL(JUnitTestGURLs.BLUE_2),
-                JUnitTestGURLs.getGURL(JUnitTestGURLs.RED_3)));
+        mTabs.addFirst(
+                createTabWithNavigationHistory(
+                        JUnitTestGURLs.RED_1,
+                        JUnitTestGURLs.RED_2,
+                        JUnitTestGURLs.BLUE_1,
+                        JUnitTestGURLs.BLUE_2,
+                        JUnitTestGURLs.RED_3));
 
-        mCloseButtonNavigator.navigateOnClose();
+        mCloseButtonNavigator.navigateOnClose(mFinishCallback);
 
         assertEquals(1, mTabs.size());
         verify(currentTabsNavigationController()).goToNavigationIndex(eq(1));

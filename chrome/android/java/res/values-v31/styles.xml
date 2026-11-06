@@ -1,12 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Copyright 2021 The Chromium Authors. All rights reserved.
-     Use of this source code is governed by a BSD-style license that can be
-     found in the LICENSE file. -->
+<!--
+Copyright 2025 The Chromium Authors
+Use of this source code is governed by a BSD-style license that can be
+found in the LICENSE file.
+-->
 
-<resources>
-    <style name="Theme.Chromium.DialogWhenLarge" parent="Base.V27.Theme.Chromium.DialogWhenLarge" >
-        <!-- TODO(https://crbug.com/1201349): Disable overscroll on S due to
-            consistency issues between browser and web platform. -->
-        <item name="android:overScrollMode">never</item>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.Chromium.Widget" parent="Theme.Material3Expressive.DynamicColors.DayNight" />
+
+    <!-- Web app themes: On Android S+, windowBackground and
+         windowDisablePreview are removed and SameTaskWebApkActivity is
+         opaque to prevent convertFromTranslucent() surface reconfigurations
+         and black flashes. -->
+    <style
+        name="Theme.Chromium.Webapp"
+        parent="Theme.Chromium.WithWindowAnimation" />
+
+    <style
+        name="Theme.Chromium.Webapp.Translucent"
+        parent="Theme.Chromium.Webapp">
+        <item name="android:windowIsTranslucent">false</item>
     </style>
 </resources>

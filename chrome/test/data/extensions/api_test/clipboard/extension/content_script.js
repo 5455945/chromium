@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,22 +9,25 @@ function appendTextarea() {
 }
 
 function run() {
-  var textIn = appendTextarea();
+  const textIn = appendTextarea();
 
   textIn.focus();
   textIn.value = 'foobar';
   textIn.selectionStart = 0;
   textIn.selectionEnd = 'foobar'.length;
-  if (!document.execCommand('copy'))
+  if (!document.execCommand('copy')) {
     return 'Failed to copy';
+  }
 
-  var textOut = appendTextarea();
+  const textOut = appendTextarea();
 
   textOut.focus();
-  if (!document.execCommand('paste'))
+  if (!document.execCommand('paste')) {
     return 'Failed to paste';
-  if (textOut.value != 'foobar')
-    return 'Expected "foobar", got ' + textOut.value;
+  }
+  if (textOut.value !== 'foobar') {
+    return `Expected 'foobar', got ${textOut.value}`;
+  }
 
   return '';
 }

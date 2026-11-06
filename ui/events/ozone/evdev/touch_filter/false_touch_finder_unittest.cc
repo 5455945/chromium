@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,7 @@
 #include <memory>
 
 #include "base/command_line.h"
-#include "base/cxx17_backports.h"
+#include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/strings/stringprintf.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -35,13 +35,17 @@ class FalseTouchFinderTest : public testing::Test {
   static constexpr gfx::Size kTouchscreenSize = gfx::Size(4000, 4000);
 
   FalseTouchFinderTest() {}
+
+  FalseTouchFinderTest(const FalseTouchFinderTest&) = delete;
+  FalseTouchFinderTest& operator=(const FalseTouchFinderTest&) = delete;
+
   ~FalseTouchFinderTest() override {}
 
-  bool FilterAndCheck(const TouchEntry entries[], size_t count) {
+  bool FilterAndCheck(base::span<const TouchEntry> entries) {
     std::vector<InProgressTouchEvdev> touches;
     size_t start_index = 0u;
     std::bitset<kNumTouchEvdevSlots> was_touching;
-    for (size_t i = 0; i < count; ++i) {
+    for (size_t i = 0; i < entries.size(); ++i) {
       const TouchEntry& entry = entries[i];
 
       InProgressTouchEvdev touch;
@@ -54,9 +58,9 @@ class FalseTouchFinderTest : public testing::Test {
       touch.touching = entry.touching;
       touches.push_back(touch);
 
-      if (i == count - 1 || entry.time_ms != entries[i + 1].time_ms) {
-        false_touch_finder_->HandleTouches(touches, base::TimeTicks() +
-            base::TimeDelta::FromMilliseconds(entry.time_ms));
+      if (i == entries.size() - 1 || entry.time_ms != entries[i + 1].time_ms) {
+        false_touch_finder_->HandleTouches(
+            touches, base::TimeTicks() + base::Milliseconds(entry.time_ms));
 
         for (size_t j = 0; j < touches.size(); ++j) {
           bool expect_delay = entries[j + start_index].expect_delay;
@@ -88,8 +92,6 @@ class FalseTouchFinderTest : public testing::Test {
   }
 
   std::unique_ptr<FalseTouchFinder> false_touch_finder_;
-
-  DISALLOW_COPY_AND_ASSIGN(FalseTouchFinderTest);
 };
 
 constexpr gfx::Size FalseTouchFinderTest::kTouchscreenSize;
@@ -112,7 +114,7 @@ TEST_F(FalseTouchFinderTest, EdgeTap) {
       {100, 4, true, gfx::PointF(100, touchscreen_height - 1), 0.35, true},
       {110, 4, true, gfx::PointF(100, touchscreen_height - 1), 0.35, true},
       {120, 4, false, gfx::PointF(100, touchscreen_height - 1), 0.35, true}};
-  EXPECT_TRUE(FilterAndCheck(kTestData, base::size(kTestData)));
+  EXPECT_TRUE(FilterAndCheck(kTestData));
 }
 
 // Test that a touch on the edge which starts at an edge is delayed but released
@@ -127,7 +129,7 @@ TEST_F(FalseTouchFinderTest, MoveFromEdge) {
       {60, 1, true, gfx::PointF(0, 100), 0.35, true},
       {70, 1, true, gfx::PointF(0, 101), 0.35, false},
       {80, 1, false, gfx::PointF(0, 101), 0.35, false}};
-  EXPECT_TRUE(FilterAndCheck(kTestData, base::size(kTestData)));
+  EXPECT_TRUE(FilterAndCheck(kTestData));
 }
 
 // Test that a touch on the edge which starts away from the edge is not
@@ -138,7 +140,7 @@ TEST_F(FalseTouchFinderTest, MoveToEdge) {
       {20, 1, true, gfx::PointF(100, 100), 0.35, false},
       {30, 1, true, gfx::PointF(0, 100), 0.35, false},
       {40, 1, false, gfx::PointF(0, 100), 0.35, false}};
-  EXPECT_TRUE(FilterAndCheck(kTestData, base::size(kTestData)));
+  EXPECT_TRUE(FilterAndCheck(kTestData));
 }
 
 // Test that a pinky finger lightly pressed is not filtered out. Based on real
@@ -150,7 +152,7 @@ TEST_F(FalseTouchFinderTest, LightPinkyPressure) {
       {30, 1, true, gfx::PointF(10, 10), 0.215686, false},
       {40, 1, true, gfx::PointF(10, 10), 0.211765, false},
       {50, 1, true, gfx::PointF(10, 10), 0.203922, false}};
-  EXPECT_TRUE(FilterAndCheck(kTestData, base::size(kTestData)));
+  EXPECT_TRUE(FilterAndCheck(kTestData));
 }
 
 }  // namespace ui

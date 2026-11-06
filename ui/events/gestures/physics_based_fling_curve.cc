@@ -1,10 +1,13 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/events/gestures/physics_based_fling_curve.h"
 
+#include <algorithm>
 #include <cmath>
+
+#include "base/check.h"
 
 namespace {
 
@@ -99,9 +102,9 @@ PhysicsBasedFlingCurve::PhysicsBasedFlingCurve(
       curve_duration_(CalculateDurationAndConfigureControlPoints(velocity)),
       bezier_(p1_.x(), p1_.y(), p2_.x(), p2_.y()),
       previous_time_delta_(base::TimeDelta()) {
-  DCHECK(!velocity.IsZero());
-  DCHECK(!std::isnan(velocity.x()));
-  DCHECK(!std::isnan(velocity.y()));
+  CHECK(!velocity.IsZero(), base::NotFatalUntil::M163);
+  CHECK(!std::isnan(velocity.x()), base::NotFatalUntil::M163);
+  CHECK(!std::isnan(velocity.y()), base::NotFatalUntil::M163);
 }
 
 PhysicsBasedFlingCurve::~PhysicsBasedFlingCurve() = default;
@@ -109,11 +112,11 @@ PhysicsBasedFlingCurve::~PhysicsBasedFlingCurve() = default;
 bool PhysicsBasedFlingCurve::ComputeScrollOffset(base::TimeTicks time,
                                                  gfx::Vector2dF* offset,
                                                  gfx::Vector2dF* velocity) {
-  DCHECK(offset);
-  DCHECK(velocity);
+  CHECK(offset, base::NotFatalUntil::M163);
+  CHECK(velocity, base::NotFatalUntil::M163);
 
   const base::TimeDelta elapsed_time = time - start_timestamp_;
-  if (elapsed_time < base::TimeDelta()) {
+  if (elapsed_time.is_negative()) {
     *offset = gfx::Vector2dF();
     *velocity = gfx::Vector2dF();
     return true;
@@ -157,6 +160,6 @@ PhysicsBasedFlingCurve::CalculateDurationAndConfigureControlPoints(
     p1_.set_x(p1_.y() / slope);
   }
 
-  return base::TimeDelta::FromSecondsD(duration);
+  return base::Seconds(duration);
 }
 }  // namespace ui

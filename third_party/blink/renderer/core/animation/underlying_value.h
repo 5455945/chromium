@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,15 +24,14 @@ class CORE_EXPORT UnderlyingValue {
  public:
   virtual InterpolableValue& MutableInterpolableValue() = 0;
 
-  virtual void SetInterpolableValue(std::unique_ptr<InterpolableValue>) = 0;
+  virtual void SetInterpolableValue(InterpolableValue*) = 0;
 
   virtual const NonInterpolableValue* GetNonInterpolableValue() const = 0;
 
   // The NonInterpolableValue part of the underlying value may not be mutated,
   // hence there is no MutableNonInterpolableValue function. However, the
   // NonInterpolableValue part may be replaced entirely with this function.
-  virtual void SetNonInterpolableValue(
-      scoped_refptr<const NonInterpolableValue>) = 0;
+  virtual void SetNonInterpolableValue(const NonInterpolableValue*) = 0;
 };
 
 }  // namespace blink

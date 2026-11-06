@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,22 +8,14 @@
 #include <memory>
 #include <vector>
 
-#include "base/macros.h"
-#include "chrome/browser/vr/elements/controller.h"
-#include "chrome/browser/vr/elements/environment/background.h"
-#include "chrome/browser/vr/elements/environment/grid.h"
-#include "chrome/browser/vr/elements/environment/stars.h"
-#include "chrome/browser/vr/elements/keyboard.h"
-#include "chrome/browser/vr/elements/laser.h"
-#include "chrome/browser/vr/elements/reticle.h"
-#include "chrome/browser/vr/elements/shadow.h"
-#include "chrome/browser/vr/gl_texture_location.h"
+#include "base/memory/raw_ptr.h"
+#include "chrome/browser/vr/elements/corner_radii.h"
 #include "chrome/browser/vr/macros.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/geometry/size_f.h"
-#include "ui/gfx/transform.h"
+#include "ui/gfx/geometry/transform.h"
 
 namespace gfx {
 class RectF;
@@ -34,11 +26,9 @@ class Transform;
 namespace vr {
 
 class BaseRenderer;
-class ExternalTexturedQuadRenderer;
+class GridRenderer;
 class RadialGradientQuadRenderer;
-class TextureCopyRenderer;
 class TexturedQuadRenderer;
-class TransparentQuadRenderer;
 
 // An instance of this class is passed to UiElements by the UiRenderer in order
 // to issue the GL commands for drawing the frame. In some ways, this class is a
@@ -51,12 +41,15 @@ class TransparentQuadRenderer;
 class UiElementRenderer {
  public:
   UiElementRenderer();
+
+  UiElementRenderer(const UiElementRenderer&) = delete;
+  UiElementRenderer& operator=(const UiElementRenderer&) = delete;
+
   VIRTUAL_FOR_MOCKS ~UiElementRenderer();
 
   VIRTUAL_FOR_MOCKS void DrawTexturedQuad(
       int texture_data_handle,
       int overlay_texture_data_handle,
-      GlTextureLocation texture_location,
       const gfx::Transform& model_view_proj_matrix,
       const gfx::RectF& clip_rect,
       float opacity,
@@ -77,50 +70,6 @@ class UiElementRenderer {
       int gridline_count,
       float opacity);
 
-  VIRTUAL_FOR_MOCKS void DrawController(
-      float opacity,
-      const gfx::Transform& model_view_proj_matrix);
-
-  VIRTUAL_FOR_MOCKS void DrawLaser(
-      float opacity,
-      const gfx::Transform& model_view_proj_matrix);
-
-  VIRTUAL_FOR_MOCKS void DrawReticle(
-      float opacity,
-      const gfx::Transform& model_view_proj_matrix);
-
-  VIRTUAL_FOR_MOCKS void DrawTextureCopy(int texture_data_handle,
-                                         const float (&uv_transform)[16],
-                                         float xborder,
-                                         float yborder);
-
-  VIRTUAL_FOR_MOCKS void DrawShadow(
-      const gfx::Transform& model_view_proj_matrix,
-      const gfx::SizeF& element_size,
-      float x_padding,
-      float y_padding,
-      float y_offset,
-      SkColor color,
-      float opacity,
-      float corner_radius);
-
-  VIRTUAL_FOR_MOCKS void DrawStars(
-      float t,
-      const gfx::Transform& model_view_proj_matrix);
-
-  VIRTUAL_FOR_MOCKS void DrawBackground(
-      const gfx::Transform& model_view_proj_matrix,
-      int texture_data_handle,
-      int normal_gradient_texture_data_handle,
-      int incognito_gradient_texture_data_handle,
-      int fullscreen_gradient_texture_data_handle,
-      float normal_factor,
-      float incognito_factor,
-      float fullscreen_factor);
-
-  VIRTUAL_FOR_MOCKS void DrawKeyboard(const CameraModel& camera_model,
-                                      KeyboardDelegate* delegate);
-
   void Flush();
 
  protected:
@@ -130,24 +79,11 @@ class UiElementRenderer {
   void Init();
   void FlushIfNecessary(BaseRenderer* renderer);
 
-  BaseRenderer* last_renderer_ = nullptr;
+  raw_ptr<BaseRenderer> last_renderer_ = nullptr;
 
-  std::unique_ptr<ExternalTexturedQuadRenderer>
-      external_textured_quad_renderer_;
-  std::unique_ptr<TransparentQuadRenderer> transparent_quad_renderer_;
   std::unique_ptr<TexturedQuadRenderer> textured_quad_renderer_;
   std::unique_ptr<RadialGradientQuadRenderer> radial_gradient_quad_renderer_;
-  std::unique_ptr<TextureCopyRenderer> texture_copy_renderer_;
-  std::unique_ptr<Reticle::Renderer> reticle_renderer_;
-  std::unique_ptr<Laser::Renderer> laser_renderer_;
-  std::unique_ptr<Controller::Renderer> controller_renderer_;
-  std::unique_ptr<Grid::Renderer> gradient_grid_renderer_;
-  std::unique_ptr<Shadow::Renderer> shadow_renderer_;
-  std::unique_ptr<Stars::Renderer> stars_renderer_;
-  std::unique_ptr<Background::Renderer> background_renderer_;
-  std::unique_ptr<Keyboard::Renderer> keyboard_renderer_;
-
-  DISALLOW_COPY_AND_ASSIGN(UiElementRenderer);
+  std::unique_ptr<GridRenderer> gradient_grid_renderer_;
 };
 
 }  // namespace vr

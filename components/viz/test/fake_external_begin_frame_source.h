@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,11 @@
 #include <set>
 
 #include "base/cancelable_callback.h"
+#include "base/containers/flat_map.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
+#include "components/viz/common/display/display_scheduler_draw_result.h"
 #include "components/viz/common/frame_sinks/begin_frame_args.h"
 #include "components/viz/common/frame_sinks/begin_frame_source.h"
 
@@ -37,19 +40,26 @@ class FakeExternalBeginFrameSource : public BeginFrameSource {
   // BeginFrameSource implementation.
   void AddObserver(BeginFrameObserver* obs) override;
   void RemoveObserver(BeginFrameObserver* obs) override;
-  void DidFinishFrame(BeginFrameObserver* obs) override;
-  bool IsThrottled() const override;
+  void DidFinishFrame(BeginFrameObserver* obs,
+                      DisplaySchedulerDrawResult result) override;
   void OnGpuNoLongerBusy() override {}
 
   BeginFrameArgs CreateBeginFrameArgs(
       BeginFrameArgs::CreationLocation location);
   BeginFrameArgs CreateBeginFrameArgs(BeginFrameArgs::CreationLocation location,
                                       const base::TickClock* now_src);
+  BeginFrameArgs CreateBeginFrameArgsWithGenerator(
+      base::TimeTicks frame_time,
+      base::TimeTicks next_frame_time,
+      base::TimeDelta vsync_interval,
+      base::TimeDelta unthrottled_interval = base::TimeDelta());
   uint64_t next_begin_frame_number() const { return next_begin_frame_number_; }
 
   void TestOnBeginFrame(const BeginFrameArgs& args);
 
   size_t num_observers() const { return observers_.size(); }
+
+  bool AllFramesDidFinish();
 
   using BeginFrameSource::RequestCallbackOnGpuAvailable;
 
@@ -58,12 +68,14 @@ class FakeExternalBeginFrameSource : public BeginFrameSource {
 
   const bool tick_automatically_;
   const double milliseconds_per_frame_;
-  Client* client_ = nullptr;
+  raw_ptr<Client, DanglingUntriaged> client_ = nullptr;
   bool paused_ = false;
   BeginFrameArgs current_args_;
   uint64_t next_begin_frame_number_ = BeginFrameArgs::kStartingFrameNumber;
-  std::set<BeginFrameObserver*> observers_;
+  std::set<raw_ptr<BeginFrameObserver, SetExperimental>> observers_;
+  base::flat_map<BeginFrameObserver*, int64_t> pending_frames_;
   base::CancelableOnceClosure begin_frame_task_;
+  BeginFrameSource::BeginFrameArgsGenerator begin_frame_args_generator_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 

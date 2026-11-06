@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,32 +7,41 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/i18n/message_formatter.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/app/vector_icons/vector_icons.h"
+#include "chrome/browser/headless/headless_mode_util.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
-#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/branded_strings.h"
 #include "chrome/grit/theme_resources.h"
 #include "components/constrained_window/constrained_window_views.h"
+#include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/models/image_model.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/base/ui_base_features.h"
+#include "ui/color/color_id.h"
 #include "ui/gfx/color_palette.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/native_theme/native_theme.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/label_button.h"
+#include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/throbber.h"
-#include "ui/views/layout/grid_layout.h"
+#include "ui/views/layout/box_layout.h"
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 #include "base/task/current_thread.h"
 #include "chrome/browser/ui/views/policy/enterprise_startup_dialog_mac_util.h"
 #endif
@@ -65,37 +74,108 @@ std::unique_ptr<views::Label> CreateText(const std::u16string& message) {
   return text;
 }
 
-std::unique_ptr<views::View> CreateLogoView() {
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-  // Show Google Chrome Enterprise logo only for official build.
-  auto logo_image = std::make_unique<views::ImageView>();
-  logo_image->SetImage(
-      ui::ResourceBundle::GetSharedInstance()
-          .GetImageNamed((logo_image->GetNativeTheme()->ShouldUseDarkColors())
-                             ? IDR_PRODUCT_LOGO_ENTERPRISE_WHITE
-                             : IDR_PRODUCT_LOGO_ENTERPRISE)
-          .AsImageSkia());
-  logo_image->SetTooltipText(
-      l10n_util::GetStringUTF16(IDS_PRODUCT_LOGO_ENTERPRISE_ALT_TEXT));
-  gfx::Rect logo_bounds = logo_image->GetImageBounds();
-  logo_image->SetImageSize(gfx::Size(
-      logo_bounds.width() * kLogoHeight / logo_bounds.height(), kLogoHeight));
-  logo_image->SetVerticalAlignment(views::ImageView::Alignment::kCenter);
-  return logo_image;
-#else
-  return nullptr;
-#endif
-}
+class LogoView : public views::ImageView {
+  METADATA_HEADER(LogoView, views::ImageView)
+
+ public:
+  LogoView() {
+    SetTooltipText(
+        l10n_util::GetStringUTF16(IDS_PRODUCT_LOGO_ENTERPRISE_ALT_TEXT));
+    SetVerticalAlignment(views::ImageView::Alignment::kCenter);
+  }
+
+  void OnThemeChanged() override {
+    ImageView::OnThemeChanged();
+    SetImage(ui::ImageModel::FromResourceId(
+        (GetNativeTheme()->preferred_color_scheme() ==
+         ui::NativeTheme::PreferredColorScheme::kDark)
+            ? IDR_PRODUCT_LOGO_ENTERPRISE_WHITE
+            : IDR_PRODUCT_LOGO_ENTERPRISE));
+    const gfx::Rect logo_bounds = GetImageBounds();
+    SetImageSize(gfx::Size(
+        logo_bounds.width() * kLogoHeight / logo_bounds.height(), kLogoHeight));
+  }
+};
+
+BEGIN_METADATA(LogoView)
+END_METADATA
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
+
+// Alternate implementation of the EnterpriseStartupDialog which is used when
+// the headless mode is in effect. It does not display anything and when error
+// is set immediately calls back with not accepted condition.
+class HeadlessEnterpriseStartupDialogImpl : public EnterpriseStartupDialog {
+ public:
+  explicit HeadlessEnterpriseStartupDialogImpl(DialogResultCallback callback)
+      : callback_(std::move(callback)) {
+    CHECK(callback_);
+  }
+
+  HeadlessEnterpriseStartupDialogImpl(
+      const HeadlessEnterpriseStartupDialogImpl&) = delete;
+  HeadlessEnterpriseStartupDialogImpl& operator=(
+      const HeadlessEnterpriseStartupDialogImpl&) = delete;
+
+  ~HeadlessEnterpriseStartupDialogImpl() override {
+    if (callback_) {
+      // ChromeBrowserCloudManagementRegisterWatcher dismisses the dialog
+      // without displaying an error messgae (in which case we would not
+      // have the outstanding callback) in case of successful enrollment,
+      // so allow it to show the browser window using the callback.
+      std::move(callback_).Run(/*was_accepted=*/false,
+                               /*can_show_browser_window_=*/true);
+    }
+  }
+
+  // Override EnterpriseStartupDialog
+  void DisplayLaunchingInformationWithThrobber(
+      const std::u16string& information) override {}
+
+  void DisplayErrorMessage(
+      const std::u16string& error_message,
+      const std::optional<std::u16string>& accept_button) override {
+    if (callback_) {
+      // In headless mode the dialog is invisible, therefore there is
+      // no one to accept or dismiss it. So just dismiss the dialog
+      // right away without accepting the prompt and not allowing
+      // browser to show its window.
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(std::move(callback_), /*was_accepted=*/false,
+                         /*can_show_browser_window_=*/false));
+    }
+  }
+
+  // It is important that `IsShowing()` returns false when it is called from
+  // within the callback.
+  bool IsShowing() override { return !callback_.is_null(); }
+
+ private:
+  DialogResultCallback callback_;
+};
 
 }  // namespace
 
 EnterpriseStartupDialogView::EnterpriseStartupDialogView(
     EnterpriseStartupDialog::DialogResultCallback callback)
     : callback_(std::move(callback)) {
+  CHECK(callback_);
+  views::BoxLayout* layout =
+      SetLayoutManager(std::make_unique<views::BoxLayout>());
+  layout->set_main_axis_alignment(views::BoxLayout::MainAxisAlignment::kCenter);
+  layout->set_cross_axis_alignment(
+      views::BoxLayout::CrossAxisAlignment::kCenter);
+  layout->set_between_child_spacing(
+      ChromeLayoutProvider::Get()->GetDistanceMetric(
+          views::DISTANCE_TEXTFIELD_HORIZONTAL_TEXT_PADDING));
+
   set_draggable(true);
-  SetButtons(ui::DIALOG_BUTTON_OK);
-  SetExtraView(CreateLogoView());
-  SetModalType(ui::MODAL_TYPE_NONE);
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  // Show Google Chrome Enterprise logo only for official build.
+  SetExtraView(std::make_unique<LogoView>());
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  SetModalType(ui::mojom::ModalType::kNone);
   SetAcceptCallback(
       base::BindOnce(&EnterpriseStartupDialogView::RunDialogCallback,
                      base::Unretained(this), true));
@@ -106,19 +186,19 @@ EnterpriseStartupDialogView::EnterpriseStartupDialogView(
       base::BindOnce(&EnterpriseStartupDialogView::RunDialogCallback,
                      base::Unretained(this), false));
   SetBorder(views::CreateEmptyBorder(GetDialogInsets()));
-  CreateDialogWidget(this, nullptr, nullptr)->Show();
-#if defined(OS_MAC)
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  CreateDialogWidget(this, gfx::NativeWindow(), gfx::NativeView())->Show();
+#if BUILDFLAG(IS_MAC)
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&EnterpriseStartupDialogView::StartModalDialog,
                                 weak_factory_.GetWeakPtr()));
 #endif
 }
 
-EnterpriseStartupDialogView::~EnterpriseStartupDialogView() {}
+EnterpriseStartupDialogView::~EnterpriseStartupDialogView() = default;
 
 void EnterpriseStartupDialogView::DisplayLaunchingInformationWithThrobber(
     const std::u16string& information) {
-  ResetDialog(false);
+  ResetDialog(std::nullopt);
 
   std::unique_ptr<views::Label> text = CreateText(information);
   auto throbber = std::make_unique<views::Throbber>();
@@ -126,27 +206,21 @@ void EnterpriseStartupDialogView::DisplayLaunchingInformationWithThrobber(
   throbber->SetPreferredSize(throbber_size);
   throbber->Start();
 
-  SetupLayout(std::move(throbber), std::move(text));
+  AddContent(std::move(throbber), std::move(text));
 }
 
 void EnterpriseStartupDialogView::DisplayErrorMessage(
     const std::u16string& error_message,
-    const absl::optional<std::u16string>& accept_button) {
-  ResetDialog(accept_button.has_value());
+    const std::optional<std::u16string>& accept_button) {
+  ResetDialog(accept_button);
   std::unique_ptr<views::Label> text = CreateText(error_message);
-  auto error_icon = std::make_unique<views::ImageView>();
-  error_icon->SetImage(
-      gfx::CreateVectorIcon(kBrowserToolsErrorIcon, kIconSize,
-                            GetNativeTheme()->GetSystemColor(
-                                ui::NativeTheme::kColorId_AlertSeverityHigh)));
+  auto error_icon =
+      std::make_unique<views::ImageView>(ui::ImageModel::FromVectorIcon(
+          features::IsRoundedIconsEnabled() ? vector_icons::kErrorFilledIcon
+                                            : kBrowserToolsErrorOldIcon,
+          ui::kColorAlertHighSeverity, kIconSize));
 
-  if (accept_button) {
-    // TODO(ellyjones): This should use SetButtonLabel()
-    // instead of changing the button text directly - this might break the
-    // dialog's layout.
-    GetOkButton()->SetText(*accept_button);
-  }
-  SetupLayout(std::move(error_icon), std::move(text));
+  AddContent(std::move(error_icon), std::move(text));
 }
 
 void EnterpriseStartupDialogView::CloseDialog() {
@@ -163,22 +237,28 @@ void EnterpriseStartupDialogView::RemoveWidgetObserver(
   GetWidget()->RemoveObserver(observer);
 }
 
+bool EnterpriseStartupDialogView::IsShowing() {
+  // It is important that `IsShowing()` returns false when it is called from
+  // within the callback.
+  return !callback_.is_null();
+}
+
 void EnterpriseStartupDialogView::StartModalDialog() {
-#if defined(OS_MAC)
-  base::CurrentThread::ScopedNestableTaskAllower allow_nested;
+#if BUILDFLAG(IS_MAC)
+  base::CurrentThread::ScopedAllowApplicationTasksInNativeNestedLoop allow;
   StartModal(GetWidget()->GetNativeWindow());
 #endif
 }
 
 void EnterpriseStartupDialogView::RunDialogCallback(bool was_accepted) {
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   // On mac, we need to stop the modal message loop before returning the result
   // to the caller who controls its own run loop.
   StopModal();
   if (can_show_browser_window_) {
     std::move(callback_).Run(was_accepted, can_show_browser_window_);
   } else {
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(callback_), was_accepted,
                                   can_show_browser_window_));
   }
@@ -191,50 +271,41 @@ bool EnterpriseStartupDialogView::ShouldShowWindowTitle() const {
   return false;
 }
 
-gfx::Size EnterpriseStartupDialogView::CalculatePreferredSize() const {
+gfx::Size EnterpriseStartupDialogView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   return gfx::Size(kDialogContentWidth, kDialogContentHeight);
 }
 
-void EnterpriseStartupDialogView::ResetDialog(bool show_accept_button) {
-  DCHECK(GetOkButton());
+void EnterpriseStartupDialogView::ResetDialog(
+    const std::optional<std::u16string>& accept_button) {
+  if (accept_button.has_value()) {
+    SetButtons(static_cast<int>(ui::mojom::DialogButton::kOk));
+    SetButtonLabel(ui::mojom::DialogButton::kOk, *accept_button);
 
-  GetOkButton()->SetVisible(show_accept_button);
-  RemoveAllChildViews(true);
+    // TODO(https://crbug.com/414502419): Explicitly request focus to ensure the
+    // focus ring appears, as DialogDelegate::SetDefaultButton does not visually
+    // indicate focus.
+    GetOkButton()->RequestFocus();
+  } else {
+    SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
+  }
+  RemoveAllChildViews();
 }
 
-void EnterpriseStartupDialogView::SetupLayout(
+void EnterpriseStartupDialogView::AddContent(
     std::unique_ptr<views::View> icon,
     std::unique_ptr<views::View> text) {
-  // Padding between icon and text
-  int text_padding = ChromeLayoutProvider::Get()->GetDistanceMetric(
-      views::DISTANCE_TEXTFIELD_HORIZONTAL_TEXT_PADDING);
+  AddChildView(std::move(icon));
+  AddChildView(std::move(text));
 
-  views::GridLayout* layout =
-      SetLayoutManager(std::make_unique<views::GridLayout>());
-  auto* columnset = layout->AddColumnSet(0);
-  // Horizontally centre the content.
-  columnset->AddPaddingColumn(1.0, 0);
-  columnset->AddColumn(views::GridLayout::FILL, views::GridLayout::FILL,
-                       views::GridLayout::kFixedSize,
-                       views::GridLayout::ColumnSize::kUsePreferred, 0, 0);
-  columnset->AddPaddingColumn(views::GridLayout::kFixedSize, text_padding);
-  columnset->AddColumn(views::GridLayout::FILL, views::GridLayout::FILL,
-                       views::GridLayout::kFixedSize,
-                       views::GridLayout::ColumnSize::kUsePreferred, 0, 0);
-  columnset->AddPaddingColumn(1.0, 0);
-
-  layout->AddPaddingRow(1.0, 0);
-  layout->StartRow(views::GridLayout::kFixedSize, 0);
-  layout->AddView(std::move(icon));
-  layout->AddView(std::move(text));
-  layout->AddPaddingRow(1.0, 0);
-
-  // TODO(ellyjones): Why is this being done here?
-  GetWidget()->GetRootView()->Layout();
+  // TODO(weili): The child views are added after the dialog shows. So it
+  // requires relayout and repaint. Consider a refactoring to add content
+  // before showing.
+  GetWidget()->GetRootView()->DeprecatedLayoutImmediately();
   GetWidget()->GetRootView()->SchedulePaint();
 }
 
-BEGIN_METADATA(EnterpriseStartupDialogView, views::DialogDelegateView)
+BEGIN_METADATA(EnterpriseStartupDialogView)
 END_METADATA
 
 /*
@@ -257,22 +328,28 @@ EnterpriseStartupDialogImpl::~EnterpriseStartupDialogImpl() {
 
 void EnterpriseStartupDialogImpl::DisplayLaunchingInformationWithThrobber(
     const std::u16string& information) {
-  if (dialog_view_)
+  if (dialog_view_) {
     dialog_view_->DisplayLaunchingInformationWithThrobber(information);
+  }
 }
 
 void EnterpriseStartupDialogImpl::DisplayErrorMessage(
     const std::u16string& error_message,
-    const absl::optional<std::u16string>& accept_button) {
-  if (dialog_view_)
+    const std::optional<std::u16string>& accept_button) {
+  if (dialog_view_) {
     dialog_view_->DisplayErrorMessage(error_message, accept_button);
+  }
 }
+
 bool EnterpriseStartupDialogImpl::IsShowing() {
-  return dialog_view_;
+  // It is important that `IsShowing()` returns false when it is called from
+  // within the callback. Relying on the view being destroyed is not good
+  // enough, as widget destruction may be asynchronous on some platforms.
+  return dialog_view_ && dialog_view_->IsShowing();
 }
 
 // views::WidgetObserver:
-void EnterpriseStartupDialogImpl::OnWidgetClosing(views::Widget* widget) {
+void EnterpriseStartupDialogImpl::OnWidgetDestroying(views::Widget* widget) {
   dialog_view_->RemoveWidgetObserver(this);
   dialog_view_ = nullptr;
 }
@@ -284,6 +361,13 @@ void EnterpriseStartupDialogImpl::OnWidgetClosing(views::Widget* widget) {
 // static
 std::unique_ptr<EnterpriseStartupDialog>
 EnterpriseStartupDialog::CreateAndShowDialog(DialogResultCallback callback) {
+  // If running in headless mode use an alternate version of the enterprise
+  // startup dialog.
+  if (headless::IsHeadlessMode()) {
+    return std::make_unique<HeadlessEnterpriseStartupDialogImpl>(
+        std::move(callback));
+  }
+
   return std::make_unique<EnterpriseStartupDialogImpl>(std::move(callback));
 }
 

@@ -1,174 +1,62 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_WEB_APPLICATIONS_WEB_APP_INSTALL_MANAGER_H_
 #define CHROME_BROWSER_WEB_APPLICATIONS_WEB_APP_INSTALL_MANAGER_H_
 
-#include <memory>
-
-#include "base/callback_forward.h"
-#include "base/containers/flat_set.h"
-#include "base/containers/queue.h"
-#include "base/containers/unique_ptr_adapters.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/web_applications/components/install_manager.h"
-#include "chrome/browser/web_applications/components/web_app_id.h"
-#include "chrome/browser/web_applications/components/web_app_url_loader.h"
-#include "chrome/browser/web_applications/web_app_sync_install_delegate.h"
+#include "base/observer_list.h"
+#include "base/types/pass_key.h"
+#include "chrome/browser/web_applications/web_app_constants.h"
+#include "components/webapps/common/web_app_id.h"
 
-class Profile;
+class PrefService;
 
-namespace content {
-class WebContents;
+namespace base {
+class Value;
 }
 
 namespace web_app {
 
-enum class InstallResultCode;
-class WebAppDataRetriever;
-class WebAppInstallTask;
+class WebAppInstallManagerObserver;
+class WebAppProvider;
 
-class WebAppInstallManager final : public InstallManager,
-                                   public SyncInstallDelegate {
+class WebAppInstallManager {
  public:
-  explicit WebAppInstallManager(Profile* profile);
+  explicit WebAppInstallManager(PrefService* pref_service);
   WebAppInstallManager(const WebAppInstallManager&) = delete;
   WebAppInstallManager& operator=(const WebAppInstallManager&) = delete;
-  ~WebAppInstallManager() override;
+  ~WebAppInstallManager();
 
+  void SetProvider(base::PassKey<WebAppProvider>, WebAppProvider& provider);
   void Start();
   void Shutdown();
 
-  // InstallManager:
-  void LoadWebAppAndCheckManifest(
-      const GURL& web_app_url,
-      webapps::WebappInstallSource install_source,
-      WebAppManifestCheckCallback callback) override;
-  void InstallWebAppFromManifest(content::WebContents* contents,
-                                 bool bypass_service_worker_check,
-                                 webapps::WebappInstallSource install_source,
-                                 WebAppInstallDialogCallback dialog_callback,
-                                 OnceInstallCallback callback) override;
-  void InstallWebAppFromManifestWithFallback(
-      content::WebContents* contents,
-      bool force_shortcut_app,
-      webapps::WebappInstallSource install_source,
-      WebAppInstallDialogCallback dialog_callback,
-      OnceInstallCallback callback) override;
+  void AddObserver(WebAppInstallManagerObserver* observer);
+  void RemoveObserver(WebAppInstallManagerObserver* observer);
 
-  void InstallWebAppFromInfo(
-      std::unique_ptr<WebApplicationInfo> web_application_info,
-      ForInstallableSite for_installable_site,
-      webapps::WebappInstallSource install_source,
-      OnceInstallCallback callback) override;
-
-  void InstallWebAppFromInfo(
-      std::unique_ptr<WebApplicationInfo> web_application_info,
-      ForInstallableSite for_installable_site,
-      const absl::optional<InstallParams>& install_params,
-      webapps::WebappInstallSource install_source,
-      OnceInstallCallback callback) override;
-  void InstallWebAppWithParams(content::WebContents* web_contents,
-                               const InstallParams& install_params,
-                               webapps::WebappInstallSource install_source,
-                               OnceInstallCallback callback) override;
-  void UpdateWebAppFromInfo(
-      const AppId& app_id,
-      std::unique_ptr<WebApplicationInfo> web_application_info,
-      bool redownload_app_icons,
-      OnceInstallCallback callback) override;
-
-  // For the new USS-based system only. SyncInstallDelegate:
-  void InstallWebAppsAfterSync(std::vector<WebApp*> web_apps,
-                               RepeatingInstallCallback callback) override;
-  void UninstallWebAppsAfterSync(std::vector<std::unique_ptr<WebApp>> web_apps,
-                                 RepeatingUninstallCallback callback) override;
-
-  using DataRetrieverFactory =
-      base::RepeatingCallback<std::unique_ptr<WebAppDataRetriever>()>;
-  void SetDataRetrieverFactoryForTesting(
-      DataRetrieverFactory data_retriever_factory);
-
-  void SetUrlLoaderForTesting(std::unique_ptr<WebAppUrlLoader> url_loader);
-  bool has_web_contents_for_testing() const { return web_contents_ != nullptr; }
-  std::set<AppId> GetEnqueuedInstallAppIdsForTesting() override;
+  void NotifyWebAppInstalled(const webapps::AppId& app_id);
+  void NotifyWebAppInstalledWithOsHooks(const webapps::AppId& app_id);
+  void NotifyWebAppSourceRemoved(const webapps::AppId& app_id);
+  void NotifyWebAppUninstalled(const webapps::AppId& app_id,
+                               webapps::WebappUninstallSource uninstall_source);
+  void NotifyWebAppManifestUpdated(const webapps::AppId& app_id);
+  void NotifyWebAppWillBeUninstalled(const webapps::AppId& app_id);
+  void NotifyWebAppInstallManagerDestroyed();
+  void NotifyWebAppMigrated(const webapps::AppId& source_app_id,
+                            const webapps::AppId& target_app_id);
 
  private:
-  FRIEND_TEST_ALL_PREFIXES(WebAppInstallManagerTest,
-                           TaskQueueWebContentsReadyRace);
+  const raw_ptr<PrefService, DanglingUntriaged> pref_service_;
+  raw_ptr<WebAppProvider> provider_ = nullptr;
 
-  void EnqueueInstallAppFromSync(
-      const AppId& sync_app_id,
-      std::unique_ptr<WebApplicationInfo> web_application_info,
-      OnceInstallCallback callback);
-  bool IsAppIdAlreadyEnqueued(const AppId& app_id) const;
-
-  // On failure will attempt a fallback install only loading icon URLs.
-  void LoadAndInstallWebAppFromManifestWithFallbackCompleted_ForAppSync(
-      const AppId& sync_app_id,
-      std::unique_ptr<WebApplicationInfo> web_application_info,
-      OnceInstallCallback callback,
-      const AppId& web_app_id,
-      InstallResultCode code);
-
-  void EnqueueTask(std::unique_ptr<WebAppInstallTask> task,
-                   base::OnceClosure start_task);
-  void MaybeStartQueuedTask();
-
-  void DeleteTask(WebAppInstallTask* task);
-  void OnInstallTaskCompleted(WebAppInstallTask* task,
-                              OnceInstallCallback callback,
-                              const AppId& app_id,
-                              InstallResultCode code);
-  void OnQueuedTaskCompleted(WebAppInstallTask* task,
-                             OnceInstallCallback callback,
-                             const AppId& app_id,
-                             InstallResultCode code);
-
-  void OnLoadWebAppAndCheckManifestCompleted(
-      WebAppInstallTask* task,
-      WebAppManifestCheckCallback callback,
-      std::unique_ptr<content::WebContents> web_contents,
-      const AppId& app_id,
-      InstallResultCode code);
-
-  content::WebContents* EnsureWebContentsCreated();
-
-  // Tasks can be queued for sequential completion (to be run one at a time).
-  // FIFO. This is a subset of |tasks_|.
-  struct PendingTask {
-    PendingTask();
-    PendingTask(PendingTask&&);
-    ~PendingTask();
-
-    const WebAppInstallTask* task = nullptr;
-    base::OnceClosure start;
-  };
-
-  void OnWebContentsReadyRunTask(PendingTask pending_task,
-                                 WebAppUrlLoader::Result result);
-
-  DataRetrieverFactory data_retriever_factory_;
-
-  std::unique_ptr<WebAppUrlLoader> url_loader_;
-
-  // All owned tasks.
-  using Tasks = base::flat_set<std::unique_ptr<WebAppInstallTask>,
-                               base::UniquePtrComparator>;
-  Tasks tasks_;
-
-  using TaskQueue = base::queue<PendingTask>;
-  TaskQueue task_queue_;
-  const WebAppInstallTask* current_queued_task_ = nullptr;
-
-  // A single WebContents, shared between tasks in |task_queue_|.
-  std::unique_ptr<content::WebContents> web_contents_;
-
-  bool started_ = false;
+  base::ObserverList<WebAppInstallManagerObserver, /*check_empty=*/true>
+      observers_;
 
   base::WeakPtrFactory<WebAppInstallManager> weak_ptr_factory_{this};
-
 };
 
 }  // namespace web_app

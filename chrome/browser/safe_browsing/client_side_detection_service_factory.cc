@@ -1,16 +1,19 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/safe_browsing/client_side_detection_service_factory.h"
 
-#include "base/command_line.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/optimization_guide/model_execution/optimization_guide_global_state.h"
+#include "chrome/browser/optimization_guide/optimization_guide_global_state_holder_keyed_service.h"
+#include "chrome/browser/optimization_guide/optimization_guide_global_state_holder_keyed_service_factory.h"
 #include "chrome/browser/profiles/incognito_helpers.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/safe_browsing/client_side_detection_service_delegate.h"
+#include "chrome/browser/safe_browsing/chrome_client_side_detection_service_delegate.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_switches.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
-#include "components/safe_browsing/buildflags.h"
 #include "components/safe_browsing/content/browser/client_side_detection_service.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
@@ -20,11 +23,6 @@ namespace safe_browsing {
 // static
 ClientSideDetectionService* ClientSideDetectionServiceFactory::GetForProfile(
     Profile* profile) {
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          ::switches::kDisableClientSidePhishingDetection)) {
-    return nullptr;
-  }
-
   return static_cast<ClientSideDetectionService*>(
       GetInstance()->GetServiceForBrowserContext(profile, /* create= */
                                                  true));
@@ -33,35 +31,58 @@ ClientSideDetectionService* ClientSideDetectionServiceFactory::GetForProfile(
 // static
 ClientSideDetectionServiceFactory*
 ClientSideDetectionServiceFactory::GetInstance() {
-  return base::Singleton<ClientSideDetectionServiceFactory>::get();
+  static base::NoDestructor<ClientSideDetectionServiceFactory> instance;
+  return instance.get();
 }
 
 ClientSideDetectionServiceFactory::ClientSideDetectionServiceFactory()
-    : BrowserContextKeyedServiceFactory(
+    : ProfileKeyedServiceFactory(
           "ClientSideDetectionService",
-          BrowserContextDependencyManager::GetInstance()) {}
-
-KeyedService* ClientSideDetectionServiceFactory::BuildServiceInstanceFor(
-    content::BrowserContext* context) const {
-  bool client_side_detection_enabled =
-#if BUILDFLAG(FULL_SAFE_BROWSING)
-      true;
-#else
-      base::FeatureList::IsEnabled(
-          safe_browsing::kClientSideDetectionForAndroid);
-#endif
-  if (!client_side_detection_enabled)
-    return nullptr;
-
-  Profile* profile = Profile::FromBrowserContext(context);
-  return new ClientSideDetectionService(
-      std::make_unique<ClientSideDetectionServiceDelegate>(profile));
+          ProfileSelections::Builder()
+              .WithRegular(ProfileSelection::kOriginalOnly)
+              // ChromeOS creates various profiles (login, lock screen...) that
+              // do not display web content and thus do not need the
+              // client side phishing detection
+              .WithAshInternals(ProfileSelection::kNone)
+              .Build()) {
+  DependsOn(
+      OptimizationGuideGlobalStateHolderKeyedServiceFactory::GetInstance());
 }
 
-content::BrowserContext*
-ClientSideDetectionServiceFactory::GetBrowserContextToUse(
+std::unique_ptr<KeyedService>
+ClientSideDetectionServiceFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  return chrome::GetBrowserContextOwnInstanceInIncognito(context);
+  if (!g_browser_process || !g_browser_process->safe_browsing_service()) {
+    return nullptr;
+  }
+
+  Profile* profile = Profile::FromBrowserContext(context);
+
+  auto* holder_service =
+      OptimizationGuideGlobalStateHolderKeyedServiceFactory::GetForProfile(
+          Profile::FromBrowserContext(context));
+  if (!holder_service) {
+    return nullptr;
+  }
+  auto& opt_guide = holder_service->GetGlobalState().model_provider();
+
+  return std::make_unique<ClientSideDetectionService>(
+      std::make_unique<ChromeClientSideDetectionServiceDelegate>(profile),
+      &opt_guide);
+}
+
+bool ClientSideDetectionServiceFactory::ServiceIsCreatedWithBrowserContext()
+    const {
+  if (base::FeatureList::IsEnabled(
+          ::features::kLazyKeyedServiceInstantiation) &&
+      ::features::kLazyKeyedServiceInstantiationSafeBrowsing.Get()) {
+    return false;
+  }
+  return true;
+}
+
+bool ClientSideDetectionServiceFactory::ServiceIsNULLWhileTesting() const {
+  return true;
 }
 
 }  // namespace safe_browsing

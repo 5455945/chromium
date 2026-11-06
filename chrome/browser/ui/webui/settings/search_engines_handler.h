@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,47 +6,47 @@
 #define CHROME_BROWSER_UI_WEBUI_SETTINGS_SEARCH_ENGINES_HANDLER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "chrome/browser/ui/search_engines/edit_search_engine_controller.h"
 #include "chrome/browser/ui/search_engines/keyword_editor_controller.h"
 #include "chrome/browser/ui/webui/settings/settings_page_ui_handler.h"
-#include "components/prefs/pref_change_registrar.h"
-#include "ui/base/models/table_model_observer.h"
+#include "components/search_engines/template_url.h"
+#include "components/search_engines/template_url_service_observer.h"
 
 class Profile;
+class TemplateURLService;
 
-namespace base {
-class DictionaryValue;
-class ListValue;
-}
-
-namespace extensions {
-class Extension;
-}
+namespace search_engines {
+enum class ChoiceMadeLocation;
+class SearchEngineSettingsDataProvider;
+}  // namespace search_engines
 
 namespace settings {
 
 class SearchEnginesHandler : public SettingsPageUIHandler,
-                             public ui::TableModelObserver,
+                             public TemplateURLServiceObserver,
                              public EditSearchEngineControllerDelegate {
  public:
   explicit SearchEnginesHandler(Profile* profile);
+
+  SearchEnginesHandler(const SearchEnginesHandler&) = delete;
+  SearchEnginesHandler& operator=(const SearchEnginesHandler&) = delete;
+
   ~SearchEnginesHandler() override;
 
-  // ui::TableModelObserver implementation.
-  void OnModelChanged() override;
-  void OnItemsChanged(int start, int length) override;
-  void OnItemsAdded(int start, int length) override;
-  void OnItemsRemoved(int start, int length) override;
+  // TemplateURLServiceObserver implementation.
+  void OnTemplateURLServiceChanged() override;
 
   // EditSearchEngineControllerDelegate implementation.
   void OnEditedKeyword(TemplateURL* template_url,
                        const std::u16string& title,
                        const std::u16string& keyword,
-                       const std::string& url) override;
+                       const std::string& fixed_up_url) override;
 
   // SettingsPageUIHandler implementation.
   void RegisterMessages() override;
@@ -54,25 +54,79 @@ class SearchEnginesHandler : public SettingsPageUIHandler,
   void OnJavascriptDisallowed() override;
 
  private:
+  friend class SearchEnginesHandlerTest;
+
   // Retrieves all search engines and returns them to WebUI.
-  void HandleGetSearchEnginesList(const base::ListValue* args);
+  void HandleGetCategorizedTemplateUrls(const base::ListValue& args);
 
-  std::unique_ptr<base::DictionaryValue> GetSearchEnginesList();
+  base::DictValue GetCategorizedTemplateUrls();
 
-  // Removes the search engine at the given index. Called from WebUI.
-  void HandleRemoveSearchEngine(const base::ListValue* args);
+  // Retrieves the default search engine picker data and returns it to WebUI.
+  void HandleGetDefaultSearchEnginePickerData(const base::ListValue& args);
 
-  // Sets the search engine at the given index to be default. Called from WebUI.
-  void HandleSetDefaultSearchEngine(const base::ListValue* args);
+  base::DictValue GetDefaultSearchEnginePickerData();
 
-  // Starts an edit session for the search engine at the given index. If the
-  // index is -1, starts editing a new search engine instead of an existing one.
+  // Retrieves the "more search engines" list for the choice dialog and returns
+  // it to WebUI. Called from WebUI.
+  void HandleGetMoreSearchEngines(const base::ListValue& args);
+
+  base::ListValue GetMoreSearchEngines();
+
+  // Retrieves all search engines and returns them to WebUI.
+  // TODO (crbug.com/494551138): Remove once `SearchSettingsUpdate` is launched.
+  void HandleGetSearchEnginesList(const base::ListValue& args);
+
+  base::DictValue GetSearchEnginesList();
+
+  // Returns whether the search engine choice should be saved in guest mode
+  // Returns null if the profile is not eligible for guest choice saving.
   // Called from WebUI.
-  void HandleSearchEngineEditStarted(const base::ListValue* args);
+  void HandleGetSaveGuestChoice(const base::ListValue& args);
+
+  // Removes a search engine. Called from WebUI.
+  // `args` contains:
+  //   [0]: string: The opaque ID of the search engine to remove.
+  void HandleRemoveSearchEngine(const base::ListValue& args);
+
+  // Sets a search engine to be default. Called from WebUI.
+  // `args` contains:
+  //   [0]: string: The opaque ID of the search engine to make default.
+  //   [1]: search_engines::ChoiceMadeLocation (int): Location where the choice
+  //        was made.
+  //   [2]: bool (optional): Whether to save the choice in guest mode.
+  void HandleSetDefaultSearchEngine(const base::ListValue& args);
+
+  // Makes the engine with `id` the default search engine, records the user
+  // action, and updates the guest mode choice if `save_guest_choice` has a
+  // value. `IdType` is one of the ID types accepted by
+  // `KeywordEditorController::MakeDefaultTemplateURL()`.
+  template <typename IdType>
+  void SetDefaultSearchEngine(
+      IdType id,
+      search_engines::ChoiceMadeLocation choice_made_location,
+      std::optional<bool> save_guest_choice);
+
+  // Activates or deactivates a search engine. Called from WebUI.
+  // `args` contains:
+  //   [0]: string: The opaque ID of the search engine.
+  //   [1]: bool: True to activate, false to deactivate.
+  void HandleSetIsActiveSearchEngine(const base::ListValue& args);
+
+  // Starts an edit session for a search engine. If the ID is empty, starts
+  // editing a new search engine instead of an existing one. Called from WebUI.
+  // `args` contains:
+  //   [0]: string: The opaque ID of the search engine to edit, or empty to
+  //        start editing a new search engine.
+  void HandleSearchEngineEditStarted(const base::ListValue& args);
 
   // Validates the given search engine values, and reports the results back
   // to WebUI. Called from WebUI.
-  void HandleValidateSearchEngineInput(const base::ListValue* args);
+  // `args` contains:
+  //   [0]: string: The callback ID to resolve with the validity result.
+  //   [1]: string: The field being validated ("searchEngine", "keyword", or
+  //        "queryUrl").
+  //   [2]: string: The field value to validate.
+  void HandleValidateSearchEngineInput(const base::ListValue& args);
 
   // Checks whether the given user input field (searchEngine, keyword, queryUrl)
   // is populated with a valid value.
@@ -81,29 +135,43 @@ class SearchEnginesHandler : public SettingsPageUIHandler,
 
   // Called when an edit is canceled.
   // Called from WebUI.
-  void HandleSearchEngineEditCancelled(const base::ListValue* args);
+  void HandleSearchEngineEditCancelled(const base::ListValue& args);
 
-  // Called when an edit is finished and should be saved.
-  // Called from WebUI.
-  void HandleSearchEngineEditCompleted(const base::ListValue* args);
+  // Called when an edit is finished and should be saved. Called from WebUI.
+  // `args` contains:
+  //   [0]: string: The search engine display name.
+  //   [1]: string: The keyword.
+  //   [2]: string: The search query URL.
+  void HandleSearchEngineEditCompleted(const base::ListValue& args);
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // Request the browser to open its search settings.
+  void HandleOpenBrowserSearchSettings(const base::ListValue& args);
+#endif
 
   // Returns a dictionary to pass to WebUI representing the given search engine.
-  std::unique_ptr<base::DictionaryValue> CreateDictionaryForEngine(
-      int index,
-      bool is_default);
+  // The engine is identified by an opaque string ID (e.g. "db:42") that the
+  // WebUI sends back to reference it in subsequent messages.
+  base::DictValue CreateDictionaryForEngine(TemplateURL* template_url);
 
-  // Returns a dictionary to pass to WebUI representing the extension.
-  base::DictionaryValue* CreateDictionaryForExtension(
-      const extensions::Extension& extension);
+  // Records the search hijacking heuristic metric if not already recorded.
+  void RecordSearchHijackingHeuristicMetric();
 
-  Profile* const profile_;
+  const raw_ptr<Profile> profile_;
 
   KeywordEditorController list_controller_;
   std::unique_ptr<EditSearchEngineController> edit_controller_;
-  PrefChangeRegistrar pref_change_registrar_;
-  base::WeakPtrFactory<SearchEnginesHandler> weak_ptr_factory_{this};
+  base::ScopedObservation<TemplateURLService, TemplateURLServiceObserver>
+      scoped_url_service_observation_{this};
 
-  DISALLOW_COPY_AND_ASSIGN(SearchEnginesHandler);
+  // Prepares the engine lists shown by this handler and owns the
+  // once-per-page-load settings telemetry.
+  // Note: Object lifetime is how we track the page load / sessions. So do not
+  // recreate it during the handler's lifetime.
+  std::unique_ptr<search_engines::SearchEngineSettingsDataProvider>
+      settings_data_provider_;
+
+  bool has_recorded_hijacking_metric_ = false;
 };
 
 }  // namespace settings

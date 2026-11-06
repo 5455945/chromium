@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,8 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback.h"
 
 class ProfileManager;
 
@@ -32,11 +32,6 @@ class ProfileShortcutManager {
   // profile created.
   virtual void CreateProfileShortcut(const base::FilePath& profile_path) = 0;
 
-  // Create an incognito desktop shortcut for the profile with path
-  // |profile_path|
-  virtual void CreateIncognitoProfileShortcut(
-      const base::FilePath& profile_path) = 0;
-
   // Removes any desktop profile shortcuts for the profile corresponding to
   // |profile_path|.
   virtual void RemoveProfileShortcuts(const base::FilePath& profile_path) = 0;
@@ -53,6 +48,10 @@ class ProfileShortcutManager {
                                      base::CommandLine* command_line,
                                      std::wstring* name,
                                      base::FilePath* icon_path) = 0;
+
+  // Returns whether a profile shortcut can be created for the profile at
+  // |profile_path|. If false, the shortcut setting isn't shown for the profile.
+  virtual bool CanCreateProfileShortcut(const base::FilePath& profile_path);
 
   // Any time a profile is created this class might do a lot of work in the
   // background that's rarely important to unit tests.

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,17 +8,16 @@
 
 #include <climits>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
-#include "base/single_thread_task_runner.h"
+#include "base/memory/raw_ptr.h"
 #include "base/task/current_thread.h"
-#include "base/task/post_task.h"
-#include "base/task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/task/task_runner.h"
 #include "base/time/time.h"
 #include "ui/snapshot/snapshot.h"
 
@@ -41,7 +40,7 @@ class ScreenshotGrabber::ScopedCursorHider {
  public:
   // The nullptr might be returned when GetCursorClient is nullptr.
   static std::unique_ptr<ScopedCursorHider> Create(aura::Window* window) {
-    DCHECK(window->IsRootWindow());
+    CHECK(window->IsRootWindow(), base::NotFatalUntil::M163);
     aura::client::CursorClient* cursor_client =
         aura::client::GetCursorClient(window);
     if (!cursor_client)
@@ -51,6 +50,9 @@ class ScreenshotGrabber::ScopedCursorHider {
         base::WrapUnique(new ScopedCursorHider(window)));
   }
 
+  ScopedCursorHider(const ScopedCursorHider&) = delete;
+  ScopedCursorHider& operator=(const ScopedCursorHider&) = delete;
+
   ~ScopedCursorHider() {
     aura::client::CursorClient* cursor_client =
         aura::client::GetCursorClient(window_);
@@ -59,21 +61,18 @@ class ScreenshotGrabber::ScopedCursorHider {
 
  private:
   explicit ScopedCursorHider(aura::Window* window) : window_(window) {}
-  aura::Window* window_;
-
-  DISALLOW_COPY_AND_ASSIGN(ScopedCursorHider);
+  raw_ptr<aura::Window> window_;
 };
 #endif
 
-ScreenshotGrabber::ScreenshotGrabber() {}
+ScreenshotGrabber::ScreenshotGrabber() = default;
 
-ScreenshotGrabber::~ScreenshotGrabber() {
-}
+ScreenshotGrabber::~ScreenshotGrabber() = default;
 
 void ScreenshotGrabber::TakeScreenshot(gfx::NativeWindow window,
                                        const gfx::Rect& rect,
                                        ScreenshotCallback callback) {
-  DCHECK(base::CurrentUIThread::IsSet());
+  CHECK(base::CurrentUIThread::IsSet(), base::NotFatalUntil::M163);
   last_screenshot_timestamp_ = base::TimeTicks::Now();
 
   bool is_partial = true;
@@ -88,9 +87,9 @@ void ScreenshotGrabber::TakeScreenshot(gfx::NativeWindow window,
 
   cursor_hider_ = ScopedCursorHider::Create(aura_window->GetRootWindow());
 #endif
-  ui::GrabWindowSnapshotAsyncPNG(
+  ui::GrabWindowSnapshotAsPNG(
       window, rect,
-      base::BindOnce(&ScreenshotGrabber::GrabWindowSnapshotAsyncCallback,
+      base::BindOnce(&ScreenshotGrabber::GrabSnapshotImageCallback,
                      factory_.GetWeakPtr(), window_identifier, is_partial,
                      std::move(callback)));
 }
@@ -98,15 +97,15 @@ void ScreenshotGrabber::TakeScreenshot(gfx::NativeWindow window,
 bool ScreenshotGrabber::CanTakeScreenshot() {
   return last_screenshot_timestamp_.is_null() ||
          base::TimeTicks::Now() - last_screenshot_timestamp_ >
-             base::TimeDelta::FromMilliseconds(kScreenshotMinimumIntervalInMS);
+             base::Milliseconds(kScreenshotMinimumIntervalInMS);
 }
 
-void ScreenshotGrabber::GrabWindowSnapshotAsyncCallback(
+void ScreenshotGrabber::GrabSnapshotImageCallback(
     const std::string& window_identifier,
     bool is_partial,
     ScreenshotCallback callback,
     scoped_refptr<base::RefCountedMemory> png_data) {
-  DCHECK(base::CurrentUIThread::IsSet());
+  CHECK(base::CurrentUIThread::IsSet(), base::NotFatalUntil::M163);
 
 #if defined(USE_AURA)
   cursor_hider_.reset();

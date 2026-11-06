@@ -1,14 +1,16 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.payments.handler;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableIntPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableObjectPropertyKey;
 
 /** PaymentHandler UI properties, which fully describe the state of the UI. */
+@NullMarked
 /* package */ class PaymentHandlerProperties {
     /** The visible height of the PaymentHandler UI's content area in pixels. */
     /* package */ static final WritableIntPropertyKey CONTENT_VISIBLE_HEIGHT_PX =

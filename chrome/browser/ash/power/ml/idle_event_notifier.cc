@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,9 @@
 
 #include "base/check.h"
 #include "base/notreached.h"
+#include "base/time/time.h"
 #include "chrome/browser/ash/power/ml/recent_events_counter.h"
-#include "chromeos/dbus/dbus_thread_manager.h"
+#include "chromeos/ash/components/dbus/dbus_thread_manager.h"
 #include "chromeos/dbus/power_manager/idle.pb.h"
 #include "chromeos/dbus/power_manager/suspend.pb.h"
 #include "ui/events/event.h"
@@ -32,15 +33,15 @@ struct IdleEventNotifier::ActivityDataInternal {
   base::Time last_user_activity_time;
 
   TimeSinceBoot last_activity_since_boot;
-  absl::optional<TimeSinceBoot> earliest_activity_since_boot;
-  absl::optional<TimeSinceBoot> last_key_since_boot;
-  absl::optional<TimeSinceBoot> last_mouse_since_boot;
-  absl::optional<TimeSinceBoot> last_touch_since_boot;
-  absl::optional<TimeSinceBoot> video_start_time;
-  absl::optional<TimeSinceBoot> video_end_time;
+  std::optional<TimeSinceBoot> earliest_activity_since_boot;
+  std::optional<TimeSinceBoot> last_key_since_boot;
+  std::optional<TimeSinceBoot> last_mouse_since_boot;
+  std::optional<TimeSinceBoot> last_touch_since_boot;
+  std::optional<TimeSinceBoot> video_start_time;
+  std::optional<TimeSinceBoot> video_end_time;
 };
 
-IdleEventNotifier::ActivityData::ActivityData() {}
+IdleEventNotifier::ActivityData::ActivityData() = default;
 
 IdleEventNotifier::ActivityData::ActivityData(const ActivityData& input_data) {
   last_activity_day = input_data.last_activity_day;
@@ -55,10 +56,11 @@ IdleEventNotifier::ActivityData::ActivityData(const ActivityData& input_data) {
   key_events_in_last_hour = input_data.key_events_in_last_hour;
   mouse_events_in_last_hour = input_data.mouse_events_in_last_hour;
   touch_events_in_last_hour = input_data.touch_events_in_last_hour;
+  is_video_playing = input_data.is_video_playing;
 }
 
 IdleEventNotifier::IdleEventNotifier(
-    PowerManagerClient* power_manager_client,
+    chromeos::PowerManagerClient* power_manager_client,
     ui::UserActivityDetector* detector,
     mojo::PendingReceiver<viz::mojom::VideoDetectorObserver> receiver)
     : internal_data_(std::make_unique<ActivityDataInternal>()),
@@ -72,9 +74,9 @@ IdleEventNotifier::IdleEventNotifier(
       touch_counter_(
           std::make_unique<RecentEventsCounter>(kUserInputEventsDuration,
                                                 kNumUserInputEventsBuckets)) {
-  DCHECK(power_manager_client);
+  CHECK(power_manager_client, base::NotFatalUntil::M160);
   power_manager_client_observation_.Observe(power_manager_client);
-  DCHECK(detector);
+  CHECK(detector, base::NotFatalUntil::M160);
   user_activity_observation_.Observe(detector);
 }
 
@@ -141,7 +143,6 @@ void IdleEventNotifier::OnUserActivity(const ui::Event* event) {
 void IdleEventNotifier::OnVideoActivityStarted() {
   if (video_playing_) {
     NOTREACHED() << "Duplicate start of video activity";
-    return;
   }
   video_playing_ = true;
   UpdateActivityData(ActivityType::VIDEO);
@@ -150,7 +151,6 @@ void IdleEventNotifier::OnVideoActivityStarted() {
 void IdleEventNotifier::OnVideoActivityEnded() {
   if (!video_playing_) {
     NOTREACHED() << "Duplicate end of video activity";
-    return;
   }
   video_playing_ = false;
   UpdateActivityData(ActivityType::VIDEO);
@@ -210,13 +210,14 @@ IdleEventNotifier::ActivityData IdleEventNotifier::ConvertActivityData(
   }
 
   if (internal_data_->video_start_time && internal_data_->video_end_time) {
-    DCHECK(!video_playing_);
+    CHECK(!video_playing_, base::NotFatalUntil::M160);
     data.video_playing_time = internal_data_->video_end_time.value() -
                               internal_data_->video_start_time.value();
     data.time_since_video_ended =
         time_since_boot - internal_data_->video_end_time.value();
   }
 
+  data.is_video_playing = video_playing_;
   data.key_events_in_last_hour = key_counter_->GetTotal(time_since_boot);
   data.mouse_events_in_last_hour = mouse_counter_->GetTotal(time_since_boot);
   data.touch_events_in_last_hour = touch_counter_->GetTotal(time_since_boot);
@@ -226,7 +227,7 @@ IdleEventNotifier::ActivityData IdleEventNotifier::ConvertActivityData(
 
 void IdleEventNotifier::UpdateActivityData(ActivityType type) {
   const base::Time now = base::Time::Now();
-  DCHECK(internal_data_);
+  CHECK(internal_data_, base::NotFatalUntil::M160);
   internal_data_->last_activity_time = now;
 
   const base::TimeDelta time_since_boot = boot_clock_.GetTimeSinceBoot();
@@ -277,9 +278,9 @@ void IdleEventNotifier::UpdateActivityData(ActivityType type) {
 // time active, which should be reset between idle events.
 void IdleEventNotifier::ResetTimestampsForRecentActivity() {
   internal_data_->last_activity_since_boot = base::TimeDelta();
-  internal_data_->earliest_activity_since_boot = absl::nullopt;
-  internal_data_->video_start_time = absl::nullopt;
-  internal_data_->video_end_time = absl::nullopt;
+  internal_data_->earliest_activity_since_boot = std::nullopt;
+  internal_data_->video_start_time = std::nullopt;
+  internal_data_->video_end_time = std::nullopt;
 }
 
 }  // namespace ml

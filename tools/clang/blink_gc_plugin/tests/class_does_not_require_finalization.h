@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -40,4 +40,4 @@ class DoesNeedFinalizer2 : public GarbageCollected<DoesNeedFinalizer2>,
 };
 }
 
-#endif
+#endif  // CLASS_DOES_NOT_REQUIRE_FINALIZATION_BASE_H_

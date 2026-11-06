@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,21 +9,19 @@
 
 @protocol ConfirmationAlertActionHandler <NSObject>
 
-// The "Dismiss" button was touched.
-- (void)confirmationAlertDismissAction;
-
 // The "Primary Action" was touched.
 - (void)confirmationAlertPrimaryAction;
+
+@optional
 
 // The "Secondary Action" was touched.
 - (void)confirmationAlertSecondaryAction;
 
-// The "Learn More" button was touched.
-- (void)confirmationAlertLearnMoreAction;
-
-@optional
 // The "Tertiary Action" was touched.
 - (void)confirmationAlertTertiaryAction;
+
+// The `ConfirmationAlertViewController` was dismissed.
+- (void)confirmationAlertDismissed;
 
 @end
 

@@ -1,10 +1,11 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef EXTENSIONS_COMMON_MOJOM_CHANNEL_MOJOM_TRAITS_H_
 #define EXTENSIONS_COMMON_MOJOM_CHANNEL_MOJOM_TRAITS_H_
 
+#include "base/notreached.h"
 #include "components/version_info/channel.h"
 #include "extensions/common/mojom/channel.mojom-shared.h"
 #include "mojo/public/cpp/bindings/enum_traits.h"
@@ -27,31 +28,22 @@ struct EnumTraits<extensions::mojom::Channel, version_info::Channel> {
         return extensions::mojom::Channel::kStable;
     }
     NOTREACHED();
-    return extensions::mojom::Channel::kUnknown;
   }
 
-  static bool FromMojom(extensions::mojom::Channel input,
-                        version_info::Channel* out) {
+  static version_info::Channel FromMojom(extensions::mojom::Channel input) {
     switch (input) {
       case extensions::mojom::Channel::kUnknown:
-        *out = version_info::Channel::UNKNOWN;
-        return true;
+        return version_info::Channel::UNKNOWN;
       case extensions::mojom::Channel::kCanary:
-        *out = version_info::Channel::CANARY;
-        return true;
+        return version_info::Channel::CANARY;
       case extensions::mojom::Channel::kDev:
-        *out = version_info::Channel::DEV;
-        return true;
+        return version_info::Channel::DEV;
       case extensions::mojom::Channel::kBeta:
-        *out = version_info::Channel::BETA;
-        return true;
+        return version_info::Channel::BETA;
       case extensions::mojom::Channel::kStable:
-        *out = version_info::Channel::STABLE;
-        return true;
+        return version_info::Channel::STABLE;
     }
     NOTREACHED();
-    *out = version_info::Channel::UNKNOWN;
-    return false;
   }
 };
 

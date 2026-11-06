@@ -1,22 +1,22 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/login/test/fake_eula_mixin.h"
 
 #include "ash/constants/ash_switches.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/strings/string_util.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "url/gurl.h"
 
-using net::test_server::BasicHttpResponse;
-using net::test_server::HttpRequest;
-using net::test_server::HttpResponse;
-
-namespace chromeos {
-
+namespace ash {
 namespace {
+
+using ::net::test_server::BasicHttpResponse;
+using ::net::test_server::HttpRequest;
+using ::net::test_server::HttpResponse;
 
 constexpr char kFakeOnlineEulaPath[] = "/intl/en-US/chrome/eula_text.html";
 
@@ -26,7 +26,7 @@ const char* FakeEulaMixin::kFakeOnlineEula = "No obligations at all";
 const char* FakeEulaMixin::kOfflineEULAWarning =
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
     // See IDS_TERMS_HTML for the complete text.
-    "Google Chrome and Chrome OS Additional Terms of Service";
+    "Google Chrome and ChromeOS Additional Terms of Service";
 #else
     // Placeholder text in terms_chromium.html.
     "In official builds this space will show the terms of service.";
@@ -54,7 +54,7 @@ void FakeEulaMixin::SetUpCommandLine(base::CommandLine* command_line) {
 std::unique_ptr<HttpResponse> FakeEulaMixin::HandleRequest(
     const HttpRequest& request) {
   GURL request_url = GURL("http://localhost").Resolve(request.relative_url);
-  const std::string request_path = request_url.path();
+  const std::string request_path = request_url.GetPath();
   if (!base::EndsWith(request_path, "/eula_text.html",
                       base::CompareCase::SENSITIVE)) {
     return nullptr;
@@ -74,4 +74,4 @@ std::unique_ptr<HttpResponse> FakeEulaMixin::HandleRequest(
   return std::move(http_response);
 }
 
-}  // namespace chromeos
+}  // namespace ash

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,14 +12,10 @@
 #include <utility>
 #include <vector>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "net/base/ip_address.h"
 #include "net/proxy_resolution/proxy_resolve_dns_operation.h"
 #include "services/proxy_resolver/proxy_host_resolver.h"
-
-namespace net {
-class NetworkIsolationKey;
-}  // namespace net
 
 namespace proxy_resolver {
 
@@ -35,16 +31,13 @@ class MockProxyHostResolver : public ProxyHostResolver {
 
   std::unique_ptr<Request> CreateRequest(
       const std::string& hostname,
-      net::ProxyResolveDnsOperation operation,
-      const net::NetworkIsolationKey& network_isolation_key) override;
+      net::ProxyResolveDnsOperation operation) override;
 
   void SetError(const std::string& hostname,
-                net::ProxyResolveDnsOperation operation,
-                const net::NetworkIsolationKey& network_isolation_key);
+                net::ProxyResolveDnsOperation operation);
 
   void SetResult(const std::string& hostname,
                  net::ProxyResolveDnsOperation operation,
-                 const net::NetworkIsolationKey& network_isolation_key,
                  std::vector<net::IPAddress> result);
 
   void FailAll();
@@ -52,9 +45,7 @@ class MockProxyHostResolver : public ProxyHostResolver {
   unsigned num_resolve() const { return num_resolve_; }
 
  private:
-  using ResultKey = std::tuple<std::string,
-                               net::ProxyResolveDnsOperation,
-                               net::NetworkIsolationKey>;
+  using ResultKey = std::tuple<std::string, net::ProxyResolveDnsOperation>;
 
   class RequestImpl;
 
@@ -75,8 +66,7 @@ class HangingProxyHostResolver : public ProxyHostResolver {
 
   std::unique_ptr<Request> CreateRequest(
       const std::string& hostname,
-      net::ProxyResolveDnsOperation operation,
-      const net::NetworkIsolationKey& network_isolation_key) override;
+      net::ProxyResolveDnsOperation operation) override;
 
   int num_cancelled_requests() const { return num_cancelled_requests_; }
 

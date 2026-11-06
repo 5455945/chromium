@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,6 +11,9 @@ import android.content.Intent;
 import android.os.Binder;
 import android.os.IBinder;
 
+import org.chromium.build.annotations.NullMarked;
+
+@NullMarked
 public class ResidentService extends Service {
     static {
         // Loading the native library.
@@ -37,8 +40,7 @@ public class ResidentService extends Service {
         if (memory > 0) {
             Intent notificationIntent = new Intent(this, MemConsumer.class);
             notificationIntent.setAction(MemConsumer.NOTIFICATION_ACTION);
-            PendingIntent pendingIntent =
-                    PendingIntent.getActivity(this, 0, notificationIntent, 0);
+            PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, notificationIntent, 0);
             Notification notification =
                     new Notification.Builder(getApplicationContext())
                             .setContentTitle("MC running (" + memory + "Mb)")

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,11 @@
 #include <map>
 
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
+#include "base/no_destructor.h"
+#include "base/scoped_multi_source_observation.h"
 #include "base/sequence_checker.h"
-#include "content/public/browser/notification_observer.h"
-#include "content/public/browser/notification_registrar.h"
-#include "content/public/browser/notification_service.h"
+#include "content/public/browser/render_process_host_creation_observer.h"
+#include "content/public/browser/render_process_host_observer.h"
 #include "content/public/test/browser_test_utils.h"
 
 namespace content {
@@ -35,6 +35,10 @@ class ScopedAllowRendererCrashes {
   // Ignores crashes of the process associated with the given |frame|.
   explicit ScopedAllowRendererCrashes(const ToRenderFrameHost& frame);
 
+  ScopedAllowRendererCrashes(const ScopedAllowRendererCrashes&) = delete;
+  ScopedAllowRendererCrashes& operator=(const ScopedAllowRendererCrashes&) =
+      delete;
+
   ~ScopedAllowRendererCrashes();
 
  private:
@@ -44,27 +48,33 @@ class ScopedAllowRendererCrashes {
   // The special |ChildProcessHost::kInvalidUniqueID| value means that crashes
   // of *any* process are allowed.
   int process_id_;
-
-  DISALLOW_COPY_AND_ASSIGN(ScopedAllowRendererCrashes);
 };
 
 // Helper that BrowserTestBase can use to start monitoring for renderer crashes
 // (triggering a test failure when a renderer crash happens).
-//
-// TODO(lukasza): https://crbug.com/972220: Actually start using this class,
-// by constructing it from BrowserTestBase::ProxyRunTestOnMainThreadLoop
-// (before calling PreRunTestOnMainThread).
-class NoRendererCrashesAssertion : public NotificationObserver {
+class NoRendererCrashesAssertion : public RenderProcessHostCreationObserver,
+                                   public RenderProcessHostObserver {
  public:
   NoRendererCrashesAssertion();
+
+  NoRendererCrashesAssertion(const NoRendererCrashesAssertion&) = delete;
+  NoRendererCrashesAssertion& operator=(const NoRendererCrashesAssertion&) =
+      delete;
+
   ~NoRendererCrashesAssertion() override;
 
  private:
-  void Observe(int type,
-               const content::NotificationSource& source,
-               const content::NotificationDetails& details) override;
+  // RenderProcessHostCreationObserver:
+  void OnRenderProcessHostCreated(RenderProcessHost* host) override;
 
-  NotificationRegistrar registrar_;
+  // RenderProcessHostObserver:
+  void RenderProcessExited(RenderProcessHost* host,
+                           const ChildProcessTerminationInfo& info) override;
+  void RenderProcessHostDestroyed(RenderProcessHost* host) override;
+
+  base::ScopedMultiSourceObservation<RenderProcessHost,
+                                     RenderProcessHostObserver>
+      process_observations_{this};
 
   // Internal helper class for keeping track of suspensions that should cause
   // us to ignore crashes in a specific renderer process.
@@ -72,6 +82,10 @@ class NoRendererCrashesAssertion : public NotificationObserver {
    public:
     static Suspensions& GetInstance();
     Suspensions();
+
+    Suspensions(const Suspensions&) = delete;
+    Suspensions& operator=(const Suspensions&) = delete;
+
     ~Suspensions();
 
     // Methods for adding or removing a suspension.
@@ -89,8 +103,6 @@ class NoRendererCrashesAssertion : public NotificationObserver {
 
     std::map<int, int> process_id_to_suspension_count_;
     SEQUENCE_CHECKER(sequence_checker_);
-
-    DISALLOW_COPY_AND_ASSIGN(Suspensions);
   };
   friend ScopedAllowRendererCrashes;
   FRIEND_TEST_ALL_PREFIXES(NoRendererCrashesAssertionSuspensions,
@@ -100,8 +112,6 @@ class NoRendererCrashesAssertion : public NotificationObserver {
                            SingleProcessNesting);
   FRIEND_TEST_ALL_PREFIXES(NoRendererCrashesAssertionSuspensions,
                            AllProcessesNesting);
-
-  DISALLOW_COPY_AND_ASSIGN(NoRendererCrashesAssertion);
 };
 
 }  // namespace content

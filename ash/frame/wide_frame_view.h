@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,16 +6,18 @@
 #define ASH_FRAME_WIDE_FRAME_VIEW_H_
 
 #include "ash/ash_export.h"
-#include "ash/frame/frame_context_menu_controller.h"
 #include "ash/wm/overview/overview_observer.h"
+#include "base/memory/raw_ptr.h"
 #include "chromeos/ui/frame/caption_buttons/caption_button_model.h"
+#include "chromeos/ui/frame/frame_context_menu_controller.h"
 #include "chromeos/ui/frame/immersive/immersive_fullscreen_controller_delegate.h"
 #include "ui/aura/window_observer.h"
 #include "ui/display/display_observer.h"
-#include "ui/views/widget/widget_delegate.h"
+#include "ui/views/view.h"
 
 namespace chromeos {
 class ImmersiveFullscreenController;
+class HeaderView;
 }
 
 namespace views {
@@ -23,7 +25,6 @@ class Widget;
 }
 
 namespace ash {
-class HeaderView;
 
 // WideFrameView is used for the case where the widget's maximzed/fullscreen
 // doesn't cover the entire workarea/display area but the caption frame should
@@ -33,16 +34,20 @@ class HeaderView;
 //
 // TODO(oshima): Currently client is responsible for hooking this up to
 // the target widget because ImmersiveFullscreenController is not owned by
-// NonClientFrameViewAsh. Investigate if we integrate this into
-// NonClientFrameViewAsh.
+// FrameViewAsh. Investigate if we integrate this into
+// FrameViewAsh.
 class ASH_EXPORT WideFrameView
-    : public views::WidgetDelegateView,
+    : public views::View,
       public aura::WindowObserver,
       public display::DisplayObserver,
       public chromeos::ImmersiveFullscreenControllerDelegate,
-      public FrameContextMenuController::Delegate {
+      public chromeos::FrameContextMenuController::Delegate {
  public:
   explicit WideFrameView(views::Widget* target);
+
+  WideFrameView(const WideFrameView&) = delete;
+  WideFrameView& operator=(const WideFrameView&) = delete;
+
   ~WideFrameView() override;
 
   // Initialize |immersive_fullscreen_controller| so that the controller reveals
@@ -53,14 +58,16 @@ class ASH_EXPORT WideFrameView
   void SetCaptionButtonModel(
       std::unique_ptr<chromeos::CaptionButtonModel> mode);
 
-  HeaderView* header_view() { return header_view_; }
+  chromeos::HeaderView* header_view() { return header_view_; }
 
- private:
   static gfx::Rect GetFrameBounds(views::Widget* target);
 
+ private:
   // views::View:
-  void Layout() override;
+  void Layout(PassKey) override;
   void OnMouseEvent(ui::MouseEvent* event) override;
+  void AddedToWidget() override;
+  void RemovedFromWidget() override;
 
   // aura::WindowObserver:
   void OnWindowDestroying(aura::Window* window) override;
@@ -81,25 +88,22 @@ class ASH_EXPORT WideFrameView
   bool ShouldShowContextMenu(views::View* source,
                              const gfx::Point& screen_coords_point) override;
 
-  HeaderView* GetTargetHeaderView();
+  chromeos::HeaderView* GetTargetHeaderView();
 
   // The target widget this frame will control.
-  views::Widget* target_;
-
-  std::unique_ptr<views::Widget> widget_;
+  raw_ptr<views::Widget> target_;
 
   display::ScopedDisplayObserver display_observer_{this};
 
-  HeaderView* header_view_ = nullptr;
+  raw_ptr<chromeos::HeaderView> header_view_ = nullptr;
 
-  std::unique_ptr<FrameContextMenuController> frame_context_menu_controller_;
+  std::unique_ptr<chromeos::FrameContextMenuController>
+      frame_context_menu_controller_;
 
   // Called when |target_|'s "paint as active" state has changed.
   void PaintAsActiveChanged();
 
   base::CallbackListSubscription paint_as_active_subscription_;
-
-  DISALLOW_COPY_AND_ASSIGN(WideFrameView);
 };
 
 }  // namespace ash

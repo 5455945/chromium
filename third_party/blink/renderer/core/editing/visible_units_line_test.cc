@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,6 @@
 #include "third_party/blink/renderer/core/editing/visible_position.h"
 #include "third_party/blink/renderer/core/html/forms/text_control_element.h"
 #include "third_party/blink/renderer/core/layout/layout_text_fragment.h"
-#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 
 namespace blink {
 
@@ -27,7 +26,7 @@ static VisiblePositionInFlatTree EndOfLine(
 
 class VisibleUnitsLineTest : public EditingTestBase {
  protected:
-  static PositionWithAffinity PositionWithAffinityInDOMTree(
+  static PositionWithAffinity PositionWithAffinityInDomTree(
       Node& anchor,
       int offset,
       TextAffinity affinity = TextAffinity::kDownstream) {
@@ -35,7 +34,7 @@ class VisibleUnitsLineTest : public EditingTestBase {
                                 affinity);
   }
 
-  static VisiblePosition CreateVisiblePositionInDOMTree(
+  static VisiblePosition CreateVisiblePositionInDomTree(
       Node& anchor,
       int offset,
       TextAffinity affinity = TextAffinity::kDownstream) {
@@ -55,10 +54,6 @@ class VisibleUnitsLineTest : public EditingTestBase {
       int offset,
       TextAffinity affinity = TextAffinity::kDownstream) {
     return CreateVisiblePosition(PositionInFlatTree(&anchor, offset), affinity);
-  }
-
-  static bool LayoutNGEnabled() {
-    return RuntimeEnabledFeatures::LayoutNGEnabled();
   }
 
   std::string TestEndOfLine(const std::string& input) {
@@ -83,22 +78,6 @@ class VisibleUnitsLineTest : public EditingTestBase {
   }
 };
 
-class ParameterizedVisibleUnitsLineTest
-    : public ::testing::WithParamInterface<bool>,
-      private ScopedLayoutNGForTest,
-      public VisibleUnitsLineTest {
- protected:
-  ParameterizedVisibleUnitsLineTest() : ScopedLayoutNGForTest(GetParam()) {}
-
-  bool LayoutNGEnabled() const {
-    return RuntimeEnabledFeatures::LayoutNGEnabled();
-  }
-};
-
-INSTANTIATE_TEST_SUITE_P(All,
-                         ParameterizedVisibleUnitsLineTest,
-                         ::testing::Bool());
-
 TEST_F(VisibleUnitsLineTest, endOfLine) {
   // Test case:
   // 5555522
@@ -116,87 +95,81 @@ TEST_F(VisibleUnitsLineTest, endOfLine) {
   SetBodyContent(body_content);
   ShadowRoot* shadow_root = SetShadowContent(shadow_content, "host");
 
-  Node* one = GetDocument().getElementById("one")->firstChild();
-  Node* two = GetDocument().getElementById("two")->firstChild();
-  Node* three = GetDocument().getElementById("three")->firstChild();
-  Node* four = GetDocument().getElementById("four")->firstChild();
-  Node* five = shadow_root->getElementById("five")->firstChild();
-  Node* six = shadow_root->getElementById("six")->firstChild();
-  Node* seven = shadow_root->getElementById("seven")->firstChild();
-  Node* br = shadow_root->QuerySelector("br");
+  Node* one = GetElementById("one")->firstChild();
+  Node* two = GetElementById("two")->firstChild();
+  Node* three = GetElementById("three")->firstChild();
+  Node* four = GetElementById("four")->firstChild();
+  Node* five = shadow_root->getElementById(AtomicString("five"))->firstChild();
+  Node* six = shadow_root->getElementById(AtomicString("six"))->firstChild();
+  Node* seven =
+      shadow_root->getElementById(AtomicString("seven"))->firstChild();
 
   EXPECT_EQ(
       Position(seven, 7),
-      EndOfLine(CreateVisiblePositionInDOMTree(*one, 0)).DeepEquivalent());
+      EndOfLine(CreateVisiblePositionInDomTree(*one, 0)).DeepEquivalent());
   EXPECT_EQ(
       PositionInFlatTree(seven, 7),
       EndOfLine(CreateVisiblePositionInFlatTree(*one, 0)).DeepEquivalent());
 
   EXPECT_EQ(
       Position(seven, 7),
-      EndOfLine(CreateVisiblePositionInDOMTree(*one, 1)).DeepEquivalent());
+      EndOfLine(CreateVisiblePositionInDomTree(*one, 1)).DeepEquivalent());
   EXPECT_EQ(
       PositionInFlatTree(seven, 7),
       EndOfLine(CreateVisiblePositionInFlatTree(*one, 1)).DeepEquivalent());
 
+  EXPECT_EQ(Position(two, 2), EndOfLine(CreateVisiblePositionInDomTree(
+                                            *two, 0, TextAffinity::kUpstream))
+                                  .DeepEquivalent());
   EXPECT_EQ(
-      // The result on legacy layout is broken and not worth fixing.
-      LayoutNGEnabled() ? Position(two, 2) : Position::BeforeNode(*br),
-      EndOfLine(
-          CreateVisiblePositionInDOMTree(*two, 0, TextAffinity::kUpstream))
-          .DeepEquivalent());
-  EXPECT_EQ(
-      // The result on legacy layout is broken and not worth fixing.
-      LayoutNGEnabled() ? Position(two, 2) : Position::BeforeNode(*br),
-      EndOfLine(CreateVisiblePositionInDOMTree(*two, 0)).DeepEquivalent());
+      Position(two, 2),
+      EndOfLine(CreateVisiblePositionInDomTree(*two, 0)).DeepEquivalent());
   EXPECT_EQ(
       PositionInFlatTree(two, 2),
       EndOfLine(CreateVisiblePositionInFlatTree(*two, 0)).DeepEquivalent());
 
   EXPECT_EQ(
-      // The result on legacy layout is broken and not worth fixing.
-      LayoutNGEnabled() ? Position(two, 2) : Position::BeforeNode(*br),
-      EndOfLine(CreateVisiblePositionInDOMTree(*two, 1)).DeepEquivalent());
+      Position(two, 2),
+      EndOfLine(CreateVisiblePositionInDomTree(*two, 1)).DeepEquivalent());
   EXPECT_EQ(
       PositionInFlatTree(two, 2),
       EndOfLine(CreateVisiblePositionInFlatTree(*two, 1)).DeepEquivalent());
 
   EXPECT_EQ(Position(four, 4),
-            EndOfLine(CreateVisiblePositionInDOMTree(*three, 0,
+            EndOfLine(CreateVisiblePositionInDomTree(*three, 0,
                                                      TextAffinity::kUpstream))
                 .DeepEquivalent());
   EXPECT_EQ(
       Position(four, 4),
-      EndOfLine(CreateVisiblePositionInDOMTree(*three, 0)).DeepEquivalent());
+      EndOfLine(CreateVisiblePositionInDomTree(*three, 0)).DeepEquivalent());
   EXPECT_EQ(
       PositionInFlatTree(four, 4),
       EndOfLine(CreateVisiblePositionInFlatTree(*three, 1)).DeepEquivalent());
 
   EXPECT_EQ(
       Position(four, 4),
-      EndOfLine(CreateVisiblePositionInDOMTree(*four, 1)).DeepEquivalent());
+      EndOfLine(CreateVisiblePositionInDomTree(*four, 1)).DeepEquivalent());
   EXPECT_EQ(
       PositionInFlatTree(four, 4),
       EndOfLine(CreateVisiblePositionInFlatTree(*four, 1)).DeepEquivalent());
 
   EXPECT_EQ(
-      // The result on legacy layout is broken and not worth fixing.
-      LayoutNGEnabled() ? Position(two, 2) : Position::BeforeNode(*br),
-      EndOfLine(CreateVisiblePositionInDOMTree(*five, 1)).DeepEquivalent());
+      Position(two, 2),
+      EndOfLine(CreateVisiblePositionInDomTree(*five, 1)).DeepEquivalent());
   EXPECT_EQ(
       PositionInFlatTree(two, 2),
       EndOfLine(CreateVisiblePositionInFlatTree(*five, 1)).DeepEquivalent());
 
   EXPECT_EQ(
       Position(six, 6),
-      EndOfLine(CreateVisiblePositionInDOMTree(*six, 1)).DeepEquivalent());
+      EndOfLine(CreateVisiblePositionInDomTree(*six, 1)).DeepEquivalent());
   EXPECT_EQ(
       PositionInFlatTree(six, 6),
       EndOfLine(CreateVisiblePositionInFlatTree(*six, 1)).DeepEquivalent());
 
   EXPECT_EQ(
       Position(seven, 7),
-      EndOfLine(CreateVisiblePositionInDOMTree(*seven, 1)).DeepEquivalent());
+      EndOfLine(CreateVisiblePositionInDomTree(*seven, 1)).DeepEquivalent());
   EXPECT_EQ(
       PositionInFlatTree(seven, 7),
       EndOfLine(CreateVisiblePositionInFlatTree(*seven, 1)).DeepEquivalent());
@@ -219,42 +192,39 @@ TEST_F(VisibleUnitsLineTest, isEndOfLine) {
   SetBodyContent(body_content);
   ShadowRoot* shadow_root = SetShadowContent(shadow_content, "host");
 
-  Node* one = GetDocument().getElementById("one")->firstChild();
-  Node* two = GetDocument().getElementById("two")->firstChild();
-  Node* three = GetDocument().getElementById("three")->firstChild();
-  Node* four = GetDocument().getElementById("four")->firstChild();
-  Node* five = shadow_root->getElementById("five")->firstChild();
-  Node* six = shadow_root->getElementById("six")->firstChild();
-  Node* seven = shadow_root->getElementById("seven")->firstChild();
+  Node* one = GetElementById("one")->firstChild();
+  Node* two = GetElementById("two")->firstChild();
+  Node* three = GetElementById("three")->firstChild();
+  Node* four = GetElementById("four")->firstChild();
+  Node* five = shadow_root->getElementById(AtomicString("five"))->firstChild();
+  Node* six = shadow_root->getElementById(AtomicString("six"))->firstChild();
+  Node* seven =
+      shadow_root->getElementById(AtomicString("seven"))->firstChild();
 
-  EXPECT_FALSE(IsEndOfLine(CreateVisiblePositionInDOMTree(*one, 0)));
+  EXPECT_FALSE(IsEndOfLine(CreateVisiblePositionInDomTree(*one, 0)));
   EXPECT_FALSE(IsEndOfLine(CreateVisiblePositionInFlatTree(*one, 0)));
 
-  EXPECT_FALSE(IsEndOfLine(CreateVisiblePositionInDOMTree(*one, 1)));
+  EXPECT_FALSE(IsEndOfLine(CreateVisiblePositionInDomTree(*one, 1)));
   EXPECT_FALSE(IsEndOfLine(CreateVisiblePositionInFlatTree(*one, 1)));
 
   EXPECT_TRUE(IsEndOfLine(
       CreateVisiblePositionInFlatTree(*two, 2, TextAffinity::kUpstream)));
-  // The result on legacy layout is broken and not worth fixing.
-  if (LayoutNGEnabled())
-    EXPECT_TRUE(IsEndOfLine(CreateVisiblePositionInFlatTree(*two, 2)));
-  else
-    EXPECT_FALSE(IsEndOfLine(CreateVisiblePositionInDOMTree(*two, 2)));
+  EXPECT_TRUE(IsEndOfLine(CreateVisiblePositionInFlatTree(*two, 2)));
   EXPECT_TRUE(IsEndOfLine(CreateVisiblePositionInFlatTree(*two, 2)));
 
-  EXPECT_FALSE(IsEndOfLine(CreateVisiblePositionInDOMTree(*three, 3)));
+  EXPECT_FALSE(IsEndOfLine(CreateVisiblePositionInDomTree(*three, 3)));
   EXPECT_FALSE(IsEndOfLine(CreateVisiblePositionInFlatTree(*three, 3)));
 
-  EXPECT_TRUE(IsEndOfLine(CreateVisiblePositionInDOMTree(*four, 4)));
+  EXPECT_TRUE(IsEndOfLine(CreateVisiblePositionInDomTree(*four, 4)));
   EXPECT_TRUE(IsEndOfLine(CreateVisiblePositionInFlatTree(*four, 4)));
 
   EXPECT_FALSE(IsEndOfLine(CreateVisiblePositionInFlatTree(*five, 5)));
   EXPECT_FALSE(IsEndOfLine(CreateVisiblePositionInFlatTree(*five, 5)));
 
-  EXPECT_TRUE(IsEndOfLine(CreateVisiblePositionInDOMTree(*six, 6)));
+  EXPECT_TRUE(IsEndOfLine(CreateVisiblePositionInDomTree(*six, 6)));
   EXPECT_TRUE(IsEndOfLine(CreateVisiblePositionInFlatTree(*six, 6)));
 
-  EXPECT_TRUE(IsEndOfLine(CreateVisiblePositionInDOMTree(*seven, 7)));
+  EXPECT_TRUE(IsEndOfLine(CreateVisiblePositionInDomTree(*seven, 7)));
   EXPECT_TRUE(IsEndOfLine(CreateVisiblePositionInFlatTree(*seven, 7)));
 }
 
@@ -275,49 +245,43 @@ TEST_F(VisibleUnitsLineTest, isLogicalEndOfLine) {
   SetBodyContent(body_content);
   ShadowRoot* shadow_root = SetShadowContent(shadow_content, "host");
 
-  Node* one = GetDocument().getElementById("one")->firstChild();
-  Node* two = GetDocument().getElementById("two")->firstChild();
-  Node* three = GetDocument().getElementById("three")->firstChild();
-  Node* four = GetDocument().getElementById("four")->firstChild();
-  Node* five = shadow_root->getElementById("five")->firstChild();
-  Node* six = shadow_root->getElementById("six")->firstChild();
-  Node* seven = shadow_root->getElementById("seven")->firstChild();
+  Node* one = GetElementById("one")->firstChild();
+  Node* two = GetElementById("two")->firstChild();
+  Node* three = GetElementById("three")->firstChild();
+  Node* four = GetElementById("four")->firstChild();
+  Node* five = shadow_root->getElementById(AtomicString("five"))->firstChild();
+  Node* six = shadow_root->getElementById(AtomicString("six"))->firstChild();
+  Node* seven =
+      shadow_root->getElementById(AtomicString("seven"))->firstChild();
 
-  EXPECT_FALSE(IsLogicalEndOfLine(CreateVisiblePositionInDOMTree(*one, 0)));
+  EXPECT_FALSE(IsLogicalEndOfLine(CreateVisiblePositionInDomTree(*one, 0)));
   EXPECT_FALSE(IsLogicalEndOfLine(CreateVisiblePositionInFlatTree(*one, 0)));
 
-  EXPECT_FALSE(IsLogicalEndOfLine(CreateVisiblePositionInDOMTree(*one, 1)));
+  EXPECT_FALSE(IsLogicalEndOfLine(CreateVisiblePositionInDomTree(*one, 1)));
   EXPECT_FALSE(IsLogicalEndOfLine(CreateVisiblePositionInFlatTree(*one, 1)));
 
-  // The result in legacy layout is broken and not worth fixing.
-  if (LayoutNGEnabled()) {
-    EXPECT_TRUE(IsLogicalEndOfLine(
-        CreateVisiblePositionInDOMTree(*two, 2, TextAffinity::kUpstream)));
-    EXPECT_TRUE(IsLogicalEndOfLine(CreateVisiblePositionInDOMTree(*two, 2)));
-  } else {
-    EXPECT_FALSE(IsLogicalEndOfLine(
-        CreateVisiblePositionInDOMTree(*two, 2, TextAffinity::kUpstream)));
-    EXPECT_FALSE(IsLogicalEndOfLine(CreateVisiblePositionInDOMTree(*two, 2)));
-  }
+  EXPECT_TRUE(IsLogicalEndOfLine(
+      CreateVisiblePositionInDomTree(*two, 2, TextAffinity::kUpstream)));
+  EXPECT_TRUE(IsLogicalEndOfLine(CreateVisiblePositionInDomTree(*two, 2)));
   EXPECT_TRUE(IsLogicalEndOfLine(CreateVisiblePositionInFlatTree(*two, 2)));
 
-  EXPECT_FALSE(IsLogicalEndOfLine(CreateVisiblePositionInDOMTree(*three, 3)));
+  EXPECT_FALSE(IsLogicalEndOfLine(CreateVisiblePositionInDomTree(*three, 3)));
   EXPECT_FALSE(IsLogicalEndOfLine(CreateVisiblePositionInFlatTree(*three, 3)));
 
-  EXPECT_TRUE(IsLogicalEndOfLine(CreateVisiblePositionInDOMTree(*four, 4)));
+  EXPECT_TRUE(IsLogicalEndOfLine(CreateVisiblePositionInDomTree(*four, 4)));
   EXPECT_TRUE(IsLogicalEndOfLine(CreateVisiblePositionInFlatTree(*four, 4)));
 
-  EXPECT_FALSE(IsLogicalEndOfLine(CreateVisiblePositionInDOMTree(*five, 5)));
+  EXPECT_FALSE(IsLogicalEndOfLine(CreateVisiblePositionInDomTree(*five, 5)));
   EXPECT_FALSE(IsLogicalEndOfLine(CreateVisiblePositionInFlatTree(*five, 5)));
 
-  EXPECT_TRUE(IsLogicalEndOfLine(CreateVisiblePositionInDOMTree(*six, 6)));
+  EXPECT_TRUE(IsLogicalEndOfLine(CreateVisiblePositionInDomTree(*six, 6)));
   EXPECT_TRUE(IsLogicalEndOfLine(CreateVisiblePositionInFlatTree(*six, 6)));
 
-  EXPECT_TRUE(IsLogicalEndOfLine(CreateVisiblePositionInDOMTree(*seven, 7)));
+  EXPECT_TRUE(IsLogicalEndOfLine(CreateVisiblePositionInDomTree(*seven, 7)));
   EXPECT_TRUE(IsLogicalEndOfLine(CreateVisiblePositionInFlatTree(*seven, 7)));
 }
 
-TEST_P(ParameterizedVisibleUnitsLineTest, inSameLine) {
+TEST_F(VisibleUnitsLineTest, inSameLine) {
   const char* body_content =
       "<p id='host'>00<b slot='#one' id='one'>11</b><b slot='#two' "
       "id='two'>22</b>33</p>";
@@ -329,44 +293,44 @@ TEST_P(ParameterizedVisibleUnitsLineTest, inSameLine) {
   ShadowRoot* shadow_root = SetShadowContent(shadow_content, "host");
 
   Element* body = GetDocument().body();
-  Element* one = body->QuerySelector("#one");
-  Element* two = body->QuerySelector("#two");
-  Element* four = shadow_root->QuerySelector("#s4");
-  Element* five = shadow_root->QuerySelector("#s5");
+  Element* one = body->QuerySelector(AtomicString("#one"));
+  Element* two = body->QuerySelector(AtomicString("#two"));
+  Element* four = shadow_root->QuerySelector(AtomicString("#s4"));
+  Element* five = shadow_root->QuerySelector(AtomicString("#s5"));
 
-  EXPECT_FALSE(InSameLine(PositionWithAffinityInDOMTree(*one, 0),
-                          PositionWithAffinityInDOMTree(*two, 0)));
+  EXPECT_FALSE(InSameLine(PositionWithAffinityInDomTree(*one, 0),
+                          PositionWithAffinityInDomTree(*two, 0)));
   EXPECT_FALSE(
-      InSameLine(PositionWithAffinityInDOMTree(*one->firstChild(), 0),
-                 PositionWithAffinityInDOMTree(*two->firstChild(), 0)));
+      InSameLine(PositionWithAffinityInDomTree(*one->firstChild(), 0),
+                 PositionWithAffinityInDomTree(*two->firstChild(), 0)));
   EXPECT_FALSE(
-      InSameLine(PositionWithAffinityInDOMTree(*one->firstChild(), 0),
-                 PositionWithAffinityInDOMTree(*five->firstChild(), 0)));
+      InSameLine(PositionWithAffinityInDomTree(*one->firstChild(), 0),
+                 PositionWithAffinityInDomTree(*five->firstChild(), 0)));
   EXPECT_TRUE(
-      InSameLine(PositionWithAffinityInDOMTree(*two->firstChild(), 0),
-                 PositionWithAffinityInDOMTree(*four->firstChild(), 0)));
+      InSameLine(PositionWithAffinityInDomTree(*two->firstChild(), 0),
+                 PositionWithAffinityInDomTree(*four->firstChild(), 0)));
 
   EXPECT_FALSE(InSameLine(
-      CreateVisiblePositionInDOMTree(*one, 0),
-      CreateVisiblePositionInDOMTree(*two, 0, TextAffinity::kUpstream)));
-  EXPECT_FALSE(InSameLine(CreateVisiblePositionInDOMTree(*one, 0),
-                          CreateVisiblePositionInDOMTree(*two, 0)));
-  EXPECT_FALSE(InSameLine(CreateVisiblePositionInDOMTree(*one->firstChild(), 0),
-                          CreateVisiblePositionInDOMTree(
+      CreateVisiblePositionInDomTree(*one, 0),
+      CreateVisiblePositionInDomTree(*two, 0, TextAffinity::kUpstream)));
+  EXPECT_FALSE(InSameLine(CreateVisiblePositionInDomTree(*one, 0),
+                          CreateVisiblePositionInDomTree(*two, 0)));
+  EXPECT_FALSE(InSameLine(CreateVisiblePositionInDomTree(*one->firstChild(), 0),
+                          CreateVisiblePositionInDomTree(
                               *two->firstChild(), 0, TextAffinity::kUpstream)));
   EXPECT_FALSE(
-      InSameLine(CreateVisiblePositionInDOMTree(*one->firstChild(), 0),
-                 CreateVisiblePositionInDOMTree(*two->firstChild(), 0)));
+      InSameLine(CreateVisiblePositionInDomTree(*one->firstChild(), 0),
+                 CreateVisiblePositionInDomTree(*two->firstChild(), 0)));
   EXPECT_FALSE(
-      InSameLine(CreateVisiblePositionInDOMTree(*one->firstChild(), 0),
-                 CreateVisiblePositionInDOMTree(*five->firstChild(), 0)));
+      InSameLine(CreateVisiblePositionInDomTree(*one->firstChild(), 0),
+                 CreateVisiblePositionInDomTree(*five->firstChild(), 0)));
   EXPECT_TRUE(
-      InSameLine(CreateVisiblePositionInDOMTree(*two->firstChild(), 0,
+      InSameLine(CreateVisiblePositionInDomTree(*two->firstChild(), 0,
                                                 TextAffinity::kUpstream),
-                 CreateVisiblePositionInDOMTree(*four->firstChild(), 0)));
+                 CreateVisiblePositionInDomTree(*four->firstChild(), 0)));
   EXPECT_TRUE(
-      InSameLine(CreateVisiblePositionInDOMTree(*two->firstChild(), 0),
-                 CreateVisiblePositionInDOMTree(*four->firstChild(), 0)));
+      InSameLine(CreateVisiblePositionInDomTree(*two->firstChild(), 0),
+                 CreateVisiblePositionInDomTree(*four->firstChild(), 0)));
 
   EXPECT_FALSE(InSameLine(PositionWithAffinityInFlatTree(*one, 0),
                           PositionWithAffinityInFlatTree(*two, 0)));
@@ -405,38 +369,39 @@ TEST_F(VisibleUnitsLineTest, isStartOfLine) {
   SetBodyContent(body_content);
   ShadowRoot* shadow_root = SetShadowContent(shadow_content, "host");
 
-  Node* one = GetDocument().getElementById("one")->firstChild();
-  Node* two = GetDocument().getElementById("two")->firstChild();
-  Node* three = GetDocument().getElementById("three")->firstChild();
-  Node* four = GetDocument().getElementById("four")->firstChild();
-  Node* five = shadow_root->getElementById("five")->firstChild();
-  Node* six = shadow_root->getElementById("six")->firstChild();
-  Node* seven = shadow_root->getElementById("seven")->firstChild();
+  Node* one = GetElementById("one")->firstChild();
+  Node* two = GetElementById("two")->firstChild();
+  Node* three = GetElementById("three")->firstChild();
+  Node* four = GetElementById("four")->firstChild();
+  Node* five = shadow_root->getElementById(AtomicString("five"))->firstChild();
+  Node* six = shadow_root->getElementById(AtomicString("six"))->firstChild();
+  Node* seven =
+      shadow_root->getElementById(AtomicString("seven"))->firstChild();
 
-  EXPECT_TRUE(IsStartOfLine(CreateVisiblePositionInDOMTree(*one, 0)));
+  EXPECT_TRUE(IsStartOfLine(CreateVisiblePositionInDomTree(*one, 0)));
   EXPECT_TRUE(IsStartOfLine(CreateVisiblePositionInFlatTree(*one, 0)));
 
-  EXPECT_FALSE(IsStartOfLine(CreateVisiblePositionInDOMTree(*one, 1)));
+  EXPECT_FALSE(IsStartOfLine(CreateVisiblePositionInDomTree(*one, 1)));
   EXPECT_FALSE(IsStartOfLine(CreateVisiblePositionInFlatTree(*one, 1)));
 
-  EXPECT_FALSE(IsStartOfLine(CreateVisiblePositionInDOMTree(*two, 0)));
+  EXPECT_FALSE(IsStartOfLine(CreateVisiblePositionInDomTree(*two, 0)));
   EXPECT_FALSE(IsStartOfLine(CreateVisiblePositionInFlatTree(*two, 0)));
 
   EXPECT_TRUE(IsStartOfLine(
-      CreateVisiblePositionInDOMTree(*three, 0, TextAffinity::kUpstream)));
-  EXPECT_TRUE(IsStartOfLine(CreateVisiblePositionInDOMTree(*three, 0)));
+      CreateVisiblePositionInDomTree(*three, 0, TextAffinity::kUpstream)));
+  EXPECT_TRUE(IsStartOfLine(CreateVisiblePositionInDomTree(*three, 0)));
   EXPECT_TRUE(IsStartOfLine(CreateVisiblePositionInFlatTree(*three, 0)));
 
-  EXPECT_FALSE(IsStartOfLine(CreateVisiblePositionInDOMTree(*four, 0)));
+  EXPECT_FALSE(IsStartOfLine(CreateVisiblePositionInDomTree(*four, 0)));
   EXPECT_FALSE(IsStartOfLine(CreateVisiblePositionInFlatTree(*four, 0)));
 
-  EXPECT_TRUE(IsStartOfLine(CreateVisiblePositionInDOMTree(*five, 0)));
+  EXPECT_TRUE(IsStartOfLine(CreateVisiblePositionInDomTree(*five, 0)));
   EXPECT_TRUE(IsStartOfLine(CreateVisiblePositionInFlatTree(*five, 0)));
 
-  EXPECT_TRUE(IsStartOfLine(CreateVisiblePositionInDOMTree(*six, 0)));
+  EXPECT_TRUE(IsStartOfLine(CreateVisiblePositionInDomTree(*six, 0)));
   EXPECT_TRUE(IsStartOfLine(CreateVisiblePositionInFlatTree(*six, 0)));
 
-  EXPECT_FALSE(IsStartOfLine(CreateVisiblePositionInDOMTree(*seven, 0)));
+  EXPECT_FALSE(IsStartOfLine(CreateVisiblePositionInDomTree(*seven, 0)));
   EXPECT_FALSE(IsStartOfLine(CreateVisiblePositionInFlatTree(*seven, 0)));
 }
 
@@ -457,89 +422,130 @@ TEST_F(VisibleUnitsLineTest, logicalEndOfLine) {
   SetBodyContent(body_content);
   ShadowRoot* shadow_root = SetShadowContent(shadow_content, "host");
 
-  Node* one = GetDocument().getElementById("one")->firstChild();
-  Node* two = GetDocument().getElementById("two")->firstChild();
-  Node* three = GetDocument().getElementById("three")->firstChild();
-  Node* four = GetDocument().getElementById("four")->firstChild();
-  Node* five = shadow_root->getElementById("five")->firstChild();
-  Node* six = shadow_root->getElementById("six")->firstChild();
-  Node* seven = shadow_root->getElementById("seven")->firstChild();
-  Node* br = shadow_root->QuerySelector("br");
+  Node* one = GetElementById("one")->firstChild();
+  Node* two = GetElementById("two")->firstChild();
+  Node* three = GetElementById("three")->firstChild();
+  Node* four = GetElementById("four")->firstChild();
+  Node* five = shadow_root->getElementById(AtomicString("five"))->firstChild();
+  Node* six = shadow_root->getElementById(AtomicString("six"))->firstChild();
+  Node* seven =
+      shadow_root->getElementById(AtomicString("seven"))->firstChild();
 
   EXPECT_EQ(Position(seven, 7),
-            LogicalEndOfLine(CreateVisiblePositionInDOMTree(*one, 0))
+            LogicalEndOfLine(CreateVisiblePositionInDomTree(*one, 0))
                 .DeepEquivalent());
   EXPECT_EQ(PositionInFlatTree(seven, 7),
             LogicalEndOfLine(CreateVisiblePositionInFlatTree(*one, 0))
                 .DeepEquivalent());
 
   EXPECT_EQ(Position(seven, 7),
-            LogicalEndOfLine(CreateVisiblePositionInDOMTree(*one, 1))
+            LogicalEndOfLine(CreateVisiblePositionInDomTree(*one, 1))
                 .DeepEquivalent());
   EXPECT_EQ(PositionInFlatTree(seven, 7),
             LogicalEndOfLine(CreateVisiblePositionInFlatTree(*one, 1))
                 .DeepEquivalent());
 
-  // The result on legacy layout is broken and not worth fixing.
-  EXPECT_EQ(LayoutNGEnabled() ? Position(two, 2) : Position::BeforeNode(*br),
-            LogicalEndOfLine(CreateVisiblePositionInDOMTree(
+  EXPECT_EQ(Position(two, 2),
+            LogicalEndOfLine(CreateVisiblePositionInDomTree(
                                  *two, 0, TextAffinity::kUpstream))
                 .DeepEquivalent());
-  // The result on legacy layout is broken and not worth fixing.
-  EXPECT_EQ(LayoutNGEnabled() ? Position(two, 2) : Position::BeforeNode(*br),
-            LogicalEndOfLine(CreateVisiblePositionInDOMTree(*two, 0))
+  EXPECT_EQ(Position(two, 2),
+            LogicalEndOfLine(CreateVisiblePositionInDomTree(*two, 0))
                 .DeepEquivalent());
   EXPECT_EQ(PositionInFlatTree(two, 2),
             LogicalEndOfLine(CreateVisiblePositionInFlatTree(*two, 0))
                 .DeepEquivalent());
 
-  // The result on legacy layout is broken and not worth fixing.
-  EXPECT_EQ(LayoutNGEnabled() ? Position(two, 2) : Position::BeforeNode(*br),
-            LogicalEndOfLine(CreateVisiblePositionInDOMTree(*two, 1))
+  EXPECT_EQ(Position(two, 2),
+            LogicalEndOfLine(CreateVisiblePositionInDomTree(*two, 1))
                 .DeepEquivalent());
   EXPECT_EQ(PositionInFlatTree(two, 2),
             LogicalEndOfLine(CreateVisiblePositionInFlatTree(*two, 1))
                 .DeepEquivalent());
 
   EXPECT_EQ(Position(four, 4),
-            LogicalEndOfLine(CreateVisiblePositionInDOMTree(
+            LogicalEndOfLine(CreateVisiblePositionInDomTree(
                                  *three, 0, TextAffinity::kUpstream))
                 .DeepEquivalent());
   EXPECT_EQ(Position(four, 4),
-            LogicalEndOfLine(CreateVisiblePositionInDOMTree(*three, 0))
+            LogicalEndOfLine(CreateVisiblePositionInDomTree(*three, 0))
                 .DeepEquivalent());
   EXPECT_EQ(PositionInFlatTree(four, 4),
             LogicalEndOfLine(CreateVisiblePositionInFlatTree(*three, 1))
                 .DeepEquivalent());
 
   EXPECT_EQ(Position(four, 4),
-            LogicalEndOfLine(CreateVisiblePositionInDOMTree(*four, 1))
+            LogicalEndOfLine(CreateVisiblePositionInDomTree(*four, 1))
                 .DeepEquivalent());
   EXPECT_EQ(PositionInFlatTree(four, 4),
             LogicalEndOfLine(CreateVisiblePositionInFlatTree(*four, 1))
                 .DeepEquivalent());
 
-  // The result on legacy layout is broken and not worth fixing.
-  EXPECT_EQ(LayoutNGEnabled() ? Position(two, 2) : Position::BeforeNode(*br),
-            LogicalEndOfLine(CreateVisiblePositionInDOMTree(*five, 1))
+  EXPECT_EQ(Position(two, 2),
+            LogicalEndOfLine(CreateVisiblePositionInDomTree(*five, 1))
                 .DeepEquivalent());
   EXPECT_EQ(PositionInFlatTree(two, 2),
             LogicalEndOfLine(CreateVisiblePositionInFlatTree(*five, 1))
                 .DeepEquivalent());
 
   EXPECT_EQ(Position(six, 6),
-            LogicalEndOfLine(CreateVisiblePositionInDOMTree(*six, 1))
+            LogicalEndOfLine(CreateVisiblePositionInDomTree(*six, 1))
                 .DeepEquivalent());
   EXPECT_EQ(PositionInFlatTree(six, 6),
             LogicalEndOfLine(CreateVisiblePositionInFlatTree(*six, 1))
                 .DeepEquivalent());
 
   EXPECT_EQ(Position(seven, 7),
-            LogicalEndOfLine(CreateVisiblePositionInDOMTree(*seven, 1))
+            LogicalEndOfLine(CreateVisiblePositionInDomTree(*seven, 1))
                 .DeepEquivalent());
   EXPECT_EQ(PositionInFlatTree(seven, 7),
             LogicalEndOfLine(CreateVisiblePositionInFlatTree(*seven, 1))
                 .DeepEquivalent());
+}
+
+TEST_F(VisibleUnitsLineTest, LogicalEndOfLineFromLeadingWbr) {
+  // The spans must be atomic inlines (inline-block, inline-flex, ...) so they
+  // establish a nested inline formatting context; the bug does not trigger
+  // with plain inline spans. The editability boundary (editable div,
+  // non-editable spans) is also required: it keeps the caret canonicalized at
+  // the block-anchored position that triggers the bug.
+  InsertStyleElement(".code { display: inline-flex; }");
+  // Two spans are needed: with a single span, the end of the nested inner
+  // line coincides with the end of the div's line, masking the bug.
+  SetBodyContent(
+      "<div id=editable contenteditable>"
+      "<wbr><span class=code contenteditable=false>1</span>"
+      "<span class=code contenteditable=false>2</span></div>");
+
+  const auto& editable = *GetElementById("editable");
+  const auto& first_wbr = *editable.firstChild();
+  const PositionWithAffinity position(Position::BeforeNode(first_wbr));
+
+  EXPECT_EQ(Position::LastPositionInNode(editable),
+            LogicalEndOfLine(CreateVisiblePosition(position)).DeepEquivalent());
+}
+
+TEST_F(VisibleUnitsLineTest, LogicalStartOfLineFromTrailingWbr) {
+  // The spans must be atomic inlines (inline-block, inline-flex, ...) so they
+  // establish a nested inline formatting context; the bug does not trigger
+  // with plain inline spans. The editability boundary (editable div,
+  // non-editable spans) is also required: it keeps the caret canonicalized at
+  // the block-anchored position that triggers the bug.
+  InsertStyleElement(".code { display: inline-flex; }");
+  // Two spans are needed: with a single span, the start of the nested inner
+  // line coincides with the start of the div's line, masking the bug.
+  SetBodyContent(
+      "<div id=editable contenteditable>"
+      "<span class=code contenteditable=false>1</span>"
+      "<span class=code contenteditable=false>2</span><wbr></div>");
+
+  const auto& editable = *GetElementById("editable");
+  const auto& last_wbr = *editable.lastChild();
+  const PositionWithAffinity position(Position::AfterNode(last_wbr));
+
+  EXPECT_EQ(
+      Position::FirstPositionInNode(editable),
+      LogicalStartOfLine(CreateVisiblePosition(position)).DeepEquivalent());
 }
 
 TEST_F(VisibleUnitsLineTest, logicalStartOfLine) {
@@ -554,84 +560,85 @@ TEST_F(VisibleUnitsLineTest, logicalStartOfLine) {
   SetBodyContent(body_content);
   ShadowRoot* shadow_root = SetShadowContent(shadow_content, "host");
 
-  Node* one = GetDocument().getElementById("one")->firstChild();
-  Node* two = GetDocument().getElementById("two")->firstChild();
-  Node* three = GetDocument().getElementById("three")->firstChild();
-  Node* four = GetDocument().getElementById("four")->firstChild();
-  Node* five = shadow_root->getElementById("five")->firstChild();
-  Node* six = shadow_root->getElementById("six")->firstChild();
-  Node* seven = shadow_root->getElementById("seven")->firstChild();
+  Node* one = GetElementById("one")->firstChild();
+  Node* two = GetElementById("two")->firstChild();
+  Node* three = GetElementById("three")->firstChild();
+  Node* four = GetElementById("four")->firstChild();
+  Node* five = shadow_root->getElementById(AtomicString("five"))->firstChild();
+  Node* six = shadow_root->getElementById(AtomicString("six"))->firstChild();
+  Node* seven =
+      shadow_root->getElementById(AtomicString("seven"))->firstChild();
 
   EXPECT_EQ(Position(one, 0),
-            LogicalStartOfLine(CreateVisiblePositionInDOMTree(*one, 0))
+            LogicalStartOfLine(CreateVisiblePositionInDomTree(*one, 0))
                 .DeepEquivalent());
   EXPECT_EQ(PositionInFlatTree(one, 0),
             LogicalStartOfLine(CreateVisiblePositionInFlatTree(*one, 0))
                 .DeepEquivalent());
 
   EXPECT_EQ(Position(one, 0),
-            LogicalStartOfLine(CreateVisiblePositionInDOMTree(*one, 1))
+            LogicalStartOfLine(CreateVisiblePositionInDomTree(*one, 1))
                 .DeepEquivalent());
   EXPECT_EQ(PositionInFlatTree(one, 0),
             LogicalStartOfLine(CreateVisiblePositionInFlatTree(*one, 1))
                 .DeepEquivalent());
 
   EXPECT_EQ(Position(five, 0),
-            LogicalStartOfLine(CreateVisiblePositionInDOMTree(
+            LogicalStartOfLine(CreateVisiblePositionInDomTree(
                                    *two, 0, TextAffinity::kUpstream))
                 .DeepEquivalent());
   EXPECT_EQ(Position(five, 0),
-            LogicalStartOfLine(CreateVisiblePositionInDOMTree(*two, 0))
+            LogicalStartOfLine(CreateVisiblePositionInDomTree(*two, 0))
                 .DeepEquivalent());
   EXPECT_EQ(PositionInFlatTree(five, 0),
             LogicalStartOfLine(CreateVisiblePositionInFlatTree(*two, 0))
                 .DeepEquivalent());
 
   EXPECT_EQ(Position(five, 0),
-            LogicalStartOfLine(CreateVisiblePositionInDOMTree(*two, 1))
+            LogicalStartOfLine(CreateVisiblePositionInDomTree(*two, 1))
                 .DeepEquivalent());
   EXPECT_EQ(PositionInFlatTree(five, 0),
             LogicalStartOfLine(CreateVisiblePositionInFlatTree(*two, 1))
                 .DeepEquivalent());
 
   EXPECT_EQ(Position(three, 0),
-            LogicalStartOfLine(CreateVisiblePositionInDOMTree(
+            LogicalStartOfLine(CreateVisiblePositionInDomTree(
                                    *three, 0, TextAffinity::kUpstream))
                 .DeepEquivalent());
   EXPECT_EQ(Position(three, 0),
-            LogicalStartOfLine(CreateVisiblePositionInDOMTree(*three, 0))
+            LogicalStartOfLine(CreateVisiblePositionInDomTree(*three, 0))
                 .DeepEquivalent());
   EXPECT_EQ(PositionInFlatTree(three, 0),
             LogicalStartOfLine(CreateVisiblePositionInFlatTree(*three, 1))
                 .DeepEquivalent());
 
   EXPECT_EQ(Position(three, 0),
-            LogicalStartOfLine(CreateVisiblePositionInDOMTree(
+            LogicalStartOfLine(CreateVisiblePositionInDomTree(
                                    *four, 1, TextAffinity::kUpstream))
                 .DeepEquivalent());
   EXPECT_EQ(Position(three, 0),
-            LogicalStartOfLine(CreateVisiblePositionInDOMTree(*four, 1))
+            LogicalStartOfLine(CreateVisiblePositionInDomTree(*four, 1))
                 .DeepEquivalent());
   EXPECT_EQ(PositionInFlatTree(three, 0),
             LogicalStartOfLine(CreateVisiblePositionInFlatTree(*four, 1))
                 .DeepEquivalent());
 
   EXPECT_EQ(Position(five, 0),
-            LogicalStartOfLine(CreateVisiblePositionInDOMTree(*five, 1))
+            LogicalStartOfLine(CreateVisiblePositionInDomTree(*five, 1))
                 .DeepEquivalent());
   EXPECT_EQ(PositionInFlatTree(five, 0),
             LogicalStartOfLine(CreateVisiblePositionInFlatTree(*five, 1))
                 .DeepEquivalent());
 
   EXPECT_EQ(Position(six, 0),
-            LogicalStartOfLine(CreateVisiblePositionInDOMTree(*six, 1))
+            LogicalStartOfLine(CreateVisiblePositionInDomTree(*six, 1))
                 .DeepEquivalent());
   EXPECT_EQ(PositionInFlatTree(six, 0),
             LogicalStartOfLine(CreateVisiblePositionInFlatTree(*six, 1))
                 .DeepEquivalent());
 
   EXPECT_EQ(Position(one, 0),
-            LogicalStartOfLine(CreateVisiblePositionInDOMTree(*seven, 1))
+            LogicalStartOfLine(CreateVisiblePositionInDomTree(*seven, 1))
                 .DeepEquivalent());
   EXPECT_EQ(PositionInFlatTree(one, 0),
             LogicalStartOfLine(CreateVisiblePositionInFlatTree(*seven, 1))
@@ -655,91 +662,92 @@ TEST_F(VisibleUnitsLineTest, startOfLine) {
   SetBodyContent(body_content);
   ShadowRoot* shadow_root = SetShadowContent(shadow_content, "host");
 
-  Node* one = GetDocument().getElementById("one")->firstChild();
-  Node* two = GetDocument().getElementById("two")->firstChild();
-  Node* three = GetDocument().getElementById("three")->firstChild();
-  Node* four = GetDocument().getElementById("four")->firstChild();
-  Node* five = shadow_root->getElementById("five")->firstChild();
-  Node* six = shadow_root->getElementById("six")->firstChild();
-  Node* seven = shadow_root->getElementById("seven")->firstChild();
+  Node* one = GetElementById("one")->firstChild();
+  Node* two = GetElementById("two")->firstChild();
+  Node* three = GetElementById("three")->firstChild();
+  Node* four = GetElementById("four")->firstChild();
+  Node* five = shadow_root->getElementById(AtomicString("five"))->firstChild();
+  Node* six = shadow_root->getElementById(AtomicString("six"))->firstChild();
+  Node* seven =
+      shadow_root->getElementById(AtomicString("seven"))->firstChild();
 
   EXPECT_EQ(
       Position(one, 0),
-      StartOfLine(CreateVisiblePositionInDOMTree(*one, 0)).DeepEquivalent());
+      StartOfLine(CreateVisiblePositionInDomTree(*one, 0)).DeepEquivalent());
   EXPECT_EQ(
       PositionInFlatTree(one, 0),
       StartOfLine(CreateVisiblePositionInFlatTree(*one, 0)).DeepEquivalent());
 
   EXPECT_EQ(
       Position(one, 0),
-      StartOfLine(CreateVisiblePositionInDOMTree(*one, 1)).DeepEquivalent());
+      StartOfLine(CreateVisiblePositionInDomTree(*one, 1)).DeepEquivalent());
   EXPECT_EQ(
       PositionInFlatTree(one, 0),
       StartOfLine(CreateVisiblePositionInFlatTree(*one, 1)).DeepEquivalent());
 
   EXPECT_EQ(Position(five, 0),
-            StartOfLine(CreateVisiblePositionInDOMTree(*two, 0,
+            StartOfLine(CreateVisiblePositionInDomTree(*two, 0,
                                                        TextAffinity::kUpstream))
                 .DeepEquivalent());
   EXPECT_EQ(
       Position(five, 0),
-      StartOfLine(CreateVisiblePositionInDOMTree(*two, 0)).DeepEquivalent());
+      StartOfLine(CreateVisiblePositionInDomTree(*two, 0)).DeepEquivalent());
   EXPECT_EQ(
       PositionInFlatTree(five, 0),
       StartOfLine(CreateVisiblePositionInFlatTree(*two, 0)).DeepEquivalent());
 
   EXPECT_EQ(
       Position(five, 0),
-      StartOfLine(CreateVisiblePositionInDOMTree(*two, 1)).DeepEquivalent());
+      StartOfLine(CreateVisiblePositionInDomTree(*two, 1)).DeepEquivalent());
   EXPECT_EQ(
       PositionInFlatTree(five, 0),
       StartOfLine(CreateVisiblePositionInFlatTree(*two, 1)).DeepEquivalent());
 
   EXPECT_EQ(Position(three, 0),
-            StartOfLine(CreateVisiblePositionInDOMTree(*three, 0,
+            StartOfLine(CreateVisiblePositionInDomTree(*three, 0,
                                                        TextAffinity::kUpstream))
                 .DeepEquivalent());
   EXPECT_EQ(
       Position(three, 0),
-      StartOfLine(CreateVisiblePositionInDOMTree(*three, 0)).DeepEquivalent());
+      StartOfLine(CreateVisiblePositionInDomTree(*three, 0)).DeepEquivalent());
   EXPECT_EQ(
       PositionInFlatTree(three, 0),
       StartOfLine(CreateVisiblePositionInFlatTree(*three, 1)).DeepEquivalent());
 
   EXPECT_EQ(Position(three, 0),
-            StartOfLine(CreateVisiblePositionInDOMTree(*four, 1,
+            StartOfLine(CreateVisiblePositionInDomTree(*four, 1,
                                                        TextAffinity::kUpstream))
                 .DeepEquivalent());
   EXPECT_EQ(
       Position(three, 0),
-      StartOfLine(CreateVisiblePositionInDOMTree(*four, 1)).DeepEquivalent());
+      StartOfLine(CreateVisiblePositionInDomTree(*four, 1)).DeepEquivalent());
   EXPECT_EQ(
       PositionInFlatTree(three, 0),
       StartOfLine(CreateVisiblePositionInFlatTree(*four, 1)).DeepEquivalent());
 
   EXPECT_EQ(
       Position(five, 0),
-      StartOfLine(CreateVisiblePositionInDOMTree(*five, 1)).DeepEquivalent());
+      StartOfLine(CreateVisiblePositionInDomTree(*five, 1)).DeepEquivalent());
   EXPECT_EQ(
       PositionInFlatTree(five, 0),
       StartOfLine(CreateVisiblePositionInFlatTree(*five, 1)).DeepEquivalent());
 
   EXPECT_EQ(
       Position(six, 0),
-      StartOfLine(CreateVisiblePositionInDOMTree(*six, 1)).DeepEquivalent());
+      StartOfLine(CreateVisiblePositionInDomTree(*six, 1)).DeepEquivalent());
   EXPECT_EQ(
       PositionInFlatTree(six, 0),
       StartOfLine(CreateVisiblePositionInFlatTree(*six, 1)).DeepEquivalent());
 
   EXPECT_EQ(
       Position(one, 0),
-      StartOfLine(CreateVisiblePositionInDOMTree(*seven, 1)).DeepEquivalent());
+      StartOfLine(CreateVisiblePositionInDomTree(*seven, 1)).DeepEquivalent());
   EXPECT_EQ(
       PositionInFlatTree(one, 0),
       StartOfLine(CreateVisiblePositionInFlatTree(*seven, 1)).DeepEquivalent());
 }
 
-TEST_P(ParameterizedVisibleUnitsLineTest, EndOfLineWithBidi) {
+TEST_F(VisibleUnitsLineTest, EndOfLineWithBidi) {
   LoadAhem();
   InsertStyleElement("p { font: 30px/3 Ahem; }");
 
@@ -762,7 +770,7 @@ TEST_P(ParameterizedVisibleUnitsLineTest, EndOfLineWithBidi) {
 }
 
 // http://crbug.com/1136740
-TEST_P(ParameterizedVisibleUnitsLineTest, EndOfLineWithHangingSpace) {
+TEST_F(VisibleUnitsLineTest, EndOfLineWithHangingSpace) {
   LoadAhem();
   InsertStyleElement(
       "p {"
@@ -794,7 +802,7 @@ TEST_P(ParameterizedVisibleUnitsLineTest, EndOfLineWithHangingSpace) {
   EXPECT_EQ("<p>  x abcd|efgh</p>", TestEndOfLine("<p>  x a|bcdefgh</p>"));
 }
 
-TEST_P(ParameterizedVisibleUnitsLineTest, EndOfLineWithPositionRelative) {
+TEST_F(VisibleUnitsLineTest, EndOfLineWithPositionRelative) {
   LoadAhem();
   InsertStyleElement(
       "b { position:relative; left: 30px; }"
@@ -802,24 +810,18 @@ TEST_P(ParameterizedVisibleUnitsLineTest, EndOfLineWithPositionRelative) {
 
   EXPECT_EQ("<p>ab <b>cd</b> <b>ef|</b></p>",
             TestEndOfLine("<p>a|b <b>cd</b> <b>ef</b></p>"));
-  // Note: legacy result is wrong. See EndOfLineWithBidi.
   EXPECT_EQ(
-      LayoutNGEnabled()
-          ? "<p><bdo dir=\"rtl\">ab <b>cd</b> <b>ef|</b></bdo></p>"
-          : "<p><bdo dir=\"rtl\">ab |<b>cd</b> <b>ef</b></bdo></p>",
+      "<p><bdo dir=\"rtl\">ab <b>cd</b> <b>ef|</b></bdo></p>",
       TestEndOfLine("<p><bdo dir=\"rtl\">a|b <b>cd</b> <b>ef</b></bdo></p>"));
   EXPECT_EQ("<p dir=\"rtl\">ab <b>cd</b> <b>ef|</b></p>",
             TestEndOfLine("<p dir=\"rtl\">a|b <b>cd</b> <b>ef</b></p>"));
-  // Note: legacy result is wrong. See EndOfLineWithBidi.
   EXPECT_EQ(
-      LayoutNGEnabled()
-          ? "<p dir=\"rtl\"><bdo dir=\"rtl\">ab <b>cd</b> <b>ef|</b></bdo></p>"
-          : "<p dir=\"rtl\"><bdo dir=\"rtl\">ab |<b>cd</b> <b>ef</b></bdo></p>",
+      "<p dir=\"rtl\"><bdo dir=\"rtl\">ab <b>cd</b> <b>ef|</b></bdo></p>",
       TestEndOfLine(
           "<p dir=\"rtl\"><bdo dir=\"rtl\">a|b <b>cd</b> <b>ef</b></bdo></p>"));
 }
 
-TEST_P(ParameterizedVisibleUnitsLineTest, EndOfLineWithSoftLineWrap3) {
+TEST_F(VisibleUnitsLineTest, EndOfLineWithSoftLineWrap3) {
   LoadAhem();
   InsertStyleElement(
       "div {"
@@ -873,7 +875,7 @@ TEST_P(ParameterizedVisibleUnitsLineTest, EndOfLineWithSoftLineWrap3) {
             TestEndOfLine("<div contenteditable>abc |def ghi</div>"));
 }
 
-TEST_P(ParameterizedVisibleUnitsLineTest, EndOfLineWithSoftLineWrap4) {
+TEST_F(VisibleUnitsLineTest, EndOfLineWithSoftLineWrap4) {
   LoadAhem();
   InsertStyleElement("div { font: 10px/1 Ahem; width: 4ch; }");
 
@@ -898,7 +900,7 @@ TEST_P(ParameterizedVisibleUnitsLineTest, EndOfLineWithSoftLineWrap4) {
 }
 
 // http://crbug.com/1169583
-TEST_P(ParameterizedVisibleUnitsLineTest, EndOfLineWithWhiteSpacePre) {
+TEST_F(VisibleUnitsLineTest, EndOfLineWithWhiteSpacePre) {
   LoadAhem();
   InsertStyleElement("p { font: 10px/1 Ahem; white-space: pre; }");
 
@@ -920,7 +922,7 @@ TEST_P(ParameterizedVisibleUnitsLineTest, EndOfLineWithWhiteSpacePre) {
       << "RTL RTL";
 }
 
-TEST_P(ParameterizedVisibleUnitsLineTest, LogicalEndOfLineWithSoftLineWrap3) {
+TEST_F(VisibleUnitsLineTest, LogicalEndOfLineWithSoftLineWrap3) {
   LoadAhem();
   InsertStyleElement(
       "div {"
@@ -951,7 +953,7 @@ TEST_P(ParameterizedVisibleUnitsLineTest, LogicalEndOfLineWithSoftLineWrap3) {
             TestLogicalEndOfLine("<div contenteditable>abc |def ghi</div>"));
 }
 
-TEST_P(ParameterizedVisibleUnitsLineTest, LogicalEndOfLineWithSoftLineWrap4) {
+TEST_F(VisibleUnitsLineTest, LogicalEndOfLineWithSoftLineWrap4) {
   LoadAhem();
   InsertStyleElement("div { font: 10px/1 Ahem; width: 4ch; }");
 
@@ -975,7 +977,7 @@ TEST_P(ParameterizedVisibleUnitsLineTest, LogicalEndOfLineWithSoftLineWrap4) {
             TestLogicalEndOfLine("<div contenteditable>abc |def ghi</div>"));
 }
 
-TEST_P(ParameterizedVisibleUnitsLineTest, InSameLineSkippingEmptyEditableDiv) {
+TEST_F(VisibleUnitsLineTest, InSameLineSkippingEmptyEditableDiv) {
   // This test records the InSameLine() results in
   // editing/selection/skip-over-contenteditable.html
   SetBodyContent(
@@ -999,18 +1001,17 @@ TEST_P(ParameterizedVisibleUnitsLineTest, InSameLineSkippingEmptyEditableDiv) {
       PositionWithAffinity(Position(bar, 0), TextAffinity::kDownstream)));
 }
 
-TEST_P(ParameterizedVisibleUnitsLineTest, InSameLineWithMixedEditability) {
-  SelectionInDOMTree selection =
+TEST_F(VisibleUnitsLineTest, InSameLineWithMixedEditability) {
+  SelectionInDomTree selection =
       SetSelectionTextToBody("<span contenteditable>f^oo</span>b|ar");
 
-  PositionWithAffinity position1(selection.Base());
-  PositionWithAffinity position2(selection.Extent());
+  PositionWithAffinity position1(selection.Anchor());
+  PositionWithAffinity position2(selection.Focus());
   // "Same line" is restricted by editability boundaries.
   EXPECT_FALSE(InSameLine(position1, position2));
 }
 
-TEST_P(ParameterizedVisibleUnitsLineTest,
-       InSameLineWithGeneratedZeroWidthSpace) {
+TEST_F(VisibleUnitsLineTest, InSameLineWithGeneratedZeroWidthSpace) {
   LoadAhem();
   InsertStyleElement(
       "p { font: 10px/1 Ahem; }"
@@ -1031,7 +1032,7 @@ TEST_P(ParameterizedVisibleUnitsLineTest,
 }
 
 // http://crbug.com/1183269
-TEST_P(ParameterizedVisibleUnitsLineTest, InSameLineWithSoftLineWrap) {
+TEST_F(VisibleUnitsLineTest, InSameLineWithSoftLineWrap) {
   LoadAhem();
   InsertStyleElement(
       "p { font: 10px/1 Ahem; }"
@@ -1039,28 +1040,28 @@ TEST_P(ParameterizedVisibleUnitsLineTest, InSameLineWithSoftLineWrap) {
   // Note: "contenteditable" adds
   //    line-break: after-white-space;
   //    overflow-wrap: break-word;
-  const SelectionInDOMTree& selection =
+  const SelectionInDomTree& selection =
       SetSelectionTextToBody("<p contenteditable id=t>abc |xyz</p>");
   EXPECT_FALSE(InSameLine(
-      PositionWithAffinity(selection.Base(), TextAffinity::kUpstream),
-      PositionWithAffinity(selection.Base(), TextAffinity::kDownstream)));
+      PositionWithAffinity(selection.Anchor(), TextAffinity::kUpstream),
+      PositionWithAffinity(selection.Anchor(), TextAffinity::kDownstream)));
 }
 
-TEST_P(ParameterizedVisibleUnitsLineTest, InSameLineWithZeroWidthSpace) {
+TEST_F(VisibleUnitsLineTest, InSameLineWithZeroWidthSpace) {
   LoadAhem();
   InsertStyleElement(
       "p { font: 10px/1 Ahem; }"
       "p { width: 4ch; }");
-  const SelectionInDOMTree& selection =
-      SetSelectionTextToBody(u8"<p id=t>abcd^\u200B|wxyz</p>");
+  const SelectionInDomTree& selection =
+      SetSelectionTextToBody("<p id=t>abcd^\u200B|wxyz</p>");
 
-  const Position& after_zws = selection.Extent();
+  const Position& after_zws = selection.Focus();
   const PositionWithAffinity after_zws_down =
       PositionWithAffinity(after_zws, TextAffinity::kDownstream);
   const PositionWithAffinity after_zws_up =
       PositionWithAffinity(after_zws, TextAffinity::kUpstream);
 
-  const Position& before_zws = selection.Base();
+  const Position& before_zws = selection.Anchor();
   const PositionWithAffinity before_zws_down =
       PositionWithAffinity(before_zws, TextAffinity::kDownstream);
   const PositionWithAffinity before_zws_up =
@@ -1078,7 +1079,47 @@ TEST_P(ParameterizedVisibleUnitsLineTest, InSameLineWithZeroWidthSpace) {
   EXPECT_TRUE(InSameLine(before_zws_up, before_zws_down));
 }
 
-TEST_P(ParameterizedVisibleUnitsLineTest, StartOfLineWithBidi) {
+// https://issues.chromium.org/issues/41497469
+TEST_F(VisibleUnitsLineTest, InSameLineWithInlineBlock) {
+  SetBodyContent(
+      "<span id=one>start</span>"
+      "<span id=two style='display: inline-block;'>test</span>"
+      "<span id=three>end</span>");
+
+  const PositionWithAffinity position =
+      PositionWithAffinity(Position(*GetElementById("two")->firstChild(), 0),
+                           TextAffinity::kUpstream);
+  EXPECT_TRUE(InSameLine(
+      position,
+      PositionWithAffinity(Position(*GetElementById("one")->firstChild(), 0),
+                           TextAffinity::kUpstream)));
+  EXPECT_TRUE(InSameLine(
+      position,
+      PositionWithAffinity(Position(*GetElementById("three")->firstChild(), 0),
+                           TextAffinity::kUpstream)));
+}
+
+// http://crbug.com/1358235
+TEST_F(VisibleUnitsLineTest, StartOfLineBeforeEmptyLine) {
+  LoadAhem();
+  InsertStyleElement("p { font: 30px/3 Ahem; }");
+
+  EXPECT_EQ("<p dir=\"ltr\">abc<br>|<br>xyz<br></p>",
+            TestStartOfLine("<p dir=\"ltr\">abc<br>|<br>xyz<br></p>"));
+  EXPECT_EQ("<p dir=\"ltr\">abc<br><br>|<br>xyz<br></p>",
+            TestStartOfLine("<p dir=\"ltr\">abc<br><br>|<br>xyz<br></p>"));
+  EXPECT_EQ("<p dir=\"ltr\">abc<br>|<br><br>xyz<br></p>",
+            TestStartOfLine("<p dir=\"ltr\">abc<br>|<br><br>xyz<br></p>"));
+
+  EXPECT_EQ("<p dir=\"rtl\">abc<br>|<br>xyz<br></p>",
+            TestStartOfLine("<p dir=\"rtl\">abc<br>|<br>xyz<br></p>"));
+  EXPECT_EQ("<p dir=\"rtl\">abc<br>|<br><br>xyz<br></p>",
+            TestStartOfLine("<p dir=\"rtl\">abc<br>|<br><br>xyz<br></p>"));
+  EXPECT_EQ("<p dir=\"rtl\">abc<br><br>|<br>xyz<br></p>",
+            TestStartOfLine("<p dir=\"rtl\">abc<br><br>|<br>xyz<br></p>"));
+}
+
+TEST_F(VisibleUnitsLineTest, StartOfLineWithBidi) {
   LoadAhem();
   InsertStyleElement("p { font: 30px/3 Ahem; }");
 
@@ -1100,7 +1141,7 @@ TEST_P(ParameterizedVisibleUnitsLineTest, StartOfLineWithBidi) {
       << "RTL RTL";
 }
 
-TEST_P(ParameterizedVisibleUnitsLineTest, StartOfLineWithPositionRelative) {
+TEST_F(VisibleUnitsLineTest, StartOfLineWithPositionRelative) {
   LoadAhem();
   InsertStyleElement(
       "b { position:relative; left: -100px; }"
@@ -1111,14 +1152,10 @@ TEST_P(ParameterizedVisibleUnitsLineTest, StartOfLineWithPositionRelative) {
   EXPECT_EQ("<p dir=\"rtl\"><b>|abc</b> xyz</p>",
             TestStartOfLine("<p dir=\"rtl\"><b>abc</b> |xyz</p>"))
       << "RTL-LTR";
-  // Legacy results are wrong. See StartOfLineWithBidi
-  EXPECT_EQ(LayoutNGEnabled() ? "<p><bdo dir=\"rtl\"><b>|abc</b> xyz</bdo></p>"
-                              : "<p><bdo dir=\"rtl\"><b>abc|</b> xyz</bdo></p>",
+  EXPECT_EQ("<p><bdo dir=\"rtl\"><b>|abc</b> xyz</bdo></p>",
             TestStartOfLine("<p><bdo dir=\"rtl\"><b>abc</b> |xyz</bdo></p>"))
       << "LTR-RTL";
-  EXPECT_EQ(LayoutNGEnabled()
-                ? "<p dir=\"rtl\"><bdo dir=\"rtl\"><b>|abc</b> xyz</bdo></p>"
-                : "<p dir=\"rtl\"><bdo dir=\"rtl\"><b>abc|</b> xyz</bdo></p>",
+  EXPECT_EQ("<p dir=\"rtl\"><bdo dir=\"rtl\"><b>|abc</b> xyz</bdo></p>",
             TestStartOfLine(
                 "<p dir=\"rtl\"><bdo  dir=\"rtl\"><b>abc</b> |xyz</bdo></p>"))
       << "RTL-RTL";
@@ -1136,14 +1173,14 @@ TEST_F(VisibleUnitsLineTest, TextOverflowEllipsis1) {
       font: 10px/10px Ahem;
     })HTML");
   SetBodyContent("<div>foo foo</div>");
-  Element* div = GetDocument().QuerySelector("div");
+  Element* div = QuerySelector("div");
   Node* text = div->firstChild();
   EXPECT_EQ(
       Position(text, 0),
-      StartOfLine(CreateVisiblePositionInDOMTree(*text, 6)).DeepEquivalent());
+      StartOfLine(CreateVisiblePositionInDomTree(*text, 6)).DeepEquivalent());
   EXPECT_EQ(
       Position(text, 7),
-      EndOfLine(CreateVisiblePositionInDOMTree(*text, 6)).DeepEquivalent());
+      EndOfLine(CreateVisiblePositionInDomTree(*text, 6)).DeepEquivalent());
 }
 
 // https://crbug.com/1177753
@@ -1161,17 +1198,40 @@ TEST_F(VisibleUnitsLineTest, TextOverflowEllipsis2) {
       width: 75px; /* Something bigger than 50px */
     })HTML");
   SetBodyContent("<div><span>x</span>&#x20;</div>");
-  Element* span = GetDocument().QuerySelector("span");
+  Element* span = QuerySelector("span");
 
   // Should not crash
   const PositionWithAffinity& start_of_line =
       StartOfLine(PositionWithAffinity(Position(span, 1)));
 
-  // The result on legacy layout is broken and not worth fixing.
-  EXPECT_EQ(LayoutNGEnabled()
-                ? PositionWithAffinity(Position::BeforeNode(*span))
-                : PositionWithAffinity(),
-            start_of_line);
+  EXPECT_EQ(PositionWithAffinity(Position::BeforeNode(*span)), start_of_line);
+}
+
+TEST_F(VisibleUnitsLineTest, LineClampEllipsisLtr) {
+  InsertStyleElement(R"HTML(
+    div {
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 1;
+      overflow: hidden;
+
+      line-clamp: 1;
+
+      white-space: nowrap;
+      width: 50px;
+      direction: rtl;
+    })HTML");
+  SetBodyContent("<div>السطر ١<br>السطر ٢</div>");
+  Element* div = QuerySelector("div");
+  Text* first_line_text = To<Text>(div->firstChild());
+
+  // Should not crash
+  const PositionWithAffinity& end_of_line =
+      EndOfLine(PositionWithAffinity(Position(div, 1)));
+
+  EXPECT_EQ(PositionWithAffinity(Position(*first_line_text, 7),
+                                 TextAffinity::kUpstream),
+            end_of_line);
 }
 
 // https://crbug.com/1181451
@@ -1182,13 +1242,93 @@ TEST_F(VisibleUnitsLineTest, InSameLineWithBidiReordering) {
       "<span dir='ltr'>a&#x20;</span>&#x20;"
       "<div></div><div></div>"
       "</span>");
-  Element* span = GetDocument().QuerySelector("span > span");
+  Element* span = QuerySelector("span > span");
   PositionWithAffinity p1(Position(span->nextSibling(), 0));
   PositionWithAffinity p2(Position(span->firstChild(), 2));
 
   // Should not crash.
-  // The result on legacy layout is broken and not worth fixing.
-  EXPECT_EQ(LayoutNGEnabled() ? true : false, InSameLine(p1, p2));
+  EXPECT_EQ(true, InSameLine(p1, p2));
+}
+
+// https://crbug.com/41053053
+// Home key should move caret to start of current line, not overshoot into
+// previous paragraph, when contenteditable=false elements are at both the
+// start and end of a paragraph.
+TEST_F(VisibleUnitsLineTest,
+       LogicalStartOfLineWithNonEditableAtBothEndsOfParagraph) {
+  LoadAhem();
+  InsertStyleElement("div { font: 10px/1 Ahem; width: 800px; }");
+  SetBodyContent(
+      "<div contenteditable id='div'>"
+      "<p id='p1'>first paragraph</p>"
+      "<p id='p2'><a contenteditable='false'>ref1</a>"
+      " editable text "
+      "<a contenteditable='false'>ref2</a><span id='span'></span></p>"
+      "<p id='p3'>third paragraph</p>"
+      "</div>");
+  UpdateAllLifecyclePhasesForTest();
+
+  // Place caret at the end of the second paragraph (inside the empty span).
+  Element* p2 = GetElementById("p2");
+  Element* span = GetElementById("span");
+  const PositionWithAffinity caret_at_end(Position(span, 0),
+                                          TextAffinity::kDownstream);
+
+  // LogicalStartOfLine should return a position at the start of <p2>,
+  // not overshoot into <p1>.
+  const VisiblePosition result =
+      LogicalStartOfLine(CreateVisiblePosition(caret_at_end));
+  ASSERT_TRUE(result.IsValid());
+
+  const Position& result_pos = result.DeepEquivalent();
+  EXPECT_TRUE(p2->contains(result_pos.ComputeContainerNode()))
+      << "Expected position in p2, but got: " << result_pos;
+}
+
+TEST_F(VisibleUnitsLineTest,
+       LogicalStartOfLineWithNonEditableAtStartOfParagraph) {
+  LoadAhem();
+  InsertStyleElement("div { font: 10px/1 Ahem; width: 800px; }");
+  SetBodyContent(
+      "<div contenteditable id='div'>"
+      "<p id='p1'>first paragraph</p>"
+      "<p id='p2'><a contenteditable='false'>ref1</a>"
+      " editable text "
+      "<a contenteditable='false'>ref2</a></p>"
+      "<p id='p3'>third paragraph</p>"
+      "</div>");
+  UpdateAllLifecyclePhasesForTest();
+
+  // Place caret in the editable text between the two non-editable anchors.
+  Element* p2 = GetElementById("p2");
+  // The text node " editable text " is the second child of p2.
+  Node* editable_text = p2->firstChild()->nextSibling();
+  ASSERT_TRUE(editable_text);
+  ASSERT_TRUE(editable_text->IsTextNode());
+  const PositionWithAffinity caret_in_text(Position(editable_text, 5),
+                                           TextAffinity::kDownstream);
+
+  const VisiblePosition result =
+      LogicalStartOfLine(CreateVisiblePosition(caret_in_text));
+  ASSERT_TRUE(result.IsValid());
+
+  const Position& result_pos = result.DeepEquivalent();
+  EXPECT_TRUE(p2->contains(result_pos.ComputeContainerNode()))
+      << "Expected position in p2, but got: " << result_pos;
+}
+
+TEST_F(VisibleUnitsLineTest, IsStartOfLineWithPosition) {
+  SetBodyContent("<div id=sample>hello world</div>");
+  Node* text = GetElementById("sample")->firstChild();
+  EXPECT_TRUE(IsStartOfLine(Position(*text, 0)));
+  EXPECT_FALSE(IsStartOfLine(Position(*text, 3)));
+}
+
+TEST_F(VisibleUnitsLineTest, IsEndOfLineWithPosition) {
+  SetBodyContent("<div id=sample>hello world</div>");
+  Node* text = GetElementById("sample")->firstChild();
+  EXPECT_TRUE(IsEndOfLine(Position(*text, 11)));
+  EXPECT_FALSE(IsEndOfLine(Position(*text, 3)));
 }
 
 }  // namespace blink

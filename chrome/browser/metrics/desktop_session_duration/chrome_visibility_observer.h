@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,25 @@
 #define CHROME_BROWSER_METRICS_DESKTOP_SESSION_DURATION_CHROME_VISIBILITY_OBSERVER_H_
 
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "base/time/time.h"
-#include "chrome/browser/ui/browser_list_observer.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
+
+class GlobalBrowserCollection;
 
 namespace metrics {
 // Observer for tracking browser visibility events.
-class ChromeVisibilityObserver : public BrowserListObserver {
+class ChromeVisibilityObserver : public BrowserCollectionObserver {
  public:
   ChromeVisibilityObserver();
+
+  ChromeVisibilityObserver(const ChromeVisibilityObserver&) = delete;
+  ChromeVisibilityObserver& operator=(const ChromeVisibilityObserver&) = delete;
+
   ~ChromeVisibilityObserver() override;
 
  private:
-  friend class ChromeVisibilityObserverInteractiveTest;
+  friend class ChromeVisibilityObserverInteractiveTestImpl;
 
   // Notifies |DesktopSessionDurationTracker| of visibility changes. Overridden
   // by tests.
@@ -27,10 +34,10 @@ class ChromeVisibilityObserver : public BrowserListObserver {
   // short gap.
   void CancelVisibilityChange();
 
-  // BrowserListObserver:
-  void OnBrowserSetLastActive(Browser* browser) override;
-  void OnBrowserNoLongerActive(Browser* browser) override;
-  void OnBrowserRemoved(Browser* browser) override;
+  // BrowserCollectionObserver:
+  void OnBrowserActivated(BrowserWindowInterface* browser) override;
+  void OnBrowserDeactivated(BrowserWindowInterface* browser) override;
+  void OnBrowserClosed(BrowserWindowInterface* browser) override;
 
   // Sets |visibility_gap_timeout_| based on variation params.
   void InitVisibilityGapTimeout();
@@ -42,9 +49,13 @@ class ChromeVisibilityObserver : public BrowserListObserver {
   // example, when user switching between two browser windows.
   base::TimeDelta visibility_gap_timeout_;
 
-  base::WeakPtrFactory<ChromeVisibilityObserver> weak_factory_{this};
+  // TODO(crbug.com/495383290): remove when the ChromeVisibilityObserver is no
+  // longer outliving the GlobalBrowserCollection it observes.
+  base::ScopedObservation<GlobalBrowserCollection,
+                          BrowserCollectionObserver>::LeakedDanglingUntriaged
+      browser_collection_observation_{this};
 
-  DISALLOW_COPY_AND_ASSIGN(ChromeVisibilityObserver);
+  base::WeakPtrFactory<ChromeVisibilityObserver> weak_factory_{this};
 };
 
 }  // namespace metrics

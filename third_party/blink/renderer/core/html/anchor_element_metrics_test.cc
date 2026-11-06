@@ -1,12 +1,13 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/html/anchor_element_metrics.h"
 
+#include <optional>
+
 #include "base/test/scoped_feature_list.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/loader/navigation_predictor.mojom-blink.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
@@ -16,8 +17,8 @@
 #include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_request.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_test.h"
-#include "third_party/blink/renderer/platform/testing/histogram_tester.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
@@ -43,8 +44,7 @@ class AnchorElementMetricsTest : public SimTest {
     LoadURL(source);
     main_resource.Complete("<a id='anchor' href=''>example</a>");
 
-    auto* anchor_element =
-        To<HTMLAnchorElement>(GetDocument().getElementById("anchor"));
+    auto* anchor_element = To<HTMLAnchorElement>(GetElementById("anchor"));
     anchor_element->SetHref(AtomicString(target));
     // We need layout to have happened before calling
     // CreateAnchorElementMetrics.
@@ -104,18 +104,18 @@ TEST_F(AnchorElementMetricsTest, AnchorFeatureImageLink) {
 
   LoadURL("https://example.com/");
 
-  main_resource.Complete(String::Format(
+  main_resource.Complete(Format(
       R"HTML(
     <body style='margin: 0px'>
-    <div style='height: %dpx;'></div>
+    <div style='height: {}px;'></div>
     <a id='anchor' href="https://example.com/page2">
       <img height="300" width="200">
     </a>
-    <div style='height: %d;'></div>
+    <div style='height: {};'></div>
     </body>)HTML",
       kViewportHeight / 2, 10 * kViewportHeight));
 
-  Element* anchor = GetDocument().getElementById("anchor");
+  Element* anchor = GetElementById("anchor");
   auto* anchor_element = To<HTMLAnchorElement>(anchor);
 
   auto metrics = CreateAnchorElementMetrics(*anchor_element);
@@ -132,7 +132,7 @@ TEST_F(AnchorElementMetricsTest, AnchorWithoutTextSibling) {
   main_resource.Complete(
       R"HTML(<body><a id='anchor' href="https://example.com/page2">foo</a></body>)HTML");
 
-  Element* anchor = GetDocument().getElementById("anchor");
+  Element* anchor = GetElementById("anchor");
   auto* anchor_element = To<HTMLAnchorElement>(anchor);
 
   auto metrics = CreateAnchorElementMetrics(*anchor_element);
@@ -146,7 +146,7 @@ TEST_F(AnchorElementMetricsTest, AnchorWithEmptyTextSibling) {
   main_resource.Complete(
       R"HTML(<body> <a id='anchor' href="https://example.com/page2">foo</a> </body>)HTML");
 
-  Element* anchor = GetDocument().getElementById("anchor");
+  Element* anchor = GetElementById("anchor");
   auto* anchor_element = To<HTMLAnchorElement>(anchor);
 
   auto metrics = CreateAnchorElementMetrics(*anchor_element);
@@ -160,7 +160,7 @@ TEST_F(AnchorElementMetricsTest, AnchorWithPreviousTextSibling) {
   main_resource.Complete(
       R"HTML(<body>bar<a id='anchor' href="https://example.com/page2">foo</a></body>)HTML");
 
-  Element* anchor = GetDocument().getElementById("anchor");
+  Element* anchor = GetElementById("anchor");
   auto* anchor_element = To<HTMLAnchorElement>(anchor);
 
   auto metrics = CreateAnchorElementMetrics(*anchor_element);
@@ -174,7 +174,7 @@ TEST_F(AnchorElementMetricsTest, AnchorWithNextTextSibling) {
   main_resource.Complete(
       R"HTML(<body><a id='anchor' href="https://example.com/page2">foo</a>bar</body>)HTML");
 
-  Element* anchor = GetDocument().getElementById("anchor");
+  Element* anchor = GetElementById("anchor");
   auto* anchor_element = To<HTMLAnchorElement>(anchor);
 
   auto metrics = CreateAnchorElementMetrics(*anchor_element);
@@ -188,7 +188,7 @@ TEST_F(AnchorElementMetricsTest, AnchorFontSize) {
   main_resource.Complete(
       R"HTML(<body><a id='anchor' style="font-size: 23px" href="https://example.com/page2">foo</a>bar</body>)HTML");
 
-  Element* anchor = GetDocument().getElementById("anchor");
+  Element* anchor = GetElementById("anchor");
   auto* anchor_element = To<HTMLAnchorElement>(anchor);
 
   auto metrics = CreateAnchorElementMetrics(*anchor_element);
@@ -202,7 +202,7 @@ TEST_F(AnchorElementMetricsTest, AnchorFontWeight) {
   main_resource.Complete(
       R"HTML(<body><a id='anchor' style='font-weight: 438' href="https://example.com/page2">foo</a>bar</body>)HTML");
 
-  Element* anchor = GetDocument().getElementById("anchor");
+  Element* anchor = GetElementById("anchor");
   auto* anchor_element = To<HTMLAnchorElement>(anchor);
 
   auto metrics = CreateAnchorElementMetrics(*anchor_element);
@@ -217,16 +217,16 @@ TEST_F(AnchorElementMetricsTest, AnchorFeatureExtract) {
 
   LoadURL("https://example.com/");
 
-  main_resource.Complete(String::Format(
+  main_resource.Complete(Format(
       R"HTML(
     <body style='margin: 0px'>
-    <div style='height: %dpx;'></div>
+    <div style='height: {}px;'></div>
     <a id='anchor' href="https://b.example.com">example</a>
-    <div style='height: %d;'></div>
+    <div style='height: {};'></div>
     </body>)HTML",
       2 * kViewportHeight, 10 * kViewportHeight));
 
-  Element* anchor = GetDocument().getElementById("anchor");
+  Element* anchor = GetElementById("anchor");
   auto* anchor_element = To<HTMLAnchorElement>(anchor);
 
   auto metrics = CreateAnchorElementMetrics(*anchor_element);
@@ -240,7 +240,7 @@ TEST_F(AnchorElementMetricsTest, AnchorFeatureExtract) {
   // Scroll down to the anchor element.
   GetDocument().View()->LayoutViewport()->SetScrollOffset(
       ScrollOffset(0, kViewportHeight * 1.5),
-      mojom::blink::ScrollType::kProgrammatic);
+      mojom::blink::ScrollType::kProgrammatic, cc::ScrollSourceType::kNone);
 
   auto metrics2 = CreateAnchorElementMetrics(*anchor_element);
   EXPECT_FALSE(metrics2->is_in_iframe);
@@ -261,32 +261,33 @@ TEST_F(AnchorElementMetricsTest, AnchorFeatureInIframe) {
 
   LoadURL("https://example.com/page1");
 
-  main_resource.Complete(String::Format(
+  main_resource.Complete(Format(
       R"HTML(
         <body style='margin: 0px'>
-        <div style='height: %dpx;'></div>
+        <div style='height: {}px;'></div>
         <iframe id='iframe' src='https://example.com/iframe.html'
-            style='width: 300px; height: %dpx;
+            style='width: 300px; height: {}px;
             border-style: none; padding: 0px; margin: 0px;'></iframe>
-        <div style='height: %dpx;'></div>
+        <div style='height: {}px;'></div>
         </body>)HTML",
       2 * kViewportHeight, kViewportHeight / 2, 10 * kViewportHeight));
 
-  iframe_resource.Complete(String::Format(
+  iframe_resource.Complete(Format(
       R"HTML(
     <body style='margin: 0px'>
-    <div style='height: %dpx;'></div>
+    <div style='height: {}px;'></div>
     <a id='anchor' href="https://example.com/page2">example</a>
-    <div style='height: %dpx;'></div>
+    <div style='height: {}px;'></div>
     </body>)HTML",
       kViewportHeight / 2, 5 * kViewportHeight));
 
-  Element* iframe = GetDocument().getElementById("iframe");
+  Element* iframe = GetElementById("iframe");
   auto* iframe_element = To<HTMLIFrameElement>(iframe);
   Frame* sub = iframe_element->ContentFrame();
   auto* subframe = To<LocalFrame>(sub);
 
-  Element* anchor = subframe->GetDocument()->getElementById("anchor");
+  Element* anchor =
+      subframe->GetDocument()->getElementById(AtomicString("anchor"));
   auto* anchor_element = To<HTMLAnchorElement>(anchor);
 
   // We need layout to have happened before calling
@@ -301,7 +302,7 @@ TEST_F(AnchorElementMetricsTest, AnchorFeatureInIframe) {
   // Scroll down the main frame.
   GetDocument().View()->LayoutViewport()->SetScrollOffset(
       ScrollOffset(0, kViewportHeight * 1.8),
-      mojom::blink::ScrollType::kProgrammatic);
+      mojom::blink::ScrollType::kProgrammatic, cc::ScrollSourceType::kNone);
   GetDocument().View()->UpdateAllLifecyclePhasesForTest();
   auto metrics2 = CreateAnchorElementMetrics(*anchor_element);
   EXPECT_TRUE(metrics2->is_in_iframe);
@@ -312,7 +313,7 @@ TEST_F(AnchorElementMetricsTest, AnchorFeatureInIframe) {
   // Scroll down inside iframe. Now the anchor element is visible.
   subframe->View()->LayoutViewport()->SetScrollOffset(
       ScrollOffset(0, kViewportHeight * 0.2),
-      mojom::blink::ScrollType::kProgrammatic);
+      mojom::blink::ScrollType::kProgrammatic, cc::ScrollSourceType::kNone);
   GetDocument().View()->UpdateAllLifecyclePhasesForTest();
   auto metrics3 = CreateAnchorElementMetrics(*anchor_element);
   EXPECT_TRUE(metrics3->is_in_iframe);

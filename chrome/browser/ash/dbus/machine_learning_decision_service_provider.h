@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,19 +8,22 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-// TODO(https://crbug.com/1164001): forward declare UserActivityController.
-#include "chrome/browser/ash/power/ml/user_activity_controller.h"
-#include "chromeos/dbus/services/cros_dbus_service.h"
+#include "chromeos/ash/components/dbus/services/cros_dbus_service.h"
 #include "dbus/exported_object.h"
 
 namespace dbus {
 class MethodCall;
 }  // namespace dbus
 
-namespace chromeos {
+namespace ash {
+
+namespace power {
+namespace ml {
+class UserActivityController;
+}  // namespace ml
+}  // namespace power
 
 // This class processes machine learning decision requests from Chrome OS side.
 //
@@ -39,6 +42,12 @@ class MachineLearningDecisionServiceProvider
     : public CrosDBusService::ServiceProviderInterface {
  public:
   MachineLearningDecisionServiceProvider();
+
+  MachineLearningDecisionServiceProvider(
+      const MachineLearningDecisionServiceProvider&) = delete;
+  MachineLearningDecisionServiceProvider& operator=(
+      const MachineLearningDecisionServiceProvider&) = delete;
+
   ~MachineLearningDecisionServiceProvider() override;
 
   // CrosDBusService::ServiceProviderInterface overrides:
@@ -70,10 +79,8 @@ class MachineLearningDecisionServiceProvider
   // beginning of destruction.
   base::WeakPtrFactory<MachineLearningDecisionServiceProvider>
       weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(MachineLearningDecisionServiceProvider);
 };
 
-}  // namespace chromeos
+}  // namespace ash
 
 #endif  // CHROME_BROWSER_ASH_DBUS_MACHINE_LEARNING_DECISION_SERVICE_PROVIDER_H_

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -44,8 +44,8 @@ class C {
 };
 
 struct Derived : public C {
-  using C::flag_field_;
   using C::field_mentioning_http_and_https_;
+  using C::flag_field_;
 };
 
 int C::instance_count_ = 0;

@@ -1,27 +1,34 @@
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 import hashlib
 
 
-class MockChromiumCommit(object):
-    def __init__(self,
-                 host,
-                 position='refs/heads/master@{#123}',
-                 change_id='Iba5eba11',
-                 author='Fake author',
-                 subject='Fake subject',
-                 body='Fake body',
-                 patch='Fake patch contents'):
+class MockChromiumCommit:
+    def __init__(
+        self,
+        host,
+        position='refs/heads/master@{#123}',
+        change_id='Iba5eba11',
+        link='',
+        author='Fake author',
+        subject='Fake subject',
+        body='Fake body',
+        patch='Fake patch contents',
+    ):
         self.host = host
         self.position = position
-        self.sha = hashlib.sha1(position).hexdigest()
+        self.sha = hashlib.sha1(position.encode('utf-8')).hexdigest()
         self._change_id = change_id
+        self._link = link
         self._author = author
         self._subject = subject
         self._body = body
         self._patch = patch
+
+    def __str__(self):
+        return f'{self.short_sha} "{self.subject()}"'
 
     @property
     def short_sha(self):
@@ -51,8 +58,11 @@ class MockChromiumCommit(object):
     def message(self):
         return self.subject() + '\n\n' + self.body()
 
-    def format_patch(self):
-        return self._patch
+    def format_patch(self) -> bytes:
+        return self._patch.encode()
 
     def change_id(self):
         return self._change_id
+
+    def link(self):
+        return self._link

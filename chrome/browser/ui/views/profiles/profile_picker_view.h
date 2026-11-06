@@ -1,33 +1,39 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_VIEWS_PROFILES_PROFILE_PICKER_VIEW_H_
 #define CHROME_BROWSER_UI_VIEWS_PROFILES_PROFILE_PICKER_VIEW_H_
 
-#include "base/cancelable_callback.h"
+#include <optional>
+#include <variant>
+
+#include "base/functional/callback_forward.h"
+#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/time/time.h"
+#include "build/buildflag.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/chrome_web_modal_dialog_manager_delegate.h"
-#include "chrome/browser/ui/profile_picker.h"
-#include "chrome/browser/ui/views/profiles/profile_picker_force_signin_dialog_host.h"
+#include "chrome/browser/ui/profiles/profile_picker.h"
+#include "chrome/browser/ui/views/profiles/profile_management_types.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_web_contents_host.h"
-#include "chrome/browser/ui/webui/signin/enterprise_profile_welcome_ui.h"
 #include "components/keep_alive_registry/scoped_keep_alive.h"
-#include "components/signin/public/identity_manager/identity_manager.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "components/user_education/common/feature_promo/feature_promo_controller.h"
 #include "ui/base/metadata/metadata_header_macros.h"
-#include "ui/views/controls/webview/unhandled_keyboard_event_handler.h"
+#include "ui/base/mojom/window_open_disposition.mojom-forward.h"
 #include "ui/views/controls/webview/webview.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget_delegate.h"
 
-class ProfilePickerSignInFlowController;
-
-namespace base {
-class FilePath;
-}
+class ProfilePickerToolbar;
+class Profile;
+class ScopedProfileKeepAlive;
+class ProfileManagementFlowController;
+class ProfilePickerFlowController;
+class ProfilePickerFeaturePromoController;
+class ForceSigninUIError;
+class SigninUIError;
 
 namespace content {
 struct ContextMenuParams;
@@ -36,54 +42,64 @@ class RenderFrameHost;
 class WebContents;
 }  // namespace content
 
-namespace ui {
-class ThemeProvider;
-}  // namespace ui
-
 // Dialog widget that contains the Desktop Profile picker webui.
-class ProfilePickerView : public views::WidgetDelegateView,
-                          public ProfilePickerWebContentsHost {
+class ProfilePickerView
+    : public views::WidgetDelegateView,
+      public ProfilePickerWebContentsHost,
+      public views::WebContentsDelegateViews<ProfilePickerView>,
+      public web_modal::WebContentsModalDialogHost,
+      public ui::AcceleratorProvider,
+      public ChromeWebModalDialogManagerDelegate {
+  METADATA_HEADER(ProfilePickerView, views::WidgetDelegateView)
+
  public:
-  METADATA_HEADER(ProfilePickerView);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kViewId);
 
   ProfilePickerView(const ProfilePickerView&) = delete;
   ProfilePickerView& operator=(const ProfilePickerView&) = delete;
 
-  const ui::ThemeProvider* GetThemeProviderForProfileBeingCreated() const;
-
-  // Displays sign in error message that is created by Chrome but not GAIA
-  // without browser window. If the dialog is not currently shown, this does
-  // nothing.
-  void DisplayErrorMessage();
-
-  // Sets the URL to be opened after the user selects a profile.
-  void set_on_select_profile_target_url(const GURL& url) {
-    on_select_profile_target_url_ = url;
-  }
+  // Updates the parameters. This calls existing callbacks with error values,
+  // and requires `ProfilePicker::Params::CanReusePickerWindow()` to be true.
+  void UpdateParams(ProfilePicker::Params&& params);
 
   // ProfilePickerWebContentsHost:
   void ShowScreen(content::WebContents* contents,
                   const GURL& url,
-                  bool show_toolbar,
-                  bool enable_navigating_back = true,
-                  base::OnceClosure navigation_finished_closure =
-                      base::OnceClosure()) override;
-  void ShowScreenInSystemContents(
+                  base::OnceClosure navigation_finished_closure) override;
+  void ShowScreenInPickerContents(
       const GURL& url,
-      bool show_toolbar,
-      bool enable_navigating_back = true,
-      base::OnceClosure navigation_finished_closure =
-          base::OnceClosure()) override;
-  void CreateToolbarBackButton() override;
-  void Clear() override;
+      base::OnceClosure navigation_finished_closure) override;
   bool ShouldUseDarkColors() const override;
+  bool AreEffectsEnabled() const override;
+  content::WebContents* GetPickerContents() const override;
+  web_modal::WebContentsModalDialogHost* GetWebContentsModalDialogHost()
+      override;
+  content::WebContentsDelegate* GetWebContentsDelegate() override;
+  void Reset(StepSwitchFinishedCallback callback) override;
+  void ShowSigninErrorDialog(
+      const std::variant<ForceSigninUIError, SigninUIError>& error,
+      bool success) override;
+  void SetNativeToolbarSigninButtonsVisible(bool visible) override;
+  void SetNativeToolbarStartBrowsingButtonVisible(bool visible) override;
+  void SetNativeToolbarEffectsControlButtonVisible(bool visible) override;
+  bool AreNativeToolbarSigninButtonsVisibleForTesting() const;
+  SkColor GetPreferredBackgroundColor() const override;
 
   // content::WebContentsDelegate:
-  bool HandleKeyboardEvent(
-      content::WebContents* source,
-      const content::NativeWebKeyboardEvent& event) override;
-  bool HandleContextMenu(content::RenderFrameHost* render_frame_host,
+  bool HandleContextMenu(content::RenderFrameHost& render_frame_host,
                          const content::ContextMenuParams& params) override;
+  content::WebContents* AddNewContents(
+      content::WebContents* source,
+      std::unique_ptr<content::WebContents> new_contents,
+      const GURL& target_url,
+      ui::mojom::WindowOpenDisposition disposition,
+      const blink::mojom::WindowFeatures& window_features,
+      bool user_gesture,
+      bool* was_blocked) override;
+
+  // ChromeWebModalDialogManagerDelegate:
+  web_modal::WebContentsModalDialogHost* GetWebContentsModalDialogHost(
+      content::WebContents* web_contents) override;
 
   // web_modal::WebContentsModalDialogHost
   gfx::NativeView GetHostView() const override;
@@ -92,18 +108,63 @@ class ProfilePickerView : public views::WidgetDelegateView,
   void AddObserver(web_modal::ModalDialogHostObserver* observer) override;
   void RemoveObserver(web_modal::ModalDialogHostObserver* observer) override;
 
- private:
-  friend class ProfilePicker;
+  // views::WidgetDelegateView:
+  void WindowClosing() override;
+  views::ClientView* CreateClientView(views::Widget* widget) override;
+  views::View* GetContentsView() override;
+  void Layout(PassKey) override;
+  std::u16string GetAccessibleWindowTitle() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
+  gfx::Size GetMinimumSize() const override;
+  bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
 
+  // ui::AcceleratorProvider
+  bool GetAcceleratorForCommandId(int command_id,
+                                  ui::Accelerator* accelerator) const override;
+
+  // Exposed for testing
+  enum State {
+    // The view has just been created.
+    kNotStarted = 0,
+
+    // The view received a request to be displayed, but nothing has been shown
+    // yet.
+    kInitializing = 1,
+
+    // The view is currently shown.
+    kDisplayed = 2,
+
+    // The view received a request to close, and will be deleted shortly.
+    kClosing = 3
+  };
+
+  State state_for_testing() { return state_; }
+
+ protected:
   // To display the Profile picker, use ProfilePicker::Show().
-  ProfilePickerView();
+  explicit ProfilePickerView(ProfilePicker::Params&& params);
   ~ProfilePickerView() override;
 
-  enum State { kNotStarted = 0, kInitializing = 1, kReady = 2, kClosing = 3 };
+  const ProfilePicker::Params& params() const { return params_; }
+
+  // Displays the profile picker.
+  void Display();
+
+  // Creates a `ProfileManagementFlowController` to drive the flow for which
+  // this profile picker is being shown.
+  virtual std::unique_ptr<ProfileManagementFlowController> CreateFlowController(
+      Profile* picker_profile,
+      ClearHostClosure clear_host_callback);
+
+ private:
+  friend class ProfilePicker;
+  FRIEND_TEST_ALL_PREFIXES(ProfilePickerCreationFlowBrowserTest,
+                           CreateForceSignedInProfile);
 
   class NavigationFinishedObserver : public content::WebContentsObserver {
    public:
-    NavigationFinishedObserver(const GURL& url,
+    NavigationFinishedObserver(const GURL& requested_url,
                                base::OnceClosure closure,
                                content::WebContents* contents);
     NavigationFinishedObserver(const NavigationFinishedObserver&) = delete;
@@ -116,130 +177,121 @@ class ProfilePickerView : public views::WidgetDelegateView,
         content::NavigationHandle* navigation_handle) override;
 
    private:
-    const GURL url_;
+    const GURL requested_url_;
     base::OnceClosure closure_;
   };
 
-  // Displays the profile picker.
-  void Display(ProfilePicker::EntryPoint entry_point);
+  // If the picker needs to be re-opened, this function schedules the reopening,
+  // closes the picker and return true. Otherwise, it returns false.
+  bool MaybeReopen(ProfilePicker::Params& params);
 
-  // On system profile creation success, it initializes the view.
-  void OnSystemProfileCreated(Profile* system_profile,
-                              Profile::CreateStatus status);
+  // Closes the profile picker.
+  void Clear();
+
+  // On picker profile creation success, it initializes the view.
+  void OnPickerProfileCreated(Profile* picker_profile);
 
   // Creates and shows the dialog.
-  void Init(Profile* system_profile);
+  void Init(Profile* picker_profile);
 
-  // Switches the layout to the sign-in flow (and creates a new profile)
-  void SwitchToSignIn(SkColor profile_color,
-                      base::OnceCallback<void(bool)> switch_finished_callback);
-  // Cancel the sign-in flow and returns back to the main picker screen (if the
-  // original EntryPoint was to open the picker).
-  void CancelSignIn();
-  // On creation success for the sign-in profile, it rebuilds the view.
-  void OnProfileForSigninCreated(
-      SkColor profile_color,
-      base::OnceCallback<void(bool)>& switch_finished_callback,
-      Profile* new_profile,
-      Profile::CreateStatus status);
+  // Finalizes the Init (entering the `kDisplayed` state), called along with the
+  // first time `ShowScreen()`.
+  void FinishInit();
 
-  // views::WidgetDelegate:
-  void WindowClosing() override;
-  views::ClientView* CreateClientView(views::Widget* widget) override;
-  views::View* GetContentsView() override;
-  std::u16string GetAccessibleWindowTitle() const override;
+  // Switch to the flow that comes when the user decides to create a profile
+  // without signing in.
+  // `profile_color` is the profile's color. It is undefined for the default
+  // theme.
+  void SwitchToSignedOutPostIdentityFlow(std::optional<SkColor> profile_color);
 
-  // views::View:
-  gfx::Size CalculatePreferredSize() const override;
-  gfx::Size GetMinimumSize() const override;
-  bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
-  void OnThemeChanged() override;
+  // Callback used when the profile is created in the signed out flow.
+  void OnLocalProfileInitialized(std::optional<SkColor> profile_color,
+                                 Profile* profile);
 
-  // Builds the views hieararchy.
+  // Switches the layout to the sign-in screen (and creates a new profile or
+  // load an existing one based on the `profile_info` content).
+  void SwitchToSignIn(ProfilePicker::ProfileInfo profile_info,
+                      StepSwitchFinishedCallback switch_finished_callback);
+
+  // Switches the profile picker layout to display the reauth page to the main
+  // account of the given `profile` if needed. On success the `profile` is
+  // unlocked and a browser is opend. On failure the user is redirected to the
+  // profile picker main page with an popup error dialog displayed through
+  // `on_error_callback`.
+  void SwitchToReauth(
+      Profile* profile,
+      StepSwitchFinishedCallback switch_finished_callback,
+      base::OnceCallback<void(const ForceSigninUIError&)> on_error_callback);
+
+  // Builds the views hierarchy.
   void BuildLayout();
-
-  void UpdateToolbarColor();
 
   void ShowScreenFinished(
       content::WebContents* contents,
-      bool show_toolbar,
-      bool enable_navigating_back,
       base::OnceClosure navigation_finished_closure = base::OnceClosure());
-
-  void BackButtonPressed(const ui::Event& event);
-  void NavigateBack();
-
-  // Checks whether the sign-in flow is in progress.
-  bool GetSigningIn() const;
-
-  // Overrides the default timeout for waiting for extended account info for any
-  // future signed-in profile creation flow.
-  void SetExtendedAccountInfoTimeoutForTesting(base::TimeDelta timeout);
 
   // Register basic keyboard accelerators such as closing the window (Alt-F4
   // on Windows).
   void ConfigureAccelerators();
 
-  // Shows a dialog where the user can auth the profile or see the
-  // auth error message. If a dialog is already shown, this destroys the current
-  // dialog and creates a new one.
-  void ShowDialog(content::BrowserContext* browser_context,
-                  const GURL& url,
-                  const base::FilePath& profile_path);
+  ProfilePickerFlowController* GetProfilePickerFlowController() const;
 
-  // Hides the dialog if it is showing.
-  void HideDialog();
+  // Returns a closure that can be executed to clear (see
+  // `ProfilePickerView::Clear()`) the view. Uses a weak pointer internally, so
+  // it can be called after the view has been destroyed. It is different from
+  // `ProfilePicker::Hide()` because it only clears this specific instance of
+  // the picker view, whereas `Hide()` would close any picker view.
+  ClearHostClosure GetClearClosure();
 
-  // Getter of the path of profile which is selected in profile picker for force
-  // signin.
-  base::FilePath GetForceSigninProfilePath() const;
+  void UpdateAccessibleNameForRootView(views::WebView*);
 
-  // Getter of the target page url. If not empty and is valid, it opens on
-  // profile selection instead of the new tab page.
-  GURL GetOnSelectProfileTargetUrl() const;
+  // Create the feature promo that manages the IPH logic that can be displayed
+  // through the Profile Picker.
+  void InitializeFeaturePromo(Profile* system_profile);
 
   ScopedKeepAlive keep_alive_;
-  ProfilePicker::EntryPoint entry_point_ =
-      ProfilePicker::EntryPoint::kOnStartup;
+  std::unique_ptr<ScopedProfileKeepAlive> profile_keep_alive_;
+
   State state_ = State::kNotStarted;
-  absl::optional<ProfilePicker::EntryPoint>
-      restart_with_entry_point_on_window_closing_;
+
+  // During destruction, `params_` should stay alive longer than
+  // `signed_in_flow_` (below) as the flow may want to trigger a callback owned
+  // by `params_`.
+  ProfilePicker::Params params_;
+
+  // Callback that gets called (if set) when the current window has closed -
+  // used to reshow the picker (with different params).
+  base::OnceClosure restart_on_window_closing_;
 
   // A mapping between accelerators and command IDs.
   std::map<ui::Accelerator, int> accelerator_table_;
-  bool enable_navigating_back_ = true;
 
-  // Handler for unhandled key events from renderer.
-  views::UnhandledKeyboardEventHandler unhandled_keyboard_event_handler_;
+  // Owned by the view hierarchy.
+  raw_ptr<views::WebView> web_view_ = nullptr;
 
-  // Views, owned by the view hierarchy.
-  views::View* toolbar_ = nullptr;
-  views::WebView* web_view_ = nullptr;
-
-  // The web contents backed by the system profile. This is used for displaying
-  // the WebUI pages.
-  std::unique_ptr<content::WebContents> system_profile_contents_;
+  // The web contents backed by the picker profile (mostly the system profile).
+  // This is used for displaying the WebUI pages.
+  std::unique_ptr<content::WebContents> contents_;
 
   // Observer used for implementing screen switching. Non-null only shorty
   // after switching a screen. Must be below all WebContents instances so that
   // WebContents outlive this observer.
   std::unique_ptr<NavigationFinishedObserver> show_screen_finished_observer_;
 
-  std::unique_ptr<ProfilePickerSignInFlowController> sign_in_;
+  // Toolbar view displayed on top of the native WebUI(s) and/or WebView (Gaia),
+  // owned by the view hierarchy.
+  raw_ptr<ProfilePickerToolbar> toolbar_ = nullptr;
 
-  // Delay used for a timeout, may be overridden by tests.
-  base::TimeDelta extended_account_info_timeout_;
+  std::unique_ptr<ProfileManagementFlowController> flow_controller_;
 
-  // Creation time of the picker, to measure performance on startup. Only set
-  // when the picker is shown on startup.
-  base::TimeTicks creation_time_on_startup_;
+  // Manages IPH promos displayed through the Profile Picker.
+  std::unique_ptr<ProfilePickerFeaturePromoController> feature_promo_;
 
-  // Hosts dialog displayed when a locked profile is selected in ProfilePicker.
-  ProfilePickerForceSigninDialogHost dialog_host_;
+  // Returns whether the profile picker can navigate back. This is determined by
+  // the current step controller.
+  bool CanNavigateBack() const;
 
-  // A target page url that opens on profile selection instead of the new tab
-  // page.
-  GURL on_select_profile_target_url_;
+  base::CallbackListSubscription web_contents_attached_subscription_;
 
   base::WeakPtrFactory<ProfilePickerView> weak_ptr_factory_{this};
 };

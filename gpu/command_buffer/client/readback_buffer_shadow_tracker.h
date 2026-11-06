@@ -1,4 +1,4 @@
-// Copyright (c) 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,12 @@
 #define GPU_COMMAND_BUFFER_CLIENT_READBACK_BUFFER_SHADOW_TRACKER_H_
 
 #include <GLES2/gl2.h>
+
 #include "base/containers/flat_map.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_span.h"
 #include "base/memory/weak_ptr.h"
+#include "gles2_impl_export.h"
 
 namespace gpu {
 
@@ -17,11 +21,17 @@ namespace gles2 {
 
 class GLES2CmdHelper;
 
-class ReadbackBufferShadowTracker {
+class GLES2_IMPL_EXPORT ReadbackBufferShadowTracker {
  public:
-  class Buffer : public base::SupportsWeakPtr<Buffer> {
+  class GLES2_IMPL_EXPORT Buffer final {
    public:
-    explicit Buffer(GLuint buffer_id, ReadbackBufferShadowTracker* tracker);
+    explicit Buffer(GLuint buffer_id,
+                    MappedMemoryManager* mapped_memory,
+                    GLES2CmdHelper* helper);
+
+    Buffer(const Buffer&) = delete;
+    Buffer& operator=(const Buffer&) = delete;
+
     ~Buffer();
 
     uint32_t Alloc(int32_t* shm_id,
@@ -30,31 +40,38 @@ class ReadbackBufferShadowTracker {
     void Free();
     void FreePendingToken(int32_t token);
 
-    void* MapReadbackShm(uint32_t offset, uint32_t map_size);
+    base::span<uint8_t> MapReadbackShm(uint32_t offset, uint32_t map_size);
     bool UnmapReadbackShm();
 
     void UpdateSerialTo(uint64_t serial);
 
     GLuint id() const { return buffer_id_; }
 
+    base::WeakPtr<Buffer> AsWeakPtr() { return weak_ptr_factory_.GetWeakPtr(); }
+
    private:
     friend class ReadbackBufferShadowTracker;
 
     GLuint buffer_id_ = 0;
-    ReadbackBufferShadowTracker* tracker_;
+    raw_ptr<MappedMemoryManager> mapped_memory_;
+    raw_ptr<GLES2CmdHelper> helper_;
     int32_t shm_id_ = 0;
     uint32_t shm_offset_ = 0;
-    void* readback_shm_address_ = nullptr;
+    base::raw_span<uint8_t> readback_buffer_;
     uint64_t serial_of_last_write_ = 1;  // will be updated right after creation
     uint64_t serial_of_readback_data_ = 0;
     uint32_t size_ = 0;
     bool is_mapped_ = false;
-
-    DISALLOW_COPY_AND_ASSIGN(Buffer);
+    base::WeakPtrFactory<Buffer> weak_ptr_factory_{this};
   };
 
   ReadbackBufferShadowTracker(MappedMemoryManager* mapped_memory,
                               GLES2CmdHelper* helper);
+
+  ReadbackBufferShadowTracker(const ReadbackBufferShadowTracker&) = delete;
+  ReadbackBufferShadowTracker& operator=(const ReadbackBufferShadowTracker&) =
+      delete;
+
   ~ReadbackBufferShadowTracker();
 
   Buffer* GetOrCreateBuffer(GLuint id, GLuint size);
@@ -83,10 +100,8 @@ class ReadbackBufferShadowTracker {
   BufferList buffers_written_but_not_fenced_;
   uint64_t buffer_shadow_serial_ = 1;
 
-  MappedMemoryManager* mapped_memory_;
-  GLES2CmdHelper* helper_;
-
-  DISALLOW_COPY_AND_ASSIGN(ReadbackBufferShadowTracker);
+  raw_ptr<MappedMemoryManager> mapped_memory_;
+  raw_ptr<GLES2CmdHelper> helper_;
 };
 
 }  // namespace gles2

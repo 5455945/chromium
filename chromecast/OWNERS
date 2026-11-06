@@ -1,14 +1,9 @@
 set noparent
-halliwell@chromium.org
-seantopping@chromium.org
-servolk@chromium.org
-yucliu@chromium.org
+file://chromecast/CHROMECAST_OWNERS
 
 # Android
 per-file *android*=file://chromecast/android/OWNERS
 per-file *.java=file://chromecast/android/OWNERS
 
-# For major changes, please use one of the reviewers above!
-alexst@chromium.org
-dnicoara@chromium.org
-spang@chromium.org
+# Fuchsia integration owners:
+per-file ...fuchsia*=file://build/fuchsia/OWNERS

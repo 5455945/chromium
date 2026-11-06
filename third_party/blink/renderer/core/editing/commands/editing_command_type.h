@@ -1,4 +1,4 @@
-// Copyright (c) 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -135,7 +135,7 @@ enum class EditingCommandType {
   kSelectWord = 120,
   kSetMark = 121,
   kStrikethrough = 122,
-  kStyleWithCSS = 123,
+  kStyleWithCss = 123,
   kSubscript = 124,
   kSuperscript = 125,
   kSwapWithMark = 126,
@@ -148,10 +148,15 @@ enum class EditingCommandType {
   kUnlink = 133,
   kUnscript = 134,
   kUnselect = 135,
-  kUseCSS = 136,
+  kUseCss = 136,
   kYank = 137,
   kYankAndSelect = 138,
   kAlignCenter = 139,
+
+  // This command is for internal use only; the current use case is pasting GIF
+  // images selected from emoji picker on ChromeOS (the GIF URLs are from
+  // tenor.com).
+  kPasteFromImageUrl = 140,
 
   // Add new commands immediately above this line.
   kNumberOfCommandTypes,
@@ -187,7 +192,6 @@ enum class EditingCommandType {
   // InsertInputText (not supported)
   // InsertMarquee (not supported)
   // InsertSelectDropDown (not supported)
-  // InsertSelectListBox (not supported)
   // InsertTextArea (not supported)
   // LiveResize (not supported)
   // MultipleSelection (not supported)

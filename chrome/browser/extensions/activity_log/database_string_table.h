@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,9 @@
 #include <string>
 
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace sql {
 class Database;
@@ -33,6 +35,9 @@ namespace extensions {
 class DatabaseStringTable {
  public:
   explicit DatabaseStringTable(const std::string& table);
+
+  DatabaseStringTable(const DatabaseStringTable&) = delete;
+  DatabaseStringTable& operator=(const DatabaseStringTable&) = delete;
 
   ~DatabaseStringTable();
 
@@ -70,8 +75,6 @@ class DatabaseStringTable {
   std::string table_;
 
   FRIEND_TEST_ALL_PREFIXES(DatabaseStringTableTest, Prune);
-
-  DISALLOW_COPY_AND_ASSIGN(DatabaseStringTable);
 };
 
 }  // namespace extensions

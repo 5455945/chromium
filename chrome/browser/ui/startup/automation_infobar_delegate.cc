@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,9 @@
 #include <memory>
 #include <utility>
 
+#include "base/memory/ptr_util.h"
 #include "chrome/browser/devtools/global_confirm_info_bar.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/infobars/confirm_infobar_creator.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/infobars/core/infobar.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -20,9 +21,23 @@ void AutomationInfoBarDelegate::Create() {
   GlobalConfirmInfoBar::Show(std::move(delegate));
 }
 
+// static
+infobars::InfoBar* AutomationInfoBarDelegate::Create(
+    infobars::ContentInfoBarManager* infobar_manager) {
+  return infobar_manager->AddInfoBar(CreateConfirmInfoBar(
+      ConfirmInfoBarCreationAllowlist::GetPassKeyForMigration(),
+      base::WrapUnique<ConfirmInfoBarDelegate>(
+          new AutomationInfoBarDelegate())));
+}
+
 infobars::InfoBarDelegate::InfoBarIdentifier
 AutomationInfoBarDelegate::GetIdentifier() const {
   return AUTOMATION_INFOBAR_DELEGATE;
+}
+
+infobars::InfoBarDelegate::InfobarPriority
+AutomationInfoBarDelegate::GetPriority() const {
+  return infobars::InfoBarDelegate::InfobarPriority::kCriticalSecurity;
 }
 
 bool AutomationInfoBarDelegate::ShouldExpire(

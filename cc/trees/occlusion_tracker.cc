@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,13 +14,16 @@
 #include "cc/layers/layer_impl.h"
 #include "cc/layers/render_surface_impl.h"
 #include "cc/trees/layer_tree_impl.h"
+#include "cc/trees/property_tree.h"
 #include "ui/gfx/geometry/quad_f.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 
 namespace cc {
 
-OcclusionTracker::OcclusionTracker(const gfx::Rect& screen_space_clip_rect)
-    : screen_space_clip_rect_(screen_space_clip_rect) {}
+OcclusionTracker::OcclusionTracker(const gfx::Rect& screen_space_clip_rect,
+                                   const EffectTree* effect_tree)
+    : effect_tree_(effect_tree),
+      screen_space_clip_rect_(screen_space_clip_rect) {}
 
 OcclusionTracker::~OcclusionTracker() = default;
 
@@ -52,37 +55,43 @@ OcclusionTracker::OcclusionSurfaceForContributingSurface() const {
   // A contributing surface doesn't get occluded by things inside its own
   // surface, so only things outside the surface can occlude it. That occlusion
   // is found just below the top of the stack (if it exists).
-  return stack_[stack_.size() - 2].target;
+  CHECK(effect_tree_);
+  return effect_tree_->GetRenderSurface(
+      stack_[stack_.size() - 2].target_effect_node_id);
 }
 
-void OcclusionTracker::EnterLayer(
-    const EffectTreeLayerListIterator::Position& iterator) {
-  RenderSurfaceImpl* render_target = iterator.target_render_surface;
+void OcclusionTracker::EnterLayer(const EffectTreeLayerListIterator& iterator,
+                                  const LayerTreeImpl& layer_tree_impl) {
+  const RenderSurfaceImpl* render_target =
+      iterator.TargetRenderSurface(layer_tree_impl);
 
-  if (iterator.state == EffectTreeLayerListIterator::State::LAYER)
+  if (iterator.state() == EffectTreeLayerListIterator::State::kLayer) {
     EnterRenderTarget(render_target);
-  else if (iterator.state == EffectTreeLayerListIterator::State::TARGET_SURFACE)
+  } else if (iterator.state() ==
+             EffectTreeLayerListIterator::State::kTargetSurface) {
     FinishedRenderTarget(render_target);
+  }
 }
 
-void OcclusionTracker::LeaveLayer(
-    const EffectTreeLayerListIterator::Position& iterator) {
-  RenderSurfaceImpl* render_target = iterator.target_render_surface;
+void OcclusionTracker::LeaveLayer(const EffectTreeLayerListIterator& iterator,
+                                  const LayerTreeImpl& layer_tree_impl) {
+  const RenderSurfaceImpl* render_target =
+      iterator.TargetRenderSurface(layer_tree_impl);
 
-  if (iterator.state == EffectTreeLayerListIterator::State::LAYER)
-    MarkOccludedBehindLayer(iterator.current_layer);
-  // TODO(danakj): This should be done when entering the contributing surface,
-  // but in a way that the surface's own occlusion won't occlude itself.
-  else if (iterator.state ==
-           EffectTreeLayerListIterator::State::CONTRIBUTING_SURFACE)
+  if (iterator.state() == EffectTreeLayerListIterator::State::kLayer) {
+    MarkOccludedBehindLayer(iterator.CurrentLayer(layer_tree_impl));
+  } else if (iterator.state() ==
+             EffectTreeLayerListIterator::State::kContributingSurface) {
+    // TODO(danakj): This should be done when entering the contributing surface,
+    // but in a way that the surface's own occlusion won't occlude itself.
     LeaveToRenderTarget(render_target);
+  }
 }
 
 static gfx::Rect ScreenSpaceClipRectInTargetSurface(
     const RenderSurfaceImpl* target_surface,
     const gfx::Rect& screen_space_clip_rect) {
-  gfx::Transform inverse_screen_space_transform(
-      gfx::Transform::kSkipInitialization);
+  gfx::Transform inverse_screen_space_transform;
   if (!target_surface->screen_space_transform().GetInverse(
           &inverse_screen_space_transform))
     return target_surface->content_rect();
@@ -104,7 +113,7 @@ static SimpleEnclosedRegion TransformSurfaceOpaqueRegion(
   // to each rect within |region| in order to transform the entire Region.
 
   // TODO(danakj): Find a rect interior to each transformed quad.
-  if (!transform.Preserves2dAxisAlignment())
+  if (!transform.NonDegeneratePreserves2dAxisAlignment())
     return SimpleEnclosedRegion();
 
   SimpleEnclosedRegion transformed_region;
@@ -122,20 +131,28 @@ static SimpleEnclosedRegion TransformSurfaceOpaqueRegion(
 void OcclusionTracker::EnterRenderTarget(
     const RenderSurfaceImpl* new_target_surface) {
   DCHECK(new_target_surface);
-  if (!stack_.empty() && stack_.back().target == new_target_surface)
+  if (!effect_tree_) {
+    // Lazily initialize effect_tree_ from the surface if not supplied at
+    // construction (e.g. in certain unit test fixtures).
+    effect_tree_ = new_target_surface->effect_tree();
+  }
+  int new_target_id = new_target_surface->EffectTreeIndex();
+  if (!stack_.empty() && stack_.back().target_effect_node_id == new_target_id) {
     return;
+  }
 
   const RenderSurfaceImpl* old_target_surface = nullptr;
   const RenderSurfaceImpl* old_occlusion_immune_ancestor = nullptr;
   if (!stack_.empty()) {
-    old_target_surface = stack_.back().target;
+    old_target_surface =
+        effect_tree_->GetRenderSurface(stack_.back().target_effect_node_id);
     old_occlusion_immune_ancestor =
         old_target_surface->nearest_occlusion_immune_ancestor();
   }
   const RenderSurfaceImpl* new_occlusion_immune_ancestor =
       new_target_surface->nearest_occlusion_immune_ancestor();
 
-  stack_.emplace_back(new_target_surface);
+  stack_.emplace_back(new_target_id);
 
   // We copy the screen occlusion into the new RenderSurfaceImpl subtree, but we
   // never copy in the occlusion from inside the target, since we are looking
@@ -147,9 +164,7 @@ void OcclusionTracker::EnterRenderTarget(
       new_occlusion_immune_ancestor &&
       new_occlusion_immune_ancestor != old_occlusion_immune_ancestor;
 
-  gfx::Transform inverse_new_target_screen_space_transform(
-      // Note carefully, not used if screen space transform is uninvertible.
-      gfx::Transform::kSkipInitialization);
+  gfx::Transform inverse_new_target_screen_space_transform;
   bool have_transform_from_screen_to_new_target =
       new_target_surface->screen_space_transform().GetInverse(
           &inverse_new_target_screen_space_transform);
@@ -166,9 +181,9 @@ void OcclusionTracker::EnterRenderTarget(
   }
 
   size_t last_index = stack_.size() - 1;
-  gfx::Transform old_target_to_new_target_transform(
-      inverse_new_target_screen_space_transform,
-      old_target_surface->screen_space_transform());
+  gfx::Transform old_target_to_new_target_transform =
+      inverse_new_target_screen_space_transform *
+      old_target_surface->screen_space_transform();
   stack_[last_index].occlusion_from_outside_target =
       TransformSurfaceOpaqueRegion(
           stack_[last_index - 1].occlusion_from_outside_target, false,
@@ -205,7 +220,8 @@ void OcclusionTracker::FinishedRenderTarget(
       !IsOccludingBlendMode(finished_target_surface->BlendMode()) ||
       target_is_only_for_copy_request_or_force_render_surface ||
       finished_target_surface->Filters().HasFilterThatAffectsOpacity() ||
-      finished_target_surface->GetDocumentTransitionSharedElementId().valid()) {
+      finished_target_surface->OwningEffectNode()
+          ->view_transition_element_resource_id.IsValid()) {
     stack_.back().occlusion_from_outside_target.Clear();
     stack_.back().occlusion_from_inside_target.Clear();
   }
@@ -228,12 +244,8 @@ static void ReduceOcclusionBelowSurface(
     return;
 
   gfx::Rect affected_area_in_target =
-      contributing_surface->BackdropFilters().HasFilterOfType(
-          FilterOperation::FilterType::BLUR)
-          ? contributing_surface->BackdropFilters().MapRect(target_rect,
-                                                            SkMatrix::I())
-          : contributing_surface->BackdropFilters().MapRectReverse(
-                target_rect, SkMatrix::I());
+      contributing_surface->BackdropFilters().MapRectReverse(target_rect,
+                                                             SkMatrix::I());
   // Unite target_rect because we only care about positive outsets.
   affected_area_in_target.Union(target_rect);
 
@@ -264,7 +276,8 @@ static void ReduceOcclusionBelowSurface(
             ? 0
             : target_rect.y() - affected_area_in_target.y();
 
-    occlusion_rect.Inset(shrink_left, shrink_top, shrink_right, shrink_bottom);
+    occlusion_rect.Inset(gfx::Insets::TLBR(shrink_top, shrink_left,
+                                           shrink_bottom, shrink_right));
 
     occlusion_from_inside_target->Union(occlusion_rect);
   }
@@ -272,17 +285,21 @@ static void ReduceOcclusionBelowSurface(
 
 void OcclusionTracker::LeaveToRenderTarget(
     const RenderSurfaceImpl* new_target_surface) {
-  DCHECK(!stack_.empty());
+  CHECK(!stack_.empty());
+  CHECK(effect_tree_);
   size_t last_index = stack_.size() - 1;
   DCHECK(new_target_surface);
+  int new_target_id = new_target_surface->EffectTreeIndex();
   bool surface_will_be_at_top_after_pop =
-      stack_.size() > 1 && stack_[last_index - 1].target == new_target_surface;
+      stack_.size() > 1 &&
+      stack_[last_index - 1].target_effect_node_id == new_target_id;
 
   // We merge the screen occlusion from the current RenderSurfaceImpl subtree
   // out to its parent target RenderSurfaceImpl. The target occlusion can be
   // merged out as well but needs to be transformed to the new target.
 
-  const RenderSurfaceImpl* old_surface = stack_[last_index].target;
+  const RenderSurfaceImpl* old_surface =
+      effect_tree_->GetRenderSurface(stack_[last_index].target_effect_node_id);
 
   SimpleEnclosedRegion old_occlusion_from_inside_target_in_new_target =
       TransformSurfaceOpaqueRegion(
@@ -317,7 +334,7 @@ void OcclusionTracker::LeaveToRenderTarget(
     stack_.pop_back();
   } else {
     // Replace the top of the stack with the new pushed surface.
-    stack_.back().target = new_target_surface;
+    stack_.back().target_effect_node_id = new_target_id;
     stack_.back().occlusion_from_inside_target =
         old_occlusion_from_inside_target_in_new_target;
     if (!is_root) {
@@ -340,8 +357,9 @@ void OcclusionTracker::LeaveToRenderTarget(
 }
 
 void OcclusionTracker::MarkOccludedBehindLayer(const LayerImpl* layer) {
-  DCHECK(!stack_.empty());
-  DCHECK_EQ(layer->render_target(), stack_.back().target);
+  CHECK(!stack_.empty());
+  CHECK_EQ(layer->render_target()->EffectTreeIndex(),
+           stack_.back().target_effect_node_id);
 
   if (layer->draw_opacity() < 1)
     return;
@@ -360,18 +378,19 @@ void OcclusionTracker::MarkOccludedBehindLayer(const LayerImpl* layer) {
   // surface, then the layer should not occlude. An example of this would
   // otherwise be wrong is that this layer is a non-render-surface mask layer
   // with kDstIn blend mode.
-  const auto* effect_node =
-      layer->layer_tree_impl()->property_trees()->effect_tree.Node(
+  const auto& effect_node =
+      layer->layer_tree_impl()->property_trees()->effect_tree().Node(
           layer->effect_tree_index());
-  if (!effect_node->HasRenderSurface() &&
-      !IsOccludingBlendMode(effect_node->blend_mode))
+  if (!effect_node.HasRenderSurface() &&
+      !IsOccludingBlendMode(effect_node.blend_mode)) {
     return;
+  }
 
   DCHECK(layer->visible_layer_rect().Contains(opaque_layer_region.bounds()));
 
   gfx::Transform draw_transform = layer->DrawTransform();
   // TODO(danakj): Find a rect interior to each transformed quad.
-  if (!draw_transform.Preserves2dAxisAlignment())
+  if (!draw_transform.NonDegeneratePreserves2dAxisAlignment())
     return;
 
   gfx::Rect clip_rect_in_target = ScreenSpaceClipRectInTargetSurface(
@@ -396,7 +415,8 @@ void OcclusionTracker::MarkOccludedBehindLayer(const LayerImpl* layer) {
 
 Region OcclusionTracker::ComputeVisibleRegionInScreen(
     const LayerTreeImpl* layer_tree) const {
-  DCHECK(layer_tree->RootRenderSurface() == stack_.back().target);
+  CHECK_EQ(layer_tree->RootRenderSurface()->EffectTreeIndex(),
+           stack_.back().target_effect_node_id);
   const SimpleEnclosedRegion& occluded =
       stack_.back().occlusion_from_inside_target;
   Region visible_region(screen_space_clip_rect_);

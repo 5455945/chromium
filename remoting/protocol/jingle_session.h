@@ -1,53 +1,61 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef REMOTING_PROTOCOL_JINGLE_SESSION_H_
 #define REMOTING_PROTOCOL_JINGLE_SESSION_H_
 
+#include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/location.h"
+#include "base/memory/raw_ptr.h"
 #include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/threading/thread_checker.h"
 #include "base/timer/timer.h"
-#include "crypto/rsa_private_key.h"
+#include "remoting/base/source_location.h"
 #include "remoting/protocol/authenticator.h"
-#include "remoting/protocol/datagram_channel_factory.h"
-#include "remoting/protocol/jingle_messages.h"
+#include "remoting/protocol/errors.h"
 #include "remoting/protocol/session.h"
-#include "remoting/protocol/session_config.h"
 #include "remoting/signaling/iq_sender.h"
+#include "remoting/signaling/jingle_data_structures.h"
 
-namespace remoting {
-namespace protocol {
+namespace remoting::protocol {
 
 class JingleSessionManager;
 class Transport;
 
-// JingleSessionManager and JingleSession implement the subset of the
-// Jingle protocol used in Chromoting. Instances of this class are
-// created by the JingleSessionManager.
+// JingleSessionManager and JingleSession implement the subset of the Jingle
+// protocol used in Chromoting. Instances of this class are created by the
+// JingleSessionManager.
 class JingleSession : public Session {
  public:
+  JingleSession(const JingleSession&) = delete;
+  JingleSession& operator=(const JingleSession&) = delete;
+
   ~JingleSession() override;
 
   // Session interface.
   void SetEventHandler(Session::EventHandler* event_handler) override;
-  ErrorCode error() override;
+  ErrorCode error() const override;
   const std::string& jid() override;
-  const SessionConfig& config() override;
+  const Authenticator& authenticator() const override;
   void SetTransport(Transport* transport) override;
-  void Close(protocol::ErrorCode error) override;
+  void Close(protocol::ErrorCode error,
+             std::string_view error_details,
+             const SourceLocation& error_location) override;
   void AddPlugin(SessionPlugin* plugin) override;
 
  private:
   friend class JingleSessionManager;
 
-  using ReplyCallback = base::OnceCallback<void(JingleMessageReply::ErrorType)>;
+  using ReplyCallback =
+      base::OnceCallback<void(const JingleMessage&,
+                              std::optional<JingleMessageReply::ErrorType>)>;
 
   explicit JingleSession(JingleSessionManager* session_manager);
 
@@ -57,13 +65,12 @@ class JingleSession : public Session {
 
   // Called by JingleSessionManager for incoming connections.
   void InitializeIncomingConnection(
-      const std::string& message_id,
       const JingleMessage& initiate_message,
       std::unique_ptr<Authenticator> authenticator);
   void AcceptIncomingConnection(const JingleMessage& initiate_message);
 
   // Callback for Transport interface to send transport-info messages.
-  void SendTransportInfo(std::unique_ptr<jingle_xmpp::XmlElement> transport_info);
+  void SendTransportInfo(std::unique_ptr<JingleTransportInfo> transport_info);
 
   // Sends |message| to the peer. The session is closed if the send fails or no
   // response is received within a reasonable time. All other responses are
@@ -73,37 +80,36 @@ class JingleSession : public Session {
   // Iq response handler.
   void OnMessageResponse(JingleMessage::ActionType request_type,
                          IqRequest* request,
-                         const jingle_xmpp::XmlElement* response);
+                         const JingleMessageReply& response);
 
   // Response handler for transport-info responses. Transport-info timeouts are
   // ignored and don't terminate connection.
   void OnTransportInfoResponse(IqRequest* request,
-                               const jingle_xmpp::XmlElement* response);
+                               const JingleMessageReply& response);
 
   // Called by JingleSessionManager on incoming |message|. Must call
   // |reply_callback| to send reply message before sending any other
   // messages.
-  void OnIncomingMessage(const std::string& id,
-                         std::unique_ptr<JingleMessage> message,
-                         ReplyCallback reply_callback);
+  void OnIncomingMessage(JingleMessage&& message, ReplyCallback reply_callback);
 
   // Called by OnIncomingMessage() to process the incoming Jingle messages
   // in the same order that they are sent.
-  void ProcessIncomingMessage(std::unique_ptr<JingleMessage> message,
+  void ProcessIncomingMessage(JingleMessage&& message,
                               ReplyCallback reply_callback);
 
   // Message handlers for incoming messages.
-  void OnAccept(std::unique_ptr<JingleMessage> message,
-                ReplyCallback reply_callback);
-  void OnSessionInfo(std::unique_ptr<JingleMessage> message,
-                     ReplyCallback reply_callback);
-  void OnTransportInfo(std::unique_ptr<JingleMessage> message,
-                       ReplyCallback reply_callback);
-  void OnTerminate(std::unique_ptr<JingleMessage> message,
-                   ReplyCallback reply_callback);
+  void OnAccept(JingleMessage&& message, ReplyCallback reply_callback);
+  void OnSessionInfo(JingleMessage&& message, ReplyCallback reply_callback);
+  void OnTransportInfo(JingleMessage&& message, ReplyCallback reply_callback);
+  void OnTerminate(JingleMessage&& message, ReplyCallback reply_callback);
+  void OnAuthenticatorStateChangeAfterAccepted();
 
-  // Called from OnAccept() to initialize session config.
-  bool InitializeConfigFromDescription(const ContentDescription* description);
+  // Called from OnAccept() to initialize session config. If initialization
+  // fails, |error_*| will be updated.
+  bool InitializeConfigFromDescription(const ContentDescription* description,
+                                       ErrorCode& error_code,
+                                       std::string& error_details,
+                                       base::Location& error_location);
 
   // Called after the initial incoming authenticator message is processed.
   void ContinueAcceptIncomingConnection();
@@ -113,6 +119,8 @@ class JingleSession : public Session {
 
   // Called when authentication is finished.
   void OnAuthenticated();
+
+  void StartTransport();
 
   // Sets |state_| to |new_state| and calls state change callback.
   void SetState(State new_state);
@@ -133,21 +141,18 @@ class JingleSession : public Session {
   // sequence ID encoded.
   std::string GetNextOutgoingId();
 
-  base::ThreadChecker thread_checker_;
-
-  JingleSessionManager* session_manager_;
+  raw_ptr<JingleSessionManager> session_manager_;
   SignalingAddress peer_address_;
-  Session::EventHandler* event_handler_;
+  raw_ptr<Session::EventHandler> event_handler_;
 
   std::string session_id_;
   State state_;
   ErrorCode error_;
 
-  std::unique_ptr<SessionConfig> config_;
-
   std::unique_ptr<Authenticator> authenticator_;
 
-  Transport* transport_ = nullptr;
+  raw_ptr<Transport> transport_ = nullptr;
+  bool transport_started_ = false;
 
   // Pending Iq requests. Used for all messages except transport-info.
   std::vector<std::unique_ptr<IqRequest>> pending_requests_;
@@ -158,11 +163,10 @@ class JingleSession : public Session {
   struct PendingMessage {
     PendingMessage();
     PendingMessage(PendingMessage&& moved);
-    PendingMessage(std::unique_ptr<JingleMessage> message,
-                   ReplyCallback reply_callback);
+    PendingMessage(JingleMessage message, ReplyCallback reply_callback);
     ~PendingMessage();
     PendingMessage& operator=(PendingMessage&& moved);
-    std::unique_ptr<JingleMessage> message;
+    JingleMessage message;
     ReplyCallback reply_callback;
   };
 
@@ -180,14 +184,13 @@ class JingleSession : public Session {
   std::vector<PendingMessage> pending_transport_info_;
 
   // The SessionPlugins attached to this session.
-  std::vector<SessionPlugin*> plugins_;
+  std::vector<raw_ptr<SessionPlugin>> plugins_;
+
+  THREAD_CHECKER(thread_checker_);
 
   base::WeakPtrFactory<JingleSession> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(JingleSession);
 };
 
-}  // namespace protocol
-}  // namespace remoting
+}  // namespace remoting::protocol
 
 #endif  // REMOTING_PROTOCOL_JINGLE_SESSION_H_

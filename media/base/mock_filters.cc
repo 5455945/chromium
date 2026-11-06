@@ -1,10 +1,11 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/base/mock_filters.h"
 
 #include "base/check_op.h"
+#include "media/base/demuxer.h"
 
 using ::testing::_;
 using ::testing::NiceMock;
@@ -33,8 +34,14 @@ std::string MockDemuxer::GetDisplayName() const {
   return "MockDemuxer";
 }
 
-MockDemuxerStream::MockDemuxerStream(DemuxerStream::Type type)
-    : type_(type), liveness_(LIVENESS_UNKNOWN) {}
+DemuxerType MockDemuxer::GetDemuxerType() const {
+  return DemuxerType::kMockDemuxer;
+}
+
+MockDemuxerStream::MockDemuxerStream(DemuxerStream::Type type) : type_(type) {
+  ON_CALL(*this, ManagesTrackSwitchesInternally())
+      .WillByDefault(testing::Return(false));
+}
 
 MockDemuxerStream::~MockDemuxerStream() = default;
 
@@ -42,7 +49,7 @@ DemuxerStream::Type MockDemuxerStream::type() const {
   return type_;
 }
 
-DemuxerStream::Liveness MockDemuxerStream::liveness() const {
+StreamLiveness MockDemuxerStream::liveness() const {
   return liveness_;
 }
 
@@ -68,7 +75,7 @@ void MockDemuxerStream::set_video_decoder_config(
   video_decoder_config_ = config;
 }
 
-void MockDemuxerStream::set_liveness(DemuxerStream::Liveness liveness) {
+void MockDemuxerStream::set_liveness(StreamLiveness liveness) {
   liveness_ = liveness;
 }
 
@@ -84,7 +91,6 @@ MockVideoDecoder::MockVideoDecoder(bool is_platform_decoder,
       supports_decryption_(supports_decryption),
       decoder_id_(decoder_id) {
   ON_CALL(*this, CanReadWithoutStalling()).WillByDefault(Return(true));
-  ON_CALL(*this, IsOptimizedForRTC()).WillByDefault(Return(false));
 }
 
 MockVideoDecoder::~MockVideoDecoder() = default;
@@ -143,6 +149,9 @@ MockAudioRenderer::~MockAudioRenderer() = default;
 
 MockRenderer::MockRenderer() = default;
 
+MockRenderer::MockRenderer(RendererType renderer_type)
+    : renderer_type_(renderer_type) {}
+
 MockRenderer::~MockRenderer() = default;
 
 MockRendererFactory::MockRendererFactory() = default;
@@ -152,10 +161,6 @@ MockRendererFactory::~MockRendererFactory() = default;
 MockTimeSource::MockTimeSource() = default;
 
 MockTimeSource::~MockTimeSource() = default;
-
-MockTextTrack::MockTextTrack() = default;
-
-MockTextTrack::~MockTextTrack() = default;
 
 MockCdmClient::MockCdmClient() = default;
 
@@ -169,12 +174,12 @@ MockCdmContext::MockCdmContext() = default;
 
 MockCdmContext::~MockCdmContext() = default;
 
-absl::optional<base::UnguessableToken> MockCdmContext::GetCdmId() const {
+std::optional<base::UnguessableToken> MockCdmContext::GetCdmId() const {
   return cdm_id_;
 }
 
 void MockCdmContext::set_cdm_id(const base::UnguessableToken& cdm_id) {
-  cdm_id_ = absl::make_optional(cdm_id);
+  cdm_id_ = std::make_optional(cdm_id);
 }
 
 MockCdmPromise::MockCdmPromise(bool expect_success) {
@@ -210,13 +215,19 @@ MockCdmSessionPromise::~MockCdmSessionPromise() {
 
 MockCdmKeyStatusPromise::MockCdmKeyStatusPromise(
     bool expect_success,
-    CdmKeyInformation::KeyStatus* key_status) {
+    CdmKeyInformation::KeyStatus* key_status,
+    CdmPromise::Exception* exception) {
   if (expect_success) {
     EXPECT_CALL(*this, resolve(_)).WillOnce(SaveArg<0>(key_status));
     EXPECT_CALL(*this, reject(_, _, _)).Times(0);
   } else {
     EXPECT_CALL(*this, resolve(_)).Times(0);
-    EXPECT_CALL(*this, reject(_, _, NotEmpty()));
+    if (exception) {
+      EXPECT_CALL(*this, reject(_, _, NotEmpty()))
+          .WillOnce(SaveArg<0>(exception));
+    } else {
+      EXPECT_CALL(*this, reject(_, _, NotEmpty()));
+    }
   }
 }
 
@@ -228,24 +239,24 @@ MockCdmKeyStatusPromise::~MockCdmKeyStatusPromise() {
 MockCdm::MockCdm() = default;
 
 MockCdm::MockCdm(
-    const std::string& key_system,
+    const CdmConfig& cdm_config,
     const SessionMessageCB& session_message_cb,
     const SessionClosedCB& session_closed_cb,
     const SessionKeysChangeCB& session_keys_change_cb,
     const SessionExpirationUpdateCB& session_expiration_update_cb) {
-  Initialize(key_system, session_message_cb, session_closed_cb,
+  Initialize(cdm_config, session_message_cb, session_closed_cb,
              session_keys_change_cb, session_expiration_update_cb);
 }
 
 MockCdm::~MockCdm() = default;
 
 void MockCdm::Initialize(
-    const std::string& key_system,
+    const CdmConfig& cdm_config,
     const SessionMessageCB& session_message_cb,
     const SessionClosedCB& session_closed_cb,
     const SessionKeysChangeCB& session_keys_change_cb,
     const SessionExpirationUpdateCB& session_expiration_update_cb) {
-  key_system_ = key_system;
+  key_system_ = cdm_config.key_system;
   session_message_cb_ = session_message_cb;
   session_closed_cb_ = session_closed_cb;
   session_keys_change_cb_ = session_keys_change_cb;
@@ -281,16 +292,16 @@ MockCdmFactory::MockCdmFactory(scoped_refptr<MockCdm> mock_cdm)
 MockCdmFactory::~MockCdmFactory() = default;
 
 void MockCdmFactory::Create(
-    const std::string& key_system,
-    const CdmConfig& /* cdm_config */,
+    const CdmConfig& cdm_config,
     const SessionMessageCB& session_message_cb,
     const SessionClosedCB& session_closed_cb,
     const SessionKeysChangeCB& session_keys_change_cb,
     const SessionExpirationUpdateCB& session_expiration_update_cb,
     CdmCreatedCB cdm_created_cb) {
   // If no key system specified, notify that Create() failed.
-  if (key_system.empty()) {
-    std::move(cdm_created_cb).Run(nullptr, "CDM creation failed");
+  if (cdm_config.key_system.empty()) {
+    std::move(cdm_created_cb)
+        .Run(nullptr, CreateCdmStatus::kUnsupportedKeySystem);
     return;
   }
 
@@ -298,9 +309,9 @@ void MockCdmFactory::Create(
   if (before_creation_cb_)
     before_creation_cb_.Run();
 
-  mock_cdm_->Initialize(key_system, session_message_cb, session_closed_cb,
+  mock_cdm_->Initialize(cdm_config, session_message_cb, session_closed_cb,
                         session_keys_change_cb, session_expiration_update_cb);
-  std::move(cdm_created_cb).Run(mock_cdm_, "");
+  std::move(cdm_created_cb).Run(mock_cdm_, CreateCdmStatus::kSuccess);
 }
 
 void MockCdmFactory::SetBeforeCreationCB(
@@ -316,4 +327,12 @@ MockMediaClient::MockMediaClient() = default;
 
 MockMediaClient::~MockMediaClient() = default;
 
+MockVideoEncoderMetricsProvider::MockVideoEncoderMetricsProvider() {
+  DETACH_FROM_SEQUENCE(sequence_checker_);
+}
+
+MockVideoEncoderMetricsProvider::~MockVideoEncoderMetricsProvider() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  MockDestroy();
+}
 }  // namespace media

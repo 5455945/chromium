@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,27 +6,22 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/metrics/histogram_macros.h"
-#include "base/strings/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/accessibility/accessibility_labels_service.h"
 #include "chrome/browser/accessibility/accessibility_labels_service_factory.h"
-#include "chrome/browser/accessibility/accessibility_state_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/renderer_context_menu/accessibility_labels_bubble_model.h"
-#include "chrome/browser/renderer_context_menu/render_view_context_menu.h"
 #include "chrome/browser/ui/confirm_bubble.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/prefs/pref_service.h"
+#include "components/renderer_context_menu/render_view_context_menu_proxy.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/context_menu_params.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/common/content_features.h"
+#include "ui/accessibility/platform/ax_platform.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/geometry/rect.h"
 
@@ -36,7 +31,7 @@ AccessibilityLabelsMenuObserver::AccessibilityLabelsMenuObserver(
     RenderViewContextMenuProxy* proxy)
     : proxy_(proxy) {}
 
-AccessibilityLabelsMenuObserver::~AccessibilityLabelsMenuObserver() {}
+AccessibilityLabelsMenuObserver::~AccessibilityLabelsMenuObserver() = default;
 
 void AccessibilityLabelsMenuObserver::InitMenu(
     const content::ContextMenuParams& params) {
@@ -54,7 +49,7 @@ bool AccessibilityLabelsMenuObserver::IsCommandIdSupported(int command_id) {
 }
 
 bool AccessibilityLabelsMenuObserver::IsCommandIdChecked(int command_id) {
-  DCHECK(IsCommandIdSupported(command_id));
+  CHECK(IsCommandIdSupported(command_id), base::NotFatalUntil::M163);
   Profile* profile = Profile::FromBrowserContext(proxy_->GetBrowserContext());
 
   if (command_id == IDC_CONTENT_CONTEXT_ACCESSIBILITY_LABELS_TOGGLE ||
@@ -67,7 +62,7 @@ bool AccessibilityLabelsMenuObserver::IsCommandIdChecked(int command_id) {
 }
 
 bool AccessibilityLabelsMenuObserver::IsCommandIdEnabled(int command_id) {
-  DCHECK(IsCommandIdSupported(command_id));
+  CHECK(IsCommandIdSupported(command_id), base::NotFatalUntil::M163);
   if (command_id == IDC_CONTENT_CONTEXT_ACCESSIBILITY_LABELS_TOGGLE ||
       command_id == IDC_CONTENT_CONTEXT_ACCESSIBILITY_LABELS ||
       command_id == IDC_CONTENT_CONTEXT_ACCESSIBILITY_LABELS_TOGGLE_ONCE) {
@@ -77,7 +72,7 @@ bool AccessibilityLabelsMenuObserver::IsCommandIdEnabled(int command_id) {
 }
 
 void AccessibilityLabelsMenuObserver::ExecuteCommand(int command_id) {
-  DCHECK(IsCommandIdSupported(command_id));
+  CHECK(IsCommandIdSupported(command_id), base::NotFatalUntil::M163);
   Profile* profile = Profile::FromBrowserContext(proxy_->GetBrowserContext());
   if (command_id == IDC_CONTENT_CONTEXT_ACCESSIBILITY_LABELS_TOGGLE) {
     // When a user enables the accessibility labeling item, we
@@ -101,16 +96,12 @@ void AccessibilityLabelsMenuObserver::ExecuteCommand(int command_id) {
       ShowConfirmBubble(profile, false /* enable once only */);
     } else {
       AccessibilityLabelsServiceFactory::GetForProfile(profile)
-          ->EnableLabelsServiceOnce();
+          ->EnableLabelsServiceOnce(proxy_->GetWebContents());
     }
   }
 }
 
 bool AccessibilityLabelsMenuObserver::ShouldShowLabelsItem() {
-  // Hidden behind a feature flag.
-  if (!base::FeatureList::IsEnabled(features::kExperimentalAccessibilityLabels))
-    return false;
-
   // Disabled by policy.
   Profile* profile = Profile::FromBrowserContext(proxy_->GetBrowserContext());
   if (!profile->GetPrefs()->GetBoolean(
@@ -120,14 +111,20 @@ bool AccessibilityLabelsMenuObserver::ShouldShowLabelsItem() {
     return false;
   }
 
-  return accessibility_state_utils::IsScreenReaderEnabled();
+  return ui::AXPlatform::GetInstance().IsScreenReaderActive();
 }
 
 void AccessibilityLabelsMenuObserver::ShowConfirmBubble(Profile* profile,
                                                         bool enable_always) {
   content::WebContents* web_contents = proxy_->GetWebContents();
+  // We use the web contents' primary main frame here rather than getting the
+  // view from the local render frame host because we want to ensure that it is
+  // non-null (proxy_->GetRenderFrameHost() can return nullptr if the frame goes
+  // away). In these cases, the spelling preference changes are still valid
+  // (tied to the BrowsingContext / WebContents) so we still want to show the
+  // confirmation bubble.
   content::RenderWidgetHostView* view =
-      proxy_->GetRenderViewHost()->GetWidget()->GetView();
+      web_contents->GetPrimaryMainFrame()->GetRenderWidgetHost()->GetView();
   gfx::Rect rect = view->GetViewBounds();
   auto model = std::make_unique<AccessibilityLabelsBubbleModel>(
       profile, web_contents, enable_always);

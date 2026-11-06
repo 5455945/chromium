@@ -21,15 +21,22 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_SVG_SVG_FILTER_PRIMITIVE_STANDARD_ATTRIBUTES_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_SVG_SVG_FILTER_PRIMITIVE_STANDARD_ATTRIBUTES_H_
 
+#include <optional>
+
 #include "third_party/blink/renderer/core/svg/svg_element.h"
 #include "third_party/blink/renderer/core/svg/svg_unit_types.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "ui/gfx/geometry/size_f.h"
+
+namespace gfx {
+class RectF;
+}
 
 namespace blink {
 
 class Filter;
 class FilterEffect;
-class FloatRect;
+class Longhand;
 class SVGAnimatedLength;
 class SVGAnimatedString;
 class SVGFilterBuilder;
@@ -39,15 +46,20 @@ class SVGFilterPrimitiveStandardAttributes : public SVGElement {
   // instantiated, and b) we don't generate corresponding V8T.h or V8T.cpp.
   // The subclasses must write DEFINE_WRAPPERTYPEINFO().
  public:
-  void SetStandardAttributes(FilterEffect*,
-                             SVGUnitTypes::SVGUnitType,
-                             const FloatRect& reference_box) const;
+  void SetStandardAttributes(
+      FilterEffect*,
+      SVGUnitTypes::SVGUnitType,
+      const gfx::RectF& reference_box,
+      const std::optional<gfx::SizeF>& override_viewport) const;
 
   virtual FilterEffect* Build(SVGFilterBuilder*, Filter*) = 0;
   // Returns true, if the new value is different from the old one.
   virtual bool SetFilterEffectAttribute(FilterEffect*, const QualifiedName&);
 
   virtual bool TaintsOrigin() const { return true; }
+
+  bool StyleColorTaintsOrigin(const ComputedStyle&,
+                              const Longhand& color_property) const;
 
   // JS API
   SVGAnimatedLength* x() const { return x_.Get(); }
@@ -64,14 +76,20 @@ class SVGFilterPrimitiveStandardAttributes : public SVGElement {
  protected:
   SVGFilterPrimitiveStandardAttributes(const QualifiedName&, Document&);
 
+  bool StyleColorTaintsOrigin(const Longhand& color_property) const;
+
   void SvgAttributeChanged(const SvgAttributeChangedParams&) override;
   void ChildrenChanged(const ChildrenChange&) override;
+
+  SVGAnimatedPropertyBase* PropertyFromAttribute(
+      const QualifiedName& attribute_name) const override;
+  void SynchronizeAllSVGAttributes() const override;
 
  private:
   bool IsFilterEffect() const final { return true; }
 
-  LayoutObject* CreateLayoutObject(const ComputedStyle&, LegacyLayout) override;
-  bool LayoutObjectIsNeeded(const ComputedStyle&) const final;
+  LayoutObject* CreateLayoutObject(const ComputedStyle&) override;
+  bool LayoutObjectIsNeeded(const DisplayStyle&) const final;
 
   Member<SVGAnimatedLength> x_;
   Member<SVGAnimatedLength> y_;

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,11 +10,13 @@
 #include <map>
 
 #include "base/compiler_specific.h"
+#include "base/files/file_error_or.h"
 #include "base/files/file_path.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/ref_counted_delete_on_sequence.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/memory/weak_ptr.h"
+#include "base/synchronization/lock.h"
+#include "base/task/sequenced_task_runner_helpers.h"
 #include "base/timer/timer.h"
 #include "storage/browser/file_system/file_observers.h"
 #include "storage/browser/file_system/file_system_url.h"
@@ -34,15 +36,28 @@ class FileSystemURL;
 class ObfuscatedFileUtil;
 class QuotaManagerProxy;
 
-class SandboxQuotaObserver : public FileUpdateObserver,
-                             public FileAccessObserver {
+// `SandboxQuotaObserver` is used from multiple threads so the ref-counting,
+// needs to be thread-safe.
+class SandboxQuotaObserver
+    : public FileUpdateObserver,
+      public FileAccessObserver,
+      // `delayed_cache_update_helper_` must be destroyed on the correct thread.
+      public base::RefCountedDeleteOnSequence<SandboxQuotaObserver> {
  public:
   SandboxQuotaObserver(
       scoped_refptr<QuotaManagerProxy> quota_manager_proxy,
       scoped_refptr<base::SequencedTaskRunner> update_notify_runner,
       ObfuscatedFileUtil* sandbox_file_util,
       FileSystemUsageCache* file_system_usage_cache_);
-  ~SandboxQuotaObserver() override;
+
+  SandboxQuotaObserver(const SandboxQuotaObserver&) = delete;
+  SandboxQuotaObserver& operator=(const SandboxQuotaObserver&) = delete;
+
+  // FileUpdateObserver and FileAccessObserver overrides.
+  void AddRef() const override;
+  void Release() const override;
+
+  void Disable() override;
 
   // FileUpdateObserver overrides.
   void OnStartUpdate(const FileSystemURL& url) override;
@@ -57,25 +72,33 @@ class SandboxQuotaObserver : public FileUpdateObserver,
                             bool enabled);
 
  private:
+  friend class base::RefCountedDeleteOnSequence<SandboxQuotaObserver>;
+  friend class base::DeleteHelper<SandboxQuotaObserver>;
+
+  mutable base::Lock is_disabled_lock_;
+  bool is_disabled_ GUARDED_BY(is_disabled_lock_) = false;
+  ~SandboxQuotaObserver() override;
+
   void ApplyPendingUsageUpdate();
   void UpdateUsageCacheFile(const base::FilePath& usage_file_path,
-                            int64_t delta);
+                            int64_t delta)
+      EXCLUSIVE_LOCKS_REQUIRED(is_disabled_lock_);
 
-  base::FilePath GetUsageCachePath(const FileSystemURL& url);
+  base::FileErrorOr<base::FilePath> GetUsageCachePath(const FileSystemURL& url)
+      EXCLUSIVE_LOCKS_REQUIRED(is_disabled_lock_);
 
   const scoped_refptr<QuotaManagerProxy> quota_manager_proxy_;
   const scoped_refptr<base::SequencedTaskRunner> update_notify_runner_;
 
-  // Not owned; sandbox_file_util_ should have identical lifetime with this.
-  ObfuscatedFileUtil* const sandbox_file_util_;
+  // Not owned. Will be nulled when `Disable()` is called.
+  raw_ptr<ObfuscatedFileUtil> sandbox_file_util_ GUARDED_BY(is_disabled_lock_);
 
-  // Not owned; file_system_usage_cache_ should have longer lifetime than this.
-  FileSystemUsageCache* const file_system_usage_cache_;
+  // Not owned. Will be nulled when `Disable()` is called.
+  raw_ptr<FileSystemUsageCache> file_system_usage_cache_
+      GUARDED_BY(is_disabled_lock_);
 
   std::map<base::FilePath, int64_t> pending_update_notification_;
   base::OneShotTimer delayed_cache_update_helper_;
-
-  DISALLOW_COPY_AND_ASSIGN(SandboxQuotaObserver);
 };
 
 }  // namespace storage

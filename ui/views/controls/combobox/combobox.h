@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,11 +9,14 @@
 #include <string>
 #include <utility>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "ui/base/models/combobox_model.h"
 #include "ui/base/models/combobox_model_observer.h"
+#include "ui/base/models/menu_model.h"
+#include "ui/base/mojom/menu_source_type.mojom-forward.h"
+#include "ui/color/color_id.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/prefix_delegate.h"
 #include "ui/views/metadata/view_factory.h"
@@ -30,7 +33,8 @@ class MenuModel;
 namespace views {
 namespace test {
 class ComboboxTestApi;
-}
+class InteractionTestUtilSimulatorViews;
+}  // namespace test
 
 class MenuRunner;
 class PrefixSelector;
@@ -40,24 +44,25 @@ class PrefixSelector;
 class VIEWS_EXPORT Combobox : public View,
                               public PrefixDelegate,
                               public ui::ComboboxModelObserver {
- public:
-  METADATA_HEADER(Combobox);
+  METADATA_HEADER(Combobox, View)
 
-  static constexpr int kDefaultComboboxTextContext = style::CONTEXT_BUTTON;
-  static constexpr int kDefaultComboboxTextStyle = style::STYLE_PRIMARY;
+ public:
+  using MenuSelectionAtCallback = base::RepeatingCallback<bool(size_t index)>;
+  using MenuWillShowCallbackList = base::RepeatingClosureList;
+  using MenuWillShowCallback = MenuWillShowCallbackList::CallbackType;
+
+  static constexpr style::TextContext kContext = style::CONTEXT_BUTTON;
+  static constexpr style::TextStyle kStyle = style::STYLE_PRIMARY;
 
   // A combobox with an empty model.
-  explicit Combobox(int text_context = kDefaultComboboxTextContext,
-                    int text_style = kDefaultComboboxTextStyle);
+  Combobox();
 
   // |model| is owned by the combobox when using this constructor.
-  explicit Combobox(std::unique_ptr<ui::ComboboxModel> model,
-                    int text_context = kDefaultComboboxTextContext,
-                    int text_style = kDefaultComboboxTextStyle);
+  explicit Combobox(std::unique_ptr<ui::ComboboxModel> model);
   // |model| is not owned by the combobox when using this constructor.
-  explicit Combobox(ui::ComboboxModel* model,
-                    int text_context = kDefaultComboboxTextContext,
-                    int text_style = kDefaultComboboxTextStyle);
+  explicit Combobox(ui::ComboboxModel* model);
+  Combobox(const Combobox&) = delete;
+  Combobox& operator=(const Combobox&) = delete;
   ~Combobox() override;
 
   const gfx::FontList& GetFontList() const;
@@ -67,9 +72,17 @@ class VIEWS_EXPORT Combobox : public View,
     callback_ = std::move(callback);
   }
 
+  // Gets the matching menu-model adapter for testing.
+  ui::MenuModel* menu_model_for_testing() const { return menu_model_.get(); }
+
   // Gets/Sets the selected index.
-  int GetSelectedIndex() const { return selected_index_; }
-  void SetSelectedIndex(int index);
+  std::optional<size_t> GetSelectedIndex() const { return selected_index_; }
+  void SetSelectedIndex(std::optional<size_t> index);
+  [[nodiscard]] base::CallbackListSubscription AddSelectedIndexChangedCallback(
+      views::PropertyChangedCallback callback);
+
+  // Called when there has been a selection from the menu.
+  void MenuSelectionAt(size_t index);
 
   // Looks for the first occurrence of |value| in |model()|. If found, selects
   // the found index and returns true. Otherwise simply noops and returns false.
@@ -85,41 +98,66 @@ class VIEWS_EXPORT Combobox : public View,
   std::u16string GetTooltipTextAndAccessibleName() const;
   void SetTooltipTextAndAccessibleName(const std::u16string& tooltip_text);
 
-  // Set the accessible name of the combobox.
-  void SetAccessibleName(const std::u16string& name);
-  std::u16string GetAccessibleName() const;
-
   // Visually marks the combobox as having an invalid value selected.
   // When invalid, it paints with white text on a red background.
   // Callers are responsible for restoring validity with selection changes.
   void SetInvalid(bool invalid);
   bool GetInvalid() const { return invalid_; }
 
+  void SetBorderColorId(ui::ColorId color_id);
+  void SetBackgroundColorId(ui::ColorId color_id);
+  void SetForegroundColorId(ui::ColorId color_id);
+  void SetForegroundIconColorId(ui::ColorId color_id);
+  void SetForegroundTextStyle(style::TextStyle text_style);
+
+  // Sets whether there should be ink drop highlighting on hover/press.
+  void SetEventHighlighting(bool should_highlight);
+
   // Whether the combobox should use the largest label as the content size.
   void SetSizeToLargestLabel(bool size_to_largest_label);
   bool GetSizeToLargestLabel() const { return size_to_largest_label_; }
 
+  void SetMenuSelectionAtCallback(MenuSelectionAtCallback callback) {
+    menu_selection_at_callback_ = std::move(callback);
+  }
+
+  base::CallbackListSubscription AddMenuWillShowCallback(
+      MenuWillShowCallback callback);
+
+  // Set whether the arrow should be shown to the user.
+  void SetShouldShowArrow(bool should_show_arrow) {
+    should_show_arrow_ = should_show_arrow;
+  }
+
+  // Use the time when combobox was closed in order for parent view to not
+  // treat a user event already treated by the combobox.
+  base::TimeTicks GetClosedTime() { return closed_time_; }
+
+  // Returns whether or not the menu is currently running.
+  bool IsMenuRunning() const;
+
   // Overridden from View:
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const SizeBounds& /*available_size*/) const override;
   void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
   bool SkipDefaultKeyEventProcessing(const ui::KeyEvent& e) override;
   bool OnKeyPressed(const ui::KeyEvent& e) override;
   void OnPaint(gfx::Canvas* canvas) override;
   void OnFocus() override;
   void OnBlur() override;
-  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
   bool HandleAccessibleAction(const ui::AXActionData& action_data) override;
   void OnThemeChanged() override;
 
   // Overridden from PrefixDelegate:
-  int GetRowCount() override;
-  int GetSelectedRow() override;
-  void SetSelectedRow(int row) override;
-  std::u16string GetTextForRow(int row) override;
+  size_t GetRowCount() override;
+  std::optional<size_t> GetSelectedRow() override;
+  void SetSelectedRow(std::optional<size_t> row) override;
+  std::u16string GetTextForRow(size_t row) override;
 
  protected:
   // Overridden from ComboboxModelObserver:
   void OnComboboxModelChanged(ui::ComboboxModel* model) override;
+  void OnComboboxModelDestroying(ui::ComboboxModel* model) override;
 
   // Getters to be used by metadata.
   const base::RepeatingClosure& GetCallback() const;
@@ -127,8 +165,7 @@ class VIEWS_EXPORT Combobox : public View,
 
  private:
   friend class test::ComboboxTestApi;
-
-  class ComboboxMenuModel;
+  friend class test::InteractionTestUtilSimulatorViews;
 
   // Updates the border according to the current node_data.
   void UpdateBorder();
@@ -143,7 +180,7 @@ class VIEWS_EXPORT Combobox : public View,
   void ArrowButtonPressed(const ui::Event& event);
 
   // Show the drop down list
-  void ShowDropDownMenu(ui::MenuSourceType source_type);
+  void ShowDropDownMenu(ui::mojom::MenuSourceType source_type);
 
   // Cleans up after the menu as closed
   void OnMenuClosed(Button::ButtonState original_button_state);
@@ -154,42 +191,66 @@ class VIEWS_EXPORT Combobox : public View,
   // Finds the size of the largest menu label.
   gfx::Size GetContentSize() const;
 
-  void OnContentSizeMaybeChanged();
+  // Returns the width needed to accommodate the provided width and checkmarks
+  // and padding if checkmarks should be shown.
+  int MaybeAdjustWidthForCheckmarks(int original_width) const;
 
-  // Handles the clicking event.
-  void HandleClickEvent();
+  void OnContentSizeMaybeChanged();
 
   PrefixSelector* GetPrefixSelector();
 
-  // Returns the color to use for the combobox's focus ring.
-  SkColor GetFocusRingColor() const;
+  const gfx::FontList& GetForegroundFontList() const;
+
+  // Sets the expanded/collapsed accessible state of the view.
+  void UpdateExpandedCollapsedAccessibleState() const;
+
+  // Updates the kValue attribute and triggers a kValueChanged event if
+  // selected index is changed.
+  void UpdateAccessibleValue() const;
+
+  void UpdateAccessibleDefaultActionVerb();
 
   // Optionally used to tie the lifetime of the model to this combobox. See
   // constructor.
   std::unique_ptr<ui::ComboboxModel> owned_model_;
 
   // Reference to our model, which may be owned or not.
-  ui::ComboboxModel* model_ = nullptr;
-
-  // Typography context for the text written in the combobox and the options
-  // shown in the drop-down menu.
-  const int text_context_;
-
-  // Typography style for the text written in the combobox and the options shown
-  // in the drop-down menu.
-  const int text_style_;
+  raw_ptr<ui::ComboboxModel> model_ = nullptr;
 
   // Callback notified when the selected index changes.
   base::RepeatingClosure callback_;
 
-  // The current selected index; -1 and means no selection.
-  int selected_index_ = -1;
+  // Callback notified when the selected index is triggered to change. If set,
+  // when a selection is made in the combobox this callback is called. If it
+  // returns true no other action is taken, if it returns false then the model
+  // will updated based on the selection.
+  MenuSelectionAtCallback menu_selection_at_callback_;
+
+  // Callbacks notified when the dropdown menu is about to show.
+  MenuWillShowCallbackList on_menu_will_show_;
+
+  // The current selected index; nullopt means no selection.
+  std::optional<size_t> selected_index_ = std::nullopt;
 
   // True when the selection is visually denoted as invalid.
   bool invalid_ = false;
 
-  // The accessible name of this combobox.
-  std::u16string accessible_name_;
+  // True when there should be ink drop highlighting on hover and press.
+  bool should_highlight_ = false;
+
+  // True when the combobox should display the arrow during paint.
+  bool should_show_arrow_ = true;
+
+  // Overriding ColorId for the combobox border.
+  std::optional<ui::ColorId> border_color_id_;
+
+  // Overriding ColorId for the combobox foreground (text and caret icon).
+  std::optional<ui::ColorId> foreground_color_id_;
+
+  // Attempts to override the color for the combobox foreground icon.
+  std::optional<ui::ColorId> foreground_icon_color_id_;
+
+  std::optional<style::TextStyle> foreground_text_style_;
 
   // A helper used to select entries by keyboard input.
   std::unique_ptr<PrefixSelector> selector_;
@@ -211,31 +272,33 @@ class VIEWS_EXPORT Combobox : public View,
   // A transparent button that handles events and holds button state. Placed on
   // top of the combobox as a child view. Doesn't paint itself, but serves as a
   // host for inkdrops.
-  Button* arrow_button_;
+  raw_ptr<Button> arrow_button_;
 
   // Set while the dropdown is showing. Ensures the menu is closed if |this| is
   // destroyed.
   std::unique_ptr<MenuRunner> menu_runner_;
 
-  // When true, the size of contents is defined by the selected label.
-  // Otherwise, it's defined by the widest label in the menu. If this is set to
-  // true, the parent view must relayout in ChildPreferredSizeChanged().
+  // Called to update background color, border and default action verb in
+  // accessibility cache when the combobox is enabled/disabled.
+  base::CallbackListSubscription enabled_changed_subscription_;
+
+  // When true, the size of contents is defined by the widest label in the menu.
+  // If this is set to true, the parent view must relayout in
+  // ChildPreferredSizeChanged(). When false, the size of contents is defined by
+  // the selected label
   bool size_to_largest_label_ = true;
 
   base::ScopedObservation<ui::ComboboxModel, ui::ComboboxModelObserver>
       observation_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(Combobox);
 };
 
 BEGIN_VIEW_BUILDER(VIEWS_EXPORT, Combobox, View)
 VIEW_BUILDER_PROPERTY(base::RepeatingClosure, Callback)
 VIEW_BUILDER_PROPERTY(std::unique_ptr<ui::ComboboxModel>, OwnedModel)
 VIEW_BUILDER_PROPERTY(ui::ComboboxModel*, Model)
-VIEW_BUILDER_PROPERTY(int, SelectedIndex)
+VIEW_BUILDER_PROPERTY(std::optional<size_t>, SelectedIndex)
 VIEW_BUILDER_PROPERTY(bool, Invalid)
 VIEW_BUILDER_PROPERTY(bool, SizeToLargestLabel)
-VIEW_BUILDER_PROPERTY(std::u16string, AccessibleName)
 VIEW_BUILDER_PROPERTY(std::u16string, TooltipTextAndAccessibleName)
 END_VIEW_BUILDER
 

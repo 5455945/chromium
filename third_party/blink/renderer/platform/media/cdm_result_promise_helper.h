@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,9 +10,8 @@
 #include "media/base/cdm_key_information.h"
 #include "media/base/cdm_promise.h"
 #include "third_party/blink/public/platform/web_content_decryption_module_result.h"
-#include "third_party/blink/renderer/platform/platform_export.h"
 
-namespace media {
+namespace blink {
 
 // A superset of media::ContentDecryptionModule::Exception for UMA reporting.
 // These values should never be changed as it will affect existing reporting,
@@ -32,19 +31,19 @@ enum CdmResultForUMA {
   NUM_RESULT_CODES  // Must be last.
 };
 
-PLATFORM_EXPORT CdmResultForUMA
-ConvertCdmExceptionToResultForUMA(CdmPromise::Exception exception_code);
+CdmResultForUMA ConvertCdmExceptionToResultForUMA(
+    media::CdmPromise::Exception exception_code);
 
-PLATFORM_EXPORT blink::WebContentDecryptionModuleException ConvertCdmException(
-    CdmPromise::Exception exception_code);
+WebContentDecryptionModuleException ConvertCdmException(
+    media::CdmPromise::Exception exception_code);
 
-PLATFORM_EXPORT blink::WebEncryptedMediaKeyInformation::KeyStatus
-ConvertCdmKeyStatus(media::CdmKeyInformation::KeyStatus key_status);
+WebEncryptedMediaKeyInformation::KeyStatus ConvertCdmKeyStatus(
+    media::CdmKeyInformation::KeyStatus key_status);
 
-PLATFORM_EXPORT void ReportCdmResultUMA(const std::string& uma_name,
-                                        uint32_t system_code,
-                                        CdmResultForUMA result);
+void ReportCdmResultUMA(const std::string& uma_name,
+                        uint32_t system_code,
+                        CdmResultForUMA result);
 
-}  // namespace media
+}  // namespace blink
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_MEDIA_CDM_RESULT_PROMISE_HELPER_H_

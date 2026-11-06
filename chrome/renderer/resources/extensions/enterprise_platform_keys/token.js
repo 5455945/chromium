@@ -1,9 +1,10 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-var utils = require('utils');
-var SubtleCrypto = require('enterprise.platformKeys.SubtleCrypto').SubtleCrypto;
+const utils = require('utils');
+const SubtleCrypto =
+    require('enterprise.platformKeys.SubtleCrypto').SubtleCrypto;
 
 /**
  * Implementation of enterprise.platformKeys.Token.
@@ -12,7 +13,9 @@ var SubtleCrypto = require('enterprise.platformKeys.SubtleCrypto').SubtleCrypto;
  */
 function TokenImpl(id) {
   this.id = id;
-  this.subtleCrypto = new SubtleCrypto(id);
+  this.subtleCrypto = new SubtleCrypto(id, /*softwareBacked=*/ false);
+  this.softwareBackedSubtleCrypto =
+      new SubtleCrypto(id, /*softwareBacked=*/ true);
 }
 $Object.setPrototypeOf(TokenImpl.prototype, null);
 
@@ -23,6 +26,7 @@ utils.expose(Token, TokenImpl, {
   readonly: [
     'id',
     'subtleCrypto',
+    'softwareBackedSubtleCrypto',
   ],
 });
 

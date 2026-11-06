@@ -1,9 +1,11 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/public/test/find_test_utils.h"
+#include "base/memory/raw_ptr.h"
 
+#include "build/build_config.h"
 #include "content/browser/find_request_manager.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -70,18 +72,18 @@ const std::vector<FindResults>& FindTestWebContentsDelegate::GetReplyRecord() {
   return reply_record_;
 }
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 void FindTestWebContentsDelegate::WaitForMatchRects() {
   WaitFor(MATCH_RECTS);
 }
 #endif
 
-void FindTestWebContentsDelegate::FindReply(WebContents* web_contents,
-                                            int request_id,
-                                            int number_of_matches,
-                                            const gfx::Rect& selection_rect,
-                                            int active_match_ordinal,
-                                            bool final_update) {
+void FindTestWebContentsDelegate::DidReceiveFindReply(
+    int request_id,
+    int number_of_matches,
+    const gfx::Rect& selection_rect,
+    int active_match_ordinal,
+    bool final_update) {
   if (record_replies_) {
     reply_record_.emplace_back(
         request_id, number_of_matches, active_match_ordinal);
@@ -110,6 +112,11 @@ void FindTestWebContentsDelegate::FindReply(WebContents* web_contents,
   }
 }
 
+bool FindTestWebContentsDelegate::IsBackForwardCacheSupported(
+    WebContents& web_contents) {
+  return true;
+}
+
 void FindTestWebContentsDelegate::WaitFor(WaitingFor wait_for) {
   ASSERT_EQ(NOTHING, waiting_for_);
   ASSERT_NE(NOTHING, wait_for);
@@ -132,7 +139,7 @@ void FindTestWebContentsDelegate::StopWaiting() {
   message_loop_runner_->Quit();
 }
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 void FindTestWebContentsDelegate::FindMatchRectsReply(
     WebContents* web_contents,
     int version,
@@ -148,13 +155,13 @@ void FindTestWebContentsDelegate::FindMatchRectsReply(
 }
 #endif
 
-std::unordered_set<RenderFrameHost*> GetRenderFrameHostsWithPendingFindResults(
-    WebContents* web_contents) {
+std::unordered_set<raw_ptr<RenderFrameHost, CtnExperimental>>
+GetRenderFrameHostsWithPendingFindResults(WebContents* web_contents) {
   if (auto* frm = static_cast<WebContentsImpl*>(web_contents)
                       ->GetFindRequestManagerForTesting()) {
     return frm->render_frame_hosts_pending_initial_reply_for_testing();
   }
-  return std::unordered_set<RenderFrameHost*>();
+  return std::unordered_set<raw_ptr<RenderFrameHost, CtnExperimental>>();
 }
 
 }  // namespace content

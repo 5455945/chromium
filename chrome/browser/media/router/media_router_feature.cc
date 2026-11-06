@@ -1,50 +1,74 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/media/router/media_router_feature.h"
 
+#include <stdint.h>
+
+#include <string>
 #include <utility>
 
 #include "base/base64.h"
+#include "base/command_line.h"
 #include "base/containers/flat_map.h"
 #include "base/feature_list.h"
 #include "base/no_destructor.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "build/build_config.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
+#include "components/media_router/common/pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/user_prefs/user_prefs.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/common/content_features.h"
 #include "crypto/random.h"
-#include "media/base/media_switches.h"
+#include "extensions/buildflags/buildflags.h"
 #include "ui/base/buildflags.h"
 
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID) || BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
 #include "components/prefs/pref_registry_simple.h"
 #endif
 
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chromeos/ash/components/browser_context_helper/browser_context_types.h"
+#endif
+
+// NOTE: Consider separating out UI-only features that are not consumed by the
+// Media Router itself into their own file in chrome/browser/ui/media_router.
+
 namespace media_router {
 
-#if !defined(OS_ANDROID)
-const base::Feature kMediaRouter{"MediaRouter",
-                                 base::FEATURE_ENABLED_BY_DEFAULT};
-// Controls if browser side DialMediaRouteProvider is enabled.
-const base::Feature kDialMediaRouteProvider{"DialMediaRouteProvider",
-                                            base::FEATURE_ENABLED_BY_DEFAULT};
-const base::Feature kCastMediaRouteProvider{"CastMediaRouteProvider",
-                                            base::FEATURE_ENABLED_BY_DEFAULT};
-const base::Feature kCastAllowAllIPsFeature{"CastAllowAllIPs",
-                                            base::FEATURE_DISABLED_BY_DEFAULT};
-const base::Feature kGlobalMediaControlsCastStartStop{
-    "GlobalMediaControlsCastStartStop", base::FEATURE_DISABLED_BY_DEFAULT};
-const base::Feature kAllowAllSitesToInitiateMirroring{
-    "AllowAllSitesToInitiateMirroring", base::FEATURE_DISABLED_BY_DEFAULT};
-const base::Feature kCastToMeetingFromCastDialog{
-    "CastToMeetingFromCastDialog", base::FEATURE_DISABLED_BY_DEFAULT};
-const base::Feature kCastFeedbackDialog{"CastFeedbackDialog",
-                                        base::FEATURE_ENABLED_BY_DEFAULT};
-#endif  // !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID) || BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
+BASE_FEATURE(kMediaRouter, base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kCastAllowAllIPsFeature,
+             "CastAllowAllIPs",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kAllowAllSitesToInitiateMirroring,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kDelayMediaSinkDiscovery, base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kShowCastPermissionRejectedError,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kCastMessageLogging, base::FEATURE_DISABLED_BY_DEFAULT);
+
+#if BUILDFLAG(IS_WIN)
+BASE_FEATURE(kCastDesktopMirroringKeepLocalAudio,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(IS_WIN)
+
+#if BUILDFLAG(ENABLE_MEDIA_REMOTING_REDIRECTION)
+// If enabled, the redirection (MMR) Media Route Provider is registered.
+BASE_FEATURE(kRedirectionMediaRouteProvider, base::FEATURE_DISABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(ENABLE_MEDIA_REMOTING_REDIRECTION)
+
+BASE_FEATURE(kFallbackToAudioTabMirroring, base::FEATURE_ENABLED_BY_DEFAULT);
+
+#endif  // !BUILDFLAG(IS_ANDROID) ||
+        // BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
 
 namespace {
 const PrefService::Preference* GetMediaRouterPref(
@@ -59,6 +83,14 @@ base::flat_map<content::BrowserContext*, bool>& GetStoredPrefValues() {
 
   return *stored_pref_values;
 }
+
+#if !BUILDFLAG(IS_ANDROID) || BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
+// TODO(mfoltz): Add full implementation for validating playout delay value.
+bool IsValidMirroringPlayoutDelayMs(int delay_ms) {
+  return delay_ms <= 1000 && delay_ms >= 1;
+}
+#endif  // !BUILDFLAG(IS_ANDROID) ||
+        // BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
 }  // namespace
 
 void ClearMediaRouterStoredPrefsForTesting() {
@@ -66,10 +98,19 @@ void ClearMediaRouterStoredPrefsForTesting() {
 }
 
 bool MediaRouterEnabled(content::BrowserContext* context) {
-#if !defined(OS_ANDROID)
-  if (!base::FeatureList::IsEnabled(kMediaRouter))
+#if !BUILDFLAG(IS_ANDROID) || BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
+  if (!base::FeatureList::IsEnabled(kMediaRouter)) {
     return false;
-#endif  // !defined(OS_ANDROID)
+  }
+#endif  // !BUILDFLAG(IS_ANDROID) ||
+        // BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
+#if BUILDFLAG(IS_CHROMEOS)
+  // TODO(crbug.com/1380828): Make the Media Router feature configurable via a
+  // policy for non-user profiles, i.e. sign-in and lock screen profiles.
+  if (!ash::IsUserBrowserContext(context)) {
+    return false;
+  }
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   // If the Media Router was already enabled or disabled for |context|, then it
   // must remain so.  The Media Router does not support dynamic
@@ -77,8 +118,9 @@ bool MediaRouterEnabled(content::BrowserContext* context) {
   base::flat_map<content::BrowserContext*, bool>& pref_values =
       GetStoredPrefValues();
   auto const it = pref_values.find(context);
-  if (it != pref_values.end())
+  if (it != pref_values.end()) {
     return it->second;
+  }
 
   // Check the enterprise policy.
   const PrefService::Preference* pref = GetMediaRouterPref(context);
@@ -91,16 +133,22 @@ bool MediaRouterEnabled(content::BrowserContext* context) {
   return true;
 }
 
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID) || BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
 void RegisterLocalStatePrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(prefs::kMediaRouterCastAllowAllIPs, false,
                                 PrefRegistry::PUBLIC);
+  registry->RegisterBooleanPref(prefs::kSuppressLocalDiscoveryPermissionError,
+                                false);
 }
 
 void RegisterProfilePrefs(PrefRegistrySimple* registry) {
-  // TODO(imcheng): Migrate existing Media Router prefs to here.
   registry->RegisterStringPref(prefs::kMediaRouterReceiverIdHashToken, "",
                                PrefRegistry::PUBLIC);
+  registry->RegisterBooleanPref(
+      media_router::prefs::kMediaRouterMediaRemotingEnabled, true);
+  registry->RegisterBooleanPref(
+      media_router::prefs::kMediaRouterShowCastSessionsStartedByOtherDevices,
+      true);
 }
 
 bool GetCastAllowAllIPsPref(PrefService* pref_service) {
@@ -123,26 +171,45 @@ std::string GetReceiverIdHashToken(PrefService* pref_service) {
   std::string token =
       pref_service->GetString(prefs::kMediaRouterReceiverIdHashToken);
   if (token.empty()) {
-    crypto::RandBytes(base::WriteInto(&token, kHashTokenSize + 1),
-                      kHashTokenSize);
-    base::Base64Encode(token, &token);
+    std::array<uint8_t, kHashTokenSize> rand_token;
+    crypto::RandBytes(rand_token);
+    token = base::Base64Encode(rand_token);
     pref_service->SetString(prefs::kMediaRouterReceiverIdHashToken, token);
   }
   return token;
 }
 
-bool DialMediaRouteProviderEnabled() {
-  return base::FeatureList::IsEnabled(kDialMediaRouteProvider);
+bool RedirectionMediaRouteProviderEnabled() {
+#if BUILDFLAG(ENABLE_MEDIA_REMOTING_REDIRECTION)
+  return base::FeatureList::IsEnabled(kRedirectionMediaRouteProvider);
+#else
+  return false;
+#endif  // BUILDFLAG(ENABLE_MEDIA_REMOTING_REDIRECTION)
 }
 
-bool CastMediaRouteProviderEnabled() {
-  return base::FeatureList::IsEnabled(kCastMediaRouteProvider);
+std::optional<base::TimeDelta> GetCastMirroringPlayoutDelay() {
+  std::optional<base::TimeDelta> target_playout_delay;
+
+  // The default playout delay can be overridden with the command line flag
+  // `cast-mirroring-target-playout-delay`.
+  const base::CommandLine* cl = base::CommandLine::ForCurrentProcess();
+  if (cl->HasSwitch(switches::kCastMirroringTargetPlayoutDelay)) {
+    int switch_playout_delay = 0;
+    if (base::StringToInt(
+            cl->GetSwitchValueASCII(switches::kCastMirroringTargetPlayoutDelay),
+            &switch_playout_delay) &&
+        IsValidMirroringPlayoutDelayMs(switch_playout_delay)) {
+      target_playout_delay = base::Milliseconds(switch_playout_delay);
+    }
+  }
+
+  return target_playout_delay;
 }
 
-bool GlobalMediaControlsCastStartStopEnabled() {
-  return base::FeatureList::IsEnabled(kGlobalMediaControlsCastStartStop);
+bool IsCastMessageLoggingEnabled() {
+  return base::FeatureList::IsEnabled(kCastMessageLogging);
 }
-
-#endif  // !defined(OS_ANDROID)
+#endif  // !BUILDFLAG(IS_ANDROID) ||
+        // BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
 
 }  // namespace media_router

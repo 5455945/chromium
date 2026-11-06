@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +8,15 @@
 #include <memory>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/ui/views/payments/payment_request_row_view.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 
 namespace views {
 class ImageView;
 class View;
-}
+}  // namespace views
 
 namespace payments {
 
@@ -31,6 +33,8 @@ class PaymentRequestItemList {
  public:
   // Represents an item in the item list.
   class Item : public PaymentRequestRowView {
+    METADATA_HEADER(Item, PaymentRequestRowView)
+
    public:
     // Creates an item that will be owned by `list` with the initial state set
     // to `selected`. `clickable` indicates whether or not the user can interact
@@ -41,6 +45,10 @@ class PaymentRequestItemList {
          bool selected,
          bool clickable,
          bool show_edit_button);
+
+    Item(const Item&) = delete;
+    Item& operator=(const Item&) = delete;
+
     ~Item() override;
 
     bool selected() const { return selected_; }
@@ -55,6 +63,10 @@ class PaymentRequestItemList {
     // this instance of the UI.
     base::WeakPtr<PaymentRequestSpec> spec() { return spec_; }
     base::WeakPtr<PaymentRequestState> state() { return state_; }
+
+    // PaymentRequestRowView overrides
+    // Leaf classes must override this and provide their own factory.
+    base::WeakPtr<PaymentRequestRowView> AsWeakPtr() override = 0;
 
    protected:
     // Initializes the layout and content of the row. Must be called by subclass
@@ -73,9 +85,9 @@ class PaymentRequestItemList {
     std::unique_ptr<views::ImageView> CreateCheckmark(bool selected);
 
     // Creates the view that represents this item's content. Typically this will
-    // be a label describing the payment method, shipping adress, etc. Populates
-    // |accessible_content| with the screen reader string for the returned
-    // content. |accessible_content| shouldn't be null.
+    // be a label describing the payment method, shipping address, etc.
+    // Populates |accessible_content| with the screen reader string for the
+    // returned content. |accessible_content| shouldn't be null.
     virtual std::unique_ptr<views::View> CreateContentView(
         std::u16string* accessible_content) = 0;
 
@@ -110,16 +122,18 @@ class PaymentRequestItemList {
 
     base::WeakPtr<PaymentRequestSpec> spec_;
     base::WeakPtr<PaymentRequestState> state_;
-    PaymentRequestItemList* list_;
+    raw_ptr<PaymentRequestItemList, DanglingUntriaged> list_;
     std::u16string accessible_item_description_;
     bool selected_;
     bool show_edit_button_;
-
-    DISALLOW_COPY_AND_ASSIGN(Item);
   };
 
   explicit PaymentRequestItemList(
       base::WeakPtr<PaymentRequestDialogView> dialog);
+
+  PaymentRequestItemList(const PaymentRequestItemList&) = delete;
+  PaymentRequestItemList& operator=(const PaymentRequestItemList&) = delete;
+
   virtual ~PaymentRequestItemList();
 
   // Adds an item to this list. |item->list()| should return this object.
@@ -145,10 +159,8 @@ class PaymentRequestItemList {
   void UnselectSelectedItem();
 
   std::vector<std::unique_ptr<Item>> items_;
-  Item* selected_item_;
+  raw_ptr<Item, DanglingUntriaged> selected_item_;
   base::WeakPtr<PaymentRequestDialogView> dialog_;
-
-  DISALLOW_COPY_AND_ASSIGN(PaymentRequestItemList);
 };
 
 }  // namespace payments

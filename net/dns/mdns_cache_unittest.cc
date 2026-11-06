@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,8 @@
 #include <algorithm>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/time/time.h"
 #include "net/dns/dns_response.h"
 #include "net/dns/dns_test_util.h"
 #include "net/dns/record_parsed.h"
@@ -127,7 +128,7 @@ class RecordRemovalMock {
 class MDnsCacheTest : public ::testing::Test {
  public:
   MDnsCacheTest()
-      : default_time_(base::Time::FromDoubleT(1234.0)) {}
+      : default_time_(base::Time::FromSecondsSinceUnixEpoch(1234.0)) {}
   ~MDnsCacheTest() override = default;
 
  protected:
@@ -138,8 +139,8 @@ class MDnsCacheTest : public ::testing::Test {
 
 // Test a single insert, corresponding lookup, and unsuccessful lookup.
 TEST_F(MDnsCacheTest, InsertLookupSingle) {
-  DnsRecordParser parser(kT1ResponseDatagram, sizeof(kT1ResponseDatagram),
-                         sizeof(dns_protocol::Header), kT1RecordCount);
+  DnsRecordParser parser(kT1ResponseDatagram, sizeof(dns_protocol::Header),
+                         kT1RecordCount);
   std::string dotted_qname;
   uint16_t qtype;
   parser.ReadQuestion(dotted_qname, qtype);
@@ -172,8 +173,8 @@ TEST_F(MDnsCacheTest, InsertLookupSingle) {
 
 // Test that records expire when their ttl has passed.
 TEST_F(MDnsCacheTest, Expiration) {
-  DnsRecordParser parser(kT1ResponseDatagram, sizeof(kT1ResponseDatagram),
-                         sizeof(dns_protocol::Header), kT1RecordCount);
+  DnsRecordParser parser(kT1ResponseDatagram, sizeof(dns_protocol::Header),
+                         kT1RecordCount);
   std::string dotted_qname;
   uint16_t qtype;
   parser.ReadQuestion(dotted_qname, qtype);
@@ -184,10 +185,10 @@ TEST_F(MDnsCacheTest, Expiration) {
   const RecordParsed* record_to_be_deleted;
 
   record1 = RecordParsed::CreateFrom(&parser, default_time_);
-  base::TimeDelta ttl1 = base::TimeDelta::FromSeconds(record1->ttl());
+  base::TimeDelta ttl1 = base::Seconds(record1->ttl());
 
   record2 = RecordParsed::CreateFrom(&parser, default_time_);
-  base::TimeDelta ttl2 = base::TimeDelta::FromSeconds(record2->ttl());
+  base::TimeDelta ttl2 = base::Seconds(record2->ttl());
   record_to_be_deleted = record2.get();
 
   EXPECT_EQ(MDnsCache::RecordAdded, cache_.UpdateDnsRecord(std::move(record1)));
@@ -226,8 +227,7 @@ TEST_F(MDnsCacheTest, Expiration) {
 // Test that a new record replacing one with the same identity (name/rrtype for
 // unique records) causes the cache to output a "record changed" event.
 TEST_F(MDnsCacheTest, RecordChange) {
-  DnsRecordParser parser(kTestResponsesDifferentAnswers,
-                         sizeof(kTestResponsesDifferentAnswers), 0,
+  DnsRecordParser parser(kTestResponsesDifferentAnswers, 0,
                          /*num_records=*/2);
 
   std::unique_ptr<const RecordParsed> record1;
@@ -245,8 +245,7 @@ TEST_F(MDnsCacheTest, RecordChange) {
 // Test that a new record replacing an otherwise identical one already in the
 // cache causes the cache to output a "no change" event.
 TEST_F(MDnsCacheTest, RecordNoChange) {
-  DnsRecordParser parser(kTestResponsesSameAnswers,
-                         sizeof(kTestResponsesSameAnswers), 0,
+  DnsRecordParser parser(kTestResponsesSameAnswers, 0,
                          /*num_records=*/2);
 
   std::unique_ptr<const RecordParsed> record1;
@@ -254,8 +253,7 @@ TEST_F(MDnsCacheTest, RecordNoChange) {
   std::vector<const RecordParsed*> results;
 
   record1 = RecordParsed::CreateFrom(&parser, default_time_);
-  record2 = RecordParsed::CreateFrom(&parser, default_time_ +
-                                     base::TimeDelta::FromSeconds(1));
+  record2 = RecordParsed::CreateFrom(&parser, default_time_ + base::Seconds(1));
 
   EXPECT_EQ(MDnsCache::RecordAdded, cache_.UpdateDnsRecord(std::move(record1)));
   EXPECT_EQ(MDnsCache::NoChange, cache_.UpdateDnsRecord(std::move(record2)));
@@ -264,8 +262,7 @@ TEST_F(MDnsCacheTest, RecordNoChange) {
 // Test that the next expiration time of the cache is updated properly on record
 // insertion.
 TEST_F(MDnsCacheTest, RecordPreemptExpirationTime) {
-  DnsRecordParser parser(kTestResponsesSameAnswers,
-                         sizeof(kTestResponsesSameAnswers), 0,
+  DnsRecordParser parser(kTestResponsesSameAnswers, 0,
                          /*num_records=*/2);
 
   std::unique_ptr<const RecordParsed> record1;
@@ -274,8 +271,8 @@ TEST_F(MDnsCacheTest, RecordPreemptExpirationTime) {
 
   record1 = RecordParsed::CreateFrom(&parser, default_time_);
   record2 = RecordParsed::CreateFrom(&parser, default_time_);
-  base::TimeDelta ttl1 = base::TimeDelta::FromSeconds(record1->ttl());
-  base::TimeDelta ttl2 = base::TimeDelta::FromSeconds(record2->ttl());
+  base::TimeDelta ttl1 = base::Seconds(record1->ttl());
+  base::TimeDelta ttl2 = base::Seconds(record2->ttl());
 
   EXPECT_EQ(base::Time(), cache_.next_expiration());
   EXPECT_EQ(MDnsCache::RecordAdded, cache_.UpdateDnsRecord(std::move(record2)));
@@ -288,8 +285,7 @@ TEST_F(MDnsCacheTest, RecordPreemptExpirationTime) {
 // records to the cache if they are not already there, and eventually removing
 // records from the cache if they are.
 TEST_F(MDnsCacheTest, GoodbyePacket) {
-  DnsRecordParser parser(kTestResponsesGoodbyePacket,
-                         sizeof(kTestResponsesGoodbyePacket), 0,
+  DnsRecordParser parser(kTestResponsesGoodbyePacket, 0,
                          /*num_records=*/2);
 
   std::unique_ptr<const RecordParsed> record_goodbye;
@@ -299,12 +295,11 @@ TEST_F(MDnsCacheTest, GoodbyePacket) {
 
   record_goodbye = RecordParsed::CreateFrom(&parser, default_time_);
   record_hello = RecordParsed::CreateFrom(&parser, default_time_);
-  parser = DnsRecordParser(kTestResponsesGoodbyePacket,
-                           sizeof(kTestResponsesGoodbyePacket), 0,
+  parser = DnsRecordParser(kTestResponsesGoodbyePacket, 0,
                            /*num_records=*/2);
   record_goodbye2 = RecordParsed::CreateFrom(&parser, default_time_);
 
-  base::TimeDelta ttl = base::TimeDelta::FromSeconds(record_hello->ttl());
+  base::TimeDelta ttl = base::Seconds(record_hello->ttl());
 
   EXPECT_EQ(base::Time(), cache_.next_expiration());
   EXPECT_EQ(MDnsCache::NoChange,
@@ -315,13 +310,11 @@ TEST_F(MDnsCacheTest, GoodbyePacket) {
   EXPECT_EQ(default_time_ + ttl, cache_.next_expiration());
   EXPECT_EQ(MDnsCache::NoChange,
             cache_.UpdateDnsRecord(std::move(record_goodbye2)));
-  EXPECT_EQ(default_time_ + base::TimeDelta::FromSeconds(1),
-            cache_.next_expiration());
+  EXPECT_EQ(default_time_ + base::Seconds(1), cache_.next_expiration());
 }
 
 TEST_F(MDnsCacheTest, AnyRRType) {
-  DnsRecordParser parser(kTestResponseTwoRecords,
-                         sizeof(kTestResponseTwoRecords), 0, /*num_records=*/2);
+  DnsRecordParser parser(kTestResponseTwoRecords, 0, /*num_records=*/2);
 
   std::unique_ptr<const RecordParsed> record1;
   std::unique_ptr<const RecordParsed> record2;
@@ -346,8 +339,8 @@ TEST_F(MDnsCacheTest, AnyRRType) {
 }
 
 TEST_F(MDnsCacheTest, RemoveRecord) {
-  DnsRecordParser parser(kT1ResponseDatagram, sizeof(kT1ResponseDatagram),
-                         sizeof(dns_protocol::Header), kT1RecordCount);
+  DnsRecordParser parser(kT1ResponseDatagram, sizeof(dns_protocol::Header),
+                         kT1RecordCount);
   std::string dotted_qname;
   uint16_t qtype;
   parser.ReadQuestion(dotted_qname, qtype);
@@ -375,8 +368,7 @@ TEST_F(MDnsCacheTest, RemoveRecord) {
 }
 
 TEST_F(MDnsCacheTest, IsCacheOverfilled) {
-  DnsRecordParser parser(kTestResponseTwoRecords,
-                         sizeof(kTestResponseTwoRecords), 0, /*num_records=*/2);
+  DnsRecordParser parser(kTestResponseTwoRecords, 0, /*num_records=*/2);
   std::unique_ptr<const RecordParsed> record1 =
       RecordParsed::CreateFrom(&parser, default_time_);
   const RecordParsed* record1_ptr = record1.get();
@@ -395,8 +387,7 @@ TEST_F(MDnsCacheTest, IsCacheOverfilled) {
 }
 
 TEST_F(MDnsCacheTest, ClearOnOverfilledCleanup) {
-  DnsRecordParser parser(kTestResponseTwoRecords,
-                         sizeof(kTestResponseTwoRecords), 0, /*num_records=*/2);
+  DnsRecordParser parser(kTestResponseTwoRecords, 0, /*num_records=*/2);
   std::unique_ptr<const RecordParsed> record1 =
       RecordParsed::CreateFrom(&parser, default_time_);
   const RecordParsed* record1_ptr = record1.get();
@@ -428,8 +419,7 @@ TEST_F(MDnsCacheTest, ClearOnOverfilledCleanup) {
 }
 
 TEST_F(MDnsCacheTest, CaseInsensitive) {
-  DnsRecordParser parser(kTestResponsesDifferentCapitalization,
-                         sizeof(kTestResponsesDifferentCapitalization), 0,
+  DnsRecordParser parser(kTestResponsesDifferentCapitalization, 0,
                          /*num_records=*/2);
 
   std::unique_ptr<const RecordParsed> record1;

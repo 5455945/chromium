@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/permissions/permission_request_enums.h"
 #include "components/permissions/prediction_service/prediction_request_features.h"
@@ -28,10 +28,10 @@ class PredictionServiceBase : public KeyedService {
       base::OnceCallback<void(std::unique_ptr<GeneratePredictionsRequest>,
                               std::string)>;  // Access token.
 
-  using LookupResponseCallback =
-      base::OnceCallback<void(bool,  // Lookup successful.
-                              bool,  // Response from cache.
-                              std::unique_ptr<GeneratePredictionsResponse>)>;
+  using LookupResponseCallback = base::OnceCallback<void(
+      bool,  // Lookup successful.
+      bool,  // Response from cache.
+      const std::optional<GeneratePredictionsResponse>&)>;
 
   virtual void StartLookup(const PredictionRequestFeatures& entity,
                            LookupRequestCallback request_callback,

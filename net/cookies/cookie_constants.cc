@@ -1,20 +1,25 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/cookies/cookie_constants.h"
 
+#include <string>
+#include <string_view>
+#include <utility>
+
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
+#include "base/rand_util.h"
 #include "base/strings/string_util.h"
+#include "url/gurl.h"
 #include "url/url_constants.h"
 
 namespace net {
 
-const base::TimeDelta kLaxAllowUnsafeMaxAge = base::TimeDelta::FromMinutes(2);
-const base::TimeDelta kShortLaxAllowUnsafeMaxAge =
-    base::TimeDelta::FromSeconds(10);
+const base::TimeDelta kLaxAllowUnsafeMaxAge = base::Minutes(2);
+const base::TimeDelta kShortLaxAllowUnsafeMaxAge = base::Seconds(10);
 
 namespace {
 
@@ -41,7 +46,6 @@ std::string CookiePriorityToString(CookiePriority priority) {
     default:
       NOTREACHED();
   }
-  return std::string();
 }
 
 CookiePriority StringToCookiePriority(const std::string& priority) {
@@ -70,41 +74,27 @@ std::string CookieSameSiteToString(CookieSameSite same_site) {
   }
 }
 
-CookieSameSite StringToCookieSameSite(const std::string& same_site,
-                                      CookieSameSiteString* samesite_string) {
-  // Put a value on the stack so that we can assign to |*samesite_string|
-  // instead of having to null-check it all the time.
-  CookieSameSiteString ignored = CookieSameSiteString::kUnspecified;
-  if (!samesite_string)
-    samesite_string = &ignored;
-
-  *samesite_string = CookieSameSiteString::kUnrecognized;
-  CookieSameSite samesite = CookieSameSite::UNSPECIFIED;
-
+std::pair<CookieSameSite, CookieSameSiteString> StringToCookieSameSite(
+    std::string_view same_site) {
   if (base::EqualsCaseInsensitiveASCII(same_site, kSameSiteNone)) {
-    samesite = CookieSameSite::NO_RESTRICTION;
-    *samesite_string = CookieSameSiteString::kNone;
+    return {CookieSameSite::NO_RESTRICTION, CookieSameSiteString::kNone};
   } else if (base::EqualsCaseInsensitiveASCII(same_site, kSameSiteLax)) {
-    samesite = CookieSameSite::LAX_MODE;
-    *samesite_string = CookieSameSiteString::kLax;
+    return {CookieSameSite::LAX_MODE, CookieSameSiteString::kLax};
   } else if (base::EqualsCaseInsensitiveASCII(same_site, kSameSiteStrict)) {
-    samesite = CookieSameSite::STRICT_MODE;
-    *samesite_string = CookieSameSiteString::kStrict;
+    return {CookieSameSite::STRICT_MODE, CookieSameSiteString::kStrict};
   } else if (base::EqualsCaseInsensitiveASCII(same_site, kSameSiteExtended)) {
     // Extended isn't supported anymore -- we just parse it for UMA stats.
-    *samesite_string = CookieSameSiteString::kExtended;
+    return {CookieSameSite::UNSPECIFIED, CookieSameSiteString::kExtended};
   } else if (same_site == "") {
-    *samesite_string = CookieSameSiteString::kEmptyString;
+    return {CookieSameSite::UNSPECIFIED, CookieSameSiteString::kEmptyString};
   }
-  return samesite;
+  return {CookieSameSite::UNSPECIFIED, CookieSameSiteString::kUnrecognized};
 }
 
-void RecordCookieSameSiteAttributeValueHistogram(CookieSameSiteString value,
-                                                 bool is_cookie_same_party) {
-  UMA_HISTOGRAM_ENUMERATION("Cookie.SameSiteAttributeValue", value);
-  if (is_cookie_same_party) {
-    base::UmaHistogramEnumeration(
-        "Cookie.SamePartyCookieSameSiteAttributeValue", value);
+void RecordCookieSameSiteAttributeValueHistogram(CookieSameSiteString value) {
+  if (base::ShouldRecordSubsampledMetric(kHistogramSampleProbability)) {
+    UMA_HISTOGRAM_ENUMERATION("Cookie.SameSiteAttributeValue.Subsampled",
+                              value);
   }
 }
 
@@ -338,8 +328,6 @@ CookieSourceSchemeName GetSchemeNameEnum(const GURL& url) {
     return CookieSourceSchemeName::kJavaScriptScheme;
   } else if (url.SchemeIs(url::kMailToScheme)) {
     return CookieSourceSchemeName::kMailToScheme;
-  } else if (url.SchemeIs(url::kQuicTransportScheme)) {
-    return CookieSourceSchemeName::kQuicTransportScheme;
   } else if (url.SchemeIs(url::kTelScheme)) {
     return CookieSourceSchemeName::kTelScheme;
   } else if (url.SchemeIs(url::kUrnScheme)) {
@@ -348,5 +336,7 @@ CookieSourceSchemeName GetSchemeNameEnum(const GURL& url) {
 
   return CookieSourceSchemeName::kOther;
 }
+
+const char kEmptyCookiePartitionKey[] = "";
 
 }  // namespace net

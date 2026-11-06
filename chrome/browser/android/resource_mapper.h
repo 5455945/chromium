@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,11 +17,6 @@ class ResourceMapper {
   // an Android drawable resource ID. Returns |kMissingId| if a mapping wasn't
   // found.
   static int MapToJavaDrawableId(int resource_id);
-
- private:
-  // Create the mapping.  IDs start at 0 to correspond to the array that gets
-  // built in the corresponding ResourceID Java class.
-  static void ConstructMap();
 };
 
 #endif  // CHROME_BROWSER_ANDROID_RESOURCE_MAPPER_H_

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,12 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "content/browser/service_worker/embedded_worker_test_helper.h"
+#include "content/browser/service_worker/service_worker_context_core.h"
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -40,6 +41,9 @@ void DidUnregisterServiceWorker(blink::ServiceWorkerStatusCode* status_out,
 class WatcherCallback {
  public:
   WatcherCallback() {}
+
+  WatcherCallback(const WatcherCallback&) = delete;
+  WatcherCallback& operator=(const WatcherCallback&) = delete;
 
   ~WatcherCallback() {}
 
@@ -118,8 +122,6 @@ class WatcherCallback {
   int callback_count_ = 0;
 
   base::WeakPtrFactory<WatcherCallback> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(WatcherCallback);
 };
 
 }  // namespace
@@ -128,6 +130,11 @@ class ServiceWorkerContextWatcherTest : public testing::Test {
  public:
   ServiceWorkerContextWatcherTest()
       : task_environment_(BrowserTaskEnvironment::IO_MAINLOOP) {}
+
+  ServiceWorkerContextWatcherTest(const ServiceWorkerContextWatcherTest&) =
+      delete;
+  ServiceWorkerContextWatcherTest& operator=(
+      const ServiceWorkerContextWatcherTest&) = delete;
 
   void SetUp() override {
     helper_ = std::make_unique<EmbeddedWorkerTestHelper>(base::FilePath());
@@ -150,11 +157,15 @@ class ServiceWorkerContextWatcherTest : public testing::Test {
     blink::mojom::ServiceWorkerRegistrationOptions options;
     options.scope = scope;
     int64_t registration_id = blink::mojom::kInvalidServiceWorkerRegistrationId;
+    auto fetch_client_settings_object =
+        blink::mojom::FetchClientSettingsObject::New();
+    fetch_client_settings_object->policy_container_policies =
+        blink::mojom::PolicyContainerPolicies::New();
     context()->RegisterServiceWorker(
-        script_url, key, options,
-        blink::mojom::FetchClientSettingsObject::New(),
+        script_url, key, options, std::move(fetch_client_settings_object),
         base::BindOnce(&DidRegisterServiceWorker, &registration_id),
-        /*requesting_frame_id=*/GlobalRenderFrameHostId());
+        /*requesting_frame_id=*/GlobalRenderFrameHostId(),
+        PolicyContainerPolicies());
     base::RunLoop().RunUntilIdle();
     return registration_id;
   }
@@ -166,6 +177,7 @@ class ServiceWorkerContextWatcherTest : public testing::Test {
         blink::ServiceWorkerStatusCode::kErrorFailed;
     context()->UnregisterServiceWorker(
         scope, key, /*is_immediate=*/false,
+        ServiceWorkerRegistration::DeleteInitiator::kTest,
         base::BindOnce(&DidUnregisterServiceWorker, &status));
     base::RunLoop().RunUntilIdle();
     return status;
@@ -174,15 +186,14 @@ class ServiceWorkerContextWatcherTest : public testing::Test {
   void ReportError(scoped_refptr<ServiceWorkerContextWatcher> watcher,
                    int64_t version_id,
                    const GURL& scope,
+                   const blink::StorageKey& key,
                    const ServiceWorkerContextObserver::ErrorInfo& error_info) {
-    watcher->OnErrorReported(version_id, scope, error_info);
+    watcher->OnErrorReported(version_id, scope, key, error_info);
   }
 
  private:
   std::unique_ptr<EmbeddedWorkerTestHelper> helper_;
   BrowserTaskEnvironment task_environment_;
-
-  DISALLOW_COPY_AND_ASSIGN(ServiceWorkerContextWatcherTest);
 };
 
 TEST_F(ServiceWorkerContextWatcherTest, NoServiceWorker) {
@@ -206,14 +217,16 @@ TEST_F(ServiceWorkerContextWatcherTest, NoServiceWorker) {
 TEST_F(ServiceWorkerContextWatcherTest, StoredServiceWorkers) {
   GURL scope_1 = GURL("https://www1.example.com/");
   GURL script_1 = GURL("https://www1.example.com/worker.js");
-  blink::StorageKey key_1(url::Origin::Create(scope_1));
+  const blink::StorageKey key_1 =
+      blink::StorageKey::CreateFirstParty(url::Origin::Create(scope_1));
   int64_t registration_id_1 = RegisterServiceWorker(scope_1, script_1, key_1);
   ASSERT_NE(blink::mojom::kInvalidServiceWorkerRegistrationId,
             registration_id_1);
 
   GURL scope_2 = GURL("https://www2.example.com/");
   GURL script_2 = GURL("https://www2.example.com/worker.js");
-  blink::StorageKey key_2(url::Origin::Create(scope_2));
+  const blink::StorageKey key_2 =
+      blink::StorageKey::CreateFirstParty(url::Origin::Create(scope_2));
   int64_t registration_id_2 = RegisterServiceWorker(scope_2, script_2, key_2);
   ASSERT_NE(blink::mojom::kInvalidServiceWorkerRegistrationId,
             registration_id_2);
@@ -248,7 +261,8 @@ TEST_F(ServiceWorkerContextWatcherTest, StoredServiceWorkers) {
 TEST_F(ServiceWorkerContextWatcherTest, RegisteredServiceWorker) {
   GURL scope_1 = GURL("https://www1.example.com/");
   GURL script_1 = GURL("https://www1.example.com/worker.js");
-  blink::StorageKey key_1(url::Origin::Create(scope_1));
+  const blink::StorageKey key_1 =
+      blink::StorageKey::CreateFirstParty(url::Origin::Create(scope_1));
   int64_t registration_id_1 = RegisterServiceWorker(scope_1, script_1, key_1);
   ASSERT_NE(blink::mojom::kInvalidServiceWorkerRegistrationId,
             registration_id_1);
@@ -270,7 +284,8 @@ TEST_F(ServiceWorkerContextWatcherTest, RegisteredServiceWorker) {
 
   GURL scope_2 = GURL("https://www2.example.com/");
   GURL script_2 = GURL("https://www2.example.com/worker.js");
-  blink::StorageKey key_2(url::Origin::Create(scope_2));
+  const blink::StorageKey key_2 =
+      blink::StorageKey::CreateFirstParty(url::Origin::Create(scope_2));
   int64_t registration_id_2 = RegisterServiceWorker(scope_2, script_2, key_2);
   ASSERT_EQ(2u, watcher_callback.registrations().size());
   EXPECT_EQ(scope_1,
@@ -297,14 +312,16 @@ TEST_F(ServiceWorkerContextWatcherTest, RegisteredServiceWorker) {
 TEST_F(ServiceWorkerContextWatcherTest, UnregisteredServiceWorker) {
   GURL scope_1 = GURL("https://www1.example.com/");
   GURL script_1 = GURL("https://www1.example.com/worker.js");
-  blink::StorageKey key_1(url::Origin::Create(scope_1));
+  const blink::StorageKey key_1 =
+      blink::StorageKey::CreateFirstParty(url::Origin::Create(scope_1));
   int64_t registration_id_1 = RegisterServiceWorker(scope_1, script_1, key_1);
   ASSERT_NE(blink::mojom::kInvalidServiceWorkerRegistrationId,
             registration_id_1);
 
   GURL scope_2 = GURL("https://www2.example.com/");
   GURL script_2 = GURL("https://www2.example.com/worker.js");
-  blink::StorageKey key_2(url::Origin::Create(scope_2));
+  const blink::StorageKey key_2 =
+      blink::StorageKey::CreateFirstParty(url::Origin::Create(scope_2));
   int64_t registration_id_2 = RegisterServiceWorker(scope_2, script_2, key_2);
 
   WatcherCallback watcher_callback;
@@ -336,7 +353,8 @@ TEST_F(ServiceWorkerContextWatcherTest, UnregisteredServiceWorker) {
 TEST_F(ServiceWorkerContextWatcherTest, ErrorReport) {
   GURL scope = GURL("https://www1.example.com/");
   GURL script = GURL("https://www1.example.com/worker.js");
-  blink::StorageKey key(url::Origin::Create(scope));
+  const blink::StorageKey key =
+      blink::StorageKey::CreateFirstParty(url::Origin::Create(scope));
   int64_t registration_id = RegisterServiceWorker(scope, script, key);
   ASSERT_NE(blink::mojom::kInvalidServiceWorkerRegistrationId, registration_id);
 
@@ -357,7 +375,7 @@ TEST_F(ServiceWorkerContextWatcherTest, ErrorReport) {
   EXPECT_EQ(0u, watcher_callback.errors().size());
 
   std::u16string message(u"HELLO");
-  ReportError(watcher, version_id, scope,
+  ReportError(watcher, version_id, scope, key,
               ServiceWorkerContextObserver::ErrorInfo(message, 0, 0, script));
   base::RunLoop().RunUntilIdle();
   ASSERT_EQ(1u, watcher_callback.errors().size());
@@ -385,7 +403,8 @@ TEST_F(ServiceWorkerContextWatcherTest, StopQuickly) {
   int callback_count = watcher_callback.callback_count();
   GURL scope = GURL("https://www1.example.com/");
   GURL script = GURL("https://www1.example.com/worker.js");
-  blink::StorageKey key(url::Origin::Create(scope));
+  const blink::StorageKey key =
+      blink::StorageKey::CreateFirstParty(url::Origin::Create(scope));
   int64_t registration_id = RegisterServiceWorker(scope, script, key);
   ASSERT_NE(blink::mojom::kInvalidServiceWorkerRegistrationId, registration_id);
   base::RunLoop().RunUntilIdle();
@@ -397,7 +416,8 @@ TEST_F(ServiceWorkerContextWatcherTest, StopQuickly) {
 TEST_F(ServiceWorkerContextWatcherTest, Race) {
   GURL scope = GURL("https://www1.example.com/");
   GURL script = GURL("https://www1.example.com/worker.js");
-  blink::StorageKey key(url::Origin::Create(scope));
+  const blink::StorageKey key =
+      blink::StorageKey::CreateFirstParty(url::Origin::Create(scope));
   int64_t registration_id = RegisterServiceWorker(scope, script, key);
   ASSERT_NE(blink::mojom::kInvalidServiceWorkerRegistrationId, registration_id);
   base::RunLoop().RunUntilIdle();
@@ -410,7 +430,7 @@ TEST_F(ServiceWorkerContextWatcherTest, Race) {
 
   int callback_count = watcher_callback.callback_count();
   std::u16string message(u"HELLO");
-  ReportError(watcher, 0 /*version_id*/, scope,
+  ReportError(watcher, 0 /*version_id*/, scope, key,
               ServiceWorkerContextObserver::ErrorInfo(message, 0, 0, script));
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(callback_count, watcher_callback.callback_count());

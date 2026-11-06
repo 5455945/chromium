@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -77,6 +77,10 @@ extern const char kProhibitedOrigin[];
 // or kInvalidSslCertificate error.
 extern const char kProhibitedOriginOrInvalidSslExplanation[];
 
+// Mojo call PaymentRequest::UpdateWith() is not allowed for the
+// "secure-payment-confirmation" method once its dialog has been shown.
+extern const char kSecurePaymentConfirmationUpdateWithNotAllowed[];
+
 // The payment handler responded with an invalid shipping address.
 extern const char kShippingAddressInvalid[];
 
@@ -90,10 +94,6 @@ extern const char kShippingOptionIdRequired[];
 // options.
 extern const char kSkipAppForPartialDelegation[];
 
-// Used when rejecting show() with NotSupportedError, because the user did not
-// have all valid autofill data.
-extern const char kStrictBasicCardShowReject[];
-
 // Used when "total": {"label": "Total", "amount": {"currency": "USD", "value":
 // "0.01"}} is required, bot not provided.
 extern const char kTotalRequired[];
@@ -101,12 +101,35 @@ extern const char kTotalRequired[];
 // Used when user dismissed the Payment Request dialog.
 extern const char kUserCancelled[];
 
+// Used when a SecurePaymentConfirmationRequest includes one or more disallowed
+// WebAuthn extensions.
+extern const char kWebAuthnExtensionsNotSupported[];
+
+// Used when user cancels authentication or when there are no matching
+// credentials
+extern const char kWebAuthnOperationTimedOutOrNotAllowed[];
+
+// Used when SPC is passed a list of locales and none match against the browser
+// locale.
+extern const char kSpcLocaleDoesNotMatch[];
+
+// Used when the user opts out of SPC for a given RP.
+extern const char kSpcUserOptedOut[];
+
 // Used when the renderer does not provide valid payment details, such as a null
 // struct or missing ID or total.
 extern const char kInvalidPaymentDetails[];
 
 // Used when the renderer does not provide valid options, such as a null struct.
 extern const char kInvalidPaymentOptions[];
+
+// Used when rejecting show() because there was no user activation when one was
+// determined to be required, i.e. after there has already been one such call.
+extern const char kCannotShowWithoutUserActivation[];
+
+// Used when the browser window is too small to contain the Payment
+// Request/Handler dialog.
+extern const char kBrowserWindowTooSmall[];
 
 }  // namespace errors
 }  // namespace payments

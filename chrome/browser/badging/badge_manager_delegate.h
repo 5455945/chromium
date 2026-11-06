@@ -1,14 +1,13 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_BADGING_BADGE_MANAGER_DELEGATE_H_
 #define CHROME_BROWSER_BADGING_BADGE_MANAGER_DELEGATE_H_
 
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/badging/badge_manager.h"
-#include "chrome/browser/web_applications/components/web_app_id.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "url/gurl.h"
+#include "components/webapps/common/web_app_id.h"
 
 class Profile;
 
@@ -21,10 +20,13 @@ class BadgeManagerDelegate {
   explicit BadgeManagerDelegate(Profile* profile, BadgeManager* badge_manager)
       : profile_(profile), badge_manager_(badge_manager) {}
 
+  BadgeManagerDelegate(const BadgeManagerDelegate&) = delete;
+  BadgeManagerDelegate& operator=(const BadgeManagerDelegate&) = delete;
+
   virtual ~BadgeManagerDelegate() = default;
 
   // Called when the badge for |app_id| has changed.
-  virtual void OnAppBadgeUpdated(const web_app::AppId& app_id) = 0;
+  virtual void OnAppBadgeUpdated(const webapps::AppId& app_id) = 0;
 
  protected:
   Profile* profile() { return profile_; }
@@ -32,11 +34,9 @@ class BadgeManagerDelegate {
 
  private:
   // The profile the badge manager delegate is associated with.
-  Profile* profile_;
+  raw_ptr<Profile, DanglingUntriaged> profile_;
   // The badge manager that owns this delegate.
-  BadgeManager* badge_manager_;
-
-  DISALLOW_COPY_AND_ASSIGN(BadgeManagerDelegate);
+  raw_ptr<BadgeManager> badge_manager_;
 };
 
 }  // namespace badging

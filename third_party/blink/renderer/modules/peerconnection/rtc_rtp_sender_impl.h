@@ -1,22 +1,32 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_PEERCONNECTION_RTC_RTP_SENDER_IMPL_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_PEERCONNECTION_RTC_RTP_SENDER_IMPL_H_
 
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/single_thread_task_runner.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/modules/peerconnection/webrtc_media_stream_track_adapter_map.h"
+#include "third_party/blink/renderer/platform/allow_discouraged_type.h"
 #include "third_party/blink/renderer/platform/peerconnection/rtc_rtp_sender_platform.h"
 #include "third_party/blink/renderer/platform/peerconnection/rtc_rtp_transceiver_platform.h"
 #include "third_party/blink/renderer/platform/peerconnection/rtc_stats.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+#include "third_party/blink/renderer/platform/wtf/vector.h"
+#include "third_party/webrtc/api/dtls_transport_interface.h"
+#include "third_party/webrtc/api/encoded_audio_frame_injector_interface.h"
+#include "third_party/webrtc/api/encoded_video_frame_injector_interface.h"
 #include "third_party/webrtc/api/peer_connection_interface.h"
+#include "third_party/webrtc/api/rtp_parameters.h"
 #include "third_party/webrtc/api/rtp_sender_interface.h"
 #include "third_party/webrtc/api/scoped_refptr.h"
 
@@ -64,7 +74,7 @@ class MODULES_EXPORT RtpSenderState {
   RtpSenderState(
       scoped_refptr<base::SingleThreadTaskRunner> main_task_runner,
       scoped_refptr<base::SingleThreadTaskRunner> signaling_task_runner,
-      scoped_refptr<webrtc::RtpSenderInterface> webrtc_sender,
+      webrtc::scoped_refptr<webrtc::RtpSenderInterface> webrtc_sender,
       std::unique_ptr<blink::WebRtcMediaStreamTrackAdapterMap::AdapterRef>
           track_ref,
       std::vector<std::string> stream_ids);
@@ -83,8 +93,8 @@ class MODULES_EXPORT RtpSenderState {
 
   scoped_refptr<base::SingleThreadTaskRunner> main_task_runner() const;
   scoped_refptr<base::SingleThreadTaskRunner> signaling_task_runner() const;
-  scoped_refptr<webrtc::RtpSenderInterface> webrtc_sender() const;
-  rtc::scoped_refptr<webrtc::DtlsTransportInterface> webrtc_dtls_transport()
+  webrtc::scoped_refptr<webrtc::RtpSenderInterface> webrtc_sender() const;
+  webrtc::scoped_refptr<webrtc::DtlsTransportInterface> webrtc_dtls_transport()
       const;
   webrtc::DtlsTransportInformation webrtc_dtls_transport_information() const;
   const std::unique_ptr<blink::WebRtcMediaStreamTrackAdapterMap::AdapterRef>&
@@ -97,13 +107,14 @@ class MODULES_EXPORT RtpSenderState {
  private:
   scoped_refptr<base::SingleThreadTaskRunner> main_task_runner_;
   scoped_refptr<base::SingleThreadTaskRunner> signaling_task_runner_;
-  scoped_refptr<webrtc::RtpSenderInterface> webrtc_sender_;
-  rtc::scoped_refptr<webrtc::DtlsTransportInterface> webrtc_dtls_transport_;
+  webrtc::scoped_refptr<webrtc::RtpSenderInterface> webrtc_sender_;
+  webrtc::scoped_refptr<webrtc::DtlsTransportInterface> webrtc_dtls_transport_;
   webrtc::DtlsTransportInformation webrtc_dtls_transport_information_;
   bool is_initialized_;
   std::unique_ptr<blink::WebRtcMediaStreamTrackAdapterMap::AdapterRef>
       track_ref_;
-  std::vector<std::string> stream_ids_;
+  std::vector<std::string> stream_ids_ ALLOW_DISCOURAGED_TYPE(
+      "Avoids conversions when passed from/to webrtc API");
 };
 
 // Used to surface |webrtc::RtpSenderInterface| to blink. Multiple
@@ -120,11 +131,10 @@ class MODULES_EXPORT RTCRtpSenderImpl : public blink::RTCRtpSenderPlatform {
   static uintptr_t getId(const webrtc::RtpSenderInterface* webrtc_sender);
 
   RTCRtpSenderImpl(
-      scoped_refptr<webrtc::PeerConnectionInterface> native_peer_connection,
+      webrtc::scoped_refptr<webrtc::PeerConnectionInterface>
+          native_peer_connection,
       scoped_refptr<blink::WebRtcMediaStreamTrackAdapterMap> track_map,
-      RtpSenderState state,
-      bool force_encoded_audio_insertable_streams,
-      bool force_encoded_video_insertable_streams);
+      RtpSenderState state);
   RTCRtpSenderImpl(const RTCRtpSenderImpl& other);
   ~RTCRtpSenderImpl() override;
   RTCRtpSenderImpl& operator=(const RTCRtpSenderImpl& other);
@@ -135,7 +145,8 @@ class MODULES_EXPORT RTCRtpSenderImpl : public blink::RTCRtpSenderPlatform {
   // blink::RTCRtpSenderPlatform.
   std::unique_ptr<blink::RTCRtpSenderPlatform> ShallowCopy() const override;
   uintptr_t Id() const override;
-  rtc::scoped_refptr<webrtc::DtlsTransportInterface> DtlsTransport() override;
+  webrtc::scoped_refptr<webrtc::DtlsTransportInterface> DtlsTransport()
+      override;
   webrtc::DtlsTransportInformation DtlsTransportInformation() override;
   MediaStreamComponent* Track() const override;
   Vector<String> StreamIds() const override;
@@ -144,22 +155,29 @@ class MODULES_EXPORT RTCRtpSenderImpl : public blink::RTCRtpSenderPlatform {
   std::unique_ptr<blink::RtcDtmfSenderHandler> GetDtmfSender() const override;
   std::unique_ptr<webrtc::RtpParameters> GetParameters() const override;
   void SetParameters(Vector<webrtc::RtpEncodingParameters>,
-                     absl::optional<webrtc::DegradationPreference>,
+                     std::optional<webrtc::DegradationPreference>,
                      blink::RTCVoidRequest*) override;
-  void GetStats(RTCStatsReportCallback,
-                const Vector<webrtc::NonStandardGroupId>&) override;
+  void GetStats(RTCStatsReportCallback) override;
   void SetStreams(const Vector<String>& stream_ids) override;
   RTCEncodedAudioStreamTransformer* GetEncodedAudioStreamTransformer()
       const override;
   RTCEncodedVideoStreamTransformer* GetEncodedVideoStreamTransformer()
       const override;
+  scoped_refptr<webrtc::EncodedVideoFrameInjectorInterface>
+  CreateEncodedVideoFrameInjector(
+      webrtc::KeyFrameCallback keyframe_callback,
+      webrtc::BitrateInfoCallback bitrate_callback) override;
+  scoped_refptr<webrtc::EncodedAudioFrameInjectorInterface>
+  CreateEncodedAudioFrameInjector(
+      webrtc::TargetBitrateCallback bitrate_callback) override;
 
   // The ReplaceTrack() that takes a blink::RTCVoidRequest is implemented on
   // top of this, which returns the result in a callback instead. Allows doing
   // ReplaceTrack() without having a blink::RTCVoidRequest, which can only be
   // constructed inside of blink.
   void ReplaceTrack(MediaStreamComponent* with_track,
-                    base::OnceCallback<void(bool)> callback);
+                    CrossThreadOnceFunction<void(bool)> callback);
+  // Removes this sender's track from its PeerConnection. Only used in Plan B.
   bool RemoveFromPeerConnection(webrtc::PeerConnectionInterface* pc);
 
  private:
@@ -167,34 +185,6 @@ class MODULES_EXPORT RTCRtpSenderImpl : public blink::RTCRtpSenderPlatform {
   struct RTCRtpSenderInternalTraits;
 
   scoped_refptr<RTCRtpSenderInternal> internal_;
-};
-
-class MODULES_EXPORT RTCRtpSenderOnlyTransceiver
-    : public RTCRtpPlanBTransceiverPlatform {
- public:
-  explicit RTCRtpSenderOnlyTransceiver(
-      std::unique_ptr<blink::RTCRtpSenderPlatform> sender);
-  ~RTCRtpSenderOnlyTransceiver() override;
-
-  RTCRtpTransceiverPlatformImplementationType ImplementationType()
-      const override;
-  uintptr_t Id() const override;
-  String Mid() const override;
-  std::unique_ptr<RTCRtpSenderPlatform> Sender() const override;
-  std::unique_ptr<RTCRtpReceiverPlatform> Receiver() const override;
-  bool Stopped() const override;
-  webrtc::RtpTransceiverDirection Direction() const override;
-  webrtc::RTCError SetDirection(
-      webrtc::RtpTransceiverDirection direction) override;
-  absl::optional<webrtc::RtpTransceiverDirection> CurrentDirection()
-      const override;
-  absl::optional<webrtc::RtpTransceiverDirection> FiredDirection()
-      const override;
-  webrtc::RTCError SetCodecPreferences(
-      Vector<webrtc::RtpCodecCapability>) override;
-
- private:
-  std::unique_ptr<blink::RTCRtpSenderPlatform> sender_;
 };
 
 }  // namespace blink

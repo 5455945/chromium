@@ -1,115 +1,28 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "chrome/browser/ui/views/external_protocol_dialog.h"
 
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
-#include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/external_protocol/external_protocol_handler.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
-#include "chrome/browser/ui/views/external_protocol_dialog.h"
+#include "chrome/browser/ui/views/external_protocol_dialog_test_harness.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "content/public/browser/render_frame_host.h"
-#include "content/public/browser/render_process_host.h"
-#include "content/public/browser/render_view_host.h"
+#include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
+#include "ui/events/event.h"
+#include "ui/events/event_utils.h"
 #include "ui/views/controls/button/checkbox.h"
-#include "url/gurl.h"
-
-namespace test {
-
-class ExternalProtocolDialogTestApi {
- public:
-  explicit ExternalProtocolDialogTestApi(ExternalProtocolDialog* dialog)
-      : dialog_(dialog) {}
-
-  void SetCheckBoxSelected(bool checked) {
-    dialog_->SetRememberSelectionCheckboxCheckedForTesting(checked);
-  }
-
- private:
-  ExternalProtocolDialog* dialog_;
-
-  DISALLOW_COPY_AND_ASSIGN(ExternalProtocolDialogTestApi);
-};
-
-}  // namespace test
-
-class ExternalProtocolDialogBrowserTest
-    : public DialogBrowserTest,
-      public ExternalProtocolHandler::Delegate {
- public:
-  using BlockState = ExternalProtocolHandler::BlockState;
-
-  ExternalProtocolDialogBrowserTest() {
-    ExternalProtocolHandler::SetDelegateForTesting(this);
-  }
-
-  ~ExternalProtocolDialogBrowserTest() override {
-    ExternalProtocolHandler::SetDelegateForTesting(nullptr);
-  }
-
-  // DialogBrowserTest:
-  void ShowUi(const std::string& initiating_origin) override {
-    content::WebContents* web_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
-    dialog_ = new ExternalProtocolDialog(
-        web_contents, GURL("telnet://12345"), u"/usr/bin/telnet",
-        url::Origin::Create(GURL(initiating_origin)));
-  }
-
-  void SetChecked(bool checked) {
-    test::ExternalProtocolDialogTestApi(dialog_).SetCheckBoxSelected(checked);
-  }
-
-  // ExternalProtocolHander::Delegate:
-  scoped_refptr<shell_integration::DefaultProtocolClientWorker>
-  CreateShellWorker(const std::string& protocol) override {
-    return nullptr;
-  }
-  ExternalProtocolHandler::BlockState GetBlockState(const std::string& scheme,
-                                                    Profile* profile) override {
-    return ExternalProtocolHandler::DONT_BLOCK;
-  }
-  void BlockRequest() override {}
-  void RunExternalProtocolDialog(
-      const GURL& url,
-      content::WebContents* web_contents,
-      ui::PageTransition page_transition,
-      bool has_user_gesture,
-      const absl::optional<url::Origin>& initiating_origin) override {}
-  void LaunchUrlWithoutSecurityCheck(
-      const GURL& url,
-      content::WebContents* web_contents) override {
-    url_did_launch_ = true;
-  }
-  void FinishedProcessingCheck() override {}
-  void OnSetBlockState(const std::string& scheme,
-                       const url::Origin& initiating_origin,
-                       BlockState state) override {
-    blocked_scheme_ = scheme;
-    blocked_origin_ = initiating_origin;
-    blocked_state_ = state;
-  }
-
-  base::HistogramTester histogram_tester_;
-
- protected:
-  ExternalProtocolDialog* dialog_ = nullptr;
-  std::string blocked_scheme_;
-  url::Origin blocked_origin_;
-  BlockState blocked_state_ = BlockState::UNKNOWN;
-  bool url_did_launch_ = false;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ExternalProtocolDialogBrowserTest);
-};
+#include "ui/views/controls/button/md_text_button.h"
+#include "ui/views/metrics.h"
+#include "ui/views/test/button_test_api.h"
 
 IN_PROC_BROWSER_TEST_F(ExternalProtocolDialogBrowserTest, TestAccept) {
   ShowUi(std::string("https://example.test"));
@@ -147,13 +60,13 @@ IN_PROC_BROWSER_TEST_F(ExternalProtocolDialogBrowserTest,
       ExternalProtocolHandler::LAUNCH, 1);
 }
 
-// Regression test for http://crbug.com/835216. The OS owns the dialog, so it
+// Regression test for http://crbug.com/41384592. The OS owns the dialog, so it
 // may may outlive the WebContents it is attached to.
 IN_PROC_BROWSER_TEST_F(ExternalProtocolDialogBrowserTest,
                        TestAcceptAfterCloseTab) {
   ShowUi(std::string("https://example.test"));
   SetChecked(true);  // |remember_| must be true for the segfault to occur.
-  browser()->tab_strip_model()->CloseAllTabs();
+  browser()->GetTabStripModel()->CloseAllTabs();
   dialog_->AcceptDialog();
   EXPECT_FALSE(url_did_launch_);
   histogram_tester_.ExpectBucketCount(
@@ -214,20 +127,71 @@ IN_PROC_BROWSER_TEST_F(ExternalProtocolDialogBrowserTest, InvokeUi_default) {
   ShowAndVerifyUi();
 }
 
-// Tests that keyboard focus works when the dialog is shown. Regression test for
-// https://crbug.com/1025343.
-IN_PROC_BROWSER_TEST_F(ExternalProtocolDialogBrowserTest, TestFocus) {
+IN_PROC_BROWSER_TEST_F(ExternalProtocolDialogBrowserTest, OriginNameTest) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+  content::WebContents* web_contents =
+      browser()->GetTabStripModel()->GetActiveWebContents();
+  EXPECT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL("a.test", "/empty.html")));
+  EXPECT_TRUE(content::ExecJs(
+      web_contents,
+      content::JsReplace("location.href = $1",
+                         embedded_test_server()->GetURL(
+                             "b.test", "/server-redirect?ms-calc:"))));
+  WaitForLaunchUrl();
+  EXPECT_TRUE(url_did_launch_);
+  // The url should be the url of the last redirecting server and not of the
+  // request initiator
+  EXPECT_EQ(launch_url_, "b.test");
+}
+
+IN_PROC_BROWSER_TEST_F(ExternalProtocolDialogBrowserTest,
+                       TestPictureInPictureOcclusionStateChanges) {
   ShowUi(std::string("https://example.test"));
-  gfx::NativeWindow window = browser()->window()->GetNativeWindow();
-  views::Widget* widget = views::Widget::GetWidgetForNativeWindow(window);
-  views::FocusManager* focus_manager = widget->GetFocusManager();
-#if defined(OS_MAC)
-  // This dialog's default focused control is the Cancel button, but on Mac,
-  // the cancel button cannot have initial keyboard focus. Advance focus once
-  // on Mac to test whether keyboard focus advancement works there rather than
-  // testing for initial focus.
-  focus_manager->AdvanceFocus(false);
-#endif
-  const views::View* focused_view = focus_manager->GetFocusedView();
-  EXPECT_TRUE(focused_view);
+  ui::MouseEvent mouse_event(ui::EventType::kMousePressed, gfx::Point(),
+                             gfx::Point(), ui::EventTimeForNow(), 0, 0);
+  EXPECT_FALSE(ShouldIgnoreButtonPressedEventHandling(nullptr, mouse_event));
+
+  // Simulate Picture-in-Picture dialog occlusion.
+  SimulateOcclusionStateChanged(true);
+  EXPECT_TRUE(ShouldIgnoreButtonPressedEventHandling(nullptr, mouse_event));
+
+  // Simulate Picture-in-Picture dialog not occluded.
+  SimulateOcclusionStateChanged(false);
+  EXPECT_FALSE(ShouldIgnoreButtonPressedEventHandling(nullptr, mouse_event));
+}
+
+IN_PROC_BROWSER_TEST_F(ExternalProtocolDialogBrowserTest,
+                       TestShouldIgnoreButtonEventsWhenOccluded) {
+  ShowUi(std::string("https://example.test"));
+
+  ui::MouseEvent mouse_event(ui::EventType::kMousePressed, gfx::Point(),
+                             gfx::Point(), ui::EventTimeForNow(), 0, 0);
+
+  // Initially not occluded by Picture-in-Picture.
+  EXPECT_FALSE(ShouldIgnoreButtonPressedEventHandling(nullptr, mouse_event));
+
+  SimulateOcclusionStateChanged(true);
+  EXPECT_TRUE(ShouldIgnoreButtonPressedEventHandling(nullptr, mouse_event));
+
+  SimulateOcclusionStateChanged(false);
+  EXPECT_FALSE(ShouldIgnoreButtonPressedEventHandling(nullptr, mouse_event));
+}
+
+IN_PROC_BROWSER_TEST_F(ExternalProtocolDialogBrowserTest,
+                       TestKeyEventsAreProtected) {
+  ShowUi(std::string("https://example.test"));
+  EXPECT_FALSE(ShouldAllowKeyEventsDuringInputProtection());
+
+  ui::KeyEvent press_enter(ui::EventType::kKeyPressed, ui::VKEY_RETURN,
+                           ui::EF_NONE, ui::EventTimeForNow());
+  views::test::ButtonTestApi(dialog_->GetOkButton()).NotifyClick(press_enter);
+  EXPECT_FALSE(url_did_launch_);
+
+  ui::KeyEvent press_enter_delayed(
+      ui::EventType::kKeyPressed, ui::VKEY_RETURN, ui::EF_NONE,
+      ui::EventTimeForNow() + views::GetDoubleClickInterval());
+  views::test::ButtonTestApi(dialog_->GetOkButton())
+      .NotifyClick(press_enter_delayed);
+  EXPECT_TRUE(url_did_launch_);
 }

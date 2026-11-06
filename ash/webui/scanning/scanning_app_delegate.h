@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,11 +9,18 @@
 #include <string>
 #include <vector>
 
+#include "ash/webui/scanning/mojom/scanning.mojom-forward.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback_forward.h"
+#include "mojo/public/cpp/bindings/pending_receiver.h"
 
 namespace ui {
 class SelectFilePolicy;
 }  // namespace ui
+
+namespace content {
+class WebUI;
+}  // namespace content
 
 namespace ash {
 
@@ -21,6 +28,9 @@ namespace ash {
 // UI.
 class ScanningAppDelegate {
  public:
+  using BindScanServiceCallback = base::RepeatingCallback<void(
+      mojo::PendingReceiver<scanning::mojom::ScanService>)>;
+
   virtual ~ScanningAppDelegate() = default;
 
   // Returns a ChromeSelectFilePolicy used to open a select dialog.
@@ -50,7 +60,12 @@ class ScanningAppDelegate {
 
   // Opens the Files app with |path_to_file| highlighted. Returns false if
   // |path_to_file| is not found in the filesystem.
-  virtual bool ShowFileInFilesApp(const base::FilePath& path_to_file) = 0;
+  virtual void ShowFileInFilesApp(
+      const base::FilePath& path_to_file,
+      base::OnceCallback<void(const bool)> callback) = 0;
+
+  virtual BindScanServiceCallback GetBindScanServiceCallback(
+      content::WebUI* web_ui) = 0;
 };
 
 }  // namespace ash

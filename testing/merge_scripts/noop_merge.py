@@ -1,9 +1,8 @@
 #!/usr/bin/env python
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import argparse
 import json
 import shutil
 import sys
@@ -21,8 +20,10 @@ def noop_merge(output_json, jsons_to_merge):
     jsons_to_merge: A list of paths to JSON files.
   """
   if len(jsons_to_merge) > 1:
-    print >> sys.stderr, (
-        'Multiple JSONs provided: %s' % ','.join(jsons_to_merge))
+    print(
+      'Multiple JSONs provided: %s' % (','.join(jsons_to_merge)),
+      file=sys.stderr,
+    )
     return 1
   if jsons_to_merge:
     shutil.copyfile(jsons_to_merge[0], output_json)

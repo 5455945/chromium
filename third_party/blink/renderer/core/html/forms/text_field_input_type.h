@@ -45,52 +45,60 @@ class TextFieldInputType : public InputType,
  public:
   void Trace(Visitor*) const override;
   using InputType::GetElement;
+  bool ValueMissing(const String&) const;
 
  protected:
-  TextFieldInputType(HTMLInputElement&);
+  TextFieldInputType(Type, HTMLInputElement&);
   ~TextFieldInputType() override;
   bool CanSetSuggestedValue() override;
   void HandleKeydownEvent(KeyboardEvent&) override;
 
+  bool SupportsBaseAppearance(Element::BaseAppearanceValue) const override;
+
+  bool IsInnerEditorValueEmpty() const final;
   void CreateShadowSubtree() override;
   void DestroyShadowSubtree() override;
   void ValueAttributeChanged() override;
-  void DisabledAttributeChanged() override;
+  void DisabledAttributeChanged(DisabledChangedReason) override;
   void ReadonlyAttributeChanged() override;
   bool SupportsReadOnly() const override;
   void ForwardEvent(Event&) override;
   void HandleBlurEvent() override;
   void HandleBeforeTextInsertedEvent(BeforeTextInsertedEvent&) override;
+  String FilterBeforeTextInserted(const String& text) override;
   String SanitizeValue(const String&) const override;
   void SetValue(const String&,
                 bool value_changed,
                 TextFieldEventBehavior,
                 TextControlSetValueSelection) override;
   void UpdateView() override;
-  void CustomStyleForLayoutObject(ComputedStyle& style) override;
-  bool TypeShouldForceLegacyLayout() const override;
-  LayoutObject* CreateLayoutObject(const ComputedStyle&,
-                                   LegacyLayout) const override;
+  void AdjustStyle(ComputedStyleBuilder&) override;
+  LayoutObject* CreateLayoutObject(const ComputedStyle&) const override;
+  void OnAttachWithLayoutObject() override;
+  void OnDetachWithLayoutObject() override;
+  AppearanceValue AutoAppearance() const override;
+  void HandleFocusInEvent(Element* old_focused_element,
+                          mojom::blink::FocusType) override;
 
   virtual bool NeedsContainer() const { return false; }
-  virtual String ConvertFromVisibleValue(const String&) const;
+  String ConvertFromVisibleValue(const String&) const override;
   virtual void DidSetValueByUserEdit();
 
   void HandleKeydownEventForSpinButton(KeyboardEvent&);
+  bool HandleKeydownForCustomizableCombobox(KeyboardEvent&);
+  bool HandleKeydownForFilterableSelect(KeyboardEvent&);
   Element* ContainerElement() const;
 
  private:
   InputTypeView* CreateView() override;
   ValueMode GetValueMode() const override;
   bool MayTriggerVirtualKeyboard() const final;
-  bool IsTextField() const final;
-  bool ValueMissing(const String&) const override;
   bool ShouldSubmitImplicitly(const Event&) final;
   bool ShouldRespectListAttribute() override;
   void ListAttributeTargetChanged() override;
-  void UpdatePlaceholderText(bool is_suggested_value) final;
-  void AppendToFormData(FormData&) const override;
+  HTMLElement* UpdatePlaceholderText(bool is_suggested_value) final;
   void SubtreeHasChanged() final;
+  void OpenPopupView() override;
 
   // SpinButtonElement::SpinButtonOwner functions.
   void FocusAndSelectSpinButtonOwner() final;
@@ -101,7 +109,22 @@ class TextFieldInputType : public InputType,
   void SpinButtonDidReleaseMouseCapture(SpinButtonElement::EventDispatch) final;
 
   SpinButtonElement* GetSpinButtonElement() const;
-  void DisabledOrReadonlyAttributeChanged();
+  void DisabledOrReadonlyAttributeChanged(DisabledChangedReason);
+
+  // Applies the :filtered pseudo-class to the options of the corresponding
+  // datalist or filterable select this input is linked to, if there is one.
+  void FilterOptions();
+
+  void UpdateWheelEventRegistration(bool is_detaching) override;
+
+  bool has_registered_wheel_event_handler_ = false;
+};
+
+template <>
+struct DowncastTraits<TextFieldInputType> {
+  static bool AllowFrom(const InputType& type) {
+    return type.IsTextFieldInputType();
+  }
 };
 
 }  // namespace blink

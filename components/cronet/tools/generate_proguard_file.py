@@ -1,6 +1,6 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
-# Copyright 2016 The Chromium Authors. All rights reserved.
+# Copyright 2016 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -8,59 +8,105 @@
 # proguard file.
 #
 # The final output file is formed by concatenating all of the
-# input proguard files, and then sequentally applying any .patch files that
-# were given in the input.
-#
-# This tool requires the ability to shell execute the 'patch' tool, and is
-# expected to only be run on Linux.
+# input proguard files.
 
-import optparse
+import argparse
+import pathlib
+import os
+import re
 import sys
-import subprocess
+import json
+
+REPOSITORY_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, os.pardir)
+)
+
+sys.path.insert(0, os.path.join(REPOSITORY_ROOT, 'build'))
+import action_helpers  # noqa: E402
 
 
-def ReadFile(path):
-  with open(path, 'rb') as f:
-    return f.read()
+def _ReadFile(path):
+    """Reads a file as a string."""
+    return pathlib.Path(path).read_text()
 
 
-def IsPatchFile(path):
-  return path.endswith('.patch')
+def _post_process_concatenated_rules(rules: str, rename_map: dict) -> str:
+    """Post-process the concatenated rules to rename packages.
+
+    Args:
+      rules: Rules before processing
+      rename_map: Dict mapping source package to destination package
+    """
+    for src, dest in rename_map.items():
+        # This regex will match anything substring that matches the source package
+        # name but is not preceded by either '*' or '/'.
+        rules = re.sub(rf"([^*/]){re.escape(src)}", rf"\g<1>{dest}", rules)
+    return rules
 
 
-def ApplyPatch(output_file, patch_file):
-  try:
-    subprocess.check_call(['patch', '--quiet', output_file, patch_file])
-  except:
-    message = '''
-Failed applying patch %s to %s
-
-For help on fixing read the documentation in the patch file.
-
-'''
-    sys.stderr.write(message % (patch_file, output_file))
-    raise
+def _strip_allowoptimization(rules: str) -> str:
+    """Strips the `allowoptimization` modifier from ProGuard keep rules."""
+    return re.sub(r",\s*allowoptimization\b", "", rules)
 
 
 def main():
-  parser = optparse.OptionParser()
-  parser.add_option('--output-file',
-          help='Output file for the generated proguard file')
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--output_file', help='Output file for the generated proguard file'
+    )
+    parser.add_argument(
+        '--rename-rule',
+        action='append',
+        default=[],
+        help='Renaming rules in the format "source_package=dest_package". '
+        'Can be repeated.',
+    )
+    parser.add_argument(
+        '--strip-allowoptimization',
+        action='store_true',
+        help='Strip the allowoptimization modifier from keep rules.',
+    )
+    parser.add_argument(
+        '--dep_file', help='Depfile path to write the implicit inputs'
+    )
+    parser.add_argument(
+        'build_config',
+        help='Path to the generated build_config that contains the transitive '
+        'dependencies of the proguard rules',
+    )
 
-  options, input_files = parser.parse_args()
+    args = parser.parse_args()
 
-  proguard_files = [path for path in input_files if not IsPatchFile(path)]
-  patch_files = [path for path in input_files if IsPatchFile(path)]
+    rename_map = {}
+    for rule in args.rename_rule:
+        if '=' not in rule:
+            parser.error(
+                f'Invalid rename rule: {rule}. Must be in "source=dest" format.'
+            )
+        src, dest = rule.split('=', 1)
+        rename_map[src] = dest
 
-  # Concatenate all the proguard files.
-  with open(options.output_file, 'wb') as target:
-    for input_file in proguard_files:
-      target.write(ReadFile(input_file))
+    # Fetch all proguard configs
+    with open(args.build_config, 'r') as f:
+        build_config = json.load(f)
+        all_proguard_configs_path = set(build_config['proguard_all_configs'])
 
-  # Apply any patch files.
-  for patch_file in patch_files:
-    ApplyPatch(options.output_file, patch_file)
+    str_output = ""
+    # Concatenate all proguard rules and sort to maintain deterministic output.
+    for proguard_config_path in sorted(all_proguard_configs_path):
+        noramlized_path = proguard_config_path.replace('../', '')
+        str_output += f"# -------- Config Path: {noramlized_path} --------\n"
+        str_output += _ReadFile(proguard_config_path)
+    if rename_map:
+        str_output = _post_process_concatenated_rules(str_output, rename_map)
+    if args.strip_allowoptimization:
+        str_output = _strip_allowoptimization(str_output)
+    with open(args.output_file, 'w') as target:
+        target.write(str_output)
+    action_helpers.write_depfile(
+        args.dep_file, args.output_file, all_proguard_configs_path
+    )
 
 
 if __name__ == '__main__':
-  sys.exit(main())
+    sys.exit(main())

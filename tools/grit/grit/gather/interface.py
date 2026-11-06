@@ -1,25 +1,22 @@
-# Copyright (c) 2012 The Chromium Authors. All rights reserved.
+# Copyright 2012 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-'''Interface for all gatherers.
-'''
-
-from __future__ import print_function
+'''Interface for all gatherers.'''
 
 import os.path
-
-import six
 
 from grit import clique
 from grit import util
 
 
-class GathererBase(object):
+class GathererBase:
   '''Interface for all gatherer implementations.  Subclasses must implement
   all methods that raise NotImplemented.'''
 
-  def __init__(self, rc_file, extkey=None, encoding='cp1252', is_skeleton=False):
+  def __init__(
+    self, rc_file, extkey=None, encoding='cp1252', is_skeleton=False
+  ):
     '''Initializes the gatherer object's attributes, but does not attempt to
     read the input file.
 
@@ -68,8 +65,7 @@ class GathererBase(object):
     pass
 
   def SetGrdNode(self, node):
-    '''Sets the grd node on which this gatherer is running.
-    '''
+    '''Sets the grd node on which this gatherer is running.'''
     self.grd_node = node
 
   def SetUberClique(self, uberclique):
@@ -101,6 +97,11 @@ class GathererBase(object):
     '''Returns the MessageClique objects for all translateable portions.'''
     return []
 
+  def GetAbsoluteInputPath(self):
+    if os.path.isabs(self.GetInputPath()):
+      return self.GetInputPath()
+    return self.grd_node.ToRealPath(self.GetInputPath())
+
   def GetInputPath(self):
     return self.rc_file
 
@@ -108,8 +109,13 @@ class GathererBase(object):
     """Returns a set of all filenames inlined by this gatherer."""
     return []
 
-  def Translate(self, lang, pseudo_if_not_available=True,
-                skeleton_gatherer=None, fallback_to_english=False):
+  def Translate(
+    self,
+    lang,
+    pseudo_if_not_available=True,
+    skeleton_gatherer=None,
+    fallback_to_english=False,
+  ):
     '''Returns the resource being gathered, with translateable portions filled
     with the translation for language 'lang'.
 
@@ -162,11 +168,7 @@ class GathererBase(object):
     '''A convenience function for subclasses that loads the contents of the
     input file.
     '''
-    if isinstance(self.rc_file, six.string_types):
-      path = self.GetInputPath()
-      # Hack: some unit tests supply an absolute path and no root node.
-      if not os.path.isabs(path):
-        path = self.grd_node.ToRealPath(path)
-      return util.ReadFile(path, self.encoding)
+    if isinstance(self.rc_file, str):
+      return util.ReadFile(self.GetAbsoluteInputPath(), self.encoding)
     else:
       return self.rc_file.read()

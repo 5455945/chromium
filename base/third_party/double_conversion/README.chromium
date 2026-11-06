@@ -1,12 +1,12 @@
 Name: Google Double Conversion
 Short Name: double-conversion
 URL: https://github.com/google/double-conversion
-Version: 0
-Date: 2020-01-27
-Revision: 9df6272fefd846401afbf839cbe7d0f9e319fe08
-License: BSD
-License File: LICENSE
+Version: v3.4.0
+Update Mechanism: Manual
+License: BSD-3-Clause
+License File: src/LICENSE
 Security Critical: yes
+Shipped: yes
 License Android Compatible: yes
 
 Description:
@@ -14,3 +14,8 @@ Provides binary-decimal and decimal-binary routines for IEEE doubles.
 
 Local Modifications:
 None.
+
+Update instructions:
+Update commit hashes in crowbar.txtpb, then run from
+this directory:
+crowbar build --no-dry-run ./

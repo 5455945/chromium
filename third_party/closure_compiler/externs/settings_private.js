@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,12 @@
 // NOTE: The format of types has changed. 'FooType' is now
 //   'chrome.settingsPrivate.FooType'.
 // Please run the closure compiler before committing changes.
-// See https://chromium.googlesource.com/chromium/src/+/master/docs/closure_compilation.md
+// See https://chromium.googlesource.com/chromium/src/+/main/docs/closure_compilation.md
 
-/** @fileoverview Externs generated from namespace: settingsPrivate */
+/**
+ * @fileoverview Externs generated from namespace: settingsPrivate
+ * @externs
+ */
 
 /** @const */
 chrome.settingsPrivate = {};
@@ -37,6 +40,7 @@ chrome.settingsPrivate.ControlledBy = {
   EXTENSION: 'EXTENSION',
   PARENT: 'PARENT',
   CHILD_RESTRICTION: 'CHILD_RESTRICTION',
+  SAFE_BROWSING_OFF: 'SAFE_BROWSING_OFF',
 };
 
 /**
@@ -52,7 +56,7 @@ chrome.settingsPrivate.Enforcement = {
  * @typedef {{
  *   key: string,
  *   type: !chrome.settingsPrivate.PrefType,
- *   value: *,
+ *   value: (*|undefined),
  *   controlledBy: (!chrome.settingsPrivate.ControlledBy|undefined),
  *   controlledByName: (string|undefined),
  *   enforcement: (!chrome.settingsPrivate.Enforcement|undefined),
@@ -77,27 +81,27 @@ chrome.settingsPrivate.setPref = function(name, value, pageId, callback) {};
 
 /**
  * Gets an array of all the prefs.
- * @param {function(!Array<!chrome.settingsPrivate.PrefObject>): void} callback
+ * @param {function(!Array<!chrome.settingsPrivate.PrefObject>): void=} callback
  */
 chrome.settingsPrivate.getAllPrefs = function(callback) {};
 
 /**
  * Gets the value of a specific pref.
  * @param {string} name
- * @param {function(!chrome.settingsPrivate.PrefObject): void} callback
+ * @param {function(!chrome.settingsPrivate.PrefObject): void=} callback
  */
 chrome.settingsPrivate.getPref = function(name, callback) {};
 
 /**
  * Gets the default page zoom factor. Possible values are currently between 0.25
- * and 5. For a full list, see zoom::kPresetZoomFactors.
- * @param {function(number): void} callback
+ * and 5. For a full list, see zoom::kPresetBrowserZoomFactors.
+ * @param {function(number): void=} callback
  */
 chrome.settingsPrivate.getDefaultZoom = function(callback) {};
 
 /**
  * Sets the page zoom factor. Must be less than 0.001 different than a value in
- * zoom::kPresetZoomFactors.
+ * zoom::kPresetBrowserZoomFactors.
  * @param {number} zoom
  * @param {function(boolean): void=} callback
  */

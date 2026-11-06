@@ -1,37 +1,33 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/loader/resource/css_style_sheet_resource.h"
 
 #include "base/memory/scoped_refptr.h"
+#include "base/task/single_thread_task_runner.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/scheduler/test/renderer_scheduler_test_support.h"
-#include "third_party/blink/public/platform/web_url_response.h"
-#include "third_party/blink/renderer/core/css/css_crossfade_value.h"
-#include "third_party/blink/renderer/core/css/css_image_value.h"
-#include "third_party/blink/renderer/core/css/css_primitive_value.h"
-#include "third_party/blink/renderer/core/css/css_property_value.h"
 #include "third_party/blink/renderer/core/css/css_property_value_set.h"
-#include "third_party/blink/renderer/core/css/css_selector_list.h"
 #include "third_party/blink/renderer/core/css/css_style_sheet.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser_context.h"
-#include "third_party/blink/renderer/core/css/parser/css_parser_selector.h"
-#include "third_party/blink/renderer/core/css/style_rule.h"
+#include "third_party/blink/renderer/core/css/quiet_mutation_scope.h"
+#include "third_party/blink/renderer/core/css/resolver/scoped_style_resolver.h"
 #include "third_party/blink/renderer/core/css/style_sheet_contents.h"
+#include "third_party/blink/renderer/core/css/style_sheet_list.h"
 #include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/execution_context/security_context.h"
+#include "third_party/blink/renderer/core/html/html_iframe_element.h"
+#include "third_party/blink/renderer/core/html/html_link_element.h"
+#include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/loader/resource/image_resource.h"
+#include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
-#include "third_party/blink/renderer/platform/loader/fetch/fetch_context.h"
-#include "third_party/blink/renderer/platform/loader/fetch/fetch_initiator_type_names.h"
+#include "third_party/blink/renderer/core/testing/sim/sim_request.h"
+#include "third_party/blink/renderer/core/testing/sim/sim_test.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/loader/fetch/memory_cache.h"
-#include "third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h"
-#include "third_party/blink/renderer/platform/loader/fetch/resource_request.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
-#include "third_party/blink/renderer/platform/testing/url_test_helpers.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/wtf/text/text_encoding.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
@@ -44,18 +40,12 @@ namespace {
 
 class CSSStyleSheetResourceTest : public PageTestBase {
  protected:
-  CSSStyleSheetResourceTest() {
-    original_memory_cache_ =
-        ReplaceMemoryCacheForTesting(MakeGarbageCollected<MemoryCache>(
-            blink::scheduler::GetSingleThreadTaskRunnerForTesting()));
-  }
-
-  ~CSSStyleSheetResourceTest() override {
-    ReplaceMemoryCacheForTesting(original_memory_cache_.Release());
-  }
+  CSSStyleSheetResourceTest()
+      : scoped_memory_cache_(MakeGarbageCollected<MemoryCache>(
+            blink::scheduler::GetSingleThreadTaskRunnerForTesting())) {}
 
   void SetUp() override {
-    PageTestBase::SetUp(IntSize());
+    PageTestBase::SetUp(gfx::Size());
     GetDocument().SetURL(KURL("https://localhost/"));
   }
 
@@ -63,17 +53,17 @@ class CSSStyleSheetResourceTest : public PageTestBase {
     const char kUrl[] = "https://localhost/style.css";
     const KURL css_url(kUrl);
     ResourceResponse response(css_url);
-    response.SetMimeType("style/css");
+    response.SetMimeType(AtomicString("style/css"));
 
     CSSStyleSheetResource* css_resource =
-        CSSStyleSheetResource::CreateForTest(css_url, UTF8Encoding());
+        CSSStyleSheetResource::CreateForTest(css_url, Utf8Encoding());
     css_resource->ResponseReceived(response);
     css_resource->FinishForTest();
-    GetMemoryCache()->Add(css_resource);
+    MemoryCache::Get()->Add(css_resource);
     return css_resource;
   }
 
-  Persistent<MemoryCache> original_memory_cache_;
+  ScopedMemoryCacheForTesting scoped_memory_cache_;
 };
 
 TEST_F(CSSStyleSheetResourceTest, DuplicateResourceNotCached) {
@@ -81,17 +71,17 @@ TEST_F(CSSStyleSheetResourceTest, DuplicateResourceNotCached) {
   const KURL image_url(kUrl);
   const KURL css_url(kUrl);
   ResourceResponse response(css_url);
-  response.SetMimeType("style/css");
+  response.SetMimeType(AtomicString("style/css"));
 
   // Emulate using <img> to do async stylesheet preloads.
 
   Resource* image_resource = ImageResource::CreateForTest(image_url);
   ASSERT_TRUE(image_resource);
-  GetMemoryCache()->Add(image_resource);
-  ASSERT_TRUE(GetMemoryCache()->Contains(image_resource));
+  MemoryCache::Get()->Add(image_resource);
+  ASSERT_TRUE(MemoryCache::Get()->Contains(image_resource));
 
   CSSStyleSheetResource* css_resource =
-      CSSStyleSheetResource::CreateForTest(css_url, UTF8Encoding());
+      CSSStyleSheetResource::CreateForTest(css_url, Utf8Encoding());
   css_resource->ResponseReceived(response);
   css_resource->FinishForTest();
 
@@ -107,8 +97,8 @@ TEST_F(CSSStyleSheetResourceTest, DuplicateResourceNotCached) {
   // Verify that the cache will have a mapping for |imageResource| at |url|.
   // The underlying |contents| for the stylesheet resource must have a
   // matching reference status.
-  EXPECT_TRUE(GetMemoryCache()->Contains(image_resource));
-  EXPECT_FALSE(GetMemoryCache()->Contains(css_resource));
+  EXPECT_TRUE(MemoryCache::Get()->Contains(image_resource));
+  EXPECT_FALSE(MemoryCache::Get()->Contains(css_resource));
   EXPECT_FALSE(contents->IsReferencedFromResource());
   EXPECT_FALSE(css_resource->CreateParsedStyleSheetFromCache(parser_context));
 }
@@ -128,7 +118,7 @@ TEST_F(CSSStyleSheetResourceTest, CreateFromCacheRestoresOriginalSheet) {
   EXPECT_TRUE(contents->IsCacheableForResource());
 
   css_resource->SaveParsedStyleSheet(contents);
-  EXPECT_TRUE(GetMemoryCache()->Contains(css_resource));
+  EXPECT_TRUE(MemoryCache::Get()->Contains(css_resource));
   EXPECT_TRUE(contents->IsReferencedFromResource());
 
   StyleSheetContents* parsed_stylesheet =
@@ -136,8 +126,7 @@ TEST_F(CSSStyleSheetResourceTest, CreateFromCacheRestoresOriginalSheet) {
   ASSERT_EQ(contents, parsed_stylesheet);
 }
 
-TEST_F(CSSStyleSheetResourceTest,
-       CreateFromCacheWithMediaQueriesCopiesOriginalSheet) {
+TEST_F(CSSStyleSheetResourceTest, CreateFromCacheWithMediaQueries) {
   CSSStyleSheetResource* css_resource = CreateAndSaveTestStyleSheetResource();
 
   auto* parser_context = MakeGarbageCollected<CSSParserContext>(
@@ -152,11 +141,11 @@ TEST_F(CSSStyleSheetResourceTest,
   EXPECT_TRUE(contents->IsCacheableForResource());
 
   contents->EnsureRuleSet(MediaQueryEvaluator(GetDocument().GetFrame()),
-                          kRuleHasNoSpecialState);
+                          /*mixins=*/{});
   EXPECT_TRUE(contents->HasRuleSet());
 
   css_resource->SaveParsedStyleSheet(contents);
-  EXPECT_TRUE(GetMemoryCache()->Contains(css_resource));
+  EXPECT_TRUE(MemoryCache::Get()->Contains(css_resource));
   EXPECT_TRUE(contents->IsReferencedFromResource());
 
   StyleSheetContents* parsed_stylesheet =
@@ -168,14 +157,224 @@ TEST_F(CSSStyleSheetResourceTest,
   ASSERT_TRUE(sheet);
 
   EXPECT_TRUE(contents->HasSingleOwnerDocument());
-  EXPECT_EQ(0U, contents->ClientSize());
+  EXPECT_EQ(1U, contents->ClientSize());
   EXPECT_TRUE(contents->IsReferencedFromResource());
   EXPECT_TRUE(contents->HasRuleSet());
 
   EXPECT_TRUE(parsed_stylesheet->HasSingleOwnerDocument());
   EXPECT_TRUE(parsed_stylesheet->HasOneClient());
-  EXPECT_FALSE(parsed_stylesheet->IsReferencedFromResource());
-  EXPECT_FALSE(parsed_stylesheet->HasRuleSet());
+  EXPECT_TRUE(parsed_stylesheet->IsReferencedFromResource());
+  EXPECT_TRUE(parsed_stylesheet->HasRuleSet());
+}
+
+class CSSStyleSheetResourceSimTest : public SimTest {};
+
+TEST_F(CSSStyleSheetResourceSimTest, CachedWithDifferentMQEval) {
+  SimRequest main_resource("https://example.com/test.html", "text/html");
+  SimRequest frame1_resource("https://example.com/frame1.html", "text/html");
+  SimRequest frame2_resource("https://example.com/frame2.html", "text/html");
+
+  SimRequest::Params params;
+  params.response_http_headers = {{"Cache-Control", "max-age=3600"}};
+  SimSubresourceRequest css_resource("https://example.com/frame.css",
+                                     "text/css", params);
+
+  LoadURL("https://example.com/test.html");
+  main_resource.Complete(R"HTML(
+    <!DOCTYPE html>
+    <style>
+      #frame1 {
+        width: 200px;
+        height: 200px;
+      }
+      #frame2 {
+        width: 400px;
+        height: 200px;
+      }
+    </style>
+    <div></div>
+    <iframe id="frame1" src="frame1.html"></iframe>
+    <iframe id="frame2" src="frame2.html"></iframe>
+  )HTML");
+
+  frame1_resource.Complete(R"HTML(
+    <!DOCTYPE html>
+    <link rel="stylesheet" href="frame.css">
+    <div id="target"></div>
+  )HTML");
+
+  css_resource.Complete(R"HTML(
+    #target { opacity: 0; }
+    @media (width > 300px) {
+      #target { opacity: 0.3; }
+    }
+    @media (width > 500px) {
+      #target { opacity: 0.5; }
+    }
+  )HTML");
+
+  test::RunPendingTasks();
+
+  frame2_resource.Complete(R"HTML(
+    <!DOCTYPE html>
+    <link rel="stylesheet" href="frame.css">
+    <div id="target"></div>
+  )HTML");
+
+  test::RunPendingTasks();
+
+  Compositor().BeginFrame();
+
+  Document* frame1_doc =
+      To<HTMLIFrameElement>(GetElementById("frame1"))->contentDocument();
+  Document* frame2_doc =
+      To<HTMLIFrameElement>(GetElementById("frame2"))->contentDocument();
+  ASSERT_TRUE(frame1_doc);
+  ASSERT_TRUE(frame2_doc);
+  frame1_doc->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
+  frame2_doc->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
+
+  const ActiveStyleSheetVector& frame1_sheets =
+      frame1_doc->GetScopedStyleResolver()->GetActiveStyleSheets();
+  const ActiveStyleSheetVector& frame2_sheets =
+      frame2_doc->GetScopedStyleResolver()->GetActiveStyleSheets();
+  ASSERT_EQ(frame1_sheets.size(), 1u);
+  ASSERT_EQ(frame2_sheets.size(), 1u);
+
+  // The two frames should share the same cached StyleSheetContents ...
+  EXPECT_EQ(frame1_sheets[0].first->Contents(),
+            frame2_sheets[0].first->Contents());
+
+  // ... but have different RuleSets due to different media query evaluation.
+  EXPECT_NE(frame1_sheets[0].second, frame2_sheets[0].second);
+
+  // Verify styling based on MQ evaluation.
+  Element* target1 = frame1_doc->getElementById(AtomicString("target"));
+  ASSERT_TRUE(target1);
+  EXPECT_EQ(target1->GetComputedStyle()->Opacity(), 0);
+  Element* target2 = frame2_doc->getElementById(AtomicString("target"));
+  ASSERT_TRUE(target2);
+  EXPECT_EQ(target2->GetComputedStyle()->Opacity(), 0.3f);
+}
+
+// https://crbug.com/417406834
+TEST_F(CSSStyleSheetResourceSimTest, CopyOnWriteSharedContentsCrash) {
+  SimRequest main_resource("https://example.com", "text/html");
+  SimRequest::Params params;
+  params.response_http_headers = {{"Cache-Control", "max-age=3600"}};
+  SimSubresourceRequest css_resource("https://example.com/style.css",
+                                     "text/css", params);
+  SimRequest frame_resource("https://example.com/frame.html", "text/html");
+
+  LoadURL("https://example.com");
+
+  // This is intentionally in quirks mode, while the iframe's document
+  // is in standards mode. This is to make that we're using different
+  // CSSParserContexts against the same resource.
+  main_resource.Complete(R"HTML(
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css">
+    Some content
+    <iframe src="frame.html"></iframe>
+  )HTML");
+
+  test::RunPendingTasks();
+
+  css_resource.Complete(R"HTML(
+    div { color: green; }
+  )HTML");
+
+  // This frame exists to access style.css under a CSSParserContext which is
+  // different from the parent document's CSSParserContext.
+  frame_resource.Complete(R"HTML(
+    <!DOCTYPE html>
+    <link rel="stylesheet" href="style.css">
+    <div>iframe</div>
+  )HTML");
+
+  test::RunPendingTasks();
+
+  ASSERT_EQ(2u, GetDocument().StyleSheets().length());
+  auto* sheet0 = To<CSSStyleSheet>(GetDocument().StyleSheets().item(0));
+  auto* sheet1 = To<CSSStyleSheet>(GetDocument().StyleSheets().item(1));
+
+  // Make sure CSSStyleRule wrappers exist. (Don't crash.)
+  for (wtf_size_t i = 0; i < sheet0->length(); ++i) {
+    ASSERT_TRUE(sheet0->ItemInternal(i));
+  }
+  for (wtf_size_t i = 0; i < sheet1->length(); ++i) {
+    ASSERT_TRUE(sheet1->ItemInternal(i));
+  }
+
+  EXPECT_EQ(sheet0->Contents(), sheet1->Contents());
+
+  DummyExceptionStateForTesting exception_state;
+  // Copy-on-write should occur here:
+  sheet1->insertRule("div { left:0; }", /*index=*/0u, exception_state);
+
+  // Access CSSStyleRule wrappers again. (Don't crash.)
+  for (wtf_size_t i = 0; i < sheet0->length(); ++i) {
+    ASSERT_TRUE(sheet0->ItemInternal(i));
+  }
+  for (wtf_size_t i = 0; i < sheet1->length(); ++i) {
+    ASSERT_TRUE(sheet1->ItemInternal(i));
+  }
+
+  // Copy-on-write should have happened:
+  EXPECT_NE(sheet0->Contents(), sheet1->Contents());
+}
+
+// Restoring the original contents at the end of a QuietMutationScope (as
+// InspectorGhostRules does) must not move the already loaded CSSStyleSheet back
+// to the loading state. Otherwise the cached StyleSheetContents stops being
+// cacheable while it is still referenced from the resource, and the next cache
+// hit fails a DCHECK in HasFailedOrCanceledSubresources().
+TEST_F(CSSStyleSheetResourceSimTest, QuietMutationKeepsCachedContentsLoaded) {
+  SimRequest main_resource("https://example.com", "text/html");
+  SimRequest::Params params;
+  params.response_http_headers = {{"Cache-Control", "max-age=3600"}};
+  SimSubresourceRequest css_resource("https://example.com/style.css",
+                                     "text/css", params);
+
+  LoadURL("https://example.com");
+  main_resource.Complete(R"HTML(
+    <!DOCTYPE html>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css">
+    <div></div>
+  )HTML");
+  css_resource.Complete("div { color: green; }");
+  test::RunPendingTasks();
+
+  ASSERT_EQ(2u, GetDocument().StyleSheets().length());
+  auto* sheet0 = To<CSSStyleSheet>(GetDocument().StyleSheets().item(0));
+  auto* sheet1 = To<CSSStyleSheet>(GetDocument().StyleSheets().item(1));
+  StyleSheetContents* contents = sheet0->Contents();
+  ASSERT_EQ(contents, sheet1->Contents());
+  ASSERT_TRUE(contents->IsReferencedFromResource());
+  EXPECT_TRUE(contents->IsCacheableForResource());
+
+  {
+    QuietMutationScope scope;
+    scope.Add(*sheet0);
+    EXPECT_NE(contents, sheet0->Contents());
+  }
+  EXPECT_EQ(contents, sheet0->Contents());
+  EXPECT_TRUE(sheet0->LoadCompleted());
+  EXPECT_TRUE(contents->LoadCompleted());
+  EXPECT_TRUE(contents->IsCacheableForResource());
+
+  // Another <link> to the same stylesheet hits the cache. (Don't crash.)
+  auto* link = MakeGarbageCollected<HTMLLinkElement>(
+      GetDocument(), CreateElementFlags::ByCreateElement());
+  link->setAttribute(html_names::kRelAttr, AtomicString("stylesheet"));
+  link->setAttribute(html_names::kHrefAttr, AtomicString("style.css"));
+  GetDocument().body()->AppendChild(link);
+  test::RunPendingTasks();
+
+  ASSERT_EQ(3u, GetDocument().StyleSheets().length());
+  EXPECT_EQ(contents,
+            To<CSSStyleSheet>(GetDocument().StyleSheets().item(2))->Contents());
 }
 
 }  // namespace

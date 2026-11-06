@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,16 +9,20 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/apple/foundation_util.h"
+#include "base/apple/scoped_objc_class_swizzler.h"
+#include "base/functional/bind.h"
 #include "base/lazy_instance.h"
-#include "base/mac/scoped_objc_class_swizzler.h"
+#include "base/no_destructor.h"
 #include "base/strings/sys_string_conversions.h"
 #import "content/app_shim_remote_cocoa/render_widget_host_view_cocoa.h"
+#include "content/app_shim_remote_cocoa/web_menu_runner_mac.h"
 #include "content/browser/renderer_host/render_widget_host_view_mac.h"
 #include "content/browser/renderer_host/text_input_client_mac.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/common/mac/attributed_string_type_converters.h"
 #include "content/public/browser/render_widget_host.h"
+#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/mojom/attributed_string.mojom.h"
 #include "ui/gfx/geometry/point.h"
@@ -28,89 +32,127 @@
 // The interface class used to override the implementation of some of
 // RenderWidgetHostViewCocoa methods for tests.
 @interface RenderWidgetHostViewCocoaSwizzler : NSObject
-- (void)didAddSubview:(NSView*)view;
 - (void)showDefinitionForAttributedString:(NSAttributedString*)attrString
                                   atPoint:(NSPoint)textBaselineOrigin;
 @end
 
 namespace content {
 
-using base::mac::ScopedObjCClassSwizzler;
+using base::apple::ScopedObjCClassSwizzler;
 
 // static
-constexpr char RenderWidgetHostViewCocoaObserver::kDidAddSubview[];
 constexpr char
     RenderWidgetHostViewCocoaObserver::kShowDefinitionForAttributedString[];
 
 // static
-std::map<std::string, std::unique_ptr<base::mac::ScopedObjCClassSwizzler>>
-    RenderWidgetHostViewCocoaObserver::rwhvcocoa_swizzlers_;
+std::map<std::string, std::unique_ptr<base::apple::ScopedObjCClassSwizzler>>&
+RenderWidgetHostViewCocoaObserver::RwhvcocoaSwizzlers() {
+  static base::NoDestructor<std::map<
+      std::string, std::unique_ptr<base::apple::ScopedObjCClassSwizzler>>>
+      swizzlers;
+  return *swizzlers;
+}
 
 // static
-std::map<WebContents*, RenderWidgetHostViewCocoaObserver*>
-    RenderWidgetHostViewCocoaObserver::observers_;
+std::map<WebContents*, RenderWidgetHostViewCocoaObserver*>&
+RenderWidgetHostViewCocoaObserver::Observers() {
+  static base::NoDestructor<
+      std::map<WebContents*, RenderWidgetHostViewCocoaObserver*>>
+      observers;
+  return *observers;
+}
 
 namespace {
 
+content::RenderWidgetHostViewMac* GetRenderWidgetHostViewMac(
+    WebContents* contents) {
+  auto* rwhv_base = static_cast<RenderWidgetHostViewBase*>(
+      contents->GetRenderWidgetHostView());
+  if (rwhv_base && !rwhv_base->IsRenderWidgetHostViewChildFrame()) {
+    return static_cast<RenderWidgetHostViewMac*>(rwhv_base);
+  }
+  return nil;
+}
+
+RenderWidgetHostViewCocoa* GetRenderWidgetHostViewCocoa(WebContents* contents) {
+  content::RenderWidgetHostViewMac* rwhv_mac =
+      GetRenderWidgetHostViewMac(contents);
+  if (!rwhv_mac) {
+    return nil;
+  }
+  return rwhv_mac->GetInProcessNSView();
+}
+
 content::RenderWidgetHostViewMac* GetRenderWidgetHostViewMac(NSObject* object) {
-  for (auto* contents : WebContentsImpl::GetAllWebContents()) {
-    auto* rwhv_base = static_cast<RenderWidgetHostViewBase*>(
-        contents->GetRenderWidgetHostView());
-    if (rwhv_base && !rwhv_base->IsRenderWidgetHostViewChildFrame()) {
-      auto* rwhv_mac = static_cast<RenderWidgetHostViewMac*>(rwhv_base);
-      if (rwhv_mac->GetInProcessNSView() == object)
-        return rwhv_mac;
+  for (auto contents : WebContentsImpl::GetAllWebContents()) {
+    content::RenderWidgetHostViewMac* rwhv_mac =
+        GetRenderWidgetHostViewMac(contents);
+    if (rwhv_mac && rwhv_mac->GetInProcessNSView() == object) {
+      return rwhv_mac;
     }
   }
-
   return nullptr;
 }
 
 }  // namespace
 
-base::mac::ScopedObjCClassSwizzler*
+base::apple::ScopedObjCClassSwizzler*
 RenderWidgetHostViewCocoaObserver::GetSwizzler(const std::string& method_name) {
-  return rwhvcocoa_swizzlers_.count(method_name)
-             ? rwhvcocoa_swizzlers_.at(method_name).get()
+  return RwhvcocoaSwizzlers().count(method_name)
+             ? RwhvcocoaSwizzlers().at(method_name).get()
              : nullptr;
 }
 
 // static
 RenderWidgetHostViewCocoaObserver*
 RenderWidgetHostViewCocoaObserver::GetObserver(WebContents* web_contents) {
-  return observers_.count(web_contents) ? observers_.at(web_contents) : nullptr;
+  return Observers().count(web_contents) ? Observers().at(web_contents)
+                                         : nullptr;
 }
 
 RenderWidgetHostViewCocoaObserver::RenderWidgetHostViewCocoaObserver(
     WebContents* web_contents)
     : web_contents_(web_contents) {
-  if (rwhvcocoa_swizzlers_.empty())
+  if (RwhvcocoaSwizzlers().empty()) {
     SetUpSwizzlers();
+  }
 
-  DCHECK(!observers_.count(web_contents));
-  observers_[web_contents] = this;
+  MenuWasRunCallback callback = base::BindRepeating(
+      [](RenderWidgetHostViewCocoaObserver* observer, NSView* view,
+         NSRect bounds, int index) {
+        RenderWidgetHostViewCocoa* rwhv_cocoa =
+            base::apple::ObjCCast<RenderWidgetHostViewCocoa>(view);
+        gfx::Rect rect = [rwhv_cocoa flipNSRectToRect:bounds];
+        observer->DidAttemptToShowPopup(rect, index);
+      },
+      this);
+  [WebMenuRunner registerForTestingMenuRunCallback:callback
+                                           forView:GetRenderWidgetHostViewCocoa(
+                                                       web_contents)];
+
+  DCHECK(!Observers().count(web_contents));
+  Observers()[web_contents] = this;
 }
 
 RenderWidgetHostViewCocoaObserver::~RenderWidgetHostViewCocoaObserver() {
-  observers_.erase(web_contents_);
+  [WebMenuRunner
+      unregisterForTestingMenuRunCallbackForView:GetRenderWidgetHostViewCocoa(
+                                                     web_contents_)];
 
-  if (observers_.empty())
-    rwhvcocoa_swizzlers_.clear();
+  Observers().erase(web_contents_);
+
+  if (Observers().empty()) {
+    RwhvcocoaSwizzlers().clear();
+  }
 }
 
 void RenderWidgetHostViewCocoaObserver::SetUpSwizzlers() {
-  if (!rwhvcocoa_swizzlers_.empty())
+  if (!RwhvcocoaSwizzlers().empty()) {
     return;
-
-  // [RenderWidgetHostViewCocoa didAddSubview:NSView*].
-  rwhvcocoa_swizzlers_[kDidAddSubview] =
-      std::make_unique<ScopedObjCClassSwizzler>(
-          GetRenderWidgetHostViewCocoaClassForTesting(),
-          [RenderWidgetHostViewCocoaSwizzler class],
-          NSSelectorFromString(@(kDidAddSubview)));
+  }
 
   // [RenderWidgetHostViewCocoa showDefinitionForAttributedString:atPoint].
-  rwhvcocoa_swizzlers_[kShowDefinitionForAttributedString] =
+  RwhvcocoaSwizzlers()[kShowDefinitionForAttributedString] =
       std::make_unique<ScopedObjCClassSwizzler>(
           GetRenderWidgetHostViewCocoaClassForTesting(),
           [RenderWidgetHostViewCocoaSwizzler class],
@@ -118,9 +160,9 @@ void RenderWidgetHostViewCocoaObserver::SetUpSwizzlers() {
 }
 
 void SetWindowBounds(gfx::NativeWindow window, const gfx::Rect& bounds) {
-  NSRect new_bounds = NSRectFromCGRect(bounds.ToCGRect());
-  if ([[NSScreen screens] count] > 0) {
-    new_bounds.origin.y = [[[NSScreen screens] firstObject] frame].size.height -
+  NSRect new_bounds = bounds.ToCGRect();
+  if (NSScreen.screens.count > 0) {
+    new_bounds.origin.y = NSScreen.screens.firstObject.frame.size.height -
                           new_bounds.origin.y - new_bounds.size.height;
   }
 
@@ -135,18 +177,17 @@ void GetStringAtPointForRenderWidget(
   TextInputClientMac::GetInstance()->GetStringAtPoint(
       rwh, point,
       base::BindOnce(
-          base::RetainBlock(^(
-              base::OnceCallback<void(const std::string&, const gfx::Point&)>
-                  callback,
-              ui::mojom::AttributedStringPtr attributed_string,
-              const gfx::Point& baseline_point) {
+          [](base::OnceCallback<void(const std::string&, const gfx::Point&)>
+                 callback,
+             ui::mojom::AttributedStringPtr attributed_string,
+             const gfx::Point& baseline_point) {
             std::string string =
                 attributed_string
-                    ? base::SysNSStringToUTF8(
-                          [attributed_string.To<NSAttributedString*>() string])
+                    ? base::SysCFStringRefToUTF8(CFAttributedStringGetString(
+                          attributed_string.To<CFAttributedStringRef>()))
                     : std::string();
             std::move(callback).Run(string, baseline_point);
-          }),
+          },
           std::move(result_callback)));
 }
 
@@ -158,64 +199,23 @@ void GetStringFromRangeForRenderWidget(
   TextInputClientMac::GetInstance()->GetStringFromRange(
       rwh, range,
       base::BindOnce(
-          base::RetainBlock(^(
-              base::OnceCallback<void(const std::string&, const gfx::Point&)>
-                  callback,
-              ui::mojom::AttributedStringPtr attributed_string,
-              const gfx::Point& baseline_point) {
+          [](base::OnceCallback<void(const std::string&, const gfx::Point&)>
+                 callback,
+             ui::mojom::AttributedStringPtr attributed_string,
+             const gfx::Point& baseline_point) {
             std::string string =
                 attributed_string
-                    ? base::SysNSStringToUTF8(
-                          [attributed_string.To<NSAttributedString*>() string])
+                    ? base::SysCFStringRefToUTF8(CFAttributedStringGetString(
+                          attributed_string.To<CFAttributedStringRef>()))
                     : std::string();
             std::move(callback).Run(string, baseline_point);
-          }),
+          },
           std::move(result_callback)));
 }
 
 }  // namespace content
 
 @implementation RenderWidgetHostViewCocoaSwizzler
-- (void)didAddSubview:(NSView*)view {
-  content::RenderWidgetHostViewCocoaObserver::GetSwizzler(
-      content::RenderWidgetHostViewCocoaObserver::kDidAddSubview)
-      ->InvokeOriginal<void, NSView*>(self, _cmd, view);
-
-  content::RenderWidgetHostViewMac* rwhv_mac =
-      content::GetRenderWidgetHostViewMac(self);
-
-  if (!rwhv_mac)
-    return;
-
-  content::RenderWidgetHostViewCocoaObserver* observer =
-      content::RenderWidgetHostViewCocoaObserver::GetObserver(
-          rwhv_mac->GetWebContents());
-
-  if (!observer)
-    return;
-
-  NSRect bounds_in_cocoa_view =
-      [view convertRect:view.bounds toView:rwhv_mac->GetInProcessNSView()];
-
-  gfx::Rect rect =
-      [rwhv_mac->GetInProcessNSView() flipNSRectToRect:bounds_in_cocoa_view];
-
-  observer->DidAddSubviewWillBeDismissed(rect);
-
-  // This override is useful for testing popups. To make sure the run loops end
-  // after the call it is best to dismiss the popup soon.
-  NSEvent* dismissal_event =
-      [NSEvent mouseEventWithType:NSEventTypeLeftMouseDown
-                         location:NSZeroPoint
-                    modifierFlags:0
-                        timestamp:0.0
-                     windowNumber:0
-                          context:nil
-                      eventNumber:0
-                       clickCount:1
-                         pressure:1.0];
-  [[NSApplication sharedApplication] postEvent:dismissal_event atStart:false];
-}
 
 - (void)showDefinitionForAttributedString:(NSAttributedString*)attrString
                                   atPoint:(NSPoint)textBaselineOrigin {
@@ -230,9 +230,11 @@ void GetStringFromRangeForRenderWidget(
   auto* observer = content::RenderWidgetHostViewCocoaObserver::GetObserver(
       rwhv_mac->GetWebContents());
 
-  if (!observer)
+  if (!observer) {
     return;
+  }
   observer->OnShowDefinitionForAttributedString(
-      base::SysNSStringToUTF8([attrString string]));
+      base::SysNSStringToUTF8(attrString.string));
 }
+
 @end

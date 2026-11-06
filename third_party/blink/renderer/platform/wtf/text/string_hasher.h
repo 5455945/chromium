@@ -19,216 +19,86 @@
  *
  */
 
+
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_TEXT_STRING_HASHER_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_TEXT_STRING_HASHER_H_
 
-#include "base/dcheck_is_on.h"
-#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
-#include "third_party/blink/renderer/platform/wtf/text/unicode.h"
+#include <stdint.h>
 
-namespace WTF {
+#include "base/containers/span.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_uchar.h"
+#include "third_party/blink/renderer/platform/wtf/wtf_export.h"
+#include "third_party/rapidhash/rapidhash.h"
 
-// Paul Hsieh's SuperFastHash
-// http://www.azillionmonkeys.com/qed/hash.html
+namespace blink {
 
-// LChar data is interpreted as Latin-1-encoded (zero extended to 16 bits).
+namespace internal {
 
-// NOTE: The hash computation here must stay in sync with
-// build/scripts/hasher.py.
+constexpr inline uint32_t MaskTop8Bits(uint64_t result) {
+  // Save 8 bits for StringImpl to use as flags.
+  constexpr uint32_t kFlagCount = 8;
+  // Reserving space from the high bits for flags preserves most of the hash's
+  // value, since hash lookup typically masks out the high bits anyway.
+  result &= (1U << (32 - kFlagCount)) - 1;
 
-// Golden ratio. Arbitrary start value to avoid mapping all zeros to a hash
-// value of zero.
-static const unsigned kStringHashingStartValue = 0x9E3779B9U;
-
-class StringHasher {
-  DISALLOW_NEW();
-
- public:
-  static const unsigned kFlagCount =
-      8;  // Save 8 bits for StringImpl to use as flags.
-
-  StringHasher()
-      : hash_(kStringHashingStartValue),
-        has_pending_character_(false),
-        pending_character_(0) {}
-
-  // The hasher hashes two characters at a time, and thus an "aligned" hasher is
-  // one where an even number of characters have been added. Callers that
-  // always add characters two at a time can use the "assuming aligned"
-  // functions.
-  void AddCharactersAssumingAligned(UChar a, UChar b) {
-    DCHECK(!has_pending_character_);
-    hash_ += a;
-    hash_ = (hash_ << 16) ^ ((b << 11) ^ hash_);
-    hash_ += hash_ >> 11;
+  // This avoids ever returning a hash code of 0, since that is used to
+  // signal "hash not computed yet". Setting the high bit maintains
+  // reasonable fidelity to a hash code of 0 because it is likely to yield
+  // exactly 0 when hash lookup masks out the high bits.
+  if (!result) {
+    result = 0x80000000 >> kFlagCount;
   }
 
-  void AddCharacter(UChar character) {
-    if (has_pending_character_) {
-      has_pending_character_ = false;
-      AddCharactersAssumingAligned(pending_character_, character);
-      return;
-    }
+  return static_cast<uint32_t>(result);
+}
 
-    pending_character_ = character;
-    has_pending_character_ = true;
-  }
+}  // namespace internal
 
-  void AddCharacters(UChar a, UChar b) {
-    if (has_pending_character_) {
-#if DCHECK_IS_ON()
-      has_pending_character_ = false;
-#endif
-      AddCharactersAssumingAligned(pending_character_, a);
-      pending_character_ = b;
-#if DCHECK_IS_ON()
-      has_pending_character_ = true;
-#endif
-      return;
-    }
+// The main entry point for the string hasher. Computes the hash and returns
+// only the lowest 24 bits, since that's what we have room for in StringImpl.
+template <class Reader = PlainHashReader>
+constexpr uint32_t HashString24(base::span<const uint8_t> data) {
+  return internal::MaskTop8Bits(rapidhash<Reader>(
+      data.data(),
+      data.size() * Reader::kExpansionFactor / Reader::kCompressionFactor));
+}
 
-    AddCharactersAssumingAligned(a, b);
-  }
+// Hashing can be very performance-sensitive, but the hashing function is also
+// fairly big (~300 bytes on x86-64, give or take). This function is exactly
+// equivalent to HashString24(), except that it is marked as ALWAYS_INLINE and
+// thus will be force-inlined into your own code. You should use this if all
+// of these are true:
+//
+// 1. You are in a frequently-called place, i.e. you are performance sensitive.
+// 2. You frequently hash short strings, so that the function call overhead
+//    dominates; for hashing e.g. 1 kB of data, this makes no sense to call.
+// 3. The gain of increased performance, ideally demonstrated by benchmarks,
+//    outweighs the cost of the binary size increase.
+//
+// Note that the compiler may choose to inline even HashString24() if it deems
+// it a win; for instance, if you call it with length equivalent to a small
+// constant known at compile time, the function may be subject to dead-code
+// removal and thus considered small enough to inline. The same goes if you are
+// the only user of your HashReader.
+template <class Reader = PlainHashReader>
+ALWAYS_INLINE constexpr uint32_t HashString24Inline(
+    base::span<const uint8_t> data) {
+  return internal::MaskTop8Bits(rapidhash<Reader>(
+      data.data(),
+      data.size() * Reader::kExpansionFactor / Reader::kCompressionFactor));
+}
 
-  template <typename T, UChar Converter(T)>
-  void AddCharactersAssumingAligned(const T* data, unsigned length) {
-    DCHECK(!has_pending_character_);
+// Computes the standard string hash for the given buffer,
+// with the caveat that the buffer may contain 8-bit data only.
+// In that case, it is converted from UChar to LChar on the fly,
+// so that we return the same hash as if we hashed the string as
+// LChar to begin with. This ensures that the same code points
+// are hashed to the same value, even if someone called e.g.
+// Ensure16Bit() on the string at some point.
+//
+// The implementation is in string_statics.cc.
+WTF_EXPORT uint32_t HashWideString24(base::span<const UChar> utf16_chars);
 
-    bool remainder = length & 1;
-    length >>= 1;
-
-    while (length--) {
-      AddCharactersAssumingAligned(Converter(data[0]), Converter(data[1]));
-      data += 2;
-    }
-
-    if (remainder)
-      AddCharacter(Converter(*data));
-  }
-
-  template <typename T>
-  void AddCharactersAssumingAligned(const T* data, unsigned length) {
-    AddCharactersAssumingAligned<T, DefaultConverter>(data, length);
-  }
-
-  template <typename T, UChar Converter(T)>
-  void AddCharacters(const T* data, unsigned length) {
-    if (has_pending_character_ && length) {
-      has_pending_character_ = false;
-      AddCharactersAssumingAligned(pending_character_, Converter(*data++));
-      --length;
-    }
-    AddCharactersAssumingAligned<T, Converter>(data, length);
-  }
-
-  template <typename T>
-  void AddCharacters(const T* data, unsigned length) {
-    AddCharacters<T, DefaultConverter>(data, length);
-  }
-
-  unsigned HashWithTop8BitsMasked() const {
-    unsigned result = AvalancheBits();
-
-    // Reserving space from the high bits for flags preserves most of the hash's
-    // value, since hash lookup typically masks out the high bits anyway.
-    result &= (1U << (sizeof(result) * 8 - kFlagCount)) - 1;
-
-    // This avoids ever returning a hash code of 0, since that is used to
-    // signal "hash not computed yet". Setting the high bit maintains
-    // reasonable fidelity to a hash code of 0 because it is likely to yield
-    // exactly 0 when hash lookup masks out the high bits.
-    if (!result)
-      result = 0x80000000 >> kFlagCount;
-
-    return result;
-  }
-
-  unsigned GetHash() const {
-    unsigned result = AvalancheBits();
-
-    // This avoids ever returning a hash code of 0, since that is used to
-    // signal "hash not computed yet". Setting the high bit maintains
-    // reasonable fidelity to a hash code of 0 because it is likely to yield
-    // exactly 0 when hash lookup masks out the high bits.
-    if (!result)
-      result = 0x80000000;
-
-    return result;
-  }
-
-  template <typename T, UChar Converter(T)>
-  static unsigned ComputeHashAndMaskTop8Bits(const T* data, unsigned length) {
-    StringHasher hasher;
-    hasher.AddCharactersAssumingAligned<T, Converter>(data, length);
-    return hasher.HashWithTop8BitsMasked();
-  }
-
-  template <typename T>
-  static unsigned ComputeHashAndMaskTop8Bits(const T* data, unsigned length) {
-    return ComputeHashAndMaskTop8Bits<T, DefaultConverter>(data, length);
-  }
-
-  template <typename T, UChar Converter(T)>
-  static unsigned ComputeHash(const T* data, unsigned length) {
-    StringHasher hasher;
-    hasher.AddCharactersAssumingAligned<T, Converter>(data, length);
-    return hasher.GetHash();
-  }
-
-  template <typename T>
-  static unsigned ComputeHash(const T* data, unsigned length) {
-    return ComputeHash<T, DefaultConverter>(data, length);
-  }
-
-  static unsigned HashMemory(const void* data, unsigned length) {
-    // FIXME: Why does this function use the version of the hash that drops the
-    // top 8 bits?  We want that for all string hashing so we can use those
-    // bits in StringImpl and hash strings consistently, but I don't see why
-    // we'd want that for general memory hashing.
-    DCHECK(!(length % 2));
-    return ComputeHashAndMaskTop8Bits<UChar>(static_cast<const UChar*>(data),
-                                             length / sizeof(UChar));
-  }
-
-  template <size_t length>
-  static unsigned HashMemory(const void* data) {
-    static_assert(!(length % 2), "length must be a multiple of two");
-    return HashMemory(data, length);
-  }
-
- private:
-  // The StringHasher works on UChar so all converters should normalize input
-  // data into being a UChar.
-  static UChar DefaultConverter(UChar character) { return character; }
-  static UChar DefaultConverter(LChar character) { return character; }
-
-  unsigned AvalancheBits() const {
-    unsigned result = hash_;
-
-    // Handle end case.
-    if (has_pending_character_) {
-      result += pending_character_;
-      result ^= result << 11;
-      result += result >> 17;
-    }
-
-    // Force "avalanching" of final 31 bits.
-    result ^= result << 3;
-    result += result >> 5;
-    result ^= result << 2;
-    result += result >> 15;
-    result ^= result << 10;
-
-    return result;
-  }
-
-  unsigned hash_;
-  bool has_pending_character_;
-  UChar pending_character_;
-};
-
-}  // namespace WTF
-
-using WTF::StringHasher;
+}  // namespace blink
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_TEXT_STRING_HASHER_H_

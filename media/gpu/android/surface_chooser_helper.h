@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,14 @@
 #define MEDIA_GPU_ANDROID_SURFACE_CHOOSER_HELPER_H_
 
 #include <memory>
+#include <optional>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "media/base/video_transformation.h"
 #include "media/gpu/android/android_video_surface_chooser.h"
 #include "media/gpu/android/promotion_hint_aggregator.h"
 #include "media/gpu/media_gpu_export.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
 class TickClock;
@@ -40,6 +40,10 @@ class MEDIA_GPU_EXPORT SurfaceChooserHelper {
       std::unique_ptr<PromotionHintAggregator> promotion_hint_aggregator =
           nullptr,
       const base::TickClock* tick_clock = nullptr);
+
+  SurfaceChooserHelper(const SurfaceChooserHelper&) = delete;
+  SurfaceChooserHelper& operator=(const SurfaceChooserHelper&) = delete;
+
   ~SurfaceChooserHelper();
 
   enum class SecureSurfaceMode {
@@ -53,20 +57,6 @@ class MEDIA_GPU_EXPORT SurfaceChooserHelper {
 
     // The surface must be a secure surface, and should fail otherwise.
     kRequired,
-  };
-
-  // Must match AVDAFrameInformation UMA enum.  Please do not remove or re-order
-  // values, only append new ones.
-  enum class FrameInformation {
-    NON_OVERLAY_INSECURE = 0,
-    NON_OVERLAY_L3 = 1,
-    OVERLAY_L3 = 2,
-    OVERLAY_L1 = 3,
-    OVERLAY_INSECURE_PLAYER_ELEMENT_FULLSCREEN = 4,
-    OVERLAY_INSECURE_NON_PLAYER_ELEMENT_FULLSCREEN = 5,
-
-    // Max enum value.
-    FRAME_INFORMATION_MAX = OVERLAY_INSECURE_NON_PLAYER_ELEMENT_FULLSCREEN
   };
 
   // The setters do not update the chooser state, since pre-M requires us to be
@@ -86,7 +76,7 @@ class MEDIA_GPU_EXPORT SurfaceChooserHelper {
   void SetIsPersistentVideo(bool is_persistent_video);
 
   // Update the chooser state using the given factory.
-  void UpdateChooserState(absl::optional<AndroidOverlayFactoryCB> new_factory);
+  void UpdateChooserState(std::optional<AndroidOverlayFactoryCB> new_factory);
 
   // Notify us about a promotion hint.  This will update the chooser state
   // if needed.
@@ -95,11 +85,6 @@ class MEDIA_GPU_EXPORT SurfaceChooserHelper {
       bool is_using_overlay);
 
   AndroidVideoSurfaceChooser* chooser() const { return surface_chooser_.get(); }
-
-  // Return the FrameInformation bucket number that the config reflects, given
-  // that |is_using_overlay| reflects whether we're currently using an overlay
-  // or not.
-  FrameInformation ComputeFrameInformation(bool is_using_overlay);
 
  private:
   AndroidVideoSurfaceChooser::State surface_chooser_state_;
@@ -116,7 +101,7 @@ class MEDIA_GPU_EXPORT SurfaceChooserHelper {
   // Time since we last updated the chooser state.
   base::TimeTicks most_recent_chooser_retry_;
 
-  const base::TickClock* tick_clock_;
+  raw_ptr<const base::TickClock> tick_clock_;
 
   // Number of promotion hints that we need to receive before clearing the
   // "delay overlay promotion" flag in |surface_chooser_state_|.  We do this so
@@ -124,8 +109,6 @@ class MEDIA_GPU_EXPORT SurfaceChooserHelper {
   // Since overlay positioning isn't synchronous, it's good to make sure that
   // blink isn't moving the quad around too.
   int hints_until_clear_relayout_flag_ = 0;
-
-  DISALLOW_COPY_AND_ASSIGN(SurfaceChooserHelper);
 };
 
 }  // namespace media

@@ -1,8 +1,10 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/browser/api/storage/weak_unlimited_settings_storage.h"
+
+using value_store::ValueStore;
 
 namespace extensions {
 
@@ -10,7 +12,7 @@ WeakUnlimitedSettingsStorage::WeakUnlimitedSettingsStorage(
     ValueStore* delegate)
     : delegate_(delegate) {}
 
-WeakUnlimitedSettingsStorage::~WeakUnlimitedSettingsStorage() {}
+WeakUnlimitedSettingsStorage::~WeakUnlimitedSettingsStorage() = default;
 
 size_t WeakUnlimitedSettingsStorage::GetBytesInUse(const std::string& key) {
   return delegate_->GetBytesInUse(key);
@@ -24,6 +26,10 @@ size_t WeakUnlimitedSettingsStorage::GetBytesInUse(
 
 size_t WeakUnlimitedSettingsStorage::GetBytesInUse() {
   return delegate_->GetBytesInUse();
+}
+
+ValueStore::ReadResult WeakUnlimitedSettingsStorage::GetKeys() {
+  return delegate_->GetKeys();
 }
 
 ValueStore::ReadResult WeakUnlimitedSettingsStorage::Get(
@@ -46,7 +52,8 @@ ValueStore::WriteResult WeakUnlimitedSettingsStorage::Set(
 }
 
 ValueStore::WriteResult WeakUnlimitedSettingsStorage::Set(
-    WriteOptions options, const base::DictionaryValue& values) {
+    WriteOptions options,
+    const base::DictValue& values) {
   return delegate_->Set(IGNORE_QUOTA, values);
 }
 

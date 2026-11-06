@@ -1,19 +1,24 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "sandbox/win/src/sandbox_nt_util.h"
 
 #include <windows.h>
+#include <winternl.h>
+
+#include <ntstatus.h>
 
 #include <memory>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/files/file.h"
 #include "base/path_service.h"
 #include "base/strings/string_util.h"
 #include "base/win/scoped_handle.h"
 #include "base/win/scoped_process_information.h"
+#include "sandbox/win/src/nt_internals.h"
 #include "sandbox/win/src/policy_broker.h"
 #include "sandbox/win/src/win_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -21,29 +26,27 @@
 namespace sandbox {
 namespace {
 
-TEST(SandboxNtUtil, IsSameProcessPseudoHandle) {
-  InitGlobalNt();
+using ScopedUnicodeString = std::unique_ptr<UNICODE_STRING, NtAllocDeleter>;
 
+TEST(SandboxNtUtil, IsSameProcessPseudoHandle) {
   HANDLE current_process_pseudo = GetCurrentProcess();
   EXPECT_TRUE(IsSameProcess(current_process_pseudo));
 }
 
 TEST(SandboxNtUtil, IsSameProcessNonPseudoHandle) {
-  InitGlobalNt();
-
   base::win::ScopedHandle current_process(
       OpenProcess(PROCESS_QUERY_INFORMATION, false, GetCurrentProcessId()));
-  ASSERT_TRUE(current_process.IsValid());
-  EXPECT_TRUE(IsSameProcess(current_process.Get()));
+  ASSERT_TRUE(current_process.is_valid());
+  EXPECT_TRUE(IsSameProcess(current_process.get()));
 }
 
 TEST(SandboxNtUtil, IsSameProcessDifferentProcess) {
-  InitGlobalNt();
-
   STARTUPINFO si = {sizeof(si)};
   PROCESS_INFORMATION pi = {};
-  wchar_t notepad[] = L"notepad";
-  ASSERT_TRUE(CreateProcessW(nullptr, notepad, nullptr, nullptr, false, 0,
+  // Calc is preferred over notepad because notepad will fail to launch on
+  // Windows if the store version is not installed.
+  wchar_t command_line[] = L"calc";
+  ASSERT_TRUE(CreateProcessW(nullptr, command_line, nullptr, nullptr, false, 0,
                              nullptr, nullptr, &si, &pi));
   base::win::ScopedProcessInformation process_info(pi);
 
@@ -67,7 +70,7 @@ void AllocateBlock(SIZE_T size,
       *base_address, size - free_size, MEM_RESERVE, PAGE_READWRITE)));
   ASSERT_NE(nullptr, ptr.get());
   mem_range->push_back(std::move(ptr));
-  *base_address += size;
+  UNSAFE_TODO(*base_address += size);
 }
 
 #define KIB(x) ((x)*1024ULL)
@@ -102,11 +105,12 @@ void AllocateTestRange(std::vector<unique_ptr_vmem>* mem_range) {
 // Test we can allocate appropriate blocks.
 void TestAlignedRange(char* base_address) {
   unique_ptr_vmem ptr_256k(new (sandbox::NT_PAGE, base_address) char[KIB(256)]);
-  EXPECT_EQ(base_address + GIB(1) + MIB(512) - KIB(256), ptr_256k.get());
+  EXPECT_EQ(UNSAFE_TODO(base_address + GIB(1) + MIB(512) - KIB(256)),
+            ptr_256k.get());
   unique_ptr_vmem ptr_64k(new (sandbox::NT_PAGE, base_address) char[KIB(64)]);
-  EXPECT_EQ(base_address + MIB(512) - KIB(64), ptr_64k.get());
+  EXPECT_EQ(UNSAFE_TODO(base_address + MIB(512) - KIB(64)), ptr_64k.get());
   unique_ptr_vmem ptr_128k(new (sandbox::NT_PAGE, base_address) char[KIB(128)]);
-  EXPECT_EQ(base_address + GIB(1) - KIB(128), ptr_128k.get());
+  EXPECT_EQ(UNSAFE_TODO(base_address + GIB(1) - KIB(128)), ptr_128k.get());
   // We will have run out of space here so should also fail.
   unique_ptr_vmem ptr_64k_noalloc(
       new (sandbox::NT_PAGE, base_address) char[KIB(64)]);
@@ -121,27 +125,29 @@ void Test512kBlock(char* base_address) {
       new (sandbox::NT_PAGE, base_address) char[KIB(512)]);
   EXPECT_EQ(nullptr, ptr_512k_noalloc.get());
   // Check that moving base address we can allocate the 512k block.
-  unique_ptr_vmem ptr_512k(
-      new (sandbox::NT_PAGE, base_address + GIB(1)) char[KIB(512)]);
-  EXPECT_EQ(base_address + GIB(2), ptr_512k.get());
+  unique_ptr_vmem ptr_512k(new (
+      sandbox::NT_PAGE, UNSAFE_TODO(base_address + GIB(1))) char[KIB(512)]);
+  EXPECT_EQ(UNSAFE_TODO(base_address + GIB(2)), ptr_512k.get());
   // Free pointer first.
   ptr_512k.reset();
-  ptr_512k.reset(new (sandbox::NT_PAGE, base_address + GIB(2)) char[KIB(512)]);
-  EXPECT_EQ(base_address + GIB(2), ptr_512k.get());
+  ptr_512k.reset(new (sandbox::NT_PAGE,
+                      UNSAFE_TODO(base_address + GIB(2))) char[KIB(512)]);
+  EXPECT_EQ(UNSAFE_TODO(base_address + GIB(2)), ptr_512k.get());
 }
 
 // Test we can allocate appropriate blocks even when starting at an unaligned
 // address.
 void TestUnalignedRange(char* base_address) {
-  char* unaligned_base = base_address + 123456;
+  char* unaligned_base = UNSAFE_TODO(base_address + 123456);
   unique_ptr_vmem ptr_256k(
       new (sandbox::NT_PAGE, unaligned_base) char[KIB(256)]);
-  EXPECT_EQ(base_address + GIB(1) + MIB(512) - KIB(256), ptr_256k.get());
+  EXPECT_EQ(UNSAFE_TODO(base_address + GIB(1) + MIB(512) - KIB(256)),
+            ptr_256k.get());
   unique_ptr_vmem ptr_64k(new (sandbox::NT_PAGE, unaligned_base) char[KIB(64)]);
-  EXPECT_EQ(base_address + MIB(512) - KIB(64), ptr_64k.get());
+  EXPECT_EQ(UNSAFE_TODO(base_address + MIB(512) - KIB(64)), ptr_64k.get());
   unique_ptr_vmem ptr_128k(
       new (sandbox::NT_PAGE, unaligned_base) char[KIB(128)]);
-  EXPECT_EQ(base_address + GIB(1) - KIB(128), ptr_128k.get());
+  EXPECT_EQ(UNSAFE_TODO(base_address + GIB(1) - KIB(128)), ptr_128k.get());
 }
 
 // Test maximum number of available allocations within the predefined pattern.
@@ -183,7 +189,6 @@ void TestExtremes() {
 // Test nearest allocator, only do this for 64 bit. We test through the exposed
 // new operator as we can't call the AllocateNearTo function directly.
 TEST(SandboxNtUtil, NearestAllocator) {
-  InitGlobalNt();
   std::vector<unique_ptr_vmem> mem_range;
   AllocateTestRange(&mem_range);
   ASSERT_LT(0U, mem_range.size());
@@ -210,13 +215,14 @@ TEST(SandboxNtUtil, ValidParameter) {
 
   // Fill the buffer with some data.
   for (unsigned int i = 0; i < buffer_size; i++)
-    ptr[i] = (i % 256);
+    UNSAFE_TODO(ptr[i]) = (i % 256);
 
   // Setup verify function.
   auto verify_buffer = [&]() {
     for (unsigned int i = 0; i < buffer_size; i++) {
-      if (ptr[i] != (i % 256))
+      if (UNSAFE_TODO(ptr[i]) != (i % 256)) {
         return false;
+      }
     }
 
     return true;
@@ -241,26 +247,80 @@ TEST(SandboxNtUtil, ValidParameter) {
   EXPECT_TRUE(verify_buffer());
 }
 
-TEST(SandboxNtUtil, NtGetPathFromHandle) {
-  InitGlobalNt();
+TEST(SandboxNtUtil, GetNtExports) {
+  const NtExports* exports = GetNtExports();
+  ASSERT_TRUE(exports);
+  static_assert((sizeof(NtExports) % sizeof(void*)) == 0);
+  // Verify that the structure is fully initialized.
+  for (size_t i = 0; i < sizeof(NtExports) / sizeof(void*); i++)
+    EXPECT_TRUE(UNSAFE_TODO(reinterpret_cast<void* const*>(exports)[i]));
+}
 
-  base::FilePath exe;
-  ASSERT_TRUE(base::PathService::Get(base::FILE_EXE, &exe));
-  base::File exe_file(exe, base::File::FLAG_OPEN);
-  ASSERT_TRUE(exe_file.IsValid());
-  std::unique_ptr<wchar_t, NtAllocDeleter> path;
-  EXPECT_TRUE(NtGetPathFromHandle(exe_file.GetPlatformFile(), &path));
+TEST(SandboxNtUtil, ExtractModuleName) {
+  {
+    UNICODE_STRING module_path = {};
+    ::RtlInitUnicodeString(&module_path, L"no-path-sep");
+    ScopedUnicodeString result(ExtractModuleName(&module_path));
+    EXPECT_TRUE(result);
+    EXPECT_EQ(result->Length, module_path.Length);
+    EXPECT_EQ(std::wstring(module_path.Buffer), std::wstring(result->Buffer));
+  }
+  {
+    UNICODE_STRING module_path = {};
+    ::RtlInitUnicodeString(&module_path, L"c:\\has a\\path\\module.dll");
+    ScopedUnicodeString result(ExtractModuleName(&module_path));
 
-  // Basic sanity test, the functionality of NtGetPathFromHandle to return
-  // the correct value is already tested from win_utils_unittest.cc.
-  EXPECT_TRUE(base::EndsWith(base::AsStringPiece16(path.get()),
-                             base::AsStringPiece16(exe.BaseName().value()),
-                             base::CompareCase::INSENSITIVE_ASCII));
+    EXPECT_TRUE(result);
+    EXPECT_EQ(result->Length, 10 * sizeof(wchar_t));
+    EXPECT_EQ(std::wstring(L"module.dll"), std::wstring(result->Buffer));
+  }
+  {
+    UNICODE_STRING module_path = {};
+    ::RtlInitUnicodeString(&module_path, L"c:\\only a\\path\\");
+    ScopedUnicodeString result(ExtractModuleName(&module_path));
 
-  // Compare to GetNtPathFromWin32Path for extra check.
-  std::wstring nt_path;
-  EXPECT_TRUE(GetNtPathFromWin32Path(exe.value(), &nt_path));
-  EXPECT_STREQ(path.get(), nt_path.c_str());
+    EXPECT_FALSE(result);
+  }
+  {
+    UNICODE_STRING module_path = {};
+    ::RtlInitUnicodeString(&module_path, L"A");
+    ScopedUnicodeString result(ExtractModuleName(&module_path));
+
+    EXPECT_TRUE(result);
+    EXPECT_EQ(result->Length, module_path.Length);
+    EXPECT_EQ(std::wstring(module_path.Buffer), std::wstring(result->Buffer));
+  }
+  {
+    UNICODE_STRING module_path = {};
+    ::RtlInitUnicodeString(&module_path, L"");
+    ScopedUnicodeString result(ExtractModuleName(&module_path));
+
+    EXPECT_TRUE(result);
+    EXPECT_EQ(result->Length, 0);
+  }
+}
+
+TEST(SandboxNtUtil, GetCurrentClientId) {
+  CLIENT_ID client_id = GetCurrentClientId();
+  EXPECT_EQ(client_id.UniqueProcess,
+            reinterpret_cast<LPVOID>(::GetCurrentProcessId()));
+  EXPECT_EQ(client_id.UniqueThread,
+            reinterpret_cast<LPVOID>(::GetCurrentThreadId()));
+}
+
+TEST(SandboxNtUtil, EqualUnicodeString) {
+  EXPECT_TRUE(*EqualUnicodeString({}, {}));
+  EXPECT_TRUE(*EqualUnicodeString(L"", L""));
+  EXPECT_TRUE(*EqualUnicodeString(L"ABC", L"ABC"));
+  EXPECT_TRUE(*EqualUnicodeString(L"ABC", L"abc"));
+  EXPECT_FALSE(*EqualUnicodeString(L"ABC", L"XYZ"));
+  EXPECT_FALSE(*EqualUnicodeString(L"", L"ABC"));
+  EXPECT_FALSE(*EqualUnicodeString(L"ABC", L""));
+  std::wstring long_str(UINT16_MAX / sizeof(WCHAR), L'A');
+  EXPECT_TRUE(*EqualUnicodeString(long_str, long_str));
+  long_str += L"A";
+  EXPECT_FALSE(EqualUnicodeString(long_str, L"ABC"));
+  EXPECT_FALSE(EqualUnicodeString(L"ABC", long_str));
 }
 
 }  // namespace

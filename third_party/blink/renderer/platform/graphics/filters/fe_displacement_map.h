@@ -51,12 +51,12 @@ class PLATFORM_EXPORT FEDisplacementMap final : public FilterEffect {
   float Scale() const;
   bool SetScale(float);
 
-  WTF::TextStream& ExternalRepresentation(WTF::TextStream&,
-                                          int indention) const override;
+  StringBuilder& ExternalRepresentation(StringBuilder&,
+                                        wtf_size_t indent) const override;
 
  private:
-  FloatRect MapInputs(const FloatRect&) const override;
-  FloatRect MapEffect(const FloatRect&) const override;
+  gfx::RectF MapInputs(const gfx::RectF&) const override;
+  gfx::RectF MapEffect(const gfx::RectF&) const override;
 
   sk_sp<PaintFilter> CreateImageFilter() override;
 

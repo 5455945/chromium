@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <stddef.h>
 
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <tuple>
@@ -25,34 +26,25 @@
 #include "components/infobars/core/infobar_manager.h"
 #include "components/translate/content/browser/content_translate_driver.h"
 #include "components/translate/content/common/translate.mojom.h"
-#include "components/translate/core/browser/translate_infobar_delegate.h"
 #include "components/translate/core/browser/translate_manager.h"
 #include "components/translate/core/browser/translate_ui_delegate.h"
 #include "components/translate/core/common/language_detection_details.h"
-#include "content/public/browser/navigation_details.h"
-#include "content/public/browser/navigation_entry.h"
-#include "content/public/browser/web_contents.h"
-#include "content/public/common/url_constants.h"
-#include "content/public/test/navigation_simulator.h"
-#include "content/public/test/test_renderer_host.h"
-#include "mojo/public/cpp/bindings/associated_receiver_set.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "url/gurl.h"
+#include "pdf/buildflags.h"
 
 class FakeTranslateAgent : public translate::mojom::TranslateAgent {
  public:
   FakeTranslateAgent();
+
+  FakeTranslateAgent(const FakeTranslateAgent&) = delete;
+  FakeTranslateAgent& operator=(const FakeTranslateAgent&) = delete;
+
   ~FakeTranslateAgent() override;
 
-  // TODO(crbug.com/1064974) Remove with subframe translation launch.
   mojo::PendingRemote<translate::mojom::TranslateAgent> BindToNewPageRemote();
 
   // translate::mojom::TranslateAgent implementation.
-  void GetWebLanguageDetectionDetails(
-      GetWebLanguageDetectionDetailsCallback callback) override;
-
   void TranslateFrame(const std::string& translate_script,
                       const std::string& source_lang,
                       const std::string& target_lang,
@@ -60,27 +52,25 @@ class FakeTranslateAgent : public translate::mojom::TranslateAgent {
 
   void RevertTranslation() override;
 
+#if BUILDFLAG(ENABLE_PDF)
+  void PdfPageCaptured(const std::u16string& contents,
+                       const std::string& pdf_lang,
+                       const GURL& page_url) override;
+#endif
+
   void PageTranslated(bool cancelled,
                       const std::string& source_lang,
                       const std::string& target_lang,
-                      translate::TranslateErrors::Type error);
-
-  void BindRequest(mojo::ScopedInterfaceEndpointHandle handle);
+                      translate::TranslateErrors error);
 
   bool called_translate_;
-  absl::optional<std::string> source_lang_;
-  absl::optional<std::string> target_lang_;
+  std::optional<std::string> source_lang_;
+  std::optional<std::string> target_lang_;
   bool called_revert_translation_;
-  std::string next_page_lang_;
-  bool next_page_translatable_;
 
  private:
   TranslateFrameCallback translate_callback_pending_;
-  // TODO(crbug.com/1064974) Remove with subframe translation launch.
   mojo::Receiver<translate::mojom::TranslateAgent> receiver_{this};
-  mojo::AssociatedReceiverSet<translate::mojom::TranslateAgent>
-      per_frame_translate_agent_receivers_;
-  DISALLOW_COPY_AND_ASSIGN(FakeTranslateAgent);
 };
 
 #endif  // CHROME_BROWSER_TRANSLATE_FAKE_TRANSLATE_AGENT_H_

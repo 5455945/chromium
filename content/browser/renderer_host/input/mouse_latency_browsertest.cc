@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,21 +7,24 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/json/json_reader.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/test/test_timeouts.h"
+#include "base/test/values_test_util.h"
+#include "base/trace_event/trace_config.h"
 #include "build/build_config.h"
-#include "content/browser/renderer_host/input/synthetic_gesture.h"
-#include "content/browser/renderer_host/input/synthetic_gesture_controller.h"
-#include "content/browser/renderer_host/input/synthetic_gesture_target.h"
-#include "content/browser/renderer_host/input/synthetic_smooth_move_gesture.h"
-#include "content/browser/renderer_host/input/synthetic_tap_gesture.h"
 #include "content/browser/renderer_host/render_widget_host_factory.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
 #include "content/browser/site_instance_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
+#include "content/common/input/synthetic_gesture.h"
+#include "content/common/input/synthetic_gesture_controller.h"
 #include "content/common/input/synthetic_gesture_params.h"
+#include "content/common/input/synthetic_gesture_target.h"
+#include "content/common/input/synthetic_pointer_action.h"
+#include "content/common/input/synthetic_smooth_move_gesture.h"
+#include "content/common/input/synthetic_smooth_scroll_gesture.h"
+#include "content/common/input/synthetic_tap_gesture.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/tracing_controller.h"
@@ -78,20 +81,22 @@ class TracingRenderWidgetHost : public RenderWidgetHostImpl {
  public:
   TracingRenderWidgetHost(FrameTree* frame_tree,
                           RenderWidgetHostDelegate* delegate,
-                          AgentSchedulingGroupHost& agent_scheduling_group,
+                          viz::FrameSinkId frame_sink_id,
+                          base::SafeRef<SiteInstanceGroup> site_instance_group,
                           int32_t routing_id,
-                          bool hidden)
+                          bool hidden,
+                          bool renderer_initiated_creation)
       : RenderWidgetHostImpl(frame_tree,
                              /*self_owned=*/false,
+                             frame_sink_id,
                              delegate,
-                             agent_scheduling_group,
+                             std::move(site_instance_group),
                              routing_id,
                              hidden,
-                             /*renderer_initiated_creation=*/false,
-                             std::make_unique<FrameTokenMessageQueue>()) {}
+                             renderer_initiated_creation) {}
 
   void OnMouseEventAck(
-      const MouseEventWithLatencyInfo& event,
+      const input::MouseEventWithLatencyInfo& event,
       blink::mojom::InputEventResultSource ack_source,
       blink::mojom::InputEventResultState ack_result) override {
     RenderWidgetHostImpl::OnMouseEventAck(event, ack_source, ack_result);
@@ -104,6 +109,11 @@ class TracingRenderWidgetHostFactory : public RenderWidgetHostFactory {
     RenderWidgetHostFactory::RegisterFactory(this);
   }
 
+  TracingRenderWidgetHostFactory(const TracingRenderWidgetHostFactory&) =
+      delete;
+  TracingRenderWidgetHostFactory& operator=(
+      const TracingRenderWidgetHostFactory&) = delete;
+
   ~TracingRenderWidgetHostFactory() override {
     RenderWidgetHostFactory::UnregisterFactory();
   }
@@ -111,26 +121,30 @@ class TracingRenderWidgetHostFactory : public RenderWidgetHostFactory {
   std::unique_ptr<RenderWidgetHostImpl> CreateRenderWidgetHost(
       FrameTree* frame_tree,
       RenderWidgetHostDelegate* delegate,
-      AgentSchedulingGroupHost& agent_scheduling_group,
+      viz::FrameSinkId frame_sink_id,
+      base::SafeRef<SiteInstanceGroup> site_instance_group,
       int32_t routing_id,
-      bool hidden) override {
+      bool hidden,
+      bool renderer_initiated_creation) override {
     return std::make_unique<TracingRenderWidgetHost>(
-        frame_tree, delegate, agent_scheduling_group, routing_id, hidden);
+        frame_tree, delegate, frame_sink_id, std::move(site_instance_group),
+        routing_id, hidden, renderer_initiated_creation);
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(TracingRenderWidgetHostFactory);
 };
 
 class MouseLatencyBrowserTest : public ContentBrowserTest {
  public:
   MouseLatencyBrowserTest() {}
+
+  MouseLatencyBrowserTest(const MouseLatencyBrowserTest&) = delete;
+  MouseLatencyBrowserTest& operator=(const MouseLatencyBrowserTest&) = delete;
+
   ~MouseLatencyBrowserTest() override {}
 
   RenderWidgetHostImpl* GetWidgetHost() {
     return RenderWidgetHostImpl::From(shell()
                                           ->web_contents()
-                                          ->GetMainFrame()
+                                          ->GetPrimaryMainFrame()
                                           ->GetRenderViewHost()
                                           ->GetWidget());
   }
@@ -141,10 +155,7 @@ class MouseLatencyBrowserTest : public ContentBrowserTest {
   }
 
   void OnTraceDataCollected(std::unique_ptr<std::string> trace_data_string) {
-    std::unique_ptr<base::Value> trace_data =
-        base::JSONReader::ReadDeprecated(*trace_data_string);
-    ASSERT_TRUE(trace_data);
-    trace_data_ = trace_data->Clone();
+    trace_data_ = base::test::ParseJson(*trace_data_string);
     runner_->Quit();
   }
 
@@ -208,7 +219,7 @@ class MouseLatencyBrowserTest : public ContentBrowserTest {
     params.distances.push_back(delta);
 
     GetWidgetHost()->QueueSyntheticGesture(
-        SyntheticGesture::Create(params),
+        std::make_unique<SyntheticSmoothScrollGesture>(params),
         base::BindOnce(&MouseLatencyBrowserTest::OnSyntheticGestureCompleted,
                        base::Unretained(this)));
 
@@ -251,44 +262,45 @@ class MouseLatencyBrowserTest : public ContentBrowserTest {
   std::string ShowTraceEventsWithId(const std::string& id_to_show,
                                     const base::ListValue* traceEvents) {
     std::stringstream stream;
-    for (size_t i = 0; i < traceEvents->GetSize(); ++i) {
-      const base::DictionaryValue* traceEvent;
-      if (!traceEvents->GetDictionary(i, &traceEvent))
+    for (const base::Value& traceEvent_value : *traceEvents) {
+      if (!traceEvent_value.is_dict())
+        continue;
+      const base::DictValue& traceEvent = traceEvent_value.GetDict();
+
+      const std::string* id = traceEvent.FindString("id");
+      if (!id)
         continue;
 
-      std::string id;
-      if (!traceEvent->GetString("id", &id))
-        continue;
-
-      if (id == id_to_show)
-        stream << *traceEvent;
+      if (*id == id_to_show)
+        stream << traceEvent;
     }
     return stream.str();
   }
 
   void AssertTraceIdsBeginAndEnd(const base::Value& trace_data,
                                  const std::string& trace_event_name) {
-    const base::DictionaryValue* trace_data_dict;
-    ASSERT_TRUE(trace_data.GetAsDictionary(&trace_data_dict));
+    const base::DictValue* trace_data_dict = trace_data.GetIfDict();
+    ASSERT_TRUE(trace_data_dict);
 
-    const base::ListValue* traceEvents;
-    ASSERT_TRUE(trace_data_dict->GetList("traceEvents", &traceEvents));
+    const base::ListValue* traceEvents =
+        trace_data_dict->FindList("traceEvents");
+    ASSERT_TRUE(traceEvents);
 
     std::map<std::string, int> trace_ids;
 
-    for (size_t i = 0; i < traceEvents->GetSize(); ++i) {
-      const base::DictionaryValue* traceEvent;
-      ASSERT_TRUE(traceEvents->GetDictionary(i, &traceEvent));
+    for (const base::Value& traceEvent_value : *traceEvents) {
+      ASSERT_TRUE(traceEvent_value.is_dict());
+      const base::DictValue& traceEvent = traceEvent_value.GetDict();
 
-      std::string name;
-      ASSERT_TRUE(traceEvent->GetString("name", &name));
+      const std::string* name = traceEvent.FindString("name");
+      ASSERT_TRUE(name);
 
-      if (name != trace_event_name)
+      if (*name != trace_event_name)
         continue;
 
-      std::string id;
-      if (traceEvent->GetString("id", &id))
-        ++trace_ids[id];
+      const std::string* id = traceEvent.FindString("id");
+      if (id)
+        ++trace_ids[*id];
     }
 
     for (auto i : trace_ids) {
@@ -301,8 +313,6 @@ class MouseLatencyBrowserTest : public ContentBrowserTest {
   std::unique_ptr<base::RunLoop> runner_;
   base::Value trace_data_;
   TracingRenderWidgetHostFactory widget_factory_;
-
-  DISALLOW_COPY_AND_ASSIGN(MouseLatencyBrowserTest);
 };
 
 // Ensures that LatencyInfo async slices are reported correctly for MouseUp and
@@ -322,25 +332,24 @@ IN_PROC_BROWSER_TEST_F(MouseLatencyBrowserTest,
             filter->GetAckStateWaitIfNecessary());
   const base::Value& trace_data = StopTracing();
 
-  const base::DictionaryValue* trace_data_dict;
-  trace_data.GetAsDictionary(&trace_data_dict);
-  ASSERT_TRUE(trace_data.GetAsDictionary(&trace_data_dict));
+  const base::DictValue* trace_data_dict = trace_data.GetIfDict();
+  ASSERT_TRUE(trace_data_dict);
 
-  const base::ListValue* traceEvents;
-  ASSERT_TRUE(trace_data_dict->GetList("traceEvents", &traceEvents));
+  const base::ListValue* traceEvents = trace_data_dict->FindList("traceEvents");
+  ASSERT_TRUE(traceEvents);
 
   std::vector<std::string> trace_event_names;
 
-  for (size_t i = 0; i < traceEvents->GetSize(); ++i) {
-    const base::DictionaryValue* traceEvent;
-    ASSERT_TRUE(traceEvents->GetDictionary(i, &traceEvent));
+  for (const base::Value& traceEvent_value : *traceEvents) {
+    ASSERT_TRUE(traceEvent_value.is_dict());
+    const base::DictValue& traceEvent = traceEvent_value.GetDict();
 
-    std::string name;
-    ASSERT_TRUE(traceEvent->GetString("name", &name));
+    const std::string* name = traceEvent.FindString("name");
+    ASSERT_TRUE(name);
 
-    if (name != "InputLatency::MouseUp" && name != "InputLatency::MouseDown")
+    if (*name != "InputLatency::MouseUp" && *name != "InputLatency::MouseDown")
       continue;
-    trace_event_names.push_back(name);
+    trace_event_names.push_back(*name);
   }
 
   // We see two events per async slice, a begin and an end.
@@ -373,7 +382,7 @@ IN_PROC_BROWSER_TEST_F(MouseLatencyBrowserTest,
   AssertTraceIdsBeginAndEnd(trace_data, "InputLatency::MouseMove");
 }
 
-// TODO(https://crbug.com/923627): This is flaky on multiple platforms.
+// TODO(crbug.com/41436535): This is flaky on multiple platforms.
 IN_PROC_BROWSER_TEST_F(MouseLatencyBrowserTest,
                        DISABLED_CoalescedMouseWheelsCorrectlyTerminated) {
   LoadURL();

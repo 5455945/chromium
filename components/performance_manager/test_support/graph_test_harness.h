@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,17 @@
 #define COMPONENTS_PERFORMANCE_MANAGER_TEST_SUPPORT_GRAPH_TEST_HARNESS_H_
 
 #include <stdint.h>
+
 #include <memory>
 #include <string>
 #include <utility>
 
+#include "base/check_op.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/test/task_environment.h"
-#include "components/performance_manager/embedder/graph_features_helper.h"
+#include "base/unguessable_token.h"
+#include "components/performance_manager/embedder/graph_features.h"
 #include "components/performance_manager/graph/frame_node_impl.h"
 #include "components/performance_manager/graph/graph_impl.h"
 #include "components/performance_manager/graph/node_base.h"
@@ -19,12 +24,39 @@
 #include "components/performance_manager/graph/process_node_impl.h"
 #include "components/performance_manager/graph/system_node_impl.h"
 #include "components/performance_manager/graph/worker_node_impl.h"
+#include "components/performance_manager/public/browser_child_process_host_id.h"
+#include "components/performance_manager/public/browser_child_process_host_proxy.h"
+#include "components/performance_manager/public/render_process_host_id.h"
 #include "components/performance_manager/public/render_process_host_proxy.h"
+#include "content/public/browser/browsing_instance_id.h"
+#include "content/public/browser/frame_tree_node_id.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
+#include "url/origin.h"
+
+namespace content {
+class WebContents;
+}
 
 namespace performance_manager {
+
+// Returns a unique frame routing ID to use for test FrameNodes. The generated
+// id is not guaranteed to be different from ids set explicitly by the test.
+int NextTestFrameRoutingId();
+
+// Returns a unique FrameTreeNodeId to use for test FrameNodes.
+content::FrameTreeNodeId NextTestFrameTreeNodeId();
+
+// Returns a unique RenderProcessHostId to use for test ProcessNodes. The
+// generated id is not guaranteed to be different from ids set explicitly by the
+// test.
+RenderProcessHostId NextTestRenderProcessHostId();
+
+// Returns a unique BrowserChildProcessHostId to use for test ProcessNodes. The
+// generated id is not guaranteed to be different from ids set explicitly by the
+// test.
+BrowserChildProcessHostId NextTestBrowserChildProcessHostId();
 
 template <class NodeClass>
 class TestNodeWrapper {
@@ -34,7 +66,7 @@ class TestNodeWrapper {
   template <typename... Args>
   static TestNodeWrapper<NodeClass> Create(GraphImpl* graph, Args&&... args);
 
-  TestNodeWrapper() {}
+  TestNodeWrapper() = default;
 
   explicit TestNodeWrapper(std::unique_ptr<NodeClass> impl)
       : impl_(std::move(impl)) {
@@ -42,9 +74,16 @@ class TestNodeWrapper {
   }
 
   TestNodeWrapper(TestNodeWrapper&& other) : impl_(std::move(other.impl_)) {}
+  TestNodeWrapper& operator=(TestNodeWrapper&& other) {
+    if (this != &other) {
+      reset();
+      impl_ = std::move(other.impl_);
+    }
+    return *this;
+  }
 
-  void operator=(TestNodeWrapper&& other) { impl_ = std::move(other.impl_); }
-  void operator=(const TestNodeWrapper& other) = delete;
+  TestNodeWrapper(const TestNodeWrapper& other) = delete;
+  TestNodeWrapper& operator=(const TestNodeWrapper& other) = delete;
 
   ~TestNodeWrapper() { reset(); }
 
@@ -79,25 +118,67 @@ struct TestNodeWrapper<FrameNodeImpl>::Factory {
       ProcessNodeImpl* process_node,
       PageNodeImpl* page_node,
       FrameNodeImpl* parent_frame_node,
-      int frame_tree_node_id,
+      FrameNodeImpl* outer_document_for_inner_frame_root,
       int render_frame_id,
       const blink::LocalFrameToken& frame_token = blink::LocalFrameToken(),
-      int32_t browsing_instance_id = 0,
-      int32_t site_instance_id = 0) {
+      content::FrameTreeNodeId frame_tree_node_id = NextTestFrameTreeNodeId(),
+      content::BrowsingInstanceId browsing_instance_id =
+          content::BrowsingInstanceId(0),
+      content::SiteInstanceGroupId site_instance_group_id =
+          content::SiteInstanceGroupId(0),
+      bool is_active = true) {
     return std::make_unique<FrameNodeImpl>(
-        process_node, page_node, parent_frame_node, frame_tree_node_id,
-        render_frame_id, frame_token, browsing_instance_id, site_instance_id);
+        process_node, page_node, parent_frame_node,
+        outer_document_for_inner_frame_root, render_frame_id, frame_token,
+        frame_tree_node_id,
+        perfetto::NamedTrack("Frame",
+                             base::PersistentHash(frame_token->AsBytes())),
+        browsing_instance_id, site_instance_group_id, is_active);
   }
 };
 
-// A specialized factory function for ProcessNodes which will provide an empty
-// RenderProcessHostProxy when it's not needed.
+// A specialized factory function for ProcessNodes that provides an
+// autogenerated proxy as needed.
 template <>
 struct TestNodeWrapper<ProcessNodeImpl>::Factory {
+  // Creates a ProcessNode for the browser process.
+  static std::unique_ptr<ProcessNodeImpl> Create(BrowserProcessNodeTag tag) {
+    return std::make_unique<ProcessNodeImpl>(tag);
+  }
+
+  // Creates a ProcessNode for a renderer process.
+  //
+  // Note that Create() with no arguments calls this, which can be confusing:
+  // prefer GraphTestHarness::CreateRendererProcessNode(). The production
+  // equivalent, PerformanceManager::CreateNodeImpl(), has no default argument
+  // which makes it more clear that CreateNodeImpl(RenderProcessHostProxy(...))
+  // creates a renderer node.
   static std::unique_ptr<ProcessNodeImpl> Create(
-      content::ProcessType process_type = content::PROCESS_TYPE_RENDERER,
       RenderProcessHostProxy proxy = RenderProcessHostProxy()) {
-    // Provide an empty RenderProcessHostProxy by default.
+    // Create a proxy if the caller didn't pass a valid one.
+    if (!proxy.is_valid()) {
+      proxy = RenderProcessHostProxy::CreateForTesting(
+          NextTestRenderProcessHostId());
+    }
+    return std::make_unique<ProcessNodeImpl>(
+        std::move(proxy), base::Process::Priority::kMaxValue);
+  }
+
+  // Creates a ProcessNode for a non-renderer child process.
+  static std::unique_ptr<ProcessNodeImpl> Create(
+      content::ProcessType process_type,
+      BrowserChildProcessHostProxy proxy = BrowserChildProcessHostProxy()) {
+    // To create a browser ProcessNode, use Create(BrowserProcessNodeTag{}) or
+    // GraphTestHarness::CreateBrowserProcessNode().
+    CHECK_NE(process_type, content::PROCESS_TYPE_BROWSER);
+    // To create a renderer ProcessNode, use Create() or
+    // GraphTestHarness::CreateRendererProcessNode().
+    CHECK_NE(process_type, content::PROCESS_TYPE_RENDERER);
+    // Create a proxy if the caller didn't pass a valid one.
+    if (!proxy.is_valid()) {
+      proxy = BrowserChildProcessHostProxy::CreateForTesting(
+          NextTestBrowserChildProcessHostId());
+    }
     return std::make_unique<ProcessNodeImpl>(process_type, std::move(proxy));
   }
 };
@@ -107,16 +188,18 @@ struct TestNodeWrapper<ProcessNodeImpl>::Factory {
 template <>
 struct TestNodeWrapper<PageNodeImpl>::Factory {
   static std::unique_ptr<PageNodeImpl> Create(
-      const WebContentsProxy& wc_proxy = WebContentsProxy(),
-      const std::string& browser_context_id = std::string(),
+      base::WeakPtr<content::WebContents> web_contents = nullptr,
+      const base::UnguessableToken& browser_context_id =
+          base::UnguessableToken(),
       const GURL& url = GURL(),
-      bool is_visible = false,
-      bool is_audible = false,
+      PagePropertyFlags initial_property_flags = {},
       base::TimeTicks visibility_change_time = base::TimeTicks::Now(),
-      PageNode::PageState page_state = PageNode::PageState::kActive) {
-    return std::make_unique<PageNodeImpl>(wc_proxy, browser_context_id, url,
-                                          is_visible, is_audible,
-                                          visibility_change_time, page_state);
+      const content::WebContents::UniqueToken& page_token =
+          content::WebContents::UniqueToken()) {
+    return std::make_unique<PageNodeImpl>(
+        std::move(web_contents), page_token, browser_context_id, url,
+        initial_property_flags, visibility_change_time,
+        perfetto::NamedTrack("PageNodeTest"));
   }
 };
 
@@ -127,10 +210,12 @@ struct TestNodeWrapper<WorkerNodeImpl>::Factory {
   static std::unique_ptr<WorkerNodeImpl> Create(
       WorkerNode::WorkerType worker_type,
       ProcessNodeImpl* process_node,
-      const std::string& browser_context_id = std::string(),
-      const blink::WorkerToken& token = blink::WorkerToken()) {
+      const base::UnguessableToken& browser_context_id =
+          base::UnguessableToken(),
+      const blink::WorkerToken& token = blink::WorkerToken(),
+      const url::Origin& origin = url::Origin()) {
     return std::make_unique<WorkerNodeImpl>(browser_context_id, worker_type,
-                                            process_node, token);
+                                            process_node, token, origin);
   }
 };
 
@@ -158,6 +243,10 @@ class TestNodeWrapper<SystemNodeImpl> {
 
   explicit TestNodeWrapper(SystemNodeImpl* impl) : impl_(impl) {}
   TestNodeWrapper(TestNodeWrapper&& other) : impl_(other.impl_) {}
+
+  TestNodeWrapper(const TestNodeWrapper&) = delete;
+  TestNodeWrapper& operator=(const TestNodeWrapper&) = delete;
+
   ~TestNodeWrapper() { reset(); }
 
   SystemNodeImpl* operator->() const { return impl_; }
@@ -166,9 +255,7 @@ class TestNodeWrapper<SystemNodeImpl> {
   void reset() { impl_ = nullptr; }
 
  private:
-  SystemNodeImpl* impl_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestNodeWrapper);
+  raw_ptr<SystemNodeImpl> impl_;
 };
 
 class TestGraphImpl : public GraphImpl {
@@ -185,10 +272,28 @@ class TestGraphImpl : public GraphImpl {
       ProcessNodeImpl* process_node,
       PageNodeImpl* page_node,
       FrameNodeImpl* parent_frame_node = nullptr,
-      int frame_tree_node_id = 0);
+      content::BrowsingInstanceId browsing_instance_id =
+          content::BrowsingInstanceId(),
+      content::FrameTreeNodeId frame_tree_node_id = content::FrameTreeNodeId());
 
- private:
-  int next_frame_routing_id_ = 0;
+  // Creates a speculative (non-active) frame node with an automatically
+  // generated routing id.
+  TestNodeWrapper<FrameNodeImpl> CreateSpeculativeFrameNodeAutoId(
+      ProcessNodeImpl* process_node,
+      PageNodeImpl* page_node,
+      FrameNodeImpl* parent_frame_node = nullptr,
+      content::BrowsingInstanceId browsing_instance_id =
+          content::BrowsingInstanceId(),
+      content::FrameTreeNodeId frame_tree_node_id = content::FrameTreeNodeId());
+
+  // Wrappers around Create<ProcessNodeImpl>(...) that make the type of process
+  // more clear.
+  TestNodeWrapper<ProcessNodeImpl> CreateBrowserProcessNode();
+  TestNodeWrapper<ProcessNodeImpl> CreateRendererProcessNode(
+      RenderProcessHostProxy proxy = RenderProcessHostProxy());
+  TestNodeWrapper<ProcessNodeImpl> CreateBrowserChildProcessNode(
+      content::ProcessType process_type = content::PROCESS_TYPE_UTILITY,
+      BrowserChildProcessHostProxy proxy = BrowserChildProcessHostProxy());
 };
 
 // A test harness that initializes the graph without the rest of
@@ -227,9 +332,42 @@ class GraphTestHarness : public ::testing::Test {
       ProcessNodeImpl* process_node,
       PageNodeImpl* page_node,
       FrameNodeImpl* parent_frame_node = nullptr,
-      int frame_tree_node_id = 0) {
+      content::BrowsingInstanceId browsing_instance_id =
+          content::BrowsingInstanceId(),
+      content::FrameTreeNodeId frame_tree_node_id =
+          content::FrameTreeNodeId()) {
     return graph()->CreateFrameNodeAutoId(
-        process_node, page_node, parent_frame_node, frame_tree_node_id);
+        process_node, page_node, parent_frame_node, browsing_instance_id,
+        frame_tree_node_id);
+  }
+
+  TestNodeWrapper<FrameNodeImpl> CreateSpeculativeFrameNodeAutoId(
+      ProcessNodeImpl* process_node,
+      PageNodeImpl* page_node,
+      FrameNodeImpl* parent_frame_node = nullptr,
+      content::BrowsingInstanceId browsing_instance_id =
+          content::BrowsingInstanceId(),
+      content::FrameTreeNodeId frame_tree_node_id =
+          content::FrameTreeNodeId()) {
+    return graph()->CreateSpeculativeFrameNodeAutoId(
+        process_node, page_node, parent_frame_node, browsing_instance_id,
+        frame_tree_node_id);
+  }
+
+  TestNodeWrapper<ProcessNodeImpl> CreateBrowserProcessNode() {
+    return graph()->CreateBrowserProcessNode();
+  }
+
+  TestNodeWrapper<ProcessNodeImpl> CreateRendererProcessNode(
+      RenderProcessHostProxy proxy = RenderProcessHostProxy()) {
+    return graph()->CreateRendererProcessNode(std::move(proxy));
+  }
+
+  TestNodeWrapper<ProcessNodeImpl> CreateBrowserChildProcessNode(
+      content::ProcessType process_type = content::PROCESS_TYPE_UTILITY,
+      BrowserChildProcessHostProxy proxy = BrowserChildProcessHostProxy()) {
+    return graph()->CreateBrowserChildProcessNode(process_type,
+                                                  std::move(proxy));
   }
 
   TestNodeWrapper<SystemNodeImpl> GetSystemNode() {
@@ -243,9 +381,7 @@ class GraphTestHarness : public ::testing::Test {
   // Allows configuring which Graph features are initialized during "SetUp".
   // This defaults to initializing no features. Features will be initialized
   // before "OnGraphCreated" is called.
-  GraphFeaturesHelper& GetGraphFeaturesHelper() {
-    return graph_features_helper_;
-  }
+  GraphFeatures& GetGraphFeatures() { return graph_features_; }
 
   // A callback that will be invoked as part of the graph initialization
   // during "SetUp". The same effect can be had by overriding "SetUp" in this
@@ -268,7 +404,7 @@ class GraphTestHarness : public ::testing::Test {
   void TearDownAndDestroyGraph();
 
  private:
-  GraphFeaturesHelper graph_features_helper_;
+  GraphFeatures graph_features_;
   content::BrowserTaskEnvironment task_env_;
   std::unique_ptr<TestGraphImpl> graph_;
 

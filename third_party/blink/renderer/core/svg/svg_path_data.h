@@ -21,8 +21,10 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_SVG_SVG_PATH_DATA_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_SVG_SVG_PATH_DATA_H_
 
-#include "third_party/blink/renderer/platform/geometry/float_point.h"
+#include <array>
+
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
+#include "ui/gfx/geometry/point_f.h"
 
 namespace blink {
 
@@ -61,40 +63,111 @@ static inline bool IsAbsolutePathSegType(const SVGPathSegType type) {
   return type < kPathSegMoveToAbs || type % 2 == 0;
 }
 
+// Command letter for each SVGPathSegType, indexed by enum value.
+// TODO(crbug.com/40441025): Unify the parallel command switches with a
+// descriptor.
+inline constexpr auto kPathSegmentCharacter = std::to_array<char>({
+    0,    // kPathSegUnknown
+    'Z',  // kPathSegClosePath
+    'M',  // kPathSegMoveToAbs
+    'm',  // kPathSegMoveToRel
+    'L',  // kPathSegLineToAbs
+    'l',  // kPathSegLineToRel
+    'C',  // kPathSegCurveToCubicAbs
+    'c',  // kPathSegCurveToCubicRel
+    'Q',  // kPathSegCurveToQuadraticAbs
+    'q',  // kPathSegCurveToQuadraticRel
+    'A',  // kPathSegArcAbs
+    'a',  // kPathSegArcRel
+    'H',  // kPathSegLineToHorizontalAbs
+    'h',  // kPathSegLineToHorizontalRel
+    'V',  // kPathSegLineToVerticalAbs
+    'v',  // kPathSegLineToVerticalRel
+    'S',  // kPathSegCurveToCubicSmoothAbs
+    's',  // kPathSegCurveToCubicSmoothRel
+    'T',  // kPathSegCurveToQuadraticSmoothAbs
+    't',  // kPathSegCurveToQuadraticSmoothRel
+});
+
+// Inverse of kPathSegmentCharacter; kPathSegUnknown for unrecognized letters.
+// TODO(crbug.com/40441025): Derive from kPathSegmentCharacter to avoid
+// duplication.
+inline SVGPathSegType MapLetterToSegmentType(unsigned letter) {
+  switch (letter) {
+    case 'Z':
+    case 'z':
+      return kPathSegClosePath;
+    case 'M':
+      return kPathSegMoveToAbs;
+    case 'm':
+      return kPathSegMoveToRel;
+    case 'L':
+      return kPathSegLineToAbs;
+    case 'l':
+      return kPathSegLineToRel;
+    case 'C':
+      return kPathSegCurveToCubicAbs;
+    case 'c':
+      return kPathSegCurveToCubicRel;
+    case 'Q':
+      return kPathSegCurveToQuadraticAbs;
+    case 'q':
+      return kPathSegCurveToQuadraticRel;
+    case 'A':
+      return kPathSegArcAbs;
+    case 'a':
+      return kPathSegArcRel;
+    case 'H':
+      return kPathSegLineToHorizontalAbs;
+    case 'h':
+      return kPathSegLineToHorizontalRel;
+    case 'V':
+      return kPathSegLineToVerticalAbs;
+    case 'v':
+      return kPathSegLineToVerticalRel;
+    case 'S':
+      return kPathSegCurveToCubicSmoothAbs;
+    case 's':
+      return kPathSegCurveToCubicSmoothRel;
+    case 'T':
+      return kPathSegCurveToQuadraticSmoothAbs;
+    case 't':
+      return kPathSegCurveToQuadraticSmoothRel;
+    default:
+      return kPathSegUnknown;
+  }
+}
+
 struct PathSegmentData {
   DISALLOW_NEW();
 
  public:
-  PathSegmentData()
-      : command(kPathSegUnknown), arc_sweep(false), arc_large(false) {}
+  float ArcAngle() const { return point2.x(); }
+  void SetArcAngle(float angle) { point2.set_x(angle); }
 
-  const FloatPoint& ArcRadii() const { return point1; }
-  FloatPoint& ArcRadii() { return point1; }
-
-  float ArcAngle() const { return point2.X(); }
-  void SetArcAngle(float angle) { point2.SetX(angle); }
-
-  float R1() const { return ArcRadii().X(); }
-  float R2() const { return ArcRadii().Y(); }
+  float ArcRadiusX() const { return point1.x(); }
+  void SetArcRadiusX(float x) { point1.set_x(x); }
+  float ArcRadiusY() const { return point1.y(); }
+  void SetArcRadiusY(float y) { point1.set_y(y); }
 
   bool LargeArcFlag() const { return arc_large; }
   bool SweepFlag() const { return arc_sweep; }
 
-  float X() const { return target_point.X(); }
-  float Y() const { return target_point.Y(); }
+  float X() const { return target_point.x(); }
+  float Y() const { return target_point.y(); }
 
-  float X1() const { return point1.X(); }
-  float Y1() const { return point1.Y(); }
+  float X1() const { return point1.x(); }
+  float Y1() const { return point1.y(); }
 
-  float X2() const { return point2.X(); }
-  float Y2() const { return point2.Y(); }
+  float X2() const { return point2.x(); }
+  float Y2() const { return point2.y(); }
 
-  SVGPathSegType command;
-  FloatPoint target_point;
-  FloatPoint point1;
-  FloatPoint point2;
-  bool arc_sweep;
-  bool arc_large;
+  SVGPathSegType command = kPathSegUnknown;
+  gfx::PointF target_point;
+  gfx::PointF point1;
+  gfx::PointF point2;
+  bool arc_sweep = false;
+  bool arc_large = false;
 };
 
 }  // namespace blink

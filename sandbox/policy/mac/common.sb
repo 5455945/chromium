@@ -1,4 +1,4 @@
-; Copyright 2017 The Chromium Authors. All rights reserved.
+; Copyright 2017 The Chromium Authors
 ; Use of this source code is governed by a BSD-style license that can be
 ; found in the LICENSE file.
 (version 1)
@@ -12,9 +12,9 @@
 ; Define constants for all of the parameter strings passed in.
 (define browser-pid "BROWSER_PID")
 (define bundle-id "BUNDLE_ID")
+(define helper-bundle-id "HELPER_BUNDLE_ID")
 (define bundle-path "BUNDLE_PATH")
 (define component-path "COMPONENT_PATH")
-(define current-pid "CURRENT_PID")
 (define disable-sandbox-denial-logging "DISABLE_SANDBOX_DENIAL_LOGGING")
 (define enable-logging "ENABLE_LOGGING")
 (define executable-path "EXECUTABLE_PATH")
@@ -24,15 +24,18 @@
 (define darwin-user-cache-dir "DARWIN_USER_CACHE_DIR")
 (define darwin-user-dir "DARWIN_USER_DIR")
 (define darwin-user-temp-dir "DARWIN_USER_TEMP_DIR")
-; There are two separate flags for syscall filtering to allow it
-; to be rolled out to one process type at a time, while still allowing
-; local development.
-(define filter-syscalls "FILTER_SYSCALLS")
-(define filter-syscalls-debug "FILTER_SYSCALLS_DEBUG")
+(define user-data-dir "USER_DATA_DIR")
+(define user-cache-dir "USER_CACHE_DIR")
 
-; Backwards compatibility for 10.11.
-(if (not (defined? 'iokit-registry-entry-class))
-  (define iokit-registry-entry-class iokit-user-client-class))
+; Sandboxed processes which use Metal may need to disable the shader cache.
+(define disable-metal-shader-cache "DISABLE_METAL_SHADER_CACHE")
+
+; Allows the renderer process to query process-info-pidinfo for other processes.
+(define allow-renderer-pidinfo "ALLOW_RENDERER_PIDINFO")
+
+; Defined if WebNN model compilation is offloaded to a separate compiler
+; process.
+(define webnn-compiler-process "WEBNN_COMPILER_PROCESS")
 
 ; --enable-sandbox-logging causes the sandbox to log failures to the syslog.
 (if (param-true? disable-sandbox-denial-logging)
@@ -44,42 +47,110 @@
 ; Allow sending signals to self - https://crbug.com/20370
 (allow signal (target self))
 
+; TODO(rsesek): Lock down `(deny process-info*)`.
+(allow process-info-pidinfo (target self))
+
 ; Consumes a subpath and appends it to the user's homedir path.
 (define (user-homedir-path subpath)
   (string-append (param homedir-as-literal) subpath))
 
-; A function that specific profiles (i.e. renderer) can call to allow
-; font rendering.
+; A function that specific profiles (i.e. renderer) can call to allow access to
+; fonts. Old fonts are stored in the resource fork, so also grant permission to
+; read xattrs (https://crbug.com/429221317).
 (define (allow-font-access)
   (begin
-    (allow file-read-data
+    (allow file-read-data file-read-xattr
       (subpath "/Library/Fonts")
       (subpath "/System/Library/Fonts")
       (subpath (user-homedir-path "/Library/Fonts"))
     )
     (allow mach-lookup
-      ; https://crbug.com/756145, https://crbug.com/786615
+      ; https://crbug.com/41339707, https://crbug.com/41356325
       (global-name "com.apple.FontObjectsServer")
       (global-name "com.apple.fonts")
     )
-    (if (< os-version 1012)
-      (allow mach-lookup (global-name "com.apple.FontServer")))
     ; To allow accessing downloaded and other hidden fonts in
     ; /System/Library/Asssets/com_apple_MobileAsset_Font*.
-    ; (https://crbug.com/662686)
+    ; (https://crbug.com/41284825)
     (allow file-read* (extension "com.apple.app-sandbox.read"))))
+
+; Allows directory operations and file access for known Metal shader cache
+; files in `dir`.
+(define (allow-metal-shader-cache-in dir)
+  ; Directory operations
+  (allow file-read* file-write-create
+    (require-all
+      (vnode-type DIRECTORY)
+      (require-any
+        (literal dir)
+        (subpath (string-append dir "/com.apple.gpuarchiver"))
+        (subpath (string-append dir "/com.apple.metalfe"))
+        (subpath (string-append dir "/com.apple.metal")))))
+
+  ; File read and write access to known Metal cache files, matching paths
+  ; such as:
+  ;   <dir>/com.apple.metalfe/modules.timestamp
+  ;   <dir>/com.apple.metal/16777235_355/functions.data
+  ;   <dir>/com.apple.metal/16777235_355/functions.list
+  ;   <dir>/com.apple.metal/16777235_179/functions1.list
+  ;   <dir>/com.apple.metal/32024/libraries.data
+  ;   <dir>/com.apple.metal/32024/libraries.list
+  (allow file-read*
+    file-write-data
+    file-write-create
+    file-write-unlink
+    file-write-xattr
+    (literal (string-append dir "/com.apple.metalfe/modules.timestamp"))
+    (regex (string-append
+      "^" (regex-quote dir) #"/com\.apple\.metal/[^/]+/"
+      #"(functions|libraries)[0-9]*\.(data|list)(\.tmp)?$"))))
+
+; Metal shader compilation may be offloaded to a helper process that needs
+; access to the user cache directory in order to cache its work to disk. This
+; allows issuing sandbox extensions to the Metal cache directories in `dir`.
+; See https://crbug.com/1453813
+(define (allow-metal-shader-cache-extensions-in dir)
+  (allow file-issue-extension
+    (require-all
+      (extension-class "com.apple.app-sandbox.read-write")
+      (require-any
+        (subpath (string-append dir "/com.apple.metalfe"))
+        (subpath (string-append dir "/com.apple.gpuarchiver"))))))
+
+; Allows the requisite file access needed for Metal shader compilation to work
+; with the shader cache.
+(define (allow-metal-shader-cache-access)
+  (define cache-dir (param darwin-user-cache-dir))
+  (if (param-defined? bundle-id)
+    (allow-metal-shader-cache-in
+      (string-append cache-dir "/" (param bundle-id))))
+  ; If this sandbox is applied to an executable that is not within an app
+  ; bundle, such as in a unit test, the helper-bundle-id parameter will not be
+  ; set and issuing sandbox extensions to the Metal cache directories will not
+  ; be allowed.
+  (if (param-defined? helper-bundle-id)
+    (let ((helper-bundle-cache-dir
+           (string-append cache-dir "/" (param helper-bundle-id))))
+      (allow-metal-shader-cache-in helper-bundle-cache-dir)
+      (allow-metal-shader-cache-extensions-in helper-bundle-cache-dir))
+    (allow-metal-shader-cache-in cache-dir)))
+
+; A function profiles can call to allow access to the Metal shader cache, unless
+; the cache is disabled. See https://crbug.com/1159113
+(define (maybe-allow-metal-shader-cache-access)
+  (unless (param-true? disable-metal-shader-cache)
+    (allow-metal-shader-cache-access)))
 
 ; Reads of signed Mach-O blobs created by the CVMS server.
 ; https://crbug.com/850021
 (define (allow-cvms-blobs)
-  (if (>= os-version 1014)
-    (begin
-      (allow file-read* file-write-unlink
-        (prefix "/private/tmp/cvmsCodeSignObj"))
-      (allow file-read*
-        (extension "com.apple.cvms.kernel")
-        (prefix "/private/var/db/CVMS/cvmsCodeSignObj"))
-)))
+  (begin
+    (allow file-read* file-write-unlink
+      (prefix "/private/tmp/cvmsCodeSignObj"))
+    (allow file-read*
+      (extension "com.apple.cvms.kernel")
+      (prefix "/private/var/db/CVMS/cvmsCodeSignObj"))
+))
 
 ; Allow logging for all processes.
 (allow file-write*
@@ -111,6 +182,40 @@
 ; All processes can read the bundle contents.
 (allow file-read* (subpath (param bundle-path)))
 
+; A sandbox bug on macOS 11 and 12 causes the sandbox to see any paths within
+; the data volume (/System/Volumes/Data) outside of system firm link locations
+; (listed in /usr/share/firmlinks) as though they were not on the data volume,
+; causing it to deny access to user paths containing the data volume mount point
+; as a prefix. This is filed as https://openradar.appspot.com/FB9738355 and
+; tracked at https://crbug.com/1266490. Although macOS 10.15 also has the root
+; volume split, this bug does not appear to affect that OS version.
+;
+; When the bundle path appears in the data volume, this causes the sandbox to
+; deny access to the bundle.
+;
+; This is not a problem in normal use, as typical bundle paths, while on the
+; data volume, will be in system firm link locations such as /Applications or
+; /Users. As a workaround for other cases where the bundle may be present on the
+; data volume but not in a system firm link location, configure the sandbox with
+; an alternate bundle path so that it permits access to the bundle.
+(define (string-prefix? str prefix)
+  (let ((l (string-length prefix)))
+    (if (< (string-length str) l)
+      #f
+      (equal? (substring str 0 l) prefix)
+    )
+  )
+)
+(define data-volume-root "/System/Volumes/Data/")
+(when (string-prefix? (param bundle-path) data-volume-root)
+  (define (strip-leading-chars str count)
+    (substring str count (string-length str))
+  )
+  (allow file-read*
+         (subpath (strip-leading-chars (param bundle-path)
+                                       (- (string-length data-volume-root) 1))))
+)
+
 ; Allow reads of system libraries and frameworks.
 (allow file-read*
   (subpath "/System/Library/CoreServices/CoreTypes.bundle")
@@ -119,6 +224,15 @@
   (subpath "/System/Library/Preferences/Logging")
   (subpath "/System/Library/PrivateFrameworks")
   (subpath "/usr/lib")
+)
+
+; In some circumstances, Safari updates are installed below /Library/Apple and
+; SafariServices.framework in /System/Library/Frameworks is replaced with a
+; symlink into that directory tree. These paths must be readable to allow
+; the framework to be loaded.
+(allow file-read*
+  (subpath "/Library/Apple/System/Library/Frameworks")
+  (subpath "/Library/Apple/System/Library/PrivateFrameworks")
 )
 
 ; Reads from /etc.
@@ -140,12 +254,8 @@
   (path "/dev/urandom")
 )
 
-(if (>= os-version 1013)
-  (begin (allow file-read* (subpath "/private/var/db/timezone"))
-         (allow file-read-data (subpath "/usr/share/zoneinfo.default"))))
-
-(if (< os-version 1013)
-  (allow file-read-data (subpath "/usr/share/zoneinfo")))
+(allow file-read* (subpath "/private/var/db/timezone"))
+(allow file-read-data (subpath "/usr/share/zoneinfo.default"))
 
 ; Reads from /Library.
 (allow file-read-data
@@ -160,20 +270,29 @@
 ; Reads from /System.
 (allow file-read-data
   (path "/System/Library/CoreServices/SystemVersion.plist")
-  (path "/System/Library/CoreServices/SystemVersionCompat.plist") ; https://crbug.com/1108832
   (path "/System/Library/CoreServices/checkfixlist")
+)
+
+; From /System/Library/Sandbox/Profiles/dyld-support.sb.
+(allow file-read* file-map-executable
+  (subpath "/System/Cryptexes/App")
+  (subpath "/System/Cryptexes/OS")
+  (subpath "/System/Volumes/Preboot/Cryptexes/App/System")
+  (subpath "/System/Volumes/Preboot/Cryptexes/OS")
 )
 
 ; Reads from /usr.
 (allow file-read-data
   (subpath "/usr/share/icu")
+  (subpath "/usr/share/locale")
 )
 
 ; Access to the home directory.
 (allow file-read-data
   (path (string-append (user-homedir-path "/Library/Preferences/") (param bundle-id) ".plist"))
   (path (user-homedir-path "/Library/Preferences/.GlobalPreferences.plist"))
-  (regex (user-homedir-path #"/Library/Preferences/ByHost/.GlobalPreferences.*"))
+  (path (user-homedir-path "/Library/Preferences/.GlobalPreferences_m.plist"))
+  (prefix (user-homedir-path "/Library/Preferences/ByHost/.GlobalPreferences"))
   (path (user-homedir-path "/Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist"))
 )
 
@@ -189,17 +308,27 @@
   (sysctl-name "hw.activecpu")
   (sysctl-name "hw.busfrequency_compat")
   (sysctl-name "hw.byteorder")
+  (sysctl-name "hw.cacheconfig")
   (sysctl-name "hw.cachelinesize_compat")
+  (sysctl-name "hw.cpufamily")
   (sysctl-name "hw.cpufrequency_compat")
   (sysctl-name "hw.cputype")
+  (sysctl-name "hw.l1dcachesize_compat")
+  (sysctl-name "hw.l1icachesize_compat")
+  (sysctl-name "hw.l2cachesize_compat")
+  (sysctl-name "hw.l3cachesize_compat")
   (sysctl-name "hw.logicalcpu_max")
   (sysctl-name "hw.machine")
+  (sysctl-name "hw.memsize")
   (sysctl-name "hw.ncpu")
+  (sysctl-name "hw.nperflevels")
+  (sysctl-name "hw.packages")
   (sysctl-name "hw.pagesize_compat")
   (sysctl-name "hw.physicalcpu_max")
   (sysctl-name "hw.tbfrequency_compat")
   (sysctl-name "hw.vectorunit")
   (sysctl-name "kern.hostname")
+  (sysctl-name "kern.hv_vmm_present")
   (sysctl-name "kern.maxfilesperproc")
   (sysctl-name "kern.osproductversion")
   (sysctl-name "kern.osrelease")
@@ -210,7 +339,8 @@
   (sysctl-name "kern.usrstack64")
   (sysctl-name "kern.version")
   (sysctl-name "sysctl.proc_cputype")
-  (sysctl-name (string-append "kern.proc.pid." (param current-pid)))
+  (sysctl-name-prefix "hw.optional.")
+  (sysctl-name-prefix "hw.perflevel")
 )
 
 (allow network-outbound
@@ -218,86 +348,12 @@
   (literal "/private/var/run/syslog")
 )
 
-; This is available in 10.15+, and rolled out as a Finch experiment.
-(if (param-true? filter-syscalls)
-  (when (defined? 'syscall-unix)
-    (allow syscall-unix
-      (syscall-number SYS___disable_threadsignal)
-      (syscall-number SYS___mac_syscall)
-      (syscall-number SYS___pthread_kill)
-      (syscall-number SYS___pthread_markcancel)
-      (syscall-number SYS___pthread_sigmask)
-      (syscall-number SYS___semwait_signal)
-      (syscall-number SYS___semwait_signal_nocancel)
-      (syscall-number SYS_access)
-      (syscall-number SYS_bsdthread_create)
-      (syscall-number SYS_bsdthread_ctl)
-      (syscall-number SYS_bsdthread_register)
-      (syscall-number SYS_bsdthread_terminate)
-      (syscall-number SYS_close)
-      (syscall-number SYS_close_nocancel)
-      (syscall-number SYS_csops_audittoken)
-      (syscall-number SYS_exit)
-      (syscall-number SYS_fcntl)
-      (syscall-number SYS_fileport_makefd)
-      (syscall-number SYS_fileport_makeport)
-      (syscall-number SYS_fstat64)
-      (syscall-number SYS_fstatat64)
-      (syscall-number SYS_fstatfs64)
-      (syscall-number SYS_getattrlist)
-      (syscall-number SYS_getattrlistbulk)
-      (syscall-number SYS_getaudit_addr)
-      (syscall-number SYS_getdirentries64)
-      (syscall-number SYS_geteuid)
-      (syscall-number SYS_getgid)
-      (syscall-number SYS_gethostuuid)
-      (syscall-number SYS_getpid)
-      (syscall-number SYS_getppid)
-      (syscall-number SYS_getpriority)
-      (syscall-number SYS_getrlimit)
-      (syscall-number SYS_gettimeofday)
-      (syscall-number SYS_getuid)
-      (syscall-number SYS_ioctl)
-      (syscall-number SYS_issetugid)
-      (syscall-number SYS_kdebug_trace64)
-      (syscall-number SYS_kevent64)
-      (syscall-number SYS_kevent_id)
-      (syscall-number SYS_kevent_qos)
-      (syscall-number SYS_kqueue)
-      (syscall-number SYS_lstat64)
-      (syscall-number SYS_madvise)
-      (syscall-number SYS_mmap)
-      (syscall-number SYS_mprotect)
-      (syscall-number SYS_munmap)
-      (syscall-number SYS_open)
-      (syscall-number SYS_open_dprotected_np)
-      (syscall-number SYS_open_nocancel)
-      (syscall-number SYS_pread)
-      (syscall-number SYS_proc_info)
-      (syscall-number SYS_psynch_mutexdrop)
-      (syscall-number SYS_psynch_mutexwait)
-      (syscall-number SYS_psynch_rw_downgrade)
-      (syscall-number SYS_psynch_rw_longrdlock)
-      (syscall-number SYS_psynch_rw_rdlock)
-      (syscall-number SYS_psynch_rw_unlock)
-      (syscall-number SYS_psynch_rw_unlock2)
-      (syscall-number SYS_psynch_rw_upgrade)
-      (syscall-number SYS_psynch_rw_wrlock)
-      (syscall-number SYS_psynch_rw_yieldwrlock)
-      (syscall-number SYS_read)
-      (syscall-number SYS_read_nocancel)
-      (syscall-number SYS_readlink)
-      (syscall-number SYS_shm_open)
-      (syscall-number SYS_sigaction)
-      (syscall-number SYS_sigprocmask)
-      (syscall-number SYS_sigreturn)
-      (syscall-number SYS_stat64)
-      (syscall-number SYS_statfs64)
-      (syscall-number SYS_sysctl)
-      (syscall-number SYS_sysctlbyname)
-      (syscall-number SYS_thread_selfid)
-      (syscall-number SYS_ulock_wait)
-      (syscall-number SYS_ulock_wake)
-      (syscall-number SYS_workq_kernreturn)
-      (syscall-number SYS_workq_open)
-)))
+; Explicit denials. These are already covered by the blanket `(deny default)`,
+; but benefit from explanation as to why they're denied.
+(deny mach-lookup
+  ; CFPreferences falls back to in-process access to preference plists, known as
+  ; direct mode, when cfprefsd is inaccessible. This in-process access ensures
+  ; that our sandbox policy limits which preference domains can be accessed via
+  ; CFPreferences or NSUserDefaults.
+  (global-name "com.apple.cfprefsd.daemon")
+)

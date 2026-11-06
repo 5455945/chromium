@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,11 +11,10 @@ namespace test {
 
 std::string ChildLayerNamesAsString(const ui::Layer& parent) {
   std::string names;
-  for (auto it = parent.children().begin(); it != parent.children().end();
-       ++it) {
+  for (const Layer* child : parent.children()) {
     if (!names.empty())
       names += " ";
-    names += (*it)->name();
+    names += child->name();
   }
   return names;
 }

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,26 +7,27 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "content/common/content_export.h"
 #include "content/common/frame.mojom.h"
 #include "content/renderer/navigation_client.h"
 #include "third_party/blink/public/mojom/navigation/navigation_params.mojom.h"
 
 namespace blink {
-class WebDocumentLoader;
-
 namespace mojom {
 enum class CommitResult;
 }
-}
+}  // namespace blink
 
 namespace content {
 
 class CONTENT_EXPORT NavigationState {
  public:
+  NavigationState(const NavigationState&) = delete;
+  NavigationState& operator=(const NavigationState&) = delete;
+
   ~NavigationState();
 
-  static std::unique_ptr<NavigationState> Create(
+  static std::unique_ptr<NavigationState> CreateForCrossDocumentCommit(
       blink::mojom::CommonNavigationParamsPtr common_params,
       blink::mojom::CommitNavigationParamsPtr commit_params,
       mojom::NavigationClient::CommitNavigationCallback
@@ -34,10 +35,14 @@ class CONTENT_EXPORT NavigationState {
       std::unique_ptr<NavigationClient> navigation_client,
       bool was_initiated_in_this_frame);
 
-  static std::unique_ptr<NavigationState> CreateForSynchronousCommit();
+  static std::unique_ptr<NavigationState>
+  CreateForSameDocumentCommitFromBrowser(
+      blink::mojom::CommonNavigationParamsPtr common_params,
+      blink::mojom::CommitNavigationParamsPtr commit_params,
+      mojom::Frame::CommitSameDocumentNavigationCallback
+          commit_same_document_callback);
 
-  static NavigationState* FromDocumentLoader(
-      blink::WebDocumentLoader* document_loader);
+  static std::unique_ptr<NavigationState> CreateForSynchronousCommit();
 
   // True iff the frame's navigation was within the same document.
   bool WasWithinSameDocument();
@@ -63,9 +68,16 @@ class CONTENT_EXPORT NavigationState {
     common_params_->transition = transition;
   }
 
+  const base::TimeTicks& commit_start_time() const {
+    return commit_start_time_;
+  }
+
   void RunCommitNavigationCallback(
       mojom::DidCommitProvisionalLoadParamsPtr params,
       mojom::DidCommitProvisionalLoadInterfaceParamsPtr interface_params);
+
+  void RunCommitSameDocumentNavigationCallback(
+      blink::mojom::CommitResult commit_result);
 
  private:
   NavigationState(blink::mojom::CommonNavigationParamsPtr common_params,
@@ -74,7 +86,13 @@ class CONTENT_EXPORT NavigationState {
                   content::mojom::NavigationClient::CommitNavigationCallback
                       commit_callback,
                   std::unique_ptr<NavigationClient> navigation_client,
+                  mojom::Frame::CommitSameDocumentNavigationCallback
+                      commit_same_document_callback,
                   bool was_initiated_in_this_frame);
+
+  // The time when the NavigationState is created, which is when the commit IPC
+  // from the browser is received in the renderer.
+  base::TimeTicks commit_start_time_;
 
   bool was_within_same_document_;
 
@@ -114,7 +132,10 @@ class CONTENT_EXPORT NavigationState {
   // successful or not.
   mojom::NavigationClient::CommitNavigationCallback commit_callback_;
 
-  DISALLOW_COPY_AND_ASSIGN(NavigationState);
+  // Used to notify whether a same document commit request from the browser
+  // process was successful or not.
+  mojom::Frame::CommitSameDocumentNavigationCallback
+      commit_same_document_callback_;
 };
 
 }  // namespace content

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,15 +7,63 @@
 
 #include <stddef.h>
 
-#include "base/macros.h"
 #include "base/time/time.h"
+#include "content/common/content_export.h"
 #include "content/public/browser/service_worker_context.h"
+#include "third_party/blink/public/common/service_worker/embedded_worker_status.h"
 #include "third_party/blink/public/common/service_worker/service_worker_status_code.h"
 #include "ui/base/page_transition_types.h"
 
-class GURL;
-
 namespace content {
+
+// Used for UMA. Append-only.
+enum class ServiceWorkerMainScriptRequestValidationResult {
+  kOk = 0,
+  kForgedUrl = 1,
+  kForgedDestination = 2,
+  kForgedMode = 3,
+  kMaxValue = kForgedMode,
+};
+
+// LINT.IfChange(ServiceWorkerMessageDispatchContextValidationResult)
+
+// Used for UMA. Append-only.
+enum class ServiceWorkerMessageDispatchContextValidationResult {
+  kAllowed = 0,
+  kDisallowed = 1,
+  kMaxValue = kDisallowed,
+};
+
+// LINT.ThenChange(//tools/metrics/histograms/metadata/service/enums.xml:ServiceWorkerMessageDispatchContextValidationResult)
+
+// LINT.IfChange(ServiceWorkerStartWorkerContextValidationDifference)
+
+// Used for UMA. Append-only.
+enum class ServiceWorkerStartWorkerContextValidationDifference {
+  kBothAllowed = 0,
+  kOldAllowedNewDisallowed = 1,
+  kOldDisallowedNewAllowed = 2,
+  kBothDisallowed = 3,
+  kMaxValue = kBothDisallowed,
+};
+
+// LINT.ThenChange(//tools/metrics/histograms/metadata/service/enums.xml:ServiceWorkerStartWorkerContextValidationDifference)
+
+// LINT.IfChange(ServiceWorkerAutoPreloadDispatchResult)
+
+// Used for UMA. Append-only.
+enum class ServiceWorkerAutoPreloadDispatchResult {
+  kDispatched = 0,
+  kFeatureDisabled = 1,
+  kNotAllowedByBrowser = 2,
+  kNotOutermostMainFrame = 3,
+  kGuestStoragePartition = 4,
+  kWebRequestAPIProxy = 5,
+  kStartFailed = 6,
+  kMaxValue = kStartFailed,
+};
+
+// LINT.ThenChange(/tools/metrics/histograms/enums.xml:ServiceWorkerAutoPreloadDispatchResult)
 
 class ServiceWorkerMetrics {
  public:
@@ -36,15 +84,9 @@ class ServiceWorkerMetrics {
   };
 
   // Used for UMA. Append-only.
-  enum class StopStatus {
-    NORMAL,
-    DETACH_BY_REGISTRY,
-    TIMEOUT,
-    // Add new types here.
-    kMaxValue = TIMEOUT,
-  };
-
-  // Used for UMA. Append-only.
+  // Note: This enum is also used for behavioral checks, such as verifying
+  // if a service worker has a pending event that allows window interaction.
+  //
   // This class is used to indicate which event is fired/finished. Most events
   // have only one request that starts the event and one response that finishes
   // the event, but the fetch event has two responses, so there are two types of
@@ -90,22 +132,22 @@ class ServiceWorkerMetrics {
     PERIODIC_SYNC = 33,
     CONTENT_DELETE = 34,
     PUSH_SUBSCRIPTION_CHANGE = 35,
+    FETCH_FENCED_FRAME = 36,
+    BYPASS_MAIN_RESOURCE = 37,
+    SKIP_EMPTY_FETCH_HANDLER = 38,
+    BYPASS_ONLY_IF_SERVICE_WORKER_NOT_STARTED = 39,
+    WARM_UP = 40,
+    STATIC_ROUTER = 41,
     // Add new events to record here.
-    kMaxValue = PUSH_SUBSCRIPTION_CHANGE,
+    kMaxValue = STATIC_ROUTER,
   };
 
-  // Used for UMA. Append only.
-  enum class Site {
-    OTHER,  // Obsolete for UMA. Use WITH_FETCH_HANDLER or
-            // WITHOUT_FETCH_HANDLER.
-    NEW_TAB_PAGE,
-    WITH_FETCH_HANDLER,
-    WITHOUT_FETCH_HANDLER,
-    PLUS,
-    INBOX,
-    DOCS,
-    kMaxValue = DOCS,
-  };
+  static void RecordMainScriptRequestValidationResult(
+      ServiceWorkerMainScriptRequestValidationResult result);
+  static void RecordMessageDispatchContextValidationResult(
+      ServiceWorkerMessageDispatchContextValidationResult result);
+  static void RecordStartWorkerContextValidationDifference(
+      ServiceWorkerStartWorkerContextValidationDifference result);
 
   // Not used for UMA.
   enum class StartSituation {
@@ -133,6 +175,19 @@ class ServiceWorkerMetrics {
     kMaxValue = INACCURATE_CLOCK,
   };
 
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  //
+  // LINT.IfChange(SyntheticResponseEligibility)
+  enum class SyntheticResponseEligibility {
+    kEligible = 0,
+    kNotEligibleByReload = 1,
+    kNotEligibleByNoHeaderStored = 2,
+    kNotEligibleByIntercepted = 3,
+    kMaxValue = kNotEligibleByIntercepted,
+  };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/service/enums.xml:SyntheticResponseEligibility)
+
   // These are prefixed with "local" or "remote" to indicate whether the browser
   // process or renderer process recorded the timing (browser is local).
   struct StartTimes {
@@ -155,13 +210,9 @@ class ServiceWorkerMetrics {
     base::TimeTicks local_end;
   };
 
-  // Used for UMA. Append-only.
-  enum class OfflineCapableReason {
-    kTimeout = 0,
-    kSuccess = 1,
-    kRedirect = 2,
-    kMaxValue = kRedirect,
-  };
+  ServiceWorkerMetrics() = delete;
+  ServiceWorkerMetrics(const ServiceWorkerMetrics&) = delete;
+  ServiceWorkerMetrics& operator=(const ServiceWorkerMetrics&) = delete;
 
   // Converts an event type to a string. Used for tracing.
   static const char* EventTypeToString(EventType event_type);
@@ -169,37 +220,30 @@ class ServiceWorkerMetrics {
   // Converts a start situation to a string. Used for tracing.
   static const char* StartSituationToString(StartSituation start_situation);
 
-  // If the |url| is not a special site, returns Site::OTHER.
-  static Site SiteFromURL(const GURL& url);
-
   // Counts the result of reading a service worker script from storage.
   static void CountReadResponseResult(ReadResponseResult result);
   // Counts the result of writing a service worker script to storage.
   static void CountWriteResponseResult(WriteResponseResult result);
-
-  // Counts the number of page loads controlled by a Service Worker.
-  static void CountControlledPageLoad(Site site,
-                                      bool is_main_frame_load);
 
   // Records the result of trying to start an installed worker.
   static void RecordStartInstalledWorkerStatus(
       blink::ServiceWorkerStatusCode status,
       EventType purpose);
 
+  // Records the running status of the worker to receive a task.
+  // Usually recorded for the fetch handler.
+  static void RecordRunAfterStartWorkerStatus(
+      blink::EmbeddedWorkerStatus running_status,
+      EventType purpose);
+
   // Records the time taken to successfully start a worker. |is_installed|
   // indicates whether the version has been installed.
   //
-  // TODO(crbug.com/855952): Replace this with RecordStartWorkerTiming().
+  // TODO(crbug.com/40582160): Replace this with RecordStartWorkerTiming().
   static void RecordStartWorkerTime(base::TimeDelta time,
                                     bool is_installed,
                                     StartSituation start_situation,
                                     EventType purpose);
-
-  // Records the result of trying to stop a worker.
-  static void RecordWorkerStopped(StopStatus status);
-
-  // Records the time taken to successfully stop a worker.
-  static void RecordStopWorkerTime(base::TimeDelta time);
 
   static void RecordActivateEventStatus(blink::ServiceWorkerStatusCode status,
                                         bool is_shutdown);
@@ -221,39 +265,13 @@ class ServiceWorkerMetrics {
   static void RecordStartWorkerTimingClockConsistency(
       CrossProcessTimeDelta type);
 
-  // Records the result of a start attempt that occurred after the worker had
-  // failed |failure_count| consecutive times.
-  static void RecordStartStatusAfterFailure(
-      int failure_count,
-      blink::ServiceWorkerStatusCode status);
-
   // Records the size of Service-Worker-Navigation-Preload header when the
   // navigation preload request is to be sent.
   static void RecordNavigationPreloadRequestHeaderSize(size_t size);
 
-  static void RecordRuntime(base::TimeDelta time);
+  static void RecordSkipServiceWorkerOnNavigation(bool skip_service_worker);
 
-  // Records the result of starting service worker for a navigation hint.
-  static void RecordStartServiceWorkerForNavigationHintResult(
-      StartServiceWorkerForNavigationHintResult result);
-
-  // Records the duration of looking up an existing registration.
-  // |status| is the result of lookup. The records for the cases where
-  // the registration is found (kOk), not found (kErrorNotFound), or an error
-  // happens (other errors) are saved separately into a relevant suffixed
-  // histogram.
-  static void RecordLookupRegistrationTime(
-      blink::ServiceWorkerStatusCode status,
-      base::TimeDelta duration);
-
-  // Records the reason a service worker was deemed to be offline capable. The
-  // reason may be that the service worker responded with 2xx..., 3xx..., or the
-  // check timed out.
-  static void RecordOfflineCapableReason(blink::ServiceWorkerStatusCode status,
-                                         int status_code);
-
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(ServiceWorkerMetrics);
+  static void RecordFindRegistrationForClientUrlTime(base::TimeDelta time);
 };
 
 }  // namespace content

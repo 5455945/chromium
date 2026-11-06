@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,17 @@
 #define COMPONENTS_PAYMENTS_CONTENT_ANDROID_PAYMENT_MANIFEST_DOWNLOADER_ANDROID_H_
 
 #include <jni.h>
+
 #include <memory>
 
 #include "base/android/jni_android.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
-#include "components/payments/core/payment_manifest_downloader.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
+#include "components/payments/content/payment_manifest_downloader.h"
+
+namespace content {
+class WeakDocumentPtr;
+}  // namespace content
 
 namespace network {
 class SharedURLLoaderFactory;
@@ -19,6 +24,7 @@ class SharedURLLoaderFactory;
 
 namespace payments {
 
+class CSPChecker;
 class ErrorLogger;
 
 // Android wrapper for the payment manifest downloader.
@@ -26,32 +32,31 @@ class PaymentManifestDownloaderAndroid {
  public:
   PaymentManifestDownloaderAndroid(
       std::unique_ptr<ErrorLogger> log,
-      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
+      base::WeakPtr<CSPChecker> csp_checker,
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+      content::WeakDocumentPtr initiator_document);
+
+  PaymentManifestDownloaderAndroid(const PaymentManifestDownloaderAndroid&) =
+      delete;
+  PaymentManifestDownloaderAndroid& operator=(
+      const PaymentManifestDownloaderAndroid&) = delete;
+
   ~PaymentManifestDownloaderAndroid();
 
   void DownloadPaymentMethodManifest(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& jcaller,
-      const base::android::JavaParamRef<jobject>& jmerchant_origin,
-      const base::android::JavaParamRef<jobject>& jurl,
-      const base::android::JavaParamRef<jobject>& jcallback);
+      const base::android::JavaRef<jobject>& jmerchant_origin,
+      const base::android::JavaRef<jobject>& jurl,
+      const base::android::JavaRef<jobject>& jcallback);
 
   void DownloadWebAppManifest(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& jcaller,
-      const base::android::JavaParamRef<jobject>&
-          jpayment_method_manifest_origin,
-      const base::android::JavaParamRef<jobject>& jurl,
-      const base::android::JavaParamRef<jobject>& jcallback);
-
-  // Deletes this object.
-  void Destroy(JNIEnv* env,
-               const base::android::JavaParamRef<jobject>& jcaller);
+      const base::android::JavaRef<jobject>& jpayment_method_manifest_origin,
+      const base::android::JavaRef<jobject>& jurl,
+      const base::android::JavaRef<jobject>& jcallback);
 
  private:
   PaymentManifestDownloader downloader_;
-
-  DISALLOW_COPY_AND_ASSIGN(PaymentManifestDownloaderAndroid);
 };
 
 }  // namespace payments

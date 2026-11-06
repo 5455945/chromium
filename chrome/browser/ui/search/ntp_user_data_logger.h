@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,57 +8,84 @@
 #include <stddef.h>
 
 #include <array>
+#include <optional>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/search/most_visited_metrics_logger.h"
 #include "chrome/common/search/ntp_logging_events.h"
 #include "components/ntp_tiles/constants.h"
 #include "components/ntp_tiles/ntp_tile_impression.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
-#if defined(OS_ANDROID)
-#error "Instant is only used on desktop";
-#endif
+// This enum must match the numbering for NewTabPageLogoShown in enums.xml and
+// LogoShownId in LogoMediator.java, which records the same histograms from the
+// Android native NTP and must therefore use an identical bucket layout.
+// Do not reorder or remove items, and only add new items before
+// LOGO_IMPRESSION_TYPE_MAX.
+// LINT.IfChange(LogoImpressionType)
+enum LogoImpressionType {
+  // Static Doodle image.
+  LOGO_IMPRESSION_TYPE_STATIC = 0,
+  // Call-to-action Doodle image. No longer recorded by the WebUI NTP, but still
+  // recorded by the Android native NTP for the static preview of an animated
+  // Doodle.
+  LOGO_IMPRESSION_TYPE_CTA = 1,
+  // Animated Doodle image.
+  LOGO_IMPRESSION_TYPE_ANIMATED = 2,
+
+  LOGO_IMPRESSION_TYPE_MAX
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/new_tab_page/enums.xml:NewTabPageLogoShown,
+// //chrome/browser/ui/android/logo/java/src/org/chromium/chrome/browser/logo/LogoMediator.java:LogoShownId)
+
+// This enum must match the numbering for NewTabPageLogoClick in enums.xml.
+// Do not reorder or remove items, and only add new items before
+// LOGO_CLICK_TYPE_MAX.
+// LINT.IfChange(LogoClickType)
+enum LogoClickType {
+  // Static Doodle image.
+  LOGO_CLICK_TYPE_STATIC = 0,
+  // (Deprecated) Call-to-action Doodle image.
+  LOGO_CLICK_TYPE_CTA = 1,
+  // Animated Doodle image.
+  LOGO_CLICK_TYPE_ANIMATED = 2,
+
+  LOGO_CLICK_TYPE_MAX
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/new_tab_page/enums.xml:NewTabPageLogoClick)
 
 // Helper class for logging data from the NTP. Attached to each NTP instance.
-class NTPUserDataLogger {
+class NTPUserDataLogger : public MostVisitedMetricsLogger {
  public:
   // Creates a NTPUserDataLogger. MUST be called only when the NTP is active.
   NTPUserDataLogger(Profile* profile, const GURL& ntp_url);
-  virtual ~NTPUserDataLogger();
+
+  NTPUserDataLogger(const NTPUserDataLogger&) = delete;
+  NTPUserDataLogger& operator=(const NTPUserDataLogger&) = delete;
+
+  ~NTPUserDataLogger() override;
 
   // Called when a One Google Bar fetch has been completed after |duration|.
   // |success| is true if the fetch was successful.
   static void LogOneGoogleBarFetchDuration(bool success,
                                            const base::TimeDelta& duration);
 
+  // MostVisitedMetricsLogger:
   // Called when an event occurs on the NTP that requires a counter to be
   // incremented. |time| is the delta time from navigation start until this
   // event happened. The NTP_ALL_TILES_LOADED event may be logged from all NTPs;
   // all others require Google as the default search provider.
-  void LogEvent(NTPLoggingEventType event, base::TimeDelta time);
+  void LogEvent(NTPLoggingEventType event, base::TimeDelta time) override;
 
   // Called when all NTP tiles have finished loading (successfully or failing).
   void LogMostVisitedLoaded(base::TimeDelta time,
                             bool using_most_visited,
-                            bool is_visible);
-
-  // Called when a search suggestion event occurs on the NTP that has an integer
-  // value associated with it; N suggestions were shown on this NTP load, the
-  // Nth suggestion was clicked, etc. |time| is the delta time from navigation
-  // start until this event happened. Requires Google as the default search
-  // provider.
-  void LogSuggestionEventWithValue(NTPSuggestionsLoggingEventType event,
-                                   int data,
-                                   base::TimeDelta time);
-
-  // Logs an impression on one of the NTP tiles by given details.
-  void LogMostVisitedImpression(const ntp_tiles::NTPTileImpression& impression);
-
-  // Logs a navigation on one of the NTP tiles by a given impression.
-  void LogMostVisitedNavigation(const ntp_tiles::NTPTileImpression& impression);
+                            bool using_custom_links,
+                            bool using_enterprise_shortcuts,
+                            bool is_visible,
+                            std::optional<bool> is_expanded) override;
 
  private:
   // Returns whether Google is selected as the default search engine. Virtual
@@ -73,33 +100,23 @@ class NTPUserDataLogger {
   // the tab/shutting down Chrome), or when the user navigates to a URL.
   void EmitNtpStatistics(base::TimeDelta load_time,
                          bool using_most_visited,
-                         bool is_visible);
+                         bool using_custom_links,
+                         bool using_enterprise_shortcuts,
+                         bool is_visible,
+                         std::optional<bool> is_expanded);
+
+  void EmitNtpTraceEvent(const char* event_name, base::TimeDelta duration);
 
   void RecordDoodleImpression(base::TimeDelta time,
-                              bool is_cta,
-                              bool from_cache);
+                              LogoImpressionType logo_type);
 
   // Logs the user |action| via base::RecordAction.
   void RecordAction(const char* action);
 
-  // Records whether we have yet logged an impression for the tile at a given
-  // index and if so the corresponding details. A typical NTP will log 9
-  // impressions, but could record fewer for new users that haven't built up a
-  // history yet. If the user has customized their shortcuts, this number can
-  // increase up to 10 impressions.
-  //
-  // If something happens that causes the NTP to pull tiles from different
-  // sources, such as signing in (switching from client to server tiles), then
-  // only the impressions for the first source will be logged, leaving the
-  // number of impressions for a source slightly out-of-sync with navigations.
-  std::array<absl::optional<ntp_tiles::NTPTileImpression>,
-             ntp_tiles::kMaxNumTiles>
-      logged_impressions_;
-
   // Whether we have already emitted NTP stats for this web contents.
-  bool has_emitted_;
+  bool has_emitted_ = false;
 
-  bool should_record_doodle_load_time_;
+  bool should_record_doodle_load_time_ = true;
 
   // Are stats being logged during Chrome startup?
   bool during_startup_;
@@ -108,9 +125,7 @@ class NTPUserDataLogger {
   GURL ntp_url_;
 
   // The profile in which this New Tab Page was loaded.
-  Profile* profile_;
-
-  DISALLOW_COPY_AND_ASSIGN(NTPUserDataLogger);
+  raw_ptr<Profile> profile_;
 };
 
 #endif  // CHROME_BROWSER_UI_SEARCH_NTP_USER_DATA_LOGGER_H_

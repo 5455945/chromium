@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -34,11 +34,16 @@ class PaymentRequestDelegate : public PaymentRequestBaseDelegate {
   virtual void CloseDialog() = 0;
 
   // Disables the dialog and shows an error message that the transaction has
-  // failed.
+  // failed. Warning: This method may result in the synchronous teardown of
+  // the PaymentRequest object. Callers should not access their members after
+  // calling this method.
   virtual void ShowErrorMessage() = 0;
 
   // Disables user interaction by showing a spinner.
   virtual void ShowProcessingSpinner() = 0;
+
+  // Shows a mandatory payment app loading view.
+  virtual void ShowLoadingView() = 0;
 
   // Returns whether the browser window is active.
   virtual bool IsBrowserWindowActive() const = 0;

@@ -1,16 +1,17 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_EXTENSIONS_API_BRAILLE_DISPLAY_PRIVATE_BRAILLE_DISPLAY_PRIVATE_API_H_
 #define CHROME_BROWSER_EXTENSIONS_API_BRAILLE_DISPLAY_PRIVATE_BRAILLE_DISPLAY_PRIVATE_API_H_
 
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/extensions/api/braille_display_private/braille_controller.h"
 #include "chrome/common/extensions/api/braille_display_private.h"
-#include "extensions/browser/api/async_api_function.h"
 #include "extensions/browser/browser_context_keyed_api_factory.h"
 #include "extensions/browser/event_router.h"
+#include "extensions/browser/extension_function.h"
 
 class Profile;
 
@@ -52,7 +53,7 @@ class BrailleDisplayPrivateAPI : public BrowserContextKeyedAPI,
 
   class EventDelegate {
    public:
-    virtual ~EventDelegate() {}
+    virtual ~EventDelegate() = default;
     virtual void BroadcastEvent(std::unique_ptr<Event> event) = 0;
     virtual bool HasListener() = 0;
   };
@@ -65,7 +66,7 @@ class BrailleDisplayPrivateAPI : public BrowserContextKeyedAPI,
 
   void SetEventDelegateForTest(std::unique_ptr<EventDelegate> delegate);
 
-  Profile* profile_;
+  raw_ptr<Profile> profile_;
   base::ScopedObservation<api::braille_display_private::BrailleController,
                           BrailleObserver>
       scoped_observation_{this};
@@ -81,17 +82,17 @@ class BrailleDisplayPrivateAPI : public BrowserContextKeyedAPI,
 
 namespace api {
 
-class BrailleDisplayPrivateGetDisplayStateFunction : public AsyncApiFunction {
+class BrailleDisplayPrivateGetDisplayStateFunction : public ExtensionFunction {
   DECLARE_EXTENSION_FUNCTION("brailleDisplayPrivate.getDisplayState",
                              BRAILLEDISPLAYPRIVATE_GETDISPLAYSTATE)
  protected:
-  ~BrailleDisplayPrivateGetDisplayStateFunction() override {}
-  bool Prepare() override;
-  void Work() override;
-  bool Respond() override;
+  ~BrailleDisplayPrivateGetDisplayStateFunction() override = default;
+  ResponseAction Run() override;
+
+  void ReplyWithState(base::DictValue state);
 };
 
-class BrailleDisplayPrivateWriteDotsFunction : public AsyncApiFunction {
+class BrailleDisplayPrivateWriteDotsFunction : public ExtensionFunction {
   DECLARE_EXTENSION_FUNCTION("brailleDisplayPrivate.writeDots",
                              BRAILLEDISPLAYPRIVATE_WRITEDOTS)
  public:
@@ -99,12 +100,12 @@ class BrailleDisplayPrivateWriteDotsFunction : public AsyncApiFunction {
 
  protected:
   ~BrailleDisplayPrivateWriteDotsFunction() override;
-  bool Prepare() override;
-  void Work() override;
-  bool Respond() override;
+  ResponseAction Run() override;
+
+  void WriteDotsOnIO();
 
  private:
-  std::unique_ptr<braille_display_private::WriteDots::Params> params_;
+  std::optional<braille_display_private::WriteDots::Params> params_;
 };
 
 class BrailleDisplayPrivateUpdateBluetoothBrailleDisplayAddressFunction

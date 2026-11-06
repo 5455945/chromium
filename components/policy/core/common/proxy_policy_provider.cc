@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,56 +6,59 @@
 
 #include <memory>
 #include <utility>
+#include <variant>
 
 #include "base/check_op.h"
 #include "components/policy/core/common/policy_bundle.h"
+#include "third_party/abseil-cpp/absl/functional/overload.h"
 
 namespace policy {
 
-ProxyPolicyProvider::ProxyPolicyProvider() : delegate_(NULL) {}
+ProxyPolicyProvider::ProxyPolicyProvider() = default;
 
 ProxyPolicyProvider::~ProxyPolicyProvider() {
-  DCHECK(!delegate_);
+  DCHECK(!delegate());
 }
 
-void ProxyPolicyProvider::SetDelegate(ConfigurationPolicyProvider* delegate) {
-  if (delegate_)
-    delegate_->RemoveObserver(this);
-  delegate_ = delegate;
-  if (delegate_) {
-    delegate_->AddObserver(this);
-    OnUpdatePolicy(delegate_);
-  } else {
-    UpdatePolicy(std::make_unique<PolicyBundle>());
+void ProxyPolicyProvider::SetOwnedDelegate(OwnedDelegate delegate) {
+  ResetDelegate();
+  if (delegate) {
+    delegate_ = std::move(delegate);
   }
+  OnDelegateChanged();
+}
+
+void ProxyPolicyProvider::SetUnownedDelegate(UnownedDelegate delegate) {
+  ResetDelegate();
+  delegate_ = delegate;
+  OnDelegateChanged();
 }
 
 void ProxyPolicyProvider::Shutdown() {
   // Note: the delegate is not owned by the proxy provider, so this call is not
   // forwarded. The same applies for the Init() call.
   // Just drop the delegate without propagating updates here.
-  if (delegate_) {
-    delegate_->RemoveObserver(this);
-    delegate_ = NULL;
-  }
+  ResetDelegate();
   ConfigurationPolicyProvider::Shutdown();
 }
 
-void ProxyPolicyProvider::RefreshPolicies() {
-  if (delegate_) {
-    delegate_->RefreshPolicies();
+void ProxyPolicyProvider::RefreshPolicies(PolicyFetchReason reason) {
+  if (delegate()) {
+    delegate()->RefreshPolicies(reason);
   } else {
     // Subtle: if a RefreshPolicies() call comes after Shutdown() then the
     // current bundle should be served instead. This also does the right thing
     // if SetDelegate() was never called before.
-    std::unique_ptr<PolicyBundle> bundle(new PolicyBundle());
-    bundle->CopyFrom(policies());
-    UpdatePolicy(std::move(bundle));
+    UpdatePolicy(policies().Clone());
   }
 }
 
 bool ProxyPolicyProvider::IsFirstPolicyLoadComplete(PolicyDomain domain) const {
-  return delegate_ && delegate_->IsInitializationComplete(domain);
+  // - Uninitialized delegate always returns false.
+  // - An initialized but nullptr delegate returns true.
+  // - An initialized and non-null delegate calls the delegate.
+  return !std::holds_alternative<Unspecified>(delegate_) &&
+         (!delegate() || delegate()->IsInitializationComplete(domain));
 }
 
 void ProxyPolicyProvider::OnUpdatePolicy(
@@ -63,10 +66,48 @@ void ProxyPolicyProvider::OnUpdatePolicy(
   if (block_policy_updates_for_testing_)
     return;
 
-  DCHECK_EQ(delegate_, provider);
-  std::unique_ptr<PolicyBundle> bundle(new PolicyBundle());
-  bundle->CopyFrom(delegate_->policies());
-  UpdatePolicy(std::move(bundle));
+  DCHECK_EQ(delegate(), provider);
+  UpdatePolicy(delegate()->policies().Clone());
+}
+
+ConfigurationPolicyProvider* ProxyPolicyProvider::delegate() {
+  return std::visit(
+      absl::Overload(
+          [](Unspecified) -> ConfigurationPolicyProvider* { return nullptr; },
+          [](const auto& delegate) { return delegate.get(); }),
+      delegate_);
+}
+
+const ConfigurationPolicyProvider* ProxyPolicyProvider::delegate() const {
+  return std::visit(
+      absl::Overload(
+          [](Unspecified) -> ConfigurationPolicyProvider* { return nullptr; },
+          [](const auto& delegate) { return delegate.get(); }),
+      delegate_);
+}
+
+void ProxyPolicyProvider::ResetDelegate() {
+  if (std::holds_alternative<OwnedDelegate>(delegate_)) {
+    std::get<OwnedDelegate>(delegate_)->Shutdown();
+  }
+
+  if (delegate()) {
+    delegate()->RemoveObserver(this);
+  }
+
+  // If Unspecified, stay Unspecified.
+  if (!std::holds_alternative<Unspecified>(delegate_)) {
+    delegate_ = UnownedDelegate(nullptr);
+  }
+}
+
+void ProxyPolicyProvider::OnDelegateChanged() {
+  if (delegate()) {
+    delegate()->AddObserver(this);
+    OnUpdatePolicy(delegate());
+  } else {
+    UpdatePolicy(PolicyBundle());
+  }
 }
 
 }  // namespace policy

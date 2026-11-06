@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,10 @@
 #include <dshow.h>
 #include <stdint.h>
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/logging.h"
+#include "base/time/time.h"
 #include "base/win/win_util.h"
 #include "media/base/timestamp_constants.h"
 #include "media/base/video_frame.h"
@@ -127,7 +130,7 @@ bool SinkInputPin::GetValidMediaType(int index, AM_MEDIA_TYPE* media_type) {
   VIDEOINFOHEADER* const pvi =
       reinterpret_cast<VIDEOINFOHEADER*>(media_type->pbFormat);
 
-  ZeroMemory(pvi, sizeof(VIDEOINFOHEADER));
+  *pvi = {};
   pvi->bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
   pvi->bmiHeader.biPlanes = 1;
   pvi->bmiHeader.biClrImportant = 0;
@@ -231,11 +234,13 @@ HRESULT SinkInputPin::Receive(IMediaSample* sample) {
   base::TimeDelta timestamp = kNoTimestamp;
   if (SUCCEEDED(sample->GetTime(&start_time, &end_time))) {
     DCHECK(start_time <= end_time);
-    timestamp = base::TimeDelta::FromMicroseconds(start_time / 10);
+    timestamp = base::Microseconds(start_time / 10);
   }
 
-  observer_->FrameReceived(buffer, length, resulting_format_, timestamp,
-                           flip_y_);
+  // SAFETY: DirectShow IMediaSample buffer has valid length bytes.
+  auto buffer_span =
+      UNSAFE_BUFFERS(base::span(buffer, static_cast<size_t>(length)));
+  observer_->FrameReceived(buffer_span, resulting_format_, timestamp, flip_y_);
   return S_OK;
 }
 

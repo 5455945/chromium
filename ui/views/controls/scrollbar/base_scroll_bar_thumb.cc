@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/controls/scrollbar/scroll_bar.h"
+#include "ui/views/widget/widget.h"
 
 namespace {
 // The distance the mouse can be dragged outside the bounds of the thumb during
@@ -19,25 +20,23 @@ static constexpr int kScrollThumbDragOutSnap = 100;
 namespace views {
 
 BaseScrollBarThumb::BaseScrollBarThumb(ScrollBar* scroll_bar)
-    : scroll_bar_(scroll_bar),
-      drag_start_position_(-1),
-      mouse_offset_(-1),
-      state_(Button::STATE_NORMAL) {}
+    : scroll_bar_(scroll_bar) {}
 
 BaseScrollBarThumb::~BaseScrollBarThumb() = default;
 
 void BaseScrollBarThumb::SetLength(int length) {
   // Make sure the thumb is never sized smaller than its minimum possible
   // display size.
-  gfx::Size size = GetPreferredSize();
+  gfx::Size size = GetPreferredSize({});
   size.SetToMax(
       gfx::Size(IsHorizontal() ? length : 0, IsHorizontal() ? 0 : length));
   SetSize(size);
 }
 
-int BaseScrollBarThumb::GetSize() const {
-  if (IsHorizontal())
+int BaseScrollBarThumb::GetLength() const {
+  if (IsHorizontal()) {
     return width();
+  }
   return height();
 }
 
@@ -54,9 +53,18 @@ void BaseScrollBarThumb::SetPosition(int position) {
 
 int BaseScrollBarThumb::GetPosition() const {
   gfx::Rect track_bounds = scroll_bar_->GetTrackBounds();
-  if (IsHorizontal())
+  if (IsHorizontal()) {
     return x() - track_bounds.x();
+  }
   return y() - track_bounds.y();
+}
+
+void BaseScrollBarThumb::SetSnapBackOnDragOutside(bool snap) {
+  snap_back_on_drag_outside_ = snap;
+}
+
+bool BaseScrollBarThumb::GetSnapBackOnDragOutside() const {
+  return snap_back_on_drag_outside_;
 }
 
 void BaseScrollBarThumb::OnMouseEntered(const ui::MouseEvent& event) {
@@ -75,26 +83,29 @@ bool BaseScrollBarThumb::OnMousePressed(const ui::MouseEvent& event) {
 }
 
 bool BaseScrollBarThumb::OnMouseDragged(const ui::MouseEvent& event) {
-  // If the user moves the mouse more than |kScrollThumbDragOutSnap| outside
-  // the bounds of the thumb, the scrollbar will snap the scroll back to the
-  // point it was at before the drag began.
-  if (IsHorizontal()) {
-    if ((event.y() < y() - kScrollThumbDragOutSnap) ||
-        (event.y() > (y() + height() + kScrollThumbDragOutSnap))) {
-      scroll_bar_->ScrollToThumbPosition(drag_start_position_, false);
-      return true;
-    }
-  } else {
-    if ((event.x() < x() - kScrollThumbDragOutSnap) ||
-        (event.x() > (x() + width() + kScrollThumbDragOutSnap))) {
-      scroll_bar_->ScrollToThumbPosition(drag_start_position_, false);
-      return true;
+  if (snap_back_on_drag_outside_) {
+    // If the user moves the mouse more than |kScrollThumbDragOutSnap| outside
+    // the bounds of the thumb, the scrollbar will snap the scroll back to the
+    // point it was at before the drag began.
+    if (IsHorizontal()) {
+      if ((event.y() < y() - kScrollThumbDragOutSnap) ||
+          (event.y() > (y() + height() + kScrollThumbDragOutSnap))) {
+        scroll_bar_->ScrollToThumbPosition(drag_start_position_, false);
+        return true;
+      }
+    } else {
+      if ((event.x() < x() - kScrollThumbDragOutSnap) ||
+          (event.x() > (x() + width() + kScrollThumbDragOutSnap))) {
+        scroll_bar_->ScrollToThumbPosition(drag_start_position_, false);
+        return true;
+      }
     }
   }
   if (IsHorizontal()) {
     int thumb_x = event.x() - mouse_offset_;
-    if (base::i18n::IsRTL())
+    if (base::i18n::IsRTL()) {
       thumb_x *= -1;
+    }
     scroll_bar_->ScrollToThumbPosition(GetPosition() + thumb_x, false);
   } else {
     int thumb_y = event.y() - mouse_offset_;
@@ -117,8 +128,9 @@ Button::ButtonState BaseScrollBarThumb::GetState() const {
 }
 
 void BaseScrollBarThumb::SetState(Button::ButtonState state) {
-  if (state_ == state)
+  if (state_ == state) {
     return;
+  }
 
   state_ = state;
   OnStateChanged();
@@ -129,10 +141,20 @@ void BaseScrollBarThumb::OnStateChanged() {
 }
 
 bool BaseScrollBarThumb::IsHorizontal() const {
-  return scroll_bar_->IsHorizontal();
+  return scroll_bar_->GetOrientation() == ScrollBar::Orientation::kHorizontal;
 }
 
-BEGIN_METADATA(BaseScrollBarThumb, View)
+ui::NativeTheme::PreferredColorScheme BaseScrollBarThumb::GetColorScheme() const {
+  const ui::ColorProviderKey::ColorMode color_mode =
+      GetWidget() ? GetWidget()->GetColorMode()
+                  : ui::ColorProviderKey::ColorMode::kLight;
+  return color_mode == ui::ColorProviderKey::ColorMode::kDark
+             ? ui::NativeTheme::PreferredColorScheme::kDark
+             : ui::NativeTheme::PreferredColorScheme::kLight;
+}
+
+BEGIN_METADATA(BaseScrollBarThumb)
+ADD_PROPERTY_METADATA(bool, SnapBackOnDragOutside);
 END_METADATA
 
 }  // namespace views

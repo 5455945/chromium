@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,15 +7,20 @@
 #include <cstdint>
 #include <memory>
 #include <utility>
+#include <variant>
 
 #include "base/base_switches.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/environment.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/lazy_instance.h"
+#include "base/logging/logging_settings.h"
+#include "base/notimplemented.h"
 #include "base/path_service.h"
+#include "base/process/current_process.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/trace_event/trace_event.h"
@@ -23,17 +28,21 @@
 #include "cc/base/switches.h"
 #include "components/crash/core/common/crash_key.h"
 #include "components/crash/core/common/crash_keys.h"
+#include "components/devtools/devtools_pipe/devtools_pipe.h"
+#include "components/headless/gpu_util/headless_gpu_util.h"
 #include "components/viz/common/switches.h"
 #include "content/public/browser/browser_main_runner.h"
 #include "content/public/common/content_switches.h"
+#include "content/public/common/main_function_params.h"
 #include "content/public/common/profiling.h"
 #include "gpu/config/gpu_switches.h"
+#include "headless/lib/browser/command_line_handler.h"
 #include "headless/lib/browser/headless_browser_impl.h"
 #include "headless/lib/browser/headless_content_browser_client.h"
 #include "headless/lib/headless_crash_reporter_client.h"
-#include "headless/lib/headless_macros.h"
 #include "headless/lib/renderer/headless_content_renderer_client.h"
 #include "headless/lib/utility/headless_content_utility_client.h"
+#include "headless/public/switches.h"
 #include "sandbox/policy/switches.h"
 #include "third_party/blink/public/common/switches.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -43,41 +52,51 @@
 #include "ui/gl/gl_switches.h"
 #include "ui/ozone/public/ozone_switches.h"
 
+#if BUILDFLAG(IS_WIN)
+#include "base/win/dark_mode_support.h"
+#include "base/win/resource_exhaustion.h"
+#endif  // BUILDFLAG(IS_WIN)
+
 #if defined(HEADLESS_USE_EMBEDDED_RESOURCES)
-#include "headless/embedded_resource_pak.h"
+#include "headless/embedded_resource_pack_data.h"     // nogncheck
+#include "headless/embedded_resource_pack_strings.h"  // nogncheck
 #endif
 
-#if defined(OS_MAC) || defined(OS_WIN)
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #include "components/crash/core/app/crashpad.h"
-#endif
+#endif  // BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
-#include "components/crash/core/app/breakpad_linux.h"
-#endif
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#include "components/crash/core/app/crash_switches.h"
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 
-#if defined(OS_POSIX)
+#if BUILDFLAG(IS_POSIX)
 #include <signal.h>
+
+#if !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_ANDROID)
+#include "v8/include/v8-wasm-trap-handler-posix.h"
+#endif
+#endif  // BUILDFLAG(IS_POSIX)
+
+#if defined(HEADLESS_USE_PREFS)
+#include "components/prefs/pref_service.h"  // nogncheck
+#endif
+
+#if defined(HEADLESS_SUPPORT_FIELD_TRIALS)
+#include "content/public/app/initialize_mojo_core.h"
+#include "headless/lib/browser/headless_field_trials.h"
 #endif
 
 namespace headless {
-
-namespace features {
-const base::Feature kVirtualTime{"VirtualTime",
-                                 base::FEATURE_DISABLED_BY_DEFAULT};
-}
 
 const base::FilePath::CharType kDefaultProfileName[] =
     FILE_PATH_LITERAL("Default");
 
 namespace {
 
-// Keep in sync with content/common/content_constants_internal.h.
-// TODO(skyostil): Add a tracing test for this.
-const int kTraceEventBrowserProcessSortIndex = -6;
-
 HeadlessContentMainDelegate* g_current_headless_content_main_delegate = nullptr;
 
-#if !defined(OS_FUCHSIA)
+#if !BUILDFLAG(IS_FUCHSIA)
 base::LazyInstance<HeadlessCrashReporterClient>::Leaky g_headless_crash_client =
     LAZY_INSTANCE_INITIALIZER;
 #endif
@@ -85,67 +104,75 @@ base::LazyInstance<HeadlessCrashReporterClient>::Leaky g_headless_crash_client =
 const char kLogFileName[] = "CHROME_LOG_FILE";
 const char kHeadlessCrashKey[] = "headless";
 
+#if BUILDFLAG(IS_WIN)
+void OnResourceExhausted() {
+  // RegisterClassEx will fail if the session's pool of ATOMs is exhausted. This
+  // appears to happen most often when the browser is being driven by automation
+  // tools, though the underlying reason for this remains a mystery
+  // (https://crbug.com/1470483). There is nothing that Chrome can do to
+  // meaningfully run until the user restarts their session by signing out of
+  // Windows or restarting their computer.
+  LOG(ERROR) << "Your computer has run out of resources. "
+                "Sign out of Windows or restart your computer and try again.";
+  base::Process::TerminateCurrentProcessImmediately(EXIT_FAILURE);
+}
+#endif  // BUILDFLAG(IS_WIN)
+
 void InitializeResourceBundle(const base::CommandLine& command_line) {
-  const std::string locale =
-      command_line.GetSwitchValueASCII(::switches::kLang);
-  ui::ResourceBundle::InitSharedInstanceWithLocale(
-      locale, nullptr, ui::ResourceBundle::DO_NOT_LOAD_COMMON_RESOURCES);
-
-#ifdef HEADLESS_USE_EMBEDDED_RESOURCES
+#if defined(HEADLESS_USE_EMBEDDED_RESOURCES)
+  ui::ResourceBundle::InitSharedInstanceWithBuffer(kHeadlessResourcePackStrings,
+                                                   ui::kScaleFactorNone);
   ui::ResourceBundle::GetSharedInstance().AddDataPackFromBuffer(
-      {kHeadlessResourcePak.contents, kHeadlessResourcePak.length},
-      ui::SCALE_FACTOR_NONE);
-
+      kHeadlessResourcePackData, ui::k100Percent);
 #else
-  base::FilePath dir_module;
-
-// Fuchsia doesn't implement DIR_MODULE
-#if !defined(OS_FUCHSIA)
-  bool result = base::PathService::Get(base::DIR_MODULE, &dir_module);
-#else
-  bool result = base::PathService::Get(base::DIR_ASSETS, &dir_module);
-#endif  // !defined(OS_FUCHSIA)
-
+  base::FilePath resource_dir;
+  bool result = base::PathService::Get(base::DIR_ASSETS, &resource_dir);
   DCHECK(result);
 
   // Try loading the headless library pak file first. If it doesn't exist (i.e.,
   // when we're running with the --headless switch), fall back to the browser's
   // resource pak.
-  base::FilePath headless_pak =
-      dir_module.Append(FILE_PATH_LITERAL("headless_lib.pak"));
-  if (base::PathExists(headless_pak)) {
+  base::FilePath string_pack =
+      resource_dir.Append(FILE_PATH_LITERAL("headless_lib_strings.pak"));
+  if (base::PathExists(string_pack)) {
+    ui::ResourceBundle::InitSharedInstanceWithPakPath(string_pack);
+    base::FilePath data_pack =
+        resource_dir.Append(FILE_PATH_LITERAL("headless_lib_data.pak"));
     ui::ResourceBundle::GetSharedInstance().AddDataPackFromPath(
-        headless_pak, ui::SCALE_FACTOR_NONE);
+        data_pack, ui::k100Percent);
     return;
   }
-
+  const std::string locale =
+      command_line.GetSwitchValueASCII(::switches::kLang);
+  ui::ResourceBundle::InitSharedInstanceWithLocale(
+      locale, nullptr, ui::ResourceBundle::DO_NOT_LOAD_COMMON_RESOURCES);
   // Otherwise, load resources.pak, chrome_100 and chrome_200.
   base::FilePath resources_pak =
-      dir_module.Append(FILE_PATH_LITERAL("resources.pak"));
+      resource_dir.Append(FILE_PATH_LITERAL("resources.pak"));
   base::FilePath chrome_100_pak =
-      dir_module.Append(FILE_PATH_LITERAL("chrome_100_percent.pak"));
+      resource_dir.Append(FILE_PATH_LITERAL("chrome_100_percent.pak"));
   base::FilePath chrome_200_pak =
-      dir_module.Append(FILE_PATH_LITERAL("chrome_200_percent.pak"));
+      resource_dir.Append(FILE_PATH_LITERAL("chrome_200_percent.pak"));
 
-#if defined(OS_MAC) && !defined(COMPONENT_BUILD)
+#if BUILDFLAG(IS_MAC) && !defined(COMPONENT_BUILD)
   // In non component builds, check if fall back in Resources/ folder is
   // available.
   if (!base::PathExists(resources_pak)) {
     resources_pak =
-        dir_module.Append(FILE_PATH_LITERAL("Resources/resources.pak"));
-    chrome_100_pak = dir_module.Append(
+        resource_dir.Append(FILE_PATH_LITERAL("Resources/resources.pak"));
+    chrome_100_pak = resource_dir.Append(
         FILE_PATH_LITERAL("Resources/chrome_100_percent.pak"));
-    chrome_200_pak = dir_module.Append(
+    chrome_200_pak = resource_dir.Append(
         FILE_PATH_LITERAL("Resources/chrome_200_percent.pak"));
   }
 #endif
 
   ui::ResourceBundle::GetSharedInstance().AddDataPackFromPath(
-      resources_pak, ui::SCALE_FACTOR_NONE);
-  ui::ResourceBundle::GetSharedInstance().AddDataPackFromPath(
-      chrome_100_pak, ui::SCALE_FACTOR_100P);
-  ui::ResourceBundle::GetSharedInstance().AddDataPackFromPath(
-      chrome_200_pak, ui::SCALE_FACTOR_200P);
+      resources_pak, ui::kScaleFactorNone);
+  ui::ResourceBundle::GetSharedInstance().AddDataPackFromPath(chrome_100_pak,
+                                                              ui::k100Percent);
+  ui::ResourceBundle::GetSharedInstance().AddDataPackFromPath(chrome_200_pak,
+                                                              ui::k200Percent);
 #endif
 }
 
@@ -154,21 +181,38 @@ void InitApplicationLocale(const base::CommandLine& command_line) {
       command_line.GetSwitchValueASCII(::switches::kLang));
 }
 
+void AddSwitchesForVirtualTime() {
+  // Only pass viz flags into the virtual time mode.
+  const char* const switches[] = {
+      // TODO(eseckler): Make --run-all-compositor-stages-before-draw a
+      // per-BeginFrame mode so that we can activate it for individual
+      // requests
+      // only. With surface sync becoming the default, we can then make
+      // virtual_time_enabled a per-request option, too.
+      // We control BeginFrames ourselves and need all compositing stages to
+      // run.
+      ::switches::kRunAllCompositorStagesBeforeDraw,
+      ::switches::kDisableNewContentRenderingTimeout,
+      ::switches::kDisableThreadedAnimation,
+      // Animtion-only BeginFrames are only supported when updates from the
+      // impl-thread are disabled, see go/headless-rendering.
+      ::switches::kDisableCheckerImaging,
+      // Ensure that image animations don't resync their animation timestamps
+      // when looping back around.
+      blink::switches::kDisableImageAnimationResync,
+  };
+
+  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+  for (const auto* flag : switches) {
+    command_line->AppendSwitch(flag);
+  }
+}
+
 }  // namespace
 
 HeadlessContentMainDelegate::HeadlessContentMainDelegate(
     std::unique_ptr<HeadlessBrowserImpl> browser)
     : browser_(std::move(browser)) {
-  Init();
-}
-
-HeadlessContentMainDelegate::HeadlessContentMainDelegate(
-    HeadlessBrowser::Options options)
-    : options_(std::make_unique<HeadlessBrowser::Options>(std::move(options))) {
-  Init();
-}
-
-void HeadlessContentMainDelegate::Init() {
   DCHECK(!g_current_headless_content_main_delegate);
   g_current_headless_content_main_delegate = this;
 }
@@ -178,49 +222,53 @@ HeadlessContentMainDelegate::~HeadlessContentMainDelegate() {
   g_current_headless_content_main_delegate = nullptr;
 }
 
-bool HeadlessContentMainDelegate::BasicStartupComplete(int* exit_code) {
+std::optional<int> HeadlessContentMainDelegate::BasicStartupComplete() {
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
 
+  content::Profiling::ProcessStarted();
+
+  // Note that on platforms where zygotes are used, this method is invoked
+  // before the zygote fork, so whatever switches are modified here get
+  // overridden when zygote forks, potentially causing differences with
+  // regard to the platforms that don't use zygotes. Therefore, we don't
+  // want this method to ever alter command line in child processes and
+  // only rely on flags set in the browsers getting propagated to children
+  // via regular flag propagation means. See crbug.com/338414704 for context.
+  if (command_line->HasSwitch(::switches::kProcessType)) {
+    return std::nullopt;
+  }
+  // The DevTools remote debugging pipe file descriptors need to be checked
+  // before any other files are opened, see https://crbug.com/1423048.
+#if BUILDFLAG(IS_WIN)
+  const bool pipes_are_specified_explicitly =
+      command_line->HasSwitch(::switches::kRemoteDebuggingIoPipes);
+#else
+  const bool pipes_are_specified_explicitly = false;
+#endif
+  if (command_line->HasSwitch(::switches::kRemoteDebuggingPipe) &&
+      !pipes_are_specified_explicitly &&
+      !devtools_pipe::AreFileDescriptorsOpen()) {
+    LOG(ERROR) << "Remote debugging pipe file descriptors are not open.";
+    return EXIT_FAILURE;
+  }
+
   // Make sure all processes know that we're in headless mode.
-  if (!command_line->HasSwitch(::switches::kHeadless))
-    command_line->AppendSwitch(::switches::kHeadless);
+  if (!command_line->HasSwitch(::switches::kHeadless)) {
+    command_line->AppendSwitchASCII(::switches::kHeadless, "old");
+  }
 
-  if (options()->single_process_mode)
-    command_line->AppendSwitch(::switches::kSingleProcess);
-
-  if (options()->disable_sandbox)
-    command_line->AppendSwitch(sandbox::policy::switches::kNoSandbox);
-
-  if (!options()->enable_resource_scheduler)
-    command_line->AppendSwitch(::switches::kDisableResourceScheduler);
-
-#if defined(USE_OZONE)
+  // Use software rendering by default, but don't mess with gl and angle
+  // switches if user is overriding them.
+  if (!command_line->HasSwitch(::switches::kUseGL) &&
+      !command_line->HasSwitch(::switches::kUseANGLE) &&
+      !command_line->HasSwitch(switches::kEnableGPU)) {
+    ConfigureHeadlessSwiftShaderCommandLine(*command_line);
+  }
+#if BUILDFLAG(IS_OZONE)
   // The headless backend is automatically chosen for a headless build, but also
   // adding it here allows us to run in a non-headless build too.
   command_line->AppendSwitchASCII(::switches::kOzonePlatform, "headless");
 #endif
-
-  if (command_line->HasSwitch(::switches::kUseGL)) {
-    std::string use_gl = command_line->GetSwitchValueASCII(switches::kUseGL);
-    if (use_gl != gl::kGLImplementationEGLName) {
-      // Headless uses a software output device which will cause us to fall back
-      // to software compositing anyway, but only after attempting and failing
-      // to initialize GPU compositing. We disable GPU compositing here
-      // explicitly to preempt this attempt.
-      command_line->AppendSwitch(::switches::kDisableGpuCompositing);
-    }
-  } else {
-    if (!options()->gl_implementation.empty()) {
-      command_line->AppendSwitchASCII(::switches::kUseGL,
-                                      options()->gl_implementation);
-      if (!options()->angle_implementation.empty()) {
-        command_line->AppendSwitchASCII(::switches::kUseANGLE,
-                                        options()->angle_implementation);
-      }
-    } else {
-      command_line->AppendSwitch(::switches::kDisableGpu);
-    }
-  }
 
   // When running headless there is no need to suppress input until content
   // is ready for display (because it isn't displayed to users). Nor is it
@@ -229,33 +277,34 @@ bool HeadlessContentMainDelegate::BasicStartupComplete(int* exit_code) {
   // in content/public/common/content_switch_dependent_feature_overrides.cc
   command_line->AppendSwitch(::blink::switches::kAllowPreCommitInput);
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   command_line->AppendSwitch(
       ::switches::kDisableGpuProcessForDX12InfoCollection);
 #endif
-
-  content::Profiling::ProcessStarted();
-  return false;
+  return std::nullopt;
 }
 
 void HeadlessContentMainDelegate::InitLogging(
     const base::CommandLine& command_line) {
   const std::string process_type =
       command_line.GetSwitchValueASCII(::switches::kProcessType);
-#if !defined(OS_WIN)
+#if !BUILDFLAG(IS_WIN)
   if (!command_line.HasSwitch(::switches::kEnableLogging))
     return;
 #else
   // Child processes in Windows are not able to initialize logging.
   if (!process_type.empty())
     return;
-#endif  // !defined(OS_WIN)
+#endif  // !BUILDFLAG(IS_WIN)
 
   logging::LoggingDestination log_mode;
   base::FilePath log_filename(FILE_PATH_LITERAL("chrome_debug.log"));
-  if (command_line.GetSwitchValueASCII(::switches::kEnableLogging) ==
-      "stderr") {
-    log_mode = logging::LOG_TO_SYSTEM_DEBUG_LOG | logging::LOG_TO_STDERR;
+  const std::string logging_dest =
+      command_line.GetSwitchValueASCII(::switches::kEnableLogging);
+  if (logging_dest == "stderr") {
+    log_mode = logging::LOG_TO_STDERR;
+  } else if (logging_dest == "system") {
+    log_mode = logging::LOG_TO_SYSTEM_DEBUG_LOG;
   } else {
     base::FilePath custom_filename(
         command_line.GetSwitchValuePath(::switches::kEnableLogging));
@@ -285,9 +334,10 @@ void HeadlessContentMainDelegate::InitLogging(
 
 // In release builds we should log into the user profile directory.
 #ifdef NDEBUG
-  if (!options()->user_data_dir.empty()) {
-    log_path = options()->user_data_dir;
-    log_path = log_path.Append(kDefaultProfileName);
+  base::FilePath user_data_dir =
+      command_line.GetSwitchValuePath(switches::kUserDataDir);
+  if (!user_data_dir.empty()) {
+    log_path = user_data_dir.Append(kDefaultProfileName);
     base::CreateDirectory(log_path);
     log_path = log_path.Append(log_filename);
   }
@@ -295,17 +345,22 @@ void HeadlessContentMainDelegate::InitLogging(
 
   // Otherwise we log to where the executable is.
   if (log_path.empty()) {
+#if BUILDFLAG(IS_FUCHSIA)
+    // TODO(crbug.com/40202595): Use the same solution as used for LOG_DIR.
+    // Use -1 to allow this to compile.
+    if (base::PathService::Get(-1, &log_path)) {
+#else
     if (base::PathService::Get(base::DIR_MODULE, &log_path)) {
+#endif
       log_path = log_path.Append(log_filename);
     } else {
       log_path = log_filename;
     }
   }
 
-  std::string filename;
   std::unique_ptr<base::Environment> env(base::Environment::Create());
-  if (env->GetVar(kLogFileName, &filename) && !filename.empty()) {
-    log_path = base::FilePath::FromUTF8Unsafe(filename);
+  if (std::optional<std::string> filename = env->GetVar(kLogFileName)) {
+    log_path = base::FilePath::FromUTF8Unsafe(filename.value());
   }
 
   // On Windows, having non canonical forward slashes in log file name causes
@@ -323,57 +378,60 @@ void HeadlessContentMainDelegate::InitLogging(
 
 void HeadlessContentMainDelegate::InitCrashReporter(
     const base::CommandLine& command_line) {
-  if (command_line.HasSwitch(::switches::kDisableBreakpad))
-    return;
-#if defined(OS_FUCHSIA)
-  // TODO(fuchsia): Implement this when crash reporting/Breakpad are available
-  // in Fuchsia. (crbug.com/753619)
-  NOTIMPLEMENTED();
-#else
   const std::string process_type =
       command_line.GetSwitchValueASCII(::switches::kProcessType);
-  crash_reporter::SetCrashReporterClient(g_headless_crash_client.Pointer());
-  g_headless_crash_client.Pointer()->set_crash_dumps_dir(
-      options()->crash_dumps_dir);
+  bool enable_crash_reporter =
+      process_type.empty() &&
+      command_line.HasSwitch(switches::kEnableCrashReporter) &&
+      !command_line.HasSwitch(switches::kDisableCrashReporter);
 
-  crash_reporter::InitializeCrashKeys();
-  crash_keys::SetSwitchesFromCommandLine(command_line, nullptr);
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+  enable_crash_reporter |=
+      command_line.HasSwitch(crash_reporter::switches::kCrashpadHandlerPid);
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 
-#if defined(HEADLESS_USE_BREAKPAD)
-  if (!options()->enable_crash_reporter) {
-    DCHECK(!breakpad::IsCrashReporterEnabled());
+  if (!enable_crash_reporter) {
     return;
   }
-  if (process_type != switches::kZygoteProcess)
-    breakpad::InitCrashReporter(process_type);
-#elif defined(OS_MAC)
-  crash_reporter::InitializeCrashpad(process_type.empty(), process_type);
-// Avoid adding this dependency in Windows Chrome non component builds, since
-// crashpad is already enabled.
-// TODO(dvallet): Ideally we would also want to avoid this for component builds.
-#elif defined(OS_WIN)
-  // InitializeCrashpad is already called from main() on Windows, no need to
-  // call it from here.
-#endif  // defined(HEADLESS_USE_BREAKPAD)
-#endif  // defined(OS_FUCHSIA)
+
+#if BUILDFLAG(IS_FUCHSIA)
+  // TODO(crbug.com/40188745): Implement this when crash reporting is available
+  // for Fuchsia.
+  NOTIMPLEMENTED();
+#else
+  crash_reporter::SetCrashReporterClient(g_headless_crash_client.Pointer());
+  crash_reporter::InitializeCrashKeys();
+
+  if (process_type != ::switches::kZygoteProcess) {
+    g_headless_crash_client.Pointer()->set_crash_dumps_dir(
+        command_line.GetSwitchValuePath(switches::kCrashDumpsDir));
+#if !BUILDFLAG(IS_WIN)
+    crash_reporter::InitializeCrashpad(process_type.empty(), process_type);
+#endif  // !BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_ANDROID)
+    crash_reporter::SetFirstChanceExceptionHandler(
+        v8::TryHandleWebAssemblyTrapPosix);
+#endif
+    crash_keys::SetSwitchesFromCommandLine(command_line, nullptr);
+  }
+#endif  // BUILDFLAG(IS_FUCHSIA)
 
   // Mark any bug reports from headless mode as such.
   static crash_reporter::CrashKeyString<32> headless_key(kHeadlessCrashKey);
   headless_key.Set("true");
 }
 
-
 void HeadlessContentMainDelegate::PreSandboxStartup() {
   const base::CommandLine& command_line(
       *base::CommandLine::ForCurrentProcess());
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   // Windows always needs to initialize logging, otherwise you get a renderer
   // crash.
   InitLogging(command_line);
 #else
   if (command_line.HasSwitch(::switches::kEnableLogging))
     InitLogging(command_line);
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
   InitCrashReporter(command_line);
 
@@ -385,38 +443,35 @@ void HeadlessContentMainDelegate::PreSandboxStartup() {
   InitApplicationLocale(command_line);
 }
 
-int HeadlessContentMainDelegate::RunProcess(
+std::variant<int, content::MainFunctionParams>
+HeadlessContentMainDelegate::RunProcess(
     const std::string& process_type,
-    const content::MainFunctionParams& main_function_params) {
-
+    content::MainFunctionParams main_function_params) {
   if (!process_type.empty())
-    return -1;
+    return std::move(main_function_params);
 
-  base::trace_event::TraceLog::GetInstance()->set_process_name(
-      "HeadlessBrowser");
-  base::trace_event::TraceLog::GetInstance()->SetProcessSortIndex(
-      kTraceEventBrowserProcessSortIndex);
+  base::CurrentProcess::GetInstance().SetProcessType(
+      base::CurrentProcessType::PROCESS_BROWSER);
 
   std::unique_ptr<content::BrowserMainRunner> browser_runner =
       content::BrowserMainRunner::Create();
 
-  int exit_code = browser_runner->Initialize(main_function_params);
-  DCHECK_LT(exit_code, 0) << "content::BrowserMainRunner::Initialize failed in "
-                             "HeadlessContentMainDelegate::RunProcess";
+  int result_code = browser_runner->Initialize(std::move(main_function_params));
+  DCHECK_LT(result_code, 0)
+      << "content::BrowserMainRunner::Initialize failed in "
+         "HeadlessContentMainDelegate::RunProcess";
 
   browser_runner->Run();
   browser_runner->Shutdown();
-  browser_.reset();
 
-  // Return value >=0 here to disable calling content::BrowserMain.
-  return 0;
+  return browser_->exit_code();
 }
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 void SIGTERMProfilingShutdown(int signal) {
   content::Profiling::Stop();
   struct sigaction sigact;
-  memset(&sigact, 0, sizeof(sigact));
+  UNSAFE_TODO(memset(&sigact, 0, sizeof(sigact)));
   sigact.sa_handler = SIG_DFL;
   CHECK_EQ(sigaction(SIGTERM, &sigact, NULL), 0);
   raise(signal);
@@ -438,27 +493,48 @@ void HeadlessContentMainDelegate::ZygoteForked() {
   }
   const base::CommandLine& command_line(
       *base::CommandLine::ForCurrentProcess());
-  const std::string process_type =
-      command_line.GetSwitchValueASCII(::switches::kProcessType);
-  // Unconditionally try to turn on crash reporting since we do not have access
-  // to the latest browser options at this point when testing. Breakpad will
-  // bail out gracefully if the browser process hasn't enabled crash reporting.
-#if defined(HEADLESS_USE_BREAKPAD)
-  breakpad::InitCrashReporter(process_type);
-#endif
+  if (command_line.HasSwitch(crash_reporter::switches::kCrashpadHandlerPid)) {
+    const std::string process_type =
+        command_line.GetSwitchValueASCII(::switches::kProcessType);
+    crash_reporter::InitializeCrashpad(false, process_type);
+    crash_reporter::SetFirstChanceExceptionHandler(
+        v8::TryHandleWebAssemblyTrapPosix);
+    crash_keys::SetSwitchesFromCommandLine(command_line, nullptr);
+  }
 }
-#endif  // defined(OS_LINUX) || defined(OS_CHROMEOS)
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 
 // static
 HeadlessContentMainDelegate* HeadlessContentMainDelegate::GetInstance() {
   return g_current_headless_content_main_delegate;
 }
 
-HeadlessBrowser::Options* HeadlessContentMainDelegate::options() {
-  if (browser_)
-    return browser_->options();
-  return options_.get();
+std::optional<int> HeadlessContentMainDelegate::PreBrowserMain() {
+  HeadlessBrowser::Options browser_options;
+  if (!HandleCommandLineSwitches(*base::CommandLine::ForCurrentProcess(),
+                                 browser_options)) {
+    return EXIT_FAILURE;
+  }
+  browser_->SetOptions(std::move(browser_options));
+
+#if BUILDFLAG(IS_WIN)
+  // Register callback to handle resource exhaustion.
+  base::win::SetOnResourceExhaustedFunction(&OnResourceExhausted);
+#endif
+
+#if BUILDFLAG(IS_MAC)
+  PlatformPreBrowserMain();
+#endif
+  return std::nullopt;
 }
+
+#if BUILDFLAG(IS_WIN)
+bool HeadlessContentMainDelegate::ShouldHandleConsoleControlEvents() {
+  // Handle console control events so that orderly shutdown can be performed by
+  // HeadlessContentBrowserClient's override of SessionEnding.
+  return true;
+}
+#endif
 
 content::ContentClient* HeadlessContentMainDelegate::CreateContentClient() {
   return &content_client_;
@@ -466,6 +542,7 @@ content::ContentClient* HeadlessContentMainDelegate::CreateContentClient() {
 
 content::ContentBrowserClient*
 HeadlessContentMainDelegate::CreateContentBrowserClient() {
+  DCHECK(browser_);
   browser_client_ =
       std::make_unique<HeadlessContentBrowserClient>(browser_.get());
   return browser_client_.get();
@@ -479,37 +556,74 @@ HeadlessContentMainDelegate::CreateContentRendererClient() {
 
 content::ContentUtilityClient*
 HeadlessContentMainDelegate::CreateContentUtilityClient() {
-  utility_client_ =
-      std::make_unique<HeadlessContentUtilityClient>(options()->user_agent);
+  utility_client_ = std::make_unique<HeadlessContentUtilityClient>();
   return utility_client_.get();
 }
 
-void HeadlessContentMainDelegate::PostEarlyInitialization(
-    bool is_running_tests) {
-  if (base::FeatureList::IsEnabled(features::kVirtualTime)) {
-    // Only pass viz flags into the virtual time mode.
-    const char* const switches[] = {
-        // TODO(eseckler): Make --run-all-compositor-stages-before-draw a
-        // per-BeginFrame mode so that we can activate it for individual
-        // requests
-        // only. With surface sync becoming the default, we can then make
-        // virtual_time_enabled a per-request option, too.
-        // We control BeginFrames ourselves and need all compositing stages to
-        // run.
-        ::switches::kRunAllCompositorStagesBeforeDraw,
-        ::switches::kDisableNewContentRenderingTimeout,
-        cc::switches::kDisableThreadedAnimation,
-        // Animtion-only BeginFrames are only supported when updates from the
-        // impl-thread are disabled, see go/headless-rendering.
-        cc::switches::kDisableCheckerImaging,
-        blink::switches::kDisableThreadedScrolling,
-        // Ensure that image animations don't resync their animation timestamps
-        // when looping back around.
-        blink::switches::kDisableImageAnimationResync,
-    };
-    for (const auto* flag : switches)
-      base::CommandLine::ForCurrentProcess()->AppendSwitch(flag);
+std::optional<int> HeadlessContentMainDelegate::PostEarlyInitialization(
+    InvokedIn invoked_in) {
+  if (std::holds_alternative<InvokedInChildProcess>(invoked_in)) {
+    return std::nullopt;
   }
+
+#if defined(HEADLESS_USE_PREFS)
+  browser_->CreatePrefService();
+#endif
+
+#if defined(HEADLESS_SUPPORT_FIELD_TRIALS)
+  // Check if we're telling content to not to create the feature list and do it
+  // here if so. Content can create default feature list on its own however here
+  // we want the feature list to be created by field trial machinery.
+  if (!ShouldCreateFeatureList(invoked_in)) {
+    SetUpFieldTrials(browser()->GetPrefs(),
+                     browser()->options()->user_data_dir);
+    // Schedule a Local State write since the above function may have resulted
+    // in some prefs being updated. Headless shell runs are typically short and
+    // often end in crashes, so it helps to commit early.
+    browser_->GetPrefs()->CommitPendingWrite();
+  }
+
+  // Check if we're telling content to not to initialize Mojo and do it here
+  // since we want it do be done after the feature list is created.
+  if (!ShouldInitializeMojo(invoked_in)) {
+    content::InitializeMojoCore();
+  }
+#endif  // defined(HEADLESS_SUPPORT_FIELD_TRIALS)
+
+  if (base::FeatureList::IsEnabled(features::kVirtualTime)) {
+    AddSwitchesForVirtualTime();
+  }
+
+#if BUILDFLAG(IS_WIN)
+  // Make sure that 'uxtheme.dll' is pinned before blocking on the main thread
+  // is disallowed; see https://crbug.com/368388543#comment11.
+  base::win::IsDarkModeAvailable();
+#endif  // BUILDFLAG(IS_WIN)
+
+  return std::nullopt;
 }
+
+#if defined(HEADLESS_SUPPORT_FIELD_TRIALS)
+bool HeadlessContentMainDelegate::ShouldCreateFeatureList(
+    InvokedIn invoked_in) {
+  // The content layer is always responsible for creating the FeatureList in
+  // child processes.
+  if (std::holds_alternative<InvokedInChildProcess>(invoked_in)) {
+    return true;
+  }
+
+  // VariationsFieldTrialCreator::SetUpFieldTrials() instantiates its own
+  // feature list so prevent content from instantiating a default one if we're
+  // going to set up field trials.
+  return !ShouldEnableFieldTrials();
+}
+
+bool HeadlessContentMainDelegate::ShouldInitializeMojo(InvokedIn invoked_in) {
+  // Mojo cannot be initialized without a feature list instance available so
+  // postpone its initialization until after feature list is instantiated by
+  // field trials setup if field trials are enabled.
+  return ShouldCreateFeatureList(invoked_in);
+}
+#endif  // defined(HEADLESS_SUPPORT_FIELD_TRIALS)
 
 }  // namespace headless

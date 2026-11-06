@@ -24,6 +24,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_htmlscriptelement_svgscriptelement.h"
 #include "third_party/blink/renderer/core/dom/attribute.h"
 #include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/dom/dom_node_ids.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
@@ -43,20 +44,37 @@ SVGScriptElement::SVGScriptElement(Document& document,
 void SVGScriptElement::ParseAttribute(
     const AttributeModificationParams& params) {
   if (params.name == html_names::kOnerrorAttr) {
-    SetAttributeEventListener(
-        event_type_names::kError,
-        JSEventHandlerForContentAttribute::Create(
-            GetExecutionContext(), params.name, params.new_value,
-            JSEventHandler::HandlerType::kOnErrorEventHandler));
+    SetElementAttributeEventListenerFromScriptBody(
+        event_type_names::kError, params.name, params.new_value, params.reason,
+        JSEventHandler::HandlerType::kOnErrorEventHandler);
+  } else if (params.name == svg_names::kAsyncAttr &&
+             RuntimeEnabledFeatures::SvgScriptElementAsyncAttributeEnabled()) {
+    // https://html.spec.whatwg.org/C/#non-blocking
+    // "In addition, whenever a script element whose |non-blocking|
+    // flag is set has an async content attribute added, the element's
+    // |non-blocking| flag must be unset."
+    loader_->HandleAsyncAttribute();
   } else {
     SVGElement::ParseAttribute(params);
   }
 }
 
+void SVGScriptElement::setAsync(bool async) {
+  CHECK(RuntimeEnabledFeatures::SvgScriptElementAsyncAttributeEnabled());
+
+  SetBooleanAttribute(svg_names::kAsyncAttr, async);
+  loader_->HandleAsyncAttribute();
+}
+
+bool SVGScriptElement::async() const {
+  CHECK(RuntimeEnabledFeatures::SvgScriptElementAsyncAttributeEnabled());
+
+  return FastHasAttribute(svg_names::kAsyncAttr) || loader_->IsForceAsync();
+}
+
 void SVGScriptElement::SvgAttributeChanged(
     const SvgAttributeChangedParams& params) {
   if (SVGURIReference::IsKnownAttribute(params.name)) {
-    SVGElement::InvalidationGuard invalidation_guard(this);
     loader_->HandleSourceAttribute(LegacyHrefString(*this));
     return;
   }
@@ -79,12 +97,13 @@ void SVGScriptElement::DidNotifySubtreeInsertionsToDocument() {
 
 void SVGScriptElement::ChildrenChanged(const ChildrenChange& change) {
   SVGElement::ChildrenChanged(change);
-  loader_->ChildrenChanged();
-}
+  if (!GetDocument().StatePreservingAtomicMoveInProgress()) {
+    loader_->ChildrenChanged(change);
+  }
 
-void SVGScriptElement::DidMoveToNewDocument(Document& old_document) {
-  ScriptRunner::MovePendingScript(old_document, GetDocument(), loader_.Get());
-  SVGElement::DidMoveToNewDocument(old_document);
+  // We'll record whether the script element children were ever changed by
+  // the API (as opposed to the parser).
+  children_changed_by_api_ |= !change.ByParser();
 }
 
 bool SVGScriptElement::IsURLAttribute(const Attribute& attribute) const {
@@ -94,12 +113,36 @@ bool SVGScriptElement::IsURLAttribute(const Attribute& attribute) const {
 void SVGScriptElement::FinishParsingChildren() {
   SVGElement::FinishParsingChildren();
   have_fired_load_ = true;
-  DCHECK(!script_text_internal_slot_.length());
-  script_text_internal_slot_ = ParkableString(TextFromChildren().Impl());
+
+  // We normally expect the parser to finish parsing before any script gets
+  // a chance to manipulate the script. However, if script parsing gets
+  // deferred (or similar; see crbug.com/1033101) then a script might get
+  // access to the script element before. In this case, we cannot blindly
+  // accept the current TextFromChildren as a parser result.
+  // This matches the logic in HTMLScriptElement.
+  DCHECK(children_changed_by_api_ || !script_text_internal_slot_.length());
+  if (!children_changed_by_api_) {
+    script_text_internal_slot_ = ParkableString(TextFromChildren().Impl());
+  }
 }
 
 bool SVGScriptElement::HaveLoadedRequiredResources() {
   return have_fired_load_;
+}
+
+String SVGScriptElement::IntegrityAttributeValue() const {
+  return FastGetAttribute(html_names::kIntegrityAttr);
+}
+
+String SVGScriptElement::SignatureAttributeValue() const {
+  return FastGetAttribute(html_names::kSignatureAttr);
+}
+
+bool SVGScriptElement::AsyncAttributeValue() const {
+  if (RuntimeEnabledFeatures::SvgScriptElementAsyncAttributeEnabled()) {
+    return FastHasAttribute(svg_names::kAsyncAttr);
+  }
+  return false;
 }
 
 String SVGScriptElement::SourceAttributeValue() const {
@@ -137,12 +180,13 @@ const AtomicString& SVGScriptElement::GetNonceForElement() const {
 
 bool SVGScriptElement::AllowInlineScriptForCSP(
     const AtomicString& nonce,
-    const WTF::OrdinalNumber& context_line,
+    const TextPosition& context_position,
     const String& script_content) {
   return GetExecutionContext()
       ->GetContentSecurityPolicyForCurrentWorld()
       ->AllowInline(ContentSecurityPolicy::InlineType::kScript, this,
-                    script_content, nonce, GetDocument().Url(), context_line);
+                    script_content, nonce, GetDocument().Url(),
+                    context_position);
 }
 
 Document& SVGScriptElement::GetDocument() const {
@@ -154,11 +198,12 @@ ExecutionContext* SVGScriptElement::GetExecutionContext() const {
 }
 
 Element& SVGScriptElement::CloneWithoutAttributesAndChildren(
-    Document& factory) const {
+    Document& factory,
+    CustomElementRegistry* registry) const {
   CreateElementFlags flags =
       CreateElementFlags::ByCloneNode().SetAlreadyStarted(
           loader_->AlreadyStarted());
-  return *factory.CreateElement(TagQName(), flags, IsValue());
+  return *factory.CreateElement(TagQName(), flags, IsValue(), registry);
 }
 
 void SVGScriptElement::DispatchLoadEvent() {
@@ -187,8 +232,9 @@ const AttrNameToTrustedType& SVGScriptElement::GetCheckedAttributeTypes()
     const {
   DEFINE_STATIC_LOCAL(
       AttrNameToTrustedType, attribute_map,
-      ({
-          {svg_names::kHrefAttr.LocalName(), SpecificTrustedType::kScriptURL},
+      ({{"href", std::pair{SpecificTrustedType::kScriptURL,
+                           trusted_types_names::kSVGScriptElement}}
+
       }));
   return attribute_map;
 }
@@ -200,7 +246,22 @@ V8HTMLOrSVGScriptElement* SVGScriptElement::AsV8HTMLOrSVGScriptElement() {
 }
 
 DOMNodeId SVGScriptElement::GetDOMNodeId() {
-  return DOMNodeIds::IdForNode(this);
+  return this->GetDomNodeId();
+}
+
+SVGAnimatedPropertyBase* SVGScriptElement::PropertyFromAttribute(
+    const QualifiedName& attribute_name) const {
+  if (SVGAnimatedPropertyBase* ret =
+          SVGURIReference::PropertyFromAttribute(attribute_name);
+      ret) {
+    return ret;
+  }
+  return SVGElement::PropertyFromAttribute(attribute_name);
+}
+
+void SVGScriptElement::SynchronizeAllSVGAttributes() const {
+  SVGURIReference::SynchronizeAllSVGAttributes();
+  SVGElement::SynchronizeAllSVGAttributes();
 }
 
 void SVGScriptElement::Trace(Visitor* visitor) const {

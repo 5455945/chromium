@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,12 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <numbers>
 #include <utility>
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/files/file.h"
-#include "base/numerics/math_constants.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/test/task_environment.h"
 #include "media/audio/audio_debug_file_writer.h"
@@ -40,10 +41,10 @@ void FakeConsumer::Clear() {
 
 void FakeConsumer::Consume(const media::AudioBus& bus) {
   CHECK_EQ(static_cast<int>(recorded_channel_data_.size()), bus.channels());
-  for (int ch = 0; ch < static_cast<int>(recorded_channel_data_.size()); ++ch) {
-    const float* const src = bus.channel(ch);
+  for (size_t ch = 0; ch < recorded_channel_data_.size(); ++ch) {
+    base::span<const float> src_ch = bus.channel(ch);
     std::vector<float>& samples = recorded_channel_data_[ch];
-    samples.insert(samples.end(), src, src + bus.frames());
+    samples.insert(samples.end(), src_ch.begin(), src_ch.end());
   }
 }
 
@@ -65,24 +66,9 @@ bool FakeConsumer::IsSilentInRange(int channel,
     return true;
   }
   const float value = samples[begin_frame];
-  return std::all_of(samples.data() + begin_frame + 1,
-                     samples.data() + end_frame,
+  return std::all_of(UNSAFE_TODO(samples.data() + begin_frame + 1),
+                     UNSAFE_TODO(samples.data() + end_frame),
                      [&value](float f) { return f == value; });
-}
-
-int FakeConsumer::FindEndOfSilence(int channel, int begin_frame) const {
-  CHECK_LT(channel, static_cast<int>(recorded_channel_data_.size()));
-  CHECK_GE(begin_frame, 0);
-  const std::vector<float>& samples = recorded_channel_data_[channel];
-
-  if (static_cast<int>(samples.size()) <= begin_frame) {
-    return begin_frame;
-  }
-  const float value = samples[begin_frame];
-  const float* at = std::find_if(samples.data() + begin_frame + 1,
-                                 samples.data() + GetRecordedFrameCount(),
-                                 [&value](float f) { return f != value; });
-  return at - samples.data();
 }
 
 double FakeConsumer::ComputeAmplitudeAt(int channel,
@@ -107,7 +93,7 @@ double FakeConsumer::ComputeAmplitudeAt(int channel,
 
   // Compute the amplitude for just the |frequency| of interest, as opposed to
   // doing a full Discrete Fourier Transform.
-  const double step = 2.0 * base::kPiDouble * frequency / sample_rate_;
+  const double step = 2.0 * std::numbers::pi * frequency / sample_rate_;
   double real_part = 0.0;
   double img_part = 0.0;
   for (int i = end_frame - analysis_length; i < end_frame; ++i) {
@@ -127,22 +113,23 @@ void FakeConsumer::SaveToFile(const base::FilePath& path) const {
     task_environment = std::make_unique<base::test::TaskEnvironment>();
   }
 
+  const size_t number_of_samples = recorded_channel_data_[0].size();
+
   const media::AudioParameters params(
       media::AudioParameters::AUDIO_PCM_LOW_LATENCY,
-      media::GuessChannelLayout(recorded_channel_data_.size()), sample_rate_,
-      recorded_channel_data_[0].size());
-  media::AudioDebugFileWriter writer(params);
+      media::ChannelLayoutConfig::Guess(recorded_channel_data_.size()),
+      sample_rate_, number_of_samples);
   base::File file(path, base::File::FLAG_CREATE_ALWAYS | base::File::FLAG_READ |
                             base::File::FLAG_WRITE);
   CHECK(file.IsValid());
-  writer.Start(std::move(file));
+  auto writer = media::AudioDebugFileWriter::Create(params, std::move(file));
   auto bus = media::AudioBus::Create(params);
   for (int i = 0; i < params.channels(); ++i) {
-    memcpy(bus->channel(i), recorded_channel_data_[i].data(),
-           sizeof(float) * recorded_channel_data_[i].size());
+    CHECK_EQ(recorded_channel_data_[i].size(), number_of_samples);
+    const std::vector<float>& channel_data = recorded_channel_data_[i];
+    bus->channel(i).copy_from_nonoverlapping(base::span(channel_data));
   }
-  writer.Write(std::move(bus));
-  writer.Stop();
+  writer->Write(*bus);
 }
 
 }  // namespace audio

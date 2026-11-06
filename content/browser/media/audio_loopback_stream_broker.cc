@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,11 @@
 
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/task/post_task.h"
 #include "base/unguessable_token.h"
+#include "content/browser/media/audio_stream_broker_helper.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "media/mojo/mojom/audio_stream_factory.mojom.h"
@@ -33,10 +33,10 @@ AudioLoopbackStreamBroker::AudioLoopbackStreamBroker(
       shared_memory_count_(shared_memory_count),
       deleter_(std::move(deleter)),
       renderer_factory_client_(std::move(renderer_factory_client)) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  DCHECK(source_);
-  DCHECK(renderer_factory_client_);
-  DCHECK(deleter_);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
+  CHECK(source_, base::NotFatalUntil::M160);
+  CHECK(renderer_factory_client_, base::NotFatalUntil::M160);
+  CHECK(deleter_, base::NotFatalUntil::M160);
 
   if (mute_source) {
     muter_.emplace(source_->GetGroupID());
@@ -49,24 +49,26 @@ AudioLoopbackStreamBroker::AudioLoopbackStreamBroker(
   // Notify the source that we are capturing from it.
   source_->AddLoopbackSink(this);
 
-  NotifyProcessHostOfStartedStream(render_process_id);
+  NotifyFrameHostOfAudioStreamStarted(render_process_id, render_frame_id,
+                                      /*is_capturing=*/true);
 }
 
 AudioLoopbackStreamBroker::~AudioLoopbackStreamBroker() {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
 
   if (source_)
     source_->RemoveLoopbackSink(this);
 
-  NotifyProcessHostOfStoppedStream(render_process_id());
+  NotifyFrameHostOfAudioStreamStopped(render_process_id(), render_frame_id(),
+                                      /*is_capturing=*/true);
 }
 
 void AudioLoopbackStreamBroker::CreateStream(
     media::mojom::AudioStreamFactory* factory) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  DCHECK(!observer_receiver_.is_bound());
-  DCHECK(!client_receiver_);
-  DCHECK(source_);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
+  CHECK(!observer_receiver_.is_bound(), base::NotFatalUntil::M160);
+  CHECK(!client_receiver_, base::NotFatalUntil::M160);
+  CHECK(source_, base::NotFatalUntil::M160);
 
   if (muter_)  // Mute the source.
     muter_->Connect(factory);
@@ -91,35 +93,35 @@ void AudioLoopbackStreamBroker::CreateStream(
 }
 
 void AudioLoopbackStreamBroker::OnSourceGone() {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
   // No further access to |source_| is allowed.
   source_ = nullptr;
   Cleanup();
 }
 
 void AudioLoopbackStreamBroker::DidStartRecording() {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
 }
 
 void AudioLoopbackStreamBroker::StreamCreated(
     mojo::PendingRemote<media::mojom::AudioInputStream> stream,
-    media::mojom::ReadOnlyAudioDataPipePtr data_pipe) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+    media::mojom::ReadWriteAudioDataPipePtr data_pipe) {
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
 
   if (!data_pipe) {
     Cleanup();
     return;
   }
 
-  DCHECK(renderer_factory_client_);
+  CHECK(renderer_factory_client_, base::NotFatalUntil::M160);
   renderer_factory_client_->StreamCreated(
       std::move(stream), std::move(client_receiver_), std::move(data_pipe),
       false /* |initially_muted|: Loopback streams are never muted. */,
-      absl::nullopt /* |stream_id|: Loopback streams don't have ids */);
+      std::nullopt /* |stream_id|: Loopback streams don't have ids */);
 }
 
 void AudioLoopbackStreamBroker::Cleanup() {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M160);
   std::move(deleter_).Run(this);
 }
 

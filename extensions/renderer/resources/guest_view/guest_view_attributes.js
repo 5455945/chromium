@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -34,8 +34,9 @@ Attribute.prototype.getValue = function() {
 // Retrieves and returns the attribute's value if it has been dirtied since
 // the last time this method was called. Returns null otherwise.
 Attribute.prototype.getValueIfDirty = function() {
-  if (!this.dirty)
+  if (!this.dirty) {
     return null;
+  }
   this.dirty = false;
   return this.getValue();
 };
@@ -67,8 +68,9 @@ Attribute.prototype.defineProperty = function() {
 
 // Called when the attribute's value changes.
 Attribute.prototype.maybeHandleMutation = function(oldValue, newValue) {
-  if (this.ignoreMutation)
+  if (this.ignoreMutation) {
     return;
+  }
 
   this.dirty = true;
   this.handleMutation(oldValue, newValue);

@@ -1,27 +1,23 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/views/payments/payment_request_views_util.h"
 
+#include <memory>
 #include <utility>
-#include <vector>
 
-#include "base/macros.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/browser/ui/views/payments/payment_request_dialog_view_ids.h"
 #include "chrome/browser/ui/views/payments/payment_request_sheet_controller.h"
-#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/branded_strings.h"
 #include "chrome/grit/theme_resources.h"
-#include "components/autofill/core/browser/autofill_data_util.h"
-#include "components/autofill/core/browser/autofill_type.h"
-#include "components/autofill/core/browser/data_model/autofill_profile.h"
-#include "components/autofill/core/browser/data_model/credit_card.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
+#include "components/autofill/core/browser/data_quality/autofill_data_util.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/geo/phone_number_i18n.h"
 #include "components/payments/content/icon/icon_size.h"
-#include "components/payments/core/payment_options_provider.h"
 #include "components/payments/core/payment_request_data_util.h"
 #include "components/payments/core/payments_profile_comparator.h"
 #include "components/payments/core/strings_util.h"
@@ -33,10 +29,10 @@
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/base/ui_base_features.h"
+#include "ui/color/color_id.h"
 #include "ui/compositor/layer.h"
 #include "ui/gfx/canvas.h"
-#include "ui/gfx/color_utils.h"
-#include "ui/gfx/font_list.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/paint_vector_icon.h"
@@ -44,49 +40,22 @@
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/bubble/bubble_frame_view.h"
-#include "ui/views/controls/button/image_button.h"
-#include "ui/views/controls/button/image_button_factory.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/styled_label.h"
 #include "ui/views/layout/box_layout.h"
-#include "ui/views/layout/grid_layout.h"
 #include "ui/views/painter.h"
+#include "ui/views/style/typography.h"
 #include "ui/views/view.h"
 
 namespace payments {
 
 namespace {
 
-class ThemeTrackingLabel : public views::Label {
- public:
-  METADATA_HEADER(ThemeTrackingLabel);
-
-  explicit ThemeTrackingLabel(const std::u16string& text) : Label(text) {}
-  ~ThemeTrackingLabel() override = default;
-
-  void set_enabled_color_id(ui::NativeTheme::ColorId enabled_color_id) {
-    enabled_color_id_ = enabled_color_id;
-  }
-
-  // views::Label:
-  void OnThemeChanged() override {
-    Label::OnThemeChanged();
-    if (enabled_color_id_.has_value())
-      SetEnabledColor(GetNativeTheme()->GetSystemColor(*enabled_color_id_));
-  }
-
- private:
-  absl::optional<ui::NativeTheme::ColorId> enabled_color_id_;
-};
-
-BEGIN_METADATA(ThemeTrackingLabel, views::Label)
-END_METADATA
-
 class ChromeLogoImageView : public views::ImageView {
- public:
-  METADATA_HEADER(ChromeLogoImageView);
+  METADATA_HEADER(ChromeLogoImageView, views::ImageView)
 
+ public:
   ChromeLogoImageView() {
     SetCanProcessEventsWithinSubtree(false);
     SetTooltipText(l10n_util::GetStringUTF16(IDS_PRODUCT_NAME));
@@ -96,15 +65,15 @@ class ChromeLogoImageView : public views::ImageView {
   // views::ImageView:
   void OnThemeChanged() override {
     ImageView::OnThemeChanged();
-    SetImage(ui::ResourceBundle::GetSharedInstance()
-                 .GetImageNamed(GetNativeTheme()->ShouldUseDarkColors()
-                                    ? IDR_PRODUCT_LOGO_NAME_22_WHITE
-                                    : IDR_PRODUCT_LOGO_NAME_22)
-                 .AsImageSkia());
+    SetImage(ui::ImageModel::FromResourceId(
+        (GetNativeTheme()->preferred_color_scheme() ==
+         ui::NativeTheme::PreferredColorScheme::kDark)
+            ? IDR_PRODUCT_LOGO_NAME_22_WHITE
+            : IDR_PRODUCT_LOGO_NAME_22));
   }
 };
 
-BEGIN_METADATA(ChromeLogoImageView, views::ImageView)
+BEGIN_METADATA(ChromeLogoImageView)
 END_METADATA
 
 // |s1|, |s2|, and |s3| are lines identifying the profile. |s1| is the
@@ -117,7 +86,7 @@ std::unique_ptr<views::View> GetBaseProfileLabel(
     const std::u16string& s3,
     std::u16string* accessible_content,
     bool enabled = true) {
-  DCHECK(accessible_content);
+  CHECK(accessible_content, base::NotFatalUntil::M162);
   std::unique_ptr<views::View> container = std::make_unique<views::View>();
   std::unique_ptr<views::BoxLayout> layout = std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kVertical, gfx::Insets(), 0);
@@ -126,34 +95,38 @@ std::unique_ptr<views::View> GetBaseProfileLabel(
   container->SetLayoutManager(std::move(layout));
 
   if (!s1.empty()) {
-    const int text_style = type == AddressStyleType::DETAILED
-                               ? static_cast<int>(STYLE_EMPHASIZED)
-                               : static_cast<int>(views::style::STYLE_PRIMARY);
-    auto label = std::make_unique<ThemeTrackingLabel>(s1);
+    const int text_style =
+        type == AddressStyleType::DETAILED
+            ? static_cast<int>(views::style::STYLE_EMPHASIZED)
+            : static_cast<int>(views::style::STYLE_PRIMARY);
+    auto label = std::make_unique<views::Label>(s1);
     label->SetTextContext(views::style::CONTEXT_LABEL);
     label->SetTextStyle(text_style);
     label->SetID(static_cast<int>(DialogViewID::PROFILE_LABEL_LINE_1));
     label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-    if (!enabled)
-      label->set_enabled_color_id(ui::NativeTheme::kColorId_LabelDisabledColor);
+    if (!enabled) {
+      label->SetEnabledColor(ui::kColorLabelForegroundDisabled);
+    }
     container->AddChildView(std::move(label));
   }
 
   if (!s2.empty()) {
-    auto label = std::make_unique<ThemeTrackingLabel>(s2);
+    auto label = std::make_unique<views::Label>(s2);
     label->SetID(static_cast<int>(DialogViewID::PROFILE_LABEL_LINE_2));
     label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-    if (!enabled)
-      label->set_enabled_color_id(ui::NativeTheme::kColorId_LabelDisabledColor);
+    if (!enabled) {
+      label->SetEnabledColor(ui::kColorLabelForegroundDisabled);
+    }
     container->AddChildView(std::move(label));
   }
 
   if (!s3.empty()) {
-    auto label = std::make_unique<ThemeTrackingLabel>(s3);
+    auto label = std::make_unique<views::Label>(s3);
     label->SetID(static_cast<int>(DialogViewID::PROFILE_LABEL_LINE_3));
     label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-    if (!enabled)
-      label->set_enabled_color_id(ui::NativeTheme::kColorId_LabelDisabledColor);
+    if (!enabled) {
+      label->SetEnabledColor(ui::kColorLabelForegroundDisabled);
+    }
     container->AddChildView(std::move(label));
   }
 
@@ -171,7 +144,7 @@ std::unique_ptr<views::View> GetShippingAddressLabel(
     const autofill::AutofillProfile& profile,
     std::u16string* accessible_content,
     bool enabled) {
-  DCHECK(accessible_content);
+  CHECK(accessible_content, base::NotFatalUntil::M162);
   std::u16string name = profile.GetInfo(autofill::NAME_FULL, locale);
 
   std::u16string address =
@@ -186,11 +159,11 @@ std::unique_ptr<views::View> GetShippingAddressLabel(
 
 std::unique_ptr<views::Label> GetLabelForMissingInformation(
     const std::u16string& missing_info) {
-  auto label = std::make_unique<ThemeTrackingLabel>(missing_info);
+  auto label = std::make_unique<views::Label>(missing_info);
   label->SetTextContext(CONTEXT_DIALOG_BODY_TEXT_SMALL);
   label->SetID(static_cast<int>(DialogViewID::PROFILE_LABEL_ERROR));
   // Missing information typically has a nice shade of blue.
-  label->set_enabled_color_id(ui::NativeTheme::kColorId_LinkEnabled);
+  label->SetEnabledColor(ui::kColorLinkForeground);
   return label;
 }
 
@@ -199,7 +172,13 @@ std::unique_ptr<views::Label> GetLabelForMissingInformation(
 class PaymentRequestRowBorderPainter : public views::Painter {
  public:
   explicit PaymentRequestRowBorderPainter(SkColor color) : color_(color) {}
-  ~PaymentRequestRowBorderPainter() override {}
+
+  PaymentRequestRowBorderPainter(const PaymentRequestRowBorderPainter&) =
+      delete;
+  PaymentRequestRowBorderPainter& operator=(
+      const PaymentRequestRowBorderPainter&) = delete;
+
+  ~PaymentRequestRowBorderPainter() override = default;
 
   // views::Painter:
   gfx::Size GetMinimumSize() const override {
@@ -217,61 +196,9 @@ class PaymentRequestRowBorderPainter : public views::Painter {
 
  private:
   SkColor color_;
-  DISALLOW_COPY_AND_ASSIGN(PaymentRequestRowBorderPainter);
 };
 
 }  // namespace
-
-void PopulateSheetHeaderView(bool show_back_arrow,
-                             std::unique_ptr<views::View> header_content_view,
-                             views::Button::PressedCallback back_arrow_callback,
-                             views::View* container,
-                             std::unique_ptr<views::Background> background) {
-  SkColor background_color = background->get_color();
-  container->SetBackground(std::move(background));
-  views::GridLayout* layout =
-      container->SetLayoutManager(std::make_unique<views::GridLayout>());
-
-  constexpr int kVerticalInset = 14;
-  constexpr int kHeaderHorizontalInset = 16;
-  container->SetBorder(
-      views::CreateEmptyBorder(kVerticalInset, kHeaderHorizontalInset,
-                               kVerticalInset, kHeaderHorizontalInset));
-
-  views::ColumnSet* columns = layout->AddColumnSet(0);
-  // A column for the optional back arrow.
-  columns->AddColumn(views::GridLayout::LEADING, views::GridLayout::CENTER,
-                     views::GridLayout::kFixedSize,
-                     views::GridLayout::ColumnSize::kUsePreferred, 0, 0);
-
-  constexpr int kPaddingBetweenArrowAndTitle = 8;
-  if (show_back_arrow)
-    columns->AddPaddingColumn(views::GridLayout::kFixedSize,
-                              kPaddingBetweenArrowAndTitle);
-
-  // A column for the title.
-  columns->AddColumn(views::GridLayout::FILL, views::GridLayout::CENTER, 1.0,
-                     views::GridLayout::ColumnSize::kUsePreferred, 0, 0);
-
-  layout->StartRow(views::GridLayout::kFixedSize, 0);
-  if (!show_back_arrow) {
-    layout->SkipColumns(1);
-  } else {
-    auto back_arrow =
-        views::CreateVectorImageButton(std::move(back_arrow_callback));
-    views::SetImageFromVectorIcon(
-        back_arrow.get(), vector_icons::kBackArrowIcon,
-        color_utils::GetColorWithMaxContrast(background_color));
-    constexpr int kBackArrowSize = 16;
-    back_arrow->SetSize(gfx::Size(kBackArrowSize, kBackArrowSize));
-    back_arrow->SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
-    back_arrow->SetID(static_cast<int>(DialogViewID::BACK_BUTTON));
-    back_arrow->SetAccessibleName(l10n_util::GetStringUTF16(IDS_PAYMENTS_BACK));
-    layout->AddView(std::move(back_arrow));
-  }
-
-  layout->AddView(std::move(header_content_view));
-}
 
 std::unique_ptr<views::ImageView> CreateAppIconView(
     int icon_resource_id,
@@ -285,21 +212,20 @@ std::unique_ptr<views::ImageView> CreateAppIconView(
     gfx::ImageSkia img = gfx::ImageSkia::CreateFrom1xBitmap(
                              (icon_bitmap ? *icon_bitmap : SkBitmap()))
                              .DeepCopy();
-    icon_view->SetImage(img);
+    icon_view->SetImage(ui::ImageModel::FromImageSkia(img));
     float width = base::checked_cast<float>(img.width());
     float height = base::checked_cast<float>(img.height());
     float ratio = 1;
-    if (width && height)
+    if (width && height) {
       ratio = width / height;
+    }
     // We should set image size in density indepent pixels here, since
     // views::ImageView objects are rastered at the device scale factor.
     icon_view->SetImageSize(gfx::Size(
         ratio * IconSizeCalculator::kPaymentAppDeviceIndependentIdealIconHeight,
         IconSizeCalculator::kPaymentAppDeviceIndependentIdealIconHeight));
   } else {
-    icon_view->SetImage(ui::ResourceBundle::GetSharedInstance()
-                            .GetImageNamed(icon_resource_id)
-                            .AsImageSkia());
+    icon_view->SetImage(ui::ImageModel::FromResourceId(icon_resource_id));
     // Images from |icon_resource_id| are 32x20 credit cards.
     icon_view->SetImageSize(gfx::Size(32, 20));
   }
@@ -333,7 +259,7 @@ std::unique_ptr<views::View> GetShippingAddressLabelWithMissingInfo(
     const PaymentsProfileComparator& comp,
     std::u16string* accessible_content,
     bool enabled) {
-  DCHECK(accessible_content);
+  CHECK(accessible_content, base::NotFatalUntil::M162);
   std::unique_ptr<views::View> base_label = GetShippingAddressLabel(
       type, locale, profile, accessible_content, enabled);
 
@@ -357,7 +283,7 @@ std::unique_ptr<views::View> GetContactInfoLabel(
     bool request_payer_phone,
     const PaymentsProfileComparator& comp,
     std::u16string* accessible_content) {
-  DCHECK(accessible_content);
+  CHECK(accessible_content, base::NotFatalUntil::M162);
   std::u16string name = request_payer_name
                             ? profile.GetInfo(autofill::NAME_FULL, locale)
                             : std::u16string();
@@ -392,7 +318,7 @@ std::unique_ptr<views::Border> CreatePaymentRequestRowBorder(
 
 std::unique_ptr<views::Label> CreateBoldLabel(const std::u16string& text) {
   return std::make_unique<views::Label>(text, views::style::CONTEXT_LABEL,
-                                        STYLE_EMPHASIZED);
+                                        views::style::STYLE_EMPHASIZED);
 }
 
 std::unique_ptr<views::Label> CreateMediumLabel(const std::u16string& text) {
@@ -422,7 +348,7 @@ std::unique_ptr<views::View> CreateShippingOptionLabel(
     const std::u16string& formatted_amount,
     bool emphasize_label,
     std::u16string* accessible_content) {
-  DCHECK(accessible_content);
+  CHECK(accessible_content, base::NotFatalUntil::M162);
   std::unique_ptr<views::View> container = std::make_unique<views::View>();
 
   auto layout = std::make_unique<views::BoxLayout>(
@@ -466,14 +392,14 @@ std::unique_ptr<views::View> CreateWarningView(const std::u16string& message,
   constexpr int kRowHorizontalSpacing = 8;
   auto layout = std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kHorizontal,
-      gfx::Insets(0, kPaymentRequestRowHorizontalInsets),
+      gfx::Insets::VH(0, kPaymentRequestRowHorizontalInsets),
       kRowHorizontalSpacing);
   layout->set_main_axis_alignment(views::BoxLayout::MainAxisAlignment::kStart);
   layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kStretch);
   header_view->SetLayoutManager(std::move(layout));
 
-  auto label = std::make_unique<ThemeTrackingLabel>(message);
+  auto label = std::make_unique<views::Label>(message);
   // If the warning message comes from the websites, then align label
   // according to the language of the website's text.
   label->SetHorizontalAlignment(message.empty() ? gfx::ALIGN_LEFT
@@ -486,10 +412,11 @@ std::unique_ptr<views::View> CreateWarningView(const std::u16string& message,
     auto warning_icon = std::make_unique<views::ImageView>();
     warning_icon->SetCanProcessEventsWithinSubtree(false);
     warning_icon->SetImage(ui::ImageModel::FromVectorIcon(
-        vector_icons::kWarningIcon, ui::NativeTheme::kColorId_AlertSeverityHigh,
-        16));
+        features::IsRoundedIconsEnabled() ? vector_icons::kWarningFilledIcon
+                                          : vector_icons::kWarningOldIcon,
+        ui::kColorAlertHighSeverity, 16));
     header_view->AddChildView(std::move(warning_icon));
-    label->set_enabled_color_id(ui::NativeTheme::kColorId_AlertSeverityHigh);
+    label->SetEnabledColor(ui::kColorAlertHighSeverity);
   }
 
   header_view->AddChildView(std::move(label));

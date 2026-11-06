@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,16 +8,19 @@
 #include <string>
 #include <vector>
 
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
+#include "base/time/time.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_observer.h"
-#include "chromeos/login/auth/challenge_response_key.h"
+#include "chromeos/ash/components/login/auth/public/challenge_response_key.h"
 #include "net/ssl/client_cert_identity.h"
 
 class AccountId;
+class PrefService;
 
-namespace chromeos {
+namespace ash {
 
 // This class allows to prepare parameters for the challenge-response
 // authentication.
@@ -36,9 +39,11 @@ class ChallengeResponseAuthKeysLoader final : public ProfileObserver {
 
   // Returns whether the given user, whose profile must already exist on the
   // device, supports authentication via the challenge-response protocol.
-  static bool CanAuthenticateUser(const AccountId& account_id);
+  static bool CanAuthenticateUser(PrefService& local_state,
+                                  const AccountId& account_id);
 
-  ChallengeResponseAuthKeysLoader();
+  // `local_state` must be non-null and must outlive `this`.
+  explicit ChallengeResponseAuthKeysLoader(PrefService* local_state);
   ChallengeResponseAuthKeysLoader(const ChallengeResponseAuthKeysLoader&) =
       delete;
   ChallengeResponseAuthKeysLoader& operator=(
@@ -81,6 +86,8 @@ class ChallengeResponseAuthKeysLoader final : public ProfileObserver {
       LoadAvailableKeysCallback callback,
       net::ClientCertIdentityList cert_identities);
 
+  const raw_ref<PrefService> local_state_;
+
   base::TimeDelta maximum_extension_load_waiting_time_;
 
   // Whether the sign-in profile is destroyed.
@@ -91,6 +98,6 @@ class ChallengeResponseAuthKeysLoader final : public ProfileObserver {
   base::WeakPtrFactory<ChallengeResponseAuthKeysLoader> weak_ptr_factory_{this};
 };
 
-}  // namespace chromeos
+}  // namespace ash
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_CHALLENGE_RESPONSE_AUTH_KEYS_LOADER_H_

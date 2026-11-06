@@ -1,26 +1,42 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/webui/theme_source.h"
+
 #include <stddef.h>
 
-#include "base/bind.h"
+#include <memory>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include "base/functional/bind.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
 #include "base/test/bind.h"
+#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/webui/theme_source.h"
+#include "chrome/browser/themes/theme_service.h"
+#include "chrome/browser/themes/theme_service_factory.h"
+#include "chrome/browser/ui/webui/top_chrome/top_chrome_webui_profile.h"
+#include "chrome/browser/ui/webui/top_chrome/top_chrome_webui_user_profile.h"
+#include "chrome/browser/ui/webui/util/webui_util_desktop.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/theme_resources.h"
+#include "chrome/test/base/test_theme_provider.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/test/browser_task_environment.h"
+#include "content/public/test/test_renderer_host.h"
 #include "content/public/test/web_contents_tester.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/ui_base_features.h"
 
 class WebUISourcesTest : public testing::Test {
  public:
-  WebUISourcesTest() : result_data_size_(0) {}
+  WebUISourcesTest() = default;
 
   TestingProfile* profile() const { return profile_.get(); }
   ThemeSource* theme_source() const { return theme_source_.get(); }
@@ -35,10 +51,11 @@ class WebUISourcesTest : public testing::Test {
                        base::Unretained(this)));
   }
 
-  size_t result_data_size_;
+  size_t result_data_size_ = 0;
 
  private:
   void SetUp() override {
+    webui::SetThemeProviderForTestingDeprecated(&test_theme_provider_);
     profile_ = std::make_unique<TestingProfile>();
     theme_source_ = std::make_unique<ThemeSource>(profile_.get());
     test_web_contents_ = content::WebContentsTester::CreateTestWebContents(
@@ -52,6 +69,7 @@ class WebUISourcesTest : public testing::Test {
     test_web_contents_.reset();
     test_web_contents_getter_ = content::WebContents::Getter();
     profile_.reset();
+    webui::SetThemeProviderForTestingDeprecated(nullptr);
   }
 
   void SendResponse(scoped_refptr<base::RefCountedMemory> data) {
@@ -59,7 +77,9 @@ class WebUISourcesTest : public testing::Test {
   }
 
   content::BrowserTaskEnvironment task_environment_;
+  content::RenderViewHostTestEnabler render_view_host_test_enabler_;
 
+  TestThemeProvider test_theme_provider_;
   std::unique_ptr<TestingProfile> profile_;
   std::unique_ptr<ThemeSource> theme_source_;
   std::unique_ptr<content::WebContents> test_web_contents_;
@@ -67,10 +87,26 @@ class WebUISourcesTest : public testing::Test {
 };
 
 TEST_F(WebUISourcesTest, ThemeSourceMimeTypes) {
-  EXPECT_EQ(theme_source()->GetMimeType("css/new_tab_theme.css"), "text/css");
-  EXPECT_EQ(theme_source()->GetMimeType("css/new_tab_theme.css?foo"),
-                                        "text/css");
-  EXPECT_EQ(theme_source()->GetMimeType("WRONGURL"), "image/png");
+  std::vector<std::string> css_urls{
+      "chrome://theme/css/new_tab_theme.css",
+      "chrome://theme/css/new_tab_theme.css?foo",
+      "chrome://theme/colors.css?sets.css",
+      "chrome://theme/colors.css?sets.css=ui",
+  };
+
+  for (auto url : css_urls) {
+    EXPECT_EQ(theme_source()->GetMimeType(GURL(url)), "text/css");
+  }
+
+  std::vector<std::string> png_urls{
+      "chrome://theme/current-channel-logo",
+      "chrome://theme/other.png",
+      "chrome://theme/WRONGURL",
+  };
+
+  for (auto url : png_urls) {
+    EXPECT_EQ(theme_source()->GetMimeType(GURL(url)), "image/png");
+  }
 }
 
 TEST_F(WebUISourcesTest, ThemeSourceImages) {
@@ -106,6 +142,22 @@ TEST_F(WebUISourcesTest, ThemeSourceCSS) {
 #endif
 }
 
+TEST_F(WebUISourcesTest, ThemeSourceColorsCSS) {
+  // Check for a successful request and that the data is non-null under both
+  // optimized and unoptimized (baseline) paths. The actual conversion of color
+  // provider colors to css colors is tested in helper functions.
+  for (bool feature_enabled : {false, true}) {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitWithFeatureState(
+        features::kColorIdCssStyleSheetOptimization, feature_enabled);
+
+    result_data_size_ = 0;
+    StartDataRequest("colors.css?sets=ui");
+    base::RunLoop().RunUntilIdle();
+    EXPECT_NE(result_data_size_, 0u);
+  }
+}
+
 TEST_F(WebUISourcesTest, ThemeAllowedOrigin) {
   EXPECT_EQ(
       theme_source()->GetAccessControlAllowOriginForOrigin("chrome://settings"),
@@ -116,4 +168,124 @@ TEST_F(WebUISourcesTest, ThemeAllowedOrigin) {
   EXPECT_EQ(
       theme_source()->GetAccessControlAllowOriginForOrigin("http://google.com"),
       "");
+  // Only the source serving chrome-untrusted://theme allows
+  // chrome-untrusted:// origins.
+  EXPECT_EQ(theme_source()->GetAccessControlAllowOriginForOrigin(
+                "chrome-untrusted://new-tab-page"),
+            "");
+}
+
+TEST_F(WebUISourcesTest, ThemeAllowedOriginUntrusted) {
+  ThemeSource untrusted_theme_source(profile(), /*serve_untrusted=*/true);
+  EXPECT_EQ(untrusted_theme_source.GetAccessControlAllowOriginForOrigin(
+                "chrome-untrusted://new-tab-page"),
+            "chrome-untrusted://new-tab-page");
+  EXPECT_EQ(untrusted_theme_source.GetAccessControlAllowOriginForOrigin(
+                "chrome://settings"),
+            "chrome://settings");
+  EXPECT_EQ(untrusted_theme_source.GetAccessControlAllowOriginForOrigin(
+                "chrome-extensions://some-id"),
+            "");
+  EXPECT_EQ(untrusted_theme_source.GetAccessControlAllowOriginForOrigin(
+                "http://google.com"),
+            "");
+}
+
+TEST_F(WebUISourcesTest, ThemeSourceShouldServiceRequest) {
+  EXPECT_TRUE(theme_source()->ShouldServiceRequest(
+      GURL("chrome://theme/colors.css"), nullptr, -1));
+  EXPECT_TRUE(theme_source()->ShouldServiceRequest(
+      GURL("chrome://theme/IDR_THEME_FRAME"), nullptr, -1));
+
+  EXPECT_TRUE(theme_source()->ShouldServiceRequest(
+      GURL("devtools://theme/colors.css"), nullptr, -1));
+  EXPECT_TRUE(theme_source()->ShouldServiceRequest(
+      GURL("devtools://theme/colors.css?sets=ui,chrome"), nullptr, -1));
+
+  EXPECT_FALSE(theme_source()->ShouldServiceRequest(
+      GURL("devtools://theme/IDR_THEME_FRAME"), nullptr, -1));
+  EXPECT_FALSE(theme_source()->ShouldServiceRequest(
+      GURL("devtools://theme/css/new_tab_theme.css"), nullptr, -1));
+  EXPECT_FALSE(theme_source()->ShouldServiceRequest(GURL("devtools://theme/"),
+                                                    nullptr, -1));
+  EXPECT_FALSE(theme_source()->ShouldServiceRequest(
+      GURL("chrome-untrusted://theme/colors.css"), nullptr, -1));
+  EXPECT_FALSE(theme_source()->ShouldServiceRequest(
+      GURL("https://theme/colors.css"), nullptr, -1));
+
+  ThemeSource untrusted_theme_source(profile(), /*serve_untrusted=*/true);
+  EXPECT_TRUE(untrusted_theme_source.ShouldServiceRequest(
+      GURL("chrome-untrusted://theme/colors.css"), nullptr, -1));
+  EXPECT_FALSE(untrusted_theme_source.ShouldServiceRequest(
+      GURL("chrome://theme/colors.css"), nullptr, -1));
+}
+
+namespace {
+
+// Returns the data that `source` serves for `path`, or an empty string if it
+// serves nothing.
+std::string GetData(ThemeSource& source,
+                    std::string_view path,
+                    content::WebContents::Getter wc_getter) {
+  std::string result;
+  base::RunLoop run_loop;
+  source.StartDataRequest(
+      GURL(base::StrCat({content::kChromeUIScheme, "://",
+                         chrome::kChromeUIThemeHost, "/", path})),
+      std::move(wc_getter),
+      base::BindLambdaForTesting(
+          [&](scoped_refptr<base::RefCountedMemory> data) {
+            if (data) {
+              result.assign(data->begin(), data->end());
+            }
+            run_loop.Quit();
+          }));
+  run_loop.Run();
+  return result;
+}
+
+}  // namespace
+
+// A source created for TopChromeWebUIProfile serves chrome://theme/colors.css
+// with the theme of the user profile of the requesting contents.
+TEST_F(WebUISourcesTest, ThemeSourceInTopChromeWebUIProfileColorsCSS) {
+  webui::ScopedTopChromeWebUIProfileForTesting scoped_top_chrome_webui_profile;
+  std::unique_ptr<content::WebContents> web_contents =
+      content::WebContentsTester::CreateTestWebContents(
+          webui::GetTopChromeWebUIProfile(), /*instance=*/nullptr);
+  webui::SetUserProfile(web_contents.get(), profile());
+  ThemeServiceFactory::GetForProfile(profile())->SetIsGrayscale(true);
+  ThemeSource source(webui::GetTopChromeWebUIProfile());
+
+  EXPECT_THAT(
+      GetData(source, "colors.css?sets=ui",
+              base::BindLambdaForTesting([&] { return web_contents.get(); })),
+      testing::HasSubstr("--user-color-source:baseline-grayscale;"));
+}
+
+// A source created for TopChromeWebUIProfile serves the theme images and the
+// NTP CSS with the user profile of the requesting contents. Without contents,
+// it serves the default theme images, and no NTP CSS.
+TEST_F(WebUISourcesTest, ThemeSourceInTopChromeWebUIProfileImagesAndNewTabCSS) {
+  webui::ScopedTopChromeWebUIProfileForTesting scoped_top_chrome_webui_profile;
+  std::unique_ptr<content::WebContents> web_contents =
+      content::WebContentsTester::CreateTestWebContents(
+          webui::GetTopChromeWebUIProfile(), /*instance=*/nullptr);
+  webui::SetUserProfile(web_contents.get(), profile());
+  ThemeSource source(webui::GetTopChromeWebUIProfile());
+  auto contents_getter =
+      base::BindLambdaForTesting([&] { return web_contents.get(); });
+  auto no_contents_getter =
+      base::BindRepeating([]() -> content::WebContents* { return nullptr; });
+
+  ThemeServiceFactory::GetForProfile(profile())
+      ->BuildAutogeneratedThemeFromColor(SK_ColorRED);
+  EXPECT_FALSE(GetData(source, "IDR_THEME_TOOLBAR", contents_getter).empty());
+  EXPECT_THAT(GetData(source, "css/new_tab_theme.css", contents_getter),
+              testing::HasSubstr(ThemeService::kAutogeneratedThemeID));
+
+  EXPECT_FALSE(
+      GetData(source, "IDR_THEME_TOOLBAR", no_contents_getter).empty());
+  EXPECT_TRUE(
+      GetData(source, "css/new_tab_theme.css", no_contents_getter).empty());
 }

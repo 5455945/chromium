@@ -1,18 +1,20 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_BROWSER_BLOB_STORAGE_BLOB_REGISTRY_WRAPPER_H_
 #define CONTENT_BROWSER_BLOB_STORAGE_BLOB_REGISTRY_WRAPPER_H_
 
+#include <memory>
+
 #include "base/memory/ref_counted.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/common/child_process_id.h"
+#include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "third_party/blink/public/mojom/blob/blob_registry.mojom.h"
 
 namespace storage {
 class BlobRegistryImpl;
-class BlobUrlRegistry;
-class FileSystemContext;
 }  // namespace storage
 
 namespace content {
@@ -29,17 +31,10 @@ class BlobRegistryWrapper
                                         BrowserThread::DeleteOnIOThread> {
  public:
   static scoped_refptr<BlobRegistryWrapper> Create(
-      scoped_refptr<ChromeBlobStorageContext> blob_storage_context,
-      scoped_refptr<storage::FileSystemContext> file_system_context,
-      scoped_refptr<BlobRegistryWrapper> registry_for_fallback_url_registry =
-          nullptr);
+      scoped_refptr<ChromeBlobStorageContext> blob_storage_context);
 
-  void Bind(int process_id,
+  void Bind(ChildProcessId process_id,
             mojo::PendingReceiver<blink::mojom::BlobRegistry> receiver);
-
-  // TODO(mek): Make this be owned by StoragePartition directly, and living
-  // on the UI thread.
-  storage::BlobUrlRegistry* url_registry() { return url_registry_.get(); }
 
  private:
   BlobRegistryWrapper();
@@ -48,12 +43,9 @@ class BlobRegistryWrapper
   ~BlobRegistryWrapper();
 
   void InitializeOnIOThread(
-      scoped_refptr<ChromeBlobStorageContext> blob_storage_context,
-      scoped_refptr<storage::FileSystemContext> file_system_context,
-      scoped_refptr<BlobRegistryWrapper> registry_for_fallback_url_registry);
+      scoped_refptr<ChromeBlobStorageContext> blob_storage_context);
 
   std::unique_ptr<storage::BlobRegistryImpl> blob_registry_;
-  std::unique_ptr<storage::BlobUrlRegistry> url_registry_;
 };
 
 }  // namespace content

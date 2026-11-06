@@ -1,43 +1,48 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_CSS_CSS_CONTAINER_RULE_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_CSS_CONTAINER_RULE_H_
 
+#include "third_party/blink/renderer/bindings/core/v8/frozen_array.h"
 #include "third_party/blink/renderer/core/css/css_condition_rule.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
 
 namespace blink {
 
+class CSSContainerCondition;
+class ContainerQuery;
+class ContainerQuerySet;
+class ContainerSelector;
 class StyleRuleContainer;
 
-class CSSContainerRule final : public CSSConditionRule {
+class CORE_EXPORT CSSContainerRule final : public CSSConditionRule {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
   CSSContainerRule(StyleRuleContainer*, CSSStyleSheet*);
   ~CSSContainerRule() override;
 
-  void Reattach(StyleRuleBase*) override;
   String cssText() const override;
+  String containerName() const;
+  String containerQuery() const;
+  const FrozenArray<CSSContainerCondition>& conditions();
+
+  // TODO(crbug.com/41491726): Returns a single container selector used by
+  // devtools to look up container candidates.
+  const ContainerSelector& SelectorForInspector() const;
+  void SetQueryText(const ExecutionContext*, String);
+  void SetConditionText(const ExecutionContext*, String);
 
   void Trace(Visitor*) const override;
 
  private:
-  // TODO(crbug.com/1214810): Don't lean on MediaList.
-  friend class InspectorCSSAgent;
-  friend class InspectorStyleSheet;
-
   CSSRule::Type GetType() const override { return kContainerRule; }
+  const ContainerQuerySet& GetContainerQuerySet() const;
+  const ContainerQuery* SingleContainerQuery() const;
 
-  scoped_refptr<MediaQuerySet> ContainerQueries() const;
-
-  MediaList* container() const;
-
-  const AtomicString& Name() const;
-
-  mutable Member<MediaList> media_cssom_wrapper_;
+  Member<FrozenArray<CSSContainerCondition>> conditions_;
 };
 
 template <>

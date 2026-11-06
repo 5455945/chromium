@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,8 @@
 #include "media/audio/audio_debug_recording_helper.h"
 
 namespace media {
+
+using Error = AudioInputStream::AudioInputCallback::Error;
 
 AudioInputStreamDataInterceptor::AudioInputStreamDataInterceptor(
     CreateDebugRecorderCB create_debug_recorder_cb,
@@ -46,7 +48,9 @@ void AudioInputStreamDataInterceptor::Stop() {
 
 void AudioInputStreamDataInterceptor::Close() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  stream_->Close();
+  AudioInputStream* stream_to_close = stream_;
+  stream_ = nullptr;
+  stream_to_close->Close();
   delete this;
 }
 
@@ -86,15 +90,17 @@ void AudioInputStreamDataInterceptor::SetOutputDeviceForAec(
   return stream_->SetOutputDeviceForAec(output_device_id);
 }
 
-void AudioInputStreamDataInterceptor::OnData(const AudioBus* source,
-                                             base::TimeTicks capture_time,
-                                             double volume) {
-  callback_->OnData(source, capture_time, volume);
+void AudioInputStreamDataInterceptor::OnData(
+    const AudioBus* source,
+    base::TimeTicks capture_time,
+    double volume,
+    const AudioGlitchInfo& audio_glitch_info) {
+  callback_->OnData(source, capture_time, volume, audio_glitch_info);
   debug_recorder_->OnData(source);
 }
 
-void AudioInputStreamDataInterceptor::OnError() {
-  callback_->OnError();
+void AudioInputStreamDataInterceptor::OnError(Error error_code) {
+  callback_->OnError(error_code);
 }
 
 }  // namespace media

@@ -1,16 +1,15 @@
-# Copyright (c) 2012 The Chromium Authors. All rights reserved.
+# Copyright 2012 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 '''Support for "policy_templates.json" format used by the policy template
 generator as a source for generating ADM,ADMX,etc files.'''
 
-from __future__ import print_function
-
+import importlib.abc
+import importlib.util
 import json
+import os.path
 import sys
-
-import six
 
 from grit.gather import skeleton_gatherer
 from grit import util
@@ -19,13 +18,30 @@ from xml.dom import minidom
 from xml.parsers.expat import ExpatError
 
 
+class StringLoader(importlib.abc.SourceLoader):
+  def __init__(self, data, dir):
+    self.data = data
+    self.dir = dir
+
+  def get_data(self, path):
+    return self.data
+
+  def get_filename(self, fullname):
+    return os.path.join(self.dir, fullname + ".py")
+
+
+class _MockUberclique:
+  def MakeClique(self, msg):
+    return msg
+
+
 class PolicyJson(skeleton_gatherer.SkeletonGatherer):
   '''Collects and translates the following strings from policy_templates.json:
-    - captions, descriptions, labels and Android app support details of policies
-    - captions of enumeration items
-    - misc strings from the 'messages' section
-     Translatable strings may have untranslateable placeholders with the same
-     format that is used in .grd files.
+  - captions, descriptions, labels and Android app support details of policies
+  - captions of enumeration items
+  - misc strings from the 'messages' section
+   Translatable strings may have untranslateable placeholders with the same
+   format that is used in .grd files.
   '''
 
   def _AddEndline(self, add_comma):
@@ -48,15 +64,17 @@ class PolicyJson(skeleton_gatherer.SkeletonGatherer):
     text = []
     example_text = []
     for node1 in placeholder.childNodes:
-      if (node1.nodeType == minidom.Node.TEXT_NODE):
+      if node1.nodeType == minidom.Node.TEXT_NODE:
         text.append(node1.data)
-      elif (node1.nodeType == minidom.Node.ELEMENT_NODE and
-            node1.tagName == 'ex'):
+      elif (
+        node1.nodeType == minidom.Node.ELEMENT_NODE and node1.tagName == 'ex'
+      ):
         for node2 in node1.childNodes:
           example_text.append(node2.toxml())
       else:
-        raise Exception('Unexpected element inside a placeholder: ' +
-                        node2.toxml())
+        raise Exception(
+          'Unexpected element inside a placeholder: ' + node2.toxml()
+        )
     if example_text == []:
       # In such cases the original text is okay for an example.
       example_text = text
@@ -64,12 +82,14 @@ class PolicyJson(skeleton_gatherer.SkeletonGatherer):
     replaced_text = self.Escape(''.join(text).strip())
     replaced_text = replaced_text.replace('$1', self._config['app_name'])
     replaced_text = replaced_text.replace('$2', self._config['os_name'])
-    replaced_text = replaced_text.replace('$3', self._config['frame_name'])
 
-    msg.AppendPlaceholder(tclib.Placeholder(
+    msg.AppendPlaceholder(
+      tclib.Placeholder(
         placeholder.attributes['name'].value,
         replaced_text,
-        ''.join(example_text).strip()))
+        ''.join(example_text).strip(),
+      )
+    )
 
   def _ParseMessage(self, string, desc):
     '''Parses a given string and adds it to the output as a translatable chunk
@@ -84,8 +104,9 @@ class PolicyJson(skeleton_gatherer.SkeletonGatherer):
     try:
       node = minidom.parseString(xml).childNodes[0]
     except ExpatError:
-      reason = '''Input isn't valid XML (has < & > been escaped?): ''' + string
-      six.reraise(Exception, reason, sys.exc_info()[2])
+      raise Exception(
+        '''Input isn't valid XML (has < & > been escaped?): ''' + string
+      )
 
     for child in node.childNodes:
       if child.nodeType == minidom.Node.TEXT_NODE:
@@ -106,9 +127,8 @@ class PolicyJson(skeleton_gatherer.SkeletonGatherer):
     att_text = []
     if node.attributes:
       for key, value in sorted(node.attributes.items()):
-        att_text.append(' %s=\"%s\"' % (key, value))
-    self._AddNontranslateableChunk("<%s%s>" %
-                                   (node.tagName, ''.join(att_text)))
+        att_text.append(' %s="%s"' % (key, value))
+    self._AddNontranslateableChunk("<%s%s>" % (node.tagName, ''.join(att_text)))
     if node.tagName == 'message':
       msg = tclib.Message(description=node.attributes['desc'])
       for child in node.childNodes:
@@ -161,23 +181,33 @@ class PolicyJson(skeleton_gatherer.SkeletonGatherer):
       'desc': 'Description',
       'caption': 'Caption',
       'label': 'Label',
-      'arc_support': 'Information about the effect on Android apps'
+      'arc_support': 'Information about the effect on Android apps',
     }
     if item_type == 'policy':
-      return ('%s of the policy named %s [owner(s): %s]' %
-              (key_map[key], item['name'],
-               ','.join(item['owners'] if 'owners' in item else 'unknown')))
+      return '%s of the policy named %s [owner(s): %s]' % (
+        key_map[key],
+        item['name'],
+        ','.join(item['owners'] if 'owners' in item else 'unknown'),
+      )
     if item_type == 'enum_item':
       if 'name' in item:
-        return ('%s of the option named %s in policy %s [owner(s): %s]' %
-                (key_map[key], item['name'], parent_item['name'],
-                 ','.join(parent_item['owners'] if 'owners' in
-                          parent_item else 'unknown')))
+        return '%s of the option named %s in policy %s [owner(s): %s]' % (
+          key_map[key],
+          item['name'],
+          parent_item['name'],
+          ','.join(
+            parent_item['owners'] if 'owners' in parent_item else 'unknown'
+          ),
+        )
       else:
-        return ('%s of the option with value %s in policy %s [owner(s): %s]' %
-                (key_map[key], item['value'], parent_item['name'],
-                 ','.join(parent_item['owners'] if 'owners' in
-                          parent_item else 'unknown')))
+        return '%s of the option with value %s in policy %s [owner(s): %s]' % (
+          key_map[key],
+          item['value'],
+          parent_item['name'],
+          ','.join(
+            parent_item['owners'] if 'owners' in parent_item else 'unknown'
+          ),
+        )
     raise Exception('Unexpected type %s' % item_type)
 
   def _AddSchemaKeys(self, obj, depth):
@@ -228,8 +258,8 @@ class PolicyJson(skeleton_gatherer.SkeletonGatherer):
     if key in ('desc', 'caption', 'label', 'arc_support'):
       self._AddNontranslateableChunk("\"")
       self._ParseMessage(
-          item[key],
-          self._GetDescription(item, item_type, parent_item, key))
+        item[key], self._GetDescription(item, item_type, parent_item, key)
+      )
       self._AddNontranslateableChunk("\"")
     elif key in ('schema', 'validation_schema', 'description_schema'):
       self._AddSchemaKeys(item[key], depth)
@@ -257,8 +287,9 @@ class PolicyJson(skeleton_gatherer.SkeletonGatherer):
           self._AddIndentedNontranslateableChunk(depth + 1, "\"items\": [\n")
           self._AddItems(item1['items'], 'enum_item', item1, depth + 2)
           self._AddIndentedNontranslateableChunk(depth + 1, "]")
-        elif key == 'policies' and all(not isinstance(x, str)
-                                       for x in item1['policies']):
+        elif key == 'policies' and all(
+          not isinstance(x, str) for x in item1['policies']
+        ):
           self._AddIndentedNontranslateableChunk(depth + 1, "\"policies\": [\n")
           self._AddItems(item1['policies'], 'policy', item1, depth + 2)
           self._AddIndentedNontranslateableChunk(depth + 1, "]")
@@ -290,10 +321,21 @@ class PolicyJson(skeleton_gatherer.SkeletonGatherer):
     self.have_parsed_ = True
 
     self.text_ = self._LoadInputFile()
-    if util.IsExtraVerbose():
-      print(self.text_)
-
-    self.data = eval(self.text_)
+    if isinstance(self.rc_file, str):
+      name = 'policy_templates'
+      spec = importlib.util.spec_from_loader(
+        name,
+        loader=StringLoader(
+          self.text_, os.path.dirname(self.GetAbsoluteInputPath())
+        ),
+      )
+      policy_templates = importlib.util.module_from_spec(spec)
+      exec(self.text_, policy_templates.__dict__)
+      self.data = policy_templates.GetPolicyTemplates()
+    else:
+      if util.IsExtraVerbose():
+        print(self.text_)
+      self.data = json.loads(self.text_)
 
     self._AddNontranslateableChunk('{\n')
     self._AddNontranslateableChunk("  \"policy_definitions\": [\n")
@@ -301,8 +343,9 @@ class PolicyJson(skeleton_gatherer.SkeletonGatherer):
     self._AddNontranslateableChunk("  ],\n")
     self._AddNontranslateableChunk("  \"policy_atomic_group_definitions\": [\n")
     if 'policy_atomic_group_definitions' in self.data:
-      self._AddItems(self.data['policy_atomic_group_definitions'],
-                    'policy', None, 2)
+      self._AddItems(
+        self.data['policy_atomic_group_definitions'], 'policy', None, 2
+      )
     self._AddNontranslateableChunk("  ],\n")
     self._AddMessages()
     self._AddNontranslateableChunk('\n}')
@@ -318,15 +361,43 @@ class PolicyJson(skeleton_gatherer.SkeletonGatherer):
       self._config = {
         'build': 'chromium',
         'app_name': 'Chromium',
-        'frame_name': 'Chromium Frame',
-        'os_name': 'Chromium OS',
+        'os_name': 'ChromiumOS',
       }
     elif '_google_chrome' in defines:
       self._config = {
         'build': 'chrome',
         'app_name': 'Google Chrome',
-        'frame_name': 'Google Chrome Frame',
-        'os_name': 'Google Chrome OS',
+        'os_name': 'Google ChromeOS',
       }
     else:
       raise Exception('Unknown build')
+
+
+def ValidateForPresubmit(data, is_policy=True):
+  """Validates that a single policy or messages dict can be parsed.
+
+  Used by presubmit checks in components/policy.
+
+  Args:
+    data: The dictionary representing a policy definition or messages.
+    is_policy: Whether data represents a policy definition (True) or
+      messages (False).
+
+  Raises:
+    Exception: If the policy or message schema, XML formatting, or
+      placeholders are invalid.
+  """
+  policy_json = PolicyJson('dummy.json')
+  policy_json._config = {
+    'app_name': 'Chromium',
+    'os_name': 'ChromiumOS',
+  }
+
+  policy_json.uberclique = _MockUberclique()
+  policy_json.skeleton_ = []
+
+  if is_policy:
+    policy_json._AddItems([data], 'policy', None, 2)
+  else:
+    policy_json.data = {'messages': data}
+    policy_json._AddMessages()

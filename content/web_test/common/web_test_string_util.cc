@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,46 +6,41 @@
 
 #include <stddef.h>
 
+#include <string_view>
+
+#include "base/containers/heap_array.h"
 #include "base/lazy_instance.h"
-#include "base/macros.h"
 #include "base/rand_util.h"
+#include "base/strings/string_util.h"
 #include "third_party/blink/public/web/web_navigation_policy.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
 #include "url/gurl.h"
 
 namespace web_test_string_util {
 
 namespace {
 
-const char web_tests_pattern[] = "/web_tests/";
-const std::string::size_type web_tests_pattern_size =
-    sizeof(web_tests_pattern) - 1;
-const char file_url_pattern[] = "file:/";
-const char file_test_prefix[] = "(file test):";
-const char data_url_pattern[] = "data:";
-const std::string::size_type data_url_pattern_size =
-    sizeof(data_url_pattern) - 1;
-const char* kPolicyDownload = "download";
-const char* kPolicyCurrentTab = "current tab";
-const char* kPolicyNewBackgroundTab = "new background tab";
-const char* kPolicyNewForegroundTab = "new foreground tab";
-const char* kPolicyNewWindow = "new window";
-const char* kPolicyNewPopup = "new popup";
+constexpr std::string_view kWebTestsPattern = "/web_tests/";
+constexpr std::string_view kFileURLPattern = "file://";
+constexpr char kFileTestPrefix[] = "(file test):";
+constexpr char kPolicyDownload[] = "download";
+constexpr char kPolicyCurrentTab[] = "current tab";
+constexpr char kPolicyNewBackgroundTab[] = "new background tab";
+constexpr char kPolicyNewForegroundTab[] = "new foreground tab";
+constexpr char kPolicyNewWindow[] = "new window";
+constexpr char kPolicyNewPopup[] = "new popup";
+constexpr char kPolicyPictureInPicture[] = "picture in picture";
 
 }  // namespace
 
-const char* kIllegalString = "illegal value";
-
-std::string NormalizeWebTestURL(const std::string& url) {
+std::string NormalizeWebTestURLForTextOutput(const std::string& url) {
   std::string result = url;
-  size_t pos;
-  if (!url.find(file_url_pattern) &&
-      ((pos = url.find(web_tests_pattern)) != std::string::npos)) {
-    // adjust file URLs to match upstream results.
-    result.replace(0, pos + web_tests_pattern_size, file_test_prefix);
-  } else if (!url.find(data_url_pattern)) {
-    // URL-escape data URLs to match results upstream.
-    std::string path = url.substr(data_url_pattern_size);
-    result.replace(data_url_pattern_size, url.length(), path);
+  if (base::StartsWith(url, kFileURLPattern)) {
+    // Adjust the file URL by removing the part depending on the testing
+    // environment.
+    size_t pos = std::string_view(url).find(kWebTestsPattern);
+    if (pos != std::string::npos)
+      result.replace(0, pos + kWebTestsPattern.size(), kFileTestPrefix);
   }
   return result;
 }
@@ -71,24 +66,27 @@ const char* WebNavigationPolicyToString(
       return kPolicyNewWindow;
     case blink::kWebNavigationPolicyNewPopup:
       return kPolicyNewPopup;
+    case blink::kWebNavigationPolicyPictureInPicture:
+      return kPolicyPictureInPicture;
     default:
       return kIllegalString;
   }
 }
 
-const char* WindowOpenDispositionToString(WindowOpenDisposition disposition) {
+const char* WindowOpenDispositionToString(
+    ui::mojom::WindowOpenDisposition disposition) {
   switch (disposition) {
-    case WindowOpenDisposition::SAVE_TO_DISK:
+    case ui::mojom::WindowOpenDisposition::kSaveToDisk:
       return kPolicyDownload;
-    case WindowOpenDisposition::CURRENT_TAB:
+    case ui::mojom::WindowOpenDisposition::kCurrentTab:
       return kPolicyCurrentTab;
-    case WindowOpenDisposition::NEW_BACKGROUND_TAB:
+    case ui::mojom::WindowOpenDisposition::kNewBackgroundTab:
       return kPolicyNewBackgroundTab;
-    case WindowOpenDisposition::NEW_FOREGROUND_TAB:
+    case ui::mojom::WindowOpenDisposition::kNewForegroundTab:
       return kPolicyNewForegroundTab;
-    case WindowOpenDisposition::NEW_WINDOW:
+    case ui::mojom::WindowOpenDisposition::kNewWindow:
       return kPolicyNewWindow;
-    case WindowOpenDisposition::NEW_POPUP:
+    case ui::mojom::WindowOpenDisposition::kNewPopup:
       return kPolicyNewPopup;
     default:
       return kIllegalString;
@@ -97,10 +95,11 @@ const char* WindowOpenDispositionToString(WindowOpenDisposition disposition) {
 
 blink::WebString V8StringToWebString(v8::Isolate* isolate,
                                      v8::Local<v8::String> v8_str) {
-  int length = v8_str->Utf8Length(isolate) + 1;
-  std::unique_ptr<char[]> chars(new char[length]);
-  v8_str->WriteUtf8(isolate, chars.get(), length);
-  return blink::WebString::FromUTF8(chars.get());
+  size_t length = v8_str->Utf8LengthV2(isolate) + 1;
+  auto chars = base::HeapArray<char>::WithSize(length);
+  v8_str->WriteUtf8V2(isolate, chars.data(), chars.size(),
+                      v8::String::WriteFlags::kNullTerminate);
+  return blink::WebString::FromUtf8(chars.data());
 }
 
 }  // namespace web_test_string_util

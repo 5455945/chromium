@@ -1,18 +1,26 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/cdm/win/media_foundation_cdm_factory.h"
 
-#include "base/bind.h"
+#include <memory>
+#include <optional>
+
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
+#include "base/strings/strcat.h"
 #include "base/test/gmock_callback_support.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "base/test/task_environment.h"
 #include "media/base/mock_filters.h"
 #include "media/base/test_helpers.h"
 #include "media/base/win/mf_helpers.h"
 #include "media/base/win/mf_mocks.h"
+#include "media/cdm/clear_key_cdm_common.h"
 #include "media/cdm/mock_helpers.h"
+#include "media/cdm/win/media_foundation_cdm_module.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -27,8 +35,19 @@ using ::testing::StrictMock;
 
 namespace media {
 
-const char kClearKeyKeySystem[] = "org.w3.clearkey";
-const CdmConfig kHardwareSecureCdmConfig = {true, true, true};
+namespace {
+const CdmConfig kClearKeyHardwareSecureCdmConfig = {kClearKeyKeySystem, true,
+                                                    true, true};
+
+// 'HardwareSecure' suffix is not included in the Uma name because for
+// the ClearKey key system, we do not differentiate between software and
+// hardware security.
+static constexpr char kFirstInitializeHistogram[] =
+    "Media.EME.MediaFoundationCdm.ClearKey.FirstInitialize";
+static constexpr char kInitializeHistogram[] =
+    "Media.EME.MediaFoundationCdm.ClearKey.Initialize";
+
+}  // namespace
 
 using Microsoft::WRL::ComPtr;
 
@@ -41,8 +60,10 @@ class MediaFoundationCdmFactoryTest : public testing::Test {
     auto cdm_helper =
         std::make_unique<StrictMock<MockCdmAuxiliaryHelper>>(nullptr);
     cdm_helper_ = cdm_helper.get();
-    cdm_factory_ = std::make_unique<MediaFoundationCdmFactory>(
-        std::move(cdm_helper), base::FilePath());
+    cdm_factory_ =
+        std::make_unique<MediaFoundationCdmFactory>(std::move(cdm_helper));
+
+    MediaFoundationCdmModule::GetInstance()->SetIsOsCdmForTesting(false);
   }
 
   ~MediaFoundationCdmFactoryTest() override = default;
@@ -67,7 +88,7 @@ class MediaFoundationCdmFactoryTest : public testing::Test {
  protected:
   void Create() {
     cdm_factory_->Create(
-        kClearKeyKeySystem, kHardwareSecureCdmConfig,
+        kClearKeyHardwareSecureCdmConfig,
         base::BindRepeating(&MockCdmClient::OnSessionMessage,
                             base::Unretained(&cdm_client_)),
         base::BindRepeating(&MockCdmClient::OnSessionClosed,
@@ -86,12 +107,14 @@ class MediaFoundationCdmFactoryTest : public testing::Test {
   ComPtr<MockMFCdmFactory> mf_cdm_factory_;
   ComPtr<MockMFCdmAccess> mf_cdm_access_;
   ComPtr<MockMFCdm> mf_cdm_;
-  StrictMock<MockCdmAuxiliaryHelper>* cdm_helper_ = nullptr;
+  raw_ptr<StrictMock<MockCdmAuxiliaryHelper>, DanglingUntriaged> cdm_helper_ =
+      nullptr;
   std::unique_ptr<MediaFoundationCdmFactory> cdm_factory_;
   base::MockCallback<CdmCreatedCB> cdm_created_cb_;
 };
 
 TEST_F(MediaFoundationCdmFactoryTest, Create) {
+  base::HistogramTester histogram_tester;
   SetCreateCdmFactoryCallbackForTesting(/*expect_success=*/true);
 
   COM_EXPECT_CALL(mf_cdm_factory_, IsTypeSupported(NotNull(), IsNull()))
@@ -99,20 +122,26 @@ TEST_F(MediaFoundationCdmFactoryTest, Create) {
   COM_EXPECT_CALL(mf_cdm_factory_, CreateContentDecryptionModuleAccess(
                                        NotNull(), NotNull(), _, _))
       .WillOnce(DoAll(SetComPointee<3>(mf_cdm_access_.Get()), Return(S_OK)));
-  EXPECT_CALL(*cdm_helper_, GetCdmOriginId(_))
-      .WillOnce(RunOnceCallback<0>(base::UnguessableToken::Create()));
+  EXPECT_CALL(*cdm_helper_, GetMediaFoundationCdmData(_))
+      .WillOnce(RunOnceCallback<0>(std::make_unique<MediaFoundationCdmData>(
+          base::UnguessableToken::Create(), base::FilePath())));
   COM_EXPECT_CALL(mf_cdm_access_, CreateContentDecryptionModule(NotNull(), _))
       .WillOnce(DoAll(SetComPointee<1>(mf_cdm_.Get()), Return(S_OK)));
 
   EXPECT_CALL(cdm_created_cb_, Run(NotNull(), _));
   Create();
+
+  // Verify Histograms for success
+  histogram_tester.ExpectUniqueSample(kFirstInitializeHistogram, S_OK, 1);
+  histogram_tester.ExpectTotalCount(kInitializeHistogram, 0);
 }
 
 TEST_F(MediaFoundationCdmFactoryTest, CreateCdmFactoryFail) {
   SetCreateCdmFactoryCallbackForTesting(/*expect_success=*/false);
 
-  EXPECT_CALL(*cdm_helper_, GetCdmOriginId(_))
-      .WillOnce(RunOnceCallback<0>(base::UnguessableToken::Create()));
+  EXPECT_CALL(*cdm_helper_, GetMediaFoundationCdmData(_))
+      .WillOnce(RunOnceCallback<0>(std::make_unique<MediaFoundationCdmData>(
+          base::UnguessableToken::Create(), base::FilePath())));
 
   EXPECT_CALL(cdm_created_cb_, Run(IsNull(), _));
   Create();
@@ -123,8 +152,9 @@ TEST_F(MediaFoundationCdmFactoryTest, IsTypeSupportedFail) {
 
   COM_EXPECT_CALL(mf_cdm_factory_, IsTypeSupported(NotNull(), IsNull()))
       .WillOnce(Return(FALSE));
-  EXPECT_CALL(*cdm_helper_, GetCdmOriginId(_))
-      .WillOnce(RunOnceCallback<0>(base::UnguessableToken::Create()));
+  EXPECT_CALL(*cdm_helper_, GetMediaFoundationCdmData(_))
+      .WillOnce(RunOnceCallback<0>(std::make_unique<MediaFoundationCdmData>(
+          base::UnguessableToken::Create(), base::FilePath())));
 
   EXPECT_CALL(cdm_created_cb_, Run(IsNull(), _));
   Create();
@@ -138,8 +168,9 @@ TEST_F(MediaFoundationCdmFactoryTest, CreateCdmAccessFail) {
   COM_EXPECT_CALL(mf_cdm_factory_, CreateContentDecryptionModuleAccess(
                                        NotNull(), NotNull(), _, _))
       .WillOnce(Return(E_FAIL));
-  EXPECT_CALL(*cdm_helper_, GetCdmOriginId(_))
-      .WillOnce(RunOnceCallback<0>(base::UnguessableToken::Create()));
+  EXPECT_CALL(*cdm_helper_, GetMediaFoundationCdmData(_))
+      .WillOnce(RunOnceCallback<0>(std::make_unique<MediaFoundationCdmData>(
+          base::UnguessableToken::Create(), base::FilePath())));
 
   EXPECT_CALL(cdm_created_cb_, Run(IsNull(), _));
   Create();
@@ -148,14 +179,16 @@ TEST_F(MediaFoundationCdmFactoryTest, CreateCdmAccessFail) {
 TEST_F(MediaFoundationCdmFactoryTest, NullCdmOriginIdFail) {
   SetCreateCdmFactoryCallbackForTesting(/*expect_success=*/true);
 
-  EXPECT_CALL(*cdm_helper_, GetCdmOriginId(_))
-      .WillOnce(RunOnceCallback<0>(base::UnguessableToken::Null()));
+  EXPECT_CALL(*cdm_helper_, GetMediaFoundationCdmData(_))
+      .WillOnce(RunOnceCallback<0>(std::make_unique<MediaFoundationCdmData>(
+          base::UnguessableToken::Null(), base::FilePath())));
 
   EXPECT_CALL(cdm_created_cb_, Run(IsNull(), _));
   Create();
 }
 
 TEST_F(MediaFoundationCdmFactoryTest, CreateCdmFail) {
+  base::HistogramTester histogram_tester;
   SetCreateCdmFactoryCallbackForTesting(/*expect_success=*/true);
 
   COM_EXPECT_CALL(mf_cdm_factory_, IsTypeSupported(NotNull(), IsNull()))
@@ -163,13 +196,18 @@ TEST_F(MediaFoundationCdmFactoryTest, CreateCdmFail) {
   COM_EXPECT_CALL(mf_cdm_factory_, CreateContentDecryptionModuleAccess(
                                        NotNull(), NotNull(), _, _))
       .WillOnce(DoAll(SetComPointee<3>(mf_cdm_access_.Get()), Return(S_OK)));
-  EXPECT_CALL(*cdm_helper_, GetCdmOriginId(_))
-      .WillOnce(RunOnceCallback<0>(base::UnguessableToken::Create()));
+  EXPECT_CALL(*cdm_helper_, GetMediaFoundationCdmData(_))
+      .WillOnce(RunOnceCallback<0>(std::make_unique<MediaFoundationCdmData>(
+          base::UnguessableToken::Create(), base::FilePath())));
   COM_EXPECT_CALL(mf_cdm_access_, CreateContentDecryptionModule(NotNull(), _))
       .WillOnce(DoAll(SetComPointee<1>(mf_cdm_.Get()), Return(E_FAIL)));
 
   EXPECT_CALL(cdm_created_cb_, Run(IsNull(), _));
   Create();
+
+  // Verify Histograms for failure
+  histogram_tester.ExpectUniqueSample(kFirstInitializeHistogram, E_FAIL, 1);
+  histogram_tester.ExpectUniqueSample(kInitializeHistogram, E_FAIL, 1);
 }
 
 }  // namespace media

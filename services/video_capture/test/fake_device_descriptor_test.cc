@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 #include "base/run_loop.h"
 
 using testing::_;
-using testing::Invoke;
 
 namespace video_capture {
 
@@ -20,16 +19,19 @@ void FakeDeviceDescriptorTest::SetUp() {
   VideoCaptureServiceTest::SetUp();
 
   base::RunLoop wait_loop;
-  EXPECT_CALL(device_info_receiver_, Run(_))
+  EXPECT_CALL(device_info_receiver_, Run)
       .WillOnce(
-          Invoke([this, &wait_loop](
-                     const std::vector<media::VideoCaptureDeviceInfo>& infos) {
+          [this, &wait_loop](
+              video_capture::mojom::VideoSourceProvider::GetSourceInfosResult,
+              const std::vector<media::VideoCaptureDeviceInfo>& infos) {
             CHECK(infos.size() >= 3);
             i420_fake_device_info_ = infos[0];
             mjpeg_fake_device_info_ = infos[2];
             wait_loop.Quit();
-          }));
-  factory_->GetDeviceInfos(device_info_receiver_.Get());
+          });
+  video_source_provider_->GetSourceInfos(
+      media::mojom::VideoCaptureDeviceEnumerationMode::kDevicesWithCapabilities,
+      device_info_receiver_.Get());
   wait_loop.Run();
 }
 

@@ -1,4 +1,4 @@
-// Copyright 2014 The Crashpad Authors. All rights reserved.
+// Copyright 2014 The Crashpad Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,13 +19,21 @@ namespace crashpad {
 bool ExceptionBehaviorHasState(exception_behavior_t behavior) {
   const exception_behavior_t basic_behavior = ExceptionBehaviorBasic(behavior);
   return basic_behavior == EXCEPTION_STATE ||
-         basic_behavior == EXCEPTION_STATE_IDENTITY;
+         basic_behavior == EXCEPTION_STATE_IDENTITY ||
+         behavior ==
+             static_cast<exception_behavior_t>(
+                 EXCEPTION_STATE_IDENTITY_PROTECTED | MACH_EXCEPTION_CODES);
 }
 
 bool ExceptionBehaviorHasIdentity(exception_behavior_t behavior) {
   const exception_behavior_t basic_behavior = ExceptionBehaviorBasic(behavior);
   return basic_behavior == EXCEPTION_DEFAULT ||
-         basic_behavior == EXCEPTION_STATE_IDENTITY;
+         basic_behavior == EXCEPTION_STATE_IDENTITY ||
+         behavior == static_cast<exception_behavior_t>(
+                         EXCEPTION_IDENTITY_PROTECTED | MACH_EXCEPTION_CODES) ||
+         behavior ==
+             static_cast<exception_behavior_t>(
+                 EXCEPTION_STATE_IDENTITY_PROTECTED | MACH_EXCEPTION_CODES);
 }
 
 bool ExceptionBehaviorHasMachExceptionCodes(exception_behavior_t behavior) {

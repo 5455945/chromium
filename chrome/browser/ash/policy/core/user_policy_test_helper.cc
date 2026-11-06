@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,8 @@
 #include "base/command_line.h"
 #include "base/run_loop.h"
 #include "base/values.h"
-#include "chrome/browser/ash/login/test/local_policy_test_server_mixin.h"
-#include "chrome/browser/ash/policy/core/user_cloud_policy_manager_chromeos.h"
+#include "chrome/browser/ash/policy/core/user_cloud_policy_manager_ash.h"
+#include "chrome/browser/ash/policy/test_support/embedded_policy_test_server_mixin.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
@@ -21,6 +21,7 @@
 #include "components/policy/core/common/cloud/cloud_policy_core.h"
 #include "components/policy/core/common/policy_service.h"
 #include "components/policy/core/common/policy_switches.h"
+#include "components/policy/proto/cloud_policy.pb.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
@@ -29,15 +30,16 @@ namespace policy {
 
 UserPolicyTestHelper::UserPolicyTestHelper(
     const std::string& account_id,
-    chromeos::LocalPolicyTestServerMixin* local_policy_server)
-    : account_id_(account_id), local_policy_server_(local_policy_server) {}
+    ash::EmbeddedPolicyTestServerMixin* embedded_policy_server)
+    : account_id_(account_id),
+      embedded_policy_server_(embedded_policy_server) {}
 
-UserPolicyTestHelper::~UserPolicyTestHelper() {}
+UserPolicyTestHelper::~UserPolicyTestHelper() = default;
 
-void UserPolicyTestHelper::SetPolicy(const base::Value& mandatory,
-                                     const base::Value& recommended) {
-  ASSERT_TRUE(local_policy_server_->UpdateUserPolicy(mandatory, recommended,
-                                                     account_id_));
+void UserPolicyTestHelper::SetPolicy(
+    const enterprise_management::CloudPolicySettings& policy) {
+  DCHECK(embedded_policy_server_);
+  embedded_policy_server_->UpdateUserPolicy(policy, account_id_);
 }
 
 void UserPolicyTestHelper::WaitForInitialPolicy(Profile* profile) {
@@ -45,8 +47,8 @@ void UserPolicyTestHelper::WaitForInitialPolicy(Profile* profile) {
       g_browser_process->browser_policy_connector();
   connector->ScheduleServiceInitialization(0);
 
-  UserCloudPolicyManagerChromeOS* const policy_manager =
-      profile->GetUserCloudPolicyManagerChromeOS();
+  UserCloudPolicyManagerAsh* const policy_manager =
+      profile->GetUserCloudPolicyManagerAsh();
   DCHECK(!policy_manager->IsInitializationComplete(POLICY_DOMAIN_CHROME));
 
   // Give a bogus OAuth token to the |policy_manager|. This should make its
@@ -59,32 +61,31 @@ void UserPolicyTestHelper::WaitForInitialPolicy(Profile* profile) {
       user_registration, std::string() /* client_id */,
       "oauth_token_unused" /* oauth_token */);
 
-  policy::ProfilePolicyConnector* const profile_connector =
+  ProfilePolicyConnector* const profile_connector =
       profile->GetProfilePolicyConnector();
-  policy::PolicyService* const policy_service =
-      profile_connector->policy_service();
+  PolicyService* const policy_service = profile_connector->policy_service();
 
   base::RunLoop run_loop;
-  policy_service->RefreshPolicies(run_loop.QuitClosure());
+  policy_service->RefreshPolicies(run_loop.QuitClosure(),
+                                  PolicyFetchReason::kTest);
   run_loop.Run();
 }
 
 void UserPolicyTestHelper::SetPolicyAndWait(
-    const base::Value& mandatory_policy,
-    const base::Value& recommended_policy,
+    const enterprise_management::CloudPolicySettings& policy,
     Profile* profile) {
-  SetPolicy(mandatory_policy, recommended_policy);
+  SetPolicy(policy);
   RefreshPolicyAndWait(profile);
 }
 
 void UserPolicyTestHelper::RefreshPolicyAndWait(Profile* profile) {
-  policy::ProfilePolicyConnector* const profile_connector =
+  ProfilePolicyConnector* const profile_connector =
       profile->GetProfilePolicyConnector();
-  policy::PolicyService* const policy_service =
-      profile_connector->policy_service();
+  PolicyService* const policy_service = profile_connector->policy_service();
 
   base::RunLoop run_loop;
-  policy_service->RefreshPolicies(run_loop.QuitClosure());
+  policy_service->RefreshPolicies(run_loop.QuitClosure(),
+                                  PolicyFetchReason::kTest);
   run_loop.Run();
 }
 

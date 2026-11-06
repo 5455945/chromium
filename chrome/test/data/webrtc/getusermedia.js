@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2012 The Chromium Authors. All rights reserved.
+ * Copyright 2012 The Chromium Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
@@ -48,20 +48,50 @@ $ = function(id) {
  * @param {!object} constraints Defines what to be requested, with mandatory
  *     and optional constraints defined. The contents of this parameter depends
  *     on the WebRTC version.
+ * @param {integer} optionalTimeoutSeconds when provided, specifies the
+ *     maximum time to wait for the get user media request to complete. Resolves
+ *     the returned promise with 'request-timedout' when the timeout occurs.
  */
-function doGetUserMedia(constraints) {
+function doGetUserMedia(constraints, optionalTimeoutSeconds) {
   if (!navigator.getUserMedia) {
-    returnToTest('Browser does not support WebRTC.');
-    return;
+    return logAndReturn('Browser does not support WebRTC.');
   }
-  debug('Requesting doGetUserMedia: constraints: ' +
-        JSON.stringify(constraints, null, 0).replace(/[\r\n]/g, ''));
-  navigator.getUserMedia(constraints,
-               function(stream) {
-                 ensureGotAllExpectedStreams_(stream, constraints);
-                 getUserMediaOkCallback_(stream);
-               },
-               getUserMediaFailedCallback_);
+
+  let timeoutDebugMessage = '';
+  if (optionalTimeoutSeconds) {
+    timeoutDebugMessage = ` with ${optionalTimeoutSeconds} second timeout`;
+  }
+  debug(
+      'Requesting doGetUserMedia: constraints: ' +
+      JSON.stringify(constraints, null, 0).replace(/[\r\n]/g, '') +
+      timeoutDebugMessage);
+
+  var gumPromise = new Promise(function(resolve) {
+    navigator.mediaDevices.getUserMedia(constraints)
+        .then(function(stream) {
+          ensureGotAllExpectedStreams_(stream, constraints);
+          getUserMediaOkCallback_(stream);
+          resolve('request-callback-granted');
+        })
+        .catch(function(err) {
+          getUserMediaFailedCallback_(err);
+          resolve('request-callback-denied');
+        });
+  });
+
+  let promises = [gumPromise];
+
+  if (optionalTimeoutSeconds) {
+    let timeoutPromise = new Promise(function(resolve) {
+      setTimeout(
+          () => resolve('request-timedout'), optionalTimeoutSeconds * 1000);
+    });
+    promises.push(timeoutPromise);
+  }
+
+  return Promise.race(promises).then(function(value) {
+    return logAndReturn(value);
+  });
 }
 
 /**
@@ -72,11 +102,10 @@ function doGetUserMedia(constraints) {
  *     callback) depending on which callback got called by WebRTC.
  */
 function obtainGetUserMediaResult() {
-  returnToTest(gRequestWebcamAndMicrophoneResult);
   var ret = gRequestWebcamAndMicrophoneResult;
   // Reset for the next call.
   gRequestWebcamAndMicrophoneResult = 'not-called-yet';
-  return ret;
+  return logAndReturn(ret);
 }
 
 /**
@@ -84,8 +113,9 @@ function obtainGetUserMediaResult() {
  */
 function stopLocalStream() {
   if (gLocalStream == null)
-    throw failTest('Tried to stop local stream, ' +
-                   'but media access is not granted.');
+    throw new Error(
+        'Tried to stop local stream, ' +
+        'but media access is not granted.');
 
   gLocalStream.getVideoTracks().forEach(function(track) {
     track.stop();
@@ -95,7 +125,7 @@ function stopLocalStream() {
   });
   gLocalStream = null;
   gRequestWebcamAndMicrophoneResult = 'not-called-yet';
-  returnToTest('ok-stopped');
+  return logAndReturn('ok-stopped');
 }
 
 // Functions callable from other JavaScript modules.
@@ -106,13 +136,15 @@ function stopLocalStream() {
  */
 function addLocalStreamToPeerConnection(peerConnection) {
   if (gLocalStream == null)
-    throw failTest('Tried to add local stream to peer connection, ' +
-                   'but there is no stream yet.');
+    throw new Error(
+        'Tried to add local stream to peer connection, ' +
+        'but there is no stream yet.');
   try {
     peerConnection.addStream(gLocalStream, gAddStreamConstraints);
   } catch (exception) {
-    throw failTest('Failed to add stream with constraints ' +
-                   gAddStreamConstraints + ': ' + exception);
+    throw new Error(
+        'Failed to add stream with constraints ' + gAddStreamConstraints +
+        ': ' + exception);
   }
   debug('Added local stream.');
 }
@@ -134,15 +166,17 @@ function getLocalStream() {
 function ensureGotAllExpectedStreams_(stream, constraints) {
   if (constraints['video'] && stream.getVideoTracks().length == 0) {
     gRequestWebcamAndMicrophoneResult = 'failed-to-get-video';
-    throw ('Requested video, but did not receive a video stream from ' +
-           'getUserMedia. Perhaps the machine you are running on ' +
-           'does not have a webcam.');
+    throw (
+        'Requested video, but did not receive a video stream from ' +
+        'getUserMedia. Perhaps the machine you are running on ' +
+        'does not have a webcam.');
   }
   if (constraints['audio'] && stream.getAudioTracks().length == 0) {
     gRequestWebcamAndMicrophoneResult = 'failed-to-get-audio';
-    throw ('Requested audio, but did not receive an audio stream ' +
-           'from getUserMedia. Perhaps the machine you are running ' +
-           'on does not have audio devices.');
+    throw (
+        'Requested audio, but did not receive an audio stream ' +
+        'from getUserMedia. Perhaps the machine you are running ' +
+        'on does not have audio devices.');
   }
 }
 
@@ -155,8 +189,6 @@ function getUserMediaOkCallback_(stream) {
   gRequestWebcamAndMicrophoneResult = 'ok-got-stream';
 
   $('local-view').srcObject = stream;
-
-  returnToTest('request-callback-granted');
 }
 
 /**
@@ -170,17 +202,17 @@ function getUserMediaFailedCallback_(error) {
   debug('GetUserMedia FAILED: Maybe the camera is in use by another process?');
   gRequestWebcamAndMicrophoneResult = 'failed-with-error-' + errorName;
   debug(gRequestWebcamAndMicrophoneResult);
-
-  returnToTest('request-callback-denied');
 }
 
 function openDesktopMediaStream() {
-  window.addEventListener('message', function(event) {
-    // Only trigger if streamId is present (callback from, not to, extension).
-    if (typeof event.data.streamId !== 'undefined') {
-      returnToTest(event.data.streamId);
-    }
-  });
+  return new Promise(resolve => {
+    window.addEventListener('message', function(event) {
+      // Only trigger if streamId is present (callback from, not to, extension).
+      if (typeof event.data.streamId !== 'undefined') {
+        return resolve(logAndReturn(event.data.streamId));
+      }
+    });
 
-  window.postMessage({desktopSourceTypes: ['window', 'screen']}, '*');
+    window.postMessage({desktopSourceTypes: ['window', 'screen', 'tab']}, '*');
+  });
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright 2009 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,12 @@
 
 #include <utility>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "base/time/time.h"
+#include "crypto/keypair.h"
 #include "net/cert/x509_certificate.h"
+#include "net/ssl/crypto_private_key.h"
 #include "net/ssl/ssl_private_key.h"
-#include "net/ssl/test_ssl_private_key.h"
 #include "net/test/cert_test_util.h"
 #include "net/test/test_data_directory.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -21,8 +21,7 @@ namespace net {
 
 namespace {
 scoped_refptr<SSLPrivateKey> MakeMockKey() {
-  bssl::UniquePtr<EVP_PKEY> pkey(EVP_PKEY_new());
-  return WrapOpenSSLPrivateKey(std::move(pkey));
+  return WrapCryptoPrivateKey(crypto::keypair::PrivateKey::GenerateEcP256());
 }
 }  // namespace
 

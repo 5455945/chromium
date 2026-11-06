@@ -1,26 +1,30 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/arc/fileapi/file_stream_forwarder.h"
 
+#include <optional>
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
 #include "base/rand_util.h"
 #include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
 #include "content/public/test/browser_task_environment.h"
 #include "storage/browser/file_system/file_system_context.h"
+#include "storage/browser/file_system/file_system_url.h"
 #include "storage/browser/quota/quota_manager_proxy.h"
 #include "storage/browser/test/async_file_test_helper.h"
+#include "storage/browser/test/mock_quota_manager.h"
+#include "storage/browser/test/mock_quota_manager_proxy.h"
+#include "storage/browser/test/mock_special_storage_policy.h"
 #include "storage/browser/test/test_file_system_context.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "url/gurl.h"
-#include "url/origin.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
 
 namespace arc {
 
@@ -28,7 +32,7 @@ namespace {
 
 class FileStreamForwarderTest : public testing::Test {
  public:
-  FileStreamForwarderTest() {}
+  FileStreamForwarderTest() = default;
 
   void SetUp() override {
     // Prepare a temporary directory and the destination file.
@@ -40,25 +44,37 @@ class FileStreamForwarderTest : public testing::Test {
     ASSERT_TRUE(dest_file.IsValid());
     dest_fd_ = base::ScopedFD(dest_file.TakePlatformFile());
 
+    base::FilePath temp_path = temp_dir_.GetPath();
+    quota_manager_ = base::MakeRefCounted<storage::MockQuotaManager>(
+        /*is_incognito=*/false, temp_path,
+        base::SingleThreadTaskRunner::GetCurrentDefault(),
+        base::MakeRefCounted<storage::MockSpecialStoragePolicy>());
+    quota_manager_proxy_ = base::MakeRefCounted<storage::MockQuotaManagerProxy>(
+        quota_manager_.get(),
+        base::SingleThreadTaskRunner::GetCurrentDefault());
     context_ = storage::CreateFileSystemContextForTesting(
-        /*quota_manager_proxy=*/nullptr, temp_dir_.GetPath());
+        quota_manager_proxy_.get(), temp_path);
 
     // Prepare a file system.
     constexpr char kURLOrigin[] = "http://origin/";
 
+    base::RunLoop open_file_system_loop;
     context_->OpenFileSystem(
-        url::Origin::Create(GURL(kURLOrigin)),
-        storage::kFileSystemTypeTemporary,
+        blink::StorageKey::CreateFromStringForTesting(kURLOrigin),
+        /*bucket=*/std::nullopt, storage::kFileSystemTypeTemporary,
         storage::OPEN_FILE_SYSTEM_CREATE_IF_NONEXISTENT,
-        base::BindOnce([](const GURL& root_url, const std::string& name,
-                          base::File::Error result) {
-          EXPECT_EQ(base::File::FILE_OK, result);
-        }));
-    base::RunLoop().RunUntilIdle();
+        base::BindOnce(
+            [](base::RunLoop* run_loop, const storage::FileSystemURL&,
+               const std::string&, base::File::Error result) {
+              EXPECT_EQ(base::File::FILE_OK, result);
+              run_loop->Quit();
+            },
+            &open_file_system_loop));
+    open_file_system_loop.Run();
 
     // Prepare a 64KB file in the file system.
     url_ = context_->CreateCrackedFileSystemURL(
-        url::Origin::Create(GURL(kURLOrigin)),
+        blink::StorageKey::CreateFromStringForTesting(kURLOrigin),
         storage::kFileSystemTypeTemporary,
         base::FilePath().AppendASCII("test.dat"));
 
@@ -67,7 +83,7 @@ class FileStreamForwarderTest : public testing::Test {
 
     ASSERT_EQ(base::File::FILE_OK,
               storage::AsyncFileTestHelper::CreateFileWithData(
-                  context_.get(), url_, test_data_.data(), test_data_.size()));
+                  context_.get(), url_, test_data_));
   }
 
  protected:
@@ -75,6 +91,8 @@ class FileStreamForwarderTest : public testing::Test {
   base::ScopedTempDir temp_dir_;
   base::FilePath dest_file_path_;
   base::ScopedFD dest_fd_;
+  scoped_refptr<storage::MockQuotaManager> quota_manager_;
+  scoped_refptr<storage::MockQuotaManagerProxy> quota_manager_proxy_;
   scoped_refptr<storage::FileSystemContext> context_;
   storage::FileSystemURL url_;
   std::string test_data_;
@@ -115,9 +133,7 @@ TEST_F(FileStreamForwarderTest, ForwardPartially) {
 
   std::string contents;
   ASSERT_TRUE(base::ReadFileToString(dest_file_path_, &contents));
-  EXPECT_EQ(std::string(test_data_.begin() + kOffset,
-                        test_data_.begin() + kOffset + kSize),
-            contents);
+  EXPECT_EQ(test_data_.substr(kOffset, kSize), contents);
 }
 
 TEST_F(FileStreamForwarderTest, ForwardPartially2) {
@@ -136,9 +152,7 @@ TEST_F(FileStreamForwarderTest, ForwardPartially2) {
 
   std::string contents;
   ASSERT_TRUE(base::ReadFileToString(dest_file_path_, &contents));
-  EXPECT_EQ(std::string(test_data_.begin() + kOffset,
-                        test_data_.begin() + kOffset + kSize),
-            contents);
+  EXPECT_EQ(test_data_.substr(kOffset, kSize), contents);
 }
 
 TEST_F(FileStreamForwarderTest, ForwardTooMuch) {
@@ -176,13 +190,12 @@ TEST_F(FileStreamForwarderTest, ForwardTooMuch2) {
 
   std::string contents;
   ASSERT_TRUE(base::ReadFileToString(dest_file_path_, &contents));
-  EXPECT_EQ(std::string(test_data_.begin() + kOffset, test_data_.end()),
-            contents);
+  EXPECT_EQ(test_data_.substr(kOffset), contents);
 }
 
 TEST_F(FileStreamForwarderTest, InvalidURL) {
   storage::FileSystemURL invalid_url = context_->CreateCrackedFileSystemURL(
-      url::Origin::Create(GURL("http://invalid-origin/")),
+      blink::StorageKey::CreateFromStringForTesting("http://invalid-origin/"),
       storage::kFileSystemTypeTemporary,
       base::FilePath().AppendASCII("invalid.dat"));
   constexpr int kOffset = 0;

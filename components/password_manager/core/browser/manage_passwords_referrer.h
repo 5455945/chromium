@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,6 +16,7 @@ namespace password_manager {
 //
 // A Java counterpart will be generated for this enum.
 // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.chrome.browser.password_manager
+// LINT.IfChange(ManagePasswordsReferrer)
 enum class ManagePasswordsReferrer {
   // Corresponds to Chrome's settings page.
   kChromeSettings = 0,
@@ -31,9 +32,12 @@ enum class ManagePasswordsReferrer {
   // Corresponds to the bubble shown when clicking the key icon after a password
   // was generated.
   kPasswordGenerationConfirmation = 4,
+
   // Corresponds to the profile chooser next to the omnibar ("Autofill Home").
   // Only used on desktop.
-  kProfileChooser = 5,
+  // Deprecated as part of the Profile Menu revamping.
+  // kProfileChooser = 5,
+
   // Corresponds to the passwords accessory sheet on Android, triggered by
   // tapping on the key icon above in the keyboard accessory bar.
   kPasswordsAccessorySheet = 6,
@@ -46,8 +50,90 @@ enum class ManagePasswordsReferrer {
   // The dialog notifying a user about compromised credentials on sign in. Only
   // used on iOS.
   kPasswordBreachDialog = 9,
-  kMaxValue = kPasswordBreachDialog,
+  // On Android, the Safety Check UI in settings opens the passwords page if no
+  // check was performed.
+  kSafetyCheck = 10,
+  // On Desktop, the Google Password Manager link was clicked in the footer of
+  // Save/Update bubble.
+  kSaveUpdateBubble = 11,
+  // On Desktop, the Google Password Manager link was clicked in the password
+  // generation prompt in the Autofill dropdown.
+  kPasswordGenerationPrompt = 12,
+  // Corresponds to the situation when Chrome opens native Password Manager UI
+  // when navigating to specified website.
+  kPasswordsGoogleWebsite = 13,
+
+  // Deprecated as part of APC removal.
+  // kAutomatedPasswordChangeSuccessLink = 14,
+
+  // On Mac, Win and ChromeOS after enabling Biometric authentication before
+  // filling a confirmation dialog is shown with an instructions on how to
+  // control the feature from settings.
+  kBiometricAuthenticationBeforeFillingDialog = 15,
+
+  // The Password Manager item was clicked in the Chrome menu.
+  kChromeMenuItem = 16,
+
+  // On Desktop, the bubble that notifies the user that some of the password
+  // stored for the current site have been received via the password sharing
+  // feature from other users.
+  kSharedPasswordsNotificationBubble = 17,
+
+  // On iOS, the Search Passwords homescreen widget that opens the Password
+  // manager in search mode.
+  kSearchPasswordsWidget = 18,
+
+  // On Desktop, the Google Password Manager link was clicked in the footer of
+  // AddUsername bubble.
+  kAddUsernameBubble = 19,
+
+  // On iOS, the "Manage Passwords" omnibox pedal suggestion was tapped.
+  kOmniboxPedalSuggestion = 20,
+
+  // On Desktop, link clicked in the DefaultStoreChanged bubble.
+  // Deprecated: kDefaultStoreChangedBubble = 21,
+
+  // Corresponds to the manage password details bubble when clicking on the key
+  // icon and navigating to the details view of a particular password.
+  kManagePasswordDetailsBubble = 22,
+
+  // On Desktop, the bubble that notifies the user that a passkey was saved.
+  kPasskeySavedConfirmationBubble = 23,
+
+  // On Desktop, the bubble that notifies the user that a passkey was deleted.
+  kPasskeyDeletedConfirmationBubble = 24,
+
+  // On Desktop, the bubble that notifies the user that a passkey was updated.
+  kPasskeyUpdatedConfirmationBubble = 25,
+
+  // On the desktop, the bubble notifies the user that a passkey was deleted
+  // because it was not accepted.
+  kPasskeyNotAcceptedBubble = 26,
+
+  // The warning (Android only) informs the user that they may loose access to
+  // their passwords because the transition to UPM has not happened.
+  // Deprecated: kAccessLossWarning = 27,
+
+  // The bubble that notifies the user that a passkey was created automatically
+  // in GPM to upgrade an existing, matching password credential.
+  kPasskeyUpgradeBubble = 28,
+
+  // The bubble informing user about the password change flow state (shown when
+  // clicking on the omnibox icon while the password change is running).
+  kPasswordChangeInfoBubble = 29,
+
+  // Corresponds to the Autofill and passwords settings page on mobile.
+  kChromeSettingsAutofillAndPasswords = 30,
+
+  // NOTE: When adding a new value to this enum that applies or could apply to
+  // Android, make sure it is correctly handled by the internal credential
+  // manager launcher java implementation.
+  kMaxValue = kChromeSettingsAutofillAndPasswords,
 };
+// LINT.ThenChange(
+//     //chrome/browser/resources/settings/autofill_page/passwords/password_manager_proxy.ts:ManagePasswordsReferrer,
+//     //tools/metrics/histograms/metadata/password/enums.xml:ManagePasswordsReferrer
+// )
 
 }  // namespace password_manager
 

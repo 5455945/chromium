@@ -1,321 +1,1315 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.ui.android.webid;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import static org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.AccountProperties.ACCOUNT;
-import static org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.AccountProperties.AVATAR;
-import static org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.AccountProperties.FAVICON_OR_FALLBACK;
-import static org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.AccountProperties.ON_CLICK_LISTENER;
-import static org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.HeaderProperties.FORMATTED_URL;
-import static org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.HeaderProperties.SINGLE_ACCOUNT;
+import static org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.HeaderProperties.CLOSE_ON_CLICK_LISTENER;
+import static org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.HeaderProperties.HEADER_ICON;
+import static org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.HeaderProperties.IDP_FOR_DISPLAY;
+import static org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.HeaderProperties.IFRAME_FOR_DISPLAY;
+import static org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.HeaderProperties.IS_MULTIPLE_ACCOUNT_CHOOSER;
+import static org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.HeaderProperties.IS_MULTIPLE_IDPS;
+import static org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.HeaderProperties.RP_BRAND_ICON;
+import static org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.HeaderProperties.RP_CONTEXT;
+import static org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.HeaderProperties.RP_FOR_DISPLAY;
+import static org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.HeaderProperties.RP_MODE;
+import static org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.HeaderProperties.SET_FOCUS_VIEW_CALLBACK;
+import static org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.HeaderProperties.TYPE;
 
-import android.graphics.Bitmap;
+import android.view.View;
+import android.widget.TextView;
 
-import androidx.annotation.Px;
+import androidx.recyclerview.widget.RecyclerView;
 
-import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.ArgumentMatcher;
 import org.mockito.Captor;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
-import org.robolectric.annotation.Config;
+import org.robolectric.ParameterizedRobolectricTestRunner;
+import org.robolectric.ParameterizedRobolectricTestRunner.Parameters;
 
-import org.chromium.base.Callback;
-import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.JniMocker;
-import org.chromium.chrome.browser.image_fetcher.ImageFetcher;
-import org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.AccountProperties.Avatar;
-import org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.AccountProperties.FaviconOrFallback;
-import org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.ItemType;
+import org.chromium.base.DeviceInfo;
+import org.chromium.base.test.BaseRobolectricTestRule;
+import org.chromium.base.test.RobolectricUtil;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.blink.mojom.RpMode;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.AccountProperties;
+import org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.ButtonData;
+import org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.ContinueButtonProperties;
+import org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.DataSharingConsentProperties;
+import org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.HeaderProperties.HeaderType;
+import org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.IdpSignInProperties;
+import org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.ItemProperties;
+import org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.LoginButtonProperties;
 import org.chromium.chrome.browser.ui.android.webid.data.Account;
+import org.chromium.chrome.browser.ui.android.webid.data.RelyingPartyData;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
-import org.chromium.components.favicon.IconType;
-import org.chromium.components.favicon.LargeIconBridge;
-import org.chromium.components.url_formatter.SchemeDisplay;
-import org.chromium.components.url_formatter.UrlFormatter;
-import org.chromium.components.url_formatter.UrlFormatterJni;
-import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetFeatureMap;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetObserver;
+import org.chromium.components.image_fetcher.ImageFetcher;
+import org.chromium.content.webid.IdentityRequestDialogDismissReason;
+import org.chromium.ui.KeyboardVisibilityDelegate.KeyboardVisibilityListener;
+import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.url.GURL;
-import org.chromium.url.JUnitTestGURLs;
 
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 
 /**
- * Controller tests verify that the Account Selection delegate modifies the model if the API is used
- * properly.
+ * Controller tests verify that the Account Selection delegate modifies the model. This class is
+ * parameterized to run all tests for each RP mode.
  */
-@RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
-public class AccountSelectionControllerTest {
-    private static final String TEST_URL = JUnitTestGURLs.EXAMPLE_URL;
-    private static final GURL TEST_URL_1 = JUnitTestGURLs.getGURL(JUnitTestGURLs.URL_1);
-    private static final GURL TEST_URL_2 = JUnitTestGURLs.getGURL(JUnitTestGURLs.URL_2);
-    private static final GURL TEST_URL_3 = JUnitTestGURLs.getGURL(JUnitTestGURLs.URL_3);
-    private static final GURL TEST_PROFILE_PIC =
-            JUnitTestGURLs.getGURL(JUnitTestGURLs.URL_1_WITH_PATH);
-
-    private static final Account ANA =
-            new Account("Ana", "ana@one.test", "Ana Doe", "Ana", TEST_PROFILE_PIC, TEST_URL_1);
-    private static final Account BOB =
-            new Account("Bob", "", "Bob", "", TEST_PROFILE_PIC, TEST_URL_2);
-    private static final Account CARL =
-            new Account("Carl", "carl@three.test", "Carl Test", ":)", TEST_PROFILE_PIC, TEST_URL_3);
-    private static final @Px int DESIRED_FAVICON_SIZE = 64;
-    private static final @Px int DESIRED_AVATAR_SIZE = 100;
-
-    @Rule
-    public JniMocker mJniMocker = new JniMocker();
-    @Mock
-    private UrlFormatter.Natives mUrlFormatterJniMock;
-    @Mock
-    private AccountSelectionComponent.Delegate mMockDelegate;
-    @Mock
-    private LargeIconBridge mMockIconBridge;
-    @Mock
-    private ImageFetcher mMockImageFetcher;
-    @Mock
-    private BottomSheetController mMockBottomSheetController;
-
-    // Can't be local, as it has to be initialized by initMocks.
-    @Captor
-    private ArgumentCaptor<LargeIconBridge.LargeIconCallback> mCallbackArgumentCaptor;
-
-    private AccountSelectionMediator mMediator;
-    private final ModelList mSheetItems = new ModelList();
-
-    @Before
-    public void setUp() {
-        MockitoAnnotations.initMocks(this);
-        mJniMocker.mock(UrlFormatterJni.TEST_HOOKS, mUrlFormatterJniMock);
-        when(mUrlFormatterJniMock.formatUrlForDisplayOmitScheme(anyString()))
-                .then(inv -> format(inv.getArgument(0)));
-        when(mUrlFormatterJniMock.formatStringUrlForSecurityDisplay(
-                     anyString(), eq(SchemeDisplay.OMIT_HTTP_AND_HTTPS)))
-                .then(inv -> formatForSecurityDisplay(inv.getArgument(0)));
-
-        mMediator = new AccountSelectionMediator(mMockDelegate, mSheetItems,
-                mMockBottomSheetController, null, mMockImageFetcher, DESIRED_AVATAR_SIZE,
-                mMockIconBridge, DESIRED_FAVICON_SIZE);
+@RunWith(ParameterizedRobolectricTestRunner.class)
+public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBase {
+    @Parameters
+    public static Collection<Object> data() {
+        return Arrays.asList(new Object[] {RpMode.PASSIVE, RpMode.ACTIVE});
     }
 
-    @Test
-    public void testShowAccountsCreatesHeader() {
-        mMediator.showAccounts(TEST_URL, Arrays.asList(ANA, BOB));
-        assertEquals("Incorrect header type", ItemType.HEADER, mSheetItems.get(0).type);
-        assertEquals("Incorrect header multiple accounts", false,
-                mSheetItems.get(0).model.get(SINGLE_ACCOUNT));
-        assertEquals("Incorrect header url", formatForSecurityDisplay(TEST_URL),
-                mSheetItems.get(0).model.get(FORMATTED_URL));
+    @Rule(order = -2)
+    public BaseRobolectricTestRule mBaseRule = new BaseRobolectricTestRule();
+
+    private @Mock BottomSheetContent mOtherBottomSheetContent;
+    private @Captor ArgumentCaptor<BottomSheetObserver> mBottomSheetObserverCaptor;
+
+    public ArgumentMatcher<ImageFetcher.Params> imageFetcherParamsHaveUrl(GURL url) {
+        return params -> params != null && params.url.equals(url.getSpec());
     }
 
-    @Test
-    public void testShowAccountWithSingleEntryCreatesHeader() {
-        mMediator.showAccounts(TEST_URL, Arrays.asList(ANA));
-        assertEquals("Incorrect header type", ItemType.HEADER, mSheetItems.get(0).type);
-        assertEquals("Incorrect header single account", true,
-                mSheetItems.get(0).model.get(SINGLE_ACCOUNT));
-        assertEquals("Incorrect header url", formatForSecurityDisplay(TEST_URL),
-                mSheetItems.get(0).model.get(FORMATTED_URL));
-    }
-
-    @Test
-    public void testShowAccountsSetsAccountListAndRequestsFavicons() {
-        mMediator.showAccounts(TEST_URL, Arrays.asList(ANA, CARL, BOB));
+    private void testAccount(
+            PropertyModel accountModel,
+            Account expectedAccount,
+            Boolean expectClickListener,
+            Boolean expectShowIdp) {
         assertEquals(
-                "Incorrect item sheet count", 4, mSheetItems.size()); // Header + three Accounts
-        assertEquals("Incorrect type", ItemType.ACCOUNT, mSheetItems.get(1).type);
-        assertEquals("Incorrect account", ANA, mSheetItems.get(1).model.get(ACCOUNT));
-        assertNull(mSheetItems.get(1).model.get(FAVICON_OR_FALLBACK));
-        assertEquals("Incorrect type", ItemType.ACCOUNT, mSheetItems.get(2).type);
-        assertEquals("Incorrect account", CARL, mSheetItems.get(2).model.get(ACCOUNT));
-        assertNull(mSheetItems.get(2).model.get(FAVICON_OR_FALLBACK));
-        assertEquals("Incorrect type", ItemType.ACCOUNT, mSheetItems.get(3).type);
-        assertEquals("Incorrect account", BOB, mSheetItems.get(3).model.get(ACCOUNT));
-        assertNull(mSheetItems.get(3).model.get(FAVICON_OR_FALLBACK));
-
-        verify(mMockIconBridge)
-                .getLargeIconForUrl(eq(ANA.getOriginUrl()), eq(DESIRED_FAVICON_SIZE), any());
-        verify(mMockIconBridge)
-                .getLargeIconForUrl(eq(CARL.getOriginUrl()), eq(DESIRED_FAVICON_SIZE), any());
-        verify(mMockIconBridge)
-                .getLargeIconForUrl(eq(BOB.getOriginUrl()), eq(DESIRED_FAVICON_SIZE), any());
+                "Incorrect account", expectedAccount, accountModel.get(AccountProperties.ACCOUNT));
+        if (expectClickListener) {
+            assertNotNull(accountModel.get(AccountProperties.ON_CLICK_LISTENER));
+        } else {
+            assertNull(accountModel.get(AccountProperties.ON_CLICK_LISTENER));
+        }
+        assertEquals(accountModel.get(AccountProperties.SHOW_IDP), expectShowIdp);
     }
 
     @Test
-    public void testShowAccountsSetsAccountListAndRequestsAvatar() {
-        mMediator.showAccounts(TEST_URL, Arrays.asList(ANA, BOB));
-        assertEquals("Incorrect item sheet count", 3, mSheetItems.size());
-        assertNull(mSheetItems.get(1).model.get(AVATAR));
-        assertNull(mSheetItems.get(2).model.get(AVATAR));
+    public void testSingleAccountSignInHeader() {
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
 
-        // Both accounts have the same profile pic URL
-        ImageFetcher.Params expected_params = ImageFetcher.Params.create(TEST_PROFILE_PIC.getSpec(),
-                ImageFetcher.WEB_ID_ACCOUNT_SELECTION_UMA_CLIENT_NAME, DESIRED_AVATAR_SIZE,
-                DESIRED_AVATAR_SIZE);
-
-        verify(mMockImageFetcher, times(2)).fetchImage(eq(expected_params), any());
+        PropertyModel headerModel = mModel.get(ItemProperties.HEADER);
+        assertEquals(HeaderType.SIGN_IN, headerModel.get(TYPE));
+        assertEquals(mTestEtldPlusOne, headerModel.get(RP_FOR_DISPLAY));
+        assertEquals(mTestEtldPlusOne2, headerModel.get(IDP_FOR_DISPLAY));
+        assertNotNull(headerModel.get(HEADER_ICON));
+        assertEquals((Integer) mRpMode, headerModel.get(RP_MODE));
+        assertFalse(headerModel.get(IS_MULTIPLE_ACCOUNT_CHOOSER));
+        assertFalse(headerModel.get(IS_MULTIPLE_IDPS));
+        assertEquals("Incorrect item sheet count", 1, mSheetAccountItems.size());
+        testAccount(
+                mSheetAccountItems.get(0).model,
+                mAnaAccount,
+                /* expectClickListener= */ true,
+                /* expectShowIdp= */ false);
     }
 
     @Test
-    public void testFetchFaviconUpdatesModel() {
-        mMediator.showAccounts(TEST_URL, Collections.singletonList(CARL));
-        assertEquals("Incorrect item sheet count", 3,
-                mSheetItems.size()); // Header + Account + Continue Button
-        assertEquals("Incorrect type", ItemType.ACCOUNT, mSheetItems.get(1).type);
-        assertEquals("Incorrect account", CARL, mSheetItems.get(1).model.get(ACCOUNT));
-        assertNull(mSheetItems.get(1).model.get(FAVICON_OR_FALLBACK));
+    public void testMultipleAccountsSignInHeader() {
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount, mBobAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
 
-        verify(mMockIconBridge)
-                .getLargeIconForUrl(eq(TEST_URL_3), eq(DESIRED_FAVICON_SIZE),
-                        mCallbackArgumentCaptor.capture());
-        LargeIconBridge.LargeIconCallback callback = mCallbackArgumentCaptor.getValue();
-        Bitmap bitmap = Bitmap.createBitmap(
-                DESIRED_FAVICON_SIZE, DESIRED_FAVICON_SIZE, Bitmap.Config.ARGB_8888);
-        callback.onLargeIconAvailable(bitmap, 333, true, IconType.FAVICON);
-        FaviconOrFallback iconData = mSheetItems.get(1).model.get(FAVICON_OR_FALLBACK);
-        assertEquals("incorrect favicon bitmap", bitmap, iconData.mIcon);
-        assertEquals("incorrect favicon url", TEST_URL_3, iconData.mUrl);
-        assertEquals("incorrect favicon size", DESIRED_FAVICON_SIZE, iconData.mIconSize);
-        assertEquals("incorrect favicon fallback color", 333, iconData.mFallbackColor);
+        PropertyModel headerModel = mModel.get(ItemProperties.HEADER);
+        assertEquals(HeaderType.SIGN_IN, headerModel.get(TYPE));
+        assertEquals(mTestEtldPlusOne, headerModel.get(RP_FOR_DISPLAY));
+        assertEquals(mTestEtldPlusOne2, headerModel.get(IDP_FOR_DISPLAY));
+        assertNotNull(headerModel.get(HEADER_ICON));
+        assertEquals((Integer) mRpMode, headerModel.get(RP_MODE));
+        assertTrue(headerModel.get(IS_MULTIPLE_ACCOUNT_CHOOSER));
+        assertFalse(headerModel.get(IS_MULTIPLE_IDPS));
+        assertEquals("Incorrect item sheet count", 2, mSheetAccountItems.size());
+        testAccount(
+                mSheetAccountItems.get(0).model,
+                mAnaAccount,
+                /* expectClickListener= */ true,
+                /* expectShowIdp= */ false);
+        testAccount(
+                mSheetAccountItems.get(1).model,
+                mBobAccount,
+                /* expectClickListener= */ true,
+                /* expectShowIdp= */ false);
     }
 
     @Test
-    public void testFetchAvatarUpdatesModel() {
-        mMediator.showAccounts(TEST_URL, Collections.singletonList(CARL));
-        assertEquals("Incorrect item sheet count", 3, mSheetItems.size());
-        assertEquals("Incorrect type", ItemType.ACCOUNT, mSheetItems.get(1).type);
-        assertEquals("Incorrect account", CARL, mSheetItems.get(1).model.get(ACCOUNT));
-        assertNull(mSheetItems.get(1).model.get(AVATAR));
+    public void testIframeInSignInHeader() {
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne,
+                        /* iframeForDisplay= */ mTestEtldPlusOne1,
+                        /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
 
-        ImageFetcher.Params expected_params = ImageFetcher.Params.create(TEST_PROFILE_PIC.getSpec(),
-                ImageFetcher.WEB_ID_ACCOUNT_SELECTION_UMA_CLIENT_NAME, DESIRED_AVATAR_SIZE,
-                DESIRED_AVATAR_SIZE);
+        PropertyModel headerModel = mModel.get(ItemProperties.HEADER);
+        assertEquals(HeaderType.SIGN_IN, headerModel.get(TYPE));
+        assertEquals(mTestEtldPlusOne, headerModel.get(RP_FOR_DISPLAY));
+        assertEquals(mTestEtldPlusOne1, headerModel.get(IFRAME_FOR_DISPLAY));
+        assertEquals(mTestEtldPlusOne2, headerModel.get(IDP_FOR_DISPLAY));
+        assertNotNull(headerModel.get(HEADER_ICON));
+        assertEquals((Integer) mRpMode, headerModel.get(RP_MODE));
+        assertFalse(headerModel.get(IS_MULTIPLE_ACCOUNT_CHOOSER));
+        assertFalse(headerModel.get(IS_MULTIPLE_IDPS));
+        assertEquals("Incorrect item sheet count", 1, mSheetAccountItems.size());
+        testAccount(
+                mSheetAccountItems.get(0).model,
+                mAnaAccount,
+                /* expectClickListener= */ true,
+                /* expectShowIdp= */ false);
+    }
 
-        final ArgumentCaptor<Callback<Bitmap>> callback = ArgumentCaptor.forClass(Callback.class);
-        verify(mMockImageFetcher).fetchImage(eq(expected_params), callback.capture());
+    @Test
+    public void testCloseOnClickRunnableFormFactor() {
+        // By default, the Desktop windowing flag and DeviceInfo.isDesktop are not mocked
+        // to true in this test, so it is treated as a small form factor.
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
 
-        Bitmap bitmap = Bitmap.createBitmap(
-                DESIRED_AVATAR_SIZE, DESIRED_AVATAR_SIZE, Bitmap.Config.ARGB_8888);
-        callback.getValue().onResult(bitmap);
+        PropertyModel headerModel = mModel.get(ItemProperties.HEADER);
+        assertNotNull(headerModel.get(CLOSE_ON_CLICK_LISTENER));
+    }
 
-        Avatar avatarData = mSheetItems.get(1).model.get(AVATAR);
-        assertEquals("incorrect avatar bitmap", bitmap, avatarData.mAvatar);
-        assertEquals("incorrect avatar name", CARL.getName(), avatarData.mName);
-        assertEquals("incorrect avatar size", DESIRED_AVATAR_SIZE, avatarData.mAvatarSize);
+    @Test
+    @EnableFeatures(ChromeFeatureList.BOTTOM_SHEET_ON_DESKTOP_WINDOWING)
+    public void testCloseOnClickRunnableLargeFormFactor() {
+        DeviceInfo.setIsDesktopForTesting(true);
+        when(mMockBottomSheetController.isLargeFormFactorUiEnabled(any())).thenReturn(true);
+        when(mMockBottomSheetController.willShowFrameworkCloseButton(any())).thenReturn(true);
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+
+        PropertyModel headerModel = mModel.get(ItemProperties.HEADER);
+        assertNull(headerModel.get(CLOSE_ON_CLICK_LISTENER));
+        DeviceInfo.setIsDesktopForTesting(false);
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.BOTTOM_SHEET_ON_DESKTOP_WINDOWING)
+    public void testCloseOnClickRunnableLargeFormFactor_NoFrameworkCloseButton() {
+        // The framework only supplies a close button for non-modal sheets, so being on a large
+        // form factor is not on its own enough to give up our own one.
+        DeviceInfo.setIsDesktopForTesting(true);
+        when(mMockBottomSheetController.isLargeFormFactorUiEnabled(any())).thenReturn(true);
+        when(mMockBottomSheetController.willShowFrameworkCloseButton(any())).thenReturn(false);
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+
+        PropertyModel headerModel = mModel.get(ItemProperties.HEADER);
+        assertNotNull(
+                "Content must keep its own close button when the framework supplies none.",
+                headerModel.get(CLOSE_ON_CLICK_LISTENER));
+        DeviceInfo.setIsDesktopForTesting(false);
+    }
+
+    /**
+     * Test that the FedCM account picker does not display the brand icon placeholder if the brand
+     * icon is null.
+     */
+    @Test
+    public void testNoBrandIcons() {
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccountWithoutBrandIcons),
+                Arrays.asList(mIdpDataWithoutIcons),
+                /* newAccounts= */ Collections.emptyList());
+
+        PropertyModel headerModel = mModel.get(ItemProperties.HEADER);
+        assertNull(headerModel.get(HEADER_ICON));
+    }
+
+    @Test
+    public void testShowAccountSignUpHeader() {
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mNewUserAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+
+        PropertyModel headerModel = mModel.get(ItemProperties.HEADER);
+        assertEquals(HeaderType.SIGN_IN, headerModel.get(TYPE));
     }
 
     @Test
     public void testShowAccountsFormatPslOrigins() {
-        mMediator.showAccounts(TEST_URL, Arrays.asList(ANA, BOB));
-        assertEquals("Incorrect item sheet count", 3, mSheetItems.size()); // Header + two Accounts
-        assertEquals("Incorrect item type", ItemType.ACCOUNT, mSheetItems.get(1).type);
-        assertEquals("Incorrect item type", ItemType.ACCOUNT, mSheetItems.get(2).type);
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount, mBobAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+        // Header + two accounts. Also drag handlebar in active mode.
+        int expectedItemCount = mRpMode == RpMode.PASSIVE ? 3 : 4;
+        assertEquals(expectedItemCount, countAllItems());
+        assertEquals("Incorrect item sheet count", 2, mSheetAccountItems.size());
     }
 
     @Test
     public void testClearsAccountListWhenShowingAgain() {
-        mMediator.showAccounts(TEST_URL, Collections.singletonList(ANA));
-        assertEquals("Incorrect item sheet count", 3,
-                mSheetItems.size()); // Header + Account + Continue Button
-        assertEquals("Incorrect item type", ItemType.ACCOUNT, mSheetItems.get(1).type);
-        assertEquals("Incorrect account", ANA, mSheetItems.get(1).model.get(ACCOUNT));
-        assertNull(mSheetItems.get(1).model.get(FAVICON_OR_FALLBACK));
+        when(mMockBottomSheetController.requestShowContent(any(), anyBoolean())).thenReturn(true);
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Collections.singletonList(mAnaAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+        // Header + Account + Continue Button. Also drag handlebar in active mode.
+        int expectedItemCount = mRpMode == RpMode.PASSIVE ? 3 : 4;
+        assertEquals(1, mSheetAccountItems.size());
+        assertEquals(
+                "Incorrect account", mAnaAccount, mSheetAccountItems.get(0).model.get(ACCOUNT));
 
         // Showing the sheet a second time should replace all changed accounts.
-        mMediator.showAccounts(TEST_URL, Collections.singletonList(BOB));
-        assertEquals("Incorrect item sheet count", 3,
-                mSheetItems.size()); // Header + Account + Continue Button
-        assertEquals("Incorrect item type", ItemType.ACCOUNT, mSheetItems.get(1).type);
-        assertEquals("Incorrect account", BOB, mSheetItems.get(1).model.get(ACCOUNT));
-        assertNull(mSheetItems.get(1).model.get(FAVICON_OR_FALLBACK));
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Collections.singletonList(mBobAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+        // Header + Account + Continue Button. Also drag handlebar in active mode.
+        assertEquals(expectedItemCount, countAllItems());
+        assertEquals(1, mSheetAccountItems.size());
+        assertEquals(
+                "Incorrect account", mBobAccount, mSheetAccountItems.get(0).model.get(ACCOUNT));
     }
 
     @Test
-    public void testShowAccountsSetsVisibile() {
+    public void testShowAccountsSetsVisible() {
         when(mMockBottomSheetController.requestShowContent(any(), anyBoolean())).thenReturn(true);
-        mMediator.showAccounts(TEST_URL, Arrays.asList(ANA, CARL, BOB));
-        verify(mMockBottomSheetController, times(1)).requestShowContent(eq(null), eq(true));
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount, mCarlAccount, mBobAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+        verify(mMockBottomSheetController, times(1)).requestShowContent(any(), eq(true));
 
-        assertEquals("Incorrectly hidden", true, mMediator.isVisible());
+        assertFalse(mMediator.wasDismissed());
     }
 
     @Test
     public void testCallsCallbackAndHidesOnSelectingItemDoesNotRecordIndexForSingleAccount() {
         when(mMockBottomSheetController.requestShowContent(any(), anyBoolean())).thenReturn(true);
-        mMediator.showAccounts(TEST_URL, Arrays.asList(ANA));
-        assertEquals("Incorrectly hidden", true, mMediator.isVisible());
-        assertNotNull(mSheetItems.get(1).model.get(ON_CLICK_LISTENER));
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+        // Do not let test inputs be ignored.
+        mMediator.setComponentShowTime(-1000);
+        assertFalse(mMediator.wasDismissed());
+        assertNotNull(
+                mModel.get(ItemProperties.CONTINUE_BUTTON)
+                        .get(ContinueButtonProperties.PROPERTIES)
+                        .mOnClickListener);
 
-        mSheetItems.get(1).model.get(ON_CLICK_LISTENER).onResult(ANA);
-        verify(mMockDelegate).onAccountSelected(ANA);
-        assertEquals("Incorrectly visible", false, mMediator.isVisible());
+        mModel.get(ItemProperties.CONTINUE_BUTTON)
+                .get(ContinueButtonProperties.PROPERTIES)
+                .mOnClickListener
+                .onResult(new ButtonData(mAnaAccount, /* idpMetadata= */ null));
+        verify(mMockDelegate).onAccountSelected(mAnaAccount);
+        assertFalse(mMediator.wasDismissed());
+        mMediator.close();
+        assertTrue(mMediator.wasDismissed());
     }
 
     @Test
     public void testCallsCallbackAndHidesOnSelectingItem() {
         when(mMockBottomSheetController.requestShowContent(any(), anyBoolean())).thenReturn(true);
-        mMediator.showAccounts(TEST_URL, Arrays.asList(ANA, CARL));
-        assertEquals("Incorrectly hidden", true, mMediator.isVisible());
-        assertNotNull(mSheetItems.get(1).model.get(ON_CLICK_LISTENER));
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount, mCarlAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+        // Do not let test inputs be ignored.
+        mMediator.setComponentShowTime(-1000);
+        assertFalse(mMediator.wasDismissed());
+        assertNotNull(mSheetAccountItems.get(0).model.get(AccountProperties.ON_CLICK_LISTENER));
 
-        mSheetItems.get(1).model.get(ON_CLICK_LISTENER).onResult(CARL);
-        verify(mMockDelegate).onAccountSelected(CARL);
-        assertEquals("Incorrectly visible", false, mMediator.isVisible());
+        mSheetAccountItems
+                .get(0)
+                .model
+                .get(AccountProperties.ON_CLICK_LISTENER)
+                .onResult(new ButtonData(mCarlAccount, /* idpMetadata= */ null));
+        verify(mMockDelegate).onAccountSelected(mCarlAccount);
+        assertFalse(mMediator.wasDismissed());
+        mMediator.close();
+        assertTrue(mMediator.wasDismissed());
     }
 
     @Test
-    public void testCallsDelegateAndHidesOnDismiss() {
+    public void testCallsDelegateAndHidesOnSingleAccountDismiss() {
         when(mMockBottomSheetController.requestShowContent(any(), anyBoolean())).thenReturn(true);
-        mMediator.showAccounts(TEST_URL, Arrays.asList(ANA, BOB));
-        mMediator.onDismissed(BottomSheetController.StateChangeReason.BACK_PRESS);
-        verify(mMockDelegate).onDismissed();
-        assertEquals("Incorrectly visible", false, mMediator.isVisible());
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+        pressBack();
+        verify(mMockDelegate).onDismissed(IdentityRequestDialogDismissReason.OTHER);
+        assertTrue(mMediator.wasDismissed());
     }
 
     @Test
-    public void testCallsDelegateAndHidesOnSelect() {
+    public void testCallsDelegateAndHidesOnAccountPickerDismiss() {
         when(mMockBottomSheetController.requestShowContent(any(), anyBoolean())).thenReturn(true);
-        mMediator.showAccounts(TEST_URL, Arrays.asList(ANA, BOB));
-        mMediator.onAccountSelected(ANA);
-        verify(mMockDelegate).onAccountSelected(ANA);
-        assertEquals("Incorrectly visible", false, mMediator.isVisible());
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount, mBobAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+        pressBack();
+        verify(mMockDelegate).onDismissed(IdentityRequestDialogDismissReason.OTHER);
+        assertTrue(mMediator.wasDismissed());
     }
 
-    /**
-     * Helper to verify formatted URLs. The real implementation calls {@link UrlFormatter}. It's not
-     * useful to actually reimplement the formatter, so just modify the string in a trivial way.
-     * @param originUrl A URL {@link String} to "format".
-     * @return A "formatted" URL {@link String}.
-     */
-    private static String format(String originUrl) {
-        return "formatted_" + originUrl + "_formatted";
+    @Test
+    public void testCallsDelegateAndHidesOnAccountPickerSelectSignIn() {
+        when(mMockBottomSheetController.requestShowContent(any(), anyBoolean())).thenReturn(true);
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount, mBobAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+        mMediator.onAccountSelected(new ButtonData(mAnaAccount, /* idpMetadata= */ null));
+        verify(mMockDelegate).onAccountSelected(mAnaAccount);
+        assertFalse(mMediator.wasDismissed());
+        mMediator.close();
+        assertTrue(mMediator.wasDismissed());
     }
 
-    /**
-     * Helper to verify URLs formatted for security display. The real implementation calls
-     * {@link UrlFormatter}. It's not useful to actually reimplement the formatter, so just
-     * modify the string in a trivial way.
-     * @param originUrl A URL {@link String} to "format".
-     * @return A "formatted" URL {@link String}.
-     */
-    private static String formatForSecurityDisplay(String originUrl) {
-        return "formatted_for_security_" + originUrl + "_formatted_for_security";
+    @Test
+    public void testShowsTosOnMultiAccountSelectSignUp() {
+        when(mMockBottomSheetController.requestShowContent(any(), anyBoolean())).thenReturn(true);
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount, mNewUserAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+        mMediator.onAccountSelected(new ButtonData(mNewUserAccount, /* idpMetadata= */ null));
+
+        assertFalse(mMediator.wasDismissed());
+        assertTrue(containsItemOfType(mModel, ItemProperties.DATA_SHARING_CONSENT));
+
+        verify(mMockDelegate, never()).onAccountSelected(mNewUserAccount);
+    }
+
+    @Test
+    public void testShowsAccountPickerOnTosDismiss() {
+        when(mMockBottomSheetController.requestShowContent(any(), anyBoolean())).thenReturn(true);
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount, mNewUserAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+        mMediator.onAccountSelected(new ButtonData(mNewUserAccount, /* idpMetadata= */ null));
+
+        pressBack();
+        assertFalse(mMediator.wasDismissed());
+        assertFalse(containsItemOfType(mModel, ItemProperties.DATA_SHARING_CONSENT));
+        assertEquals(2, mSheetAccountItems.size());
+
+        pressBack();
+        assertTrue(mMediator.wasDismissed());
+
+        verify(mMockDelegate, never()).onAccountSelected(mNewUserAccount);
+    }
+
+    @Test
+    public void testNotShowAccountPickerOnVerifyingUiDismiss() {
+        when(mMockBottomSheetController.requestShowContent(any(), anyBoolean())).thenReturn(true);
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount, mNewUserAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+        assertEquals(2, mSheetAccountItems.size());
+        mMediator.onAccountSelected(new ButtonData(mAnaAccount, /* idpMetadata= */ null));
+
+        pressBack();
+        assertTrue(mMediator.wasDismissed());
+    }
+
+    @Test
+    public void testCallsDelegateAndHidesOnAutoReauthn() {
+        when(mMockBottomSheetController.requestShowContent(any(), anyBoolean())).thenReturn(true);
+        mMediator.showVerifyingDialog(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                mAnaAccount,
+                /* isAutoReauthn= */ true);
+        // Auto reauthenticates if no action is taken.
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
+        assertFalse(mMediator.wasDismissed());
+        assertEquals(HeaderType.VERIFY_AUTO_REAUTHN, mMediator.getHeaderType());
+
+        mMediator.close();
+        assertTrue(mMediator.wasDismissed());
+    }
+
+    @Test
+    public void testAutoReauthnUiCanBeDismissed() {
+        when(mMockBottomSheetController.requestShowContent(any(), anyBoolean())).thenReturn(true);
+        mMediator.showVerifyingDialog(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                mAnaAccount,
+                /* isAutoReauthn= */ true);
+        pressBack();
+        verify(mMockDelegate).onDismissed(IdentityRequestDialogDismissReason.OTHER);
+        if (mRpMode == RpMode.PASSIVE) {
+            verify(mMockDelegate).onAccountsDisplayed();
+        }
+        verifyNoMoreInteractions(mMockDelegate);
+        assertTrue(mMediator.wasDismissed());
+        // The delayed task should not call delegate after user dismissing.
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
+    }
+
+    @Test
+    public void testShowDataSharingConsentForSingleNewAccount() {
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mNewUserAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+        // For new user we expect header + account + consent text + continue btn. Also drag
+        // handlebar in active mode.
+        int expectedItemCount = mRpMode == RpMode.PASSIVE ? 4 : 5;
+        assertEquals(expectedItemCount, countAllItems());
+        assertEquals("Incorrect item sheet count", 1, mSheetAccountItems.size());
+        assertTrue(containsItemOfType(mModel, ItemProperties.DATA_SHARING_CONSENT));
+
+        DataSharingConsentProperties.Properties dataSharingProperties =
+                mModel.get(ItemProperties.DATA_SHARING_CONSENT)
+                        .get(DataSharingConsentProperties.PROPERTIES);
+        assertEquals(
+                "Incorrect privacy policy URL",
+                mTestUrlPrivacyPolicy,
+                dataSharingProperties.mPrivacyPolicyUrl);
+        assertEquals(
+                "Incorrect terms of service URL",
+                mTestUrlTermsOfService,
+                dataSharingProperties.mTermsOfServiceUrl);
+        assertTrue(containsItemOfType(mModel, ItemProperties.CONTINUE_BUTTON));
+        assertEquals(
+                "Incorrect provider ETLD+1",
+                mTestEtldPlusOne2,
+                dataSharingProperties.mIdpForDisplay);
+    }
+
+    @Test
+    public void testNewUserWithoutRequestPermission() {
+        mIdpData.setDisclosureFields(new int[0]);
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mNewUserAccountWithoutFields),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+        // Because disclosureFields are empty, we expect header + account + continue btn, and drag
+        // handlebar in active mode.
+        int expectedItemCount = mRpMode == RpMode.PASSIVE ? 3 : 4;
+        assertEquals(expectedItemCount, countAllItems());
+        assertEquals("Incorrect item sheet count", 1, mSheetAccountItems.size());
+        assertFalse(containsItemOfType(mModel, ItemProperties.DATA_SHARING_CONSENT));
+    }
+
+    @Test
+    public void testMultiAccountSkipConsentSheetWithoutRequestPermission() {
+        when(mMockBottomSheetController.requestShowContent(any(), anyBoolean())).thenReturn(true);
+        mIdpData.setDisclosureFields(new int[0]);
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mNewUserAccountWithoutFields, mBobAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+        mMediator.onAccountSelected(
+                new ButtonData(mNewUserAccountWithoutFields, /* idpMetadata= */ null));
+        verify(mMockDelegate).onAccountSelected(mNewUserAccountWithoutFields);
+        assertFalse(mMediator.wasDismissed());
+        mMediator.close();
+        assertTrue(mMediator.wasDismissed());
+    }
+
+    @Test
+    public void testShowFailureDialog() {
+        int count = 0;
+        for (int rpContext : RP_CONTEXTS) {
+            when(mMockBottomSheetController.requestShowContent(any(), anyBoolean()))
+                    .thenReturn(true);
+            mMediator.showFailureDialog(
+                    new RelyingPartyData(
+                            mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                    mTestEtldPlusOne2,
+                    mIdpMetadata,
+                    rpContext);
+            assertEquals(0, mSheetAccountItems.size());
+
+            PropertyModel headerModel = mModel.get(ItemProperties.HEADER);
+            assertEquals(HeaderType.SIGN_IN_TO_IDP_STATIC, headerModel.get(TYPE));
+            assertNotNull(headerModel.get(HEADER_ICON));
+            assertEquals(
+                    "Header has incorrect IDP for display",
+                    mTestEtldPlusOne2,
+                    headerModel.get(IDP_FOR_DISPLAY));
+            assertEquals(
+                    "Header has incorrect RP for display",
+                    mTestEtldPlusOne,
+                    headerModel.get(RP_FOR_DISPLAY));
+            assertNull(headerModel.get(RP_BRAND_ICON));
+            assertEquals(
+                    "Header has the incorrect RP context", rpContext, headerModel.get(RP_CONTEXT));
+            assertEquals(
+                    "Header has the incorrect RP mode",
+                    (Integer) mRpMode,
+                    headerModel.get(RP_MODE));
+
+            verify(mMockDelegate, never()).onAccountsDisplayed();
+            // For failure dialog, we expect header + IDP sign in text + continue btn, and drag
+            // handlebar in active mode.
+            int expectedItemCount = mRpMode == RpMode.PASSIVE ? 3 : 4;
+            assertEquals(expectedItemCount, countAllItems());
+            assertTrue(containsItemOfType(mModel, ItemProperties.IDP_SIGNIN));
+
+            String idpEtldPlusOne =
+                    mModel.get(ItemProperties.IDP_SIGNIN).get(IdpSignInProperties.IDP_FOR_DISPLAY);
+            assertEquals("Incorrect provider ETLD+1", mTestEtldPlusOne2, idpEtldPlusOne);
+
+            assertNotNull(
+                    mModel.get(ItemProperties.CONTINUE_BUTTON)
+                            .get(ContinueButtonProperties.PROPERTIES)
+                            .mOnClickListener);
+
+            // Do not let test inputs be ignored.
+            mMediator.setComponentShowTime(-1000);
+            mModel.get(ItemProperties.CONTINUE_BUTTON)
+                    .get(ContinueButtonProperties.PROPERTIES)
+                    .mOnClickListener
+                    .onResult(new ButtonData(/* account= */ null, mIdpMetadata));
+            verify(mMockDelegate, times(++count)).onLoginToIdP(mTestConfigUrl, mTestLoginUrl);
+        }
+    }
+
+    @Test
+    public void testKeyboardShowingAndHiding() {
+        when(mMockBottomSheetController.requestShowContent(any(), anyBoolean())).thenReturn(true);
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+        KeyboardVisibilityListener listener = mMediator.getKeyboardEventListener();
+        listener.keyboardObscuringChanged(true);
+        verify(mMockBottomSheetController).hideContent(mBottomSheetContent, true);
+        when(mTab.isUserInteractable()).thenReturn(true);
+        listener.keyboardObscuringChanged(false);
+        verify(mMockBottomSheetController, times(2)).requestShowContent(mBottomSheetContent, true);
+        assertFalse(mMediator.wasDismissed());
+    }
+
+    @Test
+    public void testWebContentsInteractibilityChange() {
+        when(mMockBottomSheetController.requestShowContent(any(), anyBoolean())).thenReturn(true);
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+        mMediator.getTabObserver().onInteractabilityChanged(mTab, false);
+        verify(mMockBottomSheetController).hideContent(mBottomSheetContent, false);
+        mMediator.getTabObserver().onInteractabilityChanged(mTab, true);
+        verify(mMockBottomSheetController, times(2)).requestShowContent(mBottomSheetContent, true);
+        assertFalse(mMediator.wasDismissed());
+    }
+
+    @Test
+    public void testNavigationInPrimaryMainFrame() {
+        when(mMockBottomSheetController.requestShowContent(any(), anyBoolean())).thenReturn(true);
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+        // We pass null as |mMediatior| does not really care about where we navigate to.
+        mMediator.getTabObserver().onDidStartNavigationInPrimaryMainFrame(mTab, null);
+        assertTrue(mMediator.wasDismissed());
+        verify(mMockDelegate).onDismissed(IdentityRequestDialogDismissReason.OTHER);
+    }
+
+    @Test
+    public void testShowKeyboardWhileNotInteractable() {
+        when(mMockBottomSheetController.requestShowContent(any(), anyBoolean())).thenReturn(true);
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+        KeyboardVisibilityListener listener = mMediator.getKeyboardEventListener();
+        listener.keyboardObscuringChanged(true);
+        verify(mMockBottomSheetController).hideContent(mBottomSheetContent, true);
+
+        when(mTab.isUserInteractable()).thenReturn(false);
+
+        // Showing the keyboard again should do nothing since the tab is not interactable!
+        listener.keyboardObscuringChanged(false);
+        // The requestShowContent method should have been called only once.
+        verify(mMockBottomSheetController, times(1)).requestShowContent(mBottomSheetContent, true);
+        assertFalse(mMediator.wasDismissed());
+    }
+
+    @Test
+    public void testWebContentsHidden() {
+        when(mTab.isHidden()).thenReturn(true);
+        when(mMockBottomSheetController.requestShowContent(any(), anyBoolean())).thenReturn(true);
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+        verify(mMockBottomSheetController, never()).requestShowContent(any(), anyBoolean());
+        mMediator.getTabObserver().onInteractabilityChanged(mTab, true);
+        verify(mMockBottomSheetController, times(1)).requestShowContent(mBottomSheetContent, true);
+    }
+
+    @Test
+    public void testSetFocusViewCallback() {
+        when(mMockBottomSheetController.requestShowContent(any(), anyBoolean())).thenReturn(true);
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mNewUserAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+
+        assertNotNull(mModel.get(ItemProperties.HEADER).get(SET_FOCUS_VIEW_CALLBACK));
+        assertNotNull(
+                mModel.get(ItemProperties.CONTINUE_BUTTON)
+                        .get(ContinueButtonProperties.PROPERTIES)
+                        .mSetFocusViewCallback);
+        assertNotNull(
+                mModel.get(ItemProperties.DATA_SHARING_CONSENT)
+                        .get(DataSharingConsentProperties.PROPERTIES)
+                        .mSetFocusViewCallback);
+    }
+
+    @Test
+    public void testnewAccountsMultipleAccountsShowsAccountChooser() {
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                mNewAccountsMultipleAccounts,
+                Arrays.asList(mIdpData),
+                mNewAccountsMultipleAccounts);
+
+        // Account chooser is shown for multiple newly signed-in accounts.
+        assertEquals(HeaderType.SIGN_IN, mModel.get(ItemProperties.HEADER).get(TYPE));
+    }
+
+    @Test
+    public void testFilteredOutAccountNoClickListener() {
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(
+                        mAnaAccountWithUseDifferentAccount,
+                        mFilteredOutAccountWithUseDifferentAccount),
+                Arrays.asList(mIdpDataWithUseDifferentAccount),
+                /* newAccounts= */ Collections.emptyList());
+        RobolectricUtil.runAllBackgroundAndUi();
+
+        // Account chooser is shown.
+        assertEquals(HeaderType.SIGN_IN, mModel.get(ItemProperties.HEADER).get(TYPE));
+
+        int expectedCount = mRpMode == RpMode.PASSIVE ? 4 : 3;
+        assertEquals(expectedCount, mSheetAccountItems.size());
+        // First account has a click listener.
+        assertNotNull(mSheetAccountItems.get(0).model.get(AccountProperties.ON_CLICK_LISTENER));
+        // Second account is filtered out, so does not.
+        assertNull(mSheetAccountItems.get(1).model.get(AccountProperties.ON_CLICK_LISTENER));
+
+        View sheetContainer = mContentView.findViewById(R.id.sheet_item_list_container);
+        RecyclerView sheetItemListView = sheetContainer.findViewById(R.id.sheet_item_list);
+        assertEquals(expectedCount, sheetItemListView.getAdapter().getItemCount());
+
+        assertEquals(
+                AccountSelectionProperties.ITEM_TYPE_ACCOUNT,
+                sheetItemListView.getAdapter().getItemViewType(0));
+        View anaRow = sheetItemListView.getChildAt(0);
+        assertEquals(anaRow.getAlpha(), 1.f, ALPHA_COMPARISON_DELTA);
+        TextView textView = anaRow.findViewById(R.id.title);
+        assertEquals("Ana Doe", textView.getText());
+        textView = anaRow.findViewById(R.id.description);
+        assertEquals("ana@email.example", textView.getText());
+
+        assertEquals(
+                AccountSelectionProperties.ITEM_TYPE_ACCOUNT,
+                sheetItemListView.getAdapter().getItemViewType(1));
+        View nicolasRow = sheetItemListView.getChildAt(1);
+        assertEquals(
+                nicolasRow.getAlpha(),
+                AccountSelectionViewBinder.DISABLED_OPACITY,
+                ALPHA_COMPARISON_DELTA);
+        textView = nicolasRow.findViewById(R.id.title);
+        assertEquals("nicolas@example.com", textView.getText());
+        textView = nicolasRow.findViewById(R.id.description);
+        assertEquals("You can’t sign in using this account", textView.getText());
+
+        int currentIndex = 2;
+        if (mRpMode == RpMode.PASSIVE) {
+            assertEquals(
+                    AccountSelectionProperties.ITEM_TYPE_SEPARATOR,
+                    sheetItemListView.getAdapter().getItemViewType(currentIndex));
+            View separator = sheetItemListView.getChildAt(currentIndex);
+            assertEquals(1, separator.getHeight());
+            ++currentIndex;
+        }
+
+        assertNotNull(
+                mSheetAccountItems.get(currentIndex).model.get(LoginButtonProperties.PROPERTIES));
+        assertEquals(
+                AccountSelectionProperties.ITEM_TYPE_LOGIN,
+                sheetItemListView.getAdapter().getItemViewType(currentIndex));
+        View addAccountButton = sheetItemListView.getChildAt(currentIndex);
+        assertEquals(addAccountButton.getAlpha(), 1.f, ALPHA_COMPARISON_DELTA);
+        textView = addAccountButton.findViewById(R.id.title);
+        assertEquals("Use a different account", textView.getText());
+        assertNotNull(addAccountButton.findViewById(R.id.start_icon));
+    }
+
+    @Test
+    public void testFilteredOutAccountNoContinueButton() {
+        // Show a newly logged in filtered account.
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mFilteredOutAccountWithUseDifferentAccount),
+                Arrays.asList(mIdpDataWithUseDifferentAccount),
+                Arrays.asList(mFilteredOutAccountWithUseDifferentAccount));
+        RobolectricUtil.runAllBackgroundAndUi();
+        // Account chooser is shown.
+        assertEquals(HeaderType.SIGN_IN, mModel.get(ItemProperties.HEADER).get(TYPE));
+        int expectedCount = mRpMode == RpMode.PASSIVE ? 3 : 2;
+        assertEquals(expectedCount, mSheetAccountItems.size());
+        assertNull(mSheetAccountItems.get(0).model.get(AccountProperties.ON_CLICK_LISTENER));
+
+        View sheetContainer = mContentView.findViewById(R.id.sheet_item_list_container);
+        RecyclerView sheetItemListView = sheetContainer.findViewById(R.id.sheet_item_list);
+
+        assertEquals(
+                AccountSelectionProperties.ITEM_TYPE_ACCOUNT,
+                sheetItemListView.getAdapter().getItemViewType(0));
+        View filteredAccountRow = sheetItemListView.getChildAt(0);
+        assertEquals(
+                filteredAccountRow.getAlpha(),
+                AccountSelectionViewBinder.DISABLED_OPACITY,
+                ALPHA_COMPARISON_DELTA);
+        TextView textView = filteredAccountRow.findViewById(R.id.title);
+        assertEquals("nicolas@example.com", textView.getText());
+        textView = filteredAccountRow.findViewById(R.id.description);
+        assertEquals("You can’t sign in using this account", textView.getText());
+
+        int currentIndex = 1;
+        if (mRpMode == RpMode.PASSIVE) {
+            assertEquals(
+                    AccountSelectionProperties.ITEM_TYPE_SEPARATOR,
+                    sheetItemListView.getAdapter().getItemViewType(currentIndex));
+            View separator = sheetItemListView.getChildAt(currentIndex);
+            assertEquals(1, separator.getHeight());
+            ++currentIndex;
+        }
+
+        assertEquals(
+                AccountSelectionProperties.ITEM_TYPE_LOGIN,
+                sheetItemListView.getAdapter().getItemViewType(currentIndex));
+        View addAccountButton = sheetItemListView.getChildAt(currentIndex);
+        assertEquals(addAccountButton.getAlpha(), 1.f, ALPHA_COMPARISON_DELTA);
+        textView = addAccountButton.findViewById(R.id.title);
+        assertEquals("Use a different account", textView.getText());
+        assertNotNull(addAccountButton.findViewById(R.id.start_icon));
+
+        assertFalse(containsItemOfType(mModel, ItemProperties.CONTINUE_BUTTON));
+    }
+
+    @Test
+    public void testMultipleIdentityProvidersSignInHeader() {
+        if (mRpMode == RpMode.ACTIVE) {
+            // Multiple identity providers are not supported in active mode right now.
+            return;
+        }
+        when(mMockBottomSheetController.requestShowContent(any(), anyBoolean())).thenReturn(true);
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mNewUserAccount, mAnaAccountWithUseDifferentAccount),
+                Arrays.asList(mIdpData, mIdpDataWithUseDifferentAccount),
+                /* newAccounts= */ Collections.emptyList());
+        RobolectricUtil.runAllBackgroundAndUi();
+
+        // Dragbar should be shown when multiple identity providers are shown.
+        assertTrue(mModel.get(ItemProperties.DRAGBAR_HANDLE_VISIBLE));
+
+        PropertyModel headerModel = mModel.get(ItemProperties.HEADER);
+        assertEquals(HeaderType.SIGN_IN, headerModel.get(TYPE));
+        assertEquals(mTestEtldPlusOne, headerModel.get(RP_FOR_DISPLAY));
+        assertNull(headerModel.get(IDP_FOR_DISPLAY));
+        assertNull(headerModel.get(HEADER_ICON));
+        assertEquals((Integer) mRpMode, headerModel.get(RP_MODE));
+        assertTrue(headerModel.get(IS_MULTIPLE_ACCOUNT_CHOOSER));
+        assertTrue(headerModel.get(IS_MULTIPLE_IDPS));
+        // Because of use a different account, size is 4: two accounts, separator, add account
+        // button.
+        assertEquals("Incorrect item sheet count", 4, mSheetAccountItems.size());
+        testAccount(
+                mSheetAccountItems.get(0).model,
+                mNewUserAccount,
+                /* expectClickListener= */ true,
+                /* expectShowIdp= */ true);
+        testAccount(
+                mSheetAccountItems.get(1).model,
+                mAnaAccountWithUseDifferentAccount,
+                /* expectClickListener= */ true,
+                /* expectShowIdp= */ true);
+
+        View sheetContainer = mContentView.findViewById(R.id.sheet_item_list_container);
+        RecyclerView sheetItemListView = sheetContainer.findViewById(R.id.sheet_item_list);
+        assertEquals(4, sheetItemListView.getAdapter().getItemCount());
+
+        assertEquals(
+                AccountSelectionProperties.ITEM_TYPE_SEPARATOR,
+                sheetItemListView.getAdapter().getItemViewType(2));
+        View separator = sheetItemListView.getChildAt(2);
+        assertEquals(1, separator.getHeight());
+
+        assertEquals(
+                AccountSelectionProperties.ITEM_TYPE_LOGIN,
+                sheetItemListView.getAdapter().getItemViewType(3));
+        View addAccountButton = sheetItemListView.getChildAt(3);
+        assertEquals(addAccountButton.getAlpha(), 1.f, ALPHA_COMPARISON_DELTA);
+        TextView textView = addAccountButton.findViewById(R.id.title);
+        // The string should be specific for mIdpDataWithUseDifferentAccount.
+        assertEquals("Use your " + mTestEtldPlusOne2 + " account", textView.getText());
+        assertNotNull(addAccountButton.findViewById(R.id.start_icon));
+        assertNotNull(addAccountButton.findViewById(R.id.end_icon));
+
+        // Do not let test inputs be ignored.
+        mMediator.setComponentShowTime(-1000);
+        // Select the first account. It is new so it will require confirmation.
+        mSheetAccountItems
+                .get(0)
+                .model
+                .get(AccountProperties.ON_CLICK_LISTENER)
+                .onResult(new ButtonData(mNewUserAccount, /* idpMetadata= */ null));
+
+        // Dragbar no longer shown since only one account is being shown!
+        assertFalse(mModel.get(ItemProperties.DRAGBAR_HANDLE_VISIBLE));
+        headerModel = mModel.get(ItemProperties.HEADER);
+        assertEquals(HeaderType.SIGN_IN, headerModel.get(TYPE));
+        assertEquals(mTestEtldPlusOne, headerModel.get(RP_FOR_DISPLAY));
+        assertEquals(mTestEtldPlusOne2, headerModel.get(IDP_FOR_DISPLAY));
+        assertNotNull(headerModel.get(HEADER_ICON));
+        assertFalse(headerModel.get(IS_MULTIPLE_ACCOUNT_CHOOSER));
+        assertFalse(headerModel.get(IS_MULTIPLE_IDPS));
+        // Should show continue button with the single account.
+        assertEquals("Incorrect item sheet count", 1, mSheetAccountItems.size());
+        testAccount(
+                mSheetAccountItems.get(0).model,
+                mNewUserAccount,
+                /* expectClickListener= */ false,
+                /* expectShowIdp= */ false);
+
+        // Go back should show multiple IDP UI again.
+        pressBack();
+        assertFalse(mMediator.wasDismissed());
+        // Dragbar shown again since we should be back to the multi IDP dialog.
+        assertTrue(mModel.get(ItemProperties.DRAGBAR_HANDLE_VISIBLE));
+        headerModel = mModel.get(ItemProperties.HEADER);
+        assertEquals(HeaderType.SIGN_IN, headerModel.get(TYPE));
+        assertEquals(mTestEtldPlusOne, headerModel.get(RP_FOR_DISPLAY));
+        assertNull(headerModel.get(IDP_FOR_DISPLAY));
+        assertNull(headerModel.get(HEADER_ICON));
+        assertTrue(headerModel.get(IS_MULTIPLE_ACCOUNT_CHOOSER));
+        assertTrue(headerModel.get(IS_MULTIPLE_IDPS));
+        assertEquals("Incorrect item sheet count", 4, mSheetAccountItems.size());
+        testAccount(
+                mSheetAccountItems.get(0).model,
+                mNewUserAccount,
+                /* expectClickListener= */ true,
+                /* expectShowIdp= */ true);
+        testAccount(
+                mSheetAccountItems.get(1).model,
+                mAnaAccountWithUseDifferentAccount,
+                /* expectClickListener= */ true,
+                /* expectShowIdp= */ true);
+    }
+
+    @Test
+    public void testSingleIdentifierAccounts() {
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mSingleIdentifierAccount, mSingleIdentifierAccountFilteredOut),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+        RobolectricUtil.runAllBackgroundAndUi();
+
+        // Account chooser is shown.
+        assertEquals(HeaderType.SIGN_IN, mModel.get(ItemProperties.HEADER).get(TYPE));
+
+        assertEquals(2, mSheetAccountItems.size());
+        // First account has a click listener.
+        assertNotNull(mSheetAccountItems.get(0).model.get(AccountProperties.ON_CLICK_LISTENER));
+        // Second account is filtered out, so does not.
+        assertNull(mSheetAccountItems.get(1).model.get(AccountProperties.ON_CLICK_LISTENER));
+
+        View sheetContainer = mContentView.findViewById(R.id.sheet_item_list_container);
+        RecyclerView sheetItemListView = sheetContainer.findViewById(R.id.sheet_item_list);
+        assertEquals(2, sheetItemListView.getAdapter().getItemCount());
+
+        assertEquals(
+                AccountSelectionProperties.ITEM_TYPE_ACCOUNT,
+                sheetItemListView.getAdapter().getItemViewType(0));
+        View row = sheetItemListView.getChildAt(0);
+        assertEquals(row.getAlpha(), 1.f, ALPHA_COMPARISON_DELTA);
+        TextView textView = row.findViewById(R.id.title);
+        assertEquals("username", textView.getText());
+        textView = row.findViewById(R.id.description);
+        assertEquals("", textView.getText());
+        assertFalse(textView.isShown());
+
+        assertEquals(
+                AccountSelectionProperties.ITEM_TYPE_ACCOUNT,
+                sheetItemListView.getAdapter().getItemViewType(1));
+        row = sheetItemListView.getChildAt(1);
+        assertEquals(
+                row.getAlpha(),
+                AccountSelectionViewBinder.DISABLED_OPACITY,
+                ALPHA_COMPARISON_DELTA);
+        textView = row.findViewById(R.id.title);
+        assertEquals("username2", textView.getText());
+        textView = row.findViewById(R.id.description);
+        assertEquals("You can’t sign in using this account", textView.getText());
+    }
+
+    @Test
+    public void testSingleAccountWithSingleIdentifier() {
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mSingleIdentifierAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Arrays.asList(mSingleIdentifierAccount));
+        RobolectricUtil.runAllBackgroundAndUi();
+
+        if (mRpMode == RpMode.PASSIVE) {
+            // Account chooser is shown.
+            assertEquals(HeaderType.SIGN_IN, mModel.get(ItemProperties.HEADER).get(TYPE));
+
+            assertEquals(1, mSheetAccountItems.size());
+
+            View sheetContainer = mContentView.findViewById(R.id.sheet_item_list_container);
+            assertTrue(sheetContainer.isShown());
+            RecyclerView sheetItemListView = sheetContainer.findViewById(R.id.sheet_item_list);
+            assertEquals(1, sheetItemListView.getAdapter().getItemCount());
+
+            assertEquals(
+                    AccountSelectionProperties.ITEM_TYPE_ACCOUNT,
+                    sheetItemListView.getAdapter().getItemViewType(0));
+            View row = sheetItemListView.getChildAt(0);
+            assertEquals(row.getAlpha(), 1.f, ALPHA_COMPARISON_DELTA);
+            TextView textView = row.findViewById(R.id.title);
+            assertEquals("username", textView.getText());
+            textView = row.findViewById(R.id.description);
+            assertEquals("", textView.getText());
+            assertFalse(textView.isShown());
+        } else {
+            // Request permission is shown.
+            assertEquals(
+                    HeaderType.REQUEST_PERMISSION_MODAL,
+                    mModel.get(ItemProperties.HEADER).get(TYPE));
+
+            View accountChip = mContentView.findViewById(R.id.account_chip);
+            assertNotNull(accountChip);
+            assertTrue(accountChip.isShown());
+
+            TextView textView = accountChip.findViewById(R.id.description);
+            assertEquals("username", textView.getText());
+        }
+    }
+
+    @Test
+    public void testSetCanShowUi() {
+        when(mMockBottomSheetController.requestShowContent(any(), anyBoolean())).thenReturn(true);
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+        verify(mMockBottomSheetController, times(1)).requestShowContent(any(), eq(true));
+
+        // Setting can show UI to false hides content.
+        mMediator.setCanShowUi(false);
+        verify(mMockBottomSheetController, times(1)).hideContent(mBottomSheetContent, true);
+
+        // Setting can show UI to true shows content again.
+        when(mTab.isUserInteractable()).thenReturn(true);
+        mMediator.setCanShowUi(true);
+        verify(mMockBottomSheetController, times(2)).requestShowContent(mBottomSheetContent, true);
+    }
+
+    @Test
+    @EnableFeatures(BottomSheetFeatureMap.BOTTOM_SHEET_DEFER_CONTENT_SWAP_ON_HIDDEN)
+    public void testSheetStateHiddenIgnoresOtherSheetContent() {
+        when(mMockBottomSheetController.requestShowContent(any(), anyBoolean())).thenReturn(true);
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+
+        verify(mMockBottomSheetController).addObserver(mBottomSheetObserverCaptor.capture());
+        BottomSheetObserver observer = mBottomSheetObserverCaptor.getValue();
+
+        when(mMockBottomSheetController.getCurrentSheetContent())
+                .thenReturn(mOtherBottomSheetContent);
+        observer.onSheetStateChanged(
+                BottomSheetController.SheetState.HIDDEN,
+                BottomSheetController.StateChangeReason.SWIPE);
+        assertFalse(mMediator.wasDismissed());
+        verify(mMockDelegate, never()).onDismissed(anyInt());
+
+        when(mMockBottomSheetController.getCurrentSheetContent()).thenReturn(mBottomSheetContent);
+        observer.onSheetStateChanged(
+                BottomSheetController.SheetState.HIDDEN,
+                BottomSheetController.StateChangeReason.SWIPE);
+        assertTrue(mMediator.wasDismissed());
+        verify(mMockDelegate).onDismissed(IdentityRequestDialogDismissReason.SWIPE);
+    }
+
+    @Test
+    @EnableFeatures(BottomSheetFeatureMap.BOTTOM_SHEET_DEFER_CONTENT_SWAP_ON_HIDDEN)
+    public void testSheetStateHiddenIgnoresNullSheetContent() {
+        when(mMockBottomSheetController.requestShowContent(any(), anyBoolean())).thenReturn(true);
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+
+        verify(mMockBottomSheetController).addObserver(mBottomSheetObserverCaptor.capture());
+        BottomSheetObserver observer = mBottomSheetObserverCaptor.getValue();
+
+        when(mMockBottomSheetController.getCurrentSheetContent()).thenReturn(null);
+        observer.onSheetStateChanged(
+                BottomSheetController.SheetState.HIDDEN,
+                BottomSheetController.StateChangeReason.SWIPE);
+        assertFalse(mMediator.wasDismissed());
+        verify(mMockDelegate, never()).onDismissed(anyInt());
+    }
+
+    @Test
+    @EnableFeatures(BottomSheetFeatureMap.BOTTOM_SHEET_DEFER_CONTENT_SWAP_ON_HIDDEN)
+    public void testSheetStateHiddenDismissReasonsWhenDeferContentSwapEnabled() {
+        when(mMockBottomSheetController.requestShowContent(any(), anyBoolean())).thenReturn(true);
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+
+        verify(mMockBottomSheetController).addObserver(mBottomSheetObserverCaptor.capture());
+        BottomSheetObserver observer = mBottomSheetObserverCaptor.getValue();
+
+        when(mMockBottomSheetController.getCurrentSheetContent()).thenReturn(mBottomSheetContent);
+        observer.onSheetStateChanged(
+                BottomSheetController.SheetState.HIDDEN,
+                BottomSheetController.StateChangeReason.BACK_PRESS);
+        assertTrue(mMediator.wasDismissed());
+        verify(mMockDelegate).onDismissed(IdentityRequestDialogDismissReason.BACK_PRESS);
+    }
+
+    @Test
+    @EnableFeatures(BottomSheetFeatureMap.BOTTOM_SHEET_DEFER_CONTENT_SWAP_ON_HIDDEN)
+    public void testSheetStateHiddenReasonNoneDoesNotDismissWhenDeferContentSwapEnabled() {
+        when(mMockBottomSheetController.requestShowContent(any(), anyBoolean())).thenReturn(true);
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+
+        verify(mMockBottomSheetController).addObserver(mBottomSheetObserverCaptor.capture());
+        BottomSheetObserver observer = mBottomSheetObserverCaptor.getValue();
+
+        when(mMockBottomSheetController.getCurrentSheetContent()).thenReturn(mBottomSheetContent);
+        observer.onSheetStateChanged(
+                BottomSheetController.SheetState.HIDDEN,
+                BottomSheetController.StateChangeReason.NONE);
+        assertFalse(mMediator.wasDismissed());
+        verify(mMockDelegate, never()).onDismissed(anyInt());
+        verify(mMockBottomSheetController).hideContent(mBottomSheetContent, true);
+    }
+
+    @Test
+    @EnableFeatures(BottomSheetFeatureMap.BOTTOM_SHEET_DEFER_CONTENT_SWAP_ON_HIDDEN)
+    public void testSheetStateHiddenWhenAlreadyDismissedIsIgnored() {
+        when(mMockBottomSheetController.requestShowContent(any(), anyBoolean())).thenReturn(true);
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+
+        verify(mMockBottomSheetController).addObserver(mBottomSheetObserverCaptor.capture());
+        BottomSheetObserver observer = mBottomSheetObserverCaptor.getValue();
+
+        when(mMockBottomSheetController.getCurrentSheetContent()).thenReturn(mBottomSheetContent);
+        observer.onSheetStateChanged(
+                BottomSheetController.SheetState.HIDDEN,
+                BottomSheetController.StateChangeReason.SWIPE);
+        assertTrue(mMediator.wasDismissed());
+        verify(mMockDelegate, times(1)).onDismissed(IdentityRequestDialogDismissReason.SWIPE);
+
+        // A second HIDDEN invocation should be ignored because the mediator was already dismissed.
+        observer.onSheetStateChanged(
+                BottomSheetController.SheetState.HIDDEN,
+                BottomSheetController.StateChangeReason.SWIPE);
+        verify(mMockDelegate, times(1)).onDismissed(anyInt());
+    }
+
+    @Test
+    @DisableFeatures(BottomSheetFeatureMap.BOTTOM_SHEET_DEFER_CONTENT_SWAP_ON_HIDDEN)
+    public void testSheetStateHiddenIgnoresOtherSheetContentWhenDeferContentSwapDisabled() {
+        when(mMockBottomSheetController.requestShowContent(any(), anyBoolean())).thenReturn(true);
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+
+        verify(mMockBottomSheetController).addObserver(mBottomSheetObserverCaptor.capture());
+        BottomSheetObserver observer = mBottomSheetObserverCaptor.getValue();
+
+        observer.onSheetContentChanged(mOtherBottomSheetContent);
+        observer.onSheetStateChanged(
+                BottomSheetController.SheetState.HIDDEN,
+                BottomSheetController.StateChangeReason.SWIPE);
+        assertFalse(mMediator.wasDismissed());
+        verify(mMockDelegate, never()).onDismissed(anyInt());
+
+        // Without deferred content swap, the controller clears the current content before
+        // notifying observers of HIDDEN.
+        observer.onSheetContentChanged(mBottomSheetContent);
+        observer.onSheetContentChanged(null);
+        when(mMockBottomSheetController.getCurrentSheetContent()).thenReturn(null);
+        observer.onSheetStateChanged(
+                BottomSheetController.SheetState.HIDDEN,
+                BottomSheetController.StateChangeReason.SWIPE);
+        assertTrue(mMediator.wasDismissed());
+        verify(mMockDelegate).onDismissed(IdentityRequestDialogDismissReason.SWIPE);
+    }
+
+    @Test
+    @DisableFeatures(BottomSheetFeatureMap.BOTTOM_SHEET_DEFER_CONTENT_SWAP_ON_HIDDEN)
+    public void testSheetStateHiddenReasonNoneWhenDeferContentSwapDisabled() {
+        when(mMockBottomSheetController.requestShowContent(any(), anyBoolean())).thenReturn(true);
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+
+        verify(mMockBottomSheetController).addObserver(mBottomSheetObserverCaptor.capture());
+        BottomSheetObserver observer = mBottomSheetObserverCaptor.getValue();
+
+        observer.onSheetContentChanged(mBottomSheetContent);
+        observer.onSheetStateChanged(
+                BottomSheetController.SheetState.HIDDEN,
+                BottomSheetController.StateChangeReason.NONE);
+        assertFalse(mMediator.wasDismissed());
+        verify(mMockDelegate, never()).onDismissed(anyInt());
+        verify(mMockBottomSheetController).hideContent(mBottomSheetContent, true);
+    }
+
+    private void pressBack() {
+        if (mBottomSheetContent.handleBackPress()) return;
+
+        mMediator.onDismissed(IdentityRequestDialogDismissReason.OTHER);
     }
 }

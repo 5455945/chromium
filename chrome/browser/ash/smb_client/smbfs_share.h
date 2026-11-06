@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,31 +8,42 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/observer_list.h"
+#include "base/observer_list_types.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/smb_client/smb_errors.h"
 #include "chrome/browser/ash/smb_client/smb_url.h"
-#include "chromeos/components/smbfs/smbfs_host.h"
-#include "chromeos/components/smbfs/smbfs_mounter.h"
+#include "chromeos/ash/components/smbfs/smbfs_host.h"
+#include "chromeos/ash/components/smbfs/smbfs_mounter.h"
 
 class Profile;
 
-namespace ash {
-namespace smb_client {
+namespace ash::smb_client {
 
 // Represents an SMB share mounted using smbfs. Handles mounting, unmounting,
 // registration, and IPC communication with filesystem.
 // Destroying will unmount and deregister the filesystem.
 class SmbFsShare : public smbfs::SmbFsHost::Delegate {
  public:
+  class MountObserver : public base::CheckedObserver {
+   public:
+    ~MountObserver() override = default;
+
+    virtual void OnSmbFsMounted(const base::FilePath& mount_path,
+                                const std::string& display_name) {}
+    virtual void OnSmbFsUnmounted(const base::FilePath& mount_path) {}
+  };
+
   using KerberosOptions = smbfs::SmbFsMounter::KerberosOptions;
   using MountOptions = smbfs::SmbFsMounter::MountOptions;
   using MountCallback = base::OnceCallback<void(SmbMountResult)>;
-  using UnmountCallback = base::OnceCallback<void(chromeos::MountError)>;
+  using UnmountCallback = base::OnceCallback<void(MountError)>;
   using RemoveCredentialsCallback = base::OnceCallback<void(bool)>;
   using DeleteRecursivelyCallback = base::OnceCallback<void(base::File::Error)>;
   using MounterCreationCallback =
@@ -41,6 +52,9 @@ class SmbFsShare : public smbfs::SmbFsHost::Delegate {
           const std::string& mount_dir_name,
           const MountOptions& options,
           smbfs::SmbFsHost::Delegate* delegate)>;
+
+  void AddMountObserver(MountObserver* observer);
+  void RemoveMountObserver(MountObserver* observer);
 
   SmbFsShare(Profile* profile,
              const SmbUrl& share_url,
@@ -97,8 +111,7 @@ class SmbFsShare : public smbfs::SmbFsHost::Delegate {
                    std::unique_ptr<smbfs::SmbFsHost> smbfs_host);
 
   // Called after cros-disks has attempted to unmount the share.
-  void OnUnmountDone(SmbFsShare::UnmountCallback callback,
-                     chromeos::MountError result);
+  void OnUnmountDone(SmbFsShare::UnmountCallback callback, MountError result);
 
   // Callback for smb_dialog::SmbCredentialsDialog::Show().
   void OnSmbCredentialsDialogShowDone(RequestCredentialsCallback callback,
@@ -131,7 +144,7 @@ class SmbFsShare : public smbfs::SmbFsHost::Delegate {
   // Generate the input for stable mount ID hash (simplifies testing).
   std::string GenerateStableMountIdInput() const;
 
-  Profile* const profile_;
+  const raw_ptr<Profile> profile_;
   const SmbUrl share_url_;
   const std::string display_name_;
   MountOptions options_;
@@ -147,10 +160,11 @@ class SmbFsShare : public smbfs::SmbFsHost::Delegate {
   base::TimeTicks allow_credential_request_expiry_;
   bool allow_credential_request_ = false;
 
+  base::ObserverList<MountObserver> mount_observers_;
+
   base::WeakPtrFactory<SmbFsShare> weak_factory_{this};
 };
 
-}  // namespace smb_client
-}  // namespace ash
+}  // namespace ash::smb_client
 
 #endif  // CHROME_BROWSER_ASH_SMB_CLIENT_SMBFS_SHARE_H_

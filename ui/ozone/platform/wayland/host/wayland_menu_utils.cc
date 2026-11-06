@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,8 +15,8 @@ WaylandMenuUtils::WaylandMenuUtils(WaylandConnection* connection)
 WaylandMenuUtils::~WaylandMenuUtils() = default;
 
 int WaylandMenuUtils::GetCurrentKeyModifiers() const {
-  DCHECK(connection_);
-  DCHECK(connection_->event_source());
+  CHECK(connection_, base::NotFatalUntil::M163);
+  CHECK(connection_->event_source(), base::NotFatalUntil::M163);
   return connection_->event_source()->keyboard_modifiers();
 }
 

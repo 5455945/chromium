@@ -1,16 +1,17 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_EXTENSIONS_API_DOWNLOADS_DOWNLOADS_API_H_
 #define CHROME_BROWSER_EXTENSIONS_API_DOWNLOADS_DOWNLOADS_API_H_
 
+#include <deque>
 #include <memory>
 #include <set>
 #include <string>
 
 #include "base/files/file_path.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "chrome/browser/download/download_danger_prompt.h"
@@ -23,46 +24,16 @@
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_registry_observer.h"
 #include "extensions/browser/warning_set.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 class DownloadFileIconExtractor;
-class DownloadOpenPrompt;
 class Profile;
 
 // Functions in the chrome.downloads namespace facilitate
 // controlling downloads from extensions. See the full API doc at
-// http://goo.gl/6hO1n
-
-namespace download_extension_errors {
-
-// Errors that can be returned through chrome.runtime.lastError.message.
-extern const char kEmptyFile[];
-extern const char kFileAlreadyDeleted[];
-extern const char kFileNotRemoved[];
-extern const char kIconNotFound[];
-extern const char kInvalidDangerType[];
-extern const char kInvalidFilename[];
-extern const char kInvalidFilter[];
-extern const char kInvalidHeaderName[];
-extern const char kInvalidHeaderValue[];
-extern const char kInvalidHeaderUnsafe[];
-extern const char kInvalidId[];
-extern const char kInvalidOrderBy[];
-extern const char kInvalidQueryLimit[];
-extern const char kInvalidState[];
-extern const char kInvalidURL[];
-extern const char kInvisibleContext[];
-extern const char kNotComplete[];
-extern const char kNotDangerous[];
-extern const char kNotInProgress[];
-extern const char kNotResumable[];
-extern const char kOpenPermission[];
-extern const char kShelfDisabled[];
-extern const char kShelfPermission[];
-extern const char kTooManyListeners[];
-extern const char kUnexpectedDeterminer[];
-extern const char kUserGesture[];
-
-}  // namespace download_extension_errors
+// https://docs.google.com/document/d/12rNimeeGaA8jEV60PPKtT4pmJYmY9ae_edl3hJyoXYE/
 
 namespace extensions {
 
@@ -74,6 +45,9 @@ class DownloadedByExtension : public base::SupportsUserData::Data {
                         const std::string& id,
                         const std::string& name);
 
+  DownloadedByExtension(const DownloadedByExtension&) = delete;
+  DownloadedByExtension& operator=(const DownloadedByExtension&) = delete;
+
   const std::string& id() const { return id_; }
   const std::string& name() const { return name_; }
 
@@ -82,15 +56,37 @@ class DownloadedByExtension : public base::SupportsUserData::Data {
 
   std::string id_;
   std::string name_;
-
-  DISALLOW_COPY_AND_ASSIGN(DownloadedByExtension);
 };
 
-class DownloadsDownloadFunction : public ExtensionFunction {
+class DownloadsFunction : public ExtensionFunction {
+ public:
+  DownloadsFunction();
+
+  DownloadsFunction(const DownloadsFunction&) = delete;
+  DownloadsFunction& operator=(const DownloadsFunction&) = delete;
+
+  // ExtensionFunction:
+  ResponseAction Run() override;
+  void ExecuteFromQueue();
+  void OnManagerGoingDown();
+
+ protected:
+  ~DownloadsFunction() override;
+
+  // Subclasses should implement this instead of Run().
+  virtual ResponseAction RunInternal() = 0;
+};
+
+class DownloadsDownloadFunction : public DownloadsFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("downloads.download", DOWNLOADS_DOWNLOAD)
   DownloadsDownloadFunction();
-  ResponseAction Run() override;
+
+  DownloadsDownloadFunction(const DownloadsDownloadFunction&) = delete;
+  DownloadsDownloadFunction& operator=(const DownloadsDownloadFunction&) =
+      delete;
+
+  ResponseAction RunInternal() override;
 
  protected:
   ~DownloadsDownloadFunction() override;
@@ -101,102 +97,113 @@ class DownloadsDownloadFunction : public ExtensionFunction {
                      creator_conflict_action,
                  download::DownloadItem* item,
                  download::DownloadInterruptReason interrupt_reason);
-
-  DISALLOW_COPY_AND_ASSIGN(DownloadsDownloadFunction);
 };
 
-class DownloadsSearchFunction : public ExtensionFunction {
+class DownloadsSearchFunction : public DownloadsFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("downloads.search", DOWNLOADS_SEARCH)
   DownloadsSearchFunction();
-  ResponseAction Run() override;
+
+  DownloadsSearchFunction(const DownloadsSearchFunction&) = delete;
+  DownloadsSearchFunction& operator=(const DownloadsSearchFunction&) = delete;
+
+  ResponseAction RunInternal() override;
 
  protected:
   ~DownloadsSearchFunction() override;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(DownloadsSearchFunction);
 };
 
-class DownloadsPauseFunction : public ExtensionFunction {
+class DownloadsPauseFunction : public DownloadsFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("downloads.pause", DOWNLOADS_PAUSE)
   DownloadsPauseFunction();
-  ResponseAction Run() override;
+
+  DownloadsPauseFunction(const DownloadsPauseFunction&) = delete;
+  DownloadsPauseFunction& operator=(const DownloadsPauseFunction&) = delete;
+
+  ResponseAction RunInternal() override;
 
  protected:
   ~DownloadsPauseFunction() override;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(DownloadsPauseFunction);
 };
 
-class DownloadsResumeFunction : public ExtensionFunction {
+class DownloadsResumeFunction : public DownloadsFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("downloads.resume", DOWNLOADS_RESUME)
   DownloadsResumeFunction();
-  ResponseAction Run() override;
+
+  DownloadsResumeFunction(const DownloadsResumeFunction&) = delete;
+  DownloadsResumeFunction& operator=(const DownloadsResumeFunction&) = delete;
+
+  ResponseAction RunInternal() override;
 
  protected:
   ~DownloadsResumeFunction() override;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(DownloadsResumeFunction);
 };
 
-class DownloadsCancelFunction : public ExtensionFunction {
+class DownloadsCancelFunction : public DownloadsFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("downloads.cancel", DOWNLOADS_CANCEL)
   DownloadsCancelFunction();
-  ResponseAction Run() override;
+
+  DownloadsCancelFunction(const DownloadsCancelFunction&) = delete;
+  DownloadsCancelFunction& operator=(const DownloadsCancelFunction&) = delete;
+
+  ResponseAction RunInternal() override;
 
  protected:
   ~DownloadsCancelFunction() override;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(DownloadsCancelFunction);
 };
 
-class DownloadsEraseFunction : public ExtensionFunction {
+class DownloadsEraseFunction : public DownloadsFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("downloads.erase", DOWNLOADS_ERASE)
   DownloadsEraseFunction();
-  ResponseAction Run() override;
+
+  DownloadsEraseFunction(const DownloadsEraseFunction&) = delete;
+  DownloadsEraseFunction& operator=(const DownloadsEraseFunction&) = delete;
+
+  ResponseAction RunInternal() override;
 
  protected:
   ~DownloadsEraseFunction() override;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(DownloadsEraseFunction);
 };
 
-class DownloadsRemoveFileFunction : public ExtensionFunction {
+class DownloadsRemoveFileFunction : public DownloadsFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("downloads.removeFile", DOWNLOADS_REMOVEFILE)
   DownloadsRemoveFileFunction();
-  ResponseAction Run() override;
+
+  DownloadsRemoveFileFunction(const DownloadsRemoveFileFunction&) = delete;
+  DownloadsRemoveFileFunction& operator=(const DownloadsRemoveFileFunction&) =
+      delete;
+
+  ResponseAction RunInternal() override;
 
  protected:
   ~DownloadsRemoveFileFunction() override;
 
  private:
   void Done(bool success);
-
-  DISALLOW_COPY_AND_ASSIGN(DownloadsRemoveFileFunction);
 };
 
-class DownloadsAcceptDangerFunction : public ExtensionFunction {
+class DownloadsAcceptDangerFunction : public DownloadsFunction {
  public:
-  using OnPromptCreatedCallback =
-      base::OnceCallback<void(DownloadDangerPrompt*)>;
-  static void OnPromptCreatedForTesting(
-      OnPromptCreatedCallback* callback) {
-    on_prompt_created_ = callback;
-  }
-
   DECLARE_EXTENSION_FUNCTION("downloads.acceptDanger", DOWNLOADS_ACCEPTDANGER)
   DownloadsAcceptDangerFunction();
-  ResponseAction Run() override;
+
+  DownloadsAcceptDangerFunction(const DownloadsAcceptDangerFunction&) = delete;
+  DownloadsAcceptDangerFunction& operator=(
+      const DownloadsAcceptDangerFunction&) = delete;
+
+  ResponseAction RunInternal() override;
+
+  // Sets the action to take when a danger prompt is shown in tests. The
+  // returned AutoReset restores the previous value, which is an empty
+  // optional if it hasn't been set.
+  [[nodiscard]] static base::AutoReset<
+      std::optional<DownloadDangerPrompt::Action>>
+  TriggerDangerPromptActionForTesting(DownloadDangerPrompt::Action action);
 
  protected:
   ~DownloadsAcceptDangerFunction() override;
@@ -205,22 +212,20 @@ class DownloadsAcceptDangerFunction : public ExtensionFunction {
 
  private:
   void PromptOrWait(int download_id, int retries);
-
-  static OnPromptCreatedCallback* on_prompt_created_;
-  DISALLOW_COPY_AND_ASSIGN(DownloadsAcceptDangerFunction);
 };
 
-class DownloadsShowFunction : public ExtensionFunction {
+class DownloadsShowFunction : public DownloadsFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("downloads.show", DOWNLOADS_SHOW)
   DownloadsShowFunction();
-  ResponseAction Run() override;
+
+  DownloadsShowFunction(const DownloadsShowFunction&) = delete;
+  DownloadsShowFunction& operator=(const DownloadsShowFunction&) = delete;
+
+  ResponseAction RunInternal() override;
 
  protected:
   ~DownloadsShowFunction() override;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(DownloadsShowFunction);
 };
 
 class DownloadsShowDefaultFolderFunction : public ExtensionFunction {
@@ -228,57 +233,80 @@ class DownloadsShowDefaultFolderFunction : public ExtensionFunction {
   DECLARE_EXTENSION_FUNCTION(
       "downloads.showDefaultFolder", DOWNLOADS_SHOWDEFAULTFOLDER)
   DownloadsShowDefaultFolderFunction();
+
+  DownloadsShowDefaultFolderFunction(
+      const DownloadsShowDefaultFolderFunction&) = delete;
+  DownloadsShowDefaultFolderFunction& operator=(
+      const DownloadsShowDefaultFolderFunction&) = delete;
+
   ResponseAction Run() override;
 
  protected:
   ~DownloadsShowDefaultFolderFunction() override;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(DownloadsShowDefaultFolderFunction);
 };
 
-class DownloadsOpenFunction : public ExtensionFunction {
+class DownloadsOpenFunction : public DownloadsFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("downloads.open", DOWNLOADS_OPEN)
   DownloadsOpenFunction();
-  ResponseAction Run() override;
 
-  typedef base::OnceCallback<void(DownloadOpenPrompt*)> OnPromptCreatedCallback;
-  static void set_on_prompt_created_cb_for_testing(
-      OnPromptCreatedCallback* on_prompt_created_cb) {
-    on_prompt_created_cb_ = on_prompt_created_cb;
-  }
+  DownloadsOpenFunction(const DownloadsOpenFunction&) = delete;
+  DownloadsOpenFunction& operator=(const DownloadsOpenFunction&) = delete;
+
+  ResponseAction RunInternal() override;
+
+  [[nodiscard]] static base::AutoReset<bool> AcceptDialogForTesting();
 
  protected:
   ~DownloadsOpenFunction() override;
 
  private:
   void OpenPromptDone(int download_id, bool accept);
-
-  static OnPromptCreatedCallback* on_prompt_created_cb_;
-
-  DISALLOW_COPY_AND_ASSIGN(DownloadsOpenFunction);
 };
 
+// TODO(crbug.com/40858206): Remove this deprecated function.
 class DownloadsSetShelfEnabledFunction : public ExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("downloads.setShelfEnabled",
                              DOWNLOADS_SETSHELFENABLED)
   DownloadsSetShelfEnabledFunction();
+
+  DownloadsSetShelfEnabledFunction(const DownloadsSetShelfEnabledFunction&) =
+      delete;
+  DownloadsSetShelfEnabledFunction& operator=(
+      const DownloadsSetShelfEnabledFunction&) = delete;
+
   ResponseAction Run() override;
 
  protected:
   ~DownloadsSetShelfEnabledFunction() override;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(DownloadsSetShelfEnabledFunction);
 };
 
-class DownloadsGetFileIconFunction : public ExtensionFunction {
+class DownloadsSetUiOptionsFunction : public ExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("downloads.setUiOptions", DOWNLOADS_SETUIOPTIONS)
+  DownloadsSetUiOptionsFunction();
+
+  DownloadsSetUiOptionsFunction(const DownloadsSetUiOptionsFunction&) = delete;
+  DownloadsSetUiOptionsFunction& operator=(
+      const DownloadsSetUiOptionsFunction&) = delete;
+
+  ResponseAction Run() override;
+
+ protected:
+  ~DownloadsSetUiOptionsFunction() override;
+};
+
+class DownloadsGetFileIconFunction : public DownloadsFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("downloads.getFileIcon", DOWNLOADS_GETFILEICON)
   DownloadsGetFileIconFunction();
-  ResponseAction Run() override;
+
+  DownloadsGetFileIconFunction(const DownloadsGetFileIconFunction&) = delete;
+  DownloadsGetFileIconFunction& operator=(const DownloadsGetFileIconFunction&) =
+      delete;
+
+  ResponseAction RunInternal() override;
   void SetIconExtractorForTesting(DownloadFileIconExtractor* extractor);
 
  protected:
@@ -288,7 +316,6 @@ class DownloadsGetFileIconFunction : public ExtensionFunction {
   void OnIconURLExtracted(const std::string& url);
   base::FilePath path_;
   std::unique_ptr<DownloadFileIconExtractor> icon_extractor_;
-  DISALLOW_COPY_AND_ASSIGN(DownloadsGetFileIconFunction);
 };
 
 // Observes a single DownloadManager and many DownloadItems and dispatches
@@ -303,7 +330,7 @@ class ExtensionDownloadsEventRouter
       download::DownloadPathReservationTracker::FilenameConflictAction)>
       FilenameChangedCallback;
 
-  static void SetDetermineFilenameTimeoutSecondsForTesting(int s);
+  static void SetDetermineFilenameTimeoutForTesting(base::TimeDelta timeout);
 
   // The logic for how to handle conflicting filename suggestions from multiple
   // extensions is split out here for testing.
@@ -337,10 +364,17 @@ class ExtensionDownloadsEventRouter
 
   explicit ExtensionDownloadsEventRouter(
       Profile* profile, content::DownloadManager* manager);
+
+  ExtensionDownloadsEventRouter(const ExtensionDownloadsEventRouter&) = delete;
+  ExtensionDownloadsEventRouter& operator=(
+      const ExtensionDownloadsEventRouter&) = delete;
+
+  void QueuePendingFunction(scoped_refptr<DownloadsFunction> function);
+
   ~ExtensionDownloadsEventRouter() override;
 
-  void SetShelfEnabled(const extensions::Extension* extension, bool enabled);
-  bool IsShelfEnabled() const;
+  void SetUiEnabled(const extensions::Extension* extension, bool enabled);
+  bool IsUiEnabled() const;
 
   // Called by ChromeDownloadManagerDelegate during the filename determination
   // process, allows extensions to change the item's target filename. If no
@@ -361,6 +395,8 @@ class ExtensionDownloadsEventRouter
                          download::DownloadItem* download_item) override;
   void OnDownloadRemoved(content::DownloadManager* manager,
                          download::DownloadItem* download_item) override;
+  void OnManagerInitialized(content::DownloadManager* manager) override;
+  void OnManagerGoingDown(content::DownloadManager* manager) override;
 
   // extensions::EventRouter::Observer.
   void OnListenerRemoved(const extensions::EventListenerInfo& details) override;
@@ -372,16 +408,18 @@ class ExtensionDownloadsEventRouter
                      const std::string& event_name,
                      bool include_incognito,
                      Event::WillDispatchCallback will_dispatch_callback,
-                     std::unique_ptr<base::Value> json_arg);
+                     base::Value json_arg);
 
   // extensions::ExtensionRegistryObserver.
   void OnExtensionUnloaded(content::BrowserContext* browser_context,
                            const extensions::Extension* extension,
                            extensions::UnloadedExtensionReason reason) override;
 
-  Profile* profile_;
+  std::deque<scoped_refptr<DownloadsFunction>> pending_functions_;
+  raw_ptr<Profile> profile_;
   download::AllDownloadItemNotifier notifier_;
-  std::set<const extensions::Extension*> shelf_disabling_extensions_;
+  std::set<raw_ptr<const extensions::Extension, SetExperimental>>
+      ui_disabling_extensions_;
 
   base::Time last_checked_removal_;
 
@@ -389,8 +427,6 @@ class ExtensionDownloadsEventRouter
   base::ScopedObservation<extensions::ExtensionRegistry,
                           extensions::ExtensionRegistryObserver>
       extension_registry_observation_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ExtensionDownloadsEventRouter);
 };
 
 }  // namespace extensions

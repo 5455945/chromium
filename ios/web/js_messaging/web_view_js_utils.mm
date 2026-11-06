@@ -1,30 +1,32 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "ios/web/js_messaging/web_view_js_utils.h"
 
-#include <CoreFoundation/CoreFoundation.h>
+#import <CoreFoundation/CoreFoundation.h>
 #import <WebKit/WebKit.h>
 
-#include "base/logging.h"
-#include "base/mac/foundation_util.h"
-#include "base/notreached.h"
-#include "base/strings/sys_string_conversions.h"
-#include "base/values.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "base/apple/foundation_util.h"
+#import "base/debug/crash_logging.h"
+#import "base/location.h"
+#import "base/logging.h"
+#import "base/notreached.h"
+#import "base/strings/sys_string_conversions.h"
+#import "base/trace_event/interned_args_helper.h"
+#import "base/trace_event/trace_event.h"
+#import "base/trace_event/trace_id_helper.h"
+#import "base/values.h"
 
 namespace {
 
 // Converts result of WKWebView script evaluation to base::Value, parsing
-// |wk_result| up to a depth of |max_depth|.
+// `wk_result` up to a depth of `max_depth`.
 std::unique_ptr<base::Value> ValueResultFromWKResult(id wk_result,
                                                      int max_depth) {
-  if (!wk_result)
+  if (!wk_result) {
     return nullptr;
+  }
 
   std::unique_ptr<base::Value> result;
 
@@ -47,28 +49,83 @@ std::unique_ptr<base::Value> ValueResultFromWKResult(id wk_result,
     result = std::make_unique<base::Value>();
     DCHECK(result->is_none());
   } else if (result_type == CFDictionaryGetTypeID()) {
-    std::unique_ptr<base::DictionaryValue> dictionary =
-        std::make_unique<base::DictionaryValue>();
+    base::DictValue dictionary;
     for (id key in wk_result) {
-      NSString* obj_c_string = base::mac::ObjCCast<NSString>(key);
+      NSString* obj_c_string = base::apple::ObjCCast<NSString>(key);
       const std::string path = base::SysNSStringToUTF8(obj_c_string);
+      SCOPED_CRASH_KEY_STRING32("ScriptMessage", "path", path);
       std::unique_ptr<base::Value> value =
           ValueResultFromWKResult(wk_result[obj_c_string], max_depth - 1);
       if (value) {
-        dictionary->Set(path, std::move(value));
+        dictionary.SetByDottedPath(
+            path, base::Value::FromUniquePtrValue(std::move(value)));
       }
     }
-    result = std::move(dictionary);
+    result = std::make_unique<base::Value>(std::move(dictionary));
   } else if (result_type == CFArrayGetTypeID()) {
-    std::unique_ptr<base::ListValue> list = std::make_unique<base::ListValue>();
+    base::ListValue list;
     for (id list_item in wk_result) {
       std::unique_ptr<base::Value> value =
           ValueResultFromWKResult(list_item, max_depth - 1);
       if (value) {
-        list->Append(std::move(value));
+        list.Append(base::Value::FromUniquePtrValue(std::move(value)));
       }
     }
-    result = std::move(list);
+    result = std::make_unique<base::Value>(std::move(list));
+  } else {
+    NOTREACHED();  // Convert other types as needed.
+  }
+  return result;
+}
+
+// Converts base::Value to an equivalent Foundation object, parsing,
+// `value_result` up to a depth of `max_depth`.
+id NSObjectFromValueResult(const base::Value* value_result, int max_depth) {
+  if (!value_result) {
+    return nil;
+  }
+
+  id result = nil;
+
+  if (max_depth < 0) {
+    DLOG(WARNING) << "JS maximum recursion depth exceeded.";
+    return result;
+  }
+
+  if (value_result->is_string()) {
+    result = base::SysUTF8ToNSString(value_result->GetString());
+    DCHECK([result isKindOfClass:[NSString class]]);
+  } else if (value_result->is_int()) {
+    result = [NSNumber numberWithInt:value_result->GetInt()];
+    DCHECK([result isKindOfClass:[NSNumber class]]);
+  } else if (value_result->is_double()) {
+    result = [NSNumber numberWithDouble:value_result->GetDouble()];
+    DCHECK([result isKindOfClass:[NSNumber class]]);
+  } else if (value_result->is_bool()) {
+    result = [NSNumber numberWithBool:value_result->GetBool()];
+    DCHECK([result isKindOfClass:[NSNumber class]]);
+  } else if (value_result->is_none()) {
+    result = [NSNull null];
+    DCHECK([result isKindOfClass:[NSNull class]]);
+  } else if (value_result->is_dict()) {
+    NSMutableDictionary* dictionary = [[NSMutableDictionary alloc] init];
+    for (const auto pair : value_result->GetDict()) {
+      NSString* key = base::SysUTF8ToNSString(pair.first);
+      id wk_result = NSObjectFromValueResult(&pair.second, max_depth - 1);
+      if (wk_result) {
+        [dictionary setValue:wk_result forKey:key];
+      }
+    }
+    result = [dictionary copy];
+  } else if (value_result->is_list()) {
+    NSMutableArray* array = [[NSMutableArray alloc] init];
+    for (const base::Value& value : value_result->GetList()) {
+      id wk_result = NSObjectFromValueResult(&value, max_depth - 1);
+      if (wk_result) {
+        [array addObject:wk_result];
+      }
+    }
+    result = [array copy];
   } else {
     NOTREACHED();  // Convert other types as needed.
   }
@@ -95,60 +152,164 @@ void NotifyCompletionHandlerNullWebView(void (^completion_handler)(id,
 namespace web {
 
 NSString* const kJSEvaluationErrorDomain = @"JSEvaluationError";
-int const kMaximumParsingRecursionDepth = 10;
+// Corresponds to the mojom recursion depth defined in
+// mojo/public/cpp/bindings/lib/validation_context.h.
+int const kMaximumParsingRecursionDepth = 200;
 
 std::unique_ptr<base::Value> ValueResultFromWKResult(id wk_result) {
   return ::ValueResultFromWKResult(wk_result, kMaximumParsingRecursionDepth);
 }
 
+id NSObjectFromValueResult(const base::Value* value_result) {
+  return ::NSObjectFromValueResult(value_result, kMaximumParsingRecursionDepth);
+}
+
+id NSDictionaryFromValue(const base::DictValue& dict) {
+  NSMutableDictionary* dictionary = [[NSMutableDictionary alloc] init];
+
+  for (const auto pair : dict) {
+    NSString* key = base::SysUTF8ToNSString(pair.first);
+    id wk_result =
+        ::NSObjectFromValueResult(&pair.second, kMaximumParsingRecursionDepth);
+    if (wk_result) {
+      [dictionary setValue:wk_result forKey:key];
+    }
+  }
+  return dictionary;
+}
+
 void ExecuteJavaScript(WKWebView* web_view,
                        NSString* script,
-                       void (^completion_handler)(id, NSError*)) {
+                       void (^completion_handler)(id, NSError*),
+                       const base::Location& location) {
   DCHECK([script length]);
-  if (!web_view && completion_handler) {
-    NotifyCompletionHandlerNullWebView(completion_handler);
+
+  if (!web_view) {
+    if (completion_handler) {
+      NotifyCompletionHandlerNullWebView(completion_handler);
+    }
     return;
   }
 
-  [web_view evaluateJavaScript:script completionHandler:completion_handler];
+  uint64_t trace_id = base::trace_event::GetNextGlobalTraceId();
+
+  void (^wrapped_handler)(id, NSError*) = ^(id result, NSError* error) {
+    TRACE_EVENT_END("webkit",
+                    perfetto::NamedTrack("Script Execution", trace_id));
+    if (completion_handler) {
+      TRACE_EVENT("webkit", "ExecuteJavaScript Completion Handler");
+      completion_handler(result, error);
+    }
+  };
+  TRACE_EVENT_BEGIN(
+      "webkit", "ExecuteJavaScript",
+      perfetto::NamedTrack("Script Execution", trace_id),
+      [&](perfetto::EventContext ctx) {
+        ctx.event()->set_source_location_iid(
+            base::trace_event::InternedSourceLocation::Get(&ctx, location));
+      });
+  [web_view evaluateJavaScript:script completionHandler:wrapped_handler];
 }
 
-#if defined(__IPHONE_14_0) && __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_14_0
 void ExecuteJavaScript(WKWebView* web_view,
                        WKContentWorld* content_world,
                        WKFrameInfo* frame_info,
                        NSString* script,
-                       void (^completion_handler)(id, NSError*))
-    API_AVAILABLE(ios(14.0)) {
-  if (!content_world && !frame_info) {
-    // The -[WKWebView evaluateJavaScript:inFrame:inContentWorld:
-    // completionHandler:] API requires a content_world. However, if no specific
-    // world or frame is specified, this implies executing the JavaScript in the
-    // main frame of the page content world and can be executed.
-    ExecuteJavaScript(web_view, script, completion_handler);
+                       void (^completion_handler)(id, NSError*),
+                       const base::Location& location) {
+  DCHECK(content_world);
+  // `frame_info` is required to ensure `script` is executed on the correct
+  // webpage. This works because a `frame_info` instance is associated with a
+  // particular loaded webpage/navigation and the script execution will only
+  // happen in the web view if the current frame_info matches.
+  DCHECK(frame_info);
+
+  DCHECK([script length] > 0);
+
+  if (!web_view) {
+    if (completion_handler) {
+      NotifyCompletionHandlerNullWebView(completion_handler);
+    }
     return;
   }
 
-  DCHECK([script length] > 0);
+  uint64_t trace_id = base::trace_event::GetNextGlobalTraceId();
+
+  void (^wrapped_handler)(id, NSError*) = ^(id result, NSError* error) {
+    TRACE_EVENT_END("webkit",
+                    perfetto::NamedTrack("Script Execution", trace_id));
+    if (completion_handler) {
+      TRACE_EVENT("webkit", "ExecuteJavaScript completion_handler");
+      completion_handler(result, error);
+    }
+  };
+  TRACE_EVENT_BEGIN(
+      "webkit", "ExecuteJavaScript",
+      perfetto::NamedTrack("Script Execution", trace_id),
+      [&](perfetto::EventContext ctx) {
+        ctx.event()->set_source_location_iid(
+            base::trace_event::InternedSourceLocation::Get(&ctx, location));
+      });
+  [web_view evaluateJavaScript:script
+                       inFrame:frame_info
+                inContentWorld:content_world
+             completionHandler:wrapped_handler];
+}
+
+void ExecuteAsyncJavaScript(WKWebView* web_view,
+                            WKContentWorld* content_world,
+                            WKFrameInfo* frame_info,
+                            NSString* script,
+                            NSDictionary<NSString*, id>* arguments,
+                            void (^completion_handler)(id, NSError*),
+                            const base::Location& location) {
   DCHECK(content_world);
+  // `frame_info` is required to ensure `script` is executed on the correct
+  // webpage. This works because a `frame_info` instance is associated with a
+  // particular loaded webpage/navigation and the script execution will only
+  // happen in the web view if the current frame_info matches.
+  DCHECK(frame_info);
+
+  DCHECK([script length] > 0);
   if (!web_view && completion_handler) {
     NotifyCompletionHandlerNullWebView(completion_handler);
     return;
   }
 
-  // If |content_world| is not the page world, a |frame_info| must be specified.
-  // |frame_info| is required to ensure |script| is executed on the correct
-  // webpage.
-  // NOTE: The page content world uses windowID to ensure that |script| is being
-  // executed on the intended page. Both windowID and |frame_info| are
-  // associated with the loaded page and are destroyed on navigation.
-  DCHECK(content_world == WKContentWorld.pageWorld || frame_info);
+  uint64_t trace_id = base::trace_event::GetNextGlobalTraceId();
+
+  void (^wrapped_handler)(id, NSError*) = ^(id result, NSError* error) {
+    TRACE_EVENT_END("webkit",
+                    perfetto::NamedTrack("Script Execution", trace_id));
+    if (completion_handler) {
+      TRACE_EVENT("webkit", "ExecuteAsyncJavaScript completion_handler");
+      completion_handler(result, error);
+    }
+  };
+  TRACE_EVENT_BEGIN(
+      "webkit", "ExecuteAsyncJavaScript",
+      perfetto::NamedTrack("Script Execution", trace_id),
+      [&](perfetto::EventContext ctx) {
+        ctx.event()->set_source_location_iid(
+            base::trace_event::InternedSourceLocation::Get(&ctx, location));
+      });
+  [web_view callAsyncJavaScript:script
+                      arguments:arguments
+                        inFrame:frame_info
+                 inContentWorld:content_world
+              completionHandler:wrapped_handler];
+}
+
+void RegisterExistingFrames(WKWebView* web_view,
+                            WKContentWorld* content_world) {
+  DCHECK(content_world);
+
+  NSString* script = @"__gCrWeb.getExistingFrames();";
 
   [web_view evaluateJavaScript:script
-                       inFrame:frame_info
+                       inFrame:nil
                 inContentWorld:content_world
-             completionHandler:completion_handler];
+             completionHandler:nil];
 }
-#endif  // defined(__IPHONE14_0)
 
 }  // namespace web

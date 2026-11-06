@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/auto_reset.h"
 #include "base/memory/singleton.h"
 #include "base/observer_list.h"
 
@@ -25,9 +25,13 @@ class KeepAliveStateObserver;
 // Note: BrowserProcessImpl registers to react on changes.
 // TestingBrowserProcess does not do it, meaning that the shutdown
 // sequence does not happen during unit tests.
+// Note: This is not thread-safe, and should only be used on the main thread.
 class KeepAliveRegistry {
  public:
   static KeepAliveRegistry* GetInstance();
+
+  KeepAliveRegistry(const KeepAliveRegistry&) = delete;
+  KeepAliveRegistry& operator=(const KeepAliveRegistry&) = delete;
 
   // Methods to query the state of the registry.
   bool IsKeepingAlive() const;
@@ -47,6 +51,20 @@ class KeepAliveRegistry {
   bool IsShuttingDown() const;
   // Call when shutting down to ensure registering a new KeepAlive CHECKs.
   void SetIsShuttingDown(bool value = true);
+
+  // True if restarting is in progress.
+  bool IsRestarting() const;
+
+  // Sets the restarting flag permanently. Use in production code where the
+  // process is about to exit and the flag should stay set.
+  // Called when restarting is triggered.
+  void SetRestarting();
+
+  // Sets the restarting flag and returns a scoped resetter. The flag
+  // remains true as long as the returned AutoReset is alive; when it
+  // is destroyed the flag resets to false. Use in tests so that
+  // is_restarting_ is automatically cleaned up at end of test scope.
+  [[nodiscard]] base::AutoReset<bool> SetRestartingScopedForTesting();
 
  private:
   friend struct base::DefaultSingletonTraits<KeepAliveRegistry>;
@@ -76,8 +94,14 @@ class KeepAliveRegistry {
   void OnKeepAliveStateChanged(bool new_keeping_alive);
   void OnRestartAllowedChanged(bool new_restart_allowed);
 
-  // Unregisters one occurrence of the provided |origin| from |keep_alive_map|
+  // Unregisters one occurrence of the provided `origin` from `keep_alive_map`.
   void DecrementCount(KeepAliveOrigin origin, OriginMap* keep_alive_map);
+
+  // Mirrors the registry state into the "keep_alive_registry" crash key so
+  // hang/watchdog dumps taken from other threads carry the set of live
+  // KeepAlives (the registry itself is main-thread-only). Cleared when no
+  // KeepAlives remain.
+  void UpdateCrashKey();
 
   // Tracks the registered KeepAlives, storing the origin and the number of
   // registered KeepAlives for each.
@@ -97,9 +121,10 @@ class KeepAliveRegistry {
   // Used to guard against registering during shutdown.
   bool is_shutting_down_ = false;
 
-  base::ObserverList<KeepAliveStateObserver>::Unchecked observers_;
+  // Used to handle KeepAliveRestartOption::ENABLED.
+  bool is_restarting_ = false;
 
-  DISALLOW_COPY_AND_ASSIGN(KeepAliveRegistry);
+  base::ObserverList<KeepAliveStateObserver>::Unchecked observers_;
 };
 
 #endif  // COMPONENTS_KEEP_ALIVE_REGISTRY_KEEP_ALIVE_REGISTRY_H_

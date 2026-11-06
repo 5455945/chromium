@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,12 @@
 
 #include <utility>
 
-#include "android_webview/browser_jni_headers/AwDevToolsServer_jni.h"
-#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
-#include "base/strings/stringprintf.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "base/values.h"
 #include "content/public/browser/android/devtools_auth.h"
 #include "content/public/browser/devtools_agent_host.h"
@@ -22,7 +21,10 @@
 #include "net/socket/tcp_server_socket.h"
 #include "net/socket/unix_domain_server_socket_posix.h"
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "android_webview/browser_jni_headers/AwDevToolsServer_jni.h"
+
+using base::android::JavaRef;
 using content::DevToolsAgentHost;
 
 namespace {
@@ -30,13 +32,19 @@ namespace {
 const char kSocketNameFormat[] = "webview_devtools_remote_%d";
 const char kTetheringSocketName[] = "webview_devtools_tethering_%d_%d";
 
-const int kBackLog = 10;
+const int kBackLog = 4096;
+
+bool g_is_debugging_started_ = false;
 
 // Factory for UnixDomainServerSocket.
 class UnixDomainServerSocketFactory : public content::DevToolsSocketFactory {
  public:
   explicit UnixDomainServerSocketFactory(const std::string& socket_name)
       : socket_name_(socket_name), last_tethering_socket_(0) {}
+
+  UnixDomainServerSocketFactory(const UnixDomainServerSocketFactory&) = delete;
+  UnixDomainServerSocketFactory& operator=(
+      const UnixDomainServerSocketFactory&) = delete;
 
  private:
   // content::DevToolsAgentHost::ServerSocketFactory.
@@ -67,14 +75,15 @@ class UnixDomainServerSocketFactory : public content::DevToolsSocketFactory {
 
   std::string socket_name_;
   int last_tethering_socket_;
-
-  DISALLOW_COPY_AND_ASSIGN(UnixDomainServerSocketFactory);
 };
 
 class TCPServerSocketFactory : public content::DevToolsSocketFactory {
  public:
   TCPServerSocketFactory(const std::string& address, uint16_t port)
       : address_(address), port_(port) {}
+
+  TCPServerSocketFactory(const TCPServerSocketFactory&) = delete;
+  TCPServerSocketFactory& operator=(const TCPServerSocketFactory&) = delete;
 
  private:
   // content::DevToolsSocketFactory.
@@ -95,8 +104,6 @@ class TCPServerSocketFactory : public content::DevToolsSocketFactory {
 
   std::string address_;
   uint16_t port_;
-
-  DISALLOW_COPY_AND_ASSIGN(TCPServerSocketFactory);
 };
 
 std::unique_ptr<content::DevToolsSocketFactory> CreateSocketFactory() {
@@ -124,56 +131,34 @@ std::unique_ptr<content::DevToolsSocketFactory> CreateSocketFactory() {
 
 namespace android_webview {
 
-AwDevToolsServer::AwDevToolsServer() : is_started_(false) {}
-
-AwDevToolsServer::~AwDevToolsServer() {
-  Stop();
-}
-
-void AwDevToolsServer::Start() {
-  if (is_started_)
+void StartAwDevToolsServer() {
+  if (g_is_debugging_started_) {
     return;
-  is_started_ = true;
+  }
+  g_is_debugging_started_ = true;
 
   DevToolsAgentHost::StartRemoteDebuggingServer(
       CreateSocketFactory(), base::FilePath(), base::FilePath());
 }
 
-void AwDevToolsServer::Stop() {
+void StopAwDevToolsServer() {
   DevToolsAgentHost::StopRemoteDebuggingServer();
-  is_started_ = false;
+  g_is_debugging_started_ = false;
 }
 
-bool AwDevToolsServer::IsStarted() const {
-  return is_started_;
+bool IsAwDevToolsServerStarted() {
+  return g_is_debugging_started_;
 }
 
-static jlong JNI_AwDevToolsServer_InitRemoteDebugging(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& obj) {
-  AwDevToolsServer* server = new AwDevToolsServer();
-  return reinterpret_cast<intptr_t>(server);
-}
-
-static void JNI_AwDevToolsServer_DestroyRemoteDebugging(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& obj,
-    jlong server) {
-  delete reinterpret_cast<AwDevToolsServer*>(server);
-}
-
-static void JNI_AwDevToolsServer_SetRemoteDebuggingEnabled(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& obj,
-    jlong server,
-    jboolean enabled) {
-  AwDevToolsServer* devtools_server =
-      reinterpret_cast<AwDevToolsServer*>(server);
+static void JNI_AwDevToolsServer_SetRemoteDebuggingEnabled(JNIEnv* env,
+                                                           bool enabled) {
   if (enabled) {
-    devtools_server->Start();
+    StartAwDevToolsServer();
   } else {
-    devtools_server->Stop();
+    StopAwDevToolsServer();
   }
 }
 
 }  // namespace android_webview
+
+DEFINE_JNI(AwDevToolsServer)

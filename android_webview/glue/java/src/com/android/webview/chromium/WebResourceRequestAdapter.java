@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,11 @@ package com.android.webview.chromium;
 import android.net.Uri;
 import android.webkit.WebResourceRequest;
 
-import org.chromium.android_webview.AwContentsClient.AwWebResourceRequest;
+import org.chromium.android_webview.AwWebResourceRequest;
 
 import java.util.Map;
 
-/**
- * Adapter between WebResourceRequest and AwWebResourceRequest.
- */
+/** Adapter between WebResourceRequest and AwWebResourceRequest. */
 public class WebResourceRequestAdapter implements WebResourceRequest {
     private final AwWebResourceRequest mRequest;
 
@@ -27,31 +25,31 @@ public class WebResourceRequestAdapter implements WebResourceRequest {
 
     @Override
     public Uri getUrl() {
-        return Uri.parse(mRequest.url);
+        return Uri.parse(mRequest.getUrl());
     }
 
     @Override
     public boolean isForMainFrame() {
-        return mRequest.isMainFrame;
+        return mRequest.isOutermostMainFrame();
     }
 
     @Override
     public boolean hasGesture() {
-        return mRequest.hasUserGesture;
+        return mRequest.hasUserGesture();
     }
 
     @Override
     public String getMethod() {
-        return mRequest.method;
+        return mRequest.getMethod();
     }
 
     @Override
     public Map<String, String> getRequestHeaders() {
-        return mRequest.requestHeaders;
+        return mRequest.getRequestHeaders();
     }
 
     @Override
     public boolean isRedirect() {
-        return mRequest.isRedirect;
+        return mRequest.isRedirect();
     }
 }

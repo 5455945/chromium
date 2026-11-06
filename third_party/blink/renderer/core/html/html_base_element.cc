@@ -36,10 +36,13 @@ HTMLBaseElement::HTMLBaseElement(Document& document)
 void HTMLBaseElement::ParseAttribute(
     const AttributeModificationParams& params) {
   if (params.name == html_names::kHrefAttr ||
-      params.name == html_names::kTargetAttr)
-    GetDocument().ProcessBaseElement();
-  else
+      params.name == html_names::kTargetAttr) {
+    if (IsInDocumentTree()) {
+      GetDocument().ProcessBaseElement();
+    }
+  } else {
     HTMLElement::ParseAttribute(params);
+  }
 }
 
 Node::InsertionNotificationRequest HTMLBaseElement::InsertedInto(
@@ -61,7 +64,7 @@ bool HTMLBaseElement::IsURLAttribute(const Attribute& attribute) const {
          HTMLElement::IsURLAttribute(attribute);
 }
 
-KURL HTMLBaseElement::href() const {
+String HTMLBaseElement::href() const {
   // This does not use the GetURLAttribute function because that will resolve
   // relative to the document's base URL; base elements like this one can be
   // used to set that base URL. Thus we need to resolve relative to the
@@ -72,15 +75,18 @@ KURL HTMLBaseElement::href() const {
   if (attribute_value.IsNull())
     return GetDocument().Url();
 
-  KURL url = GetDocument().Encoding().IsValid()
-                 ? KURL(GetDocument().FallbackBaseURL(),
-                        StripLeadingAndTrailingHTMLSpaces(attribute_value))
-                 : KURL(GetDocument().FallbackBaseURL(),
-                        StripLeadingAndTrailingHTMLSpaces(attribute_value),
-                        GetDocument().Encoding());
+  auto stripped_attribute_value =
+      StripLeadingAndTrailingHtmlSpaces(attribute_value);
 
-  if (!url.IsValid())
-    return KURL();
+  KURL url =
+      GetDocument().Encoding().IsValid()
+          ? KURL(GetDocument().FallbackBaseURL(), stripped_attribute_value)
+          : KURL(GetDocument().FallbackBaseURL(), stripped_attribute_value,
+                 GetDocument().Encoding());
+
+  if (!url.IsValid()) {
+    return stripped_attribute_value.ToString();
+  }
 
   return url;
 }

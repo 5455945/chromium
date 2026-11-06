@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,10 +11,11 @@
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/values.h"
 #include "components/url_matcher/url_matcher.h"
-#include "extensions/common/event_filtering_info.h"
 #include "extensions/common/event_matcher.h"
+#include "extensions/common/mojom/event_dispatcher.mojom-forward.h"
 
 namespace extensions {
 
@@ -23,8 +24,12 @@ namespace extensions {
 // passed a matching event.
 class EventFilter {
  public:
-  typedef int MatcherID;
+  using MatcherID = int;
   EventFilter();
+
+  EventFilter(const EventFilter&) = delete;
+  EventFilter& operator=(const EventFilter&) = delete;
+
   ~EventFilter();
 
   // Adds an event matcher that will be used in calls to MatchEvent(). Returns
@@ -35,36 +40,53 @@ class EventFilter {
   // Retrieve the EventMatcher with the given id.
   EventMatcher* GetEventMatcher(MatcherID id);
 
-  // Retrieve the name of the event that the EventMatcher specified by |id| is
+  // Retrieve the name of the event that the EventMatcher specified by `id` is
   // referring to.
   const std::string& GetEventName(MatcherID id) const;
 
   // Removes an event matcher, returning the name of the event that it was for.
-  std::string RemoveEventMatcher(MatcherID id);
+  // If `condition_sets_for_bulk_removal` is non-null, the
+  // `MatcherStringPattern::ID`s are appended to
+  // `condition_sets_for_bulk_removal` and should be unregistered in batch via
+  // `URLMatcher::RemoveConditionSets()`.
+  std::string RemoveEventMatcher(MatcherID id,
+                                 std::vector<base::MatcherStringPattern::ID>*
+                                     condition_sets_for_bulk_removal);
 
-  // Match an event named |event_name| with filtering info |event_info| against
+  // Removes all event matchers in `ids`.
+  void RemoveEventMatchers(const std::vector<MatcherID>& ids);
+
+  // Match an event named `event_name` with filtering info `event_info` against
   // our set of event matchers. Returns a set of ids that correspond to the
   // event matchers that matched the event.
   // TODO(koz): Add a std::string* parameter for retrieving error messages.
   std::set<MatcherID> MatchEvent(const std::string& event_name,
-                                 const EventFilteringInfo& event_info,
+                                 const mojom::EventFilteringInfo& event_info,
                                  int routing_id) const;
 
   int GetMatcherCountForEventForTesting(const std::string& event_name) const;
 
   bool IsURLMatcherEmptyForTesting() const { return url_matcher_.IsEmpty(); }
 
+  size_t GetConditionSetIdToEventMatcherIdMapSizeForTesting() const {
+    return condition_set_id_to_event_matcher_id_.size();
+  }
+
  private:
   class EventMatcherEntry {
    public:
-    // Adds |condition_sets| to |url_matcher| on construction and removes them
-    // again on destruction. |condition_sets| should be the
+    // Adds `condition_sets` to `url_matcher` on construction and removes them
+    // again on destruction. `condition_sets` should be the
     // URLMatcherConditionSets that match the URL constraints specified by
-    // |event_matcher|.
+    // `event_matcher`.
     EventMatcherEntry(
         std::unique_ptr<EventMatcher> event_matcher,
         url_matcher::URLMatcher* url_matcher,
         const url_matcher::URLMatcherConditionSet::Vector& condition_sets);
+
+    EventMatcherEntry(const EventMatcherEntry&) = delete;
+    EventMatcherEntry& operator=(const EventMatcherEntry&) = delete;
+
     ~EventMatcherEntry();
 
     // Prevents the removal of condition sets when this class is destroyed. We
@@ -73,17 +95,18 @@ class EventFilter {
     // and clean them up anyway.
     void DontRemoveConditionSetsInDestructor();
 
-    EventMatcher* event_matcher() {
-      return event_matcher_.get();
+    EventMatcher* event_matcher() { return event_matcher_.get(); }
+
+    const std::vector<base::MatcherStringPattern::ID>& condition_set_ids()
+        const {
+      return condition_set_ids_;
     }
 
    private:
     std::unique_ptr<EventMatcher> event_matcher_;
-    // The id sets in |url_matcher_| that this EventMatcher owns.
-    std::vector<url_matcher::URLMatcherConditionSet::ID> condition_set_ids_;
-    url_matcher::URLMatcher* url_matcher_;
-
-    DISALLOW_COPY_AND_ASSIGN(EventMatcherEntry);
+    // The id sets in `url_matcher_` that this EventMatcher owns.
+    std::vector<base::MatcherStringPattern::ID> condition_set_ids_;
+    raw_ptr<url_matcher::URLMatcher> url_matcher_;
   };
 
   // Maps from a matcher id to an event matcher entry.
@@ -93,13 +116,13 @@ class EventFilter {
   // Maps from event name to the map of matchers that are registered for it.
   using EventMatcherMultiMap = std::map<std::string, EventMatcherMap>;
 
-  // Adds the list of URL filters in |matcher| to the URL matcher.
+  // Adds the list of URL filters in `matcher` to the URL matcher.
   bool CreateConditionSets(
       EventMatcher* matcher,
       url_matcher::URLMatcherConditionSet::Vector* condition_sets);
 
   bool AddDictionaryAsConditionSet(
-      base::DictionaryValue* url_filter,
+      const base::DictValue& url_filter,
       url_matcher::URLMatcherConditionSet::Vector* condition_sets);
 
   url_matcher::URLMatcher url_matcher_;
@@ -109,18 +132,16 @@ class EventFilter {
   MatcherID next_id_;
 
   // The next id to assign to a condition set passed to URLMatcher.
-  url_matcher::URLMatcherConditionSet::ID next_condition_set_id_;
+  base::MatcherStringPattern::ID next_condition_set_id_;
 
   // Maps condition set ids, which URLMatcher operates in, to event matcher
   // ids, which the interface to this class operates in. As each EventFilter
   // can specify many condition sets this is a many to one relationship.
-  std::map<url_matcher::URLMatcherConditionSet::ID, MatcherID>
+  std::map<base::MatcherStringPattern::ID, MatcherID>
       condition_set_id_to_event_matcher_id_;
 
   // Maps from event matcher ids to the name of the event they match on.
   std::map<MatcherID, std::string> id_to_event_name_;
-
-  DISALLOW_COPY_AND_ASSIGN(EventFilter);
 };
 
 }  // namespace extensions

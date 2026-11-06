@@ -1,4 +1,4 @@
-// Copyright (c) 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,28 @@
 
 #include <string>
 
-#include "base/macros.h"
+#include "base/auto_reset.h"
+#include "build/build_config.h"
+#include "content/common/content_export.h"
 #include "content/public/browser/tts_controller.h"
 #include "content/public/browser/tts_platform.h"
 
 namespace content {
 
+#if BUILDFLAG(IS_LINUX)
+// Overrides the library path captured when the Linux TTS singleton is created.
+// Must be called before TtsPlatform::GetInstance().
+CONTENT_EXPORT base::AutoReset<std::string>
+SetSpeechDispatcherLibraryPathForTesting(const std::string& library_path);
+#endif
+
 // Abstract platform implementation.
 class TtsPlatformImpl : public TtsPlatform {
  public:
   static TtsPlatformImpl* GetInstance();
+
+  TtsPlatformImpl(const TtsPlatformImpl&) = delete;
+  TtsPlatformImpl& operator=(const TtsPlatformImpl&) = delete;
 
   // TtsPlatform overrides.
   void LoadBuiltInTtsEngine(BrowserContext* browser_context) override;
@@ -26,7 +38,8 @@ class TtsPlatformImpl : public TtsPlatform {
   void ClearError() override;
   void SetError(const std::string& error) override;
   void Shutdown() override;
-  bool PreferEngineDelegateVoices() override;
+  void FinalizeVoiceOrdering(std::vector<VoiceData>& voices) override;
+  void RefreshVoices() override {}
 
  protected:
   TtsPlatformImpl() {}
@@ -36,8 +49,6 @@ class TtsPlatformImpl : public TtsPlatform {
   virtual ~TtsPlatformImpl() {}
 
   std::string error_;
-
-  DISALLOW_COPY_AND_ASSIGN(TtsPlatformImpl);
 };
 
 }  // namespace content

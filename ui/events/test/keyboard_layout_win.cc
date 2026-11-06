@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,6 +18,8 @@ namespace ui {
 // https://msdn.microsoft.com/en-us/library/windows/desktop/dd318693(v=vs.85).aspx
 PlatformKeyboardLayout GetPlatformKeyboardLayout(KeyboardLayout layout) {
   switch (layout) {
+    case KEYBOARD_LAYOUT_ARABIC:
+      return LoadKeyboardLayout(L"00000401", KLF_ACTIVATE);
     case KEYBOARD_LAYOUT_ENGLISH_US:
       return LoadKeyboardLayout(L"00000409", KLF_ACTIVATE);
     case KEYBOARD_LAYOUT_FRENCH:
@@ -35,7 +37,6 @@ PlatformKeyboardLayout GetPlatformKeyboardLayout(KeyboardLayout layout) {
   }
 
   NOTREACHED();
-  return 0;
 }
 
 PlatformKeyboardLayout ScopedKeyboardLayout::GetActiveLayout() {
@@ -43,9 +44,9 @@ PlatformKeyboardLayout ScopedKeyboardLayout::GetActiveLayout() {
 }
 
 void ScopedKeyboardLayout::ActivateLayout(PlatformKeyboardLayout layout) {
-  DCHECK(layout);
+  CHECK(layout, base::NotFatalUntil::M163);
   HKL result = ActivateKeyboardLayout(layout, 0);
-  DCHECK(!!result);
+  CHECK(!!result, base::NotFatalUntil::M163);
 }
 
 }  // namespace ui

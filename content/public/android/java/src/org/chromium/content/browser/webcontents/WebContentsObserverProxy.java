@@ -1,46 +1,61 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.content.browser.webcontents;
 
+import static org.chromium.build.NullUtil.assertNonNull;
+
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JNINamespace;
+import org.jni_zero.JniType;
+import org.jni_zero.NativeMethods;
+
 import org.chromium.base.ObserverList;
 import org.chromium.base.ObserverList.RewindableIterator;
+import org.chromium.base.TerminationStatus;
 import org.chromium.base.ThreadUtils;
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.JNINamespace;
-import org.chromium.base.annotations.NativeMethods;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.content_public.browser.GlobalRenderFrameHostId;
 import org.chromium.content_public.browser.LifecycleState;
 import org.chromium.content_public.browser.LoadCommittedDetails;
+import org.chromium.content_public.browser.MediaSession;
 import org.chromium.content_public.browser.NavigationHandle;
+import org.chromium.content_public.browser.Page;
+import org.chromium.content_public.browser.Visibility;
+import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.WebContentsObserver;
 import org.chromium.ui.base.WindowAndroid;
+import org.chromium.ui.mojom.VirtualKeyboardMode;
 import org.chromium.url.GURL;
+
+import java.util.Iterator;
 
 /**
  * Serves as a compound observer proxy for dispatching WebContentsObserver callbacks,
  * avoiding redundant JNI-related work when there are multiple Java-based observers.
  */
 @JNINamespace("content")
+@NullMarked
 class WebContentsObserverProxy extends WebContentsObserver {
-    private long mNativeWebContentsObserverProxy;
     private final ObserverList<WebContentsObserver> mObservers;
-    private final RewindableIterator<WebContentsObserver> mObserversIterator;
+
+    private long mNativeWebContentsObserverProxy;
+    private int mObserverCallsCurrentlyHandling;
 
     /**
-     * Constructs a new WebContentsObserverProxy for a given WebContents
-     * instance. A native WebContentsObserver instance will be created, which
-     * will observe the native counterpart to the provided WebContents.
+     * Constructs a new WebContentsObserverProxy for a given WebContents instance. A native
+     * WebContentsObserver instance will be created, which will observe the native counterpart to
+     * the provided WebContents.
      *
      * @param webContents The WebContents instance to observe.
      */
-    public WebContentsObserverProxy(WebContentsImpl webContents) {
+    public WebContentsObserverProxy(WebContents webContents) {
         ThreadUtils.assertOnUiThread();
-        mNativeWebContentsObserverProxy =
-                WebContentsObserverProxyJni.get().init(WebContentsObserverProxy.this, webContents);
+        mNativeWebContentsObserverProxy = WebContentsObserverProxyJni.get().init(webContents);
         mObservers = new ObserverList<WebContentsObserver>();
-        mObserversIterator = mObservers.rewindableIterator();
+        mObserverCallsCurrentlyHandling = 0;
     }
 
     /**
@@ -67,6 +82,18 @@ class WebContentsObserverProxy extends WebContentsObserver {
         return !mObservers.isEmpty();
     }
 
+    public boolean isHandlingObserverCall() {
+        return mObserverCallsCurrentlyHandling > 0;
+    }
+
+    private void handleObserverCall() {
+        mObserverCallsCurrentlyHandling++;
+    }
+
+    private void finishObserverCall() {
+        mObserverCallsCurrentlyHandling--;
+    }
+
     @CalledByNative
     public void renderFrameCreated(int renderProcessId, int renderFrameId) {
         renderFrameCreated(new GlobalRenderFrameHostId(renderProcessId, renderFrameId));
@@ -74,9 +101,12 @@ class WebContentsObserverProxy extends WebContentsObserver {
 
     @Override
     public void renderFrameCreated(GlobalRenderFrameHostId id) {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().renderFrameCreated(id);
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator.next().renderFrameCreated(id);
         }
+        finishObserverCall();
     }
 
     @CalledByNative
@@ -86,285 +116,470 @@ class WebContentsObserverProxy extends WebContentsObserver {
 
     @Override
     public void renderFrameDeleted(GlobalRenderFrameHostId id) {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().renderFrameDeleted(id);
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator.next().renderFrameDeleted(id);
+        }
+        finishObserverCall();
+    }
+
+    @Override
+    @CalledByNative
+    public void primaryPageChanged(Page page) {
+        // Don't call handleObserverCall() and finishObserverCall() to explicitly allow a
+        // WebContents to be destroyed while handling an this observer call. See
+        // https://chromium-review.googlesource.com/c/chromium/src/+/2343269 for details
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator.next().primaryPageChanged(page);
         }
     }
 
     @Override
     @CalledByNative
-    public void renderViewReady() {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().renderViewReady();
+    public void primaryMainFrameRenderProcessGone(@TerminationStatus int terminationStatus) {
+        // Don't call handleObserverCall() and finishObserverCall() to explicitly allow a
+        // WebContents to be destroyed while handling an this observer call. See
+        // https://chromium-review.googlesource.com/c/chromium/src/+/2343269 for details
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator.next().primaryMainFrameRenderProcessGone(terminationStatus);
         }
     }
 
     @Override
     @CalledByNative
-    public void renderProcessGone(boolean wasOomProtected) {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().renderProcessGone(wasOomProtected);
+    public void didStartNavigationInPrimaryMainFrame(NavigationHandle navigation) {
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator.next().didStartNavigationInPrimaryMainFrame(navigation);
         }
-    }
-
-    @Override
-    @CalledByNative
-    public void didStartNavigation(NavigationHandle navigation) {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().didStartNavigation(navigation);
-        }
+        finishObserverCall();
     }
 
     @Override
     @CalledByNative
     public void didRedirectNavigation(NavigationHandle navigation) {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().didRedirectNavigation(navigation);
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator.next().didRedirectNavigation(navigation);
         }
+        finishObserverCall();
     }
 
     @Override
     @CalledByNative
-    public void didFinishNavigation(NavigationHandle navigation) {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().didFinishNavigation(navigation);
+    public void didFinishNavigationInPrimaryMainFrame(NavigationHandle navigation) {
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator.next().didFinishNavigationInPrimaryMainFrame(navigation);
         }
+        finishObserverCall();
     }
 
     @Override
     @CalledByNative
     public void didStartLoading(GURL url) {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().didStartLoading(url);
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator.next().didStartLoading(url);
         }
+        finishObserverCall();
     }
 
     @Override
     @CalledByNative
     public void didStopLoading(GURL url, boolean isKnownValid) {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().didStopLoading(url, isKnownValid);
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator.next().didStopLoading(url, isKnownValid);
         }
+        finishObserverCall();
     }
 
     @Override
     @CalledByNative
     public void loadProgressChanged(float progress) {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().loadProgressChanged(progress);
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator.next().loadProgressChanged(progress);
         }
+        finishObserverCall();
     }
 
     @Override
     @CalledByNative
     public void didChangeVisibleSecurityState() {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().didChangeVisibleSecurityState();
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator.next().didChangeVisibleSecurityState();
         }
+        finishObserverCall();
     }
 
     @Override
     @CalledByNative
-    public void didFailLoad(boolean isMainFrame, int errorCode, GURL failingUrl,
+    public void didFailLoad(
+            boolean isInPrimaryMainFrame,
+            int errorCode,
+            GURL failingUrl,
             @LifecycleState int frameLifecycleState) {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().didFailLoad(
-                    isMainFrame, errorCode, failingUrl, frameLifecycleState);
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator
+                    .next()
+                    .didFailLoad(isInPrimaryMainFrame, errorCode, failingUrl, frameLifecycleState);
         }
+        finishObserverCall();
     }
 
     @Override
     @CalledByNative
     public void didFirstVisuallyNonEmptyPaint() {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().didFirstVisuallyNonEmptyPaint();
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator.next().didFirstVisuallyNonEmptyPaint();
         }
+        finishObserverCall();
     }
 
     @Override
     @CalledByNative
-    public void wasShown() {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().wasShown();
+    public void onVisibilityChanged(@Visibility int visibility) {
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator.next().onVisibilityChanged(visibility);
         }
-    }
-
-    @Override
-    @CalledByNative
-    public void wasHidden() {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().wasHidden();
-        }
+        finishObserverCall();
     }
 
     @Override
     @CalledByNative
     public void titleWasSet(String title) {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().titleWasSet(title);
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator.next().titleWasSet(title);
         }
+        finishObserverCall();
     }
 
     @Override
     @CalledByNative
-    public void documentAvailableInMainFrame() {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().documentAvailableInMainFrame();
+    public void primaryMainDocumentElementAvailable() {
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator.next().primaryMainDocumentElementAvailable();
         }
+        finishObserverCall();
     }
 
     @CalledByNative
-    private void didFinishLoad(int renderProcessId, int renderFrameId, GURL url,
-            boolean isKnownValid, boolean isMainFrame, @LifecycleState int frameLifecycleState) {
-        didFinishLoad(new GlobalRenderFrameHostId(renderProcessId, renderFrameId), url,
-                isKnownValid, isMainFrame, frameLifecycleState);
+    private void didFinishLoadInPrimaryMainFrame(
+            Page page,
+            int renderProcessId,
+            int renderFrameId,
+            GURL url,
+            boolean isKnownValid,
+            @LifecycleState int frameLifecycleState) {
+        didFinishLoadInPrimaryMainFrame(
+                page,
+                new GlobalRenderFrameHostId(renderProcessId, renderFrameId),
+                url,
+                isKnownValid,
+                frameLifecycleState);
     }
 
     @Override
-    public void didFinishLoad(GlobalRenderFrameHostId rfhId, GURL url, boolean isKnownValid,
-            boolean isMainFrame, @LifecycleState int rfhLifecycleState) {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().didFinishLoad(
-                    rfhId, url, isKnownValid, isMainFrame, rfhLifecycleState);
-        }
-    }
-
-    @CalledByNative
-    private void documentLoadedInFrame(int renderProcessId, int renderFrameId, boolean isMainFrame,
+    public void didFinishLoadInPrimaryMainFrame(
+            Page page,
+            GlobalRenderFrameHostId rfhId,
+            GURL url,
+            boolean isKnownValid,
             @LifecycleState int rfhLifecycleState) {
-        documentLoadedInFrame(new GlobalRenderFrameHostId(renderProcessId, renderFrameId),
-                isMainFrame, rfhLifecycleState);
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator
+                    .next()
+                    .didFinishLoadInPrimaryMainFrame(
+                            page, rfhId, url, isKnownValid, rfhLifecycleState);
+        }
+        finishObserverCall();
+    }
+
+    @CalledByNative
+    private void documentLoadedInPrimaryMainFrame(
+            Page page,
+            int renderProcessId,
+            int renderFrameId,
+            @LifecycleState int rfhLifecycleState) {
+        documentLoadedInPrimaryMainFrame(
+                page,
+                new GlobalRenderFrameHostId(renderProcessId, renderFrameId),
+                rfhLifecycleState);
     }
 
     @Override
-    public void documentLoadedInFrame(GlobalRenderFrameHostId rfhId, boolean isMainFrame,
-            @LifecycleState int rfhLifecycleState) {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().documentLoadedInFrame(rfhId, isMainFrame, rfhLifecycleState);
+    public void documentLoadedInPrimaryMainFrame(
+            Page page, GlobalRenderFrameHostId rfhId, @LifecycleState int rfhLifecycleState) {
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator
+                    .next()
+                    .documentLoadedInPrimaryMainFrame(page, rfhId, rfhLifecycleState);
         }
+        finishObserverCall();
     }
 
     @Override
     @CalledByNative
     public void navigationEntryCommitted(LoadCommittedDetails details) {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().navigationEntryCommitted(details);
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator.next().navigationEntryCommitted(details);
         }
+        finishObserverCall();
     }
 
     @Override
     @CalledByNative
     public void navigationEntriesDeleted() {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().navigationEntriesDeleted();
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator.next().navigationEntriesDeleted();
         }
+        finishObserverCall();
     }
 
     @Override
     @CalledByNative
     public void navigationEntriesChanged() {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().navigationEntriesChanged();
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator.next().navigationEntriesChanged();
         }
+        finishObserverCall();
+    }
+
+    @Override
+    @CalledByNative
+    public void frameReceivedUserActivation() {
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator.next().frameReceivedUserActivation();
+        }
+        finishObserverCall();
     }
 
     @Override
     @CalledByNative
     public void didChangeThemeColor() {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().didChangeThemeColor();
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator.next().didChangeThemeColor();
         }
+        finishObserverCall();
     }
 
     @Override
     @CalledByNative
-    public void mediaStartedPlaying() {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().mediaStartedPlaying();
+    public void onBackgroundColorChanged() {
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            WebContentsObserver obs = observersIterator.next();
+            obs.onBackgroundColorChanged();
         }
+        finishObserverCall();
     }
 
     @Override
     @CalledByNative
-    public void mediaStoppedPlaying() {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().mediaStoppedPlaying();
+    public void mediaStartedPlaying(int id, boolean hasAudio, boolean hasVideo) {
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator.next().mediaStartedPlaying(id, hasAudio, hasVideo);
         }
+        finishObserverCall();
+    }
+
+    @Override
+    @CalledByNative
+    public void mediaStoppedPlaying(int id) {
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator.next().mediaStoppedPlaying(id);
+        }
+        finishObserverCall();
     }
 
     @Override
     @CalledByNative
     public void hasEffectivelyFullscreenVideoChange(boolean isFullscreen) {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().hasEffectivelyFullscreenVideoChange(isFullscreen);
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator.next().hasEffectivelyFullscreenVideoChange(isFullscreen);
         }
+        finishObserverCall();
     }
 
     @Override
     @CalledByNative
     public void didToggleFullscreenModeForTab(boolean enteredFullscreen, boolean willCauseResize) {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().didToggleFullscreenModeForTab(
-                    enteredFullscreen, willCauseResize);
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator
+                    .next()
+                    .didToggleFullscreenModeForTab(enteredFullscreen, willCauseResize);
         }
+        finishObserverCall();
     }
 
     @Override
     @CalledByNative
     public void viewportFitChanged(@WebContentsObserver.ViewportFitType int value) {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().viewportFitChanged(value);
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator.next().viewportFitChanged(value);
         }
+        finishObserverCall();
+    }
+
+    @Override
+    @CalledByNative
+    public void safeAreaConstraintChanged(boolean hasConstraint) {
+        handleObserverCall();
+        for (WebContentsObserver observer : mObservers) {
+            observer.safeAreaConstraintChanged(hasConstraint);
+        }
+        finishObserverCall();
+    }
+
+    @Override
+    @CalledByNative
+    public void virtualKeyboardModeChanged(@VirtualKeyboardMode.EnumType int mode) {
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator.next().virtualKeyboardModeChanged(mode);
+        }
+        finishObserverCall();
     }
 
     @Override
     @CalledByNative
     public void onWebContentsFocused() {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().onWebContentsFocused();
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator.next().onWebContentsFocused();
         }
+        finishObserverCall();
     }
 
     @Override
     @CalledByNative
     public void onWebContentsLostFocus() {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().onWebContentsLostFocus();
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator.next().onWebContentsLostFocus();
         }
+        finishObserverCall();
     }
 
     @Override
-    public void onTopLevelNativeWindowChanged(WindowAndroid windowAndroid) {
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().onTopLevelNativeWindowChanged(windowAndroid);
+    public void onTopLevelNativeWindowChanged(@Nullable WindowAndroid windowAndroid) {
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator.next().onTopLevelNativeWindowChanged(windowAndroid);
         }
+        finishObserverCall();
     }
 
     @Override
     @CalledByNative
-    public void destroy() {
-        // Super destruction semantics (removing the observer from the
-        // Java-based WebContents) are quite different, so we explicitly avoid
-        // calling it here.
-        ThreadUtils.assertOnUiThread();
-        for (mObserversIterator.rewind(); mObserversIterator.hasNext();) {
-            mObserversIterator.next().destroy();
+    public void mediaSessionCreated(MediaSession mediaSession) {
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator.next().mediaSessionCreated(mediaSession);
         }
-        // All observer destroy() implementations should result in their removal
-        // from the proxy.
-        assert mObservers.isEmpty();
+        finishObserverCall();
+    }
+
+    @Override
+    @CalledByNative
+    public void wasDiscarded() {
+        handleObserverCall();
+        Iterator<WebContentsObserver> observersIterator = mObservers.iterator();
+        for (; observersIterator.hasNext(); ) {
+            observersIterator.next().wasDiscarded();
+        }
+        finishObserverCall();
+    }
+
+    @Override
+    @CalledByNative
+    public void webContentsDestroyed() {
+        ThreadUtils.assertOnUiThread();
+        RewindableIterator<WebContentsObserver> observersIterator = mObservers.rewindableIterator();
+        for (; observersIterator.hasNext(); ) {
+            WebContentsObserver observer = observersIterator.next();
+            observer.webContentsDestroyed();
+            observer.observe(null);
+        }
+        // All observer observe(null) implementations should result in their removal from the proxy.
+        String remainingObservers = "These observers were not removed: ";
+        if (!mObservers.isEmpty()) {
+            for (observersIterator.rewind(); observersIterator.hasNext(); ) {
+                remainingObservers += observersIterator.next().getClass().getName() + " ";
+            }
+        }
+        assert mObservers.isEmpty() : remainingObservers;
         mObservers.clear();
 
         if (mNativeWebContentsObserverProxy != 0) {
-            WebContentsObserverProxyJni.get().destroy(
-                    mNativeWebContentsObserverProxy, WebContentsObserverProxy.this);
+            WebContentsObserverProxyJni.get().destroy(mNativeWebContentsObserverProxy);
             mNativeWebContentsObserverProxy = 0;
         }
     }
 
+    @CalledByNative
+    private static WebContentsObserverProxy getFromWebContents(
+            @JniType("content::WebContents*") WebContents webContents) {
+        return assertNonNull(((WebContentsImpl) webContents).getWebContentsObserverProxy());
+    }
+
     @NativeMethods
     interface Natives {
-        long init(WebContentsObserverProxy caller, WebContentsImpl webContents);
-        void destroy(long nativeWebContentsObserverProxy, WebContentsObserverProxy caller);
+        long init(@JniType("content::WebContents*") WebContents webContents);
+
+        void destroy(long nativeWebContentsObserverProxy);
     }
 }

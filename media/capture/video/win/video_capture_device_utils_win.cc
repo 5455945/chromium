@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,9 @@
 #include <cmath>
 #include <iostream>
 
+#include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/win/win_util.h"
-#include "base/win/windows_version.h"
 
 namespace media {
 
@@ -82,15 +83,12 @@ double PlatformExposureTimeToCaptureStep(long log_step,
 int GetCameraRotation(VideoFacingMode facing) {
   int rotation = 0;
 
-  // Before Win10, we can't distinguish if the selected camera is an internal or
-  // external one. So we assume it's internal and do the frame rotation if the
-  // auto rotation is enabled to cover most user cases.
   if (!IsInternalCamera(facing)) {
     return rotation;
   }
 
   // When display is only on external monitors, the auto-rotation state still
-  // may be ENALBED on the target device. In that case, we shouldn't query the
+  // may be ENABLED on the target device. In that case, we shouldn't query the
   // display orientation and the built-in camera will be treated as an external
   // one.
   DISPLAY_DEVICE internal_display_device;
@@ -98,16 +96,12 @@ int GetCameraRotation(VideoFacingMode facing) {
     return rotation;
   }
 
-  if (facing == VideoFacingMode::MEDIA_VIDEO_FACING_NONE) {
-    // We set camera facing using Win10 only DeviceInformation API. So pre-Win10
-    // cameras always have a facing of VideoFacingMode::MEDIA_VIDEO_FACING_NONE.
-    // Win10 cameras with VideoFacingMode::MEDIA_VIDEO_FACING_NONE should early
-    // exit as part of the IsInternalCamera(facing) check above.
-    DCHECK(base::win::GetVersion() < base::win::Version::WIN10);
-  }
+  // Windows cameras with VideoFacingMode::MEDIA_VIDEO_FACING_NONE should early
+  // exit as part of the IsInternalCamera(facing) check above.
+  DCHECK_NE(facing, VideoFacingMode::MEDIA_VIDEO_FACING_NONE);
 
   DEVMODE mode;
-  ::ZeroMemory(&mode, sizeof(mode));
+  UNSAFE_TODO(::ZeroMemory(&mode, sizeof(mode)));
   mode.dmSize = sizeof(mode);
   mode.dmDriverExtra = 0;
   if (::EnumDisplaySettings(internal_display_device.DeviceName,
@@ -166,7 +160,7 @@ bool IsAutoRotationEnabled() {
 
   if (get_rotation_state) {
     AR_STATE auto_rotation_state;
-    ::ZeroMemory(&auto_rotation_state, sizeof(AR_STATE));
+    UNSAFE_TODO(::ZeroMemory(&auto_rotation_state, sizeof(AR_STATE)));
 
     if (get_rotation_state(&auto_rotation_state)) {
       // AR_ENABLED is defined as '0x0', while AR_STATE enumeration is defined
@@ -182,16 +176,8 @@ bool IsAutoRotationEnabled() {
 }
 
 bool IsInternalCamera(VideoFacingMode facing) {
-  if (base::win::GetVersion() < base::win::Version::WIN10) {
-    return true;
-  }
-
-  if (facing == MEDIA_VIDEO_FACING_USER ||
-      facing == MEDIA_VIDEO_FACING_ENVIRONMENT) {
-    return true;
-  }
-
-  return false;
+  return facing == MEDIA_VIDEO_FACING_USER ||
+         facing == MEDIA_VIDEO_FACING_ENVIRONMENT;
 }
 
 bool HasActiveInternalDisplayDevice(DISPLAY_DEVICE* internal_display_device) {
@@ -266,15 +252,17 @@ HRESULT CheckPathInfoForInternal(const PCWSTR device_name) {
       source_name.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
       source_name.header.size = sizeof(source_name);
       source_name.header.adapterId =
-          path_info_array[path_index].sourceInfo.adapterId;
-      source_name.header.id = path_info_array[path_index].sourceInfo.id;
+          UNSAFE_TODO(path_info_array[path_index]).sourceInfo.adapterId;
+      source_name.header.id =
+          UNSAFE_TODO(path_info_array[path_index]).sourceInfo.id;
 
       hr =
           HRESULT_FROM_WIN32(::DisplayConfigGetDeviceInfo(&source_name.header));
       if (SUCCEEDED(hr)) {
-        if (wcscmp(device_name, source_name.viewGdiDeviceName) == 0 &&
-            IsInternalVideoOutput(
-                path_info_array[path_index].targetInfo.outputTechnology)) {
+        if (UNSAFE_TODO(wcscmp(device_name, source_name.viewGdiDeviceName)) ==
+                0 &&
+            IsInternalVideoOutput(UNSAFE_TODO(path_info_array[path_index])
+                                      .targetInfo.outputTechnology)) {
           desired_path_index = path_index;
           break;
         }

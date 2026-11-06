@@ -1,17 +1,24 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/accelerated_widget_mac/ca_transaction_observer.h"
 
-#include "base/no_destructor.h"
-#include "base/time/default_tick_clock.h"
-#include "base/trace_event/trace_event.h"
-#include "ui/accelerated_widget_mac/window_resize_helper_mac.h"
-
 #import <AppKit/AppKit.h>
 #import <CoreFoundation/CoreFoundation.h>
 #import <QuartzCore/QuartzCore.h>
+
+#include <algorithm>
+
+#include "base/feature_list.h"
+#include "base/no_destructor.h"
+#include "base/task/current_thread.h"
+#include "base/time/default_tick_clock.h"
+#include "base/time/time.h"
+#include "base/trace_event/trace_event.h"
+#include "ui/accelerated_widget_mac/window_resize_helper_mac.h"
+#include "ui/base/cocoa/animation_utils.h"
+#include "ui/base/ui_base_features.h"
 
 typedef NS_ENUM(unsigned int, CATransactionPhase) {
   kCATransactionPhasePreLayout,
@@ -27,8 +34,9 @@ typedef NS_ENUM(unsigned int, CATransactionPhase) {
 namespace ui {
 
 namespace {
-NSString* kRunLoopMode = @"Chrome CATransactionCoordinator commit handler";
-constexpr auto kPostCommitTimeout = base::TimeDelta::FromMilliseconds(50);
+NSString* const kRunLoopMode =
+    @"Chrome CATransactionCoordinator commit handler";
+constexpr auto kPostCommitTimeout = base::Milliseconds(50);
 }  // namespace
 
 CATransactionCoordinator& CATransactionCoordinator::Get() {
@@ -67,21 +75,45 @@ void CATransactionCoordinator::PreCommitHandler() {
   const base::TimeTicks start_time = clock->NowTicks();
   while (true) {
     bool continue_waiting = false;
+    bool any_observed_window_in_live_resize = false;
     base::TimeTicks deadline = start_time;
     for (auto& observer : pre_commit_observers_) {
       if (observer.ShouldWaitInPreCommit()) {
         continue_waiting = true;
         deadline = std::max(deadline, start_time + observer.PreCommitTimeout());
+        if (observer.IsWindowInLiveResize()) {
+          any_observed_window_in_live_resize = true;
+        }
       }
     }
     if (!continue_waiting)
       break;  // success
 
     base::TimeDelta time_left = deadline - clock->NowTicks();
-    if (time_left <= base::TimeDelta::FromSeconds(0))
+    if (time_left <= base::Seconds(0))
       break;  // timeout
 
-    ui::WindowResizeHelperMac::Get()->WaitForSingleTaskToRun(time_left);
+    // If there is no live resize there is still a need to invoke
+    // `WaitForSingleTaskToRun()` in case there are already queued tasks.
+    // There should not be any waiting for additional tasks so the waiting is
+    // kept to essentially zero.
+    constexpr base::TimeDelta kSmallestWait = base::Nanoseconds(1);
+    const bool can_skip_window_resize_helper =
+        base::FeatureList::IsEnabled(
+            features::kOnlyUseWindowResizeHelperOnResize) &&
+        !any_observed_window_in_live_resize;
+    if (can_skip_window_resize_helper) {
+      time_left = kSmallestWait;
+    }
+
+    const bool task_ran =
+        ui::WindowResizeHelperMac::Get()->WaitForSingleTaskToRun(time_left);
+
+    // Pumping was attempted to get rid of pending work and none was executed.
+    // The loop can now be exited.
+    if (can_skip_window_resize_helper && !task_ran) {
+      break;
+    }
   }
 }
 
@@ -94,14 +126,13 @@ void CATransactionCoordinator::PostCommitHandler() {
   auto* clock = base::DefaultTickClock::GetInstance();
   const base::TimeTicks deadline = clock->NowTicks() + kPostCommitTimeout;
   while (true) {
-    bool continue_waiting = std::any_of(
-        post_commit_observers_.begin(), post_commit_observers_.end(),
-        std::mem_fn(&PostCommitObserver::ShouldWaitInPostCommit));
+    bool continue_waiting = std::ranges::any_of(
+        post_commit_observers_, &PostCommitObserver::ShouldWaitInPostCommit);
     if (!continue_waiting)
       break;  // success
 
     base::TimeDelta time_left = deadline - clock->NowTicks();
-    if (time_left <= base::TimeDelta::FromSeconds(0))
+    if (time_left <= base::Seconds(0))
       break;  // timeout
 
     ui::WindowResizeHelperMac::Get()->WaitForSingleTaskToRun(time_left);
@@ -109,8 +140,11 @@ void CATransactionCoordinator::PostCommitHandler() {
   active_ = false;
 }
 
-CATransactionCoordinator::CATransactionCoordinator() = default;
-CATransactionCoordinator::~CATransactionCoordinator() = default;
+CATransactionCoordinator::CATransactionCoordinator() {
+}
+
+CATransactionCoordinator::~CATransactionCoordinator() {
+}
 
 void CATransactionCoordinator::Synchronize() {
   if (disabled_for_testing_)
@@ -130,14 +164,35 @@ void CATransactionCoordinator::RemovePreCommitObserver(
 
 void CATransactionCoordinator::AddPostCommitObserver(
     scoped_refptr<PostCommitObserver> observer) {
-  DCHECK(!post_commit_observers_.count(observer));
+  CHECK(!post_commit_observers_.count(observer), base::NotFatalUntil::M163);
   post_commit_observers_.insert(std::move(observer));
 }
 
 void CATransactionCoordinator::RemovePostCommitObserver(
     scoped_refptr<PostCommitObserver> observer) {
-  DCHECK(post_commit_observers_.count(observer));
+  CHECK(post_commit_observers_.count(observer), base::NotFatalUntil::M163);
   post_commit_observers_.erase(std::move(observer));
+}
+
+void CATransactionCoordinator::WillProcessTask(
+    const base::PendingTask& pending_task,
+    bool was_blocked_or_low_priority) {}
+
+void CATransactionCoordinator::DidProcessTask(
+    const base::PendingTask& pending_task) {
+  if (!ca_action_disabler_) {
+    return;
+  }
+
+  // The PreCommitHandler is what waits for compositor frames to arrive.
+  // TODO(https://crbug.com/507113013): Rename this after the non-V2 path is
+  // removed.
+  PreCommitHandler();
+
+  // Release the ScopedCAActionDisabler only after the new frame has been
+  // displayed. Releasing after PreCommitHandler also ensures that recursive
+  // calls to PreCommitHandler do not happen.
+  ca_action_disabler_.reset();
 }
 
 }  // namespace ui

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,12 @@
 
 #include <memory>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/gfx/animation/animation_delegate.h"
 #include "ui/gfx/animation/slide_animation.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/views/animation/animation_delegate_views.h"
 
 namespace views {
@@ -28,6 +28,10 @@ class FullscreenControlPopup : public views::AnimationDelegateViews {
   FullscreenControlPopup(gfx::NativeView parent_view,
                          const base::RepeatingClosure& on_button_pressed,
                          const base::RepeatingClosure& on_visibility_changed);
+
+  FullscreenControlPopup(const FullscreenControlPopup&) = delete;
+  FullscreenControlPopup& operator=(const FullscreenControlPopup&) = delete;
+
   ~FullscreenControlPopup() override;
 
   // Returns the final bottom of the button as a y offset to its parent view.
@@ -67,16 +71,16 @@ class FullscreenControlPopup : public views::AnimationDelegateViews {
 
   void OnVisibilityChanged();
 
-  FullscreenControlView* const control_view_;
+  // Must outlive `control_view_`.
   const std::unique_ptr<views::Widget> popup_;
+  const raw_ptr<FullscreenControlView> control_view_;
+
   const std::unique_ptr<gfx::SlideAnimation> animation_;
 
   // The bounds is empty when the popup is not showing.
   gfx::Rect parent_bounds_in_screen_;
 
   const base::RepeatingClosure on_visibility_changed_;
-
-  DISALLOW_COPY_AND_ASSIGN(FullscreenControlPopup);
 };
 
 #endif  // COMPONENTS_FULLSCREEN_CONTROL_FULLSCREEN_CONTROL_POPUP_H_

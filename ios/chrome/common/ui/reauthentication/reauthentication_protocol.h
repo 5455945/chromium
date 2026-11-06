@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,22 +15,34 @@ enum class ReauthenticationResult {
   kMaxValue = kSkipped,
 };
 
+// Block taking a ReauthenticationResult as parameter.
+using ReauthenticationResultBlock = void (^)(ReauthenticationResult);
+
+// A help article on how to set up a passcode.
+inline constexpr char kPasscodeArticleURL[] =
+    "https://support.apple.com/HT204060";
+
 // Protocol for implementor of hardware reauthentication check.
 @protocol ReauthenticationProtocol <NSObject>
 
-// Checks whether Touch ID and/or passcode is enabled for the device.
+// Checks whether biometric authentication is enabled for the device.
+- (BOOL)canAttemptReauthWithBiometrics;
+
+// Checks whether Touch ID and/or passcode is enabled for the device. The
+// implementation of this method must be thread-safe.
 - (BOOL)canAttemptReauth;
 
 // Attempts to reauthenticate the user with Touch ID or Face ID, or passcode if
-// such hardware is not available. If |canReusePreviousAuth| is YES, a previous
+// such hardware is not available. If `canReusePreviousAuth` is YES, a previous
 // successful reauthentication can be taken into consideration, otherwise a new
-// reauth attempt must be made. |handler| will take action depending on the
+// reauth attempt must be made. `handler` will take action depending on the
 // result of the reauth attempt.
 - (void)attemptReauthWithLocalizedReason:(NSString*)localizedReason
                     canReusePreviousAuth:(BOOL)canReusePreviousAuth
-                                 handler:
-                                     (void (^)(ReauthenticationResult success))
-                                         handler;
+                                 handler:(ReauthenticationResultBlock)handler;
+
+// Clears the cached authentication validity.
+- (void)clearAuthValidity;
 
 @end
 

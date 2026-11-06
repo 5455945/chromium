@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,6 +13,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "sql/database.h"
+#include "sql/test/test_helpers.h"
 
 namespace history {
 
@@ -22,7 +23,8 @@ HistoryUnitTestBase::~HistoryUnitTestBase() {
 void HistoryUnitTestBase::ExecuteSQLScript(const base::FilePath& sql_path,
                                            const base::FilePath& db_path) {
   std::string sql;
-  ASSERT_TRUE(base::ReadFileToString(sql_path, &sql));
+  ASSERT_TRUE(base::ReadFileToString(sql_path, &sql))
+      << "Path: " << sql_path << "\nContent read before failure: " << sql;
 
   // Replace the 'last_visit_time', 'visit_time', 'time_slot' values in this
   // SQL with the current time.
@@ -33,9 +35,9 @@ void HistoryUnitTestBase::ExecuteSQLScript(const base::FilePath& sql_path,
   sql_time.push_back(base::StringPrintf("%" PRId64, now));  // time_slot
   sql = base::ReplaceStringPlaceholders(sql, sql_time, nullptr);
 
-  sql::Database connection;
+  sql::Database connection(sql::test::kTestTag);
   ASSERT_TRUE(connection.Open(db_path));
-  ASSERT_TRUE(connection.Execute(sql.c_str()));
+  ASSERT_TRUE(connection.ExecuteScriptForTesting(sql));
 }
 
 HistoryUnitTestBase::HistoryUnitTestBase() {

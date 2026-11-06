@@ -1,9 +1,10 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "build/build_config.h"
 #include "components/autofill/core/common/autofill_switches.h"
+
+#include "build/build_config.h"
 
 namespace autofill {
 namespace switches {
@@ -13,26 +14,30 @@ namespace switches {
 // of the API that are not linked to the Chrome baked key yet.
 const char kAutofillAPIKey[] = "autofill-api-key";
 
+// Directory with an `index.json` file and the custom form control scripts it
+// references. Only used if `features::kAutofillCustomFormControlScripts` is
+// enabled.
+const char kAutofillCustomFormControlScriptsDir[] =
+    "autofill-custom-form-control-scripts-dir";
+
 // Override the default autofill server URL with "scheme://host[:port]/prefix/".
 const char kAutofillServerURL[] = "autofill-server-url";
-
-// The randomized encoding type to use when sending metadata uploads. The
-// value of the parameter must be one of the valid integer values of the
-// AutofillRandomizedValue_EncodingType enum.
-const char kAutofillMetadataUploadEncoding[] =
-    "autofill-metadata-upload-encoding";
 
 // The number of days after which to reset the registry of autofill events for
 // which an upload has been sent.
 const char kAutofillUploadThrottlingPeriodInDays[] =
     "autofill-upload-throttling-period-in-days";
 
+// Automatically grants permission prompts for email verification for testing.
+const char kAutoGrantEmailVerificationPermissionForTesting[] =
+    "auto-grant-email-verification-permission-for-testing";
+
 // Ignores autocomplete="off" for Autofill data (profiles + credit cards).
 const char kIgnoreAutocompleteOffForAutofill[] =
     "ignore-autocomplete-off-autofill";
 
 // Annotates forms with Autofill field type predictions.
-const char kShowAutofillTypePredictions[]   = "show-autofill-type-predictions";
+const char kShowAutofillTypePredictions[] = "show-autofill-type-predictions";
 
 // Annotates forms and fields with Autofill signatures.
 const char kShowAutofillSignatures[] = "show-autofill-signatures";

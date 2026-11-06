@@ -1,4 +1,4 @@
-# Copyright (c) 2016 The Chromium Authors. All rights reserved.
+# Copyright 2016 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -8,29 +8,13 @@ See http://dev.chromium.org/developers/how-tos/depottools/presubmit-scripts
 for more details about the presubmit API built into depot_tools.
 """
 
-
-USE_PYTHON3 = True
-
-
-def CommonChecks(input_api, output_api):
-  import sys
-
-  output = []
-  sys_path_backup = sys.path
-  try:
-    sys.path = [
-        input_api.PresubmitLocalPath()
-    ] + sys.path
-    output.extend(input_api.canned_checks.RunPylint(input_api, output_api))
-  finally:
-    sys.path = sys_path_backup
-
-  return output
+PRESUBMIT_VERSION = '2.0.0'
 
 
-def CheckChangeOnUpload(input_api, output_api):
-  return CommonChecks(input_api, output_api)
-
-
-def CheckChangeOnCommit(input_api, output_api):
-  return CommonChecks(input_api, output_api)
+def CheckRuff(input_api, output_api):
+  return input_api.RunTests(
+    input_api.canned_checks.GetRuff(
+      input_api,
+      output_api,
+    )
+  )

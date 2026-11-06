@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,9 +15,10 @@ import org.chromium.net.impl.ImplVersion;
 import java.util.Arrays;
 
 /**
- * Implementation of {@link CronetProvider} that creates {@link CronetEngine.Builder}
- * for building the Fake implementation of {@link CronetEngine}.
- * {@hide}
+ * Implementation of {@link CronetProvider} that creates {@link CronetEngine.Builder} for building
+ * the Fake implementation of {@link CronetEngine}.
+ *
+ * @hide
  */
 public class FakeCronetProvider extends CronetProvider {
     /**

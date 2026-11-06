@@ -1,8 +1,8 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-var currentPermissionLevel = "";
+let currentPermissionLevel = '';
 
 function onGetPermissionLevel(permissionLevel) {
   currentPermissionLevel = permissionLevel;
@@ -13,15 +13,14 @@ function getPermissionLevel() {
 }
 
 function onPermissionLevelChangedListener(permissionLevel) {
-  if (permissionLevel != "denied" && permissionLevel != "granted") {
+  if (permissionLevel !== 'denied' && permissionLevel !== 'granted') {
     chrome.test.notifyFail(
-        "Unexpected permission level " + permissionLevel + " received");
+        `Unexpected permission level ${permissionLevel} received`);
     return;
   }
 
-  if (permissionLevel == currentPermissionLevel) {
-    chrome.test.notifyFail(
-        "Same permission level " + permissionLevel + " received");
+  if (permissionLevel === currentPermissionLevel) {
+    chrome.test.notifyFail(`Same permission level ${permissionLevel} received`);
     return;
   }
 

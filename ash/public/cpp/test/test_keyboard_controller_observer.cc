@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,9 +9,8 @@
 namespace ash {
 
 TestKeyboardControllerObserver::TestKeyboardControllerObserver(
-    KeyboardController* controller)
-    : controller_(controller) {
-  controller_->AddObserver(this);
+    KeyboardController* controller) {
+  observation_.Observe(controller);
 }
 
 TestKeyboardControllerObserver::~TestKeyboardControllerObserver() = default;

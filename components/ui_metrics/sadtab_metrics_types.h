@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,7 +16,7 @@ enum class SadTabEvent {
   // Records that the Sad Tab help link was triggered.
   HELP_LINK_CLICKED = 2,
   // Enum end marker.
-  MAX_SAD_TAB_EVENT = 3,
+  COUNT = 3,
 };
 
 // Describes the mode of the Sad Tab as being in 'reload' mode.

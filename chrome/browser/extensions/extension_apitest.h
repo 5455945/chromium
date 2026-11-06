@@ -1,21 +1,28 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_EXTENSIONS_EXTENSION_APITEST_H_
 #define CHROME_BROWSER_EXTENSIONS_EXTENSION_APITEST_H_
 
+#include <memory>
 #include <string>
+#include <string_view>
 
-#include "base/compiler_specific.h"
-#include "base/strings/string_piece_forward.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
-#include "content/public/browser/notification_registrar.h"
-#include "net/test/spawned_test_server/spawned_test_server.h"
+#include "chrome/browser/preloading/scoped_prewarm_feature_list.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace base {
 class FilePath;
+}
+
+namespace net::test_server {
+class EmbeddedTestServer;
 }
 
 class GURL;
@@ -49,14 +56,19 @@ class ExtensionApiTest : public ExtensionBrowserTest {
     bool open_in_incognito = false;
 
     // Launch the extension as a platform app.
+    // Note: This is unsupported on desktop android builds.
     bool launch_as_platform_app = false;
 
     // Use //extensions/test/data/ as the root path instead of the default
     // path of //chrome/test/data/extensions/api_test/.
     bool use_extensions_root_dir = false;
+
+    // If given, the Profile instance is used. Otherwise, the default Profile
+    // (i.e., taken by browser()->GetProfile()) for the browser_test is used.
+    raw_ptr<Profile> profile = nullptr;
   };
 
-  ExtensionApiTest();
+  explicit ExtensionApiTest(ContextType context_type = ContextType::kNone);
   ~ExtensionApiTest() override;
 
  protected:
@@ -64,23 +76,27 @@ class ExtensionApiTest : public ExtensionBrowserTest {
   void SetUpOnMainThread() override;
   void TearDownOnMainThread() override;
 
-  // Loads the extension with |extension_name| and default RunOptions and
+  // Loads the extension with `extension_name` and default RunOptions and
   // LoadOptions.
-  bool RunExtensionTest(const char* extension_name) WARN_UNUSED_RESULT;
+  [[nodiscard]] bool RunExtensionTest(const char* extension_name);
 
-  bool RunExtensionTest(const char* extension_name,
-                        const RunOptions& run_options) WARN_UNUSED_RESULT;
+  [[nodiscard]] bool RunExtensionTest(const char* extension_name,
+                                      const RunOptions& run_options);
 
-  bool RunExtensionTest(const char* extension_name,
-                        const RunOptions& run_options,
-                        const LoadOptions& load_options) WARN_UNUSED_RESULT;
+  [[nodiscard]] bool RunExtensionTest(const char* extension_name,
+                                      const RunOptions& run_options,
+                                      const LoadOptions& load_options);
 
-  // Opens the given |url| and waits for the next result from the
-  // chrome.test API. If |open_in_incognito| is true, the URL is opened
+  [[nodiscard]] bool RunExtensionTest(const base::FilePath& extension_path,
+                                      const RunOptions& run_options,
+                                      const LoadOptions& load_options);
+
+  // Opens the given `url` and waits for the next result from the
+  // chrome.test API. If `open_in_incognito` is true, the URL is opened
   // in an off-the-record browser profile. This API is different from
   // RunExtensionTest as it doesn't load an extension.
-  bool OpenTestURL(const GURL& url,
-                   bool open_in_incognito = false) WARN_UNUSED_RESULT;
+  [[nodiscard]] bool OpenTestURL(const GURL& url,
+                                 bool open_in_incognito = false);
 
   // Start the test server, and store details of its state. Those details
   // will be available to JavaScript tests using chrome.test.getConfig().
@@ -91,7 +107,7 @@ class ExtensionApiTest : public ExtensionBrowserTest {
   //
   // Starting the test server is done in two steps; first the server socket is
   // created and starts listening, followed by the start of an IO thread on
-  // which the test server will accept connectons.
+  // which the test server will accept connections.
   //
   // In general you can start the test server using StartEmbeddedTestServer()
   // which handles both steps. When you need to register request handlers that
@@ -106,20 +122,25 @@ class ExtensionApiTest : public ExtensionBrowserTest {
   // StartEmbeddedTestServer() instead.
   void EmbeddedTestServerAcceptConnections();
 
+  // Returns the test WebSocket EmbeddedTestServer. Can be used to configure
+  // the server before it has started.
+  net::test_server::EmbeddedTestServer& GetWebSocketServer();
+
+  // Initializes web_socket that is returned by `GetWebSocketServer` function
+  // to serve endpoints via secure wss protocol.
+  void InitWebSocketHttpsServer(
+      net::test_server::EmbeddedTestServer::ServerCertificate
+          server_certificate =
+              net::test_server::EmbeddedTestServer::ServerCertificate::CERT_OK);
+
   // Start the test WebSocket server, and store details of its state. Those
   // details will be available to javascript tests using
   // chrome.test.getConfig(). Enable HTTP basic authentication if needed.
-  bool StartWebSocketServer(const base::FilePath& root_directory,
-                            bool enable_basic_auth = false);
+  bool StartWebSocketServer(bool enable_basic_auth = false);
 
-  // Start the test FTP server, and store details of its state. Those
-  // details will be available to JavaScript tests using
-  // chrome.test.getConfig().
-  bool StartFTPServer(const base::FilePath& root_directory);
-
-  // Sets the additional string argument |customArg| to the test config object,
+  // Sets the additional string argument `customArg` to the test config object,
   // which is available to javascript tests using chrome.test.getConfig().
-  void SetCustomArg(base::StringPiece custom_arg);
+  void SetCustomArg(std::string_view custom_arg);
 
   // Test that exactly one extension loaded.  If so, return a pointer to
   // the extension.  If not, return NULL and set message_.
@@ -135,18 +156,25 @@ class ExtensionApiTest : public ExtensionBrowserTest {
   // If it failed, what was the error message?
   std::string message_;
 
+  base::DictValue* GetTestConfig() { return test_config_.get(); }
+
  private:
   void OpenURL(const GURL& url, bool open_in_incognito);
 
+  // Initializes the test data directories to the proper locations.
+  void SetUpTestDataDir();
+
+  // TODO(https://crbug.com/423465927): Explore a better approach to make the
+  // existing tests run with the prewarm feature enabled.
+  ::test::ScopedPrewarmFeatureList prewarm_feature_list_{
+      ::test::ScopedPrewarmFeatureList::PrewarmState::kDisabled};
+
   // Hold details of the test, set in C++, which can be accessed by
   // javascript using chrome.test.getConfig().
-  std::unique_ptr<base::DictionaryValue> test_config_;
+  std::unique_ptr<base::DictValue> test_config_;
 
   // Hold the test WebSocket server.
-  std::unique_ptr<net::SpawnedTestServer> websocket_server_;
-
-  // Hold the test FTP server.
-  std::unique_ptr<net::SpawnedTestServer> ftp_server_;
+  std::unique_ptr<net::test_server::EmbeddedTestServer> websocket_server_;
 
   // Test data directory shared with //extensions.
   base::FilePath shared_test_data_dir_;

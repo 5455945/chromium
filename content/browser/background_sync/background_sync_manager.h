@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,9 +14,9 @@
 #include <utility>
 #include <vector>
 
-#include "base/callback_forward.h"
 #include "base/cancelable_callback.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/time/clock.h"
@@ -44,6 +44,7 @@ namespace blink {
 namespace mojom {
 enum class PermissionStatus;
 }  // namespace mojom
+class StorageKey;
 }  // namespace blink
 
 namespace content {
@@ -73,7 +74,11 @@ class CONTENT_EXPORT BackgroundSyncManager
 
   static std::unique_ptr<BackgroundSyncManager> Create(
       scoped_refptr<ServiceWorkerContextWrapper> service_worker_context,
-      scoped_refptr<DevToolsBackgroundServicesContextImpl> devtools_context);
+      DevToolsBackgroundServicesContextImpl& devtools_context);
+
+  BackgroundSyncManager(const BackgroundSyncManager&) = delete;
+  BackgroundSyncManager& operator=(const BackgroundSyncManager&) = delete;
+
   ~BackgroundSyncManager() override;
 
   // Stores the given background sync registration and adds it to the scheduling
@@ -84,6 +89,7 @@ class CONTENT_EXPORT BackgroundSyncManager
   // parameters if the user or UA chose different parameters than those
   // supplied.
   void Register(int64_t sw_registration_id,
+                int render_process_host_id,
                 blink::mojom::SyncRegistrationOptions options,
                 StatusAndRegistrationCallback callback);
 
@@ -117,7 +123,8 @@ class CONTENT_EXPORT BackgroundSyncManager
 
   // ServiceWorkerContextCoreObserver overrides.
   void OnRegistrationDeleted(int64_t sw_registration_id,
-                             const GURL& pattern) override;
+                             const GURL& pattern,
+                             const blink::StorageKey& key) override;
   void OnStorageWiped() override;
 
   BackgroundSyncNetworkObserver* GetNetworkObserverForTesting() {
@@ -190,10 +197,14 @@ class CONTENT_EXPORT BackgroundSyncManager
   // Revive any pending periodic Background Sync registrations for |origin|.
   void RevivePeriodicSyncRegistrations(url::Origin origin);
 
+  const scoped_refptr<ServiceWorkerContextWrapper>& service_worker_context() {
+    return service_worker_context_;
+  }
+
  protected:
   BackgroundSyncManager(
       scoped_refptr<ServiceWorkerContextWrapper> context,
-      scoped_refptr<DevToolsBackgroundServicesContextImpl> devtools_context);
+      DevToolsBackgroundServicesContextImpl& devtools_context);
 
   // Init must be called before any public member function. Only call it once.
   void Init();
@@ -217,7 +228,7 @@ class CONTENT_EXPORT BackgroundSyncManager
       const std::string& tag,
       scoped_refptr<ServiceWorkerVersion> active_version,
       ServiceWorkerVersion::StatusCallback callback);
-  virtual void HasMainFrameWindowClient(const url::Origin& origin,
+  virtual void HasMainFrameWindowClient(const blink::StorageKey& key,
                                         BoolCallback callback);
 
  private:
@@ -286,14 +297,17 @@ class CONTENT_EXPORT BackgroundSyncManager
   // Register callbacks
   void RegisterCheckIfHasMainFrame(
       int64_t sw_registration_id,
+      int render_process_host_id,
       blink::mojom::SyncRegistrationOptions options,
       StatusAndRegistrationCallback callback);
   void RegisterDidCheckIfMainFrame(
       int64_t sw_registration_id,
+      int render_process_host_id,
       blink::mojom::SyncRegistrationOptions options,
       StatusAndRegistrationCallback callback,
       bool has_main_frame_client);
   void RegisterImpl(int64_t sw_registration_id,
+                    int render_process_host_id,
                     blink::mojom::SyncRegistrationOptions options,
                     StatusAndRegistrationCallback callback);
   void RegisterDidAskForPermission(
@@ -396,14 +410,6 @@ class CONTENT_EXPORT BackgroundSyncManager
                              base::OnceClosure callback,
                              blink::ServiceWorkerStatusCode status_code);
 
-  // Called when all sync events have completed.
-  static void OnAllSyncEventsCompleted(
-      blink::mojom::BackgroundSyncType sync_type,
-      const base::TimeTicks& start_time,
-      bool from_wakeup_task,
-      int number_of_batched_sync_events,
-      base::OnceClosure callback);
-
   // OnRegistrationDeleted callbacks
   void OnRegistrationDeletedImpl(int64_t sw_registration_id,
                                  base::OnceClosure callback);
@@ -482,7 +488,11 @@ class CONTENT_EXPORT BackgroundSyncManager
   scoped_refptr<ServiceWorkerContextWrapper> service_worker_context_;
   std::unique_ptr<BackgroundSyncProxy> proxy_;
 
-  scoped_refptr<DevToolsBackgroundServicesContextImpl> devtools_context_;
+  // Owned by StoragePartitionImpl; cleared on destruction during
+  // BackgroundSyncContextImpl shutdown, as part of StoragePartitionImpl
+  // shutdown.
+  raw_ptr<DevToolsBackgroundServicesContextImpl> devtools_context_;
+
   std::unique_ptr<BackgroundSyncParameters> parameters_;
 
   // True if the manager is disabled and registrations should fail.
@@ -497,15 +507,13 @@ class CONTENT_EXPORT BackgroundSyncManager
 
   std::unique_ptr<BackgroundSyncNetworkObserver> network_observer_;
 
-  base::Clock* clock_;
+  raw_ptr<base::Clock> clock_;
 
   std::map<int64_t, int> emulated_offline_sw_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 
   base::WeakPtrFactory<BackgroundSyncManager> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(BackgroundSyncManager);
 };
 
 }  // namespace content

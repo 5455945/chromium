@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,15 +9,13 @@
 #include "chrome/browser/nearby_sharing/certificates/nearby_share_decrypted_public_certificate.h"
 #include "chrome/browser/nearby_sharing/certificates/nearby_share_private_certificate.h"
 #include "chrome/browser/nearby_sharing/certificates/test_util.h"
-#include "chrome/browser/ui/webui/nearby_share/public/mojom/nearby_share_settings.mojom.h"
+#include "chromeos/ash/services/nearby/public/mojom/nearby_share_settings.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 TEST(NearbyShareCertificatesCommonTest, AuthenticationTokenHash) {
   EXPECT_EQ(GetNearbyShareTestPayloadHashUsingSecretKey(),
-            ComputeAuthenticationTokenHash(
-                GetNearbyShareTestPayloadToSign(),
-                base::as_bytes(
-                    base::make_span(GetNearbyShareTestSecretKey()->key()))));
+            ComputeAuthenticationTokenHash(GetNearbyShareTestPayloadToSign(),
+                                           GetNearbyShareTestSecretKey()));
 }
 
 TEST(NearbyShareCertificatesCommonTest, ValidityPeriod_PrivateCertificate) {
@@ -26,7 +24,7 @@ TEST(NearbyShareCertificatesCommonTest, ValidityPeriod_PrivateCertificate) {
   const bool use_public_certificate_tolerance = false;
 
   // Set time before validity period.
-  base::Time now = cert.not_before() - base::TimeDelta::FromMilliseconds(1);
+  base::Time now = cert.not_before() - base::Milliseconds(1);
   EXPECT_FALSE(IsNearbyShareCertificateExpired(
       now, cert.not_after(), use_public_certificate_tolerance));
   EXPECT_FALSE(IsNearbyShareCertificateWithinValidityPeriod(
@@ -58,7 +56,7 @@ TEST(NearbyShareCertificatesCommonTest, ValidityPeriod_PrivateCertificate) {
       use_public_certificate_tolerance));
 
   // Set time after validity period.
-  now = cert.not_after() + base::TimeDelta::FromMilliseconds(1);
+  now = cert.not_after() + base::Milliseconds(1);
   EXPECT_TRUE(IsNearbyShareCertificateExpired(
       now, cert.not_after(), use_public_certificate_tolerance));
   EXPECT_FALSE(IsNearbyShareCertificateWithinValidityPeriod(
@@ -77,7 +75,7 @@ TEST(NearbyShareCertificatesCommonTest, ValidityPeriod_PublicCertificate) {
   // Set time before validity period, outside of tolerance.
   base::Time now = cert.not_before() -
                    kNearbySharePublicCertificateValidityBoundOffsetTolerance -
-                   base::TimeDelta::FromMilliseconds(1);
+                   base::Milliseconds(1);
   EXPECT_FALSE(IsNearbyShareCertificateExpired(
       now, cert.not_after(), use_public_certificate_tolerance));
   EXPECT_FALSE(IsNearbyShareCertificateWithinValidityPeriod(
@@ -147,7 +145,7 @@ TEST(NearbyShareCertificatesCommonTest, ValidityPeriod_PublicCertificate) {
   // Set time after validity period, outside of tolerance.
   now = cert.not_after() +
         kNearbySharePublicCertificateValidityBoundOffsetTolerance +
-        base::TimeDelta::FromMilliseconds(1);
+        base::Milliseconds(1);
   EXPECT_TRUE(IsNearbyShareCertificateExpired(
       now, cert.not_after(), use_public_certificate_tolerance));
   EXPECT_FALSE(IsNearbyShareCertificateWithinValidityPeriod(

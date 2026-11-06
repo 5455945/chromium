@@ -1,18 +1,20 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.minidump_uploader;
 
-/**
- * Interface for uploading minidumps.
- */
+import org.chromium.build.annotations.NullMarked;
+
+/** Interface for uploading minidumps. */
+@NullMarked
 public interface MinidumpUploadJob {
     /**
-     * Try to upload all the minidumps in the crash directory.
-     * This method will be called on the UI thread of our JobService.
+     * Try to upload all the minidumps in the crash directory. This method will be called on the UI
+     * thread of our JobService.
+     *
      * @param uploadsFinishedCallback a callback that will be called when the uploading is finished
-     * (whether or not all of the uploads succeeded).
+     *     (whether or not all of the uploads succeeded).
      */
     void uploadAllMinidumps(UploadsFinishedCallback uploadsFinishedCallback);
 
@@ -26,5 +28,7 @@ public interface MinidumpUploadJob {
      * Provides an interface for the callback that will be called if all uploads are finished before
      * they are canceled.
      */
-    public interface UploadsFinishedCallback { public void uploadsFinished(boolean reschedule); }
+    interface UploadsFinishedCallback {
+        void uploadsFinished(boolean reschedule);
+    }
 }

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,17 @@
 
 #include <algorithm>
 #include <cmath>
+#include <ostream>
 
 #include "base/check_op.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
-#include "base/numerics/ranges.h"
 
 namespace ui {
 
 namespace {
 
 // Maximum duration of a fade sequence.
-constexpr auto kFadeDuration = base::TimeDelta::FromMilliseconds(200);
+constexpr auto kFadeDuration = base::Milliseconds(200);
 
 // Maximum amount of travel for a fade sequence. This avoids handle "ghosting"
 // when the handle is moving rapidly while the fade is active.
@@ -28,7 +27,7 @@ constexpr double kFadeDistanceSquared = 20.0f * 20.0f;
 constexpr float kMinTouchMajorForHitTesting = 1.0f;
 
 // The maximum touch size to use when computing whether a touch point is
-// targetting a touch handle. This is necessary for devices that misreport
+// targeting a touch handle. This is necessary for devices that misreport
 // touch radii, preventing inappropriately largely touch sizes from completely
 // breaking handle dragging behavior.
 constexpr float kMaxTouchMajorForHitTesting = 36.0f;
@@ -37,7 +36,7 @@ constexpr float kMaxTouchMajorForHitTesting = 36.0f;
 bool RectIntersectsCircle(const gfx::RectF& rect,
                           const gfx::PointF& circle_center,
                           float circle_radius) {
-  DCHECK_GT(circle_radius, 0.f);
+  CHECK_GT(circle_radius, 0.f, base::NotFatalUntil::M163);
   // An intersection occurs if the closest point between the rect and the
   // circle's center is less than the circle's radius.
   gfx::PointF closest_point_in_rect(circle_center);
@@ -85,7 +84,8 @@ TouchHandle::TouchHandle(TouchHandleClient* client,
       is_handle_layout_update_required_(false),
       mirror_vertical_(false),
       mirror_horizontal_(false) {
-  DCHECK_NE(orientation, TouchHandleOrientation::UNDEFINED);
+  CHECK_NE(orientation, TouchHandleOrientation::UNDEFINED,
+           base::NotFatalUntil::M163);
   drawable_->SetEnabled(enabled_);
   drawable_->SetOrientation(orientation_, false, false);
   drawable_->SetOrigin(focus_bottom_);
@@ -109,7 +109,7 @@ void TouchHandle::SetEnabled(bool enabled) {
 }
 
 void TouchHandle::SetVisible(bool visible, AnimationStyle animation_style) {
-  DCHECK(enabled_);
+  CHECK(enabled_, base::NotFatalUntil::M163);
   if (is_visible_ == visible)
     return;
 
@@ -132,7 +132,7 @@ void TouchHandle::SetVisible(bool visible, AnimationStyle animation_style) {
 }
 
 void TouchHandle::SetFocus(const gfx::PointF& top, const gfx::PointF& bottom) {
-  DCHECK(enabled_);
+  CHECK(enabled_, base::NotFatalUntil::M163);
   if (focus_top_ == top && focus_bottom_ == bottom)
     return;
 
@@ -142,7 +142,7 @@ void TouchHandle::SetFocus(const gfx::PointF& top, const gfx::PointF& bottom) {
 }
 
 void TouchHandle::SetViewportRect(const gfx::RectF& viewport_rect) {
-  DCHECK(enabled_);
+  CHECK(enabled_, base::NotFatalUntil::M163);
   if (viewport_rect_ == viewport_rect)
     return;
 
@@ -151,13 +151,15 @@ void TouchHandle::SetViewportRect(const gfx::RectF& viewport_rect) {
 }
 
 void TouchHandle::SetOrientation(TouchHandleOrientation orientation) {
-  DCHECK(enabled_);
-  DCHECK_NE(orientation, TouchHandleOrientation::UNDEFINED);
+  CHECK(enabled_, base::NotFatalUntil::M163);
+  CHECK_NE(orientation, TouchHandleOrientation::UNDEFINED,
+           base::NotFatalUntil::M163);
   if (is_dragging_) {
     deferred_orientation_ = orientation;
     return;
   }
-  DCHECK_EQ(deferred_orientation_, TouchHandleOrientation::UNDEFINED);
+  CHECK_EQ(deferred_orientation_, TouchHandleOrientation::UNDEFINED,
+           base::NotFatalUntil::M163);
   if (orientation_ == orientation)
     return;
 
@@ -178,11 +180,11 @@ bool TouchHandle::WillHandleTouchEvent(const MotionEvent& event) {
         return false;
       const gfx::PointF touch_point(event.GetX(), event.GetY());
       const float touch_radius =
-          base::ClampToRange(event.GetTouchMajor(), kMinTouchMajorForHitTesting,
-                             kMaxTouchMajorForHitTesting) *
+          std::clamp(event.GetTouchMajor(), kMinTouchMajorForHitTesting,
+                     kMaxTouchMajorForHitTesting) *
           0.5f;
       const gfx::RectF drawable_bounds = drawable_->GetVisibleBounds();
-      // Only use the touch radius for targetting if the touch is at or below
+      // Only use the touch radius for targeting if the touch is at or below
       // the drawable area. This makes it easier to interact with the line of
       // text above the drawable.
       if (touch_point.y() < drawable_bounds.y() ||
@@ -234,7 +236,7 @@ bool TouchHandle::Animate(base::TimeTicks frame_time) {
   if (fade_end_time_ == base::TimeTicks())
     return false;
 
-  DCHECK(enabled_);
+  CHECK(enabled_, base::NotFatalUntil::M163);
 
   const float time_u = 1.0f - (fade_end_time_ - frame_time) / kFadeDuration;
   const float position_u =
@@ -288,37 +290,14 @@ void TouchHandle::UpdateHandleLayout() {
 
     mirror_vertical = top_y_clipped < bottom_y_clipped;
 
-    const float best_y_clipped =
-        mirror_vertical ? top_y_clipped : bottom_y_clipped;
-
-    UMA_HISTOGRAM_PERCENTAGE(
-        "Event.TouchSelectionHandle.BottomHandleClippingPercentage",
-        static_cast<int>((bottom_y_clipped / handle_height) * 100));
-    UMA_HISTOGRAM_PERCENTAGE(
-        "Event.TouchSelectionHandle.BestVerticalClippingPercentage",
-        static_cast<int>((best_y_clipped / handle_height) * 100));
-    UMA_HISTOGRAM_BOOLEAN(
-        "Event.TouchSelectionHandle.ShouldFlipHandleVertically",
-        mirror_vertical);
-    UMA_HISTOGRAM_PERCENTAGE(
-        "Event.TouchSelectionHandle.FlippingImprovementPercentage",
-        static_cast<int>(((bottom_y_clipped - best_y_clipped) / handle_height) *
-                         100));
-
     if (orientation_ == TouchHandleOrientation::LEFT) {
       const float left_x_clipped = std::max(
           viewport_rect_.x() - (focus_bottom_.x() - handle_width), 0.f);
-      UMA_HISTOGRAM_PERCENTAGE(
-          "Event.TouchSelectionHandle.LeftHandleClippingPercentage",
-          static_cast<int>((left_x_clipped / handle_height) * 100));
       if (left_x_clipped > 0)
         mirror_horizontal = true;
     } else if (orientation_ == TouchHandleOrientation::RIGHT) {
       const float right_x_clipped = std::max(
           (focus_bottom_.x() + handle_width) - viewport_rect_.right(), 0.f);
-      UMA_HISTOGRAM_PERCENTAGE(
-          "Event.TouchSelectionHandle.RightHandleClippingPercentage",
-          static_cast<int>((right_x_clipped / handle_height) * 100));
       if (right_x_clipped > 0)
         mirror_horizontal = true;
     }
@@ -337,6 +316,13 @@ void TouchHandle::SetTransparent() {
   SetAlpha(0.f);
 }
 
+#if BUILDFLAG(IS_ANDROID)
+void TouchHandle::OnUpdateNativeViewTree(gfx::NativeView parent_native_view,
+                                         cc::slim::Layer* parent_layer) {
+  drawable_->OnUpdateNativeViewTree(parent_native_view, parent_layer);
+}
+#endif
+
 gfx::PointF TouchHandle::ComputeHandleOrigin() const {
   gfx::PointF focus = mirror_vertical_ ? focus_top_ : focus_bottom_;
   gfx::RectF drawable_bounds = drawable_->GetVisibleBounds();
@@ -347,31 +333,30 @@ gfx::PointF TouchHandle::ComputeHandleOrigin() const {
   int focal_offset_x = 0;
   int focal_offset_y = mirror_vertical_ ? drawable_bounds.height() : 0;
   switch (orientation_) {
-    case ui::TouchHandleOrientation::LEFT:
+    case TouchHandleOrientation::LEFT:
       focal_offset_x =
           mirror_horizontal_
               ? drawable_width * handle_horizontal_padding_
               : drawable_width * (1.0f - handle_horizontal_padding_);
       break;
-    case ui::TouchHandleOrientation::RIGHT:
+    case TouchHandleOrientation::RIGHT:
       focal_offset_x =
           mirror_horizontal_
               ? drawable_width * (1.0f - handle_horizontal_padding_)
               : drawable_width * handle_horizontal_padding_;
       break;
-    case ui::TouchHandleOrientation::CENTER:
+    case TouchHandleOrientation::CENTER:
       focal_offset_x = drawable_width * 0.5f;
       break;
-    case ui::TouchHandleOrientation::UNDEFINED:
+    case TouchHandleOrientation::UNDEFINED:
       NOTREACHED() << "Invalid touch handle orientation.";
-      break;
   };
 
   return focus - gfx::Vector2dF(focal_offset_x, focal_offset_y);
 }
 
 void TouchHandle::BeginDrag() {
-  DCHECK(enabled_);
+  CHECK(enabled_, base::NotFatalUntil::M163);
   if (is_dragging_)
     return;
   EndFade();
@@ -381,7 +366,7 @@ void TouchHandle::BeginDrag() {
 }
 
 void TouchHandle::EndDrag() {
-  DCHECK(enabled_);
+  CHECK(enabled_, base::NotFatalUntil::M163);
   if (!is_dragging_)
     return;
 
@@ -408,8 +393,8 @@ void TouchHandle::EndDrag() {
 }
 
 void TouchHandle::BeginFade() {
-  DCHECK(enabled_);
-  DCHECK(!is_dragging_);
+  CHECK(enabled_, base::NotFatalUntil::M163);
+  CHECK(!is_dragging_, base::NotFatalUntil::M163);
   animate_deferred_fade_ = false;
   const float target_alpha = is_visible_ ? 1.f : 0.f;
   if (target_alpha == alpha_) {
@@ -424,14 +409,14 @@ void TouchHandle::BeginFade() {
 }
 
 void TouchHandle::EndFade() {
-  DCHECK(enabled_);
+  CHECK(enabled_, base::NotFatalUntil::M163);
   animate_deferred_fade_ = false;
   fade_end_time_ = base::TimeTicks();
   SetAlpha(is_visible_ ? 1.f : 0.f);
 }
 
 void TouchHandle::SetAlpha(float alpha) {
-  alpha = base::ClampToRange(alpha, 0.0f, 1.0f);
+  alpha = std::clamp(alpha, 0.0f, 1.0f);
   if (alpha_ == alpha)
     return;
   alpha_ = alpha;

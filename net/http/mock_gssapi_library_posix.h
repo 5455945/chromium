@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -64,7 +64,6 @@ class MockGSSAPILibrary : public GSSAPILibrary {
   };
 
   MockGSSAPILibrary();
-  ~MockGSSAPILibrary() override;
 
   // Establishes an expectation for a |init_sec_context()| call.
   //
@@ -188,6 +187,9 @@ class MockGSSAPILibrary : public GSSAPILibrary {
                             int* locally_initiated,
                             int* open) override;
   const std::string& GetLibraryNameForTesting() override;
+
+ protected:
+  ~MockGSSAPILibrary() override;
 
  private:
   FRIEND_TEST_ALL_PREFIXES(HttpAuthGSSAPIPOSIXTest, GSSAPICycle);

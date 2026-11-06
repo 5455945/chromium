@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,19 +6,18 @@
 
 #include <utility>
 
-#include "base/containers/contains.h"
-#include "base/macros.h"
+#include "base/notimplemented.h"
 #include "ui/events/event.h"
 #include "ui/events/keycodes/dom/dom_code.h"
 
 namespace ui {
 
 KeyboardHookBase::KeyboardHookBase(
-    absl::optional<base::flat_set<DomCode>> dom_codes,
+    std::optional<base::flat_set<DomCode>> dom_codes,
     KeyEventCallback callback)
     : key_event_callback_(std::move(callback)),
       dom_codes_(std::move(dom_codes)) {
-  DCHECK(key_event_callback_);
+  CHECK(key_event_callback_, base::NotFatalUntil::M163);
 }
 
 KeyboardHookBase::~KeyboardHookBase() = default;
@@ -36,7 +35,7 @@ bool KeyboardHookBase::ShouldCaptureKeyEvent(DomCode dom_code) const {
   if (dom_code == DomCode::NONE)
     return false;
 
-  return !dom_codes_ || base::Contains(dom_codes_.value(), dom_code);
+  return !dom_codes_ || dom_codes_.value().contains(dom_code);
 }
 
 void KeyboardHookBase::ForwardCapturedKeyEvent(KeyEvent* event) {

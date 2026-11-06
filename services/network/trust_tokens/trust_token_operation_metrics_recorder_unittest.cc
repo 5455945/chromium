@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,86 +20,40 @@ TEST(TrustTokenOperationMetricsRecorder, Success) {
   base::HistogramTester histograms;
 
   recorder.BeginBegin();
-  env.FastForwardBy(base::TimeDelta::FromSeconds(1));
+  env.FastForwardBy(base::Seconds(1));
   recorder.FinishBegin(mojom::TrustTokenOperationStatus::kOk);
 
-  env.FastForwardBy(base::TimeDelta::FromSeconds(2));
+  env.FastForwardBy(base::Seconds(2));
   recorder.BeginFinalize();
-  env.FastForwardBy(base::TimeDelta::FromSeconds(3));
+  env.FastForwardBy(base::Seconds(3));
   recorder.FinishFinalize(mojom::TrustTokenOperationStatus::kOk);
 
   histograms.ExpectUniqueTimeSample(
       base::JoinString({internal::kTrustTokenBeginTimeHistogramNameBase,
                         "Success", "Issuance"},
                        "."),
-      base::TimeDelta::FromSeconds(1),
+      base::Seconds(1),
       /*expected_count=*/1);
 
   histograms.ExpectUniqueTimeSample(
       base::JoinString({internal::kTrustTokenServerTimeHistogramNameBase,
                         "Success", "Issuance"},
                        "."),
-      base::TimeDelta::FromSeconds(2),
+      base::Seconds(2),
       /*expected_count=*/1);
 
   histograms.ExpectUniqueTimeSample(
       base::JoinString({internal::kTrustTokenFinalizeTimeHistogramNameBase,
                         "Success", "Issuance"},
                        "."),
-      base::TimeDelta::FromSeconds(3),
+      base::Seconds(3),
       /*expected_count=*/1);
 
   histograms.ExpectUniqueTimeSample(
       base::JoinString({internal::kTrustTokenTotalTimeHistogramNameBase,
                         "Success", "Issuance"},
                        "."),
-      base::TimeDelta::FromSeconds(1 + 2 + 3),
-      /*expected_count=*/1);
-}
-
-TEST(TrustTokenOperationMetricsRecorder, SuccessPlatformProvided) {
-  base::test::TaskEnvironment env(
-      base::test::TaskEnvironment::TimeSource::MOCK_TIME);
-  TrustTokenOperationMetricsRecorder recorder(
-      mojom::TrustTokenOperationType::kIssuance);
-  recorder.WillExecutePlatformProvidedOperation();
-  base::HistogramTester histograms;
-
-  recorder.BeginBegin();
-  env.FastForwardBy(base::TimeDelta::FromSeconds(1));
-  recorder.FinishBegin(mojom::TrustTokenOperationStatus::kOk);
-
-  env.FastForwardBy(base::TimeDelta::FromSeconds(2));
-  recorder.BeginFinalize();
-  env.FastForwardBy(base::TimeDelta::FromSeconds(3));
-  recorder.FinishFinalize(mojom::TrustTokenOperationStatus::kOk);
-
-  histograms.ExpectUniqueTimeSample(
-      base::JoinString({internal::kTrustTokenBeginTimeHistogramNameBase,
-                        "Success", "Issuance", "PlatformProvided"},
-                       "."),
-      base::TimeDelta::FromSeconds(1),
-      /*expected_count=*/1);
-
-  histograms.ExpectUniqueTimeSample(
-      base::JoinString({internal::kTrustTokenServerTimeHistogramNameBase,
-                        "Success", "Issuance", "PlatformProvided"},
-                       "."),
-      base::TimeDelta::FromSeconds(2),
-      /*expected_count=*/1);
-
-  histograms.ExpectUniqueTimeSample(
-      base::JoinString({internal::kTrustTokenFinalizeTimeHistogramNameBase,
-                        "Success", "Issuance", "PlatformProvided"},
-                       "."),
-      base::TimeDelta::FromSeconds(3),
-      /*expected_count=*/1);
-
-  histograms.ExpectUniqueTimeSample(
-      base::JoinString({internal::kTrustTokenTotalTimeHistogramNameBase,
-                        "Success", "Issuance", "PlatformProvided"},
-                       "."),
-      base::TimeDelta::FromSeconds(1 + 2 + 3),
+      base::Seconds(1 + 2 + 3),
       /*expected_count=*/1);
 }
 
@@ -111,14 +65,14 @@ TEST(TrustTokenOperationMetricsRecorder, BeginFailure) {
   base::HistogramTester histograms;
 
   recorder.BeginBegin();
-  env.FastForwardBy(base::TimeDelta::FromSeconds(1));
+  env.FastForwardBy(base::Seconds(1));
   recorder.FinishBegin(mojom::TrustTokenOperationStatus::kUnknownError);
 
   histograms.ExpectUniqueTimeSample(
       base::JoinString({internal::kTrustTokenBeginTimeHistogramNameBase,
                         "Failure", "Redemption"},
                        "."),
-      base::TimeDelta::FromSeconds(1),
+      base::Seconds(1),
       /*expected_count=*/1);
 }
 
@@ -130,40 +84,40 @@ TEST(TrustTokenOperationMetricsRecorder, FinalizeFailure) {
   base::HistogramTester histograms;
 
   recorder.BeginBegin();
-  env.FastForwardBy(base::TimeDelta::FromSeconds(1));
+  env.FastForwardBy(base::Seconds(1));
   recorder.FinishBegin(mojom::TrustTokenOperationStatus::kOk);
 
-  env.FastForwardBy(base::TimeDelta::FromSeconds(2));
+  env.FastForwardBy(base::Seconds(2));
   recorder.BeginFinalize();
-  env.FastForwardBy(base::TimeDelta::FromSeconds(3));
+  env.FastForwardBy(base::Seconds(3));
   recorder.FinishFinalize(mojom::TrustTokenOperationStatus::kUnknownError);
 
   histograms.ExpectUniqueTimeSample(
       base::JoinString({internal::kTrustTokenBeginTimeHistogramNameBase,
                         "Success", "Signing"},
                        "."),
-      base::TimeDelta::FromSeconds(1),
+      base::Seconds(1),
       /*expected_count=*/1);
 
   histograms.ExpectUniqueTimeSample(
       base::JoinString({internal::kTrustTokenServerTimeHistogramNameBase,
                         "Failure", "Signing"},
                        "."),
-      base::TimeDelta::FromSeconds(2),
+      base::Seconds(2),
       /*expected_count=*/1);
 
   histograms.ExpectUniqueTimeSample(
       base::JoinString({internal::kTrustTokenFinalizeTimeHistogramNameBase,
                         "Failure", "Signing"},
                        "."),
-      base::TimeDelta::FromSeconds(3),
+      base::Seconds(3),
       /*expected_count=*/1);
 
   histograms.ExpectUniqueTimeSample(
       base::JoinString({internal::kTrustTokenTotalTimeHistogramNameBase,
                         "Failure", "Signing"},
                        "."),
-      base::TimeDelta::FromSeconds(1 + 2 + 3),
+      base::Seconds(1 + 2 + 3),
       /*expected_count=*/1);
 }
 

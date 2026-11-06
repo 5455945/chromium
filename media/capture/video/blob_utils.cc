@@ -1,17 +1,21 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/capture/video/blob_utils.h"
 
+#include <vector>
+
+#include "base/containers/heap_array.h"
+#include "base/containers/span.h"
+#include "base/containers/to_vector.h"
+#include "base/logging.h"
 #include "media/base/video_frame.h"
 #include "media/capture/video_capture_types.h"
 #include "third_party/libyuv/include/libyuv.h"
 #include "third_party/skia/include/core/SkImage.h"
 #include "ui/gfx/codec/jpeg_codec.h"
 #include "ui/gfx/codec/png_codec.h"
-
-#include <vector>
 
 namespace media {
 
@@ -34,14 +38,9 @@ libyuv::RotationModeEnum TranslateIntegerRotationToLibyuvRotation(
   return libyuv::kRotate0;
 }
 
-mojom::BlobPtr ProduceJpegBlobFromMjpegFrame(const uint8_t* buffer,
-                                             const uint32_t bytesused,
+mojom::BlobPtr ProduceJpegBlobFromMjpegFrame(base::span<const uint8_t> buffer,
                                              const gfx::Size size,
                                              const int rotation) {
-  const uint8_t* buffer_adjusted = buffer;
-  uint32_t buffer_adjusted_size = bytesused;
-  std::vector<uint8_t> buffer_rotated;
-
   // TODO(shenghao): The rotation handling logic here can be deleted once we
   // don't need to support HALv1 devices anymore.
   if (rotation != 0) {
@@ -55,67 +54,84 @@ mojom::BlobPtr ProduceJpegBlobFromMjpegFrame(const uint8_t* buffer,
     const int bytes_per_pixel = 4;
     std::vector<uint8_t> bgra_buffer(output_width * output_height *
                                      bytes_per_pixel);
-    libyuv::ConvertToARGB(buffer, static_cast<size_t>(bytesused),
-                          bgra_buffer.data(), output_width * bytes_per_pixel, 0,
-                          0, size.width(), size.height(), size.width(),
-                          size.height(),
+    libyuv::ConvertToARGB(buffer.data(), buffer.size(), bgra_buffer.data(),
+                          output_width * bytes_per_pixel, /*crop_x=*/0,
+                          /*crop_y=*/0, size.width(), size.height(),
+                          size.width(), size.height(),
                           TranslateIntegerRotationToLibyuvRotation(rotation),
                           libyuv::FOURCC_MJPG);
     SkImageInfo info =
         SkImageInfo::Make(output_width, output_height, kBGRA_8888_SkColorType,
                           kOpaque_SkAlphaType);
-    SkPixmap src(info, &bgra_buffer[0], output_width * bytes_per_pixel);
-    if (!gfx::JPEGCodec::Encode(src, kJpegQualityDefault, &buffer_rotated)) {
-      LOG(ERROR)
-          << "Failed to encode frame to JPEG. Use unrotated original frame.";
-    } else {
-      buffer_adjusted_size = buffer_rotated.size();
-      buffer_adjusted = buffer_rotated.data();
+    SkPixmap src(info, bgra_buffer.data(), output_width * bytes_per_pixel);
+
+    std::optional<std::vector<uint8_t>> rotated_jpeg_data =
+        gfx::JPEGCodec::Encode(src, kJpegQualityDefault);
+    if (rotated_jpeg_data) {
+      mojom::BlobPtr blob = mojom::Blob::New();
+      blob->data = std::move(rotated_jpeg_data).value();
+      blob->mime_type = "image/jpeg";
+      return blob;
     }
+
+    LOG(ERROR)
+        << "Failed to encode frame to JPEG. Using non-rotated original frame.";
+    // Fall through to the non-rotated case.
   }
 
   mojom::BlobPtr blob = mojom::Blob::New();
-  blob->data.resize(buffer_adjusted_size);
-  memcpy(blob->data.data(), buffer_adjusted, buffer_adjusted_size);
+  blob->data = base::ToVector(buffer);
   blob->mime_type = "image/jpeg";
   return blob;
 }
 
 }  // namespace
 
-mojom::BlobPtr RotateAndBlobify(const uint8_t* buffer,
-                                const uint32_t bytesused,
+mojom::BlobPtr RotateAndBlobify(base::span<const uint8_t> buffer,
                                 const VideoCaptureFormat& capture_format,
                                 const int rotation) {
-  DCHECK(buffer);
-  DCHECK(bytesused);
+  DCHECK(!buffer.empty());
   DCHECK(capture_format.IsValid());
 
   const VideoPixelFormat pixel_format = capture_format.pixel_format;
   if (pixel_format == VideoPixelFormat::PIXEL_FORMAT_MJPEG) {
-    return ProduceJpegBlobFromMjpegFrame(buffer, bytesused,
-                                         capture_format.frame_size, rotation);
+    return ProduceJpegBlobFromMjpegFrame(buffer, capture_format.frame_size,
+                                         rotation);
   }
 
   uint32_t src_format;
-  if (pixel_format == VideoPixelFormat::PIXEL_FORMAT_YUY2)
-    src_format = libyuv::FOURCC_YUY2;
-  else if (pixel_format == VideoPixelFormat::PIXEL_FORMAT_I420)
-    src_format = libyuv::FOURCC_I420;
-  else if (pixel_format == VideoPixelFormat::PIXEL_FORMAT_RGB24)
-    src_format = libyuv::FOURCC_24BG;
-  else
-    return nullptr;
+  switch (pixel_format) {
+    case VideoPixelFormat::PIXEL_FORMAT_YUY2:
+      src_format = libyuv::FOURCC_YUY2;
+      break;
+    case VideoPixelFormat::PIXEL_FORMAT_I420:
+      src_format = libyuv::FOURCC_I420;
+      break;
+    case VideoPixelFormat::PIXEL_FORMAT_RGB24:
+      src_format = libyuv::FOURCC_24BG;
+      break;
+    case VideoPixelFormat::PIXEL_FORMAT_ARGB:
+      src_format = libyuv::FOURCC_ARGB;
+      break;
+    case VideoPixelFormat::PIXEL_FORMAT_NV12:
+      src_format = libyuv::FOURCC_NV12;
+      break;
+    case VideoPixelFormat::PIXEL_FORMAT_UYVY:
+      src_format = libyuv::FOURCC_UYVY;
+      break;
+    default:
+      NOTREACHED() << "Unsupported pixel format passed to RotateAndBlobify";
+  }
 
   const gfx::Size frame_size = capture_format.frame_size;
   // PNGCodec does not support YUV formats, convert to a temporary ARGB buffer.
-  std::unique_ptr<uint8_t[]> tmp_argb(
-      new uint8_t[VideoFrame::AllocationSize(PIXEL_FORMAT_ARGB, frame_size)]);
-  if (ConvertToARGB(buffer, bytesused, tmp_argb.get(), frame_size.width() * 4,
-                    0 /* crop_x_pos */, 0 /* crop_y_pos */, frame_size.width(),
-                    frame_size.height(), frame_size.width(),
-                    frame_size.height(), libyuv::RotationMode::kRotate0,
-                    src_format) != 0) {
+  auto tmp_argb = base::HeapArray<uint8_t>::WithSize(
+      VideoFrame::AllocationSize(PIXEL_FORMAT_ARGB, frame_size));
+  if (ConvertToARGB(buffer.data(), buffer.size(), tmp_argb.data(),
+                    frame_size.width() * 4, 0 /* crop_x_pos */,
+                    0 /* crop_y_pos */, frame_size.width(), frame_size.height(),
+                    frame_size.width(), frame_size.height(),
+                    libyuv::RotationMode::kRotate0, src_format) != 0) {
     return nullptr;
   }
 
@@ -126,12 +142,11 @@ mojom::BlobPtr RotateAndBlobify(const uint8_t* buffer,
 #else
       gfx::PNGCodec::FORMAT_BGRA;
 #endif
-  const bool result = gfx::PNGCodec::Encode(
-      tmp_argb.get(), codec_color_format, frame_size, frame_size.width() * 4,
-      true /* discard_transparency */, std::vector<gfx::PNGCodec::Comment>(),
-      &blob->data);
-  DCHECK(result);
+  std::optional<std::vector<uint8_t>> data = gfx::PNGCodec::Encode(
+      tmp_argb.data(), codec_color_format, frame_size, frame_size.width() * 4,
+      /*discard_transparency=*/true, std::vector<gfx::PNGCodec::Comment>());
 
+  blob->data = std::move(data.value());
   blob->mime_type = "image/png";
   return blob;
 }

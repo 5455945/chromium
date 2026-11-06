@@ -1,34 +1,85 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.browser_ui.bottomsheet;
 
-import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
 
 import org.chromium.base.Callback;
-import org.chromium.base.supplier.Supplier;
-import org.chromium.components.browser_ui.widget.scrim.ScrimCoordinator;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.components.browser_ui.desktop_windowing.DesktopWindowStateManager;
+import org.chromium.components.browser_ui.widget.scrim.ScrimManager;
 import org.chromium.ui.KeyboardVisibilityDelegate;
 import org.chromium.ui.base.WindowAndroid;
+import org.chromium.ui.insets.InsetObserver;
+
+import java.util.function.Supplier;
 
 /** A factory for producing a {@link BottomSheetController}. */
+@NullMarked
 public class BottomSheetControllerFactory {
     /**
-     * @param scrim A supplier of scrim to be shown behind the sheet.
-     * @param initializedCallback A callback for the sheet having been created.
+     * @param scrimManagerSupplier Suppliers the {@link ScrimManager}, used to show scrims behind
+     *     the sheet.
      * @param window The activity's window.
      * @param keyboardDelegate A means of hiding the keyboard.
      * @param root The view that should contain the sheet.
-     * @return A new instance of the {@link BottomSheetController}.
+     * @param edgeToEdgeBottomInsetSupplier Supplier of bottom inset when e2e is on.
+     * @param desktopWindowStateManager The {@link DesktopWindowStateManager} for the app header.
+     * @param insetObserver The {@link InsetObserver} for inset changes.
+     * @param enableLargeFormFactorUi Whether to use a different UI explicitly designed for bottom
+     *     sheets when operating in a desktop or large form factor environment. Some implementations
+     *     may want to opt out of this behavior.
      */
     public static ManagedBottomSheetController createBottomSheetController(
-            final Supplier<ScrimCoordinator> scrim, Callback<View> initializedCallback,
-            Window window, KeyboardVisibilityDelegate keyboardDelegate, Supplier<ViewGroup> root) {
+            final Supplier<@Nullable ScrimManager> scrimManagerSupplier,
+            Window window,
+            KeyboardVisibilityDelegate keyboardDelegate,
+            Supplier<ViewGroup> root,
+            Supplier<Integer> edgeToEdgeBottomInsetSupplier,
+            @Nullable DesktopWindowStateManager desktopWindowStateManager,
+            InsetObserver insetObserver,
+            boolean enableLargeFormFactorUi) {
         return new BottomSheetControllerImpl(
-                scrim, initializedCallback, window, keyboardDelegate, root);
+                scrimManagerSupplier,
+                window,
+                keyboardDelegate,
+                root,
+                /* alwaysFullWidth= */ false,
+                edgeToEdgeBottomInsetSupplier,
+                desktopWindowStateManager,
+                insetObserver,
+                enableLargeFormFactorUi);
+    }
+
+    /**
+     * Create {@link BottomSheetController} of full-width bottom sheets.
+     *
+     * @param scrimManagerSupplier A supplier of scrimManagerSupplier to be shown behind the sheet.
+     * @param window The activity's window.
+     * @param keyboardDelegate A means of hiding the keyboard.
+     * @param root The view that should contain the sheet.
+     * @param insetObserver The {@link InsetObserver} for inset changes.
+     */
+    public static ManagedBottomSheetController createFullWidthBottomSheetController(
+            final Supplier<@Nullable ScrimManager> scrimManagerSupplier,
+            Window window,
+            KeyboardVisibilityDelegate keyboardDelegate,
+            Supplier<ViewGroup> root,
+            InsetObserver insetObserver) {
+        return new BottomSheetControllerImpl(
+                scrimManagerSupplier,
+                window,
+                keyboardDelegate,
+                root,
+                /* alwaysFullWidth= */ true,
+                () -> 0,
+                /* desktopWindowStateManager= */ null,
+                insetObserver,
+                /* enableLargeFormFactorUi= */ false);
     }
 
     // Redirect methods to provider to make them only accessible to classes that have access to the
@@ -36,6 +87,7 @@ public class BottomSheetControllerFactory {
 
     /**
      * Attach a shared {@link BottomSheetController} to a {@link WindowAndroid}.
+     *
      * @param windowAndroid The window to attach the sheet's controller to.
      * @param controller The controller to attach.
      */
@@ -53,8 +105,10 @@ public class BottomSheetControllerFactory {
         BottomSheetControllerProvider.detach(controller);
     }
 
-    /** @param reporter A means of reporting an exception without crashing. */
+    /**
+     * @param reporter A means of reporting an exception without crashing.
+     */
     public static void setExceptionReporter(Callback<Throwable> reporter) {
-        BottomSheet.setExceptionReporter(reporter);
+        BottomSheetCoordinator.setExceptionReporter(reporter);
     }
 }

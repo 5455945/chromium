@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -17,30 +17,35 @@
 #ifndef BASE_METRICS_BUCKET_RANGES_H_
 #define BASE_METRICS_BUCKET_RANGES_H_
 
+#include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
 
 #include <atomic>
 #include <vector>
 
-#include <limits.h>
-
 #include "base/base_export.h"
-#include "base/macros.h"
+#include "base/check_op.h"
+#include "base/containers/span.h"
 #include "base/metrics/histogram_base.h"
 
 namespace base {
 
 class BASE_EXPORT BucketRanges {
  public:
-  typedef std::vector<HistogramBase::Sample> Ranges;
+  typedef std::vector<HistogramBase::Sample32> Ranges;
 
   explicit BucketRanges(size_t num_ranges);
+  explicit BucketRanges(base::span<const HistogramBase::Sample32> data);
+
+  BucketRanges(const BucketRanges&) = delete;
+  BucketRanges& operator=(const BucketRanges&) = delete;
+
   ~BucketRanges();
 
   size_t size() const { return ranges_.size(); }
-  HistogramBase::Sample range(size_t i) const { return ranges_[i]; }
-  void set_range(size_t i, HistogramBase::Sample value) {
+  HistogramBase::Sample32 range(size_t i) const { return ranges_[i]; }
+  void set_range(size_t i, HistogramBase::Sample32 value) {
     DCHECK_LT(i, ranges_.size());
     DCHECK_GE(value, 0);
     ranges_[i] = value;
@@ -91,9 +96,7 @@ class BASE_EXPORT BucketRanges {
   // information is stored. This allows for the record to be created once and
   // re-used simply by having all histograms with the same ranges use the
   // same reference.
-  mutable std::atomic<int32_t> persistent_reference_{0};
-
-  DISALLOW_COPY_AND_ASSIGN(BucketRanges);
+  mutable std::atomic<uint32_t> persistent_reference_{0};
 };
 
 }  // namespace base

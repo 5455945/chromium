@@ -1,4 +1,4 @@
-// Copyright (c) 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,70 +6,42 @@
 
 #include <algorithm>
 
-#include "base/containers/contains.h"
 #include "base/memory/ref_counted_memory.h"
 #include "components/device_event_log/device_event_log.h"
-#include "services/device/public/cpp/hid/hid_usage_and_page.h"
+#include "services/device/public/cpp/device_features.h"
+#include "services/device/public/cpp/hid/hid_blocklist.h"
+#include "services/device/public/cpp/hid/hid_report_type.h"
+#include "services/device/public/cpp/hid/hid_report_utils.h"
 #include "services/device/public/mojom/hid.mojom.h"
 
 namespace device {
 
 namespace {
 
-// Functor used to filter collections by report ID.
-struct CollectionHasReportId {
-  explicit CollectionHasReportId(uint8_t report_id) : report_id_(report_id) {}
-
-  bool operator()(const mojom::HidCollectionInfoPtr& info) const {
-    if (info->report_ids.size() == 0 ||
-        report_id_ == HidConnection::kNullReportId)
-      return false;
-
-    if (report_id_ == HidConnection::kAnyReportId)
-      return true;
-
-    return base::Contains(info->report_ids, report_id_);
-  }
-
- private:
-  const uint8_t report_id_;
-};
-
-// Functor returning true if collection has a protected usage.
-struct CollectionIsAlwaysProtected {
-  bool operator()(const mojom::HidCollectionInfoPtr& info) const {
-    return IsAlwaysProtected(*info->usage);
-  }
-};
-
-const mojom::HidCollectionInfo* FindCollectionByReportId(
-    const std::vector<mojom::HidCollectionInfoPtr>& collections,
-    uint8_t report_id) {
-  auto collection_iter = std::find_if(collections.begin(), collections.end(),
-                                      CollectionHasReportId(report_id));
-  if (collection_iter != collections.end()) {
-    DCHECK(collection_iter->get());
-    return collection_iter->get();
-  }
-
-  return nullptr;
-}
-
 bool HasAlwaysProtectedCollection(
-    const std::vector<mojom::HidCollectionInfoPtr>& collections) {
-  return std::find_if(collections.begin(), collections.end(),
-                      CollectionIsAlwaysProtected()) != collections.end();
+    const std::vector<mojom::HidCollectionInfoPtr>& collections,
+    HidReportType report_type) {
+  return std::ranges::any_of(
+      collections, [report_type](const auto& collection) {
+        return IsAlwaysProtected(*collection->usage, report_type);
+      });
 }
 
 }  // namespace
 
 HidConnection::HidConnection(scoped_refptr<HidDeviceInfo> device_info,
-                             bool allow_protected_reports)
+                             bool allow_protected_reports,
+                             bool allow_fido_reports)
     : device_info_(device_info),
       allow_protected_reports_(allow_protected_reports),
+      allow_fido_reports_(allow_fido_reports),
       closed_(false) {
-  has_always_protected_collection_ =
-      HasAlwaysProtectedCollection(device_info->collections());
+  has_always_protected_collection_input_ = HasAlwaysProtectedCollection(
+      device_info->collections(), HidReportType::kInput);
+  has_always_protected_collection_output_ = HasAlwaysProtectedCollection(
+      device_info->collections(), HidReportType::kOutput);
+  has_always_protected_collection_feature_ = HasAlwaysProtectedCollection(
+      device_info->collections(), HidReportType::kFeature);
 }
 
 HidConnection::~HidConnection() {
@@ -128,7 +100,7 @@ void HidConnection::Write(scoped_refptr<base::RefCountedBytes> buffer,
     std::move(callback).Run(false);
     return;
   }
-  if (IsReportIdProtected(report_id, kOutput)) {
+  if (IsReportProtected(report_id, HidReportType::kOutput)) {
     HID_LOG(USER) << "Attempt to set a protected output report.";
     std::move(callback).Run(false);
     return;
@@ -149,7 +121,7 @@ void HidConnection::GetFeatureReport(uint8_t report_id, ReadCallback callback) {
     std::move(callback).Run(false, nullptr, 0);
     return;
   }
-  if (IsReportIdProtected(report_id, kFeature)) {
+  if (IsReportProtected(report_id, HidReportType::kFeature)) {
     HID_LOG(USER) << "Attempt to get a protected feature report.";
     std::move(callback).Run(false, nullptr, 0);
     return;
@@ -167,6 +139,14 @@ void HidConnection::SendFeatureReport(
     std::move(callback).Run(false);
     return;
   }
+  if (base::FeatureList::IsEnabled(features::kHidValidateFeatureReportSize) &&
+      buffer->size() > device_info_->max_feature_report_size() + 1) {
+    HID_LOG(USER) << "Feature report buffer too long (" << buffer->size()
+                  << " > " << (device_info_->max_feature_report_size() + 1)
+                  << ").";
+    std::move(callback).Run(false);
+    return;
+  }
   DCHECK_GE(buffer->size(), 1u);
   uint8_t report_id = buffer->data()[0];
   if (device_info_->has_report_id() != (report_id != 0)) {
@@ -174,7 +154,7 @@ void HidConnection::SendFeatureReport(
     std::move(callback).Run(false);
     return;
   }
-  if (IsReportIdProtected(report_id, kFeature)) {
+  if (IsReportProtected(report_id, HidReportType::kFeature)) {
     HID_LOG(USER) << "Attempt to set a protected feature report.";
     std::move(callback).Run(false);
     return;
@@ -183,26 +163,50 @@ void HidConnection::SendFeatureReport(
   PlatformSendFeatureReport(buffer, std::move(callback));
 }
 
-bool HidConnection::IsReportIdProtected(uint8_t report_id,
-                                        HidReportType report_type) {
+bool HidConnection::IsReportProtected(uint8_t report_id,
+                                      HidReportType report_type) const {
+  const mojom::HidDeviceInfo& device = *device_info_->device();
   if (!allow_protected_reports_) {
+    // If |allow_fido_reports_| is true, allow access to reports in collections
+    // with a usage from the FIDO usage page. FIDO reports are normally blocked
+    // by the HID blocklist.
+    if (allow_fido_reports_) {
+      // Allow all reports on known HID security keys.
+      if (HidBlocklist::IsKnownSecurityKey(device.vendor_id,
+                                           device.product_id)) {
+        return false;
+      }
+      auto* collection_info =
+          FindCollectionWithReport(device, report_id, report_type);
+      if (collection_info) {
+        if (base::FeatureList::IsEnabled(features::kWebHidRecursiveFiltering)) {
+          if (HasReportInCollectionWithUsagePage(
+                  *collection_info, report_id, report_type, mojom::kPageFido)) {
+            return false;
+          }
+        } else if (collection_info->usage->usage_page == mojom::kPageFido) {
+          return false;
+        }
+      }
+    }
+
     // Deny access to reports that match HID blocklist rules.
-    if (report_type == kInput) {
-      if (device_info_->device()->protected_input_report_ids.has_value() &&
-          base::Contains(*device_info_->device()->protected_input_report_ids,
-                         report_id)) {
+    if (report_type == HidReportType::kInput) {
+      if (device.protected_input_report_ids.has_value() &&
+          std::ranges::contains(*device.protected_input_report_ids,
+                                report_id)) {
         return true;
       }
-    } else if (report_type == kOutput) {
-      if (device_info_->device()->protected_output_report_ids.has_value() &&
-          base::Contains(*device_info_->device()->protected_output_report_ids,
-                         report_id)) {
+    } else if (report_type == HidReportType::kOutput) {
+      if (device.protected_output_report_ids.has_value() &&
+          std::ranges::contains(*device.protected_output_report_ids,
+                                report_id)) {
         return true;
       }
-    } else if (report_type == kFeature) {
-      if (device_info_->device()->protected_feature_report_ids.has_value() &&
-          base::Contains(*device_info_->device()->protected_feature_report_ids,
-                         report_id)) {
+    } else if (report_type == HidReportType::kFeature) {
+      if (device.protected_feature_report_ids.has_value() &&
+          std::ranges::contains(*device.protected_feature_report_ids,
+                                report_id)) {
         return true;
       }
     }
@@ -211,12 +215,17 @@ bool HidConnection::IsReportIdProtected(uint8_t report_id,
   // Some types of reports are always blocked regardless of
   // |allow_protected_reports_|.
   auto* collection_info =
-      FindCollectionByReportId(device_info_->collections(), report_id);
+      FindCollectionWithReport(device, report_id, report_type);
   if (collection_info) {
-    return IsAlwaysProtected(*collection_info->usage);
+    if (base::FeatureList::IsEnabled(features::kWebHidRecursiveFiltering)) {
+      return HasReportInAlwaysProtectedCollection(*collection_info, report_id,
+                                                  report_type);
+    } else {
+      return IsAlwaysProtected(*collection_info->usage, report_type);
+    }
   }
 
-  return has_always_protected_collection();
+  return HasAlwaysProtectedCollectionFor(report_type);
 }
 
 void HidConnection::ProcessInputReport(
@@ -226,8 +235,9 @@ void HidConnection::ProcessInputReport(
   DCHECK_GE(size, 1u);
 
   uint8_t report_id = buffer->data()[0];
-  if (IsReportIdProtected(report_id, kInput))
+  if (IsReportProtected(report_id, HidReportType::kInput)) {
     return;
+  }
 
   if (client_) {
     client_->OnInputReport(buffer, size);
@@ -247,13 +257,23 @@ void HidConnection::ProcessReadQueue() {
   while (pending_reads_.size() && pending_reports_.size()) {
     ReadCallback callback = std::move(pending_reads_.front());
 
-    scoped_refptr<base::RefCountedBytes> buffer;
-    size_t size;
-    std::tie(buffer, size) = std::move(pending_reports_.front());
+    auto [buffer, size] = std::move(pending_reports_.front());
 
     pending_reads_.pop();
     pending_reports_.pop();
     std::move(callback).Run(true, std::move(buffer), size);
+  }
+}
+
+bool HidConnection::HasAlwaysProtectedCollectionFor(
+    HidReportType report_type) const {
+  switch (report_type) {
+    case HidReportType::kInput:
+      return has_always_protected_collection_input_;
+    case HidReportType::kOutput:
+      return has_always_protected_collection_output_;
+    case HidReportType::kFeature:
+      return has_always_protected_collection_feature_;
   }
 }
 

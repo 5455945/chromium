@@ -1,16 +1,19 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/device/public/cpp/hid/hid_blocklist.h"
 
+#include <string_view>
+
 #include "base/command_line.h"
-#include "base/guid.h"
-#include "base/strings/string_piece.h"
-#include "components/variations/variations_params_manager.h"
-#include "services/device/hid/test_report_descriptors.h"
-#include "services/device/public/cpp/hid/hid_report_descriptor.h"
+#include "base/memory/raw_ref.h"
+#include "base/test/scoped_feature_list.h"
+#include "base/uuid.h"
 #include "services/device/public/cpp/hid/hid_switches.h"
+#include "services/device/public/cpp/test/hid_test_util.h"
+#include "services/device/public/cpp/test/test_report_descriptors.h"
+#include "services/device/public/mojom/hid.mojom.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -30,17 +33,20 @@ constexpr uint8_t kTestReportId = 0x01;
 class HidBlocklistTest : public testing::Test {
  public:
   HidBlocklistTest() : blocklist_(HidBlocklist::Get()) {}
+  HidBlocklistTest(HidBlocklistTest&) = delete;
+  HidBlocklistTest& operator=(HidBlocklistTest&) = delete;
 
-  const HidBlocklist& list() { return blocklist_; }
+  const HidBlocklist& list() { return *blocklist_; }
 
-  void SetDynamicBlocklist(base::StringPiece list) {
-    params_manager_.ClearAllVariationParams();
+  void SetDynamicBlocklist(std::string_view list) {
+    feature_list_.Reset();
 
     std::map<std::string, std::string> params;
-    params["blocklist_additions"] = std::string(list);
-    params_manager_.SetVariationParams("WebHIDBlocklist", params);
+    params[kWebHidBlocklistAdditions.name] = std::string(list);
+    feature_list_.InitWithFeaturesAndParameters({{kWebHidBlocklist, params}},
+                                                /*disabled_features=*/{});
 
-    blocklist_.ResetToDefaultValuesForTest();
+    blocklist_->ResetToDefaultValuesForTest();
   }
 
   mojom::HidDeviceInfoPtr CreateTestDeviceWithOneReport(
@@ -67,20 +73,22 @@ class HidBlocklistTest : public testing::Test {
       collection->feature_reports.push_back(std::move(report));
 
     auto device = mojom::HidDeviceInfo::New();
-    device->guid = base::GenerateGUID();
+    device->guid = base::Uuid::GenerateRandomV4().AsLowercaseString();
     device->vendor_id = vendor_id;
     device->product_id = product_id;
     device->has_report_id = has_report_id;
     device->collections.push_back(std::move(collection));
-    device->protected_input_report_ids = blocklist_.GetProtectedReportIds(
+    device->protected_input_report_ids = blocklist_->GetProtectedReportIds(
         HidBlocklist::kReportTypeInput, vendor_id, product_id,
         device->collections);
-    device->protected_output_report_ids = blocklist_.GetProtectedReportIds(
+    device->protected_output_report_ids = blocklist_->GetProtectedReportIds(
         HidBlocklist::kReportTypeOutput, vendor_id, product_id,
         device->collections);
-    device->protected_feature_report_ids = blocklist_.GetProtectedReportIds(
+    device->protected_feature_report_ids = blocklist_->GetProtectedReportIds(
         HidBlocklist::kReportTypeFeature, vendor_id, product_id,
         device->collections);
+    device->is_excluded_by_blocklist =
+        blocklist_->IsVendorProductBlocked(vendor_id, product_id);
     return device;
   }
 
@@ -118,51 +126,22 @@ class HidBlocklistTest : public testing::Test {
     }
 
     auto device = mojom::HidDeviceInfo::New();
-    device->guid = base::GenerateGUID();
+    device->guid = base::Uuid::GenerateRandomV4().AsLowercaseString();
     device->vendor_id = vendor_id;
     device->product_id = product_id;
     device->has_report_id = true;
     device->collections = std::move(collections);
-    device->protected_input_report_ids = blocklist_.GetProtectedReportIds(
+    device->protected_input_report_ids = blocklist_->GetProtectedReportIds(
         HidBlocklist::kReportTypeInput, vendor_id, product_id,
         device->collections);
-    device->protected_output_report_ids = blocklist_.GetProtectedReportIds(
+    device->protected_output_report_ids = blocklist_->GetProtectedReportIds(
         HidBlocklist::kReportTypeOutput, vendor_id, product_id,
         device->collections);
-    device->protected_feature_report_ids = blocklist_.GetProtectedReportIds(
+    device->protected_feature_report_ids = blocklist_->GetProtectedReportIds(
         HidBlocklist::kReportTypeFeature, vendor_id, product_id,
         device->collections);
-    return device;
-  }
-
-  mojom::HidDeviceInfoPtr CreateDeviceFromReportDescriptor(
-      uint16_t vendor_id,
-      uint16_t product_id,
-      base::span<const uint8_t> report_descriptor_data) {
-    auto device = mojom::HidDeviceInfo::New();
-    device->guid = base::GenerateGUID();
-    device->vendor_id = vendor_id;
-    device->product_id = product_id;
-
-    size_t max_input_report_size;
-    size_t max_output_report_size;
-    size_t max_feature_report_size;
-    HidReportDescriptor descriptor_parser(report_descriptor_data);
-    descriptor_parser.GetDetails(
-        &device->collections, &device->has_report_id, &max_input_report_size,
-        &max_output_report_size, &max_feature_report_size);
-    device->max_input_report_size = max_input_report_size;
-    device->max_output_report_size = max_output_report_size;
-    device->max_feature_report_size = max_feature_report_size;
-    device->protected_input_report_ids = blocklist_.GetProtectedReportIds(
-        HidBlocklist::kReportTypeInput, vendor_id, product_id,
-        device->collections);
-    device->protected_output_report_ids = blocklist_.GetProtectedReportIds(
-        HidBlocklist::kReportTypeOutput, vendor_id, product_id,
-        device->collections);
-    device->protected_feature_report_ids = blocklist_.GetProtectedReportIds(
-        HidBlocklist::kReportTypeFeature, vendor_id, product_id,
-        device->collections);
+    device->is_excluded_by_blocklist =
+        blocklist_->IsVendorProductBlocked(vendor_id, product_id);
     return device;
   }
 
@@ -170,12 +149,12 @@ class HidBlocklistTest : public testing::Test {
   void TearDown() override {
     // Because HidBlocklist is a singleton it must be cleared after tests run
     // to prevent leakage between tests.
-    params_manager_.ClearAllVariationParams();
-    blocklist_.ResetToDefaultValuesForTest();
+    feature_list_.Reset();
+    blocklist_->ResetToDefaultValuesForTest();
   }
 
-  variations::testing::VariationParamsManager params_manager_;
-  HidBlocklist& blocklist_;
+  base::test::ScopedFeatureList feature_list_;
+  const raw_ref<HidBlocklist> blocklist_;
 };
 
 }  // namespace
@@ -237,10 +216,18 @@ TEST_F(HidBlocklistTest, UnexcludedDevice) {
   auto device = CreateTestDeviceWithOneReport(
       kTestVendorId, kTestProductId, kTestUsagePage, kTestUsage, kTestReportId,
       HidBlocklist::kReportTypeInput);
-  EXPECT_FALSE(HidBlocklist::IsDeviceExcluded(*device));
+  EXPECT_FALSE(device->is_excluded_by_blocklist);
   EXPECT_TRUE(device->protected_input_report_ids->empty());
   EXPECT_TRUE(device->protected_output_report_ids->empty());
   EXPECT_TRUE(device->protected_feature_report_ids->empty());
+}
+
+TEST_F(HidBlocklistTest, UnexcludedDeviceWithNoCollections) {
+  auto device = mojom::HidDeviceInfo::New();
+  device->guid = base::Uuid::GenerateRandomV4().AsLowercaseString();
+  device->vendor_id = kTestVendorId;
+  device->product_id = kTestProductId;
+  EXPECT_FALSE(device->is_excluded_by_blocklist);
 }
 
 TEST_F(HidBlocklistTest, VendorRule) {
@@ -251,14 +238,14 @@ TEST_F(HidBlocklistTest, VendorRule) {
   auto device1 = CreateTestDeviceWithOneReport(
       kTestVendorId, kTestProductId, kTestUsagePage, kTestUsage, kTestReportId,
       HidBlocklist::kReportTypeInput);
-  EXPECT_TRUE(HidBlocklist::IsDeviceExcluded(*device1));
+  EXPECT_TRUE(device1->is_excluded_by_blocklist);
   EXPECT_THAT(*device1->protected_input_report_ids, ElementsAre(kTestReportId));
 
   // A device with a different vendor ID is not excluded.
   auto device2 = CreateTestDeviceWithOneReport(
       kTestVendorId + 1, kTestProductId, kTestUsagePage, kTestUsage,
       kTestReportId, HidBlocklist::kReportTypeInput);
-  EXPECT_FALSE(HidBlocklist::IsDeviceExcluded(*device2));
+  EXPECT_FALSE(device2->is_excluded_by_blocklist);
   EXPECT_TRUE(device2->protected_input_report_ids->empty());
 }
 
@@ -270,14 +257,14 @@ TEST_F(HidBlocklistTest, VendorProductRule) {
   auto device1 = CreateTestDeviceWithOneReport(
       kTestVendorId, kTestProductId, kTestUsagePage, kTestUsage, kTestReportId,
       HidBlocklist::kReportTypeInput);
-  EXPECT_TRUE(HidBlocklist::IsDeviceExcluded(*device1));
+  EXPECT_TRUE(device1->is_excluded_by_blocklist);
   EXPECT_THAT(*device1->protected_input_report_ids, ElementsAre(kTestReportId));
 
   // A device with matching vendor ID but different product ID is not excluded.
   auto device2 = CreateTestDeviceWithOneReport(
       kTestVendorId, kTestProductId + 1, kTestUsagePage, kTestUsage,
       kTestReportId, HidBlocklist::kReportTypeInput);
-  EXPECT_FALSE(HidBlocklist::IsDeviceExcluded(*device2));
+  EXPECT_FALSE(device2->is_excluded_by_blocklist);
   EXPECT_TRUE(device2->protected_input_report_ids->empty());
 }
 
@@ -293,7 +280,7 @@ TEST_F(HidBlocklistTest, ExcludedDeviceAllowedWithFlag) {
   auto device = CreateTestDeviceWithOneReport(
       kTestVendorId, kTestProductId, kTestUsagePage, kTestUsage, kTestReportId,
       HidBlocklist::kReportTypeInput);
-  EXPECT_FALSE(HidBlocklist::IsDeviceExcluded(*device));
+  EXPECT_FALSE(device->is_excluded_by_blocklist);
   EXPECT_TRUE(device->protected_input_report_ids->empty());
   EXPECT_TRUE(device->protected_output_report_ids->empty());
   EXPECT_TRUE(device->protected_feature_report_ids->empty());
@@ -307,7 +294,7 @@ TEST_F(HidBlocklistTest, ProductRuleWithoutVendorDoesNothing) {
   auto device = CreateTestDeviceWithOneReport(
       kTestVendorId, kTestProductId, kTestUsagePage, kTestUsage, kTestReportId,
       HidBlocklist::kReportTypeInput);
-  EXPECT_FALSE(HidBlocklist::IsDeviceExcluded(*device));
+  EXPECT_FALSE(device->is_excluded_by_blocklist);
   EXPECT_TRUE(device->protected_input_report_ids->empty());
 }
 
@@ -315,18 +302,18 @@ TEST_F(HidBlocklistTest, UsagePageRule) {
   // Protect reports by the usage page of the top-level collection.
   SetDynamicBlocklist("::ff00:::");
 
-  // A device with matching usage page is excluded.
+  // A device with matching usage page is not excluded.
   auto device1 = CreateTestDeviceWithOneReport(
       kTestVendorId, kTestProductId, kTestUsagePage, kTestUsage, kTestReportId,
       HidBlocklist::kReportTypeInput);
-  EXPECT_TRUE(HidBlocklist::IsDeviceExcluded(*device1));
+  EXPECT_FALSE(device1->is_excluded_by_blocklist);
   EXPECT_THAT(*device1->protected_input_report_ids, ElementsAre(kTestReportId));
 
   // A device with a different usage page is not excluded.
   auto device2 = CreateTestDeviceWithOneReport(
       kTestVendorId, kTestProductId, kTestUsagePage + 1, kTestUsage,
       kTestReportId, HidBlocklist::kReportTypeInput);
-  EXPECT_FALSE(HidBlocklist::IsDeviceExcluded(*device2));
+  EXPECT_FALSE(device2->is_excluded_by_blocklist);
   EXPECT_TRUE(device2->protected_input_report_ids->empty());
 }
 
@@ -334,18 +321,18 @@ TEST_F(HidBlocklistTest, UsagePageAndUsageRule) {
   // Protect reports by the usage page and usage ID of the top-level collection.
   SetDynamicBlocklist("::ff00:0001::");
 
-  // A device with matching usage page is excluded.
+  // A device with matching usage page is not excluded.
   auto device1 = CreateTestDeviceWithOneReport(
       kTestVendorId, kTestProductId, kTestUsagePage, kTestUsage, kTestReportId,
       HidBlocklist::kReportTypeInput);
-  EXPECT_TRUE(HidBlocklist::IsDeviceExcluded(*device1));
+  EXPECT_FALSE(device1->is_excluded_by_blocklist);
   EXPECT_THAT(*device1->protected_input_report_ids, ElementsAre(kTestReportId));
 
   // A device with a different usage page is not excluded.
   auto device2 = CreateTestDeviceWithOneReport(
       kTestVendorId, kTestProductId, kTestUsagePage, kTestUsage + 1,
       kTestReportId, HidBlocklist::kReportTypeInput);
-  EXPECT_FALSE(HidBlocklist::IsDeviceExcluded(*device2));
+  EXPECT_FALSE(device2->is_excluded_by_blocklist);
   EXPECT_TRUE(device2->protected_input_report_ids->empty());
 }
 
@@ -357,7 +344,7 @@ TEST_F(HidBlocklistTest, UsageRuleWithoutUsagePageDoesNothing) {
   auto device = CreateTestDeviceWithOneReport(
       kTestVendorId, kTestProductId, kTestUsagePage, kTestUsage, kTestReportId,
       HidBlocklist::kReportTypeInput);
-  EXPECT_FALSE(HidBlocklist::IsDeviceExcluded(*device));
+  EXPECT_FALSE(device->is_excluded_by_blocklist);
   EXPECT_TRUE(device->protected_input_report_ids->empty());
 }
 
@@ -365,18 +352,18 @@ TEST_F(HidBlocklistTest, NonZeroReportIdRule) {
   // Protect reports by report ID.
   SetDynamicBlocklist("::::01:");
 
-  // A device with matching report ID is excluded.
+  // A device with matching report ID is not excluded.
   auto device1 = CreateTestDeviceWithOneReport(
       kTestVendorId, kTestProductId, kTestUsagePage, kTestUsage, kTestReportId,
       HidBlocklist::kReportTypeInput);
-  EXPECT_TRUE(HidBlocklist::IsDeviceExcluded(*device1));
+  EXPECT_FALSE(device1->is_excluded_by_blocklist);
   EXPECT_THAT(*device1->protected_input_report_ids, ElementsAre(kTestReportId));
 
   // A device with a different report ID is not excluded.
   auto device2 = CreateTestDeviceWithOneReport(
       kTestVendorId, kTestProductId, kTestUsagePage, kTestUsage,
       kTestReportId + 1, HidBlocklist::kReportTypeInput);
-  EXPECT_FALSE(HidBlocklist::IsDeviceExcluded(*device2));
+  EXPECT_FALSE(device2->is_excluded_by_blocklist);
   EXPECT_TRUE(device2->protected_input_report_ids->empty());
 }
 
@@ -384,18 +371,18 @@ TEST_F(HidBlocklistTest, ZeroReportIdRule) {
   // Protect reports from devices that do not use report IDs.
   SetDynamicBlocklist("::::00:");
 
-  // A device that does not use report IDs is excluded.
+  // A device that does not use report IDs is not excluded.
   auto device1 = CreateTestDeviceWithOneReport(
       kTestVendorId, kTestProductId, kTestUsagePage, kTestUsage, kNoReportId,
       HidBlocklist::kReportTypeInput);
-  EXPECT_TRUE(HidBlocklist::IsDeviceExcluded(*device1));
+  EXPECT_FALSE(device1->is_excluded_by_blocklist);
   EXPECT_THAT(*device1->protected_input_report_ids, ElementsAre(kNoReportId));
 
   // A device that uses report IDs is not excluded.
   auto device2 = CreateTestDeviceWithOneReport(
       kTestVendorId, kTestProductId, kTestUsagePage, kTestUsage, kTestReportId,
       HidBlocklist::kReportTypeInput);
-  EXPECT_FALSE(HidBlocklist::IsDeviceExcluded(*device2));
+  EXPECT_FALSE(device2->is_excluded_by_blocklist);
   EXPECT_TRUE(device2->protected_input_report_ids->empty());
 }
 
@@ -403,18 +390,18 @@ TEST_F(HidBlocklistTest, ReportTypeRule) {
   // Protect reports by report type.
   SetDynamicBlocklist(":::::I");
 
-  // A device with only an input report is excluded.
+  // A device with only an input report is not excluded.
   auto device1 = CreateTestDeviceWithOneReport(
       kTestVendorId, kTestProductId, kTestUsagePage, kTestUsage, kTestReportId,
       HidBlocklist::kReportTypeInput);
-  EXPECT_TRUE(HidBlocklist::IsDeviceExcluded(*device1));
+  EXPECT_FALSE(device1->is_excluded_by_blocklist);
   EXPECT_THAT(*device1->protected_input_report_ids, ElementsAre(kTestReportId));
 
   // A device with an output report is not excluded.
   auto device2 = CreateTestDeviceWithOneReport(
       kTestVendorId, kTestProductId, kTestUsagePage, kTestUsage, kTestReportId,
       HidBlocklist::kReportTypeOutput);
-  EXPECT_FALSE(HidBlocklist::IsDeviceExcluded(*device2));
+  EXPECT_FALSE(device2->is_excluded_by_blocklist);
   EXPECT_TRUE(device2->protected_output_report_ids->empty());
 }
 
@@ -427,13 +414,13 @@ TEST_F(HidBlocklistTest, DeviceWithAnyUnprotectedReportsNotExcluded) {
   // reports should not be protected.
   auto device =
       CreateTestDeviceWithMultipleCollections(kTestVendorId, kTestProductId, 2);
-  EXPECT_FALSE(HidBlocklist::IsDeviceExcluded(*device));
+  EXPECT_FALSE(device->is_excluded_by_blocklist);
   EXPECT_THAT(*device->protected_input_report_ids, ElementsAre(0x01));
   EXPECT_TRUE(device->protected_output_report_ids->empty());
   EXPECT_TRUE(device->protected_feature_report_ids->empty());
 }
 
-TEST_F(HidBlocklistTest, DeviceWithAllProtectedReportsIsExcluded) {
+TEST_F(HidBlocklistTest, DeviceWithAllProtectedReportsIsNotExcluded) {
   // Protect six reports by report ID and report type.
   SetDynamicBlocklist(
       "::::01:I, ::::02:O, ::::03:F, ::::04:I, ::::05:O, ::::06:F");
@@ -442,13 +429,62 @@ TEST_F(HidBlocklistTest, DeviceWithAllProtectedReportsIsExcluded) {
   // reports match the above blocklist rules and should be protected.
   auto device =
       CreateTestDeviceWithMultipleCollections(kTestVendorId, kTestProductId, 2);
-  EXPECT_TRUE(HidBlocklist::IsDeviceExcluded(*device));
+  EXPECT_FALSE(device->is_excluded_by_blocklist);
   EXPECT_THAT(*device->protected_input_report_ids, ElementsAre(0x01, 0x04));
   EXPECT_THAT(*device->protected_output_report_ids, ElementsAre(0x02, 0x05));
   EXPECT_THAT(*device->protected_feature_report_ids, ElementsAre(0x03, 0x06));
 }
 
-TEST_F(HidBlocklistTest, SpecificOutputReportExcluded) {
+TEST_F(HidBlocklistTest, UsagePageRuleAppliesToNestedCollection) {
+  // Protect reports by usage page.
+  SetDynamicBlocklist("::ff01:::");
+
+  // Create a device with a vendor-defined top-level collection containing a
+  // child collection with the protected usage page. The child defines an input
+  // report which is also propagated to the parent.
+  auto child = mojom::HidCollectionInfo::New();
+  child->usage = mojom::HidUsageAndPage::New(kTestUsage, 0xff01);
+  child->collection_type = mojom::kHIDCollectionTypeApplication;
+  child->report_ids.push_back(kTestReportId);
+  auto child_report = mojom::HidReportDescription::New();
+  child_report->report_id = kTestReportId;
+  child->input_reports.push_back(std::move(child_report));
+
+  auto collection = mojom::HidCollectionInfo::New();
+  collection->usage = mojom::HidUsageAndPage::New(kTestUsage, kTestUsagePage);
+  collection->collection_type = mojom::kHIDCollectionTypeApplication;
+  collection->report_ids.push_back(kTestReportId);
+  auto report = mojom::HidReportDescription::New();
+  report->report_id = kTestReportId;
+  collection->input_reports.push_back(std::move(report));
+  collection->children.push_back(std::move(child));
+
+  std::vector<mojom::HidCollectionInfoPtr> collections;
+  collections.push_back(std::move(collection));
+
+  // The report defined in the child collection is protected by the usage page
+  // rule.
+  EXPECT_THAT(HidBlocklist::Get().GetProtectedReportIds(
+                  HidBlocklist::kReportTypeInput, kTestVendorId, kTestProductId,
+                  collections),
+              ElementsAre(kTestReportId));
+}
+
+TEST_F(HidBlocklistTest, FidoReportsInNestedCollectionAreProtected) {
+  // Create a device with a vendor-defined top-level collection containing a
+  // nested FIDO collection with input and output reports.
+  auto device = CreateDeviceFromReportDescriptor(
+      kTestVendorId, kTestProductId,
+      TestReportDescriptors::VendorWithNestedFido());
+
+  // The nested FIDO reports are protected by the static blocklist.
+  EXPECT_FALSE(device->is_excluded_by_blocklist);
+  EXPECT_THAT(*device->protected_input_report_ids, ElementsAre(0x01));
+  EXPECT_THAT(*device->protected_output_report_ids, ElementsAre(0x01));
+  EXPECT_TRUE(device->protected_feature_report_ids->empty());
+}
+
+TEST_F(HidBlocklistTest, SpecificOutputReportIsProtected) {
   // Block report 0x05 from usage page 0xff00 on devices from vendor 0x0b0e.
   SetDynamicBlocklist("0b0e::ff00::05:O");
 
@@ -459,7 +495,7 @@ TEST_F(HidBlocklistTest, SpecificOutputReportExcluded) {
       TestReportDescriptors::JabraLink380c());
 
   // Check that only the blocked report is excluded.
-  EXPECT_FALSE(HidBlocklist::IsDeviceExcluded(*device));
+  EXPECT_FALSE(device->is_excluded_by_blocklist);
   EXPECT_TRUE(device->protected_input_report_ids->empty());
   EXPECT_THAT(*device->protected_output_report_ids, ElementsAre(0x05));
   EXPECT_TRUE(device->protected_feature_report_ids->empty());

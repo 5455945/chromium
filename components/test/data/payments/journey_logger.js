@@ -1,13 +1,11 @@
 /*
- * Copyright 2019 The Chromium Authors. All rights reserved.
+ * Copyright 2019 The Chromium Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
 
-/* global PaymentRequest:false */
-
-var request = null;
-var showPromise = null;
+let request = null;
+let showPromise = null;
 
 const TEST_DETAILS = {
   total: {label: 'Total', amount: {currency: 'USD', value: '5.00'}},
@@ -26,23 +24,12 @@ function testPaymentMethods(methods) {
 }
 
 /**
- * Launches the PaymentRequest UI with basic-card as payment methods.
- * Saves the newly created PaymentRequest and its show promise in global
- * variables. Tests can optionally call abort() to cancel this request.
+ * Aborts the active PaymentRequest.
  */
-function testBasicCard() { // eslint-disable-line no-unused-vars
-  testPaymentMethods([
-    {supportedMethods: 'basic-card'},
-  ]);
-}
-
-/**
- * Aborts the PaymentRequest initiated by testBasicCard().
- */
-async function abort() { // eslint-disable-line no-unused-vars
+async function abort() {
   await request.abort();
   return await showPromise.catch((e) => {
-    return e.name == 'AbortError';
+    return e.name === 'AbortError';
   });
 }
 
@@ -52,7 +39,7 @@ async function abort() { // eslint-disable-line no-unused-vars
  * //components/test/data/payments/google.com.
  * This function blocks until a response is received from the payment app.
  */
-async function testGPay() { // eslint-disable-line no-unused-vars
+async function testGPay() {
   const gpayData = {
     supportedMethods: 'https://google.com/pay',
     data: {

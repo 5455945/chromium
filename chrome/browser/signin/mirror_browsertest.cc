@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,26 +8,27 @@
 #include <utility>
 
 #include "base/base_switches.h"
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
-#include "base/task/post_task.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/test/bind.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_content_browser_client.h"
 #include "chrome/browser/extensions/api/identity/web_auth_flow.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/signin_util.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/google/core/common/google_switches.h"
-#include "components/network_session_configurator/common/network_switches.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/core/browser/dice_header_helper.h"
 #include "components/signin/core/browser/signin_header_helper.h"
@@ -39,30 +40,38 @@
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/request_handler_util.h"
+#include "services/network/public/cpp/resource_request.h"
 #include "third_party/blink/public/common/loader/url_loader_throttle.h"
+#include "url/gurl.h"
 
 namespace {
 
-// A delegate to insert a user generated X-Chrome-Connected header
-// to a specifict URL.
+// A delegate to insert a user generated X-Chrome-Connected header to a specific
+// URL.
 class HeaderModifyingThrottle : public blink::URLLoaderThrottle {
  public:
   HeaderModifyingThrottle() = default;
+
+  HeaderModifyingThrottle(const HeaderModifyingThrottle&) = delete;
+  HeaderModifyingThrottle& operator=(const HeaderModifyingThrottle&) = delete;
+
   ~HeaderModifyingThrottle() override = default;
 
   void WillStartRequest(network::ResourceRequest* request,
                         bool* defer) override {
     request->headers.SetHeader(signin::kChromeConnectedHeader, "User Data");
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(HeaderModifyingThrottle);
 };
 
 class ThrottleContentBrowserClient : public ChromeContentBrowserClient {
  public:
   explicit ThrottleContentBrowserClient(const GURL& watch_url)
       : watch_url_(watch_url) {}
+
+  ThrottleContentBrowserClient(const ThrottleContentBrowserClient&) = delete;
+  ThrottleContentBrowserClient& operator=(const ThrottleContentBrowserClient&) =
+      delete;
+
   ~ThrottleContentBrowserClient() override = default;
 
   // ContentBrowserClient overrides:
@@ -72,7 +81,8 @@ class ThrottleContentBrowserClient : public ChromeContentBrowserClient {
       content::BrowserContext* browser_context,
       const base::RepeatingCallback<content::WebContents*()>& wc_getter,
       content::NavigationUIData* navigation_ui_data,
-      int frame_tree_node_id) override {
+      content::FrameTreeNodeId frame_tree_node_id,
+      std::optional<int64_t> navigation_id) override {
     std::vector<std::unique_ptr<blink::URLLoaderThrottle>> throttles;
     if (request.url == watch_url_)
       throttles.push_back(std::make_unique<HeaderModifyingThrottle>());
@@ -81,41 +91,15 @@ class ThrottleContentBrowserClient : public ChromeContentBrowserClient {
 
  private:
   const GURL watch_url_;
-
-  DISALLOW_COPY_AND_ASSIGN(ThrottleContentBrowserClient);
 };
 
 // Subclass of DiceManageAccountBrowserTest with Mirror enabled.
 class MirrorBrowserTest : public InProcessBrowserTest {
  protected:
-  void RunExtensionConsentTest(extensions::WebAuthFlow::Partition partition,
-                               bool expects_header) {
-    net::EmbeddedTestServer https_server(net::EmbeddedTestServer::TYPE_HTTPS);
-    https_server.AddDefaultHandlers(GetChromeTestDataDir());
-    const std::string kAuthPath = "/auth";
-    net::test_server::HttpRequest::HeaderMap headers;
-    base::RunLoop run_loop;
-    https_server.RegisterRequestMonitor(base::BindLambdaForTesting(
-        [&](const net::test_server::HttpRequest& request) {
-          if (request.GetURL().path() != kAuthPath)
-            return;
-
-          headers = request.headers;
-          run_loop.Quit();
-        }));
-    ASSERT_TRUE(https_server.Start());
-
-    auto web_auth_flow = std::make_unique<extensions::WebAuthFlow>(
-        nullptr, browser()->profile(),
-        https_server.GetURL("google.com", kAuthPath),
-        extensions::WebAuthFlow::INTERACTIVE, partition);
-
-    web_auth_flow->Start();
-    run_loop.Run();
-    EXPECT_EQ(!!headers.count(signin::kChromeConnectedHeader), expects_header);
-
-    web_auth_flow.release()->DetachDelegateAndDelete();
-    base::RunLoop().RunUntilIdle();
+  MirrorBrowserTest() {
+    // TODO(crbug.com/40248833): Use HTTPS URLs in tests to avoid having to
+    // disable this feature.
+    feature_list_.InitAndDisableFeature(features::kHttpsUpgrades);
   }
 
  private:
@@ -126,27 +110,25 @@ class MirrorBrowserTest : public InProcessBrowserTest {
   }
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    // HTTPS server only serves a valid cert for localhost, so this is needed to
-    // load pages from "www.google.com" without an interstitial.
-    command_line->AppendSwitch(switches::kIgnoreCertificateErrors);
-
     // The production code only allows known ports (80 for http and 443 for
     // https), but the test server runs on a random port.
     command_line->AppendSwitch(switches::kIgnoreGooglePortNumbers);
   }
+
+  base::test::ScopedFeatureList feature_list_;
 };
 
 // Verify the following items:
-// 1- X-Chrome-Connected is appended on Google domains if account
-//    consistency is enabled and access is secure.
-// 2- The header is stripped in case a request is redirected from a Gooogle
+// 1- X-Chrome-Connected is appended on Google domains if account consistency is
+//    enabled and access is secure.
+// 2- The header is stripped in case a request is redirected from a Google
 //    domain to non-google domain.
-// 3- The header is NOT stripped in case it is added directly by the page
-//    and not because it was on a secure Google domain.
-// This is a regression test for crbug.com/588492.
+// 3- The header is NOT stripped in case it is added directly by the page and
+//    not because it was on a secure Google domain.
+// This is a regression test for crbug.com/40083730.
 IN_PROC_BROWSER_TEST_F(MirrorBrowserTest, MirrorRequestHeader) {
-  browser()->profile()->GetPrefs()->SetString(prefs::kGoogleServicesAccountId,
-                                              "account_id");
+  browser()->GetProfile()->GetPrefs()->SetString(
+      prefs::kGoogleServicesAccountId, "account_id");
 
   base::Lock lock;
   // Map from the path of the URLs that test server sees to the request header.
@@ -156,7 +138,7 @@ IN_PROC_BROWSER_TEST_F(MirrorBrowserTest, MirrorRequestHeader) {
   embedded_test_server()->RegisterRequestMonitor(base::BindLambdaForTesting(
       [&](const net::test_server::HttpRequest& request) {
         base::AutoLock auto_lock(lock);
-        header_map[request.GetURL().path()] = request.headers;
+        header_map[request.GetURL().GetPath()] = request.headers;
       }));
   ASSERT_TRUE(embedded_test_server()->Start());
 
@@ -165,8 +147,9 @@ IN_PROC_BROWSER_TEST_F(MirrorBrowserTest, MirrorRequestHeader) {
   https_server.RegisterRequestMonitor(base::BindLambdaForTesting(
       [&](const net::test_server::HttpRequest& request) {
         base::AutoLock auto_lock(lock);
-        header_map[request.GetURL().path()] = request.headers;
+        header_map[request.GetURL().GetPath()] = request.headers;
       }));
+  https_server.SetCertHostnames({"www.google.com", "www.redirected.com"});
   ASSERT_TRUE(https_server.Start());
 
   base::FilePath root_http;
@@ -174,15 +157,16 @@ IN_PROC_BROWSER_TEST_F(MirrorBrowserTest, MirrorRequestHeader) {
   root_http = root_http.AppendASCII("mirror_request_header");
 
   struct TestCase {
-    GURL original_url;  // The URL from which the request begins.
+    // The URL from which the request begins.
+    GURL original_url;
     // The path to which navigation is redirected.
     std::string redirected_to_path;
-    bool inject_header;  // Should X-Chrome-Connected header be injected to the
-                         // original request.
-    bool original_url_expects_header;       // Expectation: The header should be
-                                            // visible in original URL.
-    bool redirected_to_url_expects_header;  // Expectation: The header should be
-                                            // visible in redirected URL.
+    // Should X-Chrome-Connected header be injected to the original request.
+    bool inject_header;
+    // Expectation: The header should be visible in original URL.
+    bool original_url_expects_header;
+    // Expectation: The header should be visible in redirected URL.
+    bool redirected_to_url_expects_header;
   };
 
   std::vector<TestCase> all_tests;
@@ -206,7 +190,7 @@ IN_PROC_BROWSER_TEST_F(MirrorBrowserTest, MirrorRequestHeader) {
       {embedded_test_server()->GetURL("www.header_adder.com", replacement_path),
        "/simple.html", true, true, true});
 
-  // First one should have the header, but not transfered to second one.
+  // First one should have the header, but not transferred to second one.
   replacement_text.clear();
   replacement_text.push_back(
       std::make_pair("{{PORT}}", base::NumberToString(https_server.port())));
@@ -225,7 +209,8 @@ IN_PROC_BROWSER_TEST_F(MirrorBrowserTest, MirrorRequestHeader) {
       old_browser_client = content::SetBrowserClientForTesting(&browser_client);
 
     // Navigate to first url.
-    ui_test_utils::NavigateToURL(browser(), test_case.original_url);
+    ASSERT_TRUE(
+        ui_test_utils::NavigateToURL(browser(), test_case.original_url));
 
     if (test_case.inject_header)
       content::SetBrowserClientForTesting(old_browser_client);
@@ -233,12 +218,12 @@ IN_PROC_BROWSER_TEST_F(MirrorBrowserTest, MirrorRequestHeader) {
     base::AutoLock auto_lock(lock);
 
     // Check if header exists and X-Chrome-Connected is correctly provided.
-    ASSERT_EQ(1u, header_map.count(test_case.original_url.path()));
+    ASSERT_EQ(1u, header_map.count(test_case.original_url.GetPath()));
     if (test_case.original_url_expects_header) {
-      ASSERT_TRUE(header_map[test_case.original_url.path()].count(
+      ASSERT_TRUE(header_map[test_case.original_url.GetPath()].count(
           signin::kChromeConnectedHeader));
     } else {
-      ASSERT_FALSE(header_map[test_case.original_url.path()].count(
+      ASSERT_FALSE(header_map[test_case.original_url.GetPath()].count(
           signin::kChromeConnectedHeader));
     }
 
@@ -253,20 +238,6 @@ IN_PROC_BROWSER_TEST_F(MirrorBrowserTest, MirrorRequestHeader) {
 
     header_map.clear();
   }
-}
-
-// Verifies that requests originated from chrome.identity.launchWebAuthFlow()
-// API don't have Mirror headers attached.
-// This is a regression test for crbug.com/1077504.
-IN_PROC_BROWSER_TEST_F(MirrorBrowserTest,
-                       NoMirrorExtensionConsent_LaunchWebAuthFlow) {
-  RunExtensionConsentTest(extensions::WebAuthFlow::LAUNCH_WEB_AUTH_FLOW, false);
-}
-
-// Verifies that requests originated from chrome.identity.getAuthToken()
-// API have Mirror headers attached.
-IN_PROC_BROWSER_TEST_F(MirrorBrowserTest, MirrorExtensionConsent_GetAuthToken) {
-  RunExtensionConsentTest(extensions::WebAuthFlow::GET_AUTH_TOKEN, true);
 }
 
 }  // namespace

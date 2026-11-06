@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,9 +11,10 @@
 #include <map>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/message_center/message_center_export.h"
 #include "ui/message_center/notification_blocker.h"
 #include "ui/message_center/public/cpp/notification_types.h"
@@ -28,13 +29,11 @@ class Image;
 
 namespace message_center {
 
-namespace test {
-class NotificationListTest;
-}
-
 class Notification;
 class NotificationDelegate;
 struct NotifierId;
+
+enum class ExpandState { DEFAULT = 0, USER_EXPANDED = 1, USER_COLLAPSED = 2 };
 
 // Comparers used to auto-sort the lists of Notifications.
 struct MESSAGE_CENTER_EXPORT ComparePriorityTimestampSerial {
@@ -63,11 +62,13 @@ class MESSAGE_CENTER_EXPORT NotificationList {
 
     bool shown_as_popup = false;
     bool is_read = false;
+    ExpandState expand_state = ExpandState::DEFAULT;
   };
 
   // Auto-sorted set. Matches the order in which Notifications are shown in
   // Notification Center.
-  using Notifications = std::set<Notification*, ComparePriorityTimestampSerial>;
+  using Notifications = std::set<raw_ptr<Notification, SetExperimental>,
+                                 ComparePriorityTimestampSerial>;
   using OwnedNotifications =
       std::map<std::unique_ptr<Notification>,
                NotificationState,
@@ -78,7 +79,24 @@ class MESSAGE_CENTER_EXPORT NotificationList {
   using PopupNotifications = std::set<Notification*, CompareTimestampSerial>;
 
   explicit NotificationList(MessageCenter* message_center);
+
+  NotificationList(const NotificationList&) = delete;
+  NotificationList& operator=(const NotificationList&) = delete;
+
   virtual ~NotificationList();
+
+  int size() const { return notifications_.size(); }
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // Returns the notification IDs prioritized for removal as follows:
+  // 1. Lower priority notifications are removed before higher priority ones.
+  // 2. For notifications with equal priority, older ones are removed first.
+  // 3. The most recent notifications are kept.
+  // NOTE:
+  // 1. This function is used only if the notification limit feature is enabled.
+  // 2. The returned array's size could be less than `count`.
+  std::vector<std::string> GetTopKRemovableNotificationIds(size_t count) const;
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   // Makes a message "read". Collects the set of ids whose state have changed
   // and set to |udpated_ids|. NULL if updated ids don't matter.
@@ -103,9 +121,12 @@ class MESSAGE_CENTER_EXPORT NotificationList {
   // Returns all notifications that have a matching |app_id|.
   Notifications GetNotificationsByAppId(const std::string& app_id) const;
 
+  // Returns all notifications that have a matching `origin_url`.
+  Notifications GetNotificationsByOriginUrl(const GURL& origin_url) const;
+
   // Returns true if the notification exists and was updated.
   bool SetNotificationIcon(const std::string& notification_id,
-                           const gfx::Image& image);
+                           const ui::ImageModel& image);
 
   // Returns true if the notification exists and was updated.
   bool SetNotificationImage(const std::string& notification_id,
@@ -129,6 +150,13 @@ class MESSAGE_CENTER_EXPORT NotificationList {
   PopupNotifications GetPopupNotifications(const NotificationBlockers& blockers,
                                            std::list<std::string>* blocked);
 
+  // Lists all notifications (even those that aren't shown due to shown popup
+  // limits) that would qualify as popups with the given list of blockers.
+  // Doesn't mark popups as shown.
+  PopupNotifications GetPopupNotificationsWithoutBlocker(
+      const NotificationBlockers& blockers,
+      const NotificationBlocker& blocker) const;
+
   // Marks a specific popup item as shown. Set |mark_notification_as_read| to
   // true in case marking the notification as read too.
   void MarkSinglePopupAsShown(const std::string& id,
@@ -140,6 +168,12 @@ class MESSAGE_CENTER_EXPORT NotificationList {
   // Resets the state for a pop up so that it can be shown again. Used to
   // bring up a grouped notification when a new item is added to it.
   void ResetSinglePopup(const std::string& id);
+
+  // `ExpandState` signifies whether the notification with the specified `id`
+  // has been manually expanded or collapsed by the user.
+  ExpandState GetNotificationExpandState(const std::string& id);
+  void SetNotificationExpandState(const std::string& id,
+                                  ExpandState expand_state);
 
   NotificationDelegate* GetNotificationDelegate(const std::string& id);
 
@@ -162,12 +196,17 @@ class MESSAGE_CENTER_EXPORT NotificationList {
   // Suitable for rendering notifications in a MessageCenter.
   Notifications GetVisibleNotifications(
       const NotificationBlockers& blockers) const;
+
+  // Returns all visible notifications if not for the provided blocker.
+  Notifications GetVisibleNotificationsWithoutBlocker(
+      const NotificationBlockers& blockers,
+      const NotificationBlocker* ignored_blocker) const;
+
   size_t NotificationCount(const NotificationBlockers& blockers) const;
 
  private:
   friend class NotificationListTest;
-  FRIEND_TEST_ALL_PREFIXES(NotificationListTest,
-                           TestPushingShownNotification);
+  FRIEND_TEST_ALL_PREFIXES(NotificationListTest, TestPushingShownNotification);
 
   // Iterates through the list and returns the first notification matching |id|.
   OwnedNotifications::iterator GetNotification(const std::string& id);
@@ -178,13 +217,11 @@ class MESSAGE_CENTER_EXPORT NotificationList {
 
   void PushNotification(std::unique_ptr<Notification> notification);
 
-  MessageCenter* message_center_;  // owner
+  raw_ptr<MessageCenter> message_center_;  // owner
   OwnedNotifications notifications_;
   bool quiet_mode_;
-
-  DISALLOW_COPY_AND_ASSIGN(NotificationList);
 };
 
 }  // namespace message_center
 
-#endif // UI_MESSAGE_CENTER_NOTIFICATION_LIST_H_
+#endif  // UI_MESSAGE_CENTER_NOTIFICATION_LIST_H_

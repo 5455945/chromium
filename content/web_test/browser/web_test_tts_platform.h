@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,7 +13,12 @@
 // detailed testing.
 class WebTestTtsPlatform : public content::TtsPlatform {
  public:
+  using OnSpeakFinishedCallback = base::OnceCallback<void(bool)>;
+
   static WebTestTtsPlatform* GetInstance();
+
+  WebTestTtsPlatform(const WebTestTtsPlatform&) = delete;
+  WebTestTtsPlatform& operator=(const WebTestTtsPlatform&) = delete;
 
   // content::TtsControllerDelegate overrides.
   bool PlatformImplSupported() override;
@@ -24,7 +29,7 @@ class WebTestTtsPlatform : public content::TtsPlatform {
              const std::string& lang,
              const content::VoiceData& voice,
              const content::UtteranceContinuousParameters& params,
-             base::OnceCallback<void(bool)> on_speak_finished) override;
+             OnSpeakFinishedCallback on_speak_finished) override;
   bool StopSpeaking() override;
   bool IsSpeaking() override;
   void GetVoices(std::vector<content::VoiceData>* out_voices) override;
@@ -37,15 +42,21 @@ class WebTestTtsPlatform : public content::TtsPlatform {
   void ClearError() override;
   void SetError(const std::string& error) override;
   void Shutdown() override;
-  bool PreferEngineDelegateVoices() override;
+  void FinalizeVoiceOrdering(std::vector<content::VoiceData>& voices) override;
+  void RefreshVoices() override;
 
  private:
+  static const int kInvalidUtteranceId = -1;
+
   WebTestTtsPlatform();
   virtual ~WebTestTtsPlatform();
+  void SimulateEndEvent(int utterance_id,
+                        int len,
+                        OnSpeakFinishedCallback on_speak_finished);
+
+  int utterance_id_ = kInvalidUtteranceId;
 
   friend struct base::DefaultSingletonTraits<WebTestTtsPlatform>;
-
-  DISALLOW_COPY_AND_ASSIGN(WebTestTtsPlatform);
 };
 
 #endif  // CONTENT_WEB_TEST_BROWSER_WEB_TEST_TTS_PLATFORM_H_

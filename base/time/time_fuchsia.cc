@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <zircon/syscalls.h>
 #include <zircon/threads.h>
 
+#include "base/check_op.h"
 #include "base/fuchsia/fuchsia_logging.h"
 #include "base/time/time_override.h"
 
@@ -37,11 +38,15 @@ TimeTicks TimeTicksNowIgnoringOverride() {
   CHECK_NE(0, nanos_since_boot);
   return TimeTicks::FromZxTime(nanos_since_boot);
 }
+
+TimeTicks TimeTicksLowResolutionNowIgnoringOverride() {
+  return TimeTicksNowIgnoringOverride();
+}
 }  // namespace subtle
 
 // static
 TimeDelta TimeDelta::FromZxDuration(zx_duration_t nanos) {
-  return TimeDelta::FromNanoseconds(nanos);
+  return Nanoseconds(nanos);
 }
 
 zx_duration_t TimeDelta::ToZxDuration() const {
@@ -50,7 +55,7 @@ zx_duration_t TimeDelta::ToZxDuration() const {
 
 // static
 Time Time::FromZxTime(zx_time_t nanos_since_unix_epoch) {
-  return UnixEpoch() + TimeDelta::FromNanoseconds(nanos_since_unix_epoch);
+  return UnixEpoch() + Nanoseconds(nanos_since_unix_epoch);
 }
 
 zx_time_t Time::ToZxTime() const {
@@ -74,12 +79,31 @@ bool TimeTicks::IsConsistentAcrossProcesses() {
 
 // static
 TimeTicks TimeTicks::FromZxTime(zx_time_t nanos_since_boot) {
-  return TimeTicks() + TimeDelta::FromNanoseconds(nanos_since_boot);
+  return TimeTicks() + Nanoseconds(nanos_since_boot);
 }
 
 zx_time_t TimeTicks::ToZxTime() const {
   return (*this - TimeTicks()).InNanoseconds();
 }
+
+// RealTicks ------------------------------------------------------------------
+
+namespace subtle {
+// In Fuchsia Zircon, `zx_clock_get_boot()` returns the number of nanoseconds
+// since boot including suspended time, while `zx_clock_get_monotonic()` (which
+// backs `TimeTicks` and `LiveTicks`) excludes suspended time. Both clocks are
+// linear transformations of the same underlying hardware counter
+// (`zx_ticks_get_boot()` and `zx_ticks_get()`). While the system is awake, the
+// boot offset is static, ensuring `zx_clock_get_boot()` and
+// `zx_clock_get_monotonic()` advance at the identical rate of 1 ns per ns. See:
+// https://fuchsia.dev/reference/syscalls/clock_get_boot
+// https://fuchsia.dev/reference/syscalls/clock_get_monotonic
+time_internal::RealTicks RealTicksNowIgnoringOverride() {
+  const zx_time_t nanos_since_boot = zx_clock_get_boot();
+  CHECK_NE(0, nanos_since_boot);
+  return time_internal::RealTicks() + Nanoseconds(nanos_since_boot);
+}
+}  // namespace subtle
 
 // ThreadTicks ----------------------------------------------------------------
 
@@ -90,7 +114,7 @@ ThreadTicks ThreadTicksNowIgnoringOverride() {
                                           ZX_INFO_THREAD_STATS, &info,
                                           sizeof(info), nullptr, nullptr);
   ZX_CHECK(status == ZX_OK, status);
-  return ThreadTicks() + TimeDelta::FromNanoseconds(info.total_runtime);
+  return ThreadTicks() + Nanoseconds(info.total_runtime);
 }
 }  // namespace subtle
 

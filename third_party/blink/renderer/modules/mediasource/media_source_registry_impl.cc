@@ -30,9 +30,11 @@
 
 #include "third_party/blink/renderer/modules/mediasource/media_source_registry_impl.h"
 
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include <utility>
+
+#include "third_party/blink/renderer/platform/blob/blob_url.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
-#include "third_party/blink/renderer/platform/wtf/functional.h"
+#include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/wtf/wtf.h"
 
 namespace blink {
@@ -44,31 +46,24 @@ void MediaSourceRegistryImpl::Init() {
   DVLOG(1) << __func__ << " instance=" << &instance;
 }
 
-void MediaSourceRegistryImpl::RegisterURL(SecurityOrigin*,
-                                          const KURL& url,
-                                          URLRegistrable* registrable) {
-  MutexLocker lock(map_mutex_);
+KURL MediaSourceRegistryImpl::RegisterUrl(
+    const SecurityOrigin* security_origin,
+    scoped_refptr<MediaSourceAttachment> attachment) {
+  DCHECK(IsMainThread());
+  DCHECK_EQ(&attachment->Registry(), this);
 
-  DCHECK(IsMainThread() ||
-         RuntimeEnabledFeatures::MediaSourceInWorkersEnabled());
-
-  DCHECK_EQ(&registrable->Registry(), this);
-  DCHECK(!url.IsEmpty());  // Caller of interface should already enforce this.
+  const KURL url = BlobURL::CreatePublicURL(security_origin);
+  DCHECK(!url.IsEmpty());
 
   DVLOG(1) << __func__ << " url=" << url << ", IsMainThread=" << IsMainThread();
-
-  scoped_refptr<MediaSourceAttachment> attachment =
-      base::AdoptRef(static_cast<MediaSourceAttachment*>(registrable));
 
   media_sources_.Set(url.GetString(), std::move(attachment));
+  return url;
 }
 
-void MediaSourceRegistryImpl::UnregisterURL(const KURL& url) {
-  MutexLocker lock(map_mutex_);
-
+void MediaSourceRegistryImpl::UnregisterUrl(const KURL& url) {
+  DCHECK(IsMainThread());
   DVLOG(1) << __func__ << " url=" << url << ", IsMainThread=" << IsMainThread();
-  DCHECK(IsMainThread() ||
-         RuntimeEnabledFeatures::MediaSourceInWorkersEnabled());
   DCHECK(!url.IsEmpty());  // Caller of interface should already enforce this.
 
   auto iter = media_sources_.find(url.GetString());
@@ -82,11 +77,12 @@ void MediaSourceRegistryImpl::UnregisterURL(const KURL& url) {
 
 scoped_refptr<MediaSourceAttachment> MediaSourceRegistryImpl::LookupMediaSource(
     const String& url) {
-  MutexLocker lock(map_mutex_);
-
   DCHECK(IsMainThread());
-  DCHECK(!url.IsEmpty());
-  return media_sources_.at(url);
+  DCHECK(!url.empty());
+  auto iter = media_sources_.find(url);
+  if (iter == media_sources_.end())
+    return nullptr;
+  return iter->value;
 }
 
 MediaSourceRegistryImpl::MediaSourceRegistryImpl() {

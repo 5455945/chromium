@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,15 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/run_loop.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/threading/thread.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
+#include "url/scheme_host_port.h"
 
 namespace net {
 
@@ -31,17 +33,17 @@ TEST(HttpAuthPreferencesTest, NegotiateEnablePort) {
   EXPECT_TRUE(http_auth_preferences.NegotiateEnablePort());
 }
 
-#if defined(OS_POSIX)
+#if BUILDFLAG(IS_POSIX)
 TEST(HttpAuthPreferencesTest, DisableNtlmV2) {
   HttpAuthPreferences http_auth_preferences;
   EXPECT_TRUE(http_auth_preferences.NtlmV2Enabled());
   http_auth_preferences.set_ntlm_v2_enabled(false);
   EXPECT_FALSE(http_auth_preferences.NtlmV2Enabled());
 }
-#endif
+#endif  // BUILDFLAG(IS_POSIX)
 
-#if defined(OS_ANDROID)
-TEST(HttpAuthPreferencesTest, AuthAndroidhNegotiateAccountType) {
+#if BUILDFLAG(IS_ANDROID)
+TEST(HttpAuthPreferencesTest, AuthAndroidNegotiateAccountType) {
   HttpAuthPreferences http_auth_preferences;
   EXPECT_EQ(std::string(),
             http_auth_preferences.AuthAndroidNegotiateAccountType());
@@ -49,43 +51,82 @@ TEST(HttpAuthPreferencesTest, AuthAndroidhNegotiateAccountType) {
   EXPECT_EQ(std::string("foo"),
             http_auth_preferences.AuthAndroidNegotiateAccountType());
 }
-#endif
+#endif  // BUILDFLAG(IS_ANDROID)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
 TEST(HttpAuthPreferencesTest, AllowGssapiLibraryLoad) {
   HttpAuthPreferences http_auth_preferences;
   EXPECT_TRUE(http_auth_preferences.AllowGssapiLibraryLoad());
   http_auth_preferences.set_allow_gssapi_library_load(false);
   EXPECT_FALSE(http_auth_preferences.AllowGssapiLibraryLoad());
 }
-#endif
+#endif  // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
 
 TEST(HttpAuthPreferencesTest, AuthServerAllowlist) {
   HttpAuthPreferences http_auth_preferences;
   // Check initial value
-  EXPECT_FALSE(http_auth_preferences.CanUseDefaultCredentials(GURL("abc")));
+  EXPECT_FALSE(http_auth_preferences.CanUseDefaultCredentials(
+      url::SchemeHostPort(GURL("abc"))));
   http_auth_preferences.SetServerAllowlist("*");
-  EXPECT_TRUE(http_auth_preferences.CanUseDefaultCredentials(GURL("abc")));
+  EXPECT_TRUE(http_auth_preferences.CanUseDefaultCredentials(
+      url::SchemeHostPort(GURL("abc"))));
 }
 
 TEST(HttpAuthPreferencesTest, DelegationType) {
   using DelegationType = HttpAuth::DelegationType;
   HttpAuthPreferences http_auth_preferences;
   // Check initial value
-  EXPECT_EQ(DelegationType::kNone,
-            http_auth_preferences.GetDelegationType(GURL("abc")));
+  EXPECT_EQ(DelegationType::kNone, http_auth_preferences.GetDelegationType(
+                                       url::SchemeHostPort(GURL("abc"))));
 
   http_auth_preferences.SetDelegateAllowlist("*");
   EXPECT_EQ(DelegationType::kUnconstrained,
-            http_auth_preferences.GetDelegationType(GURL("abc")));
+            http_auth_preferences.GetDelegationType(
+                url::SchemeHostPort(GURL("abc"))));
 
   http_auth_preferences.set_delegate_by_kdc_policy(true);
   EXPECT_EQ(DelegationType::kByKdcPolicy,
-            http_auth_preferences.GetDelegationType(GURL("abc")));
+            http_auth_preferences.GetDelegationType(
+                url::SchemeHostPort(GURL("abc"))));
 
   http_auth_preferences.SetDelegateAllowlist("");
-  EXPECT_EQ(DelegationType::kNone,
-            http_auth_preferences.GetDelegationType(GURL("abc")));
+  EXPECT_EQ(DelegationType::kNone, http_auth_preferences.GetDelegationType(
+                                       url::SchemeHostPort(GURL("abc"))));
+}
+
+TEST(HttpAuthPreferencesTest, HttpAuthSchemesFilter) {
+  HttpAuthPreferences http_auth_preferences;
+  http_auth_preferences.set_http_auth_scheme_filter(base::BindRepeating(
+      [](const url::SchemeHostPort& scheme_host_port, HttpAuth::Target target) {
+        return scheme_host_port.GetURL() == GURL("https://www.google.com") &&
+               target == HttpAuth::AUTH_SERVER;
+      }));
+  EXPECT_TRUE(http_auth_preferences.IsAllowedToUseAllHttpAuthSchemes(
+      url::SchemeHostPort(GURL("https://www.google.com")),
+      HttpAuth::AUTH_SERVER));
+  EXPECT_FALSE(http_auth_preferences.IsAllowedToUseAllHttpAuthSchemes(
+      url::SchemeHostPort(GURL("https://www.google.com")),
+      HttpAuth::AUTH_PROXY));
+  EXPECT_FALSE(http_auth_preferences.IsAllowedToUseAllHttpAuthSchemes(
+      url::SchemeHostPort(GURL("https://www.example.com")),
+      HttpAuth::AUTH_SERVER));
+}
+
+TEST(HttpAuthPreferencesTest, SetAllowedSchemes) {
+  HttpAuthPreferences http_auth_preferences;
+  EXPECT_FALSE(http_auth_preferences.allowed_schemes().has_value());
+
+  base::flat_set<std::string> schemes{"Basic", "NTLM", "negotiate"};
+  http_auth_preferences.SetAllowedSchemes(schemes);
+
+  ASSERT_TRUE(http_auth_preferences.allowed_schemes().has_value());
+  const auto& allowed_schemes = http_auth_preferences.allowed_schemes().value();
+  EXPECT_EQ(3u, allowed_schemes.size());
+  EXPECT_TRUE(allowed_schemes.contains("basic"));
+  EXPECT_TRUE(allowed_schemes.contains("ntlm"));
+  EXPECT_TRUE(allowed_schemes.contains("negotiate"));
+  EXPECT_FALSE(allowed_schemes.contains("Basic"));
+  EXPECT_FALSE(allowed_schemes.contains("NTLM"));
 }
 
 }  // namespace net

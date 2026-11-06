@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,18 +8,26 @@
 
 namespace blink {
 
-HardwarePreference StringToHardwarePreference(const String& value) {
-  if (value == "allow")
-    return HardwarePreference::kAllow;
+HardwarePreference IdlEnumToHardwarePreference(V8HardwarePreference value) {
+  switch (value.AsEnum()) {
+    case V8HardwarePreference::Enum::kNoPreference:
+      return HardwarePreference::kNoPreference;
+    case V8HardwarePreference::Enum::kPreferHardware:
+      return HardwarePreference::kPreferHardware;
+    case V8HardwarePreference::Enum::kPreferSoftware:
+      return HardwarePreference::kPreferSoftware;
+  }
+}
 
-  if (value == "require")
-    return HardwarePreference::kRequire;
-
-  if (value == "deny")
-    return HardwarePreference::kDeny;
-
-  NOTREACHED();
-  return HardwarePreference::kAllow;
+V8HardwarePreference HardwarePreferenceToIdlEnum(HardwarePreference hw_pref) {
+  switch (hw_pref) {
+    case HardwarePreference::kNoPreference:
+      return V8HardwarePreference(V8HardwarePreference::Enum::kNoPreference);
+    case HardwarePreference::kPreferHardware:
+      return V8HardwarePreference(V8HardwarePreference::Enum::kPreferHardware);
+    case HardwarePreference::kPreferSoftware:
+      return V8HardwarePreference(V8HardwarePreference::Enum::kPreferSoftware);
+  }
 }
 
 }  // namespace blink

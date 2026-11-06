@@ -31,29 +31,14 @@
 #ifndef THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_WIDGET_H_
 #define THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_WIDGET_H_
 
-#include "base/callback.h"
-#include "build/build_config.h"
-#include "cc/input/browser_controls_state.h"
-#include "cc/metrics/begin_main_frame_metrics.h"
-#include "cc/paint/element_id.h"
-#include "cc/trees/layer_tree_host_client.h"
-#include "third_party/blink/public/common/input/web_menu_source_type.h"
+#include "services/viz/public/mojom/compositing/compositor_frame_sink.mojom-shared.h"
 #include "third_party/blink/public/common/metrics/document_update_reason.h"
-#include "third_party/blink/public/mojom/input/input_event_result.mojom-shared.h"
-#include "third_party/blink/public/mojom/input/pointer_lock_context.mojom-shared.h"
-#include "third_party/blink/public/mojom/input/pointer_lock_result.mojom-shared.h"
-#include "third_party/blink/public/mojom/manifest/display_mode.mojom-shared.h"
+#include "third_party/blink/public/mojom/widget/platform_widget.mojom-shared.h"
 #include "third_party/blink/public/platform/cross_variant_mojo_util.h"
-#include "third_party/blink/public/platform/input/input_handler_proxy.h"
-#include "third_party/blink/public/platform/scheduler/web_agent_group_scheduler.h"
-#include "third_party/blink/public/platform/web_common.h"
 #include "third_party/blink/public/platform/web_input_event_result.h"
-#include "third_party/blink/public/platform/web_text_input_info.h"
-#include "third_party/blink/public/platform/web_vector.h"
-#include "third_party/blink/public/web/web_hit_test_result.h"
+#include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/public/web/web_lifecycle_update.h"
-#include "third_party/blink/public/web/web_range.h"
-#include "third_party/blink/public/web/web_swap_result.h"
+#include "ui/gfx/geometry/size.h"
 
 namespace cc {
 class LayerTreeHost;
@@ -61,22 +46,23 @@ class LayerTreeSettings;
 }
 
 namespace display {
-struct ScreenInfo;
 struct ScreenInfos;
 }  // namespace display
 
+namespace gfx {
+class PointF;
+class Rect;
+class Vector2dF;
+}  // namespace gfx
+
 namespace ui {
 class Cursor;
-class LatencyInfo;
 }
 
 namespace blink {
 struct VisualProperties;
 class WebCoalescedInputEvent;
-
-namespace scheduler {
-class WebRenderWidgetSchedulingState;
-}
+class WebHitTestResult;
 
 class WebWidget {
  public:
@@ -85,15 +71,28 @@ class WebWidget {
   // is called. |settings| is typically null. When |settings| is null
   // the default settings will be used, tests may provide a |settings| object to
   // override the defaults.
+  // The optional initial frame sink parameters allow the renderer to
+  // communicate with the frame sink in the GPU process earlier, without having
+  // to request the browser process for it first.
   virtual void InitializeCompositing(
-      scheduler::WebAgentGroupScheduler& agent_group_scheduler,
       const display::ScreenInfos& screen_info,
-      const cc::LayerTreeSettings* settings) = 0;
+      const cc::LayerTreeSettings* settings,
+      CrossVariantMojoRemote<viz::mojom::CompositorFrameSinkInterfaceBase>
+          initial_frame_sink,
+      CrossVariantMojoReceiver<
+          viz::mojom::CompositorFrameSinkClientInterfaceBase>
+          initial_frame_sink_client,
+      CrossVariantMojoReceiver<mojom::RenderInputRouterClientInterfaceBase>
+          initial_viz_rir_client) = 0;
 
   // Set the compositor as visible. If |visible| is true, then the compositor
   // will request a new layer frame sink and begin producing frames from the
   // compositor.
   virtual void SetCompositorVisible(bool visible) = 0;
+
+  // Asks the compositor to request warming up and request a new frame sink
+  // speculatively even if invisible.
+  virtual void WarmUpCompositor() = 0;
 
   // Returns the current size of the WebWidget.
   virtual gfx::Size Size() { return gfx::Size(); }
@@ -143,10 +142,6 @@ class WebWidget {
   // Returns the state of focus for the WebWidget.
   virtual bool HasFocus() { return false; }
 
-  // Accessor to the WebWidget scheduing state.
-  virtual scheduler::WebRenderWidgetSchedulingState*
-  RendererWidgetSchedulingState() = 0;
-
   virtual void SetCursor(const ui::Cursor& cursor) = 0;
 
   // Get the current tooltip text.
@@ -158,17 +153,13 @@ class WebWidget {
   // Set state that the widget is in the process of handling input events.
   virtual void SetHandlingInputEvent(bool handling) = 0;
 
-  using HandledEventCallback = base::OnceCallback<void(
-      mojom::InputEventResultState ack_state,
-      const ui::LatencyInfo& latency_info,
-      std::unique_ptr<InputHandlerProxy::DidOverscrollParams>,
-      absl::optional<cc::TouchAction>)>;
-
-  // Process the input event, invoking the callback when complete. This
-  // method will call the callback synchronously.
+  // Process the input event, blocking until complete.
   virtual void ProcessInputEventSynchronouslyForTesting(
-      const WebCoalescedInputEvent&,
-      HandledEventCallback) = 0;
+      const WebCoalescedInputEvent&) = 0;
+
+  // Dispatches the input event asynchronously, without blocking.
+  virtual void DispatchNonBlockingEventForTesting(
+      std::unique_ptr<WebCoalescedInputEvent> event) = 0;
 
   virtual void DidOverscrollForTesting(
       const gfx::Vector2dF& overscroll_delta,
@@ -184,7 +175,7 @@ class WebWidget {
   virtual void FlushInputProcessedCallback() = 0;
 
   // Cancel the current composition.
-  virtual void CancelCompositionForPepper() = 0;
+  virtual void CancelComposition() = 0;
 
   // Requests the selection bounds be updated.
   virtual void UpdateSelectionBounds() = 0;
@@ -195,20 +186,6 @@ class WebWidget {
   // Apply the visual properties to the widget.
   virtual void ApplyVisualProperties(
       const VisualProperties& visual_properties) = 0;
-
-  // Returns information about the screen where this view's widgets are being
-  // displayed.
-  virtual const display::ScreenInfo& GetScreenInfo() = 0;
-
-  // Returns information about all available screens.
-  virtual const display::ScreenInfos& GetScreenInfos() = 0;
-
-  // Returns original (non-emulated) information about the screen where this
-  // view's widgets are being displayed.
-  virtual const display::ScreenInfo& GetOriginalScreenInfo() = 0;
-
-  // Returns original (non-emulated) information about all available screens.
-  virtual const display::ScreenInfos& GetOriginalScreenInfos() = 0;
 
   // Called to get the position of the widget's window in screen
   // coordinates. Note, the window includes any decorations such as borders,
@@ -223,8 +200,8 @@ class WebWidget {
   virtual void SetScreenRects(const gfx::Rect& widget_screen_rect,
                               const gfx::Rect& window_screen_rect) = 0;
 
-  // Returns the visible viewport size (in screen coorindates).
-  virtual gfx::Size VisibleViewportSizeInDIPs() = 0;
+  // Returns the visible viewport size (in device pixel screen coordinates).
+  virtual gfx::Size VisibleViewportSize() = 0;
 
   // Returns the emulator scale.
   virtual float GetEmulatorScale() { return 1.0f; }

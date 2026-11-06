@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright 2010 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -44,12 +44,12 @@ bool ResourceUpdater::Update(const std::wstring& name,
 
   if (input.Initialize(input_file)) {
     if (UpdateResource(handle_, type.c_str(), name.c_str(), language_id,
-                       const_cast<uint8_t*>(input.data()),
-                       static_cast<DWORD>(input.length())) != FALSE) {
+                       input.mutable_bytes().data(),
+                       static_cast<DWORD>(input.bytes().size())) != FALSE) {
       return true;
     }
     PLOG(ERROR) << "UpdateResource failed for resource \"" << name
-                << "\" of size " << input.length() << " bytes";
+                << "\" of size " << input.bytes().size() << " bytes";
   } else {
     PLOG(DFATAL) << "Failed mapping \"" << input_file.value() << "\"";
   }

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,12 @@
 
 #include <memory>
 
-#include "base/containers/contains.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/extensions/warning_badge_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/global_error/global_error.h"
 #include "chrome/browser/ui/global_error/global_error_service.h"
 #include "chrome/browser/ui/global_error/global_error_service_factory.h"
@@ -37,25 +38,24 @@ class ErrorBadge : public GlobalError {
   bool HasMenuItem() override;
   int MenuItemCommandID() override;
   std::u16string MenuItemLabel() override;
-  void ExecuteMenuItem(Browser* browser) override;
+  void ExecuteMenuItem(BrowserWindowInterface* browser) override;
 
   bool HasBubbleView() override;
   bool HasShownBubbleView() override;
-  void ShowBubbleView(Browser* browser) override;
+  void ShowBubbleView(BrowserWindowInterface* browser) override;
   GlobalErrorBubbleViewBase* GetBubbleView() override;
 
   static int GetMenuItemCommandID();
 
  private:
-  WarningBadgeService* badge_service_;
+  raw_ptr<WarningBadgeService, DanglingUntriaged> badge_service_;
 };
 
 ErrorBadge::ErrorBadge(WarningBadgeService* badge_service)
     : badge_service_(badge_service) {
 }
 
-ErrorBadge::~ErrorBadge() {
-}
+ErrorBadge::~ErrorBadge() = default;
 
 bool ErrorBadge::HasMenuItem() {
   return true;
@@ -69,7 +69,7 @@ std::u16string ErrorBadge::MenuItemLabel() {
   return l10n_util::GetStringUTF16(IDS_EXTENSION_WARNINGS_WRENCH_MENU_ITEM);
 }
 
-void ErrorBadge::ExecuteMenuItem(Browser* browser) {
+void ErrorBadge::ExecuteMenuItem(BrowserWindowInterface* browser) {
   // Suppress all current warnings in the extension service from triggering
   // a badge on the wrench menu in the future of this session.
   badge_service_->SuppressCurrentWarnings();
@@ -85,12 +85,12 @@ bool ErrorBadge::HasShownBubbleView() {
   return false;
 }
 
-void ErrorBadge::ShowBubbleView(Browser* browser) {
+void ErrorBadge::ShowBubbleView(BrowserWindowInterface* browser) {
   NOTREACHED();
 }
 
 GlobalErrorBubbleViewBase* ErrorBadge::GetBubbleView() {
-  return NULL;
+  return nullptr;
 }
 
 // static
@@ -101,12 +101,12 @@ int ErrorBadge::GetMenuItemCommandID() {
 }  // namespace
 
 WarningBadgeService::WarningBadgeService(Profile* profile) : profile_(profile) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
   warning_service_observation_.Observe(WarningService::Get(profile_));
 }
 
 WarningBadgeService::~WarningBadgeService() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 }
 
 // static
@@ -116,7 +116,7 @@ WarningBadgeService* WarningBadgeService::Get(
 }
 
 void WarningBadgeService::SuppressCurrentWarnings() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
   size_t old_size = suppressed_warnings_.size();
 
   const WarningSet& warnings = GetCurrentWarnings();
@@ -132,7 +132,7 @@ const WarningSet& WarningBadgeService::GetCurrentWarnings() const {
 
 void WarningBadgeService::ExtensionWarningsChanged(
     const ExtensionIdSet& affected_extensions) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
   UpdateBadgeStatus();
 }
 
@@ -140,7 +140,7 @@ void WarningBadgeService::UpdateBadgeStatus() {
   const std::set<Warning>& warnings = GetCurrentWarnings();
   bool non_suppressed_warnings_exist = false;
   for (auto i = warnings.begin(); i != warnings.end(); ++i) {
-    if (!base::Contains(suppressed_warnings_, *i)) {
+    if (!suppressed_warnings_.contains(*i)) {
       non_suppressed_warnings_exist = true;
       break;
     }

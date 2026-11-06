@@ -1,14 +1,26 @@
-# Copyright 2014 The Chromium Authors. All rights reserved.
+# Copyright 2014 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
+
+component("features") {
+  sources = [
+    "features.cc",
+    "features.h",
+    "top_sites_constants.h",
+  ]
+
+  deps = [ "//base" ]
+
+  # Used by `COMPONENT_EXPORT(HISTORY_FEATURES)` in `features.h` for dynamic
+  # linking. For more info, see: https://chromium.googlesource.com/chromium/src/+/HEAD/docs/component_build.md#exporting-and-importing-symbols
+  defines = [ "IS_HISTORY_FEATURES_IMPL" ]
+}
 
 static_library("browser") {
   sources = [
     "browsing_history_driver.h",
     "browsing_history_service.cc",
     "browsing_history_service.h",
-    "domain_mixing_metrics.cc",
-    "domain_mixing_metrics.h",
     "download_constants.h",
     "download_database.cc",
     "download_database.h",
@@ -25,6 +37,8 @@ static_library("browser") {
     "history_backend_client.h",
     "history_backend_notifier.h",
     "history_backend_observer.h",
+    "history_backend_runner.cc",
+    "history_backend_runner.h",
     "history_client.h",
     "history_constants.cc",
     "history_constants.h",
@@ -43,21 +57,47 @@ static_library("browser") {
     "in_memory_database.h",
     "in_memory_history_backend.cc",
     "in_memory_history_backend.h",
+    "journeys/history_backend_for_journeys_sync.h",
+    "journeys/journey.cc",
+    "journeys/journey.h",
+    "journeys/journey_data_type_controller.cc",
+    "journeys/journey_data_type_controller.h",
+    "journeys/journey_row.cc",
+    "journeys/journey_row.h",
+    "journeys/journeys_backend_util.cc",
+    "journeys/journeys_backend_util.h",
+    "journeys/journeys_database.cc",
+    "journeys/journeys_database.h",
+    "journeys/journeys_sync_bridge.cc",
+    "journeys/journeys_sync_bridge.h",
+    "journeys/journeys_sync_metadata_database.cc",
+    "journeys/journeys_sync_metadata_database.h",
     "keyword_id.h",
     "keyword_search_term.cc",
     "keyword_search_term.h",
+    "keyword_search_term_util.cc",
+    "keyword_search_term_util.h",
     "page_usage_data.cc",
     "page_usage_data.h",
+    "segment_scorer.cc",
+    "segment_scorer.h",
     "sync/delete_directive_handler.cc",
     "sync/delete_directive_handler.h",
-    "sync/history_delete_directives_model_type_controller.cc",
-    "sync/history_delete_directives_model_type_controller.h",
-    "sync/typed_url_model_type_controller.cc",
-    "sync/typed_url_model_type_controller.h",
-    "sync/typed_url_sync_bridge.cc",
-    "sync/typed_url_sync_bridge.h",
-    "sync/typed_url_sync_metadata_database.cc",
-    "sync/typed_url_sync_metadata_database.h",
+    "sync/history_backend_for_sync.h",
+    "sync/history_data_type_controller.cc",
+    "sync/history_data_type_controller.h",
+    "sync/history_data_type_controller_helper.cc",
+    "sync/history_data_type_controller_helper.h",
+    "sync/history_delete_directives_data_type_controller.cc",
+    "sync/history_delete_directives_data_type_controller.h",
+    "sync/history_sync_bridge.cc",
+    "sync/history_sync_bridge.h",
+    "sync/history_sync_metadata_database.cc",
+    "sync/history_sync_metadata_database.h",
+    "sync/visit_id_remapper.cc",
+    "sync/visit_id_remapper.h",
+    "time_period_filter_utils.cc",
+    "time_period_filter_utils.h",
     "top_sites.cc",
     "top_sites.h",
     "top_sites_backend.cc",
@@ -81,6 +121,8 @@ static_library("browser") {
     "visit_delegate.h",
     "visit_tracker.cc",
     "visit_tracker.h",
+    "visited_link_database.cc",
+    "visited_link_database.h",
     "visitsegment_database.cc",
     "visitsegment_database.h",
     "web_history_service.cc",
@@ -89,13 +131,18 @@ static_library("browser") {
   ]
 
   public_deps = [
+    ":features",
+    "//components/sessions:session_id",
     "//components/sync/protocol",
+    "//components/sync_device_info",
     "//skia",
   ]
 
   deps = [
     "//base",
     "//base:i18n",
+    "//build:ios_buildflags",
+    "//components/crash/core/common:crash_key",
     "//components/database_utils",
     "//components/favicon/core:database",
     "//components/favicon_base",
@@ -104,120 +151,66 @@ static_library("browser") {
     "//components/keyed_service/core",
     "//components/prefs",
     "//components/query_parser",
+    "//components/search_engines",
     "//components/signin/public/identity_manager",
+    "//components/strings",
     "//components/sync",
     "//components/url_formatter",
     "//components/variations",
     "//components/version_info",
+    "//components/visitedlink/core",
+    "//crypto",
     "//google_apis",
     "//net",
     "//services/network/public/cpp",
     "//sql",
-    "//third_party/sqlite",
     "//ui/base",
     "//ui/gfx",
     "//url",
   ]
-
-  if (is_android) {
-    sources += [
-      "android/android_cache_database.cc",
-      "android/android_cache_database.h",
-      "android/android_history_types.cc",
-      "android/android_history_types.h",
-      "android/android_time.h",
-      "android/android_urls_database.cc",
-      "android/android_urls_database.h",
-      "android/android_urls_sql_handler.cc",
-      "android/android_urls_sql_handler.h",
-      "android/favicon_sql_handler.cc",
-      "android/favicon_sql_handler.h",
-      "android/sql_handler.cc",
-      "android/sql_handler.h",
-      "android/urls_sql_handler.cc",
-      "android/urls_sql_handler.h",
-      "android/visit_sql_handler.cc",
-      "android/visit_sql_handler.h",
-    ]
-  }
-
-  configs += [ "//build/config/compiler:no_size_t_to_int_warning" ]
-}
-
-bundle_data("unit_tests_bundle_data") {
-  visibility = [ ":unit_tests" ]
-  testonly = true
-  sources = [
-    "//components/test/data/history/Favicons.v3.sql",
-    "//components/test/data/history/Favicons.v4.sql",
-    "//components/test/data/history/Favicons.v5.sql",
-    "//components/test/data/history/Favicons.v6.sql",
-    "//components/test/data/history/Favicons.v7.sql",
-    "//components/test/data/history/Favicons.v8.sql",
-    "//components/test/data/history/HistoryNoDuration",
-    "//components/test/data/history/HistoryNoSource",
-    "//components/test/data/history/History_with_starred",
-    "//components/test/data/history/TopSites.v1.sql",
-    "//components/test/data/history/TopSites.v2.sql",
-    "//components/test/data/history/TopSites.v3.sql",
-    "//components/test/data/history/TopSites.v4.sql",
-    "//components/test/data/history/history.22.sql",
-    "//components/test/data/history/history.26.sql",
-    "//components/test/data/history/history.27.sql",
-    "//components/test/data/history/history.28.sql",
-    "//components/test/data/history/history.29.sql",
-    "//components/test/data/history/history.30.sql",
-    "//components/test/data/history/history.31.sql",
-    "//components/test/data/history/history.32.sql",
-    "//components/test/data/history/history.38.sql",
-    "//components/test/data/history/history.39.sql",
-    "//components/test/data/history/history.40.sql",
-    "//components/test/data/history/history.41.sql",
-    "//components/test/data/history/history.42.sql",
-    "//components/test/data/history/history.43.sql",
-    "//components/test/data/history/history.44.sql",
-    "//components/test/data/history/thumbnail_wild/Favicons.corrupt_meta.disable",
-    "//components/test/data/history/thumbnail_wild/Favicons.v2.init.sql",
-    "//components/test/data/history/thumbnail_wild/Favicons.v3.init.sql",
-    "//components/test/data/history/thumbnail_wild/Favicons.v4.init.sql",
-    "//components/test/data/history/thumbnail_wild/Favicons.v5.icon_type.sql",
-    "//components/test/data/history/thumbnail_wild/Favicons.v5.icon_type2.sql",
-    "//components/test/data/history/thumbnail_wild/Favicons.v5.init.sql",
-    "//components/test/data/history/thumbnail_wild/Favicons.v5.sizes.sql",
-    "//components/test/data/history/thumbnail_wild/Favicons.v6.init.sql",
-  ]
-  outputs = [ "{{bundle_resources_dir}}/" +
-              "{{source_root_relative_dir}}/{{source_file_part}}" ]
 }
 
 source_set("unit_tests") {
   testonly = true
   sources = [
     "browsing_history_service_unittest.cc",
-    "domain_mixing_metrics_unittest.cc",
     "download_slice_info_unittest.cc",
     "expire_history_backend_unittest.cc",
     "history_backend_db_unittest.cc",
+    "history_backend_runner_unittest.cc",
     "history_backend_unittest.cc",
     "history_database_unittest.cc",
     "history_querying_unittest.cc",
     "history_service_unittest.cc",
     "history_types_unittest.cc",
+    "in_memory_database_unittest.cc",
+    "journeys/journeys_backend_util_unittest.cc",
+    "journeys/journeys_database_unittest.cc",
+    "journeys/journeys_sync_bridge_unittest.cc",
+    "journeys/journeys_sync_metadata_database_unittest.cc",
+    "journeys/journeys_test_utils.cc",
+    "journeys/journeys_test_utils.h",
+    "segment_scorer_unittest.cc",
     "sync/delete_directive_handler_unittest.cc",
-    "sync/typed_url_sync_bridge_unittest.cc",
-    "sync/typed_url_sync_metadata_database_unittest.cc",
+    "sync/history_sync_bridge_unittest.cc",
+    "sync/history_sync_metadata_database_unittest.cc",
+    "sync/test_history_backend_for_sync.cc",
+    "sync/test_history_backend_for_sync.h",
+    "sync/visit_id_remapper_unittest.cc",
+    "time_period_filter_utils_unittest.cc",
     "top_sites_database_unittest.cc",
     "top_sites_impl_unittest.cc",
     "url_database_unittest.cc",
+    "url_row_unittest.cc",
     "url_utils_unittest.cc",
     "visit_annotations_database_unittest.cc",
     "visit_database_unittest.cc",
     "visit_tracker_unittest.cc",
+    "visited_link_database_unittest.cc",
     "web_history_service_unittest.cc",
   ]
   deps = [
     ":browser",
-    ":unit_tests_bundle_data",
     "//base",
     "//base/test:test_support",
     "//components/favicon/core:database",
@@ -225,19 +218,34 @@ source_set("unit_tests") {
     "//components/history/core/common",
     "//components/history/core/test",
     "//components/prefs:test_support",
+    "//components/search_engines",
+    "//components/search_engines:test_support",
+    "//components/strings",
+    "//components/sync",
     "//components/sync:test_support",
+    "//components/sync_device_info:test_support",
+    "//components/visitedlink/core",
     "//net:test_support",
     "//services/network:test_support",
     "//services/network/public/cpp",
     "//sql",
     "//sql:test_support",
+    "//testing/gmock",
     "//testing/gtest",
-    "//third_party/sqlite",
+    "//ui/base",
     "//ui/gfx",
     "//ui/gfx:test_support",
     "//url",
   ]
-  if (is_android) {
-    sources += [ "android/android_history_types_unittest.cc" ]
+  if (is_ios) {
+    deps += [ "//components/test:history_test_bundle_data" ]
+  }
+}
+
+if (is_android) {
+  import("//build/config/android/rules.gni")
+
+  java_cpp_enum("time_period_option_id_java") {
+    sources = [ "time_period_filter_utils.h" ]
   }
 }

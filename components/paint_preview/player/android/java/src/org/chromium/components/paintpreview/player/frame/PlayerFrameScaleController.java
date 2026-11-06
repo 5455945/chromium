@@ -1,21 +1,20 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.paintpreview.player.frame;
 
 import android.graphics.Matrix;
-import android.graphics.Rect;
 import android.util.Size;
 
-import androidx.annotation.Nullable;
-
 import org.chromium.base.Callback;
-import org.chromium.base.supplier.Supplier;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
-/**
- * Handles scaling of the top level frame for the paint preview player.
- */
+import java.util.function.Supplier;
+
+/** Handles scaling of the top level frame for the paint preview player. */
+@NullMarked
 public class PlayerFrameScaleController {
     private static final float MAX_SCALE_FACTOR = 5f;
 
@@ -23,15 +22,19 @@ public class PlayerFrameScaleController {
 
     /** References to shared state. */
     private final PlayerFrameViewport mViewport;
+
     private final Size mContentSize;
     private final Matrix mBitmapScaleMatrix;
+
     /** Interface for calling shared methods on the mediator. */
     private final PlayerFrameMediatorDelegate mMediatorDelegate;
-    private Supplier<Boolean> mIsAccessibilityEnabled;
-    private final Callback<Boolean> mOnScaleListener;
+
+    private final @Nullable Supplier<Boolean> mIsAccessibilityEnabled;
+    private final @Nullable Callback<Boolean> mOnScaleListener;
     private boolean mAcceptUserInput;
 
-    PlayerFrameScaleController(Matrix bitmapScaleMatrix,
+    PlayerFrameScaleController(
+            Matrix bitmapScaleMatrix,
             PlayerFrameMediatorDelegate mediatorDelegate,
             @Nullable Supplier<Boolean> isAccessibilityEnabled,
             @Nullable Callback<Boolean> onScaleListener) {
@@ -87,7 +90,7 @@ public class PlayerFrameScaleController {
         }
         // Don't scale outside of the acceptable range. The value is still accumulated such that the
         // continuous gesture feels smooth.
-        final float initialScaleFactor = mMediatorDelegate.getInitialScaleFactor();
+        final float initialScaleFactor = mMediatorDelegate.getMinScaleFactor();
         final float lastUncommittedScaleFactor = mUncommittedScaleFactor;
         mUncommittedScaleFactor *= scaleFactor;
         // Compute a corrected and bounded scale factor when close to the max/min scale.
@@ -109,7 +112,7 @@ public class PlayerFrameScaleController {
         }
         final float correctedAggregateScaleFactor = lastUncommittedScaleFactor * scaleFactor;
 
-        // TODO(crbug/1090804): trigger a fetch of new bitmaps periodically when zooming out.
+        // TODO(crbug.com/40133900): trigger a fetch of new bitmaps periodically when zooming out.
 
         mViewport.scale(scaleFactor, focalPointX, focalPointY);
         mBitmapScaleMatrix.postScale(scaleFactor, scaleFactor, focalPointX, focalPointY);
@@ -121,20 +124,20 @@ public class PlayerFrameScaleController {
         // are forced to be within bounds.
         final float uncorrectedX = mViewport.getTransX();
         final float uncorrectedY = mViewport.getTransY();
-        final float correctedX = Math.max(0f,
-                Math.min(uncorrectedX,
-                        mContentSize.getWidth() * correctedAggregateScaleFactor
-                                - mViewport.getWidth()));
-        final float correctedY = Math.max(0f,
-                Math.min(uncorrectedY,
-                        mContentSize.getHeight() * correctedAggregateScaleFactor
-                                - mViewport.getHeight()));
-        final int correctedXRounded = Math.abs(Math.round(correctedX));
-        final int correctedYRounded = Math.abs(Math.round(correctedY));
-        mMediatorDelegate.updateSubframes(new Rect(correctedXRounded, correctedYRounded,
-                                                  correctedXRounded + mViewport.getWidth(),
-                                                  correctedYRounded + mViewport.getHeight()),
-                mUncommittedScaleFactor);
+        final float correctedX =
+                Math.max(
+                        0f,
+                        Math.min(
+                                uncorrectedX,
+                                mContentSize.getWidth() * correctedAggregateScaleFactor
+                                        - mViewport.getWidth()));
+        final float correctedY =
+                Math.max(
+                        0f,
+                        Math.min(
+                                uncorrectedY,
+                                mContentSize.getHeight() * correctedAggregateScaleFactor
+                                        - mViewport.getHeight()));
 
         if (uncorrectedX != correctedX || uncorrectedY != correctedY) {
             // This is the delta required to force the viewport to be inside the bounds of the
@@ -152,6 +155,7 @@ public class PlayerFrameScaleController {
             bitmapScaleMatrixValues[Matrix.MTRANS_Y] += deltaY;
             mBitmapScaleMatrix.setValues(bitmapScaleMatrixValues);
         }
+        mMediatorDelegate.updateSubframes(mViewport.asRect(), mViewport.getScale());
         mMediatorDelegate.setBitmapScaleMatrix(mBitmapScaleMatrix, correctedAggregateScaleFactor);
         if (mOnScaleListener != null) mOnScaleListener.onResult(false);
         return true;
@@ -174,9 +178,7 @@ public class PlayerFrameScaleController {
         return true;
     }
 
-    /**
-     * Enables/disables processing input events for scaling.
-     */
+    /** Enables/disables processing input events for scaling. */
     public void setAcceptUserInput(boolean acceptUserInput) {
         mAcceptUserInput = acceptUserInput;
     }

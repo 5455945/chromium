@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,10 @@
 #define UI_BASE_THEME_PROVIDER_H_
 
 #include "base/component_export.h"
+#include "base/memory/scoped_refptr.h"
+#include "build/build_config.h"
 #include "third_party/skia/include/core/SkColor.h"
-#include "ui/base/layout.h"
+#include "ui/base/resource/resource_scale_factor.h"
 
 namespace base {
 class RefCountedMemory;
@@ -36,19 +38,22 @@ class COMPONENT_EXPORT(UI_BASE) ThemeProvider {
  public:
   virtual ~ThemeProvider();
 
-  // Get the image specified by |id|. An implementation of ThemeProvider should
-  // have its own source of ids (e.g. an enum, or external resource bundle).
-  virtual gfx::ImageSkia* GetImageSkiaNamed(int id) const = 0;
-
-  // Get the color specified by |id|.
-  virtual SkColor GetColor(int id) const = 0;
-
   // Get the HSL shift specified by |id|.
   virtual color_utils::HSL GetTint(int id) const = 0;
 
   // Get the property (e.g. an alignment expressed in an enum, or a width or
   // height) specified by |id|.
   virtual int GetDisplayProperty(int id) const = 0;
+
+  // The image-backed half of the interface is excluded on Android to keep the
+  // theme image and resource-loading machinery out of the binary. Android only
+  // needs the tint/display-property half, which the WebUI NTP uses for color
+  // theming. Anything guarded here must stay out of code that builds on
+  // Android.
+#if !BUILDFLAG(IS_ANDROID)
+  // Get the image specified by |id|. An implementation of ThemeProvider should
+  // have its own source of ids (e.g. an enum, or external resource bundle).
+  virtual gfx::ImageSkia* GetImageSkiaNamed(int id) const = 0;
 
   // Whether we should use the native system frame (typically Aero glass) or
   // a custom frame.
@@ -58,15 +63,13 @@ class COMPONENT_EXPORT(UI_BASE) ThemeProvider {
   // doesn't provide a certain image, but custom themes might (badges, etc).
   virtual bool HasCustomImage(int id) const = 0;
 
-  // Returns true if the theme has defined a custom color for color |id|.
-  virtual bool HasCustomColor(int id) const = 0;
-
   // Reads the image data from the theme file into the specified vector. Only
   // valid for un-themed resources and the themed IDR_THEME_NTP_* in most
-  // implementations of ThemeProvider. Returns NULL on error.
-  virtual base::RefCountedMemory* GetRawData(
+  // implementations of ThemeProvider. Returns nullptr on error.
+  virtual scoped_refptr<base::RefCountedMemory> GetRawData(
       int id,
       ui::ResourceScaleFactor scale_factor) const = 0;
+#endif  // !BUILDFLAG(IS_ANDROID)
 };
 
 }  // namespace ui

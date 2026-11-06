@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,16 +6,21 @@
 #define CHROME_BROWSER_EXTENSIONS_API_MESSAGING_NATIVE_MESSAGING_TEST_UTIL_H_
 
 #include <memory>
+#include <string_view>
 
 #include "base/files/scoped_temp_dir.h"
-#include "base/macros.h"
 #include "build/build_config.h"
+#include "extensions/buildflags/buildflags.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "base/test/test_reg_util_win.h"
 #else
 #include "base/test/scoped_path_override.h"
 #endif
+
+// This class does not work yet on desktop Android because it relies on running
+// a python executable on the test device.
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS));
 
 namespace extensions {
 
@@ -31,25 +36,37 @@ class ScopedTestNativeMessagingHost {
   static const char kBinaryMissingHostName[];
   static const char kSupportsNativeInitiatedConnectionsHostName[];
 
+#if BUILDFLAG(IS_WIN)
+  // When run on Windows, an additional .EXE backed NativeHost is available.
+  static const char kHostExeName[];
+#endif
+
   static const char kExtensionId[];
 
   ScopedTestNativeMessagingHost();
+
+  ScopedTestNativeMessagingHost(const ScopedTestNativeMessagingHost&) = delete;
+  ScopedTestNativeMessagingHost& operator=(
+      const ScopedTestNativeMessagingHost&) = delete;
+
   ~ScopedTestNativeMessagingHost();
 
   void RegisterTestHost(bool user_level);
+#if BUILDFLAG(IS_WIN)
+  // Register the Windows-only Native Host exe.
+  void RegisterTestExeHost(std::string_view filename, bool user_level);
+#endif
 
   const base::FilePath& temp_dir() { return temp_dir_.GetPath(); }
 
  private:
   base::ScopedTempDir temp_dir_;
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   registry_util::RegistryOverrideManager registry_override_;
 #else
   std::unique_ptr<base::ScopedPathOverride> path_override_;
 #endif
-
-  DISALLOW_COPY_AND_ASSIGN(ScopedTestNativeMessagingHost);
 };
 
 }  // namespace extensions

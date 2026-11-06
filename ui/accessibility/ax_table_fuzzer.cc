@@ -1,9 +1,14 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/macros.h"
+#include <tuple>
+
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/logging.h"
 #include "build/build_config.h"
+#include "testing/libfuzzer/libfuzzer_base_wrappers.h"
 #include "ui/accessibility/ax_node.h"
 #include "ui/accessibility/ax_tree.h"
 
@@ -81,70 +86,57 @@ ax::mojom::IntAttribute GetInterestingTableAttribute(unsigned char byte) {
 // table. We don't care about any of the results, we just want
 // to make sure none of these crash or hang.
 void TestTableAPIs(const ui::AXNode* node) {
-  ignore_result(node->IsTable());
-  ignore_result(node->GetTableColCount());
-  ignore_result(node->GetTableRowCount());
-  ignore_result(node->GetTableAriaColCount());
-  ignore_result(node->GetTableAriaRowCount());
-  ignore_result(node->GetTableCellCount());
-  ignore_result(node->GetTableCaption());
+  std::ignore = node->IsTable();
+  std::ignore = node->GetTableDomColCount();
+  std::ignore = node->GetTableDomRowCount();
+  std::ignore = node->GetTableAriaColCount();
+  std::ignore = node->GetTableAriaRowCount();
+  std::ignore = node->GetTableCellCount();
+  std::ignore = node->GetTableCaption();
   for (int i = 0; i < 8; i++)
-    ignore_result(node->GetTableCellFromIndex(i));
+    std::ignore = node->GetTableCellFromIndex(i);
   for (int i = 0; i < 3; i++)
     for (int j = 0; j < 3; j++)
-      ignore_result(node->GetTableCellFromCoords(i, j));
+      std::ignore = node->GetTableCellFromCoords(i, j);
   // Note: some of the APIs return IDs - we don't care what's
-  // returned, we just want to make sure these APIs don't
-  // crash. Normally |ids| is an out argument only, but
-  // there's no reason we shouldn't be able to pass a vector
-  // that was previously used by another call.
-  std::vector<ui::AXNodeID> ids;
+  // returned, we just want to make sure these APIs don't crash.
   for (int i = 0; i < 3; i++) {
-    std::vector<ui::AXNodeID> col_header_node_ids =
-        node->GetTableColHeaderNodeIds(i);
-    ids.insert(ids.end(), col_header_node_ids.begin(),
-               col_header_node_ids.end());
-
-    std::vector<ui::AXNodeID> row_header_node_ids =
-        node->GetTableRowHeaderNodeIds(i);
-    ids.insert(ids.end(), row_header_node_ids.begin(),
-               row_header_node_ids.end());
+    std::ignore = node->GetTableColHeaderNodeIds(i);
+    std::ignore = node->GetTableRowHeaderNodeIds(i);
   }
-  std::vector<ui::AXNodeID> unique_cell_ids = node->GetTableUniqueCellIds();
-  ids.insert(ids.end(), unique_cell_ids.begin(), unique_cell_ids.end());
+  std::ignore = node->GetTableUniqueCellIds();
 
-  ignore_result(node->IsTableRow());
-  ignore_result(node->GetTableRowRowIndex());
-#if defined(OS_APPLE)
-  ignore_result(node->IsTableColumn());
-  ignore_result(node->GetTableColColIndex());
+  std::ignore = node->IsTableRow();
+  std::ignore = node->GetTableRowRowIndex();
+#if BUILDFLAG(IS_APPLE)
+  std::ignore = node->IsTableColumn();
+  std::ignore = node->GetTableColColIndex();
 #endif
-  ignore_result(node->IsTableCellOrHeader());
-  ignore_result(node->GetTableCellIndex());
-  ignore_result(node->GetTableCellColIndex());
-  ignore_result(node->GetTableCellRowIndex());
-  ignore_result(node->GetTableCellColSpan());
-  ignore_result(node->GetTableCellRowSpan());
-  ignore_result(node->GetTableCellAriaColIndex());
-  ignore_result(node->GetTableCellAriaRowIndex());
-  std::vector<ui::AXNodeID> cell_col_header_node_ids =
-      node->GetTableCellColHeaderNodeIds();
-  ids.insert(ids.end(), cell_col_header_node_ids.begin(),
-             cell_col_header_node_ids.end());
-  std::vector<ui::AXNodeID> cell_row_header_node_ids =
-      node->GetTableCellRowHeaderNodeIds();
-  ids.insert(ids.end(), cell_row_header_node_ids.begin(),
-             cell_row_header_node_ids.end());
+  std::ignore = node->IsTableCellOrHeader();
+  std::ignore = node->GetTableCellIndex();
+  std::ignore = node->GetTableCellDomColIndex();
+  std::ignore = node->GetTableCellDomRowIndex();
+  std::ignore = node->GetTableCellDomColSpan();
+  std::ignore = node->GetTableCellDomRowSpan();
+  std::ignore = node->GetTableCellAriaColIndex();
+  std::ignore = node->GetTableCellAriaRowIndex();
+  std::ignore = node->GetTableCellColHeaderNodeIds();
+  std::ignore = node->GetTableCellRowHeaderNodeIds();
+
+  // Normally |headers| is an out argument only, but there's no reason we
+  // shouldn't be able to pass a vector that was previously used by another
+  // call.
   std::vector<ui::AXNode*> headers;
   node->GetTableCellColHeaders(&headers);
   node->GetTableCellRowHeaders(&headers);
 
-  for (const auto* child : node->children())
+  for (const ui::AXNode* child : node->children()) {
     TestTableAPIs(child);
+  }
 }
 
 // Entry point for LibFuzzer.
-extern "C" int LLVMFuzzerTestOneInput(const unsigned char* data, size_t size) {
+DEFINE_LLVM_FUZZER_TEST_ONE_INPUT_SPAN(base::span<const uint8_t> data) {
   ui::AXTreeUpdate initial_state;
   initial_state.root_id = 1;
   size_t i = 0;
@@ -152,8 +144,9 @@ extern "C" int LLVMFuzzerTestOneInput(const unsigned char* data, size_t size) {
   // The root of the accessibility tree.
   ui::AXNodeData root;
   root.id = 1;
-  if (i < size)
+  if (i < data.size()) {
     root.role = GetInterestingTableRole(data[i++]);
+  }
   root.child_ids.push_back(2);
   initial_state.nodes.push_back(root);
 
@@ -162,32 +155,34 @@ extern "C" int LLVMFuzzerTestOneInput(const unsigned char* data, size_t size) {
   ui::AXNodeData table;
   table.id = 2;
   table.role = ax::mojom::Role::kTable;
-  if (i < size) {
+  if (i < data.size()) {
     size_t child_count = data[i++] % 8;
-    for (size_t j = 0; j < child_count && i < size; j++)
+    for (size_t j = 0; j < child_count && i < data.size(); j++) {
       table.child_ids.push_back(3 + data[i++] % 32);
+    }
   }
   initial_state.nodes.push_back(table);
 
   // Create more accessibility nodes that might result in a table.
   int next_id = 3;
-  while (i < size) {
+  while (i < data.size()) {
     ui::AXNodeData node;
     node.id = next_id++;
-    if (i < size)
-      node.role = GetInterestingTableRole(data[i++]);
-    if (i < size) {
+    node.role = GetInterestingTableRole(data[i++]);
+
+    if (i < data.size()) {
       int attr_count = data[i++] % 6;
-      for (int j = 0; j < attr_count && i + 1 < size; j++) {
+      for (int j = 0; j < attr_count && i + 1 < data.size(); j++) {
         unsigned char attr = data[i++];
         int32_t value = static_cast<int32_t>(data[i++]) - 2;
         node.AddIntAttribute(GetInterestingTableAttribute(attr), value);
       }
     }
-    if (i < size) {
+    if (i < data.size()) {
       size_t child_count = data[i++] % 8;
-      for (size_t j = 0; j < child_count && i < size; j++)
+      for (size_t j = 0; j < child_count && i < data.size(); j++) {
         node.child_ids.push_back(4 + data[i++] % 32);
+      }
     }
     initial_state.nodes.push_back(node);
   }

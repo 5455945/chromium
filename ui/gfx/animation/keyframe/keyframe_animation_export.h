@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,11 +15,7 @@
 #endif  // defined(CC_ANIMATION_IMPLEMENTATION)
 
 #else  // defined(WIN32)
-#if defined(GFX_KEYFRAME_ANIMATION_IMPLEMENTATION)
 #define GFX_KEYFRAME_ANIMATION_EXPORT __attribute__((visibility("default")))
-#else
-#define GFX_KEYFRAME_ANIMATION_EXPORT
-#endif
 #endif
 
 #else  // defined(COMPONENT_BUILD)

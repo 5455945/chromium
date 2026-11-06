@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,24 +13,28 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/memory/raw_ptr.h"
 #include "base/posix/eintr_wrapper.h"
-#include "base/single_thread_task_runner.h"
 #include "base/strings/stringprintf.h"
 #include "base/synchronization/waitable_event.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/test_timeouts.h"
 #include "base/test/thread_test_helper.h"
 #include "base/threading/thread.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/common/chrome_constants.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -52,17 +56,18 @@ class ProcessSingletonPosixTest : public testing::Test {
                                &TestableProcessSingleton::NotificationCallback,
                                base::Unretained(this))) {}
 
-    std::vector<base::CommandLine::StringVector> callback_command_lines_;
+    std::vector<base::CommandLine> callback_command_lines_;
 
     using ProcessSingleton::NotifyOtherProcessWithTimeout;
     using ProcessSingleton::NotifyOtherProcessWithTimeoutOrCreate;
     using ProcessSingleton::OverrideCurrentPidForTesting;
     using ProcessSingleton::OverrideKillCallbackForTesting;
+    using ProcessSingleton::StartWatching;
 
    private:
-    bool NotificationCallback(const base::CommandLine& command_line,
+    bool NotificationCallback(base::CommandLine command_line,
                               const base::FilePath& current_directory) {
-      callback_command_lines_.push_back(command_line.argv());
+      callback_command_lines_.push_back(std::move(command_line));
       return true;
     }
   };
@@ -133,8 +138,8 @@ class ProcessSingletonPosixTest : public testing::Test {
     ASSERT_TRUE(helper->Run());
   }
 
-  TestableProcessSingleton* CreateProcessSingleton() {
-    return new TestableProcessSingleton(user_data_path_);
+  std::unique_ptr<TestableProcessSingleton> CreateProcessSingleton() {
+    return std::make_unique<TestableProcessSingleton>(user_data_path_);
   }
 
   void VerifyFiles() {
@@ -198,17 +203,9 @@ class ProcessSingletonPosixTest : public testing::Test {
   void CheckNotified() {
     ASSERT_TRUE(process_singleton_on_thread_);
     ASSERT_EQ(1u, process_singleton_on_thread_->callback_command_lines_.size());
-    bool found = false;
-    for (size_t i = 0;
-         i < process_singleton_on_thread_->callback_command_lines_[0].size();
-         ++i) {
-      if (process_singleton_on_thread_->callback_command_lines_[0][i] ==
-          "about:blank") {
-        found = true;
-        break;
-      }
-    }
-    ASSERT_TRUE(found);
+    ASSERT_TRUE(std::ranges::contains(
+        process_singleton_on_thread_->callback_command_lines_[0].argv(),
+        "about:blank"));
     ASSERT_EQ(0, kill_callbacks_);
   }
 
@@ -246,11 +243,12 @@ class ProcessSingletonPosixTest : public testing::Test {
     process_singleton_on_thread_ = CreateProcessSingleton();
     ASSERT_EQ(ProcessSingleton::PROCESS_NONE,
               process_singleton_on_thread_->NotifyOtherProcessOrCreate());
+    process_singleton_on_thread_->StartWatching();
   }
 
   void DestructProcessSingleton() {
     ASSERT_TRUE(process_singleton_on_thread_);
-    delete process_singleton_on_thread_;
+    process_singleton_on_thread_.reset();
   }
 
   void KillCallback(int pid) {
@@ -263,14 +261,14 @@ class ProcessSingletonPosixTest : public testing::Test {
   base::WaitableEvent signal_event_;
 
   std::unique_ptr<base::Thread> worker_thread_;
-  TestableProcessSingleton* process_singleton_on_thread_;
+  std::unique_ptr<TestableProcessSingleton> process_singleton_on_thread_;
 };
 
 }  // namespace
 
 // Test if the socket file and symbol link created by ProcessSingletonPosix
 // are valid.
-// If this test flakes, use http://crbug.com/74554.
+// If this test flakes, use http://crbug.com/41333511.
 TEST_F(ProcessSingletonPosixTest, CheckSocketFile) {
   CreateProcessSingletonOnThread();
   VerifyFiles();
@@ -499,7 +497,7 @@ TEST_F(ProcessSingletonPosixTest, IgnoreSocketSymlinkWithTooLongTarget) {
       ProcessSingleton::ORPHANED_LOCK_FILE, 1u);
 }
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 // Test that if there is an existing lock file, and we could not flock()
 // it, then exit.
 TEST_F(ProcessSingletonPosixTest, CreateRespectsOldMacLock) {
@@ -520,8 +518,8 @@ TEST_F(ProcessSingletonPosixTest, CreateRespectsOldMacLock) {
 TEST_F(ProcessSingletonPosixTest, CreateReplacesOldMacLock) {
   std::unique_ptr<TestableProcessSingleton> process_singleton(
       CreateProcessSingleton());
-  EXPECT_EQ(0, base::WriteFile(lock_path_, "", 0));
+  EXPECT_TRUE(base::WriteFile(lock_path_, std::string_view()));
   EXPECT_TRUE(process_singleton->Create());
   VerifyFiles();
 }
-#endif  // defined(OS_MAC)
+#endif  // BUILDFLAG(IS_MAC)

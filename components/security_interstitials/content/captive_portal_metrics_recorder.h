@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,6 @@
 
 #include "components/captive_portal/content/captive_portal_service.h"
 #include "net/cert/x509_certificate.h"
-#include "url/gurl.h"
 
 // This class helps the SSL interstitial record captive portal-specific
 // metrics. It should only be used on the UI thread because its implementation

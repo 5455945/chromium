@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,7 @@
 #include <iosfwd>
 #include <list>
 
-#include "base/location.h"
 #include "base/run_loop.h"
-#include "base/threading/thread_task_runner_handle.h"
 
 namespace payments {
 
@@ -27,7 +25,6 @@ enum class TestEvent : int32_t {
   kAppListReady,
   kErrorDisplayed,
   kPaymentCompleted,
-  kMinimalUIReady,
   kUIDisplayed,
 };
 
@@ -42,6 +39,9 @@ class EventWaiter {
  public:
   EventWaiter(std::list<TestEvent> expected_event_sequence,
               bool wait_for_single_event);
+
+  EventWaiter(const EventWaiter&) = delete;
+  EventWaiter& operator=(const EventWaiter&) = delete;
 
   ~EventWaiter();
 
@@ -60,8 +60,6 @@ class EventWaiter {
   // When set to true, the event waiter ignores arrival of any other events
   // while waiting for the expected event to arrive.
   bool wait_for_single_event_;
-
-  DISALLOW_COPY_AND_ASSIGN(EventWaiter);
 };
 
 }  // namespace payments

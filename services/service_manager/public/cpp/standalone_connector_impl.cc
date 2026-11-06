@@ -1,11 +1,11 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/service_manager/public/cpp/standalone_connector_impl.h"
 
 #include "base/check.h"
-#include "base/notreached.h"
+#include "base/notimplemented.h"
 
 namespace service_manager {
 
@@ -31,7 +31,7 @@ void StandaloneConnectorImpl::BindInterface(
   delegate_->OnConnect(
       filter.service_name(),
       mojo::GenericPendingReceiver(interface_name, std::move(interface_pipe)));
-  std::move(callback).Run(mojom::ConnectResult::SUCCEEDED, absl::nullopt);
+  std::move(callback).Run(mojom::ConnectResult::SUCCEEDED, std::nullopt);
 }
 
 void StandaloneConnectorImpl::QueryService(const std::string& service_name,
@@ -45,8 +45,7 @@ void StandaloneConnectorImpl::WarmService(const ServiceFilter& filter,
                                           WarmServiceCallback callback) {
   NOTIMPLEMENTED()
       << "WarmService is not supported by StandaloneConnectorImpl.";
-  std::move(callback).Run(mojom::ConnectResult::INVALID_ARGUMENT,
-                          absl::nullopt);
+  std::move(callback).Run(mojom::ConnectResult::INVALID_ARGUMENT, std::nullopt);
 }
 
 void StandaloneConnectorImpl::RegisterServiceInstance(

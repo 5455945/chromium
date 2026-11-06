@@ -1,52 +1,48 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/browser_sync/browser_sync_switches.h"
 
+#include "base/feature_list.h"
+#include "build/build_config.h"
+
 namespace switches {
 
-// Disables syncing one or more sync data types that are on by default.
-// See sync/base/model_type.h for possible types. Types
-// should be comma separated, and follow the naming convention for string
-// representation of model types, e.g.:
-// --disable-synctypes='Typed URLs, Bookmarks, Autofill Profiles'
-const char kDisableSyncTypes[] = "disable-sync-types";
+BASE_FEATURE(kMigrateSyncingUserToSignedIn,
+#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_ANDROID)
+             base::FEATURE_ENABLED_BY_DEFAULT);
+#else
+             base::FEATURE_DISABLED_BY_DEFAULT);
+#endif
 
-// Enabled the local sync backend implemented by the LoopbackServer.
-const char kEnableLocalSyncBackend[] = "enable-local-sync-backend";
+BASE_FEATURE_PARAM(base::TimeDelta,
+                   kMinDelayToMigrateSyncPaused,
+                   &switches::kMigrateSyncingUserToSignedIn,
+                   "min_delay_to_migrate_sync_paused",
+                   base::Days(7));
 
-// Specifies the local sync backend directory. The name is chosen to mimic
-// user-data-dir etc. This flag only matters if the enable-local-sync-backend
-// flag is present.
-const char kLocalSyncBackendDir[] = "local-sync-backend-dir";
+BASE_FEATURE(kUndoMigrationOfSyncingUserToSignedIn,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
-#if defined(OS_ANDROID)
-const base::Feature kSyncUseSessionsUnregisterDelay{
-    "SyncUseSessionsUnregisterDelay", base::FEATURE_DISABLED_BY_DEFAULT};
-#endif  // defined(OS_ANDROID)
+BASE_FEATURE(kForceMigrateSyncingUserToSignedIn,
+#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_ANDROID)
+             base::FEATURE_ENABLED_BY_DEFAULT);
+#else
+             base::FEATURE_DISABLED_BY_DEFAULT);
+#endif
 
-// Enables filtering out inactive devices which haven't sent DeviceInfo update
-// recently (depending on the device's pulse_interval and an additional margin).
-const base::Feature kSyncFilterOutInactiveDevicesForSingleClient{
-    "SyncFilterOutInactiveDevicesForSingleClient",
-    base::FEATURE_ENABLED_BY_DEFAULT};
+BASE_FEATURE(kForceMigrateNoopForDebugging,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
-// An additional threshold to consider devices as active. It extends device's
-// pulse interval to mitigate possible latency after DeviceInfo commit.
-const base::FeatureParam<base::TimeDelta> kSyncActiveDeviceMargin{
-    &kSyncFilterOutInactiveDevicesForSingleClient, "SyncActiveDeviceMargin",
-    base::TimeDelta::FromMinutes(30)};
+#if !BUILDFLAG(IS_CHROMEOS)
+BASE_FEATURE(kMigrateOutOfSyncSetupIncompleteState,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
-// Enables providing the list of FCM registration tokens in the commit request.
-const base::Feature kSyncUseFCMRegistrationTokensList{
-    "SyncUseFCMRegistrationTokensList", base::FEATURE_ENABLED_BY_DEFAULT};
-
-// Max size of FCM registration tokens list. If the number of active devices
-// having FCM registration tokens is higher, then the resulting list will be
-// empty meaning unknown FCM registration tokens.
-const base::FeatureParam<int> kSyncFCMRegistrationTokensListMaxSize{
-    &kSyncUseFCMRegistrationTokensList, "SyncFCMRegistrationTokensListMaxSize",
-    5};
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+BASE_FEATURE(kEnableReadingListForMigratedUsers,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
 }  // namespace switches

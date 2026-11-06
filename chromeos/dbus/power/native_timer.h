@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,11 +11,9 @@
 
 #include "base/files/file_descriptor_watcher_posix.h"
 #include "base/files/scoped_file.h"
-#include "base/macros.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
-#include "base/threading/sequenced_task_runner_handle.h"
 #include "base/threading/thread.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
@@ -29,7 +27,18 @@ using OnStartNativeTimerCallback = base::OnceCallback<void(bool)>;
 // calls to the power daemon.
 class COMPONENT_EXPORT(DBUS_POWER) NativeTimer {
  public:
+  // While exists, `NativeTimer::Start` will fail and call `result_callback`
+  // with failed status.
+  class ScopedFailureSimulatorForTesting {
+   public:
+    ScopedFailureSimulatorForTesting();
+    ~ScopedFailureSimulatorForTesting();
+  };
+
   explicit NativeTimer(const std::string& tag);
+
+  NativeTimer(const NativeTimer&) = delete;
+  NativeTimer& operator=(const NativeTimer&) = delete;
 
   ~NativeTimer();
 
@@ -48,7 +57,7 @@ class COMPONENT_EXPORT(DBUS_POWER) NativeTimer {
 
   // D-Bus callback for a create timer D-Bus call.
   void OnCreateTimer(base::ScopedFD expiration_fd,
-                     absl::optional<std::vector<int32_t>> timer_ids);
+                     std::optional<std::vector<int32_t>> timer_ids);
 
   // D-Bus callback for a start timer D-Bus call.
   void OnStartTimer(base::OnceClosure timer_expiration_callback,
@@ -90,11 +99,12 @@ class COMPONENT_EXPORT(DBUS_POWER) NativeTimer {
   std::unique_ptr<base::FileDescriptorWatcher::Controller>
       expiration_fd_watcher_;
 
+  // Indicating if the timer creation should fail. Only set by tests.
+  static bool simulate_timer_creation_failure_for_testing_;
+
   SEQUENCE_CHECKER(sequence_checker_);
 
   base::WeakPtrFactory<NativeTimer> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(NativeTimer);
 };
 
 }  // namespace chromeos

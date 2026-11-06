@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include <set>
 #include <string>
 
-#include "base/macros.h"
+#include "base/scoped_observation.h"
 #include "chrome/browser/ui/ash/shelf/shelf_app_updater.h"
 #include "components/services/app_service/public/cpp/app_registry_cache.h"
 
@@ -22,6 +22,11 @@ class ShelfAppServiceAppUpdater : public ShelfAppUpdater,
  public:
   ShelfAppServiceAppUpdater(Delegate* delegate,
                             content::BrowserContext* browser_context);
+
+  ShelfAppServiceAppUpdater(const ShelfAppServiceAppUpdater&) = delete;
+  ShelfAppServiceAppUpdater& operator=(const ShelfAppServiceAppUpdater&) =
+      delete;
+
   ~ShelfAppServiceAppUpdater() override;
 
   // apps::AppRegistryCache::Observer overrides:
@@ -30,10 +35,13 @@ class ShelfAppServiceAppUpdater : public ShelfAppUpdater,
       apps::AppRegistryCache* cache) override;
 
  private:
-  void OnShowInShelfChanged(const std::string& app_id, bool show_in_shelf);
+  void OnShowInShelfChangedForAppDisabledByPolicy(const std::string& app_id,
+                                                  bool show_in_shelf);
   std::set<std::string> installed_apps_;
 
-  DISALLOW_COPY_AND_ASSIGN(ShelfAppServiceAppUpdater);
+  base::ScopedObservation<apps::AppRegistryCache,
+                          apps::AppRegistryCache::Observer>
+      app_registry_cache_observer_{this};
 };
 
 #endif  // CHROME_BROWSER_UI_ASH_SHELF_APP_SERVICE_SHELF_APP_SERVICE_APP_UPDATER_H_

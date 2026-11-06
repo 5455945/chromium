@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 
 #include <string>
 
-#include "base/macros.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/ui_base_types.h"
 #include "url/gurl.h"
 
@@ -18,6 +18,10 @@
 class ConfirmBubbleModel {
  public:
   ConfirmBubbleModel();
+
+  ConfirmBubbleModel(const ConfirmBubbleModel&) = delete;
+  ConfirmBubbleModel& operator=(const ConfirmBubbleModel&) = delete;
+
   virtual ~ConfirmBubbleModel();
 
   // Returns the title string and the message string to be displayed for this
@@ -27,7 +31,7 @@ class ConfirmBubbleModel {
 
   // Return the label for the specified button. The default implementation
   // returns "OK" for the OK button and "Cancel" for the Cancel button.
-  virtual std::u16string GetButtonLabel(ui::DialogButton button) const;
+  virtual std::u16string GetButtonLabel(ui::mojom::DialogButton button) const;
 
   // Called when the OK button is pressed.
   virtual void Accept();
@@ -44,9 +48,6 @@ class ConfirmBubbleModel {
 
   // Called when the link is clicked.
   virtual void OpenHelpPage();
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ConfirmBubbleModel);
 };
 
 #endif  // CHROME_BROWSER_UI_CONFIRM_BUBBLE_MODEL_H_

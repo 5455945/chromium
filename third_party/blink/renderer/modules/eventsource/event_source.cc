@@ -32,8 +32,12 @@
 
 #include "third_party/blink/renderer/modules/eventsource/event_source.h"
 
+#include <algorithm>
 #include <memory>
 
+#include "base/feature_list.h"
+#include "base/numerics/safe_conversions.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/public/platform/web_url_request.h"
@@ -42,6 +46,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/serialization/serialized_script_value_factory.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_event_source_init.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
+#include "third_party/blink/renderer/core/event_target_names.h"
 #include "third_party/blink/renderer/core/events/message_event.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
@@ -51,7 +56,7 @@
 #include "third_party/blink/renderer/core/loader/threadable_loader.h"
 #include "third_party/blink/renderer/core/probe/core_probes.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_error.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_loader_options.h"
@@ -62,13 +67,36 @@
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
+namespace {
+// https://fetch.spec.whatwg.org/#cors-unsafe-request-header-byte
+bool IsCorsUnsafeRequestHeaderByte(char c) {
+  const auto u = static_cast<uint8_t>(c);
+  return (u < 0x20 && u != 0x09) || u == 0x22 || u == 0x28 || u == 0x29 ||
+         u == 0x3a || u == 0x3c || u == 0x3e || u == 0x3f || u == 0x40 ||
+         u == 0x5b || u == 0x5c || u == 0x5d || u == 0x7b || u == 0x7d ||
+         u == 0x7f;
+}
+
+void ReportUMA(ExecutionContext& context,
+               const std::string& value,
+               network::mojom::FetchResponseType response_type) {
+  if (response_type == network::mojom::FetchResponseType::kCors &&
+      (value.size() > 128 ||
+       std::ranges::any_of(value, IsCorsUnsafeRequestHeaderByte))) {
+    UseCounter::Count(context,
+                      WebFeature::kFetchEventSourceLastEventIdCorsUnSafe);
+  }
+}
+
+}  // anonymous namespace
 
 const uint64_t EventSource::kDefaultReconnectDelay = 3000;
 
 inline EventSource::EventSource(ExecutionContext* context,
                                 const KURL& url,
                                 const EventSourceInit* event_source_init)
-    : ExecutionContextLifecycleObserver(context),
+    : ActiveScriptWrappable<EventSource>({}),
+      ExecutionContextLifecycleObserver(context),
       url_(url),
       current_url_(url),
       with_credentials_(event_source_init->withCredentials()),
@@ -89,9 +117,9 @@ EventSource* EventSource::Create(ExecutionContext* context,
 
   KURL full_url = context->CompleteURL(url);
   if (!full_url.IsValid()) {
-    exception_state.ThrowDOMException(
-        DOMExceptionCode::kSyntaxError,
-        "Cannot open an EventSource to '" + url + "'. The URL is invalid.");
+    exception_state.ThrowDOMException(DOMExceptionCode::kSyntaxError,
+                                      StrCat({"Cannot open an EventSource to '",
+                                              url, "'. The URL is invalid."}));
     return nullptr;
   }
 
@@ -122,32 +150,29 @@ void EventSource::Connect() {
   ExecutionContext& execution_context = *GetExecutionContext();
   ResourceRequest request(current_url_);
   request.SetHttpMethod(http_names::kGET);
-  request.SetHttpHeaderField(http_names::kAccept, "text/event-stream");
-  request.SetHttpHeaderField(http_names::kCacheControl, "no-cache");
+  request.SetHttpHeaderField(http_names::kAccept,
+                             AtomicString("text/event-stream"));
   request.SetRequestContext(mojom::blink::RequestContextType::EVENT_SOURCE);
   request.SetFetchLikeAPI(true);
   request.SetMode(network::mojom::RequestMode::kCors);
+  request.SetTargetAddressSpace(network::mojom::IPAddressSpace::kUnknown);
   request.SetCredentialsMode(
       with_credentials_ ? network::mojom::CredentialsMode::kInclude
                         : network::mojom::CredentialsMode::kSameOrigin);
   request.SetCacheMode(blink::mojom::FetchCacheMode::kNoStore);
-  request.SetExternalRequestStateFromRequestorAddressSpace(
-      execution_context.AddressSpace());
   request.SetCorsPreflightPolicy(
       network::mojom::CorsPreflightPolicy::kPreventPreflight);
-  if (parser_ && !parser_->LastEventId().IsEmpty()) {
-    // HTTP headers are Latin-1 byte strings, but the Last-Event-ID header is
-    // encoded as UTF-8.
-    // TODO(davidben): This should be captured in the type of
-    // setHTTPHeaderField's arguments.
-    std::string last_event_id_utf8 = parser_->LastEventId().Utf8();
-    request.SetHttpHeaderField(
-        http_names::kLastEventID,
-        AtomicString(reinterpret_cast<const LChar*>(last_event_id_utf8.c_str()),
-                     last_event_id_utf8.length()));
+  // Prevents web service workers from intercepting isolated world requests.
+  if (base::FeatureList::IsEnabled(
+          features::kIsolatedWorldEventSourceAndBeaconsSkipServiceWorker)) {
+    request.SetSkipServiceWorker(world_ && world_->IsIsolatedWorld());
+  }
+  if (parser_ && !parser_->LastEventId().empty()) {
+    request.SetEventSourceLastEventId(parser_->LastEventId());
   }
 
-  ResourceLoaderOptions resource_loader_options(world_);
+  ResourceLoaderOptions resource_loader_options =
+      ResourceLoaderOptions::CreateForTargetWorld(world_.Get());
   resource_loader_options.data_buffering_policy = kDoNotBufferData;
 
   probe::WillSendEventSourceRequest(&execution_context);
@@ -165,8 +190,7 @@ void EventSource::NetworkRequestEnded() {
 
 void EventSource::ScheduleReconnect() {
   state_ = kConnecting;
-  connect_timer_.StartOneShot(
-      base::TimeDelta::FromMilliseconds(reconnect_delay_), FROM_HERE);
+  connect_timer_.StartOneShot(base::Milliseconds(reconnect_delay_), FROM_HERE);
   DispatchEvent(*Event::Create(event_type_names::kError));
 }
 
@@ -224,8 +248,7 @@ void EventSource::DidReceiveResponse(uint64_t identifier,
 
   resource_identifier_ = identifier;
   current_url_ = response.CurrentRequestUrl();
-  event_stream_origin_ =
-      SecurityOrigin::Create(response.CurrentRequestUrl())->ToString();
+  event_stream_origin_ = SecurityOrigin::Create(response.CurrentRequestUrl());
   int status_code = response.HttpStatusCode();
   bool mime_type_is_valid = response.MimeType() == "text/event-stream";
   bool response_is_valid = status_code == 200 && mime_type_is_valid;
@@ -233,32 +256,29 @@ void EventSource::DidReceiveResponse(uint64_t identifier,
     const String& charset = response.TextEncodingName();
     // If we have a charset, the only allowed value is UTF-8 (case-insensitive).
     response_is_valid =
-        charset.IsEmpty() || EqualIgnoringASCIICase(charset, "UTF-8");
+        charset.empty() || EqualIgnoringAsciiCase(charset, "UTF-8");
     if (!response_is_valid) {
-      StringBuilder message;
-      message.Append("EventSource's response has a charset (\"");
-      message.Append(charset);
-      message.Append("\") that is not UTF-8. Aborting the connection.");
+      String message =
+          StrCat({"EventSource's response has a charset (\"", charset,
+                  "\") that is not UTF-8. Aborting the connection."});
       // FIXME: We are missing the source line.
       GetExecutionContext()->AddConsoleMessage(
           MakeGarbageCollected<ConsoleMessage>(
-              mojom::ConsoleMessageSource::kJavaScript,
-              mojom::ConsoleMessageLevel::kError, message.ToString()));
+              mojom::blink::ConsoleMessageSource::kJavaScript,
+              mojom::blink::ConsoleMessageLevel::kError, message));
     }
   } else {
     // To keep the signal-to-noise ratio low, we only log 200-response with an
     // invalid MIME type.
     if (status_code == 200 && !mime_type_is_valid) {
-      StringBuilder message;
-      message.Append("EventSource's response has a MIME type (\"");
-      message.Append(response.MimeType());
-      message.Append(
-          "\") that is not \"text/event-stream\". Aborting the connection.");
+      String message = StrCat(
+          {"EventSource's response has a MIME type (\"", response.MimeType(),
+           "\") that is not \"text/event-stream\". Aborting the connection."});
       // FIXME: We are missing the source line.
       GetExecutionContext()->AddConsoleMessage(
           MakeGarbageCollected<ConsoleMessage>(
-              mojom::ConsoleMessageSource::kJavaScript,
-              mojom::ConsoleMessageLevel::kError, message.ToString()));
+              mojom::blink::ConsoleMessageSource::kJavaScript,
+              mojom::blink::ConsoleMessageLevel::kError, message));
     }
   }
 
@@ -268,6 +288,9 @@ void EventSource::DidReceiveResponse(uint64_t identifier,
     if (parser_) {
       // The new parser takes over the event ID.
       last_event_id = parser_->LastEventId();
+      DCHECK(GetExecutionContext());
+      ReportUMA(*GetExecutionContext(), last_event_id.Utf8(),
+                response.GetType());
     }
     parser_ = MakeGarbageCollected<EventSourceParser>(last_event_id, this);
     DispatchEvent(*Event::Create(event_type_names::kOpen));
@@ -276,12 +299,12 @@ void EventSource::DidReceiveResponse(uint64_t identifier,
   }
 }
 
-void EventSource::DidReceiveData(const char* data, unsigned length) {
+void EventSource::DidReceiveData(base::span<const char> data) {
   DCHECK_EQ(kOpen, state_);
   DCHECK(loader_);
   DCHECK(parser_);
 
-  parser_->AddBytes(data, length);
+  parser_->AddBytes(data);
 }
 
 void EventSource::DidFinishLoading(uint64_t) {
@@ -359,7 +382,8 @@ void EventSource::Trace(Visitor* visitor) const {
   visitor->Trace(parser_);
   visitor->Trace(loader_);
   visitor->Trace(connect_timer_);
-  EventTargetWithInlineData::Trace(visitor);
+  visitor->Trace(world_);
+  EventTarget::Trace(visitor);
   ThreadableLoaderClient::Trace(visitor);
   ExecutionContextLifecycleObserver::Trace(visitor);
   EventSourceParser::Client::Trace(visitor);

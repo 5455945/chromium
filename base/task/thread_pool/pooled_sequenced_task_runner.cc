@@ -1,22 +1,25 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/task/thread_pool/pooled_sequenced_task_runner.h"
 
+#include "base/message_loop/message_pump.h"
 #include "base/sequence_token.h"
+#include "base/task/default_delayed_task_handle_delegate.h"
 
-namespace base {
-namespace internal {
+namespace base::internal {
 
 PooledSequencedTaskRunner::PooledSequencedTaskRunner(
     const TaskTraits& traits,
-    PooledTaskRunnerDelegate* pooled_task_runner_delegate)
+    PooledTaskRunnerDelegate* pooled_task_runner_delegate,
+    bool inherit_task_importance_by_default)
     : pooled_task_runner_delegate_(pooled_task_runner_delegate),
       sequence_(MakeRefCounted<Sequence>(traits,
                                          this,
-                                         TaskSourceExecutionMode::kSequenced)) {
-}
+                                         TaskSourceExecutionMode::kSequenced,
+                                         GetCurrentTaskImportance(),
+                                         inherit_task_importance_by_default)) {}
 
 PooledSequencedTaskRunner::~PooledSequencedTaskRunner() = default;
 
@@ -28,7 +31,27 @@ bool PooledSequencedTaskRunner::PostDelayedTask(const Location& from_here,
     return false;
   }
 
-  Task task(from_here, std::move(closure), TimeTicks::Now(), delay);
+  Task task(from_here, std::move(closure), TimeTicks::Now(), delay,
+            MessagePump::GetLeewayIgnoringThreadOverride());
+
+  // Post the task as part of |sequence_|.
+  return pooled_task_runner_delegate_->PostTaskWithSequence(std::move(task),
+                                                            sequence_);
+}
+
+bool PooledSequencedTaskRunner::PostDelayedTaskAt(
+    subtle::PostDelayedTaskPassKey,
+    const Location& from_here,
+    OnceClosure closure,
+    TimeTicks delayed_run_time,
+    subtle::DelayPolicy delay_policy) {
+  if (!PooledTaskRunnerDelegate::MatchesCurrentDelegate(
+          pooled_task_runner_delegate_)) {
+    return false;
+  }
+
+  Task task(from_here, std::move(closure), TimeTicks::Now(), delayed_run_time,
+            MessagePump::GetLeewayIgnoringThreadOverride(), delay_policy);
 
   // Post the task as part of |sequence_|.
   return pooled_task_runner_delegate_->PostTaskWithSequence(std::move(task),
@@ -51,5 +74,4 @@ void PooledSequencedTaskRunner::UpdatePriority(TaskPriority priority) {
   pooled_task_runner_delegate_->UpdatePriority(sequence_, priority);
 }
 
-}  // namespace internal
-}  // namespace base
+}  // namespace base::internal

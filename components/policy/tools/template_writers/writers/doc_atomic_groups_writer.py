@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2019 The Chromium Authors. All rights reserved.
+# Copyright 2019 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -40,21 +40,26 @@ class DocAtomicGroupsWriter(doc_writer.DocWriter):
     indent = 'padding-left: %dpx;' % (7 + self._indent_level * 14)
     if policy['type'] != 'group':
       # Normal policies get two columns with name and caption.
-      name_td = self._AddStyledElement(tr, 'td', ['td', 'td.left'],
-                                       {'style': indent})
+      name_td = self._AddStyledElement(
+        tr, 'td', ['td', 'td.left'], {'style': indent}
+      )
       policy_ref = './'
       if self.config.get('local', False):
         policy_ref = './chrome_policy_list.html'
-      self.AddElement(name_td, 'a', {'href': policy_ref + '#' + policy['name']},
-                      policy['name'])
-      self._AddStyledElement(tr, 'td', ['td', 'td.right'], {},
-                             policy['caption'])
+      self.AddElement(
+        name_td,
+        'a',
+        {'href': policy_ref + '#' + policy['name']},
+        policy['name'],
+      )
+      self._AddStyledElement(
+        tr, 'td', ['td', 'td.right'], {}, policy['caption']
+      )
     else:
       # Groups get one column with caption.
-      name_td = self._AddStyledElement(tr, 'td', ['td', 'td.left'], {
-          'style': indent,
-          'colspan': '2'
-      })
+      name_td = self._AddStyledElement(
+        tr, 'td', ['td', 'td.left'], {'style': indent, 'colspan': '2'}
+      )
       self.AddElement(name_td, 'a', {'name': policy['name']}, policy['caption'])
 
   #
@@ -80,7 +85,8 @@ class DocAtomicGroupsWriter(doc_writer.DocWriter):
     self.Init()
 
     policies = self.PreprocessPolicies(
-        template['policy_atomic_group_definitions'])
+      template['policy_atomic_group_definitions']
+    )
 
     self.BeginTemplate()
     for policy in policies:

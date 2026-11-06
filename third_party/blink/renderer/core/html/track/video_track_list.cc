@@ -1,9 +1,10 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/html/track/video_track_list.h"
 
+#include "third_party/blink/renderer/core/event_target_names.h"
 #include "third_party/blink/renderer/core/html/media/html_media_element.h"
 #include "third_party/blink/renderer/core/html/track/video_track.h"
 
@@ -29,7 +30,7 @@ int VideoTrackList::selectedIndex() const {
   return -1;
 }
 
-void VideoTrackList::TrackSelected(WebMediaPlayer::TrackId selected_track_id) {
+void VideoTrackList::TrackSelected(const String& selected_track_id) {
   // Clear the selected flag on the previously selected track, if any.
   for (unsigned i = 0; i < length(); ++i) {
     VideoTrack* track = AnonymousIndexedGetter(i);

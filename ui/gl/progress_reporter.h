@@ -1,9 +1,11 @@
-// Copyright (c) 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_GL_PROGRESS_REPORTER_H_
 #define UI_GL_PROGRESS_REPORTER_H_
+
+#include "base/memory/stack_allocated.h"
 
 namespace gl {
 
@@ -18,6 +20,8 @@ class ProgressReporter {
 };
 
 class ScopedProgressReporter {
+  STACK_ALLOCATED();
+
  public:
   ScopedProgressReporter(ProgressReporter* progress_reporter)
       : progress_reporter_(progress_reporter) {

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,30 +6,35 @@
 
 #include <string>
 #include <utility>
+#include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/time/time.h"
+#include "cc/metrics/frame_info.h"
+#include "cc/test/fake_frame_info.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace cc {
 
 // Test class for FrameSorter
-class FrameSorterTest : public testing::Test {
+class FrameSorterTest : public testing::Test, FrameSorterObserver {
  public:
-  FrameSorterTest()
-      : frame_sorter_(base::BindRepeating(&FrameSorterTest::FlushFrame,
-                                          base::Unretained(this))) {
+  FrameSorterTest() {
+    frame_sorter_.AddObserver(this);
     IncreaseSourceId();
   }
   ~FrameSorterTest() override = default;
 
-  const viz::BeginFrameArgs GetNextFrameArgs() {
+  viz::BeginFrameArgs GetNextFrameArgs() {
     uint64_t sequence_number = next_frame_sequence_number_++;
+    last_begin_frame_time_ += base::Milliseconds(250);
     return viz::BeginFrameArgs::Create(
         BEGINFRAME_FROM_HERE, next_frame_source_id_, sequence_number,
         last_begin_frame_time_,
-        last_begin_frame_time_ + viz::BeginFrameArgs::DefaultInterval(),
-        viz::BeginFrameArgs::DefaultInterval(), viz::BeginFrameArgs::NORMAL);
+        last_begin_frame_time_ + base::Milliseconds(250),
+        base::Milliseconds(250), viz::BeginFrameArgs::NORMAL);
   }
 
   void IncreaseSourceId() {
@@ -49,6 +54,9 @@ class FrameSorterTest : public testing::Test {
   // "R": Reset the frame sorter.
   // Method expects the start of frames to be in order starting with 1.
   void SimulateQueries(std::vector<std::string> queries) {
+    // Keeps track of how many times a frame is terminated.
+    std::map<int, int> end_counters;
+
     for (auto& query : queries) {
       int id;
       base::StringToInt(query.substr(1), &id);
@@ -60,17 +68,43 @@ class FrameSorterTest : public testing::Test {
         case 'S':
           frame_sorter_.AddNewFrame(args_[id]);
           break;
-        case 'D':
-          frame_sorter_.AddFrameResult(args_[id], true);
+        case 'D': {
+          ++end_counters[id];
+          FrameInfo info =
+              CreateFakeFrameInfo(FrameInfo::FrameFinalState::kDropped);
+          if (end_counters[id] == 1) {
+            // For the first response to the frame, mark it as not including
+            // update from the main-thread.
+            info.main_thread_response = FrameInfo::MainThreadResponse::kMissing;
+          } else {
+            DCHECK_EQ(2, end_counters[id]);
+            info.main_thread_response =
+                FrameInfo::MainThreadResponse::kIncluded;
+          }
+          frame_sorter_.AddFrameResult(args_[id], info);
           break;
-        case 'P':
-          frame_sorter_.AddFrameResult(args_[id], false);
+        }
+        case 'P': {
+          ++end_counters[id];
+          FrameInfo info =
+              CreateFakeFrameInfo(FrameInfo::FrameFinalState::kPresentedAll);
+          if (end_counters[id] == 1) {
+            // For the first response to the frame, mark it as not including
+            // update from the main-thread.
+            info.main_thread_response = FrameInfo::MainThreadResponse::kMissing;
+          } else {
+            DCHECK_EQ(2, end_counters[id]);
+            info.main_thread_response =
+                FrameInfo::MainThreadResponse::kIncluded;
+          }
+          frame_sorter_.AddFrameResult(args_[id], info);
           break;
+        }
         case 'I':
           IncreaseSourceId();
           break;
         case 'R':
-          frame_sorter_.Reset();
+          frame_sorter_.Reset(/*reset_fcp=*/true);
           break;
       }
     }
@@ -87,19 +121,20 @@ class FrameSorterTest : public testing::Test {
       result_index++;
     }
   }
+  FrameSorter frame_sorter_;
 
  private:
-  void FlushFrame(const viz::BeginFrameArgs& args, bool is_dropped) {
-    sorted_frames_.emplace_back(args, is_dropped);
+  void AddSortedFrame(const viz::BeginFrameArgs& args,
+                      const FrameInfo& frame) override {
+    sorted_frames_.emplace_back(args, frame.IsDroppedAffectingSmoothness());
   }
 
-  FrameSorter frame_sorter_;
   std::vector<std::pair<const viz::BeginFrameArgs, bool>> sorted_frames_;
   base::TimeTicks last_begin_frame_time_ = base::TimeTicks::Now();
   uint64_t next_frame_source_id_ = 0;
   uint64_t next_frame_sequence_number_ =
       viz::BeginFrameArgs::kStartingFrameNumber;
-  std::vector<const viz::BeginFrameArgs> args_ = {};
+  std::vector<viz::BeginFrameArgs> args_ = {};
   int current_frame_id_ = -1;
 };
 

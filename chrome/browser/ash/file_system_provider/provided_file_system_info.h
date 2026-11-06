@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,11 +9,10 @@
 
 #include "base/files/file_path.h"
 #include "chrome/browser/ash/file_system_provider/icon_set.h"
-#include "chrome/common/extensions/api/file_system_provider_capabilities/file_system_provider_capabilities_handler.h"
+#include "chromeos/ash/experiences/extensions/common/api/file_system_provider_capabilities/file_system_provider_capabilities_handler.h"
 #include "extensions/common/extension_id.h"
 
-namespace ash {
-namespace file_system_provider {
+namespace ash::file_system_provider {
 
 // Options for creating the provided file system info.
 struct MountOptions {
@@ -24,6 +23,7 @@ struct MountOptions {
                const std::string& display_name);
 
   MountOptions(const MountOptions& source);
+  MountOptions& operator=(const MountOptions& source);
 
   std::string file_system_id;
   std::string display_name;
@@ -48,7 +48,7 @@ class ProviderId {
   std::string ToString() const;
   ProviderType GetType() const;
 
-  bool operator==(const ProviderId& other) const;
+  friend bool operator==(const ProviderId&, const ProviderId&) = default;
   bool operator<(const ProviderId& other) const;
 
  private:
@@ -97,6 +97,8 @@ class ProvidedFileSystemInfo {
   extensions::FileSystemProviderSource source() const { return source_; }
   const IconSet& icon_set() const { return icon_set_; }
 
+  bool operator==(const ProvidedFileSystemInfo& other) const;
+
  private:
   // ID of the provider supplying this file system.
   ProviderId provider_id_;
@@ -137,16 +139,6 @@ class ProvidedFileSystemInfo {
   IconSet icon_set_;
 };
 
-}  // namespace file_system_provider
-}  // namespace ash
-
-// TODO(https://crbug.com/1164001): remove when ChromeOS code migration is done.
-namespace chromeos {
-namespace file_system_provider {
-using ::ash::file_system_provider::MountOptions;
-using ::ash::file_system_provider::ProvidedFileSystemInfo;
-using ::ash::file_system_provider::ProviderId;
-}  // namespace file_system_provider
-}  // namespace chromeos
+}  // namespace ash::file_system_provider
 
 #endif  // CHROME_BROWSER_ASH_FILE_SYSTEM_PROVIDER_PROVIDED_FILE_SYSTEM_INFO_H_

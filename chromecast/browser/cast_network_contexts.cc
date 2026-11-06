@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,27 +8,28 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/strings/strcat.h"
-#include "base/task/post_task.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "chromecast/base/cast_features.h"
 #include "chromecast/browser/cast_browser_context.h"
 #include "chromecast/browser/cast_browser_process.h"
 #include "chromecast/browser/cast_http_user_agent_settings.h"
-#include "chromecast/common/cast_content_client.h"
+#include "chromecast/common/user_agent.h"
 #include "components/proxy_config/pref_proxy_config_tracker_impl.h"
 #include "components/variations/net/variations_http_headers.h"
 #include "content/public/browser/browser_context.h"
-#include "content/public/browser/browser_task_traits.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/network_service_instance.h"
 #include "content/public/browser/storage_partition.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "services/cert_verifier/public/mojom/cert_verifier_service_factory.mojom.h"
 #include "services/network/network_context.h"
+#include "services/network/public/cpp/cookie_encryption_provider_impl.h"
 #include "services/network/public/cpp/cross_thread_pending_shared_url_loader_factory.h"
+#include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/mojom/cookie_manager.mojom.h"
 
@@ -46,8 +47,8 @@ ContentSettingPatternSource CreateContentSetting(
   return ContentSettingPatternSource(
       ContentSettingsPattern::FromString(primary_pattern),
       ContentSettingsPattern::FromString(secondary_pattern),
-      base::Value(setting), std::string(), /*incognito=*/false,
-      /*expiration=*/base::Time());
+      base::Value(setting), content_settings::ProviderType::kNone,
+      /*incognito=*/false);
 }
 
 }  // namespace
@@ -61,6 +62,10 @@ class CastNetworkContexts::URLLoaderFactoryForSystem
       : network_context_(network_context) {
     DETACH_FROM_SEQUENCE(sequence_checker_);
   }
+
+  URLLoaderFactoryForSystem(const URLLoaderFactoryForSystem&) = delete;
+  URLLoaderFactoryForSystem& operator=(const URLLoaderFactoryForSystem&) =
+      delete;
 
   // mojom::URLLoaderFactory implementation:
   void CreateLoaderAndStart(
@@ -101,13 +106,14 @@ class CastNetworkContexts::URLLoaderFactoryForSystem
 
   SEQUENCE_CHECKER(sequence_checker_);
   CastNetworkContexts* network_context_;
-
-  DISALLOW_COPY_AND_ASSIGN(URLLoaderFactoryForSystem);
 };
 
 CastNetworkContexts::CastNetworkContexts(
-    std::vector<std::string> cors_exempt_headers_list)
+    std::vector<std::string> cors_exempt_headers_list,
+    os_crypt_async::OSCryptAsync* os_crypt_async)
     : cors_exempt_headers_list_(std::move(cors_exempt_headers_list)),
+      cookie_encryption_provider_(
+          std::make_unique<CookieEncryptionProviderImpl>(os_crypt_async)),
       system_shared_url_loader_factory_(
           base::MakeRefCounted<URLLoaderFactoryForSystem>(this)) {}
 
@@ -145,8 +151,8 @@ CastNetworkContexts::GetSystemURLLoaderFactory() {
 
   network::mojom::URLLoaderFactoryParamsPtr params =
       network::mojom::URLLoaderFactoryParams::New();
-  params->process_id = network::mojom::kBrowserProcessId;
-  params->is_corb_enabled = false;
+  params->process_id = network::OriginatingProcessId::browser();
+  params->is_orb_enabled = false;
   params->is_trusted = true;
   GetSystemContext()->CreateURLLoaderFactory(
       system_url_loader_factory_.BindNewPipeAndPassReceiver(),
@@ -224,20 +230,17 @@ void CastNetworkContexts::ConfigureDefaultNetworkContextParams(
 
   auto* browser_context = CastBrowserProcess::GetInstance()->browser_context();
   DCHECK(browser_context);
-  network_context_params->cookie_path =
-      browser_context->GetPath().Append(kCookieStoreFile);
+  network_context_params->file_paths =
+      network::mojom::NetworkContextFilePaths::New();
+  network_context_params->file_paths->data_directory =
+      browser_context->GetPath();
+  network_context_params->file_paths->cookie_database_name =
+      base::FilePath(kCookieStoreFile);
   network_context_params->restore_old_session_cookies = false;
   network_context_params->persist_session_cookies = true;
   network_context_params->cookie_manager_params = CreateCookieManagerParams();
-
-  // Disable idle sockets close on memory pressure, if instructed by DCS. On
-  // memory constrained devices:
-  // 1. if idle sockets are closed when memory pressure happens, cast_shell will
-  // close and re-open lots of connections to server.
-  // 2. if idle sockets are kept alive when memory pressure happens, this may
-  // cause JS engine gc frequently, leading to JS suspending.
-  network_context_params->disable_idle_sockets_close_on_memory_pressure =
-      IsFeatureEnabled(kDisableIdleSocketsCloseOnMemoryPressure);
+  network_context_params->cookie_encryption_provider =
+      cookie_encryption_provider_->BindNewRemote();
 
   AddProxyToNetworkContextParams(network_context_params);
 
@@ -251,8 +254,6 @@ CastNetworkContexts::CreateSystemNetworkContextParams() {
   network::mojom::NetworkContextParamsPtr network_context_params =
       network::mojom::NetworkContextParams::New();
   ConfigureDefaultNetworkContextParams(network_context_params.get());
-
-  network_context_params->context_name = std::string("system");
 
   network_context_params->cert_verifier_params = content::GetCertVerifierParams(
       cert_verifier::mojom::CertVerifierCreationParams::New());
@@ -275,11 +276,12 @@ CastNetworkContexts::CreateCookieManagerParams() {
 
   // Grant cookie and storage access to domains in the allowlist.
   for (const auto& domain : allowed_domains_for_persistent_cookies_) {
-    auto allow_setting = CreateContentSetting(
+    auto allow_storage_access_setting = CreateContentSetting(
         /*primary_pattern=*/base::StrCat({"[*.]", domain}),
         /*secondary_pattern=*/"*", ContentSetting::CONTENT_SETTING_ALLOW);
-    settings.push_back(allow_setting);
-    settings_for_storage_access.push_back(std::move(allow_setting));
+    settings.push_back(allow_storage_access_setting);
+    settings_for_storage_access.push_back(
+        std::move(allow_storage_access_setting));
   }
 
   // Restrict cookie access to session only and block storage access for
@@ -292,8 +294,10 @@ CastNetworkContexts::CreateCookieManagerParams() {
   settings_for_storage_access.push_back(CreateContentSetting(
       /*primary_pattern=*/"*",
       /*secondary_pattern=*/"*", ContentSetting::CONTENT_SETTING_BLOCK));
-  params->settings = std::move(settings);
-  params->settings_for_storage_access = std::move(settings_for_storage_access);
+  params->content_settings[ContentSettingsType::COOKIES] = std::move(settings);
+  params->content_settings[ContentSettingsType::STORAGE_ACCESS] =
+      std::move(settings_for_storage_access);
+
   return params;
 }
 
@@ -302,7 +306,9 @@ void CastNetworkContexts::AddProxyToNetworkContextParams(
   if (!proxy_config_service_) {
     pref_proxy_config_tracker_impl_ =
         std::make_unique<PrefProxyConfigTrackerImpl>(
-            CastBrowserProcess::GetInstance()->pref_service(), nullptr);
+            CastBrowserProcess::GetInstance()->pref_service(),
+            /*proxy_config_service_task_runner=*/nullptr,
+            /*policy_service=*/nullptr);
     proxy_config_service_ =
         pref_proxy_config_tracker_impl_->CreateTrackingProxyConfigService(
             nullptr);
@@ -340,7 +346,6 @@ void CastNetworkContexts::OnProxyConfigChanged(
         break;
       case net::ProxyConfigService::CONFIG_PENDING:
         NOTREACHED();
-        break;
     }
   }
 }

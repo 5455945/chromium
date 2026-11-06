@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,11 @@
 #define CHROME_BROWSER_ASH_ACCOUNT_MANAGER_ACCOUNT_MANAGER_POLICY_CONTROLLER_H_
 
 #include <memory>
-#include <string>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/sequence_checker.h"
 #include "chrome/browser/ash/account_manager/child_account_type_changed_user_data.h"
 #include "components/account_id/account_id.h"
 #include "components/account_manager_core/account.h"
@@ -21,7 +21,6 @@
 class Profile;
 
 namespace account_manager {
-class AccountManagerFacade;
 class AccountManager;
 }
 
@@ -33,8 +32,13 @@ class AccountManagerPolicyController : public KeyedService {
   AccountManagerPolicyController(
       Profile* profile,
       account_manager::AccountManager* account_manager,
-      account_manager::AccountManagerFacade* account_manager_facade,
       const AccountId& device_account_id);
+
+  AccountManagerPolicyController(const AccountManagerPolicyController&) =
+      delete;
+  AccountManagerPolicyController& operator=(
+      const AccountManagerPolicyController&) = delete;
+
   ~AccountManagerPolicyController() override;
 
   // Starts applying the behaviour required by |account_manager::AccountManager|
@@ -54,23 +58,12 @@ class AccountManagerPolicyController : public KeyedService {
   // |type_changed| is be set to true.
   void OnChildAccountTypeChanged(bool type_changed);
 
-  // Checks if invalidation version for parental consent in EDU accounts
-  // addition has changed. If so, calls
-  // |InvalidateSecondaryAccountsOnEduConsentChange|.
-  void CheckEduCoexistenceSecondaryAccountsInvalidationVersion();
-
-  // Invalidates all secondary accounts and updates consent text version.
-  void InvalidateSecondaryAccountsOnEduConsentChange(
-      const std::string& new_invalidation_version,
-      const std::vector<::account_manager::Account>& accounts);
-
   // KeyedService implementation.
   void Shutdown() override;
 
   // Non-owning pointers.
-  Profile* const profile_;
-  account_manager::AccountManager* const account_manager_;
-  account_manager::AccountManagerFacade* const account_manager_facade_;
+  const raw_ptr<Profile> profile_;
+  const raw_ptr<account_manager::AccountManager> account_manager_;
 
   const AccountId device_account_id_;
 
@@ -85,8 +78,6 @@ class AccountManagerPolicyController : public KeyedService {
   SEQUENCE_CHECKER(sequence_checker_);
 
   base::WeakPtrFactory<AccountManagerPolicyController> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(AccountManagerPolicyController);
 };
 
 }  // namespace ash

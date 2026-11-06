@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,16 +11,17 @@
 #include "Config.h"
 #include "DiagnosticsReporter.h"
 #include "clang/AST/AST.h"
-#include "clang/AST/ASTConsumer.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Frontend/CompilerInstance.h"
+#include "clang/Lex/Pragma.h"
+#include "tools/clang/plugins/FilteredASTConsumer.h"
 
 class JsonWriter;
 class RecordInfo;
 
 // Main class containing checks for various invariants of the Blink
 // garbage collection infrastructure.
-class BlinkGCPluginConsumer : public clang::ASTConsumer {
+class BlinkGCPluginConsumer : public FilteredASTConsumer {
  public:
   BlinkGCPluginConsumer(clang::CompilerInstance& instance,
                         const BlinkGCPluginOptions& options);
@@ -75,7 +76,7 @@ class BlinkGCPluginConsumer : public clang::ASTConsumer {
 
   bool InIgnoredDirectory(RecordInfo* info);
 
-  bool InCheckedNamespace(RecordInfo* info);
+  bool InCheckedNamespaceOrDirectory(RecordInfo* info);
 
   bool GetFilename(clang::SourceLocation loc, std::string* filename);
 

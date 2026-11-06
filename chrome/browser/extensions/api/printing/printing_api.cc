@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,11 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/values.h"
 #include "chrome/browser/extensions/api/printing/printing_api_handler.h"
 #include "chrome/browser/extensions/chrome_extension_function_details.h"
+#include "extensions/browser/extension_function.h"
 #include "extensions/browser/quota_service.h"
 
 namespace extensions {
@@ -19,17 +20,16 @@ PrintingSubmitJobFunction::~PrintingSubmitJobFunction() = default;
 void PrintingSubmitJobFunction::GetQuotaLimitHeuristics(
     QuotaLimitHeuristics* heuristics) const {
   QuotaLimitHeuristic::Config config = {
-      api::printing::MAX_SUBMIT_JOB_CALLS_PER_MINUTE,
-      base::TimeDelta::FromMinutes(1)};
+      api::printing::MAX_SUBMIT_JOB_CALLS_PER_MINUTE, base::Minutes(1)};
   heuristics->push_back(std::make_unique<QuotaService::TimedLimit>(
       config, std::make_unique<QuotaLimitHeuristic::SingletonBucketMapper>(),
       "MAX_SUBMIT_JOB_CALLS_PER_MINUTE"));
 }
 
 ExtensionFunction::ResponseAction PrintingSubmitJobFunction::Run() {
-  std::unique_ptr<api::printing::SubmitJob::Params> params(
-      api::printing::SubmitJob::Params::Create(*args_));
-  EXTENSION_FUNCTION_VALIDATE(params.get());
+  std::optional<api::printing::SubmitJob::Params> params =
+      api::printing::SubmitJob::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
   PrintingAPIHandler::Get(browser_context())
       ->SubmitJob(ChromeExtensionFunctionDetails(this).GetNativeWindowForUI(),
                   extension_, std::move(params),
@@ -40,40 +40,49 @@ ExtensionFunction::ResponseAction PrintingSubmitJobFunction::Run() {
 }
 
 void PrintingSubmitJobFunction::OnPrintJobSubmitted(
-    absl::optional<api::printing::SubmitJobStatus> status,
-    std::unique_ptr<std::string> job_id,
-    absl::optional<std::string> error) {
+    std::optional<api::printing::SubmitJobStatus> status,
+    std::optional<std::string> job_id,
+    std::optional<std::string> error) {
   if (error.has_value()) {
     Respond(Error(error.value()));
     return;
   }
   api::printing::SubmitJobResponse response;
-  DCHECK(status.has_value());
+  CHECK(status.has_value(), base::NotFatalUntil::M161);
   response.status = status.value();
   response.job_id = std::move(job_id);
-  Respond(OneArgument(base::Value::FromUniquePtrValue(response.ToValue())));
+  Respond(WithArguments(response.ToValue()));
 }
 
 PrintingCancelJobFunction::~PrintingCancelJobFunction() = default;
 
 ExtensionFunction::ResponseAction PrintingCancelJobFunction::Run() {
-  std::unique_ptr<api::printing::CancelJob::Params> params(
-      api::printing::CancelJob::Params::Create(*args_));
-  EXTENSION_FUNCTION_VALIDATE(params.get());
-  absl::optional<std::string> error =
+  std::optional<api::printing::CancelJob::Params> params =
+      api::printing::CancelJob::Params::Create(args());
+  EXTENSION_FUNCTION_VALIDATE(params);
+  std::optional<std::string> error =
       PrintingAPIHandler::Get(browser_context())
           ->CancelJob(extension_id(), params->job_id);
 
-  if (error.has_value())
+  if (error.has_value()) {
     return RespondNow(Error(error.value()));
+  }
   return RespondNow(NoArguments());
 }
 
+PrintingGetPrintersFunction::PrintingGetPrintersFunction() = default;
 PrintingGetPrintersFunction::~PrintingGetPrintersFunction() = default;
 
 ExtensionFunction::ResponseAction PrintingGetPrintersFunction::Run() {
-  return RespondNow(ArgumentList(api::printing::GetPrinters::Results::Create(
-      PrintingAPIHandler::Get(browser_context())->GetPrinters())));
+  PrintingAPIHandler::Get(browser_context())
+      ->GetPrinters(
+          base::BindOnce(&PrintingGetPrintersFunction::OnPrintersReady, this));
+  return RespondLater();
+}
+
+void PrintingGetPrintersFunction::OnPrintersReady(
+    std::vector<api::printing::Printer> printers) {
+  Respond(ArgumentList(api::printing::GetPrinters::Results::Create(printers)));
 }
 
 PrintingGetPrinterInfoFunction::~PrintingGetPrinterInfoFunction() = default;
@@ -81,16 +90,15 @@ PrintingGetPrinterInfoFunction::~PrintingGetPrinterInfoFunction() = default;
 void PrintingGetPrinterInfoFunction::GetQuotaLimitHeuristics(
     QuotaLimitHeuristics* heuristics) const {
   QuotaLimitHeuristic::Config config = {
-      api::printing::MAX_GET_PRINTER_INFO_CALLS_PER_MINUTE,
-      base::TimeDelta::FromMinutes(1)};
+      api::printing::MAX_GET_PRINTER_INFO_CALLS_PER_MINUTE, base::Minutes(1)};
   heuristics->push_back(std::make_unique<QuotaService::TimedLimit>(
       config, std::make_unique<QuotaLimitHeuristic::SingletonBucketMapper>(),
       "MAX_GET_PRINTER_INFO_CALLS_PER_MINUTE"));
 }
 
 ExtensionFunction::ResponseAction PrintingGetPrinterInfoFunction::Run() {
-  std::unique_ptr<api::printing::GetPrinterInfo::Params> params(
-      api::printing::GetPrinterInfo::Params::Create(*args_));
+  std::optional<api::printing::GetPrinterInfo::Params> params =
+      api::printing::GetPrinterInfo::Params::Create(args());
   EXTENSION_FUNCTION_VALIDATE(params);
   PrintingAPIHandler::Get(browser_context())
       ->GetPrinterInfo(
@@ -102,27 +110,41 @@ ExtensionFunction::ResponseAction PrintingGetPrinterInfoFunction::Run() {
 }
 
 void PrintingGetPrinterInfoFunction::OnPrinterInfoRetrieved(
-    absl::optional<base::Value> capabilities,
-    absl::optional<api::printing::PrinterStatus> status,
-    absl::optional<std::string> error) {
+    std::optional<base::Value> capabilities,
+    std::optional<api::printing::PrinterStatus> status,
+    std::optional<std::string> error) {
   if (error.has_value()) {
     Respond(Error(error.value()));
     return;
   }
   api::printing::GetPrinterInfoResponse response;
   if (capabilities.has_value()) {
-    response.capabilities =
-        std::make_unique<api::printing::GetPrinterInfoResponse::Capabilities>();
+    response.capabilities.emplace();
     base::Value capabilities_value = std::move(capabilities.value());
     CHECK(capabilities_value.is_dict());
     // It's safe just to swap values here as |capabilities_value| stores exactly
     // the same object as |response.capabilities| expects.
-    response.capabilities->additional_properties.Swap(
-        static_cast<base::DictionaryValue*>(&capabilities_value));
+    std::swap(response.capabilities->additional_properties,
+              capabilities_value.GetDict());
   }
-  DCHECK(status.has_value());
+  CHECK(status.has_value(), base::NotFatalUntil::M161);
   response.status = status.value();
-  Respond(OneArgument(base::Value::FromUniquePtrValue(response.ToValue())));
+  Respond(WithArguments(response.ToValue()));
+}
+
+PrintingGetJobStatusFunction::~PrintingGetJobStatusFunction() = default;
+
+ExtensionFunction::ResponseAction PrintingGetJobStatusFunction::Run() {
+  std::optional<api::printing::GetJobStatus::Params> params(
+      api::printing::GetJobStatus::Params::Create(args()));
+  EXTENSION_FUNCTION_VALIDATE(params);
+  base::expected<api::printing::JobStatus, std::string> result =
+      PrintingAPIHandler::Get(browser_context())
+          ->GetJobStatus(extension_id(), params->job_id);
+  if (result.has_value()) {
+    return RespondNow(WithArguments(ToString(result.value())));
+  }
+  return RespondNow(Error(result.error()));
 }
 
 }  // namespace extensions

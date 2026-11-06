@@ -1,20 +1,24 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/browser/process_manager.h"
 
-#include "base/macros.h"
+#include <memory>
+
+#include "base/process/kill.h"
+#include "build/android_buildflags.h"
 #include "content/public/browser/content_browser_client.h"
-#include "content/public/browser/notification_service.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/common/content_client.h"
+#include "content/public/test/mock_render_process_host.h"
 #include "content/public/test/test_browser_context.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extensions_test.h"
-#include "extensions/browser/notification_types.h"
 #include "extensions/browser/process_manager_delegate.h"
+#include "extensions/browser/service_worker/worker_id.h"
 #include "extensions/browser/test_extensions_browser_client.h"
+#include "third_party/blink/public/common/tokens/tokens.h"
 
 using content::BrowserContext;
 using content::SiteInstance;
@@ -57,6 +61,9 @@ class ProcessManagerTest : public ExtensionsTest {
  public:
   ProcessManagerTest() {}
 
+  ProcessManagerTest(const ProcessManagerTest&) = delete;
+  ProcessManagerTest& operator=(const ProcessManagerTest&) = delete;
+
   ~ProcessManagerTest() override {}
 
   void SetUp() override {
@@ -65,6 +72,12 @@ class ProcessManagerTest : public ExtensionsTest {
         std::make_unique<ExtensionRegistry>(browser_context());
     extensions_browser_client()->set_process_manager_delegate(
         &process_manager_delegate_);
+  }
+
+  void TearDown() override {
+    extensions_browser_client()->set_process_manager_delegate(nullptr);
+    extension_registry_.reset();
+    ExtensionsTest::TearDown();
   }
 
   // Use original_context() to make it clear it is a non-incognito context.
@@ -78,8 +91,6 @@ class ProcessManagerTest : public ExtensionsTest {
   std::unique_ptr<ExtensionRegistry>
       extension_registry_;  // Shared between BrowserContexts.
   TestProcessManagerDelegate process_manager_delegate_;
-
-  DISALLOW_COPY_AND_ASSIGN(ProcessManagerTest);
 };
 
 // Test that startup background hosts are created when the extension system
@@ -89,93 +100,79 @@ class ProcessManagerTest : public ExtensionsTest {
 // because ExtensionHost is tightly coupled to WebContents and can't be
 // constructed in unit tests.
 TEST_F(ProcessManagerTest, CreateBackgroundHostsOnExtensionsReady) {
-  std::unique_ptr<ProcessManager> manager(ProcessManager::CreateForTesting(
-      original_context(), extension_registry()));
-  ASSERT_FALSE(manager->startup_background_hosts_created_for_test());
+  ProcessManager manager(original_context(), extension_registry());
+  ASSERT_FALSE(manager.startup_background_hosts_created_for_test());
 
   // Simulate the extension system becoming ready.
   extension_system()->SetReady();
   base::RunLoop().RunUntilIdle();
-  EXPECT_TRUE(manager->startup_background_hosts_created_for_test());
+  EXPECT_TRUE(manager.startup_background_hosts_created_for_test());
 }
 
 // Test that the embedder can defer background host creation. Chrome does this
 // when the profile is created asynchronously, which may take a while.
 TEST_F(ProcessManagerTest, CreateBackgroundHostsDeferred) {
-  std::unique_ptr<ProcessManager> manager(ProcessManager::CreateForTesting(
-      original_context(), extension_registry()));
-  ASSERT_FALSE(manager->startup_background_hosts_created_for_test());
+  ProcessManager manager(original_context(), extension_registry());
+  ASSERT_FALSE(manager.startup_background_hosts_created_for_test());
 
   // Don't create background hosts if the delegate says to defer them.
   process_manager_delegate()->defer_creating_startup_background_hosts_ = true;
-  manager->MaybeCreateStartupBackgroundHosts();
-  EXPECT_FALSE(manager->startup_background_hosts_created_for_test());
+  manager.MaybeCreateStartupBackgroundHosts();
+  EXPECT_FALSE(manager.startup_background_hosts_created_for_test());
 
   // The extension system becoming ready still doesn't create the hosts.
   extension_system()->SetReady();
   base::RunLoop().RunUntilIdle();
-  EXPECT_FALSE(manager->startup_background_hosts_created_for_test());
+  EXPECT_FALSE(manager.startup_background_hosts_created_for_test());
 
   // Once the embedder is ready the background hosts can be created.
   process_manager_delegate()->defer_creating_startup_background_hosts_ = false;
-  manager->MaybeCreateStartupBackgroundHosts();
-  EXPECT_TRUE(manager->startup_background_hosts_created_for_test());
+  manager.MaybeCreateStartupBackgroundHosts();
+  EXPECT_TRUE(manager.startup_background_hosts_created_for_test());
 }
 
 // Test that the embedder can disallow background host creation.
 // Chrome OS does this in guest mode.
 TEST_F(ProcessManagerTest, IsBackgroundHostAllowed) {
-  std::unique_ptr<ProcessManager> manager(ProcessManager::CreateForTesting(
-      original_context(), extension_registry()));
-  ASSERT_FALSE(manager->startup_background_hosts_created_for_test());
+  ProcessManager manager(original_context(), extension_registry());
+  ASSERT_FALSE(manager.startup_background_hosts_created_for_test());
 
   // Don't create background hosts if the delegate disallows them.
   process_manager_delegate()->is_background_page_allowed_ = false;
-  manager->MaybeCreateStartupBackgroundHosts();
-  EXPECT_FALSE(manager->startup_background_hosts_created_for_test());
+  manager.MaybeCreateStartupBackgroundHosts();
+  EXPECT_FALSE(manager.startup_background_hosts_created_for_test());
 
   // The extension system becoming ready still doesn't create the hosts.
   extension_system()->SetReady();
   base::RunLoop().RunUntilIdle();
-  EXPECT_FALSE(manager->startup_background_hosts_created_for_test());
+  EXPECT_FALSE(manager.startup_background_hosts_created_for_test());
 }
 
-// Test that extensions get grouped in the right SiteInstance (and therefore
-// process) based on their URLs.
-TEST_F(ProcessManagerTest, ProcessGrouping) {
-  // Extensions in different browser contexts should always be different
-  // SiteInstances.
-  std::unique_ptr<ProcessManager> manager1(ProcessManager::CreateForTesting(
-      original_context(), extension_registry()));
-  // NOTE: This context is not associated with the TestExtensionsBrowserClient.
-  // That's OK because we're not testing regular vs. incognito behavior.
-  TestBrowserContext another_context;
-  ExtensionRegistry another_registry(&another_context);
-  std::unique_ptr<ProcessManager> manager2(
-      ProcessManager::CreateForTesting(&another_context, &another_registry));
+// Test that destroying a RenderProcessHost without a subsequent
+// RenderProcessExited notification (for example, when a worker registration
+// arrived after RenderProcessHostImpl::FastShutdown() marked the host dead)
+// still removes the host observation and tracked worker before ~ProcessManager.
+TEST_F(ProcessManagerTest,
+       CleansUpTrackedWorkerWhenRenderProcessHostDestroyed) {
+  ProcessManager manager(original_context(), extension_registry());
+  auto render_process_host =
+      std::make_unique<content::MockRenderProcessHost>(original_context());
+  render_process_host->Init();
+  render_process_host->SimulateRenderProcessExit(
+      base::TERMINATION_STATUS_NORMAL_TERMINATION, /*exit_code=*/0);
+  ASSERT_FALSE(render_process_host->IsInitializedAndNotDead());
 
-  // Extensions with common origins ("scheme://id/") should be grouped in the
-  // same SiteInstance.
-  GURL ext1_url1("chrome-extension://ext1_id/index.html");
-  GURL ext1_url2("chrome-extension://ext1_id/monkey/monkey.html");
-  GURL ext2_url1("chrome-extension://ext2_id/index.html");
+  const WorkerId worker_id{/*extension_id=*/"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                           render_process_host->GetID(),
+                           /*version_id=*/1,
+                           /*thread_id=*/1, blink::ServiceWorkerToken()};
+  manager.StartTrackingServiceWorkerRunningInstance(worker_id);
+  EXPECT_TRUE(manager.HasServiceWorker(worker_id));
 
-  scoped_refptr<SiteInstance> site11 =
-      manager1->GetSiteInstanceForURL(ext1_url1);
-  scoped_refptr<SiteInstance> site12 =
-      manager1->GetSiteInstanceForURL(ext1_url2);
-  EXPECT_EQ(site11, site12);
-
-  scoped_refptr<SiteInstance> site21 =
-      manager1->GetSiteInstanceForURL(ext2_url1);
-  EXPECT_NE(site11, site21);
-
-  scoped_refptr<SiteInstance> other_profile_site =
-      manager2->GetSiteInstanceForURL(ext1_url1);
-  EXPECT_NE(site11, other_profile_site);
-
-  BrowserContextDependencyManager::GetInstance()->DestroyBrowserContextServices(
-      &another_context);
+  // Destroying a dead RenderProcessHost fires RenderProcessHostDestroyed()
+  // without firing RenderProcessExited() again.
+  render_process_host.reset();
+  EXPECT_FALSE(manager.HasServiceWorker(worker_id));
 }
 
 }  // namespace extensions

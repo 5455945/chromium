@@ -1,28 +1,28 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/indexed_db/indexed_db_reporting.h"
 
 #include <string>
+#include <string_view>
 
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/strcat.h"
+#include "components/services/storage/public/cpp/buckets/bucket_locator.h"
 #include "content/browser/indexed_db/indexed_db_leveldb_coding.h"
-#include "content/browser/indexed_db/indexed_db_leveldb_env.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
+#include "third_party/leveldatabase/env_chromium.h"
 
-namespace content {
-namespace indexed_db {
+namespace content::indexed_db {
 
 namespace {
 
-std::string StorageKeyToCustomHistogramSuffix(
-    const blink::StorageKey& storage_key) {
-  if (storage_key.origin().host() == "docs.google.com")
+std::string_view BucketLocatorToCustomHistogramSuffix(
+    const storage::BucketLocator& bucket_locator) {
+  if (bucket_locator.storage_key.origin().host() == "docs.google.com")
     return ".Docs";
-  return std::string();
+  return {};
 }
 
 void ParseAndReportIOErrorDetails(const std::string& histogram_name,
@@ -40,7 +40,7 @@ void ParseAndReportIOErrorDetails(const std::string& histogram_name,
       ->Add(method);
 
   if (result == leveldb_env::METHOD_AND_BFE) {
-    DCHECK_LT(error, 0);
+    CHECK_LT(error, 0, base::NotFatalUntil::M158);
     base::LinearHistogram::FactoryGet(
         base::StrCat(
             {histogram_name, ".BFE.", leveldb_env::MethodIDToString(method)}),
@@ -53,7 +53,7 @@ void ParseAndReportIOErrorDetails(const std::string& histogram_name,
 void ParseAndReportCorruptionDetails(const std::string& histogram_name,
                                      const leveldb::Status& status) {
   int error = leveldb_env::GetCorruptionCode(status);
-  DCHECK_GE(error, 0);
+  CHECK_GE(error, 0, base::NotFatalUntil::M158);
   const int kNumPatterns = leveldb_env::GetNumCorruptionCodes();
   base::LinearHistogram::FactoryGet(
       base::StrCat({histogram_name, ".Corruption"}), 1, kNumPatterns,
@@ -63,11 +63,12 @@ void ParseAndReportCorruptionDetails(const std::string& histogram_name,
 
 }  // namespace
 
-void ReportOpenStatus(IndexedDBBackingStoreOpenResult result,
-                      const blink::StorageKey& storage_key) {
+void ReportOpenStatus(BackingStoreOpenResult result,
+                      const storage::BucketLocator& bucket_locator) {
   base::UmaHistogramEnumeration("WebCore.IndexedDB.BackingStore.OpenStatus",
                                 result, INDEXED_DB_BACKING_STORE_OPEN_MAX);
-  const std::string suffix = StorageKeyToCustomHistogramSuffix(storage_key);
+  const std::string_view suffix =
+      BucketLocatorToCustomHistogramSuffix(bucket_locator);
   // Data from the WebCore.IndexedDB.BackingStore.OpenStatus histogram is used
   // to generate a graph. So as not to alter the meaning of that graph,
   // continue to collect all stats there (above) but also now collect docs stats
@@ -82,8 +83,7 @@ void ReportOpenStatus(IndexedDBBackingStoreOpenResult result,
   }
 }
 
-void ReportInternalError(const char* type,
-                         IndexedDBBackingStoreErrorSource location) {
+void ReportInternalError(const char* type, BackingStoreErrorSource location) {
   base::Histogram::FactoryGet(
       base::StrCat({"WebCore.IndexedDB.BackingStore.", type, "Error"}), 1,
       INTERNAL_ERROR_MAX, INTERNAL_ERROR_MAX + 1,
@@ -91,38 +91,10 @@ void ReportInternalError(const char* type,
       ->Add(location);
 }
 
-void ReportSchemaVersion(int version, const blink::StorageKey& storage_key) {
-  UMA_HISTOGRAM_ENUMERATION("WebCore.IndexedDB.SchemaVersion", version,
-                            kLatestKnownSchemaVersion + 1);
-  const std::string suffix = StorageKeyToCustomHistogramSuffix(storage_key);
-  if (!suffix.empty()) {
-    base::LinearHistogram::FactoryGet(
-        base::StrCat({"WebCore.IndexedDB.SchemaVersion", suffix}), 0,
-        indexed_db::kLatestKnownSchemaVersion,
-        indexed_db::kLatestKnownSchemaVersion + 1,
-        base::HistogramBase::kUmaTargetedHistogramFlag)
-        ->Add(version);
-  }
-}
-
-void ReportV2Schema(bool has_broken_blobs,
-                    const blink::StorageKey& storage_key) {
-  base::UmaHistogramBoolean("WebCore.IndexedDB.SchemaV2HasBlobs",
-                            has_broken_blobs);
-  const std::string suffix = StorageKeyToCustomHistogramSuffix(storage_key);
-  if (!suffix.empty()) {
-    base::BooleanHistogram::FactoryGet(
-        base::StrCat({"WebCore.IndexedDB.SchemaV2HasBlobs", suffix}),
-        base::HistogramBase::kUmaTargetedHistogramFlag)
-        ->Add(has_broken_blobs);
-  }
-}
-
 void ReportLevelDBError(const std::string& histogram_name,
                         const leveldb::Status& s) {
   if (s.ok()) {
     NOTREACHED();
-    return;
   }
   enum {
     LEVEL_DB_NOT_FOUND,
@@ -148,5 +120,16 @@ void ReportLevelDBError(const std::string& histogram_name,
     ParseAndReportCorruptionDetails(histogram_name, s);
 }
 
-}  // namespace indexed_db
-}  // namespace content
+void ReportBadMessage(
+    BadMessageReason reason,
+    std::string_view message,
+    base::OnceCallback<void(std::string_view)> report_bad_message_callback) {
+  base::UmaHistogramEnumeration("IndexedDB.BadMessageReason", reason);
+  if (report_bad_message_callback) {
+    std::move(report_bad_message_callback).Run(message);
+  } else {
+    mojo::ReportBadMessage(message);
+  }
+}
+
+}  // namespace content::indexed_db

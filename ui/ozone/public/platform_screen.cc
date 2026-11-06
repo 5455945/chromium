@@ -1,11 +1,14 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/ozone/public/platform_screen.h"
 
-#include "base/notreached.h"
+#include <optional>
+
+#include "base/notimplemented.h"
 #include "base/time/time.h"
+#include "ui/gfx/geometry/point.h"
 
 namespace ui {
 
@@ -13,10 +16,15 @@ PlatformScreen::PlatformScreen() = default;
 PlatformScreen::~PlatformScreen() = default;
 
 gfx::AcceleratedWidget PlatformScreen::GetLocalProcessWidgetAtPoint(
-    const gfx::Point& point,
+    const gfx::Point& point_in_dip,
     const std::set<gfx::AcceleratedWidget>& ignore) const {
   NOTIMPLEMENTED_LOG_ONCE();
   return gfx::kNullAcceleratedWidget;
+}
+
+bool PlatformScreen::IsAcceleratedWidgetUnderCursor(
+    gfx::AcceleratedWidget widget) const {
+  return GetAcceleratedWidgetAtScreenPoint(GetCursorScreenPoint()) == widget;
 }
 
 std::string PlatformScreen::GetCurrentWorkspace() {
@@ -24,8 +32,13 @@ std::string PlatformScreen::GetCurrentWorkspace() {
   return {};
 }
 
-void PlatformScreen::SetScreenSaverSuspended(bool suspend) {
+PlatformScreen::PlatformScreenSaverSuspender::~PlatformScreenSaverSuspender() =
+    default;
+
+std::unique_ptr<PlatformScreen::PlatformScreenSaverSuspender>
+PlatformScreen::SuspendScreenSaver() {
   NOTIMPLEMENTED_LOG_ONCE();
+  return nullptr;
 }
 
 bool PlatformScreen::IsScreenSaverActive() const {
@@ -35,23 +48,31 @@ bool PlatformScreen::IsScreenSaverActive() const {
 
 base::TimeDelta PlatformScreen::CalculateIdleTime() const {
   NOTIMPLEMENTED_LOG_ONCE();
-  return base::TimeDelta::FromSeconds(0);
+  return base::Seconds(0);
 }
 
-base::Value PlatformScreen::GetGpuExtraInfoAsListValue(
+base::ListValue PlatformScreen::GetGpuExtraInfo(
     const gfx::GpuExtraInfo& gpu_extra_info) {
-  return base::Value(base::Value::Type::LIST);
+  return base::ListValue();
 }
 
-void PlatformScreen::SetDeviceScaleFactor(float scale) {}
+std::optional<float>
+PlatformScreen::GetPreferredScaleFactorForAcceleratedWidget(
+    gfx::AcceleratedWidget widget) const {
+  return std::nullopt;
+}
 
-void PlatformScreen::StorePlatformNameIntoListValue(
-    base::Value& list_value,
+bool PlatformScreen::IsHeadless() const {
+  return false;
+}
+
+void PlatformScreen::StorePlatformNameIntoListOfValues(
+    base::ListValue& values,
     const std::string& platform_name) {
-  base::Value dict(base::Value::Type::DICTIONARY);
-  dict.SetKey("description", base::Value("Ozone platform"));
-  dict.SetKey("value", base::Value(platform_name));
-  list_value.Append(std::move(dict));
+  base::DictValue dict;
+  dict.Set("description", "Ozone platform");
+  dict.Set("value", platform_name);
+  values.Append(std::move(dict));
 }
 
 }  // namespace ui

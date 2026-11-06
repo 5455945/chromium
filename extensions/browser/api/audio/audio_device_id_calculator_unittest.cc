@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "components/prefs/testing_pref_service.h"
+#include "components/user_prefs/user_prefs.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_browser_context.h"
 #include "extensions/browser/api/audio/audio_api.h"
@@ -17,36 +18,19 @@ namespace extensions {
 
 namespace {
 
-class TestExtensionsBrowserClientWithPrefService
-    : public TestExtensionsBrowserClient {
- public:
-  explicit TestExtensionsBrowserClientWithPrefService(
-      content::BrowserContext* main_context)
-      : TestExtensionsBrowserClient(main_context) {}
-  ~TestExtensionsBrowserClientWithPrefService() override {}
-
-  // ExtensionsBrowserClient override:
-  PrefService* GetPrefServiceForContext(
-      content::BrowserContext* context) override {
-    return &pref_service_;
-  }
-
-  TestingPrefServiceSimple* pref_service() { return &pref_service_; }
-
- private:
-  TestingPrefServiceSimple pref_service_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestExtensionsBrowserClientWithPrefService);
-};
-
 class AudioDeviceIdCalculatorTest : public testing::Test {
  public:
   AudioDeviceIdCalculatorTest() : test_browser_client_(&browser_context_) {}
-  ~AudioDeviceIdCalculatorTest() override {}
+
+  AudioDeviceIdCalculatorTest(const AudioDeviceIdCalculatorTest&) = delete;
+  AudioDeviceIdCalculatorTest& operator=(const AudioDeviceIdCalculatorTest&) =
+      delete;
+
+  ~AudioDeviceIdCalculatorTest() override = default;
 
   void SetUp() override {
-    AudioAPI::RegisterUserPrefs(
-        test_browser_client_.pref_service()->registry());
+    user_prefs::UserPrefs::Set(browser_context(), &pref_service_);
+    AudioAPI::RegisterUserPrefs(pref_service_.registry());
     ExtensionsBrowserClient::Set(&test_browser_client_);
   }
 
@@ -57,9 +41,8 @@ class AudioDeviceIdCalculatorTest : public testing::Test {
  private:
   content::BrowserTaskEnvironment task_environment_;
   content::TestBrowserContext browser_context_;
-  TestExtensionsBrowserClientWithPrefService test_browser_client_;
-
-  DISALLOW_COPY_AND_ASSIGN(AudioDeviceIdCalculatorTest);
+  TestingPrefServiceSimple pref_service_;
+  TestExtensionsBrowserClient test_browser_client_;
 };
 
 }  // namespace

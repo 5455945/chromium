@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,12 @@
 namespace blink {
 
 LoadingAttributeValue GetLoadingAttributeValue(const String& value) {
-  if (EqualIgnoringASCIICase(value, "lazy"))
+  if (EqualIgnoringAsciiCase(value, "lazy")) {
     return LoadingAttributeValue::kLazy;
-  if (EqualIgnoringASCIICase(value, "eager"))
+  }
+  if (EqualIgnoringAsciiCase(value, "eager")) {
     return LoadingAttributeValue::kEager;
+  }
   return LoadingAttributeValue::kAuto;
 }
 

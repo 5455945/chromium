@@ -1,42 +1,82 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/accessibility/platform/inspect/ax_property_node.h"
 
+#include <optional>
+
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/accessibility/platform/inspect/ax_inspect.h"
 
 namespace ui {
 
 // static
+AXPropertyNode AXPropertyNode::From(
+    const std::string& property,
+    const std::vector<std::string>& line_indexes) {
+  std::string::const_iterator lvalue_end(property.end()),
+      rvalue_begin(property.end());
+
+  // Find rvalue start if any. For example, in a statement
+  // textarea.AXSelectedTextMarkerRange = textarea_range, textarea_range will be
+  // rvalue. Do not confuse it with variable assignment ':=', for example,
+  // textarea_range:= textarea.AXTextMarkerRangeForUIElement(textarea) which is
+  // stored as a labelled lvalue.
+  size_t index = property.find_last_of('=');
+  if (index > 0 && index != std::string::npos) {
+    if (property[index - 1] != ':') {
+      lvalue_end = property.begin() + index - 1;
+      index = property.find_first_not_of("= ", index);
+      rvalue_begin = index == std::string::npos ? property.end()
+                                                : property.begin() + index;
+    }
+  }
+
+  // lvalue
+  AXPropertyNode lvalue_root;
+  Parse(&lvalue_root, property.begin(), lvalue_end);
+  if (lvalue_root.arguments.empty()) {  // Empty AXPropertyNode.
+    return lvalue_root;
+  }
+
+  AXPropertyNode* lvalue = &lvalue_root.arguments[0];
+  lvalue->original_property = std::string(property.begin(), lvalue_end);
+  lvalue->line_indexes = line_indexes;
+
+  // rvalue if any
+  if (lvalue_end != property.end()) {
+    AXPropertyNode rvalue_root;
+    Parse(&rvalue_root, rvalue_begin, property.end());
+
+    // Connect rvalue to the latest lvalue in a chain.
+    AXPropertyNode* last_in_chain = lvalue;
+    for (; last_in_chain->next; last_in_chain = last_in_chain->next.get())
+      ;
+
+    // Use {std::make_unique_for_overwrite} once we allow C++20.
+    last_in_chain->rvalue = std::unique_ptr<AXPropertyNode>(new AXPropertyNode);
+    *(last_in_chain->rvalue) = std::move(rvalue_root.arguments[0]);
+  }
+
+  return std::move(*lvalue);
+}
+
+// static
 AXPropertyNode AXPropertyNode::From(const AXPropertyFilter& filter) {
-  // Property invocation: property_str expected format is
-  // prop_name or prop_name(arg1, ... argN).
-  AXPropertyNode root;
-  const std::string& property_str = filter.property_str;
-  Parse(&root, property_str.begin(), property_str.end());
-
-  AXPropertyNode* node = &root.arguments[0];
-
-  // Expel a trailing wildcard if any.
-  node->original_property =
-      property_str.substr(0, property_str.find_last_of('*'));
+  // Expel an optional trailing wildcard which is used in tree formatter output
+  // filtering.
+  std::string property =
+      filter.property_str.substr(0, filter.property_str.find_last_of('*'));
 
   // Line indexes filter: filter_str expected format is
   // :line_num_1, ... :line_num_N, a comma separated list of line indexes
   // the property should be queried for. For example, ":1,:5,:7" indicates that
   // the property should called for objects placed on 1, 5 and 7 lines only.
-  const std::string& filter_str = filter.filter_str;
-  if (!filter_str.empty()) {
-    node->line_indexes =
-        base::SplitString(filter_str, std::string(1, ','),
-                          base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
-  }
-
-  return std::move(*node);
+  return From(property, base::SplitString(
+                            filter.filter_str, std::string(1, ','),
+                            base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY));
 }
 
 AXPropertyNode::AXPropertyNode() = default;
@@ -63,10 +103,10 @@ bool AXPropertyNode::IsDict() const {
   return name_or_value == "{}";
 }
 
-absl::optional<int> AXPropertyNode::AsInt() const {
+std::optional<int> AXPropertyNode::AsInt() const {
   int value = 0;
   if (!base::StringToInt(name_or_value, &value)) {
-    return absl::nullopt;
+    return std::nullopt;
   }
   return value;
 }
@@ -88,23 +128,23 @@ const AXPropertyNode* AXPropertyNode::FindKey(const char* refkey) const {
   return nullptr;
 }
 
-absl::optional<std::string> AXPropertyNode::FindStringKey(
+std::optional<std::string> AXPropertyNode::FindStringKey(
     const char* refkey) const {
   for (const auto& param : arguments) {
     if (param.key == refkey) {
       return param.name_or_value;
     }
   }
-  return absl::nullopt;
+  return std::nullopt;
 }
 
-absl::optional<int> AXPropertyNode::FindIntKey(const char* refkey) const {
+std::optional<int> AXPropertyNode::FindIntKey(const char* refkey) const {
   for (const auto& param : arguments) {
     if (param.key == refkey) {
       return param.AsInt();
     }
   }
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 std::string AXPropertyNode::ToString() const {
@@ -141,6 +181,17 @@ std::string AXPropertyNode::ToFlatString() const {
     }
     out += ')';
   }
+
+  // Chains.
+  if (next) {
+    out += "." + next->ToFlatString();
+  }
+
+  // Rvalue.
+  if (rvalue) {
+    out += "=" + rvalue->ToFlatString();
+  }
+
   return out;
 }
 
@@ -162,6 +213,9 @@ std::string AXPropertyNode::ToTreeString(const std::string& indent) const {
   }
   if (next) {  // Chains.
     out += ".\n" + next->ToTreeString(indent);
+  }
+  if (rvalue) {  // Rvalue.
+    out += "=\n" + rvalue->ToTreeString(indent);
   }
   return out;
 }

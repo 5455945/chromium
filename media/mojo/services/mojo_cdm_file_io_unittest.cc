@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -96,10 +96,10 @@ class MojoCdmFileIOTest : public testing::Test, public MojoCdmFileIO::Delegate {
   void ReportFileReadSize(int file_size_bytes) override {}
 
   base::test::TaskEnvironment task_environment_;
-  std::unique_ptr<MojoCdmFileIO> file_io_;
   std::unique_ptr<MockFileIOClient> client_;
   std::unique_ptr<MockCdmStorage> cdm_storage_;
   MockCdmFile cdm_file_;
+  std::unique_ptr<MojoCdmFileIO> file_io_;
 };
 
 TEST_F(MojoCdmFileIOTest, OpenFile) {

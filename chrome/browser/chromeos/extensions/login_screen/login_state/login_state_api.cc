@@ -1,66 +1,56 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/chromeos/extensions/login_screen/login_state/login_state_api.h"
 
-#include <memory>
-
-#include "base/values.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_types.h"
+#include "chromeos/ash/experiences/extensions/common/api/login_state.h"
 #include "components/session_manager/core/session_manager.h"
+#include "components/session_manager/session_manager_types.h"
 #include "content/public/browser/browser_context.h"
 
 namespace extensions {
 
-// Not all session states are exposed to the extension. Session states which
-// are not exposed will be mapped to the nearest logical state. The mapping is
-// as follows:
-// UNKNOWN              -> UNKNOWN
-// OOBE                 -> IN_OOBE_SCREEN
-// LOGIN_PRIMARY        -> IN_LOGIN_SCREEN
-// LOGIN_SECONDARY      -> IN_LOGIN_SCREEN
-// LOGGED_IN_NOT_ACTIVE -> IN_LOGIN_SCREEN
-// ACTIVE               -> IN_SESSION
-// LOCKED               -> IN_LOCK_SCREEN
-api::login_state::SessionState SessionStateToApiEnum(
-    session_manager::SessionState state) {
+api::login_state::SessionState ToApiEnum(session_manager::SessionState state) {
   switch (state) {
     case session_manager::SessionState::UNKNOWN:
-      return api::login_state::SessionState::SESSION_STATE_UNKNOWN;
+      return api::login_state::SessionState::kUnknown;
     case session_manager::SessionState::OOBE:
-      return api::login_state::SessionState::SESSION_STATE_IN_OOBE_SCREEN;
+      return api::login_state::SessionState::kInOobeScreen;
     case session_manager::SessionState::LOGIN_PRIMARY:
     case session_manager::SessionState::LOGIN_SECONDARY:
     case session_manager::SessionState::LOGGED_IN_NOT_ACTIVE:
-      return api::login_state::SessionState::SESSION_STATE_IN_LOGIN_SCREEN;
+      return api::login_state::SessionState::kInLoginScreen;
     case session_manager::SessionState::ACTIVE:
-      return api::login_state::SessionState::SESSION_STATE_IN_SESSION;
+      return api::login_state::SessionState::kInSession;
     case session_manager::SessionState::LOCKED:
-      return api::login_state::SessionState::SESSION_STATE_IN_LOCK_SCREEN;
+      return api::login_state::SessionState::kInLockScreen;
+    case session_manager::SessionState::RMA:
+      return api::login_state::SessionState::kInRmaScreen;
   }
+
   NOTREACHED();
-  return api::login_state::SessionState::SESSION_STATE_UNKNOWN;
 }
 
 ExtensionFunction::ResponseAction LoginStateGetProfileTypeFunction::Run() {
-  bool is_signin_profile = chromeos::ProfileHelper::IsSigninProfile(
-      Profile::FromBrowserContext(browser_context()));
-  api::login_state::ProfileType profile_type =
-      is_signin_profile
-          ? api::login_state::ProfileType::PROFILE_TYPE_SIGNIN_PROFILE
-          : api::login_state::ProfileType::PROFILE_TYPE_USER_PROFILE;
-  return RespondNow(ArgumentList(
-      api::login_state::GetProfileType::Results::Create(profile_type)));
+  const Profile* profile = Profile::FromBrowserContext(browser_context());
+  api::login_state::ProfileType profile_type;
+
+  if (ash::IsSigninBrowserContext(profile)) {
+    profile_type = api::login_state::ProfileType::kSigninProfile;
+  } else if (ash::IsLockScreenBrowserContext(profile)) {
+    profile_type = api::login_state::ProfileType::kLockProfile;
+  } else {
+    profile_type = api::login_state::ProfileType::kUserProfile;
+  }
+  return RespondNow(WithArguments(api::login_state::ToString(profile_type)));
 }
 
 ExtensionFunction::ResponseAction LoginStateGetSessionStateFunction::Run() {
-  session_manager::SessionState state =
-      session_manager::SessionManager::Get()->session_state();
-  return RespondNow(
-      ArgumentList(api::login_state::GetSessionState::Results::Create(
-          SessionStateToApiEnum(state))));
+  return RespondNow(WithArguments(api::login_state::ToString(
+      ToApiEnum(session_manager::SessionManager::Get()->session_state()))));
 }
 
 }  // namespace extensions

@@ -1,144 +1,315 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/enterprise/connectors/common.h"
 
-#include "base/notreached.h"
-#include "chrome/browser/enterprise/connectors/connectors_prefs.h"
+#include "base/metrics/histogram_functions.h"
+#include "build/build_config.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/enterprise/connectors/analysis/content_analysis_downloads_delegate.h"
+#include "chrome/browser/enterprise/connectors/connectors_service.h"
+#include "chrome/browser/enterprise/util/affiliation.h"
+#include "chrome/browser/policy/chrome_browser_policy_connector.h"
+#include "chrome/browser/policy/dm_token_utils.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
+#include "chrome/grit/generated_resources.h"
+#include "components/enterprise/connectors/core/features.h"
+#include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/web_contents.h"
+#include "extensions/buildflags/buildflags.h"
+#include "ui/base/l10n/l10n_util.h"
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "extensions/common/constants.h"
+#endif
+
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/ash/profiles/profile_helper.h"
+#include "components/user_manager/user.h"
+#endif
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+#include "chrome/browser/enterprise/signin/enterprise_signin_prefs.h"
+#include "components/prefs/pref_service.h"
+#endif
+
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+#include "chrome/browser/enterprise/connectors/analysis/local_binary_upload_service_factory.h"
+#include "chrome/browser/safe_browsing/cloud_content_scanning/cloud_binary_upload_service_factory.h"
+#include "components/enterprise/connectors/core/cloud_content_scanning/binary_upload_service.h"
+
+using safe_browsing::CloudBinaryUploadServiceFactory;
+#endif  // BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+
+#if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
+#include "chrome/browser/enterprise/connectors/analysis/content_analysis_dialog_controller.h"
+#endif  // BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
 
 namespace enterprise_connectors {
 
-AnalysisSettings::AnalysisSettings() = default;
-AnalysisSettings::AnalysisSettings(AnalysisSettings&&) = default;
-AnalysisSettings& AnalysisSettings::operator=(AnalysisSettings&&) = default;
-AnalysisSettings::~AnalysisSettings() = default;
+namespace {
 
-ReportingSettings::ReportingSettings() = default;
-ReportingSettings::ReportingSettings(GURL url,
-                                     const std::string& dm_token,
-                                     bool per_profile)
-    : reporting_url(url), dm_token(dm_token), per_profile(per_profile) {}
-ReportingSettings::ReportingSettings(ReportingSettings&&) = default;
-ReportingSettings& ReportingSettings::operator=(ReportingSettings&&) = default;
-ReportingSettings::~ReportingSettings() = default;
+#if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
+// URL chain limit for nested iFrames.
+constexpr int kMaxFrameUrls = 10;
 
-FileSystemSettings::FileSystemSettings() = default;
-FileSystemSettings::FileSystemSettings(const FileSystemSettings&) = default;
-FileSystemSettings::FileSystemSettings(FileSystemSettings&&) = default;
-FileSystemSettings& FileSystemSettings::operator=(const FileSystemSettings&) =
-    default;
-FileSystemSettings& FileSystemSettings::operator=(FileSystemSettings&&) =
-    default;
-FileSystemSettings::~FileSystemSettings() = default;
+google::protobuf::RepeatedPtrField<std::string> CollectFrameUrlsImpl(
+    content::WebContents* web_contents,
+    std::optional<content::GlobalRenderFrameHostId> initiating_frame_id) {
+  google::protobuf::RepeatedPtrField<std::string> frame_urls;
 
-const char* ConnectorPref(AnalysisConnector connector) {
-  switch (connector) {
-    case AnalysisConnector::BULK_DATA_ENTRY:
-      return kOnBulkDataEntryPref;
-    case AnalysisConnector::FILE_DOWNLOADED:
-      return kOnFileDownloadedPref;
-    case AnalysisConnector::FILE_ATTACHED:
-      return kOnFileAttachedPref;
-    case AnalysisConnector::ANALYSIS_CONNECTOR_UNSPECIFIED:
-      NOTREACHED() << "Using unspecified analysis connector";
-      return "";
+  if (!web_contents) {
+    return frame_urls;
   }
-}
 
-const char* ConnectorPref(ReportingConnector connector) {
-  switch (connector) {
-    case ReportingConnector::SECURITY_EVENT:
-      return kOnSecurityEventPref;
+  content::RenderFrameHost* current_frame = nullptr;
+  if (initiating_frame_id.has_value()) {
+    current_frame =
+        content::RenderFrameHost::FromID(initiating_frame_id.value());
+    if (!current_frame) {
+      // If an explicit initiating frame was expected but is no longer
+      // available, return an empty chain.
+      // TODO(crbug.com/531669028): Returning an empty chain for transient
+      // iframes allows them to bypass DLP rules by being evaluated as a
+      // main-frame action.
+      return frame_urls;
+    }
+  } else {
+    current_frame = web_contents->GetFocusedFrame();
   }
-}
 
-const char* ConnectorPref(FileSystemConnector connector) {
-  switch (connector) {
-    case FileSystemConnector::SEND_DOWNLOAD_TO_CLOUD:
-      return kSendDownloadToCloudPref;
-  }
-}
-
-const char* ConnectorScopePref(AnalysisConnector connector) {
-  switch (connector) {
-    case AnalysisConnector::BULK_DATA_ENTRY:
-      return kOnBulkDataEntryScopePref;
-    case AnalysisConnector::FILE_DOWNLOADED:
-      return kOnFileDownloadedScopePref;
-    case AnalysisConnector::FILE_ATTACHED:
-      return kOnFileAttachedScopePref;
-    case AnalysisConnector::ANALYSIS_CONNECTOR_UNSPECIFIED:
-      NOTREACHED() << "Using unspecified analysis connector";
-      return "";
-  }
-}
-
-const char* ConnectorScopePref(ReportingConnector connector) {
-  switch (connector) {
-    case ReportingConnector::SECURITY_EVENT:
-      return kOnSecurityEventScopePref;
-  }
-}
-
-TriggeredRule::Action GetHighestPrecedenceAction(
-    const ContentAnalysisResponse& response,
-    std::string* tag) {
-  auto action = TriggeredRule::ACTION_UNSPECIFIED;
-
-  for (const auto& result : response.results()) {
-    if (!result.has_status() ||
-        result.status() != ContentAnalysisResponse::Result::SUCCESS) {
-      continue;
+  // Traverse upwards and add URLs to the chain, stopping before the outermost
+  // frame.
+  while (current_frame && frame_urls.size() < kMaxFrameUrls) {
+    content::RenderFrameHost* parent =
+        current_frame->GetParentOrOuterDocumentOrEmbedder();
+    if (!parent) {
+      // Already at outermost frame.
+      break;
     }
 
-    for (const auto& rule : result.triggered_rules()) {
-      auto higher_precedence_action =
-          GetHighestPrecedenceAction(action, rule.action());
-      if (higher_precedence_action != action && tag != nullptr) {
-        *tag = result.tag();
-      }
-      action = higher_precedence_action;
+    // Skip internal extension resources, blob URLs, and about:blank pages from
+    // being scanned.
+    const GURL& url = current_frame->GetLastCommittedURL();
+    bool should_skip =
+        url.SchemeIs(url::kAboutScheme) || url.SchemeIs(url::kBlobScheme);
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+    should_skip |= url.SchemeIs(extensions::kExtensionScheme);
+#endif
+    if (!should_skip) {
+      *frame_urls.Add() = url.spec();
     }
+
+    current_frame = parent;
   }
-  return action;
+
+  return frame_urls;
+}
+#endif  // BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
+
+}  // namespace
+
+policy::BrowserPolicyConnector* GetBrowserPolicyConnector() {
+  return g_browser_process ? g_browser_process->browser_policy_connector()
+                           : nullptr;
 }
 
-TriggeredRule::Action GetHighestPrecedenceAction(
-    const TriggeredRule::Action& action_1,
-    const TriggeredRule::Action& action_2) {
-  // Don't use the enum's int values to determine precedence since that
-  // may introduce bugs for new actions later.
-  //
-  // The current precedence is BLOCK > WARN > REPORT_ONLY > UNSPECIFIED
-  if (action_1 == TriggeredRule::BLOCK || action_2 == TriggeredRule::BLOCK) {
-    return TriggeredRule::BLOCK;
-  }
-  if (action_1 == TriggeredRule::WARN || action_2 == TriggeredRule::WARN) {
-    return TriggeredRule::WARN;
-  }
-  if (action_1 == TriggeredRule::REPORT_ONLY ||
-      action_2 == TriggeredRule::REPORT_ONLY) {
-    return TriggeredRule::REPORT_ONLY;
-  }
-  if (action_1 == TriggeredRule::ACTION_UNSPECIFIED ||
-      action_2 == TriggeredRule::ACTION_UNSPECIFIED) {
-    return TriggeredRule::ACTION_UNSPECIFIED;
-  }
-  NOTREACHED();
-  return TriggeredRule::ACTION_UNSPECIFIED;
+const char SavePackageScanningData::kKey[] =
+    "enterprise_connectors.save_package_scanning_key";
+SavePackageScanningData::SavePackageScanningData(
+    content::SavePackageAllowedCallback callback)
+    : callback(std::move(callback)) {}
+SavePackageScanningData::~SavePackageScanningData() = default;
+
+void RunSavePackageScanningCallback(download::DownloadItem* item,
+                                    bool allowed) {
+  CHECK(item, base::NotFatalUntil::M161);
+
+  auto* data = static_cast<SavePackageScanningData*>(
+      item->GetUserData(SavePackageScanningData::kKey));
+  if (data && !data->callback.is_null())
+    std::move(data->callback).Run(allowed);
 }
 
-const char ScanResult::kKey[] = "enterprise_connectors.scan_result_key";
-ScanResult::ScanResult(const ContentAnalysisResponse& response)
-    : response(response) {}
-ScanResult::~ScanResult() = default;
-
-bool ContainsMalwareVerdict(const ContentAnalysisResponse& response) {
-  const auto& results = response.results();
-  return std::any_of(results.begin(), results.end(), [](const auto& result) {
-    return result.tag() == "malware" && !result.triggered_rules().empty();
-  });
+bool IsAffiliated(Profile* profile) {
+#if BUILDFLAG(IS_CHROMEOS)
+  const user_manager::User* user =
+      ash::ProfileHelper::Get()->GetUserByProfile(profile);
+  return user && user->IsAffiliated();
+#else
+  return enterprise_util::IsProfileAffiliated(profile);
+#endif
 }
+
+bool IncludeDeviceInfo(Profile* profile, bool per_profile) {
+#if !BUILDFLAG(IS_CHROMEOS)
+  // A browser managed through the device can send device info.
+  if (!per_profile) {
+    return true;
+  }
+
+  // An unmanaged browser shouldn't share its device info for privacy reasons.
+  if (!policy::GetDMToken(profile).is_valid()) {
+    return false;
+  }
+#endif
+  // A managed device can share its info with the profile if they are
+  // affiliated.
+  return IsAffiliated(profile);
+}
+
+std::string GetProfileEmail(Profile* profile) {
+  if (!profile) {
+    return std::string();
+  }
+
+  // If the profile is an Enterprise Isolated Mode profile, we need to get the
+  // original profile to get the email. For other off-the-record profiles, we
+  // can use the profile directly and get empty email.
+  if (profile->IsEnterpriseIsolatedModeProfile()) {
+    profile = profile->GetOriginalProfile();
+  }
+  std::string email =
+      GetProfileEmail(IdentityManagerFactory::GetForProfile(profile));
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+  if (email.empty()) {
+    email = profile->GetPrefs()->GetString(
+        enterprise_signin::prefs::kProfileUserEmail);
+  }
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+
+  return email;
+}
+
+google::protobuf::RepeatedPtrField<std::string> CollectFrameUrls(
+    content::WebContents* web_contents,
+    DeepScanAccessPoint access_point,
+    std::optional<content::GlobalRenderFrameHostId> initiating_frame_id) {
+#if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
+  if (!base::FeatureList::IsEnabled(kEnterpriseIframeDlpRulesSupport)) {
+    return google::protobuf::RepeatedPtrField<std::string>();
+  }
+
+  google::protobuf::RepeatedPtrField<std::string> frame_urls =
+      CollectFrameUrlsImpl(web_contents, initiating_frame_id);
+
+  // For the histogram, we count the tab URL to differentiate between cases
+  // where there is no tab and tabs with no iframes.
+  size_t full_chain_size = web_contents ? frame_urls.size() + 1 : 0;
+  base::UmaHistogramCustomCounts(
+      base::JoinString(
+          {"Enterprise.IframeDlpRulesSupport",
+           DeepScanAccessPointToString(access_point), "UrlChainSize"},
+          "."),
+      full_chain_size, 1, kMaxFrameUrls, 10);
+
+  return frame_urls;
+#else
+  return google::protobuf::RepeatedPtrField<std::string>();
+#endif
+}
+
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+
+BinaryUploadService* GetBinaryUploadServiceForConnector(
+    Profile* profile,
+    const enterprise_connectors::AnalysisSettings& settings) {
+#if BUILDFLAG(ENTERPRISE_LOCAL_CONTENT_ANALYSIS)
+  if (settings.cloud_or_local_settings.is_cloud_analysis()) {
+    return CloudBinaryUploadServiceFactory::GetForProfile(profile);
+  } else {
+    return LocalBinaryUploadServiceFactory::GetForProfile(profile);
+  }
+#else
+  CHECK(settings.cloud_or_local_settings.is_cloud_analysis(),
+        base::NotFatalUntil::M161);
+  return CloudBinaryUploadServiceFactory::GetForProfile(profile);
+#endif
+}
+
+#endif  // BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+
+#if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
+bool ShouldPromptReviewForDownload(
+    Profile* profile,
+    const download::DownloadItem* download_item) {
+  // Review dialog only appears if custom UI has been set by the admin or custom
+  // rule message present in download item.
+  if (!download_item) {
+    return false;
+  }
+  download::DownloadDangerType danger_type = download_item->GetDangerType();
+  if (danger_type == download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_WARNING ||
+      danger_type == download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_BLOCK) {
+    return ConnectorsServiceFactory::GetForBrowserContext(profile)
+               ->HasExtraUiToDisplay(AnalysisConnector::FILE_DOWNLOADED,
+                                     kDlpTag) ||
+           GetDownloadsCustomRuleMessage(download_item, danger_type);
+  } else if (danger_type == download::DOWNLOAD_DANGER_TYPE_DANGEROUS_FILE ||
+             danger_type == download::DOWNLOAD_DANGER_TYPE_DANGEROUS_URL ||
+             danger_type == download::DOWNLOAD_DANGER_TYPE_DANGEROUS_CONTENT) {
+    return ConnectorsServiceFactory::GetForBrowserContext(profile)
+        ->HasExtraUiToDisplay(AnalysisConnector::FILE_DOWNLOADED, kMalwareTag);
+  }
+  return false;
+}
+
+void ShowDownloadReviewDialog(const std::u16string& filename,
+                              Profile* profile,
+                              download::DownloadItem* download_item,
+                              content::WebContents* web_contents,
+                              base::OnceClosure keep_closure,
+                              base::OnceClosure discard_closure) {
+  auto state = FinalContentAnalysisResult::FAILURE;
+  download::DownloadDangerType danger_type = download_item->GetDangerType();
+
+  if (danger_type == download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_WARNING) {
+    state = FinalContentAnalysisResult::WARNING;
+  }
+
+  const char* tag =
+      (danger_type ==
+                   download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_WARNING ||
+               danger_type ==
+                   download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_BLOCK
+           ? kDlpTag
+           : kMalwareTag);
+
+  auto* connectors_service =
+      ConnectorsServiceFactory::GetForBrowserContext(profile);
+
+  std::u16string custom_message =
+      connectors_service
+          ->GetCustomMessage(AnalysisConnector::FILE_DOWNLOADED, tag)
+          .value_or(u"");
+  GURL learn_more_url =
+      connectors_service
+          ->GetLearnMoreUrl(AnalysisConnector::FILE_DOWNLOADED, tag)
+          .value_or(GURL());
+
+  bool bypass_justification_required =
+      connectors_service->GetBypassJustificationRequired(
+          AnalysisConnector::FILE_DOWNLOADED, tag);
+
+  // This dialog opens itself, and is thereafter owned by constrained window
+  // code.
+  new ContentAnalysisDialogController(
+      std::make_unique<ContentAnalysisDownloadsDelegate>(
+          filename, custom_message, learn_more_url,
+          bypass_justification_required, std::move(keep_closure),
+          std::move(discard_closure), download_item,
+          GetDownloadsCustomRuleMessage(download_item, danger_type)
+              .value_or(ContentAnalysisResponse::Result::TriggeredRule::
+                            CustomRuleMessage()),
+          l10n_util::GetStringFUTF16(
+              IDS_DEEP_SCANNING_DIALOG_DOWNLOADS_SENSITIVE_DATA, filename)),
+      true,  // Downloads are always cloud-based for now.
+      web_contents, DeepScanAccessPoint::DOWNLOAD,
+      /* file_count */ 1, state, download_item);
+}
+
+#endif  // BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
 
 }  // namespace enterprise_connectors

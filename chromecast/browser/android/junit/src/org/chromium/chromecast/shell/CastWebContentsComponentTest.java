@@ -1,152 +1,100 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chromecast.shell;
 
-import static org.mockito.Mockito.any;
-import static org.mockito.Mockito.eq;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 
-import android.app.Activity;
+import android.app.Application;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.content.ServiceConnection;
 
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
+import androidx.test.core.app.ApplicationProvider;
 
 import org.junit.Assert;
-import org.junit.Assume;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.Mockito;
-import org.mockito.MockitoAnnotations;
-import org.robolectric.Robolectric;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.Shadows;
-import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowActivity;
+import org.robolectric.shadows.ShadowApplication;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chromecast.shell.CastWebContentsComponent.StartParams;
 import org.chromium.content_public.browser.WebContents;
 
-/**
- * Tests for CastWebContentsComponent.
- */
+/** Tests for CastWebContentsComponent. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class CastWebContentsComponentTest {
-    private static final String APP_ID = "app";
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     private static final String SESSION_ID = "123456789";
 
-    private static final int VISIBILITY_PRIORITY = 2;
-
     private @Mock WebContents mWebContents;
-    private Activity mActivity;
-    private ShadowActivity mShadowActivity;
+    private Application mApplication;
+    private ShadowApplication mShadowApplication;
     private StartParams mStartParams;
+
+    @Captor private ArgumentCaptor<Intent> mIntentCaptor;
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
-        mActivity = Mockito.spy(Robolectric.buildActivity(Activity.class).setup().get());
-        mShadowActivity = Shadows.shadowOf(mActivity);
-        mStartParams = new StartParams(mActivity, mWebContents, APP_ID, VISIBILITY_PRIORITY);
+        mApplication = ApplicationProvider.getApplicationContext();
+        ContextUtils.initApplicationContextForTests(mApplication);
+        mShadowApplication = Shadows.shadowOf(mApplication);
+        mStartParams = new StartParams(mWebContents, false);
     }
 
     @Test
-    public void testStartStartsWebContentsActivity() {
-        Assume.assumeFalse(BuildConfig.DISPLAY_WEB_CONTENTS_IN_SERVICE);
-
+    public void testStartDoesNotStartWebContentsActivityUntilActivityStarted() {
         CastWebContentsComponent component =
-                new CastWebContentsComponent(SESSION_ID, null, null, false, false, true);
-        component.start(mStartParams, false);
-        Intent intent = mShadowActivity.getNextStartedActivity();
+                new CastWebContentsComponent(SESSION_ID, null, null, false, true, false);
+        component.start(mStartParams);
+        Assert.assertNull(mShadowApplication.getNextStartedActivity());
+        notifyCastWebActivityStarted();
+        Intent intent = mShadowApplication.getNextStartedActivity();
         Assert.assertEquals(
                 intent.getComponent().getClassName(), CastWebContentsActivity.class.getName());
 
-        component.stop(mActivity);
-    }
-
-    @Test
-    public void testStartStartsWebContentsService() {
-        Assume.assumeFalse(BuildConfig.DISPLAY_WEB_CONTENTS_IN_SERVICE);
-        Assume.assumeFalse(BuildConfig.ENABLE_CAST_FRAGMENT);
-
-        CastWebContentsComponent component =
-                new CastWebContentsComponent(SESSION_ID, null, null, false, false, true);
-        component.start(mStartParams, true);
-        component.stop(mActivity);
-
-        ArgumentCaptor<Intent> intent = ArgumentCaptor.forClass(Intent.class);
-        verify(mActivity).bindService(
-                intent.capture(), any(ServiceConnection.class), eq(Context.BIND_AUTO_CREATE));
-        Assert.assertEquals(intent.getValue().getComponent().getClassName(),
-                CastWebContentsService.class.getName());
+        component.stop();
+        component.destroy();
     }
 
     @Test
     public void testStopSendsStopSignalToActivity() {
-        Assume.assumeFalse(BuildConfig.DISPLAY_WEB_CONTENTS_IN_SERVICE);
-
         BroadcastReceiver receiver = Mockito.mock(BroadcastReceiver.class);
         IntentFilter intentFilter = new IntentFilter(CastIntents.ACTION_STOP_WEB_CONTENT);
         LocalBroadcastManager.getInstance(ContextUtils.getApplicationContext())
                 .registerReceiver(receiver, intentFilter);
 
         CastWebContentsComponent component =
-                new CastWebContentsComponent(SESSION_ID, null, null, false, false, true);
-        component.start(mStartParams, false);
-        component.stop(ContextUtils.getApplicationContext());
+                new CastWebContentsComponent(SESSION_ID, null, null, false, true, false);
+        notifyCastWebActivityStarted();
+        component.start(mStartParams);
+        component.stop();
 
         LocalBroadcastManager.getInstance(ContextUtils.getApplicationContext())
                 .unregisterReceiver(receiver);
 
         verify(receiver).onReceive(any(Context.class), any(Intent.class));
-    }
 
-    @Test
-    public void testStartBindsWebContentsService() {
-        Assume.assumeTrue(BuildConfig.DISPLAY_WEB_CONTENTS_IN_SERVICE);
-
-        CastWebContentsComponent component =
-                new CastWebContentsComponent(SESSION_ID, null, null, false, false, true);
-        component.start(mStartParams, false);
-        component.stop(mActivity);
-
-        ArgumentCaptor<Intent> intent = ArgumentCaptor.forClass(Intent.class);
-        verify(mActivity).bindService(
-                intent.capture(), any(ServiceConnection.class), eq(Context.BIND_AUTO_CREATE));
-        Assert.assertEquals(intent.getValue().getComponent().getClassName(),
-                CastWebContentsService.class.getName());
-    }
-
-    @Test
-    public void testStopUnbindsWebContentsService() {
-        Assume.assumeTrue(BuildConfig.DISPLAY_WEB_CONTENTS_IN_SERVICE);
-
-        CastWebContentsComponent component =
-                new CastWebContentsComponent(SESSION_ID, null, null, false, false, true);
-        component.start(mStartParams, false);
-        component.stop(mActivity);
-
-        verify(mActivity).unbindService(any(ServiceConnection.class));
+        component.destroy();
     }
 
     @Test
     public void testEnableTouchInputSendsEnableTouchToActivity() {
-        Assume.assumeTrue(BuildConfig.DISPLAY_WEB_CONTENTS_IN_SERVICE);
-
         BroadcastReceiver receiver = Mockito.mock(BroadcastReceiver.class);
         IntentFilter intentFilter =
                 new IntentFilter(CastWebContentsIntentUtils.ACTION_ENABLE_TOUCH_INPUT);
@@ -154,45 +102,49 @@ public class CastWebContentsComponentTest {
                 .registerReceiver(receiver, intentFilter);
 
         CastWebContentsComponent component =
-                new CastWebContentsComponent(SESSION_ID, null, null, false, false, true);
+                new CastWebContentsComponent(SESSION_ID, null, null, false, true, false);
         component.enableTouchInput(true);
 
         LocalBroadcastManager.getInstance(ContextUtils.getApplicationContext())
                 .unregisterReceiver(receiver);
 
         verify(receiver).onReceive(any(Context.class), any(Intent.class));
+
+        component.destroy();
     }
 
     @Test
     public void testEnableTouchInputBeforeStartedSendsEnableTouchToActivity() {
-        Assume.assumeFalse(BuildConfig.DISPLAY_WEB_CONTENTS_IN_SERVICE);
-        Assume.assumeFalse(BuildConfig.ENABLE_CAST_FRAGMENT);
-
         CastWebContentsComponent component =
-                new CastWebContentsComponent(SESSION_ID, null, null, false, false, true);
+                new CastWebContentsComponent(SESSION_ID, null, null, false, true, false);
+        notifyCastWebActivityStarted();
         component.enableTouchInput(true);
 
-        component.start(mStartParams, false);
+        component.start(mStartParams);
 
-        Intent intent = mShadowActivity.getNextStartedActivity();
+        Intent intent = mShadowApplication.getNextStartedActivity();
 
         Assert.assertTrue(CastWebContentsIntentUtils.isTouchable(intent));
+
+        component.stop();
+        component.destroy();
     }
 
     @Test
     public void testDisableTouchInputBeforeStartedSendsEnableTouchToActivity() {
-        Assume.assumeFalse(BuildConfig.DISPLAY_WEB_CONTENTS_IN_SERVICE);
-        Assume.assumeFalse(BuildConfig.ENABLE_CAST_FRAGMENT);
-
         CastWebContentsComponent component =
-                new CastWebContentsComponent(SESSION_ID, null, null, false, false, true);
+                new CastWebContentsComponent(SESSION_ID, null, null, false, true, false);
+        notifyCastWebActivityStarted();
         component.enableTouchInput(false);
 
-        component.start(mStartParams, false);
+        component.start(mStartParams);
 
-        Intent intent = mShadowActivity.getNextStartedActivity();
+        Intent intent = mShadowApplication.getNextStartedActivity();
 
         Assert.assertFalse(CastWebContentsIntentUtils.isTouchable(intent));
+
+        component.stop();
+        component.destroy();
     }
 
     @Test
@@ -201,22 +153,26 @@ public class CastWebContentsComponentTest {
                 Mockito.mock(CastWebContentsComponent.OnComponentClosedHandler.class);
 
         CastWebContentsComponent component =
-                new CastWebContentsComponent(SESSION_ID, callback, null, false, false, true);
-        component.start(mStartParams, false);
+                new CastWebContentsComponent(SESSION_ID, callback, null, false, true, false);
+        notifyCastWebActivityStarted();
+        component.start(mStartParams);
         CastWebContentsComponent.onComponentClosed(SESSION_ID);
         verify(callback).onComponentClosed();
 
-        component.stop(mActivity);
+        component.stop();
+        component.destroy();
     }
 
     @Test
     public void testStopDoesNotUnbindServiceIfStartWasNotCalled() {
         CastWebContentsComponent component =
-                new CastWebContentsComponent(SESSION_ID, null, null, false, false, true);
+                new CastWebContentsComponent(SESSION_ID, null, null, false, true, false);
 
-        component.stop(mActivity);
+        component.stop();
 
-        verify(mActivity, never()).unbindService(any(ServiceConnection.class));
+        Assert.assertNull(mShadowApplication.getNextStoppedService());
+
+        component.destroy();
     }
 
     @Test
@@ -225,57 +181,88 @@ public class CastWebContentsComponentTest {
                 Mockito.mock(CastWebContentsComponent.SurfaceEventHandler.class);
 
         CastWebContentsComponent component =
-                new CastWebContentsComponent(SESSION_ID, null, callback, false, false, true);
-        component.start(mStartParams, false);
+                new CastWebContentsComponent(SESSION_ID, null, callback, false, true, false);
+        notifyCastWebActivityStarted();
+        component.start(mStartParams);
         CastWebContentsComponent.onVisibilityChange(SESSION_ID, 2);
-        component.stop(mActivity);
+        component.stop();
 
         verify(callback).onVisibilityChange(2);
-    }
 
-    @Test
-    public void testOnGestureCallback() {
-        CastWebContentsComponent.SurfaceEventHandler callback =
-                Mockito.mock(CastWebContentsComponent.SurfaceEventHandler.class);
-        CastWebContentsComponent component =
-                new CastWebContentsComponent(SESSION_ID, null, callback, false, false, true);
-        component.start(mStartParams, false);
-        CastWebContentsComponent.onGesture(SESSION_ID, 1);
-        component.stop(mActivity);
-
-        verify(callback).consumeGesture(eq(1), any());
+        component.destroy();
     }
 
     @Test
     public void testStartWebContentsComponentMultipleTimes() {
         CastWebContentsComponent component =
-                new CastWebContentsComponent(SESSION_ID, null, null, false, false, true);
-        CastWebContentsComponent.Delegate delegate = mock(CastWebContentsComponent.Delegate.class);
-        component.start(mStartParams, delegate);
+                new CastWebContentsComponent(SESSION_ID, null, null, false, true, false);
+        notifyCastWebActivityStarted();
+        component.start(mStartParams);
         Assert.assertTrue(component.isStarted());
-        verify(delegate, times(1)).start(eq(mStartParams));
-        StartParams params2 = new StartParams(mActivity, mWebContents, "test", 1);
-        component.start(params2, delegate);
+        var activity = mShadowApplication.getNextStartedActivity();
+        Assert.assertNotNull(activity);
+        Assert.assertEquals(
+                activity.getComponent().getClassName(), CastWebContentsActivity.class.getName());
+
+        StartParams params2 = new StartParams(mWebContents, true);
+        component.start(params2);
         Assert.assertTrue(component.isStarted());
-        verify(delegate, times(2)).start(any(StartParams.class));
-        verify(delegate, times(1)).start(eq(params2));
-        component.stop(mActivity);
+        activity = mShadowApplication.getNextStartedActivity();
+        Assert.assertNotNull(activity);
+        Assert.assertEquals(
+                activity.getComponent().getClassName(), CastWebContentsActivity.class.getName());
+
+        component.stop();
         Assert.assertFalse(component.isStarted());
-        verify(delegate, times(1)).stop(any(Context.class));
+
+        component.destroy();
     }
 
     @Test
-    public void testStartActivityDelegateTwiceNoops() {
-        // Sending focus events to a started Activity is unnecessary because the Activity is always
-        // in focus, and issues with onNewIntent() and duplicate detection can cause unintended
-        // side effects.
+    public void requestsAudioFocusIfStartParamsAsks() {
         CastWebContentsComponent component =
-                new CastWebContentsComponent(SESSION_ID, null, null, false, false, true);
-        CastWebContentsComponent.Delegate delegate = component.new ActivityDelegate();
-        component.start(mStartParams, delegate);
-        Assert.assertEquals(mShadowActivity.getNextStartedActivity().getComponent().getClassName(),
-                CastWebContentsActivity.class.getName());
-        component.start(mStartParams, delegate);
-        Assert.assertNull(mShadowActivity.getNextStartedActivity());
+                new CastWebContentsComponent(SESSION_ID, null, null, false, true, true);
+        CastWebContentsComponent.StartParams startParams =
+                new StartParams(mWebContents, /* shouldRequestAudioFocus= */ true);
+        notifyCastWebActivityStarted();
+        component.start(startParams);
+        Intent intent = mShadowApplication.getNextStartedActivity();
+        Assert.assertTrue(CastWebContentsIntentUtils.shouldRequestAudioFocus(intent));
+
+        component.stop();
+        component.destroy();
+    }
+
+    @Test
+    public void doesNotRequestAudioFocusIfStartParamsDoNotAsk() {
+        CastWebContentsComponent component =
+                new CastWebContentsComponent(SESSION_ID, null, null, false, true, true);
+        CastWebContentsComponent.StartParams startParams =
+                new StartParams(mWebContents, /* shouldRequestAudioFocus= */ false);
+        notifyCastWebActivityStarted();
+        component.start(startParams);
+        Intent intent = mShadowApplication.getNextStartedActivity();
+        Assert.assertFalse(CastWebContentsIntentUtils.shouldRequestAudioFocus(intent));
+
+        component.stop();
+        component.destroy();
+    }
+
+    @Test
+    public void stopObserveAfterDestroy() {
+        CastWebContentsComponent component =
+                new CastWebContentsComponent(SESSION_ID, null, null, false, true, false);
+        component.destroy();
+        notifyCastWebActivityStarted();
+        component.start(mStartParams);
+        Assert.assertNull(mShadowApplication.getNextStartedActivity());
+
+        component.stop();
+    }
+
+    private void notifyCastWebActivityStarted() {
+        Intent intent = CastWebContentsIntentUtils.onActivityStartedByCastCore();
+        LocalBroadcastManager.getInstance(ApplicationProvider.getApplicationContext())
+                .sendBroadcastSync(intent);
     }
 }

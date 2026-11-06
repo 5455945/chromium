@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,8 @@
 
 #include "base/containers/circular_deque.h"
 #include "base/unguessable_token.h"
-#include "content/public/browser/render_document_host_user_data.h"
+#include "content/public/browser/global_routing_id.h"
+#include "content/public/browser/page_user_data.h"
 #include "content/public/browser/web_contents_observer.h"
 
 namespace content {
@@ -18,32 +19,36 @@ class InspectorIssue;
 }  // namespace Audits
 }  // namespace protocol
 
-// TODO(crbug.com/1063007): Attribute issues to ongoing navigations correctly.
-// TODO(crbug.com/1090679): Replace RenderDocumentHostUserData with
-//                          PageUserData.
+// TODO(crbug.com/40051801): Attribute issues to ongoing navigations correctly.
 class DevToolsIssueStorage
-    : public content::RenderDocumentHostUserData<DevToolsIssueStorage>,
-      public WebContentsObserver {
+    : public content::PageUserData<DevToolsIssueStorage> {
  public:
   ~DevToolsIssueStorage() override;
 
-  void AddInspectorIssue(
-      int frame_tree_node_id,
+  // Adds the given `issue` to the storage, associating it with the provided
+  // `render_frame_host`.
+  //
+  // Ownership of `issue` is transferred to the storage.
+  //
+  // Returns a const reference to the stored issue.
+  // WARNING: The returned reference is only valid as long as the issue remains
+  // in the DevToolsIssueStorage.
+  const protocol::Audits::InspectorIssue& AddInspectorIssue(
+      RenderFrameHost* render_frame_host,
       std::unique_ptr<protocol::Audits::InspectorIssue> issue);
-  std::vector<const protocol::Audits::InspectorIssue*> FilterIssuesBy(
-      const base::flat_set<int>& frame_tree_node_ids) const;
+  std::vector<const protocol::Audits::InspectorIssue*> FindIssuesForAgentOf(
+      RenderFrameHost* render_frame_host) const;
 
  private:
-  explicit DevToolsIssueStorage(RenderFrameHost* rfh);
-  friend class content::RenderDocumentHostUserData<DevToolsIssueStorage>;
-  RENDER_DOCUMENT_HOST_USER_DATA_KEY_DECL();
+  explicit DevToolsIssueStorage(Page& page);
+  friend class content::PageUserData<DevToolsIssueStorage>;
+  PAGE_USER_DATA_KEY_DECL();
 
-  // WebContentsObserver overrides.
-  void FrameDeleted(int frame_tree_node_id) override;
-
-  using FrameAssociatedIssue =
-      std::pair<int, std::unique_ptr<protocol::Audits::InspectorIssue>>;
-  base::circular_deque<FrameAssociatedIssue> issues_;
+  using RenderFrameHostAssociatedIssue =
+      std::pair<GlobalRenderFrameHostId,
+                std::unique_ptr<protocol::Audits::InspectorIssue>>;
+  base::circular_deque<RenderFrameHostAssociatedIssue> issues_;
+  int total_added_issues_ = 0;
 };
 
 }  // namespace content

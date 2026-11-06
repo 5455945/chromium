@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,7 +15,8 @@
 #include <string>
 
 #include "base/check.h"
-#include "base/macros.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/numerics/safe_math.h"
 #include "gpu/command_buffer/common/gles2_utils_export.h"
 
@@ -31,7 +32,8 @@ inline uint32_t ToGLuint(const void* ptr) {
 // Returns the address of the first byte after a struct.
 template <typename T>
 const volatile void* AddressAfterStruct(const volatile T& pod) {
-  return reinterpret_cast<const volatile uint8_t*>(&pod) + sizeof(pod);
+  return UNSAFE_TODO(reinterpret_cast<const volatile uint8_t*>(&pod) +
+                     sizeof(pod));
 }
 
 // Returns the address of the frst byte after the struct or nullptr if size >
@@ -199,6 +201,19 @@ class GLES2_UTILS_EXPORT GLES2Util {
   static uint32_t CalcClearBufferfvDataCount(int buffer);
   static uint32_t CalcClearBufferuivDataCount(int buffer);
 
+  constexpr static uint32_t
+  CalcFramebufferPixelLocalClearValueufvANGLEDataCount(int plane) {
+    return 4;
+  }
+  constexpr static uint32_t
+  CalcFramebufferPixelLocalClearValueuivANGLEDataCount(int plane) {
+    return 4;
+  }
+  constexpr static uint32_t
+  CalcFramebufferPixelLocalClearValueuuivANGLEDataCount(int plane) {
+    return 4;
+  }
+
   static void MapUint64ToTwoUint32(
       uint64_t v64, uint32_t* v32_0, uint32_t* v32_1);
   static uint64_t MapTwoUint32ToUint64(uint32_t v32_0, uint32_t v32_1);
@@ -230,7 +245,8 @@ class GLES2_UTILS_EXPORT GLES2Util {
 
  private:
   static std::string GetQualifiedEnumString(
-      const EnumToString* table, size_t count, uint32_t value);
+      base::span<const EnumToString> table,
+      uint32_t value);
 
   static bool ComputeImageRowSizeHelper(int width,
                                         uint32_t bytes_per_group,
@@ -239,9 +255,6 @@ class GLES2_UTILS_EXPORT GLES2Util {
                                         uint32_t* rt_padded_row_size,
                                         uint32_t* rt_padding);
 
-  static const EnumToString* const enum_to_string_table_;
-  static const size_t enum_to_string_table_len_;
-
   int num_compressed_texture_formats_;
   int num_shader_binary_formats_;
 };
@@ -249,6 +262,9 @@ class GLES2_UTILS_EXPORT GLES2Util {
 class GLES2_UTILS_EXPORT GLSLArrayName {
  public:
   explicit GLSLArrayName(const std::string& name);
+
+  GLSLArrayName(const GLSLArrayName&) = delete;
+  GLSLArrayName& operator=(const GLSLArrayName&) = delete;
 
   // Returns true if the string is an array reference.
   bool IsArrayName() const { return element_index_ >= 0; }
@@ -266,7 +282,6 @@ class GLES2_UTILS_EXPORT GLSLArrayName {
  private:
   std::string base_name_;
   int element_index_;
-  DISALLOW_COPY_AND_ASSIGN(GLSLArrayName);
 };
 
 }  // namespace gles2

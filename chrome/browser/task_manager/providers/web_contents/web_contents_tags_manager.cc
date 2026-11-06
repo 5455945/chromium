@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,7 +17,7 @@ WebContentsTagsManager* WebContentsTagsManager::GetInstance() {
 }
 
 void WebContentsTagsManager::AddTag(WebContentsTag* tag) {
-  DCHECK(tag);
+  CHECK(tag, base::NotFatalUntil::M162);
   tracked_tags_.push_back(tag);
 
   if (provider_)
@@ -25,10 +25,8 @@ void WebContentsTagsManager::AddTag(WebContentsTag* tag) {
 }
 
 void WebContentsTagsManager::RemoveTag(WebContentsTag* tag) {
-  DCHECK(tag);
-  tracked_tags_.erase(std::find(tracked_tags_.begin(),
-                                tracked_tags_.end(),
-                                tag));
+  CHECK(tag, base::NotFatalUntil::M162);
+  tracked_tags_.erase(std::ranges::find(tracked_tags_, tag));
 
   // No need to inform the provider here. The provider will create an entry
   // for each WebContents it's tracking which is a WebContentsObserver and
@@ -41,13 +39,13 @@ void WebContentsTagsManager::RemoveTag(WebContentsTag* tag) {
 }
 
 void WebContentsTagsManager::SetProvider(WebContentsTaskProvider* provider) {
-  DCHECK(provider);
-  DCHECK(!provider_);
+  CHECK(provider, base::NotFatalUntil::M162);
+  CHECK(!provider_, base::NotFatalUntil::M162);
   provider_ = provider;
 }
 
 void WebContentsTagsManager::ClearProvider() {
-  DCHECK(provider_);
+  CHECK(provider_, base::NotFatalUntil::M162);
   provider_ = nullptr;
 }
 
@@ -60,7 +58,6 @@ WebContentsTagsManager::WebContentsTagsManager()
     : provider_(nullptr) {
 }
 
-WebContentsTagsManager::~WebContentsTagsManager() {
-}
+WebContentsTagsManager::~WebContentsTagsManager() = default;
 
 }  // namespace task_manager

@@ -1,20 +1,22 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/public/test/scoped_page_focus_override.h"
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
 
-#include "base/callback.h"
 #include "base/containers/span.h"
+#include "base/functional/callback.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/run_loop.h"
 #include "base/values.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace content {
 
@@ -26,6 +28,12 @@ ScopedPageFocusOverride::ScopedPageFocusOverride(
 }
 
 ScopedPageFocusOverride::~ScopedPageFocusOverride() {
+  // If the session is already gone, so is focus emulation, and a command would
+  // never get a response. For example, the JS code coverage harness detaches
+  // all DevTools clients after each WebUIMochaBrowserTest.
+  if (agent_host_closed_) {
+    return;
+  }
   SetFocusEmulationEnabled(false);
   agent_host_->DetachClient(this);
 }
@@ -33,13 +41,13 @@ ScopedPageFocusOverride::~ScopedPageFocusOverride() {
 void ScopedPageFocusOverride::DispatchProtocolMessage(
     DevToolsAgentHost* agent_host,
     base::span<const uint8_t> message) {
-  base::StringPiece message_str(reinterpret_cast<const char*>(message.data()),
-                                message.size());
-  absl::optional<base::Value> parsed_message =
-      base::JSONReader::Read(message_str);
+  std::string_view message_str(reinterpret_cast<const char*>(message.data()),
+                               message.size());
+  std::optional<base::Value> parsed_message =
+      base::JSONReader::Read(message_str, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   ASSERT_TRUE(parsed_message.has_value());
 
-  absl::optional<int> id = parsed_message->FindIntPath("id");
+  std::optional<int> id = parsed_message->GetDict().FindInt("id");
   if (!id || !*id || *id != last_sent_id_)
     return;
 
@@ -47,20 +55,23 @@ void ScopedPageFocusOverride::DispatchProtocolMessage(
   std::move(run_loop_quit_closure_).Run();
 }
 
-void ScopedPageFocusOverride::AgentHostClosed(DevToolsAgentHost* agent_host) {}
+void ScopedPageFocusOverride::AgentHostClosed(DevToolsAgentHost* agent_host) {
+  agent_host_closed_ = true;
+  // Stop waiting for a response that will never come.
+  if (run_loop_quit_closure_) {
+    std::move(run_loop_quit_closure_).Run();
+  }
+}
 
 void ScopedPageFocusOverride::SetFocusEmulationEnabled(bool enabled) {
-  base::DictionaryValue command;
-  command.SetInteger("id", ++last_sent_id_);
-  command.SetString("method", "Emulation.setFocusEmulationEnabled");
-  auto params = std::make_unique<base::DictionaryValue>();
-  params->SetBoolean("enabled", enabled);
-  command.SetDictionary("params", std::move(params));
+  base::DictValue command =
+      base::DictValue()
+          .Set("id", ++last_sent_id_)
+          .Set("method", "Emulation.setFocusEmulationEnabled")
+          .Set("params", base::DictValue().Set("enabled", enabled));
 
-  std::string json_command;
-  base::JSONWriter::Write(command, &json_command);
-  agent_host_->DispatchProtocolMessage(
-      this, base::as_bytes(base::make_span(json_command)));
+  std::string json_command = base::WriteJson(command).value_or("");
+  agent_host_->DispatchProtocolMessage(this, base::as_byte_span(json_command));
 
   base::RunLoop run_loop;
   EXPECT_FALSE(run_loop_quit_closure_);

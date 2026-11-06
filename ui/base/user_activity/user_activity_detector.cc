@@ -1,11 +1,14 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/base/user_activity/user_activity_detector.h"
 
+#include <utility>
+
 #include "base/format_macros.h"
 #include "base/logging.h"
+#include "base/observer_list.h"
 #include "base/strings/stringprintf.h"
 #include "build/build_config.h"
 #include "ui/base/user_activity/user_activity_observer.h"
@@ -16,13 +19,11 @@ namespace ui {
 
 namespace {
 
-UserActivityDetector* g_instance = nullptr;
-
 // Returns a string describing |event|.
 std::string GetEventDebugString(const ui::Event* event) {
   std::string details = base::StringPrintf(
-      "type=%d name=%s flags=%d time=%" PRId64, event->type(), event->GetName(),
-      event->flags(),
+      "type=%d name=%s flags=%d time=%" PRId64,
+      std::to_underlying(event->type()), event->GetName(), event->flags(),
       (event->time_stamp() - base::TimeTicks()).InMilliseconds());
 
   if (event->IsKeyEvent()) {
@@ -47,27 +48,10 @@ const int UserActivityDetector::kNotifyIntervalMs = 200;
 // and we'll ignore legitimate activity.
 const int UserActivityDetector::kDisplayPowerChangeIgnoreMouseMs = 1000;
 
-UserActivityDetector::UserActivityDetector() {
-  CHECK(!g_instance);
-  g_instance = this;
-
-  PlatformEventSource* platform_event_source =
-      PlatformEventSource::GetInstance();
-  if (platform_event_source)
-    platform_event_source->AddPlatformEventObserver(this);
-}
-
-UserActivityDetector::~UserActivityDetector() {
-  PlatformEventSource* platform_event_source =
-      PlatformEventSource::GetInstance();
-  if (platform_event_source)
-    platform_event_source->RemovePlatformEventObserver(this);
-  g_instance = nullptr;
-}
-
 // static
 UserActivityDetector* UserActivityDetector::Get() {
-  return g_instance;
+  static base::NoDestructor<UserActivityDetector> user_activity_detector;
+  return user_activity_detector.get();
 }
 
 bool UserActivityDetector::HasObserver(
@@ -84,8 +68,8 @@ void UserActivityDetector::RemoveObserver(UserActivityObserver* observer) {
 }
 
 void UserActivityDetector::OnDisplayPowerChanging() {
-  honor_mouse_events_time_ = GetCurrentTime() +
-      base::TimeDelta::FromMilliseconds(kDisplayPowerChangeIgnoreMouseMs);
+  honor_mouse_events_time_ =
+      GetCurrentTime() + base::Milliseconds(kDisplayPowerChangeIgnoreMouseMs);
 }
 
 void UserActivityDetector::HandleExternalUserActivity() {
@@ -96,6 +80,38 @@ void UserActivityDetector::DidProcessEvent(
     const PlatformEvent& platform_event) {
   std::unique_ptr<ui::Event> event(ui::EventFromNative(platform_event));
   ProcessReceivedEvent(event.get());
+}
+
+void UserActivityDetector::PlatformEventSourceDestroying() {
+  PlatformEventSource* platform_event_source =
+      PlatformEventSource::GetInstance();
+  CHECK(platform_event_source);
+  platform_event_source->RemovePlatformEventObserver(this);
+}
+
+void UserActivityDetector::ResetStateForTesting() {
+  last_activity_name_.clear();
+  last_activity_time_ = base::TimeTicks();
+  last_observer_notification_time_ = base::TimeTicks();
+  now_for_test_ = base::TimeTicks();
+  honor_mouse_events_time_ = base::TimeTicks();
+}
+
+void UserActivityDetector::InitPlatformEventSourceObservationForTesting() {
+  InitPlatformEventSourceObservation();
+}
+
+UserActivityDetector::UserActivityDetector() {
+  InitPlatformEventSourceObservation();
+}
+
+UserActivityDetector::~UserActivityDetector() = default;
+
+void UserActivityDetector::InitPlatformEventSourceObservation() {
+  PlatformEventSource* platform_event_source =
+      PlatformEventSource::GetInstance();
+  CHECK(platform_event_source);
+  platform_event_source->AddPlatformEventObserver(this);
 }
 
 base::TimeTicks UserActivityDetector::GetCurrentTime() const {
@@ -126,8 +142,7 @@ void UserActivityDetector::HandleActivity(const ui::Event* event) {
       kNotifyIntervalMs) {
     if (VLOG_IS_ON(1) && event)
       VLOG(1) << "Reporting user activity: " << GetEventDebugString(event);
-    for (UserActivityObserver& observer : observers_)
-      observer.OnUserActivity(event);
+    observers_.Notify(&UserActivityObserver::OnUserActivity, event);
     last_observer_notification_time_ = now;
   }
 }

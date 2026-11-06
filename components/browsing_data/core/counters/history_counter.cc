@@ -1,4 +1,4 @@
-// Copyright (c) 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,12 @@
 
 #include <limits.h>
 #include <stdint.h>
+
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/timer/timer.h"
 #include "components/browsing_data/core/pref_names.h"
 
@@ -19,22 +22,23 @@ static const int64_t kWebHistoryTimeoutSeconds = 10;
 namespace browsing_data {
 
 HistoryCounter::HistoryCounter(history::HistoryService* history_service,
-                               GetUpdatedWebHistoryServiceCallback callback,
+                               history::WebHistoryService* web_history_service,
                                syncer::SyncService* sync_service)
     : history_service_(history_service),
-      web_history_service_callback_(callback),
+      web_history_service_(web_history_service),
       sync_tracker_(this, sync_service),
       has_synced_visits_(false),
-      local_counting_finished_(false),
-      web_counting_finished_(false) {
+      web_counting_finished_(false),
+      domain_fetching_finished_(false) {
   DCHECK(history_service_);
 }
 
 HistoryCounter::~HistoryCounter() = default;
 
 void HistoryCounter::OnInitialized() {
-  sync_tracker_.OnInitialized(base::BindRepeating(
-      &HistoryCounter::IsHistorySyncEnabled, base::Unretained(this)));
+  sync_tracker_.OnInitialized(
+      base::IgnoreArgs<const syncer::SyncService*>(base::BindRepeating(
+          &HistoryCounter::IsHistorySyncEnabled, base::Unretained(this))));
 }
 
 bool HistoryCounter::HasTrackedTasksForTesting() {
@@ -42,15 +46,7 @@ bool HistoryCounter::HasTrackedTasksForTesting() {
 }
 
 const char* HistoryCounter::GetPrefName() const {
-  return GetTab() == ClearBrowsingDataTab::BASIC
-             ? browsing_data::prefs::kDeleteBrowsingHistoryBasic
-             : browsing_data::prefs::kDeleteBrowsingHistory;
-}
-
-history::WebHistoryService* HistoryCounter::GetWebHistoryService() {
-  if (web_history_service_callback_)
-    return web_history_service_callback_.Run();
-  return nullptr;
+  return browsing_data::prefs::kDeleteBrowsingHistory;
 }
 
 void HistoryCounter::Count() {
@@ -58,32 +54,32 @@ void HistoryCounter::Count() {
   cancelable_task_tracker_.TryCancelAll();
   web_history_request_.reset();
   weak_ptr_factory_.InvalidateWeakPtrs();
+  web_history_timeout_.Stop();
 
   has_synced_visits_ = false;
 
-  // Count the locally stored items.
-  local_counting_finished_ = false;
+  const bool is_history_sync_enabled = IsHistorySyncEnabled();
 
-  history_service_->GetHistoryCount(
+  web_counting_finished_ = !is_history_sync_enabled;
+  domain_fetching_finished_ = false;
+
+  // Count the locally stored items.
+  history_service_->GetUniqueDomainsVisited(
       GetPeriodStart(), GetPeriodEnd(),
-      base::BindOnce(&HistoryCounter::OnGetLocalHistoryCount,
+      history::VisitQuery404sPolicy::kInclude404s,
+      base::BindOnce(&HistoryCounter::OnGetUniqueDomains,
                      weak_ptr_factory_.GetWeakPtr()),
       &cancelable_task_tracker_);
 
-  // If the history sync is enabled, test if there is at least one synced item.
-  history::WebHistoryService* web_history = GetWebHistoryService();
-
-  if (!web_history) {
-    web_counting_finished_ = true;
+  if (!is_history_sync_enabled) {
     return;
   }
 
-  web_counting_finished_ = false;
+  web_history_timeout_.Start(FROM_HERE,
+                             base::Seconds(kWebHistoryTimeoutSeconds), this,
+                             &HistoryCounter::OnWebHistoryTimeout);
 
-  web_history_timeout_.Start(
-      FROM_HERE, base::TimeDelta::FromSeconds(kWebHistoryTimeoutSeconds), this,
-      &HistoryCounter::OnWebHistoryTimeout);
-
+  // If the history sync is enabled, test if there is at least one synced item.
   history::QueryOptions options;
   options.max_count = 1;
   options.begin_time = GetPeriodStart();
@@ -111,7 +107,8 @@ void HistoryCounter::Count() {
             }
           }
         })");
-  web_history_request_ = web_history->QueryHistory(
+
+  web_history_request_ = web_history_service_->QueryHistory(
       std::u16string(), options,
       base::BindOnce(&HistoryCounter::OnGetWebHistoryCount,
                      weak_ptr_factory_.GetWeakPtr()),
@@ -120,47 +117,50 @@ void HistoryCounter::Count() {
   // TODO(msramek): Include web history count when there is an API for it.
 }
 
-void HistoryCounter::OnGetLocalHistoryCount(
-    history::HistoryCountResult result) {
-  // Ensure that all callbacks are on the same thread, so that we do not need
-  // a mutex for |MergeResults|.
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  if (!result.success) {
-    return;
-  }
-
-  local_result_ = result.count;
-  local_counting_finished_ = true;
-  MergeResults();
-}
-
 void HistoryCounter::OnGetWebHistoryCount(
     history::WebHistoryService::Request* request,
-    const base::DictionaryValue* result) {
+    base::optional_ref<const history::WebHistoryService::QueryHistoryResult>
+        result) {
   // Ensure that all callbacks are on the same thread, so that we do not need
-  // a mutex for |MergeResults|.
+  // a mutex for `MergeResults`.
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   // If the timeout for this request already fired, ignore the result.
-  if (!web_history_timeout_.IsRunning())
+  if (!web_history_timeout_.IsRunning()) {
     return;
+  }
 
   web_history_timeout_.Stop();
 
   // If the query failed, err on the safe side and inform the user that they
   // may have history items stored in Sync. Otherwise, we expect at least one
-  // entry in the "event" list.
-  const base::ListValue* events;
-  has_synced_visits_ =
-      !result || (result->GetList("event", &events) && !events->empty());
+  // entry in the "events" list.
+  if (!result.has_value()) {
+    has_synced_visits_ = true;
+  } else {
+    has_synced_visits_ = !result->visits.empty();
+  }
   web_counting_finished_ = true;
+  MergeResults();
+}
+
+void HistoryCounter::OnGetUniqueDomains(history::DomainsVisitedResult result) {
+  // Ensure that all callbacks are on the same thread, so that we do not need
+  // a mutex for `MergeResults`.
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  unique_domains_result_ = result.all_visited_domains.size();
+  last_visited_domain_ = result.all_visited_domains.empty()
+                             ? ""
+                             : result.all_visited_domains.front();
+
+  domain_fetching_finished_ = true;
   MergeResults();
 }
 
 void HistoryCounter::OnWebHistoryTimeout() {
   // Ensure that all callbacks are on the same thread, so that we do not need
-  // a mutex for |MergeResults|.
+  // a mutex for `MergeResults`.
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   // If the query timed out, err on the safe side and inform the user that they
@@ -172,25 +172,28 @@ void HistoryCounter::OnWebHistoryTimeout() {
 }
 
 void HistoryCounter::MergeResults() {
-  if (!local_counting_finished_ || !web_counting_finished_)
+  if (!web_counting_finished_ || !domain_fetching_finished_) {
     return;
+  }
 
   ReportResult(std::make_unique<HistoryResult>(
-      this, local_result_, sync_tracker_.IsSyncActive(), has_synced_visits_));
+      this, unique_domains_result_, sync_tracker_.IsSyncActive(),
+      has_synced_visits_, last_visited_domain_));
 }
 
-bool HistoryCounter::IsHistorySyncEnabled(
-    const syncer::SyncService* sync_service) {
-  return !!GetWebHistoryService();
+bool HistoryCounter::IsHistorySyncEnabled() const {
+  return web_history_service_ && web_history_service_->IsEnabled();
 }
 
 HistoryCounter::HistoryResult::HistoryResult(const HistoryCounter* source,
                                              ResultInt value,
                                              bool is_sync_enabled,
-                                             bool has_synced_visits)
+                                             bool has_synced_visits,
+                                             std::string last_visited_domain)
     : SyncResult(source, value, is_sync_enabled),
-      has_synced_visits_(has_synced_visits) {}
+      has_synced_visits_(has_synced_visits),
+      last_visited_domain_(std::move(last_visited_domain)) {}
 
-HistoryCounter::HistoryResult::~HistoryResult() {}
+HistoryCounter::HistoryResult::~HistoryResult() = default;
 
 }  // namespace browsing_data

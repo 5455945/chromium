@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,9 @@
 #include <memory>
 #include <string>
 
+#include "base/task/single_thread_task_runner.h"
 #include "base/unguessable_token.h"
+#include "chromecast/media/service/create_mojo_media_client.h"
 #include "media/mojo/buildflags.h"
 #include "media/mojo/services/mojo_media_client.h"
 
@@ -22,20 +24,17 @@ class VideoResolutionPolicy;
 
 class CastMojoMediaClient : public ::media::MojoMediaClient {
  public:
-  using CreateCdmFactoryCB =
-      base::RepeatingCallback<std::unique_ptr<::media::CdmFactory>(
-          ::media::mojom::FrameInterfaceFactory*)>;
-
   CastMojoMediaClient(CmaBackendFactory* backend_factory,
-                      const CreateCdmFactoryCB& create_cdm_factory_cb,
+                      CreateCdmFactoryCB create_cdm_factory_cb,
                       VideoModeSwitcher* video_mode_switcher,
-                      VideoResolutionPolicy* video_resolution_policy);
-  ~CastMojoMediaClient() override;
+                      VideoResolutionPolicy* video_resolution_policy,
+                      VideoGeometrySetterService* video_geometry_setter,
+                      EnableBufferingCB enable_buffering_cb);
 
-#if BUILDFLAG(ENABLE_CAST_RENDERER)
-  void SetVideoGeometrySetterService(
-      VideoGeometrySetterService* video_geometry_setter);
-#endif
+  CastMojoMediaClient(const CastMojoMediaClient&) = delete;
+  CastMojoMediaClient& operator=(const CastMojoMediaClient&) = delete;
+
+  ~CastMojoMediaClient() override;
 
   // MojoMediaClient implementation:
 #if BUILDFLAG(ENABLE_CAST_RENDERER)
@@ -56,14 +55,12 @@ class CastMojoMediaClient : public ::media::MojoMediaClient {
  private:
   CmaBackendFactory* const backend_factory_;
   const CreateCdmFactoryCB create_cdm_factory_cb_;
-  VideoModeSwitcher* video_mode_switcher_;
-  VideoResolutionPolicy* video_resolution_policy_;
-
+  [[maybe_unused]] VideoModeSwitcher* video_mode_switcher_;
+  [[maybe_unused]] VideoResolutionPolicy* video_resolution_policy_;
+  const EnableBufferingCB enable_buffering_cb_;
 #if BUILDFLAG(ENABLE_CAST_RENDERER)
   VideoGeometrySetterService* video_geometry_setter_;
 #endif
-
-  DISALLOW_COPY_AND_ASSIGN(CastMojoMediaClient);
 };
 
 }  // namespace media

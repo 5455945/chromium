@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 #define COMPONENTS_PAYMENTS_CONTENT_ANDROID_PAYMENT_APP_H_
 
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 
@@ -15,7 +16,6 @@
 #include "components/payments/content/payment_app.h"
 #include "components/payments/core/android_app_description.h"
 #include "content/public/browser/global_routing_id.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 
 namespace payments {
@@ -52,20 +52,15 @@ class AndroidPaymentApp : public PaymentApp {
   // PaymentApp implementation.
   void InvokePaymentApp(base::WeakPtr<Delegate> delegate) override;
   bool IsCompleteForPayment() const override;
-  uint32_t GetCompletenessScore() const override;
   bool CanPreselect() const override;
   std::u16string GetMissingInfoLabel() const override;
   bool HasEnrolledInstrument() const override;
-  void RecordUse() override;
   bool NeedsInstallation() const override;
   std::string GetId() const override;
   std::u16string GetLabel() const override;
   std::u16string GetSublabel() const override;
   const SkBitmap* icon_bitmap() const override;
-  bool IsValidForModifier(
-      const std::string& method,
-      bool supported_networks_specified,
-      const std::set<std::string>& supported_networks) const override;
+  bool IsValidForModifier(const std::string& method) const override;
   base::WeakPtr<PaymentApp> AsWeakPtr() override;
   bool HandlesShippingAddress() const override;
   bool HandlesPayerName() const override;
@@ -80,7 +75,7 @@ class AndroidPaymentApp : public PaymentApp {
 
  private:
   void OnPaymentAppResponse(base::WeakPtr<Delegate> delegate,
-                            const absl::optional<std::string>& error_message,
+                            const std::optional<std::string>& error_message,
                             bool is_activity_result_ok,
                             const std::string& payment_method_identifier,
                             const std::string& stringified_details);

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,9 +10,10 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
+#include "base/check_op.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
+#include "base/observer_list_types.h"
 #include "base/sequence_checker.h"
 #include "components/policy/core/common/cloud/cloud_policy_validator.h"
 #include "components/policy/core/common/policy_map.h"
@@ -20,6 +21,7 @@
 
 namespace enterprise_management {
 class PolicyData;
+class PolicyFetchResponse;
 }
 
 namespace policy {
@@ -51,18 +53,23 @@ class POLICY_EXPORT CloudPolicyStore {
   };
 
   // Callbacks for policy store events. Most importantly, policy updates.
-  class POLICY_EXPORT Observer {
+  class POLICY_EXPORT Observer : public base::CheckedObserver {
    public:
-    virtual ~Observer();
+    ~Observer() override;
 
     // Called on changes to store->policy() and/or store->policy_map().
     virtual void OnStoreLoaded(CloudPolicyStore* store) = 0;
 
     // Called upon encountering errors.
     virtual void OnStoreError(CloudPolicyStore* store) = 0;
+
+    // Called upon store destruction.
+    virtual void OnStoreDestruction(CloudPolicyStore* store);
   };
 
-  CloudPolicyStore();
+  explicit CloudPolicyStore(const std::string& policy_type);
+  CloudPolicyStore(const CloudPolicyStore&) = delete;
+  CloudPolicyStore& operator=(const CloudPolicyStore&) = delete;
   virtual ~CloudPolicyStore();
 
   // Indicates whether the store has been fully initialized. This is
@@ -83,7 +90,7 @@ class POLICY_EXPORT CloudPolicyStore {
   }
   bool has_policy() const {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    return policy_.get() != NULL;
+    return policy_.get() != nullptr;
   }
   const enterprise_management::PolicyData* policy() const {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -97,6 +104,10 @@ class POLICY_EXPORT CloudPolicyStore {
   bool first_policies_loaded() const {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     return first_policies_loaded_;
+  }
+  const std::string& policy_type() const {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    return policy_type_;
   }
   CloudPolicyValidatorBase::Status validation_status() const {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -137,6 +148,9 @@ class POLICY_EXPORT CloudPolicyStore {
   // Removes the specified observer.
   void RemoveObserver(Observer* observer);
 
+  // Checks if `observer` was already added.
+  bool HasObserver(CloudPolicyStore::Observer* observer);
+
   // The invalidation version of the last policy stored. This value can be read
   // by observers to determine which version of the policy is now available.
   int64_t invalidation_version() {
@@ -150,14 +164,6 @@ class POLICY_EXPORT CloudPolicyStore {
   void SetExternalDataManager(
       base::WeakPtr<CloudExternalDataManager> external_data_manager);
 
-  // Replaces |policy_map_| and calls the registered observers, simulating a
-  // successful load of |policy_map| from persistent storage.
-  // TODO(bartfab): This override is only needed because there are no policies
-  // that reference external data and therefore, no ExternalDataFetchers in the
-  // |policy_map_|. Once the first such policy is added, use that policy in
-  // tests and remove the override.
-  void SetPolicyMapForTesting(const PolicyMap& policy_map);
-
   // Sets whether or not the first policies for this policy store were loaded.
   void SetFirstPoliciesLoaded(bool loaded);
 
@@ -165,13 +171,20 @@ class POLICY_EXPORT CloudPolicyStore {
   void set_policy_data_for_testing(
       std::unique_ptr<enterprise_management::PolicyData> policy);
 
+  void set_policy_signature_public_key_for_testing(const std::string& key);
+
  protected:
   // Invokes the corresponding callback on all registered observers.
   void NotifyStoreLoaded();
   void NotifyStoreError();
+  void NotifyStoreDestruction();
 
   // Updates whether or not the first policies were loaded.
   virtual void UpdateFirstPoliciesLoaded();
+
+  void SetPolicy(
+      std::unique_ptr<enterprise_management::PolicyData> policy_data);
+  void ResetPolicy();
 
   // Assert non-concurrent usage in debug builds.
   SEQUENCE_CHECKER(sequence_checker_);
@@ -181,9 +194,6 @@ class POLICY_EXPORT CloudPolicyStore {
 
   // Decoded version of the currently effective policy.
   PolicyMap policy_map_;
-
-  // Currently effective policy.
-  std::unique_ptr<enterprise_management::PolicyData> policy_;
 
   // Latest status code.
   Status status_ = STATUS_OK;
@@ -204,14 +214,23 @@ class POLICY_EXPORT CloudPolicyStore {
   // policy.
   std::string policy_signature_public_key_;
 
+  // The type of the policy expected to be stored in the store.
+  const std::string policy_type_;
+
  private:
   // Whether the store has completed asynchronous initialization, which is
   // triggered by calling Load().
   bool is_initialized_ = false;
 
-  base::ObserverList<Observer, true>::Unchecked observers_;
+  std::unique_ptr<enterprise_management::PolicyData> policy_;
 
-  DISALLOW_COPY_AND_ASSIGN(CloudPolicyStore);
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      Observer,
+      /*check_empty=*/false,
+      /*allow_reentrancy=*/
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>
+      observers_;
 };
 
 }  // namespace policy

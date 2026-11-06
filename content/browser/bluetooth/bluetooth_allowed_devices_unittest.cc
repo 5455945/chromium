@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include "content/browser/bluetooth/bluetooth_allowed_devices_map.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/bluetooth/web_bluetooth_device_id.h"
+#include "third_party/blink/public/mojom/bluetooth/web_bluetooth.mojom.h"
 #include "url/gurl.h"
 
 using device::BluetoothUUID;
@@ -479,6 +480,24 @@ TEST_F(BluetoothAllowedDevicesTest, CorrectIdFormat) {
       allowed_devices.AddDevice(kDeviceAddress1, empty_options_);
 
   EXPECT_TRUE(blink::WebBluetoothDeviceId::IsValid(device_id.str()));
+}
+
+TEST_F(BluetoothAllowedDevicesTest, IsAllowedToGATTConnect) {
+  BluetoothAllowedDevices allowed_devices;
+
+  // 1. Add device with options.
+  const blink::WebBluetoothDeviceId device_id1 =
+      allowed_devices.AddDevice(kDeviceAddress1, empty_options_);
+  EXPECT_TRUE(allowed_devices.IsAllowedToGATTConnect(device_id1));
+
+  // 2. Add device without options.
+  const blink::WebBluetoothDeviceId device_id2 =
+      allowed_devices.AddDevice(kDeviceAddress2);
+  EXPECT_FALSE(allowed_devices.IsAllowedToGATTConnect(device_id2));
+
+  // 3. Remove device.
+  allowed_devices.RemoveDevice(kDeviceAddress1);
+  EXPECT_FALSE(allowed_devices.IsAllowedToGATTConnect(device_id1));
 }
 
 TEST_F(BluetoothAllowedDevicesTest, NoFilterServices) {

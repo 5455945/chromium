@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,23 +7,27 @@
 
 #include <string>
 
-#include "base/bind.h"
-#include "chrome/browser/ui/views/hover_button.h"
-#include "components/sync/protocol/sync.pb.h"
+#include "base/functional/bind.h"
+#include "chrome/browser/ui/views/controls/hover_button.h"
+#include "components/sync_device_info/device_info.h"
 #include "ui/base/metadata/metadata_header_macros.h"
+
+namespace syncer {
+struct RemoteDeviceInfo;
+}  // namespace syncer
 
 namespace send_tab_to_self {
 
-class SendTabToSelfBubbleViewImpl;
-struct TargetDeviceInfo;
+class SendTabToSelfDevicePickerBubbleView;
 
 // A button representing a device in share bubble. It is highlighted when
 // hovered.
 class SendTabToSelfBubbleDeviceButton : public HoverButton {
+  METADATA_HEADER(SendTabToSelfBubbleDeviceButton, HoverButton)
+
  public:
-  METADATA_HEADER(SendTabToSelfBubbleDeviceButton);
-  SendTabToSelfBubbleDeviceButton(SendTabToSelfBubbleViewImpl* bubble,
-                                  const TargetDeviceInfo& device_info);
+  SendTabToSelfBubbleDeviceButton(SendTabToSelfDevicePickerBubbleView* bubble,
+                                  const syncer::RemoteDeviceInfo& device_info);
   SendTabToSelfBubbleDeviceButton(const SendTabToSelfBubbleDeviceButton&) =
       delete;
   SendTabToSelfBubbleDeviceButton& operator=(
@@ -32,12 +36,20 @@ class SendTabToSelfBubbleDeviceButton : public HoverButton {
 
   const std::string& device_name() const { return device_name_; }
   const std::string& device_guid() const { return device_guid_; }
-  sync_pb::SyncEnums::DeviceType device_type() const { return device_type_; }
+  syncer::DeviceInfo::FormFactor device_form_factor() const {
+    return device_form_factor_;
+  }
+
+  void SetSelected(bool selected);
+  bool IsSelected() const { return is_selected_; }
 
  private:
-  std::string device_name_;
-  std::string device_guid_;
-  sync_pb::SyncEnums::DeviceType device_type_;
+  void ApplyDeviceSelectionStyling();
+
+  const std::string device_name_;
+  const std::string device_guid_;
+  const syncer::DeviceInfo::FormFactor device_form_factor_;
+  bool is_selected_ = false;
 };
 
 }  // namespace send_tab_to_self

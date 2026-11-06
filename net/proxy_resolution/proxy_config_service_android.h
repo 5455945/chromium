@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,12 @@
 #define NET_PROXY_RESOLUTION_PROXY_CONFIG_SERVICE_ANDROID_H_
 
 #include <string>
+#include <vector>
 
 #include "base/android/jni_android.h"
-#include "base/callback_forward.h"
 #include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/scoped_refptr.h"
 #include "net/base/net_export.h"
 #include "net/proxy_resolution/proxy_config_service.h"
 
@@ -36,7 +36,7 @@ class NET_EXPORT ProxyConfigServiceAndroid : public ProxyConfigService {
   // the .cc file.
   class JNIDelegate {
    public:
-    virtual ~JNIDelegate() {}
+    virtual ~JNIDelegate() = default;
 
     // Called from Java (on JNI thread) to signal that the proxy settings have
     // changed. The string and int arguments (the host/port pair for the proxy)
@@ -45,22 +45,23 @@ class NET_EXPORT ProxyConfigServiceAndroid : public ProxyConfigService {
     // The fourth argument is the proxy exclusion list.
     virtual void ProxySettingsChangedTo(
         JNIEnv*,
-        const base::android::JavaParamRef<jobject>&,
-        const base::android::JavaParamRef<jstring>&,
-        jint,
-        const base::android::JavaParamRef<jstring>&,
-        const base::android::JavaParamRef<jobjectArray>&) = 0;
+        const base::android::JavaRef<jstring>&,
+        int32_t,
+        const base::android::JavaRef<jstring>&,
+        const base::android::JavaRef<jobjectArray>&) = 0;
 
     // Called from Java (on JNI thread) to signal that the proxy settings have
     // changed. New proxy settings are fetched from the system property store.
-    virtual void ProxySettingsChanged(
-        JNIEnv*,
-        const base::android::JavaParamRef<jobject>&) = 0;
+    virtual void ProxySettingsChanged(JNIEnv*) = 0;
   };
 
   ProxyConfigServiceAndroid(
       const scoped_refptr<base::SequencedTaskRunner>& main_task_runner,
       const scoped_refptr<base::SequencedTaskRunner>& jni_task_runner);
+
+  ProxyConfigServiceAndroid(const ProxyConfigServiceAndroid&) = delete;
+  ProxyConfigServiceAndroid& operator=(const ProxyConfigServiceAndroid&) =
+      delete;
 
   ~ProxyConfigServiceAndroid() override;
 
@@ -127,10 +128,8 @@ class NET_EXPORT ProxyConfigServiceAndroid : public ProxyConfigService {
                               const std::vector<std::string>& exclusion_list);
 
   scoped_refptr<Delegate> delegate_;
-
-  DISALLOW_COPY_AND_ASSIGN(ProxyConfigServiceAndroid);
 };
 
 } // namespace net
 
-#endif // NET_PROXY_RESOLUTION_PROXY_CONFIG_SERVICE_ANDROID_H_
+#endif  // NET_PROXY_RESOLUTION_PROXY_CONFIG_SERVICE_ANDROID_H_

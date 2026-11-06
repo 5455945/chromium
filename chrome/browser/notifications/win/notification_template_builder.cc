@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,25 +6,24 @@
 
 #include <algorithm>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/files/file_path.h"
-#include "base/i18n/time_formatting.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
+#include "chrome/browser/notifications/win/notification_image_retainer.h"
 #include "chrome/browser/notifications/win/notification_launch_id.h"
-#include "chrome/common/chrome_features.h"
-#include "chrome/common/notifications/notification_image_retainer.h"
-#include "chrome/grit/chromium_strings.h"
-#include "chrome/grit/generated_resources.h"
+#include "chrome/grit/branded_strings.h"
 #include "components/url_formatter/elide_url.h"
+#include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "third_party/libxml/chromium/xml_writer.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/gfx/image/image_skia.h"
 #include "ui/message_center/public/cpp/notification.h"
 #include "ui/strings/grit/ui_strings.h"
 #include "url/gurl.h"
@@ -50,14 +49,15 @@ const char kBindingElement[] = "binding";
 const char kBindingElementTemplateAttribute[] = "template";
 const char kContent[] = "content";
 const char kContextMenu[] = "contextMenu";
-const char kDuration[] = "duration";
-const char kDurationLong[] = "long";
+const char kCritical[] = "Critical";
 const char kForeground[] = "foreground";
 const char kHero[] = "hero";
+const char kHintButtonStyle[] = "hint-buttonStyle";
 const char kHintCrop[] = "hint-crop";
 const char kHintCropNone[] = "none";
 const char kImageElement[] = "image";
 const char kImageUri[] = "imageUri";
+const char kIncomingCall[] = "incomingCall";
 const char kIndeterminate[] = "indeterminate";
 const char kInputElement[] = "input";
 const char kInputId[] = "id";
@@ -71,10 +71,12 @@ const char kReminder[] = "reminder";
 const char kScenario[] = "scenario";
 const char kSilent[] = "silent";
 const char kSrc[] = "src";
+const char kSuccess[] = "Success";
 const char kText[] = "text";
 const char kTextElement[] = "text";
 const char kToastElementDisplayTimestamp[] = "displayTimestamp";
 const char kTrue[] = "true";
+const char kUseButtonStyle[] = "useButtonStyle";
 const char kUserResponse[] = "userResponse";
 const char kValue[] = "value";
 const char kVisualElement[] = "visual";
@@ -85,12 +87,33 @@ const char kDefaultTemplate[] = "ToastGeneric";
 // The XML version header that has to be stripped from the output.
 const char kXmlVersionHeader[] = "<?xml version=\"1.0\"?>\n";
 
+// Maximum length of the origin string to be displayed in the notification.
+// 27 characters is the maximum number of characters that can fit in a single
+// line when there is an icon included in the toast notification.
+constexpr size_t kMaxAllowedOriginLength = 27;
+
 // Formats the |origin| for display in the notification template.
 std::string FormatOrigin(const GURL& origin) {
   std::u16string origin_string = url_formatter::FormatOriginForSecurityDisplay(
       url::Origin::Create(origin),
       url_formatter::SchemeDisplay::OMIT_HTTP_AND_HTTPS);
-  DCHECK(origin_string.size());
+  CHECK(!origin_string.empty(), base::NotFatalUntil::M161);
+
+  // If the origin exceeds the max allowed length, reduce it to the registrable
+  // domain (eTLD+1) to prevent tail truncation of the domain.
+  if (origin_string.size() > kMaxAllowedOriginLength) {
+    std::string domain_and_registry =
+        net::registry_controlled_domains::GetDomainAndRegistry(
+            origin,
+            net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
+    if (!domain_and_registry.empty()) {
+      GURL::Replacements replacements;
+      replacements.SetHostStr(domain_and_registry);
+      origin_string = url_formatter::FormatOriginForSecurityDisplay(
+          url::Origin::Create(origin.ReplaceComponents(replacements)),
+          url_formatter::SchemeDisplay::OMIT_HTTP_AND_HTTPS);
+    }
+  }
 
   return base::UTF16ToUTF8(origin_string);
 }
@@ -103,15 +126,16 @@ void StartToastElement(XmlWriter* xml_writer,
   xml_writer->StartElement(kNotificationToastElement);
   xml_writer->AddAttribute(kNotificationLaunchAttribute, launch_id.Serialize());
 
-  if (notification.never_timeout()) {
-    if (base::FeatureList::IsEnabled(
-            features::kNotificationDurationLongForRequireInteraction)) {
-      xml_writer->AddAttribute(kDuration, kDurationLong);
-    } else {
-      // Note: If the notification doesn't include a button, then Windows will
-      // ignore the Reminder flag. See EnsureReminderHasButton below.
-      xml_writer->AddAttribute(kScenario, kReminder);
-    }
+  // Only notifications created by an installed web app should be allowed to
+  // have increased priority, colored buttons, and a ringtone.
+  if (notification.scenario() ==
+      message_center::NotificationScenario::INCOMING_CALL) {
+    xml_writer->AddAttribute(kScenario, kIncomingCall);
+    xml_writer->AddAttribute(kUseButtonStyle, kTrue);
+  } else if (notification.never_timeout()) {
+    // Note: If the notification doesn't include a button, then Windows will
+    // ignore the Reminder flag. See EnsureReminderHasButton below.
+    xml_writer->AddAttribute(kScenario, kReminder);
   }
 
   if (notification.timestamp().is_null())
@@ -119,11 +143,10 @@ void StartToastElement(XmlWriter* xml_writer,
 
   base::Time::Exploded exploded;
   notification.timestamp().UTCExplode(&exploded);
-  xml_writer->AddAttribute(
-      kToastElementDisplayTimestamp,
-      base::StringPrintf("%04d-%02d-%02dT%02d:%02d:%02dZ", exploded.year,
-                         exploded.month, exploded.day_of_month, exploded.hour,
-                         exploded.minute, exploded.second));
+  std::string timestamp_str = base::StringPrintf(
+      "%04d-%02d-%02dT%02d:%02d:%02dZ", exploded.year, exploded.month,
+      exploded.day_of_month, exploded.hour, exploded.minute, exploded.second);
+  xml_writer->AddAttribute(kToastElementDisplayTimestamp, timestamp_str);
 }
 
 void EndToastElement(XmlWriter* xml_writer) {
@@ -177,8 +200,8 @@ void WriteItems(XmlWriter* xml_writer,
   std::string item_list;
   for (size_t i = 0; i < entries; ++i) {
     const auto& item = items[i];
-    item_list += base::UTF16ToUTF8(item.title) + " - " +
-                 base::UTF16ToUTF8(item.message) + "\n";
+    item_list += base::UTF16ToUTF8(item.title()) + " - " +
+                 base::UTF16ToUTF8(item.message()) + "\n";
   }
   WriteTextElement(xml_writer, item_list, TextType::NORMAL);
 }
@@ -204,7 +227,8 @@ void WriteImageElement(XmlWriter* xml_writer,
 void WriteIconElement(XmlWriter* xml_writer,
                       NotificationImageRetainer* image_retainer,
                       const message_center::Notification& notification) {
-  WriteImageElement(xml_writer, image_retainer, notification.icon(),
+  WriteImageElement(xml_writer, image_retainer,
+                    gfx::Image(notification.icon().Rasterize(nullptr)),
                     kPlacementAppLogoOverride, kHintCropNone);
 }
 
@@ -255,9 +279,25 @@ void WriteActionElement(XmlWriter* xml_writer,
                         int index,
                         NotificationLaunchId copied_launch_id) {
   xml_writer->StartElement(kActionElement);
-  xml_writer->AddAttribute(kActivationType, kForeground);
+
+  // All notifications buttons in the incoming-call scenario should be green,
+  // except for the default dismiss button added by Chromium (not by the Action
+  // Center), which should be red. This attribute will take effect only if the
+  // 'useButtonStyle' attribute has been added to the toast XML element - i.e.,
+  // when the notification scenario is INCOMING_CALL.
+  if (button.type == message_center::ButtonType::DISMISS) {
+    xml_writer->AddAttribute(kActivationType, kBackground);
+    copied_launch_id.set_is_for_dismiss_button();
+    xml_writer->AddAttribute(kHintButtonStyle, kCritical);
+  } else {
+    xml_writer->AddAttribute(kActivationType, kForeground);
+    copied_launch_id.set_button_index(index);
+    if (button.type == message_center::ButtonType::ACKNOWLEDGE) {
+      xml_writer->AddAttribute(kHintButtonStyle, kSuccess);
+    }
+  }
+
   xml_writer->AddAttribute(kContent, base::UTF16ToUTF8(button.title));
-  copied_launch_id.set_button_index(index);
   xml_writer->AddAttribute(kArguments, copied_launch_id.Serialize());
 
   if (!button.icon.IsEmpty()) {
@@ -295,8 +335,9 @@ void AddActions(XmlWriter* xml_writer,
     xml_writer->EndElement();
   }
 
-  for (size_t i = 0; i < buttons.size(); ++i)
+  for (size_t i = 0; i < buttons.size(); ++i) {
     WriteActionElement(xml_writer, image_retainer, buttons[i], i, launch_id);
+  }
 }
 
 // Writes the <audio silent="true"> element.
@@ -330,13 +371,11 @@ void AddContextMenu(XmlWriter* xml_writer,
 // Ensures that every reminder has at least one button, as the Action Center
 // does not respect the Reminder setting on notifications with no buttons, so we
 // must add a Dismiss button to the notification for those cases. For more
-// details, see issue https://crbug.com/781792.
+// details, see issue https://crbug.com/40548271.
 void EnsureReminderHasButton(XmlWriter* xml_writer,
                              const message_center::Notification& notification,
                              NotificationLaunchId copied_launch_id) {
-  if (!notification.never_timeout() || !notification.buttons().empty() ||
-      base::FeatureList::IsEnabled(
-          features::kNotificationDurationLongForRequireInteraction)) {
+  if (!notification.never_timeout() || !notification.buttons().empty()) {
     return;
   }
 
@@ -361,7 +400,7 @@ std::wstring BuildNotificationTemplate(
     NotificationImageRetainer* image_retainer,
     const NotificationLaunchId& launch_id,
     const message_center::Notification& notification) {
-  DCHECK(image_retainer);
+  CHECK(image_retainer, base::NotFatalUntil::M161);
 
   XmlWriter xml_writer;
   xml_writer.StartWriting();
@@ -431,13 +470,14 @@ std::wstring BuildNotificationTemplate(
   xml_writer.StopWriting();
 
   std::string template_xml = xml_writer.GetWrittenString();
-  DCHECK(base::StartsWith(template_xml, kXmlVersionHeader,
-                          base::CompareCase::SENSITIVE));
+  CHECK(base::StartsWith(template_xml, kXmlVersionHeader,
+                         base::CompareCase::SENSITIVE),
+        base::NotFatalUntil::M161);
 
   // The |kXmlVersionHeader| is automatically appended by libxml, but the toast
   // system in the Windows Action Center expects it to be absent.
   return base::UTF8ToWide(
-      base::StringPiece(template_xml).substr(sizeof(kXmlVersionHeader) - 1));
+      std::string_view(template_xml).substr(sizeof(kXmlVersionHeader) - 1));
 }
 
 void SetContextMenuLabelForTesting(const char* label) {

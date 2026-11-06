@@ -1,19 +1,16 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.test.pagecontroller.utils;
 
-import android.support.test.uiautomator.UiDevice;
-import android.support.test.uiautomator.UiObject2;
-
 import androidx.annotation.NonNull;
+import androidx.test.uiautomator.UiDevice;
+import androidx.test.uiautomator.UiObject2;
 
 import java.util.List;
 
-/**
- * Locate the ith node in the nodes found by an IUi2Locator.
- */
+/** Locate the ith node in the nodes found by an IUi2Locator. */
 class IndexUi2Locator implements IUi2Locator {
     private final IUi2Locator mLocator;
     private final int mIndex;
@@ -53,7 +50,6 @@ class IndexUi2Locator implements IUi2Locator {
 
     @Override
     public String toString() {
-        return "IndexUi2Locator{"
-                + "mLocator=" + mLocator + ", index=" + mIndex + "}";
+        return "IndexUi2Locator{" + "mLocator=" + mLocator + ", index=" + mIndex + "}";
     }
 }

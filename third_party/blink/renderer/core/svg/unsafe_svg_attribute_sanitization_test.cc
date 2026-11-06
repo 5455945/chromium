@@ -1,14 +1,14 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 // FIXME(dominicc): Poor confused check-webkit-style demands Attribute.h here.
-#include "third_party/blink/renderer/core/dom/attribute.h"
-
 #include <memory>
+
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/renderer/core/clipboard/system_clipboard.h"
+#include "third_party/blink/renderer/core/dom/attribute.h"
 #include "third_party/blink/renderer/core/dom/qualified_name.h"
 #include "third_party/blink/renderer/core/editing/editor.h"
 #include "third_party/blink/renderer/core/editing/frame_selection.h"
@@ -17,6 +17,7 @@
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/html_names.h"
+#include "third_party/blink/renderer/core/keywords.h"
 #include "third_party/blink/renderer/core/svg/animation/svg_smil_element.h"
 #include "third_party/blink/renderer/core/svg/properties/svg_property_info.h"
 #include "third_party/blink/renderer/core/svg/svg_a_element.h"
@@ -25,15 +26,17 @@
 #include "third_party/blink/renderer/core/svg_names.h"
 #include "third_party/blink/renderer/core/testing/dummy_page_holder.h"
 #include "third_party/blink/renderer/core/testing/mock_clipboard_host.h"
+#include "third_party/blink/renderer/core/testing/null_execution_context.h"
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
 #include "third_party/blink/renderer/core/xlink_names.h"
-#include "third_party/blink/renderer/platform/geometry/int_size.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
+#include "ui/gfx/geometry/size.h"
 
 // Test that SVG content with JavaScript URLs is sanitized by removing
 // the URLs. This sanitization happens when the content is pasted or
@@ -58,7 +61,8 @@ namespace blink {
 // |expected_partial_contents|.
 void PasteAndVerifySanitization(const char* html_to_paste,
                                 const char* expected_partial_contents) {
-  auto page_holder = std::make_unique<DummyPageHolder>(IntSize(1, 1));
+  test::TaskEnvironment task_environment;
+  auto page_holder = std::make_unique<DummyPageHolder>(gfx::Size(1, 1));
   LocalFrame& frame = page_holder.get()->GetFrame();
 
   // Setup a mock clipboard host.
@@ -68,17 +72,18 @@ void PasteAndVerifySanitization(const char* html_to_paste,
   HTMLElement* body = page_holder->GetDocument().body();
 
   // Make the body editable, and put the caret in it.
-  body->setAttribute(html_names::kContenteditableAttr, "true");
-  body->focus();
+  body->setAttribute(html_names::kContenteditableAttr, keywords::kTrue);
+  body->Focus();
   frame.GetDocument()->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
-  frame.Selection().SetSelectionAndEndTyping(
-      SelectionInDOMTree::Builder().SelectAllChildren(*body).Build());
-  EXPECT_TRUE(frame.Selection().ComputeVisibleSelectionInDOMTree().IsCaret());
+  frame.Selection().SetSelection(
+      SelectionInDomTree::Builder().SelectAllChildren(*body).Build(),
+      SetSelectionOptions());
+  EXPECT_TRUE(frame.Selection().ComputeVisibleSelectionInDomTree().IsCaret());
   EXPECT_TRUE(
-      frame.Selection().ComputeVisibleSelectionInDOMTree().IsContentEditable())
+      frame.Selection().ComputeVisibleSelectionInDomTree().IsContentEditable())
       << "We should be pasting into something editable.";
 
-  frame.GetSystemClipboard()->WriteHTML(html_to_paste, BlankURL(),
+  frame.GetSystemClipboard()->WriteHTML(html_to_paste, BlankUrl(),
                                         SystemClipboard::kCannotSmartReplace);
   frame.GetSystemClipboard()->CommitWrite();
   // Run all tasks in a message loop to allow asynchronous clipboard writing
@@ -88,11 +93,11 @@ void PasteAndVerifySanitization(const char* html_to_paste,
 
   // Verify that sanitization during pasting strips JavaScript, but keeps at
   // least |expected_partial_contents|.
-  String sanitized_content = body->innerHTML();
-  EXPECT_TRUE(sanitized_content.Contains(expected_partial_contents))
+  String sanitized_content = body->GetInnerHTMLString();
+  EXPECT_TRUE(sanitized_content.contains(expected_partial_contents))
       << "We should have pasted *something*; the document is: "
       << sanitized_content.Utf8();
-  EXPECT_FALSE(sanitized_content.Contains(":alert()"))
+  EXPECT_FALSE(sanitized_content.contains(":alert()"))
       << "The JavaScript URL is unsafe and should have been stripped; "
          "instead: "
       << sanitized_content.Utf8();
@@ -213,7 +218,10 @@ TEST(
 // Element::stripScriptingAttributes, perhaps to strip all
 // SVG animation attributes.
 TEST(UnsafeSVGAttributeSanitizationTest, stringsShouldNotSupportAddition) {
-  auto* document = Document::CreateForTest();
+  test::TaskEnvironment task_environment;
+  ScopedNullExecutionContext execution_context;
+  auto* document =
+      Document::CreateForTest(execution_context.GetExecutionContext());
   auto* target = MakeGarbageCollected<SVGAElement>(*document);
   auto* element = MakeGarbageCollected<SVGAnimateElement>(*document);
   element->SetTargetElement(target);
@@ -234,13 +242,19 @@ TEST(UnsafeSVGAttributeSanitizationTest, stringsShouldNotSupportAddition) {
 
 TEST(UnsafeSVGAttributeSanitizationTest,
      stripScriptingAttributes_animateElement) {
-  Vector<Attribute> attributes;
-  attributes.push_back(Attribute(xlink_names::kHrefAttr, "javascript:alert()"));
-  attributes.push_back(Attribute(svg_names::kHrefAttr, "javascript:alert()"));
-  attributes.push_back(Attribute(svg_names::kFromAttr, "/home"));
-  attributes.push_back(Attribute(svg_names::kToAttr, "javascript:own3d()"));
+  test::TaskEnvironment task_environment;
+  Vector<Attribute, kAttributePrealloc> attributes;
+  attributes.push_back(
+      Attribute(xlink_names::kHrefAttr, AtomicString("javascript:alert()")));
+  attributes.push_back(
+      Attribute(svg_names::kHrefAttr, AtomicString("javascript:alert()")));
+  attributes.push_back(Attribute(svg_names::kFromAttr, AtomicString("/home")));
+  attributes.push_back(
+      Attribute(svg_names::kToAttr, AtomicString("javascript:own3d()")));
 
-  auto* document = Document::CreateForTest();
+  ScopedNullExecutionContext execution_context;
+  auto* document =
+      Document::CreateForTest(execution_context.GetExecutionContext());
   auto* element = MakeGarbageCollected<SVGAnimateElement>(*document);
   element->StripScriptingAttributes(attributes);
 
@@ -259,8 +273,11 @@ TEST(UnsafeSVGAttributeSanitizationTest,
 
 TEST(UnsafeSVGAttributeSanitizationTest,
      isJavaScriptURLAttribute_hrefContainingJavascriptURL) {
-  Attribute attribute(svg_names::kHrefAttr, "javascript:alert()");
-  auto* document = Document::CreateForTest();
+  test::TaskEnvironment task_environment;
+  Attribute attribute(svg_names::kHrefAttr, AtomicString("javascript:alert()"));
+  ScopedNullExecutionContext execution_context;
+  auto* document =
+      Document::CreateForTest(execution_context.GetExecutionContext());
   auto* element = MakeGarbageCollected<SVGAElement>(*document);
   EXPECT_TRUE(element->IsJavaScriptURLAttribute(attribute))
       << "The 'a' element should identify an 'href' attribute with a "
@@ -269,8 +286,12 @@ TEST(UnsafeSVGAttributeSanitizationTest,
 
 TEST(UnsafeSVGAttributeSanitizationTest,
      isJavaScriptURLAttribute_xlinkHrefContainingJavascriptURL) {
-  Attribute attribute(xlink_names::kHrefAttr, "javascript:alert()");
-  auto* document = Document::CreateForTest();
+  test::TaskEnvironment task_environment;
+  Attribute attribute(xlink_names::kHrefAttr,
+                      AtomicString("javascript:alert()"));
+  ScopedNullExecutionContext execution_context;
+  auto* document =
+      Document::CreateForTest(execution_context.GetExecutionContext());
   auto* element = MakeGarbageCollected<SVGAElement>(*document);
   EXPECT_TRUE(element->IsJavaScriptURLAttribute(attribute))
       << "The 'a' element should identify an 'xlink:href' attribute with a "
@@ -280,10 +301,14 @@ TEST(UnsafeSVGAttributeSanitizationTest,
 TEST(
     UnsafeSVGAttributeSanitizationTest,
     isJavaScriptURLAttribute_xlinkHrefContainingJavascriptURL_alternatePrefix) {
-  QualifiedName href_alternate_prefix("foo", "href",
+  test::TaskEnvironment task_environment;
+  QualifiedName href_alternate_prefix(AtomicString("foo"), AtomicString("href"),
                                       xlink_names::kNamespaceURI);
-  Attribute evil_attribute(href_alternate_prefix, "javascript:alert()");
-  auto* document = Document::CreateForTest();
+  Attribute evil_attribute(href_alternate_prefix,
+                           AtomicString("javascript:alert()"));
+  ScopedNullExecutionContext execution_context;
+  auto* document =
+      Document::CreateForTest(execution_context.GetExecutionContext());
   auto* element = MakeGarbageCollected<SVGAElement>(*document);
   EXPECT_TRUE(element->IsJavaScriptURLAttribute(evil_attribute))
       << "The XLink 'href' attribute with a JavaScript URL value should be "
@@ -293,8 +318,12 @@ TEST(
 
 TEST(UnsafeSVGAttributeSanitizationTest,
      isSVGAnimationAttributeSettingJavaScriptURL_fromContainingJavaScriptURL) {
-  Attribute evil_attribute(svg_names::kFromAttr, "javascript:alert()");
-  auto* document = Document::CreateForTest();
+  test::TaskEnvironment task_environment;
+  Attribute evil_attribute(svg_names::kFromAttr,
+                           AtomicString("javascript:alert()"));
+  ScopedNullExecutionContext execution_context;
+  auto* document =
+      Document::CreateForTest(execution_context.GetExecutionContext());
   auto* element = MakeGarbageCollected<SVGAnimateElement>(*document);
   EXPECT_TRUE(
       element->IsSVGAnimationAttributeSettingJavaScriptURL(evil_attribute))
@@ -304,8 +333,12 @@ TEST(UnsafeSVGAttributeSanitizationTest,
 
 TEST(UnsafeSVGAttributeSanitizationTest,
      isSVGAnimationAttributeSettingJavaScriptURL_toContainingJavaScripURL) {
-  Attribute evil_attribute(svg_names::kToAttr, "javascript:window.close()");
-  auto* document = Document::CreateForTest();
+  test::TaskEnvironment task_environment;
+  Attribute evil_attribute(svg_names::kToAttr,
+                           AtomicString("javascript:window.close()"));
+  ScopedNullExecutionContext execution_context;
+  auto* document =
+      Document::CreateForTest(execution_context.GetExecutionContext());
   auto* element = MakeGarbageCollected<SVGSetElement>(*document);
   EXPECT_TRUE(
       element->IsSVGAnimationAttributeSettingJavaScriptURL(evil_attribute))
@@ -316,8 +349,12 @@ TEST(UnsafeSVGAttributeSanitizationTest,
 TEST(
     UnsafeSVGAttributeSanitizationTest,
     isSVGAnimationAttributeSettingJavaScriptURL_valuesContainingJavaScriptURL) {
-  Attribute evil_attribute(svg_names::kValuesAttr, "hi!; javascript:confirm()");
-  auto* document = Document::CreateForTest();
+  test::TaskEnvironment task_environment;
+  Attribute evil_attribute(svg_names::kValuesAttr,
+                           AtomicString("hi!; javascript:confirm()"));
+  ScopedNullExecutionContext execution_context;
+  auto* document =
+      Document::CreateForTest(execution_context.GetExecutionContext());
   auto* element = MakeGarbageCollected<SVGAnimateElement>(*document);
   EXPECT_TRUE(
       element->IsSVGAnimationAttributeSettingJavaScriptURL(evil_attribute))
@@ -327,8 +364,11 @@ TEST(
 
 TEST(UnsafeSVGAttributeSanitizationTest,
      isSVGAnimationAttributeSettingJavaScriptURL_innocuousAnimationAttribute) {
-  Attribute fine_attribute(svg_names::kFromAttr, "hello, world!");
-  auto* document = Document::CreateForTest();
+  test::TaskEnvironment task_environment;
+  Attribute fine_attribute(svg_names::kFromAttr, AtomicString("hello, world!"));
+  ScopedNullExecutionContext execution_context;
+  auto* document =
+      Document::CreateForTest(execution_context.GetExecutionContext());
   auto* element = MakeGarbageCollected<SVGSetElement>(*document);
   EXPECT_FALSE(
       element->IsSVGAnimationAttributeSettingJavaScriptURL(fine_attribute))

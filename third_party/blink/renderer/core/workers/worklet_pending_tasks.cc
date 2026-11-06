@@ -1,19 +1,21 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/workers/worklet_pending_tasks.h"
 
+#include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/core/v8/serialization/serialized_script_value.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/workers/worklet.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/wtf.h"
 
 namespace blink {
 
-WorkletPendingTasks::WorkletPendingTasks(Worklet* worklet,
-                                         ScriptPromiseResolver* resolver)
+WorkletPendingTasks::WorkletPendingTasks(
+    Worklet* worklet,
+    ScriptPromiseResolver<IDLUndefined>* resolver)
     : resolver_(resolver), worklet_(worklet) {
   DCHECK(IsMainThread());
 }
@@ -41,16 +43,20 @@ void WorkletPendingTasks::Abort(
   //   1: "If pendingTaskStruct's counter is not -1, then run these steps:"
   //     1: "Set pendingTaskStruct's counter to -1."
   //     2: "Reject promise with error to rethrow."
-  if (counter_ != -1) {
+  if (counter_ > 0 || counter_ == -2) {
     counter_ = -1;
     worklet_->FinishPendingTasks(this);
-    if (error_to_rethrow) {
-      ScriptState::Scope scope(resolver_->GetScriptState());
-      resolver_->Reject(error_to_rethrow->Deserialize(
-          resolver_->GetScriptState()->GetIsolate()));
-    } else {
-      resolver_->Reject(
-          MakeGarbageCollected<DOMException>(DOMExceptionCode::kAbortError));
+    ScriptState* script_state = resolver_->GetScriptState();
+    if (script_state->ContextIsValid()) {
+      if (error_to_rethrow) {
+        ScriptState::Scope scope(script_state);
+        resolver_->Reject(
+            error_to_rethrow->Deserialize(script_state->GetIsolate()));
+      } else {
+        resolver_->Reject(MakeGarbageCollected<DOMException>(
+            DOMExceptionCode::kAbortError,
+            "Unable to load a worklet's module."));
+      }
     }
   }
 }
@@ -62,7 +68,7 @@ void WorkletPendingTasks::DecrementCounter() {
   //   1: "If pendingTaskStruct's counter is not -1, then run these steps:"
   //     1: "Decrement pendingTaskStruct's counter by 1."
   //     2: "If pendingTaskStruct's counter is 0, then resolve promise."
-  if (counter_ != -1) {
+  if (counter_ > 0) {
     --counter_;
     if (counter_ == 0) {
       worklet_->FinishPendingTasks(this);

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 #include <memory>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "chrome/browser/ui/global_error/global_error_observer.h"
 #include "components/keyed_service/core/keyed_service.h"
@@ -24,10 +24,14 @@ class GlobalError;
 class GlobalErrorService : public KeyedService {
  public:
   // Type used to represent the list of currently active errors.
-  using GlobalErrorList = std::vector<GlobalError*>;
+  using GlobalErrorList = std::vector<raw_ptr<GlobalError, VectorExperimental>>;
 
   // Constructs a GlobalErrorService object.
   GlobalErrorService();
+
+  GlobalErrorService(const GlobalErrorService&) = delete;
+  GlobalErrorService& operator=(const GlobalErrorService&) = delete;
+
   ~GlobalErrorService() override;
 
   void AddObserver(GlobalErrorObserver* observer);
@@ -43,7 +47,7 @@ class GlobalErrorService : public KeyedService {
   std::unique_ptr<GlobalError> RemoveGlobalError(GlobalError* error);
 
   // DEPRECATED; DO NOT USE!
-  // http://crbug.com/673578
+  // http://crbug.com/41290855
   //
   // These functions allow adding and removing of a GlobalError that is not
   // owned by the GlobalErrorService. In this case, the error's lifetime must
@@ -77,8 +81,6 @@ class GlobalErrorService : public KeyedService {
 
   GlobalErrorList all_errors_;
   std::map<GlobalError*, std::unique_ptr<GlobalError>> owned_errors_;
-
-  DISALLOW_COPY_AND_ASSIGN(GlobalErrorService);
 };
 
 #endif  // CHROME_BROWSER_UI_GLOBAL_ERROR_GLOBAL_ERROR_SERVICE_H_

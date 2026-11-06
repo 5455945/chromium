@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,17 @@
 
 namespace web_modal {
 
-ModalDialogHostObserver::~ModalDialogHostObserver() {
-}
-
-ModalDialogHost::~ModalDialogHost() {
-}
-
 bool ModalDialogHost::ShouldActivateDialog() const {
   return true;
 }
+
+bool ModalDialogHost::ShouldConstrainDialogBoundsByHost() {
+  // Please consult with //constrained_window OWNERS if you intend to release
+  // the bounds constraint for your WebContents container (i.e. returning
+  // false from this function).
+  return true;
+}
+
+void ModalDialogHost::NotifyPositionRequiresUpdate() {}
 
 }  // namespace web_modal

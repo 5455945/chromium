@@ -7,14 +7,18 @@
         "namespace": [ "protocol" ],
         "options": [
             {
+                "domain": "Ads",
+                "include": [ "getAdMetrics" ]
+            },
+            {
                 "domain": "Page",
-                "include": [ "enable", "disable", "setAdBlockingEnabled", "getInstallabilityErrors", "getManifestIcons" ],
+                "include": [ "enable", "disable", "setAdBlockingEnabled", "getInstallabilityErrors", "getManifestIcons", "printToPDF", "getAppId", "getSubApps", "getSiblingSubApps", "setSPCTransactionMode", "setRPHRegistrationMode", "getAnnotatedPageContent" ],
                 "include_events": [],
-                "async": ["getInstallabilityErrors", "getManifestIcons"]
+                "async": ["getInstallabilityErrors", "getManifestIcons", "printToPDF", "getAppId", "getSubApps", "getSiblingSubApps", "getAnnotatedPageContent" ]
             },
             {
                 "domain": "Browser",
-                "include": [ "getWindowForTarget", "getWindowBounds", "setWindowBounds", "close", "setDockTile", "executeBrowserCommand" ],
+                "include": [ "getWindowForTarget", "getWindowBounds", "setWindowBounds", "setContentsSize", "close", "setDockTile", "executeBrowserCommand", "addPrivacySandboxEnrollmentOverride" ],
                 "include_events": []
             },
             {
@@ -24,22 +28,54 @@
             },
             {
                 "domain": "Cast",
-                "async": ["startTabMirroring"]
+                "async": ["startDesktopMirroring", "startTabMirroring"]
+            },
+            {
+                "domain": "Emulation",
+                "include": ["disable", "setAutomationOverride", "getScreenInfos", "addScreen", "removeScreen", "updateScreen", "setPrimaryScreen"]
             },
             {
                 "domain": "WindowManager"
             },
             {
+                "domain": "Extensions",
+                "include": [ "triggerAction", "loadUnpacked", "getStorageItems", "setStorageItems", "removeStorageItems", "clearStorageItems", "uninstall", "getExtensions" ],
+                "async": [ "loadUnpacked", "getStorageItems", "setStorageItems", "removeStorageItems", "clearStorageItems", "uninstall" ]
+            },
+            {
                 "domain": "Security",
                 "include": [ "enable", "disable" ],
                 "include_events": [ "visibleSecurityStateChanged" ]
+            },
+            {
+                "domain": "Storage",
+                "include": ["runBounceTrackingMitigations", "getPrivateVerificationTokens", "getPrivateVerificationTokensIssuerConfigs", "clearPrivateVerificationTokens", "deletePrivateVerificationToken", "setPrivateVerificationTokensTracking"],
+                "include_events": ["privateVerificationTokensUpdated"],
+                "async": ["runBounceTrackingMitigations", "getPrivateVerificationTokens", "clearPrivateVerificationTokens", "deletePrivateVerificationToken"]
+            },
+            {
+                "domain": "SystemInfo",
+                "include": ["getFeatureState"]
+            },
+            {
+                "domain": "Autofill",
+                "async": [ "setAddresses", "trigger" ]
+            },
+            {
+                "domain": "PWA",
+                "async": [ "changeAppUserSettings", "getOsAppState", "install", "launch", "launchFilesInApp", "uninstall" ]
+            },
+            {
+              "domain": "WebMCP",
+              "include": [ "enable" ],
+              "include_events": []
             }
         ]
     },
     "lib": {
         "package": "chrome/browser/devtools/protocol",
         "output": "protocol",
-        "string_header": "chrome/browser/devtools/protocol/base_string_adapter.h"
+        "protocol_traits": "third_party/inspector_protocol/crdtp/chromium/protocol_traits.h"
     },
 
     "crdtp": {

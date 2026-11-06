@@ -33,8 +33,10 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
 #include "third_party/blink/public/common/dom_storage/session_storage_namespace_id.h"
+#include "third_party/blink/public/mojom/dom_storage/storage_area.mojom-blink-forward.h"
+#include "third_party/blink/public/mojom/filesystem/file_system.mojom-blink-forward.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
@@ -50,6 +52,7 @@ namespace blink {
 
 class DevToolsSession;
 class Document;
+class ExecutionContext;
 class HTMLMediaElement;
 class InspectedFrames;
 class InspectorDOMAgent;
@@ -57,17 +60,18 @@ class LocalFrame;
 class MediaControls;
 class Page;
 class PictureInPictureController;
+class RemotePlaybackClient;
+class ServiceWorkerGlobalScope;
 class Settings;
 class ShadowRoot;
 class WebLocalFrameClient;
 class WebMediaPlayer;
 class WebMediaPlayerClient;
 class WebMediaPlayerSource;
-class WebRemotePlaybackClient;
+class WorkerGlobalScope;
 
 class CORE_EXPORT CoreInitializer {
   USING_FAST_MALLOC(CoreInitializer);
-  DISALLOW_COPY_AND_ASSIGN(CoreInitializer);
 
  public:
   // Initialize must be called before GetInstance.
@@ -76,6 +80,8 @@ class CORE_EXPORT CoreInitializer {
     return *instance_;
   }
 
+  CoreInitializer(const CoreInitializer&) = delete;
+  CoreInitializer& operator=(const CoreInitializer&) = delete;
   virtual ~CoreInitializer() = default;
 
   // Should be called by clients before trying to create Frames.
@@ -88,6 +94,9 @@ class CORE_EXPORT CoreInitializer {
   // bypass the inverted dependency from core/ to modules/.
   // Mojo Interfaces registered with LocalFrame
   virtual void InitLocalFrame(LocalFrame&) const = 0;
+  // Mojo Interfaces registered with ServiceWorkerGlobalScope.
+  virtual void InitServiceWorkerGlobalScope(
+      ServiceWorkerGlobalScope&) const = 0;
   // Supplements installed on a frame using ChromeClient
   virtual void InstallSupplements(LocalFrame&) const = 0;
   virtual MediaControls* CreateMediaControls(HTMLMediaElement&,
@@ -99,10 +108,11 @@ class CORE_EXPORT CoreInitializer {
   // TODO(nverne): remove this and restore to WebDevToolsAgentImpl once that
   // class is a controller/ crbug:731490
   virtual void InitInspectorAgentSession(DevToolsSession*,
-                                         bool,
                                          InspectorDOMAgent*,
                                          InspectedFrames*,
                                          Page*) const = 0;
+  virtual void InitWorkerInspectorAgentSession(DevToolsSession*,
+                                               WorkerGlobalScope*) const = 0;
 
   virtual void OnClearWindowObjectInMainWorld(Document&,
                                               const Settings&) const = 0;
@@ -113,7 +123,7 @@ class CORE_EXPORT CoreInitializer {
       const WebMediaPlayerSource&,
       WebMediaPlayerClient*) const = 0;
 
-  virtual WebRemotePlaybackClient* CreateWebRemotePlaybackClient(
+  virtual RemotePlaybackClient* CreateRemotePlaybackClient(
       HTMLMediaElement&) const = 0;
 
   virtual void ProvideModulesToPage(Page&,
@@ -140,6 +150,16 @@ class CORE_EXPORT CoreInitializer {
   // during a visual property update.
   virtual void DidUpdateScreens(LocalFrame& frame,
                                 const display::ScreenInfos&) = 0;
+
+  virtual void SetLocalStorageArea(
+      LocalFrame& frame,
+      mojo::PendingRemote<mojom::blink::StorageArea> local_storage_area) = 0;
+  virtual void SetSessionStorageArea(
+      LocalFrame& frame,
+      mojo::PendingRemote<mojom::blink::StorageArea> session_storage_area) = 0;
+
+  virtual mojom::blink::FileSystemManager& GetFileSystemManager(
+      ExecutionContext* context) = 0;
 
  protected:
   // CoreInitializer is only instantiated by subclass ModulesInitializer.

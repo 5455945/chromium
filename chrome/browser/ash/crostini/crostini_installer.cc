@@ -1,39 +1,38 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/crostini/crostini_installer.h"
 
+#include <algorithm>
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "ash/constants/ash_features.h"
+#include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/no_destructor.h"
-#include "base/numerics/ranges.h"
 #include "base/system/sys_info.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
-#include "chrome/browser/ash/crostini/ansible/ansible_management_service_factory.h"
 #include "chrome/browser/ash/crostini/crostini_disk.h"
 #include "chrome/browser/ash/crostini/crostini_features.h"
-#include "chrome/browser/ash/crostini/crostini_manager_factory.h"
+#include "chrome/browser/ash/crostini/crostini_manager.h"
 #include "chrome/browser/ash/crostini/crostini_pref_names.h"
-#include "chrome/browser/ash/crostini/crostini_terminal.h"
 #include "chrome/browser/ash/crostini/crostini_types.mojom.h"
 #include "chrome/browser/ash/crostini/crostini_util.h"
+#include "chrome/browser/ash/guest_os/guest_id.h"
+#include "chrome/browser/ash/guest_os/guest_os_terminal.h"
 #include "chrome/browser/ash/login/startup_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/webui/chromeos/crostini_installer/crostini_installer_dialog.h"
-#include "components/keyed_service/content/browser_context_dependency_manager.h"
-#include "components/keyed_service/content/browser_context_keyed_service_factory.h"
+#include "chromeos/ash/components/dbus/spaced/spaced_client.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/network_service_instance.h"
+#include "crostini_util.h"
 #include "ui/display/types/display_constants.h"
 
 using crostini::mojom::InstallerError;
@@ -43,38 +42,6 @@ namespace crostini {
 
 namespace {
 using SetupResult = CrostiniInstaller::SetupResult;
-constexpr char kCrostiniSetupSourceHistogram[] = "Crostini.SetupSource";
-
-class CrostiniInstallerFactory : public BrowserContextKeyedServiceFactory {
- public:
-  static crostini::CrostiniInstaller* GetForProfile(Profile* profile) {
-    return static_cast<crostini::CrostiniInstaller*>(
-        GetInstance()->GetServiceForBrowserContext(profile, true));
-  }
-
-  static CrostiniInstallerFactory* GetInstance() {
-    static base::NoDestructor<CrostiniInstallerFactory> factory;
-    return factory.get();
-  }
-
- private:
-  friend class base::NoDestructor<CrostiniInstallerFactory>;
-
-  CrostiniInstallerFactory()
-      : BrowserContextKeyedServiceFactory(
-            "CrostiniInstallerService",
-            BrowserContextDependencyManager::GetInstance()) {
-    DependsOn(crostini::CrostiniManagerFactory::GetInstance());
-    DependsOn(crostini::AnsibleManagementServiceFactory::GetInstance());
-  }
-
-  // BrowserContextKeyedServiceFactory:
-  KeyedService* BuildServiceInstanceFor(
-      content::BrowserContext* context) const override {
-    Profile* profile = Profile::FromBrowserContext(context);
-    return new crostini::CrostiniInstaller(profile);
-  }
-};
 
 constexpr int kUninitializedDiskSpace = -1;
 
@@ -93,17 +60,17 @@ constexpr char kCrostiniAvailableDiskError[] = "Crostini.AvailableDiskError";
 void RecordTimeFromDeviceSetupToInstallMetric() {
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock()},
-      base::BindOnce(&chromeos::StartupUtils::GetTimeSinceOobeFlagFileCreation),
+      base::BindOnce(&ash::StartupUtils::GetTimeSinceOobeFlagFileCreation),
       base::BindOnce([](base::TimeDelta time_from_device_setup) {
-        if (time_from_device_setup.is_zero())
+        if (time_from_device_setup.is_zero()) {
           return;
+        }
 
         // The magic number 1471228928 is used for legacy reasons and changing
         // it would invalidate already logged data.
-        base::UmaHistogramCustomTimes(
-            kCrostiniTimeFromDeviceSetupToInstall, time_from_device_setup,
-            base::TimeDelta::FromMinutes(1),
-            base::TimeDelta::FromMilliseconds(1471228928), 50);
+        base::UmaHistogramCustomTimes(kCrostiniTimeFromDeviceSetupToInstall,
+                                      time_from_device_setup, base::Minutes(1),
+                                      base::Milliseconds(1471228928), 50);
       }));
 }
 
@@ -159,6 +126,9 @@ SetupResult InstallStateToCancelledSetupResult(
       return SetupResult::kUserCancelledSetupContainer;
     case InstallerState::kStartContainer:
       return SetupResult::kUserCancelledStartContainer;
+    case InstallerState::kFetchSshKeys_DEPRECATED:
+    case InstallerState::kMountContainer_DEPRECATED:
+      NOTREACHED();
     case InstallerState::kConfigureContainer:
       return SetupResult::kUserCancelledConfiguringContainer;
   }
@@ -166,45 +136,76 @@ SetupResult InstallStateToCancelledSetupResult(
   NOTREACHED();
 }
 
-}  // namespace
+crostini::mojom::InstallerError CrostiniResultToInstallerError(
+    crostini::CrostiniResult result,
+    InstallerState installer_state) {
+  CHECK_NE(result, CrostiniResult::SUCCESS, base::NotFatalUntil::M160);
 
-CrostiniInstaller* CrostiniInstaller::GetForProfile(Profile* profile) {
-  return CrostiniInstallerFactory::GetForProfile(profile);
+  bool offline = content::GetNetworkConnectionTracker()->IsOffline();
+  if (offline) {
+    LOG(WARNING)
+        << "Crostini installation may have failed due to being offline.";
+  }
+
+  switch (installer_state) {
+    default:
+    case InstallerState::kStart:
+      NOTREACHED();
+    case InstallerState::kInstallImageLoader:
+      if (offline) {
+        return InstallerError::kErrorOffline;
+      } else if (result == CrostiniResult::NEED_UPDATE) {
+        return InstallerError::kNeedUpdate;
+      } else {
+        return InstallerError::kErrorLoadingTermina;
+      }
+    case InstallerState::kCreateDiskImage:
+      return InstallerError::kErrorCreatingDiskImage;
+    case InstallerState::kStartTerminaVm:
+      return InstallerError::kErrorStartingTermina;
+    case InstallerState::kStartLxd:
+      return InstallerError::kErrorStartingLxd;
+    case InstallerState::kCreateContainer:
+      if (offline) {
+        return InstallerError::kErrorOffline;
+      } else {
+        return InstallerError::kErrorCreateContainer;
+      }
+    case InstallerState::kSetupContainer:
+      if (offline) {
+        return InstallerError::kErrorOffline;
+      } else {
+        return InstallerError::kErrorSettingUpContainer;
+      }
+    case InstallerState::kStartContainer:
+      return InstallerError::kErrorStartingContainer;
+    case InstallerState::kConfigureContainer:
+      return InstallerError::kErrorConfiguringContainer;
+  }
 }
+
+}  // namespace
 
 CrostiniInstaller::CrostiniInstaller(Profile* profile) : profile_(profile) {}
 
 CrostiniInstaller::~CrostiniInstaller() {
   // Guaranteed by |Shutdown()|.
-  DCHECK_EQ(restart_id_, CrostiniManager::kUninitializedRestartId);
+  CHECK_EQ(restart_id_, CrostiniManager::kUninitializedRestartId,
+           base::NotFatalUntil::M160);
 }
 
 void CrostiniInstaller::Shutdown() {
   if (restart_id_ != CrostiniManager::kUninitializedRestartId) {
-    CrostiniManager::GetForProfile(profile_)->AbortRestartCrostini(
-        restart_id_, base::DoNothing());
+    CrostiniManager::GetForProfile(profile_)->CancelRestartCrostini(
+        restart_id_);
     restart_id_ = CrostiniManager::kUninitializedRestartId;
   }
-}
-
-void CrostiniInstaller::ShowDialog(CrostiniUISurface ui_surface) {
-  // Defensive check to prevent showing the installer when crostini is not
-  // allowed.
-  if (!CrostiniFeatures::Get()->IsAllowedNow(profile_)) {
-    return;
-  }
-  base::UmaHistogramEnumeration(kCrostiniSetupSourceHistogram, ui_surface,
-                                crostini::CrostiniUISurface::kCount);
-
-  // TODO(lxj): We should pass the dialog |this| here instead of letting the
-  // webui to call |GetForProfile()| later.
-  chromeos::CrostiniInstallerDialog::Show(profile_);
 }
 
 void CrostiniInstaller::Install(CrostiniManager::RestartOptions options,
                                 ProgressCallback progress_callback,
                                 ResultCallback result_callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
 
   if (!CanInstall()) {
     LOG(ERROR)
@@ -214,6 +215,7 @@ void CrostiniInstaller::Install(CrostiniManager::RestartOptions options,
   }
 
   restart_options_ = std::move(options);
+  restart_options_.restart_source = RestartSource::kInstaller;
   progress_callback_ = std::move(progress_callback);
   result_callback_ = std::move(result_callback);
 
@@ -223,19 +225,14 @@ void CrostiniInstaller::Install(CrostiniManager::RestartOptions options,
   container_download_percent_ = 0;
   UpdateState(State::INSTALLING);
 
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::MayBlock()},
-      base::BindOnce(&base::SysInfo::AmountOfFreeDiskSpace,
-                     base::FilePath(crostini::kHomeDirectory)),
-      base::BindOnce(&CrostiniInstaller::OnAvailableDiskSpace,
-                     weak_ptr_factory_.GetWeakPtr()));
-
-  // The default value of kCrostiniContainers is set to migrate existing
-  // crostini users who don't have the pref set. If crostini is being installed,
-  // then we know the user must not actually have any containers yet, so we set
-  // this pref to the empty list.
-  profile_->GetPrefs()->Set(crostini::prefs::kCrostiniContainers,
-                            base::Value(base::Value::Type::LIST));
+  // The spaced D-Bus client needs to be called from the ui thread
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE,
+      base::BindOnce(&ash::SpacedClient::GetFreeDiskSpace,
+                     base::Unretained(ash::SpacedClient::Get()),
+                     crostini::kHomeDirectory,
+                     base::BindOnce(&CrostiniInstaller::OnAvailableDiskSpace,
+                                    weak_ptr_factory_.GetWeakPtr())));
 
   // Reset mic permissions, we don't want it to persist across
   // re-installation.
@@ -243,7 +240,7 @@ void CrostiniInstaller::Install(CrostiniManager::RestartOptions options,
 }
 
 void CrostiniInstaller::Cancel(base::OnceClosure callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
 
   if (state_ != State::INSTALLING) {
     LOG(ERROR) << "Tried to cancel in non-cancelable state. state_="
@@ -260,13 +257,15 @@ void CrostiniInstaller::Cancel(base::OnceClosure callback) {
 
   if (installing_state_ == InstallerState::kStart) {
     // We have not called |RestartCrostini()| yet.
-    DCHECK_EQ(restart_id_, CrostiniManager::kUninitializedRestartId);
+    CHECK_EQ(restart_id_, CrostiniManager::kUninitializedRestartId,
+             base::NotFatalUntil::M160);
     // OnAvailableDiskSpace() will take care of |cancel_callback_|.
     UpdateState(State::CANCEL_ABORT_CHECK_DISK);
     return;
   }
 
-  DCHECK_NE(restart_id_, CrostiniManager::kUninitializedRestartId);
+  CHECK_NE(restart_id_, CrostiniManager::kUninitializedRestartId,
+           base::NotFatalUntil::M160);
 
   if (free_disk_space_ != kUninitializedDiskSpace) {
     base::UmaHistogramCounts1M(kCrostiniAvailableDiskCancel,
@@ -275,8 +274,8 @@ void CrostiniInstaller::Cancel(base::OnceClosure callback) {
 
   // Abort the long-running flow, and RestartObserver methods will not be called
   // again until next installation.
-  crostini::CrostiniManager::GetForProfile(profile_)->AbortRestartCrostini(
-      restart_id_, base::DoNothing());
+  auto* crostini_manager = crostini::CrostiniManager::GetForProfile(profile_);
+  crostini_manager->CancelRestartCrostini(restart_id_);
   restart_id_ = CrostiniManager::kUninitializedRestartId;
   RecordSetupResult(InstallStateToCancelledSetupResult(installing_state_));
 
@@ -285,8 +284,7 @@ void CrostiniInstaller::Cancel(base::OnceClosure callback) {
     content::GetUIThreadTaskRunner({})->PostTask(
         FROM_HERE,
         base::BindOnce(&crostini::CrostiniManager::RemoveCrostini,
-                       base::Unretained(
-                           crostini::CrostiniManager::GetForProfile(profile_)),
+                       crostini_manager->GetWeakPtr(),
                        crostini::kCrostiniDefaultVmName,
                        base::BindOnce(&CrostiniInstaller::FinishCleanup,
                                       weak_ptr_factory_.GetWeakPtr())));
@@ -299,7 +297,7 @@ void CrostiniInstaller::Cancel(base::OnceClosure callback) {
 }
 
 void CrostiniInstaller::CancelBeforeStart() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
 
   if (!CanInstall()) {
     LOG(ERROR) << "Not in pre-install state. state_="
@@ -309,151 +307,28 @@ void CrostiniInstaller::CancelBeforeStart() {
   RecordSetupResult(SetupResult::kNotStarted);
 }
 
-void CrostiniInstaller::OnStageStarted(InstallerState stage) {}
-
-void CrostiniInstaller::OnComponentLoaded(CrostiniResult result) {
-  DCHECK_EQ(installing_state_, InstallerState::kInstallImageLoader);
-
-  if (result != CrostiniResult::SUCCESS) {
-    if (content::GetNetworkConnectionTracker()->IsOffline()) {
-      LOG(ERROR) << "Network connection dropped while downloading cros-termina";
-      HandleError(InstallerError::kErrorOffline);
-    } else if (result == CrostiniResult::NEED_UPDATE) {
-      LOG(ERROR) << "Need to update device before installing termina-dlc";
-      HandleError(InstallerError::kNeedUpdate);
-    } else {
-      LOG(ERROR) << "Failed to install the cros-termina component";
-      HandleError(InstallerError::kErrorLoadingTermina);
-    }
+void CrostiniInstaller::OnStageStarted(InstallerState stage) {
+  if (stage == InstallerState::kStart ||
+      stage == InstallerState::kInstallImageLoader) {
+    // Drop these as we manually set our internal state to kInstallImageLoader
+    // upon starting the restart.
     return;
   }
-  UpdateInstallingState(InstallerState::kCreateDiskImage);
+
+  UpdateInstallingState(stage);
 }
 
-void CrostiniInstaller::OnDiskImageCreated(
-    bool success,
-    vm_tools::concierge::DiskImageStatus status,
-    int64_t disk_size_available) {
-  DCHECK_EQ(installing_state_, InstallerState::kCreateDiskImage);
-  if (!success) {
-    HandleError(InstallerError::kErrorCreatingDiskImage);
-    return;
-  }
-  if (status == vm_tools::concierge::DiskImageStatus::DISK_STATUS_EXISTS) {
+void CrostiniInstaller::OnDiskImageCreated(bool success,
+                                           CrostiniResult result,
+                                           int64_t disk_size_available) {
+  if (result == CrostiniResult::CREATE_DISK_IMAGE_ALREADY_EXISTS) {
     require_cleanup_ = false;
   }
-  UpdateInstallingState(InstallerState::kStartTerminaVm);
-}
-
-void CrostiniInstaller::OnVmStarted(bool success) {
-  DCHECK_EQ(installing_state_, InstallerState::kStartTerminaVm);
-  if (!success) {
-    HandleError(InstallerError::kErrorStartingTermina);
-    return;
-  }
-  UpdateInstallingState(InstallerState::kStartLxd);
-}
-
-void CrostiniInstaller::OnLxdStarted(CrostiniResult result) {
-  DCHECK_EQ(installing_state_, InstallerState::kStartLxd);
-  if (result != CrostiniResult::SUCCESS) {
-    HandleError(InstallerError::kErrorStartingLxd);
-    return;
-  }
-  UpdateInstallingState(InstallerState::kCreateContainer);
 }
 
 void CrostiniInstaller::OnContainerDownloading(int32_t download_percent) {
-  DCHECK_EQ(installing_state_, InstallerState::kCreateContainer);
-  container_download_percent_ = base::ClampToRange(download_percent, 0, 100);
+  container_download_percent_ = std::clamp(download_percent, 0, 100);
   RunProgressCallback();
-}
-
-void CrostiniInstaller::OnContainerCreated(CrostiniResult result) {
-  DCHECK_EQ(installing_state_, InstallerState::kCreateContainer);
-  if (result != CrostiniResult::SUCCESS) {
-    if (content::GetNetworkConnectionTracker()->IsOffline()) {
-      LOG(ERROR) << "Network connection dropped while creating container";
-      HandleError(InstallerError::kErrorOffline);
-    } else {
-      HandleError(InstallerError::kErrorCreateContainer);
-    }
-    return;
-  }
-  UpdateInstallingState(InstallerState::kSetupContainer);
-}
-
-void CrostiniInstaller::OnContainerSetup(bool success) {
-  DCHECK_EQ(installing_state_, InstallerState::kSetupContainer);
-
-  if (!success) {
-    if (content::GetNetworkConnectionTracker()->IsOffline()) {
-      LOG(ERROR) << "Network connection dropped while downloading container";
-      HandleError(InstallerError::kErrorOffline);
-    } else {
-      HandleError(InstallerError::kErrorSettingUpContainer);
-    }
-    return;
-  }
-  UpdateInstallingState(InstallerState::kStartContainer);
-  if (ShouldConfigureDefaultContainer(profile_)) {
-    ansible_management_service_observation_.Observe(
-        AnsibleManagementService::GetForProfile(profile_));
-  }
-}
-
-void CrostiniInstaller::OnAnsibleSoftwareConfigurationStarted() {
-  DCHECK_EQ(installing_state_, InstallerState::kStartContainer);
-  UpdateInstallingState(InstallerState::kConfigureContainer);
-}
-
-void CrostiniInstaller::OnAnsibleSoftwareConfigurationFinished(bool success) {
-  DCHECK_EQ(installing_state_, InstallerState::kConfigureContainer);
-  DCHECK(ansible_management_service_observation_.IsObservingSource(
-      AnsibleManagementService::GetForProfile(profile_)));
-  ansible_management_service_observation_.Reset();
-
-  if (!success) {
-    LOG(ERROR) << "Failed to configure container";
-    CrostiniManager::GetForProfile(profile_)->RemoveCrostini(
-        kCrostiniDefaultVmName,
-        base::BindOnce(
-            &CrostiniInstaller::OnCrostiniRemovedAfterConfigurationFailed,
-            weak_ptr_factory_.GetWeakPtr()));
-    return;
-  }
-}
-
-void CrostiniInstaller::OnCrostiniRemovedAfterConfigurationFailed(
-    CrostiniResult result) {
-  if (result != CrostiniResult::SUCCESS) {
-    LOG(ERROR) << "Failed to remove Crostini after failed configuration";
-  }
-
-  if (content::GetNetworkConnectionTracker()->IsOffline()) {
-    LOG(ERROR) << "Network connection dropped while configuring container";
-    HandleError(InstallerError::kErrorOffline);
-  } else {
-    HandleError(InstallerError::kErrorConfiguringContainer);
-  }
-}
-
-void CrostiniInstaller::OnContainerStarted(CrostiniResult result) {
-  if (result == CrostiniResult::CONTAINER_CONFIGURATION_FAILED) {
-    LOG(ERROR) << "Container start failed due to failed configuration";
-    NOTREACHED();
-    return;
-  }
-
-  DCHECK(installing_state_ == InstallerState::kStartContainer ||
-         installing_state_ == InstallerState::kConfigureContainer);
-
-  if (result != CrostiniResult::SUCCESS) {
-    LOG(ERROR) << "Failed to start container with error code: "
-               << static_cast<int>(result);
-    HandleError(InstallerError::kErrorStartingContainer);
-    return;
-  }
 }
 
 bool CrostiniInstaller::CanInstall() {
@@ -462,15 +337,15 @@ bool CrostiniInstaller::CanInstall() {
 }
 
 void CrostiniInstaller::RunProgressCallback() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK_EQ(state_, State::INSTALLING);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK_EQ(state_, State::INSTALLING, base::NotFatalUntil::M160);
 
   base::TimeDelta time_in_state =
       base::Time::Now() - installing_state_start_time_;
 
   double state_start_mark = 0;
   double state_end_mark = 0;
-  auto state_max_time = base::TimeDelta::FromSeconds(1);
+  auto state_max_time = base::Seconds(1);
 
   switch (installing_state_) {
     case InstallerState::kStart:
@@ -480,7 +355,7 @@ void CrostiniInstaller::RunProgressCallback() {
     case InstallerState::kInstallImageLoader:
       state_start_mark = 0.0;
       state_end_mark = 0.20;
-      state_max_time = base::TimeDelta::FromSeconds(30);
+      state_max_time = base::Seconds(30);
       break;
     case InstallerState::kCreateDiskImage:
       state_start_mark = 0.20;
@@ -489,33 +364,32 @@ void CrostiniInstaller::RunProgressCallback() {
     case InstallerState::kStartTerminaVm:
       state_start_mark = 0.22;
       state_end_mark = 0.28;
-      state_max_time = base::TimeDelta::FromSeconds(8);
+      state_max_time = base::Seconds(8);
       break;
     case InstallerState::kStartLxd:
       state_start_mark = 0.28;
       state_end_mark = 0.30;
-      state_max_time = base::TimeDelta::FromSeconds(2);
+      state_max_time = base::Seconds(2);
       break;
     case InstallerState::kCreateContainer:
       state_start_mark = 0.30;
       state_end_mark = 0.72;
-      state_max_time = base::TimeDelta::FromSeconds(180);
+      state_max_time = base::Seconds(180);
       break;
     case InstallerState::kSetupContainer:
       state_start_mark = 0.72;
       state_end_mark = 0.76;
-      state_max_time = base::TimeDelta::FromSeconds(8);
+      state_max_time = base::Seconds(8);
       break;
     case InstallerState::kStartContainer:
       state_start_mark = 0.76;
       state_end_mark = 0.79;
-      state_max_time = base::TimeDelta::FromSeconds(8);
+      state_max_time = base::Seconds(8);
       break;
     case InstallerState::kConfigureContainer:
       state_start_mark = 0.79;
       state_end_mark = 1;
-      // Ansible installation and playbook application.
-      state_max_time = base::TimeDelta::FromSeconds(140 + 300);
+      state_max_time = base::Seconds(140 + 300);
       break;
     default:
       NOTREACHED();
@@ -529,18 +403,14 @@ void CrostiniInstaller::RunProgressCallback() {
     state_fraction =
         0.5 * (state_fraction + 0.01 * container_download_percent_);
   }
-  // TODO(https://crbug.com/1000173): Calculate configure container step
-  // progress based on real progress.
-
-  double progress =
-      state_start_mark + base::ClampToRange(state_fraction, 0.0, 1.0) *
-                             (state_end_mark - state_start_mark);
+  double progress = state_start_mark + std::clamp(state_fraction, 0.0, 1.0) *
+                                           (state_end_mark - state_start_mark);
   progress_callback_.Run(installing_state_, progress);
 }
 
 void CrostiniInstaller::UpdateState(State new_state) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK_NE(state_, new_state);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK_NE(state_, new_state, base::NotFatalUntil::M160);
 
   state_ = new_state;
   if (state_ == State::INSTALLING) {
@@ -551,18 +421,18 @@ void CrostiniInstaller::UpdateState(State new_state) {
                           /*run_callback=*/false);
 
     state_progress_timer_.Start(
-        FROM_HERE, base::TimeDelta::FromMilliseconds(500),
+        FROM_HERE, base::Milliseconds(500),
         base::BindRepeating(&CrostiniInstaller::RunProgressCallback,
                             weak_ptr_factory_.GetWeakPtr()));
   } else {
-    state_progress_timer_.AbandonAndStop();
+    state_progress_timer_.Stop();
   }
 }
 
 void CrostiniInstaller::UpdateInstallingState(
     InstallerState new_installing_state,
     bool run_callback) {
-  DCHECK_EQ(state_, State::INSTALLING);
+  CHECK_EQ(state_, State::INSTALLING, base::NotFatalUntil::M160);
   installing_state_start_time_ = base::Time::Now();
   installing_state_ = new_installing_state;
 
@@ -572,8 +442,8 @@ void CrostiniInstaller::UpdateInstallingState(
 }
 
 void CrostiniInstaller::HandleError(InstallerError error) {
-  DCHECK_EQ(state_, State::INSTALLING);
-  DCHECK_NE(error, InstallerError::kNone);
+  CHECK_EQ(state_, State::INSTALLING, base::NotFatalUntil::M160);
+  CHECK_NE(error, InstallerError::kNone, base::NotFatalUntil::M160);
 
   UMA_HISTOGRAM_LONG_TIMES(kCrostiniTimeToInstallError,
                            base::TimeTicks::Now() - install_start_time_);
@@ -604,16 +474,17 @@ void CrostiniInstaller::RecordSetupResult(SetupResult result) {
 }
 
 void CrostiniInstaller::OnCrostiniRestartFinished(CrostiniResult result) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   restart_id_ = CrostiniManager::kUninitializedRestartId;
 
+  if (result == CrostiniResult::RESTART_ABORTED ||
+      result == CrostiniResult::RESTART_REQUEST_CANCELLED) {
+    return;
+  }
+
   if (result != CrostiniResult::SUCCESS) {
-    if (state_ != State::ERROR && result != CrostiniResult::RESTART_ABORTED) {
-      DCHECK_EQ(state_, State::INSTALLING);
-      LOG(ERROR) << "Failed to restart Crostini with error code: "
-                 << static_cast<int>(result);
-      HandleError(InstallerError::kErrorUnknown);
-    }
+    CHECK_EQ(state_, State::INSTALLING, base::NotFatalUntil::M160);
+    HandleError(CrostiniResultToInstallerError(result, installing_state_));
     return;
   }
 
@@ -637,13 +508,20 @@ void CrostiniInstaller::OnCrostiniRestartFinished(CrostiniResult result) {
 
   if (!skip_launching_terminal_for_testing_) {
     // kInvalidDisplayId will launch terminal on the current active display.
-    crostini::LaunchTerminal(profile_, display::kInvalidDisplayId,
-                             crostini::ContainerId::GetDefault());
+    const guest_os::GuestId* container_id;
+    if (CrostiniManager::GetTerminaFlavor(profile_) ==
+        CrostiniManager::TerminaFlavor::BAGUETTE) {
+      container_id = &crostini::DefaultBaguetteContainerId();
+    } else {
+      container_id = &crostini::DefaultContainerId();
+    }
+    guest_os::LaunchTerminal(profile_, display::kInvalidDisplayId,
+                             *container_id);
   }
 }
 
-void CrostiniInstaller::OnAvailableDiskSpace(int64_t bytes) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+void CrostiniInstaller::OnAvailableDiskSpace(std::optional<int64_t> bytes) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
 
   // |Cancel()| might be called immediately after |Install()|.
   if (state_ == State::CANCEL_ABORT_CHECK_DISK) {
@@ -653,9 +531,12 @@ void CrostiniInstaller::OnAvailableDiskSpace(int64_t bytes) {
     return;
   }
 
-  DCHECK_EQ(installing_state_, InstallerState::kStart);
+  CHECK_EQ(installing_state_, InstallerState::kStart,
+           base::NotFatalUntil::M160);
 
-  free_disk_space_ = bytes;
+  if (bytes.has_value()) {
+    free_disk_space_ = bytes.value();
+  }
   // Don't enforce minimum disk size on dev box or trybots because
   // base::SysInfo::AmountOfFreeDiskSpace returns zero in testing.
   if (base::SysInfo::IsRunningOnChromeOS() &&
@@ -673,11 +554,31 @@ void CrostiniInstaller::OnAvailableDiskSpace(int64_t bytes) {
 
   UpdateInstallingState(InstallerState::kInstallImageLoader);
 
-  // Kick off the Crostini Restart sequence. We will be added as an observer.
+  // In general, we should always try to start the guest that exists on the
+  // device. We should also only try to install baguette if the flag is enabled
+  // (for now).
+  //
+  // After this point, we can assume that the current local state is correct and
+  // no longer need concern ourself with the feature flag value.
+  CrostiniManager::TerminaFlavor termina_flavor =
+      CrostiniManager::GetTerminaFlavor(profile_);
+  bool baguette_enabled =
+      base::FeatureList::IsEnabled(ash::features::kCrostiniContainerless);
+  bool start_baguette =
+      (baguette_enabled &&
+       !(termina_flavor == CrostiniManager::TerminaFlavor::CROSTINI)) ||
+      termina_flavor == CrostiniManager::TerminaFlavor::BAGUETTE;
+  const guest_os::GuestId* container_id;
+  if (start_baguette) {
+    container_id = &crostini::DefaultBaguetteContainerId();
+  } else {
+    container_id = &crostini::DefaultContainerId();
+  }
+
   restart_id_ =
       crostini::CrostiniManager::GetForProfile(profile_)
           ->RestartCrostiniWithOptions(
-              crostini::ContainerId::GetDefault(), std::move(restart_options_),
+              *container_id, std::move(restart_options_),
               base::BindOnce(&CrostiniInstaller::OnCrostiniRestartFinished,
                              weak_ptr_factory_.GetWeakPtr()),
               this);
@@ -685,8 +586,8 @@ void CrostiniInstaller::OnAvailableDiskSpace(int64_t bytes) {
   // |restart_id| will be invalid when |CrostiniManager::RestartCrostini()|
   // decides to fail immediately and calls |OnCrostiniRestartFinished()|, which
   // subsequently set |state_| to |ERROR|.
-  DCHECK_EQ(restart_id_ == CrostiniManager::kUninitializedRestartId,
-            state_ == State::ERROR);
+  CHECK_EQ(restart_id_ == CrostiniManager::kUninitializedRestartId,
+           state_ == State::ERROR, base::NotFatalUntil::M160);
 }
 
 }  // namespace crostini

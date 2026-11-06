@@ -37,28 +37,42 @@ class CORE_EXPORT HTMLFieldSetElement final : public HTMLFormControlElement {
  public:
   explicit HTMLFieldSetElement(Document&);
 
+  ElementType GetElementType() const final {
+    return ElementType::kHTMLFieldSetElement;
+  }
+
   HTMLLegendElement* Legend() const;
   HTMLCollection* elements();
 
+  bool IsDisabledFormControl() const override;
+
+  InsertionNotificationRequest InsertedInto(ContainerNode&) override;
+  void RemovedFrom(ContainerNode&) override;
+
  protected:
-  void DisabledAttributeChanged() override;
+  void DisabledAttributeChanged(DisabledChangedReason) override;
+  void AncestorDisabledStateWasChanged(DisabledChangedReason) override;
+  void DidMoveToNewDocument(Document& old_document) override;
 
  private:
   bool IsEnumeratable() const override { return true; }
-  bool SupportsFocus() const override;
-  LayoutObject* CreateLayoutObject(const ComputedStyle&, LegacyLayout) override;
-  LayoutBox* GetLayoutBoxForScrolling() const override;
+  FocusableState SupportsFocus(UpdateBehavior update_behavior) const override;
+  LayoutObject* CreateLayoutObject(const ComputedStyle&) override;
   void DidRecalcStyle(const StyleRecalcChange change) override;
-  const AtomicString& FormControlType() const override;
+  mojom::blink::FormControlType FormControlType() const override;
+  const AtomicString& FormControlTypeAsString() const override;
   bool RecalcWillValidate() const override { return false; }
   bool MatchesValidityPseudoClasses() const final;
   bool IsValidElement() final;
   void ChildrenChanged(const ChildrenChange&) override;
-  bool AreAuthorShadowsAllowed() const override { return false; }
   bool IsSubmittableElement() override;
   bool AlwaysCreateUserAgentShadowRoot() const override { return false; }
+  bool MatchesEnabledPseudoClass() const final;
+  bool MatchesDisabledPseudoClass() const final;
 
-  Element* InvalidateDescendantDisabledStateAndFindFocusedOne(Element& base);
+  Element* InvalidateDescendantDisabledStateAndFindFocusedOne(
+      Element& base,
+      DisabledChangedReason);
 };
 
 }  // namespace blink

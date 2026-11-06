@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,35 +6,20 @@
 
 #include <utility>
 
-#include "base/containers/contains.h"
-#include "base/macros.h"
+#include "base/dcheck_is_on.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/memory/singleton.h"
+#include "build/build_config.h"
 #include "printing/print_job_constants.h"
-
-namespace {
-
-#if DCHECK_IS_ON()
-void ValidatePreviewData(scoped_refptr<base::RefCountedMemory> data) {
-  // PDFs are generally much bigger. This is just a sanity check on size.
-  DCHECK(data);
-  DCHECK_GE(data->size(), 50U);
-
-  static const char kPdfHeader[] = "%PDF-";
-  const char* content = data->front_as<const char>();
-  DCHECK_EQ(0, memcmp(content, kPdfHeader, strlen(kPdfHeader)));
-}
-#endif
-
-}  // namespace
+#include "printing/printing_utils.h"
 
 // PrintPreviewDataStore stores data for preview workflow and preview printing
 // workflow.
 //
 // NOTE:
-//   This class stores a list of PDFs. The list |index| is zero-based and can
-// be |printing::COMPLETE_PREVIEW_DOCUMENT_INDEX| to represent complete preview
-// document. The PDF stored at |printing::COMPLETE_PREVIEW_DOCUMENT_INDEX| is
+//   This class stores a list of PDFs. The list `index` is zero-based and can
+// be `printing::COMPLETE_PREVIEW_DOCUMENT_INDEX` to represent complete preview
+// document. The PDF stored at `printing::COMPLETE_PREVIEW_DOCUMENT_INDEX` is
 // optimized with font subsetting, compression, etc. PDF's stored at all other
 // indices are unoptimized.
 //
@@ -45,29 +30,34 @@ void ValidatePreviewData(scoped_refptr<base::RefCountedMemory> data) {
 //
 class PrintPreviewDataStore {
  public:
-  PrintPreviewDataStore() {}
-  ~PrintPreviewDataStore() {}
+  PrintPreviewDataStore() = default;
 
-  // Get the preview page for the specified |index|.
-  void GetPreviewDataForIndex(
-      int index,
-      scoped_refptr<base::RefCountedMemory>* data) const {
-    if (IsInvalidIndex(index))
-      return;
+  PrintPreviewDataStore(const PrintPreviewDataStore&) = delete;
+  PrintPreviewDataStore& operator=(const PrintPreviewDataStore&) = delete;
+
+  ~PrintPreviewDataStore() = default;
+
+  // Get the preview page for the specified `index`.
+  scoped_refptr<base::RefCountedMemory> GetPreviewDataForIndex(
+      int index) const {
+    if (IsInvalidIndex(index)) {
+      return nullptr;
+    }
 
     auto it = page_data_map_.find(index);
-    if (it != page_data_map_.end())
-      *data = it->second.get();
+    return it != page_data_map_.end() ? it->second.get() : nullptr;
   }
 
-  // Set/Update the preview data entry for the specified |index|.
+  // Set/Update the preview data entry for the specified `index`.
   void SetPreviewDataForIndex(int index,
                               scoped_refptr<base::RefCountedMemory> data) {
-    if (IsInvalidIndex(index))
+    if (IsInvalidIndex(index)) {
       return;
+    }
 
+    CHECK(data, base::NotFatalUntil::M162);
 #if DCHECK_IS_ON()
-    ValidatePreviewData(data);
+    CHECK(IsValidData(index, *data), base::NotFatalUntil::M162);
 #endif
 
     page_data_map_[index] = std::move(data);
@@ -76,11 +66,17 @@ class PrintPreviewDataStore {
  private:
   // 1:1 relationship between page index and its associated preview data.
   // Key: Page index is zero-based and can be
-  // |printing::COMPLETE_PREVIEW_DOCUMENT_INDEX| to represent complete preview
+  // `printing::COMPLETE_PREVIEW_DOCUMENT_INDEX` to represent complete preview
   // document.
   // Value: Preview data.
   using PreviewPageDataMap =
       std::map<int, scoped_refptr<base::RefCountedMemory>>;
+
+#if DCHECK_IS_ON()
+  bool IsValidData(int index, base::span<const uint8_t> data) const {
+    return printing::LooksLikePdf(data);
+  }
+#endif  // DCHECK_IS_ON()
 
   static bool IsInvalidIndex(int index) {
     return (index != printing::COMPLETE_PREVIEW_DOCUMENT_INDEX &&
@@ -88,8 +84,6 @@ class PrintPreviewDataStore {
   }
 
   PreviewPageDataMap page_data_map_;
-
-  DISALLOW_COPY_AND_ASSIGN(PrintPreviewDataStore);
 };
 
 // static
@@ -97,32 +91,30 @@ PrintPreviewDataService* PrintPreviewDataService::GetInstance() {
   return base::Singleton<PrintPreviewDataService>::get();
 }
 
-PrintPreviewDataService::PrintPreviewDataService() {
-}
+PrintPreviewDataService::PrintPreviewDataService() = default;
 
-PrintPreviewDataService::~PrintPreviewDataService() {
-}
+PrintPreviewDataService::~PrintPreviewDataService() = default;
 
-void PrintPreviewDataService::GetDataEntry(
-    int32_t preview_ui_id,
-    int index,
-    scoped_refptr<base::RefCountedMemory>* data_bytes) const {
-  *data_bytes = nullptr;
+scoped_refptr<base::RefCountedMemory> PrintPreviewDataService::GetDataEntry(
+    const base::UnguessableToken& preview_ui_id,
+    int index) const {
   auto it = data_store_map_.find(preview_ui_id);
-  if (it != data_store_map_.end())
-    it->second->GetPreviewDataForIndex(index, data_bytes);
+  return it != data_store_map_.end() ? it->second->GetPreviewDataForIndex(index)
+                                     : nullptr;
 }
 
 void PrintPreviewDataService::SetDataEntry(
-    int32_t preview_ui_id,
+    const base::UnguessableToken& preview_ui_id,
     int index,
     scoped_refptr<base::RefCountedMemory> data_bytes) {
-  if (!base::Contains(data_store_map_, preview_ui_id))
+  if (!data_store_map_.contains(preview_ui_id)) {
     data_store_map_[preview_ui_id] = std::make_unique<PrintPreviewDataStore>();
+  }
   data_store_map_[preview_ui_id]->SetPreviewDataForIndex(index,
                                                          std::move(data_bytes));
 }
 
-void PrintPreviewDataService::RemoveEntry(int32_t preview_ui_id) {
+void PrintPreviewDataService::RemoveEntry(
+    const base::UnguessableToken& preview_ui_id) {
   data_store_map_.erase(preview_ui_id);
 }

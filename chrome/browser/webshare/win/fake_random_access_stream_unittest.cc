@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,9 @@
 #include <wrl/event.h>
 #include <wrl/implements.h>
 
-#include "base/callback_helpers.h"
+#include "base/compiler_specific.h"
+#include "base/debug/stack_trace.h"
+#include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "chrome/browser/webshare/win/fake_buffer.h"
@@ -30,6 +32,8 @@ using Microsoft::WRL::Make;
 namespace webshare {
 
 TEST(FakeRandomAccessStreamTest, InvalidSeek) {
+  base::debug::OverrideStackTraceOutputForTesting suppress_stacks(
+      base::debug::OverrideStackTraceOutputForTesting::Mode::kSuppressOutput);
   auto stream = Make<FakeRandomAccessStream>();
   ASSERT_HRESULT_SUCCEEDED(stream->Seek(0));
   EXPECT_NONFATAL_FAILURE(ASSERT_HRESULT_FAILED(stream->Seek(1)), "Seek");
@@ -37,6 +41,8 @@ TEST(FakeRandomAccessStreamTest, InvalidSeek) {
 }
 
 TEST(FakeRandomAccessStreamTest, UsageAfterClose) {
+  base::debug::OverrideStackTraceOutputForTesting suppress_stacks(
+      base::debug::OverrideStackTraceOutputForTesting::Mode::kSuppressOutput);
   base::test::SingleThreadTaskEnvironment task_environment;
 
   auto stream = Make<FakeRandomAccessStream>();
@@ -94,6 +100,8 @@ TEST(FakeRandomAccessStreamTest, UsageAfterClose) {
 }
 
 TEST(FakeRandomAccessStreamTest, CompetingAsyncCalls) {
+  base::debug::OverrideStackTraceOutputForTesting suppress_stacks(
+      base::debug::OverrideStackTraceOutputForTesting::Mode::kSuppressOutput);
   base::test::SingleThreadTaskEnvironment task_environment;
 
   auto stream = Make<FakeRandomAccessStream>();
@@ -211,9 +219,9 @@ TEST(FakeRandomAccessStreamTest, BasicReadWrite) {
   byte* raw_buffer;
   ASSERT_HRESULT_SUCCEEDED(buffer->Buffer(&raw_buffer));
   raw_buffer[0] = 'a';
-  raw_buffer[1] = 'b';
-  raw_buffer[2] = 'c';
-  raw_buffer[3] = 'd';
+  UNSAFE_TODO(raw_buffer[1]) = 'b';
+  UNSAFE_TODO(raw_buffer[2]) = 'c';
+  UNSAFE_TODO(raw_buffer[3]) = 'd';
 
   // Write the buffer to the output stream
   {
@@ -239,7 +247,7 @@ TEST(FakeRandomAccessStreamTest, BasicReadWrite) {
 
   // Update the same buffer to now read "ef"
   raw_buffer[0] = 'e';
-  raw_buffer[1] = 'f';
+  UNSAFE_TODO(raw_buffer[1]) = 'f';
   ASSERT_HRESULT_SUCCEEDED(buffer->put_Length(2));
 
   // Write the buffer to the output stream
@@ -314,9 +322,9 @@ TEST(FakeRandomAccessStreamTest, BasicReadWrite) {
   ASSERT_HRESULT_SUCCEEDED(buffer->get_Length(&length));
   ASSERT_EQ(length, 4u);
   ASSERT_EQ(raw_buffer[0], 'a');
-  ASSERT_EQ(raw_buffer[1], 'b');
-  ASSERT_EQ(raw_buffer[2], 'c');
-  ASSERT_EQ(raw_buffer[3], 'd');
+  ASSERT_EQ(UNSAFE_TODO(raw_buffer[1]), 'b');
+  ASSERT_EQ(UNSAFE_TODO(raw_buffer[2]), 'c');
+  ASSERT_EQ(UNSAFE_TODO(raw_buffer[3]), 'd');
 
   // Read the remaining input stream to the buffer
   {
@@ -347,7 +355,7 @@ TEST(FakeRandomAccessStreamTest, BasicReadWrite) {
   ASSERT_HRESULT_SUCCEEDED(buffer->get_Length(&length));
   ASSERT_EQ(length, 2u);
   ASSERT_EQ(raw_buffer[0], 'e');
-  ASSERT_EQ(raw_buffer[1], 'f');
+  ASSERT_EQ(UNSAFE_TODO(raw_buffer[1]), 'f');
 }
 
 }  // namespace webshare

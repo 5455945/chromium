@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,14 +9,14 @@
 #include <functional>
 #include <limits>
 #include <memory>
-#include <queue>
+#include <optional>
 #include <string>
 
-#include "base/atomicops.h"
+#include "base/atomic_sequence_num.h"
 #include "base/base_export.h"
-#include "base/callback_forward.h"
+#include "base/containers/circular_deque.h"
+#include "base/functional/callback_forward.h"
 #include "base/sequence_checker.h"
-#include "base/strings/string_piece.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/common/checked_lock.h"
 #include "base/task/common/task_annotator.h"
@@ -25,6 +25,7 @@
 #include "base/task/thread_pool/task_source.h"
 #include "base/task/thread_pool/tracked_ref.h"
 #include "base/thread_annotations.h"
+#include "base/threading/thread_local.h"
 
 namespace base {
 
@@ -32,11 +33,13 @@ class ConditionVariable;
 
 namespace internal {
 
+class JobTaskSource;
+
 // Determines which tasks are allowed to run.
 enum class CanRunPolicy {
   // All tasks are allowed to run.
   kAll,
-  // Only USER_VISIBLE and USER_BLOCKING tasks are allowed to run.
+  // Only tasks above kBackground are allowed to run.
   kForegroundOnly,
   // No tasks can run.
   kNone,
@@ -94,13 +97,16 @@ class BASE_EXPORT TaskTracker {
   // DelayedTaskManager (if delayed). Returns true if this operation is allowed
   // (the operation should be performed if-and-only-if it is). This method may
   // also modify metadata on |task| if desired.
+  // If this returns false, `task` must be leaked by the caller if deleting it
+  // on the current sequence may invoke sequence-affine code that belongs to
+  // another sequence.
   bool WillPostTask(Task* task, TaskShutdownBehavior shutdown_behavior);
 
   // Informs this TaskTracker that |task| that is about to be pushed to a task
-  // source with |priority|. Returns true if this operation is allowed (the
+  // source with |thread_type|. Returns true if this operation is allowed (the
   // operation should be performed if-and-only-if it is).
-  bool WillPostTaskNow(const Task& task,
-                       TaskPriority priority) WARN_UNUSED_RESULT;
+  [[nodiscard]] bool WillPostTaskNow(const Task& task,
+                                     ThreadType thread_type) const;
 
   // Informs this TaskTracker that |task_source| is about to be queued. Returns
   // a RegisteredTaskSource that should be queued if-and-only-if it evaluates to
@@ -108,8 +114,12 @@ class BASE_EXPORT TaskTracker {
   RegisteredTaskSource RegisterTaskSource(
       scoped_refptr<TaskSource> task_source);
 
-  // Returns true if a task with |priority| can run under to the current policy.
-  bool CanRunPriority(TaskPriority priority) const;
+  // Informs this TaskTracker that |task_source| is about to be queued.
+  void WillEnqueueJob(JobTaskSource* task_source);
+
+  // Returns true if a task with |thread_type| can run under to the current
+  // policy.
+  bool CanRunThreadType(ThreadType thread_type) const;
 
   // Runs the next task in |task_source| unless the current shutdown state
   // prevents that. Then, pops the task from |task_source| (even if it didn't
@@ -132,24 +142,32 @@ class BASE_EXPORT TaskTracker {
     return tracked_ref_factory_.GetTrackedRef();
   }
 
+  void BeginFizzlingBlockShutdownTasks();
+  void EndFizzlingBlockShutdownTasks();
+
   // Returns true if there are task sources that haven't completed their
   // execution (still queued or in progress). If it returns false: the side-
   // effects of all completed tasks are guaranteed to be visible to the caller.
   bool HasIncompleteTaskSourcesForTesting() const;
 
  protected:
-  // Runs and deletes |task|. |task| is deleted in the environment where it
-  // runs. |task_source| is the task source from which |task| was extracted.
-  // |traits| are the traits of |task_source|. An override is expected to call
-  // its parent's implementation but is free to perform extra work before and
-  // after doing so.
+  // Runs and deletes `task`. `task` is deleted in the environment where it
+  // runs. `task_source` is the task source from which `task` was extracted. The
+  // `traits` and `thread_type` related to `task_source` are provided. An
+  // override is expected to call its parent's implementation but is free to
+  // perform extra work before and after doing so.
   virtual void RunTask(Task task,
                        TaskSource* task_source,
-                       const TaskTraits& traits);
+                       const TaskTraits& traits,
+                       ThreadType thread_type);
 
   // Allow a subclass to wait more interactively for any running shutdown tasks
   // before blocking the thread.
   virtual void BeginCompleteShutdown(base::WaitableEvent& shutdown_event);
+
+  // Asserts that FlushForTesting() is allowed to be called. Overridden in tests
+  // in situations where it is not.
+  virtual void AssertFlushForTestingAllowed() {}
 
  private:
   friend class RegisteredTaskSource;
@@ -184,23 +202,42 @@ class BASE_EXPORT TaskTracker {
   // if it reaches zero.
   void DecrementNumIncompleteTaskSources();
 
-  // Calls |flush_callback_for_testing_| if one is available in a lock-safe
-  // manner.
-  void CallFlushCallbackForTesting();
+  // Invokes all |flush_callbacks_for_testing_| if any in a lock-safe manner.
+  void InvokeFlushCallbacksForTesting();
+
+  // Adds ThreadPool related trace event metadata to the event `ctx`. Notably,
+  // records sequence information, as well as priority/execution mode.
+  void EmitThreadPoolTraceEventMetadata(perfetto::EventContext& ctx,
+                                        const TaskTraits& traits,
+                                        TaskSource* task_source,
+                                        const SequenceToken& token);
 
   // Dummy frames to allow identification of shutdown behavior in a stack trace.
-  void RunContinueOnShutdown(Task* task);
-  void RunSkipOnShutdown(Task* task);
-  void RunBlockShutdown(Task* task);
-  void RunTaskWithShutdownBehavior(TaskShutdownBehavior shutdown_behavior,
-                                   Task* task);
+  void RunContinueOnShutdown(Task& task,
+                             const TaskTraits& traits,
+                             TaskSource* task_source,
+                             const SequenceToken& token);
+  void RunSkipOnShutdown(Task& task,
+                         const TaskTraits& traits,
+                         TaskSource* task_source,
+                         const SequenceToken& token);
+  void RunBlockShutdown(Task& task,
+                        const TaskTraits& traits,
+                        TaskSource* task_source,
+                        const SequenceToken& token);
+  void RunTaskWithShutdownBehavior(Task& task,
+                                   const TaskTraits& traits,
+                                   TaskSource* task_source,
+                                   const SequenceToken& token);
+
+  NOT_TAIL_CALLED void RunTaskImpl(Task& task,
+                                   const TaskTraits& traits,
+                                   TaskSource* task_source,
+                                   const SequenceToken& token);
 
   TaskAnnotator task_annotator_;
 
-  // Suffix for histograms recorded by this TaskTracker.
-  const std::string histogram_label_;
-
-  // Indicates whether logging information about TaskPriority::BEST_EFFORT tasks
+  // Indicates whether logging information about ThreadType::kBackground tasks
   // was enabled with a command line switch.
   const bool has_log_best_effort_tasks_switch_;
 
@@ -218,30 +255,34 @@ class BASE_EXPORT TaskTracker {
   // visible when FlushForTesting() returns.
   std::atomic_int num_incomplete_task_sources_{0};
 
-  // Global policy the determines result of CanRunPriority().
+  // Global policy the determines result of CanRunThreadType().
   std::atomic<CanRunPolicy> can_run_policy_;
 
   // Lock associated with |flush_cv_|. Partially synchronizes access to
   // |num_incomplete_task_sources_|. Full synchronization isn't needed
   // because it's atomic, but synchronization is needed to coordinate waking and
   // sleeping at the right time. Fully synchronizes access to
-  // |flush_callback_for_testing_|.
+  // |flush_callbacks_for_testing_|.
   mutable CheckedLock flush_lock_;
 
   // Signaled when |num_incomplete_task_sources_| is or reaches zero or when
   // shutdown completes.
-  const std::unique_ptr<ConditionVariable> flush_cv_;
+  ConditionVariable flush_cv_;
 
-  // Invoked if non-null when |num_incomplete_task_sources_| is zero or when
+  // All invoked, if any, when |num_incomplete_task_sources_| is zero or when
   // shutdown completes.
-  OnceClosure flush_callback_for_testing_ GUARDED_BY(flush_lock_);
+  base::circular_deque<OnceClosure> flush_callbacks_for_testing_
+      GUARDED_BY(flush_lock_);
 
   // Synchronizes access to shutdown related members below.
   mutable CheckedLock shutdown_lock_;
 
   // Event instantiated when shutdown starts and signaled when shutdown
   // completes.
-  std::unique_ptr<WaitableEvent> shutdown_event_ GUARDED_BY(shutdown_lock_);
+  std::optional<WaitableEvent> shutdown_event_ GUARDED_BY(shutdown_lock_);
+
+  // Used to generate unique |PendingTask::sequence_num| when posting tasks.
+  AtomicSequenceNumber sequence_nums_;
 
   // Ensures all state (e.g. dangling cleaned up workers) is coalesced before
   // destroying the TaskTracker (e.g. in test environments).

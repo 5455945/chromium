@@ -1,19 +1,21 @@
-// Copyright (c) 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "components/browsing_data/content/conditional_cache_counting_helper.h"
 
 #include <algorithm>
 #include <memory>
 #include <set>
 #include <string>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
+#include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "components/browsing_data/content/conditional_cache_counting_helper.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/storage_partition.h"
@@ -22,6 +24,7 @@
 #include "net/test/embedded_test_server/default_handlers.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
+#include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 
 using browsing_data::ConditionalCacheCountingHelper;
@@ -61,7 +64,7 @@ class ConditionalCacheCountingHelperBrowserTest : public InProcessBrowserTest {
     DCHECK_CURRENTLY_ON(BrowserThread::UI);
     last_size_ = -1;
     ConditionalCacheCountingHelper::Count(
-        browser()->profile()->GetDefaultStoragePartition(), begin_time,
+        browser()->GetProfile()->GetDefaultStoragePartition(), begin_time,
         end_time,
         base::BindOnce(
             &ConditionalCacheCountingHelperBrowserTest::CountCallback,
@@ -101,7 +104,7 @@ class ConditionalCacheCountingHelperBrowserTest : public InProcessBrowserTest {
                                            TRAFFIC_ANNOTATION_FOR_TESTS);
       simple_loader->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
           browser()
-              ->profile()
+              ->GetProfile()
               ->GetDefaultStoragePartition()
               ->GetURLLoaderFactoryForBrowserProcess()
               .get(),
@@ -119,21 +122,27 @@ class ConditionalCacheCountingHelperBrowserTest : public InProcessBrowserTest {
 
 // Tests that ConditionalCacheCountingHelper only counts those cache entries
 // that match the condition.
-IN_PROC_BROWSER_TEST_F(ConditionalCacheCountingHelperBrowserTest, Count) {
+// TODO(crbug.com/40816226): The test is flaky on Win.
+#if BUILDFLAG(IS_WIN) || (BUILDFLAG(IS_CHROMEOS) && defined(MEMORY_SANITIZER))
+#define MAYBE_Count DISABLED_Count
+#else
+#define MAYBE_Count Count
+#endif
+IN_PROC_BROWSER_TEST_F(ConditionalCacheCountingHelperBrowserTest, MAYBE_Count) {
   // Create 5 entries.
   std::set<std::string> keys1 = {"1", "2", "3", "4", "5"};
 
   base::Time t1 = base::Time::Now();
   CreateCacheEntries(keys1);
 
-  base::PlatformThread::Sleep(base::TimeDelta::FromMilliseconds(kTimeoutMs));
+  base::PlatformThread::Sleep(base::Milliseconds(kTimeoutMs));
   base::Time t2 = base::Time::Now();
-  base::PlatformThread::Sleep(base::TimeDelta::FromMilliseconds(kTimeoutMs));
+  base::PlatformThread::Sleep(base::Milliseconds(kTimeoutMs));
 
   std::set<std::string> keys2 = {"6", "7"};
   CreateCacheEntries(keys2);
 
-  base::PlatformThread::Sleep(base::TimeDelta::FromMilliseconds(kTimeoutMs));
+  base::PlatformThread::Sleep(base::Milliseconds(kTimeoutMs));
   base::Time t3 = base::Time::Now();
 
   // Count all entries.

@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 
 #include <memory>
 
-#include "base/macros.h"
 #include "base/time/time.h"
 
 namespace syncer {
@@ -28,10 +27,13 @@ class BackoffDelayProvider {
   // was passed to command line.
   static std::unique_ptr<BackoffDelayProvider> WithShortInitialRetryOverride();
 
+  BackoffDelayProvider(const BackoffDelayProvider&) = delete;
+  BackoffDelayProvider& operator=(const BackoffDelayProvider&) = delete;
+
   virtual ~BackoffDelayProvider();
 
   // DDOS avoidance function.  Calculates how long we should wait before trying
-  // again after a failed sync attempt, where the last delay was |base_delay|.
+  // again after a failed sync attempt, where the last delay was `base_delay`.
   // TODO(tim): Look at URLRequestThrottlerEntryInterface.
   virtual base::TimeDelta GetDelay(const base::TimeDelta& last_delay);
 
@@ -39,7 +41,7 @@ class BackoffDelayProvider {
   // See possible values and comments in polling_constants.h.
   virtual base::TimeDelta GetInitialDelay(const ModelNeutralState& state) const;
 
-  // Test-only variant that avoids randomness in tests. |jitter_sign| must be -1
+  // Test-only variant that avoids randomness in tests. `jitter_sign` must be -1
   // or 1 and determines whether the jitter in the delay will be positive or
   // negative.
   base::TimeDelta GetDelayForTesting(base::TimeDelta last_delay,
@@ -52,8 +54,6 @@ class BackoffDelayProvider {
  private:
   const base::TimeDelta default_initial_backoff_;
   const base::TimeDelta short_initial_backoff_;
-
-  DISALLOW_COPY_AND_ASSIGN(BackoffDelayProvider);
 };
 
 }  // namespace syncer

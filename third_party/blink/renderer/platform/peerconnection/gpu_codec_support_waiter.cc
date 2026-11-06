@@ -1,47 +1,43 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/platform/peerconnection/gpu_codec_support_waiter.h"
 
+#include "base/functional/bind.h"
+#include "base/location.h"
 #include "base/logging.h"
-#include "base/sequenced_task_runner.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/synchronization/waitable_event.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
-#include "third_party/blink/public/common/features.h"
+#include "base/time/time.h"
+#include "media/video/gpu_video_accelerator_factories.h"
 #include "third_party/blink/renderer/platform/wtf/thread_safe_ref_counted.h"
 
 namespace blink {
 
 namespace {
 
+static constexpr base::TimeDelta kRTCGpuCodecSupportWaiterTimeout =
+    base::Milliseconds(3000);
+
 // Codec support known callback can potentially be called after the waiter is
 // destroyed. RefCountedWaitableEvent is used for the event which callback sets
 // to keep it alive in such case.
 class RefCountedWaitableEvent
     : public base::WaitableEvent,
-      public WTF::ThreadSafeRefCounted<RefCountedWaitableEvent> {
+      public ThreadSafeRefCounted<RefCountedWaitableEvent> {
  public:
   RefCountedWaitableEvent()
       : base::WaitableEvent(base::WaitableEvent::ResetPolicy::MANUAL,
                             base::WaitableEvent::InitialState::NOT_SIGNALED) {}
 
  private:
-  friend class WTF::ThreadSafeRefCounted<RefCountedWaitableEvent>;
+  friend class ThreadSafeRefCounted<RefCountedWaitableEvent>;
   ~RefCountedWaitableEvent() = default;
 };
-
-absl::optional<base::TimeDelta> GetCodecSupportWaitTimeoutMs() {
-  if (!base::FeatureList::IsEnabled(features::kRTCGpuCodecSupportWaiter)) {
-    return absl::nullopt;
-  }
-  int timeout_ms = base::GetFieldTrialParamByFeatureAsInt(
-      features::kRTCGpuCodecSupportWaiter,
-      features::kRTCGpuCodecSupportWaiterTimeoutParam.name,
-      features::kRTCGpuCodecSupportWaiterTimeoutParam.default_value);
-  return base::TimeDelta::FromMilliseconds(timeout_ms);
-}
 
 void OnCodecSupportKnown(
     scoped_refptr<RefCountedWaitableEvent> codec_support_known) {
@@ -53,7 +49,7 @@ void OnCodecSupportKnown(
 GpuCodecSupportWaiter::GpuCodecSupportWaiter(
     media::GpuVideoAcceleratorFactories* gpu_factories)
     : gpu_factories_(gpu_factories),
-      wait_timeout_ms_(GetCodecSupportWaitTimeoutMs()) {}
+      wait_timeout_ms_(kRTCGpuCodecSupportWaiterTimeout) {}
 
 bool GpuCodecSupportWaiter::IsCodecSupportKnown(bool is_encoder) const {
   if (is_encoder) {
@@ -62,10 +58,6 @@ bool GpuCodecSupportWaiter::IsCodecSupportKnown(bool is_encoder) const {
     }
   } else if (gpu_factories_->IsDecoderSupportKnown()) {
     return true;
-  }
-
-  if (!wait_timeout_ms_) {
-    return false;
   }
 
   // crbug.com/1047994. GPU might not be initialized by the time it is queried
@@ -104,7 +96,7 @@ bool GpuCodecSupportWaiter::IsCodecSupportKnown(bool is_encoder) const {
     return false;
   }
 
-  return codec_support_known->TimedWait(*wait_timeout_ms_);
+  return codec_support_known->TimedWait(wait_timeout_ms_);
 }
 
 bool GpuCodecSupportWaiter::IsDecoderSupportKnown() const {

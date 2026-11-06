@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "sql/sandboxed_vfs.h"
+#include "sql/sandboxed_vfs_file.h"
 
 namespace storage {
 
@@ -19,14 +20,17 @@ class SandboxedVfsDelegate : public sql::SandboxedVfs::Delegate {
   ~SandboxedVfsDelegate() override;
 
   // sql::SandboxedVfs::Delegate implementation:
+  sql::SandboxedVfsFile* RetrieveSandboxedVfsFile(
+      base::File file,
+      base::FilePath file_path,
+      sql::SandboxedVfsFileType file_type,
+      sql::SandboxedVfs* vfs) override;
+
   base::File OpenFile(const base::FilePath& file_path,
                       int sqlite_requested_flags) override;
-  absl::optional<sql::SandboxedVfs::PathAccessInfo> GetPathAccess(
+  std::optional<sql::SandboxedVfs::PathAccessInfo> GetPathAccess(
       const base::FilePath& file_path) override;
   int DeleteFile(const base::FilePath& file_path, bool sync_dir) override;
-  bool SetFileLength(const base::FilePath& file_path,
-                     base::File& file,
-                     size_t size) override;
 
  private:
   const std::unique_ptr<FilesystemProxy> filesystem_;

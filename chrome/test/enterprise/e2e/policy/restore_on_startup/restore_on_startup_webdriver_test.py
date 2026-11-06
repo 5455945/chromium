@@ -1,4 +1,4 @@
-# Copyright 2019 The Chromium Authors. All rights reserved.
+# Copyright 2019 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -8,26 +8,32 @@ import time
 from absl import app, flags
 from selenium.webdriver.chrome.options import Options
 
-import test_util
+from test_util import create_chrome_webdriver
+from test_util import shutdown_chrome
 
 FLAGS = flags.FLAGS
 
 flags.DEFINE_enum(
-    'action', None, ['open_urls', 'start_chrome'], """The action to take.
+  'action',
+  None,
+  ['open_urls', 'start_chrome'],
+  """The action to take.
 
     - open_urls: start chrome, then open urls passed through --urls in tabs.
     - start_chrome: start chrome.
-    """)
+    """,
+)
 
 flags.DEFINE_multi_string('urls', None, "List of urls to open")
-flags.DEFINE_string('user_data_dir', None,
-                    "The user data directory used by chrome")
+flags.DEFINE_string(
+  'user_data_dir', None, "The user data directory used by chrome"
+)
 
 
 def _create_driver():
   chrome_options = Options()
   chrome_options.add_argument(r'user-data-dir=%s' % FLAGS.user_data_dir)
-  return test_util.create_chrome_webdriver(chrome_options=chrome_options)
+  return create_chrome_webdriver(chrome_options=chrome_options)
 
 
 def _get_urls(driver):
@@ -54,7 +60,7 @@ def open_urls():
   time.sleep(2)
 
   print(json.dumps(_get_urls(driver)))
-  test_util.shutdown_chrome()
+  shutdown_chrome()
 
 
 def start_chrome():
@@ -69,7 +75,7 @@ def start_chrome():
   time.sleep(10)
 
   print(json.dumps(_get_urls(driver)))
-  test_util.shutdown_chrome()
+  shutdown_chrome()
 
 
 def main(argv):

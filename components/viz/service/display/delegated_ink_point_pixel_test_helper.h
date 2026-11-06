@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "ui/gfx/delegated_ink_metadata.h"
 
 namespace gfx {
@@ -34,12 +35,14 @@ class DelegatedInkPointPixelTestHelper {
 
   explicit DelegatedInkPointPixelTestHelper(DirectRenderer* renderer);
   void SetRendererAndCreateInkRenderer(DirectRenderer* renderer);
+  void DropRenderer();
 
   void CreateAndSendMetadata(const gfx::PointF& point,
                              float diameter,
-                             SkColor color,
+                             SkColor4f color,
                              base::TimeTicks timestamp,
-                             const gfx::RectF& presentation_area);
+                             const gfx::RectF& presentation_area,
+                             const std::uint64_t render_pass_id);
 
   void CreateAndSendMetadataFromLastPoint();
   void CreateAndSendMetadataFromLastPoint(int32_t pointer_id);
@@ -63,8 +66,8 @@ class DelegatedInkPointPixelTestHelper {
  private:
   void CreateInkRenderer();
 
-  DirectRenderer* renderer_ = nullptr;
-  DelegatedInkPointRendererBase* ink_renderer_ = nullptr;
+  raw_ptr<DirectRenderer> renderer_ = nullptr;
+  raw_ptr<DelegatedInkPointRendererBase> ink_renderer_ = nullptr;
   std::unordered_map<int32_t, std::vector<gfx::DelegatedInkPoint>> ink_points_;
   gfx::DelegatedInkMetadata metadata_;
 };

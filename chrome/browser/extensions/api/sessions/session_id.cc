@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,13 @@
 
 #include <stddef.h>
 
-#include "base/memory/ptr_util.h"
+#include <memory>
+#include <string>
+
 #include "base/strings/string_number_conversions.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -31,7 +36,7 @@ std::unique_ptr<SessionId> SessionId::Parse(const std::string& session_id) {
       &id)) {
     return nullptr;
   }
-  return base::WrapUnique(new SessionId(session_tag, id));
+  return std::make_unique<SessionId>(session_tag, id);
 }
 
 SessionId::SessionId(const std::string& session_tag, int id)

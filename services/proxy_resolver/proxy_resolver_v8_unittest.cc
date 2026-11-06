@@ -1,18 +1,29 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/proxy_resolver/proxy_resolver_v8.h"
 
+#include <array>
+#include <memory>
+#include <string>
+#include <vector>
+
 #include "base/compiler_specific.h"
-#include "base/cxx17_backports.h"
 #include "base/files/file_util.h"
+#include "base/notreached.h"
 #include "base/path_service.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/synchronization/lock.h"
+#include "base/synchronization/waitable_event.h"
+#include "base/test/bind.h"
 #include "base/test/task_environment.h"
+#include "base/test/test_future.h"
+#include "base/threading/thread.h"
 #include "net/base/net_errors.h"
+#include "net/base/proxy_string_util.h"
 #include "net/proxy_resolution/pac_file_data.h"
 #include "net/proxy_resolution/proxy_info.h"
 #include "net/test/gtest_util.h"
@@ -36,11 +47,6 @@ class MockJSBindings : public ProxyResolverV8::JSBindings {
       : my_ip_address_count(0),
         my_ip_address_ex_count(0),
         should_terminate(false) {}
-
-  void Alert(const std::u16string& message) override {
-    VLOG(1) << "PAC-alert: " << message;  // Helpful when debugging.
-    alerts.push_back(base::UTF16ToUTF8(message));
-  }
 
   bool ResolveDns(const std::string& host,
                   net::ProxyResolveDnsOperation op,
@@ -72,8 +78,12 @@ class MockJSBindings : public ProxyResolverV8::JSBindings {
       return !dns_resolve_ex_result.empty();
     }
 
-    CHECK(false);
-    return false;
+    NOTREACHED();
+  }
+
+  void Alert(const std::u16string& message) override {
+    VLOG(1) << "PAC-alert: " << message;  // Helpful when debugging.
+    alerts.push_back(base::UTF16ToUTF8(message));
   }
 
   void OnError(int line_number, const std::u16string& message) override {
@@ -109,7 +119,7 @@ class ProxyResolverV8Test : public testing::Test {
   // called more than once, the previous ProxyResolverV8 is deleted.
   int CreateResolver(const char* filename) {
     base::FilePath path;
-    base::PathService::Get(base::DIR_SOURCE_ROOT, &path);
+    base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &path);
     path = path.AppendASCII("services");
     path = path.AppendASCII("proxy_resolver");
     path = path.AppendASCII("test");
@@ -184,8 +194,8 @@ TEST_F(ProxyResolverV8Test, Basic) {
     int result = resolver().GetProxyForURL(GURL("http://query.com/path"),
                                            &proxy_info, bindings());
     EXPECT_THAT(result, IsOk());
-    EXPECT_EQ("http.query.com.path.query.com:80",
-              proxy_info.proxy_server().ToURI());
+    EXPECT_EQ("[http.query.com.path.query.com:80]",
+              proxy_info.proxy_chain().ToDebugString());
   }
   {
     net::ProxyInfo proxy_info;
@@ -194,8 +204,8 @@ TEST_F(ProxyResolverV8Test, Basic) {
     EXPECT_THAT(result, IsOk());
     // Note that FindProxyForURL(url, host) does not expect |host| to contain
     // the port number.
-    EXPECT_EQ("ftp.query.com.90.path.query.com:80",
-              proxy_info.proxy_server().ToURI());
+    EXPECT_EQ("[ftp.query.com.90.path.query.com:80]",
+              proxy_info.proxy_chain().ToDebugString());
 
     EXPECT_EQ(0U, bindings()->alerts.size());
     EXPECT_EQ(0U, bindings()->errors.size());
@@ -206,13 +216,16 @@ TEST_F(ProxyResolverV8Test, BadReturnType) {
   // These are the filenames of PAC scripts which each return a non-string
   // types for FindProxyForURL(). They should all fail with
   // net::ERR_PAC_SCRIPT_FAILED.
-  static const char* const filenames[] = {
-      "return_undefined.js", "return_integer.js", "return_function.js",
+  static const auto filenames = std::to_array<const char*>({
+      "return_undefined.js",
+      "return_integer.js",
+      "return_function.js",
       "return_object.js",
       // TODO(eroman): Should 'null' be considered equivalent to "DIRECT" ?
-      "return_null.js"};
+      "return_null.js",
+  });
 
-  for (size_t i = 0; i < base::size(filenames); ++i) {
+  for (size_t i = 0; i < std::size(filenames); ++i) {
     ASSERT_THAT(CreateResolver(filenames[i]), IsOk());
 
     MockJSBindings bindings;
@@ -265,8 +278,8 @@ TEST_F(ProxyResolverV8Test, SideEffects) {
     int result = resolver().GetProxyForURL(GURL("http://www.google.com"),
                                            &proxy_info, bindings());
     EXPECT_THAT(result, IsOk());
-    EXPECT_EQ(base::StringPrintf("sideffect_%d:80", i),
-              proxy_info.proxy_server().ToURI());
+    EXPECT_EQ(base::StringPrintf("[sideffect_%d:80]", i),
+              proxy_info.proxy_chain().ToDebugString());
   }
 
   // Reload the script -- the javascript environment should be reset, hence
@@ -278,8 +291,8 @@ TEST_F(ProxyResolverV8Test, SideEffects) {
     int result = resolver().GetProxyForURL(GURL("http://www.google.com"),
                                            &proxy_info, bindings());
     EXPECT_THAT(result, IsOk());
-    EXPECT_EQ(base::StringPrintf("sideffect_%d:80", i),
-              proxy_info.proxy_server().ToURI());
+    EXPECT_EQ(base::StringPrintf("[sideffect_%d:80]", i),
+              proxy_info.proxy_chain().ToDebugString());
   }
 }
 
@@ -360,7 +373,7 @@ TEST_F(ProxyResolverV8Test, JavascriptLibrary) {
   EXPECT_THAT(bindings()->errors, IsEmpty());
 
   ASSERT_THAT(result, IsOk());
-  EXPECT_EQ("success:80", proxy_info.proxy_server().ToURI());
+  EXPECT_EQ("[success:80]", proxy_info.proxy_chain().ToDebugString());
 }
 
 // Test marshalling/un-marshalling of values between C++/V8.
@@ -417,7 +430,7 @@ TEST_F(ProxyResolverV8Test, BindingCalledDuringInitialization) {
 
   EXPECT_THAT(result, IsOk());
   EXPECT_FALSE(proxy_info.is_direct());
-  EXPECT_EQ("127.0.0.1:80", proxy_info.proxy_server().ToURI());
+  EXPECT_EQ("[127.0.0.1:80]", proxy_info.proxy_chain().ToDebugString());
 
   // Check that no other bindings were called.
   EXPECT_EQ(0U, bindings()->errors.size());
@@ -440,7 +453,7 @@ TEST_F(ProxyResolverV8Test, EndsWithCommentNoNewline) {
 
   EXPECT_THAT(result, IsOk());
   EXPECT_FALSE(proxy_info.is_direct());
-  EXPECT_EQ("success:80", proxy_info.proxy_server().ToURI());
+  EXPECT_EQ("[success:80]", proxy_info.proxy_chain().ToDebugString());
 }
 
 // Try loading a PAC script that ends with a statement and has no terminal
@@ -456,7 +469,7 @@ TEST_F(ProxyResolverV8Test, EndsWithStatementNoNewline) {
 
   EXPECT_THAT(result, IsOk());
   EXPECT_FALSE(proxy_info.is_direct());
-  EXPECT_EQ("success:3", proxy_info.proxy_server().ToURI());
+  EXPECT_EQ("[success:3]", proxy_info.proxy_chain().ToDebugString());
 }
 
 // Test the return values from myIpAddress(), myIpAddressEx(), dnsResolve(),
@@ -472,7 +485,7 @@ TEST_F(ProxyResolverV8Test, DNSResolutionFailure) {
 
   EXPECT_THAT(result, IsOk());
   EXPECT_FALSE(proxy_info.is_direct());
-  EXPECT_EQ("success:80", proxy_info.proxy_server().ToURI());
+  EXPECT_EQ("[success:80]", proxy_info.proxy_chain().ToDebugString());
 }
 
 TEST_F(ProxyResolverV8Test, DNSResolutionOfInternationDomainName) {
@@ -551,7 +564,186 @@ TEST_F(ProxyResolverV8Test, Terminate) {
 
   EXPECT_THAT(result, IsOk());
   EXPECT_EQ(0u, bindings()->errors.size());
-  EXPECT_EQ("kittens:88", proxy_info.proxy_server().ToURI());
+  EXPECT_EQ("[kittens:88]", proxy_info.proxy_chain().ToDebugString());
+}
+
+TEST_F(ProxyResolverV8Test, NoWebAssembly) {
+  ASSERT_THAT(CreateResolver("no_webassembly.js"), IsOk());
+
+  net::ProxyInfo proxy_info;
+  int result = resolver().GetProxyForURL(GURL("http://www.google.com"),
+                                         &proxy_info, bindings());
+
+  EXPECT_THAT(result, IsOk());
+  EXPECT_TRUE(proxy_info.is_direct());
+
+  EXPECT_EQ(0U, bindings()->alerts.size());
+  EXPECT_EQ(0U, bindings()->errors.size());
+}
+
+// Thread-safe JSBindings where dnsResolve("block") blocks until `unblock` is
+// signalled. Records all calls, so a test can detect calls made on the wrong
+// thread.
+class BlockingJSBindings : public ProxyResolverV8::JSBindings {
+ public:
+  bool ResolveDns(const std::string& host,
+                  net::ProxyResolveDnsOperation op,
+                  std::string* output,
+                  bool* terminate) override {
+    {
+      base::AutoLock lock(lock_);
+      dns_resolves_.push_back(host);
+    }
+    if (host == "block") {
+      blocked_.Signal();
+      unblock_.Wait();
+      return false;
+    }
+    *output = "1.2.3.4";
+    return true;
+  }
+
+  void Alert(const std::u16string& message) override {
+    base::AutoLock lock(lock_);
+    alerts_.push_back(base::UTF16ToUTF8(message));
+  }
+
+  void OnError(int line_number, const std::u16string& message) override {
+    base::AutoLock lock(lock_);
+    errors_.push_back(base::UTF16ToUTF8(message));
+  }
+
+  std::vector<std::string> alerts() {
+    base::AutoLock lock(lock_);
+    return alerts_;
+  }
+  std::vector<std::string> dns_resolves() {
+    base::AutoLock lock(lock_);
+    return dns_resolves_;
+  }
+  std::vector<std::string> errors() {
+    base::AutoLock lock(lock_);
+    return errors_;
+  }
+
+  // Waits until blocked in ResolveDns().
+  void WaitUntilBlocked() { return blocked_.Wait(); }
+
+  // Signals to complete ResolveDns(). WaitUntilBlocked() should be called
+  // first.
+  void Unblock() { return unblock_.Signal(); }
+
+ private:
+  // Signalled when dnsResolve("block") is entered.
+  base::WaitableEvent blocked_;
+  // Signal to make dnsResolve("block") return.
+  base::WaitableEvent unblock_;
+
+  base::Lock lock_;
+  std::vector<std::string> alerts_;
+  std::vector<std::string> dns_resolves_;
+  std::vector<std::string> errors_;
+};
+
+// All ProxyResolverV8s share an isolate and its default MicrotaskQueue, so a
+// promise reaction queued by one resolver's script can be run by another thread
+// that finishes a V8 API call while the first resolver's thread is blocked in a
+// binding. Such a reaction must not be able to reach the first resolver's
+// bindings, which are only safe to use on that resolver's thread.
+TEST(ProxyResolverV8CrossThreadTest, PromiseReactionOnOtherThread) {
+  base::test::TaskEnvironment task_environment;
+
+  // FindProxyForURL("http://queue/") queues a promise reaction, and then blocks
+  // in dnsResolve(), with the isolate unlocked. The reaction saves the result
+  // of a dnsResolve() call, which FindProxyForURL("http://check/") returns.
+  static constexpr char kScriptA[] = R"(
+    var reactionResult = 'not-run';
+    function FindProxyForURL(url, host) {
+      if (host == 'queue') {
+        Promise.resolve().then(function() {
+          alert('reaction');
+          reactionResult = dnsResolve('from-reaction');
+        });
+        dnsResolve('block');
+        return 'DIRECT';
+      }
+      return 'PROXY ' + reactionResult + ':80';
+    }
+  )";
+  static constexpr char kScriptB[] =
+      "function FindProxyForURL(url, host) { return 'DIRECT'; }";
+
+  BlockingJSBindings bindings_a;
+  std::unique_ptr<ProxyResolverV8> resolver_a;
+  // Declared after the objects it uses, so it's stopped before they're
+  // destroyed.
+  base::Thread thread_a("ResolverA");
+  ASSERT_TRUE(thread_a.Start());
+  // Runs `task` on `thread_a`, and returns its result.
+  auto run_on_thread_a = [&](base::OnceCallback<int()> task) {
+    base::test::TestFuture<int> future;
+    thread_a.task_runner()->PostTaskAndReplyWithResult(
+        FROM_HERE, std::move(task), future.GetCallback());
+    return future.Get();
+  };
+
+  ASSERT_THAT(run_on_thread_a(base::BindLambdaForTesting([&] {
+                return ProxyResolverV8::Create(
+                    net::PacFileData::FromUTF8(kScriptA), &bindings_a,
+                    &resolver_a);
+              })),
+              IsOk());
+
+  // Start FindProxyForURL("http://queue/") on `thread_a`, and wait for it to
+  // block in dnsResolve().
+  base::test::TestFuture<int> queue_result;
+  net::ProxyInfo queue_proxy_info;
+  thread_a.task_runner()->PostTaskAndReplyWithResult(
+      FROM_HERE, base::BindLambdaForTesting([&] {
+        return resolver_a->GetProxyForURL(GURL("http://queue/"),
+                                          &queue_proxy_info, &bindings_a);
+      }),
+      queue_result.GetCallback());
+  bindings_a.WaitUntilBlocked();
+
+  // Use another resolver on this thread. Its V8 API calls drain the shared
+  // MicrotaskQueue, running A's reaction on this thread.
+  MockJSBindings bindings_b;
+  std::unique_ptr<ProxyResolverV8> resolver_b;
+  EXPECT_THAT(ProxyResolverV8::Create(net::PacFileData::FromUTF8(kScriptB),
+                                      &bindings_b, &resolver_b),
+              IsOk());
+  if (resolver_b) {
+    net::ProxyInfo proxy_info_b;
+    // This succeeds synchronously because the lock is free, and ProxyResolverV8
+    // calls the simple `kScriptB`, which completes immediately.
+    EXPECT_THAT(resolver_b->GetProxyForURL(GURL("http://b/"), &proxy_info_b,
+                                           &bindings_b),
+                IsOk());
+    EXPECT_TRUE(proxy_info_b.is_direct());
+  }
+
+  bindings_a.Unblock();
+  EXPECT_THAT(queue_result.Get(), IsOk());
+  EXPECT_TRUE(queue_proxy_info.is_direct());
+
+  // The reaction ran, but its dnsResolve() call failed, rather than reaching
+  // `bindings_a`.
+  net::ProxyInfo check_proxy_info;
+  EXPECT_THAT(run_on_thread_a(base::BindLambdaForTesting([&] {
+                return resolver_a->GetProxyForURL(
+                    GURL("http://check/"), &check_proxy_info, &bindings_a);
+              })),
+              IsOk());
+  EXPECT_EQ("[null:80]", check_proxy_info.proxy_chain().ToDebugString());
+
+  // Neither resolver's bindings saw any calls from the reaction.
+  EXPECT_THAT(bindings_a.dns_resolves(), testing::ElementsAre("block"));
+  EXPECT_THAT(bindings_a.alerts(), IsEmpty());
+  EXPECT_THAT(bindings_a.errors(), IsEmpty());
+  EXPECT_THAT(bindings_b.dns_resolves, IsEmpty());
+  EXPECT_THAT(bindings_b.alerts, IsEmpty());
+  EXPECT_THAT(bindings_b.errors, IsEmpty());
 }
 
 }  // namespace

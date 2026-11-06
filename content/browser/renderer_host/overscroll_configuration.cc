@@ -1,19 +1,12 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/public/browser/overscroll_configuration.h"
 
-#include "base/command_line.h"
-#include "base/strings/string_number_conversions.h"
-#include "content/public/common/content_features.h"
-#include "content/public/common/content_switches.h"
+#include "content/common/features.h"
 
 namespace {
-
-bool g_is_ptr_mode_initialized = false;
-content::OverscrollConfig::PullToRefreshMode g_ptr_mode =
-    content::OverscrollConfig::PullToRefreshMode::kDisabled;
 
 bool g_is_touchpad_overscroll_history_navigation_enabled_initialized = false;
 bool g_touchpad_overscroll_history_navigation_enabled = false;
@@ -35,34 +28,6 @@ const float OverscrollConfig::kStartTouchpadThresholdDips = 60.f;
 const float OverscrollConfig::kStartTouchscreenThresholdDips = 50.f;
 
 // static
-OverscrollConfig::PullToRefreshMode OverscrollConfig::GetPullToRefreshMode() {
-  if (g_is_ptr_mode_initialized)
-    return g_ptr_mode;
-
-  const std::string mode =
-      base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
-          switches::kPullToRefresh);
-  if (mode == "1")
-    g_ptr_mode = PullToRefreshMode::kEnabled;
-  else if (mode == "2")
-    g_ptr_mode = PullToRefreshMode::kEnabledTouchschreen;
-  g_is_ptr_mode_initialized = true;
-  return g_ptr_mode;
-}
-
-// static
-void OverscrollConfig::SetPullToRefreshMode(PullToRefreshMode mode) {
-  g_ptr_mode = mode;
-  g_is_ptr_mode_initialized = true;
-}
-
-// static
-void OverscrollConfig::ResetPullToRefreshMode() {
-  g_is_ptr_mode_initialized = false;
-  g_ptr_mode = OverscrollConfig::PullToRefreshMode::kDisabled;
-}
-
-// static
 bool OverscrollConfig::TouchpadOverscrollHistoryNavigationEnabled() {
   if (!g_is_touchpad_overscroll_history_navigation_enabled_initialized) {
     g_is_touchpad_overscroll_history_navigation_enabled_initialized = true;
@@ -82,7 +47,7 @@ void OverscrollConfig::ResetTouchpadOverscrollHistoryNavigationEnabled() {
 // static
 base::TimeDelta
 OverscrollConfig::MaxInertialEventsBeforeOverscrollCancellation() {
-  return base::TimeDelta::FromMilliseconds(
+  return base::Milliseconds(
       g_max_inertial_events_before_overscroll_cancellation_in_ms);
 }
 

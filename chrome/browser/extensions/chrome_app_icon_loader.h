@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,10 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/extensions/chrome_app_icon_delegate.h"
-#include "chrome/browser/ui/app_icon_loader.h"
+#include "components/app_icon_loader/app_icon_loader.h"
 
 class Profile;
 
@@ -30,8 +30,8 @@ class ChromeAppIconLoader : public AppIconLoader, public ChromeAppIconDelegate {
   using ResizeFunction =
       base::RepeatingCallback<void(const gfx::Size&, gfx::ImageSkia*)>;
 
-  // |resize_function| overrides icon resizing behavior if non-null. Otherwise
-  // IconLoader with perform the resizing. In both cases |resource_size_in_dip|
+  // `resize_function` overrides icon resizing behavior if non-null. Otherwise
+  // IconLoader with perform the resizing. In both cases `resource_size_in_dip`
   // is used to pick the correct icon representation from resources.
   ChromeAppIconLoader(Profile* profile,
                       int icon_size_in_dip,
@@ -40,6 +40,10 @@ class ChromeAppIconLoader : public AppIconLoader, public ChromeAppIconDelegate {
   ChromeAppIconLoader(Profile* profile,
                       int icon_size_in_dip,
                       AppIconLoaderDelegate* delegate);
+
+  ChromeAppIconLoader(const ChromeAppIconLoader&) = delete;
+  ChromeAppIconLoader& operator=(const ChromeAppIconLoader&) = delete;
+
   ~ChromeAppIconLoader() override;
 
   // AppIconLoader overrides:
@@ -48,8 +52,10 @@ class ChromeAppIconLoader : public AppIconLoader, public ChromeAppIconDelegate {
   void ClearImage(const std::string& id) override;
   void UpdateImage(const std::string& id) override;
 
-  // Sets |extensions_only_| as true to load icons for extensions only.
+  // Sets `extensions_only_` as true to load icons for extensions only.
   void SetExtensionsOnly();
+
+  Profile* profile() { return profile_; }
 
  private:
   using ExtensionIDToChromeAppIconMap =
@@ -57,6 +63,8 @@ class ChromeAppIconLoader : public AppIconLoader, public ChromeAppIconDelegate {
 
   // ChromeAppIconDelegate:
   void OnIconUpdated(ChromeAppIcon* icon) override;
+
+  const raw_ptr<Profile, DanglingUntriaged> profile_ = nullptr;
 
   // Maps from extension id to ChromeAppIcon.
   ExtensionIDToChromeAppIconMap map_;
@@ -68,8 +76,6 @@ class ChromeAppIconLoader : public AppIconLoader, public ChromeAppIconDelegate {
   // Loads icons for extensions only if true, otherwise loads icon for both
   // Chrome apps and extensions.
   bool extensions_only_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(ChromeAppIconLoader);
 };
 
 }  // namespace extensions

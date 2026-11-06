@@ -1,11 +1,14 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_SPEECH_EXTENSION_API_TTS_ENGINE_EXTENSION_OBSERVER_CHROMEOS_H_
 #define CHROME_BROWSER_SPEECH_EXTENSION_API_TTS_ENGINE_EXTENSION_OBSERVER_CHROMEOS_H_
 
-#include "base/macros.h"
+#include <map>
+#include <vector>
+
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/ash/accessibility/accessibility_manager.h"
 #include "chromeos/services/tts/public/mojom/tts_service.mojom.h"
@@ -24,7 +27,16 @@ class TtsEngineExtensionObserverChromeOS
       public extensions::EventRouter::Observer,
       public extensions::ExtensionRegistryObserver {
  public:
-  static TtsEngineExtensionObserverChromeOS* GetInstance(Profile* profile);
+  // Use
+  // TtsEngineExtensionObserverChromeOSFactory::
+  // BuildServiceInstanceForBrowserContext
+  // instead.
+  explicit TtsEngineExtensionObserverChromeOS(Profile* profile);
+  ~TtsEngineExtensionObserverChromeOS() override;
+  TtsEngineExtensionObserverChromeOS(
+      const TtsEngineExtensionObserverChromeOS&) = delete;
+  TtsEngineExtensionObserverChromeOS& operator=(
+      const TtsEngineExtensionObserverChromeOS&) = delete;
 
   // Gets the currently loaded TTS extension ids.
   const std::set<std::string>& engine_extension_ids() {
@@ -58,9 +70,22 @@ class TtsEngineExtensionObserverChromeOS
   }
 
  private:
-  explicit TtsEngineExtensionObserverChromeOS(Profile* profile);
-  ~TtsEngineExtensionObserverChromeOS() override;
-
+  // Methods used to update the keep alive count for the Google TTS extension
+  // background page or service worker.
+  void UpdateGoogleSpeechSynthesisKeepAliveCountHelper(
+      content::BrowserContext* context,
+      bool increment);
+  void UpdateGoogleSpeechSynthesisKeepAliveCount(
+      content::BrowserContext* context,
+      bool increment);
+  void UpdateGoogleSpeechSynthesisKeepAliveCountOnReload(
+      content::BrowserContext* browser_context);
+  void UpdateGoogleSpeechSynthesisKeepAliveCountManifestV2(
+      content::BrowserContext* context,
+      bool increment);
+  void UpdateGoogleSpeechSynthesisKeepAliveCountManifestV3(
+      content::BrowserContext* context,
+      bool increment);
   bool IsLoadedTtsEngine(const std::string& extension_id);
 
   void OnAccessibilityStatusChanged(
@@ -72,17 +97,20 @@ class TtsEngineExtensionObserverChromeOS
                           extensions::ExtensionRegistryObserver>
       extension_registry_observation_{this};
 
-  Profile* profile_;
+  raw_ptr<Profile> profile_;
 
   std::set<std::string> engine_extension_ids_;
+
+  // TODO(crbug.com/40936639): Change this to a single vector of Uuids.
+  // IDs that are used to decrement the keep alive count of the Google TTS
+  // service workers.
+  std::map<extensions::WorkerId, std::vector<base::Uuid>> keepalive_uuids_;
 
   base::CallbackListSubscription accessibility_status_subscription_;
 
   mojo::Remote<chromeos::tts::mojom::TtsService> tts_service_;
 
   friend class TtsEngineExtensionObserverChromeOSFactory;
-
-  DISALLOW_COPY_AND_ASSIGN(TtsEngineExtensionObserverChromeOS);
 };
 
 #endif  // CHROME_BROWSER_SPEECH_EXTENSION_API_TTS_ENGINE_EXTENSION_OBSERVER_CHROMEOS_H_

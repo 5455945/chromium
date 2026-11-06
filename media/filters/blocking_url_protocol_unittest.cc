@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,8 @@
 
 #include <memory>
 
-#include "base/bind.h"
 #include "base/files/file_path.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "base/synchronization/waitable_event.h"
 #include "media/base/test_data_util.h"
 #include "media/ffmpeg/ffmpeg_common.h"
@@ -22,12 +21,15 @@ namespace media {
 class BlockingUrlProtocolTest : public testing::Test {
  public:
   BlockingUrlProtocolTest()
-      : url_protocol_(new BlockingUrlProtocol(
+      : url_protocol_(std::make_unique<BlockingUrlProtocol>(
             &data_source_,
             base::BindRepeating(&BlockingUrlProtocolTest::OnDataSourceError,
                                 base::Unretained(this)))) {
     CHECK(data_source_.Initialize(GetTestDataFilePath("bear-320x240.webm")));
   }
+
+  BlockingUrlProtocolTest(const BlockingUrlProtocolTest&) = delete;
+  BlockingUrlProtocolTest& operator=(const BlockingUrlProtocolTest&) = delete;
 
   ~BlockingUrlProtocolTest() override { data_source_.Stop(); }
 
@@ -35,9 +37,6 @@ class BlockingUrlProtocolTest : public testing::Test {
 
   FileDataSource data_source_;
   std::unique_ptr<BlockingUrlProtocol> url_protocol_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(BlockingUrlProtocolTest);
 };
 
 
@@ -50,12 +49,12 @@ TEST_F(BlockingUrlProtocolTest, Read) {
 
   // Read 32 bytes from offset zero and verify position.
   uint8_t buffer[32];
-  EXPECT_EQ(32, url_protocol_->Read(32, buffer));
+  EXPECT_EQ(32, url_protocol_->Read(buffer));
   EXPECT_TRUE(url_protocol_->GetPosition(&position));
   EXPECT_EQ(32, position);
 
   // Read an additional 32 bytes and verify position.
-  EXPECT_EQ(32, url_protocol_->Read(32, buffer));
+  EXPECT_EQ(32, url_protocol_->Read(buffer));
   EXPECT_TRUE(url_protocol_->GetPosition(&position));
   EXPECT_EQ(64, position);
 
@@ -63,15 +62,15 @@ TEST_F(BlockingUrlProtocolTest, Read) {
   int64_t size = 0;
   EXPECT_TRUE(url_protocol_->GetSize(&size));
   EXPECT_TRUE(url_protocol_->SetPosition(size - 48));
-  EXPECT_EQ(32, url_protocol_->Read(32, buffer));
+  EXPECT_EQ(32, url_protocol_->Read(buffer));
   EXPECT_TRUE(url_protocol_->GetPosition(&position));
   EXPECT_EQ(size - 16, position);
 
-  EXPECT_EQ(16, url_protocol_->Read(32, buffer));
+  EXPECT_EQ(16, url_protocol_->Read(buffer));
   EXPECT_TRUE(url_protocol_->GetPosition(&position));
   EXPECT_EQ(size, position);
 
-  EXPECT_EQ(AVERROR_EOF, url_protocol_->Read(32, buffer));
+  EXPECT_EQ(AVERROR_EOF, url_protocol_->Read(buffer));
   EXPECT_TRUE(url_protocol_->GetPosition(&position));
   EXPECT_EQ(size, position);
 }
@@ -81,7 +80,7 @@ TEST_F(BlockingUrlProtocolTest, ReadError) {
 
   uint8_t buffer[32];
   EXPECT_CALL(*this, OnDataSourceError());
-  EXPECT_EQ(AVERROR(EIO), url_protocol_->Read(32, buffer));
+  EXPECT_EQ(AVERROR(EIO), url_protocol_->Read(buffer));
 }
 
 TEST_F(BlockingUrlProtocolTest, GetSetPosition) {

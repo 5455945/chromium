@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,30 +7,36 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
 #include "base/strings/string_util.h"
+#include "base/strings/to_string.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/app/chrome_command_ids.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/exclusive_access/exclusive_access_context.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
-#include "chrome/browser/ui/exclusive_access/exclusive_access_test.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/view_ids.h"
+#include "chrome/browser/ui/views/toolbar/webui_test_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "content/public/browser/web_contents_delegate.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_utils.h"
 #include "third_party/blink/public/common/switches.h"
+#include "ui/base/mojom/window_open_disposition.mojom.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/events/keycodes/dom/keycode_converter.h"
 #include "ui/events/keycodes/keyboard_code_conversion.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "url/gurl.h"
 #include "url/url_constants.h"
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 #include "base/mac/mac_util.h"
 #endif
 
@@ -46,7 +52,7 @@ constexpr char kFullscreenKeyboardLockHTML[] =
 // On MacOSX command key is used for most of the shortcuts, so replace it with
 // control to reduce the complexity of comparison of the results.
 void NormalizeMetaKeyForMacOS(std::string* output) {
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   base::ReplaceSubstringsAfterOffset(output, 0, "MetaLeft", "ControlLeft");
 #endif
 }
@@ -70,40 +76,42 @@ bool FullscreenKeyboardBrowserTestBase::IsActiveTabFullscreen() const {
 }
 
 bool FullscreenKeyboardBrowserTestBase::IsInBrowserFullscreen() const {
-  return GetActiveBrowser()
-      ->exclusive_access_manager()
+  return ExclusiveAccessManager::From(GetActiveBrowser())
       ->fullscreen_controller()
       ->IsFullscreenForBrowser();
 }
 
 content::WebContents* FullscreenKeyboardBrowserTestBase::GetActiveWebContents()
     const {
-  return GetActiveBrowser()->tab_strip_model()->GetActiveWebContents();
+  return GetActiveBrowser()->GetTabStripModel()->GetActiveWebContents();
 }
 
 int FullscreenKeyboardBrowserTestBase::GetActiveTabIndex() const {
-  return GetActiveBrowser()->tab_strip_model()->active_index();
+  return GetActiveBrowser()->GetTabStripModel()->active_index();
 }
 
 int FullscreenKeyboardBrowserTestBase::GetTabCount() const {
-  return GetActiveBrowser()->tab_strip_model()->count();
+  return GetActiveBrowser()->GetTabStripModel()->count();
 }
 
 size_t FullscreenKeyboardBrowserTestBase::GetBrowserCount() const {
-  return BrowserList::GetInstance()->size();
+  return GlobalBrowserCollection::GetInstance()->GetSize();
 }
 
-Browser* FullscreenKeyboardBrowserTestBase::GetActiveBrowser() const {
-  return BrowserList::GetInstance()->GetLastActive();
+BrowserWindowInterface* FullscreenKeyboardBrowserTestBase::GetActiveBrowser()
+    const {
+  return GetLastActiveBrowserWindowInterfaceWithAnyProfile();
 }
 
-Browser* FullscreenKeyboardBrowserTestBase::CreateNewBrowserInstance() {
-  Browser* first_instance = GetActiveBrowser();
-  const size_t initial_browser_count = GetBrowserCount();
+BrowserWindowInterface*
+FullscreenKeyboardBrowserTestBase::CreateNewBrowserInstance() {
+  BrowserWindowInterface* const first_instance = GetActiveBrowser();
+  ui_test_utils::BrowserCreatedObserver creation_observer;
   EXPECT_NO_FATAL_FAILURE(SendShortcut(ui::VKEY_N));
-  WaitForBrowserCount(initial_browser_count + 1);
-  Browser* second_instance = GetActiveBrowser();
+  BrowserWindowInterface* const second_instance = creation_observer.Wait();
+  ui_test_utils::WaitForBrowserSetLastActive(second_instance);
   EXPECT_NE(first_instance, second_instance);
+  WaitForInitialWebUIToolbar(second_instance);
 
   return second_instance;
 }
@@ -113,23 +121,27 @@ void FullscreenKeyboardBrowserTestBase::FocusOnLastActiveBrowser() {
 }
 
 void FullscreenKeyboardBrowserTestBase::WaitForBrowserCount(size_t expected) {
-  while (GetBrowserCount() != expected)
+  while (GetBrowserCount() != expected) {
     base::RunLoop().RunUntilIdle();
+  }
 }
 
 void FullscreenKeyboardBrowserTestBase::WaitForTabCount(int expected) {
-  while (GetTabCount() != expected)
+  while (GetTabCount() != expected) {
     base::RunLoop().RunUntilIdle();
+  }
 }
 
 void FullscreenKeyboardBrowserTestBase::WaitForActiveTabIndex(int expected) {
-  while (GetActiveTabIndex() != expected)
+  while (GetActiveTabIndex() != expected) {
     base::RunLoop().RunUntilIdle();
+  }
 }
 
 void FullscreenKeyboardBrowserTestBase::WaitForInactiveTabIndex(int expected) {
-  while (GetActiveTabIndex() == expected)
+  while (GetActiveTabIndex() == expected) {
     base::RunLoop().RunUntilIdle();
+  }
 }
 
 void FullscreenKeyboardBrowserTestBase::StartFullscreenLockPage() {
@@ -138,22 +150,27 @@ void FullscreenKeyboardBrowserTestBase::StartFullscreenLockPage() {
   ASSERT_EQ(0, GetActiveTabIndex());
   ASSERT_EQ(1U, GetBrowserCount());
   // Add a second tab for counting and focus purposes.
-  AddTabAtIndex(1, GURL(url::kAboutBlankURL), ui::PAGE_TRANSITION_LINK);
+  ASSERT_TRUE(
+      AddTabAtIndex(1, GURL(url::kAboutBlankURL), ui::PAGE_TRANSITION_LINK));
   ASSERT_EQ(2, GetTabCount());
   ASSERT_EQ(1U, GetBrowserCount());
 
-  if (!GetEmbeddedTestServer()->Started())
+  if (!GetEmbeddedTestServer()->Started()) {
     ASSERT_TRUE(GetEmbeddedTestServer()->Start());
+  }
   ui_test_utils::NavigateToURLWithDisposition(
       GetActiveBrowser(),
       GetEmbeddedTestServer()->GetURL(kFullscreenKeyboardLockHTML),
-      WindowOpenDisposition::CURRENT_TAB,
+      ui::mojom::WindowOpenDisposition::kCurrentTab,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
+  ASSERT_NO_FATAL_FAILURE(FocusOnLastActiveBrowser());
+  GetActiveWebContents()->Focus();
+  ui_test_utils::FocusView(GetActiveBrowser(), VIEW_ID_TAB_CONTAINER);
 }
 
 void FullscreenKeyboardBrowserTestBase::SendShortcut(ui::KeyboardCode key,
                                                      bool shift /* = false */) {
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   const bool control_modifier = false;
   const bool command_modifier = true;
 #else
@@ -167,12 +184,12 @@ void FullscreenKeyboardBrowserTestBase::SendShortcut(ui::KeyboardCode key,
   expected_result_ += ui::KeycodeConverter::DomCodeToCodeString(
       ui::UsLayoutKeyboardCodeToDomCode(key));
   expected_result_ += " ctrl:";
-  expected_result_ += control_modifier ? "true" : "false";
+  expected_result_ += base::ToString(control_modifier);
   expected_result_ += " shift:";
-  expected_result_ += shift ? "true" : "false";
+  expected_result_ += base::ToString(shift);
   expected_result_ += " alt:false";
   expected_result_ += " meta:";
-  expected_result_ += command_modifier ? "true" : "false";
+  expected_result_ += base::ToString(command_modifier);
   expected_result_ += '\n';
 }
 
@@ -184,13 +201,20 @@ void FullscreenKeyboardBrowserTestBase::SendShiftShortcut(
 void FullscreenKeyboardBrowserTestBase::SendFullscreenShortcutAndWait() {
   // On MacOSX, entering and exiting fullscreen are not synchronous. So we wait
   // for the observer to notice the change of fullscreen state.
-  FullscreenNotificationObserver observer(GetActiveBrowser());
+  bool current = ExclusiveAccessManager::From(GetActiveBrowser())
+                     ->context()
+                     ->IsFullscreen();
+  ui_test_utils::FullscreenWaiter waiter(
+      GetActiveBrowser(), current
+                              ? ui_test_utils::FullscreenWaiter::kNoFullscreen
+                              : ui_test_utils::FullscreenWaiter::Expectation{
+                                    .browser_fullscreen = true});
 // Enter fullscreen.
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   // On MACOSX, Command + Control + F is used.
   ASSERT_TRUE(ui_test_utils::SendKeyPressSync(GetActiveBrowser(), ui::VKEY_F,
                                               true, false, false, true));
-#elif BUILDFLAG(IS_CHROMEOS_ASH)
+#elif BUILDFLAG(IS_CHROMEOS)
   // A dedicated fullscreen key is used on Chrome OS, so send a fullscreen
   // command directly instead, to avoid constructing the key press.
   ASSERT_TRUE(chrome::ExecuteCommand(GetActiveBrowser(), IDC_FULLSCREEN));
@@ -202,20 +226,25 @@ void FullscreenKeyboardBrowserTestBase::SendFullscreenShortcutAndWait() {
 // Mac fullscreen is simulated in tests and is performed synchronously with the
 // keyboard events. As a result, content doesn't actually know it has entered
 // fullscreen. For more details, see ScopedFakeNSWindowFullscreen.
-// TODO(crbug.com/837438): Remove this once ScopedFakeNSWindowFullscreen fires
+// TODO(crbug.com/41385780): Remove this once ScopedFakeNSWindowFullscreen fires
 // OnFullscreenStateChanged.
-#if !defined(OS_MAC)
-  observer.Wait();
+#if !BUILDFLAG(IS_MAC)
+  waiter.Wait();
 #endif
+  GetActiveWebContents()->Focus();
+  ui_test_utils::FocusView(GetActiveBrowser(), VIEW_ID_TAB_CONTAINER);
 }
 
 void FullscreenKeyboardBrowserTestBase::SendJsFullscreenShortcutAndWait() {
-  FullscreenNotificationObserver observer(GetActiveBrowser());
+  ui_test_utils::FullscreenWaiter waiter(GetActiveBrowser(),
+                                         {.tab_fullscreen = true});
   ASSERT_TRUE(ui_test_utils::SendKeyPressSync(GetActiveBrowser(), ui::VKEY_S,
                                               false, false, false, false));
   expected_result_ += "KeyS ctrl:false shift:false alt:false meta:false\n";
-  observer.Wait();
+  waiter.Wait();
   ASSERT_TRUE(IsActiveTabFullscreen());
+  GetActiveWebContents()->Focus();
+  ui_test_utils::FocusView(GetActiveBrowser(), VIEW_ID_TAB_CONTAINER);
 }
 
 void FullscreenKeyboardBrowserTestBase::SendEscape() {
@@ -226,11 +255,14 @@ void FullscreenKeyboardBrowserTestBase::SendEscape() {
 
 void FullscreenKeyboardBrowserTestBase::
     SendEscapeAndWaitForExitingFullscreen() {
-  FullscreenNotificationObserver observer(GetActiveBrowser());
+  ui_test_utils::FullscreenWaiter waiter(GetActiveBrowser(),
+                                         {.tab_fullscreen = false});
   ASSERT_TRUE(ui_test_utils::SendKeyPressSync(
       GetActiveBrowser(), ui::VKEY_ESCAPE, false, false, false, false));
-  observer.Wait();
+  waiter.Wait();
   ASSERT_FALSE(IsActiveTabFullscreen());
+  GetActiveWebContents()->Focus();
+  ui_test_utils::FocusView(GetActiveBrowser(), VIEW_ID_TAB_CONTAINER);
 }
 
 void FullscreenKeyboardBrowserTestBase::SendShortcutsAndExpectPrevented() {
@@ -284,7 +316,7 @@ void FullscreenKeyboardBrowserTestBase::SendShortcutsAndExpectNotPrevented(
             "</script></html>";
         ui_test_utils::NavigateToURLWithDisposition(
             this->GetActiveBrowser(), GURL("data:text/html," + page),
-            WindowOpenDisposition::CURRENT_TAB,
+            ui::mojom::WindowOpenDisposition::kCurrentTab,
             ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
         ASSERT_NO_FATAL_FAILURE(this->SendJsFullscreenShortcutAndWait());
       }
@@ -342,10 +374,13 @@ void FullscreenKeyboardBrowserTestBase::SendShortcutsAndExpectNotPrevented(
 
   ASSERT_NO_FATAL_FAILURE(enter_fullscreen());
 
+  ui_test_utils::BrowserCreatedObserver creation_observer;
   // A new window should be created and focused.
   ASSERT_NO_FATAL_FAILURE(SendShortcut(ui::VKEY_N));
-  WaitForBrowserCount(initial_browser_count + 1);
+  BrowserWindowInterface* new_browser = creation_observer.Wait();
+  ui_test_utils::WaitForBrowserSetLastActive(new_browser);
   ASSERT_EQ(initial_browser_count + 1, GetBrowserCount());
+  WaitForInitialWebUIToolbar(new_browser);
 
   ASSERT_NO_FATAL_FAILURE(enter_fullscreen());
 
@@ -396,10 +431,13 @@ void FullscreenKeyboardBrowserTestBase::VerifyShortcutsAreNotPrevented() {
   WaitForTabCount(initial_tab_count);
   ASSERT_EQ(initial_active_index, GetActiveTabIndex());
 
+  ui_test_utils::BrowserCreatedObserver creation_observer;
   // A new window should be created and focused.
   ASSERT_NO_FATAL_FAILURE(SendShortcut(ui::VKEY_N));
-  WaitForBrowserCount(initial_browser_count + 1);
+  BrowserWindowInterface* new_browser = creation_observer.Wait();
+  ui_test_utils::WaitForBrowserSetLastActive(new_browser);
   ASSERT_EQ(initial_browser_count + 1, GetBrowserCount());
+  WaitForInitialWebUIToolbar(new_browser);
 
   // The newly created window should be closed.
   ASSERT_NO_FATAL_FAILURE(SendShiftShortcut(ui::VKEY_W));
@@ -418,9 +456,9 @@ void FullscreenKeyboardBrowserTestBase::FinishTestAndVerifyResult() {
   EXPECT_TRUE(ui_test_utils::SendKeyPressSync(GetActiveBrowser(), ui::VKEY_X,
                                               false, false, false, false));
   expected_result_ += "KeyX ctrl:false shift:false alt:false meta:false";
-  std::string result;
-  EXPECT_TRUE(content::ExecuteScriptAndExtractString(
-      GetActiveWebContents(), "getKeyEventReport();", &result));
+  std::string result =
+      content::EvalJs(GetActiveWebContents(), "getKeyEventReport();")
+          .ExtractString();
   NormalizeMetaKeyForMacOS(&result);
   NormalizeMetaKeyForMacOS(&expected_result_);
   base::TrimWhitespaceASCII(result, base::TRIM_ALL, &result);
@@ -433,6 +471,7 @@ std::string FullscreenKeyboardBrowserTestBase::GetFullscreenFramePath() {
 
 void FullscreenKeyboardBrowserTestBase::SetUpOnMainThread() {
   ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(GetActiveBrowser()));
+  WaitForInitialWebUIToolbar(GetActiveBrowser());
 }
 
 void FullscreenKeyboardBrowserTestBase::SetUpCommandLine(

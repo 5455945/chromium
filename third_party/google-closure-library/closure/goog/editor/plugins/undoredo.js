@@ -1,16 +1,8 @@
-// Copyright 2005 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 
 /**
@@ -34,6 +26,8 @@ goog.require('goog.events');
 goog.require('goog.events.EventHandler');
 goog.require('goog.log');
 goog.require('goog.object');
+goog.requireType('goog.dom.AbstractRange');
+goog.requireType('goog.events.Event');
 
 
 
@@ -49,6 +43,7 @@ goog.require('goog.object');
  * @extends {goog.editor.Plugin}
  */
 goog.editor.plugins.UndoRedo = function(opt_manager) {
+  'use strict';
   goog.editor.Plugin.call(this);
 
   this.setUndoRedoManager(
@@ -140,6 +135,7 @@ goog.editor.plugins.UndoRedo.SUPPORTED_COMMANDS_ =
  * @param {number} depth Depth of the stack.
  */
 goog.editor.plugins.UndoRedo.prototype.setMaxUndoDepth = function(depth) {
+  'use strict';
   this.undoManager_.setMaxUndoDepth(depth);
 };
 
@@ -150,6 +146,7 @@ goog.editor.plugins.UndoRedo.prototype.setMaxUndoDepth = function(depth) {
  * @param {goog.editor.plugins.UndoRedoManager} manager The undo-redo manager.
  */
 goog.editor.plugins.UndoRedo.prototype.setUndoRedoManager = function(manager) {
+  'use strict';
   if (this.managerStateChangeKey_) {
     goog.events.unlistenByKey(this.managerStateChangeKey_);
   }
@@ -170,6 +167,7 @@ goog.editor.plugins.UndoRedo.prototype.setUndoRedoManager = function(manager) {
  * @override
  */
 goog.editor.plugins.UndoRedo.prototype.isSupportedCommand = function(command) {
+  'use strict';
   return command in goog.editor.plugins.UndoRedo.SUPPORTED_COMMANDS_;
 };
 
@@ -186,6 +184,7 @@ goog.editor.plugins.UndoRedo.prototype.isSupportedCommand = function(command) {
  */
 goog.editor.plugins.UndoRedo.prototype.unregisterFieldObject = function(
     fieldObject) {
+  'use strict';
   this.disable(fieldObject);
   this.setFieldObject(null);
 };
@@ -198,6 +197,7 @@ goog.editor.plugins.UndoRedo.prototype.unregisterFieldObject = function(
  *     focused field for the multi-field plugin case.
  */
 goog.editor.plugins.UndoRedo.prototype.getCurrentFieldObject = function() {
+  'use strict';
   return this.getFieldObject();
 };
 
@@ -209,6 +209,7 @@ goog.editor.plugins.UndoRedo.prototype.getCurrentFieldObject = function() {
  */
 goog.editor.plugins.UndoRedo.prototype.getFieldObjectForHash = function(
     fieldHashCode) {
+  'use strict';
   // With single field undoredo, there's only one Field involved.
   return this.getFieldObject();
 };
@@ -219,12 +220,14 @@ goog.editor.plugins.UndoRedo.prototype.getFieldObjectForHash = function(
  * @return {goog.editor.Field} Target for COMMAND_VALUE_CHANGE events.
  */
 goog.editor.plugins.UndoRedo.prototype.getCurrentEventTarget = function() {
+  'use strict';
   return this.getFieldObject();
 };
 
 
 /** @override */
 goog.editor.plugins.UndoRedo.prototype.enable = function(fieldObject) {
+  'use strict';
   if (this.isEnabled(fieldObject)) {
     return;
   }
@@ -274,6 +277,7 @@ goog.editor.plugins.UndoRedo.prototype.enable = function(fieldObject) {
 
 /** @override */
 goog.editor.plugins.UndoRedo.prototype.disable = function(fieldObject) {
+  'use strict';
   // Process any pending changes so we don't lose any undo-redo states that we
   // want prior to disabling undo-redo.
   fieldObject.clearDelayedChange();
@@ -308,6 +312,7 @@ goog.editor.plugins.UndoRedo.prototype.disable = function(fieldObject) {
 
 /** @override */
 goog.editor.plugins.UndoRedo.prototype.isEnabled = function(fieldObject) {
+  'use strict';
   // All enabled plugins have a eventHandler so reuse that map rather than
   // storing additional enabled state.
   return !!this.eventHandlers_[fieldObject.getHashCode()];
@@ -316,6 +321,7 @@ goog.editor.plugins.UndoRedo.prototype.isEnabled = function(fieldObject) {
 
 /** @override */
 goog.editor.plugins.UndoRedo.prototype.disposeInternal = function() {
+  'use strict';
   goog.editor.plugins.UndoRedo.superClass_.disposeInternal.call(this);
 
   for (var hashcode in this.eventHandlers_) {
@@ -333,6 +339,7 @@ goog.editor.plugins.UndoRedo.prototype.disposeInternal = function() {
 
 /** @override */
 goog.editor.plugins.UndoRedo.prototype.getTrogClassId = function() {
+  'use strict';
   return 'UndoRedo';
 };
 
@@ -340,6 +347,7 @@ goog.editor.plugins.UndoRedo.prototype.getTrogClassId = function() {
 /** @override */
 goog.editor.plugins.UndoRedo.prototype.execCommand = function(
     command, var_args) {
+  'use strict';
   if (command == goog.editor.plugins.UndoRedo.COMMAND.UNDO) {
     this.undoManager_.undo();
   } else if (command == goog.editor.plugins.UndoRedo.COMMAND.REDO) {
@@ -350,6 +358,7 @@ goog.editor.plugins.UndoRedo.prototype.execCommand = function(
 
 /** @override */
 goog.editor.plugins.UndoRedo.prototype.queryCommandValue = function(command) {
+  'use strict';
   var state = null;
   if (command == goog.editor.plugins.UndoRedo.COMMAND.UNDO) {
     state = this.undoManager_.hasUndoState();
@@ -369,6 +378,7 @@ goog.editor.plugins.UndoRedo.prototype.queryCommandValue = function(command) {
  */
 goog.editor.plugins.UndoRedo.prototype.dispatchCommandValueChange_ =
     function() {
+  'use strict';
   var eventTarget = this.getCurrentEventTarget();
   eventTarget.dispatchEvent({
     type: goog.editor.Field.EventType.COMMAND_VALUE_CHANGE,
@@ -390,6 +400,7 @@ goog.editor.plugins.UndoRedo.prototype.dispatchCommandValueChange_ =
  */
 goog.editor.plugins.UndoRedo.prototype.restoreState = function(
     state, content, cursorPosition) {
+  'use strict';
   // Fire any pending changes to get the current field state up to date and
   // then stop listening to changes while doing the undo/redo.
   var fieldObj = this.getFieldObjectForHash(state.fieldHashCode);
@@ -451,9 +462,11 @@ goog.editor.plugins.UndoRedo.prototype.restoreState = function(
 
 /**
  * @override
+ * @suppress {strictMissingProperties} Added to tighten compiler checks
  */
 goog.editor.plugins.UndoRedo.prototype.handleKeyboardShortcut = function(
     e, key, isModifierPressed) {
+  'use strict';
   if (isModifierPressed) {
     var command;
     if (key == 'z') {
@@ -491,6 +504,7 @@ goog.editor.plugins.UndoRedo.prototype.handleKeyboardShortcut = function(
  * Clear the undo/redo stack.
  */
 goog.editor.plugins.UndoRedo.prototype.clearHistory = function() {
+  'use strict';
   // Fire all pending change events, so that they don't come back
   // asynchronously to fill the queue.
   this.getFieldObject().stopChangeEvents(true, true);
@@ -506,6 +520,7 @@ goog.editor.plugins.UndoRedo.prototype.clearHistory = function() {
  */
 goog.editor.plugins.UndoRedo.prototype.refreshCurrentState = function(
     fieldObject) {
+  'use strict';
   if (this.isEnabled(fieldObject)) {
     if (this.currentStates_[fieldObject.getHashCode()]) {
       delete this.currentStates_[fieldObject.getHashCode()];
@@ -521,6 +536,7 @@ goog.editor.plugins.UndoRedo.prototype.refreshCurrentState = function(
  * @private
  */
 goog.editor.plugins.UndoRedo.prototype.handleBeforeChange_ = function(e) {
+  'use strict';
   if (this.inProgressUndo_) {
     // We are in between a previous undo and its delayed change event.
     // Continuing here clobbers the redo stack.
@@ -545,6 +561,7 @@ goog.editor.plugins.UndoRedo.prototype.handleBeforeChange_ = function(e) {
  * @private
  */
 goog.editor.plugins.UndoRedo.prototype.handleDelayedChange_ = function(e) {
+  'use strict';
   // This was undo making a change, don't add it BACK into the history
   if (this.inProgressUndo_) {
     // Must clear this.inProgressUndo_ before dispatching event because the
@@ -566,6 +583,7 @@ goog.editor.plugins.UndoRedo.prototype.handleDelayedChange_ = function(e) {
  * @private
  */
 goog.editor.plugins.UndoRedo.prototype.handleBlur_ = function(e) {
+  'use strict';
   var fieldObj = /** @type {goog.editor.Field} */ (e.target);
   if (fieldObj) {
     fieldObj.clearDelayedChange();
@@ -582,6 +600,7 @@ goog.editor.plugins.UndoRedo.prototype.handleBlur_ = function(e) {
  * @private
  */
 goog.editor.plugins.UndoRedo.prototype.getCursorPosition_ = function(fieldObj) {
+  'use strict';
   var cursorPos = new goog.editor.plugins.UndoRedo.CursorPosition_(fieldObj);
   if (!cursorPos.isValid()) {
     return null;
@@ -597,6 +616,7 @@ goog.editor.plugins.UndoRedo.prototype.getCursorPosition_ = function(fieldObj) {
  */
 goog.editor.plugins.UndoRedo.prototype.updateCurrentState_ = function(
     fieldObj) {
+  'use strict';
   var fieldHashCode = fieldObj.getHashCode();
   // We specifically grab the raw innerHTML of the field here as that's what
   // we would set on the field in the case of an undo/redo operation. There's
@@ -662,6 +682,7 @@ goog.editor.plugins.UndoRedo.prototype.updateCurrentState_ = function(
  */
 goog.editor.plugins.UndoRedo.UndoState_ = function(
     fieldHashCode, content, cursorPosition, restore) {
+  'use strict';
   goog.editor.plugins.UndoRedoState.call(this, true);
 
   /**
@@ -723,6 +744,7 @@ goog.editor.plugins.UndoRedo.UndoState_.prototype.redoCursorPosition_;
  * @return {string}
  */
 goog.editor.plugins.UndoRedo.UndoState_.prototype.getUndoContent = function() {
+  'use strict';
   return this.undoContent_;
 };
 
@@ -732,6 +754,7 @@ goog.editor.plugins.UndoRedo.UndoState_.prototype.getUndoContent = function() {
  * @return {string|undefined}
  */
 goog.editor.plugins.UndoRedo.UndoState_.prototype.getRedoContent = function() {
+  'use strict';
   return this.redoContent_;
 };
 
@@ -741,6 +764,7 @@ goog.editor.plugins.UndoRedo.UndoState_.prototype.getRedoContent = function() {
  * @override
  */
 goog.editor.plugins.UndoRedo.UndoState_.prototype.undo = function() {
+  'use strict';
   this.restore_(this, this.undoContent_, this.undoCursorPosition_);
 };
 
@@ -750,6 +774,7 @@ goog.editor.plugins.UndoRedo.UndoState_.prototype.undo = function() {
  * @override
  */
 goog.editor.plugins.UndoRedo.UndoState_.prototype.redo = function() {
+  'use strict';
   this.restore_(this, this.redoContent_, this.redoCursorPosition_);
 };
 
@@ -764,6 +789,7 @@ goog.editor.plugins.UndoRedo.UndoState_.prototype.redo = function() {
  */
 goog.editor.plugins.UndoRedo.UndoState_.prototype.setUndoState = function(
     content, cursorPosition) {
+  'use strict';
   this.undoContent_ = content;
   this.undoCursorPosition_ = cursorPosition;
 };
@@ -779,6 +805,7 @@ goog.editor.plugins.UndoRedo.UndoState_.prototype.setUndoState = function(
  */
 goog.editor.plugins.UndoRedo.UndoState_.prototype.setRedoState = function(
     content, cursorPosition) {
+  'use strict';
   this.redoContent_ = content;
   this.redoCursorPosition_ = cursorPosition;
 };
@@ -792,8 +819,10 @@ goog.editor.plugins.UndoRedo.UndoState_.prototype.setRedoState = function(
  * @param {goog.editor.plugins.UndoRedoState} rhs The state to compare.
  * @return {boolean} Whether the contents are the same.
  * @override
+ * @suppress {strictMissingProperties} Added to tighten compiler checks
  */
 goog.editor.plugins.UndoRedo.UndoState_.prototype.equals = function(rhs) {
+  'use strict';
   return this.fieldHashCode == rhs.fieldHashCode &&
       this.undoContent_ == rhs.undoContent_ &&
       this.redoContent_ == rhs.redoContent_;
@@ -813,6 +842,7 @@ goog.editor.plugins.UndoRedo.UndoState_.prototype.equals = function(rhs) {
  * @constructor
  */
 goog.editor.plugins.UndoRedo.CursorPosition_ = function(field) {
+  'use strict';
   this.field_ = field;
 
   var win = field.getEditableDomHelper().getWindow();
@@ -836,6 +866,8 @@ goog.editor.plugins.UndoRedo.CursorPosition_ = function(field) {
  */
 goog.editor.plugins.UndoRedo.CursorPosition_.prototype.initW3C_ = function(
     range) {
+  'use strict';
+  /** @suppress {strictMissingProperties} Added to tighten compiler checks */
   this.isValid_ = false;
 
   // TODO: Check if the range is in the field before trying to save it
@@ -858,17 +890,26 @@ goog.editor.plugins.UndoRedo.CursorPosition_.prototype.initW3C_ = function(
 
   // Test range direction.
   if (range.isReversed()) {
+    /** @suppress {strictMissingProperties} Added to tighten compiler checks */
     this.startOffset_ = focus;
+    /** @suppress {strictMissingProperties} Added to tighten compiler checks */
     this.startChildOffset_ = focusOffset;
+    /** @suppress {strictMissingProperties} Added to tighten compiler checks */
     this.endOffset_ = anchor;
+    /** @suppress {strictMissingProperties} Added to tighten compiler checks */
     this.endChildOffset_ = anchorOffset;
   } else {
+    /** @suppress {strictMissingProperties} Added to tighten compiler checks */
     this.startOffset_ = anchor;
+    /** @suppress {strictMissingProperties} Added to tighten compiler checks */
     this.startChildOffset_ = anchorOffset;
+    /** @suppress {strictMissingProperties} Added to tighten compiler checks */
     this.endOffset_ = focus;
+    /** @suppress {strictMissingProperties} Added to tighten compiler checks */
     this.endChildOffset_ = focusOffset;
   }
 
+  /** @suppress {strictMissingProperties} Added to tighten compiler checks */
   this.isValid_ = true;
 };
 
@@ -877,9 +918,12 @@ goog.editor.plugins.UndoRedo.CursorPosition_.prototype.initW3C_ = function(
  * In IE, we just keep track of the text offset (number of characters).
  * @param {goog.dom.AbstractRange?} range The range to save.
  * @private
+ * @suppress {strictMissingProperties} Added to tighten compiler checks
  */
 goog.editor.plugins.UndoRedo.CursorPosition_.prototype.initIE_ = function(
     range) {
+  'use strict';
+  /** @suppress {strictMissingProperties} Added to tighten compiler checks */
   this.isValid_ = false;
 
   if (!range) {
@@ -900,29 +944,36 @@ goog.editor.plugins.UndoRedo.CursorPosition_.prototype.initIE_ = function(
 
   // startMarker is a range from the start of the contentEditable node to the
   // start of the current selection.
+  /** @suppress {strictMissingProperties} Added to tighten compiler checks */
   var startMarker = ieRange.duplicate();
   startMarker.collapse(true);
   startMarker.setEndPoint('StartToStart', contentEditableRange);
+  /** @suppress {strictMissingProperties} Added to tighten compiler checks */
   this.startOffset_ =
       goog.editor.plugins.UndoRedo.CursorPosition_.computeEndOffsetIE_(
           startMarker);
 
   // endMarker is a range from the start of the contentEditable node to the
   // end of the current selection.
+  /** @suppress {strictMissingProperties} Added to tighten compiler checks */
   var endMarker = ieRange.duplicate();
   endMarker.setEndPoint('StartToStart', contentEditableRange);
+  /** @suppress {strictMissingProperties} Added to tighten compiler checks */
   this.endOffset_ =
       goog.editor.plugins.UndoRedo.CursorPosition_.computeEndOffsetIE_(
           endMarker);
 
+  /** @suppress {strictMissingProperties} Added to tighten compiler checks */
   this.isValid_ = true;
 };
 
 
 /**
  * @return {boolean} Whether this object is valid.
+ * @suppress {strictMissingProperties} Added to tighten compiler checks
  */
 goog.editor.plugins.UndoRedo.CursorPosition_.prototype.isValid = function() {
+  'use strict';
   return this.isValid_;
 };
 
@@ -930,8 +981,10 @@ goog.editor.plugins.UndoRedo.CursorPosition_.prototype.isValid = function() {
 /**
  * @return {string} A string representation of this object.
  * @override
+ * @suppress {strictMissingProperties} Added to tighten compiler checks
  */
 goog.editor.plugins.UndoRedo.CursorPosition_.prototype.toString = function() {
+  'use strict';
   if (goog.editor.BrowserFeature.HAS_W3C_RANGES) {
     return 'W3C:' + this.startOffset_.toString() + '\n' +
         this.startChildOffset_ + ':' + this.endOffset_.toString() + '\n' +
@@ -945,6 +998,7 @@ goog.editor.plugins.UndoRedo.CursorPosition_.prototype.toString = function() {
  * Makes the browser's selection match the cursor position.
  */
 goog.editor.plugins.UndoRedo.CursorPosition_.prototype.select = function() {
+  'use strict';
   var range = this.getRange_(this.field_.getElement());
   if (range) {
     if (goog.editor.BrowserFeature.HAS_IE_RANGES) {
@@ -956,16 +1010,20 @@ goog.editor.plugins.UndoRedo.CursorPosition_.prototype.select = function() {
 
 
 /**
- * Get the range that encompases the the cursor position relative to a given
- * base node.
+ * Get the range that encompases the cursor position relative to a given base
+ * node.
  * @param {Element} baseNode The node to get the cursor position relative to.
  * @return {Range|TextRange|null} The browser range for this position.
  * @private
+ * @suppress {strictMissingProperties} Added to tighten compiler checks
  */
 goog.editor.plugins.UndoRedo.CursorPosition_.prototype.getRange_ = function(
     baseNode) {
+  'use strict';
   if (goog.editor.BrowserFeature.HAS_W3C_RANGES) {
+    /** @suppress {strictMissingProperties} Added to tighten compiler checks */
     var startNode = this.startOffset_.findTargetNode(baseNode);
+    /** @suppress {strictMissingProperties} Added to tighten compiler checks */
     var endNode = this.endOffset_.findTargetNode(baseNode);
     if (!startNode || !endNode) {
       return null;
@@ -1000,6 +1058,7 @@ goog.editor.plugins.UndoRedo.CursorPosition_.prototype.getRange_ = function(
  */
 goog.editor.plugins.UndoRedo.CursorPosition_.computeEndOffsetIE_ = function(
     range) {
+  'use strict';
   var testRange = range.duplicate();
 
   // The number of offset characters is a little off depending on

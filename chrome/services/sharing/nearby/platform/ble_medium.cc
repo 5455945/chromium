@@ -1,18 +1,19 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/services/sharing/nearby/platform/ble_medium.h"
 
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
 #include "base/metrics/histogram_functions.h"
 #include "chrome/services/sharing/nearby/platform/bluetooth_device.h"
 
-namespace location {
-namespace nearby {
-namespace chrome {
+namespace nearby::chrome {
 
 namespace {
+// Client name for logging in BLE scanning.
+constexpr char kScanClientName[] = "Nearby Connections";
+
 void LogStartAdvertisingResult(bool success) {
   base::UmaHistogramBoolean(
       "Nearby.Connections.Bluetooth.LEMedium.StartAdvertising.Result", success);
@@ -62,9 +63,10 @@ bool BleMedium::StartAdvertising(
   mojo::PendingRemote<bluetooth::mojom::Advertisement> pending_advertisement;
   bool success = adapter_->RegisterAdvertisement(
       service_uuid,
-      std::vector<uint8_t>(advertisement.data(),
-                           advertisement.data() + advertisement.size()),
-      /*use_scan_data=*/true, &pending_advertisement);
+      std::vector<uint8_t>(
+          advertisement.data(),
+          UNSAFE_TODO(advertisement.data() + advertisement.size())),
+      /*use_scan_data=*/true, /*connectable=*/false, &pending_advertisement);
 
   if (!success || !pending_advertisement.is_valid()) {
     LogStartAdvertisingResult(false);
@@ -119,13 +121,13 @@ bool BleMedium::StartScanning(
 
   // The ID-to-UUID map should always be in sync with the callbacks map, and we
   // assume that the ID-UUID mapping is one-to-one.
-  DCHECK_EQ(base::Contains(discovered_peripheral_callbacks_map_, service_uuid),
-            base::Contains(
-                discovery_service_id_to_fast_advertisement_service_uuid_map_,
-                service_id));
+  DCHECK_EQ(
+      discovered_peripheral_callbacks_map_.contains(service_uuid),
+      discovery_service_id_to_fast_advertisement_service_uuid_map_.contains(
+          service_id));
 
   if (IsScanning() &&
-      base::Contains(discovered_peripheral_callbacks_map_, service_uuid)) {
+      discovered_peripheral_callbacks_map_.contains(service_uuid)) {
     LogStartScanningResult(true);
     return true;
   }
@@ -148,7 +150,8 @@ bool BleMedium::StartScanning(
     }
 
     mojo::PendingRemote<bluetooth::mojom::DiscoverySession> discovery_session;
-    success = adapter_->StartDiscoverySession(&discovery_session);
+    success =
+        adapter_->StartDiscoverySession(kScanClientName, &discovery_session);
 
     if (!success || !discovery_session.is_valid()) {
       adapter_observer_.reset();
@@ -165,7 +168,7 @@ bool BleMedium::StartScanning(
   // A different DiscoveredPeripheralCallback is being passed on each call, so
   // each must be captured and associated with its service UUID.
   discovered_peripheral_callbacks_map_.insert(
-      {service_uuid, discovered_peripheral_callback});
+      {service_uuid, std::move(discovered_peripheral_callback)});
 
   discovery_service_id_to_fast_advertisement_service_uuid_map_.insert(
       {service_id, service_uuid});
@@ -184,7 +187,7 @@ bool BleMedium::StopScanning(const std::string& service_id) {
           service_id);
   if (it !=
       discovery_service_id_to_fast_advertisement_service_uuid_map_.end()) {
-    DCHECK(base::Contains(discovered_peripheral_callbacks_map_, it->second));
+    DCHECK(discovered_peripheral_callbacks_map_.contains(it->second));
     discovered_peripheral_callbacks_map_.erase(it->second);
     discovery_service_id_to_fast_advertisement_service_uuid_map_.erase(it);
     for (auto& uuid_peripheral_pair : discovered_ble_peripherals_map_) {
@@ -285,10 +288,10 @@ void BleMedium::DeviceAdded(bluetooth::mojom::DeviceInfoPtr device) {
   // BlePeripherals are passed by reference to NearbyConnections, if a
   // BlePeripheral already exists with the given address, the reference should
   // not be invalidated, the update functions should be called instead.
-  std::string address = device->address;
-  auto* ble_peripheral = GetDiscoveredBlePeripheral(address);
-  if (ble_peripheral) {
-    ble_peripheral->UpdateDeviceInfo(std::move(device));
+  const std::string address = device->address;
+  auto* existing_ble_peripheral = GetDiscoveredBlePeripheral(address);
+  if (existing_ble_peripheral) {
+    existing_ble_peripheral->UpdateDeviceInfo(std::move(device));
   } else {
     discovered_ble_peripherals_map_.emplace(
         address,
@@ -310,8 +313,9 @@ void BleMedium::DeviceAdded(bluetooth::mojom::DeviceInfoPtr device) {
     if (it == discovered_peripheral_callbacks_map_.end())
       continue;
 
-    // Fetch |ble_peripheral| again because it might have since been invalidated
-    // while we were iterating through IDs.
+    // Fetch the BlePeripheral with the same `address` again because
+    // previously fetched pointers may have been invalidated while iterating
+    // through the IDs.
     auto* ble_peripheral = GetDiscoveredBlePeripheral(address);
     if (!ble_peripheral)
       continue;
@@ -393,6 +397,4 @@ chrome::BlePeripheral* BleMedium::GetDiscoveredBlePeripheral(
   return it == discovered_ble_peripherals_map_.end() ? nullptr : &it->second;
 }
 
-}  // namespace chrome
-}  // namespace nearby
-}  // namespace location
+}  // namespace nearby::chrome

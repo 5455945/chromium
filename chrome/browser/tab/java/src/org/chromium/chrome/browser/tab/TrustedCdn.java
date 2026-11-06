@@ -1,63 +1,67 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.tab;
 
-import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
+import androidx.annotation.VisibleForTesting;
 
-import org.chromium.base.UnownedUserData;
+import org.jni_zero.JniType;
+import org.jni_zero.NativeMethods;
+
 import org.chromium.base.UnownedUserDataKey;
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.NativeMethods;
+import org.chromium.base.UserData;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.components.embedder_support.util.UrlUtilities;
 import org.chromium.components.security_state.ConnectionSecurityLevel;
 import org.chromium.components.security_state.SecurityStateModel;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.base.WindowAndroid;
+import org.chromium.url.GURL;
 
-/**
- * Provides a trusted CDN publisher URL for the current web contents in a Tab.
- */
-public class TrustedCdn extends TabWebContentsUserData {
-    private static final Class<TrustedCdn> USER_DATA_KEY = TrustedCdn.class;
+/** Provides a trusted CDN publisher URL for the current web contents in a Tab. */
+@NullMarked
+public class TrustedCdn implements UserData {
+    @VisibleForTesting public static final Class<TrustedCdn> USER_DATA_KEY = TrustedCdn.class;
 
     private final Tab mTab;
-    private final long mNativeTrustedCdn;
 
     /**
-     * UnownedUserData shared across all tabs to get the publisher url visibility.
-     * This hangs off of an activity via WindowAndroid.
+     * UnownedUserData shared across all tabs to get the publisher url visibility. This hangs off of
+     * an activity via WindowAndroid.
      */
-    public static interface PublisherUrlVisibility extends UnownedUserData {
+    public interface PublisherUrlVisibility {
         /** The key for accessing this object on an {@link UnownedUserDataHost}. */
-        public static final UnownedUserDataKey<PublisherUrlVisibility> KEY =
-                new UnownedUserDataKey<>(PublisherUrlVisibility.class);
+        UnownedUserDataKey<PublisherUrlVisibility> KEY = new UnownedUserDataKey<>();
 
         /**
-         * Get the Activity's {@link PublisherUrlVisibility} from the provided
-         * {@link WindowAndroid}.
+         * Get the Activity's {@link PublisherUrlVisibility} from the provided {@link
+         * WindowAndroid}.
+         *
          * @param window The window to get the validator from.
          * @return The Activity's {@link PublisherUrlVisibility}.
          */
-        public static @Nullable PublisherUrlVisibility from(WindowAndroid window) {
+        static @Nullable PublisherUrlVisibility from(WindowAndroid window) {
             return KEY.retrieveDataFromHost(window.getUnownedUserDataHost());
         }
 
         /**
          * Make this instance of PublisherUrlVisibility available through the activity's window.
+         *
          * @param window A {@link WindowAndroid} to attach to.
          * @param validator The {@link PublisherUrlVisibility} to attach.
          */
-        public static void attach(WindowAndroid window, PublisherUrlVisibility validator) {
+        static void attach(WindowAndroid window, PublisherUrlVisibility validator) {
             KEY.attachToHost(window.getUnownedUserDataHost(), validator);
         }
 
         /**
          * Detach the provided PublisherUrlVisibility from any host it is associated with.
+         *
          * @param validator The {@link PublisherUrlVisibility} to detach.
          */
-        public static void detach(PublisherUrlVisibility validator) {
+        static void detach(PublisherUrlVisibility validator) {
             KEY.detachFromAllHosts(validator);
         }
 
@@ -70,20 +74,30 @@ public class TrustedCdn extends TabWebContentsUserData {
     }
 
     /**
-     * The publisher URL for pages hosted on a trusted CDN, or null otherwise.
+     * @return The publisher URL if the current page is hosted on a trusted CDN, or null otherwise
      */
-    private String mPublisherUrl;
-
-    /**
-     *  @return The publisher URL if the current page is hosted on a trusted CDN, or null otherwise
-     */
-    @Nullable
-    public static String getPublisherUrl(@Nullable Tab tab) {
+    public static @Nullable GURL getPublisherUrl(@Nullable Tab tab) {
         TrustedCdn cdn = get(tab);
         return cdn != null ? cdn.getPublisherUrl() : null;
     }
 
-    static TrustedCdn from(@NonNull Tab tab) {
+    /**
+     * @param tab Tab object currently being shown.
+     * @return The name of the publisher of the content if it can be reliably extracted, or null
+     *         otherwise.
+     */
+    public static @Nullable String getContentPublisher(Tab tab) {
+        if (tab == null) return null;
+
+        GURL publisherUrl = TrustedCdn.getPublisherUrl(tab);
+        if (publisherUrl != null) {
+            return UrlUtilities.extractPublisherFromPublisherUrl(publisherUrl);
+        }
+
+        return null;
+    }
+
+    static TrustedCdn from(Tab tab) {
         TrustedCdn trustedCdn = get(tab);
         if (trustedCdn == null) {
             trustedCdn = tab.getUserDataHost().setUserData(USER_DATA_KEY, new TrustedCdn(tab));
@@ -91,34 +105,20 @@ public class TrustedCdn extends TabWebContentsUserData {
         return trustedCdn;
     }
 
-    private static TrustedCdn get(@Nullable Tab tab) {
+    public static void initForTesting(Tab tab) {
+        from(tab);
+    }
+
+    private static @Nullable TrustedCdn get(@Nullable Tab tab) {
         return tab != null ? tab.getUserDataHost().getUserData(USER_DATA_KEY) : null;
     }
 
     private TrustedCdn(Tab tab) {
-        super(tab);
         mTab = tab;
-        mNativeTrustedCdn = TrustedCdnJni.get().init(TrustedCdn.this);
     }
 
-    @Override
-    public void initWebContents(WebContents webContents) {
-        TrustedCdnJni.get().setWebContents(mNativeTrustedCdn, TrustedCdn.this, webContents);
-    }
-
-    @Override
-    public void cleanupWebContents(WebContents webContents) {
-        TrustedCdnJni.get().resetWebContents(mNativeTrustedCdn, TrustedCdn.this);
-        mPublisherUrl = null;
-    }
-
-    @Override
-    public void destroyInternal() {
-        TrustedCdnJni.get().onDestroyed(mNativeTrustedCdn, TrustedCdn.this);
-    }
-
-    @Nullable
-    private String getPublisherUrl() {
+    @VisibleForTesting
+    public @Nullable GURL getPublisherUrl() {
         WebContents webContents = mTab.getWebContents();
         if (webContents == null) return null;
 
@@ -129,20 +129,15 @@ public class TrustedCdn extends TabWebContentsUserData {
         if (publisherUrlVisibility == null || !publisherUrlVisibility.canShowPublisherUrl(mTab)) {
             return null;
         }
-        int level = SecurityStateModel.getSecurityLevelForWebContents(mTab.getWebContents());
-        return level != ConnectionSecurityLevel.DANGEROUS ? mPublisherUrl : null;
-    }
-
-    @CalledByNative
-    private void setPublisherUrl(@Nullable String url) {
-        mPublisherUrl = url;
+        int level = SecurityStateModel.getSecurityLevelForWebContents(webContents);
+        if (level != ConnectionSecurityLevel.SECURE) return null;
+        GURL publisherUrl = TrustedCdnJni.get().getPublisherUrl(webContents);
+        return publisherUrl.isValid() ? publisherUrl : null;
     }
 
     @NativeMethods
-    interface Natives {
-        long init(TrustedCdn caller);
-        void onDestroyed(long nativeTrustedCdn, TrustedCdn caller);
-        void setWebContents(long nativeTrustedCdn, TrustedCdn caller, WebContents webContents);
-        void resetWebContents(long nativeTrustedCdn, TrustedCdn caller);
+    public interface Natives {
+        @JniType("GURL")
+        GURL getPublisherUrl(@JniType("content::WebContents*") @Nullable WebContents webContents);
     }
 }

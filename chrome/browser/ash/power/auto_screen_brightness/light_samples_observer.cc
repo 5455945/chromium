@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "chrome/browser/ash/power/auto_screen_brightness/utils.h"
 
 namespace ash {
@@ -19,7 +19,7 @@ LightSamplesObserver::LightSamplesObserver(
     : als_reader_(als_reader),
       sensor_device_remote_(std::move(sensor_device_remote)) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(sensor_device_remote_.is_bound());
+  CHECK(sensor_device_remote_.is_bound(), base::NotFatalUntil::M160);
 
   sensor_device_remote_->GetAllChannelIds(
       base::BindOnce(&LightSamplesObserver::GetAllChannelIdsCallback,
@@ -31,12 +31,11 @@ LightSamplesObserver::~LightSamplesObserver() = default;
 void LightSamplesObserver::OnSampleUpdated(
     const base::flat_map<int32_t, int64_t>& sample) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(channel_index_.has_value());
-  DCHECK(als_reader_);
+  CHECK(channel_index_.has_value(), base::NotFatalUntil::M160);
+  CHECK(als_reader_, base::NotFatalUntil::M160);
 
   const auto it = sample.find(channel_index_.value());
   if (it == sample.end()) {
-    LogDataError(DataError::kAlsValue);
     return;
   }
 
@@ -87,21 +86,19 @@ void LightSamplesObserver::OnErrorOccurred(
 
 void LightSamplesObserver::Reset() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(als_reader_);
+  CHECK(als_reader_, base::NotFatalUntil::M160);
 
   LOG(ERROR) << "Resetting LightSamplesObserver";
   receiver_.reset();
   sensor_device_remote_.reset();
-
-  LogDataError(DataError::kMojoSamplesObserver);
 }
 
 void LightSamplesObserver::GetAllChannelIdsCallback(
     const std::vector<std::string>& iio_channel_ids) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(sensor_device_remote_.is_bound());
+  CHECK(sensor_device_remote_.is_bound(), base::NotFatalUntil::M160);
 
-  for (int32_t i = 0; i < iio_channel_ids.size(); ++i) {
+  for (uint32_t i = 0; i < iio_channel_ids.size(); ++i) {
     if (iio_channel_ids[i].compare(chromeos::sensors::mojom::kLightChannel) ==
         0) {
       channel_index_ = i;
@@ -120,7 +117,7 @@ void LightSamplesObserver::GetAllChannelIdsCallback(
 
 void LightSamplesObserver::StartReading() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(sensor_device_remote_.is_bound());
+  CHECK(sensor_device_remote_.is_bound(), base::NotFatalUntil::M160);
 
   sensor_device_remote_->SetTimeout(0);
   SetFrequency();
@@ -171,7 +168,7 @@ void LightSamplesObserver::SetFrequencyCallback(double result_frequency) {
 
 void LightSamplesObserver::SetChannelsEnabled() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(channel_index_.has_value());
+  CHECK(channel_index_.has_value(), base::NotFatalUntil::M160);
 
   sensor_device_remote_->SetChannelsEnabled(
       std::vector<int32_t>{channel_index_.value()},

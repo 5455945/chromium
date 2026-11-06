@@ -1,5 +1,5 @@
-#!/usr/bin/env python
-# Copyright 2014 The Chromium Authors. All rights reserved.
+#!/usr/bin/env python3
+# Copyright 2014 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -195,43 +195,67 @@ The bytes in the generated array has the following meaning:
 import argparse
 import sys
 
+from typing import (
+  Any,
+  Dict,
+  FrozenSet,
+  Iterable,
+  List,
+  MutableSequence,
+  Sequence,
+  Tuple,
+  Union,
+)
+
+# Use of Any below is because mypy doesn't support recursive types.
+SinkNode = Union[None, None]  # weird hack to get around lack of TypeAlias.
+InteriorNode = Tuple[str, List[Any]]
+SourceNode = List[Any]
+
+NonSinkNode = Union[InteriorNode, SourceNode]
+Node = Union[SinkNode, InteriorNode, SourceNode]
+DAFSA = List[Node]
+
+
 class InputError(Exception):
   """Exception raised for errors in the input file."""
 
 
-def to_dafsa(words):
-  """Generates a DAFSA from a word list and returns the source node.
+def to_dafsa(words: Iterable[str]) -> DAFSA:
+  """Generates a DAFSA from a word list and returns the source nodes.
 
   Each word is split into characters so that each character is represented by
   a unique node. It is assumed the word list is not empty.
   """
   if not words:
     raise InputError('The domain list must not be empty')
-  def ToNodes(word):
+
+  def ToNodes(word: str) -> Node:
     """Split words into characters"""
     if not 0x1F < ord(word[0]) < 0x80:
       raise InputError('Domain names must be printable 7-bit ASCII')
     if len(word) == 1:
       return chr(ord(word[0]) & 0x0F), [None]
     return word[0], [ToNodes(word[1:])]
+
   return [ToNodes(word) for word in words]
 
 
-def to_words(node):
+def to_words(node: Node) -> Iterable[str]:
   """Generates a word list from all paths starting from an internal node."""
   if not node:
     return ['']
   return [(node[0] + word) for child in node[1] for word in to_words(child)]
 
 
-def reverse(dafsa):
+def reverse(dafsa: DAFSA) -> DAFSA:
   """Generates a new DAFSA that is reversed, so that the old sink node becomes
   the new source node.
   """
-  sink = []
-  nodemap = {}
+  sink: SourceNode = []
+  nodemap: Dict[int, InteriorNode] = {}
 
-  def dfs(node, parent):
+  def dfs(node: Node, parent: Node) -> None:
     """Creates reverse nodes.
 
     A new reverse node will be created for each old node. The new node will
@@ -251,28 +275,33 @@ def reverse(dafsa):
   return sink
 
 
-def join_labels(dafsa):
+def join_labels(dafsa: DAFSA) -> DAFSA:
   """Generates a new DAFSA where internal nodes are merged if there is a one to
   one connection.
   """
-  parentcount = { id(None): 2 }
-  nodemap = { id(None): None }
+  parentcount: Dict[int, int] = {id(None): 2}
+  nodemap: Dict[int, Node] = {id(None): None}
 
-  def count_parents(node):
+  def count_parents(node: Node) -> None:
     """Count incoming references"""
     if id(node) in parentcount:
       parentcount[id(node)] += 1
     else:
+      assert node is not None  # parentcount statically contains `id(None)`
       parentcount[id(node)] = 1
       for child in node[1]:
         count_parents(child)
 
-  def join(node):
+  def join(node: Node) -> Node:
     """Create new nodes"""
     if id(node) not in nodemap:
+      assert node is not None  # nodemap statically contains `id(None)`
       children = [join(child) for child in node[1]]
       if len(children) == 1 and parentcount[id(node[1][0])] == 1:
         child = children[0]
+        # parentcount statically maps `id(None)` to 2, so this child cannot be
+        # the sink.
+        assert child is not None
         nodemap[id(node)] = (node[0] + child[0], child[1])
       else:
         nodemap[id(node)] = (node[0], children)
@@ -283,29 +312,33 @@ def join_labels(dafsa):
   return [join(node) for node in dafsa]
 
 
-def join_suffixes(dafsa):
+def join_suffixes(dafsa: DAFSA) -> DAFSA:
   """Generates a new DAFSA where nodes that represent the same word lists
   towards the sink are merged.
   """
-  nodemap = { frozenset(('',)): None }
+  nodemap: Dict[FrozenSet[str], Node] = {frozenset(('',)): None}
 
-  def join(node):
-    """Returns a macthing node. A new node is created if no matching node
+  def join(node: Node) -> Node:
+    """Returns a matching node. A new node is created if no matching node
     exists. The graph is accessed in dfs order.
     """
     suffixes = frozenset(to_words(node))
     if suffixes not in nodemap:
+      # The only set of suffixes for the sink is {''}, which is statically
+      # contained in nodemap.
+      assert node is not None
       nodemap[suffixes] = (node[0], [join(child) for child in node[1]])
     return nodemap[suffixes]
 
   return [join(node) for node in dafsa]
 
 
-def top_sort(dafsa):
+def top_sort(dafsa: DAFSA) -> Sequence[NonSinkNode]:
   """Generates list of nodes in topological sort order."""
-  incoming = {}
+  # `incoming` contains the in-degree of every node except the sink.
+  incoming: Dict[int, int] = {}
 
-  def count_incoming(node):
+  def count_incoming(node: Node) -> None:
     """Counts incoming references."""
     if node:
       if id(node) not in incoming:
@@ -319,10 +352,13 @@ def top_sort(dafsa):
     count_incoming(node)
 
   for node in dafsa:
-    incoming[id(node)] -= 1
+    if node:
+      incoming[id(node)] -= 1
 
-  waiting = [node for node in dafsa if incoming[id(node)] == 0]
-  nodes = []
+  waiting: List[NonSinkNode] = [
+    node for node in dafsa if node and incoming[id(node)] == 0
+  ]
+  nodes: List[NonSinkNode] = []
 
   while waiting:
     node = waiting.pop()
@@ -336,7 +372,9 @@ def top_sort(dafsa):
   return nodes
 
 
-def encode_links(children, offsets, current):
+def encode_links(
+  children: Sequence[Node], offsets: Dict[int, int], current: int
+) -> Iterable[int]:
   """Encodes a list of children as one, two or three byte offsets."""
   if not children[0]:
     # This is an <end_label> node and no links follow such nodes
@@ -344,10 +382,10 @@ def encode_links(children, offsets, current):
     return []
   guess = 3 * len(children)
   assert children
-  children = sorted(children, key = lambda x: -offsets[id(x)])
+  children = sorted(children, key=lambda x: -offsets[id(x)])
   while True:
     offset = current + guess
-    buf = []
+    buf: List[int] = []
     for child in children:
       last = len(buf)
       distance = offset - offsets[id(child)]
@@ -372,12 +410,12 @@ def encode_links(children, offsets, current):
       break
     guess = len(buf)
   # Set most significant bit to mark end of links in this node.
-  buf[last] |= (1 << 7)
+  buf[last] |= 1 << 7
   buf.reverse()
   return buf
 
 
-def encode_prefix(label):
+def encode_prefix(label: str) -> MutableSequence[int]:
   """Encodes a node label as a list of bytes without a trailing high byte.
 
   This method encodes a node if there is exactly one child  and the
@@ -388,23 +426,25 @@ def encode_prefix(label):
   return [ord(c) for c in reversed(label)]
 
 
-def encode_label(label):
-  """Encodes a node label as a list of bytes with a trailing high byte >0x80.
-  """
+def encode_label(label: str) -> Iterable[int]:
+  """Encodes a node label as a list of bytes with a trailing high byte >0x80."""
   buf = encode_prefix(label)
   # Set most significant bit to mark end of label in this node.
-  buf[0] |= (1 << 7)
+  buf[0] |= 1 << 7
   return buf
 
 
-def encode(dafsa):
+def encode(dafsa: DAFSA) -> Sequence[int]:
   """Encodes a DAFSA to a list of bytes"""
-  output = []
-  offsets = {}
+  output: List[int] = []
+  offsets: Dict[int, int] = {}
 
   for node in reversed(top_sort(dafsa)):
-    if (len(node[1]) == 1 and node[1][0] and
-        (offsets[id(node[1][0])] == len(output))):
+    if (
+      len(node[1]) == 1
+      and node[1][0]
+      and (offsets[id(node[1][0])] == len(output))
+    ):
       output.extend(encode_prefix(node[0]))
     else:
       output.extend(encode_links(node[1], offsets, len(output)))
@@ -416,30 +456,33 @@ def encode(dafsa):
   return output
 
 
-def to_cxx(data):
+def to_cxx(data: Sequence[int], namespace: str) -> str:
   """Generates C++ code from a list of encoded bytes."""
   text = '/* This file is generated. DO NOT EDIT!\n\n'
   text += 'The byte array encodes effective tld names. See make_dafsa.py for'
   text += ' documentation.'
   text += '*/\n\n'
+  text += f"namespace {namespace} {{\n"
   text += 'const unsigned char kDafsa[%s] = {\n' % len(data)
   for i in range(0, len(data), 12):
     text += '  '
-    text += ', '.join('0x%02x' % byte for byte in data[i:i + 12])
+    text += ', '.join('0x%02x' % byte for byte in data[i : i + 12])
     text += ',\n'
   text += '};\n'
+  text += f"}}  // namespace {namespace}\n"
+
   return text
 
 
-def words_to_cxx(words):
+def words_to_cxx(words: Iterable[str], namespace: str) -> str:
   """Generates C++ code from a word list"""
   dafsa = to_dafsa(words)
   for fun in (reverse, join_suffixes, reverse, join_suffixes, join_labels):
     dafsa = fun(dafsa)
-  return to_cxx(encode(dafsa))
+  return to_cxx(encode(dafsa), namespace)
 
 
-def parse_gperf(infile, reverse):
+def parse_gperf(infile: Iterable[str], reverse: bool) -> Iterable[str]:
   """Parses gperf file and extract strings and return code"""
   lines = [line.strip() for line in infile]
   # Extract strings after the first '%%' and before the second '%%'.
@@ -452,24 +495,36 @@ def parse_gperf(infile, reverse):
     # Technically the DAFSA format can support return values in the range
     # [0-31], but only the first three bits have any defined meaning.
     if not line.endswith(('0', '1', '2', '3', '4', '5', '6', '7')):
-      raise InputError('Expected value to be in the range of 0-7, found "%s"' %
-                       line[-1])
+      raise InputError(
+        'Expected value to be in the range of 0-7, found "%s"' % line[-1]
+      )
   if reverse:
     return [line[-4::-1] + line[-1] for line in lines]
   else:
     return [line[:-3] + line[-1] for line in lines]
 
 
-def main():
+def main() -> int:
   parser = argparse.ArgumentParser()
-  parser.add_argument('--reverse', action='store_const', const=True,
-                      default=False)
-  parser.add_argument('infile', nargs='?', type=argparse.FileType('r'),
-                      default=sys.stdin)
-  parser.add_argument('outfile', nargs='?', type=argparse.FileType('w'),
-                      default=sys.stdout)
+  parser.add_argument(
+    '--reverse', action='store_const', const=True, default=False
+  )
+  parser.add_argument(
+    'infile', nargs='?', type=argparse.FileType('r'), default=sys.stdin
+  )
+  parser.add_argument(
+    'outfile', nargs='?', type=argparse.FileType('w'), default=sys.stdout
+  )
+  parser.add_argument(
+    '--namespace',
+    action='store',
+    required=True,
+    help='the C++ namespace in which to place the generated buffer',
+  )
   args = parser.parse_args()
-  args.outfile.write(words_to_cxx(parse_gperf(args.infile, args.reverse)))
+  args.outfile.write(
+    words_to_cxx(parse_gperf(args.infile, args.reverse), args.namespace)
+  )
   return 0
 
 

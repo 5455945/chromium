@@ -1,15 +1,18 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.payments;
 
-import org.chromium.base.annotations.JNINamespace;
-import org.chromium.base.annotations.NativeMethods;
+import org.jni_zero.JNINamespace;
+import org.jni_zero.NativeMethods;
+
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.content_public.browser.WebContents;
 
 /** SSL validity checker. */
 @JNINamespace("payments")
+@NullMarked
 public class SslValidityChecker {
     /**
      *  Returns a developer-facing error message for invalid SSL certificate state or an empty
@@ -42,6 +45,7 @@ public class SslValidityChecker {
     @NativeMethods
     interface Natives {
         String getInvalidSslCertificateErrorMessage(WebContents webContents);
+
         boolean isValidPageInPaymentHandlerWindow(WebContents webContents);
     }
 }

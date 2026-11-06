@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,23 +6,26 @@
 
 #include <utility>
 
-#include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/path_service.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_service_test_base.h"
 #include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/extensions/test_extension_system.h"
-#include "chrome/browser/extensions/unpacked_installer.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_paths.h"
 #include "components/omnibox/browser/keyword_provider.h"
 #include "components/omnibox/browser/mock_autocomplete_provider_client.h"
+#include "components/search_engines/search_engines_test_environment.h"
 #include "components/search_engines/template_url_service.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_util.h"
 #include "extensions/browser/test_extension_registry_observer.h"
+#include "extensions/browser/unpacked_installer.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -30,28 +33,30 @@ namespace {
 
 class KeywordExtensionsDelegateImplTest : public ExtensionServiceTestBase {
  public:
-  KeywordExtensionsDelegateImplTest() {}
-  ~KeywordExtensionsDelegateImplTest() override {}
+  KeywordExtensionsDelegateImplTest() = default;
+
+  KeywordExtensionsDelegateImplTest(const KeywordExtensionsDelegateImplTest&) =
+      delete;
+  KeywordExtensionsDelegateImplTest& operator=(
+      const KeywordExtensionsDelegateImplTest&) = delete;
+
+  ~KeywordExtensionsDelegateImplTest() override = default;
 
  protected:
   void SetUp() override;
 
   void RunTest(bool incognito);
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(KeywordExtensionsDelegateImplTest);
 };
 
 void KeywordExtensionsDelegateImplTest::SetUp() {
   ExtensionServiceTestBase::SetUp();
-  InitializeExtensionService(CreateDefaultInitParams());
+  InitializeExtensionService(ExtensionServiceInitParams());
 }
 
 void KeywordExtensionsDelegateImplTest::RunTest(bool incognito) {
-  std::unique_ptr<TemplateURLService> empty_model(
-      new TemplateURLService(NULL, 0));
+  search_engines::SearchEnginesTestEnvironment test_environment;
   MockAutocompleteProviderClient client;
-  client.set_template_url_service(std::move(empty_model));
+  client.set_template_url_service(test_environment.template_url_service());
   scoped_refptr<KeywordProvider> keyword_provider =
       new KeywordProvider(&client, nullptr);
 
@@ -63,7 +68,7 @@ void KeywordExtensionsDelegateImplTest::RunTest(bool incognito) {
 
     TestExtensionRegistryObserver load_observer(registry());
     scoped_refptr<UnpackedInstaller> installer(
-        UnpackedInstaller::Create(service()));
+        UnpackedInstaller::Create(profile()));
     installer->Load(path);
     EXPECT_TRUE(load_observer.WaitForExtensionInstalled());
   }

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -29,11 +29,11 @@ WebRtcToMediaVideoCodec(webrtc::VideoCodecType codec);
 media::VideoCodecProfile PLATFORM_EXPORT
 WebRtcVideoFormatToMediaVideoCodecProfile(const webrtc::SdpVideoFormat& format);
 
-media::VideoColorSpace PLATFORM_EXPORT
-WebRtcToMediaVideoColorSpace(const webrtc::ColorSpace& color_space);
+gfx::ColorSpace PLATFORM_EXPORT
+WebRtcToGfxColorSpace(const webrtc::ColorSpace& color_space);
 
-absl::optional<int> PLATFORM_EXPORT
-WebRtcScalabilityModeSpatialLayers(const std::string& scalability_mode);
+webrtc::ColorSpace PLATFORM_EXPORT
+GfxToWebRtcColorSpace(const gfx::ColorSpace& color_space);
 
 }  // namespace blink
 

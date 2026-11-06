@@ -28,7 +28,7 @@
 
 #include "third_party/blink/public/platform/web_media_player.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/supplementable.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 
@@ -38,32 +38,45 @@ class HTMLMediaElement;
 
 class CORE_EXPORT TrackBase : public Supplementable<TrackBase> {
  public:
+  // Subclasses of TrackBase including AudioTrack and VideoTrack allow changing
+  // whether a track is enabled or selected. There are three sources where this
+  // change can come from:
+  //  - The user controls (currently behind the experimental web platform flag)
+  //  - JS (currently behind the experimental web platform flag)
+  //  - The media pipeline (HLS demuxer, etc).
+  //  - The initial player startup.
+  // In order to prevent the circular notification of track changes, the source
+  // of the change is recorded here.
+  enum class ChangeSource {
+    kInitial,
+    kScript,
+    kUser,
+    kDemuxer,
+  };
+
   virtual ~TrackBase();
 
-  WebMediaPlayer::TrackId id() const { return id_; }
+  String id() const { return id_; }
 
   WebMediaPlayer::TrackType GetType() const { return type_; }
 
-  const AtomicString& kind() const { return kind_; }
   AtomicString label() const { return label_; }
   AtomicString language() const { return language_; }
 
   void SetMediaElement(HTMLMediaElement* media_element) {
     media_element_ = media_element;
   }
-  HTMLMediaElement* MediaElement() const { return media_element_; }
+  HTMLMediaElement* MediaElement() const { return media_element_.Get(); }
 
   void Trace(Visitor*) const override;
 
  protected:
   TrackBase(WebMediaPlayer::TrackType,
-            const AtomicString& kind,
             const AtomicString& label,
             const AtomicString& language,
             const String& id);
 
   WebMediaPlayer::TrackType type_;
-  AtomicString kind_;
   AtomicString label_;
   AtomicString language_;
   String id_;

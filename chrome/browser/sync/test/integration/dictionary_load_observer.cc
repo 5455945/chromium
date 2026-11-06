@@ -1,11 +1,16 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/sync/test/integration/dictionary_load_observer.h"
 
-DictionaryLoadObserver::DictionaryLoadObserver(base::OnceClosure quit_task)
-    : quit_task_(std::move(quit_task)) {}
+DictionaryLoadObserver::DictionaryLoadObserver(
+    SpellcheckCustomDictionary* dictionary,
+    base::OnceClosure quit_task)
+    : quit_task_(std::move(quit_task)) {
+  CHECK(quit_task_);
+  scoped_observation_.Observe(dictionary);
+}
 
 DictionaryLoadObserver::~DictionaryLoadObserver() = default;
 
@@ -14,5 +19,4 @@ void DictionaryLoadObserver::OnCustomDictionaryLoaded() {
 }
 
 void DictionaryLoadObserver::OnCustomDictionaryChanged(
-    const SpellcheckCustomDictionary::Change& dictionary_change) {
-}
+    const SpellcheckCustomDictionary::Change& dictionary_change) {}

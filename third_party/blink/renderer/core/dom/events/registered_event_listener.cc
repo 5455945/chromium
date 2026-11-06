@@ -36,35 +36,36 @@ RegisteredEventListener::RegisteredEventListener()
       once_(false),
       blocked_event_warning_emitted_(false),
       passive_forced_for_document_target_(false),
-      passive_specified_(false) {}
+      passive_specified_(false),
+      removed_(false),
+      animation_trigger_(false) {}
 
 RegisteredEventListener::RegisteredEventListener(
     EventListener* listener,
-    const AddEventListenerOptionsResolved* options)
+    const AddEventListenerOptionsResolved& options)
     : callback_(listener),
-      use_capture_(options->capture()),
-      passive_(options->passive()),
-      once_(options->once()),
+      use_capture_(options.Capture()),
+      passive_(options.Passive()),
+      once_(options.Once()),
       blocked_event_warning_emitted_(false),
       passive_forced_for_document_target_(
-          options->PassiveForcedForDocumentTarget()),
-      passive_specified_(options->PassiveSpecified()) {}
-
-RegisteredEventListener& RegisteredEventListener::operator=(
-    const RegisteredEventListener& that) = default;
+          options.PassiveForcedForDocumentTarget()),
+      passive_specified_(options.PassiveSpecified()),
+      removed_(false),
+      animation_trigger_(options.IsAnimationTrigger()) {}
 
 void RegisteredEventListener::Trace(Visitor* visitor) const {
   visitor->Trace(callback_);
 }
 
-AddEventListenerOptionsResolved* RegisteredEventListener::Options() const {
-  auto* result = MakeGarbageCollected<AddEventListenerOptionsResolved>();
-  result->setCapture(use_capture_);
-  result->setPassive(passive_);
-  result->SetPassiveForcedForDocumentTarget(
-      passive_forced_for_document_target_);
-  result->setOnce(once_);
-  result->SetPassiveSpecified(passive_specified_);
+AddEventListenerOptionsResolved RegisteredEventListener::Options() const {
+  AddEventListenerOptionsResolved result;
+  result.SetCapture(use_capture_);
+  result.SetPassive(passive_);
+  result.SetPassiveForcedForDocumentTarget(passive_forced_for_document_target_);
+  result.SetOnce(once_);
+  result.SetPassiveSpecified(passive_specified_);
+  result.SetAnimationTrigger(animation_trigger_);
   return result;
 }
 
@@ -72,28 +73,26 @@ void RegisteredEventListener::SetCallback(EventListener* listener) {
   callback_ = listener;
 }
 
-bool RegisteredEventListener::Matches(
-    const EventListener* listener,
-    const EventListenerOptions* options) const {
+bool RegisteredEventListener::Matches(const EventListener* listener,
+                                      const OptionsForMatching& options) const {
   // Equality is soley based on the listener and useCapture flags.
   DCHECK(callback_);
   DCHECK(listener);
-  return callback_->Matches(*listener) &&
-         static_cast<bool>(use_capture_) == options->capture();
+  return callback_->Matches(*listener) && options == GetOptionsForMatching();
 }
 
 bool RegisteredEventListener::ShouldFire(const Event& event) const {
   if (event.FireOnlyCaptureListenersAtTarget()) {
-    DCHECK_EQ(event.eventPhase(), Event::kAtTarget);
+    DCHECK_EQ(event.eventPhase(), Event::PhaseType::kAtTarget);
     return Capture();
   }
   if (event.FireOnlyNonCaptureListenersAtTarget()) {
-    DCHECK_EQ(event.eventPhase(), Event::kAtTarget);
+    DCHECK_EQ(event.eventPhase(), Event::PhaseType::kAtTarget);
     return !Capture();
   }
-  if (event.eventPhase() == Event::kCapturingPhase)
+  if (event.eventPhase() == Event::PhaseType::kCapturingPhase)
     return Capture();
-  if (event.eventPhase() == Event::kBubblingPhase)
+  if (event.eventPhase() == Event::PhaseType::kBubblingPhase)
     return !Capture();
   return true;
 }

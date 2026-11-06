@@ -1,9 +1,10 @@
-// Copyright (c) 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/test/test_navigation_url_loader.h"
 
+#include <tuple>
 #include <utility>
 
 #include "content/browser/loader/navigation_early_hints_manager.h"
@@ -16,6 +17,7 @@
 #include "content/public/browser/web_contents.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "net/url_request/redirect_info.h"
+#include "services/network/public/cpp/http_request_headers_update_params.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "third_party/blink/public/common/navigation/navigation_policy.h"
@@ -31,14 +33,22 @@ TestNavigationURLLoader::TestNavigationURLLoader(
       redirect_count_(0),
       loader_type_(loader_type) {}
 
+void TestNavigationURLLoader::Start() {
+  // Do nothing.
+}
+
 void TestNavigationURLLoader::FollowRedirect(
-    const std::vector<std::string>& removed_headers,
-    const net::HttpRequestHeaders& modified_headers,
-    const net::HttpRequestHeaders& modified_cors_exempt_headers,
-    blink::PreviewsState new_previews_state) {
+    network::HttpRequestHeadersUpdateParams headers_update_params) {
   DCHECK_EQ(loader_type_, NavigationURLLoader::LoaderType::kRegular);
   redirect_count_++;
 }
+
+bool TestNavigationURLLoader::SetNavigationTimeout(base::TimeDelta timeout) {
+  // Do nothing. `false` here means no timeout was started.
+  return false;
+}
+
+void TestNavigationURLLoader::CancelNavigationTimeout() {}
 
 void TestNavigationURLLoader::SimulateServerRedirect(const GURL& redirect_url) {
   DCHECK_EQ(loader_type_, NavigationURLLoader::LoaderType::kRegular);
@@ -64,7 +74,7 @@ void TestNavigationURLLoader::SimulateErrorWithStatus(
 }
 
 void TestNavigationURLLoader::SimulateEarlyHintsPreloadLinkHeaderReceived() {
-  was_early_hints_preload_link_header_received_ = true;
+  was_resource_hints_received_ = true;
 }
 
 void TestNavigationURLLoader::CallOnRequestRedirected(
@@ -73,12 +83,14 @@ void TestNavigationURLLoader::CallOnRequestRedirected(
   DCHECK_EQ(loader_type_, NavigationURLLoader::LoaderType::kRegular);
   response_head->parsed_headers = network::mojom::ParsedHeaders::New();
   delegate_->OnRequestRedirected(
-      redirect_info, request_info_->isolation_info.network_isolation_key(),
+      redirect_info, request_info_->isolation_info.network_anonymization_key(),
       std::move(response_head));
 }
 
 void TestNavigationURLLoader::CallOnResponseStarted(
-    network::mojom::URLResponseHeadPtr response_head) {
+    network::mojom::URLResponseHeadPtr response_head,
+    mojo::ScopedDataPipeConsumerHandle response_body,
+    std::optional<mojo_base::BigBuffer> cached_metadata) {
   if (!response_head->parsed_headers)
     response_head->parsed_headers = network::mojom::ParsedHeaders::New();
   // Create a bidirectionnal communication pipe between a URLLoader and a
@@ -86,23 +98,20 @@ void TestNavigationURLLoader::CallOnResponseStarted(
   // purpose of this is not to violate some DCHECKs when the navigation commits.
   mojo::PendingRemote<network::mojom::URLLoaderClient> url_loader_client_remote;
   mojo::PendingRemote<network::mojom::URLLoader> url_loader_remote;
-  ignore_result(url_loader_remote.InitWithNewPipeAndPassReceiver());
+  std::ignore = url_loader_remote.InitWithNewPipeAndPassReceiver();
   auto url_loader_client_endpoints =
       network::mojom::URLLoaderClientEndpoints::New(
           std::move(url_loader_remote),
           url_loader_client_remote.InitWithNewPipeAndPassReceiver());
 
   NavigationURLLoaderDelegate::EarlyHints early_hints;
-  early_hints.was_preload_link_header_received =
-      was_early_hints_preload_link_header_received_;
+  early_hints.was_resource_hints_received = was_resource_hints_received_;
 
   delegate_->OnResponseStarted(
       std::move(url_loader_client_endpoints), std::move(response_head),
-      mojo::ScopedDataPipeConsumerHandle(),
-      GlobalRequestID::MakeBrowserInitiated(), false,
-      blink::NavigationDownloadPolicy(),
-      request_info_->isolation_info.network_isolation_key(), absl::nullopt,
-      std::move(early_hints));
+      std::move(response_body), GlobalRequestID::MakeBrowserInitiated(), false,
+      request_info_->isolation_info.network_anonymization_key(),
+      SubresourceLoaderParams(), std::move(early_hints));
 }
 
 TestNavigationURLLoader::~TestNavigationURLLoader() {}

@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,7 +22,8 @@ ExtensionRegistry* ExtensionRegistryFactory::GetForBrowserContext(
 
 // static
 ExtensionRegistryFactory* ExtensionRegistryFactory::GetInstance() {
-  return base::Singleton<ExtensionRegistryFactory>::get();
+  static base::NoDestructor<ExtensionRegistryFactory> instance;
+  return instance.get();
 }
 
 ExtensionRegistryFactory::ExtensionRegistryFactory()
@@ -32,11 +33,12 @@ ExtensionRegistryFactory::ExtensionRegistryFactory()
   // No dependencies on other services.
 }
 
-ExtensionRegistryFactory::~ExtensionRegistryFactory() {}
+ExtensionRegistryFactory::~ExtensionRegistryFactory() = default;
 
-KeyedService* ExtensionRegistryFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+ExtensionRegistryFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  return new ExtensionRegistry(context);
+  return std::make_unique<ExtensionRegistry>(context);
 }
 
 BrowserContext* ExtensionRegistryFactory::GetBrowserContextToUse(
@@ -44,7 +46,7 @@ BrowserContext* ExtensionRegistryFactory::GetBrowserContextToUse(
   // Redirected in incognito.
   auto* extension_browser_client = ExtensionsBrowserClient::Get();
   DCHECK(extension_browser_client);
-  return extension_browser_client->GetOriginalContext(context);
+  return extension_browser_client->GetContextRedirectedToOriginal(context);
 }
 
 }  // namespace extensions

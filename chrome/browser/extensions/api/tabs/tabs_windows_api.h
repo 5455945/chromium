@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,21 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "extensions/browser/browser_context_keyed_api_factory.h"
 #include "extensions/browser/event_router.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 class TabsEventRouter;
 class WindowsEventRouter;
 
+// TabsWindowsAPI is a BrowserContextKeyedAPI that manages the TabsEventRouter
+// and WindowsEventRouter. It routes various events to the appropriate event
+// listeners in the renderers.
 class TabsWindowsAPI : public BrowserContextKeyedAPI,
                        public EventRouter::Observer {
  public:
@@ -24,7 +31,11 @@ class TabsWindowsAPI : public BrowserContextKeyedAPI,
   // Convenience method to get the TabsWindowsAPI for a profile.
   static TabsWindowsAPI* Get(content::BrowserContext* context);
 
+  // Creates the tabs event router. Visible for testing.
+  void InitTabsEventRouter();
+
   TabsEventRouter* tabs_event_router();
+
   WindowsEventRouter* windows_event_router();
 
   // KeyedService implementation.
@@ -39,7 +50,7 @@ class TabsWindowsAPI : public BrowserContextKeyedAPI,
  private:
   friend class BrowserContextKeyedAPIFactory<TabsWindowsAPI>;
 
-  content::BrowserContext* browser_context_;
+  raw_ptr<content::BrowserContext> browser_context_;
 
   // BrowserContextKeyedAPI implementation.
   static const char* service_name() {

@@ -1,15 +1,15 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.customtabs;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.app.metrics.LaunchCauseMetrics;
 import org.chromium.chrome.browser.flags.ActivityType;
 
-/**
- * LaunchCauseMetrics for CustomTabActivity.
- */
+/** LaunchCauseMetrics for CustomTabActivity. */
+@NullMarked
 public class CustomTabLaunchCauseMetrics extends LaunchCauseMetrics {
     private final CustomTabActivity mActivity;
 
@@ -20,10 +20,13 @@ public class CustomTabLaunchCauseMetrics extends LaunchCauseMetrics {
 
     @Override
     public @LaunchCause int computeIntentLaunchCause() {
-        if (mActivity.getActivityType() == ActivityType.TRUSTED_WEB_ACTIVITY) {
+        int type = mActivity.getActivityType();
+        if (type == ActivityType.TRUSTED_WEB_ACTIVITY) {
             return LaunchCause.TWA;
         }
-        assert mActivity.getActivityType() == ActivityType.CUSTOM_TAB;
-        return LaunchCause.CUSTOM_TAB;
+        if (type == ActivityType.CUSTOM_TAB) {
+            return LaunchCause.CUSTOM_TAB;
+        }
+        return LaunchCause.AUTH_TAB;
     }
 }

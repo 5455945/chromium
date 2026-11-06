@@ -1,14 +1,17 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_INSPECTOR_LEGACY_DOM_SNAPSHOT_AGENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_INSPECTOR_LEGACY_DOM_SNAPSHOT_AGENT_H_
 
+#include "third_party/blink/public/common/dom/dom_node_id.h"
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/css_property_names.h"
-#include "third_party/blink/renderer/core/dom/dom_node_ids.h"
 #include "third_party/blink/renderer/core/inspector/inspector_base_agent.h"
-#include "third_party/blink/renderer/core/inspector/protocol/DOMSnapshot.h"
+#include "third_party/blink/renderer/core/inspector/protocol/dom_snapshot.h"
+#include "third_party/blink/renderer/platform/graphics/dom_node_id_traits.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
@@ -16,15 +19,21 @@ namespace blink {
 
 class Document;
 class Element;
+class LayoutObject;
 class Node;
 class PaintLayer;
+
+struct OriginUrlMap {
+  HashMap<DOMNodeIdType, String> map;
+  base::WeakPtrFactory<OriginUrlMap> weak_ptr_factory{this};
+};
 
 class CORE_EXPORT LegacyDOMSnapshotAgent {
   STACK_ALLOCATED();
 
  public:
-  using OriginUrlMap = WTF::HashMap<DOMNodeId, String>;
-  LegacyDOMSnapshotAgent(InspectorDOMDebuggerAgent*, OriginUrlMap*);
+  LegacyDOMSnapshotAgent(InspectorDOMDebuggerAgent*,
+                         base::WeakPtr<OriginUrlMap>);
   LegacyDOMSnapshotAgent(const LegacyDOMSnapshotAgent&) = delete;
   LegacyDOMSnapshotAgent& operator=(const LegacyDOMSnapshotAgent&) = delete;
   ~LegacyDOMSnapshotAgent();
@@ -34,9 +43,9 @@ class CORE_EXPORT LegacyDOMSnapshotAgent {
   protocol::Response GetSnapshot(
       Document* document,
       std::unique_ptr<protocol::Array<String>> style_filter,
-      protocol::Maybe<bool> include_event_listeners,
-      protocol::Maybe<bool> include_paint_order,
-      protocol::Maybe<bool> include_user_agent_shadow_tree,
+      std::optional<bool> include_event_listeners,
+      std::optional<bool> include_paint_order,
+      std::optional<bool> include_user_agent_shadow_tree,
       std::unique_ptr<protocol::Array<protocol::DOMSnapshot::DOMNode>>*
           dom_nodes,
       std::unique_ptr<protocol::Array<protocol::DOMSnapshot::LayoutTreeNode>>*
@@ -64,7 +73,7 @@ class CORE_EXPORT LegacyDOMSnapshotAgent {
 
   // Adds a LayoutTreeNode for the LayoutObject to |layout_tree_nodes_| and
   // returns its index. Returns -1 if the Node has no associated LayoutObject.
-  // Associates LayoutObjects under a pseudo element with the element.
+  // Associates LayoutObjects under a pseudo-element with the element.
   int VisitLayoutTreeNode(LayoutObject*, Node*, int node_index);
   int BuildLayoutTreeNode(LayoutObject*, Node*, int node_index);
 
@@ -75,12 +84,10 @@ class CORE_EXPORT LegacyDOMSnapshotAgent {
   int GetStyleIndexForNode(Node*);
 
   struct VectorStringHashTraits;
-  using ComputedStylesMap = WTF::HashMap<Vector<String>,
-                                         int,
-                                         VectorStringHashTraits,
-                                         VectorStringHashTraits>;
+  using ComputedStylesMap =
+      HashMap<Vector<String>, int, VectorStringHashTraits>;
   using CSSPropertyFilter = Vector<std::pair<String, CSSPropertyID>>;
-  using PaintOrderMap = WTF::HashMap<PaintLayer*, int>;
+  using PaintOrderMap = GCedHeapHashMap<Member<PaintLayer>, int>;
 
   // State of current snapshot.
   std::unique_ptr<protocol::Array<protocol::DOMSnapshot::DOMNode>> dom_nodes_;
@@ -94,10 +101,10 @@ class CORE_EXPORT LegacyDOMSnapshotAgent {
   std::unique_ptr<ComputedStylesMap> computed_styles_map_;
   std::unique_ptr<CSSPropertyFilter> css_property_filter_;
   // Maps a PaintLayer to its paint order index.
-  std::unique_ptr<PaintOrderMap> paint_order_map_;
+  PaintOrderMap* paint_order_map_ = nullptr;
   // Maps a backend node id to the url of the script (if any) that generates
   // the corresponding node.
-  OriginUrlMap* origin_url_map_;
+  base::WeakPtr<OriginUrlMap> origin_url_map_;
   using DocumentOrderMap = HeapHashMap<Member<Document>, int>;
   InspectorDOMDebuggerAgent* dom_debugger_agent_;
 };

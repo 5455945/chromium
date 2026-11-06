@@ -1,21 +1,28 @@
-// Copyright (c) 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/peerconnection/rtc_certificate_generator.h"
 
-#include <string>
+#include <cstdint>
+#include <optional>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/macros.h"
-#include "base/single_thread_task_runner.h"
+#include "base/check.h"
+#include "base/location.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/modules/peerconnection/peer_connection_dependency_factory.h"
+#include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
+#include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/thread_safe_ref_counted.h"
 #include "third_party/webrtc/api/scoped_refptr.h"
 #include "third_party/webrtc/rtc_base/rtc_certificate.h"
 #include "third_party/webrtc/rtc_base/rtc_certificate_generator.h"
+#include "third_party/webrtc/rtc_base/ssl_identity.h"
 
 namespace blink {
 namespace {
@@ -25,7 +32,7 @@ namespace {
 // is handled by a separate class so that reference counting can keep the
 // request alive independently of the |RTCCertificateGenerator| that spawned it.
 class RTCCertificateGeneratorRequest
-    : public WTF::ThreadSafeRefCounted<RTCCertificateGeneratorRequest> {
+    : public ThreadSafeRefCounted<RTCCertificateGeneratorRequest> {
  public:
   RTCCertificateGeneratorRequest(
       const scoped_refptr<base::SingleThreadTaskRunner>& main_thread,
@@ -35,43 +42,45 @@ class RTCCertificateGeneratorRequest
     DCHECK(worker_thread_);
   }
 
-  void GenerateCertificateAsync(
-      const rtc::KeyParams& key_params,
-      const absl::optional<uint64_t>& expires_ms,
-      blink::RTCCertificateCallback completion_callback) {
+  void GenerateCertificateAsync(const webrtc::KeyParams& key_params,
+                                const std::optional<uint64_t>& expires_ms,
+                                RTCCertificateCallback completion_callback) {
     DCHECK(main_thread_->BelongsToCurrentThread());
     DCHECK(completion_callback);
 
-    worker_thread_->PostTask(
-        FROM_HERE,
-        base::BindOnce(
+    PostCrossThreadTask(
+        *worker_thread_, FROM_HERE,
+        CrossThreadBindOnce(
             &RTCCertificateGeneratorRequest::GenerateCertificateOnWorkerThread,
-            this, key_params, expires_ms, std::move(completion_callback)));
+            blink::RetainedRef(this), key_params, expires_ms,
+            std::move(completion_callback)));
   }
 
  private:
-  friend class WTF::ThreadSafeRefCounted<RTCCertificateGeneratorRequest>;
+  friend class ThreadSafeRefCounted<RTCCertificateGeneratorRequest>;
   ~RTCCertificateGeneratorRequest() {}
 
   void GenerateCertificateOnWorkerThread(
-      const rtc::KeyParams key_params,
-      const absl::optional<uint64_t> expires_ms,
-      blink::RTCCertificateCallback completion_callback) {
+      const webrtc::KeyParams key_params,
+      const std::optional<uint64_t> expires_ms,
+      RTCCertificateCallback completion_callback) {
     DCHECK(worker_thread_->BelongsToCurrentThread());
 
-    rtc::scoped_refptr<rtc::RTCCertificate> certificate =
-        rtc::RTCCertificateGenerator::GenerateCertificate(key_params,
-                                                          expires_ms);
+    webrtc::scoped_refptr<webrtc::RTCCertificate> certificate =
+        webrtc::RTCCertificateGenerator::GenerateCertificate(key_params,
+                                                             expires_ms);
 
-    main_thread_->PostTask(
-        FROM_HERE,
-        base::BindOnce(&RTCCertificateGeneratorRequest::DoCallbackOnMainThread,
-                       this, std::move(completion_callback), certificate));
+    PostCrossThreadTask(
+        *main_thread_, FROM_HERE,
+        CrossThreadBindOnce(
+            &RTCCertificateGeneratorRequest::DoCallbackOnMainThread,
+            blink::RetainedRef(this), std::move(completion_callback),
+            std::move(certificate)));
   }
 
   void DoCallbackOnMainThread(
-      blink::RTCCertificateCallback completion_callback,
-      rtc::scoped_refptr<rtc::RTCCertificate> certificate) {
+      RTCCertificateCallback completion_callback,
+      webrtc::scoped_refptr<webrtc::RTCCertificate> certificate) {
     DCHECK(main_thread_->BelongsToCurrentThread());
     DCHECK(completion_callback);
     std::move(completion_callback).Run(std::move(certificate));
@@ -84,12 +93,20 @@ class RTCCertificateGeneratorRequest
 };
 
 void GenerateCertificateWithOptionalExpiration(
-    const rtc::KeyParams& key_params,
-    const absl::optional<uint64_t>& expires_ms,
-    blink::RTCCertificateCallback completion_callback,
+    const webrtc::KeyParams& key_params,
+    const std::optional<uint64_t>& expires_ms,
+    RTCCertificateCallback completion_callback,
     ExecutionContext& context,
     scoped_refptr<base::SingleThreadTaskRunner> task_runner) {
   DCHECK(key_params.IsValid());
+  if (context.IsContextDestroyed()) {
+    // If the context is destroyed we won't be able to access the
+    // PeerConnectionDependencyFactory. Reject the promise by returning a null
+    // certificate.
+    std::move(completion_callback).Run(nullptr);
+    return;
+  }
+
   auto& pc_dependency_factory =
       blink::PeerConnectionDependencyFactory::From(context);
   pc_dependency_factory.EnsureInitialized();
@@ -104,19 +121,19 @@ void GenerateCertificateWithOptionalExpiration(
 }  // namespace
 
 void RTCCertificateGenerator::GenerateCertificate(
-    const rtc::KeyParams& key_params,
-    blink::RTCCertificateCallback completion_callback,
+    const webrtc::KeyParams& key_params,
+    RTCCertificateCallback completion_callback,
     ExecutionContext& context,
     scoped_refptr<base::SingleThreadTaskRunner> task_runner) {
-  GenerateCertificateWithOptionalExpiration(key_params, absl::nullopt,
+  GenerateCertificateWithOptionalExpiration(key_params, std::nullopt,
                                             std::move(completion_callback),
                                             context, task_runner);
 }
 
 void RTCCertificateGenerator::GenerateCertificateWithExpiration(
-    const rtc::KeyParams& key_params,
+    const webrtc::KeyParams& key_params,
     uint64_t expires_ms,
-    blink::RTCCertificateCallback completion_callback,
+    RTCCertificateCallback completion_callback,
     ExecutionContext& context,
     scoped_refptr<base::SingleThreadTaskRunner> task_runner) {
   GenerateCertificateWithOptionalExpiration(key_params, expires_ms,
@@ -125,15 +142,15 @@ void RTCCertificateGenerator::GenerateCertificateWithExpiration(
 }
 
 bool RTCCertificateGenerator::IsSupportedKeyParams(
-    const rtc::KeyParams& key_params) {
+    const webrtc::KeyParams& key_params) {
   return key_params.IsValid();
 }
 
-rtc::scoped_refptr<rtc::RTCCertificate> RTCCertificateGenerator::FromPEM(
+webrtc::scoped_refptr<webrtc::RTCCertificate> RTCCertificateGenerator::FromPEM(
     String pem_private_key,
     String pem_certificate) {
-  rtc::scoped_refptr<rtc::RTCCertificate> certificate =
-      rtc::RTCCertificate::FromPEM(rtc::RTCCertificatePEM(
+  webrtc::scoped_refptr<webrtc::RTCCertificate> certificate =
+      webrtc::RTCCertificate::FromPEM(webrtc::RTCCertificatePEM(
           pem_private_key.Utf8(), pem_certificate.Utf8()));
   if (!certificate)
     return nullptr;

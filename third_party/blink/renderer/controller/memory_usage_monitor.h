@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 
 #include "base/observer_list.h"
 #include "base/timer/timer.h"
+#include "build/build_config.h"
 #include "third_party/blink/renderer/controller/controller_export.h"
 #include "third_party/blink/renderer/platform/timer.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
@@ -20,9 +21,6 @@ namespace blink {
 
 // nan means data not available.
 struct MemoryUsage {
-  double v8_bytes = std::numeric_limits<double>::quiet_NaN();
-  double partition_alloc_bytes = std::numeric_limits<double>::quiet_NaN();
-  double blink_gc_bytes = std::numeric_limits<double>::quiet_NaN();
   double private_footprint_bytes = std::numeric_limits<double>::quiet_NaN();
   double swap_bytes = std::numeric_limits<double>::quiet_NaN();
   double vm_size_bytes = std::numeric_limits<double>::quiet_NaN();
@@ -57,6 +55,10 @@ class CONTROLLER_EXPORT MemoryUsageMonitor {
 
   bool TimerIsActive() const { return timer_.IsRunning(); }
 
+#if BUILDFLAG(IS_ANDROID)
+  void SetRendererVisible(bool visible);
+#endif
+
  protected:
   MemoryUsageMonitor(
       scoped_refptr<base::SingleThreadTaskRunner> task_runner_for_testing,
@@ -77,6 +79,14 @@ class CONTROLLER_EXPORT MemoryUsageMonitor {
 
   base::RepeatingTimer timer_;
   base::ObserverList<Observer> observers_;
+#if BUILDFLAG(IS_ANDROID)
+  // Accessed only on the main thread. Defaults to true for standalone
+  // instances in unit tests; BlinkInitializer::RegisterMemoryWatchers sets
+  // the process singleton to false on Android startup (matching
+  // RenderProcessHostImpl's initial applied_priority_.visible = false when
+  // !kLaunchingProcessIsBackgrounded).
+  bool is_visible_ = true;
+#endif
 };
 
 }  // namespace blink

@@ -20,10 +20,12 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_SVG_LAYOUT_SVG_RESOURCE_CLIPPER_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_SVG_LAYOUT_SVG_RESOURCE_CLIPPER_H_
 
+#include <optional>
+
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_resource_container.h"
+#include "third_party/blink/renderer/core/paint/paint_flags.h"
 #include "third_party/blink/renderer/core/style/reference_clip_path_operation.h"
 #include "third_party/blink/renderer/core/svg/svg_unit_types.h"
-#include "third_party/skia/include/core/SkRefCnt.h"
 
 namespace blink {
 
@@ -41,7 +43,7 @@ class LayoutSVGResourceClipper final : public LayoutSVGResourceContainer {
 
   void RemoveAllClientsFromCache() override;
 
-  FloatRect ResourceBoundingBox(const FloatRect& reference_box);
+  gfx::RectF ResourceBoundingBox(const gfx::RectF& reference_box);
 
   static const LayoutSVGResourceType kResourceType = kClipperResourceType;
   LayoutSVGResourceType ResourceType() const override {
@@ -49,16 +51,21 @@ class LayoutSVGResourceClipper final : public LayoutSVGResourceContainer {
     return kResourceType;
   }
 
-  bool HitTestClipContent(const FloatRect&, const HitTestLocation&) const;
+  bool HitTestClipContent(const gfx::RectF& reference_box,
+                          const LayoutObject& reference_box_object,
+                          const HitTestLocation&) const;
 
   SVGUnitTypes::SVGUnitType ClipPathUnits() const;
-  AffineTransform CalculateClipTransform(const FloatRect& reference_box) const;
+  AffineTransform CalculateClipTransform(const gfx::RectF& reference_box) const;
 
-  absl::optional<Path> AsPath();
-  sk_sp<const PaintRecord> CreatePaintRecord();
+  std::optional<Path> AsPath();
+  PaintRecord CreatePaintRecord(PaintFlags paint_flags);
 
  private:
-  void StyleDidChange(StyleDifference, const ComputedStyle* old_style) override;
+  void StyleDidChange(StyleDifference,
+                      const ComputedStyle* old_style,
+                      const ComputedStyle& new_style,
+                      const StyleChangeContext&) override;
 
   void CalculateLocalClipBounds();
   bool FindCycleFromSelf() const override;
@@ -73,9 +80,10 @@ class LayoutSVGResourceClipper final : public LayoutSVGResourceContainer {
 
   // Cache of the clip path paint record when falling back to masking for
   // clipping.
-  sk_sp<const PaintRecord> cached_paint_record_;
+  std::optional<PaintRecord> cached_paint_record_;
+  PaintFlags cached_paint_flags_ = PaintFlag::kNoFlag;
 
-  FloatRect local_clip_bounds_;
+  gfx::RectF local_clip_bounds_;
 };
 
 template <>

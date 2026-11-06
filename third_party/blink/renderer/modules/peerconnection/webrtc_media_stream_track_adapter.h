@@ -1,4 +1,4 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,18 +7,24 @@
 
 #include <memory>
 
+#include "base/memory/scoped_refptr.h"
 #include "base/synchronization/waitable_event.h"
-#include "third_party/blink/renderer/modules/mediastream/remote_media_stream_track_adapter.h"
+#include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/modules/peerconnection/media_stream_video_webrtc_sink.h"
+#include "third_party/blink/renderer/platform/heap/cross_thread_persistent.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_component.h"
 #include "third_party/blink/renderer/platform/peerconnection/webrtc_audio_sink.h"
 #include "third_party/blink/renderer/platform/wtf/thread_safe_ref_counted.h"
 #include "third_party/webrtc/api/media_stream_interface.h"
+#include "third_party/webrtc/api/scoped_refptr.h"
 
 namespace blink {
 
+class ExecutionContext;
 class PeerConnectionDependencyFactory;
+class RemoteAudioTrackAdapter;
+class RemoteVideoTrackAdapter;
 struct WebRtcMediaStreamTrackAdapterTraits;
 
 // This is a mapping between a webrtc and blink media stream track. It takes
@@ -30,8 +36,8 @@ struct WebRtcMediaStreamTrackAdapterTraits;
 // The adapter may be created and used from either the main thread or the
 // webrtc signaling thread.
 class MODULES_EXPORT WebRtcMediaStreamTrackAdapter
-    : public WTF::ThreadSafeRefCounted<WebRtcMediaStreamTrackAdapter,
-                                       WebRtcMediaStreamTrackAdapterTraits> {
+    : public ThreadSafeRefCounted<WebRtcMediaStreamTrackAdapter,
+                                  WebRtcMediaStreamTrackAdapterTraits> {
  public:
   // Invoke on the main thread. The returned adapter is fully initialized, see
   // |is_initialized|. The adapter will keep a reference to the |main_thread|.
@@ -47,8 +53,13 @@ class MODULES_EXPORT WebRtcMediaStreamTrackAdapter
       blink::PeerConnectionDependencyFactory* factory,
       const scoped_refptr<base::SingleThreadTaskRunner>& main_thread,
       const scoped_refptr<webrtc::MediaStreamTrackInterface>& webrtc_track);
+
+  WebRtcMediaStreamTrackAdapter(const WebRtcMediaStreamTrackAdapter&) = delete;
+  WebRtcMediaStreamTrackAdapter& operator=(
+      const WebRtcMediaStreamTrackAdapter&) = delete;
+
   // Must be called before all external references are released (i.e. before
-  // destruction). Invoke on the main thread. Disposing may finish
+  // destruction). Can be called from any thread. Disposing may finish
   // asynchronously using the webrtc signaling thread and the main thread. After
   // calling this method it is safe to release all external references to the
   // adapter.
@@ -60,7 +71,7 @@ class MODULES_EXPORT WebRtcMediaStreamTrackAdapter
   // TODO(hbos): Allow these methods to be called on any thread and make them
   // const. https://crbug.com/756436
   MediaStreamComponent* track();
-  webrtc::MediaStreamTrackInterface* webrtc_track();
+  webrtc::scoped_refptr<webrtc::MediaStreamTrackInterface> webrtc_track();
   bool IsEqual(MediaStreamComponent* component);
 
   // For testing.
@@ -78,8 +89,8 @@ class MODULES_EXPORT WebRtcMediaStreamTrackAdapter
   }
 
  protected:
-  friend class WTF::ThreadSafeRefCounted<WebRtcMediaStreamTrackAdapter,
-                                         WebRtcMediaStreamTrackAdapterTraits>;
+  friend class ThreadSafeRefCounted<WebRtcMediaStreamTrackAdapter,
+                                    WebRtcMediaStreamTrackAdapterTraits>;
   friend struct WebRtcMediaStreamTrackAdapterTraits;
 
   WebRtcMediaStreamTrackAdapter(
@@ -94,15 +105,19 @@ class MODULES_EXPORT WebRtcMediaStreamTrackAdapter
   // Initialization of remote tracks starts on the webrtc signaling thread and
   // finishes on the main thread.
   void InitializeRemoteAudioTrack(
-      const scoped_refptr<webrtc::AudioTrackInterface>& webrtc_audio_track);
+      const scoped_refptr<webrtc::AudioTrackInterface>& webrtc_audio_track,
+      ExecutionContext* execution_context);
   void InitializeRemoteVideoTrack(
-      const scoped_refptr<webrtc::VideoTrackInterface>& webrtc_video_track);
+      const scoped_refptr<webrtc::VideoTrackInterface>& webrtc_video_track,
+      ExecutionContext* execution_context);
   void FinalizeRemoteTrackInitializationOnMainThread();
   void EnsureTrackIsInitialized();
 
-  // Disposing starts and finishes on the main thread. Local tracks and remote
-  // video tracks are disposed synchronously. Remote audio tracks are disposed
-  // asynchronously with a jump to the webrtc signaling thread and back.
+  // The disposal logic starts and finishes on the main thread, although it can
+  // be initiated from any thread. Local tracks and remote video tracks are
+  // disposed synchronously. Remote audio tracks are disposed asynchronously
+  // with a jump to the webrtc signaling thread and back.
+  void DisposeOnMainThread();
   void DisposeLocalAudioTrack();
   void DisposeLocalVideoTrack();
   void DisposeRemoteAudioTrack();
@@ -140,8 +155,6 @@ class MODULES_EXPORT WebRtcMediaStreamTrackAdapter
   // the remote webrtc track and notifies Blink.
   scoped_refptr<blink::RemoteAudioTrackAdapter> remote_audio_track_adapter_;
   scoped_refptr<blink::RemoteVideoTrackAdapter> remote_video_track_adapter_;
-
-  DISALLOW_COPY_AND_ASSIGN(WebRtcMediaStreamTrackAdapter);
 };
 
 struct MODULES_EXPORT WebRtcMediaStreamTrackAdapterTraits {

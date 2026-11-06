@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,16 @@
 
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
 #include "base/time/time.h"
-#include "base/trace_event/base_tracing_forward.h"
 
 namespace base {
+
+namespace trace_event {
+class TracedValue;
+class ConvertableToTraceFormat;
+}  // namespace trace_event
 
 // TestPendingTask is a helper class for test TaskRunner
 // implementations.  See test_simple_task_runner.h for example usage.
@@ -21,12 +25,17 @@ struct TestPendingTask {
   enum TestNestability { NESTABLE, NON_NESTABLE };
 
   TestPendingTask();
-  TestPendingTask(TestPendingTask&& other);
   TestPendingTask(const Location& location,
                   OnceClosure task,
                   TimeTicks post_time,
                   TimeDelta delay,
                   TestNestability nestability);
+
+  TestPendingTask(const TestPendingTask&) = delete;
+  TestPendingTask& operator=(const TestPendingTask&) = delete;
+
+  TestPendingTask(TestPendingTask&& other);
+
   ~TestPendingTask();
 
   TestPendingTask& operator=(TestPendingTask&& other);
@@ -63,9 +72,6 @@ struct TestPendingTask {
   void AsValueInto(base::trace_event::TracedValue* state) const;
   std::unique_ptr<base::trace_event::ConvertableToTraceFormat> AsValue() const;
   std::string ToString() const;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(TestPendingTask);
 };
 
 // gtest helpers which allow pretty printing of the tasks, very useful in unit

@@ -1,39 +1,34 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.ui;
 
 import android.content.Context;
-import android.os.Build;
 import android.view.View;
 import android.widget.AdapterView;
 import android.widget.ListAdapter;
 import android.widget.ListView;
 import android.widget.PopupWindow;
 
-/**
- * The dropdown popup window that decides what widget should be used for the popup.
- * For Android K+, DropdownPopupWindow is used, which is based on AnchoredPopupWindow.
- * For devices before Android K, DropdowPopupWindowJellyBean is used, which is based
- * on ListPopupWindow.
- * Note that AnchoredPopupWindow can not be used on Android J due to a focus issue
- * that blocks user from selecting the items.
- */
+import org.chromium.build.annotations.NullMarked;
+
+// TODO(crbug.com/40250394): This class is a noop now, so we should remove it.
+/** The dropdown popup window that decides what widget should be used for the popup. */
+@NullMarked
 public class DropdownPopupWindow {
-    private DropdownPopupWindowInterface mPopup;
+    private final DropdownPopupWindowInterface mPopup;
 
     /**
      * Creates an DropdownPopupWindow with specified parameters.
+     *
      * @param context Application context.
      * @param anchorView Popup view to be anchored.
      */
-    public DropdownPopupWindow(Context context, View anchorView) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            mPopup = new DropdownPopupWindowImpl(context, anchorView);
-        } else {
-            mPopup = new DropdownPopupWindowJellyBean(context, anchorView);
-        }
+    public DropdownPopupWindow(
+            Context context,
+            View anchorView) {
+        mPopup = new DropdownPopupWindowImpl(context, anchorView);
     }
 
     /**
@@ -50,9 +45,7 @@ public class DropdownPopupWindow {
         mPopup.setInitialSelection(initialSelection);
     }
 
-    /**
-     * Shows the popup. The adapter should be set before calling this method.
-     */
+    /** Shows the popup. The adapter should be set before calling this method. */
     public void show() {
         mPopup.show();
     }
@@ -108,9 +101,7 @@ public class DropdownPopupWindow {
         mPopup.postShow();
     }
 
-    /**
-     * Disposes of the popup window.
-     */
+    /** Disposes of the popup window. */
     public void dismiss() {
         mPopup.dismiss();
     }
@@ -130,9 +121,16 @@ public class DropdownPopupWindow {
     }
 
     /**
-     * See {@link DropdownPopupWindowInterface#setFooterView(View)}.
+     * Sets whether the popup is focusable.
+     *
+     * @param focusable True if the popup should be focusable, false otherwise.
      */
-    protected void setFooterView(View footerItem) {
-        mPopup.setFooterView(footerItem);
+    public void setFocusable(boolean focusable) {
+        mPopup.setFocusable(focusable);
+    }
+
+    /** Sets the list selector to transparent to prevent double ripple effects. */
+    public void setListSelectorTransparent() {
+        mPopup.setListSelectorTransparent();
     }
 }

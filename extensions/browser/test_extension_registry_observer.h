@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,21 +8,25 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
 #include "base/scoped_observation.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_registry_observer.h"
+#include "extensions/common/extension_id.h"
 
 namespace extensions {
 
-// A helper class that listen for ExtensionRegistry notifications.
+// A helper class that listens for ExtensionRegistry notifications.
 class TestExtensionRegistryObserver : public ExtensionRegistryObserver {
  public:
-  // If |extension_id| is provided, listens only to events relating to that
+  // If `extension_id` is provided, listens only to events relating to that
   // extension. Otherwise, listens to all events.
   explicit TestExtensionRegistryObserver(ExtensionRegistry* registry);
   TestExtensionRegistryObserver(ExtensionRegistry* registry,
-                                const std::string& extension_id);
+                                const ExtensionId& extension_id);
+
+  TestExtensionRegistryObserver(const TestExtensionRegistryObserver&) = delete;
+  TestExtensionRegistryObserver& operator=(
+      const TestExtensionRegistryObserver&) = delete;
 
   ~TestExtensionRegistryObserver() override;
 
@@ -72,9 +76,7 @@ class TestExtensionRegistryObserver : public ExtensionRegistryObserver {
   base::ScopedObservation<ExtensionRegistry, ExtensionRegistryObserver>
       extension_registry_observation_{this};
 
-  std::string extension_id_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestExtensionRegistryObserver);
+  ExtensionId extension_id_;
 };
 
 }  // namespace extensions

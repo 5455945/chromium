@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -34,13 +34,23 @@ blink::Manifest::ImageResource CreateIcon(const std::string& src,
 
 TEST(BackgroundFetchStructTraitsTest, ImageResourceRoundtrip) {
   blink::Manifest::ImageResource icon =
-      CreateIcon("my_icon.png", {{256, 256}}, "image/png");
+      CreateIcon("https://example.com/my_icon.png", {{256, 256}}, "image/png");
 
   blink::Manifest::ImageResource roundtrip_icon;
   ASSERT_TRUE(blink::mojom::ManifestImageResource::Deserialize(
       blink::mojom::ManifestImageResource::Serialize(&icon), &roundtrip_icon));
 
   EXPECT_EQ(icon, roundtrip_icon);
+}
+
+TEST(BackgroundFetchStructTraitsTest, ImageResourceInvalidUrlFails) {
+  // Relative URLs are invalid GURLs and should fail to deserialize.
+  blink::Manifest::ImageResource icon =
+      CreateIcon("my_icon.png", {{256, 256}}, "image/png");
+
+  blink::Manifest::ImageResource roundtrip_icon;
+  EXPECT_FALSE(blink::mojom::ManifestImageResource::Deserialize(
+      blink::mojom::ManifestImageResource::Serialize(&icon), &roundtrip_icon));
 }
 
 }  // namespace content

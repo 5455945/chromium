@@ -43,32 +43,14 @@ static void ToResourceTypeStat(const MemoryCache::TypeStatistic& from,
   to.decoded_size = from.decoded_size;
 }
 
-void WebCache::SetCapacity(size_t capacity) {
-  MemoryCache* cache = GetMemoryCache();
-  if (cache)
-    cache->SetCapacity(static_cast<unsigned>(capacity));
-}
-
 void WebCache::Clear() {
-  MemoryCache* cache = GetMemoryCache();
+  MemoryCache* cache = MemoryCache::Get();
   if (cache)
     cache->EvictResources();
 }
 
-void WebCache::GetUsageStats(UsageStats* result) {
-  DCHECK(result);
-
-  MemoryCache* cache = GetMemoryCache();
-  if (cache) {
-    result->capacity = cache->Capacity();
-    result->size = cache->size();
-  } else {
-    memset(result, 0, sizeof(UsageStats));
-  }
-}
-
 void WebCache::GetResourceTypeStats(WebCacheResourceTypeStats* result) {
-  MemoryCache* cache = GetMemoryCache();
+  MemoryCache* cache = MemoryCache::Get();
   if (cache) {
     MemoryCache::Statistics stats = cache->GetStatistics();
     ToResourceTypeStat(stats.images, result->images);
@@ -78,7 +60,7 @@ void WebCache::GetResourceTypeStats(WebCacheResourceTypeStats* result) {
     ToResourceTypeStat(stats.fonts, result->fonts);
     ToResourceTypeStat(stats.other, result->other);
   } else {
-    memset(result, 0, sizeof(WebCacheResourceTypeStats));
+    *result = {};
   }
 }
 

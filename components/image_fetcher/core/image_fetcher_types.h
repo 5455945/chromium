@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 
 namespace gfx {
 class Image;
@@ -32,9 +32,10 @@ using ImageDataFetcherCallback =
 
 #if defined(__OBJC__)
 
-// Callback that informs of the download of an image encoded in |data| and the
+// Callback that informs of the download of an image encoded in `data` and the
 // associated metadata. If an error prevented a http response,
-// |metadata.http_response_code| will be RESPONSE_CODE_INVALID.
+// `metadata.http_response_code` will be RESPONSE_CODE_INVALID; the underlying
+// network or download error is available in `metadata.net_error`.
 using ImageDataFetcherBlock = void (^)(NSData* data,
                                        const RequestMetadata& metadata);
 

@@ -1,16 +1,14 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/services/sharing/nearby/platform/condition_variable.h"
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
-#include "base/task/post_task.h"
+#include "base/task/task_runner.h"
 #include "base/task/thread_pool.h"
-#include "base/task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/gtest_util.h"
 #include "base/test/task_environment.h"
@@ -20,9 +18,7 @@
 #include "chrome/services/sharing/nearby/platform/mutex.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace location {
-namespace nearby {
-namespace chrome {
+namespace nearby::chrome {
 
 class ConditionVariableTest : public testing::Test {
  protected:
@@ -55,7 +51,7 @@ class ConditionVariableTest : public testing::Test {
   bool HasSuccessfullyRunWithAttemptId(
       const base::UnguessableToken& attempt_id) {
     base::AutoLock al(coordination_lock_);
-    return base::Contains(successful_run_attempts_, attempt_id);
+    return successful_run_attempts_.contains(attempt_id);
   }
 
   void NotifyConditionVariable() {
@@ -75,8 +71,8 @@ class ConditionVariableTest : public testing::Test {
   base::flat_set<base::UnguessableToken> successful_run_attempts_;
 };
 
-// Speculatively disabled on ChromeOS MSAN bots due to https://crbug.com/1186166
-#if defined(OS_CHROMEOS) && defined(MEMORY_SANITIZER)
+// Speculatively disabled on ChromeOS bots due to https://crbug.com/40753584
+#if BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_SingleSequence_BlocksOnWaitAndUnblocksOnNotify \
   DISABLED_SingleSequence_BlocksOnWaitAndUnblocksOnNotify
 #else
@@ -124,6 +120,4 @@ TEST_F(ConditionVariableTest,
   EXPECT_TRUE(HasSuccessfullyRunWithAttemptId(attempt_id_3));
 }
 
-}  // namespace chrome
-}  // namespace nearby
-}  // namespace location
+}  // namespace nearby::chrome

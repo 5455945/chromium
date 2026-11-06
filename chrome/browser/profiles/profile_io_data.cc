@@ -1,67 +1,69 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/profiles/profile_io_data.h"
 
+#include "base/containers/fixed_flat_set.h"
 #include "base/feature_list.h"
 #include "base/logging.h"
 #include "base/strings/string_util.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/common/buildflags.h"
 #include "chrome/common/url_constants.h"
 #include "components/dom_distiller/core/url_constants.h"
 #include "extensions/buildflags/buildflags.h"
 #include "net/net_buildflags.h"
-#include "services/network/public/cpp/features.h"
 #include "url/gurl.h"
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+    BUILDFLAG(IS_CHROMEOS)
+#include "components/webapps/isolated_web_apps/scheme.h"
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+        // BUILDFLAG(IS_CHROMEOS)
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "extensions/common/constants.h"
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 // static
-bool ProfileIOData::IsHandledProtocol(const std::string& scheme) {
-  DCHECK_EQ(scheme, base::ToLowerASCII(scheme));
-  static const char* const kProtocolList[] = {
-    url::kHttpScheme,
-    url::kHttpsScheme,
+bool ProfileIOData::IsHandledProtocol(std::string_view scheme) {
+  CHECK_EQ(scheme, base::ToLowerASCII(scheme), base::NotFatalUntil::M162);
+
+  constexpr auto kProtocolList = base::MakeFixedFlatSet<std::string_view>({
+      url::kHttpScheme,
+      url::kHttpsScheme,
 #if BUILDFLAG(ENABLE_WEBSOCKETS)
-    url::kWsScheme,
-    url::kWssScheme,
+      url::kWsScheme,
+      url::kWssScheme,
 #endif  // BUILDFLAG(ENABLE_WEBSOCKETS)
-    url::kFileScheme,
-    content::kChromeDevToolsScheme,
-    dom_distiller::kDomDistillerScheme,
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-    extensions::kExtensionScheme,
+      url::kFileScheme,
+      content::kChromeDevToolsScheme,
+      dom_distiller::kDomDistillerScheme,
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+      extensions::kExtensionScheme,
 #endif
-    content::kChromeUIScheme,
-    content::kChromeUIUntrustedScheme,
-    url::kDataScheme,
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-    content::kExternalFileScheme,
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-#if defined(OS_ANDROID)
-    url::kContentScheme,
-#endif  // defined(OS_ANDROID)
-    url::kAboutScheme,
-    url::kBlobScheme,
-    url::kFileSystemScheme,
-    chrome::kChromeSearchScheme,
-  };
-  for (const char* supported_protocol : kProtocolList) {
-    if (scheme == supported_protocol)
-      return true;
-  }
-#if !BUILDFLAG(DISABLE_FTP_SUPPORT)
-  if (scheme == url::kFtpScheme &&
-      base::FeatureList::IsEnabled(network::features::kFtpProtocol)) {
-    return true;
-  }
-#endif  // !BUILDFLAG(DISABLE_FTP_SUPPORT)
-  return false;
+      content::kChromeUIScheme,
+      content::kChromeUIUntrustedScheme,
+      url::kDataScheme,
+#if BUILDFLAG(IS_CHROMEOS)
+      content::kExternalFileScheme,
+#endif  // BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_ANDROID)
+      url::kContentScheme,
+#endif  // BUILDFLAG(IS_ANDROID)
+      url::kAboutScheme,
+      url::kBlobScheme,
+      url::kFileSystemScheme,
+      chrome::kChromeSearchScheme,
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+    BUILDFLAG(IS_CHROMEOS)
+      webapps::kIsolatedAppScheme,
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+        // BUILDFLAG(IS_CHROMEOS)
+  });
+
+  return kProtocolList.contains(scheme);
 }
 
 // static
@@ -71,5 +73,5 @@ bool ProfileIOData::IsHandledURL(const GURL& url) {
     return true;
   }
 
-  return IsHandledProtocol(url.scheme());
+  return IsHandledProtocol(url.GetScheme());
 }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,10 @@
 
 #include <map>
 #include <string>
+#include <string_view>
 
-#include "base/macros.h"
 #include "extensions/renderer/source_map.h"
+#include "v8/include/v8-forward.h"
 
 namespace extensions {
 
@@ -18,6 +19,10 @@ namespace extensions {
 class StringSourceMap : public SourceMap {
  public:
   StringSourceMap();
+
+  StringSourceMap(const StringSourceMap&) = delete;
+  StringSourceMap& operator=(const StringSourceMap&) = delete;
+
   ~StringSourceMap() override;
 
   // Adds a new string to be used in the source map.
@@ -27,13 +32,11 @@ class StringSourceMap : public SourceMap {
 
   // SourceMap:
   v8::Local<v8::String> GetSource(v8::Isolate* isolate,
-                                  const std::string& name) const override;
-  bool Contains(const std::string& name) const override;
+                                  std::string_view name) const override;
+  bool Contains(std::string_view name) const override;
 
  private:
-  std::map<std::string, std::string> sources_;
-
-  DISALLOW_COPY_AND_ASSIGN(StringSourceMap);
+  std::map<std::string, std::string, std::less<>> sources_;
 };
 
 }  // namespace extensions

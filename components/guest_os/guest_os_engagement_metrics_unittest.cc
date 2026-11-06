@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,11 +11,12 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/simple_test_clock.h"
 #include "base/test/simple_test_tick_clock.h"
+#include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
 #include "chromeos/dbus/power/fake_power_manager_client.h"
 #include "chromeos/dbus/power_manager/idle.pb.h"
-#include "chromeos/dbus/session_manager/session_manager_client.h"
 #include "components/guest_os/guest_os_prefs.h"
 #include "components/prefs/testing_pref_service.h"
+#include "components/session_manager/core/fake_session_manager_delegate.h"
 #include "components/session_manager/core/session_manager.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -36,20 +37,24 @@ class GuestOsEngagementMetricsTest : public testing::Test {
  protected:
   GuestOsEngagementMetricsTest() = default;
 
+  GuestOsEngagementMetricsTest(const GuestOsEngagementMetricsTest&) = delete;
+  GuestOsEngagementMetricsTest& operator=(const GuestOsEngagementMetricsTest&) =
+      delete;
+
   void SetUp() override {
     chromeos::PowerManagerClient::InitializeFake();
-    chromeos::SessionManagerClient::InitializeFakeInMemory();
+    ash::SessionManagerClient::InitializeFakeInMemory();
     pref_service_ = std::make_unique<TestingPrefServiceSimple>();
 
-    matched_window_.reset(aura::test::CreateTestWindowWithId(0, nullptr));
-    non_matched_window_.reset(aura::test::CreateTestWindowWithId(0, nullptr));
+    matched_window_ = aura::test::CreateTestWindow({.bounds = {100, 100}});
+    non_matched_window_ = aura::test::CreateTestWindow({.bounds = {100, 100}});
 
     prefs::RegisterEngagementProfilePrefs(pref_service_->registry(),
                                           kPrefPrefix);
 
     // The code doesn't work for correctly for a clock just at the epoch so
     // advance by a day first.
-    test_clock_.Advance(base::TimeDelta::FromDays(1));
+    test_clock_.Advance(base::Days(1));
     CreateEngagementMetrics();
     SetSessionState(session_manager::SessionState::ACTIVE);
   }
@@ -59,7 +64,7 @@ class GuestOsEngagementMetricsTest : public testing::Test {
     non_matched_window_.reset();
     matched_window_.reset();
     pref_service_.reset();
-    chromeos::SessionManagerClient::Shutdown();
+    ash::SessionManagerClient::Shutdown();
     chromeos::PowerManagerClient::Shutdown();
   }
 
@@ -80,7 +85,7 @@ class GuestOsEngagementMetricsTest : public testing::Test {
   }
 
   void AdvanceSeconds(int seconds) {
-    test_tick_clock_.Advance(base::TimeDelta::FromSeconds(seconds));
+    test_tick_clock_.Advance(base::Seconds(seconds));
   }
 
   void FocusMatchedWindow() {
@@ -97,13 +102,13 @@ class GuestOsEngagementMetricsTest : public testing::Test {
 
   void TriggerRecordEngagementTimeToUma() {
     // Trigger UMA record by changing to next day.
-    test_clock_.Advance(base::TimeDelta::FromDays(1));
+    test_clock_.Advance(base::Days(1));
     engagement_metrics_->OnSessionStateChanged();
   }
 
   void ExpectTime(const std::string& histogram, int seconds) {
     tester_.ExpectTimeBucketCount("Foo.EngagementTime." + histogram,
-                                  base::TimeDelta::FromSeconds(seconds), 1);
+                                  base::Seconds(seconds), 1);
   }
 
   void DestroyEngagementMetrics() { engagement_metrics_.reset(); }
@@ -123,7 +128,8 @@ class GuestOsEngagementMetricsTest : public testing::Test {
   }
 
   content::BrowserTaskEnvironment task_environment_;
-  session_manager::SessionManager session_manager_;
+  session_manager::SessionManager session_manager_{
+      std::make_unique<session_manager::FakeSessionManagerDelegate>()};
 
   base::SimpleTestTickClock test_tick_clock_;
   base::SimpleTestClock test_clock_;
@@ -136,8 +142,6 @@ class GuestOsEngagementMetricsTest : public testing::Test {
   std::unique_ptr<aura::Window> non_matched_window_;
 
   std::unique_ptr<GuestOsEngagementMetrics> engagement_metrics_;
-
-  DISALLOW_COPY_AND_ASSIGN(GuestOsEngagementMetricsTest);
 };
 
 TEST_F(GuestOsEngagementMetricsTest, RecordEngagementTimeSessionLocked) {

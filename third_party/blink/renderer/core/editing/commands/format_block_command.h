@@ -26,6 +26,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_EDITING_COMMANDS_FORMAT_BLOCK_COMMAND_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_EDITING_COMMANDS_FORMAT_BLOCK_COMMAND_H_
 
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/qualified_name.h"
 #include "third_party/blink/renderer/core/editing/commands/apply_block_element_command.h"
 #include "third_party/blink/renderer/core/editing/forward.h"
@@ -51,10 +52,11 @@ class CORE_EXPORT FormatBlockCommand final : public ApplyBlockElementCommand {
   void FormatRange(const Position& start,
                    const Position& end,
                    const Position& end_of_selection,
-                   HTMLElement*&,
+                   HTMLElement*& block_element,
+                   VisiblePosition& out_end_of_next_of_paragraph_to_move,
                    EditingState*) override;
 
-  bool did_apply_;
+  bool did_apply_ = false;
 };
 
 }  // namespace blink

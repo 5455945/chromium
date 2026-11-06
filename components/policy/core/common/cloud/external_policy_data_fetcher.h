@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,15 +7,14 @@
 
 #include <stdint.h>
 
-#include <map>
 #include <memory>
 #include <set>
 #include <string>
 
-#include "base/callback.h"
 #include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "components/policy/policy_export.h"
@@ -71,6 +70,9 @@ class POLICY_EXPORT ExternalPolicyDataFetcher {
   ExternalPolicyDataFetcher(
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       scoped_refptr<base::SequencedTaskRunner> task_runner);
+  ExternalPolicyDataFetcher(const ExternalPolicyDataFetcher&) = delete;
+  ExternalPolicyDataFetcher& operator=(const ExternalPolicyDataFetcher&) =
+      delete;
   ~ExternalPolicyDataFetcher();
 
   // Fetch data from |url| and invoke |callback| with the result. See the
@@ -105,12 +107,10 @@ class POLICY_EXPORT ExternalPolicyDataFetcher {
   scoped_refptr<network::SharedURLLoaderFactory> cloned_url_loader_factory_;
 
   // Set that owns all currently running Jobs.
-  typedef std::set<Job*> JobSet;
+  typedef std::set<raw_ptr<Job, SetExperimental>> JobSet;
   JobSet jobs_;
 
   base::WeakPtrFactory<ExternalPolicyDataFetcher> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ExternalPolicyDataFetcher);
 };
 
 }  // namespace policy

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,6 @@
 #define UI_EVENTS_TEST_COCOA_TEST_EVENT_UTILS_H_
 
 #import <Cocoa/Cocoa.h>
-#import <objc/objc-class.h>
-
-#include <utility>
 
 #include "ui/events/keycodes/dom/dom_key.h"
 #include "ui/events/keycodes/keyboard_codes.h"
@@ -42,13 +39,11 @@ NSEvent* LeftMouseDownAtPointInWindow(NSPoint point, NSWindow* window);
 
 // Return a mouse down and an up event with the given |clickCount| at
 // |view|'s midpoint.
-std::pair<NSEvent*, NSEvent*> MouseClickInView(NSView* view,
-                                               NSUInteger clickCount);
+NSArray<NSEvent*>* MouseClickInView(NSView* view, NSUInteger clickCount);
 
 // Return a right mouse down and an up event with the given |clickCount| at
 // |view|'s midpoint.
-std::pair<NSEvent*, NSEvent*> RightMouseClickInView(NSView* view,
-                                                    NSUInteger clickCount);
+NSArray<NSEvent*>* RightMouseClickInView(NSView* view, NSUInteger clickCount);
 
 // Creates a test scroll event. |has_precise_deltas| determines the value of
 // -[NSEvent hasPreciseScrollingDeltas] - usually NO for a mouse wheel and YES
@@ -78,9 +73,10 @@ NSEvent* KeyEventWithKeyCode(unsigned short key_code,
                              NSUInteger modifiers);
 
 // Returns a key event for pressing or releasing a modifier key (aka
-// NSFlagsChanged). For example |key_code| == kVK_Shift with (|modifiers| &
-// NSShiftKeyMask) != 0 means Shift is pressed and |key_code| == kVK_Shift
-// with (|modifiers| & NSShiftKeyMask) == 0 means Shift is released.
+// NSEventTypeFlagsChanged). For example |key_code| == kVK_Shift with
+// (|modifiers| & NSEventModifierFlagShift) != 0 means Shift is pressed and
+// |key_code| == kVK_Shift with (|modifiers| & NSEventModifierFlagShift) == 0
+// means Shift is released.
 NSEvent* KeyEventWithModifierOnly(unsigned short key_code,
                                   NSUInteger modifiers);
 

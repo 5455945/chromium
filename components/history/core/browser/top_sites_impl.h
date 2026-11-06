@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,9 +11,10 @@
 #include <utility>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/scoped_observation.h"
 #include "base/synchronization/lock.h"
 #include "base/task/cancelable_task_tracker.h"
@@ -24,9 +25,11 @@
 #include "components/history/core/browser/history_types.h"
 #include "components/history/core/browser/top_sites.h"
 #include "components/history/core/browser/top_sites_backend.h"
+#include "components/history/core/browser/top_sites_constants.h"
 
 class PrefRegistrySimple;
 class PrefService;
+class TemplateURLService;
 
 namespace base {
 class FilePath;
@@ -35,6 +38,7 @@ class FilePath;
 namespace history {
 
 class TopSitesImplTest;
+struct SitesAndQueriesRequest;
 
 // This class allows requests for most visited urls on any thread. All other
 // methods must be invoked on the UI thread. All mutations to internal state
@@ -46,13 +50,14 @@ class TopSitesImpl : public TopSites, public HistoryServiceObserver {
   // callable multiple time and during the whole lifetime of TopSitesImpl.
   using CanAddURLToHistoryFn = base::RepeatingCallback<bool(const GURL&)>;
 
-  // How many top sites to store in the cache.
-  static constexpr size_t kTopSitesNumber = 10;
-
   TopSitesImpl(PrefService* pref_service,
                HistoryService* history_service,
+               TemplateURLService* template_url_service,
                const PrepopulatedPageList& prepopulated_pages,
                const CanAddURLToHistoryFn& can_add_url_to_history);
+
+  TopSitesImpl(const TopSitesImpl&) = delete;
+  TopSitesImpl& operator=(const TopSitesImpl&) = delete;
 
   // Initializes TopSitesImpl.
   void Init(const base::FilePath& db_name);
@@ -69,6 +74,7 @@ class TopSitesImpl : public TopSites, public HistoryServiceObserver {
   PrepopulatedPageList GetPrepopulatedPages() override;
   bool loaded() const override;
   void OnNavigationCommitted(const GURL& url) override;
+  int NumBlockedSites() const override;
 
   // RefcountedKeyedService:
   void ShutdownOnUIThread() override;
@@ -97,14 +103,18 @@ class TopSitesImpl : public TopSites, public HistoryServiceObserver {
   friend class TopSitesImplTest;
   FRIEND_TEST_ALL_PREFIXES(TopSitesImplTest, DiffMostVisited);
   FRIEND_TEST_ALL_PREFIXES(TopSitesImplTest, DiffMostVisitedWithForced);
+  FRIEND_TEST_ALL_PREFIXES(TopSitesImplTest, GetMostVisitedURLsAndQueries);
 
   using PendingCallback = base::OnceCallback<void(const MostVisitedURLList&)>;
 
   using PendingCallbacks = std::vector<PendingCallback>;
 
-  // Starts to query most visited URLs from history database instantly. Also
-  // cancels any pending queries requested in a delayed manner by canceling the
-  // timer.
+  // Queries the most visited URLs followed by the most repeated queries, if
+  // applicable, from the history service. `OnGotMostVisitedURLsFromHistory()`
+  // and `OnGotMostRepeatedQueriesFromHistory()` are called when the respective
+  // queries complete. Those in turn call `SetTopSitesFromHistory()` when all
+  // the requested data is available.
+  // Cancels any pending requests in a delayed manner by canceling the timer.
   void StartQueryForMostVisited();
 
   // Generates the diff of things that happened between "old" and "new."
@@ -154,12 +164,26 @@ class TopSitesImpl : public TopSites, public HistoryServiceObserver {
   // the UI thread.
   void OnGotMostVisitedURLs(MostVisitedURLList sites);
 
-  // Called when history service returns a list of top URLs.
-  void OnTopSitesAvailableFromHistory(MostVisitedURLList data);
+  // Called when history service returns a list of the most visited sites.
+  // Calls `SetTopSitesFromHistory()` with `request` if it has completed.
+  void OnGotMostVisitedURLsFromHistory(
+      scoped_refptr<SitesAndQueriesRequest> request,
+      MostVisitedURLList sites);
+
+  // Called when history service returns a list of the most repeated queries.
+  // Calls `SetTopSitesFromHistory()` with `request` if it has completed.
+  void OnGotMostRepeatedQueriesFromHistory(
+      scoped_refptr<SitesAndQueriesRequest> request,
+      KeywordSearchTermVisitList queries);
+
+  // Called when history service returns both the most visited sites and the
+  // most repeated queries.
+  // Calls `SetTopSites()` with a new combined list, if applicable.
+  void SetTopSitesFromHistory(scoped_refptr<SitesAndQueriesRequest> request);
 
   // history::HistoryServiceObserver:
-  void OnURLsDeleted(HistoryService* history_service,
-                     const DeletionInfo& deletion_info) override;
+  void OnHistoryDeletions(HistoryService* history_service,
+                          const DeletionInfo& deletion_info) override;
 
   // Ensures that non thread-safe methods are called on the correct thread.
   base::ThreadChecker thread_checker_;
@@ -193,11 +217,15 @@ class TopSitesImpl : public TopSites, public HistoryServiceObserver {
   const PrepopulatedPageList prepopulated_pages_;
 
   // PrefService holding the set of blocked urls. Must outlive TopSitesImpl.
-  PrefService* pref_service_;
+  raw_ptr<PrefService> pref_service_;
 
   // HistoryService that TopSitesImpl can query. May be null, but if defined it
   // must outlive TopSitesImpl.
-  HistoryService* history_service_;
+  raw_ptr<HistoryService> history_service_;
+
+  // Used to identify and create search results page URLs for the default
+  // provider. May be nullptr. Must outlive |this| if provided.
+  raw_ptr<TemplateURLService> template_url_service_;
 
   // Can URL be added to the history?
   CanAddURLToHistoryFn can_add_url_to_history_;
@@ -205,14 +233,8 @@ class TopSitesImpl : public TopSites, public HistoryServiceObserver {
   // Are we loaded?
   bool loaded_;
 
-  // Have the SetTopSites execution time related histograms been recorded?
-  // The histogram should only be recorded once for each Chrome execution.
-  static bool histogram_recorded_;
-
   base::ScopedObservation<HistoryService, HistoryServiceObserver>
       history_service_observation_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(TopSitesImpl);
 };
 
 }  // namespace history

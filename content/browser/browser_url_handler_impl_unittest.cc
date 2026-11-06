@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,7 +16,7 @@ class BrowserURLHandlerImplTest : public testing::Test {
 
 // Test URL rewriter that rewrites all "foo://" URLs to "bar://bar".
 static bool FooRewriter(GURL* url, BrowserContext* browser_context) {
-  if (url->scheme() == "foo") {
+  if (url->GetScheme() == "foo") {
     *url = GURL("bar://bar");
     return true;
   }
@@ -25,7 +25,7 @@ static bool FooRewriter(GURL* url, BrowserContext* browser_context) {
 
 // Test URL rewriter that rewrites all "bar://" URLs to "foo://foo".
 static bool BarRewriter(GURL* url, BrowserContext* browser_context) {
-  if (url->scheme() == "bar") {
+  if (url->GetScheme() == "bar") {
     *url = GURL("foo://foo");
     return true;
   }

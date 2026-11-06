@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,33 +20,35 @@ DEFINE_UI_CLASS_PROPERTY_KEY(WindowParentingClient*,
 
 void SetWindowParentingClient(Window* window,
                               WindowParentingClient* window_tree_client) {
-  DCHECK(window);
+  CHECK(window, base::NotFatalUntil::M163);
 
   Window* root_window = window->GetRootWindow();
-  DCHECK(root_window);
+  CHECK(root_window, base::NotFatalUntil::M163);
   root_window->SetProperty(kRootWindowWindowParentingClientKey,
                            window_tree_client);
 }
 
 WindowParentingClient* GetWindowParentingClient(Window* window) {
-  DCHECK(window);
+  CHECK(window, base::NotFatalUntil::M163);
   Window* root_window = window->GetRootWindow();
-  DCHECK(root_window);
+  CHECK(root_window, base::NotFatalUntil::M163);
   WindowParentingClient* client =
       root_window->GetProperty(kRootWindowWindowParentingClientKey);
-  DCHECK(client);
+  CHECK(client, base::NotFatalUntil::M163);
   return client;
 }
 
 void ParentWindowWithContext(Window* window,
                              Window* context,
-                             const gfx::Rect& screen_bounds) {
-  DCHECK(context);
+                             const gfx::Rect& screen_bounds,
+                             const int64_t display_id) {
+  CHECK(context, base::NotFatalUntil::M163);
 
   // |context| must be attached to a hierarchy with a WindowParentingClient.
   WindowParentingClient* client = GetWindowParentingClient(context);
-  DCHECK(client);
-  Window* default_parent = client->GetDefaultParent(window, screen_bounds);
+  CHECK(client, base::NotFatalUntil::M163);
+  Window* default_parent =
+      client->GetDefaultParent(window, screen_bounds, display_id);
   default_parent->AddChild(window);
 }
 

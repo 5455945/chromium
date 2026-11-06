@@ -1,12 +1,12 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/signin/core/browser/account_reconcilor_delegate.h"
 
+#include <algorithm>
 #include <set>
 
-#include "base/containers/contains.h"
 #include "base/logging.h"
 #include "base/time/time.h"
 #include "google_apis/gaia/google_service_auth_error.h"
@@ -20,27 +20,13 @@ bool AccountReconcilorDelegate::IsReconcileEnabled() const {
   return false;
 }
 
-gaia::GaiaSource AccountReconcilorDelegate::GetGaiaApiSource() const {
+gaia::GaiaSource AccountReconcilorDelegate::GetGaiaApiSource(
+    bool is_cookie_upgrade) const {
   NOTREACHED() << "Reconcile is not enabled, no Gaia API calls should be made.";
-  return gaia::GaiaSource::kChrome;
 }
 
 bool AccountReconcilorDelegate::ShouldAbortReconcileIfPrimaryHasError() const {
   return false;
-}
-
-ConsentLevel AccountReconcilorDelegate::GetConsentLevelForPrimaryAccount()
-    const {
-  return ConsentLevel::kSync;
-}
-
-CoreAccountId AccountReconcilorDelegate::GetFirstGaiaAccountForReconcile(
-    const std::vector<CoreAccountId>& chrome_accounts,
-    const std::vector<gaia::ListedAccount>& gaia_accounts,
-    const CoreAccountId& primary_account,
-    bool first_execution,
-    bool will_logout) const {
-  return CoreAccountId();
 }
 
 MultiloginParameters
@@ -53,19 +39,16 @@ AccountReconcilorDelegate::CalculateParametersForMultilogin(
   const gaia::MultiloginMode mode =
       CalculateModeForReconcile(chrome_accounts, gaia_accounts, primary_account,
                                 first_execution, primary_has_error);
-  const std::vector<CoreAccountId> accounts_to_send =
-      GetChromeAccountsForReconcile(chrome_accounts, primary_account,
-                                    gaia_accounts, first_execution,
-                                    primary_has_error, mode);
-  return {mode, accounts_to_send};
+  std::vector<CoreAccountId> accounts_to_send = GetChromeAccountsForReconcile(
+      chrome_accounts, primary_account, gaia_accounts, first_execution,
+      primary_has_error, mode);
+  return {mode, std::move(accounts_to_send)};
 }
 
-bool AccountReconcilorDelegate::ShouldRevokeTokensBeforeMultilogin(
+bool AccountReconcilorDelegate::RevokeSecondaryTokensBeforeMultiloginIfNeeded(
     const std::vector<CoreAccountId>& chrome_accounts,
-    const CoreAccountId& primary_account,
     const std::vector<gaia::ListedAccount>& gaia_accounts,
-    bool first_execution,
-    bool primary_has_error) const {
+    bool first_execution) {
   return false;
 }
 
@@ -87,7 +70,7 @@ AccountReconcilorDelegate::ReorderChromeAccountsForReconcile(
   // which go above this count will fail.
   const int kMaxGaiaAccounts = 10;
   DCHECK(first_account.empty() ||
-         base::Contains(chrome_accounts, first_account));
+         std::ranges::contains(chrome_accounts, first_account));
 
   // Ordered list of accounts, this is the result of this function.
   std::vector<CoreAccountId> ordered_accounts;
@@ -97,15 +80,17 @@ AccountReconcilorDelegate::ReorderChromeAccountsForReconcile(
                                               chrome_accounts.end());
 
   // Start from the gaia accounts.
-  for (const gaia::ListedAccount& account : gaia_accounts)
+  for (const gaia::ListedAccount& account : gaia_accounts) {
     ordered_accounts.push_back(account.id);
+  }
 
   // Keep only accounts that are in chrome_accounts_set.
   for (CoreAccountId& account : ordered_accounts) {
-    if (chrome_accounts_set.find(account) == chrome_accounts_set.end())
+    if (chrome_accounts_set.find(account) == chrome_accounts_set.end()) {
       account = CoreAccountId();
-    else
+    } else {
       chrome_accounts_set.erase(account);
+    }
   }
 
   // At this point, ordered_accounts only contains accounts that must be kept,
@@ -115,13 +100,11 @@ AccountReconcilorDelegate::ReorderChromeAccountsForReconcile(
   // Put first_account in first position if needed, using swap to avoid changing
   // the order of existing cookies.
   if (!first_account.empty()) {
-    auto first_account_it = std::find(ordered_accounts.begin(),
-                                      ordered_accounts.end(), first_account);
+    auto first_account_it = std::ranges::find(ordered_accounts, first_account);
     if (first_account_it == ordered_accounts.end()) {
       // The first account was not already in the cookies, add it in the first
       // empty spot, or at the end if there is no available spot.
-      first_account_it = std::find(ordered_accounts.begin(),
-                                   ordered_accounts.end(), CoreAccountId());
+      first_account_it = std::ranges::find(ordered_accounts, CoreAccountId());
       if (first_account_it == ordered_accounts.end()) {
         first_account_it =
             ordered_accounts.insert(first_account_it, first_account);
@@ -137,8 +120,9 @@ AccountReconcilorDelegate::ReorderChromeAccountsForReconcile(
   // First in empty spots.
   auto remaining_accounts_it = chrome_accounts_set.begin();
   for (CoreAccountId& account : ordered_accounts) {
-    if (remaining_accounts_it == chrome_accounts_set.end())
+    if (remaining_accounts_it == chrome_accounts_set.end()) {
       break;
+    }
     if (account.empty()) {
       account = *remaining_accounts_it;
       ++remaining_accounts_it;
@@ -154,14 +138,16 @@ AccountReconcilorDelegate::ReorderChromeAccountsForReconcile(
   auto compacting_it = ordered_accounts.begin();
   while (compacting_it != ordered_accounts.end()) {
     // Remove all the empty accounts at the end.
-    while (!ordered_accounts.empty() && ordered_accounts.back().empty())
+    while (!ordered_accounts.empty() && ordered_accounts.back().empty()) {
       ordered_accounts.pop_back();
+    }
     // Find next empty slot.
     compacting_it =
         std::find(compacting_it, ordered_accounts.end(), CoreAccountId());
     // Swap it with the last element.
-    if (compacting_it != ordered_accounts.end())
+    if (compacting_it != ordered_accounts.end()) {
       std::swap(*compacting_it, ordered_accounts.back());
+    }
   }
 
   // All accounts have been added, and ordered_accounts now has the same
@@ -169,8 +155,9 @@ AccountReconcilorDelegate::ReorderChromeAccountsForReconcile(
   DCHECK_EQ(ordered_accounts.size(), chrome_accounts.size());
 
   // Keep only kMaxGaiaAccounts.
-  if (ordered_accounts.size() > kMaxGaiaAccounts)
+  if (ordered_accounts.size() > kMaxGaiaAccounts) {
     ordered_accounts.resize(kMaxGaiaAccounts);
+  }
 
   return ordered_accounts;
 }
@@ -186,19 +173,10 @@ AccountReconcilorDelegate::GetChromeAccountsForReconcile(
   return std::vector<CoreAccountId>();
 }
 
-AccountReconcilorDelegate::RevokeTokenOption
-AccountReconcilorDelegate::ShouldRevokeSecondaryTokensBeforeReconcile(
-    const std::vector<gaia::ListedAccount>& gaia_accounts) {
-  return RevokeTokenOption::kDoNotRevoke;
-}
+void AccountReconcilorDelegate::RevokeSecondaryTokensForReconcileIfNeeded(
+    const std::vector<gaia::ListedAccount>& gaia_accounts) {}
 
-bool AccountReconcilorDelegate::ShouldRevokeTokensNotInCookies() const {
-  return false;
-}
-
-bool AccountReconcilorDelegate::ShouldRevokeTokensOnCookieDeleted() {
-  return false;
-}
+void AccountReconcilorDelegate::OnAccountsCookieDeletedByUserAction() {}
 
 bool AccountReconcilorDelegate::ShouldRevokeTokensIfNoPrimaryAccount() const {
   return true;
@@ -210,9 +188,5 @@ base::TimeDelta AccountReconcilorDelegate::GetReconcileTimeout() const {
 
 void AccountReconcilorDelegate::OnReconcileError(
     const GoogleServiceAuthError& error) {}
-
-bool AccountReconcilorDelegate::IsUnknownInvalidAccountInCookieAllowed() const {
-  return true;
-}
 
 }  // namespace signin

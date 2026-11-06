@@ -1,8 +1,19 @@
 <style include="cr-shared-style">
 :host {
-  --focus-border-width: 1px;
+  --focus-border-width: 2px;
 }
+
+:host-context(body.jelly-enabled) .navigation-item {
+  border-radius: 20px;
+  font: var(--cros-button-2-font);
+}
+
 .navigation-item {
+  --active-shadow-rgb: transparent; /* Disable Active Shadow on cr-button */
+  --focus-shadow-color: transparent; /* Disable Focus Shadow on cr-button */
+  --hover-bg-color: var(--cros-ripple-color);
+  --ripple-opacity: 0; /* Disable Ripple on cr-button */
+
   align-items: center;
   border-block-end-width: var(--focus-border-width);
   border-block-start-width: var(--focus-border-width);
@@ -11,70 +22,90 @@
   border-inline-start-width: 0;
   border-radius: 0 20px 20px 0;
   border-style: solid;
-  color: var(--cros-text-color-secondary);
+  color: var(--cros-text-color-primary);
   cursor: pointer;
   display: flex;
   font-weight: 500;
+  justify-content: start;
   margin-bottom: 8px;
   margin-inline-end: 2px;
-  min-height: 32px;
+  min-height: 40px;
   padding-inline-start: 20px;
-  width: 225px;
 }
 
-div:hover:not(.selected).navigation-item {
-  background-color: var(--google-grey-100);
+:host-context(body.jelly-enabled) .navigation-item {
+  color: var(--cros-sys-on_surface);
+}
+
+:host-context(body.jelly-enabled) .navigation-item:hover {
+  background-color: var(--cros-sys-hover_on_subtle);
+}
+
+.navigation-item:focus-visible {
+  outline: var(--cros-focus-ring-color) solid var(--focus-border-width);
 }
 
 .navigation-item.selected {
-  background-color: var(--google-blue-50);
-  color: var(--google-blue-600);
+  background-color: var(--cros-highlight-color);
+  color: var(--cros-text-color-selection);
+}
+
+:host-context(body.jelly-enabled) .navigation-item.selected {
+  /* TODO(276493287): Replace default color rule after jelly colors launches. */
+  background-color: var(--cros-sys-primary);
+  color: var(--cros-sys-on_primary);
 }
 
 iron-icon {
-  --iron-icon-fill-color: var(--google-grey-700);
+  --iron-icon-fill-color: var(--cros-icon-color-primary);
+  --iron-icon-height: 20px;
+  --iron-icon-width: 20px;
   margin-inline-end: 16px;
   pointer-events: none;
   vertical-align: top;
 }
 
+/* TODO(276493287): Merge into default color rule after jelly colors
+                    launches. */
+:host-context(body.jelly-enabled) iron-icon {
+  --iron-icon-fill-color: var(--cros-sys-on_surface);
+}
+
+/* TODO(276493287): Remove default color rule after jelly colors launches. */
 .navigation-item.selected > iron-icon {
-  --iron-icon-fill-color: var(--google-blue-600);
+  --iron-icon-fill-color: var(--cros-icon-color-prominent);
+}
+
+:host-context(body.jelly-enabled) .navigation-item.selected > iron-icon {
+  --iron-icon-fill-color: var(--cros-sys-on_primary);
 }
 
 cr-expand-button {
   padding-inline-start: 20px;
 }
 
+
+:host-context(body.jelly-enabled) #navigationSelectorMenu {
+  margin-inline-start: 8px;
+}
+
+#navigationSelectorMenu {
+  position: relative;
+  top: var(--focus-border-width, 0);
+}
+
 </style>
 
 <div id="navigationSelectorComponent">
-  <div id="navigationSelectorMenu">
-    <template id="menuItems" is="dom-repeat" items="{{menuItems}}">
-      <template is="dom-if" if="[[!isCollapsible_(item)]]">
-        <div class$="{{computeInitialClass_(item.selectorItem)}}" tabindex="0"
+  <nav id="navigationSelectorMenu">
+    <template id="selectorItems" is="dom-repeat" items="{{selectorItems}}">
+        <cr-button class$="{{computeInitialClass_(item)}}" tabindex="0"
+            part="navigation-item"
             on-click="onSelected_">
-          <iron-icon class="icon" icon="[[item.selectorItem.icon]]" alt="">
-          </iron-icon>
-          [[item.selectorItem.name]]
-        </div>
-      </template>
-      <template is="dom-if" if="[[isCollapsible_(item)]]">
-        <cr-expand-button class="expand-button" on-click="onExpandClicked_">
-          [[item.selectorItem.name]]
-        </cr-expand-button>
-        <iron-collapse opened="[[item.properties.isExpanded]]">
-          <template class="collapsed-list" is="dom-repeat"
-              items="{{item.properties.subMenuItems}}">
-            <div class$="{{computeInitialClass_(item)}}" tabindex="0"
-                on-click="onNestedSelected_">
-              <iron-icon class="icon" icon="[[getIcon_(item)]]" alt="">
-              </iron-icon>
-              [[item.name]]
-            </div>
-          </template>
-        </iron-collapse>
-      </template>
+          <iron-icon class="icon" icon="[[item.icon]]"
+            alt="" hidden="[[!item.icon]]"></iron-icon>
+          [[item.name]]
+        </cr-button>
     </template>
-  </div>
+  </nav>
 </div>

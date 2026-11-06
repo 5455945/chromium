@@ -1,4 +1,4 @@
-// Copyright 2014 The Crashpad Authors. All rights reserved.
+// Copyright 2014 The Crashpad Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -28,15 +28,6 @@ namespace crashpad {
 namespace test {
 namespace {
 
-#if defined(OS_FUCHSIA)
-// Fuchsia uses -fsanitize=safe-stack by default, which splits local variables
-// and the call stack into separate regions (see
-// https://clang.llvm.org/docs/SafeStack.html). Because this test would like to
-// find an approximately valid stack pointer by comparing locals to the
-// captured one, disable safe-stack for this function.
-__attribute__((no_sanitize("safe-stack")))
-#endif  // defined(OS_FUCHSIA)
-
 #if defined(MEMORY_SANITIZER)
 // CaptureContext() calls inline assembly and is incompatible with MSan.
 __attribute__((no_sanitize("memory")))
@@ -56,8 +47,14 @@ void TestCaptureContext() {
   // reference program counter.
   uintptr_t pc = ProgramCounterFromContext(context_1);
 
+// TODO(crbug.com/574131848): Re-enable the "nearby" check on arm64 debug builds
+// once it tolerates larger function prologues. Since LLVM 4149fd77e859, AArch64
+// GlobalISel no longer runs the Localizer at -O0, so constants are materialized
+// in the entry block and the first `CaptureContext()` call lands more than 128
+// bytes into `TestCaptureContext()`.
 #if !defined(ADDRESS_SANITIZER) && !defined(ARCH_CPU_MIPS_FAMILY) && \
-    !defined(MEMORY_SANITIZER)
+    !defined(MEMORY_SANITIZER) &&                                    \
+    !(defined(ARCH_CPU_ARM64) && !defined(NDEBUG))
   // Sanitizers can cause enough code bloat that the “nearby” check would
   // likely fail.
   const uintptr_t kReferencePC =

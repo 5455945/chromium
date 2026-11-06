@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,9 +9,13 @@ import "third_party/blink/public/mojom/user_agent/user_agent_metadata.mojom";
 import "third_party/blink/public/mojom/browser_interface_broker.mojom";
 import "third_party/blink/public/mojom/loader/url_loader_factory_bundle.mojom";
 import "third_party/blink/public/mojom/renderer_preference_watcher.mojom";
+import "third_party/blink/public/mojom/frame/policy_container.mojom";
+import "third_party/blink/public/mojom/frame/reporting_observer.mojom";
+import "third_party/blink/public/mojom/fingerprinting_protection/noise_token.mojom";
 import "third_party/blink/public/mojom/renderer_preferences.mojom";
 import "third_party/blink/public/mojom/service_worker/controller_service_worker.mojom";
 import "third_party/blink/public/mojom/service_worker/service_worker_container.mojom";
+import "third_party/blink/public/mojom/storage_key/storage_key.mojom";
 import "third_party/blink/public/mojom/tokens/tokens.mojom";
 import "third_party/blink/public/mojom/worker/shared_worker.mojom";
 import "third_party/blink/public/mojom/worker/shared_worker_host.mojom";
@@ -42,11 +46,22 @@ interface SharedWorkerFactory {
       // should not be shared with any renderer except that hosting the worker.
       SharedWorkerToken token,
 
-      // The origin of the page where `new SharedWorker()` is called.
-      // This origin must be able to access shared workers.
+      // The StorageKey of the page where `new SharedWorker()` is called.
+      // StorageKey.origin must be able to access shared workers.
       // (see blink::SecurityOrigin::CanAccessSharedWorkers())
       // https://html.spec.whatwg.org/C/#concept-sharedworkerglobalscope-constructor-origin
-      url.mojom.Origin constructor_origin,
+      blink.mojom.StorageKey constructor_key,
+
+      // `origin` is the origin that will be used by the worker on the renderer
+      // side. It might differ from the origin that is used on the browser side
+      // when `script_url` is a data: URL, due to the linked bug.
+      // TODO(crbug.com/40051700): Remove the mismatch cases.
+      url.mojom.Origin origin,
+
+      // Whether the page where `new SharedWorker()` is called is a secure
+      // context or not. Note that this may be false even if
+      // `constructor_origin` is potentially-trustworthy.
+      bool is_constructor_secure_context,
 
       string user_agent,
       UserAgentMetadata ua_metadata,
@@ -64,11 +79,6 @@ interface SharedWorkerFactory {
       // not http(s) or another service worker supported scheme.
       ServiceWorkerContainerInfoForClient? service_worker_container_info,
 
-      // The ID of the AppCacheHost in the browser process that serves resources
-      // for this shared worker. This is not specified when AppCache doesn't
-      // serve resources for this shared worker.
-      mojo_base.mojom.UnguessableToken? appcache_host_id,
-
       // Used for passing the main script pre-requested by the browser process
       // and its redirect information.
       WorkerMainScriptLoadParams main_script_load_params,
@@ -81,6 +91,8 @@ interface SharedWorkerFactory {
       // worker. This is null when there're no controller service worker.
       ControllerServiceWorkerInfo? controller_info,
 
+      PolicyContainer policy_container,
+
       pending_remote<SharedWorkerHost> host,
       pending_receiver<SharedWorker> shared_worker,
 
@@ -90,5 +102,23 @@ interface SharedWorkerFactory {
 
       // The UKM SourceId associated with the SharedWorkerHost. This is distinct
       // from the IDs that are associated with the connected clients.
-      int64 ukm_source_id);
+      int64 ukm_source_id,
+
+      // If `require_cross_site_request_for_cookies` is true, then all
+      // requests made will have an empty site_for_cookies to ensure only
+      // SameSite=None cookies can be attached to the request.
+      // For context on usage see:
+      // https://privacycg.github.io/saa-non-cookie-storage/shared-workers.html
+      bool require_cross_site_request_for_cookies,
+
+      // Used by a CrossOriginEmbedderPolicyReporter to send reports to the
+      // ReportingObservers.
+      pending_receiver<ReportingObserver>? coep_reporting_observer_receiver,
+
+      // Used by a DocumentIsolationPolicyReporter to send reports to the
+      // ReportingObservers.
+      pending_receiver<ReportingObserver>? dip_reporting_observer_receiver,
+
+      // Whether the worker has access to cross-origin isolated  APIs or not.
+      bool cross_origin_isolated);
 };

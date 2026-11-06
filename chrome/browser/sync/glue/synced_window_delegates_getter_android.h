@@ -1,24 +1,31 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_SYNC_GLUE_SYNCED_WINDOW_DELEGATES_GETTER_ANDROID_H_
 #define CHROME_BROWSER_SYNC_GLUE_SYNCED_WINDOW_DELEGATES_GETTER_ANDROID_H_
 
-#include "base/macros.h"
+#include "base/memory/raw_ref.h"
 #include "components/sync_sessions/synced_window_delegates_getter.h"
+
+class Profile;
 
 namespace sync_sessions {
 class SyncedWindowDelegate;
 }
 
-namespace browser_sync {
-
 // This class defines how to access SyncedWindowDelegates on Android.
 class SyncedWindowDelegatesGetterAndroid
     : public sync_sessions::SyncedWindowDelegatesGetter {
  public:
-  SyncedWindowDelegatesGetterAndroid();
+  // `profile` must be non-null and must outlive `this`.
+  explicit SyncedWindowDelegatesGetterAndroid(Profile* profile);
+
+  SyncedWindowDelegatesGetterAndroid(
+      const SyncedWindowDelegatesGetterAndroid&) = delete;
+  SyncedWindowDelegatesGetterAndroid& operator=(
+      const SyncedWindowDelegatesGetterAndroid&) = delete;
+
   ~SyncedWindowDelegatesGetterAndroid() override;
 
   // SyncedWindowDelegatesGetter implementation
@@ -26,9 +33,7 @@ class SyncedWindowDelegatesGetterAndroid
   const sync_sessions::SyncedWindowDelegate* FindById(SessionID id) override;
 
  private:
-  DISALLOW_COPY_AND_ASSIGN(SyncedWindowDelegatesGetterAndroid);
+  const raw_ref<Profile> profile_;
 };
-
-}  // namespace browser_sync
 
 #endif  // CHROME_BROWSER_SYNC_GLUE_SYNCED_WINDOW_DELEGATES_GETTER_ANDROID_H_

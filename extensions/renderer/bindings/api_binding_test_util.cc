@@ -1,17 +1,17 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/renderer/bindings/api_binding_test_util.h"
 
+#include <string_view>
+
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/values.h"
 #include "content/public/renderer/v8_value_converter.h"
 #include "gin/converter.h"
-#include "testing/gtest/include/gtest/gtest.h"
 
 namespace extensions {
 
@@ -29,12 +29,12 @@ bool RunFunctionImpl(v8::Local<v8::Function> function,
                      v8::Local<v8::Value> argv[],
                      v8::Local<v8::Value>* out_value,
                      std::string* out_error) {
-  v8::TryCatch try_catch(context->GetIsolate());
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
+  v8::TryCatch try_catch(isolate);
   v8::MaybeLocal<v8::Value> maybe_result =
       function->Call(context, receiver, argc, argv);
   if (try_catch.HasCaught()) {
-    *out_error =
-        gin::V8ToString(context->GetIsolate(), try_catch.Message()->Get());
+    *out_error = gin::V8ToString(isolate, try_catch.Message()->Get());
     return false;
   }
   v8::Local<v8::Value> result;
@@ -48,31 +48,53 @@ bool RunFunctionImpl(v8::Local<v8::Function> function,
 
 }  // namespace
 
-std::string ReplaceSingleQuotes(base::StringPiece str) {
+std::string ReplaceSingleQuotes(std::string_view str) {
   std::string result;
   base::ReplaceChars(str, "'", "\"", &result);
   return result;
 }
 
-std::unique_ptr<base::Value> ValueFromString(base::StringPiece str) {
-  std::unique_ptr<base::Value> value =
-      base::JSONReader::ReadDeprecated(ReplaceSingleQuotes(str));
-  EXPECT_TRUE(value) << str;
-  return value;
+base::Value ValueFromString(std::string_view str) {
+  std::optional<base::Value> value = base::JSONReader::Read(
+      ReplaceSingleQuotes(str), base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!value) {
+    ADD_FAILURE() << "Failed to parse " << str;
+    return base::Value();
+  }
+  return std::move(value.value());
 }
 
-std::unique_ptr<base::ListValue> ListValueFromString(base::StringPiece str) {
-  return base::ListValue::From(ValueFromString(str));
+base::ListValue ListValueFromString(std::string_view str) {
+  base::Value value = ValueFromString(str);
+  if (value.is_none()) {
+    return base::ListValue();
+  }
+
+  if (!value.is_list()) {
+    ADD_FAILURE() << "Not a list: " << str;
+    return base::ListValue();
+  }
+
+  return std::move(value).TakeList();
 }
 
-std::unique_ptr<base::DictionaryValue> DictionaryValueFromString(
-    base::StringPiece str) {
-  return base::DictionaryValue::From(ValueFromString(str));
+base::DictValue DictValueFromString(std::string_view str) {
+  base::Value value = ValueFromString(str);
+  if (value.is_none()) {
+    return base::DictValue();
+  }
+
+  if (!value.is_dict()) {
+    ADD_FAILURE() << "Not a dict: " << str;
+    return base::DictValue();
+  }
+
+  return std::move(value).TakeDict();
 }
 
-std::string ValueToString(const base::Value& value) {
+std::string ValueToString(const base::ValueView& value_view) {
   std::string json;
-  EXPECT_TRUE(base::JSONWriter::Write(value, &json));
+  EXPECT_TRUE(base::JSONWriter::Write(value_view, &json));
   return json;
 }
 
@@ -93,9 +115,9 @@ std::string V8ToString(v8::Local<v8::Value> value,
 }
 
 v8::Local<v8::Value> V8ValueFromScriptSource(v8::Local<v8::Context> context,
-                                             base::StringPiece source) {
+                                             std::string_view source) {
   v8::MaybeLocal<v8::Script> maybe_script = v8::Script::Compile(
-      context, gin::StringToV8(context->GetIsolate(), source));
+      context, gin::StringToV8(v8::Isolate::GetCurrent(), source));
   v8::Local<v8::Script> script;
   if (!maybe_script.ToLocal(&script))
     return v8::Local<v8::Value>();
@@ -103,10 +125,10 @@ v8::Local<v8::Value> V8ValueFromScriptSource(v8::Local<v8::Context> context,
 }
 
 v8::Local<v8::Function> FunctionFromString(v8::Local<v8::Context> context,
-                                           base::StringPiece source) {
+                                           std::string_view source) {
   v8::Local<v8::Value> value = V8ValueFromScriptSource(context, source);
   v8::Local<v8::Function> function;
-  EXPECT_TRUE(gin::ConvertFromV8(context->GetIsolate(), value, &function));
+  EXPECT_TRUE(gin::ConvertFromV8(v8::Isolate::GetCurrent(), value, &function));
   return function;
 }
 
@@ -133,8 +155,8 @@ v8::Local<v8::Value> RunFunction(v8::Local<v8::Function> function,
                                  v8::Local<v8::Context> context,
                                  int argc,
                                  v8::Local<v8::Value> argv[]) {
-  return RunFunction(function, context, v8::Undefined(context->GetIsolate()),
-                     argc, argv);
+  return RunFunction(function, context,
+                     v8::Undefined(v8::Isolate::GetCurrent()), argc, argv);
 }
 
 v8::Local<v8::Value> RunFunctionOnGlobal(v8::Local<v8::Function> function,
@@ -157,7 +179,7 @@ v8::Global<v8::Value> RunFunctionOnGlobalAndReturnHandle(
     int argc,
     v8::Local<v8::Value> argv[]) {
   return v8::Global<v8::Value>(
-      context->GetIsolate(),
+      v8::Isolate::GetCurrent(),
       RunFunction(function, context, context->Global(), argc, argv));
 }
 
@@ -181,30 +203,47 @@ void RunFunctionAndExpectError(v8::Local<v8::Function> function,
                                v8::Local<v8::Value> argv[],
                                const std::string& expected_error) {
   RunFunctionAndExpectError(function, context,
-                            v8::Undefined(context->GetIsolate()), argc, argv,
-                            expected_error);
+                            v8::Undefined(v8::Isolate::GetCurrent()), argc,
+                            argv, expected_error);
 }
 
 v8::Local<v8::Value> GetPropertyFromObject(v8::Local<v8::Object> object,
                                            v8::Local<v8::Context> context,
-                                           base::StringPiece key) {
+                                           std::string_view key) {
   v8::Local<v8::Value> result;
-  EXPECT_TRUE(object->Get(context, gin::StringToV8(context->GetIsolate(), key))
-                  .ToLocal(&result));
+  EXPECT_TRUE(
+      object->Get(context, gin::StringToV8(v8::Isolate::GetCurrent(), key))
+          .ToLocal(&result));
   return result;
 }
 
 std::unique_ptr<base::Value> GetBaseValuePropertyFromObject(
     v8::Local<v8::Object> object,
     v8::Local<v8::Context> context,
-    base::StringPiece key) {
+    std::string_view key) {
   return V8ToBaseValue(GetPropertyFromObject(object, context, key), context);
 }
 
 std::string GetStringPropertyFromObject(v8::Local<v8::Object> object,
                                         v8::Local<v8::Context> context,
-                                        base::StringPiece key) {
+                                        std::string_view key) {
   return V8ToString(GetPropertyFromObject(object, context, key), context);
+}
+
+bool ValueTypeChecker<v8::Function>::IsType(v8::Local<v8::Value> value) {
+  return value->IsFunction();
+}
+
+bool ValueTypeChecker<v8::Object>::IsType(v8::Local<v8::Value> value) {
+  return value->IsObject();
+}
+
+bool ValueTypeChecker<v8::Promise>::IsType(v8::Local<v8::Value> value) {
+  return value->IsPromise();
+}
+
+bool ValueTypeChecker<v8::Array>::IsType(v8::Local<v8::Value> value) {
+  return value->IsArray();
 }
 
 }  // namespace extensions

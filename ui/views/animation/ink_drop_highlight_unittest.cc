@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,30 +8,34 @@
 #include <memory>
 #include <utility>
 
-#include "base/macros.h"
 #include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/compositor/layer.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/gfx/animation/animation.h"
 #include "ui/gfx/animation/animation_test_api.h"
 #include "ui/gfx/geometry/size.h"
-#include "ui/gfx/transform.h"
+#include "ui/gfx/geometry/transform.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/views/animation/test/ink_drop_highlight_test_api.h"
 #include "ui/views/animation/test/test_ink_drop_highlight_observer.h"
 
-namespace views {
-namespace test {
+namespace views::test {
 
 class InkDropHighlightTest : public testing::Test {
  public:
   InkDropHighlightTest();
+
+  InkDropHighlightTest(const InkDropHighlightTest&) = delete;
+  InkDropHighlightTest& operator=(const InkDropHighlightTest&) = delete;
+
   ~InkDropHighlightTest() override;
 
  protected:
   InkDropHighlight* ink_drop_highlight() { return ink_drop_highlight_.get(); }
 
-  InkDropHighlightTestApi* test_api() { return test_api_.get(); }
+  InkDropHighlightTestApi test_api() {
+    return InkDropHighlightTestApi(ink_drop_highlight_.get());
+  }
 
   // Observer of the test target.
   TestInkDropHighlightObserver* observer() { return &observer_; }
@@ -47,16 +51,10 @@ class InkDropHighlightTest : public testing::Test {
   // The test target.
   std::unique_ptr<InkDropHighlight> ink_drop_highlight_;
 
-  // Allows privileged access to the the |ink_drop_highlight_|.
-  std::unique_ptr<InkDropHighlightTestApi> test_api_;
-
   // Observer of the test target.
   TestInkDropHighlightObserver observer_;
 
-  std::unique_ptr<base::AutoReset<gfx::Animation::RichAnimationRenderMode>>
-      animation_mode_reset_;
-
-  DISALLOW_COPY_AND_ASSIGN(InkDropHighlightTest);
+  gfx::AnimationTestApi::RenderModeResetter animation_mode_reset_;
 };
 
 InkDropHighlightTest::InkDropHighlightTest()
@@ -74,14 +72,11 @@ InkDropHighlightTest::~InkDropHighlightTest() {
 void InkDropHighlightTest::InitHighlight(
     std::unique_ptr<InkDropHighlight> new_highlight) {
   ink_drop_highlight_ = std::move(new_highlight);
-  test_api_ =
-      std::make_unique<InkDropHighlightTestApi>(ink_drop_highlight_.get());
-  test_api()->SetDisableAnimationTimers(true);
+  test_api().SetDisableAnimationTimers(true);
   ink_drop_highlight()->set_observer(&observer_);
 }
 
 void InkDropHighlightTest::DestroyHighlight() {
-  test_api_.reset();
   ink_drop_highlight_.reset();
 }
 
@@ -90,31 +85,32 @@ TEST_F(InkDropHighlightTest, InitialStateAfterConstruction) {
 }
 
 TEST_F(InkDropHighlightTest, IsHighlightedStateTransitions) {
-  ink_drop_highlight()->FadeIn(base::TimeDelta::FromSeconds(1));
+  ink_drop_highlight()->FadeIn(base::Seconds(1));
   EXPECT_TRUE(ink_drop_highlight()->IsFadingInOrVisible());
 
-  test_api()->CompleteAnimations();
+  test_api().CompleteAnimations();
   EXPECT_TRUE(ink_drop_highlight()->IsFadingInOrVisible());
 
-  ink_drop_highlight()->FadeOut(base::TimeDelta::FromSeconds(1));
+  ink_drop_highlight()->FadeOut(base::Seconds(1));
   EXPECT_FALSE(ink_drop_highlight()->IsFadingInOrVisible());
 
-  test_api()->CompleteAnimations();
+  test_api().CompleteAnimations();
   EXPECT_FALSE(ink_drop_highlight()->IsFadingInOrVisible());
 }
 
 TEST_F(InkDropHighlightTest, VerifyObserversAreNotified) {
   // TODO(bruthig): Re-enable! For some reason these tests fail on some win
   // trunk builds. See crbug.com/731811.
-  if (!gfx::Animation::ShouldRenderRichAnimation())
+  if (!gfx::Animation::ShouldRenderRichAnimation()) {
     return;
+  }
 
-  ink_drop_highlight()->FadeIn(base::TimeDelta::FromSeconds(1));
+  ink_drop_highlight()->FadeIn(base::Seconds(1));
 
   EXPECT_EQ(1, observer()->last_animation_started_ordinal());
   EXPECT_FALSE(observer()->AnimationHasEnded());
 
-  test_api()->CompleteAnimations();
+  test_api().CompleteAnimations();
 
   EXPECT_TRUE(observer()->AnimationHasEnded());
   EXPECT_EQ(2, observer()->last_animation_ended_ordinal());
@@ -122,29 +118,29 @@ TEST_F(InkDropHighlightTest, VerifyObserversAreNotified) {
 
 TEST_F(InkDropHighlightTest,
        VerifyObserversAreNotifiedWithCorrectAnimationType) {
-  ink_drop_highlight()->FadeIn(base::TimeDelta::FromSeconds(1));
+  ink_drop_highlight()->FadeIn(base::Seconds(1));
 
   EXPECT_TRUE(observer()->AnimationHasStarted());
   EXPECT_EQ(InkDropHighlight::AnimationType::kFadeIn,
             observer()->last_animation_started_context());
 
-  test_api()->CompleteAnimations();
+  test_api().CompleteAnimations();
   EXPECT_TRUE(observer()->AnimationHasEnded());
   EXPECT_EQ(InkDropHighlight::AnimationType::kFadeIn,
             observer()->last_animation_started_context());
 
-  ink_drop_highlight()->FadeOut(base::TimeDelta::FromSeconds(1));
+  ink_drop_highlight()->FadeOut(base::Seconds(1));
   EXPECT_EQ(InkDropHighlight::AnimationType::kFadeOut,
             observer()->last_animation_started_context());
 
-  test_api()->CompleteAnimations();
+  test_api().CompleteAnimations();
   EXPECT_EQ(InkDropHighlight::AnimationType::kFadeOut,
             observer()->last_animation_started_context());
 }
 
 TEST_F(InkDropHighlightTest, VerifyObserversAreNotifiedOfSuccessfulAnimations) {
-  ink_drop_highlight()->FadeIn(base::TimeDelta::FromSeconds(1));
-  test_api()->CompleteAnimations();
+  ink_drop_highlight()->FadeIn(base::Seconds(1));
+  test_api().CompleteAnimations();
 
   EXPECT_EQ(2, observer()->last_animation_ended_ordinal());
   EXPECT_EQ(InkDropAnimationEndedReason::SUCCESS,
@@ -154,11 +150,12 @@ TEST_F(InkDropHighlightTest, VerifyObserversAreNotifiedOfSuccessfulAnimations) {
 TEST_F(InkDropHighlightTest, VerifyObserversAreNotifiedOfPreemptedAnimations) {
   // TODO(bruthig): Re-enable! For some reason these tests fail on some win
   // trunk builds. See crbug.com/731811.
-  if (!gfx::Animation::ShouldRenderRichAnimation())
+  if (!gfx::Animation::ShouldRenderRichAnimation()) {
     return;
+  }
 
-  ink_drop_highlight()->FadeIn(base::TimeDelta::FromSeconds(1));
-  ink_drop_highlight()->FadeOut(base::TimeDelta::FromSeconds(1));
+  ink_drop_highlight()->FadeIn(base::Seconds(1));
+  ink_drop_highlight()->FadeOut(base::Seconds(1));
 
   EXPECT_EQ(2, observer()->last_animation_ended_ordinal());
   EXPECT_EQ(InkDropHighlight::AnimationType::kFadeIn,
@@ -171,11 +168,11 @@ TEST_F(InkDropHighlightTest, VerifyObserversAreNotifiedOfPreemptedAnimations) {
 TEST_F(InkDropHighlightTest, NullObserverIsSafe) {
   ink_drop_highlight()->set_observer(nullptr);
 
-  ink_drop_highlight()->FadeIn(base::TimeDelta::FromSeconds(1));
-  test_api()->CompleteAnimations();
+  ink_drop_highlight()->FadeIn(base::Seconds(1));
+  test_api().CompleteAnimations();
 
-  ink_drop_highlight()->FadeOut(base::TimeDelta::FromMilliseconds(0));
-  test_api()->CompleteAnimations();
+  ink_drop_highlight()->FadeOut(base::Milliseconds(0));
+  test_api().CompleteAnimations();
   EXPECT_FALSE(ink_drop_highlight()->IsFadingInOrVisible());
 }
 
@@ -184,10 +181,11 @@ TEST_F(InkDropHighlightTest, NullObserverIsSafe) {
 TEST_F(InkDropHighlightTest, AnimationsAbortedDuringDeletion) {
   // TODO(bruthig): Re-enable! For some reason these tests fail on some win
   // trunk builds. See crbug.com/731811.
-  if (!gfx::Animation::ShouldRenderRichAnimation())
+  if (!gfx::Animation::ShouldRenderRichAnimation()) {
     return;
+  }
 
-  ink_drop_highlight()->FadeIn(base::TimeDelta::FromSeconds(1));
+  ink_drop_highlight()->FadeIn(base::Seconds(1));
   DestroyHighlight();
   EXPECT_EQ(1, observer()->last_animation_started_ordinal());
   EXPECT_EQ(2, observer()->last_animation_ended_ordinal());
@@ -201,7 +199,7 @@ TEST_F(InkDropHighlightTest, AnimationsAbortedDuringDeletion) {
 TEST_F(InkDropHighlightTest, AnimatingAZeroSizeHighlight) {
   InitHighlight(std::make_unique<InkDropHighlight>(
       gfx::Size(0, 0), 3, gfx::PointF(), SK_ColorBLACK));
-  ink_drop_highlight()->FadeOut(base::TimeDelta::FromMilliseconds(0));
+  ink_drop_highlight()->FadeOut(base::Milliseconds(0));
 }
 
 TEST_F(InkDropHighlightTest, TransformIsPixelAligned) {
@@ -209,23 +207,20 @@ TEST_F(InkDropHighlightTest, TransformIsPixelAligned) {
   constexpr gfx::Size kHighlightSize(10, 10);
   InitHighlight(std::make_unique<InkDropHighlight>(
       kHighlightSize, 3, gfx::PointF(3.5f, 3.5f), SK_ColorYELLOW));
-  const gfx::PointF layer_origin(
-      ink_drop_highlight()->layer()->bounds().origin());
   for (auto dsf : {1.25, 1.33, 1.5, 1.6, 1.75, 1.8, 2.25}) {
     SCOPED_TRACE(testing::Message()
                  << std::endl
                  << "Device Scale Factor: " << dsf << std::endl);
     ink_drop_highlight()->layer()->OnDeviceScaleFactorChanged(dsf);
 
-    gfx::Transform transform = test_api()->CalculateTransform();
-    gfx::Point3F transformed_layer_origin(layer_origin.x(), layer_origin.y(),
-                                          0);
-    transform.TransformPoint(&transformed_layer_origin);
+    gfx::Transform transform = test_api().CalculateTransform();
+    gfx::PointF transformed_layer_origin = transform.MapPoint(
+        gfx::PointF(ink_drop_highlight()->layer()->bounds().origin()));
 
     // Apply device scale factor to get the final offset.
     gfx::Transform dsf_transform;
     dsf_transform.Scale(dsf, dsf);
-    dsf_transform.TransformPoint(&transformed_layer_origin);
+    transformed_layer_origin = dsf_transform.MapPoint(transformed_layer_origin);
     EXPECT_NEAR(transformed_layer_origin.x(),
                 std::round(transformed_layer_origin.x()), kEpsilon);
     EXPECT_NEAR(transformed_layer_origin.y(),
@@ -233,5 +228,4 @@ TEST_F(InkDropHighlightTest, TransformIsPixelAligned) {
   }
 }
 
-}  // namespace test
-}  // namespace views
+}  // namespace views::test

@@ -1,15 +1,19 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "media/gpu/vp8_decoder.h"
 
 #include <stdint.h>
 
 #include <string>
 
 #include "base/command_line.h"
+#include "base/containers/span.h"
 #include "base/files/file_util.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "media/base/test_data_util.h"
-#include "media/gpu/vp8_decoder.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -27,7 +31,7 @@ const std::string kIFrame = "vp8-I-frame-320x240";
 const std::string kPFrame = "vp8-P-frame-320x240";
 const std::string kCorruptFrame = "vp8-corrupt-I-frame";
 constexpr gfx::Size kVideoSize(320, 240);
-constexpr size_t kRequiredNumOfPictures = 9u;
+constexpr size_t kRequiredNumOfPictures = 8u;
 
 class MockVP8Accelerator : public VP8Decoder::VP8Accelerator {
  public:
@@ -55,7 +59,7 @@ class VP8DecoderTest : public ::testing::Test {
   void CompleteToDecodeFirstIFrame();
 
   std::unique_ptr<VP8Decoder> decoder_;
-  MockVP8Accelerator* accelerator_ = nullptr;
+  raw_ptr<MockVP8Accelerator> accelerator_ = nullptr;
 
  private:
   void DecodeFirstIFrame();
@@ -70,7 +74,7 @@ void VP8DecoderTest::SetUp() {
 
   // Sets default behaviors for mock methods for convenience.
   ON_CALL(*accelerator_, CreateVP8Picture())
-      .WillByDefault(Return(new VP8Picture()));
+      .WillByDefault(Return(base::MakeRefCounted<VP8Picture>()));
   ON_CALL(*accelerator_, SubmitDecode(_, _)).WillByDefault(Return(true));
   ON_CALL(*accelerator_, OutputPicture(_)).WillByDefault(Return(true));
 
@@ -104,10 +108,9 @@ AcceleratedVideoDecoder::DecodeResult VP8DecoderTest::Decode(
   if (!input_frame_file.empty()) {
     auto input_file = GetTestDataFilePath(input_frame_file);
     EXPECT_TRUE(base::ReadFileToString(input_file, &bitstream));
-    buffer = DecoderBuffer::CopyFrom(
-        reinterpret_cast<const uint8_t*>(bitstream.data()), bitstream.size());
+    buffer = DecoderBuffer::CopyFrom(base::as_byte_span(bitstream));
     EXPECT_NE(buffer.get(), nullptr);
-    decoder_->SetStream(bitstream_id_++, *buffer);
+    decoder_->SetStream(bitstream_id_++, buffer);
   }
 
   AcceleratedVideoDecoder::DecodeResult result = decoder_->Decode();

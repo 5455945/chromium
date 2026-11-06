@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,8 @@
 
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "components/safe_browsing/core/browser/db/sb_protocol_manager_util.h"
 #include "components/safe_browsing/core/browser/db/util.h"
-#include "components/safe_browsing/core/browser/db/v4_protocol_manager_util.h"
 #include "components/subresource_filter/content/browser/content_activation_list_utils.h"
 #include "components/subresource_filter/content/browser/content_subresource_filter_throttle_manager.h"
 #include "components/subresource_filter/content/browser/fake_safe_browsing_database_manager.h"
@@ -49,7 +49,7 @@ TEST_F(SubresourceFilterTest, SimpleAllowedLoad) {
 TEST_F(SubresourceFilterTest, SimpleDisallowedLoad) {
   base::HistogramTester histogram_tester;
   GURL url("https://example.test");
-  ConfigureAsSubresourceFilterOnlyURL(url);
+  ConfigureAsBetterAdsURL(url);
   SimulateNavigateAndCommit(url, main_rfh());
   EXPECT_FALSE(CreateAndNavigateDisallowedSubframe(main_rfh()));
 
@@ -59,7 +59,7 @@ TEST_F(SubresourceFilterTest, SimpleDisallowedLoad) {
 
 TEST_F(SubresourceFilterTest, DeactivateUrl_ChangeSiteActivationToFalse) {
   GURL url("https://a.test");
-  ConfigureAsSubresourceFilterOnlyURL(url);
+  ConfigureAsBetterAdsURL(url);
   SimulateNavigateAndCommit(url, main_rfh());
   EXPECT_FALSE(CreateAndNavigateDisallowedSubframe(main_rfh()));
 
@@ -79,7 +79,7 @@ TEST_F(SubresourceFilterTest, DeactivateUrl_ChangeSiteActivationToFalse) {
 // we should clear the metadata.
 TEST_F(SubresourceFilterTest, ActivationToDryRun_ChangeSiteActivationToFalse) {
   GURL url("https://a.test");
-  ConfigureAsSubresourceFilterOnlyURL(url);
+  ConfigureAsBetterAdsURL(url);
   SimulateNavigateAndCommit(url, main_rfh());
   EXPECT_FALSE(CreateAndNavigateDisallowedSubframe(main_rfh()));
 
@@ -89,7 +89,7 @@ TEST_F(SubresourceFilterTest, ActivationToDryRun_ChangeSiteActivationToFalse) {
   // it should also be removed from the metadata.
   scoped_configuration().ResetConfiguration(Configuration(
       mojom::ActivationLevel::kDryRun, ActivationScope::ACTIVATION_LIST,
-      ActivationList::SUBRESOURCE_FILTER));
+      ActivationList::BETTER_ADS));
 
   // Navigate to |url| again and expect the site's activation to be set to
   // false.
@@ -102,7 +102,7 @@ TEST_F(SubresourceFilterTest, ActivationToDryRun_ChangeSiteActivationToFalse) {
 TEST_F(SubresourceFilterTest,
        ExplicitAllowlisting_ShouldNotChangeSiteActivation) {
   GURL url("https://a.test");
-  ConfigureAsSubresourceFilterOnlyURL(url);
+  ConfigureAsBetterAdsURL(url);
   SimulateNavigateAndCommit(url, main_rfh());
   EXPECT_FALSE(CreateAndNavigateDisallowedSubframe(main_rfh()));
 
@@ -117,7 +117,7 @@ TEST_F(SubresourceFilterTest,
 
 TEST_F(SubresourceFilterTest, SimpleAllowedLoad_WithObserver) {
   GURL url("https://example.test");
-  ConfigureAsSubresourceFilterOnlyURL(url);
+  ConfigureAsBetterAdsURL(url);
 
   TestSubresourceFilterObserver observer(web_contents());
   SimulateNavigateAndCommit(url, main_rfh());
@@ -129,13 +129,13 @@ TEST_F(SubresourceFilterTest, SimpleAllowedLoad_WithObserver) {
   auto* subframe =
       content::RenderFrameHostTester::For(main_rfh())->AppendChild("subframe");
   SimulateNavigateAndCommit(GURL(allowed_url), subframe);
-  EXPECT_EQ(LoadPolicy::ALLOW, *observer.GetSubframeLoadPolicy(allowed_url));
-  EXPECT_FALSE(observer.GetIsAdSubframe(subframe->GetFrameTreeNodeId()));
+  EXPECT_EQ(LoadPolicy::ALLOW, *observer.GetChildFrameLoadPolicy(allowed_url));
+  EXPECT_FALSE(observer.GetIsAdFrame(subframe->GetFrameTreeNodeId()));
 }
 
 TEST_F(SubresourceFilterTest, SimpleDisallowedLoad_WithObserver) {
   GURL url("https://example.test");
-  ConfigureAsSubresourceFilterOnlyURL(url);
+  ConfigureAsBetterAdsURL(url);
 
   TestSubresourceFilterObserver observer(web_contents());
   SimulateNavigateAndCommit(url, main_rfh());
@@ -146,6 +146,9 @@ TEST_F(SubresourceFilterTest, SimpleDisallowedLoad_WithObserver) {
   GURL disallowed_url(SubresourceFilterTest::kDefaultDisallowedUrl);
   auto* subframe =
       content::RenderFrameHostTester::For(main_rfh())->AppendChild("subframe");
+  // Save the FrameTreeNodeId, as `subframe` may be destroyed when the error
+  // page for the blocked navigation commits in another RenderFrameHost.
+  content::FrameTreeNodeId subframe_id = subframe->GetFrameTreeNodeId();
 
   content::TestNavigationObserver navigation_observer(
       web_contents(), content::MessageLoopRunner::QuitMode::IMMEDIATE,
@@ -155,13 +158,13 @@ TEST_F(SubresourceFilterTest, SimpleDisallowedLoad_WithObserver) {
   navigation_observer.WaitForNavigationFinished();
 
   EXPECT_EQ(LoadPolicy::DISALLOW,
-            *observer.GetSubframeLoadPolicy(disallowed_url));
-  EXPECT_TRUE(observer.GetIsAdSubframe(subframe->GetFrameTreeNodeId()));
+            *observer.GetChildFrameLoadPolicy(disallowed_url));
+  EXPECT_TRUE(observer.GetIsAdFrame(subframe_id));
 }
 
 TEST_F(SubresourceFilterTest, RefreshMetadataOnActivation) {
   const GURL url("https://a.test");
-  ConfigureAsSubresourceFilterOnlyURL(url);
+  ConfigureAsBetterAdsURL(url);
   SimulateNavigateAndCommit(url, main_rfh());
   EXPECT_FALSE(CreateAndNavigateDisallowedSubframe(main_rfh()));
 
@@ -178,7 +181,7 @@ TEST_F(SubresourceFilterTest, RefreshMetadataOnActivation) {
 
   // Site re-added to the blocklist. Should not activate due to allowlist, but
   // there should be page info / site details.
-  ConfigureAsSubresourceFilterOnlyURL(url);
+  ConfigureAsBetterAdsURL(url);
   SimulateNavigateAndCommit(url, main_rfh());
 
   EXPECT_EQ(CONTENT_SETTING_ALLOW,
@@ -198,10 +201,7 @@ TEST_F(SubresourceFilterTest, NotifySafeBrowsing) {
     bool expected_warning;
   } kTestCases[]{
       // AdBlockOnAbusiveSitesTest::kDisabled
-      {AdBlockOnAbusiveSitesTest::kDisabled,
-       {},
-       ActivationList::SUBRESOURCE_FILTER,
-       false},
+      {AdBlockOnAbusiveSitesTest::kDisabled, {}, ActivationList::NONE, false},
       {AdBlockOnAbusiveSitesTest::kDisabled,
        {{Type::ABUSIVE, Level::ENFORCE}},
        ActivationList::NONE,
@@ -248,7 +248,8 @@ TEST_F(SubresourceFilterTest, NotifySafeBrowsing) {
     SimulateNavigateAndCommit(url, main_rfh());
     bool warning = false;
     EXPECT_EQ(test_case.expected_activation,
-              GetListForThreatTypeAndMetadata(threat_type, metadata, &warning));
+              GetListForThreatTypeAndMetadata(threat_type, test_case.match,
+                                              &warning));
     EXPECT_EQ(warning, test_case.expected_warning);
   }
 }

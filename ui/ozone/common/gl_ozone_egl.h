@@ -1,13 +1,14 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_OZONE_COMMON_GL_OZONE_EGL_H_
 #define UI_OZONE_COMMON_GL_OZONE_EGL_H_
 
-#include "base/callback.h"
-#include "base/macros.h"
-#include "third_party/khronos/EGL/eglplatform.h"
+#include <optional>
+
+#include "components/viz/common/resources/shared_image_format.h"
+#include "third_party/angle/include/EGL/eglplatform.h"
 #include "ui/gl/gl_implementation.h"
 #include "ui/gl/gl_surface_egl.h"
 #include "ui/ozone/public/gl_ozone.h"
@@ -18,16 +19,34 @@ namespace ui {
 class GLOzoneEGL : public GLOzone {
  public:
   GLOzoneEGL() {}
+
+  GLOzoneEGL(const GLOzoneEGL&) = delete;
+  GLOzoneEGL& operator=(const GLOzoneEGL&) = delete;
+
   ~GLOzoneEGL() override {}
 
   // GLOzone:
-  bool InitializeGLOneOffPlatform() override;
+  gl::GLDisplay* InitializeGLOneOffPlatform(
+      bool supports_angle,
+      std::vector<gl::DisplayType> init_displays,
+      gl::GpuPreference gpu_preference) override;
   bool InitializeStaticGLBindings(
       const gl::GLImplementationParts& implementation) override;
   void SetDisabledExtensionsPlatform(
       const std::string& disabled_extensions) override;
-  bool InitializeExtensionSettingsOneOffPlatform() override;
-  void ShutdownGL() override;
+  bool InitializeExtensionSettingsOneOffPlatform(
+      gl::GLDisplay* display) override;
+  void ShutdownGL(gl::GLDisplay* display) override;
+  bool CanImportNativePixmap(viz::SharedImageFormat format) override;
+  std::unique_ptr<NativePixmapGLBinding> ImportNativePixmap(
+      scoped_refptr<gfx::NativePixmap> pixmap,
+      viz::SharedImageFormat format,
+      std::optional<int> plane_index,
+      gfx::Size size,
+      const gfx::ColorSpace& color_space,
+      GLenum target,
+      GLuint texture_id) override;
+
   bool GetGLWindowSystemBindingInfo(
       const gl::GLVersionInfo& gl_info,
       gl::GLWindowSystemBindingInfo* info) override;
@@ -36,10 +55,13 @@ class GLOzoneEGL : public GLOzone {
       gl::GLSurface* compatible_surface,
       const gl::GLContextAttribs& attribs) override;
   scoped_refptr<gl::GLSurface> CreateViewGLSurface(
+      gl::GLDisplay* display,
       gfx::AcceleratedWidget window) override = 0;
-  scoped_refptr<gl::GLSurface> CreateSurfacelessViewGLSurface(
+  scoped_refptr<gl::Presenter> CreateSurfacelessViewGLSurface(
+      gl::GLDisplay* display,
       gfx::AcceleratedWidget window) override;
   scoped_refptr<gl::GLSurface> CreateOffscreenGLSurface(
+      gl::GLDisplay* display,
       const gfx::Size& size) override = 0;
 
  protected:
@@ -51,9 +73,6 @@ class GLOzoneEGL : public GLOzone {
   // Sets up GL bindings for the native surface.
   virtual bool LoadGLES2Bindings(
       const gl::GLImplementationParts& implementation) = 0;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(GLOzoneEGL);
 };
 
 }  // namespace ui

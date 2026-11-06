@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,37 +6,58 @@
 #define COMPONENTS_PASSWORD_MANAGER_CORE_BROWSER_UI_CREDENTIAL_UTILS_H_
 
 #include <string>
-#include <tuple>
-#include <type_traits>
 #include <utility>
 
-#include "base/template_util.h"
-#include "components/password_manager/core/browser/leak_detection/bulk_leak_check.h"
+#include "build/build_config.h"
 #include "components/password_manager/core/browser/leak_detection/encryption_utils.h"
 #include "components/password_manager/core/browser/password_form.h"
+#include "components/password_manager/core/browser/password_string.h"
+#include "components/password_manager/core/browser/ui/credential_ui_entry.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "components/password_manager/core/browser/leak_detection/bulk_leak_check.h"
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 namespace password_manager {
 
 // Simple struct that stores a canonicalized credential. Allows implicit
-// constructon from PasswordForm and LeakCheckCredentail for convenience.
+// constructon from PasswordForm, CredentialUIEntry and LeakCheckCredentail for
+// convenience.
 struct CanonicalizedCredential {
   CanonicalizedCredential(const PasswordForm& form)  // NOLINT
       : canonicalized_username(CanonicalizeUsername(form.username_value)),
         password(form.password_value) {}
 
+  CanonicalizedCredential(const CredentialUIEntry& credential)  // NOLINT
+      : canonicalized_username(CanonicalizeUsername(credential.username)),
+        password(credential.password) {}
+
+  CanonicalizedCredential(CredentialUIEntry&& credential)  // NOLINT
+      : canonicalized_username(CanonicalizeUsername(credential.username)),
+        password(std::move(credential.password)) {}
+
+#if !BUILDFLAG(IS_ANDROID)
   CanonicalizedCredential(const LeakCheckCredential& credential)  // NOLINT
       : canonicalized_username(CanonicalizeUsername(credential.username())),
         password(credential.password()) {}
+#endif  // !BUILDFLAG(IS_ANDROID)
+
+  friend bool operator==(const CanonicalizedCredential&,
+                         const CanonicalizedCredential&) = default;
+
+  template <typename H>
+  friend H AbslHashValue(H h, const CanonicalizedCredential& credential) {
+    return H::combine(std::move(h), credential.canonicalized_username,
+                      credential.password);
+  }
 
   std::u16string canonicalized_username;
-  std::u16string password;
+  PasswordString password;
 };
 
-inline bool operator<(const CanonicalizedCredential& lhs,
-                      const CanonicalizedCredential& rhs) {
-  return std::tie(lhs.canonicalized_username, lhs.password) <
-         std::tie(rhs.canonicalized_username, rhs.password);
-}
+// Returns whether `url` has valid format (either an HTTP or HTTPS scheme) or
+// Android credential.
+bool IsValidPasswordURL(const GURL& url);
 
 }  // namespace password_manager
 

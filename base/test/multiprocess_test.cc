@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,13 @@
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/path_service.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 
 namespace base {
 
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
 Process SpawnMultiProcessTestChild(const std::string& procname,
                                    const CommandLine& base_command_line,
                                    const LaunchOptions& options) {
@@ -21,8 +22,9 @@ Process SpawnMultiProcessTestChild(const std::string& procname,
   // TODO(viettrungluu): See comment above |MakeCmdLine()| in the header file.
   // This is a temporary hack, since |MakeCmdLine()| has to provide a full
   // command line.
-  if (!command_line.HasSwitch(switches::kTestChildProcess))
+  if (!command_line.HasSwitch(switches::kTestChildProcess)) {
     command_line.AppendSwitchASCII(switches::kTestChildProcess, procname);
+  }
 
   return LaunchProcess(command_line, options);
 }
@@ -39,12 +41,13 @@ bool TerminateMultiProcessTestChild(const Process& process,
   return process.Terminate(exit_code, wait);
 }
 
-#endif  // !defined(OS_ANDROID)
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 CommandLine GetMultiProcessTestChildBaseCommandLine() {
   base::ScopedAllowBlockingForTesting allow_blocking;
   CommandLine cmd_line = *CommandLine::ForCurrentProcess();
-  cmd_line.SetProgram(MakeAbsoluteFilePath(cmd_line.GetProgram()));
+  cmd_line.SetProgram(
+      MakeAbsoluteFilePath(base::PathService::CheckedGet(base::FILE_EXE)));
   return cmd_line;
 }
 
@@ -54,7 +57,7 @@ MultiProcessTest::MultiProcessTest() = default;
 
 Process MultiProcessTest::SpawnChild(const std::string& procname) {
   LaunchOptions options;
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   options.start_hidden = true;
 #endif
   return SpawnChildWithOptions(procname, options);

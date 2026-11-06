@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,13 +20,8 @@
 #endif  // defined(BLINK_COMMON_IMPLEMENTATION)
 
 #else  // defined(WIN32)
-#if defined(BLINK_COMMON_IMPLEMENTATION)
 #define BLINK_COMMON_EXPORT __attribute__((visibility("default")))
 #define BLINK_COMMON_EXPORT_PRIVATE __attribute__((visibility("default")))
-#else
-#define BLINK_COMMON_EXPORT
-#define BLINK_COMMON_EXPORT_PRIVATE
-#endif
 #endif
 
 #else  /// defined(COMPONENT_BUILD)

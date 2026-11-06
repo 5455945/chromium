@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,13 +10,14 @@
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
 #include "base/compiler_specific.h"
 #include "base/format_macros.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/i18n/time_formatting.h"
 #include "base/strings/string_split.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/test_simple_task_runner.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -48,6 +49,9 @@ class DeviceEventLogTest : public testing::Test {
  public:
   DeviceEventLogTest() : task_runner_(new base::TestSimpleTaskRunner()) {}
 
+  DeviceEventLogTest(const DeviceEventLogTest&) = delete;
+  DeviceEventLogTest& operator=(const DeviceEventLogTest&) = delete;
+
   void SetUp() override {
     impl_ =
         std::make_unique<DeviceEventLogImpl>(task_runner_, kDefaultMaxEvents);
@@ -70,7 +74,7 @@ class DeviceEventLogTest : public testing::Test {
   }
 
   size_t CountLines(const std::string& input) {
-    return std::count(input.begin(), input.end(), '\n');
+    return std::ranges::count(input, '\n');
   }
 
   std::string GetAsString(StringOrder order,
@@ -129,9 +133,6 @@ class DeviceEventLogTest : public testing::Test {
 
   scoped_refptr<base::TestSimpleTaskRunner> task_runner_;
   std::unique_ptr<DeviceEventLogImpl> impl_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(DeviceEventLogTest);
 };
 
 TEST_F(DeviceEventLogTest, TestNetworkEvents) {
@@ -204,32 +205,24 @@ TEST_F(DeviceEventLogTest, TestStringFormat) {
 }
 
 TEST_F(DeviceEventLogTest, TestTimeFormat) {
-  const int hour = 12;
-  const std::string time_str = base::StringPrintf("1 Jan 2020 %d:34:56", hour);
-
+  static constexpr base::Time::Exploded kTime = {.year = 2020,
+                                                 .month = 1,
+                                                 .day_of_month = 1,
+                                                 .hour = 12,
+                                                 .minute = 34,
+                                                 .second = 56};
   base::Time time;
-  ASSERT_TRUE(base::Time::FromUTCString(time_str.c_str(), &time));
-  base::Time::Exploded exploded;
-
-  // This gets the offset for the current system time, which is what will be
-  // used in the logs. TODO(stevenjb): Figure out a more robust test mechanism.
-  // Using base::test::ScopedRestoreDefaultTimezone does not work as expected.
-  time.LocalExplode(&exploded);
-  int hour_delta = exploded.hour - hour;
+  ASSERT_TRUE(base::Time::FromLocalExploded(kTime, &time));
 
   AddTestEventWithTimestamp(LOG_LEVEL_EVENT, "event0", time);
 
-  std::string extected_time_str =
-      base::StringPrintf("%02d:34:56.000", hour + hour_delta);
-  EXPECT_EQ(base::StringPrintf("[%s] event0\n", extected_time_str.c_str()),
+  EXPECT_EQ("[12:34:56.000] event0\n",
             GetLogString(OLDEST_FIRST, "time", kDefaultLevel, 1));
 
-#if defined(OS_POSIX)
-  char sign = hour_delta > 0 ? '+' : '-';
-  std::string expected_time =
-      base::StringPrintf("2020-01-01T%02d:34:56.000000%c%02d:00",
-                         hour + hour_delta, sign, std::abs(hour_delta));
-  EXPECT_EQ(base::StringPrintf("%s event0\n", expected_time.c_str()),
+#if BUILDFLAG(IS_POSIX)
+  // External tools expect the "unixtime" format to match the format use in
+  // /var/log/messages and other system logs.
+  EXPECT_EQ(base::TimeFormatUnix(time) + " event0\n",
             GetLogString(OLDEST_FIRST, "unixtime", kDefaultLevel, 1));
 #endif
 }
@@ -347,22 +340,28 @@ TEST_F(DeviceEventLogTest, TestClear) {
 
 TEST_F(DeviceEventLogTest, TestClearRange) {
   AddTestEventWithTimestamp(LOG_LEVEL_EVENT, "event1",
-                            base::Time() + base::TimeDelta::FromSeconds(1));
+                            base::Time() + base::Seconds(1));
   AddTestEventWithTimestamp(LOG_LEVEL_EVENT, "event2",
-                            base::Time() + base::TimeDelta::FromSeconds(2));
+                            base::Time() + base::Seconds(2));
   AddTestEventWithTimestamp(LOG_LEVEL_EVENT, "event3",
-                            base::Time() + base::TimeDelta::FromSeconds(3));
+                            base::Time() + base::Seconds(3));
   AddTestEventWithTimestamp(LOG_LEVEL_EVENT, "event4",
-                            base::Time() + base::TimeDelta::FromSeconds(4));
+                            base::Time() + base::Seconds(4));
 
   EXPECT_EQ("event1\nevent2\nevent3\nevent4\n",
             GetLogString(OLDEST_FIRST, "", LOG_LEVEL_EVENT, 0));
 
-  impl_->Clear(base::Time() + base::TimeDelta::FromSeconds(2),
-               base::Time() + base::TimeDelta::FromSeconds(3));
+  impl_->Clear(base::Time() + base::Seconds(2),
+               base::Time() + base::Seconds(3));
 
   EXPECT_EQ("event1\nevent4\n",
             GetLogString(OLDEST_FIRST, "", LOG_LEVEL_EVENT, 0));
+}
+
+TEST_F(DeviceEventLogTest, TestEmpty) {
+  EXPECT_EQ(GetLogString(OLDEST_FIRST, "", LOG_LEVEL_ERROR, 0),
+            "No Log Entries.");
+  EXPECT_EQ(GetLogString(OLDEST_FIRST, "json", LOG_LEVEL_ERROR, 0), "[]");
 }
 
 }  // namespace device_event_log

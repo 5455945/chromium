@@ -1,16 +1,16 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "device/fido/authenticator_get_info_response.h"
 
+#include <algorithm>
 #include <utility>
 
-#include "base/containers/contains.h"
-#include "base/ranges/algorithm.h"
+#include "base/containers/to_array.h"
+#include "base/numerics/safe_conversions.h"
 #include "components/cbor/values.h"
 #include "components/cbor/writer.h"
-#include "device/fido/fido_parsing_utils.h"
 
 namespace device {
 
@@ -20,8 +20,9 @@ template <typename Container>
 cbor::Value::ArrayValue ToArrayValue(const Container& container) {
   cbor::Value::ArrayValue value;
   value.reserve(container.size());
-  for (const auto& item : container)
+  for (const auto& item : container) {
     value.emplace_back(item);
+  }
   return value;
 }
 
@@ -33,9 +34,8 @@ AuthenticatorGetInfoResponse::AuthenticatorGetInfoResponse(
     base::span<const uint8_t, kAaguidLength> in_aaguid)
     : versions(std::move(in_versions)),
       ctap2_versions(std::move(in_ctap2_versions)),
-      aaguid(fido_parsing_utils::Materialize(in_aaguid)) {
-  DCHECK_NE(base::Contains(versions, ProtocolVersion::kCtap2),
-            ctap2_versions.empty());
+      aaguid(base::ToArray(in_aaguid)) {
+  DCHECK_NE(versions.contains(ProtocolVersion::kCtap2), ctap2_versions.empty());
 }
 
 AuthenticatorGetInfoResponse::AuthenticatorGetInfoResponse(
@@ -61,6 +61,9 @@ std::vector<uint8_t> AuthenticatorGetInfoResponse::EncodeToCBOR(
             case Ctap2Version::kCtap2_1:
               version_array.emplace_back(kCtap2_1Version);
               break;
+            case Ctap2Version::kCtap2_2:
+              version_array.emplace_back(kCtap2_2Version);
+              break;
           }
         }
         break;
@@ -74,8 +77,9 @@ std::vector<uint8_t> AuthenticatorGetInfoResponse::EncodeToCBOR(
   cbor::Value::MapValue device_info_map;
   device_info_map.emplace(0x01, std::move(version_array));
 
-  if (response.extensions)
+  if (response.extensions) {
     device_info_map.emplace(0x02, ToArrayValue(*response.extensions));
+  }
 
   device_info_map.emplace(0x03, response.aaguid);
   device_info_map.emplace(0x04, AsCBOR(response.options));
@@ -103,22 +107,30 @@ std::vector<uint8_t> AuthenticatorGetInfoResponse::EncodeToCBOR(
         0x08, base::strict_cast<int64_t>(*response.max_credential_id_length));
   }
 
+  if (response.transports) {
+    std::vector<cbor::Value> transport_values;
+    for (FidoTransportProtocol transport : *response.transports) {
+      transport_values.emplace_back(ToString(transport));
+    }
+    device_info_map.emplace(0x09, std::move(transport_values));
+  }
+
   if (response.remaining_discoverable_credentials) {
     device_info_map.emplace(0x14,
                             base::strict_cast<int64_t>(
                                 *response.remaining_discoverable_credentials));
   }
 
-  if (!response.algorithms.empty()) {
+  if (response.algorithms.has_value()) {
     std::vector<cbor::Value> algorithms_cbor;
-    algorithms_cbor.reserve(response.algorithms.size());
-    for (const auto& algorithm : response.algorithms) {
+    algorithms_cbor.reserve(response.algorithms->size());
+    for (const auto& algorithm : *response.algorithms) {
       // Entries are PublicKeyCredentialParameters
       // https://w3c.github.io/webauthn/#dictdef-publickeycredentialparameters
       cbor::Value::MapValue entry;
       entry.emplace("type", "public-key");
       entry.emplace("alg", algorithm);
-      algorithms_cbor.emplace_back(cbor::Value(entry));
+      algorithms_cbor.emplace_back(std::move(entry));
     }
     device_info_map.emplace(0x0a, std::move(algorithms_cbor));
   }
@@ -139,23 +151,22 @@ std::vector<uint8_t> AuthenticatorGetInfoResponse::EncodeToCBOR(
         cbor::Value(base::strict_cast<int64_t>(*response.min_pin_length)));
   }
 
-  if (response.max_cred_blob_length) {
-    device_info_map.emplace(
-        0x0f, base::strict_cast<int64_t>(*response.max_cred_blob_length));
+  if (response.options.max_cred_blob_length) {
+    device_info_map.emplace(0x0f, base::strict_cast<int64_t>(
+                                      *response.options.max_cred_blob_length));
   }
 
-  auto encoded_bytes =
-      cbor::Writer::Write(cbor::Value(std::move(device_info_map)));
+  auto encoded_bytes = cbor::Writer::Write(device_info_map);
   DCHECK(encoded_bytes);
-  return *encoded_bytes;
+  return *std::move(encoded_bytes);
 }
 
 bool AuthenticatorGetInfoResponse::SupportsAtLeast(
     Ctap2Version ctap2_version) const {
-  return base::ranges::any_of(ctap2_versions,
-                              [ctap2_version](const Ctap2Version& version) {
-                                return version >= ctap2_version;
-                              });
+  return std::ranges::any_of(ctap2_versions,
+                             [ctap2_version](const Ctap2Version& version) {
+                               return version >= ctap2_version;
+                             });
 }
 
 }  // namespace device

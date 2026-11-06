@@ -1,27 +1,34 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/device/generic_sensor/platform_sensor_reader_win.h"
 
+#include <objbase.h>
+
 #include <Sensors.h>
 #include <comdef.h>
-#include <objbase.h>
 #include <wrl/implements.h>
 
 #include <iomanip>
 
-#include "base/bind.h"
-#include "base/cxx17_backports.h"
+#include "base/check.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
+#include "base/notimplemented.h"
+#include "base/numerics/angle_conversions.h"
 #include "base/numerics/math_constants.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/numerics/safe_conversions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "base/win/scoped_propvariant.h"
 #include "services/device/generic_sensor/generic_sensor_consts.h"
 #include "services/device/public/cpp/generic_sensor/platform_sensor_configuration.h"
 #include "services/device/public/cpp/generic_sensor/sensor_reading.h"
-#include "ui/gfx/geometry/angle_conversions.h"
+#include "services/device/public/cpp/generic_sensor/sensor_traits.h"
 
 namespace device {
 
@@ -132,9 +139,9 @@ std::unique_ptr<ReaderInitParams> CreateGyroscopeReaderInitParams() {
     }
 
     // Values are converted from degrees to radians.
-    reading->gyro.x = gfx::DegToRad(x);
-    reading->gyro.y = gfx::DegToRad(y);
-    reading->gyro.z = gfx::DegToRad(z);
+    reading->gyro.x = base::DegToRad(x);
+    reading->gyro.y = base::DegToRad(y);
+    reading->gyro.z = base::DegToRad(z);
     return S_OK;
   };
   return params;
@@ -212,9 +219,9 @@ CreateAbsoluteOrientationQuaternionReaderInitParams() {
     float* quat = reinterpret_cast<float*>(quat_variant.get().caub.pElems);
 
     reading->orientation_quat.x = quat[0];  // x*sin(Theta/2)
-    reading->orientation_quat.y = quat[1];  // y*sin(Theta/2)
-    reading->orientation_quat.z = quat[2];  // z*sin(Theta/2)
-    reading->orientation_quat.w = quat[3];  // cos(Theta/2)
+    reading->orientation_quat.y = UNSAFE_TODO(quat[1]);  // y*sin(Theta/2)
+    reading->orientation_quat.z = UNSAFE_TODO(quat[2]);  // z*sin(Theta/2)
+    reading->orientation_quat.w = UNSAFE_TODO(quat[3]);  // cos(Theta/2)
     return S_OK;
   };
   return params;
@@ -251,7 +258,15 @@ std::unique_ptr<ReaderInitParams> CreateReaderInitParamsForSensor(
 
 // Class that implements ISensorEvents used by the ISensor interface to dispatch
 // state and data change events.
-class EventListener
+//
+// Threading: ISensor is apartment-threaded, so COM delivers these callbacks on
+// the COM STA sequence that called ISensor::SetEventSink(), which is the
+// sequence the owning PlatformSensorReaderWin32 lives on. |com_sta_sequence_
+// checker_| enforces that. This is what makes it safe for the callbacks to
+// touch |platform_sensor_reader_| without synchronization, and for them to call
+// back into the reader (whose Start/StopSensor() then run synchronously instead
+// of posting a task that could outlive the reader).
+class PlatformSensorReaderWin32::EventListener
     : public Microsoft::WRL::RuntimeClass<
           Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>,
           ISensorEvents> {
@@ -261,14 +276,19 @@ class EventListener
     DCHECK(platform_sensor_reader_);
   }
 
-  static Microsoft::WRL::ComPtr<ISensorEvents> CreateInstance(
+  EventListener(const EventListener&) = delete;
+  EventListener& operator=(const EventListener&) = delete;
+
+  static Microsoft::WRL::ComPtr<EventListener> CreateInstance(
       PlatformSensorReaderWin32* platform_sensor_reader) {
-    Microsoft::WRL::ComPtr<EventListener> event_listener =
-        Microsoft::WRL::Make<EventListener>(platform_sensor_reader);
-    Microsoft::WRL::ComPtr<ISensorEvents> sensor_events;
-    HRESULT hr = event_listener.As(&sensor_events);
-    DCHECK(SUCCEEDED(hr));
-    return sensor_events;
+    return Microsoft::WRL::Make<EventListener>(platform_sensor_reader);
+  }
+
+  // Stops forwarding events to the reader. Called by the reader's destructor,
+  // because COM may keep the event sink alive past SetEventSink(nullptr).
+  void Detach() {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(com_sta_sequence_checker_);
+    platform_sensor_reader_ = nullptr;
   }
 
  protected:
@@ -280,6 +300,10 @@ class EventListener
   }
 
   IFACEMETHODIMP OnLeave(REFSENSOR_ID sensor_id) override {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(com_sta_sequence_checker_);
+    if (!platform_sensor_reader_) {
+      return S_OK;
+    }
     // If event listener is active and sensor is disconnected, notify client
     // about the error.
     platform_sensor_reader_->SensorError();
@@ -288,8 +312,13 @@ class EventListener
   }
 
   IFACEMETHODIMP OnStateChanged(ISensor* sensor, SensorState state) override {
-    if (sensor == nullptr)
+    DCHECK_CALLED_ON_VALID_SEQUENCE(com_sta_sequence_checker_);
+    if (sensor == nullptr) {
       return E_INVALIDARG;
+    }
+    if (!platform_sensor_reader_) {
+      return S_OK;
+    }
 
     if (state != SensorState::SENSOR_STATE_READY &&
         state != SensorState::SENSOR_STATE_INITIALIZING) {
@@ -301,8 +330,13 @@ class EventListener
 
   IFACEMETHODIMP OnDataUpdated(ISensor* sensor,
                                ISensorDataReport* report) override {
-    if (sensor == nullptr || report == nullptr)
+    DCHECK_CALLED_ON_VALID_SEQUENCE(com_sta_sequence_checker_);
+    if (sensor == nullptr || report == nullptr) {
       return E_INVALIDARG;
+    }
+    if (!platform_sensor_reader_) {
+      return S_OK;
+    }
 
     // To get precise timestamp, we need to get delta between timestamp
     // provided in the report and current system time. Then the delta in
@@ -315,15 +349,15 @@ class EventListener
     base::TimeTicks ticks_now = base::TimeTicks::Now();
     base::Time time_now = base::Time::NowFromSystemTime();
 
-    base::Time::Exploded exploded;
-    exploded.year = report_time.wYear;
-    exploded.month = report_time.wMonth;
-    exploded.day_of_week = report_time.wDayOfWeek;
-    exploded.day_of_month = report_time.wDay;
-    exploded.hour = report_time.wHour;
-    exploded.minute = report_time.wMinute;
-    exploded.second = report_time.wSecond;
-    exploded.millisecond = report_time.wMilliseconds;
+    const base::Time::Exploded exploded = {
+        .year = report_time.wYear,
+        .month = report_time.wMonth,
+        .day_of_week = report_time.wDayOfWeek,
+        .day_of_month = report_time.wDay,
+        .hour = report_time.wHour,
+        .minute = report_time.wMinute,
+        .second = report_time.wSecond,
+        .millisecond = report_time.wMilliseconds};
 
     base::Time timestamp;
     if (!base::Time::FromUTCExploded(exploded, &timestamp))
@@ -346,41 +380,56 @@ class EventListener
   }
 
  private:
-  PlatformSensorReaderWin32* const platform_sensor_reader_;
-  SensorReading last_sensor_reading_;
+  SEQUENCE_CHECKER(com_sta_sequence_checker_);
 
-  DISALLOW_COPY_AND_ASSIGN(EventListener);
+  raw_ptr<PlatformSensorReaderWin32> platform_sensor_reader_
+      GUARDED_BY_CONTEXT(com_sta_sequence_checker_);
+  SensorReading last_sensor_reading_
+      GUARDED_BY_CONTEXT(com_sta_sequence_checker_);
 };
 
 // static
-std::unique_ptr<PlatformSensorReaderWinBase> PlatformSensorReaderWin32::Create(
+ScopedPlatformSensorReaderWinBase PlatformSensorReaderWin32::Create(
     mojom::SensorType type,
     Microsoft::WRL::ComPtr<ISensorManager> sensor_manager) {
   DCHECK(sensor_manager);
 
+  // A null reader still needs a deleter; use the COM STA runner a successfully
+  // created reader would have captured.
+  auto no_reader = ScopedPlatformSensorReaderWinBase(
+      nullptr, base::OnTaskRunnerDeleter(
+                   base::SingleThreadTaskRunner::GetCurrentDefault()));
+
   auto params = CreateReaderInitParamsForSensor(type);
   if (!params)
-    return nullptr;
+    return no_reader;
 
   auto sensor = GetSensorForType(params->sensor_type_id, sensor_manager);
   if (!sensor)
-    return nullptr;
+    return no_reader;
 
   base::win::ScopedPropVariant min_interval;
   HRESULT hr = sensor->GetProperty(SENSOR_PROPERTY_MIN_REPORT_INTERVAL,
                                    min_interval.Receive());
   if (SUCCEEDED(hr) && min_interval.get().vt == VT_UI4) {
     params->min_reporting_interval =
-        base::TimeDelta::FromMilliseconds(min_interval.get().ulVal);
+        base::Milliseconds(min_interval.get().ulVal);
   }
 
   GUID interests[] = {SENSOR_EVENT_STATE_CHANGED, SENSOR_EVENT_DATA_UPDATED};
-  hr = sensor->SetEventInterest(interests, base::size(interests));
+  hr = sensor->SetEventInterest(interests, std::size(interests));
   if (FAILED(hr))
-    return nullptr;
+    return no_reader;
 
-  return base::WrapUnique(
+  auto reader = base::WrapUnique(
       new PlatformSensorReaderWin32(sensor, std::move(params)));
+  // Take the runner the reader captured at construction, so that the reader and
+  // its deleter cannot disagree about which sequence owns the COM objects.
+  scoped_refptr<base::SingleThreadTaskRunner> com_sta_task_runner =
+      reader->com_sta_task_runner_;
+  return ScopedPlatformSensorReaderWinBase(
+      reader.release(),
+      base::OnTaskRunnerDeleter(std::move(com_sta_task_runner)));
 }
 
 // static
@@ -405,11 +454,11 @@ PlatformSensorReaderWin32::PlatformSensorReaderWin32(
     Microsoft::WRL::ComPtr<ISensor> sensor,
     std::unique_ptr<ReaderInitParams> params)
     : init_params_(std::move(params)),
-      com_sta_task_runner_(base::ThreadTaskRunnerHandle::Get()),
-      sensor_active_(false),
+      com_sta_task_runner_(base::SingleThreadTaskRunner::GetCurrentDefault()),
       client_(nullptr),
-      sensor_(sensor),
+      sensor_(std::move(sensor)),
       event_listener_(EventListener::CreateInstance(this)) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(com_sta_sequence_checker_);
   DCHECK(init_params_);
   DCHECK(init_params_->reader_func);
   DCHECK(sensor_);
@@ -421,46 +470,105 @@ void PlatformSensorReaderWin32::SetClient(Client* client) {
   client_ = client;
 }
 
+// Posting with base::Unretained() below is safe: the reader is owned through a
+// ScopedPlatformSensorReaderWinBase, whose deleter posts the destruction to
+// |com_sta_task_runner_| as well, so the delete task is necessarily queued
+// behind any task posted here. See platform_sensor_reader_win_base.h.
 void PlatformSensorReaderWin32::StopSensor() {
-  base::AutoLock autolock(lock_);
+  {
+    base::AutoLock autolock(lock_);
+    ++stop_count_;
+  }
+  if (com_sta_task_runner_->RunsTasksInCurrentSequence()) {
+    StopSensorInternal();
+    return;
+  }
+  com_sta_task_runner_->PostTask(
+      FROM_HERE, base::BindOnce(&PlatformSensorReaderWin32::StopSensorInternal,
+                                base::Unretained(this)));
+}
+
+void PlatformSensorReaderWin32::StopSensorInternal() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(com_sta_sequence_checker_);
   if (sensor_active_) {
-    sensor_->SetEventSink(nullptr);
     sensor_active_ = false;
+    sensor_->SetEventSink(nullptr);
   }
 }
 
 PlatformSensorReaderWin32::~PlatformSensorReaderWin32() {
-  DCHECK(com_sta_task_runner_->BelongsToCurrentThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(com_sta_sequence_checker_);
+  if (event_listener_) {
+    event_listener_->Detach();
+  }
+  StopSensorInternal();
 }
 
 bool PlatformSensorReaderWin32::StartSensor(
     const PlatformSensorConfiguration& configuration) {
-  base::AutoLock autolock(lock_);
-
-  if (!SetReportingInterval(configuration))
-    return false;
-
-  if (!sensor_active_) {
-    com_sta_task_runner_->PostTask(
-        FROM_HERE, base::BindOnce(&PlatformSensorReaderWin32::ListenSensorEvent,
-                                  weak_factory_.GetWeakPtr()));
-    sensor_active_ = true;
+  uint64_t stop_count_at_start;
+  {
+    base::AutoLock autolock(lock_);
+    stop_count_at_start = stop_count_;
   }
-
+  // The COM work always happens on |com_sta_task_runner_|, so unless it can be
+  // done synchronously there is no result to report here. Failures detected
+  // later are reported through Client::OnSensorError(); returning false would
+  // require blocking. See platform_sensor_reader_win_base.h.
+  if (com_sta_task_runner_->RunsTasksInCurrentSequence()) {
+    StartSensorInternal(configuration, stop_count_at_start);
+    return true;
+  }
+  com_sta_task_runner_->PostTask(
+      FROM_HERE, base::BindOnce(&PlatformSensorReaderWin32::StartSensorInternal,
+                                base::Unretained(this), configuration,
+                                stop_count_at_start));
   return true;
 }
 
-void PlatformSensorReaderWin32::ListenSensorEvent() {
-  // Set event listener.
-  HRESULT hr = sensor_->SetEventSink(event_listener_.Get());
-  if (FAILED(hr)) {
-    SensorError();
-    StopSensor();
+void PlatformSensorReaderWin32::StartSensorInternal(
+    const PlatformSensorConfiguration& configuration,
+    uint64_t stop_count_at_start) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(com_sta_sequence_checker_);
+
+  if (!SetReportingInterval(configuration)) {
+    if (!WasStartSupersededByStop(stop_count_at_start)) {
+      SensorError();
+    }
+    StopSensorInternal();
+    return;
   }
+
+  if (!sensor_active_) {
+    HRESULT hr = sensor_->SetEventSink(event_listener_.Get());
+    if (FAILED(hr)) {
+      if (!WasStartSupersededByStop(stop_count_at_start)) {
+        SensorError();
+      }
+      StopSensorInternal();
+      return;
+    }
+    sensor_active_ = true;
+  }
+}
+
+bool PlatformSensorReaderWin32::WasStartSupersededByStop(
+    uint64_t stop_count_at_start) {
+  base::AutoLock autolock(lock_);
+  return stop_count_ != stop_count_at_start;
 }
 
 bool PlatformSensorReaderWin32::SetReportingInterval(
     const PlatformSensorConfiguration& configuration) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(com_sta_sequence_checker_);
+  // Defense in depth: callers going through PlatformSensorWin have already been
+  // filtered by CheckSensorConfiguration(), but the frequency is used in
+  // arithmetic below and ultimately originates from the renderer.
+  const double frequency = configuration.frequency();
+  if (!IsValidSensorFrequency(frequency)) {
+    return false;
+  }
+
   Microsoft::WRL::ComPtr<IPortableDeviceValues> props;
   HRESULT hr = ::CoCreateInstance(CLSID_PortableDeviceValues, nullptr,
                                   CLSCTX_ALL, IID_PPV_ARGS(&props));
@@ -476,12 +584,17 @@ bool PlatformSensorReaderWin32::SetReportingInterval(
     return false;
   }
 
-  unsigned interval =
-      (1 / configuration.frequency()) * base::Time::kMillisecondsPerSecond;
+  // base::Hertz() performs clamped arithmetic, and saturated_cast<> clamps the
+  // resulting int64_t into the ULONG range expected by the COM API. Saturating
+  // to ULONG_MAX means "report essentially never", which is the sane
+  // degradation for an absurdly low frequency.
+  const ULONG interval =
+      base::saturated_cast<ULONG>(base::Hertz(frequency).InMilliseconds());
   hr = props->SetUnsignedIntegerValue(SENSOR_PROPERTY_CURRENT_REPORT_INTERVAL,
                                       interval);
-  if (FAILED(hr))
+  if (FAILED(hr)) {
     return false;
+  }
 
   Microsoft::WRL::ComPtr<IPortableDeviceValues> return_props;
   hr = sensor_->SetProperties(props.Get(), &return_props);
@@ -492,19 +605,22 @@ HRESULT PlatformSensorReaderWin32::SensorReadingChanged(
     ISensorDataReport* report,
     SensorReading* reading) {
   base::AutoLock autolock(lock_);
-  if (!client_)
+  if (!client_) {
     return E_FAIL;
+  }
 
   HRESULT hr = init_params_->reader_func(report, reading);
-  if (SUCCEEDED(hr))
+  if (SUCCEEDED(hr)) {
     client_->OnReadingUpdated(*reading);
+  }
   return hr;
 }
 
 void PlatformSensorReaderWin32::SensorError() {
   base::AutoLock autolock(lock_);
-  if (client_)
+  if (client_) {
     client_->OnSensorError();
+  }
 }
 
 base::TimeDelta PlatformSensorReaderWin32::GetMinimalReportingInterval() const {

@@ -1,232 +1,169 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/tracing/chrome_tracing_delegate.h"
+
+#include <string_view>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/files/file_enumerator.h"
+#include "base/files/file_path.h"
+#include "base/files/file_path_watcher.h"
+#include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/json/json_writer.h"
+#include "base/path_service.h"
 #include "base/run_loop.h"
+#include "base/strings/pattern.h"
+#include "base/test/bind.h"
+#include "base/test/test_proto_loader.h"
+#include "base/threading/thread_restrictions.h"
+#include "base/trace_event/named_trigger.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_otr_state.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/metrics/metrics_pref_names.h"
 #include "components/prefs/pref_service.h"
-#include "components/tracing/common/trace_startup_config.h"
-#include "components/variations/variations_params_manager.h"
-#include "content/public/browser/background_tracing_config.h"
-#include "content/public/browser/background_tracing_manager.h"
+#include "components/tracing/common/background_tracing_state_manager.h"
+#include "components/tracing/common/pref_names.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/tracing_controller.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_utils.h"
+#include "services/tracing/public/cpp/background_tracing/background_tracing_manager.h"
+#include "services/tracing/public/cpp/trace_startup_config.h"
 #include "services/tracing/public/cpp/tracing_features.h"
 
 namespace {
 
+class TestBackgroundTracingHelper
+    : public tracing::BackgroundTracingManager::EnabledStateTestObserver {
+ public:
+  TestBackgroundTracingHelper() {
+    tracing::BackgroundTracingManager::GetInstance()
+        .AddEnabledStateObserverForTesting(this);
+  }
+
+  ~TestBackgroundTracingHelper() {
+    tracing::BackgroundTracingManager::GetInstance()
+        .RemoveEnabledStateObserverForTesting(this);
+  }
+
+  void OnScenarioActive(const std::string& scenario_name) override {
+    wait_for_scenario_active_.Quit();
+  }
+
+  void OnScenarioIdle(const std::string& scenario_name) override {
+    wait_for_scenario_idle_.Quit();
+  }
+
+  void OnTraceReceived(const std::string& proto_content) override {
+    wait_for_trace_received_.Quit();
+  }
+
+  void WaitForScenarioActive() { wait_for_scenario_active_.Run(); }
+  void WaitForScenarioIdle() { wait_for_scenario_idle_.Run(); }
+  void WaitForTraceReceived() { wait_for_trace_received_.Run(); }
+
+ private:
+  base::RunLoop wait_for_scenario_active_;
+  base::RunLoop wait_for_scenario_idle_;
+  base::RunLoop wait_for_trace_received_;
+};
+
+}  // namespace
+
+namespace tracing {
+
+perfetto::protos::gen::ChromeFieldTracingConfig ParseFieldTracingConfigFromText(
+    const std::string& proto_text) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  base::TestProtoLoader config_loader(
+      base::PathService::CheckedGet(base::DIR_GEN_TEST_DATA_ROOT)
+          .Append(
+              FILE_PATH_LITERAL("third_party/perfetto/protos/perfetto/"
+                                "config/chrome/scenario_config.descriptor")),
+      "perfetto.protos.ChromeFieldTracingConfig");
+  std::string serialized_message;
+  config_loader.ParseFromText(proto_text, serialized_message);
+  perfetto::protos::gen::ChromeFieldTracingConfig destination;
+  destination.ParseFromString(serialized_message);
+  return destination;
+}
+
 class ChromeTracingDelegateBrowserTest : public InProcessBrowserTest {
  public:
-  ChromeTracingDelegateBrowserTest()
-      : receive_count_(0),
-        started_finalizations_count_(0),
-        last_on_started_finalizing_success_(false) {}
+  ChromeTracingDelegateBrowserTest() = default;
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
   void SetUpOnMainThread() override {
+    InProcessBrowserTest::SetUpOnMainThread();
+
     PrefService* local_state = g_browser_process->local_state();
     DCHECK(local_state);
     local_state->SetBoolean(metrics::prefs::kMetricsReportingEnabled, true);
     content::TracingController::GetInstance();  // Create tracing agents.
   }
-#endif
 
-  bool StartPreemptiveScenario(
-      content::BackgroundTracingManager::DataFiltering data_filtering) {
-    base::DictionaryValue dict;
+  bool StartScenario(
+      tracing::BackgroundTracingManager::DataFiltering data_filtering) {
+    constexpr const char kScenarioConfig[] = R"pb(
+      scenarios: {
+        scenario_name: "test_scenario"
+        start_rules: { manual_trigger_name: "start_trigger" }
+        upload_rules: { manual_trigger_name: "upload_trigger" }
+        trace_config: {
+          data_sources: {
+            config: {
+              name: "track_event"
+              track_event_config: {
+                disabled_categories: [ "*" ],
+                enabled_categories: [ "toplevel" ]
+              }
+            }
+          }
+          data_sources: { config: { name: "org.chromium.trace_metadata2" } }
+        }
+      }
+    )pb";
 
-    dict.SetString("mode", "PREEMPTIVE_TRACING_MODE");
-    dict.SetString("custom_categories",
-                   tracing::TraceStartupConfig::kDefaultStartupCategories);
+    EXPECT_TRUE(tracing::BackgroundTracingManager::GetInstance()
+                    .InitializeFieldScenarios(
+                        ParseFieldTracingConfigFromText(kScenarioConfig),
+                        data_filtering, false, 0));
 
-    std::unique_ptr<base::ListValue> rules_list(new base::ListValue());
-    {
-      std::unique_ptr<base::DictionaryValue> rules_dict(
-          new base::DictionaryValue());
-      rules_dict->SetString("rule", "MONITOR_AND_DUMP_WHEN_TRIGGER_NAMED");
-      rules_dict->SetString("trigger_name", "test");
-      rules_list->Append(std::move(rules_dict));
-    }
-    dict.Set("configs", std::move(rules_list));
-
-    std::unique_ptr<content::BackgroundTracingConfig> config(
-        content::BackgroundTracingConfig::FromDict(&dict));
-
-    DCHECK(config);
-    // Proto output is uploaded through
-    // BackgroundTracingManager::SetTraceToUpload, with no ReceiveCallback.
-    if (base::FeatureList::IsEnabled(features::kBackgroundTracingProtoOutput)) {
-      return content::BackgroundTracingManager::GetInstance()
-          ->SetActiveScenario(std::move(config), data_filtering);
-    }
-
-    // Legacy JSON output needs a receive callback.
-    wait_for_upload_ = std::make_unique<base::RunLoop>();
-    content::BackgroundTracingManager::ReceiveCallback receive_callback =
-        base::BindRepeating(&ChromeTracingDelegateBrowserTest::OnUpload,
-                            base::Unretained(this));
-
-    return content::BackgroundTracingManager::GetInstance()
-        ->SetActiveScenarioWithReceiveCallback(
-            std::move(config), std::move(receive_callback), data_filtering);
+    return base::trace_event::EmitNamedTrigger("start_trigger");
   }
 
   void TriggerPreemptiveScenario(
-      base::OnceClosure on_started_finalization_callback) {
-    on_started_finalization_callback_ =
-        std::move(on_started_finalization_callback);
-    trigger_handle_ =
-        content::BackgroundTracingManager::GetInstance()->RegisterTriggerType(
-            "test");
-
-    content::BackgroundTracingManager::StartedFinalizingCallback
-        started_finalizing_callback = base::BindOnce(
-            &ChromeTracingDelegateBrowserTest::OnStartedFinalizing,
-            base::Unretained(this));
-    content::BackgroundTracingManager::GetInstance()->TriggerNamedEvent(
-        trigger_handle_, std::move(started_finalizing_callback));
+      const std::string& trigger_name = "upload_trigger") {
+    base::trace_event::EmitNamedTrigger(trigger_name);
   }
-
-  void WaitForUpload() {
-    if (wait_for_upload_) {
-      // Wait for the ReceiveCallback to quit this RunLoop.
-      wait_for_upload_->Run();
-      return;
-    }
-
-    // No ReceiveCallback set, so wait for SetTraceToUpload to be called.
-    auto* manager = content::BackgroundTracingManager::GetInstance();
-    while (!manager->HasTraceToUpload()) {
-      base::RunLoop().RunUntilIdle();
-    }
-    EXPECT_FALSE(manager->GetLatestTraceToUpload().empty());
-    receive_count_++;
-  }
-
-  int get_receive_count() const { return receive_count_; }
-  bool get_started_finalizations() const {
-    return started_finalizations_count_;
-  }
-  bool get_last_started_finalization_success() const {
-    return last_on_started_finalizing_success_;
-  }
-
- private:
-  void OnUpload(std::unique_ptr<std::string> file_contents,
-                content::BackgroundTracingManager::FinishedProcessingCallback
-                    done_callback) {
-    receive_count_ += 1;
-
-    content::GetUIThreadTaskRunner({})->PostTask(
-        FROM_HERE, base::BindOnce(std::move(done_callback), true));
-    if (wait_for_upload_) {
-      content::GetUIThreadTaskRunner({})->PostTask(
-          FROM_HERE, wait_for_upload_->QuitClosure());
-    }
-  }
-
-  void OnStartedFinalizing(bool success) {
-    started_finalizations_count_++;
-    last_on_started_finalizing_success_ = success;
-
-    if (!on_started_finalization_callback_.is_null()) {
-      content::GetUIThreadTaskRunner({})->PostTask(
-          FROM_HERE, std::move(on_started_finalization_callback_));
-    }
-  }
-
-  std::unique_ptr<base::RunLoop> wait_for_upload_;
-  base::OnceClosure on_started_finalization_callback_;
-  int receive_count_;
-  int started_finalizations_count_;
-  content::BackgroundTracingManager::TriggerHandle trigger_handle_;
-  bool last_on_started_finalizing_success_;
 };
 
-IN_PROC_BROWSER_TEST_F(ChromeTracingDelegateBrowserTest,
-                       BackgroundTracingTimeThrottled) {
-  EXPECT_TRUE(StartPreemptiveScenario(
-      content::BackgroundTracingManager::NO_DATA_FILTERING));
-
-  TriggerPreemptiveScenario(base::OnceClosure());
-
-  WaitForUpload();
-
-  EXPECT_TRUE(get_receive_count() == 1);
-
+std::string GetSessionStateJson() {
   PrefService* local_state = g_browser_process->local_state();
   DCHECK(local_state);
-  const base::Time last_upload_time = base::Time::FromInternalValue(
-      local_state->GetInt64(prefs::kBackgroundTracingLastUpload));
-  EXPECT_FALSE(last_upload_time.is_null());
-
-  content::BackgroundTracingManager::GetInstance()->AbortScenarioForTesting();
-  base::RunLoop wait_for_abort;
-  content::BackgroundTracingManager::GetInstance()->WhenIdle(
-      wait_for_abort.QuitClosure());
-  wait_for_abort.Run();
-
-  EXPECT_FALSE(
-      content::BackgroundTracingManager::GetInstance()->HasActiveScenario());
-  EXPECT_FALSE(base::trace_event::TraceLog::GetInstance()->IsEnabled());
-
-  // We should not be able to start a new reactive scenario immediately after
-  // a previous one gets uploaded.
-  EXPECT_FALSE(StartPreemptiveScenario(
-      content::BackgroundTracingManager::NO_DATA_FILTERING));
+  const base::DictValue& state =
+      local_state->GetDict(tracing::kBackgroundTracingSessionState);
+  std::string json;
+  EXPECT_TRUE(base::JSONWriter::Write(state, &json));
+  return json;
 }
 
-IN_PROC_BROWSER_TEST_F(ChromeTracingDelegateBrowserTest,
-                       BackgroundTracingThrottleTimeElapsed) {
-  EXPECT_TRUE(StartPreemptiveScenario(
-      content::BackgroundTracingManager::NO_DATA_FILTERING));
-
-  TriggerPreemptiveScenario(base::OnceClosure());
-
-  WaitForUpload();
-
-  EXPECT_TRUE(get_receive_count() == 1);
-
+void SetSessionState(base::DictValue dict) {
   PrefService* local_state = g_browser_process->local_state();
-  DCHECK(local_state);
-  const base::Time last_upload_time = base::Time::FromInternalValue(
-      local_state->GetInt64(prefs::kBackgroundTracingLastUpload));
-  EXPECT_FALSE(last_upload_time.is_null());
-
-  content::BackgroundTracingManager::GetInstance()->AbortScenarioForTesting();
-  base::RunLoop wait_for_abort;
-  content::BackgroundTracingManager::GetInstance()->WhenIdle(
-      wait_for_abort.QuitClosure());
-  wait_for_abort.Run();
-  EXPECT_FALSE(
-      content::BackgroundTracingManager::GetInstance()->HasActiveScenario());
-  EXPECT_FALSE(base::trace_event::TraceLog::GetInstance()->IsEnabled());
-
-  EXPECT_FALSE(StartPreemptiveScenario(
-      content::BackgroundTracingManager::NO_DATA_FILTERING));
-
-  // We move the last upload time to eight days in the past,
-  // and at that point should be able to start a scenario again.
-  base::Time new_upload_time = last_upload_time - base::TimeDelta::FromDays(8);
-  local_state->SetInt64(prefs::kBackgroundTracingLastUpload,
-                        new_upload_time.ToInternalValue());
-  EXPECT_TRUE(StartPreemptiveScenario(
-      content::BackgroundTracingManager::NO_DATA_FILTERING));
+  local_state->Set(tracing::kBackgroundTracingSessionState,
+                   base::Value(std::move(dict)));
 }
 
 // If we need a PII-stripped trace, any existing OTR session should block the
@@ -234,106 +171,53 @@ IN_PROC_BROWSER_TEST_F(ChromeTracingDelegateBrowserTest,
 IN_PROC_BROWSER_TEST_F(ChromeTracingDelegateBrowserTest,
                        ExistingIncognitoSessionBlockingTraceStart) {
   EXPECT_TRUE(chrome::ExecuteCommand(browser(), IDC_NEW_INCOGNITO_WINDOW));
-  EXPECT_TRUE(BrowserList::IsOffTheRecordBrowserActive());
-  EXPECT_FALSE(StartPreemptiveScenario(
-      content::BackgroundTracingManager::ANONYMIZE_DATA));
+  EXPECT_TRUE(IsOffTheRecordSessionActive());
+  EXPECT_FALSE(
+      StartScenario(tracing::BackgroundTracingManager::ANONYMIZE_DATA));
+}
+
+// If we need a PII-stripped trace, OTR sessions that ended before tracing
+// should block the trace (because traces could theoretically include stale
+// memory from those sessions).
+IN_PROC_BROWSER_TEST_F(ChromeTracingDelegateBrowserTest,
+                       FinishedIncognitoSessionBlockingTraceStart) {
+  BrowserWindowInterface* incognito_browser =
+      CreateIncognitoBrowser(browser()->GetProfile());
+  EXPECT_TRUE(IsOffTheRecordSessionActive());
+  CloseBrowserSynchronously(incognito_browser);
+  EXPECT_FALSE(IsOffTheRecordSessionActive());
 }
 
 // If we need a PII-stripped trace, any new OTR session during tracing should
 // block the finalization of the trace.
 IN_PROC_BROWSER_TEST_F(ChromeTracingDelegateBrowserTest,
                        NewIncognitoSessionBlockingTraceFinalization) {
-  EXPECT_TRUE(StartPreemptiveScenario(
-      content::BackgroundTracingManager::ANONYMIZE_DATA));
+  TestBackgroundTracingHelper background_tracing_helper;
+  EXPECT_TRUE(StartScenario(tracing::BackgroundTracingManager::ANONYMIZE_DATA));
+  background_tracing_helper.WaitForScenarioActive();
 
   EXPECT_TRUE(chrome::ExecuteCommand(browser(), IDC_NEW_INCOGNITO_WINDOW));
-  EXPECT_TRUE(BrowserList::IsOffTheRecordBrowserActive());
+  EXPECT_TRUE(IsOffTheRecordSessionActive());
 
-  base::RunLoop wait_for_finalization_start;
-  TriggerPreemptiveScenario(wait_for_finalization_start.QuitClosure());
-  wait_for_finalization_start.Run();
-
-  EXPECT_TRUE(get_started_finalizations() == 1);
-  EXPECT_FALSE(get_last_started_finalization_success());
+  TriggerPreemptiveScenario();
+  background_tracing_helper.WaitForScenarioIdle();
 }
 
-class ChromeTracingDelegateBrowserTestOnStartup
-    : public ChromeTracingDelegateBrowserTest {
- protected:
-  ChromeTracingDelegateBrowserTestOnStartup() {}
+// If we need a PII-stripped trace, any OTR session that starts and ends during
+// tracing should block the finalization of the trace.
+IN_PROC_BROWSER_TEST_F(ChromeTracingDelegateBrowserTest,
+                       ShortIncognitoSessionBlockingTraceFinalization) {
+  EXPECT_TRUE(StartScenario(tracing::BackgroundTracingManager::ANONYMIZE_DATA));
 
-  static std::string FieldTrialConfigTextFilter(
-      const std::string& config_text) {
-    // We need to replace the config JSON with the full one here, as we can't
-    // pass JSON through the fieldtrial switch parsing.
-    if (config_text == "default_config_for_testing") {
-      return "{\"mode\":\"PREEMPTIVE_TRACING_MODE\", \"custom_categories\": "
-             "\"base,toplevel\",\"configs\": [{\"rule\": "
-             "\"MONITOR_AND_DUMP_WHEN_TRIGGER_NAMED\",\"trigger_name\":"
-             "\"test\"}]}";
-    }
-    return config_text;
-  }
+  BrowserWindowInterface* incognito_browser =
+      CreateIncognitoBrowser(browser()->GetProfile());
+  EXPECT_TRUE(IsOffTheRecordSessionActive());
+  CloseBrowserSynchronously(incognito_browser);
+  EXPECT_FALSE(IsOffTheRecordSessionActive());
 
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    variations::testing::VariationParamsManager::AppendVariationParams(
-        "BackgroundTracing", "TestGroup",
-        {{"config", "default_config_for_testing"}}, command_line);
-  }
-
-  void CreatedBrowserMainParts(
-      content::BrowserMainParts* browser_main_parts) override {
-    content::BackgroundTracingManager::GetInstance()
-        ->SetConfigTextFilterForTesting(
-            base::BindRepeating(&FieldTrialConfigTextFilter));
-  }
-};
-
-IN_PROC_BROWSER_TEST_F(ChromeTracingDelegateBrowserTestOnStartup,
-                       PRE_ScenarioSetFromFieldtrial) {
-  // This test exists just to make sure the browser is created at least once and
-  // so a default profile is created. Then, the next time the browser is
-  // created, kMetricsReportingEnabled is explicitly read from the profile and
-  // the startup scenario can be activated.
+  TestBackgroundTracingHelper background_tracing_helper;
+  TriggerPreemptiveScenario();
+  background_tracing_helper.WaitForScenarioIdle();
 }
 
-IN_PROC_BROWSER_TEST_F(ChromeTracingDelegateBrowserTestOnStartup,
-                       ScenarioSetFromFieldtrial) {
-  // We should reach this point without crashing.
-  EXPECT_TRUE(
-      content::BackgroundTracingManager::GetInstance()->HasActiveScenario());
-}
-
-// TODO(crbug.com/1134793): Test is disabled after failing on multiple mac
-// builders.
-IN_PROC_BROWSER_TEST_F(ChromeTracingDelegateBrowserTestOnStartup,
-                       DISABLED_PRE_PRE_StartupTracingThrottle) {
-  // This test exists just to make sure the browser is created at least once and
-  // so a default profile is created. Then, the next time the browser is
-  // created, kMetricsReportingEnabled is explicitly read from the profile and
-  // the startup scenario can be activated.
-}
-
-IN_PROC_BROWSER_TEST_F(ChromeTracingDelegateBrowserTestOnStartup,
-                       DISABLED_PRE_StartupTracingThrottle) {
-  EXPECT_TRUE(
-      content::BackgroundTracingManager::GetInstance()->HasActiveScenario());
-
-  // Simulate a trace upload.
-  PrefService* local_state = g_browser_process->local_state();
-  DCHECK(local_state);
-  local_state->SetInt64(prefs::kBackgroundTracingLastUpload,
-                        base::Time::Now().ToInternalValue());
-}
-
-// https://crbug.com/832981: The test is reenabled to check if flakiness still
-// exists.
-IN_PROC_BROWSER_TEST_F(ChromeTracingDelegateBrowserTestOnStartup,
-                       DISABLED_StartupTracingThrottle) {
-  // The startup scenario should *not* be started, since not enough
-  // time has elapsed since the last upload (set in the PRE_ above).
-  EXPECT_FALSE(
-      content::BackgroundTracingManager::GetInstance()->HasActiveScenario());
-}
-
-}  // namespace
+}  // namespace tracing

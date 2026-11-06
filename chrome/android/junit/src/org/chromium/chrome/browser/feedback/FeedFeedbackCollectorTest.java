@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,11 @@ package org.chromium.chrome.browser.feedback;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import android.app.Activity;
 import android.os.Bundle;
@@ -17,45 +19,38 @@ import android.os.Looper;
 
 import androidx.annotation.Nullable;
 
-import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TestRule;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowLooper;
+import org.robolectric.Robolectric;
 
 import org.chromium.base.Callback;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.Feature;
 import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.chrome.test.util.browser.Features;
+import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
+import org.chromium.components.signin.identitymanager.IdentityManager;
+import org.chromium.components.signin.test.util.TestAccounts;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Test for {@link FeedFeedbackCollector}.
- */
+/** Test for {@link FeedFeedbackCollector}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class FeedFeedbackCollectorTest {
-    @Rule
-    public MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     // Enable the Features class, so we can override command line switches in the test.
-    @Rule
-    public TestRule mFeaturesProcessorRule = new Features.JUnitProcessor();
-    @Mock
+    @Mock private Profile mProfile;
+
     private Activity mActivity;
-    @Mock
-    private Profile mProfile;
 
     // Test constants.
     private static final String CATEGORY_TAG = "category_tag";
@@ -83,12 +78,23 @@ public class FeedFeedbackCollectorTest {
     }
 
     private static class EmptyFeedFeedbackCollector extends FeedFeedbackCollector {
-        EmptyFeedFeedbackCollector(Activity activity, Profile profile, @Nullable String url,
-                @Nullable String categoryTag, @Nullable String description,
+        EmptyFeedFeedbackCollector(
+                Activity activity,
+                Profile profile,
+                @Nullable String url,
+                @Nullable String categoryTag,
+                @Nullable String description,
                 @Nullable ScreenshotSource screenshotSource,
-                @Nullable Map<String, String> feedContext, Callback<FeedbackCollector> callback) {
-            super(activity, categoryTag, description, screenshotSource,
-                    new FeedFeedbackCollector.InitParams(profile, url, feedContext), callback);
+                @Nullable Map<String, String> feedContext,
+                Callback<FeedbackCollector> callback) {
+            super(
+                    activity,
+                    categoryTag,
+                    description,
+                    screenshotSource,
+                    new FeedFeedbackCollector.InitParams(profile, url, feedContext),
+                    callback,
+                    null);
         }
 
         // Override the async feedback sources to return an empty list, so we are only testing ths
@@ -103,38 +109,50 @@ public class FeedFeedbackCollectorTest {
     @Before
     public void setUp() {
         ThreadUtils.setUiThread(Looper.getMainLooper());
-    }
-
-    @After
-    public void tearDown() {
-        ThreadUtils.setUiThread(null);
+        mActivity = Robolectric.buildActivity(Activity.class).get();
+        IdentityServicesProvider.setInstanceForTests(mock(IdentityServicesProvider.class));
+        when(IdentityServicesProvider.get().getIdentityManager(any()))
+                .thenReturn(mock(IdentityManager.class));
+        when(IdentityServicesProvider.get().getIdentityManager(any()).getPrimaryAccountInfo())
+                .thenReturn(TestAccounts.ACCOUNT1);
     }
 
     @Test
     @Feature({"Feed"})
-    public void
-    testFeedSynchronousData() {
+    @SuppressWarnings("DirectInvocationOnMock")
+    public void testFeedSynchronousData() {
         @SuppressWarnings("unchecked")
         Callback<FeedbackCollector> callback = mock(Callback.class);
-        Map<String, String> feedContext = new HashMap<String, String>();
+        Map<String, String> feedContext = new HashMap<>();
         feedContext.put(CARD_URL, THE_URL);
         feedContext.put(CARD_PUBLISHER, THE_PUBLISHER);
         feedContext.put(CARD_PUBLISHING_DATE, THE_PUBLISHING_DATE);
         feedContext.put(CARD_TITLE, THE_TITLE);
 
         FeedFeedbackCollector collector =
-                new EmptyFeedFeedbackCollector(mActivity, mProfile, null, CATEGORY_TAG, DESCRIPTION,
-                        null, feedContext, (result) -> callback.onResult(result));
+                new EmptyFeedFeedbackCollector(
+                        mActivity,
+                        mProfile,
+                        null,
+                        CATEGORY_TAG,
+                        DESCRIPTION,
+                        null,
+                        feedContext,
+                        (result) -> callback.onResult(result));
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         verify(callback, times(1)).onResult(collector);
 
-        ThreadUtils.runOnUiThreadBlocking(() -> {
-            verifySynchronousSources(collector.getBundle());
-            assertFalse(collector.getBundle().containsKey(
-                    FeedbackContextFeedbackSource.FEEDBACK_CONTEXT_KEY));
-            assertEquals(CATEGORY_TAG, collector.getCategoryTag());
-            assertEquals(DESCRIPTION, collector.getDescription());
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    verifySynchronousSources(collector.getBundle());
+                    assertFalse(
+                            collector
+                                    .getBundle()
+                                    .containsKey(
+                                            FeedbackContextFeedbackSource.FEEDBACK_CONTEXT_KEY));
+                    assertEquals(CATEGORY_TAG, collector.getCategoryTag());
+                    assertEquals(DESCRIPTION, collector.getDescription());
+                });
     }
 }

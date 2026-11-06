@@ -28,7 +28,6 @@
 #include "third_party/blink/public/platform/web_worker_fetch_context.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/dom/events/event_target.h"
-#include "third_party/blink/renderer/core/loader/worker_fetch_context.h"
 #include "third_party/blink/renderer/core/workers/worker_global_scope.h"
 #include "third_party/blink/renderer/core/workers/worker_or_worklet_global_scope.h"
 #include "third_party/blink/renderer/core/workers/worker_thread.h"
@@ -42,20 +41,35 @@ WorkerNavigator::WorkerNavigator(ExecutionContext* execution_context)
 WorkerNavigator::~WorkerNavigator() = default;
 
 String WorkerNavigator::GetAcceptLanguages() {
-  WorkerOrWorkletGlobalScope* global_scope =
-      To<WorkerOrWorkletGlobalScope>(GetExecutionContext());
-  auto* web_worker_fetch_context =
-      static_cast<WorkerFetchContext*>((&global_scope->Fetcher()->Context()))
-          ->GetWebWorkerFetchContext();
-  return web_worker_fetch_context->GetAcceptLanguages();
+  auto* global_scope = To<WorkerOrWorkletGlobalScope>(GetExecutionContext());
+  if (!global_scope) {
+    // Prospective fix for crbug.com/40945292 and crbug.com/40827704
+    // Return empty string since it is better than crashing here, and the return
+    // value is not that important since the worker context is already
+    // destroyed.
+    return "";
+  }
+
+  return global_scope->GetAcceptLanguages();
 }
 
 void WorkerNavigator::NotifyUpdate() {
-  SetLanguagesDirty();
   WorkerOrWorkletGlobalScope* global_scope =
       To<WorkerOrWorkletGlobalScope>(GetExecutionContext());
+  if (!global_scope) {
+    // In case of the context destruction, `GetExecutionContext()` returns
+    // nullptr. Then, there is no `global_scope` to execute the language
+    // event.
+    return;
+  }
+  SetLanguagesDirty();
   global_scope->DispatchEvent(
       *Event::Create(event_type_names::kLanguagechange));
+}
+
+void WorkerNavigator::Trace(Visitor* visitor) const {
+  NavigatorBase::Trace(visitor);
+  AcceptLanguagesWatcher::Trace(visitor);
 }
 
 }  // namespace blink

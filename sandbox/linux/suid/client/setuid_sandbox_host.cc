@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,21 +10,26 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <array>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
 #include "base/command_line.h"
-#include "base/cxx17_backports.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/environment.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_file.h"
 #include "base/logging.h"
+#include "base/memory/ptr_util.h"
 #include "base/path_service.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/process/launch.h"
 #include "base/process/process_metrics.h"
+#include "base/strings/cstring_view.h"
 #include "base/strings/string_number_conversions.h"
 #include "sandbox/linux/suid/common/sandbox.h"
 #include "sandbox/linux/suid/common/suid_unsafe_environment_variables.h"
@@ -45,13 +50,15 @@ void SetSandboxAPIEnvironmentVariable(base::Environment* env) {
 // inside another.
 void UnsetExpectedEnvironmentVariables(base::EnvironmentMap* env_map) {
   DCHECK(env_map);
-  const base::NativeEnvironmentString environment_vars[] = {
-      kSandboxDescriptorEnvironmentVarName, kSandboxHelperPidEnvironmentVarName,
-      kSandboxEnvironmentApiProvides,       kSandboxPIDNSEnvironmentVarName,
+  const auto environment_vars = std::to_array<base::NativeEnvironmentString>({
+      kSandboxDescriptorEnvironmentVarName,
+      kSandboxHelperPidEnvironmentVarName,
+      kSandboxEnvironmentApiProvides,
+      kSandboxPIDNSEnvironmentVarName,
       kSandboxNETNSEnvironmentVarName,
-  };
+  });
 
-  for (size_t i = 0; i < base::size(environment_vars); ++i) {
+  for (size_t i = 0; i < std::size(environment_vars); ++i) {
     // Setting values in EnvironmentMap to an empty-string will make
     // sure that they get unset from the environment via AlterEnvironment().
     (*env_map)[environment_vars[i]] = base::NativeEnvironmentString();
@@ -61,8 +68,8 @@ void UnsetExpectedEnvironmentVariables(base::EnvironmentMap* env_map) {
 // Wrapper around a shared C function.
 // Returns the "saved" environment variable name corresponding to |envvar|
 // in a new string or NULL.
-std::string* CreateSavedVariableName(const char* env_var) {
-  char* const saved_env_var = SandboxSavedEnvironmentVariable(env_var);
+std::string* CreateSavedVariableName(base::cstring_view env_var) {
+  char* const saved_env_var = SandboxSavedEnvironmentVariable(env_var.c_str());
   if (!saved_env_var)
     return nullptr;
   std::string* saved_env_var_copy = new std::string(saved_env_var);
@@ -76,19 +83,26 @@ std::string* CreateSavedVariableName(const char* env_var) {
 // different names here so that the SUID sandbox can resolve them for the
 // renderer.
 void SaveSUIDUnsafeEnvironmentVariables(base::Environment* env) {
-  for (unsigned i = 0; kSUIDUnsafeEnvironmentVariables[i]; ++i) {
-    const char* env_var = kSUIDUnsafeEnvironmentVariables[i];
+  // Note: kSUIDUnsafeEnvironmentVariables is NULL-terminated.
+  for (const char* const env_var_str :
+       base::span(kSUIDUnsafeEnvironmentVariables)
+           .first<std::size(kSUIDUnsafeEnvironmentVariables) - 1>()) {
+    // SAFETY: Elements of `kSUIDUnsafeEnvironmentVariables` are static string
+    // literals and are guaranteed to be NUL-terminated.
+    const base::cstring_view env_var =
+        UNSAFE_BUFFERS(base::cstring_view(env_var_str));
     // Get the saved environment variable corresponding to envvar.
     std::unique_ptr<std::string> saved_env_var(
         CreateSavedVariableName(env_var));
     if (!saved_env_var)
       continue;
 
-    std::string value;
-    if (env->GetVar(env_var, &value))
-      env->SetVar(*saved_env_var, value);
-    else
+    std::optional<std::string> value = env->GetVar(env_var);
+    if (value.has_value()) {
+      env->SetVar(*saved_env_var, *value);
+    } else {
       env->UnSetVar(*saved_env_var);
+    }
   }
 }
 
@@ -98,8 +112,9 @@ const char* GetDevelSandboxPath() {
 
 }  // namespace
 
-SetuidSandboxHost* SetuidSandboxHost::Create() {
-  return new SetuidSandboxHost(base::Environment::Create());
+std::unique_ptr<SetuidSandboxHost> SetuidSandboxHost::Create() {
+  // Private constructor.
+  return base::WrapUnique(new SetuidSandboxHost(base::Environment::Create()));
 }
 
 SetuidSandboxHost::SetuidSandboxHost(std::unique_ptr<base::Environment> env)
@@ -107,8 +122,7 @@ SetuidSandboxHost::SetuidSandboxHost(std::unique_ptr<base::Environment> env)
   DCHECK(env_);
 }
 
-SetuidSandboxHost::~SetuidSandboxHost() {
-}
+SetuidSandboxHost::~SetuidSandboxHost() = default;
 
 // Check if CHROME_DEVEL_SANDBOX is set but empty. This currently disables
 // the setuid sandbox. TODO(jln): fix this (crbug.com/245376).
@@ -188,6 +202,28 @@ void SetuidSandboxHost::SetupLaunchOptions(
 void SetuidSandboxHost::SetupLaunchEnvironment() {
   SaveSUIDUnsafeEnvironmentVariables(env_.get());
   SetSandboxAPIEnvironmentVariable(env_.get());
+}
+
+// static
+const char* SetuidSandboxHost::DescribeExitCode(int exit_code) {
+  switch (exit_code) {
+    case kSuidSandboxExitFatalError:
+      return "fatal error";
+    case kSuidSandboxExitApiVersionFailure:
+      return "invalid API version";
+    case kSuidSandboxExitNamespaceFailure:
+      return "failed to move to new namespaces";
+    case kSuidSandboxExitChrootHelperFailure:
+      return "failed to spawn chroot helper";
+    case kSuidSandboxExitDropRootFailure:
+      return "failed to drop root";
+    case kSuidSandboxExitEnvironmentFailure:
+      return "failed to set up child environment";
+    case kSuidSandboxExitExecFailure:
+      return "exec failed";
+    default:
+      return nullptr;
+  }
 }
 
 }  // namespace sandbox

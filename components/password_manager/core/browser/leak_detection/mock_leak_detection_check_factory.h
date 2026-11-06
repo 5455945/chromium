@@ -1,10 +1,11 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_PASSWORD_MANAGER_CORE_BROWSER_LEAK_DETECTION_MOCK_LEAK_DETECTION_CHECK_FACTORY_H_
 #define COMPONENTS_PASSWORD_MANAGER_CORE_BROWSER_LEAK_DETECTION_MOCK_LEAK_DETECTION_CHECK_FACTORY_H_
 
+#include "build/build_config.h"
 #include "components/password_manager/core/browser/leak_detection/bulk_leak_check.h"
 #include "components/password_manager/core/browser/leak_detection/leak_detection_check.h"
 #include "components/password_manager/core/browser/leak_detection/leak_detection_check_factory.h"
@@ -18,17 +19,21 @@ class MockLeakDetectionCheckFactory : public LeakDetectionCheckFactory {
   ~MockLeakDetectionCheckFactory() override;
 
   // LeakDetectionCheckFactory:
-  MOCK_CONST_METHOD3(TryCreateLeakCheck,
-                     std::unique_ptr<LeakDetectionCheck>(
-                         LeakDetectionDelegateInterface*,
-                         signin::IdentityManager*,
-                         scoped_refptr<network::SharedURLLoaderFactory>));
+  MOCK_METHOD(std::unique_ptr<LeakDetectionCheck>,
+              TryCreateLeakCheck,
+              (signin::IdentityManager*,
+               scoped_refptr<network::SharedURLLoaderFactory>,
+               version_info::Channel),
+              (const, override));
 
-  MOCK_CONST_METHOD3(TryCreateBulkLeakCheck,
-                     std::unique_ptr<BulkLeakCheck>(
-                         BulkLeakCheckDelegateInterface*,
-                         signin::IdentityManager*,
-                         scoped_refptr<network::SharedURLLoaderFactory>));
+#if !BUILDFLAG(IS_ANDROID)
+  MOCK_METHOD(std::unique_ptr<BulkLeakCheck>,
+              TryCreateBulkLeakCheck,
+              (BulkLeakCheckDelegateInterface*,
+               signin::IdentityManager*,
+               scoped_refptr<network::SharedURLLoaderFactory>),
+              (const, override));
+#endif  // !BUILDFLAG(IS_ANDROID)
 };
 
 }  // namespace password_manager

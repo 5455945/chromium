@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,131 +7,157 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
+#include "components/device_reauth/device_authenticator.h"
 #include "components/password_manager/core/browser/password_form.h"
+#include "components/password_manager/core/browser/password_form_manager_for_ui.h"
 #include "components/password_manager/core/browser/password_manager_client.h"
-#include "components/password_manager/core/browser/password_store.h"
-#include "ui/gfx/native_widget_types.h"
-
-namespace network {
-namespace mojom {
-class NetworkContext;
-}
-}  // namespace network
 
 namespace password_manager {
-class CredentialsCleanerRunner;
 class PasswordManagerDriver;
 class PasswordManagerClient;
+struct PasswordFormDigest;
+struct StoredCredential;
+class BrowserSavePasswordProgressLogger;
 }  // namespace password_manager
 
-namespace syncer {
-class SyncService;
-}
+namespace autofill {
+class AutofillClient;
+}  // namespace autofill
 
 class PrefService;
 
 namespace password_manager_util {
 
+// For credentials returned from PasswordStore::GetLogins, the enum specifies
+// the type of the match for the requested page. Higher value always means
+// weaker match.
+// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.chrome.browser.password_manager
+enum class GetLoginMatchType {
+  // Exact origin or Android credentials.
+  kExact,
+  // A web site affiliated with the requesting page.
+  kAffiliated,
+  // eTLD + 1 match.
+  kPSL,
+  // Singon realm is grouped with the requesting page URL as determined by the
+  // `AffiliationService`. This relation to the requesting page is weaker than
+  // `kAffiliated`.
+  kGrouped,
+};
+
 // Update |credential| to reflect usage.
 void UpdateMetadataForUsage(password_manager::PasswordForm* credential);
 
-// Reports whether and how passwords are currently synced. In particular, for a
-// null |sync_service| returns NOT_SYNCING.
-password_manager::SyncState GetPasswordSyncState(
-    const syncer::SyncService* sync_service);
-
-// Removes Android username-only credentials from |android_credentials|.
-// Transforms federated credentials into non zero-click ones.
-void TrimUsernameOnlyCredentials(
-    std::vector<std::unique_ptr<password_manager::PasswordForm>>*
-        android_credentials);
-
 // A convenience function for testing that |client| has a non-null LogManager
 // and that that LogManager returns true for IsLoggingActive. This function can
-// be removed once PasswordManagerClient::GetLogManager is implemented on iOS
-// and required to always return non-null.
-bool IsLoggingActive(const password_manager::PasswordManagerClient* client);
+// be removed once PasswordManagerClient::GetCurrentLogManager is implemented on
+// iOS and required to always return non-null.
+bool IsLoggingActive(password_manager::PasswordManagerClient* client);
+
+// Returns a logger if logging is active.
+std::unique_ptr<password_manager::BrowserSavePasswordProgressLogger>
+GetLoggerIfAvailable(password_manager::PasswordManagerClient* client);
 
 // True iff the manual password generation is enabled for the current site.
 bool ManualPasswordGenerationEnabled(
-    password_manager::PasswordManagerDriver* driver);
-
-// Returns true iff the "Show all saved passwords" option should be shown in
-// Context Menu. Also records metric, that the Context Menu will have "Show all
-// saved passwords" option.
-bool ShowAllSavedPasswordsContextMenuEnabled(
     password_manager::PasswordManagerDriver* driver);
 
 // Triggers password generation flow and records the metrics. If the user should
 // be asked to opt in to account storage, will trigger a reauth flow first and
 // generation will only happen on success.
 void UserTriggeredManualGenerationFromContextMenu(
-    password_manager::PasswordManagerClient* password_manager_client);
+    password_manager::PasswordManagerClient* password_manager_client,
+    autofill::AutofillClient* autofill_client);
 
-// This function handles the following clean-ups of credentials:
-// (1) Removing blocklisted duplicates: if two blocklisted credentials have the
-// same signon_realm, they are duplicates of each other. Deleting all but one
-// sharing the signon_realm does not affect Chrome's behaviour and hence
-// duplicates can be removed. Having duplicates makes un-blocklisting not work,
-// hence blocklisted duplicates need to be removed.
-// (2) Removing or fixing of HTTPS credentials with wrong signon_realm. See
-// https://crbug.com/881731 for details.
-// (3) Report metrics about HTTP to HTTPS migration process and remove obsolete
-// HTTP credentials. This feature is not available on iOS platform because the
-// HSTS query is not supported. |network_context_getter| is always null for iOS
-// and it can also be null for some unittests.
-void RemoveUselessCredentials(
-    password_manager::CredentialsCleanerRunner* cleaning_tasks_runner,
-    scoped_refptr<password_manager::PasswordStore> store,
-    PrefService* prefs,
-    base::TimeDelta delay,
-    base::RepeatingCallback<network::mojom::NetworkContext*()>
-        network_context_getter);
+// Checks if password saving is possible at a storage level.
+bool IsAbleToSavePasswords(password_manager::PasswordManagerClient* client);
+
+// Returns true if the only blocking error is a trusted vault error.
+bool IsSavingBlockedByTrustedVaultError(
+    const password_manager::PasswordManagerClient* client,
+    const password_manager::PasswordFormManagerForUI* form_manager);
+
+// Returns true if password saving is blocked by a recoverable error. Returns
+// false, if saving is blocked by an unrecoverable error or not blocked at all.
+// TODO(crbug.com/464228247): Merge with IsSavingBlockedByTrustedVaultError when
+// other platforms handle more errors.
+bool IsSavingBlockedByRecoverableError(
+    const password_manager::PasswordManagerClient* client,
+    const password_manager::PasswordFormManagerForUI* form_manager);
 
 // Excluding protocol from a signon_realm means to remove from the signon_realm
 // what is before the web origin (with the protocol excluded as well). For
 // example if the signon_realm is "https://www.google.com/", after
 // excluding protocol it becomes "www.google.com/".
 // This assumes that the |form|'s host is a substring of the signon_realm.
-base::StringPiece GetSignonRealmWithProtocolExcluded(
+std::string_view GetSignonRealmWithProtocolExcluded(
     const password_manager::PasswordForm& form);
 
-// Given all non-blocklisted |non_federated_matches|, finds and populates
-// |non_federated_same_scheme|, |best_matches|, and |preferred_match|
-// accordingly. For comparing credentials the following rule is used: non-psl
-// match is better than psl match, most recently used match is better than other
-// matches. In case of tie, an arbitrary credential from the tied ones is chosen
-// for |best_matches| and |preferred_match|.
-void FindBestMatches(
-    const std::vector<const password_manager::PasswordForm*>&
-        non_federated_matches,
-    password_manager::PasswordForm::Scheme scheme,
-    std::vector<const password_manager::PasswordForm*>*
-        non_federated_same_scheme,
-    std::vector<const password_manager::PasswordForm*>* best_matches,
-    const password_manager::PasswordForm** preferred_match);
+// For credentials returned from PasswordStore::GetLogins, specifies the type of
+// the match for the requested page.
+GetLoginMatchType GetMatchType(const password_manager::PasswordForm& form);
+GetLoginMatchType GetMatchType(const password_manager::StoredCredential& form);
 
-// Returns a form with the given |username_value| from |forms|, or nullptr if
-// none exists. If multiple matches exist, returns the first one.
+// Returns true if the credential is a PSL match or a grouped match. Such
+// matches are called weak matches and do not trigger fill on page load.
+// If the form is submitted with weak match filled, credentials are saved on the
+// submitted form realm without prompting to the user.
+bool IsCredentialWeakMatch(const password_manager::PasswordForm& form);
+bool IsCredentialWeakMatch(const password_manager::StoredCredential& form);
+
+// Given all non-blocklisted |matches| returns best matches as the result of the
+// function. For comparing credentials the following rule is used:
+//   - non-psl match is better than psl match,
+//   - most recently used match is better than other matches.
+//   - In case of tie, an arbitrary credential from the tied ones is chosen for
+//     best matches.
+// TODO(crbug.com/343879843) FindBestMatches should be part of FormFetcherImpl
+// implementation detail as it has a strong coupling to form fetcher's internal
+// state.
+std::vector<password_manager::StoredCredential> FindBestMatches(
+    base::span<password_manager::StoredCredential> matches);
+
+// Returns a credential with the given |username_value| from |forms|, or nullptr
+// if none exists. If multiple matches exist, returns the first one.
 const password_manager::PasswordForm* FindFormByUsername(
-    const std::vector<const password_manager::PasswordForm*>& forms,
+    base::span<const password_manager::PasswordForm> forms,
     const std::u16string& username_value);
+const password_manager::StoredCredential* FindCredentialByUsername(
+    base::span<const password_manager::StoredCredential> forms,
+    const std::u16string& username_value);
+const password_manager::StoredCredential* FindCredentialByUsername(
+    const std::vector<raw_ptr<const password_manager::StoredCredential,
+                              VectorExperimental>>& forms,
+    const std::u16string& username_value);
+
+// Returns a form from |submitted_manager|'s best matches with
+// `kChangeSubmission` type that matches |submitted_manager|'s pending
+// credentials on username, and has a backup password. Returns nullptr if such
+// form is not found.
+const password_manager::StoredCredential* FindChangedPasswordLoginWithBackup(
+    const password_manager::PasswordFormManagerForUI& submitted_manager);
 
 // If the user submits a form, they may have used existing credentials, new
 // credentials, or modified existing credentials that should be updated.
 // The function returns a form from |credentials| that is the best candidate to
-// use for an update. Returned value is NULL if |submitted_form| looks like a
+// use for an update. Returned value is nullptr if |submitted_form| looks like a
 // new credential for the site to be saved.
 // |submitted_form| is the form being submitted.
 // |credentials| are all the credentials relevant for the current site including
 // PSL and Android matches.
-const password_manager::PasswordForm* GetMatchForUpdating(
+// |username_updated_in_bubble| indicates whether a username was manually
+// updated during the save prompt bubble.
+const password_manager::StoredCredential* GetMatchForUpdating(
     const password_manager::PasswordForm& submitted_form,
-    const std::vector<const password_manager::PasswordForm*>& credentials);
+    const std::vector<raw_ptr<const password_manager::StoredCredential,
+                              VectorExperimental>>& credentials,
+    bool username_updated_in_bubble = false);
 
 // This method creates a blocklisted form with |digests|'s scheme, signon_realm
 // and origin. This is done to avoid storing PII and to have a normalized unique
@@ -140,6 +166,59 @@ const password_manager::PasswordForm* GetMatchForUpdating(
 // credentials), the original origin is kept.
 password_manager::PasswordForm MakeNormalizedBlocklistedForm(
     password_manager::PasswordFormDigest digest);
+
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
+bool ShouldBiometricAuthenticationForFillingToggleBeVisible(
+    const PrefService* local_state);
+
+bool ShouldShowBiometricAuthenticationBeforeFillingPromo(
+    password_manager::PasswordManagerClient* client);
+#endif
+
+// Strips any authentication data, as well as query and ref portions of URL.
+GURL StripAuthAndParams(const GURL& gurl);
+
+// Helper which checks for scheme in the |url|. If not present, adds "https://"
+// by default. For ip-addresses, scheme "http://" is used.
+GURL ConstructGURLWithScheme(const std::string& url);
+
+// TODO(crbug.com/40202333): Deduplicate GetSignonRealm implementations.
+// Returns the value of PasswordForm::signon_realm for an HTML form with the
+// origin |url|.
+std::string GetSignonRealm(const GURL& url);
+
+#if BUILDFLAG(IS_IOS)
+// Returns a boolean indicating whether the user had enabled the credential
+// provider in their iOS settings at startup.
+bool IsCredentialProviderEnabledOnStartup(const PrefService* local_state);
+
+// Sets the boolean indicating whether the user had enabled the credential
+// provider in their iOS settings at startup.
+void SetCredentialProviderEnabledOnStartup(PrefService* local_state,
+                                           bool enabled);
+#endif
+
+// Helper functions for character type classification. The built-in functions
+// depend on locale, platform and other stuff. To make the output more
+// predictable, the function are re-implemented here.
+bool IsNumeric(char16_t c);
+
+bool IsLetter(char16_t c);
+
+bool IsLowercaseLetter(char16_t c);
+
+bool IsUppercaseLetter(char16_t c);
+
+// Checks if a supplied character |c| is a special symbol.
+// Special symbols are defined by
+// `password_manager::constants::kSpecialSymbols`.
+bool IsSpecialSymbol(char16_t c);
+
+// Returns true if 'type' is a username in a password-less form.
+bool IsSingleUsernameType(autofill::FieldType type);
+
+// Returns the prettified version of |signon_realm| to be displayed on the UI.
+std::u16string GetHumanReadableRealm(const std::string& signon_realm);
 
 }  // namespace password_manager_util
 

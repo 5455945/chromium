@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,6 +14,7 @@ import com.google.android.gms.vision.barcode.BarcodeDetector;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.Log;
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.gfx.mojom.PointF;
 import org.chromium.gfx.mojom.RectF;
 import org.chromium.mojo.system.MojoException;
@@ -22,13 +23,12 @@ import org.chromium.shape_detection.mojom.BarcodeDetectionResult;
 import org.chromium.shape_detection.mojom.BarcodeDetectorOptions;
 import org.chromium.shape_detection.mojom.BarcodeFormat;
 
-/**
- * Implementation of mojo BarcodeDetection, using Google Play Services vision package.
- */
+/** Implementation of mojo BarcodeDetection, using Google Play Services vision package. */
+@NullMarked
 public class BarcodeDetectionImpl implements BarcodeDetection {
     private static final String TAG = "BarcodeDetectionImpl";
 
-    private BarcodeDetector mBarcodeDetector;
+    private final BarcodeDetector mBarcodeDetector;
 
     public BarcodeDetectionImpl(BarcodeDetectorOptions options) {
         int formats = Barcode.ALL_FORMATS;
@@ -69,13 +69,14 @@ public class BarcodeDetectionImpl implements BarcodeDetection {
                 }
             }
         }
-        mBarcodeDetector = new BarcodeDetector.Builder(ContextUtils.getApplicationContext())
-                                   .setBarcodeFormats(formats)
-                                   .build();
+        mBarcodeDetector =
+                new BarcodeDetector.Builder(ContextUtils.getApplicationContext())
+                        .setBarcodeFormats(formats)
+                        .build();
     }
 
     @Override
-    public void detect(org.chromium.skia.mojom.BitmapN32 bitmapData, DetectResponse callback) {
+    public void detect(org.chromium.skia.mojom.BitmapN32 bitmapData, Detect_Response callback) {
         // The vision library will be downloaded the first time the API is used
         // on the device; this happens "fast", but it might have not completed,
         // bail in this case. Also, the API was disabled between and v.9.0 and

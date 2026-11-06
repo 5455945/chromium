@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,11 +9,13 @@
 #include <string>
 #include <unordered_map>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/types/expected.h"
 #include "chrome/browser/media/webrtc/desktop_media_picker.h"
-#include "components/arc/mojom/screen_capture.mojom.h"
+#include "chromeos/ash/experiences/arc/mojom/screen_capture.mojom.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "content/public/browser/desktop_media_id.h"
+#include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
 
 namespace content {
 class BrowserContext;
@@ -33,6 +35,10 @@ class ArcScreenCaptureBridge : public KeyedService,
 
   ArcScreenCaptureBridge(content::BrowserContext* context,
                          ArcBridgeService* bridge_service);
+
+  ArcScreenCaptureBridge(const ArcScreenCaptureBridge&) = delete;
+  ArcScreenCaptureBridge& operator=(const ArcScreenCaptureBridge&) = delete;
+
   ~ArcScreenCaptureBridge() override;
 
   // mojom::ScreenCaptureHost overrides:
@@ -45,6 +51,8 @@ class ArcScreenCaptureBridge : public KeyedService,
                          const std::string& package_name,
                          RequestPermissionCallback callback) override;
   void TestModeAcceptPermission(const std::string& package_name) override;
+
+  static void EnsureFactoryBuilt();
 
  private:
   struct PendingCaptureParams {
@@ -69,10 +77,13 @@ class ArcScreenCaptureBridge : public KeyedService,
     const bool enable_notification;
   };
 
-  void PermissionPromptCallback(const std::string& package_name,
-                                content::DesktopMediaID desktop_id);
+  void PermissionPromptCallback(
+      const std::string& package_name,
+      base::expected<content::DesktopMediaID,
+                     blink::mojom::MediaStreamRequestResult> result);
 
-  ArcBridgeService* const arc_bridge_service_;  // Owned by ArcServiceManager.
+  const raw_ptr<ArcBridgeService>
+      arc_bridge_service_;  // Owned by ArcServiceManager.
 
   // The string in this map corresponds to the passed in package_name when
   // RequestPermission is called. This map is used for when we get the callback
@@ -92,8 +103,6 @@ class ArcScreenCaptureBridge : public KeyedService,
 
   // WeakPtrFactory to use for callbacks.
   base::WeakPtrFactory<ArcScreenCaptureBridge> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ArcScreenCaptureBridge);
 };
 
 }  // namespace arc

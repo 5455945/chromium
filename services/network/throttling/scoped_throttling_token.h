@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,9 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 
 #include "base/component_export.h"
-#include "base/macros.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
 class UnguessableToken;
@@ -30,17 +29,20 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) ScopedThrottlingToken {
   // ThrottlingNetworkTransaction::Start() will be called.
   static std::unique_ptr<ScopedThrottlingToken> MaybeCreate(
       uint32_t net_log_source_id,
-      const absl::optional<base::UnguessableToken>& throttling_profile_id);
+      const std::optional<base::UnguessableToken>& throttling_profile_id);
+
+  ScopedThrottlingToken(const ScopedThrottlingToken&) = delete;
+  ScopedThrottlingToken& operator=(const ScopedThrottlingToken&) = delete;
 
   ~ScopedThrottlingToken();
+
+  uint32_t source_id() const { return net_log_source_id_; }
 
  private:
   ScopedThrottlingToken(uint32_t net_log_source_id,
                         const base::UnguessableToken& throttling_profile_id);
 
   const uint32_t net_log_source_id_;
-
-  DISALLOW_COPY_AND_ASSIGN(ScopedThrottlingToken);
 };
 
 }  // namespace network

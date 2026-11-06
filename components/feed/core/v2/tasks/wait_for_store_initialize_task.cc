@@ -1,11 +1,17 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/feed/core/v2/tasks/wait_for_store_initialize_task.h"
+
+#include <vector>
+
 #include "components/feed/core/proto/v2/store.pb.h"
 #include "components/feed/core/v2/feed_store.h"
 #include "components/feed/core/v2/feed_stream.h"
+#include "components/feed/core/v2/feedstore_util.h"
+#include "components/feed/core/v2/test/proto_printer.h"
+#include "google_apis/gaia/gaia_id.h"
 
 namespace feed {
 
@@ -17,26 +23,23 @@ WaitForStoreInitializeTask::WaitForStoreInitializeTask(
 WaitForStoreInitializeTask::~WaitForStoreInitializeTask() = default;
 
 void WaitForStoreInitializeTask::Run() {
-  // |this| stays alive as long as the |store_|, so Unretained is safe.
-  store_.Initialize(base::BindOnce(
-      &WaitForStoreInitializeTask::OnStoreInitialized, base::Unretained(this)));
+  store_->Initialize(
+      base::BindOnce(&WaitForStoreInitializeTask::OnStoreInitialized,
+                     weak_ptr_factory_.GetWeakPtr()));
 }
 
 void WaitForStoreInitializeTask::OnStoreInitialized() {
-  store_.ReadStartupData(
+  store_->ReadStartupData(
       base::BindOnce(&WaitForStoreInitializeTask::ReadStartupDataDone,
-                     base::Unretained(this)));
-  store_.ReadWebFeedStartupData(
-      base::BindOnce(&WaitForStoreInitializeTask::WebFeedStartupDataDone,
-                     base::Unretained(this)));
+                     weak_ptr_factory_.GetWeakPtr()));
 }
 
 void WaitForStoreInitializeTask::ReadStartupDataDone(
     FeedStore::StartupData startup_data) {
   if (startup_data.metadata &&
-      startup_data.metadata->gaia() != stream_.GetSyncSignedInGaia()) {
-    store_.ClearAll(base::BindOnce(&WaitForStoreInitializeTask::ClearAllDone,
-                                   base::Unretained(this)));
+      GaiaId(startup_data.metadata->gaia()) != stream_->GetAccountInfo().gaia) {
+    store_->ClearAll(base::BindOnce(&WaitForStoreInitializeTask::ClearAllDone,
+                                    weak_ptr_factory_.GetWeakPtr()));
     return;
   }
   result_.startup_data = std::move(startup_data);
@@ -57,12 +60,12 @@ void WaitForStoreInitializeTask::MaybeUpgradeStreamSchema() {
   if (metadata.stream_schema_version() != 1) {
     result_.startup_data.stream_data.clear();
     if (metadata.gaia().empty()) {
-      metadata.set_gaia(stream_.GetSyncSignedInGaia());
+      metadata.set_gaia(stream_->GetAccountInfo().gaia.ToString());
     }
-    store_.UpgradeFromStreamSchemaV0(
+    store_->UpgradeFromStreamSchemaV0(
         std::move(metadata),
         base::BindOnce(&WaitForStoreInitializeTask::UpgradeDone,
-                       base::Unretained(this)));
+                       weak_ptr_factory_.GetWeakPtr()));
     return;
   }
   Done();
@@ -74,17 +77,9 @@ void WaitForStoreInitializeTask::UpgradeDone(feedstore::Metadata metadata) {
   Done();
 }
 
-void WaitForStoreInitializeTask::WebFeedStartupDataDone(
-    FeedStore::WebFeedStartupData data) {
-  result_.web_feed_startup_data = std::move(data);
-  Done();
-}
-
 void WaitForStoreInitializeTask::Done() {
-  if (++done_count_ == 2) {
     std::move(callback_).Run(std::move(result_));
     TaskComplete();
-  }
 }
 
 }  // namespace feed

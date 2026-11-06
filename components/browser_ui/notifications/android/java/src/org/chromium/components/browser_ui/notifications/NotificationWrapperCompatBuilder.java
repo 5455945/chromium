@@ -1,8 +1,10 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.browser_ui.notifications;
+
+import static org.chromium.components.browser_ui.notifications.BitmapUtils.resizeBitmapByMemory;
 
 import android.app.Notification;
 import android.app.PendingIntent;
@@ -10,7 +12,6 @@ import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.drawable.Icon;
 import android.net.Uri;
-import android.os.Build;
 import android.os.Bundle;
 import android.support.v4.media.session.MediaSessionCompat;
 import android.widget.RemoteViews;
@@ -20,22 +21,25 @@ import androidx.core.graphics.drawable.IconCompat;
 
 import org.chromium.base.Log;
 import org.chromium.base.metrics.RecordHistogram;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.components.browser_ui.notifications.channels.ChannelsInitializer;
 
-/**
- * Wraps a {@link NotificationCompat.Builder} object.
- */
+/** Wraps a {@link NotificationCompat.Builder} object. */
+@NullMarked
 public class NotificationWrapperCompatBuilder implements NotificationWrapperBuilder {
     private static final String TAG = "NotifCompatBuilder";
     private final NotificationCompat.Builder mBuilder;
-    private final NotificationMetadata mMetadata;
+    private final @Nullable NotificationMetadata mMetadata;
     private final Context mContext;
+    private boolean mIsSilent;
 
-    public NotificationWrapperCompatBuilder(Context context, String channelId,
-            ChannelsInitializer channelsInitializer, NotificationMetadata metadata) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            channelsInitializer.safeInitialize(channelId);
-        }
+    public NotificationWrapperCompatBuilder(
+            Context context,
+            String channelId,
+            ChannelsInitializer channelsInitializer,
+            @Nullable NotificationMetadata metadata) {
+        channelsInitializer.safeInitialize(channelId);
         mBuilder = new NotificationCompat.Builder(context, channelId);
         mMetadata = metadata;
         mContext = context;
@@ -48,25 +52,26 @@ public class NotificationWrapperCompatBuilder implements NotificationWrapperBuil
     }
 
     @Override
-    public NotificationWrapperBuilder setContentIntent(PendingIntent contentIntent) {
+    public NotificationWrapperBuilder setContentIntent(@Nullable PendingIntent contentIntent) {
         mBuilder.setContentIntent(contentIntent);
         return this;
     }
 
     @Override
-    public NotificationWrapperBuilder setContentIntent(PendingIntentProvider contentIntent) {
-        mBuilder.setContentIntent(contentIntent.getPendingIntent());
+    public NotificationWrapperBuilder setContentIntent(
+            @Nullable PendingIntentProvider contentIntent) {
+        mBuilder.setContentIntent(contentIntent != null ? contentIntent.getPendingIntent() : null);
         return this;
     }
 
     @Override
-    public NotificationWrapperBuilder setContentTitle(CharSequence title) {
+    public NotificationWrapperBuilder setContentTitle(@Nullable CharSequence title) {
         mBuilder.setContentTitle(title);
         return this;
     }
 
     @Override
-    public NotificationWrapperBuilder setContentText(CharSequence text) {
+    public NotificationWrapperBuilder setContentText(@Nullable CharSequence text) {
         mBuilder.setContentText(text);
         return this;
     }
@@ -79,9 +84,7 @@ public class NotificationWrapperCompatBuilder implements NotificationWrapperBuil
 
     @Override
     public NotificationWrapperBuilder setSmallIcon(Icon icon) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            mBuilder.setSmallIcon(IconCompat.createFromIcon(mContext, icon));
-        }
+        mBuilder.setSmallIcon(IconCompat.createFromIcon(mContext, icon));
         return this;
     }
 
@@ -92,7 +95,7 @@ public class NotificationWrapperCompatBuilder implements NotificationWrapperBuil
     }
 
     @Override
-    public NotificationWrapperBuilder setTicker(CharSequence text) {
+    public NotificationWrapperBuilder setTicker(@Nullable CharSequence text) {
         mBuilder.setTicker(text);
         return this;
     }
@@ -142,10 +145,10 @@ public class NotificationWrapperCompatBuilder implements NotificationWrapperBuil
     @Override
     public NotificationWrapperBuilder addAction(
             int icon, CharSequence title, PendingIntent intent) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && icon != 0) {
+        if (icon != 0) {
             mBuilder.addAction(
-                    new NotificationCompat.Action
-                            .Builder(IconCompat.createWithResource(mContext, icon), title, intent)
+                    new NotificationCompat.Action.Builder(
+                                    IconCompat.createWithResource(mContext, icon), title, intent)
                             .build());
         } else {
             mBuilder.addAction(icon, title, intent);
@@ -154,22 +157,12 @@ public class NotificationWrapperCompatBuilder implements NotificationWrapperBuil
     }
 
     @Override
-    public NotificationWrapperBuilder addAction(int icon, CharSequence title,
-            PendingIntentProvider pendingIntentProvider, int actionType) {
-        addAction(icon, title, pendingIntentProvider.getPendingIntent());
-        return this;
-    }
-
-    @Override
-    public NotificationWrapperBuilder addAction(Notification.Action action) {
-        Log.w(TAG, "Ignoring standard action in compat builder.");
-        return this;
-    }
-
-    @Override
     public NotificationWrapperBuilder addAction(
-            Notification.Action action, int flags, int actionType) {
-        Log.w(TAG, "Ignoring standard action in compat builder.");
+            int icon,
+            CharSequence title,
+            PendingIntentProvider pendingIntentProvider,
+            int actionType) {
+        addAction(icon, title, pendingIntentProvider.getPendingIntent());
         return this;
     }
 
@@ -181,24 +174,30 @@ public class NotificationWrapperCompatBuilder implements NotificationWrapperBuil
 
     @Override
     public NotificationWrapperBuilder addAction(
-            NotificationCompat.Action action, int flags, int actionType) {
-        // TODO(xingliu): Plumb requestCode from action intent.
+            NotificationCompat.Action action, int flags, int actionType, int requestCode) {
         action.actionIntent =
-                new PendingIntentProvider(action.actionIntent, flags, 0).getPendingIntent();
+                new PendingIntentProvider(action.actionIntent, flags, requestCode)
+                        .getPendingIntent();
         addAction(action);
         return this;
     }
 
     @Override
-    public NotificationWrapperBuilder setDeleteIntent(PendingIntent intent) {
+    public NotificationWrapperBuilder setDeleteIntent(@Nullable PendingIntent intent) {
         mBuilder.setDeleteIntent(intent);
         return this;
     }
 
     @Override
-    public NotificationWrapperBuilder setDeleteIntent(PendingIntentProvider intent) {
-        mBuilder.setDeleteIntent(intent.getPendingIntent());
+    public NotificationWrapperBuilder setDeleteIntent(@Nullable PendingIntentProvider intent) {
+        mBuilder.setDeleteIntent(intent != null ? intent.getPendingIntent() : null);
         return this;
+    }
+
+    @Override
+    public NotificationWrapperBuilder setDeleteIntent(
+            @Nullable PendingIntentProvider intent, int ignoredActionType) {
+        return setDeleteIntent(intent);
     }
 
     @Override
@@ -214,14 +213,8 @@ public class NotificationWrapperCompatBuilder implements NotificationWrapperBuil
     }
 
     @Override
-    public NotificationWrapperBuilder setSubText(CharSequence text) {
+    public NotificationWrapperBuilder setSubText(@Nullable CharSequence text) {
         mBuilder.setSubText(text);
-        return this;
-    }
-
-    @Override
-    public NotificationWrapperBuilder setContentInfo(String info) {
-        mBuilder.setContentInfo(info);
         return this;
     }
 
@@ -232,7 +225,7 @@ public class NotificationWrapperCompatBuilder implements NotificationWrapperBuil
     }
 
     @Override
-    public NotificationWrapperBuilder setLargeIcon(Bitmap icon) {
+    public NotificationWrapperBuilder setLargeIcon(@Nullable Bitmap icon) {
         mBuilder.setLargeIcon(icon);
         return this;
     }
@@ -244,7 +237,7 @@ public class NotificationWrapperCompatBuilder implements NotificationWrapperBuil
     }
 
     @Override
-    public NotificationWrapperBuilder setSound(Uri sound) {
+    public NotificationWrapperBuilder setSound(@Nullable Uri sound) {
         mBuilder.setSound(sound);
         return this;
     }
@@ -252,6 +245,7 @@ public class NotificationWrapperCompatBuilder implements NotificationWrapperBuil
     @Override
     public NotificationWrapperBuilder setSilent(boolean silent) {
         mBuilder.setSilent(silent);
+        mIsSilent = silent;
         return this;
     }
 
@@ -268,7 +262,7 @@ public class NotificationWrapperCompatBuilder implements NotificationWrapperBuil
     }
 
     @Override
-    public NotificationWrapperBuilder setPublicVersion(Notification publicNotification) {
+    public NotificationWrapperBuilder setPublicVersion(@Nullable Notification publicNotification) {
         mBuilder.setPublicVersion(publicNotification);
         return this;
     }
@@ -281,20 +275,20 @@ public class NotificationWrapperCompatBuilder implements NotificationWrapperBuil
 
     @Override
     public NotificationWrapperBuilder setBigPictureStyle(
-            Bitmap bigPicture, CharSequence summaryText) {
+            Bitmap bigPicture, @Nullable CharSequence summaryText) {
+        bigPicture = resizeBitmapByMemory(bigPicture, BIG_PICTURE_BITMAP_MAX_SIZE_IN_KB);
+
         NotificationCompat.BigPictureStyle style =
                 new NotificationCompat.BigPictureStyle().bigPicture(bigPicture);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            // Android N doesn't show content text when expanded, so duplicate body text as a
-            // summary for the big picture.
-            style.setSummaryText(summaryText);
-        }
+        // Android N doesn't show content text when expanded, so duplicate body text as a  summary
+        // for the big picture.
+        style.setSummaryText(summaryText);
         mBuilder.setStyle(style);
         return this;
     }
 
     @Override
-    public NotificationWrapperBuilder setBigTextStyle(CharSequence bigText) {
+    public NotificationWrapperBuilder setBigTextStyle(@Nullable CharSequence bigText) {
         mBuilder.setStyle(new NotificationCompat.BigTextStyle().bigText(bigText));
         return this;
     }
@@ -324,7 +318,8 @@ public class NotificationWrapperCompatBuilder implements NotificationWrapperBuil
     @Override
     public NotificationWrapper buildWithBigContentView(RemoteViews view) {
         assert mMetadata != null;
-        return new NotificationWrapper(mBuilder.setCustomBigContentView(view).build(), mMetadata);
+        return new NotificationWrapper(
+                mBuilder.setCustomBigContentView(view).build(), mMetadata, mIsSilent);
     }
 
     @Override
@@ -334,11 +329,11 @@ public class NotificationWrapperCompatBuilder implements NotificationWrapperBuil
         bigTextStyle.bigText(bigText);
 
         assert mMetadata != null;
-        return new NotificationWrapper(bigTextStyle.build(), mMetadata);
+        return new NotificationWrapper(bigTextStyle.build(), mMetadata, mIsSilent);
     }
 
     @Override
-    public Notification build() {
+    public @Nullable Notification build() {
         boolean success = false;
         Notification notification = null;
         try {
@@ -356,7 +351,7 @@ public class NotificationWrapperCompatBuilder implements NotificationWrapperBuil
     @Override
     public NotificationWrapper buildNotificationWrapper() {
         assert mMetadata != null;
-        return new NotificationWrapper(build(), mMetadata);
+        return new NotificationWrapper(build(), mMetadata, mIsSilent);
     }
 
     protected NotificationCompat.Builder getBuilder() {

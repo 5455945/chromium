@@ -1,24 +1,49 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "printing/printing_context_system_dialog_win.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "base/auto_reset.h"
-#include "base/stl_util.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/current_thread.h"
+#include "base/win/scoped_hglobal.h"
 #include "printing/backend/win_helper.h"
+#include "printing/buildflags/buildflags.h"
+#include "printing/mojom/print.mojom.h"
+#include "printing/page_range.h"
 #include "printing/print_settings_initializer_win.h"
 #include "skia/ext/skia_utils_win.h"
 
 namespace printing {
 
+HWND PrintingContextSystemDialogWin::GetWindow() {
+#if BUILDFLAG(ENABLE_OOP_PRINTING)
+  if (out_of_process_behavior() ==
+      OutOfProcessBehavior::kEnabledPerformSystemCalls) {
+    // Delving through the view tree to get to root window happens separately
+    // in the browser process (i.e., not in `PrintingContextSystemDialogWin`)
+    // before sending the identified window owner to the Print Backend service.
+    // This means that this call is happening in the service, and thus should
+    // just use the parent view as-is instead of looking for the root window.
+    // TODO(crbug.com/40561724)  Pursue having a service-level instantiation of
+    // `PrintingContextSystemDialogWin` for this behavior.  That would ensure
+    // this logic would be compile-time driven and only invoked by the service.
+    return reinterpret_cast<HWND>(delegate_->GetParentView());
+  }
+#endif
+  return GetRootWindow(delegate_->GetParentView());
+}
+
 PrintingContextSystemDialogWin::PrintingContextSystemDialogWin(
-    Delegate* delegate)
-    : PrintingContextWin(delegate) {}
+    Delegate* delegate,
+    OutOfProcessBehavior out_of_process_behavior)
+    : PrintingContextWin(delegate, out_of_process_behavior) {}
 
 PrintingContextSystemDialogWin::~PrintingContextSystemDialogWin() {}
 
@@ -29,7 +54,7 @@ void PrintingContextSystemDialogWin::AskUserForSettings(
     PrintSettingsCallback callback) {
   DCHECK(!in_print_job_);
 
-  HWND window = GetRootWindow(delegate_->GetParentView());
+  HWND window = GetWindow();
   DCHECK(window);
 
   // Show the OS-dependent dialog box.
@@ -50,15 +75,33 @@ void PrintingContextSystemDialogWin::AskUserForSettings(
   if (!has_selection)
     dialog_options.Flags |= PD_NOSELECTION;
 
-  PRINTPAGERANGE ranges[32];
+  PRINTPAGERANGE ranges[32] = {};
   dialog_options.nStartPage = START_PAGE_GENERAL;
   if (max_pages) {
-    // Default initialize to print all the pages.
-    memset(ranges, 0, sizeof(ranges));
-    ranges[0].nFromPage = 1;
-    ranges[0].nToPage = max_pages;
-    dialog_options.nPageRanges = 1;
-    dialog_options.nMaxPageRanges = base::size(ranges);
+    // Pre-populate the dialog with any requested page ranges and select its
+    // "Pages" radio button. The dialog uses 1-based, inclusive page numbers
+    // and rejects ranges outside [nMinPage, nMaxPage].
+    base::span<PRINTPAGERANGE> dialog_ranges(ranges);
+    size_t num_ranges = 0;
+    for (const PageRange& range : settings_->ranges()) {
+      if (num_ranges == dialog_ranges.size() ||
+          range.from >= static_cast<uint32_t>(max_pages)) {
+        break;
+      }
+      dialog_ranges[num_ranges++] = {
+          .nFromPage = range.from + 1,
+          .nToPage = std::min(range.to + 1, static_cast<uint32_t>(max_pages))};
+    }
+    if (num_ranges) {
+      dialog_options.nPageRanges = num_ranges;
+      dialog_options.Flags |= PD_PAGENUMS;
+    } else {
+      // Default initialize to print all the pages.
+      ranges[0].nFromPage = 1;
+      ranges[0].nToPage = max_pages;
+      dialog_options.nPageRanges = 1;
+    }
+    dialog_options.nMaxPageRanges = std::size(ranges);
     dialog_options.nMinPage = 1;
     dialog_options.nMaxPage = max_pages;
     dialog_options.lpPageRanges = ranges;
@@ -69,7 +112,7 @@ void PrintingContextSystemDialogWin::AskUserForSettings(
 
   if (ShowPrintDialog(&dialog_options) != S_OK) {
     ResetSettings();
-    std::move(callback).Run(FAILED);
+    std::move(callback).Run(mojom::ResultCode::kFailed);
     return;
   }
 
@@ -91,21 +134,20 @@ HRESULT PrintingContextSystemDialogWin::ShowPrintDialog(PRINTDLGEX* options) {
   // browser frame (but still being modal) so neither the browser frame nor
   // the print dialog will get any input. See http://crbug.com/342697
   // http://crbug.com/180997 for details.
-  base::CurrentThread::ScopedNestableTaskAllower allow;
+  base::CurrentThread::ScopedAllowApplicationTasksInNativeNestedLoop allow;
 
-  return PrintDlgEx(options);
+  return ::PrintDlgEx(options);
 }
 
 bool PrintingContextSystemDialogWin::InitializeSettingsWithRanges(
     const DEVMODE& dev_mode,
     const std::wstring& new_device_name,
-    const PRINTPAGERANGE* ranges,
-    int number_ranges,
+    base::span<const PRINTPAGERANGE> pages_span,
     bool selection_only) {
   DCHECK(GetDeviceCaps(context(), CLIPCAPS));
-  DCHECK(GetDeviceCaps(context(), RASTERCAPS) & RC_STRETCHDIB);
-  DCHECK(GetDeviceCaps(context(), RASTERCAPS) & RC_BITMAP64);
   // Some printers don't advertise these.
+  // DCHECK(GetDeviceCaps(context(), RASTERCAPS) & RC_STRETCHDIB);
+  // DCHECK(GetDeviceCaps(context(), RASTERCAPS) & RC_BITMAP64);
   // DCHECK(GetDeviceCaps(context(), RASTERCAPS) & RC_SCALING);
   // DCHECK(GetDeviceCaps(context(), SHADEBLENDCAPS) & SB_CONST_ALPHA);
   // DCHECK(GetDeviceCaps(context(), SHADEBLENDCAPS) & SB_PIXEL_ALPHA);
@@ -113,7 +155,6 @@ bool PrintingContextSystemDialogWin::InitializeSettingsWithRanges(
   // StretchDIBits() support is needed for printing.
   if (!(GetDeviceCaps(context(), RASTERCAPS) & RC_STRETCHDIB) ||
       !(GetDeviceCaps(context(), RASTERCAPS) & RC_BITMAP64)) {
-    NOTREACHED();
     ResetSettings();
     return false;
   }
@@ -123,12 +164,12 @@ bool PrintingContextSystemDialogWin::InitializeSettingsWithRanges(
   PageRanges ranges_vector;
   if (!selection_only) {
     // Convert the PRINTPAGERANGE array to a PrintSettings::PageRanges vector.
-    ranges_vector.reserve(number_ranges);
-    for (int i = 0; i < number_ranges; ++i) {
+    ranges_vector.reserve(pages_span.size());
+    for (const auto& cur_page : pages_span) {
       PageRange range;
       // Transfer from 1-based to 0-based.
-      range.from = ranges[i].nFromPage - 1;
-      range.to = ranges[i].nToPage - 1;
+      range.from = cur_page.nFromPage - 1;
+      range.to = cur_page.nToPage - 1;
       ranges_vector.push_back(range);
     }
   }
@@ -142,61 +183,64 @@ bool PrintingContextSystemDialogWin::InitializeSettingsWithRanges(
   return true;
 }
 
-PrintingContext::Result PrintingContextSystemDialogWin::ParseDialogResultEx(
+mojom::ResultCode PrintingContextSystemDialogWin::ParseDialogResultEx(
     const PRINTDLGEX& dialog_options) {
   // If the user clicked OK or Apply then Cancel, but not only Cancel.
   if (dialog_options.dwResultAction != PD_RESULT_CANCEL) {
-    // Start fresh, but preserve is_modifiable and GDI print setting.
+    // Start fresh, but preserve is_modifiable print setting.
     bool is_modifiable = settings_->is_modifiable();
-    bool print_text_with_gdi = settings_->print_text_with_gdi();
     ResetSettings();
     settings_->set_is_modifiable(is_modifiable);
-    settings_->set_print_text_with_gdi(print_text_with_gdi);
 
     DEVMODE* dev_mode = NULL;
     if (dialog_options.hDevMode) {
       dev_mode =
-          reinterpret_cast<DEVMODE*>(GlobalLock(dialog_options.hDevMode));
+          reinterpret_cast<DEVMODE*>(::GlobalLock(dialog_options.hDevMode));
       DCHECK(dev_mode);
     }
 
     std::wstring device_name;
     if (dialog_options.hDevNames) {
-      DEVNAMES* dev_names =
-          reinterpret_cast<DEVNAMES*>(GlobalLock(dialog_options.hDevNames));
-      DCHECK(dev_names);
-      if (dev_names) {
-        device_name = reinterpret_cast<const wchar_t*>(dev_names) +
-                      dev_names->wDeviceOffset;
-        GlobalUnlock(dialog_options.hDevNames);
+      base::win::ScopedHGlobal<const DEVNAMES*> dev_names(
+          dialog_options.hDevNames);
+      size_t size = ::GlobalSize(dialog_options.hDevNames);
+      DCHECK(dev_names.data());
+      // SAFETY: Trust that ::GlobalSize returns the correct size.
+      auto dev_names_span = UNSAFE_BUFFERS(
+          base::span(reinterpret_cast<const wchar_t*>(dev_names.data()),
+                     size / sizeof(wchar_t)));
+
+      if (dev_names->wDeviceOffset < dev_names_span.size()) {
+        auto string_span = dev_names_span.subspan(dev_names->wDeviceOffset);
+        auto it = std::ranges::find(string_span, L'\0');
+        device_name = std::wstring(string_span.begin(), it);
       }
     }
 
     bool success = false;
     if (dev_mode && !device_name.empty()) {
       set_context(dialog_options.hDC);
-      PRINTPAGERANGE* page_ranges = NULL;
-      DWORD num_page_ranges = 0;
       bool print_selection_only = false;
-      if (dialog_options.Flags & PD_PAGENUMS) {
-        page_ranges = dialog_options.lpPageRanges;
-        num_page_ranges = dialog_options.nPageRanges;
-      }
       if (dialog_options.Flags & PD_SELECTION) {
         print_selection_only = true;
       }
-      success =
-          InitializeSettingsWithRanges(*dev_mode, device_name, page_ranges,
-                                       num_page_ranges, print_selection_only);
+      base::span<PRINTPAGERANGE> requested_ranges;
+      if (dialog_options.Flags & PD_PAGENUMS) {
+        // SAFETY: Trust PrintDlgEx set up dialog_options correctly.
+        requested_ranges = UNSAFE_BUFFERS(base::span(
+            dialog_options.lpPageRanges, dialog_options.nPageRanges));
+      }
+      success = InitializeSettingsWithRanges(
+          *dev_mode, device_name, requested_ranges, print_selection_only);
     }
 
     if (!success && dialog_options.hDC) {
-      DeleteDC(dialog_options.hDC);
+      ::DeleteDC(dialog_options.hDC);
       set_context(NULL);
     }
 
     if (dev_mode) {
-      GlobalUnlock(dialog_options.hDevMode);
+      ::GlobalUnlock(dialog_options.hDevMode);
     }
   } else {
     if (dialog_options.hDC) {
@@ -211,13 +255,15 @@ PrintingContext::Result PrintingContextSystemDialogWin::ParseDialogResultEx(
 
   switch (dialog_options.dwResultAction) {
     case PD_RESULT_PRINT:
-      return context() ? OK : FAILED;
+      return context() ? mojom::ResultCode::kSuccess
+                       : mojom::ResultCode::kFailed;
     case PD_RESULT_APPLY:
-      return context() ? CANCEL : FAILED;
+      return context() ? mojom::ResultCode::kCanceled
+                       : mojom::ResultCode::kFailed;
     case PD_RESULT_CANCEL:
-      return CANCEL;
+      return mojom::ResultCode::kCanceled;
     default:
-      return FAILED;
+      return mojom::ResultCode::kFailed;
   }
 }
 

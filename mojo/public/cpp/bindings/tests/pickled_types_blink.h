@@ -1,23 +1,23 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef MOJO_PUBLIC_CPP_BINDINGS_TESTS_PICKLED_TYPES_BLINK_H_
 #define MOJO_PUBLIC_CPP_BINDINGS_TESTS_PICKLED_TYPES_BLINK_H_
 
+#ifndef MOJO_PUBLIC_CPP_BINDINGS_TESTS_PICKLED_TYPES_BLINK_INTERNAL
+#define MOJO_PUBLIC_CPP_BINDINGS_TESTS_PICKLED_TYPES_BLINK_INTERNAL
+
 #include <stddef.h>
 
-#include <string>
-
 #include "base/check_op.h"
-#include "base/macros.h"
-#include "ipc/ipc_message_macros.h"
-#include "ipc/ipc_param_traits.h"
+#include "ipc/param_traits.h"
+#include "ipc/param_traits_macros.h"
 
 namespace base {
 class Pickle;
 class PickleIterator;
-}
+}  // namespace base
 
 namespace mojo {
 namespace test {
@@ -34,6 +34,10 @@ class PickledStructBlink {
   PickledStructBlink();
   PickledStructBlink(int foo, int bar);
   PickledStructBlink(PickledStructBlink&& other) = default;
+
+  PickledStructBlink(const PickledStructBlink&) = delete;
+  PickledStructBlink& operator=(const PickledStructBlink&) = delete;
+
   ~PickledStructBlink();
 
   PickledStructBlink& operator=(PickledStructBlink&& other) = default;
@@ -58,8 +62,6 @@ class PickledStructBlink {
   int foo_ = 0;
   int bar_ = 0;
   int baz_ = 0;
-
-  DISALLOW_COPY_AND_ASSIGN(PickledStructBlink);
 };
 
 }  // namespace test
@@ -75,10 +77,14 @@ struct ParamTraits<mojo::test::PickledStructBlink> {
   static bool Read(const base::Pickle* m,
                    base::PickleIterator* iter,
                    param_type* r);
-  static void Log(const param_type& p, std::string* l) {}
 };
 
 }  // namespace IPC
+
+#endif  // MOJO_PUBLIC_CPP_BINDINGS_TESTS_PICKLED_TYPES_BLINK_INTERNAL
+
+#undef IPC_MESSAGE_EXPORT
+#define IPC_MESSAGE_EXPORT
 
 IPC_ENUM_TRAITS_MAX_VALUE(mojo::test::PickledEnumBlink,
                           mojo::test::PickledEnumBlink::VALUE_1)

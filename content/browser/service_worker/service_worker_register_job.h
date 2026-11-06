@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,16 +10,18 @@
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "content/browser/service_worker/service_worker_register_job_base.h"
 #include "content/browser/service_worker/service_worker_registration.h"
 #include "content/browser/service_worker/service_worker_update_checker.h"
+#include "content/browser/worker_host/worker_script_fetcher.h"
 #include "content/public/browser/global_routing_id.h"
 #include "third_party/blink/public/common/service_worker/service_worker_status_code.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
+#include "third_party/blink/public/mojom/service_worker/service_worker_ancestor_frame_type.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_event_status.mojom.h"
-#include "third_party/blink/public/mojom/service_worker/service_worker_registration.mojom.h"
+#include "third_party/blink/public/mojom/service_worker/service_worker_registration.mojom-forward.h"
 #include "third_party/blink/public/mojom/worker/worker_main_script_load_params.mojom.h"
 #include "url/gurl.h"
 
@@ -49,23 +51,28 @@ class ServiceWorkerRegisterJob : public ServiceWorkerRegisterJobBase {
       RegistrationCallback;
 
   // For registration jobs.
-  CONTENT_EXPORT ServiceWorkerRegisterJob(
+  ServiceWorkerRegisterJob(
       ServiceWorkerContextCore* context,
       const GURL& script_url,
       const blink::mojom::ServiceWorkerRegistrationOptions& options,
       const blink::StorageKey& key,
       blink::mojom::FetchClientSettingsObjectPtr
           outside_fetch_client_settings_object,
-      const GlobalRenderFrameHostId& requesting_frame_id);
+      const GlobalRenderFrameHostId& requesting_frame_id,
+      blink::mojom::AncestorFrameType ancestor_frame_type,
+      PolicyContainerPolicies policy_container_policies);
 
   // For update jobs.
-  CONTENT_EXPORT ServiceWorkerRegisterJob(
-      ServiceWorkerContextCore* context,
-      ServiceWorkerRegistration* registration,
-      bool force_bypass_cache,
-      bool skip_script_comparison,
-      blink::mojom::FetchClientSettingsObjectPtr
-          outside_fetch_client_settings_object);
+  ServiceWorkerRegisterJob(ServiceWorkerContextCore* context,
+                           ServiceWorkerRegistration* registration,
+                           bool force_bypass_cache,
+                           bool skip_script_comparison,
+                           blink::mojom::FetchClientSettingsObjectPtr
+                               outside_fetch_client_settings_object);
+
+  ServiceWorkerRegisterJob(const ServiceWorkerRegisterJob&) = delete;
+  ServiceWorkerRegisterJob& operator=(const ServiceWorkerRegisterJob&) = delete;
+
   ~ServiceWorkerRegisterJob() override;
 
   // Registers a callback to be called when the promise would resolve (whether
@@ -126,7 +133,10 @@ class ServiceWorkerRegisterJob : public ServiceWorkerRegisterJobBase {
   void OnUpdateCheckFinished(
       ServiceWorkerSingleScriptUpdateChecker::Result result,
       std::unique_ptr<ServiceWorkerSingleScriptUpdateChecker::FailureInfo>
-          failure_info);
+          failure_info,
+      // TODO(crbug.com/40241479): `updated_sha256_script_checksums` will be
+      // used in a follow-up CL.
+      const std::map<GURL, std::string>& updated_sha256_script_checksums);
 
   void RegisterAndContinue();
   void ContinueWithNewRegistration(
@@ -139,15 +149,25 @@ class ServiceWorkerRegisterJob : public ServiceWorkerRegisterJobBase {
       blink::ServiceWorkerStatusCode status);
   void UpdateAndContinue();
 
-  // PlzServiceWorker:
-  // Starts script loading before starting the worker. This is called only when
-  // the job type is REGISTRATION_JOB and the worker doesn't need an
-  // byte-for-byte check.
+  // With PlzServiceWorker, we start fetching the script before starting the
+  // worker. The 3 functions below represent the expected order of execution
+  // in this process:
+  // - Devtools might decide it wants to auto-attach to new targets and to start
+  //   intercepting messages before the fetch starts. If so it needs to start
+  //   some handlers asynchronously. We pass down to the handlers a "throttle"
+  //   that can resume script fetching via a callback when ready.
+  // - We create a factory and a pass it to a ServiceWorkerNewScriptFetcher.
+  //   Once the script fetch succeeded (or failed), it calls into the final
+  //   step.
+  // - We inspect the response, determine if its a failure or not and update
+  //   state. If successful we start the worker with load parameters returned by
+  //   the ServiceWorkerNewScriptFetcher.
+  void MaybeThrottleForDevToolsBeforeStartingScriptFetch(
+      scoped_refptr<ServiceWorkerVersion> version);
   void StartScriptFetchForNewWorker(
       scoped_refptr<ServiceWorkerVersion> version);
-  void OnScriptFetchCompleted(
-      scoped_refptr<ServiceWorkerVersion> version,
-      blink::mojom::WorkerMainScriptLoadParamsPtr main_script_load_params);
+  void OnScriptFetchCompleted(scoped_refptr<ServiceWorkerVersion> version,
+                              std::optional<WorkerScriptFetcherResult> result);
 
   // Starts a service worker for [[Update]]. The script comparison has finished
   // at this point. It starts install phase.
@@ -178,7 +198,7 @@ class ServiceWorkerRegisterJob : public ServiceWorkerRegisterJobBase {
   void BumpLastUpdateCheckTimeIfNeeded();
 
   // The ServiceWorkerContextCore object must outlive this.
-  ServiceWorkerContextCore* const context_;
+  const raw_ptr<ServiceWorkerContextCore> context_;
 
   // Valid when the worker is being updated.
   std::unique_ptr<ServiceWorkerUpdateChecker> update_checker_;
@@ -210,10 +230,13 @@ class ServiceWorkerRegisterJob : public ServiceWorkerRegisterJobBase {
   std::string promise_resolved_status_message_;
   scoped_refptr<ServiceWorkerRegistration> promise_resolved_registration_;
   const GlobalRenderFrameHostId requesting_frame_id_;
+  const blink::mojom::AncestorFrameType ancestor_frame_type_;
+  PolicyContainerPolicies creator_policy_container_policies_;
+
+  const base::UnguessableToken creator_network_restrictions_id_;
+  const base::UnguessableToken network_restrictions_id_;
 
   base::WeakPtrFactory<ServiceWorkerRegisterJob> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ServiceWorkerRegisterJob);
 };
 
 }  // namespace content

@@ -1,13 +1,13 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/base/null_video_sink.h"
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 
 namespace media {
 
@@ -52,6 +52,10 @@ void NullVideoSink::CallRender() {
   DCHECK(task_runner_->BelongsToCurrentThread());
   DCHECK(started_);
 
+  if (render_cb_) {
+    render_cb_.Run();
+  }
+
   const base::TimeTicks end_of_interval = current_render_time_ + interval_;
   scoped_refptr<VideoFrame> new_frame = callback_->Render(
       current_render_time_, end_of_interval,
@@ -80,7 +84,7 @@ void NullVideoSink::CallRender() {
   } else {
     // If we're behind, find the next nearest on time interval.
     delay = current_render_time_ - now;
-    if (delay < base::TimeDelta())
+    if (delay.is_negative())
       delay = interval_ + (delay % interval_);
     current_render_time_ = now + delay;
     last_now_ = now;

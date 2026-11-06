@@ -1,30 +1,38 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CC_PAINT_PAINT_OP_BUFFER_SERIALIZER_H_
 #define CC_PAINT_PAINT_OP_BUFFER_SERIALIZER_H_
 
+#include <concepts>
 #include <memory>
 #include <vector>
 
+#include "base/containers/span.h"
+#include "base/memory/stack_allocated.h"
+#include "cc/paint/paint_op.h"
 #include "cc/paint/paint_op_buffer.h"
-
-#include "third_party/skia/src/core/SkRemoteGlyphCache.h"
+#include "third_party/skia/include/core/SkColor.h"
+#include "third_party/skia/include/private/chromium/SkChromeRemoteGlyphCache.h"
 #include "ui/gfx/geometry/rect_f.h"
 
 namespace cc {
 
 class CC_PAINT_EXPORT PaintOpBufferSerializer {
+  STACK_ALLOCATED();
+
  public:
-  using SerializeCallback =
-      base::RepeatingCallback<size_t(const PaintOp*,
-                                     const PaintOp::SerializeOptions&,
-                                     const PaintFlags*,
-                                     const SkM44&,
-                                     const SkM44&)>;
+  // As this code is performance sensitive, a raw function pointer is used.
+  using SerializeCallback = size_t (*)(void*,
+                                       const PaintOp&,
+                                       const PaintOp::SerializeOptions&,
+                                       const PaintFlags*,
+                                       const SkM44&,
+                                       const SkM44&);
 
   PaintOpBufferSerializer(SerializeCallback serialize_cb,
+                          void* callback_data,
                           const PaintOp::SerializeOptions& options);
   virtual ~PaintOpBufferSerializer();
 
@@ -47,46 +55,64 @@ class CC_PAINT_EXPORT PaintOpBufferSerializer {
     // potentially being partially transparent, if post scaled).
     bool requires_clear = true;
     // If clearing is needed, the color to clear to.
-    SkColor background_color = SK_ColorTRANSPARENT;
+    SkColor4f background_color = SkColors::kTransparent;
   };
   // Serialize the buffer with a preamble. This function wraps the buffer in a
   // save/restore and includes any translations, scales, and clearing as
   // specified by the preamble.  This should generally be used for top level
   // rastering of an entire tile.
-  void Serialize(const PaintOpBuffer* buffer,
+  void Serialize(const PaintOpBuffer& buffer,
                  const std::vector<size_t>* offsets,
                  const Preamble& preamble);
   // Serialize the buffer without a preamble. This function serializes the whole
   // buffer without any extra ops added.  No clearing is done.  This should
   // generally be used for internal PaintOpBuffers that want to be sent as-is.
-  void Serialize(const PaintOpBuffer* buffer);
+  void Serialize(const PaintOpBuffer& buffer);
   // Serialize the buffer with a scale and a playback rect.  This should
   // generally be used for internal PaintOpBuffers in PaintShaders and
   // PaintFilters that need to guarantee the nested buffer is rasterized at the
   // specific scale to a separate image. This ensures that scale-dependent
   // analysis made during serialization is consistent with analysis done during
   // rasterization.
-  void Serialize(const PaintOpBuffer* buffer,
+  void Serialize(const PaintOpBuffer& buffer,
                  const gfx::Rect& playback_rect,
                  const gfx::SizeF& post_scale);
 
   bool valid() const { return valid_; }
 
  private:
+  PlaybackParams MakeParams(const SkCanvas* canvas) const;
   void SerializePreamble(SkCanvas* canvas,
                          const Preamble& preamble,
                          const PlaybackParams& params);
+  // Serialize `buffer`, using the current transform as `original_ctm`.
   void SerializeBuffer(SkCanvas* canvas,
-                       const PaintOpBuffer* buffer,
+                       const PaintOpBuffer& buffer,
                        const std::vector<size_t>* offsets);
+  // Serialize `buffer` using the provided `params`.
+  void SerializeBufferWithParams(SkCanvas* canvas,
+                                 const PlaybackParams& params,
+                                 const PaintOpBuffer& buffer,
+                                 const std::vector<size_t>* offsets);
+  // Returns whether serialization of |op| succeeded and we need to serialize
+  // the next PaintOp in the PaintOpBuffer.
+  template<typename F>
+  requires std::same_as<F, float>
+  bool WillSerializeNextOp(const PaintOp& op,
+                           SkCanvas* canvas,
+                           const PlaybackParams& params,
+                           F alpha);
+  template<typename F>
+  requires std::same_as<F, float>
   bool SerializeOpWithFlags(SkCanvas* canvas,
-                            const PaintOpWithFlags* flags_op,
+                            const PaintOpWithFlags& flags_op,
                             const PlaybackParams& params,
-                            uint8_t alpha);
-  bool SerializeOp(SkCanvas* canvas,
-                   const PaintOp* op,
-                   const PaintFlags* flags_to_serialize,
-                   const PlaybackParams& params);
+                            F alpha);
+
+  ALWAYS_INLINE bool SerializeOp(SkCanvas* canvas,
+                                 const PaintOp& op,
+                                 const PaintFlags* flags_to_serialize,
+                                 const PlaybackParams& params);
   void Save(SkCanvas* canvas, const PlaybackParams& params);
   void RestoreToCount(SkCanvas* canvas,
                       int count,
@@ -95,35 +121,46 @@ class CC_PAINT_EXPORT PaintOpBufferSerializer {
                             const Preamble& preamble,
                             const PlaybackParams& params);
   void PlaybackOnAnalysisCanvas(SkCanvas* canvas,
-                                const PaintOp* op,
+                                const PaintOp& op,
                                 const PaintFlags* flags_to_serialize,
                                 const PlaybackParams& params);
 
   SerializeCallback serialize_cb_;
+  void* callback_data_;
   PaintOp::SerializeOptions options_;
 
+  size_t serialized_op_count_ = 0;
   bool valid_ = true;
 };
 
 // Serializes the ops in the memory available, fails on overflow.
 class CC_PAINT_EXPORT SimpleBufferSerializer : public PaintOpBufferSerializer {
  public:
-  SimpleBufferSerializer(void* memory,
-                         size_t size,
+  SimpleBufferSerializer(base::span<uint8_t> memory,
                          const PaintOp::SerializeOptions& options);
   ~SimpleBufferSerializer() override;
 
   size_t written() const { return written_; }
 
  private:
-  size_t SerializeToMemory(const PaintOp* op,
-                           const PaintOp::SerializeOptions& options,
-                           const PaintFlags* flags_to_serialize,
-                           const SkM44& current_ctm,
-                           const SkM44& original_ctm);
+  size_t SerializeToMemoryImpl(const PaintOp& op,
+                               const PaintOp::SerializeOptions& options,
+                               const PaintFlags* flags_to_serialize,
+                               const SkM44& current_ctm,
+                               const SkM44& original_ctm);
 
-  void* memory_;
-  const size_t total_;
+  static size_t SerializeToMemory(void* instance,
+                                  const PaintOp& op,
+                                  const PaintOp::SerializeOptions& options,
+                                  const PaintFlags* flags_to_serialize,
+                                  const SkM44& current_ctm,
+                                  const SkM44& original_ctm) {
+    return reinterpret_cast<SimpleBufferSerializer*>(instance)
+        ->SerializeToMemoryImpl(op, options, flags_to_serialize, current_ctm,
+                                original_ctm);
+  }
+
+  const base::span<uint8_t> memory_;
   size_t written_ = 0u;
 };
 

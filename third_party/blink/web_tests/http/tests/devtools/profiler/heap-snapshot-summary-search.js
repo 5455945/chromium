@@ -1,11 +1,13 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+import {HeapProfilerTestRunner} from 'heap_profiler_test_runner';
+
 (async function() {
   TestRunner.addResult(`Tests search in Summary view of detailed heap snapshots.\n`);
-  await TestRunner.loadTestModule('heap_profiler_test_runner');
-  await TestRunner.showPanel('heap_profiler');
+  await TestRunner.showPanel('heap-profiler');
 
   var instanceCount = 25;
   function createHeapSnapshot() {
@@ -16,13 +18,13 @@
     HeapProfilerTestRunner.takeAndOpenSnapshot(createHeapSnapshot, step1a);
     function addSearchResultSniffer(step) {
       function jumpToSearchResult() {
-        step(HeapProfilerTestRunner.currentProfileView()._searchResults.length);
+        step(HeapProfilerTestRunner.currentProfileView().searchResults.length);
       }
-      TestRunner.addSniffer(HeapProfilerTestRunner.currentProfileView(), '_jumpToSearchResult', jumpToSearchResult);
+      TestRunner.addSniffer(HeapProfilerTestRunner.currentProfileView(), 'jumpToSearchResult', jumpToSearchResult);
     }
 
     function addNodeSelectedSniffer(callback) {
-      TestRunner.addSniffer(HeapProfilerTestRunner.currentProfileView(), '_selectRevealedNode', callback);
+      TestRunner.addSniffer(HeapProfilerTestRunner.currentProfileView(), 'selectRevealedNode', callback);
     }
 
     function step1a() {

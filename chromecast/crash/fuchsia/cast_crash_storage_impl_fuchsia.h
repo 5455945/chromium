@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,28 +8,30 @@
 #include <fuchsia/feedback/cpp/fidl.h>
 #include <lib/sys/cpp/service_directory.h>
 
+#include <string_view>
+
 #include "chromecast/crash/cast_crash_storage.h"
 
 namespace chromecast {
 
-class CastCrashStorageImplFuchsia : public CastCrashStorage {
+class CastCrashStorageImplFuchsia final : public CastCrashStorage {
  public:
   explicit CastCrashStorageImplFuchsia(
       const sys::ServiceDirectory* incoming_directory);
-  ~CastCrashStorageImplFuchsia() final;
+  ~CastCrashStorageImplFuchsia() override;
   CastCrashStorageImplFuchsia& operator=(const CastCrashStorageImplFuchsia&) =
       delete;
   CastCrashStorageImplFuchsia(const CastCrashStorageImplFuchsia&) = delete;
 
   // CastCrashStorage implementation:
-  void SetLastLaunchedApp(base::StringPiece app_id) final;
-  void ClearLastLaunchedApp() final;
-  void SetCurrentApp(base::StringPiece app_id) final;
-  void ClearCurrentApp() final;
-  void SetPreviousApp(base::StringPiece app_id) final;
-  void ClearPreviousApp() final;
-  void SetStadiaSessionId(base::StringPiece session_id) final;
-  void ClearStadiaSessionId() final;
+  void SetLastLaunchedApp(std::string_view app_id) override;
+  void ClearLastLaunchedApp() override;
+  void SetCurrentApp(std::string_view app_id) override;
+  void ClearCurrentApp() override;
+  void SetPreviousApp(std::string_view app_id) override;
+  void ClearPreviousApp() override;
+  void SetStadiaSessionId(std::string_view session_id) override;
+  void ClearStadiaSessionId() override;
 
  private:
   void UpsertAnnotations(

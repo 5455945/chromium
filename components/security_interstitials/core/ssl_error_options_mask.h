@@ -1,9 +1,11 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_SECURITY_INTERSTITIALS_CORE_SSL_ERROR_OPTIONS_MASK_H_
 #define COMPONENTS_SECURITY_INTERSTITIALS_CORE_SSL_ERROR_OPTIONS_MASK_H_
+
+#include "net/base/net_errors.h"
 
 namespace security_interstitials {
 
@@ -24,7 +26,7 @@ enum SSLErrorOptionsMask {
 
 // Calculates a mask encoded via the SSLErrorOptionsMaskFlag bitfields based
 // on the passed-in parameters.
-int CalculateSSLErrorOptionsMask(int cert_error,
+int CalculateSSLErrorOptionsMask(net::Error cert_error,
                                  bool hard_override_disabled,
                                  bool should_ssl_errors_be_fatal);
 }  // namespace security_interstitials

@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,8 +21,7 @@ namespace content {
 ShellJavaScriptDialogManager::ShellJavaScriptDialogManager()
     : should_proceed_on_beforeunload_(true), beforeunload_success_(true) {}
 
-ShellJavaScriptDialogManager::~ShellJavaScriptDialogManager() {
-}
+ShellJavaScriptDialogManager::~ShellJavaScriptDialogManager() = default;
 
 void ShellJavaScriptDialogManager::RunJavaScriptDialog(
     WebContents* web_contents,
@@ -38,7 +37,7 @@ void ShellJavaScriptDialogManager::RunJavaScriptDialog(
     return;
   }
 
-#if defined(OS_MAC) || defined(OS_WIN)
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
   *did_suppress_message = false;
 
   if (dialog_) {
@@ -48,7 +47,8 @@ void ShellJavaScriptDialogManager::RunJavaScriptDialog(
   }
 
   std::u16string new_message_text =
-      url_formatter::FormatUrl(render_frame_host->GetLastCommittedURL()) +
+      url_formatter::FormatUrl(
+          render_frame_host->GetLastCommittedOrigin().GetURL()) +
       u"\n\n" + message_text;
   gfx::NativeWindow parent_window = web_contents->GetTopLevelNativeWindow();
 
@@ -79,7 +79,7 @@ void ShellJavaScriptDialogManager::RunBeforeUnloadDialog(
     return;
   }
 
-#if defined(OS_MAC) || defined(OS_WIN)
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
   if (dialog_) {
     // Seriously!?
     std::move(callback).Run(true, std::u16string());
@@ -103,7 +103,7 @@ void ShellJavaScriptDialogManager::RunBeforeUnloadDialog(
 
 void ShellJavaScriptDialogManager::CancelDialogs(WebContents* web_contents,
                                                  bool reset_state) {
-#if defined(OS_MAC) || defined(OS_WIN)
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
   if (dialog_) {
     dialog_->Cancel();
     dialog_.reset();
@@ -120,12 +120,22 @@ void ShellJavaScriptDialogManager::CancelDialogs(WebContents* web_contents,
 }
 
 void ShellJavaScriptDialogManager::DialogClosed(ShellJavaScriptDialog* dialog) {
-#if defined(OS_MAC) || defined(OS_WIN)
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
   DCHECK_EQ(dialog, dialog_.get());
   dialog_.reset();
 #else
   // TODO: implement ShellJavaScriptDialog for other platforms, drop this #if
 #endif
+}
+
+bool ShellJavaScriptDialogManager::RunBeforeUnloadCallback(
+    bool success,
+    const std::u16string& title) {
+  if (before_unload_callback_) {
+    std::move(before_unload_callback_).Run(success, title);
+    return true;
+  }
+  return false;
 }
 
 }  // namespace content

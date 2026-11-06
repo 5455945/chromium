@@ -1,7 +1,10 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <variant>
+
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/common/chrome_features.h"
@@ -9,6 +12,7 @@
 #include "components/content_settings/core/common/pref_names.h"
 #include "components/infobars/content/content_infobar_manager.h"
 #include "components/permissions/permission_request_manager.h"
+#include "components/permissions/request_type.h"
 #include "components/permissions/test/mock_permission_request.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/web_contents.h"
@@ -35,19 +39,22 @@ class PermissionPromptAndroidTest : public ChromeRenderViewHostTestHarness {
     permissions::PermissionRequestManager::CreateForWebContents(web_contents());
     permission_request_manager_ =
         permissions::PermissionRequestManager::FromWebContents(web_contents());
+    permission_request_manager_
+        ->set_enabled_app_level_notification_permission_for_testing(true);
   }
 
   base::test::ScopedFeatureList scoped_feature_list_;
-  permissions::PermissionRequestManager* permission_request_manager_;
+  raw_ptr<permissions::PermissionRequestManager> permission_request_manager_;
 };
 
-// Tests the situation in crbug.com/1016233
+// Tests the situation in crbug.com/40654163
 TEST_F(PermissionPromptAndroidTest, TabCloseMiniInfoBarClosesCleanly) {
   // Create a notification request. This causes an infobar to appear.
-  permissions::MockPermissionRequest request(
-      u"test", ContentSettingsType::NOTIFICATIONS);
-  permission_request_manager()->AddRequest(web_contents()->GetMainFrame(),
-                                           &request);
+  permissions::MockPermissionRequest::MockPermissionRequestState state;
+  auto request = std::make_unique<permissions::MockPermissionRequest>(
+      permissions::RequestType::kNotifications, state.GetWeakPtr());
+  permission_request_manager()->AddRequest(
+      web_contents()->GetPrimaryMainFrame(), std::move(request));
 
   base::RunLoop().RunUntilIdle();
 
@@ -57,26 +64,26 @@ TEST_F(PermissionPromptAndroidTest, TabCloseMiniInfoBarClosesCleanly) {
 
   // At this point close the permission prompt (after the infobar has been
   // removed already).
-  permission_request_manager()->Deny();
+  permission_request_manager()->Deny(/*prompt_options=*/std::monostate());
 
   // If no DCHECK has been hit, and the infobar has been closed, the test
   // passes.
-  EXPECT_TRUE(request.finished());
+  EXPECT_TRUE(state.finished);
 }
 
-// Tests the situation in crbug.com/1016233
+// Tests the situation in crbug.com/40654163
 TEST_F(PermissionPromptAndroidTest, RemoveAllInfoBarsWithOtherObservers) {
   // Create a notification request. This causes an infobar to appear.
-  permissions::MockPermissionRequest request(
-      u"test", ContentSettingsType::NOTIFICATIONS);
-  permission_request_manager()->AddRequest(web_contents()->GetMainFrame(),
-                                           &request);
+  auto request = std::make_unique<permissions::MockPermissionRequest>(
+      permissions::RequestType::kNotifications);
+  permission_request_manager()->AddRequest(
+      web_contents()->GetPrimaryMainFrame(), std::move(request));
 
   base::RunLoop().RunUntilIdle();
 
-  // Destroy web contents. This triggered the situation in crbug.com/1016233, as
-  // it causes the destruction of the permission prompt after the destruction of
-  // the infobar manager.
+  // Destroy web contents. This triggered the situation in crbug.com/40654163,
+  // as it causes the destruction of the permission prompt after the destruction
+  // of the infobar manager.
   DeleteContents();
 
   // Wait for all the WebContentsObserver's to handle the fact that the

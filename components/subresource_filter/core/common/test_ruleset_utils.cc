@@ -1,12 +1,13 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/subresource_filter/core/common/test_ruleset_utils.h"
 
+#include <string_view>
 #include <utility>
 
-#include "base/strings/string_piece.h"
+#include "base/check.h"
 
 namespace subresource_filter {
 namespace testing {
@@ -15,7 +16,7 @@ namespace proto = url_pattern_index::proto;
 
 namespace {
 
-proto::UrlRule CreateRuleImpl(base::StringPiece substring,
+proto::UrlRule CreateRuleImpl(std::string_view substring,
                               bool is_allowlist_rule,
                               bool is_suffix_rule) {
   proto::UrlRule rule;
@@ -33,52 +34,100 @@ proto::UrlRule CreateRuleImpl(base::StringPiece substring,
   return rule;
 }
 
-proto::UrlRule CreateRuleForDocumentImpl(base::StringPiece substring,
-                                         int32_t activation_types,
-                                         std::vector<std::string> domains,
-                                         bool is_allowlist_rule,
-                                         bool is_suffix_rule) {
+proto::UrlRule CreateRuleForDocumentImpl(
+    std::string_view substring,
+    int32_t activation_types,
+    std::vector<std::string> initiator_domains,
+    bool is_allowlist_rule,
+    bool is_suffix_rule) {
   proto::UrlRule rule =
       CreateRuleImpl(substring, is_allowlist_rule, is_suffix_rule);
   rule.set_activation_types(activation_types);
-  for (std::string& domain : domains) {
-    rule.add_domains()->set_domain(std::move(domain));
+  for (std::string& domain : initiator_domains) {
+    rule.add_initiator_domains()->set_domain(std::move(domain));
   }
   return rule;
 }
 
 }  // namespace
 
-proto::UrlRule CreateSubstringRule(base::StringPiece substring) {
+proto::UrlRule CreateSubstringRule(std::string_view substring) {
   return CreateRuleImpl(substring, /*is_allowlist_rule=*/false,
                         /*is_suffix_rule=*/false);
 }
 
-proto::UrlRule CreateSuffixRule(base::StringPiece suffix) {
+proto::UrlRule CreateSubdomainRule(std::string_view subdomain) {
+  proto::UrlRule rule = CreateRuleImpl(subdomain, /*is_allowlist_rule=*/false,
+                                       /*is_suffix_rule=*/false);
+  rule.set_anchor_left(proto::ANCHOR_TYPE_SUBDOMAIN);
+  return rule;
+}
+
+proto::UrlRule CreateAllowlistSubstringRule(std::string_view substring) {
+  return CreateRuleImpl(substring, /*is_allowlist_rule=*/true,
+                        /*is_suffix_rule=*/false);
+}
+
+proto::UrlRule CreateSuffixRule(std::string_view suffix) {
   return CreateRuleImpl(suffix, /*is_allowlist_rule=*/false,
                         /*is_suffix_rule=*/true);
 }
 
-proto::UrlRule CreateAllowlistSuffixRule(base::StringPiece suffix) {
+proto::UrlRule CreateAllowlistSuffixRule(std::string_view suffix) {
   return CreateRuleImpl(suffix, /*is_allowlist_rule=*/true,
                         /*is_suffix_rule=*/true);
 }
 
-proto::UrlRule CreateRuleForDocument(base::StringPiece pattern,
-                                     int32_t activation_types,
-                                     std::vector<std::string> domains) {
-  return CreateRuleForDocumentImpl(pattern, activation_types, domains,
+proto::UrlRule CreateRuleForDocument(
+    std::string_view pattern,
+    int32_t activation_types,
+    std::vector<std::string> initiator_domains) {
+  return CreateRuleForDocumentImpl(pattern, activation_types, initiator_domains,
                                    /*is_allowlist_rule=*/false,
                                    /*is_suffix_rule=*/false);
 }
 
 proto::UrlRule CreateAllowlistRuleForDocument(
-    base::StringPiece pattern,
+    std::string_view pattern,
     int32_t activation_types,
-    std::vector<std::string> domains) {
-  return CreateRuleForDocumentImpl(pattern, activation_types, domains,
+    std::vector<std::string> initiator_domains) {
+  return CreateRuleForDocumentImpl(pattern, activation_types, initiator_domains,
                                    /*is_allowlist_rule=*/true,
                                    /*is_suffix_rule=*/false);
+}
+
+proto::StyleRule CreateStyleRule(std::string_view selector,
+                                 const std::vector<std::string>& domains,
+                                 bool is_exclusion,
+                                 const std::vector<std::string>& classes,
+                                 const std::vector<std::string>& ids) {
+  return CreateStyleRule(StyleRuleParams()
+                             .SetSelector(std::string(selector))
+                             .SetDomains(domains)
+                             .SetExclusion(is_exclusion)
+                             .SetClasses(classes)
+                             .SetIds(ids));
+}
+
+StyleRuleParams::StyleRuleParams() = default;
+StyleRuleParams::~StyleRuleParams() = default;
+
+proto::StyleRule CreateStyleRule(const StyleRuleParams& params) {
+  proto::StyleRule rule;
+  rule.set_selector(params.selector);
+  rule.set_semantics(params.is_exclusion ? proto::RULE_SEMANTICS_ALLOWLIST
+                                         : proto::RULE_SEMANTICS_BLOCKLIST);
+  for (const auto& domain : params.domains) {
+    auto* item = rule.add_domains();
+    item->set_domain(domain);
+  }
+  for (const auto& class_name : params.classes) {
+    rule.add_classes(class_name);
+  }
+  for (const auto& id_name : params.ids) {
+    rule.add_ids(id_name);
+  }
+  return rule;
 }
 
 }  // namespace testing

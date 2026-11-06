@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,12 @@
 #include <memory>
 #include <utility>
 
+#include "base/android/android_info.h"
 #include "base/memory/ptr_util.h"
 #include "build/build_config.h"
 #include "components/policy/core/common/policy_bundle.h"
+#include "components/policy/core/common/policy_types.h"
 
-#if defined(OS_ANDROID)
-#include "base/android/build_info.h"
-#endif  // defined(OS_ANDROID)
 
 namespace policy {
 
@@ -22,19 +21,20 @@ std::unique_ptr<CommandLinePolicyProvider>
 CommandLinePolicyProvider::CreateIfAllowed(
     const base::CommandLine& command_line,
     version_info::Channel channel) {
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   if (channel == version_info::Channel::STABLE ||
       channel == version_info::Channel::BETA) {
     return nullptr;
   }
 
-  if (!base::android::BuildInfo::GetInstance()->is_debug_android())
+  if (!base::android::android_info::is_debug_android()) {
     return nullptr;
+  }
 
   return base::WrapUnique(new CommandLinePolicyProvider(command_line));
 #else
   return nullptr;
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
 }
 
 // static
@@ -46,8 +46,8 @@ CommandLinePolicyProvider::CreateForTesting(
 
 CommandLinePolicyProvider::~CommandLinePolicyProvider() = default;
 
-void CommandLinePolicyProvider::RefreshPolicies() {
-  std::unique_ptr<PolicyBundle> bundle = loader_.Load();
+void CommandLinePolicyProvider::RefreshPolicies(PolicyFetchReason reason) {
+  PolicyBundle bundle = loader_.Load();
   first_policies_loaded_ = true;
   UpdatePolicy(std::move(bundle));
 }
@@ -60,7 +60,7 @@ bool CommandLinePolicyProvider::IsFirstPolicyLoadComplete(
 CommandLinePolicyProvider::CommandLinePolicyProvider(
     const base::CommandLine& command_line)
     : loader_(command_line) {
-  RefreshPolicies();
+  RefreshPolicies(PolicyFetchReason::kBrowserStart);
 }
 
 }  // namespace policy

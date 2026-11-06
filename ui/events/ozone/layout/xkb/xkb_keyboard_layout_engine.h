@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,19 +9,23 @@
 #include <xkbcommon/xkbcommon.h>
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/component_export.h"
 #include "base/containers/flat_map.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/free_deleter.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
-#include "base/task_runner.h"
-#include "build/chromeos_buildflags.h"
+#include "base/task/task_runner.h"
 #include "ui/events/keycodes/scoped_xkb.h"
 #include "ui/events/ozone/layout/keyboard_layout_engine.h"
 #include "ui/events/ozone/layout/xkb/xkb_key_code_converter.h"
+#include "ui/events/ozone/layout/xkb/xkb_modifier_converter.h"
 
 struct xkb_keymap;
 
@@ -34,12 +38,14 @@ class COMPONENT_EXPORT(EVENTS_OZONE_LAYOUT) XkbKeyboardLayoutEngine
   ~XkbKeyboardLayoutEngine() override;
 
   // KeyboardLayoutEngine:
+  std::string_view GetLayoutName() const override;
   bool CanSetCurrentLayout() const override;
-  bool SetCurrentLayoutByName(const std::string& layout_name) override;
+  void SetCurrentLayoutByName(
+      const std::string& layout_name,
+      base::OnceCallback<void(bool success)> callback) override;
   // Required by Ozone/Wayland (at least) for non ChromeOS builds. See
   // http://xkbcommon.org/doc/current/md_doc_quick-guide.html for further info.
-  bool SetCurrentLayoutFromBuffer(const char* keymap_string,
-                                  size_t size) override;
+  bool SetCurrentLayoutFromBuffer(std::string_view keymap_string) override;
 
   bool UsesISOLevel5Shift() const override;
   bool UsesAltGr() const override;
@@ -56,7 +62,12 @@ class COMPONENT_EXPORT(EVENTS_OZONE_LAYOUT) XkbKeyboardLayoutEngine
                       uint32_t locked,
                       uint32_t group);
 
-  DomCode GetDomCodeByKeysym(uint32_t keysym) const;
+  // modifiers is optional for backward compatibility purpose.
+  // This should be removed when we no longer need to support older platform,
+  // specifically M101 or earlier of ash-chrome.
+  DomCode GetDomCodeByKeysym(
+      uint32_t keysym,
+      const std::optional<std::vector<std::string_view>>& modifiers) const;
 
   static void ParseLayoutName(const std::string& layout_name,
                               std::string* layout_id,
@@ -71,16 +82,23 @@ class COMPONENT_EXPORT(EVENTS_OZONE_LAYOUT) XkbKeyboardLayoutEngine
   };
   std::vector<XkbFlagMapEntry> xkb_flag_map_;
 
-  // Table from xkb_keysym to xkb_keycode on the current keymap.
-  // Note that there could be multiple keycodes mapped to the same
-  // keysym. In the case, the first one (smallest keycode) will be
-  // kept.
-  base::flat_map<uint32_t, uint32_t> xkb_keysym_map_;
+  // The data to reverse look up xkb_keycode/xkb_layout from xkb_keysym.
+  // The data is sorted in the (xkb_keysym, xkb_keycode, xkb_layout) dictionary
+  // order. Note that there can be multiple keycode/layout for a keysym, so
+  // this is a multi map.
+  // We can binary search on this vector by keysym as the key, and iterate from
+  // the begin to the end of the range linearly. Then, on tie break, smaller
+  // keycode wins.
+  struct XkbKeysymMapEntry {
+    xkb_keysym_t xkb_keysym;
+    xkb_keycode_t xkb_keycode;
+    xkb_layout_index_t xkb_layout;
+  };
+  std::vector<XkbKeysymMapEntry> xkb_keysym_map_;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  // Flag mask for num lock, which is always considered enabled in ChromeOS.
-  xkb_mod_mask_t num_lock_mod_mask_ = 0;
-#endif
+  // Maps between ui::EventFlags and xkb_mod_mask_t.
+  XkbModifierConverter xkb_modifier_converter_{{}};
+
   xkb_mod_mask_t shift_mod_mask_ = 0;
   xkb_mod_mask_t altgr_mod_mask_ = 0;
 
@@ -100,7 +118,7 @@ class COMPONENT_EXPORT(EVENTS_OZONE_LAYOUT) XkbKeyboardLayoutEngine
   virtual void SetKeymap(xkb_keymap* keymap);
 
   // Maps DomCode to xkb_keycode_t.
-  const XkbKeyCodeConverter& key_code_converter_;
+  const raw_ref<const XkbKeyCodeConverter> key_code_converter_;
 
   // libxkbcommon uses explicit reference counting for its structures,
   // so we need to trigger its cleanup.
@@ -109,7 +127,7 @@ class COMPONENT_EXPORT(EVENTS_OZONE_LAYOUT) XkbKeyboardLayoutEngine
  private:
   struct XkbKeymapEntry {
     std::string layout_name;
-    xkb_keymap* keymap;
+    raw_ptr<xkb_keymap> keymap;
   };
   std::vector<XkbKeymapEntry> xkb_keymaps_;
 
@@ -132,7 +150,8 @@ class COMPONENT_EXPORT(EVENTS_OZONE_LAYOUT) XkbKeyboardLayoutEngine
                            xkb_mod_mask_t flags) const;
 
   // Callback when keymap file is loaded complete.
-  void OnKeymapLoaded(const std::string& layout_name,
+  void OnKeymapLoaded(base::OnceCallback<void(bool success)> callback,
+                      const std::string& layout_name,
                       std::unique_ptr<char, base::FreeDeleter> keymap_str);
 
   std::unique_ptr<xkb_context, XkbContextDeleter> xkb_context_;

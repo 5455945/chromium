@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,17 +8,17 @@
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/guid.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
 #include "base/win/atl.h"
 #include "base/win/scoped_com_initializer.h"
+#include "base/win/windows_version.h"
+#include "build/build_config.h"
 #include "remoting/base/auto_thread_task_runner.h"
-#include "remoting/host/screen_resolution.h"
+#include "remoting/host/base/screen_resolution.h"
 #include "remoting/host/win/wts_terminal_monitor.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -42,13 +42,15 @@ const DWORD kDefaultRdpPort = 3389;
 class MockRdpClientEventHandler : public RdpClient::EventHandler {
  public:
   MockRdpClientEventHandler() {}
-  virtual ~MockRdpClientEventHandler() {}
 
-  MOCK_METHOD0(OnRdpConnected, void());
-  MOCK_METHOD0(OnRdpClosed, void());
+  MockRdpClientEventHandler(const MockRdpClientEventHandler&) = delete;
+  MockRdpClientEventHandler& operator=(const MockRdpClientEventHandler&) =
+      delete;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(MockRdpClientEventHandler);
+  ~MockRdpClientEventHandler() override {}
+
+  MOCK_METHOD(void, OnRdpConnected, (), (override));
+  MOCK_METHOD(void, OnRdpClosed, (), (override));
 };
 
 // a14498c6-7f3b-4e42-9605-6c4a20d53c87
@@ -152,8 +154,19 @@ void RdpClientTest::CloseRdpClient() {
 }
 
 // Creates a loopback RDP connection.
-TEST_F(RdpClientTest, Basic) {
-  terminal_id_ = base::GenerateGUID();
+// TODO(crbug.com/41496654): Consistently times out on Windows 11 ARM64.
+#if BUILDFLAG(IS_WIN) && defined(ARCH_CPU_ARM64)
+#define MAYBE_Basic DISABLED_Basic
+#else
+#define MAYBE_Basic Basic
+#endif
+TEST_F(RdpClientTest, MAYBE_Basic) {
+  if (base::win::OSInfo::GetInstance()->version() >=
+      base::win::Version::WIN11_23H2) {
+    GTEST_SKIP() << "https://crbug.com/365126540: Skipping test for WIN11_23H2 "
+                    "and greater";
+  }
+  terminal_id_ = WtsTerminalMonitor::GenerateVirtualTerminalId();
 
   // An ability to establish a loopback RDP connection depends on many factors
   // including OS SKU and having RDP enabled. Accept both successful connection

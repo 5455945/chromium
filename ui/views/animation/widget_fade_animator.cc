@@ -1,9 +1,10 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/views/animation/widget_fade_animator.h"
 
+#include "base/i18n/rtl.h"
 #include "ui/gfx/animation/linear_animation.h"
 #include "ui/views/widget/widget.h"
 
@@ -16,50 +17,87 @@ WidgetFadeAnimator::WidgetFadeAnimator(Widget* widget)
 
 WidgetFadeAnimator::~WidgetFadeAnimator() = default;
 
-void WidgetFadeAnimator::FadeIn() {
-  if (IsFadingIn())
+void WidgetFadeAnimator::FadeIn(int slide_distance,
+                                SlideDirection slide_direction) {
+  if (IsFadingIn()) {
     return;
+  }
 
-  DCHECK(widget_);
+  CHECK(widget_, base::NotFatalUntil::M163);
 
   animation_type_ = FadeType::kFadeIn;
   fade_animation_.SetDuration(fade_in_duration_);
 
   // Widgets cannot be shown when visible and fully transparent.
   widget_->SetOpacity(0.01f);
-  widget_->Show();
+
+  base::WeakPtr<WidgetFadeAnimator> weak_this = weak_factory_.GetWeakPtr();
+  switch (show_type_) {
+    case WidgetShowType::kNone:
+      break;
+    case WidgetShowType::kShowActive:
+      widget_->Show();
+      break;
+    case WidgetShowType::kShowInactive:
+      widget_->ShowInactive();
+      break;
+  }
+
+  // Showing the widget can synchronously invoke native or observer callbacks
+  // that might destroy this animator or cancel the animation.
+  if (!weak_this || !IsFadingIn()) {
+    return;
+  }
+
+  SetBoundsForSliding(slide_distance, slide_direction);
   fade_animation_.Start();
 }
 
-void WidgetFadeAnimator::FadeOut() {
-  if (IsFadingOut())
+void WidgetFadeAnimator::CancelFadeIn() {
+  if (!IsFadingIn()) {
     return;
+  }
 
-  DCHECK(widget_);
+  fade_animation_.Stop();
+  animation_type_ = FadeType::kNone;
+
+  CancelSlide(false);
+}
+
+void WidgetFadeAnimator::FadeOut(int slide_distance,
+                                 SlideDirection slide_direction) {
+  if (IsFadingOut() || !widget_) {
+    return;
+  }
 
   // If the widget is already hidden, then there is no current animation and
   // nothing to do. If the animation is close-on-hide, however, we should still
   // close the widget.
   if (!widget_->IsVisible()) {
-    DCHECK(!IsFadingIn());
-    if (close_on_hide_)
+    CHECK(!IsFadingIn(), base::NotFatalUntil::M163);
+    if (close_on_hide_) {
       widget_->Close();
+    }
     fade_complete_callbacks_.Notify(this, FadeType::kFadeOut);
     return;
   }
 
   animation_type_ = FadeType::kFadeOut;
+  SetBoundsForSliding(slide_distance, slide_direction);
   fade_animation_.SetDuration(fade_out_duration_);
   fade_animation_.Start();
 }
 
 void WidgetFadeAnimator::CancelFadeOut() {
-  if (!IsFadingOut())
+  if (!IsFadingOut()) {
     return;
+  }
 
   fade_animation_.Stop();
   animation_type_ = FadeType::kNone;
   widget_->SetOpacity(1.0f);
+
+  CancelSlide(false);
 }
 
 base::CallbackListSubscription WidgetFadeAnimator::AddFadeCompleteCallback(
@@ -67,23 +105,36 @@ base::CallbackListSubscription WidgetFadeAnimator::AddFadeCompleteCallback(
   return fade_complete_callbacks_.Add(callback);
 }
 
+void WidgetFadeAnimator::CancelSlide(bool snap_to_target) {
+  if (snap_to_target && IsSliding()) {
+    widget_->SetBounds(target_bounds_);
+  }
+  start_bounds_ = target_bounds_ = gfx::Rect();
+}
+
 void WidgetFadeAnimator::AnimationProgressed(const gfx::Animation* animation) {
   // Get the value of the animation with a material ease applied.
   double value =
       gfx::Tween::CalculateValue(tween_type_, animation->GetCurrentValue());
   float opacity = 0.0f;
-  if (IsFadingOut())
+  if (IsFadingOut()) {
     opacity = gfx::Tween::FloatValueBetween(value, 1.0f, 0.0f);
-  else if (IsFadingIn())
+  } else if (IsFadingIn()) {
     opacity = gfx::Tween::FloatValueBetween(value, 0.0f, 1.0f);
+  }
 
   if (IsFadingOut() && opacity == 0.0f) {
-    if (close_on_hide_)
+    if (close_on_hide_) {
       widget_->Close();
-    else
+    } else {
       widget_->Hide();
+    }
   } else {
     widget_->SetOpacity(opacity);
+  }
+  if (IsSliding()) {
+    widget_->SetBounds(
+        gfx::Tween::RectValueBetween(value, start_bounds_, target_bounds_));
   }
 }
 
@@ -94,11 +145,49 @@ void WidgetFadeAnimator::AnimationEnded(const gfx::Animation* animation) {
   fade_complete_callbacks_.Notify(this, animation_type);
 }
 
-void WidgetFadeAnimator::OnWidgetClosing(Widget* widget) {
+void WidgetFadeAnimator::OnWidgetDestroying(Widget* widget) {
   widget_observation_.Reset();
-  fade_animation_.End();
+  fade_animation_.Stop();
   animation_type_ = FadeType::kNone;
   widget_ = nullptr;
+}
+
+bool WidgetFadeAnimator::IsSliding() const {
+  return start_bounds_ != target_bounds_;
+}
+
+void WidgetFadeAnimator::SetBoundsForSliding(int slide_distance,
+                                             SlideDirection slide_direction) {
+  CHECK(animation_type_ != FadeType::kNone);
+
+  if (slide_direction == SlideDirection::kNone) {
+    start_bounds_ = target_bounds_ = gfx::Rect();
+    return;
+  }
+
+  start_bounds_ = target_bounds_ = widget_->GetWindowBoundsInScreen();
+
+  // On fade in we displace the starting bounds to slide to the
+  // current window bounds. We reverse this on fade out.
+  gfx::Rect& displaced =
+      animation_type_ == FadeType::kFadeIn ? start_bounds_ : target_bounds_;
+
+  switch (slide_direction) {
+    case SlideDirection::kUp:
+      displaced.Offset(0, slide_distance);
+      break;
+    case SlideDirection::kDown:
+      displaced.Offset(0, -slide_distance);
+      break;
+    case SlideDirection::kLeading:
+      displaced.Offset((base::i18n::IsRTL() ? -1 : 1) * slide_distance, 0);
+      break;
+    case SlideDirection::kTrailing:
+      displaced.Offset((base::i18n::IsRTL() ? 1 : -1) * slide_distance, 0);
+      break;
+    default:
+      NOTREACHED();
+  }
 }
 
 }  // namespace views

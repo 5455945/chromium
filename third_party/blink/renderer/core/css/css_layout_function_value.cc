@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,12 +16,13 @@ CSSLayoutFunctionValue::CSSLayoutFunctionValue(CSSCustomIdentValue* name,
 
 String CSSLayoutFunctionValue::CustomCSSText() const {
   StringBuilder result;
-  if (is_inline_)
+  if (is_inline_) {
     result.Append("inline-");
+  }
   result.Append("layout(");
   result.Append(name_->CustomCSSText());
   result.Append(')');
-  return result.ToString();
+  return result.ReleaseString();
 }
 
 AtomicString CSSLayoutFunctionValue::GetName() const {
@@ -30,6 +31,10 @@ AtomicString CSSLayoutFunctionValue::GetName() const {
 
 bool CSSLayoutFunctionValue::Equals(const CSSLayoutFunctionValue& other) const {
   return GetName() == other.GetName() && IsInline() == other.IsInline();
+}
+
+bool CSSLayoutFunctionValue::HasRandomFunctions() const {
+  return name_ && name_->HasRandomFunctions();
 }
 
 void CSSLayoutFunctionValue::TraceAfterDispatch(blink::Visitor* visitor) const {

@@ -1,80 +1,33 @@
-// Copyright (c) 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "gpu/ipc/service/gpu_channel_manager.h"
 
 #include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
 
-#include "base/trace_event/category_registry.h"
-#include "base/trace_event/trace_arguments.h"
-#include "base/trace_event/trace_category.h"
-#include "base/trace_event/trace_event_filter.h"
-#include "base/trace_event/trace_event_impl.h"
-#include "base/trace_event/trace_log.h"
+#include "base/memory_coordinator/memory_coordinator_features.h"
+#include "base/memory_coordinator/utils.h"
+#include "base/strings/stringprintf.h"
+#include "base/test/scoped_feature_list.h"
+#include "base/test/tracing/test_trace_processor.h"
+#include "base/test/tracing/trace_event_analyzer.h"
+#include "base/test/tracing/trace_test_utils.h"
 #include "base/unguessable_token.h"
+#include "build/build_config.h"
 #include "gpu/command_buffer/common/capabilities.h"
 #include "gpu/command_buffer/common/context_result.h"
 #include "gpu/command_buffer/service/memory_tracking.h"
+#include "gpu/config/gpu_driver_bug_workaround_type.h"
 #include "gpu/ipc/common/command_buffer_id.h"
 #include "gpu/ipc/common/gpu_channel.mojom.h"
 #include "gpu/ipc/service/gpu_channel.h"
-#include "gpu/ipc/service/gpu_channel_manager.h"
 #include "gpu/ipc/service/gpu_channel_test_common.h"
-
-namespace {
-
-// static
-// Cache of the last TraceEvent seen by TestTraceEventFilter, as it cannot be
-// stored directly in the class, due to the filtering methods being const.
-std::unique_ptr<base::trace_event::TraceEvent> g_trace_event;
-
-// Testing filter to observe "gpu" trace events. The latest one seen is copied
-// into |g_trace_event|.
-class TestTraceEventFilter : public base::trace_event::TraceEventFilter {
- public:
-  TestTraceEventFilter() { g_trace_event.reset(); }
-  ~TestTraceEventFilter() override { g_trace_event.reset(); }
-
-  static std::unique_ptr<base::trace_event::TraceEventFilter> Factory(
-      const std::string& predicate_name) {
-    std::unique_ptr<TestTraceEventFilter> res =
-        std::make_unique<TestTraceEventFilter>();
-    return res;
-  }
-
-  // base::trace_event::TraceEventFilter:
-  bool FilterTraceEvent(
-      const base::trace_event::TraceEvent& trace_event) const override {
-    const auto* category =
-        base::trace_event::CategoryRegistry::GetCategoryByStatePtr(
-            trace_event.category_group_enabled());
-
-    if (!strcmp(category->name(), "gpu")) {
-      CHECK_EQ(2u, trace_event.arg_size()) << trace_event.name();
-      // The first arg is always recorded as a uint64_t, whereas the second is
-      // a TracedValue. Here we force the first to be recorded as_uint, as on
-      // KitKat the union is failing to transpose correctly when using
-      // as_convertable.
-      std::unique_ptr<base::trace_event::TraceArguments> args =
-          std::make_unique<base::trace_event::TraceArguments>(
-              trace_event.arg_name(0), trace_event.arg_value(0).as_uint,
-              trace_event.arg_name(1),
-              static_cast<void*>(trace_event.arg_value(1).as_convertable));
-
-      g_trace_event = std::make_unique<base::trace_event::TraceEvent>(
-          trace_event.thread_id(), trace_event.timestamp(),
-          trace_event.thread_timestamp(),
-          trace_event.thread_instruction_count(), trace_event.phase(),
-          trace_event.category_group_enabled(), trace_event.name(),
-          trace_event.scope(), trace_event.id(), trace_event.bind_id(),
-          args.get(), trace_event.flags());
-    }
-    return true;
-  }
-};
-
-}  // namespace
+#include "ipc/constants.mojom.h"
+#include "testing/gmock/include/gmock/gmock.h"
+#include "third_party/perfetto/include/perfetto/tracing/tracing.h"
 
 namespace gpu {
 
@@ -86,10 +39,6 @@ class GpuChannelManagerTest : public GpuChannelTestCommon {
   GpuChannelManagerTest()
       : GpuChannelTestCommon(true /* use_stub_bindings */) {}
   ~GpuChannelManagerTest() override = default;
-
-  GpuChannelManager::GpuPeakMemoryMonitor* gpu_peak_memory_monitor() {
-    return &channel_manager()->peak_memory_monitor_;
-  }
 
   // Returns the peak memory usage from the channel_manager(). This will stop
   // tracking for |sequence_number|.
@@ -107,7 +56,7 @@ class GpuChannelManagerTest : public GpuChannelTestCommon {
     // Set default as max so that invalid cases can properly test 0u returns.
     uint64_t peak_memory = kUInt64_T_Max;
     auto allocation =
-        channel_manager()->peak_memory_monitor_.GetPeakMemoryUsage(
+        channel_manager()->peak_memory_monitor_->GetPeakMemoryUsage(
             sequence_num, &peak_memory);
     return peak_memory;
   }
@@ -117,12 +66,11 @@ class GpuChannelManagerTest : public GpuChannelTestCommon {
   void OnMemoryAllocatedChange(CommandBufferId id,
                                uint64_t old_size,
                                uint64_t new_size) {
-    static_cast<MemoryTracker::Observer*>(gpu_peak_memory_monitor())
-        ->OnMemoryAllocatedChange(id, old_size, new_size,
-                                  GpuPeakMemoryAllocationSource::UNKNOWN);
+    channel_manager()->peak_memory_monitor()->OnMemoryAllocatedChange(
+        id, old_size, new_size, GpuPeakMemoryAllocationSource::UNKNOWN);
   }
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   void TestApplicationBackgrounded(ContextType type,
                                    bool should_destroy_channel) {
     ASSERT_TRUE(channel_manager());
@@ -131,23 +79,24 @@ class GpuChannelManagerTest : public GpuChannelTestCommon {
     GpuChannel* channel = CreateChannel(kClientId, true);
     EXPECT_TRUE(channel);
 
+    auto attribs = mojom::GLESCreationAttribs::New();
+    attribs->context_type = type;
+
     int32_t kRouteId =
         static_cast<int32_t>(GpuChannelReservedRoutes::kMaxValue) + 1;
-    const SurfaceHandle kFakeSurfaceHandle = 1;
-    SurfaceHandle surface_handle = kFakeSurfaceHandle;
     auto init_params = mojom::CreateCommandBufferParams::New();
-    init_params->surface_handle = surface_handle;
-    init_params->share_group_id = MSG_ROUTING_NONE;
     init_params->stream_id = 0;
     init_params->stream_priority = SchedulingPriority::kNormal;
-    init_params->attribs = ContextCreationAttribs();
-    init_params->attribs.context_type = type;
+    init_params->attribs =
+        mojom::ContextCreationAttribs::NewGles(std::move(attribs));
     init_params->active_url = GURL();
 
     ContextResult result = ContextResult::kFatalFailure;
     Capabilities capabilities;
+    GLCapabilities gl_capabilities;
     CreateCommandBuffer(*channel, std::move(init_params), kRouteId,
-                        GetSharedMemoryRegion(), &result, &capabilities);
+                        GetSharedMemoryRegion(), &result, &capabilities,
+                        &gl_capabilities);
     EXPECT_EQ(result, ContextResult::kSuccess);
 
     auto raster_decoder_state =
@@ -172,6 +121,9 @@ class GpuChannelManagerTest : public GpuChannelTestCommon {
               raster_decoder_state.get());
   }
 #endif
+
+ private:
+  ::base::test::TracingEnvironment tracing_environment_;
 };
 
 TEST_F(GpuChannelManagerTest, EstablishChannel) {
@@ -180,13 +132,36 @@ TEST_F(GpuChannelManagerTest, EstablishChannel) {
 
   ASSERT_TRUE(channel_manager());
   GpuChannel* channel = channel_manager()->EstablishChannel(
-      base::UnguessableToken::Create(), kClientId, kClientTracingId, false,
-      true);
+      base::UnguessableToken::Create(), kClientId, kClientTracingId,
+      viz::mojom::GpuClientType::kRenderer, gpu::GPUInfo(),
+      gpu::GpuFeatureInfo());
   EXPECT_TRUE(channel);
   EXPECT_EQ(channel_manager()->LookupChannel(kClientId), channel);
 }
 
-#if defined(OS_ANDROID)
+TEST_F(GpuChannelManagerTest,
+       GetSharedContextStateAfterContextLostUpdatesThreadLocal) {
+  ContextResult result = ContextResult::kFatalFailure;
+  auto context_state1 = channel_manager()->GetSharedContextState(&result);
+  ASSERT_EQ(result, ContextResult::kSuccess);
+  ASSERT_TRUE(context_state1);
+  EXPECT_EQ(SharedContextState::GetForCurrentThread(), context_state1.get());
+
+  // Mark the context lost directly without triggering LoseAllContexts() so
+  // `channel_manager()` still holds the lost context in TLS. Drop the local
+  // reference so `channel_manager()` holds the last reference.
+  context_state1->MarkContextLost(error::kUnknown);
+  context_state1.reset();
+
+  // Recreating SharedContextState must clear TLS before resetting the old
+  // lost context so ~SharedContextState() does not hit CHECK_NE.
+  auto context_state2 = channel_manager()->GetSharedContextState(&result);
+  ASSERT_EQ(result, ContextResult::kSuccess);
+  ASSERT_TRUE(context_state2);
+  EXPECT_EQ(SharedContextState::GetForCurrentThread(), context_state2.get());
+}
+
+#if BUILDFLAG(IS_ANDROID)
 TEST_F(GpuChannelManagerTest, OnBackgroundedWithoutWebGL) {
   TestApplicationBackgrounded(CONTEXT_TYPE_OPENGLES2, true);
 }
@@ -200,21 +175,8 @@ TEST_F(GpuChannelManagerTest, OnBackgroundedWithWebGL) {
 // Tests that peak memory usage is only reported for valid sequence numbers,
 // and that polling shuts down the monitoring.
 TEST_F(GpuChannelManagerTest, GpuPeakMemoryOnlyReportedForValidSequence) {
-  // Setup filtering to observe traces emitted.
-  base::trace_event::TraceLog* trace_log =
-      base::trace_event::TraceLog::GetInstance();
-  trace_log->SetFilterFactoryForTesting(TestTraceEventFilter::Factory);
-  const char config_json[] = R"(
-      {
-        "event_filters": [
-           {
-             "filter_predicate": "gpu",
-             "included_categories": ["*"]
-           }
-        ]
-      } )";
-  trace_log->SetEnabled(base::trace_event::TraceConfig(config_json),
-                        base::trace_event::TraceLog::FILTERING_MODE);
+  base::test::TestTraceProcessor ttp;
+  ttp.StartTrace("gpu");
 
   GpuChannelManager* manager = channel_manager();
   const CommandBufferId buffer_id =
@@ -226,21 +188,10 @@ TEST_F(GpuChannelManagerTest, GpuPeakMemoryOnlyReportedForValidSequence) {
   manager->StartPeakMemoryMonitor(sequence_num);
   EXPECT_EQ(current_memory, GetMonitorsPeakMemoryUsage(sequence_num));
 
-  // A trace should have been emitted.
-  EXPECT_NE(nullptr, g_trace_event);
-  EXPECT_STREQ("PeakMemoryTracking", g_trace_event->name());
-  EXPECT_STREQ("start", g_trace_event->arg_name(0));
-  EXPECT_EQ(current_memory, g_trace_event->arg_value(0).as_uint);
-  EXPECT_STREQ("start_sources", g_trace_event->arg_name(1));
-  EXPECT_NE(nullptr, g_trace_event->arg_value(1).as_pointer);
-  g_trace_event.reset();
-
   // With no request to listen to memory it should report 0.
   const uint32_t invalid_sequence_num = 1337;
   EXPECT_EQ(0u, GetMonitorsPeakMemoryUsage(invalid_sequence_num));
   EXPECT_EQ(0u, GetManagersPeakMemoryUsage(invalid_sequence_num));
-  // There should be no trace emitted for invalid sequence.
-  EXPECT_EQ(nullptr, g_trace_event);
 
   // The valid sequence should receive a report.
   EXPECT_EQ(current_memory, GetManagersPeakMemoryUsage(sequence_num));
@@ -248,19 +199,38 @@ TEST_F(GpuChannelManagerTest, GpuPeakMemoryOnlyReportedForValidSequence) {
   EXPECT_EQ(0u, GetMonitorsPeakMemoryUsage(sequence_num));
   EXPECT_EQ(0u, GetManagersPeakMemoryUsage(sequence_num));
 
-  // A trace should have been emitted as well.
-  EXPECT_NE(nullptr, g_trace_event);
-  EXPECT_STREQ("PeakMemoryTracking", g_trace_event->name());
-  EXPECT_STREQ("peak", g_trace_event->arg_name(0));
-  EXPECT_EQ(current_memory, g_trace_event->arg_value(0).as_uint);
-  EXPECT_STREQ("end_sources", g_trace_event->arg_name(1));
-  EXPECT_NE(nullptr, g_trace_event->arg_value(1).as_pointer);
-  g_trace_event.reset();
-
-  // Tracing's globals are not reset between tests. Clear out our filter and
-  // disable tracing.
-  trace_log->SetFilterFactoryForTesting(nullptr);
-  trace_log->SetDisabled(base::trace_event::TraceLog::FILTERING_MODE);
+  absl::Status status = ttp.StopAndParseTrace();
+  ASSERT_TRUE(status.ok()) << status.message();
+  std::string query =
+      R"(
+      SELECT
+        EXTRACT_ARG(arg_set_id, 'debug.start') AS start,
+        (
+          SELECT COUNT(*)
+          FROM args
+          WHERE args.arg_set_id = slice.arg_set_id
+                AND args.key GLOB 'debug.start_sources*'
+        ) > 0 AS has_start_sources,
+        EXTRACT_ARG(arg_set_id, 'debug.peak') AS peak,
+        (
+          SELECT COUNT(*)
+          FROM args
+          WHERE args.arg_set_id = slice.arg_set_id
+                AND args.key GLOB 'debug.end_sources*'
+        ) > 0 AS has_end_sources
+      FROM slice
+      where name = 'PeakMemoryTracking'
+      ORDER BY ts ASC
+      )";
+  auto result = ttp.RunQuery(query);
+  ASSERT_TRUE(result.has_value()) << result.error();
+  EXPECT_THAT(result.value(),
+              ::testing::ElementsAre(
+                  std::vector<std::string>{"start", "has_start_sources", "peak",
+                                           "has_end_sources"},
+                  std::vector<std::string>{
+                      base::StringPrintf("%" PRIu64, current_memory), "1",
+                      base::StringPrintf("%" PRIu64, current_memory), "1"}));
 }
 
 // Tests that while a channel may exist for longer than a request to monitor,
@@ -313,6 +283,93 @@ TEST_F(GpuChannelManagerTest, GetPeakMemoryUsageCalculatedPerSequence) {
 
   EXPECT_EQ(initial_memory, GetManagersPeakMemoryUsage(sequence_num_1));
   EXPECT_EQ(localized_peak_memory, GetManagersPeakMemoryUsage(sequence_num_2));
+}
+
+#if !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_WIN)
+namespace {
+
+// Helper class to enable `base::kStatefulMemoryPressure` before
+// `GpuChannelTestCommon` initializes `TaskEnvironment` and starts background
+// threads, ensuring `ScopedFeatureList` is created before and destroyed after
+// all worker threads to avoid race conditions during teardown.
+class StatefulMemoryPressureFeature {
+ public:
+  StatefulMemoryPressureFeature() {
+    scoped_feature_list_.InitAndEnableFeature(base::kStatefulMemoryPressure);
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+}  // namespace
+
+// Test fixture that enables `base::kStatefulMemoryPressure` with safe
+// initialization/destruction order relative to `TaskEnvironment`.
+class GpuChannelManagerStatefulTest : public StatefulMemoryPressureFeature,
+                                      public GpuChannelManagerTest {};
+
+TEST_F(GpuChannelManagerStatefulTest, OnUpdateMemoryLimitStateful) {
+  // Send async notification for memory limit update and ensure it completes.
+  test_memory_consumer_registry().NotifyUpdateMemoryLimitAsync(
+      base::MemoryLimit::FromPercent(50), task_environment().QuitClosure());
+  task_environment().RunUntilQuit();
+
+  EXPECT_EQ(channel_manager()->memory_limit(),
+            base::MemoryLimit::FromPercent(50));
+}
+#endif  // !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_WIN)
+
+class GpuChannelManagerProgramCacheDisabledTest : public GpuChannelTestCommon {
+ public:
+  GpuChannelManagerProgramCacheDisabledTest()
+      : GpuChannelTestCommon({DISABLE_PROGRAM_CACHE},
+                             /*use_stub_bindings=*/true) {}
+};
+
+TEST_F(GpuChannelManagerProgramCacheDisabledTest,
+       ProgramCacheDisabledByWorkaround) {
+  EXPECT_EQ(nullptr, channel_manager()->program_cache());
+}
+
+TEST_F(GpuChannelManagerProgramCacheDisabledTest,
+       CreateCommandBufferWithProgramCacheDisabled) {
+  int32_t kClientId = 1;
+  GpuChannel* channel = CreateChannel(kClientId, true);
+  ASSERT_TRUE(channel);
+
+  int32_t kRouteId =
+      static_cast<int32_t>(GpuChannelReservedRoutes::kMaxValue) + 1;
+  auto init_params = mojom::CreateCommandBufferParams::New();
+  init_params->stream_id = 0;
+  init_params->stream_priority = SchedulingPriority::kNormal;
+  init_params->attribs =
+      mojom::ContextCreationAttribs::NewGles(mojom::GLESCreationAttribs::New());
+  init_params->active_url = GURL();
+  gpu::ContextResult result = gpu::ContextResult::kSuccess;
+  gpu::Capabilities capabilities;
+  gpu::GLCapabilities gl_capabilities;
+  CreateCommandBuffer(*channel, std::move(init_params), kRouteId,
+                      GetSharedMemoryRegion(), &result, &capabilities,
+                      &gl_capabilities);
+  EXPECT_EQ(result, gpu::ContextResult::kSuccess);
+
+  CommandBufferStub* stub = channel->LookupCommandBuffer(kRouteId);
+  ASSERT_TRUE(stub);
+
+  auto flush_params = mojom::AsyncFlushParams::New();
+  flush_params->put_offset = 0;
+  flush_params->flush_id = 1;
+  flush_params->sync_token_fences = std::vector<SyncToken>();
+  auto deferred_request =
+      mojom::DeferredCommandBufferRequestParams::NewAsyncFlush(
+          std::move(flush_params));
+
+  stub->ExecuteDeferredRequest(*deferred_request, nullptr);
+
+  channel_manager()->PopulateCache(gpu::GpuDiskCacheGlShaderHandle(),
+                                   "sample_key", "sample_data");
+  EXPECT_EQ(nullptr, channel_manager()->program_cache());
 }
 
 }  // namespace gpu

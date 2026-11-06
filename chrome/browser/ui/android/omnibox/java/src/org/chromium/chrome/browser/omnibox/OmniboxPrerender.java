@@ -1,10 +1,17 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.omnibox;
 
-import org.chromium.base.annotations.NativeMethods;
+import org.jni_zero.JniPtr;
+import org.jni_zero.JniType;
+import org.jni_zero.JniTypeToken;
+import org.jni_zero.JniUniquePtr;
+import org.jni_zero.NativeMethods;
+
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
 
@@ -12,29 +19,35 @@ import org.chromium.chrome.browser.tab.Tab;
  * Java bridge to handle conditional prerendering using autocomplete results * as the user types
  * into the Omnibox.
  *
- * OmniboxPrerender takes keystrokes, autocomplete results and navigation actions then feeds
- * them to the (native) AutocompleteActionPredictor. The predictor uses this data to update its
- * database and returns predictions on what page, if any, to pre-render or pre-connect.
- *
+ * <p>OmniboxPrerender takes keystrokes, autocomplete results and navigation actions then feeds them
+ * to the (native) AutocompleteActionPredictor. The predictor uses this data to update its database
+ * and returns predictions on what page, if any, to pre-render or pre-connect.
  */
+@NullMarked
 public class OmniboxPrerender {
-    private long mNativeOmniboxPrerender;
+    @JniType("::OmniboxPrerender")
+    interface NativeOmniboxPrerender extends JniTypeToken {}
 
-    /**
-     * Constructor for creating a OmniboxPrerender instanace.
-     */
+    private final JniUniquePtr<NativeOmniboxPrerender> mNativeOmniboxPrerender;
+
+    /** Constructor for creating an OmniboxPrerender instance. */
     public OmniboxPrerender() {
-        mNativeOmniboxPrerender = OmniboxPrerenderJni.get().init(OmniboxPrerender.this);
+        mNativeOmniboxPrerender = OmniboxPrerenderJni.get().init();
+    }
+
+    /** Destroys the native OmniboxPrerender instance. Safe to call more than once. */
+    public void destroy() {
+        mNativeOmniboxPrerender.destroy();
     }
 
     /**
-     * Clears the transitional matches. This should be called when the user stops typing into
-     * the omnibox (e.g. when navigating away, closing the keyboard or changing tabs)
+     * Clears the transitional matches. This should be called when the user stops typing into the
+     * omnibox (e.g. when navigating away, closing the keyboard or changing tabs).
      *
      * @param profile profile instance corresponding to the active profile.
      */
     public void clear(Profile profile) {
-        OmniboxPrerenderJni.get().clear(mNativeOmniboxPrerender, OmniboxPrerender.this, profile);
+        OmniboxPrerenderJni.get().clear(mNativeOmniboxPrerender, profile);
     }
 
     /**
@@ -45,14 +58,14 @@ public class OmniboxPrerender {
      * @param profile profile instance corresponding to active profile.
      */
     public void initializeForProfile(Profile profile) {
-        OmniboxPrerenderJni.get().initializeForProfile(
-                mNativeOmniboxPrerender, OmniboxPrerender.this, profile);
+        OmniboxPrerenderJni.get().initializeForProfile(mNativeOmniboxPrerender, profile);
     }
 
     /**
-     * Potentially invokes a pre-render or pre-connect given the url typed into the omnibox and
-     * a corresponding autocomplete result. This should be invoked every time the omnibox changes
-     * (e.g. As the user types characters this method should be invoked at least once per character)
+     * Potentially invokes a pre-render or pre-connect given the url typed into the omnibox and a
+     * corresponding autocomplete result. This should be invoked every time the omnibox changes
+     * (e.g. As the user types characters this method should be invoked at least once per
+     * character).
      *
      * @param url url in the omnibox.
      * @param currentUrl url the current tab is displaying.
@@ -60,19 +73,37 @@ public class OmniboxPrerender {
      * @param profile profile instance corresponding to the active profile.
      * @param tab The tab whose webcontent's to use.
      */
-    public void prerenderMaybe(String url, String currentUrl, long nativeAutocompleteResult,
-            Profile profile, Tab tab) {
-        OmniboxPrerenderJni.get().prerenderMaybe(mNativeOmniboxPrerender, OmniboxPrerender.this,
-                url, currentUrl, nativeAutocompleteResult, profile, tab);
+    public void prerenderMaybe(
+            String url,
+            String currentUrl,
+            long nativeAutocompleteResult,
+            Profile profile,
+            @Nullable Tab tab) {
+        OmniboxPrerenderJni.get()
+                .prerenderMaybe(
+                        mNativeOmniboxPrerender,
+                        url,
+                        currentUrl,
+                        nativeAutocompleteResult,
+                        profile,
+                        tab);
     }
 
     @NativeMethods
     interface Natives {
-        long init(OmniboxPrerender caller);
-        void clear(long nativeOmniboxPrerender, OmniboxPrerender caller, Profile profile);
+        JniUniquePtr<NativeOmniboxPrerender> init();
+
+        void clear(JniPtr<NativeOmniboxPrerender> self, @JniType("Profile*") Profile profile);
+
         void initializeForProfile(
-                long nativeOmniboxPrerender, OmniboxPrerender caller, Profile profile);
-        void prerenderMaybe(long nativeOmniboxPrerender, OmniboxPrerender caller, String url,
-                String currentUrl, long nativeAutocompleteResult, Profile profile, Tab tab);
+                JniPtr<NativeOmniboxPrerender> self, @JniType("Profile*") Profile profile);
+
+        void prerenderMaybe(
+                JniPtr<NativeOmniboxPrerender> self,
+                @JniType("std::u16string") String url,
+                @JniType("std::u16string") String currentUrl,
+                long nativeAutocompleteResult,
+                @JniType("Profile*") Profile profile,
+                @JniType("TabAndroid*") @Nullable Tab tab);
     }
 }

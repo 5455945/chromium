@@ -17,10 +17,15 @@
 #include <string.h>
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <limits>
+#include <optional>
 #include <string>
+#include <type_traits>
 
 #include "absl/base/attributes.h"
 #include "absl/base/config.h"
@@ -30,8 +35,9 @@
 #include "absl/numeric/bits.h"
 #include "absl/numeric/int128.h"
 #include "absl/numeric/internal/representation.h"
+#include "absl/strings/internal/str_format/extension.h"
 #include "absl/strings/numbers.h"
-#include "absl/types/optional.h"
+#include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 
 namespace absl {
@@ -92,31 +98,33 @@ class StackArray {
 
 // Calculates `10 * (*v) + carry` and stores the result in `*v` and returns
 // the carry.
+// Requires: `0 <= carry <= 9`
 template <typename Int>
-inline Int MultiplyBy10WithCarry(Int *v, Int carry) {
-  using BiggerInt = absl::conditional_t<sizeof(Int) == 4, uint64_t, uint128>;
-  BiggerInt tmp = 10 * static_cast<BiggerInt>(*v) + carry;
+inline char MultiplyBy10WithCarry(Int* v, char carry) {
+  using BiggerInt = std::conditional_t<sizeof(Int) == 4, uint64_t, uint128>;
+  BiggerInt tmp =
+      10 * static_cast<BiggerInt>(*v) + static_cast<BiggerInt>(carry);
   *v = static_cast<Int>(tmp);
-  return static_cast<Int>(tmp >> (sizeof(Int) * 8));
+  return static_cast<char>(tmp >> (sizeof(Int) * 8));
 }
 
 // Calculates `(2^64 * carry + *v) / 10`.
 // Stores the quotient in `*v` and returns the remainder.
 // Requires: `0 <= carry <= 9`
-inline uint64_t DivideBy10WithCarry(uint64_t *v, uint64_t carry) {
+inline char DivideBy10WithCarry(uint64_t* v, char carry) {
   constexpr uint64_t divisor = 10;
   // 2^64 / divisor = chunk_quotient + chunk_remainder / divisor
   constexpr uint64_t chunk_quotient = (uint64_t{1} << 63) / (divisor / 2);
   constexpr uint64_t chunk_remainder = uint64_t{} - chunk_quotient * divisor;
 
+  const uint64_t carry_u64 = static_cast<uint64_t>(carry);
   const uint64_t mod = *v % divisor;
-  const uint64_t next_carry = chunk_remainder * carry + mod;
-  *v = *v / divisor + carry * chunk_quotient + next_carry / divisor;
-  return next_carry % divisor;
+  const uint64_t next_carry = chunk_remainder * carry_u64 + mod;
+  *v = *v / divisor + carry_u64 * chunk_quotient + next_carry / divisor;
+  return static_cast<char>(next_carry % divisor);
 }
 
-using MaxFloatType =
-    typename std::conditional<IsDoubleDouble(), double, long double>::type;
+using MaxFloatType = std::conditional_t<IsDoubleDouble(), double, long double>;
 
 // Generates the decimal representation for an integer of the form `v * 2^exp`,
 // where `v` and `exp` are both positive integers.
@@ -125,11 +133,11 @@ using MaxFloatType =
 //
 // Requires `0 <= exp` and `exp <= numeric_limits<MaxFloatType>::max_exponent`.
 class BinaryToDecimal {
-  static constexpr int ChunksNeeded(int exp) {
+  static constexpr size_t ChunksNeeded(int exp) {
     // We will left shift a uint128 by `exp` bits, so we need `128+exp` total
     // bits. Round up to 32.
     // See constructor for details about adding `10%` to the value.
-    return (128 + exp + 31) / 32 * 11 / 10;
+    return static_cast<size_t>(((128 + exp + 31) / 32 * 11 + 9) / 10);
   }
 
  public:
@@ -140,23 +148,22 @@ class BinaryToDecimal {
     assert(exp > 0);
     assert(exp <= std::numeric_limits<MaxFloatType>::max_exponent);
     static_assert(
-        static_cast<int>(StackArray::kMaxCapacity) >=
-            ChunksNeeded(std::numeric_limits<MaxFloatType>::max_exponent),
-        "");
+        StackArray::kMaxCapacity >=
+            ChunksNeeded(std::numeric_limits<MaxFloatType>::max_exponent));
 
     StackArray::RunWithCapacity(
         ChunksNeeded(exp),
         [=](absl::Span<uint32_t> input) { f(BinaryToDecimal(input, v, exp)); });
   }
 
-  int TotalDigits() const {
-    return static_cast<int>((decimal_end_ - decimal_start_) * kDigitsPerChunk +
-                            CurrentDigits().size());
+  size_t TotalDigits() const {
+    return (decimal_end_ - decimal_start_) * kDigitsPerChunk +
+           CurrentDigits().size();
   }
 
   // See the current block of digits.
   absl::string_view CurrentDigits() const {
-    return absl::string_view(digits_ + kDigitsPerChunk - size_, size_);
+    return absl::string_view(&digits_[kDigitsPerChunk - size_], size_);
   }
 
   // Advance the current view of digits.
@@ -190,30 +197,31 @@ class BinaryToDecimal {
     // the decimal representation is around 7% less efficient in space than the
     // binary one. We allocate an extra 10% memory to account for this. See
     // ChunksNeeded for this calculation.
-    int chunk_index = exp / 32;
+    size_t after_chunk_index = static_cast<size_t>(exp / 32 + 1);
     decimal_start_ = decimal_end_ = ChunksNeeded(exp);
     const int offset = exp % 32;
     // Left shift v by exp bits.
-    data_[chunk_index] = static_cast<uint32_t>(v << offset);
+    data_[after_chunk_index - 1] = static_cast<uint32_t>(v << offset);
     for (v >>= (32 - offset); v; v >>= 32)
-      data_[++chunk_index] = static_cast<uint32_t>(v);
+      data_[++after_chunk_index - 1] = static_cast<uint32_t>(v);
 
-    while (chunk_index >= 0) {
+    while (after_chunk_index > 0) {
       // While we have more than one chunk available, go in steps of 1e9.
-      // `data_[chunk_index]` holds the highest non-zero binary chunk, so keep
-      // the variable updated.
+      // `data_[after_chunk_index - 1]` holds the highest non-zero binary chunk,
+      // so keep the variable updated.
       uint32_t carry = 0;
-      for (int i = chunk_index; i >= 0; --i) {
-        uint64_t tmp = uint64_t{data_[i]} + (uint64_t{carry} << 32);
-        data_[i] = static_cast<uint32_t>(tmp / uint64_t{1000000000});
+      for (size_t i = after_chunk_index; i > 0; --i) {
+        uint64_t tmp = uint64_t{data_[i - 1]} + (uint64_t{carry} << 32);
+        data_[i - 1] = static_cast<uint32_t>(tmp / uint64_t{1000000000});
         carry = static_cast<uint32_t>(tmp % uint64_t{1000000000});
       }
 
       // If the highest chunk is now empty, remove it from view.
-      if (data_[chunk_index] == 0) --chunk_index;
+      if (data_[after_chunk_index - 1] == 0)
+        --after_chunk_index;
 
       --decimal_start_;
-      assert(decimal_start_ != chunk_index);
+      assert(decimal_start_ != after_chunk_index - 1);
       data_[decimal_start_] = carry;
     }
 
@@ -225,13 +233,13 @@ class BinaryToDecimal {
   }
 
  private:
-  static constexpr int kDigitsPerChunk = 9;
+  static constexpr size_t kDigitsPerChunk = 9;
 
-  int decimal_start_;
-  int decimal_end_;
+  size_t decimal_start_;
+  size_t decimal_end_;
 
-  char digits_[kDigitsPerChunk];
-  int size_ = 0;
+  std::array<char, kDigitsPerChunk> digits_;
+  size_t size_ = 0;
 
   absl::Span<uint32_t> data_;
 };
@@ -240,6 +248,12 @@ class BinaryToDecimal {
 // Requires `-exp < 0` and
 // `-exp >= limits<MaxFloatType>::min_exponent - limits<MaxFloatType>::digits`.
 class FractionalDigitGenerator {
+ private:
+  static constexpr size_t ChunksNeeded(int exp) {
+    // We need 128 bits for mantissa and `exp` bits for exponent.
+    return static_cast<size_t>((128 + exp + 31) / 32);
+  }
+
  public:
   // Run the conversion for `v * 2^exp` and call `f(generator)`.
   // This function will allocate enough stack space to perform the conversion.
@@ -247,29 +261,31 @@ class FractionalDigitGenerator {
       uint128 v, int exp, absl::FunctionRef<void(FractionalDigitGenerator)> f) {
     using Limits = std::numeric_limits<MaxFloatType>;
     assert(-exp < 0);
-    assert(-exp >= Limits::min_exponent - 128);
+    // We need enough precision to cover all digits of MaxFloatType, and we add
+    // 128 bits of headroom for fractional digit generation.
+    const int margin = Limits::digits + 128;
+    assert(-exp >= Limits::min_exponent - margin);
     static_assert(StackArray::kMaxCapacity >=
-                      (Limits::digits + 128 - Limits::min_exponent + 31) / 32,
-                  "");
-    StackArray::RunWithCapacity((Limits::digits + exp + 31) / 32,
-                                [=](absl::Span<uint32_t> input) {
-                                  f(FractionalDigitGenerator(input, v, exp));
-                                });
+                      ChunksNeeded(margin - Limits::min_exponent));
+    StackArray::RunWithCapacity(
+        ChunksNeeded(exp), [=](absl::Span<uint32_t> input) {
+          f(FractionalDigitGenerator(input, v, exp));
+        });
   }
 
   // Returns true if there are any more non-zero digits left.
-  bool HasMoreDigits() const { return next_digit_ != 0 || chunk_index_ >= 0; }
+  bool HasMoreDigits() const { return next_digit_ != 0 || after_chunk_index_; }
 
   // Returns true if the remainder digits are greater than 5000...
   bool IsGreaterThanHalf() const {
-    return next_digit_ > 5 || (next_digit_ == 5 && chunk_index_ >= 0);
+    return next_digit_ > 5 || (next_digit_ == 5 && after_chunk_index_);
   }
   // Returns true if the remainder digits are exactly 5000...
-  bool IsExactlyHalf() const { return next_digit_ == 5 && chunk_index_ < 0; }
+  bool IsExactlyHalf() const { return next_digit_ == 5 && !after_chunk_index_; }
 
   struct Digits {
-    int digit_before_nine;
-    int num_nines;
+    char digit_before_nine;
+    size_t num_nines;
   };
 
   // Get the next set of digits.
@@ -288,35 +304,37 @@ class FractionalDigitGenerator {
 
  private:
   // Return the next digit.
-  int GetOneDigit() {
-    if (chunk_index_ < 0) return 0;
+  char GetOneDigit() {
+    if (!after_chunk_index_)
+      return 0;
 
-    uint32_t carry = 0;
-    for (int i = chunk_index_; i >= 0; --i) {
-      carry = MultiplyBy10WithCarry(&data_[i], carry);
+    char carry = 0;
+    for (size_t i = after_chunk_index_; i > 0; --i) {
+      carry = MultiplyBy10WithCarry(&data_[i - 1], carry);
     }
     // If the lowest chunk is now empty, remove it from view.
-    if (data_[chunk_index_] == 0) --chunk_index_;
+    if (data_[after_chunk_index_ - 1] == 0)
+      --after_chunk_index_;
     return carry;
   }
 
   FractionalDigitGenerator(absl::Span<uint32_t> data, uint128 v, int exp)
-      : chunk_index_(exp / 32), data_(data) {
+      : after_chunk_index_(static_cast<size_t>(exp / 32 + 1)), data_(data) {
     const int offset = exp % 32;
     // Right shift `v` by `exp` bits.
-    data_[chunk_index_] = static_cast<uint32_t>(v << (32 - offset));
+    data_[after_chunk_index_ - 1] = static_cast<uint32_t>(v << (32 - offset));
     v >>= offset;
     // Make sure we don't overflow the data. We already calculated that
     // non-zero bits fit, so we might not have space for leading zero bits.
-    for (int pos = chunk_index_; v; v >>= 32)
+    for (size_t pos = after_chunk_index_ - 1; v; v >>= 32)
       data_[--pos] = static_cast<uint32_t>(v);
 
     // Fill next_digit_, as GetDigits expects it to be populated always.
     next_digit_ = GetOneDigit();
   }
 
-  int next_digit_;
-  int chunk_index_;
+  char next_digit_;
+  size_t after_chunk_index_;
   absl::Span<uint32_t> data_;
 };
 
@@ -362,7 +380,7 @@ char *PrintIntegralDigitsFromRightFast(uint128 v, char *p) {
   auto low = static_cast<uint64_t>(v);
 
   while (high != 0) {
-    uint64_t carry = DivideBy10WithCarry(&high, 0);
+    char carry = DivideBy10WithCarry(&high, 0);
     carry = DivideBy10WithCarry(&low, carry);
     *--p = carry + '0';
   }
@@ -373,13 +391,15 @@ char *PrintIntegralDigitsFromRightFast(uint128 v, char *p) {
 // shifting.
 // Performs rounding if necessary to fit within `precision`.
 // Returns the pointer to one after the last character written.
-char *PrintFractionalDigitsFast(uint64_t v, char *start, int exp,
-                                int precision) {
+char* PrintFractionalDigitsFast(uint64_t v,
+                                char* start,
+                                int exp,
+                                size_t precision) {
   char *p = start;
   v <<= (64 - exp);
   while (precision > 0) {
     if (!v) return p;
-    *p++ = MultiplyBy10WithCarry(&v, uint64_t{0}) + '0';
+    *p++ = MultiplyBy10WithCarry(&v, 0) + '0';
     --precision;
   }
 
@@ -393,8 +413,6 @@ char *PrintFractionalDigitsFast(uint64_t v, char *start, int exp,
     RoundToEven(p - 1);
   }
 
-  assert(precision == 0);
-  // Precision can only be zero here.
   return p;
 }
 
@@ -402,8 +420,10 @@ char *PrintFractionalDigitsFast(uint64_t v, char *start, int exp,
 // after shifting.
 // Performs rounding if necessary to fit within `precision`.
 // Returns the pointer to one after the last character written.
-char *PrintFractionalDigitsFast(uint128 v, char *start, int exp,
-                                int precision) {
+char* PrintFractionalDigitsFast(uint128 v,
+                                char* start,
+                                int exp,
+                                size_t precision) {
   char *p = start;
   v <<= (128 - exp);
   auto high = static_cast<uint64_t>(v >> 64);
@@ -412,7 +432,7 @@ char *PrintFractionalDigitsFast(uint128 v, char *start, int exp,
   // While we have digits to print and `low` is not empty, do the long
   // multiplication.
   while (precision > 0 && low != 0) {
-    uint64_t carry = MultiplyBy10WithCarry(&low, uint64_t{0});
+    char carry = MultiplyBy10WithCarry(&low, 0);
     carry = MultiplyBy10WithCarry(&high, carry);
 
     *p++ = carry + '0';
@@ -424,7 +444,7 @@ char *PrintFractionalDigitsFast(uint128 v, char *start, int exp,
   // above.
   while (precision > 0) {
     if (!high) return p;
-    *p++ = MultiplyBy10WithCarry(&high, uint64_t{0}) + '0';
+    *p++ = MultiplyBy10WithCarry(&high, 0) + '0';
     --precision;
   }
 
@@ -438,14 +458,77 @@ char *PrintFractionalDigitsFast(uint128 v, char *start, int exp,
     RoundToEven(p - 1);
   }
 
-  assert(precision == 0);
-  // Precision can only be zero here.
   return p;
+}
+
+struct FractionalDigitPrinterResult {
+  char* end;
+  size_t skipped_zeros;
+  bool nonzero_remainder;
+};
+
+FractionalDigitPrinterResult PrintFractionalDigitsScientific(
+    uint64_t v, char* start, int exp, size_t precision, bool skip_zeros) {
+  char* p = start;
+  v <<= (64 - exp);
+
+  size_t skipped_zeros = 0;
+  while (v != 0 && precision > 0) {
+    char carry = MultiplyBy10WithCarry(&v, 0);
+    if (skip_zeros) {
+      if (carry == 0) {
+        ++skipped_zeros;
+        continue;
+      }
+      skip_zeros = false;
+    }
+    *p++ = carry + '0';
+    --precision;
+  }
+  return {p, skipped_zeros, v != 0};
+}
+
+FractionalDigitPrinterResult PrintFractionalDigitsScientific(
+    uint128 v, char* start, int exp, size_t precision, bool skip_zeros) {
+  char* p = start;
+  v <<= (128 - exp);
+  auto high = static_cast<uint64_t>(v >> 64);
+  auto low = static_cast<uint64_t>(v);
+
+  size_t skipped_zeros = 0;
+  while (precision > 0 && low != 0) {
+    char carry = MultiplyBy10WithCarry(&low, 0);
+    carry = MultiplyBy10WithCarry(&high, carry);
+    if (skip_zeros) {
+      if (carry == 0) {
+        ++skipped_zeros;
+        continue;
+      }
+      skip_zeros = false;
+    }
+    *p++ = carry + '0';
+    --precision;
+  }
+
+  while (precision > 0 && high != 0) {
+    char carry = MultiplyBy10WithCarry(&high, 0);
+    if (skip_zeros) {
+      if (carry == 0) {
+        ++skipped_zeros;
+        continue;
+      }
+      skip_zeros = false;
+    }
+    *p++ = carry + '0';
+    --precision;
+  }
+
+  return {p, skipped_zeros, high != 0 || low != 0};
 }
 
 struct FormatState {
   char sign_char;
-  int precision;
+  size_t precision;
   const FormatConversionSpecImpl &conv;
   FormatSinkImpl *sink;
 
@@ -455,9 +538,9 @@ struct FormatState {
 };
 
 struct Padding {
-  int left_spaces;
-  int zeros;
-  int right_spaces;
+  size_t left_spaces;
+  size_t zeros;
+  size_t right_spaces;
 };
 
 Padding ExtraWidthToPadding(size_t total_size, const FormatState &state) {
@@ -465,7 +548,7 @@ Padding ExtraWidthToPadding(size_t total_size, const FormatState &state) {
       static_cast<size_t>(state.conv.width()) <= total_size) {
     return {0, 0, 0};
   }
-  int missing_chars = state.conv.width() - total_size;
+  size_t missing_chars = static_cast<size_t>(state.conv.width()) - total_size;
   if (state.conv.has_left_flag()) {
     return {0, 0, missing_chars};
   } else if (state.conv.has_zero_flag()) {
@@ -475,8 +558,10 @@ Padding ExtraWidthToPadding(size_t total_size, const FormatState &state) {
   }
 }
 
-void FinalPrint(const FormatState &state, absl::string_view data,
-                int padding_offset, int trailing_zeros,
+void FinalPrint(const FormatState& state,
+                absl::string_view data,
+                size_t padding_offset,
+                size_t trailing_zeros,
                 absl::string_view data_postfix) {
   if (state.conv.width() < 0) {
     // No width specified. Fast-path.
@@ -487,10 +572,10 @@ void FinalPrint(const FormatState &state, absl::string_view data,
     return;
   }
 
-  auto padding = ExtraWidthToPadding((state.sign_char != '\0' ? 1 : 0) +
-                                         data.size() + data_postfix.size() +
-                                         static_cast<size_t>(trailing_zeros),
-                                     state);
+  auto padding =
+      ExtraWidthToPadding((state.sign_char != '\0' ? 1 : 0) + data.size() +
+                              data_postfix.size() + trailing_zeros,
+                          state);
 
   state.sink->Append(padding.left_spaces, ' ');
   if (state.sign_char != '\0') state.sink->Append(1, state.sign_char);
@@ -547,15 +632,16 @@ void FormatFFast(Int v, int exp, const FormatState &state) {
     if (integral_digits_start[-1] != '0') --integral_digits_start;
   }
 
-  size_t size = fractional_digits_end - integral_digits_start;
+  size_t size =
+      static_cast<size_t>(fractional_digits_end - integral_digits_start);
 
   // In `alt` mode (flag #) we keep the `.` even if there are no fractional
   // digits. In non-alt mode, we strip it.
   if (!state.ShouldPrintDot()) --size;
   FinalPrint(state, absl::string_view(integral_digits_start, size),
              /*padding_offset=*/0,
-             static_cast<int>(state.precision - (fractional_digits_end -
-                                                 fractional_digits_start)),
+             state.precision - static_cast<size_t>(fractional_digits_end -
+                                                   fractional_digits_start),
              /*data_postfix=*/"");
 }
 
@@ -564,25 +650,30 @@ void FormatFFast(Int v, int exp, const FormatState &state) {
 // Prints `v*2^exp` with the options from `state`.
 // This one is guaranteed to not have fractional digits, so we don't have to
 // worry about anything after the `.`.
-void FormatFPositiveExpSlow(uint128 v, int exp, const FormatState &state) {
+void FormatFPositiveExpSlow(uint128 v, int exp, const FormatState& state,
+                            bool strip_trailing_zeros = false) {
   BinaryToDecimal::RunConversion(v, exp, [&](BinaryToDecimal btd) {
     const size_t total_digits =
-        btd.TotalDigits() +
-        (state.ShouldPrintDot() ? static_cast<size_t>(state.precision) + 1 : 0);
+        btd.TotalDigits() + (state.ShouldPrintDot() ? state.precision + 1 : 0);
 
     const auto padding = ExtraWidthToPadding(
         total_digits + (state.sign_char != '\0' ? 1 : 0), state);
 
     state.sink->Append(padding.left_spaces, ' ');
-    if (state.sign_char != '\0') state.sink->Append(1, state.sign_char);
+    if (state.sign_char != '\0')
+      state.sink->Append(1, state.sign_char);
     state.sink->Append(padding.zeros, '0');
 
     do {
       state.sink->Append(btd.CurrentDigits());
     } while (btd.AdvanceDigits());
 
-    if (state.ShouldPrintDot()) state.sink->Append(1, '.');
-    state.sink->Append(state.precision, '0');
+    if (state.ShouldPrintDot() && !strip_trailing_zeros) {
+      state.sink->Append(1, '.');
+    }
+    if (!strip_trailing_zeros) {
+      state.sink->Append(state.precision, '0');
+    }
     state.sink->Append(padding.right_spaces, ' ');
   });
 }
@@ -592,21 +683,21 @@ void FormatFPositiveExpSlow(uint128 v, int exp, const FormatState &state) {
 // Prints `v*2^exp` with the options from `state`.
 // This one is guaranteed to be < 1.0, so we don't have to worry about integral
 // digits.
-void FormatFNegativeExpSlow(uint128 v, int exp, const FormatState &state) {
+void FormatFNegativeExpSlow(uint128 v, int exp, const FormatState& state,
+                            size_t digits_to_trim = 0) {
+  const bool print_dot =
+      (state.precision > digits_to_trim) || state.conv.has_alt_flag();
   const size_t total_digits =
-      /* 0 */ 1 +
-      (state.ShouldPrintDot() ? static_cast<size_t>(state.precision) + 1 : 0);
+      /* 0 */ 1 + (print_dot ? (state.precision - digits_to_trim) + 1 : 0);
   auto padding =
       ExtraWidthToPadding(total_digits + (state.sign_char ? 1 : 0), state);
   padding.zeros += 1;
   state.sink->Append(padding.left_spaces, ' ');
   if (state.sign_char != '\0') state.sink->Append(1, state.sign_char);
   state.sink->Append(padding.zeros, '0');
-
-  if (state.ShouldPrintDot()) state.sink->Append(1, '.');
-
+  if (print_dot) state.sink->Append(1, '.');
   // Print digits
-  int digits_to_go = state.precision;
+  size_t digits_to_go = state.precision - digits_to_trim;
 
   FractionalDigitGenerator::RunConversion(
       v, exp, [&](FractionalDigitGenerator digit_gen) {
@@ -666,7 +757,8 @@ void FormatFNegativeExpSlow(uint128 v, int exp, const FormatState &state) {
 template <typename Int>
 void FormatF(Int mantissa, int exp, const FormatState &state) {
   if (exp >= 0) {
-    const int total_bits = sizeof(Int) * 8 - LeadingZeros(mantissa) + exp;
+    const int total_bits =
+        static_cast<int>(sizeof(Int) * 8) - LeadingZeros(mantissa) + exp;
 
     // Fallback to the slow stack-based approach if we can't do it in a 64 or
     // 128 bit state.
@@ -686,9 +778,9 @@ void FormatF(Int mantissa, int exp, const FormatState &state) {
 // Grab the group of four bits (nibble) from `n`. E.g., nibble 1 corresponds to
 // bits 4-7.
 template <typename Int>
-uint8_t GetNibble(Int n, int nibble_index) {
+uint8_t GetNibble(Int n, size_t nibble_index) {
   constexpr Int mask_low_nibble = Int{0xf};
-  int shift = nibble_index * 4;
+  int shift = static_cast<int>(nibble_index * 4);
   n &= mask_low_nibble << shift;
   return static_cast<uint8_t>((n >> shift) & 0xf);
 }
@@ -696,38 +788,42 @@ uint8_t GetNibble(Int n, int nibble_index) {
 // Add one to the given nibble, applying carry to higher nibbles. Returns true
 // if overflow, false otherwise.
 template <typename Int>
-bool IncrementNibble(int nibble_index, Int *n) {
-  constexpr int kShift = sizeof(Int) * 8 - 1;
-  constexpr int kNumNibbles = sizeof(Int) * 8 / 4;
+bool IncrementNibble(size_t nibble_index, Int* n) {
+  constexpr size_t kShift = sizeof(Int) * 8 - 1;
+  constexpr size_t kNumNibbles = sizeof(Int) * 8 / 4;
   Int before = *n >> kShift;
-  // Here we essentially want to take the number 1 and move it into the requsted
-  // nibble, then add it to *n to effectively increment the nibble. However,
-  // ASan will complain if we try to shift the 1 beyond the limits of the Int,
-  // i.e., if the nibble_index is out of range. So therefore we check for this
-  // and if we are out of range we just add 0 which leaves *n unchanged, which
-  // seems like the reasonable thing to do in that case.
-  *n += ((nibble_index >= kNumNibbles) ? 0 : (Int{1} << (nibble_index * 4)));
+  // Here we essentially want to take the number 1 and move it into the
+  // requested nibble, then add it to *n to effectively increment the nibble.
+  // However, ASan will complain if we try to shift the 1 beyond the limits of
+  // the Int, i.e., if the nibble_index is out of range. So therefore we check
+  // for this and if we are out of range we just add 0 which leaves *n
+  // unchanged, which seems like the reasonable thing to do in that case.
+  *n += ((nibble_index >= kNumNibbles)
+             ? 0
+             : (Int{1} << static_cast<int>(nibble_index * 4)));
   Int after = *n >> kShift;
   return (before && !after) || (nibble_index >= kNumNibbles);
 }
 
 // Return a mask with 1's in the given nibble and all lower nibbles.
 template <typename Int>
-Int MaskUpToNibbleInclusive(int nibble_index) {
-  constexpr int kNumNibbles = sizeof(Int) * 8 / 4;
+Int MaskUpToNibbleInclusive(size_t nibble_index) {
+  constexpr size_t kNumNibbles = sizeof(Int) * 8 / 4;
   static const Int ones = ~Int{0};
-  return ones >> std::max(0, 4 * (kNumNibbles - nibble_index - 1));
+  ++nibble_index;
+  return ones >> static_cast<int>(
+                     4 * (std::max(kNumNibbles, nibble_index) - nibble_index));
 }
 
 // Return a mask with 1's below the given nibble.
 template <typename Int>
-Int MaskUpToNibbleExclusive(int nibble_index) {
-  return nibble_index <= 0 ? 0 : MaskUpToNibbleInclusive<Int>(nibble_index - 1);
+Int MaskUpToNibbleExclusive(size_t nibble_index) {
+  return nibble_index == 0 ? 0 : MaskUpToNibbleInclusive<Int>(nibble_index - 1);
 }
 
 template <typename Int>
-Int MoveToNibble(uint8_t nibble, int nibble_index) {
-  return Int{nibble} << (4 * nibble_index);
+Int MoveToNibble(uint8_t nibble, size_t nibble_index) {
+  return Int{nibble} << static_cast<int>(4 * nibble_index);
 }
 
 // Given mantissa size, find optimal # of mantissa bits to put in initial digit.
@@ -744,10 +840,10 @@ Int MoveToNibble(uint8_t nibble, int nibble_index) {
 // a multiple of four. Once again, the goal is to have all fractional digits
 // represent real precision.
 template <typename Float>
-constexpr int HexFloatLeadingDigitSizeInBits() {
+constexpr size_t HexFloatLeadingDigitSizeInBits() {
   return std::numeric_limits<Float>::digits % 4 > 0
-             ? std::numeric_limits<Float>::digits % 4
-             : 4;
+             ? static_cast<size_t>(std::numeric_limits<Float>::digits % 4)
+             : size_t{4};
 }
 
 // This function captures the rounding behavior of glibc for hex float
@@ -757,16 +853,17 @@ constexpr int HexFloatLeadingDigitSizeInBits() {
 // point that is not followed by 800000..., it disregards the parity and rounds
 // up if > 8 and rounds down if < 8.
 template <typename Int>
-bool HexFloatNeedsRoundUp(Int mantissa, int final_nibble_displayed,
+bool HexFloatNeedsRoundUp(Int mantissa,
+                          size_t final_nibble_displayed,
                           uint8_t leading) {
   // If the last nibble (hex digit) to be displayed is the lowest on in the
   // mantissa then that means that we don't have any further nibbles to inform
   // rounding, so don't round.
-  if (final_nibble_displayed <= 0) {
+  if (final_nibble_displayed == 0) {
     return false;
   }
-  int rounding_nibble_idx = final_nibble_displayed - 1;
-  constexpr int kTotalNibbles = sizeof(Int) * 8 / 4;
+  size_t rounding_nibble_idx = final_nibble_displayed - 1;
+  constexpr size_t kTotalNibbles = sizeof(Int) * 8 / 4;
   assert(final_nibble_displayed <= kTotalNibbles);
   Int mantissa_up_to_rounding_nibble_inclusive =
       mantissa & MaskUpToNibbleInclusive<Int>(rounding_nibble_idx);
@@ -793,7 +890,7 @@ struct HexFloatTypeParams {
   }
 
   int min_exponent;
-  int leading_digit_size_bits;
+  size_t leading_digit_size_bits;
 };
 
 // Hex Float Rounding. First check if we need to round; if so, then we do that
@@ -803,10 +900,12 @@ struct HexFloatTypeParams {
 template <typename Int>
 void FormatARound(bool precision_specified, const FormatState &state,
                   uint8_t *leading, Int *mantissa, int *exp) {
-  constexpr int kTotalNibbles = sizeof(Int) * 8 / 4;
+  constexpr size_t kTotalNibbles = sizeof(Int) * 8 / 4;
   // Index of the last nibble that we could display given precision.
-  int final_nibble_displayed =
-      precision_specified ? std::max(0, (kTotalNibbles - state.precision)) : 0;
+  size_t final_nibble_displayed =
+      precision_specified
+          ? (std::max(kTotalNibbles, state.precision) - state.precision)
+          : 0;
   if (HexFloatNeedsRoundUp(*mantissa, final_nibble_displayed, *leading)) {
     // Need to round up.
     bool overflow = IncrementNibble(final_nibble_displayed, mantissa);
@@ -830,9 +929,9 @@ void FormatARound(bool precision_specified, const FormatState &state,
 template <typename Int>
 void FormatANormalize(const HexFloatTypeParams float_traits, uint8_t *leading,
                       Int *mantissa, int *exp) {
-  constexpr int kIntBits = sizeof(Int) * 8;
+  constexpr size_t kIntBits = sizeof(Int) * 8;
   static const Int kHighIntBit = Int{1} << (kIntBits - 1);
-  const int kLeadDigitBitsCount = float_traits.leading_digit_size_bits;
+  const size_t kLeadDigitBitsCount = float_traits.leading_digit_size_bits;
   // Normalize mantissa so that highest bit set is in MSB position, unless we
   // get interrupted by the exponent threshold.
   while (*mantissa && !(*mantissa & kHighIntBit)) {
@@ -846,18 +945,18 @@ void FormatANormalize(const HexFloatTypeParams float_traits, uint8_t *leading,
   }
   // Extract bits for leading digit then shift them away leaving the
   // fractional part.
-  *leading =
-      static_cast<uint8_t>(*mantissa >> (kIntBits - kLeadDigitBitsCount));
-  *exp -= (*mantissa != 0) ? kLeadDigitBitsCount : *exp;
-  *mantissa <<= kLeadDigitBitsCount;
+  *leading = static_cast<uint8_t>(
+      *mantissa >> static_cast<int>(kIntBits - kLeadDigitBitsCount));
+  *exp -= (*mantissa != 0) ? static_cast<int>(kLeadDigitBitsCount) : *exp;
+  *mantissa <<= static_cast<int>(kLeadDigitBitsCount);
 }
 
 template <typename Int>
 void FormatA(const HexFloatTypeParams float_traits, Int mantissa, int exp,
              bool uppercase, const FormatState &state) {
   // Int properties.
-  constexpr int kIntBits = sizeof(Int) * 8;
-  constexpr int kTotalNibbles = sizeof(Int) * 8 / 4;
+  constexpr size_t kIntBits = sizeof(Int) * 8;
+  constexpr size_t kTotalNibbles = sizeof(Int) * 8 / 4;
   // Did the user specify a precision explicitly?
   const bool precision_specified = state.conv.precision() >= 0;
 
@@ -903,20 +1002,23 @@ void FormatA(const HexFloatTypeParams float_traits, Int mantissa, int exp,
   }
 
   // ============ Fractional Digits ============
-  int digits_emitted = 0;
+  size_t digits_emitted = 0;
   while (mantissa > 0) {
     *digits_iter++ = digits[GetNibble(mantissa, kTotalNibbles - 1)];
     mantissa <<= 4;
     ++digits_emitted;
   }
-  int trailing_zeros =
-      precision_specified ? state.precision - digits_emitted : 0;
-  assert(trailing_zeros >= 0);
-  auto digits_result = string_view(digits_buffer, digits_iter - digits_buffer);
+  size_t trailing_zeros = 0;
+  if (precision_specified) {
+    assert(state.precision >= digits_emitted);
+    trailing_zeros = state.precision - digits_emitted;
+  }
+  auto digits_result = string_view(
+      digits_buffer, static_cast<size_t>(digits_iter - digits_buffer));
 
   // =============== Exponent ==================
   constexpr size_t kBufSizeForExpDecRepr =
-      numbers_internal::kFastToBufferSize  // requred for FastIntToBuffer
+      numbers_internal::kFastToBufferSize  // required for FastIntToBuffer
       + 1                                  // 'p' or 'P'
       + 1;                                 // '+' or '-'
   char exp_buffer[kBufSizeForExpDecRepr];
@@ -925,11 +1027,11 @@ void FormatA(const HexFloatTypeParams float_traits, Int mantissa, int exp,
   numbers_internal::FastIntToBuffer(exp < 0 ? -exp : exp, exp_buffer + 2);
 
   // ============ Assemble Result ==============
-  FinalPrint(state,           //
-             digits_result,   // 0xN.NNN...
-             2,               // offset in `data` to start padding if needed.
-             trailing_zeros,  // num remaining mantissa padding zeros
-             exp_buffer);     // exponent
+  FinalPrint(state,
+             digits_result,                        // 0xN.NNN...
+             2,                                    // offset of any padding
+             static_cast<size_t>(trailing_zeros),  // remaining mantissa padding
+             exp_buffer);                          // exponent
 }
 
 char *CopyStringTo(absl::string_view v, char *out) {
@@ -961,10 +1063,10 @@ bool FallbackToSnprintf(const Float v, const FormatConversionSpecImpl &conv,
     int n = snprintf(&space[0], space.size(), fmt, w, p, v);
     if (n < 0) return false;
     if (static_cast<size_t>(n) < space.size()) {
-      result = absl::string_view(space.data(), n);
+      result = absl::string_view(space.data(), static_cast<size_t>(n));
       break;
     }
-    space.resize(n + 1);
+    space.resize(static_cast<size_t>(n) + 1);
   }
   sink->Append(result);
   return true;
@@ -972,13 +1074,13 @@ bool FallbackToSnprintf(const Float v, const FormatConversionSpecImpl &conv,
 
 // 128-bits in decimal: ceil(128*log(2)/log(10))
 //   or std::numeric_limits<__uint128_t>::digits10
-constexpr int kMaxFixedPrecision = 39;
+constexpr size_t kMaxFixedPrecision = 39;
 
-constexpr int kBufferLength = /*sign*/ 1 +
-                              /*integer*/ kMaxFixedPrecision +
-                              /*point*/ 1 +
-                              /*fraction*/ kMaxFixedPrecision +
-                              /*exponent e+123*/ 5;
+constexpr size_t kBufferLength = /*sign*/ 1 +
+                                 /*integer*/ kMaxFixedPrecision +
+                                 /*point*/ 1 +
+                                 /*fraction*/ kMaxFixedPrecision +
+                                 /*exponent e+123*/ 5;
 
 struct Buffer {
   void push_front(char c) {
@@ -994,14 +1096,14 @@ struct Buffer {
     --end;
   }
 
-  char &back() {
+  char &back() const {
     assert(begin < end);
     return end[-1];
   }
 
   char last_digit() const { return end[-1] == '.' ? end[-2] : end[-1]; }
 
-  int size() const { return static_cast<int>(end - begin); }
+  size_t size() const { return static_cast<size_t>(end - begin); }
 
   char data[kBufferLength];
   char *begin;
@@ -1030,8 +1132,9 @@ bool ConvertNonNumericFloats(char sign_char, Float v,
     return false;
   }
 
-  return sink->PutPaddedString(string_view(text, ptr - text), conv.width(), -1,
-                               conv.has_left_flag());
+  return sink->PutPaddedString(
+      string_view(text, static_cast<size_t>(ptr - text)), conv.width(), -1,
+      conv.has_left_flag());
 }
 
 // Round up the last digit of the value.
@@ -1058,33 +1161,13 @@ void RoundUp(Buffer *buffer, int *exp) {
   }
 }
 
-void PrintExponent(int exp, char e, Buffer *out) {
-  out->push_back(e);
-  if (exp < 0) {
-    out->push_back('-');
-    exp = -exp;
-  } else {
-    out->push_back('+');
-  }
-  // Exponent digits.
-  if (exp > 99) {
-    out->push_back(exp / 100 + '0');
-    out->push_back(exp / 10 % 10 + '0');
-    out->push_back(exp % 10 + '0');
-  } else {
-    out->push_back(exp / 10 + '0');
-    out->push_back(exp % 10 + '0');
-  }
-}
-
 template <typename Float, typename Int>
 constexpr bool CanFitMantissa() {
   return
-#if defined(__clang__) && !defined(__SSE3__)
+#if defined(__clang__) && (__clang_major__ < 9) && !defined(__SSE3__)
       // Workaround for clang bug: https://bugs.llvm.org/show_bug.cgi?id=38289
       // Casting from long double to uint64_t is miscompiled and drops bits.
-      (!std::is_same<Float, long double>::value ||
-       !std::is_same<Int, uint64_t>::value) &&
+      (!std::is_same_v<Float, long double> || !std::is_same_v<Int, uint64_t>) &&
 #endif
       std::numeric_limits<Float>::digits <= std::numeric_limits<Int>::digits;
 }
@@ -1092,10 +1175,8 @@ constexpr bool CanFitMantissa() {
 template <typename Float>
 struct Decomposed {
   using MantissaType =
-      absl::conditional_t<std::is_same<long double, Float>::value, uint128,
-                          uint64_t>;
-  static_assert(std::numeric_limits<Float>::digits <= sizeof(MantissaType) * 8,
-                "");
+      std::conditional_t<std::is_same_v<long double, Float>, uint128, uint64_t>;
+  static_assert(std::numeric_limits<Float>::digits <= sizeof(MantissaType) * 8);
   MantissaType mantissa;
   int exponent;
 };
@@ -1115,8 +1196,8 @@ Decomposed<Float> Decompose(Float v) {
 // In Fixed mode, we add a '.' at the end.
 // In Precision mode, we add a '.' after the first digit.
 template <FormatStyle mode, typename Int>
-int PrintIntegralDigits(Int digits, Buffer *out) {
-  int printed = 0;
+size_t PrintIntegralDigits(Int digits, Buffer* out) {
+  size_t printed = 0;
   if (digits) {
     for (; digits; digits /= 10) out->push_front(digits % 10 + '0');
     printed = out->size();
@@ -1134,171 +1215,833 @@ int PrintIntegralDigits(Int digits, Buffer *out) {
   return printed;
 }
 
-// Back out 'extra_digits' digits and round up if necessary.
-bool RemoveExtraPrecision(int extra_digits, bool has_leftover_value,
-                          Buffer *out, int *exp_out) {
-  if (extra_digits <= 0) return false;
-
-  // Back out the extra digits
-  out->end -= extra_digits;
-
-  bool needs_to_round_up = [&] {
-    // We look at the digit just past the end.
-    // There must be 'extra_digits' extra valid digits after end.
-    if (*out->end > '5') return true;
-    if (*out->end < '5') return false;
-    if (has_leftover_value || std::any_of(out->end + 1, out->end + extra_digits,
-                                          [](char c) { return c != '0'; }))
-      return true;
-
-    // Ends in ...50*, round to even.
-    return out->last_digit() % 2 == 1;
-  }();
-
-  if (needs_to_round_up) {
-    RoundUp<FormatStyle::Precision>(out, exp_out);
+std::optional<int> GetOneDigit(BinaryToDecimal& btd,
+                               absl::string_view& digits_view) {
+  if (digits_view.empty() && !btd.AdvanceDigits()) {
+    return std::nullopt;
   }
-  return true;
+  char d = digits_view.front();
+  digits_view.remove_prefix(1);
+  return d - '0';
 }
 
-// Print the value into the buffer.
-// This will not include the exponent, which will be returned in 'exp_out' for
-// Precision mode.
-template <typename Int, typename Float, FormatStyle mode>
-bool FloatToBufferImpl(Int int_mantissa, int exp, int precision, Buffer *out,
-                       int *exp_out) {
-  assert((CanFitMantissa<Float, Int>()));
+struct DigitRun {
+  std::optional<int> digit;
+  size_t nines;
+};
 
-  const int int_bits = std::numeric_limits<Int>::digits;
-
-  // In precision mode, we start printing one char to the right because it will
-  // also include the '.'
-  // In fixed mode we put the dot afterwards on the right.
-  out->begin = out->end =
-      out->data + 1 + kMaxFixedPrecision + (mode == FormatStyle::Precision);
-
-  if (exp >= 0) {
-    if (std::numeric_limits<Float>::digits + exp > int_bits) {
-      // The value will overflow the Int
-      return false;
+DigitRun GetDigits(BinaryToDecimal& btd, absl::string_view& digits_view) {
+  auto peek_digit = [&]() -> std::optional<int> {
+    if (digits_view.empty()) {
+      if (!btd.AdvanceDigits()) return std::nullopt;
+      digits_view = btd.CurrentDigits();
     }
-    int digits_printed = PrintIntegralDigits<mode>(int_mantissa << exp, out);
-    int digits_to_zero_pad = precision;
-    if (mode == FormatStyle::Precision) {
-      *exp_out = digits_printed - 1;
-      digits_to_zero_pad -= digits_printed - 1;
-      if (RemoveExtraPrecision(-digits_to_zero_pad, false, out, exp_out)) {
-        return true;
-      }
-    }
-    for (; digits_to_zero_pad-- > 0;) out->push_back('0');
-    return true;
-  }
-
-  exp = -exp;
-  // We need at least 4 empty bits for the next decimal digit.
-  // We will multiply by 10.
-  if (exp > int_bits - 4) return false;
-
-  const Int mask = (Int{1} << exp) - 1;
-
-  // Print the integral part first.
-  int digits_printed = PrintIntegralDigits<mode>(int_mantissa >> exp, out);
-  int_mantissa &= mask;
-
-  int fractional_count = precision;
-  if (mode == FormatStyle::Precision) {
-    if (digits_printed == 0) {
-      // Find the first non-zero digit, when in Precision mode.
-      *exp_out = 0;
-      if (int_mantissa) {
-        while (int_mantissa <= mask) {
-          int_mantissa *= 10;
-          --*exp_out;
-        }
-      }
-      out->push_front(static_cast<char>(int_mantissa >> exp) + '0');
-      out->push_back('.');
-      int_mantissa &= mask;
-    } else {
-      // We already have a digit, and a '.'
-      *exp_out = digits_printed - 1;
-      fractional_count -= *exp_out;
-      if (RemoveExtraPrecision(-fractional_count, int_mantissa != 0, out,
-                               exp_out)) {
-        // If we had enough digits, return right away.
-        // The code below will try to round again otherwise.
-        return true;
-      }
-    }
-  }
-
-  auto get_next_digit = [&] {
-    int_mantissa *= 10;
-    int digit = static_cast<int>(int_mantissa >> exp);
-    int_mantissa &= mask;
-    return digit;
+    return digits_view.front() - '0';
   };
 
-  // Print fractional_count more digits, if available.
-  for (; fractional_count > 0; --fractional_count) {
-    out->push_back(get_next_digit() + '0');
-  }
+  auto digit_before_nines = GetOneDigit(btd, digits_view);
+  if (!digit_before_nines.has_value()) return {std::nullopt, 0};
 
-  int next_digit = get_next_digit();
-  if (next_digit > 5 ||
-      (next_digit == 5 && (int_mantissa || out->last_digit() % 2 == 1))) {
-    RoundUp<mode>(out, exp_out);
+  auto next_digit = peek_digit();
+  size_t num_nines = 0;
+  while (next_digit == 9) {
+    // consume the 9
+    GetOneDigit(btd, digits_view);
+    ++num_nines;
+    next_digit = peek_digit();
   }
-
-  return true;
+  return digit_before_nines == 9 ? DigitRun{std::nullopt, num_nines + 1}
+                                 : DigitRun{digit_before_nines, num_nines};
 }
 
-template <FormatStyle mode, typename Float>
-bool FloatToBuffer(Decomposed<Float> decomposed, int precision, Buffer *out,
-                   int *exp) {
-  if (precision > kMaxFixedPrecision) return false;
-
-  // Try with uint64_t.
-  if (CanFitMantissa<Float, std::uint64_t>() &&
-      FloatToBufferImpl<std::uint64_t, Float, mode>(
-          static_cast<std::uint64_t>(decomposed.mantissa),
-          static_cast<std::uint64_t>(decomposed.exponent), precision, out, exp))
-    return true;
-
-#if defined(ABSL_HAVE_INTRINSIC_INT128)
-  // If that is not enough, try with __uint128_t.
-  return CanFitMantissa<Float, __uint128_t>() &&
-         FloatToBufferImpl<__uint128_t, Float, mode>(
-             static_cast<__uint128_t>(decomposed.mantissa),
-             static_cast<__uint128_t>(decomposed.exponent), precision, out,
-             exp);
-#endif
-  return false;
-}
-
-void WriteBufferToSink(char sign_char, absl::string_view str,
-                       const FormatConversionSpecImpl &conv,
-                       FormatSinkImpl *sink) {
-  int left_spaces = 0, zeros = 0, right_spaces = 0;
-  int missing_chars =
-      conv.width() >= 0 ? std::max(conv.width() - static_cast<int>(str.size()) -
-                                       static_cast<int>(sign_char != 0),
-                                   0)
-                        : 0;
-  if (conv.has_left_flag()) {
-    right_spaces = missing_chars;
-  } else if (conv.has_zero_flag()) {
-    zeros = missing_chars;
+template <typename Int>
+void FormatE(Int mantissa, int exp, bool uppercase, const FormatState& state) {
+  if (exp > 0) {
+    const int total_bits =
+        static_cast<int>(sizeof(Int) * 8) - LeadingZeros(mantissa) + exp;
+    if (total_bits > 128) {
+      FormatEPositiveExpSlow(mantissa, exp, uppercase, state);
+      return;
+    }
   } else {
-    left_spaces = missing_chars;
+    if (ABSL_PREDICT_FALSE(exp < -128)) {
+      FormatENegativeExpSlow(mantissa, exp, uppercase, state);
+      return;
+    }
+  }
+  FormatEFast(mantissa, exp, uppercase, state);
+}
+
+// Guaranteed to fit into 128 bits at this point
+template <typename Int>
+void FormatEFast(Int v, int exp, bool uppercase, const FormatState& state) {
+  if (!v) {
+    absl::string_view mantissa_str = state.ShouldPrintDot() ? "0." : "0";
+    FinalPrint(state, mantissa_str, 0, state.precision,
+               uppercase ? "E+00" : "e+00");
+    return;
+  }
+  constexpr int kInputBits = sizeof(Int) * 8;
+  constexpr int kMaxFractionalDigits = 128;
+  constexpr int kBufferSize = 2 +                    // '.' + rounding
+                              kMaxFixedPrecision +   // Integral
+                              kMaxFractionalDigits;  // Fractional
+  const int total_bits = kInputBits - LeadingZeros(v) + exp;
+  char buffer[kBufferSize];
+  char* integral_start = buffer + 2;
+  char* integral_end = buffer + 2 + kMaxFixedPrecision;
+  char* final_start;
+  char* final_end;
+  bool zero_integral = false;
+  int scientific_exp = 0;
+  size_t digits_printed = 0;
+  size_t trailing_zeros = 0;
+  bool has_more_non_zero = false;
+
+  auto check_integral_zeros =
+      [](char* const begin, char* const end,
+         const size_t precision, size_t digits_processed) -> bool {
+    // When considering rounding to even, we care about the digits after the
+    // round digit which means the total digits to move from the start is
+    // precision + 2 since the first digit we print before the decimal point
+    // is not a part of precision.
+    size_t digit_upper_bound = precision + 2;
+    if (digits_processed > digit_upper_bound) {
+      return std::any_of(begin + digit_upper_bound, end,
+                         [](char c) { return c != '0'; });
+    }
+    return false;
+  };
+
+  if (exp >= 0) {
+    integral_end = total_bits <= 64 ? numbers_internal::FastIntToBuffer(
+                               static_cast<uint64_t>(v) << exp, integral_start)
+                         : numbers_internal::FastIntToBuffer(
+                               static_cast<uint128>(v) << exp, integral_start);
+    *integral_end = '0';
+    final_start = integral_start;
+    // Integral is guaranteed to be non-zero at this point.
+    scientific_exp = static_cast<int>(integral_end - integral_start) - 1;
+    digits_printed = static_cast<size_t>(integral_end - integral_start);
+    final_end = integral_end;
+    has_more_non_zero = check_integral_zeros(integral_start, integral_end,
+                                             state.precision, digits_printed);
+  } else {
+    exp = -exp;
+    if (exp < kInputBits) {
+      integral_end =
+          numbers_internal::FastIntToBuffer(v >> exp, integral_start);
+    }
+    *integral_end = '0';
+    // We didn't move integral_start and it gets set to 0 in
+    zero_integral = exp >= kInputBits || v >> exp == 0;
+    if (!zero_integral) {
+      digits_printed = static_cast<size_t>(integral_end - integral_start);
+      has_more_non_zero = check_integral_zeros(integral_start, integral_end,
+                                               state.precision, digits_printed);
+      final_end = integral_end;
+    }
+    // Print fractional digits
+    char* fractional_start = integral_end;
+
+    size_t digits_to_print = (state.precision + 1) >= digits_printed
+                                 ? state.precision + 1 - digits_printed
+                                 : 0;
+    bool print_extra = digits_printed <= state.precision + 1;
+    auto [fractional_end, skipped_zeros, has_nonzero_rem] =
+        exp <= 64 ? PrintFractionalDigitsScientific(
+                        v, fractional_start, exp, digits_to_print + print_extra,
+                        zero_integral)
+                  : PrintFractionalDigitsScientific(
+                        static_cast<uint128>(v), fractional_start, exp,
+                        digits_to_print + print_extra, zero_integral);
+    final_end = fractional_end;
+    *fractional_end = '0';
+    has_more_non_zero |= has_nonzero_rem;
+    digits_printed += static_cast<size_t>(fractional_end - fractional_start);
+    if (zero_integral) {
+      scientific_exp = -1 * static_cast<int>(skipped_zeros + 1);
+    } else {
+      scientific_exp = static_cast<int>(integral_end - integral_start) - 1;
+    }
+    // Don't do any rounding here, we will do it ourselves.
+    final_start = zero_integral ? fractional_start : integral_start;
   }
 
-  sink->Append(left_spaces, ' ');
-  if (sign_char != '\0') sink->Append(1, sign_char);
-  sink->Append(zeros, '0');
-  sink->Append(str);
-  sink->Append(right_spaces, ' ');
+  // For rounding
+  if (digits_printed >= state.precision + 1) {
+    final_start[-1] = '0';
+    char* round_digit_ptr = final_start + 1 + state.precision;
+    if (*round_digit_ptr > '5') {
+      RoundUp(round_digit_ptr - 1);
+    } else if (*round_digit_ptr == '5') {
+      if (has_more_non_zero) {
+        RoundUp(round_digit_ptr - 1);
+      } else {
+        RoundToEven(round_digit_ptr - 1);
+      }
+    }
+    final_end = round_digit_ptr;
+    if (final_start[-1] == '1') {
+      --final_start;
+      ++scientific_exp;
+      --final_end;
+    }
+  } else {
+    // Need to pad with zeros.
+    trailing_zeros = state.precision - (digits_printed - 1);
+  }
+
+  if (state.precision > 0 || state.ShouldPrintDot()) {
+    final_start[-1] = *final_start;
+    *final_start = '.';
+    --final_start;
+  }
+
+  // We need to add 2 to the buffer size for the +/- sign and the e
+  constexpr size_t kExpBufferSize = numbers_internal::kFastToBufferSize + 2;
+  char exp_buffer[kExpBufferSize];
+  char* exp_ptr_start = exp_buffer;
+  char* exp_ptr = exp_ptr_start;
+  *exp_ptr++ = uppercase ? 'E' : 'e';
+  if (scientific_exp >= 0) {
+    *exp_ptr++ = '+';
+  } else {
+    *exp_ptr++ = '-';
+    scientific_exp = -scientific_exp;
+  }
+
+  if (scientific_exp < 10) {
+    *exp_ptr++ = '0';
+  }
+  exp_ptr = numbers_internal::FastIntToBuffer(scientific_exp, exp_ptr);
+  FinalPrint(state,
+             absl::string_view(final_start,
+                               static_cast<size_t>(final_end - final_start)),
+             0, trailing_zeros,
+             absl::string_view(exp_ptr_start,
+                               static_cast<size_t>(exp_ptr - exp_ptr_start)));
+}
+
+void FormatENegativeExpSlow(uint128 mantissa, int exp, bool uppercase,
+                            const FormatState& state,
+                            size_t digits_to_trim = 0) {
+  assert(exp < 0);
+
+  FractionalDigitGenerator::RunConversion(
+      mantissa, -exp,
+      [&](FractionalDigitGenerator digit_gen) {
+        int first_digit = 0;
+        size_t nines = 0;
+        int num_leading_zeros = 0;
+        while (digit_gen.HasMoreDigits()) {
+          auto digits = digit_gen.GetDigits();
+          if (digits.digit_before_nine != 0) {
+            first_digit = digits.digit_before_nine;
+            nines = digits.num_nines;
+            break;
+          } else if (digits.num_nines > 0) {
+            // This also means the first digit is 0
+            first_digit = 9;
+            nines = digits.num_nines - 1;
+            num_leading_zeros++;
+            break;
+          }
+          num_leading_zeros++;
+        }
+        size_t precision = state.precision;
+        if (precision > digits_to_trim) {
+          precision -= digits_to_trim;
+        } else {
+          precision = 0;
+        }
+        bool change_to_zeros = false;
+        if (nines >= precision || state.precision == 0) {
+          bool round_up = false;
+          if (nines == precision) {
+            round_up = digit_gen.IsGreaterThanHalf();
+          } else {
+            round_up = nines > 0 || digit_gen.IsGreaterThanHalf();
+          }
+          if (round_up) {
+            first_digit = (first_digit == 9 ? 1 : first_digit + 1);
+            num_leading_zeros -= (first_digit == 1);
+            change_to_zeros = true;
+          }
+        }
+        int scientific_exp = -(num_leading_zeros + 1);
+        assert(scientific_exp < 0);
+        char exp_buffer[numbers_internal::kFastToBufferSize];
+        char* exp_start = exp_buffer;
+        *exp_start++ = '-';
+        if (scientific_exp > -10) {
+          *exp_start++ = '0';
+        }
+        scientific_exp *= -1;
+        char* exp_end =
+            numbers_internal::FastIntToBuffer(scientific_exp, exp_start);
+        const size_t total_digits =
+            1  // First digit
+            +
+            ((precision > 0 || state.conv.has_alt_flag()) ? 1
+                                                          : 0)  // Decimal point
+            + precision  // Digits after decimal
+            + 1          // 'e' or 'E'
+            + static_cast<size_t>(exp_end - exp_buffer);  // Exponent digits
+
+        const auto padding = ExtraWidthToPadding(
+            total_digits + (state.sign_char != '\0' ? 1 : 0), state);
+        state.sink->Append(padding.left_spaces, ' ');
+
+        if (state.sign_char != '\0') {
+          state.sink->Append(1, state.sign_char);
+        }
+        state.sink->Append(padding.zeros, '0');
+
+        state.sink->Append(1, static_cast<char>(first_digit + '0'));
+        if (precision > 0 || state.conv.has_alt_flag()) {
+          state.sink->Append(1, '.');
+        }
+        size_t digits_to_go = precision;
+        size_t nines_to_print = std::min(nines, digits_to_go);
+        state.sink->Append(nines_to_print, change_to_zeros ? '0' : '9');
+        digits_to_go -= nines_to_print;
+        while (digits_to_go > 0 && digit_gen.HasMoreDigits()) {
+          auto digits = digit_gen.GetDigits();
+
+          if (digits.num_nines + 1 < digits_to_go) {
+            state.sink->Append(1, digits.digit_before_nine + '0');
+            state.sink->Append(digits.num_nines, '9');
+            digits_to_go -= digits.num_nines + 1;
+          } else {
+            bool round_up = false;
+            if (digits.num_nines + 1 > digits_to_go) {
+              round_up = true;
+            } else if (digit_gen.IsGreaterThanHalf()) {
+              round_up = true;
+            } else if (digit_gen.IsExactlyHalf()) {
+              round_up =
+                  digits.num_nines != 0 || digits.digit_before_nine % 2 == 1;
+            }
+            if (round_up) {
+              state.sink->Append(1, digits.digit_before_nine + '1');
+              --digits_to_go;
+            } else {
+              state.sink->Append(1, digits.digit_before_nine + '0');
+              state.sink->Append(digits_to_go - 1, '9');
+              digits_to_go = 0;
+            }
+            break;
+          }
+        }
+        state.sink->Append(digits_to_go, '0');
+        state.sink->Append(1, uppercase ? 'E' : 'e');
+        state.sink->Append(absl::string_view(
+            exp_buffer, static_cast<size_t>(exp_end - exp_buffer)));
+        state.sink->Append(padding.right_spaces, ' ');
+      });
+}
+
+void FormatEPositiveExpSlow(uint128 mantissa, int exp, bool uppercase,
+                            const FormatState& state,
+                            size_t digits_to_trim = 0) {
+  BinaryToDecimal::RunConversion(
+      mantissa, exp, [&](BinaryToDecimal btd) {
+        int scientific_exp = static_cast<int>(btd.TotalDigits() - 1);
+        absl::string_view digits_view = btd.CurrentDigits();
+
+        size_t digits_to_go = state.precision + 1;
+        auto [first_digit_opt, nines] = GetDigits(btd, digits_view);
+        if (!first_digit_opt.has_value() && nines == 0) {
+          return;
+        }
+
+        int first_digit = first_digit_opt.value_or(9);
+        if (!first_digit_opt) {
+          --nines;
+        }
+
+        // At this point we are guaranteed to have some sort of first digit
+        bool change_to_zeros = false;
+        if (nines + 1 >= digits_to_go) {
+          // Everything we need to print is in the first DigitRun
+          auto next_digit_opt = GetDigits(btd, digits_view).digit;
+          if (nines == state.precision) {
+            change_to_zeros = next_digit_opt.value_or(0) > 4;
+          } else {
+            change_to_zeros = true;
+          }
+          if (change_to_zeros) {
+            if (first_digit != 9) {
+              first_digit = first_digit + 1;
+            } else {
+              first_digit = 1;
+              ++scientific_exp;
+            }
+          }
+        }
+
+        char exp_buffer[numbers_internal::kFastToBufferSize];
+        char* exp_buffer_end =
+            numbers_internal::FastIntToBuffer(scientific_exp, exp_buffer);
+        const bool print_dot =
+            (state.precision > digits_to_trim) || state.conv.has_alt_flag();
+        const size_t exp_size =
+            static_cast<size_t>(exp_buffer_end - exp_buffer) + 2 +
+            (scientific_exp < 10 ? 1 : 0);
+        const size_t total_digits_out = 1 + (print_dot ? 1 : 0) +
+                                        (state.precision - digits_to_trim) +
+                                        exp_size;
+
+        const auto padding = ExtraWidthToPadding(
+            total_digits_out + (state.sign_char != '\0' ? 1 : 0), state);
+
+        state.sink->Append(padding.left_spaces, ' ');
+        if (state.sign_char != '\0') {
+          state.sink->Append(1, state.sign_char);
+        }
+        state.sink->Append(padding.zeros, '0');
+        state.sink->Append(1, static_cast<char>(first_digit + '0'));
+        --digits_to_go;
+        if (print_dot) {
+          state.sink->Append(1, '.');
+        }
+
+        size_t remaining_to_print = state.precision - digits_to_trim;
+        auto append_with_trim = [&](size_t count, char c) {
+          size_t to_append = std::min(count, remaining_to_print);
+          if (to_append > 0) {
+            state.sink->Append(to_append, c);
+            remaining_to_print -= to_append;
+          }
+        };
+
+        size_t nines_to_append = std::min(digits_to_go, nines);
+        append_with_trim(nines_to_append, change_to_zeros ? '0' : '9');
+        digits_to_go -= nines_to_append;
+
+        while (digits_to_go > 0) {
+          auto [digit_opt, curr_nines] = GetDigits(btd, digits_view);
+          if (!digit_opt.has_value()) break;
+          int digit = *digit_opt;
+          if (curr_nines + 1 < digits_to_go) {
+            append_with_trim(1, static_cast<char>(digit + '0'));
+            append_with_trim(curr_nines, '9');
+            digits_to_go -= curr_nines + 1;
+          } else {
+            bool need_round_up = false;
+            auto next_digit_opt = GetDigits(btd, digits_view).digit;
+            if (digits_to_go == 1) {
+              need_round_up = curr_nines > 0 || next_digit_opt > 4;
+            } else if (digits_to_go == curr_nines + 1) {
+              // Only round if next digit is > 4
+              need_round_up = next_digit_opt.value_or(0) > 4;
+            } else {
+              // we know we need to round since nine is after precision ends
+              need_round_up = true;
+            }
+            append_with_trim(1, static_cast<char>(digit + need_round_up + '0'));
+            append_with_trim(digits_to_go - 1, need_round_up ? '0' : '9');
+            digits_to_go = 0;
+          }
+        }
+
+        if (digits_to_go > 0) {
+          append_with_trim(digits_to_go, '0');
+        }
+
+        state.sink->Append(1, uppercase ? 'E' : 'e');
+        state.sink->Append(1, scientific_exp >= 0 ? '+' : '-');
+        if (scientific_exp < 10) {
+          state.sink->Append(1, '0');
+        }
+        state.sink->Append(absl::string_view(
+            exp_buffer, static_cast<size_t>(exp_buffer_end - exp_buffer)));
+        state.sink->Append(padding.right_spaces, ' ');
+      });
+}
+
+//
+template <typename Int>
+void FormatGFast(Int v, int exp, bool uppercase, const FormatState& state) {
+  if (!v) {
+    absl::string_view mantissa_str =
+        state.ShouldPrintDot() && state.conv.has_alt_flag() ? "0." : "0";
+    FinalPrint(state, mantissa_str, 0,
+               state.conv.has_alt_flag() * state.precision, "");
+    return;
+  }
+  constexpr int kInputBits = sizeof(Int) * 8;
+  constexpr int kMaxFractionalDigits = 128;
+  // We need enough headroom to the left of our starting pointer to support
+  // a potential prefix shift for values between 1e-1 and 1e-4.
+  // The prefix "0.000" is 5 chars, plus potential rounding carry (1 char).
+  constexpr int kHeadroom = 32;
+  constexpr int kBufferSize = kHeadroom +           // headroom + rounding + '.'
+                              kMaxFixedPrecision +  // Integral
+                              kMaxFractionalDigits;  // Fractional
+  const int total_bits = kInputBits - LeadingZeros(v) + exp;
+  char buffer[kBufferSize];
+  char* integral_start = buffer + kHeadroom;
+  char* integral_end = buffer + kHeadroom + kMaxFixedPrecision;
+  char* final_start;
+  char* final_end;
+  bool zero_integral = false;
+  int scientific_exp = 0;
+  size_t digits_printed = 0;
+  size_t trailing_zeros = 0;
+  bool has_more_non_zero = false;
+
+  auto check_integral_zeros = [](char* const begin, char* const end,
+                                 const size_t precision,
+                                 size_t digits_processed) -> bool {
+    // When considering rounding to even, we care about the digits after the
+    // round digit which means the total digits to move from the start is
+    // precision + 2 since the first digit we print before the decimal point
+    // is not a part of precision.
+    size_t digit_upper_bound = precision + 2;
+    if (digits_processed > digit_upper_bound) {
+      return std::any_of(begin + digit_upper_bound, end,
+                         [](char c) { return c != '0'; });
+    }
+    return false;
+  };
+
+  if (exp >= 0) {
+    integral_end = total_bits <= 64
+                       ? numbers_internal::FastIntToBuffer(
+                             static_cast<uint64_t>(v) << exp, integral_start)
+                       : numbers_internal::FastIntToBuffer(
+                             static_cast<uint128>(v) << exp, integral_start);
+    *integral_end = '0';
+    final_start = integral_start;
+    // Integral is guaranteed to be non-zero at this point.
+    scientific_exp = static_cast<int>(integral_end - integral_start) - 1;
+    digits_printed = static_cast<size_t>(integral_end - integral_start);
+    final_end = integral_end;
+    has_more_non_zero = check_integral_zeros(integral_start, integral_end,
+                                             state.precision, digits_printed);
+  } else {
+    exp = -exp;
+    if (exp < kInputBits) {
+      integral_end =
+          numbers_internal::FastIntToBuffer(v >> exp, integral_start);
+    }
+    *integral_end = '0';
+    // We didn't move integral_start and it gets set to 0 in
+    zero_integral = exp >= kInputBits || v >> exp == 0;
+    if (!zero_integral) {
+      digits_printed = static_cast<size_t>(integral_end - integral_start);
+      has_more_non_zero = check_integral_zeros(integral_start, integral_end,
+                                               state.precision, digits_printed);
+      final_end = integral_end;
+    }
+    // Print fractional digits
+    char* fractional_start = integral_end;
+
+    size_t digits_to_print = (state.precision + 1) >= digits_printed
+                                 ? state.precision + 1 - digits_printed
+                                 : 0;
+    bool print_extra = digits_printed <= state.precision + 1;
+    auto [fractional_end, skipped_zeros, has_nonzero_rem] =
+        exp <= 64 ? PrintFractionalDigitsScientific(
+                        v, fractional_start, exp, digits_to_print + print_extra,
+                        zero_integral)
+                  : PrintFractionalDigitsScientific(
+                        static_cast<uint128>(v), fractional_start, exp,
+                        digits_to_print + print_extra, zero_integral);
+    final_end = fractional_end;
+    *fractional_end = '0';
+    has_more_non_zero |= has_nonzero_rem;
+    digits_printed += static_cast<size_t>(fractional_end - fractional_start);
+    if (zero_integral) {
+      scientific_exp = -1 * static_cast<int>(skipped_zeros + 1);
+    } else {
+      scientific_exp = static_cast<int>(integral_end - integral_start) - 1;
+    }
+    // Don't do any rounding here, we will do it ourselves.
+    final_start = zero_integral ? fractional_start : integral_start;
+  }
+
+  // For rounding
+  if (digits_printed >= state.precision + 1) {
+    final_start[-1] = '0';
+    char* round_digit_ptr = final_start + 1 + state.precision;
+    if (*round_digit_ptr > '5') {
+      RoundUp(round_digit_ptr - 1);
+    } else if (*round_digit_ptr == '5') {
+      if (has_more_non_zero) {
+        RoundUp(round_digit_ptr - 1);
+      } else {
+        RoundToEven(round_digit_ptr - 1);
+      }
+    }
+    final_end = round_digit_ptr;
+    if (final_start[-1] == '1') {
+      --final_start;
+      ++scientific_exp;
+      --final_end;
+    }
+  } else {
+    // Need to pad with zeros.
+    trailing_zeros = state.precision - (digits_printed - 1);
+  }
+
+  if (state.precision > 0 || state.ShouldPrintDot()) {
+    final_start[-1] = *final_start;
+    *final_start = '.';
+    --final_start;
+  }
+  // We have scientific exp at this point
+  if ((scientific_exp < 0 ||
+       state.precision + 1 > static_cast<size_t>(scientific_exp)) &&
+      scientific_exp >= -4) {
+    if (scientific_exp < 0) {
+      // Have 1.23456, needs 0.00123456
+      // Move the first digit
+      final_start[1] = *final_start;
+      if (!state.ShouldPrintDot()) {
+        ++final_end;
+      }
+      // Add some zeros
+      for (; scientific_exp < -1; ++scientific_exp) {
+        *final_start = '0';
+        --final_start;
+      }
+      *final_start-- = '.';
+      *final_start = '0';
+    } else if (scientific_exp > 0) {
+      // Have 1.23456, needs 1234.56
+      // Move the '.' scientific_exp positions to the right.
+      std::rotate(final_start + 1, final_start + 2,
+                  final_start + scientific_exp + 2);
+    }
+    scientific_exp = 0;
+  }
+  auto const& conv = state.conv;
+  if (!conv.has_alt_flag()) {
+    trailing_zeros = 0;
+    while (final_end[-1] == '0') {
+      --final_end;
+    }
+    if (final_end[-1] == '.') --final_end;
+  }
+  if (scientific_exp) {
+    // We need to add 2 to the buffer size for the +/- sign and the e
+    constexpr size_t kExpBufferSize = numbers_internal::kFastToBufferSize + 2;
+    char exp_buffer[kExpBufferSize];
+    char* exp_ptr_start = exp_buffer;
+    char* exp_ptr = exp_ptr_start;
+    *exp_ptr++ = uppercase ? 'E' : 'e';
+    if (scientific_exp >= 0) {
+      *exp_ptr++ = '+';
+    } else {
+      *exp_ptr++ = '-';
+      scientific_exp = -scientific_exp;
+    }
+
+    if (scientific_exp < 10) {
+      *exp_ptr++ = '0';
+    }
+    exp_ptr = numbers_internal::FastIntToBuffer(scientific_exp, exp_ptr);
+    FinalPrint(state,
+               absl::string_view(
+                   final_start, static_cast<size_t>((final_end - final_start))),
+               0, trailing_zeros,
+               absl::string_view(exp_ptr_start,
+                                 static_cast<size_t>(exp_ptr - exp_ptr_start)));
+  } else {
+    FinalPrint(state,
+               absl::string_view(
+                   final_start, static_cast<size_t>((final_end - final_start))),
+               0, trailing_zeros, "");
+  }
+}
+
+template <typename Int>
+void FormatGNegativeExpSlow(Int mantissa, int exp, bool uppercase,
+                            const FormatState& state) {
+  // Most of the code here is to decide whether to use E-style or F-style
+  // formatting, with the actual formatting done in FormatENegativeExpSlow and
+  // FormatFNegativeExpSlow.
+  FractionalDigitGenerator::RunConversion(
+      mantissa, -exp, [&](FractionalDigitGenerator digit_gen) {
+        int first_digit = 0;
+        size_t nines = 0;
+        int num_leading_zeros = 0;
+        size_t num_trailing_zeros = 0;
+        while (digit_gen.HasMoreDigits()) {
+          auto digits = digit_gen.GetDigits();
+          if (digits.digit_before_nine != 0) {
+            first_digit = digits.digit_before_nine;
+            nines = digits.num_nines;
+            break;
+          } else if (digits.num_nines > 0) {
+            // This also means the first digit is 0
+            first_digit = 9;
+            nines = digits.num_nines - 1;
+            num_leading_zeros++;
+            break;
+          }
+          num_leading_zeros++;
+        }
+        if (nines >= state.precision || state.precision == 0) {
+          bool round_up = false;
+          if (nines == state.precision) {
+            round_up = digit_gen.IsGreaterThanHalf();
+          } else {
+            round_up = nines > 0 || digit_gen.IsGreaterThanHalf();
+          }
+          if (round_up) {
+            first_digit = (first_digit == 9 ? 1 : first_digit + 1);
+            num_leading_zeros -= (first_digit == 1);
+            num_trailing_zeros = state.precision;
+          }
+        }
+        int scientific_exp = -(num_leading_zeros + 1);
+        assert(scientific_exp < 0);
+        size_t digits_to_go = state.precision + 1;
+        if (state.conv.has_alt_flag()) {
+          num_trailing_zeros = 0;
+        }
+        if (!state.conv.has_alt_flag() && !num_trailing_zeros) {
+          num_trailing_zeros = (first_digit == 0);
+          digits_to_go -= std::min(digits_to_go, nines + 1);
+          while (digits_to_go > 0 && digit_gen.HasMoreDigits()) {
+            auto digits = digit_gen.GetDigits();
+            if (digits.num_nines + 1 < digits_to_go) {
+              if (digits.digit_before_nine == 0 && digits.num_nines == 0) {
+                ++num_trailing_zeros;
+              } else {
+                num_trailing_zeros = 0;
+              }
+              digits_to_go -= digits.num_nines + 1;
+            } else {
+              bool round_up = false;
+              if (digits.num_nines + 1 > digits_to_go) {
+                round_up = true;
+              } else if (digit_gen.IsGreaterThanHalf()) {
+                round_up = true;
+              } else if (digit_gen.IsExactlyHalf()) {
+                round_up =
+                    digits.num_nines != 0 || digits.digit_before_nine % 2 == 1;
+              }
+
+              if (digits_to_go == 1) {
+                if (digits.digit_before_nine + (round_up ? 1 : 0) == 0) {
+                  ++num_trailing_zeros;
+                } else {
+                  num_trailing_zeros = 0;
+                }
+              } else {
+                num_trailing_zeros = round_up ? digits_to_go - 1 : 0;
+              }
+              digits_to_go = 0;
+            }
+          }
+        }
+        if (!num_trailing_zeros) {
+          num_trailing_zeros = !state.conv.has_alt_flag() * digits_to_go;
+        }
+        if (scientific_exp <= -4) {
+          FormatENegativeExpSlow(static_cast<uint128>(mantissa), exp, uppercase,
+                                 state, num_trailing_zeros);
+        } else {
+          FormatState f_state = state;
+          f_state.precision = static_cast<size_t>(
+              static_cast<int>(state.precision) - scientific_exp);
+          FormatFNegativeExpSlow(static_cast<uint128>(mantissa), -exp, f_state,
+                                 num_trailing_zeros);
+        }
+      });
+}
+template <typename Int>
+void FormatGPositiveExpSlow(Int mantissa, int exp, bool uppercase,
+                            const FormatState& state) {
+  BinaryToDecimal::RunConversion(mantissa, exp, [&](BinaryToDecimal btd) {
+    int scientific_exp = static_cast<int>(btd.TotalDigits()) - 1;
+    absl::string_view digits = btd.CurrentDigits();
+    size_t digits_to_go = state.precision + 1;
+    auto [first_digit_opt, nines] = GetDigits(btd, digits);
+    int first_digit = first_digit_opt.value_or(9);
+    if (!first_digit_opt) {
+      --nines;
+    }
+    // At this point we are guaranteed to have some sort of first digit
+    bool change_to_zeros = false;
+    size_t num_trailing_zeros = 0;
+    if (nines + 1 >= digits_to_go) {
+      // Everything we need to print is in the first DigitRun
+      auto next_digit_opt = GetDigits(btd, digits).digit;
+      if (nines == state.precision) {
+        change_to_zeros = next_digit_opt.value_or(0) > 4;
+      } else {
+        change_to_zeros = true;
+      }
+      if (change_to_zeros) {
+        if (first_digit != 9) {
+          first_digit = first_digit + 1;
+        } else {
+          first_digit = 1;
+          ++scientific_exp;
+        }
+        num_trailing_zeros = state.precision;
+      }
+    }
+    if (state.conv.has_alt_flag()) {
+      num_trailing_zeros = 0;
+    }
+    // At this point the number of trailing zeros is not covered by the first
+    // DigitRun
+    if (!state.conv.has_alt_flag() && !num_trailing_zeros) {
+      num_trailing_zeros = first_digit == 0;
+      digits_to_go -= std::min(digits_to_go, nines + 1);
+      while (digits_to_go > 0) {
+        auto [digit_opt, curr_nines] = GetDigits(btd, digits);
+        if (!digit_opt.has_value()) {
+          break;
+        }
+        if (curr_nines + 1 < digits_to_go) {
+          int digit = *digit_opt;
+          // If the previous one was a 0 we are too
+          if (digit == 0 && curr_nines == 0) {
+            ++num_trailing_zeros;
+            --digits_to_go;
+          } else {
+            num_trailing_zeros = 0;
+            --digits_to_go;
+            digits_to_go -= std::min(digits_to_go, curr_nines);
+          }
+        } else {
+          auto next_digit_opt = GetDigits(btd, digits).digit;
+          if (digits_to_go == 1) {
+            if (*digit_opt == 0) {
+              if (curr_nines || next_digit_opt > 4) {
+                num_trailing_zeros = 0;
+              } else {
+                ++num_trailing_zeros;
+              }
+            } else {
+              num_trailing_zeros = 0;
+            }
+          } else if (digits_to_go == curr_nines + 1) {
+            num_trailing_zeros = next_digit_opt > 4 ? digits_to_go - 1 : 0;
+          } else {
+            num_trailing_zeros = digits_to_go - 1;
+          }
+          digits_to_go = 0;
+        }
+      }
+    }
+    assert(scientific_exp >= 0);
+    // By this point the exponent is accurate
+    if (static_cast<size_t>(scientific_exp) > state.precision) {
+      FormatEPositiveExpSlow(mantissa, exp, uppercase, state,
+                             num_trailing_zeros);
+    } else {
+      FormatFPositiveExpSlow(mantissa, exp, state, !state.conv.has_alt_flag());
+    }
+  });
 }
 
 template <typename Float>
@@ -1321,13 +2064,10 @@ bool FloatToSink(const Float v, const FormatConversionSpecImpl &conv,
     return true;
   }
 
-  int precision = conv.precision() < 0 ? 6 : conv.precision();
-
-  int exp = 0;
+  size_t precision =
+      conv.precision() < 0 ? 6 : static_cast<size_t>(conv.precision());
 
   auto decomposed = Decompose(abs_v);
-
-  Buffer buffer;
 
   FormatConversionChar c = conv.conversion_char();
 
@@ -1338,46 +2078,33 @@ bool FloatToSink(const Float v, const FormatConversionSpecImpl &conv,
     return true;
   } else if (c == FormatConversionCharInternal::e ||
              c == FormatConversionCharInternal::E) {
-    if (!FloatToBuffer<FormatStyle::Precision>(decomposed, precision, &buffer,
-                                               &exp)) {
-      return FallbackToSnprintf(v, conv, sink);
-    }
-    if (!conv.has_alt_flag() && buffer.back() == '.') buffer.pop_back();
-    PrintExponent(
-        exp, FormatConversionCharIsUpper(conv.conversion_char()) ? 'E' : 'e',
-        &buffer);
+    FormatE(decomposed.mantissa, decomposed.exponent,
+            FormatConversionCharIsUpper(conv.conversion_char()),
+            {sign_char, precision, conv, sink});
+    return true;
   } else if (c == FormatConversionCharInternal::g ||
              c == FormatConversionCharInternal::G) {
-    precision = std::max(0, precision - 1);
-    if (!FloatToBuffer<FormatStyle::Precision>(decomposed, precision, &buffer,
-                                               &exp)) {
-      return FallbackToSnprintf(v, conv, sink);
+    precision = std::max(precision, size_t{1}) - 1;
+    constexpr int input_bits = sizeof(decomposed.mantissa) * 8;
+    const int total_bits =
+        input_bits - LeadingZeros(decomposed.mantissa) + decomposed.exponent;
+    if (decomposed.exponent >= 0 && total_bits > 128) {
+      FormatGPositiveExpSlow(
+          decomposed.mantissa, decomposed.exponent,
+          FormatConversionCharIsUpper(conv.conversion_char()),
+          {sign_char, precision, conv, sink});
+      return true;
+    } else if (decomposed.exponent < -128) {
+      FormatGNegativeExpSlow(
+          decomposed.mantissa, decomposed.exponent,
+          FormatConversionCharIsUpper(conv.conversion_char()),
+          {sign_char, precision, conv, sink});
+      return true;
     }
-    if (precision + 1 > exp && exp >= -4) {
-      if (exp < 0) {
-        // Have 1.23456, needs 0.00123456
-        // Move the first digit
-        buffer.begin[1] = *buffer.begin;
-        // Add some zeros
-        for (; exp < -1; ++exp) *buffer.begin-- = '0';
-        *buffer.begin-- = '.';
-        *buffer.begin = '0';
-      } else if (exp > 0) {
-        // Have 1.23456, needs 1234.56
-        // Move the '.' exp positions to the right.
-        std::rotate(buffer.begin + 1, buffer.begin + 2, buffer.begin + exp + 2);
-      }
-      exp = 0;
-    }
-    if (!conv.has_alt_flag()) {
-      while (buffer.back() == '0') buffer.pop_back();
-      if (buffer.back() == '.') buffer.pop_back();
-    }
-    if (exp) {
-      PrintExponent(
-          exp, FormatConversionCharIsUpper(conv.conversion_char()) ? 'E' : 'e',
-          &buffer);
-    }
+    FormatGFast(decomposed.mantissa, decomposed.exponent,
+                FormatConversionCharIsUpper(conv.conversion_char()),
+                {sign_char, precision, conv, sink});
+    return true;
   } else if (c == FormatConversionCharInternal::a ||
              c == FormatConversionCharInternal::A) {
     bool uppercase = (c == FormatConversionCharInternal::A);
@@ -1387,12 +2114,6 @@ bool FloatToSink(const Float v, const FormatConversionSpecImpl &conv,
   } else {
     return false;
   }
-
-  WriteBufferToSink(sign_char,
-                    absl::string_view(buffer.begin, buffer.end - buffer.begin),
-                    conv, sink);
-
-  return true;
 }
 
 }  // namespace

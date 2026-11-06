@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,11 +18,13 @@
 #include "chrome/browser/resource_coordinator/tab_memory_metrics_reporter.h"
 #include "chrome/browser/resource_coordinator/utils.h"
 #include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/page.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "services/resource_coordinator/public/cpp/memory_instrumentation/memory_instrumentation.h"
 
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/resource_coordinator/tab_lifecycle_unit_external.h"
 #include "chrome/browser/resource_coordinator/tab_manager.h"
 #endif
 
@@ -30,11 +32,13 @@ namespace resource_coordinator {
 
 ResourceCoordinatorTabHelper::ResourceCoordinatorTabHelper(
     content::WebContents* web_contents)
-    : content::WebContentsObserver(web_contents) {
+    : content::WebContentsObserver(web_contents),
+      content::WebContentsUserData<ResourceCoordinatorTabHelper>(
+          *web_contents) {
   TabLoadTracker::Get()->StartTracking(web_contents);
   if (memory_instrumentation::MemoryInstrumentation::GetInstance()) {
     auto* rc_parts = g_browser_process->resource_coordinator_parts();
-    DCHECK(rc_parts);
+    CHECK(rc_parts, base::NotFatalUntil::M163);
     rc_parts->tab_memory_metrics_reporter()->StartReporting(
         TabLoadTracker::Get());
   }
@@ -51,41 +55,49 @@ bool ResourceCoordinatorTabHelper::IsLoaded(content::WebContents* contents) {
   return true;
 }
 
-void ResourceCoordinatorTabHelper::DidReceiveResponse() {
-  TabLoadTracker::Get()->DidReceiveResponse(web_contents());
+bool ResourceCoordinatorTabHelper::IsFrozen(content::WebContents* contents) {
+#if !BUILDFLAG(IS_ANDROID)
+  if (resource_coordinator::ResourceCoordinatorTabHelper::FromWebContents(
+          contents)) {
+    auto* tab_lifecycle_unit =
+        resource_coordinator::TabLifecycleUnitExternal::FromWebContents(
+            contents);
+    return tab_lifecycle_unit && tab_lifecycle_unit->GetTabState() ==
+                                     ::mojom::LifecycleUnitState::FROZEN;
+  }
+#else
+  // Android's Tab.isFrozen() state has no WebContents, so it is represented by
+  // the not-loaded histogram variant rather than the page-frozen one.
+#endif
+  return false;
+}
+
+void ResourceCoordinatorTabHelper::PrimaryPageChanged(content::Page& page) {
+  ukm_source_id_ =
+      ukm::ConvertToSourceId(page.GetMainDocument().GetPageUkmSourceId(),
+                             ukm::SourceIdType::NAVIGATION_ID);
+  TabLoadTracker::Get()->PrimaryPageChanged(web_contents());
 }
 
 void ResourceCoordinatorTabHelper::DidStopLoading() {
   TabLoadTracker::Get()->DidStopLoading(web_contents());
 }
 
-void ResourceCoordinatorTabHelper::RenderProcessGone(
+void ResourceCoordinatorTabHelper::PrimaryMainFrameRenderProcessGone(
     base::TerminationStatus status) {
   // TODO(siggi): Looks like this can be acquired in a more timely manner from
   //    the RenderProcessHostObserver.
   TabLoadTracker::Get()->RenderProcessGone(web_contents(), status);
 }
 
+void ResourceCoordinatorTabHelper::WasDiscarded() {
+  TabLoadTracker::Get()->WasDiscarded(web_contents());
+}
+
 void ResourceCoordinatorTabHelper::WebContentsDestroyed() {
   TabLoadTracker::Get()->StopTracking(web_contents());
 }
 
-void ResourceCoordinatorTabHelper::DidFinishNavigation(
-    content::NavigationHandle* navigation_handle) {
-  if (!navigation_handle->HasCommitted() ||
-      navigation_handle->IsSameDocument()) {
-    return;
-  }
-
-  // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
-  // frames. This caller was converted automatically to the primary main frame
-  // to preserve its semantics. Follow up to confirm correctness.
-  if (navigation_handle->IsInPrimaryMainFrame()) {
-    ukm_source_id_ = ukm::ConvertToSourceId(
-        navigation_handle->GetNavigationId(), ukm::SourceIdType::NAVIGATION_ID);
-  }
-}
-
-WEB_CONTENTS_USER_DATA_KEY_IMPL(ResourceCoordinatorTabHelper)
+WEB_CONTENTS_USER_DATA_KEY_IMPL(ResourceCoordinatorTabHelper);
 
 }  // namespace resource_coordinator

@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,9 +13,9 @@
 #include <vector>
 
 #include "base/files/file_path.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "components/drive/drive.pb.h"
+#include "components/drive/drive_export.h"
 #include "components/drive/file_errors.h"
 
 namespace base {
@@ -36,16 +36,20 @@ namespace internal {
 
 // Storage for ResourceMetadata which is responsible to manage resource
 // entries and child-parent relationships between entries.
-class ResourceMetadataStorage {
+class COMPONENTS_DRIVE_EXPORT ResourceMetadataStorage {
  public:
   // This should be incremented when incompatibility change is made to DB
   // format.
   static constexpr int kDBVersion = 19;
 
   // Object to iterate over entries stored in this storage.
-  class Iterator {
+  class COMPONENTS_DRIVE_EXPORT Iterator {
    public:
     explicit Iterator(std::unique_ptr<leveldb::Iterator> it);
+
+    Iterator(const Iterator&) = delete;
+    Iterator& operator=(const Iterator&) = delete;
+
     ~Iterator();
 
     // Returns true if this iterator cannot advance any more and does not point
@@ -67,12 +71,10 @@ class ResourceMetadataStorage {
    private:
     ResourceEntry entry_;
     std::unique_ptr<leveldb::Iterator> it_;
-
-    DISALLOW_COPY_AND_ASSIGN(Iterator);
   };
 
   // Cache information recovered from trashed DB.
-  struct RecoveredCacheInfo {
+  struct COMPONENTS_DRIVE_EXPORT RecoveredCacheInfo {
     RecoveredCacheInfo();
     ~RecoveredCacheInfo();
 
@@ -87,6 +89,9 @@ class ResourceMetadataStorage {
 
   ResourceMetadataStorage(const base::FilePath& directory_path,
                           base::SequencedTaskRunner* blocking_task_runner);
+
+  ResourceMetadataStorage(const ResourceMetadataStorage&) = delete;
+  ResourceMetadataStorage& operator=(const ResourceMetadataStorage&) = delete;
 
   const base::FilePath& directory_path() const { return directory_path_; }
 
@@ -170,8 +175,6 @@ class ResourceMetadataStorage {
   std::unique_ptr<leveldb::DB> resource_map_;
 
   scoped_refptr<base::SequencedTaskRunner> blocking_task_runner_;
-
-  DISALLOW_COPY_AND_ASSIGN(ResourceMetadataStorage);
 };
 
 }  // namespace internal

@@ -1,19 +1,24 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef MOJO_PUBLIC_CPP_BASE_BIG_BUFFER_H_
 #define MOJO_PUBLIC_CPP_BASE_BIG_BUFFER_H_
 
-#include <cstdint>
+#include <stdint.h>
+
+#include <optional>
+#include <utility>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/component_export.h"
+#include "base/containers/checked_iterators.h"
+#include "base/containers/heap_array.h"
 #include "base/containers/span.h"
-#include "base/macros.h"
+#include "base/memory/raw_span.h"
 #include "mojo/public/cpp/bindings/struct_traits.h"
 #include "mojo/public/cpp/system/buffer.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace mojo_base {
 
@@ -29,6 +34,11 @@ class COMPONENT_EXPORT(MOJO_BASE) BigBufferSharedMemoryRegion {
   BigBufferSharedMemoryRegion(mojo::ScopedSharedBufferHandle buffer_handle,
                               size_t size);
   BigBufferSharedMemoryRegion(BigBufferSharedMemoryRegion&& other);
+
+  BigBufferSharedMemoryRegion(const BigBufferSharedMemoryRegion&) = delete;
+  BigBufferSharedMemoryRegion& operator=(const BigBufferSharedMemoryRegion&) =
+      delete;
+
   ~BigBufferSharedMemoryRegion();
 
   BigBufferSharedMemoryRegion& operator=(BigBufferSharedMemoryRegion&& other);
@@ -45,8 +55,6 @@ class COMPONENT_EXPORT(MOJO_BASE) BigBufferSharedMemoryRegion {
   size_t size_;
   mojo::ScopedSharedBufferHandle buffer_handle_;
   mojo::ScopedSharedBufferMapping buffer_mapping_;
-
-  DISALLOW_COPY_AND_ASSIGN(BigBufferSharedMemoryRegion);
 };
 
 }  // namespace internal
@@ -62,27 +70,36 @@ class COMPONENT_EXPORT(MOJO_BASE) BigBufferSharedMemoryRegion {
 // exposes simple |data()| and |size()| accessors akin to what common container
 // types provide. Users do not need to be concerned with the actual backing
 // storage used to implement this interface.
+//
+// SECURITY NOTE: When shmem is backing the message, it may be writable in the
+// sending process while being read in the receiving process. If a BigBuffer is
+// received from an untrustworthy process, you should make a copy of the data
+// before processing it to avoid time-of-check time-of-use (TOCTOU) bugs.
+// The |size()| of the data cannot be manipulated.
 class COMPONENT_EXPORT(MOJO_BASE) BigBuffer {
  public:
+  using value_type = uint8_t;
+  using iterator = base::CheckedContiguousIterator<uint8_t>;
+  using const_iterator = base::CheckedContiguousIterator<const uint8_t>;
+
   static constexpr size_t kMaxInlineBytes = 64 * 1024;
 
   enum class StorageType {
+    // Stored in private memory.
     kBytes,
+    // Stored in a shared memory region.
     kSharedMemory,
+    // Contains no data and cannot be [de]serialized.
     kInvalidBuffer,
   };
 
   // Defaults to empty kBytes storage.
   BigBuffer();
-  BigBuffer(BigBuffer&& other);
 
   // Constructs a BigBuffer over an existing span of bytes. Intentionally
   // implicit for convenience. Always copies the contents of |data| into some
   // internal storage.
   BigBuffer(base::span<const uint8_t> data);
-
-  // Helper for implicit conversion from byte vectors.
-  BigBuffer(const std::vector<uint8_t>& data);
 
   // Constructs a BigBuffer from an existing shared memory region. Not intended
   // for general-purpose use.
@@ -93,13 +110,25 @@ class COMPONENT_EXPORT(MOJO_BASE) BigBuffer {
   // before transfer to avoid leaking information to less privileged processes.
   explicit BigBuffer(size_t size);
 
-  ~BigBuffer();
-
+  BigBuffer(BigBuffer&& other);
   BigBuffer& operator=(BigBuffer&& other);
 
+  ~BigBuffer();
+
+  // Returns a new BigBuffer containing a copy of this BigBuffer's contents.
+  // Note that the new BigBuffer may not necessarily have the same backing
+  // storage type as the original one, only the same contents.
+  BigBuffer Clone() const;
+
+  // Forces the buffer to be backed by private memory, copying the contents out
+  // of shared memory if necessary. Useful for TOCTOU prevention; see above.
+  // Also useful for releasing FDs to avoid exhaustion on POSIX.
+  void MakePrivateBytes();
+
   // Returns a pointer to the data stored by this BigBuffer, regardless of
-  // backing storage type.
-  uint8_t* data();
+  // backing storage type. Prefer to use `base::span(big_buffer)` instead, or
+  // the implicit conversion to `base::span`.
+  uint8_t* data() { return const_cast<uint8_t*>(std::as_const(*this).data()); }
   const uint8_t* data() const;
 
   // Returns the size of the data stored by this BigBuffer, regardless of
@@ -108,25 +137,60 @@ class COMPONENT_EXPORT(MOJO_BASE) BigBuffer {
 
   StorageType storage_type() const { return storage_type_; }
 
+  // WARNING: This method does not work for buffers backed by shared memory. To
+  // get a span independent of the storage type, write `base::span(big_buffer)`,
+  // or rely on the implicit conversion.
   base::span<const uint8_t> byte_span() const {
-    DCHECK_EQ(storage_type_, StorageType::kBytes);
-    return base::make_span(bytes_.get(), bytes_size_);
+    CHECK_EQ(storage_type_, StorageType::kBytes);
+    return bytes_.as_span();
   }
 
   internal::BigBufferSharedMemoryRegion& shared_memory() {
-    DCHECK_EQ(storage_type_, StorageType::kSharedMemory);
+    CHECK_EQ(storage_type_, StorageType::kSharedMemory);
     return shared_memory_.value();
   }
+
+  iterator begin() {
+    uint8_t* const ptr = data();
+    // SAFETY: If this is an invalid buffer, `ptr` is null and `size()` is zero,
+    // which results in a well-defined (null) result. Otherwise, the underlying
+    // storage (`bytes_` or `shared_memory_`) guarantees that `ptr` points to at
+    // least `size()` bytes.
+    return UNSAFE_BUFFERS(iterator(ptr, ptr + size()));
+  }
+
+  const_iterator begin() const {
+    const uint8_t* const ptr = data();
+    // SAFETY: As in the non-const version above.
+    return UNSAFE_BUFFERS(const_iterator(ptr, ptr + size()));
+  }
+
+  const_iterator cbegin() const { return begin(); }
+
+  iterator end() {
+    uint8_t* const ptr = data();
+    const size_t len = size();
+    // SAFETY: As in `begin()` above.
+    return UNSAFE_BUFFERS(iterator(ptr, ptr + len, ptr + len));
+  }
+
+  const_iterator end() const {
+    const uint8_t* const ptr = data();
+    const size_t len = size();
+    // SAFETY: As in the non-const version above.
+    return UNSAFE_BUFFERS(const_iterator(ptr, ptr + len, ptr + len));
+  }
+
+  const_iterator cend() const { return end(); }
+
+  void WriteIntoTrace(perfetto::TracedValue context) const;
 
  private:
   friend class BigBufferView;
 
-  StorageType storage_type_;
-  std::unique_ptr<uint8_t[]> bytes_;
-  size_t bytes_size_;
-  absl::optional<internal::BigBufferSharedMemoryRegion> shared_memory_;
-
-  DISALLOW_COPY_AND_ASSIGN(BigBuffer);
+  StorageType storage_type_ = StorageType::kBytes;
+  base::HeapArray<uint8_t> bytes_;
+  std::optional<internal::BigBufferSharedMemoryRegion> shared_memory_;
 };
 
 // Similar to BigBuffer, but doesn't *necessarily* own the buffer storage.
@@ -143,6 +207,10 @@ class COMPONENT_EXPORT(MOJO_BASE) BigBufferView {
   // will retain an unsafe reference to |bytes| and must therefore not outlive
   // |bytes|.
   explicit BigBufferView(base::span<const uint8_t> bytes);
+
+  BigBufferView(const BigBufferView&) = delete;
+  BigBufferView& operator=(const BigBufferView&) = delete;
+
   ~BigBufferView();
 
   BigBufferView& operator=(BigBufferView&& other);
@@ -159,10 +227,12 @@ class COMPONENT_EXPORT(MOJO_BASE) BigBufferView {
   void SetSharedMemory(internal::BigBufferSharedMemoryRegion shared_memory);
 
   // Converts to a BigBuffer which owns the viewed data. May have to copy data.
-  static BigBuffer ToBigBuffer(BigBufferView view) WARN_UNUSED_RESULT;
+  [[nodiscard]] static BigBuffer ToBigBuffer(BigBufferView view);
 
   BigBuffer::StorageType storage_type() const { return storage_type_; }
 
+  // WARNING: This method does not work for buffers backed by shared memory. To
+  // get a span independent of the storage type, use `data()`.
   base::span<const uint8_t> bytes() const {
     DCHECK_EQ(storage_type_, BigBuffer::StorageType::kBytes);
     return bytes_;
@@ -177,10 +247,8 @@ class COMPONENT_EXPORT(MOJO_BASE) BigBufferView {
 
  private:
   BigBuffer::StorageType storage_type_ = BigBuffer::StorageType::kBytes;
-  base::span<const uint8_t> bytes_;
-  absl::optional<internal::BigBufferSharedMemoryRegion> shared_memory_;
-
-  DISALLOW_COPY_AND_ASSIGN(BigBufferView);
+  base::raw_span<const uint8_t> bytes_;
+  std::optional<internal::BigBufferSharedMemoryRegion> shared_memory_;
 };
 
 }  // namespace mojo_base

@@ -1,17 +1,19 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_ANIMATION_IMAGE_LIST_PROPERTY_FUNCTIONS_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_ANIMATION_IMAGE_LIST_PROPERTY_FUNCTIONS_H_
 
+#include "base/notreached.h"
 #include "third_party/blink/renderer/core/css/css_property_names.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
 
 namespace blink {
 
-using StyleImageList = HeapVector<Member<StyleImage>, 1>;
+using StyleImageList = GCedHeapVector<Member<StyleImage>, 1>;
 
 class ImageListPropertyFunctions {
  public:
@@ -27,35 +29,37 @@ class ImageListPropertyFunctions {
       case CSSPropertyID::kBackgroundImage:
         fill_layer = &style.BackgroundLayers();
         break;
-      case CSSPropertyID::kWebkitMaskImage:
+      case CSSPropertyID::kMaskImage:
         fill_layer = &style.MaskLayers();
         break;
       default:
         NOTREACHED();
-        return;
     }
 
     result->clear();
-    while (fill_layer) {
+    // Interpolation is defined on computed values, so this walks the layers the
+    // computed value reports - see FillLayer::NextForComputedValue().
+    while (fill_layer &&
+           fill_layer->IsPropertySet(FillLayer::Property::kImage)) {
       result->push_back(fill_layer->GetImage());
-      fill_layer = fill_layer->Next();
+      fill_layer =
+          fill_layer->NextForComputedValue(FillLayer::Property::kImage);
     }
   }
 
   static void SetImageList(const CSSProperty& property,
-                           ComputedStyle& style,
+                           ComputedStyleBuilder& builder,
                            const StyleImageList* image_list) {
     FillLayer* fill_layer = nullptr;
     switch (property.PropertyID()) {
       case CSSPropertyID::kBackgroundImage:
-        fill_layer = &style.AccessBackgroundLayers();
+        fill_layer = &builder.AccessBackgroundLayers();
         break;
-      case CSSPropertyID::kWebkitMaskImage:
-        fill_layer = &style.AccessMaskLayers();
+      case CSSPropertyID::kMaskImage:
+        fill_layer = &builder.AccessMaskLayers();
         break;
       default:
         NOTREACHED();
-        return;
     }
 
     FillLayer* prev = nullptr;

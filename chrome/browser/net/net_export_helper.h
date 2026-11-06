@@ -1,17 +1,14 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_NET_NET_EXPORT_HELPER_H_
 #define CHROME_BROWSER_NET_NET_EXPORT_HELPER_H_
 
-#include <memory>
+#include "base/files/file_path.h"
+#include "base/values.h"
+#include "build/build_config.h"
 
-namespace base {
-class Value;
-class DictionaryValue;
-class ListValue;
-}
 class Profile;
 
 namespace chrome_browser_net {
@@ -21,12 +18,14 @@ namespace chrome_browser_net {
 // thread. GetSessionNetworkStats() may return null if the info does not exist;
 // others will always return a Value (possibly empty).
 
-std::unique_ptr<base::DictionaryValue> GetPrerenderInfo(Profile* profile);
-std::unique_ptr<base::ListValue> GetExtensionInfo(Profile* profile);
-#if defined(OS_WIN)
-std::unique_ptr<base::DictionaryValue> GetWindowsServiceProviders();
+base::DictValue GetPrerenderInfo(Profile* profile);
+base::ListValue GetExtensionInfo(Profile* profile);
+#if BUILDFLAG(IS_WIN)
+base::DictValue GetWindowsServiceProviders();
 #endif
-
+#if BUILDFLAG(IS_ANDROID)
+void PublishNetLogToDownloads(const base::FilePath& file_path);
+#endif
 }  // namespace chrome_browser_net
 
 #endif  // CHROME_BROWSER_NET_NET_EXPORT_HELPER_H_

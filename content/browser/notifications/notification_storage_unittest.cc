@@ -1,13 +1,14 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/notifications/notification_storage.h"
 
-#include "base/bind.h"
-#include "base/guid.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
+#include "base/uuid.h"
 #include "content/browser/service_worker/embedded_worker_test_helper.h"
+#include "content/browser/service_worker/service_worker_context_core.h"
 #include "content/browser/service_worker/service_worker_registration.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_browser_context.h"
@@ -65,17 +66,21 @@ class NotificationStorageTest : public ::testing::Test {
   // ServiceWorkerRegistration will be kept alive for the test's lifetime.
   int64_t RegisterServiceWorker() {
     GURL script_url = url_;
-    blink::StorageKey key(origin_);
+    const blink::StorageKey key = blink::StorageKey::CreateFirstParty(origin_);
     {
       blink::mojom::ServiceWorkerRegistrationOptions options;
       options.scope = url_;
       base::RunLoop run_loop;
+      auto fetch_client_settings_object =
+          blink::mojom::FetchClientSettingsObject::New();
+      fetch_client_settings_object->policy_container_policies =
+          blink::mojom::PolicyContainerPolicies::New();
       helper_->context()->RegisterServiceWorker(
-          script_url, key, options,
-          blink::mojom::FetchClientSettingsObject::New(),
+          script_url, key, options, std::move(fetch_client_settings_object),
           base::BindOnce(&NotificationStorageTest::DidRegisterServiceWorker,
                          base::Unretained(this), run_loop.QuitClosure()),
-          /*requesting_frame_id=*/GlobalRenderFrameHostId());
+          /*requesting_frame_id=*/GlobalRenderFrameHostId(),
+          PolicyContainerPolicies());
       run_loop.Run();
     }
 
@@ -89,7 +94,7 @@ class NotificationStorageTest : public ::testing::Test {
 
     {
       base::RunLoop run_loop;
-      helper_->context()->registry()->FindRegistrationForId(
+      helper_->context()->registry().FindRegistrationForId(
           service_worker_registration_id_, key,
           base::BindOnce(
               &NotificationStorageTest::DidFindServiceWorkerRegistration,
@@ -154,7 +159,9 @@ class NotificationStorageTest : public ::testing::Test {
   }
 
   // Generates a random notification ID. The format of the ID is opaque.
-  std::string GenerateNotificationId() { return base::GenerateGUID(); }
+  std::string GenerateNotificationId() {
+    return base::Uuid::GenerateRandomV4().AsLowercaseString();
+  }
 
  protected:
   BrowserTaskEnvironment task_environment_;  // Must be first member
@@ -254,6 +261,24 @@ TEST_F(NotificationStorageTest, ReadAndUpdateInteraction) {
       PlatformNotificationContext::Interaction::CLOSED);
   ASSERT_TRUE(success_);
   EXPECT_EQ(true, read_data.time_until_close_millis.has_value());
+}
+
+TEST_F(NotificationStorageTest, EmptyNotificationId) {
+  NotificationDatabaseData data;
+  data.origin = url_;
+  data.service_worker_registration_id = RegisterServiceWorker();
+  ASSERT_NE(blink::mojom::kInvalidServiceWorkerRegistrationId,
+            data.service_worker_registration_id);
+
+  // Writing with an empty notification_id should fail gracefully.
+  WriteNotificationDataSynchronous(data);
+  EXPECT_FALSE(success_);
+
+  // Reading with an empty notification_id should fail gracefully.
+  ReadNotificationDataAndRecordInteractionSynchronous(
+      data.service_worker_registration_id, /*notification_id=*/"",
+      PlatformNotificationContext::Interaction::NONE);
+  EXPECT_FALSE(success_);
 }
 
 }  // namespace content

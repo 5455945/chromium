@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 The Chromium Authors. All rights reserved.
+ * Copyright 2020 The Chromium Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
@@ -10,7 +10,7 @@
  * @param {string} method - The payment method identifier to use.
  * @return {string} - The status field or error message.
  */
-async function getStatus(method) { // eslint-disable-line no-unused-vars
+async function getStatus(method) {
   return getStatusForMethodData([{supportedMethods: method}]);
 }
 
@@ -20,9 +20,9 @@ async function getStatus(method) { // eslint-disable-line no-unused-vars
  * @param {array<string>} methods - The list of payment methods to use.
  * @return {string} - The status field or error message.
  */
-async function getStatusList(methods) { // eslint-disable-line no-unused-vars
+async function getStatusList(methods) {
   const methodData = [];
-  for (let method of methods) {
+  for (const method of methods) {
     methodData.push({supportedMethods: method});
   }
   return getStatusForMethodData(methodData);
@@ -63,7 +63,7 @@ async function getStatusForMethodDataAfterCanMakePayment(
     }
     return response.details.status;
   } catch (e) {
-    return e.message;
+    return e.toString();
   }
 }
 
@@ -74,7 +74,7 @@ async function getStatusForMethodDataAfterCanMakePayment(
  * @param {array<PaymentMethodData>} methodData - The method data to use.
  * @return {string} - The status field or error message.
  */
-async function getStatusForMethodDataWithShowPromise(methodData) { // eslint-disable-line no-unused-vars, max-len
+async function getStatusForMethodDataWithShowPromise(methodData) {
   try {
     const details = {total: {label: 'TEST',
         amount: {currency: 'USD', value: '0.01'}}};
@@ -88,6 +88,29 @@ async function getStatusForMethodDataWithShowPromise(methodData) { // eslint-dis
     }
     return response.details.status;
   } catch (e) {
-    return e.message;
+    return e.toString();
+  }
+}
+
+/**
+ * Returns the status field from the payment handler's response for given
+ * payment method data. Passes an empty Promise.resolve({}) promise into
+ * PaymentRequest.show().
+ * @param {array<PaymentMethodData>} methodData - The method data to use.
+ * @return {string} - The status field or error message.
+ */
+async function getStatusForMethodDataWithEmptyShowPromise(methodData) {
+  try {
+    const details = {total: {label: 'TEST',
+        amount: {currency: 'USD', value: '0.01'}}};
+    const request = new PaymentRequest(methodData, details);
+    const response = await request.show(Promise.resolve({}));
+    await response.complete();
+    if (!response.details.status) {
+      return 'Payment handler did not specify the status.';
+    }
+    return response.details.status;
+  } catch (e) {
+    return e.toString();
   }
 }

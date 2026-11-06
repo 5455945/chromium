@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "base/containers/span.h"
 #include "media/capture/capture_export.h"
 
 namespace media {
@@ -17,8 +18,8 @@ class CAPTURE_EXPORT VideoCaptureBufferHandle {
  public:
   virtual ~VideoCaptureBufferHandle() {}
   virtual size_t mapped_size() const = 0;
-  virtual uint8_t* data() const = 0;
-  virtual const uint8_t* const_data() const = 0;
+  virtual base::span<uint8_t> data() = 0;
+  virtual base::span<const uint8_t> const_data() const = 0;
 };
 
 // This is a null implementation used by GpuMemoryBufferTracker, as
@@ -29,8 +30,8 @@ class CAPTURE_EXPORT NullHandle final : public VideoCaptureBufferHandle {
   NullHandle();
   ~NullHandle() override;
   size_t mapped_size() const override;
-  uint8_t* data() const override;
-  const uint8_t* const_data() const override;
+  base::span<uint8_t> data() override;
+  base::span<const uint8_t> const_data() const override;
 };
 
 }  // namespace media

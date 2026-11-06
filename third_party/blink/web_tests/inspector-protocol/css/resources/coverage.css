@@ -22,3 +22,31 @@ div {
     -webkit-animation: mymove 5s infinite; /* Safari 4.0 - 8.0 */
     animation: mymove 5s infinite;
 }
+
+@supports (display: block) {
+    .unused {
+        display: block;
+    }
+    .class {
+        display: block;
+    }
+}
+
+body {
+    color: green;
+    .unused {
+        color: yellow;
+    }
+    .class {
+        color: purple;
+    }
+}
+
+body {
+    .unused {
+        color: magenta;
+    }
+    .class {
+        color: cyan;
+    }
+}

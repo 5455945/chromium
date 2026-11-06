@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 
 #include <string>
 
+#include "base/notreached.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -25,7 +26,6 @@ int GetTaskTitlePrefixMessageId(Task::Type task_type) {
       return IDS_TASK_MANAGER_SERVICE_WORKER_PREFIX;
     default:
       NOTREACHED();
-      return 0;
   }
 }
 
@@ -38,7 +38,7 @@ std::u16string GetTaskTitle(const GURL& script_url, Task::Type task_type) {
 
 WorkerTask::WorkerTask(base::ProcessHandle handle,
                        Task::Type task_type,
-                       int render_process_id)
+                       content::ChildProcessId render_process_id)
     : Task(GetTaskTitle(/*script_url=*/GURL(), task_type),
            /*icon=*/nullptr,
            handle),
@@ -51,7 +51,7 @@ Task::Type WorkerTask::GetType() const {
   return task_type_;
 }
 
-int WorkerTask::GetChildProcessUniqueID() const {
+content::ChildProcessId WorkerTask::GetChildProcessUniqueID() const {
   return render_process_id_;
 }
 

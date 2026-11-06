@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,15 @@
 
 namespace gpu {
 namespace webgpu {
+
+// Describes the type of the transfer buffer. `Shared` means the transfer buffer
+// is allocated on the shared memory that can be shared among multiple transfer
+// buffers. `Dedicated` means the transfer buffer has its own dedicated memory
+// allocation.
+enum class TransferBufferType : uint32_t {
+  kShared = 0u,
+  kDedicated = 1u,
+};
 
 // This struct holds information describing a shared memory allocation used for
 // bulk data transfers between the Dawn client and service. The shared memory is
@@ -17,6 +26,7 @@ struct MemoryTransferHandle {
   uint32_t size;
   int32_t shm_id;
   uint32_t shm_offset;
+  TransferBufferType type;
 };
 
 }  // namespace webgpu

@@ -1,16 +1,8 @@
-// Copyright 2009 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 goog.module('goog.date.UtcDateTimeTest');
 goog.setTestOnly();
@@ -22,8 +14,9 @@ const testSuite = goog.require('goog.testing.testSuite');
 const weekDay = goog.require('goog.date.weekDay');
 
 testSuite({
+  /** @suppress {checkTypes} suppression added to enable type checking */
   testConstructor() {
-    goog.now = () => new Date(2001, 2, 3, 4).getTime();
+    Date.now = () => new Date(2001, 2, 3, 4).getTime();
 
     let d = new UtcDateTime();
     assertTrue('default constructor', d.equals(new Date(goog.now())));
@@ -103,6 +96,35 @@ testSuite({
     const dateTime = UtcDateTime.fromIsoString(dateTimeString);
     exp = new UtcDateTime(2000, month.JAN, 2, 3, 4, 5);
     assertTrue('parsed ISO date/time', exp.equals(dateTime));
+
+    const dateTimeZoneString = '2089-01-02 03:04:05Z';
+    const dateTimeZone = UtcDateTime.fromIsoString(dateTimeZoneString);
+    exp = new UtcDateTime(2089, month.JAN, 2, 3, 4, 5);
+    assertTrue('parsed ISO date/time', exp.equals(dateTimeZone));
+
+    const dateTimeZoneString2 = '0089-01-02 03:04:05Z';
+    const dateTimeZone2 = UtcDateTime.fromIsoString(dateTimeZoneString2);
+    exp = new UtcDateTime(489, month.JAN, 2, 3, 4, 5);
+    exp.setUTCFullYear(89);
+    assertTrue('parsed ISO date/time', exp.equals(dateTimeZone2));
+
+    // See https://github.com/google/closure-library/issues/1143
+    assertEquals(
+        '0000-10-15T23:50:58.165Z',
+        UtcDateTime.fromIsoString('0000-10-15T23:50:58.165Z')
+            .toUTCRfc3339String());
+    assertEquals(
+        '0009-10-15T23:50:58.165Z',
+        UtcDateTime.fromIsoString('0009-10-15T23:50:58.165Z')
+            .toUTCRfc3339String());
+    assertEquals(
+        '0099-10-15T23:50:58.165Z',
+        UtcDateTime.fromIsoString('0099-10-15T23:50:58.165Z')
+            .toUTCRfc3339String());
+    assertEquals(
+        '0999-10-15T23:50:58.165Z',
+        UtcDateTime.fromIsoString('0999-10-15T23:50:58.165Z')
+            .toUTCRfc3339String());
   },
 
   testToIsoString() {

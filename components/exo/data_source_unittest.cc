@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,19 @@
 #include <atomic>
 
 #include "base/barrier_closure.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/test/bind.h"
 #include "base/test/task_environment.h"
 #include "components/exo/data_source_delegate.h"
 #include "components/exo/test/exo_test_base.h"
+#include "components/exo/test/test_data_source_delegate.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace exo {
 namespace {
+
+using test::TestDataSourceDelegate;
 
 constexpr char kTestData[] = "Test Data";
 
@@ -25,26 +28,6 @@ class DataSourceTest : public testing::Test {
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::MainThreadType::DEFAULT,
       base::test::TaskEnvironment::ThreadPoolExecutionMode::ASYNC};
-};
-
-class TestDataSourceDelegate : public DataSourceDelegate {
- public:
-  TestDataSourceDelegate() {}
-  ~TestDataSourceDelegate() override {}
-
-  // Overridden from DataSourceDelegate:
-  void OnDataSourceDestroying(DataSource* source) override {}
-  void OnTarget(const absl::optional<std::string>& mime_type) override {}
-  void OnSend(const std::string& mime_type, base::ScopedFD fd) override {
-    ASSERT_TRUE(base::WriteFileDescriptor(fd.get(), kTestData));
-  }
-  void OnCancelled() override {}
-  void OnDndDropPerformed() override {}
-  void OnDndFinished() override {}
-  void OnAction(DndAction dnd_action) override {}
-  bool CanAcceptDataEventsForSurface(Surface* surface) const override {
-    return true;
-  }
 };
 
 void CheckMimeType(const std::string& expected,
@@ -81,19 +64,30 @@ void CheckFileContentsMimeType(const FileContents& file_contents,
   std::move(counter).Run();
 }
 
+void CheckWebCustomDataMimeType(const std::string& expected,
+                                base::OnceClosure counter,
+                                const std::string& mime_type,
+                                const std::vector<uint8_t>& data) {
+  EXPECT_FALSE(mime_type.empty());
+  EXPECT_EQ(expected, mime_type);
+  std::move(counter).Run();
+}
+
 void IncrementFailureCounter(std::atomic_int* failure_count,
                              base::RepeatingClosure counter) {
   ++(*failure_count);
   std::move(counter).Run();
 }
 
-void CheckMimeTypesReceived(DataSource* data_source,
-                            const std::string& text_mime,
-                            const std::string& rtf_mime,
-                            const std::string& html_mime,
-                            const std::string& image_mime,
-                            const std::string& filenames_mime,
-                            const FileContents& file_contents) {
+void CheckMimeTypesReceived(
+    DataSource* data_source,
+    const std::string& text_mime,
+    const std::string& rtf_mime,
+    const std::string& html_mime,
+    const std::string& image_mime,
+    const std::string& filenames_mime,
+    const FileContents& file_contents,
+    const std::string& web_custom_data_mime = std::string()) {
   base::RunLoop run_loop;
   base::RepeatingClosure counter =
       base::BarrierClosure(DataSource::kMaxDataTypes, run_loop.QuitClosure());
@@ -106,12 +100,15 @@ void CheckMimeTypesReceived(DataSource* data_source,
       base::BindOnce(&CheckMimeType, image_mime, counter),
       base::BindOnce(&CheckMimeType, filenames_mime, counter),
       base::BindOnce(&CheckFileContentsMimeType, file_contents, counter),
+      base::BindOnce(&CheckWebCustomDataMimeType, web_custom_data_mime,
+                     counter),
       base::BindRepeating(&IncrementFailureCounter, &failure_count, counter));
   run_loop.Run();
 
   int expected_failure_count = 0;
-  for (const auto& mime_type : {text_mime, rtf_mime, html_mime, image_mime,
-                                filenames_mime, file_contents.mime_type}) {
+  for (const auto& mime_type :
+       {text_mime, rtf_mime, html_mime, image_mime, filenames_mime,
+        file_contents.mime_type, web_custom_data_mime}) {
     if (mime_type.empty())
       ++expected_failure_count;
   }
@@ -122,6 +119,7 @@ TEST_F(DataSourceTest, ReadData) {
   TestDataSourceDelegate delegate;
   DataSource data_source(&delegate);
   std::string mime_type("text/plain;charset=utf-8");
+  delegate.SetData(mime_type, kTestData);
   data_source.Offer(mime_type.c_str());
 
   data_source.ReadDataForTesting(
@@ -137,6 +135,7 @@ TEST_F(DataSourceTest, ReadDataArbitraryMimeType) {
   TestDataSourceDelegate delegate;
   DataSource data_source(&delegate);
   std::string mime_type("abc/def;key=value");
+  delegate.SetData(mime_type, kTestData);
   data_source.Offer(mime_type.c_str());
 
   data_source.ReadDataForTesting(
@@ -193,6 +192,19 @@ TEST_F(DataSourceTest, ReadData_Cancelled) {
       }));
   data_source.Cancelled();
   task_environment_.RunUntilIdle();
+}
+
+TEST_F(DataSourceTest, ReadData_Deleted) {
+  TestDataSourceDelegate delegate;
+  auto data_source = std::make_unique<DataSource>(&delegate);
+  std::string mime_type("text/plain;charset=utf-8");
+  data_source->Offer(mime_type);
+
+  base::RunLoop run_loop;
+  data_source->ReadDataForTesting(mime_type, base::DoNothing(),
+                                  run_loop.QuitClosure());
+  data_source.reset();
+  run_loop.Run();
 }
 
 TEST_F(DataSourceTest, PreferredMimeTypeUTF16) {
@@ -284,13 +296,13 @@ TEST_F(DataSourceTest, PreferredMimeTypeRTF) {
   CheckMimeTypesReceived(&data_source, "", "text/rtf", "", "", "", {});
 }
 
-TEST_F(DataSourceTest, PreferredMimeTypeBitmapToPNG) {
+TEST_F(DataSourceTest, PreferredMimeTypePNGtoBitmap) {
   TestDataSourceDelegate delegate;
   DataSource data_source(&delegate);
   data_source.Offer("image/bmp");
   data_source.Offer("image/png");
 
-  CheckMimeTypesReceived(&data_source, "", "", "", "image/bmp", "", {});
+  CheckMimeTypesReceived(&data_source, "", "", "", "image/png", "", {});
 }
 
 TEST_F(DataSourceTest, PreferredMimeTypePNGToJPEG) {
@@ -301,6 +313,16 @@ TEST_F(DataSourceTest, PreferredMimeTypePNGToJPEG) {
   data_source.Offer("image/jpg");
 
   CheckMimeTypesReceived(&data_source, "", "", "", "image/png", "", {});
+}
+
+TEST_F(DataSourceTest, PreferredMimeTypeBitmaptoJPEG) {
+  TestDataSourceDelegate delegate;
+  DataSource data_source(&delegate);
+  data_source.Offer("image/bmp");
+  data_source.Offer("image/jpeg");
+  data_source.Offer("image/jpg");
+
+  CheckMimeTypesReceived(&data_source, "", "", "", "image/bmp", "", {});
 }
 
 TEST_F(DataSourceTest, PreferredMimeTypeTextUriList) {
@@ -337,6 +359,16 @@ TEST_F(DataSourceTest, OctetStreamWithQuotedName) {
   CheckMimeTypesReceived(
       &data_source, "", "", "", "", "",
       {"application/octet-stream;name=\"t\\\\est\\\".jpg\"", "t\\est\".jpg"});
+}
+
+TEST_F(DataSourceTest, WebCustomDataMime) {
+  TestDataSourceDelegate delegate;
+  DataSource data_source(&delegate);
+  std::string web_custom_data_mime("chromium/x-web-custom-data");
+  data_source.Offer(web_custom_data_mime);
+
+  CheckMimeTypesReceived(&data_source, "", "", "", "", "", {},
+                         web_custom_data_mime);
 }
 
 }  // namespace

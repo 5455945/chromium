@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,11 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/sequence_checker.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/time/time.h"
 #include "media/base/audio_renderer_sink.h"
-
-namespace base {
-class SingleThreadTaskRunner;
-}
 
 namespace media {
 class AudioBus;
@@ -23,14 +22,17 @@ class FakeAudioWorker;
 class MEDIA_EXPORT NullAudioSink : public SwitchableAudioRendererSink {
  public:
   explicit NullAudioSink(
-      const scoped_refptr<base::SingleThreadTaskRunner>& task_runner);
+      const scoped_refptr<base::SequencedTaskRunner>& task_runner);
+
+  NullAudioSink(const NullAudioSink&) = delete;
+  NullAudioSink& operator=(const NullAudioSink&) = delete;
 
   // AudioRendererSink implementation.
   void Initialize(const AudioParameters& params,
                   RenderCallback* callback) override;
   void Start() override;
   void Stop() override;
-  void Pause() override;
+  void Pause(PauseReason reason) override;
   void Play() override;
   void Flush() override;
   bool SetVolume(double volume) override;
@@ -45,29 +47,29 @@ class MEDIA_EXPORT NullAudioSink : public SwitchableAudioRendererSink {
   void StartAudioHashForTesting();
 
   // Returns the hash of all audio frames seen since construction.
-  std::string GetAudioHashForTesting();
-
- protected:
-  ~NullAudioSink() override;
+  const AudioHash& GetAudioHashForTesting() const;
 
  private:
+  ~NullAudioSink() override;
+
   // Task that periodically calls Render() to consume audio data.
   void CallRender(base::TimeTicks ideal_time, base::TimeTicks now);
 
   bool initialized_;
   bool started_;
   bool playing_;
-  RenderCallback* callback_;
+  // The RenderCallback is provided via Initialize() and must outlive the sink.
+  raw_ptr<RenderCallback> callback_;
 
   // Controls whether or not a running hash is computed for audio frames.
   std::unique_ptr<AudioHash> audio_hash_;
 
-  scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
+  scoped_refptr<base::SequencedTaskRunner> task_runner_;
   std::unique_ptr<FakeAudioWorker> fake_worker_;
   base::TimeDelta fixed_data_delay_;
   std::unique_ptr<AudioBus> audio_bus_;
 
-  DISALLOW_COPY_AND_ASSIGN(NullAudioSink);
+  SEQUENCE_CHECKER(sequence_checker_);
 };
 
 }  // namespace media

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include <memory>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/synchronization/waitable_event.h"
@@ -21,6 +22,9 @@ class TriggerContext : public base::RefCountedThreadSafe<TriggerContext> {
   TriggerContext()
       : event_(base::WaitableEvent::ResetPolicy::AUTOMATIC,
                base::WaitableEvent::InitialState::NOT_SIGNALED) {}
+
+  TriggerContext(const TriggerContext&) = delete;
+  TriggerContext& operator=(const TriggerContext&) = delete;
 
   base::WaitableEvent& event() { return event_; }
   MojoResult wait_result() const { return wait_result_; }
@@ -58,8 +62,6 @@ class TriggerContext : public base::RefCountedThreadSafe<TriggerContext> {
   // apart from waiting on |event()|.
   MojoResult wait_result_ = MOJO_RESULT_UNKNOWN;
   MojoHandleSignalsState wait_state_ = {0, 0};
-
-  DISALLOW_COPY_AND_ASSIGN(TriggerContext);
 };
 
 }  // namespace
@@ -93,8 +95,9 @@ MojoResult Wait(Handle handle,
                    &blocking_event);
   if (rv == MOJO_RESULT_FAILED_PRECONDITION) {
     DCHECK_EQ(1u, num_blocking_events);
-    if (signals_state)
+    if (signals_state) {
       *signals_state = blocking_event.signals_state;
+    }
     return blocking_event.result;
   }
 
@@ -104,8 +107,9 @@ MojoResult Wait(Handle handle,
   MojoResult ready_result = context->wait_result();
   DCHECK_NE(MOJO_RESULT_UNKNOWN, ready_result);
 
-  if (signals_state)
+  if (signals_state) {
     *signals_state = context->wait_state();
+  }
 
   return ready_result;
 }
@@ -115,8 +119,9 @@ MojoResult WaitMany(const Handle* handles,
                     size_t num_handles,
                     size_t* result_index,
                     MojoHandleSignalsState* signals_states) {
-  if (!handles || !signals)
+  if (!handles || !signals) {
     return MOJO_RESULT_INVALID_ARGUMENT;
+  }
 
   ScopedTrapHandle trap;
   MojoResult rv = CreateTrap(&TriggerContext::OnNotification, &trap);
@@ -131,12 +136,14 @@ MojoResult WaitMany(const Handle* handles,
     // successful. Otherwise balanced immediately below.
     contexts[i]->AddRef();
 
-    rv = MojoAddTrigger(trap.get().value(), handles[i].value(), signals[i],
+    rv = MojoAddTrigger(trap.get().value(), UNSAFE_TODO(handles[i]).value(),
+                        UNSAFE_TODO(signals[i]),
                         MOJO_TRIGGER_CONDITION_SIGNALS_SATISFIED,
                         contexts[i]->context_value(), nullptr);
     if (rv == MOJO_RESULT_INVALID_ARGUMENT) {
-      if (result_index)
+      if (result_index) {
         *result_index = i;
+      }
 
       // Balanced above.
       contexts[i]->Release();
@@ -172,7 +179,7 @@ MojoResult WaitMany(const Handle* handles,
     DCHECK_EQ(MOJO_RESULT_OK, rv);
 
     // Wait for one of the contexts to signal. First one wins.
-    index = base::WaitableEvent::WaitMany(events.data(), events.size());
+    index = base::WaitableEvent::WaitMany(events);
     ready_result = contexts[index]->wait_result();
     ready_state = contexts[index]->wait_state();
   }
@@ -180,15 +187,17 @@ MojoResult WaitMany(const Handle* handles,
   DCHECK_NE(MOJO_RESULT_UNKNOWN, ready_result);
   DCHECK_LT(index, num_handles);
 
-  if (result_index)
+  if (result_index) {
     *result_index = index;
+  }
 
   if (signals_states) {
     for (size_t i = 0; i < num_handles; ++i) {
       if (i == index) {
-        signals_states[i] = ready_state;
+        UNSAFE_TODO(signals_states[i]) = ready_state;
       } else {
-        signals_states[i] = handles[i].QuerySignalsState();
+        UNSAFE_TODO(signals_states[i]) =
+            UNSAFE_TODO(handles[i]).QuerySignalsState();
       }
     }
   }

@@ -1,19 +1,19 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/local_discovery/service_discovery_device_lister.h"
 
+#include <map>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/single_thread_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 
 namespace local_discovery {
 
@@ -53,6 +53,13 @@ class ServiceDiscoveryDeviceListerImpl : public ServiceDiscoveryDeviceLister {
                         const std::string& service_name) {
     VLOG(1) << "OnServiceUpdated: service_type: " << service_type_
             << ", service_name: " << service_name << ", update: " << update;
+
+    if (update == ServiceWatcher::UPDATE_PERMISSION_REJECTED) {
+      resolvers_.clear();
+      delegate_->OnPermissionRejected();
+      return;
+    }
+
     if (update == ServiceWatcher::UPDATE_INVALIDATED) {
       resolvers_.clear();
       CreateServiceWatcher();
@@ -67,7 +74,7 @@ class ServiceDiscoveryDeviceListerImpl : public ServiceDiscoveryDeviceLister {
     }
 
     // If there is already a resolver working on this service, don't add one.
-    if (base::Contains(resolvers_, service_name)) {
+    if (resolvers_.contains(service_name)) {
       VLOG(1) << "Resolver already exists, service_name: " << service_name;
       return;
     }
@@ -105,10 +112,11 @@ class ServiceDiscoveryDeviceListerImpl : public ServiceDiscoveryDeviceLister {
         base::BindRepeating(&ServiceDiscoveryDeviceListerImpl::OnServiceUpdated,
                             weak_factory_.GetWeakPtr()));
     service_watcher_->Start();
+    service_watcher_->SetActivelyRefreshServices(true);
   }
 
-  Delegate* const delegate_;
-  ServiceDiscoveryClient* const service_discovery_client_;
+  const raw_ptr<Delegate> delegate_;
+  const raw_ptr<ServiceDiscoveryClient> service_discovery_client_;
   const std::string service_type_;
 
   std::unique_ptr<ServiceWatcher> service_watcher_;

@@ -1,11 +1,11 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_XR_XR_EXIT_FULLSCREEN_OBSERVER_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_XR_XR_EXIT_FULLSCREEN_OBSERVER_H_
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/dom/events/native_event_listener.h"
@@ -20,6 +20,10 @@ namespace blink {
 class XrExitFullscreenObserver : public NativeEventListener {
  public:
   XrExitFullscreenObserver();
+
+  XrExitFullscreenObserver(const XrExitFullscreenObserver&) = delete;
+  XrExitFullscreenObserver& operator=(const XrExitFullscreenObserver&) = delete;
+
   ~XrExitFullscreenObserver() override;
 
   // NativeEventListener
@@ -32,7 +36,6 @@ class XrExitFullscreenObserver : public NativeEventListener {
  private:
   Member<Document> document_;
   base::OnceClosure on_exited_;
-  DISALLOW_COPY_AND_ASSIGN(XrExitFullscreenObserver);
 };
 
 }  // namespace blink

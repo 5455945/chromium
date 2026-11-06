@@ -1,77 +1,82 @@
-# Copyright (c) 2021 The Chromium Authors. All rights reserved.
+# Copyright 2021 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """Pseudolocale translations for chrome."""
-
-from __future__ import print_function
 
 import re
 import string
 
 from collections import namedtuple
-from grit import lazy_re
 from grit import tclib
 
 ACCENTED_STRINGS = {
-    '!': u'\u00a1',
-    '$': u'\u20ac',
-    '?': u'\u00bf',
-    'A': u'\u00c5',
-    'C': u'\u00c7',
-    'D': u'\u00d0',
-    'E': u'\u00c9',
-    'G': u'\u011c',
-    'H': u'\u0124',
-    'I': u'\u00ce',
-    'J': u'\u0134',
-    'K': u'\u0136',
-    'L': u'\u013b',
-    'N': u'\u00d1',
-    'O': u'\u00d6',
-    'P': u'\u00de',
-    'R': u'\u00ae',
-    'S': u'\u0160',
-    'T': u'\u0162',
-    'U': u'\u00db',
-    'W': u'\u0174',
-    'Y': u'\u00dd',
-    'Z': u'\u017d',
-    'a': u'\u00e5',
-    'c': u'\u00e7',
-    'd': u'\u00f0',
-    'e': u'\u00e9',
-    'f': u'\u0192',
-    'g': u'\u011d',
-    'h': u'\u0125',
-    'i': u'\u00ee',
-    'j': u'\u0135',
-    'k': u'\u0137',
-    'l': u'\u013c',
-    'n': u'\u00f1',
-    'o': u'\u00f6',
-    'p': u'\u00fe',
-    's': u'\u0161',
-    't': u'\u0163',
-    'u': u'\u00fb',
-    'w': u'\u0175',
-    'y': u'\u00fd',
-    'z': u'\u017e',
+  '!': '\u00a1',
+  '$': '\u20ac',
+  '?': '\u00bf',
+  'A': '\u00c5',
+  'C': '\u00c7',
+  'D': '\u00d0',
+  'E': '\u00c9',
+  'G': '\u011c',
+  'H': '\u0124',
+  'I': '\u00ce',
+  'J': '\u0134',
+  'K': '\u0136',
+  'L': '\u013b',
+  'N': '\u00d1',
+  'O': '\u00d6',
+  'P': '\u00de',
+  'R': '\u00ae',
+  'S': '\u0160',
+  'T': '\u0162',
+  'U': '\u00db',
+  'W': '\u0174',
+  'Y': '\u00dd',
+  'Z': '\u017d',
+  'a': '\u00e5',
+  'c': '\u00e7',
+  'd': '\u00f0',
+  'e': '\u00e9',
+  'f': '\u0192',
+  'g': '\u011d',
+  'h': '\u0125',
+  'i': '\u00ee',
+  'j': '\u0135',
+  'k': '\u0137',
+  'l': '\u013c',
+  'n': '\u00f1',
+  'o': '\u00f6',
+  'p': '\u00fe',
+  's': '\u0161',
+  't': '\u0163',
+  'u': '\u00fb',
+  'w': '\u0175',
+  'y': '\u00fd',
+  'z': '\u017e',
 }
 
 NUMBERS = [
-    'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine',
-    'ten'
+  '- one',
+  'two',
+  'three',
+  'four',
+  'five',
+  'six',
+  'seven',
+  'eight',
+  'nine',
+  'ten',
 ]
 PLACEHOLDER_STRING = '{PLACEHOLDER_VARIABLE}'
-ALPHABETIC_RUN = lazy_re.compile(r'([^\W0-9_]+)')
-WORD = lazy_re.compile(r'\b\S+\b')
+ALPHABETIC_RUN = re.compile(r'([^\W0-9_]+)')
+WORD = re.compile(r'\b\S+\b')
 
 # RTL modifiers for letters
-RLO = u'\u202e'
-PDF = u'\u202c'
+RLO = '\u202e'
+PDF = '\u202c'
 
 
-class Node(object):
+class Node:
   """A node in the syntax tree representing a message to be translated."""
 
   translatable = False
@@ -100,16 +105,20 @@ class Node(object):
     translation from.
     """
     children = ''.join(c.ToString() for c in self.children)
-    return u'%s%s%s' % (self.text, children, self.after)
+    return '%s%s%s' % (self.text, children, self.after)
 
   def __repr__(self):
     # For debugging
     if self.children:
-      child_lines = '\n'.join('  ' + line for node in self.children
-                              for line in repr(node).split('\n'))
-      return '%s[before=%s, after=%s\n%s\n]' % (self.__class__.__name__,
-                                                repr(self.text), repr(
-                                                    self.after), child_lines)
+      child_lines = '\n'.join(
+        '  ' + line for node in self.children for line in repr(node).split('\n')
+      )
+      return '%s[before=%s, after=%s\n%s\n]' % (
+        self.__class__.__name__,
+        repr(self.text),
+        repr(self.after),
+        child_lines,
+      )
     else:
       return '%s %s' % (self.__class__.__name__, repr(self.text))
 
@@ -117,7 +126,7 @@ class Node(object):
   def _MatchPattern(cls, text):
     match = cls.pattern.match(text)
     if match is not None:
-      return cls(match.group(0)), text[len(match.group(0)):]
+      return cls(match.group(0)), text[len(match.group(0)) :]
     return None, text
 
   @classmethod
@@ -147,20 +156,23 @@ class HtmlTag(Node):
   script, style, xmp or listing.  If any of those appear in messages,
   something is wrong.
   """
-  pattern = lazy_re.compile(
-      r'^</?[a-z]\w*'  # beginning of tag
-      r'(?:\s+\w+(?:\s*=\s*'  # attribute start
-      r'(?:[^\s"\'>]+|"[^\"]*"|\'[^\']*\'))?'  # attribute value
-      r')*\s*/?>',
-      re.S | re.I)
+
+  pattern = re.compile(
+    r'^</?[a-z]\w*'  # beginning of tag
+    r'(?:\s+\w+(?:\s*=\s*'  # attribute start
+    r'(?:[^\s"\'>]+|"[^\"]*"|\'[^\']*\'))?'  # attribute value
+    r')*\s*/?>',
+    re.S | re.I,
+  )
 
 
 class RawText(Node):
   """RawText represents regular text able to be translated."""
+
   # Raw text can have a < or $ in it, but only at the very start.
   # This guarantees that it's already tried and failed to match an HTML tag
   # and variable.
-  pattern = lazy_re.compile(r'^[^{}][^{}<$]*', re.S)
+  pattern = re.compile(r'^[^{}][^{}<$]*', re.S)
 
   def GetNumWords(self):
     return len(WORD.findall(self.text))
@@ -173,7 +185,8 @@ class BasicVariable(Node):
   """Represents a variable. Usually used inside a plural option, but has been
   overloaded to store placeholders as well.
   """
-  pattern = lazy_re.compile(r'^\$?{[a-zA-Z0-9_]+}')
+
+  pattern = re.compile(r'^\$?{[a-zA-Z0-9_]+}')
 
   def GetNumWords(self):
     return 1
@@ -183,7 +196,8 @@ class PluralOption(Node):
   """Represents a single option for a plural selection.
   eg. =1 {singular option here}
   """
-  pattern = lazy_re.compile(r'^(=[0-9]+|other)\s*{')
+
+  pattern = re.compile(r'^(=[0-9]+|other)\s*{')
   after = '}\n'
 
   @classmethod
@@ -192,8 +206,9 @@ class PluralOption(Node):
     assert node is not None, text
     child, text = NodeSequence.Parse(text)
     assert child is not None, text
-    node.children = child.children if isinstance(child,
-                                                 NodeSequence) else [child]
+    node.children = (
+      child.children if isinstance(child, NodeSequence) else [child]
+    )
 
     assert text.startswith('}')
     return node, text[1:]
@@ -203,7 +218,8 @@ class Plural(Node):
   """Represents a set of options for plurals.
   eg. {VARIABLE, plural, =1 {singular} other {plural}}
   """
-  pattern = lazy_re.compile(r'^{[A-Za-z0-9_]+,\s*plural,\s*(offset:\d+\s*)?', re.S)
+
+  pattern = re.compile(r'^{[A-Za-z0-9_]+,\s*plural,\s*(offset:\d+\s*)?', re.S)
   after = '}'
 
   @classmethod
@@ -227,10 +243,11 @@ class Plural(Node):
 class NodeSequence(Node):
   """Represents a series of nodes.
   eg. hello {VAR} -> NodeSequence([RawText('Hello'), BasicVariable('{VAR}'])"""
+
   child_types = [HtmlTag, BasicVariable, Plural, RawText]
 
   def __init__(self, children):
-    super(NodeSequence, self).__init__('', children)
+    super().__init__('', children)
 
   @classmethod
   def Parse(cls, text):
@@ -282,7 +299,7 @@ def ToTranslation(tree, placeholders):
     index = text.find(PLACEHOLDER_STRING)
     if index > 0:
       transl.AppendText(text[:index])
-    text = text[index + len(PLACEHOLDER_STRING):]
+    text = text[index + len(PLACEHOLDER_STRING) :]
     transl.AppendPlaceholder(placeholder)
   if text:
     transl.AppendText(text)
@@ -302,11 +319,13 @@ def PseudoLongStringMessage(message):
   tree, placeholders = BuildTreeFromMessage(message)
   # This will change after the transformation, so do it early.
   n_words = tree.GetNumWords()
-  tree.Transform(lambda x: ''.join(
-      ACCENTED_STRINGS.get(letter, letter) for letter in x))
+  tree.Transform(
+    lambda x: ''.join(ACCENTED_STRINGS.get(letter, letter) for letter in x)
+  )
   transl = ToTranslation(tree, placeholders)
-  transl.AppendText(' ' + ' '.join(NUMBERS[i % len(NUMBERS)]
-                                   for i in range(n_words)))
+  transl.AppendText(
+    ' ' + ' '.join(NUMBERS[i % len(NUMBERS)] for i in range(n_words))
+  )
 
   return transl
 
@@ -321,6 +340,7 @@ def PseudoRTLMessage(message):
     tclib.Translation()
   """
   tree, placeholders = BuildTreeFromMessage(message)
-  tree.Transform(lambda text: ALPHABETIC_RUN.sub(
-      lambda run: RLO + run.group() + PDF, text))
+  tree.Transform(
+    lambda text: ALPHABETIC_RUN.sub(lambda run: RLO + run.group() + PDF, text)
+  )
   return ToTranslation(tree, placeholders)

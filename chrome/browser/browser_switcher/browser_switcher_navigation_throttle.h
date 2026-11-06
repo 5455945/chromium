@@ -1,12 +1,13 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_BROWSER_SWITCHER_BROWSER_SWITCHER_NAVIGATION_THROTTLE_H_
 #define CHROME_BROWSER_BROWSER_SWITCHER_BROWSER_SWITCHER_NAVIGATION_THROTTLE_H_
 
-#include "base/macros.h"
-#include "content/public/browser/navigation_throttle.h"
+namespace content {
+class NavigationThrottleRegistry;
+}  // namespace content
 
 namespace browser_switcher {
 
@@ -14,12 +15,14 @@ namespace browser_switcher {
 // redirect, may open an alternative browser and close the tab.
 class BrowserSwitcherNavigationThrottle {
  public:
-  // Creates a |NavigationThrottle| if needed for the navigation.
-  static std::unique_ptr<content::NavigationThrottle> MaybeCreateThrottleFor(
-      content::NavigationHandle* navigation);
+  BrowserSwitcherNavigationThrottle() = delete;
+  BrowserSwitcherNavigationThrottle(const BrowserSwitcherNavigationThrottle&) =
+      delete;
+  BrowserSwitcherNavigationThrottle& operator=(
+      const BrowserSwitcherNavigationThrottle&) = delete;
 
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(BrowserSwitcherNavigationThrottle);
+  // Creates a `NavigationThrottle` if needed for the navigation.
+  static void MaybeCreateAndAdd(content::NavigationThrottleRegistry& registry);
 };
 
 }  // namespace browser_switcher

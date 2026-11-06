@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,6 +22,11 @@ namespace viz {
 // RendererType.
 class VizPixelTest : public cc::PixelTest {
  public:
+  static constexpr char kGraphiteStr[] = "_graphite";
+  static constexpr char kANGLEMetalStr[] = "_angle_metal";
+
+  static bool IsANGLEMetal();
+
   explicit VizPixelTest(RendererType type);
 
   // cc::PixelTest implementation.
@@ -33,21 +38,20 @@ class VizPixelTest : public cc::PixelTest {
     switch (renderer_type_) {
       case RendererType::kSoftware:
         return "software";
-      case RendererType::kGL:
-        return "gl";
       case RendererType::kSkiaGL:
       case RendererType::kSkiaVk:
         return "skia";
-      case RendererType::kSkiaDawn:
-        return "dawn";
+      case RendererType::kSkiaGraphiteDawn:
+        return "graphite";
     }
   }
 
   bool is_software_renderer() const {
     return renderer_type_ == RendererType::kSoftware;
   }
-
-  bool is_gl_renderer() const { return renderer_type_ == RendererType::kGL; }
+  bool is_skia_graphite() const {
+    return renderer_type_ == RendererType::kSkiaGraphiteDawn;
+  }
 
  protected:
   static GraphicsBackend RenderTypeToBackend(RendererType renderer_type);

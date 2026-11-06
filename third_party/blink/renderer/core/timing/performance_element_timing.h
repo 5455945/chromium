@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,6 +10,7 @@
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/geometry/dom_rect_read_only.h"
 #include "third_party/blink/renderer/core/timing/performance_entry.h"
+#include "third_party/blink/renderer/platform/instrumentation/tracing/traced_value.h"
 
 namespace blink {
 
@@ -23,32 +24,35 @@ class CORE_EXPORT PerformanceElementTiming final : public PerformanceEntry {
  public:
   static PerformanceElementTiming* Create(const AtomicString& name,
                                           const String& url,
-                                          const FloatRect& intersection_rect,
-                                          DOMHighResTimeStamp render_time,
+                                          const gfx::RectF& intersection_rect,
                                           DOMHighResTimeStamp load_time,
                                           const AtomicString& identifier,
                                           int naturalWidth,
                                           int naturalHeight,
                                           const AtomicString& id,
-                                          Element*);
+                                          Element*,
+                                          DOMWindow* source);
   PerformanceElementTiming(const AtomicString& name,
-                           DOMHighResTimeStamp start_time,
                            const String& url,
-                           const FloatRect& intersection_rect,
-                           DOMHighResTimeStamp render_time,
+                           const gfx::RectF& intersection_rect,
                            DOMHighResTimeStamp load_time,
                            const AtomicString& identifier,
                            int naturalWidth,
                            int naturalHeight,
                            const AtomicString& id,
-                           Element*);
+                           Element*,
+                           DOMWindow* source);
 
   ~PerformanceElementTiming() override;
 
-  AtomicString entryType() const override;
+  const AtomicString& entryType() const override;
   PerformanceEntryType EntryTypeEnum() const override;
+  DOMHighResTimeStamp startTime() const override;
+  bool IsReadyForReporting() const override;
+  void FinalizeEntry(const DOMPaintTimingInfo&,
+                     uint64_t navigation_id) override;
 
-  DOMRectReadOnly* intersectionRect() const { return intersection_rect_; }
+  DOMRectReadOnly* intersectionRect() const { return intersection_rect_.Get(); }
   DOMHighResTimeStamp renderTime() const { return render_time_; }
   DOMHighResTimeStamp loadTime() const { return load_time_; }
   AtomicString identifier() const { return identifier_; }
@@ -58,6 +62,8 @@ class CORE_EXPORT PerformanceElementTiming final : public PerformanceEntry {
   String url() const { return url_; }
   Element* element() const;
 
+  std::unique_ptr<TracedValue> ToTracedValue() const;
+
   void Trace(Visitor*) const override;
 
  private:
@@ -65,7 +71,7 @@ class CORE_EXPORT PerformanceElementTiming final : public PerformanceEntry {
 
   WeakMember<Element> element_;
   Member<DOMRectReadOnly> intersection_rect_;
-  DOMHighResTimeStamp render_time_;
+  DOMHighResTimeStamp render_time_ = 0.0;
   DOMHighResTimeStamp load_time_;
   AtomicString identifier_;
   unsigned naturalWidth_;

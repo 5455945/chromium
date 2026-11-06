@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,9 @@
 
 #include "base/compiler_specific.h"
 #include "base/component_export.h"
-#include "base/memory/ref_counted.h"
-#include "base/sequenced_task_runner_helpers.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/task/sequenced_task_runner_helpers.h"
 
 namespace base {
 class SingleThreadTaskRunner;
@@ -61,7 +62,9 @@ class QuotaTask {
 
   void Abort();
 
-  QuotaTaskObserver* observer_;
+  raw_ptr<QuotaTaskObserver,
+          FlakyDanglingUntriaged | AcrossTasksDanglingUntriaged>
+      observer_;
   const scoped_refptr<base::SingleThreadTaskRunner> original_task_runner_;
   bool delete_scheduled_;
 };
@@ -76,7 +79,7 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) QuotaTaskObserver {
   void RegisterTask(QuotaTask* task);
   void UnregisterTask(QuotaTask* task);
 
-  std::set<QuotaTask*> running_quota_tasks_;
+  std::set<raw_ptr<QuotaTask, SetExperimental>> running_quota_tasks_;
 };
 }
 

@@ -1,42 +1,97 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 'use strict';
 
-function createAdFrame(url, name, sbox_attr) {
-  let frame = document.createElement('iframe');
+function createAdFencedFrame(url, name) {
+  const frame = document.createElement('fencedframe');
+  const config = new FencedFrameConfig(url);
+  frame.name = name;
+  frame.id = name;
+  frame.config = config;
+  document.body.appendChild(frame);
+}
+
+function createAdFrame(url, name, sbox_attr, load_callback, error_callback) {
+  const frame = document.createElement('iframe');
   frame.name = name;
   frame.id = name;
   frame.src = url;
+  if (load_callback !== undefined) {
+    frame.onload = load_callback;
+  }
+  if (error_callback !== undefined) {
+    frame.onerror = error_callback;
+  }
   if (sbox_attr !== undefined) {
     frame.sandbox = sbox_attr;
   }
   document.body.appendChild(frame);
 }
 
-function windowOpenFromAdScript() {
-  window.open();
+function executeHistoryPushStateFromAdScript(url) {
+  history.pushState({}, '', url);
+}
+
+function executeHistoryReplaceStateFromAdScript(url) {
+  history.replaceState({}, '', url);
+}
+
+function executeLocationAssignFromAdScript(url) {
+  location.assign(url);
+}
+
+function executeLocationReplaceFromAdScript(url) {
+  location.replace(url);
+}
+
+function createAdFramePromise(url, name, sbox_attr) {
+  return new Promise((resolve, reject) => {
+    createAdFrame(url, name, sbox_attr, resolve, reject);
+  });
+}
+
+function windowOpenFromAdScript(url) {
+  window.open(url);
+}
+
+function clickDownloadLinkFromAdScript(url) {
+  const a = document.createElement('a');
+  a.setAttribute('href', url);
+  a.download = '';
+  document.body.appendChild(a);
+  a.click();
+}
+
+function navigatePopupFromAdScript(url) {
+  window.my_popup.location.href = url;
+}
+
+function navigateIframeFromAdScript(name, url) {
+  document.getElementsByName(name)[0].src = url;
 }
 
 async function createDocWrittenAdFrame(name, base_url) {
-  let doc_body = await fetch('frame_factory.html');
-  let doc_text = await doc_body.text();
+  const docBody = await fetch('frame_factory.html');
+  const docText = await docBody.text();
 
-  let frame = document.createElement('iframe');
+  const frame = document.createElement('iframe');
   frame.name = name;
   document.body.appendChild(frame);
 
   frame.contentDocument.open();
-  frame.onload = function() {
-    window.domAutomationController.send(true);
-  }
-  frame.contentDocument.write(doc_text);
-  frame.contentDocument.close();
+  return new Promise(resolve => {
+    frame.onload = function() {
+      resolve(true);
+    };
+    frame.contentDocument.write(docText);
+    frame.contentDocument.close();
+  });
 }
 
 function createAdFrameWithDocWriteAbortedLoad(name) {
-  let frame = document.createElement('iframe');
+  const frame = document.createElement('iframe');
   frame.name = name;
 
   // slow takes 100 seconds to load, plenty of time to overwrite the
@@ -56,7 +111,7 @@ function createAdFrameWithDocWriteAbortedLoad(name) {
 }
 
 function createAdFrameWithWindowStopAbortedLoad(name) {
-  let frame = document.createElement('iframe');
+  const frame = document.createElement('iframe');
   frame.name = name;
 
   // slow takes 100 seconds to load, plenty of time to overwrite the
@@ -68,17 +123,17 @@ function createAdFrameWithWindowStopAbortedLoad(name) {
   // We load the scripts in frame_factory.html to allow subframe creation. We
   // set the async attribute to false to ensure that these scripts are loaded in
   // insertion order.
-  let script1 = document.createElement('script');
+  const script1 = document.createElement('script');
   script1.async = false;
   script1.src = 'create_frame.js';
   frame.contentDocument.head.appendChild(script1);
 
-  let script2 = document.createElement('script');
+  const script2 = document.createElement('script');
   script2.async = false;
   script2.src = 'ad_script.js';
   frame.contentDocument.head.appendChild(script2);
 
-  let script3 = document.createElement('script');
+  const script3 = document.createElement('script');
   script3.async = false;
   script3.src = 'ad_script_2.js';
   // Set title so we know when all scripts have loaded.
@@ -86,4 +141,93 @@ function createAdFrameWithWindowStopAbortedLoad(name) {
     top.document.title = name;
   };
   frame.contentDocument.head.appendChild(script3);
+}
+
+function createCSSBackgroundImageFromAdScript(url) {
+  const div = document.createElement('div');
+  div.style.width = '100px';
+  div.style.height = '100px';
+  div.style.backgroundImage = 'url("' + url + '")';
+  document.body.appendChild(div);
+}
+
+function appendThenLoadVideoAd(url) {
+  const video = document.createElement('video');
+  video.src = url;
+  video.autoplay = true;
+  video.style.width = '100px';
+  video.style.height = '100px';
+  video.style.position = 'fixed';
+  video.style.top = '0';
+  video.style.left = '0';
+  document.body.appendChild(video);
+  return new Promise(resolve => {
+    const checkReady = () => {
+      if (video.readyState >= 1) {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve(true)));
+      } else {
+        setTimeout(checkReady, 50);
+      }
+    };
+    checkReady();
+  });
+}
+
+function loadThenAppendVideoAd(url) {
+  const video = document.createElement('video');
+  video.src = url;
+  video.autoplay = true;
+  video.style.width = '100px';
+  video.style.height = '100px';
+  video.style.position = 'fixed';
+  video.style.top = '0';
+  video.style.left = '0';
+  return new Promise(resolve => {
+    const checkReady = () => {
+      if (video.readyState >= 1) {
+        document.body.appendChild(video);
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve(true)));
+      } else {
+        setTimeout(checkReady, 50);
+      }
+    };
+    checkReady();
+  });
+}
+
+function appendThenLoadAudioAd(url) {
+  const audio = document.createElement('audio');
+  audio.src = url;
+  audio.autoplay = true;
+  document.body.appendChild(audio);
+  return new Promise(resolve => {
+    const checkReady = () => {
+      if (audio.readyState >= 1) {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve(true)));
+      } else {
+        setTimeout(checkReady, 50);
+      }
+    };
+    checkReady();
+  });
+}
+
+function appendThenLoadInvisibleVideoAd(url) {
+  const video = document.createElement('video');
+  video.src = url;
+  video.autoplay = true;
+  video.style.width = '0px';
+  video.style.height = '0px';
+  video.style.display = 'none';
+  document.body.appendChild(video);
+  return new Promise(resolve => {
+    const checkReady = () => {
+      if (video.readyState >= 1) {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve(true)));
+      } else {
+        setTimeout(checkReady, 50);
+      }
+    };
+    checkReady();
+  });
 }

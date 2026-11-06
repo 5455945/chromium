@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,10 @@
 
 #import <AppKit/AppKit.h>
 
+#import "base/apple/scoped_objc_class_swizzler.h"
 #include "base/check.h"
-#import "base/mac/scoped_objc_class_swizzler.h"
 
-using base::mac::ScopedObjCClassSwizzler;
+using base::apple::ScopedObjCClassSwizzler;
 
 namespace {
 
@@ -55,8 +55,7 @@ NSScrollerStyle GetScrollerStyle(bool overlay) {
 
 @end
 
-namespace ui {
-namespace test {
+namespace ui::test {
 
 ScopedPreferredScrollerStyle::ScopedPreferredScrollerStyle(bool overlay)
     : overlay_(overlay) {
@@ -65,7 +64,7 @@ ScopedPreferredScrollerStyle::ScopedPreferredScrollerStyle(bool overlay)
                           ? [FakeNSScrollerPreferredStyleOverlayDonor class]
                           : [FakeNSScrollerPreferredStyleLegacyDonor class];
 
-  DCHECK(!g_swizzling);
+  CHECK(!g_swizzling, base::NotFatalUntil::M163);
   g_swizzling = true;
   swizzler_ = std::make_unique<ScopedObjCClassSwizzler>(
       [NSScroller class], style_class, @selector(preferredScrollerStyle));
@@ -76,12 +75,11 @@ ScopedPreferredScrollerStyle::ScopedPreferredScrollerStyle(bool overlay)
 
 ScopedPreferredScrollerStyle::~ScopedPreferredScrollerStyle() {
   swizzler_.reset();
-  DCHECK(g_swizzling);
+  CHECK(g_swizzling, base::NotFatalUntil::M163);
   g_swizzling = false;
 
   if ([NSScroller preferredScrollerStyle] != GetScrollerStyle(overlay_))
     NotifyStyleChanged();
 }
 
-}  // namespace test
-}  // namespace ui
+}  // namespace ui::test

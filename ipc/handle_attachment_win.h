@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -33,7 +33,7 @@ class IPC_MESSAGE_SUPPORT_EXPORT HandleAttachmentWin
   // MessageAttachment interface.
   Type GetType() const override;
 
-  HANDLE Take() { return handle_.Take(); }
+  HANDLE Take() { return handle_.release(); }
 
  private:
   ~HandleAttachmentWin() override;

@@ -1,19 +1,26 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+import * as Common from 'devtools/core/common/common.js';
+import * as SDK from 'devtools/core/sdk/sdk.js';
+import * as TextUtils from 'devtools/core/text_utils/text_utils.js';
+import * as Network from 'devtools/panels/network/network.js';
+import * as SourceFrame from 'devtools/ui/legacy/components/source_frame/source_frame.js';
+import * as UIModule from 'devtools/ui/legacy/legacy.js';
+import {TestRunner} from 'test_runner';
 
 (async function() {
   'use strict';
   TestRunner.addResult(`Tests to make sure the proper view is used for the data that is received in network panel.\n`);
-  await TestRunner.loadTestModule('network_test_runner');
-  await TestRunner.loadLegacyModule('source_frame');
   await TestRunner.showPanel('network');
 
   function createNetworkRequest(mimeType, content, statusCode, resourceType) {
-    var request = new SDK.NetworkRequest(0, 'http://localhost');
-    request._resourceType = resourceType;
+    const request = SDK.NetworkRequest.NetworkRequest.create(
+      'requestId', 'http://localhost', '', null, null, null);
+    request.setResourceType(resourceType);
     request.mimeType = mimeType;
-    request._contentData = Promise.resolve({error: null, content: content, encoded: false});
+    request.setContentDataProvider(async () => new TextUtils.ContentData.ContentData(content, false, mimeType));
     if (statusCode !== undefined)
       request.statusCode = statusCode;
     return request;
@@ -23,25 +30,30 @@
     if (!previewer)
       return '** NONE **';
     if (previewer instanceof SourceFrame.ResourceSourceFrame.SearchableContainer)
-      return '_SearchableContainer > ' + getViewName(previewer.children()[0]);
-    if (previewer instanceof UI.SearchableView)
-      return 'SearchableView > ' + getViewName(previewer._searchProvider);
-    return previewer.contentElement.className;
+      return 'SearchableContainer > ' + getViewName(previewer.children()[0]);
+    if (previewer instanceof UIModule.SearchableView.SearchableView)
+      return 'SearchableView > ' + getViewName(previewer.searchProvider);
+    return [...previewer.contentElement.classList].sort().join(' ');
   }
 
   async function testPreviewer(mimeType, content, statusCode) {
     var testResourceTypes = [
-      Common.resourceTypes.XHR, Common.resourceTypes.Fetch, Common.resourceTypes.Document, Common.resourceTypes.Other
+      Common.ResourceType.resourceTypes.XHR, Common.ResourceType.resourceTypes.Fetch, Common.ResourceType.resourceTypes.Document, Common.ResourceType.resourceTypes.Other
     ];
     TestRunner.addResult('Testing with MimeType: ' + mimeType + ', and StatusCode: ' + statusCode);
     TestRunner.addResult('Content: ' + content.replace(/\0/g, '**NULL**'));
     TestRunner.addResult('');
     for (var resourceType of testResourceTypes) {
       var request = createNetworkRequest(mimeType, content, statusCode, resourceType);
-      var previewView = new Network.RequestPreviewView(request, new Network.RequestResponseView(request));
-      previewView.wasShown();
+      var previewView = new Network.RequestPreviewView.RequestPreviewView(request);
+      previewView.markAsRoot();
+      previewView.show(document.body);
+      const contentView = await previewView.contentViewPromise;
+      await UIModule.Widget.Widget.allUpdatesComplete;
       TestRunner.addResult(
-          'ResourceType(' + resourceType.name() + '): ' + getViewName(await previewView._contentViewPromise));
+          'ResourceType(' + resourceType.name() +
+          '): ' + getViewName(contentView));
+      previewView.detach();
     }
     TestRunner.addResult('');
   }

@@ -1,16 +1,19 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.webapk.shell_apk.h2o;
 
+import org.chromium.build.annotations.NullMarked;
+
 /**
  * Controls when to launch the WebAPK for {@link SplashActivity}.
  *
- * Executes the provided Runnable when all of {@link #onSplashScreenReady}, {@link #onWillLaunch}
+ * <p>Executes the provided Runnable when all of {@link #onSplashScreenReady}, {@link #onWillLaunch}
  * and {@link #onHostBrowserSelected} have been called. The provided Runnable is only called once,
  * but this can be reset by calling {@link #reset}.
  */
+@NullMarked
 public class LaunchTrigger {
     private final Runnable mCallback;
 

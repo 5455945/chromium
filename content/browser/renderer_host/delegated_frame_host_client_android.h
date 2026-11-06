@@ -1,26 +1,44 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_BROWSER_RENDERER_HOST_DELEGATED_FRAME_HOST_CLIENT_ANDROID_H_
 #define CONTENT_BROWSER_RENDERER_HOST_DELEGATED_FRAME_HOST_CLIENT_ANDROID_H_
 
-#include "base/macros.h"
+#include <vector>
+
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "components/viz/common/frame_timing_details_map.h"
+#include "components/viz/common/surfaces/surface_id.h"
 #include "content/common/content_export.h"
+#include "content/public/browser/render_widget_host.h"
 #include "ui/android/delegated_frame_host_android.h"
 
 namespace content {
 
+class RenderWidgetHostImpl;
 class RenderWidgetHostViewAndroid;
 
 class CONTENT_EXPORT DelegatedFrameHostClientAndroid
-    : public ui::DelegatedFrameHostAndroid::Client {
+    : public RenderWidgetHost::InputEventObserver,
+      public ui::DelegatedFrameHostAndroid::Client {
  public:
   explicit DelegatedFrameHostClientAndroid(
       RenderWidgetHostViewAndroid* render_widget_host_view);
+
+  DelegatedFrameHostClientAndroid(const DelegatedFrameHostClientAndroid&) =
+      delete;
+  DelegatedFrameHostClientAndroid& operator=(
+      const DelegatedFrameHostClientAndroid&) = delete;
+
   ~DelegatedFrameHostClientAndroid() override;
+
+  void DidSubmitCompositorFrame() override;
+  void OnInputEvent(const RenderWidgetHost& widget,
+                    const blink::WebInputEvent& event,
+                    InputEventSource source) override;
 
  private:
   // DelegatedFrameHostAndroid::Client implementation.
@@ -28,10 +46,13 @@ class CONTENT_EXPORT DelegatedFrameHostClientAndroid
                            base::TimeTicks activation_time) override;
   void WasEvicted() override;
   void OnSurfaceIdChanged() override;
+  std::vector<viz::SurfaceId> CollectSurfaceIdsForEviction() const override;
+  void RecordFrameSubmissionMetrics();
 
-  RenderWidgetHostViewAndroid* render_widget_host_view_;
+  raw_ptr<RenderWidgetHostViewAndroid> render_widget_host_view_;
+  base::WeakPtr<RenderWidgetHostImpl> host_;
 
-  DISALLOW_COPY_AND_ASSIGN(DelegatedFrameHostClientAndroid);
+  int frames_submitted_this_scroll_ = 0u;
 };
 
 }  // namespace content

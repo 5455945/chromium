@@ -16,11 +16,16 @@ Nodes:
         nodeId : <number>
         nodeName : DIV
         nodeType : 1
-        nodeValue : 
+        nodeValue :
     }
 }
 {
     node : {
+        assignedSlot : {
+            backendNodeId : <number>
+            nodeName : SLOT
+            nodeType : 1
+        }
         attributes : [
             [0] : class
             [1] : in-details
@@ -33,7 +38,7 @@ Nodes:
         nodeId : <number>
         nodeName : DIV
         nodeType : 1
-        nodeValue : 
+        nodeValue :
     }
 }
 {
@@ -50,7 +55,7 @@ Nodes:
         nodeId : <number>
         nodeName : DIV
         nodeType : 1
-        nodeValue : 
+        nodeValue :
     }
 }
 

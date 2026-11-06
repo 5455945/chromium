@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 #include "third_party/blink/renderer/core/editing/range_in_flat_tree.h"
@@ -7,21 +7,27 @@
 
 namespace blink {
 
+RangeInFlatTree::RangeInFlatTree()
+    : start_(MakeGarbageCollected<RelocatablePosition>(Position())),
+      end_(MakeGarbageCollected<RelocatablePosition>(Position())) {
+  DCHECK(IsNull());
+}
+
 RangeInFlatTree::RangeInFlatTree(const PositionInFlatTree& start,
                                  const PositionInFlatTree& end)
     : start_(MakeGarbageCollected<RelocatablePosition>(
-          ToPositionInDOMTree(start))),
+          ToPositionInDomTree(start))),
       end_(
-          MakeGarbageCollected<RelocatablePosition>(ToPositionInDOMTree(end))) {
+          MakeGarbageCollected<RelocatablePosition>(ToPositionInDomTree(end))) {
   DCHECK_LE(start, end);
 }
 
 void RangeInFlatTree::SetStart(const PositionInFlatTree& start) {
-  start_->SetPosition(ToPositionInDOMTree(start));
+  start_->SetPosition(ToPositionInDomTree(start));
 }
 
 void RangeInFlatTree::SetEnd(const PositionInFlatTree& end) {
-  end_->SetPosition(ToPositionInDOMTree(end));
+  end_->SetPosition(ToPositionInDomTree(end));
 }
 
 PositionInFlatTree RangeInFlatTree::StartPosition() const {

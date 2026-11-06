@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,33 +9,28 @@
 
 #include <directmanipulation.h>
 #include <wrl.h>
+
 #include <memory>
 #include <string>
 
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "content/browser/renderer_host/direct_manipulation_event_handler_win.h"
 #include "content/common/content_export.h"
+#include "ui/aura/window_tree_host.h"
 #include "ui/compositor/compositor_animation_observer.h"
 #include "ui/gfx/geometry/size.h"
 
 namespace ui {
-
 class Compositor;
 class WindowEventTarget;
-
 }  // namespace ui
 
 namespace content {
 
 class DirectManipulationBrowserTestBase;
 class DirectManipulationUnitTest;
-
-// TODO(crbug.com/914914) This is added for help us getting debug log on
-// machine with scrolling issue on Windows Precision Touchpad. We will remove it
-// after Windows Precision Touchpad scrolling issue fixed.
-void DebugLogging(const std::string& s, HRESULT hr = 0);
-bool LoggingEnabled();
 
 // Windows 10 provides a new API called Direct Manipulation which generates
 // smooth scroll and scale factor via IDirectManipulationViewportEventHandler
@@ -46,29 +41,51 @@ bool LoggingEnabled();
 //    when DM_POINTERHITTEST.
 // 3. OnViewportStatusChanged will be called when the gesture phase change.
 //    OnContentUpdated will be called when the gesture update.
+//
+// IMPORTANT: Almost every function in this class can spin a nested message
+// loop, because they call into DirectManipulation COM objects. The nested
+// message loop can process WM_DESTROY messages that can delete the calling
+// class. So it's vital that the caller of every method take a WeakPtr to any
+// object that could be destroyed, and check if it's still valid after the
+// method returns.
 class CONTENT_EXPORT DirectManipulationHelper
     : public ui::CompositorAnimationObserver {
  public:
   // Creates and initializes an instance of this class if Direct Manipulation is
   // enabled on the platform. Returns nullptr if it disabled or failed on
   // initialization.
-  static std::unique_ptr<DirectManipulationHelper> CreateInstance(
-      HWND window,
-      ui::Compositor* compositor,
-      ui::WindowEventTarget* event_target);
+  static std::unique_ptr<DirectManipulationHelper> CreateInstance(HWND window);
 
-  // Creates and initializes an instance for testing.
+  // Creates and initializes an instance for testing. The given `manager` should
+  // implement IDirectManipulationManager::CreateViewport() and
+  // IDirectManipulationManager::GetUpdateManager() to return test mocks.
   static std::unique_ptr<DirectManipulationHelper> CreateInstanceForTesting(
-      ui::WindowEventTarget* event_target,
-      Microsoft::WRL::ComPtr<IDirectManipulationViewport> viewport);
+      Microsoft::WRL::ComPtr<IDirectManipulationManager> manager);
+
+  DirectManipulationHelper(const DirectManipulationHelper&) = delete;
+  DirectManipulationHelper& operator=(const DirectManipulationHelper&) = delete;
 
   ~DirectManipulationHelper() override;
 
+  // Returns the compositor owned by the WindowTreeHost.
+  ui::Compositor* compositor() const {
+    return window_tree_host_ ? window_tree_host_->compositor() : nullptr;
+  }
+
+  // Returns the event target.
+  ui::WindowEventTarget* event_target() const { return event_target_; }
+
+  // Creates a DirectManipulationEventHandler for `event_target`, using the
+  // compositor from `window_tree_host`. Replaces any existing event handler.
+  void UpdateEventHandler(base::WeakPtr<aura::WindowTreeHost> window_tree_host,
+                          ui::WindowEventTarget* event_target);
+
+  // ui::CompositorAnimationObserver
   // CompositorAnimationObserver implements.
   // DirectManipulation needs to poll for new events every frame while finger
   // gesturing on touchpad.
   void OnAnimationStep(base::TimeTicks timestamp) override;
-  void OnCompositingShuttingDown(ui::Compositor* compositor) override;
+  void OnCompositingShuttingDown(ui::Compositor* notifying_compositor) override;
 
   // Updates viewport size. Call it when window bounds updated.
   void SetSizeInPixels(const gfx::Size& size_in_pixels);
@@ -82,30 +99,54 @@ class CONTENT_EXPORT DirectManipulationHelper
   // Unregister this as an AnimationObserver of ui::Compositor.
   void RemoveAnimationObserver();
 
+  bool HasEventHandlerForTesting() { return event_handler_ != nullptr; }
+
  private:
   friend class DirectManipulationBrowserTestBase;
   friend class DirectManipulationUnitTest;
+  FRIEND_TEST_ALL_PREFIXES(DirectManipulationUnitTest,
+                           DestroyDuringOnPointerHitTest);
 
-  DirectManipulationHelper(HWND window, ui::Compositor* compositor);
+  template <typename T>
+  using ComPtr = Microsoft::WRL::ComPtr<T>;
 
+  // Shared implementation of CreateInstance and CreateInstanceForTesting.
   // This function instantiates Direct Manipulation and creates a viewport for
-  // |window_|. Return false if initialize failed.
-  bool Initialize(ui::WindowEventTarget* event_target);
+  // `window_`. Returns nullptr on failure.
+  static std::unique_ptr<DirectManipulationHelper> CreateInstanceImpl(
+      ComPtr<IDirectManipulationManager> manager,
+      HWND window);
+
+  DirectManipulationHelper(
+      ComPtr<IDirectManipulationManager> manager,
+      ComPtr<IDirectManipulationUpdateManager> update_manager,
+      ComPtr<IDirectManipulationViewport> viewport,
+      HWND window);
 
   void SetDeviceScaleFactorForTesting(float factor);
 
   void Destroy();
 
-  Microsoft::WRL::ComPtr<IDirectManipulationManager> manager_;
-  Microsoft::WRL::ComPtr<IDirectManipulationUpdateManager> update_manager_;
-  Microsoft::WRL::ComPtr<IDirectManipulationViewport> viewport_;
-  Microsoft::WRL::ComPtr<DirectManipulationEventHandler> event_handler_;
-  HWND window_;
-  ui::Compositor* compositor_ = nullptr;
-  DWORD view_port_handler_cookie_;
-  bool has_animation_observer_ = false;
+  // Implementation of OnPointerHitTest, with the `pointer_id` and
+  // `pointer_type` precalculated.
+  void OnPointerHitTest(UINT32 pointer_id, POINTER_INPUT_TYPE pointer_type);
 
-  DISALLOW_COPY_AND_ASSIGN(DirectManipulationHelper);
+  ComPtr<IDirectManipulationManager> manager_;
+  ComPtr<IDirectManipulationUpdateManager> update_manager_;
+  ComPtr<IDirectManipulationViewport> viewport_;
+  HWND window_;
+
+  // These are only set after UpdateEventHandler() is called, and may change
+  // whenever `window_` is reparented.
+  ComPtr<DirectManipulationEventHandler> event_handler_;
+  base::WeakPtr<aura::WindowTreeHost> window_tree_host_;
+  raw_ptr<ui::WindowEventTarget> event_target_ = nullptr;
+
+  DWORD view_port_handler_cookie_ = 0;
+  bool has_animation_observer_ = false;
+  gfx::Size size_in_pixels_;
+
+  base::WeakPtrFactory<DirectManipulationHelper> weak_factory_{this};
 };
 
 }  // namespace content

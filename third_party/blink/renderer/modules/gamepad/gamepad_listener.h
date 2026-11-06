@@ -1,17 +1,21 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_GAMEPAD_GAMEPAD_LISTENER_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_GAMEPAD_GAMEPAD_LISTENER_H_
 
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+
 namespace device {
 class Gamepad;
 }
 
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+
 namespace blink {
 
-class GamepadListener {
+class GamepadListener : public GarbageCollectedMixin {
  public:
   virtual ~GamepadListener() = default;
 
@@ -26,11 +30,11 @@ class GamepadListener {
   virtual void DidDisconnectGamepad(uint32_t index,
                                     const device::Gamepad& gamepad) = 0;
 
-  // Called when a button or axis is changed on a connected gamepad. |index| is
-  // the index of the gamepad in the gamepad array, and |gamepad| is a reference
-  // to the gamepad.
-  virtual void ButtonOrAxisDidChange(uint32_t index,
-                                     const device::Gamepad& gamepad) = 0;
+  // Called when any raw input data (buttons, axes, touches, etc.) changes
+  // on a connected gamepad. |index| is the gamepad's index in the array,
+  // and |gamepad| is a reference to the updated gamepad state.
+  virtual void DidChangeGamepadRawInput(uint32_t index,
+                                        const device::Gamepad& gamepad) = 0;
 };
 
 }  // namespace blink

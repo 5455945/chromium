@@ -1,54 +1,73 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "chrome/browser/ash/child_accounts/parent_access_code/parent_access_service.h"
 
 #include <map>
 #include <memory>
 #include <string>
 #include <utility>
 
+#include "ash/constants/ash_pref_names.h"
+#include "ash/login/ui/pin_request_widget.h"
 #include "ash/public/cpp/child_accounts/parent_access_controller.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/json/json_writer.h"
-#include "base/macros.h"
+#include "base/test/test_future.h"
 #include "chrome/browser/ash/child_accounts/parent_access_code/config_source.h"
-#include "chrome/browser/ash/child_accounts/parent_access_code/parent_access_service.h"
 #include "chrome/browser/ash/child_accounts/parent_access_code/parent_access_test_utils.h"
 #include "chrome/browser/ash/login/test/logged_in_user_mixin.h"
-#include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/ash/policy/core/user_policy_test_helper.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
+#include "chrome/browser/extensions/api/settings_private/chromeos_resolve_time_zone_by_geolocation_method_short.h"
+#include "chrome/browser/extensions/api/settings_private/chromeos_resolve_time_zone_by_geolocation_on_off.h"
+#include "chrome/browser/extensions/api/settings_private/prefs_util.h"
+#include "chrome/browser/extensions/api/settings_private/prefs_util_enums.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/webui/ash/settings/pages/date_time/mojom/date_time_handler.mojom.h"
+#include "chrome/browser/ui/webui/ash/settings/pages/date_time/new_date_time_handler.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "components/account_id/account_id.h"
+#include "components/account_id/account_id_literal.h"
 #include "components/prefs/pref_service.h"
+#include "components/session_manager/core/session.h"
+#include "components/session_manager/core/session_manager.h"
+#include "components/user_manager/test_helper.h"
+#include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/test/browser_test.h"
+#include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
+#include "mojo/public/cpp/bindings/receiver.h"
+#include "mojo/public/cpp/bindings/remote.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace ash {
-namespace parent_access {
+namespace ash::parent_access {
 
 namespace {
 
-// Dictionary keys for ParentAccessCodeConfig policy.
-constexpr char kFutureConfigDictKey[] = "future_config";
-constexpr char kCurrentConfigDictKey[] = "current_config";
-constexpr char kOldConfigsDictKey[] = "old_configs";
+class TestDateTimePage : public settings::date_time::mojom::Page {
+ public:
+  TestDateTimePage() = default;
+  ~TestDateTimePage() override = default;
 
-base::DictionaryValue PolicyFromConfigs(
-    const AccessCodeConfig& future_config,
-    const AccessCodeConfig& current_config,
-    const std::vector<AccessCodeConfig>& old_configs) {
-  base::DictionaryValue dict;
-  dict.SetKey(kFutureConfigDictKey, future_config.ToDictionary());
-  dict.SetKey(kCurrentConfigDictKey, current_config.ToDictionary());
-  base::Value old_configs_value(base::Value::Type::LIST);
-  for (const auto& config : old_configs)
-    old_configs_value.Append(config.ToDictionary());
-  dict.SetKey(kOldConfigsDictKey, std::move(old_configs_value));
-  return dict;
-}
+  mojo::PendingRemote<settings::date_time::mojom::Page> BindAndGetRemote() {
+    return receiver_.BindNewPipeAndPassRemote();
+  }
+
+  bool WaitForParentAccessValidation() { return validation_future_.Get(); }
+
+  // settings::date_time::mojom::Page:
+  void OnSystemClockCanSetTimeChanged(bool is_allowed) override {}
+  void OnParentAccessValidationComplete(bool success) override {
+    validation_future_.SetValue(success);
+  }
+
+ private:
+  base::test::TestFuture<bool> validation_future_;
+  mojo::Receiver<settings::date_time::mojom::Page> receiver_{this};
+};
 
 }  // namespace
 
@@ -61,15 +80,25 @@ struct CodeValidationResults {
   int failure_count = 0;
 };
 
+constexpr auto kRegularUserAccountId =
+    AccountId::Literal::FromUserEmailGaiaId("regular@gmail.com",
+                                            GaiaId::Literal("test-gaia"));
+
 // ParentAccessServiceObserver implementation used for tests.
 class TestParentAccessServiceObserver : public ParentAccessService::Observer {
  public:
   explicit TestParentAccessServiceObserver(const AccountId& account_id)
       : account_id_(account_id) {}
+
+  TestParentAccessServiceObserver(const TestParentAccessServiceObserver&) =
+      delete;
+  TestParentAccessServiceObserver& operator=(
+      const TestParentAccessServiceObserver&) = delete;
+
   ~TestParentAccessServiceObserver() override = default;
 
   void OnAccessCodeValidation(ParentCodeValidationResult result,
-                              absl::optional<AccountId> account_id) override {
+                              std::optional<AccountId> account_id) override {
     ASSERT_TRUE(account_id);
     EXPECT_EQ(account_id_, account_id.value());
     result == ParentCodeValidationResult::kValid
@@ -81,8 +110,6 @@ class TestParentAccessServiceObserver : public ParentAccessService::Observer {
 
  private:
   const AccountId account_id_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestParentAccessServiceObserver);
 };
 
 class ParentAccessServiceTest : public MixinBasedInProcessBrowserTest {
@@ -90,7 +117,17 @@ class ParentAccessServiceTest : public MixinBasedInProcessBrowserTest {
   ParentAccessServiceTest()
       : test_observer_(std::make_unique<TestParentAccessServiceObserver>(
             logged_in_user_mixin_.GetAccountId())) {}
+
+  ParentAccessServiceTest(const ParentAccessServiceTest&) = delete;
+  ParentAccessServiceTest& operator=(const ParentAccessServiceTest&) = delete;
+
   ~ParentAccessServiceTest() override = default;
+
+  void SetUpLocalStatePrefService(PrefService* local_state) override {
+    MixinBasedInProcessBrowserTest::SetUpLocalStatePrefService(local_state);
+    user_manager::TestHelper::RegisterPersistedUser(*local_state,
+                                                    kRegularUserAccountId);
+  }
 
   void SetUpOnMainThread() override {
     ASSERT_NO_FATAL_FAILURE(GetTestAccessCodeValues(&test_values_));
@@ -106,9 +143,8 @@ class ParentAccessServiceTest : public MixinBasedInProcessBrowserTest {
 
  protected:
   // Updates the policy containing the Parent Access Code config.
-  void UpdatePolicy(const base::DictionaryValue& dict) {
-    std::string config_string;
-    base::JSONWriter::Write(dict, &config_string);
+  void UpdatePolicy(const base::Value& dict) {
+    std::string config_string = base::WriteJson(dict).value_or("");
 
     logged_in_user_mixin_.GetUserPolicyMixin()
         ->RequestPolicyUpdate()
@@ -116,11 +152,16 @@ class ParentAccessServiceTest : public MixinBasedInProcessBrowserTest {
         ->mutable_parentaccesscodeconfig()
         ->set_value(config_string);
 
-    const user_manager::UserManager* const user_manager =
-        user_manager::UserManager::Get();
-    EXPECT_TRUE(user_manager->GetActiveUser()->IsChild());
-    Profile* child_profile =
-        ProfileHelper::Get()->GetProfileByUser(user_manager->GetActiveUser());
+    const session_manager::Session* active_session =
+        session_manager::SessionManager::Get()->GetActiveSession();
+    ASSERT_TRUE(active_session);
+    const user_manager::User* active_user =
+        user_manager::UserManager::Get()->FindUser(
+            active_session->account_id());
+    ASSERT_TRUE(active_user);
+    EXPECT_TRUE(active_user->IsChild());
+    Profile* child_profile = Profile::FromBrowserContext(
+        BrowserContextHelper::Get()->GetBrowserContextByUser(active_user));
 
     logged_in_user_mixin_.GetUserPolicyTestHelper()->RefreshPolicyAndWait(
         child_profile);
@@ -143,17 +184,10 @@ class ParentAccessServiceTest : public MixinBasedInProcessBrowserTest {
   }
 
   AccessCodeValues test_values_;
-  LoggedInUserMixin logged_in_user_mixin_{&mixin_host_,
-                                          LoggedInUserMixin::LogInType::kChild,
+  LoggedInUserMixin logged_in_user_mixin_{&mixin_host_, /*test_base=*/this,
                                           embedded_test_server(),
-                                          this,
-                                          true /*should_launch_browser*/,
-                                          absl::nullopt /*account_id*/,
-                                          true /*include_initial_user*/};
+                                          LoggedInUserMixin::LogInType::kChild};
   std::unique_ptr<TestParentAccessServiceObserver> test_observer_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ParentAccessServiceTest);
 };
 
 IN_PROC_BROWSER_TEST_F(ParentAccessServiceTest, NoConfigAvailable) {
@@ -285,16 +319,13 @@ IN_PROC_BROWSER_TEST_F(ParentAccessServiceTest, InvalidAccountId) {
 
 IN_PROC_BROWSER_TEST_F(ParentAccessServiceTest,
                        ChildDeviceOwner_IsApprovalRequired) {
-  auto* const user_manager =
-      static_cast<FakeChromeUserManager*>(user_manager::UserManager::Get());
-  user_manager->SetOwnerId(logged_in_user_mixin_.GetAccountId());
+  user_manager::UserManager::Get()->SetOwnerId(
+      logged_in_user_mixin_.GetAccountId());
 
   // No configuration available - reauth does not require PAC.
   // Login screen.
   EXPECT_TRUE(
       ParentAccessService::IsApprovalRequired(SupervisedAction::kAddUser));
-  EXPECT_FALSE(
-      ParentAccessService::IsApprovalRequired(SupervisedAction::kReauth));
   // In session, because child user is logged in the test fixture.
   EXPECT_TRUE(ParentAccessService::IsApprovalRequired(
       SupervisedAction::kUnlockTimeLimits));
@@ -309,8 +340,6 @@ IN_PROC_BROWSER_TEST_F(ParentAccessServiceTest,
   // Login screen.
   EXPECT_TRUE(
       ParentAccessService::IsApprovalRequired(SupervisedAction::kAddUser));
-  EXPECT_TRUE(
-      ParentAccessService::IsApprovalRequired(SupervisedAction::kReauth));
   // In session, because child user is logged in the test fixture.
   EXPECT_TRUE(ParentAccessService::IsApprovalRequired(
       SupervisedAction::kUnlockTimeLimits));
@@ -322,18 +351,12 @@ IN_PROC_BROWSER_TEST_F(ParentAccessServiceTest,
 
 IN_PROC_BROWSER_TEST_F(ParentAccessServiceTest,
                        RegularDeviceOwner_IsApprovalRequired) {
-  auto* const user_manager =
-      static_cast<FakeChromeUserManager*>(user_manager::UserManager::Get());
-  const AccountId regular_user = AccountId::FromUserEmail("regular@gmail.com");
-  user_manager->AddUser(regular_user);
-  user_manager->SetOwnerId(regular_user);
+  user_manager::UserManager::Get()->SetOwnerId(kRegularUserAccountId);
 
   // No configuration available - reauth does not require PAC.
   // Login screen.
   EXPECT_FALSE(
       ParentAccessService::IsApprovalRequired(SupervisedAction::kAddUser));
-  EXPECT_FALSE(
-      ParentAccessService::IsApprovalRequired(SupervisedAction::kReauth));
   // In session. Child user is logged in the test fixture.
   EXPECT_TRUE(ParentAccessService::IsApprovalRequired(
       SupervisedAction::kUnlockTimeLimits));
@@ -348,8 +371,6 @@ IN_PROC_BROWSER_TEST_F(ParentAccessServiceTest,
   // Login screen.
   EXPECT_FALSE(
       ParentAccessService::IsApprovalRequired(SupervisedAction::kAddUser));
-  EXPECT_FALSE(
-      ParentAccessService::IsApprovalRequired(SupervisedAction::kReauth));
   // In session, because child user is logged in the test fixture.
   EXPECT_TRUE(ParentAccessService::IsApprovalRequired(
       SupervisedAction::kUnlockTimeLimits));
@@ -359,5 +380,82 @@ IN_PROC_BROWSER_TEST_F(ParentAccessServiceTest,
       SupervisedAction::kUpdateTimezone));
 }
 
-}  // namespace parent_access
-}  // namespace ash
+IN_PROC_BROWSER_TEST_F(ParentAccessServiceTest,
+                       TimezoneModificationRequiresParentApproval) {
+  const session_manager::Session* active_session =
+      session_manager::SessionManager::Get()->GetActiveSession();
+  ASSERT_TRUE(active_session);
+  const AccountId& account_id = active_session->account_id();
+  const user_manager::User* const active_user =
+      user_manager::UserManager::Get()->FindUser(account_id);
+  ASSERT_TRUE(active_user);
+  ASSERT_TRUE(active_user->IsChild());
+  Profile* child_profile = Profile::FromBrowserContext(
+      BrowserContextHelper::Get()->GetBrowserContextByUser(active_user));
+  ASSERT_TRUE(child_profile);
+
+  extensions::PrefsUtil prefs_util(child_profile);
+  EXPECT_FALSE(ParentAccessService::Get().IsTimezoneChangeApproved(account_id));
+
+  base::Value auto_detect_off(false);
+  base::Value resolve_method(3);
+  base::Value timezone_1("America/Los_Angeles");
+
+  // Without parent access approval, child user cannot modify timezone prefs.
+  EXPECT_EQ(
+      prefs_util.SetPref(
+          extensions::settings_private::kResolveTimezoneByGeolocationOnOff,
+          &auto_detect_off),
+      extensions::settings_private::SetPrefResult::PREF_NOT_MODIFIABLE);
+  EXPECT_EQ(prefs_util.SetPref(extensions::settings_private::
+                                   kResolveTimezoneByGeolocationMethodShort,
+                               &resolve_method),
+            extensions::settings_private::SetPrefResult::PREF_NOT_MODIFIABLE);
+  EXPECT_EQ(prefs_util.SetPref(ash::prefs::kUserTimezone, &timezone_1),
+            extensions::settings_private::SetPrefResult::PREF_NOT_MODIFIABLE);
+
+  // Simulate opening Date & Time settings and completing parent access
+  // validation.
+  TestDateTimePage test_page;
+  mojo::Remote<settings::date_time::mojom::PageHandler> handler_remote;
+  auto handler = std::make_unique<settings::NewDateTimeHandler>(
+      handler_remote.BindNewPipeAndPassReceiver(), test_page.BindAndGetRemote(),
+      /*web_ui=*/nullptr, child_profile);
+
+  handler_remote->ShowParentAccessForTimezone();
+  handler_remote.FlushForTesting();
+  ASSERT_TRUE(PinRequestWidget::Get());
+  PinRequestWidget::Get()->Close(true);
+  EXPECT_TRUE(test_page.WaitForParentAccessValidation());
+  EXPECT_TRUE(ParentAccessService::Get().IsTimezoneChangeApproved(account_id));
+
+  // After parent access approval, child user can modify timezone prefs.
+  EXPECT_EQ(prefs_util.SetPref(extensions::settings_private::
+                                   kResolveTimezoneByGeolocationMethodShort,
+                               &resolve_method),
+            extensions::settings_private::SetPrefResult::SUCCESS);
+  EXPECT_EQ(
+      prefs_util.SetPref(
+          extensions::settings_private::kResolveTimezoneByGeolocationOnOff,
+          &auto_detect_off),
+      extensions::settings_private::SetPrefResult::SUCCESS);
+  EXPECT_EQ(prefs_util.SetPref(ash::prefs::kUserTimezone, &timezone_1),
+            extensions::settings_private::SetPrefResult::SUCCESS);
+
+  // Destroying NewDateTimeHandler (closing the Settings page) invalidates the
+  // approval.
+  handler.reset();
+  EXPECT_FALSE(ParentAccessService::Get().IsTimezoneChangeApproved(account_id));
+
+  base::Value auto_detect_on(true);
+  base::Value timezone_2("Asia/Tokyo");
+  EXPECT_EQ(
+      prefs_util.SetPref(
+          extensions::settings_private::kResolveTimezoneByGeolocationOnOff,
+          &auto_detect_on),
+      extensions::settings_private::SetPrefResult::PREF_NOT_MODIFIABLE);
+  EXPECT_EQ(prefs_util.SetPref(ash::prefs::kUserTimezone, &timezone_2),
+            extensions::settings_private::SetPrefResult::PREF_NOT_MODIFIABLE);
+}
+
+}  // namespace ash::parent_access

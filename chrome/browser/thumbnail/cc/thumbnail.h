@@ -1,11 +1,11 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_THUMBNAIL_CC_THUMBNAIL_H_
 #define CHROME_BROWSER_THUMBNAIL_CC_THUMBNAIL_H_
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "cc/resources/ui_resource_bitmap.h"
@@ -25,6 +25,8 @@ namespace ui {
 class UIResourceProvider;
 }
 
+namespace thumbnail {
+
 typedef int TabId;
 
 class Thumbnail;
@@ -32,7 +34,7 @@ class Thumbnail;
 class ThumbnailDelegate {
  public:
   virtual void InvalidateCachedThumbnail(Thumbnail* thumbnail) = 0;
-  virtual ~ThumbnailDelegate() {}
+  virtual ~ThumbnailDelegate() = default;
 };
 
 class Thumbnail : public cc::UIResourceClient {
@@ -41,8 +43,12 @@ class Thumbnail : public cc::UIResourceClient {
       TabId tab_id,
       const base::Time& time_stamp,
       float scale,
-      ui::UIResourceProvider* ui_resource_provider,
+      base::WeakPtr<ui::UIResourceProvider> ui_resource_provider,
       ThumbnailDelegate* thumbnail_delegate);
+
+  Thumbnail(const Thumbnail&) = delete;
+  Thumbnail& operator=(const Thumbnail&) = delete;
+
   ~Thumbnail() override;
 
   TabId tab_id() const { return tab_id_; }
@@ -51,6 +57,7 @@ class Thumbnail : public cc::UIResourceClient {
   cc::UIResourceId ui_resource_id() const { return ui_resource_id_; }
   const gfx::SizeF& scaled_content_size() const { return scaled_content_size_; }
   const gfx::SizeF& scaled_data_size() const { return scaled_data_size_; }
+  size_t size_in_bytes() const { return size_in_bytes_; }
 
   void SetBitmap(const SkBitmap& bitmap);
   void SetCompressedBitmap(sk_sp<SkPixelRef> compressed_bitmap,
@@ -65,29 +72,30 @@ class Thumbnail : public cc::UIResourceClient {
   Thumbnail(TabId tab_id,
             const base::Time& time_stamp,
             float scale,
-            ui::UIResourceProvider* ui_resource_provider,
+            base::WeakPtr<ui::UIResourceProvider> ui_resource_provider,
             ThumbnailDelegate* thumbnail_delegate);
 
   void ClearUIResourceId();
   void DoInvalidate();
 
-  TabId tab_id_;
   base::Time time_stamp_;
-  float scale_;
+  size_t size_in_bytes_ = 1U;
+  cc::UIResourceBitmap bitmap_;
+  base::WeakPtr<ui::UIResourceProvider> ui_resource_provider_;
+  raw_ptr<ThumbnailDelegate> thumbnail_delegate_;
 
   gfx::SizeF scaled_content_size_;
   gfx::SizeF scaled_data_size_;
 
-  cc::UIResourceBitmap bitmap_;
-  cc::UIResourceId ui_resource_id_;
+  TabId tab_id_;
+  float scale_;
+  cc::UIResourceId ui_resource_id_ = 0;
 
-  bool retrieved_;
-
-  ui::UIResourceProvider* ui_resource_provider_;
-  ThumbnailDelegate* thumbnail_delegate_;
+  bool retrieved_ = false;
 
   base::WeakPtrFactory<Thumbnail> weak_factory_{this};
-  DISALLOW_COPY_AND_ASSIGN(Thumbnail);
 };
+
+}  // namespace thumbnail
 
 #endif  // CHROME_BROWSER_THUMBNAIL_CC_THUMBNAIL_H_

@@ -1,16 +1,24 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/views/sharing_hub/sharing_hub_bubble_view_impl.h"
 
+#include "chrome/browser/share/share_metrics.h"
 #include "chrome/browser/sharing_hub/sharing_hub_model.h"
 #include "chrome/browser/ui/sharing_hub/sharing_hub_bubble_controller.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/chrome_typography.h"
+#include "chrome/browser/ui/views/sharing_hub/preview_view.h"
 #include "chrome/browser/ui/views/sharing_hub/sharing_hub_bubble_action_button.h"
 #include "chrome/grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/color/color_id.h"
+#include "ui/color/color_provider.h"
+#include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/border.h"
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/controls/separator.h"
 #include "ui/views/layout/box_layout.h"
@@ -30,137 +38,101 @@ constexpr int kMaximumButtons = 10;
 // with arrow keys possible.
 constexpr int kActionButtonGroup = 0;
 
-views::Separator* GetSeparator() {
-  auto* separator = new views::Separator();
-  separator->SetColor(gfx::kGoogleGrey300);
-  return separator;
-}
+constexpr int kInterItemPadding = 4;
+
 }  // namespace
 
 SharingHubBubbleViewImpl::SharingHubBubbleViewImpl(
-    views::View* anchor_view,
-    content::WebContents* web_contents,
+    views::BubbleAnchor anchor,
+    share::ShareAttempt attempt,
     SharingHubBubbleController* controller)
-    : LocationBarBubbleDelegateView(anchor_view, web_contents),
-      controller_(controller) {
-  SetButtons(ui::DIALOG_BUTTON_NONE);
+    : LocationBarBubbleDelegateView(anchor,
+                                    attempt.web_contents.get(),
+                                    /*autosize=*/true),
+      attempt_(attempt) {
+  CHECK(!anchor.IsNull(), base::NotFatalUntil::M162);
+  CHECK(controller, base::NotFatalUntil::M162);
+
+  SetBackgroundColor(ui::kColorMenuBackground);
+  SetAccessibleTitle(l10n_util::GetStringUTF16(IDS_SHARING_HUB_TOOLTIP));
+  SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
   set_fixed_width(views::LayoutProvider::Get()->GetDistanceMetric(
       views::DISTANCE_BUBBLE_PREFERRED_WIDTH));
-  DCHECK(controller);
+  RegisterWindowClosingCallback(base::BindOnce(
+      &SharingHubBubbleViewImpl::OnWindowClosing, weak_factory_.GetWeakPtr()));
+  SetEnableArrowKeyTraversal(true);
+  SetShowCloseButton(false);
+  SetShowTitle(false);
+
+  controller_ = controller->GetWeakPtr();
 }
 
 SharingHubBubbleViewImpl::~SharingHubBubbleViewImpl() = default;
 
 void SharingHubBubbleViewImpl::Hide() {
-  if (controller_) {
-    controller_->OnBubbleClosed();
-    controller_ = nullptr;
-  }
+  OnWindowClosing();
   CloseBubble();
-}
-
-bool SharingHubBubbleViewImpl::ShouldShowCloseButton() const {
-  return false;
-}
-
-bool SharingHubBubbleViewImpl::ShouldShowWindowTitle() const {
-  return false;
-}
-
-void SharingHubBubbleViewImpl::WindowClosing() {
-  if (controller_) {
-    controller_->OnBubbleClosed();
-    controller_ = nullptr;
-  }
-}
-
-void SharingHubBubbleViewImpl::OnPaint(gfx::Canvas* canvas) {
-  views::BubbleDialogDelegateView::OnPaint(canvas);
-}
-
-void SharingHubBubbleViewImpl::Show(DisplayReason reason) {
-  ShowForReason(reason);
 }
 
 void SharingHubBubbleViewImpl::OnActionSelected(
     SharingHubBubbleActionButton* button) {
-  if (!controller_)
+  if (!controller_) {
     return;
+  }
 
-  controller_->OnActionSelected(button->action_command_id(),
-                                button->action_is_first_party());
+  // The announcement has to happen here rather than in the button itself: the
+  // button doesn't know whether controller_ will be null, so it doesn't know
+  // whether the action will actually happen.
+  const SharingHubAction& action = button->action_info();
+  if (action.announcement_id) {
+    GetViewAccessibility().AnnounceText(
+        l10n_util::GetStringUTF16(action.announcement_id));
+  }
+  controller_->OnActionSelected(action);
+
   Hide();
 }
 
-const views::View* SharingHubBubbleViewImpl::GetButtonContainerForTesting()
-    const {
-  return scroll_view_->contents();
-}
-
 void SharingHubBubbleViewImpl::Init() {
-  auto* provider = ChromeLayoutProvider::Get();
-  set_margins(
-      gfx::Insets(provider->GetDistanceMetric(
-                      views::DISTANCE_DIALOG_CONTENT_MARGIN_TOP_CONTROL),
-                  0,
-                  provider->GetDistanceMetric(
-                      views::DISTANCE_DIALOG_CONTENT_MARGIN_BOTTOM_CONTROL),
-                  0));
-  SetLayoutManager(std::make_unique<views::FillLayout>());
+  const int kPadding = 8;
+  set_margins(gfx::Insets::TLBR(kPadding, 0, kPadding, 0));
+  SetLayoutManager(std::make_unique<views::BoxLayout>(
+      views::BoxLayout::Orientation::kVertical, gfx::Insets(),
+      kInterItemPadding));
+
+  AddChildView(std::make_unique<PreviewView>(attempt_));
+  AddChildView(std::make_unique<views::Separator>());
 
   scroll_view_ = AddChildView(std::make_unique<views::ScrollView>());
   scroll_view_->ClipHeightTo(0, kActionButtonHeight * kMaximumButtons);
+  scroll_view_->SetBackgroundColor(ui::kColorMenuBackground);
 
-  PopulateScrollView(controller_->GetFirstPartyActions(),
-                     controller_->GetThirdPartyActions());
+  PopulateScrollView(controller_->GetFirstPartyActions());
 }
 
 void SharingHubBubbleViewImpl::PopulateScrollView(
-    const std::vector<SharingHubAction>& first_party_actions,
-    const std::vector<SharingHubAction>& third_party_actions) {
+    const std::vector<SharingHubAction>& first_party_actions) {
   auto* action_list_view =
       scroll_view_->SetContents(std::make_unique<views::View>());
   action_list_view->SetLayoutManager(std::make_unique<views::BoxLayout>(
-      views::BoxLayout::Orientation::kVertical));
+      views::BoxLayout::Orientation::kVertical, gfx::Insets(),
+      kInterItemPadding));
 
   for (const auto& action : first_party_actions) {
     auto* view = action_list_view->AddChildView(
         std::make_unique<SharingHubBubbleActionButton>(this, action));
     view->SetGroup(kActionButtonGroup);
   }
+}
 
-  action_list_view->AddChildView(GetSeparator());
-
-  const int kLabelLineHeight = 22;
-  const int kIndent = 9;
-
-  auto* share_link_label =
-      new views::Label(l10n_util::GetStringUTF16(IDS_SHARING_HUB_SHARE_LABEL));
-  share_link_label->SetFontList(gfx::FontList("GoogleSans, 13px"));
-  share_link_label->SetLineHeight(kLabelLineHeight);
-  share_link_label->SetMultiLine(true);
-  share_link_label->SetHorizontalAlignment(gfx::ALIGN_TO_HEAD);
-  share_link_label->SizeToFit(views::DISTANCE_BUBBLE_PREFERRED_WIDTH);
-  constexpr auto kPrimaryIconBorder =
-      gfx::Insets(kIndent, kLabelLineHeight, 0, 0);
-  share_link_label->SetBorder(views::CreateEmptyBorder(kPrimaryIconBorder));
-
-  action_list_view->AddChildView(share_link_label);
-
-  for (const auto& action : third_party_actions) {
-    auto* view = action_list_view->AddChildView(
-        std::make_unique<SharingHubBubbleActionButton>(this, action));
-    view->SetGroup(kActionButtonGroup);
+void SharingHubBubbleViewImpl::OnWindowClosing() {
+  if (controller_) {
+    controller_->OnBubbleClosed();
+    controller_ = nullptr;
   }
-
-  MaybeSizeToContents();
-  Layout();
 }
 
-void SharingHubBubbleViewImpl::MaybeSizeToContents() {
-  // The widget may be null if this is called while the dialog is opening.
-  if (GetWidget())
-    SizeToContents();
-}
+BEGIN_METADATA(SharingHubBubbleViewImpl)
+END_METADATA
 
 }  // namespace sharing_hub

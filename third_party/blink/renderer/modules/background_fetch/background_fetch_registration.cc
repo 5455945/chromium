@@ -1,18 +1,19 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/background_fetch/background_fetch_registration.h"
 
+#include <optional>
 #include <utility>
 
-#include "base/metrics/histogram_macros.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "third_party/blink/public/common/privacy_budget/identifiability_metric_builder.h"
-#include "third_party/blink/public/common/privacy_budget/identifiable_surface.h"
+#include "base/compiler_specific.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
-#include "third_party/blink/public/mojom/web_feature/web_feature.mojom-blink.h"
+#include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-blink.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_request_usvstring.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_background_fetch_failure_reason.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_background_fetch_result.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_cache_query_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_image_resource.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
@@ -27,34 +28,40 @@
 #include "third_party/blink/renderer/modules/service_worker/service_worker_registration.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
-#include "third_party/blink/renderer/platform/heap/heap_allocator.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
 BackgroundFetchRegistration::BackgroundFetchRegistration(
     ServiceWorkerRegistration* service_worker_registration,
     mojom::blink::BackgroundFetchRegistrationPtr registration)
-    : developer_id_(registration->registration_data->developer_id),
+    : ActiveScriptWrappable<BackgroundFetchRegistration>({}),
+      developer_id_(registration->registration_data->developer_id),
       upload_total_(registration->registration_data->upload_total),
       uploaded_(registration->registration_data->uploaded),
       download_total_(registration->registration_data->download_total),
       downloaded_(registration->registration_data->downloaded),
       result_(registration->registration_data->result),
       failure_reason_(registration->registration_data->failure_reason),
+      registration_service_(service_worker_registration->GetExecutionContext()),
       observer_receiver_(this,
                          service_worker_registration->GetExecutionContext()) {
   DCHECK(service_worker_registration);
   registration_ = service_worker_registration;
-  registration_service_.Bind(std::move(registration->registration_interface));
 
   ExecutionContext* context = GetExecutionContext();
   if (!context || context->IsContextDestroyed())
     return;
 
-  auto task_runner = context->GetTaskRunner(TaskType::kBackgroundFetch);
+  auto service_task_runner = context->GetTaskRunner(TaskType::kBackgroundFetch);
+  registration_service_.Bind(std::move(registration->registration_interface),
+                             std::move(service_task_runner));
+
+  auto observer_task_runner =
+      context->GetTaskRunner(TaskType::kBackgroundFetch);
   registration_service_->AddRegistrationObserver(
-      observer_receiver_.BindNewPipeAndPassRemote(task_runner));
+      observer_receiver_.BindNewPipeAndPassRemote(observer_task_runner));
 }
 
 BackgroundFetchRegistration::~BackgroundFetchRegistration() = default;
@@ -73,11 +80,6 @@ void BackgroundFetchRegistration::OnProgress(
   result_ = result;
   failure_reason_ = failure_reason;
 
-  ExecutionContext* context = GetExecutionContext();
-  if (!context || context->IsContextDestroyed())
-    return;
-
-  DCHECK(context->IsContextThread());
   DispatchEvent(*Event::Create(event_type_names::kProgress));
 }
 
@@ -88,15 +90,15 @@ void BackgroundFetchRegistration::OnRecordsUnavailable() {
 void BackgroundFetchRegistration::OnRequestCompleted(
     mojom::blink::FetchAPIRequestPtr request,
     mojom::blink::FetchAPIResponsePtr response) {
-  for (auto* it = observers_.begin(); it != observers_.end();) {
-    BackgroundFetchRecord* observer = it->Get();
+  HeapVector<Member<BackgroundFetchRecord>> remaining_observers;
+  for (auto& observer : observers_) {
     if (observer->ObservedUrl() == request->url) {
       observer->OnRequestCompleted(response->Clone());
-      it = observers_.erase(it);
     } else {
-      it++;
+      remaining_observers.push_back(observer);
     }
   }
+  observers_.swap(remaining_observers);
 }
 
 String BackgroundFetchRegistration::id() const {
@@ -132,72 +134,81 @@ ExecutionContext* BackgroundFetchRegistration::GetExecutionContext() const {
   return registration_->GetExecutionContext();
 }
 
-ScriptPromise BackgroundFetchRegistration::abort(ScriptState* script_state) {
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
-  ScriptPromise promise = resolver->Promise();
+ScriptPromise<IDLBoolean> BackgroundFetchRegistration::abort(
+    ScriptState* script_state,
+    ExceptionState& exception_state) {
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<IDLBoolean>>(
+      script_state, exception_state.GetContext());
+  auto promise = resolver->Promise();
 
   DCHECK(registration_);
   DCHECK(registration_service_);
 
-  registration_service_->Abort(WTF::Bind(&BackgroundFetchRegistration::DidAbort,
-                                         WrapPersistent(this),
-                                         WrapPersistent(resolver)));
+  registration_service_->Abort(resolver->WrapCallbackInScriptScope(
+      BindOnce(&BackgroundFetchRegistration::DidAbort, WrapPersistent(this))));
 
   return promise;
 }
 
-ScriptPromise BackgroundFetchRegistration::match(
+ScriptPromise<BackgroundFetchRecord> BackgroundFetchRegistration::match(
     ScriptState* script_state,
     const V8RequestInfo* request,
     const CacheQueryOptions* options,
     ExceptionState& exception_state) {
-  return MatchImpl(script_state, request,
-                   mojom::blink::CacheQueryOptions::From(options),
-                   exception_state,
-                   /* match_all = */ false);
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<BackgroundFetchRecord>>(
+          script_state, exception_state.GetContext());
+  auto promise = resolver->Promise();
+  MatchImpl(script_state, resolver, request,
+            mojom::blink::CacheQueryOptions::From(options), exception_state,
+            /* match_all = */ false);
+  return promise;
 }
 
-ScriptPromise BackgroundFetchRegistration::matchAll(
-    ScriptState* script_state,
-    ExceptionState& exception_state) {
-  return MatchImpl(script_state, /* request = */ nullptr,
-                   /* cache_query_options = */ nullptr, exception_state,
-                   /* match_all = */ true);
+ScriptPromise<IDLSequence<BackgroundFetchRecord>>
+BackgroundFetchRegistration::matchAll(ScriptState* script_state,
+                                      ExceptionState& exception_state) {
+  auto* resolver = MakeGarbageCollected<
+      ScriptPromiseResolver<IDLSequence<BackgroundFetchRecord>>>(
+      script_state, exception_state.GetContext());
+  auto promise = resolver->Promise();
+  MatchImpl(script_state, resolver, /* request = */ nullptr,
+            /* cache_query_options = */ nullptr, exception_state,
+            /* match_all = */ true);
+  return promise;
 }
 
-ScriptPromise BackgroundFetchRegistration::matchAll(
-    ScriptState* script_state,
-    const V8RequestInfo* request,
-    const CacheQueryOptions* options,
-    ExceptionState& exception_state) {
-  return MatchImpl(script_state, request,
-                   mojom::blink::CacheQueryOptions::From(options),
-                   exception_state,
-                   /* match_all = */ true);
+ScriptPromise<IDLSequence<BackgroundFetchRecord>>
+BackgroundFetchRegistration::matchAll(ScriptState* script_state,
+                                      const V8RequestInfo* request,
+                                      const CacheQueryOptions* options,
+                                      ExceptionState& exception_state) {
+  auto* resolver = MakeGarbageCollected<
+      ScriptPromiseResolver<IDLSequence<BackgroundFetchRecord>>>(
+      script_state, exception_state.GetContext());
+  auto promise = resolver->Promise();
+  MatchImpl(script_state, resolver, request,
+            mojom::blink::CacheQueryOptions::From(options), exception_state,
+            /* match_all = */ true);
+  return promise;
 }
 
-ScriptPromise BackgroundFetchRegistration::MatchImpl(
+void BackgroundFetchRegistration::MatchImpl(
     ScriptState* script_state,
+    ScriptPromiseResolverBase* resolver,
     const V8RequestInfo* request,
     mojom::blink::CacheQueryOptionsPtr cache_query_options,
     ExceptionState& exception_state,
     bool match_all) {
   DCHECK(script_state);
-  UMA_HISTOGRAM_BOOLEAN("BackgroundFetch.MatchCalledFromDocumentScope",
-                        LocalDOMWindow::From(script_state));
-  UMA_HISTOGRAM_BOOLEAN("BackgroundFetch.MatchCalledWhenFetchIsIncomplete",
-                        result_ == mojom::BackgroundFetchResult::UNSET);
 
   if (!records_available_) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kInvalidStateError,
         "The records associated with this background fetch are no longer "
         "available.");
-    return ScriptPromise();
+    return;
   }
-
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
-  ScriptPromise promise = resolver->Promise();
 
   // Convert |request| to mojom::blink::FetchAPIRequestPtr.
   mojom::blink::FetchAPIRequestPtr request_to_match;
@@ -210,7 +221,7 @@ ScriptPromise BackgroundFetchRegistration::MatchImpl(
         Request* new_request = Request::Create(
             script_state, request->GetAsUSVString(), exception_state);
         if (exception_state.HadException())
-          return ScriptPromise();
+          return;
         request_to_match = new_request->CreateFetchAPIRequest();
         break;
       }
@@ -219,17 +230,14 @@ ScriptPromise BackgroundFetchRegistration::MatchImpl(
 
   DCHECK(registration_);
   DCHECK(registration_service_);
-
   registration_service_->MatchRequests(
       std::move(request_to_match), std::move(cache_query_options), match_all,
-      WTF::Bind(&BackgroundFetchRegistration::DidGetMatchingRequests,
-                WrapPersistent(this), WrapPersistent(resolver), match_all));
-
-  return promise;
+      BindOnce(&BackgroundFetchRegistration::DidGetMatchingRequests,
+               WrapPersistent(this), WrapPersistent(resolver), match_all));
 }
 
 void BackgroundFetchRegistration::DidGetMatchingRequests(
-    ScriptPromiseResolver* resolver,
+    ScriptPromiseResolverBase* resolver,
     bool return_all,
     Vector<mojom::blink::BackgroundFetchSettledFetchPtr> settled_fetches) {
   DCHECK(resolver);
@@ -257,19 +265,20 @@ void BackgroundFetchRegistration::DidGetMatchingRequests(
   }
 
   if (!return_all) {
-    if (settled_fetches.IsEmpty()) {
+    if (settled_fetches.empty()) {
       // Nothing was matched. Resolve with `undefined`.
-      resolver->Resolve();
+      resolver->DowncastTo<BackgroundFetchRecord>()->Resolve();
       return;
     }
 
     DCHECK_EQ(settled_fetches.size(), 1u);
     DCHECK_EQ(to_return.size(), 1u);
-    resolver->Resolve(to_return[0]);
+    resolver->DowncastTo<BackgroundFetchRecord>()->Resolve(to_return[0]);
     return;
   }
 
-  resolver->Resolve(to_return);
+  resolver->DowncastTo<IDLSequence<BackgroundFetchRecord>>()->Resolve(
+      to_return);
 }
 
 void BackgroundFetchRegistration::UpdateRecord(
@@ -304,7 +313,7 @@ bool BackgroundFetchRegistration::IsAborted() {
 }
 
 void BackgroundFetchRegistration::DidAbort(
-    ScriptPromiseResolver* resolver,
+    ScriptPromiseResolver<IDLBoolean>* resolver,
     mojom::blink::BackgroundFetchError error) {
   switch (error) {
     case mojom::blink::BackgroundFetchError::NONE:
@@ -314,9 +323,9 @@ void BackgroundFetchRegistration::DidAbort(
       resolver->Resolve(/* success = */ false);
       return;
     case mojom::blink::BackgroundFetchError::STORAGE_ERROR:
-      resolver->Reject(MakeGarbageCollected<DOMException>(
+      resolver->RejectWithDOMException(
           DOMExceptionCode::kAbortError,
-          "Failed to abort registration due to I/O error."));
+          "Failed to abort registration due to I/O error.");
       return;
     case mojom::blink::BackgroundFetchError::SERVICE_WORKER_UNAVAILABLE:
     case mojom::blink::BackgroundFetchError::DUPLICATED_DEVELOPER_ID:
@@ -331,43 +340,41 @@ void BackgroundFetchRegistration::DidAbort(
   NOTREACHED();
 }
 
-const String BackgroundFetchRegistration::result() const {
+V8BackgroundFetchResult BackgroundFetchRegistration::result() const {
   switch (result_) {
     case mojom::BackgroundFetchResult::SUCCESS:
-      return "success";
+      return V8BackgroundFetchResult(V8BackgroundFetchResult::Enum::kSuccess);
     case mojom::BackgroundFetchResult::FAILURE:
-      return "failure";
+      return V8BackgroundFetchResult(V8BackgroundFetchResult::Enum::kFailure);
     case mojom::BackgroundFetchResult::UNSET:
-      return "";
+      return V8BackgroundFetchResult(V8BackgroundFetchResult::Enum::k);
   }
   NOTREACHED();
 }
 
-const String BackgroundFetchRegistration::failureReason() const {
-  blink::IdentifiabilityMetricBuilder(GetExecutionContext()->UkmSourceID())
-      .Set(
-          blink::IdentifiableSurface::FromTypeAndToken(
-              blink::IdentifiableSurface::Type::kWebFeature,
-              WebFeature::
-                  kV8BackgroundFetchRegistration_FailureReason_AttributeGetter),
-          failure_reason_ ==
-              mojom::BackgroundFetchFailureReason::QUOTA_EXCEEDED)
-      .Record(GetExecutionContext()->UkmRecorder());
+V8BackgroundFetchFailureReason BackgroundFetchRegistration::failureReason()
+    const {
   switch (failure_reason_) {
     case mojom::BackgroundFetchFailureReason::NONE:
-      return "";
+      return V8BackgroundFetchFailureReason(
+          V8BackgroundFetchFailureReason::Enum::k);
     case mojom::BackgroundFetchFailureReason::CANCELLED_FROM_UI:
     case mojom::BackgroundFetchFailureReason::CANCELLED_BY_DEVELOPER:
-      return "aborted";
+      return V8BackgroundFetchFailureReason(
+          V8BackgroundFetchFailureReason::Enum::kAborted);
     case mojom::BackgroundFetchFailureReason::BAD_STATUS:
-      return "bad-status";
+      return V8BackgroundFetchFailureReason(
+          V8BackgroundFetchFailureReason::Enum::kBadStatus);
     case mojom::BackgroundFetchFailureReason::SERVICE_WORKER_UNAVAILABLE:
     case mojom::BackgroundFetchFailureReason::FETCH_ERROR:
-      return "fetch-error";
+      return V8BackgroundFetchFailureReason(
+          V8BackgroundFetchFailureReason::Enum::kFetchError);
     case mojom::BackgroundFetchFailureReason::QUOTA_EXCEEDED:
-      return "quota-exceeded";
+      return V8BackgroundFetchFailureReason(
+          V8BackgroundFetchFailureReason::Enum::kQuotaExceeded);
     case mojom::BackgroundFetchFailureReason::DOWNLOAD_TOTAL_EXCEEDED:
-      return "download-total-exceeded";
+      return V8BackgroundFetchFailureReason(
+          V8BackgroundFetchFailureReason::Enum::kDownloadTotalExceeded);
   }
   NOTREACHED();
 }
@@ -378,7 +385,7 @@ bool BackgroundFetchRegistration::HasPendingActivity() const {
   if (GetExecutionContext()->IsContextDestroyed())
     return false;
 
-  return !observers_.IsEmpty();
+  return !observers_.empty();
 }
 
 void BackgroundFetchRegistration::UpdateUI(
@@ -393,8 +400,9 @@ void BackgroundFetchRegistration::UpdateUI(
 void BackgroundFetchRegistration::Trace(Visitor* visitor) const {
   visitor->Trace(registration_);
   visitor->Trace(observers_);
+  visitor->Trace(registration_service_);
   visitor->Trace(observer_receiver_);
-  EventTargetWithInlineData::Trace(visitor);
+  EventTarget::Trace(visitor);
   ActiveScriptWrappable::Trace(visitor);
 }
 

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -47,19 +47,23 @@
 #include <stdint.h>
 #include <sys/types.h>
 
-#include "base/macros.h"
-#include "media/parsers/media_parsers_export.h"
+#include "base/memory/raw_ptr.h"
+#include "media/base/media_export.h"
 
 namespace media {
 
 // A class to decode the VP8's boolean entropy coded stream. It's a variant of
 // arithmetic coding. See RFC 6386 - Chapter 7. Boolean Entropy Decoder.
-class MEDIA_PARSERS_EXPORT Vp8BoolDecoder {
+class MEDIA_EXPORT Vp8BoolDecoder {
  public:
   Vp8BoolDecoder();
 
+  Vp8BoolDecoder(const Vp8BoolDecoder&) = delete;
+  Vp8BoolDecoder& operator=(const Vp8BoolDecoder&) = delete;
+
   // Initializes the decoder to start decoding |data|, |size| being size
   // of |data| in bytes. Returns false if |data| is NULL or empty.
+  // TODO(crbug.com/40284755): data+size should be a span.
   bool Initialize(const uint8_t* data, size_t size);
 
   // Reads a boolean from the coded stream. Returns false if it has reached the
@@ -119,14 +123,14 @@ class MEDIA_PARSERS_EXPORT Vp8BoolDecoder {
   // Returns true iff we have ran out of bits.
   bool OutOfBuffer();
 
-  const uint8_t* user_buffer_;
-  const uint8_t* user_buffer_start_;
-  const uint8_t* user_buffer_end_;
+  raw_ptr<const uint8_t, AllowPtrArithmetic | DanglingUntriaged> user_buffer_;
+  raw_ptr<const uint8_t, AllowPtrArithmetic | DanglingUntriaged>
+      user_buffer_start_;
+  raw_ptr<const uint8_t, AllowPtrArithmetic | DanglingUntriaged>
+      user_buffer_end_;
   size_t value_;
   int count_;
   size_t range_;
-
-  DISALLOW_COPY_AND_ASSIGN(Vp8BoolDecoder);
 };
 
 }  // namespace media

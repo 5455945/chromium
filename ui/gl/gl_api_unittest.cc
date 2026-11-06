@@ -1,13 +1,18 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <stdint.h>
 
+#include <array>
 #include <memory>
+#include <string>
+#include <string_view>
+#include <vector>
 
+#include "base/check.h"
 #include "base/command_line.h"
-#include "base/cxx17_backports.h"
+#include "base/strings/string_split.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gl/gl_context.h"
 #include "ui/gl/gl_gl_api_implementation.h"
@@ -20,30 +25,29 @@ namespace gl {
 
 class GLApiTest : public testing::Test {
  public:
-  void SetUp() override {
-    fake_extension_string_ = "";
-    fake_version_string_ = "";
-    num_fake_extension_strings_ = 0;
-    fake_extension_strings_ = nullptr;
-
-    SetGLGetProcAddressProc(
-        static_cast<GLGetProcAddressProc>(&FakeGLGetProcAddress));
-  }
+  GLApiTest() { current_instance_ = this; }
+  ~GLApiTest() override { current_instance_ = nullptr; }
 
   static GLFunctionPointerType GL_BINDING_CALL
   FakeGLGetProcAddress(const char* proc) {
     return reinterpret_cast<GLFunctionPointerType>(0x1);
   }
 
-  void TearDown() override {
-    api_.reset(nullptr);
-    driver_.reset(nullptr);
+  void SetUp() override {
+    fake_extension_string_ = "";
+    fake_requestable_extension_string_ = "";
+    fake_version_string_ = "";
 
+    SetGLGetProcAddressProc(
+        static_cast<GLGetProcAddressProc>(&FakeGLGetProcAddress));
+  }
+
+  void TearDown() override {
+    TerminateAPI();
     SetGLImplementation(kGLImplementationNone);
     fake_extension_string_ = "";
+    fake_requestable_extension_string_ = "";
     fake_version_string_ = "";
-    num_fake_extension_strings_ = 0;
-    fake_extension_strings_ = nullptr;
   }
 
   void InitializeAPI(const char* disabled_extensions) {
@@ -67,38 +71,59 @@ class GLApiTest : public testing::Test {
         reinterpret_cast<const char*>(api_->glGetStringFn(GL_RENDERER)),
         extension_set);
 
-    driver_->InitializeDynamicBindings(version.get(), extension_set);
+    driver_->InitializeDynamicBindings(FakeGLGetProcAddress, version.get(),
+                                       extension_set);
     api_->set_version(std::move(version));
   }
 
-  void SetFakeExtensionString(const char* fake_string) {
-    SetGLImplementation(kGLImplementationDesktopGL);
-    fake_extension_string_ = fake_string;
-    fake_version_string_ = "2.1";
+  void TerminateAPI() {
+    api_.reset();
+    driver_.reset();
   }
 
-  void SetFakeExtensionStrings(const char** fake_strings, uint32_t count) {
-    SetGLImplementation(kGLImplementationDesktopGL);
-    num_fake_extension_strings_ = count;
-    fake_extension_strings_ = fake_strings;
-    fake_version_string_ = "3.0";
+  void SetFakeExtensionString(const char* fake_string) {
+    SetGLImplementation(kGLImplementationEGLANGLE);
+    fake_extension_string_ = fake_string;
+    fake_version_string_ = "OpenGL ES 3.0";
+  }
+
+  void SetFakeRequestableExtensionString(const char* fake_string) {
+    SetGLImplementation(kGLImplementationEGLANGLE);
+    fake_requestable_extension_string_ = fake_string;
+    fake_version_string_ = "OpenGL ES 3.0";
   }
 
   static const GLubyte* GL_BINDING_CALL FakeGetString(GLenum name) {
     if (name == GL_VERSION)
       return reinterpret_cast<const GLubyte*>(fake_version_string_);
+    if (name == GL_REQUESTABLE_EXTENSIONS_ANGLE) {
+      return reinterpret_cast<const GLubyte*>(
+          fake_requestable_extension_string_);
+    }
     return reinterpret_cast<const GLubyte*>(fake_extension_string_);
   }
 
   static void GL_BINDING_CALL FakeGetIntegervFn(GLenum pname, GLint* params) {
-    *params = num_fake_extension_strings_;
+    const char* ext_str = (pname == GL_NUM_REQUESTABLE_EXTENSIONS_ANGLE)
+                              ? fake_requestable_extension_string_
+                              : fake_extension_string_;
+    std::vector<std::string> extensions = base::SplitString(
+        ext_str, " ", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+    *params = static_cast<GLint>(extensions.size());
   }
 
   static const GLubyte* GL_BINDING_CALL FakeGetStringi(GLenum name,
                                                        GLuint index) {
-    return (index < num_fake_extension_strings_) ?
-           reinterpret_cast<const GLubyte*>(fake_extension_strings_[index]) :
-           nullptr;
+    CHECK(current_instance_);
+    const char* ext_str = (name == GL_REQUESTABLE_EXTENSIONS_ANGLE)
+                              ? fake_requestable_extension_string_
+                              : fake_extension_string_;
+    current_instance_->extensions_ = base::SplitString(
+        ext_str, " ", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+    GLuint count = static_cast<GLuint>(current_instance_->extensions_.size());
+    return (index < count) ? reinterpret_cast<const GLubyte*>(
+                                 current_instance_->extensions_[index].c_str())
+                           : nullptr;
   }
 
   const char* GetExtensions() {
@@ -116,75 +141,120 @@ class GLApiTest : public testing::Test {
                                                               index));
   }
 
+  const char* GetRequestableExtensions() {
+    return reinterpret_cast<const char*>(
+        api_->glGetStringFn(GL_REQUESTABLE_EXTENSIONS_ANGLE));
+  }
+
+  uint32_t GetNumRequestableExtensions() {
+    GLint num_extensions = 0;
+    api_->glGetIntegervFn(GL_NUM_REQUESTABLE_EXTENSIONS_ANGLE, &num_extensions);
+    return static_cast<uint32_t>(num_extensions);
+  }
+
+  const char* GetRequestableExtensioni(uint32_t index) {
+    return reinterpret_cast<const char*>(
+        api_->glGetStringiFn(GL_REQUESTABLE_EXTENSIONS_ANGLE, index));
+  }
+
  protected:
+  static GLApiTest* current_instance_;
   static const char* fake_extension_string_;
+  static const char* fake_requestable_extension_string_;
   static const char* fake_version_string_;
 
-  static uint32_t num_fake_extension_strings_;
-  static const char** fake_extension_strings_;
-
+  std::vector<std::string> extensions_;
   std::unique_ptr<DriverGL> driver_;
   std::unique_ptr<RealGLApi> api_;
 };
 
+GLApiTest* GLApiTest::current_instance_ = nullptr;
 const char* GLApiTest::fake_extension_string_ = "";
+const char* GLApiTest::fake_requestable_extension_string_ = "";
 const char* GLApiTest::fake_version_string_ = "";
 
-uint32_t GLApiTest::num_fake_extension_strings_ = 0;
-const char** GLApiTest::fake_extension_strings_ = nullptr;
-
 TEST_F(GLApiTest, DisabledExtensionStringTest) {
-  static const char* kFakeExtensions = "GL_EXT_1 GL_EXT_2 GL_EXT_3 GL_EXT_4";
-  static const char* kFakeDisabledExtensions = "GL_EXT_1,GL_EXT_2,GL_FAKE";
-  static const char* kFilteredExtensions = "GL_EXT_3 GL_EXT_4";
+  static constexpr std::string_view kFakeExtensions =
+      "GL_EXT_1 GL_EXT_2 GL_EXT_3 GL_EXT_4";
+  static constexpr std::string_view kFakeDisabledExtensions =
+      "GL_EXT_1,GL_EXT_2,GL_FAKE";
+  static constexpr std::string_view kFilteredExtensions = "GL_EXT_3 GL_EXT_4";
 
-  SetFakeExtensionString(kFakeExtensions);
+  SetFakeExtensionString(kFakeExtensions.data());
   InitializeAPI(nullptr);
-  EXPECT_STREQ(kFakeExtensions, GetExtensions());
+  EXPECT_STREQ(kFakeExtensions.data(), GetExtensions());
+  TerminateAPI();
 
-  InitializeAPI(kFakeDisabledExtensions);
-  EXPECT_STREQ(kFilteredExtensions, GetExtensions());
+  InitializeAPI(kFakeDisabledExtensions.data());
+  EXPECT_STREQ(kFilteredExtensions.data(), GetExtensions());
 }
 
 TEST_F(GLApiTest, DisabledExtensionBitTest) {
-  static const char* kFakeExtensions[] = {
-    "GL_ARB_timer_query"
-  };
-  static const char* kFakeDisabledExtensions = "GL_ARB_timer_query";
+  static constexpr std::string_view kFakeExtensions =
+      "GL_EXT_disjoint_timer_query";
+  static constexpr std::string_view kFakeDisabledExtensions =
+      "GL_EXT_disjoint_timer_query";
 
-  SetFakeExtensionStrings(kFakeExtensions, base::size(kFakeExtensions));
+  SetFakeExtensionString(kFakeExtensions.data());
   InitializeAPI(nullptr);
-  EXPECT_TRUE(driver_->ext.b_GL_ARB_timer_query);
+  EXPECT_TRUE(driver_->ext.b_GL_EXT_disjoint_timer_query);
+  TerminateAPI();
 
-  InitializeAPI(kFakeDisabledExtensions);
-  EXPECT_FALSE(driver_->ext.b_GL_ARB_timer_query);
+  InitializeAPI(kFakeDisabledExtensions.data());
+  EXPECT_FALSE(driver_->ext.b_GL_EXT_disjoint_timer_query);
 }
 
 TEST_F(GLApiTest, DisabledExtensionStringIndexTest) {
-  static const char* kFakeExtensions[] = {
-    "GL_EXT_1",
-    "GL_EXT_2",
-    "GL_EXT_3",
-    "GL_EXT_4"
-  };
-  static const char* kFakeDisabledExtensions = "GL_EXT_1,GL_EXT_2,GL_FAKE";
-  static const char* kFilteredExtensions[] = {
-    "GL_EXT_3",
-    "GL_EXT_4"
-  };
+  static constexpr std::string_view kFakeExtensions =
+      "GL_EXT_1 GL_EXT_2 GL_EXT_3 GL_EXT_4";
+  static constexpr std::array<std::string_view, 4> kFakeExtensionList = {
+      {"GL_EXT_1", "GL_EXT_2", "GL_EXT_3", "GL_EXT_4"}};
+  static constexpr std::string_view kFakeDisabledExtensions =
+      "GL_EXT_1,GL_EXT_2,GL_FAKE";
+  static constexpr std::array<std::string_view, 2> kFilteredExtensions = {
+      {"GL_EXT_3", "GL_EXT_4"}};
 
-  SetFakeExtensionStrings(kFakeExtensions, base::size(kFakeExtensions));
+  SetFakeExtensionString(kFakeExtensions.data());
   InitializeAPI(nullptr);
-
-  EXPECT_EQ(base::size(kFakeExtensions), GetNumExtensions());
-  for (uint32_t i = 0; i < base::size(kFakeExtensions); ++i) {
-    EXPECT_STREQ(kFakeExtensions[i], GetExtensioni(i));
+  EXPECT_EQ(kFakeExtensionList.size(), GetNumExtensions());
+  for (size_t i = 0; i < kFakeExtensionList.size(); ++i) {
+    EXPECT_STREQ(kFakeExtensionList[i].data(), GetExtensioni(i));
   }
+  TerminateAPI();
 
-  InitializeAPI(kFakeDisabledExtensions);
-  EXPECT_EQ(base::size(kFilteredExtensions), GetNumExtensions());
-  for (uint32_t i = 0; i < base::size(kFilteredExtensions); ++i) {
-    EXPECT_STREQ(kFilteredExtensions[i], GetExtensioni(i));
+  InitializeAPI(kFakeDisabledExtensions.data());
+  EXPECT_EQ(std::size(kFilteredExtensions), GetNumExtensions());
+  for (size_t i = 0; i < kFilteredExtensions.size(); ++i) {
+    EXPECT_STREQ(kFilteredExtensions[i].data(), GetExtensioni(i));
+  }
+}
+
+TEST_F(GLApiTest, DisabledRequestableExtensionTest) {
+  static constexpr std::string_view kFakeRequestableExtensions =
+      "GL_EXT_1 GL_EXT_2 GL_EXT_3 GL_EXT_4";
+  static constexpr std::array<std::string_view, 4> kFakeExtensionList = {
+      {"GL_EXT_1", "GL_EXT_2", "GL_EXT_3", "GL_EXT_4"}};
+  static constexpr std::string_view kFakeDisabledExtensions =
+      "GL_EXT_1,GL_EXT_2,GL_FAKE";
+  static constexpr std::string_view kFilteredExtensionsStr =
+      "GL_EXT_3 GL_EXT_4";
+  static constexpr std::array<std::string_view, 2> kFilteredExtensions = {
+      {"GL_EXT_3", "GL_EXT_4"}};
+
+  SetFakeRequestableExtensionString(kFakeRequestableExtensions.data());
+  InitializeAPI(nullptr);
+  EXPECT_STREQ(kFakeRequestableExtensions.data(), GetRequestableExtensions());
+  EXPECT_EQ(kFakeExtensionList.size(), GetNumRequestableExtensions());
+  for (size_t i = 0; i < kFakeExtensionList.size(); ++i) {
+    EXPECT_STREQ(kFakeExtensionList[i].data(), GetRequestableExtensioni(i));
+  }
+  TerminateAPI();
+
+  InitializeAPI(kFakeDisabledExtensions.data());
+  EXPECT_STREQ(kFilteredExtensionsStr.data(), GetRequestableExtensions());
+  EXPECT_EQ(std::size(kFilteredExtensions), GetNumRequestableExtensions());
+  for (size_t i = 0; i < kFilteredExtensions.size(); ++i) {
+    EXPECT_STREQ(kFilteredExtensions[i].data(), GetRequestableExtensioni(i));
   }
 }
 

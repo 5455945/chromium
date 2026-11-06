@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "base/macros.h"
+#include "base/time/time.h"
+#include "base/types/pass_key.h"
 #include "media/base/decoder_buffer.h"
 #include "media/base/demuxer_stream.h"
 #include "media/base/media_export.h"
@@ -23,83 +24,105 @@ namespace media {
 // between the two types explicit and easy to spot.
 class DecodeTimestamp {
  public:
-  DecodeTimestamp() {}
-  DecodeTimestamp(const DecodeTimestamp& rhs) : ts_(rhs.ts_) { }
-  DecodeTimestamp& operator=(const DecodeTimestamp& rhs) {
-    if (&rhs != this)
-      ts_ = rhs.ts_;
-    return *this;
-  }
+  constexpr DecodeTimestamp() = default;
 
   // Only operators that are actually used by the code have been defined.
   // Reviewers should pay close attention to the addition of new operators.
-  bool operator<(const DecodeTimestamp& rhs) const { return ts_ < rhs.ts_; }
-  bool operator>(const DecodeTimestamp& rhs) const  { return ts_ > rhs.ts_; }
-  bool operator==(const DecodeTimestamp& rhs) const  { return ts_ == rhs.ts_; }
-  bool operator!=(const DecodeTimestamp& rhs) const  { return ts_ != rhs.ts_; }
-  bool operator>=(const DecodeTimestamp& rhs) const  { return ts_ >= rhs.ts_; }
-  bool operator<=(const DecodeTimestamp& rhs) const  { return ts_ <= rhs.ts_; }
+  constexpr bool operator<(const DecodeTimestamp& rhs) const {
+    return ts_ < rhs.ts_;
+  }
+  constexpr bool operator>(const DecodeTimestamp& rhs) const {
+    return ts_ > rhs.ts_;
+  }
+  constexpr bool operator==(const DecodeTimestamp& rhs) const {
+    return ts_ == rhs.ts_;
+  }
+  constexpr bool operator!=(const DecodeTimestamp& rhs) const {
+    return ts_ != rhs.ts_;
+  }
+  constexpr bool operator>=(const DecodeTimestamp& rhs) const {
+    return ts_ >= rhs.ts_;
+  }
+  constexpr bool operator<=(const DecodeTimestamp& rhs) const {
+    return ts_ <= rhs.ts_;
+  }
 
-  base::TimeDelta operator-(const DecodeTimestamp& rhs) const {
+  constexpr base::TimeDelta operator-(const DecodeTimestamp& rhs) const {
     return ts_ - rhs.ts_;
   }
 
-  DecodeTimestamp& operator+=(base::TimeDelta rhs) {
+  constexpr DecodeTimestamp& operator+=(base::TimeDelta rhs) {
     ts_ += rhs;
     return *this;
   }
 
-  DecodeTimestamp& operator-=(base::TimeDelta rhs) {
+  constexpr DecodeTimestamp& operator-=(base::TimeDelta rhs) {
     ts_ -= rhs;
     return *this;
   }
 
-  DecodeTimestamp operator+(base::TimeDelta rhs) const {
+  constexpr DecodeTimestamp operator+(base::TimeDelta rhs) const {
     return DecodeTimestamp(ts_ + rhs);
   }
 
-  DecodeTimestamp operator-(base::TimeDelta rhs) const {
+  constexpr DecodeTimestamp operator-(base::TimeDelta rhs) const {
     return DecodeTimestamp(ts_ - rhs);
   }
 
-  double operator/(base::TimeDelta rhs) const { return ts_ / rhs; }
-  int64_t IntDiv(base::TimeDelta rhs) const { return ts_.IntDiv(rhs); }
-
-  static DecodeTimestamp FromSecondsD(double seconds) {
-    return DecodeTimestamp(base::TimeDelta::FromSecondsD(seconds));
+  constexpr double operator/(base::TimeDelta rhs) const { return ts_ / rhs; }
+  constexpr int64_t IntDiv(base::TimeDelta rhs) const {
+    return ts_.IntDiv(rhs);
   }
 
-  static DecodeTimestamp FromMilliseconds(int64_t milliseconds) {
-    return DecodeTimestamp(base::TimeDelta::FromMilliseconds(milliseconds));
+  static constexpr DecodeTimestamp FromSecondsD(double seconds) {
+    return DecodeTimestamp(base::Seconds(seconds));
   }
 
-  static DecodeTimestamp FromMicroseconds(int64_t microseconds) {
-    return DecodeTimestamp(base::TimeDelta::FromMicroseconds(microseconds));
+  static constexpr DecodeTimestamp FromMilliseconds(int64_t milliseconds) {
+    return DecodeTimestamp(base::Milliseconds(milliseconds));
+  }
+
+  static constexpr DecodeTimestamp FromMicroseconds(int64_t microseconds) {
+    return DecodeTimestamp(base::Microseconds(microseconds));
   }
 
   // This method is used to explicitly call out when presentation timestamps
   // are being converted to a decode timestamp.
-  static DecodeTimestamp FromPresentationTime(base::TimeDelta timestamp) {
+  static constexpr DecodeTimestamp FromPresentationTime(
+      base::TimeDelta timestamp) {
     return DecodeTimestamp(timestamp);
   }
 
-  double InSecondsF() const { return ts_.InSecondsF(); }
+  constexpr double InSecondsF() const { return ts_.InSecondsF(); }
   int64_t InMilliseconds() const { return ts_.InMilliseconds(); }
-  int64_t InMicroseconds() const { return ts_.InMicroseconds(); }
+  constexpr int64_t InMicroseconds() const { return ts_.InMicroseconds(); }
+
+  constexpr bool is_inf() const { return ts_.is_inf(); }
 
   // TODO(acolwell): Remove once all the hacks are gone. This method is called
   // by hacks where a decode time is being used as a presentation time.
-  base::TimeDelta ToPresentationTime() const { return ts_; }
+  constexpr base::TimeDelta ToPresentationTime() const { return ts_; }
 
  private:
-  explicit DecodeTimestamp(base::TimeDelta timestamp) : ts_(timestamp) { }
+  constexpr explicit DecodeTimestamp(base::TimeDelta timestamp)
+      : ts_(timestamp) {}
 
   base::TimeDelta ts_;
 };
 
-MEDIA_EXPORT extern inline DecodeTimestamp kNoDecodeTimestamp() {
-  return DecodeTimestamp::FromPresentationTime(kNoTimestamp);
-}
+// Assert assumptions necessary for DecodeTimestamp analogues of
+// base::TimeDelta::is_inf(), media::kNoTimestamp and media::kInfiniteDuration.
+static_assert(kNoTimestamp.is_min() && kNoTimestamp.is_inf());
+static_assert(kInfiniteDuration.is_max() && kInfiniteDuration.is_inf());
+
+// Indicates an invalid or missing decode timestamp.
+constexpr DecodeTimestamp kNoDecodeTimestamp =
+    DecodeTimestamp::FromPresentationTime(kNoTimestamp);
+
+// Similar to media::kInfiniteDuration, indicates a decode timestamp of positive
+// infinity.
+constexpr DecodeTimestamp kMaxDecodeTimestamp =
+    DecodeTimestamp::FromPresentationTime(kInfiniteDuration);
 
 class MEDIA_EXPORT StreamParserBuffer : public DecoderBuffer {
  public:
@@ -109,20 +132,45 @@ class MEDIA_EXPORT StreamParserBuffer : public DecoderBuffer {
   typedef DemuxerStream::Type Type;
   typedef StreamParser::TrackId TrackId;
 
-  static scoped_refptr<StreamParserBuffer> CreateEOSBuffer();
+  static scoped_refptr<StreamParserBuffer> CreateEOSBuffer(
+      std::optional<ConfigVariant> next_config = std::nullopt);
 
-  static scoped_refptr<StreamParserBuffer> CopyFrom(const uint8_t* data,
-                                                    int data_size,
-                                                    bool is_key_frame,
-                                                    Type type,
-                                                    TrackId track_id);
-  static scoped_refptr<StreamParserBuffer> CopyFrom(const uint8_t* data,
-                                                    int data_size,
-                                                    const uint8_t* side_data,
-                                                    int side_data_size,
-                                                    bool is_key_frame,
-                                                    Type type,
-                                                    TrackId track_id);
+  static scoped_refptr<StreamParserBuffer> CopyFrom(
+      base::span<const uint8_t> data,
+      bool is_key_frame,
+      Type type,
+      TrackId track_id);
+  static scoped_refptr<StreamParserBuffer> FromExternalMemory(
+      std::unique_ptr<ExternalMemory> external_memory,
+      bool is_key_frame,
+      Type type,
+      TrackId track_id);
+  static scoped_refptr<StreamParserBuffer> FromArray(
+      base::HeapArray<uint8_t> heap_array,
+      bool is_key_frame,
+      Type type,
+      TrackId track_id);
+
+  StreamParserBuffer(base::PassKey<StreamParserBuffer>,
+                     base::HeapArray<uint8_t> heap_array,
+                     bool is_key_frame,
+                     Type type,
+                     TrackId track_id);
+  StreamParserBuffer(base::PassKey<StreamParserBuffer>,
+                     std::unique_ptr<ExternalMemory> external_memory,
+                     bool is_key_frame,
+                     Type type,
+                     TrackId track_id);
+  StreamParserBuffer(base::PassKey<StreamParserBuffer>,
+                     base::span<const uint8_t> data,
+                     bool is_key_frame,
+                     Type type,
+                     TrackId track_id);
+  StreamParserBuffer(base::PassKey<StreamParserBuffer>,
+                     DecoderBufferType decoder_buffer_type,
+                     std::optional<ConfigVariant> next_config);
+  StreamParserBuffer(const StreamParserBuffer&) = delete;
+  StreamParserBuffer& operator=(const StreamParserBuffer&) = delete;
 
   // Decode timestamp. If not explicitly set, or set to kNoTimestamp, the
   // value will be taken from the normal timestamp.
@@ -135,7 +183,7 @@ class MEDIA_EXPORT StreamParserBuffer : public DecoderBuffer {
 
   // Gets the parser's media type associated with this buffer. Value is
   // meaningless for EOS buffers.
-  Type type() const { return type_; }
+  Type type() const { return static_cast<Type>(type_); }
   const char* GetTypeName() const;
 
   // Gets the parser's track ID associated with this buffer. Value is
@@ -152,6 +200,9 @@ class MEDIA_EXPORT StreamParserBuffer : public DecoderBuffer {
   //
   // All future timestamp, decode timestamp, config id, or track id changes to
   // this buffer will be applied to the preroll buffer as well.
+  //
+  // TODO(b/331652782): integrate the setter function into the constructor to
+  // make |preroll_buffer_| immutable.
   void SetPrerollBuffer(scoped_refptr<StreamParserBuffer> preroll);
   scoped_refptr<StreamParserBuffer> preroll_buffer() { return preroll_buffer_; }
 
@@ -163,24 +214,28 @@ class MEDIA_EXPORT StreamParserBuffer : public DecoderBuffer {
     is_duration_estimated_ = is_estimated;
   }
 
+  size_t GetMemoryUsage() const override;
+
  private:
-  StreamParserBuffer(const uint8_t* data,
-                     int data_size,
-                     const uint8_t* side_data,
-                     int side_data_size,
-                     bool is_key_frame,
-                     Type type,
-                     TrackId track_id);
   ~StreamParserBuffer() override;
 
-  DecodeTimestamp decode_timestamp_;
-  int config_id_;
-  Type type_;
-  TrackId track_id_;
-  scoped_refptr<StreamParserBuffer> preroll_buffer_;
-  bool is_duration_estimated_;
+  // ***************************************************************************
+  // WARNING: This is a highly allocated object. Care should be taken when
+  // adding any fields to make sure they are absolutely necessary. If a field
+  // must be added and can be optional, ensure it is heap allocated through the
+  // usage of something like std::unique_ptr.
+  // ***************************************************************************
 
-  DISALLOW_COPY_AND_ASSIGN(StreamParserBuffer);
+  // Note: This field is stored as a uint8_t instead of Type and uses
+  // static_cast<Type> in type() to avoid signed vs unsigned issues when Type
+  // is directly used as a bit-field.
+  const uint8_t type_ : 2;
+
+  bool is_duration_estimated_ : 1 = false;
+  DecodeTimestamp decode_timestamp_ = kNoDecodeTimestamp;
+  int config_id_ = kInvalidConfigId;
+  const TrackId track_id_;
+  scoped_refptr<StreamParserBuffer> preroll_buffer_;
 };
 
 }  // namespace media

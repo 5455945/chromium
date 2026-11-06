@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 
 #include <sys/syscall.h>
 
-#include "base/macros.h"
 #include "build/build_config.h"
 #include "sandbox/linux/tests/sandbox_test_runner_function_pointer.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -53,7 +52,7 @@ bool IsArchitectureArm();
 #define DISABLE_ON_SANITIZERS(test_name) test_name
 #endif
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #define DISABLE_ON_ANDROID(test_name) DISABLED_##test_name
 #else
 #define DISABLE_ON_ANDROID(test_name) test_name
@@ -75,6 +74,9 @@ bool IsArchitectureArm();
       static_cast<const void*>(static_cast<const char*>(msg))
 #define DEATH_SEGV_MESSAGE(msg)         \
   sandbox::UnitTests::DeathSEGVMessage, \
+      static_cast<const void*>(static_cast<const char*>(msg))
+#define DEATH_SEGV_MESSAGE_PATTERN(msg)        \
+  sandbox::UnitTests::DeathSEGVMessagePattern, \
       static_cast<const void*>(static_cast<const char*>(msg))
 #define DEATH_EXIT_CODE(rc)          \
   sandbox::UnitTests::DeathExitCode, \
@@ -128,6 +130,10 @@ class UnitTests {
   typedef void (*DeathCheck)(int status,
                              const std::string& msg,
                              const void* aux);
+
+  UnitTests() = delete;
+  UnitTests(const UnitTests&) = delete;
+  UnitTests& operator=(const UnitTests&) = delete;
 
   // Runs a test inside a short-lived process. Do not call this function
   // directly. It is automatically invoked by SANDBOX_TEST(). Most sandboxing
@@ -183,6 +189,12 @@ class UnitTests {
                                const std::string& msg,
                                const void* aux);
 
+  // A DeathCheck that verifies that the child process died with a SIGSEGV
+  // and printed a message matching a pattern.
+  static void DeathSEGVMessagePattern(int status,
+                                      const std::string& msg,
+                                      const void* aux);
+
   // A DeathCheck method that verifies that the test completed with a
   // particular exit code. If the test output any messages to stderr, they are
   // silently ignored. The expected exit code should be passed in by
@@ -198,11 +210,8 @@ class UnitTests {
   static void DeathBySignal(int status,
                             const std::string& msg,
                             const void* aux);
-
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(UnitTests);
 };
 
-}  // namespace
+}  // namespace sandbox
 
 #endif  // SANDBOX_LINUX_TESTS_UNIT_TESTS_H_

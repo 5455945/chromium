@@ -27,11 +27,16 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_HTML_PARSER_HTML_TOKENIZER_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_PARSER_HTML_TOKENIZER_H_
 
+#include <optional>
+
+#include "base/check_op.h"
 #include "base/memory/ptr_util.h"
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/core/html/parser/html_attributes_ranges.h"
 #include "third_party/blink/renderer/core/html/parser/html_parser_options.h"
 #include "third_party/blink/renderer/core/html/parser/html_token.h"
 #include "third_party/blink/renderer/core/html/parser/input_stream_preprocessor.h"
+#include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/platform/text/segmented_string.h"
 
 namespace blink {
@@ -46,6 +51,8 @@ class CORE_EXPORT HTMLTokenizer {
   ~HTMLTokenizer();
 
   void Reset();
+
+  void ClearToken() { token_.Clear(); }
 
   enum State {
     kDataState,
@@ -91,6 +98,11 @@ class CORE_EXPORT HTMLTokenizer {
     kCharacterReferenceInAttributeValueState,
     kAfterAttributeValueQuotedState,
     kSelfClosingStartTagState,
+    kProcessingInstructionOpenState,
+    kProcessingInstructionTargetState,
+    kAfterProcessingInstructionTargetState,
+    kProcessingInstructionDataState,
+    kProcessingInstructionQuestionableState,
     kBogusCommentState,
     // The ContinueBogusCommentState is not in the HTML5 spec, but we use
     // it internally to keep track of whether we've started the bogus
@@ -127,7 +139,7 @@ class CORE_EXPORT HTMLTokenizer {
   // This function returns true if it emits a token. Otherwise, callers
   // must provide the same (in progress) token on the next call (unless
   // they call reset() first).
-  bool NextToken(SegmentedString&, HTMLToken&);
+  HTMLToken* NextToken(SegmentedString&);
 
   // Returns a copy of any characters buffered internally by the tokenizer.
   // The tokenizer buffers characters when searching for the </script> token
@@ -141,10 +153,16 @@ class CORE_EXPORT HTMLTokenizer {
     return temporary_buffer_.size() ? temporary_buffer_.size() + 2 : 0;
   }
 
-  // Updates the tokenizer's state according to the given tag name. This is
-  // an approximation of how the tree builder would update the tokenizer's
-  // state. This method is useful for approximating HTML tokenization. To
-  // get exactly the correct tokenization, you need the real tree builder.
+  // Potentially sets the tokenizer state for the given tag name. Specifically
+  // the state is set if SpeculativeStateForTag() returns a value, see it for
+  // details and caveats.
+  void UpdateStateFor(const HTMLToken& token);
+  void UpdateStateFor(html_names::HTMLTag tag);
+
+  // Returns the tokenizer state for the given tag. This is an approximation of
+  // how the tree builder would update the tokenizer's state. This method is
+  // useful for approximating HTML tokenization. To get exactly the correct
+  // tokenization, you need the real tree builder.
   //
   // The main failures in the approximation are as follows:
   //
@@ -155,7 +173,8 @@ class CORE_EXPORT HTMLTokenizer {
   //  * CDATA sections in foreign content will be tokenized as bogus comments
   //    instead of as character tokens.
   //
-  void UpdateStateFor(const String& tag_name);
+  // The return value is empty if a state change is not necessary.
+  std::optional<State> SpeculativeStateForTag(html_names::HTMLTag tag) const;
 
   bool ForceNullCharacterReplacement() const {
     return force_null_character_replacement_;
@@ -167,7 +186,7 @@ class CORE_EXPORT HTMLTokenizer {
   bool ShouldAllowCDATA() const { return should_allow_cdata_; }
   void SetShouldAllowCDATA(bool value) { should_allow_cdata_ = value; }
 
-  State GetState() const { return state_; }
+  ALWAYS_INLINE State GetState() const { return state_; }
   void SetState(State state) { state_ = state; }
 
   inline bool ShouldSkipNullCharacters() const {
@@ -193,7 +212,19 @@ class CORE_EXPORT HTMLTokenizer {
     }
   }
 
+  // Returns the ranges of the attributes for the current token. This is only
+  // updated if `HTMLParserOptions::track_attributes_ranges` was set.
+  // Additionally, if attributes are tracked HTMLAttributesRanges::Clear()
+  // must be called after every token.
+  HTMLAttributesRanges& attributes_ranges() {
+    // If `options_.track_attributes_ranges` is is false, `attributes_ranges_`
+    // is not updated.
+    DCHECK(options_.track_attributes_ranges);
+    return attributes_ranges_;
+  }
+
  private:
+  bool NextTokenImpl(SegmentedString&);
   inline bool ProcessEntity(SegmentedString&);
 
   // Returns true if it has skipped all the whitespaces and we still have
@@ -205,20 +236,27 @@ class CORE_EXPORT HTMLTokenizer {
 
   inline void BufferCharacter(UChar character) {
     DCHECK_NE(character, kEndOfFileMarker);
-    token_->EnsureIsCharacterToken();
-    token_->AppendToCharacter(character);
+    token_.EnsureIsCharacterToken();
+    token_.AppendToCharacter(character);
   }
 
-  inline bool EmitAndResumeIn(SegmentedString& source, State state) {
+  inline bool EmitAndResumeInDataState(SegmentedString& source) {
     SaveEndTagNameIfNeeded();
-    state_ = state;
-    source.AdvanceAndUpdateLineNumber();
+    state_ = kDataState;
+    source.AdvancePastNonNewline();
     return true;
   }
 
-  inline bool EmitAndReconsumeIn(SegmentedString&, State state) {
+  inline bool EmitProcessingInstruction(SegmentedString& source) {
+    temporary_buffer_.clear();
+    state_ = kDataState;
+    source.AdvancePastNonNewline();
+    return true;
+  }
+
+  inline bool EmitAndReconsumeInDataState() {
     SaveEndTagNameIfNeeded();
-    state_ = state;
+    state_ = kDataState;
     return true;
   }
 
@@ -229,18 +267,19 @@ class CORE_EXPORT HTMLTokenizer {
   inline bool EmitEndOfFile(SegmentedString& source) {
     if (HaveBufferedCharacterToken())
       return true;
-    state_ = HTMLTokenizer::kDataState;
+    state_ = kDataState;
     source.AdvanceAndUpdateLineNumber();
-    token_->Clear();
-    token_->MakeEndOfFile();
+    token_.Clear();
+    token_.MakeEndOfFile();
     return true;
   }
 
-  inline bool FlushEmitAndResumeIn(SegmentedString&, State);
+  inline bool FlushEmitAndResumeInDataState(SegmentedString& source);
 
   // Return whether we need to emit a character token before dealing with
   // the buffered end tag.
-  inline bool FlushBufferedEndTag(SegmentedString&);
+  inline bool FlushBufferedEndTag(SegmentedString&,
+                                  bool current_char_may_be_newline);
   inline bool TemporaryBufferIs(const String&);
 
   // Sometimes we speculatively consume input characters and we don't
@@ -249,23 +288,28 @@ class CORE_EXPORT HTMLTokenizer {
   inline void AddToPossibleEndTag(LChar cc);
 
   inline void SaveEndTagNameIfNeeded() {
-    DCHECK_NE(token_->GetType(), HTMLToken::kUninitialized);
-    if (token_->GetType() == HTMLToken::kStartTag)
-      appropriate_end_tag_name_ = token_->GetName();
+    DCHECK_NE(token_.GetType(), HTMLToken::kUninitialized);
+    if (token_.GetType() == HTMLToken::kStartTag)
+      appropriate_end_tag_name_ = token_.GetName();
   }
   inline bool IsAppropriateEndTag();
 
   inline bool HaveBufferedCharacterToken() {
-    return token_->GetType() == HTMLToken::kCharacter;
+    return token_.GetType() == HTMLToken::kCharacter;
+  }
+
+  // A closed stream never gets more input, so stop waiting on a look-ahead
+  // that returned kNotEnoughCharacters and emit a bogus comment instead.
+  // crbug.com/40727112
+  inline bool ShouldWaitForMoreInput(const SegmentedString& source) const {
+    return !truncated_markup_declaration_enabled_ || !source.IsClosed();
   }
 
   State state_;
   bool force_null_character_replacement_;
   bool should_allow_cdata_;
-
-  // token_ is owned by the caller. If NextToken is not on the stack,
-  // this member might be pointing to unallocated memory.
-  HTMLToken* token_;
+  const bool truncated_markup_declaration_enabled_;
+  const HTMLParserOptions options_;
 
   // http://www.whatwg.org/specs/web-apps/current-work/#additional-allowed-character
   UChar additional_allowed_character_;
@@ -273,17 +317,26 @@ class CORE_EXPORT HTMLTokenizer {
   // http://www.whatwg.org/specs/web-apps/current-work/#preprocessing-the-input-stream
   InputStreamPreprocessor<HTMLTokenizer> input_stream_preprocessor_;
 
-  LiteralBuffer<UChar, 32> appropriate_end_tag_name_;
+  UCharLiteralBuffer<32> appropriate_end_tag_name_;
 
   // http://www.whatwg.org/specs/web-apps/current-work/#temporary-buffer
-  LiteralBuffer<LChar, 32> temporary_buffer_;
+  LCharLiteralBuffer<32> temporary_buffer_;
 
   // We occationally want to emit both a character token and an end tag
   // token (e.g., when lexing script). We buffer the name of the end tag
   // token here so we remember it next time we re-enter the tokenizer.
-  LiteralBuffer<LChar, 32> buffered_end_tag_name_;
+  LCharLiteralBuffer<32> buffered_end_tag_name_;
 
-  HTMLParserOptions options_;
+  // This is only updated if `options_.track_attributes_ranges` is true.
+  HTMLAttributesRanges attributes_ranges_;
+
+  // HTMLToken is large; put this after all the small elements, so that they can
+  // enjoy small offsets.
+  HTMLToken token_;
+
+#if DCHECK_IS_ON()
+  bool token_should_be_in_uninitialized_state_ = true;
+#endif
 };
 
 }  // namespace blink

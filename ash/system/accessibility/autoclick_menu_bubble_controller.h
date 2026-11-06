@@ -1,15 +1,23 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ASH_SYSTEM_ACCESSIBILITY_AUTOCLICK_MENU_BUBBLE_CONTROLLER_H_
 #define ASH_SYSTEM_ACCESSIBILITY_AUTOCLICK_MENU_BUBBLE_CONTROLLER_H_
 
+#include <stdint.h>
+
 #include "ash/ash_export.h"
 #include "ash/public/cpp/ash_constants.h"
 #include "ash/system/accessibility/autoclick_menu_view.h"
 #include "ash/system/locale/locale_update_controller_impl.h"
 #include "ash/system/tray/tray_bubble_view.h"
+#include "base/memory/raw_ptr.h"
+#include "ui/display/display.h"
+
+namespace views {
+class Widget;
+}  // namespace views
 
 namespace ash {
 
@@ -26,13 +34,23 @@ class ASH_EXPORT AutoclickMenuBubbleController
   static const int kAnimationDurationMs = 150;
 
   AutoclickMenuBubbleController();
+
+  AutoclickMenuBubbleController(const AutoclickMenuBubbleController&) = delete;
+  AutoclickMenuBubbleController& operator=(
+      const AutoclickMenuBubbleController&) = delete;
+
   ~AutoclickMenuBubbleController() override;
+
+  views::Widget* bubble_widget() { return bubble_widget_; }
 
   // Sets the currently selected event type.
   void SetEventType(AutoclickEventType type);
 
-  // Sets the menu's position on the screen.
+  // Sets the menu's position on the default target screen.
   void SetPosition(FloatingMenuPosition position);
+
+  // Sets the menu's display.
+  void SetDisplay(const display::Display& display);
 
   // Set the scroll menu's position on the screen. The rect is the bounds of
   // the scrollable area, and the point is the user-selected scroll point.
@@ -61,28 +79,48 @@ class ASH_EXPORT AutoclickMenuBubbleController
 
   // TrayBubbleView::Delegate:
   void BubbleViewDestroyed() override;
+  std::u16string GetAccessibleNameForBubble() override;
+  void HideBubble(const TrayBubbleView* bubble_view) override;
 
   // LocaleChangeObserver:
   void OnLocaleChanged() override;
 
+  // For tests only.
+  void SetAnimateForTesting(bool animate) { animate_ = animate; }
+
  private:
   friend class AutoclickMenuBubbleControllerTest;
   friend class AutoclickTest;
+  friend class AutoclickTestUtils;
   friend class FloatingAccessibilityControllerTest;
 
+  // Gets default target display ID for the bubble. Returns
+  // `display::kInvalidDisplayId` if could not find a valid display.
+  int64_t GetDefaultDisplayId() const;
+
+  // Safety checks before displaying the menu under the display.
+  bool IsValidDisplay(const display::Display& display) const;
+
+  // Updates the menu's position given the display.
+  void UpdatePositionForDisplay(FloatingMenuPosition new_position,
+                                const display::Display& display);
+
   // Owned by views hierarchy.
-  TrayBubbleView* bubble_view_ = nullptr;
-  AutoclickMenuView* menu_view_ = nullptr;
+  raw_ptr<TrayBubbleView> bubble_view_ = nullptr;
+  raw_ptr<AutoclickMenuView> menu_view_ = nullptr;
   FloatingMenuPosition position_ = kDefaultAutoclickMenuPosition;
 
-  views::Widget* bubble_widget_ = nullptr;
+  raw_ptr<views::Widget> bubble_widget_ = nullptr;
+
+  bool set_position_in_progress_ = false;
 
   // The controller for the scroll bubble. Only exists during a scroll. Owned
   // by this class so that positioning calculations can take place using both
   // classes at once.
   std::unique_ptr<AutoclickScrollBubbleController> scroll_bubble_controller_;
 
-  DISALLOW_COPY_AND_ASSIGN(AutoclickMenuBubbleController);
+  // Whether to animate position changes. Can be set to false for testing.
+  bool animate_ = true;
 };
 
 }  // namespace ash

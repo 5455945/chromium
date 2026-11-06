@@ -1,1 +1,1 @@
-Text_TextChanged on role=document
+LayoutInvalidated on role=document

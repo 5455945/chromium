@@ -1,61 +1,66 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/payments/content/payment_app.h"
 
 #include <algorithm>
+#include <optional>
 
-#include "base/callback.h"
-#include "base/containers/contains.h"
-#include "components/autofill/core/common/autofill_clock.h"
-#include "components/payments/content/autofill_payment_app.h"
-#include "components/payments/core/features.h"
-#include "components/payments/core/payments_experimental_features.h"
+#include "base/functional/callback.h"
+#include "base/notreached.h"
+#include "url/origin.h"
 
 namespace payments {
 namespace {
 
 // Returns the sorting group of a payment app. This is used to order payment
 // apps in the order of:
-// 1. Built-in 1st-party payment handlers.
-// 2. Installed 3rd-party payment handlers
-// 3. Complete autofill instruments
-// 4. Just-in-time installable payment handlers that is not yet installed.
-// 5. Incomplete autofill instruments
+// 1. Built-in available 1st-party payment handlers.
+// 2. Installed or just-in-time installable payment handlers.
 int GetSortingGroup(const PaymentApp& app) {
   switch (app.type()) {
     case PaymentApp::Type::INTERNAL:
       return 1;
     case PaymentApp::Type::SERVICE_WORKER_APP:
     case PaymentApp::Type::NATIVE_MOBILE_APP:
-      // If the experimental feature is enabled, sort 3rd-party payment handlers
-      // that needs installation below autofill instruments.
-      if (app.NeedsInstallation() &&
-          PaymentsExperimentalFeatures::IsEnabled(
-              features::kDownRankJustInTimePaymentApp)) {
-        return 4;
-      }
       return 2;
-    case PaymentApp::Type::AUTOFILL:
-      if (app.IsCompleteForPayment()) {
-        return 3;
-      }
-      return 5;
     case PaymentApp::Type::UNDEFINED:
       NOTREACHED();
-      return 99;
   }
 }
 }  // namespace
 
+PaymentApp::PaymentEntityLogo::PaymentEntityLogo(std::u16string label,
+                                                 std::unique_ptr<SkBitmap> icon,
+                                                 GURL url)
+    : label(std::move(label)), icon(std::move(icon)), url(std::move(url)) {}
+
+PaymentApp::PaymentEntityLogo::PaymentEntityLogo(
+    PaymentApp::PaymentEntityLogo&&) = default;
+
+PaymentApp::PaymentEntityLogo& PaymentApp::PaymentEntityLogo::operator=(
+    PaymentApp::PaymentEntityLogo&&) = default;
+
+PaymentApp::PaymentEntityLogo::~PaymentEntityLogo() = default;
+
 PaymentApp::PaymentApp(int icon_resource_id, Type type)
     : icon_resource_id_(icon_resource_id), type_(type) {}
 
-PaymentApp::~PaymentApp() {}
+PaymentApp::~PaymentApp() = default;
 
 const SkBitmap* PaymentApp::icon_bitmap() const {
   return nullptr;
+}
+
+std::vector<PaymentApp::PaymentEntityLogo*>
+PaymentApp::GetPaymentEntitiesLogos() {
+  return {};
+}
+
+const mojom::PaymentItemPtr& PaymentApp::GetTotalForSpc() const {
+  NOTREACHED()
+      << "Only SecurePaymentConfirmationApp is expected to return the total.";
 }
 
 std::string PaymentApp::GetApplicationIdentifierToHide() const {
@@ -67,20 +72,10 @@ std::set<std::string> PaymentApp::GetApplicationIdentifiersThatHideThisApp()
   return std::set<std::string>();
 }
 
-bool PaymentApp::IsReadyForMinimalUI() const {
-  return false;
-}
-
-std::string PaymentApp::GetAccountBalance() const {
-  return std::string();
-}
-
-void PaymentApp::DisableShowingOwnUI() {}
-
 void PaymentApp::IsValidForPaymentMethodIdentifier(
     const std::string& payment_method_identifier,
     bool* is_valid) const {
-  *is_valid = base::Contains(app_method_names_, payment_method_identifier);
+  *is_valid = app_method_names_.contains(payment_method_identifier);
 }
 
 const std::set<std::string>& PaymentApp::GetAppMethodNames() const {
@@ -134,23 +129,6 @@ bool PaymentApp::operator<(const PaymentApp& other) const {
     return sorting_group < other_sorting_group;
   }
 
-  // Within a group, compare by completeness.
-  // Non-autofill apps have max completeness score. Autofill cards are sorted
-  // based on completeness. (Each autofill card is considered an app.)
-  int completeness = GetCompletenessScore() - other.GetCompletenessScore();
-  if (completeness != 0)
-    return completeness > 0;
-
-  // Sort autofill cards using their frecency scores as tie breaker.
-  if (type_ == Type::AUTOFILL) {
-    DCHECK_EQ(other.type(), Type::AUTOFILL);
-    return static_cast<const AutofillPaymentApp*>(this)
-        ->credit_card()
-        ->HasGreaterFrecencyThan(
-            static_cast<const AutofillPaymentApp*>(&other)->credit_card(),
-            autofill::AutofillClock::Now());
-  }
-
   // SW based payment apps are sorted based on whether they will handle shipping
   // delegation or not (i.e. shipping address is requested and the app supports
   // the delegation.).
@@ -182,11 +160,14 @@ bool PaymentApp::operator<(const PaymentApp& other) const {
     return contact_delegations_diff > 0;
 
   // SW based payment apps are sorted based on whether they can be pre-selected
-  // or not. Note that autofill cards are already sorted by CanPreselect() since
-  // they are sorted by completeness and type matching.
+  // or not.
   if (CanPreselect() != other.CanPreselect())
     return CanPreselect();
   return false;
+}
+
+std::optional<url::Origin> PaymentApp::GetPaymentHandlerOrigin() const {
+  return std::nullopt;
 }
 
 }  // namespace payments

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,27 +7,38 @@
 
 #include <string>
 
-#include "base/macros.h"
-#include "chrome/browser/web_applications/components/os_integration_manager.h"
-#include "chrome/test/base/in_process_browser_test.h"
+#include "build/build_config.h"
+#include "chrome/test/base/platform_browser_test.h"
 #include "url/gurl.h"
 
-class Browser;
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/web_applications/test/os_integration_test_override_impl.h"
+#endif
 
 // Common base class for browser tests exercising AppBannerManager. Contains
 // methods for generating test URLs that trigger app banners.
-class AppBannerManagerBrowserTestBase : public InProcessBrowserTest {
+class AppBannerManagerBrowserTestBase : public PlatformBrowserTest {
  public:
   AppBannerManagerBrowserTestBase();
+
+  AppBannerManagerBrowserTestBase(const AppBannerManagerBrowserTestBase&) =
+      delete;
+  AppBannerManagerBrowserTestBase& operator=(
+      const AppBannerManagerBrowserTestBase&) = delete;
+
   ~AppBannerManagerBrowserTestBase() override;
   void SetUpOnMainThread() override;
 
  protected:
   // Executes JavaScript in |script| in the active WebContents of |browser|,
   // possibly with a user gesture depending on |with_gesture|.
-  static void ExecuteScript(Browser* browser,
+  static void ExecuteScript(content::WebContents* web_contents,
                             const std::string& script,
                             bool with_gesture);
+
+  content::WebContents* web_contents();
+
+  Profile* profile();
 
   // Returns a test server URL to a page with generates a banner.
   GURL GetBannerURL();
@@ -44,9 +55,9 @@ class AppBannerManagerBrowserTestBase : public InProcessBrowserTest {
                                         const std::string& key,
                                         const std::string& value);
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(AppBannerManagerBrowserTestBase);
-  web_app::ScopedOsHooksSuppress os_hooks_suppress_;
+#if !BUILDFLAG(IS_ANDROID)
+  web_app::OsIntegrationTestOverrideBlockingRegistration faked_os_integration_;
+#endif
 };
 
 #endif  // CHROME_BROWSER_BANNERS_APP_BANNER_MANAGER_BROWSERTEST_BASE_H_

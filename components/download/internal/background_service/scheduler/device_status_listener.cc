@@ -1,46 +1,53 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/download/internal/background_service/scheduler/device_status_listener.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "build/build_config.h"
 
 namespace download {
 
 namespace {
 
-// Converts |on_battery_power| to battery status.
-BatteryStatus ToBatteryStatus(bool on_battery_power) {
-  return on_battery_power ? BatteryStatus::NOT_CHARGING
-                          : BatteryStatus::CHARGING;
+// Converts |battery_power_status| to battery status.
+BatteryStatus ToBatteryStatus(
+    base::PowerStateObserver::BatteryPowerStatus battery_power_status) {
+  switch (battery_power_status) {
+    case base::PowerStateObserver::BatteryPowerStatus::kBatteryPower:
+      return BatteryStatus::NOT_CHARGING;
+    case base::PowerStateObserver::BatteryPowerStatus::kExternalPower:
+      // TODO(339859756): We return CHARGING for kUnknown to preserve the old
+      // behavior.
+    case base::PowerStateObserver::BatteryPowerStatus::kUnknown:
+      return BatteryStatus::CHARGING;
+  }
 }
 
 // Converts a ConnectionType to NetworkStatus.
-NetworkStatus ToNetworkStatus(network::mojom::ConnectionType type) {
+NetworkStatus ToNetworkStatus(net::NetworkChangeNotifier::ConnectionType type) {
   switch (type) {
-    case network::mojom::ConnectionType::CONNECTION_ETHERNET:
-    case network::mojom::ConnectionType::CONNECTION_WIFI:
+    case net::NetworkChangeNotifier::ConnectionType::CONNECTION_ETHERNET:
+    case net::NetworkChangeNotifier::ConnectionType::CONNECTION_WIFI:
       return NetworkStatus::UNMETERED;
-    case network::mojom::ConnectionType::CONNECTION_2G:
-    case network::mojom::ConnectionType::CONNECTION_3G:
-    case network::mojom::ConnectionType::CONNECTION_4G:
-    case network::mojom::ConnectionType::CONNECTION_5G:
-      // TODO(crbug.com/1127134): 5G networks may be unmetered. Find a way to
+    case net::NetworkChangeNotifier::ConnectionType::CONNECTION_2G:
+    case net::NetworkChangeNotifier::ConnectionType::CONNECTION_3G:
+    case net::NetworkChangeNotifier::ConnectionType::CONNECTION_4G:
+    case net::NetworkChangeNotifier::ConnectionType::CONNECTION_5G:
+      // TODO(crbug.com/40148439): 5G networks may be unmetered. Find a way to
       // detect this and make DeviceStatusListener aware of it.
       return NetworkStatus::METERED;
-    case network::mojom::ConnectionType::CONNECTION_NONE:
-    case network::mojom::ConnectionType::CONNECTION_BLUETOOTH:
+    case net::NetworkChangeNotifier::ConnectionType::CONNECTION_NONE:
+    case net::NetworkChangeNotifier::ConnectionType::CONNECTION_BLUETOOTH:
       return NetworkStatus::DISCONNECTED;
-    case network::mojom::ConnectionType::CONNECTION_UNKNOWN:
-#if defined(OS_ANDROID)
+    case net::NetworkChangeNotifier::ConnectionType::CONNECTION_UNKNOWN:
+#if BUILDFLAG(IS_ANDROID)
       return NetworkStatus::DISCONNECTED;
 #else
       return NetworkStatus::UNMETERED;
 #endif
   }
   NOTREACHED();
-  return NetworkStatus::DISCONNECTED;
 }
 
 }  // namespace
@@ -92,21 +99,18 @@ void DeviceStatusListener::StartAfterDelay() {
   DCHECK(battery_listener_);
   battery_listener_->Start(this);
   status_.battery_status =
-      ToBatteryStatus(battery_listener_->IsOnBatteryPower());
+      ToBatteryStatus(battery_listener_->GetBatteryPowerStatus());
 
   // Listen to network status changes.
   network_listener_->Start(this);
 
   status_.battery_status =
-      ToBatteryStatus(battery_listener_->IsOnBatteryPower());
+      ToBatteryStatus(battery_listener_->GetBatteryPowerStatus());
   status_.network_status =
       ToNetworkStatus(network_listener_->GetConnectionType());
   pending_network_status_ = status_.network_status;
 
   listening_ = true;
-  is_valid_state_ = true;
-
-  NotifyStatusChange();
 }
 
 void DeviceStatusListener::Stop() {
@@ -126,8 +130,15 @@ void DeviceStatusListener::Stop() {
   observer_ = nullptr;
 }
 
+void DeviceStatusListener::OnNetworkStatusReady(
+    net::NetworkChangeNotifier::ConnectionType type) {
+  status_.network_status = ToNetworkStatus(type);
+  is_valid_state_ = true;
+  NotifyStatusChange();
+}
+
 void DeviceStatusListener::OnNetworkChanged(
-    network::mojom::ConnectionType type) {
+    net::NetworkChangeNotifier::ConnectionType type) {
   pending_network_status_ = ToNetworkStatus(type);
 
   if (pending_network_status_ == status_.network_status) {
@@ -155,8 +166,9 @@ void DeviceStatusListener::OnNetworkChanged(
   }
 }
 
-void DeviceStatusListener::OnPowerStateChange(bool on_battery_power) {
-  status_.battery_status = ToBatteryStatus(on_battery_power);
+void DeviceStatusListener::OnPowerStateChange(
+    base::PowerStateObserver::BatteryPowerStatus battery_power_status) {
+  status_.battery_status = ToBatteryStatus(battery_power_status);
   NotifyStatusChange();
 }
 

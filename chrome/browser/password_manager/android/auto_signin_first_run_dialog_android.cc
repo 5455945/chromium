@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,22 +6,26 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
-#include "chrome/android/chrome_jni_headers/AutoSigninFirstRunDialog_jni.h"
 #include "chrome/browser/password_manager/chrome_password_manager_client.h"
+#include "chrome/browser/password_manager/factories/password_manager_settings_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/passwords/manage_passwords_view_utils.h"
-#include "chrome/grit/chromium_strings.h"
+#include "chrome/browser/ui/passwords/ui_utils.h"
+#include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/password_manager/core/browser/password_bubble_experiment.h"
 #include "components/password_manager/core/browser/password_manager_constants.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
+#include "components/password_manager/core/browser/password_manager_settings_service.h"
 #include "components/strings/grit/components_strings.h"
+#include "third_party/jni_zero/jni_zero.h"
 #include "ui/android/window_android.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/gfx/range/range.h"
+#include "ui/gfx/native_ui_types.h"
+
+// Must come after headers that provide symbols used by @JniType.
+#include "chrome/android/chrome_jni_headers/AutoSigninFirstRunDialog_jni.h"
 
 using base::android::AttachCurrentThread;
-using base::android::ConvertUTF16ToJavaString;
 
 namespace {
 
@@ -38,7 +42,7 @@ AutoSigninFirstRunDialogAndroid::AutoSigninFirstRunDialogAndroid(
     content::WebContents* web_contents)
     : content::WebContentsObserver(web_contents), web_contents_(web_contents) {}
 
-AutoSigninFirstRunDialogAndroid::~AutoSigninFirstRunDialogAndroid() {}
+AutoSigninFirstRunDialogAndroid::~AutoSigninFirstRunDialogAndroid() = default;
 
 void AutoSigninFirstRunDialogAndroid::ShowDialog() {
   gfx::NativeWindow native_window = web_contents_->GetTopLevelNativeWindow();
@@ -64,42 +68,39 @@ void AutoSigninFirstRunDialogAndroid::ShowDialog() {
       native_window->GetJavaObject();
   if (java_dialog) {
     dialog_jobject_.Reset(Java_AutoSigninFirstRunDialog_createAndShowDialog(
-        env, java_dialog, reinterpret_cast<intptr_t>(this),
-        base::android::ConvertUTF16ToJavaString(env, message),
-        base::android::ConvertUTF16ToJavaString(env, explanation), 0, 0,
-        base::android::ConvertUTF16ToJavaString(env, ok_button_text),
-        base::android::ConvertUTF16ToJavaString(env, turn_off_button_text)));
+        env, java_dialog, jni_zero::MakeRaw(this), message, explanation,
+        ok_button_text, turn_off_button_text));
   }
 }
 
-void AutoSigninFirstRunDialogAndroid::Destroy(JNIEnv* env, jobject obj) {
+void AutoSigninFirstRunDialogAndroid::Destroy(JNIEnv* env) {
   delete this;
 }
 
-void AutoSigninFirstRunDialogAndroid::OnOkClicked(JNIEnv* env, jobject obj) {
+void AutoSigninFirstRunDialogAndroid::OnOkClicked(JNIEnv* env) {
   password_manager::metrics_util::LogAutoSigninPromoUserAction(
       password_manager::metrics_util::AUTO_SIGNIN_OK_GOT_IT);
   MarkAutoSignInFirstRunExperienceShown(web_contents_);
 }
 
-void AutoSigninFirstRunDialogAndroid::OnTurnOffClicked(JNIEnv* env,
-                                                       jobject obj) {
+void AutoSigninFirstRunDialogAndroid::OnTurnOffClicked(JNIEnv* env) {
   password_manager::metrics_util::LogAutoSigninPromoUserAction(
       password_manager::metrics_util::AUTO_SIGNIN_TURN_OFF);
   Profile* profile =
       Profile::FromBrowserContext(web_contents_->GetBrowserContext());
-  password_bubble_experiment::TurnOffAutoSignin(profile->GetPrefs());
+  // This dialog is not and should never be shown in incognito as it offers the
+  // possibility to change user settings.
+  CHECK(!profile->IsOffTheRecord(), base::NotFatalUntil::M161);
+  password_manager::PasswordManagerSettingsService* service =
+      PasswordManagerSettingsServiceFactory::GetForProfile(profile);
+  // The service can be null if the password manager is not available, but there
+  // shouldn't be any credential to auto-sign in with in that case.
+  CHECK(service);
+  service->TurnOffAutoSignIn();
   MarkAutoSignInFirstRunExperienceShown(web_contents_);
 }
 
-void AutoSigninFirstRunDialogAndroid::CancelDialog(JNIEnv* env, jobject obj) {}
-
-void AutoSigninFirstRunDialogAndroid::OnLinkClicked(JNIEnv* env, jobject obj) {
-  web_contents_->OpenURL(content::OpenURLParams(
-      GURL(password_manager::kPasswordManagerHelpCenterSmartLock),
-      content::Referrer(), WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui::PAGE_TRANSITION_LINK, false /* is_renderer_initiated */));
-}
+void AutoSigninFirstRunDialogAndroid::CancelDialog(JNIEnv* env) {}
 
 void AutoSigninFirstRunDialogAndroid::WebContentsDestroyed() {
   if (dialog_jobject_) {
@@ -111,9 +112,11 @@ void AutoSigninFirstRunDialogAndroid::WebContentsDestroyed() {
 void AutoSigninFirstRunDialogAndroid::OnVisibilityChanged(
     content::Visibility visibility) {
   if (dialog_jobject_ && visibility == content::Visibility::HIDDEN) {
-    // TODO(https://crbug.com/610700): once bug is fixed, this code should be
+    // TODO(crbug.com/41253286): once bug is fixed, this code should be
     // gone.
     JNIEnv* env = AttachCurrentThread();
     Java_AutoSigninFirstRunDialog_dismissDialog(env, dialog_jobject_);
   }
 }
+
+DEFINE_JNI(AutoSigninFirstRunDialog)

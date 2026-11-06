@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 
 #include <string>
 
-#include "base/macros.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/tts_controller.h"
 #include "content/public/browser/tts_utterance.h"
@@ -37,9 +36,10 @@ class CONTENT_EXPORT TtsPlatform {
   // the engine finishes loading.
   virtual void LoadBuiltInTtsEngine(BrowserContext* browser_context) = 0;
 
-  // Speak the given utterance with the given parameters if possible,
-  // and return true on success. Utterance will always be nonempty.
-  // If rate, pitch, or volume are -1.0, they will be ignored.
+  // Speak the given utterance using the native voice provided by the platform
+  // with the given parameters if possible.
+  // Utterance will always be nonempty. If rate, pitch, or volume are -1.0,
+  // they will be ignored.
   //
   // The TtsController will only try to speak one utterance at
   // a time. If it wants to interrupt speech, it will always call Stop
@@ -86,9 +86,13 @@ class CONTENT_EXPORT TtsPlatform {
   // other methods may no-op.
   virtual void Shutdown() = 0;
 
-  // Returns whether TtsController should prefer voices from TtsEngineDelegate
-  // over those from this platform. Defaults to false.
-  virtual bool PreferEngineDelegateVoices() = 0;
+  // Given engine delegate and platform voices, returns the finalized voice
+  // ordering used by the controller when exposing voices to clients.
+  virtual void FinalizeVoiceOrdering(std::vector<VoiceData>& voices) = 0;
+
+  // Triggers the TtsPlatform to update its list of voices and relay that update
+  // through VoicesChanged.
+  virtual void RefreshVoices() = 0;
 };
 
 }  // namespace content

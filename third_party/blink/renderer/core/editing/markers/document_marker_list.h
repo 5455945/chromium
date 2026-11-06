@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,8 @@
 
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/editing/markers/document_marker.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -38,20 +39,20 @@ class CORE_EXPORT DocumentMarkerList
   // Returns the first marker whose interior overlaps with the range
   // [start_offset, end_offset], or null if there is no such marker.
   virtual DocumentMarker* FirstMarkerIntersectingRange(
-      unsigned start_offset,
-      unsigned end_offset) const = 0;
+      wtf_size_t start_offset,
+      wtf_size_t end_offset) const = 0;
   // Returns markers whose interiors have non-empty overlap with the range
   // [start_offset, end_offset]. Note that the range can be collapsed, in which
   // case markers containing the offset in their interiors are returned.
   virtual HeapVector<Member<DocumentMarker>> MarkersIntersectingRange(
-      unsigned start_offset,
-      unsigned end_offset) const = 0;
+      wtf_size_t start_offset,
+      wtf_size_t end_offset) const = 0;
 
   // Returns true if at least one marker is copied, false otherwise
-  virtual bool MoveMarkers(int length, DocumentMarkerList* dst_list) = 0;
+  virtual bool MoveMarkers(wtf_size_t length, DocumentMarkerList* dst_list) = 0;
 
   // Returns true if at least one marker is removed, false otherwise
-  virtual bool RemoveMarkers(unsigned start_offset, int length) = 0;
+  virtual bool RemoveMarkers(wtf_size_t start_offset, wtf_size_t length) = 0;
 
   // Returns true if at least one marker is shifted or removed, false otherwise.
   // Called in response to an edit replacing the range
@@ -59,9 +60,13 @@ class CORE_EXPORT DocumentMarkerList
   // node_text is the full text of the affected node *after* the edit is
   // applied.
   virtual bool ShiftMarkers(const String& node_text,
-                            unsigned offset,
-                            unsigned old_length,
-                            unsigned new_length) = 0;
+                            wtf_size_t offset,
+                            wtf_size_t old_length,
+                            wtf_size_t new_length) = 0;
+
+  // Update the marker list by merging any overlapping markers that should be
+  // merged. Only Custom Highlights and Text Fragment markers need to merge.
+  virtual void MergeOverlappingMarkers() = 0;
 
   virtual void Trace(Visitor* visitor) const {}
 

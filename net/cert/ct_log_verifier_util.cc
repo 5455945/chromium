@@ -1,37 +1,27 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/cert/ct_log_verifier_util.h"
 
-#include <memory>
+#include <array>
 
-#include "base/strings/string_util.h"
-#include "crypto/secure_hash.h"
-#include "crypto/sha2.h"
+#include "base/containers/span.h"
+#include "crypto/hash.h"
 
-namespace net {
-
-namespace ct {
-
-namespace internal {
+namespace net::ct::internal {
 
 std::string HashNodes(const std::string& lh, const std::string& rh) {
-  std::unique_ptr<crypto::SecureHash> hash(
-      crypto::SecureHash::Create(crypto::SecureHash::SHA256));
+  static constexpr std::array<uint8_t, 1> kTag = {0x01};
 
-  hash->Update("\01", 1);
-  hash->Update(lh.data(), lh.size());
-  hash->Update(rh.data(), rh.size());
+  crypto::hash::Hasher hash(crypto::hash::kSha256);
+  hash.Update(kTag);
+  hash.Update(lh);
+  hash.Update(rh);
 
-  std::string result;
-  hash->Finish(base::WriteInto(&result, crypto::kSHA256Length + 1),
-               crypto::kSHA256Length);
+  std::string result(crypto::hash::kSha256Size, '\0');
+  hash.Finish(base::as_writable_byte_span(result));
   return result;
 }
 
-}  // namespace internal
-
-}  // namespace ct
-
-}  // namespace net
+}  // namespace net::ct::internal

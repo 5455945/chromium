@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,7 +19,8 @@ const CSSValue* AnimationUtils::KeyframeValueFromComputedStyle(
     const LayoutObject* layout_object) {
   if (property.IsCSSCustomProperty()) {
     // Holds registration and creates temporary CSSProperty.
-    CSSPropertyRef custom_ref(property.GetCSSPropertyName(), document);
+    CSSPropertyName name = property.GetCSSPropertyName();
+    CSSPropertyRef custom_ref(&name, document);
     return ComputedStyleUtils::ComputedPropertyValue(custom_ref.GetProperty(),
                                                      style, layout_object);
   }
@@ -32,24 +33,21 @@ void AnimationUtils::ForEachInterpolatedPropertyValue(
     Element* target,
     const PropertyHandleSet& properties,
     ActiveInterpolationsMap& interpolations,
-    base::RepeatingCallback<void(PropertyHandle, const CSSValue*)> callback) {
+    base::FunctionRef<void(PropertyHandle, const CSSValue*)> callback) {
   if (!target)
     return;
 
   StyleResolver& resolver = target->GetDocument().GetStyleResolver();
-  scoped_refptr<ComputedStyle> style =
+  const ComputedStyle* style =
       resolver.StyleForInterpolations(*target, interpolations);
 
   for (const auto& property : properties) {
-    if (!property.IsCSSProperty())
-      continue;
-
     const CSSValue* value = KeyframeValueFromComputedStyle(
         property, *style, target->GetDocument(), target->GetLayoutObject());
     if (!value)
       continue;
 
-    callback.Run(property, value);
+    callback(property, value);
   }
 }
 

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,9 @@
 #include <memory>
 #include <string>
 
-#include "chrome/services/media_gallery_util/public/cpp/safe_media_metadata_parser.h"
-#include "chrome/services/media_gallery_util/public/mojom/media_parser.mojom.h"
+#include "base/memory/raw_ptr.h"
+#include "components/media_gallery_util/public/mojom/media_parser.mojom.h"
+#include "components/media_gallery_util/safe_media_metadata_parser.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 
 namespace content {
@@ -36,7 +37,7 @@ class BlobDataSourceFactory
       mojo::PendingReceiver<chrome::mojom::MediaDataSource> receiver,
       MediaDataCallback media_data_callback) override;
 
-  content::BrowserContext* browser_context_;
+  raw_ptr<content::BrowserContext, DanglingUntriaged> browser_context_;
   std::string blob_uuid_;
   MediaDataCallback callback_;
 };

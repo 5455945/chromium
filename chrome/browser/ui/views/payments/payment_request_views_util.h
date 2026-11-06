@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,14 +13,12 @@
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/text_constants.h"
-#include "ui/views/controls/button/button.h"
 
 namespace autofill {
 class AutofillProfile;
 }
 
 namespace views {
-class Background;
 class Border;
 class ImageView;
 class Label;
@@ -32,39 +30,40 @@ namespace payments {
 class PaymentsProfileComparator;
 enum class PaymentShippingType;
 
-constexpr int kPaymentRequestRowHorizontalInsets = 16;
-constexpr int kPaymentRequestRowVerticalInsets = 8;
+inline constexpr int kPaymentRequestRowHorizontalInsets = 16;
+inline constexpr int kPaymentRequestRowVerticalInsets = 8;
 
 // Extra inset relative to the header when a right edge should line up with the
 // close button's X rather than its invisible right edge.
-constexpr int kPaymentRequestRowExtraRightInset = 8;
-constexpr int kPaymentRequestButtonSpacing = 10;
+inline constexpr int kPaymentRequestRowExtraRightInset = 8;
+inline constexpr int kPaymentRequestButtonSpacing = 10;
 
 // Dimensions of the dialog itself.
-constexpr int kDialogMinWidth = 512;
-constexpr int kDialogHeight = 450;
+inline constexpr int kDialogMinWidth = 512;
+inline constexpr int kDialogHeight = 450;
 
 // Preferred dimensions of the payment handler dialog in pixels.
-constexpr int kPreferredPaymentHandlerDialogWidth = 608;
-constexpr int kPreferredPaymentHandlerDialogHeight = 600;
+inline constexpr int kPreferredPaymentHandlerDialogWidth = 608;
+inline constexpr int kPreferredPaymentHandlerDialogHeight = 600;
+
+// Min/max dimensions of the payment handler dialog in pixels, used when the
+// payment app requests a size through PaymentRequestEvent.openWindow(). The
+// min width is wide enough to show the origin of common payment apps in the
+// header, and the min height fits a select and a pay button.
+inline constexpr int kPaymentHandlerMinDialogWidth = 512;
+inline constexpr int kPaymentHandlerMinDialogHeight = 196;
+inline constexpr int kPaymentHandlerMaxDialogWidth = 800;
+inline constexpr int kPaymentHandlerMaxDialogHeight = 800;
+
+inline constexpr int kPaymentHandlerHeaderHeight = 48;
+inline constexpr int kPaymentHandlerProgressBarHeight = 2;
+
+// Preferred dimensions of the payment handler error message dialog in pixels.
+inline constexpr int kPreferredPaymentHandlerErrorMessageDialogHeight = 196;
 
 // Fixed width of the amount sections in the payment sheet and the order summary
 // sheet, in pixels.
-constexpr int kAmountSectionWidth = 96;
-
-// Creates and returns a header for all the sheets in the PaymentRequest dialog.
-// The header contains an optional back arrow button (if |show_back_arrow| is
-// true) and a |header_content_view|. |back_arrow_callback| is called when
-// pressing the back button. |background| is applied to |container| and its
-// color is used to decide which color to use to paint the arrow.
-// +---------------------------+
-// | <- | header_content_view  |
-// +---------------------------+
-void PopulateSheetHeaderView(bool show_back_arrow,
-                             std::unique_ptr<views::View> header_content_view,
-                             views::Button::PressedCallback back_arrow_callback,
-                             views::View* container,
-                             std::unique_ptr<views::Background> background);
+inline constexpr int kAmountSectionWidth = 96;
 
 // Returns an instrument image view for the given |icon_bitmap| or
 // |icon_resource_id| and wanted |opacity|. Includes a rounded rect border.

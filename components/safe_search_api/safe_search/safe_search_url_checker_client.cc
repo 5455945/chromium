@@ -1,26 +1,26 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/safe_search_api/safe_search/safe_search_url_checker_client.h"
 
+#include <optional>
+#include <string>
 #include <utility>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/json/json_reader.h"
-#include "base/metrics/histogram_macros.h"
-#include "base/strings/string_piece.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/strings/escape.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "components/google/core/common/google_util.h"
-#include "net/base/escape.h"
 #include "net/base/load_flags.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/url_constants.h"
 
 namespace safe_search_api {
@@ -34,34 +34,39 @@ const char kDataFormat[] = "key=%s&urls=%s";
 
 // Builds the POST data for SafeSearch API requests.
 std::string BuildRequestData(const std::string& api_key, const GURL& url) {
-  std::string query = net::EscapeQueryParamValue(url.spec(), true);
+  std::string query = base::EscapeQueryParamValue(url.spec(), true);
   return base::StringPrintf(kDataFormat, api_key.c_str(), query.c_str());
 }
 
 // Parses a SafeSearch API |response| and stores the result in |is_porn|,
 // returns true on success. Otherwise, returns false and doesn't set |is_porn|.
 bool ParseResponse(const std::string& response, bool* is_porn) {
-  absl::optional<base::Value> optional_value = base::JSONReader::Read(response);
-  const base::DictionaryValue* dict = nullptr;
-  if (!optional_value || !optional_value.value().GetAsDictionary(&dict)) {
+  std::optional<base::Value> optional_value =
+      base::JSONReader::Read(response, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!optional_value || !optional_value.value().is_dict()) {
     DLOG(WARNING) << "ParseResponse failed to parse global dictionary";
     return false;
   }
-  const base::ListValue* classifications_list = nullptr;
-  if (!dict->GetList("classifications", &classifications_list)) {
+  const base::DictValue& dict = optional_value.value().GetDict();
+  const base::ListValue* classifications_list =
+      dict.FindList("classifications");
+  if (!classifications_list) {
     DLOG(WARNING) << "ParseResponse failed to parse classifications list";
     return false;
   }
-  if (classifications_list->GetSize() != 1) {
+  if (classifications_list->size() != 1u) {
     DLOG(WARNING) << "ParseResponse expected exactly one result";
     return false;
   }
-  const base::DictionaryValue* classification_dict = nullptr;
-  if (!classifications_list->GetDictionary(0, &classification_dict)) {
+  const base::Value& classification_value = (*classifications_list)[0];
+  if (!classification_value.is_dict()) {
     DLOG(WARNING) << "ParseResponse failed to parse classification dict";
     return false;
   }
-  classification_dict->GetBoolean("pornography", is_porn);
+  const base::DictValue& classification_dict = classification_value.GetDict();
+  std::optional<bool> is_porn_opt = classification_dict.FindBool("pornography");
+  if (is_porn_opt.has_value())
+    *is_porn = is_porn_opt.value();
   return true;
 }
 
@@ -124,7 +129,7 @@ void SafeSearchURLCheckerClient::CheckURL(const GURL& url,
 
 void SafeSearchURLCheckerClient::OnSimpleLoaderComplete(
     CheckList::iterator it,
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   std::unique_ptr<Check> check = std::move(*it);
 
   checks_in_progress_.erase(it);
@@ -142,9 +147,8 @@ void SafeSearchURLCheckerClient::OnSimpleLoaderComplete(
                              : ClientClassification::kAllowed;
   }
 
-  // TODO(msramek): Consider moving this to SupervisedUserResourceThrottle.
-  UMA_HISTOGRAM_TIMES("ManagedUsers.SafeSitesDelay",
-                      base::TimeTicks::Now() - check->start_time);
+  base::UmaHistogramTimes("Enterprise.SafeSites.Latency",
+                          base::TimeTicks::Now() - check->start_time);
 
   std::move(check->callback).Run(check->url, classification);
 }

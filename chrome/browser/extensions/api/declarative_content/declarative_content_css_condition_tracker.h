@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,12 +12,14 @@
 #include <unordered_set>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/extensions/api/declarative_content/content_predicate_evaluator.h"
-#include "content/public/browser/notification_observer.h"
-#include "content/public/browser/notification_registrar.h"
+#include "content/public/browser/render_process_host_creation_observer.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace base {
 class Value;
@@ -30,6 +32,11 @@ class Extension;
 // Tests whether all the specified CSS selectors match on the page.
 class DeclarativeContentCssPredicate : public ContentPredicate {
  public:
+  DeclarativeContentCssPredicate(const DeclarativeContentCssPredicate&) =
+      delete;
+  DeclarativeContentCssPredicate& operator=(
+      const DeclarativeContentCssPredicate&) = delete;
+
   ~DeclarativeContentCssPredicate() override;
 
   const std::vector<std::string>& css_selectors() const {
@@ -49,19 +56,23 @@ class DeclarativeContentCssPredicate : public ContentPredicate {
                                  const std::vector<std::string>& css_selectors);
 
   // Weak.
-  ContentPredicateEvaluator* const evaluator_;
+  const raw_ptr<ContentPredicateEvaluator, DanglingUntriaged> evaluator_;
   std::vector<std::string> css_selectors_;
-
-  DISALLOW_COPY_AND_ASSIGN(DeclarativeContentCssPredicate);
 };
 
 // Supports watching of CSS selectors to across tab contents in a browser
 // context, and querying for the matching CSS selectors for a context.
 class DeclarativeContentCssConditionTracker
     : public ContentPredicateEvaluator,
-      public content::NotificationObserver {
+      public content::RenderProcessHostCreationObserver {
  public:
   explicit DeclarativeContentCssConditionTracker(Delegate* delegate);
+
+  DeclarativeContentCssConditionTracker(
+      const DeclarativeContentCssConditionTracker&) = delete;
+  DeclarativeContentCssConditionTracker& operator=(
+      const DeclarativeContentCssConditionTracker&) = delete;
+
   ~DeclarativeContentCssConditionTracker() override;
 
   // ContentPredicateEvaluator:
@@ -97,6 +108,10 @@ class DeclarativeContentCssConditionTracker
     PerWebContentsTracker(content::WebContents* contents,
                           RequestEvaluationCallback request_evaluation,
                           WebContentsDestroyedCallback web_contents_destroyed);
+
+    PerWebContentsTracker(const PerWebContentsTracker&) = delete;
+    PerWebContentsTracker& operator=(const PerWebContentsTracker&) = delete;
+
     ~PerWebContentsTracker() override;
 
     void OnWebContentsNavigation(content::NavigationHandle* navigation_handle);
@@ -116,14 +131,10 @@ class DeclarativeContentCssConditionTracker
 
     // We use a hash_set for maximally efficient lookup.
     std::unordered_set<std::string> matching_css_selectors_;
-
-    DISALLOW_COPY_AND_ASSIGN(PerWebContentsTracker);
   };
 
-  // content::NotificationObserver implementation.
-  void Observe(int type,
-               const content::NotificationSource& source,
-               const content::NotificationDetails& details) override;
+  // content::RenderProcessHostCreationObserver implementation.
+  void OnRenderProcessHostCreated(content::RenderProcessHost* host) override;
 
   // Informs renderer processes of a new set of watched CSS selectors.
   void UpdateRenderersWatchedCssSelectors(
@@ -142,24 +153,21 @@ class DeclarativeContentCssConditionTracker
   void DeletePerWebContentsTracker(content::WebContents* contents);
 
   // Weak.
-  Delegate* delegate_;
+  raw_ptr<Delegate> delegate_;
 
   // Maps the CSS selectors to watch to the number of predicates specifying
   // them.
   std::map<std::string, int> watched_css_selector_predicate_count_;
 
   // Grouped predicates tracked by this object.
-  std::map<const void*, std::vector<const DeclarativeContentCssPredicate*>>
+  std::map<const void*,
+           std::vector<raw_ptr<const DeclarativeContentCssPredicate,
+                               VectorExperimental>>>
       tracked_predicates_;
 
   // Maps WebContents to the tracker for that WebContents state.
   std::map<content::WebContents*, std::unique_ptr<PerWebContentsTracker>>
       per_web_contents_tracker_;
-
-  // Manages our notification registrations.
-  content::NotificationRegistrar registrar_;
-
-  DISALLOW_COPY_AND_ASSIGN(DeclarativeContentCssConditionTracker);
 };
 
 }  // namespace extensions

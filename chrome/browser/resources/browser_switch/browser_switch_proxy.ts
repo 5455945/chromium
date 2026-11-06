@@ -1,8 +1,8 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {sendWithPromise} from 'chrome://resources/js/cr.m.js';
+import {sendWithPromise} from 'chrome://resources/js/cr.js';
 
 /** @interface */
 export interface BrowserSwitchProxy {
@@ -18,7 +18,7 @@ export interface BrowserSwitchProxy {
 
 export class BrowserSwitchProxyImpl implements BrowserSwitchProxy {
   launchAlternativeBrowserAndCloseTab(url: string) {
-    return sendWithPromise('launchAlternativeBrowserAndCloseTab', url);
+    return sendWithPromise<void>('launchAlternativeBrowserAndCloseTab', url);
   }
 
   gotoNewTabPage() {

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,7 +16,7 @@ namespace base {
 class FilePath;
 }
 
-namespace  net {
+namespace net {
 
 // Given the full path to a file name, creates a file: URL. The returned URL
 // may not be valid if the input is malformed.
@@ -131,14 +131,6 @@ NET_EXPORT bool IsSafePortableRelativePath(const base::FilePath& path);
 NET_EXPORT void GenerateSafeFileName(const std::string& mime_type,
                                      bool ignore_extension,
                                      base::FilePath* file_path);
-
-// Returns whether the specified file name is a reserved name on Windows.
-// This includes names like "com2.zip" (which correspond to devices) and
-// desktop.ini and thumbs.db which have special meaning to the Windows shell.
-// Even on other platforms, this will return whether or not a file name is
-// reserved on Windows.
-NET_EXPORT bool IsReservedNameOnWindows(
-    const base::FilePath::StringType& filename);
 
 }  // namespace net
 

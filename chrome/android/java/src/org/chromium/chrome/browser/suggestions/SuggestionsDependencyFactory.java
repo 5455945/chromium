@@ -1,12 +1,12 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.suggestions;
 
-import androidx.annotation.VisibleForTesting;
-
 import org.chromium.base.ThreadUtils;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.offlinepages.OfflinePageBridge;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.suggestions.mostvisited.MostVisitedSites;
@@ -19,8 +19,9 @@ import org.chromium.components.favicon.LargeIconBridge;
  * This class is intended to handle creating the instances of the various classes that interact with
  * native code, so that they can be easily swapped out during tests.
  */
+@NullMarked
 public class SuggestionsDependencyFactory {
-    private static SuggestionsDependencyFactory sInstance;
+    private static @Nullable SuggestionsDependencyFactory sInstance;
 
     public static SuggestionsDependencyFactory getInstance() {
         ThreadUtils.assertOnUiThread();
@@ -28,7 +29,6 @@ public class SuggestionsDependencyFactory {
         return sInstance;
     }
 
-    @VisibleForTesting
     public static void setInstanceForTesting(SuggestionsDependencyFactory testInstance) {
         if (sInstance != null && testInstance != null) {
             throw new IllegalStateException("A real instance already exists.");
@@ -44,7 +44,7 @@ public class SuggestionsDependencyFactory {
         return new LargeIconBridge(profile);
     }
 
-    public OfflinePageBridge getOfflinePageBridge(Profile profile) {
+    public @Nullable OfflinePageBridge getOfflinePageBridge(Profile profile) {
         return OfflinePageBridge.getForProfile(profile);
     }
 }

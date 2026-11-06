@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <unordered_set>
+#include <string_view>
+#include <tuple>
 #include <vector>
 
 #include "base/lazy_instance.h"
@@ -30,15 +31,29 @@ enum XInputType {
 // Enumeration of gamepads recognized by data fetchers. GamepadId values are
 // composed of the USB or Bluetooth vendor ID in the high 16 bits and product ID
 // in the low 16 bits.
+//
+// Enum labels used here should match the GamepadVendorProduct enum defined in
+// enums.xml. New labels can be generated using the gamepad_vendor_product_id
+// tool.
 enum class GamepadId : uint32_t {
   // ID value representing an unknown gamepad or non-gamepad.
   kUnknownGamepad = 0,
   // Fake IDs for devices which report as 0x0000 0x0000
   kPowerALicPro = 0x0000ff00,
   // ID values for supported devices.
+  k8BitDoProduct301b = 0x2dc8301b,
+  k8BitDoProduct3106 = 0x2dc83106,
+  k8BitDoProduct6012 = 0x2dc86012,
+  kAcerProduct1304 = 0x05021304,
+  kAcerProduct1305 = 0x05021305,
+  kAcerProduct1316 = 0x05021316,
+  kAcerProduct1317 = 0x05021317,
   kAmazonProduct041a = 0x1949041a,
   kAsusTekProduct4500 = 0x0b054500,
+  kBdaProduct6271 = 0x20d66271,
+  kBdaProduct89e5 = 0x20d689e5,
   kBroadcomProduct8502 = 0x0a5c8502,
+  kDjiProduct1020 = 0x2ca31020,
   kDragonRiseProduct0006 = 0x00790006,
   kDragonRiseProduct0011 = 0x00790011,
   kElecomProduct200f = 0x056e200f,
@@ -70,16 +85,23 @@ enum class GamepadId : uint32_t {
   kMicrosoftProduct0719 = 0x045e0719,
   kMicrosoftProduct0b00 = 0x045e0b00,
   kMicrosoftProduct0b05 = 0x045e0b05,
+  kMicrosoftProduct0b06 = 0x045e0b06,
   kMicrosoftProduct0b0a = 0x045e0b0a,
   kMicrosoftProduct0b0c = 0x045e0b0c,
   kMicrosoftProduct0b12 = 0x045e0b12,
   kMicrosoftProduct0b13 = 0x045e0b13,
+  kMicrosoftProduct0b20 = 0x045e0b20,
+  kMicrosoftProduct0b21 = 0x045e0b21,
+  kMicrosoftProduct0b22 = 0x045e0b22,
   kNintendoProduct2006 = 0x057e2006,
   kNintendoProduct2007 = 0x057e2007,
   kNintendoProduct2009 = 0x057e2009,
   kNintendoProduct200e = 0x057e200e,
   kNvidiaProduct7210 = 0x09557210,
   kNvidiaProduct7214 = 0x09557214,
+  kOnLiveProduct1008 = 0x23781008,
+  kOnLiveProduct100a = 0x2378100a,
+  kOuyaProduct0001 = 0x28360001,
   kPadixProduct2060 = 0x05832060,
   kPdpProduct0003 = 0x0e6f0003,
   kPlayComProduct0005 = 0x0b430005,
@@ -87,22 +109,29 @@ enum class GamepadId : uint32_t {
   kPrototypeVendorProduct9401 = 0x66669401,
   kRazer1532Product0900 = 0x15320900,
   kSamsungElectronicsProducta000 = 0x04e8a000,
+  kScufProduct7725 = 0x2e957725,
   kSonyProduct0268 = 0x054c0268,
   kSonyProduct05c4 = 0x054c05c4,
   kSonyProduct09cc = 0x054c09cc,
   kSonyProduct0ba0 = 0x054c0ba0,
   kSonyProduct0ce6 = 0x054c0ce6,
+  kSonyProduct0df2 = 0x054c0df2,
+  kSonyProduct0e5f = 0x054c0e5f,
   kSteelSeriesBtProduct1419 = 0x01111419,
   kSteelSeriesBtProduct1431 = 0x01111431,
+  kSteelSeriesBtProduct1434 = 0x01111434,
   kSteelSeriesProduct1412 = 0x10381412,
   kSteelSeriesProduct1418 = 0x10381418,
   kSteelSeriesProduct1420 = 0x10381420,
-  kVendor20d6Product6271 = 0x20d66271,
-  kVendor20d6Product89e5 = 0x20d689e5,
-  kVendor2378Product1008 = 0x23781008,
-  kVendor2378Product100a = 0x2378100a,
-  kVendor2836Product0001 = 0x28360001,
-  kVendor2e95Product7725 = 0x2e957725,
+  kSteelSeriesProduct1430 = 0x10381430,
+  kSteelSeriesProduct1431 = 0x10381431,
+  kValveProduct1102 = 0x28de1102,
+  kValveProduct1142 = 0x28de1142,
+  kValveProduct1205 = 0x28de1205,
+  kValveProduct1302 = 0x28de1302,
+  kValveProduct1303 = 0x28de1303,
+  kValveProduct1304 = 0x28de1304,
+  kValveProduct1305 = 0x28de1305,
 };
 
 class DEVICE_GAMEPAD_EXPORT GamepadIdList {
@@ -110,13 +139,20 @@ class DEVICE_GAMEPAD_EXPORT GamepadIdList {
   // Returns a singleton instance of the GamepadId list.
   static GamepadIdList& Get();
 
+#if BUILDFLAG(IS_WIN)
+  // Returns a unique product identifier for a given gamepad from the vendor and
+  // product id.
+  static std::string GetProductIdentifier(uint16_t vendor_id,
+                                          uint16_t product_id);
+#endif  // BUILDFLAG(IS_WIN)
+
   GamepadIdList(const GamepadIdList& entry) = delete;
   GamepadIdList& operator=(const GamepadIdList& entry) = delete;
 
   // Returns a GamepadId value suitable for identifying a specific model of
   // gamepad. If the gamepad is not contained in the list of known gamepads,
   // returns kUnknownGamepad.
-  GamepadId GetGamepadId(base::StringPiece product_name,
+  GamepadId GetGamepadId(std::string_view product_name,
                          uint16_t vendor_id,
                          uint16_t product_id) const;
 
@@ -128,13 +164,21 @@ class DEVICE_GAMEPAD_EXPORT GamepadIdList {
   // device is not XInput or the XInput flavor is unknown.
   XInputType GetXInputType(uint16_t vendor_id, uint16_t product_id) const;
 
+  // Returns true if the gamepad device identified by |gamepad_id| has haptic
+  // actuators on its triggers. Returns false otherwise.
+  bool HasTriggerRumbleSupport(GamepadId gamepad_id) const;
+
+  // Returns true if |gamepad_id| is a PlayStation 5 DualSense or DualSense
+  // Edge.
+  static bool IsPlayStation5Gamepad(GamepadId gamepad_id);
+
   // Returns the internal list of gamepad info for testing purposes.
   std::vector<std::tuple<uint16_t, uint16_t, XInputType>>
   GetGamepadListForTesting() const;
 
  private:
   friend base::LazyInstanceTraitsBase<GamepadIdList>;
-  GamepadIdList();
+  GamepadIdList() = default;
 };
 
 }  // namespace device

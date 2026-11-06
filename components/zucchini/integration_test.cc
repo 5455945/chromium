@@ -1,10 +1,11 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <stdint.h>
 
 #include <algorithm>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -16,13 +17,12 @@
 #include "components/zucchini/patch_writer.h"
 #include "components/zucchini/zucchini.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace zucchini {
 
 base::FilePath MakeTestPath(const std::string& filename) {
   base::FilePath path;
-  DCHECK(base::PathService::Get(base::DIR_SOURCE_ROOT, &path));
+  DCHECK(base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &path));
   return path.AppendASCII("components")
       .AppendASCII("zucchini")
       .AppendASCII("testdata")
@@ -41,8 +41,8 @@ void TestGenApply(const std::string& old_filename,
   base::MemoryMappedFile new_file;
   ASSERT_TRUE(new_file.Initialize(new_path));
 
-  ConstBufferView old_region(old_file.data(), old_file.length());
-  ConstBufferView new_region(new_file.data(), new_file.length());
+  ConstBufferView old_region(old_file.bytes());
+  ConstBufferView new_region(new_file.bytes());
 
   EnsemblePatchWriter patch_writer(old_region, new_region);
 
@@ -59,16 +59,16 @@ void TestGenApply(const std::string& old_filename,
   patch_writer.SerializeInto({patch_buffer.data(), patch_buffer.size()});
 
   // Read back generated patch.
-  absl::optional<EnsemblePatchReader> patch_reader =
+  std::optional<EnsemblePatchReader> patch_reader =
       EnsemblePatchReader::Create({patch_buffer.data(), patch_buffer.size()});
   ASSERT_TRUE(patch_reader.has_value());
 
   // Check basic properties.
   EXPECT_TRUE(patch_reader->CheckOldFile(old_region));
   EXPECT_TRUE(patch_reader->CheckNewFile(new_region));
-  EXPECT_EQ(old_file.length(), patch_reader->header().old_size);
+  EXPECT_EQ(old_file.bytes().size(), patch_reader->header().old_size);
   // If new_size doesn't match expectation, the function is aborted.
-  ASSERT_EQ(new_file.length(), patch_reader->header().new_size);
+  ASSERT_EQ(new_file.bytes().size(), patch_reader->header().new_size);
 
   // Apply patch to "old" to get "patched new", ensure it's identical to "new".
   std::vector<uint8_t> patched_new_buffer(new_region.size());
@@ -77,8 +77,7 @@ void TestGenApply(const std::string& old_filename,
                                                  patched_new_buffer.size()}));
 
   // Note that |new_region| and |patched_new_buffer| are the same size.
-  EXPECT_TRUE(std::equal(new_region.begin(), new_region.end(),
-                         patched_new_buffer.begin()));
+  EXPECT_TRUE(std::ranges::equal(new_region, patched_new_buffer));
 }
 
 TEST(EndToEndTest, GenApplyRaw) {

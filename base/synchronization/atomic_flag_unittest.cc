@@ -1,16 +1,17 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/synchronization/atomic_flag.h"
 
-#include "base/bind.h"
 #include "base/check_op.h"
-#include "base/single_thread_task_runner.h"
+#include "base/functional/bind.h"
 #include "base/synchronization/waitable_event.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/gtest_util.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/thread.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -27,14 +28,17 @@ void ExpectSetFlagDeath(AtomicFlag* flag) {
 // defeat the purpose of testing atomics) until |tested_flag| is set and then
 // verifies that non-atomic |*expected_after_flag| is true and sets |*done_flag|
 // before returning if it's non-null.
-void BusyWaitUntilFlagIsSet(AtomicFlag* tested_flag, bool* expected_after_flag,
+void BusyWaitUntilFlagIsSet(AtomicFlag* tested_flag,
+                            bool* expected_after_flag,
                             AtomicFlag* done_flag) {
-  while (!tested_flag->IsSet())
+  while (!tested_flag->IsSet()) {
     PlatformThread::YieldCurrentThread();
+  }
 
   EXPECT_TRUE(*expected_after_flag);
-  if (done_flag)
+  if (done_flag) {
     done_flag->Set();
+  }
 }
 
 }  // namespace
@@ -75,7 +79,7 @@ TEST(AtomicFlagTest, ReadFromDifferentThread) {
   // To verify that IsSet() fetches the flag's value from memory every time it
   // is called (not just the first time that it is called on a thread), sleep
   // before setting the flag.
-  PlatformThread::Sleep(TimeDelta::FromMilliseconds(20));
+  PlatformThread::Sleep(Milliseconds(20));
 
   // |expected_after_flag| is used to verify that all memory operations
   // performed before |tested_flag| is Set() are visible to threads that can see
@@ -85,12 +89,13 @@ TEST(AtomicFlagTest, ReadFromDifferentThread) {
 
   // Sleep again to give the busy loop time to observe the flag and verify
   // expectations.
-  PlatformThread::Sleep(TimeDelta::FromMilliseconds(20));
+  PlatformThread::Sleep(Milliseconds(20));
 
   // Use |reset_flag| to confirm that the above completed (which the rest of
   // this test assumes).
-  while (!reset_flag.IsSet())
+  while (!reset_flag.IsSet()) {
     PlatformThread::YieldCurrentThread();
+  }
 
   tested_flag.UnsafeResetForTesting();
   EXPECT_FALSE(tested_flag.IsSet());
@@ -104,7 +109,7 @@ TEST(AtomicFlagTest, ReadFromDifferentThread) {
                                  BindOnce(&BusyWaitUntilFlagIsSet, &tested_flag,
                                           &expected_after_flag, nullptr));
 
-  PlatformThread::Sleep(TimeDelta::FromMilliseconds(20));
+  PlatformThread::Sleep(Milliseconds(20));
 
   expected_after_flag = true;
   tested_flag.Set();
@@ -123,7 +128,7 @@ TEST(AtomicFlagTest, SetOnDifferentSequenceDeathTest) {
   // ExpectSetFlagDeath.
   AtomicFlag flag;
 
-  ::testing::FLAGS_gtest_death_test_style = "threadsafe";
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
   Thread t("AtomicFlagTest.SetOnDifferentThreadDeathTest");
   ASSERT_TRUE(t.Start());
   EXPECT_TRUE(t.WaitUntilThreadStarted());

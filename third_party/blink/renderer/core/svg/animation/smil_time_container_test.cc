@@ -1,9 +1,11 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/svg/animation/smil_time_container.h"
 
+#include "base/time/time.h"
+#include "third_party/blink/renderer/core/animation/animation_clock.h"
 #include "third_party/blink/renderer/core/animation/document_timeline.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element_traversal.h"
@@ -11,6 +13,7 @@
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
+#include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/svg/svg_animated_length.h"
 #include "third_party/blink/renderer/core/svg/svg_document_extensions.h"
 #include "third_party/blink/renderer/core/svg/svg_length.h"
@@ -27,30 +30,31 @@ namespace {
 
 class SMILTimeContainerTest : public PageTestBase {
  public:
+  SMILTimeContainerTest()
+      : PageTestBase(base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
+
   void SetUp() override {
     EnablePlatform();
-    platform()->SetAutoAdvanceNowToPendingTasks(false);
     PageTestBase::SetUp();
   }
 
-  void Load(base::span<const char> data) {
+  void Load(std::string_view data) {
     auto params = WebNavigationParams::CreateWithHTMLStringForTesting(
         data, KURL("http://example.com"));
     GetFrame().Loader().CommitNavigation(std::move(params),
                                          nullptr /* extra_data */);
-    GetAnimationClock().ResetTimeForTesting();
+    GetAnimationClock().OverrideDynamicClockForTesting(
+        platform()->GetTickClock());
     GetAnimationClock().SetAllowedToDynamicallyUpdateTime(false);
     GetDocument().Timeline().ResetForTesting();
   }
 
   void StepTime(base::TimeDelta delta) {
-    platform()->RunForPeriod(delta);
-    current_time_ += delta;
-    GetAnimationClock().UpdateTime(current_time_);
+    AnimationClock::NotifyTaskStart();
+    AdvanceClock(delta);
+    GetAnimationClock().SetAllowedToDynamicallyUpdateTime(false);
+    GetAnimationClock().UpdateTime(platform()->NowTicks());
   }
-
- private:
-  base::TimeTicks current_time_;
 };
 
 TEST_F(SMILTimeContainerTest, ServiceAnimationsFlushesPendingSynchronizations) {
@@ -74,21 +78,227 @@ TEST_F(SMILTimeContainerTest, ServiceAnimationsFlushesPendingSynchronizations) {
 
   // Insert an animation: <set attributeName="height" to="100"/> of the <rect>.
   auto* animation = MakeGarbageCollected<SVGSetElement>(GetDocument());
-  animation->setAttribute(svg_names::kAttributeTypeAttr, "XML");
-  animation->setAttribute(svg_names::kAttributeNameAttr, "height");
-  animation->setAttribute(svg_names::kToAttr, "100");
+  animation->setAttribute(svg_names::kAttributeTypeAttr, AtomicString("XML"));
+  animation->setAttribute(svg_names::kAttributeNameAttr,
+                          AtomicString("height"));
+  animation->setAttribute(svg_names::kToAttr, AtomicString("100"));
   rect->appendChild(animation);
 
   // Frame callback before the synchronization timer fires.
   SVGDocumentExtensions::ServiceSmilOnAnimationFrame(GetDocument());
-  SVGDocumentExtensions::ServiceWebAnimationsOnAnimationFrame(GetDocument());
 
   // The frame callback should have flushed any pending updates.
   EXPECT_EQ(100, rect->height()->CurrentValue()->Value(length_context));
 
-  StepTime(base::TimeDelta::FromMilliseconds(500));
+  StepTime(base::Milliseconds(500));
   EXPECT_EQ(100, rect->height()->CurrentValue()->Value(length_context));
   EXPECT_EQ(SMILTime::FromSecondsD(0.5), time_container->Elapsed());
+}
+
+TEST_F(SMILTimeContainerTest, ServiceAnimationsResyncOnLag) {
+  Load(R"HTML(
+    <svg id="container">
+      <rect width="100" height="100" fill="blue">
+        <animate begin="0s" dur="5min" repeatCount="indefinite"
+                 attributeName="width" from="0" to="100"/>
+      </rect>
+    </svg>
+  )HTML");
+  platform()->RunUntilIdle();
+
+  auto* svg_root = To<SVGSVGElement>(GetElementById("container"));
+  ASSERT_TRUE(svg_root);
+
+  SMILTimeContainer* time_container = svg_root->TimeContainer();
+  EXPECT_TRUE(time_container->IsStarted());
+  EXPECT_FALSE(time_container->IsPaused());
+
+  // Step an hour ahead. Since the animation starts generating frame callbacks
+  // at t=0s it will auto-suspend after 1 minute.
+  StepTime(base::Minutes(60));
+  SVGDocumentExtensions::ServiceSmilOnAnimationFrame(GetDocument());
+
+  EXPECT_EQ(SMILTime::FromSecondsD(60), time_container->Elapsed());
+}
+
+TEST_F(SMILTimeContainerTest, ServiceAnimationsNoResyncAfterFutureFrame) {
+  Load(R"HTML(
+    <svg id="container">
+      <rect width="100" height="100" fill="blue">
+        <animate begin="50min" dur="5min" repeatCount="indefinite"
+                 attributeName="width" from="0" to="100"/>
+      </rect>
+    </svg>
+  )HTML");
+  platform()->RunUntilIdle();
+
+  auto* svg_root = To<SVGSVGElement>(GetElementById("container"));
+  ASSERT_TRUE(svg_root);
+
+  SMILTimeContainer* time_container = svg_root->TimeContainer();
+  EXPECT_TRUE(time_container->IsStarted());
+  EXPECT_FALSE(time_container->IsPaused());
+
+  // Like PageAnimator::PostAnimate(). Allows the clock to adjust for/during
+  // the timer delay.
+  GetAnimationClock().SetAllowedToDynamicallyUpdateTime(true);
+
+  // Step 30 seconds into the first repeat of the animations interval. Since
+  // the animation doesn't start generating frame callbacks until t=50min it
+  // will not auto-suspend.
+  const base::TimeDelta lag = base::Minutes(50) + base::Seconds(30);
+  StepTime(lag);
+  SVGDocumentExtensions::ServiceSmilOnAnimationFrame(GetDocument());
+
+  EXPECT_EQ(SMILTime::FromTimeDelta(lag), time_container->Elapsed());
+}
+
+TEST_F(SMILTimeContainerTest, ServiceAnimationsNoSuspendOnAnimationSync) {
+  Load(R"HTML(
+    <svg id="container">
+      <rect width="100" height="100" fill="blue"/>
+    </svg>
+  )HTML");
+  platform()->RunUntilIdle();
+
+  auto* svg_root = To<SVGSVGElement>(GetElementById("container"));
+  ASSERT_TRUE(svg_root);
+
+  SMILTimeContainer* time_container = svg_root->TimeContainer();
+  EXPECT_TRUE(time_container->IsStarted());
+  EXPECT_FALSE(time_container->IsPaused());
+
+  // Like PageAnimator::PostAnimate(). Allows the clock to adjust for/during
+  // the timer delay.
+  GetAnimationClock().SetAllowedToDynamicallyUpdateTime(true);
+
+  // Step an hour ahead. There are no animations running, but the timeline is
+  // active.
+  const base::TimeDelta elapsed = base::Minutes(60);
+  StepTime(elapsed);
+
+  // Insert an animation element:
+  //  <animate begin="0s" dur="5min" repeatCount="indefinite"
+  //           attributeName="width" from="0" to="100"/>
+  auto* animation = GetDocument().CreateRawElement(svg_names::kAnimateTag);
+  animation->setAttribute(svg_names::kBeginAttr, AtomicString("0s"));
+  animation->setAttribute(svg_names::kDurAttr, AtomicString("5min"));
+  animation->setAttribute(svg_names::kRepeatCountAttr,
+                          AtomicString("indefinite"));
+  animation->setAttribute(svg_names::kAttributeNameAttr, AtomicString("width"));
+  animation->setAttribute(svg_names::kFromAttr, AtomicString("0"));
+  animation->setAttribute(svg_names::kToAttr, AtomicString("100"));
+  svg_root->AppendChild(animation);
+
+  SVGDocumentExtensions::ServiceSmilOnAnimationFrame(GetDocument());
+
+  // The timeline should not have been suspended (i.e the time elapsed on the
+  // timeline should equal the currently elapsed time).
+  EXPECT_EQ(SMILTime::FromTimeDelta(elapsed), time_container->Elapsed());
+}
+
+class RepeatEventCounterListener final : public NativeEventListener {
+ public:
+  void Invoke(ExecutionContext*, Event*) override { num_invocations_++; }
+  size_t GetCount() const { return num_invocations_; }
+
+ private:
+  size_t num_invocations_ = 0;
+};
+
+TEST_F(SMILTimeContainerTest, TimeContainerForwardsTimingStateWhenReinserted) {
+  Load(R"HTML(
+    <svg id="container">
+      <rect width="100" height="100" fill="blue">
+        <animate attributeName="fill" dur="1s" repeatCount="indefinite"
+                 values="lime; blue" id="anim"/>
+      </rect>
+    </svg>
+  )HTML");
+  test::RunPendingTasks();
+
+  auto* repeat_event_listener =
+      MakeGarbageCollected<RepeatEventCounterListener>();
+  auto* svg_root = To<SVGSVGElement>(GetElementById("container"));
+  ASSERT_TRUE(svg_root);
+  auto* animation = GetElementById("anim");
+  ASSERT_TRUE(animation);
+  animation->addEventListener(event_type_names::kRepeatEvent,
+                              repeat_event_listener);
+
+  SMILTimeContainer* time_container = svg_root->TimeContainer();
+  EXPECT_TRUE(time_container->IsStarted());
+  EXPECT_FALSE(time_container->IsPaused());
+
+  // Like PageAnimator::PostAnimate(). Allows the clock to adjust for/during
+  // the timer delay.
+  GetAnimationClock().SetAllowedToDynamicallyUpdateTime(true);
+
+  // Remove the SVG fragment.
+  svg_root->remove();
+
+  // Step an hour ahead. The animations in the detached SVG fragment are
+  // inactive. Add an additional 0.5s to step in the middle of a repetition.
+  StepTime(base::Minutes(60) + base::Milliseconds(500));
+
+  // Re-insert the SVG fragment.
+  GetDocument().body()->AppendChild(svg_root);
+
+  // Flush the pending timer and ensure a new animation frame.
+  test::RunPendingTasks();
+  SVGDocumentExtensions::ServiceSmilOnAnimationFrame(GetDocument());
+
+  // No 'repeatEvent's should've been dispatched for the re-inserted timed
+  // element.
+  EXPECT_EQ(repeat_event_listener->GetCount(), 0u);
+}
+
+TEST_F(SMILTimeContainerTest, TimeContainerForwardsTimingStateWhenRepopulated) {
+  Load(R"HTML(
+    <svg id="container">
+      <rect width="100" height="100" fill="blue">
+        <animate attributeName="fill" dur="1s" repeatCount="indefinite"
+                 values="lime; blue" id="anim"/>
+      </rect>
+    </svg>
+  )HTML");
+  test::RunPendingTasks();
+
+  auto* repeat_event_listener =
+      MakeGarbageCollected<RepeatEventCounterListener>();
+  auto* svg_root = To<SVGSVGElement>(GetElementById("container"));
+  ASSERT_TRUE(svg_root);
+  auto* animation = GetElementById("anim");
+  ASSERT_TRUE(animation);
+  animation->addEventListener(event_type_names::kRepeatEvent,
+                              repeat_event_listener);
+
+  SMILTimeContainer* time_container = svg_root->TimeContainer();
+  EXPECT_TRUE(time_container->IsStarted());
+  EXPECT_FALSE(time_container->IsPaused());
+
+  // Like PageAnimator::PostAnimate(). Allows the clock to adjust for/during
+  // the timer delay.
+  GetAnimationClock().SetAllowedToDynamicallyUpdateTime(true);
+
+  // Remove the animation element. The time container is now empty.
+  auto* rect = animation->parentElement();
+  animation->remove();
+
+  // Step an hour ahead. The animations in the detached SVG fragment are
+  // inactive. Add an additional 0.5s to step in the middle of a repetition.
+  StepTime(base::Minutes(60) + base::Milliseconds(500));
+
+  // Re-insert the animation element.
+  rect->AppendChild(animation);
+
+  // Flush the pending timer and ensure a new animation frame.
+  test::RunPendingTasks();
+  SVGDocumentExtensions::ServiceSmilOnAnimationFrame(GetDocument());
+
+  // No 'repeatEvent's should've been dispatched for the re-inserted timed
+  // element.
+  EXPECT_EQ(repeat_event_listener->GetCount(), 0u);
 }
 
 class ContentLoadedEventListener final : public NativeEventListener {
@@ -108,13 +318,15 @@ class ContentLoadedEventListener final : public NativeEventListener {
 
 class SMILTimeContainerAnimationPolicyOnceTest : public PageTestBase {
  public:
+  SMILTimeContainerAnimationPolicyOnceTest()
+      : PageTestBase(base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
+
   void SetUp() override {
     EnablePlatform();
-    platform()->SetAutoAdvanceNowToPendingTasks(false);
     PageTestBase::SetupPageWithClients(nullptr, nullptr, &OverrideSettings);
   }
 
-  void Load(base::span<const char> data) {
+  void Load(std::string_view data) {
     auto params = WebNavigationParams::CreateWithHTMLStringForTesting(
         data, KURL("http://example.com"));
     GetFrame().Loader().CommitNavigation(std::move(params),
@@ -125,11 +337,10 @@ class SMILTimeContainerAnimationPolicyOnceTest : public PageTestBase {
   }
 
   void StepTime(base::TimeDelta delta) {
-    platform()->RunForPeriod(delta);
+    FastForwardBy(delta);
     current_time_ += delta;
     GetAnimationClock().UpdateTime(current_time_);
     SVGDocumentExtensions::ServiceSmilOnAnimationFrame(GetDocument());
-    SVGDocumentExtensions::ServiceWebAnimationsOnAnimationFrame(GetDocument());
   }
 
   void OnContentLoaded(base::OnceCallback<void(Document&)> callback) {
@@ -169,10 +380,10 @@ TEST_F(SMILTimeContainerAnimationPolicyOnceTest, NoAction) {
   EXPECT_FALSE(time_container->IsPaused());
   EXPECT_EQ(30, rect->height()->CurrentValue()->Value(length_context));
 
-  StepTime(base::TimeDelta::FromMilliseconds(2500));
+  StepTime(base::Milliseconds(2500));
   EXPECT_EQ(100, rect->height()->CurrentValue()->Value(length_context));
 
-  StepTime(base::TimeDelta::FromMilliseconds(500));
+  StepTime(base::Milliseconds(500));
   EXPECT_EQ(30, rect->height()->CurrentValue()->Value(length_context));
   EXPECT_EQ(SMILTime::FromSecondsD(3), time_container->Elapsed());
 }
@@ -201,13 +412,13 @@ TEST_F(SMILTimeContainerAnimationPolicyOnceTest, SetElapsedAfterStart) {
   EXPECT_EQ(SMILTime::FromSecondsD(5.5), time_container->Elapsed());
   EXPECT_EQ(100, rect->height()->CurrentValue()->Value(length_context));
 
-  StepTime(base::TimeDelta::FromMilliseconds(2000));
+  StepTime(base::Milliseconds(2000));
   EXPECT_EQ(50, rect->height()->CurrentValue()->Value(length_context));
 
-  StepTime(base::TimeDelta::FromMilliseconds(1000));
+  StepTime(base::Milliseconds(1000));
   EXPECT_EQ(100, rect->height()->CurrentValue()->Value(length_context));
 
-  StepTime(base::TimeDelta::FromMilliseconds(1000));
+  StepTime(base::Milliseconds(1000));
   EXPECT_EQ(100, rect->height()->CurrentValue()->Value(length_context));
   EXPECT_EQ(SMILTime::FromSecondsD(8.5), time_container->Elapsed());
 }
@@ -221,8 +432,9 @@ TEST_F(SMILTimeContainerAnimationPolicyOnceTest, SetElapsedBeforeStart) {
       </rect>
     </svg>
   )HTML");
-  OnContentLoaded(WTF::Bind([](Document& document) {
-    auto* svg_root = To<SVGSVGElement>(document.getElementById("container"));
+  OnContentLoaded(BindOnce([](Document& document) {
+    auto* svg_root =
+        To<SVGSVGElement>(document.getElementById(AtomicString("container")));
     ASSERT_TRUE(svg_root);
     auto* rect = Traversal<SVGRectElement>::FirstChild(*svg_root);
     ASSERT_TRUE(rect);
@@ -248,13 +460,13 @@ TEST_F(SMILTimeContainerAnimationPolicyOnceTest, SetElapsedBeforeStart) {
   EXPECT_EQ(SMILTime::FromSecondsD(5.5), time_container->Elapsed());
   EXPECT_EQ(100, rect->height()->CurrentValue()->Value(length_context));
 
-  StepTime(base::TimeDelta::FromMilliseconds(2000));
+  StepTime(base::Milliseconds(2000));
   EXPECT_EQ(50, rect->height()->CurrentValue()->Value(length_context));
 
-  StepTime(base::TimeDelta::FromMilliseconds(1000));
+  StepTime(base::Milliseconds(1000));
   EXPECT_EQ(100, rect->height()->CurrentValue()->Value(length_context));
 
-  StepTime(base::TimeDelta::FromMilliseconds(1000));
+  StepTime(base::Milliseconds(1000));
   EXPECT_EQ(100, rect->height()->CurrentValue()->Value(length_context));
   EXPECT_EQ(SMILTime::FromSecondsD(8.5), time_container->Elapsed());
 }
@@ -281,7 +493,7 @@ TEST_F(SMILTimeContainerAnimationPolicyOnceTest, PauseAfterStart) {
   EXPECT_FALSE(time_container->IsPaused());
   EXPECT_EQ(30, rect->height()->CurrentValue()->Value(length_context));
 
-  StepTime(base::TimeDelta::FromMilliseconds(1500));
+  StepTime(base::Milliseconds(1500));
   EXPECT_EQ(50, rect->height()->CurrentValue()->Value(length_context));
 
   time_container->Pause();
@@ -292,7 +504,7 @@ TEST_F(SMILTimeContainerAnimationPolicyOnceTest, PauseAfterStart) {
   EXPECT_FALSE(time_container->IsPaused());
   EXPECT_EQ(SMILTime::FromSecondsD(1.5), time_container->Elapsed());
 
-  StepTime(base::TimeDelta::FromMilliseconds(4000));
+  StepTime(base::Milliseconds(4000));
   EXPECT_EQ(50, rect->height()->CurrentValue()->Value(length_context));
   EXPECT_EQ(SMILTime::FromSecondsD(4.5), time_container->Elapsed());
 }
@@ -306,8 +518,9 @@ TEST_F(SMILTimeContainerAnimationPolicyOnceTest, PauseBeforeStart) {
       </rect>
     </svg>
   )HTML");
-  OnContentLoaded(WTF::Bind([](Document& document) {
-    auto* svg_root = To<SVGSVGElement>(document.getElementById("container"));
+  OnContentLoaded(BindOnce([](Document& document) {
+    auto* svg_root =
+        To<SVGSVGElement>(document.getElementById(AtomicString("container")));
     ASSERT_TRUE(svg_root);
     auto* rect = Traversal<SVGRectElement>::FirstChild(*svg_root);
     ASSERT_TRUE(rect);
@@ -333,7 +546,7 @@ TEST_F(SMILTimeContainerAnimationPolicyOnceTest, PauseBeforeStart) {
   EXPECT_TRUE(time_container->IsPaused());
   EXPECT_EQ(30, rect->height()->CurrentValue()->Value(length_context));
 
-  StepTime(base::TimeDelta::FromMilliseconds(1500));
+  StepTime(base::Milliseconds(1500));
   EXPECT_EQ(SMILTime::FromSecondsD(0), time_container->Elapsed());
   EXPECT_EQ(30, rect->height()->CurrentValue()->Value(length_context));
 
@@ -341,10 +554,10 @@ TEST_F(SMILTimeContainerAnimationPolicyOnceTest, PauseBeforeStart) {
   EXPECT_FALSE(time_container->IsPaused());
   EXPECT_EQ(SMILTime::FromSecondsD(0), time_container->Elapsed());
 
-  StepTime(base::TimeDelta::FromMilliseconds(1500));
+  StepTime(base::Milliseconds(1500));
   EXPECT_EQ(50, rect->height()->CurrentValue()->Value(length_context));
 
-  StepTime(base::TimeDelta::FromMilliseconds(2500));
+  StepTime(base::Milliseconds(2500));
   EXPECT_EQ(30, rect->height()->CurrentValue()->Value(length_context));
   EXPECT_EQ(SMILTime::FromSecondsD(3), time_container->Elapsed());
 }
@@ -371,7 +584,7 @@ TEST_F(SMILTimeContainerAnimationPolicyOnceTest, PauseAndSetElapsedAfterStart) {
   EXPECT_FALSE(time_container->IsPaused());
   EXPECT_EQ(30, rect->height()->CurrentValue()->Value(length_context));
 
-  StepTime(base::TimeDelta::FromMilliseconds(1500));
+  StepTime(base::Milliseconds(1500));
   EXPECT_EQ(50, rect->height()->CurrentValue()->Value(length_context));
 
   time_container->Pause();
@@ -385,7 +598,7 @@ TEST_F(SMILTimeContainerAnimationPolicyOnceTest, PauseAndSetElapsedAfterStart) {
   EXPECT_FALSE(time_container->IsPaused());
   EXPECT_EQ(SMILTime::FromSecondsD(0.5), time_container->Elapsed());
 
-  StepTime(base::TimeDelta::FromMilliseconds(4000));
+  StepTime(base::Milliseconds(4000));
   EXPECT_EQ(30, rect->height()->CurrentValue()->Value(length_context));
   EXPECT_EQ(SMILTime::FromSecondsD(3.5), time_container->Elapsed());
 }
@@ -400,8 +613,9 @@ TEST_F(SMILTimeContainerAnimationPolicyOnceTest,
       </rect>
     </svg>
   )HTML");
-  OnContentLoaded(WTF::Bind([](Document& document) {
-    auto* svg_root = To<SVGSVGElement>(document.getElementById("container"));
+  OnContentLoaded(BindOnce([](Document& document) {
+    auto* svg_root =
+        To<SVGSVGElement>(document.getElementById(AtomicString("container")));
     ASSERT_TRUE(svg_root);
     auto* rect = Traversal<SVGRectElement>::FirstChild(*svg_root);
     ASSERT_TRUE(rect);
@@ -430,7 +644,7 @@ TEST_F(SMILTimeContainerAnimationPolicyOnceTest,
   EXPECT_EQ(SMILTime::FromSecondsD(1.5), time_container->Elapsed());
   EXPECT_EQ(50, rect->height()->CurrentValue()->Value(length_context));
 
-  StepTime(base::TimeDelta::FromMilliseconds(1500));
+  StepTime(base::Milliseconds(1500));
   EXPECT_EQ(SMILTime::FromSecondsD(1.5), time_container->Elapsed());
   EXPECT_EQ(50, rect->height()->CurrentValue()->Value(length_context));
 
@@ -438,10 +652,10 @@ TEST_F(SMILTimeContainerAnimationPolicyOnceTest,
   EXPECT_FALSE(time_container->IsPaused());
   EXPECT_EQ(SMILTime::FromSecondsD(1.5), time_container->Elapsed());
 
-  StepTime(base::TimeDelta::FromMilliseconds(2000));
+  StepTime(base::Milliseconds(2000));
   EXPECT_EQ(30, rect->height()->CurrentValue()->Value(length_context));
 
-  StepTime(base::TimeDelta::FromMilliseconds(2000));
+  StepTime(base::Milliseconds(2000));
   EXPECT_EQ(50, rect->height()->CurrentValue()->Value(length_context));
   EXPECT_EQ(SMILTime::FromSecondsD(4.5), time_container->Elapsed());
 }
@@ -455,8 +669,9 @@ TEST_F(SMILTimeContainerAnimationPolicyOnceTest, PauseAndResumeBeforeStart) {
       </rect>
     </svg>
   )HTML");
-  OnContentLoaded(WTF::Bind([](Document& document) {
-    auto* svg_root = To<SVGSVGElement>(document.getElementById("container"));
+  OnContentLoaded(BindOnce([](Document& document) {
+    auto* svg_root =
+        To<SVGSVGElement>(document.getElementById(AtomicString("container")));
     ASSERT_TRUE(svg_root);
     auto* rect = Traversal<SVGRectElement>::FirstChild(*svg_root);
     ASSERT_TRUE(rect);
@@ -484,10 +699,10 @@ TEST_F(SMILTimeContainerAnimationPolicyOnceTest, PauseAndResumeBeforeStart) {
   EXPECT_FALSE(time_container->IsPaused());
   EXPECT_EQ(30, rect->height()->CurrentValue()->Value(length_context));
 
-  StepTime(base::TimeDelta::FromMilliseconds(2500));
+  StepTime(base::Milliseconds(2500));
   EXPECT_EQ(100, rect->height()->CurrentValue()->Value(length_context));
 
-  StepTime(base::TimeDelta::FromMilliseconds(500));
+  StepTime(base::Milliseconds(500));
   EXPECT_EQ(30, rect->height()->CurrentValue()->Value(length_context));
   EXPECT_EQ(SMILTime::FromSecondsD(3), time_container->Elapsed());
 }
@@ -515,15 +730,15 @@ TEST_F(SMILTimeContainerAnimationPolicyOnceTest, PauseAndResumeAfterSuspended) {
   EXPECT_EQ(SMILTime::FromSecondsD(0), time_container->Elapsed());
   EXPECT_EQ(30, rect->height()->CurrentValue()->Value(length_context));
 
-  StepTime(base::TimeDelta::FromMilliseconds(1000));
+  StepTime(base::Milliseconds(1000));
   EXPECT_EQ(SMILTime::FromSecondsD(1.0), time_container->Elapsed());
   EXPECT_EQ(50, rect->height()->CurrentValue()->Value(length_context));
 
-  StepTime(base::TimeDelta::FromMilliseconds(1000));
+  StepTime(base::Milliseconds(1000));
   EXPECT_EQ(SMILTime::FromSecondsD(2.0), time_container->Elapsed());
   EXPECT_EQ(100, rect->height()->CurrentValue()->Value(length_context));
 
-  StepTime(base::TimeDelta::FromMilliseconds(1500));
+  StepTime(base::Milliseconds(1500));
   EXPECT_EQ(SMILTime::FromSecondsD(3.0), time_container->Elapsed());
   EXPECT_EQ(30, rect->height()->CurrentValue()->Value(length_context));
 
@@ -535,15 +750,15 @@ TEST_F(SMILTimeContainerAnimationPolicyOnceTest, PauseAndResumeAfterSuspended) {
   EXPECT_FALSE(time_container->IsPaused());
   EXPECT_EQ(SMILTime::FromSecondsD(3.0), time_container->Elapsed());
 
-  StepTime(base::TimeDelta::FromMilliseconds(1000));
+  StepTime(base::Milliseconds(1000));
   EXPECT_EQ(SMILTime::FromSecondsD(4.0), time_container->Elapsed());
   EXPECT_EQ(50, rect->height()->CurrentValue()->Value(length_context));
 
-  StepTime(base::TimeDelta::FromMilliseconds(1000));
+  StepTime(base::Milliseconds(1000));
   EXPECT_EQ(SMILTime::FromSecondsD(5.0), time_container->Elapsed());
   EXPECT_EQ(100, rect->height()->CurrentValue()->Value(length_context));
 
-  StepTime(base::TimeDelta::FromMilliseconds(1500));
+  StepTime(base::Milliseconds(1500));
   EXPECT_EQ(30, rect->height()->CurrentValue()->Value(length_context));
   EXPECT_EQ(SMILTime::FromSecondsD(6.0), time_container->Elapsed());
 }
@@ -571,15 +786,15 @@ TEST_F(SMILTimeContainerAnimationPolicyOnceTest, SetElapsedAfterSuspended) {
   EXPECT_EQ(SMILTime::FromSecondsD(0), time_container->Elapsed());
   EXPECT_EQ(30, rect->height()->CurrentValue()->Value(length_context));
 
-  StepTime(base::TimeDelta::FromMilliseconds(1000));
+  StepTime(base::Milliseconds(1000));
   EXPECT_EQ(SMILTime::FromSecondsD(1.0), time_container->Elapsed());
   EXPECT_EQ(50, rect->height()->CurrentValue()->Value(length_context));
 
-  StepTime(base::TimeDelta::FromMilliseconds(1000));
+  StepTime(base::Milliseconds(1000));
   EXPECT_EQ(SMILTime::FromSecondsD(2.0), time_container->Elapsed());
   EXPECT_EQ(100, rect->height()->CurrentValue()->Value(length_context));
 
-  StepTime(base::TimeDelta::FromMilliseconds(1500));
+  StepTime(base::Milliseconds(1500));
   EXPECT_EQ(SMILTime::FromSecondsD(3.0), time_container->Elapsed());
   EXPECT_EQ(30, rect->height()->CurrentValue()->Value(length_context));
 
@@ -588,15 +803,15 @@ TEST_F(SMILTimeContainerAnimationPolicyOnceTest, SetElapsedAfterSuspended) {
   EXPECT_EQ(SMILTime::FromSecondsD(5.5), time_container->Elapsed());
   EXPECT_EQ(100, rect->height()->CurrentValue()->Value(length_context));
 
-  StepTime(base::TimeDelta::FromMilliseconds(1000));
+  StepTime(base::Milliseconds(1000));
   EXPECT_EQ(SMILTime::FromSecondsD(6.5), time_container->Elapsed());
   EXPECT_EQ(30, rect->height()->CurrentValue()->Value(length_context));
 
-  StepTime(base::TimeDelta::FromMilliseconds(1000));
+  StepTime(base::Milliseconds(1000));
   EXPECT_EQ(SMILTime::FromSecondsD(7.5), time_container->Elapsed());
   EXPECT_EQ(50, rect->height()->CurrentValue()->Value(length_context));
 
-  StepTime(base::TimeDelta::FromMilliseconds(1500));
+  StepTime(base::Milliseconds(1500));
   EXPECT_EQ(100, rect->height()->CurrentValue()->Value(length_context));
   EXPECT_EQ(SMILTime::FromSecondsD(8.5), time_container->Elapsed());
 }

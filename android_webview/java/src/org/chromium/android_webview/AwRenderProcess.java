@@ -1,33 +1,53 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.android_webview;
 
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.JNINamespace;
-import org.chromium.base.annotations.NativeMethods;
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JNINamespace;
+import org.jni_zero.JniType;
+import org.jni_zero.NativeMethods;
+
+import org.chromium.android_webview.common.Lifetime;
+import org.chromium.base.ChildBindingState;
+import org.chromium.base.ThreadUtils;
+import org.chromium.build.annotations.NullMarked;
 
 /**
+ * Java-side representation of the renderer process. Managed and owned by
+ * android_webview/browser/aw_render_process.cc
  */
+@Lifetime.Renderer
 @JNINamespace("android_webview")
+@NullMarked
 public final class AwRenderProcess extends AwSupportLibIsomorphic {
     private long mNativeRenderProcess;
 
     private AwRenderProcess() {}
 
     public boolean terminate() {
+        if (!ThreadUtils.runningOnUiThread()) {
+            return ThreadUtils.runOnUiThreadBlocking(this::terminate);
+        }
         if (mNativeRenderProcess == 0) return false;
 
-        return AwRenderProcessJni.get().terminateChildProcess(
-                mNativeRenderProcess, AwRenderProcess.this);
+        return AwRenderProcessJni.get().terminateChildProcess(mNativeRenderProcess);
     }
 
     public boolean isProcessLockedToSiteForTesting() {
         if (mNativeRenderProcess == 0) return false;
 
-        return AwRenderProcessJni.get().isProcessLockedToSiteForTesting(
-                mNativeRenderProcess, AwRenderProcess.this);
+        return AwRenderProcessJni.get().isProcessLockedToSiteForTesting(mNativeRenderProcess);
+    }
+
+    public boolean isReadyForTesting() {
+        return mNativeRenderProcess != 0;
+    }
+
+    public @ChildBindingState int getEffectiveChildBindingStateForTesting() {
+        if (mNativeRenderProcess == 0) return ChildBindingState.UNBOUND;
+        return AwRenderProcessJni.get().getEffectiveChildBindingState(mNativeRenderProcess);
     }
 
     @CalledByNative
@@ -42,7 +62,12 @@ public final class AwRenderProcess extends AwSupportLibIsomorphic {
 
     @NativeMethods
     interface Natives {
-        boolean terminateChildProcess(long nativeAwRenderProcess, AwRenderProcess caller);
-        boolean isProcessLockedToSiteForTesting(long nativeAwRenderProcess, AwRenderProcess caller);
+        boolean terminateChildProcess(long nativeAwRenderProcess);
+
+        boolean isProcessLockedToSiteForTesting(long nativeAwRenderProcess);
+
+        @JniType("base::android::ChildBindingState")
+        @ChildBindingState
+        int getEffectiveChildBindingState(long nativeAwRenderProcess);
     }
 }

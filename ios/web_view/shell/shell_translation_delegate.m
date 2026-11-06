@@ -1,14 +1,10 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "ios/web_view/shell/shell_translation_delegate.h"
 
 #import <UIKit/UIKit.h>
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
 
 @interface ShellTranslationDelegate ()
 // Action Sheet to prompt user whether or not the page should be translated.
@@ -51,20 +47,20 @@
 
   NSString* translateTitle = [NSString
       stringWithFormat:@"Translate to %@", userLanguage.localizedName];
-  UIAlertAction* translateAction = [UIAlertAction
-      actionWithTitle:translateTitle
-                style:UIAlertActionStyleDefault
-              handler:^(UIAlertAction* action) {
-                weakSelf.beforeTranslateActionSheet = nil;
-                if (!weakSelf) {
-                  return;
-                }
-                CWVTranslationLanguage* source = pageLanguage;
-                CWVTranslationLanguage* target = userLanguage;
-                [controller translatePageFromLanguage:source
-                                           toLanguage:target
-                                        userInitiated:YES];
-              }];
+  UIAlertAction* translateAction =
+      [UIAlertAction actionWithTitle:translateTitle
+                               style:UIAlertActionStyleDefault
+                             handler:^(UIAlertAction* action) {
+                               weakSelf.beforeTranslateActionSheet = nil;
+                               if (!weakSelf) {
+                                 return;
+                               }
+                               CWVTranslationLanguage* source = pageLanguage;
+                               CWVTranslationLanguage* target = userLanguage;
+                               [controller translatePageFromLanguage:source
+                                                          toLanguage:target
+                                                       userInitiated:YES];
+                             }];
   [_beforeTranslateActionSheet addAction:translateAction];
 
   UIAlertAction* alwaysTranslateAction = [UIAlertAction
@@ -119,19 +115,27 @@
         targetLanguage, error);
 }
 
+- (void)translationController:(CWVTranslationController*)controller
+    didDeterminePageLanguageDetectionDetails:
+        (CWVTranslationLanguageDetectionDetails*)pageLanguageDetectionDetails {
+  NSLog(@"%@:%@", NSStringFromSelector(_cmd), pageLanguageDetectionDetails);
+}
+
 #pragma mark - Private
 
 - (UIWindow*)anyKeyWindow {
-#if !defined(__IPHONE_13_0) || __IPHONE_OS_VERSION_MIN_REQUIRED < __IPHONE_13_0
-  return [UIApplication sharedApplication].keyWindow;
-#else
-  NSArray<UIWindow*>* windows = [UIApplication sharedApplication].windows;
-  for (UIWindow* window in windows) {
-    if (window.isKeyWindow)
-      return window;
+  for (UIWindowScene* windowScene in UIApplication.sharedApplication
+           .connectedScenes) {
+    NSAssert([windowScene isKindOfClass:[UIWindowScene class]],
+             @"UIScene is not a UIWindowScene: %@", windowScene);
+    for (UIWindow* window in windowScene.windows) {
+      if (window.isKeyWindow) {
+        return window;
+      }
+    }
   }
+
   return nil;
-#endif
 }
 
 @end

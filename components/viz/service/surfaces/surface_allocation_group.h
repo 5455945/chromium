@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "base/containers/flat_set.h"
+#include "base/memory/raw_ptr.h"
 #include "base/unguessable_token.h"
 #include "components/viz/common/surfaces/frame_sink_id.h"
 #include "components/viz/common/surfaces/surface_range.h"
@@ -32,6 +33,10 @@ class VIZ_SERVICE_EXPORT SurfaceAllocationGroup {
   SurfaceAllocationGroup(SurfaceManager* surface_manager,
                          const FrameSinkId& submitter,
                          const base::UnguessableToken& embed_token);
+
+  SurfaceAllocationGroup(const SurfaceAllocationGroup&) = delete;
+  SurfaceAllocationGroup& operator=(const SurfaceAllocationGroup&) = delete;
+
   ~SurfaceAllocationGroup();
 
   // Returns the ID of the FrameSink that is submitting to surfaces in this
@@ -65,6 +70,13 @@ class VIZ_SERVICE_EXPORT SurfaceAllocationGroup {
   // Returns whether there is any embedder that is blocked on a surface in this
   // allocation group.
   bool HasBlockedEmbedder() const;
+
+  // Returns whether an embedder's active frame references a surface in this
+  // group that the latest active surface doesn't cover, i.e. isn't the same as
+  // or newer than it. Also true if no surface has activated yet. Until the
+  // submitter catches up, embedders draw an older fallback or their background
+  // color.
+  bool HasActiveEmbedderAwaitingNewerSurface() const;
 
   // Called by |surface| when its newly activated frame references a surface in
   // this allocation group. The embedder will be notified whenever a surface in
@@ -122,17 +134,21 @@ class VIZ_SERVICE_EXPORT SurfaceAllocationGroup {
     return surfaces_.empty() ? nullptr : surfaces_.back();
   }
 
+  const std::vector<raw_ptr<Surface, VectorExperimental>>& surfaces() const {
+    return surfaces_;
+  }
+
  private:
   // Returns an iterator to the latest surface in |surfaces_| whose SurfaceId is
   // older than or equal to |surface_id|. The returned surface may not be active
   // yet.
-  std::vector<Surface*>::const_iterator FindLatestSurfaceUpTo(
-      const SurfaceId& surface_id) const;
+  std::vector<raw_ptr<Surface, VectorExperimental>>::const_iterator
+  FindLatestSurfaceUpTo(const SurfaceId& surface_id) const;
 
   // Returns an iterator to the latest active surface in |surfaces_| whose
   // SurfaceId is older than or equal to |surface_id|.
-  std::vector<Surface*>::const_iterator FindLatestActiveSurfaceUpTo(
-      const SurfaceId& surface_id) const;
+  std::vector<raw_ptr<Surface, VectorExperimental>>::const_iterator
+  FindLatestActiveSurfaceUpTo(const SurfaceId& surface_id) const;
 
   // Notifies SurfaceManager if this allocation group is ready for destruction
   // (see IsReadyToDestroy() for the requirements).
@@ -141,6 +157,10 @@ class VIZ_SERVICE_EXPORT SurfaceAllocationGroup {
   // Updates the last reference. |surface_id| or a surface prior to it might
   // activate if it was blocked due to child throttling.
   void UpdateLastReferenceAndMaybeActivate(const SurfaceId& surface_id);
+
+  // Returns the SurfaceId in this group that `range` refers to, or an invalid
+  // SurfaceId if `range` doesn't refer to this group.
+  SurfaceId GetReferenceFromRange(const SurfaceRange& range) const;
 
   // The ID of the FrameSink that is submitting to the surfaces in this
   // allocation group.
@@ -154,7 +174,7 @@ class VIZ_SERVICE_EXPORT SurfaceAllocationGroup {
   // The list of surfaces in this allocation group in the order of creation. The
   // parent and child sequence numbers of these surfaces is monotonically
   // increasing.
-  std::vector<Surface*> surfaces_;
+  std::vector<raw_ptr<Surface, VectorExperimental>> surfaces_;
 
   // A map from the surfaces that have an unresolved activation dependency in
   // this allocation group, to the said activation dependency.
@@ -162,11 +182,11 @@ class VIZ_SERVICE_EXPORT SurfaceAllocationGroup {
 
   // The set of surfaces that reference a surface in this allocation group by
   // their active frame.
-  base::flat_set<Surface*> active_embedders_;
+  base::flat_set<raw_ptr<Surface, CtnExperimental>> active_embedders_;
 
   // We keep a pointer to SurfaceManager so we can signal when this object is
   // ready to be destroyed.
-  SurfaceManager* const surface_manager_;
+  const raw_ptr<SurfaceManager> surface_manager_;
 
   // The last SurfaceId of this allocation group that was ever referenced by the
   // active frame of a surface.
@@ -175,8 +195,6 @@ class VIZ_SERVICE_EXPORT SurfaceAllocationGroup {
   // The last SurfaceId of this allocation group that was ever referenced by the
   // active or pending frame of a surface.
   SurfaceId last_reference_;
-
-  DISALLOW_COPY_AND_ASSIGN(SurfaceAllocationGroup);
 };
 
 }  // namespace viz

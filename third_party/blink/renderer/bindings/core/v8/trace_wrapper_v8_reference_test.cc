@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,8 @@
 
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_testing.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
 
 namespace blink {
@@ -29,7 +31,7 @@ class TraceWrapperV8ReferenceHolder final
   TraceWrapperV8ReferenceHolder(const TraceWrapperV8ReferenceHolder& other)
       : value_(other.value_) {}
 
-  virtual void Trace(Visitor* visitor) const { visitor->Trace(value_); }
+  void Trace(Visitor* visitor) const { visitor->Trace(value_); }
 
   TraceWrapperV8Reference<v8::Value>* ref() { return &value_; }
 
@@ -68,7 +70,7 @@ TEST_F(TraceWrapperV8ReferenceTest, CtorWithValue) {
   RunV8FullGC();
   CHECK(!holder1->ref()->IsEmpty());
   CHECK(!observer.IsEmpty());
-  holder1->ref()->Clear();
+  holder1->ref()->Reset();
   RunV8FullGC();
   CHECK(holder1->ref()->IsEmpty());
   CHECK(observer.IsEmpty());
@@ -201,7 +203,7 @@ TEST_F(TraceWrapperV8ReferenceTest, HeapVector) {
   V8TestingScope testing_scope;
   SetIsolate(testing_scope.GetIsolate());
 
-  using VectorContainer = HeapVector<TraceWrapperV8Reference<v8::Value>>;
+  using VectorContainer = GCedHeapVector<TraceWrapperV8Reference<v8::Value>>;
   Persistent<VectorContainer> holder(MakeGarbageCollected<VectorContainer>());
   v8::Persistent<v8::Value> observer;
   {
@@ -222,8 +224,9 @@ TEST_F(TraceWrapperV8ReferenceTest, Ephemeron) {
   V8TestingScope testing_scope;
   SetIsolate(testing_scope.GetIsolate());
 
-  using EphemeronMap = HeapHashMap<WeakMember<TraceWrapperV8ReferenceHolder>,
-                                   TraceWrapperV8Reference<v8::Value>>;
+  using EphemeronMap =
+      GCedHeapHashMap<WeakMember<TraceWrapperV8ReferenceHolder>,
+                      TraceWrapperV8Reference<v8::Value>>;
   Persistent<EphemeronMap> holder(MakeGarbageCollected<EphemeronMap>());
   v8::Persistent<v8::Value> observer;
   Persistent<TraceWrapperV8ReferenceHolder> object(

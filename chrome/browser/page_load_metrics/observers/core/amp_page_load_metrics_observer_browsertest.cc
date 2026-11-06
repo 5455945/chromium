@@ -1,11 +1,10 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/page_load_metrics/observers/foreground_duration_ukm_observer.h"
-
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -14,24 +13,42 @@
 #include "components/ukm/test_ukm_recorder.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "content/public/test/prerender_test_util.h"
 #include "content/public/test/test_utils.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_source.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
 
 using UkmEntry = ukm::builders::AmpPageLoad;
 
-class AmpPageLoadMetricsBrowserTest : public InProcessBrowserTest {
+class AmpPageLoadMetricsBrowserTest : public InProcessBrowserTest,
+                                      public testing::WithParamInterface<bool> {
  public:
-  AmpPageLoadMetricsBrowserTest() {}
-  ~AmpPageLoadMetricsBrowserTest() override {}
+  AmpPageLoadMetricsBrowserTest()
+      : prerender_helper_(
+            base::BindRepeating(&AmpPageLoadMetricsBrowserTest::GetWebContents,
+                                base::Unretained(this))) {}
+
+  AmpPageLoadMetricsBrowserTest(const AmpPageLoadMetricsBrowserTest&) = delete;
+  AmpPageLoadMetricsBrowserTest& operator=(
+      const AmpPageLoadMetricsBrowserTest&) = delete;
+
+  ~AmpPageLoadMetricsBrowserTest() override = default;
+
+  void SetUp() override {
+    prerender_helper_.RegisterServerRequestMonitor(embedded_test_server());
+    InProcessBrowserTest::SetUp();
+  }
 
   void PreRunTestOnMainThread() override {
     InProcessBrowserTest::PreRunTestOnMainThread();
     test_ukm_recorder_ = std::make_unique<ukm::TestAutoSetUkmRecorder>();
+  }
+
+  void SetUpOnMainThread() override {
+    StartHttpsServer(net::EmbeddedTestServer::CERT_OK);
   }
 
  protected:
@@ -42,10 +59,20 @@ class AmpPageLoadMetricsBrowserTest : public InProcessBrowserTest {
     https_test_server_->ServeFilesFromSourceDirectory(GetChromeTestDataDir());
     ASSERT_TRUE(https_test_server_->Start());
   }
+
+  void NavigateToURL(const GURL& url) {
+    if (WithPrerendering()) {
+      prerender_helper_.AddPrerender(url);
+      prerender_helper_.NavigatePrimaryPage(url);
+    } else {
+      ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+    }
+  }
+
   void ExpectMetricValueForUrl(const GURL& url,
                                const char* metric_name,
                                const int expected_value) {
-    for (auto* entry :
+    for (const ukm::mojom::UkmEntry* entry :
          test_ukm_recorder_->GetEntriesByName(UkmEntry::kEntryName)) {
       auto* source = test_ukm_recorder_->GetSourceForSourceId(entry->source_id);
       if (source && source->url() == url) {
@@ -59,7 +86,7 @@ class AmpPageLoadMetricsBrowserTest : public InProcessBrowserTest {
                                const char* metric_name,
                                const int expected_count) {
     int count = 0;
-    for (auto* entry :
+    for (const ukm::mojom::UkmEntry* entry :
          test_ukm_recorder_->GetEntriesByName(UkmEntry::kEntryName)) {
       auto* source = test_ukm_recorder_->GetSourceForSourceId(entry->source_id);
       if (source && source->url() == url &&
@@ -71,7 +98,7 @@ class AmpPageLoadMetricsBrowserTest : public InProcessBrowserTest {
   }
 
   void CloseAllTabs() {
-    TabStripModel* tab_strip_model = browser()->tab_strip_model();
+    TabStripModel* tab_strip_model = browser()->GetTabStripModel();
     content::WebContentsDestroyedWatcher destroyed_watcher(
         tab_strip_model->GetActiveWebContents());
     tab_strip_model->CloseAllTabs();
@@ -82,50 +109,69 @@ class AmpPageLoadMetricsBrowserTest : public InProcessBrowserTest {
     return https_test_server_.get();
   }
 
+  content::WebContents* GetWebContents() {
+    return browser()->GetTabStripModel()->GetActiveWebContents();
+  }
+
+  bool WithPrerendering() { return GetParam(); }
+
  private:
   std::unique_ptr<ukm::TestAutoSetUkmRecorder> test_ukm_recorder_;
   std::unique_ptr<net::EmbeddedTestServer> https_test_server_;
-
-  DISALLOW_COPY_AND_ASSIGN(AmpPageLoadMetricsBrowserTest);
+  content::test::PrerenderTestHelper prerender_helper_;
 };
 
-IN_PROC_BROWSER_TEST_F(AmpPageLoadMetricsBrowserTest, NoAmp) {
-  page_load_metrics::PageLoadMetricsTestWaiter waiter(
-      browser()->tab_strip_model()->GetActiveWebContents());
+INSTANTIATE_TEST_SUITE_P(All, AmpPageLoadMetricsBrowserTest, testing::Bool());
+
+IN_PROC_BROWSER_TEST_P(AmpPageLoadMetricsBrowserTest, NoAmp) {
+  // Navigate to an empty page to inject SpeculationRules if prerendered case.
+  GURL empty_url = https_test_server()->GetURL("/empty.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), empty_url));
+
+  page_load_metrics::PageLoadMetricsTestWaiter waiter(GetWebContents());
   waiter.AddPageExpectation(
       page_load_metrics::PageLoadMetricsTestWaiter::TimingField::kLoadEvent);
-  StartHttpsServer(net::EmbeddedTestServer::CERT_OK);
   GURL url = https_test_server()->GetURL("/english_page.html");
-  ui_test_utils::NavigateToURL(browser(), url);
+  NavigateToURL(url);
   waiter.Wait();
   CloseAllTabs();
   ExpectMetricCountForUrl(url, "MainFrameAmpPageLoad", 0);
   ExpectMetricCountForUrl(url, "SubFrameAmpPageLoad", 0);
 }
 
-IN_PROC_BROWSER_TEST_F(AmpPageLoadMetricsBrowserTest, AmpMainFrame) {
-  page_load_metrics::PageLoadMetricsTestWaiter waiter(
-      browser()->tab_strip_model()->GetActiveWebContents());
+IN_PROC_BROWSER_TEST_P(AmpPageLoadMetricsBrowserTest, AmpMainFrame) {
+  // Navigate to an empty page to inject SpeculationRules if prerendered case.
+  GURL empty_url = https_test_server()->GetURL("/empty.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), empty_url));
+
+  page_load_metrics::PageLoadMetricsTestWaiter waiter(GetWebContents());
   waiter.AddPageExpectation(page_load_metrics::PageLoadMetricsTestWaiter::
                                 TimingField::kFirstContentfulPaint);
-  StartHttpsServer(net::EmbeddedTestServer::CERT_OK);
   GURL url = https_test_server()->GetURL("/page_load_metrics/amp_basic.html");
-  ui_test_utils::NavigateToURL(browser(), url);
+  NavigateToURL(url);
   waiter.Wait();
   CloseAllTabs();
   ExpectMetricValueForUrl(url, "MainFrameAmpPageLoad", 1);
   ExpectMetricCountForUrl(url, "SubFrameAmpPageLoad", 0);
 }
 
-IN_PROC_BROWSER_TEST_F(AmpPageLoadMetricsBrowserTest, AmpSubframe) {
-  page_load_metrics::PageLoadMetricsTestWaiter waiter(
-      browser()->tab_strip_model()->GetActiveWebContents());
+// TODO(crbug.com/428095827): Test is flaky on Windows.
+#if BUILDFLAG(IS_WIN)
+#define MAYBE_AmpSubframe DISABLED_AmpSubframe
+#else
+#define MAYBE_AmpSubframe AmpSubframe
+#endif
+IN_PROC_BROWSER_TEST_P(AmpPageLoadMetricsBrowserTest, MAYBE_AmpSubframe) {
+  // Navigate to an empty page to inject SpeculationRules if prerendered case.
+  GURL empty_url = https_test_server()->GetURL("/empty.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), empty_url));
+
+  page_load_metrics::PageLoadMetricsTestWaiter waiter(GetWebContents());
   waiter.AddPageExpectation(page_load_metrics::PageLoadMetricsTestWaiter::
                                 TimingField::kFirstContentfulPaint);
-  StartHttpsServer(net::EmbeddedTestServer::CERT_OK);
   GURL url =
       https_test_server()->GetURL("/page_load_metrics/amp_reader_mock.html");
-  ui_test_utils::NavigateToURL(browser(), url);
+  NavigateToURL(url);
   waiter.Wait();
   CloseAllTabs();
   ExpectMetricCountForUrl(url, "MainFrameAmpPageLoad", 0);

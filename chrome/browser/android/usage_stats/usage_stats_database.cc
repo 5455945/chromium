@@ -1,16 +1,17 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/android/usage_stats/usage_stats_database.h"
 
+#include <string_view>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/strings/safe_sprintf.h"
 #include "base/strings/strcat.h"
-#include "base/task/post_task.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/android/usage_stats/website_event.pb.h"
 #include "chrome/browser/profiles/profile.h"
@@ -86,7 +87,7 @@ bool DoesNotContainFilter(const base::flat_set<std::string>& set,
 
 bool KeyContainsDomainFilter(const base::flat_set<std::string>& domains,
                              const std::string& key) {
-  return domains.contains(key.substr(kUnixTimeDigits + 1));
+  return domains.contains(std::string_view(key).substr(kUnixTimeDigits + 1));
 }
 
 UsageStatsDatabase::Error ToError(bool isSuccess) {
@@ -101,6 +102,8 @@ std::string CreateWebsiteEventKey(int64_t seconds_since_unix_epoch,
   char unixTime[kUnixTimeDigits + 1];
   ssize_t printed = base::strings::SafeSPrintf(unixTime, kUnixTimeFormat,
                                                seconds_since_unix_epoch);
+  // TODO(crbug.com/574478015): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK(printed == kUnixTimeDigits);
 
   // Create the key from the time and fqdn (example: 01548276551_foo.com).
@@ -155,8 +158,8 @@ void UsageStatsDatabase::QueryEventsInRange(base::Time startTime,
   // represented by integers, [startTime, endTime) is equivalent to  [startTime,
   // endTime - 1].
   website_event_db_->LoadKeysAndEntriesInRange(
-      CreateWebsiteEventKey(startTime.ToDoubleT(), ""),
-      CreateWebsiteEventKey(endTime.ToDoubleT() - 1, ""),
+      CreateWebsiteEventKey(startTime.InSecondsFSinceUnixEpoch(), ""),
+      CreateWebsiteEventKey(endTime.InSecondsFSinceUnixEpoch() - 1, ""),
       base::BindOnce(&UsageStatsDatabase::OnLoadEntriesForQueryEventsInRange,
                      weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
 }
@@ -219,7 +222,7 @@ void UsageStatsDatabase::DeleteEventsInRange(base::Time startTime,
   }
 
   // If leveldb_proto adds a DeleteEntriesInRange function, these two proto_db_
-  // calls could be consolidated into a single call (crbug.com/939136).
+  // calls could be consolidated into a single call (crbug.com/40616989).
 
   // Load all WebsiteEvents where the timestamp is in the specified range.
   // Function accepts a half-open range [startTime, endTime) as input, but the
@@ -227,8 +230,8 @@ void UsageStatsDatabase::DeleteEventsInRange(base::Time startTime,
   // represented by integers, [startTime, endTime) is equivalent to  [startTime,
   // endTime - 1].
   website_event_db_->LoadKeysAndEntriesInRange(
-      CreateWebsiteEventKey(startTime.ToDoubleT(), ""),
-      CreateWebsiteEventKey(endTime.ToDoubleT() - 1, ""),
+      CreateWebsiteEventKey(startTime.InSecondsFSinceUnixEpoch(), ""),
+      CreateWebsiteEventKey(endTime.InSecondsFSinceUnixEpoch() - 1, ""),
       base::BindOnce(&UsageStatsDatabase::OnLoadEntriesForDeleteEventsInRange,
                      weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
 }
@@ -254,10 +257,9 @@ void UsageStatsDatabase::DeleteEventsWithMatchingDomains(
 }
 
 void UsageStatsDatabase::ExpireEvents(base::Time now) {
-  base::Time seven_days_ago =
-      now - base::TimeDelta::FromDays(EXPIRY_THRESHOLD_DAYS);
+  base::Time seven_days_ago = now - base::Days(EXPIRY_THRESHOLD_DAYS);
   DeleteEventsInRange(
-      base::Time::FromDoubleT(1), seven_days_ago,
+      base::Time::FromSecondsSinceUnixEpoch(1), seven_days_ago,
       base::BindOnce(&UsageStatsDatabase::OnWebsiteEventExpiryDone,
                      weak_ptr_factory_.GetWeakPtr()));
 }
@@ -374,7 +376,7 @@ void UsageStatsDatabase::OnWebsiteEventInitDone(
     return;
   }
 
-  // Execute deferred operations on sucessfully initialized database.
+  // Execute deferred operations on successfully initialized database.
   while (!website_event_db_callbacks_.empty()) {
     std::move(website_event_db_callbacks_.front()).Run();
     website_event_db_callbacks_.pop();
@@ -396,7 +398,7 @@ void UsageStatsDatabase::OnSuspensionInitDone(
     return;
   }
 
-  // Execute deferred operations on sucessfully initialized database.
+  // Execute deferred operations on successfully initialized database.
   while (!suspension_db_callbacks_.empty()) {
     std::move(suspension_db_callbacks_.front()).Run();
     suspension_db_callbacks_.pop();
@@ -419,7 +421,7 @@ void UsageStatsDatabase::OnTokenMappingInitDone(
     return;
   }
 
-  // Execute deferred operations on sucessfully initialized database.
+  // Execute deferred operations on successfully initialized database.
   while (!token_mapping_db_callbacks_.empty()) {
     std::move(token_mapping_db_callbacks_.front()).Run();
     token_mapping_db_callbacks_.pop();

@@ -54,9 +54,9 @@ using blink::mojom::FetchCacheMode;
 
 namespace blink {
 
-// This is complementary to ConvertNetPriorityToWebKitPriority, defined in
-// service_worker_context_client.cc.
-net::RequestPriority ConvertWebKitPriorityToNetPriority(
+// This is complementary to ConvertRequestPriorityToResourceLoadPriority,
+// defined in third_party/blink/renderer/core/fetch/fetch_request_data.cc.
+net::RequestPriority WebURLRequest::ConvertToNetPriority(
     WebURLRequest::Priority priority) {
   switch (priority) {
     case WebURLRequest::Priority::kVeryHigh:
@@ -77,7 +77,6 @@ net::RequestPriority ConvertWebKitPriorityToNetPriority(
     case WebURLRequest::Priority::kUnresolved:
     default:
       NOTREACHED();
-      return net::LOW;
   }
 }
 
@@ -143,10 +142,10 @@ void WebURLRequest::SetSiteForCookies(
   resource_request_->SetSiteForCookies(site_for_cookies);
 }
 
-absl::optional<WebSecurityOrigin> WebURLRequest::TopFrameOrigin() const {
+std::optional<WebSecurityOrigin> WebURLRequest::TopFrameOrigin() const {
   const SecurityOrigin* origin = resource_request_->TopFrameOrigin();
-  return origin ? absl::optional<WebSecurityOrigin>(origin)
-                : absl::optional<WebSecurityOrigin>();
+  return origin ? std::optional<WebSecurityOrigin>(origin)
+                : std::optional<WebSecurityOrigin>();
 }
 
 void WebURLRequest::SetTopFrameOrigin(const WebSecurityOrigin& origin) {
@@ -164,14 +163,6 @@ WebSecurityOrigin WebURLRequest::IsolatedWorldOrigin() const {
 void WebURLRequest::SetRequestorOrigin(
     const WebSecurityOrigin& requestor_origin) {
   resource_request_->SetRequestorOrigin(requestor_origin);
-}
-
-bool WebURLRequest::AllowStoredCredentials() const {
-  return resource_request_->AllowStoredCredentials();
-}
-
-void WebURLRequest::SetAllowStoredCredentials(bool allow_stored_credentials) {
-  resource_request_->SetAllowStoredCredentials(allow_stored_credentials);
 }
 
 mojom::FetchCacheMode WebURLRequest::GetCacheMode() const {
@@ -194,13 +185,21 @@ void WebURLRequest::SetHttpMethod(const WebString& http_method) {
   resource_request_->SetHttpMethod(http_method);
 }
 
+WebString WebURLRequest::HttpContentType() const {
+  return resource_request_->HttpContentType();
+}
+
+bool WebURLRequest::IsFormSubmission() const {
+  return resource_request_->IsFormSubmission();
+}
+
 WebString WebURLRequest::HttpHeaderField(const WebString& name) const {
   return resource_request_->HttpHeaderField(name);
 }
 
 void WebURLRequest::SetHttpHeaderField(const WebString& name,
                                        const WebString& value) {
-  CHECK(!EqualIgnoringASCIICase(name, "referer"));
+  CHECK(!EqualIgnoringAsciiCase(name, "referer"));
   resource_request_->SetHttpHeaderField(name, value);
 }
 
@@ -235,14 +234,6 @@ void WebURLRequest::SetReportUploadProgress(bool report_upload_progress) {
   resource_request_->SetReportUploadProgress(report_upload_progress);
 }
 
-void WebURLRequest::SetReportRawHeaders(bool report_raw_headers) {
-  resource_request_->SetReportRawHeaders(report_raw_headers);
-}
-
-bool WebURLRequest::ReportRawHeaders() const {
-  return resource_request_->ReportRawHeaders();
-}
-
 mojom::blink::RequestContextType WebURLRequest::GetRequestContext() const {
   return resource_request_->GetRequestContext();
 }
@@ -269,10 +260,6 @@ network::mojom::ReferrerPolicy WebURLRequest::GetReferrerPolicy() const {
   return resource_request_->GetReferrerPolicy();
 }
 
-void WebURLRequest::SetHttpOriginIfNeeded(const WebSecurityOrigin& origin) {
-  resource_request_->SetHttpOriginIfNeeded(origin.Get());
-}
-
 bool WebURLRequest::HasUserGesture() const {
   return resource_request_->HasUserGesture();
 }
@@ -293,10 +280,6 @@ void WebURLRequest::SetRequestContext(
 void WebURLRequest::SetRequestDestination(
     network::mojom::RequestDestination destination) {
   resource_request_->SetRequestDestination(destination);
-}
-
-bool WebURLRequest::PassResponsePipeToClient() const {
-  return resource_request_->DownloadToBlob();
 }
 
 bool WebURLRequest::UseStreamOnResponse() const {
@@ -321,14 +304,6 @@ bool WebURLRequest::GetSkipServiceWorker() const {
 
 void WebURLRequest::SetSkipServiceWorker(bool skip_service_worker) {
   resource_request_->SetSkipServiceWorker(skip_service_worker);
-}
-
-bool WebURLRequest::ShouldResetAppCache() const {
-  return resource_request_->ShouldResetAppCache();
-}
-
-void WebURLRequest::SetShouldResetAppCache(bool set_should_reset_app_cache) {
-  resource_request_->SetShouldResetAppCache(set_should_reset_app_cache);
 }
 
 network::mojom::RequestMode WebURLRequest::GetMode() const {
@@ -363,22 +338,6 @@ void WebURLRequest::SetRedirectMode(network::mojom::RedirectMode redirect) {
   return resource_request_->SetRedirectMode(redirect);
 }
 
-WebString WebURLRequest::GetFetchIntegrity() const {
-  return resource_request_->GetFetchIntegrity();
-}
-
-void WebURLRequest::SetFetchIntegrity(const WebString& integrity) {
-  return resource_request_->SetFetchIntegrity(integrity);
-}
-
-PreviewsState WebURLRequest::GetPreviewsState() const {
-  return resource_request_->GetPreviewsState();
-}
-
-void WebURLRequest::SetPreviewsState(PreviewsState previews_state) {
-  return resource_request_->SetPreviewsState(previews_state);
-}
-
 const scoped_refptr<WebURLRequestExtraData>&
 WebURLRequest::GetURLRequestExtraData() const {
   return resource_request_->GetURLRequestExtraData();
@@ -410,18 +369,14 @@ void WebURLRequest::SetPriority(WebURLRequest::Priority priority) {
   resource_request_->SetPriority(static_cast<ResourceLoadPriority>(priority));
 }
 
-bool WebURLRequest::IsExternalRequest() const {
-  return resource_request_->IsExternalRequest();
-}
-
 network::mojom::CorsPreflightPolicy WebURLRequest::GetCorsPreflightPolicy()
     const {
   return resource_request_->CorsPreflightPolicy();
 }
 
-absl::optional<WebString> WebURLRequest::GetSuggestedFilename() const {
+std::optional<WebString> WebURLRequest::GetSuggestedFilename() const {
   if (!resource_request_->GetSuggestedFilename().has_value())
-    return absl::optional<WebString>();
+    return std::optional<WebString>();
   return static_cast<WebString>(
       resource_request_->GetSuggestedFilename().value());
 }
@@ -446,9 +401,9 @@ bool WebURLRequest::IsRevalidating() const {
   return resource_request_->IsRevalidating();
 }
 
-const absl::optional<base::UnguessableToken>& WebURLRequest::GetDevToolsToken()
-    const {
-  return resource_request_->GetDevToolsToken();
+const std::optional<base::UnguessableToken>&
+WebURLRequest::GetDevToolsThrottlingToken() const {
+  return resource_request_->GetDevToolsThrottlingToken();
 }
 
 const WebString WebURLRequest::GetRequestedWithHeader() const {
@@ -457,10 +412,6 @@ const WebString WebURLRequest::GetRequestedWithHeader() const {
 
 void WebURLRequest::SetRequestedWithHeader(const WebString& value) {
   resource_request_->SetRequestedWithHeader(value);
-}
-
-const WebString WebURLRequest::GetPurposeHeader() const {
-  return resource_request_->GetPurposeHeader();
 }
 
 const base::UnguessableToken& WebURLRequest::GetFetchWindowId() const {
@@ -475,7 +426,7 @@ int WebURLRequest::GetLoadFlagsForWebUrlRequest() const {
 
   switch (resource_request_->GetCacheMode()) {
     case FetchCacheMode::kNoStore:
-      load_flags |= net::LOAD_DISABLE_CACHE;
+      load_flags |= net::LOAD_DISABLE_CACHE | net::LOAD_BYPASS_CACHE;
       break;
     case FetchCacheMode::kValidateCache:
       load_flags |= net::LOAD_VALIDATE_CACHE;
@@ -510,13 +461,17 @@ int WebURLRequest::GetLoadFlagsForWebUrlRequest() const {
   if (resource_request_->AllowsStaleResponse()) {
     load_flags |= net::LOAD_SUPPORT_ASYNC_REVALIDATION;
   }
-  if (resource_request_->PrefetchMaybeForTopLeveNavigation()) {
-    DCHECK_EQ(resource_request_->GetRequestContext(),
-              blink::mojom::blink::RequestContextType::PREFETCH);
+  if (resource_request_->PrefetchMaybeForTopLevelNavigation()) {
+    CHECK_EQ(resource_request_->GetRequestContext(),
+             blink::mojom::blink::RequestContextType::PREFETCH);
     if (!resource_request_->RequestorOrigin()->IsSameOriginWith(
             SecurityOrigin::Create(resource_request_->Url()).get())) {
-      load_flags |= net::LOAD_RESTRICTED_PREFETCH;
+      load_flags |= net::LOAD_RESTRICTED_PREFETCH_FOR_MAIN_FRAME;
     }
+  }
+
+  if (resource_request_->RequiresLoadIgnoreLimits()) {
+    load_flags |= net::LOAD_IGNORE_LIMITS;
   }
 
   return load_flags;
@@ -527,7 +482,7 @@ const ResourceRequest& WebURLRequest::ToResourceRequest() const {
   return *resource_request_;
 }
 
-absl::optional<WebString> WebURLRequest::GetDevToolsId() const {
+std::optional<WebString> WebURLRequest::GetDevToolsId() const {
   return resource_request_->GetDevToolsId();
 }
 
@@ -535,11 +490,7 @@ bool WebURLRequest::IsFromOriginDirtyStyleSheet() const {
   return resource_request_->IsFromOriginDirtyStyleSheet();
 }
 
-bool WebURLRequest::IsSignedExchangePrefetchCacheEnabled() const {
-  return resource_request_->IsSignedExchangePrefetchCacheEnabled();
-}
-
-absl::optional<base::UnguessableToken> WebURLRequest::RecursivePrefetchToken()
+std::optional<base::UnguessableToken> WebURLRequest::RecursivePrefetchToken()
     const {
   return resource_request_->RecursivePrefetchToken();
 }
@@ -548,18 +499,18 @@ network::OptionalTrustTokenParams WebURLRequest::TrustTokenParams() const {
   return ConvertTrustTokenParams(resource_request_->TrustTokenParams());
 }
 
-absl::optional<WebURL> WebURLRequest::WebBundleUrl() const {
+std::optional<WebURL> WebURLRequest::WebBundleUrl() const {
   if (resource_request_->GetWebBundleTokenParams()) {
     return resource_request_->GetWebBundleTokenParams()->bundle_url;
   }
-  return absl::nullopt;
+  return std::nullopt;
 }
 
-absl::optional<base::UnguessableToken> WebURLRequest::WebBundleToken() const {
+std::optional<base::UnguessableToken> WebURLRequest::WebBundleToken() const {
   if (resource_request_->GetWebBundleTokenParams()) {
     return resource_request_->GetWebBundleTokenParams()->token;
   }
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 WebURLRequest::WebURLRequest(ResourceRequest& r) : resource_request_(&r) {}

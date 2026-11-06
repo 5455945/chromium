@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,11 +9,13 @@
 #include <memory>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/supports_user_data.h"
 #include "components/content_capture/browser/content_capture_frame.h"
 #include "components/content_capture/common/content_capture.mojom.h"
+#include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "content/public/browser/web_contents_user_data.h"
 
 namespace content {
 class WebContents;
@@ -31,12 +33,11 @@ class ContentCaptureConsumer;
 // the ContentCaptureReceiver and associates it with RenderFrameHost, it also
 // binds ContentCaptureReceiver with its peer ContentCaptureSender in renderer.
 // The ContentSession here is used to specify which frame the message came from.
-class OnscreenContentProvider : public content::WebContentsObserver,
-                                public base::SupportsUserData::Data {
+class OnscreenContentProvider
+    : public content::WebContentsObserver,
+      public content::WebContentsUserData<OnscreenContentProvider> {
  public:
   ~OnscreenContentProvider() override;
-  static OnscreenContentProvider* FromWebContents(
-      content::WebContents* contents);
   static OnscreenContentProvider* Create(content::WebContents* web_contents);
 
   // Binds the |request| with the |render_frame_host| associated
@@ -50,6 +51,8 @@ class OnscreenContentProvider : public content::WebContentsObserver,
   void RemoveConsumer(ContentCaptureConsumer& consumer);
 
   // The methods called by ContentCaptureReceiver.
+  void FlushCaptureContent(ContentCaptureReceiver* content_capture_receiver,
+                           const ContentCaptureFrame& data);
   void DidCaptureContent(ContentCaptureReceiver* content_capture_receiver,
                          const ContentCaptureFrame& data);
   void DidUpdateContent(ContentCaptureReceiver* content_capture_receiver,
@@ -60,6 +63,11 @@ class OnscreenContentProvider : public content::WebContentsObserver,
   void DidUpdateTitle(ContentCaptureReceiver* content_capture_receiver);
   void DidUpdateFavicon(ContentCaptureReceiver* content_capture_receiver);
 
+  // The methods called by metadata providers.
+  void DidUpdateSensitivityScore(float sensitivity_score);
+  void DidUpdateLanguageDetails(const std::string& detected_language,
+                                float language_confidence);
+  void ClearContentCaptureMetadata();
   // content::WebContentsObserver:
   void RenderFrameCreated(content::RenderFrameHost* render_frame_host) override;
   void RenderFrameDeleted(content::RenderFrameHost* render_frame_host) override;
@@ -68,7 +76,10 @@ class OnscreenContentProvider : public content::WebContentsObserver,
   void TitleWasSet(content::NavigationEntry* entry) override;
   void DidUpdateFaviconURL(
       content::RenderFrameHost* render_frame_host,
-      const std::vector<blink::mojom::FaviconURLPtr>& candidates) override;
+      const std::vector<blink::mojom::FaviconURLPtr>& candidates,
+      blink::mojom::FaviconUpdateReason reason) override;
+  void DidFinishNavigation(
+      content::NavigationHandle* navigation_handle) override;
 
   size_t GetFrameMapSizeForTesting() const { return frame_map_.size(); }
 
@@ -88,12 +99,18 @@ class OnscreenContentProvider : public content::WebContentsObserver,
     return ContentCaptureReceiverForFrame(render_frame_host);
   }
 
-  const std::vector<ContentCaptureConsumer*>& GetConsumersForTesting() const {
+  const std::vector<raw_ptr<ContentCaptureConsumer, VectorExperimental>>&
+  GetConsumersForTesting() const {
     return consumers_;
   }
 #endif
 
  private:
+  friend class content::WebContentsUserData<OnscreenContentProvider>;
+  WEB_CONTENTS_USER_DATA_KEY_DECL();
+  using content::WebContentsUserData<
+      OnscreenContentProvider>::CreateForWebContents;
+
   explicit OnscreenContentProvider(content::WebContents* web_contents);
 
   ContentCaptureReceiver* ContentCaptureReceiverForFrame(
@@ -121,10 +138,11 @@ class OnscreenContentProvider : public content::WebContentsObserver,
       content::RenderFrameHost* render_frame_host,
       const std::vector<blink::mojom::FaviconURLPtr>& candidates);
 
-  std::map<content::RenderFrameHost*, std::unique_ptr<ContentCaptureReceiver>>
+  std::map<content::GlobalRenderFrameHostId,
+           std::unique_ptr<ContentCaptureReceiver>>
       frame_map_;
 
-  std::vector<ContentCaptureConsumer*> consumers_;
+  std::vector<raw_ptr<ContentCaptureConsumer, VectorExperimental>> consumers_;
 
   base::WeakPtrFactory<OnscreenContentProvider> weak_ptr_factory_{this};
 };

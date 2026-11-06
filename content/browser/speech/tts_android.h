@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include <memory>
 
 #include "base/android/scoped_java_ref.h"
-#include "base/macros.h"
 #include "content/browser/speech/tts_platform_impl.h"
 
 namespace content {
@@ -35,12 +34,15 @@ class TtsPlatformImplAndroid : public TtsPlatformImpl {
 
   // Methods called from Java via JNI.
   void VoicesChanged(JNIEnv* env);
-  void OnEndEvent(JNIEnv* env, jint utterance_id);
-  void OnErrorEvent(JNIEnv* env, jint utterance_id);
-  void OnStartEvent(JNIEnv* env, jint utterance_id);
+  void OnEndEvent(JNIEnv* env, int32_t utterance_id);
+  void OnErrorEvent(JNIEnv* env, int32_t utterance_id);
+  void OnStartEvent(JNIEnv* env, int32_t utterance_id);
 
   // Static functions.
   static TtsPlatformImplAndroid* GetInstance();
+
+  TtsPlatformImplAndroid(const TtsPlatformImplAndroid&) = delete;
+  TtsPlatformImplAndroid& operator=(const TtsPlatformImplAndroid&) = delete;
 
  private:
   friend struct base::DefaultSingletonTraits<TtsPlatformImplAndroid>;
@@ -65,7 +67,8 @@ class TtsPlatformImplAndroid : public TtsPlatformImpl {
   bool StartSpeakingNow(int utterance_id,
                         const std::string& lang,
                         const UtteranceContinuousParameters& params,
-                        const std::string& parsed_utterance);
+                        const std::string& parsed_utterance,
+                        const std::string& engine_id);
 
   // Called when TtsEnvironmentAndroid::CanSpeakNow() may have changed.
   void OnCanSpeakNowChanged();
@@ -76,8 +79,6 @@ class TtsPlatformImplAndroid : public TtsPlatformImpl {
   std::unique_ptr<TtsEnvironmentAndroid> environment_android_;
 
   base::WeakPtrFactory<TtsPlatformImplAndroid> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(TtsPlatformImplAndroid);
 };
 
 }  // namespace content

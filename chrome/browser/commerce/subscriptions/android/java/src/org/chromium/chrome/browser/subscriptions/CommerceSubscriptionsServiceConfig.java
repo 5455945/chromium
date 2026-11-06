@@ -1,29 +1,34 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.subscriptions;
 
+import androidx.annotation.VisibleForTesting;
+
+import org.chromium.base.FeatureList;
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
-import org.chromium.chrome.browser.flags.IntCachedFieldTrialParameter;
-import org.chromium.chrome.browser.flags.StringCachedFieldTrialParameter;
 
 import java.util.concurrent.TimeUnit;
 
 /** Flag configuration for Commerce Subscriptions Service. */
+@NullMarked
 public class CommerceSubscriptionsServiceConfig {
-    private static final String BASE_URL_PARAM = "subscriptions_service_base_url";
-    private static final String DEFAULT_BASE_URL =
-            "https://memex-pa.googleapis.com/v1/shopping/subscriptions";
-
+    @VisibleForTesting
     private static final String STALE_TAB_LOWER_BOUND_SECONDS_PARAM =
             "price_tracking_stale_tab_lower_bound_seconds";
 
-    public static final StringCachedFieldTrialParameter SUBSCRIPTIONS_SERVICE_BASE_URL =
-            new StringCachedFieldTrialParameter(
-                    ChromeFeatureList.COMMERCE_PRICE_TRACKING, BASE_URL_PARAM, DEFAULT_BASE_URL);
+    private static final int DEFAULT_STALE_TAB_LOWER_BOUND_DAYS = 1;
 
-    public static final IntCachedFieldTrialParameter STALE_TAB_LOWER_BOUND_SECONDS =
-            new IntCachedFieldTrialParameter(ChromeFeatureList.COMMERCE_PRICE_TRACKING,
-                    STALE_TAB_LOWER_BOUND_SECONDS_PARAM, (int) TimeUnit.DAYS.toSeconds(1));
+    public static int getStaleTabLowerBoundSeconds() {
+        int defaultValue = (int) TimeUnit.DAYS.toSeconds(DEFAULT_STALE_TAB_LOWER_BOUND_DAYS);
+        if (FeatureList.isInitialized()) {
+            return ChromeFeatureList.getFieldTrialParamByFeatureAsInt(
+                    ChromeFeatureList.PRICE_ANNOTATIONS,
+                    STALE_TAB_LOWER_BOUND_SECONDS_PARAM,
+                    defaultValue);
+        }
+        return defaultValue;
+    }
 }

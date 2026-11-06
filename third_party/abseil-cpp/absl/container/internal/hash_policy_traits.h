@@ -21,6 +21,9 @@
 #include <type_traits>
 #include <utility>
 
+#include "absl/base/config.h"
+#include "absl/container/internal/common_policy_traits.h"
+#include "absl/container/internal/container_memory.h"
 #include "absl/meta/type_traits.h"
 
 namespace absl {
@@ -29,22 +32,18 @@ namespace container_internal {
 
 // Defines how slots are initialized/destroyed/moved.
 template <class Policy, class = void>
-struct hash_policy_traits {
+  struct hash_policy_traits : common_policy_traits<Policy> {
   // The type of the keys stored in the hashtable.
   using key_type = typename Policy::key_type;
 
  private:
   struct ReturnKey {
-    // When C++17 is available, we can use std::launder to provide mutable
-    // access to the key for use in node handle.
-#if defined(__cpp_lib_launder) && __cpp_lib_launder >= 201606
     template <class Key,
-              absl::enable_if_t<std::is_lvalue_reference<Key>::value, int> = 0>
+              std::enable_if_t<std::is_lvalue_reference_v<Key>, int> = 0>
     static key_type& Impl(Key&& k, int) {
       return *std::launder(
           const_cast<key_type*>(std::addressof(std::forward<Key>(k))));
     }
-#endif
 
     template <class Key>
     static Key Impl(Key&& k, char) {
@@ -65,7 +64,7 @@ struct hash_policy_traits {
   struct ConstantIteratorsImpl : std::false_type {};
 
   template <class P>
-  struct ConstantIteratorsImpl<P, absl::void_t<typename P::constant_iterators>>
+  struct ConstantIteratorsImpl<P, std::void_t<typename P::constant_iterators>>
       : P::constant_iterators {};
 
  public:
@@ -78,51 +77,14 @@ struct hash_policy_traits {
   using init_type = typename Policy::init_type;
 
   using reference = decltype(Policy::element(std::declval<slot_type*>()));
-  using pointer = typename std::remove_reference<reference>::type*;
-  using value_type = typename std::remove_reference<reference>::type;
+  using pointer = std::remove_reference_t<reference>*;
+  using value_type = std::remove_reference_t<reference>;
 
   // Policies can set this variable to tell raw_hash_set that all iterators
   // should be constant, even `iterator`. This is useful for set-like
   // containers.
   // Defaults to false if not provided by the policy.
   using constant_iterators = ConstantIteratorsImpl<>;
-
-  // PRECONDITION: `slot` is UNINITIALIZED
-  // POSTCONDITION: `slot` is INITIALIZED
-  template <class Alloc, class... Args>
-  static void construct(Alloc* alloc, slot_type* slot, Args&&... args) {
-    Policy::construct(alloc, slot, std::forward<Args>(args)...);
-  }
-
-  // PRECONDITION: `slot` is INITIALIZED
-  // POSTCONDITION: `slot` is UNINITIALIZED
-  template <class Alloc>
-  static void destroy(Alloc* alloc, slot_type* slot) {
-    Policy::destroy(alloc, slot);
-  }
-
-  // Transfers the `old_slot` to `new_slot`. Any memory allocated by the
-  // allocator inside `old_slot` to `new_slot` can be transferred.
-  //
-  // OPTIONAL: defaults to:
-  //
-  //     clone(new_slot, std::move(*old_slot));
-  //     destroy(old_slot);
-  //
-  // PRECONDITION: `new_slot` is UNINITIALIZED and `old_slot` is INITIALIZED
-  // POSTCONDITION: `new_slot` is INITIALIZED and `old_slot` is
-  //                UNINITIALIZED
-  template <class Alloc>
-  static void transfer(Alloc* alloc, slot_type* new_slot, slot_type* old_slot) {
-    transfer_impl(alloc, new_slot, old_slot, 0);
-  }
-
-  // PRECONDITION: `slot` is INITIALIZED
-  // POSTCONDITION: `slot` is INITIALIZED
-  template <class P = Policy>
-  static auto element(slot_type* slot) -> decltype(P::element(slot)) {
-    return P::element(slot);
-  }
 
   // Returns the amount of memory owned by `slot`, exclusive of `sizeof(*slot)`.
   //
@@ -174,8 +136,8 @@ struct hash_policy_traits {
   // Used for node handle manipulation.
   template <class P = Policy>
   static auto mutable_key(slot_type* slot)
-      -> decltype(P::apply(ReturnKey(), element(slot))) {
-    return P::apply(ReturnKey(), element(slot));
+      -> decltype(P::apply(ReturnKey(), hash_policy_traits::element(slot))) {
+    return P::apply(ReturnKey(), hash_policy_traits::element(slot));
   }
 
   // Returns the "value" (as opposed to the "key") portion of the element. Used
@@ -185,19 +147,33 @@ struct hash_policy_traits {
     return P::value(elem);
   }
 
- private:
-  // Use auto -> decltype as an enabler.
-  template <class Alloc, class P = Policy>
-  static auto transfer_impl(Alloc* alloc, slot_type* new_slot,
-                            slot_type* old_slot, int)
-      -> decltype((void)P::transfer(alloc, new_slot, old_slot)) {
-    P::transfer(alloc, new_slot, old_slot);
+  template <class Hash, bool kIsAbsl, size_t kSeedShift>
+  static constexpr HashSlotFn get_hash_slot_fn() {
+// get_hash_slot_fn may return nullptr to signal that non type erased function
+// should be used. GCC warns against comparing function address with nullptr.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+// silent error: the address of * will never be NULL [-Werror=address]
+#pragma GCC diagnostic ignored "-Waddress"
+#endif
+    return Policy::template get_hash_slot_fn<Hash, kIsAbsl, kSeedShift>() ==
+                   nullptr
+               ? &hash_slot_fn_non_type_erased<Hash, kIsAbsl, kSeedShift>
+               : Policy::template get_hash_slot_fn<Hash, kIsAbsl,
+                                                   kSeedShift>();
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
   }
-  template <class Alloc>
-  static void transfer_impl(Alloc* alloc, slot_type* new_slot,
-                            slot_type* old_slot, char) {
-    construct(alloc, new_slot, std::move(element(old_slot)));
-    destroy(alloc, old_slot);
+
+ private:
+  template <class Hash, bool kIsAbsl, size_t kSeedShift>
+  static size_t hash_slot_fn_non_type_erased(const void* hash_fn, void* slot,
+                                             size_t seed) {
+    return Policy::apply(
+        HashElement<Hash, kIsAbsl, kSeedShift>{
+            *static_cast<const Hash*>(hash_fn), seed},
+        Policy::element(static_cast<slot_type*>(slot)));
   }
 };
 

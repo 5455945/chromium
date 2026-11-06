@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -33,23 +33,22 @@
 #include <stdint.h>
 
 #include <memory>
-#include <vector>
 
-#include "base/callback.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/single_thread_task_runner.h"
+#include "base/rand_util.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/version.h"
 #include "components/subresource_filter/content/browser/ruleset_publisher.h"
-#include "components/subresource_filter/content/browser/ruleset_version.h"
-#include "components/subresource_filter/content/browser/verified_ruleset_dealer.h"
-#include "content/public/browser/notification_observer.h"
-#include "content/public/browser/notification_registrar.h"
+#include "components/subresource_filter/core/browser/ruleset_version.h"
+#include "components/subresource_filter/core/browser/verified_ruleset_dealer.h"
+#include "components/subresource_filter/core/common/ruleset_config.h"
 
 namespace base {
 class SequencedTaskRunner;
@@ -112,43 +111,43 @@ class IndexedRulesetLocator {
 // RulesetPublisher, provided in the constructor, that abstracts away
 // distribution of the ruleset to renderers.
 //
-// Files corresponding to each version of the indexed ruleset are stored in a
-// separate subdirectory inside |indexed_ruleset_base_dir| named after the
-// version. The version information of the most recent successfully stored
-// ruleset is written into |local_state|. The invariant is maintained that the
-// version pointed to by preferences, if valid, will exist on disk at any point
-// in time.
+// The service is parametrized for different rulesets via |config|. Files
+// corresponding to each version of the indexed ruleset are stored in a separate
+// subdirectory inside |indexed_ruleset_base_dir| named after the version. The
+// version information of the most recent successfully stored ruleset is written
+// into |local_state|. The invariant is maintained that the version pointed to
+// by preferences, if valid, will exist on disk at any point in time.
 //
 // Obsolete files deletion and rulesets indexing are posted to
 // |background_task_runner|.
-class RulesetService : public base::SupportsWeakPtr<RulesetService> {
+class RulesetService {
  public:
   // Enumerates the possible outcomes of indexing a ruleset and writing it to
   // disk. Used in UMA histograms, so the order of enumerators should not be
   // changed.
   enum class IndexAndWriteRulesetResult {
-    SUCCESS,
-    FAILED_CREATING_SCRATCH_DIR,
-    FAILED_WRITING_RULESET_DATA,
-    FAILED_WRITING_LICENSE,
-    FAILED_REPLACE_FILE,
-    FAILED_DELETE_PREEXISTING,
-    FAILED_OPENING_UNINDEXED_RULESET,
-    FAILED_PARSING_UNINDEXED_RULESET,
-    FAILED_CREATING_VERSION_DIR,
-    FAILED_CREATING_SENTINEL_FILE,
-    FAILED_DELETING_SENTINEL_FILE,
-    ABORTED_BECAUSE_SENTINEL_FILE_PRESENT,
-
-    // Insert new values before this line.
-    MAX,
+    kSuccess,
+    kFailedCreatingScratchDir,
+    kFailedWritingRulesetData,
+    kFailedWritingLicense,
+    kFailedReplaceFile,
+    kFailedDeletePreexisting,
+    kFailedOpeningUnindexedRuleset,
+    kFailedParsingUnindexedRuleset,
+    kFailedCreatingVersionDir,
+    kFailedCreatingSentinelFile,
+    kFailedDeletingSentinelFile,
+    kAbortedBecauseSentinelFilePresent,
+    kMaxValue = kAbortedBecauseSentinelFilePresent,
   };
 
   // Creates a new instance of a ruleset with common configuration for
   // production usage in embedders.
   static std::unique_ptr<RulesetService> Create(
+      const RulesetConfig& config,
       PrefService* local_state,
-      const base::FilePath& user_data_dir);
+      const base::FilePath& user_data_dir,
+      const RulesetPublisher::Factory& publisher_factory);
 
   // Creates a new instance of a ruleset This is then assigned to a
   // RulesetPublisher that calls Initialize for this ruleset service.  Starts
@@ -157,12 +156,16 @@ class RulesetService : public base::SupportsWeakPtr<RulesetService> {
   // NOTE: This constructor supports specifying various params explicitly for
   // tests. Production code should favor RulesetService::Create().
   RulesetService(
+      const RulesetConfig& config,
       PrefService* local_state,
       scoped_refptr<base::SequencedTaskRunner> background_task_runner,
       const base::FilePath& indexed_ruleset_base_dir,
       scoped_refptr<base::SequencedTaskRunner> blocking_task_runner,
-      // Note: Optional publisher parameter used exclusively for testing.
-      std::unique_ptr<RulesetPublisher> publisher = nullptr);
+      const RulesetPublisher::Factory& publisher_factory);
+
+  RulesetService(const RulesetService&) = delete;
+  RulesetService& operator=(const RulesetService&) = delete;
+
   virtual ~RulesetService();
 
   // Pass-through function to set the callback on publishing.
@@ -190,13 +193,15 @@ class RulesetService : public base::SupportsWeakPtr<RulesetService> {
     return publisher_->GetRulesetDealer();
   }
 
+  RulesetConfig config() const { return config_; }
+
  private:
   friend class SubresourceFilteringRulesetServiceTest;
   friend class SubresourceFilterBrowserTest;
   FRIEND_TEST_ALL_PREFIXES(
-      SubresourceFilterRulesetPublisherImplTest,
+      SubresourceFilterRulesetPublisherTest,
       PublishedRuleset_IsDistributedToExistingAndNewRenderers);
-  FRIEND_TEST_ALL_PREFIXES(SubresourceFilterRulesetPublisherImplTest,
+  FRIEND_TEST_ALL_PREFIXES(SubresourceFilterRulesetPublisherTest,
                            PublishesRulesetInOnePostTask);
   FRIEND_TEST_ALL_PREFIXES(SubresourceFilteringRulesetServiceTest,
                            NewRuleset_WriteFailure);
@@ -211,19 +216,21 @@ class RulesetService : public base::SupportsWeakPtr<RulesetService> {
   // indexed ruleset version, or an invalid version on error. To be called on
   // the |background_task_runner|.
   static IndexedRulesetVersion IndexAndWriteRuleset(
+      const RulesetConfig& config,
       const base::FilePath& indexed_ruleset_base_dir,
       const UnindexedRulesetInfo& unindexed_ruleset_info);
 
   // Reads the rules via the |unindexed_ruleset_stream_generator|, and indexes
   // them using |indexer|. Returns whether the entire ruleset could be parsed.
   static bool IndexRuleset(
+      const RulesetConfig& config,
       UnindexedRulesetStreamGenerator* unindexed_ruleset_stream_generator,
       RulesetIndexer* indexer);
 
   // Writes all files comprising the given |indexed_version| of the ruleset
   // into the corresponding subdirectory in |indexed_ruleset_base_dir|.
   // More specifically, it writes:
-  //  -- the |indexed_ruleset_data| of the given |indexed_ruleset_size|,
+  //  -- the |indexed_ruleset_data|,
   //  -- a copy of the LICENSE file at |license_path|, if exists.
   // Returns true on success. To be called on the |background_task_runner|.
   // Attempts not to leave an incomplete copy in the target directory.
@@ -233,13 +240,13 @@ class RulesetService : public base::SupportsWeakPtr<RulesetService> {
   static IndexAndWriteRulesetResult WriteRuleset(
       const base::FilePath& indexed_ruleset_version_dir,
       const base::FilePath& license_source_path,
-      const uint8_t* indexed_ruleset_data,
-      size_t indexed_ruleset_size);
+      base::span<const uint8_t> indexed_ruleset_data);
 
   // Indirections for accessing these routines, so as to allow overriding and
   // injecting faults in tests.
   static decltype(&IndexRuleset) g_index_ruleset_func;
   static decltype(&base::ReplaceFile) g_replace_file_func;
+  static decltype(&base::RandUint64) g_get_ruleset_id_func;
 
   // Runs as a BEST_EFFORT task to complete portions of the initialization that
   // could potentially block Chrome startup.  Once this task is reached, the
@@ -259,7 +266,9 @@ class RulesetService : public base::SupportsWeakPtr<RulesetService> {
   void OpenAndPublishRuleset(const IndexedRulesetVersion& version);
   void OnRulesetSet(RulesetFilePtr file);
 
-  PrefService* const local_state_;
+  const RulesetConfig config_;
+
+  const raw_ptr<PrefService> local_state_;
 
   // Obsolete files deletion and indexing should be done on this runner.
   scoped_refptr<base::SequencedTaskRunner> background_task_runner_;
@@ -271,7 +280,7 @@ class RulesetService : public base::SupportsWeakPtr<RulesetService> {
 
   const base::FilePath indexed_ruleset_base_dir_;
 
-  DISALLOW_COPY_AND_ASSIGN(RulesetService);
+  base::WeakPtrFactory<RulesetService> weak_ptr_factory_{this};
 };
 
 }  // namespace subresource_filter

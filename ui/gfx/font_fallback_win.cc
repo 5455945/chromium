@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,9 @@
 
 #include <algorithm>
 #include <map>
+#include <string_view>
 
-#include "base/macros.h"
+#include "base/i18n/language_tag.h"
 #include "base/memory/singleton.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -112,6 +113,9 @@ class CachedFontLinkSettings {
  public:
   static CachedFontLinkSettings* GetInstance();
 
+  CachedFontLinkSettings(const CachedFontLinkSettings&) = delete;
+  CachedFontLinkSettings& operator=(const CachedFontLinkSettings&) = delete;
+
   // Returns the linked fonts list correspond to |font|. Returned value will
   // never be null.
   const std::vector<Font>* GetLinkedFonts(const Font& font);
@@ -127,8 +131,6 @@ class CachedFontLinkSettings {
 
   // Map from font names to vectors of linked fonts.
   std::map<std::string, std::vector<Font> > cached_linked_fonts_;
-
-  DISALLOW_COPY_AND_ASSIGN(CachedFontLinkSettings);
 };
 
 // static
@@ -206,8 +208,8 @@ std::vector<Font> GetFallbackFonts(const Font& font) {
 }
 
 bool GetFallbackFont(const Font& font,
-                     const std::string& locale,
-                     base::StringPiece16 text,
+                     const base::i18n::LanguageTag& locale,
+                     std::u16string_view text,
                      Font* result) {
   TRACE_EVENT0("fonts", "gfx::GetFallbackFont");
   // Creating a DirectWrite font fallback can be expensive. It's ok in the
@@ -224,8 +226,9 @@ bool GetFallbackFont(const Font& font,
   // text than expected then DirectWrite will become confused and crash. This
   // shouldn't happen, but crbug.com/624905 shows that it happens sometimes.
   constexpr char16_t kNulCharacter = '\0';
-  if (text.find(kNulCharacter) != base::StringPiece16::npos)
+  if (text.find(kNulCharacter) != std::u16string_view::npos) {
     return false;
+  }
 
   sk_sp<SkTypeface> fallback_typeface =
       GetSkiaFallbackTypeface(font, locale, text);
@@ -238,7 +241,7 @@ bool GetFallbackFont(const Font& font,
   // font handles and is not guaranteed to result in the correct typeface, see
   // https://crbug.com/1003829
   *result = Font(PlatformFont::CreateFromSkTypeface(
-      std::move(fallback_typeface), font.GetFontSize(), absl::nullopt));
+      std::move(fallback_typeface), font.GetFontSize(), std::nullopt));
   return true;
 }
 

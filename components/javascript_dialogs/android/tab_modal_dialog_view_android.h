@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,7 @@
 
 #include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "components/javascript_dialogs/tab_modal_dialog_view.h"
 #include "content/public/browser/javascript_dialog_manager.h"
@@ -22,6 +21,10 @@ namespace javascript_dialogs {
 // are browser tabs.
 class TabModalDialogViewAndroid : public TabModalDialogView {
  public:
+  TabModalDialogViewAndroid(const TabModalDialogViewAndroid&) = delete;
+  TabModalDialogViewAndroid& operator=(const TabModalDialogViewAndroid&) =
+      delete;
+
   ~TabModalDialogViewAndroid() override;
 
   static base::WeakPtr<TabModalDialogViewAndroid> Create(
@@ -39,12 +42,8 @@ class TabModalDialogViewAndroid : public TabModalDialogView {
   void CloseDialogWithoutCallback() override;
   std::u16string GetUserInput() override;
 
-  void Accept(JNIEnv* env,
-              const base::android::JavaParamRef<jobject>&,
-              const base::android::JavaParamRef<jstring>& prompt);
-  void Cancel(JNIEnv* env,
-              const base::android::JavaParamRef<jobject>&,
-              jboolean button_clicked);
+  void Accept(JNIEnv* env, const base::android::JavaRef<jstring>& prompt);
+  void Cancel(JNIEnv* env, bool button_clicked);
 
  private:
   TabModalDialogViewAndroid(
@@ -58,6 +57,8 @@ class TabModalDialogViewAndroid : public TabModalDialogView {
           callback_on_button_clicked,
       base::OnceClosure callback_on_cancelled);
 
+  void Show();
+
   std::unique_ptr<TabModalDialogViewAndroid> dialog_;
   base::android::ScopedJavaGlobalRef<jobject> dialog_jobject_;
   JavaObjectWeakGlobalRef jwindow_weak_ref_;
@@ -67,8 +68,6 @@ class TabModalDialogViewAndroid : public TabModalDialogView {
   base::OnceClosure callback_on_cancelled_;
 
   base::WeakPtrFactory<TabModalDialogViewAndroid> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(TabModalDialogViewAndroid);
 };
 
 }  // namespace javascript_dialogs

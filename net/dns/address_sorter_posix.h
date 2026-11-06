@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,24 @@
 #define NET_DNS_ADDRESS_SORTER_POSIX_H_
 
 #include <map>
+#include <set>
+#include <tuple>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/containers/unique_ptr_adapters.h"
+#include "base/memory/raw_ptr.h"
 #include "base/threading/thread_checker.h"
-#include "net/base/address_list.h"
 #include "net/base/ip_address.h"
 #include "net/base/net_export.h"
+#include "net/base/network_anonymization_key.h"
 #include "net/base/network_change_notifier.h"
+#include "net/base/network_handle.h"
 #include "net/dns/address_sorter.h"
+#include "net/socket/datagram_client_socket.h"
 
 namespace net {
 
+class ConnectPredictor;
 class ClientSocketFactory;
 
 // This implementation uses explicit policy to perform the sorting. It is not
@@ -47,45 +53,67 @@ class NET_EXPORT_PRIVATE AddressSorterPosix
 
   struct SourceAddressInfo {
     // Values read from policy tables.
-    AddressScope scope;
-    unsigned label;
+    AddressScope scope = SCOPE_UNDEFINED;
+    unsigned label = 0;
 
     // Values from the OS, matter only if more than one source address is used.
-    size_t prefix_length;
-    bool deprecated;  // vs. preferred RFC4862
-    bool home;        // vs. care-of RFC6275
-    bool native;
+    size_t prefix_length = 0;
+    bool deprecated = false;  // vs. preferred RFC4862
+    bool home = false;        // vs. care-of RFC6275
+    bool native = false;
   };
 
   typedef std::map<IPAddress, SourceAddressInfo> SourceAddressMap;
 
   explicit AddressSorterPosix(ClientSocketFactory* socket_factory);
+
+  AddressSorterPosix(const AddressSorterPosix&) = delete;
+  AddressSorterPosix& operator=(const AddressSorterPosix&) = delete;
+
   ~AddressSorterPosix() override;
 
   // AddressSorter:
-  void Sort(const AddressList& list, CallbackType callback) const override;
+  void Sort(const std::vector<IPEndPoint>& endpoints,
+            const NetworkAnonymizationKey& anonymization_key,
+            handles::NetworkHandle target_network,
+            CallbackType callback) const override;
 
  private:
   friend class AddressSorterPosixTest;
+  class SortContext;
 
   // NetworkChangeNotifier::IPAddressObserver:
-  void OnIPAddressChanged() override;
+  void OnIPAddressChanged(
+      NetworkChangeNotifier::IPAddressChangeType change_type) override;
 
   // Fills |info| with values for |address| from policy tables.
   void FillPolicy(const IPAddress& address, SourceAddressInfo* info) const;
+
+  void FinishedSort(SortContext* sort_context) const;
 
   // Mutable to allow using default values for source addresses which were not
   // found in most recent OnIPAddressChanged.
   mutable SourceAddressMap source_map_;
 
-  ClientSocketFactory* socket_factory_;
+  raw_ptr<ClientSocketFactory> socket_factory_;
   PolicyTable precedence_table_;
   PolicyTable label_table_;
   PolicyTable ipv4_scope_table_;
 
-  THREAD_CHECKER(thread_checker_);
+  // An instance of ConnectPredictor may make predictions about what a connect()
+  // call would return without having to call it. SortContext objects contain
+  // pointers to Partitions owned by the ConnectPredictor, and so
+  // ConnectPredictor must outlive the SortContext objects.
+  std::unique_ptr<ConnectPredictor> connect_predictor_;
 
-  DISALLOW_COPY_AND_ASSIGN(AddressSorterPosix);
+  // SortContext stores data for an outstanding Sort() that is completing
+  // asynchronously. Mutable to allow pushing a new SortContext when Sort is
+  // called. Since Sort can be called multiple times, a container is necessary
+  // to track different SortContexts.
+  mutable std::set<std::unique_ptr<SortContext>, base::UniquePtrComparator>
+      sort_contexts_;
+
+  THREAD_CHECKER(thread_checker_);
 };
 
 }  // namespace net

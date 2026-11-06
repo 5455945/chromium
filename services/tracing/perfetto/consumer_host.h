@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,13 +10,14 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/process/process_handle.h"
 #include "base/sequence_checker.h"
 #include "base/threading/sequence_bound.h"
 #include "base/timer/timer.h"
+#include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/tracing/public/mojom/perfetto_service.mojom.h"
 #include "third_party/perfetto/include/perfetto/ext/tracing/core/consumer.h"
@@ -48,22 +49,36 @@ class ConsumerHost : public perfetto::Consumer, public mojom::ConsumerHost {
         mojo::PendingReceiver<mojom::TracingSessionHost> tracing_session_host,
         mojo::PendingRemote<mojom::TracingSessionClient> tracing_session_client,
         const perfetto::TraceConfig& trace_config,
-        perfetto::base::ScopedFile output_file,
-        mojom::TracingClientPriority priority);
+        perfetto::base::ScopedFile output_file);
+    TracingSession(
+        ConsumerHost* host,
+        mojo::PendingReceiver<mojom::TracingSessionHost> tracing_session_host,
+        mojo::PendingRemote<mojom::TracingSessionClient> tracing_session_client,
+        bool privacy_filtering_enabled);
+
+    TracingSession(const TracingSession&) = delete;
+    TracingSession& operator=(const TracingSession&) = delete;
+
     ~TracingSession() override;
 
     void OnPerfettoEvents(const perfetto::ObservableEvents&);
     void OnTraceData(std::vector<perfetto::TracePacket> packets, bool has_more);
     void OnTraceStats(bool success, const perfetto::TraceStats&);
     void OnTracingDisabled(const std::string& error);
+    void OnSessionCloned(const OnSessionClonedArgs&);
     void OnConsumerClientDisconnected();
     void Flush(uint32_t timeout, base::OnceCallback<void(bool)> callback);
+    void CloneSession(const base::UnguessableToken& uuid,
+                      CloneSessionCallback callback);
 
-    mojom::TracingClientPriority tracing_priority() const {
-      return tracing_priority_;
-    }
     bool tracing_enabled() const { return tracing_enabled_; }
     ConsumerHost* host() const { return host_; }
+    const std::string& unique_session_name() const {
+      return unique_session_name_;
+    }
+    bool privacy_filtering_enabled() const {
+      return privacy_filtering_enabled_;
+    }
 
     // Called by TracingService.
     void OnActiveServicePidAdded(base::ProcessId pid);
@@ -81,7 +96,6 @@ class ConsumerHost : public perfetto::Consumer, public mojom::ConsumerHost {
     void DisableTracingAndEmitJson(
         const std::string& agent_label_filter,
         mojo::ScopedDataPipeProducerHandle stream,
-        bool privacy_filtering_enabled,
         DisableTracingAndEmitJsonCallback callback) override;
 
    private:
@@ -91,25 +105,26 @@ class ConsumerHost : public perfetto::Consumer, public mojom::ConsumerHost {
     void MaybeSendEnableTracingAck();
     bool IsExpectedPid(base::ProcessId pid) const;
 
-    ConsumerHost* const host_;
+    const raw_ptr<ConsumerHost> host_;
     mojo::Remote<mojom::TracingSessionClient> tracing_session_client_;
     mojo::Receiver<mojom::TracingSessionHost> receiver_;
+    std::string unique_session_name_;
     bool privacy_filtering_enabled_ = false;
     bool convert_to_legacy_json_ = false;
     base::SequenceBound<StreamWriter> read_buffers_stream_writer_;
     RequestBufferUsageCallback request_buffer_usage_callback_;
+    CloneSessionCallback on_session_cloned_callback_;
     std::unique_ptr<perfetto::trace_processor::TraceProcessorStorage>
         trace_processor_;
     std::string json_agent_label_filter_;
     base::OnceCallback<void(bool)> flush_callback_;
-    const mojom::TracingClientPriority tracing_priority_;
     base::OnceClosure on_disabled_callback_;
     std::set<base::ProcessId> filtered_pids_;
     bool tracing_enabled_ = true;
 
     // If set, we didn't issue OnTracingEnabled() on the session yet. If set and
     // empty, no more pids are pending and we should issue OnTracingEnabled().
-    absl::optional<std::set<base::ProcessId>> pending_enable_tracing_ack_pids_;
+    std::optional<std::set<base::ProcessId>> pending_enable_tracing_ack_pids_;
     base::OneShotTimer enable_tracing_ack_timer_;
 
     struct DataSourceHandle : public std::pair<std::string, std::string> {
@@ -121,13 +136,15 @@ class ConsumerHost : public perfetto::Consumer, public mojom::ConsumerHost {
 
     SEQUENCE_CHECKER(sequence_checker_);
     base::WeakPtrFactory<TracingSession> weak_factory_{this};
-
-    DISALLOW_COPY_AND_ASSIGN(TracingSession);
   };
 
   // The owner of ConsumerHost should make sure to destroy
   // |service| after destroying this.
   explicit ConsumerHost(PerfettoService* service);
+
+  ConsumerHost(const ConsumerHost&) = delete;
+  ConsumerHost& operator=(const ConsumerHost&) = delete;
+
   ~ConsumerHost() override;
 
   PerfettoService* service() const { return service_; }
@@ -141,6 +158,12 @@ class ConsumerHost : public perfetto::Consumer, public mojom::ConsumerHost {
       mojo::PendingRemote<mojom::TracingSessionClient> tracing_session_client,
       const perfetto::TraceConfig& config,
       base::File output_file) override;
+  void CloneSession(
+      mojo::PendingReceiver<mojom::TracingSessionHost> tracing_session_host,
+      mojo::PendingRemote<mojom::TracingSessionClient> tracing_session_client,
+      const base::UnguessableToken& uuid,
+      CloneSessionCallback callback) override;
+  void QueryServiceState(QueryServiceStateCallback callback) override;
 
   // perfetto::Consumer implementation.
   // This gets called by the Perfetto service as control signals,
@@ -152,6 +175,7 @@ class ConsumerHost : public perfetto::Consumer, public mojom::ConsumerHost {
                    bool has_more) override;
   void OnObservableEvents(const perfetto::ObservableEvents&) override;
   void OnTraceStats(bool success, const perfetto::TraceStats&) override;
+  void OnSessionCloned(const OnSessionClonedArgs&) override;
 
   // Unused in Chrome.
   void OnDetach(bool success) override {}
@@ -164,7 +188,7 @@ class ConsumerHost : public perfetto::Consumer, public mojom::ConsumerHost {
  private:
   void DestructTracingSession();
 
-  PerfettoService* const service_;
+  const raw_ptr<PerfettoService> service_;
   std::unique_ptr<TracingSession> tracing_session_;
 
   SEQUENCE_CHECKER(sequence_checker_);
@@ -174,7 +198,6 @@ class ConsumerHost : public perfetto::Consumer, public mojom::ConsumerHost {
       consumer_endpoint_;
 
   base::WeakPtrFactory<ConsumerHost> weak_factory_{this};
-  DISALLOW_COPY_AND_ASSIGN(ConsumerHost);
 };
 
 }  // namespace tracing

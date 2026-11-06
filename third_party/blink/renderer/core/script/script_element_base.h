@@ -24,9 +24,8 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_typedefs.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/create_element_flags.h"
-#include "third_party/blink/renderer/core/dom/dom_node_ids.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/graphics/dom_node_id.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "third_party/blink/renderer/platform/wtf/text/text_position.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
@@ -36,7 +35,6 @@ namespace blink {
 class Document;
 class Element;
 class ExecutionContext;
-class HTMLScriptElementOrSVGScriptElement;
 class ScriptLoader;
 
 ScriptLoader* ScriptLoaderFromElement(Element*);
@@ -51,17 +49,19 @@ class CORE_EXPORT ScriptElementBase : public GarbageCollectedMixin {
   virtual String EventAttributeValue() const = 0;
   virtual String ForAttributeValue() const = 0;
   virtual String IntegrityAttributeValue() const = 0;
+  virtual String SignatureAttributeValue() const = 0;
   virtual String LanguageAttributeValue() const = 0;
   virtual bool NomoduleAttributeValue() const = 0;
   virtual String SourceAttributeValue() const = 0;
   virtual String TypeAttributeValue() const = 0;
   virtual String ReferrerPolicyAttributeValue() const = 0;
-  virtual String ImportanceAttributeValue() const = 0;
+  virtual String FetchPriorityAttributeValue() const = 0;
+  virtual String CacheHintAttributeValue() const = 0;
 
   // This implements https://dom.spec.whatwg.org/#concept-child-text-content
   virtual String ChildTextContent() = 0;
   // This supports
-  // https://w3c.github.io/webappsec-trusted-types/dist/spec/#prepare-script-url-and-text
+  // https://w3c.github.io/trusted-types/dist/spec/#prepare-script-url-and-text
   virtual String ScriptTextInternalSlot() const = 0;
   virtual bool HasSourceAttribute() const = 0;
   virtual bool IsConnected() const = 0;
@@ -69,11 +69,14 @@ class CORE_EXPORT ScriptElementBase : public GarbageCollectedMixin {
   virtual const AtomicString& GetNonceForElement() const = 0;
   virtual bool ElementHasDuplicateAttributes() const = 0;
 
+  // https://html.spec.whatwg.org/C/#potentially-render-blocking
+  virtual bool IsPotentiallyRenderBlocking() const = 0;
+
   // Whether the inline script is allowed by the CSP. Must be called
   // synchronously to ensure the correct Javascript world is used for CSP
   // checks.
   virtual bool AllowInlineScriptForCSP(const AtomicString& nonce,
-                                       const WTF::OrdinalNumber&,
+                                       const TextPosition& context_position,
                                        const String& script_content) = 0;
 
   // GetDocument() is "element document", to which the script element belongs

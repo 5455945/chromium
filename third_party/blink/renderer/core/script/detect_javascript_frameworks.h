@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,6 +12,12 @@ namespace blink {
 class Document;
 
 CORE_EXPORT void DetectJavascriptFrameworksOnLoad(Document&);
+
+class WorkerGlobalScope;
+struct JavaScriptFrameworkDetectionResult;
+CORE_EXPORT void DetectJavascriptFrameworksOnWorkerLoad(
+    WorkerGlobalScope&,
+    JavaScriptFrameworkDetectionResult& result);
 
 }  // namespace blink
 

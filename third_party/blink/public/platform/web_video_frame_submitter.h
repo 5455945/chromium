@@ -1,12 +1,16 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_PUBLIC_PLATFORM_WEB_VIDEO_FRAME_SUBMITTER_H_
 #define THIRD_PARTY_BLINK_PUBLIC_PLATFORM_WEB_VIDEO_FRAME_SUBMITTER_H_
 
+#include <optional>
+
+#include "base/time/time.h"
 #include "cc/layers/video_frame_provider.h"
 #include "cc/metrics/video_playback_roughness_reporter.h"
+#include "components/viz/common/surfaces/frame_sink_id.h"
 #include "components/viz/common/surfaces/surface_id.h"
 #include "third_party/blink/public/platform/web_common.h"
 
@@ -22,11 +26,17 @@ namespace viz {
 class RasterContextProvider;
 }  // namespace viz
 
+namespace gpu {
+class SharedImageInterface;
+}  // namespace gpu
+
 namespace blink {
 
 // Sets the proper context_provider and compositing mode onto the Submitter.
 using WebSubmitterConfigurationCallback =
-    base::OnceCallback<void(bool, scoped_refptr<viz::RasterContextProvider>)>;
+    base::OnceCallback<void(bool,
+                            scoped_refptr<viz::RasterContextProvider>,
+                            scoped_refptr<gpu::SharedImageInterface>)>;
 
 // Callback to obtain the media RasterContextProvider and a bool indicating
 // whether we are in software compositing mode.
@@ -55,7 +65,7 @@ class BLINK_PLATFORM_EXPORT WebVideoFrameSubmitter
   //
   // TODO(dalecurtis): This could be removed in favor of getting it from each
   // VideoFrame, but today that information isn't set everywhere.
-  virtual void SetRotation(media::VideoRotation) = 0;
+  virtual void SetTransform(media::VideoTransformation) = 0;
 
   // Prepares the compositor frame sink to accept frames by providing
   // a SurfaceId.
@@ -75,6 +85,11 @@ class BLINK_PLATFORM_EXPORT WebVideoFrameSubmitter
 
   // Set whether frames should always be submitted regardless of visibility.
   virtual void SetForceSubmit(bool) = 0;
+
+  // Returns an adaptive estimate of when the next frame will be displayed,
+  // based on the observed compositor receive to present latency.
+  // Returns std::nullopt if the adaptive estimate isn't available.
+  virtual std::optional<base::TimeTicks> GetExpectedDisplayTime() const = 0;
 };
 
 }  // namespace blink

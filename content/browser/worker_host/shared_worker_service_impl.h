@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,18 +10,20 @@
 #include <string>
 #include <utility>
 
-#include "base/compiler_specific.h"
 #include "base/containers/unique_ptr_adapters.h"
-#include "base/macros.h"
+#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
-#include "content/browser/service_worker/service_worker_context_wrapper.h"
 #include "content/browser/worker_host/shared_worker_host.h"
+#include "content/common/content_export.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/shared_worker_service.h"
+#include "content/public/common/child_process_id.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
-#include "services/metrics/public/cpp/ukm_source_id.h"
+#include "net/storage_access_api/status.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/mojom/loader/fetch_client_settings_object.mojom.h"
+#include "third_party/blink/public/mojom/security_context/outside_context_csp_violation_reporter.mojom.h"
 #include "third_party/blink/public/mojom/worker/shared_worker_connector.mojom.h"
 #include "third_party/blink/public/mojom/worker/shared_worker_factory.mojom.h"
 #include "third_party/blink/public/mojom/worker/worker_main_script_load_params.mojom.h"
@@ -31,20 +33,38 @@ class MessagePortChannel;
 class StorageKey;
 }  // namespace blink
 
+namespace url {
+class Origin;
+}
+
 namespace content {
 
-class ChromeAppCacheService;
-class SharedWorkerInstance;
+class ServiceWorkerContextWrapper;
 class SharedWorkerHost;
+class SharedWorkerInstance;
 class StoragePartitionImpl;
 
 // Created per StoragePartition.
 class CONTENT_EXPORT SharedWorkerServiceImpl : public SharedWorkerService {
  public:
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  // LINT.IfChange(SharedWorkerCreationContextTypeMismatch)
+  enum class SharedWorkerCreationContextTypeMismatch {
+    kMatch = 0,
+    kMismatchRendererSecureBrowserNonsecure = 1,
+    kMismatchRendererNonsecureBrowserSecure = 2,
+    kMaxValue = kMismatchRendererNonsecureBrowserSecure,
+  };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/content/enums.xml:SharedWorkerCreationContextTypeMismatch)
+
   SharedWorkerServiceImpl(
       StoragePartitionImpl* storage_partition,
-      scoped_refptr<ServiceWorkerContextWrapper> service_worker_context,
-      scoped_refptr<ChromeAppCacheService> appcache_service);
+      scoped_refptr<ServiceWorkerContextWrapper> service_worker_context);
+
+  SharedWorkerServiceImpl(const SharedWorkerServiceImpl&) = delete;
+  SharedWorkerServiceImpl& operator=(const SharedWorkerServiceImpl&) = delete;
+
   ~SharedWorkerServiceImpl() override;
 
   // SharedWorkerService implementation.
@@ -53,15 +73,21 @@ class CONTENT_EXPORT SharedWorkerServiceImpl : public SharedWorkerService {
   void EnumerateSharedWorkers(Observer* observer) override;
   bool TerminateWorker(const GURL& url,
                        const std::string& name,
-                       const blink::StorageKey& storage_key) override;
+                       const blink::StorageKey& storage_key,
+                       const blink::mojom::SharedWorkerSameSiteCookies
+                           same_site_cookies) override;
+  void TerminateWorkersForStorageKey(
+      const blink::StorageKey& storage_key) override;
   void Shutdown() override;
 
   // Uses |url_loader_factory| to load workers' scripts instead of
-  // StoragePartition's URLLoaderFactoryGetter.
+  // StoragePartition's ReconnectableURLLoaderFactoryForIOThread.
   void SetURLLoaderFactoryForTesting(
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
 
   // Creates the worker if necessary or connects to an already existing worker.
+  // `storage_key_override` is used to grant access to unpartitioned workers
+  // in a partitioned context.
   void ConnectToWorker(
       GlobalRenderFrameHostId client_render_frame_host_id,
       blink::mojom::SharedWorkerInfoPtr info,
@@ -69,13 +95,19 @@ class CONTENT_EXPORT SharedWorkerServiceImpl : public SharedWorkerService {
       blink::mojom::SharedWorkerCreationContextType creation_context_type,
       const blink::MessagePortChannel& port,
       scoped_refptr<network::SharedURLLoaderFactory> blob_url_loader_factory,
-      ukm::SourceId client_ukm_source_id);
+      const std::optional<blink::StorageKey>& storage_key_override);
+
+  // Returns the SharedWorkerHost associated with this token. Clients should
+  // not hold on to the pointer, as it may become invalid when the worker exits.
+  SharedWorkerHost* GetSharedWorkerHostFromToken(
+      const blink::SharedWorkerToken& worker_token) const;
 
   // Virtual for testing.
   virtual void DestroyHost(SharedWorkerHost* host);
 
   void NotifyWorkerCreated(const blink::SharedWorkerToken& shared_worker_token,
-                           int worker_process_id,
+                           ChildProcessId worker_process_id,
+                           const url::Origin& security_origin,
                            const base::UnguessableToken& dev_tools_token);
   void NotifyBeforeWorkerDestroyed(
       const blink::SharedWorkerToken& shared_worker_token);
@@ -86,11 +118,23 @@ class CONTENT_EXPORT SharedWorkerServiceImpl : public SharedWorkerService {
 
   StoragePartitionImpl* storage_partition() { return storage_partition_; }
 
+  // For all connected workers with `render_frame_host`, evicts other BFCached
+  // clients and returns true if this frame is the last active client for any of
+  // them.
+  bool EvictBFCachedClientsIfLastActive(RenderFrameHostImpl* render_frame_host);
+
+  // For all connected workers with `render_frame_host`, calls
+  // SharedWorkerHost::OnClientStateChanged(). The worker will be frozen if no
+  // active clients remain, or resumed if at least one client is active.
+  void OnClientStateChanged(RenderFrameHostImpl* render_frame_host);
+
  private:
   friend class SharedWorkerHostTest;
   friend class SharedWorkerServiceImplTest;
   friend class TestSharedWorkerServiceImpl;
   friend class WorkerTest;
+  friend class SharedWorkerExtendedLifetimeBrowserTest;
+  friend class SharedWorkerExtendedLifetimeBrowserOriginTrialTest;
   FRIEND_TEST_ALL_PREFIXES(NetworkServiceRestartBrowserTest, SharedWorker);
 
   // Creates a new worker in the creator's renderer process.
@@ -101,29 +145,28 @@ class CONTENT_EXPORT SharedWorkerServiceImpl : public SharedWorkerService {
           content_security_policies,
       blink::mojom::FetchClientSettingsObjectPtr
           outside_fetch_client_settings_object,
+      mojo::PendingRemote<blink::mojom::OutsideContextCSPViolationReporter>
+          outside_settings_reporter,
       const std::string& storage_domain,
       const blink::MessagePortChannel& message_port,
-      scoped_refptr<network::SharedURLLoaderFactory> blob_url_loader_factory);
+      scoped_refptr<network::SharedURLLoaderFactory> blob_url_loader_factory,
+      const std::optional<blink::StorageKey>& storage_key_override);
 
   void StartWorker(
       base::WeakPtr<SharedWorkerHost> host,
       const blink::MessagePortChannel& message_port,
       blink::mojom::FetchClientSettingsObjectPtr
           outside_fetch_client_settings_object,
-      bool did_fetch_worker_script,
-      std::unique_ptr<blink::PendingURLLoaderFactoryBundle>
-          subresource_loader_factories,
-      blink::mojom::WorkerMainScriptLoadParamsPtr main_script_load_params,
-      blink::mojom::ControllerServiceWorkerInfoPtr controller,
-      base::WeakPtr<ServiceWorkerObjectHost>
-          controller_service_worker_object_host,
-      const GURL& final_response_url);
+      mojo::PendingRemote<blink::mojom::OutsideContextCSPViolationReporter>
+          outside_settings_reporter,
+      std::optional<WorkerScriptFetcherResult> result);
 
   // Returns nullptr if there is no such host.
   SharedWorkerHost* FindMatchingSharedWorkerHost(
       const GURL& url,
       const std::string& name,
-      const blink::StorageKey& storage_key);
+      const blink::StorageKey& storage_key,
+      const blink::mojom::SharedWorkerSameSiteCookies same_site_cookies);
 
   void ScriptLoadFailed(
       mojo::PendingRemote<blink::mojom::SharedWorkerClient> client,
@@ -131,12 +174,13 @@ class CONTENT_EXPORT SharedWorkerServiceImpl : public SharedWorkerService {
 
   std::set<std::unique_ptr<SharedWorkerHost>, base::UniquePtrComparator>
       worker_hosts_;
+  base::flat_map<blink::SharedWorkerToken,
+                 raw_ptr<SharedWorkerHost, CtnExperimental>>
+      shared_worker_hosts_;
 
   // |storage_partition_| owns |this|.
-  StoragePartitionImpl* const storage_partition_;
+  const raw_ptr<StoragePartitionImpl> storage_partition_;
   scoped_refptr<ServiceWorkerContextWrapper> service_worker_context_;
-  // |appcache_service_| may be null.
-  scoped_refptr<ChromeAppCacheService> appcache_service_;
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_override_;
 
   // Keeps a reference count of each worker-client pair so as to not send
@@ -150,8 +194,6 @@ class CONTENT_EXPORT SharedWorkerServiceImpl : public SharedWorkerService {
   base::ObserverList<Observer> observers_;
 
   base::WeakPtrFactory<SharedWorkerServiceImpl> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(SharedWorkerServiceImpl);
 };
 
 }  // namespace content

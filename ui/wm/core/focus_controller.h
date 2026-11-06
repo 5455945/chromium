@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,17 +6,17 @@
 #define UI_WM_CORE_FOCUS_CONTROLLER_H_
 
 #include <memory>
+#include <optional>
+#include <string_view>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/component_export.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/sanitized_object.h"
 #include "base/observer_list.h"
 #include "base/scoped_multi_source_observation.h"
-#include "base/strings/string_piece.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/aura/client/focus_client.h"
 #include "ui/aura/window_observer.h"
 #include "ui/events/event_handler.h"
-#include "ui/wm/core/wm_core_export.h"
 #include "ui/wm/public/activation_change_observer.h"
 #include "ui/wm/public/activation_client.h"
 
@@ -42,14 +42,25 @@ class FocusRules;
 // . ActivationReason::WINDOW_DISPOSITION_CHANGED: Window disposition changes
 //   (implemented here in aura::WindowObserver). (The FocusController registers
 //   itself as an observer of the active and focused windows).
-class WM_CORE_EXPORT FocusController : public ActivationClient,
-                                       public aura::client::FocusClient,
-                                       public ui::EventHandler,
-                                       public aura::WindowObserver {
+class COMPONENT_EXPORT(UI_WM) FocusController : public ActivationClient,
+                                                public aura::client::FocusClient
+    ,
+                                                public ui::EventHandler,
+                                                public aura::WindowObserver {
+  // TODO(crbug.com/497548800): This macro mitigates the issue. after fixing
+  // the issue, remove the marco.
+  SANITIZED_OBJECT();
+
  public:
   // |rules| cannot be NULL.
   explicit FocusController(FocusRules* rules);
+
+  FocusController(const FocusController&) = delete;
+  FocusController& operator=(const FocusController&) = delete;
+
   ~FocusController() override;
+
+  void SetFocusRules(std::unique_ptr<FocusRules> new_rules);
 
   // Overridden from ActivationClient:
   void AddObserver(ActivationChangeObserver* observer) override;
@@ -76,7 +87,7 @@ class WM_CORE_EXPORT FocusController : public ActivationClient,
   void OnScrollEvent(ui::ScrollEvent* event) override;
   void OnTouchEvent(ui::TouchEvent* event) override;
   void OnGestureEvent(ui::GestureEvent* event) override;
-  base::StringPiece GetLogContext() const override;
+  std::string_view GetLogContext() const override;
 
   // Overridden from aura::WindowObserver:
   void OnWindowVisibilityChanged(aura::Window* window, bool visible) override;
@@ -126,28 +137,26 @@ class WM_CORE_EXPORT FocusController : public ActivationClient,
   void WindowFocusedFromInputEvent(aura::Window* window,
                                    const ui::Event* event);
 
-  aura::Window* active_window_ = nullptr;
-  aura::Window* focused_window_ = nullptr;
+  raw_ptr<aura::Window> active_window_ = nullptr;
+  raw_ptr<aura::Window> focused_window_ = nullptr;
 
   bool updating_focus_ = false;
 
   // An optional value. It is set to the window being activated and is unset
   // after it is activated.
-  absl::optional<aura::Window*> pending_activation_;
+  std::optional<aura::Window*> pending_activation_;
 
   std::unique_ptr<FocusRules> rules_;
 
-  base::ObserverList<ActivationChangeObserver>::Unchecked activation_observers_;
-  base::ObserverList<aura::client::FocusChangeObserver>::Unchecked
-      focus_observers_;
+  // Activation change may change the focused window, so allow reentrancy.
+  base::ReentrantObserverList<ActivationChangeObserver> activation_observers_;
+  base::ObserverList<aura::client::FocusChangeObserver> focus_observers_;
 
   base::ScopedMultiSourceObservation<aura::Window, aura::WindowObserver>
       observation_manager_{this};
 
   // When true, windows can be activated (but not raised) without clicking.
   bool focus_follows_cursor_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(FocusController);
 };
 
 }  // namespace wm

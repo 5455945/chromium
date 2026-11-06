@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 
 #include <vector>
 
+#include "base/containers/span.h"
 #include "ui/events/events_export.h"
 
 namespace ui {
@@ -27,8 +28,8 @@ EVENTS_EXPORT int EventFlagsFromModifiers(NSUInteger modifiers);
 EVENTS_EXPORT int EventFlagsFromNSEventWithModifiers(NSEvent* event,
                                                      NSUInteger modifiers);
 
-// Returns true for |NSKeyUp| and for |NSFlagsChanged| when modifier key was
-// released.
+// Returns true for |NSEventTypeKeyUp| and for |NSEventTypeFlagsChanged| when
+// modifier key was released.
 EVENTS_EXPORT bool IsKeyUpEvent(NSEvent* event);
 
 // Convert an NSEvent to an opaque serialization using CGEventCreateData.
@@ -36,7 +37,7 @@ EVENTS_EXPORT std::vector<uint8_t> EventToData(NSEvent* event);
 
 // Create an NSEvent from an opaque serialization using CGEventCreateFromData.
 // The result is autoreleased.
-EVENTS_EXPORT NSEvent* EventFromData(const std::vector<uint8_t>& data);
+EVENTS_EXPORT NSEvent* EventFromData(base::span<const uint8_t> data);
 
 }  // namespace ui
 

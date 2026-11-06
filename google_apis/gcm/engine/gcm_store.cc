@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,10 +24,6 @@ void GCMStore::LoadResult::Reset() {
   gservices_settings.clear();
   gservices_digest.clear();
   last_checkin_time = base::Time::FromInternalValue(0LL);
-  last_token_fetch_time = base::Time::FromInternalValue(0LL);
-  last_checkin_accounts.clear();
-  account_mappings.clear();
-  heartbeat_intervals.clear();
   success = false;
   store_does_not_exist = false;
   instance_id_data.clear();

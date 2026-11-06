@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,15 +8,14 @@
 #include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/bindings/core/v8/serialization/serialized_script_value.h"
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
-#include "third_party/blink/renderer/platform/heap/heap_allocator.h"
-#include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
 
 class DOMArrayBufferBase;
 class ImageBitmap;
+class ElementImage;
 
 // Represents the "unpacked" materialized objects created after receiving the
 // transferred contents of a SerializedScriptValue, e.g. from another thread.
@@ -53,6 +52,9 @@ class CORE_EXPORT UnpackedSerializedScriptValue final
   const HeapVector<Member<ImageBitmap>>& ImageBitmaps() const {
     return image_bitmaps_;
   }
+  const HeapVector<Member<ElementImage>>& ElementImages() const {
+    return element_images_;
+  }
 
   using DeserializeOptions = SerializedScriptValue::DeserializeOptions;
   v8::Local<v8::Value> Deserialize(
@@ -68,6 +70,7 @@ class CORE_EXPORT UnpackedSerializedScriptValue final
   // here.
   HeapVector<Member<DOMArrayBufferBase>> array_buffers_;
   HeapVector<Member<ImageBitmap>> image_bitmaps_;
+  HeapVector<Member<ElementImage>> element_images_;
 
   friend class SerializedScriptValue;
 };

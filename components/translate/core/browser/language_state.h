@@ -1,13 +1,17 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_TRANSLATE_CORE_BROWSER_LANGUAGE_STATE_H_
 #define COMPONENTS_TRANSLATE_CORE_BROWSER_LANGUAGE_STATE_H_
 
+#include <optional>
 #include <string>
+#include <string_view>
 
-#include "base/macros.h"
+#include "base/i18n/language_tag.h"
+#include "base/memory/raw_ptr.h"
+#include "components/translate/core/browser/translate_metrics_logger.h"
 
 namespace translate {
 
@@ -21,9 +25,14 @@ class TranslateDriver;
 // - user is on page in language A that they had translated to language B.
 // - user clicks a link in that page that takes them to a page also in language
 //   A.
+// TODO(b/540074979): Rename this class to PageTranslationState.
 class LanguageState {
  public:
   explicit LanguageState(TranslateDriver* driver);
+
+  LanguageState(const LanguageState&) = delete;
+  LanguageState& operator=(const LanguageState&) = delete;
+
   ~LanguageState();
 
   // Should be called when the page did a new navigation (whether it is a main
@@ -31,14 +40,14 @@ class LanguageState {
   void DidNavigate(bool is_same_document_navigation,
                    bool is_main_frame,
                    bool reload,
-                   const std::string& href_translate,
+                   std::string_view href_translate,
                    bool navigation_from_google);
 
   // Should be called when the language of the page has been determined.
-  // |page_level_translation_critiera_met| when false indicates that the browser
+  // |page_level_translation_criteria_met| when false indicates that the browser
   // should not offer to translate the page.
-  void LanguageDetermined(const std::string& page_language,
-                          bool page_level_translation_critiera_met);
+  void LanguageDetermined(std::string_view page_language,
+                          bool page_level_translation_criteria_met);
 
   // Returns the language the current page should be translated to, based on the
   // previous page languages and the transition.  This should be called after
@@ -55,20 +64,53 @@ class LanguageState {
   // Returns the source language represented as a lowercase alphabetic string
   // of length 0 to 3 or "zh-CN" or "zh-TW".
   const std::string& source_language() const { return source_lang_; }
-  void SetSourceLanguage(const std::string& language);
+  void SetSourceLanguage(std::string_view language);
 
   // Returns the current language represented as a lowercase alphabetic string
   // of length 0 to 3 or "zh-CN" or "zh-TW".
   const std::string& current_language() const { return current_lang_; }
-  void SetCurrentLanguage(const std::string& language);
+  void SetCurrentLanguage(std::string_view language);
 
-  bool page_level_translation_critiera_met() const {
-    return page_level_translation_critiera_met_;
+  bool page_level_translation_criteria_met() const {
+    return page_level_translation_criteria_met_;
+  }
+  void SetPageLevelTranslationCriteriaMet(bool value) {
+    page_level_translation_criteria_met_ = value;
   }
 
   // Whether the page is currently in the process of being translated.
   bool translation_pending() const { return translation_pending_; }
-  void set_translation_pending(bool value) { translation_pending_ = value; }
+  void set_translation_pending(bool value) {
+    translation_pending_ = value;
+    if (!translation_pending_) {
+      ClearPendingTranslationLanguages();
+    }
+  }
+
+  // Returns the source language of the pending translation, or std::nullopt if
+  // no translation is pending.
+  const std::optional<base::i18n::LanguageTag>& pending_source_language() const {
+    return pending_source_lang_;
+  }
+
+  // Returns the target language of the pending translation, or std::nullopt if
+  // no translation is pending.
+  const std::optional<base::i18n::LanguageTag>& pending_target_language() const {
+    return pending_target_lang_;
+  }
+
+  // Caches the source and target languages for a pending translation.
+  void SetPendingTranslationLanguages(base::i18n::LanguageTag source,
+                                      base::i18n::LanguageTag target) {
+    pending_source_lang_ = std::move(source);
+    pending_target_lang_ = std::move(target);
+  }
+
+  // Clears the cached source and target languages for the pending translation.
+  void ClearPendingTranslationLanguages() {
+    pending_source_lang_.reset();
+    pending_target_lang_.reset();
+  }
 
   // Whether an error occured during translation.
   bool translation_error() const { return translation_error_; }
@@ -82,18 +124,42 @@ class LanguageState {
   bool translate_enabled() const { return translate_enabled_; }
   void SetTranslateEnabled(bool value);
 
+  // The type of the last translation that was initiated, if any.
+  TranslationType translation_type() const { return translation_type_; }
+  void SetTranslationType(TranslationType type) { translation_type_ = type; }
+
   // Whether the current page's language is different from the previous
   // language.
   bool HasLanguageChanged() const;
 
-  std::string href_translate() const { return href_translate_; }
+  const std::string& href_translate() const { return href_translate_; }
   bool navigation_from_google() const { return navigation_from_google_; }
 
-  std::string GetPredefinedTargetLanguage() const {
+  const std::string& GetPredefinedTargetLanguage() const {
     return predefined_target_language_;
   }
-  void SetPredefinedTargetLanguage(const std::string& language) {
-    predefined_target_language_ = language;
+  void SetPredefinedTargetLanguage(const base::i18n::LanguageTag& language,
+                                   bool should_auto_translate);
+
+  const std::optional<base::i18n::LanguageTag>&
+  should_auto_translate_to_predefined_target_language() const {
+    return should_auto_translate_to_predefined_target_language_;
+  }
+
+  // The document's PDF translatability status. Note that since PDF translatability
+  // is checked asynchronously on the browser side, this state may change
+  // dynamically. Only relevant if the document is a PDF.
+  enum class PdfTranslatabilityStatus {
+    kNotChecked,
+    kTranslatable,
+    kUntranslatable,
+  };
+
+  PdfTranslatabilityStatus pdf_translatability_status() const {
+    return pdf_translatability_status_;
+  }
+  void set_pdf_translatability_status(PdfTranslatabilityStatus status) {
+    pdf_translatability_status_ = status;
   }
 
  private:
@@ -115,14 +181,14 @@ class LanguageState {
 
   // Provides driver-level context to the shared code of the component. Must
   // outlive this object.
-  TranslateDriver* translate_driver_;
+  raw_ptr<TranslateDriver> translate_driver_;
 
   // Whether it is OK to offer to translate the page. Translation is not offered
   // if we cannot determine the source language. In addition, some pages
   // explicitly specify that they should not be translated by the browser (this
   // is the case for GMail for example, which provides its own translation
   // features).
-  bool page_level_translation_critiera_met_;
+  bool page_level_translation_criteria_met_;
 
   // Whether a translation is currently pending.
   // This is needed to avoid sending duplicate translate requests to a page.
@@ -131,6 +197,10 @@ class LanguageState {
   // TODO(jcampan): make the client send the language just once per navigation
   //                then we can get rid of that state.
   bool translation_pending_;
+
+  // Cache source/target languages for pending translations (e.g. for PDFs).
+  std::optional<base::i18n::LanguageTag> pending_source_lang_;
+  std::optional<base::i18n::LanguageTag> pending_target_lang_;
 
   // Whether an error occured during translation.
   bool translation_error_;
@@ -146,6 +216,9 @@ class LanguageState {
   // Whether the Translate is enabled.
   bool translate_enabled_;
 
+  // The type of the current translation or uninitialized if there is none.
+  TranslationType translation_type_;
+
   // The value of the hrefTranslate attribute on the link that initiated the
   // current navigation, if it was specified.
   std::string href_translate_;
@@ -157,7 +230,13 @@ class LanguageState {
   // Target language set by client.
   std::string predefined_target_language_;
 
-  DISALLOW_COPY_AND_ASSIGN(LanguageState);
+  // Indicates that the page should be automatically translated to
+  // |predefined_target_language_| if possible.
+  std::optional<base::i18n::LanguageTag>
+      should_auto_translate_to_predefined_target_language_;
+
+  PdfTranslatabilityStatus pdf_translatability_status_ =
+      PdfTranslatabilityStatus::kNotChecked;
 };
 
 }  // namespace translate

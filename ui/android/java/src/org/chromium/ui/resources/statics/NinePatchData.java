@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,47 +8,36 @@ import android.graphics.Bitmap;
 import android.graphics.NinePatch;
 import android.graphics.Rect;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+
 import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
-/**
- * A helper class to decode and expose relevant 9-patch data from a Bitmap.
- */
+/** A helper class to decode and expose relevant 9-patch data from a Bitmap. */
+@NullMarked
 public class NinePatchData {
-    private final int mWidth;
-    private final int mHeight;
     private final Rect mPadding;
-    private final int[] mDivX;
-    private final int[] mDivY;
-
-    private Rect mAperture;
+    private final Rect mAperture;
 
     /**
      * Creates a {@link NinePatchData} that stores 9-patch metadata.
-     * @param width   The width of the underlying bitmap.
-     * @param height  The height of the underlying bitmap.
-     * @param padding The padding of the 9-patch for the content area.  This padding is a set of
-     *                insets (left = left padding, top = top padding, right = right padding,
-     *                bottom = bottom padding).
-     * @param divX    A run-length encoded list of stretch regions along the x dimension.  The
-     *                regions will go from 0 -> divX[0] - 1, divX[0] -> divX[1] - 1, etc..
-     * @param divY    A run-length encoded list of stretch regions along the y dimension.  The
-     *                regions will go from 0 -> divY[0] - 1, divY[0] -> divY[1] - 1, etc..
+     *
+     * @param width The width of the underlying bitmap.
+     * @param height The height of the underlying bitmap.
+     * @param padding The padding of the 9-patch for the content area. This padding is a set of
+     *     insets (left = left padding, top = top padding, right = right padding, bottom = bottom
+     *     padding).
+     * @param divX A run-length encoded list of stretch regions along the x dimension. The regions
+     *     will go from 0 -> divX[0] - 1, divX[0] -> divX[1] - 1, etc..
+     * @param divY A run-length encoded list of stretch regions along the y dimension. The regions
+     *     will go from 0 -> divY[0] - 1, divY[0] -> divY[1] - 1, etc..
      */
     private NinePatchData(int width, int height, Rect padding, int[] divX, int[] divY) {
-        mWidth = width;
-        mHeight = height;
-        mPadding = new Rect(
-                padding.left, padding.top, mWidth - padding.right, mHeight - padding.bottom);
-
-        mDivX = new int[divX.length];
-        mDivY = new int[divY.length];
-
-        System.arraycopy(divX, 0, mDivX, 0, divX.length);
-        System.arraycopy(divY, 0, mDivY, 0, divY.length);
-
-        mAperture = new Rect(mDivX[0], mDivY[0], mDivX[1], mDivY[1]);
+        mPadding =
+                new Rect(padding.left, padding.top, width - padding.right, height - padding.bottom);
+        mAperture = new Rect(divX[0], divY[0], divX[1], divY[1]);
     }
 
     /**
@@ -69,12 +58,12 @@ public class NinePatchData {
 
     /**
      * Attempts to decode 9-patch data from a {@link Bitmap}.
+     *
      * @param bitmap The {@link Bitmap} to check.
-     * @return       An instance of {@link NinePatchData} representing the 9-patch information
-     *               encoded in {@code bitmap} or {@code null} if the {@link Bitmap} wasn't a
-     *               9-patch.
+     * @return An instance of {@link NinePatchData} representing the 9-patch information encoded in
+     *     {@code bitmap} or {@code null} if the {@link Bitmap} wasn't a 9-patch.
      */
-    public static NinePatchData create(Bitmap bitmap) {
+    public static @Nullable NinePatchData create(@Nullable Bitmap bitmap) {
         if (bitmap == null) return null;
 
         try {
@@ -88,11 +77,11 @@ public class NinePatchData {
 
             // int8_t numXDivs
             int numDivX = buffer.get();
-            if (numDivX == 0 || (numDivX & 0x01) != 0) return null;
+            if (numDivX <= 0 || (numDivX & 0x01) != 0) return null;
 
             // int8_t numYDivs
             int numDivY = buffer.get();
-            if (numDivY == 0 || (numDivY & 0x01) != 0) return null;
+            if (numDivY <= 0 || (numDivY & 0x01) != 0) return null;
 
             // int8_t numColors
             buffer.get();

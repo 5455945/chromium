@@ -1,15 +1,19 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/toolbar/toolbar_actions_model.h"
 
+#include "base/memory/raw_ptr.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "content/public/test/browser_test.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/extension_set.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -25,8 +29,14 @@ constexpr char kExtension3Name[] = "bar";
 
 class ToolbarActionsModelBrowserTest : public extensions::ExtensionBrowserTest {
  public:
-  ToolbarActionsModelBrowserTest() = default;
+  ToolbarActionsModelBrowserTest() {
+    scoped_feature_list_.InitAndDisableFeature(
+        features::kExtensionsPinnedByDefault);
+  }
   ~ToolbarActionsModelBrowserTest() override = default;
+
+ protected:
+  base::test::ScopedFeatureList scoped_feature_list_;
 
   void SetUpOnMainThread() override {
     extensions::ExtensionBrowserTest::SetUpOnMainThread();
@@ -34,11 +44,16 @@ class ToolbarActionsModelBrowserTest : public extensions::ExtensionBrowserTest {
     ASSERT_TRUE(toolbar_model_);
   }
 
+  void TearDownOnMainThread() override {
+    toolbar_model_ = nullptr;
+    extensions::ExtensionBrowserTest::TearDownOnMainThread();
+  }
+
   ToolbarActionsModel* toolbar_model() { return toolbar_model_; }
   base::HistogramTester* histogram_tester() { return &histogram_tester_; }
 
  private:
-  ToolbarActionsModel* toolbar_model_ = nullptr;
+  raw_ptr<ToolbarActionsModel> toolbar_model_ = nullptr;
   base::HistogramTester histogram_tester_;
 };
 
@@ -117,8 +132,9 @@ IN_PROC_BROWSER_TEST_F(ToolbarActionsModelBrowserTest, PinnedStatePersistence) {
   auto get_extension_by_name =
       [registry](const char* name) -> const extensions::Extension* {
     for (const auto& extension : registry->enabled_extensions()) {
-      if (extension->name() == name)
+      if (extension->name() == name) {
         return extension.get();
+      }
     }
     return nullptr;
   };
@@ -139,4 +155,15 @@ IN_PROC_BROWSER_TEST_F(ToolbarActionsModelBrowserTest, PinnedStatePersistence) {
                   extension1->id(), extension2->id(), extension3->id()));
   EXPECT_THAT(toolbar_model()->pinned_action_ids(),
               ::testing::ElementsAre(extension3->id(), extension2->id()));
+}
+
+// Test that a site is NOT restricted or policy-blocked when there are no
+// extensions installed.
+IN_PROC_BROWSER_TEST_F(ToolbarActionsModelBrowserTest,
+                       ActionsModelRestrictedUrlsWithNoExtensions) {
+  EXPECT_TRUE(toolbar_model()->action_ids().empty());
+
+  GURL example_url("http://www.example.com");
+  EXPECT_FALSE(toolbar_model()->IsRestrictedUrl(example_url));
+  EXPECT_FALSE(toolbar_model()->IsPolicyBlockedHost(example_url));
 }

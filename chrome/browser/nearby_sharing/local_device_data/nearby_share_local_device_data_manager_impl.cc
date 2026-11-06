@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,20 +7,22 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/notreached.h"
 #include "base/rand_util.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/nearby_sharing/common/nearby_share_prefs.h"
-#include "chrome/browser/nearby_sharing/common/nearby_share_profile_info_provider.h"
+#include "chrome/browser/nearby_sharing/common/nearby_share_switches.h"
 #include "chrome/browser/nearby_sharing/local_device_data/nearby_share_device_data_updater.h"
 #include "chrome/browser/nearby_sharing/local_device_data/nearby_share_device_data_updater_impl.h"
-#include "chrome/browser/nearby_sharing/scheduling/nearby_share_scheduler.h"
-#include "chrome/browser/nearby_sharing/scheduling/nearby_share_scheduler_factory.h"
 #include "chrome/grit/generated_resources.h"
+#include "chromeos/ash/components/nearby/common/scheduling/nearby_scheduler.h"
+#include "chromeos/ash/components/nearby/common/scheduling/nearby_scheduler_factory.h"
 #include "components/prefs/pref_service.h"
+#include "components/user_manager/user.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/chromeos/devicetype_utils.h"
 
@@ -39,10 +41,8 @@ constexpr std::array<char, 36> kAlphaNumericChars = {
     'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X',
     'Y', 'Z', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'};
 
-constexpr base::TimeDelta kUpdateDeviceDataTimeout =
-    base::TimeDelta::FromSeconds(30);
-constexpr base::TimeDelta kDeviceDataDownloadPeriod =
-    base::TimeDelta::FromHours(12);
+constexpr base::TimeDelta kUpdateDeviceDataTimeout = base::Seconds(30);
+constexpr base::TimeDelta kDeviceDataDownloadPeriod = base::Hours(12);
 
 // Returns a truncated version of |name| that is |overflow_length| characters
 // too long. For example, name="Reallylongname" with overflow_length=5 will
@@ -50,7 +50,7 @@ constexpr base::TimeDelta kDeviceDataDownloadPeriod =
 std::string GetTruncatedName(std::string name, size_t overflow_length) {
   std::string ellipsis("...");
   size_t max_name_length = name.length() - overflow_length - ellipsis.length();
-  DCHECK_GT(max_name_length, 0u);
+  CHECK_GT(max_name_length, 0u, base::NotFatalUntil::M160);
   std::string truncated;
   base::TruncateUTF8ToByteSize(name, max_name_length, &truncated);
   truncated.append(ellipsis);
@@ -66,16 +66,14 @@ NearbyShareLocalDeviceDataManagerImpl::Factory*
 // static
 std::unique_ptr<NearbyShareLocalDeviceDataManager>
 NearbyShareLocalDeviceDataManagerImpl::Factory::Create(
-    PrefService* pref_service,
-    NearbyShareClientFactory* http_client_factory,
-    NearbyShareProfileInfoProvider* profile_info_provider) {
+    user_manager::User& user,
+    NearbyShareClientFactory* http_client_factory) {
   if (test_factory_) {
-    return test_factory_->CreateInstance(pref_service, http_client_factory,
-                                         profile_info_provider);
+    return test_factory_->CreateInstance(user, http_client_factory);
   }
 
-  return base::WrapUnique(new NearbyShareLocalDeviceDataManagerImpl(
-      pref_service, http_client_factory, profile_info_provider));
+  return base::WrapUnique(
+      new NearbyShareLocalDeviceDataManagerImpl(user, http_client_factory));
 }
 
 // static
@@ -87,77 +85,85 @@ void NearbyShareLocalDeviceDataManagerImpl::Factory::SetFactoryForTesting(
 NearbyShareLocalDeviceDataManagerImpl::Factory::~Factory() = default;
 
 NearbyShareLocalDeviceDataManagerImpl::NearbyShareLocalDeviceDataManagerImpl(
-    PrefService* pref_service,
-    NearbyShareClientFactory* http_client_factory,
-    NearbyShareProfileInfoProvider* profile_info_provider)
-    : pref_service_(pref_service),
-      profile_info_provider_(profile_info_provider),
+    user_manager::User& user,
+    NearbyShareClientFactory* http_client_factory)
+    : user_(user),
       device_data_updater_(NearbyShareDeviceDataUpdaterImpl::Factory::Create(
           GetId(),
           kUpdateDeviceDataTimeout,
           http_client_factory)),
       download_device_data_scheduler_(
-          NearbyShareSchedulerFactory::CreatePeriodicScheduler(
+          ash::nearby::NearbySchedulerFactory::CreatePeriodicScheduler(
               kDeviceDataDownloadPeriod,
               /*retry_failures=*/true,
               /*require_connectivity=*/true,
               prefs::kNearbySharingSchedulerDownloadDeviceDataPrefName,
-              pref_service_,
+              user_->GetProfilePrefs(),
               base::BindRepeating(&NearbyShareLocalDeviceDataManagerImpl::
                                       OnDownloadDeviceDataRequested,
-                                  base::Unretained(this)))) {}
+                                  base::Unretained(this)),
+              Feature::NS)) {}
 
 NearbyShareLocalDeviceDataManagerImpl::
     ~NearbyShareLocalDeviceDataManagerImpl() = default;
 
 std::string NearbyShareLocalDeviceDataManagerImpl::GetId() {
+  auto* pref_service = user_->GetProfilePrefs();
   std::string id =
-      pref_service_->GetString(prefs::kNearbySharingDeviceIdPrefName);
+      pref_service->GetString(prefs::kNearbySharingDeviceIdPrefName);
   if (!id.empty())
     return id;
 
-  for (size_t i = 0; i < kDeviceIdLength; ++i)
-    id += kAlphaNumericChars[base::RandGenerator(kAlphaNumericChars.size())];
+  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+  if (command_line->HasSwitch(switches::kNearbyShareDeviceID)) {
+    id = command_line->GetSwitchValueASCII(switches::kNearbyShareDeviceID);
+  } else {
+    for (size_t i = 0; i < kDeviceIdLength; ++i)
+      id += kAlphaNumericChars[base::RandGenerator(kAlphaNumericChars.size())];
+  }
 
-  pref_service_->SetString(prefs::kNearbySharingDeviceIdPrefName, id);
+  pref_service->SetString(prefs::kNearbySharingDeviceIdPrefName, id);
 
   return id;
 }
 
 std::string NearbyShareLocalDeviceDataManagerImpl::GetDeviceName() const {
-  std::string device_name =
-      pref_service_->GetString(prefs::kNearbySharingDeviceNamePrefName);
+  std::string device_name = user_->GetProfilePrefs()->GetString(
+      prefs::kNearbySharingDeviceNamePrefName);
   return device_name.empty() ? GetDefaultDeviceName() : device_name;
 }
 
-absl::optional<std::string> NearbyShareLocalDeviceDataManagerImpl::GetFullName()
+std::optional<std::string> NearbyShareLocalDeviceDataManagerImpl::GetFullName()
     const {
-  if (pref_service_->FindPreference(prefs::kNearbySharingFullNamePrefName)
+  auto* pref_service = user_->GetProfilePrefs();
+  if (pref_service->FindPreference(prefs::kNearbySharingFullNamePrefName)
           ->IsDefaultValue()) {
-    return absl::nullopt;
+    return std::nullopt;
   }
 
-  return pref_service_->GetString(prefs::kNearbySharingFullNamePrefName);
+  return pref_service->GetString(prefs::kNearbySharingFullNamePrefName);
 }
 
-absl::optional<std::string> NearbyShareLocalDeviceDataManagerImpl::GetIconUrl()
+std::optional<std::string> NearbyShareLocalDeviceDataManagerImpl::GetIconUrl()
     const {
-  if (pref_service_->FindPreference(prefs::kNearbySharingIconUrlPrefName)
+  auto* pref_service = user_->GetProfilePrefs();
+  if (pref_service->FindPreference(prefs::kNearbySharingIconUrlPrefName)
           ->IsDefaultValue()) {
-    return absl::nullopt;
+    return std::nullopt;
   }
 
-  return pref_service_->GetString(prefs::kNearbySharingIconUrlPrefName);
+  return pref_service->GetString(prefs::kNearbySharingIconUrlPrefName);
 }
 
-absl::optional<std::string>
-NearbyShareLocalDeviceDataManagerImpl::GetIconToken() const {
-  if (pref_service_->FindPreference(prefs::kNearbySharingIconTokenPrefName)
+std::optional<std::string> NearbyShareLocalDeviceDataManagerImpl::GetIconToken()
+    const {
+  auto* pref_service = user_->GetProfilePrefs();
+  if (pref_service->FindPreference(prefs::kNearbySharingIconTokenPrefName)
           ->IsDefaultValue()) {
-    return absl::nullopt;
+    return std::nullopt;
   }
 
-  return pref_service_->GetString(prefs::kNearbySharingIconTokenPrefName);
+  return pref_service->GetString(prefs::kNearbySharingIconTokenPrefName);
 }
 
 nearby_share::mojom::DeviceNameValidationResult
@@ -184,7 +190,8 @@ NearbyShareLocalDeviceDataManagerImpl::SetDeviceName(const std::string& name) {
   if (error != nearby_share::mojom::DeviceNameValidationResult::kValid)
     return error;
 
-  pref_service_->SetString(prefs::kNearbySharingDeviceNamePrefName, name);
+  user_->GetProfilePrefs()->SetString(prefs::kNearbySharingDeviceNamePrefName,
+                                      name);
 
   NotifyLocalDeviceDataChanged(/*did_device_name_change=*/true,
                                /*did_full_name_change=*/false,
@@ -198,21 +205,21 @@ void NearbyShareLocalDeviceDataManagerImpl::DownloadDeviceData() {
 }
 
 void NearbyShareLocalDeviceDataManagerImpl::UploadContacts(
-    std::vector<nearbyshare::proto::Contact> contacts,
+    std::vector<nearby::sharing::proto::Contact> contacts,
     UploadCompleteCallback callback) {
   device_data_updater_->UpdateDeviceData(
       std::move(contacts),
-      /*certificates=*/absl::nullopt,
+      /*certificates=*/std::nullopt,
       base::BindOnce(
           &NearbyShareLocalDeviceDataManagerImpl::OnUploadContactsFinished,
           base::Unretained(this), std::move(callback)));
 }
 
 void NearbyShareLocalDeviceDataManagerImpl::UploadCertificates(
-    std::vector<nearbyshare::proto::PublicCertificate> certificates,
+    std::vector<nearby::sharing::proto::PublicCertificate> certificates,
     UploadCompleteCallback callback) {
   device_data_updater_->UpdateDeviceData(
-      /*contacts=*/absl::nullopt, std::move(certificates),
+      /*contacts=*/std::nullopt, std::move(certificates),
       base::BindOnce(
           &NearbyShareLocalDeviceDataManagerImpl::OnUploadCertificatesFinished,
           base::Unretained(this), std::move(callback)));
@@ -231,18 +238,18 @@ void NearbyShareLocalDeviceDataManagerImpl::OnStop() {
 std::string NearbyShareLocalDeviceDataManagerImpl::GetDefaultDeviceName()
     const {
   std::u16string device_type = ui::GetChromeOSDeviceName();
-  absl::optional<std::u16string> given_name =
-      profile_info_provider_->GetGivenName();
-  if (!given_name)
+  std::u16string given_name = user_->GetGivenName();
+  if (given_name.empty()) {
     return base::UTF16ToUTF8(device_type);
+  }
 
   std::string device_name = l10n_util::GetStringFUTF8(
-      IDS_NEARBY_DEFAULT_DEVICE_NAME, *given_name, device_type);
+      IDS_NEARBY_DEFAULT_DEVICE_NAME, given_name, device_type);
   if (device_name.length() <= kNearbyShareDeviceNameMaxLength)
     return device_name;
 
   std::string truncated_name =
-      GetTruncatedName(base::UTF16ToUTF8(*given_name),
+      GetTruncatedName(base::UTF16ToUTF8(given_name),
                        device_name.length() - kNearbyShareDeviceNameMaxLength);
   return l10n_util::GetStringFUTF8(IDS_NEARBY_DEFAULT_DEVICE_NAME,
                                    base::UTF8ToUTF16(truncated_name),
@@ -251,15 +258,16 @@ std::string NearbyShareLocalDeviceDataManagerImpl::GetDefaultDeviceName()
 
 void NearbyShareLocalDeviceDataManagerImpl::OnDownloadDeviceDataRequested() {
   device_data_updater_->UpdateDeviceData(
-      /*contacts=*/absl::nullopt,
-      /*certificates=*/absl::nullopt,
+      /*contacts=*/std::nullopt,
+      /*certificates=*/std::nullopt,
       base::BindOnce(
           &NearbyShareLocalDeviceDataManagerImpl::OnDownloadDeviceDataFinished,
           base::Unretained(this)));
 }
 
 void NearbyShareLocalDeviceDataManagerImpl::OnDownloadDeviceDataFinished(
-    const absl::optional<nearbyshare::proto::UpdateDeviceResponse>& response) {
+    const std::optional<nearby::sharing::proto::UpdateDeviceResponse>&
+        response) {
   if (response)
     HandleUpdateDeviceResponse(response);
 
@@ -269,8 +277,9 @@ void NearbyShareLocalDeviceDataManagerImpl::OnDownloadDeviceDataFinished(
 
 void NearbyShareLocalDeviceDataManagerImpl::OnUploadContactsFinished(
     UploadCompleteCallback callback,
-    const absl::optional<nearbyshare::proto::UpdateDeviceResponse>& response) {
-  // NOTE(http://crbug.com/1211189): Only process the UpdateDevice response for
+    const std::optional<nearby::sharing::proto::UpdateDeviceResponse>&
+        response) {
+  // NOTE(http://crbug.com/40767495): Only process the UpdateDevice response for
   // DownloadDeviceData() calls. We want avoid infinite loops if the full name
   // or icon URL unexpectedly change.
 
@@ -279,8 +288,9 @@ void NearbyShareLocalDeviceDataManagerImpl::OnUploadContactsFinished(
 
 void NearbyShareLocalDeviceDataManagerImpl::OnUploadCertificatesFinished(
     UploadCompleteCallback callback,
-    const absl::optional<nearbyshare::proto::UpdateDeviceResponse>& response) {
-  // NOTE(http://crbug.com/1211189): Only process the UpdateDevice response for
+    const std::optional<nearby::sharing::proto::UpdateDeviceResponse>&
+        response) {
+  // NOTE(http://crbug.com/40767495): Only process the UpdateDevice response for
   // DownloadDeviceData() calls. We want avoid infinite loops if the full name
   // or icon URL unexpectedly change.
 
@@ -288,17 +298,20 @@ void NearbyShareLocalDeviceDataManagerImpl::OnUploadCertificatesFinished(
 }
 
 void NearbyShareLocalDeviceDataManagerImpl::HandleUpdateDeviceResponse(
-    const absl::optional<nearbyshare::proto::UpdateDeviceResponse>& response) {
+    const std::optional<nearby::sharing::proto::UpdateDeviceResponse>&
+        response) {
   if (!response)
     return;
 
+  auto* pref_service = user_->GetProfilePrefs();
+
   bool did_full_name_change = response->person_name() != GetFullName();
   if (did_full_name_change) {
-    pref_service_->SetString(prefs::kNearbySharingFullNamePrefName,
-                             response->person_name());
+    pref_service->SetString(prefs::kNearbySharingFullNamePrefName,
+                            response->person_name());
   }
 
-  // NOTE(http://crbug.com/1211189): An icon URL can change without the
+  // NOTE(http://crbug.com/40767495): An icon URL can change without the
   // underlying image changing. For example, icon URLs for some child accounts
   // can rotate on every UpdateDevice RPC call; a timestamp is included in the
   // URL. The icon token is used to detect changes in the underlying image. If a
@@ -312,12 +325,12 @@ void NearbyShareLocalDeviceDataManagerImpl::HandleUpdateDeviceResponse(
   bool did_icon_token_change = response->image_token() != GetIconToken();
   bool did_icon_change = did_icon_url_change && did_icon_token_change;
   if (did_icon_url_change) {
-    pref_service_->SetString(prefs::kNearbySharingIconUrlPrefName,
-                             response->image_url());
+    pref_service->SetString(prefs::kNearbySharingIconUrlPrefName,
+                            response->image_url());
   }
   if (did_icon_token_change) {
-    pref_service_->SetString(prefs::kNearbySharingIconTokenPrefName,
-                             response->image_token());
+    pref_service->SetString(prefs::kNearbySharingIconTokenPrefName,
+                            response->image_token());
   }
 
   if (!did_full_name_change && !did_icon_change)

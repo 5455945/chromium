@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,39 +8,43 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/byte_size.h"
+#include "base/containers/flat_set.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/strings/string_piece.h"
 #include "net/base/completion_once_callback.h"
 #include "net/base/io_buffer.h"
+#include "net/base/net_errors.h"
 #include "net/base/net_export.h"
 #include "net/base/request_priority.h"
 #include "net/log/net_log_with_source.h"
-#include "net/third_party/quiche/src/spdy/core/spdy_header_block.h"
+#include "net/third_party/quiche/src/quiche/common/http/http_header_block.h"
 #include "net/websockets/websocket_basic_stream_adapters.h"
 #include "net/websockets/websocket_handshake_stream_base.h"
 #include "net/websockets/websocket_stream.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace net {
 
-struct LoadTimingInfo;
-class SSLInfo;
-class IOBuffer;
-class SSLCertRequestInfo;
-class IPEndPoint;
 class HttpNetworkSession;
-struct NetErrorDetails;
-class HttpStream;
+class HttpRequestHeaders;
 class HttpResponseHeaders;
-struct HttpRequestInfo;
 class HttpResponseInfo;
+class HttpStream;
+class IOBuffer;
+class IPEndPoint;
+class SSLInfo;
 class SpdySession;
-struct AlternativeService;
+class SpdyStream;
 class SpdyStreamRequest;
+struct AlternativeService;
+struct HttpRequestInfo;
+struct LoadTimingInfo;
+struct NetErrorDetails;
 struct WebSocketExtensionParams;
 
 class NET_EXPORT_PRIVATE WebSocketHttp2HandshakeStream
@@ -54,13 +58,17 @@ class NET_EXPORT_PRIVATE WebSocketHttp2HandshakeStream
       std::vector<std::string> requested_sub_protocols,
       std::vector<std::string> requested_extensions,
       WebSocketStreamRequestAPI* request,
-      std::vector<std::string> dns_aliases);
+      base::flat_set<std::string> dns_aliases);
+
+  WebSocketHttp2HandshakeStream(const WebSocketHttp2HandshakeStream&) = delete;
+  WebSocketHttp2HandshakeStream& operator=(
+      const WebSocketHttp2HandshakeStream&) = delete;
 
   ~WebSocketHttp2HandshakeStream() override;
 
   // HttpStream methods.
-  int InitializeStream(const HttpRequestInfo* request_info,
-                       bool can_send_early,
+  void RegisterRequest(const HttpRequestInfo* request_info) override;
+  int InitializeStream(bool can_send_early,
                        RequestPriority priority,
                        const NetLogWithSource& net_log,
                        CompletionOnceCallback callback) override;
@@ -76,20 +84,22 @@ class NET_EXPORT_PRIVATE WebSocketHttp2HandshakeStream
   bool IsConnectionReused() const override;
   void SetConnectionReused() override;
   bool CanReuseConnection() const override;
-  int64_t GetTotalReceivedBytes() const override;
-  int64_t GetTotalSentBytes() const override;
+  base::ByteSize GetTotalReceivedBytes() const override;
+  base::ByteSize GetTotalSentBytes() const override;
   bool GetAlternativeService(
       AlternativeService* alternative_service) const override;
   bool GetLoadTimingInfo(LoadTimingInfo* load_timing_info) const override;
   void GetSSLInfo(SSLInfo* ssl_info) override;
-  void GetSSLCertRequestInfo(SSLCertRequestInfo* cert_request_info) override;
-  bool GetRemoteEndpoint(IPEndPoint* endpoint) override;
+  int GetRemoteEndpoint(IPEndPoint* endpoint) override;
   void Drain(HttpNetworkSession* session) override;
   void SetPriority(RequestPriority priority) override;
+  void PopulateLoadTimingInternalInfo(
+      LoadTimingInternalInfo* load_timing_internal_info) const override;
   void PopulateNetErrorDetails(NetErrorDetails* details) override;
-  HttpStream* RenewStreamForAuth() override;
-  const std::vector<std::string>& GetDnsAliases() const override;
-  base::StringPiece GetAcceptChViaAlps() const override;
+  std::unique_ptr<HttpStream> RenewStreamForAuth() override;
+  const base::flat_set<std::string>& GetDnsAliases() const override;
+  std::string_view GetAcceptChViaAlps() const override;
+  void SetHTTP11Required() override;
 
   // WebSocketHandshakeStreamBase methods.
 
@@ -99,12 +109,14 @@ class NET_EXPORT_PRIVATE WebSocketHttp2HandshakeStream
   // Upgrade() has been called and should be disposed of as soon as possible.
   std::unique_ptr<WebSocketStream> Upgrade() override;
 
+  bool CanReadFromStream() const override;
+
   base::WeakPtr<WebSocketHandshakeStreamBase> GetWeakPtr() override;
 
   // WebSocketSpdyStreamAdapter::Delegate methods.
   void OnHeadersSent() override;
   void OnHeadersReceived(
-      const spdy::Http2HeaderBlock& response_headers) override;
+      const quiche::HttpHeaderBlock& response_headers) override;
   void OnClose(int status) override;
 
   // Called by |spdy_stream_request_| when requested stream is ready.
@@ -120,20 +132,22 @@ class NET_EXPORT_PRIVATE WebSocketHttp2HandshakeStream
 
   void OnFailure(const std::string& message,
                  int net_error,
-                 absl::optional<int> response_code);
+                 std::optional<int> response_code);
 
-  HandshakeResult result_;
+  void OnHandshakeConfirmed(CompletionOnceCallback callback, int rv);
+
+  HandshakeResult result_ = HandshakeResult::HTTP2_INCOMPLETE;
 
   // The connection to open the Websocket stream on.
   base::WeakPtr<SpdySession> session_;
 
   // Owned by another object.
   // |connect_delegate| will live during the lifetime of this object.
-  WebSocketStream::ConnectDelegate* const connect_delegate_;
+  const raw_ptr<WebSocketStream::ConnectDelegate> connect_delegate_;
 
-  HttpResponseInfo* http_response_info_;
+  raw_ptr<HttpResponseInfo> http_response_info_ = nullptr;
 
-  spdy::Http2HeaderBlock http2_request_headers_;
+  quiche::HttpHeaderBlock http2_request_headers_;
 
   // The sub-protocols we requested.
   std::vector<std::string> requested_sub_protocols_;
@@ -141,9 +155,9 @@ class NET_EXPORT_PRIVATE WebSocketHttp2HandshakeStream
   // The extensions we requested.
   std::vector<std::string> requested_extensions_;
 
-  WebSocketStreamRequestAPI* const stream_request_;
+  const raw_ptr<WebSocketStreamRequestAPI> stream_request_;
 
-  const HttpRequestInfo* request_info_;
+  raw_ptr<const HttpRequestInfo> request_info_ = nullptr;
 
   RequestPriority priority_;
 
@@ -159,22 +173,15 @@ class NET_EXPORT_PRIVATE WebSocketHttp2HandshakeStream
   // This can be passed on to WebSocketBasicStream when created.
   std::unique_ptr<WebSocketSpdyStreamAdapter> stream_adapter_;
 
-  // Temporary variables to track where stream_adapter_ was reset.
-  // TODO(ricea): Remove these once the cause of https://crbug.com/1215989
-  // is established.
-  bool stream_adapter_reset_by_onclose_ = false;
-  bool stream_adapter_reset_by_close_ = false;
-  bool stream_adapter_moved_by_upgrade_ = false;
-
   // True if |stream_| has been created then closed.
-  bool stream_closed_;
+  bool stream_closed_ = false;
 
   // The error code corresponding to the reason for closing the stream.
   // Only meaningful if |stream_closed_| is true.
-  int stream_error_;
+  int stream_error_ = OK;
 
   // True if complete response headers have been received.
-  bool response_headers_complete_;
+  bool response_headers_complete_ = false;
 
   // Save callback provided in asynchronous HttpStream methods.
   CompletionOnceCallback callback_;
@@ -185,19 +192,16 @@ class NET_EXPORT_PRIVATE WebSocketHttp2HandshakeStream
   // The extension(s) selected by the server.
   std::string extensions_;
 
-  // The extension parameters. The class is defined in the implementation file
-  // to avoid including extension-related header files here.
+  // The extension parameters negotiated during the handshake.
   std::unique_ptr<WebSocketExtensionParams> extension_params_;
 
-  // Stores any DNS aliases for the remote endpoint. The alias chain is
-  // preserved in reverse order, from canonical name (i.e. address record name)
-  // through to query name. These are stored in the stream instead of the
-  // session due to complications related to IP-pooling.
-  std::vector<std::string> dns_aliases_;
+  // Stores any DNS aliases for the remote endpoint. Includes all known aliases,
+  // e.g. from A, AAAA, or HTTPS, not just from the address used for the
+  // connection, in no particular order. These are stored in the stream instead
+  // of the session due to complications related to IP-pooling.
+  base::flat_set<std::string> dns_aliases_;
 
   base::WeakPtrFactory<WebSocketHttp2HandshakeStream> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(WebSocketHttp2HandshakeStream);
 };
 
 }  // namespace net

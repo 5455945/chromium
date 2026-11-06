@@ -1,4 +1,4 @@
-// Copyright (c) 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,15 @@
 
 
 function copyTextData(text) {
-  var input = document.getElementById('copy_text');
+  const input = document.getElementById('copy_text');
   input.value = text;
   input.focus();
   input.select();
-  if (document.execCommand('Copy'))
+  if (document.execCommand('Copy')) {
     chrome.test.succeed();
-  else
+  } else {
     chrome.test.fail('copy text failed');
+  }
 }
 
 function testCopyFoo() {
@@ -27,6 +28,6 @@ function testCopyBar() {
 chrome.test.getConfig(function(config) {
   chrome.test.runTests([
     testCopyFoo,
-    testCopyBar
+    testCopyBar,
   ]);
-})
+});

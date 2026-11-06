@@ -1,5 +1,5 @@
-#!/usr/bin/env python
-# Copyright (c) 2016 The Chromium Authors. All rights reserved.
+#!/usr/bin/env python3
+# Copyright 2016 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -27,17 +27,18 @@ import os
 script_dir = os.path.dirname(os.path.realpath(__file__))
 sys.path += [os.path.join(script_dir, '..')]
 
-import gencerts
+import gencerts  # noqa: E402
 
-import os
-import sys
-import re
+import os  # noqa: E402
+import sys  # noqa: E402
+import re  # noqa: E402
 
 # Regular expression to find the failed errors in test stdout.
 #  * Group 1 of the match is file path (relative to //src) where the
 #    expected errors were read from.
 #  * Group 2 of the match is the actual error text
-failed_test_regex = re.compile(r"""
+failed_test_regex = re.compile(
+  r"""
 Cert errors don't match expectations \((.+?)\)
 
 EXPECTED:
@@ -47,7 +48,9 @@ ACTUAL:
 
 ((?:.|\n)*?)
 ===> Use net/data/parse_certificate_unittest/rebase-errors.py to rebaseline.
-""", re.MULTILINE)
+""",
+  re.MULTILINE,
+)
 
 
 # Regular expression to find the ERRORS block (and any text above it) in a PEM
@@ -55,12 +58,15 @@ ACTUAL:
 # (since it looks for an -----END to precede it).
 #  * Group 1 of the match is the ERRORS block content and any comments
 #    immediately above it.
-errors_block_regex = re.compile(r""".*
+errors_block_regex = re.compile(
+  r""".*
 -----END .*?-----
 (.*?
 -----BEGIN ERRORS-----
 .*?
------END ERRORS-----)""", re.MULTILINE | re.DOTALL)
+-----END ERRORS-----)""",
+  re.MULTILINE | re.DOTALL,
+)
 
 
 def read_file_to_string(path):
@@ -71,7 +77,7 @@ def read_file_to_string(path):
 
 def write_string_to_file(data, path):
   """Writes a string to a file"""
-  print "Writing file %s ..." % (path)
+  print("Writing file %s ..." % (path))
   with open(path, "w") as f:
     f.write(data)
 
@@ -94,8 +100,7 @@ def fixup_pem_file(path, actual_errors):
   if not m:
     contents += errors_block_text
   else:
-    contents = replace_string(contents, m.start(1), m.end(1),
-                              errors_block_text)
+    contents = replace_string(contents, m.start(1), m.end(1), errors_block_text)
 
   # Update the file.
   write_string_to_file(contents, path)
@@ -115,7 +120,7 @@ def get_src_root():
       break
     cur_dir = parent_dir
 
-  print "Couldn't find src dir"
+  print("Couldn't find src dir")
   sys.exit(1)
 
 
@@ -126,7 +131,7 @@ def get_abs_path(rel_path):
 
 def main():
   if len(sys.argv) > 2:
-    print 'Usage: %s [path-to-unittest-stdout]' % (sys.argv[0])
+    print('Usage: %s [path-to-unittest-stdout]' % (sys.argv[0]))
     sys.exit(1)
 
   # Read the input either from a file, or from stdin.
@@ -134,7 +139,7 @@ def main():
   if len(sys.argv) == 2:
     test_stdout = read_file_to_string(sys.argv[1])
   else:
-    print 'Reading input from stdin...'
+    print('Reading input from stdin...')
     test_stdout = sys.stdin.read()
 
   for m in failed_test_regex.finditer(test_stdout):

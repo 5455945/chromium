@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,19 +8,18 @@
 #include <stdint.h>
 #include <sstream>
 
-#include "base/bind.h"
 #include "base/compiler_specific.h"
 #include "base/format_macros.h"
+#include "base/functional/bind.h"
 #include "base/i18n/number_formatting.h"
 #include "base/i18n/time_formatting.h"
 #include "base/location.h"
 #include "base/notreached.h"
-#include "base/single_thread_task_runner.h"
+#include "base/strings/escape.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/threading/thread_task_runner_handle.h"
-#include "net/base/escape.h"
+#include "base/task/single_thread_task_runner.h"
 #include "net/base/net_errors.h"
 #include "storage/browser/blob/blob_data_item.h"
 #include "storage/browser/blob/blob_entry.h"
@@ -35,7 +34,6 @@ namespace {
 
 const char kEmptyBlobStorageMessage[] = "No available blob data.";
 const char kContentType[] = "Content Type: ";
-const char kContentDisposition[] = "Content Disposition: ";
 const char kCount[] = "Count: ";
 const char kIndex[] = "Index: ";
 const char kType[] = "Type: ";
@@ -101,7 +99,6 @@ std::string StatusToString(BlobStatus status) {
              "on resolving the UUIDs of refereneced blobs.";
   }
   NOTREACHED();
-  return "Invalid blob state.";
 }
 
 void EndHTML(std::string* out) {
@@ -110,7 +107,7 @@ void EndHTML(std::string* out) {
 
 void AddHTMLBoldText(const std::string& text, std::string* out) {
   out->append("<b>");
-  out->append(net::EscapeForHTML(text));
+  out->append(base::EscapeForHTML(text));
   out->append("</b>");
 }
 
@@ -128,7 +125,7 @@ void AddHTMLListItem(const std::string& element_title,
   out->append("<li>");
   // No need to escape element_title since constant string is passed.
   out->append(element_title);
-  out->append(net::EscapeForHTML(element_data));
+  out->append(base::EscapeForHTML(element_data));
   out->append("</li>\n");
 }
 
@@ -144,12 +141,11 @@ std::string ViewBlobInternalsJob::GenerateHTML(
     for (const auto& uuid_entry_pair :
          blob_storage_context->registry().blob_map_) {
       AddHTMLBoldText(uuid_entry_pair.first, &out);
-      BlobEntry* entry = uuid_entry_pair.second.get();
+      scoped_refptr<BlobEntry> entry = uuid_entry_pair.second;
       GenerateHTMLForBlobData(*entry, entry->content_type(),
-                              entry->content_disposition(), entry->refcount(),
-                              &out);
+                              entry->handle_count(), &out);
     }
-    // TODO(https://crbug.com/1112483): Bring back information about blob URLs.
+    // TODO(crbug.com/40709731): Bring back information about blob URLs.
   }
   EndHTML(&out);
   return out;
@@ -158,7 +154,6 @@ std::string ViewBlobInternalsJob::GenerateHTML(
 void ViewBlobInternalsJob::GenerateHTMLForBlobData(
     const BlobEntry& blob_data,
     const std::string& content_type,
-    const std::string& content_disposition,
     size_t refcount,
     std::string* out) {
   StartHTMLList(out);
@@ -167,8 +162,6 @@ void ViewBlobInternalsJob::GenerateHTMLForBlobData(
   AddHTMLListItem(kStatus, StatusToString(blob_data.status()), out);
   if (!content_type.empty())
     AddHTMLListItem(kContentType, content_type, out);
-  if (!content_disposition.empty())
-    AddHTMLListItem(kContentDisposition, content_disposition, out);
 
   bool has_multi_items = blob_data.items().size() > 1;
   if (has_multi_items) {
@@ -189,9 +182,8 @@ void ViewBlobInternalsJob::GenerateHTMLForBlobData(
         break;
       case BlobDataItem::Type::kFile:
         AddHTMLListItem(kType, "file", out);
-        AddHTMLListItem(kPath,
-                 net::EscapeForHTML(item.path().AsUTF8Unsafe()),
-                 out);
+        AddHTMLListItem(kPath, base::EscapeForHTML(item.path().AsUTF8Unsafe()),
+                        out);
         if (!item.expected_modification_time().is_null()) {
           AddHTMLListItem(kModificationTime, base::UTF16ToUTF8(
               TimeFormatFriendlyDateAndTime(item.expected_modification_time())),

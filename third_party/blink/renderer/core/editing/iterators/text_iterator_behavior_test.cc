@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,10 +20,6 @@ TEST(TextIteratorBehaviorTest, Basic) {
 }
 
 TEST(TextIteratorBehaviorTest, Values) {
-  EXPECT_TRUE(TextIteratorBehavior::Builder()
-                  .SetDoesNotBreakAtReplacedElement(true)
-                  .Build()
-                  .DoesNotBreakAtReplacedElement());
   EXPECT_TRUE(TextIteratorBehavior::Builder()
                   .SetEmitsCharactersBetweenAllVisiblePositions(true)
                   .Build()
@@ -61,10 +57,6 @@ TEST(TextIteratorBehaviorTest, Values) {
                   .Build()
                   .ForSelectionToString());
   EXPECT_TRUE(TextIteratorBehavior::Builder()
-                  .SetForWindowFind(true)
-                  .Build()
-                  .ForWindowFind());
-  EXPECT_TRUE(TextIteratorBehavior::Builder()
                   .SetIgnoresStyleVisibility(true)
                   .Build()
                   .IgnoresStyleVisibility());
@@ -80,6 +72,10 @@ TEST(TextIteratorBehaviorTest, Values) {
                   .SetSuppressesExtraNewlineEmission(true)
                   .Build()
                   .SuppressesExtraNewlineEmission());
+  EXPECT_TRUE(TextIteratorBehavior::Builder()
+                  .SetIgnoresCssTextTransforms(true)
+                  .Build()
+                  .IgnoresCssTextTransforms());
 }
 
 }  // namespace blink

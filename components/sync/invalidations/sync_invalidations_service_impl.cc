@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,12 @@
 #include <utility>
 
 #include "components/sync/invalidations/fcm_handler.h"
-#include "components/sync/invalidations/switches.h"
+#include "components/sync/invalidations/interested_data_types_handler.h"
 
 namespace syncer {
 
 namespace {
 
-// TODO(crbug.com/1082115): change to real sync sender id: 8181035976.
 constexpr char kSenderId[] = "361488507004";
 constexpr char kApplicationId[] = "com.google.chrome.sync.invalidations";
 
@@ -26,70 +25,106 @@ SyncInvalidationsServiceImpl::SyncInvalidationsServiceImpl(
                                               kSenderId, kApplicationId);
 }
 
-SyncInvalidationsServiceImpl::~SyncInvalidationsServiceImpl() = default;
-
-void SyncInvalidationsServiceImpl::SetActive(bool active) {
-  if (!base::FeatureList::IsEnabled(switches::kUseSyncInvalidations) ||
-      fcm_handler_->IsListening() == active) {
-    return;
-  }
-
-  if (active) {
-    fcm_handler_->StartListening();
-  } else {
-    fcm_handler_->StopListeningPermanently();
-  }
+SyncInvalidationsServiceImpl::~SyncInvalidationsServiceImpl() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 }
 
 void SyncInvalidationsServiceImpl::AddListener(
     InvalidationsListener* listener) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   fcm_handler_->AddListener(listener);
+}
+
+bool SyncInvalidationsServiceImpl::HasListener(
+    InvalidationsListener* listener) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return fcm_handler_->HasListener(listener);
 }
 
 void SyncInvalidationsServiceImpl::RemoveListener(
     InvalidationsListener* listener) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   fcm_handler_->RemoveListener(listener);
 }
 
 void SyncInvalidationsServiceImpl::AddTokenObserver(
     FCMRegistrationTokenObserver* observer) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   fcm_handler_->AddTokenObserver(observer);
 }
 
 void SyncInvalidationsServiceImpl::RemoveTokenObserver(
     FCMRegistrationTokenObserver* observer) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   fcm_handler_->RemoveTokenObserver(observer);
 }
 
-absl::optional<std::string>
-SyncInvalidationsServiceImpl::GetFCMRegistrationToken() const {
-  if (fcm_handler_->IsWaitingForToken()) {
-    return absl::nullopt;
+void SyncInvalidationsServiceImpl::StartListening() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (fcm_handler_->IsListening()) {
+    return;
   }
+  fcm_handler_->StartListening();
+}
+
+void SyncInvalidationsServiceImpl::StopListening() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  fcm_handler_->StopListening();
+}
+
+void SyncInvalidationsServiceImpl::StopListeningPermanently() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!fcm_handler_->IsListening()) {
+    return;
+  }
+  fcm_handler_->StopListeningPermanently();
+}
+
+std::optional<std::string>
+SyncInvalidationsServiceImpl::GetFCMRegistrationToken() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   return fcm_handler_->GetFCMRegistrationToken();
 }
 
 void SyncInvalidationsServiceImpl::SetInterestedDataTypesHandler(
     InterestedDataTypesHandler* handler) {
-  data_types_manager_.SetInterestedDataTypesHandler(handler);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  DCHECK(!interested_data_types_handler_ || !handler);
+  interested_data_types_handler_ = handler;
 }
 
-absl::optional<ModelTypeSet>
+std::optional<DataTypeSet>
 SyncInvalidationsServiceImpl::GetInterestedDataTypes() const {
-  return data_types_manager_.GetInterestedDataTypes();
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return interested_data_types_;
 }
 
 void SyncInvalidationsServiceImpl::SetInterestedDataTypes(
-    const ModelTypeSet& data_types,
-    InterestedDataTypesAppliedCallback callback) {
-  data_types_manager_.SetInterestedDataTypes(data_types, std::move(callback));
+    const DataTypeSet& data_types) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  DCHECK(interested_data_types_handler_);
+
+  interested_data_types_ = data_types;
+  interested_data_types_handler_->OnInterestedDataTypesChanged();
+}
+
+void SyncInvalidationsServiceImpl::
+    SetCommittedAdditionalInterestedDataTypesCallback(
+        InterestedDataTypesAppliedCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  DCHECK(interested_data_types_handler_);
+
+  interested_data_types_handler_
+      ->SetCommittedAdditionalInterestedDataTypesCallback(std::move(callback));
 }
 
 void SyncInvalidationsServiceImpl::Shutdown() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   fcm_handler_.reset();
 }
 
 FCMHandler* SyncInvalidationsServiceImpl::GetFCMHandlerForTesting() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   return fcm_handler_.get();
 }
 

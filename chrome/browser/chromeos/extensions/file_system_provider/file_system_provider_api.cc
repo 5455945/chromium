@@ -1,125 +1,166 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/chromeos/extensions/file_system_provider/file_system_provider_api.h"
 
-#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
+#include "ash/constants/webui_url_constants.h"
+#include "base/check_deref.h"
+#include "base/files/file.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/trace_event/trace_event.h"
 #include "base/values.h"
+#include "chrome/browser/ash/file_system_provider/operation_request_manager.h"
 #include "chrome/browser/ash/file_system_provider/provided_file_system_info.h"
-#include "chrome/browser/ash/file_system_provider/provided_file_system_interface.h"
-#include "chrome/browser/ash/file_system_provider/request_manager.h"
 #include "chrome/browser/ash/file_system_provider/request_value.h"
 #include "chrome/browser/ash/file_system_provider/service.h"
-#include "chrome/browser/extensions/chrome_extension_function_details.h"
-#include "chrome/common/extensions/api/file_system_provider.h"
-#include "chrome/common/extensions/api/file_system_provider_internal.h"
+#include "chrome/browser/ash/file_system_provider/service_worker_lifetime_manager.h"
+#include "chrome/browser/ash/guest_os/guest_os_terminal.h"
+#include "chrome/browser/chromeos/extensions/file_system_provider/provider_function.h"
+#include "chromeos/ash/experiences/extensions/common/api/file_system_provider.h"
 #include "storage/browser/file_system/watcher_manager.h"
-
-using ash::file_system_provider::MountOptions;
-using ash::file_system_provider::OpenedFiles;
-using ash::file_system_provider::ProvidedFileSystemInfo;
-using ash::file_system_provider::ProvidedFileSystemInterface;
-using ash::file_system_provider::ProvidedFileSystemObserver;
-using ash::file_system_provider::ProviderId;
-using ash::file_system_provider::RequestValue;
-using ash::file_system_provider::Service;
-using ash::file_system_provider::Watchers;
+#include "third_party/abseil-cpp/absl/functional/overload.h"
 
 namespace extensions {
 namespace {
 
-// Converts the change type from the IDL type to a native type. |changed_type|
-// must be specified (not CHANGE_TYPE_NONE).
-storage::WatcherManager::ChangeType ParseChangeType(
-    const api::file_system_provider::ChangeType& change_type) {
-  switch (change_type) {
-    case api::file_system_provider::CHANGE_TYPE_CHANGED:
-      return storage::WatcherManager::CHANGED;
-    case api::file_system_provider::CHANGE_TYPE_DELETED:
-      return storage::WatcherManager::DELETED;
-    default:
-      break;
-  }
-  NOTREACHED();
-  return storage::WatcherManager::CHANGED;
+ash::file_system_provider::ProvidedFileSystemInterface* GetProvidedFileSystem(
+    content::BrowserContext* browser_context,
+    const ash::file_system_provider::ProviderId& provider_id,
+    const std::string& file_system_id) {
+  auto& service =
+      CHECK_DEREF(ash::file_system_provider::Service::Get(browser_context));
+  return service.GetProvidedFileSystem(provider_id, file_system_id);
 }
 
-// Convert the change from the IDL type to a native type. The reason IDL types
-// are not used is since they are imperfect, eg. paths are stored as strings.
-ProvidedFileSystemObserver::Change ParseChange(
-    const api::file_system_provider::Change& change) {
-  ProvidedFileSystemObserver::Change result;
-  result.entry_path = base::FilePath::FromUTF8Unsafe(change.entry_path);
-  result.change_type = ParseChangeType(change.change_type);
-  return result;
-}
+api::file_system_provider::FileSystemInfo ConvertFileSystemToExtension(
+    ash::file_system_provider::ProvidedFileSystemInterface& file_system) {
+  const ash::file_system_provider::ProvidedFileSystemInfo& file_system_info =
+      file_system.GetFileSystemInfo();
 
-// Converts a list of child changes from the IDL type to a native type.
-std::unique_ptr<ProvidedFileSystemObserver::Changes> ParseChanges(
-    const std::vector<api::file_system_provider::Change>& changes) {
-  std::unique_ptr<ProvidedFileSystemObserver::Changes> results(
-      new ProvidedFileSystemObserver::Changes);
-  for (const auto& change : changes) {
-    results->push_back(ParseChange(change));
-  }
-  return results;
-}
+  api::file_system_provider::FileSystemInfo item;
+  item.file_system_id = file_system_info.file_system_id();
+  item.display_name = file_system_info.display_name();
+  item.writable = file_system_info.writable();
+  item.opened_files_limit = file_system_info.opened_files_limit();
+  item.supports_notify_tag = file_system_info.supports_notify_tag();
 
-// Fills the IDL's FileSystemInfo with FSP's ProvidedFileSystemInfo and
-// Watchers.
-void FillFileSystemInfo(const ProvidedFileSystemInfo& file_system_info,
-                        const Watchers& watchers,
-                        const OpenedFiles& opened_files,
-                        api::file_system_provider::FileSystemInfo* output) {
-  using api::file_system_provider::Watcher;
-  using api::file_system_provider::OpenedFile;
-
-  output->file_system_id = file_system_info.file_system_id();
-  output->display_name = file_system_info.display_name();
-  output->writable = file_system_info.writable();
-  output->opened_files_limit = file_system_info.opened_files_limit();
-
-  for (const auto& watcher : watchers) {
-    Watcher watcher_item;
-    watcher_item.entry_path = watcher.second.entry_path.value();
-    watcher_item.recursive = watcher.second.recursive;
-    if (!watcher.second.last_tag.empty())
-      watcher_item.last_tag =
-          std::make_unique<std::string>(watcher.second.last_tag);
-    output->watchers.push_back(std::move(watcher_item));
+  if (file_system_info.watchable()) {
+    for (const auto& watcher : *file_system.GetWatchers()) {
+      api::file_system_provider::Watcher watcher_item;
+      watcher_item.entry_path = watcher.second.entry_path.value();
+      watcher_item.recursive = watcher.second.recursive;
+      if (!watcher.second.last_tag.empty()) {
+        watcher_item.last_tag = watcher.second.last_tag;
+      }
+      item.watchers.push_back(std::move(watcher_item));
+    }
   }
 
-  for (const auto& opened_file : opened_files) {
-    OpenedFile opened_file_item;
+  for (const auto& opened_file : file_system.GetOpenedFiles()) {
+    api::file_system_provider::OpenedFile opened_file_item;
     opened_file_item.open_request_id = opened_file.first;
     opened_file_item.file_path = opened_file.second.file_path.value();
     switch (opened_file.second.mode) {
       case ash::file_system_provider::OPEN_FILE_MODE_READ:
         opened_file_item.mode =
-            extensions::api::file_system_provider::OPEN_FILE_MODE_READ;
+            extensions::api::file_system_provider::OpenFileMode::kRead;
         break;
       case ash::file_system_provider::OPEN_FILE_MODE_WRITE:
         opened_file_item.mode =
-            extensions::api::file_system_provider::OPEN_FILE_MODE_WRITE;
+            extensions::api::file_system_provider::OpenFileMode::kWrite;
         break;
     }
-    output->opened_files.push_back(std::move(opened_file_item));
+    item.opened_files.push_back(std::move(opened_file_item));
   }
+
+  return item;
+}
+
+// Converts the change type from the IDL type to a storage type. |changed_type|
+// must be specified (not CHANGE_TYPE_NONE).
+storage::WatcherManager::ChangeType ParseChangeType(
+    const api::file_system_provider::ChangeType& change_type) {
+  switch (change_type) {
+    case api::file_system_provider::ChangeType::kChanged:
+      return storage::WatcherManager::CHANGED;
+    case api::file_system_provider::ChangeType::kDeleted:
+      return storage::WatcherManager::DELETED;
+    default:
+      break;
+  }
+  NOTREACHED();
+}
+
+ash::file_system_provider::ProvidedFileSystemObserver::Change ParseChange(
+    const api::file_system_provider::Change& change) {
+  return ash::file_system_provider::ProvidedFileSystemObserver::Change(
+      base::FilePath::FromUTF8Unsafe(change.entry_path),
+      ParseChangeType(change.change_type));
+}
+
+std::unique_ptr<ash::file_system_provider::ProvidedFileSystemObserver::Changes>
+ParseChanges(
+    const std::optional<std::vector<api::file_system_provider::Change>>&
+        changes) {
+  auto results = std::make_unique<
+      ash::file_system_provider::ProvidedFileSystemObserver::Changes>();
+  if (changes.has_value()) {
+    for (const auto& change : *changes) {
+      results->push_back(ParseChange(change));
+    }
+  }
+  return results;
+}
+
+std::string ForwardOperationResponseImpl(
+    ash::file_system_provider::RequestManager& manager,
+    int64_t request_id,
+    const ash::file_system_provider::RequestValue& value,
+    std::variant<bool /*has_more*/, base::File::Error /*error*/> arg) {
+  const base::File::Error result = std::visit(
+      absl::Overload{[&](bool has_more) {
+                       return manager.FulfillRequest(request_id, value,
+                                                     has_more);
+                     },
+                     [&](base::File::Error error) {
+                       return manager.RejectRequest(request_id, value, error);
+                     }},
+      arg);
+  if (result != base::File::FILE_OK) {
+    return extensions::FileErrorToString(result);
+  }
+  return "";
 }
 
 }  // namespace
 
+std::string FileSystemProviderBase::GetProviderId() const {
+  // Terminal app is the only non-extension to use fsp.
+  if (!extension()) {
+    CHECK(url::IsSameOriginWith(source_url(),
+                                GURL(ash::kChromeUIUntrustedTerminalURL)));
+    return guest_os::kTerminalSystemAppId;
+  }
+  return extension_id();
+}
+
+void FileSystemProviderBase::RespondWithError(const std::string& error) {
+  if (error.empty()) {
+    Respond(NoArguments());
+  } else {
+    Respond(Error(error));
+  }
+}
+
 ExtensionFunction::ResponseAction FileSystemProviderMountFunction::Run() {
   using api::file_system_provider::Mount::Params;
-  const std::unique_ptr<Params> params(Params::Create(*args_));
+  const std::optional<Params> params(Params::Create(args()));
   EXTENSION_FUNCTION_VALIDATE(params);
 
   // It's an error if the file system Id is empty.
@@ -135,129 +176,101 @@ ExtensionFunction::ResponseAction FileSystemProviderMountFunction::Run() {
   }
 
   // If the opened files limit is set, then it must be larger or equal than 0.
-  if (params->options.opened_files_limit.get() &&
-      *params->options.opened_files_limit.get() < 0) {
+  if (params->options.opened_files_limit &&
+      *params->options.opened_files_limit < 0) {
     return RespondNow(
         Error(FileErrorToString(base::File::FILE_ERROR_INVALID_OPERATION)));
   }
 
-  Service* const service =
-      Service::Get(Profile::FromBrowserContext(browser_context()));
-  DCHECK(service);
-
-  MountOptions options;
+  ash::file_system_provider::MountOptions options;
   options.file_system_id = params->options.file_system_id;
   options.display_name = params->options.display_name;
-  options.writable = params->options.writable != nullptr;
-  options.opened_files_limit = params->options.opened_files_limit.get()
-                                   ? *params->options.opened_files_limit.get()
-                                   : 0;
-  options.supports_notify_tag = params->options.supports_notify_tag != nullptr;
-  options.persistent = params->options.persistent.get()
-                           ? *params->options.persistent.get()
-                           : true;
+  options.writable = params->options.writable.value_or(false);
+  options.opened_files_limit = params->options.opened_files_limit.value_or(0);
+  options.supports_notify_tag =
+      params->options.supports_notify_tag.value_or(false);
+  options.persistent = params->options.persistent.value_or(true);
 
-  const base::File::Error result = service->MountFileSystem(
-      ProviderId::CreateFromExtensionId(extension_id()), options);
-  if (result != base::File::FILE_OK)
-    return RespondNow(Error(FileErrorToString(result)));
+  auto& service =
+      CHECK_DEREF(ash::file_system_provider::Service::Get(browser_context()));
+  const base::File::Error result = service.MountFileSystem(
+      ash::file_system_provider::ProviderId::CreateFromExtensionId(
+          GetProviderId()),
+      options);
 
+  if (result != base::File::FILE_OK) {
+    return RespondNow(Error(extensions::FileErrorToString(result)));
+  }
   return RespondNow(NoArguments());
 }
 
 ExtensionFunction::ResponseAction FileSystemProviderUnmountFunction::Run() {
   using api::file_system_provider::Unmount::Params;
-  std::unique_ptr<Params> params(Params::Create(*args_));
+  std::optional<Params> params(Params::Create(args()));
   EXTENSION_FUNCTION_VALIDATE(params);
 
-  Service* const service =
-      Service::Get(Profile::FromBrowserContext(browser_context()));
-  DCHECK(service);
-
-  const base::File::Error result = service->UnmountFileSystem(
-      ProviderId::CreateFromExtensionId(extension_id()),
-      params->options.file_system_id, Service::UNMOUNT_REASON_USER);
-  if (result != base::File::FILE_OK)
-    return RespondNow(Error(FileErrorToString(result)));
-
+  auto& service =
+      CHECK_DEREF(ash::file_system_provider::Service::Get(browser_context()));
+  const base::File::Error result = service.UnmountFileSystem(
+      ash::file_system_provider::ProviderId::CreateFromExtensionId(
+          GetProviderId()),
+      params->options.file_system_id,
+      ash::file_system_provider::Service::UNMOUNT_REASON_USER);
+  if (result != base::File::FILE_OK) {
+    return RespondNow(Error(extensions::FileErrorToString(result)));
+  }
   return RespondNow(NoArguments());
 }
 
 ExtensionFunction::ResponseAction FileSystemProviderGetAllFunction::Run() {
-  using api::file_system_provider::FileSystemInfo;
-  Service* const service =
-      Service::Get(Profile::FromBrowserContext(browser_context()));
-  DCHECK(service);
+  auto& service =
+      CHECK_DEREF(ash::file_system_provider::Service::Get(browser_context()));
+  auto provider_id =
+      ash::file_system_provider::ProviderId::CreateFromExtensionId(
+          GetProviderId());
 
-  ProviderId provider_id = ProviderId::CreateFromExtensionId(extension_id());
-  const std::vector<ProvidedFileSystemInfo> file_systems =
-      service->GetProvidedFileSystemInfoList(provider_id);
-
-  std::vector<FileSystemInfo> items;
-
-  for (const auto& file_system_info : file_systems) {
-    FileSystemInfo item;
-
-    ProvidedFileSystemInterface* const file_system =
-        service->GetProvidedFileSystem(file_system_info.provider_id(),
-                                       file_system_info.file_system_id());
-
-    DCHECK(file_system);
-
-    FillFileSystemInfo(
-        file_system_info,
-        file_system_info.watchable() ? *file_system->GetWatchers() : Watchers(),
-        file_system->GetOpenedFiles(), &item);
-
-    items.push_back(std::move(item));
+  std::vector<api::file_system_provider::FileSystemInfo> items;
+  for (const auto& file_system_info :
+       service.GetProvidedFileSystemInfoList(provider_id)) {
+    ash::file_system_provider::ProvidedFileSystemInterface* const file_system =
+        service.GetProvidedFileSystem(file_system_info.provider_id(),
+                                      file_system_info.file_system_id());
+    items.push_back(ConvertFileSystemToExtension(CHECK_DEREF(file_system)));
   }
-
   return RespondNow(
       ArgumentList(api::file_system_provider::GetAll::Results::Create(items)));
 }
 
 ExtensionFunction::ResponseAction FileSystemProviderGetFunction::Run() {
   using api::file_system_provider::Get::Params;
-  std::unique_ptr<Params> params(Params::Create(*args_));
+  std::optional<Params> params(Params::Create(args()));
   EXTENSION_FUNCTION_VALIDATE(params);
 
-  using api::file_system_provider::FileSystemInfo;
-  Service* const service =
-      Service::Get(Profile::FromBrowserContext(browser_context()));
-  DCHECK(service);
-
-  ProvidedFileSystemInterface* const file_system =
-      service->GetProvidedFileSystem(
-          ProviderId::CreateFromExtensionId(extension_id()),
-          params->file_system_id);
-
+  auto* file_system = GetProvidedFileSystem(
+      browser_context(),
+      ash::file_system_provider::ProviderId::CreateFromExtensionId(
+          GetProviderId()),
+      params->file_system_id);
   if (!file_system) {
     return RespondNow(
         Error(FileErrorToString(base::File::FILE_ERROR_NOT_FOUND)));
   }
 
-  FileSystemInfo file_system_info;
-  FillFileSystemInfo(file_system->GetFileSystemInfo(),
-                     file_system->GetFileSystemInfo().watchable()
-                         ? *file_system->GetWatchers()
-                         : Watchers(),
-                     file_system->GetOpenedFiles(), &file_system_info);
+  auto result = ConvertFileSystemToExtension(*file_system);
   return RespondNow(ArgumentList(
-      api::file_system_provider::Get::Results::Create(file_system_info)));
+      api::file_system_provider::Get::Results::Create(std::move(result))));
 }
 
 ExtensionFunction::ResponseAction FileSystemProviderNotifyFunction::Run() {
   using api::file_system_provider::Notify::Params;
-  std::unique_ptr<Params> params(Params::Create(*args_));
+  std::optional<Params> params(Params::Create(args()));
   EXTENSION_FUNCTION_VALIDATE(params);
 
-  Service* const service = Service::Get(browser_context());
-  DCHECK(service);
-
-  ProvidedFileSystemInterface* const file_system =
-      service->GetProvidedFileSystem(
-          ProviderId::CreateFromExtensionId(extension_id()),
-          params->options.file_system_id);
+  auto* file_system = GetProvidedFileSystem(
+      browser_context(),
+      ash::file_system_provider::ProviderId::CreateFromExtensionId(
+          GetProviderId()),
+      params->options.file_system_id);
   if (!file_system) {
     return RespondNow(
         Error(FileErrorToString(base::File::FILE_ERROR_NOT_FOUND)));
@@ -266,13 +279,10 @@ ExtensionFunction::ResponseAction FileSystemProviderNotifyFunction::Run() {
   file_system->Notify(
       base::FilePath::FromUTF8Unsafe(params->options.observed_path),
       params->options.recursive, ParseChangeType(params->options.change_type),
-      params->options.changes.get()
-          ? ParseChanges(*params->options.changes.get())
-          : base::WrapUnique(new ProvidedFileSystemObserver::Changes),
-      params->options.tag.get() ? *params->options.tag.get() : "",
+      ParseChanges(params->options.changes),
+      params->options.tag.value_or(std::string()),
       base::BindOnce(&FileSystemProviderNotifyFunction::OnNotifyCompleted,
                      this));
-
   return RespondLater();
 }
 
@@ -287,48 +297,133 @@ void FileSystemProviderNotifyFunction::OnNotifyCompleted(
 }
 
 ExtensionFunction::ResponseAction
-FileSystemProviderInternalUnmountRequestedSuccessFunction::Run() {
-  using api::file_system_provider_internal::UnmountRequestedSuccess::Params;
-  std::unique_ptr<Params> params(Params::Create(*args_));
+FileSystemProviderInternalRespondToMountRequestFunction::Run() {
+  using api::file_system_provider_internal::RespondToMountRequest::Params;
+  std::optional<Params> params(Params::Create(args()));
   EXTENSION_FUNCTION_VALIDATE(params);
 
-  return FulfillRequest(
-      RequestValue::CreateForUnmountSuccess(std::move(params)),
-      false /* has_more */);
+  auto* sw_lifetime_manager =
+      ash::file_system_provider::ServiceWorkerLifetimeManager::Get(
+          browser_context());
+  sw_lifetime_manager->FinishRequest(
+      {extension_id(), /*file_system_id=*/std::string(), params->request_id});
+
+  auto& service =
+      CHECK_DEREF(ash::file_system_provider::Service::Get(browser_context()));
+  auto* provider = service.GetProvider(
+      ash::file_system_provider::ProviderId::CreateFromExtensionId(
+          extension_id()));
+  if (!provider) {
+    return RespondNow(
+        Error(FileErrorToString(base::File::FILE_ERROR_NOT_FOUND)));
+  }
+
+  base::File::Error mount_error =
+      extensions::ProviderErrorToFileError(params->error);
+
+  auto arg =
+      mount_error == base::File::FILE_OK
+          ? std::variant<bool /*has_more*/, base::File::Error /*error*/>(false)
+          : mount_error;
+
+  std::string error = ForwardOperationResponseImpl(
+      CHECK_DEREF(provider->GetRequestManager()), params->request_id,
+      ash::file_system_provider::RequestValue(), arg);
+  if (!error.empty()) {
+    return RespondNow(Error(error));
+  }
+  return RespondNow(NoArguments());
+}
+
+ExtensionFunction::ResponseAction
+FileSystemProviderInternal::ForwardOperationResult(
+    const std::string& file_system_id,
+    int64_t request_id,
+    const ash::file_system_provider::RequestValue& value,
+    std::variant<bool /*has_more*/, base::File::Error /*error*/> arg) {
+  auto* sw_lifetime_manager =
+      ash::file_system_provider::ServiceWorkerLifetimeManager::Get(
+          browser_context());
+  auto provider_id = GetProviderId();
+  sw_lifetime_manager->FinishRequest({provider_id, file_system_id, request_id});
+
+  auto* file_system = GetProvidedFileSystem(
+      browser_context(),
+      ash::file_system_provider::ProviderId::CreateFromExtensionId(provider_id),
+      file_system_id);
+  if (!file_system) {
+    return RespondNow(
+        Error(FileErrorToString(base::File::FILE_ERROR_NOT_FOUND)));
+  }
+
+  std::string error = ForwardOperationResponseImpl(
+      CHECK_DEREF(file_system->GetRequestManager()), request_id, value, arg);
+  if (!error.empty()) {
+    return RespondNow(Error(error));
+  }
+  return RespondNow(NoArguments());
+}
+
+ExtensionFunction::ResponseAction
+FileSystemProviderInternalUnmountRequestedSuccessFunction::Run() {
+  using api::file_system_provider_internal::UnmountRequestedSuccess::Params;
+  std::optional<Params> params(Params::Create(args()));
+  EXTENSION_FUNCTION_VALIDATE(params);
+
+  std::string file_system_id = params->file_system_id;
+  int request_id = params->request_id;
+  return ForwardOperationResult(
+      file_system_id, request_id,
+      ash::file_system_provider::RequestValue::CreateForUnmountSuccess(
+          std::move(*params)),
+      /*has_more=*/false);
 }
 
 ExtensionFunction::ResponseAction
 FileSystemProviderInternalGetMetadataRequestedSuccessFunction::Run() {
   using api::file_system_provider_internal::GetMetadataRequestedSuccess::Params;
-  std::unique_ptr<Params> params(Params::Create(*args_));
+  std::optional<Params> params(Params::Create(args()));
   EXTENSION_FUNCTION_VALIDATE(params);
 
-  return FulfillRequest(
-      RequestValue::CreateForGetMetadataSuccess(std::move(params)),
-      false /* has_more */);
+  std::string file_system_id = params->file_system_id;
+  int request_id = params->request_id;
+  return ForwardOperationResult(
+      file_system_id, request_id,
+      ash::file_system_provider::RequestValue::CreateForGetMetadataSuccess(
+          std::move(*params)),
+      /*has_more=*/false);
 }
 
 ExtensionFunction::ResponseAction
 FileSystemProviderInternalGetActionsRequestedSuccessFunction::Run() {
   using api::file_system_provider_internal::GetActionsRequestedSuccess::Params;
-  std::unique_ptr<Params> params(Params::Create(*args_));
+  std::optional<Params> params(Params::Create(args()));
   EXTENSION_FUNCTION_VALIDATE(params);
 
-  return FulfillRequest(
-      RequestValue::CreateForGetActionsSuccess(std::move(params)),
-      false /* has_more */);
+  std::string file_system_id = params->file_system_id;
+  int request_id = params->request_id;
+  return ForwardOperationResult(
+      file_system_id, request_id,
+      ash::file_system_provider::RequestValue::CreateForGetActionsSuccess(
+          std::move(*params)),
+      /*has_more=*/false);
 }
 
 ExtensionFunction::ResponseAction
 FileSystemProviderInternalReadDirectoryRequestedSuccessFunction::Run() {
   using api::file_system_provider_internal::ReadDirectoryRequestedSuccess::
       Params;
-  std::unique_ptr<Params> params(Params::Create(*args_));
+  std::optional<Params> params(Params::Create(args()));
   EXTENSION_FUNCTION_VALIDATE(params);
 
-  const bool has_more = params->has_more;
-  return FulfillRequest(
-      RequestValue::CreateForReadDirectorySuccess(std::move(params)), has_more);
+  std::string file_system_id = params->file_system_id;
+  int request_id = params->request_id;
+  bool has_more = params->has_more;
+  return ForwardOperationResult(
+      file_system_id, request_id,
+      ash::file_system_provider::RequestValue::CreateForReadDirectorySuccess(
+          std::move(*params)),
+      has_more);
 }
 
 ExtensionFunction::ResponseAction
@@ -336,40 +431,71 @@ FileSystemProviderInternalReadFileRequestedSuccessFunction::Run() {
   TRACE_EVENT0("file_system_provider", "ReadFileRequestedSuccess");
   using api::file_system_provider_internal::ReadFileRequestedSuccess::Params;
 
-  std::unique_ptr<Params> params(Params::Create(*args_));
+  std::optional<Params> params(Params::Create(args()));
   EXTENSION_FUNCTION_VALIDATE(params);
 
-  const bool has_more = params->has_more;
-  return FulfillRequest(
-      RequestValue::CreateForReadFileSuccess(std::move(params)), has_more);
+  std::string file_system_id = params->file_system_id;
+  int request_id = params->request_id;
+  bool has_more = params->has_more;
+  return ForwardOperationResult(
+      file_system_id, request_id,
+      ash::file_system_provider::RequestValue::CreateForReadFileSuccess(
+          std::move(*params)),
+      has_more);
+}
+
+ExtensionFunction::ResponseAction
+FileSystemProviderInternalOpenFileRequestedSuccessFunction::Run() {
+  TRACE_EVENT0("file_system_provider", "OpenFileRequestedSuccess");
+  using api::file_system_provider_internal::OpenFileRequestedSuccess::Params;
+
+  std::optional<Params> params(Params::Create(args()));
+  EXTENSION_FUNCTION_VALIDATE(params);
+
+  std::string file_system_id = params->file_system_id;
+  int request_id = params->request_id;
+  return ForwardOperationResult(
+      file_system_id, request_id,
+      ash::file_system_provider::RequestValue::CreateForOpenFileSuccess(
+          std::move(*params)),
+      /*has_more=*/false);
 }
 
 ExtensionFunction::ResponseAction
 FileSystemProviderInternalOperationRequestedSuccessFunction::Run() {
   using api::file_system_provider_internal::OperationRequestedSuccess::Params;
-  std::unique_ptr<Params> params(Params::Create(*args_));
+  std::optional<Params> params(Params::Create(args()));
   EXTENSION_FUNCTION_VALIDATE(params);
 
-  return FulfillRequest(
-      std::unique_ptr<RequestValue>(
-          RequestValue::CreateForOperationSuccess(std::move(params))),
-      false /* has_more */);
+  std::string file_system_id = params->file_system_id;
+  int request_id = params->request_id;
+  return ForwardOperationResult(
+      file_system_id, request_id,
+      ash::file_system_provider::RequestValue::CreateForOperationSuccess(
+          std::move(*params)),
+      /*has_more=*/false);
 }
 
 ExtensionFunction::ResponseAction
 FileSystemProviderInternalOperationRequestedErrorFunction::Run() {
   using api::file_system_provider_internal::OperationRequestedError::Params;
-  std::unique_ptr<Params> params(Params::Create(*args_));
+  std::optional<Params> params(Params::Create(args()));
   EXTENSION_FUNCTION_VALIDATE(params);
 
-  if (params->error == api::file_system_provider::PROVIDER_ERROR_OK) {
+  if (params->error == api::file_system_provider::ProviderError::kOk) {
     // It's incorrect to pass OK as an error code.
     return ValidationFailure(this);
   }
 
-  const base::File::Error error = ProviderErrorToFileError(params->error);
-  return RejectRequest(RequestValue::CreateForOperationError(std::move(params)),
-                       error);
+  std::string file_system_id = params->file_system_id;
+  int request_id = params->request_id;
+  base::File::Error operation_error =
+      extensions::ProviderErrorToFileError(params->error);
+  return ForwardOperationResult(
+      file_system_id, request_id,
+      ash::file_system_provider::RequestValue::CreateForOperationError(
+          std::move(*params)),
+      operation_error);
 }
 
 }  // namespace extensions

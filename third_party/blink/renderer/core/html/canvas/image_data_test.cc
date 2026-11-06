@@ -1,14 +1,16 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/html/canvas/image_data.h"
 
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/renderer/platform/geometry/int_size.h"
-#include "third_party/blink/renderer/platform/graphics/color_correction_test_utils.h"
-#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
-#include "third_party/skia/include/third_party/skcms/skcms.h"
+#include "third_party/blink/renderer/platform/bindings/exception_code.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/skia/modules/skcms/skcms.h"
+#include "ui/gfx/geometry/size.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_testing.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 
 namespace blink {
 namespace {
@@ -18,6 +20,8 @@ class ImageDataTest : public testing::Test {};
 // This test passes if it does not crash. If the required memory is not
 // allocated to the ImageData, then an exception must raise.
 TEST_F(ImageDataTest, CreateImageDataTooBig) {
+  test::TaskEnvironment task_environment;
+  V8TestingScope scope;
   DummyExceptionStateForTesting exception_state;
   ImageData* too_big_image_data = ImageData::Create(
       32767, 32767, ImageDataSettings::Create(), exception_state);
@@ -28,8 +32,18 @@ TEST_F(ImageDataTest, CreateImageDataTooBig) {
 }
 
 TEST_F(ImageDataTest, ImageDataTooBigToAllocateDoesNotCrash) {
-  ImageData* image_data = ImageData::CreateForTest(
-      IntSize(1, (v8::TypedArray::kMaxLength / 4) + 1));
+  constexpr size_t kBytesPerPixel = 4;
+  constexpr size_t kMaxSize = v8::TypedArray::kMaxByteLength / kBytesPerPixel;
+
+  // Statically compute a width and height such that the product is above
+  // kMaxSize.
+  constexpr int kWidth = 1 << 30;
+  constexpr int kHeight = (kMaxSize / kWidth) + 1;
+  static_assert(size_t{kWidth} * (kHeight - 1) <= kMaxSize);
+  static_assert(size_t{kWidth} * kHeight > kMaxSize);
+
+  gfx::Size too_big_size(kWidth, kHeight);
+  ImageData* image_data = ImageData::CreateForTest(too_big_size);
   EXPECT_EQ(image_data, nullptr);
 }
 

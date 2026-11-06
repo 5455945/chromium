@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,4 +9,19 @@ namespace extensions {
 const PrefMap kCorruptedDisableCount = {"extensions.corrupted_disable_count",
                                         PrefType::kInteger,
                                         PrefScope::kProfile};
+
+// Records the user permissions.
+const PrefMap kUserPermissions = {"extensions.user_permissions",
+                                  PrefType::kDictionary, PrefScope::kProfile};
+
+// Records the configuration of user scripts worlds.
+const PrefMap kUserScriptsWorldsConfiguration = {
+    "user_scripts_worlds.configuration", PrefType::kDictionary,
+    PrefScope::kExtensionSpecific};
+
+// The ID of the extension that disabled this extension.
+const PrefMap kDisableReasonByExtensionId = {"disable_reason_by_extension_id",
+                                             PrefType::kString,
+                                             PrefScope::kExtensionSpecific};
+
 }  // namespace extensions

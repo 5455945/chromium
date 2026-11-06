@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,76 +7,68 @@
 #include <string>
 #include <utility>
 
-#include "base/callback.h"
-#include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/chromeos/printing/cups_print_job.h"
-#include "chrome/browser/chromeos/printing/cups_print_job_manager.h"
-#include "chrome/browser/chromeos/printing/cups_printers_manager.h"
-#include "chrome/browser/chromeos/printing/history/print_job_info_proto_conversions.h"
-#include "chrome/browser/chromeos/printing/test_cups_print_job_manager.h"
-#include "chromeos/printing/printer_configuration.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
+#include "chrome/browser/printing/print_job.h"
+#include "content/public/browser/browser_task_traits.h"
+#include "content/public/browser/browser_thread.h"
 #include "printing/metafile_skia.h"
 #include "printing/print_settings.h"
+#include "printing/printed_document.h"
+#include "testing/gtest/include/gtest/gtest.h"
 
 namespace extensions {
 
-FakePrintJobController::FakePrintJobController(
-    chromeos::TestCupsPrintJobManager* print_job_manager,
-    chromeos::CupsPrintersManager* printers_manager)
-    : print_job_manager_(print_job_manager),
-      printers_manager_(printers_manager) {}
+// Subclass PrintJob to allow construction without supplying a PrintJobManager
+// instance.
+class PrintJobForTesting : public printing::PrintJob {
+ public:
+  PrintJobForTesting() = default;
+
+ private:
+  ~PrintJobForTesting() override = default;
+};
+
+FakePrintJobController::FakePrintJobController() = default;
 
 FakePrintJobController::~FakePrintJobController() = default;
 
-void FakePrintJobController::StartPrintJob(
-    const std::string& extension_id,
-    std::unique_ptr<printing::MetafileSkia> metafile,
+void FakePrintJobController::CreatePrintJob(
+    std::unique_ptr<printing::MetafileSkia> pdf,
     std::unique_ptr<printing::PrintSettings> settings,
-    StartPrintJobCallback callback) {
-  absl::optional<chromeos::Printer> printer =
-      printers_manager_->GetPrinter(base::UTF16ToUTF8(settings->device_name()));
-  if (!printer) {
-    std::move(callback).Run(nullptr);
-    return;
-  }
+    uint32_t page_count,
+    printing::PrintJob::Source source,
+    const std::string& source_id,
+    PrintJobCreatedCallback callback) {
+  auto job = base::MakeRefCounted<PrintJobForTesting>();
+  job->SetSource(source, source_id);
+  StartWatchingPrintJob(job, std::move(callback));
 
-  // Create and start new CupsPrintJob.
+  content::GetUIThreadTaskRunner({})->PostTask(
+      FROM_HERE,
+      base::BindOnce(&FakePrintJobController::CreatePrintJobImpl,
+                     weak_ptr_factory_.GetWeakPtr(), job, std::move(settings)));
+}
+
+void FakePrintJobController::CreatePrintJobImpl(
+    scoped_refptr<printing::PrintJob> job,
+    std::unique_ptr<printing::PrintSettings> settings) {
   job_id_++;
-  auto print_job = std::make_unique<chromeos::CupsPrintJob>(
-      *printer, job_id_, base::UTF16ToUTF8(settings->title()),
-      /*total_page_number=*/1, printing::PrintJob::Source::EXTENSION,
-      extension_id, chromeos::PrintSettingsToProto(*settings));
-  print_job_manager_->CreatePrintJob(print_job.get());
-  print_job_manager_->StartPrintJob(print_job.get());
-  std::string print_job_unique_id = print_job->GetUniqueId();
-  jobs_[print_job_unique_id] = std::move(print_job);
-
-  std::move(callback).Run(std::make_unique<std::string>(print_job_unique_id));
-}
-
-bool FakePrintJobController::CancelPrintJob(const std::string& job_id) {
-  auto it = jobs_.find(job_id);
-  if (it == jobs_.end())
-    return false;
-  print_job_manager_->CancelPrintJob(it->second.get());
-  return true;
-}
-
-void FakePrintJobController::OnPrintJobCreated(
-    const std::string& extension_id,
-    const std::string& job_id,
-    base::WeakPtr<chromeos::CupsPrintJob> cups_job) {}
-
-void FakePrintJobController::OnPrintJobFinished(const std::string& job_id) {
-  jobs_.erase(job_id);
-}
-
-chromeos::CupsPrintJob* FakePrintJobController::GetCupsPrintJob(
-    const std::string& job_id) {
-  auto it = jobs_.find(job_id);
-  if (it == jobs_.end())
-    return nullptr;
-  return it->second.get();
+  auto document = base::MakeRefCounted<printing::PrintedDocument>(
+      std::move(settings), std::u16string(),
+      printing::PrintSettings::NewCookie());
+  int observer_count = 0;
+  for (auto& observer : job->GetObserversForTesting()) {
+    if (fail_) {
+      observer.OnFailed();
+    } else {
+      observer.OnDocDone(job_id_, document.get());
+    }
+    observer_count++;
+  }
+  EXPECT_EQ(1, observer_count);
 }
 
 }  // namespace extensions

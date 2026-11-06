@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,11 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/observer_list.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "content/browser/background_fetch/background_fetch_data_manager.h"
 #include "content/browser/background_fetch/background_fetch_data_manager_observer.h"
 #include "content/browser/background_fetch/storage/database_helpers.h"
@@ -42,7 +45,7 @@ DatabaseTaskHost::DatabaseTaskHost() = default;
 DatabaseTaskHost::~DatabaseTaskHost() = default;
 
 DatabaseTask::DatabaseTask(DatabaseTaskHost* host) : host_(host) {
-  DCHECK(host_);
+  CHECK(host_, base::NotFatalUntil::M158);
 }
 
 DatabaseTask::~DatabaseTask() = default;
@@ -52,26 +55,26 @@ base::WeakPtr<DatabaseTaskHost> DatabaseTask::GetWeakPtr() {
 }
 
 void DatabaseTask::Finished() {
-  DCHECK_CURRENTLY_ON(ServiceWorkerContext::GetCoreThreadId());
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M158);
   // Post the OnTaskFinished callback to the same thread, to allow the the
   // DatabaseTask to finish execution before deallocating it.
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&DatabaseTaskHost::OnTaskFinished,
                                 host_->GetWeakPtr(), this));
 }
 
 void DatabaseTask::OnTaskFinished(DatabaseTask* finished_subtask) {
   size_t erased = active_subtasks_.erase(finished_subtask);
-  DCHECK_EQ(erased, 1u);
+  CHECK_EQ(erased, 1u, base::NotFatalUntil::M158);
 }
 
 void DatabaseTask::AddDatabaseTask(std::unique_ptr<DatabaseTask> task) {
-  DCHECK_EQ(task->host_, data_manager());
+  CHECK_EQ(task->host_, data_manager(), base::NotFatalUntil::M158);
   data_manager()->AddDatabaseTask(std::move(task));
 }
 
 void DatabaseTask::AddSubTask(std::unique_ptr<DatabaseTask> task) {
-  DCHECK_EQ(task->host_, this);
+  CHECK_EQ(task->host_, this, base::NotFatalUntil::M158);
   auto insert_result = active_subtasks_.emplace(task.get(), std::move(task));
   insert_result.first->second->Start();  // Start the subtask.
 }
@@ -84,12 +87,11 @@ void DatabaseTask::AbandonFetches(int64_t service_worker_registration_id) {
 void DatabaseTask::IsQuotaAvailable(const blink::StorageKey& storage_key,
                                     int64_t size,
                                     IsQuotaAvailableCallback callback) {
-  DCHECK(quota_manager_proxy());
-  DCHECK_GT(size, 0);
+  CHECK(quota_manager_proxy(), base::NotFatalUntil::M158);
+  CHECK_GT(size, 0, base::NotFatalUntil::M158);
 
   quota_manager_proxy()->GetUsageAndQuota(
-      storage_key, blink::mojom::StorageType::kTemporary,
-      base::ThreadTaskRunnerHandle::Get(),
+      storage_key,
       base::BindOnce(&DidGetUsageAndQuota, std::move(callback), size));
 }
 
@@ -116,7 +118,7 @@ void DatabaseTask::DidGetStorageVersion(StorageVersionCallback callback,
       break;
   }
 
-  DCHECK_EQ(data.size(), 1u);
+  CHECK_EQ(data.size(), 1u, base::NotFatalUntil::M158);
   int storage_version = proto::SV_UNINITIALIZED;
 
   if (!base::StringToInt(data[0], &storage_version) ||
@@ -129,15 +131,17 @@ void DatabaseTask::DidGetStorageVersion(StorageVersionCallback callback,
 }
 
 void DatabaseTask::SetStorageError(BackgroundFetchStorageError error) {
-  DCHECK_NE(BackgroundFetchStorageError::kNone, error);
+  CHECK_NE(BackgroundFetchStorageError::kNone, error,
+           base::NotFatalUntil::M158);
   switch (storage_error_) {
     case BackgroundFetchStorageError::kNone:
       storage_error_ = error;
       break;
     case BackgroundFetchStorageError::kServiceWorkerStorageError:
     case BackgroundFetchStorageError::kCacheStorageError:
-      DCHECK(error == BackgroundFetchStorageError::kServiceWorkerStorageError ||
-             error == BackgroundFetchStorageError::kCacheStorageError);
+      CHECK(error == BackgroundFetchStorageError::kServiceWorkerStorageError ||
+                error == BackgroundFetchStorageError::kCacheStorageError,
+            base::NotFatalUntil::M158);
       if (storage_error_ != error)
         storage_error_ = BackgroundFetchStorageError::kStorageError;
       break;
@@ -151,25 +155,12 @@ void DatabaseTask::SetStorageErrorAndFinish(BackgroundFetchStorageError error) {
   FinishWithError(blink::mojom::BackgroundFetchError::STORAGE_ERROR);
 }
 
-void DatabaseTask::ReportStorageError() {
-  if (host_ != data_manager())
-    return;  // This is a SubTask.
-
-  base::UmaHistogramEnumeration("BackgroundFetch.Storage." + HistogramName(),
-                                storage_error_);
-}
-
 bool DatabaseTask::HasStorageError() {
   return storage_error_ != BackgroundFetchStorageError::kNone;
 }
 
-std::string DatabaseTask::HistogramName() const {
-  NOTREACHED() << "HistogramName needs to be provided.";
-  return "GeneralDatabaseTask";
-}
-
 ServiceWorkerContextWrapper* DatabaseTask::service_worker_context() {
-  DCHECK(data_manager()->service_worker_context());
+  CHECK(data_manager()->service_worker_context(), base::NotFatalUntil::M158);
   return data_manager()->service_worker_context();
 }
 
@@ -185,7 +176,8 @@ BackgroundFetchDataManager* DatabaseTask::data_manager() {
   return host_->data_manager();
 }
 
-storage::QuotaManagerProxy* DatabaseTask::quota_manager_proxy() {
+const scoped_refptr<storage::QuotaManagerProxy>&
+DatabaseTask::quota_manager_proxy() {
   return data_manager()->quota_manager_proxy();
 }
 
@@ -193,7 +185,7 @@ void DatabaseTask::OpenCache(
     const BackgroundFetchRegistrationId& registration_id,
     int64_t trace_id,
     base::OnceCallback<void(blink::mojom::CacheStorageError)> callback) {
-  DCHECK(!cache_storage_cache_remote_.is_bound());
+  CHECK(!cache_storage_cache_remote_.is_bound(), base::NotFatalUntil::M158);
   data_manager()->OpenCache(
       registration_id.storage_key(), registration_id.unique_id(), trace_id,
       base::BindOnce(&DatabaseTask::DidOpenCache,
@@ -202,13 +194,13 @@ void DatabaseTask::OpenCache(
 
 void DatabaseTask::DidOpenCache(
     base::OnceCallback<void(blink::mojom::CacheStorageError)> callback,
-    blink::mojom::OpenResultPtr result) {
-  if (result->is_status()) {
-    std::move(callback).Run(result->get_status());
+    blink::mojom::CacheStorage::OpenResult result) {
+  if (!result.has_value()) {
+    std::move(callback).Run(result.error());
     return;
   }
 
-  cache_storage_cache_remote_.Bind(std::move(result->get_cache()));
+  cache_storage_cache_remote_.Bind(std::move(result.value()));
   std::move(callback).Run(blink::mojom::CacheStorageError::kSuccess);
 }
 

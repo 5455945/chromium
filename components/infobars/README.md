@@ -11,9 +11,19 @@ well), and are occasionally used for purposes outside their original intent
 (e.g. the "default browser" infobar, which does not relate to the page content).
 Be cautious about adding new ones.
 
-Infobars is a layered component
-(https://sites.google.com/a/chromium.org/dev/developers/design-documents/layered-components-design)
+Infobars is a [layered component](https://www.chromium.org/developers/design-documents/layered-components-design/)
 to enable it to be shared cleanly on iOS.
+
+On Desktop, do **not** subclass `ConfirmInfoBarDelegate` or
+`SimpleAlertInfoBarDelegate` directly for new infobars. Instead, use the
+centralized declarative framework (`infobars::InfoBarSpec` and
+`infobars::BrowserInfoBarManager`).
+See [/chrome/browser/infobars/README.md](/chrome/browser/infobars/README.md) for
+usage instructions and examples.
+
+On Android, Infobars have been deprecated in favor of the new Message UI.
+Please consider using this new Message UI.
+See components/messages/README.md for more details.
 
 Directory structure:
 android/: Android-specific specializations

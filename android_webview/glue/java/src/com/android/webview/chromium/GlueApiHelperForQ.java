@@ -1,16 +1,13 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package com.android.webview.chromium;
 
-import android.annotation.TargetApi;
-import android.os.Build;
 import android.webkit.WebViewRenderProcess;
 import android.webkit.WebViewRenderProcessClient;
 
 import org.chromium.android_webview.AwRenderProcess;
-import org.chromium.base.annotations.VerifiesOnQ;
 
 import java.util.concurrent.Executor;
 
@@ -21,8 +18,6 @@ import java.util.concurrent.Executor;
  * in base/, for reasons such as using system APIs or instantiating an adapter class that is
  * specific to glue layer.
  */
-@VerifiesOnQ
-@TargetApi(Build.VERSION_CODES.Q)
 public final class GlueApiHelperForQ {
     private GlueApiHelperForQ() {}
 
@@ -35,8 +30,10 @@ public final class GlueApiHelperForQ {
      * @see {@link WebView#setWebViewRenderProcessClient(Executor,
      * WebViewRenderProcessClient)}
      */
-    public static void setWebViewRenderProcessClient(SharedWebViewChromium sharedWebViewChromium,
-            Executor executor, WebViewRenderProcessClient client) {
+    public static void setWebViewRenderProcessClient(
+            SharedWebViewChromium sharedWebViewChromium,
+            Executor executor,
+            WebViewRenderProcessClient client) {
         sharedWebViewChromium.setWebViewRendererClientAdapter(
                 new WebViewRenderProcessClientAdapter(executor, client));
     }

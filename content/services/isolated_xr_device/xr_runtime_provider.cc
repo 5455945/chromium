@@ -1,22 +1,29 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/services/isolated_xr_device/xr_runtime_provider.h"
 
-#include "base/bind.h"
 #include "base/command_line.h"
-#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/strings/string_util.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/trace_event.h"
+#include "build/build_config.h"
 #include "content/public/common/content_switches.h"
-#include "device/base/features.h"
 #include "device/vr/buildflags/buildflags.h"
+#include "device/vr/public/cpp/features.h"
 
-#if BUILDFLAG(ENABLE_OPENXR)
+#if BUILDFLAG(ENABLE_OPENXR) && BUILDFLAG(IS_DESKTOP_OPENXR)
 #include "content/public/common/gpu_stream_constants.h"
 #include "device/vr/openxr/openxr_device.h"
-#include "device/vr/openxr/openxr_statics.h"
 #include "services/viz/public/cpp/gpu/context_provider_command_buffer.h"
+
+#if BUILDFLAG(IS_WIN)
+#include "device/vr/openxr/windows/openxr_platform_helper_windows.h"
+#elif BUILDFLAG(IS_LINUX)
+#include "device/vr/openxr/linux/openxr_platform_helper_linux.h"
+#endif
 #endif
 
 enum class IsolatedXRRuntimeProvider::RuntimeStatus {
@@ -26,8 +33,7 @@ enum class IsolatedXRRuntimeProvider::RuntimeStatus {
 
 namespace {
 // Poll for device add/remove every 5 seconds.
-constexpr base::TimeDelta kTimeBetweenPollingEvents =
-    base::TimeDelta::FromSecondsD(5);
+constexpr base::TimeDelta kTimeBetweenPollingEvents = base::Seconds(5);
 
 template <typename VrDeviceT>
 std::unique_ptr<VrDeviceT> CreateDevice() {
@@ -39,20 +45,20 @@ std::unique_ptr<VrDeviceT> EnableRuntime(
     device::mojom::IsolatedXRRuntimeProviderClient* client,
     base::OnceCallback<std::unique_ptr<VrDeviceT>()> create_device) {
   auto device = std::move(create_device).Run();
-  TRACE_EVENT_INSTANT1("xr", "HardwareAdded", TRACE_EVENT_SCOPE_THREAD, "id",
-                       static_cast<int>(device->GetId()));
+  TRACE_EVENT_INSTANT("xr", "HardwareAdded", "id",
+                      static_cast<int>(device->GetId()));
   // "Device" here refers to a runtime + hardware pair, not necessarily
   // a physical device.
-  client->OnDeviceAdded(device->BindXRRuntime(), device->BindCompositorHost(),
-                        device->GetDeviceData(), device->GetId());
+  client->OnDeviceAdded(device->BindXRRuntime(), device->GetDeviceData(),
+                        device->GetId());
   return device;
 }
 
 template <typename VrDeviceT>
 void DisableRuntime(device::mojom::IsolatedXRRuntimeProviderClient* client,
                     std::unique_ptr<VrDeviceT> device) {
-  TRACE_EVENT_INSTANT1("xr", "HardwareRemoved", TRACE_EVENT_SCOPE_THREAD, "id",
-                       static_cast<int>(device->GetId()));
+  TRACE_EVENT_INSTANT("xr", "HardwareRemoved", "id",
+                      static_cast<int>(device->GetId()));
   // "Device" here refers to a runtime + hardware pair, not necessarily physical
   // device.
   client->OnDeviceRemoved(device->GetId());
@@ -75,9 +81,9 @@ void SetRuntimeStatus(
 
 // If none of the runtimes are enabled, this function will be unused.
 // This is a bit more scalable than wrapping it in all the typedefs
-bool ALLOW_UNUSED_TYPE IsEnabled(const base::CommandLine* command_line,
-                                 const base::Feature& feature,
-                                 const std::string& name) {
+[[maybe_unused]] bool IsEnabled(const base::CommandLine* command_line,
+                                const base::Feature& feature,
+                                const std::string& name) {
   if (!command_line->HasSwitch(switches::kWebXrForceRuntime))
     return base::FeatureList::IsEnabled(feature);
 
@@ -93,13 +99,11 @@ bool ALLOW_UNUSED_TYPE IsEnabled(const base::CommandLine* command_line,
 // runtime) should be enabled at once, so this chooses the most preferred among
 // available options.
 void IsolatedXRRuntimeProvider::PollForDeviceChanges() {
-  bool preferred_device_enabled = false;
+  // If none of the following runtimes are enabled, we'll get an error for
+  // 'preferred_device_enabled' being unused, thus [[maybe_unused]].
+  [[maybe_unused]] bool preferred_device_enabled = false;
 
-  // If none of the following runtimes are enabled,
-  // we'll get an error for 'preferred_device_enabled' being unused.
-  ALLOW_UNUSED_LOCAL(preferred_device_enabled);
-
-#if BUILDFLAG(ENABLE_OPENXR)
+#if BUILDFLAG(ENABLE_OPENXR) && BUILDFLAG(IS_DESKTOP_OPENXR)
   if (!preferred_device_enabled && IsOpenXrHardwareAvailable()) {
     SetOpenXrRuntimeStatus(RuntimeStatus::kEnable);
     preferred_device_enabled = true;
@@ -109,7 +113,7 @@ void IsolatedXRRuntimeProvider::PollForDeviceChanges() {
 #endif
 
   // Schedule this function to run again later.
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE,
       base::BindOnce(&IsolatedXRRuntimeProvider::PollForDeviceChanges,
                      weak_ptr_factory_.GetWeakPtr()),
@@ -118,17 +122,23 @@ void IsolatedXRRuntimeProvider::PollForDeviceChanges() {
 
 void IsolatedXRRuntimeProvider::SetupPollingForDeviceChanges() {
   bool any_runtimes_available = false;
-  const base::CommandLine* command_line =
+  [[maybe_unused]] const base::CommandLine* command_line =
       base::CommandLine::ForCurrentProcess();
-  // If none of the following runtimes are enabled,
-  // we'll get an error for 'command_line' being unused.
-  ALLOW_UNUSED_LOCAL(command_line);
+  // If none of the following runtimes are enabled, we'll get an error for
+  // 'command_line' being unused, thus [[maybe_unused]].
 
-#if BUILDFLAG(ENABLE_OPENXR)
+#if BUILDFLAG(ENABLE_OPENXR) && BUILDFLAG(IS_DESKTOP_OPENXR)
   if (IsEnabled(command_line, device::features::kOpenXR,
                 switches::kWebXrRuntimeOpenXr)) {
-    openxr_statics_ = std::make_unique<device::OpenXrStatics>();
-    should_check_openxr_ = openxr_statics_->IsApiAvailable();
+#if BUILDFLAG(IS_WIN)
+    openxr_platform_helper_ =
+        std::make_unique<device::OpenXrPlatformHelperWindows>();
+#elif BUILDFLAG(IS_LINUX)
+    openxr_platform_helper_ =
+        std::make_unique<device::OpenXrPlatformHelperLinux>();
+#endif
+    should_check_openxr_ = openxr_platform_helper_->EnsureInitialized() &&
+                           openxr_platform_helper_->IsApiAvailable();
     any_runtimes_available |= should_check_openxr_;
   }
 #endif
@@ -148,9 +158,9 @@ void IsolatedXRRuntimeProvider::RequestDevices(
   client_->OnDevicesEnumerated();
 }
 
-#if BUILDFLAG(ENABLE_OPENXR)
+#if BUILDFLAG(ENABLE_OPENXR) && BUILDFLAG(IS_DESKTOP_OPENXR)
 bool IsolatedXRRuntimeProvider::IsOpenXrHardwareAvailable() {
-  return should_check_openxr_ && openxr_statics_->IsHardwareAvailable();
+  return should_check_openxr_ && openxr_platform_helper_->IsHardwareAvailable();
 }
 
 void IsolatedXRRuntimeProvider::SetOpenXrRuntimeStatus(RuntimeStatus status) {
@@ -159,16 +169,12 @@ void IsolatedXRRuntimeProvider::SetOpenXrRuntimeStatus(RuntimeStatus status) {
       weak_ptr_factory_.GetWeakPtr());
   SetRuntimeStatus(client_.get(), status,
                    base::BindOnce(
-                       [](device::OpenXrStatics* openxr_statics,
-                          VizContextProviderFactoryAsync factory_async) {
-                         // This does not give any ownership of the
-                         // OpenXrStatics object to OpenXrDevice. OpenXrStatics
-                         // is only used in the constructor and a reference is
-                         // not kept.
+                       [](VizContextProviderFactoryAsync factory_async,
+                          device::OpenXrPlatformHelper* platform_helper) {
                          return std::make_unique<device::OpenXrDevice>(
-                             openxr_statics, std::move(factory_async));
+                             std::move(factory_async), platform_helper);
                        },
-                       openxr_statics_.get(), std::move(factory_async)),
+                       std::move(factory_async), openxr_platform_helper_.get()),
                    &openxr_device_);
 }
 
@@ -177,12 +183,11 @@ void IsolatedXRRuntimeProvider::SetOpenXrRuntimeStatus(RuntimeStatus status) {
 // task with this callback onto the main thread's task runner while it is
 // running on the render loop thread's task runner. The context provider and its
 // supporting object, viz::Gpu, are required to be created on the main thread's
-// task runner. Upon creating the context provider, CreateContextProviderAsync
-// posts a callback back to the render loop's thread runner with the newly
-// created context provider.
+// task runner. The RenderLoop is expected to use BindPostTask to ensure that
+// the VizContextProviderCallback sends the ContextProvider to the appropriate
+// thread.
 void IsolatedXRRuntimeProvider::CreateContextProviderAsync(
-    VizContextProviderCallback viz_context_provider_callback,
-    scoped_refptr<base::SingleThreadTaskRunner> task_runner) {
+    VizContextProviderCallback viz_context_provider_callback) {
   // viz_gpu_ must be kept alive so long as there are outstanding context
   // providers attached to it, otherwise the GPU process channel gets closed out
   // from under it.
@@ -197,22 +202,28 @@ void IsolatedXRRuntimeProvider::CreateContextProviderAsync(
         viz_gpu_->EstablishGpuChannelSync();
   }
 
+#if BUILDFLAG(IS_WIN)
   scoped_refptr<viz::ContextProvider> context_provider =
-      base::MakeRefCounted<viz::ContextProviderCommandBuffer>(
-          viz_gpu_->GetGpuChannel(), nullptr /* gpu_memory_buffer_manager */,
-          content::kGpuStreamIdDefault, content::kGpuStreamPriorityUI,
-          gpu::kNullSurfaceHandle, GURL(std::string("chrome://gpu/XrRuntime")),
-          false /* automatic flushes */, false /* support locking */,
-          false /* support grcontext */,
-          gpu::SharedMemoryLimits::ForMailboxContext(),
-          gpu::ContextCreationAttribs(),
+      viz::ContextProviderCommandBuffer::CreateForGL(
+          viz_gpu_->GetGpuChannel(), content::kGpuStreamIdDefault,
+          content::kGpuStreamPriorityUI, GURL("chrome://gpu/XrRuntime"),
           viz::command_buffer_metrics::ContextType::XR_COMPOSITING);
-  task_runner->PostTask(FROM_HERE,
-                        base::BindOnce(std::move(viz_context_provider_callback),
-                                       std::move(context_provider)));
+#else
+  // The GPU service rejects CONTEXT_TYPE_OPENGLES2 from a non-host channel
+  // outside Windows, so use the stock WebGL2 factory (WEBGL2 is still
+  // permitted; plain GLES3 is not serializable).
+  scoped_refptr<viz::ContextProvider> context_provider =
+      viz::ContextProviderCommandBuffer::CreateForWebGL(
+          viz_gpu_->GetGpuChannel(), GURL("chrome://gpu/XrRuntime"),
+          viz::WebGLContextType::kWebGL2,
+          /*prefer_low_power_gpu=*/false,
+          /*fail_if_major_performance_caveat=*/false);
+#endif
+
+  std::move(viz_context_provider_callback).Run(context_provider);
 }
 
-#endif  // BUILDFLAG(ENABLE_OPENXR)
+#endif  // BUILDFLAG(ENABLE_OPENXR) && BUILDFLAG(IS_DESKTOP_OPENXR)
 
 IsolatedXRRuntimeProvider::IsolatedXRRuntimeProvider(
     mojo::PendingRemote<device::mojom::XRDeviceServiceHost> device_service_host,
@@ -220,4 +231,10 @@ IsolatedXRRuntimeProvider::IsolatedXRRuntimeProvider(
     : device_service_host_(std::move(device_service_host)),
       io_task_runner_(std::move(io_task_runner)) {}
 
-IsolatedXRRuntimeProvider::~IsolatedXRRuntimeProvider() = default;
+IsolatedXRRuntimeProvider::~IsolatedXRRuntimeProvider() {
+#if BUILDFLAG(ENABLE_OPENXR) && BUILDFLAG(IS_DESKTOP_OPENXR)
+  // Ensure that the OpenXrPlatformHelper outlives the OpenXrDevice
+  openxr_device_.reset();
+  openxr_platform_helper_.reset();
+#endif
+}

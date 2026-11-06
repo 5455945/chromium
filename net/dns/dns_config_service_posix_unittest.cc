@@ -1,37 +1,37 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "net/dns/dns_config_service_posix.h"
+
 #include <resolv.h>
 
+#include <array>
 #include <memory>
+#include <optional>
 
 #include "base/cancelable_callback.h"
-#include "base/cxx17_backports.h"
-#include "base/files/file_util.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
-#include "base/sequenced_task_runner.h"
 #include "base/sys_byteorder.h"
-#include "base/task/post_task.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
+#include "base/task/thread_pool.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_timeouts.h"
+#include "build/build_config.h"
 #include "net/base/ip_address.h"
 #include "net/dns/dns_config.h"
-#include "net/dns/dns_config_service_posix.h"
 #include "net/dns/public/dns_protocol.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-
-#include "base/bind.h"
-#include "base/task/thread_pool.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include "base/android/path_utils.h"
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
 
 // Required for inet_pton()
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include <winsock2.h>
 #else
 #include <arpa/inet.h>
@@ -42,18 +42,18 @@ namespace net {
 namespace {
 
 // MAXNS is normally 3, but let's test 4 if possible.
-const char* const kNameserversIPv4[] = {
+constexpr std::array<const char*, 4> kNameserversIPv4 = {
     "8.8.8.8",
     "192.168.1.1",
     "63.1.2.4",
     "1.0.0.1",
 };
 
-#if defined(OS_CHROMEOS)
-const char* const kNameserversIPv6[] = {
-    NULL,
+#if BUILDFLAG(IS_CHROMEOS)
+constexpr std::array<const char*, 4> kNameserversIPv6 = {
+    nullptr,
     "2001:DB8:0::42",
-    NULL,
+    nullptr,
     "::FFFF:129.144.52.38",
 };
 #endif
@@ -64,7 +64,7 @@ void DummyConfigCallback(const DnsConfig& config) {
 
 // Fills in |res| with sane configuration.
 void InitializeResState(res_state res) {
-  memset(res, 0, sizeof(*res));
+  UNSAFE_TODO(memset(res, 0, sizeof(*res)));
   res->options = RES_INIT | RES_RECURSE | RES_DEFNAMES | RES_DNSRCH |
                  RES_ROTATE;
   res->ndots = 2;
@@ -72,33 +72,34 @@ void InitializeResState(res_state res) {
   res->retry = 7;
 
   const char kDnsrch[] = "chromium.org" "\0" "example.com";
-  memcpy(res->defdname, kDnsrch, sizeof(kDnsrch));
+  UNSAFE_TODO(memcpy(res->defdname, kDnsrch, sizeof(kDnsrch)));
   res->dnsrch[0] = res->defdname;
-  res->dnsrch[1] = res->defdname + sizeof("chromium.org");
+  res->dnsrch[1] = UNSAFE_TODO(res->defdname + sizeof("chromium.org"));
 
-  for (unsigned i = 0; i < base::size(kNameserversIPv4) && i < MAXNS; ++i) {
+  for (unsigned i = 0; i < std::size(kNameserversIPv4) && i < MAXNS; ++i) {
     struct sockaddr_in sa;
     sa.sin_family = AF_INET;
     sa.sin_port = base::HostToNet16(NS_DEFAULTPORT + i);
     inet_pton(AF_INET, kNameserversIPv4[i], &sa.sin_addr);
-    res->nsaddr_list[i] = sa;
+    UNSAFE_TODO(res->nsaddr_list[i]) = sa;
     ++res->nscount;
   }
 
-#if defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS)
   // Install IPv6 addresses, replacing the corresponding IPv4 addresses.
   unsigned nscount6 = 0;
-  for (unsigned i = 0; i < base::size(kNameserversIPv6) && i < MAXNS; ++i) {
-    if (!kNameserversIPv6[i])
+  for (unsigned i = 0; i < std::size(kNameserversIPv6) && i < MAXNS; ++i) {
+    if (!kNameserversIPv6[i]) {
       continue;
+    }
     // Must use malloc to mimick res_ninit.
     struct sockaddr_in6 *sa6;
     sa6 = (struct sockaddr_in6 *)malloc(sizeof(*sa6));
     sa6->sin6_family = AF_INET6;
     sa6->sin6_port = base::HostToNet16(NS_DEFAULTPORT - i);
     inet_pton(AF_INET6, kNameserversIPv6[i], &sa6->sin6_addr);
-    res->_u._ext.nsaddrs[i] = sa6;
-    memset(&res->nsaddr_list[i], 0, sizeof res->nsaddr_list[i]);
+    UNSAFE_TODO(res->_u._ext.nsaddrs[i]) = sa6;
+    UNSAFE_TODO(memset(&res->nsaddr_list[i], 0, sizeof res->nsaddr_list[i]));
     ++nscount6;
   }
   res->_u._ext.nscount6 = nscount6;
@@ -106,17 +107,18 @@ void InitializeResState(res_state res) {
 }
 
 void CloseResState(res_state res) {
-#if defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS)
   for (int i = 0; i < res->nscount; ++i) {
-    if (res->_u._ext.nsaddrs[i] != NULL)
-      free(res->_u._ext.nsaddrs[i]);
+    if (UNSAFE_TODO(res->_u._ext.nsaddrs[i]) != nullptr) {
+      free(UNSAFE_TODO(res->_u._ext.nsaddrs[i]));
+    }
   }
 #endif
 }
 
 void InitializeExpectedConfig(DnsConfig* config) {
   config->ndots = 2;
-  config->fallback_period = base::TimeDelta::FromSeconds(4);
+  config->fallback_period = base::Seconds(4);
   config->attempts = 7;
   config->rotate = true;
   config->append_to_multi_label_name = true;
@@ -125,16 +127,17 @@ void InitializeExpectedConfig(DnsConfig* config) {
   config->search.push_back("example.com");
 
   config->nameservers.clear();
-  for (unsigned i = 0; i < base::size(kNameserversIPv4) && i < MAXNS; ++i) {
+  for (unsigned i = 0; i < std::size(kNameserversIPv4) && i < MAXNS; ++i) {
     IPAddress ip;
     EXPECT_TRUE(ip.AssignFromIPLiteral(kNameserversIPv4[i]));
     config->nameservers.push_back(IPEndPoint(ip, NS_DEFAULTPORT + i));
   }
 
-#if defined(OS_CHROMEOS)
-  for (unsigned i = 0; i < base::size(kNameserversIPv6) && i < MAXNS; ++i) {
-    if (!kNameserversIPv6[i])
+#if BUILDFLAG(IS_CHROMEOS)
+  for (unsigned i = 0; i < std::size(kNameserversIPv6) && i < MAXNS; ++i) {
+    if (!kNameserversIPv6[i]) {
       continue;
+    }
     IPAddress ip;
     EXPECT_TRUE(ip.AssignFromIPLiteral(kNameserversIPv6[i]));
     config->nameservers[i] = IPEndPoint(ip, NS_DEFAULTPORT - i);
@@ -156,10 +159,10 @@ TEST(DnsConfigServicePosixTest, CreateAndDestroy) {
 TEST(DnsConfigServicePosixTest, ConvertResStateToDnsConfig) {
   struct __res_state res;
   InitializeResState(&res);
-  absl::optional<DnsConfig> config = internal::ConvertResStateToDnsConfig(res);
+  std::optional<DnsConfig> config = internal::ConvertResStateToDnsConfig(res);
   CloseResState(&res);
   ASSERT_TRUE(config.has_value());
-  EXPECT_TRUE(config->IsValid());
+  EXPECT_FALSE(config->nameservers.empty());
 
   DnsConfig expected_config;
   EXPECT_FALSE(expected_config.EqualsIgnoreHosts(config.value()));
@@ -171,7 +174,7 @@ TEST(DnsConfigServicePosixTest, RejectEmptyNameserver) {
   struct __res_state res = {};
   res.options = RES_INIT | RES_RECURSE | RES_DEFNAMES | RES_DNSRCH;
   const char kDnsrch[] = "chromium.org";
-  memcpy(res.defdname, kDnsrch, sizeof(kDnsrch));
+  UNSAFE_TODO(memcpy(res.defdname, kDnsrch, sizeof(kDnsrch)));
   res.dnsrch[0] = res.defdname;
 
   struct sockaddr_in sa = {};
@@ -197,8 +200,7 @@ TEST(DnsConfigServicePosixTest, DestroyWhileJobsWorking) {
       base::test::TaskEnvironment::MainThreadType::IO,
       base::test::TaskEnvironment::TimeSource::MOCK_TIME);
 
-  std::unique_ptr<internal::DnsConfigServicePosix> service(
-      new internal::DnsConfigServicePosix());
+  auto service = std::make_unique<internal::DnsConfigServicePosix>();
   // Call WatchConfig() which also tests ReadConfig().
   service->WatchConfig(base::BindRepeating(&DummyConfigCallback));
   service.reset();

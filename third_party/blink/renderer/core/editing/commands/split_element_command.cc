@@ -53,8 +53,13 @@ void SplitElementCommand::ExecuteApply() {
   DummyExceptionStateForTesting exception_state;
 
   ContainerNode* parent = element2_->parentNode();
-  if (!parent || !HasEditableStyle(*parent))
+  if (!parent || !IsEditable(*parent))
     return;
+  if (RuntimeEnabledFeatures::NonEmptyBlockquotesOnOutdentingEnabled()) {
+    if (children.size() == 0) {
+      return;
+    }
+  }
   parent->InsertBefore(element1_.Get(), element2_.Get(), exception_state);
   if (exception_state.HadException())
     return;
@@ -74,8 +79,7 @@ void SplitElementCommand::DoApply(EditingState*) {
 }
 
 void SplitElementCommand::DoUnapply() {
-  if (!element1_ || !HasEditableStyle(*element1_) ||
-      !HasEditableStyle(*element2_))
+  if (!element1_ || !IsEditable(*element1_) || !IsEditable(*element2_))
     return;
 
   NodeVector children;
@@ -86,8 +90,10 @@ void SplitElementCommand::DoUnapply() {
   for (const auto& child : children)
     element2_->InsertBefore(child, ref_child, IGNORE_EXCEPTION_FOR_TESTING);
 
-  // Recover the id attribute of the original element.
-  const AtomicString& id = element1_->FastGetAttribute(html_names::kIdAttr);
+  // Recover the id attribute of the original element. This must be a copy,
+  // not a reference: setAttribute() below notifies id observers, which can
+  // reallocate `element1_`'s attribute storage.
+  const AtomicString id = element1_->FastGetAttribute(html_names::kIdAttr);
   if (!id.IsNull())
     element2_->setAttribute(html_names::kIdAttr, id);
 
@@ -99,6 +105,10 @@ void SplitElementCommand::DoReapply() {
     return;
 
   ExecuteApply();
+}
+
+String SplitElementCommand::ToString() const {
+  return "SplitElementCommand";
 }
 
 void SplitElementCommand::Trace(Visitor* visitor) const {

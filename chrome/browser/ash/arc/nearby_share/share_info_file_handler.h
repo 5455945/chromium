@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,28 +11,25 @@
 #include <vector>
 
 #include "base/files/scoped_temp_dir.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "chrome/browser/ash/arc/nearby_share/share_info_file_stream_adapter.h"
-#include "components/arc/mojom/nearby_share.mojom.h"
+#include "chromeos/ash/experiences/arc/mojom/nearby_share.mojom.h"
 #include "content/public/browser/browser_thread.h"
 
 class GURL;
-class Profile;
-
-namespace storage {
-class FileSystemContext;
-class FileSystemURL;
-}  // namespace storage
 
 namespace content {
 class BrowserContext;
-}  // namespace content
+}
 
-namespace file_manager {
-namespace util {
-struct FileSystemURLAndHandle;
-}  // namespace util
-}  // namespace file_manager
+namespace storage {
+class FileSystemContext;
+}  // namespace storage
 
 namespace arc {
 
@@ -45,59 +42,70 @@ namespace arc {
 // separate task.  This class is created on the UI thread but deleted on the
 // IO thread.  FileShareConfig is a convenience subclass for containing related
 // files information needed to create a Chrome share intent.
-class ShareInfoFileHandler : public base::RefCountedThreadSafe<
-                                 ShareInfoFileStreamAdapter,
-                                 content::BrowserThread::DeleteOnIOThread> {
+class ShareInfoFileHandler {
  public:
+  // Signifies whether all shared files have started streaming successfully.
+  using StartedCallback = base::OnceClosure;
+
   // |result| signifies state of shared files after streaming has completed.
   using CompletedCallback =
-      base::OnceCallback<void(absl::optional<base::File::Error> result)>;
+      base::OnceCallback<void(std::optional<base::File::Error> result)>;
 
-  ShareInfoFileHandler(Profile* profile,
+  // |value| is a percentage from 0 to 1 in double format (e.g. 0.50 for 50%).
+  using ProgressBarUpdateCallback = base::RepeatingCallback<void(double value)>;
+
+  // |browser_context| is the current browser context.
+  // |share_info| represents the data being shared.
+  // |directory| is the top level share directory. The owner of this class
+  // object will be required to clean up |directory| including any
+  // subdirectories and files within it.
+  // |task_runner| is used for any cleanup which requires disk IO.
+  ShareInfoFileHandler(content::BrowserContext* browser_context,
                        mojom::ShareIntentInfo* share_info,
-                       base::FilePath directory);
+                       base::FilePath directory,
+                       scoped_refptr<base::SequencedTaskRunner> task_runner);
 
   ShareInfoFileHandler(const ShareInfoFileHandler&) = delete;
   ShareInfoFileHandler& operator=(const ShareInfoFileHandler&) = delete;
 
-  // Returns FileSystemURL for a given |context| and |url|.
-  static file_manager::util::FileSystemURLAndHandle GetFileSystemContext(
-      content::BrowserContext* context,
-      const GURL& url);
+  ~ShareInfoFileHandler();
 
   const std::vector<base::FilePath>& GetFilePaths() const;
   const std::vector<std::string>& GetMimeTypes() const;
   uint64_t GetTotalSizeOfFiles() const { return file_config_.total_size; }
   size_t GetNumberOfFiles() const { return file_config_.num_files; }
+  const base::FilePath& GetShareDirectory() const {
+    return file_config_.directory;
+  }
 
   // Start streaming virtual files to destination file descriptors in
-  // preparation for Nearby Share.
+  // preparation for Nearby Share.  Callbacks are run on the UI thread.
+  // |started_callback| is called when all files have successfully started
+  // streaming.
   // |completed_callback| is called when file streaming is completed with
   // either error or success.
-  void StartPreparingFiles(CompletedCallback completed_callback);
+  // |update_callback| is for updating a progress bar view value if needed
+  // (e.g. views::ProgressBar::SetValue(double)).
+  void StartPreparingFiles(StartedCallback started_callback,
+                           CompletedCallback completed_callback,
+                           ProgressBarUpdateCallback update_callback);
 
  private:
-  friend struct content::BrowserThread::DeleteOnThread<
-      content::BrowserThread::IO>;
-  friend class base::DeleteHelper<ShareInfoFileStreamAdapter>;
+  // Called when share directory path is created and can start streaming files.
+  void OnShareDirectoryPathCreated(base::FilePath share_dir);
 
-  ~ShareInfoFileHandler();
+  // Called when destination file descriptor is created and ready for file
+  // contents to be streamed into it.
+  void OnFileDescriptorCreated(const GURL& url,
+                               const base::FilePath& dest_file_path,
+                               const int64_t file_size,
+                               base::ScopedFD dest_fd);
 
-  // Start streaming virtual files into local path in scoped temp directory.
-  bool CreateDirectoryAndStreamFiles();
-
-  // Create file with create and write flags and return scoped fd.
-  base::ScopedFD CreateFileForWrite(const base::FilePath& file_path);
-
-  // Called when temp directory for Nearby Share cached files is created and
-  // started streaming files.
-  void OnCreatedDirectoryAndStreamingFiles(bool result);
-
-  // Called when the raw bytes of files have completed streaming from ARC VFS
-  // to Chrome local path.
+  // Called when the raw bytes of files have completed streaming from ARC
+  // virtual filesystem to Chrome local path.
   void OnFileStreamReadCompleted(
       const std::string& url_str,
-      std::list<scoped_refptr<ShareInfoFileStreamAdapter>>::iterator it,
+      std::list<scoped_refptr<ShareInfoFileStreamAdapter>>::iterator it_adapter,
       const int64_t bytes_read,
       bool result);
 
@@ -134,9 +142,10 @@ class ShareInfoFileHandler : public base::RefCountedThreadSafe<
 
   std::list<scoped_refptr<ShareInfoFileStreamAdapter>> file_stream_adapters_;
   std::list<scoped_refptr<storage::FileSystemContext>> contexts_;
-  std::list<base::ScopedTempDir> scoped_temp_dirs_;
   FileShareConfig file_config_;
+  StartedCallback started_callback_;
   CompletedCallback completed_callback_;
+  ProgressBarUpdateCallback update_callback_;
 
   // Updated by multiple stream adapters on UI thread.
   uint64_t num_bytes_read_ = 0;
@@ -145,8 +154,11 @@ class ShareInfoFileHandler : public base::RefCountedThreadSafe<
   // Track whether a file sharing flow has started .
   bool file_sharing_started_ = false;
 
-  // Unowned pointer to profile.
-  Profile* const profile_;
+  // Unowned pointer to browser context.
+  const raw_ptr<content::BrowserContext> browser_context_;
+
+  // Runner for tasks that may require disk IO.
+  const scoped_refptr<base::SequencedTaskRunner> task_runner_;
 
   // Timeout timer for asynchronous file streaming tasks.
   base::OneShotTimer file_streaming_timer_;

@@ -1,4 +1,4 @@
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -12,12 +12,12 @@ def embed_version(input_file, output_file, version, product_full_name):
     fout = open(output_file, 'w')
 
     if version:
-        replace_string = 'UPDATE_VERSION=\"' + version + '\"'
+        replace_string = 'UPDATE_VERSION="' + version + '"'
         for line in fin:
             fout.write(line.replace('UPDATE_VERSION=', replace_string))
 
     if product_full_name:
-        replace_string = 'PRODUCT_NAME=\"' + product_full_name + '\"'
+        replace_string = 'PRODUCT_NAME="' + product_full_name + '"'
         for line in fin:
             fout.write(line.replace('PRODUCT_NAME=', replace_string))
 
@@ -31,17 +31,14 @@ def parse_options():
     parser = optparse.OptionParser()
     parser.add_option('-i', '--input_file', help='Path to the input script.')
     parser.add_option(
-        '-o',
-        '--output_file',
-        help='Path to where we should output the script')
+        '-o', '--output_file', help='Path to where we should output the script'
+    )
     parser.add_option(
-        '-v',
-        '--version',
-        help='Version of the application bundle being built.')
+        '-v', '--version', help='Version of the application bundle being built.'
+    )
     parser.add_option(
-        '-p',
-        '--product_full_name',
-        help='Name of the product being built.')
+        '-p', '--product_full_name', help='Name of the product being built.'
+    )
     options, _ = parser.parse_args()
 
     if not options.version and not options.product_full_name:
@@ -51,8 +48,12 @@ def parse_options():
 
 
 def main(options):
-    embed_version(options.input_file, options.output_file,
-                  options.version, options.product_full_name)
+    embed_version(
+        options.input_file,
+        options.output_file,
+        options.version,
+        options.product_full_name,
+    )
     return 0
 
 

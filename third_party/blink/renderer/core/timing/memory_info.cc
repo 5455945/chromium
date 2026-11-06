@@ -32,20 +32,18 @@
 
 #include <limits>
 
+#include "base/memory/raw_ptr_exclusion.h"
 #include "base/time/default_tick_clock.h"
-#include "third_party/blink/renderer/core/frame/local_frame.h"
+#include "base/time/time.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
-#include "third_party/blink/renderer/platform/wtf/thread_specific.h"
 #include "v8/include/v8.h"
 
 namespace blink {
 
-static constexpr base::TimeDelta kTwentyMinutes =
-    base::TimeDelta::FromMinutes(20);
-static constexpr base::TimeDelta kFiftyMs =
-    base::TimeDelta::FromMilliseconds(50);
+static constexpr base::TimeDelta kTwentyMinutes = base::Minutes(20);
+static constexpr base::TimeDelta kFiftyMs = base::Milliseconds(50);
 
 static void GetHeapSize(HeapInfo& info) {
   v8::HeapStatistics heap_statistics;
@@ -71,13 +69,12 @@ class HeapSizeCache {
   }
 
   static HeapSizeCache& ForCurrentThread() {
-    DEFINE_THREAD_SAFE_STATIC_LOCAL(ThreadSpecific<HeapSizeCache>,
-                                    heap_size_cache, ());
-    return *heap_size_cache;
+    thread_local HeapSizeCache heap_size_cache;
+    return heap_size_cache;
   }
 
   void SetTickClockForTesting(const base::TickClock* clock) { clock_ = clock; }
-  void ResetLastUpdateTimeForTesting() { last_update_time_ = absl::nullopt; }
+  void ResetLastUpdateTimeForTesting() { last_update_time_ = std::nullopt; }
 
  private:
   void MaybeUpdate(MemoryInfo::Precision precision) {
@@ -87,8 +84,8 @@ class HeapSizeCache {
     // avoid exposing precise GC timings.
     base::TimeTicks now = clock_->NowTicks();
     base::TimeDelta delta_allowed =
-        precision == MemoryInfo::Precision::Bucketized ? kTwentyMinutes
-                                                       : kFiftyMs;
+        precision == MemoryInfo::Precision::kBucketized ? kTwentyMinutes
+                                                        : kFiftyMs;
     if (!last_update_time_.has_value() ||
         now - last_update_time_.value() >= delta_allowed) {
       Update(precision);
@@ -98,16 +95,18 @@ class HeapSizeCache {
 
   void Update(MemoryInfo::Precision precision) {
     GetHeapSize(info_);
-    if (precision == MemoryInfo::Precision::Precise)
+    if (precision == MemoryInfo::Precision::kPrecise) {
       return;
+    }
 
     info_.used_js_heap_size = QuantizeMemorySize(info_.used_js_heap_size);
     info_.total_js_heap_size = QuantizeMemorySize(info_.total_js_heap_size);
     info_.js_heap_size_limit = QuantizeMemorySize(info_.js_heap_size_limit);
   }
 
-  absl::optional<base::TimeTicks> last_update_time_;
-  const base::TickClock* clock_;
+  std::optional<base::TimeTicks> last_update_time_;
+  // RAW_PTR_EXCLUSION: #global-scope
+  RAW_PTR_EXCLUSION const base::TickClock* clock_;
 
   HeapInfo info_;
 };
@@ -120,7 +119,7 @@ size_t QuantizeMemorySize(size_t size) {
   const int kNumberOfBuckets = 100;
   DEFINE_STATIC_LOCAL(Vector<size_t>, bucket_size_list, ());
 
-  if (bucket_size_list.IsEmpty()) {
+  if (bucket_size_list.empty()) {
     bucket_size_list.resize(kNumberOfBuckets);
 
     float size_of_next_bucket =
@@ -151,14 +150,16 @@ size_t QuantizeMemorySize(size_t size) {
       }
 
       // Watch out for overflow, if the range is too large for size_t.
-      if (i > 0 && bucket_size_list[i] < bucket_size_list[i - 1])
+      if (i > 0 && bucket_size_list[i] < bucket_size_list[i - 1]) {
         bucket_size_list[i] = std::numeric_limits<size_t>::max();
+      }
     }
   }
 
   for (int i = 0; i < kNumberOfBuckets; ++i) {
-    if (size <= bucket_size_list[i])
+    if (size <= bucket_size_list[i]) {
       return bucket_size_list[i];
+    }
   }
 
   return bucket_size_list[kNumberOfBuckets - 1];
@@ -169,10 +170,11 @@ MemoryInfo::MemoryInfo(Precision precision) {
   // bucketize or cache values, regardless of the value of |precision|. When the
   // flag is off then our cache is used and |precision| determines the
   // granularity of the values and the timer of the cache we use.
-  if (RuntimeEnabledFeatures::PreciseMemoryInfoEnabled())
+  if (RuntimeEnabledFeatures::PreciseMemoryInfoEnabled()) {
     GetHeapSize(info_);
-  else
+  } else {
     HeapSizeCache::ForCurrentThread().GetCachedHeapSize(info_, precision);
+  }
   // The values must have been computed, so totalJSHeapSize must be greater than
   // 0.
   DCHECK_GT(totalJSHeapSize(), 0u);

@@ -1,56 +1,60 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/subresource_filter/content/browser/profile_interaction_manager.h"
 
+#include "base/check.h"
 #include "base/logging.h"
+#include "base/trace_event/trace_event.h"
+#include "build/build_config.h"
 #include "components/content_settings/browser/page_specific_content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/subresource_filter/content/browser/ads_intervention_manager.h"
 #include "components/subresource_filter/content/browser/content_subresource_filter_throttle_manager.h"
 #include "components/subresource_filter/content/browser/subresource_filter_content_settings_manager.h"
 #include "components/subresource_filter/content/browser/subresource_filter_profile_context.h"
+#include "components/subresource_filter/content/browser/utils.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/page.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 
-#if defined(OS_ANDROID)
-#include "components/infobars/content/content_infobar_manager.h"  // nogncheck
-#include "components/subresource_filter/content/browser/ads_blocked_infobar_delegate.h"
+#if BUILDFLAG(IS_ANDROID)
+#include "components/messages/android/message_dispatcher_bridge.h"
 #endif
 
 namespace subresource_filter {
 
 ProfileInteractionManager::ProfileInteractionManager(
-    content::WebContents* web_contents,
     SubresourceFilterProfileContext* profile_context)
-    : content::WebContentsObserver(web_contents),
-      profile_context_(profile_context) {
-  DCHECK(web_contents);
-}
+    : profile_context_(profile_context) {}
 
 ProfileInteractionManager::~ProfileInteractionManager() = default;
 
-void ProfileInteractionManager::DidFinishNavigation(
-    content::NavigationHandle* navigation_handle) {
-  if (navigation_handle->HasCommitted() && navigation_handle->IsInMainFrame() &&
-      !navigation_handle->IsSameDocument()) {
-    ads_violation_triggered_for_last_committed_navigation_ = false;
-  }
+void ProfileInteractionManager::DidCreatePage(content::Page& page) {
+  // A new ProfileInteractionManager is created for each page so we should only
+  // call this, at most, once.
+  CHECK(!page_);
+  page_ = &page;
 }
 
 void ProfileInteractionManager::OnReloadRequested() {
-  ContentSubresourceFilterThrottleManager::LogAction(
-      SubresourceFilterAction::kAllowlistedSite);
-  profile_context_->settings_manager()->AllowlistSite(
-      web_contents()->GetLastCommittedURL());
+  // A reload request comes from browser so it will always be associated with
+  // the primary page.
+  CHECK(page_);
+  CHECK(page_->IsPrimary());
 
-  web_contents()->GetController().Reload(content::ReloadType::NORMAL, true);
+  profile_context_->settings_manager()->AllowlistSite(
+      page_->GetMainDocument().GetLastCommittedURL());
+
+  // Since the reload comes from the primary page, the use of WebContents here
+  // is correct.
+  GetWebContents()->GetController().Reload(content::ReloadType::NORMAL, true);
 }
 
-// TODO(https://crbug.com/1131969): Consider adding reporting when
+// TODO(crbug.com/40721689): Consider adding reporting when
 // ads violations are triggered.
 void ProfileInteractionManager::OnAdsViolationTriggered(
     content::RenderFrameHost* rfh,
@@ -60,21 +64,20 @@ void ProfileInteractionManager::OnAdsViolationTriggered(
   // for the intervention duration, however, a page that began a navigation
   // before the intervention duration and was still alive after the duration
   // could re-trigger an ads intervention.
-  if (ads_violation_triggered_for_last_committed_navigation_)
+  if (ads_violation_triggered_for_last_committed_navigation_) {
     return;
+  }
 
   // If the feature is disabled, simulate ads interventions as if we were
   // enforcing on ads: do not record new interventions if we would be enforcing
   // an intervention on ads already.
   //
-  // TODO(https://crbug.com/1131971): Add support for enabling ads interventions
+  // TODO(crbug.com/40721691): Add support for enabling ads interventions
   // separately for different ads violations.
   const GURL& url = rfh->GetLastCommittedURL();
-  absl::optional<AdsInterventionManager::LastAdsIntervention>
-      last_intervention =
-          profile_context_->ads_intervention_manager()->GetLastAdsIntervention(
-              url);
-  // TODO(crbug.com/1131971): If a host triggers multiple times on a single
+  std::optional<AdsInterventionManager::LastAdsIntervention> last_intervention =
+      profile_context_->ads_intervention_manager()->GetLastAdsIntervention(url);
+  // TODO(crbug.com/40721691): If a host triggers multiple times on a single
   // navigate and the durations don't match, we'll use the last duration rather
   // than the longest. The metadata should probably store the activation with
   // the longest duration.
@@ -94,7 +97,9 @@ mojom::ActivationLevel ProfileInteractionManager::OnPageActivationComputed(
     content::NavigationHandle* navigation_handle,
     mojom::ActivationLevel initial_activation_level,
     ActivationDecision* decision) {
-  DCHECK(navigation_handle->IsInMainFrame());
+  TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("loading"),
+               "ProfileInteractionManager::OnPageActivationComputed");
+  CHECK(IsInSubresourceFilterRoot(navigation_handle));
 
   mojom::ActivationLevel effective_activation_level = initial_activation_level;
 
@@ -124,25 +129,33 @@ mojom::ActivationLevel ProfileInteractionManager::OnPageActivationComputed(
 }
 
 void ProfileInteractionManager::MaybeShowNotification() {
-  const GURL& top_level_url = web_contents()->GetLastCommittedURL();
+  // The caller should make sure this is only called from pages that are
+  // currently primary.
+  CHECK(page_);
+  CHECK(page_->IsPrimary());
+
+  const GURL& top_level_url = page_->GetMainDocument().GetLastCommittedURL();
   if (profile_context_->settings_manager()->ShouldShowUIForSite(
           top_level_url)) {
-#if defined(OS_ANDROID)
-    // NOTE: It is acceptable for the embedder to not have installed an infobar
-    // manager.
-    if (auto* infobar_manager =
-            infobars::ContentInfoBarManager::FromWebContents(web_contents())) {
-      subresource_filter::AdsBlockedInfobarDelegate::Create(infobar_manager);
+#if BUILDFLAG(IS_ANDROID)
+    if (messages::MessageDispatcherBridge::Get()
+            ->IsMessagesEnabledForEmbedder()) {
+      subresource_filter::AdsBlockedMessageDelegate::CreateForWebContents(
+          GetWebContents());
+      ads_blocked_message_delegate_ =
+          subresource_filter::AdsBlockedMessageDelegate::FromWebContents(
+              GetWebContents());
+      ads_blocked_message_delegate_->ShowMessage();
     }
 #endif
 
-    // TODO(https://crbug.com/1103176): Plumb the actual frame reference here
+    // TODO(crbug.com/40139135): Plumb the actual frame reference here
     // (it comes from
     // ContentSubresourceFilterThrottleManager::DidDisallowFirstSubresource,
     // which comes from a specific frame).
     content_settings::PageSpecificContentSettings* content_settings =
         content_settings::PageSpecificContentSettings::GetForFrame(
-            web_contents()->GetMainFrame());
+            &page_->GetMainDocument());
     content_settings->OnContentBlocked(ContentSettingsType::ADS);
 
     ContentSubresourceFilterThrottleManager::LogAction(
@@ -152,6 +165,23 @@ void ProfileInteractionManager::MaybeShowNotification() {
     ContentSubresourceFilterThrottleManager::LogAction(
         SubresourceFilterAction::kUISuppressed);
   }
+}
+
+content_settings::CookieSettings*
+ProfileInteractionManager::GetCookieSettings() {
+  return profile_context_->cookie_settings();
+}
+
+base::WeakPtr<safe_browsing::V5GetHashProtocolManager>
+ProfileInteractionManager::GetV5GetHashProtocolManager() {
+  return profile_context_ ? profile_context_->GetV5GetHashProtocolManager()
+                          : nullptr;
+}
+
+content::WebContents* ProfileInteractionManager::GetWebContents() {
+  CHECK(page_);
+  CHECK(page_->IsPrimary());
+  return content::WebContents::FromRenderFrameHost(&page_->GetMainDocument());
 }
 
 }  // namespace subresource_filter

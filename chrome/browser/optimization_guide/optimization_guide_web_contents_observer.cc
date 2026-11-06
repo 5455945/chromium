@@ -1,16 +1,19 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/optimization_guide/optimization_guide_web_contents_observer.h"
 
-#include "chrome/browser/optimization_guide/optimization_guide_hints_manager.h"
+#include "base/task/single_thread_task_runner.h"
+#include "chrome/browser/optimization_guide/chrome_hints_manager.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
+#include "chrome/browser/preloading/prefetch/no_state_prefetch/no_state_prefetch_manager_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "components/optimization_guide/core/hints_fetcher.h"
-#include "components/optimization_guide/core/hints_processing_util.h"
-#include "components/optimization_guide/core/optimization_guide_enums.h"
+#include "components/google/core/common/google_util.h"
+#include "components/no_state_prefetch/browser/no_state_prefetch_manager.h"
+#include "components/optimization_guide/core/hints/hints_fetcher.h"
+#include "components/optimization_guide/core/hints/hints_processing_util.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/proto/hints.pb.h"
 #include "content/public/browser/browser_thread.h"
@@ -21,19 +24,32 @@ namespace {
 
 bool IsValidOptimizationGuideNavigation(
     content::NavigationHandle* navigation_handle) {
-  // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
-  // frames. This caller was converted automatically to the primary main frame
-  // to preserve its semantics. Follow up to confirm correctness.
-  return navigation_handle->IsInPrimaryMainFrame() &&
-         navigation_handle->GetURL().SchemeIsHTTPOrHTTPS();
+  if (!navigation_handle->IsInPrimaryMainFrame())
+    return false;
+
+  if (!navigation_handle->GetURL().SchemeIsHTTPOrHTTPS())
+    return false;
+
+  // Now check if this is a NSP navigation. NSP is not a valid navigation.
+  prerender::NoStatePrefetchManager* no_state_prefetch_manager =
+      prerender::NoStatePrefetchManagerFactory::GetForBrowserContext(
+          navigation_handle->GetWebContents()->GetBrowserContext());
+  if (!no_state_prefetch_manager) {
+    // Not a NSP navigation if there is no NSP manager.
+    return true;
+  }
+  return !(no_state_prefetch_manager->IsWebContentsPrefetching(
+      navigation_handle->GetWebContents()));
 }
 
 }  // namespace
 
 OptimizationGuideWebContentsObserver::OptimizationGuideWebContentsObserver(
     content::WebContents* web_contents)
-    : content::WebContentsObserver(web_contents) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    : content::WebContentsObserver(web_contents),
+      content::WebContentsUserData<OptimizationGuideWebContentsObserver>(
+          *web_contents) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
   optimization_guide_keyed_service_ =
       OptimizationGuideKeyedServiceFactory::GetForProfile(
@@ -46,33 +62,31 @@ OptimizationGuideWebContentsObserver::~OptimizationGuideWebContentsObserver() =
 OptimizationGuideNavigationData* OptimizationGuideWebContentsObserver::
     GetOrCreateOptimizationGuideNavigationData(
         content::NavigationHandle* navigation_handle) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
+  CHECK_EQ(web_contents(), navigation_handle->GetWebContents(),
+           base::NotFatalUntil::M161);
 
-  int64_t navigation_id = navigation_handle->GetNavigationId();
-  if (inflight_optimization_guide_navigation_datas_.find(navigation_id) ==
-      inflight_optimization_guide_navigation_datas_.end()) {
+  NavigationHandleData* navigation_handle_data =
+      NavigationHandleData::GetOrCreateForNavigationHandle(*navigation_handle);
+  OptimizationGuideNavigationData* navigation_data =
+      navigation_handle_data->GetOptimizationGuideNavigationData();
+  if (!navigation_data) {
     // We do not have one already - create one.
-    inflight_optimization_guide_navigation_datas_[navigation_id] =
-        std::make_unique<OptimizationGuideNavigationData>(navigation_id);
+    navigation_handle_data->SetOptimizationGuideNavigationData(
+        std::make_unique<OptimizationGuideNavigationData>(
+            navigation_handle->GetNavigationId(),
+            navigation_handle->NavigationStart()));
+    navigation_data =
+        navigation_handle_data->GetOptimizationGuideNavigationData();
   }
 
-  DCHECK(inflight_optimization_guide_navigation_datas_.find(navigation_id) !=
-         inflight_optimization_guide_navigation_datas_.end());
-  return inflight_optimization_guide_navigation_datas_.find(navigation_id)
-      ->second.get();
+  CHECK(navigation_data, base::NotFatalUntil::M161);
+  return navigation_data;
 }
 
 void OptimizationGuideWebContentsObserver::DidStartNavigation(
     content::NavigationHandle* navigation_handle) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-
-  // Clear any leftover hint requests from a previous navigation.
-  // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
-  // frames. This caller was converted automatically to the primary main frame
-  // to preserve its semantics. Follow up to confirm correctness.
-  if (navigation_handle->IsInPrimaryMainFrame()) {
-    ClearHintsToFetchBasedOnPredictions(navigation_handle);
-  }
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
   if (!IsValidOptimizationGuideNavigation(navigation_handle))
     return;
@@ -80,13 +94,16 @@ void OptimizationGuideWebContentsObserver::DidStartNavigation(
   if (!optimization_guide_keyed_service_)
     return;
 
+  OptimizationGuideNavigationData* navigation_data =
+      GetOrCreateOptimizationGuideNavigationData(navigation_handle);
+  navigation_data->set_navigation_url(navigation_handle->GetURL());
   optimization_guide_keyed_service_->OnNavigationStartOrRedirect(
-      navigation_handle);
+      navigation_data);
 }
 
 void OptimizationGuideWebContentsObserver::DidRedirectNavigation(
     content::NavigationHandle* navigation_handle) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
   if (!IsValidOptimizationGuideNavigation(navigation_handle))
     return;
@@ -94,132 +111,176 @@ void OptimizationGuideWebContentsObserver::DidRedirectNavigation(
   if (!optimization_guide_keyed_service_)
     return;
 
+  OptimizationGuideNavigationData* navigation_data =
+      GetOrCreateOptimizationGuideNavigationData(navigation_handle);
+  navigation_data->set_navigation_url(navigation_handle->GetURL());
   optimization_guide_keyed_service_->OnNavigationStartOrRedirect(
-      navigation_handle);
-}
-
-void OptimizationGuideWebContentsObserver::ClearHintsToFetchBasedOnPredictions(
-    content::NavigationHandle* navigation_handle) {
-  hints_target_urls_.clear();
-  sent_batched_hints_request_ = false;
+      navigation_data);
 }
 
 void OptimizationGuideWebContentsObserver::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
-  // Clear any leftover hint requests from a previous navigation.
-  // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
-  // frames. This caller was converted automatically to the primary main frame
-  // to preserve its semantics. Follow up to confirm correctness.
-  if (navigation_handle->IsInPrimaryMainFrame()) {
-    ClearHintsToFetchBasedOnPredictions(navigation_handle);
-  }
-
-  if (!IsValidOptimizationGuideNavigation(navigation_handle)) {
+  if (!IsValidOptimizationGuideNavigation(navigation_handle))
     return;
-  }
 
-  // Delete Optimization Guide information later, so that other
-  // DidFinishNavigation methods can reliably use
-  // GetOptimizationGuideNavigationData regardless of order of
-  // WebContentsObservers.
-  // Note that a lot of Navigations (sub-frames, same document, non-committed,
-  // etc.) might not have navigation data associated with them, but we reduce
-  // likelihood of future leaks by always trying to remove the data.
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  // Note that a lot of Navigations (same document, non-committed, etc.) might
+  // not have navigation data associated with them, but we reduce likelihood of
+  // future leaks by always trying to remove the data.
+  NavigationHandleData* navigation_handle_data =
+      NavigationHandleData::GetForNavigationHandle(*navigation_handle);
+  if (!navigation_handle_data)
+    return;
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
       base::BindOnce(
           &OptimizationGuideWebContentsObserver::NotifyNavigationFinish,
-          weak_factory_.GetWeakPtr(), navigation_handle->GetNavigationId(),
+          weak_factory_.GetWeakPtr(),
+          navigation_handle_data->TakeOptimizationGuideNavigationData(),
           navigation_handle->GetRedirectChain()));
 }
 
-void OptimizationGuideWebContentsObserver::DocumentOnLoadCompletedInMainFrame(
-    content::RenderFrameHost* render_frame_host) {
-  if (!render_frame_host->GetLastCommittedURL().SchemeIsHTTPOrHTTPS()) {
-    return;
-  }
-  if (web_contents() !=
-      content::WebContents::FromRenderFrameHost(render_frame_host)) {
-    // The current web contents isn't for the main frame that reached onload.
-    return;
-  }
-
-  if (!optimization_guide_keyed_service_) {
-    return;
-  }
-
-  // Give the renderer some time to send us predictions that might have come
-  // at onload.
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
-      FROM_HERE,
-      base::BindOnce(&OptimizationGuideWebContentsObserver::FetchHints,
-                     weak_factory_.GetWeakPtr()),
-      optimization_guide::features::GetOnloadDelayForHintsFetching());
+void OptimizationGuideWebContentsObserver::WebContentsDestroyed() {
+  // The web contents are being destroyed. Stop observing.
+  Observe(/*web_contents=*/nullptr);
 }
 
-void OptimizationGuideWebContentsObserver::FetchHintsUsingManagerForTesting(
-    OptimizationGuideHintsManager* hints_manager) {
-  DCHECK(hints_manager);
-  sent_batched_hints_request_ = true;
-  hints_manager->FetchHintsForPredictions(
-      std::move(hints_target_urls_.vector()));
-  hints_target_urls_.clear();
-}
-
-void OptimizationGuideWebContentsObserver::FetchHints() {
-  if (!optimization_guide_keyed_service_) {
+void OptimizationGuideWebContentsObserver::
+    DocumentOnLoadCompletedInPrimaryMainFrame() {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
+  if (!web_contents() || !web_contents()
+                              ->GetPrimaryMainFrame()
+                              ->GetLastCommittedURL()
+                              .SchemeIsHTTPOrHTTPS()) {
     return;
   }
 
-  OptimizationGuideHintsManager* hints_manager =
-      optimization_guide_keyed_service_->GetHintsManager();
-  sent_batched_hints_request_ = true;
-  hints_manager->FetchHintsForPredictions(
-      std::move(hints_target_urls_.vector()));
-  hints_target_urls_.clear();
+  if (!optimization_guide_keyed_service_)
+    return;
+
+  if (optimization_guide::features::IsSRPFetchingEnabled() &&
+      google_util::IsGoogleSearchUrl(
+          web_contents()->GetPrimaryMainFrame()->GetLastCommittedURL())) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(
+            &OptimizationGuideWebContentsObserver::FetchHintsUsingManager,
+            weak_factory_.GetWeakPtr(),
+            optimization_guide_keyed_service_->GetHintsManager(),
+            web_contents()->GetPrimaryPage().GetWeakPtr()));
+  }
+}
+
+void OptimizationGuideWebContentsObserver::FetchHintsUsingManager(
+    optimization_guide::ChromeHintsManager* hints_manager,
+    base::WeakPtr<content::Page> page) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
+  CHECK(hints_manager, base::NotFatalUntil::M161);
+  if (!page)
+    return;
+
+  CHECK(optimization_guide::features::IsSRPFetchingEnabled());
+  PageData& page_data = GetPageData(*page);
+
+  std::vector<GURL> top_urls = page_data.GetHintsTargetUrls();
+
+  if (!top_urls.empty()) {
+    page_data.set_sent_batched_hints_request();
+    top_urls.resize(
+        std::min(top_urls.size(),
+                 optimization_guide::features::MaxResultsForSRPFetch()));
+    hints_manager->FetchHintsForURLs(
+        top_urls, optimization_guide::proto::CONTEXT_BATCH_UPDATE_GOOGLE_SRP);
+  }
 }
 
 void OptimizationGuideWebContentsObserver::NotifyNavigationFinish(
-    int64_t navigation_id,
+    std::unique_ptr<OptimizationGuideNavigationData> navigation_data,
     const std::vector<GURL>& navigation_redirect_chain) {
-  auto nav_data_iter =
-      inflight_optimization_guide_navigation_datas_.find(navigation_id);
-  if (nav_data_iter == inflight_optimization_guide_navigation_datas_.end())
-    return;
-
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
   if (optimization_guide_keyed_service_) {
     optimization_guide_keyed_service_->OnNavigationFinish(
         navigation_redirect_chain);
   }
 
-  // We keep the last navigation data around to keep track of events happening
-  // for the navigation that can happen after commit, such as a fetch for the
-  // navigation successfully completing (which is not guaranteed to come back
-  // before commit, if at all).
-  last_navigation_data_ = std::move(nav_data_iter->second);
-  inflight_optimization_guide_navigation_datas_.erase(navigation_id);
+  // We keep the navigation data in the PageData around to keep track of events
+  // happening for the navigation that can happen after commit, such as a fetch
+  // for the navigation successfully completing (which is not guaranteed to come
+  // back before commit, if at all).
+  if (!web_contents()) {
+    return;
+  }
+  PageData& page_data = GetPageData(web_contents()->GetPrimaryPage());
+  page_data.SetNavigationData(std::move(navigation_data));
 }
 
 void OptimizationGuideWebContentsObserver::FlushLastNavigationData() {
-  if (last_navigation_data_)
-    last_navigation_data_.reset();
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
+  if (!web_contents()) {
+    return;
+  }
+  PageData& page_data = GetPageData(web_contents()->GetPrimaryPage());
+  page_data.SetNavigationData(nullptr);
 }
 
 void OptimizationGuideWebContentsObserver::AddURLsToBatchFetchBasedOnPrediction(
     std::vector<GURL> urls,
     content::WebContents* web_contents) {
-  if (!this->web_contents()) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
+
+  if (!this->web_contents())
     return;
-  }
-  DCHECK_EQ(this->web_contents(), web_contents);
-  if (sent_batched_hints_request_) {
+  CHECK_EQ(this->web_contents(), web_contents, base::NotFatalUntil::M161);
+
+  PageData& page_data = GetPageData(web_contents->GetPrimaryPage());
+  if (page_data.is_sent_batched_hints_request())
     return;
-  }
-  for (const GURL& url : urls) {
-    hints_target_urls_.insert(url);
+  page_data.InsertHintTargetUrls(urls);
+
+  // In rare cases (such as some in browsertests), the onload event could come
+  // earlier than the first predictions, in which case we should attempt the
+  // fetch as prediction URLs are received.
+  if (web_contents->IsDocumentOnLoadCompletedInPrimaryMainFrame()) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(
+            &OptimizationGuideWebContentsObserver::FetchHintsUsingManager,
+            weak_factory_.GetWeakPtr(),
+            optimization_guide_keyed_service_->GetHintsManager(),
+            web_contents->GetPrimaryPage().GetWeakPtr()));
   }
 }
 
-WEB_CONTENTS_USER_DATA_KEY_IMPL(OptimizationGuideWebContentsObserver)
+OptimizationGuideWebContentsObserver::PageData&
+OptimizationGuideWebContentsObserver::GetPageData(content::Page& page) {
+  return *PageData::GetOrCreateForPage(page);
+}
+
+OptimizationGuideWebContentsObserver::PageData::PageData(content::Page& page)
+    : PageUserData(page) {}
+OptimizationGuideWebContentsObserver::PageData::~PageData() = default;
+
+void OptimizationGuideWebContentsObserver::PageData::InsertHintTargetUrls(
+    const std::vector<GURL>& urls) {
+  CHECK(!sent_batched_hints_request_, base::NotFatalUntil::M161);
+  for (const GURL& url : urls)
+    hints_target_urls_.insert(url);
+}
+
+std::vector<GURL>
+OptimizationGuideWebContentsObserver::PageData::GetHintsTargetUrls() {
+  std::vector<GURL> target_urls = std::move(hints_target_urls_.vector());
+  hints_target_urls_.clear();
+  return target_urls;
+}
+
+OptimizationGuideWebContentsObserver::NavigationHandleData::
+    NavigationHandleData(content::NavigationHandle&) {}
+OptimizationGuideWebContentsObserver::NavigationHandleData::
+    ~NavigationHandleData() = default;
+
+PAGE_USER_DATA_KEY_IMPL(OptimizationGuideWebContentsObserver::PageData);
+NAVIGATION_HANDLE_USER_DATA_KEY_IMPL(
+    OptimizationGuideWebContentsObserver::NavigationHandleData);
+WEB_CONTENTS_USER_DATA_KEY_IMPL(OptimizationGuideWebContentsObserver);

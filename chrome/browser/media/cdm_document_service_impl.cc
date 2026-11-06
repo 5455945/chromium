@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,13 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "build/chromeos_buildflags.h"
-#include "components/user_prefs/user_prefs.h"
+#include "base/functional/bind.h"
+#include "base/logging.h"
+#include "base/memory/self_deleting.h"
+#include "build/build_config.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/web_contents.h"
 #include "media/media_buildflags.h"
 
@@ -20,28 +22,42 @@
 #include "content/public/browser/render_process_host.h"
 #endif
 
-#if BUILDFLAG(ENABLE_CDM_STORAGE_ID) || BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(ENABLE_CDM_STORAGE_ID) || BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/render_frame_host.h"
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ash/settings/cros_settings.h"
-#include "chromeos/settings/cros_settings_names.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "chromeos/crosapi/mojom/content_protection.mojom.h"
-#include "chromeos/lacros/lacros_service.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
-
-#if defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/media/platform_verification_chromeos.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
+#include "chromeos/ash/components/settings/cros_settings_names.h"
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
+#include <windows.h>
+
+#include <aclapi.h>
+
+#include "base/containers/flat_set.h"
+#include "base/files/file_enumerator.h"
+#include "base/files/file_util.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/no_destructor.h"
+#include "base/synchronization/lock.h"
+#include "base/system/sys_info.h"
+#include "base/task/lazy_thread_pool_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/task_traits.h"
+#include "base/task/thread_pool.h"
+#include "base/win/security_util.h"
+#include "base/win/sid.h"
 #include "chrome/browser/media/cdm_pref_service_helper.h"
-#endif  // defined(OS_WIN)
+#include "chrome/browser/media/media_foundation_service_monitor.h"
+#include "content/public/browser/site_instance.h"
+#include "media/cdm/media_foundation_cdm_data.h"
+#include "media/cdm/win/media_foundation_cdm.h"
+#include "sandbox/policy/win/lpac_capability.h"
+#endif  // BUILDFLAG(IS_WIN)
 
 namespace {
 
@@ -53,93 +69,226 @@ const uint32_t kCurrentStorageIdVersion = 1;
 
 std::vector<uint8_t> GetStorageIdSaltFromProfile(
     content::RenderFrameHost* rfh) {
-  DCHECK(rfh);
+  CHECK(rfh, base::NotFatalUntil::M161);
   Profile* profile =
       Profile::FromBrowserContext(rfh->GetProcess()->GetBrowserContext());
-  return MediaStorageIdSalt::GetSalt(profile->GetPrefs());
+  return MediaStorageIdSalt::GetSalt(profile);
 }
 
 #endif  // BUILDFLAG(ENABLE_CDM_STORAGE_ID)
 
+#if BUILDFLAG(IS_WIN)
+const char kCdmStore[] = "MediaFoundationCdmStore";
+
+base::FilePath GetCdmStorePathRootForProfile(
+    const base::FilePath& profile_path) {
+  return profile_path.AppendASCII(kCdmStore).AppendASCII(
+      base::SysInfo::ProcessCPUArchitecture());
+}
+#endif  // BUILDFLAG(IS_WIN)
+
 }  // namespace
+
+#if BUILDFLAG(IS_WIN)
+bool RevokeAccess(const base::FilePath& path,
+                  const std::vector<base::win::Sid>& sids) {
+  if (sids.empty()) {
+    return true;
+  }
+
+  PACL old_dacl = nullptr;
+  PSECURITY_DESCRIPTOR sd = nullptr;
+
+  if (GetNamedSecurityInfoW(path.value().c_str(), SE_FILE_OBJECT,
+                            DACL_SECURITY_INFORMATION, nullptr, nullptr,
+                            &old_dacl, nullptr, &sd) != ERROR_SUCCESS) {
+    return false;
+  }
+
+  std::vector<EXPLICIT_ACCESS_W> explicit_access(sids.size());
+  for (size_t i = 0; i < sids.size(); ++i) {
+    explicit_access[i].grfAccessPermissions = 0;
+    explicit_access[i].grfAccessMode = REVOKE_ACCESS;
+    explicit_access[i].grfInheritance = NO_INHERITANCE;
+    explicit_access[i].Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    explicit_access[i].Trustee.TrusteeType = TRUSTEE_IS_UNKNOWN;
+    explicit_access[i].Trustee.ptstrName =
+        reinterpret_cast<LPWSTR>(const_cast<void*>(sids[i].GetPSID()));
+  }
+
+  PACL new_dacl = nullptr;
+  if (SetEntriesInAclW(static_cast<ULONG>(sids.size()), explicit_access.data(),
+                       old_dacl, &new_dacl) != ERROR_SUCCESS) {
+    LocalFree(sd);
+    return false;
+  }
+
+  bool success =
+      SetNamedSecurityInfoW(const_cast<LPWSTR>(path.value().c_str()),
+                            SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr,
+                            nullptr, new_dacl, nullptr) == ERROR_SUCCESS;
+
+  LocalFree(new_dacl);
+  LocalFree(sd);
+  return success;
+}
+
+// Get a dedicated SequencedTaskRunner for CDM directory operations to prevent
+// race conditions when multiple frames or profiles request CDMs concurrently.
+base::LazyThreadPoolSequencedTaskRunner g_cdm_data_task_runner =
+    LAZY_THREAD_POOL_SEQUENCED_TASK_RUNNER_INITIALIZER(
+        base::TaskTraits({base::MayBlock(), base::TaskPriority::USER_VISIBLE,
+                          base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN}));
+
+scoped_refptr<base::SequencedTaskRunner> GetCdmDataTaskRunner() {
+  return g_cdm_data_task_runner.Get();
+}
+
+bool CreateCdmStorePathRootAndGrantAccessIfNeeded(
+    const base::FilePath& cdm_store_path_root) {
+  if (!media::MediaFoundationCdm::IsAvailable()) {
+    DLOG(ERROR) << "Granting access to LPAC process is not supported prior to "
+                   "Windows 10.";
+    return false;
+  }
+
+  // To avoid revoking and regranting ACLs on every CDM request (which locks
+  // out asynchronous utility processes), only perform the ACL fix once per
+  // session per directory.
+  if (CdmDocumentServiceImpl::GetCdmStoreProcessedPaths().contains(
+          cdm_store_path_root)) {
+    return true;
+  }
+
+  auto sids = base::win::Sid::FromNamedCapabilityVector(
+      {sandbox::policy::kMediaFoundationCdmData});
+
+  // Revoke the vulnerable `FILE_LIST_DIRECTORY` ACL on pre-existing folders
+  if (!base::PathExists(cdm_store_path_root)) {
+    base::File::Error file_error;
+    if (!base::CreateDirectoryAndGetError(cdm_store_path_root, &file_error)) {
+      DLOG(ERROR) << "Create CDM store path failed with " << file_error;
+      return false;
+    }
+  } else if (!RevokeAccess(cdm_store_path_root, sids)) {
+    DLOG(ERROR) << "Failed to revoke existing access to the root directory.";
+    return false;
+  }
+
+  // Grant traverse access to the root directory itself to allow processes to
+  // access known subdirectories but prevent directory listing.
+  if (!base::win::GrantAccessToPath(cdm_store_path_root, sids, FILE_TRAVERSE,
+                                    NO_INHERITANCE,
+                                    /*recursive=*/false)) {
+    DLOG(ERROR) << "Failed to grant traverse access to the root directory.";
+    return false;
+  }
+
+  // Grant full access to children via inheritance, so that subdirectories
+  // corresponding to specific origin IDs are accessible. Use recursive=true so
+  // the write goes through SetNamedSecurityInfoW, which triggers NTFS DACL
+  // auto-inheritance propagation. This is required to push the new inheritable
+  // ACE onto existing <origin_id>/ subdirectories whose inherited copy of this
+  // ACE was just stripped by RevokeAccess above. With recursive=false the
+  // write would go through SetSecurityInfo(SE_KERNEL_OBJECT), which does not
+  // propagate to existing children, leaving them inaccessible to the LPAC.
+  // The ACE applied to the root itself is identical in either case; only the
+  // propagation to existing children differs.
+  if (!base::win::GrantAccessToPath(
+          cdm_store_path_root, sids,
+          FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE,
+          CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE | INHERIT_ONLY_ACE,
+          /*recursive=*/true)) {
+    return false;
+  }
+
+  CdmDocumentServiceImpl::GetCdmStoreProcessedPaths().insert(
+      cdm_store_path_root);
+  return true;
+}
+
+std::unique_ptr<media::MediaFoundationCdmData>
+GetMediaFoundationCdmDataInternal(const base::FilePath profile_path,
+                                  std::unique_ptr<CdmPrefData> pref_data) {
+  CHECK(pref_data, base::NotFatalUntil::M161);
+
+  auto cdm_store_path_root = GetCdmStorePathRootForProfile(profile_path);
+  if (!CreateCdmStorePathRootAndGrantAccessIfNeeded(cdm_store_path_root)) {
+    return nullptr;
+  }
+
+  // The root directory is only granted FILE_TRAVERSE access, which doesn't
+  // allow the utility process to create new subdirectories. So we should have
+  // the browser process pre-create the origin-specific subdirectory before
+  // passing the root path to the CDM. This way, the utility process never needs
+  // directory creation permissions at the root; it only accesses the explicit
+  // subdirectory made for it.
+  base::FilePath cdm_store_path =
+      cdm_store_path_root.AppendASCII(pref_data->origin_id().ToString());
+  base::File::Error file_error;
+  if (!base::CreateDirectoryAndGetError(cdm_store_path, &file_error)) {
+    DLOG(ERROR) << "Create CDM store path failed with " << file_error;
+    return nullptr;
+  }
+
+  return std::make_unique<media::MediaFoundationCdmData>(pref_data->origin_id(),
+                                                         cdm_store_path_root);
+}
+#endif  // BUILDFLAG(IS_WIN)
 
 // static
 void CdmDocumentServiceImpl::Create(
     content::RenderFrameHost* render_frame_host,
     mojo::PendingReceiver<media::mojom::CdmDocumentService> receiver) {
   DVLOG(2) << __func__;
-  DCHECK(render_frame_host);
+  CHECK(render_frame_host);
 
   // PlatformVerificationFlow and the pref service requires to be run/accessed
   // on the UI thread.
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
   // The object is bound to the lifetime of |render_frame_host| and the mojo
-  // connection. See DocumentServiceBase for details.
-  new CdmDocumentServiceImpl(render_frame_host, std::move(receiver));
+  // connection. See DocumentService for details.
+  base::MakeSelfDeleting<CdmDocumentServiceImpl>(*render_frame_host,
+                                                 std::move(receiver));
 }
 
 CdmDocumentServiceImpl::CdmDocumentServiceImpl(
-    content::RenderFrameHost* render_frame_host,
-    mojo::PendingReceiver<media::mojom::CdmDocumentService> receiver)
-    : DocumentServiceBase(render_frame_host, std::move(receiver)),
-      render_frame_host_(render_frame_host) {}
+    content::RenderFrameHost& render_frame_host,
+    mojo::PendingReceiver<media::mojom::CdmDocumentService> receiver,
+    base::SelfDeletingPassKey key)
+    : DocumentService(render_frame_host, std::move(receiver), key) {}
 
 CdmDocumentServiceImpl::~CdmDocumentServiceImpl() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 }
 
+#if BUILDFLAG(IS_CHROMEOS)
 void CdmDocumentServiceImpl::ChallengePlatform(
     const std::string& service_id,
     const std::string& challenge,
     ChallengePlatformCallback callback) {
   DVLOG(2) << __func__;
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
-  // TODO(crbug.com/676224). This should be commented out at the mojom
-  // level so that it's only available for ChromeOS.
-
-#if defined(OS_CHROMEOS)
   bool success = platform_verification::PerformBrowserChecks(
-      content::WebContents::FromRenderFrameHost(render_frame_host()));
+      render_frame_host().GetMainFrame());
   if (!success) {
     std::move(callback).Run(false, std::string(), std::string(), std::string());
     return;
   }
-#endif
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  auto* lacros_service = chromeos::LacrosService::Get();
-  if (lacros_service &&
-      lacros_service->IsAvailable<crosapi::mojom::ContentProtection>() &&
-      lacros_service->GetInterfaceVersion(
-          crosapi::mojom::ContentProtection::Uuid_) >= 2) {
-    lacros_service->GetRemote<crosapi::mojom::ContentProtection>()
-        ->ChallengePlatform(
-            service_id, challenge,
-            base::BindOnce(&CdmDocumentServiceImpl::OnPlatformChallenged,
-                           weak_factory_.GetWeakPtr(), std::move(callback)));
-    return;
-  }
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
   if (!platform_verification_flow_)
     platform_verification_flow_ =
         base::MakeRefCounted<ash::attestation::PlatformVerificationFlow>();
 
   platform_verification_flow_->ChallengePlatformKey(
-      content::WebContents::FromRenderFrameHost(render_frame_host()),
+      content::WebContents::FromRenderFrameHost(&render_frame_host()),
       service_id, challenge,
       base::BindOnce(&CdmDocumentServiceImpl::OnPlatformChallenged,
                      weak_factory_.GetWeakPtr(), std::move(callback)));
-#else
-  // Not supported, so return failure.
-  std::move(callback).Run(false, std::string(), std::string(), std::string());
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
 void CdmDocumentServiceImpl::OnPlatformChallenged(
     ChallengePlatformCallback callback,
     PlatformVerificationResult result,
@@ -147,66 +296,63 @@ void CdmDocumentServiceImpl::OnPlatformChallenged(
     const std::string& signature,
     const std::string& platform_key_certificate) {
   DVLOG(2) << __func__ << ": " << result;
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
   if (result != ash::attestation::PlatformVerificationFlow::SUCCESS) {
-    DCHECK(signed_data.empty());
-    DCHECK(signature.empty());
-    DCHECK(platform_key_certificate.empty());
+    CHECK(signed_data.empty(), base::NotFatalUntil::M161);
+    CHECK(signature.empty(), base::NotFatalUntil::M161);
+    CHECK(platform_key_certificate.empty(), base::NotFatalUntil::M161);
     LOG(ERROR) << "Platform verification failed.";
     std::move(callback).Run(false, "", "", "");
     return;
   }
 
-  DCHECK(!signed_data.empty());
-  DCHECK(!signature.empty());
-  DCHECK(!platform_key_certificate.empty());
+  CHECK(!signed_data.empty(), base::NotFatalUntil::M161);
+  CHECK(!signature.empty(), base::NotFatalUntil::M161);
+  CHECK(!platform_key_certificate.empty(), base::NotFatalUntil::M161);
   std::move(callback).Run(true, signed_data, signature,
                           platform_key_certificate);
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-void CdmDocumentServiceImpl::OnPlatformChallenged(
-    ChallengePlatformCallback callback,
-    crosapi::mojom::ChallengePlatformResultPtr result) {
-  if (!result) {
-    LOG(ERROR) << "Platform verification failed.";
-    std::move(callback).Run(false, "", "", "");
+void CdmDocumentServiceImpl::IsVerifiedAccessEnabled(
+    IsVerifiedAccessEnabledCallback callback) {
+  // If we are in guest/incognito mode, then verified access is effectively
+  // disabled.
+  Profile* profile =
+      Profile::FromBrowserContext(render_frame_host().GetBrowserContext());
+  if (profile->IsOffTheRecord() || profile->IsGuestSession()) {
+    std::move(callback).Run(false);
     return;
   }
-  std::move(callback).Run(true, std::move(result->signed_data),
-                          std::move(result->signed_data_signature),
-                          std::move(result->platform_key_certificate));
-}
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
 
+  bool enabled_for_device = false;
+  ash::CrosSettings::Get()->GetBoolean(
+      ash::kAttestationForContentProtectionEnabled, &enabled_for_device);
+  std::move(callback).Run(enabled_for_device);
+}
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+#if BUILDFLAG(ENABLE_CDM_STORAGE_ID)
 void CdmDocumentServiceImpl::GetStorageId(uint32_t version,
                                           GetStorageIdCallback callback) {
   DVLOG(2) << __func__ << " version: " << version;
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
-  // TODO(crbug.com/676224). This should be commented out at the mojom
-  // level so that it's only available if Storage Id is available.
-
-#if BUILDFLAG(ENABLE_CDM_STORAGE_ID)
   // Check that the request is for a supported version.
   if (version == kCurrentStorageIdVersion ||
       version == kRequestLatestStorageIdVersion) {
     ComputeStorageId(
-        GetStorageIdSaltFromProfile(render_frame_host_), origin(),
+        GetStorageIdSaltFromProfile(&render_frame_host()), origin(),
         base::BindOnce(&CdmDocumentServiceImpl::OnStorageIdResponse,
                        weak_factory_.GetWeakPtr(), std::move(callback)));
     return;
   }
-#endif  // BUILDFLAG(ENABLE_CDM_STORAGE_ID)
 
   // Version not supported, so no Storage Id to return.
   DVLOG(2) << __func__ << " not supported";
   std::move(callback).Run(version, std::vector<uint8_t>());
 }
 
-#if BUILDFLAG(ENABLE_CDM_STORAGE_ID)
 void CdmDocumentServiceImpl::OnStorageIdResponse(
     GetStorageIdCallback callback,
     const std::vector<uint8_t>& storage_id) {
@@ -217,42 +363,203 @@ void CdmDocumentServiceImpl::OnStorageIdResponse(
 }
 #endif  // BUILDFLAG(ENABLE_CDM_STORAGE_ID)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-void CdmDocumentServiceImpl::IsVerifiedAccessEnabled(
-    IsVerifiedAccessEnabledCallback callback) {
-  // If we are in guest/incognito mode, then verified access is effectively
-  // disabled.
-  Profile* profile =
-      Profile::FromBrowserContext(render_frame_host_->GetBrowserContext());
-  if (profile->IsOffTheRecord() || profile->IsGuestSession()) {
-    std::move(callback).Run(false);
-    return;
-  }
-
-  bool enabled_for_device = false;
-  if (!ash::CrosSettings::Get()->GetBoolean(
-          chromeos::kAttestationForContentProtectionEnabled,
-          &enabled_for_device)) {
-    LOG(ERROR) << "Failed to get device setting.";
-    std::move(callback).Run(false);
-    return;
-  }
-  std::move(callback).Run(enabled_for_device);
-}
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-
-#if defined(OS_WIN)
-void CdmDocumentServiceImpl::GetCdmOriginId(GetCdmOriginIdCallback callback) {
+#if BUILDFLAG(IS_WIN)
+void CdmDocumentServiceImpl::GetMediaFoundationCdmData(
+    GetMediaFoundationCdmDataCallback callback) {
   const url::Origin cdm_origin = origin();
   if (cdm_origin.opaque()) {
     mojo::ReportBadMessage("EME use is not allowed on opaque origin");
     return;
   }
 
-  PrefService* user_prefs = user_prefs::UserPrefs::Get(
-      content::WebContents::FromRenderFrameHost(render_frame_host())
-          ->GetBrowserContext());
-  std::move(callback).Run(
-      CdmPrefServiceHelper::GetCdmOriginId(user_prefs, cdm_origin));
+  Profile* profile =
+      Profile::FromBrowserContext(render_frame_host().GetBrowserContext());
+
+  PrefService* user_prefs = profile->GetPrefs();
+  std::unique_ptr<CdmPrefData> pref_data =
+      CdmPrefServiceHelper::GetCdmPrefData(user_prefs, cdm_origin);
+
+  if (!pref_data) {
+    std::move(callback).Run(nullptr);
+    return;
+  }
+
+  // PostTask to the dedicated SequencedTaskRunner to prevent concurrent
+  // directory operations from racing and corrupting the ACLs or failing.
+  GetCdmDataTaskRunner()->PostTaskAndReplyWithResult(
+      FROM_HERE,
+      base::BindOnce(&GetMediaFoundationCdmDataInternal, profile->GetPath(),
+                     std::move(pref_data)),
+      std::move(callback));
 }
-#endif  // defined(OS_WIN)
+
+void CdmDocumentServiceImpl::OnCdmEvent(media::CdmEvent event,
+                                        uint32_t hresult) {
+  DVLOG(1) << __func__ << ": event=" << static_cast<int>(event);
+
+  auto* monitor = MediaFoundationServiceMonitor::GetInstance();
+
+  // Hardware context reset after power or display change is expected.
+  if (event == media::CdmEvent::kHardwareContextReset) {
+    bool has_change = monitor->HasRecentPowerOrDisplayChange();
+    base::UmaHistogramBoolean(
+        "Media.EME.MediaFoundationService.HardwareContextReset", has_change);
+    if (has_change) {
+      DVLOG(2) << __func__
+               << ": HardwareContextReset ignored after power/display change";
+      return;
+    }
+  }
+
+  // CdmDocumentServiceImpl is shared by all CDMs in the same RenderFrame.
+  //
+  // We choose to only handle each event type at most once because:
+  // 1. A site could create many CDM instances, e.g. to prefetch licenses. This
+  //    could cause multiple errors to be reported.
+  // 2. The media::Renderer could be destroyed and then recreated as part of the
+  //    suspend/resume process (e.g. paused for long time). This could cause
+  //    multiple significant playback or hardware context reset without playback
+  //    to be reported.
+  // In all cases, our data could be skewed if we don't throttle them.
+  //
+  // A different event will still be reported. For example, if an error happens
+  // after a significant playback both will be reported. This is fine since
+  // MediaFoundationServiceMonitor calculates a score.
+  if (auto [ignored, inserted] = reported_cdm_event_.insert(event); !inserted) {
+    DVLOG(2) << __func__ << ": Repeated CdmEvent ignored";
+    return;
+  }
+
+  auto site = render_frame_host()
+                  .GetSiteInstance()
+                  ->GetSecurityPrincipal()
+                  .GetDeprecatedSiteURL();
+  switch (event) {
+    case media::CdmEvent::kSignificantPlayback:
+      monitor->OnSignificantPlayback(site);
+      break;
+    case media::CdmEvent::kPlaybackError:
+    case media::CdmEvent::kCdmError:
+      monitor->OnPlaybackOrCdmError(site, static_cast<HRESULT>(hresult));
+      break;
+    case media::CdmEvent::kHardwareContextReset:
+      monitor->OnUnexpectedHardwareContextReset(site);
+      break;
+  }
+}
+
+// This function goes over each folder located under the MediaFoundationCdm
+// store root path and delete them as needed. A folder needs to be deleted for
+// the following reason:
+// - The origin id the folder is associated with is no longer present in the
+// PrefService
+// - The folder refers to an origin matched by `filter` AND the folder was last
+// modified between `start` and `end`
+void DeleteMediaFoundationCdmData(
+    const base::FilePath& profile_path,
+    const std::map<std::string, url::Origin> origin_id_mapping,
+    base::Time start,
+    base::Time end,
+    const base::RepeatingCallback<bool(const GURL&)>& filter) {
+  auto cdm_store_path_root = GetCdmStorePathRootForProfile(profile_path);
+
+  // Enumerate all folder under `cdm_store_path_root` which should give a list
+  // of folder whose names are origin ids. Each folder contains CDM data
+  // associated with that origin id.
+  //
+  base::FileEnumerator directory_enumerator(cdm_store_path_root,
+                                            /*recursive=*/false,
+                                            base::FileEnumerator::DIRECTORIES);
+
+  for (auto file_path = directory_enumerator.Next(); !file_path.value().empty();
+       file_path = directory_enumerator.Next()) {
+    // The folder name is a string representation of a base::UnguessableToken,
+    // using MaybeAsASCII() is fine.
+    std::string origin_id_string = file_path.BaseName().MaybeAsASCII();
+    if (origin_id_string.empty())
+      continue;
+
+    DVLOG(2) << __func__ << ": Processing: " << file_path;
+    std::optional<url::Origin> origin;
+    if (auto it = origin_id_mapping.find(origin_id_string);
+        it != origin_id_mapping.end()) {
+      origin = it->second;
+    }
+
+    // If we couldn't find the origin, this mean the origin was not present in
+    // the PrefService and we should also delete the folder.
+    if (!origin) {
+      base::DeletePathRecursively(file_path);
+      continue;
+    }
+
+    // Null filter indicates that we should delete everything.
+    if (filter && !filter.Run(GURL(origin->Serialize())))
+      continue;
+
+    // Now go over every files under the current folder and delete them if
+    // needed.
+    base::FileEnumerator file_enumerator(file_path, /*recursive=*/true,
+                                         base::FileEnumerator::FILES);
+
+    // If at least one files was modified between `start` and `end`, we should
+    // delete the whole folder.
+    bool should_delete = false;
+    for (auto cdm_data_file_path = file_enumerator.Next();
+         !cdm_data_file_path.value().empty();
+         cdm_data_file_path = file_enumerator.Next()) {
+      DVLOG(2) << __func__ << ": - Processing: " << cdm_data_file_path;
+      base::File::Info file_info;
+      if (!base::GetFileInfo(cdm_data_file_path, &file_info)) {
+        DVLOG(ERROR) << "Failed to get FileInfo";
+        should_delete = true;
+        break;
+      }
+
+      if (file_info.last_modified >= start &&
+          (end.is_null() || file_info.last_modified <= end)) {
+        DVLOG(2) << "Deleting file. Last modified: " << file_info.last_modified;
+        should_delete = true;
+        break;
+      }
+    }
+
+    if (should_delete)
+      base::DeletePathRecursively(file_path);
+  }
+}
+
+void CdmDocumentServiceImpl::ClearCdmData(
+    Profile* profile,
+    base::Time start,
+    base::Time end,
+    const base::RepeatingCallback<bool(const GURL&)>& filter,
+    base::OnceClosure complete_cb) {
+  PrefService* user_prefs = profile->GetPrefs();
+  CdmPrefServiceHelper::ClearCdmPreferenceData(user_prefs, start, end, filter);
+
+  // Get the origin_id mapping here because the PrefService needs to be accessed
+  // from the UI thread.
+  auto origin_id_mapping = CdmPrefServiceHelper::GetOriginIdMapping(user_prefs);
+
+  // PostTask to the dedicated SequencedTaskRunner because it does IO
+  // operations and to prevent racing with directory creations.
+  GetCdmDataTaskRunner()->PostTaskAndReply(
+      FROM_HERE,
+      base::BindOnce(&DeleteMediaFoundationCdmData, profile->GetPath(),
+                     std::move(origin_id_mapping), start, end, filter),
+      std::move(complete_cb));
+}
+
+// static
+base::flat_set<base::FilePath>&
+CdmDocumentServiceImpl::GetCdmStoreProcessedPaths() {
+  static base::NoDestructor<base::flat_set<base::FilePath>> processed_paths;
+  return *processed_paths;
+}
+
+// static
+void CdmDocumentServiceImpl::ClearCdmStoreProcessedPathsForTesting() {
+  GetCdmStoreProcessedPaths().clear();
+}
+#endif  // BUILDFLAG(IS_WIN)

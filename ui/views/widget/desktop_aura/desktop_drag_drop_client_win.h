@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,9 +9,10 @@
 
 #include <memory>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback_forward.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "ui/aura/client/drag_drop_client.h"
 #include "ui/views/views_export.h"
@@ -36,7 +37,22 @@ class VIEWS_EXPORT DesktopDragDropClientWin
   DesktopDragDropClientWin(aura::Window* root_window,
                            HWND window,
                            DesktopWindowTreeHostWin* desktop_host);
+
+  DesktopDragDropClientWin(const DesktopDragDropClientWin&) = delete;
+  DesktopDragDropClientWin& operator=(const DesktopDragDropClientWin&) = delete;
+
   ~DesktopDragDropClientWin() override;
+
+  // Called by window-move entry points (such as pre-threshold draggable-region
+  // click-holds) so that a renderer-initiated data drag cannot start while the
+  // user is moving a window. Suppression lasts until the returned runner is
+  // destroyed. Scopes may be nested and destroyed in any order. See
+  // StartDragAndDrop.
+  [[nodiscard]] static base::ScopedClosureRunner ScopedSuppressForWindowMove();
+
+  // Returns true if a drag is in progress or data drags are currently
+  // suppressed by a ScopedSuppressForWindowMove() scope.
+  static bool IsDragInProgressOrSuppressedForTesting();
 
   // Overridden from aura::client::DragDropClient:
   ui::mojom::DragOperation StartDragAndDrop(
@@ -51,23 +67,26 @@ class VIEWS_EXPORT DesktopDragDropClientWin
   void AddObserver(aura::client::DragDropClientObserver* observer) override;
   void RemoveObserver(aura::client::DragDropClientObserver* observer) override;
 
+  static void SetOnDragStartedCallbackForTesting(
+      base::RepeatingClosure callback);
+
   void OnNativeWidgetDestroying(HWND window);
 
- private:
-  bool drag_drop_in_progress_;
+  base::WeakPtr<DesktopDragDropClientWin> GetWeakPtr() {
+    return weak_factory_.GetWeakPtr();
+  }
 
+ private:
   Microsoft::WRL::ComPtr<ui::DragSourceWin> drag_source_;
 
   scoped_refptr<DesktopDropTargetWin> drop_target_;
 
-  // |this| will get deleted DesktopNativeWidgetAura is notified that the
+  // |this| will get deleted when DesktopNativeWidgetAura is notified that the
   // DesktopWindowTreeHost is being destroyed. So desktop_host_ should outlive
   // |this|.
-  DesktopWindowTreeHostWin* desktop_host_ = nullptr;
+  raw_ptr<DesktopWindowTreeHostWin> desktop_host_ = nullptr;
 
   base::WeakPtrFactory<DesktopDragDropClientWin> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(DesktopDragDropClientWin);
 };
 
 }  // namespace views

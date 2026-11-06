@@ -1,4 +1,4 @@
-// Copyright 2017 The Crashpad Authors. All rights reserved.
+// Copyright 2017 The Crashpad Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,17 +14,18 @@
 
 #include "snapshot/crashpad_types/crashpad_info_reader.h"
 
+#include <algorithm>
 #include <type_traits>
+#include <utility>
 
 #include "build/build_config.h"
 #include "client/crashpad_info.h"
-#include "util/misc/as_underlying_type.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "util/win/traits.h"
-#elif defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_ANDROID)
+#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
 #include "util/linux/traits.h"
-#elif defined(OS_FUCHSIA)
+#elif BUILDFLAG(IS_FUCHSIA)
 #include "util/fuchsia/traits.h"
 #endif
 
@@ -33,13 +34,13 @@ namespace crashpad {
 namespace {
 
 void UnsetIfNotValidTriState(TriState* value) {
-  switch (AsUnderlyingType(*value)) {
-    case AsUnderlyingType(TriState::kUnset):
-    case AsUnderlyingType(TriState::kEnabled):
-    case AsUnderlyingType(TriState::kDisabled):
+  switch (std::to_underlying(*value)) {
+    case std::to_underlying(TriState::kUnset):
+    case std::to_underlying(TriState::kEnabled):
+    case std::to_underlying(TriState::kDisabled):
       return;
   }
-  LOG(WARNING) << "Unsetting invalid TriState " << AsUnderlyingType(*value);
+  LOG(WARNING) << "Unsetting invalid TriState " << std::to_underlying(*value);
   *value = TriState::kUnset;
 }
 

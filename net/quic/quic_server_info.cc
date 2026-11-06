@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 
 #include <limits>
 
+#include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/pickle.h"
 #include "base/stl_util.h"
@@ -20,9 +21,9 @@ const int kQuicCryptoConfigVersion = 2;
 
 namespace net {
 
-QuicServerInfo::State::State() {}
+QuicServerInfo::State::State() = default;
 
-QuicServerInfo::State::~State() {}
+QuicServerInfo::State::~State() = default;
 
 void QuicServerInfo::State::Clear() {
   base::STLClearObject(&server_config);
@@ -36,7 +37,7 @@ void QuicServerInfo::State::Clear() {
 QuicServerInfo::QuicServerInfo(const quic::QuicServerId& server_id)
     : server_id_(server_id) {}
 
-QuicServerInfo::~QuicServerInfo() {}
+QuicServerInfo::~QuicServerInfo() = default;
 
 const QuicServerInfo::State& QuicServerInfo::state() const {
   return state_;
@@ -65,8 +66,8 @@ bool QuicServerInfo::ParseInner(const string& data) {
     return false;
   }
 
-  base::Pickle p(data.data(), data.size());
-  base::PickleIterator iter(p);
+  base::PickleIterator iter =
+      base::PickleIterator::WithData(base::as_byte_span(data));
 
   int version = -1;
   if (!iter.ReadInt(&version)) {
@@ -138,10 +139,10 @@ string QuicServerInfo::SerializeInner() const {
   p.WriteString(state_.server_config_sig);
   p.WriteUInt32(state_.certs.size());
 
-  for (size_t i = 0; i < state_.certs.size(); i++)
-    p.WriteString(state_.certs[i]);
+  for (const auto& cert : state_.certs)
+    p.WriteString(cert);
 
-  return string(reinterpret_cast<const char*>(p.data()), p.size());
+  return string(p.AsStringView());
 }
 
 }  // namespace net

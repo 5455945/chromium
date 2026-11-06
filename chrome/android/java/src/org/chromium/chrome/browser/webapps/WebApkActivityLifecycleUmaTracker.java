@@ -1,65 +1,64 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.webapps;
 
-import static org.chromium.chrome.browser.dependency_injection.ChromeCommonQualifiers.SAVED_INSTANCE_SUPPLIER;
+import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.app.Activity;
 import android.content.Intent;
 import android.os.Bundle;
 import android.os.SystemClock;
 
-import androidx.annotation.VisibleForTesting;
-
 import org.chromium.base.ActivityState;
 import org.chromium.base.ApplicationStatus;
 import org.chromium.base.ApplicationStatus.ActivityStateListener;
-import org.chromium.base.library_loader.LibraryLoader;
-import org.chromium.base.supplier.Supplier;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.base.ColdStartTracker;
 import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
 import org.chromium.chrome.browser.browserservices.intents.WebApkExtras;
 import org.chromium.chrome.browser.browserservices.intents.WebappIntentUtils;
+import org.chromium.chrome.browser.browserservices.metrics.WebApkUkmRecorder;
+import org.chromium.chrome.browser.browserservices.metrics.WebApkUmaRecorder;
 import org.chromium.chrome.browser.browserservices.ui.splashscreen.SplashController;
-import org.chromium.chrome.browser.dependency_injection.ActivityScope;
+import org.chromium.chrome.browser.flags.ActivityType;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.lifecycle.InflationObserver;
 import org.chromium.chrome.browser.lifecycle.PauseResumeWithNativeObserver;
-import org.chromium.chrome.browser.metrics.ActivityTabStartupMetricsTracker;
+import org.chromium.chrome.browser.metrics.SimpleStartupForegroundSessionDetector;
+import org.chromium.chrome.browser.metrics.StartupMetricsTracker;
 import org.chromium.chrome.browser.metrics.WebApkSplashscreenMetrics;
-import org.chromium.chrome.browser.metrics.WebApkUma;
 
-import javax.inject.Inject;
-import javax.inject.Named;
+import java.util.function.Supplier;
 
-import dagger.Lazy;
-
-/**
- * Handles recording user metrics for WebAPK activities.
- */
-@ActivityScope
+/** Handles recording user metrics for WebAPK activities. */
+@NullMarked
 public class WebApkActivityLifecycleUmaTracker
         implements ActivityStateListener, InflationObserver, PauseResumeWithNativeObserver {
-    @VisibleForTesting
-    public static final String STARTUP_UMA_HISTOGRAM_SUFFIX = ".WebApk";
-
     private final Activity mActivity;
     private final BrowserServicesIntentDataProvider mIntentDataProvider;
-    private final SplashController mSplashController;
-    private final Lazy<ActivityTabStartupMetricsTracker> mStartupMetricsTracker;
-    private final Supplier<Bundle> mSavedInstanceStateSupplier;
+    private final Supplier<SplashController> mSplashController;
+    private final StartupMetricsTracker mStartupMetricsTracker;
+    private final Supplier<@Nullable Bundle> mSavedInstanceStateSupplier;
 
     /** The start time that the activity becomes focused in milliseconds since boot. */
     private long mStartTime;
 
-    @Inject
-    public WebApkActivityLifecycleUmaTracker(Activity activity,
-            BrowserServicesIntentDataProvider intentDataProvider, SplashController splashController,
-            ActivityLifecycleDispatcher lifecycleDispatcher,
-            WebappDeferredStartupWithStorageHandler deferredStartupWithStorageHandler,
-            Lazy<ActivityTabStartupMetricsTracker> startupMetricsTracker,
-            @Named(SAVED_INSTANCE_SUPPLIER) Supplier<Bundle> savedInstanceStateSupplier) {
+    private boolean isColdStart() {
+        return ColdStartTracker.wasColdOnFirstActivityCreationOrNow()
+                && SimpleStartupForegroundSessionDetector.runningCleanForegroundSession();
+    }
+
+    public WebApkActivityLifecycleUmaTracker(
+            Activity activity,
+            BrowserServicesIntentDataProvider intentDataProvider,
+            Supplier<SplashController> splashController,
+            StartupMetricsTracker startupMetricsTracker,
+            Supplier<@Nullable Bundle> savedInstanceStateSupplier,
+            WebappDeferredStartupWithStorageHandler webappDeferredStartupWithStorageHandler,
+            ActivityLifecycleDispatcher lifecycleDispatcher) {
         mActivity = activity;
         mIntentDataProvider = intentDataProvider;
         mSplashController = splashController;
@@ -71,12 +70,36 @@ public class WebApkActivityLifecycleUmaTracker
 
         // Add UMA recording task at the front of the deferred startup queue as it has a higher
         // priority than other deferred startup tasks like checking for a WebAPK update.
-        deferredStartupWithStorageHandler.addTaskToFront((storage, didCreateStorage) -> {
-            if (lifecycleDispatcher.isActivityFinishingOrDestroyed()) return;
+        webappDeferredStartupWithStorageHandler.addTaskToFront(
+                (storage, didCreateStorage) -> {
+                    if (lifecycleDispatcher.isActivityFinishingOrDestroyed()) {
+                        return;
+                    }
 
-            WebApkExtras webApkExtras = mIntentDataProvider.getWebApkExtras();
-            WebApkUma.recordShellApkVersion(webApkExtras.shellApkVersion, webApkExtras.distributor);
-        });
+                    WebApkExtras webApkExtras = mIntentDataProvider.getWebApkExtras();
+                    assumeNonNull(webApkExtras);
+                    WebApkUmaRecorder.recordShellApkVersion(
+                            webApkExtras.shellApkVersion, webApkExtras.distributor);
+                });
+
+        // Decide whether to record startup UMA histograms. This is a similar check to the one done
+        // in ChromeTabbedActivity.performPreInflationStartup refer to the comment there for why.
+        if (isColdStart()) {
+            mStartupMetricsTracker.setHistogramSuffix(ActivityType.WEB_APK);
+            // If there is a saved instance state, then the intent (and its stored timestamp) might
+            // be stale (Android replays intents if there is a recents entry for the activity).
+            if (mSavedInstanceStateSupplier.get() == null) {
+                Intent intent = mActivity.getIntent();
+                // Splash observers are removed once the splash screen is hidden.
+                mSplashController
+                        .get()
+                        .addObserver(
+                                new WebApkSplashscreenMetrics(
+                                        WebappIntentUtils.getWebApkShellLaunchTime(intent),
+                                        WebappIntentUtils.getNewStyleWebApkSplashShownTime(
+                                                intent)));
+            }
+        }
     }
 
     @Override
@@ -87,22 +110,7 @@ public class WebApkActivityLifecycleUmaTracker
     }
 
     @Override
-    public void onPreInflationStartup() {
-        // Decide whether to record startup UMA histograms. This is a similar check to the one done
-        // in ChromeTabbedActivity.performPreInflationStartup refer to the comment there for why.
-        if (!LibraryLoader.getInstance().isInitialized()) {
-            mStartupMetricsTracker.get().trackStartupMetrics(STARTUP_UMA_HISTOGRAM_SUFFIX);
-            // If there is a saved instance state, then the intent (and its stored timestamp) might
-            // be stale (Android replays intents if there is a recents entry for the activity).
-            if (mSavedInstanceStateSupplier.get() == null) {
-                Intent intent = mActivity.getIntent();
-                // Splash observers are removed once the splash screen is hidden.
-                mSplashController.addObserver(new WebApkSplashscreenMetrics(
-                        WebappIntentUtils.getWebApkShellLaunchTime(intent),
-                        WebappIntentUtils.getNewStyleWebApkSplashShownTime(intent)));
-            }
-        }
-    }
+    public void onPreInflationStartup() {}
 
     @Override
     public void onPostInflationStartup() {}
@@ -113,9 +121,14 @@ public class WebApkActivityLifecycleUmaTracker
     @Override
     public void onPauseWithNative() {
         WebApkExtras webApkExtras = mIntentDataProvider.getWebApkExtras();
+        assumeNonNull(webApkExtras);
+
         long sessionDuration = SystemClock.elapsedRealtime() - mStartTime;
-        WebApkUma.recordWebApkSessionDuration(webApkExtras.distributor, sessionDuration);
-        WebApkUkmRecorder.recordWebApkSessionDuration(webApkExtras.manifestUrl,
-                webApkExtras.distributor, webApkExtras.webApkVersionCode, sessionDuration);
+        WebApkUmaRecorder.recordWebApkSessionDuration(webApkExtras.distributor, sessionDuration);
+        WebApkUkmRecorder.recordWebApkSessionDuration(
+                webApkExtras.manifestId,
+                webApkExtras.distributor,
+                webApkExtras.webApkVersionCode,
+                sessionDuration);
     }
 }

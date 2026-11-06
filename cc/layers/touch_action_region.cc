@@ -1,8 +1,10 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "cc/layers/touch_action_region.h"
+
+#include <algorithm>
 
 #include "ui/gfx/geometry/rect.h"
 
@@ -37,11 +39,15 @@ const Region& TouchActionRegion::GetRegionForTouchAction(
 }
 
 TouchAction TouchActionRegion::GetAllowedTouchAction(
-    const gfx::Point& point) const {
+    const gfx::Rect& touch_rect) const {
   TouchAction allowed_touch_action = TouchAction::kAuto;
+  const gfx::Rect non_empty_touch_rect(
+      touch_rect.origin(), gfx::Size(std::max(1, touch_rect.width()),
+                                     std::max(1, touch_rect.height())));
   for (const auto& pair : map_) {
-    if (!pair.second.Contains(point))
+    if (!pair.second.Intersects(non_empty_touch_rect)) {
       continue;
+    }
     allowed_touch_action &= pair.first;
   }
   return allowed_touch_action;

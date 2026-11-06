@@ -1,19 +1,26 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_VIZ_SERVICE_HIT_TEST_HIT_TEST_AGGREGATOR_H_
 #define COMPONENTS_VIZ_SERVICE_HIT_TEST_HIT_TEST_AGGREGATOR_H_
 
+#include <optional>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
+#include "base/types/expected.h"
 #include "components/viz/common/hit_test/aggregated_hit_test_region.h"
+#include "components/viz/common/hit_test/hit_test_query.h"
 #include "components/viz/common/quads/aggregated_render_pass.h"
 #include "components/viz/common/surfaces/surface_id.h"
 #include "components/viz/service/hit_test/hit_test_manager.h"
 #include "components/viz/service/surfaces/surface_observer.h"
 #include "components/viz/service/viz_service_export.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+
+namespace gfx {
+class RRectF;
+}  // namespace gfx
 
 namespace viz {
 
@@ -25,7 +32,7 @@ struct HitTestRegion;
 // information is obtained from the HitTestManager. The resulting list is sent
 // to HitTestQuery for event targeting. This is intended to be created in the
 // viz or GPU process.
-class VIZ_SERVICE_EXPORT HitTestAggregator {
+class VIZ_SERVICE_EXPORT HitTestAggregator : public HitTestQuery::DataProvider {
  public:
   // |delegate| owns and outlives HitTestAggregator.
   HitTestAggregator(
@@ -35,17 +42,31 @@ class VIZ_SERVICE_EXPORT HitTestAggregator {
       const FrameSinkId& frame_sink_id,
       uint32_t initial_region_size = 100,
       uint32_t max_region_size = 100 * 100);
-  ~HitTestAggregator();
+
+  HitTestAggregator(const HitTestAggregator&) = delete;
+  HitTestAggregator& operator=(const HitTestAggregator&) = delete;
+
+  ~HitTestAggregator() override;
 
   // Called after surfaces have been aggregated into the DisplayFrame.
   // In this call HitTestRegionList structures received from active surfaces
-  // are aggregated into |hit_test_data_|. If |render_passes| are given and
-  // the correct flags are set, hit-test debug quads will be inserted.
-  void Aggregate(const SurfaceId& display_surface_id,
-                 AggregatedRenderPassList* render_passes = nullptr);
+  // are aggregated into |hit_test_data_|.
+  void Aggregate(const SurfaceId& display_surface_id);
+
+  // HitTestQuery::DataProvider override.
+  const std::vector<AggregatedHitTestRegion>& GetHitTestData() const override;
+
+  base::SafeRef<HitTestQuery::DataProvider> GetDataProviderSafeRef() {
+    return weak_ptr_factory_.GetSafeRef();
+  }
 
  private:
   friend class TestHitTestAggregator;
+
+  // TODO(jonross): add the capacity error to this and handle that.
+  enum class AggregationError {
+    INVALID_CHILD_REGION,
+  };
 
   void SendHitTestData();
 
@@ -54,15 +75,19 @@ class VIZ_SERVICE_EXPORT HitTestAggregator {
 
   // Appends a |region| to the HitTestRegionList structure to recursively
   // build the tree. |region_index| indicates the current index of the end of
-  // the list.
-  size_t AppendRegion(size_t region_index, const HitTestRegion& region);
+  // the list. |submitting_frame_sink_id| is the FrameSinkId that submitted the
+  // HitTestRegionList containing |region|.
+  base::expected<size_t, AggregationError> AppendRegion(
+      size_t region_index,
+      const HitTestRegion& region,
+      const FrameSinkId& submitting_frame_sink_id);
 
   // Populates the HitTestRegion element at the given element |index|.
   void SetRegionAt(size_t index,
                    const FrameSinkId& frame_sink_id,
                    uint32_t flags,
                    uint32_t reasons,
-                   const gfx::Rect& rect,
+                   const gfx::RRectF& rect,
                    const gfx::Transform& transform,
                    int32_t child_count);
 
@@ -70,23 +95,22 @@ class VIZ_SERVICE_EXPORT HitTestAggregator {
   // the given |surface_id| if it is different than when it was last queried.
   // This is used in order to ensure that the flow between receiving hit-test
   // data and aggregating is included only once per submission.
-  absl::optional<int64_t> GetTraceIdIfUpdated(const SurfaceId& surface_id,
-                                              uint64_t active_frame_index);
+  std::optional<int64_t> GetTraceIdIfUpdated(const SurfaceId& surface_id,
+                                             uint32_t active_frame_index);
 
-  // Inserts debug quads based on hit-test data.
-  void InsertHitTestDebugQuads(AggregatedRenderPassList* render_passes);
+  const raw_ptr<const HitTestManager> hit_test_manager_;
 
-  const HitTestManager* const hit_test_manager_;
+  const raw_ptr<HitTestAggregatorDelegate> delegate_;
 
-  HitTestAggregatorDelegate* const delegate_;
-
-  LatestLocalSurfaceIdLookupDelegate* const local_surface_id_lookup_delegate_;
+  const raw_ptr<LatestLocalSurfaceIdLookupDelegate,
+                AcrossTasksDanglingUntriaged>
+      local_surface_id_lookup_delegate_;
 
   // This is the FrameSinkId for the corresponding root CompositorFrameSink.
   const FrameSinkId root_frame_sink_id_;
 
   // Initial hit-test region size.
-  // TODO(https://crbug.com/746385): Review and select appropriate sizes based
+  // TODO(crbug.com/41334186): Review and select appropriate sizes based
   // on telemetry / UMA.
   const uint32_t initial_region_size_;
   const uint32_t incremental_region_size_;
@@ -96,23 +120,18 @@ class VIZ_SERVICE_EXPORT HitTestAggregator {
   uint32_t hit_test_data_size_ = 0;
   std::vector<AggregatedHitTestRegion> hit_test_data_;
 
-  bool hit_test_debug_ = false;
-  uint32_t hit_test_debug_ask_regions_ = 0;
-
   // This is the set of FrameSinkIds referenced in the aggregation in this tree
   // chain so far, used to detect cycles. We can have regions that have the
   // same FrameSinkId, e.g. when ALPHA_SHAPE is set in cc::FilterOperations,
   // but only at the same hierarchy level.
   base::flat_set<FrameSinkId> referenced_child_regions_;
 
-  base::flat_map<FrameSinkId, uint64_t> last_active_frame_index_;
+  base::flat_map<FrameSinkId, uint32_t> last_active_frame_index_;
   uint64_t last_submit_hit_test_region_list_index_ = 0;
 
   // Handles the case when this object is deleted after
   // the PostTaskAggregation call is scheduled but before invocation.
   base::WeakPtrFactory<HitTestAggregator> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(HitTestAggregator);
 };
 
 }  // namespace viz

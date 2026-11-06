@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,42 +6,92 @@ package org.chromium.chrome.browser.xsurface;
 
 import android.content.Context;
 
-import androidx.annotation.Nullable;
+import androidx.annotation.IntDef;
+
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
+
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 
 /**
+ * Implemented in Chromium.
+ *
  * Provides application-level dependencies for an external surface.
  */
+@NullMarked
 public interface ProcessScopeDependencyProvider {
     /**
      * Resolves a library name such as "foo" to an absolute path. The library name should be in the
      * same format given to System.loadLibrary().
      */
-    public interface LibraryResolver {
-        String resolvePath(String libName);
+    interface LibraryResolver {
+        @Nullable String resolvePath(String libName);
     }
 
     /** @return the context associated with the application. */
-    @Nullable
-    default Context getContext() {
+    default @Nullable Context getContext() {
         return null;
     }
 
-    /** Returns the account name of the signed-in user, or the empty string. */
-    @Deprecated
-    default String getAccountName() {
-        return "";
-    }
-
-    /** Returns the client instance id for this chrome. */
-    @Deprecated
-    default String getClientInstanceId() {
-        return "";
-    }
-
     /** Returns the collection of currently active experiment ids. */
-    @Deprecated
     default int[] getExperimentIds() {
         return new int[0];
+    }
+
+    /** Returns the server-provided feed launch CUI metadata. */
+    default byte[] getFeedLaunchCuiMetadata() {
+        return new byte[0];
+    }
+
+    /**
+     * Provides experimental feature state to xsurface implementations.
+     *
+     * <p>Must be called on the UI thread.
+     *
+     * <p>WARNING: These methods can crash Chrome!
+     *
+     * <p>You must add the feature to kFeaturesExposedToJava in
+     * chrome/browser/flags/android/chrome_feature_list.cc before querying for the feature with
+     * these methods. Chrome will crash if it doesn't find the feature.
+     */
+    interface FeatureStateProvider {
+        boolean isFeatureActive(String featureName);
+
+        boolean getBooleanParameterValue(
+                String featureName, String paramName, boolean defaultValue);
+
+        int getIntegerParameterValue(String featureName, String paramName, int defaultValue);
+
+        double getDoubleParameterValue(String featureName, String paramName, double defaultValue);
+    }
+
+    /** Returns the FeatureStateProvider. */
+    default FeatureStateProvider getFeatureStateProvider() {
+        return new FeatureStateProvider() {
+            @Override
+            public boolean isFeatureActive(String featureName) {
+                return false;
+            }
+
+            @Override
+            public boolean getBooleanParameterValue(
+                    String featureName, String paramName, boolean defaultValue) {
+                return defaultValue;
+            }
+
+            @Override
+            public int getIntegerParameterValue(
+                    String featureName, String paramName, int defaultValue) {
+                return defaultValue;
+            }
+
+            @Override
+            public double getDoubleParameterValue(
+                    String featureName, String paramName, double defaultValue) {
+                return defaultValue;
+            }
+        };
     }
 
     /** @see {Log.e} */
@@ -50,16 +100,8 @@ public interface ProcessScopeDependencyProvider {
     /** @see {Log.w} */
     default void logWarning(String tag, String messageTemplate, Object... args) {}
 
-    /**
-     * Returns an ImageFetchClient. ImageFetchClient should only be used for fetching images.
-     */
-    @Nullable
-    default ImageFetchClient getImageFetchClient() {
-        return null;
-    }
-
-    @Nullable
-    default PersistentKeyValueCache getPersistentKeyValueCache() {
+    /** Returns an ImageFetchClient. ImageFetchClient should only be used for fetching images. */
+    default @Nullable ImageFetchClient getImageFetchClient() {
         return null;
     }
 
@@ -81,17 +123,11 @@ public interface ProcessScopeDependencyProvider {
      * Returns a LibraryResolver to be used for resolving native library paths. If null is
      * returned, the default library loading mechanism should be used.
      */
-    @Nullable
-    default LibraryResolver getLibraryResolver() {
+    default @Nullable LibraryResolver getLibraryResolver() {
         return null;
     }
 
     default boolean isXsurfaceUsageAndCrashReportingEnabled() {
-        return false;
-    }
-
-    @Deprecated
-    default boolean isStableChannel() {
         return false;
     }
 
@@ -101,7 +137,74 @@ public interface ProcessScopeDependencyProvider {
     }
 
     /** Returns the google API key. */
-    default String getGoogleApiKey() {
+    default @Nullable String getGoogleApiKey() {
         return null;
+    }
+
+    /** Returns Chrome's version string. */
+    default String getChromeVersion() {
+        return "";
+    }
+
+    /** Returns Chrome's channel as enumerated in components/version_info/channel.h. */
+    default int getChromeChannel() {
+        return 0;
+    }
+
+    /** Returns the percentage size that the memory cache is allowed to use. */
+    default int getImageMemoryCacheSizePercentage() {
+        return 100;
+    }
+
+    /** Returns the percentage size that the bitmap pool is allowed to use. */
+    default int getBitmapPoolSizePercentage() {
+        return 100;
+    }
+
+    /** Returns the signed-out session id */
+    default String getSignedOutSessionId() {
+        return "";
+    }
+
+    // Visibility log types that can be uploaded.
+    @IntDef({VisibilityLogType.UNSPECIFIED, VisibilityLogType.VIEW, VisibilityLogType.CLICK})
+    @Retention(RetentionPolicy.SOURCE)
+    @interface VisibilityLogType {
+        int UNSPECIFIED = 0;
+        int VIEW = 1;
+        int CLICK = 2;
+    }
+
+    /**
+     * Reports whether the visibility log upload was successful.
+     *
+     * @param logType - the type of visibility log being uploaded
+     * @param success - whether the upload was successful
+     */
+    default void reportOnUploadVisibilityLog(@VisibilityLogType int logType, boolean success) {}
+
+    /**
+     * Reports whether visibility logging is enabled.
+     *
+     * @param enabled - whether logging is enabled
+     */
+    default void reportVisibilityLoggingEnabled(boolean enabled) {}
+
+    /** Must return true to enable ReliabilityLoggingTestUtil. */
+    default boolean enableAppFlowDebugging() {
+        return false;
+    }
+
+    /** @return the Color provider. */
+    @Deprecated
+    default @Nullable ColorProvider getColorProvider() {
+        return null;
+    }
+
+    /**
+     * @return True if it is connected to the Internet.
+     */
+    default boolean isNetworkOnline() {
+        return true;
     }
 }

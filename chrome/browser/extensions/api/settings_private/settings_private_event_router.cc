@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,9 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/browser_process.h"
@@ -36,7 +36,7 @@ SettingsPrivateEventRouter::SettingsPrivateEventRouter(
 }
 
 SettingsPrivateEventRouter::~SettingsPrivateEventRouter() {
-  DCHECK(!listening_);
+  CHECK(!listening_, base::NotFatalUntil::M161);
 }
 
 void SettingsPrivateEventRouter::OnGeneratedPrefChanged(
@@ -48,17 +48,18 @@ void SettingsPrivateEventRouter::Shutdown() {
   EventRouter::Get(context_)->UnregisterObserver(this);
 
   if (listening_) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     cros_settings_subscription_map_.clear();
 #endif
     const PrefsUtil::TypedPrefMap& keys = prefs_util_->GetAllowlistedKeys();
     settings_private::GeneratedPrefs* generated_prefs =
         settings_private::GeneratedPrefsFactory::GetForBrowserContext(context_);
     for (const auto& it : keys) {
-      if (generated_prefs && generated_prefs->HasPref(it.first))
+      if (generated_prefs && generated_prefs->HasPref(it.first)) {
         generated_prefs->RemoveObserver(it.first, this);
-      else if (!prefs_util_->IsCrosSetting(it.first))
+      } else if (!prefs_util_->IsCrosSetting(it.first)) {
         FindRegistrarForPref(it.first)->Remove(it.first);
+      }
     }
   }
   listening_ = false;
@@ -87,7 +88,7 @@ PrefChangeRegistrar* SettingsPrivateEventRouter::FindRegistrarForPref(
 }
 
 void SettingsPrivateEventRouter::StartOrStopListeningForPrefsChanges() {
-  DCHECK(prefs_util_);
+  CHECK(prefs_util_, base::NotFatalUntil::M161);
   EventRouter* event_router = EventRouter::Get(context_);
   bool should_listen = event_router->HasEventListener(
       api::settings_private::OnPrefsChanged::kEventName);
@@ -99,7 +100,7 @@ void SettingsPrivateEventRouter::StartOrStopListeningForPrefsChanges() {
     for (const auto& it : keys) {
       std::string pref_name = it.first;
       if (prefs_util_->IsCrosSetting(pref_name)) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
         base::CallbackListSubscription subscription =
             ash::CrosSettings::Get()->AddSettingsObserver(
                 pref_name.c_str(),
@@ -122,7 +123,7 @@ void SettingsPrivateEventRouter::StartOrStopListeningForPrefsChanges() {
     const PrefsUtil::TypedPrefMap& keys = prefs_util_->GetAllowlistedKeys();
     for (const auto& it : keys) {
       if (prefs_util_->IsCrosSetting(it.first)) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
         cros_settings_subscription_map_.erase(it.first);
 #endif
       } else if (generated_prefs && generated_prefs->HasPref(it.first)) {
@@ -140,7 +141,7 @@ void SettingsPrivateEventRouter::OnPreferenceChanged(
   // This posts an asynchronous task to ensure that all pref stores are updated,
   // as |prefs_util_->GetPref()| relies on this information to determine if a
   // preference is controlled by e.g. extensions.
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&SettingsPrivateEventRouter::SendPrefChange,
                                 weak_ptr_factory_.GetWeakPtr(), pref_name));
 }
@@ -152,24 +153,26 @@ void SettingsPrivateEventRouter::SendPrefChange(const std::string& pref_name) {
     return;
   }
 
-  std::unique_ptr<api::settings_private::PrefObject> pref_object =
+  std::optional<api::settings_private::PrefObject> pref_object =
       prefs_util_->GetPref(pref_name);
 
   std::vector<api::settings_private::PrefObject> prefs;
-  if (pref_object)
+  if (pref_object) {
     prefs.push_back(std::move(*pref_object));
+  }
 
-  auto args(api::settings_private::OnPrefsChanged::Create(prefs));
-
-  std::unique_ptr<Event> extension_event(new Event(
-      events::SETTINGS_PRIVATE_ON_PREFS_CHANGED,
-      api::settings_private::OnPrefsChanged::kEventName, std::move(args)));
+  auto event_args = base::MakeRefCounted<EventArgs>(
+      api::settings_private::OnPrefsChanged::Create(prefs));
+  auto extension_event =
+      std::make_unique<Event>(events::SETTINGS_PRIVATE_ON_PREFS_CHANGED,
+                              api::settings_private::OnPrefsChanged::kEventName,
+                              std::move(event_args), context_);
   event_router->BroadcastEvent(std::move(extension_event));
 }
 
-SettingsPrivateEventRouter* SettingsPrivateEventRouter::Create(
+std::unique_ptr<SettingsPrivateEventRouter> SettingsPrivateEventRouter::Create(
     content::BrowserContext* context) {
-  return new SettingsPrivateEventRouter(context);
+  return std::make_unique<SettingsPrivateEventRouter>(context);
 }
 
 }  // namespace extensions

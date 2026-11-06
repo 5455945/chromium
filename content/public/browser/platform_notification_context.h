@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,11 @@
 
 #include <stdint.h>
 
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_database_data.h"
@@ -26,7 +27,7 @@ namespace content {
 
 // Represents the storage context for persistent Web Notifications, specific to
 // the storage partition owning the instance. All methods defined in this
-// interface may only be used on the IO thread.
+// interface may only be used on the UI thread.
 class PlatformNotificationContext
     : public base::RefCountedThreadSafe<PlatformNotificationContext,
                                         BrowserThread::DeleteOnUIThread> {
@@ -147,12 +148,13 @@ class PlatformNotificationContext
                                       bool close_notification,
                                       DeleteResultCallback callback) = 0;
 
-  // Deletes all data of notifications with |tag| belonging to |origin| from the
-  // database and closes the notifications. |callback| will be invoked with the
-  // success status and the number of closed notifications when the operation
-  // has completed.
+  // Deletes all data of notifications with |tag|, optionally filtered by
+  // |is_shown_by_browser|, belonging to |origin| from the database and closes
+  // the notifications. |callback| will be invoked with the success status and
+  // the number of closed notifications when the operation has completed.
   virtual void DeleteAllNotificationDataWithTag(
       const std::string& tag,
+      std::optional<bool> is_shown_by_browser,
       const GURL& origin,
       DeleteAllResultCallback callback) = 0;
 
@@ -163,6 +165,17 @@ class PlatformNotificationContext
 
   // Trigger all pending notifications.
   virtual void TriggerNotifications() = 0;
+
+  // Updates metadata map of the database entry for `notification_id` and
+  // `origin` with an entry using `metadata_key` as the key and
+  // `metadata_value`. `callback` will be invoked with the success status when
+  // the operation has completed.
+  virtual void WriteNotificationMetadata(
+      const std::string& notification_id,
+      const GURL& origin,
+      const std::string& metadata_key,
+      const std::string& metadata_value,
+      WriteResourcesResultCallback callback) = 0;
 
  protected:
   friend class base::DeleteHelper<PlatformNotificationContext>;

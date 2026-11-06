@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,7 @@
 #include <memory>
 #include <string>
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/timer/timer.h"
 #include "net/base/backoff_entry.h"
@@ -39,6 +38,10 @@ class FtlRegistrationManager final : public RegistrationManager {
       OAuthTokenGetter* token_getter,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       std::unique_ptr<FtlDeviceIdProvider> device_id_provider);
+
+  FtlRegistrationManager(const FtlRegistrationManager&) = delete;
+  FtlRegistrationManager& operator=(const FtlRegistrationManager&) = delete;
+
   ~FtlRegistrationManager() override;
 
   // RegistrationManager implementations.
@@ -50,7 +53,7 @@ class FtlRegistrationManager final : public RegistrationManager {
 
  private:
   using SignInGaiaResponseCallback =
-      base::OnceCallback<void(const ProtobufHttpStatus&,
+      base::OnceCallback<void(const HttpStatus&,
                               std::unique_ptr<ftl::SignInGaiaResponse>)>;
 
   friend class FtlRegistrationManagerTest;
@@ -70,7 +73,7 @@ class FtlRegistrationManager final : public RegistrationManager {
 
   void DoSignInGaia(DoneCallback on_done);
   void OnSignInGaiaResponse(DoneCallback on_done,
-                            const ProtobufHttpStatus& status,
+                            const HttpStatus& status,
                             std::unique_ptr<ftl::SignInGaiaResponse> response);
 
   std::unique_ptr<RegistrationClient> registration_client_;
@@ -80,8 +83,6 @@ class FtlRegistrationManager final : public RegistrationManager {
   std::string registration_id_;
   std::string ftl_auth_token_;
   net::BackoffEntry sign_in_backoff_;
-
-  DISALLOW_COPY_AND_ASSIGN(FtlRegistrationManager);
 };
 
 }  // namespace remoting

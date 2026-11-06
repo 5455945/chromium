@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,16 +13,18 @@
 
 #include <stdint.h>
 
+#include <functional>
 #include <memory>
 #include <set>
 #include <string>
-#include <unordered_map>
+#include <string_view>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
 #include "base/values.h"
@@ -30,8 +32,9 @@
 #include "components/prefs/persistent_pref_store.h"
 #include "components/prefs/pref_value_store.h"
 #include "components/prefs/prefs_export.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include "base/android/scoped_java_ref.h"
 #endif
 
@@ -40,12 +43,16 @@ class PrefNotifierImpl;
 class PrefObserver;
 class PrefRegistry;
 class PrefStore;
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 class PrefServiceAndroid;
 #endif
 
 namespace base {
 class FilePath;
+}
+
+namespace base::i18n {
+class LanguageTag;
 }
 
 namespace prefs {
@@ -55,10 +62,6 @@ class ScopedDictionaryPrefUpdate;
 namespace subtle {
 class PrefMemberBase;
 class ScopedUserPrefUpdateBase;
-}
-
-namespace variations {
-class VariationsFieldTrialCreator;
 }
 
 // Base class for PrefServices. You can use the base class to read and
@@ -82,6 +85,12 @@ class COMPONENTS_PREFS_EXPORT PrefService {
     EXCLUDE_DEFAULTS,
   };
 
+  struct COMPONENTS_PREFS_EXPORT PreferenceValueAndStore {
+    std::string name;
+    base::Value value;
+    PrefValueStore::PrefStoreType store;
+  };
+
   // A helper class to store all the information associated with a preference.
   class COMPONENTS_PREFS_EXPORT Preference {
    public:
@@ -92,11 +101,11 @@ class COMPONENTS_PREFS_EXPORT PrefService {
     Preference(const PrefService* service,
                std::string name,
                base::Value::Type type);
-    ~Preference() {}
+    ~Preference() = default;
 
     // Returns the name of the Preference (i.e., the key, e.g.,
     // browser.window_placement).
-    std::string name() const { return name_; }
+    const std::string& name() const { return name_; }
 
     // Returns the registered type of the preference.
     base::Value::Type GetType() const { return type_; }
@@ -172,7 +181,7 @@ class COMPONENTS_PREFS_EXPORT PrefService {
     const uint32_t registration_flags_;
 
     // Reference to the PrefService in which this pref was created.
-    const PrefService* const pref_service_;
+    const raw_ref<const PrefService> pref_service_;
   };
 
   // You may wish to use PrefServiceFactory or one of its subclasses
@@ -184,6 +193,10 @@ class COMPONENTS_PREFS_EXPORT PrefService {
               base::RepeatingCallback<void(PersistentPrefStore::PrefReadError)>
                   read_error_callback,
               bool async);
+
+  PrefService(const PrefService&) = delete;
+  PrefService& operator=(const PrefService&) = delete;
+
   virtual ~PrefService();
 
   // Lands pending writes to disk. This should only be used if we need to save
@@ -206,94 +219,111 @@ class COMPONENTS_PREFS_EXPORT PrefService {
 
   // Returns true if the preference for the given preference name is available
   // and is managed.
-  bool IsManagedPreference(const std::string& pref_name) const;
+  bool IsManagedPreference(std::string_view path) const;
 
   // Returns true if the preference for the given preference name is available
   // and is controlled by the parent/guardian of the child Account.
-  bool IsPreferenceManagedByCustodian(const std::string& pref_name) const;
+  bool IsPreferenceManagedByCustodian(std::string_view path) const;
 
   // Returns |true| if a preference with the given name is available and its
   // value can be changed by the user.
-  bool IsUserModifiablePreference(const std::string& pref_name) const;
+  bool IsUserModifiablePreference(std::string_view path) const;
 
   // Look up a preference.  Returns NULL if the preference is not
   // registered.
-  const PrefService::Preference* FindPreference(const std::string& path) const;
+  const PrefService::Preference* FindPreference(std::string_view path) const;
 
   // If the path is valid and the value at the end of the path matches the type
   // specified, it will return the specified value.  Otherwise, the default
   // value (set when the pref was registered) will be returned.
-  bool GetBoolean(const std::string& path) const;
-  int GetInteger(const std::string& path) const;
-  double GetDouble(const std::string& path) const;
-  std::string GetString(const std::string& path) const;
-  base::FilePath GetFilePath(const std::string& path) const;
+  bool GetBoolean(std::string_view path) const;
+  int GetInteger(std::string_view path) const;
+  double GetDouble(std::string_view path) const;
+  const std::string& GetString(std::string_view path) const;
+  base::FilePath GetFilePath(std::string_view path) const;
+  base::i18n::LanguageTag GetLanguageTag(std::string_view path) const;
 
   // Returns the branch if it exists, or the registered default value otherwise.
-  // Note that |path| must point to a registered preference. In that case, these
-  // functions will never return NULL.
-  const base::Value* Get(const std::string& path) const;
-  const base::DictionaryValue* GetDictionary(const std::string& path) const;
-  const base::ListValue* GetList(const std::string& path) const;
+  // `path` must point to a registered preference (DCHECK).
+  const base::Value& GetValue(std::string_view path) const;
+
+  // Returns the branch if it exists, or the registered default value otherwise.
+  // `path` must point to a registered preference whose value and registered
+  // default are of type `base::Value::Type::DICT (DCHECK).
+  const base::DictValue& GetDict(std::string_view path) const;
+
+  // Returns the branch if it exists, or the registered default value otherwise.
+  // `path` must point to a registered preference whose value and registered
+  // default are of type `base::Value::Type::LIST (DCHECK).
+  const base::ListValue& GetList(std::string_view path) const;
 
   // Removes a user pref and restores the pref to its default value.
-  void ClearPref(const std::string& path);
+  void ClearPref(std::string_view path);
 
   // Removes user prefs that start with |prefix|.
-  void ClearPrefsWithPrefixSilently(const std::string& prefix);
+  void ClearPrefsWithPrefixSilently(std::string_view prefix);
 
   // If the path is valid (i.e., registered), update the pref value in the user
   // prefs.
-  // To set the value of dictionary or list values in the pref tree use
-  // Set(), but to modify the value of a dictionary or list use either
-  // ListPrefUpdate or DictionaryPrefUpdate from scoped_user_pref_update.h.
-  void Set(const std::string& path, const base::Value& value);
-  void SetBoolean(const std::string& path, bool value);
-  void SetInteger(const std::string& path, int value);
-  void SetDouble(const std::string& path, double value);
-  void SetString(const std::string& path, const std::string& value);
-  void SetFilePath(const std::string& path, const base::FilePath& value);
+  //
+  // To set the value of dictionary or list values in the pref tree, use
+  // SetDict()/SetList(), but to modify the value of a dictionary or list use
+  // either ScopedDictPrefUpdate or ScopedListPrefUpdate from
+  // scoped_user_pref_update.h.
+  void Set(std::string_view path, const base::Value& value);
+  void Set(std::string_view path, base::Value&& value);
+  void SetBoolean(std::string_view path, bool value);
+  void SetInteger(std::string_view path, int value);
+  void SetDouble(std::string_view path, double value);
+  void SetString(std::string_view path, std::string_view value);
+  void SetString(std::string_view path, const char* value);
+  void SetString(std::string_view path, std::string&& value);
+  void SetDict(std::string_view path, base::DictValue dict);
+  void SetList(std::string_view path, base::ListValue list);
+  void SetFilePath(std::string_view path, const base::FilePath& value);
+  void SetLanguageTag(std::string_view path,
+                      const base::i18n::LanguageTag& value);
 
   // Int64 helper methods that actually store the given value as a string.
   // Note that if obtaining the named value via GetDictionary or GetList, the
   // Value type will be Type::STRING.
-  void SetInt64(const std::string& path, int64_t value);
-  int64_t GetInt64(const std::string& path) const;
+  void SetInt64(std::string_view path, int64_t value);
+  int64_t GetInt64(std::string_view path) const;
 
   // As above, but for unsigned values.
-  void SetUint64(const std::string& path, uint64_t value);
-  uint64_t GetUint64(const std::string& path) const;
+  void SetUint64(std::string_view path, uint64_t value);
+  uint64_t GetUint64(std::string_view path) const;
 
   // Time helper methods that actually store the given value as a string, which
   // represents the number of microseconds elapsed (absolute for TimeDelta and
   // relative to Windows epoch for Time variants). Note that if obtaining the
   // named value via GetDictionary or GetList, the Value type will be
   // Type::STRING.
-  void SetTime(const std::string& path, base::Time value);
-  base::Time GetTime(const std::string& path) const;
-  void SetTimeDelta(const std::string& path, base::TimeDelta value);
-  base::TimeDelta GetTimeDelta(const std::string& path) const;
+  void SetTime(std::string_view path, base::Time value);
+  base::Time GetTime(std::string_view path) const;
+  void SetTimeDelta(std::string_view path, base::TimeDelta value);
+  base::TimeDelta GetTimeDelta(std::string_view path) const;
 
   // Returns the value of the given preference, from the user pref store. If
   // the preference is not set in the user pref store, returns NULL.
-  const base::Value* GetUserPrefValue(const std::string& path) const;
+  const base::Value* GetUserPrefValue(std::string_view path) const;
 
   // Changes the default value for a preference.
   //
   // Will cause a pref change notification to be fired if this causes
   // the effective value to change.
-  void SetDefaultPrefValue(const std::string& path, base::Value value);
+  void SetDefaultPrefValue(std::string_view path, base::Value value);
 
   // Returns the default value of the given preference. |path| must point to a
   // registered preference. In that case, will never return nullptr, so callers
   // do not need to check this.
-  const base::Value* GetDefaultPrefValue(const std::string& path) const;
+  const base::Value* GetDefaultPrefValue(std::string_view path) const;
 
   // Returns true if a value has been set for the specified path.
   // NOTE: this is NOT the same as FindPreference. In particular
   // FindPreference returns whether RegisterXXX has been invoked, where as
   // this checks if a value exists for the path.
-  bool HasPrefPath(const std::string& path) const;
+  bool HasPrefPath(std::string_view path) const;
 
   // Issues a callback for every preference value. The preferences must not be
   // mutated during iteration.
@@ -309,7 +339,11 @@ class COMPONENTS_PREFS_EXPORT PrefService {
   // If INCLUDE_DEFAULTS is requested, preferences set to their default values
   // will be included. Otherwise, these will be omitted from the returned
   // dictionary.
-  base::Value GetPreferenceValues(IncludeDefaults include_defaults) const;
+  base::DictValue GetPreferenceValues(IncludeDefaults include_defaults) const;
+
+  // Returns a map of the preference values by their path including prefs that
+  // have their default value.
+  std::vector<PreferenceValueAndStore> GetPreferencesValueAndStore() const;
 
   bool ReadOnly() const;
 
@@ -321,7 +355,12 @@ class COMPONENTS_PREFS_EXPORT PrefService {
 
   // Tell our PrefValueStore to update itself to |command_line_store|.
   // Takes ownership of the store.
-  virtual void UpdateCommandLinePrefStore(PrefStore* command_line_store);
+  virtual void UpdateCommandLinePrefStore(
+      scoped_refptr<PrefStore> command_line_store);
+
+  // Tells the PrefValueStore to update itself with `extension_store`.
+  // Takes ownership of the store.
+  void UpdateExtensionPrefStore(scoped_refptr<PrefStore> extension_store);
 
   // We run the callback once, when initialization completes. The bool
   // parameter will be set to true for successful initialization,
@@ -343,27 +382,9 @@ class COMPONENTS_PREFS_EXPORT PrefService {
   // implemented in chrome/browser/prefs/browser_prefs.cc.
   PrefRegistry* DeprecatedGetPrefRegistry();
 
-  // Clears mutable values.
-  void ClearMutableValues();
-
   // Invoked when the store is deleted from disk. Allows this PrefService
   // to tangentially cleanup data it may have saved outside the store.
   void OnStoreDeletionFromDisk();
-
-  // Add new pref stores to the existing PrefValueStore. Only adding new
-  // stores are allowed. If a corresponding store already exists, calling this
-  // will cause DCHECK failures. If the newly added stores already contain
-  // values, PrefNotifier associated with this object will be notified with
-  // these values. |delegate| can be passed to observe events of the new
-  // PrefValueStore.
-  // TODO(qinmin): packaging all the input params in a struct, and do the same
-  // for the constructor.
-  void ChangePrefValueStore(
-      PrefStore* managed_prefs,
-      PrefStore* supervised_user_prefs,
-      PrefStore* extension_prefs,
-      PrefStore* recommended_prefs,
-      std::unique_ptr<PrefValueStore::Delegate> delegate = nullptr);
 
   // A low level function for registering an observer for every single
   // preference changed notification. The caller must ensure that the observer
@@ -374,15 +395,18 @@ class COMPONENTS_PREFS_EXPORT PrefService {
   //
   // AVOID ADDING THESE. These are low-level observer notifications that are
   // called for every pref change. This can lead to inefficiency, and the lack
-  // of a "registrar" model makes it easy to forget to undregister. It is
+  // of a "registrar" model makes it easy to forget to unregister. It is
   // really designed for integrating other notification systems, not for normal
   // observation.
   void AddPrefObserverAllPrefs(PrefObserver* obs);
   void RemovePrefObserverAllPrefs(PrefObserver* obs);
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   base::android::ScopedJavaLocalRef<jobject> GetJavaObject();
 #endif
+
+  // Returns the WriteablePrefStore::PrefWriteFlags for `pref`.
+  static uint32_t GetWriteFlags(const PrefService::Preference* pref);
 
  protected:
   // The PrefNotifier handles registering and notifying preference observers.
@@ -405,9 +429,8 @@ class COMPONENTS_PREFS_EXPORT PrefService {
  private:
   // Hash map expected to be fastest here since it minimises expensive
   // string comparisons. Order is unimportant, and deletions are rare.
-  // Confirmed on Android where this speeded Chrome startup by roughly 50ms
-  // vs. std::map, and by roughly 180ms vs. std::set of Preference pointers.
-  typedef std::unordered_map<std::string, Preference> PreferenceMap;
+  using PreferenceMap =
+      absl::flat_hash_map<std::string, std::unique_ptr<Preference>>;
 
   // Give access to ReportUserPrefChanged() and GetMutableUserPref().
   friend class subtle::ScopedUserPrefUpdateBase;
@@ -423,10 +446,6 @@ class COMPONENTS_PREFS_EXPORT PrefService {
   friend class PrefChangeRegistrar;
   friend class subtle::PrefMemberBase;
 
-  // Give access to CommitPendingWriteSynchronously().
-  // TODO(crbug/1218908): Limit VariationsFieldTrialCreator's access.
-  friend class variations::VariationsFieldTrialCreator;
-
   // These are protected so they can only be accessed by the friend
   // classes listed above.
   //
@@ -436,12 +455,27 @@ class COMPONENTS_PREFS_EXPORT PrefService {
   // make sure the observer gets cleaned up properly.
   //
   // Virtual for testing.
-  virtual void AddPrefObserver(const std::string& path, PrefObserver* obs);
-  virtual void RemovePrefObserver(const std::string& path, PrefObserver* obs);
+  virtual void AddPrefObserver(std::string_view path, PrefObserver* obs);
+  virtual void RemovePrefObserver(std::string_view path, PrefObserver* obs);
+
+  // A PrefStore::Observer which reports loading errors from
+  // PersistentPrefStores after they are loaded. Usually this is only
+  // user_prefs. Errors are only reported once even though multiple files may
+  // be loaded.
+  class PersistentPrefStoreLoadingObserver : public PrefStore::Observer {
+   public:
+    explicit PersistentPrefStoreLoadingObserver(PrefService* pref_service_);
+
+    // PrefStore::Observer implementation
+    void OnInitializationCompleted(bool succeeded) override;
+
+   private:
+    raw_ptr<PrefService> pref_service_ = nullptr;
+  };
 
   // Sends notification of a changed preference. This needs to be called by
-  // a ScopedUserPrefUpdate or ScopedDictionaryPrefUpdate if a DictionaryValue
-  // or ListValue is changed.
+  // a ScopedDictPrefUpdate or ScopedListPrefUpdate if a base::DictValue or
+  // base::ListValue is changed.
   void ReportUserPrefChanged(const std::string& key);
   void ReportUserPrefChanged(
       const std::string& key,
@@ -449,20 +483,25 @@ class COMPONENTS_PREFS_EXPORT PrefService {
 
   // Sets the value for this pref path in the user pref store and informs the
   // PrefNotifier of the change.
-  void SetUserPrefValue(const std::string& path, base::Value new_value);
+  void SetUserPrefValue(std::string_view path, base::Value new_value);
 
   // Load preferences from storage, attempting to diagnose and handle errors.
   // This should only be called from the constructor.
   void InitFromStorage(bool async);
 
+  // Verifies that prefs are fully loaded from disk, handling errors. This
+  // method may be called multiple times, but no more than once after all prefs
+  // are loaded.
+  void CheckPrefsLoaded();
+
   // Used to set the value of dictionary or list values in the user pref store.
   // This will create a dictionary or list if one does not exist in the user
   // pref store. This method returns NULL only if you're requesting an
   // unregistered pref or a non-dict/non-list pref.
-  // |type| may only be Values::Type::DICTIONARY or Values::Type::LIST and
+  // |type| may only be Values::Type::DICT or Values::Type::LIST and
   // |path| must point to a registered preference of type |type|.
   // Ownership of the returned value remains at the user pref store.
-  base::Value* GetMutableUserPref(const std::string& path,
+  base::Value* GetMutableUserPref(std::string_view path,
                                   base::Value::Type type);
 
   // GetPreferenceValue is the equivalent of FindPreference(path)->GetValue(),
@@ -470,31 +509,25 @@ class COMPONENTS_PREFS_EXPORT PrefService {
   // not need to find or create a Preference object to get the
   // value (GetValue() calls back though the preference service to
   // actually get the value.).
-  const base::Value* GetPreferenceValue(const std::string& path) const;
-  const base::Value* GetPreferenceValueChecked(const std::string& path) const;
-
-  // Like CommitPendingWrite(), but writes to disk on this thread synchronously
-  // rather than scheduling a write. CommitPendingWriteSynchronously() is
-  // appropriate to call only in the exceptional situation in which you need to
-  // write to disk early on during startup before threads have been started.
-  void CommitPendingWriteSynchronously();
+  const base::Value* GetPreferenceValue(std::string_view path) const;
 
   const scoped_refptr<PrefRegistry> pref_registry_;
+
+  std::unique_ptr<PrefService::PersistentPrefStoreLoadingObserver>
+      pref_store_observer_;
 
   // Local cache of registered Preference objects. The pref_registry_
   // is authoritative with respect to what the types and default values
   // of registered preferences are.
   mutable PreferenceMap prefs_map_;
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   // Manage and fetch the java object that wraps this PrefService on
   // android.
   std::unique_ptr<PrefServiceAndroid> pref_service_android_;
 #endif
 
   SEQUENCE_CHECKER(sequence_checker_);
-
-  DISALLOW_COPY_AND_ASSIGN(PrefService);
 };
 
 #endif  // COMPONENTS_PREFS_PREF_SERVICE_H_

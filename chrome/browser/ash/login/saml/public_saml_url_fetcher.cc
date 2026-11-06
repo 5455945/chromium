@@ -1,41 +1,40 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/login/saml/public_saml_url_fetcher.h"
 
+#include <memory>
+#include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
-#include "base/bind.h"
+#include "base/check.h"
+#include "base/check_deref.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
-#include "chrome/browser/ash/arc/arc_optin_uma.h"
-#include "chrome/browser/ash/policy/core/browser_policy_connector_chromeos.h"
+#include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/ash/policy/core/device_local_account.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/ash/settings/device_settings_service.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_platform_part.h"
-#include "chrome/browser/net/system_network_context_manager.h"
-#include "chromeos/tpm/install_attributes.h"
+#include "chromeos/ash/components/install_attributes/install_attributes.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "components/account_id/account_id.h"
+#include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/device_management_service.h"
 #include "components/policy/core/common/cloud/dm_auth.h"
 #include "components/policy/core/common/cloud/dmserver_job_configurations.h"
+#include "device_management_backend.pb.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
-#include "url/gurl.h"
 
-namespace em = enterprise_management;
+namespace ash {
 namespace {
-std::string GetDeviceId() {
-  policy::BrowserPolicyConnectorChromeOS* connector =
-      g_browser_process->platform_part()->browser_policy_connector_chromeos();
-  return connector->GetInstallAttributes()->GetDeviceId();
-}
+
+namespace em = ::enterprise_management;
 
 std::string GetAccountId(std::string user_id) {
   std::vector<policy::DeviceLocalAccount> device_local_accounts =
-      policy::GetDeviceLocalAccounts(chromeos::CrosSettings::Get());
+      policy::GetDeviceLocalAccounts(CrosSettings::Get());
   for (auto account : device_local_accounts) {
     if (account.user_id == user_id) {
       return account.account_id;
@@ -43,11 +42,18 @@ std::string GetAccountId(std::string user_id) {
   }
   return std::string();
 }
+
 }  // namespace
 
-namespace chromeos {
-PublicSamlUrlFetcher::PublicSamlUrlFetcher(AccountId account_id)
-    : account_id_(GetAccountId(account_id.GetUserEmail())) {}
+PublicSamlUrlFetcher::PublicSamlUrlFetcher(
+    policy::BrowserPolicyConnectorAsh* browser_policy_connector_ash,
+    scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
+    AccountId account_id)
+    : browser_policy_connector_ash_(CHECK_DEREF(browser_policy_connector_ash)),
+      shared_url_loader_factory_(std::move(shared_url_loader_factory)),
+      account_id_(GetAccountId(account_id.GetUserEmail())) {
+  CHECK(shared_url_loader_factory_);
+}
 
 PublicSamlUrlFetcher::~PublicSamlUrlFetcher() = default;
 
@@ -60,23 +66,19 @@ bool PublicSamlUrlFetcher::FetchSucceeded() {
 }
 
 void PublicSamlUrlFetcher::Fetch(base::OnceClosure callback) {
-  DCHECK(!callback_);
+  CHECK(!callback_, base::NotFatalUntil::M160);
   callback_ = std::move(callback);
   policy::DeviceManagementService* service =
-      g_browser_process->platform_part()
-          ->browser_policy_connector_chromeos()
-          ->device_management_service();
+      browser_policy_connector_ash_->device_management_service();
   std::unique_ptr<policy::DMServerJobConfiguration> config = std::make_unique<
       policy::DMServerJobConfiguration>(
       service,
       policy::DeviceManagementService::JobConfiguration::TYPE_REQUEST_SAML_URL,
-      GetDeviceId(), /*critical=*/false,
-      policy::DMAuth::FromDMToken(chromeos::DeviceSettingsService::Get()
-                                      ->policy_data()
-                                      ->request_token()),
-      /*oauth_token=*/absl::nullopt,
-      g_browser_process->system_network_context_manager()
-          ->GetSharedURLLoaderFactory(),
+      browser_policy_connector_ash_->GetInstallAttributes()->GetDeviceId(),
+      /*critical=*/false,
+      policy::DMAuth::FromDMToken(
+          DeviceSettingsService::Get()->policy_data()->request_token()),
+      /*oauth_token=*/std::nullopt, shared_url_loader_factory_,
       base::BindOnce(&PublicSamlUrlFetcher::OnPublicSamlUrlReceived,
                      weak_ptr_factory_.GetWeakPtr()));
 
@@ -87,22 +89,20 @@ void PublicSamlUrlFetcher::Fetch(base::OnceClosure callback) {
 }
 
 void PublicSamlUrlFetcher::OnPublicSamlUrlReceived(
-    policy::DeviceManagementService::Job* job,
-    policy::DeviceManagementStatus dm_status,
-    int net_error,
-    const enterprise_management::DeviceManagementResponse& response) {
-  VLOG(1) << "Public SAML url response received. DM Status: " << dm_status;
+    policy::DMServerJobResult result) {
+  VLOG(1) << "Public SAML url response received. DM Status: "
+          << result.dm_status;
   fetch_request_job_.reset();
   std::string user_id;
 
-  switch (dm_status) {
+  switch (result.dm_status) {
     case policy::DM_STATUS_SUCCESS: {
-      if (!response.has_public_saml_user_response()) {
+      if (!result.response.has_public_saml_user_response()) {
         LOG(WARNING) << "Invalid public SAML url response.";
         break;
       }
       const em::PublicSamlUserResponse& saml_url_response =
-          response.public_saml_user_response();
+          result.response.public_saml_user_response();
 
       if (!saml_url_response.has_saml_parameters()) {
         LOG(WARNING) << "Invalid public SAML url response.";
@@ -116,11 +116,12 @@ void PublicSamlUrlFetcher::OnPublicSamlUrlReceived(
       break;
     }
     default: {  // All other error cases
-      LOG(ERROR) << "Fetching public SAML url failed. DM Status: " << dm_status;
+      LOG(ERROR) << "Fetching public SAML url failed. DM Status: "
+                 << result.dm_status;
       break;
     }
   }
   std::move(callback_).Run();
 }
 
-}  // namespace chromeos
+}  // namespace ash

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,13 +15,13 @@ namespace auto_screen_brightness {
 
 struct TrainingResult {
   TrainingResult();
-  TrainingResult(const absl::optional<MonotoneCubicSpline>& new_curve,
+  TrainingResult(const std::optional<MonotoneCubicSpline>& new_curve,
                  double error);
   TrainingResult(const TrainingResult& result);
   ~TrainingResult();
   // |new_curve| will be nullopt if trainer's curve stays unchanged after
   // training.
-  absl::optional<MonotoneCubicSpline> new_curve;
+  std::optional<MonotoneCubicSpline> new_curve;
   // Evaluation error of the latest curve (possibly updated) using the training
   // data points.
   double error;
@@ -77,6 +77,10 @@ class GaussianTrainer : public Trainer {
   };
 
   GaussianTrainer();
+
+  GaussianTrainer(const GaussianTrainer&) = delete;
+  GaussianTrainer& operator=(const GaussianTrainer&) = delete;
+
   ~GaussianTrainer() override;
 
   // Trainer overrides:
@@ -111,10 +115,10 @@ class GaussianTrainer : public Trainer {
 
   Params params_;
   // |global_curve| does not change after |SetInitialCurves| is called.
-  absl::optional<MonotoneCubicSpline> global_curve_;
+  std::optional<MonotoneCubicSpline> global_curve_;
   // |current_curve_| initially is set by |SetInitialCurves| and then gets
   // updated during training.
-  absl::optional<MonotoneCubicSpline> current_curve_;
+  std::optional<MonotoneCubicSpline> current_curve_;
 
   // Whether the |brightness_| has been updated since last time |Train| updated
   // the curve.
@@ -130,8 +134,6 @@ class GaussianTrainer : public Trainer {
   // calculated from the global curve's brightness values.
   std::vector<double> min_ratios_;
   std::vector<double> max_ratios_;
-
-  DISALLOW_COPY_AND_ASSIGN(GaussianTrainer);
 };
 
 }  // namespace auto_screen_brightness

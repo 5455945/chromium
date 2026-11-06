@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,9 +9,9 @@
 
 #include <map>
 #include <memory>
-#include <set>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/no_destructor.h"
 #include "ui/accessibility/ax_enums.mojom-forward.h"
 #include "ui/accessibility/ax_node_data.h"
@@ -44,6 +44,11 @@ class VIEWS_EXPORT AXAuraObjCache : public aura::client::FocusChangeObserver {
     virtual void OnEvent(AXAuraObjWrapper* aura_obj,
                          ax::mojom::Event event_type) = 0;
   };
+
+  // Sets or clears a focused View override for transient popups (e.g. Autofill,
+  // menus). Pass nullptr to clear.
+  static void SetPopupFocusOverride(View* view);
+  static View* GetPopupFocusOverride();
 
   // Get or create an entry in the cache. May return null if the View is not
   // associated with a Widget.
@@ -82,13 +87,11 @@ class VIEWS_EXPORT AXAuraObjCache : public aura::client::FocusChangeObserver {
 
   // Get all top level windows this cache knows about. Under classic ash and
   // SingleProcessMash this is a list of per-display root windows.
-  void GetTopLevelWindows(std::vector<AXAuraObjWrapper*>* children);
+  void GetTopLevelWindows(
+      std::vector<raw_ptr<AXAuraObjWrapper, VectorExperimental>>* children);
 
   // Get the object that has focus.
   AXAuraObjWrapper* GetFocus();
-
-  // Send a notification that the focused view may have changed.
-  void OnFocusedViewChanged();
 
   // Tell our delegate to fire an event on a given object.
   void FireEvent(AXAuraObjWrapper* aura_obj, ax::mojom::Event event_type);
@@ -103,7 +106,7 @@ class VIEWS_EXPORT AXAuraObjCache : public aura::client::FocusChangeObserver {
   // with accessibility clients that consume accessibility APIs, but cannot take
   // real focus themselves. |a11y_override_window_| will be set to null when
   // destroyed, or can be set back to null using this function.
-  // TODO(sammiequon): Merge this with set_focused_widget_for_testing().
+  // TODO: Merge this with set_focused_widget_for_testing().
   void SetA11yOverrideWindow(aura::Window* a11y_override_window);
 
   void SetDelegate(Delegate* delegate) { delegate_ = delegate; }
@@ -120,6 +123,9 @@ class VIEWS_EXPORT AXAuraObjCache : public aura::client::FocusChangeObserver {
   class A11yOverrideWindowObserver;
 
   View* GetFocusedView();
+
+  // Send a notification that the focused view may have changed.
+  void OnFocusedViewChanged();
 
   // aura::client::FocusChangeObserver override.
   void OnWindowFocused(aura::Window* gained_focus,
@@ -140,9 +146,9 @@ class VIEWS_EXPORT AXAuraObjCache : public aura::client::FocusChangeObserver {
                       std::map<AuraView*, ui::AXNodeID>* aura_view_to_id_map);
 
   // The window that should take a11y focus. This is for a window that needs to
-  // work with accessiblity features, but cannot take real focus. Gets set to
+  // work with accessibility features, but cannot take real focus. Gets set to
   // null if the window is destroyed.
-  aura::Window* a11y_override_window_ = nullptr;
+  raw_ptr<aura::Window> a11y_override_window_ = nullptr;
 
   // Observes |a11y_override_window_| for destruction and sets it to null in
   // that case.
@@ -155,13 +161,13 @@ class VIEWS_EXPORT AXAuraObjCache : public aura::client::FocusChangeObserver {
 
   std::map<ui::AXNodeID, std::unique_ptr<AXAuraObjWrapper>> cache_;
 
-  Delegate* delegate_ = nullptr;
+  raw_ptr<Delegate> delegate_ = nullptr;
 
-  std::set<aura::Window*> root_windows_;
+  std::vector<raw_ptr<aura::Window, VectorExperimental>> root_windows_;
 
-  aura::Window* focused_window_ = nullptr;
+  raw_ptr<aura::Window> focused_window_ = nullptr;
 
-  views::Widget* focused_widget_for_testing_ = nullptr;
+  raw_ptr<views::Widget> focused_widget_for_testing_ = nullptr;
 };
 
 }  // namespace views

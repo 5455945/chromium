@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,16 +12,17 @@
 // For more details, see
 // https://chromium.googlesource.com/chromium/src/+/main/testing/libfuzzer/README.md
 
+#include "content/renderer/content_security_policy_util.h"
+
 #include "base/at_exit.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/i18n/icu_util.h"
 #include "base/strings/string_util.h"
 #include "base/test/test_timeouts.h"
 #include "content/public/test/blink_test_environment.h"
-#include "content/renderer/content_security_policy_util.h"
 #include "services/network/public/cpp/content_security_policy/content_security_policy.h"
 #include "services/network/public/mojom/content_security_policy.mojom-forward.h"
-
 
 namespace {
 
@@ -41,9 +42,12 @@ class Environment {
 
     TestTimeouts::Initialize();
 
-    content::SetUpBlinkTestEnvironment();
+    blink_environment_.SetUp();
   }
   ~Environment() {}
+
+ private:
+  content::BlinkTestEnvironment blink_environment_;
 };
 
 }  // namespace
@@ -60,13 +64,13 @@ int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   // We need two pieces of input: a URL and a CSP string. Split |data| in two at
   // the first whitespace.
   const uint8_t* it = data;
-  for (; it < data + size; it++) {
+  for (; it < UNSAFE_TODO(data + size); UNSAFE_TODO(it++)) {
     if (base::IsAsciiWhitespace(*reinterpret_cast<const char*>(it))) {
-      it++;
+      UNSAFE_TODO(it++);
       break;
     }
   }
-  if (it == data + size) {
+  if (it == UNSAFE_TODO(data + size)) {
     // Not much point in going on with an empty CSP string.
     return EXIT_SUCCESS;
   }
@@ -75,11 +79,12 @@ int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     return EXIT_SUCCESS;
   }
 
-  std::string raw_url(reinterpret_cast<const char*>(data), it - 1 - data);
+  std::string raw_url(reinterpret_cast<const char*>(data),
+                      UNSAFE_TODO(it - 1 - data));
   std::string raw_csp(reinterpret_cast<const char*>(it), size - (it - data));
 
-  if (blink::WebString::FromUTF8(raw_url).Utf8() != raw_url ||
-      blink::WebString::FromUTF8(raw_csp).Utf8() != raw_csp) {
+  if (blink::WebString::FromUtf8(raw_url).Utf8() != raw_url ||
+      blink::WebString::FromUtf8(raw_csp).Utf8() != raw_csp) {
     // The back-and-forth conversion can only work for valid utf8 input.
     return EXIT_SUCCESS;
   }
@@ -91,7 +96,6 @@ int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 
   static const uint8_t kEnforcementBit = 0x01;
   static const uint8_t kSourceBit1 = 0x02;
-  static const uint8_t kSourceBit2 = 0x04;
 
   // Generate pseudo-random |header_type| and |header_source|.
   network::mojom::ContentSecurityPolicyType header_type =
@@ -100,13 +104,9 @@ int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
           : network::mojom::ContentSecurityPolicyType::kReport;
 
   network::mojom::ContentSecurityPolicySource header_source =
-      network::mojom::ContentSecurityPolicySource::kHTTP;
-  if (data[0] & kSourceBit1) {
-    header_source =
-        (data[0] & kSourceBit2)
-            ? network::mojom::ContentSecurityPolicySource::kMeta
-            : network::mojom::ContentSecurityPolicySource::kOriginPolicy;
-  }
+      data[0] & kSourceBit1
+          ? network::mojom::ContentSecurityPolicySource::kMeta
+          : network::mojom::ContentSecurityPolicySource::kHTTP;
 
   // Parse the Content Security Policy string.
   std::vector<network::mojom::ContentSecurityPolicyPtr> csp =
@@ -115,7 +115,7 @@ int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 
   if (csp.size() > 0) {
     network::mojom::ContentSecurityPolicyPtr converted_csp =
-        BuildContentSecurityPolicy(ToWebContentSecurityPolicy(csp[0]->Clone()));
+        BuildContentSecurityPolicy(ToWebContentSecurityPolicy(csp[0]));
     CHECK(converted_csp->Equals(*csp[0]));
   }
 

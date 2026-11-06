@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,8 +13,7 @@
 #include "remoting/protocol/input_stub.h"
 #include "remoting/protocol/message_serialization.h"
 
-namespace remoting {
-namespace protocol {
+namespace remoting::protocol {
 
 HostEventDispatcher::HostEventDispatcher()
     : ChannelDispatcherBase(kEventChannelName),
@@ -28,8 +27,9 @@ void HostEventDispatcher::OnIncomingMessage(
 
   std::unique_ptr<EventMessage> message =
       ParseMessage<EventMessage>(buffer.get());
-  if (!message)
+  if (!message) {
     return;
+  }
 
   event_timestamps_source_->OnEventReceived(InputEventTimestamps{
       base::TimeTicks::FromInternalValue(message->timestamp()),
@@ -50,7 +50,16 @@ void HostEventDispatcher::OnIncomingMessage(
       LOG(WARNING) << "Received invalid text event.";
     }
   } else if (message->has_mouse_event()) {
-    input_stub_->InjectMouseEvent(message->mouse_event());
+    const MouseEvent& event = message->mouse_event();
+    bool has_absolute =
+        event.has_x() || event.has_y() || event.has_fractional_coordinate();
+    bool has_relative = event.has_delta_x() || event.has_delta_y();
+    if (has_absolute && has_relative) {
+      LOG(WARNING) << "Received mouse event with both absolute and relative "
+                      "coordinates.";
+    } else {
+      input_stub_->InjectMouseEvent(event);
+    }
   } else if (message->has_touch_event()) {
     input_stub_->InjectTouchEvent(message->touch_event());
   } else {
@@ -58,5 +67,4 @@ void HostEventDispatcher::OnIncomingMessage(
   }
 }
 
-}  // namespace protocol
-}  // namespace remoting
+}  // namespace remoting::protocol

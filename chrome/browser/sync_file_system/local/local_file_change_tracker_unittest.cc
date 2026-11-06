@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,11 +10,9 @@
 #include <set>
 
 #include "base/containers/circular_deque.h"
-#include "base/containers/contains.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/macros.h"
 #include "base/run_loop.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/sync_file_system/local/canned_syncable_file_system.h"
 #include "chrome/browser/sync_file_system/local/local_file_sync_context.h"
 #include "chrome/browser/sync_file_system/local/sync_file_system_backend.h"
@@ -42,19 +40,23 @@ class LocalFileChangeTrackerTest : public testing::Test {
   LocalFileChangeTrackerTest()
       : task_environment_(content::BrowserTaskEnvironment::IO_MAINLOOP),
         in_memory_env_(leveldb_chrome::NewMemEnv("LocalFileChangeTrackerTest")),
-        file_system_(GURL("http://example.com"),
+        file_system_(GURL("chrome-extension://example"),
                      in_memory_env_.get(),
-                     base::ThreadTaskRunnerHandle::Get().get(),
-                     base::ThreadTaskRunnerHandle::Get().get()) {}
+                     base::SingleThreadTaskRunner::GetCurrentDefault().get(),
+                     base::SingleThreadTaskRunner::GetCurrentDefault().get()) {}
+
+  LocalFileChangeTrackerTest(const LocalFileChangeTrackerTest&) = delete;
+  LocalFileChangeTrackerTest& operator=(const LocalFileChangeTrackerTest&) =
+      delete;
 
   void SetUp() override {
-    file_system_.SetUp(CannedSyncableFileSystem::QUOTA_ENABLED);
+    file_system_.SetUp();
 
     ASSERT_TRUE(base_dir_.CreateUniqueTempDir());
-    sync_context_ =
-        new LocalFileSyncContext(base_dir_.GetPath(), in_memory_env_.get(),
-                                 base::ThreadTaskRunnerHandle::Get().get(),
-                                 base::ThreadTaskRunnerHandle::Get().get());
+    sync_context_ = new LocalFileSyncContext(
+        base_dir_.GetPath(), in_memory_env_.get(),
+        base::SingleThreadTaskRunner::GetCurrentDefault().get(),
+        base::SingleThreadTaskRunner::GetCurrentDefault().get());
     ASSERT_EQ(
         SYNC_STATUS_OK,
         file_system_.MaybeInitializeFileSystemContext(sync_context_.get()));
@@ -121,8 +123,6 @@ class LocalFileChangeTrackerTest : public testing::Test {
 
  private:
   scoped_refptr<LocalFileSyncContext> sync_context_;
-
-  DISALLOW_COPY_AND_ASSIGN(LocalFileChangeTrackerTest);
 };
 
 TEST_F(LocalFileChangeTrackerTest, DemoteAndPromote) {
@@ -179,14 +179,14 @@ TEST_F(LocalFileChangeTrackerTest, GetChanges) {
   file_system_.GetChangedURLsInTracker(&urls);
 
   EXPECT_EQ(5U, urls.size());
-  EXPECT_TRUE(base::Contains(urls, URL(kPath1)));
-  EXPECT_TRUE(base::Contains(urls, URL(kPath2)));
-  EXPECT_TRUE(base::Contains(urls, URL(kPath3)));
-  EXPECT_TRUE(base::Contains(urls, URL(kPath4)));
-  EXPECT_TRUE(base::Contains(urls, URL(kPath5)));
+  EXPECT_TRUE(urls.contains(URL(kPath1)));
+  EXPECT_TRUE(urls.contains(URL(kPath2)));
+  EXPECT_TRUE(urls.contains(URL(kPath3)));
+  EXPECT_TRUE(urls.contains(URL(kPath4)));
+  EXPECT_TRUE(urls.contains(URL(kPath5)));
 
   // Changes for kPath0 must have been offset and removed.
-  EXPECT_FALSE(base::Contains(urls, URL(kPath0)));
+  EXPECT_FALSE(urls.contains(URL(kPath0)));
 
   // GetNextChangedURLs only returns up to max_urls (i.e. 3) urls.
   base::circular_deque<FileSystemURL> urls_to_process;
@@ -623,7 +623,7 @@ TEST_F(LocalFileChangeTrackerTest, NextChangedURLsWithRecursiveCopy) {
   change_tracker()->GetNextChangedURLs(&urls_to_process, 0);
   ASSERT_EQ(6U, urls_to_process.size());
 
-  // Creation must have occured first.
+  // Creation must have occurred first.
   EXPECT_EQ(URL(kPath0), urls_to_process[0]);
   EXPECT_EQ(URL(kPath1), urls_to_process[1]);
   EXPECT_EQ(URL(kPath2), urls_to_process[2]);
@@ -670,8 +670,8 @@ TEST_F(LocalFileChangeTrackerTest, NextChangedURLsWithRecursiveRemove) {
   ASSERT_EQ(2U, urls.size());
 
   // The exact order of recursive removal cannot be determined.
-  EXPECT_TRUE(base::Contains(urls, URL(kPath1)));
-  EXPECT_TRUE(base::Contains(urls, URL(kPath2)));
+  EXPECT_TRUE(urls.contains(URL(kPath1)));
+  EXPECT_TRUE(urls.contains(URL(kPath2)));
 }
 
 TEST_F(LocalFileChangeTrackerTest, ResetForFileSystem) {
@@ -694,10 +694,10 @@ TEST_F(LocalFileChangeTrackerTest, ResetForFileSystem) {
   FileSystemURLSet urls;
   GetAllChangedURLs(&urls);
   EXPECT_EQ(4u, urls.size());
-  EXPECT_TRUE(base::Contains(urls, URL(kPath0)));
-  EXPECT_TRUE(base::Contains(urls, URL(kPath1)));
-  EXPECT_TRUE(base::Contains(urls, URL(kPath2)));
-  EXPECT_TRUE(base::Contains(urls, URL(kPath3)));
+  EXPECT_TRUE(urls.contains(URL(kPath0)));
+  EXPECT_TRUE(urls.contains(URL(kPath1)));
+  EXPECT_TRUE(urls.contains(URL(kPath2)));
+  EXPECT_TRUE(urls.contains(URL(kPath3)));
 
   // Reset all changes for the file system.
   change_tracker()->ResetForFileSystem(

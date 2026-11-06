@@ -1,13 +1,21 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "media/base/container_names.h"
+
 #include <stdint.h>
 
+#include <algorithm>
+#include <optional>
+
+#include "base/containers/span.h"
 #include "base/files/file_util.h"
-#include "media/base/container_names.h"
+#include "base/files/scoped_temp_dir.h"
+#include "base/numerics/safe_conversions.h"
 #include "media/base/test_data_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/fuzztest/src/fuzztest/fuzztest.h"
 
 namespace media {
 
@@ -16,15 +24,14 @@ namespace container_names {
 // Using a macros to simplify tests. Since EXPECT_EQ outputs the second argument
 // as a string when it fails, this lets the output identify what item actually
 // failed.
-#define VERIFY(buffer, name)                                                   \
-  EXPECT_EQ(name, DetermineContainer(reinterpret_cast<const uint8_t*>(buffer), \
-                                     sizeof(buffer)))
+#define VERIFY(buffer, name) \
+  EXPECT_EQ(name, DetermineContainer(base::as_byte_span(buffer)))
 
 // Test that small buffers are handled correctly.
 TEST(ContainerNamesTest, CheckSmallBuffer) {
   // Empty buffer.
   char buffer[1];  // ([0] not allowed on win)
-  VERIFY(buffer, CONTAINER_UNKNOWN);
+  VERIFY(buffer, MediaContainerName::kContainerUnknown);
 
   // Try a simple SRT file.
   char buffer1[] =
@@ -35,22 +42,22 @@ TEST(ContainerNamesTest, CheckSmallBuffer) {
       "2\n"
       "00:03:24,476 --> 00:03:25,175\n"
       "What are you talking about?\n";
-  VERIFY(buffer1, CONTAINER_SRT);
+  VERIFY(buffer1, MediaContainerName::kContainerSRT);
 
   // HLS has it's own loop.
   char buffer2[] = "#EXTM3U"
                    "some other random stuff"
                    "#EXT-X-MEDIA-SEQUENCE:";
-  VERIFY(buffer2, CONTAINER_HLS);
+  VERIFY(buffer2, MediaContainerName::kContainerHLS);
 
   // Try a large buffer all zeros.
   char buffer3[4096];
-  memset(buffer3, 0, sizeof(buffer3));
-  VERIFY(buffer3, CONTAINER_UNKNOWN);
+  std::ranges::fill(buffer3, 0);
+  VERIFY(buffer3, MediaContainerName::kContainerUnknown);
 
   // Reuse buffer, but all \n this time.
-  memset(buffer3, '\n', sizeof(buffer3));
-  VERIFY(buffer3, CONTAINER_UNKNOWN);
+  std::ranges::fill(buffer3, '\n');
+  VERIFY(buffer3, MediaContainerName::kContainerUnknown);
 }
 
 #define BYTE_ORDER_MARK "\xef\xbb\xbf"
@@ -62,6 +69,19 @@ uint8_t kAsfBuffer[] = {0x30, 0x26, 0xb2, 0x75, 0x8e, 0x66, 0xcf, 0x11,
                         0xa6, 0xd9, 0x00, 0xaa, 0x00, 0x62, 0xce, 0x6c};
 const char kAss1Buffer[] = "[Script Info]";
 const char kAss2Buffer[] = BYTE_ORDER_MARK "[Script Info]";
+uint8_t kBinkBuffer[] = {
+    'B',  'I',  'K',  'b',   // Signature
+    0x00, 0x00, 0x00, 0x00,  // File size (ignored)
+    0x01, 0x00, 0x00, 0x00,  // Number of frames = 1
+    0x00, 0x00, 0x00, 0x00,  // Largest frame size (skipped)
+    0x00, 0x00, 0x00, 0x00,  // Number of frames (alternate, skipped)
+    0x80, 0x02, 0x00, 0x00,  // Width = 640
+    0xe0, 0x01, 0x00, 0x00,  // Height = 480
+    0x1e, 0x00, 0x00, 0x00,  // FPS dividend = 30
+    0x01, 0x00, 0x00, 0x00,  // FPS scale = 1
+    0x00, 0x00, 0x00, 0x00,  // Flags (skipped)
+    0x01, 0x00, 0x00, 0x00,  // Audio tracks = 1
+};
 uint8_t kCafBuffer[] = {
     'c', 'a', 'f', 'f', 0,   1, 0, 0, 'd', 'e', 's', 'c', 0,   0, 0, 0, 0, 0, 0,
     32,  64,  229, 136, 128, 0, 0, 0, 0,   'a', 'a', 'c', ' ', 0, 0, 0, 2, 0, 0,
@@ -109,25 +129,113 @@ uint8_t kBug585243Buffer[] = {0x1a, 0x45, 0xdf, 0xa3, 0x01, 0x00,
                               0x00, 0x00, 0x00, 0x00, 0x00, 0x06,
                               0x42, 0x82, 0x42, 0x82, 0x00, 0x00};
 
+// Test Bink container parsing and validation.
+TEST(ContainerNamesTest, CheckBink) {
+  uint8_t buffer[] = {
+      'B',  'I',  'K',  'b',   // Signature
+      0x00, 0x00, 0x00, 0x00,  // File size (ignored)
+      0x01, 0x00, 0x00, 0x00,  // Number of frames = 1
+      0x00, 0x00, 0x00, 0x00,  // Largest frame size (skipped)
+      0x00, 0x00, 0x00, 0x00,  // Number of frames (alternate, skipped)
+      0x80, 0x02, 0x00, 0x00,  // Width = 640
+      0xe0, 0x01, 0x00, 0x00,  // Height = 480
+      0x1e, 0x00, 0x00, 0x00,  // FPS dividend = 30
+      0x01, 0x00, 0x00, 0x00,  // FPS scale = 1
+      0x00, 0x00, 0x00, 0x00,  // Flags (skipped)
+      0x01, 0x00, 0x00, 0x00,  // Audio tracks = 1
+  };
+  VERIFY(buffer, MediaContainerName::kContainerBink);
+
+  // Verify all supported Bink revisions ('b', 'd', 'f', 'g', 'h', 'i').
+  for (char sig : {'b', 'd', 'f', 'g', 'h', 'i'}) {
+    buffer[3] = static_cast<uint8_t>(sig);
+    VERIFY(buffer, MediaContainerName::kContainerBink);
+  }
+
+  // Unsupported revisions should not be recognized as Bink.
+  for (char sig : {'a', 'c', 'e', 'j', 'z', '1'}) {
+    buffer[3] = static_cast<uint8_t>(sig);
+    VERIFY(buffer, MediaContainerName::kContainerUnknown);
+  }
+  buffer[3] = 'b';
+
+  // Buffer must be at least 44 bytes.
+  VERIFY(base::span(buffer).first(43u), MediaContainerName::kContainerUnknown);
+  VERIFY(base::span(buffer).first(8u), MediaContainerName::kContainerUnknown);
+
+  // Number of frames must be > 0.
+  buffer[8] = 0;
+  VERIFY(buffer, MediaContainerName::kContainerUnknown);
+  buffer[8] = 1;
+
+  // Width must be > 0 and <= 32767.
+  buffer[20] = 0;
+  buffer[21] = 0;
+  VERIFY(buffer, MediaContainerName::kContainerUnknown);
+  buffer[20] = 0xff;
+  buffer[21] = 0x7f;  // 32767
+  VERIFY(buffer, MediaContainerName::kContainerBink);
+  buffer[20] = 0x00;
+  buffer[21] = 0x80;  // 32768
+  VERIFY(buffer, MediaContainerName::kContainerUnknown);
+  buffer[20] = 0x80;
+  buffer[21] = 0x02;  // 640
+
+  // Height must be > 0 and <= 32767.
+  buffer[24] = 0;
+  buffer[25] = 0;
+  VERIFY(buffer, MediaContainerName::kContainerUnknown);
+  buffer[24] = 0xff;
+  buffer[25] = 0x7f;  // 32767
+  VERIFY(buffer, MediaContainerName::kContainerBink);
+  buffer[24] = 0x00;
+  buffer[25] = 0x80;  // 32768
+  VERIFY(buffer, MediaContainerName::kContainerUnknown);
+  buffer[24] = 0xe0;
+  buffer[25] = 0x01;  // 480
+
+  // FPS dividend must be > 0.
+  buffer[28] = 0;
+  VERIFY(buffer, MediaContainerName::kContainerUnknown);
+  buffer[28] = 30;
+
+  // FPS scale must be > 0.
+  buffer[32] = 0;
+  VERIFY(buffer, MediaContainerName::kContainerUnknown);
+  buffer[32] = 1;
+
+  // Audio tracks must be <= 256.
+  buffer[40] = 0;
+  buffer[41] = 0;  // 0 audio tracks
+  VERIFY(buffer, MediaContainerName::kContainerBink);
+  buffer[40] = 0x00;
+  buffer[41] = 0x01;  // 256 audio tracks
+  VERIFY(buffer, MediaContainerName::kContainerBink);
+  buffer[40] = 0x01;
+  buffer[41] = 0x01;  // 257 audio tracks
+  VERIFY(buffer, MediaContainerName::kContainerUnknown);
+}
+
 // Test that containers that start with fixed strings are handled correctly.
 // This is to verify that the TAG matches the first 4 characters of the string.
 TEST(ContainerNamesTest, CheckFixedStrings) {
-  VERIFY(kAmrBuffer, CONTAINER_AMR);
-  VERIFY(kAsfBuffer, CONTAINER_ASF);
-  VERIFY(kAss1Buffer, CONTAINER_ASS);
-  VERIFY(kAss2Buffer, CONTAINER_ASS);
-  VERIFY(kCafBuffer, CONTAINER_CAF);
-  VERIFY(kDtshdBuffer, CONTAINER_DTSHD);
-  VERIFY(kDxaBuffer, CONTAINER_DXA);
-  VERIFY(kFlacBuffer, CONTAINER_FLAC);
-  VERIFY(kFlvBuffer, CONTAINER_FLV);
-  VERIFY(kIrcamBuffer, CONTAINER_IRCAM);
-  VERIFY(kRm1Buffer, CONTAINER_RM);
-  VERIFY(kRm2Buffer, CONTAINER_RM);
-  VERIFY(kWtvBuffer, CONTAINER_WTV);
-  VERIFY(kBug263073Buffer, CONTAINER_MOV);
-  VERIFY(kBug584401Buffer, CONTAINER_EAC3);
-  VERIFY(kBug585243Buffer, CONTAINER_UNKNOWN);
+  VERIFY(kAmrBuffer, MediaContainerName::kContainerAMR);
+  VERIFY(kAsfBuffer, MediaContainerName::kContainerASF);
+  VERIFY(kAss1Buffer, MediaContainerName::kContainerASS);
+  VERIFY(kAss2Buffer, MediaContainerName::kContainerASS);
+  VERIFY(kBinkBuffer, MediaContainerName::kContainerBink);
+  VERIFY(kCafBuffer, MediaContainerName::kContainerCAF);
+  VERIFY(kDtshdBuffer, MediaContainerName::kContainerDTSHD);
+  VERIFY(kDxaBuffer, MediaContainerName::kContainerDXA);
+  VERIFY(kFlacBuffer, MediaContainerName::kContainerFLAC);
+  VERIFY(kFlvBuffer, MediaContainerName::kContainerFLV);
+  VERIFY(kIrcamBuffer, MediaContainerName::kContainerIRCAM);
+  VERIFY(kRm1Buffer, MediaContainerName::kContainerRM);
+  VERIFY(kRm2Buffer, MediaContainerName::kContainerRM);
+  VERIFY(kWtvBuffer, MediaContainerName::kContainerWTV);
+  VERIFY(kBug263073Buffer, MediaContainerName::kContainerMOV);
+  VERIFY(kBug584401Buffer, MediaContainerName::kContainerEAC3);
+  VERIFY(kBug585243Buffer, MediaContainerName::kContainerUnknown);
 }
 
 // Determine the container type of a specified file.
@@ -136,116 +244,156 @@ void TestFile(MediaContainerName expected, const base::FilePath& filename) {
 
   // Windows implementation of ReadFile fails if file smaller than desired size,
   // so use file length if file less than 8192 bytes (http://crbug.com/243885).
-  int read_size = sizeof(buffer);
-  int64_t actual_size;
-  if (base::GetFileSize(filename, &actual_size) && actual_size < read_size)
-    read_size = actual_size;
-  int read = base::ReadFile(filename, buffer, read_size);
+  size_t read_size = sizeof(buffer);
+  std::optional<int64_t> actual_size = base::GetFileSize(filename);
+  if (actual_size.has_value() &&
+      base::checked_cast<size_t>(actual_size.value()) < read_size) {
+    read_size = base::checked_cast<size_t>(actual_size.value());
+  }
+  std::optional<uint64_t> read =
+      base::ReadFile(filename, base::span(buffer).first(read_size));
+  ASSERT_TRUE(read.has_value()) << "Failure reading file " << filename.value();
 
   // Now verify the type.
-  EXPECT_EQ(expected,
-            DetermineContainer(reinterpret_cast<const uint8_t*>(buffer), read))
+  EXPECT_EQ(expected, DetermineContainer(base::as_byte_span(buffer).first(
+                          base::checked_cast<size_t>(read.value()))))
       << "Failure with file " << filename.value();
 }
 
 TEST(ContainerNamesTest, FileCheckOGG) {
-  TestFile(CONTAINER_OGG, GetTestDataFilePath("bear.ogv"));
-  TestFile(CONTAINER_OGG, GetTestDataFilePath("9ch.ogg"));
+  TestFile(MediaContainerName::kContainerOgg, GetTestDataFilePath("bear.ogv"));
+  TestFile(MediaContainerName::kContainerOgg, GetTestDataFilePath("9ch.ogg"));
 }
 
 TEST(ContainerNamesTest, FileCheckWAV) {
-  TestFile(CONTAINER_WAV, GetTestDataFilePath("4ch.wav"));
-  TestFile(CONTAINER_WAV, GetTestDataFilePath("sfx_f32le.wav"));
-  TestFile(CONTAINER_WAV, GetTestDataFilePath("sfx_s16le.wav"));
+  TestFile(MediaContainerName::kContainerWAV, GetTestDataFilePath("4ch.wav"));
+  TestFile(MediaContainerName::kContainerWAV,
+           GetTestDataFilePath("sfx_f32le.wav"));
+  TestFile(MediaContainerName::kContainerWAV,
+           GetTestDataFilePath("sfx_s16le.wav"));
 }
 
 TEST(ContainerNamesTest, FileCheckMOV) {
-  TestFile(CONTAINER_MOV, GetTestDataFilePath("bear_rotate_90.mp4"));
-  TestFile(CONTAINER_MOV, GetTestDataFilePath("bear-1280x720.mp4"));
-  TestFile(CONTAINER_MOV, GetTestDataFilePath("crbug657437.mp4"));
-  TestFile(CONTAINER_MOV, GetTestDataFilePath("sfx.m4a"));
+  TestFile(MediaContainerName::kContainerMOV,
+           GetTestDataFilePath("bear_rotate_90.mp4"));
+  TestFile(MediaContainerName::kContainerMOV,
+           GetTestDataFilePath("bear-1280x720.mp4"));
+  TestFile(MediaContainerName::kContainerMOV,
+           GetTestDataFilePath("crbug657437.mp4"));
+  TestFile(MediaContainerName::kContainerMOV, GetTestDataFilePath("sfx.m4a"));
 }
 
 TEST(ContainerNamesTest, FileCheckWEBM) {
-  TestFile(CONTAINER_WEBM, GetTestDataFilePath("bear-320x240.webm"));
-  TestFile(CONTAINER_WEBM, GetTestDataFilePath("no_streams.webm"));
-  TestFile(CONTAINER_WEBM, GetTestDataFilePath("webm_ebml_element"));
+  TestFile(MediaContainerName::kContainerWEBM,
+           GetTestDataFilePath("bear-320x240.webm"));
+  TestFile(MediaContainerName::kContainerWEBM,
+           GetTestDataFilePath("no_streams.webm"));
+  TestFile(MediaContainerName::kContainerWEBM,
+           GetTestDataFilePath("webm_ebml_element"));
 }
 
 TEST(ContainerNamesTest, FileCheckMP3) {
-  TestFile(CONTAINER_MP3, GetTestDataFilePath("bear-audio-10s-CBR-no-TOC.mp3"));
-  TestFile(CONTAINER_MP3, GetTestDataFilePath("id3_png_test.mp3"));
-  TestFile(CONTAINER_MP3, GetTestDataFilePath("id3_test.mp3"));
-  TestFile(CONTAINER_MP3, GetTestDataFilePath("midstream_config_change.mp3"));
-  TestFile(CONTAINER_MP3, GetTestDataFilePath("sfx.mp3"));
+  TestFile(MediaContainerName::kContainerMP3,
+           GetTestDataFilePath("bear-audio-10s-CBR-no-TOC.mp3"));
+  TestFile(MediaContainerName::kContainerMP3,
+           GetTestDataFilePath("id3_png_test.mp3"));
+  TestFile(MediaContainerName::kContainerMP3,
+           GetTestDataFilePath("id3_test.mp3"));
+  TestFile(MediaContainerName::kContainerMP3,
+           GetTestDataFilePath("midstream_config_change.mp3"));
+  TestFile(MediaContainerName::kContainerMP3, GetTestDataFilePath("sfx.mp3"));
 }
 
 TEST(ContainerNamesTest, FileCheckAC3) {
-  TestFile(CONTAINER_AC3, GetTestDataFilePath("bear.ac3"));
+  TestFile(MediaContainerName::kContainerAC3, GetTestDataFilePath("bear.ac3"));
 }
 
 TEST(ContainerNamesTest, FileCheckAAC) {
-  TestFile(CONTAINER_AAC, GetTestDataFilePath("bear.adts"));
+  TestFile(MediaContainerName::kContainerAAC, GetTestDataFilePath("bear.adts"));
 }
 
 TEST(ContainerNamesTest, FileCheckAIFF) {
-  TestFile(CONTAINER_AIFF, GetTestDataFilePath("bear.aiff"));
+  TestFile(MediaContainerName::kContainerAIFF,
+           GetTestDataFilePath("bear.aiff"));
 }
 
 TEST(ContainerNamesTest, FileCheckASF) {
-  TestFile(CONTAINER_ASF, GetTestDataFilePath("bear.asf"));
+  TestFile(MediaContainerName::kContainerASF, GetTestDataFilePath("bear.asf"));
 }
 
 TEST(ContainerNamesTest, FileCheckAVI) {
-  TestFile(CONTAINER_AVI, GetTestDataFilePath("bear.avi"));
+  TestFile(MediaContainerName::kContainerAVI, GetTestDataFilePath("bear.avi"));
 }
 
 TEST(ContainerNamesTest, FileCheckEAC3) {
-  TestFile(CONTAINER_EAC3, GetTestDataFilePath("bear.eac3"));
+  TestFile(MediaContainerName::kContainerEAC3,
+           GetTestDataFilePath("bear.eac3"));
 }
 
 TEST(ContainerNamesTest, FileCheckFLAC) {
-  TestFile(CONTAINER_FLAC, GetTestDataFilePath("bear.flac"));
+  TestFile(MediaContainerName::kContainerFLAC,
+           GetTestDataFilePath("bear.flac"));
 }
 
 TEST(ContainerNamesTest, FileCheckFLV) {
-  TestFile(CONTAINER_FLV, GetTestDataFilePath("bear.flv"));
+  TestFile(MediaContainerName::kContainerFLV, GetTestDataFilePath("bear.flv"));
 }
 
 TEST(ContainerNamesTest, FileCheckH261) {
-  TestFile(CONTAINER_H261, GetTestDataFilePath("bear.h261"));
+  TestFile(MediaContainerName::kContainerH261,
+           GetTestDataFilePath("bear.h261"));
 }
 
 TEST(ContainerNamesTest, FileCheckH263) {
-  TestFile(CONTAINER_H263, GetTestDataFilePath("bear.h263"));
+  TestFile(MediaContainerName::kContainerH263,
+           GetTestDataFilePath("bear.h263"));
 }
 
 TEST(ContainerNamesTest, FileCheckMJPEG) {
-  TestFile(CONTAINER_MJPEG, GetTestDataFilePath("bear.mjpeg"));
+  TestFile(MediaContainerName::kContainerMJPEG,
+           GetTestDataFilePath("bear.mjpeg"));
 }
 
 TEST(ContainerNamesTest, FileCheckMPEG2PS) {
-  TestFile(CONTAINER_MPEG2PS, GetTestDataFilePath("bear.mpeg"));
+  TestFile(MediaContainerName::kContainerMPEG2PS,
+           GetTestDataFilePath("bear.mpeg"));
 }
 
 TEST(ContainerNamesTest, FileCheckMPEG2TS) {
-  TestFile(CONTAINER_MPEG2TS, GetTestDataFilePath("bear.m2ts"));
+  TestFile(MediaContainerName::kContainerMPEG2TS,
+           GetTestDataFilePath("bear.m2ts"));
 }
 
 TEST(ContainerNamesTest, FileCheckRM) {
-  TestFile(CONTAINER_RM, GetTestDataFilePath("bear.rm"));
+  TestFile(MediaContainerName::kContainerRM, GetTestDataFilePath("bear.rm"));
 }
 
 TEST(ContainerNamesTest, FileCheckSWF) {
-  TestFile(CONTAINER_SWF, GetTestDataFilePath("bear.swf"));
+  TestFile(MediaContainerName::kContainerSWF, GetTestDataFilePath("bear.swf"));
 }
 
 // Try a few non containers.
 TEST(ContainerNamesTest, FileCheckUNKNOWN) {
-  TestFile(CONTAINER_UNKNOWN, GetTestDataFilePath("ten_byte_file"));
-  TestFile(CONTAINER_UNKNOWN, GetTestDataFilePath("README"));
-  TestFile(CONTAINER_UNKNOWN, GetTestDataFilePath("webm_vp8_track_entry"));
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+  const base::FilePath text_file =
+      temp_dir.GetPath().AppendASCII("plain_text.txt");
+  ASSERT_TRUE(base::WriteFile(text_file,
+                              "This is plain text, not a media container.\n"));
+
+  TestFile(MediaContainerName::kContainerUnknown,
+           GetTestDataFilePath("ten_byte_file"));
+  TestFile(MediaContainerName::kContainerUnknown, text_file);
+  TestFile(MediaContainerName::kContainerUnknown,
+           GetTestDataFilePath("webm_vp8_track_entry"));
 }
+
+void DetermineContainerDoesNotCrash(base::span<const uint8_t> data) {
+  DetermineContainer(data);
+}
+
+FUZZ_TEST(ContainerNamesTest, DetermineContainerDoesNotCrash)
+    .WithDomains(fuzztest::Arbitrary<std::vector<uint8_t>>().WithMinSize(1));
 
 }  // namespace container_names
 

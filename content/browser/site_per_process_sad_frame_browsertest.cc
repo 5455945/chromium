@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include "content/browser/renderer_host/cross_process_frame_connector.h"
 #include "content/browser/renderer_host/frame_tree.h"
 #include "content/browser/renderer_host/render_frame_proxy_host.h"
+#include "content/common/features.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test_utils.h"
@@ -29,6 +30,13 @@ class SadFrameShownObserver {
   explicit SadFrameShownObserver(FrameTreeNode* ftn) {
     RenderFrameProxyHost* proxy_to_parent =
         ftn->render_manager()->GetProxyToParent();
+    proxy_to_parent->cross_process_frame_connector()
+        ->set_child_frame_crash_shown_closure_for_testing(
+            run_loop_.QuitClosure());
+  }
+
+  explicit SadFrameShownObserver(RenderFrameHostImpl* rfhi) {
+    RenderFrameProxyHost* proxy_to_parent = rfhi->GetProxyToOuterDelegate();
     proxy_to_parent->cross_process_frame_connector()
         ->set_child_frame_crash_shown_closure_for_testing(
             run_loop_.QuitClosure());
@@ -59,18 +67,11 @@ class SitePerProcessBrowserTestWithoutSadFrameTabReload
   base::test::ScopedFeatureList feature_list_;
 };
 
-// This test is flaky on Win7.
-// TODO(crbug.com/1179074): Deflake it and enable this test back.
-#if defined(OS_WIN)
-#define MAYBE_ChildFrameCrashMetrics_KilledWhileHiddenThenShown \
-  DISABLED_ChildFrameCrashMetrics_KilledWhileHiddenThenShown
-#else
-#define MAYBE_ChildFrameCrashMetrics_KilledWhileHiddenThenShown \
-  ChildFrameCrashMetrics_KilledWhileHiddenThenShown
-#endif
+// This test is flaky on all platforms.
+// TODO(crbug.com/40749527): Deflake it and enable this test back.
 IN_PROC_BROWSER_TEST_P(
     SitePerProcessBrowserTestWithoutSadFrameTabReload,
-    MAYBE_ChildFrameCrashMetrics_KilledWhileHiddenThenShown) {
+    DISABLED_ChildFrameCrashMetrics_KilledWhileHiddenThenShown) {
   // Set-up a frame tree that helps verify what the metrics tracks:
   // 1) frames (12 frames are affected if B process gets killed) or
   // 2) widgets (10 b widgets and 1 c widget are affected if B is killed) or
@@ -78,7 +79,7 @@ IN_PROC_BROWSER_TEST_P(
   GURL main_url(embedded_test_server()->GetURL(
       "a.com", "/cross_site_iframe_factory.html?a(b(b,c),b,b,b,b,b,b,b,b,b)"));
   EXPECT_TRUE(NavigateToURL(shell(), main_url));
-  FrameTreeNode* root = web_contents()->GetFrameTree()->root();
+  FrameTreeNode* root = web_contents()->GetPrimaryFrameTree().root();
 
   // Hide the web contents (UpdateWebContentsVisibility is called twice to avoid
   // hitting the |!did_first_set_visible_| case).  Make sure all subframes are
@@ -153,7 +154,7 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTestWithoutSadFrameTabReload,
   GURL main_url(
       embedded_test_server()->GetURL("a.com", "/iframe_out_of_view.html"));
   EXPECT_TRUE(NavigateToURL(shell(), main_url));
-  FrameTreeNode* root = web_contents()->GetFrameTree()->root();
+  FrameTreeNode* root = web_contents()->GetPrimaryFrameTree().root();
   EXPECT_TRUE(NavigateToURLFromRenderer(
       root->child_at(0),
       embedded_test_server()->GetURL("b.com", "/title1.html")));
@@ -240,6 +241,23 @@ class SitePerProcessBrowserTestWithSadFrameTabReload
     EXPECT_FALSE(ftn->current_frame_host()->IsRenderFrameLive());
   }
 
+  void CrashRendererProcess(RenderFrameHostImpl* rfhi) {
+    RenderProcessHost* process = rfhi->GetProcess();
+    RenderProcessHostWatcher crash_observer(
+        process, RenderProcessHostWatcher::WATCH_FOR_PROCESS_EXIT);
+    process->Shutdown(0);
+    crash_observer.Wait();
+    EXPECT_FALSE(rfhi->IsRenderFrameLive());
+  }
+
+  WebContentsImpl* web_contents() {
+    return static_cast<WebContentsImpl*>(shell()->web_contents());
+  }
+
+  RenderFrameHostImpl* primary_main_frame_host() {
+    return web_contents()->GetPrimaryMainFrame();
+  }
+
  private:
   base::test::ScopedFeatureList feature_list_;
 };
@@ -252,7 +270,7 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTestWithSadFrameTabReload,
   GURL main_url(embedded_test_server()->GetURL(
       "a.com", "/cross_site_iframe_factory.html?a(b)"));
   EXPECT_TRUE(NavigateToURL(shell(), main_url));
-  FrameTreeNode* root = web_contents()->GetFrameTree()->root();
+  FrameTreeNode* root = web_contents()->GetPrimaryFrameTree().root();
 
   // Hide the WebContents (UpdateWebContentsVisibility is called twice to avoid
   // hitting the |!did_first_set_visible_| case).
@@ -296,7 +314,7 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTestWithSadFrameTabReload,
   GURL main_url(embedded_test_server()->GetURL(
       "a.com", "/cross_site_iframe_factory.html?a(b,c)"));
   EXPECT_TRUE(NavigateToURL(shell(), main_url));
-  FrameTreeNode* root = web_contents()->GetFrameTree()->root();
+  FrameTreeNode* root = web_contents()->GetPrimaryFrameTree().root();
 
   // Hide the WebContents (UpdateWebContentsVisibility is called twice to avoid
   // hitting the |!did_first_set_visible_| case).
@@ -333,7 +351,7 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTestWithSadFrameTabReload,
                                   1);
 
     // Ensure no new metrics are logged after the reload completes.
-    manager.WaitForNavigationFinished();
+    ASSERT_TRUE(manager.WaitForNavigationFinished());
     EXPECT_TRUE(manager.was_successful());
     EXPECT_FALSE(controller.NeedsReload());
     EXPECT_EQ(1, controller.GetEntryCount());
@@ -351,7 +369,7 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTestWithSadFrameTabReload,
   GURL main_url(embedded_test_server()->GetURL(
       "a.com", "/cross_site_iframe_factory.html?a(b(c))"));
   EXPECT_TRUE(NavigateToURL(shell(), main_url));
-  FrameTreeNode* root = web_contents()->GetFrameTree()->root();
+  FrameTreeNode* root = web_contents()->GetPrimaryFrameTree().root();
   FrameTreeNode* child = root->child_at(0);
   FrameTreeNode* grandchild = child->child_at(0);
 
@@ -387,7 +405,7 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTestWithSadFrameTabReload,
                                   1);
 
     // Ensure no new metrics are logged after the navigation completes.
-    manager.WaitForNavigationFinished();
+    ASSERT_TRUE(manager.WaitForNavigationFinished());
     EXPECT_TRUE(manager.was_successful());
     histograms.ExpectUniqueSample("Stability.ChildFrameCrash.Visibility",
                                   CrashVisibility::kShownWhileAncestorIsLoading,
@@ -400,7 +418,8 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTestWithSadFrameTabReload,
 // shown. Similar to the test above, except that the crashed subframe is
 // scrolled out of view.
 IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTestWithSadFrameTabReload,
-                       ReloadHiddenTabWithCrashedSubframeOutOfView) {
+                       // TODO(crbug.com/40870019): Re-enable this test
+                       DISABLED_ReloadHiddenTabWithCrashedSubframeOutOfView) {
   // Set WebContents to VISIBLE to avoid hitting the |!did_first_set_visible_|
   // case when we hide it later.
   web_contents()->UpdateWebContentsVisibility(Visibility::VISIBLE);
@@ -409,14 +428,13 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTestWithSadFrameTabReload,
   GURL out_of_view_url(
       embedded_test_server()->GetURL("a.com", "/iframe_out_of_view.html"));
   EXPECT_TRUE(NavigateToURL(shell(), out_of_view_url));
-  EXPECT_EQ("LOADED", EvalJs(shell(), "notifyWhenLoaded();",
-                             EXECUTE_SCRIPT_USE_MANUAL_REPLY));
+  EXPECT_EQ("LOADED", EvalJs(shell(), "notifyWhenLoaded();"));
   NavigateIframeToURL(web_contents(), "test_iframe",
                       embedded_test_server()->GetURL("b.com", "/title1.html"));
 
   // This will ensure that the layout has completed and visibility of the OOPIF
   // has been updated in the browser process.
-  FrameTreeNode* root = web_contents()->GetFrameTree()->root();
+  FrameTreeNode* root = web_contents()->GetPrimaryFrameTree().root();
   EXPECT_EQ(true,
             EvalJsAfterLifecycleUpdate(root->current_frame_host(), "", "true"));
 
@@ -475,7 +493,7 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTestWithSadFrameTabReload,
   // Ensure that the parent frame has propagated the OOPIF's hidden visibility
   // to the browser process by forcing requestAnimationFrame and
   // waiting for layout to finish.
-  FrameTreeNode* root = web_contents()->GetFrameTree()->root();
+  FrameTreeNode* root = web_contents()->GetPrimaryFrameTree().root();
   EXPECT_EQ(true,
             EvalJsAfterLifecycleUpdate(root->current_frame_host(), "", "true"));
 
@@ -511,7 +529,7 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTestWithSadFrameTabReload,
   GURL main_url(embedded_test_server()->GetURL(
       "a.com", "/cross_site_iframe_factory.html?a(b)"));
   EXPECT_TRUE(NavigateToURL(shell(), main_url));
-  FrameTreeNode* root = web_contents()->GetFrameTree()->root();
+  FrameTreeNode* root = web_contents()->GetPrimaryFrameTree().root();
   base::HistogramTester histograms;
   CrashProcess(root->child_at(0));
   histograms.ExpectUniqueSample("Stability.ChildFrameCrash.TabMarkedForReload",
@@ -528,7 +546,8 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTestWithSadFrameTabReload,
 }
 
 IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
-                       ChildFrameCrashMetrics_KilledWhileVisible) {
+                       // TODO(crbug.com/40870019): Re-enable this test
+                       DISABLED_ChildFrameCrashMetrics_KilledWhileVisible) {
   // Set-up a frame tree that helps verify what the metrics tracks:
   // 1) frames (12 frames are affected if B process gets killed) or
   // 2) crashes (simply 1 crash if B process gets killed)?
@@ -538,7 +557,7 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
   GURL main_url(embedded_test_server()->GetURL(
       "a.com", "/cross_site_iframe_factory.html?a(b(b,c(b)),b,b,b,b,b,b,b,b)"));
   EXPECT_TRUE(NavigateToURL(shell(), main_url));
-  FrameTreeNode* root = web_contents()->GetFrameTree()->root();
+  FrameTreeNode* root = web_contents()->GetPrimaryFrameTree().root();
 
   std::vector<std::unique_ptr<SadFrameShownObserver>> observers;
   for (size_t i = 0U; i < root->child_count(); i++) {

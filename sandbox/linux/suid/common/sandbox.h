@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -33,6 +33,20 @@ static const char kMsgChrootSuccessful = 'O';
 // by going through the setuid binary helper.
 static const char kSandboxPIDNSEnvironmentVarName[] = "SBX_PID_NS";
 static const char kSandboxNETNSEnvironmentVarName[] = "SBX_NET_NS";
+
+// Exit codes used by the setuid sandbox helper when it fails to set up the
+// sandbox before exec'ing the sandboxed process. The helper's stderr is often
+// not visible, so these let the launching process tell why the helper failed.
+// They are chosen to be distinct from the exit codes Chrome itself uses.
+enum SuidSandboxExitCode {
+  kSuidSandboxExitFatalError = 80,
+  kSuidSandboxExitApiVersionFailure = 81,
+  kSuidSandboxExitNamespaceFailure = 82,
+  kSuidSandboxExitChrootHelperFailure = 83,
+  kSuidSandboxExitDropRootFailure = 84,
+  kSuidSandboxExitEnvironmentFailure = 85,
+  kSuidSandboxExitExecFailure = 86,
+};
 
 #if defined(__cplusplus)
 }  // namespace sandbox

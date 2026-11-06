@@ -1,27 +1,29 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/safe_browsing/content/browser/password_protection/password_protection_service.h"
-#include "content/public/browser/browser_thread.h"
 
 #include <stddef.h>
 
 #include <memory>
 #include <string>
 
-#include "base/metrics/histogram_macros.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/rand_util.h"
+#include "base/strings/escape.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
 #include "components/password_manager/core/browser/password_reuse_detector.h"
-#include "components/safe_browsing/content/browser/password_protection/password_protection_navigation_throttle.h"
+#include "components/safe_browsing/content/browser/password_protection/password_protection_commit_deferring_condition.h"
 #include "components/safe_browsing/content/browser/password_protection/password_protection_request_content.h"
 #include "components/safe_browsing/core/common/features.h"
+#include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "components/safe_browsing/core/common/utils.h"
 #include "components/zoom/zoom_controller.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
 #include "google_apis/google_api_keys.h"
-#include "net/base/escape.h"
 #include "net/base/url_util.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
 
@@ -30,13 +32,40 @@ using password_manager::metrics_util::PasswordType;
 
 namespace safe_browsing {
 
+PasswordProtectionService::PasswordProtectionService(
+    const scoped_refptr<SafeBrowsingDatabaseManager>& database_manager,
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    history::HistoryService* history_service,
+    PrefService* pref_service,
+    std::unique_ptr<SafeBrowsingTokenFetcher> token_fetcher,
+    bool is_off_the_record,
+    signin::IdentityManager* identity_manager,
+    bool try_token_fetch,
+    SafeBrowsingMetricsCollector* metrics_collector)
+    : PasswordProtectionServiceBase(database_manager,
+                                    url_loader_factory,
+                                    history_service,
+                                    pref_service,
+                                    std::move(token_fetcher),
+                                    is_off_the_record,
+                                    identity_manager,
+                                    try_token_fetch,
+                                    metrics_collector) {}
+
+PasswordProtectionService::~PasswordProtectionService() = default;
+
+PasswordReuseInfo::PasswordReuseInfo() = default;
+
+PasswordReuseInfo::PasswordReuseInfo(const PasswordReuseInfo& other) = default;
+
+PasswordReuseInfo::~PasswordReuseInfo() = default;
+
 #if defined(ON_FOCUS_PING_ENABLED)
 void PasswordProtectionService::MaybeStartPasswordFieldOnFocusRequest(
     WebContents* web_contents,
     const GURL& main_frame_url,
     const GURL& password_form_action,
-    const GURL& password_form_frame_url,
-    const std::string& hosted_domain) {
+    const GURL& password_form_frame_url) {
   DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
   LoginReputationClientRequest::TriggerType trigger_type =
       LoginReputationClientRequest::UNFAMILIAR_LOGIN_PAGE;
@@ -45,6 +74,10 @@ void PasswordProtectionService::MaybeStartPasswordFieldOnFocusRequest(
           PasswordType::PASSWORD_TYPE_UNKNOWN,
           /*username=*/"");
   if (CanSendPing(trigger_type, main_frame_url, reused_password_account_type)) {
+    if (base::RandDouble() < kCsdProactivePasswordProtectionSampleRate.Get()) {
+      MaybeTriggerClientSideDetectionScan(web_contents);
+      return;
+    }
     StartRequest(web_contents, main_frame_url, password_form_action,
                  password_form_frame_url, /* username */ "",
                  PasswordType::PASSWORD_TYPE_UNKNOWN,
@@ -71,16 +104,9 @@ void PasswordProtectionService::MaybeStartProtectedPasswordEntryRequest(
       LoginReputationClientRequest::PASSWORD_REUSE_EVENT;
   ReusedPasswordAccountType reused_password_account_type =
       GetPasswordProtectionReusedPasswordAccountType(password_type, username);
-
+  bool can_show_interstitial =
+      CanShowInterstitial(reused_password_account_type, main_frame_url);
   if (IsSupportedPasswordTypeForPinging(password_type)) {
-#if BUILDFLAG(FULL_SAFE_BROWSING)
-    // Collect metrics about typical page-zoom on login pages.
-    double zoom_level =
-        zoom::ZoomController::GetZoomLevelForWebContents(web_contents);
-    UMA_HISTOGRAM_COUNTS_1000(
-        "PasswordProtection.PageZoomFactor",
-        static_cast<int>(100 * blink::PageZoomLevelToZoomFactor(zoom_level)));
-#endif  // defined(FULL_SAFE_BROWSING)
     if (CanSendPing(LoginReputationClientRequest::PASSWORD_REUSE_EVENT,
                     main_frame_url, reused_password_account_type)) {
       saved_passwords_matching_reused_credentials_ =
@@ -94,13 +120,21 @@ void PasswordProtectionService::MaybeStartProtectedPasswordEntryRequest(
           trigger_type, main_frame_url, reused_password_account_type);
       LogNoPingingReason(trigger_type, reason, reused_password_account_type);
 
+      if (reason == RequestOutcome::PASSWORD_ALERT_MODE) {
+        LoginReputationClientRequest::Frame temp_frame;
+        FillReferrerChain(main_frame_url, SessionID::InvalidValue(),
+                          &temp_frame);
+        MaybeReportPasswordReuseDetected(
+            main_frame_url, username, password_type, /*is_phishing_url=*/false,
+            can_show_interstitial, temp_frame.referrer_chain());
+      }
       if (reused_password_account_type.is_account_syncing())
         MaybeLogPasswordReuseLookupEvent(web_contents, reason, password_type,
                                          nullptr);
     }
   }
 
-  if (CanShowInterstitial(reused_password_account_type, main_frame_url)) {
+  if (can_show_interstitial) {
     LogPasswordAlertModeOutcome(RequestOutcome::SUCCEEDED,
                                 reused_password_account_type);
     username_for_last_shown_warning_ = username;
@@ -108,6 +142,69 @@ void PasswordProtectionService::MaybeStartProtectedPasswordEntryRequest(
         reused_password_account_type;
     ShowInterstitial(web_contents, reused_password_account_type);
   }
+}
+
+void PasswordProtectionService::MaybeStartOtpPhishingRequest(
+    content::WebContents* web_contents,
+    const GURL& main_frame_url,
+    PasswordProtectionRequest::OtpPhishingVerdictCallback callback) {
+  if (!database_manager()->IsDatabaseReady()) {
+    std::move(callback).Run(false);
+    return;
+  }
+  database_manager()->CheckUrlForHighConfidenceAllowlist(
+      main_frame_url,
+      base::BindOnce(&PasswordProtectionService::
+                         OnOtpHighConfidenceAllowlistCheckCompleted,
+                     weak_ptr_factory_.GetWeakPtr(), web_contents,
+                     main_frame_url, std::move(callback)));
+}
+
+void PasswordProtectionService::OnOtpHighConfidenceAllowlistCheckCompleted(
+    content::WebContents* web_contents,
+    const GURL& main_frame_url,
+    PasswordProtectionRequest::OtpPhishingVerdictCallback callback,
+    bool did_match_allowlist,
+    std::optional<
+        SafeBrowsingDatabaseManager::HighConfidenceAllowlistCheckLoggingDetails>
+        logging_details) {
+  if (did_match_allowlist) {
+    std::move(callback).Run(false);
+    return;
+  }
+
+  ReusedPasswordAccountType reused_password_account_type =
+      GetPasswordProtectionReusedPasswordAccountType(
+          PasswordType::PASSWORD_TYPE_UNKNOWN,
+          /*username=*/"");
+
+  if (!CanSendPing(
+          LoginReputationClientRequest::ONE_TIME_PASSWORD_FIELD_DETECTED,
+          main_frame_url, reused_password_account_type)) {
+    LogNoPingingReason(
+        LoginReputationClientRequest::ONE_TIME_PASSWORD_FIELD_DETECTED,
+        GetPingNotSentReason(
+            LoginReputationClientRequest::ONE_TIME_PASSWORD_FIELD_DETECTED,
+            main_frame_url, reused_password_account_type),
+        reused_password_account_type);
+    // If ping is not sent, we should run the callback immediately.
+    std::move(callback).Run(false);
+    return;
+  }
+
+  // OTP detection is not tied to a specific password field.
+  scoped_refptr<PasswordProtectionRequest> request(
+      base::MakeRefCounted<PasswordProtectionRequestContent>(
+          web_contents, main_frame_url, /*password_form_action=*/GURL(),
+          /*password_form_frame_url=*/GURL(),
+          web_contents->GetContentsMimeType(), /*username=*/"",
+          PasswordType::PASSWORD_TYPE_UNKNOWN,
+          /*matching_reused_credentials=*/
+          std::vector<password_manager::MatchingReusedCredential>(),
+          LoginReputationClientRequest::ONE_TIME_PASSWORD_FIELD_DETECTED,
+          /*password_field_exists=*/false, this, GetRequestTimeoutInMS(),
+          std::move(callback)));
+  StartRequestInternal(std::move(request));
 }
 
 void PasswordProtectionService::StartRequest(
@@ -120,25 +217,66 @@ void PasswordProtectionService::StartRequest(
     const std::vector<password_manager::MatchingReusedCredential>&
         matching_reused_credentials,
     LoginReputationClientRequest::TriggerType trigger_type,
-    bool password_field_exists) {
-  DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+    bool password_field_exists,
+    std::optional<PasswordProtectionRequest::OtpPhishingVerdictCallback>
+        otp_phishing_verdict_callback) {
   scoped_refptr<PasswordProtectionRequest> request(
-      new PasswordProtectionRequestContent(
+      base::MakeRefCounted<PasswordProtectionRequestContent>(
           web_contents, main_frame_url, password_form_action,
           password_form_frame_url, web_contents->GetContentsMimeType(),
           username, password_type, matching_reused_credentials, trigger_type,
-          password_field_exists, this, GetRequestTimeoutInMS()));
+          password_field_exists, this, GetRequestTimeoutInMS(),
+          std::move(otp_phishing_verdict_callback)));
+  StartRequestInternal(std::move(request));
+}
+
+void PasswordProtectionService::StartRequestForTesting(
+    WebContents* web_contents,
+    const GURL& main_frame_url,
+    const GURL& password_form_action,
+    const GURL& password_form_frame_url,
+    const std::string& username,
+    PasswordType password_type,
+    const std::vector<password_manager::MatchingReusedCredential>&
+        matching_reused_credentials,
+    LoginReputationClientRequest::TriggerType trigger_type,
+    bool password_field_exists,
+    std::optional<PasswordProtectionRequest::OtpPhishingVerdictCallback>
+        otp_phishing_verdict_callback) {
+  scoped_refptr<PasswordProtectionRequest> request =
+      PasswordProtectionRequestContent::CreateForTesting(
+          web_contents, main_frame_url, password_form_action,
+          password_form_frame_url, web_contents->GetContentsMimeType(),
+          username, password_type, matching_reused_credentials, trigger_type,
+          password_field_exists, this, GetRequestTimeoutInMS(),
+          std::move(otp_phishing_verdict_callback));
+
+  StartRequestInternal(std::move(request));
+}
+
+void PasswordProtectionService::StartRequestInternal(
+    scoped_refptr<PasswordProtectionRequest> request) {
+  DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
   request->Start();
   pending_requests_.insert(std::move(request));
 }
 
-std::unique_ptr<PasswordProtectionNavigationThrottle>
-PasswordProtectionService::MaybeCreateNavigationThrottle(
-    content::NavigationHandle* navigation_handle) {
-  if (!navigation_handle->IsRendererInitiated())
+std::unique_ptr<PasswordProtectionCommitDeferringCondition>
+PasswordProtectionService::MaybeCreateCommitDeferringCondition(
+    content::NavigationHandle& navigation_handle) {
+  // Don't defer navigations that the user started themselves. This won't
+  // matter if the dialog is showing, since it's modal, but if a password reuse
+  // ping is in progress we shouldn't block the user from navigating.
+  if (!navigation_handle.IsRendererInitiated())
     return nullptr;
 
-  content::WebContents* web_contents = navigation_handle->GetWebContents();
+  // The goal of the deferral is to ensure the correct URL is in the omnibox
+  // while the warning modal is showing. Only the primary main frame affects
+  // the omnibox.
+  if (!navigation_handle.IsInPrimaryMainFrame())
+    return nullptr;
+
+  content::WebContents* web_contents = navigation_handle.GetWebContents();
   for (scoped_refptr<PasswordProtectionRequest> request : pending_requests_) {
     PasswordProtectionRequestContent* request_content =
         static_cast<PasswordProtectionRequestContent*>(request.get());
@@ -148,8 +286,8 @@ PasswordProtectionService::MaybeCreateNavigationThrottle(
         IsSupportedPasswordTypeForModalWarning(
             GetPasswordProtectionReusedPasswordAccountType(
                 request->password_type(), username_for_last_shown_warning()))) {
-      return std::make_unique<PasswordProtectionNavigationThrottle>(
-          navigation_handle, request_content, /*is_warning_showing=*/false);
+      return std::make_unique<PasswordProtectionCommitDeferringCondition>(
+          navigation_handle, *request_content);
     }
   }
 
@@ -157,30 +295,24 @@ PasswordProtectionService::MaybeCreateNavigationThrottle(
     PasswordProtectionRequestContent* request_content =
         static_cast<PasswordProtectionRequestContent*>(request.get());
     if (request_content->web_contents() == web_contents) {
-      return std::make_unique<PasswordProtectionNavigationThrottle>(
-          navigation_handle, request_content, /*is_warning_showing=*/true);
+      return std::make_unique<PasswordProtectionCommitDeferringCondition>(
+          navigation_handle, *request_content);
     }
   }
   return nullptr;
 }
-
-#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
-void PasswordProtectionService::GetPhishingDetector(
-    service_manager::InterfaceProvider* provider,
-    mojo::Remote<mojom::PhishingDetector>* phishing_detector) {
-  provider->GetInterface(phishing_detector->BindNewPipeAndPassReceiver());
-}
-#endif
 
 void PasswordProtectionService::RemoveWarningRequestsByWebContents(
     content::WebContents* web_contents) {
   for (auto it = warning_requests_.begin(); it != warning_requests_.end();) {
     PasswordProtectionRequestContent* request_content =
         static_cast<PasswordProtectionRequestContent*>(it->get());
-    if (request_content->web_contents() == web_contents)
+    if (request_content->web_contents() == web_contents) {
+      request_content->ResumeDeferredNavigations();
       it = warning_requests_.erase(it);
-    else
+    } else {
       ++it;
+    }
   }
 }
 
@@ -195,11 +327,17 @@ bool PasswordProtectionService::IsModalWarningShowingInWebContents(
   return false;
 }
 
-void PasswordProtectionService::MaybeHandleDeferredNavigations(
+void PasswordProtectionService::ResumeDeferredNavigationsIfNeeded(
     PasswordProtectionRequest* request) {
+  if (request->is_modal_warning_showing())
+    return;
+
   PasswordProtectionRequestContent* request_content =
       static_cast<PasswordProtectionRequestContent*>(request);
-  request_content->HandleDeferredNavigations();
+  request_content->ResumeDeferredNavigations();
 }
+
+void PasswordProtectionService::MaybeTriggerClientSideDetectionScan(
+    content::WebContents* web_contents) {}
 
 }  // namespace safe_browsing

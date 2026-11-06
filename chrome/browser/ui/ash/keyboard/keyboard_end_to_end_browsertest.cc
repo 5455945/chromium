@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,13 @@
 #include "ash/public/cpp/keyboard/keyboard_switches.h"
 #include "base/command_line.h"
 #include "base/files/file.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
-#include "chrome/browser/chromeos/input_method/textinput_test_helper.h"
+#include "chrome/browser/ash/input_method/textinput_test_helper.h"
 #include "chrome/browser/ui/ash/keyboard/chrome_keyboard_controller_client.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/render_widget_host_view.h"
@@ -28,6 +29,10 @@ class KeyboardVisibleWaiter : public ChromeKeyboardControllerClient::Observer {
   explicit KeyboardVisibleWaiter(bool visible) : visible_(visible) {
     ChromeKeyboardControllerClient::Get()->AddObserver(this);
   }
+
+  KeyboardVisibleWaiter(const KeyboardVisibleWaiter&) = delete;
+  KeyboardVisibleWaiter& operator=(const KeyboardVisibleWaiter&) = delete;
+
   ~KeyboardVisibleWaiter() override {
     ChromeKeyboardControllerClient::Get()->RemoveObserver(this);
   }
@@ -36,15 +41,14 @@ class KeyboardVisibleWaiter : public ChromeKeyboardControllerClient::Observer {
 
   // ChromeKeyboardControllerClient::Observer
   void OnKeyboardVisibilityChanged(bool visible) override {
-    if (visible == visible_)
+    if (visible == visible_) {
       run_loop_.QuitWhenIdle();
+    }
   }
 
  private:
   base::RunLoop run_loop_;
   const bool visible_;
-
-  DISALLOW_COPY_AND_ASSIGN(KeyboardVisibleWaiter);
 };  // namespace
 
 bool WaitUntilShown() {
@@ -66,22 +70,25 @@ bool WaitUntilHidden() {
 }
 
 gfx::Size GetScreenBounds() {
-  return display::Screen::GetScreen()->GetPrimaryDisplay().GetSizeInPixel();
+  return display::Screen::Get()->GetPrimaryDisplay().GetSizeInPixel();
 }
 
 }  // namespace
 
 class KeyboardEndToEndTest : public InProcessBrowserTest {
  public:
+  KeyboardEndToEndTest(const KeyboardEndToEndTest&) = delete;
+  KeyboardEndToEndTest& operator=(const KeyboardEndToEndTest&) = delete;
+
   // Ensure that the virtual keyboard is enabled.
   void SetUpCommandLine(base::CommandLine* command_line) override {
     command_line->AppendSwitch(keyboard::switches::kEnableVirtualKeyboard);
   }
 
   void SetUpOnMainThread() override {
-    GURL test_url = ui_test_utils::GetTestUrl(
+    GURL test_url = chrome_test_utils::GetTestUrl(
         base::FilePath("chromeos/virtual_keyboard"), test_file_);
-    ui_test_utils::NavigateToURL(browser(), test_url);
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), test_url));
     web_contents_ = browser()->tab_strip_model()->GetActiveWebContents();
     ASSERT_TRUE(web_contents_);
 
@@ -95,11 +102,11 @@ class KeyboardEndToEndTest : public InProcessBrowserTest {
 
  protected:
   // Initialized in |SetUpOnMainThread|.
-  content::WebContents* web_contents_;
+  raw_ptr<content::WebContents, DanglingUntriaged> web_contents_;
 
   explicit KeyboardEndToEndTest(const base::FilePath& test_file)
       : test_file_(test_file) {}
-  ~KeyboardEndToEndTest() override {}
+  ~KeyboardEndToEndTest() override = default;
 
   // Get the value of the attribute attribute |attribute| on the DOM element
   // with the given |id|.
@@ -142,18 +149,19 @@ class KeyboardEndToEndTest : public InProcessBrowserTest {
 
  private:
   base::FilePath test_file_;
-
-  DISALLOW_COPY_AND_ASSIGN(KeyboardEndToEndTest);
 };
 
 class KeyboardEndToEndFormTest : public KeyboardEndToEndTest {
  public:
   KeyboardEndToEndFormTest()
       : KeyboardEndToEndTest(base::FilePath("form.html")) {}
-  ~KeyboardEndToEndFormTest() override {}
+
+  KeyboardEndToEndFormTest(const KeyboardEndToEndFormTest&) = delete;
+  KeyboardEndToEndFormTest& operator=(const KeyboardEndToEndFormTest&) = delete;
+
+  ~KeyboardEndToEndFormTest() override = default;
 
  protected:
-  DISALLOW_COPY_AND_ASSIGN(KeyboardEndToEndFormTest);
 };
 
 IN_PROC_BROWSER_TEST_F(KeyboardEndToEndFormTest, ClickTextFieldShowsKeyboard) {
@@ -176,9 +184,9 @@ IN_PROC_BROWSER_TEST_F(KeyboardEndToEndFormTest,
   ASSERT_TRUE(WaitUntilShown());
 
   ASSERT_TRUE(
-      content::EvalJs(web_contents_,
+      content::EvalJs(web_contents_.get(),
                       "document.getElementById('username').type = 'password'")
-          .error.empty());
+          .is_ok());
 
   base::RunLoop().RunUntilIdle();  // Allow async operations to complete.
   EXPECT_TRUE(ChromeKeyboardControllerClient::Get()->is_keyboard_visible());
@@ -190,9 +198,9 @@ IN_PROC_BROWSER_TEST_F(KeyboardEndToEndFormTest,
   ASSERT_TRUE(WaitUntilShown());
 
   ASSERT_TRUE(
-      content::EvalJs(web_contents_,
+      content::EvalJs(web_contents_.get(),
                       "document.getElementById('username').type = 'submit'")
-          .error.empty());
+          .is_ok());
 
   ASSERT_TRUE(WaitUntilHidden());
 }
@@ -203,9 +211,9 @@ IN_PROC_BROWSER_TEST_F(KeyboardEndToEndFormTest,
   ASSERT_TRUE(WaitUntilShown());
 
   ASSERT_TRUE(
-      content::EvalJs(web_contents_,
+      content::EvalJs(web_contents_.get(),
                       "document.getElementById('username').readOnly = true")
-          .error.empty());
+          .is_ok());
 
   ASSERT_TRUE(WaitUntilHidden());
 }
@@ -215,10 +223,10 @@ IN_PROC_BROWSER_TEST_F(KeyboardEndToEndFormTest,
   ClickElementWithId(web_contents_, "username");
   ASSERT_TRUE(WaitUntilShown());
 
-  ASSERT_TRUE(content::EvalJs(web_contents_,
+  ASSERT_TRUE(content::EvalJs(web_contents_.get(),
                               "document.getElementById('username')."
                               "setAttribute('inputmode', 'numeric')")
-                  .error.empty());
+                  .is_ok());
 
   base::RunLoop().RunUntilIdle();  // Allow async operations to complete.
   EXPECT_TRUE(ChromeKeyboardControllerClient::Get()->is_keyboard_visible());
@@ -229,10 +237,10 @@ IN_PROC_BROWSER_TEST_F(KeyboardEndToEndFormTest,
   ClickElementWithId(web_contents_, "username");
   ASSERT_TRUE(WaitUntilShown());
 
-  ASSERT_TRUE(content::EvalJs(web_contents_,
+  ASSERT_TRUE(content::EvalJs(web_contents_.get(),
                               "document.getElementById('username')."
                               "setAttribute('inputmode', 'none')")
-                  .error.empty());
+                  .is_ok());
 
   ASSERT_TRUE(WaitUntilHidden());
 }
@@ -241,9 +249,9 @@ IN_PROC_BROWSER_TEST_F(KeyboardEndToEndFormTest, DeleteInputHidesKeyboard) {
   ClickElementWithId(web_contents_, "username");
   ASSERT_TRUE(WaitUntilShown());
 
-  ASSERT_TRUE(content::EvalJs(web_contents_,
+  ASSERT_TRUE(content::EvalJs(web_contents_.get(),
                               "document.getElementById('username').remove()")
-                  .error.empty());
+                  .is_ok());
 
   ASSERT_TRUE(WaitUntilHidden());
 }
@@ -252,17 +260,21 @@ class KeyboardEndToEndFocusTest : public KeyboardEndToEndTest {
  public:
   KeyboardEndToEndFocusTest()
       : KeyboardEndToEndTest(base::FilePath("focus.html")) {}
-  ~KeyboardEndToEndFocusTest() override {}
+
+  KeyboardEndToEndFocusTest(const KeyboardEndToEndFocusTest&) = delete;
+  KeyboardEndToEndFocusTest& operator=(const KeyboardEndToEndFocusTest&) =
+      delete;
+
+  ~KeyboardEndToEndFocusTest() override = default;
 
  protected:
-  DISALLOW_COPY_AND_ASSIGN(KeyboardEndToEndFocusTest);
 };
 
 IN_PROC_BROWSER_TEST_F(KeyboardEndToEndFocusTest,
                        TriggerInputFocusWithoutUserGestureDoesNotShowKeyboard) {
-  ASSERT_TRUE(
-      content::EvalJs(web_contents_, "document.getElementById('text').focus()")
-          .error.empty());
+  ASSERT_TRUE(content::EvalJs(web_contents_.get(),
+                              "document.getElementById('text').focus()")
+                  .is_ok());
 
   base::RunLoop().RunUntilIdle();  // Allow async operations to complete.
   EXPECT_FALSE(ChromeKeyboardControllerClient::Get()->is_keyboard_visible());
@@ -309,9 +321,9 @@ IN_PROC_BROWSER_TEST_F(
   ASSERT_TRUE(WaitUntilHidden());
 
   // Wait until the transient blur threshold (3500ms) passes.
-  // TODO(https://crbug.com/849995): Find a way to accelerate the clock without
+  // TODO(crbug.com/41392988): Find a way to accelerate the clock without
   // actually waiting in real time.
-  base::PlatformThread::Sleep(base::TimeDelta::FromMilliseconds(3501));
+  base::PlatformThread::Sleep(base::Milliseconds(3501));
 
   ClickElementWithId(web_contents_, "async");
   base::RunLoop().RunUntilIdle();  // Allow async operations to complete.
@@ -322,7 +334,13 @@ class KeyboardEndToEndOverscrollTest : public KeyboardEndToEndTest {
  public:
   KeyboardEndToEndOverscrollTest()
       : KeyboardEndToEndTest(base::FilePath("form.html")) {}
-  ~KeyboardEndToEndOverscrollTest() override {}
+
+  KeyboardEndToEndOverscrollTest(const KeyboardEndToEndOverscrollTest&) =
+      delete;
+  KeyboardEndToEndOverscrollTest& operator=(
+      const KeyboardEndToEndOverscrollTest&) = delete;
+
+  ~KeyboardEndToEndOverscrollTest() override = default;
 
   void FocusAndShowKeyboard() { ClickElementWithId(web_contents_, "username"); }
 
@@ -337,13 +355,11 @@ class KeyboardEndToEndOverscrollTest : public KeyboardEndToEndTest {
         ->GetVisibleViewportSize()
         .height();
   }
-
-  DISALLOW_COPY_AND_ASSIGN(KeyboardEndToEndOverscrollTest);
 };
 
 IN_PROC_BROWSER_TEST_F(KeyboardEndToEndOverscrollTest,
                        ToggleKeyboardOnMaximizedWindowAffectsViewport) {
-  browser()->window()->Maximize();
+  browser()->GetWindow()->Maximize();
 
   const int old_height = GetViewportHeight(web_contents_);
 
@@ -364,7 +380,7 @@ IN_PROC_BROWSER_TEST_F(
   // Set the window bounds so that it does not overlap with the keyboard.
   // The virtual keyboard takes up no more than half the screen height.
   gfx::Size screen_bounds = GetScreenBounds();
-  browser()->window()->SetBounds(
+  browser()->GetWindow()->SetBounds(
       gfx::Rect(0, 0, screen_bounds.width(), screen_bounds.height() / 2));
 
   const int old_height = GetViewportHeight(web_contents_);
@@ -387,24 +403,24 @@ IN_PROC_BROWSER_TEST_F(
   // window size so that when it moves upwards, it will no longer overlap with
   // the keyboard.
   gfx::Size screen_bounds = GetScreenBounds();
-  browser()->window()->SetBounds(gfx::Rect(0, screen_bounds.height() / 2,
-                                           screen_bounds.width(),
-                                           screen_bounds.height() / 2));
-  const auto old_browser_bounds = browser()->window()->GetBounds();
+  browser()->GetWindow()->SetBounds(gfx::Rect(0, screen_bounds.height() / 2,
+                                              screen_bounds.width(),
+                                              screen_bounds.height() / 2));
+  const auto old_browser_bounds = browser()->GetWindow()->GetBounds();
   const int old_height = GetViewportHeight(web_contents_);
 
   FocusAndShowKeyboard();
   ASSERT_TRUE(WaitUntilShown());
 
-  EXPECT_LT(browser()->window()->GetBounds().y(), old_browser_bounds.y());
-  EXPECT_EQ(browser()->window()->GetBounds().height(),
+  EXPECT_LT(browser()->GetWindow()->GetBounds().y(), old_browser_bounds.y());
+  EXPECT_EQ(browser()->GetWindow()->GetBounds().height(),
             old_browser_bounds.height());
   EXPECT_EQ(GetViewportHeight(web_contents_), old_height);
 
   HideKeyboard();
   ASSERT_TRUE(WaitUntilHidden());
 
-  EXPECT_EQ(browser()->window()->GetBounds(), old_browser_bounds);
+  EXPECT_EQ(browser()->GetWindow()->GetBounds(), old_browser_bounds);
   EXPECT_EQ(GetViewportHeight(web_contents_), old_height);
 }
 
@@ -415,23 +431,23 @@ IN_PROC_BROWSER_TEST_F(
   // window size so that when it moves upwards, it will still overlap with
   // the keyboard.
   gfx::Size screen_bounds = GetScreenBounds();
-  browser()->window()->SetBounds(gfx::Rect(0, screen_bounds.height() / 3,
-                                           screen_bounds.width(),
-                                           screen_bounds.height() / 3 * 2));
-  const auto old_browser_bounds = browser()->window()->GetBounds();
+  browser()->GetWindow()->SetBounds(gfx::Rect(0, screen_bounds.height() / 3,
+                                              screen_bounds.width(),
+                                              screen_bounds.height() / 3 * 2));
+  const auto old_browser_bounds = browser()->GetWindow()->GetBounds();
   const int old_height = GetViewportHeight(web_contents_);
 
   FocusAndShowKeyboard();
   ASSERT_TRUE(WaitUntilShown());
 
-  EXPECT_LT(browser()->window()->GetBounds().y(), old_browser_bounds.y());
-  EXPECT_EQ(browser()->window()->GetBounds().height(),
+  EXPECT_LT(browser()->GetWindow()->GetBounds().y(), old_browser_bounds.y());
+  EXPECT_EQ(browser()->GetWindow()->GetBounds().height(),
             old_browser_bounds.height());
   EXPECT_LT(GetViewportHeight(web_contents_), old_height);
 
   HideKeyboard();
   ASSERT_TRUE(WaitUntilHidden());
 
-  EXPECT_EQ(browser()->window()->GetBounds(), old_browser_bounds);
+  EXPECT_EQ(browser()->GetWindow()->GetBounds(), old_browser_bounds);
   EXPECT_EQ(GetViewportHeight(web_contents_), old_height);
 }

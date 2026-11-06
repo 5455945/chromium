@@ -1,17 +1,21 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_PASSWORD_MANAGER_CORE_BROWSER_HTTP_AUTH_MANAGER_IMPL_H_
 #define COMPONENTS_PASSWORD_MANAGER_CORE_BROWSER_HTTP_AUTH_MANAGER_IMPL_H_
 
-#include <map>
 #include <memory>
-#include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "components/password_manager/core/browser/browser_save_password_progress_logger.h"
 #include "components/password_manager/core/browser/http_auth_manager.h"
 #include "components/password_manager/core/browser/http_auth_observer.h"
+#include "url/origin.h"
+
+namespace device_reauth {
+class DeviceAuthenticator;
+}
 
 namespace password_manager {
 
@@ -40,11 +44,14 @@ class HttpAuthManagerImpl : public HttpAuthManager {
   void OnPasswordFormDismissed() override;
 
   // Called by a PasswordManagerClient when it decides that a HTTP auth dialog
-  // can be auto-filled. It notifies the observer about new credentials given
+  // can be auto-filled. If biometric auth before filling is enabled prompt
+  // authentication first. It notifies the observer about new credentials given
   // that the form manged by |form_manager| equals the one observed by the
-  // observer that is managed by |form_manager|.
+  // observer that is managed by |form_manager|. |on_filling_complete| is
+  // invoked after filling is completed.
   void Autofill(const PasswordForm& preferred_match,
-                const PasswordFormManagerForUI* form_manager) const;
+                const PasswordFormManagerForUI* form_manager,
+                base::OnceClosure on_filling_complete);
 
   // Handles successful navigation to the main frame.
   void OnDidFinishMainFrameNavigation();
@@ -60,11 +67,17 @@ class HttpAuthManagerImpl : public HttpAuthManager {
   // Initiates the saving of the password.
   void OnLoginSuccesfull();
 
+  void OnReauthCompleted(const std::u16string& username,
+                         const std::u16string& password,
+                         const url::Origin& credential_origin,
+                         base::OnceClosure on_filling_complete,
+                         bool auth_result);
+
   // The embedder-level client. Must outlive this class.
-  PasswordManagerClient* const client_;
+  const raw_ptr<PasswordManagerClient> client_;
 
   // Observer to be notified about values to be filled in.
-  HttpAuthObserver* observer_;
+  raw_ptr<HttpAuthObserver> observer_;
 
   // Single password form manager to handle the http-auth request form.
   std::unique_ptr<PasswordFormManager> form_manager_;
@@ -72,6 +85,14 @@ class HttpAuthManagerImpl : public HttpAuthManager {
   // When set to true, the password form has been dismissed and |form_manager_|
   // will be cleared on next navigation.
   bool form_dismissed_ = false;
+
+  // The origin of the observed form.
+  url::Origin observed_origin_;
+
+  // The authenticator used to trigger a biometric re-auth before filling.
+  std::unique_ptr<device_reauth::DeviceAuthenticator> authenticator_;
+
+  base::WeakPtrFactory<HttpAuthManagerImpl> weak_ptr_factory_{this};
 };
 
 }  // namespace password_manager

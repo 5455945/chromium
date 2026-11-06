@@ -1,16 +1,21 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef BASE_TRACE_EVENT_TRACED_VALUE_SUPPORT_H_
 #define BASE_TRACE_EVENT_TRACED_VALUE_SUPPORT_H_
 
+#include <optional>
+#include <string_view>
+
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "base/unguessable_token.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "third_party/perfetto/include/perfetto/tracing/traced_proto.h"
 #include "third_party/perfetto/include/perfetto/tracing/traced_value.h"
 
 // This file contains specialisations for trace serialisation for key
@@ -34,6 +39,16 @@ struct TraceFormatTraits<scoped_refptr<T>,
     }
     perfetto::WriteIntoTracedValue(std::move(context), *value);
   }
+
+  template <class MessageType>
+  static void WriteIntoTrace(perfetto::TracedProto<MessageType> context,
+                             const scoped_refptr<T>& value) {
+    if (value) {
+      // Proto message without any fields is treated as nullptr.
+      return;
+    }
+    perfetto::WriteIntoTracedProto(std::move(context), *value);
+  }
 };
 
 // If T is serialisable into a trace, base::WeakPtr<T> is serialisable as well.
@@ -50,16 +65,16 @@ struct TraceFormatTraits<::base::WeakPtr<T>,
   }
 };
 
-// If T is serialisable into a trace, absl::optional<T> is serialisable as well.
-// Note that we need definitions for both absl::optional<T>& and
-// const absl::optional<T>& (unlike scoped_refptr and WeakPtr above), as
+// If T is serialisable into a trace, std::optional<T> is serialisable as well.
+// Note that we need definitions for both std::optional<T>& and
+// const std::optional<T>& (unlike scoped_refptr and WeakPtr above), as
 // dereferencing const scoped_refptr<T>& gives you T, while dereferencing const
-// absl::optional<T>& gives you const T&.
+// std::optional<T>& gives you const T&.
 template <class T>
-struct TraceFormatTraits<::absl::optional<T>,
+struct TraceFormatTraits<::std::optional<T>,
                          perfetto::check_traced_value_support_t<T>> {
   static void WriteIntoTrace(perfetto::TracedValue context,
-                             const ::absl::optional<T>& value) {
+                             const ::std::optional<T>& value) {
     if (!value) {
       std::move(context).WritePointer(nullptr);
       return;
@@ -68,12 +83,42 @@ struct TraceFormatTraits<::absl::optional<T>,
   }
 
   static void WriteIntoTrace(perfetto::TracedValue context,
-                             ::absl::optional<T>& value) {
+                             ::std::optional<T>& value) {
     if (!value) {
       std::move(context).WritePointer(nullptr);
       return;
     }
     perfetto::WriteIntoTracedValue(std::move(context), *value);
+  }
+};
+
+// If T is serialisable into a trace, raw_ptr<T> is serialisable as well.
+template <class T, ::base::RawPtrTraits Traits>
+struct TraceFormatTraits<::base::raw_ptr<T, Traits>,
+                         perfetto::check_traced_value_support_t<T>> {
+  static void WriteIntoTrace(perfetto::TracedValue context,
+                             const ::base::raw_ptr<T, Traits>& value) {
+    perfetto::WriteIntoTracedValue(std::move(context), value.get());
+  }
+
+  static void WriteIntoTrace(perfetto::TracedValue context,
+                             ::base::raw_ptr<T, Traits>& value) {
+    perfetto::WriteIntoTracedValue(std::move(context), value.get());
+  }
+};
+
+// If T is serialisable into a trace, raw_ref<T> is serialisable as well.
+template <class T, ::base::RawPtrTraits Traits>
+struct TraceFormatTraits<::base::raw_ref<T, Traits>,
+                         perfetto::check_traced_value_support_t<T>> {
+  static void WriteIntoTrace(perfetto::TracedValue context,
+                             const ::base::raw_ref<T, Traits>& value) {
+    perfetto::WriteIntoTracedValue(std::move(context), value.get());
+  }
+
+  static void WriteIntoTrace(perfetto::TracedValue context,
+                             ::base::raw_ref<T, Traits>& value) {
+    perfetto::WriteIntoTracedValue(std::move(context), value.get());
   }
 };
 
@@ -83,15 +128,15 @@ struct TraceFormatTraits<::absl::optional<T>,
 template <>
 struct TraceFormatTraits<::base::TimeDelta> {
   static void WriteIntoTrace(perfetto::TracedValue context,
-                             const ::base::TimeDelta& value) {
-    std::move(context).WriteUInt64(value.InMicroseconds());
+                             ::base::TimeDelta value) {
+    std::move(context).WriteInt64(value.InMicroseconds());
   }
 };
 
 template <>
 struct TraceFormatTraits<::base::TimeTicks> {
   static void WriteIntoTrace(perfetto::TracedValue context,
-                             const ::base::TimeTicks& value) {
+                             ::base::TimeTicks value) {
     perfetto::WriteIntoTracedValue(std::move(context), value.since_origin());
   }
 };
@@ -99,7 +144,7 @@ struct TraceFormatTraits<::base::TimeTicks> {
 template <>
 struct TraceFormatTraits<::base::Time> {
   static void WriteIntoTrace(perfetto::TracedValue context,
-                             const ::base::Time& value) {
+                             ::base::Time value) {
     perfetto::WriteIntoTracedValue(std::move(context), value.since_origin());
   }
 };
@@ -129,7 +174,7 @@ struct TraceFormatTraits<char16_t[N]> {
   static void WriteIntoTrace(perfetto::TracedValue context,
                              const char16_t value[N]) {
     return std::move(context).WriteString(
-        ::base::UTF16ToUTF8(::base::StringPiece16(value)));
+        ::base::UTF16ToUTF8(::std::u16string_view(value)));
   }
 };
 
@@ -138,7 +183,7 @@ struct TraceFormatTraits<const char16_t*> {
   static void WriteIntoTrace(perfetto::TracedValue context,
                              const char16_t* value) {
     return std::move(context).WriteString(
-        ::base::UTF16ToUTF8(::base::StringPiece16(value)));
+        ::base::UTF16ToUTF8(::std::u16string_view(value)));
   }
 };
 
@@ -156,7 +201,7 @@ struct TraceFormatTraits<wchar_t[N]> {
   static void WriteIntoTrace(perfetto::TracedValue context,
                              const wchar_t value[N]) {
     return std::move(context).WriteString(
-        ::base::WideToUTF8(::base::WStringPiece(value)));
+        ::base::WideToUTF8(::std::wstring_view(value)));
   }
 };
 
@@ -165,7 +210,24 @@ struct TraceFormatTraits<const wchar_t*> {
   static void WriteIntoTrace(perfetto::TracedValue context,
                              const wchar_t* value) {
     return std::move(context).WriteString(
-        ::base::WideToUTF8(::base::WStringPiece(value)));
+        ::base::WideToUTF8(::std::wstring_view(value)));
+  }
+};
+
+// std::string_view support.
+template <>
+struct TraceFormatTraits<::std::u16string_view> {
+  static void WriteIntoTrace(perfetto::TracedValue context,
+                             ::std::u16string_view value) {
+    return std::move(context).WriteString(::base::UTF16ToUTF8(value));
+  }
+};
+
+template <>
+struct TraceFormatTraits<::std::wstring_view> {
+  static void WriteIntoTrace(perfetto::TracedValue context,
+                             ::std::wstring_view value) {
+    return std::move(context).WriteString(::base::WideToUTF8(value));
   }
 };
 

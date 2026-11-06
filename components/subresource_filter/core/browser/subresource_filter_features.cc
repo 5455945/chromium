@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,12 @@
 #include <map>
 #include <ostream>
 #include <sstream>
+#include <string_view>
 #include <tuple>
 #include <utility>
 
-#include "base/containers/contains.h"
-#include "base/lazy_instance.h"
 #include "base/metrics/field_trial_params.h"
+#include "base/no_destructor.h"
 #include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
@@ -39,47 +39,52 @@ class CommaSeparatedStrings {
                                        base::TRIM_WHITESPACE,
                                        base::SPLIT_WANT_NONEMPTY)) {}
 
-  bool CaseInsensitiveContains(base::StringPiece lowercase_key) const {
-    const auto predicate = [lowercase_key](base::StringPiece element) {
-      return base::LowerCaseEqualsASCII(element, lowercase_key);
-    };
-    return std::find_if(pieces_.begin(), pieces_.end(), predicate) !=
-           pieces_.end();
+  CommaSeparatedStrings(const CommaSeparatedStrings&) = delete;
+  CommaSeparatedStrings& operator=(const CommaSeparatedStrings&) = delete;
+
+  bool CaseInsensitiveContains(std::string_view lowercase_key) const {
+    return std::ranges::any_of(
+        pieces_, [lowercase_key](std::string_view element) {
+          return base::EqualsCaseInsensitiveASCII(element, lowercase_key);
+        });
   }
 
  private:
   const std::string backing_string_;
-  const std::vector<base::StringPiece> pieces_;
-
-  DISALLOW_COPY_AND_ASSIGN(CommaSeparatedStrings);
+  const std::vector<std::string_view> pieces_;
 };
 
 std::string TakeVariationParamOrReturnEmpty(
     std::map<std::string, std::string>* params,
     const std::string& key) {
   auto it = params->find(key);
-  if (it == params->end())
+  if (it == params->end()) {
     return std::string();
+  }
   std::string value = std::move(it->second);
   params->erase(it);
   return value;
 }
 
-mojom::ActivationLevel ParseActivationLevel(
-    const base::StringPiece activation_level) {
-  if (base::LowerCaseEqualsASCII(activation_level, kActivationLevelEnabled))
+mojom::ActivationLevel ParseActivationLevel(std::string_view activation_level) {
+  if (base::EqualsCaseInsensitiveASCII(activation_level,
+                                       kActivationLevelEnabled)) {
     return mojom::ActivationLevel::kEnabled;
-  else if (base::LowerCaseEqualsASCII(activation_level, kActivationLevelDryRun))
+  } else if (base::EqualsCaseInsensitiveASCII(activation_level,
+                                              kActivationLevelDryRun)) {
     return mojom::ActivationLevel::kDryRun;
+  }
   return mojom::ActivationLevel::kDisabled;
 }
 
-ActivationScope ParseActivationScope(const base::StringPiece activation_scope) {
-  if (base::LowerCaseEqualsASCII(activation_scope, kActivationScopeAllSites))
+ActivationScope ParseActivationScope(std::string_view activation_scope) {
+  if (base::EqualsCaseInsensitiveASCII(activation_scope,
+                                       kActivationScopeAllSites)) {
     return ActivationScope::ALL_SITES;
-  else if (base::LowerCaseEqualsASCII(activation_scope,
-                                      kActivationScopeActivationList))
+  } else if (base::EqualsCaseInsensitiveASCII(activation_scope,
+                                              kActivationScopeActivationList)) {
     return ActivationScope::ACTIVATION_LIST;
+  }
   return ActivationScope::NO_SITES;
 }
 
@@ -88,12 +93,6 @@ ActivationList ParseActivationList(std::string activation_lists_string) {
   if (activation_lists.CaseInsensitiveContains(
           kActivationListPhishingInterstitial)) {
     return ActivationList::PHISHING_INTERSTITIAL;
-  } else if (activation_lists.CaseInsensitiveContains(
-                 kActivationListSocialEngineeringAdsInterstitial)) {
-    return ActivationList::SOCIAL_ENG_ADS_INTERSTITIAL;
-  } else if (activation_lists.CaseInsensitiveContains(
-                 kActivationListSubresourceFilter)) {
-    return ActivationList::SUBRESOURCE_FILTER;
   } else if (activation_lists.CaseInsensitiveContains(
                  kActivationListBetterAds)) {
     return ActivationList::BETTER_ADS;
@@ -104,12 +103,13 @@ ActivationList ParseActivationList(std::string activation_lists_string) {
 // Will return a value between 0 and 1 inclusive.
 double ParsePerformanceMeasurementRate(const std::string& rate) {
   double value = 0.0;
-  if (!base::StringToDouble(rate, &value) || value < 0)
+  if (!base::StringToDouble(rate, &value) || value < 0) {
     return 0.0;
+  }
   return value < 1 ? value : 1;
 }
 
-int ParseInt(const base::StringPiece value) {
+int ParseInt(std::string_view value) {
   int result = 0;
   base::StringToInt(value, &result);
   return result;
@@ -183,8 +183,9 @@ std::vector<Configuration> ParseEnabledConfigurations() {
   base::GetFieldTrialParamsByFeature(kSafeBrowsingSubresourceFilter, &params);
 
   std::vector<Configuration> configs;
-  if (base::FeatureList::IsEnabled(kSafeBrowsingSubresourceFilter))
+  if (base::FeatureList::IsEnabled(kSafeBrowsingSubresourceFilter)) {
     configs = FillEnabledPresetConfigurations(&params);
+  }
 
   Configuration experimental_config = ParseExperimentalConfiguration(&params);
   configs.push_back(std::move(experimental_config));
@@ -208,41 +209,44 @@ std::vector<Configuration> SortConfigsByDecreasingPriority(
   return configs;
 }
 
-base::StringPiece GetLexicographicallyGreatestRulesetFlavor(
+std::string_view GetLexicographicallyGreatestRulesetFlavor(
     const std::vector<Configuration>& configs) {
-  base::StringPiece greatest_flavor;
+  std::string_view greatest_flavor;
   for (const auto& config : configs) {
-    base::StringPiece flavor = config.general_settings.ruleset_flavor;
-    if (flavor > greatest_flavor)
+    std::string_view flavor = config.general_settings.ruleset_flavor;
+    if (flavor > greatest_flavor) {
       greatest_flavor = flavor;
+    }
   }
   return greatest_flavor;
 }
 
 // Globals --------------------------------------------------------------------
 
-base::LazyInstance<base::Lock>::Leaky g_active_configurations_lock =
-    LAZY_INSTANCE_INITIALIZER;
+base::Lock& GetActiveConfigurationsLock() {
+  static base::NoDestructor<base::Lock> lock;
+  return *lock;
+}
 
-base::LazyInstance<scoped_refptr<ConfigurationList>>::Leaky
-    g_active_configurations = LAZY_INSTANCE_INITIALIZER;
+scoped_refptr<ConfigurationList>& GetActiveConfigurations() {
+  static base::NoDestructor<scoped_refptr<ConfigurationList>> configurations;
+  return *configurations;
+}
 
 }  // namespace
 
 // Constant definitions -------------------------------------------------------
 
-const base::Feature kSafeBrowsingSubresourceFilter{
-    "SubresourceFilter", base::FEATURE_ENABLED_BY_DEFAULT};
+BASE_FEATURE(kSafeBrowsingSubresourceFilter,
+             "SubresourceFilter",
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
-const base::Feature kFilterAdsOnAbusiveSites{"FilterAdsOnAbusiveSites",
-                                             base::FEATURE_ENABLED_BY_DEFAULT};
+BASE_FEATURE(kFilterAdsOnAbusiveSites, base::FEATURE_ENABLED_BY_DEFAULT);
 
-const base::Feature kAdsInterventionsEnforced{
-    "AdsInterventionsEnforced", base::FEATURE_DISABLED_BY_DEFAULT};
+BASE_FEATURE(kAdsInterventionsEnforced, base::FEATURE_DISABLED_BY_DEFAULT);
 
 const base::FeatureParam<base::TimeDelta> kAdsInterventionDuration = {
-    &kAdsInterventionsEnforced, "kAdsInterventionDuration",
-    base::TimeDelta::FromDays(3)};
+    &kAdsInterventionsEnforced, "kAdsInterventionDuration", base::Days(3)};
 
 // Legacy name `activation_state` is used in variation parameters.
 const char kActivationLevelParameterName[] = "activation_state";
@@ -256,10 +260,7 @@ const char kActivationScopeActivationList[] = "activation_list";
 const char kActivationScopeNoSites[] = "no_sites";
 
 const char kActivationListsParameterName[] = "activation_lists";
-const char kActivationListSocialEngineeringAdsInterstitial[] =
-    "social_engineering_ads_interstitial";
 const char kActivationListPhishingInterstitial[] = "phishing_interstitial";
-const char kActivationListSubresourceFilter[] = "subresource_filter";
 const char kActivationListBetterAds[] = "better_ads";
 
 const char kActivationPriorityParameterName[] = "activation_priority";
@@ -331,10 +332,6 @@ bool Configuration::operator==(const Configuration& rhs) const {
   return tie(*this) == tie(rhs);
 }
 
-bool Configuration::operator!=(const Configuration& rhs) const {
-  return !(*this == rhs);
-}
-
 std::unique_ptr<base::trace_event::TracedValue>
 Configuration::ActivationConditions::ToTracedValue() const {
   auto value = std::make_unique<base::trace_event::TracedValue>();
@@ -370,9 +367,11 @@ void Configuration::AddToValue(base::trace_event::TracedValue* value) const {
 }
 
 mojom::ActivationState Configuration::GetActivationState(
-    mojom::ActivationLevel effective_activation_level) const {
+    mojom::ActivationLevel effective_activation_level,
+    mojom::SubresourceFilterDisabledReason disabled_reason) const {
   mojom::ActivationState state;
   state.activation_level = effective_activation_level;
+  state.disabled_reason = disabled_reason;
 
   double measurement_rate = activation_options.performance_measurement_rate;
   state.measure_performance =
@@ -405,16 +404,16 @@ ConfigurationList::ConfigurationList(std::vector<Configuration> configs)
 ConfigurationList::~ConfigurationList() = default;
 
 scoped_refptr<ConfigurationList> GetEnabledConfigurations() {
-  base::AutoLock lock(g_active_configurations_lock.Get());
-  if (!g_active_configurations.Get()) {
-    g_active_configurations.Get() =
+  base::AutoLock lock(GetActiveConfigurationsLock());
+  if (!GetActiveConfigurations()) {
+    GetActiveConfigurations() =
         base::MakeRefCounted<ConfigurationList>(ParseEnabledConfigurations());
   }
-  return g_active_configurations.Get();
+  return GetActiveConfigurations();
 }
 
 bool HasEnabledConfiguration(const Configuration& config) {
-  return base::Contains(
+  return std::ranges::contains(
       GetEnabledConfigurations()->configs_by_decreasing_priority(), config);
 }
 
@@ -422,9 +421,9 @@ namespace testing {
 
 scoped_refptr<ConfigurationList> GetAndSetActivateConfigurations(
     scoped_refptr<ConfigurationList> new_configs) {
-  base::AutoLock lock(g_active_configurations_lock.Get());
-  auto old_configs = std::move(g_active_configurations.Get());
-  g_active_configurations.Get() = std::move(new_configs);
+  base::AutoLock lock(GetActiveConfigurationsLock());
+  auto old_configs = std::move(GetActiveConfigurations());
+  GetActiveConfigurations() = std::move(new_configs);
   return old_configs;
 }
 

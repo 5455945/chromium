@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -42,7 +42,7 @@ void AdaptiveScreenBrightnessUkmLoggerImpl::LogActivity(
     const ScreenBrightnessEvent& screen_brightness_event,
     ukm::SourceId tab_id,
     bool has_form_entry) {
-  const ukm::SourceId source_id = ukm::UkmRecorder::GetNewSourceID();
+  const ukm::SourceId source_id = ukm::NoURLSourceId();
   ukm::builders::ScreenBrightness ukm_screen_brightness(source_id);
   ukm_screen_brightness.SetSequenceId(next_sequence_id_++);
 
@@ -188,7 +188,7 @@ void AdaptiveScreenBrightnessUkmLoggerImpl::LogActivity(
 
   const ScreenBrightnessEvent_Event event = screen_brightness_event.event();
 
-  DCHECK(event.has_brightness());
+  CHECK(event.has_brightness(), base::NotFatalUntil::M160);
   ukm_screen_brightness.SetBrightness(event.brightness());
 
   if (event.has_reason()) {

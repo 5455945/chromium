@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,9 @@
 #include <memory>
 #include <utility>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "components/policy/core/common/cloud/cloud_policy_service.h"
 
@@ -20,7 +21,7 @@ class OneShotTimer;
 }  // namespace base
 
 namespace policy {
-class UserCloudPolicyManagerChromeOS;
+class UserCloudPolicyManagerAsh;
 }  // namespace policy
 
 namespace ash {
@@ -47,6 +48,10 @@ class ChildPolicyObserver : public policy::CloudPolicyService::Observer {
       base::OnceCallback<void(Profile*, InitialPolicyRefreshResult)>;
 
   explicit ChildPolicyObserver(Profile* profile);
+
+  ChildPolicyObserver(const ChildPolicyObserver&) = delete;
+  ChildPolicyObserver& operator=(const ChildPolicyObserver&) = delete;
+
   ~ChildPolicyObserver() override;
 
   // policy::CloudPolicyService::Observer:
@@ -72,7 +77,7 @@ class ChildPolicyObserver : public policy::CloudPolicyService::Observer {
   void OnPolicyReady(InitialPolicyRefreshResult refresh_result);
 
   // Returns user cloud policy manager for |profile_|.
-  policy::UserCloudPolicyManagerChromeOS* GetUserCloudPolicyManager();
+  policy::UserCloudPolicyManagerAsh* GetUserCloudPolicyManager();
 
   // The result of initial policy refresh for child user.
   InitialPolicyRefreshResult refresh_result_ =
@@ -85,17 +90,14 @@ class ChildPolicyObserver : public policy::CloudPolicyService::Observer {
   // with an error or timed out). Notifies the requester that policy is ready.
   PolicyReadyCallback on_policy_ready_;
 
-  // Profile of the child user, not owned.
-  Profile* const profile_;
+  base::ScopedObservation<policy::CloudPolicyService,
+                          policy::CloudPolicyService::Observer>
+      cloud_policy_service_observation_{this};
 
-  DISALLOW_COPY_AND_ASSIGN(ChildPolicyObserver);
+  // Profile of the child user, not owned.
+  const raw_ptr<Profile> profile_;
 };
 
 }  // namespace ash
-
-// TODO(https://crbug.com/1164001): remove when ChromOS code migration is done.
-namespace chromeos {
-using ::ash::ChildPolicyObserver;
-}  // namespace chromeos
 
 #endif  // CHROME_BROWSER_ASH_CHILD_ACCOUNTS_CHILD_POLICY_OBSERVER_H_

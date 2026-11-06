@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,7 @@
 
 #include <vector>
 
-#include "base/bind.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -20,6 +19,12 @@ namespace {
 class TestFrameTokenMessageQueueClient : public FrameTokenMessageQueue::Client {
  public:
   TestFrameTokenMessageQueueClient() {}
+
+  TestFrameTokenMessageQueueClient(const TestFrameTokenMessageQueueClient&) =
+      delete;
+  TestFrameTokenMessageQueueClient& operator=(
+      const TestFrameTokenMessageQueueClient&) = delete;
+
   ~TestFrameTokenMessageQueueClient() {}
 
   // Resets all method counters.
@@ -27,6 +32,11 @@ class TestFrameTokenMessageQueueClient : public FrameTokenMessageQueue::Client {
 
   // FrameTokenMessageQueue::Client:
   void OnInvalidFrameToken(uint32_t frame_token) override;
+
+  // FrameTokenMessageQueue::Client:
+  std::string GetMainFrameLastCommittedURLSpec() override {
+    return std::string();
+  }
 
   bool invalid_frame_token_called() const {
     return invalid_frame_token_called_;
@@ -36,7 +46,6 @@ class TestFrameTokenMessageQueueClient : public FrameTokenMessageQueue::Client {
  private:
   bool invalid_frame_token_called_ = false;
   uint32_t invalid_frame_token_ = 0u;
-  DISALLOW_COPY_AND_ASSIGN(TestFrameTokenMessageQueueClient);
 };
 
 void TestFrameTokenMessageQueueClient::Reset() {
@@ -55,6 +64,11 @@ void TestFrameTokenMessageQueueClient::OnInvalidFrameToken(
 class TestNonIPCMessageEnqueuer {
  public:
   TestNonIPCMessageEnqueuer() {}
+
+  TestNonIPCMessageEnqueuer(const TestNonIPCMessageEnqueuer&) = delete;
+  TestNonIPCMessageEnqueuer& operator=(const TestNonIPCMessageEnqueuer&) =
+      delete;
+
   ~TestNonIPCMessageEnqueuer() {}
 
   void FrameTokenCallback(base::TimeTicks activation_time);
@@ -65,7 +79,6 @@ class TestNonIPCMessageEnqueuer {
 
  private:
   bool frame_token_callback_called_ = false;
-  DISALLOW_COPY_AND_ASSIGN(TestNonIPCMessageEnqueuer);
 };
 
 void TestNonIPCMessageEnqueuer::FrameTokenCallback(
@@ -78,6 +91,11 @@ void TestNonIPCMessageEnqueuer::FrameTokenCallback(
 class FrameTokenMessageQueueTest : public testing::Test {
  public:
   FrameTokenMessageQueueTest();
+
+  FrameTokenMessageQueueTest(const FrameTokenMessageQueueTest&) = delete;
+  FrameTokenMessageQueueTest& operator=(const FrameTokenMessageQueueTest&) =
+      delete;
+
   ~FrameTokenMessageQueueTest() override {}
 
   TestFrameTokenMessageQueueClient* test_client() { return &test_client_; }
@@ -92,7 +110,6 @@ class FrameTokenMessageQueueTest : public testing::Test {
   TestFrameTokenMessageQueueClient test_client_;
   TestNonIPCMessageEnqueuer test_non_ipc_enqueuer_;
   FrameTokenMessageQueue frame_token_message_queue_;
-  DISALLOW_COPY_AND_ASSIGN(FrameTokenMessageQueueTest);
 };
 
 FrameTokenMessageQueueTest::FrameTokenMessageQueueTest() {
@@ -293,6 +310,30 @@ TEST_F(FrameTokenMessageQueueTest, OutOfOrderFrameTokensEnqueue) {
   EXPECT_EQ(0u, queue->size());
   EXPECT_FALSE(client->invalid_frame_token_called());
   EXPECT_TRUE(enqueuer->frame_token_callback_called());
+}
+
+namespace {
+void DeleteQueueCallback(std::unique_ptr<FrameTokenMessageQueue>* queue,
+                         base::TimeTicks) {
+  queue->reset();
+}
+}  // namespace
+
+TEST(FrameTokenMessageQueueUAFTest,
+     CallbackDestroysQueueDuringDidProcessFrame) {
+  TestFrameTokenMessageQueueClient client;
+  auto queue = std::make_unique<FrameTokenMessageQueue>();
+  queue->Init(&client);
+
+  const uint32_t frame_token = 42;
+  // Enqueue a callback that will delete the queue.
+  queue->EnqueueOrRunFrameTokenCallback(
+      frame_token,
+      base::BindOnce(&DeleteQueueCallback, base::Unretained(&queue)));
+
+  // This should trigger UAF if the bug is present.
+  queue->DidProcessFrame(frame_token, base::TimeTicks::Now());
+  EXPECT_EQ(nullptr, queue);
 }
 
 }  // namespace content

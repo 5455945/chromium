@@ -1,20 +1,29 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 
+#include "base/no_destructor.h"
 #include "build/build_config.h"
+#include "build/chromeos_buildflags.h"
+#include "chrome/browser/download/background_download_service_factory.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
-#include "chrome/browser/profiles/incognito_helpers.h"
 #include "chrome/browser/profiles/profile.h"
-#include "components/keyed_service/content/browser_context_dependency_manager.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
+#include "chrome/common/chrome_features.h"
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/private_ai/private_ai_service_factory.h"
+#endif
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "content/public/browser/browser_context.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ash/profiles/profile_helper.h"
-#endif
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/scoped_java_ref.h"
+
+// Must come after other includes, because FromJniType() uses Profile.
+#include "chrome/browser/optimization_guide/android/jni_headers/OptimizationGuideBridgeFactory_jni.h"
+#endif  // BUILDFLAG(IS_ANDROID)
 
 // static
 OptimizationGuideKeyedService*
@@ -34,41 +43,63 @@ OptimizationGuideKeyedServiceFactory::GetInstance() {
 }
 
 OptimizationGuideKeyedServiceFactory::OptimizationGuideKeyedServiceFactory()
-    : BrowserContextKeyedServiceFactory(
+    : ProfileKeyedServiceFactory(
           "OptimizationGuideKeyedService",
-          BrowserContextDependencyManager::GetInstance()) {}
+          ProfileSelections::Builder()
+              .WithRegular(ProfileSelection::kOwnInstance)
+              // Guest Profile follows Regular Profile selection mode.
+              .WithGuest(ProfileSelection::kOwnInstance)
+              // Do not build the OptimizationGuideKeyedService if it's a
+              // sign-in or lockscreen profile since it basically is an
+              // ephemeral profile anyway and we cannot provide hints or models
+              // to it anyway.
+              .WithAshInternals(ProfileSelection::kNone)
+              .Build()) {
+  DependsOn(BackgroundDownloadServiceFactory::GetInstance());
+  DependsOn(IdentityManagerFactory::GetInstance());
+#if !BUILDFLAG(IS_ANDROID)
+  DependsOn(private_ai::PrivateAiServiceFactory::GetInstance());
+#endif
+}
 
 OptimizationGuideKeyedServiceFactory::~OptimizationGuideKeyedServiceFactory() =
     default;
 
-KeyedService* OptimizationGuideKeyedServiceFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+OptimizationGuideKeyedServiceFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  // Do not build the OptimizationGuideKeyedService if it's a sign-in profile
-  // since it basically is an ephemeral profile anyway and we cannot provide
-  // hints or models to it anyway. Additionally, sign in profiles do not go
-  // through the standard profile initialization flow, so a lot of things that
-  // are required are not available when the browser context for the signin
-  // profile is created.
-  Profile* profile = Profile::FromBrowserContext(context);
-  if (chromeos::ProfileHelper::IsSigninProfile(profile))
-    return nullptr;
-#endif
-
-  return new OptimizationGuideKeyedService(context);
-}
-
-content::BrowserContext*
-OptimizationGuideKeyedServiceFactory::GetBrowserContextToUse(
-    content::BrowserContext* context) const {
-  return chrome::GetBrowserContextOwnInstanceInIncognito(context);
+  return std::make_unique<OptimizationGuideKeyedService>(context);
 }
 
 bool OptimizationGuideKeyedServiceFactory::ServiceIsCreatedWithBrowserContext()
     const {
+  if (base::FeatureList::IsEnabled(
+          ::features::kLazyKeyedServiceInstantiation) &&
+      ::features::kLazyKeyedServiceInstantiationOptimizationGuide.Get()) {
+    return false;
+  }
   return optimization_guide::features::IsOptimizationHintsEnabled();
 }
 
 bool OptimizationGuideKeyedServiceFactory::ServiceIsNULLWhileTesting() const {
   return true;
 }
+
+#if BUILDFLAG(IS_ANDROID)
+static base::android::ScopedJavaLocalRef<jobject>
+JNI_OptimizationGuideBridgeFactory_GetForProfile(JNIEnv* env,
+                                                 Profile* profile) {
+  CHECK(profile, base::NotFatalUntil::M161);
+
+  OptimizationGuideKeyedService* service =
+      OptimizationGuideKeyedServiceFactory::GetForProfile(profile);
+  if (!service) {
+    return base::android::ScopedJavaLocalRef<jobject>();
+  }
+  return service->GetJavaObject();
+}
+#endif  // BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_ANDROID)
+DEFINE_JNI(OptimizationGuideBridgeFactory)
+#endif

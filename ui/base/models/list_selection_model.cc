@@ -1,57 +1,101 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/base/models/list_selection_model.h"
 
 #include <algorithm>
+#include <optional>
 #include <valarray>
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
 
 namespace ui {
 
 namespace {
 
-void IncrementFromImpl(int index, int* value) {
-  if (*value >= index)
-    (*value)++;
+// Determines the new index for `original_index` after inserting an item at
+// `insert_position`. This is called for the selected indices.
+size_t GetIndexAfterInsertion(size_t insert_position, size_t original_index) {
+  return (original_index >= insert_position) ? original_index + 1
+                                             : original_index;
 }
 
-// Returns true if |value| should be erased from its container.
-bool DecrementFromImpl(int index, int* value) {
-  if (*value == index) {
-    *value = ListSelectionModel::kUnselectedIndex;
-    return true;
+// Determines the new index for `original_index` after inserting an item at
+// `insert_position`. This is called for the active and anchor indexes.
+std::optional<size_t> GetIndexAfterInsertion(
+    size_t insert_position,
+    std::optional<size_t> original_index) {
+  return original_index.has_value()
+             ? std::optional<size_t>(GetIndexAfterInsertion(
+                   insert_position, original_index.value()))
+             : std::nullopt;
+}
+
+// Determines the new index for `original_index` after removing an item at
+// `remove_position`. This is called for the selected indices. Returns
+// std::nullopt if `original_index` should be erased from its container.
+std::optional<size_t> GetIndexAfterRemoval(size_t remove_position,
+                                           size_t original_index) {
+  if (original_index == remove_position) {
+    return std::nullopt;
   }
-  if (*value > index)
-    (*value)--;
-  return false;
+
+  if (original_index > remove_position) {
+    return original_index - 1;
+  }
+
+  return original_index;
 }
 
-void MoveToLowerIndexImpl(int old_start,
-                          int new_start,
-                          int length,
-                          int* value) {
-  DCHECK_LE(new_start, old_start);
-  DCHECK_GE(length, 0);
+// Determines the new index for `original_index` after removing an item at
+// `remove_position`. This is called for active and anchor indexes. Returns
+// std::nullopt if `original_index` should be erased from its container.
+std::optional<size_t> GetIndexAfterRemoval(
+    size_t remove_position,
+    std::optional<size_t> original_index) {
+  return original_index.has_value()
+             ? std::optional<size_t>(GetIndexAfterRemoval(
+                   remove_position, original_index.value()))
+             : std::nullopt;
+}
+
+// Returns the new index for `original_index` when a range of items are moved
+// from `source_position` to `destination_position`. This assumes that the items
+// are moved to a lower index. This is called for active and anchor indexes.
+std::optional<size_t> GetIndexAfterMove(size_t source_position,
+                                        size_t destination_position,
+                                        size_t range_size,
+                                        std::optional<size_t> original_index) {
+  CHECK_LE(destination_position, source_position, base::NotFatalUntil::M163);
+
+  if (!original_index.has_value()) {
+    return std::nullopt;
+  }
+
   // When a range of items moves to a lower index, the only affected indices
-  // are those in the interval [new_start, old_start + length).
-  if (new_start <= *value && *value < old_start + length) {
-    if (*value < old_start) {
-      // The items originally in the interval [new_start, old_start) see
-      // |length| many items inserted before them, so their indices increase.
-      *value += length;
+  // are those in the interval [destination_position, source_position +
+  // range_size).
+  size_t original_index_val = original_index.value();
+  if (destination_position <= original_index_val &&
+      original_index_val < source_position + range_size) {
+    if (original_index_val < source_position) {
+      // The items originally in the interval [destination_position,
+      // source_position) see `range_size` many items inserted before them, so
+      // their indices increase.
+      return original_index_val + range_size;
     } else {
-      // The items originally in the interval [old_start, old_start + length)
-      // are shifted downward by (old_start - new_start) many spots, so
-      // their indices decrease.
-      *value -= (old_start - new_start);
+      // The items originally in the interval [source_position, source_position
+      // + range_size) are shifted downward by (source_position -
+      // destination_position) many spots, so their indices decrease.
+      return original_index_val - (source_position - destination_position);
     }
   }
-}
 
+  return original_index;
+}
 }  // namespace
 
 ListSelectionModel::ListSelectionModel() = default;
@@ -65,96 +109,99 @@ ListSelectionModel& ListSelectionModel::operator=(const ListSelectionModel&) =
 ListSelectionModel& ListSelectionModel::operator=(ListSelectionModel&&) =
     default;
 
-bool ListSelectionModel::operator==(const ListSelectionModel& other) const {
-  return active() == other.active() && anchor() == other.anchor() &&
-         selected_indices() == other.selected_indices();
-}
-
-bool ListSelectionModel::operator!=(const ListSelectionModel& other) const {
-  return !operator==(other);
-}
-
-void ListSelectionModel::IncrementFrom(int index) {
+void ListSelectionModel::IncrementFrom(size_t index) {
   // Shift the selection to account for a newly inserted item at |index|.
-  for (auto i = selected_indices_.begin(); i != selected_indices_.end(); ++i) {
-    IncrementFromImpl(index, &(*i));
+  for (size_t& selected_index : selected_indices_) {
+    selected_index = GetIndexAfterInsertion(index, selected_index);
   }
-  IncrementFromImpl(index, &anchor_);
-  IncrementFromImpl(index, &active_);
+
+  anchor_ = GetIndexAfterInsertion(index, anchor_);
+  set_active(GetIndexAfterInsertion(index, active_));
 }
 
-void ListSelectionModel::DecrementFrom(int index) {
-  for (auto i = selected_indices_.begin(); i != selected_indices_.end();) {
-    if (DecrementFromImpl(index, &(*i))) {
-      i = selected_indices_.erase(i);
+void ListSelectionModel::DecrementFrom(size_t index) {
+  for (auto it = selected_indices_.begin(); it != selected_indices_.end();) {
+    std::optional<size_t> new_value = GetIndexAfterRemoval(index, *it);
+    if (new_value == std::nullopt) {
+      it = selected_indices_.erase(it);
     } else {
-      ++i;
+      *it = new_value.value();
+      ++it;
     }
   }
-  DecrementFromImpl(index, &anchor_);
-  DecrementFromImpl(index, &active_);
+
+  anchor_ = GetIndexAfterRemoval(index, anchor_);
+  set_active(GetIndexAfterRemoval(index, active_));
 }
 
-void ListSelectionModel::SetSelectedIndex(int index) {
-  anchor_ = active_ = index;
+void ListSelectionModel::SetSelectedIndex(std::optional<size_t> index) {
+  anchor_ = index;
+  set_active(index);
+
   selected_indices_.clear();
-  if (index != kUnselectedIndex)
-    selected_indices_.insert(index);
+  if (index.has_value()) {
+    selected_indices_.insert(index.value());
+  }
 }
 
-bool ListSelectionModel::IsSelected(int index) const {
-  return base::Contains(selected_indices_, index);
+bool ListSelectionModel::IsSelected(size_t index) const {
+  return selected_indices_.contains(index);
 }
 
-void ListSelectionModel::AddIndexToSelection(int index) {
+void ListSelectionModel::AddIndexToSelection(size_t index) {
   selected_indices_.insert(index);
 }
 
-void ListSelectionModel::AddIndexRangeToSelection(int index_start,
-                                                  int index_end) {
-  DCHECK_LE(index_start, index_end);
+void ListSelectionModel::AddIndexRangeToSelection(size_t index_start,
+                                                  size_t index_end) {
+  CHECK_LE(index_start, index_end, base::NotFatalUntil::M163);
 
   if (index_start == index_end)
     return AddIndexToSelection(index_start);
 
-  for (int i = index_start; i <= index_end; ++i) {
+  for (size_t i = index_start; i <= index_end; ++i) {
     selected_indices_.insert(i);
   }
 }
 
-void ListSelectionModel::RemoveIndexFromSelection(int index) {
+void ListSelectionModel::RemoveIndexFromSelection(size_t index) {
   selected_indices_.erase(index);
 }
 
-void ListSelectionModel::SetSelectionFromAnchorTo(int index) {
-  if (anchor_ == kUnselectedIndex) {
+void ListSelectionModel::SetSelectionFromAnchorTo(size_t index) {
+  if (!anchor_.has_value()) {
     SetSelectedIndex(index);
   } else {
-    int delta = std::abs(index - anchor_);
     SelectedIndices new_selection;
-    for (int i = 0, min = std::min(index, anchor_); i <= delta; ++i)
-      new_selection.insert(i + min);
+    for (size_t min = std::min(index, anchor_.value()),
+                delta = std::max(index, anchor_.value()) - min, i = min;
+         i <= min + delta; ++i) {
+      new_selection.insert(i);
+    }
     selected_indices_.swap(new_selection);
-    active_ = index;
+    set_active(index);
   }
 }
 
-void ListSelectionModel::AddSelectionFromAnchorTo(int index) {
-  if (anchor_ == kUnselectedIndex) {
+void ListSelectionModel::AddSelectionFromAnchorTo(size_t index) {
+  if (!anchor_.has_value()) {
     SetSelectedIndex(index);
   } else {
-    for (int i = std::min(index, anchor_), end = std::max(index, anchor_);
+    for (size_t i = std::min(index, anchor_.value()),
+                end = std::max(index, anchor_.value());
          i <= end; ++i) {
       selected_indices_.insert(i);
     }
-    active_ = index;
+    set_active(index);
   }
 }
 
-void ListSelectionModel::Move(int old_index, int new_index, int length) {
+void ListSelectionModel::Move(size_t old_index,
+                              size_t new_index,
+                              size_t length) {
   // |length| many items are moving from index |old_index| to index |new_index|.
-  DCHECK_NE(old_index, new_index);
-  DCHECK_GT(length, 0);
+  CHECK_NE(old_index, new_index, base::NotFatalUntil::M163);
+  CHECK_GT(length, 0u, base::NotFatalUntil::M163);
 
   // Remap move-to-higher-index operations to the equivalent move-to-lower-index
   // operation. As an example, the permutation "ABCDEFG" -> "CDEFABG" can be
@@ -167,8 +214,8 @@ void ListSelectionModel::Move(int old_index, int new_index, int length) {
 
   // We know that |old_index| > |new_index|, so this is a move to a lower index.
   // Start by transforming |anchor_| and |active_|.
-  MoveToLowerIndexImpl(old_index, new_index, length, &anchor_);
-  MoveToLowerIndexImpl(old_index, new_index, length, &active_);
+  anchor_ = GetIndexAfterMove(old_index, new_index, length, anchor_);
+  set_active(GetIndexAfterMove(old_index, new_index, length, active_));
 
   // When a range of items moves to a lower index, the affected items are those
   // in the interval [new_index, old_index + length). Search within
@@ -181,10 +228,11 @@ void ListSelectionModel::Move(int old_index, int new_index, int length) {
   // The items originally in the interval [new_index, old_index) will see
   // |length| many items inserted before them, so their indices increase.
   auto middle = std::lower_bound(low, high, old_index);
-  int pivot_value = new_index + length;
+  size_t pivot_value = new_index + length;
   for (auto it = low; it != middle; ++it) {
     (*it) += length;
-    DCHECK(pivot_value <= (*it) && (*it) < (old_index + length));
+    CHECK_LE(pivot_value, *it, base::NotFatalUntil::M163);
+    CHECK_LT(*it, old_index + length, base::NotFatalUntil::M163);
   }
 
   // The items originally in the interval [old_index, old_index + length) are
@@ -192,7 +240,8 @@ void ListSelectionModel::Move(int old_index, int new_index, int length) {
   // decrease.
   for (auto it = middle; it != high; ++it) {
     (*it) -= (old_index - new_index);
-    DCHECK(new_index <= (*it) && (*it) < pivot_value);
+    CHECK_LE(new_index, *it, base::NotFatalUntil::M163);
+    CHECK_LT(*it, pivot_value, base::NotFatalUntil::M163);
   }
 
   // Reorder the ranges [low, middle), and [middle, high) so that the elements
@@ -204,8 +253,22 @@ void ListSelectionModel::Move(int old_index, int new_index, int length) {
 }
 
 void ListSelectionModel::Clear() {
-  anchor_ = active_ = kUnselectedIndex;
+  anchor_ = active_ = std::nullopt;
   selected_indices_.clear();
+}
+
+std::string ListSelectionModel::ToString() const {
+  const auto optional_to_string = [](const auto& opt) {
+    return opt.has_value() ? base::NumberToString(opt.value())
+                           : std::string("<none>");
+  };
+  std::vector<std::string> index_strings;
+  std::ranges::transform(
+      selected_indices_, std::back_inserter(index_strings),
+      [](const auto& index) { return base::NumberToString(index); });
+  return "active=" + optional_to_string(active_) +
+         " anchor=" + optional_to_string(anchor_) +
+         " selection=" + base::JoinString(index_strings, " ");
 }
 
 }  // namespace ui

@@ -1,17 +1,33 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/views/frame/browser_frame_view_layout_linux_native.h"
 
-#include "ui/views/linux_ui/nav_button_provider.h"
+#include "chrome/browser/ui/views/frame/opaque_browser_frame_view_layout.h"
+#include "ui/linux/nav_button_provider.h"
+#include "ui/views/window/frame_view_utils_linux.h"
 
 BrowserFrameViewLayoutLinuxNative::BrowserFrameViewLayoutLinuxNative(
-    views::NavButtonProvider* nav_button_provider)
-    : nav_button_provider_(nav_button_provider) {}
+    ui::NavButtonProvider* nav_button_provider,
+    FrameProviderGetter frame_provider_getter)
+    : nav_button_provider_(nav_button_provider),
+      frame_provider_getter_(frame_provider_getter) {}
 
 BrowserFrameViewLayoutLinuxNative::~BrowserFrameViewLayoutLinuxNative() =
     default;
+
+ui::WindowFrameProvider* BrowserFrameViewLayoutLinuxNative::GetFrameProvider()
+    const {
+#if BUILDFLAG(IS_LINUX)
+  const bool tiled = delegate_->IsTiled();
+  const bool maximized = delegate_->IsMaximized();
+#else
+  const bool tiled = false;
+  const bool maximized = false;
+#endif
+  return frame_provider_getter_.Run(tiled, maximized);
+}
 
 int BrowserFrameViewLayoutLinuxNative::CaptionButtonY(
     views::FrameButton button_id,
@@ -19,6 +35,20 @@ int BrowserFrameViewLayoutLinuxNative::CaptionButtonY(
   auto button_type = GetButtonDisplayType(button_id);
   gfx::Insets insets = nav_button_provider_->GetNavButtonMargin(button_type);
   return insets.top() + FrameEdgeInsets(false).top();
+}
+
+gfx::Insets BrowserFrameViewLayoutLinuxNative::RestoredFrameBorderInsets()
+    const {
+  // Unframed mode only has a minimal frame to be able to resize it from the
+  // borders.
+  if (delegate_->GetUnframedModeEnabled()) {
+    return gfx::Insets(
+        OpaqueBrowserFrameViewLayout::RestoredFrameBorderInsets());
+  }
+
+  gfx::Insets insets = GetFrameProvider()->GetFrameThicknessDip();
+  insets.SetToMax(GetInputInsets());
+  return insets;
 }
 
 OpaqueBrowserFrameViewLayout::TopAreaPadding
@@ -39,28 +69,18 @@ int BrowserFrameViewLayoutLinuxNative::GetWindowCaptionSpacing(
     bool is_leading_button) const {
   gfx::Insets insets =
       nav_button_provider_->GetNavButtonMargin(GetButtonDisplayType(button_id));
-  if (!leading_spacing)
+  if (!leading_spacing) {
     return insets.right();
+  }
   int spacing = insets.left();
-  if (!is_leading_button)
+  if (!is_leading_button) {
     spacing += nav_button_provider_->GetInterNavButtonSpacing();
+  }
   return spacing;
 }
 
-views::NavButtonProvider::FrameButtonDisplayType
+ui::NavButtonProvider::FrameButtonDisplayType
 BrowserFrameViewLayoutLinuxNative::GetButtonDisplayType(
     views::FrameButton button_id) const {
-  switch (button_id) {
-    case views::FrameButton::kMinimize:
-      return views::NavButtonProvider::FrameButtonDisplayType::kMinimize;
-    case views::FrameButton::kMaximize:
-      return delegate_->IsMaximized()
-                 ? views::NavButtonProvider::FrameButtonDisplayType::kRestore
-                 : views::NavButtonProvider::FrameButtonDisplayType::kMaximize;
-    case views::FrameButton::kClose:
-      return views::NavButtonProvider::FrameButtonDisplayType::kClose;
-    default:
-      NOTREACHED();
-      return views::NavButtonProvider::FrameButtonDisplayType::kClose;
-  }
+  return views::GetFrameButtonDisplayType(button_id, delegate_->IsMaximized());
 }

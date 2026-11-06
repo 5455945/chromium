@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,12 @@
 
 #include <string>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "base/process/process.h"
 #include "base/test/multiprocess_test.h"
 #include "base/test/test_timeouts.h"
 #include "build/build_config.h"
+#include "mojo/core/embedder/embedder.h"
 #include "mojo/public/cpp/system/message_pipe.h"
 #include "testing/multiprocess_func_list.h"
 
@@ -35,7 +35,7 @@ class MultiprocessTestHelper {
     // Same as CHILD but uses the newer async channel handshake.
     ASYNC,
 
-#if !defined(OS_FUCHSIA)
+#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_IOS)
     // Launch the child process as a child in the mojo system, using a named
     // pipe.
     NAMED_CHILD,
@@ -43,14 +43,18 @@ class MultiprocessTestHelper {
     // Launch the child process as an unrelated peer process in the mojo
     // system, using a named pipe.
     NAMED_PEER,
-#endif  //  !defined(OS_FUCHSIA)
-    // This is the same as child; however, it will never advertise any
-    // capabilities.
-    CHILD_WITHOUT_CAPABILITIES
+#endif  //  !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_IOS)
   };
 
   MultiprocessTestHelper();
+
+  MultiprocessTestHelper(const MultiprocessTestHelper&) = delete;
+  MultiprocessTestHelper& operator=(const MultiprocessTestHelper&) = delete;
+
   ~MultiprocessTestHelper();
+
+  // Initialize Mojo according to process type.
+  static void InitForMultiprocessTest();
 
   // Start a child process and run the "main" function "named" |test_child_name|
   // declared using |MOJO_MULTIPROCESS_TEST_CHILD_MAIN()| or
@@ -90,16 +94,14 @@ class MultiprocessTestHelper {
                            bool pass_pipe_ownership_to_main = false);
   static int RunClientTestMain(base::OnceCallback<void(MojoHandle)> main);
 
-  // For use (and only valid) in the child process:
-  static mojo::ScopedMessagePipeHandle primordial_pipe;
+  // Takes ownership of the primordial pipe in the child process.
+  static mojo::ScopedMessagePipeHandle TakePrimordialPipe();
 
  private:
   // Valid after |StartChild()| and before |WaitForChildShutdown()|.
   base::Process test_child_;
 
   std::unique_ptr<IsolatedConnection> isolated_connection_;
-
-  DISALLOW_COPY_AND_ASSIGN(MultiprocessTestHelper);
 };
 
 }  // namespace test

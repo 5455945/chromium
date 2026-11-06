@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,20 +9,23 @@
 #include <memory>
 
 #include "base/containers/span.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
 #include "media/base/video_codecs.h"
 #include "media/base/video_color_space.h"
+#include "media/base/video_types.h"
 #include "media/gpu/accelerated_video_decoder.h"
+#include "media/gpu/av1_picture.h"
 #include "media/gpu/media_gpu_export.h"
 #include "third_party/libgav1/src/src/utils/constants.h"
 
 // For libgav1::RefCountedBufferPtr.
 #include "third_party/libgav1/src/src/buffer_pool.h"
-// For libgav1::ObuSequenceHeader. absl::optional demands ObuSequenceHeader to
+// For libgav1::ObuSequenceHeader. std::optional demands ObuSequenceHeader to
 // fulfill std::is_trivially_constructible if it is forward-declared. But
 // ObuSequenceHeader doesn't.
 #include "third_party/libgav1/src/src/obu_parser.h"
+#include "ui/gfx/hdr_metadata.h"
 
 namespace libgav1 {
 struct DecoderState;
@@ -32,7 +35,6 @@ class Vector;
 }  // namespace libgav1
 
 namespace media {
-class AV1Picture;
 using AV1ReferenceFrameVector =
     std::array<scoped_refptr<AV1Picture>, libgav1::kNumReferenceFrameTypes>;
 
@@ -81,6 +83,16 @@ class MEDIA_GPU_EXPORT AV1Decoder : public AcceleratedVideoDecoder {
     // case and treat it as normal, returning kRanOutOfSurfaces from Decode().
     virtual scoped_refptr<AV1Picture> CreateAV1Picture(bool apply_grain) = 0;
 
+    // |secure_handle| is a reference to the corresponding secure memory when
+    // doing secure decoding on ARM. This is invoked instead of CreateAV1Picture
+    // when doing secure decoding on ARM. Default implementation returns
+    // nullptr.
+    // TODO(jkardatzke): Remove this once we move to the V4L2 flat stateless
+    // decoder and add a field to media::CodecPicture instead.
+    virtual scoped_refptr<AV1Picture> CreateAV1PictureSecure(
+        bool apply_grain,
+        uint64_t secure_handle);
+
     // Submits |pic| to the driver for accelerated decoding. The following
     // parameters are also passed:
     // - |sequence_header|: the current OBU sequence header.
@@ -107,6 +119,14 @@ class MEDIA_GPU_EXPORT AV1Decoder : public AcceleratedVideoDecoder {
     // called for them beforehand).
     // Returns true when successful, false otherwise.
     virtual bool OutputPicture(const AV1Picture& pic) = 0;
+
+    // Notifies the accelerater whenever there is a new stream to process.
+    // The lifetime of the stream is determined by the caller of
+    // AV1Decoder::SetStream(). `data` spans passed to SubmitDecode() will be
+    // contained in `stream` (in fact exactly the same span as `stream` in the
+    // current implementation).
+    virtual Status SetStream(base::span<const uint8_t> stream,
+                             const DecryptConfig* decrypt_config);
   };
 
   AV1Decoder(std::unique_ptr<AV1Accelerator> accelerator,
@@ -117,14 +137,17 @@ class MEDIA_GPU_EXPORT AV1Decoder : public AcceleratedVideoDecoder {
   AV1Decoder& operator=(const AV1Decoder&) = delete;
 
   // AcceleratedVideoDecoder implementation.
-  void SetStream(int32_t id, const DecoderBuffer& decoder_buffer) override;
-  bool Flush() override WARN_UNUSED_RESULT;
+  void SetStream(int32_t id,
+                 scoped_refptr<DecoderBuffer> decoder_buffer) override;
+  [[nodiscard]] bool Flush() override;
   void Reset() override;
-  DecodeResult Decode() override WARN_UNUSED_RESULT;
+  [[nodiscard]] DecodeResult Decode() override;
   gfx::Size GetPicSize() const override;
   gfx::Rect GetVisibleRect() const override;
   VideoCodecProfile GetProfile() const override;
   uint8_t GetBitDepth() const override;
+  VideoChromaSampling GetChromaSampling() const override;
+  VideoColorSpace GetVideoColorSpace() const override;
   size_t GetRequiredNumOfPictures() const override;
   size_t GetNumReferenceFrames() const override;
 
@@ -148,6 +171,7 @@ class MEDIA_GPU_EXPORT AV1Decoder : public AcceleratedVideoDecoder {
 
   bool on_error_ = false;
 
+  scoped_refptr<media::DecoderBuffer> decoder_buffer_;
   std::unique_ptr<libgav1::BufferPool> buffer_pool_;
   std::unique_ptr<libgav1::DecoderState> state_;
   std::unique_ptr<libgav1::ObuParser> parser_;
@@ -155,20 +179,28 @@ class MEDIA_GPU_EXPORT AV1Decoder : public AcceleratedVideoDecoder {
   const std::unique_ptr<AV1Accelerator> accelerator_;
   AV1ReferenceFrameVector ref_frames_;
 
-  absl::optional<libgav1::ObuSequenceHeader> current_sequence_header_;
-  absl::optional<libgav1::ObuFrameHeader> current_frame_header_;
+  // True initially and after Reset()/Flush() until a sequence header OBU is
+  // received in the stream.
+  bool need_sequence_header_ = true;
+  std::optional<libgav1::ObuSequenceHeader> current_sequence_header_;
+  std::optional<libgav1::ObuFrameHeader> current_frame_header_;
   libgav1::RefCountedBufferPtr current_frame_;
 
   gfx::Rect visible_rect_;
   gfx::Size frame_size_;
   VideoCodecProfile profile_;
   VideoColorSpace container_color_space_;
+  VideoColorSpace picture_color_space_;
   uint8_t bit_depth_ = 0;
+  VideoChromaSampling chroma_sampling_ = VideoChromaSampling::kUnknown;
+  gfx::HDRMetadata hdr_metadata_bitstream_;
 
   int32_t stream_id_ = 0;
-  const uint8_t* stream_ = nullptr;
-  size_t stream_size_ = 0;
   std::unique_ptr<DecryptConfig> decrypt_config_;
+
+  // Secure handle to pass through to the accelerator when doing secure playback
+  // on ARM.
+  uint64_t secure_handle_ = 0;
 
   // Pending picture for decode when accelerator returns kTryAgain.
   scoped_refptr<AV1Picture> pending_pic_;

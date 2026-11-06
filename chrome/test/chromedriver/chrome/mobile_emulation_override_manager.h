@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,16 +8,12 @@
 #include <memory>
 #include <string>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/values.h"
 #include "chrome/test/chromedriver/chrome/devtools_event_listener.h"
-
-namespace base {
-class DictionaryValue;
-}
+#include "chrome/test/chromedriver/chrome/mobile_device.h"
 
 class DevToolsClient;
-struct DeviceMetrics;
 class Status;
 
 // Overrides the device metrics, if requested, for the duration of the
@@ -25,14 +21,21 @@ class Status;
 class MobileEmulationOverrideManager : public DevToolsEventListener {
  public:
   MobileEmulationOverrideManager(DevToolsClient* client,
-                                 const DeviceMetrics* device_metrics);
+                                 std::optional<MobileDevice> mobile_device,
+                                 int browser_major_version);
+
+  MobileEmulationOverrideManager(const MobileEmulationOverrideManager&) =
+      delete;
+  MobileEmulationOverrideManager& operator=(
+      const MobileEmulationOverrideManager&) = delete;
+
   ~MobileEmulationOverrideManager() override;
 
   // Overridden from DevToolsEventListener:
   Status OnConnected(DevToolsClient* client) override;
   Status OnEvent(DevToolsClient* client,
                  const std::string& method,
-                 const base::DictionaryValue& params) override;
+                 const base::DictValue& params) override;
 
   bool IsEmulatingTouch() const;
   bool HasOverrideMetrics() const;
@@ -42,10 +45,9 @@ class MobileEmulationOverrideManager : public DevToolsEventListener {
  private:
   Status ApplyOverrideIfNeeded();
 
-  DevToolsClient* client_;
-  const DeviceMetrics* overridden_device_metrics_;
-
-  DISALLOW_COPY_AND_ASSIGN(MobileEmulationOverrideManager);
+  raw_ptr<DevToolsClient> client_;
+  std::optional<MobileDevice> mobile_device_;
+  int browser_major_version_ = 0;
 };
 
 #endif  // CHROME_TEST_CHROMEDRIVER_CHROME_MOBILE_EMULATION_OVERRIDE_MANAGER_H_

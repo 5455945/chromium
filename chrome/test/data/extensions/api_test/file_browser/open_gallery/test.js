@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
  * types are handled by the appropriate default-installed system app.
  */
 
-const kTestPng = 'test_dir/test_file.png';
+const TEST_PNG = 'test_dir/test_file.png';
 
 /**
  * Finds the `volumeType` volume then resolves the provided `path` as an Entry.
@@ -25,7 +25,7 @@ function getFileEntry(volumeType, path) {
             },
             fileError => {
               chrome.test.fail(
-                  `Unable to getFile "${path}": ${fileError.message}`);
+                  `Unable to getFile '${path}': ${fileError.message}`);
             });
       });
     });
@@ -42,7 +42,7 @@ function openGallery(entry, expectedResult) {
   const descriptor = {
     appId: 'jhdjimmaggjajfjphpljagpgkidjilnj',
     taskType: 'web',
-    actionId: 'open'
+    actionId: 'chrome://media-app/open',
   };
   function taskCallback(taskResult) {
     chrome.test.assertEq(expectedResult, taskResult);
@@ -55,16 +55,8 @@ function openGalleryExpectOpened(entry) {
   openGallery(entry, chrome.fileManagerPrivate.TaskResult.OPENED);
 }
 
-function openGalleryExpectMsgSent(entry) {
-  openGallery(entry, chrome.fileManagerPrivate.TaskResult.MESSAGE_SENT);
-}
-
 function testPngOpensGalleryReturnsOpened() {
-  getFileEntry('testing', kTestPng).then(openGalleryExpectOpened);
-}
-
-function testPngOpensGalleryReturnsMsgSent() {
-  getFileEntry('testing', kTestPng).then(openGalleryExpectMsgSent);
+  getFileEntry('testing', TEST_PNG).then(openGalleryExpectOpened);
 }
 
 // Handle the case where JSTestStarter has already injected a test to run.

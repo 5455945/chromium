@@ -26,6 +26,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_LAYOUT_HTML_CANVAS_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_LAYOUT_HTML_CANVAS_H_
 
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/layout/layout_replaced.h"
 
 namespace blink {
@@ -36,11 +37,10 @@ class CORE_EXPORT LayoutHTMLCanvas final : public LayoutReplaced {
  public:
   explicit LayoutHTMLCanvas(HTMLCanvasElement*);
 
-  bool IsOfType(LayoutObjectType type) const override {
+  bool IsCanvas() const final {
     NOT_DESTROYED();
-    return type == kLayoutObjectCanvas || LayoutReplaced::IsOfType(type);
+    return true;
   }
-  PaintLayerType LayerTypeRequired() const override;
 
   void InvalidatePaint(const PaintInvalidatorContext&) const final;
 
@@ -48,28 +48,70 @@ class CORE_EXPORT LayoutHTMLCanvas final : public LayoutReplaced {
 
   bool DrawsBackgroundOntoContentLayer() const final;
 
-  void StyleDidChange(StyleDifference, const ComputedStyle* old_style) override;
+  void StyleDidChange(StyleDifference,
+                      const ComputedStyle* old_style,
+                      const ComputedStyle& new_style,
+                      const StyleChangeContext&) override;
 
   const char* GetName() const override {
     NOT_DESTROYED();
     return "LayoutHTMLCanvas";
   }
 
-  void WillBeDestroyed() override;
+  void WillBeDestroyed(const ComputedStyle*) override;
+
+  void Trace(Visitor*) const override;
+
+  LayoutObject* FirstChild() const {
+    NOT_DESTROYED();
+    DCHECK_EQ(Children(), VirtualChildren());
+    return Children()->FirstChild();
+  }
+  LayoutObject* LastChild() const {
+    NOT_DESTROYED();
+    DCHECK_EQ(Children(), VirtualChildren());
+    return Children()->LastChild();
+  }
+
+  // As with LayoutMedia, use firstChild or lastChild instead.
+  void SlowFirstChild() const = delete;
+  void SlowLastChild() const = delete;
+
+  const LayoutObjectChildList* Children() const {
+    NOT_DESTROYED();
+    return &children_;
+  }
+  LayoutObjectChildList* Children() {
+    NOT_DESTROYED();
+    return &children_;
+  }
 
  private:
+  LayoutObjectChildList* VirtualChildren() final {
+    NOT_DESTROYED();
+    return Children();
+  }
+  const LayoutObjectChildList* VirtualChildren() const final {
+    NOT_DESTROYED();
+    return Children();
+  }
+  bool CanHaveChildren() const final {
+    NOT_DESTROYED();
+    return RuntimeEnabledFeatures::CanvasDrawElementEnabled(
+        GetDocument().GetExecutionContext());
+  }
+  bool IsChildAllowed(LayoutObject*, const ComputedStyle&) const final;
+
   void PaintReplaced(const PaintInfo&,
                      const PhysicalOffset& paint_offset) const override;
-  void IntrinsicSizeChanged() override {
+  void NaturalSizeChanged() override {
     NOT_DESTROYED();
     CanvasSizeChanged();
   }
+  PhysicalNaturalSizingInfo GetNaturalDimensions() const override;
 
-  bool CanHaveAdditionalCompositingReasons() const override {
-    NOT_DESTROYED();
-    return true;
-  }
-  CompositingReasons AdditionalCompositingReasons() const override;
+  LayoutObjectChildList children_;
+  PhysicalSize natural_size_;
 };
 
 template <>

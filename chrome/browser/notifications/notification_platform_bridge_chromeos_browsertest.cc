@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,8 @@
 
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/notifications/notification_display_service.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/notifications/notification_display_service_factory.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/test/browser_test.h"
 #include "ui/message_center/public/cpp/notification.h"
@@ -42,13 +43,13 @@ IN_PROC_BROWSER_TEST_F(NotificationPlatformBridgeChromeOsBrowserTest,
                        Shutdown) {
   message_center::Notification notification(
       message_center::NOTIFICATION_TYPE_SIMPLE, "notification-id",
-      std::u16string(), std::u16string(), gfx::Image(), std::u16string(),
+      std::u16string(), std::u16string(), ui::ImageModel(), std::u16string(),
       GURL(), message_center::NotifierId(),
       message_center::RichNotificationData(),
       base::MakeRefCounted<message_center::ThunkNotificationDelegate>(
           weak_ptr_factory_.GetWeakPtr()));
 
-  NotificationDisplayService::GetForProfile(browser()->profile())
+  NotificationDisplayServiceFactory::GetForProfile(browser()->GetProfile())
       ->Display(NotificationHandler::Type::TRANSIENT, notification,
                 /*metadata=*/nullptr);
   expected_close_count_ = 1;

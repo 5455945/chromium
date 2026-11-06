@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,23 +7,23 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
-#include "chrome/browser/ash/app_mode/kiosk_app_manager.h"
+#include "chrome/browser/ash/app_mode/kiosk_chrome_app_manager.h"
 #include "dbus/message.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
-namespace chromeos {
+namespace ash {
 
-KioskInfoService::KioskInfoService() {}
+KioskInfoService::KioskInfoService() = default;
 
 KioskInfoService::~KioskInfoService() = default;
 
 void KioskInfoService::Start(
     scoped_refptr<dbus::ExportedObject> exported_object) {
   exported_object->ExportMethod(
-      kKioskAppServiceInterface,
-      kKioskAppServiceGetRequiredPlatformVersionMethod,
+      chromeos::kKioskAppServiceInterface,
+      chromeos::kKioskAppServiceGetRequiredPlatformVersionMethod,
       base::BindRepeating(&KioskInfoService::GetKioskAppRequiredPlatformVersion,
                           weak_ptr_factory_.GetWeakPtr()),
       base::BindOnce(&KioskInfoService::OnExported,
@@ -44,8 +44,8 @@ void KioskInfoService::GetKioskAppRequiredPlatformVersion(
       dbus::Response::FromMethodCall(method_call);
   dbus::MessageWriter writer(response.get());
   writer.AppendString(
-      KioskAppManager::Get()->GetAutoLaunchAppRequiredPlatformVersion());
+      KioskChromeAppManager::Get()->GetAutoLaunchAppRequiredPlatformVersion());
   std::move(response_sender).Run(std::move(response));
 }
 
-}  // namespace chromeos
+}  // namespace ash

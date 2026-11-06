@@ -1,13 +1,14 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/arc/fileapi/arc_documents_provider_util.h"
 
 #include "base/files/file_path.h"
-#include "components/arc/mojom/file_system.mojom.h"
+#include "chromeos/ash/experiences/arc/mojom/file_system.mojom.h"
 #include "storage/browser/file_system/file_system_url.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "url/gurl.h"
 
 namespace arc {
@@ -47,8 +48,8 @@ TEST(ArcDocumentsProviderUtilTest, UnescapePathComponent) {
 }
 
 TEST(ArcDocumentsProviderUtilTest, GetDocumentsProviderMountPath) {
-  EXPECT_EQ("/special/arc-documents-provider/authority/document_id",
-            GetDocumentsProviderMountPath("authority", "document_id").value());
+  EXPECT_EQ("/special/arc-documents-provider/authority/root_id",
+            GetDocumentsProviderMountPath("authority", "root_id").value());
   EXPECT_EQ("/special/arc-documents-provider/a b/a b",
             GetDocumentsProviderMountPath("a b", "a b").value());
   EXPECT_EQ("/special/arc-documents-provider/a%2Fb/a%2Fb",
@@ -63,23 +64,23 @@ TEST(ArcDocumentsProviderUtilTest, GetDocumentsProviderMountPath) {
 
 TEST(ArcDocumentsProviderUtilTest, ParseDocumentsProviderUrl) {
   std::string authority;
-  std::string root_document_id;
+  std::string root_id;
   base::FilePath path;
 
   EXPECT_TRUE(ParseDocumentsProviderUrl(
       storage::FileSystemURL::CreateForTest(
-          url::Origin(), storage::kFileSystemTypeArcDocumentsProvider,
+          blink::StorageKey(), storage::kFileSystemTypeArcDocumentsProvider,
           base::FilePath(kDocumentsProviderMountPointPath)
               .Append(FILE_PATH_LITERAL("cats/root/home/calico.jpg"))),
-      &authority, &root_document_id, &path));
+      &authority, &root_id, &path));
   EXPECT_EQ("cats", authority);
-  EXPECT_EQ("root", root_document_id);
+  EXPECT_EQ("root", root_id);
   EXPECT_EQ(FILE_PATH_LITERAL("home/calico.jpg"), path.value());
 }
 
 TEST(ArcDocumentsProviderUtilTest, ParseDocumentsProviderUrlEmptyPath) {
   std::string authority;
-  std::string root_document_id;
+  std::string root_id;
   // Assign a non-empty arbitrary path to make sure an empty path is
   // set in ParseDocumentsProviderUrl().
   base::FilePath path(FILE_PATH_LITERAL("foobar"));
@@ -87,18 +88,18 @@ TEST(ArcDocumentsProviderUtilTest, ParseDocumentsProviderUrlEmptyPath) {
   // Should accept a path pointing to a root directory.
   EXPECT_TRUE(ParseDocumentsProviderUrl(
       storage::FileSystemURL::CreateForTest(
-          url::Origin(), storage::kFileSystemTypeArcDocumentsProvider,
+          blink::StorageKey(), storage::kFileSystemTypeArcDocumentsProvider,
           base::FilePath(kDocumentsProviderMountPointPath)
               .Append(FILE_PATH_LITERAL("cats/root"))),
-      &authority, &root_document_id, &path));
+      &authority, &root_id, &path));
   EXPECT_EQ("cats", authority);
-  EXPECT_EQ("root", root_document_id);
+  EXPECT_EQ("root", root_id);
   EXPECT_EQ(FILE_PATH_LITERAL(""), path.value());
 }
 
 TEST(ArcDocumentsProviderUtilTest, ParseDocumentsProviderUrlEmptyPathSlash) {
   std::string authority;
-  std::string root_document_id;
+  std::string root_id;
   // Assign a non-empty arbitrary path to make sure an empty path is
   // set in ParseDocumentsProviderUrl().
   base::FilePath path(FILE_PATH_LITERAL("foobar"));
@@ -106,96 +107,96 @@ TEST(ArcDocumentsProviderUtilTest, ParseDocumentsProviderUrlEmptyPathSlash) {
   // Should accept a path pointing to a root directory.
   EXPECT_TRUE(ParseDocumentsProviderUrl(
       storage::FileSystemURL::CreateForTest(
-          url::Origin(), storage::kFileSystemTypeArcDocumentsProvider,
+          blink::StorageKey(), storage::kFileSystemTypeArcDocumentsProvider,
           base::FilePath(kDocumentsProviderMountPointPath)
               .Append(FILE_PATH_LITERAL("cats/root/"))),
-      &authority, &root_document_id, &path));
+      &authority, &root_id, &path));
   EXPECT_EQ("cats", authority);
-  EXPECT_EQ("root", root_document_id);
+  EXPECT_EQ("root", root_id);
   EXPECT_EQ(FILE_PATH_LITERAL(""), path.value());
 }
 
 TEST(ArcDocumentsProviderUtilTest, ParseDocumentsProviderUrlInvalidType) {
   std::string authority;
-  std::string root_document_id;
+  std::string root_id;
   base::FilePath path;
 
   // Not storage::kFileSystemTypeArcDocumentsProvider.
   EXPECT_FALSE(ParseDocumentsProviderUrl(
       storage::FileSystemURL::CreateForTest(
-          url::Origin(), storage::kFileSystemTypeArcContent,
+          blink::StorageKey(), storage::kFileSystemTypeArcContent,
           base::FilePath(kDocumentsProviderMountPointPath)
               .Append(FILE_PATH_LITERAL("cats/root/home/calico.jpg"))),
-      &authority, &root_document_id, &path));
+      &authority, &root_id, &path));
 }
 
 TEST(ArcDocumentsProviderUtilTest, ParseDocumentsProviderUrlInvalidPath) {
   std::string authority;
-  std::string root_document_id;
+  std::string root_id;
   base::FilePath path;
 
-  // root_document_id part is missing.
+  // root_id part is missing.
   EXPECT_FALSE(ParseDocumentsProviderUrl(
       storage::FileSystemURL::CreateForTest(
-          url::Origin(), storage::kFileSystemTypeArcDocumentsProvider,
+          blink::StorageKey(), storage::kFileSystemTypeArcDocumentsProvider,
           base::FilePath(kDocumentsProviderMountPointPath)
               .Append(FILE_PATH_LITERAL("root-missing"))),
-      &authority, &root_document_id, &path));
+      &authority, &root_id, &path));
 
   // Leading / is missing.
   EXPECT_FALSE(ParseDocumentsProviderUrl(
       storage::FileSystemURL::CreateForTest(
-          url::Origin(), storage::kFileSystemTypeArcDocumentsProvider,
+          blink::StorageKey(), storage::kFileSystemTypeArcDocumentsProvider,
           base::FilePath(FILE_PATH_LITERAL(
               "special/arc-documents-provider/cats/root/home/calico.jpg"))),
-      &authority, &root_document_id, &path));
+      &authority, &root_id, &path));
 
   // Not under /special.
   EXPECT_FALSE(ParseDocumentsProviderUrl(
       storage::FileSystemURL::CreateForTest(
-          url::Origin(), storage::kFileSystemTypeArcDocumentsProvider,
+          blink::StorageKey(), storage::kFileSystemTypeArcDocumentsProvider,
           base::FilePath(FILE_PATH_LITERAL(
               "/invalid/arc-documents-provider/cats/root/home/calico.jpg"))),
-      &authority, &root_document_id, &path));
+      &authority, &root_id, &path));
 
   // Not under /special/arc-documents-provider.
   EXPECT_FALSE(ParseDocumentsProviderUrl(
       storage::FileSystemURL::CreateForTest(
-          url::Origin(), storage::kFileSystemTypeArcDocumentsProvider,
+          blink::StorageKey(), storage::kFileSystemTypeArcDocumentsProvider,
           base::FilePath(FILE_PATH_LITERAL(
               "/special/something-else/cats/root/home/calico.jpg"))),
-      &authority, &root_document_id, &path));
+      &authority, &root_id, &path));
 }
 
 TEST(ArcDocumentsProviderUtilTest, ParseDocumentsProviderUrlUnescape) {
   std::string authority;
-  std::string root_document_id;
+  std::string root_id;
   base::FilePath path;
 
   EXPECT_TRUE(ParseDocumentsProviderUrl(
       storage::FileSystemURL::CreateForTest(
-          url::Origin(), storage::kFileSystemTypeArcDocumentsProvider,
+          blink::StorageKey(), storage::kFileSystemTypeArcDocumentsProvider,
           base::FilePath(
               "/special/arc-documents-provider/cats/ro%2Fot/home/calico.jpg")),
-      &authority, &root_document_id, &path));
+      &authority, &root_id, &path));
   EXPECT_EQ("cats", authority);
-  EXPECT_EQ("ro/ot", root_document_id);
+  EXPECT_EQ("ro/ot", root_id);
   EXPECT_EQ(FILE_PATH_LITERAL("home/calico.jpg"), path.value());
 }
 
 TEST(ArcDocumentsProviderUtilTest, ParseDocumentsProviderUrlUtf8) {
   std::string authority;
-  std::string root_document_id;
+  std::string root_id;
   base::FilePath path;
 
   EXPECT_TRUE(ParseDocumentsProviderUrl(
       storage::FileSystemURL::CreateForTest(
-          url::Origin(), storage::kFileSystemTypeArcDocumentsProvider,
+          blink::StorageKey(), storage::kFileSystemTypeArcDocumentsProvider,
           base::FilePath(
               "/special/arc-documents-provider/cats/root/home/みけねこ.jpg")),
-      &authority, &root_document_id, &path));
+      &authority, &root_id, &path));
   EXPECT_EQ("cats", authority);
-  EXPECT_EQ("root", root_document_id);
+  EXPECT_EQ("root", root_id);
   EXPECT_EQ(FILE_PATH_LITERAL("home/みけねこ.jpg"), path.value());
 }
 
@@ -206,7 +207,6 @@ TEST(ArcDocumentsProviderUtilTest, BuildDocumentUrl) {
             BuildDocumentUrl("a b", "a b").spec());
   EXPECT_EQ("content://a%2Fb/document/a%2Fb",
             BuildDocumentUrl("a/b", "a/b").spec());
-  EXPECT_EQ("content://../document/..", BuildDocumentUrl("..", "..").spec());
 }
 
 TEST(ArcDocumentsProviderUtilTest, GetExtensionsForArcMimeType) {

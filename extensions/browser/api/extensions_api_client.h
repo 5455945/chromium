@@ -1,46 +1,58 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef EXTENSIONS_BROWSER_API_EXTENSIONS_API_CLIENT_H_
 #define EXTENSIONS_BROWSER_API_EXTENSIONS_API_CLIENT_H_
 
+#include <stdint.h>
+
 #include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
+#include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
-#include "extensions/browser/api/clipboard/clipboard_api.h"
-#include "extensions/browser/api/declarative_content/content_rules_registry.h"
-#include "extensions/browser/value_store/settings_namespace.h"
-#include "extensions/common/api/clipboard.h"
+#include "components/guest_view/buildflags/buildflags.h"
+#include "extensions/browser/api/storage/settings_namespace.h"
+#include "extensions/browser/api/storage/settings_observer.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_id.h"
 
+#if BUILDFLAG(IS_CHROMEOS)
+#include "extensions/browser/api/clipboard/clipboard_api_types.h"
+#include "extensions/common/api/clipboard.h"
+#endif
+
 class GURL;
+class KeyedServiceBaseFactory;
 
 namespace base {
-template <class T>
-class ObserverListThreadSafe;
+class SingleThreadTaskRunner;
 }
 
 namespace content {
 class BrowserContext;
 class WebContents;
-}
+}  // namespace content
 
 namespace guest_view {
 class GuestViewManagerDelegate;
 }  // namespace guest_view
+
+namespace value_store {
+class ValueStoreFactory;
+}
 
 namespace extensions {
 
 class AutomationInternalApiDelegate;
 class AppViewGuestDelegate;
 class ContentRulesRegistry;
-class DevicePermissionsPrompt;
+class CookiesApiDelegate;
 class DisplayInfoProvider;
 class ExtensionOptionsGuest;
 class ExtensionOptionsGuestDelegate;
@@ -52,18 +64,25 @@ class MessagingDelegate;
 class MetricsPrivateDelegate;
 class MimeHandlerViewGuest;
 class MimeHandlerViewGuestDelegate;
+class NativeMessageHost;
+class NativeMessagePort;
+class NativeMessagePortDispatcher;
 class NonNativeFileSystemDelegate;
 class RulesCacheDelegate;
-class SettingsObserver;
 class SupervisedUserExtensionsDelegate;
+class UsbDevicePermissionsPrompt;
 class ValueStoreCache;
-class ValueStoreFactory;
 class VirtualKeyboardDelegate;
+class WebstorePrivateAPIDelegate;
 struct WebRequestInfo;
 class WebViewGuest;
 class WebViewGuestDelegate;
 class WebViewPermissionHelper;
 class WebViewPermissionHelperDelegate;
+
+#if BUILDFLAG(IS_CHROMEOS)
+class ConsentProvider;
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 // Allows the embedder of the extensions module to customize its support for
 // API features. The embedder must create a single instance in the browser
@@ -76,30 +95,30 @@ class ExtensionsAPIClient {
   // Destruction clears the single instance.
   virtual ~ExtensionsAPIClient();
 
-  // Returns the single instance of |this|.
+  // Returns the single instance of `this`.
   static ExtensionsAPIClient* Get();
 
   // Storage API support.
 
   // Add any additional value store caches (e.g. for chrome.storage.managed)
-  // to |caches|. By default adds nothing.
+  // to `caches`. By default adds nothing.
   virtual void AddAdditionalValueStoreCaches(
       content::BrowserContext* context,
-      const scoped_refptr<ValueStoreFactory>& factory,
-      const scoped_refptr<base::ObserverListThreadSafe<SettingsObserver>>&
-          observers,
-      std::map<settings_namespace::Namespace, ValueStoreCache*>* caches);
+      const scoped_refptr<value_store::ValueStoreFactory>& factory,
+      SettingsChangedCallback observer,
+      std::map<settings_namespace::Namespace,
+               raw_ptr<ValueStoreCache, CtnExperimental>>* caches);
 
   // Attaches any extra web contents helpers (like ExtensionWebContentsObserver)
-  // to |web_contents|.
-  virtual void AttachWebContentsHelpers(content::WebContents* web_contents)
-      const;
+  // to `web_contents`.
+  virtual void AttachWebContentsHelpers(
+      content::WebContents* web_contents) const;
 
   // Returns true if the header should be hidden to extensions.
   virtual bool ShouldHideResponseHeader(const GURL& url,
                                         const std::string& header_name) const;
 
-  // Returns true if the given |request| should be hidden from extensions. This
+  // Returns true if the given `request` should be hidden from extensions. This
   // should be invoked on the UI thread.
   virtual bool ShouldHideBrowserNetworkRequest(
       content::BrowserContext* context,
@@ -113,7 +132,7 @@ class ExtensionsAPIClient {
 
   // Updates an extension's matched action count stored in an ExtensionAction
   // and optionally clears the extension's explicitly set badge text for the
-  // tab specified by |tab_id|.
+  // tab specified by `tab_id`.
   virtual void UpdateActionCount(content::BrowserContext* context,
                                  const ExtensionId& extension_id,
                                  int tab_id,
@@ -124,32 +143,45 @@ class ExtensionsAPIClient {
   virtual void ClearActionCount(content::BrowserContext* context,
                                 const Extension& extension);
 
+  // A method to open file: URL for tests (e.g. chrome.test.openFileUrl).
+  virtual void OpenFileUrlForTesting(const GURL& file_url,
+                                     content::BrowserContext* browser_context);
+
+#if BUILDFLAG(ENABLE_GUEST_VIEW)
   // Creates the AppViewGuestDelegate.
-  virtual AppViewGuestDelegate* CreateAppViewGuestDelegate() const;
+  virtual std::unique_ptr<AppViewGuestDelegate> CreateAppViewGuestDelegate()
+      const;
 
-  // Returns a delegate for ExtensionOptionsGuest. The caller owns the returned
-  // ExtensionOptionsGuestDelegate.
-  virtual ExtensionOptionsGuestDelegate* CreateExtensionOptionsGuestDelegate(
-      ExtensionOptionsGuest* guest) const;
+  // Creates a delegate for ExtensionOptionsGuest.
+  virtual std::unique_ptr<ExtensionOptionsGuestDelegate>
+  CreateExtensionOptionsGuestDelegate(ExtensionOptionsGuest* guest) const;
 
-  // Returns a delegate for GuestViewManagerDelegate.
+  // Creates a delegate for GuestViewManagerDelegate.
   virtual std::unique_ptr<guest_view::GuestViewManagerDelegate>
-  CreateGuestViewManagerDelegate(content::BrowserContext* context) const;
+  CreateGuestViewManagerDelegate() const;
 
+#if BUILDFLAG(ENABLE_EXTENSIONS)
   // Creates a delegate for MimeHandlerViewGuest.
   virtual std::unique_ptr<MimeHandlerViewGuestDelegate>
   CreateMimeHandlerViewGuestDelegate(MimeHandlerViewGuest* guest) const;
+#endif
 
-  // Returns a delegate for some of WebViewGuest's behavior. The caller owns the
-  // returned WebViewGuestDelegate.
-  virtual WebViewGuestDelegate* CreateWebViewGuestDelegate(
+  // Creates a delegate for some of WebViewGuest's behavior.
+  virtual std::unique_ptr<WebViewGuestDelegate> CreateWebViewGuestDelegate(
       WebViewGuest* web_view_guest) const;
 
-  // Returns a delegate for some of WebViewPermissionHelper's behavior. The
-  // caller owns the returned WebViewPermissionHelperDelegate.
-  virtual WebViewPermissionHelperDelegate*
+  // Creates a delegate for some of WebViewPermissionHelper's behavior.
+  virtual std::unique_ptr<WebViewPermissionHelperDelegate>
   CreateWebViewPermissionHelperDelegate(
       WebViewPermissionHelper* web_view_permission_helper) const;
+#endif
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // Returns an interface for requesting consent for file system API. The caller
+  // owns the returned ConsentProvider.
+  virtual std::unique_ptr<ConsentProvider> CreateConsentProvider(
+      content::BrowserContext* browser_context) const;
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   // TODO(wjmaclean): Remove this when (if) ContentRulesRegistry code moves
   // to extensions/browser/api.
@@ -157,18 +189,18 @@ class ExtensionsAPIClient {
       content::BrowserContext* browser_context,
       RulesCacheDelegate* cache_delegate) const;
 
-  // Creates a DevicePermissionsPrompt appropriate for the embedder.
-  virtual std::unique_ptr<DevicePermissionsPrompt>
-  CreateDevicePermissionsPrompt(content::WebContents* web_contents) const;
+  // Creates a UsbDevicePermissionsPrompt appropriate for the embedder.
+  virtual std::unique_ptr<UsbDevicePermissionsPrompt>
+  CreateUsbDevicePermissionsPrompt(content::WebContents* web_contents) const;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Returns true if device policy allows detaching a given USB device.
   virtual bool ShouldAllowDetachingUsb(int vid, int pid) const;
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
   // Returns a delegate for some of VirtualKeyboardAPI's behavior.
   virtual std::unique_ptr<VirtualKeyboardDelegate>
   CreateVirtualKeyboardDelegate(content::BrowserContext* browser_context) const;
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   // Creates a delegate for handling the management extension api.
   virtual ManagementAPIDelegate* CreateManagementAPIDelegate() const;
@@ -176,7 +208,8 @@ class ExtensionsAPIClient {
   // Creates a delegate for calling into the SupervisedUserService from the
   // Management API.
   virtual std::unique_ptr<SupervisedUserExtensionsDelegate>
-  CreateSupervisedUserExtensionsDelegate() const;
+  CreateSupervisedUserExtensionsDelegate(
+      content::BrowserContext* browser_context) const;
 
   // Creates and returns the DisplayInfoProvider used by the
   // chrome.system.display extension API.
@@ -187,16 +220,24 @@ class ExtensionsAPIClient {
   // MetricsPrivateAPI behavior.
   virtual MetricsPrivateDelegate* GetMetricsPrivateDelegate();
 
-  // Returns a delegate for embedder-specific chrome.fileSystem behavior.
-  virtual FileSystemDelegate* GetFileSystemDelegate();
-
   // Returns a delegate for embedder-specific extension messaging.
   virtual MessagingDelegate* GetMessagingDelegate();
+
+  // Returns a delegate for embedder-specific chrome.cookies behavior.
+  virtual CookiesApiDelegate* GetCookiesApiDelegate();
+
+// The APIs that need these methods are not supported on desktop Android.
+#if !BUILDFLAG(IS_ANDROID)
+  // Returns a delegate for embedder-specific chrome.fileSystem behavior.
+  virtual FileSystemDelegate* GetFileSystemDelegate();
 
   // Returns a delegate for the chrome.feedbackPrivate API.
   virtual FeedbackPrivateDelegate* GetFeedbackPrivateDelegate();
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+  virtual AutomationInternalApiDelegate* GetAutomationInternalApiDelegate();
+#endif  // !BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_CHROMEOS)
   // If supported by the embedder, returns a delegate for querying non-native
   // file systems.
   virtual NonNativeFileSystemDelegate* GetNonNativeFileSystemDelegate();
@@ -204,23 +245,29 @@ class ExtensionsAPIClient {
   // Returns a delegate for embedder-specific chrome.mediaPerceptionPrivate API
   // behavior.
   virtual MediaPerceptionAPIDelegate* GetMediaPerceptionAPIDelegate();
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
   // Saves image data on clipboard.
   virtual void SaveImageDataToClipboard(
-      const std::vector<char>& image_data,
+      std::vector<uint8_t> image_data,
       api::clipboard::ImageType type,
       AdditionalDataItemList additional_items,
       base::OnceClosure success_callback,
       base::OnceCallback<void(const std::string&)> error_callback);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
-
-  virtual AutomationInternalApiDelegate* GetAutomationInternalApiDelegate();
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   // Gets keyed service factories that are used in the other methods on this
   // class.
   virtual std::vector<KeyedServiceBaseFactory*> GetFactoryDependencies();
+
+  // Returns a delegate for the webstore_private API, or nullptr if the API is
+  // not supported.
+  virtual WebstorePrivateAPIDelegate* GetWebstorePrivateAPIDelegate();
+
+  virtual std::unique_ptr<NativeMessagePortDispatcher>
+  CreateNativeMessagePortDispatcher(
+      std::unique_ptr<NativeMessageHost> host,
+      base::WeakPtr<NativeMessagePort> port,
+      scoped_refptr<base::SingleThreadTaskRunner> message_service_task_runner);
 
   // NOTE: If this interface gains too many methods (perhaps more than 20) it
   // should be split into one interface per API.

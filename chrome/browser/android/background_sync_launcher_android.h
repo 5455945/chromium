@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,6 @@
 
 #include "base/android/jni_android.h"
 #include "base/lazy_instance.h"
-#include "base/macros.h"
 #include "base/time/time.h"
 #include "third_party/blink/public/mojom/background_sync/background_sync.mojom.h"
 
@@ -19,6 +18,10 @@
 class BackgroundSyncLauncherAndroid {
  public:
   static BackgroundSyncLauncherAndroid* Get();
+
+  BackgroundSyncLauncherAndroid(const BackgroundSyncLauncherAndroid&) = delete;
+  BackgroundSyncLauncherAndroid& operator=(
+      const BackgroundSyncLauncherAndroid&) = delete;
 
   // Schedules a BackgroundTaskScheduler task for |sync_type| with delay |delay|
   // to ensure that the browser is running when the device next goes online
@@ -34,8 +37,8 @@ class BackgroundSyncLauncherAndroid {
 
   static bool ShouldDisableBackgroundSync();
 
-  // TODO(crbug.com/514449): Remove this once the bots have their play services
-  // package updated before every test run.
+  // TODO(crbug.com/40428648): Remove this once the bots have their play
+  // services package updated before every test run.
   static void SetPlayServicesVersionCheckDisabledForTests(bool disabled);
 
   // Fires all pending Background Sync events across all storage partitions
@@ -43,7 +46,7 @@ class BackgroundSyncLauncherAndroid {
   // Fires one-shot Background Sync events for registration of |sync_type|.
   void FireBackgroundSyncEvents(
       blink::mojom::BackgroundSyncType sync_type,
-      const base::android::JavaParamRef<jobject>& j_runnable);
+      const base::android::JavaRef<jobject>& j_runnable);
 
  private:
   friend struct base::LazyInstanceTraitsBase<BackgroundSyncLauncherAndroid>;
@@ -59,8 +62,6 @@ class BackgroundSyncLauncherAndroid {
 
   base::android::ScopedJavaGlobalRef<jobject>
       java_background_sync_background_task_scheduler_launcher_;
-
-  DISALLOW_COPY_AND_ASSIGN(BackgroundSyncLauncherAndroid);
 };
 
 #endif  // CHROME_BROWSER_ANDROID_BACKGROUND_SYNC_LAUNCHER_ANDROID_H_

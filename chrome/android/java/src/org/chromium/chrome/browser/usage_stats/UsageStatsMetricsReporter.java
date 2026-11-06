@@ -1,14 +1,14 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.usage_stats;
 
 import org.chromium.base.metrics.RecordHistogram;
+import org.chromium.build.annotations.NullMarked;
 
-/**
- * Recorder for usage-stats related metrics events.
- */
+/** Recorder for usage-stats related metrics events. */
+@NullMarked
 public class UsageStatsMetricsReporter {
     public static void reportMetricsEvent(@UsageStatsMetricsEvent int event) {
         RecordHistogram.recordEnumeratedHistogram(

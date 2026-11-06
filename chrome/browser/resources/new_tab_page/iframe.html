@@ -1,15 +1,5 @@
-<style>
-  :host(:not([hidden])) {
-    display: block;
-  }
-
-  #iframe {
-    border: none;
-    border-radius: inherit;
-    height: inherit;
-    max-height: inherit;
-    max-width: inherit;
-    width: inherit;
-  }
-</style>
-<iframe id="iframe" src="[[src_]]"></iframe>
+<!-- #html_wrapper_imports_start
+import {nothing} from 'chrome://resources/lit/v3_0/lit.rollup.js';
+#html_wrapper_imports_end -->
+<iframe id="iframe" allow="${this.allow || nothing}" .src="${this.getSrc_()}">
+</iframe>

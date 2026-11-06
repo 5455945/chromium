@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "components/thin_webview/internal/compositor_view_impl.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -19,53 +19,56 @@ namespace web_contents_delegate_android {
 class WebContentsDelegateAndroid;
 }  // namespace web_contents_delegate_android
 
-namespace thin_webview {
-namespace android {
+namespace thin_webview::android {
 
 // Native counterpart of ThinWebViewImpl.java.
 class ThinWebView : public content::WebContentsObserver {
  public:
   ThinWebView(JNIEnv* env,
-              jobject obj,
+              const base::android::JavaRef<jobject>& obj,
               CompositorView* compositor_view,
               ui::WindowAndroid* window_android);
-  ~ThinWebView() override;
 
-  void Destroy(JNIEnv* env, const base::android::JavaParamRef<jobject>& object);
+  ThinWebView(const ThinWebView&) = delete;
+  ThinWebView& operator=(const ThinWebView&) = delete;
+
+  ~ThinWebView() override;
 
   void SetWebContents(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& object,
-      const base::android::JavaParamRef<jobject>& jweb_contents,
-      const base::android::JavaParamRef<jobject>& jweb_contents_delegate);
+      const base::android::JavaRef<jobject>& jweb_contents,
+      const base::android::JavaRef<jobject>& jweb_contents_delegate,
+      bool enable_permission_requests,
+      bool support_theming,
+      bool enable_browser_autofill);
 
-  void SizeChanged(JNIEnv* env,
-                   const base::android::JavaParamRef<jobject>& object,
-                   jint width,
-                   jint height);
+  void SetContextMenuPopulatorFactory(
+      JNIEnv* env,
+      const base::android::JavaRef<jobject>& jpopulator_factory);
+
+  void SizeChanged(JNIEnv* env, int32_t width, int32_t height);
 
  private:
   // content::WebContentsObserver overrides:
-  void DocumentAvailableInMainFrame(
-      content::RenderFrameHost* render_frame_host) override;
+  void PrimaryPageChanged(content::Page& page) override;
 
   void SetWebContents(
       content::WebContents* web_contents,
-      web_contents_delegate_android::WebContentsDelegateAndroid* delegate);
+      web_contents_delegate_android::WebContentsDelegateAndroid* delegate,
+      bool enable_permission_requests,
+      bool support_theming,
+      bool enable_browser_autofill);
   void ResizeWebContents(const gfx::Size& size);
 
   base::android::ScopedJavaGlobalRef<jobject> obj_;
-  CompositorView* compositor_view_;
-  ui::WindowAndroid* window_android_;
-  content::WebContents* web_contents_;
+  raw_ptr<CompositorView, DanglingUntriaged> compositor_view_;
+  raw_ptr<ui::WindowAndroid> window_android_;
   std::unique_ptr<web_contents_delegate_android::WebContentsDelegateAndroid>
       web_contents_delegate_;
   gfx::Size view_size_;
-
-  DISALLOW_COPY_AND_ASSIGN(ThinWebView);
+  base::WeakPtr<content::WebContents> web_contents_;
 };
 
-}  // namespace android
-}  // namespace thin_webview
+}  // namespace thin_webview::android
 
 #endif  // COMPONENTS_THIN_WEBVIEW_INTERNAL_THIN_WEBVIEW_H_

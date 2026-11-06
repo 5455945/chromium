@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 
 #include <memory>
 
-#include "base/macros.h"
 #include "media/base/audio_bus.h"
 #include "media/base/media_export.h"
 
@@ -22,11 +21,19 @@ class MEDIA_EXPORT AudioFifo {
  public:
   // Creates a new AudioFifo and allocates |channels| of length |frames|.
   AudioFifo(int channels, int frames);
+
+  AudioFifo(const AudioFifo&) = delete;
+  AudioFifo& operator=(const AudioFifo&) = delete;
+
   virtual ~AudioFifo();
 
-  // Pushes all audio channel data from |source| to the FIFO.
+  // Pushes all audio channel data from `source` to the FIFO.
   // Push() will crash if the allocated space is insufficient.
   void Push(const AudioBus* source);
+
+  // Pushes the number of `source_size` of frames in all audio channel data from
+  // `source` to the FIFO.
+  void Push(const AudioBus* source, int source_size);
 
   // Consumes |frames_to_consume| audio frames from the FIFO and copies
   // them to |destination| starting at position |start_frame|.
@@ -39,9 +46,9 @@ class MEDIA_EXPORT AudioFifo {
   void Clear();
 
   // Number of actual audio frames in the FIFO.
-  int frames() const;
+  size_t frames() const { return frames_; }
 
-  int max_frames() const { return max_frames_; }
+  size_t max_frames() const { return max_frames_; }
 
  private:
   // The actual FIFO is an audio bus implemented as a ring buffer.
@@ -49,19 +56,16 @@ class MEDIA_EXPORT AudioFifo {
 
   // Maximum number of elements the FIFO can contain.
   // This value is set by |frames| in the constructor.
-  const int max_frames_;
+  const size_t max_frames_;
 
   // Number of actual elements in the FIFO.
-  int frames_pushed_;
-  int frames_consumed_;
+  size_t frames_ = 0u;
 
   // Current read position.
-  int read_pos_;
+  size_t read_pos_ = 0u;
 
   // Current write position.
-  int write_pos_;
-
-  DISALLOW_COPY_AND_ASSIGN(AudioFifo);
+  size_t write_pos_ = 0u;
 };
 
 }  // namespace media

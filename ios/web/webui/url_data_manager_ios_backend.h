@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,8 +10,6 @@
 #include <string>
 #include <vector>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
 #include "base/supports_user_data.h"
 #include "ios/web/public/webui/url_data_source_ios.h"
 #include "ios/web/webui/url_data_manager_ios.h"
@@ -36,9 +34,13 @@ class URLDataManagerIOSBackend : public base::SupportsUserData::Data {
   typedef int RequestID;
 
   URLDataManagerIOSBackend();
+
+  URLDataManagerIOSBackend(const URLDataManagerIOSBackend&) = delete;
+  URLDataManagerIOSBackend& operator=(const URLDataManagerIOSBackend&) = delete;
+
   ~URLDataManagerIOSBackend() override;
 
-  // Invoked to create the protocol handler for chrome://. |is_incognito| should
+  // Invoked to create the protocol handler for chrome://. `is_incognito` should
   // be set for incognito browser states. Called on the UI thread.
   static std::unique_ptr<net::URLRequestJobFactory::ProtocolHandler>
   CreateProtocolHandler(BrowserState* browser_state);
@@ -55,15 +57,15 @@ class URLDataManagerIOSBackend : public base::SupportsUserData::Data {
  private:
   friend class URLRequestChromeJob;
 
-  typedef std::map<std::string, scoped_refptr<URLDataSourceIOSImpl> >
+  typedef std::map<std::string, scoped_refptr<URLDataSourceIOSImpl>>
       DataSourceMap;
   typedef std::map<RequestID, URLRequestChromeJob*> PendingRequestMap;
 
   // Called by the job when it's starting up.
-  // Returns false if |url| is not a URL managed by this object.
+  // Returns false if `url` is not a URL managed by this object.
   bool StartRequest(const net::URLRequest* request, URLRequestChromeJob* job);
 
-  // Helper function to call StartDataRequest on |source|'s delegate. This is
+  // Helper function to call StartDataRequest on `source`'s delegate. This is
   // needed because while we want to call URLDataSourceIOSDelegate's method, we
   // need to add a refcount on the source.
   static void CallStartRequest(scoped_refptr<URLDataSourceIOSImpl> source,
@@ -73,8 +75,8 @@ class URLDataManagerIOSBackend : public base::SupportsUserData::Data {
   // Remove a request from the list of pending requests.
   void RemoveRequest(URLRequestChromeJob* job);
 
-  // Returns true if the job exists in |pending_requests_|. False otherwise.
-  // Called by ~URLRequestChromeJob to verify that |pending_requests_| is kept
+  // Returns true if the job exists in `pending_requests_`. False otherwise.
+  // Called by ~URLRequestChromeJob to verify that `pending_requests_` is kept
   // up to date.
   bool HasPendingJob(URLRequestChromeJob* job) const;
 
@@ -92,8 +94,6 @@ class URLDataManagerIOSBackend : public base::SupportsUserData::Data {
 
   // The ID we'll use for the next request we receive.
   RequestID next_request_id_;
-
-  DISALLOW_COPY_AND_ASSIGN(URLDataManagerIOSBackend);
 };
 
 }  // namespace web

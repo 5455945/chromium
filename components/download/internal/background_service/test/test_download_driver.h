@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include <map>
 #include <memory>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "components/download/internal/background_service/download_driver.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 
@@ -19,6 +19,10 @@ namespace test {
 class TestDownloadDriver : public DownloadDriver {
  public:
   TestDownloadDriver();
+
+  TestDownloadDriver(const TestDownloadDriver&) = delete;
+  TestDownloadDriver& operator=(const TestDownloadDriver&) = delete;
+
   ~TestDownloadDriver() override;
 
   // Marks download driver as ready, used to test logic that depends on
@@ -46,19 +50,21 @@ class TestDownloadDriver : public DownloadDriver {
       const net::NetworkTrafficAnnotationTag& traffic_annotation) override;
   void Remove(const std::string& guid, bool remove_file) override;
   void Pause(const std::string& guid) override;
-  void Resume(const std::string& guid) override;
-  absl::optional<DriverEntry> Find(const std::string& guid) override;
+  void ResumeWithFactory(
+      const std::string& guid,
+      scoped_refptr<network::SharedURLLoaderFactory> factory,
+      const std::optional<url::Origin>& request_initiator,
+      const std::optional<net::IsolationInfo>& isolation_info) override;
+  std::optional<DriverEntry> Find(const std::string& guid) override;
   std::set<std::string> GetActiveDownloads() override;
   size_t EstimateMemoryUsage() const override;
 
  private:
   bool is_ready_;
-  DownloadDriver::Client* client_;
+  raw_ptr<DownloadDriver::Client> client_;
 
   // Map of guid --> DriverEntry.
   std::map<std::string, DriverEntry> entries_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestDownloadDriver);
 };
 
 }  // namespace test

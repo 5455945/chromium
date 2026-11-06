@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,10 +13,10 @@
 #include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/timer/elapsed_timer.h"
-#include "base/trace_event/base_tracing.h"
+#include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 
-#if defined(OS_POSIX) || defined(OS_FUCHSIA)
+#if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
 #include <errno.h>
 #endif
 
@@ -28,11 +28,9 @@ File::Info::~Info() = default;
 
 File::File() = default;
 
-#if !defined(OS_NACL)
 File::File(const FilePath& path, uint32_t flags) : error_details_(FILE_OK) {
   Initialize(path, flags);
 }
-#endif
 
 File::File(ScopedPlatformFile platform_file)
     : File(std::move(platform_file), false) {}
@@ -41,16 +39,14 @@ File::File(PlatformFile platform_file) : File(platform_file, false) {}
 
 File::File(ScopedPlatformFile platform_file, bool async)
     : file_(std::move(platform_file)), error_details_(FILE_OK), async_(async) {
-#if defined(OS_POSIX) || defined(OS_FUCHSIA)
+#if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
   DCHECK_GE(file_.get(), -1);
 #endif
 }
 
 File::File(PlatformFile platform_file, bool async)
-    : file_(platform_file),
-      error_details_(FILE_OK),
-      async_(async) {
-#if defined(OS_POSIX) || defined(OS_FUCHSIA)
+    : file_(platform_file), error_details_(FILE_OK), async_(async) {
+#if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
   DCHECK_GE(platform_file, -1);
 #endif
 }
@@ -59,10 +55,15 @@ File::File(Error error_details) : error_details_(error_details) {}
 
 File::File(File&& other)
     : file_(other.TakePlatformFile()),
-      tracing_path_(other.tracing_path_),
+#if BUILDFLAG(IS_ANDROID)
+      java_parcel_file_descriptor_(
+          std::move(other.java_parcel_file_descriptor_)),
+#endif
+      path_(other.path_),
       error_details_(other.error_details()),
       created_(other.created()),
-      async_(other.async_) {}
+      async_(other.async_) {
+}
 
 File::~File() {
   // Go through the AssertIOAllowed logic.
@@ -72,19 +73,21 @@ File::~File() {
 File& File::operator=(File&& other) {
   Close();
   SetPlatformFile(other.TakePlatformFile());
-  tracing_path_ = other.tracing_path_;
+#if BUILDFLAG(IS_ANDROID)
+  java_parcel_file_descriptor_ = std::move(other.java_parcel_file_descriptor_);
+#endif
+  path_ = other.path_;
   error_details_ = other.error_details();
   created_ = other.created();
   async_ = other.async_;
   return *this;
 }
 
-#if !defined(OS_NACL)
 void File::Initialize(const FilePath& path, uint32_t flags) {
   if (path.ReferencesParent()) {
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
     ::SetLastError(ERROR_ACCESS_DENIED);
-#elif defined(OS_POSIX) || defined(OS_FUCHSIA)
+#elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
     errno = EACCES;
 #else
 #error Unsupported platform
@@ -92,33 +95,71 @@ void File::Initialize(const FilePath& path, uint32_t flags) {
     error_details_ = FILE_ERROR_ACCESS_DENIED;
     return;
   }
-  if (FileTracing::IsCategoryEnabled())
-    tracing_path_ = path;
+  if (TRACE_EVENT_CATEGORY_ENABLED(TRACE_DISABLED_BY_DEFAULT("file"))) {
+    path_ = path;
+  }
   SCOPED_FILE_TRACE("Initialize");
   DoInitialize(path, flags);
 }
-#endif
+
+std::optional<size_t> File::Read(int64_t offset, span<uint8_t> data) {
+  span<char> chars = base::as_writable_chars(data);
+  int size = checked_cast<int>(chars.size());
+  // SAFETY: `chars.size()` describes valid portion of `chars.data()`.
+  int result = UNSAFE_BUFFERS(Read(offset, chars.data(), size));
+  if (result < 0) {
+    return std::nullopt;
+  }
+  return checked_cast<size_t>(result);
+}
 
 bool File::ReadAndCheck(int64_t offset, span<uint8_t> data) {
-  int size = checked_cast<int>(data.size());
-  return Read(offset, reinterpret_cast<char*>(data.data()), size) == size;
+  return Read(offset, data) == data.size();
+}
+
+std::optional<size_t> File::ReadAtCurrentPos(span<uint8_t> data) {
+  span<char> chars = base::as_writable_chars(data);
+  int size = checked_cast<int>(chars.size());
+  // SAFETY: `chars.size()` describes valid portion of `chars.data()`.
+  int result = UNSAFE_BUFFERS(ReadAtCurrentPos(chars.data(), size));
+  if (result < 0) {
+    return std::nullopt;
+  }
+  return checked_cast<size_t>(result);
 }
 
 bool File::ReadAtCurrentPosAndCheck(span<uint8_t> data) {
-  int size = checked_cast<int>(data.size());
-  return ReadAtCurrentPos(reinterpret_cast<char*>(data.data()), size) == size;
+  return ReadAtCurrentPos(data) == data.size();
+}
+
+std::optional<size_t> File::Write(int64_t offset, span<const uint8_t> data) {
+  span<const char> chars = base::as_chars(data);
+  int size = checked_cast<int>(chars.size());
+  // SAFETY: `chars.size()` describes valid portion of `chars.data()`.
+  int result = UNSAFE_BUFFERS(Write(offset, chars.data(), size));
+  if (result < 0) {
+    return std::nullopt;
+  }
+  return checked_cast<size_t>(result);
 }
 
 bool File::WriteAndCheck(int64_t offset, span<const uint8_t> data) {
-  int size = checked_cast<int>(data.size());
-  return Write(offset, reinterpret_cast<const char*>(data.data()), size) ==
-         size;
+  return Write(offset, data) == data.size();
+}
+
+std::optional<size_t> File::WriteAtCurrentPos(span<const uint8_t> data) {
+  span<const char> chars = base::as_chars(data);
+  int size = checked_cast<int>(chars.size());
+  // SAFETY: `chars.size()` describes valid portion of `chars.data()`.
+  int result = UNSAFE_BUFFERS(WriteAtCurrentPos(chars.data(), size));
+  if (result < 0) {
+    return std::nullopt;
+  }
+  return checked_cast<size_t>(result);
 }
 
 bool File::WriteAtCurrentPosAndCheck(span<const uint8_t> data) {
-  int size = checked_cast<int>(data.size());
-  return WriteAtCurrentPos(reinterpret_cast<const char*>(data.data()), size) ==
-         size;
+  return WriteAtCurrentPos(data) == data.size();
 }
 
 // static
@@ -163,7 +204,6 @@ std::string File::ErrorToString(Error error) {
   }
 
   NOTREACHED();
-  return "";
 }
 
 void File::WriteIntoTrace(perfetto::TracedValue context) const {

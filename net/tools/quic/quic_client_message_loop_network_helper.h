@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -13,15 +13,14 @@
 #include <memory>
 
 #include "base/command_line.h"
-#include "base/macros.h"
 #include "net/base/ip_address.h"
 #include "net/base/ip_endpoint.h"
 #include "net/http/http_response_headers.h"
 #include "net/quic/platform/impl/quic_chromium_clock.h"
 #include "net/quic/quic_chromium_packet_reader.h"
-#include "net/third_party/quiche/src/quic/core/http/quic_spdy_stream.h"
-#include "net/third_party/quiche/src/quic/core/quic_config.h"
-#include "net/third_party/quiche/src/quic/tools/quic_spdy_client_base.h"
+#include "net/third_party/quiche/src/quiche/quic/core/http/quic_spdy_stream.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_config.h"
+#include "net/third_party/quiche/src/quiche/quic/tools/quic_spdy_client_base.h"
 
 namespace net {
 
@@ -38,6 +37,11 @@ class QuicClientMessageLooplNetworkHelper
   QuicClientMessageLooplNetworkHelper(quic::QuicChromiumClock* clock,
                                       quic::QuicClientBase* client);
 
+  QuicClientMessageLooplNetworkHelper(
+      const QuicClientMessageLooplNetworkHelper&) = delete;
+  QuicClientMessageLooplNetworkHelper& operator=(
+      const QuicClientMessageLooplNetworkHelper&) = delete;
+
   ~QuicClientMessageLooplNetworkHelper() override;
 
   // QuicChromiumPacketReader::Visitor
@@ -49,7 +53,7 @@ class QuicClientMessageLooplNetworkHelper
   // From NetworkHelper.
   void RunEventLoop() override;
   bool CreateUDPSocketAndBind(quic::QuicSocketAddress server_address,
-                              quic::QuicIpAddress bind_to_address,
+                              quiche::QuicheIpAddress bind_to_address,
                               int bind_to_port) override;
   void CleanUpAllUDPSockets() override;
   quic::QuicSocketAddress GetLatestClientAddress() const override;
@@ -66,12 +70,10 @@ class QuicClientMessageLooplNetworkHelper
 
   std::unique_ptr<QuicChromiumPacketReader> packet_reader_;
 
-  bool packet_reader_started_;
+  bool packet_reader_started_ = false;
 
   quic::QuicChromiumClock* clock_;
   quic::QuicClientBase* client_;
-
-  DISALLOW_COPY_AND_ASSIGN(QuicClientMessageLooplNetworkHelper);
 };
 
 }  // namespace net

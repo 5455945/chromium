@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,8 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_CSS_PROPERTIES_LONGHANDS_VARIABLE_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_PROPERTIES_LONGHANDS_VARIABLE_H_
 
+#include "base/notreached.h"
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/properties/longhand.h"
 
 namespace blink {
@@ -20,12 +22,9 @@ class CORE_EXPORT Variable : public Longhand {
   constexpr Variable() : Variable(true) {}
 
   bool IsAffectedByAll() const override { return false; }
-  CSSPropertyName GetCSSPropertyName() const override {
-    NOTREACHED();
-    return CSSPropertyName("");
-  }
+  CSSPropertyName GetCSSPropertyName() const override { NOTREACHED(); }
   const char* GetPropertyName() const override { return "variable"; }
-  const WTF::AtomicString& GetPropertyNameAtomicString() const override {
+  const AtomicString& GetPropertyNameAtomicString() const override {
     DEFINE_STATIC_LOCAL(const AtomicString, name, ("variable"));
     return name;
   }
@@ -36,7 +35,9 @@ class CORE_EXPORT Variable : public Longhand {
   explicit constexpr Variable(CSSProperty::Flags flags)
       : Longhand(CSSPropertyID::kVariable,
                  kProperty | kValidForFirstLetter | kValidForFirstLine |
-                     kValidForMarker | kValidForHighlight | flags,
+                     kValidForMarker | kValidForHighlightLegacy |
+                     kValidForHighlight | kNotVisited | kNotAnimation |
+                     kNotLegacyOverlapping | flags,
                  '\0') {}
 };
 

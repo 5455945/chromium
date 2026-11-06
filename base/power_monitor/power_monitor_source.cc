@@ -1,10 +1,12 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/power_monitor/power_monitor_source.h"
 
+#include "base/notreached.h"
 #include "base/power_monitor/power_monitor.h"
+#include "base/power_monitor/power_observer.h"
 #include "build/build_config.h"
 
 namespace base {
@@ -13,34 +15,38 @@ PowerMonitorSource::PowerMonitorSource() = default;
 PowerMonitorSource::~PowerMonitorSource() = default;
 
 PowerThermalObserver::DeviceThermalState
-PowerMonitorSource::GetCurrentThermalState() {
+PowerMonitorSource::GetCurrentThermalState() const {
   return PowerThermalObserver::DeviceThermalState::kUnknown;
+}
+
+int PowerMonitorSource::GetInitialSpeedLimit() const {
+  return PowerThermalObserver::kSpeedLimitMax;
 }
 
 void PowerMonitorSource::SetCurrentThermalState(
     PowerThermalObserver::DeviceThermalState state) {}
 
-#if defined(OS_ANDROID)
-int PowerMonitorSource::GetRemainingBatteryCapacity() {
-  return 0;
+bool PowerMonitorSource::IsPowerSaverModeEnabled() const {
+  return false;
 }
-#endif  // defined(OS_ANDROID)
 
 // static
 void PowerMonitorSource::ProcessPowerEvent(PowerEvent event_id) {
-  if (!PowerMonitor::IsInitialized())
+  auto* power_monitor = base::PowerMonitor::GetInstance();
+  if (!power_monitor->IsInitialized()) {
     return;
+  }
 
   switch (event_id) {
     case POWER_STATE_EVENT:
-      PowerMonitor::NotifyPowerStateChange(
-          PowerMonitor::Source()->IsOnBatteryPower());
+      power_monitor->NotifyPowerStateChange(
+          power_monitor->Source()->GetBatteryPowerStatus());
       break;
-      case RESUME_EVENT:
-        PowerMonitor::NotifyResume();
+    case RESUME_EVENT:
+      power_monitor->NotifyResume();
       break;
-      case SUSPEND_EVENT:
-        PowerMonitor::NotifySuspend();
+    case SUSPEND_EVENT:
+      power_monitor->NotifySuspend();
       break;
   }
 }
@@ -48,9 +54,26 @@ void PowerMonitorSource::ProcessPowerEvent(PowerEvent event_id) {
 // static
 void PowerMonitorSource::ProcessThermalEvent(
     PowerThermalObserver::DeviceThermalState new_thermal_state) {
-  if (!PowerMonitor::IsInitialized())
-    return;
-  PowerMonitor::NotifyThermalStateChange(new_thermal_state);
+  if (auto* power_monitor = base::PowerMonitor::GetInstance();
+      power_monitor->IsInitialized()) {
+    power_monitor->NotifyThermalStateChange(new_thermal_state);
+  }
+}
+
+// static
+void PowerMonitorSource::ProcessSpeedLimitEvent(int speed_limit) {
+  if (auto* power_monitor = base::PowerMonitor::GetInstance();
+      power_monitor->IsInitialized()) {
+    power_monitor->NotifySpeedLimitChange(speed_limit);
+  }
+}
+
+// static
+void PowerMonitorSource::ProcessPowerSaverModeEvent(bool enabled) {
+  if (auto* power_monitor = base::PowerMonitor::GetInstance();
+      power_monitor->IsInitialized()) {
+    power_monitor->NotifyPowerSaverModeChange(enabled);
+  }
 }
 
 // static
@@ -69,7 +92,6 @@ const char* PowerMonitorSource::DeviceThermalStateToString(
       return "Critical";
   }
   NOTREACHED();
-  return "Unknown";
 }
 
 }  // namespace base

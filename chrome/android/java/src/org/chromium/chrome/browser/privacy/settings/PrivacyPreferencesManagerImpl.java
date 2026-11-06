@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,32 +9,50 @@ import android.content.Context;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 
-import androidx.annotation.VisibleForTesting;
+import org.jni_zero.JniType;
+import org.jni_zero.NativeMethods;
 
 import org.chromium.base.CommandLine;
 import org.chromium.base.ContextUtils;
-import org.chromium.base.annotations.NativeMethods;
-import org.chromium.chrome.browser.device.DeviceClassManager;
+import org.chromium.base.ResettersForTesting;
+import org.chromium.base.ThreadUtils;
+import org.chromium.base.shared_preferences.SharedPreferencesManager;
+import org.chromium.base.supplier.NonNullObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableNonNullObservableSupplier;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
+import org.chromium.chrome.browser.policy.PolicyServiceFactory;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
-import org.chromium.chrome.browser.preferences.SharedPreferencesManager;
+import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.components.minidump_uploader.util.NetworkPermissionUtil;
-import org.chromium.content_public.browser.BrowserStartupController;
+import org.chromium.components.policy.PolicyMap;
+import org.chromium.components.policy.PolicyService;
 
 /**
  * Manages preferences related to privacy, metrics reporting, prerendering, and network prediction.
  */
+@NullMarked
 public class PrivacyPreferencesManagerImpl implements PrivacyPreferencesManager {
     @SuppressLint("StaticFieldLeak")
-    private static PrivacyPreferencesManagerImpl sInstance;
+    private static @Nullable PrivacyPreferencesManagerImpl sInstance;
 
     private final Context mContext;
     private final SharedPreferencesManager mPrefs;
+    private @Nullable PolicyService mPolicyService;
+    private PolicyService.@Nullable Observer mPolicyServiceObserver;
 
-    @VisibleForTesting
+    // Supplier for other class to observe. Null until the supplier is requested.
+    private @Nullable SettableNonNullObservableSupplier<Boolean> mCrashUploadPermittedSupplier;
+
+    private volatile boolean mNativeInitialized;
+
     PrivacyPreferencesManagerImpl(Context context) {
         mContext = context;
-        mPrefs = SharedPreferencesManager.getInstance();
+        mPrefs = ChromeSharedPreferences.getInstance();
+        mNativeInitialized = false;
     }
 
     public static PrivacyPreferencesManagerImpl getInstance() {
@@ -42,6 +60,50 @@ public class PrivacyPreferencesManagerImpl implements PrivacyPreferencesManager 
             sInstance = new PrivacyPreferencesManagerImpl(ContextUtils.getApplicationContext());
         }
         return sInstance;
+    }
+
+    public static void setInstanceForTesting(PrivacyPreferencesManagerImpl instance) {
+        var oldValue = sInstance;
+        sInstance = instance;
+        ResettersForTesting.register(() -> sInstance = oldValue);
+    }
+
+    public void onNativeInitialized() {
+        if (mNativeInitialized) return;
+
+        mNativeInitialized = true;
+
+        // Cache the metrics restructurization state in SharedPreferences immediately when
+        // native is initialized so that it is safe to access pre-native in future sessions.
+        shouldUseMetricsChoiceRestructure();
+
+        createPolicyServiceObserver();
+    }
+
+    protected void createPolicyServiceObserver() {
+        if (mPolicyService != null) {
+            return;
+        }
+
+        mPolicyService = PolicyServiceFactory.getGlobalPolicyService();
+
+        mPolicyServiceObserver =
+                new PolicyService.Observer() {
+                    @Override
+                    public void onPolicyServiceInitialized() {
+                        syncUsageAndCrashReportingPermittedByPolicy();
+                    }
+
+                    @Override
+                    public void onPolicyUpdated(PolicyMap previous, PolicyMap current) {
+                        syncUsageAndCrashReportingPermittedByPolicy();
+                    }
+                };
+
+        if (mPolicyService.isInitializationComplete()) {
+            syncUsageAndCrashReportingPermittedByPolicy();
+        }
+        mPolicyService.addObserver(mPolicyServiceObserver);
     }
 
     protected boolean isNetworkAvailable() {
@@ -56,44 +118,73 @@ public class PrivacyPreferencesManagerImpl implements PrivacyPreferencesManager 
                 (ConnectivityManager) mContext.getSystemService(Context.CONNECTIVITY_SERVICE);
         // Android telephony team said it is OK to continue using getNetworkInfo() for our purposes.
         // We cannot use ConnectivityManager#getAllNetworks() because that one only reports enabled
-        // networks. See crbug.com/532455.
+        // networks. See crbug.com/40435982.
         @SuppressWarnings("deprecation")
         NetworkInfo networkInfo =
                 connectivityManager.getNetworkInfo(ConnectivityManager.TYPE_MOBILE);
         return networkInfo != null;
     }
 
-    @Override
-    public boolean shouldPrerender() {
-        if (!DeviceClassManager.enablePrerendering()) return false;
-        return canPrefetchAndPrerender();
+    /**
+     * Get the supplier for isUsageAndCrashReportingPermitted. If the supplier is null, initialize a
+     * new one. Ui Thread only.
+     */
+    protected SettableNonNullObservableSupplier<Boolean> getCrashUploadPermittedSupplier() {
+        ThreadUtils.assertOnUiThread();
+        if (mCrashUploadPermittedSupplier == null) {
+            mCrashUploadPermittedSupplier =
+                    ObservableSuppliers.createNonNull(isUsageAndCrashReportingPermitted());
+        }
+        return mCrashUploadPermittedSupplier;
+    }
+
+    public void syncUsageAndCrashReportingPermittedByPolicy() {
+        // Skip if native browser process is not yet fully initialized.
+        if (!mNativeInitialized) return;
+
+        mPrefs.writeBoolean(
+                ChromePreferenceKeys.PRIVACY_METRICS_REPORTING_PERMITTED_BY_POLICY,
+                !PrivacyPreferencesManagerImplJni.get().isMetricsReportingDisabledByPolicy());
     }
 
     @Override
     public void setUsageAndCrashReporting(boolean enabled) {
-        mPrefs.writeBoolean(ChromePreferenceKeys.PRIVACY_METRICS_REPORTING, enabled);
+        mPrefs.writeBoolean(
+                ChromePreferenceKeys.PRIVACY_METRICS_REPORTING_PERMITTED_BY_USER, enabled);
         syncUsageAndCrashReportingPrefs();
     }
 
     @Override
     public void syncUsageAndCrashReportingPrefs() {
-        // Skip if native browser process is not yet fully initialized.
-        if (!BrowserStartupController.getInstance().isNativeStarted()) return;
-
-        setMetricsReportingEnabled(isUsageAndCrashReportingPermittedByUser());
+        setMetricsReportingEnabled(isUsageAndCrashReportingPermitted());
     }
 
     @Override
-    public void setClientInMetricsSample(boolean inSample) {
-        mPrefs.writeBoolean(ChromePreferenceKeys.PRIVACY_METRICS_IN_SAMPLE, inSample);
+    public void setClientInSampleForMetrics(boolean inSample) {
+        mPrefs.writeBoolean(ChromePreferenceKeys.PRIVACY_IN_SAMPLE_FOR_METRICS, inSample);
     }
 
     @Override
-    public boolean isClientInMetricsSample() {
+    public boolean isClientInSampleForMetrics() {
+        // The default value is true to avoid sampling out metrics that occur before native code has
+        // been initialized on first run. I.e., clients are presumed to be in-sample until we know
+        // otherwise. Note that metrics reporting is also gated on the user's pref, not just being
+        // in-sample.
+        return mPrefs.readBoolean(ChromePreferenceKeys.PRIVACY_IN_SAMPLE_FOR_METRICS, true);
+    }
+
+    @Override
+    public void setClientInSampleForCrashes(boolean inSampleForCrash) {
+        mPrefs.writeBoolean(ChromePreferenceKeys.PRIVACY_IN_SAMPLE_FOR_CRASHES, inSampleForCrash);
+    }
+
+    @Override
+    public boolean isClientInSampleForCrashes() {
         // The default value is true to avoid sampling out crashes that occur before native code has
-        // been initialized on first run. We'd rather have some extra crashes than none from that
-        // time.
-        return mPrefs.readBoolean(ChromePreferenceKeys.PRIVACY_METRICS_IN_SAMPLE, true);
+        // been initialized on first run.  I.e., clients are presumed to be in-sample until we know
+        // otherwise. Note that crash reporting is also gated on the user's pref, not just being
+        // in-sample.
+        return mPrefs.readBoolean(ChromePreferenceKeys.PRIVACY_IN_SAMPLE_FOR_CRASHES, true);
     }
 
     @Override
@@ -104,28 +195,27 @@ public class PrivacyPreferencesManagerImpl implements PrivacyPreferencesManager 
     }
 
     @Override
+    public boolean isUsageAndCrashReportingPermittedByPolicy() {
+        return mPrefs.readBoolean(
+                ChromePreferenceKeys.PRIVACY_METRICS_REPORTING_PERMITTED_BY_POLICY, true);
+    }
+
+    @Override
     public boolean isUsageAndCrashReportingPermittedByUser() {
-        return mPrefs.readBoolean(ChromePreferenceKeys.PRIVACY_METRICS_REPORTING, false);
+        return mPrefs.readBoolean(
+                ChromePreferenceKeys.PRIVACY_METRICS_REPORTING_PERMITTED_BY_USER, false);
     }
 
     @Override
     public boolean isUploadEnabledForTests() {
-        return CommandLine.getInstance().hasSwitch(ChromeSwitches.FORCE_CRASH_DUMP_UPLOAD);
+        CommandLine commandLine = CommandLine.getInstance();
+        return commandLine != null && commandLine.hasSwitch(ChromeSwitches.FORCE_CRASH_DUMP_UPLOAD);
     }
 
     @Override
     public boolean isMetricsUploadPermitted() {
         return isNetworkAvailable()
-                && (isUsageAndCrashReportingPermittedByUser() || isUploadEnabledForTests());
-    }
-
-    /**
-     * Checks whether network predictions are allowed given preferences and current network
-     * connection type.
-     * @return Whether network predictions are allowed.
-     */
-    private boolean canPrefetchAndPrerender() {
-        return PrivacyPreferencesManagerImplJni.get().canPrefetchAndPrerender();
+                && (isUsageAndCrashReportingPermitted() || isUploadEnabledForTests());
     }
 
     @Override
@@ -136,36 +226,53 @@ public class PrivacyPreferencesManagerImpl implements PrivacyPreferencesManager 
     @Override
     public void setMetricsReportingEnabled(boolean enabled) {
         PrivacyPreferencesManagerImplJni.get().setMetricsReportingEnabled(enabled);
+        getCrashUploadPermittedSupplier().set(enabled);
     }
 
     @Override
-    public boolean isMetricsReportingManaged() {
-        return PrivacyPreferencesManagerImplJni.get().isMetricsReportingManaged();
+    public NonNullObservableSupplier<Boolean>
+            getUsageAndCrashReportingPermittedObservableSupplier() {
+        return getCrashUploadPermittedSupplier();
     }
 
-    @Override
-    public boolean getNetworkPredictionEnabled() {
-        return PrivacyPreferencesManagerImplJni.get().getNetworkPredictionEnabled();
+    public boolean shouldUseMetricsChoiceRestructure() {
+        if (!mNativeInitialized) {
+            // This method can be called before the native library is loaded/initialized (e.g.,
+            // in background services or binder threads checking crash uploading permission).
+            // To avoid UnsatisfiedLinkError, we read the value cached in SharedPreferences.
+            return mPrefs.readBoolean(
+                    ChromePreferenceKeys.PRIVACY_SHOULD_USE_METRICS_CHOICE_RESTRUCTURE, false);
+        }
+        boolean value = PrivacyPreferencesManagerImplJni.get().shouldUseMetricsChoiceRestructure();
+        mPrefs.writeBoolean(
+                ChromePreferenceKeys.PRIVACY_SHOULD_USE_METRICS_CHOICE_RESTRUCTURE, value);
+        return value;
     }
 
-    @Override
-    public void setNetworkPredictionEnabled(boolean enabled) {
-        PrivacyPreferencesManagerImplJni.get().setNetworkPredictionEnabled(enabled);
+    void setNativeInitializedForTesting(boolean initialized) {
+        mNativeInitialized = initialized;
     }
 
-    @Override
-    public boolean isNetworkPredictionManaged() {
-        return PrivacyPreferencesManagerImplJni.get().getNetworkPredictionManaged();
+    /**
+     * Returns whether {@code profile} is eligible for Universal Opt-Out, as determined by the
+     * native {@code UniversalOptOutService}. For signed-in users this uses the account capability
+     * signal (falling back to location history if the capability is unknown); for signed-out users
+     * this is based on recorded location history. Returns false if the service is unavailable.
+     */
+    public boolean isUniversalOptOutEligible(Profile profile) {
+        return PrivacyPreferencesManagerImplJni.get().isUniversalOptOutEligible(profile);
     }
 
     @NativeMethods
     public interface Natives {
-        boolean canPrefetchAndPrerender();
-        boolean getNetworkPredictionManaged();
-        boolean getNetworkPredictionEnabled();
-        void setNetworkPredictionEnabled(boolean enabled);
         boolean isMetricsReportingEnabled();
+
         void setMetricsReportingEnabled(boolean enabled);
-        boolean isMetricsReportingManaged();
+
+        boolean isMetricsReportingDisabledByPolicy();
+
+        boolean shouldUseMetricsChoiceRestructure();
+
+        boolean isUniversalOptOutEligible(@JniType("Profile*") Profile profile);
     }
 }

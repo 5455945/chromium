@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,21 @@
 
 #include <stdint.h>
 
+#include <set>
 #include <string>
+#include <string_view>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "build/build_config.h"
 #include "components/metrics/metrics_log_store.h"
 #include "components/metrics/metrics_log_uploader.h"
 #include "components/metrics/metrics_service_client.h"
 #include "components/metrics/test/test_metrics_log_uploader.h"
+#include "components/regional_capabilities/regional_capabilities_country_id.h"
+
+namespace variations {
+class SyntheticTrialRegistry;
+}
 
 namespace metrics {
 
@@ -24,14 +32,20 @@ class TestMetricsServiceClient : public MetricsServiceClient {
   static const char kBrandForTesting[];
 
   TestMetricsServiceClient();
+  TestMetricsServiceClient(const TestMetricsServiceClient&) = delete;
+  TestMetricsServiceClient& operator=(const TestMetricsServiceClient&) = delete;
   ~TestMetricsServiceClient() override;
 
   // MetricsServiceClient:
+  variations::SyntheticTrialRegistry* GetSyntheticTrialRegistry() override;
   metrics::MetricsService* GetMetricsService() override;
   void SetMetricsClientId(const std::string& client_id) override;
+#if BUILDFLAG(IS_CHROMEOS)
   bool ShouldUploadMetricsForUserId(uint64_t user_id) override;
+#endif  // BUILDFLAG(IS_CHROMEOS)
   int32_t GetProduct() override;
   std::string GetApplicationLocale() override;
+  const network_time::NetworkTimeTracker* GetNetworkTimeTracker() override;
   bool GetBrand(std::string* brand_code) override;
   SystemProfileProto::Channel GetChannel() override;
   bool IsExtendedStableChannel() override;
@@ -40,15 +54,20 @@ class TestMetricsServiceClient : public MetricsServiceClient {
   std::unique_ptr<MetricsLogUploader> CreateUploader(
       const GURL& server_url,
       const GURL& insecure_server_url,
-      base::StringPiece mime_type,
+      std::string_view mime_type,
       MetricsLogUploader::MetricServiceType service_type,
       const MetricsLogUploader::UploadCallback& on_upload_complete) override;
+#if BUILDFLAG(IS_ANDROID)
+  bool IsJobSchedulerSupported() const override;
+#endif  // BUILDFLAG(IS_ANDROID)
   base::TimeDelta GetStandardUploadInterval() override;
   bool IsReportingPolicyManaged() override;
   EnableMetricsDefault GetMetricsReportingDefaultState() override;
   std::string GetAppPackageNameIfLoggable() override;
   bool ShouldResetClientIdsOnClonedInstall() override;
   MetricsLogStore::StorageLimits GetStorageLimits() const override;
+  std::optional<regional_capabilities::CountryIdHolder>
+  GetProfileCountryIdForPrivateMetricsReporting() override;
 
   // Adds/removes |user_id| from the set of user ids that have metrics consent
   // as true.
@@ -57,7 +76,7 @@ class TestMetricsServiceClient : public MetricsServiceClient {
 
   const std::string& get_client_id() const { return client_id_; }
   // Returns a weak ref to the last created uploader.
-  TestMetricsLogUploader* uploader() { return uploader_; }
+  TestMetricsLogUploader* uploader() { return uploader_.get(); }
   void set_version_string(const std::string& str) { version_string_ = str; }
   void set_product(int32_t product) { product_ = product; }
   void set_reporting_is_managed(bool managed) {
@@ -72,25 +91,47 @@ class TestMetricsServiceClient : public MetricsServiceClient {
   void set_should_reset_client_ids_on_cloned_install(bool state) {
     should_reset_client_ids_on_cloned_install_ = state;
   }
-  void set_max_ongoing_log_size(size_t bytes) {
-    storage_limits_.max_ongoing_log_size = bytes;
+  void set_max_ongoing_log_size_bytes(size_t bytes) {
+    storage_limits_.ongoing_log_queue_limits.max_log_size_bytes = bytes;
+  }
+  void set_min_ongoing_log_queue_count(size_t log_count) {
+    storage_limits_.ongoing_log_queue_limits.min_log_count = log_count;
+  }
+  void set_min_ongoing_log_queue_size_bytes(size_t bytes) {
+    storage_limits_.ongoing_log_queue_limits.min_queue_size_bytes = bytes;
+  }
+
+  void set_max_initial_log_size_bytes(size_t bytes) {
+    storage_limits_.initial_log_queue_limits.max_log_size_bytes = bytes;
+  }
+  void set_synthetic_trial_registry(
+      variations::SyntheticTrialRegistry* registry) {
+    synthetic_trial_registry_ = registry;
+  }
+  void set_country_id_holder(
+      const regional_capabilities::CountryIdHolder& country_id_holder) {
+    country_id_holder_ = country_id_holder;
   }
 
  private:
-  std::string client_id_;
-  std::string version_string_;
-  int32_t product_;
-  bool reporting_is_managed_;
-  bool is_extended_stable_channel_;
-  EnableMetricsDefault enable_default_;
+  std::string client_id_{"0a94430b-18e5-43c8-a657-580f7e855ce1"};
+  std::string version_string_{"5.0.322.0-64-devel"};
+  int32_t product_ = ChromeUserMetricsExtension::CHROME;
+  bool reporting_is_managed_ = false;
+  bool is_extended_stable_channel_ = false;
+  EnableMetricsDefault enable_default_ = EnableMetricsDefault::DEFAULT_UNKNOWN;
   bool should_reset_client_ids_on_cloned_install_ = false;
-  MetricsLogStore::StorageLimits storage_limits_;
+  MetricsLogStore::StorageLimits storage_limits_ =
+      MetricsServiceClient::GetStorageLimits();
   std::set<uint64_t> allowed_user_ids_;
+  std::optional<regional_capabilities::CountryIdHolder> country_id_holder_ =
+      MetricsServiceClient::GetProfileCountryIdForPrivateMetricsReporting();
+
+  raw_ptr<variations::SyntheticTrialRegistry> synthetic_trial_registry_ =
+      nullptr;
 
   // A weak ref to the last created TestMetricsLogUploader.
-  TestMetricsLogUploader* uploader_ = nullptr;
-
-  DISALLOW_COPY_AND_ASSIGN(TestMetricsServiceClient);
+  base::WeakPtr<TestMetricsLogUploader> uploader_ = nullptr;
 };
 
 }  // namespace metrics

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,29 +6,39 @@
 #define THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_NAVIGATION_PARAMS_H_
 
 #include <memory>
+#include <optional>
 
+#include "base/containers/flat_map.h"
 #include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "base/unguessable_token.h"
+#include "base/uuid.h"
+#include "net/storage_access_api/status.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
+#include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "services/network/public/mojom/link_header.mojom-shared.h"
 #include "services/network/public/mojom/referrer_policy.mojom-shared.h"
 #include "services/network/public/mojom/url_loader_factory.mojom-shared.h"
+#include "services/network/public/mojom/url_response_head.mojom-shared.h"
 #include "services/network/public/mojom/web_client_hints_types.mojom-shared.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "third_party/blink/public/common/fenced_frame/redacted_fenced_frame_config.h"
 #include "third_party/blink/public/common/frame/frame_policy.h"
+#include "third_party/blink/public/common/frame/view_transition_state.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/mojom/blob/blob_url_store.mojom-shared.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-shared.h"
 #include "third_party/blink/public/mojom/frame/policy_container.mojom-forward.h"
 #include "third_party/blink/public/mojom/frame/triggering_event_info.mojom-shared.h"
+#include "third_party/blink/public/mojom/navigation/navigation_params.mojom-shared.h"
+#include "third_party/blink/public/mojom/navigation/renderer_content_settings.mojom.h"
+#include "third_party/blink/public/mojom/runtime_feature_state/runtime_feature.mojom-shared.h"
 #include "third_party/blink/public/platform/cross_variant_mojo_util.h"
-#include "third_party/blink/public/platform/modules/service_worker/web_service_worker_network_provider.h"
 #include "third_party/blink/public/platform/web_common.h"
 #include "third_party/blink/public/platform/web_content_security_policy_struct.h"
 #include "third_party/blink/public/platform/web_data.h"
 #include "third_party/blink/public/platform/web_http_body.h"
-#include "third_party/blink/public/platform/web_impression.h"
 #include "third_party/blink/public/platform/web_navigation_body_loader.h"
 #include "third_party/blink/public/platform/web_policy_container.h"
 #include "third_party/blink/public/platform/web_security_origin.h"
@@ -37,17 +47,13 @@
 #include "third_party/blink/public/platform/web_url.h"
 #include "third_party/blink/public/platform/web_url_request.h"
 #include "third_party/blink/public/platform/web_url_response.h"
+#include "third_party/blink/public/web/web_agent_cluster_key.h"
 #include "third_party/blink/public/web/web_form_element.h"
 #include "third_party/blink/public/web/web_frame_load_type.h"
 #include "third_party/blink/public/web/web_history_item.h"
 #include "third_party/blink/public/web/web_navigation_policy.h"
 #include "third_party/blink/public/web/web_navigation_timings.h"
 #include "third_party/blink/public/web/web_navigation_type.h"
-#include "third_party/blink/public/web/web_origin_policy.h"
-
-#if INSIDE_BLINK
-#include "base/memory/scoped_refptr.h"
-#endif
 
 namespace base {
 class TickClock;
@@ -55,8 +61,28 @@ class TickClock;
 
 namespace blink {
 
-class KURL;
+// Information about a resource preloaded by an Early Hints response.
+struct BLINK_EXPORT WebEarlyHintsPreloadInfo {
+  WebURL url;
+  network::mojom::LinkAsAttribute as =
+      network::mojom::LinkAsAttribute::kUnspecified;
+  network::mojom::CrossOriginAttribute cross_origin =
+      network::mojom::CrossOriginAttribute::kUnspecified;
+};
+
+// Information about an origin preconnected to during a navigation, either via a
+// 103 Early Hints response (early_hint=true) or a `Link: rel=preconnect` header
+// on the final response (early_hint=false). Used by the SpeculationMeasurement
+// API.
+struct BLINK_EXPORT WebPreconnectInfo {
+  WebURL url;
+  network::mojom::CrossOriginAttribute cross_origin =
+      network::mojom::CrossOriginAttribute::kUnspecified;
+  bool early_hint = false;
+};
+
 class WebDocumentLoader;
+class WebServiceWorkerNetworkProvider;
 
 // This structure holds all information collected by Blink when
 // navigation is being initiated.
@@ -66,6 +92,10 @@ struct BLINK_EXPORT WebNavigationInfo {
 
   // The main resource request.
   WebURLRequest url_request;
+
+  // The base url of the requestor. Only used for about:srcdoc and about:blank
+  // navigations.
+  WebURL requestor_base_url;
 
   // The frame type. This must not be kNone. See RequestContextFrameType.
   // TODO(dgozman): enforce this is not kNone.
@@ -87,12 +117,31 @@ struct BLINK_EXPORT WebNavigationInfo {
   // The load type. See WebFrameLoadType.
   WebFrameLoadType frame_load_type = WebFrameLoadType::kStandard;
 
+  // If true, will override cases where a WebFrameLoadType::kStandard navigation
+  // is implicitly converted to a kReplaceCurrentItem navigation.
+  mojom::ForceHistoryPush force_history_push = mojom::ForceHistoryPush::kNo;
+
   // During a history load, a child frame can be initially navigated
   // to an url from the history state. This flag indicates it.
   bool is_history_navigation_in_new_child_frame = false;
 
   // Whether the navigation is a result of client redirect.
   bool is_client_redirect = false;
+
+  // If the navigation was triggered by a script tool, this contains the
+  // ID of the tool invocation. This helps the browser to associate the
+  // navigation with the tool that caused it.
+  std::optional<ToolInvocationToken> script_tool_invocation_id;
+
+  // The host of the entity that injected the script initiating this
+  // navigation. This is only populated when the initiator document's
+  // ScriptInjectionPolicy is kNavigationProtection.
+  WebString script_injector_host;
+
+  // Used to retrieve data related to the initiator of the navigation stored in
+  // the browser process.
+  InitiatorStateToken initiator_state_token;
+  DocumentToken initiator_document_token;
 
   // Whether the navigation initiator frame has the
   // |network::mojom::blink::WebSandboxFlags::kDownloads| bit set in its sandbox
@@ -102,12 +151,27 @@ struct BLINK_EXPORT WebNavigationInfo {
   // Whether the navigation initiator frame is an ad frame.
   bool initiator_frame_is_ad = false;
 
+  // Whether there is ad script in stack when the navigation is initiated. Note
+  // that will also be true when any script is executing if the initiator frame
+  // is an ad, even if the script itself isn't recognized as an ad script.
+  // However it will be false if the navigation was initiated from an ad frame,
+  // but not by a script.
+  bool is_ad_script_in_stack = false;
+
   // Whether this is a navigation in the opener frame initiated
   // by the window.open'd frame.
   bool is_opener_navigation = false;
 
-  // Whether the runtime feature |BlockingDownloadsInSandbox| is enabled.
-  bool blocking_downloads_in_sandbox_enabled = false;
+  // True if the initiator explicitly asked for opener relationships to be
+  // preserved, via rel="opener".
+  bool has_rel_opener = false;
+
+  // Whether this is a navigation to _unfencedTop, i.e. to the top-level frame
+  // from a renderer process that does not get a handle to the frame.
+  // The browser should ignore the specified target frame and pick (and
+  // validate) the top-level frame instead.
+  // TODO(crbug.com/1315802): Refactor _unfencedTop handling.
+  bool is_unfenced_top_navigation = false;
 
   // Event information. See TriggeringEventInfo.
   blink::mojom::TriggeringEventInfo triggering_event_info =
@@ -135,6 +199,18 @@ struct BLINK_EXPORT WebNavigationInfo {
   // the input start time.
   base::TimeTicks input_start;
 
+  // An earlier and more accurate representation of the starting time of the
+  // navigation (based on the creation of the FrameLoadRequest), compared to the
+  // `navigation_start` that is passed through many of the navigation APIs
+  // (which is delayed until after the renderer process runs beforeunload
+  // handlers). The goal is to later use this in many navigation metrics to
+  // better identify performance improvements and regressions, while excluding
+  // just the time spent in beforeunload handlers. This value is currently only
+  // used in trace events and limited metrics to gauge the impact the change.
+  // TODO(crbug.com/385170155): Use this for most navigation metrics, with
+  // better ways to exclude beforeunload time.
+  base::TimeTicks actual_navigation_start;
+
   // Specifies whether or not a MHTML Archive can be used to load a subframe
   // resource instead of doing a network request.
   enum class ArchiveStatus { Absent, Present };
@@ -142,20 +218,11 @@ struct BLINK_EXPORT WebNavigationInfo {
 
   // The origin trial features activated in the document initiating this
   // navigation that should be applied in the document being navigated to.
-  WebVector<int> initiator_origin_trial_features;
+  std::vector<int> initiator_origin_trial_features;
 
   // The value of hrefTranslate attribute of a link, if this navigation was
   // inititated by clicking a link.
   WebString href_translate;
-
-  // Optional impression associated with this navigation. This is attached when
-  // a navigation results from a click on an anchor tag that has conversion
-  // measurement attributes.
-  absl::optional<WebImpression> impression;
-
-  // The navigation initiator's address space.
-  network::mojom::IPAddressSpace initiator_address_space =
-      network::mojom::IPAddressSpace::kUnknown;
 
   // The frame policy specified by the frame owner element.
   // For top-level window with no opener, this is the default lax FramePolicy.
@@ -164,12 +231,33 @@ struct BLINK_EXPORT WebNavigationInfo {
   FramePolicy frame_policy;
 
   // The frame token of the initiator Frame.
-  absl::optional<LocalFrameToken> initiator_frame_token;
+  std::optional<LocalFrameToken> initiator_frame_token;
 
-  // A handle for keeping the initiator RenderFrameHost's PolicyContainerHost
-  // alive until we create the NavigationRequest.
-  CrossVariantMojoRemote<mojom::PolicyContainerHostKeepAliveHandleInterfaceBase>
-      initiator_policy_container_keep_alive_handle;
+  // A handle for keeping the initiator RenderFrameHost's
+  // NavigationStateKeepAlive alive until we create the NavigationRequest.
+  CrossVariantMojoRemote<mojom::NavigationStateKeepAliveHandleInterfaceBase>
+      initiator_navigation_state_keep_alive_handle;
+
+  // Whether this navigation was initiated by the container, e.g. iframe changed
+  // src. Only container-initiated navigation report resource timing to the
+  // parent.
+  bool is_container_initiated = false;
+
+  // Used by the navigation API to indicate that a deferred commit should be
+  // resumed.
+  mojo::PendingReceiver<mojom::NavigationResumeDeferredCommitListener>
+      resume_defer_commit_listener;
+};
+
+// This is a container for yet-unparsed permissions policies from the manifest
+// of an Isolated Web App. It is passed within the `WebNavigationParams` to the
+// renderer for parsing, interpretation and merging with permissions policy
+// headers.
+// The only reason why it's not declared within WebNavigationParams is to allow
+// forward declaration.
+struct BLINK_EXPORT IsolatedAppPermissionPolicyEntry {
+  WebString feature;
+  std::vector<WebString> allowed_origins;
 };
 
 // This structure holds all information provided by the embedder that is
@@ -180,9 +268,14 @@ struct BLINK_EXPORT WebNavigationParams {
   WebNavigationParams();
   ~WebNavigationParams();
 
-  // Allows to specify |devtools_navigation_token|, instead of creating
-  // a new one.
-  explicit WebNavigationParams(const base::UnguessableToken&);
+  // Construct with a specific `document_token`, `devtools_navigation_token`,
+  // `initiator_state_token` and `base_auction_nonce` rather than randomly
+  // creating new ones.
+  explicit WebNavigationParams(
+      const DocumentToken& document_token,
+      const base::UnguessableToken& devtools_navigation_token,
+      const InitiatorStateToken& initiator_state_token,
+      const base::Uuid& base_auction_nonce);
 
   // Shortcut for navigating based on WebNavigationInfo parameters.
   //
@@ -194,16 +287,11 @@ struct BLINK_EXPORT WebNavigationParams {
       const WebNavigationInfo&);
 
   // Shortcut for loading html with "text/html" mime type and "UTF8" encoding.
+  static std::unique_ptr<WebNavigationParams> CreateWithEmptyHTMLForTesting(
+      const WebURL& base_url);
   static std::unique_ptr<WebNavigationParams> CreateWithHTMLStringForTesting(
       base::span<const char> html,
       const WebURL& base_url);
-
-#if INSIDE_BLINK
-  // Shortcut for loading html with "text/html" mime type and "UTF8" encoding.
-  static std::unique_ptr<WebNavigationParams> CreateWithHTMLBufferForTesting(
-      scoped_refptr<SharedBuffer> buffer,
-      const KURL& base_url);
-#endif
 
   // Fills |body_loader| based on the provided static data.
   static void FillBodyLoader(WebNavigationParams*, base::span<const char> data);
@@ -215,6 +303,12 @@ struct BLINK_EXPORT WebNavigationParams {
                                  WebString mime_type,
                                  WebString text_encoding,
                                  base::span<const char> data);
+#if INSIDE_BLINK
+  static void FillStaticResponse(WebNavigationParams*,
+                                 WebString mime_type,
+                                 WebString text_encoding,
+                                 SharedBuffer* data);
+#endif
 
   // This block defines the request used to load the main resource
   // for this navigation.
@@ -249,6 +343,11 @@ struct BLINK_EXPORT WebNavigationParams {
   // a failed navigation.
   WebURL pre_redirect_url_for_failed_navigations;
 
+  // If `url` is about:srcdoc or about:blank, this is the default base URL to
+  // use for the new document. It corresponds to the initiator's base URL
+  // snapshotted when the navigation started.
+  WebURL fallback_base_url;
+
   // The net error code for failed navigation. Must be non-zero when
   // |unreachable_url| is non-null.
   int error_code = 0;
@@ -280,11 +379,14 @@ struct BLINK_EXPORT WebNavigationParams {
     // TODO(dgozman): we only use this response for navigation timings.
     // Perhaps, we can just get rid of it.
     WebURLResponse redirect_response;
+    // When navigation is restarted due to a Critical-CH header this stores the
+    // time at which the the restart was initiated.
+    base::TimeTicks critical_ch_restart_time;
   };
   // Redirects which happened while fetching the main resource.
   // TODO(dgozman): we are only interested in the final values instead of
   // all information about redirects.
-  WebVector<RedirectInfo> redirects;
+  std::vector<RedirectInfo> redirects;
   // The final response for the main resource. This will be used to determine
   // the type of resulting document.
   WebURLResponse response;
@@ -302,30 +404,53 @@ struct BLINK_EXPORT WebNavigationParams {
   WebHistoryItem history_item;
   // Whether this navigation is a result of client redirect.
   bool is_client_redirect = false;
+
   // Cache mode to be used for subresources, instead of the one determined
   // by |frame_load_type|.
-  absl::optional<blink::mojom::FetchCacheMode> force_fetch_cache_mode;
+  std::optional<blink::mojom::FetchCacheMode> force_fetch_cache_mode;
 
   // Miscellaneous parameters.
 
   // The origin in which a navigation should commit. When provided, Blink
   // should use this origin directly and not compute locally the new document
   // origin.
-  // TODO(arthursonzogni): Always provide origin_to_commit.
   WebSecurityOrigin origin_to_commit;
 
-  // The sandbox flags to apply to the new document. This is the union of:
-  // - the frame's current sandbox attribute, taken when the navigation started.
-  // - the navigation response's CSP sandbox flags.
-  // - the result of CSP embedded enforcement required CSP sandbox flags.
-  // - Various edge cases: MHTML document, error pages, ...
-  // See content/browser/renderer_host/sandbox_flags.md
-  network::mojom::WebSandboxFlags sandbox_flags =
-      network::mojom::WebSandboxFlags::kAll;
+  // The storage key of the document that will be created by the navigation.
+  // This is compatible with the origin that the browser calculates for this
+  // navigation. Currently, the final origin used by a navigation is still
+  // determined by the renderer, except when `origin_to_commit` above is set.
+  // Until the browser is able to compute the origin accurately in all cases
+  // (see https://crbug.com/888079), this is actually just a provisional
+  // `storage_key`. The final storage key is computed by the document loader
+  // taking into account the origin computed by the renderer.
+  StorageKey storage_key;
 
+  DocumentToken document_token;
   // The devtools token for this navigation. See DocumentLoader
   // for details.
   base::UnguessableToken devtools_navigation_token;
+
+  // An unguessable token used to retrieve the complete set of policies to pass
+  // to navigations initiated from the document resulting in this navigation
+  // commit.
+  InitiatorStateToken initiator_state_token;
+
+  // Token used to derive a consistent opaque origin for the initial empty
+  // document of a newly created sandboxed frame (e.g., `<iframe sandbox>`) or
+  // window (e.g., `window.open()` with sandbox flags). Set only when the frame
+  // has the `kOrigin` sandbox flag, null for regular cross-document navigation
+  // commit, which use `DocumentLoader::origin_to_commit_` instead.
+  std::unique_ptr<base::UnguessableToken> sandbox_origin_token;
+
+  // If the navigation was triggered by a script tool, this contains the
+  // ID of the tool invocation. This helps the browser to associate the
+  // navigation with the tool that caused it.
+  std::optional<ToolInvocationToken> script_tool_invocation_id;
+
+  // Seed for all PAAPI Auction Nonces generated in this document.
+  base::Uuid base_auction_nonce;
+
   // Known timings related to navigation. If the navigation has
   // started in another process, timings are propagated from there.
   WebNavigationTimings navigation_timings;
@@ -342,22 +467,22 @@ struct BLINK_EXPORT WebNavigationParams {
   // This is based on a user activation but is different from the above bit as
   // it can be propagated across redirects and is consumed on use.
   bool has_text_fragment_token = false;
+  // Whether the navigation that produced the text fragment token was initiated
+  // from the same-origin as the document or was browser-initiated.
+  bool text_fragment_token_had_trusted_initiator = false;
   // Whether this navigation was browser initiated.
   bool is_browser_initiated = false;
-  // Whether this navigation was for prerendering.
-  bool is_prerendering = false;
   // Whether the document should be able to access local file:// resources.
   bool grant_load_local_resources = false;
-  // The previews state which should be used for this navigation.
-  PreviewsState previews_state = PreviewsTypes::kPreviewsUnspecified;
   // The service worker network provider to be used in the new
   // document.
   std::unique_ptr<blink::WebServiceWorkerNetworkProvider>
       service_worker_network_provider;
-  // The AppCache host id for this navigation.
-  base::UnguessableToken appcache_host_id;
 
-  // Used for SignedExchangeSubresourcePrefetch.
+  // This is `true` only for commit requests coming from
+  // `RenderFrameImpl::SynchronouslyConmmitAboutBlankForBug778318`.
+  bool is_synchronous_commit_for_bug_778318 = false;
+
   // This struct keeps the information about a prefetched signed exchange.
   struct BLINK_EXPORT PrefetchedSignedExchange {
     PrefetchedSignedExchange();
@@ -377,61 +502,176 @@ struct BLINK_EXPORT WebNavigationParams {
     CrossVariantMojoRemote<network::mojom::URLLoaderFactoryInterfaceBase>
         loader_factory;
   };
-  WebVector<std::unique_ptr<PrefetchedSignedExchange>>
+  std::vector<std::unique_ptr<PrefetchedSignedExchange>>
       prefetched_signed_exchanges;
   // An optional tick clock to be used for document loader timing. This is used
   // for testing.
-  const base::TickClock* tick_clock = nullptr;
+  raw_ptr<const base::TickClock> tick_clock = nullptr;
   // The origin trial features activated in the document initiating this
   // navigation that should be applied in the document being navigated to.
-  WebVector<int> initiator_origin_trial_features;
-
-  absl::optional<WebOriginPolicy> origin_policy;
-
-  // The physical URL of Web Bundle from which the document is loaded.
-  // Used as an additional identifier for MemoryCache.
-  WebURL web_bundle_physical_url;
-
-  // The claimed URL inside Web Bundle file from which the document is loaded.
-  // This URL is used for window.location and document.URL and relative path
-  // computation in the document.
-  WebURL web_bundle_claimed_url;
+  std::vector<int> initiator_origin_trial_features;
 
   // UKM source id to be associated with the Document that will be installed
   // in the current frame.
   ukm::SourceId document_ukm_source_id = ukm::kInvalidSourceId;
 
   // The frame policy specified by the frame owner element.
-  // Should be absl::nullopt for top level navigations
-  absl::optional<FramePolicy> frame_policy;
+  // Should be std::nullopt for top level navigations
+  std::optional<FramePolicy> frame_policy;
 
   // A list of origin trial names to enable for the document being loaded.
-  WebVector<WebString> force_enabled_origin_trials;
+  std::vector<WebString> force_enabled_origin_trials;
 
-  // Whether the page is in an origin-keyed agent cluster.
-  // https://html.spec.whatwg.org/C/#is-origin-keyed
-  bool origin_agent_cluster = false;
+  // The AgentClusterKey to use to obtain an agent cluster to commit the
+  // navigation.
+  // https://html.spec.whatwg.org/multipage/webappapis.html#agent-cluster-key
+  WebAgentClusterKey agent_cluster_key;
 
   // List of client hints enabled for top-level frame. These still need to be
   // checked against permissions policy before use.
-  WebVector<network::mojom::WebClientHintsType> enabled_client_hints;
+  std::vector<network::mojom::WebClientHintsType> enabled_client_hints;
 
   // Whether the navigation is cross-site and swaps BrowsingContextGroups
   // (BrowsingInstances).
   bool is_cross_site_cross_browsing_context_group = false;
 
+  // Whether the new document should start with sticky user activation, because
+  // the previously committed document did, and the navigation was same-site.
+  bool should_have_sticky_user_activation = false;
+
   // Blink's copy of the policy container containing security policies to be
   // enforced on the document created by this navigation.
   std::unique_ptr<WebPolicyContainer> policy_container;
 
-  // These are used to construct a subset of the back/forward list for the
-  // appHistory API. They only have the attributes that are needed for
-  // appHistory.
-  WebVector<WebHistoryItem> app_history_back_entries;
-  WebVector<WebHistoryItem> app_history_forward_entries;
+  // Blink's copy of a permissions policy constructed in the browser that should
+  // take precedence over any permissions policy constructed in blink. This is
+  // useful for isolated applications, which use a different base permissions
+  // policy than blink, which uses a fully permissive policy as its base.
+  // The raw string values are parsed from the JSON manifest, but individual
+  // entries themselves are not parsed and validated (in particular, this might
+  // contain malformed/invalid entries).
+  std::optional<std::vector<IsolatedAppPermissionPolicyEntry>>
+      isolated_app_policy;
 
-  // List of URLs which are preloaded by HTTP Early Hints.
-  WebVector<WebURL> early_hints_preloaded_resources;
+  // These are used to construct a subset of the back/forward list for the
+  // window.navigation API. They only have the attributes that are needed for
+  // that API.
+  std::vector<WebHistoryItem> navigation_api_back_entries;
+  std::vector<WebHistoryItem> navigation_api_forward_entries;
+  WebHistoryItem navigation_api_previous_entry;
+
+  // List of resources preloaded by HTTP Early Hints, including URL and
+  // request attributes (destination from "as", credentials mode from
+  // "crossorigin").
+  std::vector<WebEarlyHintsPreloadInfo> early_hints_preloaded_resources;
+
+  // Origins preconnected to during the navigation (Early Hints and final-
+  // response Link headers).
+  std::vector<WebPreconnectInfo> preconnects;
+
+  // If this is a navigation to fenced frame from an interest group auction,
+  // contains URNs mapped to the ad components returned by the winning bid.
+  // Null, otherwise.
+  std::optional<std::vector<WebURL>> ad_auction_components;
+
+  // Whether the current context would be allowed to create an opaque-ads
+  //  frame (based on the browser-side calculations). See
+  // NavigatorAuction::canLoadAdAuctionFencedFrame for usage and
+  // ::blink::mojom::CommitNavigationParams::ancestor_or_self_has_cspee for
+  // where the value is coming from.
+  bool ancestor_or_self_has_cspee = false;
+
+  // Carries on the `navigational_delivery_type` in `NavigationParam` on the
+  // renderer side.
+  network::mojom::NavigationDeliveryType navigation_delivery_type =
+      network::mojom::NavigationDeliveryType::kDefault;
+
+  // Provides cached state from the previous Document that will be replaced by
+  // this navigation for a ViewTransition.
+  std::optional<ViewTransitionState> view_transition_state;
+
+  // If this is a navigation to an "opaque-ads" fenced frame through an ad
+  // auction, this stores the collection of properties that were loaded into a
+  // fenced frame to specify its behavior. This is read into an inner
+  // `FencedFrameConfig` object to give a fenced frame access to the
+  // components associated with the winning bid in an auction.
+  std::optional<FencedFrame::RedactedFencedFrameProperties>
+      fenced_frame_properties;
+
+  // Maps the blink runtime-enabled features modified in the browser process to
+  // their new enabled/disabled status:
+  // <enum_representing_runtime_enabled_feature, enabled/disabled>
+  base::flat_map<::blink::mojom::RuntimeFeature, bool>
+      modified_runtime_features;
+
+  // The Storage Access API status that the document should be loaded with.
+  net::StorageAccessApiStatus load_with_storage_access =
+      net::StorageAccessApiStatus::kNone;
+
+  // Indicates which browsing context group this frame belongs to. This starts
+  // as nullopt and is only set when we commit a main frame in another browsing
+  // context group. Same browsing context group navigations never set this
+  // because no update is required. Subframes navigations never set this,
+  // because they cannot change browsing context group.
+  std::optional<base::UnguessableToken> browsing_context_group_token =
+      std::nullopt;
+
+  // For each document, the browser passes along state for each
+  // renderer-enforced content setting.
+  mojom::RendererContentSettingsPtr content_settings;
+
+  // The :visited link hashtable is stored in shared memory and contains salted
+  // hashes for all visits. Each salt corresponds to a unique origin, and
+  // renderer processes are only informed of salts that correspond to their
+  // origins. As a result, any given renderer process can only
+  // learn about visits relevant to origins for which it has the salt.
+  //
+  // Here we store the salt corresponding to this navigation's origin to
+  // be committed. It will allow the renderer process that commits this
+  // navigation to learn about visits hashed with this salt. If the :visited
+  // link hashtable is not yet initialized (or the feature is disabled), the
+  // salt value will not be set here. Instead, PartitionedVisitedLinkWriter will
+  // send the salt values to the renderer (specifically to VisitedLinkReader via
+  // the VisitedLinkNotificationSink interface) after the :visited link
+  // hashtable is initialized.
+  std::optional<uint64_t> visited_link_salt;
+
+  // Map of permission statuses at commit time.
+  // Note: the permission statues will be only used as initial states of
+  // `CachedPermissionStatus` in renderer side.
+  //  Could be std::nullopt for synchronous commit, same document navigations.
+  std::optional<base::flat_map<mojom::PermissionName, mojom::PermissionStatus>>
+      initial_permission_statuses;
+
+  // When this is set to true, the navigation must create a new document
+  // sequence number to avoid appearing as a same-document navigation, even if
+  // the URL seems like a match. This matters for cross-origin navigations
+  // (apart from error pages with the same precursor origin).
+  bool force_new_document_sequence_number = false;
+
+  // A text fragment selector (that uses the syntax defined in
+  // https://wicg.github.io/scroll-to-text-fragment/#syntax) to scroll the
+  // matched text into the viewport without applying the standard highlight
+  // styling. This is used for cross-device scroll restoration.
+  // The string should contain only the selector value (the part after
+  // "text=" in a URL directive), not the "text=" prefix itself.
+  std::optional<WebString> internal_scroll_to_text_fragment;
+
+  // Browser-authoritative per-frame secure-context-root bit. Sourced from
+  // `ContentBrowserClient::IsSecureContextRoot()` at navigation commit via
+  // CommitNavigationParams. Same-process descendants'
+  // HasInsecureContextInAncestors() stops at frames with this bit set.
+  bool is_secure_context_root = false;
+
+  // Policy controlling script injection tracking and protections for this
+  // document.
+  mojom::ScriptInjectionPolicy script_injection_policy =
+      mojom::ScriptInjectionPolicy::kNone;
+
+  // Whether the document may bind RestrictedDeviceBoundSessionManager. Set
+  // from CommitNavigationParams; false when the document commits without
+  // them.
+  bool can_use_device_bound_session_js_api = false;
 };
 
 }  // namespace blink

@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,11 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/values.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/crx_file/id_util.h"
@@ -21,21 +23,24 @@
 #include "extensions/browser/extension_error_test_util.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/unloaded_extension_reason.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/features/feature_channel.h"
-#include "extensions/common/value_builder.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
 namespace extensions {
+namespace {
 
 using error_test_util::CreateNewManifestError;
 using error_test_util::CreateNewRuntimeError;
 
 class ErrorConsoleUnitTest : public testing::Test {
  public:
-  ErrorConsoleUnitTest() : error_console_(nullptr) {}
-  ~ErrorConsoleUnitTest() override {}
+  ErrorConsoleUnitTest() = default;
+  ~ErrorConsoleUnitTest() override = default;
 
   void SetUp() override {
     testing::Test::SetUp();
@@ -47,7 +52,7 @@ class ErrorConsoleUnitTest : public testing::Test {
  protected:
   content::BrowserTaskEnvironment task_environment_;
   std::unique_ptr<TestingProfile> profile_;
-  ErrorConsole* error_console_;
+  raw_ptr<ErrorConsole> error_console_ = nullptr;
 };
 
 // Test that the error console is enabled/disabled appropriately.
@@ -81,11 +86,10 @@ TEST_F(ErrorConsoleUnitTest, EnableAndDisableErrorConsole) {
       "ohmmkhmmmpcnpikjeljgnaoabkaalbgc";
   scoped_refptr<const Extension> adt =
       ExtensionBuilder()
-          .SetManifest(DictionaryBuilder()
+          .SetManifest(base::DictValue()
                            .Set("name", "apps dev tools")
                            .Set("version", "0.2.0")
-                           .Set("manifest_version", 2)
-                           .Build())
+                           .Set("manifest_version", 2))
           .SetID(kAppsDeveloperToolsExtensionId)
           .Build();
   ExtensionRegistry* registry = ExtensionRegistry::Get(profile_.get());
@@ -128,8 +132,8 @@ TEST_F(ErrorConsoleUnitTest, EnabledForAllChannels) {
 TEST_F(ErrorConsoleUnitTest, ReportErrors) {
   const size_t kNumTotalErrors = 6;
   const std::string kId = crx_file::id_util::GenerateId("id");
-  error_console_->set_default_reporting_for_test(ExtensionError::MANIFEST_ERROR,
-                                                 true);
+  error_console_->set_default_reporting_for_test(
+      ExtensionError::Type::kManifestError, true);
   ASSERT_EQ(0u, error_console_->GetErrorsForExtension(kId).size());
 
   for (size_t i = 0; i < kNumTotalErrors; ++i) {
@@ -143,10 +147,10 @@ TEST_F(ErrorConsoleUnitTest, ReportErrors) {
 TEST_F(ErrorConsoleUnitTest, DontStoreErrorsWithoutEnablingType) {
   // Disable default runtime error reporting, and enable default manifest error
   // reporting.
-  error_console_->set_default_reporting_for_test(ExtensionError::RUNTIME_ERROR,
-                                                 false);
-  error_console_->set_default_reporting_for_test(ExtensionError::MANIFEST_ERROR,
-                                                 true);
+  error_console_->set_default_reporting_for_test(
+      ExtensionError::Type::kRuntimeError, false);
+  error_console_->set_default_reporting_for_test(
+      ExtensionError::Type::kManifestError, true);
 
   const std::string kId = crx_file::id_util::GenerateId("id");
 
@@ -165,7 +169,7 @@ TEST_F(ErrorConsoleUnitTest, DontStoreErrorsWithoutEnablingType) {
   // Enable runtime errors specifically for this extension, and disable the use
   // of the default mask.
   error_console_->SetReportingForExtension(
-      kId, ExtensionError::RUNTIME_ERROR, true);
+      kId, ExtensionError::Type::kRuntimeError, true);
 
   // We should now accept runtime and manifest errors.
   error_console_->ReportError(CreateNewManifestError(kId, "d"));
@@ -196,21 +200,19 @@ TEST_F(ErrorConsoleUnitTest, TestDefaultStoringPrefs) {
   // For this, we need actual extensions.
   scoped_refptr<const Extension> unpacked_extension =
       ExtensionBuilder()
-          .SetManifest(DictionaryBuilder()
+          .SetManifest(base::DictValue()
                            .Set("name", "unpacked")
                            .Set("version", "0.0.1")
-                           .Set("manifest_version", 2)
-                           .Build())
+                           .Set("manifest_version", 2))
           .SetLocation(mojom::ManifestLocation::kUnpacked)
           .SetID(crx_file::id_util::GenerateId("unpacked"))
           .Build();
   scoped_refptr<const Extension> packed_extension =
       ExtensionBuilder()
-          .SetManifest(DictionaryBuilder()
+          .SetManifest(base::DictValue()
                            .Set("name", "packed")
                            .Set("version", "0.0.1")
-                           .Set("manifest_version", 2)
-                           .Build())
+                           .Set("manifest_version", 2))
           .SetLocation(mojom::ManifestLocation::kInternal)
           .SetID(crx_file::id_util::GenerateId("packed"))
           .Build();
@@ -250,9 +252,8 @@ TEST_F(ErrorConsoleUnitTest, TestDefaultStoringPrefs) {
   // Registering a preference should override this for both types of extensions
   // (should be able to enable errors for packed, or disable errors for
   // unpacked).
-  error_console_->SetReportingForExtension(packed_extension->id(),
-                                           ExtensionError::RUNTIME_ERROR,
-                                           true);
+  error_console_->SetReportingForExtension(
+      packed_extension->id(), ExtensionError::Type::kRuntimeError, true);
   error_console_->ReportError(
       CreateNewRuntimeError(packed_extension->id(), "runtime error 3"));
   EXPECT_EQ(1u, error_console_->GetErrorsForExtension(
@@ -260,9 +261,8 @@ TEST_F(ErrorConsoleUnitTest, TestDefaultStoringPrefs) {
   EXPECT_TRUE(error_console_->IsReportingEnabledForExtension(
       packed_extension->id()));
 
-  error_console_->SetReportingForExtension(unpacked_extension->id(),
-                                           ExtensionError::RUNTIME_ERROR,
-                                           false);
+  error_console_->SetReportingForExtension(
+      unpacked_extension->id(), ExtensionError::Type::kRuntimeError, false);
   error_console_->ReportError(
       CreateNewRuntimeError(packed_extension->id(), "runtime error 4"));
   EXPECT_EQ(2u,  // We should still have the first two errors.
@@ -272,4 +272,5 @@ TEST_F(ErrorConsoleUnitTest, TestDefaultStoringPrefs) {
       unpacked_extension->id()));
 }
 
+}  // namespace
 }  // namespace extensions

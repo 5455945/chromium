@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,79 +6,87 @@
 
 #include <stddef.h>
 
-#include <cctype>
+#include <optional>
+#include <string_view>
+#include <tuple>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
-#include "base/single_thread_task_runner.h"
+#include "base/strings/escape.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "cc/test/test_task_graph_runner.h"
+#include "components/input/native_web_keyboard_event.h"
 #include "content/app/mojo/mojo_init.h"
 #include "content/common/agent_scheduling_group.mojom.h"
 #include "content/common/frame.mojom.h"
 #include "content/common/renderer.mojom.h"
 #include "content/public/browser/content_browser_client.h"
-#include "content/public/browser/native_web_keyboard_event.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_switches.h"
-#include "content/public/common/use_zoom_for_dsf_policy.h"
 #include "content/public/renderer/content_renderer_client.h"
-#include "content/public/renderer/render_view_visitor.h"
+#include "content/public/test/content_test_suite_base.h"
 #include "content/public/test/fake_render_widget_host.h"
 #include "content/public/test/frame_load_waiter.h"
 #include "content/public/test/policy_container_utils.h"
+#include "content/public/test/test_content_client.h"
 #include "content/renderer/mock_agent_scheduling_group.h"
 #include "content/renderer/render_process.h"
 #include "content/renderer/render_thread_impl.h"
-#include "content/renderer/render_view_impl.h"
 #include "content/renderer/renderer_blink_platform_impl.h"
 #include "content/renderer/renderer_main_platform_delegate.h"
-#include "content/test/test_content_client.h"
 #include "content/test/test_render_frame.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
+#include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "net/base/escape.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
+#include "services/network/public/mojom/fetch_api.mojom.h"
+#include "services/tracing/public/cpp/trace_startup.h"
+#include "skia/ext/font_utils.h"
+#include "third_party/abseil-cpp/absl/strings/ascii.h"
 #include "third_party/blink/public/common/dom_storage/session_storage_namespace_id.h"
 #include "third_party/blink/public/common/input/web_gesture_event.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
-#include "third_party/blink/public/common/loader/previews_state.h"
 #include "third_party/blink/public/common/navigation/navigation_params.h"
 #include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
 #include "third_party/blink/public/common/widget/visual_properties.h"
 #include "third_party/blink/public/mojom/frame/frame_replication_state.mojom.h"
 #include "third_party/blink/public/mojom/leak_detector/leak_detector.mojom.h"
 #include "third_party/blink/public/mojom/navigation/navigation_params.mojom.h"
-#include "third_party/blink/public/mojom/page/record_content_to_visible_time_request.mojom.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/scheduler/web_thread_scheduler.h"
-#include "third_party/blink/public/platform/web_back_forward_cache_loader_helper.h"
 #include "third_party/blink/public/platform/web_runtime_features.h"
-#include "third_party/blink/public/platform/web_url_loader_client.h"
 #include "third_party/blink/public/platform/web_url_request_extra_data.h"
 #include "third_party/blink/public/web/blink.h"
 #include "third_party/blink/public/web/web_document.h"
+#include "third_party/blink/public/web/web_form_control_element.h"
 #include "third_party/blink/public/web/web_frame_widget.h"
-#include "third_party/blink/public/web/web_history_entry.h"
 #include "third_party/blink/public/web/web_history_item.h"
 #include "third_party/blink/public/web/web_input_element.h"
 #include "third_party/blink/public/web/web_local_frame.h"
 #include "third_party/blink/public/web/web_script_source.h"
 #include "third_party/blink/public/web/web_view.h"
-#include "ui/base/resource/resource_bundle.h"
+#include "ui/color/color_provider.h"
+#include "ui/color/color_provider_manager.h"
+#include "ui/color/color_provider_source.h"
 #include "ui/events/base_event_utils.h"
+#include "ui/events/keycodes/dom/dom_code.h"
+#include "ui/events/keycodes/keyboard_code_conversion.h"
 #include "ui/events/keycodes/keyboard_codes.h"
-#include "ui/native_theme/native_theme_features.h"
+#include "ui/native_theme/native_theme.h"
 #include "v8/include/v8.h"
 
-#if defined(OS_MAC)
-#include "base/mac/scoped_nsautorelease_pool.h"
+#if BUILDFLAG(IS_MAC)
+#include "base/apple/scoped_nsautorelease_pool.h"
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "content/child/dwrite_font_proxy/dwrite_font_proxy_init_impl_win.h"
 #include "content/test/dwrite_font_fake_sender_win.h"
 #endif
@@ -95,151 +103,120 @@ namespace content {
 
 namespace {
 
-// This class records, and then tears down all existing RenderViews. It's
-// important to do this in two steps, since tearing down a RenderView will
-// mutate the container that RenderView::ForEach() iterates over.
-class CloseMessageSendingRenderViewVisitor : public RenderViewVisitor {
+class FailingURLLoaderFactory : public network::SharedURLLoaderFactory {
  public:
-  CloseMessageSendingRenderViewVisitor() = default;
-  ~CloseMessageSendingRenderViewVisitor() override = default;
+  FailingURLLoaderFactory() = default;
 
-  void CloseRenderViews() {
-    for (RenderView* render_view : live_render_views) {
-      RenderViewImpl* view_impl = static_cast<RenderViewImpl*>(render_view);
-      view_impl->Destroy();
+  FailingURLLoaderFactory(const FailingURLLoaderFactory&) = delete;
+  FailingURLLoaderFactory& operator=(const FailingURLLoaderFactory&) = delete;
+
+  // SharedURLLoaderFactory:
+  void CreateLoaderAndStart(
+      mojo::PendingReceiver<network::mojom::URLLoader> loader,
+      int32_t request_id,
+      uint32_t options,
+      const network::ResourceRequest& request,
+      mojo::PendingRemote<network::mojom::URLLoaderClient> client,
+      const net::MutableNetworkTrafficAnnotationTag& traffic_annotation)
+      override {
+    mojo::Remote<network::mojom::URLLoaderClient> remote(std::move(client));
+    remote->OnComplete(network::URLLoaderCompletionStatus(net::ERR_FAILED));
+  }
+  void Clone(mojo::PendingReceiver<network::mojom::URLLoaderFactory> receiver)
+      override {
+    receivers_.Add(this, std::move(receiver), this);
+  }
+  std::unique_ptr<network::PendingSharedURLLoaderFactory> Clone() override {
+    return std::make_unique<PendingFactory>();
+  }
+
+ private:
+  class PendingFactory : public network::PendingSharedURLLoaderFactory {
+   public:
+    PendingFactory() = default;
+
+    PendingFactory(const PendingFactory&) = delete;
+    PendingFactory& operator=(const PendingFactory&) = delete;
+
+    ~PendingFactory() override = default;
+
+    scoped_refptr<SharedURLLoaderFactory> CreateFactory() override {
+      return base::MakeRefCounted<FailingURLLoaderFactory>();
     }
+  };
+
+  ~FailingURLLoaderFactory() override = default;
+
+  mojo::ReceiverSet<network::mojom::URLLoaderFactory,
+                    scoped_refptr<FailingURLLoaderFactory>>
+      receivers_;
+};
+
+class MockColorProviderSource : public ui::ColorProviderSource {
+ public:
+  explicit MockColorProviderSource() = default;
+  MockColorProviderSource(const MockColorProviderSource&) = delete;
+  MockColorProviderSource& operator=(const MockColorProviderSource&) = delete;
+  ~MockColorProviderSource() override = default;
+
+  // ui::ColorProviderSource:
+  const ui::ColorProvider* GetColorProvider() const override {
+    return &provider_;
   }
 
- protected:
-  bool Visit(RenderView* render_view) override {
-    live_render_views.push_back(render_view);
-    return true;
+  ui::RendererColorMap GetRendererColorMap(
+      ui::ColorProviderKey::ColorMode color_mode,
+      ui::ColorProviderKey::ForcedColors forced_colors) const override {
+    auto key = GetColorProviderKey();
+    key.color_mode = color_mode;
+    key.forced_colors = forced_colors;
+    ui::ColorProvider* color_provider =
+        ui::ColorProviderManager::Get().GetColorProviderFor(key);
+    CHECK(color_provider);
+    return ui::CreateRendererColorMap(*color_provider);
   }
+
+  ui::ColorProviderKey GetColorProviderKey() const override { return key_; }
 
  private:
-  std::vector<RenderView*> live_render_views;
-  DISALLOW_COPY_AND_ASSIGN(CloseMessageSendingRenderViewVisitor);
+  ui::ColorProvider provider_;
+  ui::ColorProviderKey key_;
 };
 
-class FakeWebURLLoader : public blink::WebURLLoader {
- public:
-  FakeWebURLLoader(
-      std::unique_ptr<blink::scheduler::WebResourceLoadingTaskRunnerHandle>
-          freezable_task_runner_handle,
-      std::unique_ptr<blink::scheduler::WebResourceLoadingTaskRunnerHandle>
-          unfreezable_task_runner_handle)
-      : freezable_task_runner_handle_(std::move(freezable_task_runner_handle)),
-        unfreezable_task_runner_handle_(
-            std::move(unfreezable_task_runner_handle)) {}
+// Returns the WebInputEvent modifiers necessary to produce `character` on a
+// Windows keyboard with US layout.
+//
+// This works for printable ASCII characters but may need tweaking for other
+// characters.
+int GetWindowsUsLayoutModifiers(const char character) {
+  using Modifiers = blink::WebInputEvent::Modifiers;
 
-  void LoadSynchronously(
-      std::unique_ptr<network::ResourceRequest> request,
-      scoped_refptr<blink::WebURLRequestExtraData> url_request_extra_data,
-      bool pass_response_pipe_to_client,
-      bool no_mime_sniffing,
-      base::TimeDelta timeout_interval,
-      blink::WebURLLoaderClient* client,
-      blink::WebURLResponse&,
-      absl::optional<blink::WebURLError>&,
-      blink::WebData&,
-      int64_t&,
-      int64_t&,
-      blink::WebBlobInfo&,
-      std::unique_ptr<blink::ResourceLoadInfoNotifierWrapper>) override {
-    client->DidFail(blink::WebURLError(kFailureReason, request->url),
-                    base::TimeTicks::Now(), 0, 0, 0);
+  // Tabs, Backspaces, and Enters don't require shift modifiers for their
+  // character representation.
+  if (character == '\t' || character == '\b' || character == '\n') {
+    return Modifiers::kNoModifiers;
   }
 
-  void LoadAsynchronously(
-      std::unique_ptr<network::ResourceRequest> request,
-      scoped_refptr<blink::WebURLRequestExtraData> url_request_extra_data,
-      bool no_mime_sniffing,
-      std::unique_ptr<blink::ResourceLoadInfoNotifierWrapper>,
-      blink::WebURLLoaderClient* client) override {
-    DCHECK(freezable_task_runner_handle_);
-    async_client_ = client;
-    freezable_task_runner_handle_->GetTaskRunner()->PostTask(
-        FROM_HERE,
-        base::BindOnce(&FakeWebURLLoader::DidFail, weak_factory_.GetWeakPtr(),
-                       blink::WebURLError(kFailureReason, request->url),
-                       base::TimeTicks::Now(), 0, 0, 0));
+  const ui::DomKey dom_key = ui::DomKey::FromCharacter(character);
+  const ui::DomCode dom_code = ui::UsLayoutDomKeyToDomCode(dom_key);
+  if (dom_code == ui::DomCode::NONE) {
+    return Modifiers::kNoModifiers;
   }
 
-  void Freeze(blink::WebLoaderFreezeMode) override {}
-  void DidChangePriority(WebURLRequest::Priority, int) override {}
-  scoped_refptr<base::SingleThreadTaskRunner> GetTaskRunnerForBodyLoader()
-      override {
-    return nullptr;
-  }
+  // If the `unshifted_character` is different from the `character` we want to
+  // produce, then producing it requires pressing Shift.
+  const char16_t unshifted_character =
+      ui::DomCodeToUsLayoutCharacter(dom_code, ui::EF_NONE);
+  return character != unshifted_character ? Modifiers::kShiftKey
+                                          : Modifiers::kNoModifiers;
+}
 
-  void DidFail(const blink::WebURLError& error,
-               base::TimeTicks response_end,
-               int64_t total_encoded_data_length,
-               int64_t total_encoded_body_length,
-               int64_t total_decoded_body_length) {
-    DCHECK(async_client_);
-    async_client_->DidFail(error, response_end, total_encoded_data_length,
-                           total_encoded_body_length,
-                           total_decoded_body_length);
-  }
-
- private:
-  static const int kFailureReason = net::ERR_FAILED;
-  std::unique_ptr<blink::scheduler::WebResourceLoadingTaskRunnerHandle>
-      freezable_task_runner_handle_;
-  std::unique_ptr<blink::scheduler::WebResourceLoadingTaskRunnerHandle>
-      unfreezable_task_runner_handle_;
-  blink::WebURLLoaderClient* async_client_ = nullptr;
-
-  base::WeakPtrFactory<FakeWebURLLoader> weak_factory_{this};
-};
-
-class FakeWebURLLoaderFactory : public blink::WebURLLoaderFactoryForTest {
- public:
-  std::unique_ptr<blink::WebURLLoader> CreateURLLoader(
-      const WebURLRequest&,
-      std::unique_ptr<blink::scheduler::WebResourceLoadingTaskRunnerHandle>
-          freezable_task_runner_handle,
-      std::unique_ptr<blink::scheduler::WebResourceLoadingTaskRunnerHandle>
-          unfreezable_task_runner_handle,
-      blink::CrossVariantMojoRemote<blink::mojom::KeepAliveHandleInterfaceBase>
-          keep_alive_handle,
-      blink::WebBackForwardCacheLoaderHelper back_forward_cache_loader_helper)
-      override {
-    return std::make_unique<FakeWebURLLoader>(
-        std::move(freezable_task_runner_handle),
-        std::move(unfreezable_task_runner_handle));
-  }
-
-  std::unique_ptr<WebURLLoaderFactoryForTest> Clone() override {
-    return std::make_unique<FakeWebURLLoaderFactory>();
-  }
-};
-
-// Converts |ascii_character| into |key_code| and returns true on success.
-// Handles only the characters needed by tests.
-bool GetWindowsKeyCode(char ascii_character, int* key_code) {
-  if (isalnum(ascii_character)) {
-    *key_code = base::ToUpperASCII(ascii_character);
-    return true;
-  }
-
-  switch (ascii_character) {
-    case '@':
-      *key_code = '2';
-      return true;
-    case '_':
-      *key_code = ui::VKEY_OEM_MINUS;
-      return true;
-    case '.':
-      *key_code = ui::VKEY_OEM_PERIOD;
-      return true;
-    case ui::VKEY_BACK:
-      *key_code = ui::VKEY_BACK;
-      return true;
-    default:
-      return false;
-  }
+// Converts `character` into `key_code`.
+int GetWindowsUsLayoutKeyCode(const char character) {
+  const ui::DomKey dom_key = ui::DomKey::FromCharacter(character);
+  const ui::DomCode dom_code = ui::UsLayoutDomKeyToDomCode(dom_key);
+  const ui::KeyboardCode key_code = ui::DomCodeToUsLayoutKeyboardCode(dom_code);
+  return key_code;
 }
 
 }  // namespace
@@ -248,19 +225,19 @@ class RendererBlinkPlatformImplTestOverrideImpl
     : public RendererBlinkPlatformImpl {
  public:
   explicit RendererBlinkPlatformImplTestOverrideImpl(
-      blink::scheduler::WebThreadScheduler* scheduler)
-      : RendererBlinkPlatformImpl(scheduler) {}
+      blink::scheduler::WebThreadScheduler* scheduler,
+      scoped_refptr<base::SingleThreadTaskRunner> io_thread_task_runner)
+      : RendererBlinkPlatformImpl(scheduler, std::move(io_thread_task_runner)) {
+  }
 
   // Get rid of the dependency to the sandbox, which is not available in
   // RenderViewTest.
   blink::WebSandboxSupport* GetSandboxSupport() override { return nullptr; }
 
-  cc::TaskGraphRunner* GetTaskGraphRunner() override {
-    return &task_graph_runner_;
-  }
-
- private:
-  cc::TestTaskGraphRunner task_graph_runner_;
+#if BUILDFLAG(IS_ANDROID)
+  void SetPrivateMemoryFootprint(
+      uint64_t private_memory_footprint_bytes) override {}
+#endif
 };
 
 class RenderFrameWasShownWaiter : public RenderFrameObserver {
@@ -288,35 +265,41 @@ class RenderFrameWasShownWaiter : public RenderFrameObserver {
   base::RunLoop run_loop_;
 };
 
-RenderViewTest::RendererBlinkPlatformImplTestOverride::
-    RendererBlinkPlatformImplTestOverride() {
-  InitializeMojo();
-}
+RenderViewTest::CustomTaskEnvironment::CustomTaskEnvironment()
+    : base::test::TaskEnvironment(CreateTaskEnvironmentWithPriorities(
+          blink::scheduler::WebThreadScheduler::
+              CreatePrioritySettingsForTesting(),
+          SubclassCreatesDefaultTaskRunner{},
+          base::test::TaskEnvironment::TimeSource::MOCK_TIME)) {}
 
-RenderViewTest::RendererBlinkPlatformImplTestOverride::
-    ~RendererBlinkPlatformImplTestOverride() = default;
+RenderViewTest::CustomTaskEnvironment::~CustomTaskEnvironment() = default;
 
 RendererBlinkPlatformImpl*
-RenderViewTest::RendererBlinkPlatformImplTestOverride::Get() const {
+RenderViewTest::CustomTaskEnvironment::blink_platform() {
   return blink_platform_impl_.get();
 }
 
-void RenderViewTest::RendererBlinkPlatformImplTestOverride::Initialize() {
+void RenderViewTest::CustomTaskEnvironment::SetUp(
+    scoped_refptr<base::SingleThreadTaskRunner> io_thread_task_runner) {
   blink::Platform::InitializeBlink();
+
   main_thread_scheduler_ =
-      blink::scheduler::WebThreadScheduler::CreateMainThreadScheduler();
+      blink::scheduler::WebThreadScheduler::CreateMainThreadSchedulerForTesting(
+          sequence_manager());
   blink_platform_impl_ =
       std::make_unique<RendererBlinkPlatformImplTestOverrideImpl>(
-          main_thread_scheduler_.get());
+          main_thread_scheduler_.get(), std::move(io_thread_task_runner));
+
+  DeferredInitFromSubclass(nullptr);
 }
 
-void RenderViewTest::RendererBlinkPlatformImplTestOverride::Shutdown() {
+void RenderViewTest::CustomTaskEnvironment::TearDown() {
   main_thread_scheduler_->Shutdown();
   blink_platform_impl_->Shutdown();
 }
 
-RenderViewTest::RenderViewTest(bool hook_render_frame_creation)
-    : task_environment_(base::test::TaskEnvironment::TimeSource::MOCK_TIME) {
+RenderViewTest::RenderViewTest(bool hook_render_frame_creation) {
+  InitializeMojo();
   // Overrides creation of RenderFrameImpl. Subclasses may wish to do this
   // themselves and it can only be done once.
   if (hook_render_frame_creation)
@@ -333,16 +316,20 @@ RenderFrame* RenderViewTest::GetMainRenderFrame() {
   return RenderFrame::FromWebFrame(GetMainFrame());
 }
 
-void RenderViewTest::ExecuteJavaScriptForTests(const char* js) {
-  GetMainFrame()->ExecuteScript(WebScriptSource(WebString::FromUTF8(js)));
+v8::Isolate* RenderViewTest::Isolate() {
+  return GetMainFrame()->GetAgentGroupScheduler()->Isolate();
+}
+
+void RenderViewTest::ExecuteJavaScriptForTests(std::string_view js) {
+  GetMainFrame()->ExecuteScript(WebScriptSource(WebString::FromUtf8(js)));
 }
 
 bool RenderViewTest::ExecuteJavaScriptAndReturnIntValue(
     const std::u16string& script,
     int* int_result) {
-  v8::HandleScope handle_scope(v8::Isolate::GetCurrent());
+  v8::HandleScope handle_scope(Isolate());
   v8::Local<v8::Value> result = GetMainFrame()->ExecuteScriptAndReturnValue(
-      WebScriptSource(blink::WebString::FromUTF16(script)));
+      WebScriptSource(blink::WebString::FromUtf16(script)));
   if (result.IsEmpty() || !result->IsInt32())
     return false;
 
@@ -355,9 +342,9 @@ bool RenderViewTest::ExecuteJavaScriptAndReturnIntValue(
 bool RenderViewTest::ExecuteJavaScriptAndReturnNumberValue(
     const std::u16string& script,
     double* number_result) {
-  v8::HandleScope handle_scope(v8::Isolate::GetCurrent());
+  v8::HandleScope handle_scope(Isolate());
   v8::Local<v8::Value> result = GetMainFrame()->ExecuteScriptAndReturnValue(
-      WebScriptSource(blink::WebString::FromUTF16(script)));
+      WebScriptSource(blink::WebString::FromUtf16(script)));
   if (result.IsEmpty() || !result->IsNumber())
     return false;
 
@@ -367,13 +354,13 @@ bool RenderViewTest::ExecuteJavaScriptAndReturnNumberValue(
   return true;
 }
 
-void RenderViewTest::LoadHTML(const char* html) {
+void RenderViewTest::LoadHTML(std::string_view html) {
   FrameLoadWaiter waiter(GetMainRenderFrame());
   std::string url_string = "data:text/html;charset=utf-8,";
-  url_string.append(net::EscapeQueryParamValue(html, false));
+  url_string.append(base::EscapeQueryParamValue(html, false));
   RenderFrame::FromWebFrame(GetMainFrame())
       ->LoadHTMLStringForTesting(html, GURL(url_string), "UTF-8", GURL(),
-                                 false /* replace_current_item */);
+                                 /*replace_current_item=*/false);
   // The load may happen asynchronously, so we pump messages to process
   // the pending continuation.
   waiter.Wait();
@@ -381,12 +368,12 @@ void RenderViewTest::LoadHTML(const char* html) {
       blink::DocumentUpdateReason::kTest);
 }
 
-void RenderViewTest::LoadHTMLWithUrlOverride(const char* html,
-                                             const char* url_override) {
+void RenderViewTest::LoadHTMLWithUrlOverride(std::string_view html,
+                                             std::string_view url_override) {
   FrameLoadWaiter waiter(GetMainRenderFrame());
   RenderFrame::FromWebFrame(GetMainFrame())
       ->LoadHTMLStringForTesting(html, GURL(url_override), "UTF-8", GURL(),
-                                 false /* replace_current_item */);
+                                 /*replace_current_item=*/false);
   // The load may happen asynchronously, so we pump messages to process
   // the pending continuation.
   waiter.Wait();
@@ -411,6 +398,8 @@ void RenderViewTest::GoForward(const GURL& url, const blink::PageState& state) {
 }
 
 void RenderViewTest::SetUp() {
+  ContentTestSuiteBase::InitializeResourceBundle();
+
   // Ensure that this looks like the renderer process based on the command line.
   base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
       switches::kProcessType, switches::kRendererProcess);
@@ -420,13 +409,16 @@ void RenderViewTest::SetUp() {
   blink::WebRuntimeFeatures::EnableExperimentalFeatures(true);
   blink::WebRuntimeFeatures::EnableTestOnlyFeatures(true);
   blink::WebRuntimeFeatures::EnableOverlayScrollbars(
-      ui::IsOverlayScrollbarEnabled());
+      ui::NativeTheme::GetInstanceForWeb()->use_overlay_scrollbar());
 
   test_io_thread_ =
       std::make_unique<base::TestIOThread>(base::TestIOThread::kAutoStart);
   ipc_support_ = std::make_unique<mojo::core::ScopedIPCSupport>(
       test_io_thread_->task_runner(),
       mojo::core::ScopedIPCSupport::ShutdownPolicy::FAST);
+
+  tracing::InitTracingPostFeatureList(/*enable_consumer=*/false,
+                                      /*will_trace_thread_restart=*/false);
 
   // Subclasses can set render_thread_ with their own implementation before
   // calling RenderViewTest::SetUp().
@@ -437,23 +429,20 @@ void RenderViewTest::SetUp() {
 
   render_thread_->SetIOTaskRunner(test_io_thread_->task_runner());
 
-  // Blink needs to be initialized before calling CreateContentRendererClient()
-  // because it uses blink internally.
-  blink_platform_impl_.Initialize();
-  blink::Initialize(blink_platform_impl_.Get(), &binders_,
-                    blink_platform_impl_.GetMainThreadScheduler());
+  // Setting flags and really doing anything with WebKit is fairly fragile and
+  // hacky, but this is the world we live in...
+  // Note that we need to set flags *before* initializing V8 (as part of blink),
+  // as it's not allowed to modify them later.
+  v8::V8::SetFlagsFromString("--expose-gc");
 
+  skia::InitializeFontRendering();
+  // ContentClient must be initialized before Blink, because Blink now eagerly
+  // loads the default stylesheets, which are fetched from the resource bundle
+  // using ContentClient.
   content_client_.reset(CreateContentClient());
-  content_browser_client_.reset(CreateContentBrowserClient());
-  content_renderer_client_.reset(CreateContentRendererClient());
   SetContentClient(content_client_.get());
-  SetBrowserClientForTesting(content_browser_client_.get());
-  SetRendererClientForTesting(content_renderer_client_.get());
 
-  agent_scheduling_group_ = MockAgentSchedulingGroup::Create(*render_thread_);
-  render_widget_host_ = CreateRenderWidgetHost();
-
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   // This needs to happen sometime before PlatformInitialize.
   // This isn't actually necessary for most tests: most tests are able to
   // connect to their browser process which runs the real proxy host. However,
@@ -462,55 +451,73 @@ void RenderViewTest::SetUp() {
   SetDWriteFontProxySenderForTesting(CreateFakeCollectionSender());
 #endif
 
-#if defined(OS_MAC)
-  autorelease_pool_ = std::make_unique<base::mac::ScopedNSAutoreleasePool>();
+#if BUILDFLAG(IS_MAC)
+  autorelease_pool_.emplace();
 #endif
   command_line_ =
       std::make_unique<base::CommandLine>(base::CommandLine::NO_PROGRAM);
-  params_ = std::make_unique<MainFunctionParams>(*command_line_);
+  params_ = std::make_unique<MainFunctionParams>(command_line_.get());
   platform_ = std::make_unique<RendererMainPlatformDelegate>(*params_);
   platform_->PlatformInitialize();
 
-  // Setting flags and really doing anything with WebKit is fairly fragile and
-  // hacky, but this is the world we live in...
-  std::string flags("--expose-gc");
-  v8::V8::SetFlagsFromString(flags.c_str(), flags.size());
+  // Blink needs to be initialized before calling CreateContentRendererClient()
+  // because it uses Blink internally.
+  task_environment_.SetUp(render_thread_->GetIOTaskRunner());
+  blink::Initialize(task_environment_.blink_platform(), &binders_,
+                    task_environment_.main_thread_scheduler());
+
+  content_browser_client_.reset(CreateContentBrowserClient());
+  content_renderer_client_.reset(CreateContentRendererClient());
+  SetBrowserClientForTesting(content_browser_client_.get());
+  SetRendererClientForTesting(content_renderer_client_.get());
+
+  agent_scheduling_group_ = MockAgentSchedulingGroup::Create(*render_thread_);
+  render_widget_host_ = CreateRenderWidgetHost();
 
   // Ensure that we register any necessary schemes when initializing WebKit,
   // since we are using a MockRenderThread.
   RenderThreadImpl::RegisterSchemes();
 
-  RenderThreadImpl::SetRendererBlinkPlatformImplForTesting(
-      blink_platform_impl_.Get());
-
-  // This check is needed because when run under content_browsertests,
-  // ResourceBundle isn't initialized (since we have to use a diferent test
-  // suite implementation than for content_unittests). For browser_tests, this
-  // is already initialized.
-  if (!ui::ResourceBundle::HasSharedInstance()) {
-    ui::ResourceBundle::InitSharedInstanceWithLocale(
-        "en-US", nullptr, ui::ResourceBundle::DO_NOT_LOAD_COMMON_RESOURCES);
-  }
-
   process_ = std::make_unique<RenderProcess>();
 
+  // This is used to get the renderer color maps for the purpose of creating the
+  // color providers in Blink::Page.
+  MockColorProviderSource mock_color_provider_source_ =
+      MockColorProviderSource();
+
+  blink::ColorProviderColorMaps color_maps = blink::ColorProviderColorMaps{
+      mock_color_provider_source_.GetRendererColorMap(
+          ui::ColorProviderKey::ColorMode::kLight,
+          ui::ColorProviderKey::ForcedColors::kNone),
+      mock_color_provider_source_.GetRendererColorMap(
+          ui::ColorProviderKey::ColorMode::kDark,
+          ui::ColorProviderKey::ForcedColors::kNone),
+      mock_color_provider_source_.GetRendererColorMap(
+          mock_color_provider_source_.GetColorMode(),
+          ui::ColorProviderKey::ForcedColors::kSystem)};
+
   mojom::CreateViewParamsPtr view_params = mojom::CreateViewParams::New();
-  view_params->opener_frame_token = absl::nullopt;
-  view_params->window_was_created_with_opener = false;
+  view_params->opener_frame_token = std::nullopt;
+  view_params->window_was_opened_by_another_window = false;
   view_params->renderer_preferences = blink::RendererPreferences();
   view_params->web_preferences = blink::web_pref::WebPreferences();
-  view_params->view_id = render_thread_->GetNextRoutingID();
+  view_params->color_provider_colors = color_maps;
   view_params->replication_state = blink::mojom::FrameReplicationState::New();
+  view_params->blink_page_broadcast =
+      page_broadcast_.BindNewEndpointAndPassDedicatedReceiver();
 
   auto main_frame_params = mojom::CreateLocalMainFrameParams::New();
   main_frame_params->routing_id = render_thread_->GetNextRoutingID();
   main_frame_params->frame = TestRenderFrame::CreateStubFrameReceiver();
   // Ignoring the returned PendingReceiver because it is not bound to anything
-  ignore_result(
-      main_frame_params->interface_broker.InitWithNewPipeAndPassReceiver());
+  std::ignore =
+      main_frame_params->interface_broker.InitWithNewPipeAndPassReceiver();
+  main_frame_params->associated_interface_provider_remote =
+      TestRenderFrame::CreateStubAssociatedInterfaceProviderRemote();
   policy_container_host_ = std::make_unique<MockPolicyContainerHost>();
   main_frame_params->policy_container =
       policy_container_host_->CreatePolicyContainerForBlink();
+  main_frame_params->initiator_state_token = blink::InitiatorStateToken();
 
   auto widget_params = mojom::CreateFrameWidgetParams::New();
   widget_params->routing_id = render_thread_->GetNextRoutingID();
@@ -531,19 +538,18 @@ void RenderViewTest::SetUp() {
   view_params->hidden = false;
   view_params->never_composited = false;
 
-  RenderViewImpl* view = RenderViewImpl::Create(
-      *agent_scheduling_group_, std::move(view_params),
-      /*was_created_by_renderer=*/false, base::ThreadTaskRunnerHandle::Get());
+  view_params->browsing_context_group_token = base::UnguessableToken::Create();
 
-  RenderFrameWasShownWaiter waiter(RenderFrame::FromWebFrame(
-      view->GetWebView()->MainFrame()->ToWebLocalFrame()));
+  web_view_ =
+      agent_scheduling_group_->CreateWebView(std::move(view_params),
+                                             /*was_created_by_renderer=*/false,
+                                             /*base_url=*/blink::WebURL());
+
+  RenderFrameWasShownWaiter waiter(
+      RenderFrame::FromWebFrame(web_view_->MainFrame()->ToWebLocalFrame()));
   render_widget_host_->widget_remote_for_testing()->WasShown(
-      {} /* record_tab_switch_time_request */, false /* was_evicted=*/,
-      blink::mojom::RecordContentToVisibleTimeRequestPtr());
+      /*was_evicted=*/false, std::nullopt);
   waiter.Wait();
-
-  view_ = view;
-  web_view_ = view->GetWebView();
 }
 
 void RenderViewTest::TearDown() {
@@ -553,17 +559,13 @@ void RenderViewTest::TearDown() {
   mojo::Remote<blink::mojom::LeakDetector> leak_detector;
   mojo::GenericPendingReceiver receiver(
       leak_detector.BindNewPipeAndPassReceiver());
-  ignore_result(binders_.TryBind(&receiver));
+  std::ignore = binders_.TryBind(&receiver);
 
-  // Close the main |view_| as well as any other windows that might have been
-  // opened by the test.
-  CloseMessageSendingRenderViewVisitor closing_visitor;
-  RenderView::ForEach(&closing_visitor);
-  closing_visitor.CloseRenderViews();
+  render_thread_->ReleaseAllWebViews();
 
-  // |view_| is ref-counted and deletes itself during the RunUntilIdle() call
-  // below.
-  view_ = nullptr;
+  // Resetting `page_broadcast_` will cause the WebView to close itself.
+  page_broadcast_.reset();
+
   web_view_ = nullptr;
   process_.reset();
 
@@ -572,13 +574,11 @@ void RenderViewTest::TearDown() {
   // (http://crbug.com/21508).
   base::RunLoop().RunUntilIdle();
 
-  RenderThreadImpl::SetRendererBlinkPlatformImplForTesting(nullptr);
-
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   ClearDWriteFontProxySenderForTesting();
 #endif
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   autorelease_pool_.reset();
 #endif
 
@@ -604,7 +604,7 @@ void RenderViewTest::TearDown() {
     run_loop.Run();
   }
 
-  blink_platform_impl_.Shutdown();
+  task_environment_.TearDown();
   platform_->PlatformUninitialize();
   platform_.reset();
   params_.reset();
@@ -615,14 +615,13 @@ void RenderViewTest::TearDown() {
 }
 
 void RenderViewTest::SendNativeKeyEvent(
-    const NativeWebKeyboardEvent& key_event) {
+    const input::NativeWebKeyboardEvent& key_event) {
   SendWebKeyboardEvent(key_event);
 }
 
 void RenderViewTest::SendInputEvent(const blink::WebInputEvent& input_event) {
   GetWebFrameWidget()->ProcessInputEventSynchronouslyForTesting(
-      blink::WebCoalescedInputEvent(input_event, ui::LatencyInfo()),
-      base::DoNothing());
+      blink::WebCoalescedInputEvent(input_event, ui::LatencyInfo()));
 }
 
 void RenderViewTest::SendWebKeyboardEvent(
@@ -666,22 +665,23 @@ gfx::Rect RenderViewTest::GetElementBounds(const std::string& element_id) {
   std::string script =
       base::ReplaceStringPlaceholders(kGetCoordinatesScript, params, nullptr);
 
-  v8::Isolate* isolate = v8::Isolate::GetCurrent();
+  v8::Isolate* isolate = Isolate();
   v8::HandleScope handle_scope(isolate);
   v8::Local<v8::Value> value = GetMainFrame()->ExecuteScriptAndReturnValue(
-      WebScriptSource(WebString::FromUTF8(script)));
+      WebScriptSource(WebString::FromUtf8(script)));
   if (value.IsEmpty() || !value->IsArray())
     return gfx::Rect();
 
   v8::Local<v8::Array> array = value.As<v8::Array>();
+  v8::Local<v8::Context> v8_context =
+      array->GetCreationContext(isolate).ToLocalChecked();
+  v8::Context::Scope v8_context_scope(v8_context);
   if (array->Length() != 4)
     return gfx::Rect();
   std::vector<int> coords;
   for (int i = 0; i < 4; ++i) {
     v8::Local<v8::Number> index = v8::Number::New(isolate, i);
-    v8::Local<v8::Value> value;
-    if (!array->Get(isolate->GetCurrentContext(), index).ToLocal(&value) ||
-        !value->IsInt32()) {
+    if (!array->Get(v8_context, index).ToLocal(&value) || !value->IsInt32()) {
       return gfx::Rect();
     }
     coords.push_back(value.As<v8::Int32>()->Value());
@@ -704,12 +704,10 @@ void RenderViewTest::SimulatePointClick(const gfx::Point& point) {
   mouse_event.SetPositionInWidget(point.x(), point.y());
   mouse_event.click_count = 1;
   GetWebFrameWidget()->ProcessInputEventSynchronouslyForTesting(
-      blink::WebCoalescedInputEvent(mouse_event, ui::LatencyInfo()),
-      base::DoNothing());
+      blink::WebCoalescedInputEvent(mouse_event, ui::LatencyInfo()));
   mouse_event.SetType(WebInputEvent::Type::kMouseUp);
   GetWebFrameWidget()->ProcessInputEventSynchronouslyForTesting(
-      blink::WebCoalescedInputEvent(mouse_event, ui::LatencyInfo()),
-      base::DoNothing());
+      blink::WebCoalescedInputEvent(mouse_event, ui::LatencyInfo()));
 }
 
 bool RenderViewTest::SimulateElementRightClick(const std::string& element_id) {
@@ -727,12 +725,10 @@ void RenderViewTest::SimulatePointRightClick(const gfx::Point& point) {
   mouse_event.SetPositionInWidget(point.x(), point.y());
   mouse_event.click_count = 1;
   GetWebFrameWidget()->ProcessInputEventSynchronouslyForTesting(
-      blink::WebCoalescedInputEvent(mouse_event, ui::LatencyInfo()),
-      base::DoNothing());
+      blink::WebCoalescedInputEvent(mouse_event, ui::LatencyInfo()));
   mouse_event.SetType(WebInputEvent::Type::kMouseUp);
   GetWebFrameWidget()->ProcessInputEventSynchronouslyForTesting(
-      blink::WebCoalescedInputEvent(mouse_event, ui::LatencyInfo()),
-      base::DoNothing());
+      blink::WebCoalescedInputEvent(mouse_event, ui::LatencyInfo()));
 }
 
 void RenderViewTest::SimulateRectTap(const gfx::Rect& rect) {
@@ -744,8 +740,7 @@ void RenderViewTest::SimulateRectTap(const gfx::Rect& rect) {
   gesture_event.data.tap.width = rect.width();
   gesture_event.data.tap.height = rect.height();
   GetWebFrameWidget()->ProcessInputEventSynchronouslyForTesting(
-      blink::WebCoalescedInputEvent(gesture_event, ui::LatencyInfo()),
-      base::DoNothing());
+      blink::WebCoalescedInputEvent(gesture_event, ui::LatencyInfo()));
 }
 
 void RenderViewTest::SetFocused(const blink::WebElement& element) {
@@ -762,18 +757,20 @@ void RenderViewTest::ChangeFocusToNull(const blink::WebDocument& document) {
 
 void RenderViewTest::Reload(const GURL& url) {
   auto common_params = blink::mojom::CommonNavigationParams::New(
-      url, absl::nullopt, blink::mojom::Referrer::New(),
+      url, /* initiator_origin= */ std::nullopt,
+      /* initiator_base_url= */ std::nullopt, blink::mojom::Referrer::New(),
       ui::PAGE_TRANSITION_LINK, blink::mojom::NavigationType::RELOAD,
-      blink::NavigationDownloadPolicy(), false, GURL(), GURL(),
-      blink::PreviewsTypes::PREVIEWS_UNSPECIFIED, base::TimeTicks::Now(), "GET",
-      nullptr, network::mojom::SourceLocation::New(),
+      blink::NavigationDownloadPolicy(), false, GURL(),
+      base::TimeTicks::Now() /* actual_navigation_start_time */,
+      base::TimeTicks::Now() /* navigation_start_time */, "GET", nullptr,
+      network::mojom::SourceLocation::New(),
       false /* started_from_context_menu */, false /* has_user_gesture */,
       false /* has_text_fragment_token */,
       network::mojom::CSPDisposition::CHECK, std::vector<int>(), std::string(),
       false /* is_history_navigation_in_new_child_frame */,
-      base::TimeTicks() /* input_start */);
+      base::TimeTicks() /* input_start */,
+      network::mojom::RequestDestination::kDocument);
   auto commit_params = blink::CreateCommitNavigationParams();
-  commit_params->sandbox_flags = network::mojom::WebSandboxFlags::kNone;
   TestRenderFrame* frame = static_cast<TestRenderFrame*>(GetMainRenderFrame());
   FrameLoadWaiter waiter(frame);
   frame->Navigate(std::move(common_params), std::move(commit_params));
@@ -785,7 +782,7 @@ void RenderViewTest::Reload(const GURL& url) {
 void RenderViewTest::Resize(gfx::Size new_size, bool is_fullscreen_granted) {
   blink::VisualProperties visual_properties;
   visual_properties.screen_infos = display::ScreenInfos(display::ScreenInfo());
-  visual_properties.new_size = new_size;
+  visual_properties.new_size_device_px = new_size;
   visual_properties.compositor_viewport_pixel_rect = gfx::Rect(new_size);
   visual_properties.is_fullscreen_granted = is_fullscreen_granted;
   visual_properties.display_mode = blink::mojom::DisplayMode::kBrowser;
@@ -793,18 +790,14 @@ void RenderViewTest::Resize(gfx::Size new_size, bool is_fullscreen_granted) {
   GetWebFrameWidget()->ApplyVisualProperties(visual_properties);
 }
 
-void RenderViewTest::SimulateUserTypingASCIICharacter(char ascii_character,
+void RenderViewTest::SimulateUserTypingAsciiCharacter(char ascii_character,
                                                       bool flush_message_loop) {
-  int modifiers = blink::WebInputEvent::kNoModifiers;
-  if (isupper(ascii_character) || ascii_character == '@' ||
-      ascii_character == '_') {
-    modifiers = blink::WebKeyboardEvent::kShiftKey;
-  }
-
   blink::WebKeyboardEvent event(blink::WebKeyboardEvent::Type::kRawKeyDown,
-                                modifiers, ui::EventTimeForNow());
+                                GetWindowsUsLayoutModifiers(ascii_character),
+                                ui::EventTimeForNow());
   event.text[0] = ascii_character;
-  ASSERT_TRUE(GetWindowsKeyCode(ascii_character, &event.windows_key_code));
+  event.windows_key_code = GetWindowsUsLayoutKeyCode(ascii_character);
+  ASSERT_NE(event.windows_key_code, ui::VKEY_UNKNOWN);
   SendWebKeyboardEvent(event);
 
   event.SetType(blink::WebKeyboardEvent::Type::kChar);
@@ -821,41 +814,73 @@ void RenderViewTest::SimulateUserTypingASCIICharacter(char ascii_character,
   }
 }
 
+void RenderViewTest::SimulateUserTypingKeyCode(ui::KeyboardCode key_code,
+                                               bool flush_message_loop) {
+  blink::WebKeyboardEvent event(blink::WebKeyboardEvent::Type::kRawKeyDown,
+                                blink::WebKeyboardEvent::kNoModifiers,
+                                ui::EventTimeForNow());
+  event.windows_key_code = key_code;
+  SendWebKeyboardEvent(event);
+
+  event.SetType(blink::WebKeyboardEvent::Type::kKeyUp);
+  SendWebKeyboardEvent(event);
+
+  if (flush_message_loop) {
+    // Processing is delayed because of a Blink bug:
+    // https://bugs.webkit.org/show_bug.cgi?id=16976 See
+    // PasswordAutofillAgent::TextDidChangeInTextField() for details.
+    base::RunLoop().RunUntilIdle();
+  }
+}
+
 void RenderViewTest::SimulateUserInputChangeForElement(
-    blink::WebInputElement* input,
-    const std::string& new_value) {
+    blink::WebInputElement input,
+    std::string_view new_value) {
   ASSERT_TRUE(base::IsStringASCII(new_value));
-  while (!input->Focused())
-    input->GetDocument().GetFrame()->View()->AdvanceFocus(false);
+  while (!input.Focused()) {
+    input.GetDocument().GetFrame()->View()->AdvanceFocus(false);
+  }
+  SimulateUserTypingKeyCode(ui::VKEY_END, false);
 
-  size_t previous_length = input->Value().length();
-  for (size_t i = 0; i < previous_length; ++i)
-    SimulateUserTypingASCIICharacter(ui::VKEY_BACK, false);
-
-  EXPECT_TRUE(input->Value().Utf8().empty());
-  for (size_t i = 0; i < new_value.size(); ++i)
-    SimulateUserTypingASCIICharacter(new_value[i], false);
-
+  size_t previous_length = input.Value().length();
+  for (size_t i = 0; i < previous_length; ++i) {
+    SimulateUserTypingKeyCode(ui::VKEY_BACK, false);
+  }
+  EXPECT_TRUE(input.Value().Utf8().empty());
+  for (char c : new_value) {
+    SimulateUserTypingAsciiCharacter(c, false);
+  }
   // Compare only beginning, because autocomplete may have filled out the
   // form.
-  EXPECT_EQ(new_value, input->Value().Utf8().substr(0, new_value.length()));
+  EXPECT_EQ(new_value, input.Value().Utf8().substr(0, new_value.length()));
 
   base::RunLoop().RunUntilIdle();
+}
+
+void RenderViewTest::SimulateUserInputChangeForElementById(
+    std::string_view id,
+    std::string_view new_value) {
+  blink::WebInputElement element =
+      GetMainFrame()
+          ->GetDocument()
+          .GetElementById(WebString(base::UTF8ToUTF16(id)))
+          .DynamicTo<blink::WebInputElement>();
+  ASSERT_TRUE(element);
+  SimulateUserInputChangeForElement(element, new_value);
 }
 
 void RenderViewTest::OnSameDocumentNavigation(blink::WebLocalFrame* frame,
                                               bool is_new_navigation) {
   static_cast<RenderFrameImpl*>(GetMainRenderFrame())
-      ->DidFinishSameDocumentNavigation(is_new_navigation
-                                            ? blink::kWebStandardCommit
-                                            : blink::kWebHistoryInertCommit,
-                                        false /* is_synchronously_committed */,
-                                        false /* is_history_api_navigation */,
-                                        false /* is_client_redirect */);
-}
-
-void RenderViewTest::SetUseZoomForDSFEnabled(bool enabled) {
-  render_thread_->SetUseZoomForDSFEnabled(enabled);
+      ->DidFinishSameDocumentNavigation(
+          is_new_navigation ? blink::kWebStandardCommit
+                            : blink::kWebHistoryInertCommit,
+          true /* is_synchronously_committed */,
+          blink::mojom::SameDocumentNavigationType::kFragment,
+          false /* is_client_redirect */,
+          /*screenshot_destination=*/std::nullopt,
+          /*same_document_metrics_token=*/base::UnguessableToken(),
+          /*caused_by_ad=*/false);
 }
 
 blink::WebFrameWidget* RenderViewTest::GetWebFrameWidget() {
@@ -883,8 +908,9 @@ blink::VisualProperties RenderViewTest::InitialVisualProperties() {
   initial_visual_properties.screen_infos =
       display::ScreenInfos(display::ScreenInfo());
   // Ensure the view has some size so tests involving scrolling bounds work.
-  initial_visual_properties.new_size = gfx::Size(400, 300);
-  initial_visual_properties.visible_viewport_size = gfx::Size(400, 300);
+  initial_visual_properties.new_size_device_px = gfx::Size(400, 300);
+  initial_visual_properties.visible_viewport_size_device_px =
+      gfx::Size(400, 300);
   return initial_visual_properties;
 }
 
@@ -894,27 +920,29 @@ void RenderViewTest::GoToOffset(int offset,
   blink::WebView* webview = web_view_;
   int history_list_length =
       webview->HistoryBackListCount() + webview->HistoryForwardListCount() + 1;
-  int pending_offset = offset + webview->HistoryBackListCount();
+  int pending_index = offset + webview->HistoryBackListCount();
 
   auto common_params = blink::mojom::CommonNavigationParams::New(
-      url, absl::nullopt, blink::mojom::Referrer::New(),
+      url, /* initiator_origin= */ std::nullopt,
+      /* initiator_base_url= */ std::nullopt, blink::mojom::Referrer::New(),
       ui::PAGE_TRANSITION_FORWARD_BACK,
       blink::mojom::NavigationType::HISTORY_DIFFERENT_DOCUMENT,
-      blink::NavigationDownloadPolicy(), false, GURL(), GURL(),
-      blink::PreviewsTypes::PREVIEWS_UNSPECIFIED, base::TimeTicks::Now(), "GET",
-      nullptr, network::mojom::SourceLocation::New(),
+      blink::NavigationDownloadPolicy(), false, GURL(),
+      base::TimeTicks::Now() /* actual_navigation_start_time */,
+      base::TimeTicks::Now() /* navigation_start_time */, "GET", nullptr,
+      network::mojom::SourceLocation::New(),
       false /* started_from_context_menu */, false /* has_user_gesture */,
       false /* has_text_fragment_token */,
       network::mojom::CSPDisposition::CHECK, std::vector<int>(), std::string(),
       false /* is_history_navigation_in_new_child_frame */,
-      base::TimeTicks() /* input_start */);
+      base::TimeTicks() /* input_start */,
+      network::mojom::RequestDestination::kDocument);
   auto commit_params = blink::CreateCommitNavigationParams();
   commit_params->page_state = state.ToEncodedData();
-  commit_params->nav_entry_id = pending_offset + 1;
-  commit_params->pending_history_list_offset = pending_offset;
-  commit_params->current_history_list_offset = webview->HistoryBackListCount();
+  commit_params->nav_entry_id = pending_index + 1;
+  commit_params->pending_history_list_index = pending_index;
+  commit_params->current_history_list_index = webview->HistoryBackListCount();
   commit_params->current_history_list_length = history_list_length;
-  commit_params->sandbox_flags = network::mojom::WebSandboxFlags::kNone;
 
   auto* frame = static_cast<TestRenderFrame*>(GetMainRenderFrame());
   FrameLoadWaiter waiter(frame);
@@ -926,12 +954,12 @@ void RenderViewTest::GoToOffset(int offset,
       blink::DocumentUpdateReason::kTest);
 }
 
-void RenderViewTest::CreateFakeWebURLLoaderFactory() {
+void RenderViewTest::CreateFakeURLLoaderFactory() {
   RenderFrameImpl* main_frame =
       static_cast<RenderFrameImpl*>(GetMainRenderFrame());
   DCHECK(main_frame);
-  main_frame->SetWebURLLoaderFactoryOverrideForTest(
-      std::make_unique<FakeWebURLLoaderFactory>());
+  main_frame->SetURLLoaderFactoryOverrideForTest(
+      base::MakeRefCounted<FailingURLLoaderFactory>());
 }
 
 }  // namespace content

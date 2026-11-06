@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,10 @@
 
 namespace blink {
 
-InspectorHelperMixin::InspectorHelperMixin(
-    AudioGraphTracer& graph_tracer, const String& parent_uuid)
+InspectorHelperMixin::InspectorHelperMixin(AudioGraphTracer& graph_tracer,
+                                           const String& parent_uuid)
     : graph_tracer_(graph_tracer),
-      uuid_(WTF::CreateCanonicalUUIDString()),
+      uuid_(CreateCanonicalUuidString()),
       parent_uuid_(parent_uuid) {}
 
 void InspectorHelperMixin::Trace(Visitor* visitor) const {

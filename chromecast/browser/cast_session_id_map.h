@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,7 @@
 #include "base/containers/flat_map.h"
 #include "base/no_destructor.h"
 #include "base/sequence_checker.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/unguessable_token.h"
 #include "chromecast/media/audio/cast_audio_manager_helper.h"
 
@@ -36,6 +36,10 @@ class CastSessionIdMap : public media::CastAudioManagerHelper::Delegate {
   // This must be called for the first time on the browser main thread.
   static CastSessionIdMap* GetInstance(
       base::SequencedTaskRunner* task_runner = nullptr);
+
+  CastSessionIdMap(const CastSessionIdMap&) = delete;
+  CastSessionIdMap& operator=(const CastSessionIdMap&) = delete;
+
   // Map a session id to a particular group id in the provided WebContents.
   // Record whether the session is an audio only session.
   // Can be called on any thread.
@@ -59,6 +63,11 @@ class CastSessionIdMap : public media::CastAudioManagerHelper::Delegate {
   // session id. Defaults to false if the mapping is not found.
   // Must be called on the sequence for |task_runner_|.
   bool IsGroup(const std::string& session_id) override;
+
+  // Async version of IsAudioOnlySession. It can be called from any thread.
+  using IsAudioOnlySessionAsyncCallback = base::OnceCallback<void(bool)>;
+  void IsAudioOnlySessionAsync(const std::string& session_id,
+                               IsAudioOnlySessionAsyncCallback callback);
 
  private:
   class GroupObserver;
@@ -92,8 +101,6 @@ class CastSessionIdMap : public media::CastAudioManagerHelper::Delegate {
       group_info_mapping_;
   base::SequencedTaskRunner* const task_runner_;
   SEQUENCE_CHECKER(sequence_checker_);
-
-  DISALLOW_COPY_AND_ASSIGN(CastSessionIdMap);
 };
 
 }  // namespace shell

@@ -1,6 +1,5 @@
-# Primary
-collinbaker@chromium.org
+file://components/user_education/OWNERS
 
-# Backup
-bdea@chromium.org
-robliao@chromium.org
+# For NTP Promo reviews, please add one reviewer from the above list and one
+# from this list.
+per-file browser_ntp_promos.*=file://components/search/OWNERS

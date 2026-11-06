@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,9 @@
 
 #include <set>
 #include <string>
+#include <string_view>
 
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
 #include "extensions/common/mojom/api_permission_id.mojom-shared.h"
 #include "extensions/common/permissions/api_permission.h"
 #include "extensions/common/permissions/api_permission_set.h"
@@ -20,13 +19,9 @@
 
 namespace extensions {
 
-// The PermissionSet is an immutable class that encapsulates an
-// extension's permissions. The class exposes set operations for combining and
-// manipulating the permissions.
-// TODO(sashab): PermissionIDSet should be called PermissionSet. Once
-// PermissionMessageProvider::GetPermissionMessages() is the only
-// method used for generating permission messages, find the other users of this
-// class and deprecate or rename it as appropriate.
+// The PermissionSet is a class that encapsulates extension permissions of
+// different types (manifest permissions, API permissions, explicit hosts, and
+// scriptable hosts).
 class PermissionSet {
  public:
   // Creates an empty permission set (e.g. default permissions).
@@ -40,30 +35,32 @@ class PermissionSet {
                 ManifestPermissionSet manifest_permissions,
                 URLPatternSet explicit_hosts,
                 URLPatternSet scriptable_hosts);
+
+  PermissionSet& operator=(const PermissionSet&) = delete;
+
   ~PermissionSet();
 
   PermissionSet(PermissionSet&& other);
   PermissionSet& operator=(PermissionSet&& other);
 
   // Creates a new permission set equal to |set1| - |set2|.
-  static std::unique_ptr<const PermissionSet> CreateDifference(
+  static std::unique_ptr<PermissionSet> CreateDifference(
       const PermissionSet& set1,
       const PermissionSet& set2);
 
   // Creates a new permission set equal to the intersection of |set1| and
   // |set2|.
-  // TODO(https://crbug.com/867549): Audit callers of CreateIntersection() and
+  // TODO(crbug.com/40586635): Audit callers of CreateIntersection() and
   // have them determine the proper intersection behavior.
-  static std::unique_ptr<const PermissionSet> CreateIntersection(
+  static std::unique_ptr<PermissionSet> CreateIntersection(
       const PermissionSet& set1,
       const PermissionSet& set2,
       URLPatternSet::IntersectionBehavior intersection_behavior =
           URLPatternSet::IntersectionBehavior::kPatternsContainedByBoth);
 
   // Creates a new permission set equal to the union of |set1| and |set2|.
-  static std::unique_ptr<const PermissionSet> CreateUnion(
-      const PermissionSet& set1,
-      const PermissionSet& set2);
+  static std::unique_ptr<PermissionSet> CreateUnion(const PermissionSet& set1,
+                                                    const PermissionSet& set2);
 
   bool operator==(const PermissionSet& rhs) const;
   bool operator!=(const PermissionSet& rhs) const;
@@ -71,9 +68,9 @@ class PermissionSet {
   // Returns a copy of this PermissionSet.
   std::unique_ptr<PermissionSet> Clone() const;
 
-  // Returns true if every API or host permission available to |set| is also
-  // available to this. In other words, if the API permissions of |set| are a
-  // subset of this, and the host permissions in this encompass those in |set|.
+  // Returns true if every API or host permission available to `set` is also
+  // available to this. In other words, if the API permissions of `set` are a
+  // subset of this, and the host permissions in this encompass those in `set`.
   bool Contains(const PermissionSet& set) const;
 
   // Gets the API permissions in this set as a set of strings.
@@ -85,13 +82,13 @@ class PermissionSet {
   // Returns true if the set has the specified API permission.
   bool HasAPIPermission(mojom::APIPermissionID permission) const;
 
-  // Returns true if the |extension| explicitly requests access to the given
-  // |permission_name|. Note this does not include APIs without no corresponding
+  // Returns true if the `extension` explicitly requests access to the given
+  // `permission_name`. Note this does not include APIs without no corresponding
   // permission, like "runtime" or "browserAction".
-  bool HasAPIPermission(const std::string& permission_name) const;
+  bool HasAPIPermission(std::string_view permission_name) const;
 
   // Returns true if the set allows the given permission with the default
-  // permission detal.
+  // permission detail.
   bool CheckAPIPermission(mojom::APIPermissionID permission) const;
 
   // Returns true if the set allows the given permission and permission param.
@@ -99,7 +96,7 @@ class PermissionSet {
       mojom::APIPermissionID permission,
       const APIPermission::CheckParam* param) const;
 
-  // Returns true if this includes permission to access |origin|.
+  // Returns true if this includes permission to access `origin`.
   bool HasExplicitAccessToOrigin(const GURL& origin) const;
 
   // Returns true if this permission set includes effective access to all
@@ -109,24 +106,26 @@ class PermissionSet {
   // Returns true if this permission set has access to so many hosts, that we
   // should treat it as all hosts for warning purposes.
   // For example, '*://*.com/*'.
-  // If |include_api_permissions| is true, this will look at both host
+  // If `include_api_permissions` is true, this will look at both host
   // permissions and API permissions. Otherwise, this only looks at
   // host permissions.
   bool ShouldWarnAllHosts(bool include_api_permissions = true) const;
 
-  // Returns true if this permission set includes effective access to |url|.
+  // Returns true if this permission set includes effective access to `url`.
   bool HasEffectiveAccessToURL(const GURL& url) const;
 
-  const APIPermissionSet& apis() const { return apis_; }
+  // Sets the different permissions on the PermissionSet.
+  void SetAPIPermissions(APIPermissionSet new_apis);
+  void SetManifestPermissions(ManifestPermissionSet new_manifest_permissions);
+  void SetExplicitHosts(URLPatternSet new_explicit_hosts);
+  void SetScriptableHosts(URLPatternSet new_scriptable_hosts);
 
+  const APIPermissionSet& apis() const { return apis_; }
   const ManifestPermissionSet& manifest_permissions() const {
       return manifest_permissions_;
   }
-
   const URLPatternSet& effective_hosts() const { return effective_hosts_; }
-
   const URLPatternSet& explicit_hosts() const { return explicit_hosts_; }
-
   const URLPatternSet& scriptable_hosts() const { return scriptable_hosts_; }
 
  private:
@@ -136,8 +135,9 @@ class PermissionSet {
   // Deliberate copy constructor for cloning the set.
   PermissionSet(const PermissionSet& permission_set);
 
-  // Adds permissions implied independently of other context.
-  void InitImplicitPermissions();
+  // Cleans up any explicit host paths - explicit hosts require the path to be
+  // "/*", and we implicitly make this change.
+  void CleanExplicitHostPaths();
 
   // Initializes the effective host permission based on the data in this set.
   void InitEffectiveHosts();
@@ -156,29 +156,25 @@ class PermissionSet {
   ManifestPermissionSet manifest_permissions_;
 
   // The list of hosts that can be accessed directly from the extension.
-  // TODO(jstritar): Rename to "hosts_"?
   URLPatternSet explicit_hosts_;
 
   // The list of hosts that can be scripted by content scripts.
-  // TODO(jstritar): Rename to "user_script_hosts_"?
   URLPatternSet scriptable_hosts_;
 
   // The list of hosts this effectively grants access to.
   URLPatternSet effective_hosts_;
 
-  enum ShouldWarnAllHostsType {
-    UNINITIALIZED = 0,
-    WARN_ALL_HOSTS,
-    DONT_WARN_ALL_HOSTS
+  enum class ShouldWarnAllHostsType {
+    kUninitialized = 0,
+    kWarnAllHosts,
+    kDontWarnAllHosts
   };
   // Cache whether this set implies access to all hosts, because it's
   // non-trivial to compute (lazily initialized).
   mutable ShouldWarnAllHostsType host_permissions_should_warn_all_hosts_ =
-      UNINITIALIZED;
+      ShouldWarnAllHostsType::kUninitialized;
   mutable ShouldWarnAllHostsType api_permissions_should_warn_all_hosts_ =
-      UNINITIALIZED;
-
-  DISALLOW_ASSIGN(PermissionSet);
+      ShouldWarnAllHostsType::kUninitialized;
 };
 
 }  // namespace extensions

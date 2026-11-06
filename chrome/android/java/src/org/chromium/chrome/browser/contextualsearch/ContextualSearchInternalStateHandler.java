@@ -1,18 +1,21 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.contextualsearch;
 
-import org.chromium.chrome.browser.compositor.bottombar.OverlayPanel.StateChangeReason;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.chrome.browser.compositor.overlay_panel.OverlayPanel.StateChangeReason;
 
 /**
  * An interface for driving operations in the Contextual Search Manager's internal state by the
  * {@link ContextualSearchInternalStateController} class.
  */
+@NullMarked
 public interface ContextualSearchInternalStateHandler {
     /**
      * Hides the Contextual Search user interface.
+     *
      * @see ContextualSearchInternalStateController.InternalState#IDLE
      */
     void hideContextualSearchUi(@StateChangeReason int reason);
@@ -76,4 +79,22 @@ public interface ContextualSearchInternalStateHandler {
      * @see ContextualSearchInternalStateController.InternalState#RESOLVING
      */
     void resolveSearchTerm();
+
+    /**
+     * Called when a Search has been shown that was triggered by a tap gesture.
+     * @see ContextualSearchInternalStateController.InternalState#SHOWING_TAP_SEARCH
+     */
+    void showingTapSearch();
+
+    /**
+     * Called when a Search has been shown that was triggered by an intelligent longpress gesture.
+     * @see ContextualSearchInternalStateController.InternalState#SHOWING_RESOLVED_LONG_PRESS_SEARCH
+     */
+    void showingIntelligentLongpress();
+
+    /**
+     * Completes any search.
+     * @see ContextualSearchInternalStateController.InternalState#SEARCH_COMPLETED
+     */
+    void completeSearch();
 }

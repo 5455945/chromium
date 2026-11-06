@@ -1,20 +1,18 @@
 rootWebArea isLineBreakingObject=true
 ++genericContainer ignored isLineBreakingObject=true
 ++++genericContainer ignored isLineBreakingObject=true
-++++++genericContainer multiline value='text in span in presentational paragraph in li<newline><newline>A list item with both a br and<newline>an inner p role=presentation' isLineBreakingObject=true
+++++++genericContainer multiline value='1. text in span in presentational paragraph in li<newline>2. A list item with both a br and<newline>an inner p role=presentation' isLineBreakingObject=true
 ++++++++list isLineBreakingObject=true
 ++++++++++listItem isLineBreakingObject=true
 ++++++++++++listMarker name='1. ' nextOnLineId=inlineTextBox:"text in span in presentational paragraph in li"
-++++++++++++++staticText name='1. ' nextOnLineId=inlineTextBox:"text in span in presentational paragraph in li"
-++++++++++++++++inlineTextBox name='1. ' nextOnLineId=inlineTextBox:"text in span in presentational paragraph in li"
-++++++++++++staticText name='text in span in presentational paragraph in li' previousOnLineId=inlineTextBox:"1. "
-++++++++++++++inlineTextBox name='text in span in presentational paragraph in li' previousOnLineId=inlineTextBox:"1. "
+++++++++++++++staticText ignored
+++++++++++++staticText name='text in span in presentational paragraph in li' previousOnLineId=staticText
+++++++++++++++inlineTextBox name='text in span in presentational paragraph in li' previousOnLineId=staticText
 ++++++++++listItem isLineBreakingObject=true
 ++++++++++++listMarker name='2. ' nextOnLineId=inlineTextBox:"A list item with both a br and"
-++++++++++++++staticText name='2. ' nextOnLineId=inlineTextBox:"A list item with both a br and"
-++++++++++++++++inlineTextBox name='2. ' nextOnLineId=inlineTextBox:"A list item with both a br and"
-++++++++++++staticText name='A list item with both a br and' nextOnLineId=inlineTextBox:"<newline>" previousOnLineId=inlineTextBox:"2. "
-++++++++++++++inlineTextBox name='A list item with both a br and' nextOnLineId=inlineTextBox:"<newline>" previousOnLineId=inlineTextBox:"2. "
+++++++++++++++staticText ignored
+++++++++++++staticText name='A list item with both a br and' nextOnLineId=inlineTextBox:"<newline>" previousOnLineId=staticText
+++++++++++++++inlineTextBox name='A list item with both a br and' nextOnLineId=inlineTextBox:"<newline>" previousOnLineId=staticText
 ++++++++++++lineBreak name='<newline>' previousOnLineId=inlineTextBox:"A list item with both a br and" isLineBreakingObject=true
 ++++++++++++++inlineTextBox name='<newline>' previousOnLineId=inlineTextBox:"A list item with both a br and" isLineBreakingObject=true
 ++++++++++++staticText name='an inner p role=presentation'

@@ -1,26 +1,24 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_WEB_APPLICATIONS_WEB_APP_DATABASE_FACTORY_H_
 #define CHROME_BROWSER_WEB_APPLICATIONS_WEB_APP_DATABASE_FACTORY_H_
 
-#include <memory>
-
-#include "components/sync/model/model_type_store.h"
+#include "base/memory/raw_ptr.h"
+#include "components/sync/model/data_type_store.h"
 
 class Profile;
 
-namespace syncer {
-class ModelTypeStoreService;
-}  // namespace syncer
-
 namespace web_app {
+class FakeWebAppDatabaseFactory;
 
 class AbstractWebAppDatabaseFactory {
  public:
   virtual ~AbstractWebAppDatabaseFactory() = default;
-  virtual syncer::OnceModelTypeStoreFactory GetStoreFactory() = 0;
+  virtual syncer::OnceDataTypeStoreFactory GetStoreFactory() = 0;
+  virtual bool IsSyncingApps() = 0;
+  virtual FakeWebAppDatabaseFactory* AsFakeWebAppDatabaseFactory();
 };
 
 class WebAppDatabaseFactory : public AbstractWebAppDatabaseFactory {
@@ -31,15 +29,11 @@ class WebAppDatabaseFactory : public AbstractWebAppDatabaseFactory {
   ~WebAppDatabaseFactory() override;
 
   // AbstractWebAppDatabaseFactory implementation.
-  syncer::OnceModelTypeStoreFactory GetStoreFactory() override;
+  syncer::OnceDataTypeStoreFactory GetStoreFactory() override;
+  bool IsSyncingApps() override;
 
  private:
-  // If null, the Web Apps system uses the shared ModelTypeStoreService from the
-  // profile. Otherwise, the Web Apps system uses its own ModelTypeStoreService
-  // instance.
-  std::unique_ptr<syncer::ModelTypeStoreService> model_type_store_service_;
-
-  Profile* const profile_;
+  const raw_ptr<Profile> profile_;
 };
 
 }  // namespace web_app

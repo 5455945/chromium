@@ -1,9 +1,11 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_BINDINGS_CORE_V8_IDL_TYPES_BASE_H_
 #define THIRD_PARTY_BLINK_RENDERER_BINDINGS_CORE_V8_IDL_TYPES_BASE_H_
+
+#include <concepts>
 
 namespace blink {
 
@@ -22,6 +24,19 @@ struct IDLBase {
 template <typename T>
 struct IDLBaseHelper : public IDLBase {
   using ImplType = T;
+};
+
+// An utility type trait to convert an IDL type (e.g. IDLLong,
+// ScriptWrappable's subclasses) to a Blink implementation type (e.g. int32_t,
+// ScriptWrappable's subclasses themselves).
+template <typename IDLType>
+struct IDLTypeToBlinkImplType {
+  using type = IDLType;
+};
+template <typename IDLType>
+  requires std::derived_from<IDLType, IDLBase>
+struct IDLTypeToBlinkImplType<IDLType> {
+  using type = typename IDLType::ImplType;
 };
 
 }  // namespace blink

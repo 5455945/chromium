@@ -1,76 +1,347 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/login/enrollment/enrollment_screen.h"
 
-#include "ash/constants/ash_switches.h"
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/command_line.h"
-#include "base/test/scoped_mock_time_message_loop_task_runner.h"
+#include <memory>
+#include <optional>
+#include <sstream>
+#include <string>
+
+#include "ash/constants/ash_pref_names.h"
+#include "base/check_deref.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/run_loop.h"
+#include "base/test/scoped_command_line.h"
 #include "base/test/task_environment.h"
-#include "base/threading/thread_task_runner_handle.h"
-#include "chrome/browser/ash/login/enrollment/enterprise_enrollment_helper.h"
-#include "chrome/browser/ash/login/enrollment/enterprise_enrollment_helper_mock.h"
+#include "base/time/time.h"
+#include "build/branding_buildflags.h"
+#include "chrome/browser/ash/login/configuration_keys.h"
+#include "chrome/browser/ash/login/enrollment/enrollment_launcher.h"
+#include "chrome/browser/ash/login/enrollment/mock_enrollment_launcher.h"
 #include "chrome/browser/ash/login/enrollment/mock_enrollment_screen.h"
+#include "chrome/browser/ash/login/screens/mock_error_screen.h"
 #include "chrome/browser/ash/login/wizard_context.h"
-#include "chrome/browser/chromeos/policy/enrollment/enrollment_config.h"
-#include "chrome/browser/policy/enrollment_status.h"
+#include "chrome/browser/ash/policy/enrollment/enrollment_config.h"
+#include "chrome/browser/ash/policy/enrollment/enrollment_requisition_manager.h"
+#include "chrome/browser/ash/policy/enrollment/enrollment_status.h"
+#include "chrome/browser/ash/policy/enrollment/enrollment_test_helper.h"
+#include "chrome/browser/browser_process_platform_part.h"
+#include "chrome/browser/ui/ash/login/fake_login_display_host.h"
+#include "chrome/browser/ui/webui/ash/login/online_login_utils.h"
 #include "chrome/test/base/testing_browser_process.h"
-#include "chromeos/dbus/dbus_thread_manager.h"
-#include "chromeos/tpm/stub_install_attributes.h"
+#include "chromeos/ash/components/install_attributes/stub_install_attributes.h"
+#include "chromeos/ash/components/login/session/scoped_process_shutting_down_override_for_testing.h"
+#include "chromeos/ash/components/login/session/session_termination_manager.h"
+#include "chromeos/ash/components/network/network_handler_test_helper.h"
+#include "chromeos/ash/components/system/fake_statistics_provider.h"
+#include "components/policy/core/common/cloud/cloud_policy_constants.h"
+#include "components/prefs/pref_service.h"
+#include "components/prefs/testing_pref_service.h"
+#include "google_apis/gaia/gaia_id.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
+#include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
+#include "services/network/test/test_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace ash {
 
+constexpr char kTestDomain[] = "test.org";
+constexpr char kTestAuthCode[] = "test_auth_code";
+constexpr char kTestDeviceId[] = "test_device_id";
+constexpr char kTestUserEmail[] = "user@test.org";
+constexpr GaiaId::Literal kTestUserGaiaId("test_user_gaia_id");
+constexpr char kTestUserPassword[] = "test_password";
+
 using ::testing::_;
 using ::testing::AnyNumber;
-using ::testing::Invoke;
+using ::testing::NiceMock;
 
-class EnrollmentScreenUnitTest : public testing::Test {
+namespace {
+
+// Initialize network-related objects used by `EnrollmentScreen` and
+// `ErrorScreen`.
+class ScopedNetworkInitializer {
  public:
-  EnrollmentScreenUnitTest() = default;
+  ScopedNetworkInitializer() {
+    network_handler_test_helper_.AddDefaultProfiles();
+  }
+
+  ~ScopedNetworkInitializer() = default;
+
+ private:
+  // Initializes NetworkHandler and required DBus clients.
+  NetworkHandlerTestHelper network_handler_test_helper_;
+};
+
+}  // namespace
+
+class EnrollmentScreenBaseTest : public testing::Test {
+ public:
+  EnrollmentScreenBaseTest(const EnrollmentScreenBaseTest&) = delete;
+  EnrollmentScreenBaseTest& operator=(const EnrollmentScreenBaseTest&) = delete;
+
+ protected:
+  EnrollmentScreenBaseTest()
+      : mock_error_screen_(TestingBrowserProcess::GetGlobal()->local_state(),
+                           mock_error_view_.AsWeakPtr()) {
+    policy::EnrollmentRequisitionManager::Initialize(
+        CHECK_DEREF(TestingBrowserProcess::GetGlobal()->local_state()));
+    TestingBrowserProcess::GetGlobal()->SetSharedURLLoaderFactory(
+        test_url_loader_factory_.GetSafeWeakWrapper());
+  }
+
+  ~EnrollmentScreenBaseTest() override {
+    TestingBrowserProcess::GetGlobal()->SetSharedURLLoaderFactory(nullptr);
+    // ~EnrollmentScreen() CHECKs that it owns an EnrollmentLauncher only during
+    // shutdown.
+    ScopedProcessShuttingDownOverrideForTesting shutting_down_override;
+    enrollment_screen_.reset();
+  }
 
   // Creates the EnrollmentScreen and sets required parameters.
-  virtual void SetUpEnrollmentScreen() {
-    wizard_context_ = std::make_unique<WizardContext>();
-
+  void SetUpEnrollmentScreen(const policy::EnrollmentConfig& config) {
     enrollment_screen_ = std::make_unique<EnrollmentScreen>(
-        &mock_view_,
-        base::BindRepeating(&EnrollmentScreenUnitTest::HandleScreenExit,
+        TestingBrowserProcess::GetGlobal()->local_state(),
+        TestingBrowserProcess::GetGlobal()->shared_url_loader_factory(),
+        TestingBrowserProcess::GetGlobal()
+            ->platform_part()
+            ->browser_policy_connector_ash(),
+        mock_view_.AsWeakPtr(), &mock_error_screen_,
+        base::BindRepeating(&EnrollmentScreenBaseTest::HandleScreenExit,
                             base::Unretained(this)));
 
-    enrollment_screen_->SetEnrollmentConfig(enrollment_config_);
+    enrollment_screen_->SetEnrollmentConfig(config);
+    enrollment_screen_->set_tpm_updater_for_testing(base::DoNothing());
   }
+
+  void ResetEnrollmentScreen() { enrollment_screen_.reset(); }
 
   // Fast forwards time by the specified amount.
   void FastForwardTime(base::TimeDelta time) {
-    runner_.task_runner()->FastForwardBy(time);
+    task_environment_.FastForwardBy(time);
   }
 
-  MockEnrollmentScreenView* GetMockScreenView() { return &mock_view_; }
+  void ExpectAttestationBasedEnrollmentAndReportEnrolled() {
+    EXPECT_CALL(mock_enrollment_launcher_, EnrollUsingAttestation())
+        .WillOnce([this]() {
+          ExpectEnrollmentScreenIsEnrollmentStatusConsumer();
+          SetupEnrolledDevice();
+          enrollment_screen_->OnDeviceEnrolled();
+        });
 
-  // testing::Test:
-  void SetUp() override {
-    // Initialize the thread manager.
-    DBusThreadManager::Initialize();
+    ExpectSetEnterpriseDomainInfo();
   }
 
-  void TearDown() override {
-    TestingBrowserProcess::GetGlobal()->SetShuttingDown(true);
-    DBusThreadManager::Shutdown();
+  void ExpectAttestationBasedEnrollmentAndReportFailure(
+      policy::EnrollmentStatus status) {
+    EXPECT_NE(status.enrollment_code(),
+              policy::EnrollmentStatus::Code::kSuccess)
+        << "Cannot not expect failure with a success code";
+
+    EXPECT_CALL(mock_enrollment_launcher_, EnrollUsingAttestation())
+        .WillOnce([this, status]() {
+          ExpectEnrollmentScreenIsEnrollmentStatusConsumer();
+          enrollment_screen_->OnEnrollmentError(status);
+        });
   }
 
- protected:
-  std::unique_ptr<EnrollmentScreen> enrollment_screen_;
-  std::unique_ptr<WizardContext> wizard_context_;
+  void ExpectAttestationBasedEnrollmentAndReportFailure() {
+    ExpectAttestationBasedEnrollmentAndReportFailure(
+        policy::EnrollmentStatus::ForRegistrationError(
+            policy::DeviceManagementStatus::DM_STATUS_TEMPORARY_UNAVAILABLE));
+  }
 
-  // The last result reported by `enrollment_screen_`.
-  absl::optional<EnrollmentScreen::Result> last_screen_result_;
+  void ExpectAttestationBasedEnrollmentAndReportFailureWithAutomaticFallback() {
+    ExpectAttestationBasedEnrollmentAndReportFailure(
+        policy::EnrollmentStatus::ForRegistrationError(
+            policy::DeviceManagementStatus::
+                DM_STATUS_SERVICE_DEVICE_NOT_FOUND));
+  }
 
-  policy::EnrollmentConfig enrollment_config_;
+  void ExpectManualEnrollmentAndReportEnrolled() {
+    EXPECT_CALL(mock_enrollment_launcher_, EnrollUsingAuthCode(kTestAuthCode))
+        .WillOnce([this]() {
+          ExpectEnrollmentScreenIsEnrollmentStatusConsumer();
+          SetupEnrolledDevice();
+          enrollment_screen_->OnDeviceEnrolled();
+        });
+
+    ExpectSetEnterpriseDomainInfo();
+  }
+
+  void ExpectManualEnrollmentAndReportFailure(policy::EnrollmentStatus status) {
+    EXPECT_NE(status.enrollment_code(),
+              policy::EnrollmentStatus::Code::kSuccess)
+        << "Cannot not expect failure with a success code";
+
+    EXPECT_CALL(mock_enrollment_launcher_, EnrollUsingAuthCode(kTestAuthCode))
+        .WillOnce([this, status]() {
+          ExpectEnrollmentScreenIsEnrollmentStatusConsumer();
+          enrollment_screen_->OnEnrollmentError(status);
+        });
+  }
+
+  void ExpectManualEnrollmentAndReportFailure() {
+    ExpectManualEnrollmentAndReportFailure(
+        policy::EnrollmentStatus::ForRegistrationError(
+            policy::DeviceManagementStatus::DM_STATUS_TEMPORARY_UNAVAILABLE));
+  }
+
+  void ExpectGetDeviceAttributeUpdatePermission(bool permission_granted) {
+    EXPECT_CALL(mock_enrollment_launcher_, GetDeviceAttributeUpdatePermission())
+        .WillOnce([this, permission_granted]() {
+          ExpectEnrollmentScreenIsEnrollmentStatusConsumer();
+          enrollment_screen_->OnDeviceAttributeUpdatePermission(
+              permission_granted);
+        });
+  }
+
+  void ExpectDeviceAttributeUpdateSuccess() {
+    EXPECT_CALL(mock_enrollment_launcher_, UpdateDeviceAttributes(_, _))
+        .WillOnce([this](const std::string&, const std::string&) {
+          enrollment_screen_->OnDeviceAttributeUploadCompleted(/*success=*/true);
+        });
+  }
+
+  void ExpectSuccessScreen() {
+    EXPECT_CALL(mock_view_, ShowEnrollmentStatus(
+                                policy::EnrollmentStatus::ForEnrollmentCode(
+                                    policy::EnrollmentStatus::Code::kSuccess)))
+        .WillOnce([this]() { enrollment_screen_->OnConfirmationClosed(); });
+  }
+
+  void ExpectSuccessScreenIsNotShown() {
+    EXPECT_CALL(mock_view_, ShowEnrollmentStatus(
+                                policy::EnrollmentStatus::ForEnrollmentCode(
+                                    policy::EnrollmentStatus::Code::kSuccess)))
+        .Times(0);
+  }
+
+  void ExpectErrorScreen(policy::EnrollmentStatus status) {
+    EXPECT_NE(status.enrollment_code(),
+              policy::EnrollmentStatus::Code::kSuccess)
+        << "Cannot not expect failure with a success code";
+
+    EXPECT_CALL(mock_view_, ShowEnrollmentStatus(status));
+  }
+
+  void ExpectTokenBasedEnrollmentAndReportEnrolled() {
+    EXPECT_CALL(mock_enrollment_launcher_, EnrollUsingEnrollmentToken())
+        .WillOnce([this]() {
+          ExpectEnrollmentScreenIsEnrollmentStatusConsumer();
+          SetupEnrolledDevice();
+          enrollment_screen_->OnDeviceEnrolled();
+        });
+  }
+
+  void ExpectTokenBasedEnrollmentAndReportFailure() {
+    ExpectTokenBasedEnrollmentAndReportFailure(
+        policy::EnrollmentStatus::EnrollmentStatus::ForRegistrationError(
+            policy::DeviceManagementStatus::DM_STATUS_TEMPORARY_UNAVAILABLE));
+  }
+
+  void ExpectTokenBasedEnrollmentAndReportFailure(
+      policy::EnrollmentStatus status) {
+    EXPECT_NE(status.enrollment_code(),
+              policy::EnrollmentStatus::Code::kSuccess)
+        << "Cannot not expect failure with a success code";
+
+    EXPECT_CALL(mock_enrollment_launcher_, EnrollUsingEnrollmentToken())
+        .WillOnce([this, status]() {
+          ExpectEnrollmentScreenIsEnrollmentStatusConsumer();
+          enrollment_screen_->OnEnrollmentError(status);
+        });
+  }
+
+  void ExpectErrorScreen() {
+    ExpectErrorScreen(policy::EnrollmentStatus::ForRegistrationError(
+        policy::DeviceManagementStatus::DM_STATUS_TEMPORARY_UNAVAILABLE));
+  }
+
+  void ExpectSetEnterpriseDomainInfo() {
+    EXPECT_CALL(mock_view_, SetEnterpriseDomainInfo(kTestDomain, _));
+  }
+
+  void ExpectClearAuth() {
+    EXPECT_CALL(mock_enrollment_launcher_, ClearAuth(_, true))
+        .Times(AnyNumber())
+        .WillRepeatedly(
+            [](base::OnceClosure callback, bool revoke_oauth2_tokens) {
+              std::move(callback).Run();
+            });
+  }
+
+  void ExpectEnrollmentConfig(policy::EnrollmentConfig::Mode mode) {
+    EXPECT_CALL(mock_view_, SetEnrollmentConfig(testing::AllOf(testing::Field(
+                                &policy::EnrollmentConfig::mode, mode))));
+  }
+
+  void ExpectEnrollmentConfig(policy::EnrollmentConfig::Mode mode,
+                              std::string enrollment_token) {
+    EXPECT_CALL(mock_view_,
+                SetEnrollmentConfig(testing::AllOf(
+                    testing::Field(&policy::EnrollmentConfig::mode, mode),
+                    testing::Field(&policy::EnrollmentConfig::enrollment_token,
+                                   enrollment_token))));
+  }
+
+  void ExpectShowView() { EXPECT_CALL(mock_view_, Show()); }
+
+  void ExpectShowViewWithLogin(
+      policy::LicenseType license_type = policy::LicenseType::kEnterprise) {
+    EXPECT_CALL(mock_view_, Show()).WillOnce([this, license_type]() {
+      login::OnlineSigninArtifacts signin_artifacts;
+      signin_artifacts.email = kTestUserEmail;
+      signin_artifacts.gaia_id = kTestUserGaiaId;
+      signin_artifacts.password = kTestUserPassword;
+      signin_artifacts.using_saml = false;
+
+      enrollment_screen_->OnLoginDone(std::move(signin_artifacts),
+                                      static_cast<int>(license_type),
+                                      kTestAuthCode);
+    });
+  }
+
+  void ShowEnrollmentScreen(bool suppress_jitter = false) {
+    if (suppress_jitter) {
+      // Remove jitter to enable deterministic testing.
+      enrollment_screen_->retry_policy_.jitter_factor = 0;
+    }
+    enrollment_screen_->Show(&wizard_context());
+
+    FlushTasksAndWaitCompletion();
+  }
+
+  void UserCancel() {
+    enrollment_screen_->OnCancel();
+    FlushTasksAndWaitCompletion();
+  }
+
+  void UserRetry() {
+    enrollment_screen_->OnRetry();
+    FlushTasksAndWaitCompletion();
+  }
+
+  int GetEnrollmentScreenRetries() const {
+    return enrollment_screen_->num_retries_;
+  }
+
+  const auto& last_screen_result() const { return last_screen_result_; }
+
+  WizardContext& wizard_context() {
+    return CHECK_DEREF(fake_login_display_host_.GetWizardContext());
+  }
+
+  TestingPrefServiceSimple& local_state() {
+    return *TestingBrowserProcess::GetGlobal()->GetTestingLocalState();
+  }
+
+  MockEnrollmentLauncher& mock_enrollment_launcher() {
+    return mock_enrollment_launcher_;
+  }
 
  private:
   void HandleScreenExit(EnrollmentScreen::Result screen_result) {
@@ -78,248 +349,742 @@ class EnrollmentScreenUnitTest : public testing::Test {
     last_screen_result_ = screen_result;
   }
 
-  base::test::TaskEnvironment task_environment_;
-  // Replace main thread's task runner with a mock for duration of test.
-  base::ScopedMockTimeMessageLoopTaskRunner runner_;
+  void ExpectEnrollmentScreenIsEnrollmentStatusConsumer() {
+    EXPECT_EQ(mock_enrollment_launcher_.status_consumer(),
+              enrollment_screen_.get())
+        << "EnrollmentScreen is not status consumer of EnrollmentLauncher";
+  }
 
+  void SetupEnrolledDevice() {
+    test_install_attributes_.Get()->SetCloudManaged(kTestDomain, kTestDeviceId);
+    test_install_attributes_.Get()->set_device_locked(true);
+  }
+
+  void FlushTasksAndWaitCompletion() {
+    // Trigger and wait for async tasks to finish. E.g.
+    // `StartupUtils::MarkDeviceRegistered`.
+    FastForwardTime(base::TimeDelta());
+    base::RunLoop().RunUntilIdle();
+  }
+
+  base::test::TaskEnvironment task_environment_{
+      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
+
+  network::TestURLLoaderFactory test_url_loader_factory_;
+
+  // Must outlive `mock_error_screen_`.
+  ScopedNetworkInitializer scoped_network_;
+
+  // Mocks must outlive `enrollment_screen_`.
+  NiceMock<MockEnrollmentScreenView> mock_view_;
+  NiceMock<MockErrorScreenView> mock_error_view_;
+  NiceMock<MockErrorScreen> mock_error_screen_;
+  NiceMock<MockEnrollmentLauncher> mock_enrollment_launcher_;
+  ScopedEnrollmentLauncherFactoryOverrideForTesting
+      scoped_enrollment_launcher_factory_override_{
+          base::BindRepeating(FakeEnrollmentLauncher::Create,
+                              &mock_enrollment_launcher_)};
+
+  // Used by `enrollment_screen_`.
   ScopedStubInstallAttributes test_install_attributes_;
 
-  // Objects required by the EnrollmentScreen that can be re-used.
-  MockEnrollmentScreenView mock_view_;
+  // Used by `EnrollmentRequisitionManager`.
+  system::ScopedFakeStatisticsProvider fake_statistics_provider_;
 
-  DISALLOW_COPY_AND_ASSIGN(EnrollmentScreenUnitTest);
+  // Used by `enrollment_screen_`.
+  FakeLoginDisplayHost fake_login_display_host_{
+      TestingBrowserProcess::GetGlobal()->local_state(),
+      /*multi_user_sign_in_policy_controller=*/nullptr};
+
+  std::unique_ptr<EnrollmentScreen> enrollment_screen_;
+
+  // The last result reported by `enrollment_screen_`.
+  std::optional<EnrollmentScreen::Result> last_screen_result_;
 };
 
-class ZeroTouchEnrollmentScreenUnitTest : public EnrollmentScreenUnitTest {
- public:
-  ZeroTouchEnrollmentScreenUnitTest() = default;
-
-  enum AttestationEnrollmentStatus {
-    SUCCESS,
-    DEVICE_NOT_SETUP_FOR_ZERO_TOUCH,
-    DMSERVER_ERROR
-  };
-
-  // Closure passed to EnterpriseEnrollmentHelper::SetupEnrollmentHelperMock
-  // which creates the EnterpriseEnrollmentHelperMock object that will
-  // eventually be tied to the EnrollmentScreen. It also sets up the
-  // appropriate expectations for testing with the Google Mock framework.
-  // The template parameter should_enroll indicates whether or not
-  // the EnterpriseEnrollmentHelper should be mocked to successfully enroll.
-  void SetupMockEnrollmentHelper(AttestationEnrollmentStatus status) {
-    std::unique_ptr<EnterpriseEnrollmentHelperMock> mock =
-        std::make_unique<EnterpriseEnrollmentHelperMock>();
-    EnterpriseEnrollmentHelperMock* mock_ptr = mock.get();
-    if (status == SUCCESS) {
-      // Define behavior of EnrollUsingAttestation to successfully enroll.
-      EXPECT_CALL(*mock, EnrollUsingAttestation())
-          .Times(AnyNumber())
-          .WillRepeatedly(Invoke([mock_ptr]() {
-            static_cast<EnrollmentScreen*>(mock_ptr->status_consumer())
-                ->ShowEnrollmentStatusOnSuccess();
-          }));
-    } else {
-      // Define behavior of EnrollUsingAttestation to fail to enroll.
-      const policy::EnrollmentStatus enrollment_status =
-          policy::EnrollmentStatus::ForRegistrationError(
-              status == DEVICE_NOT_SETUP_FOR_ZERO_TOUCH
-                  ? policy::DeviceManagementStatus::
-                        DM_STATUS_SERVICE_DEVICE_NOT_FOUND
-                  : policy::DeviceManagementStatus::
-                        DM_STATUS_TEMPORARY_UNAVAILABLE);
-      EXPECT_CALL(*mock, EnrollUsingAttestation())
-          .Times(AnyNumber())
-          .WillRepeatedly(Invoke([mock_ptr, enrollment_status]() {
-            mock_ptr->status_consumer()->OnEnrollmentError(enrollment_status);
-          }));
-    }
-    // Define behavior of ClearAuth to only run the callback it is given.
-    EXPECT_CALL(*mock, ClearAuth(_))
-        .Times(AnyNumber())
-        .WillRepeatedly(Invoke(
-            [](base::OnceClosure callback) { std::move(callback).Run(); }));
-
-    EnterpriseEnrollmentHelper::SetEnrollmentHelperMock(std::move(mock));
-  }
-
-  void SetUpEnrollmentScreen() override {
-    enrollment_config_.mode =
-        policy::EnrollmentConfig::MODE_ATTESTATION_LOCAL_FORCED;
-    enrollment_config_.auth_mechanism =
-        policy::EnrollmentConfig::AUTH_MECHANISM_ATTESTATION;
-    EnrollmentScreenUnitTest::SetUpEnrollmentScreen();
-  }
-
-  virtual void SetUpEnrollmentScreenForFallback() {
-    enrollment_config_.mode = policy::EnrollmentConfig::MODE_ATTESTATION;
-    enrollment_config_.auth_mechanism =
-        policy::EnrollmentConfig::AUTH_MECHANISM_BEST_AVAILABLE;
-    EnrollmentScreenUnitTest::SetUpEnrollmentScreen();
-  }
-
-  // testing::Test:
-  void SetUp() override {
-    EnrollmentScreenUnitTest::SetUp();
-
-    // Configure the browser to use Hands-Off Enrollment.
-    base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
-        switches::kEnterpriseEnableZeroTouchEnrollment, "hands-off");
-  }
-
-  void TestRetry() {
-    // Define behavior of EnterpriseEnrollmentHelperMock to always fail
-    // enrollment.
-    SetupMockEnrollmentHelper(DMSERVER_ERROR);
-
-    SetUpEnrollmentScreen();
-
-    // Remove jitter to enable deterministic testing.
-    enrollment_screen_->retry_policy_.jitter_factor = 0;
-
-    // Start zero-touch enrollment.
-    enrollment_screen_->Show(wizard_context_.get());
-
-    // Fast forward time by 1 minute.
-    FastForwardTime(base::TimeDelta::FromMinutes(1));
-
-    // Check that we have retried 4 times.
-    EXPECT_EQ(enrollment_screen_->num_retries_, 4);
-  }
-
-  void TestFinishEnrollmentFlow() {
-    // Define behavior of EnterpriseEnrollmentHelperMock to successfully enroll.
-    SetupMockEnrollmentHelper(SUCCESS);
-
-    SetUpEnrollmentScreen();
-
-    // Start zero-touch enrollment.
-    enrollment_screen_->Show(wizard_context_.get());
-
-    // Verify that enrollment flow finished and exited cleanly.
-    ASSERT_TRUE(last_screen_result_.has_value());
-    EXPECT_EQ(EnrollmentScreen::Result::COMPLETED, last_screen_result_.value());
-  }
-
-  void TestFallback() {
-    // Define behavior of EnterpriseEnrollmentHelperMock to fail
-    // attestation-based enrollment.
-    SetupMockEnrollmentHelper(DEVICE_NOT_SETUP_FOR_ZERO_TOUCH);
-
-    SetUpEnrollmentScreenForFallback();
-
-    // Once we fallback we show a sign in screen for manual enrollment.
-    EXPECT_CALL(*GetMockScreenView(), ShowSigninScreen()).Times(1);
-
-    // Start enrollment.
-    enrollment_screen_->Show(wizard_context_.get());
-  }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ZeroTouchEnrollmentScreenUnitTest);
-};
-
-TEST_F(ZeroTouchEnrollmentScreenUnitTest, FinishEnrollmentFlow) {
-  TestFinishEnrollmentFlow();
-}
-
-TEST_F(ZeroTouchEnrollmentScreenUnitTest, Fallback) {
-  TestFallback();
-}
-
-TEST_F(ZeroTouchEnrollmentScreenUnitTest, Retry) {
-  TestRetry();
-}
-
-TEST_F(ZeroTouchEnrollmentScreenUnitTest, DoNotRetryOnTopOfUser) {
-  // Define behavior of EnterpriseEnrollmentHelperMock to always fail
-  // enrollment.
-  SetupMockEnrollmentHelper(DMSERVER_ERROR);
-
-  SetUpEnrollmentScreen();
-
-  // Remove jitter to enable deterministic testing.
-  enrollment_screen_->retry_policy_.jitter_factor = 0;
-
-  // Start zero-touch enrollment.
-  enrollment_screen_->Show(wizard_context_.get());
-
-  // Schedule user retry button click after 30 sec.
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
-      FROM_HERE,
-      base::BindOnce(&EnrollmentScreen::OnRetry,
-                     enrollment_screen_->weak_ptr_factory_.GetWeakPtr()),
-      base::TimeDelta::FromSeconds(30));
-
-  // Fast forward time by 1 minute.
-  FastForwardTime(base::TimeDelta::FromMinutes(1));
-
-  // Check that the number of retries is still 4.
-  EXPECT_EQ(enrollment_screen_->num_retries_, 4);
-}
-
-TEST_F(ZeroTouchEnrollmentScreenUnitTest, DoNotRetryAfterSuccess) {
-  // Define behavior of EnterpriseEnrollmentHelperMock to successfully enroll.
-  SetupMockEnrollmentHelper(SUCCESS);
-
-  SetUpEnrollmentScreen();
-
-  // Start zero-touch enrollment.
-  enrollment_screen_->Show(wizard_context_.get());
-
-  // Fast forward time by 1 minute.
-  FastForwardTime(base::TimeDelta::FromMinutes(1));
-
-  // Check that we do not retry.
-  EXPECT_EQ(enrollment_screen_->num_retries_, 0);
-}
-
-/*
- * We base these tests off ZeroTouchEnrollmenScreenUnitTest for two reasons:
- *   1. We want to check that some same tests pass in both classes
- *   2. We want to leverage Zero-Touch Hands Off to test for proper completions
- */
-class AutomaticEnrollmentScreenUnitTest
-    : public ZeroTouchEnrollmentScreenUnitTest,
+class EnrollmentScreenManualFlowTest
+    : public EnrollmentScreenBaseTest,
       public ::testing::WithParamInterface<policy::EnrollmentConfig::Mode> {
- public:
-  AutomaticEnrollmentScreenUnitTest() = default;
+ protected:
+  policy::EnrollmentConfig GetEnrollmentConfig() {
+    policy::EnrollmentConfig config;
+    config.mode = GetParam();
+    DCHECK(!config.is_mode_attestation())
+        << "Config must not be attestation: " << config;
 
-  void SetUpEnrollmentScreen() override {
-    enrollment_config_.mode = GetParam();
-    enrollment_config_.auth_mechanism =
-        policy::EnrollmentConfig::AUTH_MECHANISM_BEST_AVAILABLE;
-    EnrollmentScreenUnitTest::SetUpEnrollmentScreen();
+    return config;
   }
-
-  void SetUpEnrollmentScreenForFallback() override {
-    // Automatic re-enrollment is always setup for fallback.
-    SetUpEnrollmentScreen();
-  }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(AutomaticEnrollmentScreenUnitTest);
 };
 
-TEST_P(AutomaticEnrollmentScreenUnitTest, ShowErrorPanel) {
-  // We use Zero-Touch's test for retries as a way to know that there was
-  // an error pane with a Retry button displayed to the user when we encounter
-  // a DMServer error that is not that the device isn't setup for Auto RE.
-  TestRetry();
+TEST_P(EnrollmentScreenManualFlowTest, ShouldFinishEnrollmentScreen) {
+  const policy::EnrollmentConfig config = GetEnrollmentConfig();
+
+  ExpectEnrollmentConfig(config.mode);
+
+  ExpectShowViewWithLogin();
+  ExpectManualEnrollmentAndReportEnrolled();
+  ExpectGetDeviceAttributeUpdatePermission(/*permission_granted=*/false);
+  ExpectSuccessScreen();
+  ExpectClearAuth();
+
+  SetUpEnrollmentScreen(config);
+  ShowEnrollmentScreen();
+
+  EXPECT_EQ(last_screen_result(), EnrollmentScreen::Result::COMPLETED);
+  EXPECT_EQ(local_state().GetInteger(ash::prefs::kDeviceRegistered), 1);
 }
 
-TEST_P(AutomaticEnrollmentScreenUnitTest, FinishEnrollmentFlow) {
-  TestFinishEnrollmentFlow();
+TEST_P(EnrollmentScreenManualFlowTest, OobeConfigSkipEnrollmentSuccessScreen) {
+  wizard_context().configuration.Set(
+      configuration::kSkipEnrollmentSuccessScreen, true);
+  const policy::EnrollmentConfig config = GetEnrollmentConfig();
+
+  ExpectShowViewWithLogin();
+  ExpectManualEnrollmentAndReportEnrolled();
+  ExpectGetDeviceAttributeUpdatePermission(/*permission_granted=*/false);
+  ExpectSuccessScreenIsNotShown();
+  ExpectClearAuth();
+
+  SetUpEnrollmentScreen(config);
+  ShowEnrollmentScreen();
+
+  EXPECT_EQ(last_screen_result(), EnrollmentScreen::Result::COMPLETED);
+  EXPECT_EQ(local_state().GetInteger(ash::prefs::kDeviceRegistered), 1);
 }
 
-TEST_P(AutomaticEnrollmentScreenUnitTest, Fallback) {
-  TestFallback();
+TEST_P(EnrollmentScreenManualFlowTest,
+       OobeConfigSkipEnrollmentSuccessScreenWithDeviceAttributes) {
+  wizard_context().configuration.Set(
+      configuration::kSkipEnrollmentSuccessScreen, true);
+  wizard_context().configuration.Set(configuration::kEnrollmentAutoAttributes,
+                                     true);
+  const policy::EnrollmentConfig config = GetEnrollmentConfig();
+
+  ExpectShowViewWithLogin();
+  ExpectManualEnrollmentAndReportEnrolled();
+  ExpectGetDeviceAttributeUpdatePermission(/*permission_granted=*/true);
+  ExpectDeviceAttributeUpdateSuccess();
+  ExpectSuccessScreenIsNotShown();
+  ExpectClearAuth();
+
+  SetUpEnrollmentScreen(config);
+  ShowEnrollmentScreen();
+
+  EXPECT_EQ(last_screen_result(), EnrollmentScreen::Result::COMPLETED);
+  EXPECT_EQ(local_state().GetInteger(ash::prefs::kDeviceRegistered), 1);
+}
+
+TEST_P(EnrollmentScreenManualFlowTest, ShouldNotAutomaticallyRetryEnrollment) {
+  const policy::EnrollmentConfig config = GetEnrollmentConfig();
+
+  ExpectEnrollmentConfig(config.mode);
+
+  ExpectShowViewWithLogin();
+  ExpectManualEnrollmentAndReportFailure();
+  ExpectErrorScreen();
+  ExpectClearAuth();
+
+  SetUpEnrollmentScreen(config);
+  ShowEnrollmentScreen();
+
+  FastForwardTime(base::Days(1));
+
+  EXPECT_EQ(GetEnrollmentScreenRetries(), 0);
+  EXPECT_FALSE(last_screen_result().has_value());
+}
+
+TEST_P(EnrollmentScreenManualFlowTest, ShouldRetryEnrollmentOnUserAction) {
+  const policy::EnrollmentConfig config = GetEnrollmentConfig();
+
+  {
+    testing::InSequence s;
+    // First view is shown for attestation-based failure.
+    ExpectEnrollmentConfig(config.mode);
+    ExpectShowViewWithLogin();
+    ExpectManualEnrollmentAndReportFailure();
+    ExpectErrorScreen();
+    ExpectClearAuth();
+
+    // Second view is shown after user retry.
+    ExpectShowViewWithLogin();
+    ExpectManualEnrollmentAndReportEnrolled();
+    ExpectGetDeviceAttributeUpdatePermission(/*permission_granted=*/false);
+    ExpectSuccessScreen();
+    ExpectClearAuth();
+  }
+
+  SetUpEnrollmentScreen(config);
+  ShowEnrollmentScreen();
+
+  EXPECT_FALSE(last_screen_result().has_value());
+
+  UserRetry();
+
+  EXPECT_EQ(GetEnrollmentScreenRetries(), 1);
+  EXPECT_EQ(last_screen_result(), EnrollmentScreen::Result::COMPLETED);
+  EXPECT_EQ(local_state().GetInteger(ash::prefs::kDeviceRegistered), 1);
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    P,
-    AutomaticEnrollmentScreenUnitTest,
+    ManualEnrollment,
+    EnrollmentScreenManualFlowTest,
+    ::testing::Values(policy::EnrollmentConfig::MODE_MANUAL,
+                      policy::EnrollmentConfig::MODE_MANUAL_REENROLLMENT,
+                      policy::EnrollmentConfig::MODE_LOCAL_FORCED,
+                      policy::EnrollmentConfig::MODE_LOCAL_ADVERTISED,
+                      policy::EnrollmentConfig::MODE_SERVER_FORCED,
+                      policy::EnrollmentConfig::MODE_SERVER_ADVERTISED,
+                      policy::EnrollmentConfig::MODE_RECOVERY,
+                      policy::EnrollmentConfig::MODE_INITIAL_SERVER_FORCED));
+
+class EnrollmentScreenAttestationFlowTest
+    : public EnrollmentScreenBaseTest,
+      public ::testing::WithParamInterface<policy::EnrollmentConfig::Mode> {
+ protected:
+  EnrollmentScreenAttestationFlowTest() {
+    if (IsRollbackFlow()) {
+      wizard_context().configuration.Set(configuration::kRestoreAfterRollback,
+                                         true);
+    }
+  }
+  policy::EnrollmentConfig GetEnrollmentConfig() {
+    policy::EnrollmentConfig config;
+    config.mode = GetParam();
+    DCHECK(config.is_mode_attestation())
+        << "Config must be attestation: " << config;
+
+    return config;
+  }
+  bool IsRollbackFlow() const {
+    return GetParam() ==
+           policy::EnrollmentConfig::MODE_ATTESTATION_ROLLBACK_FORCED;
+  }
+};
+
+TEST_P(EnrollmentScreenAttestationFlowTest, ShouldFinishEnrollmentScreen) {
+  const policy::EnrollmentConfig config = GetEnrollmentConfig();
+
+  ExpectEnrollmentConfig(config.mode);
+
+  ExpectAttestationBasedEnrollmentAndReportEnrolled();
+  ExpectGetDeviceAttributeUpdatePermission(/*permission_granted=*/false);
+
+  if (IsRollbackFlow()) {
+    ExpectSuccessScreenIsNotShown();
+  } else {
+    ExpectSuccessScreen();
+  }
+  ExpectClearAuth();
+
+  SetUpEnrollmentScreen(config);
+  ShowEnrollmentScreen();
+
+  EXPECT_EQ(last_screen_result(), EnrollmentScreen::Result::COMPLETED);
+  EXPECT_EQ(local_state().GetInteger(ash::prefs::kDeviceRegistered), 1);
+}
+
+TEST_P(EnrollmentScreenAttestationFlowTest,
+       ShouldNotAutomaticallyRetryEnrollment) {
+  const policy::EnrollmentConfig config = GetEnrollmentConfig();
+
+  ExpectEnrollmentConfig(config.mode);
+  ExpectAttestationBasedEnrollmentAndReportFailure();
+  ExpectErrorScreen();
+  ExpectClearAuth();
+
+  SetUpEnrollmentScreen(config);
+  ShowEnrollmentScreen(/*suppress_jitter=*/true);
+
+  FastForwardTime(base::Days(1));
+
+  EXPECT_EQ(GetEnrollmentScreenRetries(), 0);
+  EXPECT_FALSE(last_screen_result().has_value());
+}
+
+TEST_P(EnrollmentScreenAttestationFlowTest, ShouldRetryEnrollmentOnUserAction) {
+  const policy::EnrollmentConfig config = GetEnrollmentConfig();
+
+  {
+    testing::InSequence s;
+    // First view is shown for attestation-based failure.
+    ExpectEnrollmentConfig(config.mode);
+    ExpectShowView();
+    ExpectAttestationBasedEnrollmentAndReportFailure();
+    ExpectErrorScreen();
+
+    // Second view is shown after user retry.
+    ExpectShowView();
+    ExpectAttestationBasedEnrollmentAndReportEnrolled();
+    ExpectGetDeviceAttributeUpdatePermission(/*permission_granted=*/false);
+    if (!IsRollbackFlow()) {
+      ExpectSuccessScreen();
+    }
+  }
+
+  ExpectClearAuth();
+
+  SetUpEnrollmentScreen(config);
+  ShowEnrollmentScreen();
+
+  EXPECT_FALSE(last_screen_result().has_value());
+
+  UserRetry();
+
+  EXPECT_EQ(GetEnrollmentScreenRetries(), 1);
+  EXPECT_EQ(last_screen_result(), EnrollmentScreen::Result::COMPLETED);
+  EXPECT_EQ(local_state().GetInteger(ash::prefs::kDeviceRegistered), 1);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    AttestationBasedEnrollment,
+    EnrollmentScreenAttestationFlowTest,
     ::testing::Values(
+        policy::EnrollmentConfig::MODE_ATTESTATION,
+        policy::EnrollmentConfig::MODE_ATTESTATION_LOCAL_FORCED,
+        policy::EnrollmentConfig::MODE_ATTESTATION_SERVER_FORCED,
         policy::EnrollmentConfig::MODE_ATTESTATION_INITIAL_SERVER_FORCED,
-        policy::EnrollmentConfig::MODE_ATTESTATION_SERVER_FORCED));
+        policy::EnrollmentConfig::MODE_ATTESTATION_ROLLBACK_FORCED));
+
+class EnrollmentScreenAttestationFlowWithManualFallbackTest
+    : public EnrollmentScreenAttestationFlowTest {
+ protected:
+  policy::EnrollmentConfig GetEnrollmentConfigForManualFallback() {
+    return CHECK_DEREF(GetEnrollmentConfig().GetManualFallbackConfig());
+  }
+};
+
+TEST_P(EnrollmentScreenAttestationFlowWithManualFallbackTest,
+       ShouldAutomaticallyFallbackToManuallEnrollment) {
+  const policy::EnrollmentConfig initial_config = GetEnrollmentConfig();
+  ASSERT_TRUE(initial_config.is_mode_with_manual_fallback());
+  const policy::EnrollmentConfig fallback_config =
+      GetEnrollmentConfigForManualFallback();
+  {
+    testing::InSequence s;
+    // First view is shown for attestation-based failure.
+    ExpectEnrollmentConfig(initial_config.mode);
+    ExpectShowView();
+    ExpectAttestationBasedEnrollmentAndReportFailureWithAutomaticFallback();
+
+    // Second view is shown for manual fallback.
+    ExpectEnrollmentConfig(fallback_config.mode);
+    ExpectShowViewWithLogin();
+    ExpectManualEnrollmentAndReportEnrolled();
+    ExpectGetDeviceAttributeUpdatePermission(/*permission_granted=*/false);
+    if (!IsRollbackFlow()) {
+      ExpectSuccessScreen();
+    }
+  }
+
+  ExpectClearAuth();
+
+  SetUpEnrollmentScreen(initial_config);
+  ShowEnrollmentScreen();
+
+  EXPECT_EQ(last_screen_result(), EnrollmentScreen::Result::COMPLETED);
+  EXPECT_EQ(local_state().GetInteger(ash::prefs::kDeviceRegistered), 1);
+}
+
+TEST_P(EnrollmentScreenAttestationFlowWithManualFallbackTest,
+       ShouldFallbackToManualEnrollmentOnUserAction) {
+  const policy::EnrollmentConfig initial_config = GetEnrollmentConfig();
+  ASSERT_TRUE(initial_config.is_mode_with_manual_fallback());
+  const policy::EnrollmentConfig fallback_config =
+      GetEnrollmentConfigForManualFallback();
+  {
+    testing::InSequence s;
+    // First view is shown for attestation-based failure.
+    ExpectEnrollmentConfig(initial_config.mode);
+    ExpectShowView();
+    ExpectAttestationBasedEnrollmentAndReportFailure();
+    ExpectErrorScreen();
+
+    // Second view is shown for manual fallback. This should be triggered after
+    // user decides to fallback.
+    ExpectEnrollmentConfig(fallback_config.mode);
+    ExpectShowViewWithLogin();
+    ExpectManualEnrollmentAndReportEnrolled();
+    ExpectGetDeviceAttributeUpdatePermission(/*permission_granted=*/false);
+    if (!IsRollbackFlow()) {
+      ExpectSuccessScreen();
+    }
+  }
+
+  ExpectClearAuth();
+
+  SetUpEnrollmentScreen(initial_config);
+  ShowEnrollmentScreen();
+
+  EXPECT_FALSE(last_screen_result().has_value());
+
+  UserCancel();
+
+  EXPECT_EQ(last_screen_result(), EnrollmentScreen::Result::COMPLETED);
+  EXPECT_EQ(local_state().GetInteger(ash::prefs::kDeviceRegistered), 1);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ManualFallbackEnrollment,
+    EnrollmentScreenAttestationFlowWithManualFallbackTest,
+    ::testing::Values(
+        policy::EnrollmentConfig::MODE_ATTESTATION_SERVER_FORCED,
+        policy::EnrollmentConfig::MODE_ATTESTATION_INITIAL_SERVER_FORCED,
+        policy::EnrollmentConfig::MODE_ATTESTATION_ROLLBACK_FORCED));
+
+class EnrollmentScreenTokenBasedEnrollmentTest
+    : public EnrollmentScreenBaseTest {
+ protected:
+  EnrollmentScreenTokenBasedEnrollmentTest() = default;
+
+  policy::EnrollmentConfig GetEnrollmentConfig(
+      policy::EnrollmentConfig::Mode mode = policy::EnrollmentConfig::
+          MODE_ENROLLMENT_TOKEN_INITIAL_SERVER_FORCED) {
+    policy::EnrollmentConfig config;
+    config.mode = mode;
+    // The token isn't used directly by EnrollmentScreen, but let's set it here
+    // for realism.
+    config.enrollment_token = policy::test::kEnrollmentToken;
+    return config;
+  }
+
+  policy::EnrollmentConfig GetEnrollmentConfigForManualFallback() {
+    return CHECK_DEREF(GetEnrollmentConfig().GetManualFallbackConfig());
+  }
+
+  system::ScopedFakeStatisticsProvider statistics_provider_;
+  base::test::ScopedCommandLine command_line_;
+  policy::test::EnrollmentTestHelper enrollment_test_helper_{
+      &command_line_, &statistics_provider_};
+};
+
+TEST_F(EnrollmentScreenTokenBasedEnrollmentTest, ShouldFinishEnrollmentScreen) {
+  const policy::EnrollmentConfig config = GetEnrollmentConfig();
+
+  ExpectEnrollmentConfig(config.mode, config.enrollment_token);
+
+  ExpectTokenBasedEnrollmentAndReportEnrolled();
+  ExpectGetDeviceAttributeUpdatePermission(false);
+  ExpectSuccessScreen();
+  ExpectClearAuth();
+
+  SetUpEnrollmentScreen(config);
+  ShowEnrollmentScreen();
+
+  EXPECT_EQ(last_screen_result(), EnrollmentScreen::Result::COMPLETED);
+}
+
+TEST_F(EnrollmentScreenTokenBasedEnrollmentTest,
+       ShouldFinishEnrollmentScreenRemoteDeployment) {
+  const policy::EnrollmentConfig config = GetEnrollmentConfig(
+      policy::EnrollmentConfig::MODE_REMOTE_DEPLOYMENT_SERVER_FORCED);
+  ExpectEnrollmentConfig(config.mode, config.enrollment_token);
+
+  ExpectTokenBasedEnrollmentAndReportEnrolled();
+  ExpectGetDeviceAttributeUpdatePermission(false);
+  ExpectSuccessScreen();
+  ExpectClearAuth();
+
+  SetUpEnrollmentScreen(config);
+  ShowEnrollmentScreen();
+
+  EXPECT_EQ(last_screen_result(), EnrollmentScreen::Result::COMPLETED);
+}
+
+TEST_F(EnrollmentScreenTokenBasedEnrollmentTest,
+       OobeConfigSkipEnrollmentSuccessScreen) {
+  wizard_context().configuration.Set(
+      configuration::kSkipEnrollmentSuccessScreen, true);
+  const policy::EnrollmentConfig config = GetEnrollmentConfig();
+
+  ExpectEnrollmentConfig(config.mode, config.enrollment_token);
+
+  ExpectTokenBasedEnrollmentAndReportEnrolled();
+  ExpectGetDeviceAttributeUpdatePermission(false);
+  ExpectSuccessScreenIsNotShown();
+  ExpectClearAuth();
+
+  SetUpEnrollmentScreen(config);
+  ShowEnrollmentScreen();
+
+  EXPECT_EQ(last_screen_result(), EnrollmentScreen::Result::COMPLETED);
+}
+
+// Enrollment tokens are currently only retrieved from OOBE config if the device
+// is chrome-branded, so we need to have this preprocessor check in order to run
+// this test.
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+TEST_F(EnrollmentScreenTokenBasedEnrollmentTest,
+       EnrollmentTokenConfigIsDeletedAfterEnrollmentSuccess) {
+  enrollment_test_helper_.SetUpFlexDevice();
+  enrollment_test_helper_.SetUpEnrollmentTokenConfig();
+  const std::string* present_enrollment_token =
+      enrollment_test_helper_.GetEnrollmentTokenFromOobeConfiguration();
+  ASSERT_EQ(*present_enrollment_token, policy::test::kEnrollmentToken);
+
+  const policy::EnrollmentConfig config = GetEnrollmentConfig();
+
+  ExpectEnrollmentConfig(config.mode, config.enrollment_token);
+
+  ExpectTokenBasedEnrollmentAndReportEnrolled();
+  ExpectGetDeviceAttributeUpdatePermission(false);
+  ExpectSuccessScreen();
+  ExpectClearAuth();
+
+  SetUpEnrollmentScreen(config);
+  ShowEnrollmentScreen();
+
+  const std::string* missing_flex_token =
+      enrollment_test_helper_.GetEnrollmentTokenFromOobeConfiguration();
+  EXPECT_EQ(missing_flex_token, nullptr);
+}
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
+
+TEST_F(EnrollmentScreenTokenBasedEnrollmentTest,
+       ShouldRetryEnrollmentOnUserAction) {
+  const policy::EnrollmentConfig config = GetEnrollmentConfig();
+
+  {
+    testing::InSequence s;
+    // First view is shown for token-based enrollment failure.
+    ExpectEnrollmentConfig(config.mode, config.enrollment_token);
+    ExpectShowView();
+    ExpectTokenBasedEnrollmentAndReportFailure();
+    ExpectErrorScreen();
+
+    // Second view is shown after user retry.
+    ExpectShowView();
+    ExpectTokenBasedEnrollmentAndReportEnrolled();
+    ExpectGetDeviceAttributeUpdatePermission(/*permission_granted=*/false);
+    ExpectSuccessScreen();
+  }
+
+  ExpectClearAuth();
+
+  SetUpEnrollmentScreen(config);
+  ShowEnrollmentScreen();
+
+  EXPECT_FALSE(last_screen_result().has_value());
+
+  UserRetry();
+
+  EXPECT_EQ(GetEnrollmentScreenRetries(), 1);
+  EXPECT_EQ(last_screen_result(), EnrollmentScreen::Result::COMPLETED);
+}
+
+TEST_F(EnrollmentScreenTokenBasedEnrollmentTest,
+       ShouldNotAutomaticallyRetryEnrollment) {
+  const policy::EnrollmentConfig config = GetEnrollmentConfig();
+
+  ExpectEnrollmentConfig(config.mode);
+  ExpectTokenBasedEnrollmentAndReportFailure();
+  ExpectErrorScreen();
+  ExpectClearAuth();
+
+  SetUpEnrollmentScreen(config);
+  ShowEnrollmentScreen(/*suppress_jitter=*/true);
+
+  FastForwardTime(base::Days(1));
+
+  EXPECT_EQ(GetEnrollmentScreenRetries(), 0);
+  EXPECT_FALSE(last_screen_result().has_value());
+}
+
+// Unlike with attestation, DEVICE_NOT_FOUND doesn't really make sense for
+// enrollment, so we shouldn't automatically fall back to manual if we get
+// this status (although we don't expect to). We should perhaps automatically
+// fall back if the server encounters an invalid or not present token, but that
+// status hasn't yet been enumerated.
+//
+// TODO(b/329271128): Change this test once the proper DeviceManagementStatus
+// for TOKEN_NOT_FOUND is added and handled in the server response.
+TEST_F(EnrollmentScreenTokenBasedEnrollmentTest,
+       ShouldNotAutomaticallyFallbackToManualEnrollment) {
+  const policy::EnrollmentConfig config = GetEnrollmentConfig();
+  {
+    testing::InSequence s;
+    // First view is shown for attestation-based failure.
+    ExpectEnrollmentConfig(config.mode, config.enrollment_token);
+    ExpectShowView();
+    ExpectTokenBasedEnrollmentAndReportFailure(
+        policy::EnrollmentStatus::ForRegistrationError(
+            policy::DeviceManagementStatus::
+                DM_STATUS_SERVICE_DEVICE_NOT_FOUND));
+
+    // Verify that we land at the error screen instead of the GAIA sign-in
+    // screen.
+    ExpectErrorScreen(policy::EnrollmentStatus::ForRegistrationError(
+        policy::DeviceManagementStatus::DM_STATUS_SERVICE_DEVICE_NOT_FOUND));
+  }
+
+  ExpectClearAuth();
+  SetUpEnrollmentScreen(config);
+  ShowEnrollmentScreen();
+
+  EXPECT_FALSE(last_screen_result().has_value());
+}
+
+TEST_F(EnrollmentScreenTokenBasedEnrollmentTest,
+       ShouldFallbackToManualEnrollmentOnUserAction) {
+  const policy::EnrollmentConfig initial_config = GetEnrollmentConfig();
+  ASSERT_TRUE(initial_config.is_mode_with_manual_fallback());
+  const policy::EnrollmentConfig fallback_config =
+      GetEnrollmentConfigForManualFallback();
+  {
+    testing::InSequence s;
+    // First view is shown for token-based failure.
+    ExpectEnrollmentConfig(initial_config.mode,
+                           initial_config.enrollment_token);
+    ExpectShowView();
+    ExpectTokenBasedEnrollmentAndReportFailure();
+    ExpectErrorScreen();
+
+    // Second view is shown for manual fallback. This should be triggered after
+    // user decides to fallback.
+    ExpectEnrollmentConfig(fallback_config.mode,
+                           fallback_config.enrollment_token);
+    ExpectShowViewWithLogin();
+    ExpectManualEnrollmentAndReportEnrolled();
+    ExpectGetDeviceAttributeUpdatePermission(/*permission_granted=*/false);
+    ExpectSuccessScreen();
+  }
+
+  ExpectClearAuth();
+
+  SetUpEnrollmentScreen(initial_config);
+  ShowEnrollmentScreen();
+
+  EXPECT_FALSE(last_screen_result().has_value());
+
+  UserCancel();
+
+  EXPECT_EQ(last_screen_result(), EnrollmentScreen::Result::COMPLETED);
+}
+
+TEST_F(EnrollmentScreenTokenBasedEnrollmentTest,
+       RemoteDeploymentShouldFallbackToManualEnrollmentOnUserAction) {
+  const policy::EnrollmentConfig initial_config = GetEnrollmentConfig(
+      policy::EnrollmentConfig::MODE_REMOTE_DEPLOYMENT_SERVER_FORCED);
+  ASSERT_TRUE(initial_config.is_mode_with_manual_fallback());
+  const policy::EnrollmentConfig fallback_config =
+      initial_config.GetManualFallbackConfig().value();
+  EXPECT_TRUE(fallback_config.is_manual_fallback());
+  {
+    testing::InSequence s;
+    // First view is shown for token-based failure.
+    ExpectEnrollmentConfig(initial_config.mode,
+                           initial_config.enrollment_token);
+    ExpectShowView();
+    ExpectTokenBasedEnrollmentAndReportFailure();
+    ExpectErrorScreen();
+
+    // Second view is shown for manual fallback. This should be triggered after
+    // user decides to fallback.
+    ExpectEnrollmentConfig(fallback_config.mode,
+                           fallback_config.enrollment_token);
+    ExpectShowViewWithLogin();
+    ExpectManualEnrollmentAndReportEnrolled();
+    ExpectGetDeviceAttributeUpdatePermission(/*permission_granted=*/false);
+    ExpectSuccessScreen();
+  }
+
+  ExpectClearAuth();
+
+  SetUpEnrollmentScreen(initial_config);
+  ShowEnrollmentScreen();
+
+  EXPECT_FALSE(last_screen_result().has_value());
+
+  UserCancel();
+
+  EXPECT_EQ(last_screen_result(), EnrollmentScreen::Result::COMPLETED);
+}
+
+class EnrollmentScreenLicenseTest : public EnrollmentScreenBaseTest {
+ protected:
+  void ExpectLicense(policy::LicenseType license_type) {
+    EXPECT_CALL(
+        mock_enrollment_launcher(),
+        Setup(testing::AllOf(testing::Field(
+                  &policy::EnrollmentConfig::license_type, license_type)),
+              _));
+  }
+};
+
+// Test that user can override prescribed license type on manual enrollment.
+TEST_F(EnrollmentScreenLicenseTest,
+       UserCanChooseLicenseTypeOnManualEnrollment) {
+  policy::EnrollmentConfig config;
+  config.mode = policy::EnrollmentConfig::MODE_MANUAL;
+  config.license_type = policy::LicenseType::kEducation;
+
+  ExpectShowViewWithLogin(policy::LicenseType::kTerminal);
+  ExpectLicense(policy::LicenseType::kTerminal);
+  ExpectManualEnrollmentAndReportEnrolled();
+  ExpectGetDeviceAttributeUpdatePermission(/*permission_granted=*/false);
+  ExpectSuccessScreen();
+
+  SetUpEnrollmentScreen(config);
+  ShowEnrollmentScreen();
+}
+
+TEST_F(EnrollmentScreenLicenseTest,
+       AttestationBasedEnrollmentPicksPrescribedLicense) {
+  policy::EnrollmentConfig config;
+  config.mode = policy::EnrollmentConfig::MODE_ATTESTATION_SERVER_FORCED;
+  config.license_type = policy::LicenseType::kTerminal;
+
+  ExpectLicense(policy::LicenseType::kTerminal);
+  ExpectAttestationBasedEnrollmentAndReportEnrolled();
+  ExpectGetDeviceAttributeUpdatePermission(/*permission_granted=*/false);
+  ExpectSuccessScreen();
+
+  SetUpEnrollmentScreen(config);
+  ShowEnrollmentScreen();
+}
+
+TEST_F(EnrollmentScreenLicenseTest, TokenEnrollmentPicksPrescribedLicense) {
+  policy::EnrollmentConfig config;
+  config.mode =
+      policy::EnrollmentConfig::MODE_ENROLLMENT_TOKEN_INITIAL_SERVER_FORCED;
+  config.enrollment_token = policy::test::kEnrollmentToken;
+  config.license_type = policy::LicenseType::kEnterprise;
+
+  ExpectLicense(policy::LicenseType::kEnterprise);
+  ExpectTokenBasedEnrollmentAndReportEnrolled();
+  ExpectGetDeviceAttributeUpdatePermission(/*permission_granted=*/false);
+  ExpectSuccessScreen();
+
+  SetUpEnrollmentScreen(config);
+  ShowEnrollmentScreen();
+}
+
+using EnrollmentScreenTest = EnrollmentScreenBaseTest;
+
+// Regression test for crbug.com/578879534: destroying EnrollmentScreen while it
+// still owns an EnrollmentLauncher (e.g., on the enrollment confirmation step
+// when SessionTerminationManager triggers LoginDisplayHost teardown via
+// OnAppTerminating()) must satisfy the destructor CHECK even before
+// IsProcessShuttingDown() or BrowserController::IsTryingToQuit() is set.
+TEST_F(EnrollmentScreenTest, DestroyWithActiveLauncherDuringAppTermination) {
+  SessionTerminationManager session_termination_manager;
+
+  policy::EnrollmentConfig config;
+  config.mode = policy::EnrollmentConfig::MODE_ATTESTATION_SERVER_FORCED;
+
+  ExpectEnrollmentConfig(config.mode);
+  ExpectAttestationBasedEnrollmentAndReportEnrolled();
+  ExpectGetDeviceAttributeUpdatePermission(/*permission_granted=*/false);
+  // Keep EnrollmentScreen on the confirmation step without calling
+  // OnConfirmationClosed(), so `enrollment_launcher_` remains alive.
+  EXPECT_CALL(mock_enrollment_launcher(), ClearAuth(_, _)).Times(0);
+
+  SetUpEnrollmentScreen(config);
+  ShowEnrollmentScreen();
+
+  EXPECT_FALSE(last_screen_result().has_value());
+
+  session_termination_manager.GetClosureNotifyingAppTerminating().Run();
+  ResetEnrollmentScreen();
+}
 
 }  // namespace ash

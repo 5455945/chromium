@@ -1,115 +1,59 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/views/eye_dropper/eye_dropper_view_mac.h"
 
+#include <Carbon/Carbon.h>  // For keycode names in Carbon's Event.h.
 #import <Cocoa/Cocoa.h>
 
-#include "chrome/browser/ui/views/eye_dropper/eye_dropper_view.h"
+#include <memory>
+
 #include "content/public/browser/render_frame_host.h"
 #include "skia/ext/skia_utils_mac.h"
+#include "ui/base/ui_base_features.h"
 
 EyeDropperViewMac::EyeDropperViewMac(content::EyeDropperListener* listener)
-    : listener_(listener) {
-  if (!listener_)
+    : listener_(listener), weak_ptr_factory_(this) {
+  if (!listener_) {
     return;
-  if (@available(macOS 10.15, *)) {
-    color_sampler_.reset([[NSColorSampler alloc] init]);
-    [color_sampler_ showSamplerWithSelectionHandler:^(NSColor* selectedColor) {
-      if (!selectedColor) {
-        listener_->ColorSelectionCanceled();
-      } else {
-        listener_->ColorSelected(skia::NSSystemColorToSkColor(selectedColor));
-      }
-    }];
   }
+  color_sampler_ = [[NSColorSampler alloc] init];
+  // Used to ensure that EyeDropperViewMac is still alive when the handler is
+  // called.
+  base::WeakPtr<EyeDropperViewMac> weak_this = weak_ptr_factory_.GetWeakPtr();
+  [color_sampler_ showSamplerWithSelectionHandler:^(NSColor* selectedColor) {
+    if (!weak_this) {
+      return;
+    }
+
+    // Keep NSColorSampler alive on the main queue until AppKit has unwound
+    // from this handler. The listener call below destroys `*this` and drops
+    // the only strong reference to `color_sampler_`; releasing NSColorSampler
+    // from inside its own selection handler wedges the system sampler on
+    // macOS Tahoe. See https://crbug.com/509627745.
+    NSColorSampler* sampler = weak_this->color_sampler_;
+    dispatch_async(dispatch_get_main_queue(), ^{
+      NS_VALID_UNTIL_END_OF_SCOPE NSColorSampler* sampler_keepalive = sampler;
+    });
+
+    if (selectedColor) {
+      weak_this->listener_->ColorSelected(
+          skia::CGColorRefToSkColor(selectedColor.CGColor));
+    } else {
+      weak_this->listener_->ColorSelectionCanceled();
+    }
+  }];
 }
 
-EyeDropperViewMac::~EyeDropperViewMac() {}
-
-EyeDropperView::PreEventDispatchHandler::PreEventDispatchHandler(
-    EyeDropperView* view)
-    : view_(view) {
-  // Ensure that this handler is called before color popup handler.
-  clickEventTap_ = [NSEvent
-      addLocalMonitorForEventsMatchingMask:NSAnyEventMask
-                                   handler:^NSEvent*(NSEvent* event) {
-                                     NSEventType eventType = [event type];
-                                     if (eventType == NSLeftMouseDown ||
-                                         eventType == NSRightMouseDown) {
-                                       view_->OnColorSelected();
-                                       return nil;
-                                     }
-
-                                     return event;
-                                   }];
-
-  // Needed because the local event monitor doesn't see the click on the
-  // menubar.
-  NSNotificationCenter* notificationCenter =
-      [NSNotificationCenter defaultCenter];
-  notificationObserver_ =
-      [notificationCenter addObserverForName:NSMenuDidBeginTrackingNotification
-                                      object:[NSApp mainMenu]
-                                       queue:[NSOperationQueue mainQueue]
-                                  usingBlock:^(NSNotification* note) {
-                                    view_->OnColorSelected();
-                                  }];
-}
-
-EyeDropperView::PreEventDispatchHandler::~PreEventDispatchHandler() {
-  if (clickEventTap_) {
-    [NSEvent removeMonitor:clickEventTap_];
-    clickEventTap_ = nil;
-  }
-
-  if (notificationObserver_) {
-    NSNotificationCenter* notificationCenter =
-        [NSNotificationCenter defaultCenter];
-    [notificationCenter removeObserver:notificationObserver_];
-    notificationObserver_ = nil;
-  }
-}
-
-void EyeDropperView::PreEventDispatchHandler::OnMouseEvent(
-    ui::MouseEvent* event) {
-  // The event monitor already provides a handler.
-}
-
-void EyeDropperView::MoveViewToFront() {
-  // Moves the window to the front of the screen list within the popup level
-  // since the eye dropper can be opened from the color picker.
-  NSWindow* window = GetWidget()->GetNativeWindow().GetNativeNSWindow();
-  [window setLevel:NSPopUpMenuWindowLevel];
-  [window makeKeyAndOrderFront:nil];
-}
-
-void EyeDropperView::CaptureInputIfNeeded() {
-  // There is no need to capture input on Mac.
-}
-
-void EyeDropperView::HideCursor() {
-  [NSCursor hide];
-}
-
-void EyeDropperView::ShowCursor() {
-  [NSCursor unhide];
-}
-
-gfx::Size EyeDropperView::GetSize() const {
-  return gfx::Size(90, 90);
-}
-
-float EyeDropperView::GetDiameter() const {
-  return 90;
-}
+EyeDropperViewMac::~EyeDropperViewMac() = default;
 
 std::unique_ptr<content::EyeDropper> ShowEyeDropper(
     content::RenderFrameHost* frame,
     content::EyeDropperListener* listener) {
-  if (@available(macOS 10.15, *)) {
-    return std::make_unique<EyeDropperViewMac>(listener);
+  if (!features::IsEyeDropperEnabled()) {
+    return nullptr;
   }
-  return std::make_unique<EyeDropperView>(frame, listener);
+
+  return std::make_unique<EyeDropperViewMac>(listener);
 }

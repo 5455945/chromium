@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,10 +19,12 @@ class PLATFORM_EXPORT OpenTypeCapsSupport {
   STACK_ALLOCATED();
 
  public:
-  OpenTypeCapsSupport();
-  OpenTypeCapsSupport(const HarfBuzzFace*,
-                      FontDescription::FontVariantCaps requested_caps,
-                      hb_script_t);
+  OpenTypeCapsSupport() = default;
+  OpenTypeCapsSupport(
+      const HarfBuzzFace*,
+      FontDescription::FontVariantCaps requested_caps,
+      FontDescription::FontSynthesisSmallCaps font_synthesis_small_caps,
+      hb_script_t);
 
   bool NeedsRunCaseSplitting();
   bool NeedsSyntheticFont(SmallCapsIterator::SmallCapsBehavior run_case);
@@ -39,9 +41,13 @@ class PLATFORM_EXPORT OpenTypeCapsSupport {
   bool SupportsFeature(hb_script_t, uint32_t tag) const;
   bool SupportsAatFeature(uint32_t tag) const;
   bool SupportsOpenTypeFeature(hb_script_t, uint32_t tag) const;
+  bool SyntheticSmallCapsAllowed() const;
 
-  const HarfBuzzFace* harfbuzz_face_;
-  FontDescription::FontVariantCaps requested_caps_;
+  const HarfBuzzFace* harfbuzz_face_ = nullptr;
+  FontDescription::FontVariantCaps requested_caps_ =
+      FontDescription::kCapsNormal;
+  FontDescription::FontSynthesisSmallCaps font_synthesis_small_caps_ =
+      FontDescription::kAutoFontSynthesisSmallCaps;
 
   enum class FontSupport {
     kFull,
@@ -56,9 +62,9 @@ class PLATFORM_EXPORT OpenTypeCapsSupport {
     kBothToSmallCaps
   };
 
-  FontSupport font_support_;
-  CapsSynthesis caps_synthesis_;
-  mutable FontFormat font_format_;
+  FontSupport font_support_ = FontSupport::kFull;
+  CapsSynthesis caps_synthesis_ = CapsSynthesis::kNone;
+  mutable FontFormat font_format_ = FontFormat::kUndetermined;
 };
 
 }  // namespace blink

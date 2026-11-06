@@ -1,20 +1,19 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 module blink.mojom;
 
-// Values are persisted to disk.
-// Do not renumber or delete existing values, to avoid data loss.
-enum StorageType {
-  kTemporary = 0,
-  kPersistent = 1,
-  kSyncable = 2,
-  kQuotaNotManaged = 3,
-  kUnknown = 4,
+// The durability policy to apply to a single StorageBucket. The values are
+// persisted to the quota DB and must not be changed.
+enum BucketDurability {
+  kRelaxed = 0,
+  kStrict = 1,
 };
 
-// These values need to match core/dom/exception_code.h.
+// These values need to match core/dom/exception_code.h given how they are used in
+// DeprecatedStorageQuota. In newer code, i.e. StorageManager, a generic TypeError is returned
+// instead which matches the spec.
 enum QuotaStatusCode {
   kOk = 0,
   kErrorNotSupported = 9,          // NOT_SUPPORTED_ERR
@@ -26,8 +25,6 @@ enum QuotaStatusCode {
 
 struct UsageBreakdown {
   int64 fileSystem = 0;
-  int64 webSql = 0;
-  int64 appcache = 0;
   int64 indexedDatabase = 0;
   int64 serviceWorkerCache = 0;
   int64 serviceWorker = 0;

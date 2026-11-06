@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,15 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check.h"
 #include "base/command_line.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "build/build_config.h"
 #include "components/performance_manager/graph/process_node_impl.h"
 #include "components/performance_manager/performance_manager_impl.h"
+#include "components/performance_manager/public/features.h"
 #include "components/performance_manager/public/render_process_host_id.h"
 #include "components/performance_manager/public/render_process_host_proxy.h"
 #include "content/public/browser/child_process_termination_info.h"
@@ -25,20 +27,27 @@ namespace {
 
 const void* const kRenderProcessUserDataKey = &kRenderProcessUserDataKey;
 
+base::Process::Priority GetInitialPriority() {
+  return features::kRendererHighInitialPriority.Get()
+             ? base::Process::Priority::kUserBlocking
+             : base::Process::Priority::kMinValue;
+}
+
 }  // namespace
 
 RenderProcessUserData::RenderProcessUserData(
     content::RenderProcessHost* render_process_host)
     : host_(render_process_host) {
   host_->AddObserver(this);
+  base::Process::Priority initial_priority = GetInitialPriority();
   process_node_ = PerformanceManagerImpl::CreateProcessNode(
-      content::PROCESS_TYPE_RENDERER,
-      RenderProcessHostProxy(RenderProcessHostId(host_->GetID())));
+      RenderProcessHostProxy(RenderProcessHostId(host_->GetID())),
+      initial_priority);
 }
 
 RenderProcessUserData::~RenderProcessUserData() {
-  PerformanceManagerImpl::DeleteNode(std::move(process_node_));
   host_->RemoveObserver(this);
+  PerformanceManagerImpl::DeleteNode(std::move(process_node_));
 
   if (destruction_observer_) {
     destruction_observer_->OnRenderProcessUserDataDestroying(host_);
@@ -63,6 +72,12 @@ void RenderProcessUserData::SetDestructionObserver(
   destruction_observer_ = destruction_observer;
 }
 
+void RenderProcessUserData::OnProcessLaunched() {
+  DCHECK(host_->GetProcess().IsValid());
+  process_node_->SetProcess(host_->GetProcess().Duplicate(),
+                            /*launch_time=*/base::TimeTicks::Now());
+}
+
 // static
 RenderProcessUserData* RenderProcessUserData::CreateForRenderProcessHost(
     content::RenderProcessHost* host) {
@@ -74,31 +89,10 @@ RenderProcessUserData* RenderProcessUserData::CreateForRenderProcessHost(
   return raw_user_data;
 }
 
-void RenderProcessUserData::RenderProcessReady(
-    content::RenderProcessHost* host) {
-  const base::Time launch_time =
-#if defined(OS_ANDROID)
-      // Process::CreationTime() is not available on Android. Since this
-      // method is called immediately after the process is launched, the
-      // process launch time can be approximated with the current time.
-      base::Time::Now();
-#else
-      host->GetProcess().CreationTime();
-#endif
-
-  PerformanceManagerImpl::CallOnGraphImpl(
-      FROM_HERE, base::BindOnce(&ProcessNodeImpl::SetProcess,
-                                base::Unretained(process_node_.get()),
-                                host->GetProcess().Duplicate(), launch_time));
-}
-
 void RenderProcessUserData::RenderProcessExited(
     content::RenderProcessHost* host,
     const content::ChildProcessTerminationInfo& info) {
-  PerformanceManagerImpl::CallOnGraphImpl(
-      FROM_HERE,
-      base::BindOnce(&ProcessNodeImpl::SetProcessExitStatus,
-                     base::Unretained(process_node_.get()), info.exit_code));
+  process_node_->SetProcessExitStatus(info.exit_code);
 }
 
 void RenderProcessUserData::RenderProcessHostDestroyed(

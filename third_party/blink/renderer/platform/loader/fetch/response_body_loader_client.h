@@ -1,21 +1,32 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_LOADER_FETCH_RESPONSE_BODY_LOADER_CLIENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_LOADER_FETCH_RESPONSE_BODY_LOADER_CLIENT_H_
 
-#include "third_party/blink/public/mojom/frame/back_forward_cache_controller.mojom-blink-forward.h"
+#include "base/containers/span.h"
+#include "third_party/blink/renderer/platform/bindings/parkable_string.h"
+#include "third_party/blink/renderer/platform/loader/fetch/drained_data_pipe_client.h"
+#include "third_party/blink/renderer/platform/wtf/forward.h"
 
 namespace blink {
 
 // A ResponseBodyLoaderClient receives signals for loading a response body.
-class ResponseBodyLoaderClient : public GarbageCollectedMixin {
+// When the body is drained as a data pipe it also receives what the user of
+// the pipe does with the contents, see DrainedDataPipeClient.
+class ResponseBodyLoaderClient : public DrainedDataPipeClient {
  public:
-  virtual ~ResponseBodyLoaderClient() = default;
+  ~ResponseBodyLoaderClient() override = default;
 
   // Called when reading a chunk, with the chunk.
   virtual void DidReceiveData(base::span<const char> data) = 0;
+
+  // Called as an optimization if the loader has decoded the body data. This can
+  // be called at most once.
+  virtual void DidReceiveDecodedData(
+      const String& data,
+      std::unique_ptr<SecureStringDigest> digest) = 0;
 
   // Called when finishing reading the entire body. This must be the last
   // signal.

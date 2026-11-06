@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,12 +12,11 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/media_galleries/media_galleries_dialog_controller.h"
 #include "chrome/browser/media_galleries/media_galleries_preferences.h"
 #include "components/storage_monitor/removable_storage_observer.h"
-#include "ui/gfx/native_widget_types.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
 
 namespace content {
@@ -55,6 +54,11 @@ class MediaGalleriesPermissionController
   MediaGalleriesPermissionController(content::WebContents* web_contents,
                                      const extensions::Extension& extension,
                                      base::OnceClosure on_finish);
+
+  MediaGalleriesPermissionController(
+      const MediaGalleriesPermissionController&) = delete;
+  MediaGalleriesPermissionController& operator=(
+      const MediaGalleriesPermissionController&) = delete;
 
   // MediaGalleriesDialogController implementation.
   std::u16string GetHeader() const override;
@@ -96,6 +100,10 @@ class MediaGalleriesPermissionController
   class DialogIdMap {
    public:
     DialogIdMap();
+
+    DialogIdMap(const DialogIdMap&) = delete;
+    DialogIdMap& operator=(const DialogIdMap&) = delete;
+
     ~DialogIdMap();
     GalleryDialogId GetDialogId(MediaGalleryPrefId pref_id);
     MediaGalleryPrefId GetPrefId(GalleryDialogId id) const;
@@ -104,7 +112,6 @@ class MediaGalleriesPermissionController
     GalleryDialogId next_dialog_id_;
     std::map<MediaGalleryPrefId, GalleryDialogId> back_map_;
     std::vector<MediaGalleryPrefId> forward_mapping_;
-    DISALLOW_COPY_AND_ASSIGN(DialogIdMap);
   };
 
 
@@ -112,9 +119,8 @@ class MediaGalleriesPermissionController
   void OnPreferencesInitialized();
 
   // SelectFileDialog::Listener implementation:
-  void FileSelected(const base::FilePath& path,
-                    int index,
-                    void* params) override;
+  void FileSelected(const ui::SelectedFileInfo& file_info, int index) override;
+  void FileSelectionCanceled() override;
 
   // RemovableStorageObserver implementation.
   // Used to keep dialog in sync with removable device status.
@@ -158,7 +164,7 @@ class MediaGalleriesPermissionController
   void SavePermissions();
 
   // Updates the model and view when |preferences_| changes. Some of the
-  // possible changes includes a gallery getting blacklisted, or a new
+  // possible changes includes a gallery getting blocklisted, or a new
   // auto detected gallery becoming available.
   void UpdateGalleriesOnPreferencesEvent();
 
@@ -171,16 +177,16 @@ class MediaGalleriesPermissionController
   Profile* GetProfile();
 
   // The web contents from which the request originated.
-  content::WebContents* web_contents_;
+  raw_ptr<content::WebContents> web_contents_;
 
   // This is just a reference, but it's assumed that it won't become invalid
   // while the dialog is showing.
-  const extensions::Extension* extension_;
+  raw_ptr<const extensions::Extension> extension_;
 
   // Mapping between pref ids and dialog ids.
   DialogIdMap id_map_;
 
-  // This map excludes those galleries which have been blacklisted; it only
+  // This map excludes those galleries which have been blocklisted; it only
   // counts active known galleries.
   GalleryPermissionsMap known_galleries_;
 
@@ -202,7 +208,7 @@ class MediaGalleriesPermissionController
 
   // The model that tracks galleries and extensions' permissions.
   // This is the authoritative source for gallery information.
-  MediaGalleriesPreferences* preferences_;
+  raw_ptr<MediaGalleriesPreferences> preferences_;
 
   // The view that's showing.
   std::unique_ptr<MediaGalleriesDialog> dialog_;
@@ -213,8 +219,6 @@ class MediaGalleriesPermissionController
 
   // Creates the dialog. Only changed for unit tests.
   CreateDialogCallback create_dialog_callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(MediaGalleriesPermissionController);
 };
 
 #endif  // CHROME_BROWSER_MEDIA_GALLERIES_MEDIA_GALLERIES_PERMISSION_CONTROLLER_H_

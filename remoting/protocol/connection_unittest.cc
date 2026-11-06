@@ -1,29 +1,41 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
 #include <memory>
+#include <numbers>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/macros.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/numerics/math_constants.h"
 #include "base/run_loop.h"
+#include "base/test/gmock_callback_support.h"
+#include "base/test/run_until.h"
 #include "base/test/task_environment.h"
 #include "base/threading/thread.h"
 #include "base/threading/thread_checker.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
-#include "build/build_config.h"
 #include "remoting/base/constants.h"
+#include "remoting/base/fifo_buffer.h"
+#include "remoting/base/ipc_fifo_buffer.h"
 #include "remoting/proto/audio.pb.h"
+#include "remoting/proto/control.pb.h"
+#include "remoting/proto/event.pb.h"
 #include "remoting/protocol/audio_source.h"
 #include "remoting/protocol/audio_stream.h"
 #include "remoting/protocol/audio_stub.h"
+#include "remoting/protocol/desktop_capturer.h"
+#include "remoting/protocol/desktop_capturer_wrapper.h"
 #include "remoting/protocol/fake_session.h"
 #include "remoting/protocol/fake_video_renderer.h"
-#include "remoting/protocol/ice_connection_to_client.h"
-#include "remoting/protocol/ice_connection_to_host.h"
+#include "remoting/protocol/fake_webrtc_audio_classes.h"
+#include "remoting/protocol/ice_config_fetcher.h"
+#include "remoting/protocol/network_settings.h"
 #include "remoting/protocol/protocol_mock_objects.h"
 #include "remoting/protocol/transport_context.h"
 #include "remoting/protocol/video_stream.h"
@@ -31,7 +43,7 @@
 #include "remoting/protocol/webrtc_connection_to_host.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/webrtc/modules/desktop_capture/desktop_capturer.h"
+#include "third_party/webrtc/modules/desktop_capture/desktop_capture_types.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_frame.h"
 
 using ::testing::_;
@@ -39,8 +51,7 @@ using ::testing::InvokeWithoutArgs;
 using ::testing::NotNull;
 using ::testing::StrictMock;
 
-namespace remoting {
-namespace protocol {
+namespace remoting::protocol {
 
 namespace {
 
@@ -63,12 +74,15 @@ class MockConnectionToHostEventCallback
   MockConnectionToHostEventCallback() = default;
   ~MockConnectionToHostEventCallback() override = default;
 
-  MOCK_METHOD2(OnConnectionState,
-               void(ConnectionToHost::State state, ErrorCode error));
-  MOCK_METHOD1(OnConnectionReady, void(bool ready));
-  MOCK_METHOD2(OnRouteChanged,
-               void(const std::string& channel_name,
-                    const TransportRoute& route));
+  MOCK_METHOD(void,
+              OnConnectionState,
+              (ConnectionToHost::State state, ErrorCode error),
+              (override));
+  MOCK_METHOD(void, OnConnectionReady, (bool ready), (override));
+  MOCK_METHOD(void,
+              OnRouteChanged,
+              (const std::string& channel_name, const TransportRoute& route),
+              (override));
 };
 
 class TestScreenCapturer : public webrtc::DesktopCapturer {
@@ -77,9 +91,7 @@ class TestScreenCapturer : public webrtc::DesktopCapturer {
   ~TestScreenCapturer() override = default;
 
   // webrtc::DesktopCapturer interface.
-  void Start(Callback* callback) override {
-    callback_ = callback;
-  }
+  void Start(Callback* callback) override { callback_ = callback; }
 
   void CaptureFrame() override {
     if (capture_request_index_to_fail_ >= 0) {
@@ -92,10 +104,10 @@ class TestScreenCapturer : public webrtc::DesktopCapturer {
     }
 
     // Return black 100x100 frame.
-    std::unique_ptr<webrtc::DesktopFrame> frame(
-        new webrtc::BasicDesktopFrame(webrtc::DesktopSize(100, 100)));
-    memset(frame->data(), frame_index_,
-           frame->stride() * frame->size().height());
+    auto frame = std::make_unique<webrtc::BasicDesktopFrame>(
+        webrtc::DesktopSize(100, 100), webrtc::FOURCC_ARGB);
+    UNSAFE_TODO(memset(frame->data(), frame_index_,
+                       frame->stride() * frame->size().height()));
     frame_index_++;
     frame->mutable_updated_region()->SetRect(
         webrtc::DesktopRect::MakeSize(frame->size()));
@@ -104,34 +116,39 @@ class TestScreenCapturer : public webrtc::DesktopCapturer {
                                std::move(frame));
   }
 
-  bool GetSourceList(SourceList* sources) override {
-    return true;
-  }
+  bool GetSourceList(SourceList* sources) override { return true; }
 
-  bool SelectSource(SourceId id) override {
-    return true;
-  }
+  bool SelectSource(SourceId id) override { return true; }
 
   void FailNthFrame(int n) { capture_request_index_to_fail_ = n; }
 
  private:
-  Callback* callback_ = nullptr;
+  raw_ptr<Callback> callback_ = nullptr;
   int frame_index_ = 0;
 
   int capture_request_index_to_fail_ = -1;
 };
 
 static const int kAudioSampleRate = AudioPacket::SAMPLING_RATE_48000;
-static const int kAudioPacketDurationMs = 50;
-static constexpr int kSamplesPerAudioPacket =
-    kAudioSampleRate * kAudioPacketDurationMs /
-    base::Time::kMillisecondsPerSecond;
-static constexpr base::TimeDelta kAudioPacketDuration =
-    base::TimeDelta::FromMilliseconds(kAudioPacketDurationMs);
+static constexpr int kAudioFrameDurationMs = 10;
+static constexpr int kSamplesPerAudioFrame = kAudioSampleRate *
+                                             kAudioFrameDurationMs /
+                                             base::Time::kMillisecondsPerSecond;
+static constexpr base::TimeDelta kAudioFrameDuration =
+    base::Milliseconds(kAudioFrameDurationMs);
+static constexpr base::TimeDelta kAudioPacketDuration = base::Milliseconds(20);
 
 static const int kAudioChannels = 2;
 
-static const int kTestAudioSignalFrequencyLeftHz = 3000;
+// WebRTC's NetEq computes pitch correlation lags for PLC (Expand) and
+// time-stretching (Accelerate / PreemptiveExpand) exclusively from Channel 0
+// (left) after downsampling to 4 kHz (2000 Hz Nyquist). Using 1000 Hz on the
+// left channel (48-sample period at 48 kHz; 4-sample period at 4 kHz, below
+// Nyquist) and its second harmonic 2000 Hz on the right channel (24-sample
+// period at 48 kHz) ensures every pitch lag multiple of Channel 0's period is
+// also an exact multiple of Channel 1's period, keeping both channels in phase
+// (voice_mix_factor = 1.0) rather than classifying Channel 1 as unvoiced noise.
+static const int kTestAudioSignalFrequencyLeftHz = 1000;
 static const int kTestAudioSignalFrequencyRightHz = 2000;
 
 class TestAudioSource : public AudioSource {
@@ -142,6 +159,13 @@ class TestAudioSource : public AudioSource {
   // AudioSource interface.
   bool Start(const PacketCapturedCallback& callback) override {
     callback_ = callback;
+    // Start two packet intervals (40 ms) in the past and cap each 20 ms timer
+    // tick to 4 frames (40 ms). Even if the first tick fires before
+    // asynchronous SDP audio negotiation finishes attaching the sender sink, at
+    // least one packet interval of prefill remains for the next tick so NetEq
+    // maintains a steady-state buffer cushion against 30 ms WebrtcAudioModule
+    // polls.
+    last_send_time_ = base::TimeTicks::Now() - 2 * kAudioPacketDuration;
     timer_.Start(FROM_HERE, kAudioPacketDuration,
                  base::BindRepeating(&TestAudioSource::GenerateAudioSamples,
                                      base::Unretained(this)));
@@ -152,24 +176,39 @@ class TestAudioSource : public AudioSource {
   static int16_t GetSampleValue(double pos, int frequency) {
     const int kMaxSampleValue = 32767;
     return static_cast<int>(
-        sin(pos * 2 * base::kPiDouble * frequency / kAudioSampleRate) *
+        sin(pos * 2 * std::numbers::pi * frequency / kAudioSampleRate) *
             kMaxSampleValue +
         0.5);
   }
 
   void GenerateAudioSamples() {
-    std::vector<int16_t> data(kSamplesPerAudioPacket * kAudioChannels);
-    for (int i = 0; i < kSamplesPerAudioPacket; ++i) {
+    base::TimeTicks now = base::TimeTicks::Now();
+    base::TimeDelta elapsed = now - last_send_time_;
+    int frames_to_generate =
+        static_cast<int>(elapsed.IntDiv(kAudioFrameDuration));
+    if (frames_to_generate <= 0) {
+      return;
+    }
+    // Cap each tick to 4 frames (40 ms / two 20 ms Opus packets) so timer
+    // wake-up delays catch up smoothly across ticks instead of injecting a
+    // large multi-packet burst at a single NetEq tick_timer value (which skews
+    // PacketArrivalHistory and triggers NetEq kAccelerate).
+    frames_to_generate = std::min(frames_to_generate, 4);
+    last_send_time_ += frames_to_generate * kAudioFrameDuration;
+    int samples_to_generate = frames_to_generate * kSamplesPerAudioFrame;
+
+    std::vector<int16_t> data(samples_to_generate * kAudioChannels);
+    for (int i = 0; i < samples_to_generate; ++i) {
       data[i * kAudioChannels] = GetSampleValue(
           position_samples_ + i, kTestAudioSignalFrequencyLeftHz);
       data[i * kAudioChannels + 1] = GetSampleValue(
           position_samples_ + i, kTestAudioSignalFrequencyRightHz);
     }
-    position_samples_ += kSamplesPerAudioPacket;
+    position_samples_ += samples_to_generate;
 
     std::unique_ptr<AudioPacket> packet(new AudioPacket());
     packet->add_data(reinterpret_cast<char*>(&(data[0])),
-                     kSamplesPerAudioPacket * kAudioChannels * sizeof(int16_t));
+                     samples_to_generate * kAudioChannels * sizeof(int16_t));
     packet->set_encoding(AudioPacket::ENCODING_RAW);
     packet->set_sampling_rate(AudioPacket::SAMPLING_RATE_48000);
     packet->set_bytes_per_sample(AudioPacket::BYTES_PER_SAMPLE_2);
@@ -179,6 +218,7 @@ class TestAudioSource : public AudioSource {
 
   PacketCapturedCallback callback_;
   base::RepeatingTimer timer_;
+  base::TimeTicks last_send_time_;
   int position_samples_ = 0;
 };
 
@@ -191,18 +231,31 @@ class FakeAudioPlayer : public AudioStub {
   void ProcessAudioPacket(std::unique_ptr<AudioPacket> packet,
                           base::OnceClosure done) override {
     EXPECT_TRUE(thread_checker_.CalledOnValidThread());
-    EXPECT_EQ(AudioPacket::ENCODING_RAW, packet->encoding());
-    EXPECT_EQ(AudioPacket::SAMPLING_RATE_48000, packet->sampling_rate());
-    EXPECT_EQ(AudioPacket::BYTES_PER_SAMPLE_2, packet->bytes_per_sample());
-    EXPECT_EQ(AudioPacket::CHANNELS_STEREO, packet->channels());
+    EXPECT_EQ(packet->encoding(), AudioPacket::ENCODING_RAW);
+    EXPECT_EQ(packet->sampling_rate(), AudioPacket::SAMPLING_RATE_48000);
+    EXPECT_EQ(packet->bytes_per_sample(), AudioPacket::BYTES_PER_SAMPLE_2);
+
+    // WebRTC's NetEq defaults to 1 channel (mono) and generates 1-channel
+    // silence frames when polled before the first stereo Opus RTP packet is
+    // received and decoded. Ignore these pre-stream mono silence packets.
+    if (data_.empty() && packet->channels() == AudioPacket::CHANNELS_MONO) {
+      if (done) {
+        std::move(done).Run();
+      }
+      return;
+    }
+
+    EXPECT_EQ(packet->channels(), AudioPacket::CHANNELS_STEREO);
 
     data_.insert(data_.end(), packet->data(0).begin(), packet->data(0).end());
 
-    if (run_loop_ && data_.size() >= samples_expected_ * 4)
+    if (run_loop_ && data_.size() >= samples_expected_ * 4) {
       run_loop_->Quit();
+    }
 
-    if (!done.is_null())
+    if (done) {
       std::move(done).Run();
+    }
   }
 
   void WaitForSamples(size_t samples_expected) {
@@ -214,25 +267,28 @@ class FakeAudioPlayer : public AudioStub {
   }
 
   void Verify() {
-    const int16_t* data = reinterpret_cast<const int16_t*>(data_.data());
+    const int16_t* data =
+        UNSAFE_TODO(reinterpret_cast<const int16_t*>(data_.data()));
     int num_samples = data_.size() / kAudioChannels / sizeof(int16_t);
 
-    // Skip the first 200 ms as these samples are more likely to be affected by
-    // concealment which causes the zero-crossing frequency estimation to fail.
-    // This is even more likely for ASAN builds.
+    // Skip the first 300 ms as these samples are more likely to be affected by
+    // initial NetEq jitter-buffer adaptation and concealment, which can extend
+    // slightly past 200 ms on heavily loaded bots (such as ASan and debug
+    // builds) and skew zero-crossing frequency estimation.
     constexpr int kSkippedSamples =
-        200 * kAudioSampleRate / base::Time::kMillisecondsPerSecond;
+        300 * kAudioSampleRate / base::Time::kMillisecondsPerSecond;
     ASSERT_GT(num_samples, kSkippedSamples);
 
     // Estimate signal frequency by counting how often it crosses 0.
     int left = 0;
     int right = 0;
     for (int i = kSkippedSamples; i < num_samples; ++i) {
-      if (data[(i - 1) * kAudioChannels] < 0 && data[i * kAudioChannels] >= 0) {
+      if (UNSAFE_TODO(data[(i - 1) * kAudioChannels]) < 0 &&
+          UNSAFE_TODO(data[i * kAudioChannels]) >= 0) {
         ++left;
       }
-      if (data[(i - 1) * kAudioChannels + 1] < 0 &&
-          data[i * kAudioChannels + 1] >= 0) {
+      if (UNSAFE_TODO(data[(i - 1) * kAudioChannels + 1]) < 0 &&
+          UNSAFE_TODO(data[i * kAudioChannels + 1]) >= 0) {
         ++right;
       }
     }
@@ -251,7 +307,7 @@ class FakeAudioPlayer : public AudioStub {
  private:
   base::ThreadChecker thread_checker_;
   std::vector<char> data_;
-  base::RunLoop* run_loop_ = nullptr;
+  raw_ptr<base::RunLoop> run_loop_ = nullptr;
   size_t samples_expected_ = 0;
 
   base::WeakPtrFactory<FakeAudioPlayer> weak_factory_{this};
@@ -259,8 +315,7 @@ class FakeAudioPlayer : public AudioStub {
 
 }  // namespace
 
-class ConnectionTest : public testing::Test,
-                       public testing::WithParamInterface<bool> {
+class ConnectionTest : public testing::Test, public Session::EventHandler {
  public:
   ConnectionTest()
       : task_environment_(base::test::TaskEnvironment::MainThreadType::IO),
@@ -272,43 +327,47 @@ class ConnectionTest : public testing::Test,
     audio_decode_thread_.Start();
   }
 
+  ConnectionTest(const ConnectionTest&) = delete;
+  ConnectionTest& operator=(const ConnectionTest&) = delete;
+
   void DestroyHost() {
     host_connection_.reset();
     run_loop_->Quit();
   }
 
- protected:
-  bool is_using_webrtc() { return GetParam(); }
+  void OnSessionStateChange(Session::State state) override {
+    if (state == Session::AUTHENTICATED) {
+      if (host_connection_) {
+        host_session_->SetTransport(host_connection_->transport());
+        host_connection_->Start();
+      }
+    } else if (state == Session::CLOSED || state == Session::FAILED) {
+      if (host_connection_) {
+        ErrorCode error =
+            state == Session::CLOSED ? ErrorCode::OK : host_session_->error();
+        host_connection_->Disconnect(error, {}, FROM_HERE);
+      }
+    }
+  }
 
+ protected:
   void SetUp() override {
     // Create fake sessions.
-    host_session_ = new FakeSession();
+    owned_host_session_ = std::make_unique<FakeSession>();
+    host_session_ = owned_host_session_.get();
     owned_client_session_ = std::make_unique<FakeSession>();
     client_session_ = owned_client_session_.get();
 
-    // Create Connection objects.
-    if (is_using_webrtc()) {
-      // Set the polling interval to zero to prevent hangs from PostDelayedTask.
-      WebrtcTransport::SetDataChannelPollingIntervalForTests(base::TimeDelta());
+    // Set the polling interval to zero to prevent hangs from PostDelayedTask.
+    WebrtcTransport::SetDataChannelPollingIntervalForTests(base::TimeDelta());
 
-      host_connection_ = std::make_unique<WebrtcConnectionToClient>(
-          base::WrapUnique(host_session_),
-          TransportContext::ForTests(protocol::TransportRole::SERVER),
-          task_environment_.GetMainThreadTaskRunner(),
-          task_environment_.GetMainThreadTaskRunner());
-      client_connection_ = std::make_unique<WebrtcConnectionToHost>();
-
-    } else {
-      host_connection_ = std::make_unique<IceConnectionToClient>(
-          base::WrapUnique(host_session_),
-          TransportContext::ForTests(protocol::TransportRole::SERVER),
-          task_environment_.GetMainThreadTaskRunner(),
-          task_environment_.GetMainThreadTaskRunner());
-      client_connection_ = std::make_unique<IceConnectionToHost>();
-    }
+    host_connection_ = std::make_unique<WebrtcConnectionToClient>(
+        /*ice_config_fetcher=*/nullptr);
+    client_connection_ = std::make_unique<WebrtcConnectionToHost>();
 
     // Setup host side.
     host_connection_->SetEventHandler(&host_event_handler_);
+    host_session_->SetEventHandler(this);
     host_connection_->set_clipboard_stub(&host_clipboard_stub_);
     host_connection_->set_host_stub(&host_stub_);
     host_connection_->set_input_stub(&host_input_stub_);
@@ -323,11 +382,6 @@ class ConnectionTest : public testing::Test,
   }
 
   void Connect() {
-    {
-      testing::InSequence sequence;
-      EXPECT_CALL(host_event_handler_, OnConnectionAuthenticating());
-      EXPECT_CALL(host_event_handler_, OnConnectionAuthenticated());
-    }
     EXPECT_CALL(host_event_handler_, OnConnectionChannelsConnected())
         .WillOnce(InvokeWithoutArgs(this, &ConnectionTest::OnHostConnected));
     EXPECT_CALL(host_event_handler_, OnRouteChange(_, _))
@@ -335,22 +389,29 @@ class ConnectionTest : public testing::Test,
 
     {
       testing::InSequence sequence;
+      EXPECT_CALL(
+          client_event_handler_,
+          OnConnectionState(ConnectionToHost::CONNECTING, ErrorCode::OK));
+      EXPECT_CALL(
+          client_event_handler_,
+          OnConnectionState(ConnectionToHost::AUTHENTICATED, ErrorCode::OK));
       EXPECT_CALL(client_event_handler_,
-                  OnConnectionState(ConnectionToHost::CONNECTING, OK));
-      EXPECT_CALL(client_event_handler_,
-                  OnConnectionState(ConnectionToHost::AUTHENTICATED, OK));
-      EXPECT_CALL(client_event_handler_,
-                  OnConnectionState(ConnectionToHost::CONNECTED, OK))
-          .WillOnce(InvokeWithoutArgs(
-              this, &ConnectionTest::OnClientConnected));
+                  OnConnectionState(ConnectionToHost::CONNECTED, ErrorCode::OK))
+          .WillOnce(
+              InvokeWithoutArgs(this, &ConnectionTest::OnClientConnected));
     }
     EXPECT_CALL(client_event_handler_, OnRouteChanged(_, _))
         .Times(testing::AnyNumber());
+
+    NetworkSettings network_settings(NetworkSettings::NAT_TRAVERSAL_OUTGOING);
+
+    host_connection_->ApplyNetworkSettings(network_settings);
 
     client_connection_->Connect(
         std::move(owned_client_session_),
         TransportContext::ForTests(protocol::TransportRole::CLIENT),
         &client_event_handler_);
+    client_connection_->ApplyNetworkSettings(network_settings);
     client_session_->SimulateConnection(host_session_);
 
     run_loop_ = std::make_unique<base::RunLoop>();
@@ -368,56 +429,44 @@ class ConnectionTest : public testing::Test,
 
   void OnHostConnected() {
     host_connected_ = true;
-    if (client_connected_ && run_loop_)
+    if (client_connected_ && run_loop_) {
       run_loop_->Quit();
+    }
   }
 
   void OnClientConnected() {
     client_connected_ = true;
-    if (host_connected_ && run_loop_)
+    if (host_connected_ && run_loop_) {
       run_loop_->Quit();
+    }
+  }
+
+  std::unique_ptr<DesktopCapturer> WrapTestCapturer(
+      std::unique_ptr<TestScreenCapturer> capturer) {
+    return std::make_unique<DesktopCapturerWrapper>(std::move(capturer));
+  }
+
+  std::unique_ptr<DesktopCapturer> CreateTestCapturer() {
+    return WrapTestCapturer(std::make_unique<TestScreenCapturer>());
   }
 
   void WaitNextVideoFrame() {
     size_t received_frames =
-        is_using_webrtc()
-            ? client_video_renderer_.GetFrameConsumer()
-                  ->received_frames()
-                  .size()
-            : client_video_renderer_.GetVideoStub()->received_packets().size();
+        client_video_renderer_.GetFrameConsumer()->received_frames().size();
 
     base::RunLoop run_loop;
 
-    // Expect frames to be passed to FrameConsumer when WebRTC is used, or to
-    // VideoStub otherwise.
-    if (is_using_webrtc()) {
-      client_video_renderer_.GetFrameConsumer()->set_on_frame_callback(
-          base::BindRepeating(&base::RunLoop::Quit,
-                              base::Unretained(&run_loop)));
-    } else {
-      client_video_renderer_.GetVideoStub()->set_on_frame_callback(
-          base::BindRepeating(&base::RunLoop::Quit,
-                              base::Unretained(&run_loop)));
-    }
+    client_video_renderer_.GetFrameConsumer()->set_on_frame_callback(
+        base::BindRepeating(&base::RunLoop::Quit, base::Unretained(&run_loop)));
 
     run_loop.Run();
 
-    if (is_using_webrtc()) {
-      EXPECT_EQ(
-          client_video_renderer_.GetFrameConsumer()->received_frames().size(),
-          received_frames + 1);
-      EXPECT_EQ(
-          client_video_renderer_.GetVideoStub()->received_packets().size(), 0U);
-      client_video_renderer_.GetFrameConsumer()->set_on_frame_callback({});
-    } else {
-      EXPECT_EQ(
-          client_video_renderer_.GetFrameConsumer()->received_frames().size(),
-          0U);
-      EXPECT_EQ(
-          client_video_renderer_.GetVideoStub()->received_packets().size(),
-          received_frames + 1);
-      client_video_renderer_.GetVideoStub()->set_on_frame_callback({});
-    }
+    EXPECT_EQ(
+        client_video_renderer_.GetFrameConsumer()->received_frames().size(),
+        received_frames + 1);
+    EXPECT_EQ(client_video_renderer_.GetVideoStub()->received_packets().size(),
+              0U);
+    client_video_renderer_.GetFrameConsumer()->set_on_frame_callback({});
   }
 
   void WaitFirstFrameStats() {
@@ -446,7 +495,8 @@ class ConnectionTest : public testing::Test,
   MockHostStub host_stub_;
   MockInputStub host_input_stub_;
   std::unique_ptr<ConnectionToClient> host_connection_;
-  FakeSession* host_session_;  // Owned by |host_connection_|.
+  std::unique_ptr<FakeSession> owned_host_session_;
+  raw_ptr<FakeSession, AcrossTasksDanglingUntriaged> host_session_;
   bool host_connected_ = false;
 
   MockConnectionToHostEventCallback client_event_handler_;
@@ -455,26 +505,21 @@ class ConnectionTest : public testing::Test,
   FakeVideoRenderer client_video_renderer_;
   FakeAudioPlayer client_audio_player_;
   std::unique_ptr<ConnectionToHost> client_connection_;
-  FakeSession* client_session_;  // Owned by |client_connection_|.
   std::unique_ptr<FakeSession> owned_client_session_;
+  raw_ptr<FakeSession, AcrossTasksDanglingUntriaged>
+      client_session_;  // Owned by |client_connection_|.
   bool client_connected_ = false;
 
   base::Thread video_encode_thread_;
   base::Thread audio_encode_thread_;
   base::Thread audio_decode_thread_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ConnectionTest);
 };
 
-INSTANTIATE_TEST_SUITE_P(Ice, ConnectionTest, ::testing::Values(false));
-INSTANTIATE_TEST_SUITE_P(Webrtc, ConnectionTest, ::testing::Values(true));
-
-TEST_P(ConnectionTest, RejectConnection) {
+TEST_F(ConnectionTest, RejectConnection) {
   EXPECT_CALL(client_event_handler_,
-              OnConnectionState(ConnectionToHost::CONNECTING, OK));
+              OnConnectionState(ConnectionToHost::CONNECTING, ErrorCode::OK));
   EXPECT_CALL(client_event_handler_,
-              OnConnectionState(ConnectionToHost::CLOSED, OK));
+              OnConnectionState(ConnectionToHost::CLOSED, ErrorCode::OK));
 
   client_connection_->Connect(
       std::move(owned_client_session_),
@@ -483,30 +528,17 @@ TEST_P(ConnectionTest, RejectConnection) {
   client_session_->event_handler()->OnSessionStateChange(Session::CLOSED);
 }
 
-// crbug.com/1224862: Tests are flaky on Mac.
-#if defined(OS_MAC)
-#define MAYBE_Disconnect DISABLED_Disconnect
-#else
-#define MAYBE_Disconnect Disconnect
-#endif
-TEST_P(ConnectionTest, MAYBE_Disconnect) {
+TEST_F(ConnectionTest, Disconnect) {
   Connect();
 
   EXPECT_CALL(client_event_handler_,
-              OnConnectionState(ConnectionToHost::CLOSED, OK));
-  EXPECT_CALL(host_event_handler_, OnConnectionClosed(OK));
+              OnConnectionState(ConnectionToHost::CLOSED, ErrorCode::OK));
 
-  client_session_->Close(OK);
+  client_session_->Close(ErrorCode::OK, /* error_details= */ {}, FROM_HERE);
   base::RunLoop().RunUntilIdle();
 }
 
-// crbug.com/1224862: Tests are flaky on Mac.
-#if defined(OS_MAC)
-#define MAYBE_Control DISABLED_Control
-#else
-#define MAYBE_Control Control
-#endif
-TEST_P(ConnectionTest, MAYBE_Control) {
+TEST_F(ConnectionTest, Control) {
   Connect();
 
   Capabilities capabilities_msg;
@@ -524,13 +556,7 @@ TEST_P(ConnectionTest, MAYBE_Control) {
   run_loop.Run();
 }
 
-// crbug.com/1224862: Tests are flaky on Mac.
-#if defined(OS_MAC)
-#define MAYBE_Events DISABLED_Events
-#else
-#define MAYBE_Events Events
-#endif
-TEST_P(ConnectionTest, MAYBE_Events) {
+TEST_F(ConnectionTest, Events) {
   Connect();
 
   KeyEvent event;
@@ -548,18 +574,12 @@ TEST_P(ConnectionTest, MAYBE_Events) {
   run_loop.Run();
 }
 
-// crbug.com/1224862: Tests are flaky on Mac.
-#if defined(OS_MAC)
-#define MAYBE_Video DISABLED_Video
-#else
-#define MAYBE_Video Video
-#endif
-TEST_P(ConnectionTest, MAYBE_Video) {
+TEST_F(ConnectionTest, Video) {
   Connect();
 
   std::unique_ptr<VideoStream> video_stream =
-      host_connection_->StartVideoStream(
-          std::make_unique<TestScreenCapturer>());
+      host_connection_->StartVideoStream(webrtc::kFullDesktopScreenId,
+                                         CreateTestCapturer());
 
   // Receive 5 frames.
   for (int i = 0; i < 5; ++i) {
@@ -567,35 +587,23 @@ TEST_P(ConnectionTest, MAYBE_Video) {
   }
 }
 
-// crbug.com/1224862: Tests are flaky on Mac.
-#if defined(OS_MAC)
-#define MAYBE_VideoWithSlowSignaling DISABLED_VideoWithSlowSignaling
-#else
-#define MAYBE_VideoWithSlowSignaling VideoWithSlowSignaling
-#endif
-// Verifies that the VideoStream doesn't loose any video frames while the
+// Verifies that the VideoStream doesn't lose any video frames while the
 // connection is being established.
-TEST_P(ConnectionTest, MAYBE_VideoWithSlowSignaling) {
+TEST_F(ConnectionTest, VideoWithSlowSignaling) {
   // Add signaling delay to slow down connection handshake.
-  host_session_->set_signaling_delay(base::TimeDelta::FromMilliseconds(100));
-  client_session_->set_signaling_delay(base::TimeDelta::FromMilliseconds(100));
+  host_session_->set_signaling_delay(base::Milliseconds(100));
+  client_session_->set_signaling_delay(base::Milliseconds(100));
 
   Connect();
 
   std::unique_ptr<VideoStream> video_stream =
-      host_connection_->StartVideoStream(
-          base::WrapUnique(new TestScreenCapturer()));
+      host_connection_->StartVideoStream(webrtc::kFullDesktopScreenId,
+                                         CreateTestCapturer());
 
   WaitNextVideoFrame();
 }
 
-// crbug.com/1224862: Tests are flaky on Mac.
-#if defined(OS_MAC)
-#define MAYBE_DestroyOnIncomingMessage DISABLED_DestroyOnIncomingMessage
-#else
-#define MAYBE_DestroyOnIncomingMessage DestroyOnIncomingMessage
-#endif
-TEST_P(ConnectionTest, MAYBE_DestroyOnIncomingMessage) {
+TEST_F(ConnectionTest, DestroyOnIncomingMessage) {
   Connect();
 
   KeyEvent event;
@@ -614,14 +622,7 @@ TEST_P(ConnectionTest, MAYBE_DestroyOnIncomingMessage) {
   run_loop.Run();
 }
 
-// TODO(crbug.com/1146302): Test is flaky.
-TEST_P(ConnectionTest, DISABLED_VideoStats) {
-  // Currently this test only works for WebRTC because for ICE connections stats
-  // are reported by SoftwareVideoRenderer which is not used in this test.
-  // TODO(sergeyu): Fix this.
-  if (!is_using_webrtc())
-    return;
-
+TEST_F(ConnectionTest, VideoStats) {
   Connect();
 
   base::TimeTicks start_time = base::TimeTicks::Now();
@@ -629,14 +630,14 @@ TEST_P(ConnectionTest, DISABLED_VideoStats) {
 
   scoped_refptr<InputEventTimestampsSourceImpl> input_event_timestamps_source =
       new InputEventTimestampsSourceImpl();
+
   input_event_timestamps_source->OnEventReceived(
       InputEventTimestamps{event_timestamp, start_time});
 
   std::unique_ptr<VideoStream> video_stream =
-      host_connection_->StartVideoStream(
-          std::make_unique<TestScreenCapturer>());
+      host_connection_->StartVideoStream(webrtc::kFullDesktopScreenId,
+                                         CreateTestCapturer());
   video_stream->SetEventTimestampsSource(input_event_timestamps_source);
-
   WaitNextVideoFrame();
 
   base::TimeTicks finish_time = base::TimeTicks::Now();
@@ -669,48 +670,94 @@ TEST_P(ConnectionTest, DISABLED_VideoStats) {
   EXPECT_LE(stats.client_stats.time_rendered, finish_time);
 }
 
-// Slow/fails on Linux ASan/TSan (http://crbug.com/1045344).
-#if (defined(OS_LINUX) || defined(OS_CHROMEOS)) && \
-    (defined(ADDRESS_SANITIZER) || defined(THREAD_SANITIZER))
-#define MAYBE_Audio DISABLED_Audio
-#else
-#define MAYBE_Audio Audio
-#endif
-TEST_P(ConnectionTest, MAYBE_Audio) {
+TEST_F(ConnectionTest, Audio) {
   Connect();
 
   std::unique_ptr<AudioStream> audio_stream =
       host_connection_->StartAudioStream(std::make_unique<TestAudioSource>());
 
-  // Wait for 1 second worth of audio samples.
-  client_audio_player_.WaitForSamples(kAudioSampleRate * 2);
+  // Wait for 1 second worth of stereo audio samples (after skipping the initial
+  // 300 ms warmup window in Verify(), 700 ms provides 700 left-channel and
+  // 1,400 right-channel cycles for zero-crossing frequency estimation).
+  client_audio_player_.WaitForSamples(kAudioSampleRate);
   client_audio_player_.Verify();
 }
 
-// Flaky on multiple platforms
-// https://crbug.com/1143671
-TEST_P(ConnectionTest, DISABLED_FirstCaptureFailed) {
+TEST_F(ConnectionTest, FirstCaptureFailed) {
   Connect();
 
-  auto capturer = std::make_unique<TestScreenCapturer>();
-  capturer->FailNthFrame(0);
-  auto video_stream = host_connection_->StartVideoStream(std::move(capturer));
+  auto test_capturer = std::make_unique<TestScreenCapturer>();
+  test_capturer->FailNthFrame(0);
+  auto video_stream = host_connection_->StartVideoStream(
+      webrtc::kFullDesktopScreenId, WrapTestCapturer(std::move(test_capturer)));
 
   WaitNextVideoFrame();
 }
 
-// Flaky on multiple platforms
-// https://crbug.com/1143671
-TEST_P(ConnectionTest, DISABLED_SecondCaptureFailed) {
+TEST_F(ConnectionTest, SecondCaptureFailed) {
   Connect();
 
-  auto capturer = std::make_unique<TestScreenCapturer>();
-  capturer->FailNthFrame(1);
-  auto video_stream = host_connection_->StartVideoStream(std::move(capturer));
+  auto test_capturer = std::make_unique<TestScreenCapturer>();
+  test_capturer->FailNthFrame(1);
+  auto video_stream = host_connection_->StartVideoStream(
+      webrtc::kFullDesktopScreenId, WrapTestCapturer(std::move(test_capturer)));
 
   WaitNextVideoFrame();
   WaitNextVideoFrame();
 }
 
-}  // namespace protocol
-}  // namespace remoting
+TEST_F(ConnectionTest, WebrtcAudioFifoPlayoutBinding) {
+  Connect();
+
+  // 1. Instantiate SPSC pipe.
+  std::unique_ptr<IpcFifoBufferWriter> writer;
+  std::unique_ptr<IpcFifoBufferReader> reader;
+  ASSERT_TRUE(CreateIpcFifoBuffer(kDefaultFifoBufferCapacity, writer, reader));
+
+  // 2. Bind the SPSC writer to WebrtcConnectionToClient.
+  host_connection_->SetAudioWriter(std::move(writer));
+
+  // 3. Create a fake audio track and stream.
+  webrtc::scoped_refptr<FakeAudioTrackSource> source(
+      new webrtc::RefCountedObject<FakeAudioTrackSource>());
+  webrtc::scoped_refptr<FakeAudioTrack> track(
+      new webrtc::RefCountedObject<FakeAudioTrack>(source.get()));
+  webrtc::scoped_refptr<FakeMediaStream> stream(
+      new webrtc::RefCountedObject<FakeMediaStream>(track.get()));
+
+  // 4. Trigger track addition.
+  // Cast to WebrtcConnectionToClient to call OnWebrtcTransportMediaStreamAdded.
+  auto* webrtc_connection =
+      static_cast<WebrtcConnectionToClient*>(host_connection_.get());
+  webrtc_connection->OnWebrtcTransportMediaStreamAdded(stream);
+
+  // Verify that the track is registered.
+  ASSERT_FALSE(source->sinks().empty());
+
+  // 5. Inject a frame to trigger format handshake.
+  EXPECT_CALL(host_event_handler_, OnIncomingAudioFormatChanged(_, _))
+      .WillOnce(base::test::RunOnceCallback<1>(true));
+  std::vector<uint8_t> data = {1, 2, 3, 4};
+  source->sinks()[0]->OnData(data.data(), 16, 48000, 2, 1);
+
+  // Wait for the SPSC format changed handshake to complete deterministically!
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return webrtc_connection->FormatHandshakeCompleteForTesting();
+  }));
+
+  // The first frame is dropped due to handshake pending, so buffer remains
+  // empty.
+  ASSERT_EQ(reader->GetBufferedBytes(), 0u);
+
+  // 6. Inject a second frame. Playout direct SPSC write succeeds!
+  source->sinks()[0]->OnData(data.data(), 16, 48000, 2, 1);
+  ASSERT_EQ(reader->GetBufferedBytes(), 4u);
+
+  // 7. Trigger track removal.
+  webrtc_connection->OnWebrtcTransportMediaStreamRemoved(stream);
+
+  // Verify that the track is safely unregistered.
+  ASSERT_TRUE(source->sinks().empty());
+}
+
+}  // namespace remoting::protocol

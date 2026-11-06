@@ -1,4 +1,4 @@
-# Copyright 2016 The Chromium Authors. All rights reserved.
+# Copyright 2016 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -13,18 +13,21 @@ from page_sets.login_helpers import google_login
 from page_sets.helpers import override_online
 
 from telemetry.util import js_template
+from telemetry.util import wpr_modes
 
 
 class _LoadingStory(system_health_story.SystemHealthStory):
   """Abstract base class for single-page System Health user stories."""
-  ABSTRACT_STORY = True
 
-  def __init__(self,
-               story_set,
-               take_memory_measurement,
-               extra_browser_args=None):
-    super(_LoadingStory, self).__init__(story_set, take_memory_measurement,
-                                        extra_browser_args)
+  ABSTRACT_STORY = True
+  EXTRA_BROWSER_ARGUMENTS = []
+
+  def __init__(self, story_set, take_memory_measurement):
+    super(_LoadingStory, self).__init__(
+        story_set,
+        take_memory_measurement,
+        extra_browser_args=self.EXTRA_BROWSER_ARGUMENTS,
+    )
     self.script_to_evaluate_on_commit = override_online.ALWAYS_ONLINE
 
   @classmethod
@@ -104,6 +107,13 @@ class LoadEbayStory2018(_LoadingStory):
   TAGS = [story_tags.YEAR_2018]
 
 
+class LoadNaverStory2023(_LoadingStory):
+  NAME = 'load:search:naver:2023'
+  URL = 'https://m.naver.com/'
+  TAGS = [story_tags.INTERNATIONAL, story_tags.YEAR_2023]
+  SUPPORTED_PLATFORMS = platforms.MOBILE_ONLY
+
+
 ################################################################################
 # Social networks.
 ################################################################################
@@ -124,7 +134,9 @@ class LoadVkDesktopStory2018(_LoadingStory):
   URL = 'https://vk.com/sbeatles'
   SUPPORTED_PLATFORMS = platforms.DESKTOP_ONLY
   TAGS = [
-      story_tags.HEALTH_CHECK, story_tags.INTERNATIONAL, story_tags.YEAR_2018
+      story_tags.HEALTH_CHECK,
+      story_tags.INTERNATIONAL,
+      story_tags.YEAR_2018,
   ]
 
 
@@ -171,7 +183,9 @@ class LoadCnnStory2020(_LoadingStory):
   NAME = 'load:news:cnn:2020'
   URL = 'https://edition.cnn.com'
   TAGS = [
-      story_tags.HEALTH_CHECK, story_tags.JAVASCRIPT_HEAVY, story_tags.YEAR_2020
+      story_tags.HEALTH_CHECK,
+      story_tags.JAVASCRIPT_HEAVY,
+      story_tags.YEAR_2020,
   ]
 
 
@@ -247,14 +261,17 @@ class LoadWashingtonPostMobileStory2019(_LoadingStory):
     # popup is transparent, so this is mostly an aesthetical issue.
     has_button = action_runner.EvaluateJavaScript(
         '!!document.querySelector({{ selector }})',
-        selector=self._CONTINUE_FREE_BUTTON_SELECTOR)
+        selector=self._CONTINUE_FREE_BUTTON_SELECTOR,
+    )
     if has_button:
       action_runner.ClickElement(selector=self._CONTINUE_FREE_BUTTON_SELECTOR)
       action_runner.ScrollPageToElement(selector=self._ACCEPT_GDPR_SELECTOR)
       action_runner.ClickElement(selector=self._ACCEPT_GDPR_SELECTOR)
       element_function = js_template.Render(
-        'document.querySelectorAll({{ selector }})[{{ index }}]',
-        selector=self._CONTINUE_TO_SITE_SELECTOR, index=0)
+          'document.querySelectorAll({{ selector }})[{{ index }}]',
+          selector=self._CONTINUE_TO_SITE_SELECTOR,
+          index=0,
+      )
       action_runner.ClickElement(element_function=element_function)
 
 
@@ -277,6 +294,7 @@ class LoadIrctcStory2019(_LoadingStory):
     action_runner.Navigate(self.URL)
     action_runner.tab.WaitForDocumentReadyStateToBeComplete()
 
+
 ################################################################################
 # Audio, images, and video.
 ################################################################################
@@ -287,7 +305,9 @@ class LoadYouTubeStory2018(_LoadingStory):
   NAME = 'load:media:youtube:2018'
   URL = 'https://www.youtube.com/watch?v=QGfhS1hfTWw&autoplay=false'
   TAGS = [
-      story_tags.HEALTH_CHECK, story_tags.EMERGING_MARKET, story_tags.YEAR_2018
+      story_tags.HEALTH_CHECK,
+      story_tags.EMERGING_MARKET,
+      story_tags.YEAR_2018,
   ]
 
 
@@ -300,7 +320,7 @@ class LoadYouTubeLivingRoomStory2020(_LoadingStory):
 
 class LoadDailymotionStory2019(_LoadingStory):
   NAME = 'load:media:dailymotion:2019'
-  URL = ('https://www.dailymotion.com/video/x7paozv')
+  URL = 'https://www.dailymotion.com/video/x7paozv'
   TAGS = [story_tags.YEAR_2019]
 
 
@@ -338,18 +358,20 @@ class LoadFlickrStory2018(_LoadingStory):
 
 class LoadFacebookPhotosMobileStory2019(_LoadingStory):
   """Load a page of rihanna's facebook with a photo."""
+
   NAME = 'load:media:facebook_photos:2019'
-  URL = (
-      'https://m.facebook.com/rihanna/photos/a.207477806675/10156574885461676/?type=3&source=54&ref=page_internal')
+  URL = ('https://m.facebook.com/rihanna/photos/a.207477806675/'
+         '10156574885461676/?type=3&source=54&ref=page_internal')
   SUPPORTED_PLATFORMS = platforms.MOBILE_ONLY
   TAGS = [story_tags.EMERGING_MARKET, story_tags.YEAR_2019]
 
 
 class LoadFacebookPhotosDesktopStory2018(_LoadingStory):
   """Load a page of rihanna's facebook with a photo."""
+
   NAME = 'load:media:facebook_photos:2018'
-  URL = (
-    'https://www.facebook.com/rihanna/photos/pb.10092511675.-2207520000.1541795576./10155941787036676/?type=3&theater')
+  URL = ('https://www.facebook.com/rihanna/photos/pb.10092511675.-2207520000.'
+         '1541795576./10155941787036676/?type=3&theater')
   TAGS = [story_tags.YEAR_2018]
   SUPPORTED_PLATFORMS = platforms.DESKTOP_ONLY
 
@@ -397,7 +419,8 @@ class _FacebookDesktopStory(_LoadingStory):
         '''{{@events_reported_by_page}}
         {{@performance_measure}}''',
         events_reported_by_page=self.EVENTS_REPORTED_BY_PAGE,
-        performance_measure=self.PERFORMANCE_MEASURE_PATCH)
+        performance_measure=self.PERFORMANCE_MEASURE_PATCH,
+    )
 
   def _DidLoadDocument(self, action_runner):
     action_runner.WaitForJavaScriptCondition(self.VISUAL_COMPLETION_EVENT)
@@ -405,10 +428,10 @@ class _FacebookDesktopStory(_LoadingStory):
 
 class LoadFacebookPhotosDesktopStory2020(_FacebookDesktopStory):
   """Load a page of rihanna's facebook with a photo."""
+
   NAME = 'load:media:facebook_photos:desktop:2020'
-  URL = (
-      'https://www.facebook.com/rihanna/photos/pb.10092511675.-2207520000.1541795576./10155941787036676/?type=3&theater'
-  )
+  URL = ('https://www.facebook.com/rihanna/photos/pb.10092511675.-2207520000.'
+         '1541795576./10155941787036676/?type=3&theater')
   TAGS = [story_tags.YEAR_2020]
 
   def _Login(self, action_runner):
@@ -417,6 +440,7 @@ class LoadFacebookPhotosDesktopStory2020(_FacebookDesktopStory):
 
 class LoadFacebookFeedDesktopStory2020(_FacebookDesktopStory):
   """Load facebook main page"""
+
   NAME = 'load:media:facebook_feed:desktop:2020'
   URL = 'https://www.facebook.com/'
   TAGS = [story_tags.YEAR_2020]
@@ -427,10 +451,10 @@ class LoadFacebookFeedDesktopStory2020(_FacebookDesktopStory):
 
 class LoadFacebookPhotosMobileStory2020(_LoadingStory):
   """Load a page of rihanna's facebook with a photo."""
+
   NAME = 'load:media:facebook_photos:mobile:2020'
-  URL = (
-      'https://m.facebook.com/rihanna/photos/pb.10092511675.-2207520000.1541795576./10155941787036676/'
-  )
+  URL = ('https://m.facebook.com/rihanna/photos/pb.10092511675.-2207520000.'
+         '1541795576./10155941787036676/')
   TAGS = [story_tags.YEAR_2020]
   SUPPORTED_PLATFORMS = platforms.MOBILE_ONLY
 
@@ -440,8 +464,9 @@ class LoadFacebookPhotosMobileStory2020(_LoadingStory):
 
 class LoadFacebookFeedMobileStory2020(_LoadingStory):
   """Load a page of national park"""
+
   NAME = 'load:media:facebook_feed:mobile:2020'
-  URL = ('https://www.facebook.com/')
+  URL = 'https://www.facebook.com/'
   TAGS = [story_tags.YEAR_2020]
   SUPPORTED_PLATFORMS = platforms.MOBILE_ONLY
 
@@ -456,9 +481,10 @@ class LoadFacebookFeedMobileStory2020(_LoadingStory):
 
 class LoadDocsStory2019(_LoadingStory):
   """Load a typical google doc page (2019)."""
+
   NAME = 'load:tools:docs:2019'
-  URL = (
-      'https://docs.google.com/document/d/1GvzDP-tTLmJ0myRhUAfTYWs3ZUFilUICg8psNHyccwQ/edit?usp=sharing')
+  URL = ('https://docs.google.com/document/d/'
+         '1GvzDP-tTLmJ0myRhUAfTYWs3ZUFilUICg8psNHyccwQ/edit?usp=sharing')
   TAGS = [story_tags.YEAR_2019]
 
 
@@ -488,20 +514,24 @@ class LoadGmailStory2019(_LoadingStory):
   URL = 'http://mail.google.com/'
   TAGS = [story_tags.HEALTH_CHECK, story_tags.YEAR_2019]
   SKIP_LOGIN = False
+  EXTRA_BROWSER_ARGUMENTS = ['--allow-browser-signin=false']
 
   def _Login(self, action_runner):
-    google_login.NewLoginGoogleAccount(action_runner, 'googletest')
+    if self.wpr_mode in [wpr_modes.WPR_OFF, wpr_modes.WPR_RECORD]:
+      google_login.LoginWithLoginUrl(action_runner, self.URL)
+    else:
+      google_login.NewLoginGoogleAccount(action_runner, 'googletest')
 
-    # Navigating to http://mail.google.com immediately leads to an infinite
-    # redirection loop due to a bug in WPR (see
-    # https://bugs.chromium.org/p/chromium/issues/detail?id=1036791). We
-    # therefore first navigate to a dummy sub-URL to set up the session and
-    # hit the resulting redirection loop. Afterwards, we can safely navigate
-    # to http://mail.google.com.
-    action_runner.tab.WaitForDocumentReadyStateToBeComplete()
-    action_runner.Navigate(
-        'https://mail.google.com/mail/mu/mp/872/trigger_redirection_loop')
-    action_runner.tab.WaitForDocumentReadyStateToBeComplete()
+      # Navigating to http://mail.google.com immediately leads to an infinite
+      # redirection loop due to a bug in WPR (see
+      # https://bugs.chromium.org/p/chromium/issues/detail?id=1036791). We
+      # therefore first navigate to a dummy sub-URL to set up the session and
+      # hit the resulting redirection loop. Afterwards, we can safely navigate
+      # to http://mail.google.com.
+      action_runner.tab.WaitForDocumentReadyStateToBeComplete()
+      action_runner.Navigate(
+          'https://mail.google.com/mail/mu/mp/872/trigger_redirection_loop')
+      action_runner.tab.WaitForDocumentReadyStateToBeComplete()
 
 
 class LoadChatStory2020(_LoadingStory):
@@ -511,18 +541,23 @@ class LoadChatStory2020(_LoadingStory):
   TAGS = [story_tags.YEAR_2020]
   SUPPORTED_PLATFORMS = platforms.DESKTOP_ONLY
   SKIP_LOGIN = False
+  EXTRA_BROWSER_ARGUMENTS = ['--allow-browser-signin=false']
 
   def _Login(self, action_runner):
-    google_login.NewLoginGoogleAccount(action_runner, 'chatfeature')
-    action_runner.tab.WaitForDocumentReadyStateToBeComplete()
+    if self.wpr_mode in [wpr_modes.WPR_OFF, wpr_modes.WPR_RECORD]:
+      google_login.LoginWithLoginUrl(action_runner, self.URL)
+    else:
+      google_login.NewLoginGoogleAccount(action_runner, 'chatfeature')
 
+    action_runner.tab.WaitForDocumentReadyStateToBeComplete()
 
 
 class LoadStackOverflowStory2018(_LoadingStory):
   """Load a typical question & answer page of stackoverflow.com"""
+
   NAME = 'load:tools:stackoverflow:2018'
-  URL = (
-      'https://stackoverflow.com/questions/36827659/compiling-an-application-for-use-in-highly-radioactive-environments')
+  URL = ('https://stackoverflow.com/questions/36827659/'
+         'compiling-an-application-for-use-in-highly-radioactive-environments')
   TAGS = [story_tags.YEAR_2018]
 
 
@@ -542,7 +577,9 @@ class LoadWeatherStory2019(_LoadingStory):
   NAME = 'load:tools:weather:2019'
   URL = 'https://weather.com/en-GB/weather/today/l/USCA0286:1:US'
   TAGS = [
-      story_tags.HEALTH_CHECK, story_tags.JAVASCRIPT_HEAVY, story_tags.YEAR_2019
+      story_tags.HEALTH_CHECK,
+      story_tags.JAVASCRIPT_HEAVY,
+      story_tags.YEAR_2019,
   ]
 
 
@@ -550,9 +587,13 @@ class LoadDriveStory2019(_LoadingStory):
   NAME = 'load:tools:drive:2019'
   URL = 'https://drive.google.com/drive/my-drive'
   TAGS = [story_tags.JAVASCRIPT_HEAVY, story_tags.YEAR_2019]
+  EXTRA_BROWSER_ARGUMENTS = ['--allow-browser-signin=false']
 
   def _Login(self, action_runner):
-    google_login.NewLoginGoogleAccount(action_runner, 'googletest')
+    if self.wpr_mode in [wpr_modes.WPR_OFF, wpr_modes.WPR_RECORD]:
+      google_login.LoginWithLoginUrl(action_runner, self.URL)
+    else:
+      google_login.NewLoginGoogleAccount(action_runner, 'googletest')
 
 
 ################################################################################
@@ -562,9 +603,12 @@ class LoadDriveStory2019(_LoadingStory):
 
 class LoadBubblesStory2020(_LoadingStory):
   """Load "smarty bubbles" game on famobi.com"""
+
   NAME = 'load:games:bubbles:2020'
   URL = (
-      'https://games.cdn.famobi.com/html5games/s/smarty-bubbles/v010/?fg_domain=play.famobi.com&fg_uid=d8f24956-dc91-4902-9096-a46cb1353b6f&fg_pid=4638e320-4444-4514-81c4-d80a8c662371&fg_beat=620')
+      'https://games.cdn.famobi.com/html5games/s/smarty-bubbles/v010/'
+      '?fg_domain=play.famobi.com&fg_uid=d8f24956-dc91-4902-9096-a46cb1353b6f'
+      '&fg_pid=4638e320-4444-4514-81c4-d80a8c662371&fg_beat=620')
   TAGS = [story_tags.YEAR_2020]
 
 

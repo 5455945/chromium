@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,9 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_CUSTOM_CUSTOM_STATE_SET_H_
 
 #include "third_party/blink/renderer/bindings/core/v8/iterable.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_sync_iterator_custom_state_set.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
@@ -16,7 +18,7 @@ class Element;
 
 // This class is an implementation of 'CustomStateSet' IDL interface.
 class CustomStateSet final : public ScriptWrappable,
-                             public SetlikeIterable<String> {
+                             public ValueSyncIterable<CustomStateSet> {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
@@ -38,13 +40,13 @@ class CustomStateSet final : public ScriptWrappable,
   bool Has(const String& value) const;
 
  private:
-  // blink::Iterable override:
-  IterationSource* StartIteration(ScriptState* state, ExceptionState&) override;
+  // blink::ValueSyncIterable override:
+  IterationSource* CreateIterationSource(ScriptState* script_state) override;
 
   void InvalidateStyle() const;
 
   Member<Element> element_;
-  // We use neither LinkedHashSet nor ListHashSet because it's difficult to
+  // We don't use LinkedHashSet because it's difficult to
   // implement "live" iterators with them.
   // See crbug.com/1184020.
   //

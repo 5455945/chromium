@@ -1,6 +1,7 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 
 #include "device/bluetooth/bluetooth_service_record_win.h"
 
@@ -23,6 +24,9 @@ bool AdvanceToSdpType(const SDP_ELEMENT_DATA& sequence_data,
                       SDP_TYPE type,
                       HBLUETOOTH_CONTAINER_ELEMENT* element,
                       SDP_ELEMENT_DATA* sdp_data) {
+  if (sequence_data.type != SDP_TYPE_SEQUENCE) {
+    return false;
+  }
   while (ERROR_SUCCESS == BluetoothSdpGetContainerElementData(
       sequence_data.data.sequence.value,
       sequence_data.data.sequence.length,

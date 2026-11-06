@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,29 +9,48 @@
 var contextMenuNatives = requireNative('context_menus');
 
 // Add the bindings to the contextMenus API.
-function createContextMenusHandlers(isWebview) {
-  var eventName = isWebview ? 'webViewInternal.contextMenus' : 'contextMenus';
+function createContextMenusHandlers(webViewNamespace) {
+  var eventName = '';
+  var isWebview = !!webViewNamespace;
+  if (isWebview) {
+    eventName = webViewNamespace === 'chromeWebViewInternal' ?
+        'webViewInternal.contextMenus' :
+        webViewNamespace + '.contextMenus';
+  } else {
+    eventName = 'contextMenus';
+  }
   // Some dummy value for chrome.contextMenus instances.
   // Webviews use positive integers, and 0 to denote an invalid webview ID.
   // The following constant is -1 to avoid any conflicts between webview IDs and
   // extensions.
   var INSTANCEID_NON_WEBVIEW = -1;
 
-  // Generates a customCallback for a given method. |handleCallback| will be
-  // invoked with the same arguments this function is called with.
-  function getCallback(handleCallback) {
+  // Generates a customCallback for a given method. If lastError was set
+  // propagates that error to |failureCallback|, otherwise the |handleCallback|
+  // will be invoked with the same arguments the generated function is called
+  // with.
+  function getCallback(handleCallback, failureCallback) {
     return function() {
-      var extensionCallback = arguments[arguments.length - 1];
       if (bindingUtil.hasLastError()) {
-        if (extensionCallback)
-          extensionCallback();
+        var error = bindingUtil.getLastErrorMessage()
+        bindingUtil.clearLastError();
+        failureCallback(error);
         return;
       }
 
+      var extensionCallback = arguments[arguments.length - 1];
       $Function.apply(handleCallback, null, arguments);
+
       if (extensionCallback)
         extensionCallback();
     };
+  }
+
+  // Shift off the instanceId from the arguments for webviews.
+  function getInstanceId(args) {
+    if (isWebview)
+      return $Array.shift(args);  // This modifies the array in-place.
+    return INSTANCEID_NON_WEBVIEW;
   }
 
   var contextMenus = { __proto__: null };
@@ -92,20 +111,29 @@ function createContextMenusHandlers(isWebview) {
   }
 
   requestHandlers.create = function() {
-    var createProperties = isWebview ? arguments[1] : arguments[0];
+    var args = $Array.from(arguments);
+    var instanceId = getInstanceId(args);
+    var createProperties = args[0];
+    var successCallback = args[1];
+    var failureCallback = args[2];
     createProperties.generatedId = contextMenuNatives.GetNextContextMenuId();
     var id = contextMenus.getIdFromCreateProperties(createProperties);
-    var instanceId = isWebview ? arguments[0] : INSTANCEID_NON_WEBVIEW;
     var onclick = createProperties.onclick;
 
     var optArgs = {
       __proto__: null,
-      customCallback: getCallback($Function.bind(createCallback, null,
-                                                 instanceId, id, onclick)),
+      customCallback: getCallback(
+          $Function.bind(createCallback, null, instanceId, id, onclick),
+          failureCallback),
     };
-    var name = isWebview ?
-        'chromeWebViewInternal.contextMenusCreate' : 'contextMenus.create';
-    bindingUtil.sendRequest(name, $Array.from(arguments), optArgs);
+    if (isWebview) {
+      bindingUtil.sendRequest(
+          webViewNamespace + '.contextMenusCreate',
+          [instanceId, createProperties, successCallback], optArgs);
+    } else {
+      bindingUtil.sendRequest(
+          'contextMenus.create', [createProperties, successCallback], optArgs);
+    }
     return id;
   };
 
@@ -114,16 +142,25 @@ function createContextMenusHandlers(isWebview) {
   }
 
   requestHandlers.remove = function() {
-    var instanceId = isWebview ? arguments[0] : INSTANCEID_NON_WEBVIEW;
-    var id = isWebview ? arguments[1] : arguments[0];
+    var args = $Array.from(arguments);
+    var instanceId = getInstanceId(args);
+    var id = args[0];
+    var successCallback = args[1];
+    var failureCallback = args[2];
     var optArgs = {
       __proto__: null,
-      customCallback: getCallback($Function.bind(removeCallback, null,
-                                                 instanceId, id)),
+      customCallback: getCallback(
+          $Function.bind(removeCallback, null, instanceId, id),
+          failureCallback),
     };
-    var name = isWebview ?
-        'chromeWebViewInternal.contextMenusRemove' : 'contextMenus.remove';
-    bindingUtil.sendRequest(name, $Array.from(arguments), optArgs);
+    if (isWebview) {
+      bindingUtil.sendRequest(
+          'chromeWebViewInternal.contextMenusRemove',
+          [instanceId, id, successCallback], optArgs);
+    } else {
+      bindingUtil.sendRequest(
+          'contextMenus.remove', [id, successCallback], optArgs);
+    }
   };
 
   function updateCallback(instanceId, id, onclick) {
@@ -137,20 +174,28 @@ function createContextMenusHandlers(isWebview) {
   }
 
   requestHandlers.update = function() {
-    var instanceId = isWebview ? arguments[0] : INSTANCEID_NON_WEBVIEW;
-    var id = isWebview ? arguments[1] : arguments[0];
-    var updateProperties = isWebview ? arguments[2] : arguments[1];
+    var args = $Array.from(arguments);
+    var instanceId = getInstanceId(args);
+    var id = args[0];
+    var updateProperties = args[1];
+    var successCallback = args[2];
+    var failureCallback = args[3];
     var onclick = updateProperties.onclick;
     var optArgs = {
       __proto__: null,
-      customCallback: getCallback($Function.bind(updateCallback, null,
-                                                 instanceId, id, onclick)),
+      customCallback: getCallback(
+          $Function.bind(updateCallback, null, instanceId, id, onclick),
+          failureCallback),
     };
-
-    var name = isWebview ?
-        'chromeWebViewInternal.contextMenusUpdate' :
-        'contextMenus.update';
-    bindingUtil.sendRequest(name, $Array.from(arguments), optArgs);
+    if (isWebview) {
+      bindingUtil.sendRequest(
+          webViewNamespace + '.contextMenusUpdate',
+          [instanceId, id, updateProperties, successCallback], optArgs);
+    } else {
+      bindingUtil.sendRequest(
+          'contextMenus.update', [id, updateProperties, successCallback],
+          optArgs);
+    }
   };
 
   function removeAllCallback(instanceId) {
@@ -158,17 +203,23 @@ function createContextMenusHandlers(isWebview) {
   }
 
   requestHandlers.removeAll = function() {
-    var instanceId = isWebview ? arguments[0] : INSTANCEID_NON_WEBVIEW;
+    var args = $Array.from(arguments);
+    var instanceId = getInstanceId(args);
+    var successCallback = args[0];
+    var failureCallback = args[1];
     var optArgs = {
       __proto__: null,
-      customCallback: getCallback($Function.bind(removeAllCallback, null,
-                                                 instanceId)),
+      customCallback: getCallback(
+          $Function.bind(removeAllCallback, null, instanceId), failureCallback),
     };
-
-    var name = isWebview ?
-        'chromeWebViewInternal.contextMenusRemoveAll' :
-        'contextMenus.removeAll';
-    bindingUtil.sendRequest(name, $Array.from(arguments), optArgs);
+    if (isWebview) {
+      bindingUtil.sendRequest(
+          'chromeWebViewInternal.contextMenusRemoveAll',
+          [instanceId, successCallback], optArgs);
+    } else {
+      bindingUtil.sendRequest(
+          'contextMenus.removeAll', [successCallback], optArgs);
+    }
   };
 
   return {

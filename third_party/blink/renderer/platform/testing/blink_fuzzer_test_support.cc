@@ -1,15 +1,18 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/platform/testing/blink_fuzzer_test_support.h"
 
-#include "base/at_exit.h"
 #include "base/command_line.h"
 #include "base/i18n/icu_util.h"
+#include "base/test/allow_check_is_test_for_testing.h"
 #include "base/test/test_timeouts.h"
 #include "content/public/test/blink_test_environment.h"
+#include "content/public/test/setup_field_trials.h"
 #include "third_party/blink/renderer/platform/heap/thread_state.h"
+#include "third_party/skia/include/codec/SkCodec.h"
+#include "third_party/skia/include/codec/SkPngRustDecoder.h"
 
 namespace blink {
 
@@ -17,27 +20,30 @@ BlinkFuzzerTestSupport::BlinkFuzzerTestSupport()
     : BlinkFuzzerTestSupport(0, nullptr) {}
 
 BlinkFuzzerTestSupport::BlinkFuzzerTestSupport(int argc, char** argv) {
+  base::test::AllowCheckIsTestForTesting();
+
   // Note: we don't tear anything down here after an iteration of the fuzzer
   // is complete, this is for efficiency. We rerun the fuzzer with the same
   // environment as the previous iteration.
-  base::AtExitManager at_exit;
-
   CHECK(base::i18n::InitializeICU());
+  SkCodecs::Register(SkPngRustDecoder::Decoder());
 
   base::CommandLine::Init(argc, argv);
 
   TestTimeouts::Initialize();
 
-  content::SetUpBlinkTestEnvironment();
+  // In unbranded builds, enable the features listed in
+  // testing/variations/fieldtrial_testing_config.json
+  // This allows fuzzing of features shipping to Beta/Dev/Stable users via a
+  // field trial experiment.
+  content::SetupFieldTrials();
+
+  test_environment_ = std::make_unique<content::BlinkTestEnvironment>();
+  test_environment_->SetUp();
 }
 
 BlinkFuzzerTestSupport::~BlinkFuzzerTestSupport() {
-#if defined(ADDRESS_SANITIZER)
-  // LSAN needs unreachable objects to be released to avoid reporting them
-  // incorrectly as a memory leak.
-  blink::ThreadState* currentThreadState = blink::ThreadState::Current();
-  currentThreadState->CollectAllGarbageForTesting();
-#endif
+  test_environment_->TearDown();
 }
 
 }  // namespace blink

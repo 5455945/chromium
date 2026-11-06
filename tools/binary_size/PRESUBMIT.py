@@ -1,4 +1,4 @@
-# Copyright 2014 The Chromium Authors. All rights reserved.
+# Copyright 2014 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -8,33 +8,26 @@ See http://dev.chromium.org/developers/how-tos/depottools/presubmit-scripts
 for more details about the presubmit API built into depot_tools.
 """
 
-USE_PYTHON3 = True
+PRESUBMIT_VERSION = '2.0.0'
 
 
-def CommonChecks(input_api, output_api):
+def CheckRunUnitTests(input_api, output_api):
   output = []
-  output.extend(input_api.canned_checks.RunPylint(input_api, output_api))
-  py_tests = input_api.canned_checks.GetUnitTestsRecursively(
+  # Linting the code is skipped on Windows because it will fail due to OS
+  # differences.
+  if input_api.sys.platform != 'win32':
+    py_tests = input_api.canned_checks.GetUnitTestsRecursively(
       input_api,
       output_api,
       input_api.PresubmitLocalPath(),
       files_to_check=[r'.+_test\.py$'],
       files_to_skip=[],
-      run_on_python2=False,
-      run_on_python3=True)
-
-  output.extend(input_api.RunTests(py_tests, False))
-
-  if input_api.is_committing:
-    output.extend(input_api.canned_checks.PanProjectChecks(input_api,
-                                                           output_api,
-                                                           owners_check=False))
+    )
+    output.extend(input_api.RunTests(py_tests, False))
   return output
 
 
-def CheckChangeOnUpload(input_api, output_api):
-  return CommonChecks(input_api, output_api)
-
-
-def CheckChangeOnCommit(input_api, output_api):
-  return CommonChecks(input_api, output_api)
+def CheckPathFormatted(input_api, output_api):
+  return input_api.canned_checks.CheckPatchFormatted(
+    input_api, output_api, check_js=True
+  )

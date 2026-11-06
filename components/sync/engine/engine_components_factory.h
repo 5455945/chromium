@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,8 +16,9 @@ namespace syncer {
 class CancelationSignal;
 class DebugInfoGetter;
 class ExtensionsActivity;
-class ModelTypeRegistry;
+class DataTypeRegistry;
 class ServerConnectionManager;
+class SyncAccessTokenFetcher;
 class SyncCycleContext;
 class SyncEngineEventListener;
 class SyncScheduler;
@@ -44,25 +45,30 @@ class EngineComponentsFactory {
     bool force_short_nudge_delay_for_test;
   };
 
-  virtual ~EngineComponentsFactory() {}
+  virtual ~EngineComponentsFactory() = default;
 
   virtual std::unique_ptr<SyncScheduler> BuildScheduler(
       const std::string& name,
       SyncCycleContext* context,
-      CancelationSignal* cancelation_signal,
-      bool ignore_auth_credentials) = 0;
+      CancelationSignal* cancelation_signal) = 0;
 
   virtual std::unique_ptr<SyncCycleContext> BuildContext(
       ServerConnectionManager* connection_manager,
       ExtensionsActivity* extensions_activity,
       const std::vector<SyncEngineEventListener*>& listeners,
       DebugInfoGetter* debug_info_getter,
-      ModelTypeRegistry* model_type_registry,
-      const std::string& invalidator_client_id,
+      DataTypeRegistry* data_type_registry,
       const std::string& cache_guid,
       const std::string& store_birthday,
       const std::string& bag_of_chips,
-      base::TimeDelta poll_interval) = 0;
+      base::TimeDelta poll_interval,
+      const std::string& account_email,
+      SyncAccessTokenFetcher* sync_access_token_fetcher) = 0;
+
+  // May be invoked at most once.
+  virtual std::unique_ptr<ServerConnectionManager> BuildConnectionManager(
+      const std::string& cache_guid,
+      CancelationSignal* cancelation_signal) = 0;
 };
 
 }  // namespace syncer

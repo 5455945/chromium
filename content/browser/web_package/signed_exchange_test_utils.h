@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,9 @@
 namespace content {
 
 constexpr char kPEMECDSAP256SPKIHash[] =
-    "Roij6gF5orGtG9K8u8PkTe1LiRbVklxLM+EVABTK8I0=";
+    "ytA3kTmbf1oNhuri+Ci7ppf/o9FLUtfI7kurrlxPc7k=";
 constexpr char kPEMECDSAP384SPKIHash[] =
-    "wfk/4dogHdX/MbLIvpjbKQ7fhO+ovkX2wjzDPSrIsMY=";
+    "bUIRKGHh5tM0DVUKslLnqEwVq5bpC/axBAtexVMjD68=";
 
 }  // namespace content
 

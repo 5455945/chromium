@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,18 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+#include <array>
+
+#import "base/apple/foundation_util.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/location.h"
-#import "base/mac/foundation_util.h"
 #include "base/native_library.h"
 #include "base/notreached.h"
-#include "base/stl_util.h"
 #include "ui/gfx/animation/tween.h"
 
 // The window animations in this file use private APIs as described here:
-// http://code.google.com/p/undocumented-goodness/source/browse/trunk/CoreGraphics/CGSPrivate.h
+// https://github.com/MarkVillacampa/undocumented-goodness/blob/master/CoreGraphics/CGSPrivate.h
 // There are two important things to keep in mind when modifying this file:
 // - For most operations the origin of the coordinate system is top left.
 // - Perspective and shear transformations get clipped if they are bigger
@@ -79,16 +81,17 @@ struct KeyFrame {
 // bottom left. The various CGSSetWindow* APIs use a coordinate system where
 // the screen origin is the top left.
 NSPoint GetCGSWindowScreenOrigin(NSWindow* window) {
-  NSArray* screens = [NSScreen screens];
-  if ([screens count] == 0)
+  NSArray* screens = NSScreen.screens;
+  if (screens.count == 0) {
     return NSZeroPoint;
+  }
   // Origin is relative to the screen with the menu bar (the screen at index 0).
   // Note, this is not the same as mainScreen which is the screen with the key
   // window.
   NSScreen* main_screen = screens[0];
 
-  NSRect window_frame = [window frame];
-  NSRect screen_frame = [main_screen frame];
+  NSRect window_frame = window.frame;
+  NSRect screen_frame = main_screen.frame;
   return NSMakePoint(NSMinX(window_frame),
                      NSHeight(screen_frame) - NSMaxY(window_frame));
 }
@@ -96,7 +99,7 @@ NSPoint GetCGSWindowScreenOrigin(NSWindow* window) {
 // Set the transparency of the window.
 void SetWindowAlpha(NSWindow* window, float alpha) {
   CGSConnection cid = _CGSDefaultConnection();
-  CGSSetWindowAlpha(cid, [window windowNumber], alpha);
+  CGSSetWindowAlpha(cid, static_cast<CGSWindow>(window.windowNumber), alpha);
 }
 
 // Scales the window and translates it so that it stays centered relative
@@ -108,7 +111,7 @@ void SetWindowScale(NSWindow* window, float scale) {
       CGAffineTransformMakeScale(cur_scale, cur_scale);
 
   // Translate the window to keep it centered at the original location.
-  NSSize window_size = [window frame].size;
+  NSSize window_size = window.frame.size;
   CGFloat scale_offset_x = window_size.width * (1 - cur_scale) / 2.0;
   CGFloat scale_offset_y = window_size.height * (1 - cur_scale) / 2.0;
 
@@ -118,7 +121,8 @@ void SetWindowScale(NSWindow* window, float scale) {
   transform = CGAffineTransformTranslate(transform, new_x, new_y);
 
   CGSConnection cid = _CGSDefaultConnection();
-  CGSSetWindowTransform(cid, [window windowNumber], transform);
+  CGSSetWindowTransform(cid, static_cast<CGSWindow>(window.windowNumber),
+                        transform);
 }
 
 // Unsets any window warp that may have been previously applied.
@@ -126,7 +130,8 @@ void SetWindowScale(NSWindow* window, float scale) {
 // being applied.
 void ClearWindowWarp(NSWindow* window) {
   CGSConnection cid = _CGSDefaultConnection();
-  CGSSetWindowWarp(cid, [window windowNumber], 0, 0, NULL);
+  CGSSetWindowWarp(cid, static_cast<CGSWindow>(window.windowNumber), 0, 0,
+                   nullptr);
 }
 
 // Applies various transformations using a warp effect. The window is
@@ -137,7 +142,7 @@ void SetWindowWarp(NSWindow* window,
                    float y_offset,
                    float scale,
                    float perspective_offset) {
-  NSRect win_rect = [window frame];
+  NSRect win_rect = window.frame;
   win_rect.origin = NSZeroPoint;
   NSRect screen_rect = win_rect;
   screen_rect.origin = GetCGSWindowScreenOrigin(window);
@@ -183,7 +188,8 @@ void SetWindowWarp(NSWindow* window,
   };
 
   CGSConnection cid = _CGSDefaultConnection();
-  CGSSetWindowWarp(cid, [window windowNumber], 2, 2, &(mesh[0][0]));
+  CGSSetWindowWarp(cid, static_cast<CGSWindow>(window.windowNumber), 2, 2,
+                   &(mesh[0][0]));
 }
 
 // Sets the various effects that are a part of the Show/Hide animation.
@@ -196,7 +202,7 @@ void UpdateWindowShowHideAnimationState(NSWindow* window, CGFloat value) {
   CGFloat y_offset = kShowHideVerticalOffset * inverse_value;
   CGFloat scale = 1.0 - (1.0 - kShowHideScaleFactor) * inverse_value;
   CGFloat perspective_offset =
-      ([window frame].size.width * kShowHidePerspectiveFactor) * inverse_value;
+      (window.frame.size.width * kShowHidePerspectiveFactor) * inverse_value;
 
   SetWindowWarp(window, y_offset, scale, perspective_offset);
 }
@@ -218,15 +224,20 @@ bool AreWindowServerEffectsDisabled() {
 - (void)setWindowStateForStart;
 - (void)setWindowStateForValue:(float)value;
 - (void)setWindowStateForEnd;
+
+@property(strong) NSWindow* window;
+
 @end
 
 @implementation ConstrainedWindowAnimationBase
 
+@synthesize window = _window;
+
 - (instancetype)initWithWindow:(NSWindow*)window {
   if ((self = [self initWithDuration:kAnimationDuration
                       animationCurve:NSAnimationEaseInOut])) {
-    _window.reset([window retain]);
-    [self setAnimationBlockingMode:NSAnimationBlocking];
+    self.window = window;
+    self.animationBlockingMode = NSAnimationBlocking;
     [self setWindowStateForStart];
   }
   return self;
@@ -235,8 +246,9 @@ bool AreWindowServerEffectsDisabled() {
 - (void)stopAnimation {
   [super stopAnimation];
   [self setWindowStateForEnd];
-  if ([[self delegate] respondsToSelector:@selector(animationDidEnd:)])
-    [[self delegate] animationDidEnd:self];
+  if ([self.delegate respondsToSelector:@selector(animationDidEnd:)]) {
+    [self.delegate animationDidEnd:self];
+  }
 }
 
 - (void)setCurrentProgress:(NSAnimationProgress)progress {
@@ -252,9 +264,9 @@ bool AreWindowServerEffectsDisabled() {
     // See http://crbug.com/436884.
     // TODO(tapted): Find a better fix (this is horrible).
     if (!AreWindowServerEffectsDisabled()) {
-      NSRect frame = [_window frame];
-      [_window setFrame:NSInsetRect(frame, 1, 1) display:NO animate:NO];
-      [_window setFrame:frame display:NO animate:NO];
+      NSRect frame = self.window.frame;
+      [self.window setFrame:NSInsetRect(frame, 1, 1) display:NO animate:NO];
+      [self.window setFrame:frame display:NO animate:NO];
     }
     return;
   }
@@ -280,27 +292,27 @@ bool AreWindowServerEffectsDisabled() {
 
 - (void)setWindowStateForStart {
   if (AreWindowServerEffectsDisabled()) {
-    [_window setAlphaValue:0.0];
+    self.window.alphaValue = 0.0;
     return;
   }
-  SetWindowAlpha(_window, 0.0);
+  SetWindowAlpha(self.window, 0.0);
 }
 
 - (void)setWindowStateForValue:(float)value {
   if (AreWindowServerEffectsDisabled()) {
-    [_window setAlphaValue:value];
+    self.window.alphaValue = value;
     return;
   }
-  UpdateWindowShowHideAnimationState(_window, value);
+  UpdateWindowShowHideAnimationState(self.window, value);
 }
 
 - (void)setWindowStateForEnd {
   if (AreWindowServerEffectsDisabled()) {
-    [_window setAlphaValue:1.0];
+    self.window.alphaValue = 1.0;
     return;
   }
-  SetWindowAlpha(_window, 1.0);
-  ClearWindowWarp(_window);
+  SetWindowAlpha(self.window, 1.0);
+  ClearWindowWarp(self.window);
 }
 
 @end
@@ -309,19 +321,19 @@ bool AreWindowServerEffectsDisabled() {
 
 - (void)setWindowStateForValue:(float)value {
   if (AreWindowServerEffectsDisabled()) {
-    [_window setAlphaValue:1.0 - value];
+    self.window.alphaValue = 1.0 - value;
     return;
   }
-  UpdateWindowShowHideAnimationState(_window, 1.0 - value);
+  UpdateWindowShowHideAnimationState(self.window, 1.0 - value);
 }
 
 - (void)setWindowStateForEnd {
   if (AreWindowServerEffectsDisabled()) {
-    [_window setAlphaValue:0.0];
+    self.window.alphaValue = 0.0;
     return;
   }
-  SetWindowAlpha(_window, 0.0);
-  ClearWindowWarp(_window);
+  SetWindowAlpha(self.window, 0.0);
+  ClearWindowWarp(self.window);
 }
 
 @end
@@ -333,22 +345,27 @@ bool AreWindowServerEffectsDisabled() {
   if (AreWindowServerEffectsDisabled())
     return;
 
-  KeyFrame frames[] = {
-      {0.00, 1.0}, {0.40, 1.02}, {0.60, 1.02}, {1.00, 1.0},
-  };
+  constexpr std::array<KeyFrame, 4> frames = {{
+      {0.00, 1.0},
+      {0.40, 1.02},
+      {0.60, 1.02},
+      {1.00, 1.0},
+  }};
 
   CGFloat scale = 1;
-  for (int i = base::size(frames) - 1; i >= 0; --i) {
-    if (value >= frames[i].value) {
-      CGFloat delta = frames[i + 1].value - frames[i].value;
-      CGFloat frame_progress = (value - frames[i].value) / delta;
-      scale = gfx::Tween::FloatValueBetween(frame_progress, frames[i].scale,
-                                            frames[i + 1].scale);
+  for (size_t i = frames.size() - 1; i > 0; --i) {
+    const KeyFrame& from = frames[i - 1];
+    const KeyFrame& to = frames[i];
+    if (value >= from.value) {
+      CGFloat delta = to.value - from.value;
+      CGFloat frame_progress = (value - from.value) / delta;
+      scale =
+          gfx::Tween::FloatValueBetween(frame_progress, from.scale, to.scale);
       break;
     }
   }
 
-  SetWindowScale(_window, scale);
+  SetWindowScale(self.window, scale);
 }
 
 - (void)setWindowStateForEnd {
@@ -357,7 +374,7 @@ bool AreWindowServerEffectsDisabled() {
     return;
   }
 
-  SetWindowScale(_window, 1.0);
+  SetWindowScale(self.window, 1.0);
 }
 
 @end

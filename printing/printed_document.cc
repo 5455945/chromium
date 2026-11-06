@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,9 +10,9 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/i18n/file_util_icu.h"
 #include "base/i18n/time_formatting.h"
 #include "base/json/json_writer.h"
@@ -22,18 +22,20 @@
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task/post_task.h"
 #include "base/task/thread_pool.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "printing/metafile.h"
 #include "printing/page_number.h"
 #include "printing/print_settings_conversion.h"
+#include "printing/printing_context.h"
 #include "printing/units.h"
 #include "ui/gfx/font.h"
 #include "ui/gfx/text_elider.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "printing/printed_page_win.h"
 #endif
 
@@ -44,7 +46,7 @@ namespace {
 base::LazyInstance<base::FilePath>::Leaky g_debug_dump_info =
     LAZY_INSTANCE_INITIALIZER;
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 void DebugDumpPageTask(const std::u16string& doc_name,
                        const PrintedPage* page) {
   DCHECK(PrintedDocument::HasDebugDumpPath());
@@ -59,25 +61,33 @@ void DebugDumpPageTask(const std::u16string& doc_name,
                   base::File::FLAG_CREATE_ALWAYS | base::File::FLAG_WRITE);
   page->metafile()->SaveTo(&file);
 }
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
-void DebugDumpTask(const std::u16string& doc_name,
-                   const MetafilePlayer* metafile) {
-  DCHECK(PrintedDocument::HasDebugDumpPath());
+}  // namespace
+
+// Not in an anonymous namespace so it can be friends with
+// base::ScopedAllowBlocking.
+void DumpMetafileIfDebugEnabled(const std::u16string& doc_name,
+                                const MetafilePlayer* metafile) {
+  if (!PrintedDocument::HasDebugDumpPath()) {
+    return;
+  }
 
   static constexpr base::FilePath::CharType kExtension[] =
       FILE_PATH_LITERAL(".pdf");
-
-  std::u16string name = doc_name;
-  base::FilePath path = PrintedDocument::CreateDebugDumpPath(name, kExtension);
+  base::ScopedAllowBlocking allow_blocking;
+  base::FilePath path =
+      PrintedDocument::CreateDebugDumpPath(doc_name, kExtension);
   base::File file(path,
                   base::File::FLAG_CREATE_ALWAYS | base::File::FLAG_WRITE);
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   metafile->SaveToFileDescriptor(file.GetPlatformFile());
 #else
   metafile->SaveTo(&file);
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
 }
+
+namespace {
 
 void DebugDumpDataTask(const std::u16string& doc_name,
                        const base::FilePath::StringType& extension,
@@ -91,13 +101,12 @@ void DebugDumpDataTask(const std::u16string& doc_name,
 
 void DebugDumpSettings(const std::u16string& doc_name,
                        const PrintSettings& settings) {
-  base::DictionaryValue job_settings;
-  PrintSettingsToJobSettingsDebug(settings, &job_settings);
+  base::Value job_settings(PrintSettingsToJobSettingsDebug(settings));
   std::string settings_str;
   base::JSONWriter::WriteWithOptions(
       job_settings, base::JSONWriter::OPTIONS_PRETTY_PRINT, &settings_str);
   scoped_refptr<base::RefCountedMemory> data =
-      base::RefCountedString::TakeString(&settings_str);
+      base::MakeRefCounted<base::RefCountedString>(std::move(settings_str));
   base::ThreadPool::PostTask(
       FROM_HERE, {base::TaskPriority::BEST_EFFORT, base::MayBlock()},
       base::BindOnce(&DebugDumpDataTask, doc_name, FILE_PATH_LITERAL(".json"),
@@ -120,7 +129,7 @@ PrintedDocument::PrintedDocument(std::unique_ptr<PrintSettings> settings,
 
 PrintedDocument::~PrintedDocument() = default;
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 void PrintedDocument::SetConvertingPdf() {
   base::AutoLock lock(lock_);
   mutable_.converting_pdf_ = true;
@@ -159,41 +168,61 @@ scoped_refptr<PrintedPage> PrintedDocument::GetPage(uint32_t page_number) {
   return page;
 }
 
-void PrintedDocument::DropPage(const PrintedPage* page) {
+void PrintedDocument::RemovePage(const PrintedPage* page) {
   base::AutoLock lock(lock_);
   PrintedPages::const_iterator it =
       mutable_.pages_.find(page->page_number() - 1);
+  CHECK(it != mutable_.pages_.end());
   DCHECK_EQ(page, it->second.get());
   mutable_.pages_.erase(it);
 }
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
 void PrintedDocument::SetDocument(std::unique_ptr<MetafilePlayer> metafile) {
-  {
-    base::AutoLock lock(lock_);
-    mutable_.metafile_ = std::move(metafile);
-  }
+  DumpMetafileIfDebugEnabled(name(), metafile.get());
 
-  if (HasDebugDumpPath()) {
-    base::ThreadPool::PostTask(
-        FROM_HERE, {base::TaskPriority::BEST_EFFORT, base::MayBlock()},
-        base::BindOnce(&DebugDumpTask, name(), mutable_.metafile_.get()));
-  }
+  base::AutoLock lock(lock_);
+  mutable_.metafile_ = std::move(metafile);
 }
 
-const MetafilePlayer* PrintedDocument::GetMetafile() {
-  return mutable_.metafile_.get();
+bool PrintedDocument::HasDocument() const {
+  base::AutoLock lock(lock_);
+  return !!mutable_.metafile_;
+}
+
+PrintedDocument::DocumentData PrintedDocument::GetDocumentData() const {
+  base::AutoLock lock(lock_);
+  base::MappedReadOnlyRegion region_mapping =
+      mutable_.metafile_->GetDataAsSharedMemoryRegion();
+  return {std::move(region_mapping.region), mutable_.metafile_->GetDataType()};
+}
+
+mojom::ResultCode PrintedDocument::RenderPrintedDocument(
+    PrintingContext* context) {
+  base::AutoLock lock(lock_);
+  mojom::ResultCode result =
+      context->PrintDocument(*mutable_.metafile_, *immutable_.settings_,
+                             mutable_.expected_page_count_);
+  if (result != mojom::ResultCode::kSuccess)
+    return result;
+
+  // Beware of any asynchronous aborts of the print job that happened during
+  // printing.
+  if (context->PrintingAborted())
+    return mojom::ResultCode::kCanceled;
+
+  return mojom::ResultCode::kSuccess;
 }
 
 bool PrintedDocument::IsComplete() const {
   base::AutoLock lock(lock_);
   if (!mutable_.page_count_)
     return false;
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   if (mutable_.converting_pdf_)
     return true;
 
-  PageNumber page(*immutable_.settings_, mutable_.page_count_);
+  PageNumber page(immutable_.settings_->ranges(), mutable_.page_count_);
   if (page == PageNumber::npos())
     return false;
 
@@ -257,11 +286,11 @@ base::FilePath PrintedDocument::CreateDebugDumpPath(
   filename += u"_";
   filename += document_name;
   base::FilePath::StringType system_filename;
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   system_filename = base::UTF16ToWide(filename);
-#else   // OS_WIN
+#else   // BUILDFLAG(IS_WIN)
   system_filename = base::UTF16ToUTF8(filename);
-#endif  // OS_WIN
+#endif  // BUILDFLAG(IS_WIN)
   base::i18n::ReplaceIllegalCharactersInPath(&system_filename, '_');
   const auto& dump_path = g_debug_dump_info.Get();
   DCHECK(!dump_path.empty());
@@ -277,25 +306,6 @@ void PrintedDocument::DebugDumpData(
       base::BindOnce(&DebugDumpDataTask, name(), extension,
                      base::RetainedRef(data)));
 }
-
-#if defined(OS_WIN)
-// static
-gfx::Rect PrintedDocument::GetCenteredPageContentRect(
-    const gfx::Size& paper_size,
-    const gfx::Size& page_size,
-    const gfx::Rect& page_content_rect) {
-  gfx::Rect content_rect = page_content_rect;
-  if (paper_size.width() > page_size.width()) {
-    int diff = paper_size.width() - page_size.width();
-    content_rect.set_x(content_rect.x() + diff / 2);
-  }
-  if (paper_size.height() > page_size.height()) {
-    int diff = paper_size.height() - page_size.height();
-    content_rect.set_y(content_rect.y() + diff / 2);
-  }
-  return content_rect;
-}
-#endif
 
 PrintedDocument::Mutable::Mutable() = default;
 

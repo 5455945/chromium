@@ -1,15 +1,16 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/cdm/common/cdm_manifest.h"
 
 #include <stdint.h>
+
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
@@ -19,9 +20,10 @@
 #include "base/values.h"
 #include "base/version.h"
 #include "content/public/common/cdm_info.h"
+#include "media/base/cdm_capability.h"
 #include "media/cdm/api/content_decryption_module.h"
-#include "media/cdm/cdm_capability.h"
 #include "media/cdm/supported_cdm_versions.h"
+#include "media/media_buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using media::CdmCapability;
@@ -50,6 +52,7 @@ constexpr int kSupportedCdmInterfaceVersion =
 static_assert(media::kSupportedCdmInterfaceVersions[0].enabled,
               "kSupportedCdmInterfaceVersion is not enabled by default.");
 constexpr int kSupportedCdmHostVersion = media::kMinSupportedCdmHostVersion;
+const char kVersion[] = "1.2.3.4";
 
 // Make a string of the values from 0 up to and including |item|.
 std::string MakeStringList(int item) {
@@ -61,54 +64,54 @@ std::string MakeStringList(int item) {
   return base::JoinString(parts, ",");
 }
 
-base::Value MakeListValue(const std::string& item) {
-  base::Value list(base::Value::Type::LIST);
+base::ListValue MakeList(const std::string& item) {
+  base::ListValue list;
   list.Append(item);
   return list;
 }
 
-base::Value MakeListValue(const std::string& item1, const std::string& item2) {
-  base::Value list(base::Value::Type::LIST);
+base::ListValue MakeList(const std::string& item1, const std::string& item2) {
+  base::ListValue list;
   list.Append(item1);
   list.Append(item2);
   return list;
 }
 
 // Create a default manifest with valid values for all entries.
-base::Value DefaultManifest() {
-  base::Value dict(base::Value::Type::DICTIONARY);
-  dict.SetStringKey(kCdmCodecsListName, "vp8,vp09,av01");
-  dict.SetBoolKey(kCdmPersistentLicenseSupportName, true);
-  dict.SetKey(kCdmSupportedEncryptionSchemesName,
-              MakeListValue("cenc", "cbcs"));
+base::DictValue DefaultManifest() {
+  base::DictValue dict;
+  dict.Set(kCdmCodecsListName, "vp8,vp09,av01");
+  dict.Set(kCdmPersistentLicenseSupportName, true);
+  dict.Set(kCdmSupportedEncryptionSchemesName, MakeList("cenc", "cbcs"));
 
   // The following are dependent on what the current code supports.
   EXPECT_TRUE(media::IsSupportedCdmModuleVersion(kSupportedCdmModuleVersion));
   EXPECT_TRUE(media::IsSupportedAndEnabledCdmInterfaceVersion(
       kSupportedCdmInterfaceVersion));
   EXPECT_TRUE(media::IsSupportedCdmHostVersion(kSupportedCdmHostVersion));
-  dict.SetStringKey(kCdmModuleVersionsName,
-                    base::NumberToString(kSupportedCdmModuleVersion));
-  dict.SetStringKey(kCdmInterfaceVersionsName,
-                    base::NumberToString(kSupportedCdmInterfaceVersion));
-  dict.SetStringKey(kCdmHostVersionsName,
-                    base::NumberToString(kSupportedCdmHostVersion));
+  dict.Set(kCdmModuleVersionsName,
+           base::NumberToString(kSupportedCdmModuleVersion));
+  dict.Set(kCdmInterfaceVersionsName,
+           base::NumberToString(kSupportedCdmInterfaceVersion));
+  dict.Set(kCdmHostVersionsName,
+           base::NumberToString(kSupportedCdmHostVersion));
+  dict.Set(kCdmVersion, kVersion);
   return dict;
 }
 
 void CheckVideoCodecs(const media::CdmCapability::VideoCodecMap& actual,
                       const std::vector<media::VideoCodec>& expected) {
   EXPECT_EQ(expected.size(), actual.size());
-  for (const auto& codec : actual) {
-    EXPECT_TRUE(base::Contains(expected, codec.first));
+  for (const auto& [video_codec, video_codec_info] : actual) {
+    EXPECT_TRUE(std::ranges::contains(expected, video_codec));
 
     // As the manifest only specifies codecs and not profiles, the list of
     // profiles should be empty to indicate that all profiles are supported.
-    EXPECT_TRUE(codec.second.empty());
+    EXPECT_TRUE(video_codec_info.supported_profiles.empty());
   }
 }
 
-void CheckAudioCodecs(const std::vector<media::AudioCodec>& actual,
+void CheckAudioCodecs(const base::flat_set<media::AudioCodec>& actual,
                       const std::vector<media::AudioCodec>& expected) {
   EXPECT_EQ(actual, expected);
 }
@@ -124,18 +127,18 @@ void CheckSessionTypes(const base::flat_set<media::CdmSessionType>& actual,
   EXPECT_EQ(actual, expected);
 }
 
-void WriteManifestToFile(const base::Value& manifest,
+void WriteManifestToFile(const base::ValueView manifest,
                          const base::FilePath& file_path) {
   EXPECT_FALSE(base::PathExists(file_path));
   JSONFileValueSerializer serializer(file_path);
-  EXPECT_TRUE(serializer.Serialize(manifest));
+  EXPECT_TRUE(serializer.Serialize(std::move(manifest)));
   EXPECT_TRUE(base::PathExists(file_path));
 }
 
 }  // namespace
 
 TEST(CdmManifestTest, IsCompatibleWithChrome) {
-  base::Value manifest(DefaultManifest());
+  base::DictValue manifest(DefaultManifest());
   EXPECT_TRUE(IsCdmManifestCompatibleWithChrome(manifest));
 }
 
@@ -144,8 +147,8 @@ TEST(CdmManifestTest, InCompatibleModuleVersion) {
   EXPECT_FALSE(media::IsSupportedCdmModuleVersion(kUnsupportedModuleVersion));
 
   auto manifest = DefaultManifest();
-  manifest.SetStringKey(kCdmModuleVersionsName,
-                        base::NumberToString(kUnsupportedModuleVersion));
+  manifest.Set(kCdmModuleVersionsName,
+               base::NumberToString(kUnsupportedModuleVersion));
   EXPECT_FALSE(IsCdmManifestCompatibleWithChrome(std::move(manifest)));
 }
 
@@ -155,8 +158,8 @@ TEST(CdmManifestTest, InCompatibleInterfaceVersion) {
       kUnsupportedInterfaceVersion));
 
   auto manifest = DefaultManifest();
-  manifest.SetStringKey(kCdmInterfaceVersionsName,
-                        base::NumberToString(kUnsupportedInterfaceVersion));
+  manifest.Set(kCdmInterfaceVersionsName,
+               base::NumberToString(kUnsupportedInterfaceVersion));
   EXPECT_FALSE(IsCdmManifestCompatibleWithChrome(std::move(manifest)));
 }
 
@@ -165,19 +168,18 @@ TEST(CdmManifestTest, InCompatibleHostVersion) {
   EXPECT_FALSE(media::IsSupportedCdmHostVersion(kUnsupportedHostVersion));
 
   auto manifest = DefaultManifest();
-  manifest.SetStringKey(kCdmHostVersionsName,
-                        base::NumberToString(kUnsupportedHostVersion));
+  manifest.Set(kCdmHostVersionsName,
+               base::NumberToString(kUnsupportedHostVersion));
   EXPECT_FALSE(IsCdmManifestCompatibleWithChrome(std::move(manifest)));
 }
 
 TEST(CdmManifestTest, IsCompatibleWithMultipleValues) {
   auto manifest = DefaultManifest();
-  manifest.SetStringKey(kCdmModuleVersionsName,
-                        MakeStringList(kSupportedCdmModuleVersion));
-  manifest.SetStringKey(kCdmInterfaceVersionsName,
-                        MakeStringList(kSupportedCdmInterfaceVersion));
-  manifest.SetStringKey(kCdmHostVersionsName,
-                        MakeStringList(kSupportedCdmHostVersion));
+  manifest.Set(kCdmModuleVersionsName,
+               MakeStringList(kSupportedCdmModuleVersion));
+  manifest.Set(kCdmInterfaceVersionsName,
+               MakeStringList(kSupportedCdmInterfaceVersion));
+  manifest.Set(kCdmHostVersionsName, MakeStringList(kSupportedCdmHostVersion));
   EXPECT_TRUE(IsCdmManifestCompatibleWithChrome(std::move(manifest)));
 }
 
@@ -186,15 +188,25 @@ TEST(CdmManifestTest, ValidManifest) {
   CdmCapability capability;
   EXPECT_TRUE(ParseCdmManifest(manifest, &capability));
   CheckVideoCodecs(capability.video_codecs,
-                   {media::VideoCodec::kCodecVP8, media::VideoCodec::kCodecVP9,
-                    media::VideoCodec::kCodecAV1});
+                   {media::VideoCodec::kVP8, media::VideoCodec::kVP9,
+                    media::VideoCodec::kAV1});
   CheckAudioCodecs(capability.audio_codecs, {
-    media::AudioCodec::kCodecOpus, media::AudioCodec::kCodecVorbis,
-        media::AudioCodec::kCodecFLAC,
+                                                media::AudioCodec::kOpus,
+                                                media::AudioCodec::kVorbis,
+                                                media::AudioCodec::kFLAC,
 #if BUILDFLAG(USE_PROPRIETARY_CODECS)
-        media::AudioCodec::kCodecAAC,
+                                                media::AudioCodec::kAAC,
+#if BUILDFLAG(ENABLE_PLATFORM_DTS_AUDIO)
+                                                media::AudioCodec::kDTS,
+                                                media::AudioCodec::kDTSE,
+                                                media::AudioCodec::kDTSXP2,
+#endif  // BUILDFLAG(ENABLE_PLATFORM_DTS_AUDIO)
+#if BUILDFLAG(ENABLE_PLATFORM_AC3_EAC3_AUDIO)
+                                                media::AudioCodec::kAC3,
+                                                media::AudioCodec::kEAC3,
+#endif  // BUILDFLAG(ENABLE_PLATFORM_AC3_EAC3_AUDIO)
 #endif  // BUILDFLAG(USE_PROPRIETARY_CODECS)
-  });
+                                            });
   CheckEncryptionSchemes(
       capability.encryption_schemes,
       {media::EncryptionScheme::kCenc, media::EncryptionScheme::kCbcs});
@@ -204,17 +216,32 @@ TEST(CdmManifestTest, ValidManifest) {
 }
 
 TEST(CdmManifestTest, EmptyManifest) {
-  base::Value manifest(base::Value::Type::DICTIONARY);
+  base::DictValue manifest;
   CdmCapability capability;
+  EXPECT_FALSE(ParseCdmManifest(manifest, &capability));
+
+  // Manifests require a version.
+  manifest.Set(kCdmVersion, kVersion);
   EXPECT_TRUE(ParseCdmManifest(manifest, &capability));
+
   CheckVideoCodecs(capability.video_codecs, {});
   CheckAudioCodecs(capability.audio_codecs, {
-    media::AudioCodec::kCodecOpus, media::AudioCodec::kCodecVorbis,
-        media::AudioCodec::kCodecFLAC,
+                                                media::AudioCodec::kOpus,
+                                                media::AudioCodec::kVorbis,
+                                                media::AudioCodec::kFLAC,
 #if BUILDFLAG(USE_PROPRIETARY_CODECS)
-        media::AudioCodec::kCodecAAC,
+                                                media::AudioCodec::kAAC,
+#if BUILDFLAG(ENABLE_PLATFORM_DTS_AUDIO)
+                                                media::AudioCodec::kDTS,
+                                                media::AudioCodec::kDTSE,
+                                                media::AudioCodec::kDTSXP2,
+#endif  // BUILDFLAG(ENABLE_PLATFORM_DTS_AUDIO)
+#if BUILDFLAG(ENABLE_PLATFORM_AC3_EAC3_AUDIO)
+                                                media::AudioCodec::kAC3,
+                                                media::AudioCodec::kEAC3,
+#endif  // BUILDFLAG(ENABLE_PLATFORM_AC3_EAC3_AUDIO)
 #endif  // BUILDFLAG(USE_PROPRIETARY_CODECS)
-  });
+                                            });
   CheckEncryptionSchemes(capability.encryption_schemes,
                          {media::EncryptionScheme::kCenc});
   CheckSessionTypes(capability.session_types,
@@ -227,71 +254,71 @@ TEST(CdmManifestTest, ManifestCodecs) {
   // Try each valid value individually.
   {
     CdmCapability capability;
-    manifest.SetStringKey(kCdmCodecsListName, "vp8");
+    manifest.Set(kCdmCodecsListName, "vp8");
     EXPECT_TRUE(ParseCdmManifest(manifest, &capability));
-    CheckVideoCodecs(capability.video_codecs, {media::VideoCodec::kCodecVP8});
+    CheckVideoCodecs(capability.video_codecs, {media::VideoCodec::kVP8});
   }
   {
     CdmCapability capability;
-    manifest.SetStringKey(kCdmCodecsListName, "vp09");
+    manifest.Set(kCdmCodecsListName, "vp09");
     EXPECT_TRUE(ParseCdmManifest(manifest, &capability));
-    CheckVideoCodecs(capability.video_codecs, {media::VideoCodec::kCodecVP9});
+    CheckVideoCodecs(capability.video_codecs, {media::VideoCodec::kVP9});
   }
   {
     CdmCapability capability;
-    manifest.SetStringKey(kCdmCodecsListName, "av01");
+    manifest.Set(kCdmCodecsListName, "av01");
     EXPECT_TRUE(ParseCdmManifest(manifest, &capability));
-    CheckVideoCodecs(capability.video_codecs, {media::VideoCodec::kCodecAV1});
+    CheckVideoCodecs(capability.video_codecs, {media::VideoCodec::kAV1});
   }
 #if BUILDFLAG(USE_PROPRIETARY_CODECS)
   {
     CdmCapability capability;
-    manifest.SetStringKey(kCdmCodecsListName, "avc1");
+    manifest.Set(kCdmCodecsListName, "avc1");
     EXPECT_TRUE(ParseCdmManifest(manifest, &capability));
-    CheckVideoCodecs(capability.video_codecs, {media::VideoCodec::kCodecH264});
+    CheckVideoCodecs(capability.video_codecs, {media::VideoCodec::kH264});
   }
 #endif
   {
     // Try list of everything (except proprietary codecs).
     CdmCapability capability;
-    manifest.SetStringKey(kCdmCodecsListName, "vp8,vp09,av01");
+    manifest.Set(kCdmCodecsListName, "vp8,vp09,av01");
     EXPECT_TRUE(ParseCdmManifest(manifest, &capability));
-    CheckVideoCodecs(capability.video_codecs, {media::VideoCodec::kCodecVP8,
-                                               media::VideoCodec::kCodecVP9,
-                                               media::VideoCodec::kCodecAV1});
+    CheckVideoCodecs(capability.video_codecs,
+                     {media::VideoCodec::kVP8, media::VideoCodec::kVP9,
+                      media::VideoCodec::kAV1});
   }
   {
     // Empty codecs list result in empty list.
     CdmCapability capability;
-    manifest.SetStringKey(kCdmCodecsListName, "");
+    manifest.Set(kCdmCodecsListName, "");
     EXPECT_TRUE(ParseCdmManifest(manifest, &capability));
     CheckVideoCodecs(capability.video_codecs, {});
   }
   {
     // Note that invalid codec values are simply skipped.
     CdmCapability capability;
-    manifest.SetStringKey(kCdmCodecsListName, "invalid,av01");
+    manifest.Set(kCdmCodecsListName, "invalid,av01");
     EXPECT_TRUE(ParseCdmManifest(manifest, &capability));
-    CheckVideoCodecs(capability.video_codecs, {media::VideoCodec::kCodecAV1});
+    CheckVideoCodecs(capability.video_codecs, {media::VideoCodec::kAV1});
   }
   {
     // Legacy: "vp9.0" was used to support VP9 profile 0 (no profile 2 support).
     // Now this has been deprecated and "vp9.0" becomes an invalid codec value.
     CdmCapability capability;
-    manifest.SetStringKey(kCdmCodecsListName, "vp9.0");
+    manifest.Set(kCdmCodecsListName, "vp9.0");
     EXPECT_TRUE(ParseCdmManifest(manifest, &capability));
     CheckVideoCodecs(capability.video_codecs, {});
   }
   {
     // Wrong types are an error.
     CdmCapability capability;
-    manifest.SetBoolKey(kCdmCodecsListName, true);
+    manifest.Set(kCdmCodecsListName, true);
     EXPECT_FALSE(ParseCdmManifest(manifest, &capability));
   }
   {
     // Missing entry is OK, but list is empty.
     CdmCapability capability;
-    EXPECT_TRUE(manifest.RemoveKey(kCdmCodecsListName));
+    EXPECT_TRUE(manifest.Remove(kCdmCodecsListName));
     EXPECT_TRUE(ParseCdmManifest(manifest, &capability));
     CheckVideoCodecs(capability.video_codecs, {});
   }
@@ -303,14 +330,14 @@ TEST(CdmManifestTest, ManifestEncryptionSchemes) {
   // Try each valid value individually.
   {
     CdmCapability capability;
-    manifest.SetKey(kCdmSupportedEncryptionSchemesName, MakeListValue("cenc"));
+    manifest.Set(kCdmSupportedEncryptionSchemesName, MakeList("cenc"));
     EXPECT_TRUE(ParseCdmManifest(manifest, &capability));
     CheckEncryptionSchemes(capability.encryption_schemes,
                            {media::EncryptionScheme::kCenc});
   }
   {
     CdmCapability capability;
-    manifest.SetKey(kCdmSupportedEncryptionSchemesName, MakeListValue("cbcs"));
+    manifest.Set(kCdmSupportedEncryptionSchemesName, MakeList("cbcs"));
     EXPECT_TRUE(ParseCdmManifest(manifest, &capability));
     CheckEncryptionSchemes(capability.encryption_schemes,
                            {media::EncryptionScheme::kCbcs});
@@ -318,8 +345,7 @@ TEST(CdmManifestTest, ManifestEncryptionSchemes) {
   {
     // Try multiple valid entries.
     CdmCapability capability;
-    manifest.SetKey(kCdmSupportedEncryptionSchemesName,
-                    MakeListValue("cenc", "cbcs"));
+    manifest.Set(kCdmSupportedEncryptionSchemesName, MakeList("cenc", "cbcs"));
     EXPECT_TRUE(ParseCdmManifest(manifest, &capability));
     CheckEncryptionSchemes(
         capability.encryption_schemes,
@@ -329,14 +355,13 @@ TEST(CdmManifestTest, ManifestEncryptionSchemes) {
     // Invalid encryption schemes are ignored. However, if value specified then
     // there must be at least 1 valid value.
     CdmCapability capability;
-    manifest.SetKey(kCdmSupportedEncryptionSchemesName,
-                    MakeListValue("invalid"));
+    manifest.Set(kCdmSupportedEncryptionSchemesName, MakeList("invalid"));
     EXPECT_FALSE(ParseCdmManifest(manifest, &capability));
   }
   {
     CdmCapability capability;
-    manifest.SetKey(kCdmSupportedEncryptionSchemesName,
-                    MakeListValue("invalid", "cenc"));
+    manifest.Set(kCdmSupportedEncryptionSchemesName,
+                 MakeList("invalid", "cenc"));
     EXPECT_TRUE(ParseCdmManifest(manifest, &capability));
     CheckEncryptionSchemes(capability.encryption_schemes,
                            {media::EncryptionScheme::kCenc});
@@ -344,13 +369,13 @@ TEST(CdmManifestTest, ManifestEncryptionSchemes) {
   {
     // Wrong types are an error.
     CdmCapability capability;
-    manifest.SetBoolKey(kCdmSupportedEncryptionSchemesName, true);
+    manifest.Set(kCdmSupportedEncryptionSchemesName, true);
     EXPECT_FALSE(ParseCdmManifest(manifest, &capability));
   }
   {
     // Missing values default to "cenc".
     CdmCapability capability;
-    EXPECT_TRUE(manifest.RemoveKey(kCdmSupportedEncryptionSchemesName));
+    EXPECT_TRUE(manifest.Remove(kCdmSupportedEncryptionSchemesName));
     EXPECT_TRUE(ParseCdmManifest(manifest, &capability));
     CheckEncryptionSchemes(capability.encryption_schemes,
                            {media::EncryptionScheme::kCenc});
@@ -363,7 +388,7 @@ TEST(CdmManifestTest, ManifestSessionTypes) {
   {
     // Try false (persistent license not supported).
     CdmCapability capability;
-    manifest.SetBoolKey(kCdmPersistentLicenseSupportName, false);
+    manifest.Set(kCdmPersistentLicenseSupportName, false);
     EXPECT_TRUE(ParseCdmManifest(manifest, &capability));
     CheckSessionTypes(capability.session_types,
                       {media::CdmSessionType::kTemporary});
@@ -371,7 +396,7 @@ TEST(CdmManifestTest, ManifestSessionTypes) {
   {
     // Try true (persistent license is supported).
     CdmCapability capability;
-    manifest.SetBoolKey(kCdmPersistentLicenseSupportName, true);
+    manifest.Set(kCdmPersistentLicenseSupportName, true);
     EXPECT_TRUE(ParseCdmManifest(manifest, &capability));
     CheckSessionTypes(capability.session_types,
                       {media::CdmSessionType::kTemporary,
@@ -380,13 +405,13 @@ TEST(CdmManifestTest, ManifestSessionTypes) {
   {
     // Wrong types are an error.
     CdmCapability capability;
-    manifest.SetStringKey(kCdmPersistentLicenseSupportName, "true");
+    manifest.Set(kCdmPersistentLicenseSupportName, "true");
     EXPECT_FALSE(ParseCdmManifest(manifest, &capability));
   }
   {
     // Missing values default to "temporary".
     CdmCapability capability;
-    EXPECT_TRUE(manifest.RemoveKey(kCdmPersistentLicenseSupportName));
+    EXPECT_TRUE(manifest.Remove(kCdmPersistentLicenseSupportName));
     EXPECT_TRUE(ParseCdmManifest(manifest, &capability));
     CheckSessionTypes(capability.session_types,
                       {media::CdmSessionType::kTemporary});
@@ -394,25 +419,21 @@ TEST(CdmManifestTest, ManifestSessionTypes) {
 }
 
 TEST(CdmManifestTest, FileManifest) {
-  const char kVersion[] = "1.2.3.4";
-
   base::ScopedTempDir temp_dir;
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
   auto manifest_path = temp_dir.GetPath().AppendASCII("manifest.json");
 
   // Manifests read from a file also need a version.
   auto manifest = DefaultManifest();
-  manifest.SetStringKey(kCdmVersion, kVersion);
   WriteManifestToFile(manifest, manifest_path);
 
-  base::Version version;
   CdmCapability capability;
-  EXPECT_TRUE(ParseCdmManifestFromPath(manifest_path, &version, &capability));
-  EXPECT_TRUE(version.IsValid());
-  EXPECT_EQ(version.GetString(), kVersion);
+  EXPECT_TRUE(ParseCdmManifestFromPath(manifest_path, &capability));
+  EXPECT_TRUE(capability.version.IsValid());
+  EXPECT_EQ(capability.version.GetString(), kVersion);
   CheckVideoCodecs(capability.video_codecs,
-                   {media::VideoCodec::kCodecVP8, media::VideoCodec::kCodecVP9,
-                    media::VideoCodec::kCodecAV1});
+                   {media::VideoCodec::kVP8, media::VideoCodec::kVP9,
+                    media::VideoCodec::kAV1});
   CheckEncryptionSchemes(
       capability.encryption_schemes,
       {media::EncryptionScheme::kCenc, media::EncryptionScheme::kCbcs});
@@ -427,11 +448,11 @@ TEST(CdmManifestTest, FileManifestNoVersion) {
   auto manifest_path = temp_dir.GetPath().AppendASCII("manifest.json");
 
   auto manifest = DefaultManifest();
+  manifest.Remove(kCdmVersion);
   WriteManifestToFile(manifest, manifest_path);
 
-  base::Version version;
   CdmCapability capability;
-  EXPECT_FALSE(ParseCdmManifestFromPath(manifest_path, &version, &capability));
+  EXPECT_FALSE(ParseCdmManifestFromPath(manifest_path, &capability));
 }
 
 TEST(CdmManifestTest, FileManifestBadVersion) {
@@ -440,12 +461,11 @@ TEST(CdmManifestTest, FileManifestBadVersion) {
   auto manifest_path = temp_dir.GetPath().AppendASCII("manifest.json");
 
   auto manifest = DefaultManifest();
-  manifest.SetStringKey(kCdmVersion, "bad version");
+  manifest.Set(kCdmVersion, "bad version");
   WriteManifestToFile(manifest, manifest_path);
 
-  base::Version version;
   CdmCapability capability;
-  EXPECT_FALSE(ParseCdmManifestFromPath(manifest_path, &version, &capability));
+  EXPECT_FALSE(ParseCdmManifestFromPath(manifest_path, &capability));
 }
 
 TEST(CdmManifestTest, FileManifestDoesNotExist) {
@@ -453,9 +473,8 @@ TEST(CdmManifestTest, FileManifestDoesNotExist) {
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
   auto manifest_path = temp_dir.GetPath().AppendASCII("manifest.json");
 
-  base::Version version;
   CdmCapability capability;
-  EXPECT_FALSE(ParseCdmManifestFromPath(manifest_path, &version, &capability));
+  EXPECT_FALSE(ParseCdmManifestFromPath(manifest_path, &capability));
 }
 
 TEST(CdmManifestTest, FileManifestEmpty) {
@@ -463,12 +482,11 @@ TEST(CdmManifestTest, FileManifestEmpty) {
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
   auto manifest_path = temp_dir.GetPath().AppendASCII("manifest.json");
 
-  base::Value manifest(base::Value::Type::DICTIONARY);
+  base::DictValue manifest;
   WriteManifestToFile(manifest, manifest_path);
 
-  base::Version version;
   CdmCapability capability;
-  EXPECT_FALSE(ParseCdmManifestFromPath(manifest_path, &version, &capability));
+  EXPECT_FALSE(ParseCdmManifestFromPath(manifest_path, &capability));
 }
 
 TEST(CdmManifestTest, FileManifestLite) {
@@ -478,19 +496,18 @@ TEST(CdmManifestTest, FileManifestLite) {
 
   // Only a version plus fields to satisfy compatibility are required in the
   // manifest to parse correctly.
-  base::Value manifest(base::Value::Type::DICTIONARY);
-  manifest.SetStringKey(kCdmVersion, "1.2.3.4");
-  manifest.SetStringKey(kCdmModuleVersionsName,
-                        base::NumberToString(kSupportedCdmModuleVersion));
-  manifest.SetStringKey(kCdmInterfaceVersionsName,
-                        base::NumberToString(kSupportedCdmInterfaceVersion));
-  manifest.SetStringKey(kCdmHostVersionsName,
-                        base::NumberToString(kSupportedCdmHostVersion));
+  base::DictValue manifest;
+  manifest.Set(kCdmVersion, "1.2.3.4");
+  manifest.Set(kCdmModuleVersionsName,
+               base::NumberToString(kSupportedCdmModuleVersion));
+  manifest.Set(kCdmInterfaceVersionsName,
+               base::NumberToString(kSupportedCdmInterfaceVersion));
+  manifest.Set(kCdmHostVersionsName,
+               base::NumberToString(kSupportedCdmHostVersion));
   WriteManifestToFile(manifest, manifest_path);
 
-  base::Version version;
   CdmCapability capability;
-  EXPECT_TRUE(ParseCdmManifestFromPath(manifest_path, &version, &capability));
+  EXPECT_TRUE(ParseCdmManifestFromPath(manifest_path, &capability));
   CheckVideoCodecs(capability.video_codecs, {});
   CheckEncryptionSchemes(capability.encryption_schemes,
                          {media::EncryptionScheme::kCenc});
@@ -506,7 +523,6 @@ TEST(CdmManifestTest, FileManifestNotDictionary) {
   base::Value manifest("not a dictionary");
   WriteManifestToFile(manifest, manifest_path);
 
-  base::Version version;
   CdmCapability capability;
-  EXPECT_FALSE(ParseCdmManifestFromPath(manifest_path, &version, &capability));
+  EXPECT_FALSE(ParseCdmManifestFromPath(manifest_path, &capability));
 }

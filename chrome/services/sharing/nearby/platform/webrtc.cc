@@ -1,31 +1,61 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/services/sharing/nearby/platform/webrtc.h"
 
+#include <utility>
+
+#include "ash/constants/ash_features.h"
+#include "base/memory/raw_ptr.h"
+#include "base/notimplemented.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "chrome/services/sharing/webrtc/ipc_network_manager.h"
 #include "chrome/services/sharing/webrtc/ipc_packet_socket_factory.h"
 #include "chrome/services/sharing/webrtc/mdns_responder_adapter.h"
 #include "chrome/services/sharing/webrtc/p2p_port_allocator.h"
-#include "chromeos/services/nearby/public/mojom/webrtc_signaling_messenger.mojom-shared.h"
-#include "jingle/glue/thread_wrapper.h"
+#include "chromeos/ash/services/nearby/public/mojom/webrtc_signaling_messenger.mojom-shared.h"
+#include "components/webrtc/thread_wrapper.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
-#include "third_party/nearby/src/cpp/platform/public/count_down_latch.h"
-#include "third_party/nearby/src/cpp/platform/public/future.h"
-#include "third_party/nearby/src/cpp/platform/public/logging.h"
+#include "third_party/nearby/src/internal/platform/count_down_latch.h"
+#include "third_party/nearby/src/internal/platform/future.h"
+#include "third_party/nearby/src/internal/platform/logging.h"
+#include "third_party/webrtc/api/async_dns_resolver.h"
+#include "third_party/webrtc/api/create_modular_peer_connection_factory.h"
+#include "third_party/webrtc/api/data_channel_interface.h"
 #include "third_party/webrtc/api/jsep.h"
 #include "third_party/webrtc/api/peer_connection_interface.h"
-#include "third_party/webrtc_overrides/task_queue_factory.h"
+#include "third_party/webrtc_overrides/environment.h"
 #include "unicode/locid.h"
 
-namespace location {
-namespace nearby {
-namespace chrome {
+namespace nearby::chrome {
 
 namespace {
+
+// The following constants are RTCConfiguration defaults designed to help with
+// battery life for persistent connections like Phone Hub. These values were
+// chosen by doing battery drain tests on an Android phone with a persistent
+// Phone Hub connection upgraded to WebRtc. The goal here is prevent chatty
+// KeepAlive pings at the WebRtc layer from waking up the Phone's kernel too
+// frequently and causing battery drain.
+//
+// NOTE: Nearby Connections also has its own KeepAlive interval and timeout that
+// are different from these core WebRtc values. They operate at a different
+// layer and don't directly affect the values chosen for WebRtc. However, both
+// values need to be greater than the defaults for battery saving to happen and
+// the most frequent ping ultimately determines the worst case number of wake
+// ups.
+//
+// See: b/183505430 for more context.
+constexpr base::TimeDelta kIceConnectionReceivingTimeout = base::Minutes(10);
+constexpr base::TimeDelta kIceCheckIntervalStrongConnectivity =
+    base::Seconds(25);
+constexpr base::TimeDelta kStableWritableConnectionPingInterval =
+    base::Seconds(30);
+
 net::NetworkTrafficAnnotationTag kTrafficAnnotation =
     net::DefineNetworkTrafficAnnotation("nearby_webrtc_connection", R"(
         semantics {
@@ -70,20 +100,36 @@ const std::string GetCurrentCountryCode() {
   return std::string(icu::Locale::getDefault().getCountry());
 }
 
-class ProxyAsyncResolverFactory final : public webrtc::AsyncResolverFactory {
+class ProxyAsyncDnsResolverFactory final
+    : public webrtc::AsyncDnsResolverFactoryInterface {
  public:
-  explicit ProxyAsyncResolverFactory(
+  explicit ProxyAsyncDnsResolverFactory(
       sharing::IpcPacketSocketFactory* socket_factory)
       : socket_factory_(socket_factory) {
     DCHECK(socket_factory_);
   }
 
-  rtc::AsyncResolverInterface* Create() override {
-    return socket_factory_->CreateAsyncResolver();
+  std::unique_ptr<webrtc::AsyncDnsResolverInterface> Create() override {
+    return socket_factory_->CreateAsyncDnsResolver();
+  }
+  std::unique_ptr<webrtc::AsyncDnsResolverInterface> CreateAndResolve(
+      const webrtc::SocketAddress& addr,
+      absl::AnyInvocable<void()> callback) override {
+    auto temp = Create();
+    temp->Start(addr, std::move(callback));
+    return temp;
+  }
+  std::unique_ptr<webrtc::AsyncDnsResolverInterface> CreateAndResolve(
+      const webrtc::SocketAddress& addr,
+      int family,
+      absl::AnyInvocable<void()> callback) override {
+    auto temp = Create();
+    temp->Start(addr, family, std::move(callback));
+    return temp;
   }
 
  private:
-  sharing::IpcPacketSocketFactory* socket_factory_;
+  raw_ptr<sharing::IpcPacketSocketFactory> socket_factory_;
 };
 
 // This object only exists to forward incoming mojo messages. It will be created
@@ -91,7 +137,7 @@ class ProxyAsyncResolverFactory final : public webrtc::AsyncResolverFactory {
 // connection goes down. This is necessary to keep it pumping messages while the
 // the main WebRtc thread is blocked on a future.
 class IncomingMessageListener
-    : public sharing::mojom::IncomingMessagesListener {
+    : public ::sharing::mojom::IncomingMessagesListener {
  public:
   explicit IncomingMessageListener(
       api::WebRtcSignalingMessenger::OnSignalingMessageCallback
@@ -130,8 +176,8 @@ class WebRtcSignalingMessengerImpl : public api::WebRtcSignalingMessenger {
  public:
   WebRtcSignalingMessengerImpl(
       const std::string& self_id,
-      const connections::LocationHint& location_hint,
-      const mojo::SharedRemote<sharing::mojom::WebRtcSignalingMessenger>&
+      const location::nearby::connections::LocationHint& location_hint,
+      const mojo::SharedRemote<::sharing::mojom::WebRtcSignalingMessenger>&
           messenger)
       : self_id_(self_id),
         location_hint_(location_hint),
@@ -146,34 +192,34 @@ class WebRtcSignalingMessengerImpl : public api::WebRtcSignalingMessenger {
   WebRtcSignalingMessengerImpl& operator=(
       const WebRtcSignalingMessengerImpl& other) = delete;
 
-  sharing::mojom::LocationHintPtr CreateLocationHint() {
-    sharing::mojom::LocationHintPtr location_hint_ptr =
-        sharing::mojom::LocationHint::New();
+  ::sharing::mojom::LocationHintPtr CreateLocationHint() {
+    ::sharing::mojom::LocationHintPtr location_hint_ptr =
+        ::sharing::mojom::LocationHint::New();
     location_hint_ptr->location = location_hint_.location();
     switch (location_hint_.format()) {
       case location::nearby::connections::LocationStandard_Format::
           LocationStandard_Format_E164_CALLING:
         location_hint_ptr->format =
-            sharing::mojom::LocationStandardFormat::E164_CALLING;
+            ::sharing::mojom::LocationStandardFormat::E164_CALLING;
         break;
       case location::nearby::connections::LocationStandard_Format::
           LocationStandard_Format_ISO_3166_1_ALPHA_2:
         location_hint_ptr->format =
-            sharing::mojom::LocationStandardFormat::ISO_3166_1_ALPHA_2;
+            ::sharing::mojom::LocationStandardFormat::ISO_3166_1_ALPHA_2;
         break;
       case location::nearby::connections::LocationStandard_Format::
           LocationStandard_Format_UNKNOWN:
         // Here we default to the current default country code before sending.
         location_hint_ptr->location = GetCurrentCountryCode();
         location_hint_ptr->format =
-            sharing::mojom::LocationStandardFormat::ISO_3166_1_ALPHA_2;
+            ::sharing::mojom::LocationStandardFormat::ISO_3166_1_ALPHA_2;
         break;
     }
     return location_hint_ptr;
   }
 
   // api::WebRtcSignalingMessenger:
-  bool SendMessage(absl::string_view peer_id,
+  bool SendMessage(std::string_view peer_id,
                    const ByteArray& message) override {
     bool success = false;
     if (!messenger_->SendMessage(self_id_, std::string(peer_id),
@@ -186,7 +232,7 @@ class WebRtcSignalingMessengerImpl : public api::WebRtcSignalingMessenger {
   }
 
   void BindIncomingReceiver(
-      mojo::PendingReceiver<sharing::mojom::IncomingMessagesListener>
+      mojo::PendingReceiver<::sharing::mojom::IncomingMessagesListener>
           pending_receiver,
       api::WebRtcSignalingMessenger::OnSignalingMessageCallback
           message_callback,
@@ -203,9 +249,9 @@ class WebRtcSignalingMessengerImpl : public api::WebRtcSignalingMessenger {
       OnSignalingMessageCallback message_callback,
       OnSignalingCompleteCallback complete_callback) override {
     bool success = false;
-    mojo::PendingRemote<sharing::mojom::IncomingMessagesListener>
+    mojo::PendingRemote<::sharing::mojom::IncomingMessagesListener>
         pending_remote;
-    mojo::PendingReceiver<sharing::mojom::IncomingMessagesListener>
+    mojo::PendingReceiver<::sharing::mojom::IncomingMessagesListener>
         pending_receiver = pending_remote.InitWithNewPipeAndPassReceiver();
     // NOTE: this is a Sync mojo call that waits until Fast-Path ready is
     // received on the Instant Messaging (Tachyon) stream before returning.
@@ -236,7 +282,7 @@ class WebRtcSignalingMessengerImpl : public api::WebRtcSignalingMessenger {
     if (receiving_messages_) {
       receiving_messages_ = false;
       if (pending_session_remote_) {
-        mojo::Remote<sharing::mojom::ReceiveMessagesSession> session(
+        mojo::Remote<::sharing::mojom::ReceiveMessagesSession> session(
             std::move(pending_session_remote_));
         // This is a one-way message so it is safe to bind, send, and forget.
         // When the Remote goes out of scope it will close the pipe and cause
@@ -250,36 +296,109 @@ class WebRtcSignalingMessengerImpl : public api::WebRtcSignalingMessenger {
  private:
   bool receiving_messages_ = false;
   std::string self_id_;
-  connections::LocationHint location_hint_;
+  location::nearby::connections::LocationHint location_hint_;
   // This is received and stored on a successful StartReceiveMessages(). We
   // choose to not bind right away because multiple threads end up
   // creating/calling/destroying WebRtcSignalingMessengerImpl by the design
   // of NearbyConnections. We need to ensure the thread that
   // binds/calls/destroys the remote is the same sequence, so we do all three at
   // once in StopReceivingMessages(). If the other side of the pipe is already
-  // down, binding, calling, and destorying will be a no-op.
-  mojo::PendingRemote<sharing::mojom::ReceiveMessagesSession>
+  // down, binding, calling, and destroying will be a no-op.
+  mojo::PendingRemote<::sharing::mojom::ReceiveMessagesSession>
       pending_session_remote_;
-  mojo::SharedRemote<sharing::mojom::WebRtcSignalingMessenger> messenger_;
+  mojo::SharedRemote<::sharing::mojom::WebRtcSignalingMessenger> messenger_;
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
   base::WeakPtrFactory<WebRtcSignalingMessengerImpl> weak_ptr_factory_{this};
+};
+
+// TODO(crbug.com/506378027): Remove once //third_party/nearby is rolled past
+// the upstream fix for ConnectionFlow / WebRtcSocket.
+// Wraps `ConnectionFlow`'s `PeerConnectionObserver` to enforce at most one data
+// channel per `PeerConnection`, preventing a remote peer from overwriting
+// `ConnectionFlow::socket_wrapper_` and destroying the previous `WebRtcSocket`
+// while the `PeerConnection` is still open.
+class PeerConnectionObserverWrapper : public webrtc::PeerConnectionObserver {
+ public:
+  explicit PeerConnectionObserverWrapper(webrtc::PeerConnectionObserver* impl)
+      : impl_(impl) {}
+
+  void OnSignalingChange(
+      webrtc::PeerConnectionInterface::SignalingState new_state) override {
+    if (!impl_) {
+      return;
+    }
+    if (new_state ==
+        webrtc::PeerConnectionInterface::SignalingState::kHaveLocalOffer) {
+      has_data_channel_ = true;
+    }
+    impl_->OnSignalingChange(new_state);
+    if (new_state == webrtc::PeerConnectionInterface::SignalingState::kClosed) {
+      impl_ = nullptr;
+    }
+  }
+
+  void OnDataChannel(
+      webrtc::scoped_refptr<webrtc::DataChannelInterface> channel) override {
+    if (!impl_ || std::exchange(has_data_channel_, true)) {
+      if (channel) {
+        channel->Close();
+      }
+      return;
+    }
+    impl_->OnDataChannel(std::move(channel));
+  }
+
+  void OnIceCandidate(const webrtc::IceCandidate* candidate) override {
+    if (impl_) {
+      impl_->OnIceCandidate(candidate);
+    }
+  }
+
+  void OnIceGatheringChange(
+      webrtc::PeerConnectionInterface::IceGatheringState new_state) override {
+    if (impl_) {
+      impl_->OnIceGatheringChange(new_state);
+    }
+  }
+
+  void OnConnectionChange(
+      webrtc::PeerConnectionInterface::PeerConnectionState new_state) override {
+    if (impl_) {
+      impl_->OnConnectionChange(new_state);
+    }
+  }
+
+  void OnRenegotiationNeeded() override {
+    if (impl_) {
+      impl_->OnRenegotiationNeeded();
+    }
+  }
+
+  void OnIceSelectedCandidatePairChanged(
+      const webrtc::CandidatePairChangeEvent& event) override {
+    if (impl_) {
+      impl_->OnIceSelectedCandidatePairChanged(event);
+    }
+  }
+
+ private:
+  raw_ptr<webrtc::PeerConnectionObserver, DisableDanglingPtrDetection> impl_;
+  bool has_data_channel_ = false;
 };
 
 }  // namespace
 
 WebRtcMedium::WebRtcMedium(
     const mojo::SharedRemote<network::mojom::P2PSocketManager>& socket_manager,
-    const mojo::SharedRemote<
-        location::nearby::connections::mojom::MdnsResponderFactory>&
+    const mojo::SharedRemote<::sharing::mojom::MdnsResponderFactory>&
         mdns_responder_factory,
-    const mojo::SharedRemote<sharing::mojom::IceConfigFetcher>&
+    const mojo::SharedRemote<::sharing::mojom::IceConfigFetcher>&
         ice_config_fetcher,
-    const mojo::SharedRemote<sharing::mojom::WebRtcSignalingMessenger>&
+    const mojo::SharedRemote<::sharing::mojom::WebRtcSignalingMessenger>&
         webrtc_signaling_messenger,
     scoped_refptr<base::SingleThreadTaskRunner> task_runner)
     : chrome_network_thread_(/*name=*/"WebRtc Network Thread"),
       chrome_signaling_thread_(/*name=*/"WebRtc Signaling Thread"),
-      chrome_worker_thread_(/*name=*/"WebRtc Worker Thread"),
       p2p_socket_manager_(socket_manager),
       mdns_responder_factory_(mdns_responder_factory),
       ice_config_fetcher_(ice_config_fetcher),
@@ -319,7 +438,7 @@ WebRtcMedium::~WebRtcMedium() {
   // Stop is called in thread destructor, but we want to ensure all threads are
   // down before the destructor is complete and we release the lock.
   chrome_signaling_thread_.Stop();
-  chrome_worker_thread_.Stop();
+  observer_wrappers_.clear();
   VLOG(1) << "WebRtcMedium destructor is done shutting down threads.";
 }
 
@@ -336,47 +455,47 @@ void WebRtcMedium::CreatePeerConnection(
                                 std::move(callback)));
 }
 
+void WebRtcMedium::CreatePeerConnection(
+    std::optional<webrtc::PeerConnectionFactoryInterface::Options> options,
+    webrtc::PeerConnectionObserver* observer,
+    PeerConnectionCallback callback) {
+  NOTIMPLEMENTED();
+}
+
 void WebRtcMedium::FetchIceServers(webrtc::PeerConnectionObserver* observer,
                                    PeerConnectionCallback callback) {
   ice_config_fetcher_->GetIceServers(base::BindOnce(
       &WebRtcMedium::OnIceServersFetched, weak_ptr_factory_.GetWeakPtr(),
-      observer, std::move(callback)));
+      base::UnsafeDanglingUntriaged(observer), std::move(callback)));
 }
 
-void WebRtcMedium::InitWebRTCThread(rtc::Thread** thread_to_set) {
-  jingle_glue::JingleThreadWrapper::EnsureForCurrentMessageLoop();
-  jingle_glue::JingleThreadWrapper::current()->set_send_allowed(true);
-  *thread_to_set = jingle_glue::JingleThreadWrapper::current();
+void WebRtcMedium::InitWebRTCThread(webrtc::Thread** thread_to_set) {
+  webrtc::ThreadWrapper::EnsureForCurrentMessageLoop();
+  webrtc::ThreadWrapper::current()->set_send_allowed(true);
+  *thread_to_set = webrtc::ThreadWrapper::current();
 }
 
 void WebRtcMedium::InitPeerConnectionFactory() {
   DCHECK(!chrome_network_thread_.IsRunning());
   DCHECK(!chrome_signaling_thread_.IsRunning());
-  DCHECK(!chrome_worker_thread_.IsRunning());
   DCHECK(!rtc_network_thread_);
   DCHECK(!rtc_signaling_thread_);
-  DCHECK(!rtc_worker_thread_);
 
-  jingle_glue::JingleThreadWrapper::EnsureForCurrentMessageLoop();
-  jingle_glue::JingleThreadWrapper::current()->set_send_allowed(true);
+  webrtc::ThreadWrapper::EnsureForCurrentMessageLoop();
+  webrtc::ThreadWrapper::current()->set_send_allowed(true);
 
-  // We need to create three dedicated threads for WebRTC. We post tasks to the
-  // threads and to ensure the message loop and jingle wrapper is setup for each
-  // thread. Unretained(this) is used because we will wait on this thread for
-  // the tasks to complete before exiting.
+  // We need to create dedicated network and signaling threads for WebRTC. We
+  // post tasks to the threads to ensure the message loop and jingle wrapper
+  // are setup for each thread. Unretained(this) is used because we will wait
+  // on this thread for the tasks to complete before exiting.
 
-  CountDownLatch latch(3);
+  CountDownLatch latch(2);
   auto decrement_latch = base::BindRepeating(
       [](CountDownLatch* latch) { latch->CountDown(); }, &latch);
 
   chrome_network_thread_.Start();
   chrome_network_thread_.task_runner()->PostTask(
       FROM_HERE, base::BindOnce(&WebRtcMedium::InitNetworkThread,
-                                base::Unretained(this), decrement_latch));
-
-  chrome_worker_thread_.Start();
-  chrome_worker_thread_.task_runner()->PostTask(
-      FROM_HERE, base::BindOnce(&WebRtcMedium::InitWorkerThread,
                                 base::Unretained(this), decrement_latch));
 
   chrome_signaling_thread_.Start();
@@ -389,12 +508,10 @@ void WebRtcMedium::InitPeerConnectionFactory() {
 
   DCHECK(rtc_network_thread_);
   DCHECK(rtc_signaling_thread_);
-  DCHECK(rtc_worker_thread_);
 
   webrtc::PeerConnectionFactoryDependencies factory_dependencies;
-  factory_dependencies.task_queue_factory = CreateWebRtcTaskQueueFactory();
+  factory_dependencies.env = WebRtcEnvironment();
   factory_dependencies.network_thread = rtc_network_thread_;
-  factory_dependencies.worker_thread = rtc_worker_thread_;
   factory_dependencies.signaling_thread = rtc_signaling_thread_;
 
   peer_connection_factory_ = webrtc::CreateModularPeerConnectionFactory(
@@ -430,7 +547,7 @@ void WebRtcMedium::InitNetworkThread(base::OnceClosure complete_callback) {
 
   // NOTE: IpcNetworkManager::Initialize() does not override the empty default
   // implementation so this doesn't actually do anything right now. However
-  // the contract of rtc::NetworkManagerBase states that it should be called
+  // the contract of webrtc::NetworkManagerBase states that it should be called
   // before using and explicitly on the network thread (which right now is the
   // current thread). Previously this was handled by P2PPortAllocator.
   network_manager_->Initialize();
@@ -453,19 +570,11 @@ void WebRtcMedium::InitSignalingThread(base::OnceClosure complete_callback) {
   std::move(complete_callback).Run();
 }
 
-void WebRtcMedium::InitWorkerThread(base::OnceClosure complete_callback) {
-  DCHECK(chrome_worker_thread_.task_runner()->BelongsToCurrentThread());
-  DCHECK(!rtc_worker_thread_);
-
-  InitWebRTCThread(&rtc_worker_thread_);
-
-  std::move(complete_callback).Run();
-}
 
 void WebRtcMedium::OnIceServersFetched(
     webrtc::PeerConnectionObserver* observer,
     PeerConnectionCallback callback,
-    std::vector<sharing::mojom::IceServerPtr> ice_servers) {
+    std::vector<::sharing::mojom::IceServerPtr> ice_servers) {
   base::AutoLock peer_connection_factory_auto_lock(
       peer_connection_factory_lock_);
   if (!peer_connection_factory_) {
@@ -473,6 +582,8 @@ void WebRtcMedium::OnIceServersFetched(
   }
 
   webrtc::PeerConnectionInterface::RTCConfiguration rtc_config;
+  // Use the spec-compliant SDP semantics.
+  rtc_config.sdp_semantics = webrtc::SdpSemantics::kUnifiedPlan;
   // Add |ice_servers| into the rtc_config.servers.
   for (const auto& ice_server : ice_servers) {
     webrtc::PeerConnectionInterface::IceServer ice_turn_server;
@@ -485,29 +596,51 @@ void WebRtcMedium::OnIceServersFetched(
     rtc_config.servers.push_back(ice_turn_server);
   }
 
-  webrtc::PeerConnectionDependencies dependencies(observer);
+  // This prevents WebRTC from being chatty with keep alive messages which was
+  // causing battery drain for Phone Hub's persistent connection.
+  // Ideally these options should be configurable per connection, but right now
+  // we have a single share factory for all peer connections.
+  rtc_config.ice_connection_receiving_timeout =
+      kIceConnectionReceivingTimeout.InMilliseconds();
+  rtc_config.ice_check_interval_strong_connectivity =
+      kIceCheckIntervalStrongConnectivity.InMilliseconds();
+  rtc_config.stable_writable_connection_ping_interval_ms =
+      kStableWritableConnectionPingInterval.InMilliseconds();
+
+  auto observer_wrapper =
+      std::make_unique<PeerConnectionObserverWrapper>(observer);
+  webrtc::PeerConnectionDependencies dependencies(observer_wrapper.get());
   sharing::P2PPortAllocator::Config port_config;
   port_config.enable_multiple_routes = true;
   port_config.enable_nonproxied_udp = true;
   dependencies.allocator = std::make_unique<sharing::P2PPortAllocator>(
       network_manager_.get(), socket_factory_.get(), port_config);
-  dependencies.async_resolver_factory =
-      std::make_unique<ProxyAsyncResolverFactory>(socket_factory_.get());
+  dependencies.async_dns_resolver_factory =
+      std::make_unique<ProxyAsyncDnsResolverFactory>(socket_factory_.get());
 
-  rtc::scoped_refptr<webrtc::PeerConnectionInterface> peer_connection =
-      peer_connection_factory_->CreatePeerConnection(rtc_config,
-                                                     std::move(dependencies));
-  callback(std::move(peer_connection));
+  webrtc::RTCErrorOr<webrtc::scoped_refptr<webrtc::PeerConnectionInterface>>
+      peer_connection = peer_connection_factory_->CreatePeerConnectionOrError(
+          rtc_config, std::move(dependencies));
+  if (peer_connection.ok()) {
+    observer_wrappers_.push_back(std::move(observer_wrapper));
+    callback(peer_connection.MoveValue());
+  } else {
+    callback(/*peer_connection=*/nullptr);
+  }
 }
 
 std::unique_ptr<api::WebRtcSignalingMessenger>
 WebRtcMedium::GetSignalingMessenger(
-    absl::string_view self_id,
-    const connections::LocationHint& location_hint) {
+    std::string_view self_id,
+    const location::nearby::connections::LocationHint& location_hint) {
   return std::make_unique<WebRtcSignalingMessengerImpl>(
       std::string(self_id), location_hint, webrtc_signaling_messenger_);
 }
 
-}  // namespace chrome
-}  // namespace nearby
-}  // namespace location
+std::unique_ptr<webrtc::PeerConnectionObserver>
+WebRtcMedium::CreatePeerConnectionObserverWrapperForTesting(
+    webrtc::PeerConnectionObserver* observer) {
+  return std::make_unique<PeerConnectionObserverWrapper>(observer);
+}
+
+}  // namespace nearby::chrome

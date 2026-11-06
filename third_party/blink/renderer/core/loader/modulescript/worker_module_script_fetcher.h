@@ -1,10 +1,11 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_LOADER_MODULESCRIPT_WORKER_MODULE_SCRIPT_FETCHER_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_LOADER_MODULESCRIPT_WORKER_MODULE_SCRIPT_FETCHER_H_
 
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/loader/modulescript/module_script_fetcher.h"
 #include "third_party/blink/renderer/platform/loader/fetch/url_loader/worker_main_script_loader.h"
 #include "third_party/blink/renderer/platform/loader/fetch/url_loader/worker_main_script_loader_client.h"
@@ -32,12 +33,14 @@ class CORE_EXPORT WorkerModuleScriptFetcher final
              ModuleType,
              ResourceFetcher*,
              ModuleGraphLevel,
-             ModuleScriptFetcher::Client*) override;
+             ModuleScriptFetcher::Client*,
+             ModuleImportPhase import_phase) override;
 
   // Implements WorkerMainScriptLoaderClient, and these will be called for
-  // dedicated workers (when PlzDedicatedWorker is enabled) and shared workers.
-  void DidReceiveData(base::span<const char> span) override;
-  void OnStartLoadingBody(const ResourceResponse& resource_response) override;
+  // dedicated workers and shared workers.
+  void DidReceiveDataWorkerMainScript(base::span<const char> span) override;
+  void OnStartLoadingBodyWorkerMainScript(
+      const ResourceResponse& resource_response) override;
   void OnFinishedLoadingWorkerMainScript() override;
   void OnFailedLoadingWorkerMainScript() override;
 
@@ -48,16 +51,18 @@ class CORE_EXPORT WorkerModuleScriptFetcher final
   void NotifyFinished(Resource*) override;
   String DebugName() const override { return "WorkerModuleScriptFetcher"; }
 
-  void NotifyClient(const KURL& request_url,
-                    ModuleType module_type,
-                    const ParkableString& source_text,
-                    const ResourceResponse& response,
-                    SingleCachedMetadataHandler* cache_handler);
+  // `base::HeapArray<uint8_t>` is stored when `module_type` is
+  // `ResolvedModuleType::kWasm`, and `ParkableString` otherwise.
+  void NotifyClient(
+      const KURL& request_url,
+      ResolvedModuleType module_type,
+      std::variant<ParkableString, base::HeapArray<uint8_t>>&& source,
+      const ResourceResponse& response,
+      CachedMetadataHandler* cache_handler);
 
   const Member<WorkerGlobalScope> global_scope_;
 
-  // These are used for dedicated workers (when PlzDedicatedWorker is enabled)
-  // and shared workers.
+  // These are used for dedicated workers and shared workers.
   Member<WorkerMainScriptLoader> worker_main_script_loader_;
   std::unique_ptr<TextResourceDecoder> decoder_;
   StringBuilder source_text_;
@@ -66,6 +71,7 @@ class CORE_EXPORT WorkerModuleScriptFetcher final
   Member<Client> client_;
   ModuleGraphLevel level_;
   ModuleType expected_module_type_;
+  ModuleImportPhase import_phase_;
 };
 
 }  // namespace blink

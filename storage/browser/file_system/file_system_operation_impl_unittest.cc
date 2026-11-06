@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,28 +7,37 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <memory>
 #include <string>
+#include <tuple>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/cxx17_backports.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
+#include "base/strings/string_view_util.h"
 #include "base/strings/stringprintf.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/test/test_future.h"
+#include "base/time/time.h"
+#include "build/build_config.h"
 #include "components/services/filesystem/public/mojom/types.mojom.h"
-#include "storage/browser/blob/shareable_file_reference.h"
+#include "storage/browser/blob/scoped_file.h"
+#include "storage/browser/file_system/async_file_util_adapter.h"
+#include "storage/browser/file_system/copy_or_move_hook_delegate.h"
 #include "storage/browser/file_system/file_system_context.h"
 #include "storage/browser/file_system/file_system_file_util.h"
 #include "storage/browser/file_system/file_system_operation_context.h"
 #include "storage/browser/file_system/file_system_operation_runner.h"
+#include "storage/browser/file_system/local_file_util.h"
 #include "storage/browser/file_system/sandbox_file_system_backend.h"
 #include "storage/browser/quota/quota_manager.h"
 #include "storage/browser/quota/quota_manager_proxy.h"
@@ -37,6 +46,7 @@
 #include "storage/browser/test/mock_file_update_observer.h"
 #include "storage/browser/test/mock_quota_manager.h"
 #include "storage/browser/test/mock_quota_manager_proxy.h"
+#include "storage/browser/test/mock_special_storage_policy.h"
 #include "storage/browser/test/sandbox_file_system_test_helper.h"
 #include "storage/common/file_system/file_system_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -48,9 +58,14 @@ namespace storage {
 class FileSystemOperationImplTest : public testing::Test {
  public:
   FileSystemOperationImplTest()
-      : task_environment_(base::test::TaskEnvironment::MainThreadType::IO) {}
+      : special_storage_policy_(
+            base::MakeRefCounted<MockSpecialStoragePolicy>()),
+        task_environment_(base::test::TaskEnvironment::MainThreadType::IO) {}
 
- protected:
+  FileSystemOperationImplTest(const FileSystemOperationImplTest&) = delete;
+  FileSystemOperationImplTest& operator=(const FileSystemOperationImplTest&) =
+      delete;
+
   void SetUp() override {
     EXPECT_TRUE(base_.CreateUniqueTempDir());
     change_observers_ = MockFileChangeObserver::CreateList(&change_observer_);
@@ -59,10 +74,10 @@ class FileSystemOperationImplTest : public testing::Test {
     base::FilePath base_dir = base_.GetPath().AppendASCII("filesystem");
     quota_manager_ = base::MakeRefCounted<MockQuotaManager>(
         /* is_incognito= */ false, base_dir,
-        base::ThreadTaskRunnerHandle::Get().get(),
-        /* special storage policy= */ nullptr);
+        base::SingleThreadTaskRunner::GetCurrentDefault(),
+        special_storage_policy_);
     quota_manager_proxy_ = base::MakeRefCounted<MockQuotaManagerProxy>(
-        quota_manager(), base::ThreadTaskRunnerHandle::Get());
+        quota_manager(), base::SingleThreadTaskRunner::GetCurrentDefault());
     sandbox_file_system_.SetUp(base_dir, quota_manager_proxy_.get());
     sandbox_file_system_.AddFileChangeObserver(&change_observer_);
     sandbox_file_system_.AddFileUpdateObserver(&update_observer_);
@@ -86,9 +101,7 @@ class FileSystemOperationImplTest : public testing::Test {
     return entries_;
   }
 
-  const ShareableFileReference* shareable_file_ref() const {
-    return shareable_file_ref_.get();
-  }
+  const ScopedFile& temp_file() const { return temp_file_; }
 
   MockQuotaManager* quota_manager() {
     return static_cast<MockQuotaManager*>(quota_manager_.get());
@@ -211,29 +224,28 @@ class FileSystemOperationImplTest : public testing::Test {
     std::move(closure).Run();
   }
 
-  void DidCreateSnapshotFile(
-      base::OnceClosure closure,
-      base::File::Error* status,
-      base::File::Error actual,
-      const base::File::Info& info,
-      const base::FilePath& platform_path,
-      scoped_refptr<ShareableFileReference> shareable_file_ref) {
+  void DidCreateSnapshotFile(base::OnceClosure closure,
+                             base::File::Error* status,
+                             base::File::Error actual,
+                             const base::File::Info& info,
+                             const base::FilePath& platform_path,
+                             ScopedFile temp_file) {
     info_ = info;
     path_ = platform_path;
     *status = actual;
-    shareable_file_ref_ = std::move(shareable_file_ref);
+    temp_file_ = std::move(temp_file);
     std::move(closure).Run();
   }
 
   int64_t GetDataSizeOnDisk() {
-    return sandbox_file_system_.ComputeCurrentOriginUsage() -
+    return sandbox_file_system_.ComputeCurrentStorageKeyUsage() -
            sandbox_file_system_.ComputeCurrentDirectoryDatabaseUsage();
   }
 
   void GetUsageAndQuota(int64_t* usage, int64_t* quota) {
     blink::mojom::QuotaStatusCode status =
         AsyncFileTestHelper::GetUsageAndQuota(
-            quota_manager_.get(), sandbox_file_system_.origin(),
+            quota_manager_->proxy(), sandbox_file_system_.storage_key(),
             sandbox_file_system_.type(), usage, quota);
     task_environment_.RunUntilIdle();
     ASSERT_EQ(blink::mojom::QuotaStatusCode::kOk, status);
@@ -257,8 +269,7 @@ class FileSystemOperationImplTest : public testing::Test {
   void GrantQuotaForCurrentUsage() {
     int64_t usage;
     GetUsageAndQuota(&usage, nullptr);
-    quota_manager()->SetQuota(blink::StorageKey(sandbox_file_system_.origin()),
-                              sandbox_file_system_.storage_type(), usage);
+    quota_manager()->SetQuota(sandbox_file_system_.storage_key(), usage);
   }
 
   int64_t GetUsage() {
@@ -270,20 +281,19 @@ class FileSystemOperationImplTest : public testing::Test {
   void AddQuota(int64_t quota_delta) {
     int64_t quota;
     GetUsageAndQuota(nullptr, &quota);
-    quota_manager()->SetQuota(blink::StorageKey(sandbox_file_system_.origin()),
-                              sandbox_file_system_.storage_type(),
+    quota_manager()->SetQuota(sandbox_file_system_.storage_key(),
                               quota + quota_delta);
   }
 
   base::File::Error Move(const FileSystemURL& src,
                          const FileSystemURL& dest,
-                         FileSystemOperation::CopyOrMoveOption option) {
+                         FileSystemOperation::CopyOrMoveOptionSet options) {
     base::File::Error status;
     base::RunLoop run_loop;
     update_observer_.Enable();
     operation_runner()->Move(
-        src, dest, option, storage::FileSystemOperation::ERROR_BEHAVIOR_ABORT,
-        storage::FileSystemOperation::CopyOrMoveProgressCallback(),
+        src, dest, options, FileSystemOperation::ERROR_BEHAVIOR_ABORT,
+        std::make_unique<CopyOrMoveHookDelegate>(),
         RecordStatusCallback(run_loop.QuitClosure(), &status));
     run_loop.Run();
     update_observer_.Disable();
@@ -292,13 +302,13 @@ class FileSystemOperationImplTest : public testing::Test {
 
   base::File::Error Copy(const FileSystemURL& src,
                          const FileSystemURL& dest,
-                         FileSystemOperation::CopyOrMoveOption option) {
+                         FileSystemOperation::CopyOrMoveOptionSet options) {
     base::File::Error status;
     base::RunLoop run_loop;
     update_observer_.Enable();
     operation_runner()->Copy(
-        src, dest, option, FileSystemOperation::ERROR_BEHAVIOR_ABORT,
-        FileSystemOperation::CopyOrMoveProgressCallback(),
+        src, dest, options, FileSystemOperation::ERROR_BEHAVIOR_ABORT,
+        std::make_unique<CopyOrMoveHookDelegate>(),
         RecordStatusCallback(run_loop.QuitClosure(), &status));
     run_loop.Run();
     update_observer_.Disable();
@@ -364,7 +374,9 @@ class FileSystemOperationImplTest : public testing::Test {
     return status;
   }
 
-  base::File::Error GetMetadata(const FileSystemURL& url, int fields) {
+  base::File::Error GetMetadata(
+      const FileSystemURL& url,
+      FileSystemOperation::GetMetadataFieldSet fields) {
     base::File::Error status;
     base::RunLoop run_loop;
     update_observer_.Enable();
@@ -433,14 +445,17 @@ class FileSystemOperationImplTest : public testing::Test {
     return status;
   }
 
-  base::test::TaskEnvironment task_environment_;
-
- private:
-  scoped_refptr<QuotaManager> quota_manager_;
-  scoped_refptr<QuotaManagerProxy> quota_manager_proxy_;
+ protected:
+  scoped_refptr<MockSpecialStoragePolicy> special_storage_policy_;
 
   // Common temp base for nondestructive uses.
   base::ScopedTempDir base_;
+
+  base::test::TaskEnvironment task_environment_;
+
+  // These are mocks.
+  scoped_refptr<QuotaManager> quota_manager_;
+  scoped_refptr<QuotaManagerProxy> quota_manager_proxy_;
 
   SandboxFileSystemTestHelper sandbox_file_system_;
 
@@ -448,7 +463,7 @@ class FileSystemOperationImplTest : public testing::Test {
   base::File::Info info_;
   base::FilePath path_;
   std::vector<filesystem::mojom::DirectoryEntry> entries_;
-  scoped_refptr<ShareableFileReference> shareable_file_ref_;
+  ScopedFile temp_file_;
 
   MockFileChangeObserver change_observer_;
   ChangeObserverList change_observers_;
@@ -456,15 +471,13 @@ class FileSystemOperationImplTest : public testing::Test {
   UpdateObserverList update_observers_;
 
   base::WeakPtrFactory<FileSystemOperationImplTest> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(FileSystemOperationImplTest);
 };
 
 TEST_F(FileSystemOperationImplTest, TestMoveFailureSrcDoesntExist) {
   change_observer()->ResetCount();
-  EXPECT_EQ(
-      base::File::FILE_ERROR_NOT_FOUND,
-      Move(URLForPath("a"), URLForPath("b"), FileSystemOperation::OPTION_NONE));
+  EXPECT_EQ(base::File::FILE_ERROR_NOT_FOUND,
+            Move(URLForPath("a"), URLForPath("b"),
+                 FileSystemOperation::CopyOrMoveOptionSet()));
   EXPECT_TRUE(change_observer()->HasNoChange());
 }
 
@@ -472,8 +485,9 @@ TEST_F(FileSystemOperationImplTest, TestMoveFailureContainsPath) {
   FileSystemURL src_dir(CreateDirectory("src"));
   FileSystemURL dest_dir(CreateDirectory("src/dest"));
 
-  EXPECT_EQ(base::File::FILE_ERROR_INVALID_OPERATION,
-            Move(src_dir, dest_dir, FileSystemOperation::OPTION_NONE));
+  EXPECT_EQ(
+      base::File::FILE_ERROR_INVALID_OPERATION,
+      Move(src_dir, dest_dir, FileSystemOperation::CopyOrMoveOptionSet()));
   EXPECT_TRUE(change_observer()->HasNoChange());
 }
 
@@ -483,8 +497,9 @@ TEST_F(FileSystemOperationImplTest, TestMoveFailureSrcDirExistsDestFile) {
   FileSystemURL dest_dir(CreateDirectory("dest"));
   FileSystemURL dest_file(CreateFile("dest/file"));
 
-  EXPECT_EQ(base::File::FILE_ERROR_INVALID_OPERATION,
-            Move(src_dir, dest_file, FileSystemOperation::OPTION_NONE));
+  EXPECT_EQ(
+      base::File::FILE_ERROR_INVALID_OPERATION,
+      Move(src_dir, dest_file, FileSystemOperation::CopyOrMoveOptionSet()));
   EXPECT_TRUE(change_observer()->HasNoChange());
 }
 
@@ -495,8 +510,9 @@ TEST_F(FileSystemOperationImplTest,
   FileSystemURL dest_dir(CreateDirectory("dest"));
   FileSystemURL dest_file(CreateFile("dest/file"));
 
-  EXPECT_EQ(base::File::FILE_ERROR_NOT_EMPTY,
-            Move(src_dir, dest_dir, FileSystemOperation::OPTION_NONE));
+  EXPECT_EQ(
+      base::File::FILE_ERROR_NOT_EMPTY,
+      Move(src_dir, dest_dir, FileSystemOperation::CopyOrMoveOptionSet()));
   EXPECT_TRUE(change_observer()->HasNoChange());
 }
 
@@ -506,8 +522,9 @@ TEST_F(FileSystemOperationImplTest, TestMoveFailureSrcFileExistsDestDir) {
   FileSystemURL src_file(CreateFile("src/file"));
   FileSystemURL dest_dir(CreateDirectory("dest"));
 
-  EXPECT_EQ(base::File::FILE_ERROR_INVALID_OPERATION,
-            Move(src_file, dest_dir, FileSystemOperation::OPTION_NONE));
+  EXPECT_EQ(
+      base::File::FILE_ERROR_INVALID_OPERATION,
+      Move(src_file, dest_dir, FileSystemOperation::CopyOrMoveOptionSet()));
   EXPECT_TRUE(change_observer()->HasNoChange());
 }
 
@@ -516,7 +533,7 @@ TEST_F(FileSystemOperationImplTest, TestMoveFailureDestParentDoesntExist) {
   FileSystemURL src_dir(CreateDirectory("src"));
   EXPECT_EQ(base::File::FILE_ERROR_NOT_FOUND,
             Move(src_dir, URLForPath("nonexistent/deset"),
-                 FileSystemOperation::OPTION_NONE));
+                 FileSystemOperation::CopyOrMoveOptionSet()));
   EXPECT_TRUE(change_observer()->HasNoChange());
 }
 
@@ -524,22 +541,24 @@ TEST_F(FileSystemOperationImplTest, TestMoveSuccessSrcFileAndOverwrite) {
   FileSystemURL src_file(CreateFile("src"));
   FileSystemURL dest_file(CreateFile("dest"));
 
-  EXPECT_EQ(base::File::FILE_OK,
-            Move(src_file, dest_file, FileSystemOperation::OPTION_NONE));
+  EXPECT_EQ(
+      base::File::FILE_OK,
+      Move(src_file, dest_file, FileSystemOperation::CopyOrMoveOptionSet()));
   EXPECT_TRUE(FileExists("dest"));
 
-  EXPECT_EQ(1, change_observer()->get_and_reset_modify_file_count());
+  EXPECT_EQ(1, change_observer()->get_and_reset_create_file_from_count());
   EXPECT_EQ(1, change_observer()->get_and_reset_remove_file_count());
   EXPECT_TRUE(change_observer()->HasNoChange());
 
-  EXPECT_EQ(1, quota_manager_proxy()->notify_storage_accessed_count());
+  EXPECT_EQ(1, quota_manager_proxy()->notify_bucket_accessed_count());
 }
 
 TEST_F(FileSystemOperationImplTest, TestMoveSuccessSrcFileAndNew) {
   FileSystemURL src_file(CreateFile("src"));
 
-  EXPECT_EQ(base::File::FILE_OK, Move(src_file, URLForPath("new"),
-                                      FileSystemOperation::OPTION_NONE));
+  EXPECT_EQ(base::File::FILE_OK,
+            Move(src_file, URLForPath("new"),
+                 FileSystemOperation::CopyOrMoveOptionSet()));
   EXPECT_TRUE(FileExists("new"));
 
   EXPECT_EQ(1, change_observer()->get_and_reset_create_file_from_count());
@@ -551,8 +570,9 @@ TEST_F(FileSystemOperationImplTest, TestMoveSuccessSrcDirAndOverwrite) {
   FileSystemURL src_dir(CreateDirectory("src"));
   FileSystemURL dest_dir(CreateDirectory("dest"));
 
-  EXPECT_EQ(base::File::FILE_OK,
-            Move(src_dir, dest_dir, FileSystemOperation::OPTION_NONE));
+  EXPECT_EQ(
+      base::File::FILE_OK,
+      Move(src_dir, dest_dir, FileSystemOperation::CopyOrMoveOptionSet()));
   EXPECT_FALSE(DirectoryExists("src"));
 
   EXPECT_EQ(1, change_observer()->get_and_reset_create_directory_count());
@@ -568,8 +588,9 @@ TEST_F(FileSystemOperationImplTest, TestMoveSuccessSrcDirAndNew) {
   FileSystemURL src_dir(CreateDirectory("src"));
   FileSystemURL dest_dir(CreateDirectory("dest"));
 
-  EXPECT_EQ(base::File::FILE_OK, Move(src_dir, URLForPath("dest/new"),
-                                      FileSystemOperation::OPTION_NONE));
+  EXPECT_EQ(base::File::FILE_OK,
+            Move(src_dir, URLForPath("dest/new"),
+                 FileSystemOperation::CopyOrMoveOptionSet()));
   EXPECT_FALSE(DirectoryExists("src"));
   EXPECT_TRUE(DirectoryExists("dest/new"));
 
@@ -585,8 +606,9 @@ TEST_F(FileSystemOperationImplTest, TestMoveSuccessSrcDirRecursive) {
 
   FileSystemURL dest_dir(CreateDirectory("dest"));
 
-  EXPECT_EQ(base::File::FILE_OK,
-            Move(src_dir, dest_dir, FileSystemOperation::OPTION_NONE));
+  EXPECT_EQ(
+      base::File::FILE_OK,
+      Move(src_dir, dest_dir, FileSystemOperation::CopyOrMoveOptionSet()));
   EXPECT_TRUE(DirectoryExists("dest/dir"));
   EXPECT_TRUE(FileExists("dest/dir/sub"));
 
@@ -603,7 +625,7 @@ TEST_F(FileSystemOperationImplTest, TestMoveSuccessSamePath) {
   CreateFile("src/dir/sub");
 
   EXPECT_EQ(base::File::FILE_OK,
-            Move(src_dir, src_dir, FileSystemOperation::OPTION_NONE));
+            Move(src_dir, src_dir, FileSystemOperation::CopyOrMoveOptionSet()));
   EXPECT_TRUE(DirectoryExists("src/dir"));
   EXPECT_TRUE(FileExists("src/dir/sub"));
 
@@ -615,9 +637,9 @@ TEST_F(FileSystemOperationImplTest, TestMoveSuccessSamePath) {
 }
 
 TEST_F(FileSystemOperationImplTest, TestCopyFailureSrcDoesntExist) {
-  EXPECT_EQ(
-      base::File::FILE_ERROR_NOT_FOUND,
-      Copy(URLForPath("a"), URLForPath("b"), FileSystemOperation::OPTION_NONE));
+  EXPECT_EQ(base::File::FILE_ERROR_NOT_FOUND,
+            Copy(URLForPath("a"), URLForPath("b"),
+                 FileSystemOperation::CopyOrMoveOptionSet()));
   EXPECT_TRUE(change_observer()->HasNoChange());
 }
 
@@ -625,8 +647,9 @@ TEST_F(FileSystemOperationImplTest, TestCopyFailureContainsPath) {
   FileSystemURL src_dir(CreateDirectory("src"));
   FileSystemURL dest_dir(CreateDirectory("src/dir"));
 
-  EXPECT_EQ(base::File::FILE_ERROR_INVALID_OPERATION,
-            Copy(src_dir, dest_dir, FileSystemOperation::OPTION_NONE));
+  EXPECT_EQ(
+      base::File::FILE_ERROR_INVALID_OPERATION,
+      Copy(src_dir, dest_dir, FileSystemOperation::CopyOrMoveOptionSet()));
   EXPECT_TRUE(change_observer()->HasNoChange());
 }
 
@@ -636,8 +659,9 @@ TEST_F(FileSystemOperationImplTest, TestCopyFailureSrcDirExistsDestFile) {
   FileSystemURL dest_dir(CreateDirectory("dest"));
   FileSystemURL dest_file(CreateFile("dest/file"));
 
-  EXPECT_EQ(base::File::FILE_ERROR_INVALID_OPERATION,
-            Copy(src_dir, dest_file, FileSystemOperation::OPTION_NONE));
+  EXPECT_EQ(
+      base::File::FILE_ERROR_INVALID_OPERATION,
+      Copy(src_dir, dest_file, FileSystemOperation::CopyOrMoveOptionSet()));
   EXPECT_TRUE(change_observer()->HasNoChange());
 }
 
@@ -648,8 +672,9 @@ TEST_F(FileSystemOperationImplTest,
   FileSystemURL dest_dir(CreateDirectory("dest"));
   FileSystemURL dest_file(CreateFile("dest/file"));
 
-  EXPECT_EQ(base::File::FILE_ERROR_NOT_EMPTY,
-            Copy(src_dir, dest_dir, FileSystemOperation::OPTION_NONE));
+  EXPECT_EQ(
+      base::File::FILE_ERROR_NOT_EMPTY,
+      Copy(src_dir, dest_dir, FileSystemOperation::CopyOrMoveOptionSet()));
   EXPECT_TRUE(change_observer()->HasNoChange());
 }
 
@@ -658,8 +683,9 @@ TEST_F(FileSystemOperationImplTest, TestCopyFailureSrcFileExistsDestDir) {
   FileSystemURL src_file(CreateFile("src"));
   FileSystemURL dest_dir(CreateDirectory("dest"));
 
-  EXPECT_EQ(base::File::FILE_ERROR_INVALID_OPERATION,
-            Copy(src_file, dest_dir, FileSystemOperation::OPTION_NONE));
+  EXPECT_EQ(
+      base::File::FILE_ERROR_INVALID_OPERATION,
+      Copy(src_file, dest_dir, FileSystemOperation::CopyOrMoveOptionSet()));
   EXPECT_TRUE(change_observer()->HasNoChange());
 }
 
@@ -669,7 +695,7 @@ TEST_F(FileSystemOperationImplTest, TestCopyFailureDestParentDoesntExist) {
 
   EXPECT_EQ(base::File::FILE_ERROR_NOT_FOUND,
             Copy(src_dir, URLForPath("nonexistent/dest"),
-                 FileSystemOperation::OPTION_NONE));
+                 FileSystemOperation::CopyOrMoveOptionSet()));
   EXPECT_TRUE(change_observer()->HasNoChange());
 }
 
@@ -685,8 +711,9 @@ TEST_F(FileSystemOperationImplTest, TestCopyFailureByQuota) {
   GrantQuotaForCurrentUsage();
   AddQuota(6 + dest_path_cost - 1);
 
-  EXPECT_EQ(base::File::FILE_ERROR_NO_SPACE,
-            Copy(src_file, dest_file, FileSystemOperation::OPTION_NONE));
+  EXPECT_EQ(
+      base::File::FILE_ERROR_NO_SPACE,
+      Copy(src_file, dest_file, FileSystemOperation::CopyOrMoveOptionSet()));
   EXPECT_FALSE(FileExists("dest/file"));
 }
 
@@ -694,11 +721,12 @@ TEST_F(FileSystemOperationImplTest, TestCopySuccessSrcFileAndOverwrite) {
   FileSystemURL src_file(CreateFile("src"));
   FileSystemURL dest_file(CreateFile("dest"));
 
-  EXPECT_EQ(base::File::FILE_OK,
-            Copy(src_file, dest_file, FileSystemOperation::OPTION_NONE));
+  EXPECT_EQ(
+      base::File::FILE_OK,
+      Copy(src_file, dest_file, FileSystemOperation::CopyOrMoveOptionSet()));
 
   EXPECT_TRUE(FileExists("dest"));
-  EXPECT_EQ(4, quota_manager_proxy()->notify_storage_accessed_count());
+  EXPECT_EQ(4, quota_manager_proxy()->notify_bucket_accessed_count());
   EXPECT_EQ(2, change_observer()->get_and_reset_modify_file_count());
 
   EXPECT_TRUE(change_observer()->HasNoChange());
@@ -707,10 +735,11 @@ TEST_F(FileSystemOperationImplTest, TestCopySuccessSrcFileAndOverwrite) {
 TEST_F(FileSystemOperationImplTest, TestCopySuccessSrcFileAndNew) {
   FileSystemURL src_file(CreateFile("src"));
 
-  EXPECT_EQ(base::File::FILE_OK, Copy(src_file, URLForPath("new"),
-                                      FileSystemOperation::OPTION_NONE));
+  EXPECT_EQ(base::File::FILE_OK,
+            Copy(src_file, URLForPath("new"),
+                 FileSystemOperation::CopyOrMoveOptionSet()));
   EXPECT_TRUE(FileExists("new"));
-  EXPECT_EQ(4, quota_manager_proxy()->notify_storage_accessed_count());
+  EXPECT_EQ(4, quota_manager_proxy()->notify_bucket_accessed_count());
 
   EXPECT_EQ(1, change_observer()->get_and_reset_create_file_count());
   EXPECT_EQ(1, change_observer()->get_and_reset_modify_file_count());
@@ -721,13 +750,14 @@ TEST_F(FileSystemOperationImplTest, TestCopySuccessSrcDirAndOverwrite) {
   FileSystemURL src_dir(CreateDirectory("src"));
   FileSystemURL dest_dir(CreateDirectory("dest"));
 
-  EXPECT_EQ(base::File::FILE_OK,
-            Copy(src_dir, dest_dir, FileSystemOperation::OPTION_NONE));
+  EXPECT_EQ(
+      base::File::FILE_OK,
+      Copy(src_dir, dest_dir, FileSystemOperation::CopyOrMoveOptionSet()));
 
   // Make sure we've overwritten but not copied the source under the |dest_dir|.
   EXPECT_TRUE(DirectoryExists("dest"));
   EXPECT_FALSE(DirectoryExists("dest/src"));
-  EXPECT_GE(quota_manager_proxy()->notify_storage_accessed_count(), 3);
+  EXPECT_GE(quota_manager_proxy()->notify_bucket_accessed_count(), 3);
 
   EXPECT_EQ(1, change_observer()->get_and_reset_create_directory_count());
   EXPECT_EQ(1, change_observer()->get_and_reset_remove_directory_count());
@@ -738,10 +768,11 @@ TEST_F(FileSystemOperationImplTest, TestCopySuccessSrcDirAndNew) {
   FileSystemURL src_dir(CreateDirectory("src"));
   FileSystemURL dest_dir_new(URLForPath("dest"));
 
-  EXPECT_EQ(base::File::FILE_OK,
-            Copy(src_dir, dest_dir_new, FileSystemOperation::OPTION_NONE));
+  EXPECT_EQ(
+      base::File::FILE_OK,
+      Copy(src_dir, dest_dir_new, FileSystemOperation::CopyOrMoveOptionSet()));
   EXPECT_TRUE(DirectoryExists("dest"));
-  EXPECT_GE(quota_manager_proxy()->notify_storage_accessed_count(), 2);
+  EXPECT_GE(quota_manager_proxy()->notify_bucket_accessed_count(), 2);
 
   EXPECT_EQ(1, change_observer()->get_and_reset_create_directory_count());
   EXPECT_TRUE(change_observer()->HasNoChange());
@@ -754,14 +785,15 @@ TEST_F(FileSystemOperationImplTest, TestCopySuccessSrcDirRecursive) {
 
   FileSystemURL dest_dir(CreateDirectory("dest"));
 
-  EXPECT_EQ(base::File::FILE_OK,
-            Copy(src_dir, dest_dir, FileSystemOperation::OPTION_NONE));
+  EXPECT_EQ(
+      base::File::FILE_OK,
+      Copy(src_dir, dest_dir, FileSystemOperation::CopyOrMoveOptionSet()));
 
   EXPECT_TRUE(DirectoryExists("dest/dir"));
   EXPECT_TRUE(FileExists("dest/dir/sub"));
 
   // For recursive copy we may record multiple read access.
-  EXPECT_GE(quota_manager_proxy()->notify_storage_accessed_count(), 1);
+  EXPECT_GE(quota_manager_proxy()->notify_bucket_accessed_count(), 1);
 
   EXPECT_EQ(2, change_observer()->get_and_reset_create_directory_count());
   EXPECT_EQ(1, change_observer()->get_and_reset_remove_directory_count());
@@ -776,7 +808,7 @@ TEST_F(FileSystemOperationImplTest, TestCopySuccessSamePath) {
   CreateFile("src/dir/sub");
 
   EXPECT_EQ(base::File::FILE_OK,
-            Copy(src_dir, src_dir, FileSystemOperation::OPTION_NONE));
+            Copy(src_dir, src_dir, FileSystemOperation::CopyOrMoveOptionSet()));
 
   EXPECT_TRUE(DirectoryExists("src/dir"));
   EXPECT_TRUE(FileExists("src/dir/sub"));
@@ -790,9 +822,8 @@ TEST_F(FileSystemOperationImplTest, TestCopySuccessSamePath) {
 TEST_F(FileSystemOperationImplTest, TestCopyInForeignFileSuccess) {
   base::FilePath src_local_disk_file_path;
   base::CreateTemporaryFile(&src_local_disk_file_path);
-  const char test_data[] = "foo";
-  int data_size = base::size(test_data);
-  base::WriteFile(src_local_disk_file_path, test_data, data_size);
+  constexpr std::string_view test_data = "foo";
+  base::WriteFile(src_local_disk_file_path, test_data);
 
   FileSystemURL dest_dir(CreateDirectory("dest"));
 
@@ -810,18 +841,18 @@ TEST_F(FileSystemOperationImplTest, TestCopyInForeignFileSuccess) {
   EXPECT_GT(after_usage, before_usage);
 
   // Compare contents of src and copied file.
-  char buffer[100];
-  EXPECT_EQ(data_size,
-            base::ReadFile(PlatformPath("dest/file"), buffer, data_size));
-  for (int i = 0; i < data_size; ++i)
-    EXPECT_EQ(test_data[i], buffer[i]);
+  std::array<char, 100> buffer;
+  auto read_span = base::span(buffer).first(test_data.size());
+  EXPECT_EQ(test_data.size(),
+            base::ReadFile(PlatformPath("dest/file"), read_span).value_or(0));
+  EXPECT_EQ(test_data, base::as_string_view(read_span));
 }
 
 TEST_F(FileSystemOperationImplTest, TestCopyInForeignFileFailureByQuota) {
   base::FilePath src_local_disk_file_path;
   base::CreateTemporaryFile(&src_local_disk_file_path);
-  const char test_data[] = "foo";
-  base::WriteFile(src_local_disk_file_path, test_data, base::size(test_data));
+  constexpr std::string_view test_data = "foo";
+  base::WriteFile(src_local_disk_file_path, test_data);
 
   FileSystemURL dest_dir(CreateDirectory("dest"));
 
@@ -909,8 +940,7 @@ TEST_F(FileSystemOperationImplTest, TestCreateDirSuccessExclusive) {
 
 TEST_F(FileSystemOperationImplTest, TestExistsAndMetadataFailure) {
   EXPECT_EQ(base::File::FILE_ERROR_NOT_FOUND,
-            GetMetadata(URLForPath("nonexistent"),
-                        FileSystemOperation::GET_METADATA_FIELD_NONE));
+            GetMetadata(URLForPath("nonexistent"), {}));
 
   EXPECT_EQ(base::File::FILE_ERROR_NOT_FOUND,
             FileExists(URLForPath("nonexistent")));
@@ -930,7 +960,7 @@ TEST_F(FileSystemOperationImplTest, TestExistsAndMetadataSuccess) {
 
   EXPECT_EQ(
       base::File::FILE_OK,
-      GetMetadata(dir, FileSystemOperation::GET_METADATA_FIELD_IS_DIRECTORY));
+      GetMetadata(dir, {FileSystemOperation::GetMetadataField::kIsDirectory}));
   EXPECT_TRUE(info().is_directory);
   ++read_access;
 
@@ -939,12 +969,11 @@ TEST_F(FileSystemOperationImplTest, TestExistsAndMetadataSuccess) {
 
   EXPECT_EQ(
       base::File::FILE_OK,
-      GetMetadata(file, FileSystemOperation::GET_METADATA_FIELD_IS_DIRECTORY));
+      GetMetadata(file, {FileSystemOperation::GetMetadataField::kIsDirectory}));
   EXPECT_FALSE(info().is_directory);
   ++read_access;
 
-  EXPECT_EQ(read_access,
-            quota_manager_proxy()->notify_storage_accessed_count());
+  EXPECT_EQ(read_access, quota_manager_proxy()->notify_bucket_accessed_count());
   EXPECT_TRUE(change_observer()->HasNoChange());
 }
 
@@ -986,7 +1015,7 @@ TEST_F(FileSystemOperationImplTest, TestReadDirSuccess) {
       EXPECT_EQ(FILE_PATH_LITERAL("child_file"), entry.name.value());
     }
   }
-  EXPECT_EQ(1, quota_manager_proxy()->notify_storage_accessed_count());
+  EXPECT_EQ(1, quota_manager_proxy()->notify_bucket_accessed_count());
   EXPECT_TRUE(change_observer()->HasNoChange());
 }
 
@@ -1048,15 +1077,16 @@ TEST_F(FileSystemOperationImplTest, TestTruncate) {
   FileSystemURL file(CreateFile("file"));
   base::FilePath platform_path = PlatformPath("file");
 
-  char test_data[] = "test data";
-  int data_size = static_cast<int>(sizeof(test_data));
-  EXPECT_EQ(data_size, base::WriteFile(platform_path, test_data, data_size));
+  constexpr std::string_view test_data = "test data";
+  constexpr int data_size = test_data.size();
+  EXPECT_TRUE(base::WriteFile(platform_path, test_data));
 
   // Check that its length is the size of the data written.
   EXPECT_EQ(
       base::File::FILE_OK,
-      GetMetadata(file, FileSystemOperation::GET_METADATA_FIELD_IS_DIRECTORY |
-                            FileSystemOperation::GET_METADATA_FIELD_SIZE));
+      GetMetadata(file,
+                  {storage::FileSystemOperation::GetMetadataField::kIsDirectory,
+                   storage::FileSystemOperation::GetMetadataField::kSize}));
   EXPECT_FALSE(info().is_directory);
   EXPECT_EQ(data_size, info().size);
 
@@ -1070,13 +1100,13 @@ TEST_F(FileSystemOperationImplTest, TestTruncate) {
   // Check that its length is now 17 and that it's all zeroes after the test
   // data.
   EXPECT_EQ(length, GetFileSize("file"));
-  char data[100];
-  EXPECT_EQ(length, base::ReadFile(platform_path, data, length));
-  for (int i = 0; i < length; ++i) {
-    if (i < static_cast<int>(sizeof(test_data)))
-      EXPECT_EQ(test_data[i], data[i]);
-    else
-      EXPECT_EQ(0, data[i]);
+  std::array<char, 100> data;
+  auto data_span = base::span(data).first(static_cast<size_t>(length));
+  EXPECT_EQ(static_cast<uint64_t>(length),
+            base::ReadFile(platform_path, data_span).value_or(0));
+  EXPECT_EQ(test_data, base::as_string_view(data_span.first(test_data.size())));
+  for (char c : data_span.subspan(test_data.size())) {
+    EXPECT_EQ(0, c);
   }
 
   // Shorten the file by truncating it.
@@ -1088,13 +1118,14 @@ TEST_F(FileSystemOperationImplTest, TestTruncate) {
 
   // Check that its length is now 3 and that it contains only bits of test data.
   EXPECT_EQ(length, GetFileSize("file"));
-  EXPECT_EQ(length, base::ReadFile(platform_path, data, length));
-  for (int i = 0; i < length; ++i)
-    EXPECT_EQ(test_data[i], data[i]);
+  data_span = base::span(data).first(static_cast<size_t>(length));
+  EXPECT_EQ(static_cast<uint64_t>(length),
+            base::ReadFile(platform_path, data_span).value_or(0));
+  EXPECT_EQ(test_data.substr(0, length), base::as_string_view(data_span));
 
   // Truncate is not a 'read' access.  (Here expected access count is 1
   // since we made 1 read access for GetMetadata.)
-  EXPECT_EQ(1, quota_manager_proxy()->notify_storage_accessed_count());
+  EXPECT_EQ(1, quota_manager_proxy()->notify_bucket_accessed_count());
 }
 
 TEST_F(FileSystemOperationImplTest, TestTruncateFailureByQuota) {
@@ -1116,6 +1147,12 @@ TEST_F(FileSystemOperationImplTest, TestTruncateFailureByQuota) {
   EXPECT_EQ(10, GetFileSize("dir/file"));
 }
 
+// TODO(crbug.com/40511450): Remove this test once last_access_time has
+// been removed after PPAPI has been deprecated. Fuchsia does not support touch,
+// which breaks this test that relies on it. Since PPAPI is being deprecated,
+// this test is excluded from the Fuchsia build.
+// See https://crbug.com/1077456 for details.
+#if !BUILDFLAG(IS_FUCHSIA)
 TEST_F(FileSystemOperationImplTest, TestTouchFile) {
   FileSystemURL file(CreateFile("file"));
   base::FilePath platform_path = PlatformPath("file");
@@ -1128,8 +1165,7 @@ TEST_F(FileSystemOperationImplTest, TestTouchFile) {
   const base::Time last_accessed = info.last_accessed;
 
   const base::Time new_modified_time = base::Time::UnixEpoch();
-  const base::Time new_accessed_time =
-      new_modified_time + base::TimeDelta::FromHours(77);
+  const base::Time new_accessed_time = new_modified_time + base::Hours(77);
   ASSERT_NE(last_modified, new_modified_time);
   ASSERT_NE(last_accessed, new_accessed_time);
 
@@ -1144,6 +1180,7 @@ TEST_F(FileSystemOperationImplTest, TestTouchFile) {
   EXPECT_EQ(new_modified_time.ToTimeT(), info.last_modified.ToTimeT());
   EXPECT_EQ(new_accessed_time.ToTimeT(), info.last_accessed.ToTimeT());
 }
+#endif  // !BUILDFLAG(IS_FUCHSIA)
 
 TEST_F(FileSystemOperationImplTest, TestCreateSnapshotFile) {
   FileSystemURL dir(CreateDirectory("dir"));
@@ -1162,9 +1199,56 @@ TEST_F(FileSystemOperationImplTest, TestCreateSnapshotFile) {
   EXPECT_EQ(PlatformPath("dir/file"), path());
   EXPECT_TRUE(change_observer()->HasNoChange());
 
-  // The FileSystemOpration implementation does not create a
-  // shareable file reference.
-  EXPECT_EQ(nullptr, shareable_file_ref());
+  EXPECT_TRUE(temp_file().path().empty());
+}
+
+TEST_F(FileSystemOperationImplTest, SnapshotTransfersOwnership) {
+  class SnapshotFileUtil : public LocalFileUtil {
+   public:
+    ScopedFile CreateSnapshotFile(FileSystemOperationContext* context,
+                                  const FileSystemURL& url,
+                                  base::File::Error* error,
+                                  base::File::Info* file_info,
+                                  base::FilePath* platform_path) override {
+      LocalFileUtil::CreateSnapshotFile(context, url, error, file_info,
+                                        platform_path);
+      if (*error != base::File::FILE_OK) {
+        return ScopedFile();
+      }
+      return ScopedFile(*platform_path, ScopedFile::DELETE_ON_SCOPE_OUT,
+                        context->task_runner());
+    }
+  };
+
+  base::ScopedTempDir snapshot_dir;
+  ASSERT_TRUE(snapshot_dir.CreateUniqueTempDir());
+  base::FilePath snapshot_path;
+  ASSERT_TRUE(
+      base::CreateTemporaryFileInDir(snapshot_dir.GetPath(), &snapshot_path));
+  const FileSystemURL url = FileSystemURL::CreateForTest(
+      blink::StorageKey::CreateFromStringForTesting("http://example.com"),
+      kFileSystemTypeLocal, snapshot_path);
+  AsyncFileUtilAdapter adapter(std::make_unique<SnapshotFileUtil>());
+  std::unique_ptr<FileSystemOperationContext> context = NewContext();
+  scoped_refptr<base::SequencedTaskRunner> task_runner = context->task_runner();
+  base::test::TestFuture<base::File::Error, const base::File::Info&,
+                         const base::FilePath&, ScopedFile>
+      snapshot_future;
+  adapter.CreateSnapshotFile(std::move(context), url,
+                             snapshot_future.GetCallback());
+
+  ASSERT_EQ(base::File::FILE_OK, snapshot_future.Get<0>());
+  EXPECT_EQ(snapshot_path, snapshot_future.Get<2>());
+  ScopedFile temp_file = std::get<3>(snapshot_future.Take());
+  EXPECT_EQ(snapshot_path, temp_file.path());
+  EXPECT_TRUE(base::PathExists(snapshot_path));
+
+  temp_file.Reset();
+  base::test::TestFuture<bool> exists_future;
+  task_runner->PostTaskAndReplyWithResult(
+      FROM_HERE, base::BindOnce(&base::PathExists, snapshot_path),
+      exists_future.GetCallback());
+  EXPECT_FALSE(exists_future.Get());
 }
 
 TEST_F(FileSystemOperationImplTest, TestMoveSuccessSrcDirRecursiveWithQuota) {
@@ -1191,7 +1275,7 @@ TEST_F(FileSystemOperationImplTest, TestMoveSuccessSrcDirRecursiveWithQuota) {
   EXPECT_EQ(all_file_size + total_path_cost, GetUsage());
 
   EXPECT_EQ(base::File::FILE_OK,
-            Move(src, dest, FileSystemOperation::OPTION_NONE));
+            Move(src, dest, FileSystemOperation::CopyOrMoveOptionSet()));
 
   EXPECT_FALSE(DirectoryExists("src/dir"));
   EXPECT_FALSE(FileExists("src/dir/file2"));
@@ -1236,7 +1320,7 @@ TEST_F(FileSystemOperationImplTest, TestCopySuccessSrcDirRecursiveWithQuota) {
   EXPECT_EQ(expected_usage, usage);
 
   EXPECT_EQ(base::File::FILE_OK,
-            Copy(src, dest1, FileSystemOperation::OPTION_NONE));
+            Copy(src, dest1, FileSystemOperation::CopyOrMoveOptionSet()));
 
   expected_usage += all_file_size + child_path_cost + grandchild_path_cost;
   EXPECT_TRUE(DirectoryExists("src/dir"));
@@ -1248,7 +1332,7 @@ TEST_F(FileSystemOperationImplTest, TestCopySuccessSrcDirRecursiveWithQuota) {
   EXPECT_EQ(expected_usage, GetUsage());
 
   EXPECT_EQ(base::File::FILE_OK,
-            Copy(child_dir, dest2, FileSystemOperation::OPTION_NONE));
+            Copy(child_dir, dest2, FileSystemOperation::CopyOrMoveOptionSet()));
 
   expected_usage += grandchild_file_size + grandchild_path_cost;
   usage = GetUsage();
@@ -1263,8 +1347,9 @@ TEST_F(FileSystemOperationImplTest,
   FileSystemURL dest_file(CreateFile("dest"));
 
   EXPECT_EQ(base::File::FILE_OK, Truncate(dest_file, 6));
-  EXPECT_EQ(base::File::FILE_OK,
-            Copy(src_file, dest_file, FileSystemOperation::OPTION_NONE));
+  EXPECT_EQ(
+      base::File::FILE_OK,
+      Copy(src_file, dest_file, FileSystemOperation::CopyOrMoveOptionSet()));
   EXPECT_EQ(0, GetFileSize("dest"));
 }
 

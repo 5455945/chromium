@@ -1,4 +1,4 @@
-// Copyright 2014 The Crashpad Authors. All rights reserved.
+// Copyright 2014 The Crashpad Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,7 +19,6 @@
 
 #include <set>
 
-#include "base/macros.h"
 #include "util/mach/child_port_types.h"
 #include "util/mach/mach_message_server.h"
 
@@ -41,6 +40,7 @@ class ChildPortServer : public MachMessageServer::Interface {
     //! \param[in] token
     //! \param[in] port
     //! \param[in] right_type
+    //! \param[in] embedder_port
     //! \param[in] trailer The trailer received with the request message.
     //! \param[out] destroy_request `true` if the request message is to be
     //!     destroyed even when this method returns success. See
@@ -50,6 +50,7 @@ class ChildPortServer : public MachMessageServer::Interface {
         const child_port_token_t token,
         mach_port_t port,
         mach_msg_type_name_t right_type,
+        mach_port_t embedder_port,
         const mach_msg_trailer_t* trailer,
         bool* destroy_request) = 0;
 
@@ -62,6 +63,9 @@ class ChildPortServer : public MachMessageServer::Interface {
   //! \param[in] interface The interface to dispatch requests to. Weak.
   explicit ChildPortServer(Interface* interface);
 
+  ChildPortServer(const ChildPortServer&) = delete;
+  ChildPortServer& operator=(const ChildPortServer&) = delete;
+
   // MachMessageServer::Interface:
   bool MachMessageServerFunction(const mach_msg_header_t* in_header,
                                  mach_msg_header_t* out_header,
@@ -72,8 +76,6 @@ class ChildPortServer : public MachMessageServer::Interface {
 
  private:
   Interface* interface_;  // weak
-
-  DISALLOW_COPY_AND_ASSIGN(ChildPortServer);
 };
 
 }  // namespace crashpad

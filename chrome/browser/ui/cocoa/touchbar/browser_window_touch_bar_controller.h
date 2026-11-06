@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,8 @@
 #define CHROME_BROWSER_UI_COCOA_TOUCHBAR_BROWSER_WINDOW_TOUCH_BAR_CONTROLLER_H_
 
 #import <Cocoa/Cocoa.h>
-#include <os/availability.h>
 
-class Browser;
+class BrowserWindowInterface;
 @class BrowserWindowDefaultTouchBar;
 @class WebTextfieldTouchBarController;
 
@@ -18,10 +17,10 @@ class WebContents;
 
 // Provides a touch bar for the browser window. This class implements the
 // NSTouchBarDelegate and handles the items in the touch bar.
-API_AVAILABLE(macos(10.12.2))
 @interface BrowserWindowTouchBarController : NSObject
 
-- (instancetype)initWithBrowser:(Browser*)browser window:(NSWindow*)window;
+- (instancetype)initWithBrowser:(BrowserWindowInterface*)browser
+                         window:(NSWindow*)window;
 
 // Creates and returns a touch bar for the browser window.
 - (NSTouchBar*)makeTouchBar;
@@ -37,6 +36,7 @@ API_AVAILABLE(macos(10.12.2))
 - (BrowserWindowDefaultTouchBar*)defaultTouchBar;
 
 - (WebTextfieldTouchBarController*)webTextfieldTouchBar;
+
 @end
 
 #endif  // CHROME_BROWSER_UI_COCOA_TOUCHBAR_BROWSER_WINDOW_TOUCH_BAR_CONTROLLER_H_

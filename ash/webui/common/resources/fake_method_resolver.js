@@ -1,9 +1,9 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {assert} from 'chrome://resources/js/assert.m.js';
-import {PromiseResolver} from 'chrome://resources/js/promise_resolver.m.js';
+import {assert} from 'chrome://resources/ash/common/assert.js';
+import {PromiseResolver} from './promise_resolver.js';
 
 /**
  * @fileoverview
@@ -26,9 +26,22 @@ class FakeMethodState {
    * @return {!Promise}
    */
   resolveMethod() {
-    let resolver = new PromiseResolver();
+    const resolver = new PromiseResolver();
     resolver.resolve(this.result_);
     return resolver.promise;
+  }
+
+  /**
+   * Resolve the method with the supplied result after delayMs.
+   * @param {number} delayMs
+   * @return {!Promise}
+   */
+   resolveMethodWithDelay(delayMs) {
+     const resolver = new PromiseResolver();
+     setTimeout(() => {
+       resolver.resolve(this.result_);
+     }, delayMs);
+     return resolver.promise;
   }
 
   /**
@@ -76,6 +89,16 @@ export class FakeMethodResolver {
    */
   resolveMethod(methodName) {
     return this.getState_(methodName).resolveMethod();
+  }
+
+  /**
+   * Causes the promise for methodName to resolve after delayMs.
+   * @param {string} methodName
+   * @param {number} delayMs
+   * @return {!Promise}
+   */
+  resolveMethodWithDelay(methodName, delayMs) {
+    return this.getState_(methodName).resolveMethodWithDelay(delayMs);
   }
 
   /**

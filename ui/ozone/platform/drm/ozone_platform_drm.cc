@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,28 +7,30 @@
 #include <gbm.h>
 #include <stdlib.h>
 #include <xf86drm.h>
+
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check.h"
 #include "base/command_line.h"
-#include "base/macros.h"
+#include "base/containers/flat_set.h"
+#include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
 #include "base/notreached.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/threading/platform_thread.h"
-#include "base/threading/thread_task_runner_handle.h"
-#include "build/chromeos_buildflags.h"
+#include "mojo/public/cpp/bindings/binder_map.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "ui/base/buildflags.h"
 #include "ui/base/cursor/cursor_factory.h"
-#include "ui/base/cursor/ozone/bitmap_cursor_factory_ozone.h"
 #include "ui/events/ozone/device/device_manager.h"
 #include "ui/events/ozone/evdev/event_factory_evdev.h"
 #include "ui/events/ozone/layout/keyboard_layout_engine_manager.h"
 #include "ui/gfx/linux/client_native_pixmap_dmabuf.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
+#include "ui/ozone/common/base_keyboard_hook.h"
+#include "ui/ozone/common/bitmap_cursor_factory.h"
 #include "ui/ozone/platform/drm/common/drm_util.h"
 #include "ui/ozone/platform/drm/gpu/drm_device_generator.h"
 #include "ui/ozone/platform/drm/gpu/drm_device_manager.h"
@@ -45,10 +47,9 @@
 #include "ui/ozone/platform/drm/host/drm_window_host.h"
 #include "ui/ozone/platform/drm/host/drm_window_host_manager.h"
 #include "ui/ozone/platform/drm/host/host_drm_device.h"
+#include "ui/ozone/platform/drm/mojom/drm_device.mojom.h"
 #include "ui/ozone/public/gpu_platform_support_host.h"
-#include "ui/ozone/public/mojom/drm_device.mojom.h"
 #include "ui/ozone/public/ozone_platform.h"
-#include "ui/ozone/public/ozone_switches.h"
 #include "ui/ozone/public/platform_screen.h"
 #include "ui/platform_window/platform_window_init_properties.h"
 
@@ -59,11 +60,7 @@
 #include "ui/events/ozone/layout/stub/stub_keyboard_layout_engine.h"
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "ui/base/ime/chromeos/input_method_chromeos.h"
-#else
-#include "ui/base/ime/input_method_minimal.h"
-#endif
+#include "ui/base/ime/ash/input_method_ash.h"
 
 namespace ui {
 
@@ -71,7 +68,10 @@ namespace {
 
 class OzonePlatformDrm : public OzonePlatform {
  public:
-  OzonePlatformDrm() = default;
+  OzonePlatformDrm() {
+    platform_properties_.wait_for_root_compositor_frame_sink_destruction =
+        false;
+  }
   ~OzonePlatformDrm() override = default;
 
   // OzonePlatform:
@@ -86,10 +86,8 @@ class OzonePlatformDrm : public OzonePlatform {
     return event_factory_ozone_->input_controller();
   }
 
-  std::unique_ptr<PlatformScreen> CreateScreen() override {
-    NOTREACHED();
-    return nullptr;
-  }
+  std::unique_ptr<PlatformScreen> CreateScreen() override { NOTREACHED(); }
+  void InitScreen(PlatformScreen* screen) override { NOTREACHED(); }
 
   GpuPlatformSupportHost* GetGpuPlatformSupportHost() override {
     return drm_device_connector_.get();
@@ -125,7 +123,7 @@ class OzonePlatformDrm : public OzonePlatform {
       binders->Add<ozone::mojom::DrmDevice>(
           base::BindRepeating(
               &OzonePlatformDrm::CreateDrmDeviceReceiverOnDrmThread,
-              weak_factory_on_drm_.GetWeakPtr()),
+              base::Unretained(this)),
           drm_thread_proxy_->GetDrmThreadTaskRunner());
     }
   }
@@ -173,22 +171,20 @@ class OzonePlatformDrm : public OzonePlatform {
     return std::make_unique<DrmNativeDisplayDelegate>(display_manager_.get());
   }
   std::unique_ptr<InputMethod> CreateInputMethod(
-      internal::InputMethodDelegate* delegate,
+      ImeKeyEventDispatcher* ime_key_event_dispatcher,
       gfx::AcceleratedWidget) override {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-    return std::make_unique<InputMethodChromeOS>(delegate);
-#else
-    return std::make_unique<InputMethodMinimal>(delegate);
-#endif
+    return std::make_unique<ash::InputMethodAsh>(ime_key_event_dispatcher);
   }
 
-  bool IsNativePixmapConfigSupported(gfx::BufferFormat format,
+  bool IsNativePixmapConfigSupported(viz::SharedImageFormat format,
                                      gfx::BufferUsage usage) const override {
     return gfx::ClientNativePixmapDmaBuf::IsConfigurationSupported(format,
                                                                    usage);
   }
 
-  void InitializeUI(const InitParams& args) override {
+  bool IsWindowCompositingSupported() const override { return true; }
+
+  bool InitializeUI(const InitParams& args) override {
     // Ozone drm can operate in two modes configured at runtime.
     //   1. single-process mode where host and viz components
     //      communicate via in-process mojo. Single-process mode can be single
@@ -225,19 +221,15 @@ class OzonePlatformDrm : public OzonePlatform {
     display_manager_ = std::make_unique<DrmDisplayHostManager>(
         adapter, device_manager_.get(), &host_properties_,
         event_factory_ozone_->input_controller());
-    cursor_factory_ = std::make_unique<BitmapCursorFactoryOzone>();
+    cursor_factory_ = std::make_unique<BitmapCursorFactory>();
 
     host_drm_device_->SetDisplayManager(display_manager_.get());
+
+    return true;
   }
 
   void InitializeGPU(const InitParams& args) override {
-    // Check if buffer bandwidth compression is disabled
-    if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-            switches::kDisableBufferBWCompression)) {
-      setenv("MINIGBM_DEBUG", "nocompression", 1);
-    }
-
-    gpu_task_runner_ = base::ThreadTaskRunnerHandle::Get();
+    gpu_task_runner_ = base::SingleThreadTaskRunner::GetCurrentDefault();
 
     // NOTE: Can't start the thread here since this is called before sandbox
     // initialization in multi-process Chrome.
@@ -245,6 +237,9 @@ class OzonePlatformDrm : public OzonePlatform {
 
     surface_factory_ =
         std::make_unique<GbmSurfaceFactory>(drm_thread_proxy_.get());
+
+    // Native pixmaps are always available on ozone/drm.
+    host_properties_.supports_native_pixmaps = true;
 
     overlay_manager_ = std::make_unique<DrmOverlayManagerGpu>(
         drm_thread_proxy_.get(),
@@ -274,8 +269,20 @@ class OzonePlatformDrm : public OzonePlatform {
     }
   }
 
-  const InitializedHostProperties& GetInitializedHostProperties() override {
-    DCHECK(has_initialized_ui());
+  void PostCreateMainMessageLoop(base::OnceCallback<void()> shutdown_cb,
+                                 scoped_refptr<base::SingleThreadTaskRunner>
+                                     user_input_task_runner) override {
+    event_factory_ozone_->SetUserInputTaskRunner(
+        std::move(user_input_task_runner));
+  }
+
+  const PlatformProperties& GetPlatformProperties() override {
+    return platform_properties_;
+  }
+
+  const PlatformRuntimeProperties& GetPlatformRuntimeProperties() override {
+    CHECK(has_initialized_ui() || has_initialized_gpu(),
+          base::NotFatalUntil::M163);
     return host_properties_;
   }
 
@@ -283,12 +290,26 @@ class OzonePlatformDrm : public OzonePlatform {
   // sandbox to start. This entry point in the Ozone API gives platforms
   // flexibility in handing this requirement.
   void AfterSandboxEntry() override {
-    DCHECK(!single_process());
+    CHECK(!single_process(), base::NotFatalUntil::M163);
     CHECK(has_initialized_gpu()) << "AfterSandboxEntry before InitializeForGPU "
                                     "is invalid startup order.";
 
     const bool block_for_drm_thread = false;
     StartDrmThread(block_for_drm_thread);
+  }
+
+  std::unique_ptr<PlatformKeyboardHook> CreateKeyboardHook(
+      PlatformKeyboardHookTypes type,
+      base::RepeatingCallback<void(KeyEvent* event)> callback,
+      std::optional<base::flat_set<DomCode>> dom_codes,
+      gfx::AcceleratedWidget accelerated_widget) override {
+    switch (type) {
+      case PlatformKeyboardHookTypes::kModifier:
+        return std::make_unique<BaseKeyboardHook>(std::move(dom_codes),
+                                                  std::move(callback));
+      case PlatformKeyboardHookTypes::kMedia:
+        return nullptr;
+    }
   }
 
  private:
@@ -302,9 +323,12 @@ class OzonePlatformDrm : public OzonePlatform {
       done_event.Wait();
       DrainReceiverRequests();
     } else {
+      // OzonePlatformDrm owns |drm_thread_proxy_| which owns the DRM thread
+      // this callback is invoked on, using base::Unretained pointer here is
+      // safe.
       auto safe_receiver_request_drainer = CreateSafeOnceCallback(
           base::BindOnce(&OzonePlatformDrm::DrainReceiverRequests,
-                         weak_factory_on_drm_.GetWeakPtr()));
+                         base::Unretained(this)));
       drm_thread_proxy_->StartDrmThread(
           std::move(safe_receiver_request_drainer));
     }
@@ -342,10 +366,10 @@ class OzonePlatformDrm : public OzonePlatform {
   std::unique_ptr<DrmCursor> cursor_;
   std::unique_ptr<EventFactoryEvdev> event_factory_ozone_;
   std::unique_ptr<DrmDisplayHostManager> display_manager_;
-  InitializedHostProperties host_properties_;
+  PlatformProperties platform_properties_;
+  PlatformRuntimeProperties host_properties_;
 
   base::WeakPtrFactory<OzonePlatformDrm> weak_factory_{this};
-  base::WeakPtrFactory<OzonePlatformDrm> weak_factory_on_drm_{this};
   OzonePlatformDrm(const OzonePlatformDrm&) = delete;
   OzonePlatformDrm& operator=(const OzonePlatformDrm&) = delete;
 };

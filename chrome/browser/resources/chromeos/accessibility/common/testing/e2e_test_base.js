@@ -1,16 +1,21 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-GEN_INCLUDE(
-    ['assert_additions.js', 'callback_helper.js', 'common.js', 'doc_utils.js']);
+GEN_INCLUDE([
+  'accessibility_test_base.js',
+  'assert_additions.js',
+  'callback_helper.js',
+  'common.js',
+  'doc_utils.js',
+]);
 
 /**
  * Base test fixture for end to end tests (tests that need a full extension
  * renderer) for accessibility component extensions. These tests run inside of
  * the extension's background page context.
  */
-E2ETestBase = class extends testing.Test {
+E2ETestBase = class extends AccessibilityTestBase {
   constructor() {
     super();
     this.callbackHelper_ = new CallbackHelper(this);
@@ -20,11 +25,20 @@ E2ETestBase = class extends testing.Test {
   /** @override */
   testGenCppIncludes() {
     GEN(`
+  #include "ash/accessibility/accessibility_delegate.h"
+  #include "ash/shell.h"
+  #include "base/functional/bind.h"
+  #include "base/functional/callback.h"
+  #include "base/containers/flat_set.h"
+  #include "chrome/browser/ash/accessibility/accessibility_manager.h"
+  #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
   #include "chrome/browser/speech/extension_api/tts_engine_extension_api.h"
-  #include "chrome/browser/ui/browser.h"
+  #include "chrome/common/extensions/extension_constants.h"
+  #include "content/public/test/browser_test.h"
   #include "content/public/test/browser_test_utils.h"
-  #include "extensions/browser/extension_host.h"
+  #include "extensions/browser/test_extension_console_observer.h"
   #include "extensions/browser/process_manager.h"
+  #include "ui/accessibility/accessibility_switches.h"
       `);
   }
 
@@ -39,34 +53,32 @@ E2ETestBase = class extends testing.Test {
   testGenPostamble() {
     GEN(`
     if (fail_on_console_error) {
-      EXPECT_EQ(0u, console_observer.messages().size())
-          << "Found console.log or console.warn with message: "
+      EXPECT_EQ(0u, console_observer.GetErrorCount())
+          << "Found console.warn or console.error with message: "
           << console_observer.GetMessageAt(0);
     }
     `);
   }
 
-  testGenPreambleCommon(extensionIdName, failOnConsoleError = true) {
+  testGenPreambleCommon(
+      extensionIdName, failOnConsoleError = true, allowedMessages = []) {
+    const messages = allowedMessages.reduce(
+        (accumulator, message) => accumulator + `u"${message}",`, '');
     GEN(`
     WaitForExtension(extension_misc::${extensionIdName}, std::move(load_cb));
 
-    extensions::ExtensionHost* host =
-        extensions::ProcessManager::Get(browser()->profile())
-            ->GetBackgroundHostForExtension(
-                extension_misc::${extensionIdName});
-
     bool fail_on_console_error = ${failOnConsoleError};
-    content::WebContentsConsoleObserver console_observer(host->host_contents());
-    // A11y extensions should not log warnings or errors: these should cause
-    // test failures.
-    auto filter =
-        [](const content::WebContentsConsoleObserver::Message& message) {
-          return message.log_level ==
-              blink::mojom::ConsoleMessageLevel::kWarning ||
-              message.log_level == blink::mojom::ConsoleMessageLevel::kError;
-        };
+    // Convert |allowedMessages| into a C++ set.
+    base::flat_set<std::u16string> allowed_messages({${messages}});
+    extensions::TestExtensionConsoleObserver
+        console_observer(GetProfile(), extension_misc::${extensionIdName},
+        fail_on_console_error);
+    // In most cases, A11y extensions should not log warnings or errors.
+    // However, informational messages may be logged in some cases and should
+    // be specified in |allowed_messages|. All other messages should cause test
+    // failures.
     if (fail_on_console_error) {
-      console_observer.SetFilter(base::BindRepeating(filter));
+      console_observer.SetAllowedErrorMessages(allowed_messages);
     }
     `);
   }
@@ -112,6 +124,22 @@ E2ETestBase = class extends testing.Test {
   }
 
   /**
+   * Waits for the given |eventType| to be fired on |node|.
+   * @param {!chrome.automation.AutomationNode} node
+   * @param {!chrome.automation.EventType} eventType
+   * @param {boolean=} capture
+   */
+  async waitForEvent(node, eventType, capture) {
+    return new Promise(this.newCallback(resolve => {
+      const callback = this.newCallback(() => {
+        node.removeEventListener(eventType, callback, capture);
+        resolve();
+      });
+      node.addEventListener(eventType, callback, capture);
+    }));
+  }
+
+  /**
    * Creates a callback that optionally calls {@code opt_callback} when
    * called.  If this method is called one or more times, then
    * {@code testDone()} will be called when all callbacks have been called.
@@ -127,7 +155,7 @@ E2ETestBase = class extends testing.Test {
   /**
    * Gets the desktop from the automation API and runs |callback|.
    * Arranges to call |testDone()| after |callback| returns.
-   * NOTE: Callbacks created inside |opt_callback| must be wrapped with
+   * NOTE: Callbacks created inside |callback| must be wrapped with
    * |this.newCallback| if passed to asynchronous calls.  Otherwise, the test
    * will be finished prematurely.
    * @param {function(chrome.automation.AutomationNode)} callback
@@ -139,41 +167,66 @@ E2ETestBase = class extends testing.Test {
 
   /**
    * Gets the desktop from the automation API and Launches a new tab with
-   * the given document, and runs |callback| when a load complete fires.
-   * Arranges to call |testDone()| after |callback| returns.
-   * NOTE: Callbacks created inside |callback| must be wrapped with
-   * |this.newCallback| if passed to asynchronous calls.  Otherwise, the test
-   * will be finished prematurely.
+   * the given document, and returns the root web area when a load complete
+   * fires.
    * @param {string|function(): string} doc An HTML snippet, optionally wrapped
    *     inside of a function.
-   * @param {function(chrome.automation.AutomationNode)} callback
-   *     Called with the root web area node once the document is ready.
-   * @param {{url: (string=), returnDesktop: (boolean=)}}
+   * @param {{url: (string=)}}
    *     opt_params
    *           url Optional url to wait for. Defaults to undefined.
+   * @return {chrome.automation.AutomationNode} the root web area node, only
+   *     returned once the document is ready.
    */
-  runWithLoadedTree(doc, callback, opt_params = {}) {
-    callback = this.newCallback(callback);
-    chrome.automation.getDesktop((desktop) => {
+  async runWithLoadedTree(doc, opt_params = {}) {
+    return new Promise(this.newCallback(async resolve => {
+      // Make sure the test doesn't finish until this function has resolved.
+      let callback = this.newCallback(resolve);
+      this.desktop_ = await AsyncUtil.getDesktop();
       const url = opt_params.url || DocUtils.createUrlForDoc(doc);
-      const listener = (event) => {
+
+      // The below block handles opening a url via the chrome.tabs api.
+
+      // Listener for both load complete and focus events that eventually
+      // triggers the test.
+      const listener = async event => {
+        // Navigation has occurred, but we need to ensure the url we want has
+        // loaded.
         if (event.target.root.url !== url || !event.target.root.docLoaded) {
-          return;
+          return;  // exit listener.
         }
 
-        desktop.removeEventListener('focus', listener, true);
-        desktop.removeEventListener('loadComplete', listener, true);
-        callback && callback(event.target.root);
-        callback = null;
-      };
+        // Finally, when we get here, we've successfully navigated to
+        // the |url|.
+        this.desktop_.removeEventListener('focus', listener, true);
+        this.desktop_.removeEventListener('loadComplete', listener, true);
 
-      this.desktop_ = desktop;
-      desktop.addEventListener('focus', listener, true);
-      desktop.addEventListener('loadComplete', listener, true);
+        if (callback) {
+          callback(event.target.root);
+        }
+        // Avoid calling |callback| twice (which would cause the test to fail).
+        callback = null;
+      };  // end listener.
+
+      // Setup the listener above for focus and load complete listening.
+      this.desktop_.addEventListener('focus', listener, true);
+      this.desktop_.addEventListener('loadComplete', listener, true);
 
       const createParams = {active: true, url};
       chrome.tabs.create(createParams);
-    });
+    }));
+  }
+
+  /**
+   * Gets the desktop from the automation API and launches new tabs with
+   * the given url, returns when load complete has fired on each document.
+   * @param {Array<string>} urls HTML snippets to open in the URLs.
+   * @return {!Promise}
+   */
+  async runWithLoadedTabs(urls) {
+    console.assert(urls.length !== 0);
+    for (const url of urls) {
+      await this.runWithLoadedTree(url);
+    }
   }
 
   /**
@@ -185,8 +238,8 @@ E2ETestBase = class extends testing.Test {
    */
   runWithLoadedOptionsPage(callback, matchUrlRegExp = /options.html/) {
     callback = this.newCallback(callback);
-    chrome.automation.getDesktop((desktop) => {
-      const listener = (event) => {
+    chrome.automation.getDesktop(desktop => {
+      const listener = event => {
         if (!matchUrlRegExp.test(event.target.docUrl) ||
             !event.target.docLoaded) {
           return;
@@ -226,12 +279,108 @@ E2ETestBase = class extends testing.Test {
         treeWalker.next().node, 'Found more than one ' + nodeDescription + '.');
     return node;
   }
+
+  /**
+   * Async function to get a preference value from Settings.
+   * @param {string} name
+   * @return {!Promise<*>}
+   */
+  async getPref(name) {
+    return new Promise(resolve => {
+      chrome.settingsPrivate.getPref(name, ret => {
+        resolve(ret);
+      });
+    });
+  }
+
+  /**
+   * A simple deep equality test of two values by comparing their JSON
+   * representation.
+   */
+  deepEqual_(val1, val2) {
+    return JSON.stringify(val1) === JSON.stringify(val2);
+  }
+
+  /**
+   * Async function to set a preference value in Settings. It ensures that the
+   * new pref value is persisted and `settingsPrivate.onPrefsChanged` event is
+   * fired if the value is changed.
+   *
+   * Waiting for `settingsPrivate.onPrefsChanged` event is needed because the
+   * event is not guaranteed to happen after a `settingsPrivate.setPref` call
+   * and a `settingsPrivate.getPref` call. When it happens, it breaks the test
+   * code like the following pattern:
+   *
+   * ```
+   *   await this.setPref(somePref, someValue);
+   *   assertEquals(class.memberBoundToPref, someValue);
+   * ```
+   *
+   * `assertEquals` depends on `settingsPrivate.onPrefsChanged` event to update
+   *  `class.memberBoundToPref` to pass. If the event does not happen, it fails.
+   *
+   *
+   * See https://crbug.com/439995191#comment7
+   *
+   * @param {string} name
+   * @return {!Promise}
+   */
+  async setPref(name, value) {
+    return new Promise(async resolve => {
+      // If the pref value is not changed, early out.
+      const existing = await (this.getPref(name));
+      if (this.deepEqual_(existing.value, value)) {
+        assertEquals(existing.key, name);
+        if (typeof (value) === 'object') {
+          assertObjectEquals(value, existing.value);
+        } else {
+          assertEquals(value, existing.value);
+        }
+        resolve();
+        return;
+      }
+
+      // Otherwise, `resolve()` after `onPrefsChanged` event has fired and
+      // setPref callback has been invoked.
+      let onPrefsChangedFired = false;
+      let setPrefCallbackCalled = false;
+
+      const maybeResolve = function() {
+        if (!onPrefsChangedFired || !setPrefCallbackCalled) {
+          return;
+        }
+
+        resolve();
+      };
+
+      const onPrefChanged = function(prefs) {
+        prefs.forEach(pref => {
+          if (pref.key === name) {
+            onPrefsChangedFired = true;
+            chrome.settingsPrivate.onPrefsChanged.removeListener(onPrefChanged);
+            maybeResolve();
+            return;
+          }
+        });
+      };
+      chrome.settingsPrivate.onPrefsChanged.addListener(onPrefChanged);
+
+      chrome.settingsPrivate.setPref(name, value, undefined, async () => {
+        // Wait for changes to fully propagate.
+        const result = await (this.getPref(name));
+        assertEquals(result.key, name);
+        if (typeof (value) === 'object') {
+          assertObjectEquals(value, result.value);
+        } else {
+          assertEquals(value, result.value);
+        }
+
+        setPrefCallbackCalled = true;
+        maybeResolve();
+      });
+    });
+  }
 };
 
 /** @override */
 E2ETestBase.prototype.isAsync = true;
-/**
- * @override
- * No UI in the background context.
- */
-E2ETestBase.prototype.runAccessibilityChecks = false;

@@ -1,22 +1,27 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/quirks/quirks_client.h"
 
+#include <optional>
+#include <string>
+
 #include "base/base64.h"
-#include "base/bind.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/json/json_reader.h"
+#include "base/strings/escape.h"
 #include "base/strings/stringprintf.h"
-#include "base/task_runner_util.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/quirks/quirks_manager.h"
 #include "components/version_info/version_info.h"
-#include "net/base/escape.h"
 #include "net/base/load_flags.h"
+#include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
+#include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/simple_url_loader.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 
 namespace quirks {
 
@@ -39,13 +44,13 @@ const net::BackoffEntry::Policy kDefaultBackoffPolicy = {
 };
 
 bool WriteIccFile(const base::FilePath file_path, const std::string& data) {
-  int bytes_written = base::WriteFile(file_path, data.data(), data.length());
-  if (bytes_written == -1)
+  if (!base::WriteFile(file_path, data)) {
     PLOG(ERROR) << "Write failed: " << file_path.value();
-  else
-    VLOG(1) << bytes_written << "bytes written to: " << file_path.value();
+    return false;
+  }
 
-  return (bytes_written != -1);
+  VLOG(1) << data.size() << "bytes written to: " << file_path.value();
+  return true;
 }
 
 }  // namespace
@@ -54,36 +59,38 @@ bool WriteIccFile(const base::FilePath file_path, const std::string& data) {
 // QuirksClient
 
 QuirksClient::QuirksClient(int64_t product_id,
-                           const std::string& display_name,
+                           std::string display_name,
+                           std::string api_key,
                            RequestFinishedCallback on_request_finished,
                            QuirksManager* manager)
     : product_id_(product_id),
-      display_name_(display_name),
+      display_name_(std::move(display_name)),
+      api_key_(std::move(api_key)),
       on_request_finished_(std::move(on_request_finished)),
       manager_(manager),
-      icc_path_(manager->delegate()->GetDisplayProfileDirectory().Append(
-          IdToFileName(product_id))),
+      icc_path_(
+          manager_->display_profile_path().Append(IdToFileName(product_id))),
       backoff_entry_(&kDefaultBackoffPolicy) {}
 
-QuirksClient::~QuirksClient() {}
+QuirksClient::~QuirksClient() = default;
 
 void QuirksClient::StartDownload() {
   DCHECK(thread_checker_.CalledOnValidThread());
 
   // URL of icc file on Quirks Server.
-  int major_version = atoi(version_info::GetVersionNumber().c_str());
+  int major_version = version_info::GetMajorVersionNumberAsInt();
   std::string url = base::StringPrintf(
       kQuirksUrlFormat, IdToHexString(product_id_).c_str(), major_version);
 
   if (!display_name_.empty()) {
-    url +=
-        "display_name=" + net::EscapeQueryParamValue(display_name_, true) + "&";
+    url += "display_name=" + base::EscapeQueryParamValue(display_name_, true) +
+           "&";
   }
 
   VLOG(2) << "Preparing to download\n  " << url << "\nto file "
           << icc_path_.value();
 
-  url += "key=" + manager_->delegate()->GetApiKey();
+  url += "key=" + api_key_;
 
   auto resource_request = std::make_unique<network::ResourceRequest>();
   resource_request->url = GURL(url);
@@ -121,7 +128,7 @@ void QuirksClient::StartDownload() {
 }
 
 void QuirksClient::OnDownloadComplete(
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   DCHECK(thread_checker_.CalledOnValidThread());
 
   // Take ownership of the loader in this scope.
@@ -162,9 +169,8 @@ void QuirksClient::OnDownloadComplete(
     return;
   }
 
-  base::PostTaskAndReplyWithResult(
-      manager_->task_runner(), FROM_HERE,
-      base::BindOnce(&WriteIccFile, icc_path_, data),
+  manager_->task_runner()->PostTaskAndReplyWithResult(
+      FROM_HERE, base::BindOnce(&WriteIccFile, icc_path_, data),
       base::BindOnce(&QuirksClient::Shutdown, weak_ptr_factory_.GetWeakPtr()));
 }
 
@@ -187,16 +193,20 @@ void QuirksClient::Retry() {
 }
 
 bool QuirksClient::ParseResult(const std::string& result, std::string* data) {
-  std::string data64;
-  const base::DictionaryValue* dict;
-  std::unique_ptr<base::Value> json = base::JSONReader::ReadDeprecated(result);
-  if (!json || !json->GetAsDictionary(&dict) ||
-      !dict->GetString("icc", &data64)) {
+  std::optional<base::DictValue> maybe_json =
+      base::JSONReader::ReadDict(result, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!maybe_json) {
     VLOG(1) << "Failed to parse JSON icc data";
     return false;
   }
 
-  if (!base::Base64Decode(data64, data)) {
+  std::string* data64 = maybe_json->FindString("icc");
+  if (!data64) {
+    VLOG(1) << "Missing icc data";
+    return false;
+  }
+
+  if (!base::Base64Decode(*data64, data)) {
     VLOG(1) << "Failed to decode Base64 icc data";
     return false;
   }

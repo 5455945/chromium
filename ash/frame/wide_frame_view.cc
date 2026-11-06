@@ -1,26 +1,32 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/frame/wide_frame_view.h"
 
-#include "ash/frame/header_view.h"
-#include "ash/frame/non_client_frame_view_ash.h"
+#include <memory>
+
+#include "ash/frame/frame_view_ash.h"
 #include "ash/public/cpp/window_properties.h"
 #include "ash/screen_util.h"
 #include "ash/shell.h"
 #include "ash/wm/overview/overview_controller.h"
 #include "ash/wm/window_state.h"
 #include "ash/wm/wm_event.h"
-#include "base/bind.h"
+#include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/metrics/user_metrics.h"
 #include "chromeos/ui/frame/caption_buttons/frame_caption_button_container_view.h"
 #include "chromeos/ui/frame/default_frame_header.h"
+#include "chromeos/ui/frame/header_view.h"
 #include "chromeos/ui/frame/immersive/immersive_fullscreen_controller.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_targeter.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
+#include "ui/events/types/event_type.h"
+#include "ui/views/view_tracker.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/caption_button_layout_constants.h"
 
@@ -31,16 +37,24 @@ using ::chromeos::ImmersiveFullscreenController;
 
 class WideFrameTargeter : public aura::WindowTargeter {
  public:
-  explicit WideFrameTargeter(HeaderView* header_view)
-      : header_view_(header_view) {}
+  explicit WideFrameTargeter(chromeos::HeaderView* header_view) {
+    header_view_tracker_.SetView(header_view);
+  }
+
+  WideFrameTargeter(const WideFrameTargeter&) = delete;
+  WideFrameTargeter& operator=(const WideFrameTargeter&) = delete;
+
   ~WideFrameTargeter() override = default;
 
   // aura::WindowTargeter:
   bool GetHitTestRects(aura::Window* target,
                        gfx::Rect* hit_test_rect_mouse,
                        gfx::Rect* hit_test_rect_touch) const override {
-    if (header_view_->in_immersive_mode() && !header_view_->is_revealed()) {
-      aura::Window* source = header_view_->GetWidget()->GetNativeWindow();
+    auto* header_view =
+        views::AsViewClass<chromeos::HeaderView>(header_view_tracker_.view());
+    CHECK(header_view);
+    if (header_view->in_immersive_mode() && !header_view->is_revealed()) {
+      aura::Window* source = header_view->GetWidget()->GetNativeWindow();
       *hit_test_rect_mouse = source->bounds();
       aura::Window::ConvertRectToTarget(source, target->parent(),
                                         hit_test_rect_mouse);
@@ -54,8 +68,7 @@ class WideFrameTargeter : public aura::WindowTargeter {
   }
 
  private:
-  HeaderView* header_view_;
-  DISALLOW_COPY_AND_ASSIGN(WideFrameTargeter);
+  views::ViewTracker header_view_tracker_;
 };
 
 }  // namespace
@@ -89,44 +102,18 @@ void WideFrameView::SetCaptionButtonModel(
 WideFrameView::WideFrameView(views::Widget* target)
     : target_(target),
       frame_context_menu_controller_(
-          std::make_unique<FrameContextMenuController>(target_, this)) {
-  // WideFrameView is owned by its client, not by Views.
-  SetOwnedByWidget(false);
-
+          std::make_unique<chromeos::FrameContextMenuController>(target_,
+                                                                 this)) {
   aura::Window* target_window = target->GetNativeWindow();
   target_window->AddObserver(this);
   // Use the HeaderView itself as a frame view because WideFrameView is
   // is the frame only.
-  header_view_ = new HeaderView(target, /*frame view=*/nullptr);
-  AddChildView(header_view_);
+  header_view_ = AddChildView(
+      std::make_unique<chromeos::HeaderView>(target, /*frame view=*/nullptr));
+  header_view_->Init();
   GetTargetHeaderView()->SetShouldPaintHeader(false);
   header_view_->set_context_menu_controller(
       frame_context_menu_controller_.get());
-
-  views::Widget::InitParams params;
-  params.type = views::Widget::InitParams::TYPE_POPUP;
-  params.delegate = this;
-  params.bounds = GetFrameBounds(target);
-  params.name = "WideFrameView";
-  params.parent = target->GetNativeWindow();
-  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
-  // Setup Opacity Control.
-  // WideFrame should be used only when the rounded corner is not necessary.
-  params.opacity = views::Widget::InitParams::WindowOpacity::kOpaque;
-  auto widget = std::make_unique<views::Widget>();
-  widget->Init(std::move(params));
-  widget_ = std::move(widget);
-
-  aura::Window* window = widget_->GetNativeWindow();
-  // Overview normally clips the caption container which exists on the same
-  // window. But this WideFrameView exists as a separate window, which we hide
-  // in overview using the `kHideInOverviewKey` property. However, we still want
-  // to show it in the desks mini_views.
-  window->SetProperty(kHideInOverviewKey, true);
-  window->SetProperty(kForceVisibleInMiniViewKey, true);
-  window->SetEventTargeter(std::make_unique<WideFrameTargeter>(header_view()));
-  set_owned_by_client();
-  WindowState::Get(window)->set_allow_set_bounds_direct(true);
 
   paint_as_active_subscription_ =
       target_->RegisterPaintAsActiveChangedCallback(base::BindRepeating(
@@ -135,17 +122,16 @@ WideFrameView::WideFrameView(views::Widget* target)
 }
 
 WideFrameView::~WideFrameView() {
-  if (widget_)
-    widget_->CloseNow();
+  header_view_->set_context_menu_controller(nullptr);
   if (target_) {
-    HeaderView* target_header_view = GetTargetHeaderView();
+    chromeos::HeaderView* target_header_view = GetTargetHeaderView();
     target_header_view->SetShouldPaintHeader(true);
     target_header_view->GetFrameHeader()->UpdateFrameHeaderKey();
     target_->GetNativeWindow()->RemoveObserver(this);
   }
 }
 
-void WideFrameView::Layout() {
+void WideFrameView::Layout(PassKey) {
   int onscreen_height = header_view_->GetPreferredOnScreenHeight();
   if (onscreen_height == 0 || !GetVisible()) {
     header_view_->SetVisible(false);
@@ -156,9 +142,29 @@ void WideFrameView::Layout() {
   }
 }
 
+void WideFrameView::AddedToWidget() {
+  aura::Window* window = GetWidget()->GetNativeWindow();
+  // Overview normally clips the caption container which exists on the same
+  // window. But this WideFrameView exists as a separate window, which we hide
+  // in overview using the `kHideInOverviewKey` property. However, we still want
+  // to show it in the desks mini_views.
+  window->SetProperty(kHideInOverviewKey, true);
+  window->SetProperty(kForceVisibleInMiniViewKey, true);
+  window->SetEventTargeter(std::make_unique<WideFrameTargeter>(header_view()));
+  WindowState::Get(window)->set_allow_set_bounds_direct(true);
+}
+
+void WideFrameView::RemovedFromWidget() {
+  aura::Window* window = GetWidget()->GetNativeWindow();
+  if (window) {
+    window->SetEventTargeter(nullptr);
+  }
+}
+
 void WideFrameView::OnMouseEvent(ui::MouseEvent* event) {
   if (event->IsOnlyLeftMouseButton()) {
-    if ((event->flags() & ui::EF_IS_DOUBLE_CLICK)) {
+    if ((event->flags() & ui::EF_IS_DOUBLE_CLICK) &&
+        event->type() == ui::EventType::kMousePressed) {
       base::RecordAction(
           base::UserMetricsAction("Caption_ClickTogglesMaximize"));
       const WMEvent wm_event(WM_EVENT_TOGGLE_MAXIMIZE_CAPTION);
@@ -175,10 +181,19 @@ void WideFrameView::OnWindowDestroying(aura::Window* window) {
 
 void WideFrameView::OnDisplayMetricsChanged(const display::Display& display,
                                             uint32_t changed_metrics) {
-  display::Screen* screen = display::Screen::GetScreen();
+  aura::Window* target_window = target_->GetNativeWindow();
+  // The target window is detached from the tree when the window is being moved
+  // to another desks, or another display, and it may trigger the display
+  // metrics change if the target window is in fullscreen. Do not try to layout
+  // in this case. The it'll be layout when the window is added back.
+  // (crbug.com/1267128)
+  if (!target_window->GetRootWindow())
+    return;
+
+  display::Screen* screen = display::Screen::Get();
   if (screen->GetDisplayNearestWindow(target_->GetNativeWindow()).id() !=
           display.id() ||
-      !widget_) {
+      !GetWidget()) {
     return;
   }
   DCHECK(target_);
@@ -186,8 +201,7 @@ void WideFrameView::OnDisplayMetricsChanged(const display::Display& display,
   // Ignore if this is called when the targe window state is nor proper
   // state. This can happen when switching the state to other states, in which
   // case, the wide frame will be removed.
-  if (!WindowState::Get(target_->GetNativeWindow())
-           ->IsMaximizedOrFullscreenOrPinned()) {
+  if (!WindowState::Get(target_window)->IsMaximizedOrFullscreenOrPinned()) {
     return;
   }
 
@@ -204,17 +218,17 @@ void WideFrameView::OnImmersiveRevealEnded() {
 
 void WideFrameView::OnImmersiveFullscreenEntered() {
   header_view_->OnImmersiveFullscreenEntered();
-  widget_->GetNativeWindow()->SetTransparent(true);
+  GetWidget()->GetNativeWindow()->SetTransparent(true);
   if (target_)
     GetTargetHeaderView()->OnImmersiveFullscreenEntered();
 }
 
 void WideFrameView::OnImmersiveFullscreenExited() {
   header_view_->OnImmersiveFullscreenExited();
-  widget_->GetNativeWindow()->SetTransparent(false);
+  GetWidget()->GetNativeWindow()->SetTransparent(false);
   if (target_)
     GetTargetHeaderView()->OnImmersiveFullscreenExited();
-  Layout();
+  DeprecatedLayoutImmediately();
 }
 
 void WideFrameView::SetVisibleFraction(double visible_fraction) {
@@ -235,9 +249,9 @@ bool WideFrameView::ShouldShowContextMenu(
       gfx::Rect(point_in_header_coords, gfx::Size(1, 1)));
 }
 
-HeaderView* WideFrameView::GetTargetHeaderView() {
-  auto* frame_view = static_cast<NonClientFrameViewAsh*>(
-      target_->non_client_view()->frame_view());
+chromeos::HeaderView* WideFrameView::GetTargetHeaderView() {
+  auto* frame_view =
+      static_cast<FrameViewAsh*>(target_->non_client_view()->frame_view());
   return frame_view->GetHeaderView();
 }
 

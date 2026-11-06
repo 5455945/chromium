@@ -1,13 +1,15 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chromecast/media/cma/test/frame_generator_for_test.h"
 
 #include <stdint.h>
+
 #include <utility>
 
-#include "base/cxx17_backports.h"
+#include "base/compiler_specific.h"
+#include "base/memory/scoped_refptr.h"
 #include "chromecast/media/api/decoder_buffer_base.h"
 #include "chromecast/media/cma/base/decoder_buffer_adapter.h"
 #include "media/base/decoder_buffer.h"
@@ -55,21 +57,20 @@ scoped_refptr<DecoderBufferBase> FrameGeneratorForTest::Generate() {
         new DecoderBufferAdapter(::media::DecoderBuffer::CreateEOSBuffer()));
   }
 
-  scoped_refptr< ::media::DecoderBuffer> buffer(
-      new ::media::DecoderBuffer(frame_spec.size));
+  auto buffer = base::MakeRefCounted<::media::DecoderBuffer>(frame_spec.size);
 
   // Timestamp.
   buffer->set_timestamp(frame_spec.timestamp);
 
   // Generate the frame data.
   for (size_t k = 0; k < frame_spec.size; k++) {
-    buffer->writable_data()[k] = total_buffer_size_ & 0xff;
+    UNSAFE_TODO(buffer->writable_data()[k]) = total_buffer_size_ & 0xff;
     total_buffer_size_++;
   }
 
   // Generate the decrypt configuration.
   if (frame_spec.has_decrypt_config) {
-    uint32_t frame_size = buffer->data_size();
+    uint32_t frame_size = buffer->size();
     uint32_t chunk_size = 1;
     std::vector< ::media::SubsampleEntry> subsamples;
     while (frame_size > 0) {
@@ -99,8 +100,8 @@ scoped_refptr<DecoderBufferBase> FrameGeneratorForTest::Generate() {
 
     std::unique_ptr<::media::DecryptConfig> decrypt_config =
         ::media::DecryptConfig::CreateCencConfig(
-            std::string(key_id, base::size(key_id)),
-            std::string(iv, base::size(iv)), subsamples);
+            std::string(key_id, std::size(key_id)),
+            std::string(iv, std::size(iv)), subsamples);
     buffer->set_decrypt_config(std::move(decrypt_config));
   }
 

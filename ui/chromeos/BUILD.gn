@@ -1,12 +1,11 @@
-# Copyright 2014 The Chromium Authors. All rights reserved.
+# Copyright 2014 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
 import("//build/config/ui.gni")
 import("//testing/test.gni")
 
-assert(is_chromeos_ash)
+assert(is_chromeos)
 
 component("chromeos") {
   output_name = "ui_chromeos"
@@ -22,10 +21,11 @@ component("chromeos") {
   deps = [
     "//ash/constants",
     "//base",
-    "//base/third_party/dynamic_annotations",
+    "//build:chromeos_buildflags",
+    "//chromeos/ash/components/network",
+    "//chromeos/constants",
     "//chromeos/dbus/power",
     "//chromeos/dbus/power:power_manager_proto",
-    "//chromeos/network:network",
     "//components/device_event_log",
     "//mojo/public/cpp/bindings",
     "//services/device/public/mojom",
@@ -34,7 +34,7 @@ component("chromeos") {
     "//ui/chromeos/strings",
     "//ui/events",
     "//ui/events:gesture_detection",
-    "//ui/events/devices:devices",
+    "//ui/events/devices",
   ]
 }
 

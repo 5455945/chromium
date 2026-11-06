@@ -34,12 +34,13 @@
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_midi_options.h"
 #include "third_party/blink/renderer/core/frame/navigator.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/supplementable.h"
 
 namespace blink {
 
 class ExceptionState;
+class MIDIAccess;
 class Navigator;
 
 class NavigatorWebMIDI final : public GarbageCollected<NavigatorWebMIDI>,
@@ -48,13 +49,14 @@ class NavigatorWebMIDI final : public GarbageCollected<NavigatorWebMIDI>,
   static const char kSupplementName[];
 
   static NavigatorWebMIDI& From(Navigator&);
-  static ScriptPromise requestMIDIAccess(ScriptState*,
-                                         Navigator&,
-                                         const MIDIOptions*,
-                                         ExceptionState& exception_state);
-  ScriptPromise requestMIDIAccess(ScriptState*,
-                                  const MIDIOptions*,
-                                  ExceptionState& exception_state);
+  static ScriptPromise<MIDIAccess> requestMIDIAccess(
+      ScriptState*,
+      Navigator&,
+      const MIDIOptions*,
+      ExceptionState& exception_state);
+  ScriptPromise<MIDIAccess> requestMIDIAccess(ScriptState*,
+                                              const MIDIOptions*,
+                                              ExceptionState& exception_state);
 
   explicit NavigatorWebMIDI(Navigator&);
 

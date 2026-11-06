@@ -1,4 +1,4 @@
-# Copyright 2014 The Chromium Authors. All rights reserved.
+# Copyright 2014 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -42,6 +42,9 @@ static_library("hunspell") {
     "src/hunspell/hunspell.cxx",
     "src/hunspell/hunspell.h",
     "src/hunspell/hunspell.hxx",
+    "src/hunspell/hunspelltrace.cxx",
+    "src/hunspell/hunspelltrace.hxx",
+    "src/hunspell/hunversion.h",
     "src/hunspell/hunzip.cxx",
     "src/hunspell/hunzip.hxx",
     "src/hunspell/langnum.hxx",
@@ -65,10 +68,14 @@ static_library("hunspell") {
   ]
   public_configs = [ ":hunspell_config" ]
 
-  defines = [ "OPENOFFICEORG" ]
+  defines = [
+    "OPENOFFICEORG",
+    "MAXSUGGESTION=5",
+  ]
 
   deps = [
     "//base",
+    "//crypto",
     "//third_party/icu",
   ]
 
@@ -116,7 +123,7 @@ fuzzer_test("hunspell_spell_fuzzer") {
   ]
   deps = [
     ":hunspell",
-    "//base:base",
+    "//base",
   ]
 
   # This is a dictionary for the fuzzer, not a spellcheck dictionary.
@@ -130,7 +137,7 @@ fuzzer_test("hunspell_suggest_fuzzer") {
   ]
   deps = [
     ":hunspell",
-    "//base:base",
+    "//base",
   ]
 
   # This is a dictionary for the fuzzer, not a spellcheck dictionary.
@@ -141,7 +148,8 @@ fuzzer_test("bdict_fuzzer") {
   sources = [ "fuzz/bdict_fuzzer.cc" ]
   deps = [
     ":hunspell",
-    "//base:base",
+    "//base",
+    "//testing/libfuzzer:libfuzzer_base_wrappers",
   ]
   seed_corpus = "fuzz/bdict_corpus"
 }

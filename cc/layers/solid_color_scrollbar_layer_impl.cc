@@ -1,12 +1,14 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "cc/layers/solid_color_scrollbar_layer_impl.h"
 
+#include <algorithm>
+#include <memory>
+
 #include "base/memory/ptr_util.h"
-#include "cc/trees/layer_tree_impl.h"
-#include "cc/trees/layer_tree_settings.h"
+#include "cc/input/scroll_utils.h"
 #include "cc/trees/occlusion.h"
 #include "components/viz/common/quads/solid_color_draw_quad.h"
 
@@ -26,8 +28,12 @@ SolidColorScrollbarLayerImpl::Create(LayerTreeImpl* tree_impl,
 
 SolidColorScrollbarLayerImpl::~SolidColorScrollbarLayerImpl() = default;
 
+mojom::LayerType SolidColorScrollbarLayerImpl::GetLayerType() const {
+  return mojom::LayerType::kSolidColorScrollbar;
+}
+
 std::unique_ptr<LayerImpl> SolidColorScrollbarLayerImpl::CreateLayerImpl(
-    LayerTreeImpl* tree_impl) {
+    LayerTreeImpl* tree_impl) const {
   return SolidColorScrollbarLayerImpl::Create(
       tree_impl, id(), orientation(), thumb_thickness_, track_start_,
       is_left_side_vertical_scrollbar());
@@ -46,37 +52,42 @@ SolidColorScrollbarLayerImpl::SolidColorScrollbarLayerImpl(
                              is_left_side_vertical_scrollbar,
                              /*is_overlay*/ true),
       thumb_thickness_(thumb_thickness),
-      track_start_(track_start),
-      color_(tree_impl->settings().solid_color_scrollbar_color) {}
+      track_start_(track_start) {}
 
-void SolidColorScrollbarLayerImpl::PushPropertiesTo(LayerImpl* layer) {
-  ScrollbarLayerImplBase::PushPropertiesTo(layer);
-  DCHECK(!layer->HitTestable());
+void SolidColorScrollbarLayerImpl::CopyPropertiesTo(LayerImpl* layer) const {
+  ScrollbarLayerImplBase::CopyPropertiesTo(layer);
+  static_cast<SolidColorScrollbarLayerImpl*>(layer)->set_color(color_);
+}
+
+void SolidColorScrollbarLayerImpl::set_color(SkColor4f color) {
+  if (color_ == color) {
+    return;
+  }
+  color_ = color;
+  NoteLayerPropertyChanged();
 }
 
 int SolidColorScrollbarLayerImpl::ThumbThickness() const {
   if (thumb_thickness_ != -1)
     return thumb_thickness_;
 
-  if (orientation() == ScrollbarOrientation::HORIZONTAL)
+  if (orientation() == ScrollbarOrientation::kHorizontal) {
     return bounds().height();
-  else
+  } else {
     return bounds().width();
+  }
 }
 
-int SolidColorScrollbarLayerImpl::ThumbLength() const {
-  float thumb_length = TrackLength();
-  if (scroll_layer_length())
-    thumb_length *= clip_layer_length() / scroll_layer_length();
-
-  return std::max(static_cast<int>(thumb_length), ThumbThickness());
+int SolidColorScrollbarLayerImpl::MinimumThumbLength() const {
+  return ThumbThickness();
 }
 
 float SolidColorScrollbarLayerImpl::TrackLength() const {
-  if (orientation() == ScrollbarOrientation::HORIZONTAL)
+  if (orientation() == ScrollbarOrientation::kHorizontal) {
     return bounds().width() - TrackStart() * 2;
-  else
+  } else {
     return bounds().height() + vertical_adjust() - TrackStart() * 2;
+  }
 }
 
 int SolidColorScrollbarLayerImpl::TrackStart() const { return track_start_; }
@@ -86,6 +97,7 @@ bool SolidColorScrollbarLayerImpl::IsThumbResizable() const {
 }
 
 void SolidColorScrollbarLayerImpl::AppendQuads(
+    const AppendQuadsContext& context,
     viz::CompositorRenderPass* render_pass,
     AppendQuadsData* append_quads_data) {
   viz::SharedQuadState* shared_quad_state =
@@ -103,12 +115,8 @@ void SolidColorScrollbarLayerImpl::AppendQuads(
     return;
 
   auto* quad = render_pass->CreateAndAppendDrawQuad<viz::SolidColorDrawQuad>();
-  quad->SetNew(
-      shared_quad_state, thumb_quad_rect, visible_quad_rect, color_, false);
-}
-
-const char* SolidColorScrollbarLayerImpl::LayerTypeAsString() const {
-  return "cc::SolidColorScrollbarLayerImpl";
+  quad->SetNew(shared_quad_state, thumb_quad_rect, visible_quad_rect, color_,
+               false);
 }
 
 }  // namespace cc

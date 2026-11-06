@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -38,8 +38,8 @@ struct PermissionUsageSession {
   // usage started.
   bool had_focus;
 
-  bool operator==(const PermissionUsageSession& other) const;
-  bool operator!=(const PermissionUsageSession& other) const;
+  friend bool operator==(const PermissionUsageSession&,
+                         const PermissionUsageSession&) = default;
 
   // Checks if the session satisfies the following constraints:
   // 1) `origin` is not opaque;

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -29,6 +29,7 @@ class AnyWidgetObserverSingleton {
   void OnAnyWidgetShown(Widget* widget);
   void OnAnyWidgetHidden(Widget* widget);
   void OnAnyWidgetClosing(Widget* widget);
+  void OnAnyWidgetActivated(Widget* widget);
 
   void AddObserver(AnyWidgetObserver* observer);
   void RemoveObserver(AnyWidgetObserver* observer);
@@ -39,7 +40,8 @@ class AnyWidgetObserverSingleton {
   AnyWidgetObserverSingleton();
   ~AnyWidgetObserverSingleton();
 
-  base::ObserverList<AnyWidgetObserver> observers_;
+  // Changing one widget's state may change other widgets' states.
+  base::ReentrantObserverList<AnyWidgetObserver> observers_;
 };
 
 }  // namespace internal

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,11 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/token.h"
+#include "base/trace_event/trace_event.h"
+#include "media/capture/mojom/video_capture_types.mojom.h"
 
 namespace content {
 
@@ -32,12 +35,12 @@ ServiceLaunchedVideoCaptureDevice::ServiceLaunchedVideoCaptureDevice(
 }
 
 ServiceLaunchedVideoCaptureDevice::~ServiceLaunchedVideoCaptureDevice() {
-  DCHECK(sequence_checker_.CalledOnValidSequence());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 }
 
 void ServiceLaunchedVideoCaptureDevice::GetPhotoState(
     media::VideoCaptureDevice::GetPhotoStateCallback callback) {
-  DCHECK(sequence_checker_.CalledOnValidSequence());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   subscription_->GetPhotoState(base::BindOnce(
       &ServiceLaunchedVideoCaptureDevice::OnGetPhotoStateResponse,
       base::Unretained(this), std::move(callback)));
@@ -46,7 +49,7 @@ void ServiceLaunchedVideoCaptureDevice::GetPhotoState(
 void ServiceLaunchedVideoCaptureDevice::SetPhotoOptions(
     media::mojom::PhotoSettingsPtr settings,
     media::VideoCaptureDevice::SetPhotoOptionsCallback callback) {
-  DCHECK(sequence_checker_.CalledOnValidSequence());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   subscription_->SetPhotoOptions(
       std::move(settings),
       base::BindOnce(
@@ -56,7 +59,7 @@ void ServiceLaunchedVideoCaptureDevice::SetPhotoOptions(
 
 void ServiceLaunchedVideoCaptureDevice::TakePhoto(
     media::VideoCaptureDevice::TakePhotoCallback callback) {
-  DCHECK(sequence_checker_.CalledOnValidSequence());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   TRACE_EVENT_INSTANT0(TRACE_DISABLED_BY_DEFAULT("video_and_image_capture"),
                        "ServiceLaunchedVideoCaptureDevice::TakePhoto",
                        TRACE_EVENT_SCOPE_PROCESS);
@@ -66,43 +69,48 @@ void ServiceLaunchedVideoCaptureDevice::TakePhoto(
 }
 
 void ServiceLaunchedVideoCaptureDevice::MaybeSuspendDevice() {
-  DCHECK(sequence_checker_.CalledOnValidSequence());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   subscription_->Suspend(base::DoNothing());
 }
 
 void ServiceLaunchedVideoCaptureDevice::ResumeDevice() {
-  DCHECK(sequence_checker_.CalledOnValidSequence());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   subscription_->Resume();
 }
 
+void ServiceLaunchedVideoCaptureDevice::ApplySubCaptureTarget(
+    media::mojom::SubCaptureTargetType type,
+    const base::Token& target,
+    uint32_t sub_capture_target_version,
+    base::OnceCallback<void(media::mojom::ApplySubCaptureTargetResult)>
+        callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // TODO(crbug.com/40203554): Implement if necessary.
+  std::move(callback).Run(
+      media::mojom::ApplySubCaptureTargetResult::kNotImplemented);
+}
+
 void ServiceLaunchedVideoCaptureDevice::RequestRefreshFrame() {
-  DCHECK(sequence_checker_.CalledOnValidSequence());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   // Nothing to do here. The video capture service does not support refresh
   // frames.
 }
 
-void ServiceLaunchedVideoCaptureDevice::SetDesktopCaptureWindowIdAsync(
-    gfx::NativeViewId window_id,
-    base::OnceClosure done_cb) {
-  // This method should only be called for desktop capture devices.
-  // The video_capture Mojo service does not support desktop capture devices
-  // (yet) and should not be used for it.
-  NOTREACHED();
+void ServiceLaunchedVideoCaptureDevice::InvalidateBuffers() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  subscription_->InvalidateBuffers();
 }
 
 void ServiceLaunchedVideoCaptureDevice::OnUtilizationReport(
-    int frame_feedback_id,
     media::VideoCaptureFeedback feedback) {
-  DCHECK(sequence_checker_.CalledOnValidSequence());
-  if (feedback != last_feedback_) {
-    subscription_->ProcessFeedback(feedback);
-    last_feedback_ = feedback;
-  }
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  subscription_->ProcessFeedback(feedback);
 }
 
 void ServiceLaunchedVideoCaptureDevice::
     OnLostConnectionToSourceOrSubscription() {
-  DCHECK(sequence_checker_.CalledOnValidSequence());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   source_.reset();
   subscription_.reset();
   std::move(connection_lost_cb_).Run();

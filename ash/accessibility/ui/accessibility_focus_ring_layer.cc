@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,11 @@
 
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/shell.h"
-#include "base/bind.h"
+#include "base/check.h"
+#include "base/functional/bind.h"
 #include "third_party/skia/include/core/SkPaint.h"
 #include "third_party/skia/include/core/SkPath.h"
-#include "third_party/skia/include/effects/SkDashPathEffect.h"
+#include "third_party/skia/include/core/SkPathBuilder.h"
 #include "ui/aura/window.h"
 #include "ui/compositor/layer.h"
 #include "ui/gfx/canvas.h"
@@ -68,9 +69,9 @@ SkPath MakePath(const AccessibilityFocusRing& input_ring,
     }
   }
 
-  SkPath path;
-  gfx::Point p0 = ring.points[0] - offset;
-  path.moveTo(SkIntToScalar(p0.x()), SkIntToScalar(p0.y()));
+  SkPathBuilder path;
+  gfx::Point p = ring.points[0] - offset;
+  path.moveTo(SkIntToScalar(p.x()), SkIntToScalar(p.y()));
   for (int i = 0; i < 12; i++) {
     int index0 = ((3 * i) + 1) % 36;
     int index1 = ((3 * i) + 2) % 36;
@@ -83,7 +84,21 @@ SkPath MakePath(const AccessibilityFocusRing& input_ring,
                 SkIntToScalar(p2.x()), SkIntToScalar(p2.y()));
   }
 
-  return path;
+  return path.detach();
+}
+
+// Returns the parent container for `stacking_order` on `display`.
+aura::Window* GetParentContainer(const display::Display& display,
+                                 FocusRingStackingOrder stacking_order) {
+  aura::Window* root_window = Shell::GetRootWindowForDisplayId(display.id());
+  if (!root_window) {
+    return nullptr;
+  }
+  int container_id =
+      stacking_order == FocusRingStackingOrder::ABOVE_ACCESSIBILITY_BUBBLES
+          ? kShellWindowId_OverlayContainer
+          : kShellWindowId_AccessibilityBubbleContainer;
+  return Shell::GetContainer(root_window, container_id);
 }
 
 }  // namespace
@@ -98,17 +113,17 @@ void AccessibilityFocusRingLayer::Set(const AccessibilityFocusRing& ring) {
   ring_ = ring;
 
   gfx::Rect bounds = ring.GetBounds();
-  display::Display display =
-      display::Screen::GetScreen()->GetDisplayMatching(bounds);
-  aura::Window* root_window = Shell::GetRootWindowForDisplayId(display.id());
-  aura::Window* container = Shell::GetContainer(
-      root_window, kShellWindowId_AccessibilityBubbleContainer);
+  display::Display display = display::Screen::Get()->GetDisplayMatching(bounds);
+  aura::Window* container = GetParentContainer(display, stacking_order_);
+  if (!container) {
+    return;
+  }
 
   if (SkColorGetA(background_color_) > 0) {
     bounds = display.bounds();
   } else {
     int inset = kGradientWidth;
-    bounds.Inset(-inset, -inset, -inset, -inset);
+    bounds.Inset(-inset);
   }
   ::wm::ConvertRectFromScreen(container, &bounds);
   bool stack_at_top =
@@ -157,8 +172,7 @@ void AccessibilityFocusRingLayer::OnPaintLayer(
 void AccessibilityFocusRingLayer::DrawSolidFocusRing(
     ui::PaintRecorder& recorder,
     cc::PaintFlags& flags) {
-  if (!has_custom_color())
-    NOTREACHED();
+  CHECK(has_custom_color());
 
   SkPath path;
   gfx::Vector2d offset = layer()->bounds().OffsetFromOrigin();
@@ -176,8 +190,7 @@ void AccessibilityFocusRingLayer::DrawSolidFocusRing(
 void AccessibilityFocusRingLayer::DrawDashedFocusRing(
     ui::PaintRecorder& recorder,
     cc::PaintFlags& flags) {
-  if (!has_custom_color())
-    NOTREACHED();
+  CHECK(has_custom_color());
 
   SkPath path;
   gfx::Vector2d offset = layer()->bounds().OffsetFromOrigin();
@@ -190,7 +203,7 @@ void AccessibilityFocusRingLayer::DrawDashedFocusRing(
 
   SkScalar intervals[] = {kDashLengthDip, kGapLengthDip};
   int intervals_length = 2;
-  flags.setPathEffect(SkDashPathEffect::Make(intervals, intervals_length, 0));
+  flags.setPathEffect(cc::PathEffect::MakeDash(intervals, intervals_length, 0));
   flags.setColor(secondary_color_);
 
   path = MakePath(ring_, kDefaultStrokeWidth, offset);
@@ -199,8 +212,7 @@ void AccessibilityFocusRingLayer::DrawDashedFocusRing(
 
 void AccessibilityFocusRingLayer::DrawGlowFocusRing(ui::PaintRecorder& recorder,
                                                     cc::PaintFlags& flags) {
-  if (!has_custom_color())
-    NOTREACHED();
+  CHECK(has_custom_color());
   SkColor base_color = custom_color();
 
   SkPath path;

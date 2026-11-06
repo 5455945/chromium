@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,30 +11,26 @@
 #include "base/i18n/base_i18n_export.h"
 #include "build/build_config.h"
 
-#define ICU_UTIL_DATA_FILE   0
+#define ICU_UTIL_DATA_FILE 0
 #define ICU_UTIL_DATA_STATIC 1
 
-namespace base {
-namespace i18n {
+namespace base::i18n {
 
-#if !defined(OS_NACL)
 // Call this function to load ICU's data tables for the current process.  This
 // function should be called before ICU is used.
 BASE_I18N_EXPORT bool InitializeICU();
 
-#if ICU_UTIL_DATA_IMPL == ICU_UTIL_DATA_FILE
-// Loads ICU's extra data tables from disk for the current process. If used must
-// be called before InitializeICU(). |split_name| is used on Android to find the
-// asset file.
-BASE_I18N_EXPORT bool InitializeExtraICU(const std::string& split_name);
+// Pre-reads the memory-mapped ICU data file from disk into memory on the
+// ThreadPool so that subsequent ICU lookups do not incur hard page faults.
+// Must be called after InitializeICU() and after the ThreadPool is initialized.
+BASE_I18N_EXPORT void PreReadIcuData();
 
-// Returns the PlatformFile and Region that was initialized by InitializeICU()
-// or InitializeExtraICU(). Use with InitializeICUWithFileDescriptor() or
-// InitializeExtraICUWithFileDescriptor().
-BASE_I18N_EXPORT PlatformFile GetIcuDataFileHandle(
-    MemoryMappedFile::Region* out_region);
+#if ICU_UTIL_DATA_IMPL == ICU_UTIL_DATA_FILE
+
+// Returns the PlatformFile and Region that was initialized by InitializeICU().
+// Use with InitializeICUWithFileDescriptor().
 BASE_I18N_EXPORT PlatformFile
-GetIcuExtraDataFileHandle(MemoryMappedFile::Region* out_region);
+GetIcuDataFileHandle(MemoryMappedFile::Region* out_region);
 
 // Loads ICU data file from file descriptor passed by browser process to
 // initialize ICU in render processes.
@@ -42,26 +38,19 @@ BASE_I18N_EXPORT bool InitializeICUWithFileDescriptor(
     PlatformFile data_fd,
     const MemoryMappedFile::Region& data_region);
 
-// Loads ICU extra data file from file descriptor passed by browser process to
-// initialize ICU in render processes. If used must be called before
-// InitializeICUWithFileDescriptor().
-BASE_I18N_EXPORT bool InitializeExtraICUWithFileDescriptor(
-    PlatformFile data_fd,
-    const MemoryMappedFile::Region& data_region);
-
+// Calls `u_cleanup()` to reset the ICU library, and clears global state,
+// notably releasing the mapped ICU data file, and handle.
 BASE_I18N_EXPORT void ResetGlobalsForTesting();
 
-#if defined(OS_FUCHSIA)
+#if BUILDFLAG(IS_FUCHSIA)
 // Overrides the directory used by ICU for external time zone data.
 BASE_I18N_EXPORT void SetIcuTimeZoneDataDirForTesting(const char* dir);
-#endif  // defined(OS_FUCHSIA)
+#endif  // BUILDFLAG(IS_FUCHSIA)
 #endif  // ICU_UTIL_DATA_IMPL == ICU_UTIL_DATA_FILE
 
 // In a test binary, initialize functions might be called twice.
 BASE_I18N_EXPORT void AllowMultipleInitializeCallsForTesting();
-#endif  // !defined(OS_NACL)
 
-}  // namespace i18n
-}  // namespace base
+}  // namespace base::i18n
 
 #endif  // BASE_I18N_ICU_UTIL_H_

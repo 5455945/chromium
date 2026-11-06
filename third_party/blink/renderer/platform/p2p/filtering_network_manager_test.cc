@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,46 +11,47 @@
 #include <vector>
 
 #include "base/check.h"
-#include "base/cxx17_backports.h"
+#include "base/containers/span.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
+#include "base/notimplemented.h"
 #include "base/notreached.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/test_simple_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "media/base/media_permission.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/platform/p2p/empty_network_manager.h"
 #include "third_party/webrtc/rtc_base/ip_address.h"
 
-using NetworkList = rtc::NetworkManager::NetworkList;
 using ::testing::SizeIs;
 
 namespace {
 
 enum EventType {
-  MIC_DENIED,      // Receive mic permission denied.
-  MIC_GRANTED,     // Receive mic permission granted.
-  CAMERA_DENIED,   // Receive camera permission denied.
-  CAMERA_GRANTED,  // Receive camera permission granted.
-  START_UPDATING,  // Client calls StartUpdating() on FilteringNetworkManager.
-  STOP_UPDATING,   // Client calls StopUpdating() on FilteringNetworkManager.
-  MOCK_NETWORKS_CHANGED_WITH_NEW_NETWORK,   // MockNetworkManager has signaled
-                                            // networks changed event and the
-                                            // underlying network is replaced by
-                                            // a new one.
-  MOCK_NETWORKS_CHANGED_WITH_SAME_NETWORK,  // MockNetworkManager has signaled
-                                            // networks changed event but the
-                                            // underlying network stays the
-                                            // same.
+  kMicDenied,      // Receive mic permission denied.
+  kMicGranted,     // Receive mic permission granted.
+  kCameraDenied,   // Receive camera permission denied.
+  kCameraGranted,  // Receive camera permission granted.
+  kStartUpdating,  // Client calls StartUpdating() on FilteringNetworkManager.
+  kStopUpdating,   // Client calls StopUpdating() on FilteringNetworkManager.
+  kMockNetworksChangedWithNewNetwork,   // MockNetworkManager has signaled
+                                        // networks changed event and the
+                                        // underlying network is replaced by
+                                        // a new one.
+  kMockNetworksChangedWithSameNetwork,  // MockNetworkManager has signaled
+                                        // networks changed event but the
+                                        // underlying network stays the
+                                        // same.
 };
 
 enum ResultType {
-  NO_SIGNAL,                   // Do not expect SignalNetworksChanged fired.
-  SIGNAL_ENUMERATION_BLOCKED,  // Expect SignalNetworksChanged and
-                               // ENUMERATION_BLOCKED.
-  SIGNAL_ENUMERATION_ALLOWED,  // Expect SignalNetworksChanged and
-                               // ENUMERATION_ALLOWED.
+  kNoSignal,                  // Do not expect SignalNetworksChanged fired.
+  kSignalEnumerationBlocked,  // Expect SignalNetworksChanged and
+                              // ENUMERATION_BLOCKED.
+  kSignalEnumerationAllowed,  // Expect SignalNetworksChanged and
+                              // ENUMERATION_ALLOWED.
 };
 
 struct TestEntry {
@@ -60,41 +61,42 @@ struct TestEntry {
 
 class EmptyMdnsResponder : public webrtc::MdnsResponderInterface {
  public:
-  void CreateNameForAddress(const rtc::IPAddress& addr,
+  void CreateNameForAddress(const webrtc::IPAddress& addr,
                             NameCreatedCallback callback) override {
     NOTREACHED();
   }
-  void RemoveNameForAddress(const rtc::IPAddress& addr,
+  void RemoveNameForAddress(const webrtc::IPAddress& addr,
                             NameRemovedCallback callback) override {
     NOTREACHED();
   }
 };
 
-class MockNetworkManager : public rtc::NetworkManagerBase {
+class MockNetworkManager : public webrtc::NetworkManagerBase {
  public:
   MockNetworkManager() : mdns_responder_(new EmptyMdnsResponder()) {}
   // Mimic the current behavior that once the first signal is sent, any future
   // StartUpdating() will trigger another one.
   void StartUpdating() override {
     if (sent_first_update_)
-      SignalNetworksChanged();
+      NotifyNetworksChanged();
   }
   void StopUpdating() override {}
-  void GetNetworks(NetworkList* networks) const override {
-    networks->push_back(network_.get());
+
+  std::vector<const webrtc::Network*> GetNetworks() const override {
+    return {network_.get()};
   }
 
   void SendNetworksChanged() {
     sent_first_update_ = true;
-    SignalNetworksChanged();
+    NotifyNetworksChanged();
   }
 
   webrtc::MdnsResponderInterface* GetMdnsResponder() const override {
     return mdns_responder_.get();
   }
 
-  void CopyAndSetNetwork(const rtc::Network& network) {
-    network_ = std::make_unique<rtc::Network>(network);
+  void CopyAndSetNetwork(const webrtc::Network* network) {
+    network_ = network->Clone();
     network_->AddIP(network_->GetBestIP());
   }
 
@@ -104,15 +106,15 @@ class MockNetworkManager : public rtc::NetworkManagerBase {
 
  private:
   bool sent_first_update_ = false;
-  std::unique_ptr<rtc::Network> network_;
+  std::unique_ptr<webrtc::Network> network_;
   std::unique_ptr<EmptyMdnsResponder> mdns_responder_;
   base::WeakPtrFactory<MockNetworkManager> weak_factory_{this};
 };
 
 class MockMediaPermission : public media::MediaPermission {
  public:
-  MockMediaPermission() {}
-  ~MockMediaPermission() override {}
+  MockMediaPermission() = default;
+  ~MockMediaPermission() override = default;
 
   void RequestPermission(Type type,
                          PermissionStatusCB permission_status_cb) override {
@@ -121,17 +123,24 @@ class MockMediaPermission : public media::MediaPermission {
 
   void HasPermission(Type type,
                      PermissionStatusCB permission_status_cb) override {
-    if (type == MediaPermission::AUDIO_CAPTURE) {
+    if (type == MediaPermission::Type::kAudioCapture) {
       DCHECK(mic_callback_.is_null());
       mic_callback_ = std::move(permission_status_cb);
     } else {
-      DCHECK(type == MediaPermission::VIDEO_CAPTURE);
+      DCHECK(type == MediaPermission::Type::kVideoCapture);
       DCHECK(camera_callback_.is_null());
       camera_callback_ = std::move(permission_status_cb);
     }
   }
 
   bool IsEncryptedMediaEnabled() override { return true; }
+
+#if BUILDFLAG(IS_WIN)
+  void IsHardwareSecureDecryptionAllowed(
+      IsHardwareSecureDecryptionAllowedCB cb) override {
+    std::move(cb).Run(true);
+  }
+#endif  // BUILDFLAG(IS_WIN)
 
   void SetMicPermission(bool granted) {
     if (!mic_callback_)
@@ -156,21 +165,20 @@ class MockMediaPermission : public media::MediaPermission {
 
 namespace blink {
 
-class FilteringNetworkManagerTest : public testing::Test,
-                                    public sigslot::has_slots<> {
+class FilteringNetworkManagerTest : public testing::Test {
  public:
   FilteringNetworkManagerTest()
       : media_permission_(new MockMediaPermission()),
         task_runner_(new base::TestSimpleTaskRunner()),
-        task_runner_handle_(task_runner_) {
-    networks_.emplace_back("test_eth0", "Test Network Adapter 1",
-                           rtc::IPAddress(0x12345600U), 24,
-                           rtc::ADAPTER_TYPE_ETHERNET),
-        networks_.back().AddIP(rtc::IPAddress(0x12345678));
-    networks_.emplace_back("test_eth1", "Test Network Adapter 2",
-                           rtc::IPAddress(0x87654300U), 24,
-                           rtc::ADAPTER_TYPE_ETHERNET),
-        networks_.back().AddIP(rtc::IPAddress(0x87654321));
+        task_runner_current_default_handle_(task_runner_) {
+    networks_.push_back(std::make_unique<webrtc::Network>(
+        "test_eth0", "Test Network Adapter 1", webrtc::IPAddress(0x12345600U),
+        24, webrtc::ADAPTER_TYPE_ETHERNET));
+    networks_.back()->AddIP(webrtc::IPAddress(0x12345678));
+    networks_.push_back(std::make_unique<webrtc::Network>(
+        "test_eth1", "Test Network Adapter 2", webrtc::IPAddress(0x87654300U),
+        24, webrtc::ADAPTER_TYPE_ETHERNET));
+    networks_.back()->AddIP(webrtc::IPAddress(0x87654321));
   }
 
   void SetupNetworkManager(bool multiple_routes_requested) {
@@ -185,44 +193,45 @@ class FilteringNetworkManagerTest : public testing::Test,
       network_manager_.reset(new EmptyNetworkManager(
           base_network_manager_.get(), base_network_manager_->AsWeakPtr()));
     }
-    network_manager_->SignalNetworksChanged.connect(
-        this, &FilteringNetworkManagerTest::OnNetworksChanged);
+    network_manager_->SubscribeNetworksChanged(this,
+                                               [this] { OnNetworksChanged(); });
   }
 
-  void RunTests(TestEntry* tests, size_t size) {
-    for (size_t i = 0; i < size; ++i) {
+  void RunTests(base::span<TestEntry> tests) {
+    for (size_t i = 0; i < tests.size(); ++i) {
       EXPECT_EQ(tests[i].expected_result, ProcessEvent(tests[i].event))
           << " in step: " << i;
     }
   }
 
   void SetNewNetworkForBaseNetworkManager() {
-    base_network_manager_->CopyAndSetNetwork(networks_[next_new_network_id_]);
+    base_network_manager_->CopyAndSetNetwork(
+        networks_[next_new_network_id_].get());
     next_new_network_id_ = (next_new_network_id_ + 1) % networks_.size();
   }
 
   ResultType ProcessEvent(EventType event) {
     clear_callback_called();
     switch (event) {
-      case MIC_DENIED:
-      case MIC_GRANTED:
-        media_permission_->SetMicPermission(event == MIC_GRANTED);
+      case kMicDenied:
+      case kMicGranted:
+        media_permission_->SetMicPermission(event == kMicGranted);
         break;
-      case CAMERA_DENIED:
-      case CAMERA_GRANTED:
-        media_permission_->SetCameraPermission(event == CAMERA_GRANTED);
+      case kCameraDenied:
+      case kCameraGranted:
+        media_permission_->SetCameraPermission(event == kCameraGranted);
         break;
-      case START_UPDATING:
+      case kStartUpdating:
         network_manager_->StartUpdating();
         break;
-      case STOP_UPDATING:
+      case kStopUpdating:
         network_manager_->StopUpdating();
         break;
-      case MOCK_NETWORKS_CHANGED_WITH_NEW_NETWORK:
+      case kMockNetworksChangedWithNewNetwork:
         SetNewNetworkForBaseNetworkManager();
         base_network_manager_->SendNetworksChanged();
         break;
-      case MOCK_NETWORKS_CHANGED_WITH_SAME_NETWORK:
+      case kMockNetworksChangedWithSameNetwork:
         base_network_manager_->SendNetworksChanged();
         break;
     }
@@ -230,21 +239,20 @@ class FilteringNetworkManagerTest : public testing::Test,
     task_runner_->RunUntilIdle();
 
     if (!callback_called_)
-      return NO_SIGNAL;
+      return kNoSignal;
 
     if (network_manager_->enumeration_permission() ==
-        rtc::NetworkManager::ENUMERATION_BLOCKED) {
+        webrtc::NetworkManager::ENUMERATION_BLOCKED) {
       EXPECT_EQ(0u, GetP2PNetworkList().size());
-      return SIGNAL_ENUMERATION_BLOCKED;
+      return kSignalEnumerationBlocked;
     }
     EXPECT_EQ(1u, GetP2PNetworkList().size());
-    return SIGNAL_ENUMERATION_ALLOWED;
+    return kSignalEnumerationAllowed;
   }
 
  protected:
-  const NetworkList& GetP2PNetworkList() {
-    network_list_.clear();
-    network_manager_->GetNetworks(&network_list_);
+  const std::vector<const webrtc::Network*>& GetP2PNetworkList() {
+    network_list_ = network_manager_->GetNetworks();
     return network_list_;
   }
 
@@ -253,18 +261,21 @@ class FilteringNetworkManagerTest : public testing::Test,
   void set_allow_mdns_obfuscation(bool val) { allow_mdns_obfuscation_ = val; }
 
   bool callback_called_ = false;
-  std::unique_ptr<rtc::NetworkManager> network_manager_;
+  std::unique_ptr<webrtc::NetworkManager> network_manager_;
   std::unique_ptr<MockNetworkManager> base_network_manager_;
 
   std::unique_ptr<MockMediaPermission> media_permission_;
   bool allow_mdns_obfuscation_ = true;
 
-  std::vector<rtc::Network> networks_;
+  std::vector<std::unique_ptr<webrtc::Network>> networks_;
   int next_new_network_id_ = 0;
 
-  NetworkList network_list_;
+  // This field is not vector<raw_ptr<...>> due to interaction with third_party
+  // api.
+  RAW_PTR_EXCLUSION std::vector<const webrtc::Network*> network_list_;
   scoped_refptr<base::TestSimpleTaskRunner> task_runner_;
-  base::ThreadTaskRunnerHandle task_runner_handle_;
+  base::SingleThreadTaskRunner::CurrentDefaultHandle
+      task_runner_current_default_handle_;
 };
 
 // Test that when multiple routes is not requested, SignalNetworksChanged is
@@ -274,24 +285,24 @@ TEST_F(FilteringNetworkManagerTest, MultipleRoutesNotRequested) {
   TestEntry tests[] = {
       // Underneath network manager signals, no callback as StartUpdating() is
       // not called.
-      {MOCK_NETWORKS_CHANGED_WITH_SAME_NETWORK, NO_SIGNAL},
+      {kMockNetworksChangedWithSameNetwork, kNoSignal},
       // StartUpdating() is called, should receive callback as the multiple
       // routes is not requested.
-      {START_UPDATING, SIGNAL_ENUMERATION_BLOCKED},
+      {kStartUpdating, kSignalEnumerationBlocked},
       // Further network signal should trigger callback, since the
       // EmptyNetworkManager always forwards the signal from the base network
       // manager if there is any outstanding StartUpdate();
-      {MOCK_NETWORKS_CHANGED_WITH_SAME_NETWORK, SIGNAL_ENUMERATION_BLOCKED},
+      {kMockNetworksChangedWithSameNetwork, kSignalEnumerationBlocked},
       // StartUpdating() always triggers callback after we have sent the first
       // network update.
-      {START_UPDATING, SIGNAL_ENUMERATION_BLOCKED},
-      {STOP_UPDATING, NO_SIGNAL},
-      {STOP_UPDATING, NO_SIGNAL},
+      {kStartUpdating, kSignalEnumerationBlocked},
+      {kStopUpdating, kNoSignal},
+      {kStopUpdating, kNoSignal},
       // No outstanding StartUpdating(), no more signal.
-      {MOCK_NETWORKS_CHANGED_WITH_SAME_NETWORK, NO_SIGNAL},
+      {kMockNetworksChangedWithSameNetwork, kNoSignal},
   };
 
-  RunTests(tests, base::size(tests));
+  RunTests(tests);
 }
 
 // Test that multiple routes request is blocked and signaled right after
@@ -300,25 +311,25 @@ TEST_F(FilteringNetworkManagerTest, BlockMultipleRoutesByStartUpdating) {
   SetupNetworkManager(true);
 
   TestEntry tests[] = {
-      {MOCK_NETWORKS_CHANGED_WITH_SAME_NETWORK, NO_SIGNAL},
+      {kMockNetworksChangedWithSameNetwork, kNoSignal},
       // Both mic and camera are denied.
-      {MIC_DENIED, NO_SIGNAL},
-      {CAMERA_DENIED, NO_SIGNAL},
+      {kMicDenied, kNoSignal},
+      {kCameraDenied, kNoSignal},
       // Once StartUpdating() is called, signal network changed event with
       // ENUMERATION_BLOCKED.
-      {START_UPDATING, SIGNAL_ENUMERATION_BLOCKED},
+      {kStartUpdating, kSignalEnumerationBlocked},
       // Further network signal should not trigger callback, since the set of
       // networks does not change after merging.
-      {MOCK_NETWORKS_CHANGED_WITH_SAME_NETWORK, NO_SIGNAL},
+      {kMockNetworksChangedWithSameNetwork, kNoSignal},
       // Signal when observing a change after merging while there is any
       // outstanding StartUpdate();
-      {MOCK_NETWORKS_CHANGED_WITH_NEW_NETWORK, SIGNAL_ENUMERATION_BLOCKED},
-      {START_UPDATING, SIGNAL_ENUMERATION_BLOCKED},
-      {STOP_UPDATING, NO_SIGNAL},
-      {STOP_UPDATING, NO_SIGNAL},
+      {kMockNetworksChangedWithNewNetwork, kSignalEnumerationBlocked},
+      {kStartUpdating, kSignalEnumerationBlocked},
+      {kStopUpdating, kNoSignal},
+      {kStopUpdating, kNoSignal},
   };
 
-  RunTests(tests, base::size(tests));
+  RunTests(tests);
 }
 
 // Test that multiple routes request is blocked and signaled right after
@@ -330,20 +341,20 @@ TEST_F(FilteringNetworkManagerTest, BlockMultipleRoutesByPermissionsDenied) {
   TestEntry tests[] = {
       // StartUpdating() should not fire the event before we send the first
       // update.
-      {START_UPDATING, NO_SIGNAL},
-      {MOCK_NETWORKS_CHANGED_WITH_SAME_NETWORK, NO_SIGNAL},
-      {MIC_DENIED, NO_SIGNAL},
+      {kStartUpdating, kNoSignal},
+      {kMockNetworksChangedWithSameNetwork, kNoSignal},
+      {kMicDenied, kNoSignal},
       // The last permission check being denied should immediately trigger the
       // networks changed signal, since we already have an updated network list.
-      {CAMERA_DENIED, SIGNAL_ENUMERATION_BLOCKED},
-      {START_UPDATING, SIGNAL_ENUMERATION_BLOCKED},
-      {STOP_UPDATING, NO_SIGNAL},
-      {STOP_UPDATING, NO_SIGNAL},
+      {kCameraDenied, kSignalEnumerationBlocked},
+      {kStartUpdating, kSignalEnumerationBlocked},
+      {kStopUpdating, kNoSignal},
+      {kStopUpdating, kNoSignal},
       // No outstanding StartUpdating(), no more signal.
-      {MOCK_NETWORKS_CHANGED_WITH_NEW_NETWORK, NO_SIGNAL},
+      {kMockNetworksChangedWithNewNetwork, kNoSignal},
   };
 
-  RunTests(tests, base::size(tests));
+  RunTests(tests);
 }
 
 // Test that after permissions have been denied, a network change signal from
@@ -354,16 +365,16 @@ TEST_F(FilteringNetworkManagerTest, BlockMultipleRoutesByNetworksChanged) {
   SetupNetworkManager(true);
 
   TestEntry tests[] = {
-      {START_UPDATING, NO_SIGNAL},
-      {MIC_DENIED, NO_SIGNAL},
-      {CAMERA_DENIED, NO_SIGNAL},
-      {MOCK_NETWORKS_CHANGED_WITH_SAME_NETWORK, SIGNAL_ENUMERATION_BLOCKED},
-      {START_UPDATING, SIGNAL_ENUMERATION_BLOCKED},
-      {STOP_UPDATING, NO_SIGNAL},
-      {STOP_UPDATING, NO_SIGNAL},
+      {kStartUpdating, kNoSignal},
+      {kMicDenied, kNoSignal},
+      {kCameraDenied, kNoSignal},
+      {kMockNetworksChangedWithSameNetwork, kSignalEnumerationBlocked},
+      {kStartUpdating, kSignalEnumerationBlocked},
+      {kStopUpdating, kNoSignal},
+      {kStopUpdating, kNoSignal},
   };
 
-  RunTests(tests, base::size(tests));
+  RunTests(tests);
 }
 
 // Test that multiple routes request is granted and signaled right after
@@ -373,24 +384,24 @@ TEST_F(FilteringNetworkManagerTest, AllowMultipleRoutesByPermissionsGranted) {
   SetupNetworkManager(true);
 
   TestEntry tests[] = {
-      {START_UPDATING, NO_SIGNAL},
-      {MIC_DENIED, NO_SIGNAL},
-      {MOCK_NETWORKS_CHANGED_WITH_SAME_NETWORK, NO_SIGNAL},
+      {kStartUpdating, kNoSignal},
+      {kMicDenied, kNoSignal},
+      {kMockNetworksChangedWithSameNetwork, kNoSignal},
       // Once one media type is granted, signal networks changed with
       // ENUMERATION_ALLOWED.
-      {CAMERA_GRANTED, SIGNAL_ENUMERATION_ALLOWED},
-      {MOCK_NETWORKS_CHANGED_WITH_SAME_NETWORK, NO_SIGNAL},
-      {START_UPDATING, SIGNAL_ENUMERATION_ALLOWED},
-      {STOP_UPDATING, NO_SIGNAL},
+      {kCameraGranted, kSignalEnumerationAllowed},
+      {kMockNetworksChangedWithSameNetwork, kNoSignal},
+      {kStartUpdating, kSignalEnumerationAllowed},
+      {kStopUpdating, kNoSignal},
       // If there is any outstanding StartUpdating(), new event from underneath
       // network manger should trigger SignalNetworksChanged.
-      {MOCK_NETWORKS_CHANGED_WITH_NEW_NETWORK, SIGNAL_ENUMERATION_ALLOWED},
-      {STOP_UPDATING, NO_SIGNAL},
+      {kMockNetworksChangedWithNewNetwork, kSignalEnumerationAllowed},
+      {kStopUpdating, kNoSignal},
       // No outstanding StartUpdating(), no more signal.
-      {MOCK_NETWORKS_CHANGED_WITH_NEW_NETWORK, NO_SIGNAL},
+      {kMockNetworksChangedWithNewNetwork, kNoSignal},
   };
 
-  RunTests(tests, base::size(tests));
+  RunTests(tests);
 }
 
 // Test that multiple routes request is granted and signaled right after
@@ -399,24 +410,24 @@ TEST_F(FilteringNetworkManagerTest, AllowMultipleRoutesByStartUpdating) {
   SetupNetworkManager(true);
 
   TestEntry tests[] = {
-      {MIC_DENIED, NO_SIGNAL},
-      {MOCK_NETWORKS_CHANGED_WITH_SAME_NETWORK, NO_SIGNAL},
-      {CAMERA_GRANTED, NO_SIGNAL},
+      {kMicDenied, kNoSignal},
+      {kMockNetworksChangedWithSameNetwork, kNoSignal},
+      {kCameraGranted, kNoSignal},
       // StartUpdating() should signal the event with the status of permissions
       // granted.
-      {START_UPDATING, SIGNAL_ENUMERATION_ALLOWED},
-      {MOCK_NETWORKS_CHANGED_WITH_SAME_NETWORK, NO_SIGNAL},
-      {START_UPDATING, SIGNAL_ENUMERATION_ALLOWED},
-      {STOP_UPDATING, NO_SIGNAL},
+      {kStartUpdating, kSignalEnumerationAllowed},
+      {kMockNetworksChangedWithSameNetwork, kNoSignal},
+      {kStartUpdating, kSignalEnumerationAllowed},
+      {kStopUpdating, kNoSignal},
       // Signal when observing a change after merging while there is any
       // outstanding StartUpdate();
-      {MOCK_NETWORKS_CHANGED_WITH_NEW_NETWORK, SIGNAL_ENUMERATION_ALLOWED},
-      {STOP_UPDATING, NO_SIGNAL},
+      {kMockNetworksChangedWithNewNetwork, kSignalEnumerationAllowed},
+      {kStopUpdating, kNoSignal},
       // No outstanding StartUpdating(), no more signal.
-      {MOCK_NETWORKS_CHANGED_WITH_NEW_NETWORK, NO_SIGNAL},
+      {kMockNetworksChangedWithNewNetwork, kNoSignal},
   };
 
-  RunTests(tests, base::size(tests));
+  RunTests(tests);
 }
 
 // Test that multiple routes request is granted and signaled right after
@@ -426,21 +437,21 @@ TEST_F(FilteringNetworkManagerTest, AllowMultipleRoutesByNetworksChanged) {
   SetupNetworkManager(true);
 
   TestEntry tests[] = {
-      {START_UPDATING, NO_SIGNAL},
-      {CAMERA_GRANTED, NO_SIGNAL},
+      {kStartUpdating, kNoSignal},
+      {kCameraGranted, kNoSignal},
       // Underneath network manager's signal networks changed should trigger
       // SignalNetworksChanged with ENUMERATION_ALLOWED.
-      {MOCK_NETWORKS_CHANGED_WITH_SAME_NETWORK, SIGNAL_ENUMERATION_ALLOWED},
-      {MIC_DENIED, NO_SIGNAL},
-      {MOCK_NETWORKS_CHANGED_WITH_NEW_NETWORK, SIGNAL_ENUMERATION_ALLOWED},
-      {START_UPDATING, SIGNAL_ENUMERATION_ALLOWED},
-      {STOP_UPDATING, NO_SIGNAL},
-      {MOCK_NETWORKS_CHANGED_WITH_NEW_NETWORK, SIGNAL_ENUMERATION_ALLOWED},
-      {STOP_UPDATING, NO_SIGNAL},
-      {MOCK_NETWORKS_CHANGED_WITH_NEW_NETWORK, NO_SIGNAL},
+      {kMockNetworksChangedWithSameNetwork, kSignalEnumerationAllowed},
+      {kMicDenied, kNoSignal},
+      {kMockNetworksChangedWithNewNetwork, kSignalEnumerationAllowed},
+      {kStartUpdating, kSignalEnumerationAllowed},
+      {kStopUpdating, kNoSignal},
+      {kMockNetworksChangedWithNewNetwork, kSignalEnumerationAllowed},
+      {kStopUpdating, kNoSignal},
+      {kMockNetworksChangedWithNewNetwork, kNoSignal},
   };
 
-  RunTests(tests, base::size(tests));
+  RunTests(tests);
 }
 
 // Test that the networks provided by the GetNetworks() and
@@ -451,27 +462,26 @@ TEST_F(FilteringNetworkManagerTest, NullMdnsResponderAfterPermissionGranted) {
   SetupNetworkManager(true);
 
   TestEntry setup_steps[] = {
-      {MOCK_NETWORKS_CHANGED_WITH_SAME_NETWORK, NO_SIGNAL},
+      {kMockNetworksChangedWithSameNetwork, kNoSignal},
       // Both mic and camera are granted.
-      {MIC_GRANTED, NO_SIGNAL},
-      {CAMERA_GRANTED, NO_SIGNAL},
+      {kMicGranted, kNoSignal},
+      {kCameraGranted, kNoSignal},
       // Once StartUpdating() is called, signal network changed event with
       // ENUMERATION_ALLOWED.
-      {START_UPDATING, SIGNAL_ENUMERATION_ALLOWED},
+      {kStartUpdating, kSignalEnumerationAllowed},
   };
-  RunTests(setup_steps, base::size(setup_steps));
+  RunTests(setup_steps);
 
-  NetworkList networks;
-  network_manager_->GetNetworks(&networks);
+  std::vector<const webrtc::Network*> networks =
+      network_manager_->GetNetworks();
   EXPECT_THAT(networks, SizeIs(1u));
-  for (const rtc::Network* network : networks) {
+  for (const webrtc::Network* network : networks) {
     EXPECT_EQ(nullptr, network->GetMdnsResponder());
   }
 
-  networks.clear();
-  network_manager_->GetAnyAddressNetworks(&networks);
+  networks = network_manager_->GetAnyAddressNetworks();
   EXPECT_THAT(networks, SizeIs(2u));
-  for (const rtc::Network* network : networks) {
+  for (const webrtc::Network* network : networks) {
     EXPECT_EQ(nullptr, network->GetMdnsResponder());
   }
 }
@@ -483,17 +493,17 @@ TEST_F(FilteringNetworkManagerTest,
        ProvideMdnsResponderForDefaultRouteAfterPermissionDenied) {
   SetupNetworkManager(true);
   // By default, the enumeration is blocked if we provide |media_permission_|;
-  EXPECT_EQ(rtc::NetworkManager::ENUMERATION_BLOCKED,
+  EXPECT_EQ(webrtc::NetworkManager::ENUMERATION_BLOCKED,
             network_manager_->enumeration_permission());
 
-  NetworkList networks;
-  network_manager_->GetNetworks(&networks);
+  std::vector<const webrtc::Network*> networks =
+      network_manager_->GetNetworks();
   EXPECT_TRUE(networks.empty());
 
-  network_manager_->GetAnyAddressNetworks(&networks);
+  networks = network_manager_->GetAnyAddressNetworks();
   EXPECT_THAT(networks, SizeIs(2u));
   EXPECT_NE(nullptr, network_manager_->GetMdnsResponder());
-  for (const rtc::Network* network : networks) {
+  for (const webrtc::Network* network : networks) {
     EXPECT_EQ(network_manager_->GetMdnsResponder(),
               network->GetMdnsResponder());
   }
@@ -507,16 +517,16 @@ TEST_F(FilteringNetworkManagerTest,
   set_allow_mdns_obfuscation(false);
   SetupNetworkManager(true);
   // By default, the enumeration is blocked if we provide |media_permission_|;
-  EXPECT_EQ(rtc::NetworkManager::ENUMERATION_BLOCKED,
+  EXPECT_EQ(webrtc::NetworkManager::ENUMERATION_BLOCKED,
             network_manager_->enumeration_permission());
 
-  NetworkList networks;
-  network_manager_->GetNetworks(&networks);
+  std::vector<const webrtc::Network*> networks =
+      network_manager_->GetNetworks();
   EXPECT_TRUE(networks.empty());
 
-  network_manager_->GetAnyAddressNetworks(&networks);
+  networks = network_manager_->GetAnyAddressNetworks();
   EXPECT_THAT(networks, SizeIs(2u));
-  for (const rtc::Network* network : networks) {
+  for (const webrtc::Network* network : networks) {
     EXPECT_EQ(nullptr, network->GetMdnsResponder());
   }
 }

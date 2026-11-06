@@ -1,99 +1,123 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_COMPOSITING_PENDING_LAYER_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_COMPOSITING_PENDING_LAYER_H_
 
+#include "base/check_op.h"
+#include "cc/input/layer_selection_bound.h"
+#include "third_party/blink/renderer/platform/graphics/compositing/content_layer_client_impl.h"
+#include "third_party/blink/renderer/platform/graphics/lcd_text_preference.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_chunk_subset.h"
 #include "third_party/blink/renderer/platform/graphics/paint/property_tree_state.h"
+#include "ui/gfx/geometry/rect_f.h"
+#include "ui/gfx/geometry/vector2d_f.h"
+
+namespace cc {
+class LayerTreeHost;
+}
 
 namespace blink {
 
-class GraphicsLayer;
-
-// Information of a composited layer that is created during compositing update
-// in pre-CompositeAfterPaint. In CompositeAfterPaint, this is expected to
-// contain all paint chunks, as if we created one root layer that needs to be
-// future layerized.
-struct PreCompositedLayerInfo {
-  // For now this is used only when graphics_layer == nullptr. This will also
-  // contain the paint chunks for the graphics layer when we unify
-  // PaintController for pre-CAP and CAP.
-  PaintChunkSubset chunks;
-  // If this is not nullptr, we should use the composited layer created by the
-  // GraphicsLayer. Otherwise we should layerize |chunks|. A GraphicsLayer with
-  // ShouldCreateLayersAfterPaint() == true should set this field to nullptr.
-  const GraphicsLayer* graphics_layer = nullptr;
-};
+class PendingLayer;
+using PendingLayers = HeapVector<PendingLayer>;
 
 // A pending layer is a collection of paint chunks that will end up in the same
 // cc::Layer.
 class PLATFORM_EXPORT PendingLayer {
+  DISALLOW_NEW();
+
  public:
   enum CompositingType {
-    // This type is only for scroll hit test layers that have direct
-    // compositing reasons.
-    kCompositedScrollHitTestLayer,
-    kPreCompositedLayer,
+    kScrollHitTestLayer,
     kForeignLayer,
     kScrollbarLayer,
     kOverlap,
     kOther,
   };
 
-  PendingLayer(const PaintChunkSubset&,
-               const PaintChunkIterator&,
-               CompositingType compositng_type = kOther);
-  explicit PendingLayer(const PreCompositedLayerInfo&);
+  PendingLayer(const PaintArtifact&,
+               const PaintChunk& first_chunk,
+               DOMNodeId canvas_drawable_id = kInvalidDOMNodeId,
+               CompositingType = kOther);
 
-  const FloatRect& Bounds() const { return bounds_; }
-  const FloatRect& RectKnownToBeOpaque() const {
+  void Trace(Visitor*) const;
+
+  // Returns the offset/bounds for the final cc::Layer, rounded if needed.
+  std::pair<gfx::Vector2dF, gfx::Size> Bounds() const;
+
+  const gfx::RectF& BoundsForTesting() const { return bounds_; }
+
+  const gfx::RectF& RectKnownToBeOpaque() const {
     return rect_known_to_be_opaque_;
   }
   bool TextKnownToBeOnOpaqueBackground() const {
     return text_known_to_be_on_opaque_background_;
   }
   const PaintChunkSubset& Chunks() const { return chunks_; }
-  const PropertyTreeState& GetPropertyTreeState() const {
-    return property_tree_state_;
+  PropertyTreeState GetPropertyTreeState() const {
+    return PropertyTreeState(property_tree_state_);
   }
-  const FloatPoint& OffsetOfDecompositedTransforms() const {
+  const gfx::Vector2dF& OffsetOfDecompositedTransforms() const {
     return offset_of_decomposited_transforms_;
   }
   PaintPropertyChangeType ChangeOfDecompositedTransforms() const {
     return change_of_decomposited_transforms_;
   }
-  const GraphicsLayer* GetGraphicsLayer() const { return graphics_layer_; }
   CompositingType GetCompositingType() const { return compositing_type_; }
+  cc::HitTestOpaqueness GetHitTestOpaqueness() const {
+    return hit_test_opaqueness_;
+  }
+  bool HasText() const { return has_text_; }
 
-  void SetCompositingType(CompositingType new_type) {
-    compositing_type_ = new_type;
+  bool HasVideo() const;
+
+  void SetCompositingTypeToOverlap() {
+    DCHECK_EQ(compositing_type_, kOther);
+    compositing_type_ = kOverlap;
   }
 
-  void SetPaintArtifact(scoped_refptr<const PaintArtifact> paint_artifact) {
+  void SetPaintArtifact(const PaintArtifact& paint_artifact) {
     chunks_.SetPaintArtifact(paint_artifact);
   }
 
-  // Merges |guest| into |this| if it can, by appending chunks of |guest|
-  // after chunks of |this|, with appropriate space conversion applied to
-  // both layers from their original property tree states to |merged_state|.
-  // Returns whether the merge is successful.
-  bool Merge(const PendingLayer& guest, bool prefers_lcd_text = false) {
-    return MergeInternal(guest, guest.property_tree_state_, prefers_lcd_text,
-                         /*dry_run*/ false);
+  std::optional<CanvasDrawablePaintRecord> GetCanvasDrawablePaintRecord()
+      const {
+    return content_layer_client_
+               ? content_layer_client_->GetCanvasDrawablePaintRecord()
+               : std::nullopt;
+  }
+  const CanvasDrawablePaintState* canvas_drawable_paint_state() const {
+    return content_layer_client_
+               ? content_layer_client_->canvas_drawable_paint_state()
+               : nullptr;
   }
 
-  // Returns true if |guest| can be merged into |this|.
-  // |guest_state| is for cases where we want to check if we can merge |guest|
-  // if it has |guest_state| in the future (which may be different from its
-  // current state).
-  bool CanMerge(const PendingLayer& guest,
-                const PropertyTreeState& guest_state,
-                bool prefers_lcd_text = false) const {
-    return const_cast<PendingLayer*>(this)->MergeInternal(
-        guest, guest_state, prefers_lcd_text, /*dry_run*/ true);
-  }
+  DOMNodeId CanvasDrawableId() const { return canvas_drawable_id_; }
+
+  using IsCompositedScrollFunction =
+      PropertyTreeState::IsCompositedScrollFunction;
+
+  // Merges `guest` into `this` if it can, by appending chunks of `guest`
+  // after chunks of `this`, with appropriate space conversion applied to
+  // both layers from their original property tree states to the merged state.
+  struct MergeResult {
+    // Whether the merge is successful.
+    bool merged = false;
+    // See `PropertyTreeState::UpcastResult::scroll_range_dependent`.
+    bool scroll_range_dependent = false;
+  };
+  MergeResult Merge(const PendingLayer& guest,
+                    LCDTextPreference lcd_text_preference,
+                    float device_pixel_ratio,
+                    IsCompositedScrollFunction);
+
+  // Returns true if `guest` that could be upcasted with decomposited blend
+  // mode can be merged into `this`.
+  bool CanMergeWithDecompositedBlendMode(const PendingLayer& guest,
+                                         const PropertyTreeState& upcast_state,
+                                         IsCompositedScrollFunction) const;
 
   // Mutate this layer's property tree state to a more general (shallower)
   // state, thus the name "upcast". The concrete effect of this is to
@@ -105,45 +129,159 @@ class PLATFORM_EXPORT PendingLayer {
   const PaintChunk& FirstPaintChunk() const;
   const DisplayItem& FirstDisplayItem() const;
 
-  const TransformPaintPropertyNode* ScrollTranslationForScrollHitTestLayer()
+  bool Matches(const PendingLayer& old_pending_layer) const;
+
+  const TransformPaintPropertyNode& ScrollTranslationForScrollHitTestLayer()
       const;
 
   std::unique_ptr<JSONObject> ToJSON() const;
+  String DebugName() const;
+  DOMNodeId OwnerNodeId() const;
 
-  bool MayDrawContent() const;
+  void ForceDrawsContent() { draws_content_ = true; }
+  bool DrawsContent() const { return draws_content_; }
 
-  bool RequiresOwnLayer() const {
-    return compositing_type_ != kOverlap && compositing_type_ != kOther;
+  static bool RequiresOwnLayer(CompositingType type) {
+    return type != kOverlap && type != kOther;
   }
 
-  bool PropertyTreeStateChanged() const;
+  bool ChunkRequiresOwnLayer() const {
+    bool result = RequiresOwnLayer(compositing_type_);
+#if DCHECK_IS_ON()
+    if (result) {
+      DCHECK(!content_layer_client_);
+      DCHECK_EQ(chunks_.size(), 1u);
+    } else {
+      DCHECK(!cc_layer_ || UsesSolidColorLayer());
+      DCHECK_GE(chunks_.size(), 1u);
+    }
+#endif
+    return result;
+  }
 
   bool MightOverlap(const PendingLayer& other) const;
 
-  static void DecompositeTransforms(Vector<PendingLayer>& pending_layers);
+  static void DecompositeTransforms(PendingLayers& pending_layers);
+
+  // This is valid only when SetCclayer() or SetContentLayerClient() has been
+  // called.
+  cc::Layer& CcLayer() const {
+    if (content_layer_client_)
+      return content_layer_client_->Layer();
+    DCHECK(cc_layer_);
+    return *cc_layer_;
+  }
+
+  ContentLayerClientImpl* GetContentLayerClient() const {
+    return content_layer_client_.Get();
+  }
+
+  // For this PendingLayer, creates a composited layer or uses the existing
+  // one in |old_pending_layer|, and updates the layer according to the current
+  // contents and properties of this PendingLayer.
+  void UpdateCompositedLayer(PendingLayer* old_pending_layer,
+                             PropertyTreeState property_state_for_paint,
+                             cc::LayerSelection&,
+                             bool tracks_raster_invalidations,
+                             cc::LayerTreeHost*);
+
+  // A lighter version of UpdateCompositedLayer(). Called when the existing
+  // composited layer has only repainted since the last update
+  void UpdateCompositedLayerForRepaint(
+      const PaintArtifact& repainted_artifact,
+      PropertyTreeState property_state_for_paint,
+      cc::LayerSelection&);
+
+  // Another lighter version of UpdateCompositedLayers(). Called after
+  // raster-inducing scrolls that don't need repaint or PaintArtifactCompositor
+  // update.
+  void UpdateForRasterInducingScroll();
+
+  SkColor4f ComputeBackgroundColor() const;
+
+  // True if a solid color chunk exists that makes this entire layer
+  // draw a solid color (see comment above `solid_color_chunk_index_`).
+  bool IsSolidColor() const { return solid_color_chunk_index_ != kNotFound; }
 
  private:
-  FloatRect VisualRectForOverlapTesting(
-      const PropertyTreeState& ancestor_state) const;
-  FloatRect MapRectKnownToBeOpaque(const PropertyTreeState&) const;
-  bool MergeInternal(const PendingLayer& guest,
-                     const PropertyTreeState& guest_state,
-                     bool prefers_lcd_text,
-                     bool dry_run);
+  // Checks basic merge-ability with `guest` and calls
+  // PropertyTreeState::CanUpcastWith().
+  std::optional<PropertyTreeState::UpcastResult> CanUpcastWith(
+      const PendingLayer& guest,
+      const PropertyTreeState& guest_state,
+      IsCompositedScrollFunction is_comosited_scroll) const;
+
+  bool CanMerge(const PendingLayer& guest,
+                LCDTextPreference lcd_text_preference,
+                float device_pixel_ratio,
+                IsCompositedScrollFunction,
+                gfx::RectF& merged_bounds,
+                PropertyTreeState& merged_state,
+                gfx::RectF& merged_rect_known_to_be_opaque,
+                bool& merged_text_known_to_be_on_opaque_background,
+                wtf_size_t& merged_solid_color_chunk_index,
+                cc::HitTestOpaqueness& merged_hit_test_opaqueness,
+                bool& scroll_range_dependent) const;
+
+  gfx::RectF MapRectKnownToBeOpaque(
+      const PropertyTreeState& new_state,
+      const FloatClipRect& mapped_layer_bounds) const;
+
+  bool PropertyTreeStateChanged(const PendingLayer* old_pending_layer) const;
+
+  // The following methods are called by UpdateCompositedLayer(), each for a
+  // particular type of composited layer.
+  void UpdateForeignLayer();
+  void UpdateScrollHitTestLayer(PendingLayer* old_pending_layer);
+  void UpdateScrollbarLayer(PendingLayer* old_pending_layer);
+  void UpdateContentLayer(PendingLayer* old_pending_layer,
+                          PropertyTreeState property_state_for_paint,
+                          bool tracks_raster_invalidations);
+  void UpdateSolidColorLayer(PendingLayer* old_pending_layer);
+
+  void UpdateLayerProperties(cc::LayerSelection&, bool selection_only);
+
+  bool UsesSolidColorLayer() const;
+  SkColor4f GetSolidColor() const;
 
   // The rects are in the space of property_tree_state.
-  FloatRect bounds_;
-  FloatRect rect_known_to_be_opaque_;
-  bool has_text_ = false;
-  bool text_known_to_be_on_opaque_background_ = false;
   PaintChunkSubset chunks_;
-  PropertyTreeState property_tree_state_;
-  FloatPoint offset_of_decomposited_transforms_;
+  TraceablePropertyTreeState property_tree_state_;
+  // Contains non-composited hit_test_data.scroll_translation of PaintChunks.
+  // This is a vector instead of a set because the size is small vs the cost of
+  // hashing.
+  HeapVector<Member<const TransformPaintPropertyNode>>
+      non_composited_scroll_translations_;
+  gfx::RectF bounds_;
+  gfx::RectF rect_known_to_be_opaque_;
+  // If not kNotFound, this is the index of the chunk that makes this layer
+  // solid color. The solid color chunk must be the last drawable chunk and
+  // must draw a solid color that fully covers this pending layer.
+  wtf_size_t solid_color_chunk_index_ = kNotFound;
+  gfx::Vector2dF offset_of_decomposited_transforms_;
+  // This is set to non-null after layerization if ChunkRequiresOwnLayer() or
+  // UsesSolidColorLayer() is true.
+  scoped_refptr<cc::Layer> cc_layer_;
+  // This is set to non-null after layerization if ChunkRequiresOwnLayer() and
+  // UsesSolidColorLayer() are false.
+  Member<ContentLayerClientImpl> content_layer_client_;
   PaintPropertyChangeType change_of_decomposited_transforms_ =
       PaintPropertyChangeType::kUnchanged;
-  const GraphicsLayer* graphics_layer_ = nullptr;
-  CompositingType compositing_type_;
+  CompositingType compositing_type_ = kOther;
+  cc::HitTestOpaqueness hit_test_opaqueness_ =
+      cc::HitTestOpaqueness::kTransparent;
+
+  DOMNodeId canvas_drawable_id_ = kInvalidDOMNodeId;
+  bool has_text_ = false;
+  bool draws_content_ = false;
+  bool text_known_to_be_on_opaque_background_ = false;
+  bool has_decomposited_blend_mode_ = false;
 };
+
+PLATFORM_EXPORT std::ostream& operator<<(std::ostream&, const PendingLayer&);
+
 }  // namespace blink
+
+WTF_ALLOW_CLEAR_UNUSED_SLOTS_WITH_MEM_FUNCTIONS(blink::PendingLayer)
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_COMPOSITING_PENDING_LAYER_H_

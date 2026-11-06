@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +8,14 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "third_party/blink/public/platform/web_crypto.h"
 
 namespace webcrypto {
 
-class CryptoData;
 class GenerateKeyResult;
 class Status;
 
@@ -37,10 +38,6 @@ class Status;
 //   * The key usages have already been verified. In fact in the case of calls
 //     to Encrypt()/Decrypt() the corresponding key usages may not be present
 //     (when wrapping/unwrapping).
-//
-// An AlgorithmImplementation can also assume that crypto::EnsureOpenSSLInit()
-// will be called before any of its methods are invoked (except the
-// constructor).
 class AlgorithmImplementation {
  public:
   virtual ~AlgorithmImplementation();
@@ -51,7 +48,7 @@ class AlgorithmImplementation {
   // (crypto.subtle.encrypt() dispatches to this)
   virtual Status Encrypt(const blink::WebCryptoAlgorithm& algorithm,
                          const blink::WebCryptoKey& key,
-                         const CryptoData& data,
+                         base::span<const uint8_t> data,
                          std::vector<uint8_t>* buffer) const;
 
   // This is what is run whenever the spec says:
@@ -60,7 +57,7 @@ class AlgorithmImplementation {
   // (crypto.subtle.decrypt() dispatches to this)
   virtual Status Decrypt(const blink::WebCryptoAlgorithm& algorithm,
                          const blink::WebCryptoKey& key,
-                         const CryptoData& data,
+                         base::span<const uint8_t> data,
                          std::vector<uint8_t>* buffer) const;
 
   // This is what is run whenever the spec says:
@@ -69,7 +66,7 @@ class AlgorithmImplementation {
   // (crypto.subtle.sign() dispatches to this)
   virtual Status Sign(const blink::WebCryptoAlgorithm& algorithm,
                       const blink::WebCryptoKey& key,
-                      const CryptoData& data,
+                      base::span<const uint8_t> data,
                       std::vector<uint8_t>* buffer) const;
 
   // This is what is run whenever the spec says:
@@ -78,8 +75,8 @@ class AlgorithmImplementation {
   // (crypto.subtle.verify() dispatches to this)
   virtual Status Verify(const blink::WebCryptoAlgorithm& algorithm,
                         const blink::WebCryptoKey& key,
-                        const CryptoData& signature,
-                        const CryptoData& data,
+                        base::span<const uint8_t> signature,
+                        base::span<const uint8_t> data,
                         bool* signature_match) const;
 
   // This is what is run whenever the spec says:
@@ -87,7 +84,7 @@ class AlgorithmImplementation {
   //
   // (crypto.subtle.digest() dispatches to this)
   virtual Status Digest(const blink::WebCryptoAlgorithm& algorithm,
-                        const CryptoData& data,
+                        base::span<const uint8_t> data,
                         std::vector<uint8_t>* buffer) const;
 
   // This is what is run whenever the spec says:
@@ -106,27 +103,24 @@ class AlgorithmImplementation {
   // (crypto.subtle.deriveBits() dispatches to this)
   virtual Status DeriveBits(const blink::WebCryptoAlgorithm& algorithm,
                             const blink::WebCryptoKey& base_key,
-                            bool has_optional_length_bits,
-                            unsigned int optional_length_bits,
+                            std::optional<unsigned int> length_bits,
                             std::vector<uint8_t>* derived_bytes) const;
 
   // This is what is run whenever the spec says:
   //    "Let length be the result of executing the get key length algorithm"
   //
   // In the Web Crypto spec the operation returns either "null" or an
-  // "Integer". In this code "null" is represented by setting
-  // |*has_length_bits = false|.
+  // "Integer". In this code "null" is represented with |std::nullopt|.
   virtual Status GetKeyLength(
       const blink::WebCryptoAlgorithm& key_length_algorithm,
-      bool* has_length_bits,
-      unsigned int* length_bits) const;
+      std::optional<unsigned int>* length_bits) const;
 
   // This is what is run whenever the spec says:
   //    "Let result be the result of performing the import key operation"
   //
   // (crypto.subtle.importKey() dispatches to this).
   virtual Status ImportKey(blink::WebCryptoKeyFormat format,
-                           const CryptoData& key_data,
+                           base::span<const uint8_t> key_data,
                            const blink::WebCryptoAlgorithm& algorithm,
                            bool extractable,
                            blink::WebCryptoKeyUsageMask usages,
@@ -139,6 +133,30 @@ class AlgorithmImplementation {
   virtual Status ExportKey(blink::WebCryptoKeyFormat format,
                            const blink::WebCryptoKey& key,
                            std::vector<uint8_t>* buffer) const;
+
+  virtual Status Encapsulate(const blink::WebCryptoAlgorithm& algorithm,
+                             const blink::WebCryptoKey& encapsulation_key,
+                             std::vector<uint8_t>* out_shared_secret,
+                             std::vector<uint8_t>* out_ciphertext) const;
+
+  virtual Status Decapsulate(const blink::WebCryptoAlgorithm& algorithm,
+                             const blink::WebCryptoKey& decapsulation_key,
+                             base::span<const uint8_t> ciphertext,
+                             std::vector<uint8_t>* out_shared_secret) const;
+
+  virtual Status GetPublicKey(const blink::WebCryptoKey& key,
+                              blink::WebCryptoKeyUsageMask usages,
+                              blink::WebCryptoKey* public_key) const;
+
+  // Returns true if the operation and algorithm are supported.
+  //
+  // This function need only check for the specific operations where parameters
+  // applied to the algorithm may impact whether the operation is supported or
+  // not, or if deriveKey/deriveBits is supported and the length_bits needs to
+  // be validated.
+  virtual bool Supports(blink::WebCryptoOperation op,
+                        const blink::WebCryptoAlgorithm& algorithm,
+                        std::optional<unsigned int> length_bits) const;
 
   // -----------------------------------------------
   // Structured clone
@@ -160,14 +178,10 @@ class AlgorithmImplementation {
   //     and be able to survive future migrations to crypto libraries)
   //   * Work for all keys (including ones marked as non-extractable).
   //   * Gracefully handle invalid inputs
-  //
-  // Tests to verify structured cloning are available in:
-  //   LayoutTests/crypto/clone-*.html
 
-  // Note that SerializeKeyForClone() is not virtual because all
-  // implementations end up doing the same thing.
-  Status SerializeKeyForClone(const blink::WebCryptoKey& key,
-                              blink::WebVector<uint8_t>* key_data) const;
+  // Serializes key data for Blink.
+  virtual Status SerializeKeyForClone(const blink::WebCryptoKey& key,
+                                      std::vector<uint8_t>* key_data) const;
 
   // Deserializes key data from Blink (used for structured cloning).
   //
@@ -193,7 +207,7 @@ class AlgorithmImplementation {
       blink::WebCryptoKeyType type,
       bool extractable,
       blink::WebCryptoKeyUsageMask usages,
-      const CryptoData& key_data,
+      base::span<const uint8_t> key_data,
       blink::WebCryptoKey* key) const;
 };
 

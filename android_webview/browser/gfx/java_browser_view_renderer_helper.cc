@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,18 @@
 #include <android/bitmap.h>
 #include <memory>
 
-#include "android_webview/browser_jni_headers/JavaBrowserViewRendererHelper_jni.h"
 #include "android_webview/public/browser/draw_sw.h"
 #include "base/android/scoped_java_ref.h"
+#include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "base/trace_event/trace_event.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
 #include "third_party/skia/include/utils/SkCanvasStateUtils.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "android_webview/browser_jni_headers/JavaBrowserViewRendererHelper_jni.h"
 
 using base::android::ScopedJavaLocalRef;
 
@@ -28,25 +33,29 @@ AwDrawSWFunctionTable* g_sw_draw_functions = NULL;
 class JavaCanvasHolder : public SoftwareCanvasHolder {
  public:
   JavaCanvasHolder(JNIEnv* env,
-                   jobject java_canvas,
-                   const gfx::Vector2d& scroll_correction);
+                   const base::android::JavaRef<jobject>& java_canvas,
+                   const gfx::Point& scroll_correction);
+
+  JavaCanvasHolder(const JavaCanvasHolder&) = delete;
+  JavaCanvasHolder& operator=(const JavaCanvasHolder&) = delete;
+
   ~JavaCanvasHolder() override;
 
   SkCanvas* GetCanvas() override;
 
  private:
-  AwPixelInfo* pixels_;
+  raw_ptr<AwPixelInfo> pixels_;
   std::unique_ptr<SkCanvas> canvas_;
-  DISALLOW_COPY_AND_ASSIGN(JavaCanvasHolder);
 };
 
-JavaCanvasHolder::JavaCanvasHolder(JNIEnv* env,
-                                   jobject java_canvas,
-                                   const gfx::Vector2d& scroll)
+JavaCanvasHolder::JavaCanvasHolder(
+    JNIEnv* env,
+    const base::android::JavaRef<jobject>& java_canvas,
+    const gfx::Point& scroll)
     : pixels_(nullptr) {
   if (!g_sw_draw_functions)
     return;
-  pixels_ = g_sw_draw_functions->access_pixels(env, java_canvas);
+  pixels_ = g_sw_draw_functions->access_pixels(env, java_canvas.obj());
   if (!pixels_ || !pixels_->state)
     return;
 
@@ -76,9 +85,13 @@ SkCanvas* JavaCanvasHolder::GetCanvas() {
 class AuxiliaryCanvasHolder : public SoftwareCanvasHolder {
  public:
   AuxiliaryCanvasHolder(JNIEnv* env,
-                        jobject java_canvas,
-                        const gfx::Vector2d& scroll_correction,
+                        const base::android::JavaRef<jobject>& java_canvas,
+                        const gfx::Point& scroll_correction,
                         const gfx::Size size);
+
+  AuxiliaryCanvasHolder(const AuxiliaryCanvasHolder&) = delete;
+  AuxiliaryCanvasHolder& operator=(const AuxiliaryCanvasHolder&) = delete;
+
   ~AuxiliaryCanvasHolder() override;
 
   SkCanvas* GetCanvas() override;
@@ -86,16 +99,15 @@ class AuxiliaryCanvasHolder : public SoftwareCanvasHolder {
  private:
   ScopedJavaLocalRef<jobject> jcanvas_;
   ScopedJavaLocalRef<jobject> jbitmap_;
-  gfx::Vector2d scroll_;
+  gfx::Point scroll_;
   std::unique_ptr<SkBitmap> bitmap_;
   std::unique_ptr<SkCanvas> canvas_;
-  DISALLOW_COPY_AND_ASSIGN(AuxiliaryCanvasHolder);
 };
 
 AuxiliaryCanvasHolder::AuxiliaryCanvasHolder(
     JNIEnv* env,
-    jobject java_canvas,
-    const gfx::Vector2d& scroll_correction,
+    const base::android::JavaRef<jobject>& java_canvas,
+    const gfx::Point& scroll_correction,
     const gfx::Size size)
     : jcanvas_(env, java_canvas), scroll_(scroll_correction) {
   DCHECK(size.width() > 0);
@@ -127,7 +139,7 @@ AuxiliaryCanvasHolder::AuxiliaryCanvasHolder(
 AuxiliaryCanvasHolder::~AuxiliaryCanvasHolder() {
   bitmap_.reset();
 
-  JNIEnv* env = base::android::AttachCurrentThread();
+  JNIEnv* env = jni_zero::AttachCurrentThread();
   if (AndroidBitmap_unlockPixels(env, jbitmap_.obj()) < 0) {
     LOG(ERROR) << "Error unlocking java bitmap pixels.";
     return;
@@ -149,11 +161,11 @@ void RasterHelperSetAwDrawSWFunctionTable(AwDrawSWFunctionTable* table) {
 
 // static
 std::unique_ptr<SoftwareCanvasHolder> SoftwareCanvasHolder::Create(
-    jobject java_canvas,
-    const gfx::Vector2d& scroll_correction,
+    const base::android::JavaRef<jobject>& java_canvas,
+    const gfx::Point& scroll_correction,
     const gfx::Size& auxiliary_bitmap_size,
     bool force_auxiliary_bitmap) {
-  JNIEnv* env = base::android::AttachCurrentThread();
+  JNIEnv* env = jni_zero::AttachCurrentThread();
   std::unique_ptr<SoftwareCanvasHolder> holder;
   if (!force_auxiliary_bitmap) {
     holder =
@@ -171,3 +183,5 @@ std::unique_ptr<SoftwareCanvasHolder> SoftwareCanvasHolder::Create(
 }
 
 }  // namespace android_webview
+
+DEFINE_JNI(JavaBrowserViewRendererHelper)

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,9 @@
 #include <map>
 
 #include "base/containers/flat_set.h"
-#include "base/gtest_prod_util.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/singleton.h"
+#include "base/observer_list.h"
 #include "base/unguessable_token.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "third_party/blink/public/mojom/devtools/devtools_agent.mojom.h"
@@ -22,10 +22,21 @@ class SharedWorkerHost;
 
 // Manages WorkerDevToolsAgentHost's for Shared Workers.
 // This class lives on UI thread.
-class CONTENT_EXPORT SharedWorkerDevToolsManager {
+class SharedWorkerDevToolsManager {
  public:
+  class Observer : public base::CheckedObserver {
+   public:
+    virtual void SharedWorkerCreated(SharedWorkerDevToolsAgentHost* host,
+                                     bool* should_pause_on_start) = 0;
+    virtual void SharedWorkerDestroyed(SharedWorkerDevToolsAgentHost* host) = 0;
+  };
+
   // Returns the SharedWorkerDevToolsManager singleton.
   static SharedWorkerDevToolsManager* GetInstance();
+
+  SharedWorkerDevToolsManager(const SharedWorkerDevToolsManager&) = delete;
+  SharedWorkerDevToolsManager& operator=(const SharedWorkerDevToolsManager&) =
+      delete;
 
   void AddAllAgentHosts(
       std::vector<scoped_refptr<SharedWorkerDevToolsAgentHost>>* result);
@@ -43,20 +54,23 @@ class CONTENT_EXPORT SharedWorkerDevToolsManager {
 
   SharedWorkerDevToolsAgentHost* GetDevToolsHost(SharedWorkerHost* host);
 
+  void AddObserver(Observer* observer);
+  void RemoveObserver(Observer* observer);
+
  private:
   friend struct base::DefaultSingletonTraits<SharedWorkerDevToolsManager>;
 
   SharedWorkerDevToolsManager();
   ~SharedWorkerDevToolsManager();
 
+  base::ObserverList<Observer> observer_list_;
+
   // We retatin agent hosts as long as the shared worker is alive.
   std::map<SharedWorkerHost*, scoped_refptr<SharedWorkerDevToolsAgentHost>>
       live_hosts_;
   // Clients may retain agent host for the terminated shared worker,
   // and we reconnect them when shared worker is restarted.
-  base::flat_set<SharedWorkerDevToolsAgentHost*> terminated_hosts_;
-
-  DISALLOW_COPY_AND_ASSIGN(SharedWorkerDevToolsManager);
+  base::flat_set<raw_ptr<SharedWorkerDevToolsAgentHost>> terminated_hosts_;
 };
 
 }  // namespace content

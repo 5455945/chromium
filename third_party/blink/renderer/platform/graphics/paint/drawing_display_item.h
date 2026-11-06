@@ -1,17 +1,18 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_PAINT_DRAWING_DISPLAY_ITEM_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_PAINT_DRAWING_DISPLAY_ITEM_H_
 
+#include "base/check_op.h"
 #include "base/compiler_specific.h"
 #include "third_party/blink/renderer/platform/graphics/paint/display_item.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_record.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
+#include "ui/gfx/geometry/rect.h"
 
 namespace blink {
 
@@ -20,33 +21,27 @@ namespace blink {
 class PLATFORM_EXPORT DrawingDisplayItem : public DisplayItem {
  public:
   DISABLE_CFI_PERF
-  DrawingDisplayItem(const DisplayItemClient& client,
+  DrawingDisplayItem(DisplayItemClientId client_id,
                      Type type,
-                     const IntRect& visual_rect,
-                     sk_sp<const PaintRecord> record);
+                     const gfx::Rect& visual_rect,
+                     PaintRecord record,
+                     RasterEffectOutset raster_effect_outset,
+                     PaintInvalidationReason paint_invalidation_reason =
+                         PaintInvalidationReason::kJustCreated);
 
-  const sk_sp<const PaintRecord>& GetPaintRecord() const {
+  const PaintRecord& GetPaintRecord() const {
     DCHECK(!IsTombstone());
     return record_;
   }
 
-  bool KnownToBeOpaque() const {
-    DCHECK(!IsTombstone());
-    if (!RuntimeEnabledFeatures::CompositeAfterPaintEnabled())
-      return false;
-    if (!known_to_be_opaque_is_set_) {
-      known_to_be_opaque_is_set_ = true;
-      known_to_be_opaque_ = CalculateKnownToBeOpaque(record_.get());
-    }
-    return known_to_be_opaque_;
-  }
-  void SetKnownToBeOpaqueForTesting() {
-    DCHECK(!IsTombstone());
-    known_to_be_opaque_is_set_ = true;
-    known_to_be_opaque_ = true;
-  }
+  gfx::Rect RectKnownToBeOpaque() const;
 
-  SkColor BackgroundColor(float& area) const;
+  struct BackgroundColorInfo {
+    SkColor4f color = SkColors::kTransparent;
+    float area = 0;
+    bool is_solid_color = false;
+  };
+  BackgroundColorInfo BackgroundColor() const;
 
  private:
   friend class DisplayItem;
@@ -55,23 +50,63 @@ class PLATFORM_EXPORT DrawingDisplayItem : public DisplayItem {
   void PropertiesAsJSONImpl(JSONObject&) const {}
 #endif
 
-  bool CalculateKnownToBeOpaque(const PaintRecord*) const;
+  // Status of RectKnownToBeOpaque(). kOther means recalculation.
+  enum class Opaqueness { kOther, kFull, kNone };
+  Opaqueness GetOpaqueness() const {
+    return static_cast<Opaqueness>(opaqueness_);
+  }
+  void SetOpaqueness(Opaqueness opaqueness) const {
+    opaqueness_ = static_cast<unsigned>(opaqueness);
+    DCHECK_EQ(GetOpaqueness(), opaqueness);
+  }
+  gfx::Rect CalculateRectKnownToBeOpaque() const;
+  gfx::Rect CalculateRectKnownToBeOpaqueForRecord(const PaintRecord&) const;
 
-  sk_sp<const PaintRecord> record_;
+  // Improve the visual rect using the paint record. This can improve solid
+  // color analysis in cases when the painted content was snapped but the
+  // visual rect was not. Check |ShouldTightenVisualRect| before calling.
+  static gfx::Rect TightenVisualRect(const gfx::Rect& visual_rect,
+                                     const PaintRecord& record);
+  static bool ShouldTightenVisualRect(const PaintRecord& record) {
+    // We only have an optimization to tighten the visual rect for a single op.
+    return record.size() == 1;
+  }
+
+  const PaintRecord record_;
 };
 
 // TODO(dcheng): Move this ctor back inline once the clang plugin is fixed.
 DISABLE_CFI_PERF
-inline DrawingDisplayItem::DrawingDisplayItem(const DisplayItemClient& client,
-                                              Type type,
-                                              const IntRect& visual_rect,
-                                              sk_sp<const PaintRecord> record)
-    : DisplayItem(client,
-                  type,
-                  visual_rect,
-                  /* draws_content*/ record && record->size()),
-      record_(DrawsContent() ? std::move(record) : nullptr) {
+inline DrawingDisplayItem::DrawingDisplayItem(
+    DisplayItemClientId client_id,
+    Type type,
+    const gfx::Rect& visual_rect,
+    PaintRecord record,
+    RasterEffectOutset raster_effect_outset,
+    PaintInvalidationReason paint_invalidation_reason)
+    : DisplayItem(
+          client_id,
+          type,
+          [&] {
+            if (ShouldTightenVisualRect(record)) [[unlikely]] {
+              return TightenVisualRect(visual_rect, record);
+            }
+            return visual_rect;
+          }(),
+          raster_effect_outset,
+          paint_invalidation_reason,
+          /* draws_content*/ !record.empty()),
+      record_(std::move(record)) {
   DCHECK(IsDrawing());
+  DCHECK_EQ(GetOpaqueness(), Opaqueness::kOther);
+}
+
+inline gfx::Rect DrawingDisplayItem::RectKnownToBeOpaque() const {
+  if (GetOpaqueness() == Opaqueness::kFull)
+    return VisualRect();
+  if (GetOpaqueness() == Opaqueness::kNone)
+    return gfx::Rect();
+  return CalculateRectKnownToBeOpaque();
 }
 
 template <>

@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,14 +9,13 @@
 namespace ash {
 
 ScopedSessionObserver::ScopedSessionObserver(SessionObserver* observer)
-    : observer_(observer) {
+    : observation_(observer) {
   DCHECK(SessionController::Get());
-  SessionController::Get()->AddObserver(observer_);
+  observation_.Observe(SessionController::Get());
 }
 
 ScopedSessionObserver::~ScopedSessionObserver() {
   DCHECK(SessionController::Get());
-  SessionController::Get()->RemoveObserver(observer_);
 }
 
 }  // namespace ash

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,24 +6,26 @@
 
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/dom/element_traversal.h"
+#include "third_party/blink/renderer/core/dom/shadow_root.h"
+#include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
+#include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/html/forms/date_time_chooser_client.h"
 #include "third_party/blink/renderer/core/html/forms/html_input_element.h"
-#include "third_party/blink/renderer/core/testing/dummy_page_holder.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
-#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
+#include "third_party/blink/renderer/core/html/shadow/shadow_element_names.h"
+#include "third_party/blink/renderer/core/testing/null_execution_context.h"
+#include "third_party/blink/renderer/core/testing/page_test_base.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
-class ExternalDateTimeChooserTest : public testing::Test {
+class ExternalDateTimeChooserTest : public PageTestBase {
  protected:
-  void SetUp() final {
-    dummy_page_holder_ = std::make_unique<DummyPageHolder>(IntSize(800, 600));
+  void SetUp() override {
+    PageTestBase::SetUp();
+    GetDocument().GetSettings()->SetDateTimeSubfieldsFocusableForTesting(true);
   }
-  Document& GetDocument() { return dummy_page_holder_->GetDocument(); }
-
- private:
-  std::unique_ptr<DummyPageHolder> dummy_page_holder_;
 };
 
 class TestDateTimeChooserClient final
@@ -60,8 +62,9 @@ class TestDateTimeChooserClient final
 // This is a regression test for crbug.com/974646. EndChooser can cause a crash
 // when it's called twice because |client_| was already nullptr.
 TEST_F(ExternalDateTimeChooserTest, EndChooserShouldNotCrash) {
-  ScopedInputMultipleFieldsUIForTest input_multiple_fields_ui(false);
-  auto* document = Document::CreateForTest();
+  ScopedNullExecutionContext execution_context;
+  auto* document =
+      Document::CreateForTest(execution_context.GetExecutionContext());
   auto* element = document->CreateRawElement(html_names::kInputTag);
   auto* client = MakeGarbageCollected<TestDateTimeChooserClient>(element);
   auto* external_date_time_chooser =
@@ -77,8 +80,7 @@ TEST_F(ExternalDateTimeChooserTest, EndChooserShouldNotCrash) {
 // receiving side.
 TEST_F(ExternalDateTimeChooserTest,
        OpenDateTimeChooserShouldNotCrashWhenLabelAndValueIsTheSame) {
-  ScopedInputMultipleFieldsUIForTest input_multiple_fields_ui(false);
-  GetDocument().documentElement()->setInnerHTML(R"HTML(
+  GetDocument().documentElement()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
       <input id=test type="date" list="src" />
         <datalist id="src">
           <option value='2019-12-31'>Hint</option>
@@ -89,7 +91,7 @@ TEST_F(ExternalDateTimeChooserTest,
       )HTML");
   GetDocument().View()->UpdateAllLifecyclePhasesForTest();
 
-  auto* input = To<HTMLInputElement>(GetDocument().getElementById("test"));
+  auto* input = To<HTMLInputElement>(GetElementById("test"));
   ASSERT_TRUE(input);
 
   DateTimeChooserParameters params;
@@ -104,6 +106,87 @@ TEST_F(ExternalDateTimeChooserTest,
   external_date_time_chooser->OpenDateTimeChooser(GetDocument().GetFrame(),
                                                   params);
   // Crash should not happen after calling OpenDateTimeChooser().
+}
+
+TEST_F(ExternalDateTimeChooserTest, IsPickerVisible) {
+  GetDocument().documentElement()->SetInnerHTMLWithoutTrustedTypes(
+      "<input id=test type=date>");
+  GetDocument().View()->UpdateAllLifecyclePhasesForTest();
+
+  auto* input = To<HTMLInputElement>(GetElementById("test"));
+  ASSERT_TRUE(input);
+
+  DateTimeChooserParameters params;
+  bool success = input->SetupDateTimeChooserParameters(params);
+  ASSERT_TRUE(success);
+
+  auto* client = MakeGarbageCollected<TestDateTimeChooserClient>(
+      GetDocument().documentElement());
+  auto* external_date_time_chooser =
+      MakeGarbageCollected<ExternalDateTimeChooser>(client);
+  client->SetDateTimeChooser(external_date_time_chooser);
+  EXPECT_FALSE(external_date_time_chooser->IsPickerVisible());
+
+  external_date_time_chooser->OpenDateTimeChooser(GetDocument().GetFrame(),
+                                                  params);
+  EXPECT_TRUE(external_date_time_chooser->IsPickerVisible());
+
+  external_date_time_chooser->EndChooser();
+  EXPECT_FALSE(external_date_time_chooser->IsPickerVisible());
+
+  external_date_time_chooser->OpenDateTimeChooser(GetDocument().GetFrame(),
+                                                  params);
+  EXPECT_TRUE(external_date_time_chooser->IsPickerVisible());
+}
+
+TEST_F(ExternalDateTimeChooserTest, DesktopFocusability) {
+  SetBodyContent("<input id=test type=date>");
+
+  auto* input = To<HTMLInputElement>(GetElementById("test"));
+  ASSERT_TRUE(input);
+
+  ShadowRoot* shadow = input->UserAgentShadowRoot();
+  ASSERT_TRUE(shadow);
+
+  Element* edit = shadow->getElementById(shadow_element_names::kIdDateTimeEdit);
+  ASSERT_TRUE(edit);
+  Element* wrapper = ElementTraversal::FirstChild(*edit);
+  ASSERT_TRUE(wrapper);
+  Element* subfield = ElementTraversal::FirstChild(*wrapper);
+  ASSERT_TRUE(subfield);
+
+  Element* picker_indicator =
+      shadow->getElementById(shadow_element_names::kIdPickerIndicator);
+  ASSERT_TRUE(picker_indicator);
+
+  EXPECT_TRUE(subfield->IsFocusable());
+  EXPECT_TRUE(picker_indicator->IsFocusable());
+}
+
+TEST_F(ExternalDateTimeChooserTest, NonDesktopFocusability) {
+  GetDocument().GetSettings()->SetDateTimeSubfieldsFocusableForTesting(false);
+
+  SetBodyContent("<input id=test type=date>");
+
+  auto* input = To<HTMLInputElement>(GetElementById("test"));
+  ASSERT_TRUE(input);
+
+  ShadowRoot* shadow = input->UserAgentShadowRoot();
+  ASSERT_TRUE(shadow);
+
+  Element* edit = shadow->getElementById(shadow_element_names::kIdDateTimeEdit);
+  ASSERT_TRUE(edit);
+  Element* wrapper = ElementTraversal::FirstChild(*edit);
+  ASSERT_TRUE(wrapper);
+  Element* subfield = ElementTraversal::FirstChild(*wrapper);
+  ASSERT_TRUE(subfield);
+
+  Element* picker_indicator =
+      shadow->getElementById(shadow_element_names::kIdPickerIndicator);
+  ASSERT_TRUE(picker_indicator);
+
+  EXPECT_FALSE(subfield->IsFocusable());
+  EXPECT_FALSE(picker_indicator->IsFocusable());
 }
 
 }  // namespace blink

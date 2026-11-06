@@ -1,94 +1,51 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <stdint.h>
+
 #include <memory>
 #include <string>
 #include <utility>
 
-#include "base/at_exit.h"
-#include "base/base_switches.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/command_line.h"
-#include "base/i18n/icu_util.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ref.h"
+#include "base/no_destructor.h"
 #include "base/run_loop.h"
-#include "base/test/test_switches.h"
-#include "base/test/test_timeouts.h"
-#include "base/threading/platform_thread.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/threading/thread.h"
-#include "content/browser/gpu/gpu_data_manager_impl.h"      // nogncheck
-#include "content/browser/network_service_instance_impl.h"  // nogncheck
+#include "content/browser/gpu/gpu_data_manager_impl.h"  // nogncheck
 #include "content/browser/presentation/presentation_service_impl.h"  // nogncheck
 #include "content/browser/presentation/presentation_test_utils.h"
 #include "content/browser/site_instance_impl.h"  // nogncheck
-#include "content/public/browser/browser_task_traits.h"
-#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/presentation_request.h"
 #include "content/public/browser/presentation_service_delegate.h"
 #include "content/public/browser/site_instance.h"
-#include "content/public/common/content_client.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/mock_navigation_handle.h"
 #include "content/public/test/test_browser_context.h"
-#include "content/public/test/test_content_client_initializer.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/test/fuzzer/controller_presentation_service_delegate_for_fuzzing.h"
+#include "content/test/fuzzer/mojolpm_fuzzer_support.h"
 #include "content/test/fuzzer/presentation_service_mojolpm_fuzzer.pb.h"
 #include "content/test/test_render_frame_host.h"
 #include "content/test/test_web_contents.h"
-#include "mojo/core/embedder/embedder.h"
-#include "mojo/public/cpp/bindings/interface_ptr.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/mojom/presentation/presentation.mojom-mojolpm.h"
 #include "third_party/libprotobuf-mutator/src/src/libfuzzer/libfuzzer_macro.h"
 #include "ui/events/devices/device_data_manager.h"
 
-const char* cmdline[] = {"presentation_service_mojolpm_fuzzer", nullptr};
+constexpr const char* kCmdline[] = {"presentation_service_mojolpm_fuzzer",
+                                    nullptr};
 
-// Global environment needed to run the interface being tested.
-//
-// This will be created once, before fuzzing starts, and will be shared between
-// all testcases. It is created on the main thread.
-//
-// At a minimum, we should always be able to set up the command line, i18n and
-// mojo, and create the thread on which the fuzzer will be run. We want to avoid
-// (as much as is reasonable) any state being preserved between testcases.
-//
-// We try to create an environment that matches the real browser process as
-// much as possible, so we use real platform threads in the task environment.
-class ContentFuzzerEnvironment {
- public:
-  ContentFuzzerEnvironment()
-      : fuzzer_thread_((base::CommandLine::Init(1, cmdline), "fuzzer_thread")) {
-    TestTimeouts::Initialize();
-    logging::SetMinLogLevel(logging::LOG_FATAL);
-    mojo::core::Init();
-    base::i18n::InitializeICU();
-    fuzzer_thread_.StartAndWaitForTesting();
-
-    content::ForceCreateNetworkServiceDirectlyForTesting();
-  }
-
-  scoped_refptr<base::SequencedTaskRunner> fuzzer_task_runner() {
-    return fuzzer_thread_.task_runner();
-  }
-
- private:
-  base::AtExitManager at_exit_manager_;
-  base::Thread fuzzer_thread_;
-  content::TestContentClientInitializer content_client_initializer_;
-};
-
-ContentFuzzerEnvironment& GetEnvironment() {
-  static base::NoDestructor<ContentFuzzerEnvironment> environment;
+content::mojolpm::FuzzerEnvironment& GetEnvironment() {
+  static base::NoDestructor<content::mojolpm::FuzzerEnvironment> environment(
+      1, kCmdline);
   return *environment;
 }
 
@@ -149,7 +106,8 @@ class PresentationServiceTestcase : public content::RenderViewHostTestHarness {
   void TestBody() override {}
 
   // The proto message describing the test actions to perform.
-  const content::fuzzing::presentation_service::proto::Testcase& testcase_;
+  const raw_ref<const content::fuzzing::presentation_service::proto::Testcase>
+      testcase_;
 
   // Apply a reasonable upper-bound on testcase complexity to avoid timeouts.
   const int max_action_count_ = 512;
@@ -167,7 +125,8 @@ class PresentationServiceTestcase : public content::RenderViewHostTestHarness {
 
   // A fake delegate which we can control with protobuf messages,
   // the actions of which are also within our fuzzer's actions.
-  // Required as `PresentationServiceDelegateImpl` expects UI interaction.
+  // Required as `ControllerPresentationServiceDelegateImpl` expects UI
+  // interaction.
   std::unique_ptr<ControllerPresentationServiceDelegateForFuzzing>
       controller_delegate_;
 
@@ -194,20 +153,20 @@ PresentationServiceTestcase::~PresentationServiceTestcase() {
 }
 
 bool PresentationServiceTestcase::IsFinished() {
-  return next_sequence_idx_ >= testcase_.sequence_indexes_size();
+  return next_sequence_idx_ >= testcase_->sequence_indexes_size();
 }
 
 void PresentationServiceTestcase::NextAction() {
-  if (next_sequence_idx_ < testcase_.sequence_indexes_size()) {
-    auto sequence_idx = testcase_.sequence_indexes(next_sequence_idx_++);
+  if (next_sequence_idx_ < testcase_->sequence_indexes_size()) {
+    auto sequence_idx = testcase_->sequence_indexes(next_sequence_idx_++);
     const auto& sequence =
-        testcase_.sequences(sequence_idx % testcase_.sequences_size());
+        testcase_->sequences(sequence_idx % testcase_->sequences_size());
     for (auto action_idx : sequence.action_indexes()) {
-      if (!testcase_.actions_size() || ++action_count_ > max_action_count_) {
+      if (!testcase_->actions_size() || ++action_count_ > max_action_count_) {
         return;
       }
       const auto& action =
-          testcase_.actions(action_idx % testcase_.actions_size());
+          testcase_->actions(action_idx % testcase_->actions_size());
       if (action.ByteSizeLong() > max_action_size_) {
         return;
       }
@@ -270,7 +229,8 @@ void PresentationServiceTestcase::SetUp() {
 
 void PresentationServiceTestcase::SetUpOnUIThread() {
   content::TestRenderFrameHost* render_frame_host =
-      static_cast<content::TestWebContents*>(web_contents())->GetMainFrame();
+      static_cast<content::TestWebContents*>(web_contents())
+          ->GetPrimaryMainFrame();
   render_frame_host->InitializeRenderFrameIfNeeded();
 
   presentation_service_ =

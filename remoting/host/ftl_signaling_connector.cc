@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,10 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/strings/string_util.h"
 #include "google_apis/google_api_keys.h"
-#include "net/url_request/url_fetcher.h"
 #include "net/url_request/url_request_context_getter.h"
 #include "remoting/base/logging.h"
 #include "remoting/signaling/signaling_address.h"
@@ -19,8 +18,8 @@ namespace remoting {
 
 namespace {
 
-constexpr base::TimeDelta kBackoffResetDelay = base::TimeDelta::FromSeconds(30);
-constexpr base::TimeDelta kNetworkChangeDelay = base::TimeDelta::FromSeconds(5);
+constexpr base::TimeDelta kBackoffResetDelay = base::Seconds(30);
+constexpr base::TimeDelta kNetworkChangeDelay = base::Seconds(5);
 
 const net::BackoffEntry::Policy kBackoffPolicy = {
     // Number of initial errors (in sequence) to ignore before applying
@@ -86,7 +85,7 @@ void FtlSignalingConnector::Start() {
   TryReconnect(base::TimeDelta());
 }
 
-void FtlSignalingConnector::OnSignalStrategyStateChange(
+void FtlSignalingConnector::OnSignalingStateChanged(
     SignalStrategy::State state) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
@@ -98,7 +97,7 @@ void FtlSignalingConnector::OnSignalStrategyStateChange(
   } else if (state == SignalStrategy::DISCONNECTED) {
     HOST_LOG << "Signaling disconnected. error="
              << SignalStrategyErrorToString(signal_strategy_->GetError());
-    backoff_reset_timer_.AbandonAndStop();
+    backoff_reset_timer_.Stop();
     backoff_.InformOfRequest(false);
     if (signal_strategy_->IsSignInError() &&
         signal_strategy_->GetError() == SignalStrategy::AUTHENTICATION_FAILED) {
@@ -109,11 +108,6 @@ void FtlSignalingConnector::OnSignalStrategyStateChange(
     }
     TryReconnect(backoff_.GetTimeUntilRelease());
   }
-}
-
-bool FtlSignalingConnector::OnSignalStrategyIncomingStanza(
-    const jingle_xmpp::XmlElement* stanza) {
-  return false;
 }
 
 void FtlSignalingConnector::OnNetworkChanged(

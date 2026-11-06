@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,11 +9,10 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/containers/queue.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/test/task_environment.h"
-#include "base/threading/sequenced_task_runner_handle.h"
 #include "net/base/io_buffer.h"
 #include "remoting/base/compound_buffer.h"
 #include "remoting/host/file_transfer/fake_file_operations.h"
@@ -32,8 +31,7 @@ std::unique_ptr<remoting::CompoundBuffer> StringToBuffer(
     const std::string& data) {
   std::unique_ptr<remoting::CompoundBuffer> buffer =
       std::make_unique<remoting::CompoundBuffer>();
-  buffer->Append(base::MakeRefCounted<net::StringIOBuffer>(data.data()),
-                 data.size());
+  buffer->Append(base::MakeRefCounted<net::StringIOBuffer>(data), data.size());
   return buffer;
 }
 
@@ -52,19 +50,30 @@ std::unique_ptr<remoting::CompoundBuffer> DataToBuffer(
 // base::queue doesn't provide operator==.
 template <typename T>
 bool QueuesEqual(const base::queue<T>& a, const base::queue<T>& b) {
-  if (a.size() != b.size())
+  if (a.size() != b.size()) {
     return false;
+  }
 
   auto a_copy = a;
   auto b_copy = b;
   while (!a_copy.empty()) {
-    if (a_copy.front() != b_copy.front())
+    if (a_copy.front() != b_copy.front()) {
       return false;
+    }
     a_copy.pop();
     b_copy.pop();
   }
   return true;
 }
+
+class NullFileOperations : public remoting::FileOperations {
+ public:
+  NullFileOperations() = default;
+  ~NullFileOperations() override = default;
+
+  std::unique_ptr<Reader> CreateReader() override { return nullptr; }
+  std::unique_ptr<Writer> CreateWriter() override { return nullptr; }
+};
 
 }  // namespace
 
@@ -137,11 +146,11 @@ TEST_F(FileTransferMessageHandlerTest, WritesThreeChunks) {
 
   fake_pipe_->ClosePipe();
 
-  ASSERT_EQ(1ul, test_io.files_written.size());
-  ASSERT_EQ(false, test_io.files_written[0].failed);
+  ASSERT_EQ(test_io.files_written.size(), 1ul);
+  ASSERT_FALSE(test_io.files_written[0].failed);
   std::vector<std::vector<std::uint8_t>> expected_chunks = {
       kTestDataOne, kTestDataTwo, kTestDataThree};
-  ASSERT_EQ(expected_chunks, test_io.files_written[0].chunks);
+  ASSERT_EQ(test_io.files_written[0].chunks, expected_chunks);
 
   const base::queue<std::string>& actual_sent_messages =
       fake_pipe_->sent_messages();
@@ -208,11 +217,11 @@ TEST_F(FileTransferMessageHandlerTest, HandlesErrorMessage) {
 
   fake_pipe_->ClosePipe();
 
-  ASSERT_EQ(1ul, test_io.files_written.size());
-  ASSERT_EQ(true, test_io.files_written[0].failed);
+  ASSERT_EQ(test_io.files_written.size(), 1ul);
+  ASSERT_TRUE(test_io.files_written[0].failed);
   std::vector<std::vector<std::uint8_t>> expected_chunks = {kTestDataOne,
                                                             kTestDataTwo};
-  ASSERT_EQ(expected_chunks, test_io.files_written[0].chunks);
+  ASSERT_EQ(test_io.files_written[0].chunks, expected_chunks);
 
   const base::queue<std::string>& actual_sent_messages =
       fake_pipe_->sent_messages();
@@ -239,11 +248,11 @@ TEST_F(FileTransferMessageHandlerTest, HandlesPrematureClose) {
 
   fake_pipe_->ClosePipe();
 
-  ASSERT_EQ(1ul, test_io.files_written.size());
-  ASSERT_EQ(true, test_io.files_written[0].failed);
+  ASSERT_EQ(test_io.files_written.size(), 1ul);
+  ASSERT_TRUE(test_io.files_written[0].failed);
   std::vector<std::vector<std::uint8_t>> expected_chunks = {kTestDataOne,
                                                             kTestDataTwo};
-  ASSERT_EQ(expected_chunks, test_io.files_written[0].chunks);
+  ASSERT_EQ(test_io.files_written[0].chunks, expected_chunks);
 }
 
 // Verifies that an error is sent if data is sent before/without metadata.
@@ -264,15 +273,15 @@ TEST_F(FileTransferMessageHandlerTest, ErrorsOnMissingMetadata) {
 
   fake_pipe_->ClosePipe();
 
-  ASSERT_EQ(0ul, test_io.files_written.size());
+  ASSERT_EQ(test_io.files_written.size(), 0ul);
 
   const base::queue<std::string>& sent_messages = fake_pipe_->sent_messages();
-  ASSERT_EQ(1ul, sent_messages.size());
+  ASSERT_EQ(sent_messages.size(), 1ul);
   protocol::FileTransfer response;
   response.ParseFromString(sent_messages.front());
-  ASSERT_EQ(protocol::FileTransfer::kError, response.message_case());
-  ASSERT_EQ(protocol::FileTransfer_Error_Type_PROTOCOL_ERROR,
-            response.error().type());
+  ASSERT_EQ(response.message_case(), protocol::FileTransfer::kError);
+  ASSERT_EQ(response.error().type(),
+            protocol::FileTransfer_Error_Type_PROTOCOL_ERROR);
 }
 
 // Verifies that an error is sent if another metadata message is sent.
@@ -296,13 +305,13 @@ TEST_F(FileTransferMessageHandlerTest, ErrorsOnNewMetadata) {
   fake_pipe_->ClosePipe();
 
   const base::queue<std::string>& sent_messages = fake_pipe_->sent_messages();
-  // First is the sucess message, second should be a protocol error.
-  ASSERT_EQ(2ul, sent_messages.size());
+  // First is the success message, second should be a protocol error.
+  ASSERT_EQ(sent_messages.size(), 2ul);
   protocol::FileTransfer response;
   response.ParseFromString(sent_messages.back());
-  ASSERT_EQ(protocol::FileTransfer::kError, response.message_case());
-  ASSERT_EQ(protocol::FileTransfer_Error_Type_PROTOCOL_ERROR,
-            response.error().type());
+  ASSERT_EQ(response.message_case(), protocol::FileTransfer::kError);
+  ASSERT_EQ(response.error().type(),
+            protocol::FileTransfer_Error_Type_PROTOCOL_ERROR);
 }
 
 // Verifies that an error is sent if more data is sent after Close.
@@ -325,18 +334,18 @@ TEST_F(FileTransferMessageHandlerTest, ErrorsOnDataAfterClose) {
 
   fake_pipe_->ClosePipe();
 
-  ASSERT_EQ(1ul, test_io.files_written.size());
-  ASSERT_EQ(true, test_io.files_written[0].failed);
+  ASSERT_EQ(test_io.files_written.size(), 1ul);
+  ASSERT_TRUE(test_io.files_written[0].failed);
 
   const base::queue<std::string>& sent_messages = fake_pipe_->sent_messages();
   // Because the error is triggered before RunUntilIdle is called, there should
   // be no complete message this time.
-  ASSERT_EQ(1ul, sent_messages.size());
+  ASSERT_EQ(sent_messages.size(), 1ul);
   protocol::FileTransfer response;
   response.ParseFromString(sent_messages.front());
-  ASSERT_EQ(protocol::FileTransfer::kError, response.message_case());
-  ASSERT_EQ(protocol::FileTransfer_Error_Type_PROTOCOL_ERROR,
-            response.error().type());
+  ASSERT_EQ(response.message_case(), protocol::FileTransfer::kError);
+  ASSERT_EQ(response.error().type(),
+            protocol::FileTransfer_Error_Type_PROTOCOL_ERROR);
 }
 
 // Download tests.
@@ -348,8 +357,8 @@ TEST_F(FileTransferMessageHandlerTest, ReadsFile) {
   auto file_operations = std::make_unique<FakeFileOperations>(&test_io);
 
   test_io.input_file = FakeFileOperations::InputFile(
-      base::FilePath::FromUTF8Unsafe(kTestFilename),
-      ByteArrayFrom(kTestDataOne, kTestDataTwo, kTestDataThree), absl::nullopt);
+      base::FilePath::FromASCII(kTestFilename),
+      ByteArrayFrom(kTestDataOne, kTestDataTwo, kTestDataThree), std::nullopt);
 
   // This will delete itself when fake_pipe_->ClosePipe() is called.
   new FileTransferMessageHandler(kTestDatachannelName, fake_pipe_->Wrap(),
@@ -409,7 +418,7 @@ TEST_F(FileTransferMessageHandlerTest, ForwardsReadError) {
   auto file_operations = std::make_unique<FakeFileOperations>(&test_io);
 
   test_io.input_file = FakeFileOperations::InputFile(
-      base::FilePath::FromUTF8Unsafe(kTestFilename),
+      base::FilePath::FromASCII(kTestFilename),
       ByteArrayFrom(kTestDataOne, kTestDataTwo, kTestDataThree),
       protocol::MakeFileTransferError(
           FROM_HERE, protocol::FileTransfer_Error_Type_IO_ERROR));
@@ -436,6 +445,45 @@ TEST_F(FileTransferMessageHandlerTest, ForwardsReadError) {
   *error.mutable_error() = *test_io.input_file->io_error;
   expected_sent_messages.push(error.SerializeAsString());
   ASSERT_TRUE(QueuesEqual(expected_sent_messages, actual_sent_messages));
+}
+
+TEST_F(FileTransferMessageHandlerTest, NullWriter_SendsProtocolError) {
+  new FileTransferMessageHandler(kTestDatachannelName, fake_pipe_->Wrap(),
+                                 std::make_unique<NullFileOperations>());
+
+  protocol::FileTransfer fake_error_message;
+  *fake_error_message.mutable_error() = protocol::MakeFileTransferError(
+      FROM_HERE, protocol::FileTransfer_Error_Type_CANCELED);
+
+  fake_pipe_->OpenPipe();
+  fake_pipe_->Receive(MessageToBuffer(fake_metadata_));
+  fake_pipe_->Receive(MessageToBuffer(fake_error_message));
+  fake_pipe_->ClosePipe();
+
+  const base::queue<std::string>& sent_messages = fake_pipe_->sent_messages();
+  ASSERT_EQ(sent_messages.size(), 1ul);
+  protocol::FileTransfer response;
+  response.ParseFromString(sent_messages.front());
+  ASSERT_EQ(response.message_case(), protocol::FileTransfer::kError);
+  ASSERT_EQ(response.error().type(),
+            protocol::FileTransfer_Error_Type_PROTOCOL_ERROR);
+}
+
+TEST_F(FileTransferMessageHandlerTest, NullReader_SendsProtocolError) {
+  new FileTransferMessageHandler(kTestDatachannelName, fake_pipe_->Wrap(),
+                                 std::make_unique<NullFileOperations>());
+
+  fake_pipe_->OpenPipe();
+  fake_pipe_->Receive(MessageToBuffer(fake_request_transfer_));
+  fake_pipe_->ClosePipe();
+
+  const base::queue<std::string>& sent_messages = fake_pipe_->sent_messages();
+  ASSERT_EQ(sent_messages.size(), 1ul);
+  protocol::FileTransfer response;
+  response.ParseFromString(sent_messages.front());
+  ASSERT_EQ(response.message_case(), protocol::FileTransfer::kError);
+  ASSERT_EQ(response.error().type(),
+            protocol::FileTransfer_Error_Type_PROTOCOL_ERROR);
 }
 
 }  // namespace remoting

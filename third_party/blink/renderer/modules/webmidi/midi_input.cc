@@ -30,13 +30,12 @@
 
 #include "third_party/blink/renderer/modules/webmidi/midi_input.h"
 
+#include "base/numerics/safe_conversions.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/modules/webmidi/midi_access.h"
 #include "third_party/blink/renderer/modules/webmidi/midi_message_event.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
-#include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 
 namespace blink {
 
@@ -48,7 +47,13 @@ MIDIInput::MIDIInput(MIDIAccess* access,
                      const String& name,
                      const String& version,
                      PortState state)
-    : MIDIPort(access, id, manufacturer, name, kTypeInput, version, state) {}
+    : MIDIPort(access,
+               id,
+               manufacturer,
+               name,
+               MIDIPortType::kInput,
+               version,
+               state) {}
 
 EventListener* MIDIInput::onmidimessage() {
   return GetAttributeEventListener(event_type_names::kMidimessage);
@@ -56,7 +61,7 @@ EventListener* MIDIInput::onmidimessage() {
 
 void MIDIInput::setOnmidimessage(EventListener* listener) {
   // Implicit open. It does nothing if the port is already opened.
-  // See http://www.w3.org/TR/webmidi/#widl-MIDIPort-open-Promise-MIDIPort
+  // See https://www.w3.org/TR/webmidi/#dom-midiport-open
   open();
 
   SetAttributeEventListener(event_type_names::kMidimessage, listener);
@@ -73,25 +78,27 @@ void MIDIInput::AddedEventListener(
 }
 
 void MIDIInput::DidReceiveMIDIData(unsigned port_index,
-                                   const unsigned char* data,
-                                   size_t length,
+                                   base::span<const uint8_t> data,
                                    base::TimeTicks time_stamp) {
   DCHECK(IsMainThread());
 
-  if (!length)
+  if (data.empty()) {
     return;
+  }
 
-  if (GetConnection() != kConnectionStateOpen)
+  if (GetConnection() != MIDIPortConnectionState::kOpen) {
     return;
+  }
 
   // Drop sysex message here when the client does not request it. Note that this
   // is not a security check but an automatic filtering for clients that do not
   // want sysex message. Also note that sysex message will never be sent unless
   // the current process has an explicit permission to handle sysex message.
-  if (data[0] == 0xf0 && !midiAccess()->sysexEnabled())
+  if (data[0] == 0xf0 && !midiAccess()->sysexEnabled()) {
     return;
-  DOMUint8Array* array =
-      DOMUint8Array::Create(data, SafeCast<unsigned>(length));
+  }
+  DOMUint8Array* array = DOMUint8Array::Create(data);
+
   DispatchEvent(*MakeGarbageCollected<MIDIMessageEvent>(time_stamp, array));
 
   UseCounter::Count(GetExecutionContext(), WebFeature::kMIDIMessageEvent);

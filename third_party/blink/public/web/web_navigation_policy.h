@@ -40,6 +40,13 @@ enum WebNavigationPolicy {
   kWebNavigationPolicyNewForegroundTab,
   kWebNavigationPolicyNewWindow,
   kWebNavigationPolicyNewPopup,
+
+  // The navigation request is for a Picture-in-Picture window opened via
+  // |documentPictureInPicture.requestWindow()|.
+  kWebNavigationPolicyPictureInPicture,
+
+  // The navigation should open in a split view alongside the current tab.
+  kWebNavigationPolicySplitView,
 };
 
 }  // namespace blink

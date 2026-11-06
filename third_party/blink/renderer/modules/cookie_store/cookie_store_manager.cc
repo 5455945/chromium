@@ -1,13 +1,14 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/cookie_store/cookie_store_manager.h"
 
+#include <optional>
 #include <utility>
 
 #include "services/network/public/mojom/restricted_cookie_manager.mojom-blink.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_throw_dom_exception.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_cookie_list_item.h"
@@ -16,12 +17,10 @@
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/modules/cookie_store/cookie_change_event.h"
-#include "third_party/blink/renderer/modules/service_worker/service_worker_global_scope.h"
 #include "third_party/blink/renderer/modules/service_worker/service_worker_registration.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
@@ -40,7 +39,7 @@ mojom::blink::CookieChangeSubscriptionPtr ToBackendSubscription(
 
   if (subscription->hasUrl()) {
     KURL subscription_url(default_cookie_url, subscription->url());
-    if (!subscription_url.GetString().StartsWith(
+    if (!subscription_url.GetString().starts_with(
             default_cookie_url.GetString())) {
       exception_state.ThrowTypeError("URL must be within ServiceWorker scope");
       return nullptr;
@@ -72,7 +71,7 @@ CookieStoreGetOptions* ToCookieChangeSubscription(
   CookieStoreGetOptions* subscription = CookieStoreGetOptions::Create();
   subscription->setUrl(backend_subscription.url);
 
-  if (!backend_subscription.name.IsEmpty())
+  if (!backend_subscription.name.empty())
     subscription->setName(backend_subscription.name);
 
   return subscription;
@@ -106,76 +105,93 @@ CookieStoreManager::CookieStoreManager(ServiceWorkerRegistration& registration)
       registration_(&registration),
       backend_(registration.GetExecutionContext()),
       default_cookie_url_(DefaultCookieURL(&registration)) {
-  auto* execution_context = registration.GetExecutionContext();
-  execution_context->GetBrowserInterfaceBroker().GetInterface(
-      backend_.BindNewPipeAndPassReceiver(
-          execution_context->GetTaskRunner(TaskType::kDOMManipulation)));
+  if (auto* execution_context = registration.GetExecutionContext()) {
+    execution_context->GetBrowserInterfaceBroker().GetInterface(
+        backend_.BindNewPipeAndPassReceiver(
+            execution_context->GetTaskRunner(TaskType::kDOMManipulation)));
+  }
 }
 
-ScriptPromise CookieStoreManager::subscribe(
+ScriptPromise<IDLUndefined> CookieStoreManager::subscribe(
     ScriptState* script_state,
     const HeapVector<Member<CookieStoreGetOptions>>& subscriptions,
-    ExceptionState& exception_state) {
-  Vector<mojom::blink::CookieChangeSubscriptionPtr> backend_subscriptions;
-  backend_subscriptions.ReserveInitialCapacity(subscriptions.size());
-  for (const CookieStoreGetOptions* subscription : subscriptions) {
-    mojom::blink::CookieChangeSubscriptionPtr backend_subscription =
-        ToBackendSubscription(default_cookie_url_, subscription,
-                              exception_state);
-    if (backend_subscription.is_null()) {
-      DCHECK(exception_state.HadException());
-      return ScriptPromise();
-    }
-    backend_subscriptions.push_back(std::move(backend_subscription));
-  }
-
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
-  backend_->AddSubscriptions(
-      registration_->RegistrationId(), std::move(backend_subscriptions),
-      WTF::Bind(&CookieStoreManager::OnSubscribeResult, WrapPersistent(this),
-                WrapPersistent(resolver)));
-  return resolver->Promise();
-}
-
-ScriptPromise CookieStoreManager::unsubscribe(
-    ScriptState* script_state,
-    const HeapVector<Member<CookieStoreGetOptions>>& subscriptions,
-    ExceptionState& exception_state) {
-  Vector<mojom::blink::CookieChangeSubscriptionPtr> backend_subscriptions;
-  backend_subscriptions.ReserveInitialCapacity(subscriptions.size());
-  for (const CookieStoreGetOptions* subscription : subscriptions) {
-    mojom::blink::CookieChangeSubscriptionPtr backend_subscription =
-        ToBackendSubscription(default_cookie_url_, subscription,
-                              exception_state);
-    if (backend_subscription.is_null()) {
-      DCHECK(exception_state.HadException());
-      return ScriptPromise();
-    }
-    backend_subscriptions.push_back(std::move(backend_subscription));
-  }
-
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
-  backend_->RemoveSubscriptions(
-      registration_->RegistrationId(), std::move(backend_subscriptions),
-      WTF::Bind(&CookieStoreManager::OnSubscribeResult, WrapPersistent(this),
-                WrapPersistent(resolver)));
-  return resolver->Promise();
-}
-
-ScriptPromise CookieStoreManager::getSubscriptions(
-    ScriptState* script_state,
     ExceptionState& exception_state) {
   if (!backend_.is_bound()) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       "CookieStore backend went away");
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
+  Vector<mojom::blink::CookieChangeSubscriptionPtr> backend_subscriptions;
+  backend_subscriptions.ReserveInitialCapacity(subscriptions.size());
+  for (const CookieStoreGetOptions* subscription : subscriptions) {
+    mojom::blink::CookieChangeSubscriptionPtr backend_subscription =
+        ToBackendSubscription(default_cookie_url_, subscription,
+                              exception_state);
+    if (backend_subscription.is_null()) {
+      DCHECK(exception_state.HadException());
+      return EmptyPromise();
+    }
+    backend_subscriptions.push_back(std::move(backend_subscription));
+  }
+
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(
+      script_state, exception_state.GetContext());
+  backend_->AddSubscriptions(
+      registration_->RegistrationId(), std::move(backend_subscriptions),
+      BindOnce(&CookieStoreManager::OnSubscribeResult, WrapPersistent(this),
+               WrapPersistent(resolver)));
+  return resolver->Promise();
+}
+
+ScriptPromise<IDLUndefined> CookieStoreManager::unsubscribe(
+    ScriptState* script_state,
+    const HeapVector<Member<CookieStoreGetOptions>>& subscriptions,
+    ExceptionState& exception_state) {
+  if (!backend_.is_bound()) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                      "CookieStore backend went away");
+    return EmptyPromise();
+  }
+
+  Vector<mojom::blink::CookieChangeSubscriptionPtr> backend_subscriptions;
+  backend_subscriptions.ReserveInitialCapacity(subscriptions.size());
+  for (const CookieStoreGetOptions* subscription : subscriptions) {
+    mojom::blink::CookieChangeSubscriptionPtr backend_subscription =
+        ToBackendSubscription(default_cookie_url_, subscription,
+                              exception_state);
+    if (backend_subscription.is_null()) {
+      DCHECK(exception_state.HadException());
+      return EmptyPromise();
+    }
+    backend_subscriptions.push_back(std::move(backend_subscription));
+  }
+
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(
+      script_state, exception_state.GetContext());
+  backend_->RemoveSubscriptions(
+      registration_->RegistrationId(), std::move(backend_subscriptions),
+      BindOnce(&CookieStoreManager::OnSubscribeResult, WrapPersistent(this),
+               WrapPersistent(resolver)));
+  return resolver->Promise();
+}
+
+ScriptPromise<IDLSequence<CookieStoreGetOptions>>
+CookieStoreManager::getSubscriptions(ScriptState* script_state,
+                                     ExceptionState& exception_state) {
+  if (!backend_.is_bound()) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                      "CookieStore backend went away");
+    return ScriptPromise<IDLSequence<CookieStoreGetOptions>>();
+  }
+
+  auto* resolver = MakeGarbageCollected<
+      ScriptPromiseResolver<IDLSequence<CookieStoreGetOptions>>>(
+      script_state, exception_state.GetContext());
   backend_->GetSubscriptions(
       registration_->RegistrationId(),
-      WTF::Bind(&CookieStoreManager::OnGetSubscriptionsResult,
-                WrapPersistent(this), WrapPersistent(resolver)));
+      BindOnce(&CookieStoreManager::OnGetSubscriptionsResult,
+               WrapPersistent(this), WrapPersistent(resolver)));
   return resolver->Promise();
 }
 
@@ -186,35 +202,26 @@ void CookieStoreManager::Trace(Visitor* visitor) const {
   ScriptWrappable::Trace(visitor);
 }
 
-void CookieStoreManager::OnSubscribeResult(ScriptPromiseResolver* resolver,
-                                           bool backend_success) {
-  ScriptState* script_state = resolver->GetScriptState();
-  if (!script_state->ContextIsValid())
-    return;
-  ScriptState::Scope scope(script_state);
-
+void CookieStoreManager::OnSubscribeResult(
+    ScriptPromiseResolver<IDLUndefined>* resolver,
+    bool backend_success) {
   if (!backend_success) {
-    resolver->Reject(V8ThrowDOMException::CreateOrEmpty(
-        script_state->GetIsolate(), DOMExceptionCode::kUnknownError,
-        "An unknown error occured while subscribing to cookie changes."));
+    resolver->RejectWithDOMException(
+        DOMExceptionCode::kUnknownError,
+        "An unknown error occurred while subscribing to cookie changes.");
     return;
   }
   resolver->Resolve();
 }
 
 void CookieStoreManager::OnGetSubscriptionsResult(
-    ScriptPromiseResolver* resolver,
+    ScriptPromiseResolver<IDLSequence<CookieStoreGetOptions>>* resolver,
     Vector<mojom::blink::CookieChangeSubscriptionPtr> backend_result,
     bool backend_success) {
-  ScriptState* script_state = resolver->GetScriptState();
-  if (!script_state->ContextIsValid())
-    return;
-  ScriptState::Scope scope(script_state);
-
   if (!backend_success) {
-    resolver->Reject(V8ThrowDOMException::CreateOrEmpty(
-        script_state->GetIsolate(), DOMExceptionCode::kUnknownError,
-        "An unknown error occured while subscribing to cookie changes."));
+    resolver->RejectWithDOMException(
+        DOMExceptionCode::kUnknownError,
+        "An unknown error occurred while subscribing to cookie changes.");
     return;
   }
 

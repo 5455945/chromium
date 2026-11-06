@@ -1,6 +1,8 @@
 /* ***** BEGIN LICENSE BLOCK *****
  * Version: MPL 1.1/GPL 2.0/LGPL 2.1
  *
+ * Copyright (C) 2002-2022 Németh László
+ *
  * The contents of this file are subject to the Mozilla Public License Version
  * 1.1 (the "License"); you may not use this file except in compliance with
  * the License. You may obtain a copy of the License at
@@ -11,12 +13,7 @@
  * for the specific language governing rights and limitations under the
  * License.
  *
- * The Original Code is Hunspell, based on MySpell.
- *
- * The Initial Developers of the Original Code are
- * Kevin Hendricks (MySpell) and Németh László (Hunspell).
- * Portions created by the Initial Developers are Copyright (C) 2002-2005
- * the Initial Developers. All Rights Reserved.
+ * Hunspell is based on MySpell which is Copyright (C) 2002 Kevin Hendricks.
  *
  * Contributor(s): David Einstein, Davide Prina, Giuseppe Modugno,
  * Gianluca Turconi, Simon Brouwer, Noll János, Bíró Árpád,
@@ -50,6 +47,9 @@
 using namespace std;
 #endif
 
+#define UTF8_APOS "\xe2\x80\x99"
+#define APOSTROPHE "'"
+
 static struct {
   const char* pat[2];
   int arg;
@@ -61,14 +61,19 @@ static struct {
                {{"\\begin{displaymath}", "\\end{displaymath}"}, 0},
                {{"\\begin{equation}", "\\end{equation}"}, 0},
                {{"\\begin{equation*}", "\\end{equation*}"}, 0},
-               {{"\\cite", NULL}, 1},
-               {{"\\nocite", NULL}, 1},
-               {{"\\index", NULL}, 1},
-               {{"\\label", NULL}, 1},
-               {{"\\ref", NULL}, 1},
-               {{"\\pageref", NULL}, 1},
-               {{"\\autoref", NULL}, 1},
-               {{"\\parbox", NULL}, 1},
+               {{"\\begin{align}", "\\end{align}"}, 0},
+               {{"\\begin{align*}", "\\end{align*}"}, 0},
+               {{"\\begin{lstlisting}", "\\end{lstlisting}"}, 0},
+               {{"\\cite", nullptr}, 1},
+               {{"\\textcite", nullptr}, 1},
+               {{"\\autocite", nullptr}, 1},
+               {{"\\nocite", nullptr}, 1},
+               {{"\\index", nullptr}, 1},
+               {{"\\label", nullptr}, 1},
+               {{"\\ref", nullptr}, 1},
+               {{"\\pageref", nullptr}, 1},
+               {{"\\autoref", nullptr}, 1},
+               {{"\\parbox", nullptr}, 1},
                {{"\\begin{verbatim}", "\\end{verbatim}"}, 0},
                {{"\\verb+", "+"}, 0},
                {{"\\verb|", "|"}, 0},
@@ -76,55 +81,61 @@ static struct {
                {{"\\verb*", "*"}, 0},
                {{"\\documentstyle", "\\begin{document}"}, 0},
                {{"\\documentclass", "\\begin{document}"}, 0},
-               //	{ { "\\documentclass", NULL } , 1 },
-               {{"\\usepackage", NULL}, 1},
-               {{"\\includeonly", NULL}, 1},
-               {{"\\include", NULL}, 1},
-               {{"\\input", NULL}, 1},
-               {{"\\vspace", NULL}, 1},
-               {{"\\setlength", NULL}, 2},
-               {{"\\addtolength", NULL}, 2},
-               {{"\\settowidth", NULL}, 2},
-               {{"\\rule", NULL}, 2},
-               {{"\\hspace", NULL}, 1},
-               {{"\\vspace", NULL}, 1},
+               // { { "\\documentclass", NULL } , 1 },
+               {{"\\usepackage", nullptr}, 1},
+               {{"\\includeonly", nullptr}, 1},
+               {{"\\include", nullptr}, 1},
+               {{"\\input", nullptr}, 1},
+               {{"\\vspace", nullptr}, 1},
+               {{"\\setlength", nullptr}, 2},
+               {{"\\addtolength", nullptr}, 2},
+               {{"\\settowidth", nullptr}, 2},
+               {{"\\rule", nullptr}, 2},
+               {{"\\hspace", nullptr}, 1},
+               {{"\\vspace", nullptr}, 1},
                {{"\\\\[", "]"}, 0},
                {{"\\pagebreak[", "]"}, 0},
                {{"\\nopagebreak[", "]"}, 0},
-               {{"\\enlargethispage", NULL}, 1},
-               {{"\\begin{tabular}", NULL}, 1},
-               {{"\\addcontentsline", NULL}, 2},
-               {{"\\begin{thebibliography}", NULL}, 1},
-               {{"\\bibliography", NULL}, 1},
-               {{"\\bibliographystyle", NULL}, 1},
-               {{"\\bibitem", NULL}, 1},
-               {{"\\begin", NULL}, 1},
-               {{"\\end", NULL}, 1},
-               {{"\\pagestyle", NULL}, 1},
-               {{"\\pagenumbering", NULL}, 1},
-               {{"\\thispagestyle", NULL}, 1},
-               {{"\\newtheorem", NULL}, 2},
-               {{"\\newcommand", NULL}, 2},
-               {{"\\renewcommand", NULL}, 2},
-               {{"\\setcounter", NULL}, 2},
-               {{"\\addtocounter", NULL}, 1},
-               {{"\\stepcounter", NULL}, 1},
-               {{"\\selectlanguage", NULL}, 1},
-               {{"\\inputencoding", NULL}, 1},
-               {{"\\hyphenation", NULL}, 1},
-               {{"\\definecolor", NULL}, 3},
-               {{"\\color", NULL}, 1},
-               {{"\\textcolor", NULL}, 1},
-               {{"\\pagecolor", NULL}, 1},
-               {{"\\colorbox", NULL}, 2},
-               {{"\\fcolorbox", NULL}, 2},
-               {{"\\declaregraphicsextensions", NULL}, 1},
-               {{"\\psfig", NULL}, 1},
-               {{"\\url", NULL}, 1},
-               {{"\\eqref", NULL}, 1},
-               {{"\\vskip", NULL}, 1},
-               {{"\\vglue", NULL}, 1},
-               {{"\'\'", NULL}, 1}};
+               {{"\\enlargethispage", nullptr}, 1},
+               {{"\\begin{tabular}", nullptr}, 1},
+               {{"\\addcontentsline", nullptr}, 2},
+               {{"\\gls", nullptr}, 1},
+               {{"\\glspl", nullptr}, 1},
+               {{"\\Gls", nullptr}, 1},
+               {{"\\Glspl", nullptr}, 1},
+               {{"\\begin{thebibliography}", nullptr}, 1},
+               {{"\\bibliography", nullptr}, 1},
+               {{"\\bibliographystyle", nullptr}, 1},
+               {{"\\bibitem", nullptr}, 1},
+               {{"\\begin", nullptr}, 1},
+               {{"\\end", nullptr}, 1},
+               {{"\\pagestyle", nullptr}, 1},
+               {{"\\pagenumbering", nullptr}, 1},
+               {{"\\thispagestyle", nullptr}, 1},
+               {{"\\newtheorem", nullptr}, 2},
+               {{"\\newcommand", nullptr}, 2},
+               {{"\\renewcommand", nullptr}, 2},
+               {{"\\setcounter", nullptr}, 2},
+               {{"\\addtocounter", nullptr}, 1},
+               {{"\\stepcounter", nullptr}, 1},
+               {{"\\selectlanguage", nullptr}, 1},
+               {{"\\inputencoding", nullptr}, 1},
+               {{"\\hyphenation", nullptr}, 1},
+               {{"\\definecolor", nullptr}, 3},
+               {{"\\color", nullptr}, 1},
+               {{"\\textcolor", nullptr}, 1},
+               {{"\\pagecolor", nullptr}, 1},
+               {{"\\colorbox", nullptr}, 2},
+               {{"\\fcolorbox", nullptr}, 2},
+               {{"\\declaregraphicsextensions", nullptr}, 1},
+               {{"\\psfig", nullptr}, 1},
+               {{"\\url", nullptr}, 1},
+               {{"\\eqref", nullptr}, 1},
+               {{"\\cref", nullptr}, 1},
+               {{"\\Cref", nullptr}, 1},
+               {{"\\vskip", nullptr}, 1},
+               {{"\\vglue", nullptr}, 1},
+               {{"\'\'", nullptr}, 1}};
 
 #define PATTERN_LEN (sizeof(PATTERN) / sizeof(PATTERN[0]))
 
@@ -138,7 +149,7 @@ LaTeXParser::LaTeXParser(const w_char* wordchars, int len)
     , pattern_num(0), depth(0), arg(0), opt(0) {
 }
 
-LaTeXParser::~LaTeXParser() {}
+LaTeXParser::~LaTeXParser() = default;
 
 int LaTeXParser::look_pattern(int col) {
   for (unsigned int i = 0; i < PATTERN_LEN; i++) {
@@ -206,7 +217,20 @@ bool LaTeXParser::next_token(std::string& t) {
         break;
       case 1:  // wordchar
         apostrophe = 0;
-        if (!is_wordchar(line[actual].c_str() + head) ||
+        if ((is_wordchar(APOSTROPHE) ||
+             (is_utf8() && is_wordchar(UTF8_APOS))) &&
+            !line[actual].empty() && line[actual][head] == '\'' &&
+            is_wordchar(line[actual].c_str() + head + 1)) {
+          head++;
+        } else if (is_utf8() &&
+                   is_wordchar(APOSTROPHE) &&  // add Unicode apostrophe
+                                                      // to the WORDCHARS, if
+                                                      // needed
+                   strncmp(line[actual].c_str() + head, UTF8_APOS, strlen(UTF8_APOS)) ==
+                   0 &&
+                   is_wordchar(line[actual].c_str() + head + strlen(UTF8_APOS))) {
+          head += strlen(UTF8_APOS) - 1;
+        } else if (!is_wordchar(line[actual].c_str() + head) ||
             (line[actual][head] == '\'' && line[actual][head + 1] == '\'' &&
              ++apostrophe)) {
           state = 0;

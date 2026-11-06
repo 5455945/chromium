@@ -78,6 +78,7 @@ class CORE_EXPORT TouchEvent final : public UIEventWithKeyState {
   TouchList* targetTouches() const { return target_touches_.Get(); }
   TouchList* changedTouches() const { return changed_touches_.Get(); }
 
+
   void SetTouches(TouchList* touches) { touches_ = touches; }
   void SetTargetTouches(TouchList* target_touches) {
     target_touches_ = target_touches;
@@ -101,8 +102,6 @@ class CORE_EXPORT TouchEvent final : public UIEventWithKeyState {
   void Trace(Visitor*) const override;
 
  private:
-  bool IsTouchStartOrFirstTouchMove() const;
-
   Member<TouchList> touches_;
   Member<TouchList> target_touches_;
   Member<TouchList> changed_touches_;

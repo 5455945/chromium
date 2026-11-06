@@ -1,28 +1,28 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "android_webview/browser/gfx/render_thread_manager.h"
 
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include "android_webview/browser/gfx/compositor_frame_producer.h"
 #include "android_webview/browser/gfx/gpu_service_webview.h"
-#include "android_webview/browser/gfx/hardware_renderer_viz.h"
+#include "android_webview/browser/gfx/hardware_renderer.h"
 #include "android_webview/browser/gfx/scoped_app_gl_state_restore.h"
 #include "android_webview/browser/gfx/task_queue_webview.h"
 #include "android_webview/common/aw_features.h"
-#include "android_webview/public/browser/draw_gl.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/memory/ptr_util.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "base/trace_event/traced_value.h"
 #include "components/viz/common/features.h"
 #include "components/viz/common/quads/compositor_frame.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace android_webview {
 
@@ -38,7 +38,7 @@ RenderThreadManager::~RenderThreadManager() {
   DCHECK(child_frames_.empty());
 }
 
-void RenderThreadManager::UpdateParentDrawConstraintsOnUI() {
+void RenderThreadManager::UpdateParentDrawDataOnUI() {
   DCHECK(ui_loop_->BelongsToCurrentThread());
   CheckUiCallsAllowed();
   if (producer_weak_ptr_) {
@@ -56,14 +56,14 @@ void RenderThreadManager::ViewTreeForceDarkStateChangedOnUI(
   }
 }
 
-void RenderThreadManager::SetScrollOffsetOnUI(gfx::Vector2d scroll_offset) {
+void RenderThreadManager::SetScrollOffsetOnUI(gfx::Point scroll_offset) {
   DCHECK(ui_loop_->BelongsToCurrentThread());
   CheckUiCallsAllowed();
   base::AutoLock lock(lock_);
   scroll_offset_ = scroll_offset;
 }
 
-gfx::Vector2d RenderThreadManager::GetScrollOffsetOnRT() {
+gfx::Point RenderThreadManager::GetScrollOffsetOnRT() {
   base::AutoLock lock(lock_);
   return scroll_offset_;
 }
@@ -112,30 +112,26 @@ void RenderThreadManager::PostParentDrawDataToChildCompositorOnRT(
     const ParentCompositorDrawConstraints& parent_draw_constraints,
     const viz::FrameSinkId& frame_sink_id,
     viz::FrameTimingDetailsMap timing_details,
-    uint32_t frame_token) {
+    base::TimeDelta preferred_frame_interval) {
   {
     base::AutoLock lock(lock_);
     parent_draw_constraints_ = parent_draw_constraints;
-    // FrameTimingDetails are a sequence and it's ok to drop something in
-    // the middle of the sequence. This also means its ok to drop the details
-    // from early returned frames from WaitAndPruneFrameQueue as well.
-    timing_details_ = std::move(timing_details);
-    presented_frame_token_ = frame_token;
+    timing_details_.insert(timing_details.begin(), timing_details.end());
     frame_sink_id_for_presentation_feedbacks_ = frame_sink_id;
+    preferred_frame_interval_ = preferred_frame_interval;
   }
 
   // No need to hold the lock_ during the post task.
   ui_loop_->PostTask(
-      FROM_HERE,
-      base::BindOnce(&RenderThreadManager::UpdateParentDrawConstraintsOnUI,
-                     ui_thread_weak_ptr_));
+      FROM_HERE, base::BindOnce(&RenderThreadManager::UpdateParentDrawDataOnUI,
+                                ui_thread_weak_ptr_));
 }
 
 void RenderThreadManager::TakeParentDrawDataOnUI(
     ParentCompositorDrawConstraints* constraints,
     viz::FrameSinkId* frame_sink_id,
     viz::FrameTimingDetailsMap* timing_details,
-    uint32_t* frame_token) {
+    base::TimeDelta* preferred_frame_interval) {
   DCHECK(ui_loop_->BelongsToCurrentThread());
   DCHECK(timing_details->empty());
   CheckUiCallsAllowed();
@@ -143,7 +139,7 @@ void RenderThreadManager::TakeParentDrawDataOnUI(
   *constraints = parent_draw_constraints_;
   *frame_sink_id = frame_sink_id_for_presentation_feedbacks_;
   timing_details_.swap(*timing_details);
-  *frame_token = presented_frame_token_;
+  *preferred_frame_interval = preferred_frame_interval_;
 }
 
 void RenderThreadManager::SetInsideHardwareRelease(bool inside) {
@@ -190,15 +186,19 @@ void RenderThreadManager::UpdateViewTreeForceDarkStateOnRT(
                      ui_thread_weak_ptr_, view_tree_force_dark_state_));
 }
 
-void RenderThreadManager::DrawOnRT(bool save_restore,
-                                   const HardwareRendererDrawParams& params,
-                                   const OverlaysParams& overlays_params) {
+void RenderThreadManager::DrawOnRT(
+    const HardwareRendererDrawParams& params,
+    const OverlaysParams& overlays_params,
+    ReportRenderingThreadsCallback report_rendering_threads) {
   // Force GL binding init if it's not yet initialized.
   GpuServiceWebView::GetInstance();
 
-  absl::optional<ScopedAppGLStateRestore> state_restore;
+  std::optional<ScopedAppGLStateRestore> state_restore;
   if (!vulkan_context_provider_) {
-    state_restore.emplace(ScopedAppGLStateRestore::MODE_DRAW, save_restore);
+    state_restore.emplace(ScopedAppGLStateRestore::MODE_DRAW);
+    if (state_restore->skip_draw()) {
+      return;
+    }
   }
 
   if (!hardware_renderer_ && !IsInsideHardwareRelease() &&
@@ -209,13 +209,14 @@ void RenderThreadManager::DrawOnRT(bool save_restore,
       getter = root_frame_sink_getter_;
     }
     DCHECK(getter);
-    hardware_renderer_ = std::make_unique<HardwareRendererViz>(
+    hardware_renderer_ = std::make_unique<HardwareRenderer>(
         this, std::move(getter), vulkan_context_provider_);
     hardware_renderer_->CommitFrame();
   }
 
   if (hardware_renderer_)
-    hardware_renderer_->Draw(params, overlays_params);
+    hardware_renderer_->Draw(params, overlays_params,
+                             std::move(report_rendering_threads));
 }
 
 void RenderThreadManager::RemoveOverlaysOnRT(
@@ -224,16 +225,26 @@ void RenderThreadManager::RemoveOverlaysOnRT(
     hardware_renderer_->RemoveOverlays(merge_transaction);
 }
 
-void RenderThreadManager::DestroyHardwareRendererOnRT(bool save_restore) {
+void RenderThreadManager::CrashOnContextLossOnRT() {
+  if (hardware_renderer_) {
+    hardware_renderer_->CrashOnContextLoss();
+  }
+}
+
+void RenderThreadManager::DestroyHardwareRendererOnRT() {
   GpuServiceWebView::GetInstance();
 
-  absl::optional<ScopedAppGLStateRestore> state_restore;
+  std::optional<ScopedAppGLStateRestore> state_restore;
   if (!vulkan_context_provider_) {
-    state_restore.emplace(ScopedAppGLStateRestore::MODE_RESOURCE_MANAGEMENT,
-                          save_restore);
+    state_restore.emplace(ScopedAppGLStateRestore::MODE_RESOURCE_MANAGEMENT);
   }
 
   hardware_renderer_.reset();
+
+  ui_loop_->PostTask(
+      FROM_HERE,
+      base::BindOnce(&CompositorFrameProducer::ChildSurfaceWasEvicted,
+                     producer_weak_ptr_));
 }
 
 void RenderThreadManager::RemoveFromCompositorFrameProducerOnUI() {
@@ -255,6 +266,11 @@ void RenderThreadManager::SetCompositorFrameProducer(
   producer_weak_ptr_ = compositor_frame_producer->GetWeakPtr();
 
   base::AutoLock lock(lock_);
+  root_frame_sink_getter_ = std::move(root_frame_sink_getter);
+}
+
+void RenderThreadManager::SetRootFrameSinkGetterForTesting(
+    RootFrameSinkGetter root_frame_sink_getter) {
   root_frame_sink_getter_ = std::move(root_frame_sink_getter);
 }
 

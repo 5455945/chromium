@@ -1,13 +1,14 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef GPU_COMMAND_BUFFER_SERVICE_COPY_TEXTURE_CHROMIUM_MOCK_H_
 #define GPU_COMMAND_BUFFER_SERVICE_COPY_TEXTURE_CHROMIUM_MOCK_H_
 
+#include <optional>
+
 #include "gpu/command_buffer/service/gles2_cmd_copy_tex_image.h"
 #include "gpu/command_buffer/service/gles2_cmd_copy_texture_chromium.h"
-
 #include "testing/gmock/include/gmock/gmock.h"
 
 namespace gpu {
@@ -17,6 +18,12 @@ class MockCopyTexImageResourceManager final
     : public CopyTexImageResourceManager {
  public:
   MockCopyTexImageResourceManager(const gles2::FeatureInfo* feature_info);
+
+  MockCopyTexImageResourceManager(const MockCopyTexImageResourceManager&) =
+      delete;
+  MockCopyTexImageResourceManager& operator=(
+      const MockCopyTexImageResourceManager&) = delete;
+
   ~MockCopyTexImageResourceManager() final;
 
   MOCK_METHOD1(Initialize, void(const DecoderContext* decoder));
@@ -56,15 +63,18 @@ class MockCopyTexImageResourceManager final
       GLsizei height,
       GLuint source_framebuffer,
       GLenum source_framebuffer_internal_format) override {}
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(MockCopyTexImageResourceManager);
 };
 
 class MockCopyTextureResourceManager final
     : public CopyTextureCHROMIUMResourceManager {
  public:
   MockCopyTextureResourceManager();
+
+  MockCopyTextureResourceManager(const MockCopyTextureResourceManager&) =
+      delete;
+  MockCopyTextureResourceManager& operator=(
+      const MockCopyTextureResourceManager&) = delete;
+
   ~MockCopyTextureResourceManager() final;
 
   MOCK_METHOD2(Initialize,
@@ -88,7 +98,6 @@ class MockCopyTextureResourceManager final
       bool flip_y,
       bool premultiply_alpha,
       bool unpremultiply_alpha,
-      bool dither,
       CopyTextureMethod method,
       CopyTexImageResourceManager* luma_emulation_blitter) override {}
   void DoCopySubTexture(
@@ -114,12 +123,17 @@ class MockCopyTextureResourceManager final
       bool flip_y,
       bool premultiply_alpha,
       bool unpremultiply_alpha,
-      bool dither,
       CopyTextureMethod method,
-      CopyTexImageResourceManager* luma_emulation_blitter) override {}
+      CopyTexImageResourceManager* luma_emulation_blitter) override {
+    last_copy_sub_texture_method_ = method;
+  }
+
+  std::optional<CopyTextureMethod> last_copy_sub_texture_method() const {
+    return last_copy_sub_texture_method_;
+  }
 
  private:
-  DISALLOW_COPY_AND_ASSIGN(MockCopyTextureResourceManager);
+  std::optional<CopyTextureMethod> last_copy_sub_texture_method_;
 };
 
 }  // namespace gles2

@@ -1,21 +1,37 @@
-# Run test locally
+# Run test(s) locally
 
 This file contains instruction summary to run test(s) under this folder locally.
-See [testing page](../docs/testing.md) for details.
+See the [testing page](../docs/testing.md) for details.
 
-# To run run_py_tests.py
+# To run `run_py_tests.py`
 
-Suppose you would like to run test testCanSetCheckboxWithSpaceKey.
-First, build chrome and chromedriver binary.
+Suppose you would like to run the `testCanSetCheckboxWithSpaceKey` test.
+First, build the `chrome` and `chromedriver` binaries.
+
 ```
 autoninja -C out/Default chromedriver_py_tests
+```
+
+Then, either run:
 
 ```
-Then, either run
+chrome/test/chromedriver/test/run_py_tests.py --chromedriver=out/Default/chromedriver --filter=__main__.ChromeDriverTest.testCanSetCheckboxWithSpaceKey
 ```
-vpython chrome/test/chromedriver/test/run_py_tests.py --chromedriver=out/Default/chromedriver --filter=__main__.ChromeDriverTest.testCanSetCheckboxWithSpaceKey
+
+or, by abbreviating the filter:
+
 ```
-or the abbreviating the filter
+chrome/test/chromedriver/test/run_py_tests.py --chromedriver=out/Default/chromedriver --filter=\*testCanSetCheckboxWithSpaceKey
 ```
-vpython chrome/test/chromedriver/test/run_py_tests.py --chromedriver=out/Default/chromedriver --filter=\*testCanSetCheckboxWithSpaceKey
+
+# Android support
+
+Build chromedriver for desktop:
+```
+autoninja -C out/Desktop chromedriver
+```
+
+Run against a chrome APK (a Release build seems to be required, Debug builds time out):
+```
+chrome/test/chromedriver/test/run_py_tests.py --chromedriver out/Desktop/chromedriver --android-package chrome
 ```

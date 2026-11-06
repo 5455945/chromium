@@ -7,6 +7,7 @@
 #include <libxml/parser.h>
 #include <libxml/encoding.h>
 #include <libxml/uri.h>
+#include <libxml/threads.h>
 
 #include <libxslt/xsltutils.h>
 #include <libxslt/xsltInternals.h>
@@ -94,7 +95,7 @@ exsltCryptoHex2Bin (const unsigned char *hex, int hexlen,
 	else if (tmp >= 'a' && tmp <= 'f')
 	    lo = 10 + (tmp - 'a');
 
-	result = (unsigned char) (hi << 4);
+	result = hi << 4;
 	result += lo;
 	bin[j++] = result;
     }
@@ -102,7 +103,7 @@ exsltCryptoHex2Bin (const unsigned char *hex, int hexlen,
     return j;
 }
 
-#if defined(_WIN32) && !defined(__CYGWIN__)
+#if defined(_WIN32)
 
 #define HAVE_CRYPTO
 #define PLATFORM_HASH	exsltCryptoCryptoApiHash
@@ -124,10 +125,10 @@ exsltCryptoCryptoApiReportError (xmlXPathParserContextPtr ctxt,
     char *lpMsgBuf;
     DWORD dw = GetLastError ();
 
-    FormatMessage (FORMAT_MESSAGE_ALLOCATE_BUFFER |
+    FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER |
 		   FORMAT_MESSAGE_FROM_SYSTEM, NULL, dw,
 		   MAKELANGID (LANG_NEUTRAL, SUBLANG_DEFAULT),
-		   (LPTSTR) & lpMsgBuf, 0, NULL);
+		   (LPSTR)&lpMsgBuf, 0, NULL);
 
     xsltTransformError (xsltXPathGetTransformContext (ctxt), NULL, NULL,
 			"exslt:crypto error (line %d). %s", line,
@@ -314,9 +315,6 @@ exsltCryptoCryptoApiRc4Decrypt (xmlXPathParserContextPtr ctxt,
 
 #ifdef HAVE_SYS_TYPES_H
 # include <sys/types.h>
-#endif
-#ifdef HAVE_STDINT_H
-# include <stdint.h>
 #endif
 
 #ifdef HAVE_SYS_SELECT_H

@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,11 @@
 
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/macros.h"
 #include "base/notreached.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "remoting/host/client_session_control.h"
 #include "remoting/proto/control.pb.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_geometry.h"
@@ -20,13 +19,15 @@
 namespace remoting {
 
 // Runs an instance of |HostWindow| on the |ui_task_runner_| thread.
-class HostWindowProxy::Core
-    : public base::RefCountedThreadSafe<Core>,
-      public ClientSessionControl {
+class HostWindowProxy::Core : public base::RefCountedThreadSafe<Core>,
+                              public ClientSessionControl {
  public:
   Core(scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner,
        scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
        std::unique_ptr<HostWindow> host_window);
+
+  Core(const Core&) = delete;
+  Core& operator=(const Core&) = delete;
 
   // Starts |host_window_| on the |ui_task_runner_| thread.
   void Start(const base::WeakPtr<ClientSessionControl>& client_session_control);
@@ -44,13 +45,16 @@ class HostWindowProxy::Core
 
   // ClientSessionControl interface.
   const std::string& client_jid() const override;
-  void DisconnectSession(protocol::ErrorCode error) override;
+  void DisconnectSession(ErrorCode error,
+                         std::string_view error_details,
+                         const SourceLocation& error_location) override;
   void OnLocalKeyPressed(uint32_t usb_keycode) override;
   void OnLocalPointerMoved(const webrtc::DesktopVector& position,
                            ui::EventType type) override;
   void SetDisableInputs(bool disable_inputs) override;
   void OnDesktopDisplayChanged(
       std::unique_ptr<protocol::VideoLayout> layout) override;
+  void OnMicrophoneControl(const protocol::MicrophoneControl& control) override;
 
   // Task runner on which public methods of this class must be called.
   scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner_;
@@ -70,8 +74,6 @@ class HostWindowProxy::Core
 
   // Used to create the control pointer passed to |host_window_|.
   base::WeakPtrFactory<ClientSessionControl> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(Core);
 };
 
 HostWindowProxy::HostWindowProxy(
@@ -152,15 +154,21 @@ const std::string& HostWindowProxy::Core::client_jid() const {
   return client_jid_;
 }
 
-void HostWindowProxy::Core::DisconnectSession(protocol::ErrorCode error) {
+void HostWindowProxy::Core::DisconnectSession(
+    ErrorCode error,
+    std::string_view error_details,
+    const SourceLocation& error_location) {
   if (!caller_task_runner_->BelongsToCurrentThread()) {
     caller_task_runner_->PostTask(
-        FROM_HERE, base::BindOnce(&Core::DisconnectSession, this, error));
+        FROM_HERE, base::BindOnce(&Core::DisconnectSession, this, error,
+                                  std::string(error_details), error_location));
     return;
   }
 
-  if (client_session_control_.get())
-    client_session_control_->DisconnectSession(error);
+  if (client_session_control_.get()) {
+    client_session_control_->DisconnectSession(error, error_details,
+                                               error_location);
+  }
 }
 
 void HostWindowProxy::Core::OnLocalKeyPressed(uint32_t usb_keycode) {
@@ -170,8 +178,9 @@ void HostWindowProxy::Core::OnLocalKeyPressed(uint32_t usb_keycode) {
     return;
   }
 
-  if (client_session_control_.get())
+  if (client_session_control_.get()) {
     client_session_control_->OnLocalKeyPressed(usb_keycode);
+  }
 }
 
 void HostWindowProxy::Core::OnLocalPointerMoved(
@@ -184,8 +193,9 @@ void HostWindowProxy::Core::OnLocalPointerMoved(
     return;
   }
 
-  if (client_session_control_.get())
+  if (client_session_control_.get()) {
     client_session_control_->OnLocalPointerMoved(position, type);
+  }
 }
 
 void HostWindowProxy::Core::SetDisableInputs(bool disable_inputs) {
@@ -196,12 +206,18 @@ void HostWindowProxy::Core::SetDisableInputs(bool disable_inputs) {
     return;
   }
 
-  if (client_session_control_.get())
+  if (client_session_control_.get()) {
     client_session_control_->SetDisableInputs(disable_inputs);
+  }
 }
 
 void HostWindowProxy::Core::OnDesktopDisplayChanged(
     std::unique_ptr<protocol::VideoLayout> layout) {
+  NOTREACHED();
+}
+
+void HostWindowProxy::Core::OnMicrophoneControl(
+    const protocol::MicrophoneControl& control) {
   NOTREACHED();
 }
 

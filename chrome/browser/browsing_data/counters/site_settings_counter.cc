@@ -1,41 +1,51 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/browsing_data/counters/site_settings_counter.h"
 
-#include <set>
+#include <optional>
+#include <utility>
+
+#include "base/json/values_util.h"
 #include "build/build_config.h"
-#include "chrome/browser/custom_handlers/protocol_handler_registry.h"
+#include "chrome/browser/performance_manager/public/user_tuning/user_performance_tuning_manager.h"
 #include "chrome/browser/translate/chrome_translate_client.h"
 #include "components/browsing_data/core/pref_names.h"
-#include "components/content_settings/core/browser/content_settings_registry.h"
+#include "components/content_settings/core/browser/permission_settings_info.h"
+#include "components/content_settings/core/browser/permission_settings_registry.h"
+#include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
+#include "components/custom_handlers/protocol_handler.h"
+#include "components/custom_handlers/protocol_handler_registry.h"
+#include "components/performance_manager/public/user_tuning/prefs.h"
+#include "components/url_matcher/url_util.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
 #include "content/public/browser/host_zoom_map.h"
 #endif
 
 SiteSettingsCounter::SiteSettingsCounter(
     HostContentSettingsMap* map,
     content::HostZoomMap* zoom_map,
-    ProtocolHandlerRegistry* handler_registry,
+    custom_handlers::ProtocolHandlerRegistry* handler_registry,
     PrefService* pref_service)
     : map_(map),
       zoom_map_(zoom_map),
       handler_registry_(handler_registry),
       pref_service_(pref_service) {
-  DCHECK(map_);
-  DCHECK(handler_registry_);
-#if !defined(OS_ANDROID)
-  DCHECK(zoom_map_);
+  CHECK(map_, base::NotFatalUntil::M161);
+  CHECK(handler_registry_, base::NotFatalUntil::M161);
+#if !BUILDFLAG(IS_ANDROID)
+  CHECK(zoom_map_, base::NotFatalUntil::M161);
 #else
-  DCHECK(!zoom_map_);
+  CHECK(!zoom_map_, base::NotFatalUntil::M161);
 #endif
-  DCHECK(pref_service_);
+  CHECK(pref_service_, base::NotFatalUntil::M161);
 }
 
-SiteSettingsCounter::~SiteSettingsCounter() {}
+SiteSettingsCounter::~SiteSettingsCounter() = default;
 
 void SiteSettingsCounter::OnInitialized() {}
 
@@ -44,7 +54,7 @@ const char* SiteSettingsCounter::GetPrefName() const {
 }
 
 void SiteSettingsCounter::Count() {
-  std::set<std::string> hosts;
+  absl::flat_hash_set<std::string> hosts;
   int empty_host_pattern = 0;
   base::Time period_start = GetPeriodStart();
   base::Time period_end = GetPeriodEnd();
@@ -53,14 +63,12 @@ void SiteSettingsCounter::Count() {
       [&](ContentSettingsType content_type,
           const ContentSettingsForOneType& content_settings_list) {
         for (const auto& content_setting : content_settings_list) {
-          // TODO(crbug.com/762560): Check the conceptual SettingSource instead
-          // of ContentSettingPatternSource.source
-          if (content_setting.source == "preference" ||
-              content_setting.source == "notification_android" ||
-              content_setting.source == "ephemeral") {
-            base::Time last_modified = map_->GetSettingLastModifiedDate(
-                content_setting.primary_pattern,
-                content_setting.secondary_pattern, content_type);
+          if (content_settings::GetSettingSourceFromProviderType(
+                  content_setting.source) ==
+                  content_settings::SettingSource::kUser &&
+              content_setting.source !=
+                  content_settings::ProviderType::kDefaultProvider) {
+            base::Time last_modified = content_setting.metadata.last_modified();
             if (last_modified >= period_start && last_modified < period_end) {
               if (content_setting.primary_pattern.GetHost().empty())
                 empty_host_pattern++;
@@ -71,22 +79,17 @@ void SiteSettingsCounter::Count() {
         }
       };
 
-  auto* registry = content_settings::ContentSettingsRegistry::GetInstance();
-  for (const content_settings::ContentSettingsInfo* info : *registry) {
+  auto* registry = content_settings::PermissionSettingsRegistry::GetInstance();
+  for (const content_settings::PermissionSettingsInfo* info : *registry) {
     ContentSettingsType type = info->website_settings_info()->type();
-    ContentSettingsForOneType content_settings_list;
-    map_->GetSettingsForOneType(type, &content_settings_list);
-    iterate_content_settings_list(type, content_settings_list);
+    iterate_content_settings_list(type, map_->GetSettingsForOneType(type));
   }
 
-  ContentSettingsForOneType content_settings_list_for_usb_chooser;
-  map_->GetSettingsForOneType(ContentSettingsType::USB_CHOOSER_DATA,
+  iterate_content_settings_list(
+      ContentSettingsType::USB_CHOOSER_DATA,
+      map_->GetSettingsForOneType(ContentSettingsType::USB_CHOOSER_DATA));
 
-                              &content_settings_list_for_usb_chooser);
-  iterate_content_settings_list(ContentSettingsType::USB_CHOOSER_DATA,
-                                content_settings_list_for_usb_chooser);
-
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
   for (const auto& zoom_level : zoom_map_->GetAllZoomLevels()) {
     // zoom_level with non-empty scheme are only used for some internal
     // features and not stored in preferences. They are not counted.
@@ -99,14 +102,28 @@ void SiteSettingsCounter::Count() {
 
   auto handlers =
       handler_registry_->GetUserDefinedHandlers(period_start, period_end);
-  for (const ProtocolHandler& handler : handlers)
-    hosts.insert(handler.url().host());
+  for (const custom_handlers::ProtocolHandler& handler : handlers)
+    hosts.insert(handler.url().GetHost());
 
-  std::vector<std::string> blacklisted_sites =
+  std::vector<std::string> never_prompt_sites =
       ChromeTranslateClient::CreateTranslatePrefs(pref_service_)
           ->GetNeverPromptSitesBetween(period_start, period_end);
-  for (const auto& site : blacklisted_sites)
+  for (const auto& site : never_prompt_sites)
     hosts.insert(site);
+
+  const std::vector<std::string> tab_discard_exceptions =
+      performance_manager::user_tuning::prefs::GetTabDiscardExceptionsBetween(
+          pref_service_, period_start, period_end);
+  for (const auto& exception : tab_discard_exceptions) {
+    std::optional<url_matcher::util::FilterComponents> components =
+        url_matcher::util::FilterToComponents(exception);
+
+    if (components && !components->host.empty()) {
+      hosts.insert(std::move(components->host));
+    } else {
+      empty_host_pattern++;
+    }
+  }
 
   ReportResult(hosts.size() + empty_host_pattern);
 }

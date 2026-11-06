@@ -1,19 +1,18 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/login/test/test_predicate_waiter.h"
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace chromeos {
+namespace ash {
 namespace test {
 namespace {
 
-const base::TimeDelta kPredicateCheckFrequency =
-    base::TimeDelta::FromMilliseconds(200);
+const base::TimeDelta kPredicateCheckFrequency = base::Milliseconds(10);
 
 }  // anonymous namespace
 
@@ -47,4 +46,4 @@ void TestPredicateWaiter::CheckPredicate() {
 }
 
 }  // namespace test
-}  // namespace chromeos
+}  // namespace ash

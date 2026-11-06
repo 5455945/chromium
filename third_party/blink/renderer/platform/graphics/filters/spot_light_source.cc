@@ -32,26 +32,26 @@
 #include "third_party/blink/renderer/platform/graphics/filters/spot_light_source.h"
 
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
-#include "third_party/blink/renderer/platform/wtf/text/text_stream.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_builder_stream.h"
 
 namespace blink {
 
-bool SpotLightSource::SetPosition(const FloatPoint3D& position) {
+bool SpotLightSource::SetPosition(const gfx::Point3F& position) {
   if (position_ == position)
     return false;
   position_ = position;
   return true;
 }
 
-bool SpotLightSource::SetPointsAt(const FloatPoint3D& direction) {
-  if (direction_ == direction)
+bool SpotLightSource::SetPointsAt(const gfx::Point3F& points_at) {
+  if (points_at_ == points_at)
     return false;
-  direction_ = direction;
+  points_at_ = points_at;
   return true;
 }
 
 bool SpotLightSource::SetSpecularExponent(float specular_exponent) {
-  specular_exponent = clampTo(specular_exponent, 1.0f, 128.0f);
+  specular_exponent = ClampTo(specular_exponent, 1.0f, 128.0f);
   if (specular_exponent_ == specular_exponent)
     return false;
   specular_exponent_ = specular_exponent;
@@ -65,11 +65,11 @@ bool SpotLightSource::SetLimitingConeAngle(float limiting_cone_angle) {
   return true;
 }
 
-WTF::TextStream& SpotLightSource::ExternalRepresentation(
-    WTF::TextStream& ts) const {
+StringBuilder& SpotLightSource::ExternalRepresentation(
+    StringBuilder& ts) const {
   ts << "[type=SPOT-LIGHT] ";
-  ts << "[position=\"" << GetPosition() << "\"]";
-  ts << "[direction=\"" << Direction() << "\"]";
+  ts << "[position=\"" << GetPosition().ToString() << "\"]";
+  ts << "[pointsAt=\"" << PointsAt().ToString() << "\"]";
   ts << "[specularExponent=\"" << SpecularExponent() << "\"]";
   ts << "[limitingConeAngle=\"" << LimitingConeAngle() << "\"]";
   return ts;

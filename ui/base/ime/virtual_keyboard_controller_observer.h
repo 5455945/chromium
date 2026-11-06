@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 #define UI_BASE_IME_VIRTUAL_KEYBOARD_CONTROLLER_OBSERVER_H_
 
 #include "base/component_export.h"
+#include "base/observer_list_types.h"
 
 namespace gfx {
 class Rect;
@@ -15,14 +16,15 @@ namespace ui {
 
 // This observer class provides a method to observe on screen
 // keyboard changes.
-class COMPONENT_EXPORT(UI_BASE_IME) VirtualKeyboardControllerObserver {
+class COMPONENT_EXPORT(UI_BASE_IME) VirtualKeyboardControllerObserver
+    : public base::CheckedObserver {
  public:
   // The |keyboard_rect| parameter contains the bounds of the keyboard in dips.
   virtual void OnKeyboardVisible(const gfx::Rect& keyboard_rect) = 0;
   virtual void OnKeyboardHidden() = 0;
 
  protected:
-  virtual ~VirtualKeyboardControllerObserver() = default;
+  ~VirtualKeyboardControllerObserver() override = default;
 };
 
 }  // namespace ui

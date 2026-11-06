@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -48,7 +48,8 @@ class GamepadDispatcher final : public GarbageCollected<GamepadDispatcher>,
   // GamepadListener
   void DidConnectGamepad(uint32_t index, const device::Gamepad&) override;
   void DidDisconnectGamepad(uint32_t index, const device::Gamepad&) override;
-  void ButtonOrAxisDidChange(uint32_t index, const device::Gamepad&) override;
+  void DidChangeGamepadRawInput(uint32_t index,
+                                const device::Gamepad&) override;
 
   // PlatformEventDispatcher
   void StartListening(LocalDOMWindow*) override;

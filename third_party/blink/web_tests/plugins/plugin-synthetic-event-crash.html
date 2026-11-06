@@ -11,7 +11,7 @@ if (window.testRunner) {
 var plugin = document.getElementById("plugin");
 
 var listenerCalledCount = 0;
-var eventTypes = ["touchmove", "gesturescrollstart", "mousewheel"];
+var eventTypes = ["touchmove", "mousewheel"];
 
 eventTypes.forEach(function(eventType) {
     plugin.addEventListener(eventType, function(event) {
@@ -24,16 +24,10 @@ eventTypes.forEach(function(eventType) {
     });
 });
 
-var event = document.createEvent("PopStateEvent");
-event.initEvent("touchmove", true, true);
+var event = new PopStateEvent("touchmove", {bubbles: true, cancelable: true});
 plugin.dispatchEvent(event);
 
-event = document.createEvent("PopStateEvent");
-event.initEvent("gesturescrollstart", true, true);
-plugin.dispatchEvent(event);
-
-event = document.createEvent("PopStateEvent");
-event.initEvent("mousewheel", true, true);
+event = new PopStateEvent("mousewheel", {bubbles: true, cancelable: true});
 plugin.dispatchEvent(event);
 </script>
 </body>

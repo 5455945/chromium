@@ -1,11 +1,12 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "ui/events/gesture_detection/gesture_event_data_packet.h"
 
 #include <stddef.h>
 
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/events/gesture_detection/gesture_event_data_packet.h"
 #include "ui/events/test/motion_event_test_utils.h"
 
 using ui::test::MockMotionEvent;
@@ -42,17 +43,21 @@ bool PacketEquals(const GestureEventDataPacket& lhs,
       lhs.gesture_count() != rhs.gesture_count() ||
       lhs.timestamp() != rhs.timestamp() ||
       lhs.gesture_source() != rhs.gesture_source() ||
+      lhs.flags() != rhs.flags() ||
       lhs.touch_location() != rhs.touch_location() ||
       lhs.raw_touch_location() != rhs.raw_touch_location() ||
-      lhs.unique_touch_event_id() != rhs.unique_touch_event_id())
+      lhs.unique_touch_event_id() != rhs.unique_touch_event_id()) {
     return false;
+  }
 
   for (size_t i = 0; i < lhs.gesture_count(); ++i) {
-    if (!GestureEqualsExceptForTouchId(lhs.gesture(i), rhs.gesture(i)))
+    if (!GestureEqualsExceptForTouchId(lhs.gesture(i), rhs.gesture(i))) {
       return false;
+    }
     if (lhs.gesture(i).unique_touch_event_id !=
-        rhs.gesture(i).unique_touch_event_id)
+        rhs.gesture(i).unique_touch_event_id) {
       return false;
+    }
   }
 
   return true;
@@ -73,11 +78,12 @@ TEST_F(GestureEventDataPacketTest, Basic) {
   EXPECT_EQ(0U, packet.gesture_count());
   EXPECT_EQ(gfx::PointF(kTouchX, kTouchY), packet.touch_location());
 
-  for (size_t i = ET_GESTURE_TYPE_START; i < ET_GESTURE_TYPE_END; ++i) {
+  for (size_t i = static_cast<size_t>(EventType::kGestureTypeStart);
+       i < static_cast<size_t>(EventType::kGestureTypeEnd); ++i) {
     const EventType type = static_cast<EventType>(i);
     GestureEventData gesture = CreateGesture(type);
     packet.Push(gesture);
-    const size_t index = (i - ET_GESTURE_TYPE_START);
+    const size_t index = i - static_cast<int>(EventType::kGestureTypeStart);
     ASSERT_EQ(index + 1U, packet.gesture_count());
     EXPECT_TRUE(GestureEqualsExceptForTouchId(gesture, packet.gesture(index)));
     EXPECT_EQ(packet.unique_touch_event_id(),
@@ -88,14 +94,37 @@ TEST_F(GestureEventDataPacketTest, Basic) {
 TEST_F(GestureEventDataPacketTest, Copy) {
   GestureEventDataPacket packet0 = GestureEventDataPacket::FromTouch(
       MockMotionEvent(MotionEvent::Action::UP));
-  packet0.Push(CreateGesture(ET_GESTURE_TAP_DOWN));
-  packet0.Push(CreateGesture(ET_GESTURE_SCROLL_BEGIN));
+  packet0.Push(CreateGesture(EventType::kGestureTapDown));
+  packet0.Push(CreateGesture(EventType::kGestureScrollBegin));
 
   GestureEventDataPacket packet1 = packet0;
   EXPECT_TRUE(PacketEquals(packet0, packet1));
 
   packet0 = packet1;
   EXPECT_TRUE(PacketEquals(packet1, packet0));
+}
+
+TEST_F(GestureEventDataPacketTest, EventFlags) {
+  MockMotionEvent touch(MotionEvent::Action::DOWN);
+  touch.set_flags(EF_FROM_DEBUGGER | EF_SHIFT_DOWN);
+  auto packet = GestureEventDataPacket::FromTouch(touch);
+  EXPECT_EQ(touch.GetFlags(), packet.flags());
+
+  GestureEventDataPacket copy(packet);
+  EXPECT_EQ(touch.GetFlags(), copy.flags());
+  GestureEventDataPacket assigned;
+  assigned = packet;
+  EXPECT_EQ(touch.GetFlags(), assigned.flags());
+
+  GestureEventData gesture = CreateGesture(EventType::kGestureTap);
+  gesture.flags = EF_FROM_DEBUGGER | EF_CONTROL_DOWN;
+  auto timeout = GestureEventDataPacket::FromTouchTimeout(gesture);
+  EXPECT_EQ(gesture.flags, timeout.flags());
+  EXPECT_EQ(gesture.flags, timeout.gesture(0).flags);
+
+  packet = GestureEventDataPacket::FromTouch(
+      MockMotionEvent(MotionEvent::Action::DOWN));
+  EXPECT_EQ(EF_NONE, packet.flags());
 }
 
 TEST_F(GestureEventDataPacketTest, GestureSource) {
@@ -126,12 +155,41 @@ TEST_F(GestureEventDataPacketTest, GestureSource) {
       MockMotionEvent(MotionEvent::Action::POINTER_UP));
   EXPECT_EQ(GestureEventDataPacket::TOUCH_END, packet.gesture_source());
 
-  GestureEventData gesture = CreateGesture(ET_GESTURE_TAP);
+  GestureEventData gesture = CreateGesture(EventType::kGestureTap);
   packet = GestureEventDataPacket::FromTouchTimeout(gesture);
   EXPECT_EQ(GestureEventDataPacket::TOUCH_TIMEOUT, packet.gesture_source());
   EXPECT_EQ(1U, packet.gesture_count());
   EXPECT_EQ(base::TimeTicks(), packet.timestamp());
   EXPECT_EQ(gfx::PointF(gesture.x, gesture.y), packet.touch_location());
+}
+
+TEST_F(GestureEventDataPacketTest, AddEventLatencyMetadataToGestures) {
+  GestureEventDataPacket packet = GestureEventDataPacket::FromTouch(
+      MockMotionEvent(MotionEvent::Action::DOWN));
+  packet.Push(CreateGesture(EventType::kGestureTap));
+  packet.Push(CreateGesture(EventType::kGestureScrollUpdate));
+  packet.Push(CreateGesture(EventType::kGesturePinchUpdate));
+
+  EventLatencyMetadata event_latency_metadata;
+  event_latency_metadata.scrolls_blocking_touch_dispatched_to_renderer =
+      base::TimeTicks::Now();
+  packet.AddEventLatencyMetadataToGestures(
+      event_latency_metadata,
+      base::BindRepeating([](const ui::GestureEventData& data) {
+        return data.type() == EventType::kGestureScrollUpdate;
+      }));
+
+  EXPECT_TRUE(packet.gesture(0)
+                  .details.GetEventLatencyMetadata()
+                  .scrolls_blocking_touch_dispatched_to_renderer.is_null());
+  EXPECT_EQ(
+      packet.gesture(1)
+          .details.GetEventLatencyMetadata()
+          .scrolls_blocking_touch_dispatched_to_renderer,
+      event_latency_metadata.scrolls_blocking_touch_dispatched_to_renderer);
+  EXPECT_TRUE(packet.gesture(2)
+                  .details.GetEventLatencyMetadata()
+                  .scrolls_blocking_touch_dispatched_to_renderer.is_null());
 }
 
 }  // namespace ui

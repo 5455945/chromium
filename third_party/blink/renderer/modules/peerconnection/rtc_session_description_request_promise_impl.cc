@@ -1,41 +1,39 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/peerconnection/rtc_session_description_request_promise_impl.h"
 
+#include "base/check.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
-#include "third_party/blink/renderer/core/dom/dom_exception.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_sdp_type.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_session_description_init.h"
 #include "third_party/blink/renderer/modules/peerconnection/rtc_error_util.h"
 #include "third_party/blink/renderer/modules/peerconnection/rtc_peer_connection.h"
 #include "third_party/blink/renderer/modules/peerconnection/rtc_session_description.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/visitor.h"
 #include "third_party/blink/renderer/platform/peerconnection/rtc_session_description_platform.h"
+#include "third_party/blink/renderer/platform/peerconnection/rtc_session_description_request.h"
+#include "third_party/webrtc/api/rtc_error.h"
 
 namespace blink {
 
 RTCSessionDescriptionRequestPromiseImpl*
 RTCSessionDescriptionRequestPromiseImpl::Create(
-    RTCCreateSessionDescriptionOperation operation,
     RTCPeerConnection* requester,
-    ScriptPromiseResolver* resolver,
-    const char* interface_name,
-    const char* property_name) {
+    ScriptPromiseResolver<RTCSessionDescriptionInit>* resolver,
+    bool is_offer) {
   return MakeGarbageCollected<RTCSessionDescriptionRequestPromiseImpl>(
-      operation, requester, resolver, interface_name, property_name);
+      requester, resolver, is_offer);
 }
 
 RTCSessionDescriptionRequestPromiseImpl::
     RTCSessionDescriptionRequestPromiseImpl(
-        RTCCreateSessionDescriptionOperation operation,
         RTCPeerConnection* requester,
-        ScriptPromiseResolver* resolver,
-        const char* interface_name,
-        const char* property_name)
-    : operation_(operation),
-      requester_(requester),
-      resolver_(resolver),
-      interface_name_(interface_name),
-      property_name_(property_name) {
+        ScriptPromiseResolver<RTCSessionDescriptionInit>* resolver,
+        bool is_offer)
+    : requester_(requester), resolver_(resolver), is_offer_(is_offer) {
   DCHECK(requester_);
   DCHECK(resolver_);
 }
@@ -46,9 +44,10 @@ RTCSessionDescriptionRequestPromiseImpl::
 void RTCSessionDescriptionRequestPromiseImpl::RequestSucceeded(
     RTCSessionDescriptionPlatform* platform_session_description) {
   if (requester_ && requester_->ShouldFireDefaultCallbacks()) {
-    requester_->NoteSessionDescriptionRequestCompleted(operation_, true);
-    auto* description =
-        RTCSessionDescription::Create(platform_session_description);
+    auto* description = RTCSessionDescriptionInit::Create();
+    description->setType(
+        V8RTCSdpType::Create(platform_session_description->GetType()).value());
+    description->setSdp(platform_session_description->Sdp());
     requester_->NoteSdpCreated(*description);
     resolver_->Resolve(description);
   } else {
@@ -62,14 +61,16 @@ void RTCSessionDescriptionRequestPromiseImpl::RequestSucceeded(
 
 void RTCSessionDescriptionRequestPromiseImpl::RequestFailed(
     const webrtc::RTCError& error) {
-  if (requester_ && requester_->ShouldFireDefaultCallbacks()) {
-    requester_->NoteSessionDescriptionRequestCompleted(operation_, false);
-    ScriptState::Scope scope(resolver_->GetScriptState());
-    ExceptionState exception_state(resolver_->GetScriptState()->GetIsolate(),
-                                   ExceptionState::kExecutionContext,
-                                   interface_name_, property_name_);
-    ThrowExceptionFromRTCError(error, exception_state);
-    resolver_->Reject(exception_state);
+  if (requester_) {
+    is_offer_ ? requester_->NoteCreateOfferFailed()
+              : requester_->NoteCreateAnswerFailed();
+    if (requester_->ShouldFireDefaultCallbacks()) {
+      RejectPromiseFromRTCError(error, resolver_);
+    } else {
+      // This is needed to have the resolver release its internal resources
+      // while leaving the associated promise pending as specified.
+      resolver_->Detach();
+    }
   } else {
     // This is needed to have the resolver release its internal resources
     // while leaving the associated promise pending as specified.

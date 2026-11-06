@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,14 +11,8 @@ SwapBuffersCompleteParams::SwapBuffersCompleteParams() = default;
 SwapBuffersCompleteParams::SwapBuffersCompleteParams(
     SwapBuffersCompleteParams&& other) = default;
 
-SwapBuffersCompleteParams::SwapBuffersCompleteParams(
-    const SwapBuffersCompleteParams& other) = default;
-
 SwapBuffersCompleteParams& SwapBuffersCompleteParams::operator=(
     SwapBuffersCompleteParams&& other) = default;
-
-SwapBuffersCompleteParams& SwapBuffersCompleteParams::operator=(
-    const SwapBuffersCompleteParams& other) = default;
 
 SwapBuffersCompleteParams::~SwapBuffersCompleteParams() = default;
 

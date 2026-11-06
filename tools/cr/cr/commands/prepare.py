@@ -1,4 +1,4 @@
-# Copyright 2013 The Chromium Authors. All rights reserved.
+# Copyright 2013 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -21,10 +21,10 @@ class PrepareCommand(cr.Command):
   def __init__(self):
     super(PrepareCommand, self).__init__()
     self.help = 'Prepares an output directory'
-    self.description = ("""
+    self.description = """
         This does any preparation needed for the output directory, such as
         running gn.
-        """)
+        """
 
   def Run(self):
     self.Prepare()
@@ -50,11 +50,14 @@ class PrepareOut(cr.Plugin, cr.Plugin.Type):
   @classmethod
   def AddArguments(cls, parser):
     parser.add_argument(
-        '--generator', dest=cls.SELECTOR,
-        choices=cls.Choices(),
-        default=None,
-        help=('Sets the build file generator to use. ' +
-              'Overrides %s.' % cls.SELECTOR)
+      '--generator',
+      dest=cls.SELECTOR,
+      choices=cls.Choices(),
+      default=None,
+      help=(
+        'Sets the build file generator to use. '
+        + 'Overrides %s.' % cls.SELECTOR
+      ),
     )
 
   def UpdateContext(self):

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,14 +9,21 @@
 
 namespace blink {
 
-class GPUTextureView : public DawnObject<WGPUTextureView> {
+class GPUTextureView : public DawnObject<wgpu::TextureView> {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  explicit GPUTextureView(GPUDevice* device, WGPUTextureView texture_view);
+  explicit GPUTextureView(GPUDevice* device,
+                          wgpu::TextureView texture_view,
+                          const String& label);
+
+  GPUTextureView(const GPUTextureView&) = delete;
+  GPUTextureView& operator=(const GPUTextureView&) = delete;
 
  private:
-  DISALLOW_COPY_AND_ASSIGN(GPUTextureView);
+  void SetLabelImpl(std::string_view value) override {
+    GetHandle().SetLabel(value);
+  }
 };
 
 }  // namespace blink

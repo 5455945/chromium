@@ -1,10 +1,9 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/callback_helpers.h"
 #include "base/check.h"
-#include "base/macros.h"
+#include "base/functional/callback_helpers.h"
 #include "base/notreached.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
@@ -27,6 +26,9 @@ class TestServiceImpl : public mojom::TestService, public mojom::KeepAlive {
  public:
   explicit TestServiceImpl(PendingReceiver<mojom::TestService> receiver)
       : receiver_(this, std::move(receiver)) {}
+
+  TestServiceImpl(const TestServiceImpl&) = delete;
+  TestServiceImpl& operator=(const TestServiceImpl&) = delete;
 
   ~TestServiceImpl() override = default;
 
@@ -58,11 +60,9 @@ class TestServiceImpl : public mojom::TestService, public mojom::KeepAlive {
 
   bool hold_next_ping_pong_ = false;
   base::OnceClosure last_ping_pong_reply_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestServiceImpl);
 };
 
-TEST_P(IdleTrackingTest, ControlMessagesDontExpectAck) {
+TEST_F(IdleTrackingTest, ControlMessagesDontExpectAck) {
   // Verifies that only mojom interface messages expect to be acknowledged and
   // control messages do not. This means that control messages cannot trigger
   // idle notifications.
@@ -78,7 +78,7 @@ TEST_P(IdleTrackingTest, ControlMessagesDontExpectAck) {
   EXPECT_EQ(0u, remote.GetNumUnackedMessagesForTesting());
 }
 
-TEST_P(IdleTrackingTest, BasicTracking) {
+TEST_F(IdleTrackingTest, BasicTracking) {
   // Verifies that basic idle tracking works when sending one-off messages with
   // reply and no attached PendingReceivers. Such messages can cause the
   // receiver to re-signal idle as soon as they're dispatched.
@@ -97,7 +97,7 @@ TEST_P(IdleTrackingTest, BasicTracking) {
   }
 }
 
-TEST_P(IdleTrackingTest, PendingRepliesPreventIdling) {
+TEST_F(IdleTrackingTest, PendingRepliesPreventIdling) {
   // Verifies that any reply-expecting messages sent to an idle-tracking
   // receiver will keep that receiver from idling until their reply is sent.
 
@@ -151,7 +151,7 @@ TEST_P(IdleTrackingTest, PendingRepliesPreventIdling) {
   }
 }
 
-TEST_P(IdleTrackingTest, OtherBoundReceiversPreventIdling) {
+TEST_F(IdleTrackingTest, OtherBoundReceiversPreventIdling) {
   // Verifies that the existence of other receivers bound through an
   // idle-tracking receiver will keep that receiver from signaling idle as long
   // as they remain bound.
@@ -184,14 +184,14 @@ TEST_P(IdleTrackingTest, OtherBoundReceiversPreventIdling) {
   loop.Run();
 }
 
-TEST_P(IdleTrackingTest, NonZeroTimeout) {
+TEST_F(IdleTrackingTest, NonZeroTimeout) {
   // Verifies that a non-zero idle timeout will not signal idle for at least as
   // long as the specified duration.
 
   Remote<mojom::TestService> remote;
   TestServiceImpl impl(remote.BindNewPipeAndPassReceiver());
 
-  constexpr auto kTimeout = base::TimeDelta::FromMilliseconds(500);
+  constexpr auto kTimeout = base::Milliseconds(500);
   base::ElapsedTimer timer;
   base::RunLoop loop;
   remote.set_idle_handler(kTimeout, base::BindLambdaForTesting([&] {
@@ -202,7 +202,7 @@ TEST_P(IdleTrackingTest, NonZeroTimeout) {
   loop.Run();
 }
 
-TEST_P(IdleTrackingTest, SubInterfacesCanIdleSeparately) {
+TEST_F(IdleTrackingTest, SubInterfacesCanIdleSeparately) {
   // Verifies that hierarchical ConnectionGroup references work properly, such
   // that a main interface with an idle timeout can bind a subinterface with its
   // own idle timeout, and the subinterface (and all subinterfaces it binds
@@ -246,8 +246,6 @@ TEST_P(IdleTrackingTest, SubInterfacesCanIdleSeparately) {
   keepalive.reset();
   loop.Run();
 }
-
-INSTANTIATE_MOJO_BINDINGS_TEST_SUITE_P(IdleTrackingTest);
 
 }  // namespace idle_tracking_unittest
 }  // namespace test

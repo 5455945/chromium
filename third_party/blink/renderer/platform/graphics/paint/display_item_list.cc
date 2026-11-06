@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,37 +6,41 @@
 
 #include "third_party/blink/renderer/platform/graphics/logging_canvas.h"
 #include "third_party/blink/renderer/platform/graphics/paint/drawing_display_item.h"
+#include "third_party/blink/renderer/platform/graphics/paint/paint_artifact.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
-DisplayItemList::~DisplayItemList() {
-  for (auto& item : *this)
+void DisplayItemList::clear() {
+  for (auto& item : *this) {
     item.Destruct();
+  }
+  items_.clear();
 }
 
 #if DCHECK_IS_ON()
 
 std::unique_ptr<JSONArray> DisplayItemList::DisplayItemsAsJSON(
+    const PaintArtifact& paint_artifact,
     wtf_size_t first_item_index,
     const DisplayItemRange& display_items,
-    JsonFlags flags) {
+    JsonOption option) {
   auto json_array = std::make_unique<JSONArray>();
   wtf_size_t i = first_item_index;
-  DCHECK(!(flags & kCompact) || !(flags & kShowPaintRecords))
-      << "kCompact and kShowPaintRecords are exclusive";
   for (auto& item : display_items) {
-    if (flags & kCompact) {
+    if (option == kCompact) {
       json_array->PushString(
-          String::Format("%u: %s", i, item.IdAsString().Utf8().data()));
+          Format("{}: {}", i, item.IdAsString(paint_artifact)));
     } else {
       auto json = std::make_unique<JSONObject>();
       json->SetInteger("index", i);
-      item.PropertiesAsJSON(*json, flags & kClientKnownToBeAlive);
+      item.PropertiesAsJSON(*json, paint_artifact);
 
-      if ((flags & kShowPaintRecords) && item.IsDrawing()) {
-        const auto& drawing_item = To<DrawingDisplayItem>(item);
-        if (const auto* record = drawing_item.GetPaintRecord().get())
-          json->SetArray("record", RecordAsJSON(*record));
+      if (option == kShowPaintRecords) {
+        if (const auto* drawing_item = DynamicTo<DrawingDisplayItem>(item)) {
+          json->SetArray("record",
+                         RecordAsJSON(drawing_item->GetPaintRecord()));
+        }
       }
 
       json_array->PushObject(std::move(json));

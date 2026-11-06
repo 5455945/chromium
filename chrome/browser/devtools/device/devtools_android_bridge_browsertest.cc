@@ -1,15 +1,16 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "chrome/browser/devtools/device/devtools_android_bridge.h"
+
 #include <algorithm>
 #include <array>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/values.h"
-#include "chrome/browser/devtools/device/devtools_android_bridge.h"
 #include "chrome/browser/devtools/device/tcp_device_provider.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -29,8 +30,7 @@ static void assign_from_callback(scoped_refptr<TCPDeviceProvider>* store,
 
 static std::string SetToString(const std::set<std::string>& values) {
   std::ostringstream result;
-  std::copy(values.begin(), values.end(),
-            std::ostream_iterator<std::string>(result, ", "));
+  std::ranges::copy(values, std::ostream_iterator<std::string>(result, ", "));
   std::string result_string = result.str();
   return result_string.substr(0, result_string.length() - 2);
 }
@@ -44,7 +44,7 @@ static std::string AllTargetsString(
 }
 
 IN_PROC_BROWSER_TEST_F(DevToolsAndroidBridgeTest, DiscoveryListChanges) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
 
   PrefService* service = profile->GetPrefs();
   service->ClearPref(prefs::kDevToolsTCPDiscoveryConfig);
@@ -66,28 +66,28 @@ IN_PROC_BROWSER_TEST_F(DevToolsAndroidBridgeTest, DiscoveryListChanges) {
 
   int invocations = called;
   base::ListValue list;
-  list.AppendString("somehost:2000");
+  list.Append("somehost:2000");
 
-  service->Set(prefs::kDevToolsTCPDiscoveryConfig, list);
+  service->SetList(prefs::kDevToolsTCPDiscoveryConfig, list.Clone());
 
   EXPECT_LT(invocations, called);
   EXPECT_NE(nullptr, provider);
   EXPECT_STREQ("somehost:2000", AllTargetsString(provider).c_str());
 
   invocations = called;
-  list.Clear();
-  service->Set(prefs::kDevToolsTCPDiscoveryConfig, list);
+  list.clear();
+  service->SetList(prefs::kDevToolsTCPDiscoveryConfig, list.Clone());
 
   EXPECT_LT(invocations, called);
   EXPECT_EQ(nullptr, provider);
   invocations = called;
 
-  list.AppendString("b:1");
-  list.AppendString("c:2");
-  list.AppendString("<not really a good address.");
-  list.AppendString("d:3");
-  list.AppendString("c:2");
-  service->Set(prefs::kDevToolsTCPDiscoveryConfig, list);
+  list.Append("b:1");
+  list.Append("c:2");
+  list.Append("<not really a good address.");
+  list.Append("d:3");
+  list.Append("c:2");
+  service->SetList(prefs::kDevToolsTCPDiscoveryConfig, std::move(list));
 
   EXPECT_LT(invocations, called);
   EXPECT_NE(nullptr, provider);
@@ -95,22 +95,22 @@ IN_PROC_BROWSER_TEST_F(DevToolsAndroidBridgeTest, DiscoveryListChanges) {
 }
 
 IN_PROC_BROWSER_TEST_F(DevToolsAndroidBridgeTest, DefaultValues) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
 
   PrefService* service = profile->GetPrefs();
   DevToolsAndroidBridge::Factory::GetForProfile(profile);
   service->ClearPref(prefs::kDevToolsDiscoverTCPTargetsEnabled);
   service->ClearPref(prefs::kDevToolsTCPDiscoveryConfig);
 
-  const base::ListValue* targets =
-    service->GetList(prefs::kDevToolsTCPDiscoveryConfig);
-  EXPECT_NE(nullptr, targets);
-  EXPECT_EQ(2ul, targets->GetSize());
+  const base::ListValue& targets =
+      service->GetList(prefs::kDevToolsTCPDiscoveryConfig);
+  EXPECT_EQ(2ul, targets.size());
 
   std::set<std::string> actual;
-  for (size_t i = 0; i < targets->GetSize(); i++) {
+  for (const base::Value& item : targets) {
     std::string value;
-    targets->GetString(i, &value);
+    if (item.is_string())
+      value = item.GetString();
     actual.insert(value);
   }
   EXPECT_STREQ("localhost:9222, localhost:9229", SetToString(actual).c_str());
@@ -118,7 +118,7 @@ IN_PROC_BROWSER_TEST_F(DevToolsAndroidBridgeTest, DefaultValues) {
 }
 
 IN_PROC_BROWSER_TEST_F(DevToolsAndroidBridgeTest, TCPEnableChange) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
 
   PrefService* service = profile->GetPrefs();
   service->ClearPref(prefs::kDevToolsTCPDiscoveryConfig);

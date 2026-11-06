@@ -54,7 +54,7 @@ each other. CTS is versioned alongside the Android OS; any Android 10 device is
 expected to pass CTS version 10, and so on. CTS does have minor version updates
 to address bugs in the tests themselves, such as flakiness or assumptions that
 are discovered not to be valid on all devices; see
-[WebView's CTS docs](./tools/cts_config/README.md#changing-cts-tests-retroactively)
+[WebView's CTS docs](../tools/cts_config/README.md#changing-cts-tests-retroactively)
 for more information on when this may be appropriate.
 
 CTS contains a number of tests which test the WebView's APIs and behaviours, and
@@ -225,7 +225,7 @@ Some of the most important examples:
 
 *   WebView doesn't render any UI elements outside of the content viewport. The
     embedding app is responsible for any UI that may be needed to implement
-    WebView callbacks. 
+    WebView callbacks.
 
 *   Callback APIs exist to trigger permission prompts (though apps may not
     implement them), but there's no current API to render infobars, control how
@@ -264,9 +264,13 @@ compatibility is _definitely_ affected, and means you should definitely
 [reach out to the WebView team](https://groups.google.com/a/chromium.org/forum/#!forum/android-webview-dev)
 to discuss it.
 
-CTS is run as part of the `android-pie-arm64-rel` trybot, and on the main
-waterfall. If your change causes CTS failures, you may need to
-[run CTS locally](./test-instructions.md#cts) to investigate.
+CTS is run as part of the [required CQ trybots](https://chromium.googlesource.com/chromium/src/+/HEAD/infra/config/generated/cq-builders.md#required-builders-chromium):
+- [`android-arm64-rel`](https://ci.chromium.org/ui/p/chromium/builders/try/android-arm64-rel)
+(for device-side CTS)
+- [`android-x64-rel`](https://ci.chromium.org/ui/p/chromium/builders/try/android-x64-rel) (for host-driven CTS)
+
+and on the main waterfall. If your change causes CTS failures,
+you may need to [run CTS locally](./test-instructions.md#cts) to investigate.
 
 ### UMA, Finch, and other data collection from the field
 
@@ -278,10 +282,8 @@ docs for more detailed information, but some key points:
 *   WebView is a separate "platform" for UMA/Finch purposes; experiments
     targeting "android" only affect Chrome for Android, _not_ WebView.
 
-*   WebView's beta population is fairly small, and its dev and canary
-    populations are tiny. The dev and canary channels are also only available on
-    Android 7 and later, so data from Android 5 and 6 is limited to beta and
-    stable.
+*   WebView's dev and canary populations are fairly small, although the beta
+    population is decently sized.
 
 *   WebView currently uses _per-app_ anonymous IDs for privacy reasons - this
     means that each individual app on a particular Android device will be
@@ -470,46 +472,43 @@ All code in `//android_webview` is exclusively used in WebView, and no code in
 `//chrome` is ever used by WebView, so if you can make the change at that level,
 it's guaranteed not to affect the other.
 
-In common code (such as `//content` and `//components`), it is **not** possible
-to use `#if` or similar to add/exclude code just for WebView; the distinction
-must be made at runtime. There is also intentionally no generic API or command
-line flag for "is this WebView" (and if you do find something that looks like
-that, please don't use it!) - it should be explicit exactly what
-behaviour/option is being controlled in each case.
+In common code (such as `//content` and `//components`), you can use one of
+the mechanisms below. Since Chrome and WebView share the same GN `target_os`,
+each of these requires a different strategy to make sure both behaviors are
+unit tested.
 
-*** aside
-All common code is only compiled once for both WebView and Chrome for Android,
-for unavoidable packaging reasons, so there is no `WEBVIEW` or similar macro
-defined. Code can use `#if defined(OS_ANDROID)` to exclude it from other
-platforms if desired, but this includes Chrome for Android.
+*** note
+**Note:** Out of these, only (1) can be controlled server-side to mitigate
+incidents, so be careful.
 ***
 
-Mechanisms usually used for this include:
+1.  If you're launching a feature in Chrome first and will later launch in
+    WebView (or vice-versa), use a `base::Feature` with overrides in
+    `AwFieldTrials::RegisterFeatureOverrides()`. You can configure which code
+    path is tested with `base::test::ScopedFeatureList`.
 
+2.  Otherwise, if you want a configurable setting (by the user, enterprise
+    policy, or embedding app) that has different defaults in Chrome and WebView,
+    declare the setting in common code and the defaults in each embedder.
+    Examples of these are:
+    *   `blink::web_pref::WebPreferences`: these are usually per-WebView
+        settings accessed via `android.webkit.WebSettings`. WebView values are
+        populated in `AwSettings::PopulateWebPreferencesLocked()`. Tests can set
+        different values via `content::WebContents::SetWebPreferences()` or
+        `blink::WebView::ApplyWebPreferences()`.
+    *   Prefs: these are per-`AwBrowserContext` or local-state settings. For an
+        example, see `PrefService::GetBoolean()` and
+        `PrefRegistrySimple::RegisterBooleanPref()`. Tests can set different
+        values via `TestingPrefServiceSimple`.
 
-*   Checking a command line flag in the common code such as
-    `--disable-foo-enforcement`, and setting that flag during WebView's startup,
-    often in [`AwMainDelegate::BasicStartupComplete`](../lib/aw_main_delegate.cc).
-    *   This can be used to apply changes conditionally based on the app's
-        targetSdkVersion, or unconditionally for all usage of WebView. Don't use
-        this for settings the app should be able to control.
-    *   The command line flag should have a name that describes the actual
-        effect it has, and usually doesn't need to refer to WebView.
+3.  Otherwise, if either the Chrome or WebView implementation needs to rely
+    on functionality that lives in `//chrome` or `//android_webview`, declare a
+    method in a new/existing interface and implement it in each embedder. Tests
+    can use a fake or mock the method.
 
-*   Calling a method defined by the common code from WebView code.
-    *   This can be used during startup as a more flexible alternative to a
-        command line flag; for example to easily pass an enum value, or to
-        ensure the change is applied at a specific point in time.
-    *   This can also be used when the app should be able to change a global
-        setting at runtime.
-
-*   Checking a setting stored in `content::WebPreferences`.
-    *   This can be used when the app should be able to change the setting at
-        runtime, usually on a per-WebView basis (e.g. via
-        `android.webkit.WebSettings`).
-
-*   Calling a method in a delegate interface defined by the common code and
-    implemented by the WebView/Chrome layer.
-    *   This can be used for situations that are more complex than a
-        boolean/enum option, e.g. policy logic with parameters that affect the
-        result, if the policy should be different in Chrome vs WebView.
+4.  Otherwise, check `build::IsAndroidWebView()`. Perform the check in a code
+    path that allows testing, such as a) the implementation of a method in some
+    interface (uses the same test strategy as above), or b) when deciding what
+    argument to pass to a function; different tests can pass different values.
+    In general this is less convenient than (1) but good testing can and should
+    still be achieved.

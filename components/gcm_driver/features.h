@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,19 +6,17 @@
 #define COMPONENTS_GCM_DRIVER_FEATURES_H_
 
 #include "base/feature_list.h"
+#include "base/time/time.h"
 
-namespace gcm {
+namespace gcm::features {
 
-namespace features {
+// Enables in-memory buffering of incoming push messages when no matching
+// AppHandler is currently registered (e.g. during browser initialization).
+BASE_DECLARE_FEATURE(kGCMMessageBuffering);
 
-extern const base::Feature kInvalidateTokenFeature;
-extern const char kParamNameTokenInvalidationPeriodDays[];
+// The time-to-live for unhandled buffered push messages before they are pruned.
+base::TimeDelta GetGCMMessageBufferingTTL();
 
-// The period after which the GCM token becomes stale.
-base::TimeDelta GetTokenInvalidationInterval();
-
-}  // namespace features
-
-}  // namespace gcm
+}  // namespace gcm::features
 
 #endif  // COMPONENTS_GCM_DRIVER_FEATURES_H_

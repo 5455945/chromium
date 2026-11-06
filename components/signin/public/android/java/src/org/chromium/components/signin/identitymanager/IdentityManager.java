@@ -1,214 +1,132 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.signin.identitymanager;
 
-import android.accounts.Account;
-
+import androidx.annotation.IntDef;
 import androidx.annotation.MainThread;
-import androidx.annotation.Nullable;
-import androidx.annotation.VisibleForTesting;
 
-import org.chromium.base.ObserverList;
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.NativeMethods;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.components.signin.base.AccountInfo;
-import org.chromium.components.signin.base.CoreAccountId;
 import org.chromium.components.signin.base.CoreAccountInfo;
+import org.chromium.google_apis.gaia.CoreAccountId;
 
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.util.List;
-/**
- * IdentityManager provides access to native IdentityManager's public API to java components.
- */
-public class IdentityManager {
-    private static final String TAG = "IdentityManager";
+
+/** IdentityManager provides access to native IdentityManager's public API to java components. */
+@NullMarked
+public interface IdentityManager {
+
+    /**
+     * Represents the state of the refresh tokens loading.
+     *
+     * <p>TODO(crbug.com/572579970): Move refresh tokens loading state to native IdentityManager. *
+     */
+    @IntDef({
+        RefreshTokensLoadingState.IN_PROGRESS,
+        RefreshTokensLoadingState.SUCCEEDED,
+        RefreshTokensLoadingState.FAILED
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    @interface RefreshTokensLoadingState {
+        int IN_PROGRESS = 0;
+        int SUCCEEDED = 1;
+        int FAILED = 2;
+    }
 
     /**
      * IdentityManager.Observer is notified when the available account information are updated. This
      * is a subset of native's IdentityManager::Observer.
      */
-    public interface Observer {
+    interface Observer {
+
+        /**
+         * Called when loading of refresh tokens is finished.
+         *
+         * @param state The state of refresh token loading. This state is terminal and will never
+         *     change back to {@link RefreshTokensLoadingState#IN_PROGRESS}.
+         */
+        default void onRefreshTokensLoaded(@RefreshTokensLoadingState int state) {}
+
+        /** Called when the given account is updated. */
+        default void onRefreshTokenUpdatedForAccount(CoreAccountInfo coreAccountInfo) {}
+
+        /** Called when the given account is removed. */
+        default void onRefreshTokenRemovedForAccount(CoreAccountId accountId) {}
+
         /**
          * Called for all types of changes to the primary account such as - primary account
          * set/cleared or sync consent granted/revoked in C++.
+         *
          * @param eventDetails Details about the primary account change event.
          */
         default void onPrimaryAccountChanged(PrimaryAccountChangeEvent eventDetails) {}
 
         /**
-         * Called when the Gaia cookie has been deleted explicitly by a user action, e.g. from
-         * the settings.
+         * Called when the Gaia cookie has been deleted explicitly by a user action, e.g. from the
+         * settings.
          */
         default void onAccountsCookieDeletedByUserAction() {}
 
-        /**
-         * Called after an account is updated.
-         */
+        /** Called after an account is updated. */
         default void onExtendedAccountInfoUpdated(AccountInfo accountInfo) {}
     }
+
+    /** Registers a IdentityManager.Observer */
+    void addObserver(Observer observer);
+
+    /** Unregisters a IdentityManager.Observer */
+    void removeObserver(Observer observer);
+
+    /** Returns whether the user's primary account is available. */
+    boolean hasPrimaryAccount();
+
     /**
-     * A simple callback for getAccessToken.
+     * Provides access to the core information of the user's primary account. Returns non-null if
+     * the primary account was set, null otherwise.
      */
-    public interface GetAccessTokenCallback
-            extends ProfileOAuth2TokenServiceDelegate.GetAccessTokenCallback {}
-
-    private long mNativeIdentityManager;
-    private final ProfileOAuth2TokenServiceDelegate mProfileOAuth2TokenServiceDelegate;
-
-    private final ObserverList<Observer> mObservers = new ObserverList<>();
+    @Nullable AccountInfo getPrimaryAccountInfo();
 
     /**
-     * Called by native to create an instance of IdentityManager.
+     * Looks up and returns information for account with given |accountId|. If the account cannot be
+     * found, return a null value.
      */
-    @CalledByNative
-    @VisibleForTesting
-    public static IdentityManager create(long nativeIdentityManager,
-            ProfileOAuth2TokenServiceDelegate profileOAuth2TokenServiceDelegate) {
-        return new IdentityManager(nativeIdentityManager, profileOAuth2TokenServiceDelegate);
-    }
-
-    private IdentityManager(long nativeIdentityManager,
-            ProfileOAuth2TokenServiceDelegate profileOAuth2TokenServiceDelegate) {
-        assert nativeIdentityManager != 0;
-        mNativeIdentityManager = nativeIdentityManager;
-        mProfileOAuth2TokenServiceDelegate = profileOAuth2TokenServiceDelegate;
-    }
+    @Nullable AccountInfo findExtendedAccountInfoByAccountId(CoreAccountId accountId);
 
     /**
-     * Called by native upon KeyedService's shutdown
+     * Looks up and returns information for account with given |email|. If the account cannot be
+     * found, return a null value.
      */
-    @CalledByNative
-    private void destroy() {
-        mNativeIdentityManager = 0;
-    }
+    @Nullable AccountInfo findExtendedAccountInfoByEmailAddress(String email);
 
     /**
-     * Registers a IdentityManager.Observer
-     */
-    public void addObserver(Observer observer) {
-        mObservers.addObserver(observer);
-    }
-
-    /**
-     * Unregisters a IdentityManager.Observer
-     */
-    public void removeObserver(Observer observer) {
-        mObservers.removeObserver(observer);
-    }
-
-    /**
-     * Called for all types of changes to the primary account such as - primary account set/cleared
-     * or sync consent granted/revoked in C++.
-     */
-    @CalledByNative
-    @VisibleForTesting
-    public void onPrimaryAccountChanged(PrimaryAccountChangeEvent eventDetails) {
-        for (Observer observer : mObservers) {
-            observer.onPrimaryAccountChanged(eventDetails);
-        }
-    }
-
-    @CalledByNative
-    @VisibleForTesting
-    public void onAccountsCookieDeletedByUserAction() {
-        for (Observer observer : mObservers) {
-            observer.onAccountsCookieDeletedByUserAction();
-        }
-    }
-
-    /**
-     * Called after an account is updated.
-     */
-    @CalledByNative
-    @VisibleForTesting
-    public void onExtendedAccountInfoUpdated(AccountInfo accountInfo) {
-        for (Observer observer : mObservers) {
-            observer.onExtendedAccountInfoUpdated(accountInfo);
-        }
-    }
-
-    /**
-     * Returns whether the user's primary account is available.
-     */
-    public boolean hasPrimaryAccount() {
-        return getPrimaryAccountInfo(ConsentLevel.SYNC) != null;
-    }
-
-    /**
-     * Provides the information of all accounts that have refresh tokens.
-     */
-    @VisibleForTesting
-    public CoreAccountInfo[] getAccountsWithRefreshTokens() {
-        return IdentityManagerJni.get().getAccountsWithRefreshTokens(mNativeIdentityManager);
-    }
-
-    /**
-     * Provides access to the core information of the user's primary account.
-     * Returns non-null if the primary account was set AND the required consent level was granted,
-     * null otherwise.
+     * Returns an array of all accounts with refresh tokens.
      *
-     * @param consentLevel {@link ConsentLevel} necessary for the caller. Most features should use
-     *         {@link ConsentLevel.SYNC}.
+     * <p>Note: Returns an empty array if refresh tokens are not yet fully loaded. Use {@link
+     * #getRefreshTokensLoadingState()} to verify the loading state before calling this method.
      */
-    public @Nullable CoreAccountInfo getPrimaryAccountInfo(@ConsentLevel int consentLevel) {
-        return IdentityManagerJni.get().getPrimaryAccountInfo(mNativeIdentityManager, consentLevel);
-    }
+    List<AccountInfo> getExtendedAccountInfoForAccountsWithRefreshToken();
 
-    /**
-     * Looks up and returns information for account with given |email|. If the account
-     * cannot be found, return a null value.
-     */
-    public @Nullable AccountInfo findExtendedAccountInfoByEmailAddress(String email) {
-        return IdentityManagerJni.get().findExtendedAccountInfoByEmailAddress(
-                mNativeIdentityManager, email);
-    }
+    /** Returns the state of the refresh tokens loading. */
+    @RefreshTokensLoadingState
+    int getRefreshTokensLoadingState();
 
-    /**
-     * Forces refreshing extended {@link AccountInfo} with image for the given
-     * list of {@link CoreAccountInfo}.
-     */
-    public void forceRefreshOfExtendedAccountInfo(List<CoreAccountInfo> accountInfos) {
-        for (CoreAccountInfo accountInfo : accountInfos) {
-            IdentityManagerJni.get().forceRefreshOfExtendedAccountInfo(
-                    mNativeIdentityManager, accountInfo.getId());
-        }
-    }
+    /** Refreshes extended {@link AccountInfo} with image for all accounts with a refresh token. */
+    // TODO(crbug.com/365057341): This doesn't need to be exposed in Java. Move this logic to
+    // native.
+    void refreshAccountInfoIfStale();
 
-    /**
-     * Call this method to retrieve an OAuth2 access token for the given account and scope. Please
-     * note that this method expects a scope with 'oauth2:' prefix.
-     * @param account the account to get the access token for.
-     * @param scope The scope to get an auth token for (with Android-style 'oauth2:' prefix).
-     * @param callback called on successful and unsuccessful fetching of auth token.
-     */
-    @MainThread
-    public void getAccessToken(Account account, String scope, GetAccessTokenCallback callback) {
-        assert mProfileOAuth2TokenServiceDelegate != null;
-        // TODO(crbug.com/934688) The following should call a JNI method instead.
-        mProfileOAuth2TokenServiceDelegate.getAccessToken(account, scope, callback);
-    }
+    /** Returns true if the primary account can be cleared/removed from the browser. */
+    boolean isClearPrimaryAccountAllowed();
 
     /**
      * Called by native to invalidate an OAuth2 token. Please note that the token is invalidated
      * asynchronously.
      */
     @MainThread
-    public void invalidateAccessToken(String accessToken) {
-        assert mProfileOAuth2TokenServiceDelegate != null;
-
-        // TODO(crbug.com/934688) The following should call a JNI method instead.
-        mProfileOAuth2TokenServiceDelegate.invalidateAccessToken(accessToken);
-    }
-
-    @NativeMethods
-    public interface Natives {
-        @Nullable
-        CoreAccountInfo getPrimaryAccountInfo(long nativeIdentityManager, int consentLevel);
-        @Nullable
-        AccountInfo findExtendedAccountInfoByEmailAddress(long nativeIdentityManager, String email);
-        CoreAccountInfo[] getAccountsWithRefreshTokens(long nativeIdentityManager);
-        void forceRefreshOfExtendedAccountInfo(
-                long nativeIdentityManager, CoreAccountId coreAccountId);
-    }
+    void invalidateAccessToken(String accessToken);
 }

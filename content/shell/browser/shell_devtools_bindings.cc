@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,25 +6,26 @@
 
 #include <stddef.h>
 
+#include <algorithm>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 #include "base/base64.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
-#include "base/guid.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/json/string_escape.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
+#include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task/post_task.h"
+#include "base/uuid.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_handle.h"
@@ -38,14 +39,18 @@
 #include "content/shell/browser/shell_browser_main_parts.h"
 #include "content/shell/browser/shell_content_browser_client.h"
 #include "content/shell/browser/shell_devtools_manager_delegate.h"
+#include "ipc/constants.mojom.h"
 #include "net/http/http_response_headers.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
+#include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/cpp/simple_url_loader_stream_consumer.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_FUCHSIA)
+#include "base/command_line.h"
 #include "content/public/browser/devtools_frontend_host.h"
+#include "content/shell/common/shell_switches.h"
 #endif
 
 namespace content {
@@ -57,10 +62,10 @@ std::vector<ShellDevToolsBindings*>* GetShellDevtoolsBindingsInstances() {
   return instance.get();
 }
 
-base::DictionaryValue BuildObjectForResponse(const net::HttpResponseHeaders* rh,
-                                             bool success,
-                                             int net_error) {
-  base::DictionaryValue response = base::DictionaryValue();
+base::DictValue BuildObjectForResponse(const net::HttpResponseHeaders* rh,
+                                       bool success,
+                                       int net_error) {
+  base::DictValue response;
   int responseCode = 200;
   if (rh) {
     responseCode = rh->response_code();
@@ -68,20 +73,20 @@ base::DictionaryValue BuildObjectForResponse(const net::HttpResponseHeaders* rh,
     // In case of no headers, assume file:// URL and failed to load
     responseCode = 404;
   }
-  response.SetInteger("statusCode", responseCode);
-  response.SetInteger("netError", net_error);
-  response.SetString("netErrorName", net::ErrorToString(net_error));
+  response.Set("statusCode", responseCode);
+  response.Set("netError", net_error);
+  response.Set("netErrorName", net::ErrorToString(net_error));
 
-  base::DictionaryValue headers;
+  base::DictValue headers;
   size_t iterator = 0;
   std::string name;
   std::string value;
   // TODO(caseq): this probably needs to handle duplicate header names
   // correctly by folding them.
   while (rh && rh->EnumerateHeaderLines(&iterator, &name, &value))
-    headers.SetString(name, value);
+    headers.Set(name, value);
 
-  response.SetKey("headers", std::move(headers));
+  response.Set("headers", std::move(headers));
   return response;
 }
 
@@ -104,21 +109,22 @@ class ShellDevToolsBindings::NetworkResourceLoader
     loader_->DownloadAsStream(url_loader_factory, this);
   }
 
+  NetworkResourceLoader(const NetworkResourceLoader&) = delete;
+  NetworkResourceLoader& operator=(const NetworkResourceLoader&) = delete;
+
  private:
   void OnResponseStarted(const GURL& final_url,
                          const network::mojom::URLResponseHead& response_head) {
     response_headers_ = response_head.headers;
   }
 
-  void OnDataReceived(base::StringPiece chunk,
+  void OnDataReceived(std::string_view chunk,
                       base::OnceClosure resume) override {
     base::Value chunkValue;
 
     bool encoded = !base::IsStringUTF8(chunk);
     if (encoded) {
-      std::string encoded_string;
-      base::Base64Encode(chunk, &encoded_string);
-      chunkValue = base::Value(std::move(encoded_string));
+      chunkValue = base::Value(base::Base64Encode(chunk));
     } else {
       chunkValue = base::Value(chunk);
     }
@@ -142,18 +148,16 @@ class ShellDevToolsBindings::NetworkResourceLoader
 
   const int stream_id_;
   const int request_id_;
-  ShellDevToolsBindings* const bindings_;
+  const raw_ptr<ShellDevToolsBindings> bindings_;
   std::unique_ptr<network::SimpleURLLoader> loader_;
   scoped_refptr<net::HttpResponseHeaders> response_headers_;
-
-  DISALLOW_COPY_AND_ASSIGN(NetworkResourceLoader);
 };
 
 // This constant should be in sync with
 // the constant
 // kMaxMessageChunkSize in chrome/browser/devtools/devtools_ui_bindings.cc.
 constexpr size_t kShellMaxMessageChunkSize =
-    IPC::Channel::kMaximumMessageSize / 4;
+    IPC::mojom::kChannelMaximumMessageSize / 4;
 
 void ShellDevToolsBindings::InspectElementAt(int x, int y) {
   if (agent_host_) {
@@ -173,7 +177,7 @@ ShellDevToolsBindings::ShellDevToolsBindings(WebContents* devtools_contents,
       inspect_element_at_x_(-1),
       inspect_element_at_y_(-1) {
   auto* bindings = GetShellDevtoolsBindingsInstances();
-  DCHECK(!base::Contains(*bindings, this));
+  DCHECK(!std::ranges::contains(*bindings, this));
   bindings->push_back(this);
 }
 
@@ -182,29 +186,14 @@ ShellDevToolsBindings::~ShellDevToolsBindings() {
     agent_host_->DetachClient(this);
 
   auto* bindings = GetShellDevtoolsBindingsInstances();
-  DCHECK(base::Contains(*bindings, this));
-  base::Erase(*bindings, this);
-}
-
-// static
-std::vector<ShellDevToolsBindings*>
-ShellDevToolsBindings::GetInstancesForWebContents(WebContents* web_contents) {
-  auto* bindings = GetShellDevtoolsBindingsInstances();
-  std::vector<ShellDevToolsBindings*> result;
-  std::copy_if(bindings->begin(), bindings->end(), std::back_inserter(result),
-               [web_contents](ShellDevToolsBindings* binding) {
-                 return binding->inspected_contents() == web_contents;
-               });
-  return result;
+  DCHECK(std::ranges::contains(*bindings, this));
+  std::erase(*bindings, this);
 }
 
 void ShellDevToolsBindings::ReadyToCommitNavigation(
     NavigationHandle* navigation_handle) {
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_FUCHSIA)
   content::RenderFrameHost* frame = navigation_handle->GetRenderFrameHost();
-  // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
-  // frames. This caller was converted automatically to the primary main frame
-  // to preserve its semantics. Follow up to confirm correctness.
   if (navigation_handle->IsInPrimaryMainFrame()) {
     frontend_host_ = DevToolsFrontendHost::Create(
         frame, base::BindRepeating(
@@ -212,12 +201,14 @@ void ShellDevToolsBindings::ReadyToCommitNavigation(
                    base::Unretained(this)));
     return;
   }
-  std::string origin = navigation_handle->GetURL().GetOrigin().spec();
+  std::string origin =
+      navigation_handle->GetURL().DeprecatedGetOriginAsURL().spec();
   auto it = extensions_api_.find(origin);
   if (it == extensions_api_.end())
     return;
-  std::string script = base::StringPrintf("%s(\"%s\")", it->second.c_str(),
-                                          base::GenerateGUID().c_str());
+  std::string script = base::StringPrintf(
+      "%s(\"%s\")", it->second.c_str(),
+      base::Uuid::GenerateRandomV4().AsLowercaseString().c_str());
   DevToolsFrontendHost::SetupExtensionsAPI(frame, script);
 #endif
 }
@@ -225,7 +216,14 @@ void ShellDevToolsBindings::ReadyToCommitNavigation(
 void ShellDevToolsBindings::AttachInternal() {
   if (agent_host_)
     agent_host_->DetachClient(this);
-  agent_host_ = DevToolsAgentHost::GetOrCreateFor(inspected_contents_);
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+  const bool create_for_tab = false;
+#else
+  const bool create_for_tab = true;
+#endif
+  agent_host_ = create_for_tab
+                    ? DevToolsAgentHost::GetOrCreateForTab(inspected_contents_)
+                    : DevToolsAgentHost::GetOrCreateFor(inspected_contents_);
   agent_host_->AttachClient(this);
   if (inspect_element_at_x_ != -1) {
     agent_host_->InspectElement(inspected_contents_->GetFocusedFrame(),
@@ -239,20 +237,6 @@ void ShellDevToolsBindings::Attach() {
   AttachInternal();
 }
 
-void ShellDevToolsBindings::UpdateInspectedWebContents(
-    WebContents* new_contents,
-    base::OnceCallback<void()> callback) {
-  inspected_contents_ = new_contents;
-  if (!agent_host_)
-    return;
-  AttachInternal();
-  CallClientFunction(
-      "DevToolsAPI", "reattachMainTarget", {}, {}, {},
-      base::BindOnce([](base::OnceCallback<void()> callback,
-                        base::Value) { std::move(callback).Run(); },
-                     std::move(callback)));
-}
-
 void ShellDevToolsBindings::WebContentsDestroyed() {
   if (agent_host_) {
     agent_host_->DetachClient(this);
@@ -261,40 +245,42 @@ void ShellDevToolsBindings::WebContentsDestroyed() {
 }
 
 void ShellDevToolsBindings::HandleMessageFromDevToolsFrontend(
-    base::Value message) {
-  std::string method;
-  base::ListValue* params = nullptr;
-  base::DictionaryValue* dict = nullptr;
-  if (!message.GetAsDictionary(&dict) || !dict->GetString("method", &method)) {
+    base::DictValue message) {
+  const std::string* method = message.FindString("method");
+  if (!method)
     return;
-  }
-  int request_id = 0;
-  dict->GetInteger("id", &request_id);
-  dict->GetList("params", &params);
 
-  if (method == "dispatchProtocolMessage" && params && params->GetSize() == 1) {
-    std::string protocol_message;
-    if (!agent_host_ || !params->GetString(0, &protocol_message))
+  int request_id = message.FindInt("id").value_or(0);
+  base::ListValue* params_value = message.FindList("params");
+
+  // Since we've received message by value, we can take the list.
+  base::ListValue params;
+  if (params_value) {
+    params = std::move(*params_value);
+  }
+
+  if (*method == "dispatchProtocolMessage" && params.size() == 1) {
+    const std::string* protocol_message = params[0].GetIfString();
+    if (!agent_host_ || !protocol_message)
       return;
-    agent_host_->DispatchProtocolMessage(
-        this, base::as_bytes(base::make_span(protocol_message)));
-  } else if (method == "loadCompleted") {
+    agent_host_->DispatchProtocolMessage(this,
+                                         base::as_byte_span(*protocol_message));
+  } else if (*method == "loadCompleted") {
     CallClientFunction("DevToolsAPI", "setUseSoftMenu", base::Value(true));
-  } else if (method == "loadNetworkResource" && params->GetSize() == 3) {
+  } else if (*method == "loadNetworkResource" && params.size() == 3) {
     // TODO(pfeldman): handle some of the embedder messages in content.
-    std::string url;
-    std::string headers;
-    int stream_id;
-    if (!params->GetString(0, &url) || !params->GetString(1, &headers) ||
-        !params->GetInteger(2, &stream_id)) {
+    const std::string* url = params[0].GetIfString();
+    const std::string* headers = params[1].GetIfString();
+    std::optional<const int> stream_id = params[2].GetIfInt();
+    if (!url || !headers || !stream_id.has_value()) {
       return;
     }
 
-    GURL gurl(url);
+    GURL gurl(*url);
     if (!gurl.is_valid()) {
-      base::DictionaryValue response;
-      response.SetInteger("statusCode", 404);
-      response.SetBoolean("urlValid", false);
+      base::DictValue response;
+      response.Set("statusCode", 404);
+      response.Set("urlValid", false);
       SendMessageAck(request_id, std::move(response));
       return;
     }
@@ -330,48 +316,57 @@ void ShellDevToolsBindings::HandleMessageFromDevToolsFrontend(
     // TODO(caseq): this preserves behavior of URLFetcher-based implementation.
     // We really need to pass proper first party origin from the front-end.
     resource_request->site_for_cookies = net::SiteForCookies::FromUrl(gurl);
-    resource_request->headers.AddHeadersFromString(headers);
+    resource_request->headers.AddHeadersFromString(*headers);
 
     auto* partition =
-        web_contents()->GetBrowserContext()->GetStoragePartitionForUrl(gurl);
+        inspected_contents()->GetPrimaryMainFrame()->GetStoragePartition();
     auto factory = partition->GetURLLoaderFactoryForBrowserProcess();
 
     auto simple_url_loader = network::SimpleURLLoader::Create(
         std::move(resource_request), traffic_annotation);
     auto resource_loader = std::make_unique<NetworkResourceLoader>(
-        stream_id, request_id, this, std::move(simple_url_loader),
+        *stream_id, request_id, this, std::move(simple_url_loader),
         factory.get());
     loaders_.insert(std::move(resource_loader));
     return;
-  } else if (method == "getPreferences") {
+  } else if (*method == "getPreferences") {
     SendMessageAck(request_id, std::move(preferences_));
     return;
-  } else if (method == "setPreference") {
-    std::string name;
-    std::string value;
-    if (!params->GetString(0, &name) || !params->GetString(1, &value)) {
+  } else if (*method == "getHostConfig") {
+    SendMessageAck(request_id, {});
+    return;
+  } else if (*method == "setPreference") {
+    if (params.size() < 2)
       return;
-    }
-    preferences_.SetKey(name, base::Value(value));
-  } else if (method == "removePreference") {
-    std::string name;
-    if (!params->GetString(0, &name))
+    const std::string* name = params[0].GetIfString();
+
+    // We're just setting params[1] as a value anyways, so just make sure it's
+    // the type we want, but don't worry about getting it.
+    if (!name || !params[1].is_string())
       return;
-    preferences_.RemoveKey(name);
-  } else if (method == "requestFileSystems") {
+
+    preferences_.Set(*name, std::move(params[1]));
+  } else if (*method == "removePreference") {
+    const std::string* name = params[0].GetIfString();
+    if (!name)
+      return;
+    preferences_.Remove(*name);
+  } else if (*method == "requestFileSystems") {
     CallClientFunction("DevToolsAPI", "fileSystemsLoaded",
                        base::Value(base::Value::Type::LIST));
-  } else if (method == "reattach") {
+  } else if (*method == "reattach") {
     if (!agent_host_)
       return;
     agent_host_->DetachClient(this);
     agent_host_->AttachClient(this);
-  } else if (method == "registerExtensionsAPI") {
-    std::string origin;
-    std::string script;
-    if (!params->GetString(0, &origin) || !params->GetString(1, &script))
+  } else if (*method == "registerExtensionsAPI") {
+    if (params.size() < 2)
       return;
-    extensions_api_[origin + "/"] = script;
+    const std::string* origin = params[0].GetIfString();
+    const std::string* script = params[1].GetIfString();
+    if (!origin || !script)
+      return;
+    extensions_api_[*origin + "/"] = *script;
   } else {
     return;
   }
@@ -383,8 +378,8 @@ void ShellDevToolsBindings::HandleMessageFromDevToolsFrontend(
 void ShellDevToolsBindings::DispatchProtocolMessage(
     DevToolsAgentHost* agent_host,
     base::span<const uint8_t> message) {
-  base::StringPiece str_message(reinterpret_cast<const char*>(message.data()),
-                                message.size());
+  std::string_view str_message(reinterpret_cast<const char*>(message.data()),
+                               message.size());
   if (str_message.length() < kShellMaxMessageChunkSize) {
     CallClientFunction("DevToolsAPI", "dispatchMessage",
                        base::Value(std::string(str_message)));
@@ -392,7 +387,7 @@ void ShellDevToolsBindings::DispatchProtocolMessage(
     size_t total_size = str_message.length();
     for (size_t pos = 0; pos < str_message.length();
          pos += kShellMaxMessageChunkSize) {
-      base::StringPiece str_message_chunk =
+      std::string_view str_message_chunk =
           str_message.substr(pos, kShellMaxMessageChunkSize);
 
       CallClientFunction(
@@ -412,9 +407,9 @@ void ShellDevToolsBindings::CallClientFunction(
     base::OnceCallback<void(base::Value)> cb) {
   std::string javascript;
 
-  web_contents()->GetMainFrame()->AllowInjectingJavaScript();
+  web_contents()->GetPrimaryMainFrame()->AllowInjectingJavaScript();
 
-  base::Value arguments(base::Value::Type::LIST);
+  base::ListValue arguments;
   if (!arg1.is_none()) {
     arguments.Append(std::move(arg1));
     if (!arg2.is_none()) {
@@ -424,14 +419,15 @@ void ShellDevToolsBindings::CallClientFunction(
       }
     }
   }
-  web_contents()->GetMainFrame()->ExecuteJavaScriptMethod(
+  web_contents()->GetPrimaryMainFrame()->ExecuteJavaScriptMethod(
       base::ASCIIToUTF16(object_name), base::ASCIIToUTF16(method_name),
       std::move(arguments), std::move(cb));
 }
 
-void ShellDevToolsBindings::SendMessageAck(int request_id, base::Value arg) {
+void ShellDevToolsBindings::SendMessageAck(int request_id,
+                                           base::DictValue arg) {
   CallClientFunction("DevToolsAPI", "embedderMessageAck",
-                     base::Value(request_id), std::move(arg));
+                     base::Value(request_id), base::Value(std::move(arg)));
 }
 
 void ShellDevToolsBindings::AgentHostClosed(DevToolsAgentHost* agent_host) {

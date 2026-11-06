@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,15 +9,11 @@
 
 #include <memory>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "storage/browser/file_system/async_file_util.h"
 
-namespace ash {
-namespace file_system_provider {
-
 // TODO(mtomasz): Remove this namespace.
-namespace internal {
+namespace ash::file_system_provider::internal {
 
 // The implementation of storage::AsyncFileUtil for provided file systems. It is
 // created one per Chrome process. It is responsible for routing calls to the
@@ -32,13 +28,17 @@ namespace internal {
 class ProviderAsyncFileUtil : public storage::AsyncFileUtil {
  public:
   ProviderAsyncFileUtil();
+
+  ProviderAsyncFileUtil(const ProviderAsyncFileUtil&) = delete;
+  ProviderAsyncFileUtil& operator=(const ProviderAsyncFileUtil&) = delete;
+
   ~ProviderAsyncFileUtil() override;
 
   // storage::AsyncFileUtil overrides.
   void CreateOrOpen(
       std::unique_ptr<storage::FileSystemOperationContext> context,
       const storage::FileSystemURL& url,
-      int file_flags,
+      uint32_t file_flags,
       CreateOrOpenCallback callback) override;
   void EnsureFileExists(
       std::unique_ptr<storage::FileSystemOperationContext> context,
@@ -52,7 +52,7 @@ class ProviderAsyncFileUtil : public storage::AsyncFileUtil {
       StatusCallback callback) override;
   void GetFileInfo(std::unique_ptr<storage::FileSystemOperationContext> context,
                    const storage::FileSystemURL& url,
-                   int fields,
+                   GetMetadataFieldSet fields,
                    GetFileInfoCallback callback) override;
   void ReadDirectory(
       std::unique_ptr<storage::FileSystemOperationContext> context,
@@ -71,14 +71,14 @@ class ProviderAsyncFileUtil : public storage::AsyncFileUtil {
       std::unique_ptr<storage::FileSystemOperationContext> context,
       const storage::FileSystemURL& src_url,
       const storage::FileSystemURL& dest_url,
-      CopyOrMoveOption option,
+      CopyOrMoveOptionSet options,
       CopyFileProgressCallback progress_callback,
       StatusCallback callback) override;
   void MoveFileLocal(
       std::unique_ptr<storage::FileSystemOperationContext> context,
       const storage::FileSystemURL& src_url,
       const storage::FileSystemURL& dest_url,
-      CopyOrMoveOption option,
+      CopyOrMoveOptionSet options,
       StatusCallback callback) override;
   void CopyInForeignFile(
       std::unique_ptr<storage::FileSystemOperationContext> context,
@@ -100,13 +100,8 @@ class ProviderAsyncFileUtil : public storage::AsyncFileUtil {
       std::unique_ptr<storage::FileSystemOperationContext> context,
       const storage::FileSystemURL& url,
       CreateSnapshotFileCallback callback) override;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ProviderAsyncFileUtil);
 };
 
-}  // namespace internal
-}  // namespace file_system_provider
-}  // namespace ash
+}  // namespace ash::file_system_provider::internal
 
 #endif  // CHROME_BROWSER_ASH_FILE_SYSTEM_PROVIDER_FILEAPI_PROVIDER_ASYNC_FILE_UTIL_H_

@@ -26,9 +26,12 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_SCROLL_SCROLLBAR_THEME_OVERLAY_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_SCROLL_SCROLLBAR_THEME_OVERLAY_H_
 
+#include "base/gtest_prod_util.h"
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/scroll/scrollbar_theme.h"
 
 namespace blink {
+struct PaintInfo;
 
 // This scrollbar theme is used to get overlay scrollbar for platforms other
 // than Mac. Mac's overlay scrollbars are in ScrollbarThemeMac*.
@@ -40,38 +43,38 @@ class CORE_EXPORT ScrollbarThemeOverlay : public ScrollbarTheme {
 
   bool ShouldRepaintAllPartsOnInvalidation() const override;
 
-  ScrollbarPart PartsToInvalidateOnThumbPositionChange(
-      const Scrollbar&,
-      float old_position,
-      float new_position) const override;
+  int PartsToInvalidateOnThumbPositionChange(const Scrollbar&,
+                                             float old_position,
+                                             float new_position) const override;
 
   int ScrollbarThickness(float scale_from_dip,
-                         EScrollbarWidth scrollbar_width) override;
+                         EScrollbarWidth scrollbar_width) const override;
   int ScrollbarMargin(float scale_from_dip,
                       EScrollbarWidth scrollbar_width) const override;
   bool UsesOverlayScrollbars() const override;
   base::TimeDelta OverlayScrollbarFadeOutDelay() const override;
   base::TimeDelta OverlayScrollbarFadeOutDuration() const override;
 
-  int ThumbLength(const Scrollbar&) override;
   int ThumbThickness(float scale_from_dip,
                      EScrollbarWidth scrollbar_width) const;
 
-  bool NativeThemeHasButtons() override { return false; }
-  bool HasThumb(const Scrollbar&) override;
+  bool NativeThemeHasButtons() const override { return false; }
+  bool HasThumb(const Scrollbar&) const override;
 
-  IntRect BackButtonRect(const Scrollbar&) override;
-  IntRect ForwardButtonRect(const Scrollbar&) override;
-  IntRect TrackRect(const Scrollbar&) override;
-  IntRect ThumbRect(const Scrollbar&) override;
+  gfx::Rect BackButtonRect(const Scrollbar&) const override;
+  gfx::Rect ForwardButtonRect(const Scrollbar&) const override;
+  gfx::Rect TrackRect(const Scrollbar&) const override;
+  gfx::Rect ThumbRect(const Scrollbar&) const override;
 
-  void PaintThumb(GraphicsContext&, const Scrollbar&, const IntRect&) override;
+  void PaintThumb(const PaintInfo&,
+                  const Scrollbar&,
+                  const gfx::Rect&) override;
 
   bool UsesNinePatchThumbResource() const override;
-  IntSize NinePatchThumbCanvasSize(const Scrollbar&) const override;
-  IntRect NinePatchThumbAperture(const Scrollbar&) const override;
+  gfx::Size NinePatchThumbCanvasSize(const Scrollbar&) const override;
+  gfx::Rect NinePatchThumbAperture(const Scrollbar&) const override;
 
-  int MinimumThumbLength(const Scrollbar&) override;
+  int MinimumThumbLength(const Scrollbar&) const override;
 
  protected:
   FRIEND_TEST_ALL_PREFIXES(ScrollbarThemeOverlayTest, PaintInvalidation);
@@ -81,7 +84,7 @@ class CORE_EXPORT ScrollbarThemeOverlay : public ScrollbarTheme {
                         int thumb_thickness_thin_dip,
                         int scrollbar_margin_thin_dip);
 
-  ScrollbarPart HitTest(const Scrollbar&, const IntPoint&) override;
+  ScrollbarPart HitTest(const Scrollbar&, const gfx::Point&) const override;
 
  private:
   int thumb_thickness_default_dip_;

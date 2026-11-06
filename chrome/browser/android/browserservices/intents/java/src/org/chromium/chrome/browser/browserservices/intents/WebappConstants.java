@@ -1,9 +1,10 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.browserservices.intents;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.content_public.common.ScreenOrientationConstants;
 
 /**
@@ -11,6 +12,7 @@ import org.chromium.content_public.common.ScreenOrientationConstants;
  * screen.  These shortcuts are used to either open a page in the main browser
  * or open a web app.
  */
+@NullMarked
 public class WebappConstants {
     public static final String EXTRA_ICON = "org.chromium.chrome.browser.webapp_icon";
     public static final String EXTRA_ID = "org.chromium.chrome.browser.webapp_id";
@@ -28,10 +30,16 @@ public class WebappConstants {
     public static final String EXTRA_THEME_COLOR = "org.chromium.chrome.browser.theme_color";
     public static final String EXTRA_BACKGROUND_COLOR =
             "org.chromium.chrome.browser.background_color";
+    public static final String EXTRA_DARK_THEME_COLOR =
+            "org.chromium.chrome.browser.dark_theme_color";
+    public static final String EXTRA_DARK_BACKGROUND_COLOR =
+            "org.chromium.chrome.browser.dark_background_color";
     public static final String EXTRA_IS_ICON_GENERATED =
             "org.chromium.chrome.browser.is_icon_generated";
     public static final String EXTRA_IS_ICON_ADAPTIVE =
             "org.chromium.chrome.browser.webapp_icon_adaptive";
+    public static final String EXTRA_IS_ICON_TRUSTED =
+            "org.chromium.chrome.browser.webapp_is_icon_trusted";
     public static final String EXTRA_VERSION =
             "org.chromium.chrome.browser.webapp_shortcut_version";
     public static final String REUSE_URL_MATCHING_TAB_ELSE_NEW_TAB =
@@ -44,9 +52,6 @@ public class WebappConstants {
     // When a new field is added to the intent, this version should be incremented so that it will
     // be correctly populated into the WebappRegistry/WebappDataStorage.
     public static final int WEBAPP_SHORTCUT_VERSION = 3;
-
-    // This value is equal to kInvalidOrMissingColor in the C++ blink::Manifest struct.
-    public static final long MANIFEST_COLOR_INVALID_OR_MISSING = ((long) Integer.MAX_VALUE) + 1;
 
     private WebappConstants() {}
 }

@@ -27,14 +27,19 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_LOADER_RESOURCE_FONT_RESOURCE_H_
 
 #include "base/gtest_prod_util.h"
-#include "base/memory/scoped_refptr.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/types/expected.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/fonts/web_font_decoder.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_client.h"
+#include "third_party/blink/renderer/platform/loader/fetch/url_loader/background_response_processor.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cancellable_task.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
+#include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
+#include "third_party/skia/include/core/SkTypeface.h"
 
 namespace blink {
 
@@ -42,6 +47,7 @@ class FetchParameters;
 class ResourceFetcher;
 class FontCustomPlatformData;
 class FontResourceClient;
+class IftPatcher;
 
 // An observer that will be notified when original data is cleared
 // from the resource. Inspector may collect this data and store it for
@@ -71,7 +77,13 @@ class CORE_EXPORT FontResource final : public Resource {
 
   String OtsParsingMessage() const { return ots_parsing_message_; }
 
-  scoped_refptr<FontCustomPlatformData> GetCustomFontData();
+  // Decodes the font on the first call, then releases the encoded data and
+  // reports the decoded size to MemoryCache. Returns null on decode failure.
+  const FontCustomPlatformData* GetCustomFontData();
+  // Returns a copy of the IFT patcher for this font, or nullptr if the font is
+  // not an IFT font. Each caller receives its own independent copy.
+  // TODO(wmedrano): Share a single IftPatcher instead of cloning.
+  std::unique_ptr<IftPatcher> CloneIftPatcher() const;
 
   // Returns true if the loading priority of the remote font resource can be
   // lowered. The loading priority of the font can be lowered only if the
@@ -85,7 +97,12 @@ class CORE_EXPORT FontResource final : public Resource {
 
   void AddClearDataObserver(FontResourceClearDataObserver* observer) const;
 
+  std::unique_ptr<BackgroundResponseProcessorFactory>
+  MaybeCreateBackgroundResponseProcessorFactory() override;
+
  private:
+  class BackgroundFontProcessor;
+  class BackgroundFontProcessorFactory;
   class FontResourceFactory : public NonTextResourceFactory {
    public:
     FontResourceFactory() : NonTextResourceFactory(ResourceType::kFont) {}
@@ -102,6 +119,9 @@ class CORE_EXPORT FontResource final : public Resource {
   void NotifyClientsShortLimitExceeded();
   void NotifyClientsLongLimitExceeded();
 
+  void OnBackgroundDecodeFinished(
+      base::expected<DecodedWebFont, String> result_or_error);
+
   // This is used in UMA histograms, should not change order.
   enum class LoadLimitState {
     kLoadNotStarted,
@@ -111,7 +131,8 @@ class CORE_EXPORT FontResource final : public Resource {
     kMaxValue = kLongLimitExceeded,
   };
 
-  scoped_refptr<FontCustomPlatformData> font_data_;
+  Member<FontCustomPlatformData> font_data_;
+  std::unique_ptr<IftPatcher> ift_patcher_;
   String ots_parsing_message_;
   LoadLimitState load_limit_state_;
   bool cors_failed_;
@@ -119,6 +140,8 @@ class CORE_EXPORT FontResource final : public Resource {
   TaskHandle font_load_long_limit_;
   mutable HeapHashSet<WeakMember<FontResourceClearDataObserver>>
       clear_data_observers_;
+
+  base::expected<DecodedWebFont, String> background_decode_result_;
 
   friend class MemoryCache;
   FRIEND_TEST_ALL_PREFIXES(CacheAwareFontResourceTest, CacheAwareFontLoading);

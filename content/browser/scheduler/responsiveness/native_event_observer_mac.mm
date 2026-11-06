@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,28 +8,30 @@
 
 #import "content/public/browser/native_event_processor_mac.h"
 
-namespace content {
-namespace responsiveness {
+namespace content::responsiveness {
 
-void NativeEventObserver::RegisterObserver() {
-  DCHECK([NSApp conformsToProtocol:@protocol(NativeEventProcessor)]);
+void BrowserUINativeEventObserver::RegisterObserver() {
+  CHECK([NSApp conformsToProtocol:@protocol(NativeEventProcessor)],
+        base::NotFatalUntil::M160);
   id<NativeEventProcessor> processor =
       static_cast<id<NativeEventProcessor>>(NSApp);
   [processor addNativeEventProcessorObserver:this];
 }
-void NativeEventObserver::DeregisterObserver() {
-  DCHECK([NSApp conformsToProtocol:@protocol(NativeEventProcessor)]);
+void BrowserUINativeEventObserver::UnregisterObserver() {
+  CHECK([NSApp conformsToProtocol:@protocol(NativeEventProcessor)],
+        base::NotFatalUntil::M160);
   id<NativeEventProcessor> processor =
       static_cast<id<NativeEventProcessor>>(NSApp);
   [processor removeNativeEventProcessorObserver:this];
 }
 
-void NativeEventObserver::WillRunNativeEvent(const void* opaque_identifier) {
+void BrowserUINativeEventObserver::WillRunNativeEvent(
+    uintptr_t opaque_identifier) {
   will_run_event_callback_.Run(opaque_identifier);
 }
-void NativeEventObserver::DidRunNativeEvent(const void* opaque_identifier) {
+void BrowserUINativeEventObserver::DidRunNativeEvent(
+    uintptr_t opaque_identifier) {
   did_run_event_callback_.Run(opaque_identifier);
 }
 
-}  // namespace responsiveness
-}  // namespace content
+}  // namespace content::responsiveness

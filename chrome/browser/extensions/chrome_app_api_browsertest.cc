@@ -1,98 +1,95 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <memory>
 #include <string>
 
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
-#include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "extensions/browser/disable_reason.h"
+#include "extensions/browser/extension_registrar.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/manifest.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+#include "third_party/blink/public/common/features.h"
 #include "url/gurl.h"
 
 using extensions::Extension;
 
 class ChromeAppAPITest : public extensions::ExtensionBrowserTest {
+ protected:
   void SetUpOnMainThread() override {
     extensions::ExtensionBrowserTest::SetUpOnMainThread();
     host_resolver()->AddRule("*", "127.0.0.1");
     ASSERT_TRUE(embedded_test_server()->Start());
   }
 
- protected:
   bool IsAppInstalledInMainFrame() {
-    return IsAppInstalledInFrame(
-        browser()->tab_strip_model()->GetActiveWebContents()->GetMainFrame());
+    return IsAppInstalledInFrame(browser()
+                                     ->GetTabStripModel()
+                                     ->GetActiveWebContents()
+                                     ->GetPrimaryMainFrame());
   }
   bool IsAppInstalledInIFrame() {
     return IsAppInstalledInFrame(GetIFrame());
   }
   bool IsAppInstalledInFrame(content::RenderFrameHost* frame) {
-    const char kGetAppIsInstalled[] =
-        "window.domAutomationController.send(window.chrome.app.isInstalled);";
-    bool result;
-    CHECK(content::ExecuteScriptAndExtractBool(frame,
-                                               kGetAppIsInstalled,
-                                               &result));
-    return result;
+    const char kGetAppIsInstalled[] = "window.chrome.app.isInstalled;";
+    return content::EvalJs(frame, kGetAppIsInstalled).ExtractBool();
   }
 
   std::string InstallStateInMainFrame() {
-    return InstallStateInFrame(
-        browser()->tab_strip_model()->GetActiveWebContents()->GetMainFrame());
+    return InstallStateInFrame(browser()
+                                   ->GetTabStripModel()
+                                   ->GetActiveWebContents()
+                                   ->GetPrimaryMainFrame());
   }
   std::string InstallStateInIFrame() {
     return InstallStateInFrame(GetIFrame());
   }
   std::string InstallStateInFrame(content::RenderFrameHost* frame) {
     const char kGetAppInstallState[] =
-        "window.chrome.app.installState("
-        "    function(s) { window.domAutomationController.send(s); });";
-    std::string result;
-    CHECK(content::ExecuteScriptAndExtractString(frame,
-                                                 kGetAppInstallState,
-                                                 &result));
-    return result;
+        "new Promise(resolve => {"
+        "    window.chrome.app.installState("
+        "        function(s) { resolve(s); });"
+        "});";
+    return content::EvalJs(frame, kGetAppInstallState).ExtractString();
   }
 
   std::string RunningStateInMainFrame() {
-    return RunningStateInFrame(
-        browser()->tab_strip_model()->GetActiveWebContents()->GetMainFrame());
+    return RunningStateInFrame(browser()
+                                   ->GetTabStripModel()
+                                   ->GetActiveWebContents()
+                                   ->GetPrimaryMainFrame());
   }
   std::string RunningStateInIFrame() {
     return RunningStateInFrame(GetIFrame());
   }
   std::string RunningStateInFrame(content::RenderFrameHost* frame) {
-    const char kGetAppRunningState[] =
-        "window.domAutomationController.send("
-        "    window.chrome.app.runningState());";
-    std::string result;
-    CHECK(content::ExecuteScriptAndExtractString(frame,
-                                                 kGetAppRunningState,
-                                                 &result));
-    return result;
+    const char kGetAppRunningState[] = "window.chrome.app.runningState();";
+    return content::EvalJs(frame, kGetAppRunningState).ExtractString();
   }
 
  private:
   content::RenderFrameHost* GetIFrame() {
     return content::FrameMatchingPredicate(
-        browser()->tab_strip_model()->GetActiveWebContents(),
+        browser()->GetTabStripModel()->GetActiveWebContents()->GetPrimaryPage(),
         base::BindRepeating(&content::FrameIsChildOfMainFrame));
   }
 };
@@ -104,7 +101,7 @@ IN_PROC_BROWSER_TEST_F(ChromeAppAPITest, IsInstalled) {
       "nonapp.com", "/extensions/test_file.html");
 
   // Before the app is installed, app.com does not think that it is installed
-  ui_test_utils::NavigateToURL(browser(), app_url);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), app_url));
   EXPECT_FALSE(IsAppInstalledInMainFrame());
 
   // Load an app which includes app.com in its extent.
@@ -117,89 +114,79 @@ IN_PROC_BROWSER_TEST_F(ChromeAppAPITest, IsInstalled) {
   EXPECT_FALSE(IsAppInstalledInMainFrame());
 
   // Test that a non-app page has chrome.app.isInstalled = false.
-  ui_test_utils::NavigateToURL(browser(), non_app_url);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), non_app_url));
   EXPECT_FALSE(IsAppInstalledInMainFrame());
 
   // Test that a non-app page returns null for chrome.app.getDetails().
   const char kGetAppDetails[] =
-      "window.domAutomationController.send("
-      "    JSON.stringify(window.chrome.app.getDetails()));";
-  std::string result;
-  ASSERT_TRUE(
-      content::ExecuteScriptAndExtractString(
-          browser()->tab_strip_model()->GetActiveWebContents(),
-          kGetAppDetails,
-          &result));
-  EXPECT_EQ("null", result);
+      "JSON.stringify(window.chrome.app.getDetails());";
+  EXPECT_EQ("null", content::EvalJs(
+                        browser()->GetTabStripModel()->GetActiveWebContents(),
+                        kGetAppDetails));
 
   // Check that an app page has chrome.app.isInstalled = true.
-  ui_test_utils::NavigateToURL(browser(), app_url);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), app_url));
   EXPECT_TRUE(IsAppInstalledInMainFrame());
 
   // Check that an app page returns the correct result for
   // chrome.app.getDetails().
-  ui_test_utils::NavigateToURL(browser(), app_url);
-  ASSERT_TRUE(
-      content::ExecuteScriptAndExtractString(
-          browser()->tab_strip_model()->GetActiveWebContents(),
-          kGetAppDetails,
-          &result));
-  std::unique_ptr<base::DictionaryValue> app_details(
-      static_cast<base::DictionaryValue*>(
-          base::JSONReader::ReadDeprecated(result).release()));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), app_url));
+  std::string result =
+      content::EvalJs(browser()->GetTabStripModel()->GetActiveWebContents(),
+                      kGetAppDetails)
+          .ExtractString();
+  std::optional<base::Value> result_value =
+      base::JSONReader::Read(result, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  ASSERT_TRUE(result_value && result_value->is_dict());
+  base::DictValue& app_details = result_value.value().GetDict();
+
   // extension->manifest() does not contain the id.
-  app_details->Remove("id", NULL);
-  EXPECT_TRUE(app_details.get());
-  EXPECT_TRUE(app_details->Equals(extension->manifest()->value()));
+  app_details.Remove("id");
+  EXPECT_EQ(app_details, *extension->manifest()->value());
 
   // Try to change app.isInstalled.  Should silently fail, so
   // that isInstalled should have the initial value.
-  ASSERT_TRUE(
-      content::ExecuteScriptAndExtractString(
-          browser()->tab_strip_model()->GetActiveWebContents(),
-          "window.domAutomationController.send("
-          "    function() {"
-          "        var value = window.chrome.app.isInstalled;"
-          "        window.chrome.app.isInstalled = !value;"
-          "        if (window.chrome.app.isInstalled == value) {"
-          "            return 'true';"
-          "        } else {"
-          "            return 'false';"
-          "        }"
-          "    }()"
-          ");",
-          &result));
 
   // Should not be able to alter window.chrome.app.isInstalled from javascript";
-  EXPECT_EQ("true", result);
+  EXPECT_EQ("true", content::EvalJs(
+                        browser()->GetTabStripModel()->GetActiveWebContents(),
+                        "    (function() {"
+                        "        var value = window.chrome.app.isInstalled;"
+                        "        window.chrome.app.isInstalled = !value;"
+                        "        if (window.chrome.app.isInstalled == value) {"
+                        "            return 'true';"
+                        "        } else {"
+                        "            return 'false';"
+                        "        }"
+                        "    })()"));
 }
 
 // Test accessing app.isInstalled when the context has been invalidated (e.g.
-// by removing the frame). Regression test for https://crbug.com/855853.
+// by removing the frame). Regression test for https://crbug.com/41396418.
 IN_PROC_BROWSER_TEST_F(ChromeAppAPITest, IsInstalledFromRemovedFrame) {
   GURL app_url =
       embedded_test_server()->GetURL("app.com", "/extensions/test_file.html");
   const Extension* extension =
       LoadExtension(test_data_dir_.AppendASCII("app_dot_com_app"));
   ASSERT_TRUE(extension);
-  ui_test_utils::NavigateToURL(browser(), app_url);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), app_url));
 
   constexpr char kScript[] =
       R"(var i = document.createElement('iframe');
-         i.onload = function() {
-           var frameApp = i.contentWindow.chrome.app;
-           document.body.removeChild(i);
-           var isInstalled = frameApp.isInstalled;
-           window.domAutomationController.send(
-               isInstalled === undefined);
-         };
-         i.src = '%s';
-         document.body.appendChild(i);)";
-  bool result = false;
-  ASSERT_TRUE(content::ExecuteScriptAndExtractBool(
-      browser()->tab_strip_model()->GetActiveWebContents(),
-      base::StringPrintf(kScript, app_url.spec().c_str()), &result));
-  EXPECT_TRUE(result);
+         new Promise(resolve => {
+           i.onload = function() {
+             var frameApp = i.contentWindow.chrome.app;
+             document.body.removeChild(i);
+             var isInstalled = frameApp.isInstalled;
+             resolve(isInstalled === undefined);
+           };
+           i.src = '%s';
+           document.body.appendChild(i);
+         });
+         )";
+  EXPECT_EQ(true, content::EvalJs(
+                      browser()->GetTabStripModel()->GetActiveWebContents(),
+                      base::StringPrintf(kScript, app_url.spec().c_str())));
 }
 
 IN_PROC_BROWSER_TEST_F(ChromeAppAPITest, InstallAndRunningState) {
@@ -209,7 +196,7 @@ IN_PROC_BROWSER_TEST_F(ChromeAppAPITest, InstallAndRunningState) {
       "nonapp.com", "/extensions/get_app_details_for_frame.html");
 
   // Before the app is installed, app.com does not think that it is installed
-  ui_test_utils::NavigateToURL(browser(), app_url);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), app_url));
 
   EXPECT_EQ("not_installed", InstallStateInMainFrame());
   EXPECT_EQ("cannot_run", RunningStateInMainFrame());
@@ -224,31 +211,28 @@ IN_PROC_BROWSER_TEST_F(ChromeAppAPITest, InstallAndRunningState) {
   EXPECT_FALSE(IsAppInstalledInMainFrame());
 
   // Reloading the page should put the tab in an app process.
-  ui_test_utils::NavigateToURL(browser(), app_url);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), app_url));
   EXPECT_EQ("installed", InstallStateInMainFrame());
   EXPECT_EQ("running", RunningStateInMainFrame());
   EXPECT_TRUE(IsAppInstalledInMainFrame());
 
   // Disable the extension and verify the state.
-  extensions::ExtensionService* service =
-      extensions::ExtensionSystem::Get(browser()->profile())
-          ->extension_service();
-  service->DisableExtension(
+  extension_registrar()->DisableExtension(
       extension->id(),
-      extensions::disable_reason::DISABLE_PERMISSIONS_INCREASE);
-  ui_test_utils::NavigateToURL(browser(), app_url);
+      {extensions::disable_reason::DISABLE_PERMISSIONS_INCREASE});
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), app_url));
 
   EXPECT_EQ("disabled", InstallStateInMainFrame());
   EXPECT_EQ("cannot_run", RunningStateInMainFrame());
   EXPECT_FALSE(IsAppInstalledInMainFrame());
 
-  service->EnableExtension(extension->id());
+  extension_registrar()->EnableExtension(extension->id());
   EXPECT_EQ("installed", InstallStateInMainFrame());
   EXPECT_EQ("ready_to_run", RunningStateInMainFrame());
   EXPECT_FALSE(IsAppInstalledInMainFrame());
 
   // The non-app URL should still not be installed or running.
-  ui_test_utils::NavigateToURL(browser(), non_app_url);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), non_app_url));
 
   EXPECT_EQ("not_installed", InstallStateInMainFrame());
   EXPECT_EQ("cannot_run", RunningStateInMainFrame());
@@ -259,10 +243,11 @@ IN_PROC_BROWSER_TEST_F(ChromeAppAPITest, InstallAndRunningState) {
 
   // With --site-per-process, the iframe on nonapp.com will currently swap
   // processes and go into the hosted app process.
-  if (content::AreAllSitesIsolatedForTesting())
+  if (content::AreAllSitesIsolatedForTesting()) {
     EXPECT_TRUE(IsAppInstalledInIFrame());
-  else
+  } else {
     EXPECT_FALSE(IsAppInstalledInIFrame());
+  }
 }
 
 IN_PROC_BROWSER_TEST_F(ChromeAppAPITest, InstallAndRunningStateFrame) {
@@ -271,9 +256,10 @@ IN_PROC_BROWSER_TEST_F(ChromeAppAPITest, InstallAndRunningStateFrame) {
 
   // Check the install and running state of a non-app iframe running
   // within an app.
-  ui_test_utils::NavigateToURL(browser(), app_url);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), app_url));
 
   EXPECT_EQ("not_installed", InstallStateInIFrame());
   EXPECT_EQ("cannot_run", RunningStateInIFrame());
   EXPECT_FALSE(IsAppInstalledInIFrame());
 }
+

@@ -1,10 +1,12 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/public/cpp/test/test_nearby_share_delegate.h"
 
 #include "base/time/time.h"
+#include "test_nearby_share_delegate.h"
+#include "ui/gfx/vector_icon_types.h"
 
 namespace ash {
 
@@ -12,12 +14,24 @@ TestNearbyShareDelegate::TestNearbyShareDelegate() = default;
 
 TestNearbyShareDelegate::~TestNearbyShareDelegate() = default;
 
+bool TestNearbyShareDelegate::IsEnabled() {
+  return is_enabled_;
+}
+
+void TestNearbyShareDelegate::SetEnabled(bool enabled) {
+  is_enabled_ = enabled;
+}
+
 bool TestNearbyShareDelegate::IsPodButtonVisible() {
   return is_pod_button_visible_;
 }
 
 bool TestNearbyShareDelegate::IsHighVisibilityOn() {
   return is_high_visibility_on_;
+}
+
+bool TestNearbyShareDelegate::IsOnboardingComplete() {
+  return is_onboarding_complete_;
 }
 
 bool TestNearbyShareDelegate::IsEnableHighVisibilityRequestActive() const {
@@ -37,5 +51,25 @@ void TestNearbyShareDelegate::DisableHighVisibility() {
 }
 
 void TestNearbyShareDelegate::ShowNearbyShareSettings() const {}
+
+void TestNearbyShareDelegate::ShowOnboardingPage() const {}
+
+const gfx::VectorIcon& TestNearbyShareDelegate::GetIcon(bool on_icon) const {
+  return gfx::VectorIcon::EmptyIcon();
+}
+
+std::u16string TestNearbyShareDelegate::GetPlaceholderFeatureName() const {
+  return u"Nearby Share";
+}
+
+::nearby_share::mojom::Visibility TestNearbyShareDelegate::GetVisibility()
+    const {
+  return visibility_;
+}
+
+void TestNearbyShareDelegate::SetVisibility(
+    ::nearby_share::mojom::Visibility visibility) {
+  visibility_ = visibility;
+}
 
 }  // namespace ash

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,15 +8,13 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/ash/smb_client/discovery/host_locator.h"
 
-namespace ash {
-namespace smb_client {
+namespace ash::smb_client {
 
 // Removes .local from |raw_hostname| if located at the end of the string and
 // returns the new hostname.
@@ -26,6 +24,10 @@ Hostname RemoveLocal(const std::string& raw_hostname);
 class MDnsHostLocator : public HostLocator {
  public:
   MDnsHostLocator();
+
+  MDnsHostLocator(const MDnsHostLocator&) = delete;
+  MDnsHostLocator& operator=(const MDnsHostLocator&) = delete;
+
   ~MDnsHostLocator() override;
 
   // HostLocator override.
@@ -55,11 +57,8 @@ class MDnsHostLocator : public HostLocator {
 
   // Must be last member.
   base::WeakPtrFactory<MDnsHostLocator> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(MDnsHostLocator);
 };
 
-}  // namespace smb_client
-}  // namespace ash
+}  // namespace ash::smb_client
 
 #endif  // CHROME_BROWSER_ASH_SMB_CLIENT_DISCOVERY_MDNS_HOST_LOCATOR_H_

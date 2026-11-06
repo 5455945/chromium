@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,6 @@
 #include <cmath>
 
 #include "base/logging.h"
-#include "base/macros.h"
-#include "base/metrics/histogram_functions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -20,22 +18,9 @@ namespace auto_screen_brightness {
 namespace {
 constexpr double kTol = 1e-10;
 
-// Entries should not be renumbered and numeric values should never be reused.
-enum class InvalidCurveReason {
-  kTooFewPoints = 0,
-  kUnequalXY = 1,
-  kKnotsNotIncreasing = 2,
-  kControlsDecreasing = 3,
-  kMaxValue = kControlsDecreasing
-};
-
-void LogError(InvalidCurveReason reason) {
-  base::UmaHistogramEnumeration("AutoScreenBrightness.InvalidCurveReason",
-                                reason);
-}
 
 bool IsIncreasing(const std::vector<double>& data, bool is_strict) {
-  DCHECK_GT(data.size(), 1u);
+  CHECK_GT(data.size(), 1u, base::NotFatalUntil::M160);
   for (size_t i = 1; i < data.size(); ++i) {
     if (data[i] < data[i - 1] || (data[i] <= data[i - 1] && is_strict))
       return false;
@@ -46,22 +31,18 @@ bool IsIncreasing(const std::vector<double>& data, bool is_strict) {
 bool IsDataValid(const std::vector<double>& xs, const std::vector<double>& ys) {
   const size_t num_points = xs.size();
   if (num_points < 2) {
-    LogError(InvalidCurveReason::kTooFewPoints);
     return false;
   }
 
   if (num_points != ys.size()) {
-    LogError(InvalidCurveReason::kUnequalXY);
     return false;
   }
 
   if (!IsIncreasing(xs, true /* is_strict */)) {
-    LogError(InvalidCurveReason::kKnotsNotIncreasing);
     return false;
   }
 
   if (!IsIncreasing(ys, false /* is_strict */)) {
-    LogError(InvalidCurveReason::kControlsDecreasing);
     return false;
   }
 
@@ -78,7 +59,7 @@ std::vector<double> ComputeTangents(const std::vector<double>& xs,
   std::vector<double> ms;
   for (size_t i = 0; i < num_points - 1; ++i) {
     const double slope = (ys[i + 1] - ys[i]) / (xs[i + 1] - xs[i]);
-    DCHECK_GE(slope, 0);
+    CHECK_GE(slope, 0, base::NotFatalUntil::M160);
     ds.push_back(slope);
   }
 
@@ -99,8 +80,8 @@ std::vector<double> ComputeTangents(const std::vector<double>& xs,
     } else {
       const double a = ms[i] / ds[i];
       const double b = ms[i + 1] / ds[i];
-      DCHECK_GE(a, 0.0);
-      DCHECK_GE(b, 0.0);
+      CHECK_GE(a, 0.0, base::NotFatalUntil::M160);
+      CHECK_GE(b, 0.0, base::NotFatalUntil::M160);
 
       const double r = std::hypot(a, b);
       if (r > 3.0) {
@@ -124,18 +105,18 @@ MonotoneCubicSpline& MonotoneCubicSpline::operator=(
 
 MonotoneCubicSpline::~MonotoneCubicSpline() = default;
 
-absl::optional<MonotoneCubicSpline> MonotoneCubicSpline::FromString(
+std::optional<MonotoneCubicSpline> MonotoneCubicSpline::FromString(
     const std::string& data) {
   std::vector<double> xs;
   std::vector<double> ys;
 
   if (data.empty())
-    return absl::nullopt;
+    return std::nullopt;
 
   base::StringPairs key_value_pairs;
   if (!base::SplitStringIntoKeyValuePairs(data, ',', '\n', &key_value_pairs)) {
     LOG(ERROR) << "Ill-formatted spline";
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   for (base::StringPairs::iterator it = key_value_pairs.begin();
@@ -143,29 +124,29 @@ absl::optional<MonotoneCubicSpline> MonotoneCubicSpline::FromString(
     double x;
     if (!base::StringToDouble(it->first, &x)) {
       LOG(ERROR) << "Ill-formatted xs";
-      return absl::nullopt;
+      return std::nullopt;
     }
 
     double y;
     if (!base::StringToDouble(it->second, &y)) {
       LOG(ERROR) << "Ill-formatted ys";
-      return absl::nullopt;
+      return std::nullopt;
     }
     xs.push_back(x);
     ys.push_back(y);
   }
 
   if (!IsDataValid(xs, ys))
-    return absl::nullopt;
+    return std::nullopt;
 
   return MonotoneCubicSpline(xs, ys);
 }
 
-absl::optional<MonotoneCubicSpline>
+std::optional<MonotoneCubicSpline>
 MonotoneCubicSpline::CreateMonotoneCubicSpline(const std::vector<double>& xs,
                                                const std::vector<double>& ys) {
   if (!IsDataValid(xs, ys))
-    return absl::nullopt;
+    return std::nullopt;
 
   return MonotoneCubicSpline(xs, ys);
 }
@@ -185,12 +166,8 @@ bool MonotoneCubicSpline::operator==(const MonotoneCubicSpline& spline) const {
   return true;
 }
 
-bool MonotoneCubicSpline::operator!=(const MonotoneCubicSpline& spline) const {
-  return !(*this == spline);
-}
-
 double MonotoneCubicSpline::Interpolate(double x) const {
-  DCHECK_GT(num_points_, 1u);
+  CHECK_GT(num_points_, 1u, base::NotFatalUntil::M160);
 
   if (x <= xs_[0])
     return ys_[0];
@@ -214,11 +191,11 @@ double MonotoneCubicSpline::Interpolate(double x) const {
     ++i;
   }
 
-  DCHECK_LT(i, num_points_);
+  CHECK_LT(i, num_points_, base::NotFatalUntil::M160);
   const double x_upper = xs_[i];
   const double x_lower = xs_[i - 1];
-  DCHECK_GE(x, x_lower);
-  DCHECK_LE(x, x_upper);
+  CHECK_GE(x, x_lower, base::NotFatalUntil::M160);
+  CHECK_LE(x, x_upper, base::NotFatalUntil::M160);
 
   const double h = x_upper - x_lower;
   const double t = (x - x_lower) / h;

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,27 +7,26 @@
 
 #include <list>
 
-#include "base/observer_list.h"
+#include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
 #include "ui/base/metadata/metadata_header_macros.h"
-#include "ui/compositor/layer.h"
 #include "ui/compositor/layer_delegate.h"
+#include "ui/compositor/layer_textured.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/layout/animating_layout_manager.h"
 #include "ui/views/layout/flex_layout.h"
 #include "ui/views/view.h"
+#include "ui/views/widget/widget_observer.h"
 
 // A general view container for any type of toolbar icons.
 class ToolbarIconContainerView : public views::View,
-                                 public views::ViewObserver {
+                                 public views::ViewObserver,
+                                 public views::WidgetObserver {
+  METADATA_HEADER(ToolbarIconContainerView, views::View)
+
  public:
-  METADATA_HEADER(ToolbarIconContainerView);
-
-  class Observer : public base::CheckedObserver {
-   public:
-    virtual void OnHighlightChanged() = 0;
-  };
-
-  explicit ToolbarIconContainerView(bool uses_highlight);
+  explicit ToolbarIconContainerView(bool uses_highlight,
+                                    bool use_default_target_layout = true);
   ToolbarIconContainerView(const ToolbarIconContainerView&) = delete;
   ToolbarIconContainerView& operator=(const ToolbarIconContainerView&) = delete;
   ~ToolbarIconContainerView() override;
@@ -36,17 +35,13 @@ class ToolbarIconContainerView : public views::View,
   virtual void UpdateAllIcons() = 0;
 
   // Adds the RHS child as well as setting its margins.
-  void AddMainButton(views::Button* main_button);
+  void AddMainItem(views::View* item);
 
   // Begins observing |button| for changes that should affect the container's
   // highlight state.
   void ObserveButton(views::Button* button);
 
-  void AddObserver(Observer* obs);
-  void RemoveObserver(const Observer* obs);
-
-  void SetIconColor(SkColor icon_color);
-  SkColor GetIconColor() const;
+  views::View* main_item() { return main_item_; }
 
   bool GetHighlighted() const;
 
@@ -70,8 +65,6 @@ class ToolbarIconContainerView : public views::View,
   void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
 
  private:
-  friend class ToolbarAccountIconContainerViewBrowserTest;
-
   // Responsible for painting a roundrect border for the owning view.
   class RoundRectBorder : public ui::LayerDelegate {
    public:
@@ -87,8 +80,8 @@ class ToolbarIconContainerView : public views::View,
                                     float new_device_scale_factor) override;
 
    private:
-    views::View* parent_;
-    ui::Layer layer_;
+    raw_ptr<views::View> parent_;
+    ui::LayerTextured layer_;
   };
 
   class WidgetRestoreObserver;
@@ -97,6 +90,10 @@ class ToolbarIconContainerView : public views::View,
   void OnMouseEntered(const ui::MouseEvent& event) override;
   void OnMouseExited(const ui::MouseEvent& event) override;
   void AddedToWidget() override;
+  void RemovedFromWidget() override;
+
+  // views::WidgetObserver:
+  void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
 
   void UpdateHighlight();
 
@@ -106,30 +103,24 @@ class ToolbarIconContainerView : public views::View,
   // Determine whether the container shows its highlight border.
   const bool uses_highlight_;
 
-  // Hacky; see comments in UpdateHighlight().
-  bool ever_painted_highlight_ = false;
-
   // The main view is nominally always present and is last child in the view
   // hierarchy.
-  views::Button* main_button_ = nullptr;
-
-  // Override for the icon color. If not set, |COLOR_TOOLBAR_BUTTON_ICON| is
-  // used.
-  absl::optional<SkColor> icon_color_;
+  raw_ptr<views::View, AcrossTasksDanglingUntriaged> main_item_ = nullptr;
 
   // Points to the child buttons that we know are currently highlighted.
   // TODO(pbos): Consider observing buttons leaving our hierarchy and removing
   // them from this set.
-  std::set<const views::Button*> highlighted_buttons_;
+  std::set<raw_ptr<const views::Button, SetExperimental>> highlighted_buttons_;
 
   RoundRectBorder border_{this};
 
   // Tracks when the widget is restored and resets the layout.
   std::unique_ptr<WidgetRestoreObserver> restore_observer_;
 
-  std::list<base::CallbackListSubscription> subscriptions_;
+  base::ScopedObservation<views::Widget, views::WidgetObserver>
+      widget_observation_{this};
 
-  base::ObserverList<Observer> observers_;
+  std::list<base::CallbackListSubscription> subscriptions_;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_TOOLBAR_TOOLBAR_ICON_CONTAINER_VIEW_H_

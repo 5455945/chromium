@@ -48,6 +48,7 @@
 #include "third_party/blink/renderer/modules/filesystem/dom_file_system.h"
 #include "third_party/blink/renderer/modules/filesystem/file_system_callbacks.h"
 #include "third_party/blink/renderer/modules/filesystem/file_system_dispatcher.h"
+#include "third_party/blink/renderer/platform/heap/cross_thread_handle.h"
 #include "third_party/blink/renderer/platform/scheduler/public/frame_scheduler.h"
 #include "third_party/blink/renderer/platform/scheduler/public/scheduling_policy.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
@@ -58,9 +59,10 @@ namespace blink {
 void LocalFileSystem::ResolveURL(const KURL& file_system_url,
                                  std::unique_ptr<ResolveURICallbacks> callbacks,
                                  SynchronousType type) {
-  RequestFileSystemAccessInternal(WTF::Bind(
-      &LocalFileSystem::ResolveURLCallback, WrapCrossThreadPersistent(this),
-      file_system_url, std::move(callbacks), type));
+  RequestFileSystemAccessInternal(
+      BindOnce(&LocalFileSystem::ResolveURLCallback,
+               MakeUnwrappingCrossThreadHandle(this), file_system_url,
+               std::move(callbacks), type));
 }
 
 void LocalFileSystem::ResolveURLCallback(
@@ -80,12 +82,10 @@ void LocalFileSystem::RequestFileSystem(
     int64_t size,
     std::unique_ptr<FileSystemCallbacks> callbacks,
     SynchronousType sync_type) {
-  RequestFileSystemAccessInternal(WTF::Bind(
-      &LocalFileSystem::RequestFileSystemCallback,
-      WrapCrossThreadPersistent(this), type, std::move(callbacks), sync_type));
-  GetSupplementable()->GetScheduler()->RegisterStickyFeature(
-      blink::SchedulingPolicy::Feature::kWebFileSystem,
-      {blink::SchedulingPolicy::DisableBackForwardCache()});
+  RequestFileSystemAccessInternal(
+      BindOnce(&LocalFileSystem::RequestFileSystemCallback,
+               MakeUnwrappingCrossThreadHandle(this), type,
+               std::move(callbacks), sync_type));
 }
 
 void LocalFileSystem::RequestFileSystemCallback(
@@ -103,14 +103,9 @@ void LocalFileSystem::RequestFileSystemCallback(
 void LocalFileSystem::RequestFileSystemAccessInternal(
     base::OnceCallback<void(bool)> callback) {
   if (LocalDOMWindow* window = DynamicTo<LocalDOMWindow>(GetSupplementable())) {
-    auto* client = window->GetFrame()->GetContentSettingsClient();
-    if (!client) {
-      std::move(callback).Run(true);
-    } else {
-      client->AllowStorageAccess(
-          WebContentSettingsClient::StorageType::kFileSystem,
-          std::move(callback));
-    }
+    window->GetFrame()->AllowStorageAccessAndNotify(
+        WebContentSettingsClient::StorageType::kFileSystem,
+        std::move(callback));
     return;
   }
   if (auto* global_scope = DynamicTo<WorkerGlobalScope>(GetSupplementable())) {
@@ -130,18 +125,18 @@ void LocalFileSystem::FileSystemNotAllowedInternal(
     std::unique_ptr<FileSystemCallbacks> callbacks) {
   GetSupplementable()
       ->GetTaskRunner(TaskType::kFileReading)
-      ->PostTask(FROM_HERE,
-                 WTF::Bind(&FileSystemCallbacks::DidFail, std::move(callbacks),
-                           base::File::FILE_ERROR_ABORT));
+      ->PostTask(FROM_HERE, blink::BindOnce(&FileSystemCallbacks::DidFail,
+                                            std::move(callbacks),
+                                            base::File::FILE_ERROR_ABORT));
 }
 
 void LocalFileSystem::FileSystemNotAllowedInternal(
     std::unique_ptr<ResolveURICallbacks> callbacks) {
   GetSupplementable()
       ->GetTaskRunner(TaskType::kFileReading)
-      ->PostTask(FROM_HERE,
-                 WTF::Bind(&ResolveURICallbacks::DidFail, std::move(callbacks),
-                           base::File::FILE_ERROR_ABORT));
+      ->PostTask(FROM_HERE, blink::BindOnce(&ResolveURICallbacks::DidFail,
+                                            std::move(callbacks),
+                                            base::File::FILE_ERROR_ABORT));
 }
 
 void LocalFileSystem::FileSystemAllowedInternal(
@@ -151,11 +146,9 @@ void LocalFileSystem::FileSystemAllowedInternal(
   ExecutionContext* context = GetSupplementable();
   FileSystemDispatcher& dispatcher = FileSystemDispatcher::From(context);
   if (sync_type == kSynchronous) {
-    dispatcher.OpenFileSystemSync(context->GetSecurityOrigin(), type,
-                                  std::move(callbacks));
+    dispatcher.OpenFileSystemSync(type, std::move(callbacks));
   } else {
-    dispatcher.OpenFileSystem(context->GetSecurityOrigin(), type,
-                              std::move(callbacks));
+    dispatcher.OpenFileSystem(type, std::move(callbacks));
   }
 }
 

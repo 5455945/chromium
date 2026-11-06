@@ -27,6 +27,8 @@
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_TRANSFORMS_PERSPECTIVE_TRANSFORM_OPERATION_H_
 
 #include <algorithm>
+#include <optional>
+
 #include "third_party/blink/renderer/platform/transforms/transform_operation.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
 
@@ -35,47 +37,56 @@ namespace blink {
 class PLATFORM_EXPORT PerspectiveTransformOperation final
     : public TransformOperation {
  public:
-  static scoped_refptr<PerspectiveTransformOperation> Create(double p) {
-    return base::AdoptRef(new PerspectiveTransformOperation(p));
+  explicit PerspectiveTransformOperation(std::optional<double> p) : p_(p) {}
+
+  std::optional<double> Perspective() const { return p_; }
+
+  double UsedPerspective() const {
+    DCHECK(p_.has_value());
+    return std::max(1.0, *p_);
   }
 
-  double Perspective() const { return p_; }
-
-  double UsedPerspective() const { return std::max(1.0, p_); }
+  double InverseUsedPerspective() const {
+    if (!p_) {
+      return 0.0;
+    }
+    return 1.0 / std::max(1.0, *p_);
+  }
 
   static bool IsMatchingOperationType(OperationType type) {
     return type == kPerspective;
   }
 
- private:
-  OperationType GetType() const override { return kPerspective; }
-
-  bool operator==(const TransformOperation& o) const override {
-    if (!IsSameType(o))
-      return false;
+ protected:
+  bool IsEqualAssumingSameType(const TransformOperation& o) const override {
     const PerspectiveTransformOperation* p =
         static_cast<const PerspectiveTransformOperation*>(&o);
     return p_ == p->p_;
   }
 
-  void Apply(TransformationMatrix& transform, const FloatSize&) const override {
-    transform.ApplyPerspective(UsedPerspective());
+ private:
+  OperationType GetType() const override { return kPerspective; }
+
+  void Apply(gfx::Transform& transform, const gfx::SizeF&) const override {
+    if (Perspective()) {
+      transform.ApplyPerspectiveDepth(UsedPerspective());
+    }
   }
 
-  scoped_refptr<TransformOperation> Accumulate(
-      const TransformOperation& other) override;
-  scoped_refptr<TransformOperation> Blend(
-      const TransformOperation* from,
-      double progress,
-      bool blend_to_identity = false) override;
-  scoped_refptr<TransformOperation> Zoom(double factor) final;
+  TransformOperation* Accumulate(const TransformOperation& other) override;
+  TransformOperation* AccumulateN(const TransformOperation& other,
+                                  int n) override;
+  TransformOperation* Blend(const TransformOperation* from,
+                            double progress,
+                            bool blend_to_identity = false) override;
+  TransformOperation* Zoom(double factor) final;
 
   // Perspective does not, by itself, specify a 3D transform.
   bool HasNonTrivial3DComponent() const override { return false; }
 
-  PerspectiveTransformOperation(double p) : p_(p) {}
-
-  double p_;
+  // !p_.has_value() means the value is `none`, which is equivalent to
+  // infinity.
+  std::optional<double> p_;
 };
 
 template <>

@@ -1,31 +1,31 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/login/login_client_cert_usage_observer.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <string_view>
 
 #include "base/logging.h"
-#include "base/strings/string_piece.h"
 #include "chrome/browser/ash/certificate_provider/certificate_provider_service.h"
 #include "chrome/browser/ash/certificate_provider/certificate_provider_service_factory.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/profiles/profile.h"
-#include "chromeos/login/auth/challenge_response/cert_utils.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "chromeos/ash/components/login/auth/challenge_response/cert_utils.h"
+#include "content/public/browser/browser_context.h"
 #include "net/cert/asn1_util.h"
 #include "net/cert/x509_util.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
-namespace chromeos {
-
+namespace ash {
 namespace {
 
-CertificateProviderService* GetCertificateProviderService() {
-  Profile* signin_profile = ProfileHelper::GetSigninProfile();
-  return CertificateProviderServiceFactory::GetForBrowserContext(
-      signin_profile);
+chromeos::CertificateProviderService* GetCertificateProviderService() {
+  content::BrowserContext* signin_browser_context =
+      BrowserContextHelper::Get()->GetSigninBrowserContext();
+  return chromeos::CertificateProviderServiceFactory::GetForBrowserContext(
+      signin_browser_context);
 }
 
 bool ObtainSignatureAlgorithms(
@@ -33,7 +33,7 @@ bool ObtainSignatureAlgorithms(
     std::vector<ChallengeResponseKey::SignatureAlgorithm>*
         signature_algorithms) {
   auto* certificate_provider_service = GetCertificateProviderService();
-  base::StringPiece spki;
+  std::string_view spki;
   if (!net::asn1::ExtractSPKIFromDERCert(
           net::x509_util::CryptoBufferAsStringPiece(cert.cert_buffer()),
           &spki)) {
@@ -47,7 +47,7 @@ bool ObtainSignatureAlgorithms(
   }
   signature_algorithms->clear();
   for (auto ssl_algorithm : ssl_algorithms) {
-    absl::optional<ChallengeResponseKey::SignatureAlgorithm> algorithm =
+    std::optional<ChallengeResponseKey::SignatureAlgorithm> algorithm =
         GetChallengeResponseKeyAlgorithmFromSsl(ssl_algorithm);
     if (algorithm)
       signature_algorithms->push_back(*algorithm);
@@ -81,7 +81,7 @@ bool LoginClientCertUsageObserver::GetOnlyUsedClientCert(
            "authentication, since more than one client certificate was used";
     return false;
   }
-  DCHECK(used_cert_);
+  CHECK(used_cert_, base::NotFatalUntil::M160);
   if (!ObtainSignatureAlgorithms(*used_cert_, signature_algorithms))
     return false;
   *cert = used_cert_;
@@ -98,4 +98,4 @@ void LoginClientCertUsageObserver::OnSignCompleted(
   used_extension_id_ = extension_id;
 }
 
-}  // namespace chromeos
+}  // namespace ash

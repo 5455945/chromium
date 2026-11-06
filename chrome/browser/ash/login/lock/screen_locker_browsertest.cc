@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,33 +6,34 @@
 
 #include <memory>
 
+#include "ash/constants/ash_pref_names.h"
 #include "ash/wm/window_state.h"
-#include "base/bind.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
-#include "chrome/browser/ash/login/lock/screen_locker.h"
+#include "build/build_config.h"
+#include "chrome/browser/ash/login/lock/screen_locker_controller.h"
 #include "chrome/browser/ash/login/lock/screen_locker_tester.h"
 #include "chrome/browser/ash/login/quick_unlock/quick_unlock_utils.h"
-#include "chrome/browser/ash/login/ui/user_adding_screen.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/ash/login/user_adding_screen.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
-#include "chrome/browser/ui/exclusive_access/exclusive_access_test.h"
 #include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "chromeos/dbus/biod/fake_biod_client.h"
-#include "chromeos/dbus/session_manager/fake_session_manager_client.h"
+#include "chrome/test/base/ui_test_utils.h"
+#include "chromeos/ash/components/dbus/biod/fake_biod_client.h"
+#include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
 #include "components/prefs/pref_service.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/user_manager/user_names.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 
-namespace chromeos {
+namespace ash {
 namespace {
 
 constexpr char kFingerprint[] = "pinky";
@@ -40,6 +41,10 @@ constexpr char kFingerprint[] = "pinky";
 class ScreenLockerTest : public InProcessBrowserTest {
  public:
   ScreenLockerTest() = default;
+
+  ScreenLockerTest(const ScreenLockerTest&) = delete;
+  ScreenLockerTest& operator=(const ScreenLockerTest&) = delete;
+
   ~ScreenLockerTest() override = default;
 
   FakeSessionManagerClient* session_manager_client() {
@@ -49,14 +54,14 @@ class ScreenLockerTest : public InProcessBrowserTest {
   // InProcessBrowserTest:
   void SetUpInProcessBrowserTestFixture() override {
     zero_duration_mode_ =
-        std::make_unique<ui::ScopedAnimationDurationScaleMode>(
-            ui::ScopedAnimationDurationScaleMode::ZERO_DURATION);
+        std::make_unique<gfx::ScopedAnimationDurationScaleMode>(
+            gfx::ScopedAnimationDurationScaleMode::ZERO_DURATION);
   }
 
-  void TearDown() override { quick_unlock::EnabledForTesting(false); }
-
   void EnrollFingerprint() {
-    quick_unlock::EnabledForTesting(true);
+    test_api_ = std::make_unique<quick_unlock::TestApi>(
+        /*override_quick_unlock=*/true);
+    test_api_->EnableFingerprintByPolicy(quick_unlock::Purpose::kUnlock);
 
     FakeBiodClient::Get()->StartEnrollSession(
         "test-user", std::string(),
@@ -74,20 +79,18 @@ class ScreenLockerTest : public InProcessBrowserTest {
   }
 
   void AuthenticateWithFingerprint() {
-    FakeBiodClient::Get()->SendAuthScanDone(kFingerprint,
-                                            biod::SCAN_RESULT_SUCCESS);
+    biod::FingerprintMessage msg;
+    msg.set_scan_result(biod::SCAN_RESULT_SUCCESS);
+    FakeBiodClient::Get()->SendAuthScanDone(kFingerprint, msg);
     base::RunLoop().RunUntilIdle();
   }
 
  private:
   void OnStartSession(const dbus::ObjectPath& path) {}
 
-  std::unique_ptr<ui::ScopedAnimationDurationScaleMode> zero_duration_mode_;
-
-  DISALLOW_COPY_AND_ASSIGN(ScreenLockerTest);
+  std::unique_ptr<gfx::ScopedAnimationDurationScaleMode> zero_duration_mode_;
+  std::unique_ptr<quick_unlock::TestApi> test_api_;
 };
-
-}  // namespace
 
 IN_PROC_BROWSER_TEST_F(ScreenLockerTest, TestBadThenGoodPassword) {
   ScreenLockerTester tester;
@@ -117,16 +120,10 @@ IN_PROC_BROWSER_TEST_F(ScreenLockerTest, TestFullscreenExit) {
   // hidden), locking the screen should exit fullscreen. The shelf is
   // auto hidden when in immersive fullscreen.
   ScreenLockerTester tester;
-  BrowserWindow* browser_window = browser()->window();
-  ash::WindowState* window_state =
-      ash::WindowState::Get(browser_window->GetNativeWindow());
+  BrowserWindow* browser_window = BrowserWindow::FromBrowser(browser());
+  auto* window_state = WindowState::Get(browser_window->GetNativeWindow());
   {
-    FullscreenNotificationObserver fullscreen_waiter(browser());
-    browser()
-        ->exclusive_access_manager()
-        ->fullscreen_controller()
-        ->ToggleBrowserFullscreenMode();
-    fullscreen_waiter.Wait();
+    ui_test_utils::ToggleFullscreenModeAndWait(browser());
     EXPECT_TRUE(browser_window->IsFullscreen());
     EXPECT_FALSE(window_state->GetHideShelfWhenFullscreen());
     EXPECT_FALSE(tester.IsLocked());
@@ -144,21 +141,20 @@ IN_PROC_BROWSER_TEST_F(ScreenLockerTest, TestFullscreenExit) {
 
   // Browser window should be activated after screen locker is gone. Otherwise,
   // the rest of the test would fail.
-  ASSERT_EQ(window_state, ash::WindowState::ForActiveWindow());
+  ASSERT_EQ(window_state, WindowState::ForActiveWindow());
 
   // 2) Similar to 1) if the active browser window is in fullscreen and the
   // fullscreen window has all of the pixels, locking the screen should exit
   // fullscreen. The fullscreen window has all of the pixels when in tab
   // fullscreen.
   {
-    FullscreenNotificationObserver fullscreen_waiter(browser());
     content::WebContents* web_contents =
         browser()->tab_strip_model()->GetActiveWebContents();
-    browser()
-        ->exclusive_access_manager()
+    ui_test_utils::FullscreenWaiter waiter(browser(), {.tab_fullscreen = true});
+    ExclusiveAccessManager::From(browser())
         ->fullscreen_controller()
-        ->EnterFullscreenModeForTab(web_contents->GetMainFrame());
-    fullscreen_waiter.Wait();
+        ->EnterFullscreenModeForTab(web_contents->GetPrimaryMainFrame());
+    waiter.Wait();
     EXPECT_TRUE(browser_window->IsFullscreen());
     EXPECT_TRUE(window_state->GetHideShelfWhenFullscreen());
     EXPECT_FALSE(tester.IsLocked());
@@ -183,12 +179,12 @@ IN_PROC_BROWSER_TEST_F(ScreenLockerTest, TestShowTwice) {
   tester.Lock();
 
   // Calling Show again simply send LockCompleted signal.
-  ScreenLocker::Show();
+  ScreenLockerController::Get().ShowLockScreen();
   EXPECT_TRUE(tester.IsLocked());
   EXPECT_EQ(2, session_manager_client()->notify_lock_screen_shown_call_count());
 
   // Close the locker to match expectations.
-  ScreenLocker::Hide();
+  ScreenLockerController::Get().HideLockScreen();
   base::RunLoop().RunUntilIdle();
   EXPECT_FALSE(tester.IsLocked());
   EXPECT_EQ(
@@ -206,19 +202,18 @@ IN_PROC_BROWSER_TEST_F(ScreenLockerTest, PasswordAuthWhenAuthDisabled) {
   EXPECT_TRUE(tester.IsLocked());
 
   // Disable authentication for user.
-  ScreenLocker::default_screen_locker()->TemporarilyDisableAuthForUser(
+  ScreenLockerController::Get().screen_locker()->TemporarilyDisableAuthForUser(
       user_manager::StubAccountId(),
-      ash::AuthDisabledData(ash::AuthDisabledReason::kTimeWindowLimit,
-                            base::Time::Now() + base::TimeDelta::FromHours(1),
-                            base::TimeDelta::FromHours(1),
-                            true /*disable_lock_screen_media*/));
+      AuthDisabledData(AuthDisabledReason::kTimeWindowLimit,
+                       base::Time::Now() + base::Hours(1), base::Hours(1),
+                       true /*disable_lock_screen_media*/));
 
   // Try to authenticate with password.
   tester.ForceSubmitPassword(user_manager::StubAccountId(), kPassword);
   EXPECT_TRUE(tester.IsLocked());
 
   // Re-enable authentication for user.
-  ScreenLocker::default_screen_locker()->ReenableAuthForUser(
+  ScreenLockerController::Get().screen_locker()->ReenableAuthForUser(
       user_manager::StubAccountId());
 
   // Try to authenticate with password.
@@ -244,19 +239,18 @@ IN_PROC_BROWSER_TEST_F(ScreenLockerTest, FingerprintAuthWhenAuthDisabled) {
   EXPECT_TRUE(tester.IsLocked());
 
   // Disable authentication for user.
-  ScreenLocker::default_screen_locker()->TemporarilyDisableAuthForUser(
+  ScreenLockerController::Get().screen_locker()->TemporarilyDisableAuthForUser(
       user_manager::StubAccountId(),
-      ash::AuthDisabledData(ash::AuthDisabledReason::kTimeUsageLimit,
-                            base::Time::Now() + base::TimeDelta::FromHours(1),
-                            base::TimeDelta::FromHours(3),
-                            true /*disable_lock_screen_media*/));
+      AuthDisabledData(AuthDisabledReason::kTimeUsageLimit,
+                       base::Time::Now() + base::Hours(1), base::Hours(3),
+                       true /*disable_lock_screen_media*/));
 
   // Try to authenticate with fingerprint.
   AuthenticateWithFingerprint();
   EXPECT_TRUE(tester.IsLocked());
 
   // Re-enable authentication for user.
-  ScreenLocker::default_screen_locker()->ReenableAuthForUser(
+  ScreenLockerController::Get().screen_locker()->ReenableAuthForUser(
       user_manager::StubAccountId());
 
   // Try to authenticate with fingerprint.
@@ -269,4 +263,5 @@ IN_PROC_BROWSER_TEST_F(ScreenLockerTest, FingerprintAuthWhenAuthDisabled) {
       1, session_manager_client()->notify_lock_screen_dismissed_call_count());
 }
 
-}  // namespace chromeos
+}  // namespace
+}  // namespace ash

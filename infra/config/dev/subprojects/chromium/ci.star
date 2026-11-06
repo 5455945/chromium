@@ -1,8 +1,12 @@
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-load("//lib/builders.star", "builder", "cpu", "defaults", "goma", "os")
+load("@chromium-luci//builder_config.star", "builder_config")
+load("@chromium-luci//builders.star", "builder", "cpu", "defaults", "os")
+load("@chromium-luci//gn_args.star", "gn_args")
+load("@chromium-luci//targets.star", "targets")
+load("//lib/siso.star", "siso")
 
 luci.bucket(
     name = "ci",
@@ -20,9 +24,32 @@ luci.bucket(
         ),
         acl.entry(
             roles = acl.BUILDBUCKET_OWNER,
-            groups = "google/luci-task-force@google.com",
+            groups = "project-chromium-admins",
         ),
     ],
+    bindings = [
+        # Allow everyone to view Turbo CI workflows
+        luci.binding(
+            roles = "role/turboci.externalReader",
+            groups = "all",
+        ),
+    ],
+)
+
+luci.bucket(
+    name = "ci.shadow",
+    shadows = "ci",
+    constraints = luci.bucket_constraints(
+        pools = ["luci.chromium.ci", "luci.chromium.btrfs"],
+        service_accounts = ["chromium-ci-builder-dev@chops-service-accounts.iam.gserviceaccount.com"],
+    ),
+    bindings = [
+        luci.binding(
+            roles = "role/buildbucket.creator",
+            groups = "mdb/chrome-troopers",
+        ),
+    ],
+    dynamic = True,
 )
 
 luci.gitiles_poller(
@@ -35,89 +62,361 @@ luci.recipe.defaults.cipd_package.set(
     "infra/recipe_bundles/chromium.googlesource.com/chromium/tools/build",
 )
 
+luci.recipe.defaults.use_bbagent.set(True)
+
 defaults.bucket.set("ci")
 defaults.build_numbers.set(True)
 defaults.builder_group.set("chromium.dev")
 defaults.builderless.set(None)
 defaults.cpu.set(cpu.X86_64)
-defaults.executable.set(luci.recipe(name = "swarming/staging"))
+defaults.executable.set("recipe:chromium")
 defaults.execution_timeout.set(3 * time.hour)
-defaults.os.set(os.LINUX_BIONIC_SWITCH_TO_DEFAULT)
+defaults.experiments.set({
+    "luci.buildbucket.run_in_turboci": 100,
+})
+defaults.os.set(os.LINUX_DEFAULT)
+defaults.properties.set({
+    "$build/chromium_swarming": {
+        "verbose": True,
+    },
+})
 defaults.service_account.set(
     "chromium-ci-builder-dev@chops-service-accounts.iam.gserviceaccount.com",
 )
-defaults.swarming_tags.set(["vpython:native-python-wrapper"])
+
+targets.builder_defaults.set(
+    mixins = [
+        "chromium-tester-dev-service-account",
+    ],
+)
 
 def ci_builder(*, name, resultdb_bigquery_exports = None, **kwargs):
     resultdb_bigquery_exports = resultdb_bigquery_exports or []
-    resultdb_bigquery_exports.append(
+    resultdb_bigquery_exports.extend([
         resultdb.export_test_results(
-            bq_table = "luci-resultdb-dev.chromium.ci_test_results",
+            bq_table = "chrome-luci-data.chromium_staging.ci_test_results",
         ),
-    )
+        resultdb.export_text_artifacts(
+            bq_table = "chrome-luci-data.chromium_staging.ci_text_artifacts",
+        ),
+    ])
     return builder(
         name = name,
         triggered_by = ["chromium-gitiles-trigger"],
         resultdb_bigquery_exports = resultdb_bigquery_exports,
-        isolated_server = "https://isolateserver-dev.appspot.com",
-        goma_backend = goma.backend.RBE_PROD,
+        siso_project = siso.project.DEFAULT_TRUSTED,
+        siso_remote_jobs = siso.remote_jobs.DEFAULT,
         resultdb_index_by_timestamp = True,
-        # TODO(crbug.com/1225524): remove this after migration.
-        experiments = {
-            "chromium.isolate.use_new_lib": 50,
-        },
         **kwargs
     )
 
-ci_builder(
-    name = "android-lollipop-arm-rel-swarming",
-)
+###############################################################################
+# NOTE: If you change any of the following builders, please make sure the
+# GCE image roller that watches these builders is similarly up-to-date. See
+# http://shortn/_F1oktuhGEV.
+###############################################################################
 
 ci_builder(
-    name = "android-marshmallow-arm64-rel-swarming",
-)
-
-ci_builder(
-    name = "linux-rel-swarming",
-    description_html = "Test description. <b>Test HTML</b>.",
-    resultdb_bigquery_exports = [
-        resultdb.export_text_artifacts(
-            bq_table = "luci-resultdb-dev.chromium.ci_text_artifacts",
+    name = "android-arm64-rel-dev",
+    description_html = "Run chromium tests on Android arm64 devices.",
+    builder_spec = builder_config.builder_spec(
+        gclient_config = builder_config.gclient_config(
+            config = "chromium",
+            apply_configs = [
+                "android",
+            ],
         ),
-    ],
+        chromium_config = builder_config.chromium_config(
+            config = "main_builder",
+            apply_configs = ["mb"],
+            build_config = builder_config.build_config.RELEASE,
+            target_arch = builder_config.target_arch.ARM,
+            target_bits = 64,
+            target_platform = builder_config.target_platform.ANDROID,
+        ),
+        android_config = builder_config.android_config(
+            config = "base_config",
+        ),
+    ),
+    gn_args = gn_args.config(
+        configs = [
+            "android_builder",
+            "android_with_static_analysis",
+            "release_builder",
+            "remoteexec",
+            "minimal_symbols",
+            "arm64",
+            "strip_debug_info",
+        ],
+    ),
+    targets = targets.bundle(
+        targets = [
+            "chromium_dev_android_gtests",
+        ],
+        mixins = [
+            targets.mixin(
+                swarming = targets.swarming(
+                    dimensions = {
+                        "os": "Android",
+                    },
+                    expiration_sec = 10800,
+                ),
+            ),
+            "chromium_tests_pool",
+            "has_native_resultdb_integration",
+        ],
+    ),
+    targets_settings = targets.settings(
+        os_type = targets.os_type.ANDROID,
+    ),
+    contact_team_email = "clank-engprod@google.com",
 )
 
 ci_builder(
-    name = "linux-ssd-rel-swarming",
+    name = "linux-rel-jammy-dev",
+    description_html = "Run chromium tests on Linux Jammy.",
+    builder_spec = builder_config.builder_spec(
+        gclient_config = builder_config.gclient_config(config = "chromium"),
+        chromium_config = builder_config.chromium_config(
+            config = "chromium",
+            apply_configs = ["mb"],
+            build_config = builder_config.build_config.RELEASE,
+            target_platform = builder_config.target_platform.LINUX,
+        ),
+    ),
+    builder_config_settings = builder_config.ci_settings(
+        retry_failed_shards = True,
+    ),
+    gn_args = gn_args.config(
+        configs = [
+            "gpu_tests",
+            "release_builder",
+            "remoteexec",
+            "linux",
+            "x64",
+        ],
+    ),
+    targets = targets.bundle(
+        targets = [
+            "chromium_dev_linux_gtests",
+        ],
+        mixins = [
+            "linux-jammy",
+        ],
+    ),
+)
+
+ci_builder(
+    name = "linux-local-ssd-rel-dev",
     description_html = "Ensures builders are using available local SSDs",
+    builder_spec = builder_config.builder_spec(
+        gclient_config = builder_config.gclient_config(config = "chromium"),
+        chromium_config = builder_config.chromium_config(
+            config = "chromium",
+            apply_configs = ["mb"],
+            build_config = builder_config.build_config.RELEASE,
+            target_platform = builder_config.target_platform.LINUX,
+        ),
+    ),
+    gn_args = gn_args.config(
+        configs = [
+            "gpu_tests",
+            "release_builder",
+            "remoteexec",
+            "linux",
+            "x64",
+        ],
+    ),
+    targets = targets.bundle(),
     builderless = False,
+    ssd = True,
 )
 
 ci_builder(
-    name = "mac-rel-swarming",
+    name = "linux-remote-ssd-rel-dev",
+    description_html = "Ensures builders are using available remote SSDs. See b/279078023 for context.",
+    builder_spec = builder_config.builder_spec(
+        gclient_config = builder_config.gclient_config(config = "chromium"),
+        chromium_config = builder_config.chromium_config(
+            config = "chromium",
+            apply_configs = ["mb"],
+            build_config = builder_config.build_config.RELEASE,
+            target_platform = builder_config.target_platform.LINUX,
+        ),
+    ),
+    gn_args = gn_args.config(
+        configs = [
+            "gpu_tests",
+            "release_builder",
+            "remoteexec",
+            "linux",
+            "x64",
+        ],
+    ),
+    targets = targets.bundle(),
+    builderless = False,
+    ssd = True,
+)
+
+ci_builder(
+    name = "mac-rel-dev",
+    description_html = "Run chromium tests on Mac x64.",
+    builder_spec = builder_config.builder_spec(
+        gclient_config = builder_config.gclient_config(config = "chromium"),
+        chromium_config = builder_config.chromium_config(
+            config = "chromium",
+            apply_configs = ["mb"],
+            build_config = builder_config.build_config.RELEASE,
+            target_platform = builder_config.target_platform.MAC,
+        ),
+    ),
+    gn_args = gn_args.config(
+        configs = [
+            "gpu_tests",
+            "release_builder",
+            "remoteexec",
+            "minimal_symbols",
+            "mac",
+            "x64",
+        ],
+    ),
+    targets = targets.bundle(
+        targets = [
+            "chromium_dev_mac_gtests",
+        ],
+        mixins = [
+            "mac_15_x64",
+        ],
+    ),
+    # TODO(crbug.com/543006750): Revert to MAC_DEFAULT after arm migration.
+    os = os.MAC_15,
+)
+
+ci_builder(
+    name = "mac-arm-rel-dev",
+    description_html = "Run chromium tests on Mac ARM64.",
+    builder_spec = builder_config.builder_spec(
+        gclient_config = builder_config.gclient_config(config = "chromium"),
+        chromium_config = builder_config.chromium_config(
+            config = "chromium",
+            apply_configs = ["mb"],
+            build_config = builder_config.build_config.RELEASE,
+            target_platform = builder_config.target_platform.MAC,
+        ),
+    ),
+    gn_args = gn_args.config(
+        configs = [
+            "gpu_tests",
+            "release_builder",
+            "remoteexec",
+            "minimal_symbols",
+            "mac",
+            "arm64",
+        ],
+    ),
+    targets = targets.bundle(
+        targets = [
+            "chromium_dev_mac_gtests",
+        ],
+        mixins = [
+            "mac_default_arm64",
+        ],
+    ),
     os = os.MAC_DEFAULT,
+    cpu = cpu.ARM64,
 )
 
 ci_builder(
-    name = "win-rel-swarming",
-    os = os.WINDOWS_DEFAULT,
-    goma_enable_ats = True,
+    name = "win-local-ssd-rel-dev",
+    description_html = "Ensures mounting local SSDs on Windows works.",
+    builder_spec = builder_config.builder_spec(
+        gclient_config = builder_config.gclient_config(config = "chromium"),
+        chromium_config = builder_config.chromium_config(
+            config = "chromium",
+            apply_configs = ["mb"],
+            build_config = builder_config.build_config.RELEASE,
+            target_platform = builder_config.target_platform.WIN,
+        ),
+    ),
+    gn_args = gn_args.config(
+        configs = [
+            "gpu_tests",
+            "release_builder",
+            "remoteexec",
+            "minimal_symbols",
+            "win",
+            "x64",
+        ],
+    ),
+    targets = targets.bundle(),
+    builderless = False,
+    os = os.WINDOWS_10,
+    ssd = 1,
 )
 
-## builders using swarming staging instance
-
-def ci_builder_staging(**kwargs):
-    return ci_builder(
-        swarming_host = "chromium-swarm-staging.appspot.com",
-        **kwargs
-    )
-
-ci_builder_staging(
-    name = "linux-rel-swarming-staging",
+ci_builder(
+    name = "win-rel-dev",
+    description_html = "Run chromium tests on Windows 10.",
+    builder_spec = builder_config.builder_spec(
+        gclient_config = builder_config.gclient_config(config = "chromium"),
+        chromium_config = builder_config.chromium_config(
+            config = "chromium",
+            apply_configs = ["mb"],
+            build_config = builder_config.build_config.RELEASE,
+            target_platform = builder_config.target_platform.WIN,
+        ),
+    ),
+    gn_args = gn_args.config(
+        configs = [
+            "gpu_tests",
+            "release_builder",
+            "remoteexec",
+            "minimal_symbols",
+            "win",
+            "x64",
+        ],
+    ),
+    targets = targets.bundle(
+        targets = [
+            "chromium_dev_win_gtests",
+        ],
+        mixins = [
+            "win10",
+        ],
+    ),
+    os = os.WINDOWS_10,
+    ssd = 0,
 )
 
-ci_builder_staging(
-    name = "win-rel-swarming-staging",
-    os = os.WINDOWS_DEFAULT,
-    goma_enable_ats = True,
+ci_builder(
+    name = "win11-rel-dev",
+    description_html = "Run chromium tests on Windows 11.",
+    builder_spec = builder_config.builder_spec(
+        gclient_config = builder_config.gclient_config(config = "chromium"),
+        chromium_config = builder_config.chromium_config(
+            config = "chromium",
+            apply_configs = ["mb"],
+            build_config = builder_config.build_config.RELEASE,
+            target_platform = builder_config.target_platform.WIN,
+        ),
+    ),
+    gn_args = gn_args.config(
+        configs = [
+            "gpu_tests",
+            "release_builder",
+            "remoteexec",
+            "minimal_symbols",
+            "win",
+            "x64",
+        ],
+    ),
+    targets = targets.bundle(
+        targets = [
+            "chromium_dev_win_gtests",
+        ],
+        mixins = [
+            "win11-any",
+        ],
+    ),
+    os = os.WINDOWS_11,
 )

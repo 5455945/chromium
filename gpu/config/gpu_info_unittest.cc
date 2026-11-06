@@ -1,4 +1,4 @@
-// Copyright (c) 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,7 +15,6 @@ class TestGPUInfoEnumerator : public gpu::GPUInfo::Enumerator {
       : gpu_device_active_(false),
         video_decode_accelerator_profile_active_(false),
         video_encode_accelerator_profile_active_(false),
-        image_decode_accelerator_profile_active_(false),
         overlay_info_active_(false),
         aux_attributes_active_(false) {}
 
@@ -54,14 +53,6 @@ class TestGPUInfoEnumerator : public gpu::GPUInfo::Enumerator {
     video_encode_accelerator_profile_active_ = false;
   }
 
-  void BeginImageDecodeAcceleratorSupportedProfile() override {
-    image_decode_accelerator_profile_active_ = true;
-  }
-
-  void EndImageDecodeAcceleratorSupportedProfile() override {
-    image_decode_accelerator_profile_active_ = false;
-  }
-
   void BeginOverlayInfo() override { overlay_info_active_ = true; }
 
   void EndOverlayInfo() override { overlay_info_active_ = false; }
@@ -81,17 +72,12 @@ class TestGPUInfoEnumerator : public gpu::GPUInfo::Enumerator {
     return video_encode_accelerator_profile_active_;
   }
 
-  bool image_decode_accelerator_profile_active() const {
-    return image_decode_accelerator_profile_active_;
-  }
-
   bool aux_attributes_active() const { return aux_attributes_active_; }
 
  private:
   bool gpu_device_active_;
   bool video_decode_accelerator_profile_active_;
   bool video_encode_accelerator_profile_active_;
-  bool image_decode_accelerator_profile_active_;
   bool overlay_info_active_;
   bool aux_attributes_active_;
 };
@@ -106,7 +92,6 @@ TEST(GpuInfoTest, FieldEditStates) {
   EXPECT_FALSE(enumerator.gpu_device_active());
   EXPECT_FALSE(enumerator.video_decode_accelerator_profile_active());
   EXPECT_FALSE(enumerator.video_encode_accelerator_profile_active());
-  EXPECT_FALSE(enumerator.image_decode_accelerator_profile_active());
   EXPECT_FALSE(enumerator.aux_attributes_active());
 }
 

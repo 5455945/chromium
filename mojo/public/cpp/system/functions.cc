@@ -1,11 +1,12 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "mojo/public/cpp/system/functions.h"
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/no_destructor.h"
+#include "mojo/public/c/system/invitation.h"
 
 namespace mojo {
 
@@ -29,8 +30,9 @@ void SetDefaultProcessErrorHandler(DefaultProcessErrorHandler handler) {
   MojoSetDefaultProcessErrorHandler(nullptr, nullptr);
   auto& global_handler = GetDefaultProcessErrorHandler();
   global_handler = std::move(handler);
-  if (global_handler)
+  if (global_handler) {
     MojoSetDefaultProcessErrorHandler(&HandleError, nullptr);
+  }
 }
 
 }  // namespace mojo

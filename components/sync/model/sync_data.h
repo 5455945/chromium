@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,15 @@
 
 #include <iosfwd>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "components/sync/base/client_tag_hash.h"
-#include "components/sync/base/immutable.h"
-#include "components/sync/base/model_type.h"
+#include "components/sync/base/data_type.h"
 
 namespace sync_pb {
 class EntitySpecifics;
-class SyncEntity;
 }  // namespace sync_pb
 
 namespace syncer {
@@ -27,40 +26,45 @@ class SyncData {
  public:
   // Creates an empty and invalid SyncData.
   SyncData();
-  SyncData(const SyncData& other);
-  ~SyncData();
 
-  // Default copy and assign welcome.
+  // Copyable and movable, all cheap.
+  SyncData(const SyncData& other);
+  SyncData(SyncData&& other);
+  SyncData& operator=(const SyncData& other);
+  SyncData& operator=(SyncData&& other);
+
+  ~SyncData();
 
   // Helper methods for creating SyncData objects for local data.
   //
-  // |client_tag_unhashed| Must be a non-empty string unique to this entity and
+  // `client_tag_unhashed` Must be a non-empty string unique to this entity and
   // is used (in hashed form) as a node identifier server-side.
   //
-  // For deletes: |datatype| must specify the datatype who node is being
+  // For deletes: `datatype` must specify the datatype who node is being
   // deleted.
   //
-  // For adds/updates: |specifics| must be valid and |non_unique_title| (can be
-  // the same as |client_tag_unhashed|) must be specfied.  Note:
-  // |non_unique_title| is primarily for debug purposes, and will be overwritten
+  // For adds/updates: `specifics` must be valid and `non_unique_title` (can be
+  // the same as `client_tag_unhashed`) must be specified.  Note:
+  // `non_unique_title` is primarily for debug purposes, and will be overwritten
   // if the datatype is encrypted.
-  static SyncData CreateLocalDelete(const std::string& client_tag_unhashed,
-                                    ModelType datatype);
-  static SyncData CreateLocalData(const std::string& client_tag_unhashed,
-                                  const std::string& non_unique_title,
+  static SyncData CreateLocalDelete(std::string_view client_tag_unhashed,
+                                    DataType datatype);
+  static SyncData CreateLocalData(std::string_view client_tag_unhashed,
+                                  std::string_view non_unique_title,
                                   const sync_pb::EntitySpecifics& specifics);
 
   // Helper method for creating SyncData objects originating from the syncer.
   static SyncData CreateRemoteData(sync_pb::EntitySpecifics specifics,
                                    const ClientTagHash& client_tag_hash);
 
-  // Whether this SyncData holds valid data. The only way to have a SyncData
-  // without valid data is to use the default constructor.
+  // Whether this SyncData holds valid data. An instance can be invalid either
+  // if the default value was used upon construction or if an instance was moved
+  // away.
   bool IsValid() const;
 
   // Return the datatype we're holding information about. Derived from the sync
   // datatype specifics.
-  ModelType GetDataType() const;
+  DataType GetDataType() const;
 
   // Return the value of the unique client tag hash.
   ClientTagHash GetClientTagHash() const;
@@ -75,33 +79,13 @@ class SyncData {
   std::string ToString() const;
 
  private:
-  // Necessary since we forward-declare sync_pb::SyncEntity; see
-  // comments in immutable.h.
-  struct ImmutableSyncEntityTraits {
-    using Wrapper = sync_pb::SyncEntity*;
+  // Forward-declared to avoid includes for EntitySpecifics.
+  struct InternalData;
 
-    static void InitializeWrapper(Wrapper* wrapper);
+  // Null if data invalid, i.e. default constructor used or moved-away instance.
+  scoped_refptr<InternalData> ptr_;
 
-    static void DestroyWrapper(Wrapper* wrapper);
-
-    static const sync_pb::SyncEntity& Unwrap(const Wrapper& wrapper);
-
-    static sync_pb::SyncEntity* UnwrapMutable(Wrapper* wrapper);
-
-    static void Swap(sync_pb::SyncEntity* t1, sync_pb::SyncEntity* t2);
-  };
-
-  using ImmutableSyncEntity =
-      Immutable<sync_pb::SyncEntity, ImmutableSyncEntityTraits>;
-
-  // The actual shared sync entity being held.
-  ImmutableSyncEntity immutable_entity_;
-
-  // Whether this SyncData holds valid data.
-  bool is_valid_;
-
-  // Clears |entity|.
-  explicit SyncData(sync_pb::SyncEntity* entity);
+  explicit SyncData(scoped_refptr<InternalData> ptr);
 };
 
 // gmock printer helper.

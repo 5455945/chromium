@@ -1,22 +1,23 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.merchant_viewer;
 
+import static org.junit.Assert.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
-import android.app.Activity;
 import android.view.View;
-import android.view.View.OnLayoutChangeListener;
 
 import androidx.test.filters.SmallTest;
 
 import org.junit.After;
 import org.junit.Before;
+import org.junit.BeforeClass;
 import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
@@ -27,105 +28,119 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
-import org.chromium.base.supplier.Supplier;
+import org.chromium.base.ThreadUtils;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.test.BaseActivityTestRule;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
-import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
-import org.chromium.chrome.test.batch.BlankCTATabInitialStateRule;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.SheetState;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.StateChangeReason;
-import org.chromium.components.browser_ui.bottomsheet.EmptyBottomSheetObserver;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetObserver;
 import org.chromium.components.thinwebview.ThinWebView;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
+import org.chromium.content_public.browser.test.NativeLibraryTestUtils;
 import org.chromium.ui.base.IntentRequestTracker;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.modelutil.PropertyModel;
+import org.chromium.ui.test.util.BlankUiTestActivity;
 import org.chromium.url.GURL;
 
-/**
- * Tests for {@link MerchantTrustBottomSheetCoordinator}.
- */
+/** Tests for {@link MerchantTrustBottomSheetCoordinator}. */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @Batch(Batch.PER_CLASS)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 public class MerchantTrustBottomSheetCoordinatorTest {
+    private static final GURL TEST_URL = new GURL("https://example.com");
+
     @ClassRule
-    public static final ChromeTabbedActivityTestRule sActivityTestRule =
-            new ChromeTabbedActivityTestRule();
+    public static BaseActivityTestRule<BlankUiTestActivity> sActivityTestRule =
+            new BaseActivityTestRule<>(BlankUiTestActivity.class);
 
-    @Rule
-    public final BlankCTATabInitialStateRule mBlankCTATabInitialStateRule =
-            new BlankCTATabInitialStateRule(sActivityTestRule, false);
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
-    @Rule
-    public MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Mock private BottomSheetController mMockBottomSheetController;
 
-    @Mock
-    private BottomSheetController mMockBottomSheetController;
+    @Mock private MerchantTrustMetrics mMockMetrics;
 
-    @Mock
-    private View mMockDecorView;
+    @Mock private MerchantTrustBottomSheetMediator mMockMediator;
 
-    @Mock
-    private Supplier<Tab> mMockTabProvider;
+    @Mock private Runnable mMockOnBottomSheetDismissed;
 
-    @Mock
-    private MerchantTrustMetrics mMockMetrics;
+    @Captor private ArgumentCaptor<BottomSheetObserver> mBottomSheetObserverCaptor;
 
-    @Mock
-    private GURL mMockGurl;
+    @Captor private ArgumentCaptor<MerchantTrustBottomSheetContent> mSheetContentCaptor;
 
-    @Mock
-    private MerchantTrustBottomSheetMediator mMockMediator;
+    private static final String TEST_SHEET_TITLE = "Test Title";
+    private static final int CONTAINER_HEIGHT = 1000;
 
-    @Captor
-    private ArgumentCaptor<EmptyBottomSheetObserver> mBottomSheetObserverCaptor;
-
-    @Captor
-    private ArgumentCaptor<MerchantTrustBottomSheetContent> mSheetContentCaptor;
-
-    private static final String DUMMY_SHEET_TITLE = "DUMMY_TITLE";
-
-    private Activity mActivity;
+    private View mDecorView;
     private WindowAndroid mWindowAndroid;
     private MerchantTrustBottomSheetCoordinator mDetailsTabCoordinator;
+    private Profile mProfile;
+
+    @BeforeClass
+    public static void setupSuite() {
+        sActivityTestRule.launchActivity(null);
+    }
 
     @Before
     public void setUp() {
-        mActivity = sActivityTestRule.getActivity();
-        TestThreadUtils.runOnUiThreadBlocking(
-                () -> { mWindowAndroid = new WindowAndroid(mActivity); });
-        mDetailsTabCoordinator = new MerchantTrustBottomSheetCoordinator(mActivity, mWindowAndroid,
-                mMockBottomSheetController, mMockTabProvider, mMockDecorView, mMockMetrics,
-                IntentRequestTracker.createFromActivity(mActivity));
+        NativeLibraryTestUtils.loadNativeLibraryAndInitBrowserProcess();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mProfile = ProfileManager.getLastUsedRegularProfile();
+                    BlankUiTestActivity activity = sActivityTestRule.getActivity();
+                    mDecorView = new View(activity);
+                    mWindowAndroid =
+                            new WindowAndroid(activity, /* occlusionTrackingAllowed= */ true);
+                    mDetailsTabCoordinator =
+                            new MerchantTrustBottomSheetCoordinator(
+                                    activity,
+                                    mWindowAndroid,
+                                    mMockBottomSheetController,
+                                    mDecorView,
+                                    mMockMetrics,
+                                    IntentRequestTracker.createFromActivity(activity),
+                                    ObservableSuppliers.createNonNull(mProfile));
+                });
         mDetailsTabCoordinator.setMediatorForTesting(mMockMediator);
         requestOpenSheetAndVerify();
     }
 
     @After
     public void tearDown() {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            mDetailsTabCoordinator.destroySheet();
-            mWindowAndroid.destroy();
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mDetailsTabCoordinator.destroySheet();
+                    mWindowAndroid.destroy();
+                });
     }
 
     private void requestOpenSheetAndVerify() {
-        TestThreadUtils.runOnUiThreadBlocking(
-                () -> { mDetailsTabCoordinator.requestOpenSheet(mMockGurl, DUMMY_SHEET_TITLE); });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mDetailsTabCoordinator.requestOpenSheet(
+                            TEST_URL, TEST_SHEET_TITLE, mMockOnBottomSheetDismissed);
+                });
         verify(mMockMediator, times(1))
                 .setupSheetWebContents(any(ThinWebView.class), any(PropertyModel.class));
         verify(mMockBottomSheetController, times(1))
                 .addObserver(mBottomSheetObserverCaptor.capture());
-        verify(mMockDecorView, times(1))
-                .addOnLayoutChangeListener(any(OnLayoutChangeListener.class));
-        verify(mMockMediator, times(1)).navigateToUrl(eq(mMockGurl), eq(DUMMY_SHEET_TITLE));
+        verify(mMockMediator, times(1)).navigateToUrl(eq(TEST_URL), eq(TEST_SHEET_TITLE));
         verify(mMockBottomSheetController, times(1))
                 .requestShowContent(mSheetContentCaptor.capture(), eq(true));
+
+        // A layout change of the decor view resizes the web view to the container.
+        View webView = mSheetContentCaptor.getValue().getContentView();
+        int height = webView.getLayoutParams().height;
+        int growth = (int) (CONTAINER_HEIGHT * MerchantTrustBottomSheetContent.FULL_HEIGHT_RATIO);
+        when(mMockBottomSheetController.getContainerHeight()).thenReturn(CONTAINER_HEIGHT);
+        ThreadUtils.runOnUiThreadBlocking(() -> mDecorView.layout(0, 0, 1, 1));
+        assertEquals(height + growth, webView.getLayoutParams().height);
     }
 
     @Test
@@ -140,12 +155,13 @@ public class MerchantTrustBottomSheetCoordinatorTest {
     @SmallTest
     public void testBottomSheetObserverOnSheetContentChanged() {
         mBottomSheetObserverCaptor.getValue().onSheetClosed(StateChangeReason.BACK_PRESS);
-        TestThreadUtils.runOnUiThreadBlocking(
-                () -> { mBottomSheetObserverCaptor.getValue().onSheetContentChanged(null); });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mBottomSheetObserverCaptor.getValue().onSheetContentChanged(null);
+                });
         verify(mMockMetrics, times(1))
                 .recordMetricsForBottomSheetClosed(eq(StateChangeReason.BACK_PRESS));
-        verify(mMockDecorView, times(1))
-                .removeOnLayoutChangeListener(any(OnLayoutChangeListener.class));
+        verify(mMockOnBottomSheetDismissed, times(1)).run();
         verify(mMockBottomSheetController, times(1))
                 .removeObserver(eq(mBottomSheetObserverCaptor.getValue()));
         verify(mMockBottomSheetController, times(1))
@@ -163,11 +179,17 @@ public class MerchantTrustBottomSheetCoordinatorTest {
     @Test
     @SmallTest
     public void testBottomSheetObserverOnSheetStateChanged() {
-        mBottomSheetObserverCaptor.getValue().onSheetStateChanged(SheetState.PEEK);
+        mBottomSheetObserverCaptor
+                .getValue()
+                .onSheetStateChanged(SheetState.PEEK, StateChangeReason.NONE);
         verify(mMockMetrics, times(1)).recordMetricsForBottomSheetPeeked();
-        mBottomSheetObserverCaptor.getValue().onSheetStateChanged(SheetState.HALF);
+        mBottomSheetObserverCaptor
+                .getValue()
+                .onSheetStateChanged(SheetState.HALF, StateChangeReason.NONE);
         verify(mMockMetrics, times(1)).recordMetricsForBottomSheetHalfOpened();
-        mBottomSheetObserverCaptor.getValue().onSheetStateChanged(SheetState.FULL);
+        mBottomSheetObserverCaptor
+                .getValue()
+                .onSheetStateChanged(SheetState.FULL, StateChangeReason.NONE);
         verify(mMockMetrics, times(1)).recordMetricsForBottomSheetFullyOpened();
     }
 }

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "build/build_config.h"
 #include "components/autofill/content/browser/risk/proto/fingerprint.pb.h"
@@ -21,6 +21,7 @@
 #include "services/device/public/mojom/geoposition.mojom.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/display/screen_info.h"
 #include "ui/gfx/geometry/rect.h"
 
 using testing::ElementsAre;
@@ -39,10 +40,10 @@ void GetFingerprintInternal(
     const std::string& version,
     const std::string& charset,
     const std::string& accept_languages,
-    const base::Time& install_time,
+    base::Time install_time,
     const std::string& app_locale,
     const std::string& user_agent,
-    const base::TimeDelta& timeout,
+    base::TimeDelta timeout,
     base::OnceCallback<void(std::unique_ptr<Fingerprint>)> callback);
 
 }  // namespace internal
@@ -71,7 +72,8 @@ class AutofillRiskFingerprintTest : public content::ContentBrowserTest {
         content_bounds_(11, 13, 17, 37),
         screen_bounds_(0, 0, 101, 71),
         available_screen_bounds_(0, 11, 101, 60),
-        unavailable_screen_bounds_(0, 0, 101, 11) {}
+        unavailable_screen_bounds_(0, 0, 101, 11) {
+  }
 
   void SetUpOnMainThread() override {
     auto position = device::mojom::Geoposition::New();
@@ -79,12 +81,12 @@ class AutofillRiskFingerprintTest : public content::ContentBrowserTest {
     position->longitude = kLongitude;
     position->altitude = kAltitude;
     position->accuracy = kAccuracy;
-    position->timestamp = base::Time::UnixEpoch() +
-                          base::TimeDelta::FromMilliseconds(kGeolocationTime);
+    position->timestamp =
+        base::Time::UnixEpoch() + base::Milliseconds(kGeolocationTime);
 
     geolocation_overrider_ =
         std::make_unique<device::ScopedGeolocationOverrider>(
-            std::move(position));
+            device::mojom::GeopositionResult::NewPosition(std::move(position)));
   }
 
   void GetFingerprintTestCallback(base::OnceClosure continuation_callback,
@@ -95,7 +97,13 @@ class AutofillRiskFingerprintTest : public content::ContentBrowserTest {
         fingerprint->machine_characteristics();
     EXPECT_TRUE(machine.has_operating_system_build());
     EXPECT_TRUE(machine.has_browser_install_time_hours());
+
+#if BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_ANDROID)
+    // GetFontList() returns an empty list on Fuchsia and Android.
+    EXPECT_EQ(machine.font_size(), 0);
+#else
     EXPECT_GT(machine.font_size(), 0);
+#endif  // BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_ANDROID)
 
     // TODO(isherman): http://crbug.com/358548 and EXPECT_EQ.
     EXPECT_GE(machine.plugin_size(), 0);
@@ -120,11 +128,11 @@ class AutofillRiskFingerprintTest : public content::ContentBrowserTest {
     EXPECT_TRUE(machine.has_browser_build());
     EXPECT_TRUE(machine.has_browser_feature());
     if (content::GpuDataManager::GetInstance()->GpuAccessAllowed(nullptr)) {
-      ASSERT_TRUE(machine.has_graphics_card());
+      EXPECT_TRUE(machine.has_graphics_card());
+    }
+    if (machine.has_graphics_card()) {
       EXPECT_TRUE(machine.graphics_card().has_vendor_id());
       EXPECT_TRUE(machine.graphics_card().has_device_id());
-    } else {
-      EXPECT_FALSE(machine.has_graphics_card());
     }
 
     ASSERT_TRUE(fingerprint->has_transient_state());
@@ -137,17 +145,7 @@ class AutofillRiskFingerprintTest : public content::ContentBrowserTest {
     EXPECT_TRUE(transient_state.outer_window_size().has_width());
     EXPECT_TRUE(transient_state.outer_window_size().has_height());
 
-    ASSERT_TRUE(fingerprint->has_user_characteristics());
-    const Fingerprint::UserCharacteristics& user_characteristics =
-        fingerprint->user_characteristics();
-    ASSERT_TRUE(user_characteristics.has_location());
-    const Fingerprint::UserCharacteristics::Location& location =
-        user_characteristics.location();
-    EXPECT_TRUE(location.has_altitude());
-    EXPECT_TRUE(location.has_latitude());
-    EXPECT_TRUE(location.has_longitude());
-    EXPECT_TRUE(location.has_accuracy());
-    EXPECT_TRUE(location.has_time_in_ms());
+    ASSERT_FALSE(fingerprint->has_user_characteristics());
 
     ASSERT_TRUE(fingerprint->has_metadata());
     EXPECT_TRUE(fingerprint->metadata().has_timestamp_ms());
@@ -175,11 +173,6 @@ class AutofillRiskFingerprintTest : public content::ContentBrowserTest {
     EXPECT_EQ(window_bounds_.height(),
               transient_state.outer_window_size().height());
     EXPECT_EQ(kObfuscatedGaiaId, fingerprint->metadata().obfuscated_gaia_id());
-    EXPECT_EQ(kAltitude, location.altitude());
-    EXPECT_EQ(kLatitude, location.latitude());
-    EXPECT_EQ(kLongitude, location.longitude());
-    EXPECT_EQ(kAccuracy, location.accuracy());
-    EXPECT_EQ(kGeolocationTime, location.time_in_ms());
 
     std::move(continuation_callback).Run();
   }
@@ -210,7 +203,7 @@ IN_PROC_BROWSER_TEST_F(AutofillRiskFingerprintTest, GetFingerprint) {
       kObfuscatedGaiaId, window_bounds_, content_bounds_, screen_info,
       "25.0.0.123", kCharset, kAcceptLanguages, AutofillClock::Now(), kLocale,
       kUserAgent,
-      base::TimeDelta::FromDays(1),  // Ought to be longer than any test run.
+      base::Days(1),  // Ought to be longer than any test run.
       base::BindOnce(&AutofillRiskFingerprintTest::GetFingerprintTestCallback,
                      base::Unretained(this), run_loop.QuitWhenIdleClosure()));
 

@@ -1,48 +1,58 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/credential_provider/gaiacp/gcp_utils.h"
 
-#include <iphlpapi.h>
-#include <wincred.h>  // For <ntsecapi.h>
 #include <windows.h>
 #include <winsock2.h>
-#include <winternl.h>
 
-#define _NTDEF_  // Prevent redefition errors, must come after <winternl.h>
-#include <atlbase.h>
-#include <atlcom.h>
-#include <atlcomcli.h>
+#include <accctrl.h>
+#include <iphlpapi.h>
 #include <malloc.h>
 #include <memory.h>
-#include <ntsecapi.h>  // For LsaLookupAuthenticationPackage()
-#include <sddl.h>      // For ConvertSidToStringSid()
-#include <security.h>  // For NEGOSSP_NAME_A
+#include <sddl.h>
+#include <security.h>
 #include <stdlib.h>
-#include <wbemidl.h>
 
+#include <algorithm>
+#include <array>
 #include <iomanip>
 #include <memory>
+#include <string>
+#include <string_view>
+#include <utility>
 
 #include "base/base64.h"
 #include "base/command_line.h"
-#include "base/cxx17_backports.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/i18n/win/embedded_i18n/language_selector.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
-#include "base/macros.h"
 #include "base/no_destructor.h"
 #include "base/path_service.h"
+#include "base/rand_util.h"
+#include "base/strings/strcat.h"
+#include "base/strings/strcat_win.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_number_conversions_win.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/values.h"
 #include "base/win/current_module.h"
-#include "base/win/embedded_i18n/language_selector.h"
+#include "base/win/ntsecapi_shim.h"
+#include "base/win/security_descriptor.h"
+#include "base/win/sid.h"
+#include "base/win/wbemidl_shim.h"
 #include "base/win/win_util.h"
+#include "base/win/wincred_shim.h"
+#include "base/win/windows_handle_util.h"
 #include "base/win/wmi.h"
 #include "build/branding_buildflags.h"
 #include "chrome/common/chrome_version.h"
@@ -50,105 +60,107 @@
 #include "chrome/credential_provider/gaiacp/gaia_resources.h"
 #include "chrome/credential_provider/gaiacp/gcpw_strings.h"
 #include "chrome/credential_provider/gaiacp/logging.h"
+#include "chrome/credential_provider/gaiacp/os_device_manager.h"
 #include "chrome/credential_provider/gaiacp/reg_utils.h"
 #include "chrome/credential_provider/gaiacp/token_generator.h"
 #include "chrome/installer/launcher_support/chrome_launcher_support.h"
 #include "google_apis/gaia/gaia_auth_util.h"
 #include "google_apis/gaia/gaia_switches.h"
 #include "google_apis/gaia/gaia_urls.h"
+#include "services/device/public/mojom/hid.mojom.h"
 #include "third_party/re2/src/re2/re2.h"
 
 namespace credential_provider {
 
-const wchar_t kDefaultProfilePictureFileExtension[] = L".jpg";
+constexpr wchar_t kDefaultProfilePictureFileExtension[] = L".jpg";
 
-const base::FilePath::CharType kCredentialProviderFolder[] =
+constexpr base::FilePath::CharType kCredentialProviderFolder[] =
     L"Credential Provider";
-
-// Overridden in tests to fake serial number extraction.
-bool g_use_test_serial_number = false;
-std::wstring g_test_serial_number = L"";
-
-// Overridden in tests to fake mac address extraction.
-bool g_use_test_mac_addresses = false;
-std::vector<std::string> g_test_mac_addresses;
-
-// Overriden in tests to fake os version.
-bool g_use_test_os_version = false;
-std::string g_test_os_version = "";
-
-// Overridden in tests to fake installed chrome path.
-bool g_use_test_chrome_path = false;
-base::FilePath g_test_chrome_path(L"");
-
-const wchar_t kKernelLibFile[] = L"kernel32.dll";
-const wchar_t kOsRegistryPath[] =
-    L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
-const wchar_t kOsMajorName[] = L"CurrentMajorVersionNumber";
-const wchar_t kOsMinorName[] = L"CurrentMinorVersionNumber";
-const wchar_t kOsBuildName[] = L"CurrentBuildNumber";
-const int kVersionStringSize = 128;
 
 constexpr wchar_t kDefaultMdmUrl[] =
     L"https://deviceenrollmentforwindows.googleapis.com/v1/discovery";
 
-constexpr int kMaxNumConsecutiveUploadDeviceFailures = 3;
-const base::TimeDelta kMaxTimeDeltaSinceLastUserPolicyRefresh =
-    base::TimeDelta::FromDays(1);
-const base::TimeDelta kMaxTimeDeltaSinceLastExperimentsFetch =
-    base::TimeDelta::FromDays(1);
+constexpr int kMaxNumConsecutiveUploadDeviceFailures = 7;
 
-// Path elements for the path where the experiments are stored on disk.
-const wchar_t kGcpwExperimentsDirectory[] = L"Experiments";
-const wchar_t kGcpwUserExperimentsFileName[] = L"ExperimentsFetchResponse";
+// The following staleness time limits are set to 5 days to prevent file fetch
+// operations unnecessarily by GCPW when machine is offline during weekends and
+// holidays. These files are also updated by GCPW extension Windows NT service
+// regularly when the device is online.
+constexpr base::TimeDelta kMaxTimeDeltaSinceLastUserPolicyRefresh =
+    base::Days(5);
+constexpr base::TimeDelta kMaxTimeDeltaSinceLastExperimentsFetch =
+    base::Days(5);
+
+constexpr wchar_t kGcpwExperimentsDirectory[] = L"Experiments";
+constexpr wchar_t kGcpwUserExperimentsFileName[] = L"ExperimentsFetchResponse";
 
 namespace {
+
+// Overridden in tests to fake serial number extraction.
+bool g_use_test_serial_number = false;
+std::wstring& TestSerialNumber() {
+  static base::NoDestructor<std::wstring> value;
+  return *value;
+}
+
+// Overridden in tests to fake MAC address extraction.
+bool g_use_test_mac_addresses = false;
+std::vector<std::string>& TestMacAddresses() {
+  static base::NoDestructor<std::vector<std::string>> value;
+  return *value;
+}
+
+// Overridden in tests to fake OS version.
+bool g_use_test_os_version = false;
+std::string& TestOSVersion() {
+  static base::NoDestructor<std::string> value;
+  return *value;
+}
+
+// Overridden in tests to fake installed Chrome path.
+bool g_use_test_chrome_path = false;
+base::FilePath& TestChromePath() {
+  static base::NoDestructor<base::FilePath> value;
+  return *value;
+}
+
+constexpr wchar_t kKernelLibFile[] = L"kernel32.dll";
+constexpr wchar_t kOsRegistryPath[] =
+    L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
+constexpr wchar_t kOsMajorName[] = L"CurrentMajorVersionNumber";
+constexpr wchar_t kOsMinorName[] = L"CurrentMinorVersionNumber";
+constexpr wchar_t kOsBuildName[] = L"CurrentBuildNumber";
+constexpr int kVersionStringSize = 128;
 
 // Minimum supported version of Chrome for GCPW.
 constexpr char kMinimumSupportedChromeVersionStr[] = "77.0.3865.65";
 
 constexpr char kSentinelFilename[] = "gcpw_startup.sentinel";
 constexpr int64_t kMaxConsecutiveCrashCount = 5;
+constexpr int kHoursToDisableGCPW = 10;
 
 // L$ prefix means this secret can only be accessed locally.
-const wchar_t kLsaKeyDMTokenPrefix[] = L"L$GCPW-DM-Token-";
+constexpr wchar_t kLsaKeyDMTokenPrefix[] = L"L$GCPW-DM-Token-";
 
-constexpr base::win::i18n::LanguageSelector::LangToOffset
-    kLanguageOffsetPairs[] = {
+constexpr base::i18n::LanguageSelector::LangToOffset kLanguageOffsetPairs[] = {
 #define HANDLE_LANGUAGE(l_, o_) {L## #l_, o_},
-        DO_LANGUAGES
+    DO_LANGUAGES
 #undef HANDLE_LANGUAGE
-
 };
 
 base::FilePath GetStartupSentinelLocation(const std::wstring& version) {
-  base::FilePath sentienal_path;
-  if (!base::PathService::Get(base::DIR_COMMON_APP_DATA, &sentienal_path)) {
-    HRESULT hr = HRESULT_FROM_WIN32(::GetLastError());
-    LOGFN(ERROR) << "PathService::Get(DIR_COMMON_APP_DATA) hr=" << putHR(hr);
+  base::FilePath sentinel_path = GetDataDirectory();
+  if (sentinel_path.empty()) {
     return base::FilePath();
   }
 
-  sentienal_path = sentienal_path.Append(GetInstallParentDirectoryName())
-                       .Append(kCredentialProviderFolder);
-
-  return sentienal_path.Append(version).AppendASCII(kSentinelFilename);
+  return sentinel_path.Append(version).AppendASCII(kSentinelFilename);
 }
 
-const base::win::i18n::LanguageSelector& GetLanguageSelector() {
-  static base::NoDestructor<base::win::i18n::LanguageSelector> instance(
+const base::i18n::LanguageSelector& GetLanguageSelector() {
+  static base::NoDestructor<base::i18n::LanguageSelector> instance(
       std::wstring(), kLanguageOffsetPairs);
   return *instance;
-}
-
-// Opens |path| with options that prevent the file from being read or written
-// via another handle. As long as the returned object is alive, it is guaranteed
-// that |path| isn't in use. It can however be deleted.
-base::File GetFileLock(const base::FilePath& path) {
-  return base::File(path, base::File::FLAG_OPEN | base::File::FLAG_READ |
-                              base::File::FLAG_EXCLUSIVE_READ |
-                              base::File::FLAG_EXCLUSIVE_WRITE |
-                              base::File::FLAG_SHARE_DELETE);
 }
 
 // Deletes a specific GCP version from the disk.
@@ -156,7 +168,7 @@ void DeleteVersionDirectory(const base::FilePath& version_path) {
   // Lock all exes and dlls for exclusive access while allowing deletes.  Mark
   // the files for deletion and release them, causing them to actually be
   // deleted.  This allows the deletion of the version path itself.
-  std::vector<base::File> locks;
+  std::vector<base::win::ScopedHandle> locks;
   const int types = base::FileEnumerator::FILES;
   base::FileEnumerator enumerator_version(version_path, false, types,
                                           FILE_PATH_LITERAL("*"));
@@ -168,18 +180,21 @@ void DeleteVersionDirectory(const base::FilePath& version_path) {
       continue;
     }
 
-    // Open the file for exclusive access while allowing deletes.
-    locks.push_back(GetFileLock(path));
-    if (!locks.back().IsValid()) {
+    base::win::ScopedHandle handle =
+        SecureOpenFile(path, base::File::FLAG_OPEN | base::File::FLAG_READ |
+                                 base::File::FLAG_WIN_EXCLUSIVE_READ |
+                                 base::File::FLAG_WIN_EXCLUSIVE_WRITE);
+    if (!handle.is_valid()) {
       HRESULT hr = HRESULT_FROM_WIN32(::GetLastError());
       LOGFN(ERROR) << "Could not lock " << path << " hr=" << putHR(hr);
       all_deletes_succeeded = false;
       continue;
     }
+    locks.push_back(std::move(handle));
 
     // Mark the file for deletion.
-    HRESULT hr = base::DeleteFile(path);
-    if (FAILED(hr)) {
+    bool deleted = base::DeleteFile(path);
+    if (!deleted) {
       LOGFN(ERROR) << "Could not delete " << path;
       all_deletes_succeeded = false;
     }
@@ -202,7 +217,6 @@ HRESULT GetGCPWDmTokenInternal(const std::wstring& sid,
   std::wstring store_key = kLsaKeyDMTokenPrefix + sid;
 
   auto policy = ScopedLsaPolicy::Create(POLICY_ALL_ACCESS);
-
   if (!policy) {
     HRESULT hr = HRESULT_FROM_WIN32(::GetLastError());
     LOGFN(ERROR) << "ScopedLsaPolicy::Create hr=" << putHR(hr);
@@ -231,7 +245,7 @@ HRESULT GetGCPWDmTokenInternal(const std::wstring& sid,
   } else {
     wchar_t dm_token_lsa_data[1024];
     HRESULT hr = policy->RetrievePrivateData(
-        store_key.c_str(), dm_token_lsa_data, base::size(dm_token_lsa_data));
+        store_key.c_str(), dm_token_lsa_data, std::size(dm_token_lsa_data));
     if (FAILED(hr)) {
       LOGFN(ERROR) << "ScopedLsaPolicy::RetrievePrivateData hr=" << putHR(hr);
       return hr;
@@ -247,17 +261,11 @@ HRESULT GetGCPWDmTokenInternal(const std::wstring& sid,
 // and |file_dir|.
 base::FilePath GetDirectoryFilePath(const std::wstring& sid,
                                     const std::wstring& file_dir) {
-  base::FilePath path;
-  if (!base::PathService::Get(base::DIR_COMMON_APP_DATA, &path)) {
-    HRESULT hr = HRESULT_FROM_WIN32(::GetLastError());
-    LOGFN(ERROR) << "PathService::Get(DIR_COMMON_APP_DATA) hr=" << putHR(hr);
+  base::FilePath path = GetDataDirectory();
+  if (path.empty()) {
     return base::FilePath();
   }
-  path = path.Append(GetInstallParentDirectoryName())
-             .Append(kCredentialProviderFolder)
-             .Append(file_dir)
-             .Append(sid);
-  return path;
+  return path.Append(file_dir).Append(sid);
 }
 
 }  // namespace
@@ -267,12 +275,12 @@ base::FilePath GetDirectoryFilePath(const std::wstring& sid,
 GoogleRegistrationDataForTesting::GoogleRegistrationDataForTesting(
     std::wstring serial_number) {
   g_use_test_serial_number = true;
-  g_test_serial_number = serial_number;
+  TestSerialNumber() = serial_number;
 }
 
 GoogleRegistrationDataForTesting::~GoogleRegistrationDataForTesting() {
   g_use_test_serial_number = false;
-  g_test_serial_number = L"";
+  TestSerialNumber() = L"";
 }
 
 // GoogleRegistrationDataForTesting //////////////////////////////////////////
@@ -284,8 +292,8 @@ GemDeviceDetailsForTesting::GemDeviceDetailsForTesting(
     std::string os_version) {
   g_use_test_mac_addresses = true;
   g_use_test_os_version = true;
-  g_test_mac_addresses = mac_addresses;
-  g_test_os_version = os_version;
+  TestMacAddresses() = mac_addresses;
+  TestOSVersion() = os_version;
 }
 
 GemDeviceDetailsForTesting::~GemDeviceDetailsForTesting() {
@@ -300,12 +308,12 @@ GemDeviceDetailsForTesting::~GemDeviceDetailsForTesting() {
 GoogleChromePathForTesting::GoogleChromePathForTesting(
     base::FilePath file_path) {
   g_use_test_chrome_path = true;
-  g_test_chrome_path = file_path;
+  TestChromePath() = file_path;
 }
 
 GoogleChromePathForTesting::~GoogleChromePathForTesting() {
   g_use_test_chrome_path = false;
-  g_test_chrome_path = base::FilePath(L"");
+  TestChromePath() = base::FilePath(L"");
 }
 
 // GoogleChromePathForTesting /////////////////////////////////////////////////
@@ -346,14 +354,14 @@ void DeleteVersionsExcept(const base::FilePath& gcp_path,
 
 // StdParentHandles ///////////////////////////////////////////////////////////
 
-StdParentHandles::StdParentHandles() {}
+StdParentHandles::StdParentHandles() = default;
 
-StdParentHandles::~StdParentHandles() {}
+StdParentHandles::~StdParentHandles() = default;
 
 // ScopedStartupInfo //////////////////////////////////////////////////////////
 
 ScopedStartupInfo::ScopedStartupInfo() {
-  memset(&info_, 0, sizeof(info_));
+  UNSAFE_TODO(memset(&info_, 0, sizeof(info_)));
   info_.hStdInput = INVALID_HANDLE_VALUE;
   info_.hStdOutput = INVALID_HANDLE_VALUE;
   info_.hStdError = INVALID_HANDLE_VALUE;
@@ -384,17 +392,17 @@ HRESULT ScopedStartupInfo::SetStdHandles(base::win::ScopedHandle* hstdin,
   // standard handle if no handle is given for some of the handles. This tells
   // the process it can create its own local handles for these pipes as needed.
   info_.dwFlags |= STARTF_USESTDHANDLES;
-  if (hstdin && hstdin->IsValid()) {
+  if (hstdin && hstdin->is_valid()) {
     info_.hStdInput = hstdin->Take();
   } else {
     info_.hStdInput = ::GetStdHandle(STD_INPUT_HANDLE);
   }
-  if (hstdout && hstdout->IsValid()) {
+  if (hstdout && hstdout->is_valid()) {
     info_.hStdOutput = hstdout->Take();
   } else {
     info_.hStdOutput = ::GetStdHandle(STD_OUTPUT_HANDLE);
   }
-  if (hstderr && hstderr->IsValid()) {
+  if (hstderr && hstderr->is_valid()) {
     info_.hStdError = hstderr->Take();
   } else {
     info_.hStdError = ::GetStdHandle(STD_ERROR_HANDLE);
@@ -434,11 +442,11 @@ HRESULT WaitForProcess(base::win::ScopedHandle::Handle process_handle,
 
   output_buffer[0] = 0;
 
-  HANDLE output_handle = parent_handles.hstdout_read.Get();
+  HANDLE output_handle = parent_handles.hstdout_read.get();
 
   for (bool is_done = false; !is_done;) {
-    char buffer[80];
-    DWORD length = base::size(buffer) - 1;
+    std::array<char, 80> buffer;
+    DWORD length = buffer.size() - 1;
     HRESULT hr = S_OK;
 
     const DWORD kThreeMinutesInMs = 3 * 60 * 1000;
@@ -448,7 +456,8 @@ HRESULT WaitForProcess(base::win::ScopedHandle::Handle process_handle,
       case WAIT_OBJECT_0: {
         int index = ret - WAIT_OBJECT_0;
         LOGFN(VERBOSE) << "WAIT_OBJECT_" << index;
-        if (!::ReadFile(output_handle, buffer, length, &length, nullptr)) {
+        if (!::ReadFile(output_handle, buffer.data(), length, &length,
+                        nullptr)) {
           hr = HRESULT_FROM_WIN32(::GetLastError());
           if (hr != HRESULT_FROM_WIN32(ERROR_BROKEN_PIPE))
             LOGFN(ERROR) << "ReadFile(" << index << ") hr=" << putHR(hr);
@@ -471,8 +480,8 @@ HRESULT WaitForProcess(base::win::ScopedHandle::Handle process_handle,
       }
       case WAIT_FAILED:
       default: {
-        HRESULT hr = HRESULT_FROM_WIN32(::GetLastError());
-        LOGFN(ERROR) << "WaitForMultipleObjectsEx hr=" << putHR(hr);
+        HRESULT last_error_hr = HRESULT_FROM_WIN32(::GetLastError());
+        LOGFN(ERROR) << "WaitForMultipleObjectsEx hr=" << putHR(last_error_hr);
         is_done = true;
         break;
       }
@@ -484,7 +493,7 @@ HRESULT WaitForProcess(base::win::ScopedHandle::Handle process_handle,
       LOGFN(VERBOSE) << "Stop waiting for output buffer";
       break;
     } else {
-      strcat_s(output_buffer, buffer_size, buffer);
+      UNSAFE_TODO(strcat_s(output_buffer, buffer_size, buffer.data()));
     }
   }
 
@@ -530,7 +539,7 @@ HRESULT CreateLogonToken(const wchar_t* domain,
   }
   base::win::ScopedHandle primary_token(handle);
 
-  if (!::CreateRestrictedToken(primary_token.Get(), DISABLE_MAX_PRIVILEGE, 0,
+  if (!::CreateRestrictedToken(primary_token.get(), DISABLE_MAX_PRIVILEGE, 0,
                                nullptr, 0, nullptr, 0, nullptr, &handle)) {
     HRESULT hr = HRESULT_FROM_WIN32(::GetLastError());
     LOGFN(ERROR) << "CreateRestrictedToken hr=" << putHR(hr);
@@ -545,7 +554,7 @@ HRESULT CreateJobForSignin(base::win::ScopedHandle* job) {
   DCHECK(job);
 
   job->Set(::CreateJobObject(nullptr, nullptr));
-  if (!job->IsValid()) {
+  if (!job->is_valid()) {
     HRESULT hr = HRESULT_FROM_WIN32(::GetLastError());
     LOGFN(ERROR) << "CreateJobObject hr=" << putHR(hr);
     return hr;
@@ -557,7 +566,7 @@ HRESULT CreateJobForSignin(base::win::ScopedHandle* job) {
       JOB_OBJECT_UILIMIT_HANDLES |           // Only access own handles.
       JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS |  // Cannot set sys params.
       JOB_OBJECT_UILIMIT_WRITECLIPBOARD;     // Cannot write to clipboard.
-  if (!::SetInformationJobObject(job->Get(), JobObjectBasicUIRestrictions, &ui,
+  if (!::SetInformationJobObject(job->get(), JobObjectBasicUIRestrictions, &ui,
                                  sizeof(ui))) {
     HRESULT hr = HRESULT_FROM_WIN32(::GetLastError());
     LOGFN(ERROR) << "SetInformationJobObject hr=" << putHR(hr);
@@ -583,7 +592,7 @@ HRESULT CreatePipeForChildProcess(bool child_reads,
         ::CreateFileW(L"nul:", FILE_GENERIC_READ | FILE_GENERIC_WRITE,
                       FILE_SHARE_DELETE | FILE_SHARE_READ | FILE_SHARE_WRITE,
                       &sa, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr));
-    if (!h.IsValid()) {
+    if (!h.is_valid()) {
       HRESULT hr = HRESULT_FROM_WIN32(::GetLastError());
       LOGFN(ERROR) << "CreateFile(nul) hr=" << putHR(hr);
       return hr;
@@ -606,7 +615,7 @@ HRESULT CreatePipeForChildProcess(bool child_reads,
     writing->Set(temp_handle2);
 
     // Make sure parent side is not inherited.
-    if (!::SetHandleInformation(child_reads ? writing->Get() : reading->Get(),
+    if (!::SetHandleInformation(child_reads ? writing->get() : reading->get(),
                                 HANDLE_FLAG_INHERIT, 0)) {
       HRESULT hr = HRESULT_FROM_WIN32(::GetLastError());
       LOGFN(ERROR) << "SetHandleInformation(parent) hr=" << putHR(hr);
@@ -617,8 +626,43 @@ HRESULT CreatePipeForChildProcess(bool child_reads,
   return S_OK;
 }
 
+HRESULT CreateNamedPipeForChildProcess(base::win::ScopedHandle* server_handle,
+                                       base::win::ScopedHandle* client_handle) {
+  std::wstring pipe_name =
+      base::StrCat({L"\\\\.\\pipe\\gcpw-stdin-",
+                    base::NumberToWString(::GetCurrentProcessId()), L"-",
+                    base::NumberToWString(::GetCurrentThreadId()), L"-",
+                    base::NumberToWString(base::RandUint64())});
+
+  SECURITY_ATTRIBUTES sa_server = {};
+  sa_server.nLength = sizeof(sa_server);
+  sa_server.bInheritHandle = TRUE;
+  sa_server.lpSecurityDescriptor = nullptr;
+
+  server_handle->Set(
+      ::CreateNamedPipeW(pipe_name.c_str(), PIPE_ACCESS_DUPLEX,
+                         PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1,
+                         4096, 4096, 0, &sa_server));
+  if (!server_handle->is_valid()) {
+    HRESULT hr = HRESULT_FROM_WIN32(::GetLastError());
+    LOGFN(ERROR) << "CreateNamedPipeW(stdin) hr=" << putHR(hr);
+    return hr;
+  }
+
+  client_handle->Set(::CreateFileW(pipe_name.c_str(),
+                                   GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+                                   OPEN_EXISTING, 0, nullptr));
+  if (!client_handle->is_valid()) {
+    HRESULT hr = HRESULT_FROM_WIN32(::GetLastError());
+    LOGFN(ERROR) << "CreateFileW(stdin) hr=" << putHR(hr);
+    return hr;
+  }
+  return S_OK;
+}
+
 HRESULT InitializeStdHandles(CommDirection direction,
                              StdHandlesToCreate to_create,
+                             bool create_named_pipe_for_stdin,
                              ScopedStartupInfo* startupinfo,
                              StdParentHandles* parent_handles) {
   LOGFN(VERBOSE);
@@ -628,13 +672,20 @@ HRESULT InitializeStdHandles(CommDirection direction,
   base::win::ScopedHandle hstdin_read;
   base::win::ScopedHandle hstdin_write;
   if ((to_create & kStdInput) != 0) {
-    HRESULT hr = CreatePipeForChildProcess(
-        true,                                            // child reads
-        direction == CommDirection::kChildToParentOnly,  // use nul
-        &hstdin_read, &hstdin_write);
-    if (FAILED(hr)) {
-      LOGFN(ERROR) << "CreatePipeForChildProcess(stdin) hr=" << putHR(hr);
-      return hr;
+    if (create_named_pipe_for_stdin) {
+      HRESULT hr = CreateNamedPipeForChildProcess(&hstdin_read, &hstdin_write);
+      if (FAILED(hr)) {
+        return hr;
+      }
+    } else {
+      HRESULT hr = CreatePipeForChildProcess(
+          true,                                            // child reads
+          direction == CommDirection::kChildToParentOnly,  // use nul
+          &hstdin_read, &hstdin_write);
+      if (FAILED(hr)) {
+        LOGFN(ERROR) << "CreatePipeForChildProcess(stdin) hr=" << putHR(hr);
+        return hr;
+      }
     }
   }
 
@@ -680,15 +731,15 @@ HRESULT InitializeStdHandles(CommDirection direction,
 HRESULT GetPathToDllFromHandle(HINSTANCE dll_handle,
                                base::FilePath* path_to_dll) {
   wchar_t path[MAX_PATH];
-  DWORD length = base::size(path);
+  DWORD length = std::size(path);
   length = ::GetModuleFileName(dll_handle, path, length);
-  if (length == 0 || length >= base::size(path)) {
+  if (length == 0 || length >= std::size(path)) {
     HRESULT hr = HRESULT_FROM_WIN32(::GetLastError());
     LOGFN(ERROR) << "GetModuleFileNameW hr=" << putHR(hr);
     return hr;
   }
 
-  *path_to_dll = base::FilePath(base::WStringPiece(path, length));
+  *path_to_dll = base::FilePath(std::wstring_view(path, length));
   return S_OK;
 }
 
@@ -711,23 +762,23 @@ HRESULT GetEntryPointArgumentForRunDll(HINSTANCE dll_handle,
     return hr;
 
   wchar_t short_path[MAX_PATH];
-  DWORD short_length = base::size(short_path);
+  DWORD short_length = std::size(short_path);
   short_length =
       ::GetShortPathName(path_to_dll.value().c_str(), short_path, short_length);
-  if (short_length >= base::size(short_path)) {
-    HRESULT hr = HRESULT_FROM_WIN32(::GetLastError());
+  if (short_length >= std::size(short_path)) {
+    hr = HRESULT_FROM_WIN32(::GetLastError());
     LOGFN(ERROR) << "GetShortPathNameW hr=" << putHR(hr);
     return hr;
   }
 
-  *entrypoint_arg =
-      std::wstring(base::StringPrintf(L"\"%ls\",%ls", short_path, entrypoint));
+  *entrypoint_arg = base::StrCat({L"\"", short_path, L"\",", entrypoint});
 
   // In tests, the current module is the unittest exe, not the real dll.
   // The unittest exe does not expose entrypoints, so return S_FALSE as a hint
   // that this will not work.  The command line is built anyway though so
   // tests of the command line construction can be written.
-  return wcsicmp(wcsrchr(path_to_dll.value().c_str(), L'.'), L".dll") == 0
+  return UNSAFE_TODO(
+             wcsicmp(wcsrchr(path_to_dll.value().c_str(), L'.'), L".dll") == 0)
              ? S_OK
              : S_FALSE;
 }
@@ -773,7 +824,7 @@ HRESULT GetLocalizedNameBuiltinAdministratorAccount(
         PolicyHandle, PolicyAccountDomainInformation, (void**)&ppadi);
     if (status >= 0) {
       BYTE well_known_sid[SECURITY_MAX_SID_SIZE];
-      DWORD size_local_users_group_sid = base::size(well_known_sid);
+      DWORD size_local_users_group_sid = std::size(well_known_sid);
       if (CreateWellKnownSid(::WinAccountAdministratorSid, ppadi->DomainSid,
                              well_known_sid, &size_local_users_group_sid)) {
         return LookupLocalizedNameBySid(well_known_sid,
@@ -831,7 +882,7 @@ HRESULT LookupLocalizedNameBySid(PSID sid, std::wstring* localized_name) {
 HRESULT LookupLocalizedNameForWellKnownSid(WELL_KNOWN_SID_TYPE sid_type,
                                            std::wstring* localized_name) {
   BYTE well_known_sid[SECURITY_MAX_SID_SIZE];
-  DWORD size_local_users_group_sid = base::size(well_known_sid);
+  DWORD size_local_users_group_sid = std::size(well_known_sid);
 
   // Get the sid for the well known local users group.
   if (!::CreateWellKnownSid(sid_type, nullptr, well_known_sid,
@@ -844,7 +895,166 @@ HRESULT LookupLocalizedNameForWellKnownSid(WELL_KNOWN_SID_TYPE sid_type,
   return LookupLocalizedNameBySid(well_known_sid, localized_name);
 }
 
+bool IsSentinelOlderThanSetTime(const base::File::Info info) {
+  base::Time sentinel_time = info.last_modified;
+  base::Time current_time = base::Time::Now();
+
+  LOGFN(VERBOSE) << "Sentinel time: " << sentinel_time
+                 << " Current time: " << current_time;
+
+  return (current_time.ToDeltaSinceWindowsEpoch().InHours() -
+          sentinel_time.ToDeltaSinceWindowsEpoch().InHours()) >
+         kHoursToDisableGCPW;
+}
+
+bool IsPathRedirected(const base::FilePath& path) {
+  base::FilePath path_to_check = base::PathExists(path) ? path : path.DirName();
+  base::FilePath long_path = base::MakeLongFilePath(path_to_check);
+  if (long_path.empty()) {
+    return true;
+  }
+  base::FilePath normalized_path;
+  if (base::NormalizeFilePath(path_to_check, &normalized_path) &&
+      long_path.StripTrailingSeparators() ==
+          normalized_path.StripTrailingSeparators()) {
+    return false;
+  }
+  return true;
+}
+
+bool SecureCreateDirectory(const base::FilePath& path,
+                           bool grant_read_on_children) {
+  if (path.empty()) {
+    return false;
+  }
+
+  // Create the parent directory, allowing ordinary inherited permissions.
+  base::File::Error error = base::File::FILE_OK;
+  if (base::FilePath parent = path.DirName();
+      !parent.empty() && parent != path) {
+    if (!base::CreateDirectoryAndGetError(parent, &error)) {
+      LOGFN(ERROR) << "Failed to create parent directory for " << path << "; "
+                   << base::File::ErrorToString(error);
+      return false;
+    }
+  }
+
+  if (IsPathRedirected(path)) {
+    LOGFN(ERROR) << "Path mismatch detected (possible reparse point, "
+                 << "redirect, or unresolvable path): " << path;
+    return false;
+  }
+
+  base::win::SecurityDescriptor sd;
+  // Set the owner explicitly. An object's owner implicitly holds WRITE_DAC, so
+  // if a pre-existing directory kept its creator as owner, that creator could
+  // undo the restrictive DACL applied below.
+  sd.set_owner(base::win::Sid(base::win::WellKnownSid::kBuiltinAdministrators));
+  sd.set_dacl_protected(true);  // Protects from inheriting parent DACLs
+
+  // Add DACL entries strictly for SYSTEM and BuiltinAdministrators with full
+  // control, plus optional inherit-only read access on child objects for
+  // Authenticated Users and All Application Packages (UWP shell components).
+  if (!sd.SetDaclEntry(base::win::WellKnownSid::kLocalSystem,
+                       base::win::SecurityAccessMode::kGrant,
+                       GENERIC_ALL | STANDARD_RIGHTS_ALL,
+                       SUB_CONTAINERS_AND_OBJECTS_INHERIT) ||
+      !sd.SetDaclEntry(base::win::WellKnownSid::kBuiltinAdministrators,
+                       base::win::SecurityAccessMode::kGrant,
+                       GENERIC_ALL | STANDARD_RIGHTS_ALL,
+                       SUB_CONTAINERS_AND_OBJECTS_INHERIT) ||
+      (grant_read_on_children &&
+       (!sd.SetDaclEntry(
+            base::win::WellKnownSid::kAuthenticatedUser,
+            base::win::SecurityAccessMode::kGrant,
+            GENERIC_READ | STANDARD_RIGHTS_READ,
+            SUB_CONTAINERS_AND_OBJECTS_INHERIT | INHERIT_ONLY_ACE) ||
+        !sd.SetDaclEntry(
+            base::win::WellKnownSid::kAllApplicationPackages,
+            base::win::SecurityAccessMode::kGrant,
+            GENERIC_READ | STANDARD_RIGHTS_READ,
+            SUB_CONTAINERS_AND_OBJECTS_INHERIT | INHERIT_ONLY_ACE)))) {
+    LOGFN(ERROR) << "Failed to set DACL entries for " << path;
+    return false;
+  }
+
+  // Attempt to create the directory with the security descriptor attached.
+  auto self_relative = sd.ToSelfRelative();
+  if (!self_relative) {
+    LOGFN(ERROR) << "Failed to convert SecurityDescriptor to self-relative for "
+                 << path;
+    return false;
+  }
+  SECURITY_ATTRIBUTES sa{sizeof(SECURITY_ATTRIBUTES), self_relative->get(),
+                         FALSE};
+
+  if (::CreateDirectory(path.value().c_str(), &sa)) {
+    return true;
+  }
+
+  // If CreateDirectory failed (e.g., because the directory already exists),
+  // open a handle to the directory to set the owner and DACL.
+  base::File handle(::CreateFile(
+      path.value().c_str(), WRITE_DAC | WRITE_OWNER | READ_CONTROL,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+      OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+      nullptr));
+  if (!handle.IsValid()) {
+    HRESULT hr = HRESULT_FROM_WIN32(::GetLastError());
+    LOGFN(ERROR) << "Failed to open handle for existing path " << path
+                 << " hr=" << putHR(hr);
+    return false;
+  }
+
+  BY_HANDLE_FILE_INFORMATION file_info = {};
+  if (!::GetFileInformationByHandle(handle.GetPlatformFile(), &file_info)) {
+    HRESULT hr = HRESULT_FROM_WIN32(::GetLastError());
+    LOGFN(ERROR) << "GetFileInformationByHandle failed for " << path
+                 << " hr=" << putHR(hr);
+    return false;
+  }
+
+  // Verify that a directory (not a file) was just opened.
+  if ((file_info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+    LOGFN(ERROR) << "Path exists but is not a directory: " << path;
+    return false;
+  }
+
+  // Verify that the directory does not have a reparse point (e.g., it's not a
+  // symlink or a junction point).
+  if ((file_info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+    LOGFN(ERROR) << "Path exists but is a reparse point (junction/symlink): "
+                 << path;
+    return false;
+  }
+
+  // Apply the owner and DACL to the directory.
+  if (!sd.WriteToHandle(
+          handle.GetPlatformFile(), base::win::SecurityObjectType::kFile,
+          DACL_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION)) {
+    HRESULT hr = HRESULT_FROM_WIN32(::GetLastError());
+    LOGFN(ERROR) << "Failed to write SecurityDescriptor to handle for " << path
+                 << " hr=" << putHR(hr);
+    return false;
+  }
+
+  return true;
+}
+
+bool SecureCreateFile(const base::FilePath& path, std::string_view data) {
+  base::win::ScopedHandle handle = SecureOpenFile(
+      path, base::File::FLAG_CREATE_ALWAYS | base::File::FLAG_WRITE |
+                base::File::FLAG_WIN_EXCLUSIVE_READ |
+                base::File::FLAG_WIN_EXCLUSIVE_WRITE);
+  if (!handle.is_valid()) {
+    return false;
+  }
+  base::File file(std::move(handle));
+  return file.WriteAtCurrentPosAndCheck(base::as_byte_span(data));
+}
+
 bool WriteToStartupSentinel() {
+  LOGFN(VERBOSE);
   // Always try to write to the startup sentinel file. If writing or opening
   // fails for any reason (file locked, no access etc) consider this a failure.
   // If no sentinel file path can be found this probably means that we are
@@ -852,67 +1062,83 @@ bool WriteToStartupSentinel() {
   // Each process will only write once to startup sentinel file.
 
   static volatile long sentinel_initialized = 0;
-  if (::InterlockedCompareExchange(&sentinel_initialized, 1, 0))
+  if (::InterlockedCompareExchange(&sentinel_initialized, 1, 0)) {
+    LOGFN(VERBOSE) << "Sentinel already initialized.";
     return true;
+  }
 
   base::FilePath startup_sentinel_path =
       GetStartupSentinelLocation(TEXT(CHROME_VERSION_STRING));
   if (!startup_sentinel_path.empty()) {
     base::FilePath startup_sentinel_directory = startup_sentinel_path.DirName();
-    if (!base::DirectoryExists(startup_sentinel_directory)) {
-      base::File::Error error;
-      if (!base::CreateDirectoryAndGetError(startup_sentinel_directory,
-                                            &error)) {
-        LOGFN(ERROR) << "Could not create sentinel directory='"
-                     << startup_sentinel_directory << "' error=" << error;
-        return false;
-      }
-    }
-    base::File startup_sentinel(
-        startup_sentinel_path,
-        base::File::FLAG_OPEN_ALWAYS | base::File::FLAG_APPEND);
 
-    // Keep writing to the sentinel file until we have reached
-    // |kMaxConsecutiveCrashCount| at which point it is assumed that GCPW
-    // is crashing continuously and should be disabled.
-    if (!startup_sentinel.IsValid()) {
-      LOGFN(ERROR) << "Could not open the sentinel path "
+    if (!SecureCreateDirectory(startup_sentinel_directory)) {
+      LOGFN(ERROR) << "Could not securely create sentinel directory='"
+                   << startup_sentinel_directory << "'";
+      return false;
+    }
+
+    base::win::ScopedHandle handle =
+        SecureOpenFile(startup_sentinel_path,
+                       base::File::FLAG_OPEN_ALWAYS | base::File::FLAG_APPEND);
+
+    if (!handle.is_valid()) {
+      LOGFN(ERROR) << "Could not open the sentinel path securely: "
                    << startup_sentinel_path.value();
       return false;
     }
 
+    base::File startup_sentinel(std::move(handle));
+
     if (startup_sentinel.GetLength() >= kMaxConsecutiveCrashCount) {
       LOGFN(ERROR) << "Sentinel file length indicates "
                    << startup_sentinel.GetLength() << " possible crashes";
-      return false;
+
+      base::File::Info info;
+      startup_sentinel.GetInfo(&info);
+
+      // Is sentinel older than kHoursToDisableGCPW hours? Then, enable GCPW
+      // again.
+      return IsSentinelOlderThanSetTime(info);
     }
 
-    return startup_sentinel.WriteAtCurrentPos("0", 1) == 1;
+    LOGFN(VERBOSE) << "Writing to sentinel. Current length="
+                   << startup_sentinel.GetLength();
+    return startup_sentinel.WriteAtCurrentPosAndCheck(
+        base::byte_span_from_cstring("0"));
   }
 
   return true;
 }
 
 void DeleteStartupSentinel() {
+  LOGFN(VERBOSE);
   DeleteStartupSentinelForVersion(TEXT(CHROME_VERSION_STRING));
 }
 
 void DeleteStartupSentinelForVersion(const std::wstring& version) {
+  LOGFN(VERBOSE) << "Deleting sentinel for version " << version;
   base::FilePath startup_sentinel_path = GetStartupSentinelLocation(version);
-  if (base::PathExists(startup_sentinel_path) &&
-      !base::DeleteFile(startup_sentinel_path)) {
-    LOGFN(ERROR) << "Failed to delete sentinel file: " << startup_sentinel_path;
+  if (!base::DeleteFile(startup_sentinel_path)) {
+    LOGFN(ERROR) << "Could not delete sentinel file, maybe it doesn't exist: "
+                 << startup_sentinel_path;
   }
 }
 
-std::wstring GetStringResource(int base_message_id) {
+std::wstring GetStringResource(UINT base_message_id) {
   std::wstring localized_string;
 
-  int message_id = base_message_id + GetLanguageSelector().offset();
-  const ATLSTRINGRESOURCEIMAGE* image =
-      AtlGetStringResourceImage(_AtlBaseModule.GetModuleInstance(), message_id);
-  if (image) {
-    localized_string = std::wstring(image->achString, image->nLength);
+  UINT message_id =
+      static_cast<UINT>(base_message_id + GetLanguageSelector().offset());
+  wchar_t* str_ptr;
+  // reinterpret_cast<wchar_t*> is needed as 0 tells LoadString to provide
+  // a pointer to the string instead of filling the buffer.
+  // The 'W' version is explicitly called as it's semantically different from
+  // LoadStringA for 0 length buffers.
+  const int str_len = ::LoadStringW(CURRENT_MODULE(), message_id,
+                                    reinterpret_cast<wchar_t*>(&str_ptr), 0);
+  if (str_len > 0 && str_ptr) {
+    localized_string = std::wstring(str_ptr, static_cast<size_t>(str_len));
   } else {
     NOTREACHED() << "Unable to find resource id " << message_id;
   }
@@ -920,7 +1146,7 @@ std::wstring GetStringResource(int base_message_id) {
   return localized_string;
 }
 
-std::wstring GetStringResource(int base_message_id,
+std::wstring GetStringResource(UINT base_message_id,
                                const std::vector<std::wstring>& subst) {
   std::wstring format_string = GetStringResource(base_message_id);
   std::wstring formatted =
@@ -930,24 +1156,26 @@ std::wstring GetStringResource(int base_message_id,
 }
 
 std::wstring GetSelectedLanguage() {
-  return GetLanguageSelector().matched_candidate();
+  return base::ASCIIToWide(
+      GetLanguageSelector().matched_candidate().tag_string());
 }
 
-void SecurelyClearDictionaryValue(absl::optional<base::Value>* value) {
-  SecurelyClearDictionaryValueWithKey(value, kKeyPassword);
+void SecurelyClearDictionaryValue(base::optional_ref<base::DictValue> dict) {
+  SecurelyClearDictionaryValueWithKey(dict, kKeyPassword);
 }
 
-void SecurelyClearDictionaryValueWithKey(absl::optional<base::Value>* value,
-                                         const std::string& password_key) {
-  if (!value || !(*value) || !((*value)->is_dict()))
+void SecurelyClearDictionaryValueWithKey(
+    base::optional_ref<base::DictValue> dict,
+    const std::string& password_key) {
+  if (!dict.has_value()) {
     return;
-
-  const std::string* password_value = (*value)->FindStringKey(password_key);
-  if (password_value) {
-    SecurelyClearString(*const_cast<std::string*>(password_value));
   }
 
-  (*value).reset();
+  if (auto* password_value = dict->FindString(password_key)) {
+    SecurelyClearString(*password_value);
+  }
+
+  dict->clear();
 }
 
 void SecurelyClearString(std::wstring& str) {
@@ -966,60 +1194,53 @@ void SecurelyClearBuffer(void* buffer, size_t length) {
 
 std::string SearchForKeyInStringDictUTF8(
     const std::string& json_string,
-    const std::initializer_list<base::StringPiece>& path) {
-  DCHECK(path.size() > 0);
+    const std::initializer_list<std::string_view>& path) {
+  DCHECK_GT(path.size(), 0UL);
 
-  absl::optional<base::Value> json_obj =
-      base::JSONReader::Read(json_string, base::JSON_ALLOW_TRAILING_COMMAS);
-  if (!json_obj || !json_obj->is_dict()) {
+  std::optional<base::DictValue> json_obj =
+      base::JSONReader::ReadDict(json_string, base::JSON_ALLOW_TRAILING_COMMAS);
+  if (!json_obj) {
     LOGFN(ERROR) << "base::JSONReader::Read failed to translate to JSON";
     return std::string();
   }
   const std::string* value =
-      json_obj->FindStringPath(base::JoinString(path, "."));
+      json_obj->FindStringByDottedPath(base::JoinString(path, "."));
   return value ? *value : std::string();
 }
 
-std::wstring GetDictString(const base::Value& dict, const char* name) {
+std::wstring GetDictString(const base::DictValue& dict, const char* name) {
   DCHECK(name);
-  DCHECK(dict.is_dict());
-  auto* value = dict.FindKey(name);
-  return value && value->is_string() ? base::UTF8ToWide(value->GetString())
-                                     : std::wstring();
+  const std::string* value = dict.FindString(name);
+  return value ? base::UTF8ToWide(*value) : std::wstring();
 }
 
-std::wstring GetDictString(const std::unique_ptr<base::Value>& dict,
-                           const char* name) {
-  return GetDictString(*dict, name);
-}
-
-std::string GetDictStringUTF8(const base::Value& dict, const char* name) {
+std::string GetDictStringUTF8(const base::DictValue& dict, const char* name) {
   DCHECK(name);
-  DCHECK(dict.is_dict());
-  auto* value = dict.FindKey(name);
-  return value && value->is_string() ? value->GetString() : std::string();
+  const std::string* value = dict.FindString(name);
+  return value ? *value : std::string();
 }
 
 HRESULT SearchForListInStringDictUTF8(
     const std::string& list_key,
     const std::string& json_string,
-    const std::initializer_list<base::StringPiece>& path,
+    const std::initializer_list<std::string_view>& path,
     std::vector<std::string>* output) {
-  DCHECK(path.size() > 0);
+  DCHECK_GT(path.size(), 0UL);
 
-  absl::optional<base::Value> json_obj =
-      base::JSONReader::Read(json_string, base::JSON_ALLOW_TRAILING_COMMAS);
-  if (!json_obj || !json_obj->is_dict()) {
+  std::optional<base::DictValue> json_obj =
+      base::JSONReader::ReadDict(json_string, base::JSON_ALLOW_TRAILING_COMMAS);
+  if (!json_obj) {
     LOGFN(ERROR) << "base::JSONReader::Read failed to translate to JSON";
     return E_FAIL;
   }
 
-  auto* value = json_obj->FindListPath(base::JoinString(path, "."));
-  if (value && value->is_list()) {
-    for (const base::Value& entry : value->GetList()) {
-      if (entry.FindKey(list_key) && entry.FindKey(list_key)->is_string()) {
-        std::string value = entry.FindKey(list_key)->GetString();
-        output->push_back(value);
+  auto* value = json_obj->FindListByDottedPath(base::JoinString(path, "."));
+  if (value) {
+    for (const base::Value& entry_val : *value) {
+      const base::DictValue& entry = entry_val.GetDict();
+      const std::string* list_key_str = entry.FindString(list_key);
+      if (list_key_str) {
+        output->push_back(*list_key_str);
       } else {
         return E_FAIL;
       }
@@ -1028,9 +1249,22 @@ HRESULT SearchForListInStringDictUTF8(
   return S_OK;
 }
 
-std::string GetDictStringUTF8(const std::unique_ptr<base::Value>& dict,
-                              const char* name) {
-  return GetDictStringUTF8(*dict, name);
+base::FilePath GetDataDirectory() {
+  base::FilePath path;
+  if (!base::PathService::Get(base::DIR_COMMON_APP_DATA, &path)) {
+    HRESULT hr = HRESULT_FROM_WIN32(::GetLastError());
+    LOGFN(ERROR) << "PathService::Get(DIR_COMMON_APP_DATA) hr=" << putHR(hr);
+    return base::FilePath();
+  }
+  path = path.Append(GetInstallParentDirectoryName())
+             .Append(kCredentialProviderFolder);
+  if (!SecureCreateDirectory(path)) {
+    HRESULT hr = HRESULT_FROM_WIN32(::GetLastError());
+    LOGFN(ERROR) << "Could not create or secure directory " << path
+                 << "; hr=" << putHR(hr);
+    return base::FilePath();
+  }
+  return path;
 }
 
 base::FilePath::StringType GetInstallParentDirectoryName() {
@@ -1043,7 +1277,7 @@ base::FilePath::StringType GetInstallParentDirectoryName() {
 
 std::wstring GetWindowsVersion() {
   wchar_t release_id[32];
-  ULONG length = base::size(release_id);
+  ULONG length = std::size(release_id);
   HRESULT hr =
       GetMachineRegString(L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion",
                           L"ReleaseId", release_id, &length);
@@ -1058,13 +1292,10 @@ base::Version GetMinimumSupportedChromeVersion() {
 }
 
 bool ExtractKeysFromDict(
-    const base::Value& dict,
+    const base::DictValue& dict,
     const std::vector<std::pair<std::string, std::string*>>& needed_outputs) {
-  if (!dict.is_dict())
-    return false;
-
   for (const std::pair<std::string, std::string*>& output : needed_outputs) {
-    const std::string* output_value = dict.FindStringKey(output.first);
+    const std::string* output_value = dict.FindString(output.first);
     if (!output_value) {
       LOGFN(ERROR) << "Could not extract value '" << output.first
                    << "' from server response";
@@ -1077,8 +1308,9 @@ bool ExtractKeysFromDict(
 }
 
 std::wstring GetSerialNumber() {
-  if (g_use_test_serial_number)
-    return g_test_serial_number;
+  if (g_use_test_serial_number) {
+    return TestSerialNumber();
+  }
   return base::win::WmiComputerSystemInfo::Get().serial_number();
 }
 
@@ -1086,8 +1318,9 @@ std::wstring GetSerialNumber() {
 // https://msdn.microsoft.com/en-us/library/windows/desktop/aa365917(v=vs.85).aspx
 std::vector<std::string> GetMacAddresses() {
   // Used for unit tests.
-  if (g_use_test_mac_addresses)
-    return g_test_mac_addresses;
+  if (g_use_test_mac_addresses) {
+    return TestMacAddresses();
+  }
 
   PIP_ADAPTER_INFO pAdapter;
   ULONG ulOutBufLen = sizeof(IP_ADAPTER_INFO);
@@ -1152,7 +1385,7 @@ void GetOsVersionFallback(std::string* version) {
 // The format of the OS version is <Major>.<Minor>.<BuildNumber>. Eg: 10.0.18363
 void GetOsVersion(std::string* version) {
   if (g_use_test_os_version) {
-    *version = g_test_os_version;
+    *version = TestOSVersion();
     return;
   }
 
@@ -1162,7 +1395,7 @@ void GetOsVersion(std::string* version) {
   DWORD major;
   DWORD minor;
   wchar_t build[32];
-  ULONG length = base::size(build);
+  ULONG length = std::size(build);
 
   HRESULT hr1 = GetMachineRegDWORD(kOsRegistryPath, kOsMajorName, &major);
   HRESULT hr2 = GetMachineRegDWORD(kOsRegistryPath, kOsMinorName, &minor);
@@ -1171,8 +1404,8 @@ void GetOsVersion(std::string* version) {
 
   if (SUCCEEDED(hr1) && SUCCEEDED(hr2) && SUCCEEDED(hr3)) {
     char version_buffer[kVersionStringSize];
-    snprintf(version_buffer, kVersionStringSize, "%lu.%lu.%ls", major, minor,
-             build);
+    UNSAFE_TODO(snprintf(version_buffer, kVersionStringSize, "%lu.%lu.%ls",
+                         major, minor, build));
     *version = version_buffer;
     return;
   }
@@ -1186,20 +1419,20 @@ void GetOsVersion(std::string* version) {
 
 HRESULT GenerateDeviceId(std::string* device_id) {
   // Build the json data encapsulating different device ids.
-  base::Value device_ids_dict(base::Value::Type::DICTIONARY);
+  base::DictValue device_ids_dict;
 
   // Add the serial number to the dictionary.
   std::wstring serial_number = GetSerialNumber();
-  if (!serial_number.empty())
-    device_ids_dict.SetStringKey("serial_number",
-                                 base::WideToUTF8(serial_number));
+  if (!serial_number.empty()) {
+    device_ids_dict.Set("serial_number", base::WideToUTF8(serial_number));
+  }
 
   // Add machine_guid to the dictionary.
   std::wstring machine_guid;
   HRESULT hr = GetMachineGuid(&machine_guid);
-  if (SUCCEEDED(hr) && !machine_guid.empty())
-    device_ids_dict.SetStringKey("machine_guid",
-                                 base::WideToUTF8(machine_guid));
+  if (SUCCEEDED(hr) && !machine_guid.empty()) {
+    device_ids_dict.Set("machine_guid", base::WideToUTF8(machine_guid));
+  }
 
   std::string device_id_str;
   bool json_write_result =
@@ -1210,7 +1443,7 @@ HRESULT GenerateDeviceId(std::string* device_id) {
   }
 
   // Store the base64encoded device id json blob in the output.
-  base::Base64Encode(device_id_str, device_id);
+  *device_id = base::Base64Encode(device_id_str);
   return S_OK;
 }
 
@@ -1221,7 +1454,7 @@ HRESULT SetGaiaEndpointCommandLineIfNeeded(const wchar_t* override_registry_key,
                                            base::CommandLine* command_line) {
   // Registry specified endpoint.
   wchar_t endpoint_url_setting[256];
-  ULONG endpoint_url_length = base::size(endpoint_url_setting);
+  ULONG endpoint_url_length = std::size(endpoint_url_setting);
   HRESULT hr = GetGlobalFlag(override_registry_key, endpoint_url_setting,
                              &endpoint_url_length);
   if (SUCCEEDED(hr) && endpoint_url_setting[0]) {
@@ -1230,7 +1463,7 @@ HRESULT SetGaiaEndpointCommandLineIfNeeded(const wchar_t* override_registry_key,
       command_line->AppendSwitchASCII(switches::kGaiaUrl,
                                       endpoint_url.GetWithEmptyPath().spec());
       command_line->AppendSwitchASCII(kGcpwEndpointPathSwitch,
-                                      endpoint_url.path().substr(1));
+                                      endpoint_url.GetPath().substr(1));
     }
     return S_OK;
   }
@@ -1257,7 +1490,7 @@ base::FilePath GetChromePath() {
   base::FilePath gls_path = GetSystemChromePath();
 
   wchar_t custom_gls_path_value[MAX_PATH];
-  ULONG path_len = base::size(custom_gls_path_value);
+  ULONG path_len = std::size(custom_gls_path_value);
   HRESULT hr = GetGlobalFlag(kRegGlsPath, custom_gls_path_value, &path_len);
   if (SUCCEEDED(hr)) {
     base::FilePath custom_gls_path(custom_gls_path_value);
@@ -1273,8 +1506,9 @@ base::FilePath GetChromePath() {
 }
 
 base::FilePath GetSystemChromePath() {
-  if (g_use_test_chrome_path)
-    return g_test_chrome_path;
+  if (g_use_test_chrome_path) {
+    return TestChromePath();
+  }
 
   return chrome_launcher_support::GetChromePathForInstallationLevel(
       chrome_launcher_support::SYSTEM_LEVEL_INSTALLATION, false);
@@ -1289,9 +1523,9 @@ HRESULT GetGCPWDmToken(const std::wstring& sid, std::wstring* token) {
   return GetGCPWDmTokenInternal(sid, token, false);
 }
 
-FakesForTesting::FakesForTesting() {}
+FakesForTesting::FakesForTesting() = default;
 
-FakesForTesting::~FakesForTesting() {}
+FakesForTesting::~FakesForTesting() = default;
 
 GURL GetGcpwServiceUrl() {
   std::wstring dev = GetGlobalFlagOrDefault(kRegDeveloperMode, L"");
@@ -1316,48 +1550,122 @@ std::wstring GetDevelopmentUrl(const std::wstring& url,
   return url;
 }
 
+base::win::ScopedHandle SecureOpenFile(const base::FilePath& file_path,
+                                       uint32_t open_flags) {
+  // Map base::File flags to Windows API flags
+  DWORD access = 0;
+  if (open_flags & base::File::FLAG_READ) {
+    access |= GENERIC_READ;
+  }
+  if (open_flags & base::File::FLAG_WRITE) {
+    access |= GENERIC_WRITE;
+  }
+  if (open_flags & base::File::FLAG_APPEND) {
+    access |= FILE_APPEND_DATA;
+  }
+
+  // We need at least read attributes access to get file info, and we need
+  // to synchronize if we aren't using overlapped IO.
+  access |= FILE_READ_ATTRIBUTES | SYNCHRONIZE;
+
+  DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+  if (open_flags & base::File::FLAG_WIN_EXCLUSIVE_READ) {
+    share &= ~FILE_SHARE_READ;
+  }
+  if (open_flags & base::File::FLAG_WIN_EXCLUSIVE_WRITE) {
+    share &= ~FILE_SHARE_WRITE;
+  }
+
+  // Determine disposition based on flags, but avoid CREATE_ALWAYS and
+  // OPEN_TRUNCATED because we must verify the handle BEFORE truncating.
+  DWORD disposition = OPEN_EXISTING;
+  if (open_flags & base::File::FLAG_CREATE) {
+    disposition = CREATE_NEW;
+  } else if (open_flags & base::File::FLAG_OPEN_ALWAYS ||
+             open_flags & base::File::FLAG_CREATE_ALWAYS) {
+    disposition = OPEN_ALWAYS;
+  } else if (open_flags & base::File::FLAG_OPEN_TRUNCATED) {
+    disposition = OPEN_EXISTING;  // Will manually truncate later
+  }
+
+  // Open handle securely without following symlinks and without
+  // truncating.
+  base::win::ScopedHandle handle(::CreateFileW(
+      file_path.value().c_str(), access, share, nullptr, disposition,
+      FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT |
+          FILE_FLAG_BACKUP_SEMANTICS,
+      nullptr));
+
+  if (!handle.is_valid()) {
+    HRESULT hr = HRESULT_FROM_WIN32(::GetLastError());
+    LOGFN(ERROR) << "Error opening file securely " << file_path
+                 << " hr=" << putHR(hr);
+    return base::win::ScopedHandle();
+  }
+
+  // Verify the handle does not point to a reparse point or hardlink.
+  BY_HANDLE_FILE_INFORMATION file_info = {};
+  if (!::GetFileInformationByHandle(handle.get(), &file_info)) {
+    HRESULT hr = HRESULT_FROM_WIN32(::GetLastError());
+    LOGFN(ERROR) << "GetFileInformationByHandle failed. hr=" << putHR(hr);
+    return base::win::ScopedHandle();
+  }
+
+  if ((file_info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 ||
+      file_info.nNumberOfLinks > 1) {
+    LOGFN(ERROR) << "File is a reparse point or hardlink! Aborting. "
+                 << file_path;
+    return base::win::ScopedHandle();
+  }
+
+  // Truncate manually only AFTER verifying it is safe
+  if (open_flags & base::File::FLAG_CREATE_ALWAYS ||
+      open_flags & base::File::FLAG_OPEN_TRUNCATED) {
+    if (::SetFilePointer(handle.get(), 0, nullptr, FILE_BEGIN) ==
+            INVALID_SET_FILE_POINTER ||
+        !::SetEndOfFile(handle.get())) {
+      HRESULT hr = HRESULT_FROM_WIN32(::GetLastError());
+      LOGFN(ERROR) << "Failed to securely truncate file. hr=" << putHR(hr);
+      return base::win::ScopedHandle();
+    }
+  }
+
+  return handle;
+}
+
 std::unique_ptr<base::File> GetOpenedFileForUser(
     const std::wstring& sid,
     uint32_t open_flags,
     const std::wstring& file_dir,
     const std::wstring& file_name) {
-  base::FilePath experiments_dir = GetDirectoryFilePath(sid, file_dir);
-  if (!base::DirectoryExists(experiments_dir)) {
-    base::File::Error error;
-    if (!CreateDirectoryAndGetError(experiments_dir, &error)) {
-      LOGFN(ERROR) << "Experiments data directory could not be created for "
-                   << sid << " Error: " << error;
-      return nullptr;
-    }
-  }
+  base::FilePath data_dir = GetDirectoryFilePath(sid, file_dir);
 
-  base::FilePath experiments_file_path = experiments_dir.Append(file_name);
-  std::unique_ptr<base::File> experiments_file(
-      new base::File(experiments_file_path, open_flags));
-
-  if (!experiments_file->IsValid()) {
-    LOGFN(ERROR) << "Error opening experiments file for user " << sid
-                 << " with flags " << open_flags
-                 << " Error: " << experiments_file->error_details();
+  if (!SecureCreateDirectory(data_dir)) {
+    LOGFN(ERROR) << "Data directory could not be securely created for " << sid;
     return nullptr;
   }
 
-  base::File::Error lock_error =
-      experiments_file->Lock(base::File::LockMode::kExclusive);
+  base::FilePath file_path = data_dir.Append(file_name);
+  base::win::ScopedHandle handle = SecureOpenFile(file_path, open_flags);
+  if (!handle.is_valid()) {
+    return nullptr;
+  }
+
+  auto file = std::make_unique<base::File>(std::move(handle));
+  base::File::Error lock_error = file->Lock(base::File::LockMode::kExclusive);
   if (lock_error != base::File::FILE_OK) {
-    LOGFN(ERROR)
-        << "Failed to obtain exclusive lock on experiments file! Error: "
-        << lock_error;
+    LOGFN(ERROR) << "Failed to obtain exclusive lock on file! Error: "
+                 << lock_error;
     return nullptr;
   }
 
-  return experiments_file;
+  return file;
 }
 
 base::TimeDelta GetTimeDeltaSinceLastFetch(const std::wstring& sid,
                                            const std::wstring& flag) {
   wchar_t last_fetch_millis[512];
-  ULONG last_fetch_size = base::size(last_fetch_millis);
+  ULONG last_fetch_size = std::size(last_fetch_millis);
   HRESULT hr = GetUserProperty(sid, flag, last_fetch_millis, &last_fetch_size);
 
   if (FAILED(hr)) {
@@ -1371,7 +1679,96 @@ base::TimeDelta GetTimeDeltaSinceLastFetch(const std::wstring& sid,
       base::Time::Now().ToDeltaSinceWindowsEpoch().InMilliseconds() -
       last_fetch_millis_int64;
 
-  return base::TimeDelta::FromMilliseconds(time_delta_from_last_fetch_ms);
+  return base::Milliseconds(time_delta_from_last_fetch_ms);
+}
+
+device::gcpw::HidOpenDeviceGcpwResponse ProcessHidOpenDeviceRequest(
+    const device::gcpw::HidOpenDeviceGcpwRequest& request,
+    HANDLE logon_ui_process) {
+  LOGFN(VERBOSE) << L"Received hid open request for: \""
+                 << base::UTF8ToWide(request.device_path()) << L"\"";
+
+  device::gcpw::HidOpenDeviceGcpwResponse response;
+
+  OSDeviceManager* os_device_manager = OSDeviceManager::Get();
+  base::win::ScopedHandle device_handle =
+      os_device_manager->OpenDevice(base::UTF8ToWide(request.device_path()));
+
+  if (!device_handle.is_valid()) {
+    LOGFN(ERROR) << "Failed to open device: " << request.device_path();
+    return response;
+  }
+
+  // LINT.IfChange
+  uint16_t usage_page = os_device_manager->GetUsagePage(device_handle.get());
+  if (usage_page != device::mojom::kPageFido) {
+    LOGFN(VERBOSE) << "Device is not a FIDO device. " << usage_page;
+    return response;
+  }
+  // LINT.ThenChange(//services/device/hid/hid_service_win.cc)
+
+  HANDLE duplicated_handle;
+  if (!::DuplicateHandle(GetCurrentProcess(), device_handle.get(),
+                         logon_ui_process, &duplicated_handle, 0, FALSE,
+                         DUPLICATE_SAME_ACCESS)) {
+    LOGFN(ERROR) << "Failed to duplicate handle: " << GetLastError();
+  } else {
+    LOGFN(VERBOSE) << "Going to send successfully duplicated device handle ";
+    if (duplicated_handle != INVALID_HANDLE_VALUE) {
+      response.set_device_handle(base::win::HandleToUint32(duplicated_handle));
+    }
+  }
+
+  return response;
+}
+
+HRESULT ReadMessageFromPipe(base::win::ScopedHandle& pipe,
+                            std::vector<uint8_t>* buffer) {
+  DWORD message_size;
+  DWORD bytes_read;
+  if (!::ReadFile(pipe.get(), &message_size, sizeof(message_size), &bytes_read,
+                  nullptr) ||
+      bytes_read != sizeof(message_size)) {
+    return HRESULT_FROM_WIN32(::GetLastError());
+  }
+
+  // Enforce a maximum message size to prevent excessive memory allocation.
+  constexpr DWORD kMaxMessageSize = 64 * 1024;  // 64KB
+  if (message_size > kMaxMessageSize) {
+    LOGFN(ERROR) << "Message size " << message_size
+                 << " exceeds maximum allowed size " << kMaxMessageSize;
+    return E_FAIL;
+  }
+
+  buffer->resize(message_size);
+  if (message_size > 0) {
+    if (!::ReadFile(pipe.get(), buffer->data(), buffer->size(), &bytes_read,
+                    nullptr) ||
+        bytes_read != message_size) {
+      return HRESULT_FROM_WIN32(::GetLastError());
+    }
+  }
+  return S_OK;
+}
+
+HRESULT WriteMessageToPipe(base::win::ScopedHandle& pipe,
+                           const std::vector<uint8_t>& buffer) {
+  DWORD message_size = buffer.size();
+  DWORD bytes_written;
+  if (!::WriteFile(pipe.get(), &message_size, sizeof(message_size),
+                   &bytes_written, nullptr) ||
+      bytes_written != sizeof(message_size)) {
+    return HRESULT_FROM_WIN32(::GetLastError());
+  }
+
+  if (message_size > 0) {
+    if (!::WriteFile(pipe.get(), buffer.data(), message_size, &bytes_written,
+                     nullptr) ||
+        bytes_written != message_size) {
+      return HRESULT_FROM_WIN32(::GetLastError());
+    }
+  }
+  return S_OK;
 }
 
 }  // namespace credential_provider

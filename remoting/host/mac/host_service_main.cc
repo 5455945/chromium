@@ -1,22 +1,29 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "remoting/host/mac/host_service_main.h"
+
+#include <errno.h>
 #include <signal.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <iostream>
 #include <string>
+#include <string_view>
 
 #include "base/at_exit.h"
-#include "base/bind.h"
+#include "base/check.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/mac/mac_util.h"
-#include "base/no_destructor.h"
 #include "base/path_service.h"
+#include "base/posix/eintr_wrapper.h"
 #include "base/process/launch.h"
 #include "base/process/process.h"
 #include "base/strings/string_number_conversions.h"
@@ -24,11 +31,10 @@
 #include "base/threading/platform_thread.h"
 #include "base/time/time.h"
 #include "remoting/base/logging.h"
-#include "remoting/host/host_exit_codes.h"
-#include "remoting/host/logging.h"
+#include "remoting/base/username.h"
+#include "remoting/host/base/host_exit_codes.h"
+#include "remoting/host/base/switches.h"
 #include "remoting/host/mac/constants_mac.h"
-#include "remoting/host/switches.h"
-#include "remoting/host/username.h"
 #include "remoting/host/version.h"
 
 namespace remoting {
@@ -44,12 +50,14 @@ constexpr char kHostExeFileName[] = "remoting_me2me_host";
 constexpr char kNativeMessagingHostPath[] =
     "Contents/MacOS/native_messaging_host";
 
+// Base offset added to a signal number to form its conventional exit status.
+constexpr int kSignalExitCodeOffset = 128;
+
 // The exit code returned by 'wait' when a process is terminated by SIGTERM.
-constexpr int kSigtermExitCode = 128 + SIGTERM;
+constexpr int kSigtermExitCode = kSignalExitCodeOffset + SIGTERM;
 
 // Constants controlling the host process relaunch throttling.
-constexpr base::TimeDelta kMinimumRelaunchInterval =
-    base::TimeDelta::FromMinutes(1);
+constexpr base::TimeDelta kMinimumRelaunchInterval = base::Minutes(1);
 constexpr int kMaximumHostFailures = 10;
 
 // Exit code 126 is defined by Posix to mean "Command found, but not
@@ -57,34 +65,35 @@ constexpr int kMaximumHostFailures = 10;
 // parental control.
 constexpr int kPermissionDeniedParentalControl = 126;
 
-// This executable works as a proxy between launchd and the host. Signals of
-// interest to the host must be forwarded.
-constexpr int kSignalList[] = {
-    SIGHUP,  SIGINT,    SIGQUIT, SIGILL,   SIGTRAP, SIGABRT, SIGEMT,
-    SIGFPE,  SIGBUS,    SIGSEGV, SIGSYS,   SIGPIPE, SIGALRM, SIGTERM,
-    SIGURG,  SIGTSTP,   SIGCONT, SIGTTIN,  SIGTTOU, SIGIO,   SIGXCPU,
-    SIGXFSZ, SIGVTALRM, SIGPROF, SIGWINCH, SIGINFO, SIGUSR1, SIGUSR2};
+// This executable works as a proxy between launchd and the host. Only signals
+// handled by remoting_me2me_host (SIGTERM for launchd shutdown and SIGUSR2 for
+// pre-upgrade disconnect) should be caught and forwarded.
+constexpr int kSignalList[] = {SIGTERM, SIGUSR2};
 
-// Current host PID used to forward signals. 0 if host is not running.
-static base::ProcessId g_host_pid = 0;
+// Lock-free atomics are required in signal handlers; a lock-backed atomic could
+// self-deadlock if a signal interrupts a store on the same thread.
+static_assert(std::atomic<pid_t>::is_always_lock_free);
+static_assert(std::atomic<int>::is_always_lock_free);
+
+// Shared with HandleSignal(). Plain globals are undefined behavior across
+// asynchronous signal handlers even on one thread, and macOS frameworks
+// (os_log / libdispatch) may also spawn worker threads that receive signals.
+// |g_host_pid| is 0 when the host process is not running.
+std::atomic<pid_t> g_host_pid{0};
+std::atomic<int> g_terminating_signal{0};
 
 void HandleSignal(int signum) {
-  if (g_host_pid) {
-    // All other signals are forwarded to host then ignored except SIGTERM.
-    // launchd sends SIGTERM when service is being stopped so both the host and
-    // the host service need to terminate.
-    HOST_LOG << "Forwarding signal " << signum << " to host process "
-             << g_host_pid;
-    kill(g_host_pid, signum);
-    if (signum == SIGTERM) {
-      HOST_LOG << "Host service is terminating upon reception of SIGTERM";
-      exit(kSigtermExitCode);
-    }
+  // Only use async-signal-safe calls (no HOST_LOG/malloc/exit) and preserve
+  // |errno| so interrupted syscalls like HANDLE_EINTR(waitpid) still see EINTR.
+  const int saved_errno = errno;
+  g_terminating_signal.store(signum);
+  const pid_t host_pid = g_host_pid.load();
+  if (host_pid > 0) {
+    kill(host_pid, signum);
   } else {
-    HOST_LOG << "Signal " << signum
-             << " will not be forwarded since host is not running.";
-    exit(128 + signum);
+    _exit(kSignalExitCodeOffset + signum);
   }
+  errno = saved_errno;
 }
 
 void RegisterSignalHandler() {
@@ -145,14 +154,6 @@ HostService::HostService() {
 HostService::~HostService() = default;
 
 int HostService::RunHost() {
-  // Mojave users updating from an older host likely have already granted a11y
-  // permission to the old script. In this case we always delegate RunHost to
-  // the old script so that they don't need to grant permission to a new app.
-  if (base::mac::IsOS10_14() && base::PathExists(old_host_helper_file_)) {
-    HOST_LOG << "RunHost will be delegated to the old host script.";
-    return RunHostFromOldScript();
-  }
-
   if (geteuid() != 0 && HostIsEnabled()) {
     // Only check for non-root users, as the permission wizard is not actionable
     // at the login screen. Also, permission is only needed when host is
@@ -187,6 +188,7 @@ int HostService::RunHost() {
           LOG(ERROR) << "Too many host failures. Giving up.";
           return 1;
         }
+        // TODO: crbug.com/366071356 - use exponential backoff
         base::TimeDelta relaunch_in = kMinimumRelaunchInterval - host_lifetime;
         HOST_LOG << "Relaunching in " << relaunch_in;
         base::PlatformThread::Sleep(relaunch_in);
@@ -208,10 +210,31 @@ int HostService::RunHost() {
       return 1;
     }
 
-    g_host_pid = process.Pid();
-    int exit_code;
-    process.WaitForExit(&exit_code);
-    g_host_pid = 0;
+    // Use waitpid() directly since base::Process::WaitForExit() maps any
+    // signal termination to -1 instead of 128 + WTERMSIG(status).
+    const pid_t host_pid = process.Pid();
+    g_host_pid.store(host_pid);
+    int status = 0;
+    const pid_t wait_result = HANDLE_EINTR(waitpid(host_pid, &status, 0));
+    g_host_pid.store(0);
+
+    int exit_code = -1;
+    if (wait_result == host_pid) {
+      if (WIFEXITED(status)) {
+        exit_code = WEXITSTATUS(status);
+      } else if (WIFSIGNALED(status)) {
+        exit_code = kSignalExitCodeOffset + WTERMSIG(status);
+      }
+    } else {
+      PLOG(ERROR) << "waitpid failed for host process " << host_pid;
+    }
+
+    const int terminating_signal = g_terminating_signal.load();
+    if (terminating_signal != 0) {
+      HOST_LOG << "Forwarded signal " << terminating_signal
+               << " to host process " << host_pid;
+    }
+
     const char* exit_code_string_ptr = ExitCodeToStringUnchecked(exit_code);
     std::string exit_code_string =
         exit_code_string_ptr ? (std::string(exit_code_string_ptr) + " (" +
@@ -237,15 +260,18 @@ int HostService::RunHost() {
       return exit_code;
     }
 
-    // Ignore non-permanent error-code and launch host again. Stop handling
-    // signals temporarily in case the executable has to sleep to throttle host
-    // relaunches. While throttling, there is no host process to which to
-    // forward the signal, so the default behaviour should be restored.
-    HOST_LOG << "Host returned non-permanent exit code " << exit_code_string
-             << " at " << base::Time::Now();
-  }
+    if (terminating_signal != 0) {
+      HOST_LOG << "Host service terminating after forwarding signal "
+               << terminating_signal << " (host exit code " << exit_code_string
+               << ")";
+      return kSignalExitCodeOffset + terminating_signal;
+    }
 
-  return 0;
+    // Ignore non-permanent error-code and launch host again. While throttling,
+    // g_host_pid is 0 so any termination signal will exit immediately.
+    LOG(WARNING) << "Host returned non-permanent exit code " << exit_code_string
+                 << " at " << base::Time::Now();
+  }
 }
 
 bool HostService::Disable() {
@@ -279,7 +305,7 @@ bool HostService::Enable() {
     HOST_LOG << "Message from chmod: " << output;
   }
 
-  if (base::WriteFile(enabled_file_, nullptr, 0) < 0) {
+  if (!base::WriteFile(enabled_file_, std::string_view())) {
     LOG(ERROR) << "Failed to write enabled file";
     return false;
   }
@@ -291,8 +317,7 @@ bool HostService::WriteStdinToConfig() {
   std::istreambuf_iterator<char> begin(std::cin);
   std::istreambuf_iterator<char> end;
   std::string config(begin, end);
-  if (base::WriteFile(config_file_, config.data(), config.size()) !=
-      static_cast<int>(config.size())) {
+  if (!base::WriteFile(config_file_, config)) {
     LOG(ERROR) << "Failed to write config file";
     return false;
   }
@@ -321,10 +346,10 @@ int HostService::RunHostFromOldScript() {
     return 1;
   }
 
-  g_host_pid = process.Pid();
+  g_host_pid.store(process.Pid());
   int exit_code;
   process.WaitForExit(&exit_code);
-  g_host_pid = 0;
+  g_host_pid.store(0);
   return exit_code;
 }
 
@@ -356,9 +381,10 @@ bool HostService::HostIsEnabled() {
 }
 
 }  // namespace
-}  // namespace remoting
 
-int main(int argc, char const* argv[]) {
+int Me2MeHostServiceMain(int argc, char** argv) {
+  PCHECK(signal(SIGPIPE, SIG_IGN) != SIG_ERR);
+
   base::AtExitManager exitManager;
   base::CommandLine::Init(argc, argv);
   remoting::InitHostLogging();
@@ -397,3 +423,5 @@ int main(int argc, char const* argv[]) {
   }
   return 0;
 }
+
+}  // namespace remoting

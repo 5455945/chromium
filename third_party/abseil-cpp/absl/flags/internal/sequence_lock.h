@@ -23,6 +23,7 @@
 #include <cassert>
 #include <cstring>
 
+#include "absl/base/config.h"
 #include "absl/base/optimization.h"
 
 namespace absl {
@@ -49,7 +50,7 @@ inline constexpr size_t AlignUp(size_t x, size_t align) {
 // The memory reads and writes protected by this lock must use the provided
 // `TryRead()` and `Write()` functions. These functions behave similarly to
 // `memcpy()`, with one oddity: the protected data must be an array of
-// `std::atomic<int64>`. This is to comply with the C++ standard, which
+// `std::atomic<uint64>`. This is to comply with the C++ standard, which
 // considers data races on non-atomic objects to be undefined behavior. See "Can
 // Seqlocks Get Along With Programming Language Memory Models?"[1] by Hans J.
 // Boehm for more details.
@@ -63,6 +64,12 @@ class SequenceLock {
   void MarkInitialized() {
     assert(lock_.load(std::memory_order_relaxed) == kUninitialized);
     lock_.store(0, std::memory_order_release);
+  }
+
+  // Returns true if the flag is either uninitialized or initialized with zero
+  // modifications.
+  bool IsUnmodified() const {
+    return lock_.load(std::memory_order_acquire) <= 0;
   }
 
   // Copy "size" bytes of data from "src" to "dst", protected as a read-side

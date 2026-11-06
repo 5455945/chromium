@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,10 +13,10 @@
 #include "third_party/blink/renderer/core/frame/navigator.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_remote.h"
 #include "third_party/blink/renderer/platform/supplementable.h"
-#include "third_party/blink/renderer/platform/wtf/hash_set.h"
 
 namespace blink {
 
@@ -30,7 +30,7 @@ class MODULES_EXPORT NavigatorShare final
  public:
   static const char kSupplementName[];
 
-  NavigatorShare() : Supplement(nullptr) {}
+  NavigatorShare(Navigator& navigator) : Supplement(navigator) {}
   ~NavigatorShare() = default;
 
   // Gets, or creates, NavigatorShare supplement on Navigator.
@@ -40,11 +40,13 @@ class MODULES_EXPORT NavigatorShare final
   // Navigator partial interface
   bool canShare(ScriptState*, const ShareData*);
   static bool canShare(ScriptState*, Navigator&, const ShareData*);
-  ScriptPromise share(ScriptState*, const ShareData*, ExceptionState&);
-  static ScriptPromise share(ScriptState*,
-                             Navigator&,
-                             const ShareData*,
-                             ExceptionState&);
+  ScriptPromise<IDLUndefined> share(ScriptState*,
+                                    const ShareData*,
+                                    ExceptionState&);
+  static ScriptPromise<IDLUndefined> share(ScriptState*,
+                                           Navigator&,
+                                           const ShareData*,
+                                           ExceptionState&);
 
   void Trace(Visitor*) const override;
 

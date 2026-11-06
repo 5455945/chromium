@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include <memory>
 #include <vector>
 
-#include "base/macros.h"
 #include "base/test/task_environment.h"
 #include "extensions/renderer/bindings/test_js_runner.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -24,13 +23,14 @@ namespace extensions {
 // A common unit test class for testing API bindings. Creates an isolate and an
 // initial v8 context, and checks for v8 leaks at the end of the test.
 class APIBindingTest : public testing::Test {
+ public:
+  APIBindingTest(const APIBindingTest&) = delete;
+  APIBindingTest& operator=(const APIBindingTest&) = delete;
+
  protected:
   APIBindingTest();
   ~APIBindingTest() override;
 
-  // Returns the V8 ExtensionConfiguration to use for contexts. The default
-  // implementation returns null.
-  virtual v8::ExtensionConfiguration* GetV8ExtensionConfiguration();
 
   // testing::Test:
   void SetUp() override;
@@ -40,10 +40,10 @@ class APIBindingTest : public testing::Test {
   v8::Local<v8::Context> MainContext();
 
   // Creates a new context (maintaining it with a holder in
-  // |additional_context_holders_| and returns a local.
+  // `additional_context_holders_` and returns a local.
   v8::Local<v8::Context> AddContext();
 
-  // Disposes the context pointed to by |context|.
+  // Disposes the context pointed to by `context`.
   //
   // When the main context is disposed, it will be exited. This balances the
   // call to Context::Enter in APIBindingTest::SetUp. This will not work
@@ -84,8 +84,6 @@ class APIBindingTest : public testing::Test {
   std::unique_ptr<gin::ContextHolder> main_context_holder_;
   std::unique_ptr<TestJSRunner::Scope> test_js_runner_;
   std::vector<std::unique_ptr<gin::ContextHolder>> additional_context_holders_;
-
-  DISALLOW_COPY_AND_ASSIGN(APIBindingTest);
 };
 
 }  // namespace extensions

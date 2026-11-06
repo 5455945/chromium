@@ -1,14 +1,14 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "components/subresource_filter/content/browser/ads_intervention_manager.h"
 
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_clock.h"
 #include "chrome/browser/subresource_filter/subresource_filter_browser_test_harness.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "components/subresource_filter/content/browser/ads_intervention_manager.h"
 #include "components/subresource_filter/content/browser/content_subresource_filter_throttle_manager.h"
 #include "components/subresource_filter/core/mojom/subresource_filter.mojom.h"
 #include "components/ukm/test_ukm_recorder.h"
@@ -22,12 +22,8 @@ namespace subresource_filter {
 
 namespace {
 
-const char kSubresourceFilterActionsHistogram[] = "SubresourceFilter.Actions2";
 const char kAdsInterventionRecordedHistogram[] =
     "SubresourceFilter.PageLoad.AdsInterventionTriggered";
-const char kTimeSinceAdsInterventionTriggeredHistogram[] =
-    "SubresourceFilter.PageLoad."
-    "TimeSinceLastActiveAdsIntervention";
 
 }  // namespace
 
@@ -39,6 +35,12 @@ class AdsInterventionManagerTestWithEnforcement
         subresource_filter::kAdsInterventionsEnforced);
   }
 
+  subresource_filter::ContentSubresourceFilterThrottleManager*
+  current_throttle_manager() {
+    return subresource_filter::ContentSubresourceFilterThrottleManager::
+        FromPage(web_contents()->GetPrimaryPage());
+  }
+
  private:
   base::test::ScopedFeatureList feature_list_;
 };
@@ -47,8 +49,6 @@ IN_PROC_BROWSER_TEST_F(AdsInterventionManagerTestWithEnforcement,
                        AdsInterventionEnforced_PageActivated) {
   base::HistogramTester histogram_tester;
   ukm::TestAutoSetUkmRecorder ukm_recorder;
-  auto* throttle_manager = subresource_filter::
-      ContentSubresourceFilterThrottleManager::FromWebContents(web_contents());
   auto test_clock = std::make_unique<base::SimpleTestClock>();
   ads_intervention_manager()->set_clock_for_testing(test_clock.get());
 
@@ -59,26 +59,26 @@ IN_PROC_BROWSER_TEST_F(AdsInterventionManagerTestWithEnforcement,
 
   // Should not trigger activation as the URL is not on the blocklist and
   // has no active ads interventions.
-  ui_test_utils::NavigateToURL(browser(), url);
-  EXPECT_TRUE(WasParsedScriptElementLoaded(web_contents()->GetMainFrame()));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  EXPECT_TRUE(
+      WasParsedScriptElementLoaded(web_contents()->GetPrimaryMainFrame()));
   histogram_tester.ExpectBucketCount(
       kSubresourceFilterActionsHistogram,
       subresource_filter::SubresourceFilterAction::kUIShown, 0);
   histogram_tester.ExpectTotalCount(kAdsInterventionRecordedHistogram, 0);
-  histogram_tester.ExpectTotalCount(kTimeSinceAdsInterventionTriggeredHistogram,
-                                    0);
   auto entries = ukm_recorder.GetEntriesByName(
       ukm::builders::AdsIntervention_LastIntervention::kEntryName);
   EXPECT_EQ(0u, entries.size());
 
   // Trigger an ads violation and renavigate the page. Should trigger
   // subresource filter activation.
-  throttle_manager->OnAdsViolationTriggered(
-      web_contents()->GetMainFrame(),
+  current_throttle_manager()->OnAdsViolationTriggered(
+      web_contents()->GetPrimaryMainFrame(),
       mojom::AdsViolation::kMobileAdDensityByHeightAbove30);
-  ui_test_utils::NavigateToURL(browser(), url);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
-  EXPECT_FALSE(WasParsedScriptElementLoaded(web_contents()->GetMainFrame()));
+  EXPECT_FALSE(
+      WasParsedScriptElementLoaded(web_contents()->GetPrimaryMainFrame()));
   histogram_tester.ExpectBucketCount(
       kSubresourceFilterActionsHistogram,
       subresource_filter::SubresourceFilterAction::kUIShown, 1);
@@ -86,8 +86,6 @@ IN_PROC_BROWSER_TEST_F(AdsInterventionManagerTestWithEnforcement,
       kAdsInterventionRecordedHistogram,
       static_cast<int>(mojom::AdsViolation::kMobileAdDensityByHeightAbove30),
       1);
-  histogram_tester.ExpectBucketCount(
-      kTimeSinceAdsInterventionTriggeredHistogram, 0, 1);
   entries = ukm_recorder.GetEntriesByName(
       ukm::builders::AdsIntervention_LastIntervention::kEntryName);
   EXPECT_EQ(1u, entries.size());
@@ -102,16 +100,14 @@ IN_PROC_BROWSER_TEST_F(AdsInterventionManagerTestWithEnforcement,
 
   // Advance the clock to clear the intervention.
   test_clock->Advance(subresource_filter::kAdsInterventionDuration.Get());
-  ui_test_utils::NavigateToURL(browser(), url);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
-  EXPECT_TRUE(WasParsedScriptElementLoaded(web_contents()->GetMainFrame()));
+  EXPECT_TRUE(
+      WasParsedScriptElementLoaded(web_contents()->GetPrimaryMainFrame()));
   histogram_tester.ExpectBucketCount(
       kAdsInterventionRecordedHistogram,
       static_cast<int>(mojom::AdsViolation::kMobileAdDensityByHeightAbove30),
       1);
-  histogram_tester.ExpectBucketCount(
-      kTimeSinceAdsInterventionTriggeredHistogram,
-      subresource_filter::kAdsInterventionDuration.Get().InHours(), 1);
   entries = ukm_recorder.GetEntriesByName(
       ukm::builders::AdsIntervention_LastIntervention::kEntryName);
   EXPECT_EQ(2u, entries.size());
@@ -127,6 +123,7 @@ IN_PROC_BROWSER_TEST_F(AdsInterventionManagerTestWithEnforcement,
            entries.back(), ukm::builders::AdsIntervention_LastIntervention::
                                kInterventionStatusName) ==
        static_cast<int>(AdsInterventionStatus::kExpired)));
+  ads_intervention_manager()->set_clock_for_testing(nullptr);
 }
 
 IN_PROC_BROWSER_TEST_F(
@@ -134,8 +131,6 @@ IN_PROC_BROWSER_TEST_F(
     MultipleAdsInterventions_PageActivationClearedAfterFirst) {
   base::HistogramTester histogram_tester;
   ukm::TestAutoSetUkmRecorder ukm_recorder;
-  auto* throttle_manager = subresource_filter::
-      ContentSubresourceFilterThrottleManager::FromWebContents(web_contents());
   auto test_clock = std::make_unique<base::SimpleTestClock>();
   ads_intervention_manager()->set_clock_for_testing(test_clock.get());
 
@@ -146,26 +141,26 @@ IN_PROC_BROWSER_TEST_F(
 
   // Should not trigger activation as the URL is not on the blocklist and
   // has no active ads interventions.
-  ui_test_utils::NavigateToURL(browser(), url);
-  EXPECT_TRUE(WasParsedScriptElementLoaded(web_contents()->GetMainFrame()));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  EXPECT_TRUE(
+      WasParsedScriptElementLoaded(web_contents()->GetPrimaryMainFrame()));
   histogram_tester.ExpectBucketCount(
       kSubresourceFilterActionsHistogram,
       subresource_filter::SubresourceFilterAction::kUIShown, 0);
   histogram_tester.ExpectTotalCount(kAdsInterventionRecordedHistogram, 0);
-  histogram_tester.ExpectTotalCount(kTimeSinceAdsInterventionTriggeredHistogram,
-                                    0);
   auto entries = ukm_recorder.GetEntriesByName(
       ukm::builders::AdsIntervention_LastIntervention::kEntryName);
   EXPECT_EQ(0u, entries.size());
 
   // Trigger an ads violation and renavigate the page. Should trigger
   // subresource filter activation.
-  throttle_manager->OnAdsViolationTriggered(
-      web_contents()->GetMainFrame(),
+  current_throttle_manager()->OnAdsViolationTriggered(
+      web_contents()->GetPrimaryMainFrame(),
       mojom::AdsViolation::kMobileAdDensityByHeightAbove30);
-  ui_test_utils::NavigateToURL(browser(), url);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
-  EXPECT_FALSE(WasParsedScriptElementLoaded(web_contents()->GetMainFrame()));
+  EXPECT_FALSE(
+      WasParsedScriptElementLoaded(web_contents()->GetPrimaryMainFrame()));
   histogram_tester.ExpectBucketCount(
       kSubresourceFilterActionsHistogram,
       subresource_filter::SubresourceFilterAction::kUIShown, 1);
@@ -173,8 +168,6 @@ IN_PROC_BROWSER_TEST_F(
       kAdsInterventionRecordedHistogram,
       static_cast<int>(mojom::AdsViolation::kMobileAdDensityByHeightAbove30),
       1);
-  histogram_tester.ExpectBucketCount(
-      kTimeSinceAdsInterventionTriggeredHistogram, 0, 1);
   entries = ukm_recorder.GetEntriesByName(
       ukm::builders::AdsIntervention_LastIntervention::kEntryName);
   EXPECT_EQ(1u, entries.size());
@@ -190,24 +183,22 @@ IN_PROC_BROWSER_TEST_F(
   // Advance the clock by less than kAdsInterventionDuration and trigger another
   // intervention. This intervention is a no-op.
   test_clock->Advance(subresource_filter::kAdsInterventionDuration.Get() -
-                      base::TimeDelta::FromMinutes(30));
-  throttle_manager->OnAdsViolationTriggered(
-      web_contents()->GetMainFrame(),
+                      base::Minutes(30));
+  current_throttle_manager()->OnAdsViolationTriggered(
+      web_contents()->GetPrimaryMainFrame(),
       mojom::AdsViolation::kMobileAdDensityByHeightAbove30);
 
   // Advance the clock to to kAdsInterventionDuration from the first
   // intervention, this clear the intervention.
-  test_clock->Advance(base::TimeDelta::FromMinutes(30));
-  ui_test_utils::NavigateToURL(browser(), url);
+  test_clock->Advance(base::Minutes(30));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
-  EXPECT_TRUE(WasParsedScriptElementLoaded(web_contents()->GetMainFrame()));
+  EXPECT_TRUE(
+      WasParsedScriptElementLoaded(web_contents()->GetPrimaryMainFrame()));
   histogram_tester.ExpectBucketCount(
       kAdsInterventionRecordedHistogram,
       static_cast<int>(mojom::AdsViolation::kMobileAdDensityByHeightAbove30),
       1);
-  histogram_tester.ExpectBucketCount(
-      kTimeSinceAdsInterventionTriggeredHistogram,
-      subresource_filter::kAdsInterventionDuration.Get().InHours(), 1);
   entries = ukm_recorder.GetEntriesByName(
       ukm::builders::AdsIntervention_LastIntervention::kEntryName);
   EXPECT_EQ(2u, entries.size());
@@ -223,6 +214,7 @@ IN_PROC_BROWSER_TEST_F(
            entries.back(), ukm::builders::AdsIntervention_LastIntervention::
                                kInterventionStatusName) ==
        static_cast<int>(AdsInterventionStatus::kExpired)));
+  ads_intervention_manager()->set_clock_for_testing(nullptr);
 }
 
 class AdsInterventionManagerTestWithoutEnforcement
@@ -233,6 +225,12 @@ class AdsInterventionManagerTestWithoutEnforcement
         subresource_filter::kAdsInterventionsEnforced);
   }
 
+  subresource_filter::ContentSubresourceFilterThrottleManager*
+  current_throttle_manager() {
+    return subresource_filter::ContentSubresourceFilterThrottleManager::
+        FromPage(web_contents()->GetPrimaryPage());
+  }
+
  private:
   base::test::ScopedFeatureList feature_list_;
 };
@@ -241,8 +239,6 @@ IN_PROC_BROWSER_TEST_F(AdsInterventionManagerTestWithoutEnforcement,
                        AdsInterventionNotEnforced_NoPageActivation) {
   base::HistogramTester histogram_tester;
   ukm::TestAutoSetUkmRecorder ukm_recorder;
-  auto* throttle_manager = subresource_filter::
-      ContentSubresourceFilterThrottleManager::FromWebContents(web_contents());
   auto test_clock = std::make_unique<base::SimpleTestClock>();
   ads_intervention_manager()->set_clock_for_testing(test_clock.get());
 
@@ -253,8 +249,9 @@ IN_PROC_BROWSER_TEST_F(AdsInterventionManagerTestWithoutEnforcement,
 
   // Should not trigger activation as the URL is not on the blocklist and
   // has no active ads interventions.
-  ui_test_utils::NavigateToURL(browser(), url);
-  EXPECT_TRUE(WasParsedScriptElementLoaded(web_contents()->GetMainFrame()));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  EXPECT_TRUE(
+      WasParsedScriptElementLoaded(web_contents()->GetPrimaryMainFrame()));
   histogram_tester.ExpectBucketCount(
       kSubresourceFilterActionsHistogram,
       subresource_filter::SubresourceFilterAction::kUIShown, 0);
@@ -264,24 +261,22 @@ IN_PROC_BROWSER_TEST_F(AdsInterventionManagerTestWithoutEnforcement,
 
   // Trigger an ads violation and renavigate to the page. Interventions are not
   // enforced so no activation should occur.
-  throttle_manager->OnAdsViolationTriggered(
-      web_contents()->GetMainFrame(),
+  current_throttle_manager()->OnAdsViolationTriggered(
+      web_contents()->GetPrimaryMainFrame(),
       mojom::AdsViolation::kMobileAdDensityByHeightAbove30);
 
-  const base::TimeDelta kRenavigationDelay = base::TimeDelta::FromHours(2);
+  const base::TimeDelta kRenavigationDelay = base::Hours(2);
   test_clock->Advance(kRenavigationDelay);
-  ui_test_utils::NavigateToURL(browser(), url);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
-  EXPECT_TRUE(WasParsedScriptElementLoaded(web_contents()->GetMainFrame()));
+  EXPECT_TRUE(
+      WasParsedScriptElementLoaded(web_contents()->GetPrimaryMainFrame()));
   histogram_tester.ExpectBucketCount(
       kSubresourceFilterActionsHistogram,
       subresource_filter::SubresourceFilterAction::kUIShown, 0);
   histogram_tester.ExpectBucketCount(
       kAdsInterventionRecordedHistogram,
       static_cast<int>(mojom::AdsViolation::kMobileAdDensityByHeightAbove30),
-      1);
-  histogram_tester.ExpectBucketCount(
-      kTimeSinceAdsInterventionTriggeredHistogram, kRenavigationDelay.InHours(),
       1);
   entries = ukm_recorder.GetEntriesByName(
       ukm::builders::AdsIntervention_LastIntervention::kEntryName);
@@ -294,6 +289,7 @@ IN_PROC_BROWSER_TEST_F(AdsInterventionManagerTestWithoutEnforcement,
       entries.front(),
       ukm::builders::AdsIntervention_LastIntervention::kInterventionStatusName,
       static_cast<int>(AdsInterventionStatus::kWouldBlock));
+  ads_intervention_manager()->set_clock_for_testing(nullptr);
 }
 
 }  // namespace subresource_filter

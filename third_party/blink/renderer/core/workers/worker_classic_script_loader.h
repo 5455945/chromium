@@ -29,11 +29,11 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_WORKERS_WORKER_CLASSIC_SCRIPT_LOADER_H_
 
 #include <memory>
-#include "base/memory/scoped_refptr.h"
+
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "services/network/public/mojom/fetch_api.mojom-blink-forward.h"
-#include "services/network/public/mojom/ip_address_space.mojom-blink-forward.h"
 #include "services/network/public/mojom/url_loader_factory.mojom-blink.h"
+#include "third_party/blink/public/common/permissions_policy/document_policy.h"
 #include "third_party/blink/public/mojom/loader/resource_load_info_notifier.mojom-shared.h"
 #include "third_party/blink/public/platform/cross_variant_mojo_util.h"
 #include "third_party/blink/public/platform/web_url_request.h"
@@ -75,15 +75,15 @@ class CORE_EXPORT WorkerClassicScriptLoader final
                          network::mojom::RequestDestination);
 
   // Note that callbacks could be invoked before
-  // LoadTopLevelScriptAsynchronously() returns.
+  // `LoadTopLevelScriptAsynchronously()` returns.
   //
-  // |fetch_client_settings_object_fetcher| is different from
-  // ExecutionContext::Fetcher() in off-the-main-thread fetch.
-  // TODO(crbug.com/1064920): Remove |reject_coep_unsafe_none| and
-  // |blob_url_loader_factory| when PlzDedicatedWorker ships.
+  // `fetch_client_settings_object_fetcher` is different from
+  // `ExecutionContext::Fetcher()` in off-the-main-thread fetch.
+  // TODO(crbug.com/40123913): Remove `blob_url_loader_factory` now
+  // that PlzDedicatedWorker has shipped.
   //
-  // |worker_main_script_load_params| is valid for dedicated workers (when
-  // PlzDedicatedWorker is enabled) and shared workers.
+  // `worker_main_script_load_params` is valid for dedicated workers and shared
+  // workers.
   void LoadTopLevelScriptAsynchronously(
       ExecutionContext&,
       ResourceFetcher* fetch_client_settings_object_fetcher,
@@ -96,8 +96,6 @@ class CORE_EXPORT WorkerClassicScriptLoader final
       network::mojom::CredentialsMode,
       base::OnceClosure response_callback,
       base::OnceClosure finished_callback,
-      RejectCoepUnsafeNone reject_coep_unsafe_none =
-          RejectCoepUnsafeNone(false),
       mojo::PendingRemote<network::mojom::blink::URLLoaderFactory>
           blob_url_loader_factory = {});
 
@@ -108,10 +106,10 @@ class CORE_EXPORT WorkerClassicScriptLoader final
   String SourceText();
   const KURL& Url() const { return url_; }
   const KURL& ResponseURL() const;
+  TextEncoding GetScriptEncoding() const;
   bool Failed() const { return failed_; }
   bool Canceled() const { return canceled_; }
   uint64_t Identifier() const { return identifier_; }
-  int64_t AppCacheID() const { return app_cache_id_; }
 
   std::unique_ptr<Vector<uint8_t>> ReleaseCachedMetadata() {
     return std::move(cached_metadata_);
@@ -123,8 +121,8 @@ class CORE_EXPORT WorkerClassicScriptLoader final
 
   const String& GetReferrerPolicy() const { return referrer_policy_; }
 
-  network::mojom::IPAddressSpace ResponseAddressSpace() const {
-    return response_address_space_;
+  DocumentPolicy::DocumentPolicyBundle GetDocumentPolicy() const {
+    return document_policy_;
   }
 
   const Vector<String>* OriginTrialTokens() const {
@@ -134,16 +132,15 @@ class CORE_EXPORT WorkerClassicScriptLoader final
   // ThreadableLoaderClient
   void DidReceiveResponse(uint64_t /*identifier*/,
                           const ResourceResponse&) override;
-  void DidReceiveData(const char* data, unsigned data_length) override;
+  void DidReceiveData(base::span<const char> data) override;
   void DidReceiveCachedMetadata(mojo_base::BigBuffer) override;
   void DidFinishLoading(uint64_t identifier) override;
   void DidFail(uint64_t, const ResourceError&) override;
   void DidFailRedirectCheck(uint64_t) override;
 
   // WorkerMainScriptLoaderClient
-  // These will be called for dedicated workers (when PlzDedicatedWorker is
-  // enabled) and shared workers.
-  void DidReceiveData(base::span<const char> span) override;
+  // These will be called for dedicated workers and shared workers.
+  void DidReceiveDataWorkerMainScript(base::span<const char> span) override;
   void OnFinishedLoadingWorkerMainScript() override;
   void OnFailedLoadingWorkerMainScript() override;
 
@@ -154,6 +151,7 @@ class CORE_EXPORT WorkerClassicScriptLoader final
   void NotifyFinished();
 
   void ProcessContentSecurityPolicy(const ResourceResponse&);
+  void ProcessDocumentPolicy(const ResourceResponse&);
 
   // Callbacks for loadAsynchronously().
   base::OnceClosure response_callback_;
@@ -180,12 +178,11 @@ class CORE_EXPORT WorkerClassicScriptLoader final
   bool is_top_level_script_ = false;
 
   uint64_t identifier_ = 0;
-  int64_t app_cache_id_ = 0;
   std::unique_ptr<Vector<uint8_t>> cached_metadata_;
   Member<ContentSecurityPolicy> content_security_policy_;
-  network::mojom::IPAddressSpace response_address_space_;
   std::unique_ptr<Vector<String>> origin_trial_tokens_;
   String referrer_policy_;
+  DocumentPolicy::DocumentPolicyBundle document_policy_;
 
   Member<ResourceFetcher> fetch_client_settings_object_fetcher_;
 };

@@ -1,16 +1,22 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <jni.h>
-
 #include "base/android/apk_assets.h"
 
-#include "base/android/jni_array.h"
+#include <jni.h>
+
+#include <cstdint>
+#include <vector>
+
 #include "base/android/jni_string.h"
-#include "base/android/scoped_java_ref.h"
-#include "base/base_jni_headers/ApkAssets_jni.h"
+#include "base/debug/crash_logging.h"
+#include "base/debug/dump_without_crashing.h"
 #include "base/file_descriptor_store.h"
+#include "third_party/jni_zero/default_conversions.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "base/base_jni/ApkAssets_jni.h"
 
 namespace base {
 namespace android {
@@ -21,15 +27,13 @@ int OpenApkAsset(const std::string& file_path,
   // The AssetManager API of the NDK does not expose a method for accessing raw
   // resources :(
   JNIEnv* env = base::android::AttachCurrentThread();
-  ScopedJavaLocalRef<jlongArray> jarr =
-      Java_ApkAssets_open(env, ConvertUTF8ToJavaString(env, file_path),
-                          ConvertUTF8ToJavaString(env, split_name));
-  std::vector<jlong> results;
-  base::android::JavaLongArrayToLongVector(env, jarr, &results);
+  std::vector<int64_t> results =
+      Java_ApkAssets_open(env, file_path, split_name);
   CHECK_EQ(3U, results.size());
   int fd = static_cast<int>(results[0]);
   region->offset = results[1];
-  region->size = results[2];
+  // Not a checked_cast because open() may return -1.
+  region->size = static_cast<size_t>(results[2]);
   return fd;
 }
 
@@ -43,12 +47,25 @@ bool RegisterApkAssetWithFileDescriptorStore(const std::string& key,
   base::MemoryMappedFile::Region region =
       base::MemoryMappedFile::Region::kWholeFile;
   int asset_fd = OpenApkAsset(file_path.value(), &region);
-  if (asset_fd == -1)
+  if (asset_fd == -1) {
     return false;
+  }
   base::FileDescriptorStore::GetInstance().Set(key, base::ScopedFD(asset_fd),
                                                region);
   return true;
 }
 
+void DumpLastOpenApkAssetFailure() {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  std::string error = Java_ApkAssets_takeLastErrorString(env);
+  if (error.empty()) {
+    return;
+  }
+  SCOPED_CRASH_KEY_STRING256("base", "OpenApkAssetError", error);
+  base::debug::DumpWithoutCrashing();
+}
+
 }  // namespace android
 }  // namespace base
+
+DEFINE_JNI(ApkAssets)

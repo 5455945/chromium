@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,18 +11,18 @@ namespace content {
 
 class StubRenderWidgetHostOwnerDelegate : public RenderWidgetHostOwnerDelegate {
  public:
-  void RenderWidgetDidFirstVisuallyNonEmptyPaint() override {}
   void RenderWidgetGotFocus() override {}
   void RenderWidgetLostFocus() override {}
   void RenderWidgetDidForwardMouseEvent(
       const blink::WebMouseEvent& mouse_event) override {}
   bool MayRenderWidgetForwardKeyboardEvent(
-      const NativeWebKeyboardEvent& key_event) override;
-  bool ShouldContributePriorityToProcess() override;
+      const input::NativeWebKeyboardEvent& key_event) override;
   void SetBackgroundOpaque(bool opaque) override {}
   bool IsMainFrameActive() override;
-  bool IsNeverComposited() override;
   blink::web_pref::WebPreferences GetWebkitPreferencesForWidget() override;
+  void ZoomToFindInPageRect(const gfx::Rect& rect_to_zoom) override {}
+  void AnimateDoubleTapZoom(const gfx::Point& point,
+                            const gfx::Rect& rect) override {}
 };
 
 }  // namespace content

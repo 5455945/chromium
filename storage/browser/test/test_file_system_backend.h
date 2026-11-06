@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,8 +10,8 @@
 #include <memory>
 
 #include "base/files/file_path.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
+#include "components/file_access/scoped_file_access_delegate.h"
 #include "storage/browser/file_system/async_file_util_adapter.h"
 #include "storage/browser/file_system/file_system_backend.h"
 #include "storage/browser/file_system/task_runner_bound_observer_list.h"
@@ -34,6 +34,10 @@ class TestFileSystemBackend : public FileSystemBackend {
  public:
   TestFileSystemBackend(base::SequencedTaskRunner* task_runner,
                         const base::FilePath& base_path);
+
+  TestFileSystemBackend(const TestFileSystemBackend&) = delete;
+  TestFileSystemBackend& operator=(const TestFileSystemBackend&) = delete;
+
   ~TestFileSystemBackend() override;
 
   // FileSystemBackend implementation.
@@ -41,13 +45,14 @@ class TestFileSystemBackend : public FileSystemBackend {
   void Initialize(FileSystemContext* context) override;
   void ResolveURL(const FileSystemURL& url,
                   OpenFileSystemMode mode,
-                  OpenFileSystemCallback callback) override;
+                  ResolveURLCallback callback) override;
   AsyncFileUtil* GetAsyncFileUtil(FileSystemType type) override;
   WatcherManager* GetWatcherManager(FileSystemType type) override;
   CopyOrMoveFileValidatorFactory* GetCopyOrMoveFileValidatorFactory(
       FileSystemType type,
       base::File::Error* error_code) override;
-  FileSystemOperation* CreateFileSystemOperation(
+  std::unique_ptr<FileSystemOperation> CreateFileSystemOperation(
+      OperationType type,
       const FileSystemURL& url,
       FileSystemContext* context,
       base::File::Error* error_code) const override;
@@ -58,7 +63,9 @@ class TestFileSystemBackend : public FileSystemBackend {
       int64_t offset,
       int64_t max_bytes_to_read,
       const base::Time& expected_modification_time,
-      FileSystemContext* context) const override;
+      FileSystemContext* context,
+      file_access::ScopedFileAccessDelegate::RequestFilesAccessIOCallback
+          file_access) const override;
   std::unique_ptr<FileStreamWriter> CreateFileStreamWriter(
       const FileSystemURL& url,
       int64_t offset,
@@ -98,8 +105,6 @@ class TestFileSystemBackend : public FileSystemBackend {
   bool require_copy_or_move_validator_;
   std::unique_ptr<CopyOrMoveFileValidatorFactory>
       copy_or_move_file_validator_factory_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestFileSystemBackend);
 };
 
 }  // namespace storage

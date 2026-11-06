@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,25 +6,31 @@
 #define CHROME_BROWSER_EXTENSIONS_WEBSTORE_STANDALONE_INSTALLER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
-#include "chrome/browser/extensions/active_install_data.h"
+#include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "chrome/browser/extensions/extension_install_prompt.h"
-#include "chrome/browser/extensions/webstore_data_fetcher_delegate.h"
-#include "chrome/browser/extensions/webstore_install_helper.h"
-#include "chrome/browser/extensions/webstore_installer.h"
-#include "chrome/common/extensions/webstore_install_result.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_observer.h"
+#include "extensions/browser/active_install_data.h"
+#include "extensions/browser/cws_item_service.pb.h"
+#include "extensions/browser/webstore_data_fetcher_delegate.h"
+#include "extensions/browser/webstore_install_helper.h"
+#include "extensions/browser/webstore_install_result.h"
+#include "extensions/browser/webstore_installer.h"
+#include "extensions/buildflags/buildflags.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
-namespace base {
-class DictionaryValue;
-}
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 class Extension;
+struct InstallApproval;
 class ScopedActiveInstall;
 class WebstoreDataFetcher;
 
@@ -40,11 +46,10 @@ class WebstoreDataFetcher;
 class WebstoreStandaloneInstaller
     : public base::RefCountedThreadSafe<WebstoreStandaloneInstaller>,
       public WebstoreDataFetcherDelegate,
-      public WebstoreInstaller::Delegate,
-      public WebstoreInstallHelper::Delegate {
+      public ProfileObserver {
  public:
   // A callback for when the install process completes, successfully or not. If
-  // there was a failure, |success| will be false and |error| may contain a
+  // there was a failure, `success` will be false and `error` may contain a
   // developer-readable error message about why it failed.
   using Callback = base::OnceCallback<void(bool success,
                                            const std::string& error,
@@ -53,6 +58,11 @@ class WebstoreStandaloneInstaller
   WebstoreStandaloneInstaller(const std::string& webstore_item_id,
                               Profile* profile,
                               Callback callback);
+
+  WebstoreStandaloneInstaller(const WebstoreStandaloneInstaller&) = delete;
+  WebstoreStandaloneInstaller& operator=(const WebstoreStandaloneInstaller&) =
+      delete;
+
   void BeginInstall();
 
  protected:
@@ -95,20 +105,16 @@ class WebstoreStandaloneInstaller
   // extension's icon?
   virtual bool ShouldShowPostInstallUI() const = 0;
 
-  // Should pop up an "App installed" bubble after installation?
-  virtual bool ShouldShowAppInstalledBubble() const = 0;
-
   // In the very least this should return a dummy WebContents (required
   // by some calls even when no prompt or other UI is shown). A non-dummy
   // WebContents is required if the prompt returned by CreateInstallPromt()
   // contains a navigable link(s). Returned WebContents should correspond
-  // to |profile| passed into the constructor.
+  // to `profile` passed into the constructor.
   virtual content::WebContents* GetWebContents() const = 0;
 
   // Should return an installation prompt with desired properties or NULL if
   // no prompt should be shown.
-  virtual std::unique_ptr<ExtensionInstallPrompt::Prompt> CreateInstallPrompt()
-      const = 0;
+  virtual std::unique_ptr<InstallPromptData> CreateInstallPrompt() const = 0;
 
   // Will be called after the extension's manifest has been successfully parsed.
   // Subclasses can perform asynchronous checks at this point and call
@@ -119,13 +125,15 @@ class WebstoreStandaloneInstaller
 
   // Returns an install UI to be shown. By default, this returns an install UI
   // that is a transient child of the host window for GetWebContents().
-  virtual std::unique_ptr<ExtensionInstallPrompt> CreateInstallUI();
+  virtual std::unique_ptr<ExtensionInstallPrompt> CreateInstallUI(
+      std::unique_ptr<InstallPromptData> prompt);
 
   // Create an approval to pass installation parameters to the CrxInstaller.
-  virtual std::unique_ptr<WebstoreInstaller::Approval> CreateApproval() const;
+  virtual std::unique_ptr<InstallApproval> CreateApproval() const;
 
   // Called once the install prompt has finished.
-  virtual void OnInstallPromptDone(ExtensionInstallPrompt::Result result);
+  virtual void OnInstallPromptDone(
+      ExtensionInstallPrompt::DoneCallbackPayload payload);
 
   // Accessors to be used by subclasses.
   bool show_user_count() const { return show_user_count_; }
@@ -134,6 +142,9 @@ class WebstoreStandaloneInstaller
   }
   double average_rating() const { return average_rating_; }
   int rating_count() const { return rating_count_; }
+  const std::string& localized_rating_count() const {
+    return localized_rating_count_;
+  }
   void set_install_source(WebstoreInstaller::InstallSource source) {
     install_source_ = source;
   }
@@ -142,7 +153,7 @@ class WebstoreStandaloneInstaller
   }
   Profile* profile() const { return profile_; }
   const std::string& id() const { return id_; }
-  const base::DictionaryValue* manifest() const { return manifest_.get(); }
+  const base::DictValue& manifest() const { return manifest_.value(); }
   const Extension* localized_extension_for_display() const {
     return localized_extension_for_display_.get();
   }
@@ -151,12 +162,14 @@ class WebstoreStandaloneInstaller
   friend class base::RefCountedThreadSafe<WebstoreStandaloneInstaller>;
 
   // Several delegate/client interface implementations follow. The normal flow
-  // (for successful installs) is:
+  // (for successful installs) with the item snippets API is:
   //
-  // 1. BeginInstall: starts the fetch of data from the webstore
-  // 2. OnURLFetchComplete: starts the parsing of data from the webstore
-  // 3. OnWebstoreResponseParseSuccess: starts the parsing of the manifest and
-  //    fetching of icon data.
+  // 1. BeginInstall: starts the fetch of data from the webstore.
+  // 2. WebstoreDataFetcher::OnFetchItemSnippetResponseReceived: starts the
+  //    parsing of data from the webstore into a FetchItemSnippetResponse
+  //    protobuf.
+  // 3. OnFetchItemSnippetParseSuccess: starts the parsing of the
+  //    manifest and fetching of icon data.
   // 4. OnWebstoreParseSuccess: shows the install UI
   // 5. InstallUIProceed: initiates the .crx download/install
   //
@@ -165,42 +178,41 @@ class WebstoreStandaloneInstaller
 
   // WebstoreDataFetcherDelegate interface implementation.
   void OnWebstoreRequestFailure(const std::string& extension_id) override;
-
-  void OnWebstoreResponseParseSuccess(
+  void OnFetchItemSnippetParseSuccess(
       const std::string& extension_id,
-      std::unique_ptr<base::DictionaryValue> webstore_data) override;
-
+      FetchItemSnippetResponse item_snippet) override;
   void OnWebstoreResponseParseFailure(const std::string& extension_id,
                                       const std::string& error) override;
 
-  // WebstoreInstallHelper::Delegate interface implementation.
-  void OnWebstoreParseSuccess(
-      const std::string& id,
-      const SkBitmap& icon,
-      std::unique_ptr<base::DictionaryValue> parsed_manifest) override;
-  void OnWebstoreParseFailure(const std::string& id,
-                              InstallHelperResultCode result_code,
-                              const std::string& error_message) override;
+  void OnWebstoreParseFinished(WebstoreParseResult result);
 
-  // WebstoreInstaller::Delegate interface implementation.
-  void OnExtensionInstallSuccess(const std::string& id) override;
-  void OnExtensionInstallFailure(
-      const std::string& id,
-      const std::string& error,
-      WebstoreInstaller::FailureReason reason) override;
+  // WebstoreInstaller::Delegate callbacks.
+  void OnExtensionInstallSuccess(const std::string& id);
+  void OnExtensionInstallFailure(const std::string& id,
+                                 const std::string& error,
+                                 WebstoreInstaller::FailureReason reason);
+
+  // ProfileObserver
+  void OnProfileWillBeDestroyed(Profile* profile) override;
 
   void ShowInstallUI();
   void OnWebStoreDataFetcherDone();
 
+  // Called when install either completes or aborts to clean up internal
+  // state and release the added reference from BeginInstall.
+  void CleanUp();
+
   // Input configuration.
   std::string id_;
   Callback callback_;
-  Profile* profile_;
-  WebstoreInstaller::InstallSource install_source_;
+  raw_ptr<Profile> profile_;
+  base::ScopedObservation<Profile, ProfileObserver> observation_{this};
+  WebstoreInstaller::InstallSource install_source_{
+      WebstoreInstaller::INSTALL_SOURCE_INLINE};
 
   // Installation dialog and its underlying prompt.
   std::unique_ptr<ExtensionInstallPrompt> install_ui_;
-  std::unique_ptr<ExtensionInstallPrompt::Prompt> install_prompt_;
+  std::unique_ptr<InstallPromptData> install_prompt_;
 
   // For fetching webstore JSON data.
   std::unique_ptr<WebstoreDataFetcher> webstore_data_fetcher_;
@@ -208,12 +220,12 @@ class WebstoreStandaloneInstaller
   // Extracted from the webstore JSON data response.
   std::string localized_name_;
   std::string localized_description_;
-  bool show_user_count_;
+  bool show_user_count_{true};
   std::string localized_user_count_;
-  double average_rating_;
-  int rating_count_;
-  std::unique_ptr<base::DictionaryValue> webstore_data_;
-  std::unique_ptr<base::DictionaryValue> manifest_;
+  double average_rating_{0.0};
+  std::string localized_rating_count_;
+  int rating_count_{0};
+  std::optional<base::DictValue> manifest_;
   SkBitmap icon_;
 
   // Active install registered with the InstallTracker.
@@ -223,7 +235,7 @@ class WebstoreStandaloneInstaller
   // the implementor returns a non-NULL in CreateInstallPrompt()).
   scoped_refptr<Extension> localized_extension_for_display_;
 
-  DISALLOW_IMPLICIT_CONSTRUCTORS(WebstoreStandaloneInstaller);
+  base::WeakPtrFactory<WebstoreStandaloneInstaller> weak_ptr_factory_{this};
 };
 
 }  // namespace extensions

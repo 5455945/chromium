@@ -1,11 +1,13 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_BASE_IDLE_IDLE_H_
 #define UI_BASE_IDLE_IDLE_H_
 
+#include "base/callback_list.h"
 #include "base/component_export.h"
+#include "base/functional/callback.h"
 #include "build/build_config.h"
 
 namespace ui {
@@ -19,7 +21,7 @@ enum IdleState {
 };
 
 // For MacOSX, InitIdleMonitor needs to be called first to setup the monitor.
-#if defined(OS_APPLE)
+#if BUILDFLAG(IS_APPLE)
 COMPONENT_EXPORT(UI_BASE_IDLE) void InitIdleMonitor();
 #endif
 
@@ -32,6 +34,12 @@ COMPONENT_EXPORT(UI_BASE_IDLE) int CalculateIdleTime();
 
 // Checks synchronously if Idle state is IDLE_STATE_LOCKED.
 COMPONENT_EXPORT(UI_BASE_IDLE) bool CheckIdleStateIsLocked();
+
+// Adds a callback that will be run when the screen lock state changes.
+// The returned subscription can be destroyed to remove the callback.
+COMPONENT_EXPORT(UI_BASE_IDLE)
+base::CallbackListSubscription AddScreenLockCallback(
+    base::RepeatingCallback<void(bool)> callback);
 
 }  // namespace ui
 

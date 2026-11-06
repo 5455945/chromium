@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,15 +8,18 @@
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/check.h"
+#include "base/feature_list.h"
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/metrics/histogram.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/threading/thread_checker.h"
+#include "components/leveldb_proto/internal/leveldb_proto_feature_list.h"
+#include "components/leveldb_proto/public/proto_database.h"
 #include "third_party/leveldatabase/env_chromium.h"
 #include "third_party/leveldatabase/leveldb_chrome.h"
 #include "third_party/leveldatabase/src/include/leveldb/cache.h"
@@ -31,23 +34,29 @@ namespace leveldb_proto {
 
 namespace {
 
-// Covers 8MB block cache,
-const int kMaxApproxMemoryUseMB = 16;
-
-}  // namespace
-
 bool PrefixStopCallback(const std::string& prefix, const std::string& key) {
   return base::StartsWith(key, prefix, base::CompareCase::SENSITIVE);
 }
 
-LevelDB::LevelDB(const char* client_name) {
-  // Used in lieu of UMA_HISTOGRAM_ENUMERATION because the histogram name is
-  // not a constant.
-  approx_memtable_mem_histogram_ = base::LinearHistogram::FactoryGet(
-      std::string("LevelDB.ApproximateMemTableMemoryUse.") + client_name, 1,
-      kMaxApproxMemoryUseMB * 1048576, kMaxApproxMemoryUseMB * 4,
-      base::Histogram::kUmaTargetedHistogramFlag);
+}  // namespace
+
+Enums::KeyIteratorAction LevelDB::ComputeIteratorAction(
+    const KeyFilter& while_callback,
+    const KeyFilter& filter,
+    const std::string& key) {
+  DCHECK(!while_callback.is_null());
+  if (while_callback.is_null())
+    return Enums::kSkipAndStop;
+  if (!while_callback.Run(key))
+    return Enums::kSkipAndStop;
+  if (filter.is_null())
+    return Enums::kLoadAndContinue;
+  if (filter.Run(key))
+    return Enums::kLoadAndContinue;
+  return Enums::kSkipAndContinue;
 }
+
+LevelDB::LevelDB(const char* client_name) {}
 
 LevelDB::~LevelDB() {
   DFAKE_SCOPED_LOCK(thread_checker_);
@@ -85,18 +94,6 @@ leveldb::Status LevelDB::Init(const base::FilePath& database_dir,
   }
 
   if (status.ok()) {
-    if (!in_mem) {
-      // Record the approximate memory usage of this DB right after init.
-      // This should just be the size of the MemTable since we haven't done any
-      // reads/writes and the block cache should be empty.
-      uint64_t approx_mem = 0;
-      std::string usage_string;
-      if (GetApproximateMemoryUse(&approx_mem)) {
-        approx_memtable_mem_histogram_->Add(
-            approx_mem -
-            leveldb_chrome::GetSharedBrowserBlockCache()->TotalCharge());
-      }
-    }
     // Don't log warnings when result is InvalidArgument and create_if_missing
     // is false, as this means the DB file doesn't exist and the client didn't
     // ask to create a new one.
@@ -124,7 +121,7 @@ bool LevelDB::Save(const base::StringPairs& entries_to_save,
     updates.Delete(leveldb::Slice(key));
 
   leveldb::WriteOptions options;
-  options.sync = true;
+  options.sync = !base::FeatureList::IsEnabled(kLevelDBProtoAsyncWrite);
 
   *status = db_->Write(options, &updates);
   if (status->ok())
@@ -171,7 +168,7 @@ bool LevelDB::UpdateWithRemoveFilter(const base::StringPairs& entries_to_save,
   }
 
   leveldb::WriteOptions write_options;
-  write_options.sync = true;
+  write_options.sync = !base::FeatureList::IsEnabled(kLevelDBProtoAsyncWrite);
   *status = db_->Write(write_options, &updates);
   if (status->ok())
     return true;
@@ -228,32 +225,41 @@ bool LevelDB::LoadKeysAndEntriesWithFilter(
 }
 
 bool LevelDB::LoadKeysAndEntriesWhile(
+    std::map<std::string, std::string>* keys_entries,
+    const leveldb::ReadOptions& options,
+    const std::string& start_key,
+    const KeyIteratorController& controller) {
+  DFAKE_SCOPED_LOCK(thread_checker_);
+  if (!db_)
+    return false;
+  DCHECK(!controller.is_null());
+
+  std::unique_ptr<leveldb::Iterator> db_iterator(db_->NewIterator(options));
+
+  for (db_iterator->Seek(leveldb::Slice(start_key)); db_iterator->Valid();
+       db_iterator->Next()) {
+    const std::string key = db_iterator->key().ToString();
+    const Enums::KeyIteratorAction action = controller.Run(key);
+    if (action == Enums::kLoadAndContinue || action == Enums::kLoadAndStop) {
+      keys_entries->insert(
+          std::make_pair(key, db_iterator->value().ToString()));
+    }
+    if (action == Enums::kLoadAndStop || action == Enums::kSkipAndStop)
+      break;
+  }
+  return true;
+}
+
+bool LevelDB::LoadKeysAndEntriesWhile(
     const KeyFilter& filter,
     std::map<std::string, std::string>* keys_entries,
     const leveldb::ReadOptions& options,
     const std::string& start_key,
     const KeyFilter& while_callback) {
-  DFAKE_SCOPED_LOCK(thread_checker_);
-  if (!db_)
-    return false;
-
-  std::unique_ptr<leveldb::Iterator> db_iterator(db_->NewIterator(options));
-  leveldb::Slice start(start_key);
-  for (db_iterator->Seek(start);
-       db_iterator->Valid() &&
-       while_callback.Run(db_iterator->key().ToString());
-       db_iterator->Next()) {
-    leveldb::Slice key_slice = db_iterator->key();
-    std::string key_slice_str(key_slice.data(), key_slice.size());
-    if (!filter.is_null() && !filter.Run(key_slice_str)) {
-      continue;
-    }
-
-    leveldb::Slice value_slice = db_iterator->value();
-    keys_entries->insert(std::make_pair(
-        key_slice_str, std::string(value_slice.data(), value_slice.size())));
-  }
-  return true;
+  return LoadKeysAndEntriesWhile(
+      keys_entries, options, start_key,
+      base::BindRepeating(LevelDB::ComputeIteratorAction, while_callback,
+                          filter));
 }
 
 bool LevelDB::LoadKeys(std::vector<std::string>* keys) {
@@ -307,12 +313,6 @@ leveldb::Status LevelDB::Destroy() {
   if (!status.ok())
     LOG(WARNING) << "Unable to destroy " << path << ": " << status.ToString();
   return status;
-}
-
-bool LevelDB::GetApproximateMemoryUse(uint64_t* approx_mem) {
-  std::string usage_string;
-  return (db_->GetProperty("leveldb.approximate-memory-usage", &usage_string) &&
-          base::StringToUint64(usage_string, approx_mem));
 }
 
 }  // namespace leveldb_proto

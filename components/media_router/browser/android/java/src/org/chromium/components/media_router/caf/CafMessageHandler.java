@@ -1,9 +1,10 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.media_router.caf;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
 import static org.chromium.components.media_router.caf.CastUtils.isSameOrigin;
 
 import android.os.Handler;
@@ -22,6 +23,8 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import org.chromium.base.Log;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.components.media_router.CastRequestIdGenerator;
 import org.chromium.components.media_router.CastSessionUtil;
 import org.chromium.components.media_router.ClientRecord;
@@ -31,7 +34,6 @@ import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
@@ -41,6 +43,8 @@ import java.util.Queue;
  * dispatch the messages accordingly. The handler talks to the Cast SDK via CastSession, and
  * talks to the pages via the media router.
  */
+@NullMarked
+@SuppressWarnings("NullAway") // https://crbug.com/401584051
 public class CafMessageHandler {
     private static final String TAG = "CafMR";
 
@@ -48,45 +52,43 @@ public class CafMessageHandler {
     static final int VOID_SEQUENCE_NUMBER = -1;
     static final int TIMEOUT_IMMEDIATE = 0;
 
-    private static final String MEDIA_MESSAGE_TYPES[] = {
-            "PLAY",
-            "LOAD",
-            "PAUSE",
-            "SEEK",
-            "STOP_MEDIA",
-            "MEDIA_SET_VOLUME",
-            "MEDIA_GET_STATUS",
-            "EDIT_TRACKS_INFO",
-            "QUEUE_LOAD",
-            "QUEUE_INSERT",
-            "QUEUE_UPDATE",
-            "QUEUE_REMOVE",
-            "QUEUE_REORDER",
+    private static final String[] MEDIA_MESSAGE_TYPES = {
+        "PLAY",
+        "LOAD",
+        "PAUSE",
+        "SEEK",
+        "STOP_MEDIA",
+        "MEDIA_SET_VOLUME",
+        "MEDIA_GET_STATUS",
+        "EDIT_TRACKS_INFO",
+        "QUEUE_LOAD",
+        "QUEUE_INSERT",
+        "QUEUE_UPDATE",
+        "QUEUE_REMOVE",
+        "QUEUE_REORDER",
     };
 
-    private static final String MEDIA_SUPPORTED_COMMANDS[] = {
-            "pause",
-            "seek",
-            "stream_volume",
-            "stream_mute",
+    private static final String[] MEDIA_SUPPORTED_COMMANDS = {
+        "pause", "seek", "stream_volume", "stream_mute",
     };
-
-    // Lock used to lazy initialize sMediaOverloadedMessageTypes.
-    private static final Object INIT_LOCK = new Object();
 
     // Map associating types that have a different names outside of the media namespace and inside.
     // In other words, some types are sent as MEDIA_FOO or FOO_MEDIA by the client by the Cast
     // expect them to be named FOO. The reason being that FOO might exist in multiple namespaces
     // but the client isn't aware of namespacing.
-    private static Map<String, String> sMediaOverloadedMessageTypes;
+    private static final Map<String, String> sMediaOverloadedMessageTypes =
+            Map.of(
+                    "STOP_MEDIA", "STOP", //
+                    "MEDIA_SET_VOLUME", "SET_VOLUME", //
+                    "MEDIA_GET_STATUS", "GET_STATUS");
 
-    private SparseArray<RequestRecord> mRequests;
-    private ArrayMap<String, Queue<Integer>> mStopRequests;
-    private Queue<RequestRecord> mVolumeRequests;
+    private final SparseArray<RequestRecord> mRequests;
+    private final ArrayMap<String, Queue<Integer>> mStopRequests;
+    private final Queue<RequestRecord> mVolumeRequests;
 
     private final CastSessionController mSessionController;
     private final CafMediaRouteProvider mRouteProvider;
-    private Handler mHandler;
+    private final Handler mHandler;
 
     /**
      * The record for client requests. {@link CafMessageHandler} uses this class to manage the
@@ -104,49 +106,36 @@ public class CafMessageHandler {
 
     /**
      * Initializes a new {@link CafMessageHandler} instance.
-     * @param session  The {@link CastSession} for communicating with the Cast SDK.
+     *
+     * @param session The {@link CastSession} for communicating with the Cast SDK.
      * @param provider The {@link CafMediaRouteProvider} for communicating with the page.
      */
     public CafMessageHandler(
             CafMediaRouteProvider provider, CastSessionController sessionController) {
         mRouteProvider = provider;
-        mRequests = new SparseArray<RequestRecord>();
-        mStopRequests = new ArrayMap<String, Queue<Integer>>();
+        mRequests = new SparseArray<>();
+        mStopRequests = new ArrayMap<>();
         mSessionController = sessionController;
-        mVolumeRequests = new ArrayDeque<RequestRecord>();
+        mVolumeRequests = new ArrayDeque<>();
         mHandler = new Handler();
-
-        synchronized (INIT_LOCK) {
-            if (sMediaOverloadedMessageTypes == null) {
-                sMediaOverloadedMessageTypes = new HashMap<String, String>();
-                sMediaOverloadedMessageTypes.put("STOP_MEDIA", "STOP");
-                sMediaOverloadedMessageTypes.put("MEDIA_SET_VOLUME", "SET_VOLUME");
-                sMediaOverloadedMessageTypes.put("MEDIA_GET_STATUS", "GET_STATUS");
-            }
-        }
     }
 
-    @VisibleForTesting
     static String[] getMediaMessageTypesForTest() {
         return MEDIA_MESSAGE_TYPES;
     }
 
-    @VisibleForTesting
     static Map<String, String> getMediaOverloadedMessageTypesForTest() {
         return sMediaOverloadedMessageTypes;
     }
 
-    @VisibleForTesting
     SparseArray<RequestRecord> getRequestsForTest() {
         return mRequests;
     }
 
-    @VisibleForTesting
     Queue<RequestRecord> getVolumeRequestsForTest() {
         return mVolumeRequests;
     }
 
-    @VisibleForTesting
     Map<String, Queue<Integer>> getStopRequestsForTest() {
         return mStopRequests;
     }
@@ -190,7 +179,7 @@ public class CafMessageHandler {
             }
             return handleSessionMessageFromClient(jsonMessage);
         } catch (JSONException e) {
-            Log.e(TAG, "JSONException while handling internal message: " + e);
+            Log.e(TAG, "JSONException while handling internal message:", e);
         }
         return false;
     }
@@ -228,6 +217,7 @@ public class CafMessageHandler {
         if (clientId == null || !mSessionController.isConnected()) return false;
 
         String sessionId = jsonMessage.getString("message");
+        assumeNonNull(mSessionController.getSessionId());
         if (!mSessionController.getSessionId().equals(sessionId)) return false;
 
         ClientRecord currentClient = mRouteProvider.getClientIdToRecords().get(clientId);
@@ -341,10 +331,12 @@ public class CafMessageHandler {
         return true;
     }
 
-    boolean handleVolumeMessage(JSONObject volumeMessage, final String clientId,
-            final int sequenceNumber) throws JSONException {
+    boolean handleVolumeMessage(
+            JSONObject volumeMessage, final String clientId, final int sequenceNumber)
+            throws JSONException {
         if (volumeMessage == null) return false;
         if (!mSessionController.isConnected()) return false;
+        assumeNonNull(mSessionController.getSession());
         boolean shouldWaitForVolumeChange = false;
         try {
             if (!volumeMessage.isNull("muted")) {
@@ -365,7 +357,7 @@ public class CafMessageHandler {
                 }
             }
         } catch (IOException | IllegalStateException e) {
-            Log.e(TAG, "Failed to send volume command: " + e);
+            Log.e(TAG, "Failed to send volume command:", e);
             return false;
         }
 
@@ -380,12 +372,7 @@ public class CafMessageHandler {
         } else {
             // It's usually bad to have request and response on the same call stack so post the
             // response to the Android message loop.
-            mHandler.post(new Runnable() {
-                @Override
-                public void run() {
-                    onVolumeChanged(clientId, sequenceNumber);
-                }
-            });
+            mHandler.post(() -> onVolumeChanged(clientId, sequenceNumber));
         }
         return true;
     }
@@ -394,7 +381,7 @@ public class CafMessageHandler {
     void handleStopMessage(String clientId, int sequenceNumber) {
         Queue<Integer> sequenceNumbersForClient = mStopRequests.get(clientId);
         if (sequenceNumbersForClient == null) {
-            sequenceNumbersForClient = new ArrayDeque<Integer>();
+            sequenceNumbersForClient = new ArrayDeque<>();
             mStopRequests.put(clientId, sequenceNumbersForClient);
         }
         sequenceNumbersForClient.add(sequenceNumber);
@@ -425,8 +412,8 @@ public class CafMessageHandler {
 
         JSONObject jsonAppMessageWrapper = jsonMessage.getJSONObject("message");
 
-        if (!mSessionController.getSessionId().equals(
-                    jsonAppMessageWrapper.getString("sessionId"))) {
+        if (!assumeNonNull(mSessionController.getSessionId())
+                .equals(jsonAppMessageWrapper.getString("sessionId"))) {
             return false;
         }
 
@@ -450,8 +437,12 @@ public class CafMessageHandler {
     }
 
     @VisibleForTesting
-    boolean sendJsonCastMessage(JSONObject message, final String namespace, final String clientId,
-            final int sequenceNumber) throws JSONException {
+    boolean sendJsonCastMessage(
+            JSONObject message,
+            final String namespace,
+            final String clientId,
+            final int sequenceNumber)
+            throws JSONException {
         if (!mSessionController.isConnected()) return false;
 
         removeNullFields(message);
@@ -508,7 +499,7 @@ public class CafMessageHandler {
      * @param request The information about the client and the sequence number to respond with.
      */
     @VisibleForTesting
-    void onMediaMessage(String message, RequestRecord request) {
+    void onMediaMessage(String message, @Nullable RequestRecord request) {
         if (isMediaStatusMessage(message)) {
             // MEDIA_STATUS needs to be sent to all the clients.
             for (String clientId : mRouteProvider.getClientIdToRecords().keySet()) {
@@ -530,14 +521,17 @@ public class CafMessageHandler {
      * @param request The information about the client and the sequence number to respond with.
      */
     @VisibleForTesting
-    void onAppMessage(String message, String namespace, RequestRecord request) {
+    void onAppMessage(String message, String namespace, @Nullable RequestRecord request) {
         try {
             JSONObject jsonMessage = new JSONObject();
             jsonMessage.put("sessionId", mSessionController.getSessionId());
             jsonMessage.put("namespaceName", namespace);
             jsonMessage.put("message", message);
             if (request != null) {
-                sendEnclosedMessageToClient(request.clientId, "app_message", jsonMessage.toString(),
+                sendEnclosedMessageToClient(
+                        request.clientId,
+                        "app_message",
+                        jsonMessage.toString(),
                         request.sequenceNumber);
             } else {
                 broadcastClientMessage("app_message", jsonMessage.toString());
@@ -547,21 +541,25 @@ public class CafMessageHandler {
         }
     }
 
-    /**
-     * Notifies the session has stopped to all requesting clients.
-     */
+    /** Notifies the session has stopped to all requesting clients. */
     public void onSessionEnded() {
         for (String clientId : mRouteProvider.getClientIdToRecords().keySet()) {
             Queue<Integer> sequenceNumbersForClient = mStopRequests.get(clientId);
             if (sequenceNumbersForClient == null) {
-                sendEnclosedMessageToClient(clientId, "remove_session",
-                        mSessionController.getSessionId(), VOID_SEQUENCE_NUMBER);
+                sendEnclosedMessageToClient(
+                        clientId,
+                        "remove_session",
+                        mSessionController.getSessionId(),
+                        VOID_SEQUENCE_NUMBER);
                 continue;
             }
 
             for (int sequenceNumber : sequenceNumbersForClient) {
-                sendEnclosedMessageToClient(clientId, "remove_session",
-                        mSessionController.getSessionId(), sequenceNumber);
+                sendEnclosedMessageToClient(
+                        clientId,
+                        "remove_session",
+                        mSessionController.getSessionId(),
+                        sequenceNumber);
             }
             mStopRequests.remove(clientId);
         }
@@ -631,14 +629,14 @@ public class CafMessageHandler {
      * @param sequenceNumber The sequence number for matching requesting and responding messages.
      */
     public void sendEnclosedMessageToClient(
-            String clientId, String type, String message, int sequenceNumber) {
+            String clientId, String type, @Nullable String message, int sequenceNumber) {
         mRouteProvider.sendMessageToClient(
                 clientId, buildEnclosedClientMessage(type, message, clientId, sequenceNumber));
     }
 
     @VisibleForTesting
     String buildEnclosedClientMessage(
-            String type, String message, String clientId, int sequenceNumber) {
+            String type, @Nullable String message, String clientId, int sequenceNumber) {
         JSONObject json = new JSONObject();
         try {
             json.put("type", type);
@@ -648,7 +646,8 @@ public class CafMessageHandler {
 
             // TODO(mlamouri): we should have a more reliable way to handle string, null and Object
             // messages.
-            if (message == null || "remove_session".equals(type)
+            if (message == null
+                    || "remove_session".equals(type)
                     || "disconnect_session".equals(type)) {
                 json.put("message", message);
             } else {
@@ -660,17 +659,16 @@ public class CafMessageHandler {
                 json.put("message", jsonMessage);
             }
         } catch (JSONException e) {
-            Log.e(TAG, "Failed to build the reply: " + e);
+            Log.e(TAG, "Failed to build the reply:", e);
         }
 
         return json.toString();
     }
 
-    /**
-     * @return A message containing the information of the {@link CastSession}.
-     */
+    /** @return A message containing the information of the {@link CastSession}. */
     public String buildSessionMessage() {
         if (!mSessionController.isConnected()) return "{}";
+        assumeNonNull(mSessionController.getSession());
 
         try {
             // "volume" is a part of "receiver" initialized below.
@@ -681,8 +679,10 @@ public class CafMessageHandler {
             // "receiver" is a part of "message" initialized below.
             JSONObject jsonReceiver = new JSONObject();
             jsonReceiver.put(
-                    "label", mSessionController.getSession().getCastDevice().getDeviceId());
-            jsonReceiver.put("friendlyName",
+                    "label",
+                    assumeNonNull(mSessionController.getSession().getCastDevice()).getDeviceId());
+            jsonReceiver.put(
+                    "friendlyName",
                     mSessionController.getSession().getCastDevice().getFriendlyName());
             jsonReceiver.put("capabilities", toJSONArray(mSessionController.getCapabilities()));
             jsonReceiver.put("volume", jsonVolume);
@@ -712,10 +712,14 @@ public class CafMessageHandler {
             if (applicationMetadata != null) {
                 jsonMessage.put("appId", applicationMetadata.getApplicationId());
             } else {
-                jsonMessage.put("appId",
-                        mSessionController.getRouteCreationInfo().source.getApplicationId());
+                jsonMessage.put(
+                        "appId",
+                        assumeNonNull(mSessionController.getRouteCreationInfo())
+                                .getMediaSource()
+                                .getApplicationId());
             }
-            jsonMessage.put("displayName",
+            jsonMessage.put(
+                    "displayName",
                     mSessionController.getSession().getCastDevice().getFriendlyName());
 
             return jsonMessage.toString();
@@ -728,9 +732,7 @@ public class CafMessageHandler {
     /////////////////////////////////////////////////////////////////////////////////////////////
     // Utility functions
 
-    /**
-     * Modifies the received MediaStatus message to match the format expected by the client.
-     */
+    /** Modifies the received MediaStatus message to match the format expected by the client. */
     private void sanitizeMediaStatusMessage(JSONObject object) throws JSONException {
         object.put("sessionId", mSessionController.getSessionId());
 
@@ -754,15 +756,12 @@ public class CafMessageHandler {
 
     /**
      * Remove 'null' fields from a JSONObject. This method calls itself recursively until all the
-     * fields have been looked at.
-     * TODO(mlamouri): move to some util class?
+     * fields have been looked at. TODO(mlamouri): move to some util class?
      */
     private static void removeNullFields(Object object) throws JSONException {
-        if (object instanceof JSONArray) {
-            JSONArray array = (JSONArray) object;
+        if (object instanceof JSONArray array) {
             for (int i = 0; i < array.length(); ++i) removeNullFields(array.get(i));
-        } else if (object instanceof JSONObject) {
-            JSONObject json = (JSONObject) object;
+        } else if (object instanceof JSONObject json) {
             JSONArray names = json.names();
             if (names == null) return;
             for (int i = 0; i < names.length(); ++i) {
@@ -797,6 +796,7 @@ public class CafMessageHandler {
     boolean sendStringCastMessage(
             String message, String namespace, String clientId, int sequenceNumber) {
         if (!mSessionController.isConnected()) return false;
+        assumeNonNull(mSessionController.getSession());
 
         PendingResult<Status> pendingResult =
                 mSessionController.getSession().sendMessage(namespace, message);
@@ -817,7 +817,7 @@ public class CafMessageHandler {
         if (!result.isSuccess()) {
             // TODO(avayvod): should actually report back to the page.
             // See https://crbug.com/550445.
-            Log.e(TAG, "Failed to send the message: " + result);
+            Log.e(TAG, "Failed to send the message: %s", result);
             return;
         }
 

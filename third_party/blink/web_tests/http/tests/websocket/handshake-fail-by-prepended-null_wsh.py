@@ -21,8 +21,8 @@
 
 from __future__ import division
 import time
-from mod_pywebsocket import stream
-from mod_pywebsocket.handshake.hybi import compute_accept_from_unicode
+from pywebsocket3 import stream
+from pywebsocket3.handshake.hybi import compute_accept_from_unicode
 
 
 def web_socket_do_extra_handshake(request):
@@ -34,11 +34,13 @@ def web_socket_do_extra_handshake(request):
     frame = stream.create_text_frame('\0Frame-contains-thirty-two-bytes')
 
     msg = frame
-    msg += (b'HTTP/1.1 101 Switching Protocols\r\n'
-            b'Upgrade: websocket\r\n'
-            b'Connection: Upgrade\r\n'
-            b'Sec-WebSocket-Accept: %s\r\n'
-            b'\r\n') % compute_accept_from_unicode(request.headers_in['Sec-WebSocket-Key'])
+    msg += (
+        b'HTTP/1.1 101 Switching Protocols\r\n'
+        b'Upgrade: websocket\r\n'
+        b'Connection: Upgrade\r\n'
+        b'Sec-WebSocket-Accept: %s\r\n'
+        b'\r\n'
+    ) % compute_accept_from_unicode(request.headers_in['Sec-WebSocket-Key'])
     request.connection.write(msg)
     # continue writing data until the client disconnects
     while True:

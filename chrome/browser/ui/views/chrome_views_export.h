@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,11 +19,7 @@
 
 #else  // !defined(WIN32)
 
-#if defined(CHROME_VIEWS_IMPLEMENTATION)
 #define CHROME_VIEWS_EXPORT __attribute__((visibility("default")))
-#else
-#define CHROME_VIEWS_EXPORT
-#endif
 
 #endif  // defined(WIN32)
 

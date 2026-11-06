@@ -1,15 +1,14 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/chrome_resource_bundle_helper.h"
 
-#include "base/files/file_util.h"
+#include "base/command_line.h"
 #include "base/path_service.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/metrics/chrome_feature_list_creator.h"
 #include "chrome/browser/prefs/chrome_command_line_pref_store.h"
 #include "chrome/browser/prefs/chrome_pref_service_factory.h"
@@ -22,16 +21,16 @@
 #include "extensions/buildflags/buildflags.h"
 #include "ui/base/resource/resource_bundle.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include "ui/base/resource/resource_bundle_android.h"
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
-#include "chrome/common/pref_names.h"
 #endif
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "extensions/common/extension_l10n_util.h"
 #endif
 
@@ -41,13 +40,13 @@ extern void InitializeLocalState(
     ChromeFeatureListCreator* chrome_feature_list_creator) {
   TRACE_EVENT0("startup", "ChromeBrowserMainParts::InitializeLocalState");
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-  if (command_line->HasSwitch(chromeos::switches::kLoginManager)) {
+  if (command_line->HasSwitch(ash::switches::kLoginManager)) {
     PrefService* local_state = chrome_feature_list_creator->local_state();
-    DCHECK(local_state);
+    CHECK(local_state, base::NotFatalUntil::M162);
 
-    std::string owner_locale = local_state->GetString(prefs::kOwnerLocale);
+    std::string owner_locale = local_state->GetString(ash::prefs::kOwnerLocale);
     // Ensure that we start with owner's locale.
     if (!owner_locale.empty() &&
         local_state->GetString(language::prefs::kApplicationLocale) !=
@@ -57,27 +56,22 @@ extern void InitializeLocalState(
       local_state->SetString(language::prefs::kApplicationLocale, owner_locale);
     }
   }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
 // Initializes the shared instance of ResourceBundle and returns the application
 // locale. An empty |actual_locale| value indicates failure.
 std::string InitResourceBundleAndDetermineLocale(PrefService* local_state,
                                                  bool is_running_tests) {
-#if defined(OS_ANDROID)
-  // In order for SetLoadSecondaryLocalePaks() to work ResourceBundle must
-  // not have been created yet.
-  DCHECK(!ui::ResourceBundle::HasSharedInstance());
-  // Auto-detect based on en-US whether secondary locale .pak files exist.
-  bool in_split = false;
-  bool log_error = false;
-  ui::SetLoadSecondaryLocalePaks(
-      !ui::GetPathForAndroidLocalePakWithinApk("en-US", in_split, log_error)
-           .empty());
+#if BUILDFLAG(IS_ANDROID)
+  // In order for DetectAndSetLoadNonWebViewLocalePaks() to work ResourceBundle
+  // must not have been created yet.
+  CHECK(!ui::ResourceBundle::HasSharedInstance(), base::NotFatalUntil::M162);
+  ui::DetectAndSetLoadNonWebViewLocalePaks();
 #endif
 
   std::string preferred_locale;
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   // TODO(markusheintz): Read preference pref::kApplicationLocale in order
   // to enforce the application locale.
   // Tests always get en-US.
@@ -103,18 +97,18 @@ std::string InitResourceBundleAndDetermineLocale(PrefService* local_state,
                  ":AddDataPack");
     base::FilePath resources_pack_path;
     base::PathService::Get(chrome::FILE_RESOURCES_PACK, &resources_pack_path);
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
     ui::LoadMainAndroidPackFile("assets/resources.pak", resources_pack_path);
 
     // Avoid loading DFM native resources here, to keep startup lean. These
     // resources are loaded on-use, when an already-installed DFM loads.
 #else
     ui::ResourceBundle::GetSharedInstance().AddDataPackFromPath(
-        resources_pack_path, ui::SCALE_FACTOR_NONE);
-#endif  // defined(OS_ANDROID)
+        resources_pack_path, ui::kScaleFactorNone);
+#endif  // BUILDFLAG(IS_ANDROID)
   }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   extension_l10n_util::SetProcessLocale(actual_locale);
   extension_l10n_util::SetPreferredLocale(preferred_locale);
 #endif
@@ -133,7 +127,8 @@ std::string LoadLocalState(
   InitializeLocalState(chrome_feature_list_creator);
 
   chrome_feature_list_creator->local_state()->UpdateCommandLinePrefStore(
-      new ChromeCommandLinePrefStore(base::CommandLine::ForCurrentProcess()));
+      base::MakeRefCounted<ChromeCommandLinePrefStore>(
+          base::CommandLine::ForCurrentProcess()));
 
   return InitResourceBundleAndDetermineLocale(
       chrome_feature_list_creator->local_state(), is_running_tests);

@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,6 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 
-#include "base/files/file_util.h"
 #include "base/files/scoped_file.h"
 #include "base/logging.h"
 #include "base/posix/eintr_wrapper.h"
@@ -19,8 +18,6 @@ namespace base {
 
 namespace {
 
-const int kWaitBeforeKillSeconds = 2;
-
 // Reap |child| process. This call blocks until completion.
 void BlockingReap(pid_t child) {
   const pid_t result = HANDLE_EINTR(waitpid(child, NULL, 0));
@@ -28,6 +25,8 @@ void BlockingReap(pid_t child) {
     DPLOG(ERROR) << "waitpid(" << child << ", NULL, 0)";
   }
 }
+
+}  // namespace
 
 // Waits for |timeout| seconds for the given |child| to exit and reap it. If
 // the child doesn't exit within the time specified, kills it.
@@ -114,7 +113,7 @@ void WaitForChildToDie(pid_t child, int timeout) {
     } else {
       // Keep track of the elapsed time to be able to restart kevent if it's
       // interrupted.
-      TimeDelta remaining_delta = TimeDelta::FromSeconds(timeout);
+      TimeDelta remaining_delta = Seconds(timeout);
       TimeTicks deadline = TimeTicks::Now() + remaining_delta;
       result = -1;
       struct kevent event = {0};
@@ -164,10 +163,11 @@ void WaitForChildToDie(pid_t child, int timeout) {
   }
 }
 
-}  // namespace
-
+#if !BUILDFLAG(IS_IOS)
 void EnsureProcessTerminated(Process process) {
+  constexpr int kWaitBeforeKillSeconds = 2;
   WaitForChildToDie(process.Pid(), kWaitBeforeKillSeconds);
 }
+#endif  // !BUILDFLAG(IS_IOS)
 
 }  // namespace base

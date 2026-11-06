@@ -1,34 +1,40 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_HISTORY_CORE_BROWSER_HISTORY_BACKEND_OBSERVER_H_
 #define COMPONENTS_HISTORY_CORE_BROWSER_HISTORY_BACKEND_OBSERVER_H_
 
-#include "base/macros.h"
 #include "components/history/core/browser/history_types.h"
 
 namespace history {
 
 class HistoryBackend;
 
+// Used by internal History components to observe `HistoryBackend` and process
+// those notifications on the backend task runner.
+//
+// Classes external to History that wish to observe History should instead use
+// `HistoryServiceObserver`, which operates on the main thread.
+//
+// These notifications are kept roughly in sync with `HistoryServiceObserver`,
+// but there's already not an exact 1-to-1 correspondence.
 class HistoryBackendObserver {
  public:
-  HistoryBackendObserver() {}
-  virtual ~HistoryBackendObserver() {}
+  HistoryBackendObserver() = default;
 
-  // Called when user visits an URL.
+  HistoryBackendObserver(const HistoryBackendObserver&) = delete;
+  HistoryBackendObserver& operator=(const HistoryBackendObserver&) = delete;
+
+  virtual ~HistoryBackendObserver() = default;
+
+  // Called when the user visits an URL.
   //
-  // The `row` ID will be set to the value that is currently in effect in the
-  // main history database. `redirects` is the list of redirects leading up to
-  // the URL. If we have a redirect chain A -> B -> C and user is visiting C,
-  // then `redirects[0]=B` and `redirects[1]=A`. If there are no redirects,
-  // `redirects` is an empty vector.
+  // The row IDs will be set to the values that are currently in effect in the
+  // main history database.
   virtual void OnURLVisited(HistoryBackend* history_backend,
-                            ui::PageTransition transition,
-                            const URLRow& row,
-                            const RedirectList& redirects,
-                            base::Time visit_time) = 0;
+                            const URLRow& url_row,
+                            const VisitRow& visit_row) = 0;
 
   // Called when a URL has been added or modified.
   //
@@ -37,6 +43,9 @@ class HistoryBackendObserver {
   // database. `is_from_expiration` is true if the modification is caused by
   // automatic history expiration (the visit count got reduced by expiring some
   // of the visits); it is false if the modification is caused by user action.
+  //
+  // Callers may receive URLRows that contain 404 visits and thus have visit
+  // counts or times that take 404 errors into account.
   virtual void OnURLsModified(HistoryBackend* history_backend,
                               const URLRows& changed_urls,
                               bool is_from_expiration) = 0;
@@ -49,14 +58,20 @@ class HistoryBackendObserver {
   // `expired` is set to true, if the URL deletion is due to expiration.
   // `deleted_rows` list of the deleted URLs.
   // `favicon_urls` list of favicon URLs that correspond to the deleted URLs.
-  virtual void OnURLsDeleted(HistoryBackend* history_backend,
-                             bool all_history,
-                             bool expired,
-                             const URLRows& deleted_rows,
-                             const std::set<GURL>& favicon_urls) = 0;
+  virtual void OnHistoryDeletions(HistoryBackend* history_backend,
+                                  bool all_history,
+                                  bool expired,
+                                  const URLRows& deleted_rows,
+                                  const std::set<GURL>& favicon_urls) = 0;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(HistoryBackendObserver);
+  // Called when a visit, or some of its annotations, are updated. `reason`
+  // specifies what specifically was updated.
+  virtual void OnVisitUpdated(const VisitRow& visit,
+                              VisitUpdateReason reason) = 0;
+
+  // Called when a visit is deleted - usually either due to expiry, or because
+  // the user explicitly deleted it.
+  virtual void OnVisitDeleted(const VisitRow& visit) = 0;
 };
 
 }  // namespace history

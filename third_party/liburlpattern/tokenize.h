@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Copyright 2014 Blake Embrey (hello@blakeembrey.com)
 // Use of this source code is governed by an MIT-style license that can be
 // found in the LICENSE file or at https://opensource.org/licenses/MIT.
@@ -6,10 +6,12 @@
 #ifndef THIRD_PARTY_LIBURLPATTERN_LEXER_H_
 #define THIRD_PARTY_LIBURLPATTERN_LEXER_H_
 
+#include <string_view>
 #include <vector>
+
 #include "base/component_export.h"
-#include "third_party/abseil-cpp/absl/status/statusor.h"
-#include "third_party/abseil-cpp/absl/strings/string_view.h"
+#include "base/types/expected.h"
+#include "third_party/abseil-cpp/absl/status/status.h"
 
 namespace liburlpattern {
 
@@ -59,9 +61,9 @@ struct COMPONENT_EXPORT(LIBURLPATTERN) Token {
 
   // The value of the token.  May be one or many characters depending on type.
   // May be null zero characters for the kEnd type.
-  absl::string_view value;
+  std::string_view value;
 
-  Token(TokenType t, size_t i, absl::string_view v)
+  Token(TokenType t, size_t i, std::string_view v)
       : type(t), index(i), value(v) {}
   Token() = default;
 };
@@ -94,12 +96,13 @@ inline bool operator!=(const Token& lh, const Token& rh) {
 COMPONENT_EXPORT(LIBURLPATTERN)
 std::ostream& operator<<(std::ostream& o, Token token);
 
-// Split the given input pattern string into a list of lexical tokens. Note,
-// the generated Token objects simply reference positions within the input
-// |pattern|.  The |pattern| must be kept alive as long as the Token objects.
+// Split the given input pattern string into a list of lexical tokens.
+// Tokenizing will fail if |pattern| is not valid UTF-8.  Note, the generated
+// Token objects simply reference positions within the input |pattern|.  The
+// |pattern| must be kept alive as long as the Token objects.
 COMPONENT_EXPORT(LIBURLPATTERN)
-absl::StatusOr<std::vector<Token>> Tokenize(
-    absl::string_view pattern,
+base::expected<std::vector<Token>, absl::Status> Tokenize(
+    std::string_view pattern,
     TokenizePolicy policy = TokenizePolicy::kStrict);
 
 }  // namespace liburlpattern

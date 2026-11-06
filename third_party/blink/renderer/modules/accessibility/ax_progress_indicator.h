@@ -21,18 +21,19 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_ACCESSIBILITY_AX_PROGRESS_INDICATOR_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_ACCESSIBILITY_AX_PROGRESS_INDICATOR_H_
 
-#include "base/macros.h"
-#include "third_party/blink/renderer/modules/accessibility/ax_layout_object.h"
+#include "third_party/blink/renderer/modules/accessibility/ax_node_object.h"
 
 namespace blink {
 
 class AXObjectCacheImpl;
 class HTMLProgressElement;
-class LayoutProgress;
 
-class AXProgressIndicator final : public AXLayoutObject {
+class AXProgressIndicator final : public AXNodeObject {
  public:
-  AXProgressIndicator(LayoutProgress*, AXObjectCacheImpl&);
+  AXProgressIndicator(LayoutObject*, AXObjectCacheImpl&);
+
+  AXProgressIndicator(const AXProgressIndicator&) = delete;
+  AXProgressIndicator& operator=(const AXProgressIndicator&) = delete;
 
  private:
   ax::mojom::blink::Role NativeRoleIgnoringAria() const final;
@@ -44,9 +45,6 @@ class AXProgressIndicator final : public AXLayoutObject {
   bool MinValueForRange(float* out_value) const override;
 
   HTMLProgressElement* GetProgressElement() const;
-  bool ComputeAccessibilityIsIgnored(IgnoredReasons* = nullptr) const override;
-
-  DISALLOW_COPY_AND_ASSIGN(AXProgressIndicator);
 };
 
 }  // namespace blink

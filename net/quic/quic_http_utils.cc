@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,20 +6,10 @@
 
 #include <utility>
 
-#include "base/metrics/histogram_macros.h"
+#include "base/strings/string_number_conversions.h"
 #include "net/spdy/spdy_log_util.h"
 
 namespace net {
-
-namespace {
-
-enum AltSvcFormat { GOOGLE_FORMAT = 0, IETF_FORMAT = 1, ALTSVC_FORMAT_MAX };
-
-void RecordAltSvcFormat(AltSvcFormat format) {
-  UMA_HISTOGRAM_ENUMERATION("Net.QuicAltSvcFormat", format, ALTSVC_FORMAT_MAX);
-}
-
-}  // namespace
 
 spdy::SpdyPriority ConvertRequestPriorityToQuicPriority(
     const RequestPriority priority) {
@@ -35,45 +25,48 @@ RequestPriority ConvertQuicPriorityToRequestPriority(
                          : static_cast<RequestPriority>(HIGHEST - priority);
 }
 
-base::Value QuicRequestNetLogParams(quic::QuicStreamId stream_id,
-                                    const spdy::Http2HeaderBlock* headers,
-                                    spdy::SpdyPriority priority,
-                                    NetLogCaptureMode capture_mode) {
-  base::Value dict = Http2HeaderBlockNetLogParams(headers, capture_mode);
-  DCHECK(dict.is_dict());
-  dict.SetIntKey("quic_priority", static_cast<int>(priority));
-  dict.SetIntKey("quic_stream_id", static_cast<int>(stream_id));
-  return dict;
-}
+base::DictValue QuicRequestNetLogParams(quic::QuicStreamId stream_id,
+                                        const quiche::HttpHeaderBlock* headers,
+                                        quic::QuicStreamPriority priority,
+                                        NetLogCaptureMode capture_mode) {
+  base::DictValue dict = HttpHeaderBlockNetLogParams(headers, capture_mode);
+  switch (priority.type()) {
+    case quic::QuicPriorityType::kHttp: {
+      auto http_priority = priority.http();
+      dict.Set("quic_priority_type", "http");
+      dict.Set("quic_priority_urgency", http_priority.urgency);
+      dict.Set("quic_priority_incremental", http_priority.incremental);
+      break;
+    }
+    case quic::QuicPriorityType::kWebTransport: {
+      auto web_transport_priority = priority.web_transport();
+      dict.Set("quic_priority_type", "web_transport");
+      dict.Set("web_transport_session_id",
+               static_cast<int>(web_transport_priority.session_id));
 
-base::Value QuicResponseNetLogParams(quic::QuicStreamId stream_id,
-                                     bool fin_received,
-                                     const spdy::Http2HeaderBlock* headers,
-                                     NetLogCaptureMode capture_mode) {
-  base::Value dict = Http2HeaderBlockNetLogParams(headers, capture_mode);
-  dict.SetIntKey("quic_stream_id", static_cast<int>(stream_id));
-  dict.SetBoolKey("fin", fin_received);
-  return dict;
-}
-
-quic::ParsedQuicVersionVector FilterSupportedAltSvcVersions(
-    const spdy::SpdyAltSvcWireFormat::AlternativeService& quic_alt_svc,
-    const quic::ParsedQuicVersionVector& supported_versions) {
-  quic::ParsedQuicVersionVector supported_alt_svc_versions;
-  DCHECK("quic" == quic_alt_svc.protocol_id || "hq" == quic_alt_svc.protocol_id)
-      << quic_alt_svc.protocol_id;
-
-  for (uint32_t quic_version : quic_alt_svc.version) {
-    for (const quic::ParsedQuicVersion& supported : supported_versions) {
-      if (supported.UsesQuicCrypto() &&
-          supported.SupportsGoogleAltSvcFormat() &&
-          static_cast<uint32_t>(supported.transport_version) == quic_version) {
-        supported_alt_svc_versions.push_back(supported);
-        RecordAltSvcFormat(GOOGLE_FORMAT);
-      }
+      // `send_group_number` is an uint64_t, `send_order` is an int64_t. But
+      // base::Value doesn't support these types.
+      // Case to a double instead. As this is just for diagnostics, some loss of
+      // precision is acceptable.
+      dict.Set("web_transport_send_group_number",
+               static_cast<double>(web_transport_priority.send_group_number));
+      dict.Set("web_transport_send_order",
+               static_cast<double>(web_transport_priority.send_order));
+      break;
     }
   }
-  return supported_alt_svc_versions;
+  dict.Set("quic_stream_id", static_cast<int>(stream_id));
+  return dict;
+}
+
+base::DictValue QuicResponseNetLogParams(quic::QuicStreamId stream_id,
+                                         bool fin_received,
+                                         const quiche::HttpHeaderBlock* headers,
+                                         NetLogCaptureMode capture_mode) {
+  base::DictValue dict = HttpHeaderBlockNetLogParams(headers, capture_mode);
+  dict.Set("quic_stream_id", static_cast<int>(stream_id));
+  dict.Set("fin", fin_received);
+  return dict;
 }
 
 }  // namespace net

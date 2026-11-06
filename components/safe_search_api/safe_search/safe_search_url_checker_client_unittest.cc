@@ -1,13 +1,15 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/safe_search_api/safe_search/safe_search_url_checker_client.h"
 
+#include <array>
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/byte_size.h"
+#include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "base/test/task_environment.h"
 #include "base/values.h"
@@ -30,26 +32,27 @@ constexpr char kSafeSearchApiUrl[] =
     "https://safesearch.googleapis.com/v1:classify";
 
 std::string BuildResponse(bool is_porn) {
-  base::DictionaryValue dict;
-  auto classification_dict = std::make_unique<base::DictionaryValue>();
+  base::DictValue dict;
+  base::DictValue classification_dict;
   if (is_porn)
-    classification_dict->SetBoolean("pornography", is_porn);
-  auto classifications_list = std::make_unique<base::ListValue>();
-  classifications_list->Append(std::move(classification_dict));
-  dict.SetKey("classifications",
-              base::Value::FromUniquePtrValue(std::move(classifications_list)));
-  std::string result;
-  base::JSONWriter::Write(dict, &result);
-  return result;
+    classification_dict.Set("pornography", is_porn);
+  base::ListValue classifications_list;
+  classifications_list.Append(std::move(classification_dict));
+  dict.Set("classifications", std::move(classifications_list));
+  return base::WriteJson(dict).value_or("");
 }
 
-const char* kURLs[] = {
-    "http://www.randomsite1.com", "http://www.randomsite2.com",
-    "http://www.randomsite3.com", "http://www.randomsite4.com",
-    "http://www.randomsite5.com", "http://www.randomsite6.com",
-    "http://www.randomsite7.com", "http://www.randomsite8.com",
+constexpr auto kURLs = std::to_array<const char*>({
+    "http://www.randomsite1.com",
+    "http://www.randomsite2.com",
+    "http://www.randomsite3.com",
+    "http://www.randomsite4.com",
+    "http://www.randomsite5.com",
+    "http://www.randomsite6.com",
+    "http://www.randomsite7.com",
+    "http://www.randomsite8.com",
     "http://www.randomsite9.com",
-};
+});
 
 }  // namespace
 
@@ -69,7 +72,7 @@ class SafeSearchURLCheckerClientTest : public testing::Test {
 
  protected:
   GURL GetNewURL() {
-    CHECK(next_url_ < base::size(kURLs));
+    CHECK(next_url_ < std::size(kURLs));
     return GURL(kURLs[next_url_++]);
   }
 
@@ -85,7 +88,7 @@ class SafeSearchURLCheckerClientTest : public testing::Test {
 
   void SetUpResponse(net::Error error, const std::string& response) {
     network::URLLoaderCompletionStatus status(error);
-    status.decoded_body_length = response.size();
+    status.decoded_body_length = base::ByteSize(response.size());
     test_url_loader_factory_.AddResponse(GURL(kSafeSearchApiUrl),
                                          network::mojom::URLResponseHead::New(),
                                          response, status);

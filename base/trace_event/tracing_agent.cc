@@ -1,11 +1,10 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/trace_event/tracing_agent.h"
 
-namespace base {
-namespace trace_event {
+namespace base::trace_event {
 
 TracingAgent::~TracingAgent() = default;
 
@@ -19,6 +18,4 @@ void TracingAgent::RecordClockSyncMarker(
   DCHECK(SupportsExplicitClockSync());
 }
 
-
-}  // namespace trace_event
-}  // namespace base
+}  // namespace base::trace_event

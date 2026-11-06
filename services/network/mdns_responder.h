@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,16 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/unique_ptr_adapters.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/default_tick_clock.h"
 #include "base/time/time.h"
@@ -22,7 +25,6 @@
 #include "net/dns/dns_query.h"
 #include "net/dns/dns_response.h"
 #include "services/network/public/mojom/mdns_responder.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace net {
 class IOBufferWithSize;
@@ -92,10 +94,10 @@ struct COMPONENT_EXPORT(NETWORK_SERVICE) MdnsResponseSendOption
   // shared resource record set.
   bool shared_result = false;
   // If not nullopt, returns true if the response to send is cancelled.
-  absl::optional<base::RepeatingCallback<bool()>> cancelled_callback;
+  std::optional<base::RepeatingCallback<bool()>> cancelled_callback;
 
  private:
-  friend class RefCounted<MdnsResponseSendOption>;
+  friend class base::RefCounted<MdnsResponseSendOption>;
 
   ~MdnsResponseSendOption();
 };
@@ -140,10 +142,14 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) MdnsResponderManager {
 
   // Delay between throttled attempts to start the `MdnsResponderManager`.
   constexpr static base::TimeDelta kManagerStartThrottleDelay =
-      base::TimeDelta::FromSeconds(1);
+      base::Seconds(1);
 
   MdnsResponderManager();
   explicit MdnsResponderManager(net::MDnsSocketFactory* socket_factory);
+
+  MdnsResponderManager(const MdnsResponderManager&) = delete;
+  MdnsResponderManager& operator=(const MdnsResponderManager&) = delete;
+
   ~MdnsResponderManager();
 
   // Creates an instance of MdnsResponder for the receiver.
@@ -241,7 +247,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) MdnsResponderManager {
   void SendGoodbyePacketForMdnsNameGeneratorServiceIfNecessary();
 
   std::unique_ptr<net::MDnsSocketFactory> owned_socket_factory_;
-  net::MDnsSocketFactory* socket_factory_;
+  raw_ptr<net::MDnsSocketFactory> socket_factory_;
   // Only the socket handlers that have successfully bound and started are kept.
   std::map<uint16_t, std::unique_ptr<SocketHandler>> socket_handler_by_id_;
   SocketHandlerStartResult start_result_ =
@@ -258,15 +264,14 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) MdnsResponderManager {
   std::set<std::unique_ptr<MdnsResponder>, base::UniquePtrComparator>
       responders_;
 
-  const base::TickClock* tick_clock_ = base::DefaultTickClock::GetInstance();
+  raw_ptr<const base::TickClock> tick_clock_ =
+      base::DefaultTickClock::GetInstance();
 
   // If not `base::TimeTicks()`, represents the end of the throttling period for
   // calls to `StartIfNeeded()`.
   base::TimeTicks throttled_start_end_;
 
   base::WeakPtrFactory<MdnsResponderManager> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(MdnsResponderManager);
 };
 
 // Implementation of the mDNS service that can provide utilities of an mDNS
@@ -276,6 +281,10 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) MdnsResponder
  public:
   MdnsResponder(mojo::PendingReceiver<mojom::MdnsResponder> receiver,
                 MdnsResponderManager* manager);
+
+  MdnsResponder(const MdnsResponder&) = delete;
+  MdnsResponder& operator=(const MdnsResponder&) = delete;
+
   // When destroyed, clears all existing name-address associations owned by this
   // responder in the local network by sending out goodbye packets. See
   // SendGoodbyePacketForNameAddressMap below.
@@ -329,12 +338,10 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) MdnsResponder
   // responder should be destroyed before |manager_| becomes invalid or a weak
   // reference should be used to access the manager when there is no such
   // guarantee in an operation.
-  MdnsResponderManager* const manager_;
+  const raw_ptr<MdnsResponderManager> manager_;
   std::map<std::string, net::IPAddress> name_addr_map_;
   std::map<std::string, uint16_t> name_refcount_map_;
-  MdnsResponderManager::NameGenerator* name_generator_;
-
-  DISALLOW_COPY_AND_ASSIGN(MdnsResponder);
+  raw_ptr<MdnsResponderManager::NameGenerator> name_generator_;
 };
 
 }  // namespace network

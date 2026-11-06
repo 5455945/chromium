@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,21 +8,22 @@
 #include <memory>
 #include <string>
 #include <utility>
-#include <vector>
 
-#include "base/bind.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "base/test/simple_test_clock.h"
 #include "base/test/task_environment.h"
-#include "base/threading/sequenced_task_runner_handle.h"
 #include "components/image_fetcher/core/cache/image_cache.h"
 #include "components/image_fetcher/core/cache/image_data_store_disk.h"
 #include "components/image_fetcher/core/cache/image_metadata_store_leveldb.h"
 #include "components/image_fetcher/core/cache/proto/cached_image_metadata.pb.h"
 #include "components/image_fetcher/core/cached_image_fetcher.h"
+#include "components/image_fetcher/core/fake_image_decoder.h"
 #include "components/image_fetcher/core/image_fetcher_impl.h"
 #include "components/image_fetcher/core/image_fetcher_metrics_reporter.h"
 #include "components/image_fetcher/core/image_fetcher_types.h"
@@ -53,7 +54,11 @@ const char kImageFetcherEventHistogramName[] = "ImageFetcher.Events";
 
 class ReducedModeImageFetcherTest : public testing::Test {
  public:
-  ReducedModeImageFetcherTest() {}
+  ReducedModeImageFetcherTest() = default;
+
+  ReducedModeImageFetcherTest(const ReducedModeImageFetcherTest&) = delete;
+  ReducedModeImageFetcherTest& operator=(const ReducedModeImageFetcherTest&) =
+      delete;
 
   ~ReducedModeImageFetcherTest() override {
     reduced_mode_image_fetcher_.reset();
@@ -76,16 +81,16 @@ class ReducedModeImageFetcherTest : public testing::Test {
     auto metadata_store =
         std::make_unique<ImageMetadataStoreLevelDB>(std::move(db), &clock_);
     auto data_store = std::make_unique<ImageDataStoreDisk>(
-        data_dir_.GetPath(), base::SequencedTaskRunnerHandle::Get());
+        data_dir_.GetPath(), base::SequencedTaskRunner::GetCurrentDefault());
 
     image_cache_ = base::MakeRefCounted<ImageCache>(
         std::move(data_store), std::move(metadata_store), &test_prefs_, &clock_,
-        base::SequencedTaskRunnerHandle::Get());
+        base::SequencedTaskRunner::GetCurrentDefault());
 
     // Use an initial request to start the cache up.
     image_cache_->SaveImage(kImageUrl.spec(), kImageData,
                             /* needs_transcoding */ false,
-                            /* expiration_interval */ absl::nullopt);
+                            /* expiration_interval */ std::nullopt);
     RunUntilIdle();
     db_->InitStatusCallback(leveldb_proto::Enums::InitStatus::kOK);
     image_cache_->DeleteImage(kImageUrl.spec());
@@ -95,8 +100,10 @@ class ReducedModeImageFetcherTest : public testing::Test {
         base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
             &test_url_loader_factory_);
 
+    auto decoder = std::make_unique<FakeImageDecoder>();
+    fake_image_decoder_ = decoder.get();
     image_fetcher_ = std::make_unique<image_fetcher::ImageFetcherImpl>(
-        /* ImageDecoder */ nullptr, shared_factory_);
+        std::move(decoder), shared_factory_);
     cached_image_fetcher_ = std::make_unique<CachedImageFetcher>(
         image_fetcher_.get(), image_cache_, /* read_only */ false);
     reduced_mode_image_fetcher_ =
@@ -106,6 +113,14 @@ class ReducedModeImageFetcherTest : public testing::Test {
   }
 
   void RunUntilIdle() { task_environment_.RunUntilIdle(); }
+
+  void PerformFetch(ImageDataFetcherCallback callback) {
+    reduced_mode_image_fetcher()->FetchImageAndData(
+        kImageUrl, std::move(callback), ImageFetcherCallback(),
+        ImageFetcherParams(TRAFFIC_ANNOTATION_FOR_TESTS, kUmaClientName));
+    db()->LoadCallback(true);
+    RunUntilIdle();
+  }
 
   void VerifyCacheHit() {
     RunUntilIdle();
@@ -134,14 +149,18 @@ class ReducedModeImageFetcherTest : public testing::Test {
   }
   base::HistogramTester& histogram_tester() { return histogram_tester_; }
   FakeDB<CachedImageMetadataProto>* db() { return db_; }
+  std::map<std::string, CachedImageMetadataProto>& metadata_store() {
+    return metadata_store_;
+  }
 
-  MOCK_METHOD2(OnImageLoaded, void(bool, std::string));
+  MOCK_METHOD(void, OnImageLoaded, (bool, std::string), ());
 
  protected:
   GURL kImageUrl{"http://gstatic.img.com/foo.jpg"};
 
  private:
   std::unique_ptr<ImageFetcher> image_fetcher_;
+  raw_ptr<FakeImageDecoder> fake_image_decoder_;
   std::unique_ptr<ImageFetcher> cached_image_fetcher_;
   std::unique_ptr<ReducedModeImageFetcher> reduced_mode_image_fetcher_;
   network::TestURLLoaderFactory test_url_loader_factory_;
@@ -151,20 +170,18 @@ class ReducedModeImageFetcherTest : public testing::Test {
   base::SimpleTestClock clock_;
   TestingPrefServiceSimple test_prefs_;
   base::ScopedTempDir data_dir_;
-  FakeDB<CachedImageMetadataProto>* db_;
+  raw_ptr<FakeDB<CachedImageMetadataProto>> db_;
   std::map<std::string, CachedImageMetadataProto> metadata_store_;
 
   base::test::TaskEnvironment task_environment_;
   base::HistogramTester histogram_tester_;
-
-  DISALLOW_COPY_AND_ASSIGN(ReducedModeImageFetcherTest);
 };
 
 TEST_F(ReducedModeImageFetcherTest, FetchNeedsTranscodingImageFromCache) {
   // Save the image that needs transcoding in the database.
   image_cache()->SaveImage(kImageUrl.spec(), kImageData,
                            /* needs_transcoding */ true,
-                           /* expiration_interval */ absl::nullopt);
+                           /* expiration_interval */ std::nullopt);
   VerifyCacheHit();
 }
 
@@ -172,8 +189,38 @@ TEST_F(ReducedModeImageFetcherTest, FetchImageFromCache) {
   // Save the image that doesn't need transcoding in the database.
   image_cache()->SaveImage(kImageUrl.spec(), kImageData,
                            /* needs_transcoding */ false,
-                           /* expiration_interval */ absl::nullopt);
+                           /* expiration_interval */ std::nullopt);
   VerifyCacheHit();
+}
+
+TEST_F(ReducedModeImageFetcherTest, FetchImageFromNetworkAndCacheReadBack) {
+  std::string test_data = "raw_image_data";
+  test_url_loader_factory()->AddResponse(kImageUrl.spec(), test_data);
+
+  // Confirm cache is empty at first.
+  ASSERT_EQ(metadata_store().size(), 0u);
+
+  // Fetch image (should go to network because cache is empty).
+  base::MockCallback<ImageDataFetcherCallback> data_callback1;
+  // Verify that the fetched data matches the raw image data exactly.
+  EXPECT_CALL(data_callback1, Run(test_data, _));
+  PerformFetch(data_callback1.Get());
+
+  // Confirm there is 1 element in the cache after fetch.
+  EXPECT_EQ(metadata_store().size(), 1u);
+
+  // Clear responses to ensure the next fetch doesn't hit the network.
+  test_url_loader_factory()->ClearResponses();
+
+  // Fetch image again (should hit cache).
+  base::MockCallback<ImageDataFetcherCallback> data_callback2;
+  // Verify that the cached data returned is identical to the original raw data.
+  EXPECT_CALL(data_callback2, Run(test_data, _));
+  PerformFetch(data_callback2.Get());
+
+  // Verify that the cache was hit.
+  histogram_tester().ExpectBucketCount(kImageFetcherEventHistogramName,
+                                       ImageFetcherEvent::kCacheHit, 1);
 }
 
 }  // namespace image_fetcher

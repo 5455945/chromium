@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,7 @@ namespace web_app {
 
 // The name of "Last Browser" file, which stores the path of the last Chrome
 // executable to use its containing User Data directory.
-extern const base::FilePath::StringPieceType kLastBrowserFilename;
+extern const base::FilePath::StringViewType kLastBrowserFilename;
 
 // Reads the content of |last_browser_file|, which is assumed to contain a path,
 // as a wide string, and returns it as a FilePath. Returns an empty FilePath if

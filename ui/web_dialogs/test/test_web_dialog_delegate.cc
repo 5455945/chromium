@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,30 +14,18 @@ namespace ui {
 namespace test {
 
 TestWebDialogDelegate::TestWebDialogDelegate(const GURL& url)
-    : url_(url),
-      size_(400, 400),
-      did_delete_(nullptr),
-      close_on_escape_(true) {}
-
-TestWebDialogDelegate::~TestWebDialogDelegate() {
-  if (did_delete_) {
-    CHECK(!*did_delete_);
-    *did_delete_ = true;
-  }
+    : url_(url), size_(400, 400), close_on_escape_(true) {
+  set_delete_on_close(false);
 }
 
-void TestWebDialogDelegate::SetDeleteOnClosedAndObserve(
-    bool* destroy_observer) {
-  CHECK(destroy_observer);
-  did_delete_ = destroy_observer;
-}
+TestWebDialogDelegate::~TestWebDialogDelegate() = default;
 
 void TestWebDialogDelegate::SetCloseOnEscape(bool enabled) {
   close_on_escape_ = enabled;
 }
 
-ModalType TestWebDialogDelegate::GetDialogModalType() const {
-  return MODAL_TYPE_WINDOW;
+ui::mojom::ModalType TestWebDialogDelegate::GetDialogModalType() const {
+  return ui::mojom::ModalType::kWindow;
 }
 
 std::u16string TestWebDialogDelegate::GetDialogTitle() const {
@@ -48,21 +36,12 @@ GURL TestWebDialogDelegate::GetDialogContentURL() const {
   return url_;
 }
 
-void TestWebDialogDelegate::GetWebUIMessageHandlers(
-    std::vector<WebUIMessageHandler*>* handlers) const {
-}
-
 void TestWebDialogDelegate::GetDialogSize(gfx::Size* size) const {
   *size = size_;
 }
 
 std::string TestWebDialogDelegate::GetDialogArgs() const {
   return std::string();
-}
-
-void TestWebDialogDelegate::OnDialogClosed(const std::string& json_retval) {
-  if (did_delete_)
-    delete this;
 }
 
 void TestWebDialogDelegate::OnCloseContents(WebContents* source,

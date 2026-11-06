@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 
 #include "base/observer_list_types.h"
 #include "chrome/browser/ash/power/auto_screen_brightness/monotone_cubic_spline.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace ash {
 namespace power {
@@ -22,6 +21,10 @@ class Modeller {
   class Observer : public base::CheckedObserver {
    public:
     Observer() = default;
+
+    Observer(const Observer&) = delete;
+    Observer& operator=(const Observer&) = delete;
+
     ~Observer() override = default;
 
     // Called when a new curve (|brightness_curve|) is trained.
@@ -32,9 +35,6 @@ class Modeller {
     // |global_curve| and |personal_curve| will be nullopt. If there is only a
     // global curve, then |personal_curve| will be nullopt.
     virtual void OnModelInitialized(const Model& model) = 0;
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(Observer);
   };
 
   virtual ~Modeller() = default;

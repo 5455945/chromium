@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -68,6 +68,10 @@ class UserActivityUkmLoggerTest : public testing::Test {
 
     user_activity_logger_delegate_ukm_.ukm_recorder_ = &recorder_;
   }
+
+  UserActivityUkmLoggerTest(const UserActivityUkmLoggerTest&) = delete;
+  UserActivityUkmLoggerTest& operator=(const UserActivityUkmLoggerTest&) =
+      delete;
 
  protected:
   void LogActivity(const UserActivityEvent& event) {
@@ -146,7 +150,6 @@ class UserActivityUkmLoggerTest : public testing::Test {
 
  private:
   UserActivityUkmLoggerImpl user_activity_logger_delegate_ukm_;
-  DISALLOW_COPY_AND_ASSIGN(UserActivityUkmLoggerTest);
 };
 
 TEST_F(UserActivityUkmLoggerTest, BasicLogging) {
@@ -155,7 +158,7 @@ TEST_F(UserActivityUkmLoggerTest, BasicLogging) {
       user_activity_event.mutable_features();
   features->set_source_id(recorder_.GetNewSourceID());
   const GURL kUrl1 = GURL("https://example1.com/");
-  features->set_tab_domain(kUrl1.host());
+  features->set_tab_domain(kUrl1.GetHost());
   features->set_engagement_score(90);
   features->set_has_form_entry(false);
 

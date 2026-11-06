@@ -1,20 +1,20 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/child_accounts/child_status_reporting_service.h"
 
-#include "base/bind.h"
+#include "ash/constants/ash_pref_names.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/ash/child_accounts/event_based_status_reporting_service_factory.h"
 #include "chrome/browser/ash/child_accounts/usage_time_limit_processor.h"
-#include "chrome/browser/ash/policy/core/user_cloud_policy_manager_chromeos.h"
-#include "chrome/browser/chromeos/policy/status_collector/child_status_collector.h"
-#include "chrome/browser/chromeos/policy/uploading/status_uploader.h"
+#include "chrome/browser/ash/policy/core/user_cloud_policy_manager_ash.h"
+#include "chrome/browser/ash/policy/status_collector/child_status_collector.h"
+#include "chrome/browser/ash/policy/uploading/status_uploader.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/pref_names.h"
-#include "chromeos/system/statistics_provider.h"
+#include "chromeos/ash/components/system/statistics_provider.h"
 #include "components/policy/core/common/cloud/cloud_policy_client.h"
 #include "components/policy/core/common/cloud/cloud_policy_core.h"
 #include "components/prefs/pref_change_registrar.h"
@@ -26,8 +26,7 @@ namespace ash {
 namespace {
 
 // Default frequency for uploading status reports.
-constexpr base::TimeDelta kStatusUploadFrequency =
-    base::TimeDelta::FromMinutes(10);
+constexpr base::TimeDelta kStatusUploadFrequency = base::Minutes(10);
 
 }  // namespace
 
@@ -37,7 +36,7 @@ ChildStatusReportingService::ChildStatusReportingService(
   Profile* profile = Profile::FromBrowserContext(context_);
   // If child user is registered with DMServer and has User Policy applied, it
   // should upload device status to the server.
-  user_cloud_policy_manager_ = profile->GetUserCloudPolicyManagerChromeOS();
+  user_cloud_policy_manager_ = profile->GetUserCloudPolicyManagerAsh();
   if (!user_cloud_policy_manager_) {
     LOG(WARNING) << "Child user is not managed by User Policy - status reports "
                     "cannot be uploaded to the server. ";
@@ -45,15 +44,16 @@ ChildStatusReportingService::ChildStatusReportingService(
   }
 
   PrefService* pref_service = profile->GetPrefs();
-  DCHECK(pref_service->GetInitializationStatus() !=
-         PrefService::INITIALIZATION_STATUS_WAITING);
+  CHECK(pref_service->GetInitializationStatus() !=
+            PrefService::INITIALIZATION_STATUS_WAITING,
+        base::NotFatalUntil::M160);
 
   // We immediately upload a status report after Time Limits policy changes.
   // Make sure we listen for those events.
   pref_change_registrar_ = std::make_unique<PrefChangeRegistrar>();
   pref_change_registrar_->Init(pref_service);
   pref_change_registrar_->Add(
-      prefs::kUsageTimeLimit,
+      ash::prefs::kUsageTimeLimit,
       base::BindRepeating(
           &ChildStatusReportingService::OnTimeLimitsPolicyChanged,
           base::Unretained(this)));
@@ -66,10 +66,10 @@ ChildStatusReportingService::~ChildStatusReportingService() = default;
 
 void ChildStatusReportingService::CreateStatusUploaderIfNeeded(
     policy::CloudPolicyClient* client) {
-  const base::DictionaryValue* time_limit =
-      pref_change_registrar_->prefs()->GetDictionary(prefs::kUsageTimeLimit);
+  const base::DictValue& time_limit =
+      pref_change_registrar_->prefs()->GetDict(ash::prefs::kUsageTimeLimit);
   const base::TimeDelta new_day_reset_time =
-      usage_time_limit::GetTimeUsageLimitResetTime(*time_limit);
+      usage_time_limit::GetTimeUsageLimitResetTime(time_limit);
 
   // Day reset time did not change, there is no need to re-create StatusUploader
   // if it already exists.
@@ -83,10 +83,11 @@ void ChildStatusReportingService::CreateStatusUploaderIfNeeded(
       std::make_unique<policy::ChildStatusCollector>(
           pref_change_registrar_->prefs(),
           Profile::FromBrowserContext(context_),
-          chromeos::system::StatisticsProvider::GetInstance(),
+          system::StatisticsProvider::GetInstance(),
           policy::ChildStatusCollector::AndroidStatusFetcher(),
           day_reset_time_),
-      base::ThreadTaskRunnerHandle::Get(), kStatusUploadFrequency);
+      base::SingleThreadTaskRunner::GetCurrentDefault(),
+      kStatusUploadFrequency);
 }
 
 bool ChildStatusReportingService::RequestImmediateStatusReport() {

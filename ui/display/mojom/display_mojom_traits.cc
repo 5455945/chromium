@@ -1,8 +1,10 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/display/mojom/display_mojom_traits.h"
+
+#include "base/notreached.h"
 
 namespace mojo {
 
@@ -20,28 +22,22 @@ EnumTraits<display::mojom::Rotation, display::Display::Rotation>::ToMojom(
       return display::mojom::Rotation::VALUE_270;
   }
   NOTREACHED();
-  return display::mojom::Rotation::VALUE_0;
 }
 
-bool EnumTraits<display::mojom::Rotation, display::Display::Rotation>::
-    FromMojom(display::mojom::Rotation rotation,
-              display::Display::Rotation* out) {
+display::Display::Rotation
+EnumTraits<display::mojom::Rotation, display::Display::Rotation>::FromMojom(
+    display::mojom::Rotation rotation) {
   switch (rotation) {
     case display::mojom::Rotation::VALUE_0:
-      *out = display::Display::ROTATE_0;
-      return true;
+      return display::Display::ROTATE_0;
     case display::mojom::Rotation::VALUE_90:
-      *out = display::Display::ROTATE_90;
-      return true;
+      return display::Display::ROTATE_90;
     case display::mojom::Rotation::VALUE_180:
-      *out = display::Display::ROTATE_180;
-      return true;
+      return display::Display::ROTATE_180;
     case display::mojom::Rotation::VALUE_270:
-      *out = display::Display::ROTATE_270;
-      return true;
+      return display::Display::ROTATE_270;
   }
   NOTREACHED();
-  return false;
 }
 
 display::mojom::TouchSupport
@@ -56,25 +52,20 @@ EnumTraits<display::mojom::TouchSupport, display::Display::TouchSupport>::
       return display::mojom::TouchSupport::UNAVAILABLE;
   }
   NOTREACHED();
-  return display::mojom::TouchSupport::UNKNOWN;
 }
 
-bool EnumTraits<display::mojom::TouchSupport, display::Display::TouchSupport>::
-    FromMojom(display::mojom::TouchSupport touch_support,
-              display::Display::TouchSupport* out) {
+display::Display::TouchSupport
+EnumTraits<display::mojom::TouchSupport, display::Display::TouchSupport>::
+    FromMojom(display::mojom::TouchSupport touch_support) {
   switch (touch_support) {
     case display::mojom::TouchSupport::UNKNOWN:
-      *out = display::Display::TouchSupport::UNKNOWN;
-      return true;
+      return display::Display::TouchSupport::UNKNOWN;
     case display::mojom::TouchSupport::AVAILABLE:
-      *out = display::Display::TouchSupport::AVAILABLE;
-      return true;
+      return display::Display::TouchSupport::AVAILABLE;
     case display::mojom::TouchSupport::UNAVAILABLE:
-      *out = display::Display::TouchSupport::UNAVAILABLE;
-      return true;
+      return display::Display::TouchSupport::UNAVAILABLE;
   }
   NOTREACHED();
-  return false;
 }
 
 display::mojom::AccelerometerSupport
@@ -90,26 +81,21 @@ EnumTraits<display::mojom::AccelerometerSupport,
       return display::mojom::AccelerometerSupport::UNAVAILABLE;
   }
   NOTREACHED();
-  return display::mojom::AccelerometerSupport::UNKNOWN;
 }
 
-bool EnumTraits<display::mojom::AccelerometerSupport,
-                display::Display::AccelerometerSupport>::
-    FromMojom(display::mojom::AccelerometerSupport accelerometer_support,
-              display::Display::AccelerometerSupport* out) {
+display::Display::AccelerometerSupport
+EnumTraits<display::mojom::AccelerometerSupport,
+           display::Display::AccelerometerSupport>::
+    FromMojom(display::mojom::AccelerometerSupport accelerometer_support) {
   switch (accelerometer_support) {
     case display::mojom::AccelerometerSupport::UNKNOWN:
-      *out = display::Display::AccelerometerSupport::UNKNOWN;
-      return true;
+      return display::Display::AccelerometerSupport::UNKNOWN;
     case display::mojom::AccelerometerSupport::AVAILABLE:
-      *out = display::Display::AccelerometerSupport::AVAILABLE;
-      return true;
+      return display::Display::AccelerometerSupport::AVAILABLE;
     case display::mojom::AccelerometerSupport::UNAVAILABLE:
-      *out = display::Display::AccelerometerSupport::UNAVAILABLE;
-      return true;
+      return display::Display::AccelerometerSupport::UNAVAILABLE;
   }
   NOTREACHED();
-  return false;
 }
 
 bool StructTraits<display::mojom::DisplayDataView, display::Display>::Read(
@@ -122,6 +108,10 @@ bool StructTraits<display::mojom::DisplayDataView, display::Display>::Read(
 
   if (!data.ReadSizeInPixels(&out->size_in_pixels_))
     return false;
+
+  if (!data.ReadNativeOrigin(&out->native_origin_)) {
+    return false;
+  }
 
   if (!data.ReadWorkArea(&out->work_area_))
     return false;
@@ -140,13 +130,20 @@ bool StructTraits<display::mojom::DisplayDataView, display::Display>::Read(
   if (!data.ReadMaximumCursorSize(&out->maximum_cursor_size_))
     return false;
 
-  if (!data.ReadColorSpaces(&out->color_spaces_))
-    return false;
+  gfx::DisplayColorSpaces color_spaces = out->GetColorSpaces();
 
+  if (!data.ReadColorSpaces(&color_spaces)) {
+    return false;
+  }
+
+  out->SetColorSpaces(color_spaces);
   out->set_color_depth(data.color_depth());
   out->set_depth_per_component(data.depth_per_component());
   out->set_is_monochrome(data.is_monochrome());
   out->set_display_frequency(data.display_frequency());
+
+  if (!data.ReadLabel(&out->label_))
+    return false;
 
   return true;
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,19 @@
 #define CHROME_BROWSER_EXTENSIONS_EXTENSION_CONTEXT_MENU_MODEL_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/macros.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "ui/base/models/simple_menu_model.h"
+#include "base/memory/raw_ptr.h"
+#include "extensions/buildflags/buildflags.h"
+#include "extensions/common/extension_id.h"
+#include "extensions/common/extension_usage.h"
+#include "ui/menus/simple_menu_model.h"
+#include "url/origin.h"
 
-class Browser;
-class GURL;
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
+class BrowserWindowInterface;
 class Profile;
 
 namespace content {
@@ -24,11 +29,19 @@ namespace extensions {
 class ContextMenuMatcher;
 class Extension;
 class ExtensionAction;
+class SidePanelService;
 
 // The context menu model for extension icons.
 class ExtensionContextMenuModel : public ui::SimpleMenuModel,
                                   public ui::SimpleMenuModel::Delegate {
  public:
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kHomePageMenuItem);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kToggleVisibilityMenuItem);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kPageAccessMenuItem);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kPageAccessRunOnClickSubmenuItem);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kPageAccessRunOnSiteSubmenuItem);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kPageAccessRunOnAllSitesSubmenuItem);
+
   enum MenuEntries {
     HOME_PAGE = 0,
     OPTIONS,
@@ -42,6 +55,13 @@ class ExtensionContextMenuModel : public ui::SimpleMenuModel,
     PAGE_ACCESS_RUN_ON_SITE,
     PAGE_ACCESS_RUN_ON_ALL_SITES,
     PAGE_ACCESS_LEARN_MORE,
+    PAGE_ACCESS_ALL_EXTENSIONS_GRANTED,
+    PAGE_ACCESS_ALL_EXTENSIONS_BLOCKED,
+    PAGE_ACCESS_PERMISSIONS_PAGE,
+    VIEW_WEB_PERMISSIONS,
+    POLICY_INSTALLED,
+    TOGGLE_SIDE_PANEL_VISIBILITY,
+    RATE_EXTENSION,
     // NOTE: If you update this, you probably need to update the
     // ContextMenuAction enum below.
   };
@@ -66,22 +86,31 @@ class ExtensionContextMenuModel : public ui::SimpleMenuModel,
     kPageAccessRunOnSite = 9,
     kPageAccessRunOnAllSites = 10,
     kPageAccessLearnMore = 11,
-    kMaxValue = kPageAccessLearnMore,
+    kPageAccessPermissionsPage = 12,
+    kViewWebPermissions = 13,
+    kPolicyInstalled = 14,
+    kToggleSidePanelVisibility = 15,
+    kRateExtension = 16,
+    kMaxValue = kRateExtension,
+    // NOTE: Please update ExtensionContextMenuAction in enums.xml if you modify
+    // this enum.
   };
 
-  // The current visibility of the extension; this affects the "pin" / "unpin"
-  // strings in the menu.
-  // TODO(devlin): Rename this "PinState" when we finish removing the old UI
-  // bits.
-  enum ButtonVisibility {
-    // The extension is pinned on the toolbar.
-    PINNED,
-    // The extension is temporarily visible on the toolbar, as for showing a
-    // popup.
-    TRANSITIVELY_VISIBLE,
-    // The extension is not pinned (and is shown in the extensions menu).
-    UNPINNED,
+  // Location where the context menu is open from.
+  // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.chrome.browser.extensions
+  enum class ContextMenuSource { kToolbarAction = 0, kMenuItem = 1 };
+
+  // Outcome of the "Rate it" menu item for a menu session in which it was
+  // shown, logged to UMA when the menu closes.
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  // LINT.IfChange(ExtensionContextMenuRateExtensionOutcome)
+  enum class RateExtensionOutcome {
+    kNotClicked = 0,
+    kClicked = 1,
+    kMaxValue = kClicked,
   };
+  // LINT.ThenChange(/tools/metrics/histograms/metadata/extensions/enums.xml:ExtensionContextMenuRateExtensionOutcome)
 
   // Delegate to handle showing an ExtensionAction popup.
   class PopupDelegate {
@@ -91,19 +120,29 @@ class ExtensionContextMenuModel : public ui::SimpleMenuModel,
     // The delegate should know which popup to display.
     virtual void InspectPopup() = 0;
 
+    // Returns the active WebContents for the context that owns this menu, or
+    // nullptr to fall back to the browser's active tab.
+    virtual content::WebContents* GetCurrentWebContents() const;
+
    protected:
-    virtual ~PopupDelegate() {}
+    virtual ~PopupDelegate() = default;
   };
 
   // Creates a menu model for the given extension. If
   // prefs::kExtensionsUIDeveloperMode is enabled then a menu item
   // will be shown for "Inspect Popup" which, when selected, will cause
-  // ShowPopupForDevToolsWindow() to be called on |delegate|.
+  // ShowPopupForDevToolsWindow() to be called on `delegate`.
   ExtensionContextMenuModel(const Extension* extension,
-                            Browser* browser,
-                            ButtonVisibility visibility,
+                            BrowserWindowInterface* browser,
+                            bool is_pinned,
                             PopupDelegate* delegate,
-                            bool can_show_icon_in_toolbar);
+                            bool can_show_icon_in_toolbar,
+                            ContextMenuSource source);
+
+  ExtensionContextMenuModel(const ExtensionContextMenuModel&) = delete;
+  ExtensionContextMenuModel& operator=(const ExtensionContextMenuModel&) =
+      delete;
+
   ~ExtensionContextMenuModel() override;
 
   // SimpleMenuModel::Delegate:
@@ -119,24 +158,23 @@ class ExtensionContextMenuModel : public ui::SimpleMenuModel,
   }
 
  private:
-  void InitMenu(const Extension* extension, ButtonVisibility button_visibility);
+  void Init(const Extension* extension, bool can_show_icon_in_toolbar);
 
-  void CreatePageAccessSubmenu(const Extension* extension);
+  void InitMenu(const Extension* extension, bool can_show_icon_in_toolbar);
 
-  MenuEntries GetCurrentPageAccess(const Extension* extension,
-                                   content::WebContents* web_contents) const;
+  // Constructs the menu when `kExtensionsMenuAccessControl` is enabled.
+  void InitMenuWithFeature(const Extension* extension,
+                           bool can_show_icon_in_toolbar);
 
-  // Returns true if the given page access command is enabled in the menu.
-  bool IsPageAccessCommandEnabled(const Extension& extension,
-                                  const GURL& url,
-                                  int command_id) const;
+  // Adds the page access items based on the current site setting pointed by
+  // `web_contents`.
+  void CreatePageAccessItems(const Extension* extension,
+                             content::WebContents* web_contents);
 
-  void HandlePageAccessCommand(int command_id,
-                               const Extension* extension) const;
-
-  // Logs a user action when an option is selected in the page access section of
-  // the context menu.
-  void LogPageAccessAction(int command_id) const;
+  // Emits a UKM record for the extension associated with `extension_url` and
+  // the corresponding `action`.
+  void RecordUkmForExtension(const GURL& extension_url,
+                             ExtensionUsageAction action);
 
   // Gets the extension we are displaying the menu for. Returns NULL if the
   // extension has been uninstalled and no longer exists.
@@ -145,30 +183,35 @@ class ExtensionContextMenuModel : public ui::SimpleMenuModel,
   // Returns the active web contents.
   content::WebContents* GetActiveWebContents() const;
 
+  // Returns the side panel service for the current profile.
+  SidePanelService* GetSidePanelService() const;
+
   // Appends the extension's context menu items.
   void AppendExtensionItems();
 
+  // Appends the side panel menu item to the context menu if `extension` has one
+  // it can open.
+  void AddSidePanelEntryIfPresent(const Extension& extension);
+
   // A copy of the extension's id.
-  std::string extension_id_;
+  ExtensionId extension_id_;
 
   // Whether the menu is for a component extension.
   bool is_component_;
 
   // The extension action of the extension we are displaying the menu for (if
   // it has one, otherwise NULL).
-  ExtensionAction* extension_action_;
+  raw_ptr<ExtensionAction, DanglingUntriaged> extension_action_;
 
-  Browser* const browser_;
+  const raw_ptr<BrowserWindowInterface> browser_;
 
-  Profile* profile_;
+  raw_ptr<Profile> profile_;
 
   // The delegate which handles the 'inspect popup' menu command (or NULL).
-  PopupDelegate* delegate_;
+  raw_ptr<PopupDelegate> delegate_;
 
-  // The visibility of the button at the time the menu opened.
-  ButtonVisibility button_visibility_;
-
-  const bool can_show_icon_in_toolbar_;
+  // Whether the extension icon is pinned at the time the menu opened.
+  bool is_pinned_;
 
   // Menu matcher for context menu items specified by the extension.
   std::unique_ptr<ContextMenuMatcher> extension_items_;
@@ -177,9 +220,15 @@ class ExtensionContextMenuModel : public ui::SimpleMenuModel,
 
   // The action taken by the menu. Has a valid value when the menu is being
   // shown.
-  absl::optional<ContextMenuAction> action_taken_;
+  std::optional<ContextMenuAction> action_taken_;
 
-  DISALLOW_COPY_AND_ASSIGN(ExtensionContextMenuModel);
+  ContextMenuSource source_;
+
+  // The origin used to populate the context menu's content.
+  // TODO(crbug.com/40265043): Web contents may change while the menu is open,
+  // which may affect the context menu contents. We should dynamically update
+  // the context menu, or close it when this happens.
+  url::Origin origin_;
 };
 
 }  // namespace extensions

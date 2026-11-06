@@ -1,18 +1,26 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_CSS_COUNTER_STYLE_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_COUNTER_STYLE_H_
 
+#include "base/check_op.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/core/css/cascade_layered.h"
+#include "third_party/blink/renderer/core/css/style_rule_counter_style.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 
 namespace blink {
 
-class StyleRuleCounterStyle;
 class CSSValue;
+
+namespace cssvalue {
+class CSSSymbolsValue;
+}  // namespace cssvalue
 
 enum class CounterStyleSystem {
   kCyclic,
@@ -35,6 +43,14 @@ enum class CounterStyleSystem {
   kUnresolvedExtends,
 };
 
+enum class CounterStyleSpeakAs {
+  kAuto,
+  kBullets,
+  kNumbers,
+  kWords,
+  kReference,
+};
+
 // Represents a valid counter style defined in a tree scope.
 class CORE_EXPORT CounterStyle final : public GarbageCollected<CounterStyle> {
  public:
@@ -43,12 +59,29 @@ class CORE_EXPORT CounterStyle final : public GarbageCollected<CounterStyle> {
   static CounterStyleSystem ToCounterStyleSystemEnum(const CSSValue* value);
 
   // Returns nullptr if the @counter-style rule is invalid.
-  static CounterStyle* Create(const StyleRuleCounterStyle&);
+  static CounterStyle* Create(
+      const CascadeLayered<const StyleRuleCounterStyle>&);
+
+  // Creates the anonymous counter style described by a symbols() function
+  // value, applying the implied descriptor values from the spec, along with any
+  // fallback behavior.
+  // https://drafts.csswg.org/css-counter-styles-3/#symbols-function
+  static CounterStyle* CreateAnonymousCounterStyle(
+      const cssvalue::CSSSymbolsValue&);
 
   const StyleRuleCounterStyle& GetStyleRule() const { return *style_rule_; }
+  CascadeLayered<const StyleRuleCounterStyle> GetLayeredStyleRule() const {
+    return CascadeLayered<const StyleRuleCounterStyle>(style_rule_,
+                                                       cascade_layer_);
+  }
 
   AtomicString GetName() const;
   CounterStyleSystem GetSystem() const { return system_; }
+
+  // Compares the declared descriptors and the resolved `extends`, `fallback`
+  // and `speak-as` targets by identity, so two styles that resolve differently
+  // are not equal.
+  bool operator==(const CounterStyle& other) const;
 
   bool IsPredefined() const { return is_predefined_; }
   void SetIsPredefined() { is_predefined_ = true; }
@@ -57,6 +90,19 @@ class CORE_EXPORT CounterStyle final : public GarbageCollected<CounterStyle> {
   // 'square', 'disclosure-open' and 'disclosure-closed'.
   bool IsPredefinedSymbolMarker() const { return is_predefined_symbol_marker_; }
   void SetIsPredefinedSymbolMarker() { is_predefined_symbol_marker_ = true; }
+
+  // Returns the predefined symbol marker (`disc`, `circle`, `square`,
+  // `disclosure-open` or `disclosure-closed`) this style resolves to through
+  // the `extends` chain, or `g_null_atom` if none.
+  AtomicString GetEffectiveSymbolMarkerName() const;
+
+  // Returns true if this counter style is, or resolves through `extends` to,
+  // `disclosure-open` or `disclosure-closed`.
+  bool IsDisclosureMarker() const;
+
+  bool RendersAsSymbolMarker() const {
+    return IsPredefinedSymbolMarker() || IsDisclosureMarker();
+  }
 
   // A CounterStyle object is dirtied when the information it holds becomes
   // stale, e.g., when the style rule mutated or the 'extends' or 'fallback'
@@ -68,8 +114,8 @@ class CORE_EXPORT CounterStyle final : public GarbageCollected<CounterStyle> {
 
   void TraverseAndMarkDirtyIfNeeded(HeapHashSet<Member<CounterStyle>>& visited);
 
-  // Set to true when there's no counter style matching 'extends' or 'fallback',
-  // and therefore we are resorting to 'decimal'.
+  // Set to true when there's no counter style matching 'extends', 'fallback' or
+  // 'speak-as', so this style must be dirtied when new styles are added.
   void SetHasInexistentReferences() { has_inexistent_references_ = true; }
 
   // https://drafts.csswg.org/css-counter-styles/#generate-a-counter
@@ -77,6 +123,10 @@ class CORE_EXPORT CounterStyle final : public GarbageCollected<CounterStyle> {
 
   String GetPrefix() const { return prefix_; }
   String GetSuffix() const { return suffix_; }
+
+  String GenerateRepresentationWithPrefixAndSuffix(int value) const {
+    return StrCat({prefix_, GenerateRepresentation(value), suffix_});
+  }
 
   AtomicString GetExtendsName() const { return extends_name_; }
   const CounterStyle& GetExtendedStyle() const { return *extended_style_; }
@@ -90,9 +140,35 @@ class CORE_EXPORT CounterStyle final : public GarbageCollected<CounterStyle> {
   bool HasUnresolvedFallback() const { return !fallback_style_; }
   void ResolveFallback(CounterStyle& fallback) { fallback_style_ = &fallback; }
 
+  CounterStyleSpeakAs GetSpeakAs() const { return speak_as_; }
+  AtomicString GetSpeakAsName() const { return speak_as_name_; }
+  bool HasUnresolvedSpeakAsReference() const {
+    return speak_as_ == CounterStyleSpeakAs::kReference && !speak_as_style_;
+  }
+  void ResolveInvalidSpeakAsReference() {
+    speak_as_ = CounterStyleSpeakAs::kAuto;
+    speak_as_style_ = nullptr;
+  }
+  void ResolveSpeakAsReference(CounterStyle& speak_as) {
+    DCHECK_NE(CounterStyleSpeakAs::kReference, speak_as.speak_as_);
+    speak_as_style_ = speak_as;
+  }
+  const CounterStyle& GetSpeakAsStyle() const {
+    DCHECK_EQ(CounterStyleSpeakAs::kReference, speak_as_);
+    return *speak_as_style_;
+  }
+
+  // Converts kReference and kAuto to one of the remaining values.
+  CounterStyleSpeakAs EffectiveSpeakAs() const;
+
+  // Generates the alternative text for the given counter value according to the
+  // 'speak-as' descriptor. Consumed by accessibility.
+  String GenerateTextAlternative(int value) const;
+
   void Trace(Visitor*) const;
 
-  explicit CounterStyle(const StyleRuleCounterStyle& rule);
+  explicit CounterStyle(
+      const CascadeLayered<const StyleRuleCounterStyle>& rule);
   ~CounterStyle();
 
  private:
@@ -114,8 +190,11 @@ class CORE_EXPORT CounterStyle final : public GarbageCollected<CounterStyle> {
 
   String IndexesToString(const Vector<wtf_size_t>& symbol_indexes) const;
 
-  // The corresponding style rule in CSS.
+  String GenerateTextAlternativeWithoutPrefixSuffix(int value) const;
+
+  // The corresponding style rule in CSS (and its associated CascadeLayer).
   Member<const StyleRuleCounterStyle> style_rule_;
+  Member<const CascadeLayer> cascade_layer_;
 
   // Tracks mutations of |style_rule_|.
   int style_rule_version_;
@@ -127,8 +206,14 @@ class CORE_EXPORT CounterStyle final : public GarbageCollected<CounterStyle> {
   AtomicString extends_name_;
   Member<CounterStyle> extended_style_;
 
-  AtomicString fallback_name_ = "decimal";
+  AtomicString fallback_name_{"decimal"};
   Member<CounterStyle> fallback_style_;
+
+  CounterStyleSpeakAs speak_as_ = CounterStyleSpeakAs::kAuto;
+
+  // These two members are set if 'speak-as' references another counter style.
+  AtomicString speak_as_name_;
+  Member<CounterStyle> speak_as_style_;
 
   // True if we are looking for a fallback counter style to generate a counter
   // value. Supports cycle detection in fallback.

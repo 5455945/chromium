@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,34 +9,39 @@
 #define UI_BASE_TEMPLATE_EXPRESSIONS_H_
 
 #include <map>
+#include <optional>
 #include <string>
+#include <string_view>
 
 #include "base/component_export.h"
-#include "base/strings/string_piece.h"
-
-namespace base {
-class Value;
-}
+#include "base/values.h"
 
 namespace ui {
 
 // Map of strings for template replacement in |ReplaceTemplateExpressions|.
-typedef std::map<const std::string, std::string> TemplateReplacements;
+typedef std::map<std::string, std::string> TemplateReplacements;
 
 // Convert a dictionary to a replacement map. This helper function is to assist
 // migration to using TemplateReplacements directly (which is preferred).
 // TODO(dschuyler): remove this function by using TemplateReplacements directly.
 COMPONENT_EXPORT(UI_BASE)
 void TemplateReplacementsFromDictionaryValue(
-    const base::Value& dictionary,
+    const base::DictValue& dictionary,
     TemplateReplacements* replacements);
 
 // Replace $i18n*{foo} in the format string with the value for the foo key in
-// |replacements|.  If the key is not found in the |replacements| that item will
-// be unaltered.
+// `replacements`. Crashes with a CHECK if a key is not found in `replacements`.
 COMPONENT_EXPORT(UI_BASE)
 std::string ReplaceTemplateExpressions(
-    base::StringPiece source,
+    std::string_view source,
+    const TemplateReplacements& replacements,
+    bool skip_unexpected_placeholder_check = false);
+
+// Same as `ReplaceTemplateExpressions()`, but returns `std::nullopt` instead of
+// crashing if a key in `source` is not found in `replacements`.
+COMPONENT_EXPORT(UI_BASE)
+std::optional<std::string> TryReplaceTemplateExpressions(
+    std::string_view source,
     const TemplateReplacements& replacements,
     bool skip_unexpected_placeholder_check = false);
 
@@ -54,7 +59,7 @@ std::string ReplaceTemplateExpressions(
 // Note: Currently, this only supports the legacy Polymer syntax, i.e.:
 //     _template: html` ... `,
 COMPONENT_EXPORT(UI_BASE)
-bool ReplaceTemplateExpressionsInJS(base::StringPiece source,
+bool ReplaceTemplateExpressionsInJS(std::string_view source,
                                     const TemplateReplacements& replacements,
                                     std::string* output);
 

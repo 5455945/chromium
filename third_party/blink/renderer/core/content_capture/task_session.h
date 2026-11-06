@@ -1,23 +1,22 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_CONTENT_CAPTURE_TASK_SESSION_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CONTENT_CAPTURE_TASK_SESSION_H_
 
+#include <optional>
 #include <utility>
+#include <vector>
 
-#include "base/callback.h"
-#include "base/memory/scoped_refptr.h"
+#include "base/functional/callback.h"
 #include "cc/paint/node_id.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "third_party/blink/public/platform/web_vector.h"
 #include "third_party/blink/renderer/core/content_capture/content_holder.h"
+#include "third_party/blink/renderer/platform/allow_discouraged_type.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
-#include "third_party/blink/renderer/platform/heap/heap_allocator.h"
 #include "third_party/blink/renderer/platform/heap/member.h"
-#include "third_party/blink/renderer/platform/wtf/hash_map.h"
-#include "third_party/blink/renderer/platform/wtf/hash_set.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
@@ -48,10 +47,9 @@ class TaskSession final : public GarbageCollected<TaskSession> {
   class DocumentSession final : public GarbageCollected<DocumentSession> {
    public:
     // The callback for total_sent_nodes_ metrics.
-    using SentNodeCountCallback = base::RepeatingCallback<void(size_t)>;
+    using SentNodeCountCallback = base::RepeatingCallback<void(int)>;
 
-    DocumentSession(const Document& document,
-                    SentNodeCountCallback& call_back);
+    DocumentSession(const Document& document, SentNodeCountCallback& call_back);
     ~DocumentSession();
     // Add the given |node| to changed node set if the node was sent, return
     // true if succeed.
@@ -67,13 +65,11 @@ class TaskSession final : public GarbageCollected<TaskSession> {
       return HasUnsentCapturedContent() || HasUnsentChangedContent() ||
              HasUnsentDetachedNodes();
     }
-    bool HasUnsentCapturedContent() const {
-      return !captured_content_.IsEmpty();
-    }
-    bool HasUnsentChangedContent() const { return !changed_content_.IsEmpty(); }
+    bool HasUnsentCapturedContent() const { return !captured_content_.empty(); }
+    bool HasUnsentChangedContent() const { return !changed_content_.empty(); }
     bool HasUnsentDetachedNodes() const { return !detached_nodes_.empty(); }
-    WebVector<int64_t> MoveDetachedNodes();
-    const Document* GetDocument() const { return document_; }
+    std::vector<int64_t> MoveDetachedNodes();
+    const Document* GetDocument() const { return document_.Get(); }
     bool FirstDataHasSent() const { return first_data_has_sent_; }
     void SetFirstDataHasSent() { first_data_has_sent_ = true; }
 
@@ -96,7 +92,8 @@ class TaskSession final : public GarbageCollected<TaskSession> {
     HeapHashMap<WeakMember<Node>, gfx::Rect> changed_content_;
     // The list of content id of node that has been detached from the
     // LayoutTree and needs to be sent.
-    WebVector<int64_t> detached_nodes_;
+    std::vector<int64_t> detached_nodes_ ALLOW_DISCOURAGED_TYPE(
+        "Will be passed to WebContentCaptureClient::DidRemoveContent");
 
     WeakMember<const Document> document_;
     // A set of weak reference of the node that has been sent.
@@ -111,10 +108,10 @@ class TaskSession final : public GarbageCollected<TaskSession> {
 
     bool first_data_has_sent_ = false;
     // This is for the metrics to record the total node that has been sent.
-    size_t total_sent_nodes_ = 0;
-    // Histogram could be disabed in low time resolution OS, see
+    int total_sent_nodes_ = 0;
+    // Histogram could be disabled in low time resolution OS, see
     // base::TimeTicks::IsHighResolution and ContentCaptureTask.
-    absl::optional<SentNodeCountCallback> callback_;
+    std::optional<SentNodeCountCallback> callback_;
   };
 
   TaskSession();

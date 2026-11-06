@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,8 @@
 
 #include <string>
 
-#include "base/macros.h"
+#include "base/memory/stack_allocated.h"
+#include "base/unguessable_token.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
 
 class Profile;
@@ -19,9 +20,14 @@ class Pickle;
 }
 
 class BrowserActionDragData {
+  STACK_ALLOCATED();
+
  public:
   BrowserActionDragData();
   BrowserActionDragData(const std::string& id, int index);
+
+  BrowserActionDragData(const BrowserActionDragData&) = delete;
+  BrowserActionDragData& operator=(const BrowserActionDragData&) = delete;
 
   // These mirror the views::View and views::MenuDelegate methods for dropping,
   // and return the appropriate results for being able to drop an extension's
@@ -50,16 +56,14 @@ class BrowserActionDragData {
   void WriteToPickle(Profile* profile, base::Pickle* pickle) const;
   bool ReadFromPickle(base::Pickle* pickle);
 
-  // The profile we originated from.
-  void* profile_;
+  // The unique token of the profile we originated from.
+  base::UnguessableToken profile_unique_token_;
 
   // The id of the view being dragged.
   std::string id_;
 
   // The index of the view being dragged.
   size_t index_;
-
-  DISALLOW_COPY_AND_ASSIGN(BrowserActionDragData);
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_EXTENSIONS_BROWSER_ACTION_DRAG_DATA_H_

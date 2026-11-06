@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,10 @@
 #include <string>
 #include <utility>
 
+#include "ash/constants/ash_pref_names.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/user_metrics.h"
-#include "chrome/common/pref_names.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 
@@ -19,9 +19,9 @@ namespace ash {
 namespace {
 
 constexpr int kEngagementHourBuckets = base::Time::kHoursPerDay;
-constexpr base::TimeDelta kOneHour = base::TimeDelta::FromHours(1);
-constexpr base::TimeDelta kMinSessionDuration = base::TimeDelta::FromSeconds(1);
-constexpr base::TimeDelta kMaxSessionDuration = base::TimeDelta::FromDays(1);
+constexpr base::TimeDelta kOneHour = base::Hours(1);
+constexpr base::TimeDelta kMinSessionDuration = base::Seconds(1);
+constexpr base::TimeDelta kMaxSessionDuration = base::Days(1);
 constexpr int kSessionDurationBuckets = 100;
 
 // Returns the hour (0-23) within the day for given local time.
@@ -90,12 +90,13 @@ const char FamilyUserSessionMetrics::kSessionEngagementDurationHistogramName[] =
 void FamilyUserSessionMetrics::RegisterProfilePrefs(
     PrefRegistrySimple* registry) {
   registry->RegisterTimeDeltaPref(
-      prefs::kFamilyUserMetricsSessionEngagementDuration, base::TimeDelta());
+      ash::prefs::kFamilyUserMetricsSessionEngagementDuration,
+      base::TimeDelta());
 }
 
 FamilyUserSessionMetrics::FamilyUserSessionMetrics(PrefService* pref_service)
     : pref_service_(pref_service) {
-  DCHECK(pref_service_);
+  CHECK(pref_service_, base::NotFatalUntil::M160);
   UsageTimeStateNotifier::GetInstance()->AddObserver(this);
 }
 
@@ -112,13 +113,14 @@ FamilyUserSessionMetrics::~FamilyUserSessionMetrics() {
 
 void FamilyUserSessionMetrics::OnNewDay() {
   base::TimeDelta unreported_duration = pref_service_->GetTimeDelta(
-      prefs::kFamilyUserMetricsSessionEngagementDuration);
+      ash::prefs::kFamilyUserMetricsSessionEngagementDuration);
   if (unreported_duration <= base::TimeDelta())
     return;
   base::UmaHistogramCustomTimes(kSessionEngagementDurationHistogramName,
                                 unreported_duration, kMinSessionDuration,
                                 kMaxSessionDuration, kSessionDurationBuckets);
-  pref_service_->ClearPref(prefs::kFamilyUserMetricsSessionEngagementDuration);
+  pref_service_->ClearPref(
+      ash::prefs::kFamilyUserMetricsSessionEngagementDuration);
 }
 
 void FamilyUserSessionMetrics::SetActiveSessionStartForTesting(
@@ -144,9 +146,9 @@ void FamilyUserSessionMetrics::UpdateUserEngagement(bool is_user_active) {
         /*end=*/now);
     if (now > active_session_start_) {
       base::TimeDelta unreported_duration = pref_service_->GetTimeDelta(
-          prefs::kFamilyUserMetricsSessionEngagementDuration);
+          ash::prefs::kFamilyUserMetricsSessionEngagementDuration);
       pref_service_->SetTimeDelta(
-          prefs::kFamilyUserMetricsSessionEngagementDuration,
+          ash::prefs::kFamilyUserMetricsSessionEngagementDuration,
           unreported_duration + now - active_session_start_);
     }
 

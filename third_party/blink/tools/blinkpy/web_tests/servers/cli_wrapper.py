@@ -40,9 +40,8 @@ import signal
 
 from blinkpy.common.host import Host
 from blinkpy.common.system.log_utils import configure_logging
+from blinkpy.web_tests.command_line import configuration_options
 from blinkpy.web_tests.port.base import ARTIFACTS_SUB_DIR
-from blinkpy.web_tests.port.factory import configuration_options
-from blinkpy.web_tests.port.factory import python_server_options
 from blinkpy.web_tests.servers.server_base import ServerError
 
 _log = logging.getLogger(__name__)
@@ -53,43 +52,38 @@ class RawTextHelpFormatter(optparse.IndentedHelpFormatter):
         return description
 
 
-def parse_python_server_options(argv=None):
-    parse = optparse.OptionParser()
-    for opt in python_server_options():
-        parse.add_option(opt)
-    option, args = parse.parse_args(argv)
-    return option, args
-
-
-def main(server_constructor,
-         sleep_fn=None,
-         argv=None,
-         description=None,
-         **kwargs):
+def main(
+    server_constructor, sleep_fn=None, argv=None, description=None, **kwargs
+):
     host = Host()
     sleep_fn = sleep_fn or (lambda: host.sleep(1))
 
     parser = optparse.OptionParser(
-        description=description, formatter=RawTextHelpFormatter())
+        description=description, formatter=RawTextHelpFormatter()
+    )
     parser.add_option(
         '--output-dir',
         type=str,
         default=None,
-        help='output directory, for log files etc.')
+        help='output directory, for log files etc.',
+    )
     parser.add_option(
-        '-v', '--verbose', action='store_true', help='print debug logs')
+        '-v', '--verbose', action='store_true', help='print debug logs'
+    )
     for opt in configuration_options():
         parser.add_option(opt)
     options, _ = parser.parse_args(argv)
 
     configure_logging(
         logging_level=logging.DEBUG if options.verbose else logging.INFO,
-        include_time=options.verbose)
+        include_time=options.verbose,
+    )
 
     port_obj = host.port_factory.get(options=options)
     if not options.output_dir:
         options.output_dir = host.filesystem.join(
-            port_obj.default_results_directory(), ARTIFACTS_SUB_DIR)
+            port_obj.default_results_directory(), ARTIFACTS_SUB_DIR
+        )
 
     # Create the output directory if it doesn't already exist.
     host.filesystem.maybe_make_directory(options.output_dir)

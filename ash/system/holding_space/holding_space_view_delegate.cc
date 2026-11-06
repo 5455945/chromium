@@ -1,34 +1,49 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/system/holding_space/holding_space_view_delegate.h"
 
+#include <algorithm>
+#include <vector>
+
+#include "ash/constants/ash_features.h"
 #include "ash/public/cpp/holding_space/holding_space_client.h"
 #include "ash/public/cpp/holding_space/holding_space_constants.h"
 #include "ash/public/cpp/holding_space/holding_space_controller.h"
+#include "ash/public/cpp/holding_space/holding_space_file.h"
 #include "ash/public/cpp/holding_space/holding_space_item.h"
 #include "ash/public/cpp/holding_space/holding_space_metrics.h"
 #include "ash/public/cpp/holding_space/holding_space_model.h"
 #include "ash/public/cpp/holding_space/holding_space_progress.h"
+#include "ash/public/cpp/holding_space/holding_space_util.h"
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/system/holding_space/holding_space_drag_util.h"
 #include "ash/system/holding_space/holding_space_item_view.h"
 #include "ash/system/holding_space/holding_space_tray.h"
 #include "ash/system/holding_space/holding_space_tray_bubble.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/containers/contains.h"
+#include "base/check.h"
+#include "base/memory/raw_ref.h"
+#include "base/memory/weak_ptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "net/base/mime_util.h"
+#include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
 #include "ui/accessibility/ax_action_data.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
+#include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/base/dragdrop/os_exchange_data_provider.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/models/simple_menu_model.h"
+#include "ui/base/mojom/menu_source_type.mojom.h"
+#include "ui/base/ui_base_features.h"
+#include "ui/color/color_id.h"
+#include "ui/display/screen.h"
+#include "ui/display/tablet_state.h"
+#include "ui/menus/simple_menu_model.h"
 #include "ui/views/controls/menu/menu_runner.h"
+#include "ui/views/focus/focus_manager.h"
 #include "ui/views/vector_icons.h"
 #include "ui/views/view.h"
 
@@ -78,13 +93,6 @@ std::vector<HoldingSpaceItemView*> GetViewsInRange(
   DCHECK(found_start);
   DCHECK(found_end);
   return range;
-}
-
-// Attempts to open the holding space items associated with the given `views`.
-void OpenItems(const std::vector<const HoldingSpaceItemView*>& views) {
-  DCHECK_GE(views.size(), 1u);
-  HoldingSpaceController::Get()->client()->OpenItems(GetItems(views),
-                                                     base::DoNothing());
 }
 
 }  // namespace
@@ -147,11 +155,9 @@ HoldingSpaceViewDelegate::HoldingSpaceViewDelegate(
 
   // Multi-select is the only selection UI in tablet mode. Outside of tablet
   // mode, selection UI is based on the `selection_size_`.
-  selection_ui_ = TabletMode::Get()->InTabletMode()
+  selection_ui_ = display::Screen::Get()->InTabletMode()
                       ? SelectionUi::kMultiSelect
                       : SelectionUi::kSingleSelect;
-
-  tablet_mode_observer_.Observe(TabletMode::Get());
 }
 
 HoldingSpaceViewDelegate::~HoldingSpaceViewDelegate() {
@@ -191,7 +197,7 @@ bool HoldingSpaceViewDelegate::OnHoldingSpaceItemViewAccessibleAction(
   if (action_data.action == ax::mojom::Action::kDoDefault) {
     if (!view->selected())
       SetSelection(view);
-    OpenItems(GetSelection());
+    OpenItemsAndScheduleClose(GetSelection());
     return true;
   }
   // When showing the context menu via accessible action (e.g. Search + M),
@@ -218,23 +224,24 @@ bool HoldingSpaceViewDelegate::OnHoldingSpaceItemViewGestureEvent(
 
   // When a long press or two finger tap gesture occurs we are going to show the
   // context menu. Ensure that the pressed `view` is part of the selection.
-  if (event.type() == ui::ET_GESTURE_LONG_PRESS ||
-      event.type() == ui::ET_GESTURE_TWO_FINGER_TAP) {
+  if (event.type() == ui::EventType::kGestureLongPress ||
+      event.type() == ui::EventType::kGestureTwoFingerTap) {
     view->SetSelected(true);
     return false;
   }
   // If a scroll begin gesture is received while the context menu is showing,
   // that means the user is trying to initiate a drag. Close the context menu
   // and start the item drag.
-  if (event.type() == ui::ET_GESTURE_SCROLL_BEGIN && context_menu_runner_ &&
-      context_menu_runner_->IsRunning()) {
+  if (event.type() == ui::EventType::kGestureScrollBegin &&
+      context_menu_runner_ && context_menu_runner_->IsRunning()) {
     context_menu_runner_.reset();
     view->StartDrag(event, ui::mojom::DragEventSource::kTouch);
     return false;
   }
 
-  if (event.type() != ui::ET_GESTURE_TAP)
+  if (event.type() != ui::EventType::kGestureTap) {
     return false;
+  }
 
   // When a tap gesture occurs and *no* views are currently selected, select and
   // open the tapped `view`. Note that the tap `event` should *not* propagate
@@ -242,7 +249,7 @@ bool HoldingSpaceViewDelegate::OnHoldingSpaceItemViewGestureEvent(
   // the child bubble which clears selection state.
   if (GetSelection().empty()) {
     SetSelection(view);
-    OpenItems(GetSelection());
+    OpenItemsAndScheduleClose(GetSelection());
     return true;
   }
 
@@ -262,7 +269,7 @@ bool HoldingSpaceViewDelegate::OnHoldingSpaceItemViewKeyPressed(
   if (event.key_code() == ui::KeyboardCode::VKEY_RETURN) {
     if (!view->selected())
       SetSelection(view);
-    OpenItems(GetSelection());
+    OpenItemsAndScheduleClose(GetSelection());
     return true;
   }
   return false;
@@ -286,10 +293,9 @@ bool HoldingSpaceViewDelegate::OnHoldingSpaceItemViewMousePressed(
   // Note that this is performed in a scoped closure runner in order to give
   // `SetSelectedRange()` a chance to run and clean up any previous range-based
   // selection.
-  base::ScopedClosureRunner set_selected_range_end(base::BindOnce(
-      [](HoldingSpaceItemView** selected_range_end,
-         HoldingSpaceItemView* view) { *selected_range_end = view; },
-      &selected_range_end_, view));
+  absl::Cleanup set_selected_range_end = [this, view] {
+    selected_range_end_ = view;
+  };
 
   // If the SHIFT key is down, the user is attempting a range-based selection.
   // Remove from the selection the previously selected range and instead add
@@ -352,7 +358,7 @@ void HoldingSpaceViewDelegate::OnHoldingSpaceItemViewMouseReleased(
   // `view` being clicked is already part of the selection.
   if (event.flags() & ui::EF_IS_DOUBLE_CLICK) {
     DCHECK(view->selected());
-    OpenItems(GetSelection());
+    OpenItemsAndScheduleClose(GetSelection());
     return;
   }
 
@@ -369,6 +375,18 @@ void HoldingSpaceViewDelegate::OnHoldingSpaceItemViewMouseReleased(
   SetSelection(view);
 }
 
+void HoldingSpaceViewDelegate::OnHoldingSpaceItemViewPrimaryActionPressed(
+    HoldingSpaceItemView* view) {
+  if (!view->selected())
+    ClearSelection();
+}
+
+void HoldingSpaceViewDelegate::OnHoldingSpaceItemViewSecondaryActionPressed(
+    HoldingSpaceItemView* view) {
+  if (!view->selected())
+    ClearSelection();
+}
+
 void HoldingSpaceViewDelegate::OnHoldingSpaceItemViewSelectedChanged(
     HoldingSpaceItemView* view) {
   selection_size_ += view->selected() ? 1 : -1;
@@ -380,7 +398,7 @@ bool HoldingSpaceViewDelegate::OnHoldingSpaceTrayBubbleKeyPressed(
   // The ENTER key should open all selected holding space items.
   if (event.key_code() == ui::KeyboardCode::VKEY_RETURN) {
     if (!GetSelection().empty()) {
-      OpenItems(GetSelection());
+      OpenItemsAndScheduleClose(GetSelection());
       return true;
     }
   }
@@ -389,8 +407,9 @@ bool HoldingSpaceViewDelegate::OnHoldingSpaceTrayBubbleKeyPressed(
 
 void HoldingSpaceViewDelegate::OnHoldingSpaceTrayChildBubbleGestureEvent(
     const ui::GestureEvent& event) {
-  if (event.type() == ui::ET_GESTURE_TAP)
+  if (event.type() == ui::EventType::kGestureTap) {
     ClearSelection();
+  }
 }
 
 void HoldingSpaceViewDelegate::OnHoldingSpaceTrayChildBubbleMousePressed(
@@ -398,7 +417,7 @@ void HoldingSpaceViewDelegate::OnHoldingSpaceTrayChildBubbleMousePressed(
   ClearSelection();
 }
 
-base::RepeatingClosureList::Subscription
+base::CallbackListSubscription
 HoldingSpaceViewDelegate::AddSelectionUiChangedCallback(
     base::RepeatingClosureList::CallbackType callback) {
   return selection_ui_changed_callbacks_.Add(std::move(callback));
@@ -411,17 +430,17 @@ void HoldingSpaceViewDelegate::UpdateTrayVisibility() {
 void HoldingSpaceViewDelegate::ShowContextMenuForViewImpl(
     views::View* source,
     const gfx::Point& point,
-    ui::MenuSourceType source_type) {
+    ui::mojom::MenuSourceType source_type) {
   // In touch mode, gesture events continue to be sent to holding space views
   // after showing the context menu so that it can be aborted if the user
-  // initiates a drag sequence. This means both `ui::ET_GESTURE_LONG_TAP` and
-  // `ui::ET_GESTURE_LONG_PRESS` may be received while showing the context menu
-  // which would result in trying to show the context menu twice. This would not
-  // be a fatal failure but would result in UI jank.
+  // initiates a drag sequence. This means both `ui::EventType::kGestureLongTap`
+  // and `ui::EventType::kGestureLongPress` may be received while showing the
+  // context menu which would result in trying to show the context menu twice.
+  // This would not be a fatal failure but would result in UI jank.
   if (context_menu_runner_ && context_menu_runner_->IsRunning())
     return;
 
-  int run_types = views::MenuRunner::USE_TOUCHABLE_LAYOUT |
+  int run_types = views::MenuRunner::USE_ASH_SYS_UI_LAYOUT |
                   views::MenuRunner::CONTEXT_MENU |
                   views::MenuRunner::FIXED_ANCHOR;
 
@@ -429,16 +448,17 @@ void HoldingSpaceViewDelegate::ShowContextMenuForViewImpl(
   // In order to determine if the gesture resulting in this context menu being
   // shown was actually the start of a drag sequence, holding space views will
   // have to receive events that would otherwise be consumed by the `MenuHost`.
-  if (source_type == ui::MenuSourceType::MENU_SOURCE_TOUCH)
+  if (source_type == ui::mojom::MenuSourceType::kTouch) {
     run_types |= views::MenuRunner::SEND_GESTURE_EVENTS_TO_OWNER;
+  }
 
   context_menu_runner_ =
       std::make_unique<views::MenuRunner>(BuildMenuModel(), run_types);
 
   context_menu_runner_->RunMenuAt(
       source->GetWidget(), nullptr /*button_controller*/,
-      source->GetBoundsInScreen(), views::MenuAnchorPosition::kBubbleBelow,
-      source_type);
+      source->GetBoundsInScreen(),
+      views::MenuAnchorPosition::kBubbleBottomRight, source_type);
 }
 
 bool HoldingSpaceViewDelegate::CanStartDragForView(
@@ -467,72 +487,81 @@ void HoldingSpaceViewDelegate::WriteDragDataForView(views::View* sender,
   // Drag image.
   gfx::ImageSkia drag_image;
   gfx::Vector2d drag_offset;
-  holding_space_util::CreateDragImage(selection, &drag_image, &drag_offset);
+  holding_space_util::CreateDragImage(
+      selection, &drag_image, &drag_offset,
+      bubble_->GetBubbleView()->GetColorProvider());
   data->provider().SetDragImage(std::move(drag_image), drag_offset);
 
   // Payload.
   std::vector<ui::FileInfo> filenames;
   for (const HoldingSpaceItemView* view : selection) {
-    const base::FilePath& file_path = view->item()->file_path();
+    const base::FilePath& file_path = view->item()->file().file_path;
     filenames.push_back(ui::FileInfo(file_path, file_path.BaseName()));
   }
   data->SetFilenames(filenames);
 }
 
-void HoldingSpaceViewDelegate::ExecuteCommand(int command_id, int event_flags) {
+void HoldingSpaceViewDelegate::ExecuteCommand(int command, int event_flags) {
   const std::vector<const HoldingSpaceItem*> items(GetItems(GetSelection()));
   DCHECK_GE(items.size(), 1u);
 
+  const auto command_id = static_cast<HoldingSpaceCommandId>(command);
   HoldingSpaceClient* const client = HoldingSpaceController::Get()->client();
-  switch (static_cast<HoldingSpaceCommandId>(command_id)) {
-    case HoldingSpaceCommandId::kCancelItem:
-      client->CancelItems(items);
-      break;
+  switch (command_id) {
     case HoldingSpaceCommandId::kCopyImageToClipboard:
       DCHECK_EQ(items.size(), 1u);
       client->CopyImageToClipboard(*items.front(), base::DoNothing());
       break;
-    case HoldingSpaceCommandId::kPauseItem:
-      client->PauseItems(items);
-      break;
     case HoldingSpaceCommandId::kPinItem:
       client->PinItems(items);
       break;
-    case HoldingSpaceCommandId::kRemoveItem:
+    case HoldingSpaceCommandId::kRemoveItem: {
+      std::vector<base::FilePath> suggested_file_paths;
       HoldingSpaceController::Get()->model()->RemoveIf(base::BindRepeating(
           [](const std::vector<const HoldingSpaceItem*>& items,
+             std::vector<base::FilePath>& suggested_file_paths,
              const HoldingSpaceItem* item) {
-            const bool remove = base::Contains(items, item);
+            const bool remove = std::ranges::contains(items, item);
             if (remove) {
+              if (HoldingSpaceItem::IsSuggestionType(item->type())) {
+                suggested_file_paths.push_back(item->file().file_path);
+              }
               holding_space_metrics::RecordItemAction(
                   {item}, holding_space_metrics::ItemAction::kRemove);
             }
             return remove;
           },
-          std::cref(items)));
+          std::cref(items), std::ref(suggested_file_paths)));
+      HoldingSpaceController::Get()->client()->RemoveSuggestions(
+          suggested_file_paths);
       break;
-    case HoldingSpaceCommandId::kResumeItem:
-      client->ResumeItems(items);
-      break;
+    }
     case HoldingSpaceCommandId::kShowInFolder:
       DCHECK_EQ(items.size(), 1u);
-      client->ShowItemInFolder(*items.front(), base::DoNothing());
+      client->ShowItemInFolder(
+          *items.front(),
+          base::DoNothing());
       break;
     case HoldingSpaceCommandId::kUnpinItem:
       client->UnpinItems(items);
       break;
     default:
-      NOTREACHED();
+      CHECK(holding_space_util::IsInProgressCommand(command_id));
+      for (const HoldingSpaceItem* item : items) {
+        const bool success =
+            holding_space_util::ExecuteInProgressCommand(item, command_id);
+        CHECK(success);
+      }
       break;
   }
 }
 
-void HoldingSpaceViewDelegate::OnTabletModeStarted() {
-  UpdateSelectionUi();
-}
-
-void HoldingSpaceViewDelegate::OnTabletModeEnded() {
-  UpdateSelectionUi();
+void HoldingSpaceViewDelegate::OnDisplayTabletStateChanged(
+    display::TabletState state) {
+  if (state == display::TabletState::kInClamshellMode ||
+      state == display::TabletState::kInTabletMode) {
+    UpdateSelectionUi();
+  }
 }
 
 ui::SimpleMenuModel* HoldingSpaceViewDelegate::BuildMenuModel() {
@@ -541,31 +570,44 @@ ui::SimpleMenuModel* HoldingSpaceViewDelegate::BuildMenuModel() {
   std::vector<const HoldingSpaceItemView*> selection = GetSelection();
   DCHECK_GE(selection.size(), 1u);
 
-  bool is_pausable = true;
-  bool is_resumable = true;
-  bool is_cancelable = true;
+  // Whether any item in `selection` is complete.
+  bool is_any_item_complete = false;
+
+  // Whether all items in `selection` are removable.
   bool is_removable = true;
 
   // A value for `is_pinnable` will only be present if the `selection` contains
   // at least one holding space item which is *not* in-progress. In-progress
   // items are ignored with respect to pin-/unpin-ability.
-  absl::optional<bool> is_pinnable;
+  std::optional<bool> is_pinnable;
+
+  // A value for `in_progress_commands` will only be present if the `selection`
+  // does *not* contain any items which are complete.
+  std::optional<std::vector<HoldingSpaceItem::InProgressCommand>>
+      in_progress_commands;
 
   HoldingSpaceModel* const model = HoldingSpaceController::Get()->model();
   for (const HoldingSpaceItemView* view : selection) {
     const HoldingSpaceItem* item = view->item();
 
-    // The "Pause" command should only be present if *all* of the selected
-    // holding space items are pausable.
-    is_pausable &= !item->progress().IsComplete() && !item->IsPaused();
-
-    // The "Resume" command should only be present if *all* of the selected
-    // holding space items are resumable.
-    is_resumable &= item->IsPaused();
-
-    // The "Cancel" command should only be present if *all* of the selected
-    // holding space items are cancelable.
-    is_cancelable &= !item->progress().IsComplete();
+    // In-progress commands are only available if supported by the entire
+    // `selection`. In-progress commands supported by only a subset of the
+    // `selection` are removed.
+    if (!item->progress().IsComplete() && !is_any_item_complete) {
+      if (!in_progress_commands.has_value()) {
+        in_progress_commands = item->in_progress_commands();
+      } else {
+        std::erase_if(in_progress_commands.value(),
+                      [&](const HoldingSpaceItem::InProgressCommand&
+                              in_progress_command) {
+                        return !holding_space_util::SupportsInProgressCommand(
+                            item, in_progress_command.command_id);
+                      });
+      }
+    } else {
+      in_progress_commands = std::nullopt;
+      is_any_item_complete = true;
+    }
 
     // The "Remove" command should only be present if *all* of the selected
     // holding space items are removable.
@@ -582,87 +624,106 @@ ui::SimpleMenuModel* HoldingSpaceViewDelegate::BuildMenuModel() {
     // are already pinned will be ignored.
     is_pinnable = is_pinnable.value_or(false) ||
                   !model->ContainsItem(HoldingSpaceItem::Type::kPinnedFile,
-                                       item->file_path());
+                                       item->file().file_path);
   }
 
-  if (is_pausable) {
-    context_menu_model_->AddItemWithIcon(
-        static_cast<int>(HoldingSpaceCommandId::kPauseItem),
-        l10n_util::GetStringUTF16(IDS_ASH_HOLDING_SPACE_CONTEXT_MENU_PAUSE),
-        ui::ImageModel::FromVectorIcon(kPauseIcon, /*color_id=*/-1,
-                                       kHoldingSpaceIconSize));
+  struct MenuItemModel {
+    const HoldingSpaceCommandId command_id;
+    const int label_id;
+    const raw_ref<const gfx::VectorIcon> icon;
+  };
+
+  using MenuSectionModel = std::vector<MenuItemModel>;
+  std::vector<MenuSectionModel> menu_sections(1);
+
+  // In-progress commands.
+  if (in_progress_commands.has_value()) {
+    for (const HoldingSpaceItem::InProgressCommand& in_progress_command :
+         in_progress_commands.value()) {
+      // `kOpenItem` is not accessible from the context menu.
+      if (in_progress_command.command_id != HoldingSpaceCommandId::kOpenItem) {
+        menu_sections.back().emplace_back(
+            MenuItemModel{.command_id = in_progress_command.command_id,
+                          .label_id = in_progress_command.label_id,
+                          .icon = raw_ref(*in_progress_command.icon)});
+      }
+    }
   }
 
-  if (is_resumable) {
-    context_menu_model_->AddItemWithIcon(
-        static_cast<int>(HoldingSpaceCommandId::kResumeItem),
-        l10n_util::GetStringUTF16(IDS_ASH_HOLDING_SPACE_CONTEXT_MENU_RESUME),
-        ui::ImageModel::FromVectorIcon(kResumeIcon, /*color_id=*/-1,
-                                       kHoldingSpaceIconSize));
-  }
-
-  if (is_cancelable) {
-    context_menu_model_->AddItemWithIcon(
-        static_cast<int>(HoldingSpaceCommandId::kCancelItem),
-        l10n_util::GetStringUTF16(IDS_ASH_HOLDING_SPACE_CONTEXT_MENU_CANCEL),
-        ui::ImageModel::FromVectorIcon(kCancelIcon, /*color_id=*/-1,
-                                       kHoldingSpaceIconSize));
-  }
-
-  // The "Pause"/"Resume"/"Cancel" commands are separated from other commands.
-  if (context_menu_model_->GetItemCount())
-    context_menu_model_->AddSeparator(ui::MenuSeparatorType::NORMAL_SEPARATOR);
+  // The in-progress commands are separated from other commands.
+  if (!menu_sections.back().empty())
+    menu_sections.emplace_back();
 
   if (selection.size() == 1u) {
     // The "Show in folder" command should only be present if there is only one
     // holding space item selected.
-    context_menu_model_->AddItemWithIcon(
-        static_cast<int>(HoldingSpaceCommandId::kShowInFolder),
-        l10n_util::GetStringUTF16(
-            IDS_ASH_HOLDING_SPACE_CONTEXT_MENU_SHOW_IN_FOLDER),
-        ui::ImageModel::FromVectorIcon(kFolderIcon, /*color_id=*/-1,
-                                       kHoldingSpaceIconSize));
+    menu_sections.back().emplace_back(MenuItemModel{
+        .command_id = HoldingSpaceCommandId::kShowInFolder,
+        .label_id = IDS_ASH_HOLDING_SPACE_CONTEXT_MENU_SHOW_IN_FOLDER,
+        .icon = raw_ref(kFolderIcon)});
 
     std::string mime_type;
     const bool is_image =
-        net::GetMimeTypeFromFile(selection.front()->item()->file_path(),
-                                 &mime_type) &&
+        net::GetWellKnownMimeTypeFromFile(
+            selection.front()->item()->file().file_path, &mime_type) &&
         net::MatchesMimeType(kMimeTypeImage, mime_type);
 
     if (is_image) {
       // The "Copy image" command should only be present if there is only one
       // holding space item selected and that item is backed by an image file.
-      context_menu_model_->AddItemWithIcon(
-          static_cast<int>(HoldingSpaceCommandId::kCopyImageToClipboard),
-          l10n_util::GetStringUTF16(
-              IDS_ASH_HOLDING_SPACE_CONTEXT_MENU_COPY_IMAGE_TO_CLIPBOARD),
-          ui::ImageModel::FromVectorIcon(kCopyIcon, /*color_id=*/-1,
-                                         kHoldingSpaceIconSize));
+      menu_sections.back().emplace_back(MenuItemModel{
+          .command_id = HoldingSpaceCommandId::kCopyImageToClipboard,
+          .label_id =
+              IDS_ASH_HOLDING_SPACE_CONTEXT_MENU_COPY_IMAGE_TO_CLIPBOARD,
+          .icon = raw_ref(kCopyIcon)});
     }
   }
 
   if (is_pinnable.has_value()) {
     if (is_pinnable.value()) {
-      context_menu_model_->AddItemWithIcon(
-          static_cast<int>(HoldingSpaceCommandId::kPinItem),
-          l10n_util::GetStringUTF16(IDS_ASH_HOLDING_SPACE_CONTEXT_MENU_PIN),
-          ui::ImageModel::FromVectorIcon(views::kPinIcon, /*color_id=*/-1,
-                                         kHoldingSpaceIconSize));
+      menu_sections.back().emplace_back(
+          MenuItemModel{.command_id = HoldingSpaceCommandId::kPinItem,
+                        .label_id = IDS_ASH_HOLDING_SPACE_CONTEXT_MENU_PIN,
+                        .icon = raw_ref(::features::IsRoundedIconsEnabled()
+                                            ? views::kKeepIcon
+                                            : views::kPinOldIcon)});
     } else {
-      context_menu_model_->AddItemWithIcon(
-          static_cast<int>(HoldingSpaceCommandId::kUnpinItem),
-          l10n_util::GetStringUTF16(IDS_ASH_HOLDING_SPACE_CONTEXT_MENU_UNPIN),
-          ui::ImageModel::FromVectorIcon(views::kUnpinIcon, /*color_id=*/-1,
-                                         kHoldingSpaceIconSize));
+      menu_sections.back().emplace_back(
+          MenuItemModel{.command_id = HoldingSpaceCommandId::kUnpinItem,
+                        .label_id = IDS_ASH_HOLDING_SPACE_CONTEXT_MENU_UNPIN,
+                        .icon = raw_ref(::features::IsRoundedIconsEnabled()
+                                            ? views::kKeepFilledIcon
+                                            : views::kUnpinOldIcon)});
     }
   }
 
   if (is_removable) {
-    context_menu_model_->AddItemWithIcon(
-        static_cast<int>(HoldingSpaceCommandId::kRemoveItem),
-        l10n_util::GetStringUTF16(IDS_ASH_HOLDING_SPACE_CONTEXT_MENU_REMOVE),
-        ui::ImageModel::FromVectorIcon(kRemoveCircleOutlineIcon,
-                                       /*color_id=*/-1, kHoldingSpaceIconSize));
+    menu_sections.back().emplace_back(
+        MenuItemModel{.command_id = HoldingSpaceCommandId::kRemoveItem,
+                      .label_id = IDS_ASH_HOLDING_SPACE_CONTEXT_MENU_REMOVE,
+                      .icon = raw_ref(kCancelCircleOutlineIcon)});
+  }
+
+  // Add modeled `menu_sections` to the `context_menu_model_`.
+  for (const MenuSectionModel& menu_section : menu_sections) {
+    if (menu_section.empty())
+      continue;
+
+    // Each `menu_section` should be separated by a normal separator.
+    if (context_menu_model_->GetItemCount()) {
+      context_menu_model_->AddSeparator(
+          ui::MenuSeparatorType::NORMAL_SEPARATOR);
+    }
+
+    // Each `menu_section` should contain their respective `menu_item`s.
+    for (const MenuItemModel& menu_item : menu_section) {
+      context_menu_model_->AddItemWithIcon(
+          static_cast<int>(menu_item.command_id),
+          l10n_util::GetStringUTF16(menu_item.label_id),
+          ui::ImageModel::FromVectorIcon(*menu_item.icon,
+                                         ui::kColorAshSystemUIMenuIcon,
+                                         kHoldingSpaceIconSize));
+    }
   }
 
   return context_menu_model_.get();
@@ -671,9 +732,12 @@ ui::SimpleMenuModel* HoldingSpaceViewDelegate::BuildMenuModel() {
 std::vector<const HoldingSpaceItemView*>
 HoldingSpaceViewDelegate::GetSelection() {
   std::vector<const HoldingSpaceItemView*> selection;
-  for (const HoldingSpaceItemView* view : bubble_->GetHoldingSpaceItemViews()) {
-    if (view->selected())
-      selection.push_back(view);
+  if (bubble_) {  // Maybe be `nullptr` in testing.
+    for (const HoldingSpaceItemView* view :
+         bubble_->GetHoldingSpaceItemViews()) {
+      if (view->selected())
+        selection.push_back(view);
+    }
   }
   DCHECK_EQ(selection.size(), selection_size_);
   return selection;
@@ -691,10 +755,12 @@ void HoldingSpaceViewDelegate::SetSelection(
     const std::vector<std::string>& item_ids) {
   std::vector<HoldingSpaceItemView*> selection;
 
-  for (HoldingSpaceItemView* view : bubble_->GetHoldingSpaceItemViews()) {
-    view->SetSelected(base::Contains(item_ids, view->item_id()));
-    if (view->selected())
-      selection.push_back(view);
+  if (bubble_) {  // May be `nullptr` in testing.
+    for (HoldingSpaceItemView* view : bubble_->GetHoldingSpaceItemViews()) {
+      view->SetSelected(std::ranges::contains(item_ids, view->item_id()));
+      if (view->selected())
+        selection.push_back(view);
+    }
   }
 
   if (selection.size() == 1u) {
@@ -727,7 +793,7 @@ void HoldingSpaceViewDelegate::SetSelectedRange(HoldingSpaceItemView* start,
 
 void HoldingSpaceViewDelegate::UpdateSelectionUi() {
   const SelectionUi selection_ui =
-      TabletMode::Get()->InTabletMode() || selection_size_ > 1u
+      display::Screen::Get()->InTabletMode() || selection_size_ > 1u
           ? SelectionUi::kMultiSelect
           : SelectionUi::kSingleSelect;
 
@@ -736,6 +802,25 @@ void HoldingSpaceViewDelegate::UpdateSelectionUi() {
 
   selection_ui_ = selection_ui;
   selection_ui_changed_callbacks_.Notify();
+}
+
+void HoldingSpaceViewDelegate::OpenItemsAndScheduleClose(
+    const std::vector<const HoldingSpaceItemView*>& views) {
+  DCHECK_GE(views.size(), 1u);
+
+  // This `PostTask()` will result in the destruction of the view delegate if it
+  // has not already been destroyed.
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          [](const base::WeakPtr<HoldingSpaceViewDelegate>& weak_ptr) {
+            if (weak_ptr)
+              weak_ptr->bubble_->tray()->CloseBubble();
+          },
+          weak_factory_.GetWeakPtr()));
+
+  HoldingSpaceController::Get()->client()->OpenItems(GetItems(views),
+                                                     base::DoNothing());
 }
 
 }  // namespace ash

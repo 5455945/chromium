@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,10 @@
 #include <memory>
 #include <vector>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
 #include "content/browser/payments/payment_manager.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/mojom/payments/payment_app.mojom.h"
+#include "third_party/blink/public/mojom/payments/payment_app_events.mojom.h"
 #include "url/gurl.h"
 
 namespace blink {
@@ -28,11 +26,20 @@ class StoragePartitionImpl;
 class BrowserTaskEnvironment;
 
 class PaymentAppContentUnitTestBase : public testing::Test {
+ public:
+  PaymentAppContentUnitTestBase(const PaymentAppContentUnitTestBase&) = delete;
+  PaymentAppContentUnitTestBase& operator=(
+      const PaymentAppContentUnitTestBase&) = delete;
+
  protected:
   PaymentAppContentUnitTestBase();
   ~PaymentAppContentUnitTestBase() override;
 
   BrowserContext* browser_context();
+  int64_t RegisterAndActivateServiceWorker(const GURL& scope_url,
+                                           const GURL& sw_script_url);
+  PaymentManager* CreateUninitializedPaymentManager(const GURL& scope_url,
+                                                    const GURL& sw_script_url);
   PaymentManager* CreatePaymentManager(const GURL& scope_url,
                                        const GURL& sw_script_url);
   void UnregisterServiceWorker(const GURL& scope_url,
@@ -43,19 +50,19 @@ class PaymentAppContentUnitTestBase : public testing::Test {
   const GURL& last_sw_scope_url() const;
 
   void SetNoPaymentRequestResponseImmediately();
-  void RespondPendingPaymentRequest();
+  void RespondPendingPaymentRequest(
+      payments::mojom::PaymentHandlerResponsePtr response);
+
+  PaymentAppContextImpl* payment_app_context();
 
  private:
   class PaymentAppForWorkerTestHelper;
 
   StoragePartitionImpl* storage_partition();
-  PaymentAppContextImpl* payment_app_context();
 
   std::unique_ptr<BrowserTaskEnvironment> task_environment_;
   std::unique_ptr<PaymentAppForWorkerTestHelper> worker_helper_;
   std::vector<mojo::Remote<payments::mojom::PaymentManager>> payment_managers_;
-
-  DISALLOW_COPY_AND_ASSIGN(PaymentAppContentUnitTestBase);
 };
 
 }  // namespace content

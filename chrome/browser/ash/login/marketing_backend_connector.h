@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,21 +6,27 @@
 #define CHROME_BROWSER_ASH_LOGIN_MARKETING_BACKEND_CONNECTOR_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_forward.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
-#include "chrome/browser/profiles/profile.h"
 #include "components/signin/public/identity_manager/primary_account_access_token_fetcher.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 
-namespace chromeos {
+class Profile;
+
+namespace signin {
+class IdentityManager;
+}  // namespace signin
+
+namespace ash {
 
 class MarketingBackendConnector
     : public base::RefCountedThreadSafe<MarketingBackendConnector> {
@@ -53,7 +59,11 @@ class MarketingBackendConnector
   friend class ScopedRequestCallbackSetter;
   friend class base::RefCountedThreadSafe<MarketingBackendConnector>;
 
-  explicit MarketingBackendConnector(Profile* user_profile);
+  // `identity_manager` must outlive this. `url_loader_factory` is used for the
+  // subscription request.
+  MarketingBackendConnector(
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+      signin::IdentityManager& identity_manager);
   virtual ~MarketingBackendConnector();
 
   // Sends a request to the server to subscribe the user to all campaigns.
@@ -70,7 +80,7 @@ class MarketingBackendConnector
   void SetTokenAndStartRequest();
 
   // Handles responses from the SimpleURLLoader
-  void OnSimpleLoaderComplete(std::unique_ptr<std::string> response_body);
+  void OnSimpleLoaderComplete(std::optional<std::string> response_body);
   void OnSimpleLoaderCompleteInternal(int response_code,
                                       const std::string& data);
 
@@ -78,12 +88,13 @@ class MarketingBackendConnector
   // the language.
   std::string GetRequestContent();
 
+  const raw_ref<signin::IdentityManager> identity_manager_;
+
   // Internal
   std::unique_ptr<signin::PrimaryAccountAccessTokenFetcher> token_fetcher_;
   std::unique_ptr<network::SimpleURLLoader> simple_url_loader_;
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
   std::string access_token_;
-  Profile* profile_ = nullptr;
 
   static base::RepeatingCallback<void(std::string)>*
       request_finished_for_tests_;
@@ -103,13 +114,6 @@ class ScopedRequestCallbackSetter {
   std::unique_ptr<base::RepeatingCallback<void(std::string)>> callback_;
 };
 
-}  // namespace chromeos
-
-// TODO(https://crbug.com/1164001): remove after the //chrome/browser/chromeos
-// source migration is finished.
-namespace ash {
-using ::chromeos::MarketingBackendConnector;
-using ::chromeos::ScopedRequestCallbackSetter;
 }  // namespace ash
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_MARKETING_BACKEND_CONNECTOR_H_

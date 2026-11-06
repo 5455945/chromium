@@ -1,30 +1,36 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/devtools/service_worker_devtools_manager.h"
 
+#include <algorithm>
+#include <optional>
+
+#include "base/no_destructor.h"
+#include "base/observer_list.h"
+#include "content/browser/devtools/devtools_instrumentation.h"
 #include "content/browser/devtools/protocol/network_handler.h"
 #include "content/browser/devtools/protocol/page_handler.h"
 #include "content/browser/devtools/service_worker_devtools_agent_host.h"
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
-#include "ipc/ipc_listener.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "services/network/public/cpp/devtools_observer_util.h"
+#include "services/network/public/mojom/devtools_observer.mojom.h"
 
 namespace content {
 
 // static
 ServiceWorkerDevToolsManager* ServiceWorkerDevToolsManager::GetInstance() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   static base::NoDestructor<ServiceWorkerDevToolsManager> instance;
   return &*instance;
 }
 
 ServiceWorkerDevToolsAgentHost*
 ServiceWorkerDevToolsManager::GetDevToolsAgentHostForWorker(
-    int worker_process_id,
+    ChildProcessId worker_process_id,
     int worker_route_id) {
   auto it = live_hosts_.find(WorkerId(worker_process_id, worker_route_id));
   return it == live_hosts_.end() ? nullptr : it->second.get();
@@ -34,8 +40,8 @@ ServiceWorkerDevToolsAgentHost*
 ServiceWorkerDevToolsManager::GetDevToolsAgentHostForNewInstallingWorker(
     const ServiceWorkerContextWrapper* context_wrapper,
     int64_t version_id) {
-  auto it = std::find_if(
-      new_installing_hosts_.begin(), new_installing_hosts_.end(),
+  auto it = std::ranges::find_if(
+      new_installing_hosts_,
       [&context_wrapper, &version_id](
           const scoped_refptr<ServiceWorkerDevToolsAgentHost>& agent_host) {
         return agent_host->context_wrapper() == context_wrapper &&
@@ -50,6 +56,9 @@ void ServiceWorkerDevToolsManager::AddAllAgentHosts(
     ServiceWorkerDevToolsAgentHost::List* result) {
   for (auto& it : live_hosts_)
     result->push_back(it.second.get());
+  for (auto& it : new_installing_hosts_) {
+    result->push_back(it.get());
+  }
 }
 
 void ServiceWorkerDevToolsManager::AddAllAgentHostsForBrowserContext(
@@ -59,63 +68,105 @@ void ServiceWorkerDevToolsManager::AddAllAgentHostsForBrowserContext(
     if (it.second->GetBrowserContext() == browser_context)
       result->push_back(it.second.get());
   }
+  for (auto& it : new_installing_hosts_) {
+    if (it->GetBrowserContext() == browser_context)
+      result->push_back(it.get());
+  }
 }
 
 void ServiceWorkerDevToolsManager::WorkerMainScriptFetchingStarting(
     scoped_refptr<ServiceWorkerContextWrapper> context_wrapper,
     int64_t version_id,
     const GURL& url,
-    const GURL& scope) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    const GURL& scope,
+    const GlobalRenderFrameHostId& requesting_frame_id,
+    scoped_refptr<DevToolsThrottleHandle> throttle_handle) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 
   // Verify that we are not getting a similar host that's already in a stopped
   // state. This should never happen, we are installing a new SW, we cannot
   // have the same one that was started and stopped.
+  ServiceWorkerContextWrapper* context_wrapper_ptr = context_wrapper.get();
   scoped_refptr<ServiceWorkerDevToolsAgentHost> agent_host =
-      TakeStoppedHost(context_wrapper.get(), version_id);
-  DCHECK(!agent_host);
+      TakeStoppedHost(context_wrapper_ptr, version_id);
+  CHECK(!agent_host, base::NotFatalUntil::M159);
 
   scoped_refptr<ServiceWorkerDevToolsAgentHost> host =
-      new ServiceWorkerDevToolsAgentHost(
-          -1, -1, std::move(context_wrapper), version_id, url, scope,
+      base::MakeRefCounted<ServiceWorkerDevToolsAgentHost>(
+          ChildProcessId(), -1, std::move(context_wrapper), version_id, url,
+          scope,
           /*is_installed_version=*/false,
-          /*cross_origin_embedder_policy=*/absl::nullopt,
+          /*client_security_state=*/nullptr,
           /*coep_reporter=*/mojo::NullRemote(),
+          /*dip_reporter=*/mojo::NullRemote(),
           base::UnguessableToken::Create());
+
+  ServiceWorkerDevToolsAgentHost* host_ptr = host.get();
   new_installing_hosts_.insert(std::move(host));
+
+  for (auto& observer : observer_list_) {
+    bool should_pause_on_start = false;
+    observer.WorkerCreated(host_ptr, &should_pause_on_start);
+    if (should_pause_on_start) {
+      host_ptr->set_should_pause_on_start(true);
+    }
+  }
+
+  // Now that we have a devtools target, we need to give devtools the
+  // opportunity to attach to it before we do the actual fetch. We pass it a
+  // callback that will be called once we have all the handlers ready.
+  if (host_ptr->should_pause_on_start()) {
+    devtools_instrumentation::ThrottleServiceWorkerMainScriptFetch(
+        context_wrapper_ptr, version_id, requesting_frame_id, throttle_handle);
+  }
 }
 
 void ServiceWorkerDevToolsManager::WorkerMainScriptFetchingFailed(
     scoped_refptr<ServiceWorkerContextWrapper> context_wrapper,
     int64_t version_id) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  TakeNewInstallingHost(context_wrapper.get(), version_id);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+  scoped_refptr<ServiceWorkerDevToolsAgentHost> host =
+      TakeNewInstallingHost(context_wrapper.get(), version_id);
+
+  // While not strictly required, some WPTs expect all messages to be answered
+  // before finishing and will loop until they get an answer. This call makes
+  // sure all pending messages are answered with an error when we fail the
+  // main script fetch.
+  host->DiscardPendingMessages();
+
+  // This observer call should trigger the destruction of the
+  // ServiceWorkerDevToolsAgentHost by removing the scoped_ptr references held
+  // by auto-attachers.
+  for (auto& observer : observer_list_)
+    observer.WorkerDestroyed(host.get());
 }
 
 void ServiceWorkerDevToolsManager::WorkerStarting(
-    int worker_process_id,
+    ChildProcessId worker_process_id,
     int worker_route_id,
     scoped_refptr<ServiceWorkerContextWrapper> context_wrapper,
     int64_t version_id,
     const GURL& url,
     const GURL& scope,
     bool is_installed_version,
-    absl::optional<network::CrossOriginEmbedderPolicy>
-        cross_origin_embedder_policy,
+    network::mojom::ClientSecurityStatePtr client_security_state,
     mojo::PendingRemote<network::mojom::CrossOriginEmbedderPolicyReporter>
         coep_reporter,
+    mojo::PendingRemote<network::mojom::DocumentIsolationPolicyReporter>
+        dip_reporter,
     base::UnguessableToken* devtools_worker_token,
     bool* pause_on_start) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   const WorkerId worker_id(worker_process_id, worker_route_id);
-  DCHECK(live_hosts_.find(worker_id) == live_hosts_.end());
+  CHECK(!live_hosts_.contains(worker_id), base::NotFatalUntil::M159);
 
   scoped_refptr<ServiceWorkerDevToolsAgentHost> agent_host =
       TakeStoppedHost(context_wrapper.get(), version_id);
   if (agent_host) {
     live_hosts_[worker_id] = agent_host;
     agent_host->WorkerStarted(worker_process_id, worker_route_id);
-    *pause_on_start = agent_host->IsAttached();
+    *pause_on_start =
+        agent_host->IsAttached() && agent_host->should_pause_on_start();
     *devtools_worker_token = agent_host->devtools_worker_token();
     return;
   }
@@ -123,31 +174,25 @@ void ServiceWorkerDevToolsManager::WorkerStarting(
   agent_host = TakeNewInstallingHost(context_wrapper.get(), version_id);
   if (agent_host) {
     live_hosts_[worker_id] = agent_host;
+    agent_host->WorkerStarted(worker_process_id, worker_route_id);
+    *pause_on_start = agent_host->should_pause_on_start();
+    *devtools_worker_token = agent_host->devtools_worker_token();
 
-    // TODO(https://crbug.com/1211358): This is too late for handlers to attach.
-    // We have already fetched the main script at this stage. Moving this to
-    // WorkerMainScriptFetchingStarting also requires throttling the fetch to
-    // allow clients to attach.
-    *pause_on_start = debug_service_worker_on_start_;
-    for (auto& observer : observer_list_) {
-      bool should_pause_on_start = false;
-      observer.WorkerCreated(agent_host.get(), &should_pause_on_start);
-      if (should_pause_on_start)
-        *pause_on_start = true;
+    if (client_security_state) {
+      agent_host->UpdateClientSecurityState(std::move(client_security_state),
+                                            std::move(coep_reporter),
+                                            std::move(dip_reporter));
     }
 
-    agent_host->WorkerStarted(worker_process_id, worker_route_id);
-    *devtools_worker_token = agent_host->devtools_worker_token();
     return;
   }
 
   *devtools_worker_token = base::UnguessableToken::Create();
-  scoped_refptr<ServiceWorkerDevToolsAgentHost> host =
-      new ServiceWorkerDevToolsAgentHost(
-          worker_process_id, worker_route_id, std::move(context_wrapper),
-          version_id, url, scope, is_installed_version,
-          cross_origin_embedder_policy, std::move(coep_reporter),
-          *devtools_worker_token);
+  auto host = base::MakeRefCounted<ServiceWorkerDevToolsAgentHost>(
+      worker_process_id, worker_route_id, std::move(context_wrapper),
+      version_id, url, scope, is_installed_version,
+      std::move(client_security_state), std::move(coep_reporter),
+      std::move(dip_reporter), *devtools_worker_token);
   live_hosts_[worker_id] = host;
   *pause_on_start = debug_service_worker_on_start_;
   for (auto& observer : observer_list_) {
@@ -159,11 +204,11 @@ void ServiceWorkerDevToolsManager::WorkerStarting(
 }
 
 void ServiceWorkerDevToolsManager::WorkerReadyForInspection(
-    int worker_process_id,
+    ChildProcessId worker_process_id,
     int worker_route_id,
     mojo::PendingRemote<blink::mojom::DevToolsAgent> agent_remote,
     mojo::PendingReceiver<blink::mojom::DevToolsAgentHost> host_receiver) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   const WorkerId worker_id(worker_process_id, worker_route_id);
   auto it = live_hosts_.find(worker_id);
   if (it == live_hosts_.end())
@@ -176,24 +221,10 @@ void ServiceWorkerDevToolsManager::WorkerReadyForInspection(
     host->Inspect();
 }
 
-void ServiceWorkerDevToolsManager::UpdateCrossOriginEmbedderPolicy(
-    int worker_process_id,
-    int worker_route_id,
-    network::CrossOriginEmbedderPolicy cross_origin_embedder_policy,
-    mojo::PendingRemote<network::mojom::CrossOriginEmbedderPolicyReporter>
-        coep_reporter) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  const WorkerId worker_id(worker_process_id, worker_route_id);
-  auto it = live_hosts_.find(worker_id);
-  if (it == live_hosts_.end())
-    return;
-  it->second->UpdateCrossOriginEmbedderPolicy(
-      std::move(cross_origin_embedder_policy), std::move(coep_reporter));
-}
-
-void ServiceWorkerDevToolsManager::WorkerVersionInstalled(int worker_process_id,
-                                                          int worker_route_id) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+void ServiceWorkerDevToolsManager::WorkerVersionInstalled(
+    ChildProcessId worker_process_id,
+    int worker_route_id) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   const WorkerId worker_id(worker_process_id, worker_route_id);
   auto it = live_hosts_.find(worker_id);
   if (it == live_hosts_.end())
@@ -202,11 +233,11 @@ void ServiceWorkerDevToolsManager::WorkerVersionInstalled(int worker_process_id,
 }
 
 void ServiceWorkerDevToolsManager::WorkerVersionDoomed(
-    int worker_process_id,
+    ChildProcessId worker_process_id,
     int worker_route_id,
     scoped_refptr<ServiceWorkerContextWrapper> context_wrapper,
     int64_t version_id) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   const WorkerId worker_id(worker_process_id, worker_route_id);
   auto it = live_hosts_.find(worker_id);
   if (it != live_hosts_.end()) {
@@ -224,9 +255,10 @@ void ServiceWorkerDevToolsManager::WorkerVersionDoomed(
     observer.WorkerDestroyed(host.get());
 }
 
-void ServiceWorkerDevToolsManager::WorkerStopped(int worker_process_id,
-                                                 int worker_route_id) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+void ServiceWorkerDevToolsManager::WorkerStopped(
+    ChildProcessId worker_process_id,
+    int worker_route_id) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   const WorkerId worker_id(worker_process_id, worker_route_id);
   auto it = live_hosts_.find(worker_id);
   if (it == live_hosts_.end())
@@ -243,9 +275,58 @@ void ServiceWorkerDevToolsManager::WorkerStopped(int worker_process_id,
   }
 }
 
+void ServiceWorkerDevToolsManager::StorageWiped(
+    const ServiceWorkerContextWrapper* context_wrapper) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI);
+
+  // Take the hosts of stopped and new installing workers of `context_wrapper`
+  // out of the manager. Stopped workers will never restart, and the
+  // registration jobs of the new installing workers were aborted.
+  ServiceWorkerDevToolsAgentHost::List inactive_hosts;
+  base::EraseIf(stopped_hosts_,
+                [&](ServiceWorkerDevToolsAgentHost* agent_host) {
+                  if (agent_host->context_wrapper() != context_wrapper) {
+                    return false;
+                  }
+                  inactive_hosts.push_back(base::WrapRefCounted(agent_host));
+                  return true;
+                });
+  base::EraseIf(
+      new_installing_hosts_,
+      [&](const scoped_refptr<ServiceWorkerDevToolsAgentHost>& agent_host) {
+        if (agent_host->context_wrapper() != context_wrapper) {
+          return false;
+        }
+        inactive_hosts.push_back(agent_host);
+        return true;
+      });
+
+  // Update the state of all affected hosts before notifying any observers,
+  // since observers might query the manager for all hosts and detach from
+  // the ones that are gone (e.g. FrameAutoAttacher).
+  //
+  // Workers that are still running keep their hosts until they stop, but
+  // since their hosts are doomed, WorkerStopped() destroys them rather than
+  // keeping them around in `stopped_hosts_`.
+  for (auto& [worker_id, agent_host] : live_hosts_) {
+    if (agent_host->context_wrapper() == context_wrapper) {
+      agent_host->StorageWiped();
+    }
+  }
+  for (const auto& agent_host : inactive_hosts) {
+    agent_host->StorageWiped();
+  }
+
+  for (const auto& agent_host : inactive_hosts) {
+    for (auto& observer : observer_list_) {
+      observer.WorkerDestroyed(agent_host.get());
+    }
+  }
+}
+
 void ServiceWorkerDevToolsManager::AgentHostDestroyed(
     ServiceWorkerDevToolsAgentHost* agent_host) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   // Might be missing during shutdown due to different
   // destruction order of this manager, service workers
   // and their agent hosts.
@@ -272,7 +353,7 @@ ServiceWorkerDevToolsManager::ServiceWorkerDevToolsManager()
 ServiceWorkerDevToolsManager::~ServiceWorkerDevToolsManager() = default;
 
 void ServiceWorkerDevToolsManager::NavigationPreloadRequestSent(
-    int worker_process_id,
+    ChildProcessId worker_process_id,
     int worker_route_id,
     const std::string& request_id,
     const network::ResourceRequest& request) {
@@ -281,17 +362,21 @@ void ServiceWorkerDevToolsManager::NavigationPreloadRequestSent(
   if (it == live_hosts_.end())
     return;
   auto timestamp = base::TimeTicks::Now();
+  network::mojom::URLRequestDevToolsInfoPtr request_info =
+      network::ExtractDevToolsInfo(request);
   for (auto* network :
        protocol::NetworkHandler::ForAgentHost(it->second.get())) {
-    network->RequestSent(request_id, std::string(), request,
+    network->RequestSent(request_id, std::string(), request.headers,
+                         *request_info,
                          protocol::Network::Initiator::TypeEnum::Preload,
-                         /*initiator_url=*/absl::nullopt,
-                         /*initiator_devtools_request_id=*/"", timestamp);
+                         /*initiator_url=*/std::nullopt,
+                         /*initiator_devtools_request_id=*/"",
+                         /*frame_token=*/std::nullopt, timestamp);
   }
 }
 
 void ServiceWorkerDevToolsManager::NavigationPreloadResponseReceived(
-    int worker_process_id,
+    ChildProcessId worker_process_id,
     int worker_route_id,
     const std::string& request_id,
     const GURL& url,
@@ -300,14 +385,17 @@ void ServiceWorkerDevToolsManager::NavigationPreloadResponseReceived(
   auto it = live_hosts_.find(worker_id);
   if (it == live_hosts_.end())
     return;
+
+  network::mojom::URLResponseHeadDevToolsInfoPtr head_info =
+      network::ExtractDevToolsInfo(head);
   for (auto* network : protocol::NetworkHandler::ForAgentHost(it->second.get()))
     network->ResponseReceived(request_id, std::string(), url,
-                              protocol::Network::ResourceTypeEnum::Other, head,
-                              protocol::Maybe<std::string>());
+                              protocol::Network::ResourceTypeEnum::Other,
+                              *head_info, std::nullopt);
 }
 
 void ServiceWorkerDevToolsManager::NavigationPreloadCompleted(
-    int worker_process_id,
+    ChildProcessId worker_process_id,
     int worker_route_id,
     const std::string& request_id,
     const network::URLLoaderCompletionStatus& status) {
@@ -324,13 +412,12 @@ scoped_refptr<ServiceWorkerDevToolsAgentHost>
 ServiceWorkerDevToolsManager::TakeStoppedHost(
     const ServiceWorkerContextWrapper* context_wrapper,
     int64_t version_id) {
-  auto it =
-      std::find_if(stopped_hosts_.begin(), stopped_hosts_.end(),
-                   [&context_wrapper,
-                    &version_id](ServiceWorkerDevToolsAgentHost* agent_host) {
-                     return agent_host->context_wrapper() == context_wrapper &&
-                            agent_host->version_id() == version_id;
-                   });
+  auto it = std::ranges::find_if(
+      stopped_hosts_, [&context_wrapper, &version_id](
+                          ServiceWorkerDevToolsAgentHost* agent_host) {
+        return agent_host->context_wrapper() == context_wrapper &&
+               agent_host->version_id() == version_id;
+      });
   if (it == stopped_hosts_.end())
     return nullptr;
   scoped_refptr<ServiceWorkerDevToolsAgentHost> agent_host(*it);
@@ -342,8 +429,8 @@ scoped_refptr<ServiceWorkerDevToolsAgentHost>
 ServiceWorkerDevToolsManager::TakeNewInstallingHost(
     const ServiceWorkerContextWrapper* context_wrapper,
     int64_t version_id) {
-  auto it = std::find_if(
-      new_installing_hosts_.begin(), new_installing_hosts_.end(),
+  auto it = std::ranges::find_if(
+      new_installing_hosts_,
       [&context_wrapper, &version_id](
           const scoped_refptr<ServiceWorkerDevToolsAgentHost>& agent_host) {
         return agent_host->context_wrapper() == context_wrapper &&

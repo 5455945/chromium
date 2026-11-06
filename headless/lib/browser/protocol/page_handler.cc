@@ -1,32 +1,30 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "headless/lib/browser/protocol/page_handler.h"
 
-#include "base/bind.h"
+#include <variant>
+
+#include "base/functional/bind.h"
+#include "base/strings/strcat.h"
+#include "components/optimization_guide/content/browser/page_content_proto_provider.h"
+#include "components/optimization_guide/proto/features/common_quality_data.pb.h"
 #include "content/public/browser/web_contents.h"
-#include "printing/units.h"
+#include "third_party/blink/public/mojom/content_extraction/ai_page_content.mojom.h"
+
+#if BUILDFLAG(ENABLE_PRINTING)
+#include <optional>
+
+#include "components/printing/browser/print_to_pdf/pdf_print_utils.h"
+#endif
 
 namespace headless {
 namespace protocol {
 
-#if BUILDFLAG(ENABLE_PRINTING)
-namespace {
-
-// The max and min value should match the ones in scaling_settings.html.
-// Update both files at the same time.
-const double kScaleMaxVal = 200;
-const double kScaleMinVal = 10;
-
-
-}  // namespace
-#endif  // BUILDFLAG(ENABLE_PRINTING)
-
 PageHandler::PageHandler(scoped_refptr<content::DevToolsAgentHost> agent_host,
                          content::WebContents* web_contents)
-    : agent_host_(agent_host), web_contents_(web_contents) {
-  DCHECK(web_contents_);
+    : agent_host_(agent_host), web_contents_(web_contents->GetWeakPtr()) {
   DCHECK(agent_host_);
 }
 
@@ -40,101 +38,55 @@ Response PageHandler::Disable() {
   return Response::Success();
 }
 
-void PageHandler::PrintToPDF(Maybe<bool> landscape,
-                             Maybe<bool> display_header_footer,
-                             Maybe<bool> print_background,
-                             Maybe<double> scale,
-                             Maybe<double> paper_width,
-                             Maybe<double> paper_height,
-                             Maybe<double> margin_top,
-                             Maybe<double> margin_bottom,
-                             Maybe<double> margin_left,
-                             Maybe<double> margin_right,
-                             Maybe<String> page_ranges,
-                             Maybe<bool> ignore_invalid_page_ranges,
-                             Maybe<String> header_template,
-                             Maybe<String> footer_template,
-                             Maybe<bool> prefer_css_page_size,
-                             Maybe<String> transfer_mode,
+void PageHandler::PrintToPDF(std::optional<bool> landscape,
+                             std::optional<bool> display_header_footer,
+                             std::optional<bool> print_background,
+                             std::optional<double> scale,
+                             std::optional<double> paper_width,
+                             std::optional<double> paper_height,
+                             std::optional<double> margin_top,
+                             std::optional<double> margin_bottom,
+                             std::optional<double> margin_left,
+                             std::optional<double> margin_right,
+                             std::optional<String> page_ranges,
+                             std::optional<String> header_template,
+                             std::optional<String> footer_template,
+                             std::optional<bool> prefer_css_page_size,
+                             std::optional<String> transfer_mode,
+                             std::optional<bool> generate_tagged_pdf,
+                             std::optional<bool> generate_document_outline,
                              std::unique_ptr<PrintToPDFCallback> callback) {
+  DCHECK(callback);
+
 #if BUILDFLAG(ENABLE_PRINTING)
-  HeadlessPrintSettings settings;
-  settings.landscape = landscape.fromMaybe(false);
-  settings.display_header_footer = display_header_footer.fromMaybe(false);
-  settings.should_print_backgrounds = print_background.fromMaybe(false);
-  settings.scale = scale.fromMaybe(1.0);
-  if (settings.scale > kScaleMaxVal / 100 ||
-      settings.scale < kScaleMinVal / 100) {
+  if (!web_contents_) {
+    callback->sendFailure(Response::ServerError("No web contents to print"));
+    return;
+  }
+
+  std::variant<printing::mojom::PrintPagesParamsPtr, std::string>
+      print_pages_params = print_to_pdf::GetPrintPagesParams(
+          web_contents_->GetPrimaryMainFrame()->GetLastCommittedURL(),
+          landscape, display_header_footer, print_background, scale,
+          paper_width, paper_height, margin_top, margin_bottom, margin_left,
+          margin_right, header_template, footer_template, prefer_css_page_size,
+          generate_tagged_pdf, generate_document_outline);
+  if (std::holds_alternative<std::string>(print_pages_params)) {
     callback->sendFailure(
-        Response::InvalidParams("scale is outside [0.1 - 2] range"));
+        Response::InvalidParams(std::get<std::string>(print_pages_params)));
     return;
   }
-  settings.page_ranges = page_ranges.fromMaybe("");
-  settings.ignore_invalid_page_ranges =
-      ignore_invalid_page_ranges.fromMaybe(false);
 
-  double paper_width_in_inch =
-      paper_width.fromMaybe(printing::kLetterWidthInch);
-  double paper_height_in_inch =
-      paper_height.fromMaybe(printing::kLetterHeightInch);
-  if (paper_width_in_inch <= 0) {
-    callback->sendFailure(
-        Response::InvalidParams("paperWidth is zero or negative"));
-    return;
-  }
-  if (paper_height_in_inch <= 0) {
-    callback->sendFailure(
-        Response::InvalidParams("paperHeight is zero or negative"));
-    return;
-  }
-  settings.paper_size_in_points =
-      gfx::Size(paper_width_in_inch * printing::kPointsPerInch,
-                paper_height_in_inch * printing::kPointsPerInch);
+  DCHECK(std::holds_alternative<printing::mojom::PrintPagesParamsPtr>(
+      print_pages_params));
 
-  // Set default margin to 1.0cm = ~2/5 of an inch.
-  static constexpr double kDefaultMarginInMM = 10.0;
-  static constexpr double kMMPerInch = printing::kMicronsPerMil;
-  static constexpr double kDefaultMarginInInch =
-      kDefaultMarginInMM / kMMPerInch;
-  double margin_top_in_inch = margin_top.fromMaybe(kDefaultMarginInInch);
-  double margin_right_in_inch = margin_right.fromMaybe(kDefaultMarginInInch);
-  double margin_bottom_in_inch = margin_bottom.fromMaybe(kDefaultMarginInInch);
-  double margin_left_in_inch = margin_left.fromMaybe(kDefaultMarginInInch);
-
-  settings.header_template = header_template.fromMaybe("");
-  settings.footer_template = footer_template.fromMaybe("");
-
-  if (margin_top_in_inch < 0) {
-    callback->sendFailure(Response::InvalidParams("marginTop is negative"));
-    return;
-  }
-  if (margin_bottom_in_inch < 0) {
-    callback->sendFailure(Response::InvalidParams("marginBottom is negative"));
-    return;
-  }
-  if (margin_left_in_inch < 0) {
-    callback->sendFailure(Response::InvalidParams("marginLeft is negative"));
-    return;
-  }
-  if (margin_right_in_inch < 0) {
-    callback->sendFailure(Response::InvalidParams("marginRight is negative"));
-    return;
-  }
-  settings.margins_in_points.top =
-      margin_top_in_inch * printing::kPointsPerInch;
-  settings.margins_in_points.bottom =
-      margin_bottom_in_inch * printing::kPointsPerInch;
-  settings.margins_in_points.left =
-      margin_left_in_inch * printing::kPointsPerInch;
-  settings.margins_in_points.right =
-      margin_right_in_inch * printing::kPointsPerInch;
-  settings.prefer_css_page_size = prefer_css_page_size.fromMaybe(false);
-
-  bool return_as_stream = transfer_mode.fromMaybe("") ==
+  bool return_as_stream = transfer_mode.value_or("") ==
                           Page::PrintToPDF::TransferModeEnum::ReturnAsStream;
-  HeadlessPrintManager::FromWebContents(web_contents_)
-      ->GetPDFContents(
-          web_contents_->GetMainFrame(), settings,
+  HeadlessPrintManager::FromWebContents(web_contents_.get())
+      ->PrintToPdf(
+          web_contents_->GetPrimaryMainFrame(), page_ranges.value_or(""),
+          std::move(std::get<printing::mojom::PrintPagesParamsPtr>(
+              print_pages_params)),
           base::BindOnce(&PageHandler::PDFCreated, weak_factory_.GetWeakPtr(),
                          return_as_stream, std::move(callback)));
 #else
@@ -143,26 +95,65 @@ void PageHandler::PrintToPDF(Maybe<bool> landscape,
 #endif  // BUILDFLAG(ENABLE_PRINTING)
 }
 
-#if BUILDFLAG(ENABLE_PRINTING)
-void PageHandler::PDFCreated(
-    bool returnAsStream,
-    std::unique_ptr<PageHandler::PrintToPDFCallback> callback,
-    HeadlessPrintManager::PrintResult print_result,
-    scoped_refptr<base::RefCountedMemory> data) {
-  std::unique_ptr<base::DictionaryValue> response;
-  if (print_result != HeadlessPrintManager::PRINT_SUCCESS) {
-    callback->sendFailure(Response::ServerError(
-        HeadlessPrintManager::PrintResultToString(print_result)));
+void PageHandler::GetAnnotatedPageContent(
+    std::optional<bool> include_actionable_information,
+    std::unique_ptr<GetAnnotatedPageContentCallback> callback) {
+  if (!web_contents_) {
+    callback->sendFailure(Response::ServerError("WebContents not found."));
     return;
   }
 
-  if (!returnAsStream) {
-    callback->sendSuccess(protocol::Binary::fromRefCounted(data),
-                          Maybe<std::string>());
+  // optimization_guide::GetAIPageContent() extracts content from the primary
+  // main frame of `web_contents_`. Reject sessions attached to a non-primary
+  // page (e.g. a prerendered page) rather than returning the content of a
+  // different page.
+  if (content::DevToolsAgentHost::GetOrCreateFor(web_contents_.get()) !=
+      agent_host_) {
+    callback->sendFailure(
+        Response::ServerError("Not attached to an active page"));
     return;
   }
-  std::string handle = agent_host_->CreateIOStreamFromData(data);
-  callback->sendSuccess(protocol::Binary(), handle);
+
+  auto options = include_actionable_information.value_or(true)
+                     ? optimization_guide::ActionableAIPageContentOptions(
+                           /*on_critical_path=*/false)
+                     : optimization_guide::DefaultAIPageContentOptions(
+                           /*on_critical_path=*/false);
+
+  optimization_guide::GetAIPageContent(
+      web_contents_.get(), std::move(options),
+      base::BindOnce(
+          [](std::unique_ptr<GetAnnotatedPageContentCallback> callback,
+             optimization_guide::AIPageContentResultOrError result) {
+            if (!result.has_value()) {
+              callback->sendFailure(Response::ServerError(
+                  base::StrCat({"Failed to get annotated page content: ",
+                                result.error().message})));
+              return;
+            }
+            callback->sendSuccess(
+                Binary::fromString(result->proto.SerializeAsString()));
+          },
+          std::move(callback)));
+}
+
+#if BUILDFLAG(ENABLE_PRINTING)
+void PageHandler::PDFCreated(bool return_as_stream,
+                             std::unique_ptr<PrintToPDFCallback> callback,
+                             print_to_pdf::PdfPrintResult print_result,
+                             scoped_refptr<base::RefCountedMemory> data) {
+  if (print_result != print_to_pdf::PdfPrintResult::kPrintSuccess) {
+    callback->sendFailure(Response::ServerError(
+        print_to_pdf::PdfPrintResultToString(print_result)));
+    return;
+  }
+
+  if (return_as_stream) {
+    std::string handle = agent_host_->CreateIOStreamFromData(data);
+    callback->sendSuccess(protocol::Binary(), handle);
+  } else {
+    callback->sendSuccess(protocol::Binary::fromRefCounted(data), std::nullopt);
+  }
 }
 #endif  // BUILDFLAG(ENABLE_PRINTING)
 

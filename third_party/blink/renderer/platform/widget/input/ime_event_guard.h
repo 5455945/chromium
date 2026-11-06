@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,6 +19,9 @@ class ImeEventGuard {
   // variable is on the stack. (i.e. inside a nested event loop).
   explicit ImeEventGuard(base::WeakPtr<WidgetBase> widget);
   ~ImeEventGuard();
+
+  // Returns true if the widget is still alive.
+  bool IsValid() const;
 
   bool show_virtual_keyboard() const { return show_virtual_keyboard_; }
   void set_show_virtual_keyboard(bool show) { show_virtual_keyboard_ = show; }

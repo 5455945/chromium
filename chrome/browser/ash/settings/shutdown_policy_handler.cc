@@ -1,21 +1,21 @@
-// Copyright (c) 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/settings/shutdown_policy_handler.h"
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "chromeos/settings/cros_settings_names.h"
-#include "chromeos/settings/cros_settings_provider.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "chromeos/ash/components/settings/cros_settings_names.h"
+#include "chromeos/ash/components/settings/cros_settings_provider.h"
 
 namespace ash {
 
 ShutdownPolicyHandler::ShutdownPolicyHandler(CrosSettings* cros_settings,
                                              Delegate* delegate)
     : cros_settings_(cros_settings), delegate_(delegate) {
-  DCHECK(cros_settings_);
-  DCHECK(delegate);
+  CHECK(cros_settings_, base::NotFatalUntil::M160);
+  CHECK(delegate, base::NotFatalUntil::M160);
   shutdown_policy_subscription_ = cros_settings_->AddSettingsObserver(
       kRebootOnShutdown,
       base::BindRepeating(
@@ -23,7 +23,7 @@ ShutdownPolicyHandler::ShutdownPolicyHandler(CrosSettings* cros_settings,
           weak_factory_.GetWeakPtr()));
 }
 
-ShutdownPolicyHandler::~ShutdownPolicyHandler() {}
+ShutdownPolicyHandler::~ShutdownPolicyHandler() = default;
 
 void ShutdownPolicyHandler::NotifyDelegateWithShutdownPolicy() {
   CrosSettingsProvider::TrustedStatus status =

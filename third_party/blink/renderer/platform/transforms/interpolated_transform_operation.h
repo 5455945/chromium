@@ -31,6 +31,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_TRANSFORMS_INTERPOLATED_TRANSFORM_OPERATION_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_TRANSFORMS_INTERPOLATED_TRANSFORM_OPERATION_H_
 
+#include "base/notreached.h"
 #include "third_party/blink/renderer/platform/transforms/transform_operation.h"
 #include "third_party/blink/renderer/platform/transforms/transform_operations.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
@@ -41,35 +42,46 @@ namespace blink {
 class PLATFORM_EXPORT InterpolatedTransformOperation final
     : public TransformOperation {
  public:
-  static scoped_refptr<InterpolatedTransformOperation> Create(
-      const TransformOperations& from,
-      const TransformOperations& to,
-      int starting_index,
-      double progress) {
-    return base::AdoptRef(
-        new InterpolatedTransformOperation(from, to, starting_index, progress));
+  InterpolatedTransformOperation(const TransformOperations& from,
+                                 const TransformOperations& to,
+                                 int starting_index,
+                                 double progress)
+      : from_(from),
+        to_(to),
+        starting_index_(starting_index),
+        progress_(progress) {
+    // This should only be generated during interpolation when it is impossible
+    // to create a Matrix3DTransformOperation due to layout-dependence.
+    DCHECK(BoxSizeDependencies());
   }
+
+  void Trace(Visitor* visitor) const override {
+    visitor->Trace(from_);
+    visitor->Trace(to_);
+    TransformOperation::Trace(visitor);
+  }
+
+ protected:
+  bool IsEqualAssumingSameType(const TransformOperation&) const override;
 
  private:
   OperationType GetType() const override { return kInterpolated; }
 
-  bool operator==(const TransformOperation&) const override;
-  void Apply(TransformationMatrix&,
-             const FloatSize& border_box_size) const override;
+  void Apply(gfx::Transform&, const gfx::SizeF& border_box_size) const override;
 
-  scoped_refptr<TransformOperation> Accumulate(
-      const TransformOperation&) override {
+  TransformOperation* Accumulate(const TransformOperation&) override {
     NOTREACHED();
-    return this;
+  }
+  TransformOperation* AccumulateN(const TransformOperation&, int) override {
+    NOTREACHED();
   }
 
-  scoped_refptr<TransformOperation> Blend(
-      const TransformOperation* from,
-      double progress,
-      bool blend_to_identity = false) override;
-  scoped_refptr<TransformOperation> Zoom(double factor) final {
-    return Create(from_.Zoom(factor), to_.Zoom(factor), starting_index_,
-                  progress_);
+  TransformOperation* Blend(const TransformOperation* from,
+                            double progress,
+                            bool blend_to_identity = false) override;
+  TransformOperation* Zoom(double factor) final {
+    return MakeGarbageCollected<InterpolatedTransformOperation>(
+        from_.Zoom(factor), to_.Zoom(factor), starting_index_, progress_);
   }
 
   bool PreservesAxisAlignment() const final {
@@ -82,19 +94,6 @@ class PLATFORM_EXPORT InterpolatedTransformOperation final
   BoxSizeDependency BoxSizeDependencies() const override {
     return CombineDependencies(from_.BoxSizeDependencies(starting_index_),
                                to_.BoxSizeDependencies(starting_index_));
-  }
-
-  InterpolatedTransformOperation(const TransformOperations& from,
-                                 const TransformOperations& to,
-                                 int starting_index,
-                                 double progress)
-      : from_(from),
-        to_(to),
-        starting_index_(starting_index),
-        progress_(progress) {
-    // This should only be generated during interpolation when it is impossible
-    // to create a Matrix3DTransformOperation due to layout-dependence.
-    DCHECK(BoxSizeDependencies());
   }
 
   const TransformOperations from_;

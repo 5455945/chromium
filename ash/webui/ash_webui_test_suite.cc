@@ -1,40 +1,15 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/webui/ash_webui_test_suite.h"
 
-#include "base/base_paths.h"
-#include "base/files/file_path.h"
-#include "base/i18n/rtl.h"
+#include "ash/constants/ash_paths.h"
 #include "base/path_service.h"
-#include "testing/gtest/include/gtest/gtest.h"
+#include "chromeos/ash/components/test/ash_test_suite.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/ui_base_paths.h"
-
-namespace {
-
-// Initializes the i18n stack and loads the necessary strings. Uses a specific
-// locale, so that the tests can compare against golden strings without
-// depending on the environment.
-void InitI18n() {
-  base::i18n::SetICUDefaultLocale("en_US");
-
-  ui::RegisterPathProvider();
-
-  base::FilePath ui_test_pak_path;
-  ASSERT_TRUE(base::PathService::Get(ui::UI_TEST_PAK, &ui_test_pak_path));
-  ui::ResourceBundle::InitSharedInstanceWithPakPath(ui_test_pak_path);
-
-  base::FilePath dir_module_path;
-  ASSERT_TRUE(base::PathService::Get(base::DIR_MODULE, &dir_module_path));
-  base::FilePath chromeos_test_strings_path =
-      dir_module_path.Append(FILE_PATH_LITERAL("chromeos_test_strings.pak"));
-  ui::ResourceBundle::GetSharedInstance().AddDataPackFromPath(
-      chromeos_test_strings_path, ui::SCALE_FACTOR_NONE);
-}
-
-}  // namespace
+#include "ui/gl/test/gl_surface_test_support.h"
 
 AshWebUITestSuite::AshWebUITestSuite(int argc, char** argv)
     : TestSuite(argc, argv) {}
@@ -44,7 +19,18 @@ AshWebUITestSuite::~AshWebUITestSuite() = default;
 void AshWebUITestSuite::Initialize() {
   base::TestSuite::Initialize();
 
-  InitI18n();
+  gl::GLSurfaceTestSupport::InitializeOneOff();
+
+  ui::RegisterPathProvider();
+  ash::AshTestSuite::LoadTestResources();
+
+  ash::RegisterPathProvider();
+  CHECK(user_data_dir_.CreateUniqueTempDir());
+  CHECK(base::PathService::OverrideAndCreateIfNeeded(
+      ash::DIR_USER_DATA, user_data_dir_.GetPath(),
+      /*is_absolute=*/true, /*create=*/false));
+
+  base::DiscardableMemoryAllocator::SetInstance(&discardable_memory_allocator_);
 }
 
 void AshWebUITestSuite::Shutdown() {

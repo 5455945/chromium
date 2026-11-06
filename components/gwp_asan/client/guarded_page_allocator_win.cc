@@ -1,10 +1,10 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <windows.h>
-
 #include "components/gwp_asan/client/guarded_page_allocator.h"
+
+#include <windows.h>
 
 #include "base/check.h"
 #include "build/build_config.h"
@@ -26,10 +26,9 @@ void* GuardedPageAllocator::MapRegion() {
 
 void GuardedPageAllocator::UnmapRegion() {
   CHECK(state_.pages_base_addr);
-  BOOL err = VirtualFree(reinterpret_cast<void*>(state_.pages_base_addr), 0,
-                         MEM_RELEASE);
+  [[maybe_unused]] BOOL err = VirtualFree(
+      reinterpret_cast<void*>(state_.pages_base_addr), 0, MEM_RELEASE);
   DPCHECK(err) << "VirtualFree";
-  (void)err;
 }
 
 void GuardedPageAllocator::MarkPageReadWrite(void* ptr) {

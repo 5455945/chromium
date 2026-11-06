@@ -1,20 +1,24 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+import {TestRunner} from 'test_runner';
+import {SourcesTestRunner} from 'sources_test_runner';
+import {ExtensionsTestRunner} from 'extensions_test_runner';
+import {ConsoleTestRunner} from 'console_test_runner';
+
+import * as Console from 'devtools/panels/console/console.js';
 
 (async function() {
   TestRunner.addResult(
       `Tests that webInspector.inspectedWindow.reload() successfully injects and preprocesses user's code upon reload\n`);
-  await TestRunner.loadModule('sources'); await TestRunner.loadTestModule('sources_test_runner');
-  await TestRunner.loadTestModule('extensions_test_runner');
-  await TestRunner.loadModule('console'); await TestRunner.loadTestModule('console_test_runner');
   await TestRunner.navigatePromise(TestRunner.url('resources/reload.html'));
 
   TestRunner.lastMessageScriptId = function(callback) {
-    var consoleView = Console.ConsoleView.instance();
-    if (consoleView._needsFullUpdate)
-      consoleView._updateMessageList();
-    var viewMessages = consoleView._visibleViewMessages;
+    var consoleView = Console.ConsoleView.ConsoleView.instance();
+    if (consoleView.needsFullUpdate)
+      consoleView.updateMessageList();
+    var viewMessages = consoleView.visibleViewMessages;
     if (viewMessages.length !== 1)
       callback(null);
     var uiMessage = viewMessages[viewMessages.length - 1];
@@ -24,8 +28,8 @@
     callback(message.stackTrace.callFrames[0].scriptId);
   }
   TestRunner.getScriptSource = async function(scriptId, callback) {
-    var source = await TestRunner.DebuggerAgent.getScriptSource(scriptId);
-    callback(source);
+    var {scriptSource} = await TestRunner.DebuggerAgent.invoke_getScriptSource({scriptId});
+    callback(scriptSource);
   }
 
   await ExtensionsTestRunner.runExtensionTests([

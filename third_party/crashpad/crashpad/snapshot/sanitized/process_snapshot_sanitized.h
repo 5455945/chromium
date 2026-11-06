@@ -1,4 +1,4 @@
-// Copyright 2018 The Crashpad Authors. All rights reserved.
+// Copyright 2018 The Crashpad Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,7 +19,6 @@
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
 #include "snapshot/exception_snapshot.h"
 #include "snapshot/process_snapshot.h"
 #include "snapshot/sanitized/module_snapshot_sanitized.h"
@@ -34,11 +33,19 @@
 
 namespace crashpad {
 
+namespace internal {
+class ExceptionSnapshotSanitized;
+}  // namespace internal
+
 //! \brief A ProcessSnapshot which wraps and filters sensitive information from
 //!     another ProcessSnapshot.
 class ProcessSnapshotSanitized final : public ProcessSnapshot {
  public:
   ProcessSnapshotSanitized();
+
+  ProcessSnapshotSanitized(const ProcessSnapshotSanitized&) = delete;
+  ProcessSnapshotSanitized& operator=(const ProcessSnapshotSanitized&) = delete;
+
   ~ProcessSnapshotSanitized() override;
 
   //! \brief Initializes this object.
@@ -50,6 +57,7 @@ class ProcessSnapshotSanitized final : public ProcessSnapshot {
   //! \param[in] allowed_annotations A list of annotations names to allow to
   //!     be returned by AnnotationsSimpleMap() or from this object's module
   //!     snapshots. If `nullptr`, all annotations will be returned.
+  //      These annotation names support pattern matching, eg: "switch-*"
   //! \param[in] allowed_memory_ranges A list of memory ranges to allow to be
   //!     accessible via Memory(), or `nullptr` to allow all ranges.
   //! \param[in] target_module_address An address in the target process'
@@ -60,7 +68,8 @@ class ProcessSnapshotSanitized final : public ProcessSnapshot {
   //!     references to any particular module.
   //! \param[in] sanitize_stacks If `true`, the MemorySnapshots for each
   //!     thread's stack will be filtered using an
-  //!     internal::StackSnapshotSanitized.
+  //!     internal::MemorySnapshotSanitized and ExtraMemory() for each thread
+  //!     and the exception will be omitted.
   //! \return `false` if \a snapshot does not meet sanitization requirements and
   //!     should be filtered entirely. Otherwise `true`.
   bool Initialize(
@@ -97,6 +106,7 @@ class ProcessSnapshotSanitized final : public ProcessSnapshot {
   std::vector<std::unique_ptr<internal::ModuleSnapshotSanitized>> modules_;
 
   // Only used when sanitize_stacks_ == true.
+  std::unique_ptr<internal::ExceptionSnapshotSanitized> exception_;
   std::vector<std::unique_ptr<internal::ThreadSnapshotSanitized>> threads_;
 
   RangeSet address_ranges_;
@@ -105,8 +115,6 @@ class ProcessSnapshotSanitized final : public ProcessSnapshot {
   std::unique_ptr<const std::vector<std::string>> allowed_annotations_;
   bool sanitize_stacks_;
   InitializationStateDcheck initialized_;
-
-  DISALLOW_COPY_AND_ASSIGN(ProcessSnapshotSanitized);
 };
 
 }  // namespace crashpad

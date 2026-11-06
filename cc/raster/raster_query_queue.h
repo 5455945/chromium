@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,12 @@
 #define CC_RASTER_RASTER_QUERY_QUEUE_H_
 
 #include "base/containers/circular_deque.h"
+#include "base/memory/raw_ptr.h"
 #include "base/synchronization/lock.h"
 #include "base/thread_annotations.h"
 #include "base/time/time.h"
 #include "cc/cc_export.h"
-#include "third_party/khronos/GLES2/gl2.h"
+#include "third_party/angle/include/GLES2/gl2.h"
 
 namespace viz {
 class RasterContextProvider;
@@ -27,24 +28,12 @@ struct CC_EXPORT RasterQuery {
 
   // The duration for executing the work on the raster worker thread.
   base::TimeDelta worker_raster_duration;
-
-  // The id for querying the time at which we're about to start issuing raster
-  // work to the driver.
-  GLuint raster_start_query_id = 0u;
-
-  // The time at which the raster buffer was created.
-  base::TimeTicks raster_buffer_creation_time;
-
-  // Whether the raster work depends on candidates for hardware accelerated
-  // JPEG or WebP decodes.
-  bool depends_on_hardware_accelerated_jpeg_candidates = false;
-  bool depends_on_hardware_accelerated_webp_candidates = false;
 };
 
 class CC_EXPORT RasterQueryQueue {
  public:
-  RasterQueryQueue(viz::RasterContextProvider* const worker_context_provider,
-                   bool oop_rasterization_enabled);
+  explicit RasterQueryQueue(
+      viz::RasterContextProvider* const worker_context_provider);
   virtual ~RasterQueryQueue();
 
   // These functions should never be called with the raster context lock
@@ -54,8 +43,7 @@ class CC_EXPORT RasterQueryQueue {
   virtual bool CheckRasterFinishedQueries();
 
  private:
-  viz::RasterContextProvider* const worker_context_provider_;
-  const bool oop_rasterization_enabled_;
+  const raw_ptr<viz::RasterContextProvider> worker_context_provider_;
 
   // Note that this lock should never be acquired while holding the raster
   // context lock.

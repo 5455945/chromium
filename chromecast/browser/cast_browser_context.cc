@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,6 @@
 
 #include "base/command_line.h"
 #include "base/files/file_util.h"
-#include "base/macros.h"
 #include "base/path_service.h"
 #include "build/build_config.h"
 #include "chromecast/base/cast_paths.h"
@@ -19,7 +18,6 @@
 #include "components/profile_metrics/browser_profile_type.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/resource_context.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/common/content_switches.h"
 
@@ -30,18 +28,7 @@ namespace {
 const void* const kDownloadManagerDelegateKey = &kDownloadManagerDelegateKey;
 }  // namespace
 
-class CastBrowserContext::CastResourceContext
-    : public content::ResourceContext {
- public:
-  CastResourceContext() {}
-  ~CastResourceContext() override {}
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(CastResourceContext);
-};
-
-CastBrowserContext::CastBrowserContext()
-    : resource_context_(new CastResourceContext) {
+CastBrowserContext::CastBrowserContext() {
   profile_metrics::SetBrowserProfileType(
       this, profile_metrics::BrowserProfileType::kRegular);
   InitWhileIOAllowed();
@@ -54,12 +41,10 @@ CastBrowserContext::~CastBrowserContext() {
   SimpleKeyMap::GetInstance()->Dissociate(this);
   NotifyWillBeDestroyed();
   ShutdownStoragePartitions();
-  content::GetIOThreadTaskRunner({})->DeleteSoon(FROM_HERE,
-                                                 resource_context_.release());
 }
 
 void CastBrowserContext::InitWhileIOAllowed() {
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   CHECK(base::PathService::Get(base::DIR_ANDROID_APP_DATA, &path_));
   path_ = path_.Append(FILE_PATH_LITERAL("cast_shell"));
 
@@ -71,27 +56,21 @@ void CastBrowserContext::InitWhileIOAllowed() {
   // data (currently only cookies and local storage) will be
   // shared in a single location as defined here.
   CHECK(base::PathService::Get(DIR_CAST_HOME, &path_));
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
 }
 
-#if !defined(OS_ANDROID)
 std::unique_ptr<content::ZoomLevelDelegate>
 CastBrowserContext::CreateZoomLevelDelegate(
     const base::FilePath& partition_path) {
   return nullptr;
 }
-#endif  // !defined(OS_ANDROID)
 
-base::FilePath CastBrowserContext::GetPath() {
+base::FilePath CastBrowserContext::GetPath() const {
   return path_;
 }
 
 bool CastBrowserContext::IsOffTheRecord() {
   return false;
-}
-
-content::ResourceContext* CastBrowserContext::GetResourceContext() {
-  return resource_context_.get();
 }
 
 content::DownloadManagerDelegate*
@@ -109,6 +88,11 @@ content::BrowserPluginGuestManager* CastBrowserContext::GetGuestManager() {
 }
 
 storage::SpecialStoragePolicy* CastBrowserContext::GetSpecialStoragePolicy() {
+  return nullptr;
+}
+
+content::PlatformNotificationService*
+CastBrowserContext::GetPlatformNotificationService() {
   return nullptr;
 }
 
@@ -149,6 +133,11 @@ CastBrowserContext::GetBackgroundSyncController() {
 
 content::BrowsingDataRemoverDelegate*
 CastBrowserContext::GetBrowsingDataRemoverDelegate() {
+  return nullptr;
+}
+
+content::ReduceAcceptLanguageControllerDelegate*
+CastBrowserContext::GetReduceAcceptLanguageControllerDelegate() {
   return nullptr;
 }
 

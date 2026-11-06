@@ -1,36 +1,39 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/html/custom/custom_element_definition.h"
-#include "third_party/blink/renderer/core/css/css_import_rule.h"
-#include "third_party/blink/renderer/core/css/style_change_reason.h"
-#include "third_party/blink/renderer/core/css/style_engine.h"
-#include "third_party/blink/renderer/core/css/style_sheet_contents.h"
+
 #include "third_party/blink/renderer/core/dom/attr.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element.h"
+#include "third_party/blink/renderer/core/html/custom/custom_element_construction_stack.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element_reaction.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element_reaction_factory.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element_reaction_stack.h"
+#include "third_party/blink/renderer/core/html/custom/custom_element_registry.h"
+#include "third_party/blink/renderer/core/html/custom/custom_element_registry_assignment.h"
 #include "third_party/blink/renderer/core/html/custom/element_internals.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/html_element_factory.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
 CustomElementDefinition::CustomElementDefinition(
+    CustomElementRegistry& registry,
     const CustomElementDescriptor& descriptor)
-    : descriptor_(descriptor) {}
+    : registry_(registry), descriptor_(descriptor) {}
 
 CustomElementDefinition::CustomElementDefinition(
+    CustomElementRegistry& registry,
     const CustomElementDescriptor& descriptor,
     const HashSet<AtomicString>& observed_attributes,
     const Vector<String>& disabled_features,
     FormAssociationFlag form_association_flag)
-    : descriptor_(descriptor),
+    : registry_(registry),
+      descriptor_(descriptor),
       observed_attributes_(observed_attributes),
       has_style_attribute_changed_callback_(
           observed_attributes.Contains(html_names::kStyleAttr.LocalName())),
@@ -41,8 +44,8 @@ CustomElementDefinition::CustomElementDefinition(
 CustomElementDefinition::~CustomElementDefinition() = default;
 
 void CustomElementDefinition::Trace(Visitor* visitor) const {
-  visitor->Trace(construction_stack_);
-  visitor->Trace(default_style_sheets_);
+  visitor->Trace(registry_);
+  NodeRareDataField::Trace(visitor);
 }
 
 static String ErrorMessageForConstructorResult(Element& element,
@@ -92,7 +95,7 @@ void CustomElementDefinition::CheckConstructorResult(
   // 6.1.4. through 6.1.9.
   const String message =
       ErrorMessageForConstructorResult(*element, document, tag_name);
-  if (!message.IsEmpty()) {
+  if (!message.empty()) {
     exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
                                       message);
   }
@@ -128,13 +131,13 @@ HTMLElement* CustomElementDefinition::CreateElement(
       CustomElement::ShouldCreateCustomizedBuiltinElement(tag_name, document))
       << tag_name;
 
-  // 5. If definition is non-null, and definition’s name is not equal to
+  // 4. If definition is non-null, and definition’s name is not equal to
   // its local name (i.e., definition represents a customized built-in
   // element), then:
   if (!descriptor_.IsAutonomous()) {
-    // 5.1. Let interface be the element interface for localName and the
+    // 4.1. Let interface be the element interface for localName and the
     // HTML namespace.
-    // 5.2. Set result to a new element that implements interface, with
+    // 4.2. Set result to a new element that implements interface, with
     // no attributes, namespace set to the HTML namespace, namespace
     // prefix set to prefix, local name set to localName, custom element
     // state set to "undefined", custom element definition set to null,
@@ -144,7 +147,7 @@ HTMLElement* CustomElementDefinition::CreateElement(
     result->SetIsValue(Descriptor().GetName());
 
     if (!flags.IsAsyncCustomElements()) {
-      // 5.3 If the synchronous custom elements flag is set, then run this step
+      // 4.3 If the synchronous custom elements flag is set, then run this step
       // while catching any exceptions:
       //   1. Upgrade element using definition.
       // If this step threw an exception, then:
@@ -152,46 +155,48 @@ HTMLElement* CustomElementDefinition::CreateElement(
       //   2. Set result's custom element state to "failed".
       Upgrade(*result);
     } else {
-      // 5.4. Otherwise, enqueue a custom element upgrade reaction given
+      // 4.4. Otherwise, enqueue a custom element upgrade reaction given
       // result and definition.
       EnqueueUpgradeReaction(*result);
     }
     return To<HTMLElement>(result);
   }
 
-  // 6. If definition is non-null, then:
-  // 6.1. If the synchronous custom elements flag is set, then run these
+  // 5. If definition is non-null, then:
+  // 5.1. If the synchronous custom elements flag is set, then run these
   // steps while catching any exceptions:
-  if (!flags.IsAsyncCustomElements())
-    return CreateAutonomousCustomElementSync(document, tag_name);
+  if (!flags.IsAsyncCustomElements()) {
+    // We push the construction stack while creating element from scoped
+    // custom element registry as we don't have access to scoped registry
+    // in HTMLConstructor
+    if (!registry_->IsGlobalRegistry()) {
+      Element* element = CreateElementForConstructor(document);
+      // Set the registry for the element before running the constructor,
+      // to ensure user gets the correct registry in constructor if need.
+      element->SetCustomElementRegistry(
+          CustomElementRegistryAssignment::Explicit(registry_.Get()));
+      CustomElementConstructionStackScope construction_stack_scope(*this,
+                                                                   *element);
+      // Keeping the following creation call here to avoid the construction
+      // stack above fall out of scope.
+      return CreateAutonomousCustomElementSync(document, tag_name, registry_);
+    }
+    return CreateAutonomousCustomElementSync(document, tag_name, registry_);
+  }
 
-  // 6.2. Otherwise: (the synchronous custom elements flag is not set)
-  // 6.2.1. Set result to a new element that implements the HTMLElement
+  // 5.2. Otherwise: (the synchronous custom elements flag is not set)
+  // 5.2.1. Set result to a new element that implements the HTMLElement
   // interface, with no attributes, namespace set to the HTML namespace,
   // namespace prefix set to prefix, local name set to localName, custom
   // element state set to "undefined", and node document set to document.
   auto* element = MakeGarbageCollected<HTMLElement>(tag_name, document);
   element->SetCustomElementState(CustomElementState::kUndefined);
-  // 6.2.2. Enqueue a custom element upgrade reaction given result and
+  element->SetCustomElementRegistry(
+      CustomElementRegistryAssignment::Explicit(registry_.Get()));
+  // 5.2.2. Enqueue a custom element upgrade reaction given result and
   // definition.
   EnqueueUpgradeReaction(*element);
   return element;
-}
-
-CustomElementDefinition::ConstructionStackScope::ConstructionStackScope(
-    CustomElementDefinition& definition,
-    Element& element)
-    : construction_stack_(definition.construction_stack_), element_(&element) {
-  // Push the construction stack.
-  construction_stack_.push_back(&element);
-  depth_ = construction_stack_.size();
-}
-
-CustomElementDefinition::ConstructionStackScope::~ConstructionStackScope() {
-  // Pop the construction stack.
-  DCHECK(!construction_stack_.back() || construction_stack_.back() == element_);
-  DCHECK_EQ(construction_stack_.size(), depth_);  // It's a *stack*.
-  construction_stack_.pop_back();
 }
 
 // https://html.spec.whatwg.org/C/#concept-upgrade-an-element
@@ -210,7 +215,7 @@ void CustomElementDefinition::Upgrade(Element& element) {
   // a custom element callback reaction with element, callback name
   // "attributeChangedCallback", and an argument list containing attribute's
   // local name, null, attribute's value, and attribute's namespace.
-  if (!observed_attributes_.IsEmpty())
+  if (!observed_attributes_.empty())
     EnqueueAttributeChangedCallbackForAllAttributes(element);
 
   // 4.13.5.5: If element is connected, then enqueue a custom element callback
@@ -222,48 +227,36 @@ void CustomElementDefinition::Upgrade(Element& element) {
   bool succeeded = false;
   {
     // 4.13.5.6: Add element to the end of definition's construction stack.
-    ConstructionStackScope construction_stack_scope(*this, element);
+    CustomElementConstructionStackScope construction_stack_scope(*this,
+                                                                 element);
     // 4.13.5.8: Run the constructor, catching exceptions.
     succeeded = RunConstructor(element);
   }
   if (!succeeded) {
     // 4.13.5.?: If the above steps threw an exception, then element's custom
     // element state will remain "failed".
-    CustomElementReactionStack::Current().ClearQueue(element);
+    CustomElementReactionStack::From(element.GetDocument().GetAgent())
+        .ClearQueue(element);
     return;
   }
 
   element.SetCustomElementDefinition(this);
 
-  if (IsFormAssociated())
-    To<HTMLElement>(element).EnsureElementInternals().DidUpgrade();
-  AddDefaultStylesTo(element);
-}
-
-void CustomElementDefinition::AddDefaultStylesTo(Element& element) {
-  if (!RuntimeEnabledFeatures::CustomElementDefaultStyleEnabled() ||
-      !HasDefaultStyleSheets())
-    return;
-  const auto& default_styles = DefaultStyleSheets();
-  for (CSSStyleSheet* style : default_styles) {
-    Document* document = style->ConstructorDocument();
-    if (document && document != &element.GetDocument()) {
-      // No spec yet, but for now we forbid usage of other document's
-      // constructed stylesheet.
-      return;
+  // Setting the custom element definition changes the value of
+  // IsFormAssociatedCustomElement(), which impacts whether HTMLElement calls
+  // to the ListedElement when an attribute changes. Call the various change
+  // methods now to ensure ListedElements state is correct.
+  if (ListedElement* listed_element = ListedElement::From(element)) {
+    if (element.FastHasAttribute(html_names::kReadonlyAttr))
+      listed_element->ReadonlyAttributeChanged();
+    if (element.FastHasAttribute(html_names::kDisabledAttr)) {
+      listed_element->DisabledAttributeChanged(
+          DisabledChangedReason::kAttributeChanged);
     }
   }
-  if (!added_default_style_sheet_) {
-    element.GetDocument().GetStyleEngine().AddedCustomElementDefaultStyles(
-        default_styles);
-    added_default_style_sheet_ = true;
-    const AtomicString& local_tag_name = element.LocalNameForSelectorMatching();
-    for (CSSStyleSheet* sheet : default_styles)
-      sheet->AddToCustomElementTagNames(local_tag_name);
-  }
-  element.SetNeedsStyleRecalc(
-      kLocalStyleChange, StyleChangeReasonForTracing::Create(
-                             style_change_reason::kActiveStylesheetsUpdate));
+
+  if (IsFormAssociated())
+    To<HTMLElement>(element).EnsureElementInternals().DidUpgrade();
 }
 
 bool CustomElementDefinition::HasAttributeChangedCallback(
@@ -288,6 +281,11 @@ void CustomElementDefinition::EnqueueConnectedCallback(Element& element) {
 void CustomElementDefinition::EnqueueDisconnectedCallback(Element& element) {
   CustomElement::Enqueue(
       element, CustomElementReactionFactory::CreateDisconnected(*this));
+}
+
+void CustomElementDefinition::EnqueueConnectedMoveCallback(Element& element) {
+  CustomElement::Enqueue(
+      element, CustomElementReactionFactory::CreateConnectedMove(*this));
 }
 
 void CustomElementDefinition::EnqueueAdoptedCallback(Element& element,

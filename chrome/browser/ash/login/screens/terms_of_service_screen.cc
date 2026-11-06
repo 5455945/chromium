@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,25 +7,33 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
+#include "ash/constants/ash_login_pref_names.h"
 #include "base/check.h"
+#include "base/check_deref.h"
+#include "base/files/file_util.h"
+#include "base/files/important_file_writer.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/no_destructor.h"
+#include "base/strings/escape.h"
+#include "base/task/task_traits.h"
+#include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
-#include "chrome/browser/ash/policy/core/browser_policy_connector_chromeos.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_platform_part.h"
-#include "chrome/browser/net/system_network_context_manager.h"
+#include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
+#include "chrome/browser/enterprise/util/managed_browser_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/webui/chromeos/login/terms_of_service_screen_handler.h"
-#include "chrome/common/pref_names.h"
+#include "chrome/browser/ui/webui/ash/login/terms_of_service_screen_handler.h"
+#include "chromeos/ash/components/install_attributes/install_attributes.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/storage_partition.h"
 #include "net/http/http_response_headers.h"
 #include "services/network/public/cpp/resource_request.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 #include "url/gurl.h"
 
 namespace ash {
@@ -34,11 +42,34 @@ namespace {
 constexpr const char kAccept[] = "accept";
 constexpr const char kBack[] = "back";
 constexpr const char kRetry[] = "retry";
+constexpr const char kUserTos[] = "user_managed_terms_of_service.txt";
+
+// This allows to set callback before screen is created.
+base::OnceClosure& GetTosSavedCallbackOverride() {
+  static base::NoDestructor<base::OnceClosure> tos_saved_for_testing;
+  return *tos_saved_for_testing;
+}
+
+void SaveTosToFile(const std::string& tos, const base::FilePath& tos_path) {
+  if (!base::ImportantFileWriter::WriteFileAtomically(tos_path, tos)) {
+    LOG(ERROR) << "Failed to save terms of services to file: "
+               << tos_path.AsUTF8Unsafe();
+  }
+}
+
+std::optional<std::string> ReadFileToOptionalString(
+    const base::FilePath& file_path) {
+  std::string content;
+  if (base::ReadFileToString(file_path, &content))
+    return std::make_optional<std::string>(content);
+  return std::nullopt;
+}
 
 }  // namespace
 
 // static
 std::string TermsOfServiceScreen::GetResultString(Result result) {
+  // LINT.IfChange(UsageMetrics)
   switch (result) {
     case Result::ACCEPTED:
       return "Accepted";
@@ -47,24 +78,25 @@ std::string TermsOfServiceScreen::GetResultString(Result result) {
     case Result::NOT_APPLICABLE:
       return BaseScreen::kNotApplicable;
   }
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/oobe/histograms.xml)
 }
 
 TermsOfServiceScreen::TermsOfServiceScreen(
-    TermsOfServiceScreenView* view,
+    scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
+    const policy::BrowserPolicyConnectorAsh* browser_policy_connector_ash,
+    base::WeakPtr<TermsOfServiceScreenView> view,
     const ScreenExitCallback& exit_callback)
     : BaseScreen(TermsOfServiceScreenView::kScreenId,
                  OobeScreenPriority::DEFAULT),
-      view_(view),
+      shared_url_loader_factory_(std::move(shared_url_loader_factory)),
+      browser_policy_connector_ash_(CHECK_DEREF(browser_policy_connector_ash)),
+      view_(std::move(view)),
       exit_callback_(exit_callback) {
-  DCHECK(view_);
-  if (view_)
-    view_->SetScreen(this);
+  CHECK(shared_url_loader_factory_);
+  CHECK(view_, base::NotFatalUntil::M161);
 }
 
-TermsOfServiceScreen::~TermsOfServiceScreen() {
-  if (view_)
-    view_->SetScreen(nullptr);
-}
+TermsOfServiceScreen::~TermsOfServiceScreen() = default;
 
 void TermsOfServiceScreen::OnDecline() {
   exit_callback_.Run(Result::DECLINED);
@@ -94,20 +126,18 @@ void TermsOfServiceScreen::OnRetry() {
   StartDownload();
 }
 
-void TermsOfServiceScreen::OnViewDestroyed(TermsOfServiceScreenView* view) {
-  if (view_ == view)
-    view_ = nullptr;
-}
-
-bool TermsOfServiceScreen::MaybeSkip(WizardContext* context) {
-  // Only show the Terms of Service when logging into a public account and Terms
-  // of Service have been specified through policy. In all other cases, advance
-  // to the post-ToS part immediately.
-  if (!user_manager::UserManager::Get()->IsLoggedInAsPublicAccount() ||
+bool TermsOfServiceScreen::MaybeSkip(WizardContext& context) {
+  // Only show the Terms of Service when Terms of Service have been specified
+  // through policy. In all other cases, advance to the post-ToS part
+  // immediately.
+  if (context.skip_post_login_screens_for_tests ||
       !ProfileManager::GetActiveUserProfile()->GetPrefs()->IsManagedPreference(
-          prefs::kTermsOfServiceURL)) {
+          ash::prefs::kTermsOfServiceURL)) {
     exit_callback_.Run(Result::NOT_APPLICABLE);
     return true;
+  }
+  if (user_manager::UserManager::Get()->IsLoggedInAsManagedGuestSession()) {
+    return false;
   }
 
   return false;
@@ -118,23 +148,21 @@ void TermsOfServiceScreen::ShowImpl() {
     return;
 
   // Set the domain name whose Terms of Service are being shown.
-  policy::BrowserPolicyConnectorChromeOS* connector =
-      g_browser_process->platform_part()->browser_policy_connector_chromeos();
-  view_->SetManager(connector->GetEnterpriseDomainManager());
-
   // Show the screen.
-  view_->Show();
+  view_->Show(
+      ash::InstallAttributes::Get()->IsEnterpriseManaged()
+          ? browser_policy_connector_ash_->GetEnterpriseDomainManager()
+          : enterprise_util::GetDomainFromEmail(
+                ProfileManager::GetActiveUserProfile()->GetProfileUserName()));
 
   // Start downloading the Terms of Service.
   StartDownload();
 }
 
-void TermsOfServiceScreen::HideImpl() {
-  if (view_)
-    view_->Hide();
-}
+void TermsOfServiceScreen::HideImpl() {}
 
-void TermsOfServiceScreen::OnUserAction(const std::string& action_id) {
+void TermsOfServiceScreen::OnUserAction(const base::ListValue& args) {
+  const std::string& action_id = args[0].GetString();
   if (action_id == kBack)
     OnDecline();
   else if (action_id == kAccept)
@@ -142,7 +170,7 @@ void TermsOfServiceScreen::OnUserAction(const std::string& action_id) {
   else if (action_id == kRetry)
     OnRetry();
   else
-    BaseScreen::OnUserAction(action_id);
+    BaseScreen::OnUserAction(args);
 }
 
 void TermsOfServiceScreen::StartDownload() {
@@ -150,7 +178,7 @@ void TermsOfServiceScreen::StartDownload() {
   // If an URL from which the Terms of Service can be downloaded has not been
   // set, show an error message to the user.
   std::string terms_of_service_url =
-      prefs->GetString(prefs::kTermsOfServiceURL);
+      prefs->GetString(ash::prefs::kTermsOfServiceURL);
   if (terms_of_service_url.empty()) {
     if (view_)
       view_->OnLoadError();
@@ -192,15 +220,13 @@ void TermsOfServiceScreen::StartDownload() {
   // download.
   terms_of_service_loader_->SetRetryOptions(
       3, network::SimpleURLLoader::RETRY_ON_NETWORK_CHANGE);
-  network::mojom::URLLoaderFactory* loader_factory =
-      g_browser_process->system_network_context_manager()
-          ->GetURLLoaderFactory();
   terms_of_service_loader_->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
-      loader_factory, base::BindOnce(&TermsOfServiceScreen::OnDownloaded,
-                                     base::Unretained(this)));
+      shared_url_loader_factory_.get(),
+      base::BindOnce(&TermsOfServiceScreen::OnDownloaded,
+                     base::Unretained(this)));
 
   // Abort the download attempt if it takes longer than one minute.
-  download_timer_.Start(FROM_HERE, base::TimeDelta::FromMinutes(1), this,
+  download_timer_.Start(FROM_HERE, base::Minutes(1), this,
                         &TermsOfServiceScreen::OnDownloadTimeout);
 }
 
@@ -208,13 +234,11 @@ void TermsOfServiceScreen::OnDownloadTimeout() {
   // Destroy the fetcher, which will abort the download attempt.
   terms_of_service_loader_.reset();
 
-  // Show an error message to the user.
-  if (view_)
-    view_->OnLoadError();
+  LoadFromFileOrShowError();
 }
 
 void TermsOfServiceScreen::OnDownloaded(
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   download_timer_.Stop();
 
   // Destroy the fetcher when this method returns.
@@ -224,15 +248,69 @@ void TermsOfServiceScreen::OnDownloaded(
     return;
 
   // If the Terms of Service could not be downloaded, do not have a MIME type of
-  // text/plain or are empty, show an error message to the user.
+  // text/plain or are empty, try to load offline version or show an error
+  // message to the user.
   if (!response_body || *response_body == "" || !loader->ResponseInfo() ||
       loader->ResponseInfo()->mime_type != "text/plain") {
-    view_->OnLoadError();
+    LoadFromFileOrShowError();
   } else {
-    // If the Terms of Service were downloaded successfully, show them to the
-    // user.
-    view_->OnLoadSuccess(*response_body);
+    // If the Terms of Service were downloaded successfully, sanitize and show
+    // them to the user.
+    view_->OnLoadSuccess(base::EscapeForHTML(*response_body));
+    // Update locally saved terms.
+    SaveTos(base::EscapeForHTML(*response_body));
   }
+}
+
+void TermsOfServiceScreen::LoadFromFileOrShowError() {
+  if (!view_)
+    return;
+  auto tos_path = GetTosFilePath();
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE,
+      {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
+       base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
+      base::BindOnce(&ReadFileToOptionalString, tos_path),
+      base::BindOnce(&TermsOfServiceScreen::OnTosLoadedFromFile,
+                     weak_factory_.GetWeakPtr()));
+}
+
+void TermsOfServiceScreen::OnTosLoadedFromFile(std::optional<std::string> tos) {
+  if (!view_)
+    return;
+  if (!tos.has_value()) {
+    view_->OnLoadError();
+    return;
+  }
+  view_->OnLoadSuccess(tos.value());
+}
+
+// static
+void TermsOfServiceScreen::SetTosSavedCallbackForTesting(
+    base::OnceClosure callback) {
+  GetTosSavedCallbackOverride() = std::move(callback);
+}
+
+// static
+base::FilePath TermsOfServiceScreen::GetTosFilePath() {
+  auto user_data_dir = ProfileManager::GetActiveUserProfile()->GetPath();
+  return user_data_dir.AppendASCII(kUserTos);
+}
+
+void TermsOfServiceScreen::SaveTos(const std::string& tos) {
+  auto tos_path = GetTosFilePath();
+  base::ThreadPool::PostTaskAndReply(
+      FROM_HERE,
+      {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
+       base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
+      base::BindOnce(&SaveTosToFile, tos, tos_path),
+      base::BindOnce(&TermsOfServiceScreen::OnTosSavedForTesting,
+                     weak_factory_.GetWeakPtr()));
+}
+
+void TermsOfServiceScreen::OnTosSavedForTesting() {
+  if (GetTosSavedCallbackOverride())
+    std::move(GetTosSavedCallbackOverride()).Run();
 }
 
 }  // namespace ash

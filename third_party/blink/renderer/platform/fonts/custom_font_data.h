@@ -21,28 +21,39 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_CUSTOM_FONT_DATA_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_CUSTOM_FONT_DATA_H_
 
-#include "base/memory/scoped_refptr.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
-#include "third_party/blink/renderer/platform/wtf/ref_counted.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_view.h"
 
 namespace blink {
 
-class PLATFORM_EXPORT CustomFontData : public RefCounted<CustomFontData> {
+// The `CustomFontData` provides an interface of loadable font resource and
+// lifetime management. `SimpleFontData` owns its instance.
+//
+// Following classes construct an instance:
+//  * `BinaryDataFontFaceSource` as loaded font resource
+//  * `LocalFontFaceSource` as derived class `CSSCustomFontData`
+//  * `RemoteFontFaceSource` as derived class `CSSCustomFontData`
+class PLATFORM_EXPORT CustomFontData : public GarbageCollected<CustomFontData> {
  public:
-  static scoped_refptr<CustomFontData> Create() {
-    return base::AdoptRef(new CustomFontData());
-  }
-
+  CustomFontData() = default;
   virtual ~CustomFontData() = default;
+  virtual void Trace(Visitor*) const {}
 
   virtual void BeginLoadIfNeeded() const {}
   virtual bool IsLoading() const { return false; }
   virtual bool IsLoadingFallback() const { return false; }
   virtual bool ShouldSkipDrawing() const { return false; }
-  virtual void ClearFontFaceSource() {}
+  virtual bool IsPendingDataUrl() const { return false; }
 
- protected:
-  CustomFontData() = default;
+  // Requests that an IFT font is extended to support `text`. Returns true if
+  // the font is maximally extended (which is the case for non-IFT fonts) or if
+  // the IFT font already supports the given `text`.
+  //
+  // See https://www.w3.org/TR/IFT/ for IFT fonts.
+  //
+  // TODO(wmedrano): Add support for variable axes and features.
+  virtual bool IftRequireSubset(const StringView& text) const { return true; }
 };
 
 }  // namespace blink

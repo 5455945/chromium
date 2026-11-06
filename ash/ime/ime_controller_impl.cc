@@ -1,9 +1,10 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/ime/ime_controller_impl.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "ash/ime/ime_mode_indicator_view.h"
@@ -11,11 +12,9 @@
 #include "ash/ime/mode_indicator_observer.h"
 #include "ash/shell.h"
 #include "ash/system/tray/system_tray_notifier.h"
-#include "base/callback_helpers.h"
-#include "base/containers/contains.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/functional/callback_helpers.h"
 #include "ui/base/accelerators/accelerator.h"
-#include "ui/base/ime/chromeos/extension_ime_util.h"
+#include "ui/base/ime/ash/extension_ime_util.h"
 #include "ui/display/manager/display_manager.h"
 
 namespace ash {
@@ -61,19 +60,7 @@ bool ImeControllerImpl::IsCurrentImeVisible() const {
 }
 
 void ImeControllerImpl::SetClient(ImeControllerClient* client) {
-  if (client_) {
-    if (CastConfigController::Get())
-      CastConfigController::Get()->RemoveObserver(this);
-    Shell::Get()->display_manager()->RemoveObserver(this);
-  }
-
   client_ = client;
-
-  if (client_) {
-    if (CastConfigController::Get())
-      CastConfigController::Get()->AddObserver(this);
-    Shell::Get()->display_manager()->AddObserver(this);
-  }
 }
 
 bool ImeControllerImpl::CanSwitchIme() const {
@@ -125,8 +112,7 @@ void ImeControllerImpl::SwitchImeWithAccelerator(
       GetCandidateImesForAccelerator(accelerator);
   if (candidate_ids.empty())
     return;
-  auto it =
-      std::find(candidate_ids.begin(), candidate_ids.end(), current_ime_.id);
+  auto it = std::ranges::find(candidate_ids, current_ime_.id);
   if (it != candidate_ids.end())
     ++it;
   if (it == candidate_ids.end())
@@ -183,16 +169,24 @@ void ImeControllerImpl::ShowImeMenuOnShelf(bool show) {
 void ImeControllerImpl::UpdateCapsLockState(bool caps_enabled) {
   is_caps_lock_enabled_ = caps_enabled;
 
-  for (ImeControllerImpl::Observer& observer : observers_)
+  for (ImeController::Observer& observer : observers_) {
     observer.OnCapsLockChanged(caps_enabled);
+  }
 }
 
 void ImeControllerImpl::OnKeyboardLayoutNameChanged(
     const std::string& layout_name) {
   keyboard_layout_name_ = layout_name;
 
-  for (ImeControllerImpl::Observer& observer : observers_)
+  for (ImeController::Observer& observer : observers_) {
     observer.OnKeyboardLayoutNameChanged(layout_name);
+  }
+}
+
+void ImeControllerImpl::OnKeyboardEnabledChanged(bool is_enabled) {
+  if (!is_enabled) {
+    OverrideKeyboardKeyset(input_method::ImeKeyset::kNone);
+  }
 }
 
 void ImeControllerImpl::SetExtraInputOptionsEnabledState(
@@ -216,28 +210,6 @@ void ImeControllerImpl::ShowModeIndicator(
   mi_view->ShowAndFadeOut();
 }
 
-void ImeControllerImpl::OnDisplayMetricsChanged(const display::Display& display,
-                                                uint32_t changed_metrics) {
-  if (changed_metrics & display::DisplayObserver::DISPLAY_METRIC_MIRROR_STATE) {
-    Shell* shell = Shell::Get();
-    client_->UpdateMirroringState(shell->display_manager()->IsInMirrorMode());
-  }
-}
-
-void ImeControllerImpl::OnDevicesUpdated(
-    const std::vector<SinkAndRoute>& devices) {
-  DCHECK(client_);
-
-  bool casting_desktop = false;
-  for (const auto& receiver : devices) {
-    if (receiver.route.content_source == ContentSource::kDesktop) {
-      casting_desktop = true;
-      break;
-    }
-  }
-  client_->UpdateCastingState(casting_desktop);
-}
-
 void ImeControllerImpl::SetCapsLockEnabled(bool caps_enabled) {
   is_caps_lock_enabled_ = caps_enabled;
 
@@ -245,13 +217,12 @@ void ImeControllerImpl::SetCapsLockEnabled(bool caps_enabled) {
     client_->SetCapsLockEnabled(caps_enabled);
 }
 
-void ImeControllerImpl::OverrideKeyboardKeyset(
-    chromeos::input_method::ImeKeyset keyset) {
+void ImeControllerImpl::OverrideKeyboardKeyset(input_method::ImeKeyset keyset) {
   OverrideKeyboardKeyset(keyset, base::DoNothing());
 }
 
 void ImeControllerImpl::OverrideKeyboardKeyset(
-    chromeos::input_method::ImeKeyset keyset,
+    input_method::ImeKeyset keyset,
     ImeControllerClient::OverrideKeyboardKeysetCallback callback) {
   if (client_)
     client_->OverrideKeyboardKeyset(keyset, std::move(callback));
@@ -265,7 +236,7 @@ std::vector<std::string> ImeControllerImpl::GetCandidateImesForAccelerator(
     const ui::Accelerator& accelerator) const {
   std::vector<std::string> candidate_ids;
 
-  using chromeos::extension_ime_util::GetInputMethodIDByEngineID;
+  using extension_ime_util::GetInputMethodIDByEngineID;
   std::vector<std::string> input_method_ids_to_switch;
   switch (accelerator.key_code()) {
     case ui::VKEY_CONVERT:  // Henkan key on JP106 keyboard
@@ -293,7 +264,7 @@ std::vector<std::string> ImeControllerImpl::GetCandidateImesForAccelerator(
 
   // Obtain the intersection of input_method_ids_to_switch and available_imes_.
   for (const ImeInfo& ime : available_imes_) {
-    if (base::Contains(input_method_ids_to_switch, ime.id))
+    if (std::ranges::contains(input_method_ids_to_switch, ime.id))
       candidate_ids.push_back(ime.id);
   }
   return candidate_ids;

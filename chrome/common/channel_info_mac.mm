@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,10 @@
 
 #import <Foundation/Foundation.h>
 
+#include <tuple>
+
+#include "base/apple/bundle_locations.h"
 #include "base/check.h"
-#include "base/mac/bundle_locations.h"
-#include "base/macros.h"
 #include "base/no_destructor.h"
 #include "base/strings/sys_string_conversions.h"
 #include "build/branding_buildflags.h"
@@ -63,7 +64,7 @@ ChannelState ParseChannelId(NSString* channel) {
 ChannelState DetermineChannelState() {
   // Use the main Chrome application bundle and not the framework bundle.
   // Keystone keys don't live in the framework.
-  NSBundle* bundle = base::mac::OuterBundle();
+  NSBundle* bundle = base::apple::OuterBundle();
 
   if (![bundle objectForInfoDictionaryKey:@"KSProductID"]) {
     // This build is not Keystone-enabled; it can't have a channel.
@@ -98,7 +99,7 @@ bool SideBySideCapable() {
   static const bool capable = [] {
     // Use the main Chrome application bundle and not the framework bundle.
     // Keystone keys don't live in the framework.
-    NSBundle* bundle = base::mac::OuterBundle();
+    NSBundle* bundle = base::apple::OuterBundle();
     if (![bundle objectForInfoDictionaryKey:@"KSProductID"]) {
       // This build is not Keystone-enabled, and without a channel assume it is
       // side-by-side capable.
@@ -127,8 +128,8 @@ bool SideBySideCapable() {
 }  // namespace
 
 void CacheChannelInfo() {
-  ignore_result(GetChannelState());
-  ignore_result(SideBySideCapable());
+  std::ignore = GetChannelState();
+  std::ignore = SideBySideCapable();
 }
 
 std::string GetChannelName(WithExtendedStable with_extended_stable) {

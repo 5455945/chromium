@@ -1,27 +1,32 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <stddef.h>
 #include <stdint.h>
+
 #include <vector>
 
 #include "base/at_exit.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/task/bind_post_task.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/test_timeouts.h"
-#include "base/threading/thread_task_runner_handle.h"
-#include "media/base/bind_to_current_loop.h"
 #include "media/base/eme_constants.h"
 #include "media/base/media.h"
 #include "media/base/media_switches.h"
 #include "media/base/pipeline_status.h"
+#include "media/base/test_data_util.h"
 #include "media/media_buildflags.h"
 #include "media/test/pipeline_integration_test_base.h"
 #include "media/test/test_media_source.h"
+#include "testing/libfuzzer/libfuzzer_base_wrappers.h"
 #include "third_party/googletest/src/googletest/src/gtest-internal-inl.h"
 
 namespace {
@@ -36,6 +41,9 @@ enum FuzzerVariant {
   WEBM_OPUS_VP9,
 #if BUILDFLAG(ENABLE_AV1_DECODER)
   MP4_AV1,
+#endif
+#if BUILDFLAG(ENABLE_IAMF_TOOLS)
+  MP4_IAMF_OPUS,
 #endif
   MP4_FLAC,
   MP4_OPUS,
@@ -72,6 +80,10 @@ std::string MseFuzzerVariantEnumToMimeTypeString(FuzzerVariant variant) {
     case MP4_AV1:
       return "video/mp4; codecs=\"av01.0.04M.08\"";
 #endif  // BUILDFLAG(ENABLE_AV1_DECODER)
+#if BUILDFLAG(ENABLE_IAMF_TOOLS)
+    case MP4_IAMF_OPUS:
+      return "audio/mp4; codecs=\"iamf.001.001.Opus\"";
+#endif  // BUILDFLAG(ENABLE_IAMF_TOOLS)
     case MP4_FLAC:
       return "audio/mp4; codecs=\"flac\"";
     case MP4_OPUS:
@@ -106,10 +118,7 @@ std::string MseFuzzerVariantEnumToMimeTypeString(FuzzerVariant variant) {
 
     case SRC:
       NOTREACHED() << "SRC is an invalid MSE fuzzer variant";
-      break;
   }
-
-  return "";
 }
 
 }  // namespace
@@ -118,7 +127,7 @@ namespace media {
 
 // Limit the amount of initial (or post-seek) audio silence padding allowed in
 // rendering of fuzzed input.
-constexpr base::TimeDelta kMaxPlayDelay = base::TimeDelta::FromSeconds(10);
+constexpr base::TimeDelta kMaxPlayDelay = base::Seconds(10);
 
 void OnEncryptedMediaInitData(media::PipelineIntegrationTestBase* test,
                               media::EmeInitDataType /* type */,
@@ -130,7 +139,7 @@ void OnEncryptedMediaInitData(media::PipelineIntegrationTestBase* test,
   // Note: Since the callback is on the media task runner but the test is on
   // the main task runner, this must be posted.
   // TODO(xhwang): Support encrypted media in this fuzzer test.
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&PipelineIntegrationTestBase::FailTest,
                                 base::Unretained(test),
                                 media::PIPELINE_ERROR_INITIALIZATION_FAILED));
@@ -142,7 +151,7 @@ void OnAudioPlayDelay(media::PipelineIntegrationTestBase* test,
   if (play_delay > kMaxPlayDelay) {
     // Note: Since the callback is on the media task runner but the test is on
     // the main task runner, this must be posted.
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&PipelineIntegrationTestBase::FailTest,
                                   base::Unretained(test),
                                   media::PIPELINE_ERROR_INITIALIZATION_FAILED));
@@ -155,15 +164,16 @@ class ProgressivePipelineIntegrationFuzzerTest
   ProgressivePipelineIntegrationFuzzerTest() {
     set_encrypted_media_init_data_cb(
         base::BindRepeating(&OnEncryptedMediaInitData, this));
-    set_audio_play_delay_cb(
-        BindToCurrentLoop(base::BindRepeating(&OnAudioPlayDelay, this)));
+    set_audio_play_delay_cb(base::BindPostTaskToCurrentDefault(
+        base::BindRepeating(&OnAudioPlayDelay, this)));
   }
 
   ~ProgressivePipelineIntegrationFuzzerTest() override = default;
 
-  void RunTest(const uint8_t* data, size_t size) {
-    if (PIPELINE_OK != Start(data, size, kUnreliableDuration | kFuzzing))
+  void RunTest(base::span<const uint8_t> data) {
+    if (PIPELINE_OK != Start(data, kUnreliableDuration | kFuzzing)) {
       return;
+    }
 
     Play();
     if (PIPELINE_OK != WaitUntilEndedOrError())
@@ -179,18 +189,21 @@ class MediaSourcePipelineIntegrationFuzzerTest
   MediaSourcePipelineIntegrationFuzzerTest() {
     set_encrypted_media_init_data_cb(
         base::BindRepeating(&OnEncryptedMediaInitData, this));
-    set_audio_play_delay_cb(
-        BindToCurrentLoop(base::BindRepeating(&OnAudioPlayDelay, this)));
+    set_audio_play_delay_cb(base::BindPostTaskToCurrentDefault(
+        base::BindRepeating(&OnAudioPlayDelay, this)));
   }
 
   ~MediaSourcePipelineIntegrationFuzzerTest() override = default;
 
-  void RunTest(const uint8_t* data, size_t size, const std::string& mimetype) {
-    if (size == 0)
+  void RunTest(base::span<const uint8_t> data, const std::string& mimetype) {
+    if (data.empty()) {
       return;
+    }
 
-    scoped_refptr<media::DecoderBuffer> buffer(
-        DecoderBuffer::CopyFrom(data, size));
+    auto external_memory =
+        std::make_unique<media::ExternalMemoryAdapterForTesting>(data);
+    scoped_refptr<media::DecoderBuffer> buffer =
+        media::DecoderBuffer::FromExternalMemory(std::move(external_memory));
 
     TestMediaSource source(buffer, mimetype, kAppendWholeFile);
 
@@ -228,40 +241,47 @@ struct Environment {
   Environment() {
     base::CommandLine::Init(0, nullptr);
 
+    // Initialize the feature list to defaults to avoid crashes when feature
+    // checks are performed. Fuzzers do not go through the normal browser
+    // initialization that typically sets this up.
+    feature_list.Init();
+
     // |test| instances uses TaskEnvironment, which needs TestTimeouts.
     TestTimeouts::Initialize();
 
     media::InitializeMediaLibrary();
 
-    // Note, instead of LOG_FATAL, use a value at or below logging::LOG_VERBOSE
-    // here to assist local debugging.
-    logging::SetMinLogLevel(logging::LOG_FATAL);
+    // Note, instead of LOGGING_FATAL, use a value at or below
+    // logging::LOGGING_VERBOSE here to assist local debugging.
+    logging::SetMinLogLevel(logging::LOGGING_FATAL);
   }
-};
 
-Environment* env = new Environment();
-
-// Entry point for LibFuzzer.
-extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   // Media pipeline starts new threads, which needs AtExitManager.
   base::AtExitManager at_exit;
 
+  base::test::ScopedFeatureList feature_list;
+};
+
+
+// Entry point for LibFuzzer.
+DEFINE_LLVM_FUZZER_TEST_ONE_INPUT_SPAN(const base::span<const uint8_t> bytes) {
+  static const base::NoDestructor<Environment> env;
   FuzzerVariant variant = PIPELINE_FUZZER_VARIANT;
 
   // These tests use GoogleTest assertions without using the GoogleTest
   // framework. While this is the case, tell GoogleTest's stack trace getter
   // that GoogleTest is being left now so that there is a basis for traces
-  // collected upon assertion failure. TODO(https://crbug.com/1039559): use
+  // collected upon assertion failure. TODO(crbug.com/40113640): use
   // RUN_ALL_TESTS() and remove this code.
   ::testing::internal::GetUnitTestImpl()
       ->os_stack_trace_getter()
       ->UponLeavingGTest();
   if (variant == SRC) {
     media::ProgressivePipelineIntegrationFuzzerTest test;
-    test.RunTest(data, size);
+    test.RunTest(bytes);
   } else {
     media::MediaSourcePipelineIntegrationFuzzerTest test;
-    test.RunTest(data, size, MseFuzzerVariantEnumToMimeTypeString(variant));
+    test.RunTest(bytes, MseFuzzerVariantEnumToMimeTypeString(variant));
   }
 
   return 0;

@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,13 @@
 #define CHROMEOS_DBUS_POWER_POWER_POLICY_CONTROLLER_H_
 
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "base/component_export.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
 #include "base/values.h"
 #include "chromeos/dbus/power/power_manager_client.h"
 #include "chromeos/dbus/power_manager/policy.pb.h"
@@ -40,6 +42,9 @@ class COMPONENT_EXPORT(DBUS_POWER) PowerPolicyController
   // Returns the global instance. Initialize() must be called first.
   static PowerPolicyController* Get();
 
+  PowerPolicyController(const PowerPolicyController&) = delete;
+  PowerPolicyController& operator=(const PowerPolicyController&) = delete;
+
   // Reasons why a wake lock may be added.
   // TODO(derat): Remove this enum in favor of device::mojom::WakeLockReason
   // once this class has been moved to the device service:
@@ -58,6 +63,12 @@ class COMPONENT_EXPORT(DBUS_POWER) PowerPolicyController
     ACTION_DO_NOTHING = 3,
   };
 
+  // Note: Do not change these values; they are used by preferences.
+  enum OptimizedChargingStrategy {
+    STRATEGY_ADAPTIVE_CHARGING = 0,
+    STRATEGY_CHARGE_LIMIT = 1,
+  };
+
   // Values of various power-management-related preferences.
   struct PrefValues {
     PrefValues();
@@ -68,13 +79,17 @@ class COMPONENT_EXPORT(DBUS_POWER) PowerPolicyController
     // the other fields, unfortunately (but the default values would only reach
     // powerd if Chrome failed to override them with the pref-assigned values).
     int ac_screen_dim_delay_ms = -1;
+    int ac_quick_dim_delay_ms = -1;
     int ac_screen_off_delay_ms = -1;
     int ac_screen_lock_delay_ms = -1;
+    int ac_quick_lock_delay_ms = -1;
     int ac_idle_warning_delay_ms = -1;
     int ac_idle_delay_ms = -1;
     int battery_screen_dim_delay_ms = -1;
+    int battery_quick_dim_delay_ms = -1;
     int battery_screen_off_delay_ms = -1;
     int battery_screen_lock_delay_ms = -1;
+    int battery_quick_lock_delay_ms = -1;
     int battery_idle_warning_delay_ms = -1;
     int battery_idle_delay_ms = -1;
 
@@ -107,19 +122,33 @@ class COMPONENT_EXPORT(DBUS_POWER) PowerPolicyController
             power_manager::PowerManagementPolicy::BatteryChargeMode::ADAPTIVE;
     int custom_charge_start = -1;
     int custom_charge_stop = -1;
+    // Only set send_feedback_if_undimmed in policy proto if this field is set.
+    std::optional<bool> send_feedback_if_undimmed;
+    // Only set adaptive_charging_enabled in policy proto if this field is set.
+    std::optional<bool> adaptive_charging_enabled;
+    // Only set charge_limit_enabled in policy proto if this field is set.
+    std::optional<bool> charge_limit_enabled;
+
+    // Adaptive charging configs, only set when adaptive_charging_enabled.
+    // Configurable via base::FeatureParam.
+    double adaptive_charging_min_probability = -1.0;
+    int adaptive_charging_hold_percent = -1;
+    double adaptive_charging_max_delay_percentile = -1.0;
+    int adaptive_charging_min_days_history = -1;
+    double adaptive_charging_min_full_on_ac_ratio = -1.0;
   };
 
-  // Converts |base::DictionaryValue| to |std::vector<PeakShiftDayConfig>| and
+  // Converts |base::DictValue| to |std::vector<PeakShiftDayConfig>| and
   // returns true if there are no missing fields and errors.
   static bool GetPeakShiftDayConfigs(
-      const base::DictionaryValue& value,
+      const base::DictValue& value,
       std::vector<PeakShiftDayConfig>* configs_out);
 
-  // Converts |base::DictionaryValue| to
+  // Converts |base::DictValue| to
   // |std::vector<AdvancedBatteryChargeModeDayConfig>| and returns true if there
   // are no missing fields and errors.
   static bool GetAdvancedBatteryChargeModeDayConfigs(
-      const base::DictionaryValue& value,
+      const base::DictValue& value,
       std::vector<AdvancedBatteryChargeModeDayConfig>* configs_out);
 
   // Saves appropriate value to |mode_out| and returns true if there is mapping
@@ -177,6 +206,11 @@ class COMPONENT_EXPORT(DBUS_POWER) PowerPolicyController
   // is overridden to ensure that the system doesn't suspend or shut
   // down.
   void NotifyChromeIsExiting();
+
+  // Adjusts idle action policy when set by demo mode. There are 2 states in
+  // demo mode: use power idle policy or use `DemoModeIdleHandler` which
+  // implements UI actions for idle.
+  void SetShouldDoNothingWhenIdleInDemoMode();
 
   // Adjusts policy when the display is forced off in response to the
   // user tapping the power button, or when it's no longer forced off.
@@ -238,7 +272,7 @@ class COMPONENT_EXPORT(DBUS_POWER) PowerPolicyController
   // Sends a policy based on |prefs_policy_| to the power manager.
   void SendCurrentPolicy();
 
-  PowerManagerClient* client_;  // weak
+  raw_ptr<PowerManagerClient> client_;  // weak
 
   // Policy derived from values passed to ApplyPrefs().
   power_manager::PowerManagementPolicy prefs_policy_;
@@ -283,15 +317,12 @@ class COMPONENT_EXPORT(DBUS_POWER) PowerPolicyController
   // Indicates if screen autolock is enabled or not by policy.
   bool auto_screen_lock_enabled_ = false;
 
-  DISALLOW_COPY_AND_ASSIGN(PowerPolicyController);
+  bool should_do_nothing_when_idle_in_demo_mode_ = false;
+
+  base::ScopedObservation<PowerManagerClient, PowerManagerClient::Observer>
+      power_manager_client_observation_{this};
 };
 
 }  // namespace chromeos
-
-// TODO(https://crbug.com/1164001): remove after the //chrome/browser/chromeos
-// source migration is finished.
-namespace ash {
-using ::chromeos::PowerPolicyController;
-}
 
 #endif  // CHROMEOS_DBUS_POWER_POWER_POLICY_CONTROLLER_H_

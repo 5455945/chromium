@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 
 #include <memory>
 
-#include "base/memory/weak_ptr.h"
 #include "components/keyed_service/core/keyed_service.h"
 
 namespace content {
@@ -22,14 +21,16 @@ class SharingHubModel;
 class SharingHubService : public KeyedService {
  public:
   explicit SharingHubService(content::BrowserContext* context);
+
+  SharingHubService(const SharingHubService&) = delete;
+  SharingHubService& operator=(const SharingHubService&) = delete;
+
   ~SharingHubService() override;
 
   virtual SharingHubModel* GetSharingHubModel();
 
  private:
   std::unique_ptr<SharingHubModel> model_;
-
-  DISALLOW_COPY_AND_ASSIGN(SharingHubService);
 };
 
 }  // namespace sharing_hub

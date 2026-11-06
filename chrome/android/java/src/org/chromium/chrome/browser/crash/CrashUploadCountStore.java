@@ -1,12 +1,14 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.crash;
 
+import org.chromium.base.shared_preferences.SharedPreferencesManager;
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.crash.MinidumpUploadServiceImpl.ProcessType;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
-import org.chromium.chrome.browser.preferences.SharedPreferencesManager;
+import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 
 /**
  * Records number of crashes uploaded in SharedPreferences.
@@ -14,13 +16,14 @@ import org.chromium.chrome.browser.preferences.SharedPreferencesManager;
  * These numbers may be recorded even when running in background and the main Chrome Activity does
  * not exist, so they are persisted until the next time it runs.
  */
+@NullMarked
 public class CrashUploadCountStore {
     private static final CrashUploadCountStore INSTANCE = new CrashUploadCountStore();
 
     private final SharedPreferencesManager mManager;
 
     private CrashUploadCountStore() {
-        mManager = SharedPreferencesManager.getInstance();
+        mManager = ChromeSharedPreferences.getInstance();
     }
 
     /**

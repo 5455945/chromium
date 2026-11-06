@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,28 +6,31 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/check_deref.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
-#include "chrome/browser/ash/arc/arc_support_host.h"
-#include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/ui/app_list/arc/arc_app_utils.h"
 #include "components/signin/public/identity_manager/access_token_fetcher.h"
 #include "content/public/common/url_constants.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
+
+// Enable VLOG level 1.
+#undef ENABLED_VLOG_LEVEL
+#define ENABLED_VLOG_LEVEL 1
 
 namespace arc {
 
 namespace {
 
-constexpr base::TimeDelta kRefreshTokenTimeout =
-    base::TimeDelta::FromSeconds(10);
+constexpr base::TimeDelta kRefreshTokenTimeout = base::Seconds(10);
 
 }  // namespace
 
-ArcAuthContext::ArcAuthContext(Profile* profile,
+ArcAuthContext::ArcAuthContext(signin::IdentityManager* identity_manager,
                                const CoreAccountId& account_id)
-    : account_id_(account_id),
-      identity_manager_(IdentityManagerFactory::GetForProfile(profile)) {
+    : identity_manager_(CHECK_DEREF(identity_manager)),
+      account_id_(account_id) {
+  // TODO(crbug.com/576417065): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK(identity_manager_->HasAccountWithRefreshToken(account_id));
 }
 
@@ -59,19 +62,19 @@ void ArcAuthContext::Prepare(PrepareCallback callback) {
 
 std::unique_ptr<signin::AccessTokenFetcher>
 ArcAuthContext::CreateAccessTokenFetcher(
-    const std::string& consumer_name,
-    const signin::ScopeSet& scopes,
+    const signin::OAuthConsumerId consumer_id,
     signin::AccessTokenFetcher::TokenCallback callback) {
-  DCHECK(identity_manager_->HasAccountWithRefreshToken(account_id_));
+  CHECK(identity_manager_->HasAccountWithRefreshToken(account_id_),
+        base::NotFatalUntil::M160);
   return identity_manager_->CreateAccessTokenFetcherForAccount(
-      account_id_, consumer_name, scopes, std::move(callback),
+      account_id_, consumer_id, std::move(callback),
       signin::AccessTokenFetcher::Mode::kImmediate);
 }
 
 void ArcAuthContext::RemoveAccessTokenFromCache(
-    const signin::ScopeSet& scopes,
+    const signin::OAuthConsumerId consumer_id,
     const std::string& access_token) {
-  identity_manager_->RemoveAccessTokenFromCache(account_id_, scopes,
+  identity_manager_->RemoveAccessTokenFromCache(account_id_, consumer_id,
                                                 access_token);
 }
 

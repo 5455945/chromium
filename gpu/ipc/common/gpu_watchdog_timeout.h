@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,31 +15,28 @@ namespace gpu {
 // launched.
 
 #if defined(CYGPROFILE_INSTRUMENTATION)
-constexpr base::TimeDelta kGpuWatchdogTimeout =
-    base::TimeDelta::FromSeconds(30);
-#elif defined(OS_MAC)
-constexpr base::TimeDelta kGpuWatchdogTimeout =
-    base::TimeDelta::FromSeconds(25);
-#elif defined(OS_WIN)
-constexpr base::TimeDelta kGpuWatchdogTimeout =
-    base::TimeDelta::FromSeconds(30);
+constexpr base::TimeDelta kGpuWatchdogTimeout = base::Seconds(30);
+#elif BUILDFLAG(IS_MAC)
+#if defined(ADDRESS_SANITIZER)
+// Use a longer timeout because of slower execution time leading to
+// intermittent flakes. http://crbug.com/1270755
+constexpr base::TimeDelta kGpuWatchdogTimeout = base::Seconds(50);
 #else
-constexpr base::TimeDelta kGpuWatchdogTimeout =
-    base::TimeDelta::FromSeconds(15);
+constexpr base::TimeDelta kGpuWatchdogTimeout = base::Seconds(25);
+#endif
+#elif BUILDFLAG(IS_WIN)
+constexpr base::TimeDelta kGpuWatchdogTimeout = base::Seconds(30);
+#else
+constexpr base::TimeDelta kGpuWatchdogTimeout = base::Seconds(15);
 #endif
 
 // It usually takes longer to finish a GPU task when the system just resumes
 // from power suspension or when the Android app switches from the background to
 // the foreground. This is the factor the original timeout will be multiplied.
-constexpr int kRestartFactor = 2;
+inline constexpr int kRestartFactor = 2;
 
-// It takes longer to initialize GPU process in Windows. See
-// https://crbug.com/949839 for details.
-#if defined(OS_WIN)
-constexpr int kInitFactor = 2;
-#else
-constexpr int kInitFactor = 1;
-#endif
+// Software rasterizer runs slower than hardware accelerated.
+inline constexpr int kSoftwareRenderingFactor = 2;
 
 }  // namespace gpu
 

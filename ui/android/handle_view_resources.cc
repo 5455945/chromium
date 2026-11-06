@@ -1,26 +1,18 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/android/handle_view_resources.h"
 
+#include "base/notreached.h"
 #include "base/trace_event/trace_event.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "ui/android/ui_android_jni_headers/HandleViewResources_jni.h"
-
-namespace {
-
-static SkBitmap CreateSkBitmapFromJavaBitmap(
-    base::android::ScopedJavaLocalRef<jobject> jbitmap) {
-  return jbitmap.is_null()
-             ? SkBitmap()
-             : CreateSkBitmapFromJavaBitmap(gfx::JavaBitmap(jbitmap));
-}
-
-}  // namespace
 
 namespace ui {
 
-HandleViewResources::HandleViewResources() {}
+HandleViewResources::HandleViewResources() = default;
 
 void HandleViewResources::LoadIfNecessary(const JavaRef<jobject>& context) {
   if (loaded_)
@@ -31,12 +23,9 @@ void HandleViewResources::LoadIfNecessary(const JavaRef<jobject>& context) {
   TRACE_EVENT0("ui", "HandleViewResources::Create");
   JNIEnv* env = base::android::AttachCurrentThread();
 
-  left_bitmap_ = CreateSkBitmapFromJavaBitmap(
-      Java_HandleViewResources_getLeftHandleBitmap(env, context));
-  right_bitmap_ = CreateSkBitmapFromJavaBitmap(
-      Java_HandleViewResources_getRightHandleBitmap(env, context));
-  center_bitmap_ = CreateSkBitmapFromJavaBitmap(
-      Java_HandleViewResources_getCenterHandleBitmap(env, context));
+  left_bitmap_ = Java_HandleViewResources_getLeftHandleBitmap(env, context);
+  right_bitmap_ = Java_HandleViewResources_getRightHandleBitmap(env, context);
+  center_bitmap_ = Java_HandleViewResources_getCenterHandleBitmap(env, context);
 
   left_bitmap_.setImmutable();
   right_bitmap_.setImmutable();
@@ -48,7 +37,7 @@ void HandleViewResources::LoadIfNecessary(const JavaRef<jobject>& context) {
 
 const SkBitmap& HandleViewResources::GetBitmap(
     ui::TouchHandleOrientation orientation) {
-  DCHECK(loaded_);
+  CHECK(loaded_, base::NotFatalUntil::M163);
   switch (orientation) {
     case ui::TouchHandleOrientation::LEFT:
       return left_bitmap_;
@@ -59,12 +48,13 @@ const SkBitmap& HandleViewResources::GetBitmap(
     case ui::TouchHandleOrientation::UNDEFINED:
       NOTREACHED() << "Invalid touch handle orientation.";
   };
-  return center_bitmap_;
 }
 
 float HandleViewResources::GetDrawableHorizontalPaddingRatio() const {
-  DCHECK(loaded_);
+  CHECK(loaded_, base::NotFatalUntil::M163);
   return drawable_horizontal_padding_ratio_;
 }
 
 }  // namespace ui
+
+DEFINE_JNI(HandleViewResources)

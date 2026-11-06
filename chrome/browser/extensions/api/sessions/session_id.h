@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,30 +8,35 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
 class SessionId {
  public:
   // Returns a SessionId, representing either a local or a foreign session.
-  // In the case that the session is local, |session_tag_| will be empty string.
-  // |session_string| should be in the format that ToString() would produce.
+  // In the case that the session is local, `session_tag_` will be empty string.
+  // `session_string` should be in the format that ToString() would produce.
   static std::unique_ptr<SessionId> Parse(const std::string& session_string);
 
   // Constructs a SessionId object for the given session information.
-  // |session_tag| is the string used to uniquely identify a synced foreign
+  // `session_tag` is the string used to uniquely identify a synced foreign
   // session from the SessionModelAssociator. In the case that SessionId
-  // represents a local session, |session_tag_| will be the empty string. |id|
+  // represents a local session, `session_tag_` will be the empty string. `id`
   // uniquely identifies either a window or tab object in the local or the
-  // |session_tag| session.
+  // `session_tag` session.
   SessionId(const std::string& session_tag, int id);
+
+  SessionId(const SessionId&) = delete;
+  SessionId& operator=(const SessionId&) = delete;
 
   // Returns true if the SessionId represents a foreign session.
   bool IsForeign() const;
 
   // Returns the compressed std::string representation of a SessionId in the
-  // same format that Parse() accepts as its |session_string| parameter.
+  // same format that Parse() accepts as its `session_string` parameter.
   std::string ToString() const;
 
   const std::string& session_tag() const { return session_tag_; }
@@ -44,8 +49,6 @@ class SessionId {
 
   // ID corresponding to a window or tab object.
   int id_;
-
-  DISALLOW_COPY_AND_ASSIGN(SessionId);
 };
 
 }  // namespace extensions

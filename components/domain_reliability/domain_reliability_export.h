@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,11 +16,7 @@
 
 #else  // defined(WIN32)
 
-#if defined(DOMAIN_RELIABILITY_IMPLEMENTATION)
 #define DOMAIN_RELIABILITY_EXPORT __attribute__((visibility("default")))
-#else
-#define DOMAIN_RELIABILITY_EXPORT
-#endif
 
 #endif  // defined(WIN32)
 #else  // defined(COMPONENT_BUILD)

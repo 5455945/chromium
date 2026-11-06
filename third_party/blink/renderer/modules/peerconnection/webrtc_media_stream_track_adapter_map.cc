@@ -1,15 +1,25 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/peerconnection/webrtc_media_stream_track_adapter_map.h"
 
+#include <cstddef>
+#include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/check.h"
+#include "base/location.h"
 #include "base/memory/ptr_util.h"
-#include "base/single_thread_task_runner.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/synchronization/lock.h"
+#include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/renderer/modules/peerconnection/peer_connection_dependency_factory.h"
+#include "third_party/blink/renderer/modules/peerconnection/webrtc_media_stream_track_adapter.h"
+#include "third_party/blink/renderer/platform/mediastream/media_stream_component.h"
+#include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
+#include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
+#include "third_party/webrtc/api/media_stream_interface.h"
 
 namespace blink {
 
@@ -23,28 +33,47 @@ WebRtcMediaStreamTrackAdapterMap::AdapterRef::AdapterRef(
 }
 
 WebRtcMediaStreamTrackAdapterMap::AdapterRef::~AdapterRef() {
-  DCHECK(map_->main_thread_->BelongsToCurrentThread());
+  if (!map_->main_thread_->BelongsToCurrentThread()) {
+    scoped_refptr<base::SingleThreadTaskRunner> main_thread =
+        map_->main_thread_;
+    PostCrossThreadTask(
+        *main_thread, FROM_HERE,
+        CrossThreadBindOnce(
+            &WebRtcMediaStreamTrackAdapterMap::DisposeAdapterRef,
+            std::move(map_), type_, std::move(adapter_)));
+    return;
+  }
+  DisposeAdapterRef(std::move(map_), type_, std::move(adapter_));
+}
+
+// static
+void WebRtcMediaStreamTrackAdapterMap::DisposeAdapterRef(
+    scoped_refptr<WebRtcMediaStreamTrackAdapterMap> map,
+    AdapterRef::Type type,
+    scoped_refptr<blink::WebRtcMediaStreamTrackAdapter> adapter) {
+  DCHECK(map->main_thread_->BelongsToCurrentThread());
   scoped_refptr<blink::WebRtcMediaStreamTrackAdapter> removed_adapter;
   {
-    base::AutoLock scoped_lock(map_->lock_);
-    // The adapter is stored in the track adapter map and we have |adapter_|,
+    base::AutoLock scoped_lock(map->lock_);
+    // The adapter is stored in the track adapter map and we have |adapter|,
     // so there must be at least two references to the adapter.
-    DCHECK(!adapter_->HasOneRef());
-    // Using a raw pointer instead of |adapter_| allows the reference count to
+    DCHECK(!adapter->HasOneRef());
+    // Using a raw pointer instead of |adapter| allows the reference count to
     // go down to one if this is the last |AdapterRef|.
-    blink::WebRtcMediaStreamTrackAdapter* adapter = adapter_.get();
-    adapter_ = nullptr;
-    if (adapter->HasOneRef()) {
-      removed_adapter = adapter;
+    blink::WebRtcMediaStreamTrackAdapter* adapter_ptr = adapter.get();
+    adapter = nullptr;
+    if (adapter_ptr->HasOneRef()) {
+      removed_adapter = adapter_ptr;
       // "GetOrCreate..." ensures the adapter is initialized and the secondary
       // key is set before the last |AdapterRef| is destroyed. We can use either
       // the primary or secondary key for removal.
-      DCHECK(adapter->is_initialized());
-      if (type_ == Type::kLocal) {
-        map_->local_track_adapters_.EraseByPrimary(
-            adapter->track()->UniqueId());
+      DCHECK(adapter_ptr->is_initialized());
+      if (type == AdapterRef::Type::kLocal) {
+        map->local_track_adapters_.EraseByPrimary(
+            adapter_ptr->track()->UniqueId());
       } else {
-        map_->remote_track_adapters_.EraseByPrimary(adapter->webrtc_track());
+        map->remote_track_adapters_.EraseByPrimary(
+            adapter_ptr->webrtc_track().get());
       }
     }
   }
@@ -67,7 +96,7 @@ void WebRtcMediaStreamTrackAdapterMap::AdapterRef::InitializeOnMainThread() {
   if (type_ == WebRtcMediaStreamTrackAdapterMap::AdapterRef::Type::kRemote) {
     base::AutoLock scoped_lock(map_->lock_);
     if (!map_->remote_track_adapters_.FindBySecondary(track()->UniqueId())) {
-      map_->remote_track_adapters_.SetSecondaryKey(webrtc_track(),
+      map_->remote_track_adapters_.SetSecondaryKey(webrtc_track().get(),
                                                    track()->UniqueId());
     }
   }
@@ -134,7 +163,7 @@ WebRtcMediaStreamTrackAdapterMap::GetOrCreateLocalTrackAdapter(
   DCHECK(new_adapter->is_initialized());
   local_track_adapters_.Insert(component->UniqueId(), new_adapter);
   local_track_adapters_.SetSecondaryKey(component->UniqueId(),
-                                        new_adapter->webrtc_track());
+                                        new_adapter->webrtc_track().get());
   return base::WrapUnique(
       new AdapterRef(this, AdapterRef::Type::kLocal, new_adapter));
 }
@@ -199,9 +228,9 @@ WebRtcMediaStreamTrackAdapterMap::GetOrCreateRemoteTrackAdapter(
   // key is set.
   auto adapter_ref = base::WrapUnique(
       new AdapterRef(this, AdapterRef::Type::kRemote, new_adapter));
-  main_thread_->PostTask(
-      FROM_HERE,
-      base::BindOnce(
+  PostCrossThreadTask(
+      *main_thread_, FROM_HERE,
+      CrossThreadBindOnce(
           &WebRtcMediaStreamTrackAdapterMap::AdapterRef::InitializeOnMainThread,
           std::move(adapter_ref)));
   return base::WrapUnique(

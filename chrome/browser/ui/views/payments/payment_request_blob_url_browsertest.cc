@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,17 +11,23 @@ namespace payments {
 
 class PaymentRequestBlobUrlTest : public PaymentRequestBrowserTestBase {
  protected:
-  PaymentRequestBlobUrlTest() {}
+  PaymentRequestBlobUrlTest() = default;
 };
 
-IN_PROC_BROWSER_TEST_F(PaymentRequestBlobUrlTest, ConnectionTerminated) {
+IN_PROC_BROWSER_TEST_F(PaymentRequestBlobUrlTest, Rejected) {
   NavigateTo("/payment_request_blob_url_test.html");
-  ResetEventWaiter(DialogEvent::DIALOG_CLOSED);
-  ASSERT_TRUE(content::ExecuteScript(
+
+  // Trigger the Blob URL load, and wait for it to finish.
+  ASSERT_TRUE(content::ExecJs(
       GetActiveWebContents(),
       "(function() { document.getElementById('buy').click(); })();"));
-  WaitForObservedEvent();
-  ExpectBodyContains({"Rejected: NotSupportedError"});
+  WaitForLoadStop(GetActiveWebContents());
+
+  // Trigger the PaymentRequest, which should be rejected.
+  ASSERT_EQ(
+      "NotSupportedError: Only localhost, file://, and cryptographic scheme "
+      "origins allowed.",
+      content::EvalJs(GetActiveWebContents(), "triggerPaymentRequest();"));
 }
 
 }  // namespace payments

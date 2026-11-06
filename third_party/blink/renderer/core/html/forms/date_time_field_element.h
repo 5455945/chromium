@@ -83,6 +83,7 @@ class DateTimeFieldElement : public HTMLSpanElement {
   virtual String Placeholder() const = 0;
   virtual void PopulateDateTimeFieldsState(DateTimeFieldsState&) = 0;
   void RemoveEventHandler() { field_owner_ = nullptr; }
+  virtual void ResetTypeAhead() {}
   void SetDisabled();
   virtual void SetEmptyValue(EventBehavior = kDispatchNoEvent) = 0;
   virtual void SetValueAsDate(const DateComponents&) = 0;
@@ -94,8 +95,6 @@ class DateTimeFieldElement : public HTMLSpanElement {
   virtual String VisibleValue() const = 0;
   void Trace(Visitor*) const override;
   DateTimeField Type() const;
-
-  static float ComputeTextWidth(const ComputedStyle&, const String&);
 
  protected:
   DateTimeFieldElement(Document&, FieldOwner&, DateTimeField);
@@ -113,14 +112,15 @@ class DateTimeFieldElement : public HTMLSpanElement {
   virtual int ValueForARIAValueNow() const;
 
   // Node functions.
-  void SetFocused(bool, mojom::blink::FocusType) override;
+  using Element::SetFocused;
+  void SetFocused(bool, mojom::blink::FocusType, BlurEventBehavior) override;
 
  private:
   void DefaultKeyboardEventHandler(KeyboardEvent&);
   bool IsDateTimeFieldElement() const final;
   bool IsFieldOwnerDisabled() const;
   bool IsFieldOwnerReadOnly() const;
-  bool SupportsFocus() const final;
+  FocusableState SupportsFocus(UpdateBehavior update_behavior) const final;
 
   Member<FieldOwner> field_owner_;
   DateTimeField type_;

@@ -1,12 +1,13 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_ZOOM_TEST_ZOOM_TEST_UTILS_H_
 #define COMPONENTS_ZOOM_TEST_ZOOM_TEST_UTILS_H_
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
 #include "components/zoom/zoom_controller.h"
 #include "components/zoom/zoom_observer.h"
 
@@ -39,21 +40,26 @@ class ZoomChangedWatcher : public zoom::ZoomObserver {
       content::WebContents* web_contents,
       const ZoomController::ZoomChangedEventData& expected_event_data);
 
+  ZoomChangedWatcher(const ZoomChangedWatcher&) = delete;
+  ZoomChangedWatcher& operator=(const ZoomChangedWatcher&) = delete;
+
   ~ZoomChangedWatcher() override;
 
   void Wait();
 
   // zoom::ZoomObserver:
+  void OnZoomControllerDestroyed(
+      zoom::ZoomController* zoom_controller) override;
   void OnZoomChanged(
       const ZoomController::ZoomChangedEventData& event_data) override;
 
  private:
-  ZoomController* zoom_controller_;
+  raw_ptr<ZoomController> zoom_controller_;
   ZoomEventPred predicate_;
   scoped_refptr<content::MessageLoopRunner> message_loop_runner_;
   bool change_received_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(ZoomChangedWatcher);
+  base::ScopedObservation<zoom::ZoomController, zoom::ZoomObserver>
+      zoom_observation_{this};
 };
 
 }  // namespace zoom

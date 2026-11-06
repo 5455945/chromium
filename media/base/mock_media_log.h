@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
 #include "media/base/media_log.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
@@ -19,10 +18,6 @@ struct TypeAndCodec {
   std::string codec;
 };
 }  // namespace
-
-// Helper macros to reduce boilerplate when verifying media log entries.
-// |outer| is the std::string searched for substring |sub|.
-#define CONTAINS_STRING(outer, sub) (std::string::npos != (outer).find(sub))
 
 // Assumes |media_log_| is available which is a MockMediaLog, optionally a
 // NiceMock or StrictMock, in scope of the usage of this macro.
@@ -66,8 +61,8 @@ struct TypeAndCodec {
 namespace media {
 
 MATCHER_P(TracksHasCodecName, tandc, "") {
-  return (arg.substr(0, 15) == "{\"" + tandc.type + "\"") && (arg[16] != ']') &&
-         CONTAINS_STRING(arg, tandc.codec);
+  return arg.starts_with("{\"" + tandc.type + "\"") && (arg[16] != ']') &&
+         arg.contains(tandc.codec);
 }
 
 MATCHER_P(MatchesPropertyExactValue, message, "") {
@@ -75,13 +70,22 @@ MATCHER_P(MatchesPropertyExactValue, message, "") {
 }
 
 MATCHER_P(MatchesPropertyAnyValue, message, "") {
-  return CONTAINS_STRING(arg, message);
+  return arg.contains(message);
 }
 
 class MockMediaLog : public MediaLog {
  public:
   MockMediaLog();
+
+  MockMediaLog(const MockMediaLog&) = delete;
+  MockMediaLog& operator=(const MockMediaLog&) = delete;
+
   ~MockMediaLog() override;
+
+  // Important but subtle note: remember that media logs are often `Clone()`d,
+  // so the mock is the parent log rather than the instance that any particular
+  // class owns.  If you mock any `MediaLog` methods here, be sure they're
+  // actually called by clones.
 
   MOCK_METHOD1(DoAddLogRecordLogString, void(const std::string& event));
 
@@ -105,8 +109,6 @@ class MockMediaLog : public MediaLog {
 
  private:
   std::unique_ptr<MediaLogRecord> most_recent_event_;
-
-  DISALLOW_COPY_AND_ASSIGN(MockMediaLog);
 };
 
 }  // namespace media

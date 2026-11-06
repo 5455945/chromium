@@ -1,50 +1,31 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "gpu/command_buffer/client/dawn_client_serializer.h"
 
+#include "base/compiler_specific.h"
 #include "base/numerics/checked_math.h"
 #include "base/trace_event/trace_event.h"
 #include "gpu/command_buffer/client/dawn_client_memory_transfer_service.h"
 #include "gpu/command_buffer/client/shared_memory_limits.h"
 #include "gpu/command_buffer/client/webgpu_cmd_helper.h"
 #include "gpu/command_buffer/client/webgpu_implementation.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 
 namespace gpu {
 namespace webgpu {
-
-// static
-std::unique_ptr<DawnClientSerializer> DawnClientSerializer::Create(
-    WebGPUImplementation* client,
-    WebGPUCmdHelper* helper,
-    DawnClientMemoryTransferService* memory_transfer_service,
-    const SharedMemoryLimits& limits) {
-  std::unique_ptr<TransferBuffer> transfer_buffer =
-      std::make_unique<TransferBuffer>(helper);
-  if (!transfer_buffer->Initialize(limits.start_transfer_buffer_size,
-                                   /* start offset */ 0,
-                                   limits.min_transfer_buffer_size,
-                                   limits.max_transfer_buffer_size,
-                                   /* alignment */ 8)) {
-    return nullptr;
-  }
-  return std::make_unique<DawnClientSerializer>(
-      client, helper, memory_transfer_service, std::move(transfer_buffer),
-      limits.start_transfer_buffer_size);
-}
 
 DawnClientSerializer::DawnClientSerializer(
     WebGPUImplementation* client,
     WebGPUCmdHelper* helper,
     DawnClientMemoryTransferService* memory_transfer_service_,
-    std::unique_ptr<TransferBuffer> transfer_buffer,
-    uint32_t buffer_initial_size)
+    std::unique_ptr<TransferBuffer> transfer_buffer)
     : client_(client),
       helper_(helper),
       memory_transfer_service_(memory_transfer_service_),
       transfer_buffer_(std::move(transfer_buffer)),
-      buffer_initial_size_(buffer_initial_size),
+      buffer_initial_size_(transfer_buffer_->GetSize()),
       buffer_(helper_, transfer_buffer_.get()) {
   DCHECK_GT(buffer_initial_size_, 0u);
 }
@@ -55,7 +36,8 @@ size_t DawnClientSerializer::GetMaximumAllocationSize() const {
   return transfer_buffer_->GetMaxSize();
 }
 
-void* DawnClientSerializer::GetCmdSpace(size_t size) {
+std::optional<std::span<volatile std::byte>>
+DawnClientSerializer::GetCommandSpace(size_t size) {
   // Note: Dawn will never call this function with |size| >
   // GetMaximumAllocationSize().
   DCHECK_LE(size, GetMaximumAllocationSize());
@@ -67,19 +49,18 @@ void* DawnClientSerializer::GetCmdSpace(size_t size) {
   const bool overflows_remaining_space =
       size > static_cast<size_t>(buffer_.size() - put_offset_);
 
-  if (LIKELY(buffer_.valid() && !overflows_remaining_space)) {
+  if (buffer_.valid() && !overflows_remaining_space) [[likely]] {
     // If the buffer is valid and has sufficient space, return the
     // pointer and increment the offset.
-    uint8_t* ptr = static_cast<uint8_t*>(buffer_.address());
-    ptr += put_offset_;
-
+    auto space = buffer_.as_byte_span().subspan(put_offset_, size);
     put_offset_ += static_cast<uint32_t>(size);
-    return ptr;
+    return std::span<volatile std::byte>(
+        reinterpret_cast<std::byte*>(space.data()), space.size());
   }
 
   if (!transfer_buffer_) {
     // The serializer hit a fatal error and was disconnected.
-    return nullptr;
+    return std::nullopt;
   }
 
   // Otherwise, flush and reset the command stream.
@@ -88,18 +69,21 @@ void* DawnClientSerializer::GetCmdSpace(size_t size) {
   uint32_t allocation_size =
       std::max(buffer_initial_size_, static_cast<uint32_t>(size));
   TRACE_EVENT1(TRACE_DISABLED_BY_DEFAULT("gpu.dawn"),
-               "DawnClientSerializer::GetCmdSpace", "bytes", allocation_size);
+               "DawnClientSerializer::GetCommandSpace", "bytes",
+               allocation_size);
   buffer_.Reset(allocation_size);
 
   if (!buffer_.valid() || buffer_.size() < size) {
     DLOG(ERROR) << "Dawn wire transfer buffer allocation failed";
     Disconnect();
     client_->OnGpuControlLostContextMaybeReentrant();
-    return nullptr;
+    return std::nullopt;
   }
 
   put_offset_ = size;
-  return buffer_.address();
+  auto space = buffer_.as_byte_span().first(size);
+  return std::span<volatile std::byte>(
+      reinterpret_cast<std::byte*>(space.data()), space.size());
 }
 
 void DawnClientSerializer::Commit() {
@@ -107,31 +91,47 @@ void DawnClientSerializer::Commit() {
     TRACE_EVENT1(TRACE_DISABLED_BY_DEFAULT("gpu.dawn"),
                  "DawnClientSerializer::Flush", "bytes", put_offset_);
 
-    TRACE_EVENT_WITH_FLOW0(
-        TRACE_DISABLED_BY_DEFAULT("gpu.dawn"), "DawnCommands",
-        TRACE_EVENT_FLAG_FLOW_OUT,
-        (static_cast<uint64_t>(buffer_.shm_id()) << 32) + buffer_.offset());
+    bool is_tracing = false;
+    TRACE_EVENT_CATEGORY_GROUP_ENABLED(TRACE_DISABLED_BY_DEFAULT("gpu.dawn"),
+                                       &is_tracing);
+    uint64_t trace_id;
+    if (is_tracing) {
+      trace_id = base::RandUint64();
+      TRACE_EVENT(TRACE_DISABLED_BY_DEFAULT("gpu.dawn"), "DawnCommands",
+                  perfetto::Flow::Global(trace_id));
+    } else {
+      trace_id = 0;
+    }
 
     buffer_.Shrink(put_offset_);
-    helper_->DawnCommands(buffer_.shm_id(), buffer_.offset(), put_offset_);
+    helper_->DawnCommands(trace_id >> 32, trace_id & 0xFFFF'FFFF,
+                          buffer_.shm_id(), buffer_.offset(), put_offset_);
     put_offset_ = 0;
     buffer_.Release();
-    awaiting_flush_ = false;
 
     memory_transfer_service_->FreeHandles(helper_);
   }
 }
 
 void DawnClientSerializer::SetAwaitingFlush(bool awaiting_flush) {
-  // If awaiting_flush is true, but the buffer_ is invalid (empty), that
-  // means the last command right before this caused a flush. Another flush is
-  // not needed.
-  awaiting_flush_ = awaiting_flush && buffer_.valid();
+  // Set awaiting_flush_. Even if there are no commands in buffer_, this may be
+  // necessary since the buffer_ commands could have been committed and reset,
+  // but not yet flushed.
+  awaiting_flush_ = awaiting_flush;
 }
 
 void DawnClientSerializer::Disconnect() {
   buffer_.Discard();
-  transfer_buffer_ = nullptr;
+  if (transfer_buffer_) {
+    auto transfer_buffer = std::move(transfer_buffer_);
+    // Wait for commands to finish before we free shared memory that
+    // the GPU process is using.
+    // TODO(crbug.com/40779774): This Finish may not be necessary if the
+    // shared memory is not immediately freed. Investigate this and
+    // consider optimization.
+    helper_->Finish();
+    transfer_buffer = nullptr;
+  }
 }
 
 bool DawnClientSerializer::Flush() {

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,12 +14,6 @@ ThreadSafeForwarderBase::ThreadSafeForwarderBase(
     : proxy_(std::move(proxy)) {}
 
 ThreadSafeForwarderBase::~ThreadSafeForwarderBase() = default;
-
-bool ThreadSafeForwarderBase::PrefersSerializedMessages() {
-  // NOTE: This means SharedRemote etc will ignore lazy serialization hints and
-  // will always eagerly serialize messages.
-  return true;
-}
 
 bool ThreadSafeForwarderBase::Accept(Message* message) {
   proxy_->SendMessage(*message);

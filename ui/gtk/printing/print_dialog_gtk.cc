@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,23 +8,31 @@
 #include <cmath>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/check_op.h"
+#include "base/compiler_specific.h"
+#include "base/dcheck_is_on.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/macros.h"
+#include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/no_destructor.h"
 #include "base/sequence_checker.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task/post_task.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
-#include "base/threading/sequenced_task_runner_handle.h"
 #include "base/values.h"
+#include "printing/buildflags/buildflags.h"
 #include "printing/metafile.h"
+#include "printing/mojom/print.mojom.h"
 #include "printing/print_job_constants.h"
 #include "printing/print_settings.h"
+#include "printing/printing_features.h"
 #include "ui/aura/window.h"
 #include "ui/gtk/gtk_compat.h"
 #include "ui/gtk/gtk_ui.h"
@@ -32,16 +40,12 @@
 #include "ui/gtk/gtk_util.h"
 #include "ui/gtk/printing/printing_gtk_util.h"
 
-#if defined(USE_CUPS)
-#include "printing/mojom/print.mojom.h"  // nogncheck
-#endif
-
 using printing::PageRanges;
 using printing::PrintSettings;
 
 namespace {
 
-#if defined(USE_CUPS)
+#if BUILDFLAG(USE_CUPS)
 // CUPS Duplex attribute and values.
 const char kCUPSDuplex[] = "cups-Duplex";
 const char kDuplexNone[] = "None";
@@ -52,6 +56,14 @@ const char kDuplexNoTumble[] = "DuplexNoTumble";
 constexpr int kPaperSizeTresholdMicrons = 100;
 constexpr int kMicronsInMm = 1000;
 
+struct GListDeleter {
+  void operator()(void* ptr) const {
+    if (ptr) {
+      g_list_free(reinterpret_cast<GList*>(ptr));
+    }
+  }
+};
+
 // Checks whether |gtk_paper_size| can be used to represent user selected media.
 // In fuzzy match mode checks that paper sizes are "close enough" (less than
 // 1mm difference). In the exact mode, looks for the paper with the same PPD
@@ -59,8 +71,9 @@ constexpr int kMicronsInMm = 1000;
 bool PaperSizeMatch(GtkPaperSize* gtk_paper_size,
                     const PrintSettings::RequestedMedia& media,
                     bool fuzzy_match) {
-  if (!gtk_paper_size)
+  if (!gtk_paper_size) {
     return false;
+  }
 
   gfx::Size paper_size_microns(
       static_cast<int>(gtk_paper_size_get_width(gtk_paper_size, GTK_UNIT_MM) *
@@ -73,8 +86,9 @@ bool PaperSizeMatch(GtkPaperSize* gtk_paper_size,
       std::abs(paper_size_microns.width() - media.size_microns.width()),
       std::abs(paper_size_microns.height() - media.size_microns.height()));
   bool close_enough = diff <= kPaperSizeTresholdMicrons;
-  if (fuzzy_match)
+  if (fuzzy_match) {
     return close_enough;
+  }
 
   return close_enough && !media.vendor_id.empty() &&
          media.vendor_id == gtk_paper_size_get_ppd_name(gtk_paper_size);
@@ -88,34 +102,52 @@ GtkPaperSize* FindPaperSizeMatch(GList* gtk_paper_sizes,
   GtkPaperSize* first_fuzzy_match = nullptr;
   for (GList* p = gtk_paper_sizes; p && p->data; p = g_list_next(p)) {
     GtkPaperSize* gtk_paper_size = static_cast<GtkPaperSize*>(p->data);
-    if (PaperSizeMatch(gtk_paper_size, media, false))
+    if (PaperSizeMatch(gtk_paper_size, media, false)) {
       return gtk_paper_size;
+    }
 
-    if (!first_fuzzy_match && PaperSizeMatch(gtk_paper_size, media, true))
+    if (!first_fuzzy_match && PaperSizeMatch(gtk_paper_size, media, true)) {
       first_fuzzy_match = gtk_paper_size;
+    }
   }
   return first_fuzzy_match;
 }
 
+// Helper class to handle the GTK print job callback.
+// TODO(thomasanderson): This should be replaced with a template in
+// //ui/base/glib that accepts a base::OnceCallback for safer and less manual
+// memory management.
+struct PrintJobCallbackHelper {
+  base::WeakPtr<PrintDialogGtk> dialog;
+
+  void OnJobCompleted(GtkPrintJob* print_job, const GError* error) {
+    if (dialog) {
+      dialog->OnJobCompleted(print_job, error);
+    }
+    delete this;
+  }
+};
+
 class StickyPrintSettingGtk {
  public:
   StickyPrintSettingGtk() : last_used_settings_(gtk_print_settings_new()) {}
-  ~StickyPrintSettingGtk() {
-    NOTREACHED();  // Intended to be used with base::NoDestructor.
-  }
+
+  StickyPrintSettingGtk(const StickyPrintSettingGtk&) = delete;
+  StickyPrintSettingGtk& operator=(const StickyPrintSettingGtk&) = delete;
+
+  // Intended to be used with base::NoDestructor.
+  ~StickyPrintSettingGtk() = delete;
 
   GtkPrintSettings* settings() { return last_used_settings_; }
 
   void SetLastUsedSettings(GtkPrintSettings* settings) {
-    DCHECK(last_used_settings_);
-    g_object_unref(last_used_settings_);
+    CHECK(last_used_settings_, base::NotFatalUntil::M163);
+    g_object_unref(last_used_settings_.ExtractAsDangling());
     last_used_settings_ = gtk_print_settings_copy(settings);
   }
 
  private:
-  GtkPrintSettings* last_used_settings_;
-
-  DISALLOW_COPY_AND_ASSIGN(StickyPrintSettingGtk);
+  raw_ptr<GtkPrintSettings> last_used_settings_;
 };
 
 StickyPrintSettingGtk& GetLastUsedSettings() {
@@ -123,94 +155,104 @@ StickyPrintSettingGtk& GetLastUsedSettings() {
   return *settings;
 }
 
-// Helper class to track GTK printers.
-class GtkPrinterList {
- public:
-  GtkPrinterList() { gtk_enumerate_printers(SetPrinter, this, nullptr, TRUE); }
+#if BUILDFLAG(ENABLE_OOP_PRINTING_NO_OOP_BASIC_PRINT_DIALOG)
+ScopedGKeyFile GetGKeyFileFromDict(const base::DictValue& data,
+                                   std::string_view key) {
+  const std::string* data_string = data.FindString(key);
+  CHECK(data_string);
 
-  ~GtkPrinterList() {
-    for (GtkPrinter* printer : printers_)
-      g_object_unref(printer);
-  }
+  ScopedGKeyFile key_file = ScopedGKeyFile(g_key_file_new());
+  GError* error = nullptr;
+  CHECK(g_key_file_load_from_data(key_file.get(), data_string->c_str(),
+                                  data_string->size(), G_KEY_FILE_NONE, &error))
+      << error->message;
+  return key_file;
+}
+#endif
 
-  // Can return nullptr if there's no default printer. E.g. Printer on a laptop
-  // is "home_printer", but the laptop is at work.
-  GtkPrinter* default_printer() { return default_printer_; }
-
-  // Can return nullptr if the printer cannot be found due to:
-  // - Printer list out of sync with printer dialog UI.
-  // - Querying for non-existant printers like 'Print to PDF'.
-  GtkPrinter* GetPrinterWithName(const std::string& name) {
-    if (name.empty())
-      return nullptr;
-
-    for (GtkPrinter* printer : printers_) {
-      if (gtk_printer_get_name(printer) == name)
-        return printer;
+void InitializePrintBackends() {
+  std::unique_ptr<GList, GListDeleter> backends_list(
+      gtk_print_backend_load_modules());
+  for (GList* it = backends_list.get(); it; it = it->next) {
+    auto* backend = reinterpret_cast<GtkPrintBackend*>(it->data);
+    CHECK(backend);
+    // This is required to populate the printer list.
+    if (gtk::GtkCheckVersion(4)) {
+      WrapGObject(gtk_print_backend_get_printers(backend));
+    } else {
+      std::unique_ptr<GList, GListDeleter>(
+          gtk_print_backend_get_printer_list(backend));
     }
-
-    return nullptr;
   }
+}
 
- private:
-  // Callback function used by gtk_enumerate_printers() to get all printer.
-  static gboolean SetPrinter(GtkPrinter* printer, gpointer data) {
-    GtkPrinterList* printer_list = reinterpret_cast<GtkPrinterList*>(data);
-    if (gtk_printer_is_default(printer))
-      printer_list->default_printer_ = printer;
+ScopedGObject<GtkPrinter> GetPrinterWithName(std::string_view name) {
+  // One time initialization to ensure print backends are loaded and printer
+  // list is populated.
+  static bool initialized = []() {
+    InitializePrintBackends();
+    return true;
+  }();
+  (void)initialized;
 
-    g_object_ref(printer);
-    printer_list->printers_.push_back(printer);
+  struct PrinterSearchData {
+    const std::string_view name;
+    ScopedGObject<GtkPrinter> printer;
+  };
 
-    return FALSE;
-  }
-
-  std::vector<GtkPrinter*> printers_;
-  GtkPrinter* default_printer_ = nullptr;
-};
+  PrinterSearchData data{name, nullptr};
+  gtk_enumerate_printers(
+      [](GtkPrinter* printer, gpointer user_data) -> gboolean {
+        auto* search_data = static_cast<PrinterSearchData*>(user_data);
+        const char* printer_name = gtk_printer_get_name(printer);
+        if (printer_name && printer_name == search_data->name) {
+          search_data->printer = WrapGObject(printer);
+        }
+        // Always return false to let GTK finish enumerating all printers, even
+        // though it has found a match. Returning true here will stop printer
+        // enumeration early, but due to gtk_enumerate_printers() implementation
+        // quirks, that can cause printer capabilities to be incorrectly
+        // populated.
+        return false;
+      },
+      &data, nullptr, true);
+  return std::move(data.printer);
+}
 
 }  // namespace
 
-// static
-printing::PrintDialogGtkInterface* PrintDialogGtk::CreatePrintDialog(
-    PrintingContextLinux* context) {
-  return new PrintDialogGtk(context);
-}
-
-PrintDialogGtk::PrintDialogGtk(PrintingContextLinux* context)
-    : base::RefCountedDeleteOnSequence<PrintDialogGtk>(
-          base::SequencedTaskRunnerHandle::Get()),
-      context_(context) {}
+PrintDialogGtk::PrintDialogGtk(PrintingContextLinux* context,
+                               gtk::GtkUiPlatform* platform)
+    : context_(context),
+      platform_(platform),
+      task_runner_(base::SequencedTaskRunner::GetCurrentDefault()) {}
 
 PrintDialogGtk::~PrintDialogGtk() {
-  DCHECK(owning_task_runner()->RunsTasksInCurrentSequence());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (dialog_) {
     aura::Window* parent = gtk::GetAuraTransientParent(dialog_);
     if (parent) {
       parent->RemoveObserver(this);
-      gtk::ClearAuraTransientParent(dialog_, parent);
+      gtk::ClearAuraTransientParent(dialog_, parent, platform_);
     }
-    gtk::GtkWindowDestroy(dialog_);
-    dialog_ = nullptr;
+    gtk::GtkWindowDestroy(dialog_.ExtractAsDangling());
+  }
+  if (reenable_parent_events_) {
+    std::move(reenable_parent_events_).Run();
   }
   if (gtk_settings_) {
-    g_object_unref(gtk_settings_);
-    gtk_settings_ = nullptr;
+    g_object_unref(gtk_settings_.ExtractAsDangling());
   }
   if (page_setup_) {
-    g_object_unref(page_setup_);
-    page_setup_ = nullptr;
-  }
-  if (printer_) {
-    g_object_unref(printer_);
-    printer_ = nullptr;
+    g_object_unref(page_setup_.ExtractAsDangling());
   }
 }
 
 void PrintDialogGtk::UseDefaultSettings() {
-  DCHECK(!page_setup_);
-  DCHECK(!printer_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(!page_setup_, base::NotFatalUntil::M163);
+  CHECK(!printer_, base::NotFatalUntil::M163);
 
   // |gtk_settings_| is a new copy.
   gtk_settings_ = gtk_print_settings_copy(GetLastUsedSettings().settings());
@@ -221,18 +263,17 @@ void PrintDialogGtk::UseDefaultSettings() {
 
 void PrintDialogGtk::UpdateSettings(
     std::unique_ptr<printing::PrintSettings> settings) {
-  if (!gtk_settings_)
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!gtk_settings_) {
     gtk_settings_ = gtk_print_settings_copy(GetLastUsedSettings().settings());
+  }
 
-  auto printer_list = std::make_unique<GtkPrinterList>();
-  printer_ = printer_list->GetPrinterWithName(
-      base::UTF16ToUTF8(settings->device_name()));
-  if (printer_) {
-    g_object_ref(printer_);
+  printer_ = GetPrinterWithName(base::UTF16ToUTF8(settings->device_name()));
+  if (printer_.get()) {
     gtk_print_settings_set_printer(gtk_settings_,
-                                   gtk_printer_get_name(printer_));
+                                   gtk_printer_get_name(printer_.get()));
     if (!page_setup_) {
-      page_setup_ = gtk_printer_get_default_page_size(printer_);
+      page_setup_ = gtk_printer_get_default_page_size(printer_.get());
     }
   }
 
@@ -241,10 +282,11 @@ void PrintDialogGtk::UpdateSettings(
   if (settings->dpi_horizontal() > 0 && settings->dpi_vertical() > 0) {
     gtk_print_settings_set_resolution_xy(
         gtk_settings_, settings->dpi_horizontal(), settings->dpi_vertical());
-#if defined(USE_CUPS)
+#if BUILDFLAG(USE_CUPS)
     std::string dpi = base::NumberToString(settings->dpi_horizontal());
-    if (settings->dpi_horizontal() != settings->dpi_vertical())
+    if (settings->dpi_horizontal() != settings->dpi_vertical()) {
       dpi += "x" + base::NumberToString(settings->dpi_vertical());
+    }
     dpi += "dpi";
 
     // The resolution attribute (case-insensitive) has decent coverage
@@ -261,7 +303,7 @@ void PrintDialogGtk::UpdateSettings(
     // the Resolution PPD attribute. For this reason "cups-Resolution"
     // makes the most sense here.
     //
-    // TODO(crbug.com/1119956): Since PrintBackendCUPS parses the PPD file in
+    // TODO(crbug.com/40714448): Since PrintBackendCUPS parses the PPD file in
     // Chromium, it should be possible to store the resolution attribute name
     // as well as a map from the gfx::Size resolution to the std::string
     // serialized value (in case a non-standard value such as 500x500dpi is
@@ -275,13 +317,32 @@ void PrintDialogGtk::UpdateSettings(
 #endif
   }
 
-#if defined(USE_CUPS)
+  const auto& print_ranges = settings->ranges();
+  if (!print_ranges.empty()) {
+    // Tell the system that the caller only intends to print a subset of pages.
+    gtk_print_settings_set_print_pages(gtk_settings_, GTK_PRINT_PAGES_RANGES);
+
+    std::vector<GtkPageRange> ranges;
+    ranges.reserve(print_ranges.size());
+    for (const auto& range : print_ranges) {
+      GtkPageRange gtk_range;
+      gtk_range.start = range.from;
+      gtk_range.end = range.to;
+      ranges.push_back(gtk_range);
+    }
+
+    gtk_print_settings_set_page_ranges(gtk_settings_, ranges.data(),
+                                       ranges.size());
+  }
+
+#if BUILDFLAG(USE_CUPS)
   // Set advanced settings first so they can be overridden by user applied
   // settings.
+  static constexpr char kSettingNamePrefix[] = "cups-";
   for (const auto& pair : settings->advanced_settings()) {
-    if (!pair.second.is_string())
+    if (!pair.second.is_string()) {
       continue;
-    static constexpr char kSettingNamePrefix[] = "cups-";
+    }
     const std::string setting_name = kSettingNamePrefix + pair.first;
     gtk_print_settings_set(gtk_settings_, setting_name.c_str(),
                            pair.second.GetString().c_str());
@@ -291,6 +352,7 @@ void PrintDialogGtk::UpdateSettings(
   std::string color_setting_name;
   printing::GetColorModelForModel(settings->color(), &color_setting_name,
                                   &color_value);
+  color_setting_name.insert(0, kSettingNamePrefix);
   gtk_print_settings_set(gtk_settings_, color_setting_name.c_str(),
                          color_value.c_str());
 
@@ -309,14 +371,14 @@ void PrintDialogGtk::UpdateSettings(
         break;
       default:  // kUnknownDuplexMode
         NOTREACHED();
-        break;
     }
     gtk_print_settings_set(gtk_settings_, kCUPSDuplex, cups_duplex_mode);
   }
 #endif
 
-  if (!page_setup_)
+  if (!page_setup_) {
     page_setup_ = gtk_page_setup_new();
+  }
 
   if (page_setup_ && !settings->requested_media().IsDefault()) {
     const PrintSettings::RequestedMedia& requested_media =
@@ -359,19 +421,55 @@ void PrintDialogGtk::UpdateSettings(
   InitPrintSettings(std::move(settings));
 }
 
+#if BUILDFLAG(ENABLE_OOP_PRINTING_NO_OOP_BASIC_PRINT_DIALOG)
+void PrintDialogGtk::LoadPrintSettings(const PrintSettings& settings) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  const std::string* printer_name =
+      settings.system_print_dialog_data().FindString(
+          printing::kLinuxSystemPrintDialogDataPrinter);
+  CHECK(printer_name);
+
+  printer_ = GetPrinterWithName(*printer_name);
+
+  if (!gtk_settings_) {
+    gtk_settings_ = gtk_print_settings_copy(GetLastUsedSettings().settings());
+  }
+  if (!page_setup_) {
+    page_setup_ = gtk_page_setup_new();
+  }
+
+  GError* error = nullptr;
+  ScopedGKeyFile settings_key_file =
+      GetGKeyFileFromDict(settings.system_print_dialog_data(),
+                          printing::kLinuxSystemPrintDialogDataPrintSettings);
+  CHECK(gtk_print_settings_load_key_file(gtk_settings_, settings_key_file.get(),
+                                         /*group_name=*/nullptr, &error))
+      << error->message;
+
+  ScopedGKeyFile page_setup_key_file =
+      GetGKeyFileFromDict(settings.system_print_dialog_data(),
+                          printing::kLinuxSystemPrintDialogDataPageSetup);
+  CHECK(gtk_page_setup_load_key_file(page_setup_, page_setup_key_file.get(),
+                                     /*group_name=*/nullptr, &error))
+      << error->message;
+}
+#endif  // BUILDFLAG(ENABLE_OOP_PRINTING_NO_OOP_BASIC_PRINT_DIALOG)
+
 void PrintDialogGtk::ShowDialog(
     gfx::NativeView parent_view,
     bool has_selection,
     PrintingContextLinux::PrintSettingsCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   callback_ = std::move(callback);
-  DCHECK(callback_);
+  CHECK(callback_, base::NotFatalUntil::M163);
 
   dialog_ = gtk_print_unix_dialog_new(nullptr, nullptr);
-  gtk::SetGtkTransientForAura(dialog_, parent_view);
-  if (parent_view)
+  gtk::SetGtkTransientForAura(dialog_, parent_view, platform_);
+  if (parent_view) {
     parent_view->AddObserver(this);
+  }
   if (gtk::GtkCheckVersion(4)) {
-    gtk_window_set_hide_on_close(GTK_WINDOW(dialog_), true);
+    gtk_window_set_hide_on_close(GTK_WINDOW(dialog_.get()), true);
   } else {
     g_signal_connect(dialog_, "delete-event",
                      G_CALLBACK(gtk_widget_hide_on_delete), nullptr);
@@ -381,12 +479,14 @@ void PrintDialogGtk::ShowDialog(
   // as the page range, but |has_selection| is false.
   if (!has_selection) {
     GtkPrintPages range = gtk_print_settings_get_print_pages(gtk_settings_);
-    if (range == GTK_PRINT_PAGES_SELECTION)
+    if (range == GTK_PRINT_PAGES_SELECTION) {
       gtk_print_settings_set_print_pages(gtk_settings_, GTK_PRINT_PAGES_ALL);
+    }
   }
 
-  // Set modal so user cannot focus the same tab and press print again.
-  gtk_window_set_modal(GTK_WINDOW(dialog_), TRUE);
+  // Disable input handling so the user cannot focus the same tab and press
+  // print again.
+  reenable_parent_events_ = gtk::DisableHostInputHandling(dialog_, parent_view);
 
   // Since we only generate PDF, only show printers that support PDF.
   // TODO(thestig) Add more capabilities to support?
@@ -394,30 +494,37 @@ void PrintDialogGtk::ShowDialog(
       GTK_PRINT_CAPABILITY_GENERATE_PDF | GTK_PRINT_CAPABILITY_PAGE_SET |
       GTK_PRINT_CAPABILITY_COPIES | GTK_PRINT_CAPABILITY_COLLATE |
       GTK_PRINT_CAPABILITY_REVERSE);
-  gtk_print_unix_dialog_set_manual_capabilities(GTK_PRINT_UNIX_DIALOG(dialog_),
-                                                cap);
-  gtk_print_unix_dialog_set_embed_page_setup(GTK_PRINT_UNIX_DIALOG(dialog_),
-                                             TRUE);
-  gtk_print_unix_dialog_set_support_selection(GTK_PRINT_UNIX_DIALOG(dialog_),
-                                              TRUE);
-  gtk_print_unix_dialog_set_has_selection(GTK_PRINT_UNIX_DIALOG(dialog_),
+  gtk_print_unix_dialog_set_manual_capabilities(
+      GTK_PRINT_UNIX_DIALOG(dialog_.get()), cap);
+  gtk_print_unix_dialog_set_embed_page_setup(
+      GTK_PRINT_UNIX_DIALOG(dialog_.get()), TRUE);
+  gtk_print_unix_dialog_set_support_selection(
+      GTK_PRINT_UNIX_DIALOG(dialog_.get()), TRUE);
+  gtk_print_unix_dialog_set_has_selection(GTK_PRINT_UNIX_DIALOG(dialog_.get()),
                                           has_selection);
-  gtk_print_unix_dialog_set_settings(GTK_PRINT_UNIX_DIALOG(dialog_),
+  gtk_print_unix_dialog_set_settings(GTK_PRINT_UNIX_DIALOG(dialog_.get()),
                                      gtk_settings_);
-  g_signal_connect(dialog_, "response", G_CALLBACK(OnResponseThunk), this);
-  gtk_widget_show(dialog_);
+  // Unretained is safe since we own `signal_`.
+  signal_ = ScopedGSignal(
+      dialog_, "response",
+      base::BindRepeating(&PrintDialogGtk::OnResponse, base::Unretained(this)));
 
-  gtk::GtkUi::GetPlatform()->ShowGtkWindow(GTK_WINDOW(dialog_));
+  // ShowGtkWindow() maps the dialog once its transient parent is in effect,
+  // which is asynchronous on Wayland.
+  platform_->ShowGtkWindow(GTK_WINDOW(dialog_.get()));
 }
 
 void PrintDialogGtk::PrintDocument(const printing::MetafilePlayer& metafile,
                                    const std::u16string& document_name) {
-  // This runs on the print worker thread, does not block the UI thread.
-  DCHECK(!owning_task_runner()->RunsTasksInCurrentSequence());
+  bool oop_printing =
+      context_->out_of_process_behavior() !=
+      printing::PrintingContext::OutOfProcessBehavior::kDisabled;
 
-  // The document printing tasks can outlive the PrintingContext that created
-  // this dialog.
-  AddRef();
+  // For in-browser printing, this runs on the print worker thread, so it does
+  // not block the UI thread.  For OOP it runs on the service document task
+  // runner.
+  CHECK_EQ(task_runner_->RunsTasksInCurrentSequence(), oop_printing,
+           base::NotFatalUntil::M163);
 
   bool success = base::CreateTemporaryFile(&path_to_pdf_);
 
@@ -427,55 +534,52 @@ void PrintDialogGtk::PrintDocument(const printing::MetafilePlayer& metafile,
                     base::File::FLAG_CREATE_ALWAYS | base::File::FLAG_WRITE);
     success = metafile.SaveTo(&file);
     file.Close();
-    if (!success)
+    if (!success) {
       base::DeleteFile(path_to_pdf_);
+    }
   }
 
   if (!success) {
     LOG(ERROR) << "Saving metafile failed";
-    // Matches AddRef() above.
-    Release();
     return;
   }
 
   // No errors, continue printing.
-  owning_task_runner()->PostTask(
-      FROM_HERE, base::BindOnce(&PrintDialogGtk::SendDocumentToPrinter, this,
-                                document_name));
-}
-
-void PrintDialogGtk::AddRefToDialog() {
-  AddRef();
-}
-
-void PrintDialogGtk::ReleaseDialog() {
-  Release();
+  task_runner_->PostTask(
+      FROM_HERE, base::BindOnce(&PrintDialogGtk::SendDocumentToPrinter,
+                                weak_factory_.GetWeakPtr(), document_name));
 }
 
 void PrintDialogGtk::OnResponse(GtkWidget* dialog, int response_id) {
-  int num_matched_handlers = g_signal_handlers_disconnect_by_func(
-      dialog_, reinterpret_cast<gpointer>(&OnResponseThunk), this);
-  CHECK_EQ(1, num_matched_handlers);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  signal_.Reset();
 
   gtk_widget_hide(dialog_);
+  if (reenable_parent_events_) {
+    std::move(reenable_parent_events_).Run();
+  }
 
   switch (response_id) {
     case GTK_RESPONSE_OK: {
-      if (gtk_settings_)
-        g_object_unref(gtk_settings_);
-      gtk_settings_ =
-          gtk_print_unix_dialog_get_settings(GTK_PRINT_UNIX_DIALOG(dialog_));
+      if (!context_) {
+        std::move(callback_).Run(printing::mojom::ResultCode::kCanceled);
+        return;
+      }
 
-      if (printer_)
-        g_object_unref(printer_);
-      printer_ = gtk_print_unix_dialog_get_selected_printer(
-          GTK_PRINT_UNIX_DIALOG(dialog_));
-      g_object_ref(printer_);
+      if (gtk_settings_) {
+        g_object_unref(gtk_settings_.ExtractAsDangling());
+      }
+      gtk_settings_ = gtk_print_unix_dialog_get_settings(
+          GTK_PRINT_UNIX_DIALOG(dialog_.get()));
 
-      if (page_setup_)
-        g_object_unref(page_setup_);
-      page_setup_ =
-          gtk_print_unix_dialog_get_page_setup(GTK_PRINT_UNIX_DIALOG(dialog_));
+      printer_ = WrapGObject(gtk_print_unix_dialog_get_selected_printer(
+          GTK_PRINT_UNIX_DIALOG(dialog_.get())));
+
+      if (page_setup_) {
+        g_object_unref(page_setup_.ExtractAsDangling());
+      }
+      page_setup_ = gtk_print_unix_dialog_get_page_setup(
+          GTK_PRINT_UNIX_DIALOG(dialog_.get()));
       g_object_ref(page_setup_);
 
       // Handle page ranges.
@@ -489,8 +593,8 @@ void PrintDialogGtk::OnResponse(GtkWidget* dialog, int response_id) {
           if (gtk_range) {
             for (int i = 0; i < num_ranges; ++i) {
               printing::PageRange range;
-              range.from = gtk_range[i].start;
-              range.to = gtk_range[i].end;
+              range.from = UNSAFE_TODO(gtk_range[i]).start;
+              range.to = UNSAFE_TODO(gtk_range[i]).end;
               ranges_vector.push_back(range);
             }
             g_free(gtk_range);
@@ -506,7 +610,6 @@ void PrintDialogGtk::OnResponse(GtkWidget* dialog, int response_id) {
         case GTK_PRINT_PAGES_CURRENT:
         default:
           NOTREACHED();
-          break;
       }
 
       auto settings = std::make_unique<PrintSettings>();
@@ -515,12 +618,12 @@ void PrintDialogGtk::OnResponse(GtkWidget* dialog, int response_id) {
       settings->set_selection_only(print_selection_only);
       InitPrintSettingsGtk(gtk_settings_, page_setup_, settings.get());
       context_->InitWithSettings(std::move(settings));
-      std::move(callback_).Run(PrintingContextLinux::OK);
+      std::move(callback_).Run(printing::mojom::ResultCode::kSuccess);
       return;
     }
     case GTK_RESPONSE_DELETE_EVENT:  // Fall through.
     case GTK_RESPONSE_CANCEL: {
-      std::move(callback_).Run(PrintingContextLinux::CANCEL);
+      std::move(callback_).Run(printing::mojom::ResultCode::kCanceled);
       return;
     }
     case GTK_RESPONSE_APPLY:
@@ -533,17 +636,16 @@ void PrintDialogGtk::OnResponse(GtkWidget* dialog, int response_id) {
 static void OnJobCompletedThunk(GtkPrintJob* print_job,
                                 gpointer user_data,
                                 const GError* error) {
-  static_cast<PrintDialogGtk*>(user_data)->OnJobCompleted(print_job, error);
+  static_cast<PrintJobCallbackHelper*>(user_data)->OnJobCompleted(print_job,
+                                                                  error);
 }
 void PrintDialogGtk::SendDocumentToPrinter(
     const std::u16string& document_name) {
-  DCHECK(owning_task_runner()->RunsTasksInCurrentSequence());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   // If |printer_| is nullptr then somehow the GTK printer list changed out
   // under us. In which case, just bail out.
   if (!printer_) {
-    // Matches AddRef() in PrintDocument();
-    Release();
     return;
   }
 
@@ -555,36 +657,46 @@ void PrintDialogGtk::SendDocumentToPrinter(
                         gtk_settings_, page_setup_);
   gtk_print_job_set_source_file(print_job, path_to_pdf_.value().c_str(),
                                 nullptr);
-  gtk_print_job_send(print_job, OnJobCompletedThunk, this, nullptr);
+  auto* helper = new PrintJobCallbackHelper{weak_factory_.GetWeakPtr()};
+  gtk_print_job_send(print_job, OnJobCompletedThunk, helper, nullptr);
 }
 
 void PrintDialogGtk::OnJobCompleted(GtkPrintJob* print_job,
                                     const GError* error) {
-  if (error)
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (error) {
     LOG(ERROR) << "Printing failed: " << error->message;
-  if (print_job)
+  }
+  if (print_job) {
     g_object_unref(print_job);
+  }
 
-  base::ThreadPool::PostTask(
-      FROM_HERE,
-      {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
-       base::TaskShutdownBehavior::BLOCK_SHUTDOWN},
-      base::BindOnce(base::GetDeleteFileCallback(), path_to_pdf_));
-  // Printing finished. Matches AddRef() in PrintDocument();
-  Release();
+  base::ThreadPool::PostTask(FROM_HERE,
+                             {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
+                              base::TaskShutdownBehavior::BLOCK_SHUTDOWN},
+                             base::GetDeleteFileCallback(path_to_pdf_));
+  // Printing finished.
 }
 
 void PrintDialogGtk::InitPrintSettings(
     std::unique_ptr<PrintSettings> settings) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!context_) {
+    return;
+  }
+
   InitPrintSettingsGtk(gtk_settings_, page_setup_, settings.get());
   context_->InitWithSettings(std::move(settings));
 }
 
 void PrintDialogGtk::OnWindowDestroying(aura::Window* window) {
-  DCHECK_EQ(gtk::GetAuraTransientParent(dialog_), window);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK_EQ(gtk::GetAuraTransientParent(dialog_), window,
+           base::NotFatalUntil::M163);
 
-  gtk::ClearAuraTransientParent(dialog_, window);
+  gtk::ClearAuraTransientParent(dialog_, window, platform_);
   window->RemoveObserver(this);
-  if (callback_)
-    std::move(callback_).Run(PrintingContextLinux::CANCEL);
+  if (callback_) {
+    std::move(callback_).Run(printing::mojom::ResultCode::kCanceled);
+  }
 }

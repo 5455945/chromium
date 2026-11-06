@@ -1,35 +1,30 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/run_loop.h"
+#import "base/ios/ios_util.h"
+#import "base/run_loop.h"
 #import "base/test/ios/wait_util.h"
-#include "base/test/scoped_feature_list.h"
+#import "base/test/scoped_feature_list.h"
 #import "ios/net/protocol_handler_util.h"
-#include "ios/web/common/features.h"
+#import "ios/web/common/features.h"
 #import "ios/web/public/navigation/navigation_manager.h"
-#include "ios/web/public/security/certificate_policy_cache.h"
-#include "ios/web/public/security/security_style.h"
-#include "ios/web/public/security/ssl_status.h"
-#import "ios/web/public/session/crw_session_certificate_policy_cache_storage.h"
-#import "ios/web/public/session/crw_session_storage.h"
-#include "ios/web/public/session/session_certificate_policy_cache.h"
+#import "ios/web/public/security/certificate_policy_cache.h"
+#import "ios/web/public/security/security_style.h"
+#import "ios/web/public/security/ssl_status.h"
+#import "ios/web/public/session/session_certificate_policy_cache.h"
 #import "ios/web/public/test/error_test_util.h"
 #import "ios/web/public/test/fakes/fake_web_client.h"
-#include "ios/web/public/test/fakes/fake_web_state_observer.h"
+#import "ios/web/public/test/fakes/fake_web_state_observer.h"
 #import "ios/web/public/test/navigation_test_util.h"
 #import "ios/web/public/test/web_test_with_web_state.h"
 #import "ios/web/public/test/web_view_content_test_util.h"
 #import "ios/web/public/web_state.h"
-#include "net/cert/x509_certificate.h"
-#include "net/ssl/ssl_info.h"
-#include "net/test/embedded_test_server/default_handlers.h"
-#include "net/test/embedded_test_server/embedded_test_server.h"
-#include "testing/gtest/include/gtest/gtest.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "net/cert/x509_certificate.h"
+#import "net/ssl/ssl_info.h"
+#import "net/test/embedded_test_server/default_handlers.h"
+#import "net/test/embedded_test_server/embedded_test_server.h"
+#import "testing/gtest/include/gtest/gtest.h"
 
 using base::test::ios::kWaitForPageLoadTimeout;
 using base::test::ios::WaitUntilConditionOrTimeout;
@@ -38,6 +33,10 @@ namespace web {
 
 // Test fixture for loading https pages with self signed certificate.
 class BadSslResponseTest : public WebTestWithWebState {
+ public:
+  BadSslResponseTest(const BadSslResponseTest&) = delete;
+  BadSslResponseTest& operator=(const BadSslResponseTest&) = delete;
+
  protected:
   BadSslResponseTest()
       : WebTestWithWebState(std::make_unique<FakeWebClient>()),
@@ -63,7 +62,6 @@ class BadSslResponseTest : public WebTestWithWebState {
   net::test_server::EmbeddedTestServer https_server_;
   base::test::ScopedFeatureList scoped_feature_list_;
   std::unique_ptr<FakeWebStateObserver> web_state_observer_;
-  DISALLOW_COPY_AND_ASSIGN(BadSslResponseTest);
 };
 
 // Tests that an error page is shown for SSL cert errors when committed
@@ -75,10 +73,18 @@ TEST_F(BadSslResponseTest, ShowSSLErrorPageCommittedInterstitial) {
     base::RunLoop().RunUntilIdle();
     return !web_state()->IsLoading();
   }));
-  NSError* error = testing::CreateErrorWithUnderlyingErrorChain(
-      {{@"NSURLErrorDomain", NSURLErrorServerCertificateUntrusted},
-       {@"kCFErrorDomainCFNetwork", kCFURLErrorServerCertificateUntrusted},
-       {net::kNSErrorDomain, net::ERR_CERT_AUTHORITY_INVALID}});
+  NSError* error;
+  if (base::ios::IsRunningOnOrLater(26, 4, 0)) {
+    error = testing::CreateErrorWithUnderlyingErrorChain(
+        {{@"NSURLErrorDomain", NSURLErrorServerCertificateUntrusted},
+         {@"NSOSStatusErrorDomain", -9808},
+         {net::kNSErrorDomain, net::ERR_CERT_AUTHORITY_INVALID}});
+  } else {
+    error = testing::CreateErrorWithUnderlyingErrorChain(
+        {{@"NSURLErrorDomain", NSURLErrorServerCertificateUntrusted},
+         {@"kCFErrorDomainCFNetwork", kCFURLErrorServerCertificateUntrusted},
+         {net::kNSErrorDomain, net::ERR_CERT_AUTHORITY_INVALID}});
+  }
   ASSERT_TRUE(test::WaitForWebViewContainingText(
       web_state(), testing::GetErrorText(
                        web_state(), url, error,

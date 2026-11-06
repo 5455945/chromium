@@ -21,7 +21,10 @@
 
 #include "third_party/blink/renderer/core/svg/svg_fe_specular_lighting_element.h"
 
-#include "third_party/blink/renderer/core/dom/node_computed_style.h"
+#include "third_party/blink/renderer/core/css/properties/longhands.h"
+#include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
+#include "third_party/blink/renderer/core/layout/layout_object.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/core/svg/graphics/filters/svg_filter_builder.h"
 #include "third_party/blink/renderer/core/svg/svg_animated_number.h"
@@ -30,7 +33,9 @@
 #include "third_party/blink/renderer/core/svg/svg_fe_light_element.h"
 #include "third_party/blink/renderer/platform/graphics/filters/fe_specular_lighting.h"
 #include "third_party/blink/renderer/platform/graphics/filters/filter.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/graphics/filters/light_source.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 
 namespace blink {
 
@@ -53,13 +58,7 @@ SVGFESpecularLightingElement::SVGFESpecularLightingElement(Document& document)
           this,
           svg_names::kKernelUnitLengthAttr,
           0.0f)),
-      in1_(MakeGarbageCollected<SVGAnimatedString>(this, svg_names::kInAttr)) {
-  AddToPropertyMap(specular_constant_);
-  AddToPropertyMap(specular_exponent_);
-  AddToPropertyMap(surface_scale_);
-  AddToPropertyMap(kernel_unit_length_);
-  AddToPropertyMap(in1_);
-}
+      in1_(MakeGarbageCollected<SVGAnimatedString>(this, svg_names::kInAttr)) {}
 
 SVGAnimatedNumber* SVGFESpecularLightingElement::kernelUnitLengthX() {
   return kernel_unit_length_->FirstNumber();
@@ -99,35 +98,12 @@ bool SVGFESpecularLightingElement::SetFilterEffectAttribute(
     return specular_lighting->SetSpecularExponent(
         specular_exponent_->CurrentValue()->Value());
 
-  LightSource* light_source =
-      const_cast<LightSource*>(specular_lighting->GetLightSource());
-  SVGFELightElement* light_element = SVGFELightElement::FindLightElement(*this);
-  DCHECK(light_source);
-  DCHECK(light_element);
-  DCHECK(effect->GetFilter());
-
-  if (attr_name == svg_names::kAzimuthAttr)
-    return light_source->SetAzimuth(
-        light_element->azimuth()->CurrentValue()->Value());
-  if (attr_name == svg_names::kElevationAttr)
-    return light_source->SetElevation(
-        light_element->elevation()->CurrentValue()->Value());
-  if (attr_name == svg_names::kXAttr || attr_name == svg_names::kYAttr ||
-      attr_name == svg_names::kZAttr)
-    return light_source->SetPosition(
-        effect->GetFilter()->Resolve3dPoint(light_element->GetPosition()));
-  if (attr_name == svg_names::kPointsAtXAttr ||
-      attr_name == svg_names::kPointsAtYAttr ||
-      attr_name == svg_names::kPointsAtZAttr)
-    return light_source->SetPointsAt(
-        effect->GetFilter()->Resolve3dPoint(light_element->PointsAt()));
-  if (attr_name == svg_names::kSpecularExponentAttr)
-    return light_source->SetSpecularExponent(
-        light_element->specularExponent()->CurrentValue()->Value());
-  if (attr_name == svg_names::kLimitingConeAngleAttr)
-    return light_source->SetLimitingConeAngle(
-        light_element->limitingConeAngle()->CurrentValue()->Value());
-
+  if (const auto* light_element = SVGFELightElement::FindLightElement(*this)) {
+    std::optional<bool> light_source_update =
+        light_element->SetLightSourceAttribute(specular_lighting, attr_name);
+    if (light_source_update)
+      return *light_source_update;
+  }
   return SVGFilterPrimitiveStandardAttributes::SetFilterEffectAttribute(
       effect, attr_name);
 }
@@ -138,13 +114,11 @@ void SVGFESpecularLightingElement::SvgAttributeChanged(
   if (attr_name == svg_names::kSurfaceScaleAttr ||
       attr_name == svg_names::kSpecularConstantAttr ||
       attr_name == svg_names::kSpecularExponentAttr) {
-    SVGElement::InvalidationGuard invalidation_guard(this);
     PrimitiveAttributeChanged(attr_name);
     return;
   }
 
   if (attr_name == svg_names::kInAttr) {
-    SVGElement::InvalidationGuard invalidation_guard(this);
     Invalidate();
     return;
   }
@@ -166,15 +140,18 @@ void SVGFESpecularLightingElement::LightElementAttributeChanged(
 FilterEffect* SVGFESpecularLightingElement::Build(
     SVGFilterBuilder* filter_builder,
     Filter* filter) {
+  UseCounter::Count(GetDocument(), WebFeature::kSVGFESpecularLightingElement);
   FilterEffect* input1 = filter_builder->GetEffectById(
       AtomicString(in1_->CurrentValue()->Value()));
   DCHECK(input1);
 
-  const ComputedStyle* style = GetComputedStyle();
-  if (!style)
+  const LayoutObject* layout_object = GetLayoutObject();
+  if (!layout_object) {
     return nullptr;
+  }
 
-  Color color = style->VisitedDependentColor(GetCSSPropertyLightingColor());
+  const ComputedStyle& style = layout_object->Style();
+  Color color = style.VisitedDependentColor(GetCSSPropertyLightingColor());
 
   const SVGFELightElement* light_node =
       SVGFELightElement::FindLightElement(*this);
@@ -190,11 +167,33 @@ FilterEffect* SVGFESpecularLightingElement::Build(
 }
 
 bool SVGFESpecularLightingElement::TaintsOrigin() const {
-  const ComputedStyle* style = GetComputedStyle();
-  // TaintsOrigin() is only called after a successful call to Build()
-  // (see above), so we should have a ComputedStyle here.
-  DCHECK(style);
-  return style->LightingColor().IsCurrentColor();
+  return StyleColorTaintsOrigin(GetCSSPropertyLightingColor());
+}
+
+SVGAnimatedPropertyBase* SVGFESpecularLightingElement::PropertyFromAttribute(
+    const QualifiedName& attribute_name) const {
+  if (attribute_name == svg_names::kSpecularConstantAttr) {
+    return specular_constant_.Get();
+  } else if (attribute_name == svg_names::kSpecularExponentAttr) {
+    return specular_exponent_.Get();
+  } else if (attribute_name == svg_names::kSurfaceScaleAttr) {
+    return surface_scale_.Get();
+  } else if (attribute_name == svg_names::kKernelUnitLengthAttr) {
+    return kernel_unit_length_.Get();
+  } else if (attribute_name == svg_names::kInAttr) {
+    return in1_.Get();
+  } else {
+    return SVGFilterPrimitiveStandardAttributes::PropertyFromAttribute(
+        attribute_name);
+  }
+}
+
+void SVGFESpecularLightingElement::SynchronizeAllSVGAttributes() const {
+  SVGAnimatedPropertyBase* attrs[]{
+      specular_constant_.Get(), specular_exponent_.Get(), surface_scale_.Get(),
+      kernel_unit_length_.Get(), in1_.Get()};
+  SynchronizeListOfSVGAttributes(attrs);
+  SVGFilterPrimitiveStandardAttributes::SynchronizeAllSVGAttributes();
 }
 
 }  // namespace blink

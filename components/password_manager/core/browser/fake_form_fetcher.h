@@ -1,17 +1,19 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_PASSWORD_MANAGER_CORE_BROWSER_FAKE_FORM_FETCHER_H_
 #define COMPONENTS_PASSWORD_MANAGER_CORE_BROWSER_FAKE_FORM_FETCHER_H_
 
+#include <memory>
 #include <vector>
 
-#include "base/macros.h"
 #include "base/observer_list.h"
 #include "components/password_manager/core/browser/form_fetcher.h"
 #include "components/password_manager/core/browser/password_form.h"
-#include "components/password_manager/core/browser/statistics_table.h"
+#include "components/password_manager/core/browser/password_store/interactions_stats.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
+#include "components/password_manager/core/browser/password_store/stored_credential.h"
 
 namespace password_manager {
 
@@ -22,6 +24,9 @@ struct InteractionsStats;
 class FakeFormFetcher : public FormFetcher {
  public:
   FakeFormFetcher();
+
+  FakeFormFetcher(const FakeFormFetcher&) = delete;
+  FakeFormFetcher& operator=(const FakeFormFetcher&) = delete;
 
   ~FakeFormFetcher() override;
 
@@ -40,18 +45,23 @@ class FakeFormFetcher : public FormFetcher {
   State GetState() const override;
 
   const std::vector<InteractionsStats>& GetInteractionsStats() const override;
-  base::span<const InsecureCredential> GetInsecureCredentials() const override;
-  std::vector<const PasswordForm*> GetNonFederatedMatches() const override;
-  std::vector<const PasswordForm*> GetFederatedMatches() const override;
+  base::span<const StoredCredential> GetInsecureCredentials() const override;
+  base::span<const StoredCredential> GetNonFederatedMatches() const override;
+  base::span<const StoredCredential> GetFederatedMatches() const override;
   bool IsBlocklisted() const override;
-  bool IsMovingBlocked(const autofill::GaiaIdHash& destination,
+  bool IsMovingBlocked(const signin::GaiaIdHash& destination,
                        const std::u16string& username) const override;
-  const std::vector<const PasswordForm*>& GetAllRelevantMatches()
-      const override;
-  const std::vector<const PasswordForm*>& GetBestMatches() const override;
-  const PasswordForm* GetPreferredMatch() const override;
+  base::span<const StoredCredential> GetAllRelevantMatches() const override;
+  base::span<const StoredCredential> GetBestMatches() const override;
+  const StoredCredential* GetPreferredMatch() const override;
+  std::optional<PasswordFormMetricsRecorder::MatchedFormType>
+  GetPreferredOrPotentialMatchedFormType() const override;
   // Returns a new FakeFormFetcher.
   std::unique_ptr<FormFetcher> Clone() override;
+  std::optional<PasswordStoreBackendError> GetProfileStoreBackendError()
+      const override;
+  std::optional<PasswordStoreBackendError> GetAccountStoreBackendError()
+      const override;
 
   void set_stats(const std::vector<InteractionsStats>& stats) {
     state_ = State::NOT_WAITING;
@@ -60,36 +70,59 @@ class FakeFormFetcher : public FormFetcher {
 
   void set_scheme(PasswordForm::Scheme scheme) { scheme_ = scheme; }
 
-  void set_federated(const std::vector<const PasswordForm*>& federated) {
+  void set_federated(const std::vector<PasswordForm>& federated) {
     state_ = State::NOT_WAITING;
-    federated_ = federated;
+    federated_ = FromPasswordForms(federated);
   }
 
-  void set_insecure_credentials(
-      const std::vector<InsecureCredential>& credentials) {
-    insecure_credentials_ = credentials;
+  void set_insecure_credentials(const std::vector<PasswordForm>& credentials) {
+    insecure_credentials_ = FromPasswordForms(credentials);
   }
 
-  void SetNonFederated(const std::vector<const PasswordForm*>& non_federated);
+  void set_preferred_or_potential_matched_form_type(
+      PasswordFormMetricsRecorder::MatchedFormType
+          preferred_or_potential_matched_form_type) {
+    preferred_or_potential_matched_form_type_ =
+        preferred_or_potential_matched_form_type;
+  }
+
+  // Set non-federated matches. All matches must have the same scheme
+  // as |scheme_| as this is the standard case.
+  void SetNonFederated(const std::vector<PasswordForm>& non_federated);
+
+  void SetNonFederated(
+      const std::vector<PasswordForm>& non_federated,
+      const std::vector<PasswordForm>& non_federated_same_scheme);
+
+  void SetBestMatches(const std::vector<PasswordForm>& best_matches);
 
   void SetBlocklisted(bool is_blocklisted);
 
+  bool HasConsumers();
+
   void NotifyFetchCompleted();
+
+  void SetProfileStoreBackendError(
+      std::optional<PasswordStoreBackendError> error);
+
+  void SetAccountStoreBackendError(
+      std::optional<PasswordStoreBackendError> error);
 
  private:
   base::ObserverList<Consumer> consumers_;
   State state_ = State::NOT_WAITING;
   PasswordForm::Scheme scheme_ = PasswordForm::Scheme::kHtml;
   std::vector<InteractionsStats> stats_;
-  std::vector<const PasswordForm*> non_federated_;
-  std::vector<const PasswordForm*> federated_;
-  std::vector<const PasswordForm*> non_federated_same_scheme_;
-  std::vector<const PasswordForm*> best_matches_;
-  std::vector<InsecureCredential> insecure_credentials_;
-  const PasswordForm* preferred_match_ = nullptr;
+  std::vector<StoredCredential> non_federated_;
+  std::vector<StoredCredential> federated_;
+  std::vector<StoredCredential> non_federated_same_scheme_;
+  std::vector<StoredCredential> best_matches_;
+  std::vector<StoredCredential> insecure_credentials_;
   bool is_blocklisted_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeFormFetcher);
+  std::optional<PasswordStoreBackendError> profile_store_backend_error_;
+  std::optional<PasswordStoreBackendError> account_store_backend_error_;
+  std::optional<PasswordFormMetricsRecorder::MatchedFormType>
+      preferred_or_potential_matched_form_type_;
 };
 
 }  // namespace password_manager

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,76 +9,113 @@
 namespace download {
 namespace features {
 
-const base::Feature kUseDownloadOfflineContentProvider{
-    "UseDownloadOfflineContentProvider", base::FEATURE_DISABLED_BY_DEFAULT};
-
-const base::Feature kDownloadAutoResumptionNative {
-  "DownloadsAutoResumptionNative",
-#if defined(OS_ANDROID)
-      base::FEATURE_ENABLED_BY_DEFAULT
+BASE_FEATURE(kParallelDownloading,
+#if BUILDFLAG(IS_ANDROID)
+             base::FEATURE_ENABLED_BY_DEFAULT
 #else
-      base::FEATURE_DISABLED_BY_DEFAULT
+             base::FEATURE_DISABLED_BY_DEFAULT
 #endif
-};
+);
 
-const base::Feature kParallelDownloading {
-  "ParallelDownloading",
-#if defined(OS_ANDROID)
-      base::FEATURE_ENABLED_BY_DEFAULT
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+BASE_FEATURE(kBackoffInDownloading, base::FEATURE_DISABLED_BY_DEFAULT);
+#endif
+
+bool IsBackoffInDownloadingEnabled() {
+#if !BUILDFLAG(IS_WIN) && !BUILDFLAG(IS_MAC)
+  return false;
 #else
-      base::FEATURE_DISABLED_BY_DEFAULT
+  return base::FeatureList::IsEnabled(kBackoffInDownloading);
 #endif
-};
+}
 
-const base::Feature kDownloadLater{"DownloadLater",
-                                   base::FEATURE_DISABLED_BY_DEFAULT};
+#if BUILDFLAG(IS_ANDROID)
+BASE_FEATURE(kSmartSuggestionForLargeDownloads,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
-#if defined(OS_ANDROID)
-const base::Feature kSmartSuggestionForLargeDownloads{
-    "SmartSuggestionForLargeDownloads", base::FEATURE_DISABLED_BY_DEFAULT};
+BASE_FEATURE(kShowBlockedSensitiveDownload, base::FEATURE_ENABLED_BY_DEFAULT);
 
-const base::Feature kRefreshExpirationDate{"RefreshExpirationDate",
-                                           base::FEATURE_ENABLED_BY_DEFAULT};
+BASE_FEATURE(kShowDownloadScanningState, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kDownloadsCompactListView, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kRemapGenericMimeType, base::FEATURE_ENABLED_BY_DEFAULT);
 #endif
 
-const base::Feature kUseInProgressDownloadManagerForDownloadService{
-    "UseInProgressDownloadManagerForDownloadService",
-    base::FEATURE_DISABLED_BY_DEFAULT};
-
-const base::Feature kAllowDownloadResumptionWithoutStrongValidators{
-  "AllowDownloadResumptionWithoutStrongValidators",
-#if defined(OS_ANDROID)
-      base::FEATURE_ENABLED_BY_DEFAULT
+BASE_FEATURE(kDownloadNotificationServiceUnifiedAPI,
+#if BUILDFLAG(IS_ANDROID)
+             base::FEATURE_ENABLED_BY_DEFAULT
 #else
-      base::FEATURE_DISABLED_BY_DEFAULT
+             base::FEATURE_DISABLED_BY_DEFAULT
 #endif
-};
+);
 
-const base::Feature kUseParallelRequestsForUnknwonRangeSupport{
-    "UseParallelRequestForUnknownRangeSupport",
-    base::FEATURE_ENABLED_BY_DEFAULT};
+BASE_FEATURE(kUseInProgressDownloadManagerForDownloadService,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
-const base::Feature kUseParallelRequestsForHTTP2{
-    "UseParallelRequestsForHTTP2", base::FEATURE_ENABLED_BY_DEFAULT};
+BASE_FEATURE(kAllowDownloadResumptionWithoutStrongValidators,
+#if BUILDFLAG(IS_ANDROID)
+             base::FEATURE_ENABLED_BY_DEFAULT
+#else
+             base::FEATURE_DISABLED_BY_DEFAULT
+#endif
+);
 
-const base::Feature kUseParallelRequestsForQUIC{
-    "UseParallelRequestsForQUIC", base::FEATURE_ENABLED_BY_DEFAULT};
+BASE_FEATURE(kUseParallelRequestsForHTTP2, base::FEATURE_ENABLED_BY_DEFAULT);
 
-const base::Feature kDeleteExpiredDownloads{"DeleteExpiredDownloads",
-                                            base::FEATURE_ENABLED_BY_DEFAULT};
+BASE_FEATURE(kUseParallelRequestsForQUIC, base::FEATURE_ENABLED_BY_DEFAULT);
 
-const base::Feature kDeleteOverwrittenDownloads{
-    "DeleteOverwrittenDownloads", base::FEATURE_ENABLED_BY_DEFAULT};
+BASE_FEATURE(kDeleteOverwrittenDownloads, base::FEATURE_ENABLED_BY_DEFAULT);
 
-const base::Feature kAllowFileBufferSizeControl{
-    "AllowFileBufferSizeControl", base::FEATURE_DISABLED_BY_DEFAULT};
+BASE_FEATURE(kRemoveOldDownloadsFromHistory, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE_PARAM(base::TimeDelta,
+                   kRemoveOldDownloadsFromHistoryMinAge,
+                   &kRemoveOldDownloadsFromHistory,
+                   base::Days(90));
 
+BASE_FEATURE(kAllowFileBufferSizeControl, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kAllowedMixedContentInlinePdf, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kEnableAsyncNotificationManagerForDownload,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+#if BUILDFLAG(IS_ANDROID)
+BASE_FEATURE(kEnableSavePackageForOffTheRecord,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+// TODO(crbug.com/521890621): Enable on all form factors once the non-desktop
+// rollout is complete.
+BASE_FEATURE(kOpenDownloadInFilesAppIfNoHandlerFound,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+// TODO(crbug.com/521890621): Enable on LFF once the non-desktop rollout is
+// complete.
+BASE_FEATURE(kOpenDownloadInNewTab, base::FEATURE_DISABLED_BY_DEFAULT);
+
+// TODO(crbug.com/521890621): Part of this feature is desktop-only (b/555382195)
+// and part is LFF. Enable the LFF part on LFF once the rollout is complete.
+BASE_FEATURE(kEnableDownloadSaveAsContextMenu,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Desktop-only feature (see b/555382195).
+BASE_FEATURE(kEnableDownloadSaveAsSystemFileDialog,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kRetrieveDisplayNamesForHistoryDownloads,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(IS_ANDROID)
+
+BASE_FEATURE(kDeferredDownloadHistoryLoading,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+#if BUILDFLAG(IS_WIN)
+BASE_FEATURE(kEnableDownloadOpenWithContextMenu,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(IS_WIN)
+
+BASE_FEATURE(kPreserveDownloadLastModified,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 }  // namespace features
-
-namespace switches {
-
-const char kDownloadLaterDebugOnWifi[] = "download-later-debug-on-wifi";
-
-}  // namespace switches
 
 }  // namespace download

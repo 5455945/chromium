@@ -1,10 +1,14 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-var NATIVE_APP_NAME = 'com.google.chrome.test.initiator';
-var MESSAGE_TO_SEND = {request: 'foo'};
-var EXPECTED_RESPONSE_MESSAGE = {response: 'bar'};
+const NATIVE_APP_NAME = 'com.google.chrome.test.initiator';
+const MESSAGE_TO_SEND = {
+  request: 'foo',
+};
+const EXPECTED_RESPONSE_MESSAGE = {
+  response: 'bar',
+};
 
 function assertValidNativeMessageSender(sender) {
   chrome.test.assertEq(undefined, sender.id);
@@ -27,5 +31,5 @@ chrome.test.runTests([
         chrome.test.succeed();
       });
     });
-  }
+  },
 ]);

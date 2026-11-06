@@ -32,11 +32,9 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_FORMS_MULTIPLE_FIELDS_TEMPORAL_INPUT_TYPE_VIEW_H_
 
 #include "third_party/blink/public/mojom/input/focus_type.mojom-blink-forward.h"
-#include "third_party/blink/renderer/core/html/forms/clear_button_element.h"
 #include "third_party/blink/renderer/core/html/forms/date_time_edit_element.h"
 #include "third_party/blink/renderer/core/html/forms/input_type_view.h"
 #include "third_party/blink/renderer/core/html/forms/picker_indicator_element.h"
-#include "third_party/blink/renderer/core/html/forms/spin_button_element.h"
 
 namespace blink {
 
@@ -47,9 +45,7 @@ class MultipleFieldsTemporalInputTypeView final
     : public GarbageCollected<MultipleFieldsTemporalInputTypeView>,
       public InputTypeView,
       protected DateTimeEditElement::EditControlOwner,
-      protected PickerIndicatorElement::PickerIndicatorOwner,
-      protected SpinButtonElement::SpinButtonOwner,
-      protected ClearButtonElement::ClearButtonOwner {
+      protected PickerIndicatorElement::PickerIndicatorOwner {
  public:
   MultipleFieldsTemporalInputTypeView(HTMLInputElement&,
                                       BaseTemporalInputType&);
@@ -57,6 +53,8 @@ class MultipleFieldsTemporalInputTypeView final
   void Trace(Visitor*) const override;
 
   wtf_size_t FocusedFieldIndex() const override;
+
+  bool IsMultipleFieldsTemporal() const override { return true; }
 
  private:
   // DateTimeEditElement::EditControlOwner functions
@@ -69,15 +67,6 @@ class MultipleFieldsTemporalInputTypeView final
   AtomicString LocaleIdentifier() const final;
   void EditControlDidChangeValueByKeyboard() final;
 
-  // SpinButtonElement::SpinButtonOwner functions.
-  void FocusAndSelectSpinButtonOwner() override;
-  bool ShouldSpinButtonRespondToMouseEvents() override;
-  bool ShouldSpinButtonRespondToWheelEvents() override;
-  void SpinButtonStepDown() override;
-  void SpinButtonStepUp() override;
-  void SpinButtonDidReleaseMouseCapture(
-      SpinButtonElement::EventDispatch) override;
-
   // PickerIndicatorElement::PickerIndicatorOwner functions
   bool IsPickerIndicatorOwnerDisabledOrReadOnly() const final;
   void PickerIndicatorChooseValue(const String&) final;
@@ -87,29 +76,28 @@ class MultipleFieldsTemporalInputTypeView final
   void DidEndChooser() final;
   String AriaLabelForPickerIndicator() const final;
 
-  // ClearButtonElement::ClearButtonOwner functions.
-  void FocusAndSelectClearButtonOwner() override;
-  bool ShouldClearButtonRespondToMouseEvents() override;
-  void ClearValue() override;
-
   // InputTypeView functions
   void Blur() final;
+  AppearanceValue AutoAppearance() const override;
+  void OpenPopupView() override;
   void ClosePopupView() override;
   bool HasOpenedPopup() const override;
-  void CustomStyleForLayoutObject(ComputedStyle& style) override;
+  bool IsPickerVisible() const override;
+  void AdjustStyle(ComputedStyleBuilder&) override;
   void CreateShadowSubtree() final;
   void DestroyShadowSubtree() final;
-  void DisabledAttributeChanged() final;
+  void DisabledAttributeChanged(DisabledChangedReason) final;
   void ForwardEvent(Event&) final;
   void HandleClickEvent(MouseEvent&) final;
+  void HandleDOMActivateEvent(Event&) override;
   void HandleFocusInEvent(Element* old_focused_element,
                           mojom::blink::FocusType) final;
   void HandleKeydownEvent(KeyboardEvent&) final;
+  void AccessKeyAction(SimulatedClickCreationScope creation_scope) final;
   bool HasBadInput() const override;
   bool HasCustomFocusLogic() const final;
   void MinOrMaxAttributeChanged() final;
   void ReadonlyAttributeChanged() final;
-  void RequiredAttributeChanged() final;
   void RestoreFormControlState(const FormControlState&) final;
   FormControlState SaveFormControlState() const final;
   void DidSetValue(const String&, bool value_changed) final;
@@ -117,13 +105,12 @@ class MultipleFieldsTemporalInputTypeView final
   void UpdateView() final;
   void ValueAttributeChanged() override;
   void ListAttributeTargetChanged() final;
-  void UpdateClearButtonVisibility() final;
   TextDirection ComputedTextDirection() final;
   AXObject* PopupRootAXObject() final;
 
   DateTimeEditElement* GetDateTimeEditElement() const;
-  SpinButtonElement* GetSpinButtonElement() const;
-  ClearButtonElement* GetClearButtonElement() const;
+  // Similar to GetDateTimeEditElement(), but does not force creation.
+  DateTimeEditElement* GetDateTimeEditElementIfCreated() const;
   PickerIndicatorElement* GetPickerIndicatorElement() const;
   bool ContainsFocusedShadowElement() const;
   void ShowPickerIndicator();

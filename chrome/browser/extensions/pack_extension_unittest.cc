@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,15 @@
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/path_service.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/extensions/startup_helper.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "content/public/test/browser_task_environment.h"
+#include "extensions/buildflags/buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -32,7 +36,11 @@ class PackExtensionTest : public testing::Test {
     base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
     command_line.AppendSwitchPath(switches::kPackExtension,
                                   temp_dir.GetPath().Append(path.BaseName()));
-    return startup_helper_.PackExtension(command_line);
+    std::u16string error_message;
+    bool result = startup_helper_.PackExtension(command_line, &error_message);
+    EXPECT_EQ(result, error_message.empty())
+        << base::UTF16ToUTF8(error_message);
+    return result;
   }
 
   content::BrowserTaskEnvironment task_environment_;
@@ -53,13 +61,18 @@ TEST_F(PackExtensionTest, ExtensionWithManagedStorage) {
                                     .AppendASCII("managed_storage")));
 }
 
+#if !BUILDFLAG(IS_ANDROID)
+// Android does not support packaged apps.
 TEST_F(PackExtensionTest, PackagedApp) {
   ASSERT_TRUE(TestPackExtension(test_data_dir_.AppendASCII("packaged_app")));
 }
+#endif  // BUILDFLAG(IS_ANDROID)
 
+#if BUILDFLAG(ENABLE_PLATFORM_APPS)
 TEST_F(PackExtensionTest, PlatformApp) {
   ASSERT_TRUE(TestPackExtension(test_data_dir_.AppendASCII("platform_apps")
                                               .AppendASCII("minimal")));
 }
+#endif  // BUILDFLAG(ENABLE_PLATFORM_APPS)
 
 }  // namespace extensions

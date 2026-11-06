@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,19 @@
 
 [
     Exposed=(Window,DedicatedWorker),
-    RuntimeEnabled=WebCodecs,
+    SecureContext,
     ActiveScriptWrappable
-] interface AudioEncoder {
+] interface AudioEncoder : EventTarget {
     [CallWith=ScriptState, RaisesException, MeasureAs=WebCodecsAudioEncoder]
     constructor(AudioEncoderInit init);
 
     // The number of pending encode requests. This does not include requests
     // that have been sent to the underlying codec.
-    readonly attribute long encodeQueueSize;
+    readonly attribute unsigned long encodeQueueSize;
+
+    // Fires to signal a decrease in encodeQueueSize. Will fire at most once
+    // for a given turn of the event loop.
+    attribute EventHandler ondequeue;
 
     // Enqueues a control message to configure the audio encoder for encoding
     // audio data as described by config.
@@ -29,8 +33,8 @@
 
     // Enqueues a request to produce outputs for all already encoded data.
     // Resolved after emitting outputs for all previously encoded data.
-    [RaisesException]
-    Promise<void> flush();
+    [CallWith=ScriptState, RaisesException]
+    Promise<undefined> flush();
 
     // Discard all pending work and current encoder configuration.
     //

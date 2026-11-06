@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 
 #include "build/build_config.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -32,7 +32,7 @@ TEST(SocketTagTest, Compares) {
   EXPECT_FALSE(unset1 != unset2);
   EXPECT_FALSE(unset1 < unset2);
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   SocketTag s00(0, 0), s01(0, 1), s11(1, 1);
 
   EXPECT_FALSE(s00 == unset1);
@@ -54,7 +54,7 @@ TEST(SocketTagTest, Compares) {
 
 // On Android, where socket tagging is supported, verify that SocketTag::Apply
 // works as expected.
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 TEST(SocketTagTest, Apply) {
   if (!CanGetTaggedBytes()) {
     DVLOG(0) << "Skipping test - GetTaggedBytes unsupported.";
@@ -70,7 +70,7 @@ TEST(SocketTagTest, Apply) {
   AddressList addr_list;
   ASSERT_TRUE(test_server.GetAddressList(&addr_list));
   SockaddrStorage addr;
-  ASSERT_TRUE(addr_list[0].ToSockAddr(addr.addr, &addr.addr_len));
+  ASSERT_TRUE(addr_list[0].ToSockAddr(addr.addr(), &addr.addr_len));
 
   // Create socket.
   int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -81,7 +81,7 @@ TEST(SocketTagTest, Apply) {
   uint64_t old_traffic = GetTaggedBytes(tag_val1);
   SocketTag tag1(SocketTag::UNSET_UID, tag_val1);
   tag1.Apply(s);
-  ASSERT_EQ(connect(s, addr.addr, addr.addr_len), 0);
+  ASSERT_EQ(connect(s, addr.addr(), addr.addr_len), 0);
   EXPECT_GT(GetTaggedBytes(tag_val1), old_traffic);
 
   // Verify socket can be retagged with a new value and the current process's

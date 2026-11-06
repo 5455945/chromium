@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,8 @@
 
 #include <string>
 
+#include "base/strings/string_view_util.h"
+#include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/platform/mhtml/archive_resource.h"
 #include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
@@ -16,9 +18,9 @@ namespace {
 
 std::string GetResourceData(
     const HeapVector<Member<ArchiveResource>>& resources,
-    size_t index) {
-  return std::string(resources[index]->Data()->Data(),
-                     resources[index]->Data()->size());
+    wtf_size_t index) {
+  Vector<char> flatten_data = resources[index]->Data()->CopyAs<Vector<char>>();
+  return std::string(base::as_string_view(flatten_data));
 }
 
 }  // namespace
@@ -27,15 +29,15 @@ class MHTMLParserTest : public testing::Test {
  public:
   MHTMLParserTest() = default;
 
-  HeapVector<Member<ArchiveResource>> ParseArchive(const char* mhtml_data,
-                                                   size_t size) {
-    scoped_refptr<SharedBuffer> buf = SharedBuffer::Create(mhtml_data, size);
+  HeapVector<Member<ArchiveResource>> ParseArchive(
+      base::span<const char> mhtml_data) {
+    scoped_refptr<SharedBuffer> buf = SharedBuffer::Create(mhtml_data);
     MHTMLParser parser(buf);
     return parser.ParseArchive();
   }
 
-  base::Time ParseArchiveTime(const char* mhtml_data, size_t size) {
-    scoped_refptr<SharedBuffer> buf = SharedBuffer::Create(mhtml_data, size);
+  base::Time ParseArchiveTime(base::span<const char> mhtml_data) {
+    scoped_refptr<SharedBuffer> buf = SharedBuffer::Create(mhtml_data);
     MHTMLParser parser(buf);
     EXPECT_GT(parser.ParseArchive().size(), 0U);
     return parser.CreationDate();
@@ -75,7 +77,7 @@ TEST_F(MHTMLParserTest, MHTMLPartHeaders) {
       "--BoUnDaRy--\r\n";
 
   HeapVector<Member<ArchiveResource>> resources =
-      ParseArchive(mhtml_data, sizeof(mhtml_data));
+      ParseArchive(base::span_with_nul_from_cstring(mhtml_data));
   EXPECT_EQ(3ul, resources.size());
 
   EXPECT_EQ("http://www.example.com/page1", resources[0]->Url());
@@ -128,7 +130,7 @@ TEST_F(MHTMLParserTest, QuotedPrintableContentTransferEncoding) {
       "--BoUnDaRy--\r\n";
 
   HeapVector<Member<ArchiveResource>> resources =
-      ParseArchive(mhtml_data, sizeof(mhtml_data));
+      ParseArchive(base::span_with_nul_from_cstring(mhtml_data));
   EXPECT_EQ(3ul, resources.size());
 
   EXPECT_EQ("single line\r\n", GetResourceData(resources, 0));
@@ -164,7 +166,7 @@ TEST_F(MHTMLParserTest, Base64ContentTransferEncoding) {
       "--BoUnDaRy--\r\n";
 
   HeapVector<Member<ArchiveResource>> resources =
-      ParseArchive(mhtml_data, sizeof(mhtml_data));
+      ParseArchive(base::span_with_nul_from_cstring(mhtml_data));
   EXPECT_EQ(2ul, resources.size());
 
   EXPECT_EQ("123abc", GetResourceData(resources, 0));
@@ -193,7 +195,7 @@ TEST_F(MHTMLParserTest, EightBitContentTransferEncoding) {
       "--BoUnDaRy--\r\n";
 
   HeapVector<Member<ArchiveResource>> resources =
-      ParseArchive(mhtml_data, sizeof(mhtml_data));
+      ParseArchive(base::span_with_nul_from_cstring(mhtml_data));
   EXPECT_EQ(1ul, resources.size());
 
   EXPECT_EQ(std::string("123bin\0ary", 10), GetResourceData(resources, 0));
@@ -220,7 +222,7 @@ TEST_F(MHTMLParserTest, SevenBitContentTransferEncoding) {
       "--BoUnDaRy--\r\n";
 
   HeapVector<Member<ArchiveResource>> resources =
-      ParseArchive(mhtml_data, sizeof(mhtml_data));
+      ParseArchive(base::span_with_nul_from_cstring(mhtml_data));
   EXPECT_EQ(1ul, resources.size());
 
   EXPECT_EQ(std::string("123abcdefg", 10), GetResourceData(resources, 0));
@@ -247,7 +249,7 @@ TEST_F(MHTMLParserTest, SpaceAsHeaderContinuation) {
       "--BoUnDaRy--\r\n";
 
   HeapVector<Member<ArchiveResource>> resources =
-      ParseArchive(mhtml_data, sizeof(mhtml_data));
+      ParseArchive(base::span_with_nul_from_cstring(mhtml_data));
   EXPECT_EQ(1ul, resources.size());
 
   EXPECT_EQ(std::string("123abcdefg", 10), GetResourceData(resources, 0));
@@ -283,7 +285,7 @@ TEST_F(MHTMLParserTest, BinaryContentTransferEncoding) {
       "--BoUnDaRy--\r\n";
 
   HeapVector<Member<ArchiveResource>> resources =
-      ParseArchive(mhtml_data, sizeof(mhtml_data));
+      ParseArchive(base::span_with_nul_from_cstring(mhtml_data));
   EXPECT_EQ(3ul, resources.size());
 
   EXPECT_EQ(std::string("bin\0ary", 7), GetResourceData(resources, 0));
@@ -322,7 +324,7 @@ TEST_F(MHTMLParserTest, UnknownContentTransferEncoding) {
       "--BoUnDaRy--\r\n";
 
   HeapVector<Member<ArchiveResource>> resources =
-      ParseArchive(mhtml_data, sizeof(mhtml_data));
+      ParseArchive(base::span_with_nul_from_cstring(mhtml_data));
   EXPECT_EQ(3ul, resources.size());
 
   EXPECT_EQ(std::string("bin\0ary", 7), GetResourceData(resources, 0));
@@ -358,7 +360,7 @@ TEST_F(MHTMLParserTest, NoContentTransferEncoding) {
       "--BoUnDaRy--\r\n";
 
   HeapVector<Member<ArchiveResource>> resources =
-      ParseArchive(mhtml_data, sizeof(mhtml_data));
+      ParseArchive(base::span_with_nul_from_cstring(mhtml_data));
   EXPECT_EQ(3ul, resources.size());
 
   EXPECT_EQ(std::string("bin\0ary", 7), GetResourceData(resources, 0));
@@ -384,7 +386,8 @@ TEST_F(MHTMLParserTest, DateParsing_EmptyDate) {
       "bin\0ary\r\n"
       "--BoUnDaRy--\r\n";
 
-  base::Time creation_time = ParseArchiveTime(mhtml_data, sizeof(mhtml_data));
+  base::Time creation_time =
+      ParseArchiveTime(base::span_with_nul_from_cstring(mhtml_data));
 
   // No header should produce an invalid time.
   EXPECT_EQ(base::Time(), creation_time);
@@ -411,7 +414,8 @@ TEST_F(MHTMLParserTest, DateParsing_InvalidDate) {
       "bin\0ary\r\n"
       "--BoUnDaRy--\r\n";
 
-  base::Time creation_time = ParseArchiveTime(mhtml_data, sizeof(mhtml_data));
+  base::Time creation_time =
+      ParseArchiveTime(base::span_with_nul_from_cstring(mhtml_data));
 
   // Invalid header should produce an invalid time.
   EXPECT_EQ(base::Time(), creation_time);
@@ -436,7 +440,8 @@ TEST_F(MHTMLParserTest, DateParsing_ValidDate) {
       "bin\0ary\r\n"
       "--BoUnDaRy--\r\n";
 
-  base::Time creation_time = ParseArchiveTime(mhtml_data, sizeof(mhtml_data));
+  base::Time creation_time =
+      ParseArchiveTime(base::span_with_nul_from_cstring(mhtml_data));
   base::Time expected_time;
   ASSERT_TRUE(base::Time::FromUTCExploded(
       {2017, 3 /* March */, 5 /* Friday */, 1, 22, 44, 17, 0}, &expected_time));
@@ -449,7 +454,7 @@ TEST_F(MHTMLParserTest, MissingBoundary) {
   const char mhtml_data[] = "Content-Type: multipart/false\r\n";
 
   HeapVector<Member<ArchiveResource>> resources =
-      ParseArchive(mhtml_data, sizeof(mhtml_data));
+      ParseArchive(base::span_with_nul_from_cstring(mhtml_data));
   EXPECT_EQ(0U, resources.size());
 }
 
@@ -471,7 +476,8 @@ TEST_F(MHTMLParserTest, OverflowedDate) {
       "bin\0ary\r\n"
       "--BoUnDaRy--\r\n";
 
-  base::Time creation_time = ParseArchiveTime(mhtml_data, sizeof(mhtml_data));
+  base::Time creation_time =
+      ParseArchiveTime(base::span_with_nul_from_cstring(mhtml_data));
   EXPECT_EQ(base::Time(), creation_time);
 }
 
@@ -493,7 +499,8 @@ TEST_F(MHTMLParserTest, OverflowedDay) {
       "bin\0ary\r\n"
       "--BoUnDaRy--\r\n";
 
-  base::Time creation_time = ParseArchiveTime(mhtml_data, sizeof(mhtml_data));
+  base::Time creation_time =
+      ParseArchiveTime(base::span_with_nul_from_cstring(mhtml_data));
   EXPECT_EQ(base::Time(), creation_time);
 }
 

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,7 +19,6 @@
 #include <type_traits>
 #include <utility>
 
-#include "base/macros.h"
 #include "base/time/time.h"
 
 namespace subresource_filter {
@@ -79,9 +78,13 @@ class ScopedTimerImpl {
     return *this;
   }
 
+  ScopedTimerImpl(const ScopedTimerImpl&) = delete;
+  ScopedTimerImpl& operator=(const ScopedTimerImpl&) = delete;
+
   ~ScopedTimerImpl() {
-    if (activated_)
+    if (activated_) {
       export_functor_(TimeProvider::Now() - construction_time_);
+    }
   }
 
  private:
@@ -91,8 +94,6 @@ class ScopedTimerImpl {
   ExportFunctor export_functor_;
   TimeType construction_time_;
   bool activated_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(ScopedTimerImpl);
 };
 
 // TimeProvider implementations ------------------------------------------------

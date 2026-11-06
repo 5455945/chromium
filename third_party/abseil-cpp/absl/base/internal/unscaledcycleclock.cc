@@ -14,6 +14,9 @@
 
 #include "absl/base/internal/unscaledcycleclock.h"
 
+#include "absl/base/config.h"
+#include "absl/base/internal/unscaledcycleclock_config.h"
+
 #if ABSL_USE_UNSCALED_CYCLECLOCK
 
 #if defined(_WIN32)
@@ -24,8 +27,13 @@
 #ifdef __GLIBC__
 #include <sys/platform/ppc.h>
 #elif defined(__FreeBSD__)
-#include <sys/sysctl.h>
+// clang-format off
+// This order does actually matter =(.
 #include <sys/types.h>
+#include <sys/sysctl.h>
+// clang-format on
+
+#include "absl/base/call_once.h"
 #endif
 #endif
 
@@ -49,12 +57,6 @@ double UnscaledCycleClock::Frequency() {
 
 #elif defined(__x86_64__)
 
-int64_t UnscaledCycleClock::Now() {
-  uint64_t low, high;
-  __asm__ volatile("rdtsc" : "=a"(low), "=d"(high));
-  return (high << 32) | low;
-}
-
 double UnscaledCycleClock::Frequency() {
   return base_internal::NominalCPUFrequency();
 }
@@ -63,7 +65,7 @@ double UnscaledCycleClock::Frequency() {
 
 int64_t UnscaledCycleClock::Now() {
 #ifdef __GLIBC__
-  return __ppc_get_timebase();
+  return static_cast<int64_t>(__ppc_get_timebase());
 #else
 #ifdef __powerpc64__
   int64_t tbr;
@@ -72,13 +74,12 @@ int64_t UnscaledCycleClock::Now() {
 #else
   int32_t tbu, tbl, tmp;
   asm volatile(
-      "0:\n"
       "mftbu %[hi32]\n"
       "mftb %[lo32]\n"
       "mftbu %[tmp]\n"
       "cmpw %[tmp],%[hi32]\n"
-      "bne 0b\n"
-      : [ hi32 ] "=r"(tbu), [ lo32 ] "=r"(tbl), [ tmp ] "=r"(tmp));
+      "bne $-16\n"  // Retry on failure.
+      : [hi32] "=r"(tbu), [lo32] "=r"(tbl), [tmp] "=r"(tmp));
   return (static_cast<int64_t>(tbu) << 32) | tbl;
 #endif
 #endif
@@ -87,13 +88,24 @@ int64_t UnscaledCycleClock::Now() {
 double UnscaledCycleClock::Frequency() {
 #ifdef __GLIBC__
   return __ppc_get_timebase_freq();
+#elif defined(__linux__)
+  // Fallback for musl + ppc64le: use constant timebase frequency (512 MHz)
+  // Must come after __GLIBC__.
+  return static_cast<double>(512000000);
+#elif defined(_AIX)
+  // This is the same constant value as returned by
+  // __ppc_get_timebase_freq().
+  return static_cast<double>(512000000);
 #elif defined(__FreeBSD__)
   static once_flag init_timebase_frequency_once;
   static double timebase_frequency = 0.0;
   base_internal::LowLevelCallOnce(&init_timebase_frequency_once, [&]() {
-    size_t length = sizeof(timebase_frequency);
-    sysctlbyname("kern.timecounter.tc.timebase.frequency", &timebase_frequency,
-                 &length, nullptr, 0);
+    uint64_t freq = 0;
+    size_t length = sizeof(freq);
+    if (sysctlbyname("kern.timecounter.tc.timebase.frequency", &freq, &length,
+                     nullptr, 0) == 0) {
+      timebase_frequency = static_cast<double>(freq);
+    }
   });
   return timebase_frequency;
 #else
@@ -102,16 +114,6 @@ double UnscaledCycleClock::Frequency() {
 }
 
 #elif defined(__aarch64__)
-
-// System timer of ARMv8 runs at a different frequency than the CPU's.
-// The frequency is fixed, typically in the range 1-50MHz.  It can be
-// read at CNTFRQ special register.  We assume the OS has set up
-// the virtual timer properly.
-int64_t UnscaledCycleClock::Now() {
-  int64_t virtual_timer_value;
-  asm volatile("mrs %0, cntvct_el0" : "=r"(virtual_timer_value));
-  return virtual_timer_value;
-}
 
 double UnscaledCycleClock::Frequency() {
   uint64_t aarch64_timer_frequency;

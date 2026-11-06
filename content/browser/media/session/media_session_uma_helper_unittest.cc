@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,10 +11,10 @@
 
 namespace content {
 
-using MediaSessionSuspendedSource =
-    MediaSessionUmaHelper::MediaSessionSuspendedSource;
-
 namespace {
+
+const char kPictureInPictureTotalTimeForSessionHistogram[] =
+    "Media.Session.PictureInPicture.TotalTimeForSession";
 
 class MediaSessionUmaHelperTest : public testing::Test {
  public:
@@ -52,70 +52,14 @@ TEST_F(MediaSessionUmaHelperTest, CreateAndKillDoesNothing) {
 
   {
     std::unique_ptr<base::HistogramSamples> samples(
-        GetHistogramSamplesSinceTestStart("Media.Session.Suspended"));
-    EXPECT_EQ(0, samples->TotalCount());
-  }
-
-  {
-    std::unique_ptr<base::HistogramSamples> samples(
         GetHistogramSamplesSinceTestStart("Media.Session.ActiveTime"));
     EXPECT_EQ(0, samples->TotalCount());
   }
 }
 
-TEST_F(MediaSessionUmaHelperTest, SuspendRegisterImmediately) {
-  media_session_uma_helper().RecordSessionSuspended(
-      MediaSessionSuspendedSource::kSystemTransient);
-
-  std::unique_ptr<base::HistogramSamples> samples(
-      GetHistogramSamplesSinceTestStart("Media.Session.Suspended"));
-  EXPECT_EQ(1, samples->TotalCount());
-  EXPECT_EQ(1, samples->GetCount(0)); // System Transient
-  EXPECT_EQ(0, samples->GetCount(1)); // System Permanent
-  EXPECT_EQ(0, samples->GetCount(2)); // UI
-}
-
-TEST_F(MediaSessionUmaHelperTest, MultipleSuspend) {
-  media_session_uma_helper().RecordSessionSuspended(
-      MediaSessionSuspendedSource::kSystemTransient);
-  media_session_uma_helper().RecordSessionSuspended(
-      MediaSessionSuspendedSource::kSystemPermanent);
-  media_session_uma_helper().RecordSessionSuspended(
-      MediaSessionSuspendedSource::kUI);
-
-  std::unique_ptr<base::HistogramSamples> samples(
-      GetHistogramSamplesSinceTestStart("Media.Session.Suspended"));
-  EXPECT_EQ(3, samples->TotalCount());
-  EXPECT_EQ(1, samples->GetCount(0)); // System Transient
-  EXPECT_EQ(1, samples->GetCount(1)); // System Permanent
-  EXPECT_EQ(1, samples->GetCount(2)); // UI
-}
-
-TEST_F(MediaSessionUmaHelperTest, MultipleSuspendSame) {
-  media_session_uma_helper().RecordSessionSuspended(
-      MediaSessionSuspendedSource::kSystemPermanent);
-  media_session_uma_helper().RecordSessionSuspended(
-      MediaSessionSuspendedSource::kSystemTransient);
-  media_session_uma_helper().RecordSessionSuspended(
-      MediaSessionSuspendedSource::kUI);
-  media_session_uma_helper().RecordSessionSuspended(
-      MediaSessionSuspendedSource::kSystemTransient);
-  media_session_uma_helper().RecordSessionSuspended(
-      MediaSessionSuspendedSource::kSystemPermanent);
-  media_session_uma_helper().RecordSessionSuspended(
-      MediaSessionSuspendedSource::kUI);
-
-  std::unique_ptr<base::HistogramSamples> samples(
-      GetHistogramSamplesSinceTestStart("Media.Session.Suspended"));
-  EXPECT_EQ(6, samples->TotalCount());
-  EXPECT_EQ(2, samples->GetCount(0)); // System Transient
-  EXPECT_EQ(2, samples->GetCount(1)); // System Permanent
-  EXPECT_EQ(2, samples->GetCount(2)); // UI
-}
-
 TEST_F(MediaSessionUmaHelperTest, ActivationNotTerminatedDoesNotCommit) {
   media_session_uma_helper().OnSessionActive();
-  clock()->Advance(base::TimeDelta::FromMilliseconds(1000));
+  clock()->Advance(base::Milliseconds(1000));
 
   std::unique_ptr<base::HistogramSamples> samples(
       GetHistogramSamplesSinceTestStart("Media.Session.ActiveTime"));
@@ -125,7 +69,7 @@ TEST_F(MediaSessionUmaHelperTest, ActivationNotTerminatedDoesNotCommit) {
 TEST_F(MediaSessionUmaHelperTest, SuspendActivationNotTerminatedDoesNotCommit) {
   media_session_uma_helper().OnSessionActive();
 
-  clock()->Advance(base::TimeDelta::FromMilliseconds(1000));
+  clock()->Advance(base::Milliseconds(1000));
   media_session_uma_helper().OnSessionSuspended();
 
   std::unique_ptr<base::HistogramSamples> samples(
@@ -136,7 +80,7 @@ TEST_F(MediaSessionUmaHelperTest, SuspendActivationNotTerminatedDoesNotCommit) {
 TEST_F(MediaSessionUmaHelperTest, FullActivation) {
   media_session_uma_helper().OnSessionActive();
 
-  clock()->Advance(base::TimeDelta::FromMilliseconds(1000));
+  clock()->Advance(base::Milliseconds(1000));
   media_session_uma_helper().OnSessionInactive();
 
   std::unique_ptr<base::HistogramSamples> samples(
@@ -148,13 +92,13 @@ TEST_F(MediaSessionUmaHelperTest, FullActivation) {
 TEST_F(MediaSessionUmaHelperTest, ActivationCycleWithSuspend) {
   media_session_uma_helper().OnSessionActive();
 
-  clock()->Advance(base::TimeDelta::FromMilliseconds(1000));
+  clock()->Advance(base::Milliseconds(1000));
   media_session_uma_helper().OnSessionSuspended();
 
-  clock()->Advance(base::TimeDelta::FromMilliseconds(2000));
+  clock()->Advance(base::Milliseconds(2000));
   media_session_uma_helper().OnSessionActive();
 
-  clock()->Advance(base::TimeDelta::FromMilliseconds(1000));
+  clock()->Advance(base::Milliseconds(1000));
   media_session_uma_helper().OnSessionInactive();
 
   std::unique_ptr<base::HistogramSamples> samples(
@@ -166,19 +110,19 @@ TEST_F(MediaSessionUmaHelperTest, ActivationCycleWithSuspend) {
 TEST_F(MediaSessionUmaHelperTest, ActivationCycleWithMultipleSuspend) {
   media_session_uma_helper().OnSessionActive();
 
-  clock()->Advance(base::TimeDelta::FromMilliseconds(1000));
+  clock()->Advance(base::Milliseconds(1000));
   media_session_uma_helper().OnSessionSuspended();
 
-  clock()->Advance(base::TimeDelta::FromMilliseconds(2000));
+  clock()->Advance(base::Milliseconds(2000));
   media_session_uma_helper().OnSessionActive();
 
-  clock()->Advance(base::TimeDelta::FromMilliseconds(1000));
+  clock()->Advance(base::Milliseconds(1000));
   media_session_uma_helper().OnSessionSuspended();
 
-  clock()->Advance(base::TimeDelta::FromMilliseconds(2000));
+  clock()->Advance(base::Milliseconds(2000));
   media_session_uma_helper().OnSessionActive();
 
-  clock()->Advance(base::TimeDelta::FromMilliseconds(1000));
+  clock()->Advance(base::Milliseconds(1000));
   media_session_uma_helper().OnSessionInactive();
 
   std::unique_ptr<base::HistogramSamples> samples(
@@ -190,30 +134,30 @@ TEST_F(MediaSessionUmaHelperTest, ActivationCycleWithMultipleSuspend) {
 TEST_F(MediaSessionUmaHelperTest, MultipleActivations) {
   media_session_uma_helper().OnSessionActive();
 
-  clock()->Advance(base::TimeDelta::FromMilliseconds(1000));
+  clock()->Advance(base::Milliseconds(1000));
   media_session_uma_helper().OnSessionSuspended();
 
-  clock()->Advance(base::TimeDelta::FromMilliseconds(2000));
+  clock()->Advance(base::Milliseconds(2000));
   media_session_uma_helper().OnSessionActive();
 
-  clock()->Advance(base::TimeDelta::FromMilliseconds(1000));
+  clock()->Advance(base::Milliseconds(1000));
   media_session_uma_helper().OnSessionInactive();
 
   media_session_uma_helper().OnSessionActive();
 
-  clock()->Advance(base::TimeDelta::FromMilliseconds(1000));
+  clock()->Advance(base::Milliseconds(1000));
   media_session_uma_helper().OnSessionSuspended();
 
-  clock()->Advance(base::TimeDelta::FromMilliseconds(2000));
+  clock()->Advance(base::Milliseconds(2000));
   media_session_uma_helper().OnSessionActive();
 
-  clock()->Advance(base::TimeDelta::FromMilliseconds(1000));
+  clock()->Advance(base::Milliseconds(1000));
   media_session_uma_helper().OnSessionSuspended();
 
-  clock()->Advance(base::TimeDelta::FromMilliseconds(2000));
+  clock()->Advance(base::Milliseconds(2000));
   media_session_uma_helper().OnSessionActive();
 
-  clock()->Advance(base::TimeDelta::FromMilliseconds(1000));
+  clock()->Advance(base::Milliseconds(1000));
   media_session_uma_helper().OnSessionInactive();
 
   std::unique_ptr<base::HistogramSamples> samples(
@@ -226,13 +170,13 @@ TEST_F(MediaSessionUmaHelperTest, MultipleActivations) {
 TEST_F(MediaSessionUmaHelperTest, MultipleActivationCalls) {
   media_session_uma_helper().OnSessionActive();
 
-  clock()->Advance(base::TimeDelta::FromMilliseconds(1000));
+  clock()->Advance(base::Milliseconds(1000));
   media_session_uma_helper().OnSessionActive();
 
-  clock()->Advance(base::TimeDelta::FromMilliseconds(2000));
+  clock()->Advance(base::Milliseconds(2000));
   media_session_uma_helper().OnSessionActive();
 
-  clock()->Advance(base::TimeDelta::FromMilliseconds(500));
+  clock()->Advance(base::Milliseconds(500));
   media_session_uma_helper().OnSessionInactive();
 
   // Calling OnSessionActive() multiple times reset the start time of the
@@ -246,13 +190,13 @@ TEST_F(MediaSessionUmaHelperTest, MultipleActivationCalls) {
 TEST_F(MediaSessionUmaHelperTest, MultipleSuspendCalls_WhileSuspended) {
   media_session_uma_helper().OnSessionActive();
 
-  clock()->Advance(base::TimeDelta::FromMilliseconds(1000));
+  clock()->Advance(base::Milliseconds(1000));
   media_session_uma_helper().OnSessionSuspended();
 
-  clock()->Advance(base::TimeDelta::FromMilliseconds(2000));
+  clock()->Advance(base::Milliseconds(2000));
   media_session_uma_helper().OnSessionSuspended();
 
-  clock()->Advance(base::TimeDelta::FromMilliseconds(500));
+  clock()->Advance(base::Milliseconds(500));
   media_session_uma_helper().OnSessionSuspended();
 
   media_session_uma_helper().OnSessionInactive();
@@ -268,13 +212,13 @@ TEST_F(MediaSessionUmaHelperTest, MultipleSuspendCalls_WhileSuspended) {
 TEST_F(MediaSessionUmaHelperTest, MultipleSuspendCalls_WhileInactive) {
   media_session_uma_helper().OnSessionActive();
 
-  clock()->Advance(base::TimeDelta::FromMilliseconds(1000));
+  clock()->Advance(base::Milliseconds(1000));
   media_session_uma_helper().OnSessionInactive();
 
-  clock()->Advance(base::TimeDelta::FromMilliseconds(2000));
+  clock()->Advance(base::Milliseconds(2000));
   media_session_uma_helper().OnSessionSuspended();
 
-  clock()->Advance(base::TimeDelta::FromMilliseconds(500));
+  clock()->Advance(base::Milliseconds(500));
   media_session_uma_helper().OnSessionSuspended();
 
   media_session_uma_helper().OnSessionInactive();
@@ -290,13 +234,13 @@ TEST_F(MediaSessionUmaHelperTest, MultipleSuspendCalls_WhileInactive) {
 TEST_F(MediaSessionUmaHelperTest, MultipleInactiveCalls) {
   media_session_uma_helper().OnSessionActive();
 
-  clock()->Advance(base::TimeDelta::FromMilliseconds(3000));
+  clock()->Advance(base::Milliseconds(3000));
   media_session_uma_helper().OnSessionInactive();
 
-  clock()->Advance(base::TimeDelta::FromMilliseconds(2000));
+  clock()->Advance(base::Milliseconds(2000));
   media_session_uma_helper().OnSessionInactive();
 
-  clock()->Advance(base::TimeDelta::FromMilliseconds(500));
+  clock()->Advance(base::Milliseconds(500));
   media_session_uma_helper().OnSessionInactive();
 
   // If the session is already inactive, OnSessionInactive() calls are ignored.
@@ -304,6 +248,106 @@ TEST_F(MediaSessionUmaHelperTest, MultipleInactiveCalls) {
       GetHistogramSamplesSinceTestStart("Media.Session.ActiveTime"));
   EXPECT_EQ(1, samples->TotalCount());
   EXPECT_EQ(1, samples->GetCount(3000));
+}
+
+TEST_F(MediaSessionUmaHelperTest,
+       OnServiceDestroyedWithoutTotalTimeDoesNotCommit) {
+  media_session_uma_helper().OnServiceDestroyed();
+  clock()->Advance(base::Milliseconds(1000));
+
+  std::unique_ptr<base::HistogramSamples> samples(
+      GetHistogramSamplesSinceTestStart(
+          kPictureInPictureTotalTimeForSessionHistogram));
+  EXPECT_EQ(0, samples->TotalCount());
+}
+
+TEST_F(MediaSessionUmaHelperTest,
+       EnterAndClosePipMultipleTimes_DoesCommitTotalPipTime) {
+  media_session_uma_helper().OnMediaPictureInPictureChanged(true);
+
+  clock()->Advance(base::Milliseconds(4000));
+  media_session_uma_helper().OnMediaPictureInPictureChanged(false);
+
+  media_session_uma_helper().OnMediaPictureInPictureChanged(true);
+  clock()->Advance(base::Milliseconds(3000));
+  media_session_uma_helper().OnMediaPictureInPictureChanged(false);
+
+  media_session_uma_helper().OnMediaPictureInPictureChanged(true);
+  clock()->Advance(base::Milliseconds(2000));
+  media_session_uma_helper().OnMediaPictureInPictureChanged(false);
+  media_session_uma_helper().OnServiceDestroyed();
+
+  std::unique_ptr<base::HistogramSamples> samples(
+      GetHistogramSamplesSinceTestStart(
+          kPictureInPictureTotalTimeForSessionHistogram));
+  EXPECT_EQ(1, samples->TotalCount());
+  EXPECT_EQ(1, samples->GetCount(9000));
+}
+
+TEST_F(MediaSessionUmaHelperTest, EnterAndClosePip_DoesCommitTotalPipTime) {
+  media_session_uma_helper().OnMediaPictureInPictureChanged(true);
+
+  clock()->Advance(base::Milliseconds(3000));
+  media_session_uma_helper().OnMediaPictureInPictureChanged(false);
+  media_session_uma_helper().OnServiceDestroyed();
+
+  std::unique_ptr<base::HistogramSamples> samples(
+      GetHistogramSamplesSinceTestStart(
+          kPictureInPictureTotalTimeForSessionHistogram));
+  EXPECT_EQ(1, samples->TotalCount());
+  EXPECT_EQ(1, samples->GetCount(3000));
+}
+
+TEST_F(MediaSessionUmaHelperTest,
+       EnterAndRepeatedlyClosePip_DoesCommitTotalPipTime) {
+  media_session_uma_helper().OnMediaPictureInPictureChanged(true);
+
+  clock()->Advance(base::Milliseconds(3000));
+  media_session_uma_helper().OnMediaPictureInPictureChanged(false);
+  clock()->Advance(base::Milliseconds(2000));
+  media_session_uma_helper().OnMediaPictureInPictureChanged(false);
+  media_session_uma_helper().OnServiceDestroyed();
+
+  std::unique_ptr<base::HistogramSamples> samples(
+      GetHistogramSamplesSinceTestStart(
+          kPictureInPictureTotalTimeForSessionHistogram));
+  EXPECT_EQ(1, samples->TotalCount());
+  EXPECT_EQ(1, samples->GetCount(3000));
+}
+
+TEST_F(MediaSessionUmaHelperTest,
+       CloseAndRepeatedlyEnterPip_DoesNotCommitTotalPipTime) {
+  media_session_uma_helper().OnMediaPictureInPictureChanged(false);
+
+  clock()->Advance(base::Milliseconds(3000));
+  media_session_uma_helper().OnMediaPictureInPictureChanged(true);
+  clock()->Advance(base::Milliseconds(2000));
+  media_session_uma_helper().OnMediaPictureInPictureChanged(true);
+  media_session_uma_helper().OnServiceDestroyed();
+
+  std::unique_ptr<base::HistogramSamples> samples(
+      GetHistogramSamplesSinceTestStart(
+          kPictureInPictureTotalTimeForSessionHistogram));
+  EXPECT_EQ(0, samples->TotalCount());
+}
+
+TEST_F(MediaSessionUmaHelperTest,
+       CloseRepeatedlyEnterThenClosePip_DoesCommitTotalPipTime) {
+  media_session_uma_helper().OnMediaPictureInPictureChanged(false);
+
+  clock()->Advance(base::Milliseconds(3000));
+  media_session_uma_helper().OnMediaPictureInPictureChanged(true);
+  clock()->Advance(base::Milliseconds(2000));
+  media_session_uma_helper().OnMediaPictureInPictureChanged(true);
+  clock()->Advance(base::Milliseconds(1000));
+  media_session_uma_helper().OnMediaPictureInPictureChanged(false);
+  media_session_uma_helper().OnServiceDestroyed();
+
+  std::unique_ptr<base::HistogramSamples> samples(
+      GetHistogramSamplesSinceTestStart(
+          kPictureInPictureTotalTimeForSessionHistogram));
+  EXPECT_EQ(1, samples->TotalCount());
+  EXPECT_EQ(1, samples->GetCount(1000));
 }
 
 }  // namespace content

@@ -1,16 +1,17 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/css/cssom/declared_style_property_map.h"
 
-#include "third_party/blink/renderer/core/css/css_custom_property_declaration.h"
+#include "third_party/blink/renderer/core/css/css_private_rule.h"
 #include "third_party/blink/renderer/core/css/css_property_value_set.h"
 #include "third_party/blink/renderer/core/css/css_style_rule.h"
 #include "third_party/blink/renderer/core/css/css_style_sheet.h"
-#include "third_party/blink/renderer/core/css/css_variable_reference_value.h"
+#include "third_party/blink/renderer/core/css/css_unparsed_declaration_value.h"
 #include "third_party/blink/renderer/core/css/style_property_serializer.h"
 #include "third_party/blink/renderer/core/css/style_rule.h"
+#include "third_party/blink/renderer/core/css/style_sheet_contents.h"
 
 namespace blink {
 
@@ -18,31 +19,47 @@ DeclaredStylePropertyMap::DeclaredStylePropertyMap(CSSStyleRule* owner_rule)
     : StylePropertyMap(), owner_rule_(owner_rule) {}
 
 unsigned int DeclaredStylePropertyMap::size() const {
-  if (!GetStyleRule())
+  if (!GetStyleRule()) {
     return 0;
+  }
   return GetStyleRule()->Properties().PropertyCount();
+}
+
+bool DeclaredStylePropertyMap::IsPropertyValid(
+    CSSPropertyID property_id) const {
+  return !GetPrivateRule() || property_id == CSSPropertyID::kVariable;
 }
 
 const CSSValue* DeclaredStylePropertyMap::GetProperty(
     CSSPropertyID property_id) const {
-  if (!GetStyleRule())
+  if (!GetStyleRule()) {
     return nullptr;
+  }
   return GetStyleRule()->Properties().GetPropertyCSSValue(property_id);
 }
 
 const CSSValue* DeclaredStylePropertyMap::GetCustomProperty(
-    AtomicString property_name) const {
-  if (!GetStyleRule())
+    const AtomicString& property_name) const {
+  if (!GetStyleRule()) {
     return nullptr;
-  return GetStyleRule()->Properties().GetPropertyCSSValue(property_name);
+  }
+  AtomicString hygienic_name = property_name;
+  if (CSSPrivateRule* private_rule = GetPrivateRule()) {
+    hygienic_name =
+        private_rule->AuthoredToHygienicCustomPropertyName(property_name);
+  }
+  return GetStyleRule()->Properties().GetPropertyCSSValue(hygienic_name);
 }
 
 void DeclaredStylePropertyMap::SetProperty(CSSPropertyID property_id,
                                            const CSSValue& value) {
-  if (!GetStyleRule())
+  DCHECK_NE(property_id, CSSPropertyID::kVariable);
+  if (!GetStyleRule()) {
     return;
+  }
   CSSStyleSheet::RuleMutationScope mutation_scope(owner_rule_);
   GetStyleRule()->MutableProperties().SetProperty(property_id, value);
+  NotifyRuleMutation();
 }
 
 bool DeclaredStylePropertyMap::SetShorthandProperty(
@@ -51,62 +68,94 @@ bool DeclaredStylePropertyMap::SetShorthandProperty(
     SecureContextMode secure_context_mode) {
   DCHECK(CSSProperty::Get(property_id).IsShorthand());
   CSSStyleSheet::RuleMutationScope mutation_scope(owner_rule_);
-  const auto result = GetStyleRule()->MutableProperties().SetProperty(
-      property_id, value, false /* important */, secure_context_mode);
-  return result.did_parse;
+  CSSStyleSheet* parent_sheet = owner_rule_->parentStyleSheet();
+  const auto result = GetStyleRule()->MutableProperties().ParseAndSetProperty(
+      property_id, value, false /* important */, secure_context_mode,
+      parent_sheet ? parent_sheet->Contents() : nullptr);
+  NotifyRuleMutation();
+  return result != MutableCSSPropertyValueSet::kParseError;
 }
 
 void DeclaredStylePropertyMap::SetCustomProperty(
     const AtomicString& property_name,
     const CSSValue& value) {
-  if (!GetStyleRule())
+  if (!GetStyleRule()) {
     return;
+  }
   CSSStyleSheet::RuleMutationScope mutation_scope(owner_rule_);
 
-  auto* variable_data =
-      To<CSSVariableReferenceValue>(value).VariableDataValue();
+  const auto& variable_value = To<CSSUnparsedDeclarationValue>(value);
+  CSSVariableData* variable_data = variable_value.VariableDataValue();
+  AtomicString hygienic_name = property_name;
+  if (CSSPrivateRule* private_rule = GetPrivateRule()) {
+    hygienic_name =
+        private_rule->EnsureCustomPropertyNameForHygienic(property_name);
+  }
   GetStyleRule()->MutableProperties().SetProperty(
-      CSSPropertyID::kVariable,
-      *MakeGarbageCollected<CSSCustomPropertyDeclaration>(property_name,
-                                                          variable_data));
+      CSSPropertyName(hygienic_name),
+      *MakeGarbageCollected<CSSUnparsedDeclarationValue>(
+          variable_data, variable_value.ParserContext()));
+  NotifyRuleMutation();
 }
 
 void DeclaredStylePropertyMap::RemoveProperty(CSSPropertyID property_id) {
-  if (!GetStyleRule())
+  if (!GetStyleRule()) {
     return;
+  }
   CSSStyleSheet::RuleMutationScope mutation_scope(owner_rule_);
   GetStyleRule()->MutableProperties().RemoveProperty(property_id);
+  NotifyRuleMutation();
 }
 
 void DeclaredStylePropertyMap::RemoveCustomProperty(
     const AtomicString& property_name) {
-  if (!GetStyleRule())
+  if (!GetStyleRule()) {
     return;
+  }
   CSSStyleSheet::RuleMutationScope mutation_scope(owner_rule_);
-  GetStyleRule()->MutableProperties().RemoveProperty(property_name);
+  AtomicString hygienic_name = property_name;
+  if (CSSPrivateRule* private_rule = GetPrivateRule()) {
+    hygienic_name =
+        private_rule->AuthoredToHygienicCustomPropertyName(property_name);
+  }
+  GetStyleRule()->MutableProperties().RemoveProperty(hygienic_name);
+  NotifyRuleMutation();
 }
 
 void DeclaredStylePropertyMap::RemoveAllProperties() {
-  if (!GetStyleRule())
+  if (!GetStyleRule()) {
     return;
+  }
   CSSStyleSheet::RuleMutationScope mutation_scope(owner_rule_);
   GetStyleRule()->MutableProperties().Clear();
+  NotifyRuleMutation();
 }
 
-void DeclaredStylePropertyMap::ForEachProperty(
-    const IterationCallback& callback) {
-  if (!GetStyleRule())
+void DeclaredStylePropertyMap::ForEachProperty(IterationFunction visitor) {
+  if (!GetStyleRule()) {
     return;
+  }
   const CSSPropertyValueSet& declared_style_set = GetStyleRule()->Properties();
-  for (unsigned i = 0; i < declared_style_set.PropertyCount(); i++) {
-    const auto& property_reference = declared_style_set.PropertyAt(i);
-    callback(property_reference.Name(), property_reference.Value());
+  for (const CSSPropertyValue& property_reference :
+       declared_style_set.Properties()) {
+    CSSPropertyName name = property_reference.Name();
+    if (CSSPrivateRule* private_rule = GetPrivateRule();
+        name.IsCustomProperty() && private_rule) {
+      name = CSSPropertyName(private_rule->HygienicToAuthoredCustomPropertyName(
+          name.ToAtomicString()));
+    }
+    visitor(name, property_reference.Value());
   }
 }
 
+CSSPrivateRule* DeclaredStylePropertyMap::GetPrivateRule() const {
+  return DynamicTo<CSSPrivateRule>(owner_rule_.Get());
+}
+
 StyleRule* DeclaredStylePropertyMap::GetStyleRule() const {
-  if (!owner_rule_)
+  if (!owner_rule_) {
     return nullptr;
+  }
   return owner_rule_->GetStyleRule();
 }
 
@@ -119,6 +168,16 @@ String DeclaredStylePropertyMap::SerializationForShorthand(
   }
 
   return "";
+}
+
+void DeclaredStylePropertyMap::NotifyRuleMutation() {
+  // Similar to StyleRuleCSSStyleDeclaration::DidMutate(),
+  // except that owner_rule_ can never be anything but a CSSStyleRule.
+  if (owner_rule_ && owner_rule_->parentStyleSheet()) {
+    StyleSheetContents* parent_contents =
+        owner_rule_->parentStyleSheet()->Contents();
+    parent_contents->NotifyRuleChanged(GetStyleRule());
+  }
 }
 
 }  // namespace blink

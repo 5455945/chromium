@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,16 +10,12 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "base/debug/activity_tracker.h"
-#include "base/files/file_util.h"
 #include "base/logging.h"
-#include "base/macros.h"
+#include "base/memory/self_deleting.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/process/process_iterator.h"
-#include "base/task/post_task.h"
 #include "base/threading/platform_thread.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 
 namespace base {
 
@@ -31,8 +27,8 @@ TerminationStatus GetTerminationStatusImpl(ProcessHandle handle,
   DCHECK(exit_code);
 
   int status = 0;
-  const pid_t result = HANDLE_EINTR(waitpid(handle, &status,
-                                            can_block ? 0 : WNOHANG));
+  const pid_t result =
+      HANDLE_EINTR(waitpid(handle, &status, can_block ? 0 : WNOHANG));
   if (result == -1) {
     DPLOG(ERROR) << "waitpid(" << handle << ")";
     *exit_code = 0;
@@ -57,7 +53,7 @@ TerminationStatus GetTerminationStatusImpl(ProcessHandle handle,
       case SIGSYS:
         return TERMINATION_STATUS_PROCESS_CRASHED;
       case SIGKILL:
-#if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_CHROMEOS)
         // On ChromeOS, only way a process gets kill by SIGKILL
         // is by oom-killer.
         return TERMINATION_STATUS_PROCESS_WAS_KILLED_BY_OOM;
@@ -70,8 +66,9 @@ TerminationStatus GetTerminationStatusImpl(ProcessHandle handle,
     }
   }
 
-  if (WIFEXITED(status) && WEXITSTATUS(status) != 0)
+  if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
     return TERMINATION_STATUS_ABNORMAL_TERMINATION;
+  }
 
   return TERMINATION_STATUS_NORMAL_TERMINATION;
 }
@@ -86,13 +83,13 @@ TerminationStatus GetKnownDeadTerminationStatus(ProcessHandle handle,
                                                 int* exit_code) {
   bool result = kill(handle, SIGKILL) == 0;
 
-  if (!result)
+  if (!result) {
     DPLOG(ERROR) << "Unable to terminate process " << handle;
+  }
 
   return GetTerminationStatusImpl(handle, true /* can_block */, exit_code);
 }
 
-#if !defined(OS_NACL_NONSFI)
 bool WaitForProcessesToExit(const FilePath::StringType& executable_name,
                             TimeDelta wait,
                             const ProcessFilter* filter) {
@@ -108,8 +105,8 @@ bool WaitForProcessesToExit(const FilePath::StringType& executable_name,
       result = true;
       break;
     }
-    PlatformThread::Sleep(TimeDelta::FromMilliseconds(100));
-  } while ((end_time - TimeTicks::Now()) > TimeDelta());
+    PlatformThread::Sleep(Milliseconds(100));
+  } while ((end_time - TimeTicks::Now()).is_positive());
 
   return result;
 }
@@ -119,20 +116,29 @@ bool CleanupProcesses(const FilePath::StringType& executable_name,
                       int exit_code,
                       const ProcessFilter* filter) {
   bool exited_cleanly = WaitForProcessesToExit(executable_name, wait, filter);
-  if (!exited_cleanly)
+  if (!exited_cleanly) {
     KillProcesses(executable_name, exit_code, filter);
+  }
   return exited_cleanly;
 }
 
-#if !defined(OS_APPLE)
+#if !BUILDFLAG(IS_APPLE)
 
 namespace {
 
-class BackgroundReaper : public PlatformThread::Delegate {
+class BackgroundReaper : public PlatformThread::Delegate, public SelfDeleting {
  public:
-  BackgroundReaper(base::Process child_process, const TimeDelta& wait_time)
-      : child_process_(std::move(child_process)), wait_time_(wait_time) {}
+  BackgroundReaper(Process child_process,
+                   TimeDelta wait_time,
+                   SelfDeletingPassKey key)
+      : SelfDeleting(key),
+        child_process_(std::move(child_process)),
+        wait_time_(wait_time) {}
 
+  BackgroundReaper(const BackgroundReaper&) = delete;
+  BackgroundReaper& operator=(const BackgroundReaper&) = delete;
+
+  // PlatformThread::Delegate:
   void ThreadMain() override {
     if (!wait_time_.is_zero()) {
       child_process_.WaitForExitWithTimeout(wait_time_, nullptr);
@@ -143,9 +149,11 @@ class BackgroundReaper : public PlatformThread::Delegate {
   }
 
  private:
+  // Self-deleting.
+  ~BackgroundReaper() override = default;
+
   Process child_process_;
   const TimeDelta wait_time_;
-  DISALLOW_COPY_AND_ASSIGN(BackgroundReaper);
 };
 
 }  // namespace
@@ -153,27 +161,28 @@ class BackgroundReaper : public PlatformThread::Delegate {
 void EnsureProcessTerminated(Process process) {
   DCHECK(!process.is_current());
 
-  if (process.WaitForExitWithTimeout(TimeDelta(), nullptr))
+  if (process.WaitForExitWithTimeout(TimeDelta(), nullptr)) {
     return;
+  }
 
   PlatformThread::CreateNonJoinable(
-      0, new BackgroundReaper(std::move(process), TimeDelta::FromSeconds(2)));
+      0, MakeSelfDeleting<BackgroundReaper>(std::move(process), Seconds(2)));
 }
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 void EnsureProcessGetsReaped(Process process) {
   DCHECK(!process.is_current());
 
   // If the child is already dead, then there's nothing to do.
-  if (process.WaitForExitWithTimeout(TimeDelta(), nullptr))
+  if (process.WaitForExitWithTimeout(TimeDelta(), nullptr)) {
     return;
+  }
 
   PlatformThread::CreateNonJoinable(
-      0, new BackgroundReaper(std::move(process), TimeDelta()));
+      0, MakeSelfDeleting<BackgroundReaper>(std::move(process), TimeDelta()));
 }
-#endif  // defined(OS_LINUX) || defined(OS_CHROMEOS)
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 
-#endif  // !defined(OS_APPLE)
-#endif  // !defined(OS_NACL_NONSFI)
+#endif  // !BUILDFLAG(IS_APPLE)
 
 }  // namespace base

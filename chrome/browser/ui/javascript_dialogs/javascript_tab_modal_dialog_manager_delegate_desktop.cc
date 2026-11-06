@@ -1,28 +1,33 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/javascript_dialogs/javascript_tab_modal_dialog_manager_delegate_desktop.h"
 
+#include <algorithm>
 #include <utility>
 
-#include "chrome/browser/safe_browsing/user_interaction_observer.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/tab_modal_confirm_dialog.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "components/javascript_dialogs/app_modal_dialog_manager.h"
 #include "components/javascript_dialogs/tab_modal_dialog_manager.h"
 #include "components/javascript_dialogs/tab_modal_dialog_view.h"
 #include "components/navigation_metrics/navigation_metrics.h"
-#include "components/ukm/content/source_url_recorder.h"
+#include "components/safe_browsing/buildflags.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
 #include "ui/gfx/text_elider.h"
+
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+#include "chrome/browser/safe_browsing/interstitials/user_interaction_observer.h"
+#endif
 
 JavaScriptTabModalDialogManagerDelegateDesktop::
     JavaScriptTabModalDialogManagerDelegateDesktop(
@@ -31,11 +36,14 @@ JavaScriptTabModalDialogManagerDelegateDesktop::
 
 JavaScriptTabModalDialogManagerDelegateDesktop::
     ~JavaScriptTabModalDialogManagerDelegateDesktop() {
-  DCHECK(!tab_strip_model_being_observed_);
+  CHECK(!tab_strip_model_being_observed_, base::NotFatalUntil::M162);
 }
 
 void JavaScriptTabModalDialogManagerDelegateDesktop::WillRunDialog() {
-  BrowserList::AddObserver(this);
+  browser_collection_observer_.Observe(ProfileBrowserCollection::GetForProfile(
+      Profile::FromBrowserContext(web_contents_->GetBrowserContext())));
+
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
   // SafeBrowsing Delayed Warnings experiment can delay some SafeBrowsing
   // warnings until user interaction. If the current page has a delayed warning,
   // it'll have a user interaction observer attached. Show the warning
@@ -46,46 +54,79 @@ void JavaScriptTabModalDialogManagerDelegateDesktop::WillRunDialog() {
   if (observer) {
     observer->OnJavaScriptDialog();
   }
+#endif
 }
 
 void JavaScriptTabModalDialogManagerDelegateDesktop::DidCloseDialog() {
-  BrowserList::RemoveObserver(this);
+  browser_collection_observer_.Reset();
 }
 
 void JavaScriptTabModalDialogManagerDelegateDesktop::SetTabNeedsAttention(
     bool attention) {
-  Browser* browser = chrome::FindBrowserWithWebContents(web_contents_);
+  tabs::TabInterface* tab =
+      tabs::TabInterface::MaybeGetFromContents(web_contents_);
+  if (!tab) {
+    // WebContents may be detached during tab close. See crbug.com/40727952.
+    return;
+  }
+  BrowserWindowInterface* browser = tab->GetBrowserWindowInterface();
   if (!browser) {
     // It's possible that the WebContents is no longer in the tab strip. If so,
-    // just give up. https://crbug.com/786178
+    // just give up. https://crbug.com/40550429
     return;
   }
 
-  TabStripModel* tab_strip_model = browser->tab_strip_model();
-  SetTabNeedsAttentionImpl(
-      attention, tab_strip_model,
-      tab_strip_model->GetIndexOfWebContents(web_contents_));
+  TabStripModel* tab_strip_model = browser->GetTabStripModel();
+  SetTabNeedsAttentionImpl(attention, tab_strip_model, web_contents_);
 }
 
 bool JavaScriptTabModalDialogManagerDelegateDesktop::IsWebContentsForemost() {
-  Browser* browser = BrowserList::GetInstance()->GetLastActive();
+  BrowserWindowInterface* browser =
+      GetLastActiveBrowserWindowInterfaceWithAnyProfile();
   if (!browser) {
     // It's rare, but there are crashes from where sites are trying to show
     // dialogs in the split second of time between when their Browser is gone
-    // and they're gone. In that case, bail. https://crbug.com/1142806
+    // and they're gone. In that case, bail. https://crbug.com/40727952
     return false;
   }
 
-  return browser->tab_strip_model()->GetActiveWebContents() == web_contents_;
+  // A dialog can be shown on the inactive tab of a split so check if one of the
+  // foreground tabs contains the web contents.
+  std::vector<tabs::TabInterface*> tabs =
+      browser->GetTabStripModel()->GetForegroundTabs();
+  return std::any_of(tabs.begin(), tabs.end(),
+                     [this](const tabs::TabInterface* tab) {
+                       return tab->GetContents() == web_contents_;
+                     });
 }
 
 bool JavaScriptTabModalDialogManagerDelegateDesktop::IsApp() {
-  Browser* browser = chrome::FindBrowserWithWebContents(web_contents_);
-  return browser && browser->deprecated_is_app();
+  tabs::TabInterface* tab =
+      tabs::TabInterface::MaybeGetFromContents(web_contents_);
+  if (!tab) {
+    // WebContents may be detached during tab close. See crbug.com/40727952.
+    return false;
+  }
+  BrowserWindowInterface* browser = tab->GetBrowserWindowInterface();
+  return browser &&
+         (browser->GetType() == BrowserWindowInterface::Type::TYPE_APP ||
+          browser->GetType() == BrowserWindowInterface::Type::TYPE_APP_POPUP);
 }
 
-void JavaScriptTabModalDialogManagerDelegateDesktop::OnBrowserSetLastActive(
-    Browser* browser) {
+bool JavaScriptTabModalDialogManagerDelegateDesktop::CanShowModalUI() {
+  tabs::TabInterface* tab =
+      tabs::TabInterface::MaybeGetFromContents(web_contents_);
+  return tab && tab->CanShowModalUI();
+}
+
+void JavaScriptTabModalDialogManagerDelegateDesktop::OnBrowserActivated(
+    BrowserWindowInterface* browser) {
+  javascript_dialogs::TabModalDialogManager::FromWebContents(web_contents_)
+      ->BrowserActiveStateChanged();
+}
+
+void JavaScriptTabModalDialogManagerDelegateDesktop::OnBrowserDeactivated(
+    BrowserWindowInterface* browser) {
   javascript_dialogs::TabModalDialogManager::FromWebContents(web_contents_)
       ->BrowserActiveStateChanged();
 }
@@ -100,7 +141,7 @@ void JavaScriptTabModalDialogManagerDelegateDesktop::OnTabStripModelChanged(
       // At this point, this WebContents is no longer in the tabstrip. The usual
       // teardown will not be able to turn off the attention indicator, so that
       // must be done here.
-      SetTabNeedsAttentionImpl(false, tab_strip_model, replace->index);
+      SetTabNeedsAttentionImpl(false, tab_strip_model, replace->new_contents);
 
       javascript_dialogs::TabModalDialogManager::FromWebContents(web_contents_)
           ->CloseDialogWithReason(javascript_dialogs::TabModalDialogManager::
@@ -115,8 +156,8 @@ void JavaScriptTabModalDialogManagerDelegateDesktop::OnTabStripModelChanged(
         // short term because the tab in question is being removed.
         // TODO(erikchen): Clean up TabStripModel observer API so that this
         // doesn't require re-entrancy and/or works correctly
-        // https://crbug.com/842194.
-        DCHECK(tab_strip_model_being_observed_);
+        // https://crbug.com/40575977.
+        CHECK(tab_strip_model_being_observed_, base::NotFatalUntil::M162);
         tab_strip_model_being_observed_->RemoveObserver(this);
         tab_strip_model_being_observed_ = nullptr;
         javascript_dialogs::TabModalDialogManager::FromWebContents(
@@ -132,13 +173,14 @@ void JavaScriptTabModalDialogManagerDelegateDesktop::OnTabStripModelChanged(
 void JavaScriptTabModalDialogManagerDelegateDesktop::SetTabNeedsAttentionImpl(
     bool attention,
     TabStripModel* tab_strip_model,
-    int index) {
-  tab_strip_model->SetTabNeedsAttentionAt(index, attention);
+    content::WebContents* web_contents) {
+  tab_strip_model->SetTabNeedsAttention(web_contents, attention);
   if (attention) {
     tab_strip_model->AddObserver(this);
     tab_strip_model_being_observed_ = tab_strip_model;
   } else {
-    DCHECK_EQ(tab_strip_model_being_observed_, tab_strip_model);
+    CHECK_EQ(tab_strip_model_being_observed_, tab_strip_model,
+             base::NotFatalUntil::M162);
     tab_strip_model_being_observed_->RemoveObserver(this);
     tab_strip_model_being_observed_ = nullptr;
   }

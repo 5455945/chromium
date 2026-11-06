@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,6 +12,7 @@
 #include "third_party/blink/renderer/core/input_type_names.h"
 #include "third_party/blink/renderer/modules/media_controls/media_controls_impl.h"
 #include "third_party/blink/renderer/platform/text/platform_locale.h"
+#include "ui/strings/grit/ax_strings.h"
 
 namespace blink {
 
@@ -33,8 +34,8 @@ void MediaControlMuteButtonElement::UpdateDisplayType() {
   bool muted = MediaElement().muted() || MediaElement().volume() == 0;
   setAttribute(
       html_names::kAriaLabelAttr,
-      WTF::AtomicString(GetLocale().QueryString(
-          muted ? IDS_AX_MEDIA_UNMUTE_BUTTON : IDS_AX_MEDIA_MUTE_BUTTON)));
+      AtomicString(GetLocale().QueryString(muted ? IDS_AX_MEDIA_UNMUTE_BUTTON
+                                                 : IDS_AX_MEDIA_MUTE_BUTTON)));
   SetClass("muted", muted);
   UpdateOverflowString();
 

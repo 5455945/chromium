@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,34 +7,27 @@
 #include <memory>
 
 #include "base/metrics/histogram_macros.h"
-#include "components/autofill/core/common/save_password_progress_logger.h"
-#include "components/password_manager/core/browser/browser_save_password_progress_logger.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "url/gurl.h"
-
-// Shorten the name to spare line breaks. The code provides enough context
-// already.
-typedef autofill::SavePasswordProgressLogger Logger;
 
 namespace password_manager {
 
 PasswordManagerMetricsRecorder::PasswordManagerMetricsRecorder(
-    ukm::SourceId source_id,
-    std::unique_ptr<NavigationMetricRecorderDelegate>
-        navigation_metric_recorder)
+    ukm::SourceId source_id)
     : ukm_entry_builder_(
-          std::make_unique<ukm::builders::PageWithPassword>(source_id)),
-      navigation_metric_recorder_(std::move(navigation_metric_recorder)) {}
+          std::make_unique<ukm::builders::PageWithPassword>(source_id)) {}
 
 PasswordManagerMetricsRecorder::PasswordManagerMetricsRecorder(
     PasswordManagerMetricsRecorder&& that) noexcept = default;
 
 PasswordManagerMetricsRecorder::~PasswordManagerMetricsRecorder() {
-  if (user_modified_password_field_)
+  if (user_modified_password_field_) {
     ukm_entry_builder_->SetUserModifiedPasswordField(1);
-  if (form_manager_availability_ != FormManagerAvailable::kNotSet)
+  }
+  if (form_manager_availability_ != FormManagerAvailable::kNotSet) {
     ukm_entry_builder_->SetFormManagerAvailable(
         static_cast<int64_t>(form_manager_availability_));
+  }
   ukm_entry_builder_->Record(ukm::UkmRecorder::Get());
 }
 
@@ -42,59 +35,14 @@ PasswordManagerMetricsRecorder& PasswordManagerMetricsRecorder::operator=(
     PasswordManagerMetricsRecorder&& that) = default;
 
 void PasswordManagerMetricsRecorder::RecordUserModifiedPasswordField() {
-  if (!user_modified_password_field_ && navigation_metric_recorder_) {
-    navigation_metric_recorder_->OnUserModifiedPasswordFieldFirstTime();
-  }
   user_modified_password_field_ = true;
 }
 
-void PasswordManagerMetricsRecorder::RecordUserFocusedPasswordField() {
-  if (!user_focused_password_field_ && navigation_metric_recorder_) {
-    navigation_metric_recorder_->OnUserFocusedPasswordFieldFirstTime();
-  }
-  user_focused_password_field_ = true;
-}
-
 void PasswordManagerMetricsRecorder::RecordProvisionalSaveFailure(
-    ProvisionalSaveFailure failure,
-    const GURL& main_frame_url,
-    const GURL& form_origin,
-    BrowserSavePasswordProgressLogger* logger) {
-  UMA_HISTOGRAM_ENUMERATION("PasswordManager.ProvisionalSaveFailure", failure,
+    ProvisionalSaveFailure failure) {
+  UMA_HISTOGRAM_ENUMERATION("PasswordManager.ProvisionalSaveFailure2", failure,
                             MAX_FAILURE_VALUE);
   ukm_entry_builder_->SetProvisionalSaveFailure(static_cast<int64_t>(failure));
-
-  if (logger) {
-    switch (failure) {
-      case SAVING_DISABLED:
-        logger->LogMessage(Logger::STRING_SAVING_DISABLED);
-        break;
-      case EMPTY_PASSWORD:
-        logger->LogMessage(Logger::STRING_EMPTY_PASSWORD);
-        break;
-      case MATCHING_NOT_COMPLETE:
-        logger->LogMessage(Logger::STRING_MATCHING_NOT_COMPLETE);
-        break;
-      case NO_MATCHING_FORM:
-        logger->LogMessage(Logger::STRING_NO_MATCHING_FORM);
-        break;
-      case INVALID_FORM:
-        logger->LogMessage(Logger::STRING_INVALID_FORM);
-        break;
-      case SYNC_CREDENTIAL:
-        logger->LogMessage(Logger::STRING_SYNC_CREDENTIAL);
-        break;
-      case SAVING_ON_HTTP_AFTER_HTTPS:
-        logger->LogSuccessiveOrigins(
-            Logger::STRING_BLOCK_PASSWORD_SAME_ORIGIN_INSECURE_SCHEME,
-            main_frame_url.GetOrigin(), form_origin.GetOrigin());
-        break;
-      case MAX_FAILURE_VALUE:
-        NOTREACHED();
-        return;
-    }
-    logger->LogMessage(Logger::STRING_DECISION_DROP);
-  }
 }
 
 void PasswordManagerMetricsRecorder::RecordFormManagerAvailable(

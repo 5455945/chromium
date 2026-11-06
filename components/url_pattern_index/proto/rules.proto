@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,7 +14,7 @@ enum RuleType {
 
   RULE_TYPE_COMMENT = 1;  // Comment rule.
   RULE_TYPE_URL = 2;      // Network level filtering rule based on URL pattern.
-  RULE_TYPE_CSS = 3;      // Element hiding rule based on a CSS selector.
+  RULE_TYPE_STYLE = 3;    // Element hiding rule based on a CSS selector.
 };
 
 // The format of a URL pattern.
@@ -66,10 +66,12 @@ enum ElementType {
   ELEMENT_TYPE_FONT = 1024;
   ELEMENT_TYPE_POPUP = 2048;
   ELEMENT_TYPE_WEBSOCKET = 4096;
+  ELEMENT_TYPE_WEBTRANSPORT = 8192;
+  ELEMENT_TYPE_WEBBUNDLE = 16384;
 
   // NOTE: Keep these two values consistent with the values above.
-  ELEMENT_TYPE_MAX = 4096;
-  ELEMENT_TYPE_ALL = 8191;
+  ELEMENT_TYPE_MAX = 16384;
+  ELEMENT_TYPE_ALL = 32767;
 };
 
 // The options controlling whether or not to activate filtering for subresources
@@ -141,10 +143,11 @@ message UrlRule {
   // The rule applies only to subresources of documents loaded from included
   // domains (or subdomains thereof). If the list is empty, the rule is applied
   // on documents from all domains.
-  // If |domains| is empty or has exceptions only, the rule is called generic.
+  // If `initiator_domains` is empty or only contains exceptions, the rule is
+  // called generic.
   // Otherwise is it called domain specific, i.e. applies to a limited number of
   // domains.
-  repeated DomainListItem domains = 5;
+  repeated DomainListItem initiator_domains = 5;
 
   // The format of |url_pattern|.
   optional UrlPatternType url_pattern_type = 6;
@@ -160,15 +163,19 @@ message UrlRule {
 
   // When set, the rule applies only to URLs that match |url_pattern| in a
   // case-sensitive way.
-  // Not currently implemented.
-  optional bool match_case = 9 [deprecated = true];
+  optional bool match_case = 9;
 
   // The URL pattern of the format prescribed by |url_pattern_type|.
   optional string url_pattern = 10;
+
+  // The rule applies only for requests to the included domains (or subdomains
+  // thereof). If the list is empty, the rule applies to requests to all
+  // domains.
+  repeated DomainListItem request_domains = 11;
 }
 
-// Element hiding rule based on a CSS selector. Corresponds to RULE_TYPE_CSS.
-message CssRule {
+// Element hiding rule based on a CSS selector. Corresponds to RULE_TYPE_STYLE.
+message StyleRule {
   // The semantics of the rule.
   optional RuleSemantics semantics = 1;
 
@@ -176,7 +183,12 @@ message CssRule {
   repeated DomainListItem domains = 2;
 
   // A CSS selector as specified in http://www.w3.org/TR/css3-selectors.
-  optional string css_selector = 3;
+  optional string selector = 3;
+
+  // Pre-parsed anchors for indexing. These are populated by the tools and
+  // trusted by the browser to avoid complex parsing in the browser process.
+  repeated string classes = 4;
+  repeated string ids = 5;
 }
 
 // A comment line.
@@ -192,5 +204,5 @@ message Comment {
 // A container for lists of non-comment rules collated by RuleType.
 message FilteringRules {
   repeated UrlRule url_rules = 1;
-  repeated CssRule css_rules = 2;
+  repeated StyleRule style_rules = 2;
 }

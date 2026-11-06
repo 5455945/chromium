@@ -1,68 +1,36 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 #include "components/reporting/compression/compression_module.h"
 
-#include "base/feature_list.h"
+#include <optional>
+#include <string>
+#include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
-#include "base/metrics/histogram_functions.h"
-#include "base/strings/string_piece.h"
 #include "base/task/thread_pool.h"
-#include "components/reporting/proto/record.pb.h"
+#include "components/reporting/proto/synced/record.pb.h"
+#include "components/reporting/resources/resource_manager.h"
 #include "third_party/snappy/src/snappy.h"
 
 namespace reporting {
 
-// TODO(b/189130411): Make this feature default enabled once it has been fully
-// tested and available for launch.
-const base::Feature kCompressReportingPipeline{
-    CompressionModule::kCompressReportingFeature,
-    base::FEATURE_DISABLED_BY_DEFAULT};
-
-// static
-const char CompressionModule::kCompressReportingFeature[] =
-    "CompressReportingPipeline";
-
-namespace {
-
-constexpr char kCompressionThresholdCountMetricsName[] =
-    "Enterprise.CloudReportingCompressionThresholdCount";
-
-enum class CompressedRecordThresholdMetricEvent {
-  kNotCompressed = 0,
-  kCompressed = 1,
-  kMaxValue = kCompressed
-};
-
-constexpr char kSnappyUncompressedRecordSizeMetricsName[] =
-    "Enterprise.CloudReportingSnappyUncompressedRecordSize";
-
-constexpr char kSnappyCompressedRecordSizeMetricsName[] =
-    "Enterprise.CloudReportingSnappyCompressedRecordSize";
-
-}  // namespace
-
 // static
 scoped_refptr<CompressionModule> CompressionModule::Create(
-    uint64_t compression_threshold_,
-    CompressionInformation::CompressionAlgorithm compression_type_) {
+    uint64_t compression_threshold,
+    CompressionInformation::CompressionAlgorithm compression_type) {
   return base::WrapRefCounted(
-      new CompressionModule(compression_threshold_, compression_type_));
+      new CompressionModule(compression_threshold, compression_type));
 }
 
 void CompressionModule::CompressRecord(
     std::string record,
-    base::OnceCallback<void(std::string,
-                            absl::optional<CompressionInformation>)> cb) const {
-  if (!is_enabled()) {
-    // Compression disabled, don't compress and don't return compression
-    // information.
-    std::move(cb).Run(std::move(record), absl::nullopt);
-    return;
-  }
+    scoped_refptr<ResourceManager> memory_resource,
+    base::OnceCallback<void(std::string, std::optional<CompressionInformation>)>
+        cb) const {
   // Compress if record is larger than the compression threshold and compression
   // enabled
   switch (compression_type_) {
@@ -77,10 +45,6 @@ void CompressionModule::CompressRecord(
     case CompressionInformation::COMPRESSION_SNAPPY: {
       if (record.length() < compression_threshold_) {
         // Record size is smaller than threshold, don't compress.
-        base::UmaHistogramEnumeration(
-            kCompressionThresholdCountMetricsName,
-            CompressedRecordThresholdMetricEvent::kNotCompressed);
-
         CompressionInformation compression_information;
         compression_information.set_compression_algorithm(
             CompressionInformation::COMPRESSION_NONE);
@@ -88,49 +52,52 @@ void CompressionModule::CompressRecord(
                           std::move(compression_information));
         return;
       }
-      base::UmaHistogramEnumeration(
-          kCompressionThresholdCountMetricsName,
-          CompressedRecordThresholdMetricEvent::kCompressed);
+      // Before doing compression, we must make sure there is enough memory - we
+      // are going to temporarily double the record.
+      ScopedReservation scoped_reservation(record.size(), memory_resource);
+      if (!scoped_reservation.reserved()) {
+        CompressionInformation compression_information;
+        compression_information.set_compression_algorithm(
+            CompressionInformation::COMPRESSION_NONE);
+        std::move(cb).Run(std::move(record),
+                          std::move(compression_information));
+        return;
+      }
+      // Perform compression.
       CompressionModule::CompressRecordSnappy(std::move(record), std::move(cb));
       break;
     }
   }
 }
 
-// static
-bool CompressionModule::is_enabled() {
-  return base::FeatureList::IsEnabled(kCompressReportingPipeline);
-}
-
 CompressionModule::CompressionModule(
-    uint64_t compression_threshold_,
-    CompressionInformation::CompressionAlgorithm compression_type_)
-    : compression_type_(compression_type_),
-      compression_threshold_(compression_threshold_) {}
+    uint64_t compression_threshold,
+    CompressionInformation::CompressionAlgorithm compression_type)
+    : compression_type_(compression_type),
+      compression_threshold_(compression_threshold) {}
 CompressionModule::~CompressionModule() = default;
 
 void CompressionModule::CompressRecordSnappy(
     std::string record,
-    base::OnceCallback<void(std::string,
-                            absl::optional<CompressionInformation>)> cb) const {
-  // Log record size before compression.
-  const size_t uncompressed_record_size = record.size();
-  base::UmaHistogramMemoryKB(kSnappyUncompressedRecordSizeMetricsName,
-                             uncompressed_record_size / 1024u);
-
-  // Compression is enabled and crosses the threshold,
+    base::OnceCallback<void(std::string, std::optional<CompressionInformation>)>
+        cb) const {
+  // Compression is enabled and crosses the threshold.
   std::string output;
   snappy::Compress(record.data(), record.size(), &output);
+  if (output.size() >= record.size()) {
+    // Compression increases size, discard it.
+    CompressionInformation compression_information;
+    compression_information.set_compression_algorithm(
+        CompressionInformation::COMPRESSION_NONE);
+    std::move(cb).Run(std::move(record), std::move(compression_information));
+    return;
+  }
 
-  // Log record size after compression.
-  const size_t compressed_record_size = record.size();
-  base::UmaHistogramMemoryKB(kSnappyCompressedRecordSizeMetricsName,
-                             compressed_record_size / 1024u);
-
-  // Return compressed string
+  // Compression us shorter, accept it.
+  // Return compressed string.
   CompressionInformation compression_information;
   compression_information.set_compression_algorithm(
       CompressionInformation::COMPRESSION_SNAPPY);
-  std::move(cb).Run(output, compression_information);
+  std::move(cb).Run(std::move(output), std::move(compression_information));
 }
 }  // namespace reporting

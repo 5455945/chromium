@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,14 @@
 
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check_op.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/functional/bind.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
 #include "base/trace_event/trace_event.h"
 #include "media/audio/audio_device_description.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 namespace audio {
 
@@ -30,7 +31,7 @@ int64_t ToTraceId(base::TimeTicks time) {
   return (time - base::TimeTicks()).InNanoseconds();
 }
 
-std::string ParamsToString(absl::optional<AudioParameters> params) {
+std::string ParamsToString(std::optional<AudioParameters> params) {
   return params ? params->AsHumanReadableString() : "nullopt";
 }
 
@@ -47,7 +48,7 @@ enum Action {
 
 enum StreamType { kInput, kOutput };
 
-const char* GetTraceEvent(Action action) {
+const perfetto::StaticString GetTraceEvent(Action action) {
   switch (action) {
     case kGetInputStreamParameters:
       return "AudioSystemToServiceAdapter::GetInputStreamParameters";
@@ -76,19 +77,21 @@ OnAudioParamsCallback WrapGetStreamParametersReply(
   const Action action = (stream_type == kInput) ? kGetInputStreamParameters
                                                 : kGetOutputStreamParameters;
   const base::TimeTicks start_time = base::TimeTicks::Now();
-  TRACE_EVENT_ASYNC_BEGIN1("audio", GetTraceEvent(action),
-                           ToTraceId(start_time), "device id", device_id);
+  const perfetto::StaticString name = GetTraceEvent(action);
+  TRACE_EVENT_BEGIN("audio", name,
+                    perfetto::NamedTrack(name, ToTraceId(start_time)),
+                    "device id", device_id);
 
   return base::BindOnce(
-      [](Action action, base::TimeTicks start_time,
+      [](const perfetto::StaticString name, base::TimeTicks start_time,
          OnAudioParamsCallback on_params_callback,
-         const absl::optional<media::AudioParameters>& params) {
-        TRACE_EVENT_ASYNC_END1("audio", GetTraceEvent(action),
-                               ToTraceId(start_time), "params",
-                               ParamsToString(params));
+         const std::optional<media::AudioParameters>& params) {
+        TRACE_EVENT_END("audio",
+                        perfetto::NamedTrack(name, ToTraceId(start_time)),
+                        "params", ParamsToString(params));
         std::move(on_params_callback).Run(params);
       },
-      action, start_time, std::move(on_params_callback));
+      name, start_time, std::move(on_params_callback));
 }
 
 OnBoolCallback WrapHasDevicesReply(StreamType stream_type,
@@ -96,17 +99,19 @@ OnBoolCallback WrapHasDevicesReply(StreamType stream_type,
   const Action action =
       (stream_type == kInput) ? kHasInputDevices : kHasOutputDevices;
   const base::TimeTicks start_time = base::TimeTicks::Now();
-  TRACE_EVENT_ASYNC_BEGIN0("audio", GetTraceEvent(action),
-                           ToTraceId(start_time));
+  const perfetto::StaticString name = GetTraceEvent(action);
+  TRACE_EVENT_BEGIN("audio", name,
+                    perfetto::NamedTrack(name, ToTraceId(start_time)));
 
   return base::BindOnce(
-      [](Action action, base::TimeTicks start_time,
+      [](const perfetto::StaticString name, base::TimeTicks start_time,
          OnBoolCallback on_has_devices_callback, bool answer) {
-        TRACE_EVENT_ASYNC_END1("audio", GetTraceEvent(action),
-                               ToTraceId(start_time), "answer", answer);
+        TRACE_EVENT_END("audio",
+                        perfetto::NamedTrack(name, ToTraceId(start_time)),
+                        "answer", answer);
         std::move(on_has_devices_callback).Run(answer);
       },
-      action, start_time, std::move(on_has_devices_callback));
+      name, start_time, std::move(on_has_devices_callback));
 }
 
 OnDeviceDescriptionsCallback WrapGetDeviceDescriptionsReply(
@@ -115,61 +120,71 @@ OnDeviceDescriptionsCallback WrapGetDeviceDescriptionsReply(
   const Action action = (stream_type == kInput) ? kGetInputDeviceDescriptions
                                                 : kGetOutputDeviceDescriptions;
   const base::TimeTicks start_time = base::TimeTicks::Now();
-  TRACE_EVENT_ASYNC_BEGIN0("audio", GetTraceEvent(action),
-                           ToTraceId(start_time));
+  const perfetto::StaticString name = GetTraceEvent(action);
+  TRACE_EVENT_BEGIN("audio", name,
+                    perfetto::NamedTrack(name, ToTraceId(start_time)));
 
   return base::BindOnce(
-      [](Action action, base::TimeTicks start_time,
+      [](const perfetto::StaticString name, base::TimeTicks start_time,
          OnDeviceDescriptionsCallback on_descriptions_callback,
          media::AudioDeviceDescriptions descriptions) {
-        TRACE_EVENT_ASYNC_END1("audio", GetTraceEvent(action),
-                               ToTraceId(start_time), "device count",
-                               descriptions.size());
+        TRACE_EVENT_END("audio",
+                        perfetto::NamedTrack(name, ToTraceId(start_time)),
+                        "device count", descriptions.size());
         std::move(on_descriptions_callback).Run(std::move(descriptions));
       },
-      action, start_time, std::move(on_descriptions_callback));
+      name, start_time, std::move(on_descriptions_callback));
 }
 
 OnDeviceIdCallback WrapGetAssociatedOutputDeviceIDReply(
     const std::string& input_device_id,
     OnDeviceIdCallback on_device_id_callback) {
   const base::TimeTicks start_time = base::TimeTicks::Now();
-  TRACE_EVENT_ASYNC_BEGIN1("audio", GetTraceEvent(kGetAssociatedOutputDeviceID),
-                           ToTraceId(start_time), "input_device_id",
-                           input_device_id);
+  const perfetto::StaticString name =
+      GetTraceEvent(kGetAssociatedOutputDeviceID);
+  TRACE_EVENT_BEGIN("audio", name,
+                    perfetto::NamedTrack(name, ToTraceId(start_time)),
+                    "input_device_id", input_device_id);
 
   return base::BindOnce(
-      [](base::TimeTicks start_time, OnDeviceIdCallback on_device_id_callback,
-         const absl::optional<std::string>& answer) {
-        TRACE_EVENT_ASYNC_END1(
-            "audio", GetTraceEvent(kGetAssociatedOutputDeviceID),
-            ToTraceId(start_time), "answer", answer.value_or("nullopt"));
+      [](const perfetto::StaticString name, base::TimeTicks start_time,
+         OnDeviceIdCallback on_device_id_callback,
+         const std::optional<std::string>& answer) {
+        TRACE_EVENT_END("audio",
+                        perfetto::NamedTrack(name, ToTraceId(start_time)),
+                        "answer", answer.value_or("nullopt"));
         std::move(on_device_id_callback).Run(answer);
       },
-      start_time, std::move(on_device_id_callback));
+      name, start_time, std::move(on_device_id_callback));
 }
 
 OnInputDeviceInfoCallback WrapGetInputDeviceInfoReply(
     const std::string& input_device_id,
     OnInputDeviceInfoCallback on_input_device_info_callback) {
   const base::TimeTicks start_time = base::TimeTicks::Now();
-  TRACE_EVENT_ASYNC_BEGIN1("audio", GetTraceEvent(kGetInputDeviceInfo),
-                           ToTraceId(start_time), "input_device_id",
-                           input_device_id);
+  const perfetto::StaticString name = GetTraceEvent(kGetInputDeviceInfo);
+  TRACE_EVENT_BEGIN("audio", name,
+                    perfetto::NamedTrack(name, ToTraceId(start_time)),
+                    "input_device_id", input_device_id);
 
   return base::BindOnce(
-      [](base::TimeTicks start_time,
+      [](const perfetto::StaticString name, base::TimeTicks start_time,
          OnInputDeviceInfoCallback on_input_device_info_callback,
-         const absl::optional<AudioParameters>& params,
-         const absl::optional<std::string>& associated_output_device_id) {
-        TRACE_EVENT_ASYNC_END2(
-            "audio", GetTraceEvent(kGetInputDeviceInfo), ToTraceId(start_time),
+         const std::optional<AudioParameters>& params,
+         const std::optional<std::string>& associated_output_device_id) {
+        TRACE_EVENT_END(
+            "audio", perfetto::NamedTrack(name, ToTraceId(start_time)),
             "params", ParamsToString(params), "associated_output_device_id",
             associated_output_device_id.value_or("nullopt"));
         std::move(on_input_device_info_callback)
             .Run(params, associated_output_device_id);
       },
-      start_time, std::move(on_input_device_info_callback));
+      name, start_time, std::move(on_input_device_info_callback));
+}
+
+void ReportGetDeviceDescriptionResult(bool success) {
+  base::UmaHistogramBoolean("Media.AudioSystem.GetDeviceDescription.Result",
+                            success);
 }
 
 }  // namespace
@@ -180,7 +195,7 @@ AudioSystemToServiceAdapter::AudioSystemToServiceAdapter(
     : system_info_binder_(std::move(system_info_binder)),
       disconnect_timeout_(disconnect_timeout) {
   DCHECK(system_info_binder_);
-  DETACH_FROM_THREAD(thread_checker_);
+  DETACH_FROM_SEQUENCE(sequence_checker_);
 }
 
 AudioSystemToServiceAdapter::AudioSystemToServiceAdapter(
@@ -189,11 +204,12 @@ AudioSystemToServiceAdapter::AudioSystemToServiceAdapter(
                                   base::TimeDelta()) {}
 
 AudioSystemToServiceAdapter::~AudioSystemToServiceAdapter() {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (system_info_.is_bound()) {
-    TRACE_EVENT_NESTABLE_ASYNC_END1("audio",
-                                    "AudioSystemToServiceAdapter bound", this,
-                                    "disconnect reason", "destroyed");
+    TRACE_EVENT_END("audio",
+                    perfetto::NamedTrack::FromPointer(
+                        "audio::AudioSystemToServiceAdapter", this),
+                    "disconnect reason", "destroyed");
   }
 }
 
@@ -204,7 +220,7 @@ void AudioSystemToServiceAdapter::GetInputStreamParameters(
       device_id, mojo::WrapCallbackWithDefaultInvokeIfNotRun(
                      WrapGetStreamParametersReply(
                          kInput, device_id, std::move(on_params_callback)),
-                     absl::nullopt));
+                     std::nullopt));
 }
 
 void AudioSystemToServiceAdapter::GetOutputStreamParameters(
@@ -214,7 +230,7 @@ void AudioSystemToServiceAdapter::GetOutputStreamParameters(
       device_id, mojo::WrapCallbackWithDefaultInvokeIfNotRun(
                      WrapGetStreamParametersReply(
                          kOutput, device_id, std::move(on_params_callback)),
-                     absl::nullopt));
+                     std::nullopt));
 }
 
 void AudioSystemToServiceAdapter::HasInputDevices(
@@ -232,16 +248,23 @@ void AudioSystemToServiceAdapter::HasOutputDevices(
 void AudioSystemToServiceAdapter::GetDeviceDescriptions(
     bool for_input,
     OnDeviceDescriptionsCallback on_descriptions_callback) {
+  base::OnceCallback reporting_wrapped_callback = base::BindOnce(
+      [](OnDeviceDescriptionsCallback cb, bool success,
+         media::AudioDeviceDescriptions descriptions) {
+        ReportGetDeviceDescriptionResult(success);
+        WrapCallbackWithDeviceNameLocalization(std::move(cb))
+            .Run(std::move(descriptions));
+      },
+      std::move(on_descriptions_callback));
   auto reply_callback = mojo::WrapCallbackWithDefaultInvokeIfNotRun(
-      WrapCallbackWithDeviceNameLocalization(
-          std::move(on_descriptions_callback)),
-      media::AudioDeviceDescriptions());
+      std::move(reporting_wrapped_callback),
+      /*success=*/false, media::AudioDeviceDescriptions());
   if (for_input)
-    GetSystemInfo()->GetInputDeviceDescriptions(
-        WrapGetDeviceDescriptionsReply(kInput, std::move(reply_callback)));
+    GetSystemInfo()->GetInputDeviceDescriptions(WrapGetDeviceDescriptionsReply(
+        kInput, base::BindOnce(std::move(reply_callback), /*success=*/true)));
   else
-    GetSystemInfo()->GetOutputDeviceDescriptions(
-        WrapGetDeviceDescriptionsReply(kOutput, std::move(reply_callback)));
+    GetSystemInfo()->GetOutputDeviceDescriptions(WrapGetDeviceDescriptionsReply(
+        kOutput, base::BindOnce(std::move(reply_callback), /*success=*/true)));
 }
 
 void AudioSystemToServiceAdapter::GetAssociatedOutputDeviceID(
@@ -252,7 +275,7 @@ void AudioSystemToServiceAdapter::GetAssociatedOutputDeviceID(
       mojo::WrapCallbackWithDefaultInvokeIfNotRun(
           WrapGetAssociatedOutputDeviceIDReply(
               input_device_id, std::move(on_device_id_callback)),
-          absl::nullopt));
+          std::nullopt));
 }
 
 void AudioSystemToServiceAdapter::GetInputDeviceInfo(
@@ -263,14 +286,15 @@ void AudioSystemToServiceAdapter::GetInputDeviceInfo(
       mojo::WrapCallbackWithDefaultInvokeIfNotRun(
           WrapGetInputDeviceInfoReply(input_device_id,
                                       std::move(on_input_device_info_callback)),
-          absl::nullopt, absl::nullopt));
+          std::nullopt, std::nullopt));
 }
 
 mojom::SystemInfo* AudioSystemToServiceAdapter::GetSystemInfo() {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!system_info_) {
-    TRACE_EVENT_NESTABLE_ASYNC_BEGIN0(
-        "audio", "AudioSystemToServiceAdapter bound", this);
+    TRACE_EVENT_BEGIN("audio", "AudioSystemToServiceAdapter bound",
+                      perfetto::NamedTrack::FromPointer(
+                          "audio::AudioSystemToServiceAdapter", this));
     system_info_binder_.Run(system_info_.BindNewPipeAndPassReceiver());
     system_info_.set_disconnect_handler(
         base::BindOnce(&AudioSystemToServiceAdapter::OnConnectionError,
@@ -283,10 +307,11 @@ mojom::SystemInfo* AudioSystemToServiceAdapter::GetSystemInfo() {
 }
 
 void AudioSystemToServiceAdapter::OnConnectionError() {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  TRACE_EVENT_NESTABLE_ASYNC_END1("audio", "AudioSystemToServiceAdapter bound",
-                                  this, "disconnect reason",
-                                  "connection error");
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  TRACE_EVENT_END("audio",
+                  perfetto::NamedTrack::FromPointer(
+                      "audio::AudioSystemToServiceAdapter", this),
+                  "disconnect reason", "connection error");
   system_info_.reset();
 }
 

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -29,41 +29,41 @@ namespace ash {
 using ScreenUtilTest = AshTestBase;
 
 TEST_F(ScreenUtilTest, Bounds) {
-  UpdateDisplay("600x600,500x500");
+  UpdateDisplay("700x600,600x500");
   views::Widget* primary = views::Widget::CreateWindowWithContext(
       nullptr, GetContext(), gfx::Rect(10, 10, 100, 100));
   primary->Show();
   views::Widget* secondary = views::Widget::CreateWindowWithContext(
-      nullptr, GetContext(), gfx::Rect(610, 10, 100, 100));
+      nullptr, GetContext(), gfx::Rect(710, 10, 100, 100));
   secondary->Show();
 
   // Maximized bounds.
   const int bottom_inset_first = 600 - ShelfConfig::Get()->shelf_size();
   const int bottom_inset_second = 500 - ShelfConfig::Get()->shelf_size();
   EXPECT_EQ(
-      gfx::Rect(0, 0, 600, bottom_inset_first).ToString(),
+      gfx::Rect(0, 0, 700, bottom_inset_first).ToString(),
       screen_util::GetMaximizedWindowBoundsInParent(primary->GetNativeView())
           .ToString());
   EXPECT_EQ(
-      gfx::Rect(0, 0, 500, bottom_inset_second).ToString(),
+      gfx::Rect(0, 0, 600, bottom_inset_second).ToString(),
       screen_util::GetMaximizedWindowBoundsInParent(secondary->GetNativeView())
           .ToString());
 
   // Display bounds
-  EXPECT_EQ("0,0 600x600",
+  EXPECT_EQ("0,0 700x600",
             screen_util::GetDisplayBoundsInParent(primary->GetNativeView())
                 .ToString());
-  EXPECT_EQ("0,0 500x500",
+  EXPECT_EQ("0,0 600x500",
             screen_util::GetDisplayBoundsInParent(secondary->GetNativeView())
                 .ToString());
 
   // Work area bounds
   EXPECT_EQ(
-      gfx::Rect(0, 0, 600, bottom_inset_first).ToString(),
+      gfx::Rect(0, 0, 700, bottom_inset_first).ToString(),
       screen_util::GetDisplayWorkAreaBoundsInParent(primary->GetNativeView())
           .ToString());
   EXPECT_EQ(
-      gfx::Rect(0, 0, 500, bottom_inset_second).ToString(),
+      gfx::Rect(0, 0, 600, bottom_inset_second).ToString(),
       screen_util::GetDisplayWorkAreaBoundsInParent(secondary->GetNativeView())
           .ToString());
 }
@@ -71,9 +71,9 @@ TEST_F(ScreenUtilTest, Bounds) {
 // Test verifies a stable handling of secondary screen widget changes
 // (crbug.com/226132).
 TEST_F(ScreenUtilTest, StabilityTest) {
-  UpdateDisplay("600x600,500x500");
+  UpdateDisplay("700x600,600x500");
   views::Widget* secondary = views::Widget::CreateWindowWithContext(
-      nullptr, GetContext(), gfx::Rect(610, 10, 100, 100));
+      nullptr, GetContext(), gfx::Rect(710, 10, 100, 100));
   EXPECT_EQ(Shell::GetAllRootWindows()[1],
             secondary->GetNativeView()->GetRootWindow());
   secondary->Show();
@@ -85,20 +85,20 @@ TEST_F(ScreenUtilTest, StabilityTest) {
 }
 
 TEST_F(ScreenUtilTest, ConvertRect) {
-  UpdateDisplay("600x600,500x500");
+  UpdateDisplay("700x600,600x500");
 
   views::Widget* primary = views::Widget::CreateWindowWithContext(
       nullptr, GetContext(), gfx::Rect(10, 10, 100, 100));
   primary->Show();
   views::Widget* secondary = views::Widget::CreateWindowWithContext(
-      nullptr, GetContext(), gfx::Rect(610, 10, 100, 100));
+      nullptr, GetContext(), gfx::Rect(710, 10, 100, 100));
   secondary->Show();
 
   gfx::Rect r1(10, 10, 100, 100);
   ::wm::ConvertRectFromScreen(primary->GetNativeView(), &r1);
   EXPECT_EQ("0,0 100x100", r1.ToString());
 
-  gfx::Rect r2(620, 20, 100, 100);
+  gfx::Rect r2(720, 20, 100, 100);
   ::wm::ConvertRectFromScreen(secondary->GetNativeView(), &r2);
   EXPECT_EQ("10,10 100x100", r2.ToString());
 
@@ -108,7 +108,7 @@ TEST_F(ScreenUtilTest, ConvertRect) {
 
   gfx::Rect r4(40, 40, 100, 100);
   ::wm::ConvertRectToScreen(secondary->GetNativeView(), &r4);
-  EXPECT_EQ("650,50 100x100", r4.ToString());
+  EXPECT_EQ("750,50 100x100", r4.ToString());
 }
 
 TEST_F(ScreenUtilTest, ShelfDisplayBoundsInUnifiedDesktop) {
@@ -140,18 +140,18 @@ TEST_F(ScreenUtilTest, ShelfDisplayBoundsInUnifiedDesktop) {
 }
 
 TEST_F(ScreenUtilTest, ShelfDisplayBoundsInUnifiedDesktopGrid) {
-  UpdateDisplay("500x400,400x600,300x600,200x300,600x200,350x400");
+  UpdateDisplay("500x400,400x600,300x600,300x450,600x200,350x400");
   display_manager()->SetUnifiedDesktopEnabled(true);
 
   views::Widget* widget = views::Widget::CreateWindowWithContext(
       nullptr, GetContext(), gfx::Rect(10, 10, 100, 100));
   aura::Window* window = widget->GetNativeWindow();
 
-  display::DisplayIdList list = display_manager()->GetCurrentDisplayIdList();
+  display::DisplayIdList list = display_manager()->GetConnectedDisplayIdList();
   ASSERT_EQ(6u, list.size());
   // Create a 3 x 2 vertical layout matrix and set it.
   // [500 x 400] [400 x 600]
-  // [300 x 600] [200 x 300]
+  // [300 x 600] [300 x 450]
   // [600 x 200] [350 x 400]
   display::UnifiedDesktopLayoutMatrix matrix;
   matrix.resize(3u);
@@ -162,7 +162,7 @@ TEST_F(ScreenUtilTest, ShelfDisplayBoundsInUnifiedDesktopGrid) {
   matrix[2].emplace_back(list[4]);
   matrix[2].emplace_back(list[5]);
   display_manager()->SetUnifiedDesktopMatrix(matrix);
-  display::Screen* screen = display::Screen::GetScreen();
+  display::Screen* screen = display::Screen::Get();
   EXPECT_EQ(gfx::Size(766, 1254), screen->GetPrimaryDisplay().size());
 
   Shelf* shelf = Shell::GetPrimaryRootWindowController()->shelf();
@@ -226,7 +226,7 @@ TEST_F(ScreenUtilTest, SnapBoundsToDisplayEdge) {
 
   UpdateDisplay("2400x1800*1.8/r");
   EXPECT_EQ(gfx::Size(1000, 1333),
-            display::Screen::GetScreen()->GetPrimaryDisplay().size());
+            display::Screen::Get()->GetPrimaryDisplay().size());
   bounds = gfx::Rect(950, 0, 50, 1333);
   snapped_bounds = screen_util::SnapBoundsToDisplayEdge(bounds, window);
   EXPECT_EQ(snapped_bounds, gfx::Rect(950, 0, 50, 1334));
@@ -252,8 +252,8 @@ TEST_F(ScreenUtilTest, FullscreenWindowBoundsWithDockedMagnifier) {
   EXPECT_NE(window->bounds(), kDisplayBounds);
 
   gfx::Rect expected_bounds = kDisplayBounds;
-  expected_bounds.Inset(
-      0, docked_magnifier_controller->GetTotalMagnifierHeight(), 0, 0);
+  expected_bounds.Inset(gfx::Insets().set_top(
+      docked_magnifier_controller->GetTotalMagnifierHeight()));
   EXPECT_EQ(expected_bounds, window->bounds());
 }
 

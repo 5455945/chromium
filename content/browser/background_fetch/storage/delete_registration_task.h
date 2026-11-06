@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,6 +25,9 @@ class DeleteRegistrationTask : public background_fetch::DatabaseTask {
                          const std::string& unique_id,
                          HandleBackgroundFetchErrorCallback callback);
 
+  DeleteRegistrationTask(const DeleteRegistrationTask&) = delete;
+  DeleteRegistrationTask& operator=(const DeleteRegistrationTask&) = delete;
+
   ~DeleteRegistrationTask() override;
 
   void Start() override;
@@ -43,8 +46,6 @@ class DeleteRegistrationTask : public background_fetch::DatabaseTask {
 
   void FinishWithError(blink::mojom::BackgroundFetchError error) override;
 
-  std::string HistogramName() const override;
-
   int64_t service_worker_registration_id_;
   blink::StorageKey storage_key_;
   std::string unique_id_;
@@ -52,8 +53,6 @@ class DeleteRegistrationTask : public background_fetch::DatabaseTask {
 
   base::WeakPtrFactory<DeleteRegistrationTask> weak_factory_{
       this};  // Keep as last.
-
-  DISALLOW_COPY_AND_ASSIGN(DeleteRegistrationTask);
 };
 
 }  // namespace background_fetch

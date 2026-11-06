@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,12 +20,14 @@ namespace base {
 
 constexpr char kMetricPrefixObserverList[] = "ObserverList.";
 constexpr char kMetricNotifyTimePerObserver[] = "notify_time_per_observer";
+constexpr char kMetricAddRemoveTime[] = "add_remove_time";
 
 namespace {
 
 perf_test::PerfResultReporter SetUpReporter(const std::string& story_name) {
   perf_test::PerfResultReporter reporter(kMetricPrefixObserverList, story_name);
   reporter.RegisterImportantMetric(kMetricNotifyTimePerObserver, "ns");
+  reporter.RegisterImportantMetric(kMetricAddRemoveTime, "ns");
   return reporter;
 }
 
@@ -37,7 +39,9 @@ class ObserverInterface {
   ObserverInterface(const ObserverInterface&) = delete;
   ObserverInterface& operator=(const ObserverInterface&) = delete;
   virtual ~ObserverInterface() = default;
-  virtual void Observe() const { ++g_observer_list_perf_test_counter; }
+  virtual void Observe() const {
+    g_observer_list_perf_test_counter = g_observer_list_perf_test_counter + 1;
+  }
 };
 
 class UnsafeObserver : public ObserverInterface {};
@@ -85,31 +89,42 @@ TYPED_TEST(ObserverListPerfTest, NotifyPerformance) {
 
   for (int observer_count = 0; observer_count <= kMaxObservers;
        observer_count = observer_count ? observer_count * 2 : 1) {
-    typename TestFixture::ObserverListType list;
-    for (int i = 0; i < observer_count; ++i)
-      observers.push_back(std::make_unique<TypeParam>());
-    for (auto& o : observers)
-      list.AddObserver(o.get());
-
-    for (int i = 0; i < kWarmupLaps; ++i) {
-      for (auto& o : list)
-        o.Observe();
-    }
-    g_observer_list_perf_test_counter = 0;
     const int weighted_laps = kLaps / (observer_count + 1);
+    TimeDelta duration;
+    {
+      TimeTicks start;
+      typename TestFixture::ObserverListType list;
+      for (int i = 0; i < observer_count; ++i) {
+        observers.push_back(std::make_unique<TypeParam>());
+      }
+      for (auto& o : observers) {
+        list.AddObserver(o.get());
+      }
 
-    TimeTicks start = TimeTicks::Now();
-    for (int i = 0; i < weighted_laps; ++i) {
-      for (auto& o : list)
-        o.Observe();
+      for (int i = 0; i < kWarmupLaps; ++i) {
+        for (auto& o : list) {
+          o.Observe();
+        }
+      }
+      g_observer_list_perf_test_counter = 0;
+
+      start = TimeTicks::Now();
+      for (int i = 0; i < weighted_laps; ++i) {
+        for (auto& o : list) {
+          o.Observe();
+        }
+      }
+      duration = TimeTicks::Now() - start;
     }
-    TimeDelta duration = TimeTicks::Now() - start;
 
+    // The observers are no longer needed in this iteration, so reset the list
+    // to get ready for the next iteration. Be careful. We cannot invoke
+    // `observers.clear()` before destructing the `list`. Otherwise, we will
+    // see crashes caused by dangling pointers.
     observers.clear();
 
     EXPECT_EQ(observer_count * weighted_laps,
               g_observer_list_perf_test_counter);
-    EXPECT_TRUE(observer_count == 0 || !list.empty());
 
     std::string story_name =
         base::StringPrintf("%s_%d", Pick<TypeParam>::GetName(), observer_count);
@@ -122,6 +137,53 @@ TYPED_TEST(ObserverListPerfTest, NotifyPerformance) {
         duration.InNanoseconds() /
             static_cast<double>(g_observer_list_perf_test_counter +
                                 weighted_laps));
+  }
+}
+
+// Measures adding and removing one observer while the list already holds
+// `observer_count` observers. Both operations scan the list, so the time grows
+// with the list size; long lists are common for observers of profile-scoped
+// services, which get one observer per tab.
+TYPED_TEST(ObserverListPerfTest, AddRemovePerformance) {
+  constexpr int kMaxObservers = 4096;
+#if DCHECK_IS_ON()
+  constexpr int kLaps = 2000;
+#else
+  constexpr int kLaps = 20000;
+#endif
+  constexpr int kWarmupLaps = 10;
+
+  for (int observer_count = 1; observer_count <= kMaxObservers;
+       observer_count *= 4) {
+    std::vector<std::unique_ptr<TypeParam>> observers;
+    TimeDelta duration;
+    {
+      typename TestFixture::ObserverListType list;
+      for (int i = 0; i < observer_count; ++i) {
+        observers.push_back(std::make_unique<TypeParam>());
+        list.AddObserver(observers.back().get());
+      }
+      TypeParam extra;
+      for (int i = 0; i < kWarmupLaps; ++i) {
+        list.AddObserver(&extra);
+        list.RemoveObserver(&extra);
+      }
+
+      const TimeTicks start = TimeTicks::Now();
+      for (int i = 0; i < kLaps; ++i) {
+        list.AddObserver(&extra);
+        list.RemoveObserver(&extra);
+      }
+      duration = TimeTicks::Now() - start;
+      EXPECT_FALSE(list.HasObserver(&extra));
+    }
+    observers.clear();
+
+    std::string story_name =
+        base::StringPrintf("%s_%d", Pick<TypeParam>::GetName(), observer_count);
+    auto reporter = SetUpReporter(story_name);
+    reporter.AddResult(kMetricAddRemoveTime,
+                       duration.InNanoseconds() / static_cast<double>(kLaps));
   }
 }
 

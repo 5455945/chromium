@@ -1,44 +1,56 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.base;
 
+import android.content.ContentResolver;
+import android.content.ContentValues;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
+import android.os.Environment;
 import android.os.ParcelFileDescriptor;
+import android.provider.MediaStore.Downloads;
+import android.provider.MediaStore.MediaColumns;
 
-import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JNINamespace;
+import org.jni_zero.JniType;
+import org.jni_zero.NativeMethods;
+
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileDescriptor;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.util.List;
 import java.util.Locale;
+import java.util.function.Function;
 
-/**
- * Helper methods for dealing with Files.
- */
+/** Helper methods for dealing with Files. */
+@NullMarked
+@JNINamespace("base::android")
 public class FileUtils {
     private static final String TAG = "FileUtils";
 
     public static Function<String, Boolean> DELETE_ALL = filepath -> true;
 
     /**
-     * Delete the given File and (if it's a directory) everything within it.
+     * Delete the given File and (if it's a directory) everything within it. Caveat: Return values
+     * from recursive deletes are ignored.
+     *
      * @param currentFile The file or directory to delete. Does not need to exist.
-     * @param canDelete the {@link Function} function used to check if the file can be deleted.
-     * @return True if the files are deleted, or files reserved by |canDelete|, false if failed to
-     *         delete files.
-     * @note Caveat: Return values from recursive deletes are ignored.
-     * @note Caveat: |canDelete| is not robust; see https://crbug.com/1066733.
+     * @param canDelete The {@link Function} function used to check if the file can be deleted.
+     *     Caveat: {@code canDelete} is not robust, see https://crbug.com/1066733.
+     * @return True if the files are deleted, or files reserved by {@code canDelete}, false if
+     *     failed to delete files.
      */
     public static boolean recursivelyDeleteFile(
             File currentFile, Function<String, Boolean> canDelete) {
@@ -55,7 +67,7 @@ public class FileUtils {
         if (currentFile.isDirectory()) {
             File[] files = currentFile.listFiles();
             if (files != null) {
-                for (File file : files) {
+                for (var file : files) {
                     recursivelyDeleteFile(file, canDelete);
                 }
             }
@@ -69,26 +81,8 @@ public class FileUtils {
     }
 
     /**
-     * Delete the given files or directories by calling {@link #recursivelyDeleteFile(File)}. This
-     * supports deletion of content URIs.
-     * @param filePaths The file paths or content URIs to delete.
-     * @param canDelete the {@link Function} function used to check if the file can be deleted.
-     */
-    public static void batchDeleteFiles(
-            List<String> filePaths, Function<String, Boolean> canDelete) {
-        for (String filePath : filePaths) {
-            if (canDelete != null && !canDelete.apply(filePath)) continue;
-            if (ContentUriUtils.isContentUri(filePath)) {
-                ContentUriUtils.delete(filePath);
-            } else {
-                File file = new File(filePath);
-                if (file.exists()) recursivelyDeleteFile(file, canDelete);
-            }
-        }
-    }
-
-    /**
      * Get file size. If it is a directory, recursively get the size of all files within it.
+     *
      * @param file The file or directory.
      * @return The size in bytes.
      */
@@ -109,25 +103,7 @@ public class FileUtils {
         }
     }
 
-    /**
-     * Extracts an asset from the app's APK to a file.
-     * @param context
-     * @param assetName Name of the asset to extract.
-     * @param outFile File to extract the asset to.
-     * @return true on success.
-     */
-    public static boolean extractAsset(Context context, String assetName, File outFile) {
-        try (InputStream inputStream = context.getAssets().open(assetName)) {
-            copyStreamToFile(inputStream, outFile);
-            return true;
-        } catch (IOException e) {
-            return false;
-        }
-    }
-
-    /**
-     * Performs a simple copy of inputStream to outputStream.
-     */
+    /** Performs a simple copy of inputStream to outputStream. */
     public static void copyStream(InputStream inputStream, OutputStream outputStream)
             throws IOException {
         byte[] buffer = new byte[8192];
@@ -154,10 +130,7 @@ public class FileUtils {
         }
     }
 
-    /**
-     * Reads inputStream into a byte array.
-     */
-    @NonNull
+    /** Reads inputStream into a byte array. */
     public static byte[] readStream(InputStream inputStream) throws IOException {
         ByteArrayOutputStream data = new ByteArrayOutputStream();
         FileUtils.copyStream(inputStream, data);
@@ -166,18 +139,17 @@ public class FileUtils {
 
     /**
      * Returns a URI that points at the file.
+     *
      * @param file File to get a URI for.
      * @return URI that points at that file, either as a content:// URI or a file:// URI.
      */
     public static Uri getUriForFile(File file) {
-        // TODO(crbug/709584): Uncomment this when http://crbug.com/709584 has been fixed.
-        // assert !ThreadUtils.runningOnUiThread();
         Uri uri = null;
 
         try {
             // Try to obtain a content:// URI, which is preferred to a file:// URI so that
             // receiving apps don't attempt to determine the file's mime type (which often fails).
-            uri = ContentUriUtils.getContentUriFromFile(file);
+            uri = FileProviderUtils.getContentUriFromFile(file);
         } catch (IllegalArgumentException e) {
             Log.e(TAG, "Could not create content uri: " + e);
         }
@@ -200,10 +172,9 @@ public class FileUtils {
     }
 
     /** Queries and decodes bitmap from content provider. */
-    @Nullable
-    public static Bitmap queryBitmapFromContentProvider(Context context, Uri uri) {
+    public static @Nullable Bitmap queryBitmapFromContentProvider(Context context, Uri uri) {
         try (ParcelFileDescriptor parcelFileDescriptor =
-                        context.getContentResolver().openFileDescriptor(uri, "r")) {
+                context.getContentResolver().openFileDescriptor(uri, "r")) {
             if (parcelFileDescriptor == null) {
                 Log.w(TAG, "Null ParcelFileDescriptor from uri " + uri);
                 return null;
@@ -223,5 +194,88 @@ public class FileUtils {
             Log.w(TAG, "IO exception when reading uri " + uri);
         }
         return null;
+    }
+
+    /**
+     * Copies a file from app-private storage into the public Downloads collection.
+     *
+     * @param sourceFilePath Absolute path to the source file.
+     * @param mimeType The MIME type of the file.
+     * @return The public content URI string on success, or null on failure.
+     */
+    @CalledByNative
+    public static @JniType("std::optional<std::string>") @Nullable String
+            copyFileToDownloadsCollection(
+                    @JniType("std::string") String sourceFilePath,
+                    @JniType("std::string") String mimeType) {
+        File sourceFile = new File(sourceFilePath);
+        if (!sourceFile.exists()) {
+            Log.e(TAG, "Source file does not exist: " + sourceFilePath);
+            return null;
+        }
+
+        String fileName = sourceFile.getName();
+        Context context = ContextUtils.getApplicationContext();
+        ContentResolver resolver = context.getContentResolver();
+
+        final long now = TimeUtils.currentTimeMillis() / 1000;
+        ContentValues values = new ContentValues();
+        values.put(MediaColumns.TITLE, fileName);
+        values.put(MediaColumns.DISPLAY_NAME, fileName);
+        values.put(MediaColumns.MIME_TYPE, mimeType);
+        values.put(MediaColumns.DATE_ADDED, now);
+        values.put(MediaColumns.DATE_MODIFIED, now);
+        values.put(MediaColumns.IS_PENDING, 1);
+        values.put(MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
+
+        Uri collectionUri = Downloads.EXTERNAL_CONTENT_URI;
+        Uri itemUri = resolver.insert(collectionUri, values);
+        if (itemUri == null) {
+            Log.e(TAG, "Failed to insert item into MediaStore");
+            return null;
+        }
+
+        try (InputStream in = new FileInputStream(sourceFile);
+                OutputStream out = resolver.openOutputStream(itemUri)) {
+            if (out == null) {
+                Log.e(TAG, "Failed to open output stream for MediaStore Uri");
+                return null;
+            }
+            copyStream(in, out);
+        } catch (IOException e) {
+            Log.e(TAG, "Failed to copy file to MediaStore: " + e.getMessage(), e);
+            resolver.delete(itemUri, null, null);
+            return null;
+        }
+
+        ContentValues updateValues = new ContentValues();
+        updateValues.put(MediaColumns.IS_PENDING, 0);
+        try {
+            if (resolver.update(itemUri, updateValues, null, null) == 1) {
+                return itemUri.toString();
+            }
+        } catch (RuntimeException e) {
+            Log.e(TAG, "Failed to update pending status: " + e.getMessage(), e);
+        }
+        resolver.delete(itemUri, null, null);
+        return null;
+    }
+
+    /**
+     * Gets the canonicalised absolute pathname for {@code filePath}. Returns empty string if the
+     * path is invalid. This function can result in I/O so it can be slow.
+     *
+     * @param filePath Path of the file, has to be a file path instead of a content URI.
+     * @return canonicalised absolute pathname for {@code filePath}.
+     */
+    public static String getAbsoluteFilePath(String filePath) {
+        return FileUtilsJni.get().getAbsoluteFilePath(filePath);
+    }
+
+    @NativeMethods
+    public interface Natives {
+        /** Returns the canonicalised absolute pathname for {@code filePath}. */
+        @JniType("std::string")
+        String getAbsoluteFilePath(@JniType("std::string") String filePath);
     }
 }

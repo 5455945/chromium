@@ -1,21 +1,21 @@
 # DOM
 
-[Rendered](https://chromium.googlesource.com/chromium/src/+/master/third_party/blink/renderer/core/dom/README.md)
+[Rendered](https://chromium.googlesource.com/chromium/src/+/main/third_party/blink/renderer/core/dom/README.md)
 
-Author: hayato@chromium.org
+Author: hayato@chromium.org, some edits by masonf@chromium.org
 
 The `renderer/core/dom` directory contains the implementation of [DOM].
 
 [dom]: https://dom.spec.whatwg.org/
 [dom standard]: https://dom.spec.whatwg.org/
 
-Basically, this directory should contain only a file which is related to [DOM
-Standard]. However, for historical reasons, `renderer/core/dom` directory has
-been used as if it were _misc_ directory. As a result, unfortunately, this
+Basically, this directory should contain only files related to the [DOM
+Standard]. However, for historical reasons, the `renderer/core/dom` directory
+has been used as if it were a _misc_ directory. As a result, unfortunately, this
 directory contains a lot of files which are not directly related to DOM.
 
 Please don't add unrelated files to this directory any more. We are trying to
-organize the files so that developers wouldn't get confused at seeing this
+organize the files so that developers wouldn't get confused by seeing this
 directory.
 
 - See the
@@ -60,9 +60,9 @@ That means:
 
 - Siblings are stored as a linked list. It takes O(N) to access a parent's n-th
   child.
-- Parent can't tell how many children it has in O(1).
+- A parent can't tell how many children it has in O(1).
 
-![next sibling and previous sibling](https://hayato.io/2017/dom/next-sibling.svg)
+![next sibling and previous sibling](https://hayatoito.github.io/2017/dom/next-sibling.svg)
 
 Further info:
 
@@ -75,7 +75,7 @@ You can traverse a tree manually:
 ```c++
 // In C++
 
-// Traverse a children.
+// Traverse a node's children.
 for (Node* child = parent.firstChild(); child; child = child->nextSibling()) {
   ...
 }
@@ -93,11 +93,11 @@ void foo(const Node& node) {
 
 Tree order is:
 
-![tree order](https://hayato.io/2017/dom/tree-order.svg)
+![tree order](https://hayatoito.github.io/2017/dom/tree-order.svg)
 
 However, traversing a tree in this way might be error-prone. Instead, you can
-use `NodeTraversal` and `ElementTraversal`. They provides a C++11's range-based
-for loops, such as:
+use `NodeTraversal` and `ElementTraversal`. They provide C++11 range-based
+for loops such as:
 
 ```c++
 // In C++
@@ -137,7 +137,7 @@ host**, or just a **host** if the context is clear.
 - The node tree of a shadow root’s host is sometimes referred to as the **light
   tree**.
 
-![shadow tree](https://hayato.io/2017/dom/shadow-tree.svg)
+![shadow tree](https://hayatoito.github.io/2017/dom/shadow-tree.svg)
 
 For example, given the example node tree:
 
@@ -168,7 +168,7 @@ shadowRoot
 └── sb
 ```
 
-The _shadowRoot_ has one child, _sb_. This shadow tree is being _attached_ to B:
+The _shadowRoot_ has one child, _sb_. This shadow tree is _attached_ to B:
 
 ```text
 A
@@ -190,7 +190,7 @@ tree and a shadow tree should be considered separately, from a node tree's
 perspective. (`──/`) is _NOT_ a parent-child relationship in a node tree.
 
 For example, even though _B_ _hosts_ the shadow tree, _shadowRoot_ is not
-considered as a _child_ of _B_. The means the following traversal:
+considered as a _child_ of _B_. That means the following traversal:
 
 ```c++
 // In C++
@@ -209,23 +209,23 @@ Further info:
 
 # TreeScope
 
-`Document` and `ShadowRoot` are always the root of a node tree. Both`Document`
-and `ShadowRoot` implements `TreeScope`.
+`Document` and `ShadowRoot` are always the root of a node tree. Both `Document`
+and `ShadowRoot` implement `TreeScope`.
 
 `TreeScope` maintains a lot of information about the underlying tree for
-efficiency. For example, TreeScope has a _id-to-element_ mapping, as
+efficiency. For example, TreeScope has an _id-to-element_ mapping, as
 [`TreeOrderedMap`](./tree_ordered_map.h), so that `querySelector('#foo')` can
 find an element whose id attribute is "foo" in O(1). In other words,
-`root.querySelector('#foo')` can be slow if that is used in a node tree whose
+`root.querySelector('#foo')` can be slow if it is used in a node tree whose
 root is not `TreeScope`.
 
-Each `Node` has `tree_scope_` pointer, which points to:
+Each `Node` has a `tree_scope_` pointer, which points to:
 
 - The root node: if the node's root is either Document or ShadowRoot.
 - [owner document](https://dom.spec.whatwg.org/#concept-node-documentOwnerDocument),
   otherwise.
 
-The means `tree_scope_` pointer is always non-null (except for while in a DOM
+That means `tree_scope_` pointer is always non-null (except for while in a DOM
 mutation), but it doesn't always point to the node's root.
 
 Since each node doesn't have a pointer which _always_ points to the root,
@@ -283,16 +283,16 @@ document-fragment
 Further Info:
 
 - [`tree_scope.h`](./tree_scope.h), [`tree_scope.cc`](./tree_scope.cc)
-- `Node#GetTreeScope()`, `Node#ContainingTreeScope()`, `Node#IsInTreeScope()`
+- `Node#GetTreeScope()`, `Node#IsInTreeScope()`
 
 # Composed Tree (a tree of node trees)
 
-In the previous picture, you might think that more than one node trees, a
+In the previous picture, you might think that different node trees, e.g., a
 document tree and a shadow tree, were _connected_ to each other. That is _true_
 in some sense. We call this _super tree_ as _composed tree_, which is a _tree of
 trees_.
 
-![super tree](https://hayato.io/2017/dom/super-tree.svg)
+![super tree](https://hayatoito.github.io/2017/dom/super-tree.svg)
 
 The following is a complex example:
 
@@ -435,7 +435,7 @@ In the following table, "`-`" means that "node _A_ is _visible_ from node _B_".
 | e1        | hidden   | hidden | hidden | hidden | hidden | hidden | hidden | -      | hidden |
 | f1        | hidden   | hidden | hidden | hidden | hidden | hidden | hidden | hidden | -      |
 
-For example, _document_ is _visible_ from any nodes.
+For example, _document_ is _visible_ from any node.
 
 To understand _visibility relationship_ easily, here is a rule of thumb:
 
@@ -477,11 +477,11 @@ _similar_ to the structure of a document tree; where only one node tree,
 _document tree_, is being involved there.
 
 Since the Web Platform got Shadow DOM, we now have a composed tree which is
-composed of multiple node trees, instead of a single node tree. That means We
+composed of multiple node trees, instead of a single node tree. That means we
 have to _flatten_ the composed tree to the one node tree, called a _flat tree_,
 from which a layout tree is constructed.
 
-![flat tree](https://hayato.io/2017/dom/flat-tree.svg)
+![flat tree](https://hayatoito.github.io/2017/dom/flat-tree.svg)
 
 For example, given the following composed tree,
 
@@ -532,14 +532,13 @@ document
                 └── f2
 ```
 
-We can't explain the exact algorithm how to flatten a composed tree into a flat
-tree until I explain the concept of _slots_ and _node distribution_ If we are
-ignoring the effect of `<slot>`, we can have the following simple definition. A
-flat tree can be defined as:
+We can't explain the exact algorithm of how to flatten a composed tree into a
+flat tree until we explain the concept of _slots_ and _slot assignment_. If we
+ignore the effect of `<slot>`, we can define a flat tree as:
 
 - A root of a flat tree: _document_
-- Given node _A_ which is in a flat tree, its children are defined, recursively,
-  as follows:
+- Given a node _A_ which is in a flat tree, its children are defined,
+  recursively, as follows:
   - If _A_ is a shadow host, its shadow root's children
   - Otherwise, _A_'s children
 
@@ -636,10 +635,11 @@ A
 - `slot2`'s child, `C`, is not shown in this flat tree because `slot2` has
   non-empty assigned nodes, `[G, I]`, which are used as `slot2`'s children in
   the flat tree.
-- If a slots doesn't have any assigned nodes, the slot's children are used as
+- If a slot doesn't have any assigned nodes, the slot's children are used as
   _fallback contents_ in the flat tree. e.g. `slot3`s children in the flat tree
   are `E` and `F`.
-- If a host's child node is assigned to nowhere, the child is not used. e.g. `J`
+- If a host's child node is assigned to nowhere, the child is not used, as is
+  the case, e.g., for `J`.
 
 ## Example 3
 
@@ -717,41 +717,22 @@ The APIs which `FlatTreeTraversal` provides are very similar to ones other
 traversal utility classes provide, such as `NodeTraversal` and
 `ElementTraversal`.
 
-## Warning
-
-For historical reasons, Blink still supports Shadow DOM v0, where the different
-node distribution mechanism is still used. To support v0, you need to call
-`Node::UpdateDistributionForFlatTreeTraversal` before calling any function of
-`FlatTreeTraversal`.
-
-If you use `FlatTreeTraversal` without updating distribution, you would hit
-DCHECK. :(
-
-Since `Node::UpdateDistributionForFlatTreeTraversal` can take O(N) in the worst
-case (_even if the distribution flag is clean!_), you should be careful not to
-call it in hot code paths. If you are not sure, please contact
-dom-dev@chromium.org, or add masonf@chromium.org to reviewers.
-
-Once Blink removes Shadow DOM v0 in the future, you don't need to call
-`Node::UpdateDistributionForFlatTreeTraversal` before using `FlatTreeTraversal`
-beforehand in most cases, however, that wouldn't happen soon.
-
 # Event path and Event Retargeting
 
 <!-- Old doc: https://www.w3.org/TR/2014/WD-shadow-dom-20140617/ -->
 
-[DOM Standard] defines how an event should be dispatched
-[here](https://dom.spec.whatwg.org/#concept-event-dispatch), including how
-[event path](https://dom.spec.whatwg.org/#event-path) should be calculated,
-however, I wouldn't be surprised if the steps described there might look a kind
-of cryptogram to you.
+The [DOM Standard] defines how an event should be dispatched
+[here](https://dom.spec.whatwg.org/#concept-event-dispatch), including how the
+[event path](https://dom.spec.whatwg.org/#event-path) should be calculated.
+However, I wouldn't be surprised if the steps described there might appear
+cryptic to you.
 
 In this README, I'll explain how an event is dispatched and how its event path
 is calculated briefly by using some relatively-understandable examples.
 
 Basically, an event is dispatched across shadow trees.
 
-![event dispatch](https://hayato.io/2017/dom/event-dispatch.svg)
+![event dispatch](https://hayatoito.github.io/2017/dom/event-dispatch.svg)
 
 Let me show more complex example composed tree, involving a slot:
 
@@ -789,8 +770,8 @@ Slot Assignments:
 | slot-R | [slot-S]              |
 | slot-S | [T]                   |
 
-Given that, suppose that an event is fired on `U`, an event path would be (in
-reverse order):
+Given that, suppose that an event is fired on `U`. Then an event path would be
+(in reverse order):
 
 ```text
 [U => T => slot-S => slot-R => Q => slot-P => slot-O => shadowroot-N => M
@@ -808,7 +789,7 @@ calculated as follows:
 In the above case, `event.target`, `U`, doesn't change in its lifetime because
 `U` can be _seen_ from every nodes there. However, if an event is fired on node
 `Q`, for example, `event.target` would be adjusted for some nodes in event path
-to honer encapsulation. That is called _event re-targeting_.
+to honor encapsulation. That is called _event re-targeting_.
 
 Here is an event path for an event which is fired on `Q` :
 

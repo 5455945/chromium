@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,66 +6,84 @@
 
 #include <jni.h>
 #include <stddef.h>
-#include "chrome/browser/android/resource_mapper.h"
+
+#include <string>
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
 #include "base/android/scoped_java_ref.h"
 #include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "chrome/browser/ui/android/autofill/internal/jni_headers/AutofillErrorDialogBridge_jni.h"
-#include "components/grit/components_scaled_resources.h"
+#include "base/memory/weak_ptr.h"
+#include "chrome/browser/ui/autofill/payments/payments_view_factory.h"
+#include "content/public/browser/web_contents.h"
 #include "ui/android/view_android.h"
 #include "ui/android/window_android.h"
-#include "ui/base/resource/resource_bundle.h"
 
-using base::android::ConvertUTF16ToJavaString;
+// Must come after headers that provide symbols used by @JniType.
+#include "chrome/browser/ui/android/autofill/internal/jni_headers/AutofillErrorDialogBridge_jni.h"
 
 namespace autofill {
 
 AutofillErrorDialogViewAndroid::AutofillErrorDialogViewAndroid(
     AutofillErrorDialogController* controller)
-    : controller_(controller) {}
+    : controller_(controller->GetWeakPtr()) {}
 
 AutofillErrorDialogViewAndroid::~AutofillErrorDialogViewAndroid() = default;
-
-// static
-std::unique_ptr<AutofillErrorDialogView> AutofillErrorDialogView::Create(
-    AutofillErrorDialogController* controller) {
-  return std::make_unique<AutofillErrorDialogViewAndroid>(controller);
-}
-
-void AutofillErrorDialogViewAndroid::Show() {
-  JNIEnv* env = base::android::AttachCurrentThread();
-  ui::ViewAndroid* view_android =
-      controller_->GetWebContents()->GetNativeView();
-  DCHECK(view_android);
-  ui::WindowAndroid* window_android = view_android->GetWindowAndroid();
-  if (!window_android)
-    return;
-
-  java_object_.Reset(Java_AutofillErrorDialogBridge_create(
-      env, reinterpret_cast<intptr_t>(this), window_android->GetJavaObject()));
-
-  Java_AutofillErrorDialogBridge_show(
-      env, java_object_, ConvertUTF16ToJavaString(env, controller_->GetTitle()),
-      ConvertUTF16ToJavaString(env, controller_->GetDescription()),
-      ConvertUTF16ToJavaString(env, controller_->GetButtonLabel()),
-      ResourceMapper::MapToJavaDrawableId(
-          IDR_AUTOFILL_GOOGLE_PAY_WITH_DIVIDER));
-}
 
 void AutofillErrorDialogViewAndroid::Dismiss() {
   JNIEnv* env = base::android::AttachCurrentThread();
   if (!java_object_.is_null()) {
     Java_AutofillErrorDialogBridge_dismiss(env, java_object_);
   } else {
-    OnDismissed(env);
+    OnDismissed();
   }
 }
 
-void AutofillErrorDialogViewAndroid::OnDismissed(JNIEnv* env) {
-  controller_->OnDismissed();
+base::WeakPtr<AutofillErrorDialogView>
+AutofillErrorDialogViewAndroid::GetWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
+}
+
+void AutofillErrorDialogViewAndroid::OnDismissed() {
+  if (controller_) {
+    controller_->OnDismissed();
+  }
+  controller_ = nullptr;
+  // Must delete itself when the view is dismissed to avoid memory leak as this
+  // class is not owned by other autofill components.
+  delete this;
+}
+
+void AutofillErrorDialogViewAndroid::Show(content::WebContents* web_contents) {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  ui::ViewAndroid* view_android = web_contents->GetNativeView();
+  CHECK(view_android, base::NotFatalUntil::M162);
+  ui::WindowAndroid* window_android = view_android->GetWindowAndroid();
+  if (!window_android) {
+    return;
+  }
+
+  java_object_.Reset(Java_AutofillErrorDialogBridge_create(
+      env, reinterpret_cast<intptr_t>(this), window_android));
+
+  if (!controller_) {
+    return;
+  }
+
+  Java_AutofillErrorDialogBridge_show(
+      env, java_object_, controller_->GetTitle(), controller_->GetDescription(),
+      controller_->GetButtonLabel());
+}
+
+base::WeakPtr<AutofillErrorDialogView> CreateAndShowAutofillErrorDialog(
+    AutofillErrorDialogController* controller,
+    content::WebContents* web_contents) {
+  AutofillErrorDialogViewAndroid* dialog_view =
+      new AutofillErrorDialogViewAndroid(controller);
+  dialog_view->Show(web_contents);
+  return dialog_view->GetWeakPtr();
 }
 
 }  // namespace autofill
+
+DEFINE_JNI(AutofillErrorDialogBridge)

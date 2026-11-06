@@ -31,18 +31,17 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_ANIMATION_PENDING_ANIMATIONS_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_ANIMATION_PENDING_ANIMATIONS_H_
 
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/core/animation/animation.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/platform/graphics/compositor_element_id.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/timer.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
 
+class Document;
 class PaintArtifactCompositor;
 
 // Handles starting animations when they could potentially require
@@ -61,12 +60,13 @@ class PaintArtifactCompositor;
 class CORE_EXPORT PendingAnimations final
     : public GarbageCollected<PendingAnimations> {
  public:
-  explicit PendingAnimations(Document& document)
-      : timer_(document.GetTaskRunner(TaskType::kInternalDefault),
-               this,
-               &PendingAnimations::TimerFired),
-        compositor_group_(1),
-        inside_timer_fired_(false) {}
+  // Compositor group reserved for animations which are to be auto-assigned
+  // groups.
+  static const int kCompositorGroupAutoAssign = 0;
+  // Compositor group reserved for animations which already have a start time.
+  static const int kCompositorGroupHasStartTime = 1;
+
+  explicit PendingAnimations(Document& document);
 
   void Add(Animation*);
 
@@ -96,9 +96,10 @@ class CORE_EXPORT PendingAnimations final
 
   void Trace(Visitor*) const;
 
+  int NextCompositorGroup();
+
  private:
   void TimerFired(TimerBase*);
-  int NextCompositorGroup();
   void FlushWaitingNonCompositedAnimations();
 
   HeapVector<Member<Animation>> pending_;

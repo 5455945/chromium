@@ -1,18 +1,15 @@
+# This directory is for shared code between Ash and Lacros. Most of the
+# ChromeOS code lives in chrome/browser/ash/, hence, share OWNERS.
+file://chrome/browser/ash/OWNERS
+
 # This is for the common case of adding or renaming files. If you're doing
 # structural changes, use usual OWNERS rules.
 per-file BUILD.gn=*
 
-achuith@chromium.org
-alemate@chromium.org
-jamescook@chromium.org
-khorimoto@chromium.org
-oshima@chromium.org
-satorux@chromium.org
-xiyuan@chromium.org
-per-file *active_directory*=rsorokin@chromium.org
-per-file *active_directory*=fsandrade@chromium.org
-per-file tpm_firmware_update*=mnissler@chromium.org
-
-# Sandbox selection needs security review
-per-file service_sandbox_type.h=set noparent
-per-file service_sandbox_type.h=file://ipc/SECURITY_OWNERS
+# We're trying to avoid taking new dependencies on ash. But when they
+# happen, we want the chrome-side review to be easy for OWNERS there,
+# leaving the ash-side to approve or reject the new dependency.
+per-file DEPS=set noparent
+per-file DEPS=file://chrome/browser/ash/REFACTORING_OWNERS
+per-file .../DEPS=set noparent
+per-file .../DEPS=file://chrome/browser/ash/REFACTORING_OWNERS

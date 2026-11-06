@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,28 +7,34 @@
 
 #include <stdint.h>
 
-#include <memory>
-#include <set>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/containers/flat_map.h"
 #include "base/memory/weak_ptr.h"
-#include "base/sequenced_task_runner.h"
+#include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/common/child_process_id.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
+#include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/bindings/remote_set.h"
-#include "net/base/network_isolation_key.h"
+#include "net/base/network_anonymization_key.h"
 #include "services/network/public/mojom/p2p.mojom.h"
 #include "services/network/public/mojom/p2p_trusted.mojom.h"
 
 namespace content {
 
+class RenderProcessHostImpl;
+
 // Responsible for P2P sockets. Lives on the UI thread.
 class P2PSocketDispatcherHost
     : public network::mojom::P2PTrustedSocketManagerClient {
  public:
-  explicit P2PSocketDispatcherHost(int render_process_id);
+  explicit P2PSocketDispatcherHost(ChildProcessId render_process_id);
+
+  P2PSocketDispatcherHost(const P2PSocketDispatcherHost&) = delete;
+  P2PSocketDispatcherHost& operator=(const P2PSocketDispatcherHost&) = delete;
+
   ~P2PSocketDispatcherHost() override;
 
   // Starts the RTP packet header dumping.
@@ -42,9 +48,14 @@ class P2PSocketDispatcherHost
   void BindReceiver(
       RenderProcessHostImpl& process,
       mojo::PendingReceiver<network::mojom::P2PSocketManager> receiver,
-      net::NetworkIsolationKey isolation_key);
+      net::NetworkAnonymizationKey anonymization_key,
+      const GlobalRenderFrameHostId& render_frame_host_id);
 
   base::WeakPtr<P2PSocketDispatcherHost> GetWeakPtr();
+  void PauseSocketManagerForRenderFrameHost(
+      const GlobalRenderFrameHostId& frame_id);
+  void ResumeSocketManagerForRenderFrameHost(
+      const GlobalRenderFrameHostId& frame_id);
 
  private:
   // network::mojom::P2PTrustedSocketManagerClient overrides:
@@ -53,13 +64,13 @@ class P2PSocketDispatcherHost
                   uint64_t packet_length,
                   bool incoming) override;
 
-  int render_process_id_;
+  const ChildProcessId render_process_id_;
 
   bool dump_incoming_rtp_packet_ = false;
   bool dump_outgoing_rtp_packet_ = false;
   RenderProcessHost::WebRtcRtpPacketCallback packet_callback_;
 
-  // TODO(crbug.com/1178670): We use sets of interfaces for now (instead of
+  // TODO(crbug.com/40169214): We use sets of interfaces for now (instead of
   // creating a host-per-frame) since RTP dumps are started/stopped at the
   // process level (for now).
   // There are, however, plans to:
@@ -70,11 +81,13 @@ class P2PSocketDispatcherHost
   mojo::RemoteSet<network::mojom::P2PTrustedSocketManager>
       trusted_socket_managers_;
 
-  network::mojom::P2PNetworkNotificationClientPtr network_notification_client_;
+  base::flat_map<GlobalRenderFrameHostId, mojo::RemoteSetElementId>
+      frame_host_to_socket_manager_id_;
+
+  mojo::Remote<network::mojom::P2PNetworkNotificationClient>
+      network_notification_client_;
 
   base::WeakPtrFactory<P2PSocketDispatcherHost> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(P2PSocketDispatcherHost);
 };
 
 }  // namespace content

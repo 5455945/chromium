@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,8 +11,10 @@
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/callback_list.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "base/sequence_checker.h"
 #include "components/account_manager_core/account.h"
 #include "components/account_manager_core/account_manager_facade.h"
@@ -20,6 +22,7 @@
 #include "services/network/public/cpp/network_connection_tracker.h"
 
 class AccountTrackerService;
+class SigninClient;
 
 namespace signin {
 class ProfileOAuth2TokenServiceDelegateChromeOS
@@ -31,53 +34,56 @@ class ProfileOAuth2TokenServiceDelegateChromeOS
   // `NetworkConnectorTracker`, and `account_manager::AccountManagerFacade`.
   // These objects must all outlive `this` delegate.
   ProfileOAuth2TokenServiceDelegateChromeOS(
+      SigninClient* signin_client,
       AccountTrackerService* account_tracker_service,
       network::NetworkConnectionTracker* network_connection_tracker,
       account_manager::AccountManagerFacade* account_manager_facade,
       bool is_regular_profile);
+
+  ProfileOAuth2TokenServiceDelegateChromeOS(
+      const ProfileOAuth2TokenServiceDelegateChromeOS&) = delete;
+  ProfileOAuth2TokenServiceDelegateChromeOS& operator=(
+      const ProfileOAuth2TokenServiceDelegateChromeOS&) = delete;
+
   ~ProfileOAuth2TokenServiceDelegateChromeOS() override;
 
   // ProfileOAuth2TokenServiceDelegate overrides.
   std::unique_ptr<OAuth2AccessTokenFetcher> CreateAccessTokenFetcher(
       const CoreAccountId& account_id,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-      OAuth2AccessTokenConsumer* consumer) override;
+      OAuth2AccessTokenConsumer* consumer,
+      const std::string& token_binding_challenge) override;
   bool RefreshTokenIsAvailable(const CoreAccountId& account_id) const override;
-  void UpdateAuthError(const CoreAccountId& account_id,
-                       const GoogleServiceAuthError& error) override;
-  void UpdateAuthErrorInternal(const CoreAccountId& account_id,
-                               const GoogleServiceAuthError& error,
-                               bool fire_auth_error_changed = true);
-  GoogleServiceAuthError GetAuthError(
-      const CoreAccountId& account_id) const override;
   std::vector<CoreAccountId> GetAccounts() const override;
-  void LoadCredentials(const CoreAccountId& primary_account_id) override;
-  void UpdateCredentials(const CoreAccountId& account_id,
-                         const std::string& refresh_token) override;
   scoped_refptr<network::SharedURLLoaderFactory> GetURLLoaderFactory()
       const override;
-  void RevokeCredentials(const CoreAccountId& account_id) override;
-  void RevokeAllCredentials() override;
-  const net::BackoffEntry* BackoffEntry() const override;
+  void UpdateAuthError(const CoreAccountId& account_id,
+                       const GoogleServiceAuthError& error,
+                       bool fire_auth_error_changed = true) override;
 
   // `account_manager::AccountManagerFacade::Observer` overrides.
   void OnAccountUpserted(const account_manager::Account& account) override;
   void OnAccountRemoved(const account_manager::Account& account) override;
+  void OnAuthErrorChanged(const account_manager::AccountKey& account,
+                          const GoogleServiceAuthError& error) override;
 
   // |NetworkConnectionTracker::NetworkConnectionObserver| overrides.
-  void OnConnectionChanged(network::mojom::ConnectionType type) override;
+  void OnConnectionChanged(
+      net::NetworkChangeNotifier::ConnectionType type) override;
 
  private:
-  FRIEND_TEST_ALL_PREFIXES(ProfileOAuth2TokenServiceDelegateChromeOSTest,
-                           BackOffIsTriggerredForTransientErrors);
-  FRIEND_TEST_ALL_PREFIXES(ProfileOAuth2TokenServiceDelegateChromeOSTest,
-                           BackOffIsResetOnNetworkChange);
+  friend class TestProfileOAuth2TokenServiceDelegateChromeOS;
 
-  // A utility class to keep track of |GoogleServiceAuthError|s for an account.
-  struct AccountErrorStatus {
-    // The last auth error seen.
-    GoogleServiceAuthError last_auth_error;
-  };
+  // ProfileOAuth2TokenServiceDelegate implementation:
+  void LoadCredentialsInternal(
+      const CoreAccountId& primary_account_ids) override;
+  void UpdateCredentialsInternal(
+      const CoreAccountId& account_id,
+      const std::string& refresh_token,
+      const signin::TokenBindingInfo& token_binding_info) override;
+  void RevokeCredentialsInternal(const CoreAccountId& account_id) override;
+  void RevokeAllCredentialsInternal(
+      signin_metrics::SourceForRefreshTokenOperation source) override;
 
   // Callback handler for `account_manager::AccountManagerFacade::GetAccounts`.
   void OnGetAccounts(const std::vector<account_manager::Account>& accounts);
@@ -92,9 +98,12 @@ class ProfileOAuth2TokenServiceDelegateChromeOS
                                   const GoogleServiceAuthError& error);
 
   // Non-owning pointers.
-  AccountTrackerService* const account_tracker_service_;
-  network::NetworkConnectionTracker* const network_connection_tracker_;
-  account_manager::AccountManagerFacade* const account_manager_facade_;
+  const raw_ptr<SigninClient, DanglingUntriaged> signin_client_;
+  const raw_ptr<AccountTrackerService, DanglingUntriaged>
+      account_tracker_service_;
+  const raw_ptr<network::NetworkConnectionTracker> network_connection_tracker_;
+  raw_ptr<account_manager::AccountManagerFacade> account_manager_facade_ =
+      nullptr;
 
   // When the delegate receives an account from either `GetAccounts` or
   // `OnAccountUpserted`, this account is first added to pending accounts, until
@@ -107,20 +116,13 @@ class ProfileOAuth2TokenServiceDelegateChromeOS
   // A cache of AccountKeys.
   std::set<account_manager::AccountKey> account_keys_;
 
-  // A map from account id to the last seen error for that account.
-  std::map<CoreAccountId, AccountErrorStatus> errors_;
-
-  // Used to rate-limit token fetch requests so as to not overload the server.
-  net::BackoffEntry backoff_entry_;
-  GoogleServiceAuthError backoff_error_;
-
   // Is |this| attached to a regular (non-Signin && non-LockScreen) Profile.
   const bool is_regular_profile_;
 
+  base::CallbackListSubscription account_manager_factory_cb_subscription_;
+
   SEQUENCE_CHECKER(sequence_checker_);
   base::WeakPtrFactory<ProfileOAuth2TokenServiceDelegateChromeOS> weak_factory_;
-
-  DISALLOW_COPY_AND_ASSIGN(ProfileOAuth2TokenServiceDelegateChromeOS);
 };
 
 }  // namespace signin

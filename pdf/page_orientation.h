@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,8 @@
 #define PDF_PAGE_ORIENTATION_H_
 
 #include <cstdint>
+
+#include "base/notreached.h"
 
 namespace chrome_pdf {
 
@@ -27,6 +29,33 @@ enum class PageOrientation : uint8_t {
   // Last enumeration value.
   kLast = kClockwise270
 };
+
+// Returns the number of 90 degree clockwise rotation steps for `orientation`.
+// The return value is appropriate for use with PDFium APIs that expect a
+// rotation value.
+constexpr int GetClockwiseRotationSteps(PageOrientation orientation) {
+  // Could use static_cast<int>(orientation), but using an exhaustive switch
+  // will trigger an error if the definition of `PageOrientation` changes.
+  switch (orientation) {
+    case PageOrientation::kOriginal:
+      return 0;
+    case PageOrientation::kClockwise90:
+      return 1;
+    case PageOrientation::kClockwise180:
+      return 2;
+    case PageOrientation::kClockwise270:
+      return 3;
+  }
+  NOTREACHED();
+}
+
+// Converts 90 degree clockwise rotation steps to `PageOrientation`.
+// `steps` must be non-negative.
+// This is the reverse of GetClockwiseRotationSteps().
+PageOrientation PageOrientationFromClockwiseRotationSteps(int steps);
+
+// Whether the page orientation is `kClockwise90` or `kClockwise270`.
+bool IsTransposedPageOrientation(PageOrientation orientation);
 
 // Rotates a page orientation clockwise by one step (90 degrees).
 PageOrientation RotateClockwise(PageOrientation orientation);

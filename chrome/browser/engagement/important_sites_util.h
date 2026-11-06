@@ -1,18 +1,18 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_ENGAGEMENT_IMPORTANT_SITES_UTIL_H_
 #define CHROME_BROWSER_ENGAGEMENT_IMPORTANT_SITES_UTIL_H_
 
+#include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/macros.h"
 #include "build/build_config.h"
 #include "components/browsing_data/core/browsing_data_utils.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 
 class Profile;
@@ -27,7 +27,7 @@ namespace site_engagement {
 // All methods should be used on the UI thread.
 class ImportantSitesUtil {
  public:
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   static const int kMaxImportantSites = 5;
 #else
   static const int kMaxImportantSites = 10;
@@ -45,22 +45,26 @@ class ImportantSitesUtil {
     double engagement_score = 0;
     int32_t reason_bitfield = 0;
     // Only set if the domain belongs to an installed app.
-    absl::optional<std::string> app_name;
+    std::optional<std::string> app_name;
   };
 
   // Do not change the values here, as they are used for UMA histograms.
   enum ImportantReason {
     ENGAGEMENT = 0,
-    DURABLE = 1,
+    PERSISTENT = 1,
     BOOKMARKS = 2,
     HOME_SCREEN = 3,
     NOTIFICATIONS = 4,
     REASON_BOUNDARY
   };
 
+  ImportantSitesUtil() = delete;
+  ImportantSitesUtil(const ImportantSitesUtil&) = delete;
+  ImportantSitesUtil& operator=(const ImportantSitesUtil&) = delete;
+
   static std::string GetRegisterableDomainOrIP(const GURL& url);
 
-  static std::string GetRegisterableDomainOrIPFromHost(base::StringPiece host);
+  static std::string GetRegisterableDomainOrIPFromHost(std::string_view host);
 
   static bool IsDialogDisabled(Profile* profile);
 
@@ -76,15 +80,6 @@ class ImportantSitesUtil {
       Profile* profile,
       size_t max_results);
 
-#if !defined(OS_ANDROID)
-  // Return the top |<=max_results| important registrable domains that have an
-  // associated installed app. |max_results| is assumed to be small.
-  static std::vector<ImportantDomainInfo> GetInstalledRegisterableDomains(
-      browsing_data::TimePeriod time_period,
-      Profile* profile,
-      size_t max_results);
-#endif
-
   static std::set<std::string> GetInstalledRegisterableDomains(
       Profile* profile);
 
@@ -96,18 +91,13 @@ class ImportantSitesUtil {
   static void RecordExcludedAndIgnoredImportantSites(
       Profile* profile,
       const std::vector<std::string>& excluded_sites,
-      const std::vector<int32_t>& excluded_sites_reason_bitfield,
-      const std::vector<std::string>& ignored_sites,
-      const std::vector<int32_t>& ignored_sites_reason_bitfield);
+      const std::vector<std::string>& ignored_sites);
 
   // This marks the given origin as important for testing. Note: This changes
   // the score requirements for the Site Engagement Service, so ONLY call for
   // testing.
   static void MarkOriginAsImportantForTesting(Profile* profile,
                                               const GURL& origin);
-
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(ImportantSitesUtil);
 };
 
 }  // namespace site_engagement

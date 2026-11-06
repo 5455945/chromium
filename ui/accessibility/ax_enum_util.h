@@ -1,14 +1,15 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_ACCESSIBILITY_AX_ENUM_UTIL_H_
 #define UI_ACCESSIBILITY_AX_ENUM_UTIL_H_
 
-#include <map>
+#include <optional>
 #include <string>
+#include <utility>
 
-#include "base/containers/contains.h"
+#include "base/containers/flat_map.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
@@ -22,23 +23,19 @@ AX_BASE_EXPORT const char* ToString(ax::mojom::Event event);
 
 // ax::mojom::Role
 AX_BASE_EXPORT const char* ToString(ax::mojom::Role role);
+AX_BASE_EXPORT ax::mojom::Role StringToRole(const std::string& role);
 
 // ax::mojom::State
 AX_BASE_EXPORT const char* ToString(ax::mojom::State state);
+AX_BASE_EXPORT ax::mojom::State StringToState(const std::string& state);
 
 // ax::mojom::Action
 AX_BASE_EXPORT const char* ToString(ax::mojom::Action action);
 
-// ax::mojom::ActionFlags
-AX_BASE_EXPORT const char* ToString(ax::mojom::ActionFlags action_flags);
 
 // ax::mojom::DefaultActionVerb
 AX_BASE_EXPORT const char* ToString(
     ax::mojom::DefaultActionVerb default_action_verb);
-
-// Returns a localized string that corresponds to the name of the given action.
-AX_BASE_EXPORT std::string ToLocalizedString(
-    ax::mojom::DefaultActionVerb action_verb);
 
 // ax::mojom::Mutation
 AX_BASE_EXPORT const char* ToString(ax::mojom::Mutation mutation);
@@ -46,15 +43,21 @@ AX_BASE_EXPORT const char* ToString(ax::mojom::Mutation mutation);
 // ax::mojom::StringAttribute
 AX_BASE_EXPORT const char* ToString(
     ax::mojom::StringAttribute string_attribute);
+AX_BASE_EXPORT ax::mojom::StringAttribute StringToStringAttribute(
+    const std::string& string_attribute);
 
 // ax::mojom::IntAttribute
 AX_BASE_EXPORT const char* ToString(ax::mojom::IntAttribute int_attribute);
+AX_BASE_EXPORT ax::mojom::IntAttribute StringToIntAttribute(
+    const std::string& int_attribute);
 
 // ax::mojom::FloatAttribute
 AX_BASE_EXPORT const char* ToString(ax::mojom::FloatAttribute float_attribute);
 
 // ax::mojom::BoolAttribute
 AX_BASE_EXPORT const char* ToString(ax::mojom::BoolAttribute bool_attribute);
+AX_BASE_EXPORT ax::mojom::BoolAttribute StringToBoolAttribute(
+    const std::string& bool_attribute);
 
 // ax::mojom::IntListAttribute
 AX_BASE_EXPORT const char* ToString(
@@ -69,6 +72,9 @@ AX_BASE_EXPORT const char* ToString(ax::mojom::ListStyle list_style);
 
 // ax::mojom::MarkerType
 AX_BASE_EXPORT const char* ToString(ax::mojom::MarkerType marker_type);
+
+// ax::mojom::HighlightType
+AX_BASE_EXPORT const char* ToString(ax::mojom::HighlightType highlight_type);
 
 // ax::mojom::MoveDirection
 AX_BASE_EXPORT const char* ToString(ax::mojom::MoveDirection move_direction);
@@ -106,6 +112,9 @@ AX_BASE_EXPORT const char* ToString(
 // ax::mojom::HasPopup
 AX_BASE_EXPORT const char* ToString(ax::mojom::HasPopup has_popup);
 
+// ax::mojom::IsPopup
+AX_BASE_EXPORT const char* ToString(ax::mojom::IsPopup is_popup);
+
 // ax::mojom::InvalidState
 AX_BASE_EXPORT const char* ToString(ax::mojom::InvalidState invalid_state);
 
@@ -125,6 +134,9 @@ AX_BASE_EXPORT const char* ToString(ax::mojom::NameFrom name_from);
 AX_BASE_EXPORT const char* ToString(
     ax::mojom::DescriptionFrom description_from);
 
+// ax::mojom::DetailsFrom
+AX_BASE_EXPORT const char* ToString(ax::mojom::DetailsFrom details_from);
+
 // ax::mojom::EventFrom
 AX_BASE_EXPORT const char* ToString(ax::mojom::EventFrom event_from);
 
@@ -140,32 +152,51 @@ AX_BASE_EXPORT const char* ToString(ax::mojom::TreeOrder tree_order);
 // ax::mojom::ImageAnnotationStatus
 AX_BASE_EXPORT const char* ToString(ax::mojom::ImageAnnotationStatus status);
 
-// ax::mojom::Dropeffect
-AX_BASE_EXPORT const char* ToString(ax::mojom::Dropeffect dropeffect);
+// ax::mojom::AriaNotificationInterrupt
+AX_BASE_EXPORT const char* ToString(
+    ax::mojom::AriaNotificationInterrupt interrupt);
+
+// ax::mojom::AriaNotificationPriority
+AX_BASE_EXPORT const char* ToString(
+    ax::mojom::AriaNotificationPriority priority);
+
+template <typename T>
+std::optional<T> MaybeParseAXEnum(const char* attribute) {
+  static const base::NoDestructor<base::flat_map<std::string, T>> attr_map([] {
+    static_assert(T::kNone == T::kMinValue);
+    static_assert(std::to_underlying(T::kNone) == 0);
+    std::vector<std::pair<std::string, T>> entries;
+    // Normally, this would be max - min + 1, but as a special case, the empty
+    // string always maps to kNone as well.
+    entries.reserve(std::to_underlying(T::kMaxValue) -
+                    std::to_underlying(T::kMinValue) + 2);
+    entries.push_back({"", T::kNone});
+    for (auto i = std::to_underlying(T::kMinValue);
+         i <= std::to_underlying(T::kMaxValue); ++i) {
+      T attr = T{i};
+      std::string str = ToString(attr);
+      entries.push_back({std::move(str), attr});
+    }
+    return base::flat_map(std::move(entries));
+  }());
+  auto iter = attr_map->find(attribute);
+  if (iter != attr_map->end()) {
+    return iter->second;
+  }
+  return std::nullopt;
+}
 
 // Convert from the string representation of an enum defined in ax_enums.mojom
 // into the enum value. The first time this is called, builds up a map.
-// Relies on the existence of ui::ToString(enum).
+// Relies on the existence of ToString(enum).
 template <typename T>
 T ParseAXEnum(const char* attribute) {
-  static base::NoDestructor<std::map<std::string, T>> attr_map;
-  if (attr_map->empty()) {
-    (*attr_map)[""] = T::kNone;
-    for (int i = static_cast<int>(T::kMinValue);
-         i <= static_cast<int>(T::kMaxValue); i++) {
-      auto attr = static_cast<T>(i);
-      std::string str = ui::ToString(attr);
-      if (!base::Contains(*attr_map, str))
-        (*attr_map)[str] = attr;
-    }
+  auto result = MaybeParseAXEnum<T>(attribute);
+  if (result.has_value()) {
+    return result.value();
   }
-  auto iter = attr_map->find(attribute);
-  if (iter != attr_map->end())
-    return iter->second;
 
-  LOG(ERROR) << "Could not parse: " << attribute;
-  NOTREACHED();
-  return T::kNone;
+  NOTREACHED() << "Could not parse: " << attribute;
 }
 
 }  // namespace ui

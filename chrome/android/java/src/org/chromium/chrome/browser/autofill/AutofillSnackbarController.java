@@ -1,51 +1,93 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.autofill;
 
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.JNINamespace;
-import org.chromium.base.annotations.NativeMethods;
+import static org.chromium.build.NullUtil.assumeNonNull;
+
+import androidx.annotation.VisibleForTesting;
+
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JNINamespace;
+import org.jni_zero.JniPtr;
+import org.jni_zero.JniRawPtr;
+import org.jni_zero.JniType;
+import org.jni_zero.JniTypeToken;
+import org.jni_zero.NativeMethods;
+
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.ui.messages.snackbar.Snackbar;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManagerProvider;
 import org.chromium.ui.base.WindowAndroid;
 
 /**
- * Controller that allows the native autofill code to show a {@link Snackbar}.
- * For example: After a Virtual Card is auto-filled, a snackbar is shown with an informational
- * message and an action button.
+ * Controller that allows the native autofill code to show a {@link Snackbar}. For example: After a
+ * Virtual Card is auto-filled, a snackbar is shown with an informational message and an action
+ * button.
  */
 @JNINamespace("autofill")
+@NullMarked
 public class AutofillSnackbarController implements SnackbarManager.SnackbarController {
-    // Duration in milliseconds for which the snackbar should be shown.
-    private static final int DURATION_MS = 10000;
+    @JniType("::autofill::AutofillSnackbarViewAndroid")
+    interface NativeAutofillSnackbarViewAndroid extends JniTypeToken {}
 
-    private final long mNativeAutofillSnackbarView;
     private final SnackbarManager mSnackbarManager;
+    private @Nullable JniRawPtr<NativeAutofillSnackbarViewAndroid> mNativeAutofillSnackbarView;
+    private @Nullable JniRawPtr<NativeAutofillSnackbarViewAndroid> mNativeViewInCall;
 
-    public AutofillSnackbarController(
-            long nativeAutofillSnackbarView, SnackbarManager snackbarManager) {
+    @VisibleForTesting
+    AutofillSnackbarController(
+            JniRawPtr<NativeAutofillSnackbarViewAndroid> nativeAutofillSnackbarView,
+            SnackbarManager snackbarManager) {
         this.mNativeAutofillSnackbarView = nativeAutofillSnackbarView;
         this.mSnackbarManager = snackbarManager;
     }
 
-    @Override
-    public void onAction(Object actionData) {
-        AutofillSnackbarControllerJni.get().onActionClicked(mNativeAutofillSnackbarView);
+    private @Nullable JniRawPtr<NativeAutofillSnackbarViewAndroid> takeNativePtr() {
+        JniRawPtr<NativeAutofillSnackbarViewAndroid> nativeView = mNativeAutofillSnackbarView;
+        mNativeAutofillSnackbarView = null;
+        return nativeView;
     }
 
     @Override
-    public void onDismissNoAction(Object actionData) {
-        AutofillSnackbarControllerJni.get().onDismissed(mNativeAutofillSnackbarView);
+    public void onAction(@Nullable Object actionData) {
+        JniRawPtr<NativeAutofillSnackbarViewAndroid> nativeView = takeNativePtr();
+        if (nativeView == null) {
+            return;
+        }
+        // Native OnActionClicked runs both the action callback and the dismiss callback.
+        mNativeViewInCall = nativeView;
+        AutofillSnackbarControllerJni.get().onActionClicked(nativeView);
+        if (mNativeViewInCall != null) {
+            mNativeViewInCall.release();
+            mNativeViewInCall = null;
+        }
+    }
+
+    @Override
+    public void onDismissNoAction(@Nullable Object actionData) {
+        JniRawPtr<NativeAutofillSnackbarViewAndroid> nativeView = takeNativePtr();
+        if (nativeView == null) {
+            return;
+        }
+        mNativeViewInCall = nativeView;
+        AutofillSnackbarControllerJni.get().onDismissed(nativeView);
+        if (mNativeViewInCall != null) {
+            mNativeViewInCall.release();
+            mNativeViewInCall = null;
+        }
     }
 
     @CalledByNative
-    public static AutofillSnackbarController create(
-            long nativeAutofillSnackbarView, WindowAndroid windowAndroid) {
-        return new AutofillSnackbarController(
-                nativeAutofillSnackbarView, SnackbarManagerProvider.from(windowAndroid));
+    static AutofillSnackbarController create(
+            JniRawPtr<NativeAutofillSnackbarViewAndroid> nativeAutofillSnackbarView,
+            @JniType("ui::WindowAndroid*") WindowAndroid windowAndroid) {
+        SnackbarManager snackbarManager = SnackbarManagerProvider.from(windowAndroid);
+        assumeNonNull(snackbarManager);
+        return new AutofillSnackbarController(nativeAutofillSnackbarView, snackbarManager);
     }
 
     /**
@@ -53,28 +95,58 @@ public class AutofillSnackbarController implements SnackbarManager.SnackbarContr
      *
      * @param message Message to be shown in the snackbar.
      * @param action Label for the action button in the snackbar.
+     * @param duration The duration (in ms) for which the snackbar should be shown.
+     * @param snackbarType The type of the snackbar to be shown.
      */
     @CalledByNative
-    public void show(String message, String action) {
-        Snackbar snackBar = Snackbar.make(message, this, Snackbar.TYPE_ACTION,
-                                            Snackbar.UMA_AUTOFILL_VIRTUAL_CARD_FILLED)
-                                    .setAction(action, /*objectData=*/null);
+    void show(
+            @JniType("std::u16string") String message,
+            @JniType("std::u16string") String action,
+            int duration,
+            @JniType("autofill::AutofillSnackbarType") @AutofillSnackbarType int snackbarType) {
+        int identifier = getSnackbarIdentifier(snackbarType);
+        Snackbar snackBar =
+                Snackbar.make(message, this, Snackbar.TYPE_ACTION, identifier)
+                        .setAction(action, /* actionData= */ null);
         // Wrap the message text if it doesn't fit on a single line. The action text will not wrap
         // though.
-        snackBar.setSingleLine(false);
-        snackBar.setDuration(DURATION_MS);
+        snackBar.setDefaultLines(false);
+        snackBar.setDuration(duration);
         mSnackbarManager.showSnackbar(snackBar);
+    }
+
+    private static int getSnackbarIdentifier(@AutofillSnackbarType int snackbarType) {
+        switch (snackbarType) {
+            case AutofillSnackbarType.AUTOFILL_AI_SUPPRESSION_UNDO:
+                return Snackbar.UMA_AUTOFILL_AI_SUPPRESSION_UNDO;
+            case AutofillSnackbarType.VIRTUAL_CARD:
+            default:
+                // Other snackbar types intentionally share UMA_AUTOFILL_VIRTUAL_CARD_FILLED
+                // until dedicated UMA constants are introduced.
+                return Snackbar.UMA_AUTOFILL_VIRTUAL_CARD_FILLED;
+        }
     }
 
     /** Dismiss the autofill snackbar if it's showing. No-op if it's not showing. */
     @CalledByNative
-    public void dismiss() {
+    void dismiss() {
+        if (mNativeViewInCall != null) {
+            mNativeViewInCall.release();
+            mNativeViewInCall = null;
+            return;
+        }
+        JniRawPtr<NativeAutofillSnackbarViewAndroid> nativeView = takeNativePtr();
+        if (nativeView == null) {
+            return;
+        }
+        nativeView.release();
         mSnackbarManager.dismissSnackbars(this);
     }
 
     @NativeMethods
-    public interface Natives {
-        void onActionClicked(long nativeAutofillSnackbarViewAndroid);
-        void onDismissed(long nativeAutofillSnackbarViewAndroid);
+    interface Natives {
+        void onActionClicked(JniPtr<NativeAutofillSnackbarViewAndroid> self);
+
+        void onDismissed(JniPtr<NativeAutofillSnackbarViewAndroid> self);
     }
 }

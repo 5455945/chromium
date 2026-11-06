@@ -1,10 +1,14 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+import {SourcesTestRunner} from 'sources_test_runner';
+
+import * as SDK from 'devtools/core/sdk/sdk.js';
+
 (async function() {
   TestRunner.addResult(`Tests that breakpoints are successfully restored after debugger disabling.\n`);
-  await TestRunner.loadModule('sources'); await TestRunner.loadTestModule('sources_test_runner');
   await TestRunner.showPanel('sources');
   await TestRunner.evaluateInPagePromise(`
       function testFunction()
@@ -23,7 +27,7 @@
     TestRunner.addResult('Main resource was shown.');
     await SourcesTestRunner.setBreakpoint(sourceFrame, 11, '', true);
     TestRunner.debuggerModel.addEventListener(SDK.DebuggerModel.Events.DebuggerWasDisabled, step3, this);
-    TestRunner.debuggerModel._disableDebugger();
+    TestRunner.debuggerModel.disableDebugger();
   }
 
   function step3() {
@@ -34,18 +38,19 @@
   }
 
   function step4() {
-    TestRunner.addResult('function evaluated without a pause on the breakpoint.');
-    TestRunner.debuggerModel.addEventListener(SDK.DebuggerModel.Events.DebuggerWasEnabled, step5, this);
-    TestRunner.debuggerModel._enableDebugger();
+    TestRunner.addResult('Function evaluated without a pause on the breakpoint.');
+    TestRunner.addSniffer(TestRunner.debuggerModel, "setBreakpointByURL", step5);
+    TestRunner.addResult('Enabling debugger.');
+    TestRunner.debuggerModel.enableDebugger();
   }
 
   function step5() {
-    TestRunner.addResult('Debugger was enabled');
-    TestRunner.debuggerModel.removeEventListener(SDK.DebuggerModel.Events.DebuggerWasEnabled, step5, this);
+    TestRunner.addResult('Breakpoint was set after re-enabling.');
     SourcesTestRunner.runTestFunctionAndWaitUntilPaused(step6);
   }
 
   function step6() {
+    TestRunner.addResult('Function evaluated and paused on breakpoint.');
     SourcesTestRunner.completeDebuggerTest();
   }
 })();

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,10 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "remoting/host/client_session_control.h"
 #include "remoting/host/input_monitor/local_hotkey_input_monitor.h"
 #include "remoting/host/input_monitor/local_keyboard_input_monitor.h"
@@ -21,9 +21,12 @@ namespace {
 class LocalInputMonitorImpl : public LocalInputMonitor {
  public:
   LocalInputMonitorImpl(
-      scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner,
       scoped_refptr<base::SingleThreadTaskRunner> input_task_runner,
       scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner);
+
+  LocalInputMonitorImpl(const LocalInputMonitorImpl&) = delete;
+  LocalInputMonitorImpl& operator=(const LocalInputMonitorImpl&) = delete;
+
   ~LocalInputMonitorImpl() override;
 
   // LocalInputMonitor implementation.
@@ -46,30 +49,34 @@ class LocalInputMonitorImpl : public LocalInputMonitor {
 
   // Indicates whether the instance is actively monitoring local input.
   bool monitoring_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(LocalInputMonitorImpl);
 };
 
 LocalInputMonitorImpl::LocalInputMonitorImpl(
-    scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner,
     scoped_refptr<base::SingleThreadTaskRunner> input_task_runner,
     scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner)
-    : caller_task_runner_(caller_task_runner),
-      input_task_runner_(input_task_runner),
-      ui_task_runner_(ui_task_runner) {}
+    : input_task_runner_(std::move(input_task_runner)),
+      ui_task_runner_(std::move(ui_task_runner)) {}
 
 LocalInputMonitorImpl::~LocalInputMonitorImpl() {
+  if (!monitoring_) {
+    return;
+  }
+
+  DCHECK(caller_task_runner_);
   // LocalInputMonitor sub-classes expect to be torn down on the caller thread.
   if (!caller_task_runner_->BelongsToCurrentThread()) {
-    if (hotkey_input_monitor_)
+    if (hotkey_input_monitor_) {
       caller_task_runner_->DeleteSoon(FROM_HERE,
                                       hotkey_input_monitor_.release());
-    if (keyboard_input_monitor_)
+    }
+    if (keyboard_input_monitor_) {
       caller_task_runner_->DeleteSoon(FROM_HERE,
                                       keyboard_input_monitor_.release());
-    if (pointer_input_monitor_)
+    }
+    if (pointer_input_monitor_) {
       caller_task_runner_->DeleteSoon(FROM_HERE,
                                       pointer_input_monitor_.release());
+    }
   }
   caller_task_runner_ = nullptr;
 }
@@ -77,25 +84,29 @@ LocalInputMonitorImpl::~LocalInputMonitorImpl() {
 void LocalInputMonitorImpl::StartMonitoringForClientSession(
     base::WeakPtr<ClientSessionControl> client_session_control) {
   DCHECK(!monitoring_);
+  caller_task_runner_ = base::SingleThreadTaskRunner::GetCurrentDefault();
 
   hotkey_input_monitor_ = LocalHotkeyInputMonitor::Create(
       caller_task_runner_, input_task_runner_, ui_task_runner_,
       base::BindOnce(&ClientSessionControl::DisconnectSession,
-                     client_session_control, protocol::OK));
+                     client_session_control, ErrorCode::OK,
+                     "Disconnection keyboard shortcut pressed", FROM_HERE));
 
   pointer_input_monitor_ = LocalPointerInputMonitor::Create(
       caller_task_runner_, input_task_runner_, ui_task_runner_,
       base::BindRepeating(&ClientSessionControl::OnLocalPointerMoved,
                           client_session_control),
       base::BindOnce(&ClientSessionControl::DisconnectSession,
-                     client_session_control, protocol::OK));
+                     client_session_control, ErrorCode::OK,
+                     "Local pointer input detected", FROM_HERE));
 
   keyboard_input_monitor_ = LocalKeyboardInputMonitor::Create(
       caller_task_runner_, input_task_runner_, ui_task_runner_,
       base::BindRepeating(&ClientSessionControl::OnLocalKeyPressed,
                           client_session_control),
       base::BindOnce(&ClientSessionControl::DisconnectSession,
-                     client_session_control, protocol::OK));
+                     client_session_control, ErrorCode::OK,
+                     "Local keyboard input detected.", FROM_HERE));
 
   OnMonitoringStarted();
 }
@@ -107,6 +118,7 @@ void LocalInputMonitorImpl::StartMonitoring(
   DCHECK(!monitoring_);
   DCHECK(on_error);
   DCHECK(on_pointer_input || on_keyboard_input);
+  caller_task_runner_ = base::SingleThreadTaskRunner::GetCurrentDefault();
 
   if (on_pointer_input) {
     pointer_input_monitor_ = LocalPointerInputMonitor::Create(
@@ -135,11 +147,10 @@ void LocalInputMonitorImpl::OnMonitoringStarted() {
 }  // namespace
 
 std::unique_ptr<LocalInputMonitor> LocalInputMonitor::Create(
-    scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner,
     scoped_refptr<base::SingleThreadTaskRunner> input_task_runner,
     scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner) {
-  return std::make_unique<LocalInputMonitorImpl>(
-      caller_task_runner, input_task_runner, ui_task_runner);
+  return std::make_unique<LocalInputMonitorImpl>(std::move(input_task_runner),
+                                                 std::move(ui_task_runner));
 }
 
 }  // namespace remoting

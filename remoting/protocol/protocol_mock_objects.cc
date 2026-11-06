@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +8,13 @@
 #include <utility>
 
 #include "base/check.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
+#include "remoting/proto/video.pb.h"
 #include "remoting/protocol/session_plugin.h"
 #include "remoting/protocol/video_stream.h"
 #include "remoting/signaling/signaling_address.h"
 
-namespace remoting {
-namespace protocol {
+namespace remoting::protocol {
 
 MockAuthenticator::MockAuthenticator() = default;
 MockAuthenticator::~MockAuthenticator() = default;
@@ -42,20 +42,43 @@ MockCursorShapeStub::~MockCursorShapeStub() = default;
 MockVideoStub::MockVideoStub() = default;
 MockVideoStub::~MockVideoStub() = default;
 
-MockSession::MockSession() = default;
+void MockVideoStub::ProcessVideoPacket(
+    std::unique_ptr<VideoPacket> video_packet,
+    base::OnceClosure done) {
+  ProcessVideoPacketPtr(video_packet.get(), &done);
+}
+
+MockSession::MockSession() {
+  ON_CALL(*this, SetEventHandler(testing::_))
+      .WillByDefault(
+          [this](Session::EventHandler* handler) { event_handler_ = handler; });
+  ON_CALL(*this, error()).WillByDefault([this]() { return error_; });
+  ON_CALL(*this, Close(testing::_, testing::_, testing::_))
+      .WillByDefault([this](ErrorCode error, std::string_view error_details,
+                            const SourceLocation& location) {
+        error_ = error;
+        if (event_handler_) {
+          event_handler_->OnSessionStateChange(
+              error == ErrorCode::OK ? Session::CLOSED : Session::FAILED);
+        }
+      });
+}
 MockSession::~MockSession() = default;
 
 MockSessionManager::MockSessionManager() = default;
 MockSessionManager::~MockSessionManager() = default;
 
+MockSessionObserver::MockSessionObserver() = default;
+MockSessionObserver::~MockSessionObserver() = default;
+
 MockPairingRegistryDelegate::MockPairingRegistryDelegate() = default;
 MockPairingRegistryDelegate::~MockPairingRegistryDelegate() = default;
 
-std::unique_ptr<base::ListValue> MockPairingRegistryDelegate::LoadAll() {
-  std::unique_ptr<base::ListValue> result(new base::ListValue());
+base::ListValue MockPairingRegistryDelegate::LoadAll() {
+  base::ListValue result;
   for (Pairings::const_iterator i = pairings_.begin(); i != pairings_.end();
        ++i) {
-    result->Append(i->second.ToValue());
+    result.Append(i->second.ToValue());
   }
   return result;
 }
@@ -88,7 +111,7 @@ bool MockPairingRegistryDelegate::Delete(const std::string& client_id) {
 
 SynchronousPairingRegistry::SynchronousPairingRegistry(
     std::unique_ptr<Delegate> delegate)
-    : PairingRegistry(base::ThreadTaskRunnerHandle::Get(),
+    : PairingRegistry(base::SingleThreadTaskRunner::GetCurrentDefault(),
                       std::move(delegate)) {}
 SynchronousPairingRegistry::~SynchronousPairingRegistry() = default;
 
@@ -100,5 +123,4 @@ void SynchronousPairingRegistry::PostTask(
   std::move(task).Run();
 }
 
-}  // namespace protocol
-}  // namespace remoting
+}  // namespace remoting::protocol

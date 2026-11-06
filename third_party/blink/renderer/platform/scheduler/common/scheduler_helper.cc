@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,10 @@
 
 #include "base/task/sequence_manager/sequence_manager_impl.h"
 #include "base/task/sequence_manager/task_queue.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/default_tick_clock.h"
 #include "base/trace_event/trace_event.h"
 #include "base/trace_event/traced_value.h"
-#include "third_party/blink/renderer/platform/scheduler/common/ukm_task_sampler.h"
 
 namespace blink {
 namespace scheduler {
@@ -22,35 +22,28 @@ using base::sequence_manager::TaskTimeObserver;
 using base::sequence_manager::TimeDomain;
 
 SchedulerHelper::SchedulerHelper(SequenceManager* sequence_manager)
-    : sequence_manager_(sequence_manager),
-      observer_(nullptr),
-      ukm_task_sampler_(sequence_manager_->GetMetricRecordingSettings()
-                            .task_sampling_rate_for_recording_cpu_time) {
+    : sequence_manager_(sequence_manager), observer_(nullptr) {
   sequence_manager_->SetWorkBatchSize(4);
 }
 
-void SchedulerHelper::AttachToCurrentThread() {
-  DETACH_FROM_THREAD(thread_checker_);
-  CheckOnValidThread();
-  DCHECK(default_task_runner_) << "Must be invoked after InitDefaultQueues.";
-  DCHECK(!simple_task_executor_.has_value());
-  simple_task_executor_.emplace(default_task_runner_);
-}
-
-void SchedulerHelper::InitDefaultQueues(
-    scoped_refptr<TaskQueue> default_task_queue,
-    scoped_refptr<TaskQueue> control_task_queue,
-    TaskType default_task_type) {
-  control_task_queue->SetQueuePriority(TaskQueue::kControlPriority);
-
-  default_task_runner_ =
-      default_task_queue->CreateTaskRunner(static_cast<int>(default_task_type));
+void SchedulerHelper::InitDefaultTaskQueue(
+    base::sequence_manager::TaskQueue* queue,
+    scoped_refptr<base::SingleThreadTaskRunner> task_runner) {
+  default_task_runner_ = std::move(task_runner);
 
   // Invoking SequenceManager::SetDefaultTaskRunner() before attaching the
   // SchedulerHelper to a thread is fine. The default TaskRunner will be stored
   // in TLS by the ThreadController before tasks are executed.
   DCHECK(sequence_manager_);
-  sequence_manager_->SetDefaultTaskRunner(default_task_runner_);
+  sequence_manager_->SetDefaultTaskRunner(default_task_runner_,
+                                          queue->GetQueuePriority());
+}
+
+void SchedulerHelper::AttachToCurrentThread() {
+  DETACH_FROM_THREAD(thread_checker_);
+  CheckOnValidThread();
+  DCHECK(default_task_runner_)
+      << "Must be invoked after InitDefaultTaskRunner().";
 }
 
 SchedulerHelper::~SchedulerHelper() {
@@ -59,8 +52,6 @@ SchedulerHelper::~SchedulerHelper() {
 
 void SchedulerHelper::Shutdown() {
   CheckOnValidThread();
-  DCHECK(simple_task_executor_.has_value())
-      << "AttachToCurrentThread() was not invoked.";
   if (!sequence_manager_)
     return;
   ShutdownAllQueues();
@@ -123,30 +114,35 @@ void SchedulerHelper::ReclaimMemory() {
   sequence_manager_->ReclaimMemory();
 }
 
-TimeDomain* SchedulerHelper::real_time_domain() const {
+std::optional<base::sequence_manager::WakeUp> SchedulerHelper::GetNextWakeUp()
+    const {
   CheckOnValidThread();
   DCHECK(sequence_manager_);
-  return sequence_manager_->GetRealTimeDomain();
+  return sequence_manager_->GetNextDelayedWakeUp();
 }
 
-void SchedulerHelper::RegisterTimeDomain(TimeDomain* time_domain) {
+void SchedulerHelper::SetTimeDomain(
+    base::sequence_manager::TimeDomain* time_domain) {
   CheckOnValidThread();
   DCHECK(sequence_manager_);
-  sequence_manager_->RegisterTimeDomain(time_domain);
+  return sequence_manager_->SetTimeDomain(time_domain);
 }
 
-void SchedulerHelper::UnregisterTimeDomain(TimeDomain* time_domain) {
+void SchedulerHelper::ResetTimeDomain() {
   CheckOnValidThread();
-  if (sequence_manager_)
-    sequence_manager_->UnregisterTimeDomain(time_domain);
+  DCHECK(sequence_manager_);
+  return sequence_manager_->ResetTimeDomain();
 }
 
 void SchedulerHelper::OnBeginNestedRunLoop() {
+  ++nested_runloop_depth_;
   if (observer_)
     observer_->OnBeginNestedRunLoop();
 }
 
 void SchedulerHelper::OnExitNestedRunLoop() {
+  --nested_runloop_depth_;
+  DCHECK_GE(nested_runloop_depth_, 0);
   if (observer_)
     observer_->OnExitNestedRunLoop();
 }
@@ -162,30 +158,6 @@ base::TimeTicks SchedulerHelper::NowTicks() const {
     return sequence_manager_->NowTicks();
   // We may need current time for tracing when shutting down worker thread.
   return base::TimeTicks::Now();
-}
-
-void SchedulerHelper::SetTimerSlack(base::TimerSlack timer_slack) {
-  if (sequence_manager_) {
-    static_cast<base::sequence_manager::internal::SequenceManagerImpl*>(
-        sequence_manager_)
-        ->SetTimerSlack(timer_slack);
-  }
-}
-
-double SchedulerHelper::GetSamplingRateForRecordingCPUTime() const {
-  if (sequence_manager_) {
-    return sequence_manager_->GetMetricRecordingSettings()
-        .task_sampling_rate_for_recording_cpu_time;
-  }
-  return 0;
-}
-
-bool SchedulerHelper::HasCPUTimingForEachTask() const {
-  if (sequence_manager_) {
-    return sequence_manager_->GetMetricRecordingSettings()
-        .records_cpu_time_for_all_tasks();
-  }
-  return false;
 }
 
 }  // namespace scheduler

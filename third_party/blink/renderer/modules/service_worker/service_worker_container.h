@@ -33,6 +33,7 @@
 
 #include <memory>
 
+#include "third_party/blink/public/mojom/script/script_type.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_registration.mojom-blink-forward.h"
 #include "third_party/blink/public/platform/modules/service_worker/web_service_worker_provider.h"
 #include "third_party/blink/public/platform/modules/service_worker/web_service_worker_provider_client.h"
@@ -46,7 +47,8 @@
 #include "third_party/blink/renderer/modules/service_worker/service_worker.h"
 #include "third_party/blink/renderer/modules/service_worker/service_worker_registration.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
@@ -54,40 +56,48 @@ namespace blink {
 
 class ExecutionContext;
 class ExceptionState;
-class LocalDOMWindow;
+class ServiceWorkerRegistration;
+class V8UnionTrustedScriptURLOrUSVString;
 
 class MODULES_EXPORT ServiceWorkerContainer final
-    : public EventTargetWithInlineData,
-      public Supplement<LocalDOMWindow>,
+    : public EventTarget,
+      public Supplement<ExecutionContext>,
       public ExecutionContextLifecycleObserver,
       public WebServiceWorkerProviderClient {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  using RegistrationCallbacks =
-      WebServiceWorkerProvider::WebServiceWorkerRegistrationCallbacks;
-
   static const char kSupplementName[];
 
-  static ServiceWorkerContainer* From(LocalDOMWindow&);
+  static ServiceWorkerContainer* From(ExecutionContext&);
 
   static ServiceWorkerContainer* CreateForTesting(
-      LocalDOMWindow&,
+      ExecutionContext&,
       std::unique_ptr<WebServiceWorkerProvider>);
 
-  explicit ServiceWorkerContainer(LocalDOMWindow&);
+  explicit ServiceWorkerContainer(ExecutionContext&);
   ~ServiceWorkerContainer() override;
 
   void Trace(Visitor*) const override;
 
-  ServiceWorker* controller() { return controller_; }
-  ScriptPromise ready(ScriptState*, ExceptionState&);
+  ServiceWorker* controller() { return controller_.Get(); }
+  ScriptPromise<ServiceWorkerRegistration> ready(ScriptState*, ExceptionState&);
 
-  ScriptPromise registerServiceWorker(ScriptState*,
-                                      const String& pattern,
-                                      const RegistrationOptions*);
-  ScriptPromise getRegistration(ScriptState*, const String& document_url);
-  ScriptPromise getRegistrations(ScriptState*);
+  ScriptPromise<ServiceWorkerRegistration> registerServiceWorker(
+      ScriptState*,
+      const V8UnionTrustedScriptURLOrUSVString* scriptURL,
+      const RegistrationOptions*,
+      ExceptionState&);
+  ScriptPromise<ServiceWorkerRegistration> getRegistration(
+      ScriptState*,
+      const String& document_url);
+  ScriptPromise<IDLSequence<ServiceWorkerRegistration>> getRegistrations(
+      ScriptState*);
+
+  ScriptPromise<ServiceWorkerRegistration>
+  registerServiceWorkerWithoutTrustedTypes(ScriptState*,
+                                           const String& scriptURL,
+                                           const RegistrationOptions*);
 
   void startMessages();
 
@@ -120,12 +130,25 @@ class MODULES_EXPORT ServiceWorkerContainer final
   // object if needed, or else returns the existing one.
   ServiceWorker* GetOrCreateServiceWorker(WebServiceWorkerObjectInfo);
 
+ protected:
+  DispatchEventResult DispatchEventInternal(Event&) override;
+
  private:
   class DomContentLoadedListener;
 
-  using ReadyProperty =
-      ScriptPromiseProperty<Member<ServiceWorkerRegistration>,
-                            Member<ServiceWorkerRegistration>>;
+  using RegistrationCallbacks =
+      WebServiceWorkerProvider::WebServiceWorkerRegistrationCallbacks;
+
+  void RegisterServiceWorkerInternal(
+      const KURL& scope_url,
+      const KURL& script_url,
+      std::optional<mojom::blink::ScriptType> script_type,
+      mojom::blink::ServiceWorkerUpdateViaCache update_via_cache,
+      WebFetchClientSettingsObject fetch_client_settings_object,
+      std::unique_ptr<RegistrationCallbacks> callbacks);
+
+  using ReadyProperty = ScriptPromiseProperty<ServiceWorkerRegistration,
+                                              ServiceWorkerRegistration>;
   ReadyProperty* CreateReadyProperty();
 
   void EnableClientMessageQueue();
@@ -142,15 +165,13 @@ class MODULES_EXPORT ServiceWorkerContainer final
   // ServiceWorkerRegistration object in current execution context.
   HeapHashMap<int64_t,
               WeakMember<ServiceWorkerRegistration>,
-              WTF::IntHash<int64_t>,
-              WTF::UnsignedWithZeroKeyHashTraits<int64_t>>
+              IntWithZeroKeyHashTraits<int64_t>>
       service_worker_registration_objects_;
   // Map from service worker version id to JavaScript ServiceWorker object in
   // current execution context.
   HeapHashMap<int64_t,
               WeakMember<ServiceWorker>,
-              WTF::IntHash<int64_t>,
-              WTF::UnsignedWithZeroKeyHashTraits<int64_t>>
+              IntWithZeroKeyHashTraits<int64_t>>
       service_worker_objects_;
 
   // For https://w3c.github.io/ServiceWorker/#dfn-client-message-queue

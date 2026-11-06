@@ -1,5 +1,4 @@
-
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,9 +17,9 @@ namespace blink {
 struct VariationAxis {
   String tag;
   String name;
-  double minValue;
-  double maxValue;
-  double defaultValue;
+  double minValue = 0;
+  double maxValue = 0;
+  double defaultValue = 0;
 };
 
 class PLATFORM_EXPORT VariableAxesNames {

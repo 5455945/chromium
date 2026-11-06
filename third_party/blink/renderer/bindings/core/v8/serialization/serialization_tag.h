@@ -1,9 +1,11 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_BINDINGS_CORE_V8_SERIALIZATION_SERIALIZATION_TAG_H_
 #define THIRD_PARTY_BLINK_RENDERER_BINDINGS_CORE_V8_SERIALIZATION_SERIALIZATION_TAG_H_
+
+#include <cstdint>
 
 namespace blink {
 
@@ -36,20 +38,21 @@ namespace blink {
 // the contents of these values, they are first given object reference IDs (by
 // GenerateFreshObjectTag/GenerateFreshArrayTag); these reference IDs are then
 // used with ObjectReferenceTag to tie the recursive knot.
-enum SerializationTag {
+enum SerializationTag : uint8_t {
   kMessagePortTag = 'M',  // index:int -> MessagePort. Fills the result with
                           // transferred MessagePort.
   kMojoHandleTag = 'h',   // index:int -> MojoHandle. Fills the result with
                           // transferred MojoHandle.
-  kBlobTag = 'b',  // uuid:WebCoreString, type:WebCoreString, size:uint64_t ->
+  // In M155 and earlier, the index was a UUID.
+  kBlobTag = 'b',  // index:WebCoreString, type:WebCoreString, size:uint64_t ->
                    // Blob (ref)
-  kBlobIndexTag = 'i',             // index:int32_t -> Blob (ref)
-  kFileTag = 'f',                  // file:RawFile -> File (ref)
-  kFileIndexTag = 'e',             // index:int32_t -> File (ref)
-  kDOMFileSystemTag = 'd',         // type:int32_t, name:WebCoreString,
-                                   // uuid:WebCoreString -> FileSystem (ref)
-  kFileSystemFileHandleTag = 'n',  // name:WebCoreString, index:uint32_t
-                                   // -> FileSystemFileHandle (ref)
+  kBlobIndexTag = 'i',                  // index:int32_t -> Blob (ref)
+  kFileTag = 'f',                       // file:RawFile -> File (ref)
+  kFileIndexTag = 'e',                  // index:int32_t -> File (ref)
+  kDOMFileSystemTag = 'd',              // type:int32_t, name:WebCoreString,
+                                        // url:WebCoreString -> FileSystem (ref)
+  kFileSystemFileHandleTag = 'n',       // name:WebCoreString, index:uint32_t
+                                        // -> FileSystemFileHandle (ref)
   kFileSystemDirectoryHandleTag = 'N',  // name:WebCoreString, index:uint32_t ->
                                         // FileSystemDirectoryHandle (ref)
   kFileListTag =
@@ -68,6 +71,8 @@ enum SerializationTag {
                           // -> ImageBitmap (ref)
   kImageBitmapTransferTag =
       'G',  // index:uint32_t -> ImageBitmap. For ImageBitmap transfer
+  kElementImageTransferTag =
+      'J',  // index:uint32_t -> ElementImage. For ElementImage transfer
   kOffscreenCanvasTransferTag = 'H',  // index, width, height, id,
                                       // filter_quality::uint32_t ->
                                       // OffscreenCanvas. For OffscreenCanvas
@@ -75,8 +80,15 @@ enum SerializationTag {
   kReadableStreamTransferTag = 'r',   // index:uint32_t
   kTransformStreamTransferTag = 'm',  // index:uint32_t
   kWritableStreamTransferTag = 'w',   // index:uint32_t
-  kDOMPointTag = 'Q',                 // x:Double, y:Double, z:Double, w:Double
-  kDOMPointReadOnlyTag = 'W',         // x:Double, y:Double, z:Double, w:Double
+  kMediaStreamTrack =
+      's',  // trackImplSubtype:Uint32Enum, session_id.high:uint64_t,
+            // session_id.low:uint64_t, transfer_id.high:uint64_t,
+            // transfer_id.low:uint64_t, kind:WebCoreString, id:WebCoreString,
+            // label:WebCoreString, enabled:byte, muted:byte,
+            // contentHint:Uint32Enum, readyState:Uint32Enum
+            // If trackImplSubtype=BrowserCapture: cropVersion:uint32_t
+  kDOMPointTag = 'Q',          // x:Double, y:Double, z:Double, w:Double
+  kDOMPointReadOnlyTag = 'W',  // x:Double, y:Double, z:Double, w:Double
   kDOMRectTag = 'E',          // x:Double, y:Double, width:Double, height:Double
   kDOMRectReadOnlyTag = 'R',  // x:Double, y:Double, width:Double, height:Double
   kDOMQuadTag = 'T',          // p1:Double, p2:Double, p3:Double, p4:Double
@@ -103,9 +115,17 @@ enum SerializationTag {
                              // pemCertificate:WebCoreString
   kRTCEncodedAudioFrameTag = 'A',  // uint32_t -> transferred audio frame ID
   kRTCEncodedVideoFrameTag = 'V',  // uint32_t -> transferred video frame ID
+  kRTCDataChannel = 'p',  // uint32_t -> transferred webrtc datachannel ID
 
-  kAudioDataTag = 'a',   // uint32_t -> transferred audio data
-  kVideoFrameTag = 'v',  // uint32_t -> transferred video frame ID
+  kAudioDataTag = 'a',          // uint32_t -> transferred audio data
+  kVideoFrameTag = 'v',         // uint32_t -> transferred video frame ID
+  kEncodedAudioChunkTag = 'y',  // uint32_t -> transferred chunk
+  kEncodedVideoChunkTag = 'z',  // uint32_t -> transferred chunk
+
+  kCropTargetTag = 'c',         // crop_id:WebCoreString
+  kRestrictionTargetTag = 'D',  // restriction_id:WebCoreString
+
+  kMediaSourceHandleTag = 'S',  // uint32_t -> transferred MediaSourceHandle
 
   // The following tags were used by the Shape Detection API implementation
   // between M71 and M81. During these milestones, the API was always behind
@@ -114,8 +134,32 @@ enum SerializationTag {
   kDeprecatedDetectedFaceTag = 'F',
   kDeprecatedDetectedTextTag = 't',
 
+  kFencedFrameConfigTag = 'C',
+
   kDOMExceptionTag = 'x',  // name:String,message:String,stack:String
-  kVersionTag = 0xFF       // version:uint32_t -> Uses this as the file version.
+
+  kQuotaExceededErrorTag = 'q',  // message:String,stack:String,
+                                 // has_quota:uint32 (0 or 1), quota:double,
+                                 // has_requested:uint32 (0 or 1),
+                                 // requested:double
+  kWebTransportErrorTag = 'P',   // version:uint32,message:String,stack:String,
+                                 // source:uint32,
+                                 // has_stream_error_code:uint32,
+                                 // stream_error_code:uint32
+  kTrailerOffsetTag =
+      0xFE,  // offset:uint64_t (fixed width, network order) from buffer start
+             // size:uint32_t (fixed width, network order)
+  kVersionTag = 0xFF,  // version:uint32_t -> Uses this as the file version.
+
+  // Tags used in trailers.
+  kTrailerRequiresInterfacesTag = 0xA0,
+};
+
+inline constexpr uint32_t kWebTransportErrorFormatVersion = 1;
+
+enum class WebTransportErrorSourceTag : uint32_t {
+  kStream = 0,
+  kSession = 1,
 };
 
 }  // namespace blink

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,8 @@
 
 #include <wayland-server-protocol.h>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "ui/ozone/platform/wayland/test/global_object.h"
 
 namespace wl {
@@ -21,6 +22,10 @@ class TestDataSource;
 class TestDataDeviceManager : public GlobalObject {
  public:
   TestDataDeviceManager();
+
+  TestDataDeviceManager(const TestDataDeviceManager&) = delete;
+  TestDataDeviceManager& operator=(const TestDataDeviceManager&) = delete;
+
   ~TestDataDeviceManager() override;
 
   TestDataDevice* data_device() const { return data_device_; }
@@ -33,11 +38,14 @@ class TestDataDeviceManager : public GlobalObject {
     data_source_ = data_source;
   }
 
- private:
-  TestDataDevice* data_device_ = nullptr;
-  TestDataSource* data_source_ = nullptr;
+  base::WeakPtr<TestDataDeviceManager> GetWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
 
-  DISALLOW_COPY_AND_ASSIGN(TestDataDeviceManager);
+ private:
+  raw_ptr<TestDataDevice> data_device_ = nullptr;
+  raw_ptr<TestDataSource, DanglingUntriaged> data_source_ = nullptr;
+  base::WeakPtrFactory<TestDataDeviceManager> weak_ptr_factory_{this};
 };
 
 }  // namespace wl

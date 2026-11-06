@@ -1,37 +1,35 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/net/dns_probe_test_util.h"
 
 #include <stdint.h>
+
 #include <utility>
 
+#include "base/notreached.h"
 #include "chrome/browser/net/dns_probe_runner.h"
 #include "net/base/ip_address.h"
-#include "net/base/network_isolation_key.h"
+#include "net/base/network_anonymization_key.h"
 #include "net/dns/public/resolve_error_info.h"
+#include "services/network/public/mojom/clear_data_filter.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace chrome_browser_net {
 
 namespace {
 
-static absl::optional<net::AddressList> AddressListForResponse(
+static net::AddressList AddressListForResponse(
     FakeHostResolver::Response response) {
-  absl::optional<net::AddressList> resolved_addresses;
   switch (response) {
     case FakeHostResolver::kNoResponse:
-      break;
-    case FakeHostResolver::kEmptyResponse:
-      resolved_addresses = net::AddressList();
-      break;
+      return net::AddressList();
     case FakeHostResolver::kOneAddressResponse:
-      resolved_addresses =
-          net::AddressList(net::IPEndPoint(net::IPAddress(192, 168, 1, 1), 0));
-      break;
+      return net::AddressList(
+          net::IPEndPoint(net::IPAddress(192, 168, 1, 1), 0));
   }
-  return resolved_addresses;
+  NOTREACHED();
 }
 
 }  // namespace
@@ -63,12 +61,12 @@ FakeHostResolver::FakeHostResolver(
 FakeHostResolver::~FakeHostResolver() = default;
 
 void FakeHostResolver::ResolveHost(
-    const net::HostPortPair& host,
-    const net::NetworkIsolationKey& network_isolation_key,
+    network::mojom::HostResolverHostPtr host,
+    const net::NetworkAnonymizationKey& network_anonymization_key,
     network::mojom::ResolveHostParametersPtr optional_parameters,
     mojo::PendingRemote<network::mojom::ResolveHostClient>
         pending_response_client) {
-  EXPECT_TRUE(network_isolation_key.IsTransient());
+  EXPECT_TRUE(network_anonymization_key.IsTransient());
 
   const SingleResult& cur_result = result_list_[next_result_];
   if (next_result_ + 1 < result_list_.size())
@@ -76,7 +74,8 @@ void FakeHostResolver::ResolveHost(
   mojo::Remote<network::mojom::ResolveHostClient> response_client(
       std::move(pending_response_client));
   response_client->OnComplete(cur_result.result, cur_result.resolve_error_info,
-                              AddressListForResponse(cur_result.response));
+                              AddressListForResponse(cur_result.response),
+                              /*alternative_endpoints=*/{});
 }
 
 void FakeHostResolver::MdnsListen(
@@ -94,11 +93,11 @@ HangingHostResolver::HangingHostResolver(
 HangingHostResolver::~HangingHostResolver() = default;
 
 void HangingHostResolver::ResolveHost(
-    const net::HostPortPair& host,
-    const net::NetworkIsolationKey& network_isolation_key,
+    network::mojom::HostResolverHostPtr host,
+    const net::NetworkAnonymizationKey& network_anonymization_key,
     network::mojom::ResolveHostParametersPtr optional_parameters,
     mojo::PendingRemote<network::mojom::ResolveHostClient> response_client) {
-  EXPECT_TRUE(network_isolation_key.IsTransient());
+  EXPECT_TRUE(network_anonymization_key.IsTransient());
 
   // Intentionally do not call response_client->OnComplete, but hang onto the
   // |response_client| since destroying that also causes the mojo
@@ -123,7 +122,7 @@ FakeHostResolverNetworkContext::FakeHostResolverNetworkContext(
 FakeHostResolverNetworkContext::~FakeHostResolverNetworkContext() = default;
 
 void FakeHostResolverNetworkContext::CreateHostResolver(
-    const absl::optional<net::DnsConfigOverrides>& config_overrides,
+    const std::optional<net::DnsConfigOverrides>& config_overrides,
     mojo::PendingReceiver<network::mojom::HostResolver> receiver) {
   ASSERT_TRUE(config_overrides);
   if (!config_overrides->nameservers) {
@@ -145,7 +144,7 @@ HangingHostResolverNetworkContext::~HangingHostResolverNetworkContext() =
     default;
 
 void HangingHostResolverNetworkContext::CreateHostResolver(
-    const absl::optional<net::DnsConfigOverrides>& config_overrides,
+    const std::optional<net::DnsConfigOverrides>& config_overrides,
     mojo::PendingReceiver<network::mojom::HostResolver> receiver) {
   resolver_ = std::make_unique<HangingHostResolver>(std::move(receiver));
 }

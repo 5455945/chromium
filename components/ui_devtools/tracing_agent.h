@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,11 +9,11 @@
 #include <string>
 #include <utility>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/trace_event/trace_config.h"
-#include "components/ui_devtools/Tracing.h"
 #include "components/ui_devtools/devtools_base_agent.h"
+#include "components/ui_devtools/tracing.h"
 
 namespace base {
 class RepeatingTimer;
@@ -30,6 +30,10 @@ class UI_DEVTOOLS_EXPORT TracingAgent
     : public UiDevToolsBaseAgent<protocol::Tracing::Metainfo> {
  public:
   explicit TracingAgent(std::unique_ptr<ConnectorDelegate> connector);
+
+  TracingAgent(const TracingAgent&) = delete;
+  TracingAgent& operator=(const TracingAgent&) = delete;
+
   ~TracingAgent() override;
 
   void set_gpu_pid(base::ProcessId pid) { gpu_pid_ = pid; }
@@ -42,9 +46,9 @@ class UI_DEVTOOLS_EXPORT TracingAgent
   void OnTraceComplete();
 
   // Tracing::Backend:
-  void start(protocol::Maybe<std::string> categories,
-             protocol::Maybe<std::string> options,
-             protocol::Maybe<double> buffer_usage_reporting_interval,
+  void start(std::optional<std::string> categories,
+             std::optional<std::string> options,
+             std::optional<double> buffer_usage_reporting_interval,
              std::unique_ptr<StartCallback> callback) override;
   protocol::Response end() override;
 
@@ -108,7 +112,6 @@ class UI_DEVTOOLS_EXPORT TracingAgent
   std::unique_ptr<PerfettoTracingSession> perfetto_session_;
   TraceDataBufferState trace_data_buffer_state_;
   base::WeakPtrFactory<TracingAgent> weak_factory_{this};
-  DISALLOW_COPY_AND_ASSIGN(TracingAgent);
 };
 
 }  // namespace ui_devtools

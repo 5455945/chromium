@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,16 @@
 
 namespace notifications {
 
-constexpr char kDefaultHelpfulButtonId[] =
+inline constexpr char kChromeFindsNotificationsThemeType[] =
+    "CHROME_FINDS_NOTIFICATIONS_THEME_TYPE";
+inline constexpr char kChromeFindsNotificationsUrl[] =
+    "CHROME_FINDS_NOTIFICATIONS_URL";
+inline constexpr char kDefaultHelpfulButtonId[] =
     "NOTIFICATION_SCHEDULER_DEFAULT_HELPFUL_BUTTON_ID";
-constexpr char kDefaultUnhelpfulButtonId[] =
+inline constexpr char kDefaultUnhelpfulButtonId[] =
     "NOTIFICATION_SCHEDULER_DEFAULT_UNHELPFUL_BUTTON_ID";
+inline constexpr char kTipsNotificationsFeatureType[] =
+    "TIPS_NOTIFICATIONS_FEATURE_TYPE";
 
 }  // namespace notifications
 

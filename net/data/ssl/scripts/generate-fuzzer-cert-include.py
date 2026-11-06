@@ -1,4 +1,4 @@
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -23,8 +23,10 @@ output_filename = sys.argv[2]
 # Load PEM block.
 with open(input_filename, 'r') as f:
   match = re.search(
-      r"-----BEGIN CERTIFICATE-----\n(.+)-----END CERTIFICATE-----\n", f.read(),
-      re.DOTALL)
+    r"-----BEGIN CERTIFICATE-----\n(.+)-----END CERTIFICATE-----\n",
+    f.read(),
+    re.DOTALL,
+  )
 text = match.group(1)
 
 # Perform Base64 decoding.

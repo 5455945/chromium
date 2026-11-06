@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,35 +11,30 @@ import static org.mockito.Mockito.verify;
 import android.graphics.drawable.Animatable2;
 import android.graphics.drawable.AnimatedVectorDrawable;
 
-import org.junit.After;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 
-/**
- * Test AnimationLooper class.
- */
+/** Test AnimationLooper class. */
 @RunWith(BaseRobolectricTestRunner.class)
 public class AnimationLooperTest {
-    @Mock
-    private AnimatedVectorDrawable mAnimatableMock;
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
+
+    @Mock private AnimatedVectorDrawable mAnimatableMock;
 
     private AnimationLooper mAnimationLooper;
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
         mAnimationLooper = new AnimationLooper(mAnimatableMock);
-    }
-
-    @After
-    public void tearDown() {
-        AnimationLooper.setAreAnimatorsEnabledForTests(null);
     }
 
     @Test
@@ -65,6 +60,7 @@ public class AnimationLooperTest {
         final Animatable2.AnimationCallback callback = captor.getValue();
 
         callback.onAnimationEnd(mAnimatableMock);
+        RobolectricUtil.runAllBackgroundAndUi();
         verify(mAnimatableMock, times(2)).start();
 
         mAnimationLooper.stop();

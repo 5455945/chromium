@@ -1,13 +1,79 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/base/models/dialog_model.h"
 
-#include "base/callback_helpers.h"
-#include "base/ranges/algorithm.h"
+#include <algorithm>
+#include <memory>
+#include <variant>
+#include <vector>
+
+#include "base/functional/callback_helpers.h"
+#include "base/notreached.h"
+#include "third_party/abseil-cpp/absl/functional/overload.h"
+#include "ui/base/interaction/element_identifier.h"
+#include "ui/base/models/dialog_model_field.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/ui_base_types.h"
 
 namespace ui {
+
+DialogModel::Button::Params::Params() = default;
+DialogModel::Button::Params::~Params() = default;
+
+DialogModel::Button::Params& DialogModel::Button::Params::SetId(
+    ElementIdentifier id) {
+  CHECK(!id_);
+  CHECK(id);
+  id_ = id;
+  return *this;
+}
+
+DialogModel::Button::Params& DialogModel::Button::Params::SetLabel(
+    std::u16string label) {
+  CHECK(label_.empty());
+  CHECK(!label.empty());
+  label_ = label;
+  return *this;
+}
+
+DialogModel::Button::Params& DialogModel::Button::Params::SetStyle(
+    std::optional<ButtonStyle> style) {
+  CHECK(style_ != style);
+  style_ = style;
+  return *this;
+}
+
+DialogModel::Button::Params& DialogModel::Button::Params::SetEnabled(
+    bool is_enabled) {
+  is_enabled_ = is_enabled;
+  return *this;
+}
+
+DialogModel::Button::Params& DialogModel::Button::Params::AddAccelerator(
+    Accelerator accelerator) {
+  accelerators_.insert(std::move(accelerator));
+  return *this;
+}
+
+DialogModel::Button::Button(
+    base::RepeatingCallback<void(const Event&)> callback,
+    const DialogModel::Button::Params& params)
+    : DialogModelField(kCustom, params.id_, params.accelerators_, params),
+      label_(params.label_),
+      style_(params.style_),
+      is_enabled_(params.is_enabled_),
+      callback_(std::move(callback)) {
+  CHECK(callback_);
+}
+
+DialogModel::Button::~Button() = default;
+
+void DialogModel::Button::OnPressed(base::PassKey<DialogModelHost>,
+                                    const Event& event) {
+  callback_.Run(event);
+}
 
 DialogModel::Builder::Builder(std::unique_ptr<DialogModelDelegate> delegate)
     : model_(std::make_unique<DialogModel>(base::PassKey<Builder>(),
@@ -16,62 +82,99 @@ DialogModel::Builder::Builder(std::unique_ptr<DialogModelDelegate> delegate)
 DialogModel::Builder::Builder() : Builder(nullptr) {}
 
 DialogModel::Builder::~Builder() {
-  DCHECK(!model_) << "Model should've been built.";
+  CHECK(!model_) << "Model should've been built.";
 }
 
 std::unique_ptr<DialogModel> DialogModel::Builder::Build() {
-  DCHECK(model_);
+  CHECK(model_);
   return std::move(model_);
 }
 
 DialogModel::Builder& DialogModel::Builder::AddOkButton(
-    base::OnceClosure callback,
-    std::u16string label,
-    const DialogModelButton::Params& params) {
-  DCHECK(!model_->accept_callback_);
-  model_->accept_callback_ = std::move(callback);
-  // NOTREACHED() is used below to make sure this callback isn't used.
-  // DialogModelHost should be using OnDialogAccepted() instead.
-  model_->ok_button_.emplace(
-      model_->GetPassKey(), model_.get(),
-      base::BindRepeating([](const Event&) { NOTREACHED(); }), std::move(label),
-      params);
-
-  return *this;
+    ButtonCallbackVariant callback,
+    const DialogModel::Button::Params& params) {
+  return AddButtonInternal(std::move(callback), params, model_->ok_button_,
+                           model_->accept_action_callback_);
 }
 
 DialogModel::Builder& DialogModel::Builder::AddCancelButton(
-    base::OnceClosure callback,
-    std::u16string label,
-    const DialogModelButton::Params& params) {
-  DCHECK(!model_->cancel_callback_);
-  model_->cancel_callback_ = std::move(callback);
+    ButtonCallbackVariant callback,
+    const DialogModel::Button::Params& params) {
+  return AddButtonInternal(std::move(callback), params, model_->cancel_button_,
+                           model_->cancel_action_callback_);
+}
+
+DialogModel::Builder& DialogModel::Builder::AddButtonInternal(
+    ButtonCallbackVariant callback,
+    const DialogModel::Button::Params& params,
+    std::optional<ui::DialogModel::Button>& model_button,
+    ButtonCallbackVariant& model_callback) {
+  CHECK(params.is_visible_);
+  CHECK(!model_button.has_value());
+  std::visit(
+      absl::Overload{
+          [](decltype(base::DoNothing())& callback) {
+            // Intentional noop
+          },
+          [](base::RepeatingCallback<bool()>& callback) { CHECK(callback); },
+          [](base::OnceClosure& closure) { CHECK(closure); },
+      },
+      callback);
+  model_callback = std::move(callback);
   // NOTREACHED() is used below to make sure this callback isn't used.
   // DialogModelHost should be using OnDialogCanceled() instead.
-  model_->cancel_button_.emplace(
-      model_->GetPassKey(), model_.get(),
-      base::BindRepeating([](const Event&) { NOTREACHED(); }), std::move(label),
-      params);
+  model_button.emplace(base::BindRepeating([](const Event&) { NOTREACHED(); }),
+                       params);
 
   return *this;
 }
 
-DialogModel::Builder& DialogModel::Builder::AddDialogExtraButton(
+DialogModel::Builder& DialogModel::Builder::AddExtraButton(
     base::RepeatingCallback<void(const Event&)> callback,
-    std::u16string label,
-    const DialogModelButton::Params& params) {
-  model_->extra_button_.emplace(model_->GetPassKey(), model_.get(),
-                                std::move(callback), std::move(label), params);
+    const DialogModel::Button::Params& params) {
+  CHECK(params.is_visible_);
+  CHECK(!model_->extra_button_);
+  CHECK(!model_->extra_link_);
+  // Extra buttons are required to have labels.
+  CHECK(!params.label_.empty());
+  model_->extra_button_.emplace(std::move(callback), params);
+  return *this;
+}
+
+DialogModel::Builder& DialogModel::Builder::AddExtraLink(
+    DialogModelLabel::TextReplacement link) {
+  CHECK(!model_->extra_button_);
+  CHECK(!model_->extra_link_);
+  model_->extra_link_.emplace(std::move(link));
+  return *this;
+}
+
+DialogModel::Builder& DialogModel::Builder::OverrideDefaultButton(
+    mojom::DialogButton button) {
+  // This can only be called once.
+  CHECK(!model_->override_default_button_);
+  // Confirm the button exists.
+  switch (button) {
+    case mojom::DialogButton::kNone:
+      break;
+    case mojom::DialogButton::kOk:
+      CHECK(model_->ok_button_);
+      break;
+    case mojom::DialogButton::kCancel:
+      CHECK(model_->cancel_button_);
+      break;
+  }
+  model_->override_default_button_ = button;
   return *this;
 }
 
 DialogModel::Builder& DialogModel::Builder::SetInitiallyFocusedField(
-    int unique_id) {
-  // This must be called with unique_id >= 0 (-1 is "no ID").
-  DCHECK_GE(unique_id, 0);
+    ElementIdentifier id) {
+  // This must be called with a non-null id
+  CHECK(id);
   // This can only be called once.
-  DCHECK(!model_->initially_focused_field_);
-  model_->initially_focused_field_ = unique_id;
+  CHECK(!model_->initially_focused_field_);
+  model_->initially_focused_field_ = id;
   return *this;
 }
 
@@ -84,82 +187,114 @@ DialogModel::DialogModel(base::PassKey<Builder>,
 
 DialogModel::~DialogModel() = default;
 
-void DialogModel::AddBodyText(const DialogModelLabel& label) {
-  AddField(std::make_unique<DialogModelBodyText>(GetPassKey(), this, label));
+bool DialogModel::HasField(ElementIdentifier id) const {
+  return std::ranges::any_of(contents_.fields(),
+                             [id](auto& field) {
+                               // TODO(pbos): This does not
+                               // work recursively yet.
+                               CHECK_NE(field->type_,
+                                        DialogModelField::kSection);
+                               return field->id_ == id;
+                             }) ||
+         (ok_button_ && ok_button_->id_ == id) ||
+         (cancel_button_ && cancel_button_->id_ == id) ||
+         (extra_button_ && extra_button_->id_ == id);
 }
 
-void DialogModel::AddCheckbox(int unique_id,
-                              const DialogModelLabel& label,
-                              const DialogModelCheckbox::Params& params) {
-  AddField(std::make_unique<DialogModelCheckbox>(GetPassKey(), this, unique_id,
-                                                 label, params));
-}
-
-void DialogModel::AddCombobox(std::u16string label,
-                              std::unique_ptr<ui::ComboboxModel> combobox_model,
-                              const DialogModelCombobox::Params& params) {
-  AddField(std::make_unique<DialogModelCombobox>(
-      GetPassKey(), this, std::move(label), std::move(combobox_model), params));
-}
-
-void DialogModel::AddTextfield(std::u16string label,
-                               std::u16string text,
-                               const DialogModelTextfield::Params& params) {
-  AddField(std::make_unique<DialogModelTextfield>(
-      GetPassKey(), this, std::move(label), std::move(text), params));
-}
-
-bool DialogModel::HasField(int unique_id) const {
-  return base::ranges::any_of(fields_, [unique_id](auto& field) {
-    return field->unique_id_ == unique_id;
-  });
-}
-
-DialogModelField* DialogModel::GetFieldByUniqueId(int unique_id) {
-  for (auto& field : fields_) {
-    if (field->unique_id_ == unique_id)
-      return field.get();
+DialogModelField* DialogModel::GetFieldByUniqueId(ElementIdentifier id) {
+  // TODO(pbos): Make sure buttons aren't accessed through GetFieldByUniqueId.
+  // Then make this simply forward to contents_.
+  if (Button* const button = MaybeGetButtonByUniqueId(id)) {
+    return button;
   }
-  NOTREACHED() << "No field with unique_id: " << unique_id;
+
+  return contents_.GetFieldByUniqueId(id);
+}
+
+DialogModel::Button* DialogModel::GetButtonByUniqueId(ElementIdentifier id) {
+  Button* const button = MaybeGetButtonByUniqueId(id);
+  CHECK(button);
+  return button;
+}
+
+DialogModel::Button* DialogModel::MaybeGetButtonByUniqueId(
+    ElementIdentifier id) {
+  if (ok_button_ && ok_button_->id_ == id) {
+    return &ok_button_.value();
+  }
+  if (cancel_button_ && cancel_button_->id_ == id) {
+    return &cancel_button_.value();
+  }
+  if (extra_button_ && extra_button_->id_ == id) {
+    return &extra_button_.value();
+  }
   return nullptr;
 }
 
-DialogModelCheckbox* DialogModel::GetCheckboxByUniqueId(int unique_id) {
-  return GetFieldByUniqueId(unique_id)->AsCheckbox();
+bool DialogModel::OnDialogAcceptAction(base::PassKey<DialogModelHost>) {
+  return RunButtonCallback(accept_action_callback_);
 }
 
-DialogModelCombobox* DialogModel::GetComboboxByUniqueId(int unique_id) {
-  return GetFieldByUniqueId(unique_id)->AsCombobox();
+bool DialogModel::OnDialogCancelAction(base::PassKey<DialogModelHost>) {
+  return RunButtonCallback(cancel_action_callback_);
 }
 
-DialogModelTextfield* DialogModel::GetTextfieldByUniqueId(int unique_id) {
-  return GetFieldByUniqueId(unique_id)->AsTextfield();
+bool DialogModel::RunButtonCallback(ButtonCallbackVariant& callback_variant) {
+  return std::visit(
+      absl::Overload{
+          [](decltype(base::DoNothing())& callback) { return true; },
+          [](base::RepeatingCallback<bool()>& callback) {
+            return callback.Run();
+          },
+          [](base::OnceClosure& callback) {
+            CHECK(callback);
+            std::move(callback).Run();
+            return true;
+          },
+      },
+      callback_variant);
 }
 
-void DialogModel::OnDialogAccepted(base::PassKey<DialogModelHost>) {
-  if (accept_callback_)
-    std::move(accept_callback_).Run();
+void DialogModel::OnDialogCloseAction(base::PassKey<DialogModelHost>) {
+  if (close_action_callback_)
+    std::move(close_action_callback_).Run();
 }
 
-void DialogModel::OnDialogCancelled(base::PassKey<DialogModelHost>) {
-  if (cancel_callback_)
-    std::move(cancel_callback_).Run();
+void DialogModel::OnDialogDestroying(base::PassKey<DialogModelHost>) {
+  if (dialog_destroying_callback_)
+    std::move(dialog_destroying_callback_).Run();
 }
 
-void DialogModel::OnDialogClosed(base::PassKey<DialogModelHost>) {
-  if (close_callback_)
-    std::move(close_callback_).Run();
+void DialogModel::SetVisible(ElementIdentifier id, bool visible) {
+  // TODO(pbos): Consider a different method for dialog buttons vs. contents.
+  if (Button* button = MaybeGetButtonByUniqueId(id)) {
+    button->SetVisible(visible);
+    if (host_) {
+      host_->OnDialogButtonChanged();
+    }
+    return;
+  }
+
+  GetFieldByUniqueId(id)->SetVisible(visible);
 }
 
-void DialogModel::OnWindowClosing(base::PassKey<DialogModelHost>) {
-  if (window_closing_callback_)
-    std::move(window_closing_callback_).Run();
+void DialogModel::SetButtonLabel(DialogModel::Button* button,
+                                 const std::u16string& label) {
+  CHECK(button);
+  button->label_ = label;
+
+  if (host_) {
+    host_->OnDialogButtonChanged();
+  }
 }
 
-void DialogModel::AddField(std::unique_ptr<DialogModelField> field) {
-  fields_.push_back(std::move(field));
-  if (host_)
-    host_->OnFieldAdded(fields_.back().get());
+void DialogModel::SetButtonEnabled(DialogModel::Button* button, bool enabled) {
+  CHECK(button);
+  button->is_enabled_ = enabled;
+
+  if (host_) {
+    host_->OnDialogButtonChanged();
+  }
 }
 
 }  // namespace ui

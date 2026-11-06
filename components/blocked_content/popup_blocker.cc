@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,9 +18,27 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/mojom/frame/frame.mojom-shared.h"
+#include "ui/base/mojom/window_open_disposition.mojom.h"
 
 namespace blocked_content {
 namespace {
+
+content::Page& GetSourcePageForPopup(
+    const content::OpenURLParams* open_url_params,
+    content::WebContents* web_contents) {
+  if (open_url_params) {
+    content::RenderFrameHost* source = content::RenderFrameHost::FromID(
+
+        open_url_params->source_render_process_id,
+        open_url_params->source_render_frame_id);
+    if (source)
+      return source->GetPage();
+  }
+
+  // When there's no source RenderFrameHost, attribute the popup to the primary
+  // page.
+  return web_contents->GetPrimaryPage();
+}
 
 // If the popup should be blocked, returns the reason why it was blocked.
 // Otherwise returns kNotBlocked.
@@ -67,7 +85,8 @@ PopupBlockType ShouldBlockPopup(content::WebContents* web_contents,
   auto* safe_browsing_blocker =
       SafeBrowsingTriggeredPopupBlocker::FromWebContents(web_contents);
   if (safe_browsing_blocker &&
-      safe_browsing_blocker->ShouldApplyAbusivePopupBlocker()) {
+      safe_browsing_blocker->ShouldApplyAbusivePopupBlocker(
+          GetSourcePageForPopup(open_url_params, web_contents))) {
     return PopupBlockType::kAbusive;
   }
   return PopupBlockType::kNotBlocked;
@@ -75,11 +94,26 @@ PopupBlockType ShouldBlockPopup(content::WebContents* web_contents,
 
 }  // namespace
 
-bool ConsiderForPopupBlocking(WindowOpenDisposition disposition) {
-  return disposition == WindowOpenDisposition::NEW_POPUP ||
-         disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB ||
-         disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB ||
-         disposition == WindowOpenDisposition::NEW_WINDOW;
+bool ConsiderForPopupBlocking(ui::mojom::WindowOpenDisposition disposition) {
+  switch (disposition) {
+    case ui::mojom::WindowOpenDisposition::kUnknown:
+    case ui::mojom::WindowOpenDisposition::kCurrentTab:
+    case ui::mojom::WindowOpenDisposition::kSingletonTab:
+    // OTR popups would be considered, but they cannot be triggered by any
+    // renderer message so we can ignore them.
+    case ui::mojom::WindowOpenDisposition::kOffTheRecord:
+    case ui::mojom::WindowOpenDisposition::kSaveToDisk:
+    case ui::mojom::WindowOpenDisposition::kIgnoreAction:
+    case ui::mojom::WindowOpenDisposition::kSwitchToTab:
+      return false;
+    case ui::mojom::WindowOpenDisposition::kNewPopup:
+    case ui::mojom::WindowOpenDisposition::kNewForegroundTab:
+    case ui::mojom::WindowOpenDisposition::kNewBackgroundTab:
+    case ui::mojom::WindowOpenDisposition::kNewWindow:
+    case ui::mojom::WindowOpenDisposition::kNewPictureInPicture:
+    case ui::mojom::WindowOpenDisposition::kNewSplitView:
+      return true;
+  }
 }
 
 std::unique_ptr<PopupNavigationDelegate> MaybeBlockPopup(

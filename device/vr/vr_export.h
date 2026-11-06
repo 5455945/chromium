@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,11 +15,7 @@
 
 #elif defined(COMPONENT_BUILD) && !defined(WIN32)
 
-#if defined(DEVICE_VR_IMPLEMENTATION)
 #define DEVICE_VR_EXPORT __attribute__((visibility("default")))
-#else
-#define DEVICE_VR_EXPORT
-#endif
 
 #else
 #define DEVICE_VR_EXPORT

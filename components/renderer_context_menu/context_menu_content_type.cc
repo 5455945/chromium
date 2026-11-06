@@ -1,10 +1,10 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/renderer_context_menu/context_menu_content_type.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/url_constants.h"
 #include "printing/buildflags/buildflags.h"
@@ -22,12 +22,9 @@ bool IsDevToolsURL(const GURL& url) {
 }  // namespace
 
 ContextMenuContentType::ContextMenuContentType(
-    content::WebContents* web_contents,
     const content::ContextMenuParams& params,
     bool supports_custom_items)
-    : params_(params),
-      source_web_contents_(web_contents),
-      supports_custom_items_(supports_custom_items) {}
+    : params_(params), supports_custom_items_(supports_custom_items) {}
 
 ContextMenuContentType::~ContextMenuContentType() {
 }
@@ -66,10 +63,9 @@ bool ContextMenuContentType::SupportsGroup(int group) {
 bool ContextMenuContentType::SupportsGroupInternal(int group) {
   const bool has_link = !params_.unfiltered_link_url.is_empty();
   const bool has_selection = !params_.selection_text.empty();
-  const bool is_password =
-      params_.input_field_type ==
-      blink::mojom::ContextMenuDataInputFieldType::kPassword;
-  const bool existing_highlight = params_.opened_from_highlight;
+  const bool is_password = params_.form_control_type ==
+                           blink::mojom::FormControlType::kInputPassword;
+  const bool existing_highlight = params_.annotation_type.has_value();
 
   switch (group) {
     case ITEM_GROUP_CUSTOM:
@@ -88,7 +84,7 @@ bool ContextMenuContentType::SupportsGroupInternal(int group) {
 
     case ITEM_GROUP_FRAME: {
       bool page_group_supported = SupportsGroupInternal(ITEM_GROUP_PAGE);
-      return page_group_supported && !params_.frame_url.is_empty();
+      return page_group_supported && params_.is_subframe;
     }
 
     case ITEM_GROUP_LINK:
@@ -103,6 +99,13 @@ bool ContextMenuContentType::SupportsGroupInternal(int group) {
     case ITEM_GROUP_SEARCHWEBFORIMAGE:
       // Image menu items imply search web for image item.
       return SupportsGroupInternal(ITEM_GROUP_MEDIA_IMAGE);
+
+    case ITEM_GROUP_GLICSHAREIMAGE:
+      // Image menu items imply glic share image item.
+      return SupportsGroupInternal(ITEM_GROUP_MEDIA_IMAGE);
+
+    case ITEM_GROUP_GLIC:
+      return has_selection || !SupportsGroupInternal(ITEM_GROUP_MEDIA_IMAGE);
 
     case ITEM_GROUP_MEDIA_VIDEO:
       return params_.media_type == ContextMenuDataMediaType::kVideo;
@@ -125,8 +128,11 @@ bool ContextMenuContentType::SupportsGroupInternal(int group) {
     case ITEM_GROUP_COPY:
       return !params_.is_editable && has_selection;
 
+    case ITEM_GROUP_PARTIAL_TRANSLATE:
+      return has_selection;
+
     case ITEM_GROUP_EXISTING_LINK_TO_TEXT:
-      return params_.opened_from_highlight;
+      return params_.annotation_type.has_value();
 
     case ITEM_GROUP_SEARCH_PROVIDER:
       return has_selection && !is_password;
@@ -155,15 +161,11 @@ bool ContextMenuContentType::SupportsGroupInternal(int group) {
       return false;
 #endif
 
-    case ITEM_GROUP_PASSWORD:
-      return params_.input_field_type ==
-             blink::mojom::ContextMenuDataInputFieldType::kPassword;
-
-    case ITEM_GROUP_LENS_REGION_SEARCH:
-      return true;
+    case ITEM_GROUP_AUTOFILL:
+      return params_.form_control_type.has_value() ||
+             params_.is_content_editable_for_autofill;
 
     default:
       NOTREACHED();
-      return false;
   }
 }

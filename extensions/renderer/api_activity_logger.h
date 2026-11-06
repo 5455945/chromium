@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,12 @@
 
 #include <memory>
 #include <string>
-#include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/values.h"
 #include "extensions/renderer/ipc_message_sender.h"
 #include "extensions/renderer/object_backed_native_handler.h"
-#include "v8/include/v8.h"
-
-namespace base {
-class ListValue;
-}
+#include "v8/include/v8-forward.h"
 
 namespace extensions {
 
@@ -26,6 +22,10 @@ namespace extensions {
 class APIActivityLogger : public ObjectBackedNativeHandler {
  public:
   APIActivityLogger(IPCMessageSender* ipc_sender, ScriptContext* context);
+
+  APIActivityLogger(const APIActivityLogger&) = delete;
+  APIActivityLogger& operator=(const APIActivityLogger&) = delete;
+
   ~APIActivityLogger() override;
 
   // ObjectBackedNativeHandler:
@@ -39,14 +39,14 @@ class APIActivityLogger : public ObjectBackedNativeHandler {
   static void LogAPICall(IPCMessageSender* ipc_sender,
                          v8::Local<v8::Context> context,
                          const std::string& call_name,
-                         const std::vector<v8::Local<v8::Value>>& arguments);
+                         const v8::LocalVector<v8::Value>& arguments);
 
   // Notifies the browser that an API event has been dispatched, if and only if
   // activity logging is enabled.
   static void LogEvent(IPCMessageSender* ipc_sender,
                        ScriptContext* script_context,
                        const std::string& event_name,
-                       std::unique_ptr<base::ListValue> arguments);
+                       base::ListValue arguments);
 
   static void set_log_for_testing(bool log);
 
@@ -60,22 +60,12 @@ class APIActivityLogger : public ObjectBackedNativeHandler {
   void LogForJS(const IPCMessageSender::ActivityLogCallType call_type,
                 const v8::FunctionCallbackInfo<v8::Value>& args);
 
-  // Common implementation method for sending a logging IPC.
-  static void LogInternal(IPCMessageSender* ipc_sender,
-                          const IPCMessageSender::ActivityLogCallType call_type,
-                          const std::string& extension_id,
-                          const std::string& call_name,
-                          std::unique_ptr<base::ListValue> arguments,
-                          const std::string& extra);
-
-  // Not owned by |this|.
+  // Not owned by `this`.
   // This is owned by NativeExtensionBindingsSystem.
   //
   // Valid to use so long as there's a valid ScriptContext associated with the
   // call-site.
-  IPCMessageSender* ipc_sender_ = nullptr;
-
-  DISALLOW_COPY_AND_ASSIGN(APIActivityLogger);
+  raw_ptr<IPCMessageSender> ipc_sender_ = nullptr;
 };
 
 }  // namespace extensions

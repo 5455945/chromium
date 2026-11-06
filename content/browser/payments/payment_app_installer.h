@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,7 @@
 #include <stdint.h>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "content/public/browser/supported_delegations.h"
 
 class GURL;
@@ -17,6 +16,7 @@ class GURL;
 namespace content {
 
 class WebContents;
+struct GlobalRenderFrameHostId;
 
 // Installs a web payment app with a default payment instrument and returns
 // the registration Id through callback on success.
@@ -25,7 +25,12 @@ class PaymentAppInstaller {
   using InstallPaymentAppCallback =
       base::OnceCallback<void(int64_t registration_id)>;
 
+  PaymentAppInstaller() = delete;
+  PaymentAppInstaller(const PaymentAppInstaller&) = delete;
+  PaymentAppInstaller& operator=(const PaymentAppInstaller&) = delete;
+
   // Installs the payment app.
+  // |requesting_frame_id| is the id of the initiator frame.
   // |app_name| is the name of the payment app.
   // |app_icon| is the icon of the payment app.
   // |sw_url| is the url to get the service worker js script.
@@ -35,6 +40,7 @@ class PaymentAppInstaller {
   // |supported_delegations| are the supported delegations of the payment app.
   // |callback| to send back registration result.
   static void Install(WebContents* web_contents,
+                      GlobalRenderFrameHostId requesting_frame_id,
                       const std::string& app_name,
                       const std::string& app_icon,
                       const GURL& sw_url,
@@ -43,9 +49,6 @@ class PaymentAppInstaller {
                       const std::string& method,
                       const SupportedDelegations& supported_delegations,
                       InstallPaymentAppCallback callback);
-
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(PaymentAppInstaller);
 };
 
 }  // namespace content.

@@ -1,17 +1,17 @@
-<!-- Copyright 2020 The Chromium Authors. All rights reserved.
+<!-- Copyright 2020 The Chromium Authors
      Use of this source code is governed by a BSD-style license that can be
      found in the LICENSE file. -->
 
 <template>
   <div id="page-container">
-    <v-dialog />
+    <v-dialog/>
     <div id="title-and-graph-container">
       <div
           id="title-and-metadata">
         <div
             id="title"
             class="md-headline">
-          Clank Dependency Viewer - Class Graph
+          <a href="/">Clank Dependency Viewer</a>  - Class Graph
         </div>
         <div
             id="graph-metadata-info">
@@ -65,6 +65,13 @@
             :input-value.sync="displaySettingsData.outboundDepth"
             :min-value="0"/>
       </div>
+      <MdCheckbox
+          v-model="displaySettingsData.excludeNoise"
+          class="md-primary display-settings-option"
+          type="checkbox"
+          @change="displayOptionChanged">
+        Exclude noisy nodes (e.g. tests, utils, feature maps, etc)
+      </MdCheckbox>
       <GraphDisplayPanel
           :display-settings-data="displaySettingsData"
           :display-settings-preset.sync="
@@ -156,7 +163,8 @@ const ClassGraphPage = {
 
   /**
    * Various references to objects used across the entire class page.
-   * @typedef {Object} ClassPageData
+   *
+   * @typedef {object} ClassPageData
    * @property {PageModel} pageModel The data store for the page.
    * @property {!ClassDisplaySettingsData} displaySettingsData Additional data
    *   store for the graph's display settings.
@@ -261,6 +269,9 @@ const ClassGraphPage = {
      */
     setInboundDepth: function(depth) {
       this.displaySettingsData.inboundDepth = depth;
+    },
+    setExcludeNoise: function(excludeNoise) {
+      this.displaySettingsData.excludeNoise = excludeNoise;
     },
     /**
      * @param {number} depth The new outbound depth.

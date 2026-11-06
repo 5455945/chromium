@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,18 @@
 
 #include <stddef.h>
 
+#include "base/containers/span.h"
+#include "content/common/content_export.h"
+
 namespace blink { class WebAudioBus; }
 
 namespace content {
 
-// Decode in-memory audio file data.
-bool DecodeAudioFileData(blink::WebAudioBus* destination_bus, const char* data,
-                         size_t data_size);
+// Decodes encoded audio information passed in `data`. Returned a populated
+// audio bus if decoding was successful, otherwise nullptr.
+CONTENT_EXPORT
+std::unique_ptr<blink::WebAudioBus> DecodeAudioFileData(
+    base::span<const char> data);
 
 }  // namespace content
 

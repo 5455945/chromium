@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,8 @@
 #include <set>
 #include <utility>
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "dbus/bus.h"
 #include "dbus/object_path.h"
 #include "device/bluetooth/bluetooth_export.h"
@@ -34,6 +34,12 @@ class DEVICE_BLUETOOTH_EXPORT FakeBluetoothGattManagerClient
     : public BluetoothGattManagerClient {
  public:
   FakeBluetoothGattManagerClient();
+
+  FakeBluetoothGattManagerClient(const FakeBluetoothGattManagerClient&) =
+      delete;
+  FakeBluetoothGattManagerClient& operator=(
+      const FakeBluetoothGattManagerClient&) = delete;
+
   ~FakeBluetoothGattManagerClient() override;
 
   // DBusClient override.
@@ -92,13 +98,15 @@ class DEVICE_BLUETOOTH_EXPORT FakeBluetoothGattManagerClient
   // service providers. The fake GATT manager stores references to all
   // instances created so that they can be obtained by tests.
   using ApplicationMap = std::map<dbus::ObjectPath, ApplicationProvider>;
-  using ServiceMap =
-      std::map<dbus::ObjectPath, FakeBluetoothGattServiceServiceProvider*>;
-  using CharacteristicMap =
-      std::map<dbus::ObjectPath,
-               FakeBluetoothGattCharacteristicServiceProvider*>;
-  using DescriptorMap =
-      std::map<dbus::ObjectPath, FakeBluetoothGattDescriptorServiceProvider*>;
+  using ServiceMap = std::map<
+      dbus::ObjectPath,
+      raw_ptr<FakeBluetoothGattServiceServiceProvider, CtnExperimental>>;
+  using CharacteristicMap = std::map<
+      dbus::ObjectPath,
+      raw_ptr<FakeBluetoothGattCharacteristicServiceProvider, CtnExperimental>>;
+  using DescriptorMap = std::map<
+      dbus::ObjectPath,
+      raw_ptr<FakeBluetoothGattDescriptorServiceProvider, CtnExperimental>>;
 
   // Return a pointer to the Application provider that corresponds to the object
   // path |object_path| if it exists.
@@ -123,8 +131,6 @@ class DEVICE_BLUETOOTH_EXPORT FakeBluetoothGattManagerClient
   ServiceMap service_map_;
   CharacteristicMap characteristic_map_;
   DescriptorMap descriptor_map_;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeBluetoothGattManagerClient);
 };
 
 }  // namespace bluez

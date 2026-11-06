@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,11 @@
 #include "ash/public/cpp/accessibility_controller_enums.h"
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/strings/grit/ash_strings.h"
-#include "ash/style/ash_color_provider.h"
 #include "ash/system/accessibility/floating_menu_button.h"
 #include "ash/system/accessibility/select_to_speak/select_to_speak_constants.h"
 #include "ash/system/accessibility/select_to_speak/select_to_speak_metrics_utils.h"
 #include "ash/system/tray/tray_constants.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/i18n/rtl.h"
 #include "base/metrics/histogram_functions.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -25,6 +24,7 @@
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/separator.h"
 #include "ui/views/layout/box_layout.h"
+#include "ui/views/metadata/view_factory.h"
 
 namespace ash {
 
@@ -33,6 +33,16 @@ namespace {
 constexpr int kButtonSize = 36;
 constexpr int kStopButtonPadding = 14;
 constexpr int kSeparatorHeight = 16;
+
+void RecordButtonMetric(SelectToSpeakPanelAction action) {
+  base::UmaHistogramEnumeration(
+      "Accessibility.CrosSelectToSpeak.BubbleButtonPress", action);
+}
+
+void RecordKeyPressMetric(SelectToSpeakPanelAction action) {
+  base::UmaHistogramEnumeration(
+      "Accessibility.CrosSelectToSpeak.BubbleKeyPress", action);
+}
 
 // Histograms in which user action statistics are recorded. These values
 // correspond to their respective entries in histograms.xml, so if they are
@@ -68,7 +78,6 @@ SelectToSpeakPanelAction PanelActionForButtonID(int button_id, bool is_paused) {
   }
 
   NOTREACHED();
-  return SelectToSpeakPanelAction::kNone;
 }
 
 }  // namespace
@@ -80,99 +89,105 @@ SelectToSpeakMenuView::SelectToSpeakMenuView(Delegate* delegate)
   views::Builder<SelectToSpeakMenuView>(this)
       .SetCrossAxisAlignment(views::BoxLayout::CrossAxisAlignment::kEnd)
       .AddChildren(
-          {views::Builder<views::BoxLayoutView>()
-               .SetInsideBorderInsets(kUnifiedMenuItemPadding)
-               .SetBetweenChildSpacing(kUnifiedTopShortcutSpacing)
-               .AddChildren(
-                   {views::Builder<FloatingMenuButton>()
-                        .CopyAddressTo(&prev_paragraph_button_)
-                        .SetID(static_cast<int>(ButtonId::kPrevParagraph))
-                        .SetVectorIcon(kSelectToSpeakPrevParagraphIcon)
-                        .SetFlipCanvasOnPaintForRTLUI(true)
-                        .SetTooltipText(l10n_util::GetStringUTF16(
-                            IDS_ASH_SELECT_TO_SPEAK_PREV_PARAGRAPH))
-                        .SetCallback(base::BindRepeating(
-                            &SelectToSpeakMenuView::OnButtonPressed,
-                            base::Unretained(this),
-                            base::Unretained(prev_paragraph_button_))),
-                    views::Builder<FloatingMenuButton>()
-                        .CopyAddressTo(&prev_sentence_button_)
-                        .SetID(static_cast<int>(ButtonId::kPrevSentence))
-                        .SetVectorIcon(kSelectToSpeakPrevSentenceIcon)
-                        .SetFlipCanvasOnPaintForRTLUI(true)
-                        .SetTooltipText(l10n_util::GetStringUTF16(
-                            IDS_ASH_SELECT_TO_SPEAK_PREV_SENTENCE))
-                        .SetCallback(base::BindRepeating(
-                            &SelectToSpeakMenuView::OnButtonPressed,
-                            base::Unretained(this),
-                            base::Unretained(prev_sentence_button_))),
-                    views::Builder<FloatingMenuButton>()
-                        .CopyAddressTo(&pause_button_)
-                        .SetID(static_cast<int>(ButtonId::kPause))
-                        .SetVectorIcon(kSelectToSpeakPauseIcon)
-                        .SetTooltipText(l10n_util::GetStringUTF16(
-                            IDS_ASH_SELECT_TO_SPEAK_PAUSE))
-                        .SetCallback(base::BindRepeating(
-                            &SelectToSpeakMenuView::OnButtonPressed,
-                            base::Unretained(this),
-                            base::Unretained(pause_button_))),
-                    views::Builder<FloatingMenuButton>()
-                        .CopyAddressTo(&next_sentence_button_)
-                        .SetID(static_cast<int>(ButtonId::kNextSentence))
-                        .SetVectorIcon(kSelectToSpeakNextSentenceIcon)
-                        .SetFlipCanvasOnPaintForRTLUI(true)
-                        .SetTooltipText(l10n_util::GetStringUTF16(
-                            IDS_ASH_SELECT_TO_SPEAK_NEXT_SENTENCE))
-                        .SetCallback(base::BindRepeating(
-                            &SelectToSpeakMenuView::OnButtonPressed,
-                            base::Unretained(this),
-                            base::Unretained(next_sentence_button_))),
-                    views::Builder<FloatingMenuButton>()
-                        .CopyAddressTo(&next_paragraph_button_)
-                        .SetID(static_cast<int>(ButtonId::kNextParagraph))
-                        .SetVectorIcon(kSelectToSpeakNextParagraphIcon)
-                        .SetFlipCanvasOnPaintForRTLUI(true)
-                        .SetTooltipText(l10n_util::GetStringUTF16(
-                            IDS_ASH_SELECT_TO_SPEAK_NEXT_PARAGRAPH))
-                        .SetCallback(base::BindRepeating(
-                            &SelectToSpeakMenuView::OnButtonPressed,
-                            base::Unretained(this),
-                            base::Unretained(next_paragraph_button_))),
-                    views::Builder<FloatingMenuButton>()
-                        .CopyAddressTo(&speed_button_)
-                        .SetID(static_cast<int>(ButtonId::kSpeed))
-                        .SetVectorIcon(kSelectToSpeakReadingSpeedNormalIcon)
-                        .SetTooltipText(l10n_util::GetStringUTF16(
-                            IDS_ASH_SELECT_TO_SPEAK_READING_SPEED))
-                        .SetCallback(base::BindRepeating(
-                            &SelectToSpeakMenuView::OnButtonPressed,
-                            base::Unretained(this),
-                            base::Unretained(speed_button_)))}),
-           views::Builder<views::Separator>()
-               .SetColor(AshColorProvider::Get()->GetContentLayerColor(
-                   AshColorProvider::ContentLayerType::kSeparatorColor))
-               .SetPreferredHeight(kSeparatorHeight)
-               .SetBorder(views::CreateEmptyBorder(
-                   separator_spacing - kUnifiedTopShortcutSpacing, 0,
-                   separator_spacing, 0)),
-           views::Builder<views::BoxLayoutView>()
-               .SetInsideBorderInsets(gfx::Insets(0, kStopButtonPadding,
-                                                  kStopButtonPadding,
-                                                  kStopButtonPadding))
-               .SetBetweenChildSpacing(kStopButtonPadding)
-               .AddChildren(
-                   {views::Builder<FloatingMenuButton>()
-                        .CopyAddressTo(&stop_button_)
-                        .SetID(static_cast<int>(ButtonId::kStop))
-                        .SetVectorIcon(kSelectToSpeakStopIcon)
-                        .SetDrawHighlight(false)
-                        .SetPreferredSize(gfx::Size(kButtonSize, kButtonSize))
-                        .SetTooltipText(l10n_util::GetStringUTF16(
-                            IDS_ASH_SELECT_TO_SPEAK_EXIT))
-                        .SetCallback(base::BindRepeating(
-                            &SelectToSpeakMenuView::OnButtonPressed,
-                            base::Unretained(this),
-                            base::Unretained(stop_button_)))})})
+          views::Builder<views::BoxLayoutView>()
+              .SetInsideBorderInsets(kUnifiedMenuItemPadding)
+              .SetBetweenChildSpacing(kUnifiedTopShortcutSpacing)
+              .AddChildren(
+                  views::Builder<FloatingMenuButton>()
+                      .CopyAddressTo(&prev_paragraph_button_)
+                      .SetID(static_cast<int>(ButtonId::kPrevParagraph))
+                      .SetVectorIcon(kSelectToSpeakPrevParagraphIcon)
+                      .SetFlipCanvasOnPaintForRTLUI(true)
+                      .SetTooltipText(l10n_util::GetStringUTF16(
+                          IDS_ASH_SELECT_TO_SPEAK_PREV_PARAGRAPH))
+                      .SetCallback(base::BindRepeating(
+                          &SelectToSpeakMenuView::OnButtonPressed,
+                          base::Unretained(this),
+                          base::Unretained(prev_paragraph_button_))),
+                  views::Builder<FloatingMenuButton>()
+                      .CopyAddressTo(&prev_sentence_button_)
+                      .SetID(static_cast<int>(ButtonId::kPrevSentence))
+                      .SetVectorIcon(kSelectToSpeakPrevSentenceIcon)
+                      .SetFlipCanvasOnPaintForRTLUI(true)
+                      .SetTooltipText(l10n_util::GetStringUTF16(
+                          IDS_ASH_SELECT_TO_SPEAK_PREV_SENTENCE))
+                      .SetCallback(base::BindRepeating(
+                          &SelectToSpeakMenuView::OnButtonPressed,
+                          base::Unretained(this),
+                          base::Unretained(prev_sentence_button_))),
+                  views::Builder<FloatingMenuButton>()
+                      .CopyAddressTo(&pause_button_)
+                      .SetID(static_cast<int>(ButtonId::kPause))
+                      .SetVectorIcon(kSelectToSpeakPauseIcon)
+                      .SetTooltipText(l10n_util::GetStringUTF16(
+                          IDS_ASH_SELECT_TO_SPEAK_PAUSE))
+                      // Setting the accessible name means that ChromeVox will
+                      // read this rather than the play/pause tooltip. This
+                      // ensures that ChromeVox doesn't immediately interrupt
+                      // reading to announce that the button tooltip text
+                      // changed.
+                      .SetAccessibleName(l10n_util::GetStringUTF16(
+                          IDS_ASH_SELECT_TO_SPEAK_TOGGLE_PLAYBACK))
+                      .SetCallback(base::BindRepeating(
+                          &SelectToSpeakMenuView::OnButtonPressed,
+                          base::Unretained(this),
+                          base::Unretained(pause_button_))),
+                  views::Builder<FloatingMenuButton>()
+                      .CopyAddressTo(&next_sentence_button_)
+                      .SetID(static_cast<int>(ButtonId::kNextSentence))
+                      .SetVectorIcon(kSelectToSpeakNextSentenceIcon)
+                      .SetFlipCanvasOnPaintForRTLUI(true)
+                      .SetTooltipText(l10n_util::GetStringUTF16(
+                          IDS_ASH_SELECT_TO_SPEAK_NEXT_SENTENCE))
+                      .SetCallback(base::BindRepeating(
+                          &SelectToSpeakMenuView::OnButtonPressed,
+                          base::Unretained(this),
+                          base::Unretained(next_sentence_button_))),
+                  views::Builder<FloatingMenuButton>()
+                      .CopyAddressTo(&next_paragraph_button_)
+                      .SetID(static_cast<int>(ButtonId::kNextParagraph))
+                      .SetVectorIcon(kSelectToSpeakNextParagraphIcon)
+                      .SetFlipCanvasOnPaintForRTLUI(true)
+                      .SetTooltipText(l10n_util::GetStringUTF16(
+                          IDS_ASH_SELECT_TO_SPEAK_NEXT_PARAGRAPH))
+                      .SetCallback(base::BindRepeating(
+                          &SelectToSpeakMenuView::OnButtonPressed,
+                          base::Unretained(this),
+                          base::Unretained(next_paragraph_button_))),
+                  views::Builder<FloatingMenuButton>()
+                      .CopyAddressTo(&speed_button_)
+                      .SetID(static_cast<int>(ButtonId::kSpeed))
+                      .SetVectorIcon(kSelectToSpeakReadingSpeedNormalIcon)
+                      .SetTooltipText(l10n_util::GetStringUTF16(
+                          IDS_ASH_SELECT_TO_SPEAK_READING_SPEED))
+                      .SetCallback(base::BindRepeating(
+                          &SelectToSpeakMenuView::OnButtonPressed,
+                          base::Unretained(this),
+                          base::Unretained(speed_button_)))),
+          views::Builder<views::Separator>()
+              .SetColorId(ui::kColorAshSystemUIMenuSeparator)
+              .SetPreferredLength(kSeparatorHeight)
+              .SetBorder(views::CreateEmptyBorder(gfx::Insets::TLBR(
+                  separator_spacing - kUnifiedTopShortcutSpacing, 0,
+                  separator_spacing, 0))),
+          views::Builder<views::BoxLayoutView>()
+              .SetInsideBorderInsets(gfx::Insets::TLBR(0, kStopButtonPadding,
+                                                       kStopButtonPadding,
+                                                       kStopButtonPadding))
+              .SetBetweenChildSpacing(kStopButtonPadding)
+              .AddChildren(
+                  views::Builder<FloatingMenuButton>()
+                      .CopyAddressTo(&stop_button_)
+                      .SetID(static_cast<int>(ButtonId::kStop))
+                      .SetVectorIcon(kSelectToSpeakStopIcon)
+                      .SetDrawHighlight(false)
+                      .SetPreferredSize(gfx::Size(kButtonSize, kButtonSize))
+                      .SetTooltipText(l10n_util::GetStringUTF16(
+                          IDS_ASH_SELECT_TO_SPEAK_EXIT))
+                      .SetCallback(base::BindRepeating(
+                          &SelectToSpeakMenuView::OnButtonPressed,
+                          base::Unretained(this),
+                          base::Unretained(stop_button_)))))
       .BuildChildren();
 }
 
@@ -191,7 +206,8 @@ void SelectToSpeakMenuView::SetInitialSpeechRate(double initial_speech_rate) {
 }
 
 void SelectToSpeakMenuView::OnKeyEvent(ui::KeyEvent* key_event) {
-  if (key_event->type() != ui::ET_KEY_PRESSED || key_event->is_repeat()) {
+  if (key_event->type() != ui::EventType::kKeyPressed ||
+      key_event->is_repeat()) {
     // Only process key when first pressed.
     return;
   }
@@ -241,6 +257,8 @@ void SelectToSpeakMenuView::OnKeyEvent(ui::KeyEvent* key_event) {
       return;
   }
 
+  RecordKeyPressMetric(action);
+
   delegate_->OnActionSelected(action);
   key_event->SetHandled();
   key_event->StopPropagation();
@@ -271,16 +289,18 @@ void SelectToSpeakMenuView::OnButtonPressed(views::Button* sender) {
   SelectToSpeakPanelAction action =
       PanelActionForButtonID(sender->GetID(), is_paused_);
 
+  RecordButtonMetric(action);
+
   switch (action) {
     case SelectToSpeakPanelAction::kPreviousParagraph:
-      ABSL_FALLTHROUGH_INTENDED;
+      [[fallthrough]];
     case SelectToSpeakPanelAction::kNextParagraph:
       base::UmaHistogramEnumeration(
           kParagraphNavigationMethodHistogramName,
           CrosSelectToSpeakActivationMethod::kMenuButton);
       break;
     case SelectToSpeakPanelAction::kPreviousSentence:
-      ABSL_FALLTHROUGH_INTENDED;
+      [[fallthrough]];
     case SelectToSpeakPanelAction::kNextSentence:
       base::UmaHistogramEnumeration(
           kSentenceNavigationMethodHistogramName,
@@ -298,7 +318,7 @@ void SelectToSpeakMenuView::OnButtonPressed(views::Button* sender) {
   delegate_->OnActionSelected(action);
 }
 
-BEGIN_METADATA(SelectToSpeakMenuView, views::BoxLayoutView)
+BEGIN_METADATA(SelectToSpeakMenuView)
 END_METADATA
 
 }  // namespace ash

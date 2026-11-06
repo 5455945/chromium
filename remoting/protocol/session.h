@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,15 +7,15 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
-#include "base/macros.h"
+#include "remoting/base/source_location.h"
 #include "remoting/protocol/errors.h"
-#include "remoting/protocol/session_config.h"
 #include "remoting/protocol/transport.h"
 
-namespace remoting {
-namespace protocol {
+namespace remoting::protocol {
 
+class Authenticator;
 class SessionPlugin;
 class Transport;
 
@@ -52,8 +52,8 @@ class Session {
 
   class EventHandler {
    public:
-    EventHandler() {}
-    virtual ~EventHandler() {}
+    EventHandler() = default;
+    virtual ~EventHandler() = default;
 
     // Called after session state has changed. It is safe to destroy
     // the session from within the handler if |state| is AUTHENTICATING
@@ -61,43 +61,47 @@ class Session {
     virtual void OnSessionStateChange(State state) = 0;
   };
 
-  Session() {}
-  virtual ~Session() {}
+  Session() = default;
+
+  Session(const Session&) = delete;
+  Session& operator=(const Session&) = delete;
+
+  virtual ~Session() = default;
 
   // Set event handler for this session. |event_handler| must outlive
   // this object.
   virtual void SetEventHandler(EventHandler* event_handler) = 0;
 
   // Returns error code for a failed session.
-  virtual ErrorCode error() = 0;
+  virtual ErrorCode error() const = 0;
 
   // JID of the other side.
   virtual const std::string& jid() = 0;
 
-  // Protocol configuration. Can be called only after session has been accepted.
-  // Returned pointer is valid until connection is closed.
-  virtual const SessionConfig& config() = 0;
+  virtual const Authenticator& authenticator() const = 0;
 
   // Sets Transport to be used by the session. Must be called before the
   // session becomes AUTHENTICATED. The transport must outlive the session.
   virtual void SetTransport(Transport* transport) = 0;
 
   // Closes connection. EventHandler is guaranteed not to be called after this
-  // method returns. |error| specifies the error code in case when the session
-  // is being closed due to an error.
-  virtual void Close(ErrorCode error) = 0;
+  // method returns.
+  // |error| specifies the error code in case when the session is being closed
+  //   due to an error.
+  // |error_details| is a free-form human-readable string that describes the
+  //   reason for closing the connection.
+  // |error_location| denotes where the error occurs in the code.
+  virtual void Close(ErrorCode error,
+                     std::string_view error_details,
+                     const SourceLocation& error_location) = 0;
 
   // Adds a SessionPlugin to handle attachments. To ensure plugin attachments
   // are processed correctly for session-initiate message, this function must be
   // called immediately after SessionManager::Connect() for outgoing connections
   // or in the IncomingSessionCallback handler for incoming connections.
   virtual void AddPlugin(SessionPlugin* plugin) = 0;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(Session);
 };
 
-}  // namespace protocol
-}  // namespace remoting
+}  // namespace remoting::protocol
 
 #endif  // REMOTING_PROTOCOL_SESSION_H_

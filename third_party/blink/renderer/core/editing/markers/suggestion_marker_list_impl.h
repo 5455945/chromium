@@ -1,12 +1,14 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_EDITING_MARKERS_SUGGESTION_MARKER_LIST_IMPL_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_EDITING_MARKERS_SUGGESTION_MARKER_LIST_IMPL_H_
 
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/editing/markers/document_marker_list.h"
 #include "third_party/blink/renderer/core/editing/markers/suggestion_marker.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
 
 namespace blink {
@@ -31,18 +33,21 @@ class CORE_EXPORT SuggestionMarkerListImpl final : public DocumentMarkerList {
   void Clear() final;
 
   const HeapVector<Member<DocumentMarker>>& GetMarkers() const final;
-  DocumentMarker* FirstMarkerIntersectingRange(unsigned start_offset,
-                                               unsigned end_offset) const final;
+  DocumentMarker* FirstMarkerIntersectingRange(
+      wtf_size_t start_offset,
+      wtf_size_t end_offset) const final;
   HeapVector<Member<DocumentMarker>> MarkersIntersectingRange(
-      unsigned start_offset,
-      unsigned end_offset) const final;
+      wtf_size_t start_offset,
+      wtf_size_t end_offset) const final;
 
-  bool MoveMarkers(int length, DocumentMarkerList* dst_list) final;
-  bool RemoveMarkers(unsigned start_offset, int length) final;
+  bool MoveMarkers(wtf_size_t length, DocumentMarkerList* dst_list) final;
+  bool RemoveMarkers(wtf_size_t start_offset, wtf_size_t length) final;
   bool ShiftMarkers(const String& node_text,
-                    unsigned offset,
-                    unsigned old_length,
-                    unsigned new_length) final;
+                    wtf_size_t offset,
+                    wtf_size_t old_length,
+                    wtf_size_t new_length) final;
+
+  void MergeOverlappingMarkers() final {}
 
   void Trace(Visitor*) const override;
 
@@ -51,13 +56,13 @@ class CORE_EXPORT SuggestionMarkerListImpl final : public DocumentMarkerList {
   bool RemoveMarkerByType(const SuggestionMarker::SuggestionType& type);
 
  private:
-  bool ShiftMarkersForSuggestionReplacement(unsigned offset,
-                                            unsigned old_length,
-                                            unsigned new_length);
+  bool ShiftMarkersForSuggestionReplacement(wtf_size_t offset,
+                                            wtf_size_t old_length,
+                                            wtf_size_t new_length);
   bool ShiftMarkersForNonSuggestionEditingOperation(const String& node_text,
-                                                    unsigned offset,
-                                                    unsigned old_length,
-                                                    unsigned new_length);
+                                                    wtf_size_t offset,
+                                                    wtf_size_t old_length,
+                                                    wtf_size_t new_length);
 
   HeapVector<Member<DocumentMarker>> markers_;
 };

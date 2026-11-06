@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "chromeos/dbus/power/power_manager_client.h"
@@ -49,6 +49,10 @@ class GuestOsEngagementMetrics : public wm::ActivationChangeObserver,
                            WindowMatcher window_matcher,
                            const std::string& pref_prefix,
                            const std::string& uma_name);
+
+  GuestOsEngagementMetrics(const GuestOsEngagementMetrics&) = delete;
+  GuestOsEngagementMetrics& operator=(const GuestOsEngagementMetrics&) = delete;
+
   ~GuestOsEngagementMetrics() override;
 
   // Instead of using |window_matcher_|, we let consumers define when the Guest
@@ -110,7 +114,7 @@ class GuestOsEngagementMetrics : public wm::ActivationChangeObserver,
 
   bool ShouldRecordEngagementTimeToUma() const;
 
-  PrefService* const pref_service_;
+  const raw_ptr<PrefService> pref_service_;
 
   WindowMatcher window_matcher_;
   std::string pref_prefix_;
@@ -118,8 +122,8 @@ class GuestOsEngagementMetrics : public wm::ActivationChangeObserver,
 
   // |clock_| is used for determining when to log to UMA, while |tick_clock_|
   // is used to calculate elapsed time.
-  const base::Clock* clock_;
-  const base::TickClock* tick_clock_;
+  raw_ptr<const base::Clock> clock_;
+  raw_ptr<const base::TickClock> tick_clock_;
   base::RepeatingTimer update_engagement_time_timer_;
   base::RepeatingTimer save_engagement_time_to_prefs_timer_;
   base::TimeTicks last_update_ticks_;
@@ -136,8 +140,6 @@ class GuestOsEngagementMetrics : public wm::ActivationChangeObserver,
   base::TimeDelta engagement_time_total_;
   base::TimeDelta engagement_time_foreground_;
   base::TimeDelta engagement_time_background_;
-
-  DISALLOW_COPY_AND_ASSIGN(GuestOsEngagementMetrics);
 };
 
 }  // namespace guest_os

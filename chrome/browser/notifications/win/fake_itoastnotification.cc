@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 #include <wrl/client.h>
 
 #include "base/logging.h"
-#include "base/strings/string_piece.h"
 #include "base/win/scoped_hstring.h"
 
 namespace mswr = Microsoft::WRL;
@@ -17,6 +16,8 @@ namespace winxml = ABI::Windows::Data::Xml;
 FakeIToastNotification::FakeIToastNotification(const std::wstring& xml,
                                                const std::wstring& tag)
     : xml_(xml), group_(L"Notifications"), tag_(tag) {}
+
+FakeIToastNotification::~FakeIToastNotification() = default;
 
 HRESULT FakeIToastNotification::get_Content(winxml::Dom::IXmlDocument** value) {
   mswr::ComPtr<winxml::Dom::IXmlDocumentIO> xml_document_io;

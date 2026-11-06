@@ -1,17 +1,18 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.init;
 
-/**
- * Empty implementation of the browser parts for easy extension.
- */
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+
+/** Empty implementation of the browser parts for easy extension. */
+@NullMarked
 public class EmptyBrowserParts implements BrowserParts {
 
     @Override
-    public void preInflationStartup() {
-    }
+    public void preInflationStartup() {}
 
     @Override
     public void setContentViewAndLoadLibrary(Runnable onInflationCompleteCallback) {
@@ -19,27 +20,22 @@ public class EmptyBrowserParts implements BrowserParts {
     }
 
     @Override
-    public void postInflationStartup() {
-    }
+    public void postInflationStartup() {}
 
     @Override
-    public void maybePreconnect() {
-    }
+    public void maybePreconnect() {}
 
     @Override
-    public void initializeCompositor() {
-    }
+    public void initializeCompositor() {}
 
     @Override
-    public void initializeState() {
-    }
+    public void initializeState() {}
 
     @Override
-    public void finishNativeInitialization() {
-    }
+    public void finishNativeInitialization() {}
 
     @Override
-    public void onStartupFailure(Exception failureCause) {}
+    public void onStartupFailure(@Nullable Exception failureCause) {}
 
     @Override
     public boolean isActivityFinishingOrDestroyed() {

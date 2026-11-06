@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,16 +10,17 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/simple_test_clock.h"
 #include "base/test/task_environment.h"
-#include "base/timer/timer.h"
 #include "google_apis/gcm/base/fake_encryptor.h"
 #include "google_apis/gcm/base/mcs_util.h"
 #include "google_apis/gcm/engine/fake_connection_factory.h"
@@ -108,22 +109,6 @@ class TestMCSClient : public MCSClient {
   uint32_t next_id_;
 };
 
-class TestConnectionListener : public ConnectionFactory::ConnectionListener {
- public:
-  TestConnectionListener() : disconnect_counter_(0) { }
-  ~TestConnectionListener() override { }
-
-  void OnConnected(const GURL& current_server,
-                   const net::IPEndPoint& ip_endpoint) override { }
-  void OnDisconnected() override {
-    ++disconnect_counter_;
-  }
-
-  int get_disconnect_counter() const { return disconnect_counter_; }
- private:
-  int disconnect_counter_;
-};
-
 class MCSClientTest : public testing::Test {
  public:
   MCSClientTest();
@@ -136,18 +121,12 @@ class MCSClientTest : public testing::Test {
   void InitializeClient();
   void StoreCredentials();
   void LoginClient(const std::vector<std::string>& acknowledged_ids);
-  void LoginClientWithHeartbeat(
-      const std::vector<std::string>& acknowledged_ids,
-      int heartbeat_interval_ms);
-  void AddExpectedLoginRequest(const std::vector<std::string>& acknowledged_ids,
-                               int heartbeat_interval_ms);
 
   base::SimpleTestClock* clock() { return &clock_; }
   TestMCSClient* mcs_client() const { return mcs_client_.get(); }
   FakeConnectionFactory* connection_factory() {
     return &connection_factory_;
   }
-  bool init_success() const { return init_success_; }
   uint64_t restored_android_id() const { return restored_android_id_; }
   uint64_t restored_security_token() const { return restored_security_token_; }
   MCSMessage* received_message() const { return received_message_.get(); }
@@ -164,10 +143,8 @@ class MCSClientTest : public testing::Test {
   void PumpLoop();
 
  private:
-  void ErrorCallback();
   void MessageReceivedCallback(const MCSMessage& message);
-  void MessageSentCallback(int64_t user_serial_number,
-                           const std::string& app_id,
+  void MessageSentCallback(const std::string& app_id,
                            const std::string& message_id,
                            MCSClient::MessageSendStatus status);
 
@@ -180,7 +157,6 @@ class MCSClientTest : public testing::Test {
 
   FakeConnectionFactory connection_factory_;
   std::unique_ptr<TestMCSClient> mcs_client_;
-  bool init_success_;
   uint64_t restored_android_id_;
   uint64_t restored_security_token_;
   std::unique_ptr<MCSMessage> received_message_;
@@ -192,7 +168,6 @@ class MCSClientTest : public testing::Test {
 
 MCSClientTest::MCSClientTest()
     : run_loop_(new base::RunLoop()),
-      init_success_(true),
       restored_android_id_(0),
       restored_security_token_(0),
       message_send_status_(MCSClient::SENT) {
@@ -200,7 +175,7 @@ MCSClientTest::MCSClientTest()
   run_loop_ = std::make_unique<base::RunLoop>();
 
   // Advance the clock to a non-zero time.
-  clock_.Advance(base::TimeDelta::FromSeconds(1));
+  clock_.Advance(base::Seconds(1));
 }
 
 MCSClientTest::~MCSClientTest() {}
@@ -217,13 +192,11 @@ void MCSClientTest::TearDown() {
 
 void MCSClientTest::BuildMCSClient() {
   gcm_store_ = std::make_unique<GCMStoreImpl>(
-      temp_directory_.GetPath(),
-      /*remove_account_mappings_with_email_key=*/true,
-      task_environment_.GetMainThreadTaskRunner(),
+      temp_directory_.GetPath(), task_environment_.GetMainThreadTaskRunner(),
       base::WrapUnique<Encryptor>(new FakeEncryptor));
   mcs_client_ = std::make_unique<TestMCSClient>(
       &clock_, &connection_factory_, gcm_store_.get(),
-      base::ThreadTaskRunnerHandle::Get(), &recorder_);
+      base::SingleThreadTaskRunner::GetCurrentDefault(), &recorder_);
 }
 
 void MCSClientTest::InitializeClient() {
@@ -231,8 +204,6 @@ void MCSClientTest::InitializeClient() {
       GCMStore::CREATE_IF_MISSING,
       base::BindOnce(
           &MCSClient::Initialize, base::Unretained(mcs_client_.get()),
-          base::BindRepeating(&MCSClientTest::ErrorCallback,
-                              base::Unretained(this)),
           base::BindRepeating(&MCSClientTest::MessageReceivedCallback,
                               base::Unretained(this)),
           base::BindRepeating(&MCSClientTest::MessageSentCallback,
@@ -243,32 +214,14 @@ void MCSClientTest::InitializeClient() {
 
 void MCSClientTest::LoginClient(
     const std::vector<std::string>& acknowledged_ids) {
-  LoginClientWithHeartbeat(acknowledged_ids, 0);
-}
-
-void MCSClientTest::LoginClientWithHeartbeat(
-    const std::vector<std::string>& acknowledged_ids,
-    int heartbeat_interval_ms) {
-  AddExpectedLoginRequest(acknowledged_ids, heartbeat_interval_ms);
-  mcs_client_->Login(kAndroidId, kSecurityToken);
-  run_loop_->Run();
-  run_loop_ = std::make_unique<base::RunLoop>();
-}
-
-void MCSClientTest::AddExpectedLoginRequest(
-    const std::vector<std::string>& acknowledged_ids,
-    int heartbeat_interval_ms) {
   std::unique_ptr<mcs_proto::LoginRequest> login_request =
       BuildLoginRequest(kAndroidId, kSecurityToken, "");
-  for (size_t i = 0; i < acknowledged_ids.size(); ++i)
-    login_request->add_received_persistent_id(acknowledged_ids[i]);
-  if (heartbeat_interval_ms) {
-    mcs_proto::Setting* setting = login_request->add_setting();
-    setting->set_name("hbping");
-    setting->set_value(base::NumberToString(heartbeat_interval_ms));
+  for (const std::string& acknowledged_id : acknowledged_ids) {
+    login_request->add_received_persistent_id(acknowledged_id);
   }
   GetFakeHandler()->ExpectOutgoingMessage(
       MCSMessage(kLoginRequestTag, std::move(login_request)));
+  mcs_client_->Login(kAndroidId, kSecurityToken);
 }
 
 void MCSClientTest::StoreCredentials() {
@@ -295,20 +248,16 @@ void MCSClientTest::PumpLoop() {
   run_loop_ = std::make_unique<base::RunLoop>();
 }
 
-void MCSClientTest::ErrorCallback() {
-  init_success_ = false;
-  DVLOG(1) << "Error callback invoked, killing loop.";
-  run_loop_->Quit();
-}
-
 void MCSClientTest::MessageReceivedCallback(const MCSMessage& message) {
   received_message_ = std::make_unique<MCSMessage>(message);
+  if (message.tag() == kLoginResponseTag) {
+    return;
+  }
   DVLOG(1) << "Message received callback invoked, killing loop.";
   run_loop_->Quit();
 }
 
-void MCSClientTest::MessageSentCallback(int64_t user_serial_number,
-                                        const std::string& app_id,
+void MCSClientTest::MessageSentCallback(const std::string& app_id,
                                         const std::string& message_id,
                                         MCSClient::MessageSendStatus status) {
   DVLOG(1) << "Message sent callback invoked, killing loop.";
@@ -326,7 +275,7 @@ void MCSClientTest::SetDeviceCredentialsCallback(bool success) {
 TEST_F(MCSClientTest, InitializeNew) {
   BuildMCSClient();
   InitializeClient();
-  EXPECT_TRUE(init_success());
+  EXPECT_EQ(MCSClient::LOADED, mcs_client()->state());
 }
 
 // Initialize a new client, shut it down, then restart the client. Should
@@ -340,7 +289,7 @@ TEST_F(MCSClientTest, InitializeExisting) {
   StoreCredentials();
   BuildMCSClient();
   InitializeClient();
-  EXPECT_TRUE(init_success());
+  EXPECT_EQ(MCSClient::LOADED, mcs_client()->state());
 }
 
 // Log in successfully to the MCS endpoint.
@@ -348,8 +297,9 @@ TEST_F(MCSClientTest, LoginSuccess) {
   BuildMCSClient();
   InitializeClient();
   LoginClient(std::vector<std::string>());
+  PumpLoop();
   EXPECT_TRUE(connection_factory()->IsEndpointReachable());
-  EXPECT_TRUE(init_success());
+  EXPECT_EQ(MCSClient::CONNECTED, mcs_client()->state());
   ASSERT_TRUE(received_message());
   EXPECT_EQ(kLoginResponseTag, received_message()->tag());
 }
@@ -363,7 +313,7 @@ TEST_F(MCSClientTest, FailLogin) {
   connection_factory()->set_delay_reconnect(true);
   LoginClient(std::vector<std::string>());
   EXPECT_FALSE(connection_factory()->IsEndpointReachable());
-  EXPECT_FALSE(init_success());
+  EXPECT_EQ(MCSClient::UNINITIALIZED, mcs_client()->state());
   EXPECT_FALSE(received_message());
   EXPECT_TRUE(connection_factory()->reconnect_pending());
 }
@@ -438,9 +388,8 @@ TEST_F(MCSClientTest, SendMessageRMQWhileDisconnected) {
   EXPECT_EQ("X", sent_message_id());
   EXPECT_FALSE(GetFakeHandler()->AllOutgoingMessagesReceived());
   GetFakeHandler()->set_fail_send(false);
-  clock()->Advance(base::TimeDelta::FromSeconds(kTTLValue - 1));
+  clock()->Advance(base::Seconds(kTTLValue - 1));
   connection_factory()->Connect();
-  WaitForMCSEvent();  // Wait for the login to finish.
   PumpLoop();         // Wait for the send to happen.
 
   // Receive the ack.
@@ -477,7 +426,7 @@ TEST_F(MCSClientTest, SendMessageRMQOnRestart) {
   BuildMCSClient();
   InitializeClient();
 
-  clock()->Advance(base::TimeDelta::FromSeconds(kTTLValue - 1));
+  clock()->Advance(base::Seconds(kTTLValue - 1));
   MCSMessage message2(BuildDataMessage("from", "category", "X", 1, "1",
                                        kTTLValue, 1, kTTLValue - 1, "", 0,
                                        IMMEDIATE_ACK_NO));
@@ -793,7 +742,7 @@ TEST_F(MCSClientTest, ExpiredTTLOnSend) {
                                       IMMEDIATE_ACK_NO));
 
   // Advance time to after the TTL.
-  clock()->Advance(base::TimeDelta::FromSeconds(kTTLValue + 2));
+  clock()->Advance(base::Seconds(kTTLValue + 2));
   EXPECT_TRUE(sent_message_id().empty());
   mcs_client()->SendMessage(message);
 
@@ -821,7 +770,7 @@ TEST_F(MCSClientTest, ExpiredTTLOnRestart) {
 
   // Move the clock forward and rebuild the client, which should fail the
   // message send on restart.
-  clock()->Advance(base::TimeDelta::FromSeconds(kTTLValue + 2));
+  clock()->Advance(base::Seconds(kTTLValue + 2));
   StoreCredentials();
   BuildMCSClient();
   InitializeClient();
@@ -892,274 +841,6 @@ TEST_F(MCSClientTest, CollapseKeysDifferentUser) {
   GetFakeHandler()->ExpectOutgoingMessage(message);
   GetFakeHandler()->ExpectOutgoingMessage(message2);
   PumpLoop();
-}
-
-// Test case for setting a custom heartbeat interval, when it is too short.
-// Covers both connection restart and storing of custom intervals.
-TEST_F(MCSClientTest, CustomHeartbeatIntervalTooShort) {
-  BuildMCSClient();
-  InitializeClient();
-  LoginClient(std::vector<std::string>());
-  PumpLoop();
-  StoreCredentials();
-
-  HeartbeatManager* hb_manager = mcs_client()->GetHeartbeatManagerForTesting();
-  // By default custom client interval is not set.
-  EXPECT_FALSE(hb_manager->HasClientHeartbeatInterval());
-
-  const std::string component_1 = "component1";
-  int interval_ms = 15 * 1000;  // 15 seconds, too low.
-  mcs_client()->AddHeartbeatInterval(component_1, interval_ms);
-  // Setting was too low so it was ignored.
-  EXPECT_FALSE(hb_manager->HasClientHeartbeatInterval());
-
-  // Restore and check again to make sure that nothing was set in store.
-  BuildMCSClient();
-  InitializeClient();
-  LoginClientWithHeartbeat(std::vector<std::string>(), 0);
-  PumpLoop();
-
-  hb_manager = mcs_client()->GetHeartbeatManagerForTesting();
-  EXPECT_FALSE(hb_manager->HasClientHeartbeatInterval());
-}
-
-// Test case for setting a custom heartbeat interval, when it is too long.
-// Covers both connection restart and storing of custom intervals.
-TEST_F(MCSClientTest, CustomHeartbeatIntervalTooLong) {
-  BuildMCSClient();
-  InitializeClient();
-  LoginClient(std::vector<std::string>());
-  PumpLoop();
-  StoreCredentials();
-
-  HeartbeatManager* hb_manager = mcs_client()->GetHeartbeatManagerForTesting();
-
-  const std::string component_1 = "component1";
-  int interval_ms = 60 * 60 * 1000;  // 1 hour, too high.
-  mcs_client()->AddHeartbeatInterval(component_1, interval_ms);
-  // Setting was too high, again it was ignored.
-  EXPECT_FALSE(hb_manager->HasClientHeartbeatInterval());
-
-  // Restore and check again to make sure that nothing was set in store.
-  BuildMCSClient();
-  InitializeClient();
-  LoginClientWithHeartbeat(std::vector<std::string>(), 0);
-  PumpLoop();
-
-  // Setting was too high, again it was ignored.
-  hb_manager = mcs_client()->GetHeartbeatManagerForTesting();
-  EXPECT_FALSE(hb_manager->HasClientHeartbeatInterval());
-}
-
-// Tests adding and removing custom heartbeat interval.
-// Covers both connection restart and storing of custom intervals.
-TEST_F(MCSClientTest, CustomHeartbeatIntervalSingleInterval) {
-  BuildMCSClient();
-  InitializeClient();
-  LoginClient(std::vector<std::string>());
-  PumpLoop();
-  StoreCredentials();
-
-  TestConnectionListener test_connection_listener;
-  connection_factory()->SetConnectionListener(&test_connection_listener);
-
-  HeartbeatManager* hb_manager = mcs_client()->GetHeartbeatManagerForTesting();
-
-  const std::string component_1 = "component1";
-  int interval_ms = 5 * 60 * 1000;  // 5 minutes. A valid setting.
-
-  AddExpectedLoginRequest(std::vector<std::string>(), interval_ms);
-  mcs_client()->AddHeartbeatInterval(component_1, interval_ms);
-  PumpLoop();
-
-  // Interval was OK. HearbeatManager should get that setting now.
-  EXPECT_TRUE(hb_manager->HasClientHeartbeatInterval());
-  EXPECT_EQ(interval_ms, hb_manager->GetClientHeartbeatIntervalMs());
-  EXPECT_EQ(1, test_connection_listener.get_disconnect_counter());
-
-  // Check that setting was persisted and will take effect upon restart.
-  BuildMCSClient();
-  InitializeClient();
-  LoginClientWithHeartbeat(std::vector<std::string>(), interval_ms);
-  PumpLoop();
-
-  // HB manger uses the shortest persisted interval after restart.
-  hb_manager = mcs_client()->GetHeartbeatManagerForTesting();
-  EXPECT_TRUE(hb_manager->HasClientHeartbeatInterval());
-  EXPECT_EQ(interval_ms, hb_manager->GetClientHeartbeatIntervalMs());
-
-  mcs_client()->RemoveHeartbeatInterval(component_1);
-  PumpLoop();
-
-  // Check that setting was persisted and will take effect upon restart.
-  BuildMCSClient();
-  InitializeClient();
-  LoginClientWithHeartbeat(std::vector<std::string>(), 0);
-  PumpLoop();
-
-  hb_manager = mcs_client()->GetHeartbeatManagerForTesting();
-  EXPECT_FALSE(hb_manager->HasClientHeartbeatInterval());
-}
-
-// Tests adding custom heartbeat interval before connection is initialized.
-TEST_F(MCSClientTest, CustomHeartbeatIntervalSetBeforeInitialize) {
-  BuildMCSClient();
-
-  const std::string component_1 = "component1";
-  int interval_ms = 5 * 60 * 1000;  // 5 minutes. A valid setting.
-  mcs_client()->AddHeartbeatInterval(component_1, interval_ms);
-  InitializeClient();
-  LoginClientWithHeartbeat(std::vector<std::string>(), interval_ms);
-  HeartbeatManager* hb_manager = mcs_client()->GetHeartbeatManagerForTesting();
-  EXPECT_TRUE(hb_manager->HasClientHeartbeatInterval());
-}
-
-// Tests adding custom heartbeat interval after connection is initialized, but
-// but before login is sent.
-TEST_F(MCSClientTest, CustomHeartbeatIntervalSetBeforeLogin) {
-  BuildMCSClient();
-
-  const std::string component_1 = "component1";
-  int interval_ms = 5 * 60 * 1000;  // 5 minutes. A valid setting.
-  InitializeClient();
-  mcs_client()->AddHeartbeatInterval(component_1, interval_ms);
-  LoginClientWithHeartbeat(std::vector<std::string>(), interval_ms);
-  HeartbeatManager* hb_manager = mcs_client()->GetHeartbeatManagerForTesting();
-  EXPECT_TRUE(hb_manager->HasClientHeartbeatInterval());
-}
-
-// Tests situation when two heartbeat intervals are set and second is longer.
-// Covers both connection restart and storing of custom intervals.
-TEST_F(MCSClientTest, CustomHeartbeatIntervalSecondIntervalLonger) {
-  BuildMCSClient();
-  InitializeClient();
-  LoginClient(std::vector<std::string>());
-  PumpLoop();
-  StoreCredentials();
-
-  TestConnectionListener test_connection_listener;
-  connection_factory()->SetConnectionListener(&test_connection_listener);
-
-  HeartbeatManager* hb_manager = mcs_client()->GetHeartbeatManagerForTesting();
-
-  const std::string component_1 = "component1";
-  int interval_ms = 5 * 60 * 1000;  // 5 minutes. A valid setting.
-
-  AddExpectedLoginRequest(std::vector<std::string>(), interval_ms);
-  mcs_client()->AddHeartbeatInterval(component_1, interval_ms);
-  PumpLoop();
-
-  const std::string component_2 = "component2";
-  int other_interval_ms = 10 * 60 * 1000;  // 10 minutes. A valid setting.
-  mcs_client()->AddHeartbeatInterval(component_2, other_interval_ms);
-  PumpLoop();
-
-  // Interval was OK, but longer. HearbeatManager will use the first one.
-  EXPECT_TRUE(hb_manager->HasClientHeartbeatInterval());
-  EXPECT_EQ(interval_ms, hb_manager->GetClientHeartbeatIntervalMs());
-  EXPECT_EQ(1, test_connection_listener.get_disconnect_counter());
-
-  // Check that setting was persisted and will take effect upon restart.
-  BuildMCSClient();
-  InitializeClient();
-  LoginClientWithHeartbeat(std::vector<std::string>(), interval_ms);
-  PumpLoop();
-
-  // HB manger uses the shortest persisted interval after restart.
-  hb_manager = mcs_client()->GetHeartbeatManagerForTesting();
-  EXPECT_TRUE(hb_manager->HasClientHeartbeatInterval());
-  EXPECT_EQ(interval_ms, hb_manager->GetClientHeartbeatIntervalMs());
-}
-
-// Tests situation when two heartbeat intervals are set and second is shorter.
-// Covers both connection restart and storing of custom intervals.
-TEST_F(MCSClientTest, CustomHeartbeatIntervalSecondIntervalShorter) {
-  BuildMCSClient();
-  InitializeClient();
-  LoginClient(std::vector<std::string>());
-  PumpLoop();
-  StoreCredentials();
-
-  TestConnectionListener test_connection_listener;
-  connection_factory()->SetConnectionListener(&test_connection_listener);
-
-  HeartbeatManager* hb_manager = mcs_client()->GetHeartbeatManagerForTesting();
-
-  const std::string component_1 = "component1";
-  int interval_ms = 5 * 60 * 1000;  // 5 minutes. A valid setting.
-
-  AddExpectedLoginRequest(std::vector<std::string>(), interval_ms);
-  mcs_client()->AddHeartbeatInterval(component_1, interval_ms);
-  PumpLoop();
-
-  const std::string component_2 = "component2";
-  int other_interval_ms = 3 * 60 * 1000;  // 3 minutes. A valid setting.
-  AddExpectedLoginRequest(std::vector<std::string>(), other_interval_ms);
-  mcs_client()->AddHeartbeatInterval(component_2, other_interval_ms);
-  PumpLoop();
-  // Interval was OK. HearbeatManager should get that setting now.
-  EXPECT_TRUE(hb_manager->HasClientHeartbeatInterval());
-  EXPECT_EQ(other_interval_ms, hb_manager->GetClientHeartbeatIntervalMs());
-  EXPECT_EQ(2, test_connection_listener.get_disconnect_counter());
-
-  // Check that setting was persisted and will take effect upon restart.
-  BuildMCSClient();
-  InitializeClient();
-  LoginClientWithHeartbeat(std::vector<std::string>(), other_interval_ms);
-  PumpLoop();
-
-  // HB manger uses the shortest persisted interval after restart.
-  hb_manager = mcs_client()->GetHeartbeatManagerForTesting();
-  EXPECT_TRUE(hb_manager->HasClientHeartbeatInterval());
-  EXPECT_EQ(other_interval_ms, hb_manager->GetClientHeartbeatIntervalMs());
-}
-
-// Tests situation shorter of two intervals is removed.
-// Covers both connection restart and storing of custom intervals.
-TEST_F(MCSClientTest, CustomHeartbeatIntervalRemoveShorterInterval) {
-  BuildMCSClient();
-  InitializeClient();
-  LoginClient(std::vector<std::string>());
-  PumpLoop();
-  StoreCredentials();
-
-  TestConnectionListener test_connection_listener;
-  connection_factory()->SetConnectionListener(&test_connection_listener);
-
-  HeartbeatManager* hb_manager = mcs_client()->GetHeartbeatManagerForTesting();
-
-  const std::string component_1 = "component1";
-  int interval_ms = 5 * 60 * 1000;  // 5 minutes. A valid setting.
-
-  AddExpectedLoginRequest(std::vector<std::string>(), interval_ms);
-  mcs_client()->AddHeartbeatInterval(component_1, interval_ms);
-  PumpLoop();
-
-  const std::string component_2 = "component2";
-  int other_interval_ms = 3 * 60 * 1000;  // 3 minutes. A valid setting.
-  AddExpectedLoginRequest(std::vector<std::string>(), other_interval_ms);
-  mcs_client()->AddHeartbeatInterval(component_2, other_interval_ms);
-  PumpLoop();
-
-  mcs_client()->RemoveHeartbeatInterval(component_2);
-  PumpLoop();
-
-  // Removing the lowest setting reverts to second lowest.
-  EXPECT_TRUE(hb_manager->HasClientHeartbeatInterval());
-  EXPECT_EQ(interval_ms, hb_manager->GetClientHeartbeatIntervalMs());
-  // No connection reset expected.
-  EXPECT_EQ(2, test_connection_listener.get_disconnect_counter());
-
-  // Check that setting was persisted and will take effect upon restart.
-  BuildMCSClient();
-  InitializeClient();
-  LoginClientWithHeartbeat(std::vector<std::string>(), interval_ms);
-  PumpLoop();
-
-  // HB manger uses the shortest persisted interval after restart.
-  hb_manager = mcs_client()->GetHeartbeatManagerForTesting();
-  EXPECT_TRUE(hb_manager->HasClientHeartbeatInterval());
-  EXPECT_EQ(interval_ms, hb_manager->GetClientHeartbeatIntervalMs());
 }
 
 // Receive a message with immediate ack request, which should trigger an

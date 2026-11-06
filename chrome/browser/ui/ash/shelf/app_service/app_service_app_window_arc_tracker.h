@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,9 +12,10 @@
 #include <vector>
 
 #include "ash/public/cpp/shelf_types.h"
+#include "base/memory/raw_ptr.h"
+#include "chrome/browser/ash/app_list/arc/arc_app_list_prefs.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager_observer.h"
-#include "chrome/browser/ui/app_list/arc/arc_app_list_prefs.h"
-#include "components/arc/arc_util.h"
+#include "chromeos/ash/experiences/arc/arc_util.h"
 
 namespace arc {
 class ArcAppShelfId;
@@ -26,10 +27,6 @@ class ShelfItemDelegate;
 
 namespace aura {
 class window;
-}
-
-namespace base {
-class Time;
 }
 
 namespace gfx {
@@ -64,6 +61,15 @@ class AppServiceAppWindowArcTracker : public ArcAppListPrefs::Observer,
 
   // Invoked by controller to notify |window| is destroying.
   void HandleWindowDestroying(aura::Window* window);
+
+  // Close all windows for 'app_id'.
+  void CloseWindows(const std::string& app_id);
+
+  // Invoked by controller to notify |window| may be replaced from ghost window
+  // to app window.
+  void OnWindowPropertyChanged(aura::Window* window,
+                               const void* key,
+                               intptr_t old);
 
   // ArcAppListPrefs::Observer:
   void OnAppStatesChanged(const std::string& app_id,
@@ -110,49 +116,51 @@ class AppServiceAppWindowArcTracker : public ArcAppListPrefs::Observer,
 
   // Maps shelf group id to controller. Shelf group id is optional parameter for
   // the Android task. If it is not set, app id is used instead.
-  using ShelfGroupToAppControllerMap =
-      std::map<arc::ArcAppShelfId, AppServiceAppWindowShelfItemController*>;
+  using ShelfGroupToAppControllerMap = std::map<
+      arc::ArcAppShelfId,
+      raw_ptr<AppServiceAppWindowShelfItemController, CtnExperimental>>;
 
   // Checks |arc_window_candidates_| and attaches controller when they
   // are ARC app windows and have task id or session id.
   void CheckAndAttachControllers();
   void AttachControllerToTask(int taskId);
-  void AttachControllerToSession(int session_id);
+  void AttachControllerToSession(int session_id, const ArcAppWindowInfo& info);
 
   // arc::ArcSessionManagerObserver:
-  void OnArcOptInManagementCheckStarted() override;
-  void OnArcSessionStopped(arc::ArcStopReason stop_reason) override;
-
-  void HandlePlayStoreLaunch(ArcAppWindowInfo* app_window_info);
+  void OnArcPlayStoreEnabledChanged(bool enabled) override;
 
   // Returns a task ID different from |task_id| that is part of the same
   // logical window. Return arc::kNoTaskId if there is no such window.
   // For consistency, always return the lowest such task ID.
   int GetTaskIdSharingLogicalWindow(int task_id);
 
-  std::vector<int> GetTaskIdsForApp(const std::string& arc_app_id) const;
+  std::vector<int> GetTaskIdsForApp(const std::string& app_id) const;
+
+  // Returns session ids of all ghost windows for the app of `arc_app_id`.
+  std::vector<int> GetSessionIdsForApp(const std::string& app_id) const;
 
   // Invoked when the compressed data is converted to an ImageSkia.
   void OnIconLoaded(int32_t task_id,
                     const std::string& title,
                     const gfx::ImageSkia& icon);
 
-  // Sets the window title and icon.
-  // TODO(crbug.com/1083331): This function can be deleted when the flag
-  // kAppServiceAdaptiveIcon is deleted, and use OnIconLoaded to replace this
-  // function.
-  void SetDescription(int32_t task_id,
-                      const std::string& title,
-                      gfx::ImageSkia icon);
-
   ArcAppWindowInfo* GetArcAppWindowInfo(aura::Window* window);
 
-  Profile* const observed_profile_;
-  AppServiceAppWindowShelfController* const app_service_controller_;
+  // Invoked when the app is removed to close the ghost window with
+  // `session_id`.
+  void OnSessionDestroyed(int32_t session_id);
+
+  const raw_ptr<Profile> observed_profile_;
+  const raw_ptr<AppServiceAppWindowShelfController> app_service_controller_;
 
   TaskIdToArcAppWindowInfo task_id_to_arc_app_window_info_;
   SessionIdToArcAppWindowInfo session_id_to_arc_app_window_info_;
   ShelfGroupToAppControllerMap app_shelf_group_to_controller_map_;
+
+  // Temporarily map session id to task id, starting from OnTaskCreated called
+  // to exo application id set (until that `arc::GetWindowTaskId` can return
+  // correct task id for window, or it will still be session id).
+  std::map<int, int> session_id_to_task_id_map_;
 
   // ARC app task id could be created after the window initialized.
   // |arc_window_candidates_| is used to record those initialized ARC app
@@ -160,16 +168,15 @@ class AppServiceAppWindowArcTracker : public ArcAppListPrefs::Observer,
   // the windows in |arc_window_candidates_| will be checked and attach the task
   // id. Once the window is assigned a task id, the window is removed from
   // |arc_window_candidates_|.
-  std::set<aura::Window*> arc_window_candidates_;
+  std::set<raw_ptr<aura::Window, SetExperimental>> arc_window_candidates_;
 
   int active_task_id_ = arc::kNoTaskId;
   int active_session_id_ = arc::kNoTaskId;
 
-  // The time when the ARC OptIn management check was started. This happens
-  // right after user agrees the ToS or in some cases for managed user when ARC
-  // starts for the first time. OptIn management check is preceding step before
-  // ARC container is actually started.
-  base::Time opt_in_management_check_start_time_;
+  // TODO(crbug.com/40808991): A temp variable used to investigate whether
+  // OnTaskDestroyed is called in the middle of OnTaskCreated. This can be
+  // removed if we have the result.
+  int task_id_being_created_ = arc::kNoTaskId;
 
   base::WeakPtrFactory<AppServiceAppWindowArcTracker> weak_ptr_factory_{this};
 };

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,33 +10,38 @@
 #include <memory>
 
 #include "base/base_export.h"
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "base/memory/discardable_memory.h"
 
 namespace base {
 class DiscardableMemory;
 
 // An allocator which creates and manages DiscardableMemory. The allocator
-// itself should be created via CreateDiscardableMemoryAllocator, which
 // selects an appropriate implementation depending on platform support.
 class BASE_EXPORT DiscardableMemoryAllocator {
  public:
   DiscardableMemoryAllocator() = default;
+
+  DiscardableMemoryAllocator(const DiscardableMemoryAllocator&) = delete;
+  DiscardableMemoryAllocator& operator=(const DiscardableMemoryAllocator&) =
+      delete;
+
   virtual ~DiscardableMemoryAllocator() = default;
 
-  // Returns the allocator instance.
+  // Returns the allocator instance. Asserts if not already set.
   static DiscardableMemoryAllocator* GetInstance();
+
+  // Returns true if the instance has been set.
+  static bool HasInstance();
 
   // Sets the allocator instance. Can only be called once, e.g. on startup.
   // Ownership of |instance| remains with the caller.
   static void SetInstance(DiscardableMemoryAllocator* allocator);
 
-  // Creates an initially-locked instance of discardable memory.
-  // If the platform supports Android ashmem or madvise(MADV_FREE),
-  // platform-specific techniques will be used to discard memory under pressure.
-  // Otherwise, discardable memory is emulated and manually discarded
-  // heuristicly (via memory pressure notifications).
+  // Creates an initially-locked instance of discardable memory. If the platform
+  // supports Android ashmem, platform-specific techniques will be used to
+  // discard memory under pressure. Otherwise, discardable memory is emulated
+  // and manually discarded heuristicly (via memory pressure notifications).
   virtual std::unique_ptr<DiscardableMemory> AllocateLockedDiscardableMemory(
       size_t size) = 0;
 
@@ -60,9 +65,6 @@ class BASE_EXPORT DiscardableMemoryAllocator {
   // Release any memory used in the implementation of discardable memory that is
   // not immediately being used.
   virtual void ReleaseFreeMemory() = 0;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(DiscardableMemoryAllocator);
 };
 
 }  // namespace base

@@ -1,10 +1,13 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/loader/resource_load_observer_for_worker.h"
 
+#include "services/network/public/cpp/ip_address_space_util.h"
+#include "third_party/blink/renderer/core/core_probe_sink.h"
 #include "third_party/blink/renderer/core/core_probes_inl.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/loader/mixed_content_checker.h"
 #include "third_party/blink/renderer/core/loader/worker_fetch_context.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_client_settings_object.h"
@@ -34,9 +37,10 @@ void ResourceLoadObserverForWorker::WillSendRequest(
     const ResourceResponse& redirect_response,
     ResourceType resource_type,
     const ResourceLoaderOptions& options,
-    RenderBlockingBehavior render_blocking_behavior) {
+    RenderBlockingBehavior render_blocking_behavior,
+    const Resource* resource) {
   probe::WillSendRequest(
-      probe_, nullptr,
+      worker_fetch_context_->GetExecutionContext(), nullptr,
       fetcher_properties_->GetFetchClientSettingsObject().GlobalObjectUrl(),
       request, redirect_response, options, resource_type,
       render_blocking_behavior, base::TimeTicks::Now());
@@ -47,12 +51,46 @@ void ResourceLoadObserverForWorker::DidChangePriority(
     ResourceLoadPriority priority,
     int intra_priority_value) {}
 
+// Record use counter for private network access.
+void RecordPrivateNetworkAccessFeature(ExecutionContext* execution_context,
+                                       const ResourceResponse& response) {
+  DCHECK(execution_context);
+
+  if (response.RemoteIPEndpoint().address().IsZero()) {
+    execution_context->CountUse(WebFeature::kPrivateNetworkAccessNullIpAddress);
+  }
+
+  if (!network::IsLessPublicAddressSpace(response.AddressSpace(),
+                                         response.ClientAddressSpace()))
+    return;
+  // Only record the feature for worker contexts, not worklets. Worklets have
+  // opaque origins and so should never be able to do an LNA request. See
+  // https://crbug.com/1291176 for more information.
+  if (!execution_context->IsWorkerGlobalScope()) {
+    CHECK(execution_context->GetSecurityOrigin() &&
+          execution_context->GetSecurityOrigin()->IsOpaque());
+    return;
+  }
+  execution_context->CountUse(WebFeature::kPrivateNetworkAccessWithinWorker);
+
+  if (execution_context->IsDedicatedWorkerGlobalScope()) {
+    execution_context->CountUse(
+        WebFeature::kLocalNetworkAccessWithinDedicatedWorker);
+  } else if (execution_context->IsSharedWorkerGlobalScope()) {
+    execution_context->CountUse(
+        WebFeature::kLocalNetworkAccessWithinSharedWorker);
+  }
+}
+
 void ResourceLoadObserverForWorker::DidReceiveResponse(
     uint64_t identifier,
     const ResourceRequest& request,
     const ResourceResponse& response,
     const Resource* resource,
     ResponseSource) {
+  RecordPrivateNetworkAccessFeature(
+      worker_fetch_context_->GetExecutionContext(), response);
+
   if (response.HasMajorCertificateErrors()) {
     MixedContentChecker::HandleCertificateError(
         response, request.GetRequestContext(),
@@ -65,9 +103,8 @@ void ResourceLoadObserverForWorker::DidReceiveResponse(
 
 void ResourceLoadObserverForWorker::DidReceiveData(
     uint64_t identifier,
-    base::span<const char> chunk) {
-  probe::DidReceiveData(probe_, identifier, nullptr, chunk.data(),
-                        chunk.size());
+    base::SpanOrSize<const char> chunk) {
+  probe::DidReceiveData(probe_, identifier, nullptr, chunk);
 }
 
 void ResourceLoadObserverForWorker::DidReceiveTransferSizeUpdate(
@@ -79,17 +116,21 @@ void ResourceLoadObserverForWorker::DidReceiveTransferSizeUpdate(
 }
 
 void ResourceLoadObserverForWorker::DidDownloadToBlob(uint64_t identifier,
-                                                      BlobDataHandle* blob) {}
+                                                      BlobDataHandle* blob) {
+  if (blob) {
+    probe::DidReceiveBlob(probe_, identifier, nullptr, blob);
+  }
+}
 
 void ResourceLoadObserverForWorker::DidFinishLoading(
     uint64_t identifier,
     base::TimeTicks finish_time,
     int64_t encoded_data_length,
-    int64_t decoded_body_length,
-    bool should_report_corb_blocking) {
+    uint64_t encoded_body_length,
+    int64_t decoded_body_length) {
   probe::DidFinishLoading(probe_, identifier, nullptr, finish_time,
-                          encoded_data_length, decoded_body_length,
-                          should_report_corb_blocking);
+                          encoded_data_length, encoded_body_length,
+                          decoded_body_length);
 }
 
 void ResourceLoadObserverForWorker::DidFailLoading(const KURL&,
@@ -99,6 +140,13 @@ void ResourceLoadObserverForWorker::DidFailLoading(const KURL&,
                                                    IsInternalRequest) {
   probe::DidFailLoading(probe_, identifier, nullptr, error,
                         devtools_worker_token_);
+}
+
+bool ResourceLoadObserverForWorker::InterestedInAllRequests() {
+  if (probe_) {
+    return probe_->HasInspectorNetworkAgents();
+  }
+  return false;
 }
 
 void ResourceLoadObserverForWorker::Trace(Visitor* visitor) const {

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,17 +14,16 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "base/containers/span.h"
-#include "base/strings/string_piece.h"
 #include "net/base/net_export.h"
 #include "net/ntlm/ntlm_constants.h"
 
-namespace net {
-namespace ntlm {
+namespace net::ntlm {
 
 // Maps the bits in the NTLM Hash into 3 DES keys. The DES keys each have 56
 // bits stored in the 7 most significant bits of 8 bytes. The least
@@ -135,7 +134,7 @@ NET_EXPORT_PRIVATE void GenerateNtlmHashV2(
 // [8-15]   - |timestamp|                         (Timestamp)
 // [16-23]  - |client_challenge|                  (Client challenge)
 // [24-27]  - 0x00000000                          (Reserved - all zero)
-NET_EXPORT_PRIVATE std::vector<uint8_t> GenerateProofInputV2(
+NET_EXPORT_PRIVATE std::array<uint8_t, kProofInputLenV2> GenerateProofInputV2(
     uint64_t timestamp,
     base::span<const uint8_t, kChallengeLen> client_challenge);
 
@@ -225,7 +224,6 @@ NET_EXPORT_PRIVATE std::vector<uint8_t> GenerateUpdatedTargetInfo(
     const std::vector<AvPair>& av_pairs,
     uint64_t* server_timestamp);
 
-}  // namespace ntlm
-}  // namespace net
+}  // namespace net::ntlm
 
 #endif  // NET_NTLM_NTLM_H_

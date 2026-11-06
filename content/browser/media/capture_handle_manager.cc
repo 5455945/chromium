@@ -1,10 +1,13 @@
-// Copyright (c) 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/media/capture_handle_manager.h"
 
+#include <algorithm>
+
 #include "base/memory/ptr_util.h"
+#include "build/build_config.h"
 #include "content/browser/renderer_host/render_frame_host_delegate.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/public/browser/browser_context.h"
@@ -13,10 +16,14 @@
 #include "content/public/browser/web_contents_observer.h"
 #include "url/origin.h"
 
+#if defined(USE_AURA)
+#include "ui/aura/window.h"
+#endif
+
 namespace content {
 
 namespace {
-// TODO(crbug.com/1208868): Eliminate code duplication with
+// TODO(crbug.com/40181897): Eliminate code duplication with
 // desktop_capture_devices_util.cc.
 media::mojom::CaptureHandlePtr CreateCaptureHandle(
     RenderFrameHostImpl* capturer,
@@ -33,17 +40,17 @@ media::mojom::CaptureHandlePtr CreateCaptureHandle(
 
   const url::Origin& capturer_origin = capturer->GetLastCommittedOrigin();
   if (!capture_handle_config.all_origins_permitted &&
-      std::none_of(capture_handle_config.permitted_origins.begin(),
-                   capture_handle_config.permitted_origins.end(),
-                   [capturer_origin](const url::Origin& permitted_origin) {
-                     return capturer_origin.IsSameOriginWith(permitted_origin);
-                   })) {
+      std::ranges::none_of(
+          capture_handle_config.permitted_origins,
+          [capturer_origin](const url::Origin& permitted_origin) {
+            return capturer_origin.IsSameOriginWith(permitted_origin);
+          })) {
     return nullptr;
   }
 
   // Observing CaptureHandle wheneither the capturing or the captured party
   // is incognito is disallowed, except for self-capture.
-  if (capturer->GetMainFrame() != captured->GetMainFrame()) {
+  if (capturer->GetMainFrame() != captured->GetPrimaryMainFrame()) {
     if (capturer->GetBrowserContext()->IsOffTheRecord() ||
         captured->GetBrowserContext()->IsOffTheRecord()) {
       return nullptr;
@@ -52,7 +59,7 @@ media::mojom::CaptureHandlePtr CreateCaptureHandle(
 
   auto result = media::mojom::CaptureHandle::New();
   if (capture_handle_config.expose_origin) {
-    result->origin = captured->GetMainFrame()->GetLastCommittedOrigin();
+    result->origin = captured->GetPrimaryMainFrame()->GetLastCommittedOrigin();
   }
   result->capture_handle = capture_handle_config.capture_handle;
 
@@ -78,9 +85,50 @@ bool IsEqual(const media::mojom::CaptureHandlePtr& lhs,
 
   return lhs->capture_handle == rhs->capture_handle;
 }
+
+std::optional<GlobalRenderFrameHostId> GetCapturedFrameHostId(
+    const std::string& device_id) {
+  WebContentsMediaCaptureId captured_tab_id;
+  if (WebContentsMediaCaptureId::Parse(device_id, &captured_tab_id)) {
+    return GlobalRenderFrameHostId(captured_tab_id.render_process_id,
+                                   captured_tab_id.main_render_frame_id);
+  }
+
+  content::DesktopMediaID desktop_id =
+      content::DesktopMediaID::Parse(device_id);
+
+  if (desktop_id.is_null() ||
+      desktop_id.type != content::DesktopMediaID::TYPE_WINDOW) {
+    DVLOG(1) << "Not a tab-capture or supported window-capture ID: "
+             << device_id << ".";
+    return std::nullopt;
+  }
+
+#if defined(USE_AURA) || BUILDFLAG(IS_MAC)
+  gfx::NativeWindow target_window =
+      content::DesktopMediaID::GetNativeWindowById(desktop_id);
+
+  WebContents* web_contents =
+      GetContentClient()
+          ->browser()
+          ->GetWebContentsFromWindowIfCaptureHandleAllowed(target_window);
+
+  if (!web_contents) {
+    DVLOG(1) << "Window does not host a WebContents or capture handle is "
+                "disallowed.";
+    return std::nullopt;
+  }
+
+  return web_contents->GetPrimaryMainFrame()->GetGlobalId();
+#else
+  DVLOG(1)
+      << "Window capture handle parsing is only supported on this platform.";
+  return std::nullopt;
+#endif
+}
 }  // namespace
 
-class CaptureHandleManager::Observer : public WebContentsObserver {
+class CaptureHandleManager::Observer final : public WebContentsObserver {
  public:
   static std::unique_ptr<Observer> Create(
       const CaptureKey& capture_key,
@@ -88,11 +136,11 @@ class CaptureHandleManager::Observer : public WebContentsObserver {
       GlobalRenderFrameHostId capturer,
       DeviceCaptureHandleChangeCallback handle_change_callback);
 
-  ~Observer() final;
+  ~Observer() override;
 
   // Implements WebContentsObserver.
   void OnCaptureHandleConfigUpdate(
-      const blink::mojom::CaptureHandleConfig& config) final;
+      const blink::mojom::CaptureHandleConfig& config) override;
 
   // Forces an immediate polling of the captured tab for the current config.
   // Reports it back via |handle_change_callback_|.
@@ -115,7 +163,7 @@ CaptureHandleManager::Observer::Create(
     GlobalRenderFrameHostId captured,
     GlobalRenderFrameHostId capturer,
     DeviceCaptureHandleChangeCallback handle_change_callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
   auto* const capturer_rfhi = RenderFrameHostImpl::FromID(capturer);
   if (!capturer_rfhi || !capturer_rfhi->IsActive()) {
@@ -127,12 +175,8 @@ CaptureHandleManager::Observer::Create(
     return nullptr;
   }
 
-  auto* const captured_delegate = captured_rfhi->delegate();
-  if (!captured_delegate) {
-    return nullptr;
-  }
-
-  auto* const captured_web_contents = captured_delegate->GetAsWebContents();
+  auto* const captured_web_contents =
+      WebContents::FromRenderFrameHost(captured_rfhi);
   if (!captured_web_contents) {
     return nullptr;
   }
@@ -151,15 +195,15 @@ CaptureHandleManager::Observer::Observer(
       capture_key_(capture_key),
       capturer_(capturer),
       handle_change_callback_(std::move(handle_change_callback)) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(handle_change_callback_);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(handle_change_callback_, base::NotFatalUntil::M160);
 }
 
 CaptureHandleManager::Observer::~Observer() = default;
 
 void CaptureHandleManager::Observer::OnCaptureHandleConfigUpdate(
     const blink::mojom::CaptureHandleConfig& config) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
   auto* const capturer_rfhi = RenderFrameHostImpl::FromID(capturer_);
   if (!capturer_rfhi || !capturer_rfhi->IsActive()) {
@@ -173,10 +217,10 @@ void CaptureHandleManager::Observer::OnCaptureHandleConfigUpdate(
 }
 
 void CaptureHandleManager::Observer::UpdateCaptureHandleConfig() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
   auto* wc = web_contents();
   if (wc) {
-    OnCaptureHandleConfigUpdate(wc->GetCaptureHandleConfig());
+    OnCaptureHandleConfigUpdate(wc->GetPrimaryPage().GetCaptureHandleConfig());
   }
 }
 
@@ -191,34 +235,33 @@ CaptureHandleManager::CaptureInfo::CaptureInfo(
 CaptureHandleManager::CaptureInfo::~CaptureInfo() = default;
 
 CaptureHandleManager::CaptureHandleManager() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 }
 
 CaptureHandleManager::~CaptureHandleManager() {
-  DCHECK(!BrowserThread::IsThreadInitialized(BrowserThread::IO));
+  CHECK(!BrowserThread::IsThreadInitialized(BrowserThread::IO),
+        base::NotFatalUntil::M160);
 }
 
-void CaptureHandleManager::OnTabCaptureStarted(
+void CaptureHandleManager::OnCaptureStarted(
     const std::string& label,
     const blink::MediaStreamDevice& captured_device,
     GlobalRenderFrameHostId capturer,
     DeviceCaptureHandleChangeCallback handle_change_callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
-  WebContentsMediaCaptureId captured_tab_id;
-  if (!WebContentsMediaCaptureId::Parse(captured_device.id, &captured_tab_id)) {
-    DVLOG(1) << "Not a tab-capture ID:" << captured_device.id << ".";
+  std::optional<GlobalRenderFrameHostId> captured =
+      GetCapturedFrameHostId(captured_device.id);
+  if (!captured.has_value()) {
     return;
   }
-  const GlobalRenderFrameHostId captured(captured_tab_id.render_process_id,
-                                         captured_tab_id.main_render_frame_id);
 
   const CaptureKey capture_key{label, captured_device.type};
 
   // base::Unretained(this) is safe because the observer is owned by |this|
   // and both live on the UI thread together.
   std::unique_ptr<Observer> observer = Observer::Create(
-      capture_key, captured, capturer,
+      capture_key, *captured, capturer,
       base::BindRepeating(&CaptureHandleManager::OnCaptureHandleConfigUpdate,
                           base::Unretained(this)));
   if (!observer) {
@@ -229,12 +272,10 @@ void CaptureHandleManager::OnTabCaptureStarted(
   auto iter = captures_.find(capture_key);
   if (iter == captures_.end()) {
     // Creating a new tracking session.
-    const absl::optional<media::mojom::DisplayMediaInformationPtr>& info =
+    const media::mojom::DisplayMediaInformationPtr& info =
         captured_device.display_media_info;
     media::mojom::CaptureHandlePtr capture_handle =
-        (info.has_value() && info.value())
-            ? info.value()->capture_handle.Clone()
-            : nullptr;
+        info ? info->capture_handle.Clone() : nullptr;
     captures_[capture_key] = std::make_unique<CaptureInfo>(
         std::move(observer), std::move(capture_handle),
         std::move(handle_change_callback));
@@ -249,20 +290,23 @@ void CaptureHandleManager::OnTabCaptureStarted(
   captures_[capture_key]->observer->UpdateCaptureHandleConfig();
 }
 
-void CaptureHandleManager::OnTabCaptureStopped(
+void CaptureHandleManager::OnCaptureStopped(
     const std::string& label,
     const blink::MediaStreamDevice& captured_device) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
   captures_.erase({label, captured_device.type});
 }
 
-void CaptureHandleManager::OnTabCaptureDevicesUpdated(
+void CaptureHandleManager::OnCaptureDevicesUpdated(
     const std::string& label,
-    const std::vector<blink::MediaStreamDevice>& new_devices,
+    blink::mojom::StreamDevicesSetPtr new_stream_devices_set,
     GlobalRenderFrameHostId capturer,
     DeviceCaptureHandleChangeCallback handle_change_callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(new_stream_devices_set, base::NotFatalUntil::M160);
+  CHECK_EQ(1u, new_stream_devices_set->stream_devices.size(),
+           base::NotFatalUntil::M160);
 
   // Pause tracking of all old devices.
   for (auto& capture : captures_) {
@@ -272,8 +316,15 @@ void CaptureHandleManager::OnTabCaptureDevicesUpdated(
   }
 
   // Start tracking any new devices; resume tracking of changed devices.
-  for (const auto& device : new_devices) {
-    OnTabCaptureStarted(label, device, capturer, handle_change_callback);
+  const blink::mojom::StreamDevices& new_devices =
+      *new_stream_devices_set->stream_devices[0];
+  if (new_devices.audio_device.has_value()) {
+    OnCaptureStarted(label, new_devices.audio_device.value(), capturer,
+                     handle_change_callback);
+  }
+  if (new_devices.video_device.has_value()) {
+    OnCaptureStarted(label, new_devices.video_device.value(), capturer,
+                     handle_change_callback);
   }
 
   // Forget any old device which was not in |new_devices|.
@@ -290,7 +341,7 @@ void CaptureHandleManager::OnCaptureHandleConfigUpdate(
     const std::string& label,
     blink::mojom::MediaStreamType type,
     media::mojom::CaptureHandlePtr capture_handle) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M160);
 
   auto iter = captures_.find({label, type});
   if (iter == captures_.end()) {

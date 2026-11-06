@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,11 +12,12 @@
 
 #include "base/compiler_specific.h"
 #include "base/containers/circular_deque.h"
-#include "base/macros.h"
+#include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
 #include "base/unguessable_token.h"
+#include "gpu/command_buffer/client/gpu_command_buffer_client_export.h"
 #include "gpu/command_buffer/client/ring_buffer.h"
 #include "gpu/command_buffer/common/buffer.h"
-#include "gpu/gpu_export.h"
 
 namespace gpu {
 
@@ -25,7 +26,7 @@ template <typename>
 class ScopedResultPtr;
 
 // Interface for managing the transfer buffer.
-class GPU_EXPORT TransferBufferInterface {
+class GPU_COMMAND_BUFFER_CLIENT_EXPORT TransferBufferInterface {
  public:
   TransferBufferInterface() = default;
   virtual ~TransferBufferInterface() = default;
@@ -46,12 +47,13 @@ class GPU_EXPORT TransferBufferInterface {
 
   virtual bool HaveBuffer() const = 0;
 
-  // Allocates up to size bytes.
-  virtual void* AllocUpTo(unsigned int size, unsigned int* size_allocated) = 0;
+  // Allocates up to size bytes. The actual allocated size will be the span's
+  // size().
+  virtual base::span<uint8_t> AllocUpTo(unsigned int size) = 0;
 
   // Allocates size bytes.
   // Note: Alloc will fail if it can not return size bytes.
-  virtual void* Alloc(unsigned int size) = 0;
+  virtual base::span<uint8_t> Alloc(unsigned int size) = 0;
 
   virtual RingBuffer::Offset GetOffset(void* pointer) const = 0;
 
@@ -82,7 +84,8 @@ class GPU_EXPORT TransferBufferInterface {
 };
 
 // Class that manages the transfer buffer.
-class GPU_EXPORT TransferBuffer : public TransferBufferInterface {
+class GPU_COMMAND_BUFFER_CLIENT_EXPORT TransferBuffer
+    : public TransferBufferInterface {
  public:
   TransferBuffer(CommandBufferHelper* helper);
   ~TransferBuffer() override;
@@ -100,8 +103,8 @@ class GPU_EXPORT TransferBuffer : public TransferBufferInterface {
   int GetResultOffset() override;
   void Free() override;
   bool HaveBuffer() const override;
-  void* AllocUpTo(unsigned int size, unsigned int* size_allocated) override;
-  void* Alloc(unsigned int size) override;
+  base::span<uint8_t> AllocUpTo(unsigned int size) override;
+  base::span<uint8_t> Alloc(unsigned int size) override;
   RingBuffer::Offset GetOffset(void* pointer) const override;
   void DiscardBlock(void* p) override;
   void FreePendingToken(void* p, unsigned int token) override;
@@ -130,7 +133,7 @@ class GPU_EXPORT TransferBuffer : public TransferBufferInterface {
   // previously freed.
   unsigned int GetPreviousRingBufferUsedBytes();
 
-  CommandBufferHelper* helper_;
+  raw_ptr<CommandBufferHelper> helper_;
   std::unique_ptr<RingBuffer> ring_buffer_;
   base::circular_deque<std::unique_ptr<RingBuffer>> previous_ring_buffers_;
 
@@ -165,7 +168,7 @@ class GPU_EXPORT TransferBuffer : public TransferBufferInterface {
   int32_t buffer_id_;
 
   // address of result area
-  void* result_buffer_;
+  raw_ptr<void> result_buffer_;
 
   // offset to result area
   uint32_t result_shm_offset_;
@@ -179,25 +182,22 @@ class GPU_EXPORT TransferBuffer : public TransferBufferInterface {
 };
 
 // A class that will manage the lifetime of a transferbuffer allocation.
-class GPU_EXPORT ScopedTransferBufferPtr {
+class GPU_COMMAND_BUFFER_CLIENT_EXPORT ScopedTransferBufferPtr {
  public:
   ScopedTransferBufferPtr(unsigned int size,
                           CommandBufferHelper* helper,
                           TransferBufferInterface* transfer_buffer)
-      : buffer_(nullptr),
-        size_(0),
-        helper_(helper),
-        transfer_buffer_(transfer_buffer) {
+      : helper_(helper), transfer_buffer_(transfer_buffer) {
     Reset(size);
   }
 
   // Constructs an empty and invalid allocation that should be Reset() later.
   ScopedTransferBufferPtr(CommandBufferHelper* helper,
                           TransferBufferInterface* transfer_buffer)
-      : buffer_(nullptr),
-        size_(0),
-        helper_(helper),
-        transfer_buffer_(transfer_buffer) {}
+      : helper_(helper), transfer_buffer_(transfer_buffer) {}
+
+  ScopedTransferBufferPtr(const ScopedTransferBufferPtr&) = delete;
+  ScopedTransferBufferPtr& operator=(const ScopedTransferBufferPtr&) = delete;
 
   ~ScopedTransferBufferPtr() {
     Release();
@@ -205,26 +205,26 @@ class GPU_EXPORT ScopedTransferBufferPtr {
 
   ScopedTransferBufferPtr(ScopedTransferBufferPtr&& other);
 
-  bool valid() const { return buffer_ != nullptr; }
+  bool valid() const { return buffer_.data() != nullptr; }
 
-  unsigned int size() const {
-    return size_;
-  }
+  unsigned int size() const { return buffer_.size(); }
 
   int shm_id() const {
     return transfer_buffer_->GetShmId();
   }
 
   RingBuffer::Offset offset() const {
-    return transfer_buffer_->GetOffset(buffer_);
+    return transfer_buffer_->GetOffset(buffer_.data());
   }
 
-  void* address() const {
-    return buffer_;
-  }
+  void* address() const { return buffer_.data(); }
+
+  base::span<uint8_t> as_byte_span() { return buffer_; }
+
+  base::span<const uint8_t> as_byte_span() const { return buffer_; }
 
   // Returns true if |memory| lies inside this buffer.
-  bool BelongsToBuffer(char* memory) const;
+  bool BelongsToBuffer(uint8_t* memory) const;
 
   void Release();
 
@@ -236,11 +236,14 @@ class GPU_EXPORT ScopedTransferBufferPtr {
   void Shrink(unsigned int new_size);
 
  private:
-  void* buffer_;
-  unsigned int size_;
-  CommandBufferHelper* helper_;
-  TransferBufferInterface* transfer_buffer_;
-  DISALLOW_COPY_AND_ASSIGN(ScopedTransferBufferPtr);
+  base::raw_span<uint8_t> buffer_;
+
+  // Found dangling on `linux-rel` in
+  // `gpu_tests.trace_integration_test.TraceIntegrationTest.
+  // WebGPUCachingTraceTest_ComputePipelineMainThread`.
+  raw_ptr<CommandBufferHelper, DanglingUntriaged> helper_;
+
+  raw_ptr<TransferBufferInterface, DanglingUntriaged> transfer_buffer_;
 };
 
 template <typename T>
@@ -270,6 +273,10 @@ class ScopedResultPtr {
   explicit ScopedResultPtr(TransferBufferInterface* tb)
       : result_(static_cast<T*>(tb->AcquireResultBuffer())),
         transfer_buffer_(tb) {}
+
+  ScopedResultPtr(const ScopedResultPtr&) = delete;
+  ScopedResultPtr& operator=(const ScopedResultPtr&) = delete;
+
   ~ScopedResultPtr() {
     if (transfer_buffer_)
       transfer_buffer_->ReleaseResultBuffer();
@@ -278,7 +285,6 @@ class ScopedResultPtr {
   int offset() const { return transfer_buffer_->GetResultOffset(); }
 
   // Make this a move-only class like unique_ptr.
-  DISALLOW_COPY_AND_ASSIGN(ScopedResultPtr);
   ScopedResultPtr(ScopedResultPtr<T>&& other) { *this = std::move(other); }
   ScopedResultPtr& operator=(ScopedResultPtr<T>&& other) {
     this->result_ = other.result_;
@@ -294,8 +300,8 @@ class ScopedResultPtr {
   explicit operator bool() { return result_; }
 
  private:
-  T* result_;
-  TransferBufferInterface* transfer_buffer_;
+  raw_ptr<T> result_;
+  raw_ptr<TransferBufferInterface> transfer_buffer_;
 };
 
 }  // namespace gpu

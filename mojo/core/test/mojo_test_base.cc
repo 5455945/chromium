@@ -1,11 +1,13 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "mojo/core/test/mojo_test_base.h"
 
+#include "base/compiler_specific.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/run_loop.h"
 #include "base/synchronization/waitable_event.h"
 #include "build/build_config.h"
@@ -37,7 +39,7 @@ MojoTestBase::ClientController& MojoTestBase::StartClient(
 MojoTestBase::ClientController::ClientController(const std::string& client_name,
                                                  MojoTestBase* test,
                                                  LaunchType launch_type) {
-#if !defined(OS_IOS)
+#if BUILDFLAG(USE_BLINK)
   pipe_ = helper_.StartChild(client_name, launch_type);
 #endif
 }
@@ -49,12 +51,11 @@ MojoTestBase::ClientController::~ClientController() {
 
 int MojoTestBase::ClientController::WaitForShutdown() {
   was_shutdown_ = true;
-#if !defined(OS_IOS)
+#if BUILDFLAG(USE_BLINK)
   int retval = helper_.WaitForChildShutdown();
   return retval;
 #else
   NOTREACHED();
-  return 1;
 #endif
 }
 
@@ -71,78 +72,118 @@ void MojoTestBase::CreateMessagePipe(MojoHandle* p0, MojoHandle* p1) {
 }
 
 // static
-void MojoTestBase::WriteMessageWithHandles(MojoHandle mp,
-                                           const std::string& message,
-                                           const MojoHandle* handles,
-                                           uint32_t num_handles) {
+void MojoTestBase::WriteMessageWithHandles(
+    MojoHandle mp,
+    const std::string& message,
+    base::span<const MojoHandle> handles) {
   CHECK_EQ(WriteMessageRaw(MessagePipeHandle(mp), message.data(),
-                           static_cast<uint32_t>(message.size()), handles,
-                           num_handles, MOJO_WRITE_MESSAGE_FLAG_NONE),
+                           base::checked_cast<uint32_t>(message.size()),
+                           handles.data(),
+                           base::checked_cast<uint32_t>(handles.size()),
+                           MOJO_WRITE_MESSAGE_FLAG_NONE),
            MOJO_RESULT_OK);
 }
 
 // static
+void MojoTestBase::WriteMessageWithHandle(MojoHandle mp,
+                                          const std::string& message,
+                                          MojoHandle handle) {
+  WriteMessageWithHandles(mp, message, base::span_from_ref(handle));
+}
+
+// static
 void MojoTestBase::WriteMessage(MojoHandle mp, const std::string& message) {
-  WriteMessageWithHandles(mp, message, nullptr, 0);
+  WriteMessageWithHandles(mp, message, {});
 }
 
 // static
 std::string MojoTestBase::ReadMessageWithHandles(
     MojoHandle mp,
-    MojoHandle* out_handles,
-    uint32_t expected_num_handles) {
-  CHECK_EQ(WaitForSignals(mp, MOJO_HANDLE_SIGNAL_READABLE), MOJO_RESULT_OK);
+    base::span<MojoHandle> out_handles) {
+  for (;;) {
+    CHECK_EQ(WaitForSignals(mp, MOJO_HANDLE_SIGNAL_READABLE), MOJO_RESULT_OK);
 
-  std::vector<uint8_t> bytes;
-  std::vector<ScopedHandle> handles;
-  CHECK_EQ(MOJO_RESULT_OK,
-           ReadMessageRaw(MessagePipeHandle(mp), &bytes, &handles,
-                          MOJO_READ_MESSAGE_FLAG_NONE));
-  CHECK_EQ(expected_num_handles, handles.size());
-  for (size_t i = 0; i < handles.size(); ++i)
-    out_handles[i] = handles[i].release().value();
+    std::vector<uint8_t> bytes;
+    std::vector<ScopedHandle> handles;
+    MojoResult result = ReadMessageRaw(MessagePipeHandle(mp), &bytes, &handles,
+                                       MOJO_READ_MESSAGE_FLAG_NONE);
+    if (result == MOJO_RESULT_SHOULD_WAIT) {
+      // Spurious read signals are possible when MojoIpcz is used with lazily
+      // serialized messages. Retry.
+      continue;
+    }
 
-  return std::string(bytes.begin(), bytes.end());
+    CHECK_EQ(MOJO_RESULT_OK, result);
+    CHECK_EQ(out_handles.size(), handles.size());
+    for (size_t i = 0; i < handles.size(); ++i) {
+      out_handles[i] = handles[i].release().value();
+    }
+
+    return std::string(bytes.begin(), bytes.end());
+  }
+}
+
+// static
+std::string MojoTestBase::ReadMessageWithHandle(MojoHandle mp,
+                                                MojoHandle* out_handle) {
+  return ReadMessageWithHandles(mp, base::span_from_ref(*out_handle));
 }
 
 // static
 std::string MojoTestBase::ReadMessageWithOptionalHandle(MojoHandle mp,
                                                         MojoHandle* handle) {
-  CHECK_EQ(WaitForSignals(mp, MOJO_HANDLE_SIGNAL_READABLE), MOJO_RESULT_OK);
+  for (;;) {
+    CHECK_EQ(WaitForSignals(mp, MOJO_HANDLE_SIGNAL_READABLE), MOJO_RESULT_OK);
 
-  std::vector<uint8_t> bytes;
-  std::vector<ScopedHandle> handles;
-  CHECK_EQ(MOJO_RESULT_OK,
-           ReadMessageRaw(MessagePipeHandle(mp), &bytes, &handles,
-                          MOJO_READ_MESSAGE_FLAG_NONE));
-  CHECK(handles.size() == 0 || handles.size() == 1);
-  CHECK(handle);
+    std::vector<uint8_t> bytes;
+    std::vector<ScopedHandle> handles;
+    MojoResult result = ReadMessageRaw(MessagePipeHandle(mp), &bytes, &handles,
+                                       MOJO_READ_MESSAGE_FLAG_NONE);
+    if (result == MOJO_RESULT_SHOULD_WAIT) {
+      // Spurious read signals are possible when MojoIpcz is used with lazily
+      // serialized messages. Retry.
+      continue;
+    }
 
-  if (handles.size() == 1)
-    *handle = handles[0].release().value();
-  else
-    *handle = MOJO_HANDLE_INVALID;
+    CHECK_EQ(MOJO_RESULT_OK, result);
+    CHECK(handles.size() == 0 || handles.size() == 1);
+    CHECK(handle);
 
-  return std::string(bytes.begin(), bytes.end());
+    if (handles.size() == 1) {
+      *handle = handles[0].release().value();
+    } else {
+      *handle = MOJO_HANDLE_INVALID;
+    }
+
+    return std::string(bytes.begin(), bytes.end());
+  }
 }
 
 // static
 std::string MojoTestBase::ReadMessage(MojoHandle mp) {
-  return ReadMessageWithHandles(mp, nullptr, 0);
+  return ReadMessageWithHandles(mp, {});
 }
 
 // static
 void MojoTestBase::ReadMessage(MojoHandle mp, char* data, size_t num_bytes) {
-  CHECK_EQ(WaitForSignals(mp, MOJO_HANDLE_SIGNAL_READABLE), MOJO_RESULT_OK);
+  for (;;) {
+    CHECK_EQ(WaitForSignals(mp, MOJO_HANDLE_SIGNAL_READABLE), MOJO_RESULT_OK);
 
-  std::vector<uint8_t> bytes;
-  std::vector<ScopedHandle> handles;
-  CHECK_EQ(MOJO_RESULT_OK,
-           ReadMessageRaw(MessagePipeHandle(mp), &bytes, &handles,
-                          MOJO_READ_MESSAGE_FLAG_NONE));
-  CHECK_EQ(0u, handles.size());
-  CHECK_EQ(num_bytes, bytes.size());
-  memcpy(data, bytes.data(), bytes.size());
+    std::vector<uint8_t> bytes;
+    std::vector<ScopedHandle> handles;
+    MojoResult result = ReadMessageRaw(MessagePipeHandle(mp), &bytes, &handles,
+                                       MOJO_READ_MESSAGE_FLAG_NONE);
+    if (result == MOJO_RESULT_SHOULD_WAIT) {
+      // Spurious read signals are possible when MojoIpcz is used with lazily
+      // serialized messages. Retry.
+      continue;
+    }
+
+    CHECK_EQ(MOJO_RESULT_OK, result);
+    CHECK_EQ(0u, handles.size());
+    CHECK_EQ(num_bytes, bytes.size());
+    UNSAFE_TODO(memcpy(data, bytes.data(), bytes.size()));
+  }
 }
 
 // static
@@ -173,8 +214,9 @@ MojoHandle MojoTestBase::DuplicateBuffer(MojoHandle h, bool read_only) {
   MojoDuplicateBufferHandleOptions options = {
       sizeof(MojoDuplicateBufferHandleOptions),
       MOJO_DUPLICATE_BUFFER_HANDLE_FLAG_NONE};
-  if (read_only)
+  if (read_only) {
     options.flags |= MOJO_DUPLICATE_BUFFER_HANDLE_FLAG_READ_ONLY;
+  }
   EXPECT_EQ(MOJO_RESULT_OK,
             MojoDuplicateBufferHandle(h, &options, &new_handle));
   return new_handle;
@@ -183,22 +225,22 @@ MojoHandle MojoTestBase::DuplicateBuffer(MojoHandle h, bool read_only) {
 // static
 void MojoTestBase::WriteToBuffer(MojoHandle h,
                                  size_t offset,
-                                 const base::StringPiece& s) {
+                                 const std::string_view& s) {
   char* data;
   EXPECT_EQ(MOJO_RESULT_OK, MojoMapBuffer(h, offset, s.size(), nullptr,
                                           reinterpret_cast<void**>(&data)));
-  memcpy(data, s.data(), s.size());
+  UNSAFE_TODO(memcpy(data, s.data(), s.size()));
   EXPECT_EQ(MOJO_RESULT_OK, MojoUnmapBuffer(static_cast<void*>(data)));
 }
 
 // static
 void MojoTestBase::ExpectBufferContents(MojoHandle h,
                                         size_t offset,
-                                        const base::StringPiece& s) {
+                                        const std::string_view& s) {
   char* data;
   EXPECT_EQ(MOJO_RESULT_OK, MojoMapBuffer(h, offset, s.size(), nullptr,
                                           reinterpret_cast<void**>(&data)));
-  EXPECT_EQ(s, base::StringPiece(data, s.size()));
+  EXPECT_EQ(s, std::string_view(data, s.size()));
   EXPECT_EQ(MOJO_RESULT_OK, MojoUnmapBuffer(static_cast<void*>(data)));
 }
 

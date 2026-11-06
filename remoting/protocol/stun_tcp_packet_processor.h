@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,8 +10,7 @@
 #include "base/memory/scoped_refptr.h"
 #include "remoting/protocol/stream_packet_processor.h"
 
-namespace remoting {
-namespace protocol {
+namespace remoting::protocol {
 
 // StreamPacketSocket implementation for data that has already been packed in
 // STUN/TURN's TCP packet. It won't add any extra header to the data but will
@@ -28,19 +27,13 @@ class StunTcpPacketProcessor final : public StreamPacketProcessor {
   static StunTcpPacketProcessor* GetInstance();
 
   // StreamPacketProcessor implementations.
-  scoped_refptr<net::IOBufferWithSize> Pack(const uint8_t* data,
-                                            size_t data_size) const override;
+  scoped_refptr<net::IOBufferWithSize> Pack(
+      base::span<const uint8_t> data) const override;
   scoped_refptr<net::IOBufferWithSize> Unpack(
-      const uint8_t* data,
-      size_t data_size,
+      base::span<const uint8_t> data,
       size_t* bytes_consumed) const override;
-  void ApplyPacketOptions(
-      uint8_t* data,
-      size_t data_size,
-      const rtc::PacketTimeUpdateParams& packet_time_params) const override;
 };
 
-}  // namespace protocol
-}  // namespace remoting
+}  // namespace remoting::protocol
 
 #endif  // REMOTING_PROTOCOL_STUN_TCP_PACKET_PROCESSOR_H_

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -71,13 +71,19 @@ const int32_t kInvalidSharedMemoryId = -1;
 const int32_t kCommandBufferSharedMemoryId = 4;
 
 // Namespace used to separate various command buffer types.
+//
+// These values are logged to UMA. Entries should not be renumbered and
+// numeric values should never be reused. Please keep in sync with
+// CommandBufferNamespace in tools/metrics/histograms/metadata/gpu/enums.xml
 enum CommandBufferNamespace : int8_t {
   INVALID = -1,
 
-  GPU_IO,
-  IN_PROCESS,
-  VIZ_SKIA_OUTPUT_SURFACE,
-  VIZ_SKIA_OUTPUT_SURFACE_NON_DDL,
+  GPU_IO = 0,
+  IN_PROCESS = 1,
+  VIZ_SKIA_OUTPUT_SURFACE = 2,
+  VIZ_SKIA_OUTPUT_SURFACE_NON_DDL = 3,
+  GPU_CHANNEL_SHARED_IMAGE_INTERFACE = 4,
+  WEBNN_CONTEXT_INTERFACE = 5,
 
   NUM_COMMAND_BUFFER_NAMESPACES
 };
@@ -87,12 +93,12 @@ enum class TransferBufferAllocationOption : int8_t {
   kReturnNullOnOOM,
 };
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 // Value used for DXGI keyed mutex AcquireSync and ReleaseSync. Exposed here so
 // that external clients such as media and video capture can use the same key as
 // gpu which is essential for correct operation of the keyed mutex.
 constexpr uint64_t kDXGIKeyedMutexAcquireKey = 0;
-#endif  // OS_WIN
+#endif  // BUILDFLAG(IS_WIN)
 
 }  // namespace gpu
 

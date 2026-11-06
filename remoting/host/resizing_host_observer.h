@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,17 @@
 
 #include <stddef.h>
 
+#include <map>
 #include <memory>
+#include <set>
 
-#include "base/macros.h"
+#include "base/callback_list.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
-#include "remoting/host/screen_controls.h"
-#include "remoting/host/screen_resolution.h"
+#include "remoting/host/base/screen_controls.h"
+#include "remoting/host/base/screen_resolution.h"
 
 namespace base {
 class TickClock;
@@ -22,7 +25,13 @@ class TickClock;
 
 namespace remoting {
 
+class DesktopDisplayInfoMonitor;
 class DesktopResizer;
+
+struct RateLimitState {
+  base::TimeTicks previous_time;
+  base::OneShotTimer timer;
+};
 
 // TODO(alexeypa): Rename this class to reflect that it is not
 // HostStatusObserver any more.
@@ -32,13 +41,20 @@ class DesktopResizer;
 // the original desktop size if restore is true.
 class ResizingHostObserver : public ScreenControls {
  public:
-  explicit ResizingHostObserver(
-      std::unique_ptr<DesktopResizer> desktop_resizer,
-      bool restore);
+  explicit ResizingHostObserver(std::unique_ptr<DesktopResizer> desktop_resizer,
+                                bool restore);
+
+  ResizingHostObserver(const ResizingHostObserver&) = delete;
+  ResizingHostObserver& operator=(const ResizingHostObserver&) = delete;
+
   ~ResizingHostObserver() override;
 
+  void RegisterForDisplayChanges(DesktopDisplayInfoMonitor& monitor);
+
   // ScreenControls interface.
-  void SetScreenResolution(const ScreenResolution& resolution) override;
+  void SetScreenResolution(const ScreenResolution& resolution,
+                           std::optional<webrtc::ScreenId> screen_id) override;
+  void SetVideoLayout(const protocol::VideoLayout& video_layout) override;
 
   // Provide a replacement for base::TimeTicks::Now so that this class can be
   // unit-tested in a timely manner. This function will be called exactly
@@ -46,20 +62,53 @@ class ResizingHostObserver : public ScreenControls {
   void SetClockForTesting(const base::TickClock* clock);
 
  private:
-  void RestoreScreenResolution();
+  // Restores the given monitor's original resolution, and removes it from the
+  // stored list.
+  void RestoreScreenResolution(webrtc::ScreenId screen_id);
+
+  // Restores every monitor's resolution.
+  void RestoreAllScreenResolutions();
+
+  // Stores the original resolution for the monitor |screen_id|. This does not
+  // overwrite any previously stored value, so the recorded resolutions are
+  // always the first ones for each monitor.
+  void RecordOriginalResolution(ScreenResolution resolution,
+                                webrtc::ScreenId screen_id);
+
+  void OnDisplayInfoChanged();
 
   std::unique_ptr<DesktopResizer> desktop_resizer_;
-  ScreenResolution original_resolution_;
+
+  // It is only safe to access this from displays-changed callbacks, otherwise
+  // it could have been destroyed.
+  raw_ptr<DesktopDisplayInfoMonitor> display_info_monitor_;
+
+  // List of per-monitor original resolutions to be restored.
+  std::map<webrtc::ScreenId, ScreenResolution> original_resolutions_;
+
+  // List of current monitor IDs, populated from OnDisplayInfoChanged().
+  // Requests to change a resolution should be dropped if there is no
+  // monitor matching the requested ID. Requests without any ID should be
+  // applied to the single monitor if there is only one.
+  std::set<webrtc::ScreenId> current_monitor_ids_;
+
+  // Whether monitors should be restored when this object is destroyed.
   bool restore_;
 
+  // If SetScreenResolution() is called without any screen_id, and the
+  // video-layout is still empty, the requested resolution is stored here so it
+  // can be applied when the next video-layout is received. This is needed
+  // because, on Windows, DesktopSessionAgent::Start() calls
+  // SetScreenResolution() immediately after creating this object.
+  ScreenResolution pending_resolution_request_;
+
   // State to manage rate-limiting of desktop resizes.
-  base::OneShotTimer deferred_resize_timer_;
-  base::TimeTicks previous_resize_time_;
-  const base::TickClock* clock_;
+  std::map<webrtc::ScreenId, RateLimitState> rate_limiters_;
+  raw_ptr<const base::TickClock> clock_;
+
+  base::CallbackListSubscription display_info_subscription_;
 
   base::WeakPtrFactory<ResizingHostObserver> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ResizingHostObserver);
 };
 
 }  // namespace remoting

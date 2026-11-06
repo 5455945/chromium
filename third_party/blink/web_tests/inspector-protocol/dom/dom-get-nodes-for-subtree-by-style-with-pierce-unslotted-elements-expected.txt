@@ -23,11 +23,16 @@ Nodes:
         nodeId : <number>
         nodeName : SLOT
         nodeType : 1
-        nodeValue : 
+        nodeValue :
     }
 }
 {
     node : {
+        assignedSlot : {
+            backendNodeId : <number>
+            nodeName : SLOT
+            nodeType : 1
+        }
         attributes : [
             [0] : class
             [1] : inserted-slot
@@ -42,7 +47,7 @@ Nodes:
         nodeId : <number>
         nodeName : SPAN
         nodeType : 1
-        nodeValue : 
+        nodeValue :
     }
 }
 {
@@ -59,7 +64,7 @@ Nodes:
         nodeId : <number>
         nodeName : DIV
         nodeType : 1
-        nodeValue : 
+        nodeValue :
     }
 }
 

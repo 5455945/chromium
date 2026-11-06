@@ -1,20 +1,17 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/run_loop.h"
-#include "base/test/scoped_feature_list.h"
+#include "base/test/test_future.h"
 #include "chrome/browser/ash/crostini/crostini_browser_test_util.h"
 #include "chrome/browser/ash/crostini/crostini_util.h"
 #include "chrome/browser/ash/crostini/fake_crostini_features.h"
 #include "chrome/browser/ash/guest_os/guest_os_registry_service.h"
 #include "chrome/browser/ash/guest_os/guest_os_registry_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "chromeos/dbus/vm_applications/apps.pb.h"
+#include "chromeos/ash/components/dbus/vm_applications/apps.pb.h"
 #include "content/public/test/browser_test.h"
+#include "ui/display/types/display_constants.h"
 
 namespace crostini {
 
@@ -38,22 +35,17 @@ class CrostiniBrowserTest : public CrostiniBrowserTestBase {
     app_list.set_container_name(kCrostiniDefaultContainerName);
     *app_list.add_apps() = app;
 
-    guest_os::GuestOsRegistryServiceFactory::GetForProfile(browser()->profile())
+    guest_os::GuestOsRegistryServiceFactory::GetForProfile(
+        browser()->GetProfile())
         ->UpdateApplicationList(app_list);
   }
 
   void LaunchApp() {
-    base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
-    LaunchCrostiniApp(browser()->profile(), kAppId, display::kInvalidDisplayId,
-                      {},
-                      base::BindOnce(
-                          [](base::OnceClosure quit_closure, bool success,
-                             const std::string& failure_reason) {
-                            EXPECT_TRUE(success) << failure_reason;
-                            std::move(quit_closure).Run();
-                          },
-                          run_loop.QuitClosure()));
-    run_loop.Run();
+    base::test::TestFuture<bool, const std::string&> result_future;
+    LaunchCrostiniApp(browser()->GetProfile(), kAppId,
+                      display::kInvalidDisplayId, {},
+                      result_future.GetCallback());
+    EXPECT_TRUE(result_future.Get<0>()) << result_future.Get<1>();
   }
 
   const std::string kAppId = guest_os::GuestOsRegistryService::GenerateAppId(

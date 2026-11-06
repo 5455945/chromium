@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,8 +11,12 @@
 #include "base/memory/scoped_refptr.h"
 #include "net/cert/cert_net_fetcher.h"
 #include "net/cert/cert_verifier.h"
+#include "net/cert/cert_verify_proc.h"
 #include "services/cert_verifier/public/mojom/cert_verifier_service_factory.mojom.h"
+#include "services/network/public/mojom/cert_verifier_service_updater.mojom.h"
 
+// Set of utility functions to help with creation of CertVerifiers for
+// CertVerifyServiceFactory.
 namespace cert_verifier {
 
 // Certain platforms and build configurations require a net::CertNetFetcher in
@@ -22,10 +26,17 @@ namespace cert_verifier {
 bool IsUsingCertNetFetcher();
 
 // Creates a concrete net::CertVerifier based on the platform and the particular
-// build configuration. |creation_params| is optional.
-std::unique_ptr<net::CertVerifier> CreateCertVerifier(
-    mojom::CertVerifierCreationParams* creation_params,
-    scoped_refptr<net::CertNetFetcher> cert_net_fetcher);
+// build configuration.
+std::unique_ptr<net::CertVerifierWithUpdatableProc> CreateCertVerifier(
+    scoped_refptr<net::CertNetFetcher> cert_net_fetcher,
+    const net::CertVerifyProc::ImplParams& impl_params,
+    const net::CertVerifyProc::InstanceParams& instance_params);
+
+// Update the |instance_params| for the verifier based on the contents of
+// |additional_certificates|.
+void UpdateCertVerifierInstanceParams(
+    const mojom::AdditionalCertificatesPtr& additional_certificates,
+    net::CertVerifyProc::InstanceParams* instance_params);
 
 }  // namespace cert_verifier
 

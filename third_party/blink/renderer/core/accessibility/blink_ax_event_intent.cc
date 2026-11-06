@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -72,6 +72,10 @@ BlinkAXEventIntent BlinkAXEventIntent::FromEditCommand(
       command = ax::mojom::blink::Command::kInsert;
       input_event_type =
           ax::mojom::blink::InputEventType::kInsertCompositionText;
+      break;
+    case InputEvent::InputType::kInsertLink:
+      command = ax::mojom::blink::Command::kInsert;
+      input_event_type = ax::mojom::blink::InputEventType::kInsertLink;
       break;
 
     // Deletion.
@@ -194,7 +198,6 @@ BlinkAXEventIntent BlinkAXEventIntent::FromEditCommand(
     case InputEvent::InputType::kNumberOfInputTypes:
       NOTREACHED()
           << "Should never be assigned as an input type to |edit_command|.";
-      return BlinkAXEventIntent();
   }
 
   return BlinkAXEventIntent(command, input_event_type);
@@ -257,7 +260,6 @@ BlinkAXEventIntent BlinkAXEventIntent::FromModifiedSelection(
       switch (move_direction) {
         case ax::mojom::blink::MoveDirection::kNone:
           NOTREACHED();
-          return BlinkAXEventIntent();
         case ax::mojom::blink::MoveDirection::kBackward:
           // All platforms behave the same when moving backward by word.
           text_boundary = ax::mojom::blink::TextBoundary::kWordStart;
@@ -299,7 +301,6 @@ BlinkAXEventIntent BlinkAXEventIntent::FromModifiedSelection(
       switch (move_direction) {
         case ax::mojom::blink::MoveDirection::kNone:
           NOTREACHED();
-          return BlinkAXEventIntent();
         case ax::mojom::blink::MoveDirection::kBackward:
           text_boundary = ax::mojom::blink::TextBoundary::kSentenceStart;
           break;
@@ -314,7 +315,6 @@ BlinkAXEventIntent BlinkAXEventIntent::FromModifiedSelection(
       switch (move_direction) {
         case ax::mojom::blink::MoveDirection::kNone:
           NOTREACHED();
-          return BlinkAXEventIntent();
         case ax::mojom::blink::MoveDirection::kBackward:
           text_boundary = ax::mojom::blink::TextBoundary::kLineStart;
           break;
@@ -329,7 +329,6 @@ BlinkAXEventIntent BlinkAXEventIntent::FromModifiedSelection(
       switch (move_direction) {
         case ax::mojom::blink::MoveDirection::kNone:
           NOTREACHED();
-          return BlinkAXEventIntent();
         case ax::mojom::blink::MoveDirection::kBackward:
           text_boundary = ax::mojom::blink::TextBoundary::kParagraphStart;
           break;
@@ -402,7 +401,7 @@ BlinkAXEventIntent::BlinkAXEventIntent(
     ax::mojom::blink::MoveDirection move_direction)
     : intent_(command, text_boundary, move_direction), is_initialized_(true) {}
 
-BlinkAXEventIntent::BlinkAXEventIntent(WTF::HashTableDeletedValueType type)
+BlinkAXEventIntent::BlinkAXEventIntent(HashTableDeletedValueType type)
     : is_initialized_(true), is_deleted_(true) {}
 
 BlinkAXEventIntent::~BlinkAXEventIntent() = default;
@@ -414,12 +413,8 @@ BlinkAXEventIntent& BlinkAXEventIntent::operator=(
     const BlinkAXEventIntent& intent) = default;
 
 bool operator==(const BlinkAXEventIntent& a, const BlinkAXEventIntent& b) {
-  return BlinkAXEventIntentHash::GetHash(a) ==
-         BlinkAXEventIntentHash::GetHash(b);
-}
-
-bool operator!=(const BlinkAXEventIntent& a, const BlinkAXEventIntent& b) {
-  return !(a == b);
+  return BlinkAXEventIntentHashTraits::GetHash(a) ==
+         BlinkAXEventIntentHashTraits::GetHash(b);
 }
 
 bool BlinkAXEventIntent::IsHashTableDeletedValue() const {
@@ -435,7 +430,7 @@ std::string BlinkAXEventIntent::ToString() const {
 }
 
 // static
-unsigned int BlinkAXEventIntentHash::GetHash(const BlinkAXEventIntent& key) {
+uint32_t BlinkAXEventIntentHashTraits::GetHash(const BlinkAXEventIntent& key) {
   // If the intent is uninitialized, it is not safe to rely on the memory being
   // initialized to zero, because any uninitialized field that might be
   // accidentally added in the future will produce a potentially non-zero memory
@@ -443,23 +438,14 @@ unsigned int BlinkAXEventIntentHash::GetHash(const BlinkAXEventIntent& key) {
   if (!key.is_initialized())
     return 0u;
   if (key.IsHashTableDeletedValue())
-    return std::numeric_limits<unsigned>::max();
+    return std::numeric_limits<uint32_t>::max();
 
-  unsigned hash = 1u;
-  WTF::AddIntToHash(hash, static_cast<const unsigned>(key.intent().command));
-  WTF::AddIntToHash(hash,
-                    static_cast<const unsigned>(key.intent().input_event_type));
-  WTF::AddIntToHash(hash,
-                    static_cast<const unsigned>(key.intent().text_boundary));
-  WTF::AddIntToHash(hash,
-                    static_cast<const unsigned>(key.intent().move_direction));
+  uint32_t hash = 1u;
+  AddIntToHash(hash, static_cast<uint32_t>(key.intent().command));
+  AddIntToHash(hash, static_cast<uint32_t>(key.intent().input_event_type));
+  AddIntToHash(hash, static_cast<uint32_t>(key.intent().text_boundary));
+  AddIntToHash(hash, static_cast<uint32_t>(key.intent().move_direction));
   return hash;
-}
-
-// static
-bool BlinkAXEventIntentHash::Equal(const BlinkAXEventIntent& a,
-                                   const BlinkAXEventIntent& b) {
-  return a == b;
 }
 
 }  // namespace blink

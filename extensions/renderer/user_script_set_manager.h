@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,15 +10,16 @@
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
 #include "base/memory/read_only_shared_memory_region.h"
 #include "base/observer_list.h"
 #include "content/public/renderer/render_thread_observer.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/extension_id.h"
 #include "extensions/common/mojom/host_id.mojom-forward.h"
 #include "extensions/common/mojom/run_location.mojom-shared.h"
 #include "extensions/common/user_script.h"
 #include "extensions/renderer/user_script_set.h"
+#include "third_party/blink/public/platform/web_string.h"
 
 namespace content {
 class RenderFrame;
@@ -47,31 +48,42 @@ class UserScriptSetManager {
 
   UserScriptSetManager();
 
+  UserScriptSetManager(const UserScriptSetManager&) = delete;
+  UserScriptSetManager& operator=(const UserScriptSetManager&) = delete;
+
   ~UserScriptSetManager();
 
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
 
-  // Looks up the script injection associated with |script_id| and
-  // |extension_id| in the context of the given |web_frame|, |tab_id|,
-  // and |url|.
+  // Looks up the script injection associated with `script_id` and
+  // `extension_id` in the context of the given `web_frame`, `tab_id`,
+  // and `url`.
   std::unique_ptr<ScriptInjection> GetInjectionForDeclarativeScript(
       const std::string& script_id,
       content::RenderFrame* render_frame,
       int tab_id,
       const GURL& url,
-      const std::string& extension_id);
+      const ExtensionId& extension_id);
 
-  // Append all injections from |static_scripts| and each of
-  // |programmatic_scripts_| to |injections|.
+  // Append all injections from `static_scripts` and each of
+  // `programmatic_scripts_` to `injections`.
   void GetAllInjections(
       std::vector<std::unique_ptr<ScriptInjection>>* injections,
       content::RenderFrame* render_frame,
       int tab_id,
       mojom::RunLocation run_location);
 
+  void InsertStreamersForInjectionsAtDocumentStart(
+      const GURL& document_url,
+      blink::WebLocalFrame* web_frame,
+      std::map<GURL, std::optional<blink::ExtensionScriptStreamer>>&
+          script_streamers,
+      uint64_t& streamed_scripts_count,
+      uint64_t& injected_scripts_count);
+
   // Get active extension IDs from `static_scripts_`.
-  void GetAllActiveExtensionIds(std::set<std::string>* ids) const;
+  void GetAllActiveExtensionIds(std::set<ExtensionId>* ids) const;
 
   // Handle the UpdateUserScripts extension message.
   void OnUpdateUserScripts(base::ReadOnlySharedMemoryRegion shared_memory,
@@ -79,7 +91,7 @@ class UserScriptSetManager {
 
   // Invalidates script injections for the UserScriptSet in `scripts_`
   // corresponding to `extension_id` and deletes the script set.
-  void OnExtensionUnloaded(const std::string& extension_id);
+  void OnExtensionUnloaded(const ExtensionId& extension_id);
 
   void set_activity_logging_enabled(bool enabled) {
     activity_logging_enabled_ = enabled;
@@ -102,8 +114,6 @@ class UserScriptSetManager {
 
   // The associated observers.
   base::ObserverList<Observer>::Unchecked observers_;
-
-  DISALLOW_COPY_AND_ASSIGN(UserScriptSetManager);
 };
 
 }  // namespace extensions

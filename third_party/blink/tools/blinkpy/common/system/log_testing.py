@@ -32,7 +32,6 @@ see the TestLogStream class, and perhaps also the LogTesting class.
 import logging
 import unittest
 
-# pylint: disable=invalid-name
 # Camel-case names were used here to match the style of the TestCase
 # methods. It would also be alright to change these to lowercase.
 
@@ -112,8 +111,8 @@ class LogTesting(object):
         # root logger seems to suffice.
         return logging.getLogger()
 
-    @staticmethod
-    def setUp(test_case, logging_level=logging.INFO):
+    @classmethod
+    def setUp(cls, test_case, logging_level=logging.INFO):
         """Configures logging for unit testing.
 
         Configures the root logger to log to a testing log stream.
@@ -146,7 +145,7 @@ class LogTesting(object):
         # logger.setLevel().  This ensures that we have not interfered
         # with how the code being tested may have configured the root
         # logger.
-        logger = LogTesting._getLogger()
+        logger = cls._getLogger()
         logger.setLevel(logging_level)
         logger.addHandler(handler)
 

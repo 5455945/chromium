@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,15 +7,18 @@
 #include "chrome/browser/autocomplete/shortcuts_backend_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/omnibox/browser/shortcuts_backend.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 ShortcutsExtensionsManager::ShortcutsExtensionsManager(Profile* profile)
     : profile_(profile) {
-  DCHECK(profile_);
+  CHECK(profile_, base::NotFatalUntil::M161);
   registry_observation_.Observe(extensions::ExtensionRegistry::Get(profile_));
 }
 
-ShortcutsExtensionsManager::~ShortcutsExtensionsManager() {}
+ShortcutsExtensionsManager::~ShortcutsExtensionsManager() = default;
 
 void ShortcutsExtensionsManager::OnExtensionUnloaded(
     content::BrowserContext* browser_context,

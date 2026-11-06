@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,17 +10,20 @@
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
-#include "chrome/common/importer/importer_data_types.h"
+#include "components/user_data_importer/common/importer_data_types.h"
 
 // ImporterList detects installed browsers and profiles via
 // DetectSourceProfilesWorker(). ImporterList lives on the UI thread.
 class ImporterList {
  public:
   ImporterList();
+
+  ImporterList(const ImporterList&) = delete;
+  ImporterList& operator=(const ImporterList&) = delete;
+
   ~ImporterList();
 
   // Detects the installed browsers and their associated profiles, then stores
@@ -42,23 +45,22 @@ class ImporterList {
   // Returns the SourceProfile at |index|. The profiles are ordered such that
   // the profile at index 0 is the likely default browser. The SourceProfile
   // should be passed to ImporterHost::StartImportSettings().
-  const importer::SourceProfile& GetSourceProfileAt(size_t index) const;
+  const user_data_importer::SourceProfile& GetSourceProfileAt(
+      size_t index) const;
 
  private:
   // Called when the source profiles are loaded. Copies the loaded profiles
   // in |profiles| and calls |profiles_loaded_callback|.
   void SourceProfilesLoaded(
       base::OnceClosure profiles_loaded_callback,
-      const std::vector<importer::SourceProfile>& profiles);
+      const std::vector<user_data_importer::SourceProfile>& profiles);
 
   // The list of profiles with the default one first.
-  std::vector<importer::SourceProfile> source_profiles_;
+  std::vector<user_data_importer::SourceProfile> source_profiles_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 
   base::WeakPtrFactory<ImporterList> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ImporterList);
 };
 
 #endif  // CHROME_BROWSER_IMPORTER_IMPORTER_LIST_H_

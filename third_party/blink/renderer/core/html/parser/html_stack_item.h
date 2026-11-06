@@ -26,43 +26,110 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_HTML_PARSER_HTML_STACK_ITEM_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_PARSER_HTML_STACK_ITEM_H_
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "third_party/blink/renderer/core/dom/document_fragment.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/html/parser/atomic_html_token.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/mathml_names.h"
+#include "third_party/blink/renderer/core/sanitizer/sanitizer.h"
 #include "third_party/blink/renderer/core/svg_names.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 
 namespace blink {
 
 class ContainerNode;
 
+// NOTE: HTMLStackItem stores all of its attributes (if any) just after the end
+// of the pointer itself, to reduce on the number of Alloc/Free calls. (This
+// also saves a little bit of memory, as a side effect.)
 class HTMLStackItem final : public GarbageCollected<HTMLStackItem> {
  public:
-  enum ItemType { kItemForContextElement, kItemForDocumentFragmentNode };
+  // You cannot call this constructor directly (but it must be public so that
+  // MakeGarbageCollected() can); use CreateForDocumentFragment() below instead.
+  // (It isn't needed for this constructor since there's no extra space for
+  // attributes, but we use the same patten as the other two constructors,
+  // which do need this.)
+  HTMLStackItem(base::PassKey<HTMLStackItem>,
+                DocumentFragment* document_fragment)
+      : node_(document_fragment),
+        token_name_(html_names::HTMLTag::kUnknown),
+        is_document_fragment_node_(true) {}
 
-  HTMLStackItem(ContainerNode* node, ItemType type) : node_(node) {
-    switch (type) {
-      case kItemForDocumentFragmentNode:
-        is_document_fragment_node_ = true;
-        break;
-      case kItemForContextElement:
-        token_local_name_ = GetElement()->localName();
-        namespace_uri_ = GetElement()->namespaceURI();
-        is_document_fragment_node_ = false;
-        break;
+  // You cannot call this constructor directly (but it must be public so that
+  // MakeGarbageCollected() can); use CreateForContextElement() below instead.
+  HTMLStackItem(base::PassKey<HTMLStackItem>, Element* context_element)
+      : node_(context_element),
+        token_name_(HTMLTokenName::FromLocalName(context_element->localName())),
+        namespace_uri_(context_element->namespaceURI()),
+        num_token_attributes_(context_element->Attributes().size()),
+        is_document_fragment_node_(false) {
+    // We need to store the attributes because we sometimes make decisions
+    // based on attributes of the context elements, for example the encoding
+    // attribute of <mathml:annotation-xml> elements.
+    //
+    // We rely on Create() allocating extra memory past our end for the
+    // attributes.
+    const AttributeCollection element_attributes =
+        context_element->Attributes();
+    auto attributes = TokenAttributesSpan();
+    for (wtf_size_t i = 0; i < element_attributes.size(); ++i) {
+      new (&attributes[i]) Attribute(element_attributes[i]);
     }
   }
 
-  HTMLStackItem(
+  // You cannot call this constructor directly (but it must be public
+  // so that MakeGarbageCollected() can); use Create() below instead.
+  HTMLStackItem(base::PassKey<HTMLStackItem>,
+                ContainerNode* node,
+                AtomicHTMLToken* token,
+                const AtomicString& namespace_uri)
+      : node_(node),
+        token_name_(token->GetTokenName()),
+        namespace_uri_(namespace_uri),
+        num_token_attributes_(token->Attributes().size()),
+        is_document_fragment_node_(false) {
+    // We rely on Create() allocating extra memory past our end for the
+    // attributes.
+    auto attributes = TokenAttributesSpan();
+    for (wtf_size_t i = 0; i < token->Attributes().size(); ++i) {
+      new (&attributes[i]) Attribute(token->Attributes()[i]);
+    }
+  }
+
+  ~HTMLStackItem() {
+    // We need to clean up the attributes we initialized in the constructor
+    // manually, since they are not stored in a regular member.
+    if (num_token_attributes_ > 0) {
+      for (Attribute& attribute : Attributes()) {
+        attribute.~Attribute();
+      }
+    }
+  }
+
+  static HTMLStackItem* Create(
       ContainerNode* node,
       AtomicHTMLToken* token,
-      const AtomicString& namespace_uri = html_names::xhtmlNamespaceURI)
-      : node_(node),
-        token_local_name_(token->GetName()),
-        token_attributes_(token->Attributes()),
-        namespace_uri_(namespace_uri),
-        is_document_fragment_node_(false) {}
+      const AtomicString& namespace_uri = html_names::xhtmlNamespaceURI) {
+    return MakeGarbageCollected<HTMLStackItem>(
+        AdditionalBytes(token->Attributes().size() * sizeof(Attribute)),
+        base::PassKey<HTMLStackItem>(), node, token, namespace_uri);
+  }
+
+  static HTMLStackItem* CreateForDocumentFragment(
+      DocumentFragment* document_fragment) {
+    return MakeGarbageCollected<HTMLStackItem>(base::PassKey<HTMLStackItem>(),
+                                               document_fragment);
+  }
+
+  static HTMLStackItem* CreateForContextElement(Element* context_element) {
+    return MakeGarbageCollected<HTMLStackItem>(
+        AdditionalBytes(context_element->Attributes().size() *
+                        sizeof(Attribute)),
+        base::PassKey<HTMLStackItem>(), context_element);
+  }
 
   Element* GetElement() const { return To<Element>(node_.Get()); }
   ContainerNode* GetNode() const { return node_.Get(); }
@@ -71,39 +138,73 @@ class HTMLStackItem final : public GarbageCollected<HTMLStackItem> {
   bool IsElementNode() const { return !is_document_fragment_node_; }
 
   const AtomicString& NamespaceURI() const { return namespace_uri_; }
-  const AtomicString& LocalName() const { return token_local_name_; }
+  const AtomicString& LocalName() const { return token_name_.GetLocalName(); }
 
-  const Vector<Attribute>& Attributes() const {
-    DCHECK(token_local_name_);
-    return token_attributes_;
+  const HTMLTokenName& GetTokenName() const { return token_name_; }
+
+  base::span<Attribute> Attributes() {
+    DCHECK(LocalName());
+    return TokenAttributesSpan();
+  }
+  base::span<const Attribute> Attributes() const {
+    DCHECK(LocalName());
+    return TokenAttributesSpan();
+  }
+  Vector<Attribute> TakeAttributes() {
+    Vector<Attribute> attributes;
+    attributes.ReserveInitialCapacity(num_token_attributes_);
+    for (Attribute& attr : Attributes()) {
+      attributes.push_back(std::move(attr));
+    }
+    num_token_attributes_ = 0;
+    return attributes;
   }
   Attribute* GetAttributeItem(const QualifiedName& attribute_name) {
-    DCHECK(token_local_name_);
-    return FindAttributeInVector(token_attributes_, attribute_name);
+    DCHECK(LocalName());
+    return FindAttributeInVector(Attributes(), attribute_name);
   }
 
+  html_names::HTMLTag GetHTMLTag() const { return token_name_.GetHTMLTag(); }
+
   bool HasLocalName(const AtomicString& name) const {
-    return token_local_name_ == name;
+    return token_name_.GetLocalName() == name;
   }
+
   bool HasTagName(const QualifiedName& name) const {
-    return token_local_name_ == name.LocalName() &&
+    return token_name_.GetLocalName() == name.LocalName() &&
            namespace_uri_ == name.NamespaceURI();
   }
 
-  bool MatchesHTMLTag(const AtomicString& name) const {
-    return token_local_name_ == name &&
-           namespace_uri_ == html_names::xhtmlNamespaceURI;
+  bool IsHTMLNamespace() const {
+    return namespace_uri_ == html_names::xhtmlNamespaceURI;
   }
-  bool MatchesHTMLTag(const QualifiedName& name) const {
-    return token_local_name_ == name &&
-           namespace_uri_ == html_names::xhtmlNamespaceURI;
+
+  bool MatchesHTMLTag(const HTMLTokenName& name) const {
+    return name == token_name_ && IsHTMLNamespace();
+  }
+
+  bool MatchesHTMLTag(const AtomicString& name) const {
+    return HasLocalName(name) && IsHTMLNamespace();
+  }
+
+  bool MatchesHTMLTag(html_names::HTMLTag tag) const {
+    // Equality of HTMLTag only works if supplied a value other than
+    // kUnknownTag.
+    DCHECK_NE(tag, html_names::HTMLTag::kUnknown);
+    return tag == GetHTMLTag() && IsHTMLNamespace();
   }
 
   bool CausesFosterParenting() {
-    return HasTagName(html_names::kTableTag) ||
-           HasTagName(html_names::kTbodyTag) ||
-           HasTagName(html_names::kTfootTag) ||
-           HasTagName(html_names::kTheadTag) || HasTagName(html_names::kTrTag);
+    switch (GetHTMLTag()) {
+      case html_names::HTMLTag::kTable:
+      case html_names::HTMLTag::kTbody:
+      case html_names::HTMLTag::kTfoot:
+      case html_names::HTMLTag::kThead:
+      case html_names::HTMLTag::kTr:
+        return namespace_uri_ == html_names::xhtmlNamespaceURI;
+      default:
+        return false;
+    }
   }
 
   bool IsInHTMLNamespace() const {
@@ -115,19 +216,111 @@ class HTMLStackItem final : public GarbageCollected<HTMLStackItem> {
   }
 
   bool IsNumberedHeaderElement() const {
-    return HasTagName(html_names::kH1Tag) || HasTagName(html_names::kH2Tag) ||
-           HasTagName(html_names::kH3Tag) || HasTagName(html_names::kH4Tag) ||
-           HasTagName(html_names::kH5Tag) || HasTagName(html_names::kH6Tag);
-  }
-
-  bool IsTableBodyContextElement() const {
-    return HasTagName(html_names::kTbodyTag) ||
-           HasTagName(html_names::kTfootTag) ||
-           HasTagName(html_names::kTheadTag);
+    switch (GetHTMLTag()) {
+      case html_names::HTMLTag::kH1:
+      case html_names::HTMLTag::kH2:
+      case html_names::HTMLTag::kH3:
+      case html_names::HTMLTag::kH4:
+      case html_names::HTMLTag::kH5:
+      case html_names::HTMLTag::kH6:
+        return namespace_uri_ == html_names::xhtmlNamespaceURI;
+      default:
+        return false;
+    }
   }
 
   // http://www.whatwg.org/specs/web-apps/current-work/multipage/parsing.html#special
   bool IsSpecialNode() const {
+    if (IsDocumentFragmentNode())
+      return true;
+    if (IsInHTMLNamespace()) {
+      switch (GetHTMLTag()) {
+        case html_names::HTMLTag::kAddress:
+        case html_names::HTMLTag::kArea:
+        case html_names::HTMLTag::kApplet:
+        case html_names::HTMLTag::kArticle:
+        case html_names::HTMLTag::kAside:
+        case html_names::HTMLTag::kBase:
+        case html_names::HTMLTag::kBasefont:
+        case html_names::HTMLTag::kBgsound:
+        case html_names::HTMLTag::kBlockquote:
+        case html_names::HTMLTag::kBody:
+        case html_names::HTMLTag::kBr:
+        case html_names::HTMLTag::kButton:
+        case html_names::HTMLTag::kCaption:
+        case html_names::HTMLTag::kCenter:
+        case html_names::HTMLTag::kCol:
+        case html_names::HTMLTag::kColgroup:
+        case html_names::HTMLTag::kDd:
+        case html_names::HTMLTag::kDetails:
+        case html_names::HTMLTag::kDir:
+        case html_names::HTMLTag::kDiv:
+        case html_names::HTMLTag::kDl:
+        case html_names::HTMLTag::kDt:
+        case html_names::HTMLTag::kEmbed:
+        case html_names::HTMLTag::kFieldset:
+        case html_names::HTMLTag::kFigcaption:
+        case html_names::HTMLTag::kFigure:
+        case html_names::HTMLTag::kFooter:
+        case html_names::HTMLTag::kForm:
+        case html_names::HTMLTag::kFrame:
+        case html_names::HTMLTag::kFrameset:
+        case html_names::HTMLTag::kH1:
+        case html_names::HTMLTag::kH2:
+        case html_names::HTMLTag::kH3:
+        case html_names::HTMLTag::kH4:
+        case html_names::HTMLTag::kH5:
+        case html_names::HTMLTag::kH6:
+        case html_names::HTMLTag::kHead:
+        case html_names::HTMLTag::kHeader:
+        case html_names::HTMLTag::kHgroup:
+        case html_names::HTMLTag::kHr:
+        case html_names::HTMLTag::kHTML:
+        case html_names::HTMLTag::kIFrame:
+        case html_names::HTMLTag::kImg:
+        case html_names::HTMLTag::kInput:
+        case html_names::HTMLTag::kLi:
+        case html_names::HTMLTag::kLink:
+        case html_names::HTMLTag::kListing:
+        case html_names::HTMLTag::kMain:
+        case html_names::HTMLTag::kMarquee:
+        case html_names::HTMLTag::kMenu:
+        case html_names::HTMLTag::kMeta:
+        case html_names::HTMLTag::kNav:
+        case html_names::HTMLTag::kNoembed:
+        case html_names::HTMLTag::kNoframes:
+        case html_names::HTMLTag::kNoscript:
+        case html_names::HTMLTag::kObject:
+        case html_names::HTMLTag::kOl:
+        case html_names::HTMLTag::kP:
+        case html_names::HTMLTag::kParam:
+        case html_names::HTMLTag::kPlaintext:
+        case html_names::HTMLTag::kPre:
+        case html_names::HTMLTag::kScript:
+        case html_names::HTMLTag::kSection:
+        case html_names::HTMLTag::kSelect:
+        case html_names::HTMLTag::kStyle:
+        case html_names::HTMLTag::kSummary:
+        case html_names::HTMLTag::kTable:
+        case html_names::HTMLTag::kTbody:
+        case html_names::HTMLTag::kTfoot:
+        case html_names::HTMLTag::kThead:
+        case html_names::HTMLTag::kTd:
+        case html_names::HTMLTag::kTemplate:
+        case html_names::HTMLTag::kTextarea:
+        case html_names::HTMLTag::kTh:
+        case html_names::HTMLTag::kTitle:
+        case html_names::HTMLTag::kTr:
+        case html_names::HTMLTag::kUl:
+        case html_names::HTMLTag::kWbr:
+        case html_names::HTMLTag::kXmp:
+          return true;
+        case html_names::HTMLTag::kCommand:
+          return !RuntimeEnabledFeatures::HTMLCommandElementRemovalEnabled();
+        default:
+          return false;
+      }
+    }
     if (HasTagName(mathml_names::kMiTag) || HasTagName(mathml_names::kMoTag) ||
         HasTagName(mathml_names::kMnTag) || HasTagName(mathml_names::kMsTag) ||
         HasTagName(mathml_names::kMtextTag) ||
@@ -135,85 +328,98 @@ class HTMLStackItem final : public GarbageCollected<HTMLStackItem> {
         HasTagName(svg_names::kForeignObjectTag) ||
         HasTagName(svg_names::kDescTag) || HasTagName(svg_names::kTitleTag))
       return true;
-    if (IsDocumentFragmentNode())
-      return true;
-    if (!IsInHTMLNamespace())
-      return false;
-    const AtomicString& tag_name = LocalName();
-    return tag_name == html_names::kAddressTag ||
-           tag_name == html_names::kAreaTag ||
-           tag_name == html_names::kAppletTag ||
-           tag_name == html_names::kArticleTag ||
-           tag_name == html_names::kAsideTag ||
-           tag_name == html_names::kBaseTag ||
-           tag_name == html_names::kBasefontTag ||
-           tag_name == html_names::kBgsoundTag ||
-           tag_name == html_names::kBlockquoteTag ||
-           tag_name == html_names::kBodyTag || tag_name == html_names::kBrTag ||
-           tag_name == html_names::kButtonTag ||
-           tag_name == html_names::kCaptionTag ||
-           tag_name == html_names::kCenterTag ||
-           tag_name == html_names::kColTag ||
-           tag_name == html_names::kColgroupTag ||
-           tag_name == html_names::kCommandTag ||
-           tag_name == html_names::kDdTag ||
-           tag_name == html_names::kDetailsTag ||
-           tag_name == html_names::kDirTag || tag_name == html_names::kDivTag ||
-           tag_name == html_names::kDlTag || tag_name == html_names::kDtTag ||
-           tag_name == html_names::kEmbedTag ||
-           tag_name == html_names::kFieldsetTag ||
-           tag_name == html_names::kFigcaptionTag ||
-           tag_name == html_names::kFigureTag ||
-           tag_name == html_names::kFooterTag ||
-           tag_name == html_names::kFormTag ||
-           tag_name == html_names::kFrameTag ||
-           tag_name == html_names::kFramesetTag || IsNumberedHeaderElement() ||
-           tag_name == html_names::kHeadTag ||
-           tag_name == html_names::kHeaderTag ||
-           tag_name == html_names::kHgroupTag ||
-           tag_name == html_names::kHrTag || tag_name == html_names::kHTMLTag ||
-           tag_name == html_names::kIFrameTag ||
-           tag_name == html_names::kImgTag ||
-           tag_name == html_names::kInputTag ||
-           tag_name == html_names::kLiTag || tag_name == html_names::kLinkTag ||
-           tag_name == html_names::kListingTag ||
-           tag_name == html_names::kMainTag ||
-           tag_name == html_names::kMarqueeTag ||
-           tag_name == html_names::kMenuTag ||
-           tag_name == html_names::kMetaTag ||
-           tag_name == html_names::kNavTag ||
-           tag_name == html_names::kNoembedTag ||
-           tag_name == html_names::kNoframesTag ||
-           tag_name == html_names::kNoscriptTag ||
-           tag_name == html_names::kObjectTag ||
-           tag_name == html_names::kOlTag || tag_name == html_names::kPTag ||
-           tag_name == html_names::kParamTag ||
-           tag_name == html_names::kPlaintextTag ||
-           tag_name == html_names::kPreTag ||
-           tag_name == html_names::kScriptTag ||
-           tag_name == html_names::kSectionTag ||
-           tag_name == html_names::kSelectTag ||
-           tag_name == html_names::kStyleTag ||
-           tag_name == html_names::kSummaryTag ||
-           tag_name == html_names::kTableTag || IsTableBodyContextElement() ||
-           tag_name == html_names::kTdTag ||
-           tag_name == html_names::kTemplateTag ||
-           tag_name == html_names::kTextareaTag ||
-           tag_name == html_names::kThTag ||
-           tag_name == html_names::kTitleTag ||
-           tag_name == html_names::kTrTag || tag_name == html_names::kUlTag ||
-           tag_name == html_names::kWbrTag || tag_name == html_names::kXmpTag;
+    return false;
   }
 
-  void Trace(Visitor* visitor) const { visitor->Trace(node_); }
+  HTMLStackItem* NextItemInStack() { return next_item_in_stack_.Get(); }
+
+  bool IsAboveItemInStack(const HTMLStackItem* item) const {
+    DCHECK(item);
+    HTMLStackItem* below = next_item_in_stack_.Get();
+    while (below) {
+      if (below == item) {
+        return true;
+      }
+      below = below->NextItemInStack();
+    }
+    return false;
+  }
+
+  void Trace(Visitor* visitor) const {
+    visitor->Trace(node_);
+    visitor->Trace(next_item_in_stack_);
+    visitor->Trace(sanitizer_);
+    visitor->Trace(replaced_insertion_parent_);
+    visitor->Trace(replaced_insertion_next_child_);
+  }
+
+  void SetSanitizer(StreamingSanitizer* sanitizer) { sanitizer_ = sanitizer; }
+
+  StreamingSanitizer* GetSanitizer() const { return sanitizer_.Get(); }
+
+  void SetReplacedInsertionLocation(ContainerNode* parent, Node* next_child) {
+    is_replaced_with_children_ = true;
+    replaced_insertion_parent_ = parent;
+    replaced_insertion_next_child_ = next_child;
+  }
+  bool IsReplacedWithChildren() const { return is_replaced_with_children_; }
+  ContainerNode* ReplacedInsertionParent() const {
+    return replaced_insertion_parent_.Get();
+  }
+  Node* ReplacedInsertionNextChild() const {
+    return replaced_insertion_next_child_.Get();
+  }
 
  private:
+  void SetNextItemInStack(HTMLStackItem* item) {
+    DCHECK(!item || (item && !next_item_in_stack_));
+    next_item_in_stack_ = item;
+  }
+
+  HTMLStackItem* ReleaseNextItemInStack() {
+    return next_item_in_stack_.Release();
+  }
+
+  // Needed for stack related functions.
+  friend class HTMLElementStack;
+
+  // The attributes are stored directly after the HTMLStackItem in memory
+  // (using Oilpan's AdditionalBytes system). Space for this is guaranteed
+  // by Create().
+  base::span<Attribute> TokenAttributesSpan() {
+    static_assert(alignof(HTMLStackItem) >= alignof(Attribute));
+    // SAFETY: Create() allocates num_token_attributes_ * sizeof(Attribute)
+    // extra bytes immediately after this object via AdditionalBytes.
+    return UNSAFE_BUFFERS(base::span(base::unchecked,
+                                     reinterpret_cast<Attribute*>(this + 1),
+                                     num_token_attributes_));
+  }
+  base::span<const Attribute> TokenAttributesSpan() const {
+    static_assert(alignof(HTMLStackItem) >= alignof(Attribute));
+    // SAFETY: Create() allocates num_token_attributes_ * sizeof(Attribute)
+    // extra bytes immediately after this object via AdditionalBytes.
+    return UNSAFE_BUFFERS(base::span(
+        base::unchecked, reinterpret_cast<const Attribute*>(this + 1),
+        num_token_attributes_));
+  }
+
   Member<ContainerNode> node_;
 
-  AtomicString token_local_name_;
-  Vector<Attribute> token_attributes_;
+  // This member is maintained by HTMLElementStack.
+  Member<HTMLStackItem> next_item_in_stack_{nullptr};
+
+  Member<StreamingSanitizer> sanitizer_;
+  Member<ContainerNode> replaced_insertion_parent_;
+  Member<Node> replaced_insertion_next_child_;
+
+  HTMLTokenName token_name_;
   AtomicString namespace_uri_;
+  wtf_size_t num_token_attributes_ = 0;
   bool is_document_fragment_node_;
+  bool is_replaced_with_children_ = false;
+
+  // Maintained by HTMLElementStack.
+  bool has_p_element_in_button_scope_ = false;
 };
 
 }  // namespace blink

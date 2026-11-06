@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,11 @@
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_WEBUSB_USB_CONNECTION_EVENT_H_
 
 #include "third_party/blink/renderer/modules/event_modules.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
+class DOMWrapperWorld;
 class USBConnectionEventInit;
 class USBDevice;
 
@@ -18,18 +19,27 @@ class USBConnectionEvent final : public Event {
 
  public:
   static USBConnectionEvent* Create(const AtomicString& type,
-                                    const USBConnectionEventInit*);
-  static USBConnectionEvent* Create(const AtomicString& type, USBDevice*);
+                                    const USBConnectionEventInit*,
+                                    const DOMWrapperWorld* world = nullptr);
+  static USBConnectionEvent* Create(const AtomicString& type,
+                                    USBDevice*,
+                                    const DOMWrapperWorld* world = nullptr);
 
-  USBConnectionEvent(const AtomicString& type, const USBConnectionEventInit*);
-  USBConnectionEvent(const AtomicString& type, USBDevice*);
+  USBConnectionEvent(const AtomicString& type,
+                     const USBConnectionEventInit*,
+                     const DOMWrapperWorld* world);
+  USBConnectionEvent(const AtomicString& type,
+                     USBDevice*,
+                     const DOMWrapperWorld* world);
 
-  USBDevice* device() const { return device_; }
+  USBDevice* device() const { return device_.Get(); }
 
+  bool CanBeDispatchedInWorld(const DOMWrapperWorld&) const override;
   void Trace(Visitor*) const override;
 
  private:
   Member<USBDevice> device_;
+  Member<const DOMWrapperWorld> world_;
 };
 
 }  // namespace blink

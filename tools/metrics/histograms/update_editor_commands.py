@@ -1,4 +1,4 @@
-# Copyright 2014 The Chromium Authors. All rights reserved.
+# Copyright 2014 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -11,26 +11,24 @@ If the file was pretty-printed, the updated version is pretty-printed too.
 from __future__ import print_function
 
 import logging
-import os
 import re
 import sys
-
 from xml.dom import minidom
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'common'))
-from diff_util import PromptUserToAcceptDiff
-import path_util
-
-import histogram_paths
-import histogram_configuration_model
+import setup_modules  # pylint: disable=unused-import
 
 
-ENUMS_PATH = histogram_paths.ENUMS_XML
+from chromium_src.tools.metrics.common.diff_util import PromptUserToAcceptDiff
+import chromium_src.tools.metrics.common.path_util as path_util
+import chromium_src.tools.metrics.histograms.histogram_configuration_model as histogram_configuration_model
+
+# MappedEditingCommands Enum is defined in:
+ENUMS_PATH = 'tools/metrics/histograms/metadata/web_core/enums.xml'
 ENUM_NAME = 'MappedEditingCommands'
 
 EDITOR_COMMAND_CPP = 'third_party/blink/renderer/core/editing/editor_command.cc'
-ENUM_START_MARKER = "^    static const CommandEntry commands\[\] = {"
-ENUM_END_MARKER = "^    };"
+ENUM_START_MARKER = '^    static const CommandEntry commands\[\] = {'
+ENUM_END_MARKER = '^    };'
 
 
 class UserError(Exception):
@@ -42,7 +40,7 @@ class UserError(Exception):
     return self.args[0]
 
 
-def ReadHistogramValues(filename):
+def ReadHistogramValues(filename: str) -> list[tuple[str, int]]:
   """Returns a list of pairs (label, value) corresponding to HistogramValue.
 
   Reads the EditorCommand.cpp file, locates the
@@ -54,7 +52,7 @@ def ReadHistogramValues(filename):
     content = f.readlines()
 
   # Locate the enum definition and collect all entries in it
-  inside_enum = False # We haven't found the enum definition yet
+  inside_enum = False  # We haven't found the enum definition yet
   result = []
   for line in content:
     if inside_enum:
@@ -63,13 +61,12 @@ def ReadHistogramValues(filename):
         inside_enum = False
       else:
         # Inside enum: generate new xml entry
-        m = re.match("^{ \"([\w]+)\", \{([\w]+)", line.strip())
+        m = re.match('^{ "([\w]+)", \{([\w]+)', line.strip())
         if m:
           result.append((m.group(1), int(m.group(2))))
     else:
       if re.match(ENUM_START_MARKER, line):
         inside_enum = True
-        enum_value = 0 # Start at 'UNKNOWN'
   return sorted(result, key=lambda pair: pair[1])
 
 
@@ -96,14 +93,15 @@ def UpdateHistogramDefinitions(histogram_values, document):
   # Remove existing values.
   while extension_functions_enum_node.hasChildNodes():
     extension_functions_enum_node.removeChild(
-      extension_functions_enum_node.lastChild)
+      extension_functions_enum_node.lastChild
+    )
 
   # Add a "Generated from (...)" comment
   comment = ' Generated from {0} '.format(EDITOR_COMMAND_CPP)
   extension_functions_enum_node.appendChild(document.createComment(comment))
 
   # Add values generated from policy templates.
-  for (label, value) in histogram_values:
+  for label, value in histogram_values:
     node = document.createElement('int')
     node.attributes['value'] = str(value)
     node.attributes['label'] = label

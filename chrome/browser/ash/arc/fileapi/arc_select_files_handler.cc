@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,25 +6,28 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/json/string_escape.h"
 #include "base/logging.h"
+#include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/values.h"
 #include "chrome/browser/ash/arc/arc_util.h"
 #include "chrome/browser/ash/arc/fileapi/arc_content_file_system_url_util.h"
 #include "chrome/browser/ash/arc/fileapi/arc_documents_provider_util.h"
 #include "chrome/browser/ash/arc/fileapi/arc_select_files_util.h"
 #include "chrome/browser/ash/file_manager/fileapi_util.h"
-#include "chrome/browser/chromeos/file_manager/app_id.h"
-#include "chrome/browser/chromeos/file_manager/path_util.h"
-#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ash/file_manager/path_util.h"
+#include "chrome/browser/ash/policy/dlp/dlp_files_controller_ash.h"
+#include "chrome/browser/chromeos/policy/dlp/dlp_file_destination.h"
+#include "chrome/browser/chromeos/policy/dlp/dlp_rules_manager.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
-#include "chrome/browser/ui/chrome_select_file_policy.h"
-#include "chrome/browser/ui/views/select_file_dialog_extension.h"
+#include "chrome/browser/ui/select_file_policy/chrome_select_file_policy.h"
+#include "chrome/browser/ui/views/select_file_dialog_extension/select_file_dialog_extension.h"
 #include "chrome/common/chrome_isolated_world_ids.h"
-#include "components/arc/arc_util.h"
+#include "chromeos/ash/experiences/arc/arc_util.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/common/url_constants.h"
@@ -36,44 +39,9 @@
 #include "url/gurl.h"
 
 namespace arc {
-
-// Script for clicking OK button on the selector.
-const char kScriptClickOk[] =
-    "(function() { document.querySelector('#ok-button').click(); })();";
-
-// Script for clicking Cancel button on the selector.
-const char kScriptClickCancel[] =
-    "(function() { document.querySelector('#cancel-button').click(); })();";
-
-// Script for clicking a directory element in the left pane of the selector.
-// %s should be replaced by the target directory name wrapped by double-quotes.
-const char kScriptClickDirectory[] =
-    "(function() {"
-    "  var dirs = document.querySelectorAll('#directory-tree .entry-name');"
-    "  Array.from(dirs).filter(a => a.innerText === %s)[0].click();"
-    "})();";
-
-// Script for clicking a file element in the right pane of the selector.
-// %s should be replaced by the target file name wrapped by double-quotes.
-const char kScriptClickFile[] =
-    "(function() {"
-    "  var evt = document.createEvent('MouseEvents');"
-    "  evt.initMouseEvent('mousedown', true, false);"
-    "  var files = document.querySelectorAll('#file-list .file');"
-    "  Array.from(files).filter(a => a.getAttribute('file-name') === %s)[0]"
-    "      .dispatchEvent(evt);"
-    "})();";
-
-// Script for querying UI elements (directories and files) shown on the selector.
-const char kScriptGetElements[] =
-    "(function() {"
-    "  var dirs = document.querySelectorAll('#directory-tree .entry-name');"
-    "  var files = document.querySelectorAll('#file-list .file');"
-    "  return {dirNames: Array.from(dirs, a => a.innerText),"
-    "          fileNames: Array.from(files, a => a.getAttribute('file-name'))};"
-    "})();";
-
 namespace {
+
+constexpr char kRecentAllFakePath[] = "/.fake-entry/recent/all";
 
 void ConvertToElementVector(
     const base::Value* list_value,
@@ -93,9 +61,10 @@ void OnGetElementsScriptResults(
     base::Value value) {
   mojom::FileSelectorElementsPtr result = mojom::FileSelectorElements::New();
   if (value.is_dict()) {
-    ConvertToElementVector(value.FindKey("dirNames"),
+    ConvertToElementVector(value.GetDict().Find("dirNames"),
                            &result->directory_elements);
-    ConvertToElementVector(value.FindKey("fileNames"), &result->file_elements);
+    ConvertToElementVector(value.GetDict().Find("fileNames"),
+                           &result->file_elements);
     // TODO(niwa): Fill result->search_query.
   }
   std::move(callback).Run(std::move(result));
@@ -115,6 +84,7 @@ ui::SelectFileDialog::Type GetDialogType(
   switch (request->action_type) {
     case mojom::SelectFilesActionType::GET_CONTENT:
     case mojom::SelectFilesActionType::OPEN_DOCUMENT:
+    case mojom::SelectFilesActionType::OPEN_MEDIA_STORE_FILES:
       return request->allow_multiple
                  ? ui::SelectFileDialog::SELECT_OPEN_MULTI_FILE
                  : ui::SelectFileDialog::SELECT_OPEN_FILE;
@@ -129,31 +99,32 @@ ui::SelectFileDialog::Type GetDialogType(
 base::FilePath GetInitialFilePath(const mojom::SelectFilesRequestPtr& request) {
   const mojom::DocumentPathPtr& document_path = request->initial_document_path;
   if (!document_path)
-    return base::FilePath();
+    return base::FilePath(kRecentAllFakePath);
 
-  if (document_path->path.empty()) {
-    LOG(ERROR) << "path should at least contain root Document ID.";
-    return base::FilePath();
+  if (!document_path->root_id.has_value()) {
+    LOG(ERROR) << "root ID is missing; falling back to opening Recent";
+    return base::FilePath(kRecentAllFakePath);
   }
 
-  const std::string& root_document_id = document_path->path[0];
   // TODO(niwa): Convert non-root document IDs to the relative path and append.
   return arc::GetDocumentsProviderMountPath(document_path->authority,
-                                            root_document_id);
+                                            document_path->root_id.value());
 }
 
 void BuildFileTypeInfo(const mojom::SelectFilesRequestPtr& request,
                        ui::SelectFileDialog::FileTypeInfo* file_type_info) {
   file_type_info->allowed_paths = ui::SelectFileDialog::FileTypeInfo::ANY_PATH;
   for (const std::string& mime_type : request->mime_types) {
-    std::vector<base::FilePath::StringType> extensions;
-    net::GetExtensionsForMimeType(mime_type, &extensions);
-    file_type_info->extensions.push_back(extensions);
+    const std::vector<base::FilePath::StringType> extensions =
+        GetExtensionsForArcMimeType(mime_type);
+    if (!extensions.empty()) {
+      file_type_info->extensions.push_back(extensions);
+    }
 
-    // Enable "Select from all files" option if GetExtensionsForMimeType
+    // Enable "Select from all files" option if GetExtensionsForArcMimeType
     // can't find any matching extensions or specified MIME type contains an
-    // asterisk. This is because some extensions used in Android (e.g. .DNG) are
-    // not covered by GetExtensionsForMimeType. (crbug.com/1034874)
+    // asterisk. This is to support extensions that are not covered by
+    // GetExtensionsForArcMimeType. (crbug.com/1034874)
     if (extensions.empty() ||
         base::EndsWith(mime_type, "/*", base::CompareCase::SENSITIVE)) {
       file_type_info->include_all_files = true;
@@ -239,7 +210,7 @@ ArcSelectFilesHandler::~ArcSelectFilesHandler() {
 void ArcSelectFilesHandler::SelectFiles(
     const mojom::SelectFilesRequestPtr& request,
     mojom::FileSystemHost::SelectFilesCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
 
   callback_ = std::move(callback);
 
@@ -254,21 +225,26 @@ void ArcSelectFilesHandler::SelectFiles(
   bool show_android_picker_apps =
       request->action_type == mojom::SelectFilesActionType::GET_CONTENT;
 
+  // In OPEN_MEDIA_STORE_FILES mode, only show volumes indexed in Android's
+  // MediaStore.
+  bool use_media_store_filter =
+      request->action_type ==
+      mojom::SelectFilesActionType::OPEN_MEDIA_STORE_FILES;
+
   bool success = dialog_holder_->SelectFile(
       dialog_type, default_path, &file_type_info, request->task_id,
-      search_query, show_android_picker_apps);
+      search_query, show_android_picker_apps, use_media_store_filter);
   if (!success) {
     std::move(callback_).Run(mojom::SelectFilesResult::New());
   }
 }
 
-void ArcSelectFilesHandler::FileSelected(const base::FilePath& path,
-                                         int index,
-                                         void* params) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(callback_);
+void ArcSelectFilesHandler::FileSelected(const ui::SelectedFileInfo& file,
+                                         int index) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(callback_, base::NotFatalUntil::M160);
 
-  const std::string& activity = ConvertFilePathToAndroidActivity(path);
+  const std::string& activity = ConvertFilePathToAndroidActivity(file.path());
   if (!activity.empty()) {
     // The user selected an Android picker activity instead of a file.
     mojom::SelectFilesResultPtr result = mojom::SelectFilesResult::New();
@@ -277,39 +253,36 @@ void ArcSelectFilesHandler::FileSelected(const base::FilePath& path,
     return;
   }
 
-  std::vector<base::FilePath> files;
-  files.push_back(path);
-  FilesSelectedInternal(files, params);
+  FilesSelectedInternal({file});
 }
 
 void ArcSelectFilesHandler::MultiFilesSelected(
-    const std::vector<base::FilePath>& files,
-    void* params) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  FilesSelectedInternal(files, params);
+    const std::vector<ui::SelectedFileInfo>& files) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  FilesSelectedInternal(files);
 }
 
-void ArcSelectFilesHandler::FileSelectionCanceled(void* params) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(callback_);
+void ArcSelectFilesHandler::FileSelectionCanceled() {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(callback_, base::NotFatalUntil::M160);
   // Returns an empty result if the user cancels file selection.
   std::move(callback_).Run(mojom::SelectFilesResult::New());
 }
 
 void ArcSelectFilesHandler::FilesSelectedInternal(
-    const std::vector<base::FilePath>& files,
-    void* params) {
-  DCHECK(callback_);
+    const std::vector<ui::SelectedFileInfo>& files) {
+  CHECK(callback_, base::NotFatalUntil::M160);
 
   storage::FileSystemContext* file_system_context =
       file_manager::util::GetFileManagerFileSystemContext(profile_);
 
   std::vector<storage::FileSystemURL> file_system_urls;
-  for (const base::FilePath& file_path : files) {
+  for (const auto& file : files) {
     GURL gurl;
     file_manager::util::ConvertAbsoluteFilePathToFileSystemUrl(
-        profile_, file_path, file_manager::util::GetFileManagerURL(), &gurl);
-    file_system_urls.push_back(file_system_context->CrackURL(gurl));
+        profile_, file.path(), file_manager::util::GetFileManagerURL(), &gurl);
+    file_system_urls.push_back(
+        file_system_context->CrackURLInFirstPartyContext(gurl));
   }
 
   arc::ConvertToContentUrlsAndShare(
@@ -320,7 +293,7 @@ void ArcSelectFilesHandler::FilesSelectedInternal(
 void ArcSelectFilesHandler::OnFileSelectorEvent(
     mojom::FileSelectorEventPtr event,
     mojom::FileSystemHost::OnFileSelectorEventCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
 
   std::string quotedClickTargetName =
       base::GetQuotedJSONString(event->click_target->name.c_str());
@@ -349,7 +322,7 @@ void ArcSelectFilesHandler::OnFileSelectorEvent(
 void ArcSelectFilesHandler::GetFileSelectorElements(
     mojom::GetFileSelectorElementsRequestPtr request,
     mojom::FileSystemHost::GetFileSelectorElementsCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
 
   dialog_holder_->ExecuteJavaScript(
       kScriptGetElements,
@@ -379,7 +352,8 @@ bool SelectFileDialogHolder::SelectFile(
     const ui::SelectFileDialog::FileTypeInfo* file_types,
     int task_id,
     const std::string& search_query,
-    bool show_android_picker_apps) {
+    bool show_android_picker_apps,
+    bool use_media_store_filter) {
   aura::Window* owner_window = nullptr;
   for (auto* window : ChromeShelfController::instance()->GetArcWindows()) {
     if (arc::GetWindowTaskId(window) == task_id) {
@@ -392,22 +366,23 @@ bool SelectFileDialogHolder::SelectFile(
     return false;
   }
 
-  // TODO(niwa): Pass search query as well.
   SelectFileDialogExtension::Owner owner;
   owner.window = owner_window;
-  owner.android_task_id = task_id;
+  owner.dialog_caller =
+      policy::DlpFileDestination(data_controls::Component::kArc);
   select_file_dialog_->SelectFileWithFileManagerParams(
       type,
       /*title=*/std::u16string(), default_path, file_types,
-      /*file_type_index=*/0,
-      /*params=*/nullptr, owner, search_query, show_android_picker_apps);
+      /*file_type_index=*/0, owner, search_query, show_android_picker_apps,
+      use_media_store_filter);
   return true;
 }
 
 void SelectFileDialogHolder::ExecuteJavaScript(
     const std::string& script,
     content::RenderFrameHost::JavaScriptResultCallback callback) {
-  content::RenderFrameHost* frame_host = select_file_dialog_->GetMainFrame();
+  content::RenderFrameHost* frame_host =
+      select_file_dialog_->GetPrimaryMainFrame();
 
   if (!frame_host || !frame_host->IsRenderFrameLive()) {
     LOG(ERROR) << "Can't execute a script. SelectFileDialog is not ready.";

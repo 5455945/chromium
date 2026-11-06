@@ -1,12 +1,13 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/gl/gl_gl_api_implementation.h"
 
+#include <array>
 #include <vector>
 
-#include "base/containers/contains.h"
+#include "base/command_line.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "ui/gl/gl_context.h"
@@ -48,6 +49,7 @@ static inline GLenum GetTexInternalFormat(const GLVersionInfo* version,
           gl_internal_format = GL_R16_EXT;
           break;
         case GL_HALF_FLOAT_OES:
+        case GL_HALF_FLOAT:
           gl_internal_format = GL_R16F_EXT;
           break;
         case GL_FLOAT:
@@ -55,7 +57,6 @@ static inline GLenum GetTexInternalFormat(const GLVersionInfo* version,
           break;
         default:
           NOTREACHED();
-          break;
       }
       return gl_internal_format;
     } else if (internal_format == GL_RG_EXT) {
@@ -64,6 +65,10 @@ static inline GLenum GetTexInternalFormat(const GLVersionInfo* version,
         case GL_UNSIGNED_BYTE:
           gl_internal_format = GL_RG8_EXT;
           break;
+        case GL_UNSIGNED_SHORT:
+          gl_internal_format = GL_RG16_EXT;
+          break;
+        case GL_HALF_FLOAT:
         case GL_HALF_FLOAT_OES:
           gl_internal_format = GL_RG16F_EXT;
           break;
@@ -72,13 +77,12 @@ static inline GLenum GetTexInternalFormat(const GLVersionInfo* version,
           break;
         default:
           NOTREACHED();
-          break;
       }
       return gl_internal_format;
     }
   }
 
-  if (version->IsAtLeastGL(2, 1) || version->IsAtLeastGLES(3, 0)) {
+  if (version->IsAtLeastGLES(3, 0)) {
     switch (internal_format) {
       case GL_SRGB_EXT:
         gl_internal_format = GL_SRGB8;
@@ -104,42 +108,18 @@ static inline GLenum GetTexInternalFormat(const GLVersionInfo* version,
       case GL_RGB:
         gl_internal_format = GL_RGB32F;
         break;
-      case GL_LUMINANCE_ALPHA:
-        if (!version->is_es)
-          gl_internal_format = GL_LUMINANCE_ALPHA32F_ARB;
-        break;
-      case GL_LUMINANCE:
-        if (!version->is_es)
-          gl_internal_format = GL_LUMINANCE32F_ARB;
-        break;
-      case GL_ALPHA:
-        if (!version->is_es)
-          gl_internal_format = GL_ALPHA32F_ARB;
-        break;
       default:
         // We can't assert here because if the client context is ES3,
         // all sized internal_format will reach here.
         break;
     }
-  } else if (type == GL_HALF_FLOAT_OES) {
+  } else if (type == GL_HALF_FLOAT_OES || type == GL_HALF_FLOAT) {
     switch (internal_format) {
       case GL_RGBA:
         gl_internal_format = GL_RGBA16F;
         break;
       case GL_RGB:
         gl_internal_format = GL_RGB16F;
-        break;
-      case GL_LUMINANCE_ALPHA:
-        if (!version->is_es)
-          gl_internal_format = GL_LUMINANCE_ALPHA16F_ARB;
-        break;
-      case GL_LUMINANCE:
-        if (!version->is_es)
-          gl_internal_format = GL_LUMINANCE16F_ARB;
-        break;
-      case GL_ALPHA:
-        if (!version->is_es)
-          gl_internal_format = GL_ALPHA16F_ARB;
         break;
       default:
         break;
@@ -152,7 +132,7 @@ static inline GLenum GetTexInternalFormat(const GLVersionInfo* version,
 static inline GLenum GetTexFormat(const GLVersionInfo* version, GLenum format) {
   GLenum gl_format = format;
 
-  if (version->IsAtLeastGL(2, 1) || version->IsAtLeastGLES(3, 0)) {
+  if (version->IsAtLeastGLES(3, 0)) {
     switch (format) {
       case GL_SRGB_EXT:
         gl_format = GL_RGB;
@@ -171,20 +151,15 @@ static inline GLenum GetTexFormat(const GLVersionInfo* version, GLenum format) {
 static inline GLenum GetPixelType(const GLVersionInfo* version,
                                   GLenum type,
                                   GLenum format) {
-  if (!version->is_es2) {
-    if (type == GL_HALF_FLOAT_OES) {
-      if (version->is_es) {
-        // For ES3+, use HALF_FLOAT instead of HALF_FLOAT_OES whenever possible.
-        switch (format) {
-          case GL_LUMINANCE:
-          case GL_LUMINANCE_ALPHA:
-          case GL_ALPHA:
-            return type;
-          default:
-            break;
-        }
-      }
-      return GL_HALF_FLOAT;
+  if (!version->is_es2 && type == GL_HALF_FLOAT_OES) {
+    // For ES3+, use HALF_FLOAT instead of HALF_FLOAT_OES whenever possible.
+    switch (format) {
+      case GL_LUMINANCE:
+      case GL_LUMINANCE_ALPHA:
+      case GL_ALPHA:
+        return type;
+      default:
+        return GL_HALF_FLOAT;
     }
   }
   return type;
@@ -193,10 +168,6 @@ static inline GLenum GetPixelType(const GLVersionInfo* version,
 }  // anonymous namespace
 
 GLenum GetInternalFormat(const GLVersionInfo* version, GLenum internal_format) {
-  if (!version->is_es) {
-    if (internal_format == GL_BGRA_EXT || internal_format == GL_BGRA8_EXT)
-      return GL_RGBA8;
-  }
   if (version->is_es3 && version->is_mesa) {
     // Mesa bug workaround: Mipmapping does not work when using GL_BGRA_EXT
     if (internal_format == GL_BGRA_EXT)
@@ -206,9 +177,22 @@ GLenum GetInternalFormat(const GLVersionInfo* version, GLenum internal_format) {
 }
 
 void InitializeStaticGLBindingsGL() {
-  g_current_gl_context_tls = new base::ThreadLocalPointer<CurrentGL>;
   g_no_context_current_gl = new CurrentGL;
   g_no_context_current_gl->Api = new NoContextGLApi;
+}
+
+CurrentGL*& ThreadLocalCurrentGL() {
+  thread_local CurrentGL* current_gl = nullptr;
+  return current_gl;
+}
+
+CurrentGL* GetThreadLocalCurrentGL() {
+  // This prevents mutation of the thread local CurrentGL pointer.
+  return ThreadLocalCurrentGL();
+}
+
+void SetThreadLocalCurrentGL(CurrentGL* current) {
+  ThreadLocalCurrentGL() = current ? current : g_no_context_current_gl;
 }
 
 void ClearBindingsGL() {
@@ -219,11 +203,7 @@ void ClearBindingsGL() {
     delete g_no_context_current_gl;
     g_no_context_current_gl = nullptr;
   }
-
-  if (g_current_gl_context_tls) {
-    delete g_current_gl_context_tls;
-    g_current_gl_context_tls = nullptr;
-  }
+  ThreadLocalCurrentGL() = nullptr;
 }
 
 bool SetNullDrawGLBindingsEnabled(bool enabled) {
@@ -236,62 +216,89 @@ bool GetNullDrawBindingsEnabled() {
   return g_null_draw_bindings_enabled;
 }
 
-void SetCurrentGL(CurrentGL* current) {
-  CurrentGL* new_current = current ? current : g_no_context_current_gl;
-  g_current_gl_context_tls->Set(new_current);
-}
+GLApi::GLApi() = default;
 
-GLApi::GLApi() {
-}
-
-GLApi::~GLApi() {
-}
+GLApi::~GLApi() = default;
 
 GLApiBase::GLApiBase() : driver_(nullptr) {}
 
-GLApiBase::~GLApiBase() {
-}
+GLApiBase::~GLApiBase() = default;
 
 void GLApiBase::InitializeBase(DriverGL* driver) {
   driver_ = driver;
 }
 
-RealGLApi::RealGLApi() {
-}
+RealGLApi::RealGLApi()
+    : logging_enabled_(base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kEnableGPUServiceLogging)) {}
 
-RealGLApi::~RealGLApi() {
-}
+RealGLApi::~RealGLApi() = default;
 
 void RealGLApi::Initialize(DriverGL* driver) {
   InitializeBase(driver);
 }
 
 void RealGLApi::glGetIntegervFn(GLenum pname, GLint* params) {
-  if (pname == GL_NUM_EXTENSIONS && disabled_exts_.size()) {
-    InitializeFilteredExtensionsIfNeeded();
-    *params = static_cast<GLint>(filtered_exts_.size());
-  } else {
-    GLApiBase::glGetIntegervFn(pname, params);
+  if (disabled_exts_.size()) {
+    if (pname == GL_NUM_EXTENSIONS) {
+      InitializeFilteredExtensionsIfNeeded();
+      *params = static_cast<GLint>(filtered_exts_.size());
+      return;
+    }
+    if (pname == GL_NUM_REQUESTABLE_EXTENSIONS_ANGLE) {
+      InitializeFilteredRequestableExtensionsIfNeeded();
+      *params = static_cast<GLint>(filtered_requestable_exts_.size());
+      return;
+    }
   }
+  GLApiBase::glGetIntegervFn(pname, params);
 }
 
 const GLubyte* RealGLApi::glGetStringFn(GLenum name) {
-  if (name == GL_EXTENSIONS && disabled_exts_.size()) {
-    InitializeFilteredExtensionsIfNeeded();
-    return reinterpret_cast<const GLubyte*>(filtered_exts_str_.c_str());
+  if (disabled_exts_.size()) {
+    if (name == GL_EXTENSIONS) {
+      InitializeFilteredExtensionsIfNeeded();
+      return reinterpret_cast<const GLubyte*>(filtered_exts_str_.c_str());
+    }
+    if (name == GL_REQUESTABLE_EXTENSIONS_ANGLE) {
+      InitializeFilteredRequestableExtensionsIfNeeded();
+      return reinterpret_cast<const GLubyte*>(
+          filtered_requestable_exts_str_.c_str());
+    }
   }
   return GLApiBase::glGetStringFn(name);
 }
 
 const GLubyte* RealGLApi::glGetStringiFn(GLenum name, GLuint index) {
-  if (name == GL_EXTENSIONS && disabled_exts_.size()) {
-    InitializeFilteredExtensionsIfNeeded();
-    if (index >= filtered_exts_.size()) {
-      return nullptr;
+  if (disabled_exts_.size()) {
+    if (name == GL_EXTENSIONS) {
+      InitializeFilteredExtensionsIfNeeded();
+      if (index >= filtered_exts_.size()) {
+        return nullptr;
+      }
+      return reinterpret_cast<const GLubyte*>(filtered_exts_[index].c_str());
     }
-    return reinterpret_cast<const GLubyte*>(filtered_exts_[index].c_str());
+    if (name == GL_REQUESTABLE_EXTENSIONS_ANGLE) {
+      InitializeFilteredRequestableExtensionsIfNeeded();
+      if (index >= filtered_requestable_exts_.size()) {
+        return nullptr;
+      }
+      return reinterpret_cast<const GLubyte*>(
+          filtered_requestable_exts_[index].c_str());
+    }
   }
   return GLApiBase::glGetStringiFn(name, index);
+}
+
+void RealGLApi::glGenTexturesFn(GLsizei n, GLuint* textures) {
+  GLApiBase::glGenTexturesFn(n, textures);
+  if (GetGLImplementation() != kGLImplementationMockGL && n > 0 &&
+      UNSAFE_TODO(textures[0]) == 0u) {
+    // On texture generation failure (id = 0), check the reset status. This
+    // should not be GL_NO_ERROR.
+    CHECK(driver_->fn.glGetGraphicsResetStatusARBFn);
+    CHECK_NE(glGetGraphicsResetStatusARBFn(), /*GL_NO_ERROR*/ 0u);
+  }
 }
 
 void RealGLApi::glTexImage2DFn(GLenum target,
@@ -308,21 +315,6 @@ void RealGLApi::glTexImage2DFn(GLenum target,
   GLenum gl_format = GetTexFormat(version_.get(), format);
   GLenum gl_type = GetPixelType(version_.get(), type, format);
 
-  // TODO(yizhou): Check if cubemap, 3d texture or texture2d array has the same
-  // bug on intel mac.
-  if (!version_->is_angle && gl_workarounds_.reset_teximage2d_base_level &&
-      target == GL_TEXTURE_2D) {
-    GLint base_level = 0;
-    GLApiBase::glGetTexParameterivFn(target, GL_TEXTURE_BASE_LEVEL,
-                                     &base_level);
-    if (base_level) {
-      GLApiBase::glTexParameteriFn(target, GL_TEXTURE_BASE_LEVEL, 0);
-      GLApiBase::glTexImage2DFn(target, level, gl_internal_format, width,
-                                height, border, gl_format, gl_type, pixels);
-      GLApiBase::glTexParameteriFn(target, GL_TEXTURE_BASE_LEVEL, base_level);
-      return;
-    }
-  }
   GLApiBase::glTexImage2DFn(target, level, gl_internal_format, width, height,
                             border, gl_format, gl_type, pixels);
 }
@@ -364,19 +356,21 @@ void RealGLApi::glTexStorageMem2DEXTFn(GLenum target,
                                     height, memory, offset);
 }
 
-void RealGLApi::glTexStorageMemFlags2DANGLEFn(GLenum target,
-                                              GLsizei levels,
-                                              GLenum internalformat,
-                                              GLsizei width,
-                                              GLsizei height,
-                                              GLuint memory,
-                                              GLuint64 offset,
-                                              GLbitfield createFlags,
-                                              GLbitfield usageFlags) {
+void RealGLApi::glTexStorageMemFlags2DANGLEFn(
+    GLenum target,
+    GLsizei levels,
+    GLenum internalformat,
+    GLsizei width,
+    GLsizei height,
+    GLuint memory,
+    GLuint64 offset,
+    GLbitfield createFlags,
+    GLbitfield usageFlags,
+    const void* imageCreateInfoPNext) {
   internalformat = GetInternalFormat(version_.get(), internalformat);
-  GLApiBase::glTexStorageMemFlags2DANGLEFn(target, levels, internalformat,
-                                           width, height, memory, offset,
-                                           createFlags, usageFlags);
+  GLApiBase::glTexStorageMemFlags2DANGLEFn(
+      target, levels, internalformat, width, height, memory, offset,
+      createFlags, usageFlags, imageCreateInfoPNext);
 }
 
 void RealGLApi::glRenderbufferStorageEXTFn(GLenum target,
@@ -424,43 +418,37 @@ void RealGLApi::glReadPixelsFn(GLint x,
 }
 
 void RealGLApi::glClearFn(GLbitfield mask) {
-  if (!g_null_draw_bindings_enabled)
+  if (!g_null_draw_bindings_enabled) {
     GLApiBase::glClearFn(mask);
-}
-
-void RealGLApi::glClearColorFn(GLclampf red,
-                               GLclampf green,
-                               GLclampf blue,
-                               GLclampf alpha) {
-  if (!version_->is_angle && gl_workarounds_.clear_to_zero_or_one_broken &&
-      (1 == red || 0 == red) && (1 == green || 0 == green) &&
-      (1 == blue || 0 == blue) && (1 == alpha || 0 == alpha)) {
-    if (1 == alpha)
-      alpha = 2;
-    else
-      alpha = -1;
+  } else if (logging_enabled_) {
+    LOG(WARNING) << "Skipped glClear()";
   }
-  GLApiBase::glClearColorFn(red, green, blue, alpha);
 }
 
 void RealGLApi::glDrawArraysFn(GLenum mode, GLint first, GLsizei count) {
-  if (!g_null_draw_bindings_enabled)
+  if (!g_null_draw_bindings_enabled) {
     GLApiBase::glDrawArraysFn(mode, first, count);
+  } else if (logging_enabled_) {
+    LOG(WARNING) << "Skipped glDrawArrays()";
+  }
 }
 
 void RealGLApi::glDrawElementsFn(GLenum mode,
                                  GLsizei count,
                                  GLenum type,
                                  const void* indices) {
-  if (!g_null_draw_bindings_enabled)
+  if (!g_null_draw_bindings_enabled) {
     GLApiBase::glDrawElementsFn(mode, count, type, indices);
+  } else if (logging_enabled_) {
+    LOG(WARNING) << "Skipped glDrawElements()";
+  }
 }
 
 void RealGLApi::glClearDepthFn(GLclampd depth) {
   // OpenGL ES only has glClearDepthf, forward the parameters from glClearDepth.
   // Many mock tests expect only glClearDepth is called so don't make the
   // interception when testing with mocks.
-  if (version_->is_es && GetGLImplementation() != kGLImplementationMockGL) {
+  if (GetGLImplementation() != kGLImplementationMockGL) {
     DCHECK(driver_->fn.glClearDepthfFn);
     GLApiBase::glClearDepthfFn(static_cast<GLclampf>(depth));
   } else {
@@ -473,7 +461,7 @@ void RealGLApi::glDepthRangeFn(GLclampd z_near, GLclampd z_far) {
   // OpenGL ES only has glDepthRangef, forward the parameters from glDepthRange.
   // Many mock tests expect only glDepthRange is called so don't make the
   // interception when testing with mocks.
-  if (version_->is_es && GetGLImplementation() != kGLImplementationMockGL) {
+  if (GetGLImplementation() != kGLImplementationMockGL) {
     DCHECK(driver_->fn.glDepthRangefFn);
     GLApiBase::glDepthRangefFn(static_cast<GLclampf>(z_near),
                                static_cast<GLclampf>(z_far));
@@ -486,8 +474,8 @@ void RealGLApi::glDepthRangeFn(GLclampd z_near, GLclampd z_far) {
 void RealGLApi::glUseProgramFn(GLuint program) {
   ShaderTracking* shader_tracking = ShaderTracking::GetInstance();
   if (shader_tracking) {
-    std::vector<char> buffers[2];
-    char* strings[2] = {nullptr, nullptr};
+    std::array<std::vector<char>, 2> buffers;
+    std::array<char*, 2> strings = {};
     if (program) {
       // The following only works with ANGLE backend because ANGLE makes sure
       // a program's shaders are not actually deleted and source can still be
@@ -496,8 +484,8 @@ void RealGLApi::glUseProgramFn(GLuint program) {
       // Also, in theory, different shaders can be attached to the program
       // after the last link, but for now, ignore such corner case patterns.
       GLsizei count = 0;
-      GLuint shaders[2] = {0};
-      glGetAttachedShadersFn(program, 2, &count, shaders);
+      std::array<GLuint, 2> shaders = {};
+      glGetAttachedShadersFn(program, 2, &count, shaders.data());
       for (GLsizei ii = 0; ii < std::min(2, count); ++ii) {
         buffers[ii].resize(ShaderTracking::kMaxShaderSize);
         glGetShaderSourceFn(shaders[ii], ShaderTracking::kMaxShaderSize,
@@ -515,24 +503,26 @@ void RealGLApi::InitializeFilteredExtensionsIfNeeded() {
   if (filtered_exts_.size())
     return;
   DCHECK(filtered_exts_str_.empty());
-  if (WillUseGLGetStringForExtensions(this)) {
-    filtered_exts_str_ = FilterGLExtensionList(
-        reinterpret_cast<const char*>(GLApiBase::glGetStringFn(GL_EXTENSIONS)),
-        disabled_exts_);
-    filtered_exts_ = base::SplitString(
-        filtered_exts_str_, " ", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
-  } else {
-    GLint num_extensions = 0;
-    GLApiBase::glGetIntegervFn(GL_NUM_EXTENSIONS, &num_extensions);
-    for (GLint i = 0; i < num_extensions; ++i) {
-      const char* gl_extension = reinterpret_cast<const char*>(
-          GLApiBase::glGetStringiFn(GL_EXTENSIONS, i));
-      DCHECK(gl_extension);
-      if (!base::Contains(disabled_exts_, gl_extension))
-        filtered_exts_.push_back(gl_extension);
-    }
-    filtered_exts_str_ = base::JoinString(filtered_exts_, " ");
+  filtered_exts_str_ = FilterGLExtensionList(
+      reinterpret_cast<const char*>(GLApiBase::glGetStringFn(GL_EXTENSIONS)),
+      disabled_exts_);
+  filtered_exts_ = base::SplitString(
+      filtered_exts_str_, " ", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
+}
+
+void RealGLApi::InitializeFilteredRequestableExtensionsIfNeeded() {
+  DCHECK(disabled_exts_.size());
+  if (filtered_requestable_exts_.size()) {
+    return;
   }
+  DCHECK(filtered_requestable_exts_str_.empty());
+  filtered_requestable_exts_str_ = FilterGLExtensionList(
+      reinterpret_cast<const char*>(
+          GLApiBase::glGetStringFn(GL_REQUESTABLE_EXTENSIONS_ANGLE)),
+      disabled_exts_);
+  filtered_requestable_exts_ =
+      base::SplitString(filtered_requestable_exts_str_, " ",
+                        base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
 }
 
 void RealGLApi::SetDisabledExtensions(const std::string& disabled_extensions) {
@@ -549,27 +539,22 @@ void RealGLApi::SetDisabledExtensions(const std::string& disabled_extensions) {
 void RealGLApi::ClearCachedGLExtensions() {
   filtered_exts_.clear();
   filtered_exts_str_.clear();
-}
-
-void RealGLApi::set_gl_workarounds(const GLWorkarounds& workarounds) {
-  gl_workarounds_ = workarounds;
+  filtered_requestable_exts_.clear();
+  filtered_requestable_exts_str_.clear();
 }
 
 void RealGLApi::set_version(std::unique_ptr<GLVersionInfo> version) {
   version_ = std::move(version);
 }
 
-TraceGLApi::~TraceGLApi() {
-}
+TraceGLApi::~TraceGLApi() = default;
 
 LogGLApi::LogGLApi(GLApi* gl_api) : gl_api_(gl_api) {}
 
-LogGLApi::~LogGLApi() {}
+LogGLApi::~LogGLApi() = default;
 
-NoContextGLApi::NoContextGLApi() {
-}
+NoContextGLApi::NoContextGLApi() = default;
 
-NoContextGLApi::~NoContextGLApi() {
-}
+NoContextGLApi::~NoContextGLApi() = default;
 
 }  // namespace gl

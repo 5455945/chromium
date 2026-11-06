@@ -1,8 +1,10 @@
-# Copyright 2014 The Chromium Authors. All rights reserved.
+# Copyright 2014 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-assert(!is_ios)
+import("//build/config/features.gni")
+
+assert(use_blink)
 
 component("content") {
   output_name = "keyed_service_content"
@@ -17,9 +19,6 @@ component("content") {
     "refcounted_browser_context_keyed_service_factory.h",
   ]
 
-  # TODO(jschuh): crbug.com/167187 fix size_t to int truncations.
-  configs += [ "//build/config/compiler:no_size_t_to_int_warning" ]
-
   defines = [ "KEYED_SERVICE_IMPLEMENTATION" ]
 
   public_deps = [
@@ -28,10 +27,8 @@ component("content") {
   ]
 
   deps = [
-    "//base/third_party/dynamic_annotations",
     "//components/pref_registry",
     "//content/public/browser",
-    "//content/public/common",
   ]
 }
 
@@ -40,6 +37,9 @@ source_set("unit_tests") {
   sources = [ "browser_context_dependency_manager_unittest.cc" ]
   deps = [
     ":content",
+    "//base",
+    "//content/public/browser",
+    "//content/test:test_support",
     "//testing/gtest",
   ]
 }

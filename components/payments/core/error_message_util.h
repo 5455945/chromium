@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,8 @@
 #include <set>
 #include <string>
 #include <vector>
+
+class GURL;
 
 namespace payments {
 
@@ -19,6 +21,15 @@ std::string GetNotSupportedErrorMessage(const std::set<std::string>& methods);
 // they do not support full delegation.
 std::string GetAppsSkippedForPartialDelegationErrorMessage(
     const std::vector<std::string>& skipped_apps);
+
+// Returns a developer-facing error message for failure to download a payment
+// manifest due to the given HTTP response code.
+std::string GenerateHttpStatusCodeError(const GURL& url,
+                                        int http_response_code);
+
+// Returns a developer-facing error message for failure to download a payment
+// manifest due to the given network error code.
+std::string GenerateNetworkErrorMessage(const GURL& url, int net_error);
 
 }  // namespace payments
 

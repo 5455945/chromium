@@ -1,11 +1,11 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/public/platform/web_common.h"
 #include "third_party/blink/public/platform/web_security_origin.h"
 #include "third_party/blink/public/platform/web_string.h"
-#include "v8/include/v8.h"
+#include "v8/include/v8-forward.h"
 
 #ifndef THIRD_PARTY_BLINK_PUBLIC_PLATFORM_WEB_ISOLATED_WORLD_INFO_H_
 #define THIRD_PARTY_BLINK_PUBLIC_PLATFORM_WEB_ISOLATED_WORLD_INFO_H_
@@ -44,7 +44,17 @@ struct WebIsolatedWorldInfo {
   // Some types of isolated world will not have a suitable tag so will leave
   // this empty.
   WebString stable_id;
+
+  // Distinguishes isolated worlds that share a `stable_id`. As with
+  // `stable_id`, the exact meaning depends on the embedder and the type of
+  // isolated world. Chrome extensions use the `worldId` the extension chose
+  // for a chrome.userScripts world, which is unset for the default user
+  // script world.
+  WebString embedder_world_id;
 };
+
+// The ID of the "main" execution world for a document.
+static constexpr int32_t kMainDOMWorldId = 0;
 
 // Sets up an isolated world by associating a |world_id| with |info|.
 // worldID must be > 0 (as 0 represents the main world).

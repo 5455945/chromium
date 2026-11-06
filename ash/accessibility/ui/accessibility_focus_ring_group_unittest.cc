@@ -1,9 +1,10 @@
-// Copyright (c) 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/accessibility/ui/accessibility_focus_ring_group.h"
 
+#include <array>
 #include <memory>
 #include <vector>
 
@@ -22,6 +23,12 @@ class TestableAccessibilityFocusRingGroup : public AccessibilityFocusRingGroup {
     // By default use an easy round number for testing.
     margin_ = 10;
   }
+
+  TestableAccessibilityFocusRingGroup(
+      const TestableAccessibilityFocusRingGroup&) = delete;
+  TestableAccessibilityFocusRingGroup& operator=(
+      const TestableAccessibilityFocusRingGroup&) = delete;
+
   ~TestableAccessibilityFocusRingGroup() override = default;
 
   void RectsToRings(const std::vector<gfx::Rect>& rects,
@@ -33,7 +40,6 @@ class TestableAccessibilityFocusRingGroup : public AccessibilityFocusRingGroup {
 
  private:
   int margin_;
-  DISALLOW_COPY_AND_ASSIGN(TestableAccessibilityFocusRingGroup);
 };
 
 class AccessibilityFocusRingGroupTest : public AshTestBase {
@@ -46,7 +52,7 @@ class AccessibilityFocusRingGroupTest : public AshTestBase {
 
  protected:
   gfx::Rect AddMargin(gfx::Rect r) {
-    r.Inset(-group_.GetMargin(), -group_.GetMargin());
+    r.Inset(-group_.GetMargin());
     return r;
   }
 
@@ -88,7 +94,7 @@ TEST_F(AccessibilityFocusRingGroupTest, ClipToBounds) {
 }
 
 TEST_F(AccessibilityFocusRingGroupTest, RectsToRingsSimpleBoundsCheck) {
-  // Easy sanity check. Given a single rectangle, make sure we get back
+  // Easy confidence check. Given a single rectangle, make sure we get back
   // a focus ring with the same bounds.
   std::vector<gfx::Rect> rects;
   rects.push_back(gfx::Rect(20, 30, 70, 150));
@@ -167,7 +173,7 @@ TEST_F(AccessibilityFocusRingGroupTest, RectsToRingsParagraphShape) {
   ASSERT_EQ(1U, rings.size());
   EXPECT_EQ(gfx::Rect(100, 100, 600, 500), rings[0].GetBounds());
 
-  const gfx::Point* points = rings[0].points;
+  const std::array<gfx::Point, 36>& points = rings[0].points;
   EXPECT_EQ(gfx::Point(100, 190), points[0]);
   EXPECT_EQ(gfx::Point(100, 110), points[1]);
   EXPECT_EQ(gfx::Point(100, 100), points[2]);

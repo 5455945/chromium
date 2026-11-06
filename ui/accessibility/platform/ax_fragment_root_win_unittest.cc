@@ -1,21 +1,24 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/accessibility/platform/ax_fragment_root_win.h"
 
-#include <UIAutomationClient.h>
-#include <UIAutomationCoreApi.h>
+#include <wrl/client.h>
 
 #include "base/auto_reset.h"
+#include "base/test/gmock_expected_support.h"
 #include "base/win/scoped_safearray.h"
 #include "base/win/scoped_variant.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/accessibility/accessibility_switches.h"
+#include "ui/accessibility/accessibility_features.h"
 #include "ui/accessibility/platform/ax_platform_node_win.h"
 #include "ui/accessibility/platform/ax_platform_node_win_unittest.h"
 #include "ui/accessibility/platform/test_ax_node_wrapper.h"
 #include "ui/accessibility/platform/uia_registrar_win.h"
+
+#include <UIAutomationClient.h>
+#include <UIAutomationCoreApi.h>
 
 using base::win::ScopedVariant;
 using Microsoft::WRL::ComPtr;
@@ -77,8 +80,8 @@ TEST_F(AXFragmentRootTest, UIAFindItemByPropertyUniqueId) {
   ComPtr<IRawElementProviderSimple> button_raw_element_provider_simple =
       GetIRawElementProviderSimpleFromChildIndex(1);
 
-  AXNode* text1_node = GetRootAsAXNode()->children()[0];
-  AXNode* button_node = GetRootAsAXNode()->children()[1];
+  AXNode* text1_node = GetRoot()->children()[0];
+  AXNode* button_node = GetRoot()->children()[1];
 
   ComPtr<IItemContainerProvider> item_container_provider;
   EXPECT_HRESULT_SUCCEEDED(root_raw_element_provider_simple->GetPatternProvider(
@@ -92,14 +95,12 @@ TEST_F(AXFragmentRootTest, UIAFindItemByPropertyUniqueId) {
   // When |start_after_element| is an invalid element, we should fail at finding
   // the item.
   {
-    unique_id = AXPlatformNodeFromNode(GetRootAsAXNode())->GetUniqueId();
+    unique_id = AXPlatformNodeFromNode(GetRoot())->GetUniqueId();
     unique_id_variant.Set(
         SysAllocString(base::NumberToWString(-unique_id).c_str()));
 
-    ComPtr<IRawElementProviderSimple> invalid_element_provider_simple;
-    EXPECT_HRESULT_SUCCEEDED(
-        MockIRawElementProviderSimple::CreateMockIRawElementProviderSimple(
-            &invalid_element_provider_simple));
+    ComPtr<IRawElementProviderSimple> invalid_element_provider_simple =
+        Microsoft::WRL::Make<MockIRawElementProviderSimple>();
 
     EXPECT_HRESULT_FAILED(item_container_provider->FindItemByProperty(
         invalid_element_provider_simple.Get(),
@@ -112,7 +113,7 @@ TEST_F(AXFragmentRootTest, UIAFindItemByPropertyUniqueId) {
   // Fetch the AxUniqueId of "root", and verify we can retrieve its
   // corresponding IRawElementProviderSimple through FindItemByProperty().
   {
-    unique_id = AXPlatformNodeFromNode(GetRootAsAXNode())->GetUniqueId();
+    unique_id = AXPlatformNodeFromNode(GetRoot())->GetUniqueId();
     unique_id_variant.Set(
         SysAllocString(base::NumberToWString(-unique_id).c_str()));
 
@@ -297,7 +298,7 @@ TEST_F(AXFragmentRootTest, TestUIAElementProviderFromPoint) {
   Init(root_data, element1_data, element2_data);
   InitFragmentRoot();
 
-  AXNode* root_node = GetRootAsAXNode();
+  AXNode* root_node = GetRoot();
   AXNode* element1_node = root_node->children()[0];
   AXNode* element2_node = root_node->children()[1];
 
@@ -345,7 +346,7 @@ TEST_F(AXFragmentRootTest, TestUIAGetFocus) {
   Init(root_data, element1_data, element2_data);
   InitFragmentRoot();
 
-  AXNode* root_node = GetRootAsAXNode();
+  AXNode* root_node = GetRoot();
   AXNode* element1_node = root_node->children()[0];
   AXNode* element2_node = root_node->children()[1];
 
@@ -420,10 +421,10 @@ TEST_F(AXFragmentRootTest, TestGetChildCount) {
   InitFragmentRoot();
 
   AXPlatformNodeDelegate* fragment_root = ax_fragment_root_.get();
-  EXPECT_EQ(1, fragment_root->GetChildCount());
+  EXPECT_EQ(1u, fragment_root->GetChildCount());
 
   test_fragment_root_delegate_->child_ = nullptr;
-  EXPECT_EQ(0, fragment_root->GetChildCount());
+  EXPECT_EQ(0u, fragment_root->GetChildCount());
 }
 
 TEST_F(AXFragmentRootTest, TestChildAtIndex) {
@@ -434,7 +435,7 @@ TEST_F(AXFragmentRootTest, TestChildAtIndex) {
   InitFragmentRoot();
 
   gfx::NativeViewAccessible native_view_accessible =
-      AXPlatformNodeFromNode(GetRootAsAXNode())->GetNativeViewAccessible();
+      AXPlatformNodeFromNode(GetRoot())->GetNativeViewAccessible();
   AXPlatformNodeDelegate* fragment_root = ax_fragment_root_.get();
   EXPECT_EQ(native_view_accessible, fragment_root->ChildAtIndex(0));
   EXPECT_EQ(nullptr, fragment_root->ChildAtIndex(1));
@@ -454,7 +455,7 @@ TEST_F(AXFragmentRootTest, TestGetParent) {
   EXPECT_EQ(nullptr, fragment_root->GetParent());
 
   gfx::NativeViewAccessible native_view_accessible =
-      AXPlatformNodeFromNode(GetRootAsAXNode())->GetNativeViewAccessible();
+      AXPlatformNodeFromNode(GetRoot())->GetNativeViewAccessible();
   test_fragment_root_delegate_->parent_ = native_view_accessible;
   EXPECT_EQ(native_view_accessible, fragment_root->GetParent());
 }
@@ -521,37 +522,37 @@ TEST_F(AXFragmentRootTest, TestUIAMultipleFragmentRoots) {
   //     / \       / \
   //   U6---U7   U8---U9
 
-  ui::AXNodeData top_fragment_root_n1;
+  AXNodeData top_fragment_root_n1;
   top_fragment_root_n1.id = 1;
 
-  ui::AXNodeData sibling_n2;
+  AXNodeData sibling_n2;
   sibling_n2.id = 2;
 
-  ui::AXNodeData child_fragment_root_n3;
+  AXNodeData child_fragment_root_n3;
   child_fragment_root_n3.id = 3;
 
-  ui::AXNodeData sibling_n6;
+  AXNodeData sibling_n6;
   sibling_n6.id = 6;
-  ui::AXNodeData sibling_n7;
+  AXNodeData sibling_n7;
   sibling_n7.id = 7;
 
   child_fragment_root_n3.child_ids = {6, 7};
 
-  ui::AXNodeData sibling_n4;
+  AXNodeData sibling_n4;
   sibling_n4.id = 4;
 
-  ui::AXNodeData child_fragment_root_n5;
+  AXNodeData child_fragment_root_n5;
   child_fragment_root_n5.id = 5;
 
-  ui::AXNodeData sibling_n8;
+  AXNodeData sibling_n8;
   sibling_n8.id = 8;
-  ui::AXNodeData sibling_n9;
+  AXNodeData sibling_n9;
   sibling_n9.id = 9;
 
   child_fragment_root_n5.child_ids = {8, 9};
   top_fragment_root_n1.child_ids = {2, 3, 4, 5};
 
-  ui::AXTreeUpdate update;
+  AXTreeUpdate update;
   update.has_tree_data = true;
   update.root_id = top_fragment_root_n1.id;
   update.nodes = {top_fragment_root_n1,
@@ -563,12 +564,12 @@ TEST_F(AXFragmentRootTest, TestUIAMultipleFragmentRoots) {
                   child_fragment_root_n5,
                   sibling_n8,
                   sibling_n9};
-  update.tree_data.tree_id = ui::AXTreeID::CreateNewAXTreeID();
+  update.tree_data.tree_id = AXTreeID::CreateNewAXTreeID();
 
   Init(update);
   InitFragmentRoot();
 
-  AXNode* root_node = GetRootAsAXNode();
+  AXNode* root_node = GetRoot();
 
   // Set up other fragment roots
   AXNode* child_fragment_root_n3_node = root_node->children()[1];
@@ -706,6 +707,164 @@ TEST_F(AXFragmentRootTest, TestFragmentRootMap) {
                          gfx::kMockAcceleratedWidget));
   EXPECT_EQ(nullptr, AXFragmentRootWin::GetFragmentRootParentOf(
                          GetRootIAccessible().Get()));
+}
+
+TEST_F(AXFragmentRootTest, DetectEventListenersForEvents) {
+  AXNodeData root_data;
+  root_data.id = 1;
+
+  Init(root_data);
+  InitFragmentRoot();
+
+  ASSERT_NE(ax_fragment_root_, nullptr);
+
+  ComPtr<IRawElementProviderAdviseEvents> provider_advise_events;
+  ax_fragment_root_->GetNativeViewAccessible()->QueryInterface(
+      IID_PPV_ARGS(&provider_advise_events));
+
+  // We start with no event listener.
+  EXPECT_FALSE(
+      ax_fragment_root_->HasEventListenerForEvent(UIA_Invoke_InvokedEventId));
+  EXPECT_FALSE(
+      ax_fragment_root_->HasEventListenerForEvent(UIA_MenuOpenedEventId));
+
+  // Then we add one for the UIA_Invoke_InvokedEventId event.
+  provider_advise_events->AdviseEventAdded(UIA_Invoke_InvokedEventId,
+                                           /*property_ids=*/nullptr);
+
+  EXPECT_TRUE(
+      ax_fragment_root_->HasEventListenerForEvent(UIA_Invoke_InvokedEventId));
+  EXPECT_FALSE(
+      ax_fragment_root_->HasEventListenerForEvent(UIA_MenuOpenedEventId));
+
+  // Then we add a second one for UIA_Invoke_InvokedEventId and add a first one
+  // for UIA_MenuOpenedEventId.
+  provider_advise_events->AdviseEventAdded(UIA_Invoke_InvokedEventId,
+                                           /*property_ids=*/nullptr);
+  provider_advise_events->AdviseEventAdded(UIA_MenuOpenedEventId,
+                                           /*property_ids=*/nullptr);
+
+  EXPECT_TRUE(
+      ax_fragment_root_->HasEventListenerForEvent(UIA_Invoke_InvokedEventId));
+  EXPECT_TRUE(
+      ax_fragment_root_->HasEventListenerForEvent(UIA_MenuOpenedEventId));
+
+  // Then we remove one of each, leaving us with only one listener for
+  // UIA_Invoke_InvokedEventId.
+  provider_advise_events->AdviseEventRemoved(UIA_Invoke_InvokedEventId,
+                                             /*property_ids=*/nullptr);
+  provider_advise_events->AdviseEventRemoved(UIA_MenuOpenedEventId,
+                                             /*property_ids=*/nullptr);
+
+  EXPECT_TRUE(
+      ax_fragment_root_->HasEventListenerForEvent(UIA_Invoke_InvokedEventId));
+  EXPECT_FALSE(
+      ax_fragment_root_->HasEventListenerForEvent(UIA_MenuOpenedEventId));
+
+  // Finally, we remove the last listener.
+  provider_advise_events->AdviseEventRemoved(UIA_Invoke_InvokedEventId,
+                                             /*property_ids=*/nullptr);
+
+  EXPECT_FALSE(
+      ax_fragment_root_->HasEventListenerForEvent(UIA_Invoke_InvokedEventId));
+  EXPECT_FALSE(
+      ax_fragment_root_->HasEventListenerForEvent(UIA_MenuOpenedEventId));
+}
+
+TEST_F(AXFragmentRootTest, DetectEventListenersForProperties) {
+  AXNodeData root_data;
+  root_data.id = 1;
+
+  Init(root_data);
+  InitFragmentRoot();
+
+  ASSERT_NE(ax_fragment_root_, nullptr);
+
+  ComPtr<IRawElementProviderAdviseEvents> provider_advise_events;
+  ax_fragment_root_->GetNativeViewAccessible()->QueryInterface(
+      IID_PPV_ARGS(&provider_advise_events));
+
+  // We start with no property listener.
+  EXPECT_FALSE(
+      ax_fragment_root_->HasEventListenerForProperty(UIA_NamePropertyId));
+  EXPECT_FALSE(ax_fragment_root_->HasEventListenerForProperty(
+      UIA_ControlTypePropertyId));
+
+  // Create a SAFEARRAY with property IDs of size 2.
+  base::win::ScopedSafearray property_ids(
+      ::SafeArrayCreateVector(VT_I4, 0, /*cElements=*/2));
+
+  // Put properties in the SAFEARRAY.
+  {
+    ASSERT_OK_AND_ASSIGN(auto lock, property_ids.CreateLockScope<VT_I4>());
+    lock[0] = UIA_NamePropertyId;
+    lock[1] = UIA_ControlTypePropertyId;
+  }
+
+  // Add a listener for the properties.
+  provider_advise_events->AdviseEventAdded(UIA_AutomationPropertyChangedEventId,
+                                           property_ids.Get());
+
+  EXPECT_TRUE(
+      ax_fragment_root_->HasEventListenerForProperty(UIA_NamePropertyId));
+  EXPECT_TRUE(ax_fragment_root_->HasEventListenerForProperty(
+      UIA_ControlTypePropertyId));
+
+  // Remove the listener for one property by creating a SAFEARRAY with that
+  // single property.
+  base::win::ScopedSafearray single_property_ids(
+      ::SafeArrayCreateVector(VT_I4, 0, /*cElements=*/1));
+
+  {
+    ASSERT_OK_AND_ASSIGN(auto lock,
+                         single_property_ids.CreateLockScope<VT_I4>());
+    lock[0] = UIA_NamePropertyId;
+  }
+
+  provider_advise_events->AdviseEventRemoved(
+      UIA_AutomationPropertyChangedEventId, single_property_ids.Get());
+
+  EXPECT_FALSE(
+      ax_fragment_root_->HasEventListenerForProperty(UIA_NamePropertyId));
+  EXPECT_TRUE(ax_fragment_root_->HasEventListenerForProperty(
+      UIA_ControlTypePropertyId));
+
+  // Remove the listener for the remaining property.
+  provider_advise_events->AdviseEventRemoved(
+      UIA_AutomationPropertyChangedEventId, property_ids.Get());
+
+  EXPECT_FALSE(
+      ax_fragment_root_->HasEventListenerForProperty(UIA_NamePropertyId));
+  EXPECT_FALSE(ax_fragment_root_->HasEventListenerForProperty(
+      UIA_ControlTypePropertyId));
+}
+
+TEST_F(AXFragmentRootTest, EventListenersCountDisabledWhenFlagIsOff) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(::features::kUiaEventOptimization);
+
+  AXNodeData root_data;
+  root_data.id = 1;
+
+  Init(root_data);
+  InitFragmentRoot();
+
+  ASSERT_NE(ax_fragment_root_, nullptr);
+
+  ComPtr<IRawElementProviderAdviseEvents> provider_advise_events;
+  EXPECT_EQ(ax_fragment_root_->GetNativeViewAccessible()->QueryInterface(
+                IID_PPV_ARGS(&provider_advise_events)),
+            E_NOINTERFACE);
+
+  AXPlatformNodeWin* platform_node =
+      static_cast<AXPlatformNodeWin*>(AXPlatformNodeFromNode(GetRoot()));
+  ASSERT_NE(platform_node, nullptr);
+
+  // Despite not having any event listener, we should return true when the flag
+  // is off.
+  EXPECT_TRUE(platform_node->HasEventListenerForProperty(UIA_NamePropertyId));
+  EXPECT_TRUE(
+      platform_node->HasEventListenerForProperty(UIA_ControlTypePropertyId));
 }
 
 }  // namespace ui

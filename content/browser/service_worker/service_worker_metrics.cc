@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,18 +7,17 @@
 #include <limits>
 #include <string>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
-#include "base/task/post_task.h"
 #include "base/time/time.h"
-#include "content/browser/service_worker/embedded_worker_status.h"
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/common/content_client.h"
+#include "third_party/blink/public/common/service_worker/embedded_worker_status.h"
 
 namespace content {
 
@@ -31,7 +30,6 @@ const char* StartSituationToSuffix(
   switch (situation) {
     case ServiceWorkerMetrics::StartSituation::UNKNOWN:
       NOTREACHED();
-      return ".Unknown";
     case ServiceWorkerMetrics::StartSituation::DURING_STARTUP:
       return ".DuringStartup";
     case ServiceWorkerMetrics::StartSituation::NEW_PROCESS:
@@ -42,7 +40,6 @@ const char* StartSituationToSuffix(
       return ".ExistingReadyProcess";
   }
   NOTREACHED() << static_cast<int>(situation);
-  return ".Unknown";
 }
 
 // TODO(falken): Remove this when the associated UMA are removed.
@@ -53,7 +50,6 @@ const char* StartSituationToDeprecatedSuffix(
   switch (situation) {
     case ServiceWorkerMetrics::StartSituation::UNKNOWN:
       NOTREACHED();
-      return "_Unknown";
     case ServiceWorkerMetrics::StartSituation::DURING_STARTUP:
       return "_DuringStartup";
     case ServiceWorkerMetrics::StartSituation::NEW_PROCESS:
@@ -64,7 +60,6 @@ const char* StartSituationToDeprecatedSuffix(
       return "_ExistingReadyProcess";
   }
   NOTREACHED() << static_cast<int>(situation);
-  return "_Unknown";
 }
 
 const char* EventTypeToSuffix(ServiceWorkerMetrics::EventType event_type) {
@@ -123,6 +118,19 @@ const char* EventTypeToSuffix(ServiceWorkerMetrics::EventType event_type) {
       return "_CONTENT_DELETE";
     case ServiceWorkerMetrics::EventType::PUSH_SUBSCRIPTION_CHANGE:
       return "_PUSH_SUBSCRIPTION_CHANGE";
+    case ServiceWorkerMetrics::EventType::FETCH_FENCED_FRAME:
+      return "_FETCH_FENCED_FRAME";
+    case ServiceWorkerMetrics::EventType::BYPASS_MAIN_RESOURCE:
+      return "_BYPASS_MAIN_RESOURCE";
+    case ServiceWorkerMetrics::EventType::SKIP_EMPTY_FETCH_HANDLER:
+      return "_SKIP_EMPTY_FETCH_HANDLER";
+    case ServiceWorkerMetrics::EventType::
+        BYPASS_ONLY_IF_SERVICE_WORKER_NOT_STARTED:
+      return "_BYPASS_ONLY_IF_SERVICE_WORKER_NOT_STARTED";
+    case ServiceWorkerMetrics::EventType::WARM_UP:
+      return "_WARM_UP";
+    case ServiceWorkerMetrics::EventType::STATIC_ROUTER:
+      return "_STATIC_ROUTING";
   }
   return "_UNKNOWN";
 }
@@ -183,9 +191,21 @@ const char* ServiceWorkerMetrics::EventTypeToString(EventType event_type) {
       return "Content Delete";
     case EventType::PUSH_SUBSCRIPTION_CHANGE:
       return "Push Subscription Change";
+    case EventType::FETCH_FENCED_FRAME:
+      return "Fetch Fenced Frame";
+    case ServiceWorkerMetrics::EventType::BYPASS_MAIN_RESOURCE:
+      return "_BYPASS_MAIN_RESOURCE";
+    case ServiceWorkerMetrics::EventType::SKIP_EMPTY_FETCH_HANDLER:
+      return "Skip Empty Fetch Handler";
+    case ServiceWorkerMetrics::EventType::
+        BYPASS_ONLY_IF_SERVICE_WORKER_NOT_STARTED:
+      return "Bypass Only If ServiceWorker Is Not Started";
+    case ServiceWorkerMetrics::EventType::WARM_UP:
+      return "Warm Up";
+    case ServiceWorkerMetrics::EventType::STATIC_ROUTER:
+      return "Static Routing";
   }
   NOTREACHED() << "Got unexpected event type: " << static_cast<int>(event_type);
-  return "error";
 }
 
 const char* ServiceWorkerMetrics::StartSituationToString(
@@ -204,37 +224,6 @@ const char* ServiceWorkerMetrics::StartSituationToString(
   }
   NOTREACHED() << "Got unexpected start situation: "
                << static_cast<int>(start_situation);
-  return "error";
-}
-
-ServiceWorkerMetrics::Site ServiceWorkerMetrics::SiteFromURL(const GURL& url) {
-  // TODO(falken): Plumb through ContentBrowserClient::GetMetricSuffixForURL or
-  // figure out a way to remove ServiceWorkerMetrics::Site entirely instead of
-  // hardcoding sites in //content.
-
-  // This inaccurately matches google.example.com, see the TODO above.
-  static const char google_like_scope_prefix[] = "https://www.google.";
-  static const char ntp_scope_path[] = "/_/chrome/";
-  if (base::StartsWith(url.spec(), google_like_scope_prefix,
-                       base::CompareCase::INSENSITIVE_ASCII) &&
-      base::StartsWith(url.path(), ntp_scope_path,
-                       base::CompareCase::SENSITIVE)) {
-    return ServiceWorkerMetrics::Site::NEW_TAB_PAGE;
-  }
-
-  const base::StringPiece host = url.host_piece();
-  if (host == "plus.google.com")
-    return ServiceWorkerMetrics::Site::PLUS;
-  if (host == "inbox.google.com")
-    return ServiceWorkerMetrics::Site::INBOX;
-  if (host == "docs.google.com")
-    return ServiceWorkerMetrics::Site::DOCS;
-  if (host == "drive.google.com") {
-    // TODO(falken): This should not be DOCS but historically we logged them
-    // together.
-    return ServiceWorkerMetrics::Site::DOCS;
-  }
-  return ServiceWorkerMetrics::Site::OTHER;
 }
 
 void ServiceWorkerMetrics::CountReadResponseResult(
@@ -247,15 +236,6 @@ void ServiceWorkerMetrics::CountWriteResponseResult(
     ServiceWorkerMetrics::WriteResponseResult result) {
   UMA_HISTOGRAM_ENUMERATION("ServiceWorker.DiskCache.WriteResponseResult",
                             result, NUM_WRITE_RESPONSE_RESULT_TYPES);
-}
-
-void ServiceWorkerMetrics::CountControlledPageLoad(Site site,
-                                                   bool is_main_frame_load) {
-  DCHECK_NE(site, Site::OTHER);
-  UMA_HISTOGRAM_ENUMERATION("ServiceWorker.PageLoad", site);
-  if (is_main_frame_load) {
-    UMA_HISTOGRAM_ENUMERATION("ServiceWorker.MainFramePageLoad", site);
-  }
 }
 
 void ServiceWorkerMetrics::RecordStartInstalledWorkerStatus(
@@ -273,12 +253,25 @@ void ServiceWorkerMetrics::RecordStartInstalledWorkerStatus(
   }
 }
 
+void ServiceWorkerMetrics::RecordRunAfterStartWorkerStatus(
+    blink::EmbeddedWorkerStatus running_status,
+    EventType purpose) {
+  UMA_HISTOGRAM_ENUMERATION("ServiceWorker.MaybeStartWorker.RunningStatus",
+                            running_status);
+  base::UmaHistogramEnumeration(
+      base::StrCat({"ServiceWorker.MaybeStartWorker.RunningStatusByPurpose",
+                    EventTypeToSuffix(purpose)}),
+      running_status);
+  UMA_HISTOGRAM_ENUMERATION("ServiceWorker.MaybeStartWorker.Purpose", purpose);
+}
+
 void ServiceWorkerMetrics::RecordStartWorkerTime(base::TimeDelta time,
                                                  bool is_installed,
                                                  StartSituation start_situation,
                                                  EventType purpose) {
   if (is_installed) {
-    UMA_HISTOGRAM_MEDIUM_TIMES("ServiceWorker.StartWorker.Time", time);
+    DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES("ServiceWorker.StartWorker.Time",
+                                          time);
     base::UmaHistogramMediumTimes(
         base::StrCat({"ServiceWorker.StartWorker.Time",
                       StartSituationToDeprecatedSuffix(start_situation)}),
@@ -288,17 +281,14 @@ void ServiceWorkerMetrics::RecordStartWorkerTime(base::TimeDelta time,
                       StartSituationToDeprecatedSuffix(start_situation),
                       EventTypeToSuffix(purpose)}),
         time);
+    base::UmaHistogramMediumTimes(
+        base::StrCat(
+            {"ServiceWorker.StartWorker.Time_Any", EventTypeToSuffix(purpose)}),
+        time);
   } else {
-    UMA_HISTOGRAM_MEDIUM_TIMES("ServiceWorker.StartNewWorker.Time", time);
+    DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES("ServiceWorker.StartNewWorker.Time",
+                                          time);
   }
-}
-
-void ServiceWorkerMetrics::RecordWorkerStopped(StopStatus status) {
-  UMA_HISTOGRAM_ENUMERATION("ServiceWorker.WorkerStopped", status);
-}
-
-void ServiceWorkerMetrics::RecordStopWorkerTime(base::TimeDelta time) {
-  UMA_HISTOGRAM_MEDIUM_TIMES("ServiceWorker.StopWorker.Time", time);
 }
 
 void ServiceWorkerMetrics::RecordActivateEventStatus(
@@ -333,7 +323,7 @@ void ServiceWorkerMetrics::RecordEventDuration(EventType event,
                                                uint32_t fetch_count) {
   switch (event) {
     case EventType::ACTIVATE:
-      UMA_HISTOGRAM_MEDIUM_TIMES("ServiceWorker.ActivateEvent.Time", time);
+      base::UmaHistogramMediumTimes("ServiceWorker.ActivateEvent.Time2", time);
       break;
     case EventType::INSTALL:
       base::UmaHistogramMediumTimes("ServiceWorker.InstallEvent.All.Time",
@@ -343,90 +333,62 @@ void ServiceWorkerMetrics::RecordEventDuration(EventType event,
             "ServiceWorker.InstallEvent.WithFetch.Time", time);
       }
       break;
+    case EventType::MESSAGE:
+      DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES(
+          "ServiceWorker.ExtendableMessageEvent.Time", time);
+      break;
     case EventType::FETCH_MAIN_FRAME:
     case EventType::FETCH_SUB_FRAME:
     case EventType::FETCH_SHARED_WORKER:
     case EventType::FETCH_SUB_RESOURCE:
+    case EventType::FETCH_FENCED_FRAME:
       if (was_handled) {
-        UMA_HISTOGRAM_MEDIUM_TIMES("ServiceWorker.FetchEvent.HasResponse.Time",
-                                   time);
+        DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES(
+            "ServiceWorker.FetchEvent.HasResponse.Time", time);
       } else {
-        UMA_HISTOGRAM_MEDIUM_TIMES("ServiceWorker.FetchEvent.Fallback.Time",
-                                   time);
+        DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES(
+            "ServiceWorker.FetchEvent.Fallback.Time", time);
       }
       break;
-    case EventType::FETCH_WAITUNTIL:
-      UMA_HISTOGRAM_MEDIUM_TIMES("ServiceWorker.FetchEvent.WaitUntil.Time",
-                                 time);
-      break;
-    case EventType::SYNC:
-      UMA_HISTOGRAM_MEDIUM_TIMES("ServiceWorker.BackgroundSyncEvent.Time",
-                                 time);
-      break;
-    case EventType::NOTIFICATION_CLICK:
-      UMA_HISTOGRAM_MEDIUM_TIMES("ServiceWorker.NotificationClickEvent.Time",
-                                 time);
-      break;
-    case EventType::NOTIFICATION_CLOSE:
-      UMA_HISTOGRAM_MEDIUM_TIMES("ServiceWorker.NotificationCloseEvent.Time",
-                                 time);
-      break;
-    case EventType::PUSH:
-      UMA_HISTOGRAM_MEDIUM_TIMES("ServiceWorker.PushEvent.Time", time);
-      break;
-    case EventType::MESSAGE:
-      UMA_HISTOGRAM_MEDIUM_TIMES("ServiceWorker.ExtendableMessageEvent.Time",
-                                 time);
-      break;
-    case EventType::EXTERNAL_REQUEST:
-      UMA_HISTOGRAM_MEDIUM_TIMES("ServiceWorker.ExternalRequest.Time", time);
-      break;
     case EventType::PAYMENT_REQUEST:
-      UMA_HISTOGRAM_MEDIUM_TIMES("ServiceWorker.PaymentRequestEvent.Time",
-                                 time);
-      break;
-    case EventType::BACKGROUND_FETCH_ABORT:
-      UMA_HISTOGRAM_MEDIUM_TIMES("ServiceWorker.BackgroundFetchAbortEvent.Time",
-                                 time);
-      break;
-    case EventType::BACKGROUND_FETCH_CLICK:
-      UMA_HISTOGRAM_MEDIUM_TIMES("ServiceWorker.BackgroundFetchClickEvent.Time",
-                                 time);
-      break;
-    case EventType::BACKGROUND_FETCH_FAIL:
-      UMA_HISTOGRAM_MEDIUM_TIMES("ServiceWorker.BackgroundFetchFailEvent.Time",
-                                 time);
-      break;
-    case EventType::BACKGROUND_FETCH_SUCCESS:
-      UMA_HISTOGRAM_MEDIUM_TIMES(
-          "ServiceWorker.BackgroundFetchSuccessEvent.Time", time);
-      break;
-    case EventType::CAN_MAKE_PAYMENT:
-      UMA_HISTOGRAM_MEDIUM_TIMES("ServiceWorker.CanMakePaymentEvent.Time",
-                                 time);
-      break;
-    case EventType::ABORT_PAYMENT:
-      UMA_HISTOGRAM_MEDIUM_TIMES("ServiceWorker.AbortPaymentEvent.Time", time);
-      break;
-    case EventType::COOKIE_CHANGE:
-      UMA_HISTOGRAM_MEDIUM_TIMES("ServiceWorker.CookieChangeEvent.Time", time);
+      DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES(
+          "ServiceWorker.PaymentRequestEvent.Time", time);
       break;
     case EventType::PERIODIC_SYNC:
-      UMA_HISTOGRAM_MEDIUM_TIMES(
+      DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES(
           "ServiceWorker.PeriodicBackgroundSyncEvent.Time", time);
       break;
+    case EventType::SYNC:
+    case EventType::NOTIFICATION_CLICK:
+    case EventType::PUSH:
+    case EventType::NOTIFICATION_CLOSE:
+    case EventType::FETCH_WAITUNTIL:
+    case EventType::EXTERNAL_REQUEST:
+    case EventType::BACKGROUND_FETCH_ABORT:
+    case EventType::BACKGROUND_FETCH_CLICK:
+    case EventType::BACKGROUND_FETCH_FAIL:
+    case EventType::CAN_MAKE_PAYMENT:
+    case EventType::ABORT_PAYMENT:
+    case EventType::COOKIE_CHANGE:
+    case EventType::BACKGROUND_FETCH_SUCCESS:
     case EventType::CONTENT_DELETE:
-      UMA_HISTOGRAM_MEDIUM_TIMES("ServiceWorker.ContentDeleteEvent.Time", time);
-      break;
     case EventType::PUSH_SUBSCRIPTION_CHANGE:
-      UMA_HISTOGRAM_MEDIUM_TIMES(
-          "ServiceWorker.PushSubscriptionChangeEvent.Time", time);
+    case EventType::WARM_UP:
+      // Do nothing: the warm up should not be sent as an event.
       break;
     case EventType::NAVIGATION_HINT:
     // The navigation hint should not be sent as an event.
+    case EventType::BYPASS_MAIN_RESOURCE:
+    // The bypass main resource should not be sent as an event.
+    case EventType::SKIP_EMPTY_FETCH_HANDLER:
+    // The skip empty fetch handler should not be sent as an event.
+    case EventType::BYPASS_ONLY_IF_SERVICE_WORKER_NOT_STARTED:
+    // The bypass_only_if_service_worker_not_started should not be sent as an
+    // event.
+    case EventType::STATIC_ROUTER:
+    // Static Routing should not be sent as an event.
     case EventType::UNKNOWN:
       NOTREACHED() << "Invalid event type";
-      break;
   }
 }
 
@@ -459,45 +421,46 @@ void ServiceWorkerMetrics::RecordStartWorkerTiming(const StartTimes& times,
   RecordStartWorkerTimingClockConsistency(CrossProcessTimeDelta::NORMAL);
 
   // Total duration.
-  UMA_HISTOGRAM_MEDIUM_TIMES("ServiceWorker.StartTiming.Duration",
-                             times.local_end - times.local_start);
+  DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES("ServiceWorker.StartTiming.Duration",
+                                        times.local_end - times.local_start);
   base::UmaHistogramMediumTimes(
       base::StrCat({"ServiceWorker.StartTiming.Duration",
                     StartSituationToSuffix(situation)}),
       times.local_end - times.local_start);
 
   // SentStartWorker milestone.
-  UMA_HISTOGRAM_MEDIUM_TIMES("ServiceWorker.StartTiming.StartToSentStartWorker",
-                             times.local_start_worker_sent - times.local_start);
+  DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES(
+      "ServiceWorker.StartTiming.StartToSentStartWorker",
+      times.local_start_worker_sent - times.local_start);
 
   // ReceivedStartWorker milestone.
-  UMA_HISTOGRAM_MEDIUM_TIMES(
+  DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES(
       "ServiceWorker.StartTiming.StartToReceivedStartWorker",
       times.remote_start_worker_received - times.local_start);
-  UMA_HISTOGRAM_MEDIUM_TIMES(
+  DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES(
       "ServiceWorker.StartTiming.SentStartWorkerToReceivedStartWorker",
       times.remote_start_worker_received - times.local_start_worker_sent);
 
   // ScriptEvaluationStart milestone.
-  UMA_HISTOGRAM_MEDIUM_TIMES(
+  DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES(
       "ServiceWorker.StartTiming.StartToScriptEvaluationStart",
       times.remote_script_evaluation_start - times.local_start);
-  UMA_HISTOGRAM_MEDIUM_TIMES(
+  DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES(
       "ServiceWorker.StartTiming.ReceivedStartWorkerToScriptEvaluationStart",
       times.remote_script_evaluation_start -
           times.remote_start_worker_received);
 
   // ScriptEvaluationEnd milestone.
-  UMA_HISTOGRAM_MEDIUM_TIMES(
+  DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES(
       "ServiceWorker.StartTiming.StartToScriptEvaluationEnd",
       times.remote_script_evaluation_end - times.local_start);
-  UMA_HISTOGRAM_MEDIUM_TIMES(
+  DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES(
       "ServiceWorker.StartTiming.ScriptEvaluationStartToScriptEvaluationEnd",
       times.remote_script_evaluation_end -
           times.remote_script_evaluation_start);
 
   // End milestone.
-  UMA_HISTOGRAM_MEDIUM_TIMES(
+  DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES(
       "ServiceWorker.StartTiming.ScriptEvaluationEndToEnd",
       times.local_end - times.remote_script_evaluation_end);
 }
@@ -507,87 +470,60 @@ void ServiceWorkerMetrics::RecordStartWorkerTimingClockConsistency(
   UMA_HISTOGRAM_ENUMERATION("ServiceWorker.StartTiming.ClockConsistency", type);
 }
 
-void ServiceWorkerMetrics::RecordStartStatusAfterFailure(
-    int failure_count,
-    blink::ServiceWorkerStatusCode status) {
-  DCHECK_GT(failure_count, 0);
-
-  if (status == blink::ServiceWorkerStatusCode::kOk) {
-    UMA_HISTOGRAM_COUNTS_1000("ServiceWorker.StartWorker.FailureStreakEnded",
-                              failure_count);
-  } else if (failure_count < std::numeric_limits<int>::max()) {
-    UMA_HISTOGRAM_COUNTS_1000("ServiceWorker.StartWorker.FailureStreak",
-                              failure_count + 1);
-  }
-
-  if (failure_count == 1) {
-    UMA_HISTOGRAM_ENUMERATION("ServiceWorker.StartWorker.AfterFailureStreak_1",
-                              status);
-  } else if (failure_count == 2) {
-    UMA_HISTOGRAM_ENUMERATION("ServiceWorker.StartWorker.AfterFailureStreak_2",
-                              status);
-  } else if (failure_count == 3) {
-    UMA_HISTOGRAM_ENUMERATION("ServiceWorker.StartWorker.AfterFailureStreak_3",
-                              status);
-  }
-}
-
-void ServiceWorkerMetrics::RecordRuntime(base::TimeDelta time) {
-  // Start at 1 second since we expect service worker to last at least this
-  // long: the update timer and idle timeout timer run on the order of seconds.
-  constexpr base::TimeDelta kMin = base::TimeDelta::FromSeconds(1);
-  // End at 1 day since service workers can conceivably run as long as the the
-  // browser is open; we have to cap somewhere.
-  constexpr base::TimeDelta kMax = base::TimeDelta::FromDays(1);
-  // Set the bucket count to 50 since that is the recommended value for all
-  // histograms.
-  const int kBucketCount = 50;
-
-  UMA_HISTOGRAM_CUSTOM_TIMES("ServiceWorker.Runtime", time, kMin, kMax,
-                             kBucketCount);
-}
-
-void ServiceWorkerMetrics::RecordStartServiceWorkerForNavigationHintResult(
-    StartServiceWorkerForNavigationHintResult result) {
-  UMA_HISTOGRAM_ENUMERATION("ServiceWorker.StartForNavigationHint.Result",
-                            result);
-}
-
-void ServiceWorkerMetrics::RecordLookupRegistrationTime(
-    blink::ServiceWorkerStatusCode status,
-    base::TimeDelta duration) {
-  if (status == blink::ServiceWorkerStatusCode::kOk) {
-    UMA_HISTOGRAM_TIMES(
-        "ServiceWorker.LookupRegistration.MainResource.Time.Exists", duration);
-  } else if (status == blink::ServiceWorkerStatusCode::kErrorNotFound) {
-    UMA_HISTOGRAM_TIMES(
-        "ServiceWorker.LookupRegistration.MainResource.Time.DoesNotExist",
-        duration);
+void ServiceWorkerMetrics::RecordSkipServiceWorkerOnNavigation(
+    bool skip_service_worker) {
+  static bool is_first_call = true;
+  if (is_first_call) {
+    is_first_call = false;
+    if (!GetContentClient()->browser()->IsBrowserStartupComplete()) {
+      base::UmaHistogramBoolean(
+          "ServiceWorker.OnBrowserStartup.SkipServiceWorkerOnFirstNavigation",
+          skip_service_worker);
+    }
   } else {
-    UMA_HISTOGRAM_TIMES(
-        "ServiceWorker.LookupRegistration.MainResource.Time.Error", duration);
-  }
-}
-
-void ServiceWorkerMetrics::RecordOfflineCapableReason(
-    blink::ServiceWorkerStatusCode status,
-    int status_code) {
-  if (status == blink::ServiceWorkerStatusCode::kErrorTimeout) {
-    base::UmaHistogramEnumeration("ServiceWorker.OfflineCapable.Reason",
-                                  OfflineCapableReason::kTimeout);
-    return;
-  } else if (status == blink::ServiceWorkerStatusCode::kOk) {
-    if (200 <= status_code && status_code <= 299) {
-      base::UmaHistogramEnumeration("ServiceWorker.OfflineCapable.Reason",
-                                    OfflineCapableReason::kSuccess);
-      return;
-    } else if (300 <= status_code && status_code <= 399) {
-      base::UmaHistogramEnumeration("ServiceWorker.OfflineCapable.Reason",
-                                    OfflineCapableReason::kRedirect);
-      return;
+    if (GetContentClient()->browser()->IsBrowserStartupComplete()) {
+      base::UmaHistogramBoolean(
+          "ServiceWorker.SkipCallingFindRegistrationForClientUrl",
+          skip_service_worker);
     }
   }
-  NOTREACHED();
+}
+
+void ServiceWorkerMetrics::RecordFindRegistrationForClientUrlTime(
+    base::TimeDelta time) {
+  static bool is_first_call = true;
+  if (is_first_call) {
+    is_first_call = false;
+    if (!GetContentClient()->browser()->IsBrowserStartupComplete()) {
+      base::UmaHistogramMediumTimes(
+          "ServiceWorker.OnBrowserStartup.FirstFindRegistrationForClientUrl."
+          "Time",
+          time);
+    }
+  } else {
+    if (GetContentClient()->browser()->IsBrowserStartupComplete()) {
+      base::UmaHistogramMediumTimes(
+          "ServiceWorker.FindRegistrationForClientUrl.Time", time);
+    }
+  }
+}
+
+void ServiceWorkerMetrics::RecordMainScriptRequestValidationResult(
+    ServiceWorkerMainScriptRequestValidationResult result) {
+  base::UmaHistogramEnumeration("ServiceWorker.MainScriptUrlValidationResult",
+                                result);
+}
+
+void ServiceWorkerMetrics::RecordMessageDispatchContextValidationResult(
+    ServiceWorkerMessageDispatchContextValidationResult result) {
+  base::UmaHistogramEnumeration(
+      "ServiceWorker.MessageDispatch.ContextValidation", result);
+}
+
+void ServiceWorkerMetrics::RecordStartWorkerContextValidationDifference(
+    ServiceWorkerStartWorkerContextValidationDifference result) {
+  base::UmaHistogramEnumeration(
+      "ServiceWorker.StartWorker.ContextValidationDifference", result);
 }
 
 }  // namespace content

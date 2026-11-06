@@ -1,8 +1,10 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/network/public/cpp/default_credentials_mojom_traits.h"
+
+#include "base/notreached.h"
 
 namespace mojo {
 
@@ -17,22 +19,19 @@ EnumTraits<network::mojom::DefaultCredentials,
       return network::mojom::DefaultCredentials::DISALLOW_DEFAULT_CREDENTIALS;
   }
   NOTREACHED();
-  return network::mojom::DefaultCredentials::ALLOW_DEFAULT_CREDENTIALS;
 }
 
-bool EnumTraits<network::mojom::DefaultCredentials,
-                net::HttpAuthPreferences::DefaultCredentials>::
-    FromMojom(network::mojom::DefaultCredentials input,
-              net::HttpAuthPreferences::DefaultCredentials* output) {
+net::HttpAuthPreferences::DefaultCredentials
+EnumTraits<network::mojom::DefaultCredentials,
+           net::HttpAuthPreferences::DefaultCredentials>::
+    FromMojom(network::mojom::DefaultCredentials input) {
   switch (input) {
     case network::mojom::DefaultCredentials::ALLOW_DEFAULT_CREDENTIALS:
-      *output = net::HttpAuthPreferences::ALLOW_DEFAULT_CREDENTIALS;
-      return true;
+      return net::HttpAuthPreferences::ALLOW_DEFAULT_CREDENTIALS;
     case network::mojom::DefaultCredentials::DISALLOW_DEFAULT_CREDENTIALS:
-      *output = net::HttpAuthPreferences::DISALLOW_DEFAULT_CREDENTIALS;
-      return true;
+      return net::HttpAuthPreferences::DISALLOW_DEFAULT_CREDENTIALS;
   }
-  return false;
+  NOTREACHED();
 }
 
 }  // namespace mojo

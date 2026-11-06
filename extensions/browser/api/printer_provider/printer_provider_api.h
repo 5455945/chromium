@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,11 @@
 
 #include <string>
 
-#include "base/callback_forward.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback_forward.h"
+#include "base/values.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "extensions/common/extension_id.h"
 #include "services/device/public/mojom/usb_device.mojom.h"
-
-namespace base {
-class DictionaryValue;
-class ListValue;
-class Value;
-}
 
 namespace content {
 class BrowserContext;
@@ -33,19 +28,20 @@ namespace extensions {
 class PrinterProviderAPI : public KeyedService {
  public:
   using GetPrintersCallback =
-      base::RepeatingCallback<void(const base::ListValue& printers, bool done)>;
+      base::RepeatingCallback<void(base::ListValue printers, bool done)>;
   using GetCapabilityCallback =
-      base::OnceCallback<void(const base::DictionaryValue& capability)>;
+      base::OnceCallback<void(const base::DictValue capability)>;
   using PrintCallback = base::OnceCallback<void(const base::Value& error)>;
   using GetPrinterInfoCallback =
-      base::OnceCallback<void(const base::DictionaryValue& printer_info)>;
+      base::OnceCallback<void(const base::DictValue printer_info)>;
 
-  static PrinterProviderAPI* Create(content::BrowserContext* context);
+  static std::unique_ptr<PrinterProviderAPI> Create(
+      content::BrowserContext* context);
 
   // Returns generic error string for print request.
   static std::string GetDefaultPrintError();
 
-  ~PrinterProviderAPI() override {}
+  ~PrinterProviderAPI() override = default;
 
   // Requests list of supported printers from extensions implementing
   // chrome.printerProvider API. It dispatches
@@ -61,13 +57,13 @@ class PrinterProviderAPI : public KeyedService {
   virtual void DispatchGetPrintersRequested(
       const GetPrintersCallback& callback) = 0;
 
-  // Requests printer capability for a printer with id |printer_id|.
-  // |printer_id| should be one of the printer ids reported by |GetPrinters|
+  // Requests printer capability for a printer with id `printer_id`.
+  // `printer_id` should be one of the printer ids reported by `GetPrinters`
   // callback.
   // It dispatches chrome.printerProvider.onGetCapabilityRequested event
   // to the extension that manages the printer (which can be determined from
-  // |printer_id| value).
-  // |callback| is passed a dictionary value containing printer capabilities as
+  // `printer_id` value).
+  // `callback` is passed a dictionary value containing printer capabilities as
   // reported by the extension.
   virtual void DispatchGetCapabilityRequested(
       const std::string& printer_id,
@@ -76,22 +72,22 @@ class PrinterProviderAPI : public KeyedService {
   // It dispatches chrome.printerProvider.onPrintRequested event with the
   // provided print job. The event is dispatched only to the extension that
   // manages printer with id |job.printer_id|.
-  // |callback| is passed the print status returned by the extension, and it
+  // `callback` is passed the print status returned by the extension, and it
   // must not be null.
   virtual void DispatchPrintRequested(PrinterProviderPrintJob job,
                                       PrintCallback callback) = 0;
 
-  // Returns print job associated with the print request with id |request_id|
-  // for extension |extension|.
+  // Returns print job associated with the print request with id `request_id`
+  // for extension `extension`.
   // It should return NULL if the job for the request does not exist.
   virtual const PrinterProviderPrintJob* GetPrintJob(const Extension* extension,
                                                      int request_id) const = 0;
 
   // Dispatches a chrome.printerProvider.getUsbPrinterInfo event requesting
-  // information about |device_id|. The event is only dispatched to the
-  // extension identified by |extension_id|.
+  // information about `device_id`. The event is only dispatched to the
+  // extension identified by `extension_id`.
   virtual void DispatchGetUsbPrinterInfoRequested(
-      const std::string& extension_id,
+      const ExtensionId& extension_id,
       const device::mojom::UsbDeviceInfo& device,
       GetPrinterInfoCallback callback) = 0;
 };

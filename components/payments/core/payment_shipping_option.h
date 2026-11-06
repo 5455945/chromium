@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,7 +14,7 @@
 // https://w3c.github.io/browser-payment-api/#dom-paymentshippingoption
 
 namespace base {
-class DictionaryValue;
+class DictValue;
 }
 
 namespace payments {
@@ -27,12 +27,11 @@ class PaymentShippingOption {
   ~PaymentShippingOption();
 
   bool operator==(const PaymentShippingOption& other) const;
-  bool operator!=(const PaymentShippingOption& other) const;
   PaymentShippingOption& operator=(const PaymentShippingOption& other);
 
-  // Populates the properties of this PaymentShippingOption from |value|.
+  // Populates the properties of this PaymentShippingOption from |dict|.
   // Returns true if the required values are present.
-  bool FromDictionaryValue(const base::DictionaryValue& value);
+  bool FromValueDict(const base::DictValue& dict);
 
   // An identifier used to reference this PaymentShippingOption. It is unique
   // for a given PaymentRequest.

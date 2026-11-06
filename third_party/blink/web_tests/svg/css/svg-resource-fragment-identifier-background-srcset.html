@@ -1,7 +1,4 @@
 <!DOCTYPE html>
-<script>
-  window.targetScaleFactor = 2;
-</script>
 <script src="../../fast/hidpi/resources/srcset-helper.js"></script>
 <style>
   div {
@@ -9,5 +6,15 @@
     height: 100px;
   }
 </style>
+
+<!-- standard -->
+<div style="background: image-set(url(resources/fragment-identifiers.svg#red) 1x,
+                                  url(resources/fragment-identifiers.svg#green) 2x);">
+</div>
+
+<br>
+
+<!-- prefixed -->
 <div style="background: -webkit-image-set(url(resources/fragment-identifiers.svg#red) 1x,
                                           url(resources/fragment-identifiers.svg#green) 2x);">
+</div>

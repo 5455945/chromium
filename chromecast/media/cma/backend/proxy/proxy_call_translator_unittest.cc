@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "base/compiler_specific.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/test/test_simple_task_runner.h"
 #include "base/time/time.h"
@@ -28,7 +29,7 @@ ACTION_P(CompareTimestampInfos, buffer_id, timestamp) {
   EXPECT_EQ(result.buffer_id(), buffer_id);
   const int64_t micros =
       result.system_timestamp().seconds() * base::Time::kMicrosecondsPerSecond +
-      result.system_timestamp().nanos() /
+      result.system_timestamp().nanoseconds() /
           base::Time::kNanosecondsPerMicrosecond;
   EXPECT_EQ(micros, timestamp);
 }
@@ -166,7 +167,6 @@ TEST_F(ProxyCallTranslatorTest, TestExternalResume) {
   target_buffer_info.buffer_id = buffer_id;
   target_buffer_info.timestamp_micros = timestamp;
 
-  // TODO(rwkeane): Validate the duration in the ResumeAsync call.
   EXPECT_CALL(*decoder_channel_, ResumeAsync(testing::_))
       .WillOnce(
           testing::WithArgs<0>(CompareTimestampInfos(buffer_id, timestamp)));
@@ -202,8 +202,8 @@ TEST_F(ProxyCallTranslatorTest, TestExternalPushBuffer) {
   scoped_refptr<CastDecoderBufferImpl> buffer(
       new CastDecoderBufferImpl(3, StreamId::kPrimary));
   buffer->writable_data()[0] = 1;
-  buffer->writable_data()[1] = 2;
-  buffer->writable_data()[2] = 3;
+  UNSAFE_TODO(buffer->writable_data()[1]) = 2;
+  UNSAFE_TODO(buffer->writable_data()[2]) = 3;
   EXPECT_EQ(translator_.PushBuffer(buffer, 1),
             CmaBackend::BufferStatus::kBufferSuccess);
 
@@ -237,7 +237,7 @@ TEST_F(ProxyCallTranslatorTest, TestExternalSetConfig) {
   config.codec = AudioCodec::kCodecPCM;
   config.channel_layout = ChannelLayout::SURROUND_5_1;
   config.sample_format = SampleFormat::kSampleFormatPlanarS16;
-  config.bytes_per_channel = 42;
+  config.bytes_per_channel = 2;
   config.channel_number = 5;
   config.samples_per_second = 5000;
   config.extra_data = {1, 2, 3};
@@ -272,6 +272,43 @@ TEST_F(ProxyCallTranslatorTest, TestExternalSetConfig) {
             config.extra_data[1]);
   EXPECT_EQ(result.value().audio_config().extra_data()[2],
             config.extra_data[2]);
+}
+
+TEST_F(ProxyCallTranslatorTest, TestExternalSetConfigRejectsInvalidConfig) {
+  AudioConfig config;
+  config.codec = AudioCodec::kCodecPCM;
+  config.channel_layout = ChannelLayout::SURROUND_5_1;
+  config.sample_format = SampleFormat::kSampleFormatPlanarS16;
+  config.bytes_per_channel = 42;  // Invalid! (> kMaxBytesPerSample)
+  config.channel_number = 5;
+  config.samples_per_second = 5000;
+  config.extra_data = {1, 2, 3};
+  config.encryption_scheme = EncryptionScheme::kUnencrypted;
+
+  EXPECT_FALSE(translator_.SetConfig(config));
+  EXPECT_FALSE(translator_as_handler_->HasBufferedData());
+}
+
+TEST_F(ProxyCallTranslatorTest, TestExternalSetConfigRejectsUnmappedCodecAndFormat) {
+  AudioConfig config;
+  config.codec = AudioCodec::kCodecDTSXP2;
+  config.channel_layout = ChannelLayout::SURROUND_5_1;
+  config.sample_format = SampleFormat::kSampleFormatPlanarS16;
+  config.bytes_per_channel = 2;
+  config.channel_number = 5;
+  config.samples_per_second = 5000;
+
+  EXPECT_FALSE(translator_.SetConfig(config));
+  EXPECT_FALSE(translator_as_handler_->HasBufferedData());
+
+  config.codec = AudioCodec::kCodecDTSE;
+  EXPECT_FALSE(translator_.SetConfig(config));
+  EXPECT_FALSE(translator_as_handler_->HasBufferedData());
+
+  config.codec = AudioCodec::kCodecPCM;
+  config.sample_format = SampleFormat::kSampleFormatPlanarU8;
+  EXPECT_FALSE(translator_.SetConfig(config));
+  EXPECT_FALSE(translator_as_handler_->HasBufferedData());
 }
 
 TEST_F(ProxyCallTranslatorTest, TestInternalHandleInitializeFailure) {

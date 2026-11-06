@@ -1,20 +1,31 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 [
   {
     "namespace": "debugger",
-    "description": "The <code>chrome.debugger</code> API serves as an alternate transport for Chrome's <a href='https://developer.chrome.com/devtools/docs/debugger-protocol'>remote debugging protocol</a>. Use <code>chrome.debugger</code> to attach to one or more tabs to instrument network interaction, debug JavaScript, mutate the DOM and CSS, etc. Use the Debuggee <code>tabId</code> to target tabs with sendCommand and route events by <code>tabId</code> from onEvent callbacks.",
+    "description": "The <code>chrome.debugger</code> API serves as an alternate transport for Chrome's <a href='https://developer.chrome.com/devtools/docs/debugger-protocol'>remote debugging protocol</a>. Use <code>chrome.debugger</code> to attach to one or more tabs to instrument network interaction, debug JavaScript, mutate the DOM and CSS, and more. Use the $(ref:Debuggee) property <code>tabId</code> to target tabs with <code>sendCommand</code> and route events by <code>tabId</code> from <code>onEvent</code> callbacks.",
     "types": [
       {
         "id": "Debuggee",
         "type": "object",
-        "description": "Debuggee identifier. Either tabId or extensionId must be specified",
+        "description": "Debuggee identifier. Either tabId, extensionId or targetId must be specified",
         "properties": {
           "tabId": { "type": "integer", "optional": true, "description": "The id of the tab which you intend to debug." },
           "extensionId": { "type": "string", "optional": true, "description": "The id of the extension which you intend to debug. Attaching to an extension background page is only possible when the <code>--silent-debugger-extension-api</code> command-line switch is used." },
           "targetId": { "type": "string", "optional": true, "description": "The opaque id of the debug target." }
+        }
+      },
+      {
+        "id": "DebuggerSession",
+        "type": "object",
+        "description": "Debugger session identifier. One of tabId, extensionId or targetId must be specified. Additionally, an optional sessionId can be provided. If sessionId is specified for arguments sent from $(ref:onEvent), it means the event is coming from a child protocol session within the root debuggee session. If sessionId is specified when passed to $(ref:sendCommand), it targets a child protocol session within the root debuggee session.",
+        "properties": {
+          "tabId": { "type": "integer", "optional": true, "description": "The id of the tab which you intend to debug." },
+          "extensionId": { "type": "string", "optional": true, "description": "The id of the extension which you intend to debug. Attaching to an extension background page is only possible when the <code>--silent-debugger-extension-api</code> command-line switch is used." },
+          "targetId": { "type": "string", "optional": true, "description": "The opaque id of the debug target." },
+          "sessionId": { "type": "string", "optional": true, "description": "The opaque id of the Chrome DevTools Protocol session. Identifies a child session within the root session identified by tabId, extensionId or targetId." }
         }
       },
       {
@@ -63,15 +74,14 @@
             "type": "string",
             "name": "requiredVersion",
             "description": "Required debugging protocol version (\"0.1\"). One can only attach to the debuggee with matching major version and greater or equal minor version. List of the protocol versions can be obtained <a href='https://developer.chrome.com/devtools/docs/debugger-protocol'>here</a>."
-          },
-          {
-            "type": "function",
-            "name": "callback",
-            "optional": true,
-            "parameters": [],
-            "description": "Called once the attach operation succeeds or fails. Callback receives no arguments. If the attach fails, $(ref:runtime.lastError) will be set to the error message."
           }
-        ]
+        ],
+        "returns_async": {
+          "name": "callback",
+          "optional": true,
+          "parameters": [],
+          "description": "Resolves once the attach operation succeeds or fails. The promise resolves with no value. If the attach fails, the promise will be rejected."
+        }
       },
       {
         "name": "detach",
@@ -82,15 +92,14 @@
             "$ref": "Debuggee",
             "name": "target",
             "description": "Debugging target from which you want to detach."
-          },
-          {
-            "type": "function",
-            "name": "callback",
-            "optional": true,
-            "parameters": [],
-            "description": "Called once the detach operation succeeds or fails. Callback receives no arguments. If the detach fails, $(ref:runtime.lastError) will be set to the error message."
           }
-        ]
+        ],
+        "returns_async": {
+          "name": "callback",
+          "optional": true,
+          "parameters": [],
+          "description": "Resolves once the detach operation succeeds or fails. The promise resolves with no value. If the detach fails, the promise will be rejected."
+        }
       },
       {
         "name": "sendCommand",
@@ -98,7 +107,7 @@
         "description": "Sends given command to the debugging target.",
         "parameters": [
           {
-            "$ref": "Debuggee",
+            "$ref": "DebuggerSession",
             "name": "target",
             "description": "Debugging target to which you want to send the command."
           },
@@ -113,42 +122,39 @@
             "optional": true,
             "additionalProperties": { "type": "any" },
             "description": "JSON object with request parameters. This object must conform to the remote debugging params scheme for given method."
-          },
-          {
-            "type": "function",
-            "name": "callback",
-            "optional": true,
-            "parameters": [
-              {
-                "type": "object",
-                "name": "result",
-                "optional": true,
-                "additionalProperties": { "type": "any" },
-                "description": "JSON object with the response. Structure of the response varies depending on the method name and is defined by the 'returns' attribute of the command description in the remote debugging protocol."
-              }
-            ],
-            "description": "Response body. If an error occurs while posting the message, the callback will be called with no arguments and $(ref:runtime.lastError) will be set to the error message."
           }
-        ]
+        ],
+        "returns_async": {
+          "name": "callback",
+          "optional": true,
+          "parameters": [
+            {
+              "type": "object",
+              "name": "result",
+              "optional": true,
+              "additionalProperties": { "type": "any" },
+              "description": "JSON object with the response. Structure of the response varies depending on the method name and is defined by the 'returns' attribute of the command description in the remote debugging protocol."
+            }
+          ],
+          "description": "Response body. If an error occurs while posting the message, the promise will be rejected."
+        }
       },
       {
         "name": "getTargets",
         "type": "function",
         "description": "Returns the list of available debug targets.",
-        "parameters": [
-          {
-            "type": "function",
-            "name": "callback",
-            "parameters": [
-              {
-                "type": "array",
-                "name": "result",
-                "items": {"$ref": "TargetInfo"},
-                "description": "Array of TargetInfo objects corresponding to the available debug targets."
-              }
-            ]
-          }
-        ]
+        "parameters": [],
+        "returns_async": {
+          "name": "callback",
+          "parameters": [
+            {
+              "type": "array",
+              "name": "result",
+              "items": {"$ref": "TargetInfo"},
+              "description": "Array of TargetInfo objects corresponding to the available debug targets."
+            }
+          ]
+        }
       }
     ],
     "events": [
@@ -158,9 +164,9 @@
         "description": "Fired whenever debugging target issues instrumentation event.",
         "parameters": [
           {
-            "$ref": "Debuggee",
+            "$ref": "DebuggerSession",
             "name": "source",
-            "description": "The debuggee that generated this event."
+            "description": "The debugger session that generated this event."
           },
           {
             "type": "string",

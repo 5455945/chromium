@@ -1,11 +1,14 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_EXTENSIONS_DATA_DELETER_H_
 #define CHROME_BROWSER_EXTENSIONS_DATA_DELETER_H_
 
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 class Profile;
 
@@ -15,16 +18,18 @@ class Extension;
 
 class DataDeleter {
  public:
+  DataDeleter(const DataDeleter&) = delete;
+  DataDeleter& operator=(const DataDeleter&) = delete;
+
   // Starts removing data. The extension should not be running when this is
   // called. Cookies are deleted on the current thread, local storage and
   // databases/settings are deleted asynchronously on the webkit and file
   // threads, respectively. This function must be called from the UI thread.
-  // This method only starts the deletion process in a fire-and-forget fashion;
-  // the deletion will finish asynchronously.
-  static void StartDeleting(Profile* profile, const Extension* extension);
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(DataDeleter);
+  // This method starts the deletion process and triggers `done_callback` when
+  // the process has finished.
+  static void StartDeleting(Profile* profile,
+                            const Extension* extension,
+                            base::OnceClosure done_callback);
 };
 
 }  // namespace extensions

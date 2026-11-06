@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,16 @@
 
 #include <memory>
 #include <set>
+#include <utility>
 
-#include "base/macros.h"
+#include "base/containers/flat_map.h"
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
-#include "base/supports_user_data.h"
 #include "build/build_config.h"
 #include "mojo/public/cpp/system/buffer.h"
 #include "ui/aura/aura_export.h"
+#include "ui/aura/client/cursor_shape_client.h"
+#include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
 #include "ui/events/event_target.h"
 #include "ui/events/types/event_type.h"
 #include "ui/gfx/geometry/point.h"
@@ -24,8 +27,8 @@ class EventObserver;
 class GestureRecognizer;
 class PlatformEventSource;
 
-#if defined(OS_WIN) || defined(USE_X11)
-class CursorFactory;
+#if BUILDFLAG(IS_WIN)
+class WinCursorFactory;
 #endif
 }  // namespace ui
 
@@ -39,14 +42,14 @@ class EnvObserver;
 class EventObserverAdapter;
 class InputStateLookup;
 class Window;
-class WindowEventDispatcherObserver;
 class WindowOcclusionTracker;
 class WindowTreeHost;
 
 // A singleton object that tracks general state within Aura.
-class AURA_EXPORT Env : public ui::EventTarget,
-                        public base::SupportsUserData {
+class AURA_EXPORT Env : public ui::EventTarget {
  public:
+  Env(const Env&) = delete;
+  Env& operator=(const Env&) = delete;
   ~Env() override;
 
   // Creates a new Env instance.
@@ -61,15 +64,6 @@ class AURA_EXPORT Env : public ui::EventTarget,
   void AddObserver(EnvObserver* observer);
   void RemoveObserver(EnvObserver* observer);
 
-  void AddWindowEventDispatcherObserver(
-      WindowEventDispatcherObserver* observer);
-  void RemoveWindowEventDispatcherObserver(
-      WindowEventDispatcherObserver* observer);
-  base::ObserverList<WindowEventDispatcherObserver>::Unchecked&
-  window_event_dispatcher_observers() {
-    return window_event_dispatcher_observers_;
-  }
-
   EnvInputStateController* env_controller() const {
     return env_controller_.get();
   }
@@ -82,14 +76,46 @@ class AURA_EXPORT Env : public ui::EventTarget,
   // otherwise it uses |mouse_button_flags_|.
   bool IsMouseButtonDown() const;
 
+  // Returns true if the left mouse button specifically is down. This may query
+  // the native OS, otherwise it uses |mouse_button_flags_|. Prefer this over
+  // IsMouseButtonDown() when validating that a drag gesture is in progress:
+  // drags are only ever initiated with the left button.
+  bool IsLeftMouseButtonDown() const;
+
   // Gets/sets the last mouse location seen in a mouse event in the screen
   // coordinates.
   const gfx::Point& last_mouse_location() const { return last_mouse_location_; }
   void SetLastMouseLocation(const gfx::Point& last_mouse_location);
+  void SetLastTouchLocation(const aura::Window* target,
+                            const gfx::Point& last_touch_location);
 
   // Whether any touch device is currently down.
   bool is_touch_down() const { return is_touch_down_; }
-  void set_touch_down(bool value) { is_touch_down_ = value; }
+  void SetTouchDown(bool value);
+
+  // If a touch that was pressed on `window` is still down and has not already
+  // been used to start a drag, marks it as used and returns its most recent
+  // location in screen coordinates. Otherwise returns std::nullopt.
+  //
+  // Unlike is_touch_down(), this only reports touches that were dispatched to
+  // `window` itself, and each touch press can start at most one drag. This
+  // makes it suitable for validating drags requested by untrusted code (e.g. a
+  // renderer), since neither a touch elsewhere in the window (e.g. on the
+  // caption) nor a touch whose release was lost after an earlier drag (e.g.
+  // consumed by a platform drag loop) can be used.
+  std::optional<gfx::Point> ConsumeTouchForDrag(const aura::Window* window);
+
+  // If the left mouse button is down, the press was dispatched to `window`, and
+  // the press has not already been used to start a drag, marks it as used and
+  // returns true. Otherwise returns false.
+  //
+  // Unlike IsLeftMouseButtonDown(), this only reports a press that was
+  // dispatched to `window` itself (and was not a non-client press), and each
+  // press can start at most one drag. This makes it suitable for validating
+  // drags requested by untrusted code (e.g. a renderer), since neither a press
+  // elsewhere (e.g. holding the window caption to move the window) nor a press
+  // whose release was lost after an earlier drag can be used.
+  bool ConsumeLeftMousePressForDrag(const aura::Window* window);
 
   void set_context_factory(ui::ContextFactory* context_factory) {
     context_factory_ = context_factory;
@@ -110,9 +136,16 @@ class AURA_EXPORT Env : public ui::EventTarget,
   ui::GestureRecognizer* gesture_recognizer() {
     return gesture_recognizer_.get();
   }
-
   void SetGestureRecognizer(
       std::unique_ptr<ui::GestureRecognizer> gesture_recognizer);
+
+  // Returns the location of last mouse or touch event. Note that touch makes
+  // sense only during pressed state, and this will fallback to to the
+  // 'fallback' value, or mouse pointer location in the case of a missing touch
+  // state.
+  gfx::Point GetLastPointerPoint(ui::mojom::DragEventSource event_source,
+                                 aura::Window* window,
+                                 std::optional<gfx::Point> fallback);
 
   // Get WindowOcclusionTracker instance. Create one if not yet created.
   WindowOcclusionTracker* GetWindowOcclusionTracker();
@@ -132,7 +165,15 @@ class AURA_EXPORT Env : public ui::EventTarget,
   void RemoveEventObserver(ui::EventObserver* observer);
   void NotifyEventObservers(const ui::Event& event);
 
-  const std::vector<aura::WindowTreeHost*>& window_tree_hosts() const {
+  client::CursorShapeClient* cursor_shape_client() {
+    return cursor_shape_client_;
+  }
+  void set_cursor_shape_client(client::CursorShapeClient* cursor_shape_client) {
+    cursor_shape_client_ = cursor_shape_client;
+  }
+
+  const std::vector<raw_ptr<aura::WindowTreeHost, VectorExperimental>>&
+  window_tree_hosts() const {
     return window_tree_hosts_;
   }
 
@@ -144,7 +185,9 @@ class AURA_EXPORT Env : public ui::EventTarget,
 
   Env();
 
-  void Init();
+  // Returns whether the initialisation was successful.  If it was not,
+  // CreateInstance will return nullptr, and the process will eventually exit.
+  bool Init();
 
   // Called by the Window when it is initialized. Notifies observers.
   void NotifyWindowInitialized(Window* window);
@@ -163,41 +206,41 @@ class AURA_EXPORT Env : public ui::EventTarget,
 
   base::ObserverList<EnvObserver>::Unchecked observers_;
 
-  // Code wanting to observe WindowEventDispatcher typically wants to observe
-  // all WindowEventDispatchers. This is made easier by having Env own all the
-  // observers.
-  base::ObserverList<WindowEventDispatcherObserver>::Unchecked
-      window_event_dispatcher_observers_;
-
   // The ObserverList and set of owned EventObserver adapters.
   base::ObserverList<EventObserverAdapter> event_observer_adapter_list_;
   std::set<std::unique_ptr<EventObserverAdapter>> event_observer_adapters_;
 
   std::unique_ptr<EnvInputStateController> env_controller_;
   int mouse_button_flags_ = 0;
-  // Location of last mouse event, in screen coordinates.
+  // Location of last mouse event and touch event in screen coordinates.
   mutable gfx::Point last_mouse_location_;
+  mutable gfx::Point last_touch_location_;
   bool is_touch_down_ = false;
 
   std::unique_ptr<ui::GestureRecognizer> gesture_recognizer_;
 
-#if defined(OS_WIN) || defined(USE_X11)
-  std::unique_ptr<ui::CursorFactory> cursor_factory_;
+#if BUILDFLAG(IS_WIN)
+  std::unique_ptr<ui::WinCursorFactory> cursor_factory_;
 #endif
 
   std::unique_ptr<InputStateLookup> input_state_lookup_;
   std::unique_ptr<ui::PlatformEventSource> event_source_;
 
-  ui::ContextFactory* context_factory_ = nullptr;
+  raw_ptr<ui::ContextFactory, DanglingUntriaged> context_factory_ = nullptr;
 
   static bool initial_throttle_input_on_resize_;
   bool throttle_input_on_resize_ = initial_throttle_input_on_resize_;
 
   std::unique_ptr<WindowOcclusionTracker> window_occlusion_tracker_;
 
-  std::vector<aura::WindowTreeHost*> window_tree_hosts_;
+  std::vector<raw_ptr<aura::WindowTreeHost, VectorExperimental>>
+      window_tree_hosts_;
 
-  DISALLOW_COPY_AND_ASSIGN(Env);
+  // Touch points. The `target` window may be stale and should not be accessed
+  // other than looking up purpose.
+  base::flat_map<const aura::Window*, gfx::Point> last_touch_locations_;
+
+  raw_ptr<client::CursorShapeClient> cursor_shape_client_ = nullptr;
 };
 
 }  // namespace aura

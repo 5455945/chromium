@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 #include "components/sync/engine/loopback_server/loopback_connection_manager.h"
@@ -11,14 +11,15 @@ namespace syncer {
 
 LoopbackConnectionManager::LoopbackConnectionManager(
     const base::FilePath& persistent_file)
-    : loopback_server_(persistent_file) {}
+    : loopback_server_(persistent_file,
+                       base::ImportantFileWriter::kBlockCurrentSequence) {}
 
 LoopbackConnectionManager::~LoopbackConnectionManager() = default;
 
 HttpResponse LoopbackConnectionManager::PostBuffer(
     const std::string& buffer_in,
-    const std::string& access_token,
-    std::string* buffer_out) {
+    std::string* buffer_out,
+    const signin::AccessTokenInfo& access_token_info) {
   buffer_out->clear();
 
   sync_pb::ClientToServerMessage message;

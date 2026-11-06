@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,14 @@
 #define CONTENT_BROWSER_SPEECH_SPEECH_RECOGNIZER_H_
 
 #include "base/check.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory/sanitized_object.h"
 #include "content/common/content_export.h"
+
+namespace media {
+struct SpeechRecognitionRecognitionContext;
+}
 
 namespace content {
 
@@ -17,14 +22,19 @@ class SpeechRecognitionEventListener;
 // Handles speech recognition for a session (identified by |session_id|).
 class CONTENT_EXPORT SpeechRecognizer
     : public base::RefCountedThreadSafe<SpeechRecognizer> {
- public:
+  // TODO(b/495229724): Remove this once the bug is fixed.
+  SANITIZED_OBJECT();
 
-  SpeechRecognizer(SpeechRecognitionEventListener* listener, int session_id)
-      : listener_(listener), session_id_(session_id) {
-    DCHECK(listener_);
-  }
+ public:
+  SpeechRecognizer(SpeechRecognitionEventListener* listener, int session_id);
+
+  SpeechRecognizer(const SpeechRecognizer&) = delete;
+  SpeechRecognizer& operator=(const SpeechRecognizer&) = delete;
 
   virtual void StartRecognition(const std::string& device_id) = 0;
+  virtual void UpdateRecognitionContext(
+      const media::SpeechRecognitionRecognitionContext&
+          recognition_context) = 0;
   virtual void AbortRecognition() = 0;
   virtual void StopAudioCapture() = 0;
   virtual bool IsActive() const = 0;
@@ -38,10 +48,8 @@ class CONTENT_EXPORT SpeechRecognizer
   int session_id() const { return session_id_; }
 
  private:
-  SpeechRecognitionEventListener* listener_;
+  raw_ptr<SpeechRecognitionEventListener> listener_;
   int session_id_;
-
-  DISALLOW_COPY_AND_ASSIGN(SpeechRecognizer);
 };
 
 }  // namespace content

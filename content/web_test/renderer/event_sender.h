@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,16 +8,16 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 #include "base/containers/circular_deque.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
 #include "third_party/blink/public/common/input/web_touch_point.h"
@@ -41,6 +41,7 @@ class Arguments;
 
 namespace content {
 class TestRunner;
+class WebFrameTestProxy;
 
 // Key event location code introduced in DOM Level 3.
 // See also: http://www.w3.org/TR/DOM-Level-3-Events/#events-keyboardevents
@@ -54,10 +55,14 @@ enum KeyLocationCode {
 class EventSender {
  public:
   EventSender(blink::WebFrameWidget*, content::TestRunner* test_runner);
+
+  EventSender(const EventSender&) = delete;
+  EventSender& operator=(const EventSender&) = delete;
+
   virtual ~EventSender();
 
   void Reset();
-  void Install(blink::WebLocalFrame*);
+  void Install(WebFrameTestProxy*);
 
   void SetContextMenuData(const blink::ContextMenuData&);
 
@@ -87,6 +92,12 @@ class EventSender {
   void KeyDown(const std::string& code_str,
                int modifiers,
                KeyLocationCode location);
+  enum KeyEventType { kKeyDown = 1, kKeyUp = 2, kKeyPress = kKeyDown | kKeyUp };
+  void KeyEvent(KeyEventType event_type,
+                const std::string& code_str,
+                int modifiers,
+                KeyLocationCode location,
+                bool async);
 
   struct SavedEvent {
     enum SavedEventType {
@@ -126,7 +137,7 @@ class EventSender {
   void SetTouchCancelable(bool cancelable);
   void ThrowTouchPointError();
 
-  void DumpFilenameBeingDragged();
+  void DumpFilenameBeingDragged(blink::WebLocalFrame* frame);
 
   void TouchStart(gin::Arguments* args);
   void TouchMove(gin::Arguments* args);
@@ -136,10 +147,12 @@ class EventSender {
 
   void LeapForward(int milliseconds);
 
-  void BeginDragWithItems(
-      const blink::WebVector<blink::WebDragData::Item>& items);
-  void BeginDragWithFiles(const std::vector<std::string>& files);
-  void BeginDragWithStringData(const std::string& data,
+  void BeginDragWithItems(blink::WebLocalFrame* frame,
+                          const std::vector<blink::WebDragData::Item>& items);
+  void BeginDragWithFiles(blink::WebLocalFrame* frame,
+                          const std::vector<std::string>& files);
+  void BeginDragWithStringData(blink::WebLocalFrame* frame,
+                               const std::string& data,
                                const std::string& mime_type);
 
   void AddTouchPoint(float x, float y, gin::Arguments* args);
@@ -187,14 +200,17 @@ class EventSender {
                              float* radius_x,
                              float* radius_y);
 
-  void FinishDragAndDrop(const blink::WebMouseEvent&, ui::mojom::DragOperation);
+  void FinishDragAndDrop(const blink::WebMouseEvent&,
+                         ui::mojom::DragOperation,
+                         bool);
 
   int ModifiersForPointer(int pointer_id);
   void DoDragAfterMouseUp(const blink::WebMouseEvent&);
   void DoDragAfterMouseMove(const blink::WebMouseEvent&);
   void ReplaySavedEvents();
-  blink::WebInputEventResult HandleInputEventOnViewOrPopup(
-      const blink::WebInputEvent& event);
+  std::optional<blink::WebInputEventResult> HandleInputEventOnViewOrPopup(
+      const blink::WebInputEvent& event,
+      bool async = false);
 
   void SendGesturesForMouseWheelEvent(
       const blink::WebMouseWheelEvent wheel_event);
@@ -216,7 +232,7 @@ class EventSender {
   bool is_drag_mode() const { return is_drag_mode_; }
   void set_is_drag_mode(bool drag_mode) { is_drag_mode_ = drag_mode; }
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   int wm_key_down() const { return wm_key_down_; }
   void set_wm_key_down(int key_down) { wm_key_down_ = key_down; }
 
@@ -253,10 +269,13 @@ class EventSender {
   int wm_sys_dead_char_;
 #endif
 
-  blink::WebFrameWidget* const web_frame_widget_;
-  TestRunner* const test_runner_;
+  const raw_ptr<blink::WebFrameWidget> web_frame_widget_;
+  const raw_ptr<TestRunner> test_runner_;
 
   bool force_layout_on_events_;
+
+  // Currently pressed modifiers for key events.
+  int key_modifiers_ = 0;
 
   // When set to true (the default value), we batch mouse move and mouse up
   // events so we can simulate drag & drop.
@@ -268,7 +287,7 @@ class EventSender {
 
   std::unique_ptr<blink::ContextMenuData> last_context_menu_data_;
 
-  absl::optional<blink::WebDragData> current_drag_data_;
+  std::optional<blink::WebDragData> current_drag_data_;
 
   // Location of the touch point that initiated a gesture.
   gfx::PointF current_gesture_location_;
@@ -317,8 +336,6 @@ class EventSender {
   base::TimeTicks last_event_timestamp_;
 
   base::WeakPtrFactory<EventSender> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(EventSender);
 };
 
 }  // namespace content

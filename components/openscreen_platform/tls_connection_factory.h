@@ -1,13 +1,12 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_OPENSCREEN_PLATFORM_TLS_CONNECTION_FACTORY_H_
 #define COMPONENTS_OPENSCREEN_PLATFORM_TLS_CONNECTION_FACTORY_H_
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "mojo/public/cpp/bindings/pending_receiver.h"
-#include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/network/public/mojom/tcp_socket.mojom.h"
 #include "services/network/public/mojom/tls_socket.mojom.h"
@@ -21,7 +20,6 @@ class IPEndPoint;
 
 namespace openscreen {
 
-class TaskRunner;
 struct TlsCredentials;
 struct TlsListenOptions;
 
@@ -31,8 +29,8 @@ namespace openscreen_platform {
 
 class TlsConnectionFactory final : public openscreen::TlsConnectionFactory {
  public:
-  TlsConnectionFactory(openscreen::TlsConnectionFactory::Client* client,
-                       openscreen::TaskRunner* task_runner);
+  explicit TlsConnectionFactory(
+      openscreen::TlsConnectionFactory::Client& client);
 
   ~TlsConnectionFactory() final;
 
@@ -89,8 +87,8 @@ class TlsConnectionFactory final : public openscreen::TlsConnectionFactory {
 
   void OnTcpConnect(TcpConnectRequest request,
                     int32_t net_result,
-                    const absl::optional<net::IPEndPoint>& local_address,
-                    const absl::optional<net::IPEndPoint>& remote_address,
+                    const std::optional<net::IPEndPoint>& local_address,
+                    const std::optional<net::IPEndPoint>& remote_address,
                     mojo::ScopedDataPipeConsumerHandle receive_stream,
                     mojo::ScopedDataPipeProducerHandle send_stream);
 
@@ -98,10 +96,9 @@ class TlsConnectionFactory final : public openscreen::TlsConnectionFactory {
                     int32_t net_result,
                     mojo::ScopedDataPipeConsumerHandle receive_stream,
                     mojo::ScopedDataPipeProducerHandle send_stream,
-                    const absl::optional<net::SSLInfo>& ssl_info);
+                    const std::optional<net::SSLInfo>& ssl_info);
 
-  openscreen::TlsConnectionFactory::Client* client_;
-  openscreen::TaskRunner* const task_runner_;
+  raw_ref<openscreen::TlsConnectionFactory::Client> client_;
   base::WeakPtrFactory<TlsConnectionFactory> weak_factory_{this};
 };
 

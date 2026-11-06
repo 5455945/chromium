@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,58 +18,54 @@ namespace extensions {
 
 namespace keys = manifest_keys;
 
+// static
+const char* OfflineEnabledInfo::kManifestDataKey = keys::kOfflineEnabled;
+
 OfflineEnabledInfo::OfflineEnabledInfo(bool is_offline_enabled)
     : offline_enabled(is_offline_enabled) {
 }
 
-OfflineEnabledInfo::~OfflineEnabledInfo() {
-}
+OfflineEnabledInfo::~OfflineEnabledInfo() = default;
 
 // static
 bool OfflineEnabledInfo::IsOfflineEnabled(const Extension* extension) {
-  OfflineEnabledInfo* info = static_cast<OfflineEnabledInfo*>(
-      extension->GetManifestData(keys::kOfflineEnabled));
-  return info ? info->offline_enabled : false;
+  const auto* info = extension->GetManifestData<OfflineEnabledInfo>();
+  return info && info->offline_enabled;
 }
 
-OfflineEnabledHandler::OfflineEnabledHandler() {
-}
-
-OfflineEnabledHandler::~OfflineEnabledHandler() {
-}
+OfflineEnabledHandler::OfflineEnabledHandler() = default;
+OfflineEnabledHandler::~OfflineEnabledHandler() = default;
 
 bool OfflineEnabledHandler::Parse(Extension* extension, std::u16string* error) {
-  if (!extension->manifest()->HasKey(keys::kOfflineEnabled)) {
+  const base::Value* offline_enabled_value =
+      extension->manifest()->FindKey(keys::kOfflineEnabled);
+  if (offline_enabled_value == nullptr) {
     // Only platform apps are provided with a default offline enabled value.
     // A platform app is offline enabled unless it requests the webview
     // permission. That is, offline_enabled is true when there is NO webview
     // permission requested and false when webview permission is present.
-    DCHECK(extension->is_platform_app());
+    CHECK(extension->is_platform_app());
 
     const bool has_webview_permission = PermissionsParser::HasAPIPermission(
         extension, mojom::APIPermissionID::kWebView);
     extension->SetManifestData(
-        keys::kOfflineEnabled,
         std::make_unique<OfflineEnabledInfo>(!has_webview_permission));
     return true;
   }
 
-  bool offline_enabled = false;
-
-  if (!extension->manifest()->GetBoolean(keys::kOfflineEnabled,
-                                         &offline_enabled)) {
-    *error = base::ASCIIToUTF16(manifest_errors::kInvalidOfflineEnabled);
+  if (!offline_enabled_value->is_bool()) {
+    *error = manifest_errors::kInvalidOfflineEnabled;
     return false;
   }
+  bool offline_enabled = offline_enabled_value->GetBool();
 
   extension->SetManifestData(
-      keys::kOfflineEnabled,
       std::make_unique<OfflineEnabledInfo>(offline_enabled));
   return true;
 }
 
 bool OfflineEnabledHandler::AlwaysParseForType(Manifest::Type type) const {
-  return type == Manifest::TYPE_PLATFORM_APP;
+  return type == Manifest::Type::kPlatformApp;
 }
 
 base::span<const char* const> OfflineEnabledHandler::Keys() const {

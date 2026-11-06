@@ -1,13 +1,12 @@
-# Copyright 2018 The Chromium Authors. All rights reserved.
+# Copyright 2018 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 from __future__ import print_function
 
-import pipes
+import shlex
 import subprocess
 import sys
-from six.moves import input  # pylint: disable=redefined-builtin
 
 
 COLOR_ANSI_CODE_MAP = {
@@ -110,7 +109,7 @@ def Ask(question, answers=None, default=None):
   common_prefixes = set()
   for ans, retval in answers.items():
     for i in range(len(ans)):
-      inp = ans[:i+1]
+      inp = ans[: i + 1]
       if inp in inputs:
         common_prefixes.add(inp)
         del inputs[inp]
@@ -127,15 +126,17 @@ def Ask(question, answers=None, default=None):
 
   while True:
     print(Colored(question + prompt, 'cyan'), end=' ')
-    choice = input().strip().lower()
+    choice = input().strip()
     if default is not None and choice == '':
       return inputs[default]
-    elif choice in inputs:
+    if choice in inputs:
       return inputs[choice]
-    else:
-      choices = sorted(['"%s"' % a for a in sorted(answers.keys())])
-      Error('Please respond with %s or %s.' % (
-        ', '.join(choices[:-1]), choices[-1]))
+    if choice.lower() in inputs:
+      return inputs[choice.lower()]
+    choices = sorted(['"%s"' % a for a in sorted(answers.keys())])
+    Error(
+      'Please respond with %s or %s.' % (', '.join(choices[:-1]), choices[-1])
+    )
 
 
 def Prompt(question, accept_empty=False):
@@ -160,12 +161,16 @@ def CheckLog(command, log_path, env=None):
   """
   with open(log_path, 'w') as f:
     try:
-      cmd_str = (' '.join(pipes.quote(c) for c in command)
-                 if isinstance(command, list) else command)
+      cmd_str = (
+        ' '.join(shlex.quote(c) for c in command)
+        if isinstance(command, list)
+        else command
+      )
       print(Colored(cmd_str, 'blue'))
       print(Colored('Logging stdout & stderr to %s' % log_path, 'blue'))
       subprocess.check_call(
-          command, stdout=f, stderr=subprocess.STDOUT, shell=False, env=env)
+        command, stdout=f, stderr=subprocess.STDOUT, shell=False, env=env
+      )
     except subprocess.CalledProcessError:
       Error('=' * 80)
       Error('Received non-zero return code. Log content:')
@@ -179,11 +184,10 @@ def Run(command, ok_fail=False, **kwargs):
   """Prints and runs the command. Allows to ignore non-zero exit code."""
   if not isinstance(command, list):
     raise ValueError('command must be a list')
-  print(Colored(' '.join(pipes.quote(c) for c in command), 'blue'))
+  print(Colored(' '.join(shlex.quote(c) for c in command), 'blue'))
   try:
     return subprocess.check_call(command, **kwargs)
   except subprocess.CalledProcessError as cpe:
     if not ok_fail:
       raise
-    else:
-      return cpe.returncode
+    return cpe.returncode

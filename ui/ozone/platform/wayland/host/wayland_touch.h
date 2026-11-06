@@ -1,11 +1,13 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_OZONE_PLATFORM_WAYLAND_HOST_WAYLAND_TOUCH_H_
 #define UI_OZONE_PLATFORM_WAYLAND_HOST_WAYLAND_TOUCH_H_
 
-#include "base/macros.h"
+#include <vector>
+
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "ui/events/pointer_details.h"
 #include "ui/ozone/platform/wayland/common/wayland_object.h"
@@ -13,6 +15,10 @@
 namespace gfx {
 class PointF;
 }  // namespace gfx
+
+namespace wl {
+enum class EventDispatchPolicy;
+}
 
 namespace ui {
 
@@ -26,37 +32,51 @@ class WaylandTouch {
   WaylandTouch(wl_touch* touch,
                WaylandConnection* connection,
                Delegate* delegate);
+
+  WaylandTouch(const WaylandTouch&) = delete;
+  WaylandTouch& operator=(const WaylandTouch&) = delete;
+
   ~WaylandTouch();
 
+  uint32_t id() const { return obj_.id(); }
+
  private:
-  // wl_touch_listener
-  static void Down(void* data,
-                   wl_touch* obj,
-                   uint32_t serial,
-                   uint32_t time,
-                   struct wl_surface* surface,
-                   int32_t id,
-                   wl_fixed_t x,
-                   wl_fixed_t y);
-  static void Up(void* data,
-                 wl_touch* obj,
-                 uint32_t serial,
-                 uint32_t time,
-                 int32_t id);
-  static void Motion(void* data,
-                     wl_touch* obj,
-                     uint32_t time,
-                     int32_t id,
-                     wl_fixed_t x,
-                     wl_fixed_t y);
-  static void Cancel(void* data, wl_touch* obj);
-  static void Frame(void* data, wl_touch* obj);
+  // wl_touch_listener callbacks:
+  static void OnTouchDown(void* data,
+                          wl_touch* touch,
+                          uint32_t serial,
+                          uint32_t time,
+                          struct wl_surface* surface,
+                          int32_t id,
+                          wl_fixed_t x,
+                          wl_fixed_t y);
+  static void OnTouchUp(void* data,
+                        wl_touch* touch,
+                        uint32_t serial,
+                        uint32_t time,
+                        int32_t id);
+  static void OnTouchMotion(void* data,
+                            wl_touch* touch,
+                            uint32_t time,
+                            int32_t id,
+                            wl_fixed_t x,
+                            wl_fixed_t y);
+  static void OnTouchShape(void* data,
+                           wl_touch* touch,
+                           int32_t id,
+                           wl_fixed_t major,
+                           wl_fixed_t minor);
+  static void OnTouchOrientation(void* data,
+                                 wl_touch* touch,
+                                 int32_t id,
+                                 wl_fixed_t orientation);
+  static void OnTouchCancel(void* data, wl_touch* touch);
+  static void OnTouchFrame(void* data, wl_touch* touch);
+
 
   wl::Object<wl_touch> obj_;
-  WaylandConnection* const connection_;
-  Delegate* const delegate_;
-
-  DISALLOW_COPY_AND_ASSIGN(WaylandTouch);
+  const raw_ptr<WaylandConnection> connection_;
+  const raw_ptr<Delegate> delegate_;
 };
 
 class WaylandTouch::Delegate {
@@ -64,12 +84,22 @@ class WaylandTouch::Delegate {
   virtual void OnTouchPressEvent(WaylandWindow* window,
                                  const gfx::PointF& location,
                                  base::TimeTicks timestamp,
-                                 PointerId id) = 0;
-  virtual void OnTouchReleaseEvent(base::TimeTicks timestamp, PointerId id) = 0;
+                                 PointerId id,
+                                 wl::EventDispatchPolicy dispatch_policy) = 0;
+  virtual void OnTouchReleaseEvent(base::TimeTicks timestamp,
+                                   PointerId id,
+                                   wl::EventDispatchPolicy dispatch_policy,
+                                   bool is_synthesized) = 0;
   virtual void OnTouchMotionEvent(const gfx::PointF& location,
                                   base::TimeTicks timestamp,
-                                  PointerId id) = 0;
+                                  PointerId id,
+                                  wl::EventDispatchPolicy dispatch_policy,
+                                  bool is_synthesized) = 0;
   virtual void OnTouchCancelEvent() = 0;
+  virtual void OnTouchFrame() = 0;
+  virtual void OnTouchFocusChanged(WaylandWindow* window) = 0;
+  virtual std::vector<PointerId> GetActiveTouchPointIds() = 0;
+  virtual const WaylandWindow* GetTouchTarget(PointerId id) const = 0;
 };
 
 }  // namespace ui

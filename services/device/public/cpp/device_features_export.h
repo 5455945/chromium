@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,11 +17,7 @@
 
 #else  // !defined(WIN32)
 
-#if defined(DEVICE_FEATURES_IMPLEMENTATION)
 #define DEVICE_FEATURES_EXPORT __attribute__((visibility("default")))
-#else
-#define DEVICE_FEATURES_EXPORT
-#endif
 
 #endif
 

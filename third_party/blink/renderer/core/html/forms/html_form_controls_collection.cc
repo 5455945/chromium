@@ -28,6 +28,7 @@
 #include "third_party/blink/renderer/core/html/forms/html_form_element.h"
 #include "third_party/blink/renderer/core/html/html_image_element.h"
 #include "third_party/blink/renderer/core/html_names.h"
+#include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
 
@@ -90,7 +91,7 @@ HTMLElement* HTMLFormControlsCollection::VirtualItemAfter(
     if (listed_element->IsEnumeratable()) {
       cached_element_ = listed_element->ToHTMLElement();
       cached_element_offset_in_array_ = i;
-      return cached_element_;
+      return cached_element_.Get();
     }
   }
   return nullptr;
@@ -142,11 +143,11 @@ void HTMLFormControlsCollection::UpdateIdNameCache() const {
       HTMLElement& element = listed_element->ToHTMLElement();
       const AtomicString& id_attr_val = element.GetIdAttribute();
       const AtomicString& name_attr_val = element.GetNameAttribute();
-      if (!id_attr_val.IsEmpty()) {
+      if (!id_attr_val.empty()) {
         cache->AddElementWithId(id_attr_val, &element);
         found_input_elements.insert(id_attr_val.Impl());
       }
-      if (!name_attr_val.IsEmpty() && id_attr_val != name_attr_val) {
+      if (!name_attr_val.empty() && id_attr_val != name_attr_val) {
         cache->AddElementWithName(name_attr_val, &element);
         found_input_elements.insert(name_attr_val.Impl());
       }
@@ -159,10 +160,10 @@ void HTMLFormControlsCollection::UpdateIdNameCache() const {
   for (const auto& element : FormImageElements()) {
     const AtomicString& id_attr_val = element->GetIdAttribute();
     const AtomicString& name_attr_val = element->GetNameAttribute();
-    if (!id_attr_val.IsEmpty() &&
+    if (!id_attr_val.empty() &&
         !found_input_elements.Contains(id_attr_val.Impl()))
       cache->AddElementWithId(id_attr_val, element);
-    if (!name_attr_val.IsEmpty() && id_attr_val != name_attr_val &&
+    if (!name_attr_val.empty() && id_attr_val != name_attr_val &&
         !found_input_elements.Contains(name_attr_val.Impl()))
       cache->AddElementWithName(name_attr_val, element);
   }
@@ -172,26 +173,27 @@ void HTMLFormControlsCollection::UpdateIdNameCache() const {
   SetNamedItemCache(cache);
 }
 
-V8UnionElementOrRadioNodeList* HTMLFormControlsCollection::namedGetter(
+V8UnionElementOrRadioNodeList::Ret HTMLFormControlsCollection::namedGetter(
+    ScriptState* script_state,
     const AtomicString& name) {
   HeapVector<Member<Element>> named_items;
   NamedItems(name, named_items);
 
-  if (named_items.IsEmpty())
-    return nullptr;
+  if (named_items.empty()) {
+    return {};
+  }
 
   if (named_items.size() == 1) {
     if (!IsA<HTMLImageElement>(*named_items[0])) {
-      return MakeGarbageCollected<V8UnionElementOrRadioNodeList>(
-          named_items[0]);
+      return V8UnionElementOrRadioNodeList::Ret(script_state, named_items[0]);
     }
-    return nullptr;
+    return {};
   }
 
   // This path never returns a RadioNodeList for <img> because
   // onlyMatchingImgElements flag is false by default.
-  return MakeGarbageCollected<V8UnionElementOrRadioNodeList>(
-      ownerNode().GetRadioNodeList(name));
+  return V8UnionElementOrRadioNodeList::Ret(script_state,
+                                            ownerNode().GetRadioNodeList(name));
 }
 
 void HTMLFormControlsCollection::SupportedPropertyNames(Vector<String>& names) {
@@ -207,14 +209,14 @@ void HTMLFormControlsCollection::SupportedPropertyNames(Vector<String>& names) {
     HTMLElement* element = item(i);
     DCHECK(element);
     const AtomicString& id_attribute = element->GetIdAttribute();
-    if (!id_attribute.IsEmpty()) {
+    if (!id_attribute.empty()) {
       HashSet<AtomicString>::AddResult add_result =
           existing_names.insert(id_attribute);
       if (add_result.is_new_entry)
         names.push_back(id_attribute);
     }
     const AtomicString& name_attribute = element->GetNameAttribute();
-    if (!name_attribute.IsEmpty()) {
+    if (!name_attribute.empty()) {
       HashSet<AtomicString>::AddResult add_result =
           existing_names.insert(name_attribute);
       if (add_result.is_new_entry)

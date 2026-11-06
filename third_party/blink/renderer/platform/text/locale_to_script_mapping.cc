@@ -30,9 +30,9 @@
 
 #include "third_party/blink/renderer/platform/text/locale_to_script_mapping.h"
 
-#include "third_party/blink/renderer/platform/wtf/hash_map.h"
-#include "third_party/blink/renderer/platform/wtf/hash_set.h"
-#include "third_party/blink/renderer/platform/wtf/text/string_hash.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_view.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
 
@@ -41,7 +41,7 @@ struct SubtagScript {
   UScriptCode script;
 };
 
-UScriptCode ScriptNameToCode(const String& script_name) {
+UScriptCode ScriptNameToCode(const StringView& script_name) {
   // This generally maps an ISO 15924 script code to its UScriptCode, but
   // certain families of script codes are treated as a single script for
   // assigning a per-script font in Settings. For example, "hira" is mapped to
@@ -51,6 +51,7 @@ UScriptCode ScriptNameToCode(const String& script_name) {
       {"zyyy", USCRIPT_COMMON},
       {"qaai", USCRIPT_INHERITED},
       {"arab", USCRIPT_ARABIC},
+      {"aran", USCRIPT_ARABIC_NASTALIQ},
       {"armn", USCRIPT_ARMENIAN},
       {"beng", USCRIPT_BENGALI},
       {"bopo", USCRIPT_BOPOMOFO},
@@ -155,8 +156,13 @@ UScriptCode ScriptNameToCode(const String& script_name) {
       {"zxxx", USCRIPT_UNWRITTEN_LANGUAGES},
       {"zzzz", USCRIPT_UNKNOWN}};
   for (const auto& kv : kScriptNameCodeList) {
-    if (EqualIgnoringASCIICase(script_name, kv.subtag))
+    if (EqualIgnoringAsciiCase(script_name, kv.subtag)) {
+      if (kv.script == USCRIPT_ARABIC_NASTALIQ &&
+          !RuntimeEnabledFeatures::NastaliqScriptEnabled()) {
+        return USCRIPT_INVALID_CODE;
+      }
       return kv.script;
+    }
   }
   return USCRIPT_INVALID_CODE;
 }
@@ -274,7 +280,7 @@ UScriptCode LocaleToScriptCodeForFontSelection(const String& locale) {
       {"kos", USCRIPT_LATIN},
       {"kpe", USCRIPT_LATIN},
       {"krc", USCRIPT_CYRILLIC},
-      {"ks", USCRIPT_ARABIC},
+      {"ks", USCRIPT_ARABIC_NASTALIQ},
       {"ku", USCRIPT_ARABIC},
       {"kum", USCRIPT_CYRILLIC},
       {"kvx", USCRIPT_ARABIC},
@@ -388,7 +394,7 @@ UScriptCode LocaleToScriptCodeForFontSelection(const String& locale) {
       {"ug", USCRIPT_ARABIC},
       {"uk", USCRIPT_CYRILLIC},
       {"und", USCRIPT_LATIN},
-      {"ur", USCRIPT_ARABIC},
+      {"ur", USCRIPT_ARABIC_NASTALIQ},
       {"uz", USCRIPT_CYRILLIC},
       {"ve", USCRIPT_LATIN},
       {"vi", USCRIPT_LATIN},
@@ -445,35 +451,42 @@ UScriptCode LocaleToScriptCodeForFontSelection(const String& locale) {
   String canonical_locale = locale;
   canonical_locale.Replace('_', '-');
 
-  while (!canonical_locale.IsEmpty()) {
+  StringView tag(canonical_locale);
+  while (!tag.empty()) {
     for (const auto& kv : kLocaleScriptList) {
-      if (EqualIgnoringASCIICase(canonical_locale, kv.subtag))
+      if (EqualIgnoringAsciiCase(tag, kv.subtag)) {
+        if (kv.script == USCRIPT_ARABIC_NASTALIQ &&
+            !RuntimeEnabledFeatures::NastaliqScriptEnabled()) [[unlikely]] {
+          return USCRIPT_ARABIC;
+        }
         return kv.script;
+      }
     }
 
-    wtf_size_t pos = canonical_locale.ReverseFind('-');
+    wtf_size_t pos = tag.rfind('-');
     if (pos == kNotFound)
       break;
     // script = 4ALPHA
-    if (canonical_locale.length() - (pos + 1) == 4) {
-      UScriptCode code = ScriptNameToCode(canonical_locale.Substring(pos + 1));
+    if (tag.length() - (pos + 1) == 4) {
+      UScriptCode code = ScriptNameToCode(tag.substr(pos + 1));
       if (code != USCRIPT_INVALID_CODE && code != USCRIPT_UNKNOWN)
         return code;
     }
-    canonical_locale = canonical_locale.Substring(0, pos);
+    tag = tag.substr(0, pos);
   }
   return USCRIPT_COMMON;
 }
 
-static UScriptCode ScriptCodeForHanFromRegion(const String& region) {
+static UScriptCode ScriptCodeForHanFromRegion(const StringView& region) {
   static constexpr SubtagScript kRegionScriptList[] = {
       {"hk", USCRIPT_TRADITIONAL_HAN}, {"jp", USCRIPT_KATAKANA_OR_HIRAGANA},
       {"kr", USCRIPT_HANGUL},          {"mo", USCRIPT_TRADITIONAL_HAN},
       {"tw", USCRIPT_TRADITIONAL_HAN},
   };
   for (const auto& kv : kRegionScriptList) {
-    if (EqualIgnoringASCIICase(region, kv.subtag))
+    if (EqualIgnoringAsciiCase(region, kv.subtag)) {
       return kv.script;
+    }
   }
   return USCRIPT_COMMON;
 }
@@ -489,12 +502,12 @@ UScriptCode ScriptCodeForHanFromSubtags(const String& locale, char delimiter) {
     UScriptCode script;
     switch (len) {
       case 2:  // region = 2ALPHA / 3DIGIT
-        script = ScriptCodeForHanFromRegion(locale.Substring(begin, len));
+        script = ScriptCodeForHanFromRegion(StringView(locale, begin, len));
         if (script != USCRIPT_COMMON)
           return script;
         break;
       case 4:  // script = 4ALPHA
-        script = ScriptNameToCode(locale.Substring(begin, len));
+        script = ScriptNameToCode(StringView(locale, begin, len));
         if (IsUnambiguousHanScript(script))
           return script;
     }

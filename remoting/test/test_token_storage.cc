@@ -1,15 +1,16 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "remoting/test/test_token_storage.h"
+
+#include <optional>
 
 #include "base/files/file_util.h"
 #include "base/files/important_file_writer.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
-#include "base/macros.h"
 #include "base/memory/ptr_util.h"
 #include "base/values.h"
 
@@ -24,6 +25,7 @@ constexpr char kUnspecifiedUsername[] = "unspecified";
 constexpr char kRefreshTokenKey[] = "refresh_token";
 constexpr char kUserEmailKey[] = "user_email";
 constexpr char kAccessTokenKey[] = "access_token";
+constexpr char kScopesKey[] = "scopes";
 constexpr char kDeviceIdKey[] = "device_id";
 }  // namespace
 
@@ -36,6 +38,10 @@ class TestTokenStorageOnDisk : public TestTokenStorage {
  public:
   TestTokenStorageOnDisk(const std::string& user_name,
                          const base::FilePath& tokens_file_path);
+
+  TestTokenStorageOnDisk(const TestTokenStorageOnDisk&) = delete;
+  TestTokenStorageOnDisk& operator=(const TestTokenStorageOnDisk&) = delete;
+
   ~TestTokenStorageOnDisk() override;
 
   // TestTokenStorage interface.
@@ -45,6 +51,8 @@ class TestTokenStorageOnDisk : public TestTokenStorage {
   bool StoreUserEmail(const std::string& user_email) override;
   std::string FetchAccessToken() override;
   bool StoreAccessToken(const std::string& access_token) override;
+  std::string FetchScopes() override;
+  bool StoreScopes(const std::string& scopes) override;
   std::string FetchDeviceId() override;
   bool StoreDeviceId(const std::string& device_id) override;
 
@@ -61,8 +69,6 @@ class TestTokenStorageOnDisk : public TestTokenStorage {
 
   // Path used to retrieve the tokens file.
   base::FilePath file_path_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestTokenStorageOnDisk);
 };
 
 TestTokenStorageOnDisk::TestTokenStorageOnDisk(const std::string& user_name,
@@ -102,6 +108,14 @@ bool TestTokenStorageOnDisk::StoreAccessToken(const std::string& access_token) {
   return StoreTokenForKey(kAccessTokenKey, access_token);
 }
 
+std::string TestTokenStorageOnDisk::FetchScopes() {
+  return FetchTokenFromKey(kScopesKey);
+}
+
+bool TestTokenStorageOnDisk::StoreScopes(const std::string& scopes) {
+  return StoreTokenForKey(kScopesKey, scopes);
+}
+
 std::string TestTokenStorageOnDisk::FetchDeviceId() {
   return FetchTokenFromKey(kDeviceIdKey);
 }
@@ -121,21 +135,22 @@ std::string TestTokenStorageOnDisk::FetchTokenFromKey(const std::string& key) {
     return std::string();
   }
 
-  absl::optional<base::Value> token_data(base::JSONReader::Read(file_contents));
-  base::DictionaryValue* tokens = nullptr;
-  if (!token_data.has_value() || !token_data->GetAsDictionary(&tokens)) {
+  std::optional<base::DictValue> token_data = base::JSONReader::ReadDict(
+      file_contents, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!token_data) {
     LOG(ERROR) << "File contents were not valid JSON, "
                << "could not retrieve token.";
     return std::string();
   }
 
-  base::Value* token = tokens->FindPath({user_name_, key});
+  const std::string* token =
+      token_data->FindStringByDottedPath(user_name_ + '.' + key);
   if (!token) {
     VLOG(1) << "Could not find token for: " << key;
     return std::string();
   }
 
-  return token->GetString();
+  return *token;
 }
 
 bool TestTokenStorageOnDisk::StoreTokenForKey(const std::string& key,
@@ -160,21 +175,22 @@ bool TestTokenStorageOnDisk::StoreTokenForKey(const std::string& key,
     }
   }
 
-  absl::optional<base::Value> token_data(base::JSONReader::Read(file_contents));
-  base::DictionaryValue* tokens = nullptr;
-  if (!token_data.has_value() || !token_data->GetAsDictionary(&tokens)) {
+  std::optional<base::DictValue> token_data = base::JSONReader::ReadDict(
+      file_contents, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!token_data) {
     LOG(ERROR) << "Invalid token file format, could not store token.";
     return false;
   }
 
-  std::string json_string;
-  tokens->SetPath({user_name_, key}, base::Value(value));
-  if (!base::JSONWriter::Write(*token_data, &json_string)) {
+  token_data->SetByDottedPath(user_name_ + '.' + key, value);
+  std::optional<std::string> json_string = base::WriteJson(*token_data);
+  if (!json_string.has_value()) {
     LOG(ERROR) << "Couldn't convert JSON data to string";
     return false;
   }
 
-  if (!base::ImportantFileWriter::WriteFileAtomically(file_path, json_string)) {
+  if (!base::ImportantFileWriter::WriteFileAtomically(file_path,
+                                                      json_string.value())) {
     LOG(ERROR) << "Failed to save token to the file on disk.";
     return false;
   }

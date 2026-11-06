@@ -1,31 +1,35 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ash/accelerators/accelerator_controller_impl.h"
+#include "ui/base/accelerators/accelerator.h"
 
+#include <memory>
+#include <string_view>
+
+#include "ash/accelerators/accelerator_controller_impl.h"
 #include "ash/app_list/test/app_list_test_helper.h"
-#include "ash/constants/ash_features.h"
 #include "ash/shell.h"
 #include "ash/shell_observer.h"
 #include "ash/system/network/network_observer.h"
 #include "ash/system/tray/system_tray_notifier.h"
 #include "ash/test/ash_test_base.h"
-#include "ash/test/ui_controls_factory_ash.h"
-#include "ash/test_screenshot_delegate.h"
 #include "ash/wm/overview/overview_controller.h"
 #include "ash/wm/overview/overview_observer.h"
 #include "ash/wm/window_state.h"
 #include "ash/wm/window_util.h"
 #include "base/run_loop.h"
 #include "base/test/metrics/user_action_tester.h"
-#include "chromeos/dbus/shill/shill_clients.h"
-#include "chromeos/network/network_handler.h"
+#include "base/test/scoped_feature_list.h"
+#include "base/test/task_environment.h"
+#include "base/test/test_future.h"
+#include "chromeos/ash/components/dbus/shill/shill_clients.h"
+#include "chromeos/ash/components/network/network_handler.h"
+#include "chromeos/ash/services/assistant/test_support/scoped_assistant_browser_delegate.h"
 #include "ui/aura/window.h"
-#include "ui/base/accelerators/accelerator.h"
 #include "ui/base/accelerators/test_accelerator_target.h"
-#include "ui/base/test/ui_controls.h"
 #include "ui/events/event.h"
+#include "ui/events/keycodes/keyboard_codes_posix.h"
 #include "ui/events/test/event_generator.h"
 
 namespace ash {
@@ -36,6 +40,10 @@ namespace {
 class TestNetworkObserver : public NetworkObserver {
  public:
   TestNetworkObserver() = default;
+
+  TestNetworkObserver(const TestNetworkObserver&) = delete;
+  TestNetworkObserver& operator=(const TestNetworkObserver&) = delete;
+
   ~TestNetworkObserver() override = default;
 
   // ash::NetworkObserver:
@@ -47,8 +55,6 @@ class TestNetworkObserver : public NetworkObserver {
 
  private:
   bool wifi_enabled_status_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(TestNetworkObserver);
 };
 
 }  // namespace
@@ -56,16 +62,16 @@ class TestNetworkObserver : public NetworkObserver {
 ////////////////////////////////////////////////////////////////////////////////
 
 // This is intended to test few samples from each category of accelerators to
-// make sure they work properly. The test is done as an interactive ui test
-// using ui_controls::Send*() functions.
+// make sure they work properly.
 // This is to catch any future regressions (crbug.com/469235).
 class AcceleratorTest : public AshTestBase, public OverviewObserver {
  public:
   AcceleratorTest() : is_in_overview_mode_(false) {}
 
-  void SetUp() override {
-    ui_controls::InstallUIControlsAura(test::CreateAshUIControls());
+  AcceleratorTest(const AcceleratorTest&) = delete;
+  AcceleratorTest& operator=(const AcceleratorTest&) = delete;
 
+  void SetUp() override {
     AshTestBase::SetUp();
 
     Shell::Get()->overview_controller()->AddObserver(this);
@@ -75,8 +81,6 @@ class AcceleratorTest : public AshTestBase, public OverviewObserver {
     Shell::Get()->overview_controller()->RemoveObserver(this);
 
     AshTestBase::TearDown();
-
-    ui_controls::InstallUIControlsAura(nullptr);
   }
 
   // Sends a key press event and waits synchronously until it's completely
@@ -85,11 +89,8 @@ class AcceleratorTest : public AshTestBase, public OverviewObserver {
                         bool control,
                         bool shift,
                         bool alt) {
-    base::RunLoop loop;
-    ui_controls::SendKeyPressNotifyWhenDone(Shell::GetPrimaryRootWindow(), key,
-                                            control, shift, alt, false,
-                                            loop.QuitClosure());
-    loop.Run();
+    ui::test::EmulateFullKeyPressReleaseSequence(
+        GetEventGenerator(), key, control, shift, alt, /*command=*/false);
   }
 
   // OverviewObserver:
@@ -98,9 +99,6 @@ class AcceleratorTest : public AshTestBase, public OverviewObserver {
 
  protected:
   bool is_in_overview_mode_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(AcceleratorTest);
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -135,145 +133,14 @@ TEST_F(AcceleratorTest, Basic) {
       &network_observer);
 }
 
-// Tests full screenshot accelerators.
-TEST_F(AcceleratorTest, FullScreenshot) {
-  if (features::IsCaptureModeEnabled()) {
-    // Capture mode shortcuts and behavior are tested elsewhere.
-    return;
-  }
-
-  TestScreenshotDelegate* screenshot_delegate = GetScreenshotDelegate();
-  screenshot_delegate->set_can_take_screenshot(true);
-  EXPECT_EQ(0, screenshot_delegate->handle_take_screenshot_count());
-  EXPECT_EQ(0, screenshot_delegate->handle_take_partial_screenshot_count());
-  EXPECT_EQ(0, screenshot_delegate->handle_take_window_screenshot_count());
-
-  // Test TAKE_SCREENSHOT via crtl+overview key.
-  SendKeyPressSync(ui::VKEY_MEDIA_LAUNCH_APP1, true, false, false);
-  EXPECT_EQ(1, screenshot_delegate->handle_take_screenshot_count());
-  EXPECT_EQ(0, screenshot_delegate->handle_take_partial_screenshot_count());
-  EXPECT_EQ(0, screenshot_delegate->handle_take_window_screenshot_count());
-  screenshot_delegate->reset_all_screenshot_counts();
-
-  // Test TAKE_SCREENSHOT via PrtScn/Snapshot key.
-  SendKeyPressSync(ui::VKEY_SNAPSHOT, false, false, false);
-  EXPECT_EQ(1, screenshot_delegate->handle_take_screenshot_count());
-  EXPECT_EQ(0, screenshot_delegate->handle_take_partial_screenshot_count());
-  EXPECT_EQ(0, screenshot_delegate->handle_take_window_screenshot_count());
-  screenshot_delegate->reset_all_screenshot_counts();
-}
-
-// Tests partial screenshot accelerators.
-TEST_F(AcceleratorTest, PartialScreenshot) {
-  if (features::IsCaptureModeEnabled()) {
-    // Capture mode shortcuts and behavior are tested elsewhere.
-    return;
-  }
-
-  ui::test::EventGenerator generator(Shell::GetPrimaryRootWindow());
-  TestScreenshotDelegate* screenshot_delegate = GetScreenshotDelegate();
-  screenshot_delegate->set_can_take_screenshot(true);
-
-  // Test TAKE_PARTIAL_SCREENSHOT via ctrl+shift+overview key then exit with
-  // escape key.
-  SendKeyPressSync(ui::VKEY_MEDIA_LAUNCH_APP1, true, true, false);
-  SendKeyPressSync(ui::VKEY_ESCAPE, false, false, false);
-  EXPECT_EQ(0, screenshot_delegate->handle_take_screenshot_count());
-  EXPECT_EQ(0, screenshot_delegate->handle_take_partial_screenshot_count());
-  EXPECT_EQ(0, screenshot_delegate->handle_take_window_screenshot_count());
-  screenshot_delegate->reset_all_screenshot_counts();
-
-  // Test TAKE_PARTIAL_SCREENSHOT via alt+PrtScn key then exit with escape
-  // key.
-  SendKeyPressSync(ui::VKEY_SNAPSHOT, false, false, true);
-  SendKeyPressSync(ui::VKEY_ESCAPE, false, false, false);
-  EXPECT_EQ(0, screenshot_delegate->handle_take_screenshot_count());
-  EXPECT_EQ(0, screenshot_delegate->handle_take_partial_screenshot_count());
-  EXPECT_EQ(0, screenshot_delegate->handle_take_window_screenshot_count());
-  screenshot_delegate->reset_all_screenshot_counts();
-
-  // Test TAKE_PARTIAL_SCREENSHOT via ctrl+shift+overview key then select
-  // a region to complete the screenshot.
-  SendKeyPressSync(ui::VKEY_MEDIA_LAUNCH_APP1, true, true, false);
-  generator.MoveMouseTo(100, 100);
-  generator.PressLeftButton();
-  EXPECT_EQ(0, screenshot_delegate->handle_take_partial_screenshot_count());
-  generator.MoveMouseTo(150, 150);
-  generator.ReleaseLeftButton();
-  EXPECT_EQ(0, screenshot_delegate->handle_take_screenshot_count());
-  EXPECT_EQ(1, screenshot_delegate->handle_take_partial_screenshot_count());
-  EXPECT_EQ(0, screenshot_delegate->handle_take_window_screenshot_count());
-  EXPECT_EQ(gfx::Rect(100, 100, 50, 50), screenshot_delegate->last_rect());
-  screenshot_delegate->reset_all_screenshot_counts();
-
-  // Test TAKE_PARTIAL_SCREENSHOT via alt+PrtScn key then select a region
-  // to complete the screenshot.
-  SendKeyPressSync(ui::VKEY_SNAPSHOT, false, false, true);
-  generator.MoveMouseTo(100, 100);
-  generator.PressLeftButton();
-  EXPECT_EQ(0, screenshot_delegate->handle_take_partial_screenshot_count());
-  generator.MoveMouseTo(150, 150);
-  generator.ReleaseLeftButton();
-  EXPECT_EQ(0, screenshot_delegate->handle_take_screenshot_count());
-  EXPECT_EQ(1, screenshot_delegate->handle_take_partial_screenshot_count());
-  EXPECT_EQ(0, screenshot_delegate->handle_take_window_screenshot_count());
-  EXPECT_EQ(gfx::Rect(100, 100, 50, 50), screenshot_delegate->last_rect());
-  screenshot_delegate->reset_all_screenshot_counts();
-}
-
-// Tests window screenshot accelerators.
-TEST_F(AcceleratorTest, WindowScreenshot) {
-  if (features::IsCaptureModeEnabled()) {
-    // Capture mode shortcuts and behavior are tested elsewhere.
-    return;
-  }
-
-  TestScreenshotDelegate* screenshot_delegate = GetScreenshotDelegate();
-  screenshot_delegate->set_can_take_screenshot(true);
-
-  // Test TAKE_WINDOW_SCREENSHOT via ctrl+alt+overview then exit with
-  // escape key.
-  SendKeyPressSync(ui::VKEY_MEDIA_LAUNCH_APP1, true, false, true);
-  SendKeyPressSync(ui::VKEY_ESCAPE, false, false, false);
-  EXPECT_EQ(0, screenshot_delegate->handle_take_screenshot_count());
-  EXPECT_EQ(0, screenshot_delegate->handle_take_partial_screenshot_count());
-  EXPECT_EQ(0, screenshot_delegate->handle_take_window_screenshot_count());
-  EXPECT_EQ(nullptr, screenshot_delegate->GetSelectedWindowAndReset());
-  screenshot_delegate->reset_all_screenshot_counts();
-
-  // Test TAKE_WINDOW_SCREENSHOT via ctrl+alt+overview without an active
-  // window.
-  SendKeyPressSync(ui::VKEY_MEDIA_LAUNCH_APP1, true, false, true);
-  SendKeyPressSync(ui::VKEY_RETURN, false, false, false);
-  EXPECT_EQ(0, screenshot_delegate->handle_take_screenshot_count());
-  EXPECT_EQ(0, screenshot_delegate->handle_take_partial_screenshot_count());
-  EXPECT_EQ(0, screenshot_delegate->handle_take_window_screenshot_count());
-  EXPECT_EQ(nullptr, screenshot_delegate->GetSelectedWindowAndReset());
-  screenshot_delegate->reset_all_screenshot_counts();
-
-  // Test TAKE_WINDOW_SCREENSHOT via ctrl+alt+overview key then activate
-  // the window by pressing return/enter to complete the screenshot.
-  aura::Window* window =
-      CreateTestWindowInShellWithBounds(gfx::Rect(0, 0, 100, 100));
-  window->Show();
-  wm::ActivateWindow(window);
-  SendKeyPressSync(ui::VKEY_MEDIA_LAUNCH_APP1, true, false, true);
-  SendKeyPressSync(ui::VKEY_RETURN, false, false, false);
-  EXPECT_EQ(0, screenshot_delegate->handle_take_screenshot_count());
-  EXPECT_EQ(0, screenshot_delegate->handle_take_partial_screenshot_count());
-  EXPECT_EQ(1, screenshot_delegate->handle_take_window_screenshot_count());
-  EXPECT_EQ(window, screenshot_delegate->GetSelectedWindowAndReset());
-  screenshot_delegate->reset_all_screenshot_counts();
-}
-
 // Tests a sample of the non-repeatable accelerators that need windows to be
 // enabled.
 TEST_F(AcceleratorTest, NonRepeatableNeedingWindowActions) {
   // Create a bunch of windows to work with.
   aura::Window* window_1 =
-      CreateTestWindowInShellWithBounds(gfx::Rect(0, 0, 100, 100));
+      CreateTestWindowInShell({.bounds = {100, 100}, .window_id = 0}).release();
   aura::Window* window_2 =
-      CreateTestWindowInShellWithBounds(gfx::Rect(0, 0, 100, 100));
+      CreateTestWindowInShell({.bounds = {100, 100}, .window_id = 0}).release();
   window_1->Show();
   wm::ActivateWindow(window_1);
   window_2->Show();
@@ -315,6 +182,44 @@ TEST_F(AcceleratorTest, ToggleAppList) {
   SendKeyPressSync(ui::VKEY_LWIN, false, false, false);
   base::RunLoop().RunUntilIdle();
   GetAppListTestHelper()->CheckVisibility(false);
+}
+
+TEST_F(AcceleratorTest, AssistantKeyWithNewEntryPointEnabled) {
+  base::UserActionTester user_action_tester;
+
+  base::test::TestFuture<void> open_new_entry_point_future;
+  assistant::ScopedAssistantBrowserDelegate scoped_assistant_browser_delegate;
+  scoped_assistant_browser_delegate.SetOpenNewEntryPointClosure(
+      open_new_entry_point_future.GetCallback());
+
+  ui::test::EmulateFullKeyPressReleaseSequence(
+      GetEventGenerator(), ui::VKEY_ASSISTANT,
+      /*control=*/false, /*shift=*/false, /*alt=*/false, /*command=*/false);
+
+  EXPECT_TRUE(open_new_entry_point_future.Wait());
+  EXPECT_EQ(1, user_action_tester.GetActionCount(
+                   "Assistant.NewEntryPoint.AssistantKey"));
+}
+
+TEST_F(AcceleratorTest, NoSearchPlusAWithNewEntryPointEnabled) {
+  base::UserActionTester user_action_tester;
+
+  base::test::TestFuture<void> open_new_entry_point_future;
+  assistant::ScopedAssistantBrowserDelegate scoped_assistant_browser_delegate;
+  scoped_assistant_browser_delegate.SetOpenNewEntryPointClosure(
+      open_new_entry_point_future.GetCallback());
+
+  ui::test::EmulateFullKeyPressReleaseSequence(
+      GetEventGenerator(), ui::VKEY_A,
+      /*control=*/false, /*shift=*/false, /*alt=*/false, /*command=*/true);
+
+  task_environment()->RunUntilIdle();
+  EXPECT_FALSE(open_new_entry_point_future.IsReady())
+      << "Search+A shortcut won't be available if new entry point flag is on. "
+         "New entry point won't be expected to be opened.";
+
+  EXPECT_EQ(0, user_action_tester.GetActionCount(
+                   "VoiceInteraction.Started.Search_A"));
 }
 
 }  // namespace ash

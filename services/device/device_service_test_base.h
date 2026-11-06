@@ -1,23 +1,27 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef SERVICES_DEVICE_DEVICE_SERVICE_TEST_BASE_H_
 #define SERVICES_DEVICE_DEVICE_SERVICE_TEST_BASE_H_
 
-#include "base/macros.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
 #include "build/build_config.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "services/device/public/cpp/geolocation/buildflags.h"
 #include "services/device/public/mojom/device_service.mojom.h"
 #include "services/network/test/test_network_connection_tracker.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+#if BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
+#include "services/device/public/cpp/test/fake_geolocation_system_permission_manager.h"
+#endif  // BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
+
 namespace device {
 
 class DeviceService;
-class GeolocationManager;
 
 const char kTestGeolocationApiKey[] = "FakeApiKeyForTest";
 
@@ -25,12 +29,18 @@ const char kTestGeolocationApiKey[] = "FakeApiKeyForTest";
 class DeviceServiceTestBase : public testing::Test {
  public:
   DeviceServiceTestBase();
+
+  DeviceServiceTestBase(const DeviceServiceTestBase&) = delete;
+  DeviceServiceTestBase& operator=(const DeviceServiceTestBase&) = delete;
+
   ~DeviceServiceTestBase() override;
 
   // NOTE: It's important to do service instantiation within SetUp instead of
   // the constructor, as subclasses of this fixture may need to initialize some
   // global state before the service is constructed.
   void SetUp() override;
+
+  void TearDown() override;
 
  protected:
   mojom::DeviceService* device_service() { return service_remote_.get(); }
@@ -48,9 +58,10 @@ class DeviceServiceTestBase : public testing::Test {
   scoped_refptr<base::SingleThreadTaskRunner> file_task_runner_;
   scoped_refptr<base::SingleThreadTaskRunner> io_task_runner_;
 
-#if defined(OS_MAC)
-  std::unique_ptr<GeolocationManager> fake_geolocation_manager_;
-#endif
+#if BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
+  raw_ptr<FakeGeolocationSystemPermissionManager>
+      fake_geolocation_system_permission_manager_;
+#endif  // BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
 
   network::TestURLLoaderFactory test_url_loader_factory_;
 
@@ -59,8 +70,6 @@ class DeviceServiceTestBase : public testing::Test {
       network_connection_tracker_;
   std::unique_ptr<DeviceService> service_;
   mojo::Remote<mojom::DeviceService> service_remote_;
-
-  DISALLOW_COPY_AND_ASSIGN(DeviceServiceTestBase);
 };
 
 }  // namespace device

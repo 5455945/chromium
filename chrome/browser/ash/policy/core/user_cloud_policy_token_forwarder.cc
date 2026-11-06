@@ -1,24 +1,23 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/policy/core/user_cloud_policy_token_forwarder.h"
 
-#include "base/bind.h"
+#include "base/check.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/clock.h"
 #include "base/time/default_clock.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
-#include "chrome/browser/ash/policy/core/user_cloud_policy_manager_chromeos.h"
-#include "chrome/browser/chrome_notification_types.h"
+#include "chrome/browser/ash/policy/core/user_cloud_policy_manager_ash.h"
 #include "components/policy/core/common/cloud/cloud_policy_core.h"
-#include "components/signin/public/identity_manager/consent_level.h"
+#include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/identity_manager/primary_account_access_token_fetcher.h"
-#include "components/signin/public/identity_manager/scope_set.h"
-#include "content/public/browser/notification_source.h"
 #include "google_apis/gaia/gaia_constants.h"
 
 namespace policy {
@@ -39,7 +38,7 @@ const net::BackoffEntry::Policy
 constexpr char UserCloudPolicyTokenForwarder::kUMAChildUserOAuthTokenError[];
 
 UserCloudPolicyTokenForwarder::UserCloudPolicyTokenForwarder(
-    UserCloudPolicyManagerChromeOS* manager,
+    UserCloudPolicyManagerAsh* manager,
     signin::IdentityManager* identity_manager)
     : manager_(manager),
       identity_manager_(identity_manager),
@@ -47,21 +46,23 @@ UserCloudPolicyTokenForwarder::UserCloudPolicyTokenForwarder(
       retry_backoff_(
           std::make_unique<net::BackoffEntry>(&kFetchTokenRetryBackoffPolicy)),
       clock_(base::DefaultClock::GetInstance()) {
+  CHECK(manager_);
+  CHECK(identity_manager_);
   // Start by waiting for the CloudPolicyService to be initialized, so that
   // we can check if it already has a DMToken or not.
   if (manager_->core()->service()->IsInitializationComplete()) {
     StartRequest();
   } else {
-    manager_->core()->service()->AddObserver(this);
+    cloud_policy_service_observation_.Observe(manager_->core()->service());
   }
 }
 
-UserCloudPolicyTokenForwarder::~UserCloudPolicyTokenForwarder() {}
+UserCloudPolicyTokenForwarder::~UserCloudPolicyTokenForwarder() = default;
 
 void UserCloudPolicyTokenForwarder::Shutdown() {
   access_token_fetcher_.reset();
   refresh_oauth_token_timer_.reset();
-  manager_->core()->service()->RemoveObserver(this);
+  cloud_policy_service_observation_.Reset();
 }
 
 void UserCloudPolicyTokenForwarder::
@@ -77,11 +78,11 @@ bool UserCloudPolicyTokenForwarder::IsTokenRefreshScheduledForTesting() const {
   return refresh_oauth_token_timer_ && refresh_oauth_token_timer_->IsRunning();
 }
 
-absl::optional<base::TimeDelta>
+std::optional<base::TimeDelta>
 UserCloudPolicyTokenForwarder::GetTokenRefreshDelayForTesting() const {
   return IsTokenRefreshScheduledForTesting()
              ? refresh_oauth_token_timer_->GetCurrentDelay()
-             : absl::optional<base::TimeDelta>();
+             : std::optional<base::TimeDelta>();
 }
 
 void UserCloudPolicyTokenForwarder::OverrideTimeForTesting(
@@ -98,18 +99,15 @@ void UserCloudPolicyTokenForwarder::OverrideTimeForTesting(
 
 void UserCloudPolicyTokenForwarder::StartRequest() {
   refresh_oauth_token_timer_->Stop();
+
   // TODO(mnissler): Once a better way to reconfirm whether a user is on the
-  // login whitelist is available there is no reason to fetch the OAuth2 token
+  // login allowlist is available there is no reason to fetch the OAuth2 token
   // for regular user here if the client is already registered. If it is not
   // recurring token fetch for child user check and bail out here.
-  signin::ScopeSet scopes;
-  scopes.insert(GaiaConstants::kDeviceManagementServiceOAuth);
-  scopes.insert(GaiaConstants::kGoogleUserInfoEmail);
-
   // NOTE: The primary account may not be available yet.
   access_token_fetcher_ =
       std::make_unique<signin::PrimaryAccountAccessTokenFetcher>(
-          "policy_token_forwarder", identity_manager_, scopes,
+          signin::OAuthConsumerId::kPolicyTokenForwarder, identity_manager_,
           base::BindOnce(
               &UserCloudPolicyTokenForwarder::OnAccessTokenFetchCompleted,
               base::Unretained(this)),
@@ -120,7 +118,7 @@ void UserCloudPolicyTokenForwarder::StartRequest() {
 void UserCloudPolicyTokenForwarder::OnAccessTokenFetchCompleted(
     GoogleServiceAuthError error,
     signin::AccessTokenInfo token_info) {
-  DCHECK(access_token_fetcher_);
+  CHECK(access_token_fetcher_, base::NotFatalUntil::M160);
 
   if (error.state() == GoogleServiceAuthError::NONE) {
     oauth_token_ = std::move(token_info);
@@ -150,7 +148,7 @@ void UserCloudPolicyTokenForwarder::OnAccessTokenFetchCompleted(
                             GoogleServiceAuthError::NUM_STATES);
 
   // Schedule fetching fresh OAuth token after current token expiration, if
-  // UserCloudPolicyManagerChromeOS needs valid OAuth token all the time.
+  // UserCloudPolicyManagerAsh needs valid OAuth token all the time.
   access_token_fetcher_.reset();
   // Retry after delay, if token request fails or the new token is expired.
   const base::Time now = clock_->Now();

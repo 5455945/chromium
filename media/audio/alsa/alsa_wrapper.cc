@@ -1,8 +1,11 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/audio/alsa/alsa_wrapper.h"
+
+#include "base/compiler_specific.h"
+#include "base/containers/heap_array.h"
 
 namespace media {
 
@@ -10,8 +13,10 @@ AlsaWrapper::AlsaWrapper() = default;
 
 AlsaWrapper::~AlsaWrapper() = default;
 
-int AlsaWrapper::PcmOpen(snd_pcm_t** handle, const char* name,
-                         snd_pcm_stream_t stream, int mode) {
+int AlsaWrapper::PcmOpen(snd_pcm_t** handle,
+                         const char* name,
+                         snd_pcm_stream_t stream,
+                         int mode) {
   return snd_pcm_open(handle, name, stream, mode);
 }
 
@@ -19,8 +24,19 @@ int AlsaWrapper::DeviceNameHint(int card, const char* iface, void*** hints) {
   return snd_device_name_hint(card, iface, hints);
 }
 
-char* AlsaWrapper::DeviceNameGetHint(const void* hint, const char* id) {
-  return snd_device_name_get_hint(hint, id);
+AlsaWrapper::ScopedAlsaString AlsaWrapper::DeviceNameGetHint(const void* hint,
+                                                             const char* id) {
+  char* ptr = snd_device_name_get_hint(hint, id);
+  if (!ptr) {
+    return {};
+  }
+  // SAFETY:
+  // https://github.com/alsa-project/alsa-lib/blob/07ec2ad34c42dba8656d3f543164f360f481c52e/src/control/namehint.c#L712
+  // `ptr` must end with '\0', so we can use the length measurement method of C
+  // language.
+  return UNSAFE_BUFFERS(
+      base::HeapArray<char, base::FreeDeleter>::FromOwningPointer(
+          ptr, std::char_traits<char>::length(ptr)));
 }
 
 int AlsaWrapper::DeviceNameFreeHint(void** hints) {
@@ -75,20 +91,19 @@ const char* AlsaWrapper::PcmName(snd_pcm_t* handle) {
   return snd_pcm_name(handle);
 }
 
-int AlsaWrapper::PcmSetParams(snd_pcm_t* handle, snd_pcm_format_t format,
-                              snd_pcm_access_t access, unsigned int channels,
-                              unsigned int rate, int soft_resample,
+int AlsaWrapper::PcmSetParams(snd_pcm_t* handle,
+                              snd_pcm_format_t format,
+                              snd_pcm_access_t access,
+                              unsigned int channels,
+                              unsigned int rate,
+                              int soft_resample,
                               unsigned int latency) {
-  return snd_pcm_set_params(handle,
-                            format,
-                            access,
-                            channels,
-                            rate,
-                            soft_resample,
-                            latency);
+  return snd_pcm_set_params(handle, format, access, channels, rate,
+                            soft_resample, latency);
 }
 
-int AlsaWrapper::PcmGetParams(snd_pcm_t* handle, snd_pcm_uframes_t* buffer_size,
+int AlsaWrapper::PcmGetParams(snd_pcm_t* handle,
+                              snd_pcm_uframes_t* buffer_size,
                               snd_pcm_uframes_t* period_size) {
   return snd_pcm_get_params(handle, buffer_size, period_size);
 }
@@ -270,17 +285,27 @@ int AlsaWrapper::MixerSelemIsActive(snd_mixer_elem_t* elem) {
   return snd_mixer_selem_is_active(elem);
 }
 
-const char* AlsaWrapper::MixerSelemName(snd_mixer_elem_t* elem) {
-  return snd_mixer_selem_get_name(elem);
+std::string_view AlsaWrapper::MixerSelemName(snd_mixer_elem_t* elem) {
+  // We did not find the official document description of alsa, but according to
+  // the code hint in
+  // https://github.com/alsa-project/alsa-lib/blob/master/src/mixer/simple.c#L170,
+  // the result here is `elem->private_data->id->name`, which is a C array.
+  const char* ptr = snd_mixer_selem_get_name(elem);
+  if (!ptr) {
+    return {};
+  }
+  return std::string_view(ptr);
 }
 
-int AlsaWrapper::MixerSelemSetCaptureVolumeAll(
-    snd_mixer_elem_t* elem, long value) {
+int AlsaWrapper::MixerSelemSetCaptureVolumeAll(snd_mixer_elem_t* elem,
+                                               long value) {
   return snd_mixer_selem_set_capture_volume_all(elem, value);
 }
 
 int AlsaWrapper::MixerSelemGetCaptureVolume(
-    snd_mixer_elem_t* elem, snd_mixer_selem_channel_id_t channel, long* value) {
+    snd_mixer_elem_t* elem,
+    snd_mixer_selem_channel_id_t channel,
+    long* value) {
   return snd_mixer_selem_get_capture_volume(elem, channel, value);
 }
 
@@ -289,7 +314,8 @@ int AlsaWrapper::MixerSelemHasCaptureVolume(snd_mixer_elem_t* elem) {
 }
 
 int AlsaWrapper::MixerSelemGetCaptureVolumeRange(snd_mixer_elem_t* elem,
-                                                 long* min, long* max) {
+                                                 long* min,
+                                                 long* max) {
   return snd_mixer_selem_get_capture_volume_range(elem, min, max);
 }
 
@@ -346,8 +372,24 @@ int AlsaWrapper::MixerSelemGetPlaybackVolumeRange(snd_mixer_elem_t* elem,
   return snd_mixer_selem_get_playback_volume_range(elem, min, max);
 }
 
+int AlsaWrapper::MixerSelemAskPlaybackVolDb(snd_mixer_elem_t* elem,
+                                            long value,
+                                            long* db_value) {
+  return snd_mixer_selem_ask_playback_vol_dB(elem, value, db_value);
+}
+
+int AlsaWrapper::MixerSelemAskPlaybackDbVol(snd_mixer_elem_t* elem,
+                                            long db_value,
+                                            long* value) {
+  return snd_mixer_selem_ask_playback_dB_vol(elem, db_value, 0, value);
+}
+
 int AlsaWrapper::MixerSelemHasPlaybackSwitch(snd_mixer_elem_t* elem) {
   return snd_mixer_selem_has_playback_switch(elem);
+}
+
+int AlsaWrapper::MixerSelemHasPlaybackVolume(snd_mixer_elem_t* elem) {
+  return snd_mixer_selem_has_playback_volume(elem);
 }
 
 void AlsaWrapper::MixerSelemIdSetIndex(snd_mixer_selem_id_t* obj,
@@ -365,6 +407,12 @@ int AlsaWrapper::MixerSelemSetPlaybackSwitch(
     snd_mixer_selem_channel_id_t channel,
     int value) {
   return snd_mixer_selem_set_playback_switch(elem, channel, value);
+}
+
+int AlsaWrapper::MixerSelemSetPlaybackSwitchAll(
+    snd_mixer_elem_t* elem,
+    int value) {
+  return snd_mixer_selem_set_playback_switch_all(elem, value);
 }
 
 int AlsaWrapper::MixerSelemSetPlaybackVolumeAll(snd_mixer_elem_t* elem,

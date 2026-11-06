@@ -1,35 +1,38 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_ASH_LOGIN_SCREENS_ENABLE_ADB_SIDELOADING_SCREEN_H_
 #define CHROME_BROWSER_ASH_LOGIN_SCREENS_ENABLE_ADB_SIDELOADING_SCREEN_H_
 
-#include <string>
-
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ash/login/help_app_launcher.h"
 #include "chrome/browser/ash/login/screens/base_screen.h"
-// TODO(https://crbug.com/1164001): move to forward declaration.
-#include "chrome/browser/ui/webui/chromeos/login/enable_adb_sideloading_screen_handler.h"
-#include "chromeos/dbus/session_manager/session_manager_client.h"
+#include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
 
 class PrefRegistrySimple;
+class PrefService;
 
 namespace ash {
+
+class EnableAdbSideloadingScreenView;
 
 // Representation independent class that controls screen showing enable
 // adb sideloading screen to users.
 class EnableAdbSideloadingScreen : public BaseScreen {
  public:
-  EnableAdbSideloadingScreen(EnableAdbSideloadingScreenView* view,
+  // `local_state` must be non-null and must outlive `this`.
+  EnableAdbSideloadingScreen(PrefService* local_state,
+                             base::WeakPtr<EnableAdbSideloadingScreenView> view,
                              const base::RepeatingClosure& exit_callback);
-  ~EnableAdbSideloadingScreen() override;
 
-  // Called by EnableAdbSideloadingHandler.
-  void OnViewDestroyed(EnableAdbSideloadingScreenView* view);
+  EnableAdbSideloadingScreen(const EnableAdbSideloadingScreen&) = delete;
+  EnableAdbSideloadingScreen& operator=(const EnableAdbSideloadingScreen&) =
+      delete;
+
+  ~EnableAdbSideloadingScreen() override;
 
   // Registers Local State preferences.
   static void RegisterPrefs(PrefRegistrySimple* registry);
@@ -38,7 +41,7 @@ class EnableAdbSideloadingScreen : public BaseScreen {
   // BaseScreen:
   void ShowImpl() override;
   void HideImpl() override;
-  void OnUserAction(const std::string& action_id) override;
+  void OnUserAction(const base::ListValue& args) override;
 
   base::RepeatingClosure* exit_callback() { return &exit_callback_; }
 
@@ -53,22 +56,16 @@ class EnableAdbSideloadingScreen : public BaseScreen {
   void OnCancel();
   void OnLearnMore();
 
+  const raw_ref<PrefService> local_state_;
+
   // Help application used for help dialogs.
   scoped_refptr<HelpAppLauncher> help_app_;
 
-  EnableAdbSideloadingScreenView* view_;
+  base::WeakPtr<EnableAdbSideloadingScreenView> view_;
   base::RepeatingClosure exit_callback_;
   base::WeakPtrFactory<EnableAdbSideloadingScreen> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(EnableAdbSideloadingScreen);
 };
 
 }  // namespace ash
-
-// TODO(https://crbug.com/1164001): remove after the //chrome/browser/chromeos
-// source migration is finished.
-namespace chromeos {
-using ::ash::EnableAdbSideloadingScreen;
-}
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_SCREENS_ENABLE_ADB_SIDELOADING_SCREEN_H_

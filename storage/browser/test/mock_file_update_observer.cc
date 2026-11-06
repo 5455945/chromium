@@ -1,9 +1,9 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/threading/thread_task_runner_handle.h"
 #include "storage/browser/test/mock_file_update_observer.h"
+#include "base/task/single_thread_task_runner.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace storage {
@@ -15,9 +15,17 @@ MockFileUpdateObserver::~MockFileUpdateObserver() = default;
 
 // static
 UpdateObserverList MockFileUpdateObserver::CreateList(
-    MockFileUpdateObserver* observer) {
+    scoped_refptr<MockFileUpdateObserver> observer) {
   UpdateObserverList list;
-  return list.AddObserver(observer, base::ThreadTaskRunnerHandle::Get().get());
+  return list.AddObserver(
+      std::move(observer),
+      base::SingleThreadTaskRunner::GetCurrentDefault().get());
+}
+
+void MockFileUpdateObserver::Disable() {
+  start_update_count_.clear();
+  end_update_count_.clear();
+  is_ready_ = false;
 }
 
 void MockFileUpdateObserver::OnStartUpdate(const FileSystemURL& url) {

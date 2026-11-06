@@ -1,21 +1,30 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/chromeos/policy/dlp/clipboard_bubble.h"
 
-#include "ash/constants/ash_features.h"
-#include "ash/public/cpp/style/color_provider.h"
+#include "ash/public/cpp/new_window_delegate.h"
+#include "ash/style/style_util.h"
+#include "base/functional/bind.h"
 #include "chrome/browser/chromeos/policy/dlp/dlp_clipboard_bubble_constants.h"
+#include "chrome/browser/chromeos/policy/dlp/dlp_policy_constants.h"
+#include "chromeos/constants/chromeos_features.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/ui_base_features.h"
+#include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/compositor/layer.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/gfx/text_utils.h"
+#include "ui/views/background.h"
 #include "ui/views/bubble/bubble_border.h"
 #include "ui/views/controls/button/label_button.h"
+#include "ui/views/controls/link.h"
+#include "ui/views/controls/styled_label.h"
 
 namespace policy {
 
@@ -64,10 +73,11 @@ constexpr int kButtonLabelSpacing = 8;
 // The spacing between the buttons.
 constexpr int kButtonsSpacing = 8;
 
-class Button : public views::LabelButton {
+class BubbleButton : public views::LabelButton {
+  METADATA_HEADER(BubbleButton, views::LabelButton)
+
  public:
-  METADATA_HEADER(Button);
-  explicit Button(const std::u16string& button_label) {
+  explicit BubbleButton(const std::u16string& button_label) {
     SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_CENTER);
 
     SetText(button_label);
@@ -75,18 +85,15 @@ class Button : public views::LabelButton {
     const gfx::FontList font_list = GetFontList();
     label()->SetFontList(font_list);
 
-    SetTextColor(
-        ButtonState::STATE_NORMAL,
-        ash::ColorProvider::Get()->GetContentLayerColor(
-            ash::ColorProvider::ContentLayerType::kButtonLabelColorBlue));
+    SetTextColor(ButtonState::STATE_NORMAL, cros_tokens::kTextColorProminent);
     SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_CENTER);
     SetSize({gfx::GetStringWidth(button_label, font_list) + 2 * kButtonPadding,
              kButtonHeight});
   }
 
-  Button(const Button&) = delete;
-  Button& operator=(const Button&) = delete;
-  ~Button() override = default;
+  BubbleButton(const BubbleButton&) = delete;
+  BubbleButton& operator=(const BubbleButton&) = delete;
+  ~BubbleButton() override = default;
 
   int GetLabelWidth() const { return label()->bounds().width(); }
 
@@ -96,65 +103,93 @@ class Button : public views::LabelButton {
   }
 };
 
+void OnLearnMoreLinkClicked() {
+  ash::NewWindowDelegate::GetInstance()->OpenUrl(
+      GURL(dlp::kDlpLearnMoreUrl),
+      ash::NewWindowDelegate::OpenUrlFrom::kUserInteraction,
+      ash::NewWindowDelegate::Disposition::kNewForegroundTab);
+}
+
 }  // namespace
 
-BEGIN_METADATA(Button, views::LabelButton)
+BEGIN_METADATA(BubbleButton)
 ADD_READONLY_PROPERTY_METADATA(int, LabelWidth)
 END_METADATA
 
 ClipboardBubbleView::ClipboardBubbleView(const std::u16string& text) {
   SetPaintToLayer(ui::LAYER_SOLID_COLOR);
-  ash::ColorProvider* color_provider = ash::ColorProvider::Get();
-  layer()->SetColor(color_provider->GetBaseLayerColor(
-      ash::ColorProvider::BaseLayerType::kTransparent80));
-  if (ash::features::IsBackgroundBlurEnabled())
+  SetBackground(views::CreateLayerBasedRoundedBackground(
+      chromeos::features::IsSystemBlurEnabled()
+          ? cros_tokens::kCrosSysSystemBaseElevated
+          : cros_tokens::kCrosSysSystemBaseElevatedOpaque,
+      kCornerRadii));
+
+  if (chromeos::features::IsSystemBlurEnabled()) {
     layer()->SetBackgroundBlur(kBubbleBlurRadius);
-  layer()->SetRoundedCornerRadius(kCornerRadii);
+    layer()->SetBackdropFilterQuality(ash::StyleUtil::kBackgroundBlurQuality);
+  }
 
   // Add the managed icon.
-  SkColor icon_color = color_provider->GetContentLayerColor(
-      ash::ColorProvider::ContentLayerType::kIconColorPrimary);
   managed_icon_ = AddChildView(std::make_unique<views::ImageView>());
   managed_icon_->SetPaintToLayer();
   managed_icon_->layer()->SetFillsBoundsOpaquely(false);
   managed_icon_->SetBounds(kBubblePadding, kBubblePadding, kManagedIconSize,
                            kManagedIconSize);
-  managed_icon_->SetImage(gfx::CreateVectorIcon(vector_icons::kBusinessIcon,
-                                                kManagedIconSize, icon_color));
+  managed_icon_->SetImage(ui::ImageModel::FromVectorIcon(
+      features::IsRoundedIconsEnabled() ? vector_icons::kDomainIcon
+                                        : vector_icons::kBusinessOldIcon,
+      cros_tokens::kIconColorPrimary, kManagedIconSize));
 
   // Add the bubble text.
-  label_ = AddChildView(std::make_unique<views::Label>());
+  label_ = AddChildView(std::make_unique<views::StyledLabel>());
   label_->SetPaintToLayer();
   label_->layer()->SetFillsBoundsOpaquely(false);
   label_->SetPosition(gfx::Point(
       kBubblePadding + kManagedIconSize + kIconLabelSpacing, kBubblePadding));
+  label_->SetTextContext(views::style::CONTEXT_DIALOG_BODY_TEXT);
 
-  // Set the styling of the text.
+  std::u16string learn_more_link_text =
+      l10n_util::GetStringUTF16(IDS_LEARN_MORE);
+  std::u16string full_text = l10n_util::GetStringFUTF16(
+      IDS_POLICY_DLP_CLIPBOARD_BUBBLE_MESSAGE, text, learn_more_link_text);
+  const int main_message_length =
+      full_text.size() - learn_more_link_text.size();
+
+  // Set the styling of the main text.
   // TODO(crbug.com/1150741): Handle RTL.
-  label_->SetText(text);
-  label_->SetFontList(gfx::FontList({kTextFontName}, gfx::Font::NORMAL,
-                                    kTextFontSize, gfx::Font::Weight::NORMAL));
-  label_->SetEnabledColor(color_provider->GetContentLayerColor(
-      ash::ColorProvider::ContentLayerType::kTextColorPrimary));
+  views::StyledLabel::RangeStyleInfo message_style;
+  message_style.override_color = cros_tokens::kTextColorPrimary;
+
+  label_->SetText(full_text);
+  label_->AddStyleRange(gfx::Range(0, main_message_length), message_style);
+
+  // Add "Learn more" link.
+  views::StyledLabel::RangeStyleInfo link_style =
+      views::StyledLabel::RangeStyleInfo::CreateForLink(
+          base::BindRepeating(&OnLearnMoreLinkClicked));
+  link_style.override_color = cros_tokens::kLinkColor;
+
+  label_->AddStyleRange(gfx::Range(main_message_length, full_text.size()),
+                        link_style);
   label_->SetLineHeight(kLineHeight);
-  label_->SetMultiLine(true);
   label_->SizeToFit(kBubbleWidth - 2 * kBubblePadding - kManagedIconSize -
                     kIconLabelSpacing);
   label_->SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_LEFT);
-  label_->SetAutoColorReadabilityEnabled(false);
+  label_->SetDisplayedOnBackgroundColor(
+      cros_tokens::kCrosSysSystemBaseElevated);
 
   // Bubble borders
   border_ = AddChildView(std::make_unique<views::ImageView>());
   border_->SetPaintToLayer();
   border_->layer()->SetFillsBoundsOpaquely(false);
   auto shadow_border = std::make_unique<views::BubbleBorder>(
-      views::BubbleBorder::FLOAT, views::BubbleBorder::STANDARD_SHADOW,
-      SK_ColorTRANSPARENT);
-  shadow_border->SetCornerRadius(kBubbleCornerRadius);
+      views::BubbleBorder::FLOAT, views::BubbleBorder::STANDARD_SHADOW);
+  shadow_border->set_rounded_corners(gfx::RoundedCornersF(kBubbleCornerRadius));
   shadow_border->set_background_color(SK_ColorTRANSPARENT);
   shadow_border->set_insets(kBubbleBorderInsets);
   border_->SetSize({kBubbleWidth, INT_MAX});
   border_->SetBorder(std::move(shadow_border));
+  border_->SetCanProcessEventsWithinSubtree(false);
 }
 
 ClipboardBubbleView::~ClipboardBubbleView() = default;
@@ -163,7 +198,7 @@ void ClipboardBubbleView::UpdateBorderSize(const gfx::Size& size) {
   border_->SetSize(size);
 }
 
-BEGIN_METADATA(ClipboardBubbleView, views::View)
+BEGIN_METADATA(ClipboardBubbleView)
 ADD_READONLY_PROPERTY_METADATA(gfx::Size, BubbleSize)
 END_METADATA
 
@@ -172,7 +207,7 @@ ClipboardBlockBubble::ClipboardBlockBubble(const std::u16string& text)
   // Add "Got it" button.
   std::u16string button_label =
       l10n_util::GetStringUTF16(IDS_POLICY_DLP_CLIPBOARD_BLOCK_DISMISS_BUTTON);
-  button_ = AddChildView(std::make_unique<Button>(button_label));
+  button_ = AddChildView(std::make_unique<BubbleButton>(button_label));
   button_->SetPaintToLayer();
   button_->layer()->SetFillsBoundsOpaquely(false);
   button_->SetPosition(
@@ -185,19 +220,18 @@ ClipboardBlockBubble::ClipboardBlockBubble(const std::u16string& text)
 ClipboardBlockBubble::~ClipboardBlockBubble() = default;
 
 gfx::Size ClipboardBlockBubble::GetBubbleSize() const {
-  DCHECK(label_);
-  DCHECK(button_);
+  CHECK(label_, base::NotFatalUntil::M161);
+  CHECK(button_, base::NotFatalUntil::M161);
   return {kBubbleWidth, 2 * kBubblePadding + label_->bounds().height() +
                             kButtonLabelSpacing + button_->height()};
 }
 
-void ClipboardBlockBubble::SetDismissCallback(
-    base::RepeatingCallback<void()> cb) {
-  DCHECK(button_);
+void ClipboardBlockBubble::SetDismissCallback(base::OnceClosure cb) {
+  CHECK(button_, base::NotFatalUntil::M161);
   button_->SetCallback(std::move(cb));
 }
 
-BEGIN_METADATA(ClipboardBlockBubble, ClipboardBubbleView)
+BEGIN_METADATA(ClipboardBlockBubble)
 END_METADATA
 
 ClipboardWarnBubble::ClipboardWarnBubble(const std::u16string& text)
@@ -205,7 +239,7 @@ ClipboardWarnBubble::ClipboardWarnBubble(const std::u16string& text)
   // Add paste button.
   std::u16string paste_label =
       l10n_util::GetStringUTF16(IDS_POLICY_DLP_CLIPBOARD_WARN_PROCEED_BUTTON);
-  paste_button_ = AddChildView(std::make_unique<Button>(paste_label));
+  paste_button_ = AddChildView(std::make_unique<BubbleButton>(paste_label));
   paste_button_->SetPaintToLayer();
   paste_button_->layer()->SetFillsBoundsOpaquely(false);
   paste_button_->SetPosition(
@@ -214,8 +248,8 @@ ClipboardWarnBubble::ClipboardWarnBubble(const std::u16string& text)
 
   // Add cancel button.
   std::u16string cancel_label =
-      l10n_util::GetStringUTF16(IDS_POLICY_DLP_CLIPBOARD_WARN_DISMISS_BUTTON);
-  cancel_button_ = AddChildView(std::make_unique<Button>(cancel_label));
+      l10n_util::GetStringUTF16(IDS_POLICY_DLP_WARN_CANCEL_BUTTON);
+  cancel_button_ = AddChildView(std::make_unique<BubbleButton>(cancel_label));
   cancel_button_->SetPaintToLayer();
   cancel_button_->layer()->SetFillsBoundsOpaquely(false);
   cancel_button_->SetPosition(
@@ -226,29 +260,31 @@ ClipboardWarnBubble::ClipboardWarnBubble(const std::u16string& text)
   UpdateBorderSize(GetBubbleSize());
 }
 
-ClipboardWarnBubble::~ClipboardWarnBubble() = default;
+ClipboardWarnBubble::~ClipboardWarnBubble() {
+  if (paste_cb_) {
+    std::move(paste_cb_).Run(false);
+  }
+}
 
 gfx::Size ClipboardWarnBubble::GetBubbleSize() const {
-  DCHECK(label_);
-  DCHECK(cancel_button_);
-  DCHECK(paste_button_);
+  CHECK(label_, base::NotFatalUntil::M161);
+  CHECK(cancel_button_, base::NotFatalUntil::M161);
+  CHECK(paste_button_, base::NotFatalUntil::M161);
   return {kBubbleWidth, 2 * kBubblePadding + label_->bounds().height() +
                             kButtonLabelSpacing + paste_button_->height()};
 }
 
-void ClipboardWarnBubble::SetDismissCallback(
-    base::RepeatingCallback<void()> cb) {
-  DCHECK(cancel_button_);
+void ClipboardWarnBubble::SetDismissCallback(base::OnceClosure cb) {
+  CHECK(cancel_button_, base::NotFatalUntil::M161);
   cancel_button_->SetCallback(std::move(cb));
 }
 
-void ClipboardWarnBubble::SetProceedCallback(
-    base::RepeatingCallback<void()> cb) {
-  DCHECK(paste_button_);
+void ClipboardWarnBubble::SetProceedCallback(base::OnceClosure cb) {
+  CHECK(paste_button_, base::NotFatalUntil::M161);
   paste_button_->SetCallback(std::move(cb));
 }
 
-BEGIN_METADATA(ClipboardWarnBubble, ClipboardBubbleView)
+BEGIN_METADATA(ClipboardWarnBubble)
 END_METADATA
 
 }  // namespace policy

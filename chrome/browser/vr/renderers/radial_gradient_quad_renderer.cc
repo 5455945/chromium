@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 #include "device/vr/vr_gl_util.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/size_f.h"
-#include "ui/gfx/transform.h"
+#include "ui/gfx/geometry/transform.h"
 
 namespace vr {
 
@@ -139,7 +139,7 @@ void RadialGradientQuadRenderer::Draw(
     float opacity,
     const gfx::SizeF& element_size,
     const CornerRadii& radii) {
-  DCHECK(opacity > 0.f);
+  CHECK(opacity > 0.f, base::NotFatalUntil::M163);
   if (SkColorGetA(edge_color) == SK_AlphaTRANSPARENT &&
       SkColorGetA(center_color) == SK_AlphaTRANSPARENT) {
     return;

@@ -1,15 +1,17 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/content_index/content_index_provider_impl.h"
 
 #include <memory>
+#include <string_view>
 
 #include "base/barrier_closure.h"
+#include "base/notimplemented.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
-#include "base/task/post_task.h"
+#include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "chrome/browser/engagement/site_engagement_service_factory.h"
 #include "chrome/browser/metrics/ukm_background_recorder_service.h"
@@ -25,23 +27,24 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_index_context.h"
 #include "content/public/browser/storage_partition.h"
+#include "ui/base/mojom/window_open_disposition.mojom.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/gfx/image/image_skia.h"
 #include "url/origin.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/android/service_tab_launcher.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/common/referrer.h"
 #else
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #endif
 
 using offline_items_collection::ContentId;
 using offline_items_collection::LaunchLocation;
 using offline_items_collection::OfflineItem;
 using offline_items_collection::OfflineItemFilter;
-using offline_items_collection::OfflineItemSchedule;
 
 namespace {
 
@@ -62,23 +65,24 @@ std::string EntryKey(int64_t service_worker_registration_id,
 }
 
 std::string EntryKey(const content::ContentIndexEntry& entry) {
-  return EntryKey(entry.service_worker_registration_id,
-                  url::Origin::Create(entry.launch_url.GetOrigin()),
-                  entry.description->id);
+  return EntryKey(
+      entry.service_worker_registration_id,
+      url::Origin::Create(entry.launch_url.DeprecatedGetOriginAsURL()),
+      entry.description->id);
 }
 
 EntryKeyComponents GetEntryKeyComponents(const std::string& key) {
   size_t pos1 = key.find_first_of(kEntryKeySeparator);
-  DCHECK_NE(pos1, std::string::npos);
+  CHECK_NE(pos1, std::string::npos, base::NotFatalUntil::M161);
   size_t pos2 = key.find_first_of(kEntryKeySeparator, pos1 + 1);
-  DCHECK_NE(pos2, std::string::npos);
+  CHECK_NE(pos2, std::string::npos, base::NotFatalUntil::M161);
 
   int64_t service_worker_registration_id = -1;
-  base::StringToInt64(base::StringPiece(key.data(), pos1),
+  base::StringToInt64(std::string_view(key.data(), pos1),
                       &service_worker_registration_id);
 
   GURL origin(key.substr(pos1 + 1, pos2 - pos1 - 1));
-  DCHECK(origin.is_valid());
+  CHECK(origin.is_valid(), base::NotFatalUntil::M161);
 
   return {service_worker_registration_id, url::Origin::Create(origin),
           key.substr(pos2 + 1)};
@@ -125,12 +129,12 @@ void ContentIndexProviderImpl::Shutdown() {
 
 std::vector<gfx::Size> ContentIndexProviderImpl::GetIconSizes(
     blink::mojom::ContentCategory category) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
   if (icon_sizes_for_testing_)
     return *icon_sizes_for_testing_;
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   // Recommended notification icon size for Android.
   return {{192, 192}};
 #else
@@ -140,7 +144,10 @@ std::vector<gfx::Size> ContentIndexProviderImpl::GetIconSizes(
 
 void ContentIndexProviderImpl::OnContentAdded(
     content::ContentIndexEntry entry) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
+
+  if (!entry.is_top_level_context)
+    return;
 
   OfflineItemList items(1, EntryToOfflineItem(entry));
 
@@ -149,15 +156,16 @@ void ContentIndexProviderImpl::OnContentAdded(
 
   NotifyItemsAdded(items);
 
-  metrics_.RecordContentAdded(url::Origin::Create(entry.launch_url.GetOrigin()),
-                              entry.description->category);
+  metrics_.RecordContentAdded(
+      url::Origin::Create(entry.launch_url.DeprecatedGetOriginAsURL()),
+      entry.description->category);
 }
 
 void ContentIndexProviderImpl::OnContentDeleted(
     int64_t service_worker_registration_id,
     const url::Origin& origin,
     const std::string& description_id) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
   std::string entry_key =
       EntryKey(service_worker_registration_id, origin, description_id);
@@ -183,15 +191,16 @@ void ContentIndexProviderImpl::OpenItem(
 }
 
 void ContentIndexProviderImpl::DidGetEntryToOpen(
-    absl::optional<content::ContentIndexEntry> entry) {
+    std::optional<content::ContentIndexEntry> entry) {
   if (!entry)
     return;
 
-#if defined(OS_ANDROID)
-  content::OpenURLParams params(entry->launch_url, content::Referrer(),
-                                WindowOpenDisposition::NEW_FOREGROUND_TAB,
-                                ui::PAGE_TRANSITION_LINK,
-                                /* is_renderer_initiated= */ false);
+#if BUILDFLAG(IS_ANDROID)
+  content::OpenURLParams params =
+      content::OpenURLParams::CreateBrowserInitiated(
+          entry->launch_url,
+          ui::mojom::WindowOpenDisposition::kNewForegroundTab,
+          ui::PAGE_TRANSITION_LINK);
   ServiceTabLauncher::GetInstance()->LaunchTab(
       profile_, params,
       base::BindOnce(&ContentIndexProviderImpl::DidOpenTab,
@@ -233,8 +242,11 @@ void ContentIndexProviderImpl::PauseDownload(const ContentId& id) {
   NOTREACHED();
 }
 
-void ContentIndexProviderImpl::ResumeDownload(const ContentId& id,
-                                              bool has_user_gesture) {
+void ContentIndexProviderImpl::ResumeDownload(const ContentId& id) {
+  NOTREACHED();
+}
+
+void ContentIndexProviderImpl::ValidateDangerousDownload(const ContentId& id) {
   NOTREACHED();
 }
 
@@ -246,8 +258,8 @@ void ContentIndexProviderImpl::GetItemById(const ContentId& id,
       components.origin.GetURL(), /* can_create= */ false);
 
   if (!storage_partition || !storage_partition->GetContentIndexContext()) {
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
-        FROM_HERE, base::BindOnce(std::move(callback), absl::nullopt));
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback), std::nullopt));
     return;
   }
 
@@ -259,38 +271,37 @@ void ContentIndexProviderImpl::GetItemById(const ContentId& id,
 
 void ContentIndexProviderImpl::DidGetItem(
     SingleItemCallback callback,
-    absl::optional<content::ContentIndexEntry> entry) {
+    std::optional<content::ContentIndexEntry> entry) {
   if (!entry)
-    std::move(callback).Run(absl::nullopt);
+    std::move(callback).Run(std::nullopt);
   else
     std::move(callback).Run(EntryToOfflineItem(*entry));
 }
 
 void ContentIndexProviderImpl::GetAllItems(MultipleItemCallback callback) {
   // Get the number of Storage Paritions.
-  std::vector<content::StoragePartition*> storage_paritions;
-  profile_->ForEachStoragePartition(base::BindRepeating(
-      [](std::vector<content::StoragePartition*>* storage_paritions,
-         content::StoragePartition* storage_partition) {
-        storage_paritions->push_back(storage_partition);
-      },
-      &storage_paritions));
-  DCHECK(!storage_paritions.empty());
+  std::vector<content::StoragePartition*> storage_partitions;
+  profile_->ForEachLoadedStoragePartition(
+      [&](content::StoragePartition* partition) {
+        storage_partitions.push_back(partition);
+      });
+  CHECK(!storage_partitions.empty(), base::NotFatalUntil::M161);
 
   auto item_list = std::make_unique<OfflineItemList>();
   OfflineItemList* item_list_ptr = item_list.get();
 
   // Get the all entries from every partition.
   auto barrier_closure = base::BarrierClosure(
-      storage_paritions.size(),
+      storage_partitions.size(),
       base::BindOnce(
           &ContentIndexProviderImpl::DidGetAllEntriesAcrossStorageParitions,
           weak_ptr_factory_.GetWeakPtr(), std::move(item_list),
           std::move(callback)));
 
-  for (auto* storage_partition : storage_paritions) {
+  for (auto* storage_partition : storage_partitions) {
     if (!storage_partition || !storage_partition->GetContentIndexContext()) {
-      base::ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE, barrier_closure);
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, barrier_closure);
       continue;
     }
 
@@ -305,7 +316,6 @@ void ContentIndexProviderImpl::GetAllItems(MultipleItemCallback callback) {
 void ContentIndexProviderImpl::DidGetAllEntriesAcrossStorageParitions(
     std::unique_ptr<OfflineItemList> item_list,
     MultipleItemCallback callback) {
-  ContentIndexMetrics::RecordContentIndexEntries(item_list->size());
   std::move(callback).Run(*item_list);
 }
 
@@ -319,8 +329,11 @@ void ContentIndexProviderImpl::DidGetAllEntries(
     return;
   }
 
-  for (const auto& entry : entries)
+  for (const auto& entry : entries) {
+    if (!entry.is_top_level_context)
+      continue;
     item_list->push_back(EntryToOfflineItem(entry));
+  }
 
   std::move(done_closure).Run();
 }
@@ -334,7 +347,7 @@ void ContentIndexProviderImpl::GetVisualsForItem(const ContentId& id,
       components.origin.GetURL(), /* can_create= */ false);
 
   if (!storage_partition || !storage_partition->GetContentIndexContext()) {
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(callback), id, nullptr));
     return;
   }
@@ -363,7 +376,8 @@ OfflineItem ContentIndexProviderImpl::EntryToOfflineItem(
 
   if (site_engagement_service_) {
     item.content_quality_score =
-        site_engagement_service_->GetScore(entry.launch_url.GetOrigin()) /
+        site_engagement_service_->GetScore(
+            entry.launch_url.DeprecatedGetOriginAsURL()) /
         site_engagement::SiteEngagementScore::kMaxPoints;
   }
 
@@ -376,7 +390,7 @@ void ContentIndexProviderImpl::DidGetIcons(const ContentId& id,
   auto visuals =
       std::make_unique<offline_items_collection::OfflineItemVisuals>();
   if (!icons.empty()) {
-    DCHECK_EQ(icons.size(), 1u);
+    CHECK_EQ(icons.size(), 1u, base::NotFatalUntil::M161);
     visuals->icon = gfx::Image::CreateFrom1xBitmap(std::move(icons.front()));
   }
   std::move(callback).Run(id, std::move(visuals));
@@ -390,11 +404,5 @@ void ContentIndexProviderImpl::GetShareInfoForItem(const ContentId& id,
 void ContentIndexProviderImpl::RenameItem(const ContentId& id,
                                           const std::string& name,
                                           RenameCallback callback) {
-  NOTREACHED();
-}
-
-void ContentIndexProviderImpl::ChangeSchedule(
-    const ContentId& id,
-    absl::optional<OfflineItemSchedule> schedule) {
   NOTREACHED();
 }

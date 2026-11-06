@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,7 @@
 
 #include "base/component_export.h"
 
-namespace variations {
-namespace switches {
+namespace variations::switches {
 
 // Alphabetical list of switches specific to the variations component. Document
 // each in the .cc file.
@@ -16,9 +15,19 @@ namespace switches {
 COMPONENT_EXPORT(VARIATIONS)
 extern const char kDisableFieldTrialTestingConfig[];
 COMPONENT_EXPORT(VARIATIONS)
-extern const char kEnableBenchmarking[];
+extern const char kDisableVariationsSafeMode[];
+COMPONENT_EXPORT(VARIATIONS)
+extern const char kDisableVariationsSeedFetch[];
+COMPONENT_EXPORT(VARIATIONS)
+extern const char kDisableVariationsSeedFetchThrottling[];
+COMPONENT_EXPORT(VARIATIONS)
+extern const char kEnableBenchmarkingApi[];
+COMPONENT_EXPORT(VARIATIONS)
+extern const char kEnableFieldTrialTestingConfig[];
 COMPONENT_EXPORT(VARIATIONS)
 extern const char kFakeVariationsChannel[];
+COMPONENT_EXPORT(VARIATIONS)
+extern const char kFakeVariationsPlatform[];
 COMPONENT_EXPORT(VARIATIONS)
 extern const char kForceFieldTrialParams[];
 COMPONENT_EXPORT(VARIATIONS)
@@ -26,13 +35,28 @@ extern const char kForceVariationIds[];
 COMPONENT_EXPORT(VARIATIONS)
 extern const char kForceDisableVariationIds[];
 COMPONENT_EXPORT(VARIATIONS)
+extern const char kVariationsSeedCorpus[];
+COMPONENT_EXPORT(VARIATIONS)
+extern const char kVariationsSeedVersion[];
+COMPONENT_EXPORT(VARIATIONS)
 extern const char kVariationsOverrideCountry[];
+COMPONENT_EXPORT(VARIATIONS)
+extern const char kVariationsOverrideGeoLevel1[];
+COMPONENT_EXPORT(VARIATIONS)
+extern const char kVariationsTestSeedJsonPath[];
 COMPONENT_EXPORT(VARIATIONS)
 extern const char kVariationsServerURL[];
 COMPONENT_EXPORT(VARIATIONS)
 extern const char kVariationsInsecureServerURL[];
+COMPONENT_EXPORT(VARIATIONS)
+extern const char kVariationsSeedFetchInterval[];
+COMPONENT_EXPORT(VARIATIONS)
+extern const char kEnableFinchSeedDeltaCompression[];
+COMPONENT_EXPORT(VARIATIONS)
+extern const char kAcceptEmptySeedSignatureForTesting[];
+COMPONENT_EXPORT(VARIATIONS)
+extern const char kVariationsStateFile[];
 
-}  // namespace switches
-}  // namespace variations
+}  // namespace variations::switches
 
 #endif  // COMPONENTS_VARIATIONS_VARIATIONS_SWITCHES_H_

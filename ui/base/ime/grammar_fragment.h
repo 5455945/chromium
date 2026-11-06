@@ -1,4 +1,4 @@
-// Copyright (c) 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,8 +18,8 @@ struct COMPONENT_EXPORT(UI_BASE_IME_TYPES) GrammarFragment {
   GrammarFragment(const GrammarFragment& other);
   ~GrammarFragment();
 
-  bool operator==(const GrammarFragment& other) const;
-  bool operator!=(const GrammarFragment& other) const;
+  friend bool operator==(const GrammarFragment&,
+                         const GrammarFragment&) = default;
 
   // The range of the marker, visual indications such as underlining are
   // expected to show in this range.

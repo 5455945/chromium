@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2018 The Chromium Authors. All rights reserved.
+# Copyright 2018 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -20,7 +20,8 @@ def main():
     env = os.environ.copy()
     if len(python_paths) > 0:
         existing_pp = (
-            os.pathsep + env['PYTHONPATH']) if 'PYTHONPATH' in env else ''
+            (os.pathsep + env['PYTHONPATH']) if 'PYTHONPATH' in env else ''
+        )
         env['PYTHONPATH'] = os.pathsep.join(python_paths) + existing_pp
     sys.exit(subprocess.call([sys.executable] + args, env=env))
 

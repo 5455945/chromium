@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "media/base/channel_layout.h"
 #include "media/base/media_export.h"
 
@@ -15,10 +15,11 @@ namespace media {
 
 class MEDIA_EXPORT ChannelMixingMatrix {
  public:
-  ChannelMixingMatrix(ChannelLayout input_layout,
-                      int input_channels,
-                      ChannelLayout output_layout,
-                      int output_channels);
+  ChannelMixingMatrix(ChannelLayoutConfig input_config,
+                      ChannelLayoutConfig output_config);
+
+  ChannelMixingMatrix(const ChannelMixingMatrix&) = delete;
+  ChannelMixingMatrix& operator=(const ChannelMixingMatrix&) = delete;
 
   ~ChannelMixingMatrix();
 
@@ -29,13 +30,11 @@ class MEDIA_EXPORT ChannelMixingMatrix {
 
  private:
   // Result transformation of input channels to output channels
-  std::vector<std::vector<float>>* matrix_;
+  raw_ptr<std::vector<std::vector<float>>> matrix_;
 
-  // Input and output channel layout provided during construction.
-  ChannelLayout input_layout_;
-  int input_channels_;
-  ChannelLayout output_layout_;
-  int output_channels_;
+  // Input and output channel config provided during construction.
+  ChannelLayoutConfig input_config_;
+  ChannelLayoutConfig output_config_;
 
   // Helper variable for tracking which inputs are currently unaccounted,
   // should be empty after construction completes.
@@ -44,6 +43,11 @@ class MEDIA_EXPORT ChannelMixingMatrix {
   // Helper methods for managing unaccounted input channels.
   void AccountFor(Channels ch);
   bool IsUnaccounted(Channels ch) const;
+
+  // Helper methods for checking if input or output layout is mono or 1.1 (Mono
+  // + LFE).
+  bool IsMonoInputLayout() const;
+  bool IsMonoOutputLayout() const;
 
   // Helper methods for checking if |ch| exists in either |input_layout_| or
   // |output_layout_| respectively.
@@ -55,8 +59,6 @@ class MEDIA_EXPORT ChannelMixingMatrix {
   // remove the channel from |unaccounted_inputs_|.
   void Mix(Channels input_ch, Channels output_ch, float scale);
   void MixWithoutAccounting(Channels input_ch, Channels output_ch, float scale);
-
-  DISALLOW_COPY_AND_ASSIGN(ChannelMixingMatrix);
 };
 
 }  // namespace media

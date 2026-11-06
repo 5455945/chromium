@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 #include <utility>
 
 #include "base/containers/flat_set.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/time/time.h"
 #include "ui/gfx/animation/animation_export.h"
@@ -33,6 +33,9 @@ class ANIMATION_EXPORT AnimationContainer
     : public base::RefCounted<AnimationContainer> {
  public:
   AnimationContainer();
+
+  AnimationContainer(const AnimationContainer&) = delete;
+  AnimationContainer& operator=(const AnimationContainer&) = delete;
 
   // Invoked by Animation when it needs to start. Starts the timer if necessary.
   // NOTE: This is invoked by Animation for you, you shouldn't invoke this
@@ -71,7 +74,8 @@ class ANIMATION_EXPORT AnimationContainer
   // frequently the cache locality of the vector is more important than the
   // costlier (but rarer) insertion. Profiling shows that flat_set continues to
   // perform best in these cases (up to 12x faster than std::set).
-  typedef base::flat_set<AnimationContainerElement*> Elements;
+  typedef base::flat_set<raw_ptr<AnimationContainerElement, CtnExperimental>>
+      Elements;
 
   ~AnimationContainer();
 
@@ -111,9 +115,7 @@ class ANIMATION_EXPORT AnimationContainer
       AnimationRunner::CreateDefaultAnimationRunner();
   bool has_custom_animation_runner_ = false;
 
-  AnimationContainerObserver* observer_ = nullptr;
-
-  DISALLOW_COPY_AND_ASSIGN(AnimationContainer);
+  raw_ptr<AnimationContainerObserver> observer_ = nullptr;
 };
 
 }  // namespace gfx

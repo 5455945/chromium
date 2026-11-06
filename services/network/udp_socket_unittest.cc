@@ -1,6 +1,8 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "services/network/udp_socket.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -8,12 +10,11 @@
 #include <limits>
 #include <utility>
 
-#include "services/network/udp_socket.h"
-
-#include "base/bind.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/notreached.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "build/build_config.h"
@@ -23,11 +24,17 @@
 #include "net/socket/udp_socket.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
+#include "net/url_request/url_request_context.h"
+#include "net/url_request/url_request_context_builder.h"
 #include "net/url_request/url_request_test_util.h"
 #include "services/network/public/mojom/udp_socket.mojom.h"
 #include "services/network/socket_factory.h"
 #include "services/network/test/udp_socket_test_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+#if BUILDFLAG(IS_MAC)
+#include "base/mac/mac_util.h"
+#endif  // BUILDFLAG(IS_MAC)
 
 namespace network {
 
@@ -38,19 +45,21 @@ const size_t kDatagramSize = 255;
 class SocketWrapperTestImpl : public UDPSocket::SocketWrapper {
  public:
   SocketWrapperTestImpl() {}
+
+  SocketWrapperTestImpl(const SocketWrapperTestImpl&) = delete;
+  SocketWrapperTestImpl& operator=(const SocketWrapperTestImpl&) = delete;
+
   ~SocketWrapperTestImpl() override {}
 
   int Connect(const net::IPEndPoint& remote_addr,
               mojom::UDPSocketOptionsPtr options,
               net::IPEndPoint* local_addr_out) override {
     NOTREACHED();
-    return net::ERR_NOT_IMPLEMENTED;
   }
   int Bind(const net::IPEndPoint& local_addr,
            mojom::UDPSocketOptionsPtr options,
            net::IPEndPoint* local_addr_out) override {
     NOTREACHED();
-    return net::ERR_NOT_IMPLEMENTED;
   }
   int SendTo(
       net::IOBuffer* buf,
@@ -59,27 +68,17 @@ class SocketWrapperTestImpl : public UDPSocket::SocketWrapper {
       net::CompletionOnceCallback callback,
       const net::NetworkTrafficAnnotationTag& traffic_annotation) override {
     NOTREACHED();
-    return net::ERR_NOT_IMPLEMENTED;
   }
-  int SetBroadcast(bool broadcast) override {
+  int SetBroadcast(bool broadcast) override { NOTREACHED(); }
+  int SetSendBufferSize(int send_buffer_size) override { NOTREACHED(); }
+  int SetReceiveBufferSize(int receive_buffer_size) override { NOTREACHED(); }
+  int JoinGroup(const net::IPAddress& group_address,
+                const std::optional<net::IPAddress>& source_address) override {
     NOTREACHED();
-    return net::ERR_NOT_IMPLEMENTED;
   }
-  int SetSendBufferSize(int send_buffer_size) override {
+  int LeaveGroup(const net::IPAddress& group_address,
+                 const std::optional<net::IPAddress>& source_address) override {
     NOTREACHED();
-    return net::ERR_NOT_IMPLEMENTED;
-  }
-  int SetReceiveBufferSize(int receive_buffer_size) override {
-    NOTREACHED();
-    return net::ERR_NOT_IMPLEMENTED;
-  }
-  int JoinGroup(const net::IPAddress& group_address) override {
-    NOTREACHED();
-    return net::ERR_NOT_IMPLEMENTED;
-  }
-  int LeaveGroup(const net::IPAddress& group_address) override {
-    NOTREACHED();
-    return net::ERR_NOT_IMPLEMENTED;
   }
   int Write(
       net::IOBuffer* buf,
@@ -87,18 +86,13 @@ class SocketWrapperTestImpl : public UDPSocket::SocketWrapper {
       net::CompletionOnceCallback callback,
       const net::NetworkTrafficAnnotationTag& traffic_annotation) override {
     NOTREACHED();
-    return net::ERR_NOT_IMPLEMENTED;
   }
   int RecvFrom(net::IOBuffer* buf,
                int buf_len,
                net::IPEndPoint* address,
                net::CompletionOnceCallback callback) override {
     NOTREACHED();
-    return net::ERR_NOT_IMPLEMENTED;
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(SocketWrapperTestImpl);
 };
 
 net::IPEndPoint GetLocalHostWithAnyPort() {
@@ -129,8 +123,7 @@ class HangingUDPSocket : public SocketWrapperTestImpl {
       const net::IPEndPoint& address,
       net::CompletionOnceCallback callback,
       const net::NetworkTrafficAnnotationTag& traffic_annotation) override {
-    EXPECT_EQ(expected_data_,
-              std::vector<unsigned char>(buf->data(), buf->data() + buf_len));
+    EXPECT_EQ(expected_data_, buf->first(base::checked_cast<size_t>(buf_len)));
     if (should_complete_requests_)
       return net::OK;
     pending_io_buffers_.push_back(buf);
@@ -143,7 +136,8 @@ class HangingUDPSocket : public SocketWrapperTestImpl {
     expected_data_ = expected_data;
   }
 
-  const std::vector<net::IOBuffer*>& pending_io_buffers() const {
+  const std::vector<raw_ptr<net::IOBuffer, VectorExperimental>>&
+  pending_io_buffers() const {
     return pending_io_buffers_;
   }
 
@@ -163,7 +157,7 @@ class HangingUDPSocket : public SocketWrapperTestImpl {
  private:
   std::vector<uint8_t> expected_data_;
   bool should_complete_requests_ = false;
-  std::vector<net::IOBuffer*> pending_io_buffers_;
+  std::vector<raw_ptr<net::IOBuffer, VectorExperimental>> pending_io_buffers_;
   std::vector<int> pending_io_buffer_lengths_;
   std::vector<net::CompletionOnceCallback> pending_send_requests_;
 };
@@ -192,7 +186,13 @@ class UDPSocketTest : public testing::Test {
  public:
   UDPSocketTest()
       : task_environment_(base::test::TaskEnvironment::MainThreadType::IO),
-        factory_(nullptr /*netlog*/, &url_request_context_) {}
+        url_request_context_(
+            net::CreateTestURLRequestContextBuilder()->Build()),
+        factory_(nullptr /*netlog*/, url_request_context_.get()) {}
+
+  UDPSocketTest(const UDPSocketTest&) = delete;
+  UDPSocketTest& operator=(const UDPSocketTest&) = delete;
+
   ~UDPSocketTest() override {}
 
   void SetWrappedSocket(
@@ -209,10 +209,8 @@ class UDPSocketTest : public testing::Test {
 
  private:
   base::test::TaskEnvironment task_environment_;
-  net::TestURLRequestContext url_request_context_;
+  std::unique_ptr<net::URLRequestContext> url_request_context_;
   SocketFactory factory_;
-
-  DISALLOW_COPY_AND_ASSIGN(UDPSocketTest);
 };
 
 TEST_F(UDPSocketTest, Settings) {
@@ -280,18 +278,9 @@ TEST_F(UDPSocketTest, TestSendToWithConnect) {
   EXPECT_EQ(net::ERR_UNEXPECTED, result);
 }
 
-// TODO(crbug.com/1014916): These two tests are very flaky on Fuchsia.
-#if defined(OS_FUCHSIA)
-#define MAYBE_TestReadSendTo DISABLED_TestReadSendTo
-#define MAYBE_TestUnexpectedSequences DISABLED_TestUnexpectedSequences
-#else
-#define MAYBE_TestReadSendTo TestReadSendTo
-#define MAYBE_TestUnexpectedSequences TestUnexpectedSequences
-#endif
-
 // Tests that the sequence of calling Bind()/Connect() and setters is
 // important.
-TEST_F(UDPSocketTest, MAYBE_TestUnexpectedSequences) {
+TEST_F(UDPSocketTest, TestUnexpectedSequences) {
   mojo::Remote<mojom::UDPSocket> socket_remote;
   factory()->CreateUDPSocket(socket_remote.BindNewPipeAndPassReceiver(),
                              mojo::NullRemote());
@@ -357,8 +346,7 @@ TEST_F(UDPSocketTest, TestBufferValid) {
   // and that buffer still contains the exact same data.
   net::IOBuffer* buf = socket_raw_ptr->pending_io_buffers()[0];
   int buf_len = socket_raw_ptr->pending_io_buffer_lengths()[0];
-  EXPECT_EQ(test_msg,
-            std::vector<unsigned char>(buf->data(), buf->data() + buf_len));
+  EXPECT_EQ(test_msg, buf->first(base::checked_cast<size_t>(buf_len)));
 }
 
 // Test that exercises the queuing of send requests and makes sure
@@ -497,7 +485,7 @@ TEST_F(UDPSocketTest, TestReadSend) {
   EXPECT_EQ(msg, result.data.value());
 }
 
-TEST_F(UDPSocketTest, MAYBE_TestReadSendTo) {
+TEST_F(UDPSocketTest, TestReadSendTo) {
   // Create a server socket to send data.
   mojo::Remote<mojom::UDPSocket> server_socket;
   factory()->CreateUDPSocket(server_socket.BindNewPipeAndPassReceiver(),
@@ -623,7 +611,7 @@ TEST_F(UDPSocketTest, TestSendToInvalidAddress) {
 
   std::vector<uint8_t> test_msg{1};
   std::vector<uint8_t> invalid_ip_addr{127, 0, 0, 0, 1};
-  net::IPAddress ip_address(invalid_ip_addr.data(), invalid_ip_addr.size());
+  net::IPAddress ip_address(invalid_ip_addr);
   EXPECT_FALSE(ip_address.IsValid());
   net::IPEndPoint invalid_addr(ip_address, 53);
   server_socket->SendTo(
@@ -667,16 +655,22 @@ TEST_F(UDPSocketTest, TestReadZeroByte) {
   EXPECT_EQ(std::vector<uint8_t>(), result.data.value());
 }
 
-#if defined(OS_ANDROID) || defined(OS_IOS)
+#if BUILDFLAG(IS_ANDROID)
 // Some Android devices do not support multicast socket.
 // The ones supporting multicast need WifiManager.MulticastLock to enable it.
 // https://developer.android.com/reference/android/net/wifi/WifiManager.MulticastLock.html
-// TODO(crbug.com/1215667): Fails on iOS running on Mac 11 machines.
 #define MAYBE_JoinMulticastGroup DISABLED_JoinMulticastGroup
 #else
 #define MAYBE_JoinMulticastGroup JoinMulticastGroup
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
 TEST_F(UDPSocketTest, MAYBE_JoinMulticastGroup) {
+#if BUILDFLAG(IS_MAC)
+  // See https://crbug.com/354933441
+  if (base::mac::MacOSMajorVersion() >= 15) {
+    GTEST_SKIP() << "Disabled on macOS Sequoia and later.";
+  }
+#endif
+
   const char kGroup[] = "237.132.100.17";
 
   net::IPAddress group_ip;
@@ -749,6 +743,19 @@ TEST_F(UDPSocketTest, MAYBE_JoinMulticastGroup) {
   socket_remote->ReceiveMore(1);
   socket_remote.FlushForTesting();
   EXPECT_EQ(2u, listener.results().size());
+}
+
+TEST_F(UDPSocketTest, JoinAndLeaveGroupRejectInvalidGroupAddress) {
+  mojo::Remote<mojom::UDPSocket> socket_remote;
+  factory()->CreateUDPSocket(socket_remote.BindNewPipeAndPassReceiver(),
+                             mojo::NullRemote());
+  test::UDPSocketTestHelper helper(&socket_remote);
+
+  net::IPEndPoint socket_address(net::IPAddress::IPv4Localhost(), 0);
+  ASSERT_EQ(net::OK, helper.BindSync(socket_address, nullptr, &socket_address));
+
+  EXPECT_EQ(net::ERR_ADDRESS_INVALID, helper.JoinGroupSync(net::IPAddress()));
+  EXPECT_EQ(net::ERR_ADDRESS_INVALID, helper.LeaveGroupSync(net::IPAddress()));
 }
 
 TEST_F(UDPSocketTest, ErrorHappensDuringSocketOptionsConfiguration) {

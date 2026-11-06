@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,9 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/win/async_operation.h"
 
 namespace device {
@@ -46,12 +46,13 @@ HRESULT FakeRadioWinrt::SetStateAsync(
   // |cancelable_closure_| gets destroyed first.
   cancelable_closure_.Reset(base::BindLambdaForTesting([this, value] {
     std::move(set_state_callback_).Run(RadioAccessStatus_Allowed);
-    if (std::exchange(state_, value) != value)
+    if (state_changed_handler_ && std::exchange(state_, value) != value) {
       state_changed_handler_->Invoke(this, nullptr);
+    }
   }));
 
-  base::ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE,
-                                                cancelable_closure_.callback());
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, cancelable_closure_.callback());
   *operation = async_op.Detach();
   return S_OK;
 }
@@ -88,8 +89,8 @@ void FakeRadioWinrt::SimulateAdapterPowerFailure() {
   // with an error code.
   cancelable_closure_.Reset(base::BindOnce(std::move(set_state_callback_),
                                            RadioAccessStatus_DeniedBySystem));
-  base::ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE,
-                                                cancelable_closure_.callback());
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, cancelable_closure_.callback());
 }
 
 void FakeRadioWinrt::SimulateAdapterPoweredOn() {
@@ -134,7 +135,7 @@ void FakeRadioStaticsWinrt::SimulateRequestAccessAsyncError(
 HRESULT FakeRadioStaticsWinrt::RequestAccessAsync(
     IAsyncOperation<RadioAccessStatus>** operation) {
   auto async_op = Make<base::win::AsyncOperation<RadioAccessStatus>>();
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(async_op->callback(), access_status_));
   *operation = async_op.Detach();
   return S_OK;

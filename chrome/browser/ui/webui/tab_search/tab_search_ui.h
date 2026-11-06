@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,17 +7,33 @@
 
 #include <memory>
 
-#include "base/macros.h"
 #include "base/timer/elapsed_timer.h"
 #include "chrome/browser/ui/webui/tab_search/tab_search.mojom.h"
-#include "chrome/browser/ui/webui/tab_search/tab_search_page_handler.h"
+#include "chrome/browser/ui/webui/top_chrome/top_chrome_web_ui_controller.h"
+#include "chrome/browser/ui/webui/top_chrome/top_chrome_webui_config.h"
 #include "chrome/browser/ui/webui/webui_load_timer.h"
+#include "chrome/common/webui_url_constants.h"
+#include "content/public/browser/webui_config.h"
+#include "content/public/common/url_constants.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
-#include "ui/webui/mojo_bubble_web_ui_controller.h"
 
-class TabSearchUI : public ui::MojoBubbleWebUIController,
+class SearchHandler;
+class TabSearchPageHandler;
+class TabSearchUI;
+
+class TabSearchUIConfig : public DefaultTopChromeWebUIConfig<TabSearchUI> {
+ public:
+  TabSearchUIConfig();
+
+  // DefaultTopChromeWebUIConfig:
+  bool ShouldAutoResizeHost() override;
+  bool IsPreloadable() override;
+  std::optional<int> GetCommandIdForTesting() override;
+};
+
+class TabSearchUI : public TopChromeWebUIController,
                     public tab_search::mojom::PageHandlerFactory {
  public:
   explicit TabSearchUI(content::WebUI* web_ui);
@@ -29,9 +45,20 @@ class TabSearchUI : public ui::MojoBubbleWebUIController,
   // interface passing the pending receiver that will be internally bound.
   void BindInterface(
       mojo::PendingReceiver<tab_search::mojom::PageHandlerFactory> receiver);
+  void BindInterface(
+      mojo::PendingReceiver<tab_search::mojom::SearchHandler> receiver);
+
+  void BeforeBubbleWidgetShowed();
 
   TabSearchPageHandler* page_handler_for_testing() {
     return page_handler_.get();
+  }
+
+  static constexpr std::string_view GetWebUIName() { return "TabSearch"; }
+
+  void set_page_handler_creation_callback_for_testing(
+      base::OnceClosure callback) {
+    page_handler_creation_callback_ = std::move(callback);
   }
 
  private:
@@ -41,15 +68,18 @@ class TabSearchUI : public ui::MojoBubbleWebUIController,
       mojo::PendingReceiver<tab_search::mojom::PageHandler> receiver) override;
 
   std::unique_ptr<TabSearchPageHandler> page_handler_;
+  std::unique_ptr<SearchHandler> search_handler_;
 
   mojo::Receiver<tab_search::mojom::PageHandlerFactory> page_factory_receiver_{
       this};
 
   WebuiLoadTimer webui_load_timer_;
 
+  base::OnceClosure page_handler_creation_callback_;
+
   // A timer used to track the duration between when the WebUI is constructed
   // and when the TabSearchPageHandler is constructed.
-  absl::optional<base::ElapsedTimer> page_handler_timer_;
+  std::optional<base::ElapsedTimer> page_handler_timer_;
 
   WEB_UI_CONTROLLER_TYPE_DECL();
 };

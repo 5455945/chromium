@@ -1,10 +1,10 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/power/ml/smart_dim/smart_dim_worker.h"
 
-#include "components/assist_ranker/proto/example_preprocessor.pb.h"
+#include "chrome/browser/ash/power/ml/smart_dim/example_preprocessor.pb.h"
 
 namespace ash {
 namespace power {

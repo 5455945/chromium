@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,19 +7,16 @@
 #include <utility>
 #include <vector>
 
-#include "base/threading/thread_task_runner_handle.h"
-#include "content/browser/appcache/chrome_appcache_service.h"
+#include "base/task/single_thread_task_runner.h"
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
 
 namespace content {
 
 TestSharedWorkerServiceImpl::TestSharedWorkerServiceImpl(
     StoragePartitionImpl* storage_partition,
-    scoped_refptr<ServiceWorkerContextWrapper> service_worker_context,
-    scoped_refptr<ChromeAppCacheService> appcache_service)
+    scoped_refptr<ServiceWorkerContextWrapper> service_worker_context)
     : SharedWorkerServiceImpl(storage_partition,
-                              std::move(service_worker_context),
-                              std::move(appcache_service)) {}
+                              std::move(service_worker_context)) {}
 
 TestSharedWorkerServiceImpl::~TestSharedWorkerServiceImpl() = default;
 
@@ -30,8 +27,8 @@ void TestSharedWorkerServiceImpl::TerminateAllWorkers(
 
   // All workers may already be fully terminated.
   if (worker_hosts_.empty() && workers_awaiting_disconnection_.empty()) {
-    base::ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE,
-                                                  std::move(callback));
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, std::move(callback));
     return;
   }
 
@@ -43,8 +40,9 @@ void TestSharedWorkerServiceImpl::TerminateAllWorkers(
     worker_hosts.push_back(host.get());
   }
 
-  for (SharedWorkerHost* worker_host : worker_hosts)
+  for (SharedWorkerHost* worker_host : worker_hosts) {
     DestroyHost(worker_host);
+  }
 }
 
 void TestSharedWorkerServiceImpl::SetWorkerTerminationCallback(
@@ -62,7 +60,8 @@ void TestSharedWorkerServiceImpl::DestroyHost(SharedWorkerHost* host) {
   mojo::Remote<blink::mojom::SharedWorker> remote_shared_worker =
       host->TerminateRemoteWorkerForTesting();
 
-  worker_hosts_.erase(worker_hosts_.find(host));
+  // Deletes `host` and removes it from all maps.
+  SharedWorkerServiceImpl::DestroyHost(host);
 
   if (remote_shared_worker && remote_shared_worker.is_connected()) {
     // The remote shared worker for this host is still connected. Track its

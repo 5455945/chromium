@@ -1,11 +1,18 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/network/public/cpp/resource_request_body.h"
 
+#include <utility>
+#include <vector>
+
+#include "base/check.h"
+#include "base/memory/scoped_refptr.h"
+#include "services/network/public/cpp/data_element.h"
 #include "services/network/public/mojom/chunked_data_pipe_getter.mojom.h"
 #include "services/network/public/mojom/data_pipe_getter.mojom.h"
+#include "services/network/public/mojom/url_request.mojom-shared.h"
 
 namespace network {
 
@@ -13,11 +20,18 @@ ResourceRequestBody::ResourceRequestBody()
     : identifier_(0), contains_sensitive_info_(false) {}
 
 // static
+scoped_refptr<ResourceRequestBody> ResourceRequestBody::CreateFromCopyOfBytes(
+    base::span<const uint8_t> bytes) {
+  auto result = base::MakeRefCounted<ResourceRequestBody>();
+  result->AppendCopyOfBytes(bytes);
+  return result;
+}
+
+// static
 scoped_refptr<ResourceRequestBody> ResourceRequestBody::CreateFromBytes(
-    const char* bytes,
-    size_t length) {
-  scoped_refptr<ResourceRequestBody> result = new ResourceRequestBody();
-  result->AppendBytes(bytes, length);
+    std::vector<uint8_t>&& bytes) {
+  auto result = base::MakeRefCounted<ResourceRequestBody>();
+  result->AppendBytes(std::move(bytes));
   return result;
 }
 
@@ -27,7 +41,7 @@ bool ResourceRequestBody::EnableToAppendElement() const {
           mojom::DataElementDataView::Tag::kChunkedDataPipe);
 }
 
-void ResourceRequestBody::AppendBytes(std::vector<uint8_t> bytes) {
+void ResourceRequestBody::AppendBytes(std::vector<uint8_t>&& bytes) {
   DCHECK(EnableToAppendElement());
 
   if (bytes.size() > 0) {
@@ -35,12 +49,8 @@ void ResourceRequestBody::AppendBytes(std::vector<uint8_t> bytes) {
   }
 }
 
-void ResourceRequestBody::AppendBytes(const char* bytes, int bytes_len) {
-  std::vector<uint8_t> vec;
-  vec.assign(reinterpret_cast<const uint8_t*>(bytes),
-             reinterpret_cast<const uint8_t*>(bytes + bytes_len));
-
-  AppendBytes(std::move(vec));
+void ResourceRequestBody::AppendCopyOfBytes(base::span<const uint8_t> bytes) {
+  AppendBytes(std::vector<uint8_t>(bytes.begin(), bytes.end()));
 }
 
 void ResourceRequestBody::AppendFileRange(
@@ -75,8 +85,8 @@ void ResourceRequestBody::SetToChunkedDataPipe(
 std::vector<base::FilePath> ResourceRequestBody::GetReferencedFiles() const {
   std::vector<base::FilePath> result;
   for (const auto& element : *elements()) {
-    if (element.type() == mojom::DataElementDataView::Tag::kFile) {
-      result.push_back(element.As<DataElementFile>().path());
+    if (const auto* file = element.TryAs<DataElementFile>()) {
+      result.push_back(file->path());
     }
   }
   return result;

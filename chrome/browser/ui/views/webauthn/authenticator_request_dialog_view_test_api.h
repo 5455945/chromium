@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,28 +7,26 @@
 
 #include <memory>
 
-class AuthenticatorRequestDialogModel;
 class AuthenticatorRequestDialogView;
+class AuthenticatorRequestDialogViewControllerViews;
 class AuthenticatorRequestSheetView;
-
-namespace content {
-class WebContents;
-}
 
 namespace test {
 
 class AuthenticatorRequestDialogViewTestApi {
  public:
-  // Returns a non-owning pointer to an AuthenticatorRequestDialogView for
-  // testing.
-  static AuthenticatorRequestDialogView* CreateDialogView(
-      std::unique_ptr<AuthenticatorRequestDialogModel> dialog_model,
-      content::WebContents* web_contents);
-
-  // Replaces the current sheet on |dialog| with |new_sheet|.
-  static void ShowWithSheet(
-      AuthenticatorRequestDialogView* dialog,
+  // Replaces the current sheet on `controller`'s view with `new_sheet`.
+  static void SetSheetTo(
+      AuthenticatorRequestDialogViewControllerViews* controller,
       std::unique_ptr<AuthenticatorRequestSheetView> new_sheet);
+
+  // Get a non-owning pointer to the current sheet.
+  static AuthenticatorRequestSheetView* GetSheet(
+      AuthenticatorRequestDialogViewControllerViews* controller);
+
+ private:
+  static AuthenticatorRequestDialogView* GetView(
+      AuthenticatorRequestDialogViewControllerViews* controller);
 };
 
 }  // namespace test

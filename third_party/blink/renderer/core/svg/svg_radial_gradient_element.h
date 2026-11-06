@@ -22,7 +22,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_SVG_SVG_RADIAL_GRADIENT_ELEMENT_H_
 
 #include "third_party/blink/renderer/core/svg/svg_gradient_element.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -35,8 +35,9 @@ class SVGRadialGradientElement final : public SVGGradientElement {
 
  public:
   explicit SVGRadialGradientElement(Document&);
-
-  void CollectGradientAttributes(RadialGradientAttributes&) const;
+  ElementType GetElementType() const final {
+    return ElementType::kSVGRadialGradientElement;
+  }
 
   SVGAnimatedLength* cx() const { return cx_.Get(); }
   SVGAnimatedLength* cy() const { return cy_.Get(); }
@@ -45,14 +46,20 @@ class SVGRadialGradientElement final : public SVGGradientElement {
   SVGAnimatedLength* fy() const { return fy_.Get(); }
   SVGAnimatedLength* fr() const { return fr_.Get(); }
 
+  RadialGradientAttributes CollectGradientAttributes() const;
+
   void Trace(Visitor*) const override;
 
  private:
   void SvgAttributeChanged(const SvgAttributeChangedParams&) override;
 
-  LayoutObject* CreateLayoutObject(const ComputedStyle&, LegacyLayout) override;
+  LayoutObject* CreateLayoutObject(const ComputedStyle&) override;
 
   bool SelfHasRelativeLengths() const override;
+
+  SVGAnimatedPropertyBase* PropertyFromAttribute(
+      const QualifiedName& attribute_name) const override;
+  void SynchronizeAllSVGAttributes() const override;
 
   Member<SVGAnimatedLength> cx_;
   Member<SVGAnimatedLength> cy_;

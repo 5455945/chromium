@@ -1,12 +1,12 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ASH_ACCESSIBILITY_UI_ACCESSIBILITY_HIGHLIGHT_CONTROLLER_H_
 #define ASH_ACCESSIBILITY_UI_ACCESSIBILITY_HIGHLIGHT_CONTROLLER_H_
 
+#include "ash/accessibility/ui/native_focus_watcher.h"
 #include "ash/ash_export.h"
-#include "base/macros.h"
 #include "ui/aura/client/cursor_client_observer.h"
 #include "ui/base/ime/input_method_observer.h"
 #include "ui/events/event_handler.h"
@@ -27,9 +27,16 @@ namespace ash {
 class ASH_EXPORT AccessibilityHighlightController
     : public ui::EventHandler,
       public ui::InputMethodObserver,
+      public NativeFocusObserver,
       public aura::client::CursorClientObserver {
  public:
   AccessibilityHighlightController();
+
+  AccessibilityHighlightController(const AccessibilityHighlightController&) =
+      delete;
+  AccessibilityHighlightController& operator=(
+      const AccessibilityHighlightController&) = delete;
+
   ~AccessibilityHighlightController() override;
 
   void HighlightFocus(bool focus);
@@ -49,18 +56,23 @@ class ASH_EXPORT AccessibilityHighlightController
   void OnFocus() override {}
   void OnBlur() override {}
   void OnInputMethodDestroyed(const ui::InputMethod* input_method) override {}
-  void OnShowVirtualKeyboardIfEnabled() override {}
   void OnTextInputStateChanged(const ui::TextInputClient* client) override;
   void OnCaretBoundsChanged(const ui::TextInputClient* client) override;
 
   // aura::client::CursorClientObserver:
   void OnCursorVisibilityChanged(bool is_visible) override;
 
+  // NativeFocusObserver:
+  void OnNativeFocusChanged(const gfx::Rect& bounds_in_screen) override;
+  void OnNativeFocusCleared() override;
+
  private:
   bool IsCursorVisible();
   bool IsCaretVisible(const gfx::Rect& caret_bounds_in_screen);
   void UpdateFocusAndCaretHighlights();
   void UpdateCursorHighlight();
+
+  void SetWidget(views::Widget* widget);
 
   bool focus_ = false;
   gfx::Rect focus_rect_;
@@ -72,7 +84,7 @@ class ASH_EXPORT AccessibilityHighlightController
   bool caret_visible_ = false;
   gfx::Point caret_point_;
 
-  DISALLOW_COPY_AND_ASSIGN(AccessibilityHighlightController);
+  std::unique_ptr<NativeFocusWatcher> native_focus_watcher_;
 };
 
 }  // namespace ash

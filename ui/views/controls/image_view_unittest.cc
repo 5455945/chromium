@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,11 @@
 #include <string>
 #include <utility>
 
+#include "base/i18n/language_tag.h"
 #include "base/i18n/rtl.h"
+#include "base/i18n/tag_converters.h"
+#include "base/i18n/test/scoped_rtl_for_testing.h"
+#include "base/memory/raw_ptr.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -18,10 +22,12 @@
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/image/image_skia.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/border.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/test/ax_event_counter.h"
 #include "ui/views/test/views_test_base.h"
+#include "ui/views/test/views_test_utils.h"
 #include "ui/views/widget/widget.h"
 
 namespace {
@@ -30,13 +36,6 @@ enum class Axis {
   kHorizontal,
   kVertical,
 };
-
-// A test utility function to set the application default text direction.
-void SetRTL(bool rtl) {
-  // Override the current locale/direction.
-  base::i18n::SetICUDefaultLocale(rtl ? "he" : "en");
-  EXPECT_EQ(rtl, base::i18n::IsRTL());
-}
 
 }  // namespace
 
@@ -47,14 +46,17 @@ class ImageViewTest : public ViewsTestBase,
  public:
   ImageViewTest() = default;
 
+  ImageViewTest(const ImageViewTest&) = delete;
+  ImageViewTest& operator=(const ImageViewTest&) = delete;
+
   // ViewsTestBase:
   void SetUp() override {
     ViewsTestBase::SetUp();
 
     Widget::InitParams params =
-        CreateParams(Widget::InitParams::TYPE_WINDOW_FRAMELESS);
+        CreateParams(Widget::InitParams::CLIENT_OWNS_WIDGET,
+                     Widget::InitParams::TYPE_WINDOW_FRAMELESS);
     params.bounds = gfx::Rect(200, 200);
-    params.ownership = Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
     widget_.Init(std::move(params));
     auto container = std::make_unique<View>();
     // Make sure children can take up exactly as much space as they require.
@@ -69,6 +71,8 @@ class ImageViewTest : public ViewsTestBase,
   }
 
   void TearDown() override {
+    // Null out the raw_ptr so it doesn't dangle during teardown.
+    image_view_ = nullptr;
     widget_.Close();
     ViewsTestBase::TearDown();
   }
@@ -84,10 +88,8 @@ class ImageViewTest : public ViewsTestBase,
   Widget* widget() { return &widget_; }
 
  private:
-  ImageView* image_view_ = nullptr;
+  raw_ptr<ImageView> image_view_ = nullptr;
   Widget widget_;
-
-  DISALLOW_COPY_AND_ASSIGN(ImageViewTest);
 };
 
 // Test the image origin of the internal ImageSkia is correct when it is
@@ -99,8 +101,8 @@ TEST_P(ImageViewTest, CenterAlignment) {
   SkBitmap bitmap;
   bitmap.allocN32Pixels(kImageSkiaSize, kImageSkiaSize);
   gfx::ImageSkia image_skia = gfx::ImageSkia::CreateFrom1xBitmap(bitmap);
-  image_view()->SetImage(image_skia);
-  widget()->GetContentsView()->Layout();
+  image_view()->SetImage(ui::ImageModel::FromImageSkia(image_skia));
+  views::test::RunScheduledLayout(image_view());
   EXPECT_NE(gfx::Size(), image_skia.size());
 
   // With no changes to the size / padding of |image_view|, the origin of
@@ -109,26 +111,29 @@ TEST_P(ImageViewTest, CenterAlignment) {
 
   // Test insets are always respected in LTR and RTL.
   constexpr int kInset = 5;
-  image_view()->SetBorder(CreateEmptyBorder(gfx::Insets(kInset)));
-  widget()->GetContentsView()->Layout();
-  EXPECT_EQ(kInset, CurrentImageOriginForParam());
-
-  SetRTL(true);
-  widget()->GetContentsView()->Layout();
+  image_view()->SetBorder(CreateEmptyBorder(kInset));
+  views::test::RunScheduledLayout(image_view());
   EXPECT_EQ(kInset, CurrentImageOriginForParam());
 
   // Check this still holds true when the insets are asymmetrical.
   constexpr int kLeadingInset = 4;
   constexpr int kTrailingInset = 6;
-  image_view()->SetBorder(CreateEmptyBorder(
-      gfx::Insets(/*top=*/kLeadingInset, /*left=*/kLeadingInset,
-                  /*bottom=*/kTrailingInset, /*right=*/kTrailingInset)));
-  widget()->GetContentsView()->Layout();
-  EXPECT_EQ(kLeadingInset, CurrentImageOriginForParam());
+  {
+    base::i18n::ScopedRTLForTesting scoped_rtl(true);
+    views::test::RunScheduledLayout(image_view());
+    EXPECT_EQ(kInset, CurrentImageOriginForParam());
 
-  SetRTL(false);
-  widget()->GetContentsView()->Layout();
-  EXPECT_EQ(kLeadingInset, CurrentImageOriginForParam());
+    image_view()->SetBorder(CreateEmptyBorder(gfx::Insets::TLBR(
+        kLeadingInset, kLeadingInset, kTrailingInset, kTrailingInset)));
+    views::test::RunScheduledLayout(image_view());
+    EXPECT_EQ(kLeadingInset, CurrentImageOriginForParam());
+  }
+
+  {
+    base::i18n::ScopedRTLForTesting scoped_rtl(false);
+    views::test::RunScheduledLayout(image_view());
+    EXPECT_EQ(kLeadingInset, CurrentImageOriginForParam());
+  }
 }
 
 TEST_P(ImageViewTest, ImageOriginForCustomViewBounds) {
@@ -140,7 +145,7 @@ TEST_P(ImageViewTest, ImageOriginForCustomViewBounds) {
   constexpr int kImageSkiaSize = 20;
   bitmap.allocN32Pixels(kImageSkiaSize, kImageSkiaSize);
   gfx::ImageSkia image_skia = gfx::ImageSkia::CreateFrom1xBitmap(bitmap);
-  image_view()->SetImage(image_skia);
+  image_view()->SetImage(ui::ImageModel::FromImageSkia(image_skia));
 
   EXPECT_EQ(gfx::Point(30, 30), image_view()->GetImageBounds().origin());
   EXPECT_EQ(image_view_bounds, image_view()->bounds());
@@ -149,16 +154,85 @@ TEST_P(ImageViewTest, ImageOriginForCustomViewBounds) {
 // Verifies setting the accessible name will be call NotifyAccessibilityEvent.
 TEST_P(ImageViewTest, SetAccessibleNameNotifiesAccessibilityEvent) {
   std::u16string test_tooltip_text = u"Test Tooltip Text";
-  test::AXEventCounter counter(views::AXEventManager::Get());
+  test::AXEventCounter counter(views::AXUpdateNotifier::Get());
   EXPECT_EQ(0, counter.GetCount(ax::mojom::Event::kTextChanged));
-  image_view()->SetAccessibleName(test_tooltip_text);
+  image_view()->GetViewAccessibility().SetName(test_tooltip_text);
   EXPECT_EQ(1, counter.GetCount(ax::mojom::Event::kTextChanged));
-  EXPECT_EQ(test_tooltip_text, image_view()->GetAccessibleName());
+  EXPECT_EQ(test_tooltip_text,
+            image_view()->GetViewAccessibility().GetCachedName());
   ui::AXNodeData data;
-  image_view()->GetAccessibleNodeData(&data);
+  image_view()->GetViewAccessibility().GetAccessibleNodeData(&data);
   const std::string& name =
       data.GetStringAttribute(ax::mojom::StringAttribute::kName);
   EXPECT_EQ(test_tooltip_text, base::ASCIIToUTF16(name));
+}
+
+TEST_P(ImageViewTest, AccessibleNameFromTooltipText) {
+  // Initially there is no name and no tooltip text.
+  // The role should always be image, regardless of whether or not there is
+  // presentable information. It's the "ignored" state which should change.
+  ui::AXNodeData data;
+  image_view()->GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ(data.GetString16Attribute(ax::mojom::StringAttribute::kName),
+            std::u16string());
+  EXPECT_EQ(image_view()->GetViewAccessibility().GetCachedName(),
+            std::u16string());
+  EXPECT_EQ(image_view()->GetTooltipText(), std::u16string());
+  EXPECT_EQ(data.role, ax::mojom::Role::kImage);
+  EXPECT_TRUE(image_view()->GetViewAccessibility().GetIsIgnored());
+
+  // Setting the tooltip text when there is no accessible name should result in
+  // the tooltip text being used for the accessible name and the "ignored" state
+  // being removed.
+  data = ui::AXNodeData();
+  std::u16string tooltip_text = u"Tooltip Text";
+  image_view()->SetTooltipText(tooltip_text);
+  image_view()->GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ(data.GetString16Attribute(ax::mojom::StringAttribute::kName),
+            tooltip_text);
+  EXPECT_EQ(image_view()->GetViewAccessibility().GetCachedName(), tooltip_text);
+  EXPECT_EQ(image_view()->GetTooltipText(), tooltip_text);
+  EXPECT_EQ(data.role, ax::mojom::Role::kImage);
+  EXPECT_FALSE(image_view()->GetViewAccessibility().GetIsIgnored());
+
+  // Setting the accessible name to a non-empty string should replace the name
+  // from the tooltip text.
+  data = ui::AXNodeData();
+  std::u16string accessible_name = u"Accessible Name";
+  image_view()->GetViewAccessibility().SetName(accessible_name);
+  image_view()->GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ(data.GetString16Attribute(ax::mojom::StringAttribute::kName),
+            accessible_name);
+  EXPECT_EQ(image_view()->GetViewAccessibility().GetCachedName(),
+            accessible_name);
+  EXPECT_EQ(image_view()->GetTooltipText(), tooltip_text);
+  EXPECT_EQ(data.role, ax::mojom::Role::kImage);
+  EXPECT_FALSE(image_view()->GetViewAccessibility().GetIsIgnored());
+
+  // Setting the accessible name to an empty string should cause the tooltip
+  // text to be used as the name.
+  data = ui::AXNodeData();
+  image_view()->GetViewAccessibility().SetName(std::u16string());
+  image_view()->GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ(data.GetString16Attribute(ax::mojom::StringAttribute::kName),
+            tooltip_text);
+  EXPECT_EQ(image_view()->GetViewAccessibility().GetCachedName(), tooltip_text);
+  EXPECT_EQ(image_view()->GetTooltipText(), tooltip_text);
+  EXPECT_EQ(data.role, ax::mojom::Role::kImage);
+  EXPECT_FALSE(image_view()->GetViewAccessibility().GetIsIgnored());
+
+  // Setting the tooltip to an empty string without setting a new accessible
+  // name should cause the view to become "ignored" again.
+  data = ui::AXNodeData();
+  image_view()->SetTooltipText(std::u16string());
+  image_view()->GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ(data.GetString16Attribute(ax::mojom::StringAttribute::kName),
+            std::u16string());
+  EXPECT_EQ(image_view()->GetViewAccessibility().GetCachedName(),
+            std::u16string());
+  EXPECT_EQ(image_view()->GetTooltipText(), std::u16string());
+  EXPECT_EQ(data.role, ax::mojom::Role::kImage);
+  EXPECT_TRUE(image_view()->GetViewAccessibility().GetIsIgnored());
 }
 
 INSTANTIATE_TEST_SUITE_P(All,

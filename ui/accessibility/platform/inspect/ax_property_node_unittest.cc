@@ -1,12 +1,12 @@
-// Copyright (c) 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/accessibility/platform/inspect/ax_property_node.h"
 
-#include "base/macros.h"
+#include <optional>
+
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/accessibility/platform/inspect/ax_inspect.h"
 
 using ui::AXPropertyFilter;
@@ -17,10 +17,11 @@ namespace ui {
 class AXPropertyNodeTest : public testing::Test {
  public:
   AXPropertyNodeTest() = default;
-  ~AXPropertyNodeTest() override = default;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(AXPropertyNodeTest);
+  AXPropertyNodeTest(const AXPropertyNodeTest&) = delete;
+  AXPropertyNodeTest& operator=(const AXPropertyNodeTest&) = delete;
+
+  ~AXPropertyNodeTest() override = default;
 };
 
 AXPropertyNode Parse(const char* input) {
@@ -30,7 +31,7 @@ AXPropertyNode Parse(const char* input) {
 
 AXPropertyNode GetArgumentNode(const char* input) {
   auto got = Parse(input);
-  if (got.arguments.size() == 0) {
+  if (got.arguments.empty()) {
     return AXPropertyNode();
   }
   return std::move(got.arguments[0]);
@@ -42,7 +43,7 @@ void ParseAndCheck(const char* input, const char* expected) {
 }
 
 void ParseAndCheckTree(const char* input, const char* expected) {
-  auto got = Parse(input).ToTreeString();
+  auto got = AXPropertyNode::From(input).ToTreeString();
   EXPECT_EQ(got, expected);
 }
 
@@ -97,15 +98,15 @@ TEST_F(AXPropertyNodeTest, ParseProperty) {
       "forward");
   EXPECT_EQ(GetArgumentNode("Text({start: :1, dir: forward})")
                 .FindStringKey("notexists"),
-            absl::nullopt);
+            std::nullopt);
 
   // Dict: FindIntKey
   EXPECT_EQ(GetArgumentNode("Text({loc: 3, len: 2})").FindIntKey("loc"), 3);
   EXPECT_EQ(GetArgumentNode("Text({loc: 3, len: 2})").FindIntKey("len"), 2);
   EXPECT_EQ(GetArgumentNode("Text({loc: 3, len: 2})").FindIntKey("notexists"),
-            absl::nullopt);
+            std::nullopt);
 
-  // Dict: FindKey
+  // `AXPropertyNode::FindKey()`
   EXPECT_EQ(GetArgumentNode("Text({anchor: {:1, 0, up}})")
                 .FindKey("anchor")
                 ->ToFlatString(),
@@ -219,12 +220,75 @@ AXTextMarkerRangeForUIElement(
 ))~~");
 }
 
-TEST_F(AXPropertyNodeTest, Keys) {
+TEST_F(AXPropertyNodeTest, Variables) {
+  // Statement
   ParseAndCheckTree(
       "textmarker_range:= textarea.AXTextMarkerRangeForUIElement(textarea)",
       R"~~(textmarker_range:textarea.
 AXTextMarkerRangeForUIElement(
   textarea
+))~~");
+
+  // Integer array
+  ParseAndCheckTree("var:= [3, 4]",
+                    R"~~(var:[](
+  3,
+  4
+))~~");
+
+  // Range dictionary
+  ParseAndCheckTree("var:= {loc: 3, len: 2}",
+                    R"~~(var:{}(
+  loc:3,
+  len:2
+))~~");
+
+  // TextMarker dictionary
+  ParseAndCheckTree("var:= {:2, 2, down}",
+                    R"~~(var:{}(
+  :2,
+  2,
+  down
+))~~");
+
+  // TextMarker array
+  ParseAndCheckTree("var:= [{:2, 2, down}, {:1, 1, up}]",
+                    R"~~(var:[](
+  {}(
+    :2,
+    2,
+    down
+  ),
+  {}(
+    :1,
+    1,
+    up
+  )
+))~~");
+
+  // TextMarkerRange dictionary
+  ParseAndCheckTree("var:= {anchor: {:2, 1, down}, focus: {:2, 2, down} }",
+                    R"~~(var:{}(
+  anchor:{}(
+    :2,
+    1,
+    down
+  ),
+  focus:{}(
+    :2,
+    2,
+    down
+  )
+))~~");
+}
+
+TEST_F(AXPropertyNodeTest, RValue) {
+  ParseAndCheckTree("textarea.AXSelectedTextMarkerRange = {loc: 3, len: 2}",
+                    R"~~(textarea.
+AXSelectedTextMarkerRange=
+{}(
+  loc:3,
+  len:2
 ))~~");
 }
 

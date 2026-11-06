@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,7 @@
 
 #include "net/base/ip_endpoint.h"
 
-namespace ash {
-namespace smb_client {
+namespace ash::smb_client {
 
 FakeNetBiosClient::FakeNetBiosClient() = default;
 
@@ -21,7 +20,7 @@ void FakeNetBiosClient::ExecuteNameRequest(
     const net::IPAddress& broadcast_address,
     uint16_t transaction_id,
     NetBiosResponseCallback callback) {
-  DCHECK(callback);
+  CHECK(callback, base::NotFatalUntil::M160);
 
   for (const auto& kv : fake_data_) {
     const net::IPEndPoint& ip_address = kv.first;
@@ -30,5 +29,4 @@ void FakeNetBiosClient::ExecuteNameRequest(
   }
 }
 
-}  // namespace smb_client
-}  // namespace ash
+}  // namespace ash::smb_client

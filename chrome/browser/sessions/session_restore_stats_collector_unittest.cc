@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 #include <utility>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
@@ -34,18 +34,17 @@ class MockStatsReportingDelegate : public StatsReportingDelegate {
  public:
   MockStatsReportingDelegate()
       : report_tab_loader_stats_call_count_(0u),
-        report_stats_collector_death_call_count_(0u),
-        report_tab_time_since_active_call_count_(0u) {}
+        report_stats_collector_death_call_count_(0u) {}
+
+  MockStatsReportingDelegate(const MockStatsReportingDelegate&) = delete;
+  MockStatsReportingDelegate& operator=(const MockStatsReportingDelegate&) =
+      delete;
 
   ~MockStatsReportingDelegate() override = default;
 
   void ReportTabLoaderStats(const TabLoaderStats& stats) override {
     report_tab_loader_stats_call_count_++;
     tab_loader_stats_ = stats;
-  }
-
-  void ReportTabTimeSinceActive(base::TimeDelta elapsed) override {
-    report_tab_time_since_active_call_count_++;
   }
 
   // This is not part of the StatsReportingDelegate, but an added function that
@@ -62,24 +61,17 @@ class MockStatsReportingDelegate : public StatsReportingDelegate {
       SessionRestoreStatsCollector::SessionRestorePaintFinishReasonUma
           finish_reason) {
     EXPECT_EQ(tab_count, tab_loader_stats_.tab_count);
-    EXPECT_EQ(base::TimeDelta::FromMilliseconds(foreground_tab_first_paint_ms),
+    EXPECT_EQ(base::Milliseconds(foreground_tab_first_paint_ms),
               tab_loader_stats_.foreground_tab_first_paint);
     EXPECT_EQ(tab_loader_stats_.tab_first_paint_reason, finish_reason);
-  }
-
-  void ExpectReportTabTimeSinceActiveCalled(size_t count) {
-    EXPECT_LE(count, report_tab_time_since_active_call_count_);
-    report_tab_time_since_active_call_count_ -= count;
   }
 
   void EnsureNoUnexpectedCalls() {
     EXPECT_EQ(0u, report_tab_loader_stats_call_count_);
     EXPECT_EQ(0u, report_stats_collector_death_call_count_);
-    EXPECT_EQ(0u, report_tab_time_since_active_call_count_);
 
     report_tab_loader_stats_call_count_ = 0u;
     report_stats_collector_death_call_count_ = 0u;
-    report_tab_time_since_active_call_count_ = 0u;
     tab_loader_stats_ = TabLoaderStats();
   }
 
@@ -91,10 +83,7 @@ class MockStatsReportingDelegate : public StatsReportingDelegate {
  private:
   size_t report_tab_loader_stats_call_count_;
   size_t report_stats_collector_death_call_count_;
-  size_t report_tab_time_since_active_call_count_;
   TabLoaderStats tab_loader_stats_;
-
-  DISALLOW_COPY_AND_ASSIGN(MockStatsReportingDelegate);
 };
 
 // A pass-through stats reporting delegate. This is used to decouple the
@@ -104,6 +93,12 @@ class MockStatsReportingDelegate : public StatsReportingDelegate {
 class PassthroughStatsReportingDelegate : public StatsReportingDelegate {
  public:
   PassthroughStatsReportingDelegate() : reporting_delegate_(nullptr) {}
+
+  PassthroughStatsReportingDelegate(const PassthroughStatsReportingDelegate&) =
+      delete;
+  PassthroughStatsReportingDelegate& operator=(
+      const PassthroughStatsReportingDelegate&) = delete;
+
   ~PassthroughStatsReportingDelegate() override {
     reporting_delegate_->ReportStatsCollectorDeath();
   }
@@ -116,14 +111,8 @@ class PassthroughStatsReportingDelegate : public StatsReportingDelegate {
     reporting_delegate_->ReportTabLoaderStats(tab_loader_stats);
   }
 
-  void ReportTabTimeSinceActive(base::TimeDelta elapsed) override {
-    reporting_delegate_->ReportTabTimeSinceActive(elapsed);
-  }
-
  private:
-  MockStatsReportingDelegate* reporting_delegate_;
-
-  DISALLOW_COPY_AND_ASSIGN(PassthroughStatsReportingDelegate);
+  raw_ptr<MockStatsReportingDelegate> reporting_delegate_;
 };
 
 }  // namespace
@@ -134,6 +123,11 @@ class SessionRestoreStatsCollectorTest : public testing::Test {
 
   SessionRestoreStatsCollectorTest()
       : task_environment_{base::test::TaskEnvironment::TimeSource::MOCK_TIME} {}
+
+  SessionRestoreStatsCollectorTest(const SessionRestoreStatsCollectorTest&) =
+      delete;
+  SessionRestoreStatsCollectorTest& operator=(
+      const SessionRestoreStatsCollectorTest&) = delete;
 
   void SetUp() override {
     test_web_contents_factory_ =
@@ -159,9 +153,7 @@ class SessionRestoreStatsCollectorTest : public testing::Test {
   }
 
   // Advances the test clock by 1ms.
-  void Tick() {
-    task_environment_.FastForwardBy(base::TimeDelta::FromMilliseconds(1));
-  }
+  void Tick() { task_environment_.FastForwardBy(base::Milliseconds(1)); }
 
   void Show(size_t tab_index) {
     restored_tabs_[tab_index].contents()->WasShown();
@@ -184,9 +176,9 @@ class SessionRestoreStatsCollectorTest : public testing::Test {
                                       &entries);
     // Create a last active time in the past.
     content::WebContentsTester::For(contents)->SetLastActiveTime(
-        base::TimeTicks::Now() - base::TimeDelta::FromMinutes(1));
-    restored_tabs_.push_back(
-        RestoredTab(contents, is_active, false, false, absl::nullopt));
+        base::Time::Now() - base::Minutes(1));
+    restored_tabs_.push_back(RestoredTab(contents, is_active, false, false,
+                                         std::nullopt, std::nullopt));
     if (is_active)
       Show(restored_tabs_.size() - 1);
   }
@@ -227,11 +219,9 @@ class SessionRestoreStatsCollectorTest : public testing::Test {
 
   // These are recreated for each test. The reporting delegate allows the test
   // to observe the behaviour of the SessionRestoreStatsCollector under test.
-  PassthroughStatsReportingDelegate* passthrough_reporting_delegate_;
-  SessionRestoreStatsCollector* stats_collector_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(SessionRestoreStatsCollectorTest);
+  raw_ptr<PassthroughStatsReportingDelegate, DanglingUntriaged>
+      passthrough_reporting_delegate_;
+  raw_ptr<SessionRestoreStatsCollector, DanglingUntriaged> stats_collector_;
 };
 
 TEST_F(SessionRestoreStatsCollectorTest, MultipleTabsLoadSerially) {
@@ -243,7 +233,6 @@ TEST_F(SessionRestoreStatsCollectorTest, MultipleTabsLoadSerially) {
   CreateRestoredTab(false);
   CreateRestoredTab(false);
   stats_collector_->TrackTabs(restored_tabs_);
-  mock_reporting_delegate.ExpectReportTabTimeSinceActiveCalled(3);
   mock_reporting_delegate.EnsureNoUnexpectedCalls();
   // Foreground tab paints then finishes loading.
   Tick();  // 1ms.
@@ -263,7 +252,6 @@ TEST_F(SessionRestoreStatsCollectorTest, ForegroundTabOccluded) {
 
   CreateRestoredTab(/*is_active=*/true);
   stats_collector_->TrackTabs(restored_tabs_);
-  mock_reporting_delegate.ExpectReportTabTimeSinceActiveCalled(1);
   mock_reporting_delegate.EnsureNoUnexpectedCalls();
   Tick();  // 1ms.
 
@@ -296,7 +284,6 @@ TEST_F(SessionRestoreStatsCollectorTest, FirstOfTwoTabsOccluded) {
   CreateRestoredTab(/*is_active=*/true);
   CreateRestoredTab(/*is_active=*/true);
   stats_collector_->TrackTabs(restored_tabs_);
-  mock_reporting_delegate.ExpectReportTabTimeSinceActiveCalled(2);
   mock_reporting_delegate.EnsureNoUnexpectedCalls();
   Tick();  // 1ms.
 
@@ -331,7 +318,6 @@ TEST_F(SessionRestoreStatsCollectorTest, LoadingTabDestroyedBeforePaint) {
 
   CreateRestoredTab(true);
   stats_collector_->TrackTabs(restored_tabs_);
-  mock_reporting_delegate.ExpectReportTabTimeSinceActiveCalled(1);
   mock_reporting_delegate.EnsureNoUnexpectedCalls();
 
   // Destroy the tab. Expect all timings to be zero.
@@ -348,7 +334,6 @@ TEST_F(SessionRestoreStatsCollectorTest, FocusSwitchNoForegroundPaintOrLoad) {
 
   CreateRestoredTab(true);
   stats_collector_->TrackTabs(restored_tabs_);
-  mock_reporting_delegate.ExpectReportTabTimeSinceActiveCalled(1);
   mock_reporting_delegate.EnsureNoUnexpectedCalls();
 
   // Create another tab and make it the foreground tab. This tab is not actually

@@ -1,29 +1,29 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/socket/transport_client_socket_pool.h"
 
 #include <algorithm>
+#include <string_view>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/auto_reset.h"
+#include "base/barrier_callback.h"
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
 #include "base/format_macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/memory/ptr_util.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
-#include "base/single_thread_task_runner.h"
 #include "base/strings/string_util.h"
-#include "base/strings/stringprintf.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/bind_post_task.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
-#include "base/trace_event/memory_allocator_dump.h"
-#include "base/trace_event/process_memory_dump.h"
 #include "base/values.h"
+#include "net/base/features.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/net_errors.h"
 #include "net/base/proxy_server.h"
@@ -34,29 +34,24 @@
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "url/gurl.h"
 
-using base::TimeDelta;
-
 namespace net {
 
 namespace {
 
-// Indicate whether or not we should establish a new transport layer connection
-// after a certain timeout has passed without receiving an ACK.
-bool g_connect_backup_jobs_enabled = true;
-
-base::Value NetLogCreateConnectJobParams(
+base::DictValue NetLogCreateConnectJobParams(
     bool backup_job,
     const ClientSocketPool::GroupId* group_id) {
-  base::Value dict(base::Value::Type::DICTIONARY);
-  dict.SetBoolKey("backup_job", backup_job);
-  dict.SetStringKey("group_id", group_id->ToString());
-  return dict;
+  return base::DictValue()
+      .Set("backup_job", backup_job)
+      .Set("group_id", group_id->ToString());
 }
 
 }  // namespace
 
 const char TransportClientSocketPool::kCertDatabaseChanged[] =
     "Cert database changed";
+const char TransportClientSocketPool::kCertVerifierChanged[] =
+    "Cert verifier changed";
 const char TransportClientSocketPool::kClosedConnectionReturnedToPool[] =
     "Connection was closed when it was returned to the pool";
 const char TransportClientSocketPool::kDataReceivedUnexpectedly[] =
@@ -82,7 +77,7 @@ TransportClientSocketPool::Request::Request(
     RespectLimits respect_limits,
     Flags flags,
     scoped_refptr<SocketParams> socket_params,
-    const absl::optional<NetworkTrafficAnnotationTag>& proxy_annotation_tag,
+    const std::optional<NetworkTrafficAnnotationTag>& proxy_annotation_tag,
     const NetLogWithSource& net_log)
     : handle_(handle),
       callback_(std::move(callback)),
@@ -93,13 +88,12 @@ TransportClientSocketPool::Request::Request(
       socket_params_(std::move(socket_params)),
       proxy_annotation_tag_(proxy_annotation_tag),
       net_log_(net_log),
-      socket_tag_(socket_tag),
-      job_(nullptr) {
+      socket_tag_(socket_tag) {
   if (respect_limits_ == ClientSocketPool::RespectLimits::DISABLED)
     DCHECK_EQ(priority_, MAXIMUM_PRIORITY);
 }
 
-TransportClientSocketPool::Request::~Request() {}
+TransportClientSocketPool::Request::~Request() = default;
 
 void TransportClientSocketPool::Request::AssignJob(ConnectJob* job) {
   DCHECK(job);
@@ -116,23 +110,43 @@ ConnectJob* TransportClientSocketPool::Request::ReleaseJob() {
   return job;
 }
 
+struct TransportClientSocketPool::IdleSocket {
+  // An idle socket can't be used if it is disconnected or has been used
+  // before and has received data unexpectedly (hence no longer idle).  The
+  // unread data would be mistaken for the beginning of the next response if
+  // we were to use the socket for a new request.
+  //
+  // Note that a socket that has never been used before (like a preconnected
+  // socket) may be used even with unread data.  This may be, e.g., a SPDY
+  // SETTINGS frame.
+  //
+  // If the socket is not usable, |net_log_reason_utf8| is set to a string
+  // indicating why the socket is not usable.
+  bool IsUsable(const char** net_log_reason_utf8) const;
+
+  std::unique_ptr<StreamSocket> socket;
+  base::TimeTicks start_time;
+};
+
 TransportClientSocketPool::TransportClientSocketPool(
-    int max_sockets,
-    int max_sockets_per_group,
+    size_t socket_soft_cap,
+    size_t max_sockets_per_group,
     base::TimeDelta unused_idle_socket_timeout,
-    const ProxyServer& proxy_server,
+    const ProxyChain& proxy_chain,
     bool is_for_websockets,
-    const CommonConnectJobParams* common_connect_job_params)
-    : TransportClientSocketPool(max_sockets,
+    const CommonConnectJobParams* common_connect_job_params,
+    bool cleanup_on_ip_address_change)
+    : TransportClientSocketPool(socket_soft_cap,
                                 max_sockets_per_group,
                                 unused_idle_socket_timeout,
                                 ClientSocketPool::used_idle_socket_timeout(),
-                                proxy_server,
+                                proxy_chain,
                                 is_for_websockets,
                                 common_connect_job_params,
+                                cleanup_on_ip_address_change,
                                 std::make_unique<ConnectJobFactory>(),
                                 common_connect_job_params->ssl_client_context,
-                                true /* connect_backup_jobs_enabled */) {}
+                                /*connect_backup_jobs_enabled=*/true) {}
 
 TransportClientSocketPool::~TransportClientSocketPool() {
   // Clean up any idle sockets and pending connect jobs.  Assert that we have no
@@ -141,23 +155,24 @@ TransportClientSocketPool::~TransportClientSocketPool() {
   FlushWithError(ERR_ABORTED, kSocketPoolDestroyed);
   DCHECK(group_map_.empty());
   DCHECK(pending_callback_map_.empty());
-  DCHECK_EQ(0, connecting_socket_count_);
-  DCHECK_EQ(0, handed_out_socket_count_);
+  DCHECK_EQ(0u, connecting_socket_count_);
+  DCHECK_EQ(0u, handed_out_socket_count_);
   CHECK(higher_pools_.empty());
 
   if (ssl_client_context_)
     ssl_client_context_->RemoveObserver(this);
 
-  NetworkChangeNotifier::RemoveIPAddressObserver(this);
+  if (cleanup_on_ip_address_change_)
+    NetworkChangeNotifier::RemoveIPAddressObserver(this);
 }
 
 std::unique_ptr<TransportClientSocketPool>
 TransportClientSocketPool::CreateForTesting(
-    int max_sockets,
-    int max_sockets_per_group,
+    size_t socket_soft_cap,
+    size_t max_sockets_per_group,
     base::TimeDelta unused_idle_socket_timeout,
     base::TimeDelta used_idle_socket_timeout,
-    const ProxyServer& proxy_server,
+    const ProxyChain& proxy_chain,
     bool is_for_websockets,
     const CommonConnectJobParams* common_connect_job_params,
     std::unique_ptr<ConnectJobFactory> connect_job_factory,
@@ -165,9 +180,10 @@ TransportClientSocketPool::CreateForTesting(
     bool connect_backup_jobs_enabled) {
   return base::WrapUnique<TransportClientSocketPool>(
       new TransportClientSocketPool(
-          max_sockets, max_sockets_per_group, unused_idle_socket_timeout,
-          used_idle_socket_timeout, proxy_server, is_for_websockets,
-          common_connect_job_params, std::move(connect_job_factory),
+          socket_soft_cap, max_sockets_per_group, unused_idle_socket_timeout,
+          used_idle_socket_timeout, proxy_chain, is_for_websockets,
+          common_connect_job_params,
+          /*cleanup_on_ip_address_change=*/true, std::move(connect_job_factory),
           ssl_client_context, connect_backup_jobs_enabled));
 }
 
@@ -189,20 +205,22 @@ TransportClientSocketPool::CallbackResultPair::operator=(
 TransportClientSocketPool::CallbackResultPair::~CallbackResultPair() = default;
 
 bool TransportClientSocketPool::IsStalled() const {
-  // If fewer than |max_sockets_| are in use, then clearly |this| is not
-  // stalled.
-  if ((handed_out_socket_count_ + connecting_socket_count_) < max_sockets_)
+  // We don't count idle sockets here as they can be purged, so cannot be the
+  // reason this pool is stalled.
+  if ((SocketsInUse() - idle_socket_count_) < SocketSoftCap()) {
     return false;
-  // So in order to be stalled, |this| must be using at least |max_sockets_| AND
-  // |this| must have a request that is actually stalled on the global socket
-  // limit.  To find such a request, look for a group that has more requests
-  // than jobs AND where the number of sockets is less than
-  // |max_sockets_per_group_|.  (If the number of sockets is equal to
-  // |max_sockets_per_group_|, then the request is stalled on the group limit,
+  }
+  // Further, in order to be stalled `this` must be using at least
+  // `SocketSoftCap()` sockets AND `this` must have a request that is actually
+  // stalled on the global socket limit.  To find such a request, look for a
+  // group that has more requests than jobs AND where the number of sockets is
+  // less than `max_sockets_per_group_`.  (If the number of sockets is equal to
+  // `max_sockets_per_group_`, then the request is stalled on the group limit,
   // which does not count.)
-  for (auto it = group_map_.begin(); it != group_map_.end(); ++it) {
-    if (it->second->CanUseAdditionalSocketSlot(max_sockets_per_group_))
+  for (const auto& it : group_map_) {
+    if (it.second.CanUseAdditionalSocketSlot(max_sockets_per_group_)) {
       return true;
+    }
   }
   return false;
 }
@@ -210,21 +228,21 @@ bool TransportClientSocketPool::IsStalled() const {
 void TransportClientSocketPool::AddHigherLayeredPool(
     HigherLayeredPool* higher_pool) {
   CHECK(higher_pool);
-  CHECK(!base::Contains(higher_pools_, higher_pool));
+  CHECK(!higher_pools_.contains(higher_pool));
   higher_pools_.insert(higher_pool);
 }
 
 void TransportClientSocketPool::RemoveHigherLayeredPool(
     HigherLayeredPool* higher_pool) {
   CHECK(higher_pool);
-  CHECK(base::Contains(higher_pools_, higher_pool));
+  CHECK(higher_pools_.contains(higher_pool));
   higher_pools_.erase(higher_pool);
 }
 
 int TransportClientSocketPool::RequestSocket(
     const GroupId& group_id,
     scoped_refptr<SocketParams> params,
-    const absl::optional<NetworkTrafficAnnotationTag>& proxy_annotation_tag,
+    const std::optional<NetworkTrafficAnnotationTag>& proxy_annotation_tag,
     RequestPriority priority,
     const SocketTag& socket_tag,
     RespectLimits respect_limits,
@@ -246,7 +264,9 @@ int TransportClientSocketPool::RequestSocket(
 
   request->net_log().BeginEvent(NetLogEventType::SOCKET_POOL);
 
-  int rv = RequestSocketInternal(group_id, *request);
+  int rv = RequestSocketInternal(
+      group_id, *request,
+      /*preconnect_done_closure=*/OnConnectJobCompleteCallback());
   if (rv != ERR_IO_PENDING) {
     if (rv == OK) {
       request->handle()->socket()->ApplySocketTag(request->socket_tag());
@@ -263,7 +283,7 @@ int TransportClientSocketPool::RequestSocket(
     // re-entrancy issues if the socket pool is doing something else at the
     // time.
     if (group->CanUseAdditionalSocketSlot(max_sockets_per_group_)) {
-      base::ThreadTaskRunnerHandle::Get()->PostTask(
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE,
           base::BindOnce(
               &TransportClientSocketPool::TryToCloseSocketsInLayeredPools,
@@ -273,21 +293,20 @@ int TransportClientSocketPool::RequestSocket(
   return rv;
 }
 
-void TransportClientSocketPool::RequestSockets(
+int TransportClientSocketPool::RequestSockets(
     const GroupId& group_id,
     scoped_refptr<SocketParams> params,
-    const absl::optional<NetworkTrafficAnnotationTag>& proxy_annotation_tag,
-    int num_sockets,
+    const std::optional<NetworkTrafficAnnotationTag>& proxy_annotation_tag,
+    size_t num_sockets,
+    PreconnectCompletionCallback callback,
     const NetLogWithSource& net_log) {
-  if (net_log.IsCapturing()) {
-    // TODO(eroman): Split out the host and port parameters.
-    net_log.AddEvent(NetLogEventType::TCP_CLIENT_SOCKET_POOL_REQUESTED_SOCKETS,
-                     [&] { return NetLogGroupIdParams(group_id); });
-  }
+  // TODO(eroman): Split out the host and port parameters.
+  net_log.AddEvent(NetLogEventType::TCP_CLIENT_SOCKET_POOL_REQUESTED_SOCKETS,
+                   [&] { return NetLogGroupIdParams(group_id); });
 
   Request request(nullptr /* no handle */, CompletionOnceCallback(),
                   ProxyAuthCallback(), IDLE, SocketTag(),
-                  RespectLimits::ENABLED, NO_IDLE_SOCKETS, std::move(params),
+                  RespectLimits::ENABLED, NO_IDLE_SOCKETS, params,
                   proxy_annotation_tag, net_log);
 
   // Cleanup any timed-out idle sockets.
@@ -307,22 +326,41 @@ void TransportClientSocketPool::RequestSockets(
   bool deleted_group = false;
 
   int rv = OK;
+
+  base::RepeatingCallback<void(int)> preconnect_done_closure =
+      base::BarrierCallback<int>(
+          num_sockets,
+          // The `preconnect_done_closure` is called when the connect job
+          // is complete and destructed. Generally, `TransportClientSocketPool`
+          // outlives the `ConnectJob`. One exception for this is when
+          // `TransportClientSocketPool` is destroyed and we are cancelling the
+          // existing `ConnectJob`. In this case, `preconnect_done_closure` will
+          // be post tasked after the last `ConnectJob` is destroyed, meaning
+          // that the closure may be called after the
+          // `TransportClientSocketPool` is destroyed. Therefore, we need to
+          // pass the closure to the task runner asynchronously.
+          base::BindPostTaskToCurrentDefault(base::BindOnce(
+              &TransportClientSocketPool::OnPreconnectConnectJobComplete,
+              weak_factory_.GetWeakPtr(), std::move(callback), group_id, params,
+              proxy_annotation_tag, net_log)));
+  int pending_connect_job_count = 0;
   for (int num_iterations_left = num_sockets;
        group->NumActiveSocketSlots() < num_sockets && num_iterations_left > 0;
        num_iterations_left--) {
-    rv = RequestSocketInternal(group_id, request);
+    rv = RequestSocketInternal(group_id, request, preconnect_done_closure);
+    if (rv == ERR_IO_PENDING) {
+      ++pending_connect_job_count;
+    }
     if (rv < 0 && rv != ERR_IO_PENDING) {
       // We're encountering a synchronous error.  Give up.
-      if (!base::Contains(group_map_, group_id))
+      if (!group_map_.contains(group_id))
         deleted_group = true;
       break;
     }
-    if (!base::Contains(group_map_, group_id)) {
+    if (!group_map_.contains(group_id)) {
       // Unexpected.  The group should only be getting deleted on synchronous
       // error.
       NOTREACHED();
-      deleted_group = true;
-      break;
     }
   }
 
@@ -333,17 +371,38 @@ void TransportClientSocketPool::RequestSockets(
     rv = OK;
   request.net_log().EndEventWithNetErrorCode(
       NetLogEventType::SOCKET_POOL_CONNECTING_N_SOCKETS, rv);
+
+  // Currently we don't handle preconnect errors. So this method returns OK even
+  // if failed to preconnect.
+  // TODO(crbug.com/40843081): Consider support error handlings when needed.
+  if (pending_connect_job_count == 0)
+    return OK;
+  for (size_t i = 0; i < num_sockets - pending_connect_job_count; ++i) {
+    preconnect_done_closure.Run(rv);
+  }
+
+  return ERR_IO_PENDING;
 }
 
-int TransportClientSocketPool::RequestSocketInternal(const GroupId& group_id,
-                                                     const Request& request) {
+int TransportClientSocketPool::RequestSocketInternal(
+    const GroupId& group_id,
+    const Request& request,
+    OnConnectJobCompleteCallback preconnect_done_closure) {
+#if DCHECK_IS_ON()
+  DCHECK(!request_in_process_);
+  base::AutoReset<bool> auto_reset(&request_in_process_, true);
+#endif  // DCHECK_IS_ON()
+
   ClientSocketHandle* const handle = request.handle();
   const bool preconnecting = !handle;
+  DCHECK_EQ(preconnecting, !!preconnect_done_closure);
+
+  UpdateExpandabilityBeforeAllocation();
 
   Group* group = nullptr;
   auto group_it = group_map_.find(group_id);
   if (group_it != group_map_.end()) {
-    group = group_it->second;
+    group = &group_it->second;
 
     if (!(request.flags() & NO_IDLE_SOCKETS)) {
       // Try to reuse a socket.
@@ -366,60 +425,82 @@ int TransportClientSocketPool::RequestSocketInternal(const GroupId& group_id,
       // to this layer.
       request.net_log().AddEvent(
           NetLogEventType::SOCKET_POOL_STALLED_MAX_SOCKETS_PER_GROUP);
-      return ERR_IO_PENDING;
+      return preconnecting ? ERR_PRECONNECT_MAX_SOCKET_LIMIT : ERR_IO_PENDING;
     }
   }
 
-  if (ReachedMaxSocketsLimit() &&
+  if (Expandability() == SocketPoolExpandability::kCapped &&
       request.respect_limits() == RespectLimits::ENABLED) {
     // NOTE(mmenke):  Wonder if we really need different code for each case
     // here.  Only reason for them now seems to be preconnects.
-    if (idle_socket_count_ > 0) {
-      // There's an idle socket in this pool. Either that's because there's
-      // still one in this group, but we got here due to preconnecting
-      // bypassing idle sockets, or because there's an idle socket in another
-      // group.
-      bool closed = CloseOneIdleSocketExceptInGroup(group);
-      if (preconnecting && !closed)
-        return ERR_PRECONNECT_MAX_SOCKET_LIMIT;
-    } else {
-      // We could check if we really have a stalled group here, but it
-      // requires a scan of all groups, so just flip a flag here, and do the
-      // check later.
+    if (idle_socket_count_ == 0) {
+      // Checking for a stalled higher layer group here could result in
+      // reentrancy issues, so instead return an error for preconnects and
+      // ERR_IO_PENDING if invoked from another callsite.
+      //
+      // If RequestSocket() sees ERR_IO_PENDING, it will check if it should
+      // trigger an async task to try and close a socket in a higher layered
+      // pool, and then posts a task to do so, to avoid reentrancy issues. All
+      // other callers (other than RequestSockets(), which is only for
+      // preconnects) are only made on already pending requests, which have
+      // already made it through this check.
+      //
+      // This isn't a perfect system, since SpdySessions don't inform this class
+      // when they become idle, to potentially be closed, but it does mean a
+      // reload, at least, will check for any idle SPDY sessions it can close if
+      // stalled.
       request.net_log().AddEvent(
           NetLogEventType::SOCKET_POOL_STALLED_MAX_SOCKETS);
-      return ERR_IO_PENDING;
+      return preconnecting ? ERR_PRECONNECT_MAX_SOCKET_LIMIT : ERR_IO_PENDING;
+    }
+
+    // There's an idle socket in this pool. Either that's because there's
+    // still one in this group, but we got here due to preconnecting
+    // bypassing idle sockets, or because there's an idle socket in another
+    // group. Close idle sockets until we have capacity (or there are none
+    // left outside the current group).
+    while (idle_socket_count_ > 0) {
+      if (!CloseOneIdleSocketExceptInGroup(group)) {
+        break;
+      }
+      // We want to know if a new allocation could succeed, if not we must
+      // release more idle sockets and try again.
+      UpdateExpandabilityBeforeAllocation();
+      if (Expandability() == SocketPoolExpandability::kUncapped) {
+        break;
+      }
+    }
+    // If the pool is still capped by now, there's no free capacity to allocate.
+    if (Expandability() == SocketPoolExpandability::kCapped) {
+      return preconnecting ? ERR_PRECONNECT_MAX_SOCKET_LIMIT : ERR_IO_PENDING;
     }
   }
 
   // We couldn't find a socket to reuse, and there's space to allocate one,
   // so allocate and connect a new one.
   group = GetOrCreateGroup(group_id);
-  connecting_socket_count_++;
-  std::unique_ptr<ConnectJob> owned_connect_job(
-      CreateConnectJob(group_id, request.socket_params(), proxy_server_,
-                       request.proxy_annotation_tag(), request.priority(),
-                       request.socket_tag(), group));
-  owned_connect_job->net_log().AddEvent(
+  std::unique_ptr<ConnectJob> connect_job(CreateConnectJob(
+      group_id, request.socket_params(), request.proxy_annotation_tag(),
+      request.priority(), request.socket_tag(), group));
+  connect_job->net_log().AddEvent(
       NetLogEventType::SOCKET_POOL_CONNECT_JOB_CREATED, [&] {
         return NetLogCreateConnectJobParams(false /* backup_job */, &group_id);
       });
-  ConnectJob* connect_job = owned_connect_job.get();
-  bool was_group_empty = group->IsEmpty();
-  // Need to add the ConnectJob to the group before connecting, to ensure
-  // |group| is not empty.  Otherwise, if the ConnectJob calls back into the
-  // socket pool with a new socket request (Like for DNS over HTTPS), the pool
-  // would then notice the group is empty, and delete it. That would result in a
-  // UAF when group is referenced later in this function.
-  group->AddJob(std::move(owned_connect_job), preconnecting);
 
   int rv = connect_job->Connect();
   if (rv == ERR_IO_PENDING) {
+    if (preconnect_done_closure) {
+      DCHECK(preconnecting);
+      connect_job->set_done_closure(std::move(preconnect_done_closure));
+    }
     // If we didn't have any sockets in this group, set a timer for potentially
     // creating a new one.  If the SYN is lost, this backup socket may complete
     // before the slow socket, improving end user latency.
-    if (connect_backup_jobs_enabled_ && was_group_empty)
+    if (connect_backup_jobs_enabled_ && group->IsEmpty()) {
       group->StartBackupJobTimer(group_id);
+    }
+    group->AddJob(std::move(connect_job), preconnecting);
+    connecting_socket_count_++;
     return rv;
   }
 
@@ -430,16 +511,16 @@ int TransportClientSocketPool::RequestSocketInternal(const GroupId& group_id,
   } else {
     DCHECK(handle);
     if (rv != OK)
-      handle->SetAdditionalErrorState(connect_job);
+      handle->SetAdditionalErrorState(connect_job.get());
     std::unique_ptr<StreamSocket> socket = connect_job->PassSocket();
     if (socket) {
-      HandOutSocket(std::move(socket), ClientSocketHandle::UNUSED,
-                    connect_job->connect_timing(), handle,
-                    base::TimeDelta() /* idle_time */, group,
-                    request.net_log());
+      HandOutSocket(std::move(socket),
+                    StreamSocketHandle::SocketReuseType::kUnused,
+                    connect_job->connect_timing(),
+                    connect_job->GetResolutionDetails(), handle,
+                    /*time_idle=*/base::TimeDelta(), group, request.net_log());
     }
   }
-  RemoveConnectJob(connect_job, group);
   if (group->IsEmpty())
     RemoveGroup(group_id);
 
@@ -465,8 +546,8 @@ bool TransportClientSocketPool::AssignIdleSocketToRequest(
       it->socket->NetLog().AddEventWithStringParams(
           NetLogEventType::SOCKET_POOL_CLOSING_SOCKET, "reason",
           net_log_reason_utf8);
+      QueueDestroySocket(std::move(it->socket));
       DecrementIdleCount();
-      delete it->socket;
       it = idle_sockets->erase(it);
       continue;
     }
@@ -489,23 +570,25 @@ bool TransportClientSocketPool::AssignIdleSocketToRequest(
     DecrementIdleCount();
     base::TimeDelta idle_time =
         base::TimeTicks::Now() - idle_socket_it->start_time;
-    IdleSocket idle_socket = *idle_socket_it;
+    std::unique_ptr<StreamSocket> socket = std::move(idle_socket_it->socket);
     idle_sockets->erase(idle_socket_it);
     // TODO(davidben): If |idle_time| is under some low watermark, consider
     // treating as UNUSED rather than UNUSED_IDLE. This will avoid
     // HttpNetworkTransaction retrying on some errors.
     ClientSocketHandle::SocketReuseType reuse_type =
-        idle_socket.socket->WasEverUsed() ? ClientSocketHandle::REUSED_IDLE
-                                          : ClientSocketHandle::UNUSED_IDLE;
+        socket->WasEverUsed()
+            ? StreamSocketHandle::SocketReuseType::kReusedIdle
+            : StreamSocketHandle::SocketReuseType::kUnusedIdle;
 
-    // If this socket took multiple attempts to obtain, don't report those
-    // every time it's reused, just to the first user.
-    if (idle_socket.socket->WasEverUsed())
-      idle_socket.socket->ClearConnectionAttempts();
-
-    HandOutSocket(std::unique_ptr<StreamSocket>(idle_socket.socket), reuse_type,
-                  LoadTimingInfo::ConnectTiming(), request.handle(), idle_time,
-                  group, request.net_log());
+    // Passing std::nullopt for resolution details. This behavior is slightly
+    // different from SPDY/QUIC, where reused streams will continue to report
+    // the resolution_details of the underlying session. Since preserving
+    // resolution details for reused sockets is not critical for HTTP/1.1,
+    // we don't pass them here.
+    HandOutSocket(std::move(socket), reuse_type,
+                  LoadTimingInfo::ConnectTiming(),
+                  /*resolution_details=*/std::nullopt, request.handle(),
+                  idle_time, group, request.net_log());
     return true;
   }
 
@@ -525,13 +608,13 @@ void TransportClientSocketPool::SetPriority(const GroupId& group_id,
                                             RequestPriority priority) {
   auto group_it = group_map_.find(group_id);
   if (group_it == group_map_.end()) {
-    DCHECK(base::Contains(pending_callback_map_, handle));
+    DCHECK(pending_callback_map_.contains(handle));
     // The Request has already completed and been destroyed; nothing to
     // reprioritize.
     return;
   }
 
-  group_it->second->SetPriority(handle, priority);
+  group_it->second.SetPriority(handle, priority);
 }
 
 void TransportClientSocketPool::CancelRequest(const GroupId& group_id,
@@ -558,15 +641,13 @@ void TransportClientSocketPool::CancelRequest(const GroupId& group_id,
     return;
   }
 
-  CHECK(base::Contains(group_map_, group_id));
+  CHECK(group_map_.contains(group_id));
   Group* group = GetOrCreateGroup(group_id);
-
-  // TODO(crbug.com/1164929): Remove this CHECK once the investigation is done.
-  CHECK_EQ(group_id, group->group_id());
 
   std::unique_ptr<Request> request = group->FindAndRemoveBoundRequest(handle);
   if (request) {
     --connecting_socket_count_;
+    UpdateExpandabilityAfterRelease();
     OnAvailableSocketSlot(group_id, group);
     CheckForStalledSocketGroups();
     return;
@@ -574,35 +655,19 @@ void TransportClientSocketPool::CancelRequest(const GroupId& group_id,
 
   // Search |unbound_requests_| for matching handle.
   request = group->FindAndRemoveUnboundRequest(handle);
-
-  // TODO(crbug.com/1164929): Remove this CHECK once the investigation is done.
-  CHECK(base::Contains(group_map_, group_id));
   if (request) {
     request->net_log().AddEvent(NetLogEventType::CANCELLED);
     request->net_log().EndEvent(NetLogEventType::SOCKET_POOL);
 
     // Let the job run, unless |cancel_connect_job| is true, or we're at the
     // socket limit and there are no other requests waiting on the job.
-    bool reached_limit = ReachedMaxSocketsLimit();
-
-    // TODO(crbug.com/1164929): Remove this CHECK once the investigation is
-    // done.
-    CHECK(base::Contains(group_map_, group_id));
-
+    bool reached_limit = Expandability() == SocketPoolExpandability::kCapped;
     if (group->jobs().size() > group->unbound_request_count() &&
         (cancel_connect_job || reached_limit)) {
-      // TODO(crbug.com/1164929): Remove this CHECK once the investigation is
-      // done.
-      CHECK(base::Contains(group_map_, group_id));
-
       RemoveConnectJob(group->jobs().begin()->get(), group);
-
-      // TODO(crbug.com/1164929): Remove this CHECK once the investigation is
-      // done.
-      CHECK(base::Contains(group_map_, group_id));
-
       if (group->IsEmpty())
         RemoveGroup(group->group_id());
+      UpdateExpandabilityAfterRelease();
       if (reached_limit)
         CheckForStalledSocketGroups();
     }
@@ -612,7 +677,8 @@ void TransportClientSocketPool::CancelRequest(const GroupId& group_id,
 void TransportClientSocketPool::CloseIdleSockets(
     const char* net_log_reason_utf8) {
   CleanupIdleSockets(true, net_log_reason_utf8);
-  DCHECK_EQ(0, idle_socket_count_);
+  DestroyQueuedSockets();
+  DCHECK_EQ(0u, idle_socket_count_);
 }
 
 void TransportClientSocketPool::CloseIdleSocketsInGroup(
@@ -623,13 +689,14 @@ void TransportClientSocketPool::CloseIdleSocketsInGroup(
   auto it = group_map_.find(group_id);
   if (it == group_map_.end())
     return;
-  CleanupIdleSocketsInGroup(true, it->second, base::TimeTicks::Now(),
+  CleanupIdleSocketsInGroup(true, &it->second, base::TimeTicks::Now(),
                             net_log_reason_utf8);
-  if (it->second->IsEmpty())
+  if (it->second.IsEmpty()) {
     RemoveGroup(it);
+  }
 }
 
-int TransportClientSocketPool::IdleSocketCount() const {
+size_t TransportClientSocketPool::IdleSocketCount() const {
   return idle_socket_count_;
 }
 
@@ -638,13 +705,13 @@ size_t TransportClientSocketPool::IdleSocketCountInGroup(
   auto i = group_map_.find(group_id);
   CHECK(i != group_map_.end());
 
-  return i->second->idle_sockets().size();
+  return i->second.idle_sockets().size();
 }
 
 LoadState TransportClientSocketPool::GetLoadState(
     const GroupId& group_id,
     const ClientSocketHandle* handle) const {
-  if (base::Contains(pending_callback_map_, handle))
+  if (pending_callback_map_.contains(handle))
     return LOAD_STATE_CONNECTING;
 
   auto group_it = group_map_.find(group_id);
@@ -653,10 +720,9 @@ LoadState TransportClientSocketPool::GetLoadState(
     // Would be great to understand why, and if it's a bug, fix it.  If not,
     // should have a test for that case.
     NOTREACHED();
-    return LOAD_STATE_IDLE;
   }
 
-  const Group& group = *group_it->second;
+  const Group& group = group_it->second;
   ConnectJob* job = group.GetConnectJobForHandle(handle);
   if (job)
     return job->GetLoadState();
@@ -670,99 +736,71 @@ base::Value TransportClientSocketPool::GetInfoAsValue(
     const std::string& name,
     const std::string& type) const {
   // TODO(mmenke): This currently doesn't return bound Requests or ConnectJobs.
-  base::Value dict(base::Value::Type::DICTIONARY);
-  dict.SetStringKey("name", name);
-  dict.SetStringKey("type", type);
-  dict.SetIntKey("handed_out_socket_count", handed_out_socket_count_);
-  dict.SetIntKey("connecting_socket_count", connecting_socket_count_);
-  dict.SetIntKey("idle_socket_count", idle_socket_count_);
-  dict.SetIntKey("max_socket_count", max_sockets_);
-  dict.SetIntKey("max_sockets_per_group", max_sockets_per_group_);
+  auto dict =
+      base::DictValue()
+          .Set("name", name)
+          .Set("type", type)
+          .Set("handed_out_socket_count",
+               static_cast<int>(handed_out_socket_count_))
+          .Set("connecting_socket_count",
+               static_cast<int>(connecting_socket_count_))
+          .Set("idle_socket_count", static_cast<int>(idle_socket_count_))
+          .Set("socket_soft_cap", static_cast<int>(SocketSoftCap()))
+          .Set("max_sockets_per_group",
+               static_cast<int>(max_sockets_per_group_))
+          .Set("additional_capacity", std::string(AdditionalCapacity()));
 
   if (group_map_.empty())
-    return dict;
+    return base::Value(std::move(dict));
 
-  base::Value all_groups_dict(base::Value::Type::DICTIONARY);
+  base::DictValue all_groups_dict;
   for (const auto& entry : group_map_) {
-    const Group* group = entry.second;
-    base::Value group_dict(base::Value::Type::DICTIONARY);
+    const Group* group = &entry.second;
 
-    group_dict.SetIntKey("pending_request_count",
-                         group->unbound_request_count());
-    if (group->has_unbound_requests()) {
-      group_dict.SetStringKey(
-          "top_pending_priority",
-          RequestPriorityToString(group->TopPendingPriority()));
-    }
-
-    group_dict.SetIntKey("active_socket_count", group->active_socket_count());
-
-    std::vector<base::Value> idle_socket_list;
+    base::ListValue idle_socket_list;
     for (const auto& idle_socket : group->idle_sockets()) {
       int source_id = idle_socket.socket->NetLog().source().id;
-      idle_socket_list.push_back(base::Value(source_id));
+      idle_socket_list.Append(source_id);
     }
-    group_dict.SetKey("idle_sockets", base::Value(std::move(idle_socket_list)));
 
-    std::vector<base::Value> connect_jobs_list;
+    base::ListValue connect_jobs_list;
     for (const auto& job : group->jobs()) {
       int source_id = job->net_log().source().id;
-      connect_jobs_list.push_back(base::Value(source_id));
+      connect_jobs_list.Append(source_id);
     }
-    group_dict.SetKey("connect_jobs",
-                      base::Value(std::move(connect_jobs_list)));
 
-    group_dict.SetBoolKey("is_stalled", group->CanUseAdditionalSocketSlot(
-                                            max_sockets_per_group_));
-    group_dict.SetBoolKey("backup_job_timer_is_running",
-                          group->BackupJobTimerIsRunning());
+    auto group_dict =
+        base::DictValue()
+            .Set("pending_request_count",
+                 static_cast<int>(group->unbound_request_count()))
+            .Set("active_socket_count",
+                 static_cast<int>(group->active_socket_count()))
+            .Set("idle_sockets", std::move(idle_socket_list))
+            .Set("connect_jobs", std::move(connect_jobs_list))
+            .Set("is_stalled",
+                 group->CanUseAdditionalSocketSlot(max_sockets_per_group_))
+            .Set("backup_job_timer_is_running",
+                 group->BackupJobTimerIsRunning());
 
-    all_groups_dict.SetKey(entry.first.ToString(), std::move(group_dict));
+    if (group->has_unbound_requests()) {
+      group_dict.Set("top_pending_priority",
+                     RequestPriorityToString(group->TopPendingPriority()));
+    }
+
+    all_groups_dict.Set(entry.first.ToString(), std::move(group_dict));
   }
-  dict.SetKey("groups", std::move(all_groups_dict));
-  return dict;
+  dict.Set("groups", std::move(all_groups_dict));
+  return base::Value(std::move(dict));
 }
 
-void TransportClientSocketPool::DumpMemoryStats(
-    base::trace_event::ProcessMemoryDump* pmd,
-    const std::string& parent_dump_absolute_name) const {
-  size_t socket_count = 0;
-  size_t total_size = 0;
-  size_t buffer_size = 0;
-  size_t cert_count = 0;
-  size_t cert_size = 0;
-  for (const auto& kv : group_map_) {
-    for (const auto& socket : kv.second->idle_sockets()) {
-      StreamSocket::SocketMemoryStats stats;
-      socket.socket->DumpMemoryStats(&stats);
-      total_size += stats.total_size;
-      buffer_size += stats.buffer_size;
-      cert_count += stats.cert_count;
-      cert_size += stats.cert_size;
-      ++socket_count;
-    }
-  }
-  // Only create a MemoryAllocatorDump if there is at least one idle socket
-  if (socket_count > 0) {
-    base::trace_event::MemoryAllocatorDump* socket_pool_dump =
-        pmd->CreateAllocatorDump(base::StringPrintf(
-            "%s/socket_pool", parent_dump_absolute_name.c_str()));
-    socket_pool_dump->AddScalar(
-        base::trace_event::MemoryAllocatorDump::kNameSize,
-        base::trace_event::MemoryAllocatorDump::kUnitsBytes, total_size);
-    socket_pool_dump->AddScalar(
-        base::trace_event::MemoryAllocatorDump::kNameObjectCount,
-        base::trace_event::MemoryAllocatorDump::kUnitsObjects, socket_count);
-    socket_pool_dump->AddScalar(
-        "buffer_size", base::trace_event::MemoryAllocatorDump::kUnitsBytes,
-        buffer_size);
-    socket_pool_dump->AddScalar(
-        "cert_count", base::trace_event::MemoryAllocatorDump::kUnitsObjects,
-        cert_count);
-    socket_pool_dump->AddScalar(
-        "cert_size", base::trace_event::MemoryAllocatorDump::kUnitsBytes,
-        cert_size);
-  }
+bool TransportClientSocketPool::HasActiveSocket(const GroupId& group_id) const {
+  return HasGroup(group_id);
+}
+
+size_t TransportClientSocketPool::SocketsInUse() const {
+  // Each connecting socket will eventually connect and be handed out.
+  return handed_out_socket_count_ + connecting_socket_count_ +
+         idle_socket_count_;
 }
 
 bool TransportClientSocketPool::IdleSocket::IsUsable(
@@ -788,53 +826,68 @@ bool TransportClientSocketPool::IdleSocket::IsUsable(
 }
 
 TransportClientSocketPool::TransportClientSocketPool(
-    int max_sockets,
-    int max_sockets_per_group,
+    size_t socket_soft_cap,
+    size_t max_sockets_per_group,
     base::TimeDelta unused_idle_socket_timeout,
     base::TimeDelta used_idle_socket_timeout,
-    const ProxyServer& proxy_server,
+    const ProxyChain& proxy_chain,
     bool is_for_websockets,
     const CommonConnectJobParams* common_connect_job_params,
+    bool cleanup_on_ip_address_change,
     std::unique_ptr<ConnectJobFactory> connect_job_factory,
     SSLClientContext* ssl_client_context,
     bool connect_backup_jobs_enabled)
-    : ClientSocketPool(is_for_websockets,
+    : ClientSocketPool(socket_soft_cap,
+                       proxy_chain,
+                       is_for_websockets,
                        common_connect_job_params,
                        std::move(connect_job_factory)),
-      idle_socket_count_(0),
-      connecting_socket_count_(0),
-      handed_out_socket_count_(0),
-      max_sockets_(max_sockets),
       max_sockets_per_group_(max_sockets_per_group),
       unused_idle_socket_timeout_(unused_idle_socket_timeout),
       used_idle_socket_timeout_(used_idle_socket_timeout),
-      proxy_server_(proxy_server),
-      connect_backup_jobs_enabled_(connect_backup_jobs_enabled &&
-                                   g_connect_backup_jobs_enabled),
+      cleanup_on_ip_address_change_(cleanup_on_ip_address_change),
+      connect_backup_jobs_enabled_(
+          connect_backup_jobs_enabled &&
+          base::FeatureList::IsEnabled(
+              net::features::kPermitTcpSocketPoolConnectBackupJobs)),
       ssl_client_context_(ssl_client_context) {
-  DCHECK_LE(0, max_sockets_per_group);
-  DCHECK_LE(max_sockets_per_group, max_sockets);
+  DCHECK_LE(max_sockets_per_group, socket_soft_cap);
 
-  NetworkChangeNotifier::AddIPAddressObserver(this);
+  if (cleanup_on_ip_address_change_)
+    NetworkChangeNotifier::AddIPAddressObserver(this);
 
   if (ssl_client_context_)
     ssl_client_context_->AddObserver(this);
 }
 
 void TransportClientSocketPool::OnSSLConfigChanged(
-    bool is_cert_database_change) {
-  // When the user changes the SSL config, flush all idle sockets so they won't
-  // get re-used.
-  if (is_cert_database_change) {
-    FlushWithError(ERR_CERT_DATABASE_CHANGED, kCertDatabaseChanged);
-  } else {
-    FlushWithError(ERR_NETWORK_CHANGED, kNetworkChanged);
+    SSLClientContext::SSLConfigChangeType change_type) {
+  const char* message = nullptr;
+  // When the SSL config or cert verifier config changes, flush all idle
+  // sockets so they won't get reused, and allow any active sockets to finish,
+  // but don't put them back in the socket pool.
+  switch (change_type) {
+    case SSLClientContext::SSLConfigChangeType::kSSLConfigChanged:
+      message = kNetworkChanged;
+      break;
+    case SSLClientContext::SSLConfigChangeType::kCertDatabaseChanged:
+      message = kCertDatabaseChanged;
+      break;
+    case SSLClientContext::SSLConfigChangeType::kCertVerifierChanged:
+      message = kCertVerifierChanged;
+      break;
+  };
+
+  base::TimeTicks now = base::TimeTicks::Now();
+  for (auto it = group_map_.begin(); it != group_map_.end();) {
+    it = RefreshGroup(it, now, message);
   }
+  CheckForStalledSocketGroups();
 }
 
-// TODO(crbug.com/1206799): Get `server` as SchemeHostPort?
-void TransportClientSocketPool::OnSSLConfigForServerChanged(
-    const HostPortPair& server) {
+// TODO(crbug.com/40181080): Get `server` as SchemeHostPort?
+void TransportClientSocketPool::OnSSLConfigForServersChanged(
+    const base::flat_set<HostPortPair>& servers) {
   // Current time value. Retrieving it once at the function start rather than
   // inside the inner loop, since it shouldn't change by any meaningful amount.
   //
@@ -843,21 +896,27 @@ void TransportClientSocketPool::OnSSLConfigForServerChanged(
   // interfaces so the parameter is not necessary.
   base::TimeTicks now = base::TimeTicks::Now();
 
-  // If the proxy is |server| and uses SSL settings (HTTPS or QUIC), refresh
-  // every group.
-  bool proxy_matches = proxy_server_.is_http_like() &&
-                       !proxy_server_.is_http() &&
-                       proxy_server_.host_port_pair() == server;
+  // If the proxy chain includes a server from `servers` and uses SSL settings
+  // (HTTPS or QUIC), refresh every group.
+  bool proxy_matches = false;
+  for (const ProxyServer& proxy_server : GetProxyChain().proxy_servers()) {
+    if (proxy_server.is_secure_http_like() &&
+        servers.contains(proxy_server.host_port_pair())) {
+      proxy_matches = true;
+    }
+  }
+
   bool refreshed_any = false;
   for (auto it = group_map_.begin(); it != group_map_.end();) {
-    auto to_refresh = it++;
-    if (proxy_matches || (GURL::SchemeIsCryptographic(
-                              to_refresh->first.destination().scheme()) &&
-                          HostPortPair::FromSchemeHostPort(
-                              to_refresh->first.destination()) == server)) {
+    if (proxy_matches ||
+        (GURL::SchemeIsCryptographic(it->first.destination().scheme()) &&
+         servers.contains(
+             HostPortPair::FromSchemeHostPort(it->first.destination())))) {
       refreshed_any = true;
       // Note this call may destroy the group and invalidate |to_refresh|.
-      RefreshGroup(to_refresh, now, kSslConfigChanged);
+      it = RefreshGroup(it, now, kSslConfigChanged);
+    } else {
+      ++it;
     }
   }
 
@@ -872,7 +931,7 @@ void TransportClientSocketPool::OnSSLConfigForServerChanged(
 }
 
 bool TransportClientSocketPool::HasGroup(const GroupId& group_id) const {
-  return base::Contains(group_map_, group_id);
+  return group_map_.contains(group_id);
 }
 
 void TransportClientSocketPool::CleanupIdleSockets(
@@ -886,30 +945,24 @@ void TransportClientSocketPool::CleanupIdleSockets(
   base::TimeTicks now = base::TimeTicks::Now();
 
   for (auto i = group_map_.begin(); i != group_map_.end();) {
-    Group* group = i->second;
+    Group* group = &i->second;
+    CHECK(group);
     CleanupIdleSocketsInGroup(force, group, now, net_log_reason_utf8);
     // Delete group if no longer needed.
     if (group->IsEmpty()) {
-      auto old = i++;
-      RemoveGroup(old);
+      i = RemoveGroup(i);
     } else {
       ++i;
     }
   }
 }
 
-bool TransportClientSocketPool::CloseOneIdleSocket() {
-  if (idle_socket_count_ == 0)
-    return false;
-  return CloseOneIdleSocketExceptInGroup(nullptr);
-}
-
 bool TransportClientSocketPool::CloseOneIdleConnectionInHigherLayeredPool() {
   // This pool doesn't have any idle sockets. It's possible that a pool at a
   // higher layer is holding one of this sockets active, but it's actually idle.
   // Query the higher layers.
-  for (auto it = higher_pools_.begin(); it != higher_pools_.end(); ++it) {
-    if ((*it)->CloseOneIdleConnection())
+  for (HigherLayeredPool* higher_pool : higher_pools_) {
+    if (higher_pool->CloseOneIdleConnection())
       return true;
   }
   return false;
@@ -938,7 +991,7 @@ void TransportClientSocketPool::CleanupIdleSocketsInGroup(
       reason_for_closing_socket = kIdleTimeLimitExpired;
     }
 
-    // Usability errors take precedence over over other errors.
+    // Usability errors take precedence over other errors.
     if (!idle_socket_it->IsUsable(&reason_for_closing_socket))
       should_clean_up = true;
 
@@ -947,9 +1000,10 @@ void TransportClientSocketPool::CleanupIdleSocketsInGroup(
       idle_socket_it->socket->NetLog().AddEventWithStringParams(
           NetLogEventType::SOCKET_POOL_CLOSING_SOCKET, "reason",
           reason_for_closing_socket);
-      delete idle_socket_it->socket;
+      QueueDestroySocket(std::move(idle_socket_it->socket));
       idle_socket_it = group->mutable_idle_sockets()->erase(idle_socket_it);
       DecrementIdleCount();
+      UpdateExpandabilityAfterRelease();
     } else {
       DCHECK(!reason_for_closing_socket);
       ++idle_socket_it;
@@ -959,12 +1013,7 @@ void TransportClientSocketPool::CleanupIdleSocketsInGroup(
 
 TransportClientSocketPool::Group* TransportClientSocketPool::GetOrCreateGroup(
     const GroupId& group_id) {
-  auto it = group_map_.find(group_id);
-  if (it != group_map_.end())
-    return it->second;
-  Group* group = new Group(group_id, this);
-  group_map_[group_id] = group;
-  return group;
+  return &group_map_.try_emplace(group_id, group_id, this).first->second;
 }
 
 void TransportClientSocketPool::RemoveGroup(const GroupId& group_id) {
@@ -974,21 +1023,9 @@ void TransportClientSocketPool::RemoveGroup(const GroupId& group_id) {
   RemoveGroup(it);
 }
 
-void TransportClientSocketPool::RemoveGroup(GroupMap::iterator it) {
-  delete it->second;
-  group_map_.erase(it);
-}
-
-// static
-bool TransportClientSocketPool::connect_backup_jobs_enabled() {
-  return g_connect_backup_jobs_enabled;
-}
-
-// static
-bool TransportClientSocketPool::set_connect_backup_jobs_enabled(bool enabled) {
-  bool old_value = g_connect_backup_jobs_enabled;
-  g_connect_backup_jobs_enabled = enabled;
-  return old_value;
+TransportClientSocketPool::GroupMap::iterator
+TransportClientSocketPool::RemoveGroup(GroupMap::iterator it) {
+  return group_map_.erase(it);
 }
 
 void TransportClientSocketPool::IncrementIdleCount() {
@@ -1006,16 +1043,18 @@ void TransportClientSocketPool::ReleaseSocket(
   auto i = group_map_.find(group_id);
   CHECK(i != group_map_.end());
 
-  Group* group = i->second;
+  Group* group = &i->second;
 
-  CHECK_GT(handed_out_socket_count_, 0);
+  CHECK_GT(handed_out_socket_count_, 0u);
   handed_out_socket_count_--;
 
-  CHECK_GT(group->active_socket_count(), 0);
+  CHECK_GT(group->active_socket_count(), 0u);
   group->DecrementActiveSocketCount();
 
+  UpdateExpandabilityAfterRelease();
+
   bool can_resuse_socket = false;
-  base::StringPiece not_reusable_reason;
+  std::string_view not_reusable_reason;
   if (!socket->IsConnectedAndIdle()) {
     if (!socket->IsConnected()) {
       not_reusable_reason = kClosedConnectionReturnedToPool;
@@ -1042,7 +1081,7 @@ void TransportClientSocketPool::ReleaseSocket(
         not_reusable_reason);
     if (group->IsEmpty())
       RemoveGroup(i);
-    socket.reset();
+    QueueDestroySocket(std::move(socket));
   }
 
   CheckForStalledSocketGroups();
@@ -1052,14 +1091,14 @@ void TransportClientSocketPool::CheckForStalledSocketGroups() {
   // Loop until there's nothing more to do.
   while (true) {
     // If we have idle sockets, see if we can give one to the top-stalled group.
-    GroupId top_group_id;
     Group* top_group = nullptr;
+    GroupId top_group_id;
     if (!FindTopStalledGroup(&top_group, &top_group_id))
       return;
 
-    if (ReachedMaxSocketsLimit()) {
+    if (Expandability() == SocketPoolExpandability::kCapped) {
       if (idle_socket_count_ > 0) {
-        CloseOneIdleSocket();
+        CloseOneIdleSocketExceptInGroup(nullptr);
       } else {
         // We can't activate more sockets since we're already at our global
         // limit.
@@ -1077,31 +1116,29 @@ void TransportClientSocketPool::CheckForStalledSocketGroups() {
 // the same priority, the winner is based on group hash ordering (and not
 // insertion order).
 bool TransportClientSocketPool::FindTopStalledGroup(Group** group,
-                                                    GroupId* group_id) const {
-  CHECK((group && group_id) || (!group && !group_id));
+                                                    GroupId* group_id) {
+  CHECK(group);
+  CHECK(group_id);
   Group* top_group = nullptr;
   const GroupId* top_group_id = nullptr;
   bool has_stalled_group = false;
-  for (auto i = group_map_.begin(); i != group_map_.end(); ++i) {
-    Group* curr_group = i->second;
+  for (auto& it : group_map_) {
+    Group* curr_group = &it.second;
     if (!curr_group->has_unbound_requests())
       continue;
     if (curr_group->CanUseAdditionalSocketSlot(max_sockets_per_group_)) {
-      if (!group)
-        return true;
       has_stalled_group = true;
       bool has_higher_priority =
           !top_group ||
           curr_group->TopPendingPriority() > top_group->TopPendingPriority();
       if (has_higher_priority) {
         top_group = curr_group;
-        top_group_id = &i->first;
+        top_group_id = &it.first;
       }
     }
   }
 
   if (top_group) {
-    CHECK(group);
     *group = top_group;
     *group_id = *top_group_id;
   } else {
@@ -1110,7 +1147,17 @@ bool TransportClientSocketPool::FindTopStalledGroup(Group** group,
   return has_stalled_group;
 }
 
-void TransportClientSocketPool::OnIPAddressChanged() {
+void TransportClientSocketPool::OnIPAddressChanged(
+    NetworkChangeNotifier::IPAddressChangeType change_type) {
+  DCHECK(cleanup_on_ip_address_change_);
+
+  // Ignore changes to randomly generated IPv6 temporary addresses.
+  if (base::FeatureList::IsEnabled(
+          net::features::kMaintainConnectionsOnIpv6TempAddrChange) &&
+      change_type == NetworkChangeNotifier::IP_ADDRESS_CHANGE_IPV6_TEMPADDR) {
+    return;
+  }
+
   FlushWithError(ERR_NETWORK_CHANGED, kNetworkChanged);
 }
 
@@ -1120,14 +1167,15 @@ void TransportClientSocketPool::FlushWithError(
   CancelAllConnectJobs();
   CloseIdleSockets(net_log_reason_utf8);
   CancelAllRequestsWithError(error);
-  for (const auto& group : group_map_) {
-    group.second->IncrementGeneration();
+  for (auto& group : group_map_) {
+    group.second.IncrementGeneration();
   }
+  ResetExpandability();
 }
 
 void TransportClientSocketPool::RemoveConnectJob(ConnectJob* job,
                                                  Group* group) {
-  CHECK_GT(connecting_socket_count_, 0);
+  CHECK_GT(connecting_socket_count_, 0u);
   connecting_socket_count_--;
 
   DCHECK(group);
@@ -1136,7 +1184,7 @@ void TransportClientSocketPool::RemoveConnectJob(ConnectJob* job,
 
 void TransportClientSocketPool::OnAvailableSocketSlot(const GroupId& group_id,
                                                       Group* group) {
-  DCHECK(base::Contains(group_map_, group_id));
+  DCHECK(group_map_.contains(group_id));
   if (group->IsEmpty()) {
     RemoveGroup(group_id);
   } else if (group->has_unbound_requests()) {
@@ -1157,7 +1205,9 @@ void TransportClientSocketPool::ProcessPendingRequest(const GroupId& group_id,
     return;
   }
 
-  int rv = RequestSocketInternal(group_id, *next_request);
+  int rv = RequestSocketInternal(
+      group_id, *next_request,
+      /*preconnect_done_closure=*/OnConnectJobCompleteCallback());
   if (rv != ERR_IO_PENDING) {
     std::unique_ptr<Request> request = group->PopNextUnboundRequest();
     DCHECK(request);
@@ -1175,6 +1225,7 @@ void TransportClientSocketPool::HandOutSocket(
     std::unique_ptr<StreamSocket> socket,
     ClientSocketHandle::SocketReuseType reuse_type,
     const LoadTimingInfo::ConnectTiming& connect_timing,
+    std::optional<ResolutionDetails> resolution_details,
     ClientSocketHandle* handle,
     base::TimeDelta idle_time,
     Group* group,
@@ -1185,8 +1236,9 @@ void TransportClientSocketPool::HandOutSocket(
   handle->set_idle_time(idle_time);
   handle->set_group_generation(group->generation());
   handle->set_connect_timing(connect_timing);
+  handle->set_resolution_details(std::move(resolution_details));
 
-  if (reuse_type == ClientSocketHandle::REUSED_IDLE) {
+  if (reuse_type == StreamSocketHandle::SocketReuseType::kReusedIdle) {
     net_log.AddEventWithIntParams(
         NetLogEventType::SOCKET_POOL_REUSED_AN_EXISTING_SOCKET, "idle_ms",
         static_cast<int>(idle_time.InMilliseconds()));
@@ -1205,23 +1257,22 @@ void TransportClientSocketPool::AddIdleSocket(
     Group* group) {
   DCHECK(socket);
   IdleSocket idle_socket;
-  idle_socket.socket = socket.release();
+  idle_socket.socket = std::move(socket);
   idle_socket.start_time = base::TimeTicks::Now();
 
-  group->mutable_idle_sockets()->push_back(idle_socket);
+  group->mutable_idle_sockets()->push_back(std::move(idle_socket));
   IncrementIdleCount();
 }
 
 void TransportClientSocketPool::CancelAllConnectJobs() {
   for (auto i = group_map_.begin(); i != group_map_.end();) {
-    Group* group = i->second;
+    Group* group = &i->second;
     connecting_socket_count_ -= group->jobs().size();
     group->RemoveAllUnboundJobs();
 
     // Delete group if no longer needed.
     if (group->IsEmpty()) {
-      auto old = i++;
-      RemoveGroup(old);
+      i = RemoveGroup(i);
     } else {
       ++i;
     }
@@ -1230,7 +1281,7 @@ void TransportClientSocketPool::CancelAllConnectJobs() {
 
 void TransportClientSocketPool::CancelAllRequestsWithError(int error) {
   for (auto i = group_map_.begin(); i != group_map_.end();) {
-    Group* group = i->second;
+    Group* group = &i->second;
 
     while (true) {
       std::unique_ptr<Request> request = group->PopNextUnboundRequest();
@@ -1249,42 +1300,32 @@ void TransportClientSocketPool::CancelAllRequestsWithError(int error) {
 
     // Delete group if no longer needed.
     if (group->IsEmpty()) {
-      auto old = i++;
-      RemoveGroup(old);
+      i = RemoveGroup(i);
     } else {
       ++i;
     }
   }
 }
 
-bool TransportClientSocketPool::ReachedMaxSocketsLimit() const {
-  // Each connecting socket will eventually connect and be handed out.
-  int total =
-      handed_out_socket_count_ + connecting_socket_count_ + idle_socket_count_;
-  // There can be more sockets than the limit since some requests can ignore
-  // the limit
-  if (total < max_sockets_)
-    return false;
-  return true;
-}
-
 bool TransportClientSocketPool::CloseOneIdleSocketExceptInGroup(
     const Group* exception_group) {
-  CHECK_GT(idle_socket_count_, 0);
+  CHECK_GT(idle_socket_count_, 0u);
 
   for (auto i = group_map_.begin(); i != group_map_.end(); ++i) {
-    Group* group = i->second;
+    Group* group = &i->second;
     if (exception_group == group)
       continue;
     std::list<IdleSocket>* idle_sockets = group->mutable_idle_sockets();
 
     if (!idle_sockets->empty()) {
-      delete idle_sockets->front().socket;
+      QueueDestroySocket(std::move(idle_sockets->front().socket));
       idle_sockets->pop_front();
       DecrementIdleCount();
       if (group->IsEmpty())
         RemoveGroup(i);
-
+      // As a socket was released, the expandability should be updated to
+      // reflect this.
+      UpdateExpandabilityAfterRelease();
       return true;
     }
   }
@@ -1297,12 +1338,12 @@ void TransportClientSocketPool::OnConnectJobComplete(Group* group,
                                                      ConnectJob* job) {
   DCHECK_NE(ERR_IO_PENDING, result);
   DCHECK(group_map_.find(group->group_id()) != group_map_.end());
-  DCHECK_EQ(group, group_map_[group->group_id()]);
+  DCHECK_EQ(group, &group_map_.find(group->group_id())->second);
   DCHECK(result != OK || job->socket() != nullptr);
 
   // Check if the ConnectJob is already bound to a Request. If so, result is
   // returned to that specific request.
-  absl::optional<Group::BoundRequest> bound_request =
+  std::optional<Group::BoundRequest> bound_request =
       group->FindAndRemoveBoundRequestForConnectJob(job);
   Request* request = nullptr;
   std::unique_ptr<Request> owned_request;
@@ -1318,6 +1359,7 @@ void TransportClientSocketPool::OnConnectJobComplete(Group* group,
                               bound_request->request->socket_tag());
       bound_request->request->net_log().EndEventWithNetErrorCode(
           NetLogEventType::SOCKET_POOL, bound_request->pending_error);
+      UpdateExpandabilityAfterRelease();
       OnAvailableSocketSlot(group->group_id(), group);
       CheckForStalledSocketGroups();
       return;
@@ -1327,6 +1369,7 @@ void TransportClientSocketPool::OnConnectJobComplete(Group* group,
     // the group, and kick off another request. The socket will be discarded.
     if (bound_request->generation != group->generation()) {
       group->InsertUnboundRequest(std::move(bound_request->request));
+      UpdateExpandabilityAfterRelease();
       OnAvailableSocketSlot(group->group_id(), group);
       CheckForStalledSocketGroups();
       return;
@@ -1343,6 +1386,9 @@ void TransportClientSocketPool::OnConnectJobComplete(Group* group,
       if (result == OK)
         AddIdleSocket(job->PassSocket(), group);
       RemoveConnectJob(job, group);
+      if (result != OK) {
+        UpdateExpandabilityAfterRelease();
+      }
       OnAvailableSocketSlot(group->group_id(), group);
       CheckForStalledSocketGroups();
       return;
@@ -1357,18 +1403,21 @@ void TransportClientSocketPool::OnConnectJobComplete(Group* group,
   if (result != OK)
     request->handle()->SetAdditionalErrorState(job);
   if (job->socket()) {
-    HandOutSocket(job->PassSocket(), ClientSocketHandle::UNUSED,
-                  job->connect_timing(), request->handle(), base::TimeDelta(),
-                  group, request->net_log());
+    HandOutSocket(
+        job->PassSocket(), StreamSocketHandle::SocketReuseType::kUnused,
+        job->connect_timing(), job->GetResolutionDetails(), request->handle(),
+        base::TimeDelta(), group, request->net_log());
   }
   request->net_log().EndEventWithNetErrorCode(NetLogEventType::SOCKET_POOL,
                                               result);
   InvokeUserCallbackLater(request->handle(), request->release_callback(),
                           result, request->socket_tag());
-  if (!bound_request)
+  if (!bound_request) {
     RemoveConnectJob(job, group);
+  }
   // If no socket was handed out, there's a new socket slot available.
   if (!request->handle()->socket()) {
+    UpdateExpandabilityAfterRelease();
     OnAvailableSocketSlot(group->group_id(), group);
     CheckForStalledSocketGroups();
   }
@@ -1381,7 +1430,7 @@ void TransportClientSocketPool::OnNeedsProxyAuth(
     base::OnceClosure restart_with_auth_callback,
     ConnectJob* job) {
   DCHECK(group_map_.find(group->group_id()) != group_map_.end());
-  DCHECK_EQ(group, group_map_[group->group_id()]);
+  DCHECK_EQ(group, &group_map_.find(group->group_id())->second);
 
   const Request* request = group->BindRequestToConnectJob(job);
   // If can't bind the ConnectJob to a request, treat this as a ConnectJob
@@ -1400,17 +1449,23 @@ void TransportClientSocketPool::InvokeUserCallbackLater(
     CompletionOnceCallback callback,
     int rv,
     const SocketTag& socket_tag) {
-  CHECK(!base::Contains(pending_callback_map_, handle));
+  CHECK(!pending_callback_map_.contains(handle));
   pending_callback_map_[handle] = CallbackResultPair(std::move(callback), rv);
   if (rv == OK) {
     handle->socket()->ApplySocketTag(socket_tag);
   }
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&TransportClientSocketPool::InvokeUserCallback,
-                                weak_factory_.GetWeakPtr(), handle));
+                                weak_factory_.GetWeakPtr(),
+                                // This is safe as `handle` is checked against a
+                                // map to verify it's alive before dereference.
+                                // This code path must only be reachable by
+                                // `handle`s that have had Init called.
+                                base::UnsafeDangling(handle)));
 }
 
-void TransportClientSocketPool::InvokeUserCallback(ClientSocketHandle* handle) {
+void TransportClientSocketPool::InvokeUserCallback(
+    MayBeDangling<ClientSocketHandle> handle) {
   auto it = pending_callback_map_.find(handle);
 
   // Exit if the request has already been cancelled.
@@ -1433,10 +1488,12 @@ void TransportClientSocketPool::TryToCloseSocketsInLayeredPools() {
   }
 }
 
-void TransportClientSocketPool::RefreshGroup(GroupMap::iterator it,
-                                             const base::TimeTicks& now,
-                                             const char* net_log_reason_utf8) {
-  Group* group = it->second;
+TransportClientSocketPool::GroupMap::iterator
+TransportClientSocketPool::RefreshGroup(GroupMap::iterator it,
+                                        const base::TimeTicks& now,
+                                        const char* net_log_reason_utf8) {
+  Group* group = &it->second;
+  CHECK(group);
   CleanupIdleSocketsInGroup(true /* force */, group, now, net_log_reason_utf8);
 
   connecting_socket_count_ -= group->jobs().size();
@@ -1447,8 +1504,92 @@ void TransportClientSocketPool::RefreshGroup(GroupMap::iterator it,
 
   // Delete group if no longer needed.
   if (group->IsEmpty()) {
-    RemoveGroup(it);
+    return RemoveGroup(it);
   }
+  return ++it;
+}
+
+void TransportClientSocketPool::QueueDestroySocket(
+    std::unique_ptr<StreamSocket> socket) {
+  if (GetProxyChain().is_direct()) {
+    return;
+  }
+  if (sockets_queued_for_destruction_.empty()) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(&TransportClientSocketPool::DestroyQueuedSockets,
+                       weak_factory_.GetWeakPtr()));
+  }
+  sockets_queued_for_destruction_.emplace_back(std::move(socket));
+}
+
+void TransportClientSocketPool::DestroyQueuedSockets() {
+  // Move into a local vector before destroying elements in case a socket's
+  // destructor reentrantly calls QueueDestroySocket().
+  std::vector<std::unique_ptr<StreamSocket>> sockets =
+      std::move(sockets_queued_for_destruction_);
+}
+
+void TransportClientSocketPool::OnPreconnectConnectJobComplete(
+    PreconnectCompletionCallback callback,
+    const GroupId& group_id,
+    scoped_refptr<SocketParams> socket_params,
+    const std::optional<NetworkTrafficAnnotationTag>& proxy_annotation_tag,
+    const NetLogWithSource& net_log,
+    std::vector<int> results) {
+  int result = OK;
+  std::unique_ptr<ClientSocketHandle> handle;
+  if (base::FeatureList::IsEnabled(
+          net::features::kEnableErrorCodePropagationForPreconnect)) {
+    CHECK(!results.empty());
+    // TODO(crbug.com/453308537): Consider more sophisticated
+    // error code propagation logic.
+    result = *std::max_element(results.begin(), results.end());
+    if (result == OK) {
+      // We check if we still have an idle socket in the group, since the
+      // actual request may have retrieved the socket before this callback is
+      // invoked, resulting in no idle sockets in the group.
+      if (HasActiveSocket(group_id) && IdleSocketCountInGroup(group_id) > 0) {
+        handle = std::make_unique<ClientSocketHandle>();
+        int rv = handle->Init(
+            group_id, std::move(socket_params), proxy_annotation_tag, IDLE,
+            SocketTag(), ClientSocketPool::RespectLimits::ENABLED,
+            base::DoNothing(), ProxyAuthCallback(), this, net_log);
+
+        // There are couple of cases where rv can be ERR_IO_PENDING:
+        // 1. Within TransportClientSocketPool::RequestSocket, it
+        // immediately calls CleanupIdleSockets(false) to prune any sockets that
+        // have become stale based on wall time. If enough time has passed since
+        // the socket was added to the pool (which is common in asynchronous
+        // callbacks), the very socket that passed the check at line 1520 may be
+        // closed and removed during this internal cleanup.
+        // 2. Even if the socket is not timed out, Init performs a usability
+        // check. If the socket has been closed by the peer or has received
+        // unexpected data while idle, the pool will discard it as unusable.
+        // Once the idle socket is discarded, the pool initiates a new
+        // connection attempt to satisfy the Init request. Since starting a new
+        // connection is an asynchronous process, Init returns ERR_IO_PENDING.
+        if (rv == ERR_IO_PENDING) {
+          rv = ERR_FAILED;
+        }
+
+        // There is a slight chance that the socket is not usable (e.g.
+        // the socket is being closed due to network connection failures or
+        // flakiness), thus handle->Init might return an error. If that
+        // happens, we cannot hand out the socket to the callback, and we
+        // should reset the handle to indicate that no socket is available. We
+        // should also consider this case as a failure for the preconnect,
+        // since no socket can be reused.
+        if (rv != OK) {
+          handle.reset();
+          result = rv;
+        }
+      }
+    }
+  }
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE,
+      base::BindOnce(std::move(callback), result == OK, std::move(handle)));
 }
 
 TransportClientSocketPool::Group::Group(
@@ -1456,10 +1597,7 @@ TransportClientSocketPool::Group::Group(
     TransportClientSocketPool* client_socket_pool)
     : group_id_(group_id),
       client_socket_pool_(client_socket_pool),
-      never_assigned_job_count_(0),
-      unbound_requests_(NUM_PRIORITIES),
-      active_socket_count_(0),
-      generation_(0) {}
+      unbound_requests_(NUM_PRIORITIES) {}
 
 TransportClientSocketPool::Group::~Group() {
   DCHECK_EQ(0u, never_assigned_job_count());
@@ -1529,14 +1667,11 @@ std::unique_ptr<ConnectJob> TransportClientSocketPool::Group::RemoveUnboundJob(
   SanityCheck();
 
   // Check that |job| is in the list.
-  auto it = std::find_if(jobs_.begin(), jobs_.end(),
-                         [job](const std::unique_ptr<ConnectJob>& ptr) {
-                           return ptr.get() == job;
-                         });
-  DCHECK(it != jobs_.end());
+  auto it = std::ranges::find(jobs_, job, &std::unique_ptr<ConnectJob>::get);
+  CHECK(it != jobs_.end());
 
   // Check if |job| is in the unassigned jobs list. If so, remove it.
-  auto it2 = std::find(unassigned_jobs_.begin(), unassigned_jobs_.end(), job);
+  auto it2 = std::ranges::find(unassigned_jobs_, job);
   if (it2 != unassigned_jobs_.end()) {
     unassigned_jobs_.erase(it2);
   } else {
@@ -1573,7 +1708,6 @@ void TransportClientSocketPool::Group::OnBackupJobTimerFired(
   // If we've done our cleanups correctly, this should not happen.
   if (jobs_.empty()) {
     NOTREACHED();
-    return;
   }
 
   // If the old job has already established a connection, don't start a backup
@@ -1581,7 +1715,7 @@ void TransportClientSocketPool::Group::OnBackupJobTimerFired(
   // connection - the timeout they used is tuned for that, and tests expect that
   // behavior.
   //
-  // TODO(https://crbug.com/929814): Replace both this and the
+  // TODO(crbug.com/41440018): Replace both this and the
   // LOAD_STATE_RESOLVING_HOST check with a callback. Use the
   // LOAD_STATE_RESOLVING_HOST callback to start the timer (And invoke the
   // OnHostResolved callback of any pending requests), and the
@@ -1592,7 +1726,8 @@ void TransportClientSocketPool::Group::OnBackupJobTimerFired(
 
   // If our old job is waiting on DNS, or if we can't create any sockets
   // right now due to limits, just reset the timer.
-  if (client_socket_pool_->ReachedMaxSocketsLimit() ||
+  if (client_socket_pool_->Expandability() ==
+          SocketPoolExpandability::kCapped ||
       !HasAvailableSocketSlot(client_socket_pool_->max_sockets_per_group_) ||
       (*jobs_.begin())->GetLoadState() == LOAD_STATE_RESOLVING_HOST) {
     StartBackupJobTimer(group_id);
@@ -1605,8 +1740,7 @@ void TransportClientSocketPool::Group::OnBackupJobTimerFired(
   Request* request = unbound_requests_.FirstMax().value().get();
   std::unique_ptr<ConnectJob> owned_backup_job =
       client_socket_pool_->CreateConnectJob(
-          group_id, request->socket_params(),
-          client_socket_pool_->proxy_server_, request->proxy_annotation_tag(),
+          group_id, request->socket_params(), request->proxy_annotation_tag(),
           request->priority(), request->socket_tag(), this);
   owned_backup_job->net_log().AddEvent(
       NetLogEventType::SOCKET_POOL_CONNECT_JOB_CREATED, [&] {
@@ -1644,13 +1778,10 @@ void TransportClientSocketPool::Group::SanityCheck() const {
       ConnectJob* job = pointer.value()->job();
       DCHECK(job);
       // The request's job is not in |unassigned_jobs_|
-      DCHECK(std::find(unassigned_jobs_.begin(), unassigned_jobs_.end(), job) ==
-             unassigned_jobs_.end());
+      DCHECK(!std::ranges::contains(unassigned_jobs_, job));
       // The request's job is in |jobs_|
-      DCHECK(std::find_if(jobs_.begin(), jobs_.end(),
-                          [job](const std::unique_ptr<ConnectJob>& ptr) {
-                            return ptr.get() == job;
-                          }) != jobs_.end());
+      DCHECK(
+          std::ranges::contains(jobs_, job, &std::unique_ptr<ConnectJob>::get));
       // The same job is not assigned to any other request with a job.
       RequestQueue::Pointer pointer2 =
           unbound_requests_.GetNextTowardsLastMin(pointer);
@@ -1671,20 +1802,18 @@ void TransportClientSocketPool::Group::SanityCheck() const {
   for (auto it = unassigned_jobs_.begin(); it != unassigned_jobs_.end(); ++it) {
     // Check that all unassigned jobs are in |jobs_|
     ConnectJob* job = *it;
-    DCHECK(std::find_if(jobs_.begin(), jobs_.end(),
-                        [job](const std::unique_ptr<ConnectJob>& ptr) {
-                          return ptr.get() == job;
-                        }) != jobs_.end());
+    DCHECK(
+        std::ranges::contains(jobs_, job, &std::unique_ptr<ConnectJob>::get));
     // Check that there are no duplicated entries in |unassigned_jobs_|
     for (auto it2 = std::next(it); it2 != unassigned_jobs_.end(); ++it2) {
       DCHECK_NE(job, *it2);
     }
 
     // Check that no |unassigned_jobs_| are in |bound_requests_|.
-    DCHECK(std::find_if(bound_requests_.begin(), bound_requests_.end(),
-                        [job](const BoundRequest& bound_request) {
-                          return bound_request.connect_job.get() == job;
-                        }) == bound_requests_.end());
+    DCHECK(!std::ranges::contains(bound_requests_, job,
+                                  [](const BoundRequest& bound_request) {
+                                    return bound_request.connect_job.get();
+                                  }));
   }
 #endif
 }
@@ -1702,6 +1831,12 @@ void TransportClientSocketPool::Group::RemoveAllUnboundJobs() {
   }
   unassigned_jobs_.clear();
   never_assigned_job_count_ = 0;
+
+  // Diagnostics check for crbug.com/1231248. `Group`s are deleted only on
+  // removal from `TransportClientSocketPool::group_map_`, so if this check
+  // fails, `this` has been deleted, likely through some reentrancy issue.
+  CHECK(client_socket_pool_->HasGroup(group_id_));
+
   // Delete active jobs.
   jobs_.clear();
   // Stop backup job timer.
@@ -1792,11 +1927,10 @@ TransportClientSocketPool::Group::FindAndRemoveUnboundRequest(
 
 void TransportClientSocketPool::Group::SetPendingErrorForAllBoundRequests(
     int pending_error) {
-  for (auto bound_pair = bound_requests_.begin();
-       bound_pair != bound_requests_.end(); ++bound_pair) {
+  for (auto& bound_request : bound_requests_) {
     // Earlier errors take precedence.
-    if (bound_pair->pending_error == OK)
-      bound_pair->pending_error = pending_error;
+    if (bound_request.pending_error == OK)
+      bound_request.pending_error = pending_error;
   }
 }
 
@@ -1826,7 +1960,7 @@ TransportClientSocketPool::Group::BindRequestToConnectJob(
   return request;
 }
 
-absl::optional<TransportClientSocketPool::Group::BoundRequest>
+std::optional<TransportClientSocketPool::Group::BoundRequest>
 TransportClientSocketPool::Group::FindAndRemoveBoundRequestForConnectJob(
     ConnectJob* connect_job) {
   for (auto bound_pair = bound_requests_.begin();
@@ -1837,7 +1971,7 @@ TransportClientSocketPool::Group::FindAndRemoveBoundRequestForConnectJob(
     bound_requests_.erase(bound_pair);
     return std::move(ret);
   }
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 std::unique_ptr<TransportClientSocketPool::Request>
@@ -1894,7 +2028,6 @@ bool TransportClientSocketPool::Group::RequestWithHandleHasJobForTesting(
     pointer = unbound_requests_.GetNextTowardsLastMin(pointer);
   }
   NOTREACHED();
-  return false;
 }
 
 TransportClientSocketPool::Group::BoundRequest::BoundRequest()
@@ -1923,8 +2056,6 @@ TransportClientSocketPool::Group::RemoveUnboundRequest(
     const RequestQueue::Pointer& pointer) {
   SanityCheck();
 
-  // TODO(eroman): Temporary for debugging http://crbug.com/467797.
-  CHECK(!pointer.is_null());
   std::unique_ptr<Request> request = unbound_requests_.Erase(pointer);
   if (request->job()) {
     TryToAssignUnassignedJob(request->ReleaseJob());
@@ -1949,8 +2080,7 @@ TransportClientSocketPool::Group::FindUnboundRequestWithJob(
       return pointer;
   }
   // If a request with the job was not found, it must be in |unassigned_jobs_|.
-  DCHECK(std::find(unassigned_jobs_.begin(), unassigned_jobs_.end(), job) !=
-         unassigned_jobs_.end());
+  DCHECK(std::ranges::contains(unassigned_jobs_, job));
   return RequestQueue::Pointer();
 }
 

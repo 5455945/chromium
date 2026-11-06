@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include "mojo/public/cpp/bindings/map_traits_wtf_hash_map.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-shared.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
+#include "third_party/blink/renderer/platform/wtf/text/case_folding_hash.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace mojo {
@@ -15,20 +16,24 @@ namespace mojo {
 template <>
 struct StructTraits<
     blink::mojom::FetchAPIRequestHeadersDataView,
-    WTF::HashMap<WTF::String, WTF::String, WTF::CaseFoldingHash>> {
-  static WTF::HashMap<WTF::String, WTF::String> headers(
-      const WTF::HashMap<WTF::String, WTF::String, WTF::CaseFoldingHash>&
-          input) {
-    WTF::HashMap<WTF::String, WTF::String> map;
+    blink::HashMap<blink::String,
+                   blink::String,
+                   blink::DeprecatedCaseFoldingHashTraits<blink::String>>> {
+  using MapType =
+      blink::HashMap<blink::String,
+                     blink::String,
+                     blink::DeprecatedCaseFoldingHashTraits<blink::String>>;
+  static blink::HashMap<blink::String, blink::String> headers(
+      const MapType& input) {
+    blink::HashMap<blink::String, blink::String> map;
     for (const auto& tuple : input)
       map.insert(tuple.key, tuple.value);
     return map;
   }
 
-  static bool Read(
-      blink::mojom::FetchAPIRequestHeadersDataView in,
-      WTF::HashMap<WTF::String, WTF::String, WTF::CaseFoldingHash>* out) {
-    WTF::HashMap<WTF::String, WTF::String> in_headers;
+  static bool Read(blink::mojom::FetchAPIRequestHeadersDataView in,
+                   MapType* out) {
+    blink::HashMap<blink::String, blink::String> in_headers;
     if (!in.ReadHeaders(&in_headers))
       return false;
     for (const auto& tuple : in_headers)

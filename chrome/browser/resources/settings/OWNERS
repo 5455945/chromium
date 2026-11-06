@@ -1,9 +1,13 @@
 dpapad@chromium.org
-dschuyler@chromium.org
-khorimoto@chromium.org
-michaelpg@chromium.org
-tommycli@chromium.org
-zentaro@chromium.org
 
-# Chrome OS Settings
-per-file *os_settings*=file://chrome/browser/resources/settings/chromeos/OWNERS
+# Metrics browser proxy
+per-file metrics_browser_proxy.ts=rainhard@chromium.org,msramek@chromium.org
+
+# Two-column description style
+per-file settings_columned_section.css=rainhard@chromium.org
+
+# Settings icons
+per-file icons.html=rainhard@chromium.org
+
+# Privacy settings icons
+per-file privacy_icons.html=rainhard@chromium.org,sideyilmaz@chromium.org

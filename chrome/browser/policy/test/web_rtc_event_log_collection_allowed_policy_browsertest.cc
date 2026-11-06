@@ -1,16 +1,15 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/run_loop.h"
 #include "base/values.h"
 #include "chrome/browser/media/webrtc/webrtc_event_log_manager.h"
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
 #include "components/policy/core/common/policy_map.h"
@@ -57,7 +56,7 @@ class WebRtcEventLogCollectionAllowedPolicyTest
   }
 
   const PrefService::Preference* GetPreference() const {
-    auto* service = user_prefs::UserPrefs::Get(browser()->profile());
+    auto* service = user_prefs::UserPrefs::Get(browser()->GetProfile());
     return service->FindPreference(prefs::kWebRtcEventLogCollectionAllowed);
   }
 
@@ -99,7 +98,7 @@ IN_PROC_BROWSER_TEST_P(WebRtcEventLogCollectionAllowedPolicyTest, RunTest) {
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
   content::GlobalRenderFrameHostId frame_id =
-      web_contents->GetMainFrame()->GetGlobalId();
+      web_contents->GetPrimaryMainFrame()->GetGlobalId();
 
   constexpr int kLid = 123;
   const std::string kSessionId = "id";
@@ -113,7 +112,7 @@ IN_PROC_BROWSER_TEST_P(WebRtcEventLogCollectionAllowedPolicyTest, RunTest) {
 
   {
     base::RunLoop run_loop;
-    webrtc_event_log_manager->OnPeerConnectionSessionIdSet(
+    webrtc_event_log_manager->OnSessionIdSetForPeerConnection(
         frame_id, kLid, kSessionId,
         BlockingBoolExpectingReply(&run_loop, true));
     run_loop.Run();
@@ -127,9 +126,10 @@ IN_PROC_BROWSER_TEST_P(WebRtcEventLogCollectionAllowedPolicyTest, RunTest) {
 
     // Test focus - remote-bound logging allowed if and only if the policy
     // is configured to allow it.
+    // TODO(crbug.com/379869738) Remove GetUnsafeValue.
     webrtc_event_log_manager->StartRemoteLogging(
-        frame_id.child_id, kSessionId, kMaxFileSizeBytes, kOutputPeriodMs,
-        kWebAppId,
+        frame_id.child_id.GetUnsafeValue(), kSessionId, kMaxFileSizeBytes,
+        kOutputPeriodMs, kWebAppId, std::nullopt, /*local_only=*/false,
         BlockingBoolExpectingReplyWithExtras(&run_loop,
                                              remote_logging_allowed));
     run_loop.Run();

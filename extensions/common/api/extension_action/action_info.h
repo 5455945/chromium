@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +8,13 @@
 #include <memory>
 #include <string>
 
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
-#include "extensions/common/extension_icon_set.h"
+#include "extensions/common/icons/extension_icon_set.h"
+#include "extensions/common/icons/extension_icon_variants.h"
 #include "url/gurl.h"
 
-namespace base {
-class DictionaryValue;
-}
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -22,30 +22,41 @@ class Extension;
 
 struct ActionInfo {
   // The types of extension actions.
-  enum Type {
-    TYPE_ACTION,
-    TYPE_BROWSER,
-    TYPE_PAGE,
+  enum class Type {
+    kAction,
+    kBrowser,
+    kPage,
   };
 
-  enum DefaultState {
-    STATE_ENABLED,
-    STATE_DISABLED,
+  enum class DefaultState {
+    kEnabled,
+    kDisabled,
   };
 
   explicit ActionInfo(Type type);
   ActionInfo(const ActionInfo& other);
+  ActionInfo(ActionInfo&& other);
   ~ActionInfo();
 
-  // Loads an ActionInfo from the given DictionaryValue.
-  static std::unique_ptr<ActionInfo> Load(const Extension* extension,
-                                          Type type,
-                                          const base::DictionaryValue* dict,
-                                          std::u16string* error);
+  // Loads an ActionInfo from the given Dict. Populating
+  // `install_warnings` if issues are encountered when parsing the manifest.
+  static std::unique_ptr<ActionInfo> Load(
+      const Extension* extension,
+      Type type,
+      const base::DictValue& dict,
+      std::vector<InstallWarning>* install_warnings,
+      std::u16string* error);
+
+  // TODO(jlulejian): Rather than continue to grow this list of static helper
+  // methods, move them to a action_helper.h class similar to
+  // chrome/browser/extensions/settings_api_helpers.h
 
   // Returns any action associated with the extension, whether it's specified
   // under the "page_action", "browser_action", or "action" key.
   static const ActionInfo* GetExtensionActionInfo(const Extension* extension);
+
+  // Retrieves the manifest key for the given action `type`.
+  static const char* GetManifestKeyForActionType(ActionInfo::Type type);
 
   // Sets the extension's action.
   static void SetExtensionActionInfo(Extension* extension,
@@ -53,7 +64,7 @@ struct ActionInfo {
 
   // The key this action corresponds to. NOTE: You should only use this if you
   // care about the actual manifest key. Use the other members (like
-  // |default_state| for querying general info.
+  // `default_state` for querying general info.
   const Type type;
 
   // Empty implies the key wasn't present.
@@ -66,6 +77,9 @@ struct ActionInfo {
   DefaultState default_state;
   // Whether or not this action was synthesized to force visibility.
   bool synthesized;
+
+  // Icon Variants can be defined here in action or at manifest.json top level.
+  std::optional<ExtensionIconVariants> icon_variants;
 };
 
 }  // namespace extensions

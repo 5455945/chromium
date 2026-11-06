@@ -1,13 +1,33 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/performance_manager/test_support/graph_test_harness.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 
 namespace performance_manager {
+
+int NextTestFrameRoutingId() {
+  static int next_frame_routing_id_;
+  return ++next_frame_routing_id_;
+}
+
+RenderProcessHostId NextTestRenderProcessHostId() {
+  static RenderProcessHostId::underlying_type::Generator id_generator;
+  return RenderProcessHostId(id_generator.GenerateNextId());
+}
+
+BrowserChildProcessHostId NextTestBrowserChildProcessHostId() {
+  static BrowserChildProcessHostId::underlying_type::Generator id_generator;
+  return BrowserChildProcessHostId(id_generator.GenerateNextId());
+}
+
+content::FrameTreeNodeId NextTestFrameTreeNodeId() {
+  static content::FrameTreeNodeId::Generator id_generator;
+  return id_generator.GenerateNextId();
+}
 
 TestGraphImpl::TestGraphImpl() = default;
 TestGraphImpl::~TestGraphImpl() = default;
@@ -16,10 +36,48 @@ TestNodeWrapper<FrameNodeImpl> TestGraphImpl::CreateFrameNodeAutoId(
     ProcessNodeImpl* process_node,
     PageNodeImpl* page_node,
     FrameNodeImpl* parent_frame_node,
-    int frame_tree_node_id) {
+    content::BrowsingInstanceId browsing_instance_id,
+    content::FrameTreeNodeId frame_tree_node_id) {
+  if (frame_tree_node_id.is_null()) {
+    frame_tree_node_id = NextTestFrameTreeNodeId();
+  }
   return TestNodeWrapper<FrameNodeImpl>::Create(
-      this, process_node, page_node, parent_frame_node, frame_tree_node_id,
-      ++next_frame_routing_id_);
+      this, process_node, page_node, parent_frame_node,
+      /*outer_document_for_inner_frame_root=*/nullptr, NextTestFrameRoutingId(),
+      blink::LocalFrameToken(), frame_tree_node_id, browsing_instance_id);
+}
+
+TestNodeWrapper<FrameNodeImpl> TestGraphImpl::CreateSpeculativeFrameNodeAutoId(
+    ProcessNodeImpl* process_node,
+    PageNodeImpl* page_node,
+    FrameNodeImpl* parent_frame_node,
+    content::BrowsingInstanceId browsing_instance_id,
+    content::FrameTreeNodeId frame_tree_node_id) {
+  if (frame_tree_node_id.is_null()) {
+    frame_tree_node_id = NextTestFrameTreeNodeId();
+  }
+  return TestNodeWrapper<FrameNodeImpl>::Create(
+      this, process_node, page_node, parent_frame_node,
+      /*outer_document_for_inner_frame_root=*/nullptr, NextTestFrameRoutingId(),
+      blink::LocalFrameToken(), frame_tree_node_id, browsing_instance_id,
+      content::SiteInstanceGroupId(0), /*is_active=*/false);
+}
+
+TestNodeWrapper<ProcessNodeImpl> TestGraphImpl::CreateBrowserProcessNode() {
+  return TestNodeWrapper<ProcessNodeImpl>::Create(this,
+                                                  BrowserProcessNodeTag{});
+}
+
+TestNodeWrapper<ProcessNodeImpl> TestGraphImpl::CreateRendererProcessNode(
+    RenderProcessHostProxy proxy) {
+  return TestNodeWrapper<ProcessNodeImpl>::Create(this, std::move(proxy));
+}
+
+TestNodeWrapper<ProcessNodeImpl> TestGraphImpl::CreateBrowserChildProcessNode(
+    content::ProcessType process_type,
+    BrowserChildProcessHostProxy proxy) {
+  return TestNodeWrapper<ProcessNodeImpl>::Create(this, process_type,
+                                                  std::move(proxy));
 }
 
 GraphTestHarness::GraphTestHarness()
@@ -47,7 +105,7 @@ void GraphTestHarness::SetUp() {
   setup_called_ = true;
 
   graph_->SetUp();
-  graph_features_helper_.ConfigureGraph(graph_.get());
+  graph_features_.ConfigureGraph(graph_.get());
 
   // This can't be done in the constructor because it is a virtual function.
   OnGraphCreated(graph_.get());

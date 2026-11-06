@@ -1,19 +1,28 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_BASE_DATA_TRANSFER_POLICY_DATA_TRANSFER_POLICY_CONTROLLER_H_
 #define UI_BASE_DATA_TRANSFER_POLICY_DATA_TRANSFER_POLICY_CONTROLLER_H_
 
-#include "base/callback.h"
+#include <optional>
+#include <variant>
+#include <vector>
+
 #include "base/component_export.h"
+#include "base/files/file_path.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_forward.h"
+#include "base/types/optional_ref.h"
 #include "ui/base/data_transfer_policy/data_transfer_endpoint.h"
 
 namespace content {
-class WebContents;
+class RenderFrameHost;
 }
 
 namespace ui {
+
+struct FileInfo;
 
 // The DataTransfer policy controller controls transferring data via
 // drag-and-drop and clipboard read operations. It allows/disallows transferring
@@ -32,28 +41,43 @@ class COMPONENT_EXPORT(UI_BASE_DATA_TRANSFER_POLICY)
   // Indicates that restricting data transfer is no longer required.
   static void DeleteInstance();
 
-  // nullptr can be passed instead of `data_src` or `data_dst`. If clipboard
-  // read is not allowed, this function will show a notification to the user.
+  // Returns true if `data_dst` is allowed to read clipboard data originally
+  // written by `data_src`. `data_src` may be null if the clipboard data
+  // originates from source can't be represented by DataTransferEndpoint;
+  // similarly, `data_dst`  may be null if the data is pasted into a destination
+  // can't be represented by DataTransferEndpoint e.g. Omnibox. `size` may be
+  // null in some cases such as pasting files.
   virtual bool IsClipboardReadAllowed(
-      const DataTransferEndpoint* const data_src,
-      const DataTransferEndpoint* const data_dst) = 0;
+      base::optional_ref<const DataTransferEndpoint> data_src,
+      base::optional_ref<const DataTransferEndpoint> data_dst,
+      std::optional<size_t> size) = 0;
 
   // nullptr can be passed instead of `data_src` or `data_dst`. If clipboard
   // data is set to be in warning mode, this function will show a notification
   // to the user. If clipboard read is allowed, `callback` will be invoked with
   // true. Otherwise `callback` will be invoked with false.
-  // If `web_contents` got destroyed before `callback` is invoked, the
+  // If the WebContents of `rfh` got destroyed before `callback` is invoked, the
   // notification will get closed.
-  virtual void PasteIfAllowed(const DataTransferEndpoint* const data_src,
-                              const DataTransferEndpoint* const data_dst,
-                              content::WebContents* web_contents,
-                              base::OnceCallback<void(bool)> callback) = 0;
+  // When pasting files, `pasted_content` contains a vector of the associated
+  // pasted files. Otherwise, `pasted_content` contains the size of the pasted
+  // data (text, image, etc...).
+  virtual void PasteIfAllowed(
+      base::optional_ref<const DataTransferEndpoint> data_src,
+      base::optional_ref<const DataTransferEndpoint> data_dst,
+      std::variant<size_t, std::vector<base::FilePath>> pasted_content,
+      content::RenderFrameHost* rfh,
+      base::OnceCallback<void(bool)> paste_cb) = 0;
 
-  // nullptr can be passed instead of `data_src` or `data_dst`. If dropping the
-  // data is not allowed, this function will show a notification to the user.
-  virtual bool IsDragDropAllowed(const DataTransferEndpoint* const data_src,
-                                 const DataTransferEndpoint* const data_dst,
-                                 const bool is_drop) = 0;
+  // nullopt can be passed instead of `data_dst` and `data_src`. If dropping
+  // files, `filenames` contains the associated file info. If dropping the data
+  // is not allowed, this function will show a notification to the user. If the
+  // drop is allowed, `drop_cb` will be run. Otherwise `drop_cb` will be reset.
+  // `drop_cb` may be run asynchronously after the user comfirms they want to
+  // drop the data.
+  virtual void DropIfAllowed(std::optional<DataTransferEndpoint> data_src,
+                             std::optional<DataTransferEndpoint> data_dst,
+                             std::optional<std::vector<FileInfo>> filenames,
+                             base::OnceClosure drop_cb) = 0;
 
  protected:
   DataTransferPolicyController();

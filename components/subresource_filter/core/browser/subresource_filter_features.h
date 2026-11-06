@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,13 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/feature_list.h"
-#include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/metrics/field_trial_params.h"
-#include "base/strings/string_piece.h"
+#include "base/time/time.h"
 #include "components/subresource_filter/core/common/activation_list.h"
 #include "components/subresource_filter/core/common/activation_scope.h"
 #include "components/subresource_filter/core/mojom/subresource_filter.mojom.h"
@@ -48,7 +48,7 @@ namespace subresource_filter {
 // as needed).
 struct Configuration {
   // The conditions that determine whether subresource filtering should be
-  // activated for a given main frame navigation using this configuration.
+  // activated for a given root frame navigation using this configuration.
   struct ActivationConditions {
     // The activation scope. That is, the subset of page loads where subresource
     // filtering should be activated according to this configuration. When set
@@ -68,7 +68,7 @@ struct Configuration {
     std::unique_ptr<base::trace_event::TracedValue> ToTracedValue() const;
   };
 
-  // The details of how subresource filtering should operate for a given main
+  // The details of how subresource filtering should operate for a given root
   // frame navigation when it is activated using this configuration.
   struct ActivationOptions {
     // The maximum degree to which subresource filtering should be activated on
@@ -103,7 +103,6 @@ struct Configuration {
   Configuration& operator=(Configuration&&);
 
   bool operator==(const Configuration& rhs) const;
-  bool operator!=(const Configuration& rhs) const;
 
   void AddToValue(base::trace_event::TracedValue*) const;
   std::unique_ptr<base::trace_event::TracedValue> ToTracedValue() const;
@@ -113,7 +112,8 @@ struct Configuration {
   // different from this config's activation level due to things like warning
   // mode or client allowlisting.
   mojom::ActivationState GetActivationState(
-      mojom::ActivationLevel effective_activation_level) const;
+      mojom::ActivationLevel effective_activation_level,
+      mojom::SubresourceFilterDisabledReason disabled_reason) const;
 
   // Factory methods for preset configurations.
   //
@@ -138,10 +138,13 @@ class ConfigurationList : public base::RefCountedThreadSafe<ConfigurationList> {
  public:
   explicit ConfigurationList(std::vector<Configuration> configs);
 
+  ConfigurationList(const ConfigurationList&) = delete;
+  ConfigurationList& operator=(const ConfigurationList&) = delete;
+
   // Returns the lexicographically greatest flavor string that is prescribed by
   // any of the configurations. The caller must hold a reference to this
   // instance while using the returned string piece.
-  base::StringPiece lexicographically_greatest_ruleset_flavor() const {
+  std::string_view lexicographically_greatest_ruleset_flavor() const {
     return lexicographically_greatest_ruleset_flavor_;
   }
 
@@ -156,9 +159,7 @@ class ConfigurationList : public base::RefCountedThreadSafe<ConfigurationList> {
   ~ConfigurationList();
 
   const std::vector<Configuration> configs_by_decreasing_priority_;
-  const base::StringPiece lexicographically_greatest_ruleset_flavor_;
-
-  DISALLOW_COPY_AND_ASSIGN(ConfigurationList);
+  const std::string_view lexicographically_greatest_ruleset_flavor_;
 };
 
 // Retrieves all currently enabled subresource filtering configurations. The
@@ -182,16 +183,16 @@ scoped_refptr<ConfigurationList> GetAndSetActivateConfigurations(
 // Feature and variation parameter definitions -------------------------------
 
 // The primary toggle to enable/disable the Safe Browsing Subresource Filter.
-extern const base::Feature kSafeBrowsingSubresourceFilter;
+BASE_DECLARE_FEATURE(kSafeBrowsingSubresourceFilter);
 
 // Enables the blocking of ads on sites that are abusive.
-extern const base::Feature kFilterAdsOnAbusiveSites;
+BASE_DECLARE_FEATURE(kFilterAdsOnAbusiveSites);
 
 // Enables the blocking of ads on sites that have ads violations.
-extern const base::Feature kAdsInterventionsEnforced;
+BASE_DECLARE_FEATURE(kAdsInterventionsEnforced);
 
 // The maximum duration that an ads intervention is active for.
-// TODO(crbug.com/1131971): This currently is the default delay.
+// TODO(crbug.com/40721691): This currently is the default delay.
 // We should move to an approach where each intervention has a duration that is
 // attainable separately as a parameter for that intervention. Right now this is
 // overridden explicitly in a switch for interventions that require a different
@@ -210,9 +211,7 @@ extern const char kActivationScopeActivationList[];
 extern const char kActivationScopeNoSites[];
 
 extern const char kActivationListsParameterName[];
-extern const char kActivationListSocialEngineeringAdsInterstitial[];
 extern const char kActivationListPhishingInterstitial[];
-extern const char kActivationListSubresourceFilter[];
 extern const char kActivationListBetterAds[];
 
 extern const char kActivationPriorityParameterName[];

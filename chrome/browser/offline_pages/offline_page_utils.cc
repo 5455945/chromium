@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,16 +8,11 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/metrics/histogram_macros.h"
-#include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
-#include "base/task/post_task.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
-#include "build/build_config.h"
 #include "chrome/browser/net/net_error_tab_helper.h"
 #include "chrome/browser/offline_pages/offline_page_mhtml_archiver.h"
 #include "chrome/browser/offline_pages/offline_page_model_factory.h"
@@ -34,16 +29,13 @@
 #include "components/offline_pages/core/offline_page_item_utils.h"
 #include "components/offline_pages/core/offline_page_model.h"
 #include "components/offline_pages/core/request_header/offline_page_header.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_frame_host.h"
-#include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
 #include "net/base/mime_util.h"
-
-#if defined(OS_ANDROID)
-#include "chrome/browser/download/android/download_controller_base.h"
-#endif  // defined(OS_ANDROID)
 
 namespace offline_pages {
 namespace {
@@ -89,14 +81,6 @@ void CheckDuplicateOngoingDownloads(
           std::move(callback).Run(
               OfflinePageUtils::DuplicateCheckResult::NOT_FOUND);
         } else {
-          // Using CUSTOM_COUNTS instead of time-oriented histogram to record
-          // samples in seconds rather than milliseconds.
-          UMA_HISTOGRAM_CUSTOM_COUNTS(
-              "OfflinePages.DownloadRequestTimeSinceDuplicateRequested",
-              (OfflineTimeNow() - latest_request_time).InSeconds(),
-              base::TimeDelta::FromSeconds(1).InSeconds(),
-              base::TimeDelta::FromDays(7).InSeconds(), 50);
-
           std::move(callback).Run(
               OfflinePageUtils::DuplicateCheckResult::DUPLICATE_REQUEST_FOUND);
         }
@@ -120,54 +104,7 @@ void DoCalculateSizeBetween(
   std::move(callback).Run(total_size);
 }
 
-content::WebContents* GetWebContentsByFrameID(int render_process_id,
-                                              int render_frame_id) {
-  content::RenderFrameHost* render_frame_host =
-      content::RenderFrameHost::FromID(render_process_id, render_frame_id);
-  if (!render_frame_host)
-    return NULL;
-  return content::WebContents::FromRenderFrameHost(render_frame_host);
-}
-
-content::WebContents::Getter GetWebContentsGetter(
-    content::WebContents* web_contents) {
-  // The FrameTreeNode ID should be used to access the WebContents.
-  int frame_tree_node_id = web_contents->GetMainFrame()->GetFrameTreeNodeId();
-  if (frame_tree_node_id != content::RenderFrameHost::kNoFrameTreeNodeId) {
-    return base::BindRepeating(content::WebContents::FromFrameTreeNodeId,
-                               frame_tree_node_id);
-  }
-
-  // In other cases, use the RenderProcessHost ID + RenderFrameHost ID to get
-  // the WebContents.
-  return base::BindRepeating(
-      &GetWebContentsByFrameID,
-      web_contents->GetMainFrame()->GetProcess()->GetID(),
-      web_contents->GetMainFrame()->GetRoutingID());
-}
-
-void AcquireFileAccessPermissionDoneForScheduleDownload(
-    content::WebContents* web_contents,
-    const std::string& name_space,
-    const GURL& url,
-    OfflinePageUtils::DownloadUIActionFlags ui_action,
-    const std::string& request_origin,
-    bool granted) {
-  if (!granted)
-    return;
-  OfflinePageTabHelper* tab_helper =
-      OfflinePageTabHelper::FromWebContents(web_contents);
-  if (!tab_helper)
-    return;
-  tab_helper->ScheduleDownloadHelper(web_contents, name_space, url, ui_action,
-                                     request_origin);
-}
-
 }  // namespace
-
-// static
-const base::FilePath::CharType OfflinePageUtils::kMHTMLExtension[] =
-    FILE_PATH_LITERAL("mhtml");
 
 // static
 void OfflinePageUtils::SelectPagesForURL(
@@ -189,7 +126,7 @@ void OfflinePageUtils::SelectPagesWithCriteria(
   OfflinePageModel* offline_page_model =
       OfflinePageModelFactory::GetForKey(key);
   if (!offline_page_model) {
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
         base::BindOnce(std::move(callback), std::vector<OfflinePageItem>()));
     return;
@@ -239,8 +176,10 @@ bool OfflinePageUtils::IsShowingOfflinePreview(
 // static
 bool OfflinePageUtils::IsShowingDownloadButtonInErrorPage(
     content::WebContents* web_contents) {
+  tabs::TabInterface* const tab =
+      tabs::TabInterface::MaybeGetFromContents(web_contents);
   chrome_browser_net::NetErrorTabHelper* tab_helper =
-      chrome_browser_net::NetErrorTabHelper::FromWebContents(web_contents);
+      tab ? chrome_browser_net::NetErrorTabHelper::From(tab) : nullptr;
   return tab_helper && tab_helper->is_showing_download_button_in_error_page();
 }
 
@@ -280,14 +219,6 @@ void OfflinePageUtils::CheckDuplicateDownloads(
       // Then check for ongoing downloads, that is, requests.
       CheckDuplicateOngoingDownloads(browser_context, url, std::move(callback));
     } else {
-      // Using CUSTOM_COUNTS instead of time-oriented histogram to record
-      // samples in seconds rather than milliseconds.
-      UMA_HISTOGRAM_CUSTOM_COUNTS(
-          "OfflinePages.DownloadRequestTimeSinceDuplicateSaved",
-          (OfflineTimeNow() - latest_saved_time).InSeconds(),
-          base::TimeDelta::FromSeconds(1).InSeconds(),
-          base::TimeDelta::FromDays(7).InSeconds(), 50);
-
       std::move(callback).Run(DuplicateCheckResult::DUPLICATE_PAGE_FOUND);
     }
   };
@@ -307,12 +238,13 @@ void OfflinePageUtils::ScheduleDownload(content::WebContents* web_contents,
   if (!web_contents)
     return;
 
-  // Ensure that the storage permission is granted since the archive file is
-  // going to be placed in the public directory.
-  AcquireFileAccessPermission(
-      web_contents,
-      base::BindOnce(&AcquireFileAccessPermissionDoneForScheduleDownload,
-                     web_contents, name_space, url, ui_action, request_origin));
+  OfflinePageTabHelper* tab_helper =
+      OfflinePageTabHelper::FromWebContents(web_contents);
+  if (!tab_helper) {
+    return;
+  }
+  tab_helper->ScheduleDownloadHelper(web_contents, name_space, url, ui_action,
+                                     request_origin);
 }
 
 // static
@@ -379,21 +311,6 @@ bool OfflinePageUtils::IsShowingTrustedOfflinePage(
   OfflinePageTabHelper* tab_helper =
       OfflinePageTabHelper::FromWebContents(web_contents);
   return tab_helper && tab_helper->IsShowingTrustedOfflinePage();
-}
-
-// static
-void OfflinePageUtils::AcquireFileAccessPermission(
-    content::WebContents* web_contents,
-    base::OnceCallback<void(bool)> callback) {
-#if defined(OS_ANDROID)
-  content::WebContents::Getter web_contents_getter =
-      GetWebContentsGetter(web_contents);
-  DownloadControllerBase::Get()->AcquireFileAccessPermission(
-      web_contents_getter, std::move(callback));
-#else
-  // Not needed in other platforms.
-  std::move(callback).Run(true /*granted*/);
-#endif  // defined(OS_ANDROID)
 }
 
 }  // namespace offline_pages

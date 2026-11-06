@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,11 @@
 
 #include <list>
 
-#include "base/callback.h"
-#include "base/macros.h"
-#include "base/single_thread_task_runner.h"
-
+#include "base/functional/callback.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
-
+#include "content/common/content_export.h"
 #include "content/public/browser/browser_main_runner.h"
 
 namespace content {
@@ -36,9 +35,15 @@ class CONTENT_EXPORT StartupTaskRunner {
 
  public:
   // Constructor: Note that |startup_complete_callback| is optional. If it is
-  // not null it will be called once all the startup tasks have run.
-  StartupTaskRunner(base::OnceCallback<void(int)> startup_complete_callback,
-                    scoped_refptr<base::SingleThreadTaskRunner> proxy);
+  // not null it will be called, once all the startup tasks have run, with the
+  // result of running tasks and the duration spent blocking the UI thread.
+  StartupTaskRunner(
+      base::OnceCallback<void(int, base::TimeDelta, base::TimeDelta)>
+          startup_complete_callback,
+      scoped_refptr<base::SingleThreadTaskRunner> proxy);
+
+  StartupTaskRunner(const StartupTaskRunner&) = delete;
+  StartupTaskRunner& operator=(const StartupTaskRunner&) = delete;
 
   ~StartupTaskRunner();
 
@@ -49,7 +54,9 @@ class CONTENT_EXPORT StartupTaskRunner {
   void StartRunningTasksAsync();
 
   // Run all tasks, or all remaining tasks, synchronously
-  void RunAllTasksNow();
+  // `was_posted` means the caller had posted this task to the task_runner
+  // instead of executing it inline.
+  void RunAllTasksNow(bool was_posted);
 
  private:
   friend class base::RefCounted<StartupTaskRunner>;
@@ -57,10 +64,15 @@ class CONTENT_EXPORT StartupTaskRunner {
   std::list<StartupTask> task_list_;
   void WrappedTask();
 
-  base::OnceCallback<void(int)> startup_complete_callback_;
+  base::OnceCallback<void(int, base::TimeDelta, base::TimeDelta)>
+      startup_complete_callback_;
   scoped_refptr<base::SingleThreadTaskRunner> proxy_;
-
-  DISALLOW_COPY_AND_ASSIGN(StartupTaskRunner);
+  // The longest of the wall-clock durations of each individual task that was
+  // posted to the task_runner.
+  base::TimeDelta longest_duration_of_posted_startup_tasks_;
+  // The total wall-clock duration of all the tasks that were run as posted
+  // tasks.
+  base::TimeDelta total_duration_of_posted_startup_tasks_;
 };
 
 }  // namespace content

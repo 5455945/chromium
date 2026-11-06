@@ -1,17 +1,22 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "components/paint_preview/common/serialized_recording.h"
 
+#include <optional>
+
 #include "base/notreached.h"
+#include "base/task/task_traits.h"
+#include "base/task/thread_pool.h"
 #include "base/trace_event/common/trace_event_common.h"
 #include "base/trace_event/trace_event.h"
 #include "components/paint_preview/common/file_stream.h"
 #include "components/paint_preview/common/paint_preview_tracker.h"
 #include "components/paint_preview/common/serial_utils.h"
 #include "mojo/public/cpp/base/big_buffer.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "skia/ext/skia_utils_base.h"
 #include "third_party/skia/include/core/SkStream.h"
 
 namespace paint_preview {
@@ -70,7 +75,15 @@ SerializedRecording::SerializedRecording(SerializedRecording&&) = default;
 SerializedRecording& SerializedRecording::operator=(SerializedRecording&&) =
     default;
 
-SerializedRecording::~SerializedRecording() = default;
+SerializedRecording::~SerializedRecording() {
+  if (is_file() && file_.IsValid()) {
+    base::ThreadPool::PostTask(
+        FROM_HERE,
+        {base::MayBlock(), base::TaskShutdownBehavior::BLOCK_SHUTDOWN},
+        base::BindOnce([](base::File file) { file.Close(); },
+                       std::move(file_)));
+  }
+}
 
 bool SerializedRecording::IsValid() const {
   if (is_file()) {
@@ -79,11 +92,10 @@ bool SerializedRecording::IsValid() const {
     return buffer_.has_value();
   } else {
     NOTREACHED();
-    return false;
   }
 }
 
-absl::optional<SkpResult> SerializedRecording::Deserialize() && {
+std::optional<SkpResult> SerializedRecording::Deserialize() && {
   TRACE_EVENT0("paint_preview", "SerializedRecording::Deserialize");
   SkpResult result;
   SkDeserialProcs procs = MakeDeserialProcs(&result.ctx);
@@ -98,7 +110,6 @@ absl::optional<SkpResult> SerializedRecording::Deserialize() && {
     result.skp = SkPicture::MakeFromStream(&stream, &procs);
   } else {
     NOTREACHED();
-    return {};
   }
 
   return {std::move(result)};
@@ -120,49 +131,56 @@ sk_sp<SkPicture> SerializedRecording::DeserializeWithContext(
     return SkPicture::MakeFromStream(&stream, &procs);
   } else {
     NOTREACHED();
-    return nullptr;
   }
 }
 
 bool RecordToFile(base::File file,
                   sk_sp<const SkPicture> skp,
                   PaintPreviewTracker* tracker,
-                  absl::optional<size_t> max_capture_size,
+                  std::optional<size_t> max_capture_size,
                   size_t* serialized_size) {
-  if (!file.IsValid())
+  if (!file.IsValid()) {
     return false;
+  }
 
-  if (max_capture_size.has_value() && max_capture_size.value() == 0)
+  if (max_capture_size.has_value() && max_capture_size.value() == 0) {
     return false;
+  }
 
   FileWStream file_stream(std::move(file), max_capture_size.value_or(0));
-  if (!SerializeSkPicture(skp, tracker, &file_stream))
+  if (!SerializeSkPicture(skp, tracker, &file_stream)) {
     return false;
+  }
 
   file_stream.Close();
   *serialized_size = file_stream.ActualBytesWritten();
   return !file_stream.DidWriteFail();
 }
 
-absl::optional<mojo_base::BigBuffer> RecordToBuffer(
+std::optional<mojo_base::BigBuffer> RecordToBuffer(
     sk_sp<const SkPicture> skp,
     PaintPreviewTracker* tracker,
-    absl::optional<size_t> maybe_max_capture_size,
+    std::optional<size_t> maybe_max_capture_size,
     size_t* serialized_size) {
   SkDynamicMemoryWStream memory_stream;
-  if (!SerializeSkPicture(skp, tracker, &memory_stream))
-    return absl::nullopt;
+  if (!SerializeSkPicture(skp, tracker, &memory_stream)) {
+    return std::nullopt;
+  }
 
   size_t max_capture_size = maybe_max_capture_size.value_or(SIZE_MAX);
-  if (max_capture_size == 0)
-    return absl::nullopt;
+  if (max_capture_size == 0) {
+    return std::nullopt;
+  }
 
+  TRACE_EVENT_BEGIN("paint_preview", "CopyToBigBuffer");
   sk_sp<SkData> data = memory_stream.detachAsData();
   *serialized_size = std::min(data->size(), max_capture_size);
   mojo_base::BigBuffer buffer(
-      base::span<const uint8_t>(data->bytes(), *serialized_size));
-  if (data->size() > max_capture_size)
-    return absl::nullopt;
+      skia::as_byte_span(*data).first(*serialized_size));
+  TRACE_EVENT_END("paint_preview");
+  if (data->size() > max_capture_size) {
+    return std::nullopt;
+  }
 
   return {std::move(buffer)};
 }

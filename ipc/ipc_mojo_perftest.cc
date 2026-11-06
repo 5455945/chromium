@@ -1,27 +1,29 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <stddef.h>
-#include <memory>
 
-#include "base/bind.h"
+#include <memory>
+#include <tuple>
+
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/process/process_metrics.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/synchronization/waitable_event.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/perf_time_logger.h"
 #include "base/test/task_environment.h"
 #include "base/threading/thread.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
-#include "ipc/ipc_channel_mojo.h"
-#include "ipc/ipc_perftest_messages.h"
+#include "ipc/ipc_channel.h"
 #include "ipc/ipc_perftest_util.h"
-#include "ipc/ipc_sync_channel.h"
-#include "ipc/ipc_test.mojom.h"
-#include "ipc/ipc_test_base.h"
+#include "ipc/ipc_test.test-mojom.h"
 #include "mojo/core/embedder/embedder.h"
 #include "mojo/core/test/mojo_test_base.h"
 #include "mojo/core/test/multiprocess_test_helper.h"
@@ -38,95 +40,7 @@
 namespace IPC {
 namespace {
 
-class PerformanceChannelListener : public Listener {
- public:
-  explicit PerformanceChannelListener(const std::string& label)
-      : label_(label),
-        sender_(nullptr),
-        msg_count_(0),
-        msg_size_(0),
-        sync_(false),
-        count_down_(0) {
-    VLOG(1) << "Server listener up";
-  }
-
-  ~PerformanceChannelListener() override { VLOG(1) << "Server listener down"; }
-
-  void Init(Sender* sender) {
-    DCHECK(!sender_);
-    sender_ = sender;
-  }
-
-  // Call this before running the message loop.
-  void SetTestParams(int msg_count, size_t msg_size, bool sync) {
-    DCHECK_EQ(0, count_down_);
-    msg_count_ = msg_count;
-    msg_size_ = msg_size;
-    sync_ = sync;
-    count_down_ = msg_count_;
-    payload_ = std::string(msg_size_, 'a');
-  }
-
-  bool OnMessageReceived(const Message& message) override {
-    CHECK(sender_);
-
-    bool handled = true;
-    IPC_BEGIN_MESSAGE_MAP(PerformanceChannelListener, message)
-      IPC_MESSAGE_HANDLER(TestMsg_Hello, OnHello)
-      IPC_MESSAGE_HANDLER(TestMsg_Ping, OnPing)
-      IPC_MESSAGE_UNHANDLED(handled = false)
-    IPC_END_MESSAGE_MAP()
-    return handled;
-  }
-
-  void OnHello() {
-    // Start timing on hello.
-    DCHECK(!perf_logger_.get());
-    std::string test_name =
-        base::StringPrintf("IPC_%s_Perf_%dx_%u", label_.c_str(), msg_count_,
-                           static_cast<unsigned>(msg_size_));
-    perf_logger_ = std::make_unique<base::PerfTimeLogger>(test_name.c_str());
-    if (sync_) {
-      for (; count_down_ > 0; --count_down_) {
-        std::string response;
-        sender_->Send(new TestMsg_SyncPing(payload_, &response));
-        DCHECK_EQ(response, payload_);
-      }
-      perf_logger_.reset();
-      base::RunLoop::QuitCurrentWhenIdleDeprecated();
-    } else {
-      SendPong();
-    }
-  }
-
-  void OnPing(const std::string& payload) {
-    // Include message deserialization in latency.
-    DCHECK_EQ(payload_.size(), payload.size());
-
-    CHECK(count_down_ > 0);
-    count_down_--;
-    if (count_down_ == 0) {
-      perf_logger_.reset();  // Stop the perf timer now.
-      base::RunLoop::QuitCurrentWhenIdleDeprecated();
-      return;
-    }
-
-    SendPong();
-  }
-
-  void SendPong() { sender_->Send(new TestMsg_Ping(payload_)); }
-
- private:
-  std::string label_;
-  Sender* sender_;
-  int msg_count_;
-  size_t msg_size_;
-  bool sync_;
-
-  int count_down_;
-  std::string payload_;
-  std::unique_ptr<base::PerfTimeLogger> perf_logger_;
-};
+constexpr base::TimeDelta kLongTestTimeout = base::Seconds(80);
 
 class PingPongTestParams {
  public:
@@ -183,105 +97,12 @@ std::vector<InterfacePassingTestParams> GetDefaultInterfacePassingTestParams() {
   return list;
 }
 
-class MojoChannelPerfTest : public IPCChannelMojoTestBase {
- public:
-  MojoChannelPerfTest() = default;
-  ~MojoChannelPerfTest() override = default;
-
-  void RunTestChannelProxyPingPong() {
-    Init("MojoPerfTestClient");
-
-    // Set up IPC channel and start client.
-    PerformanceChannelListener listener("ChannelProxy");
-    auto channel_proxy = IPC::ChannelProxy::Create(
-        TakeHandle().release(), IPC::Channel::MODE_SERVER, &listener,
-        GetIOThreadTaskRunner(), base::ThreadTaskRunnerHandle::Get());
-    listener.Init(channel_proxy.get());
-
-    LockThreadAffinity thread_locker(kSharedCore);
-    std::vector<PingPongTestParams> params = GetDefaultTestParams();
-    for (size_t i = 0; i < params.size(); i++) {
-      listener.SetTestParams(params[i].message_count(),
-                             params[i].message_size(), false);
-
-      // This initial message will kick-start the ping-pong of messages.
-      channel_proxy->Send(new TestMsg_Hello);
-
-      // Run message loop.
-      base::RunLoop().Run();
-    }
-
-    // Send quit message.
-    channel_proxy->Send(new TestMsg_Quit);
-
-    EXPECT_TRUE(WaitForClientShutdown());
-    channel_proxy.reset();
-  }
-
-  void RunTestChannelProxySyncPing() {
-    Init("MojoPerfTestClient");
-
-    // Set up IPC channel and start client.
-    PerformanceChannelListener listener("ChannelProxy");
-    base::WaitableEvent shutdown_event(
-        base::WaitableEvent::ResetPolicy::MANUAL,
-        base::WaitableEvent::InitialState::NOT_SIGNALED);
-    auto channel_proxy = IPC::SyncChannel::Create(
-        TakeHandle().release(), IPC::Channel::MODE_SERVER, &listener,
-        GetIOThreadTaskRunner(), base::ThreadTaskRunnerHandle::Get(), false,
-        &shutdown_event);
-    listener.Init(channel_proxy.get());
-
-    LockThreadAffinity thread_locker(kSharedCore);
-    std::vector<PingPongTestParams> params = GetDefaultTestParams();
-    for (size_t i = 0; i < params.size(); i++) {
-      listener.SetTestParams(params[i].message_count(),
-                             params[i].message_size(), true);
-
-      // This initial message will kick-start the ping-pong of messages.
-      channel_proxy->Send(new TestMsg_Hello);
-
-      // Run message loop.
-      base::RunLoop().Run();
-    }
-
-    // Send quit message.
-    channel_proxy->Send(new TestMsg_Quit);
-
-    EXPECT_TRUE(WaitForClientShutdown());
-    channel_proxy.reset();
-  }
-};
-
-TEST_F(MojoChannelPerfTest, ChannelProxyPingPong) {
-  RunTestChannelProxyPingPong();
-
-  base::RunLoop run_loop;
-  run_loop.RunUntilIdle();
-}
-
-TEST_F(MojoChannelPerfTest, ChannelProxySyncPing) {
-  RunTestChannelProxySyncPing();
-
-  base::RunLoop run_loop;
-  run_loop.RunUntilIdle();
-}
-
-MULTIPROCESS_TEST_MAIN(MojoPerfTestClientTestChildMain) {
-  MojoPerfTestClient client;
-  int rv = mojo::core::test::MultiprocessTestHelper::RunClientMain(
-      base::BindOnce(&MojoPerfTestClient::Run, base::Unretained(&client)),
-      true /* pass_pipe_ownership_to_main */);
-
-  base::RunLoop run_loop;
-  run_loop.RunUntilIdle();
-
-  return rv;
-}
-
 class MojoInterfacePerfTest : public mojo::core::test::MojoTestBase {
  public:
   MojoInterfacePerfTest() : message_count_(0), count_down_(0) {}
+
+  MojoInterfacePerfTest(const MojoInterfacePerfTest&) = delete;
+  MojoInterfacePerfTest& operator=(const MojoInterfacePerfTest&) = delete;
 
  protected:
   void RunPingPongServer(MojoHandle mp, const std::string& label) {
@@ -295,21 +116,23 @@ class MojoInterfacePerfTest : public mojo::core::test::MojoTestBase {
     LockThreadAffinity thread_locker(kSharedCore);
     std::vector<PingPongTestParams> params = GetDefaultTestParams();
     for (size_t i = 0; i < params.size(); i++) {
-      ping_receiver_->Ping("hello",
-                           base::BindOnce(&MojoInterfacePerfTest::OnPong,
-                                          base::Unretained(this)));
+      base::RunLoop loop;
+      ping_receiver_->Ping(
+          "hello",
+          base::BindOnce(&MojoInterfacePerfTest::OnPong, base::Unretained(this),
+                         loop.QuitWhenIdleClosure()));
       message_count_ = count_down_ = params[i].message_count();
       payload_ = std::string(params[i].message_size(), 'a');
 
-      base::RunLoop().Run();
+      loop.Run();
     }
 
     ping_receiver_->Quit();
 
-    ignore_result(ping_receiver_.Unbind().PassPipe().release());
+    std::ignore = ping_receiver_.Unbind().PassPipe().release();
   }
 
-  void OnPong(const std::string& value) {
+  void OnPong(base::OnceClosure quit_closure, const std::string& value) {
     if (value == "hello") {
       DCHECK(!perf_logger_.get());
       std::string test_name =
@@ -323,7 +146,9 @@ class MojoInterfacePerfTest : public mojo::core::test::MojoTestBase {
       count_down_--;
       if (count_down_ == 0) {
         perf_logger_.reset();
-        base::RunLoop::QuitCurrentWhenIdleDeprecated();
+        if (!quit_closure.is_null()) {
+          std::move(quit_closure).Run();
+        }
         return;
       }
     }
@@ -335,11 +160,14 @@ class MojoInterfacePerfTest : public mojo::core::test::MojoTestBase {
         DCHECK_EQ(response, payload_);
       }
       perf_logger_.reset();
-      base::RunLoop::QuitCurrentWhenIdleDeprecated();
+      if (!quit_closure.is_null()) {
+        std::move(quit_closure).Run();
+      }
     } else {
-      ping_receiver_->Ping(payload_,
-                           base::BindOnce(&MojoInterfacePerfTest::OnPong,
-                                          base::Unretained(this)));
+      ping_receiver_->Ping(
+          payload_,
+          base::BindOnce(&MojoInterfacePerfTest::OnPong, base::Unretained(this),
+                         std::move(quit_closure)));
     }
   }
 
@@ -366,8 +194,6 @@ class MojoInterfacePerfTest : public mojo::core::test::MojoTestBase {
   std::string payload_;
   mojo::Remote<IPC::mojom::Reflector> ping_receiver_;
   std::unique_ptr<base::PerfTimeLogger> perf_logger_;
-
-  DISALLOW_COPY_AND_ASSIGN(MojoInterfacePerfTest);
 };
 
 class InterfacePassingTestDriverImpl : public mojom::InterfacePassingTestDriver,
@@ -380,7 +206,7 @@ class InterfacePassingTestDriverImpl : public mojom::InterfacePassingTestDriver,
                       std::move(handle))),
         quit_closure_(std::move(quit_closure)) {}
   ~InterfacePassingTestDriverImpl() override {
-    ignore_result(receiver_.Unbind().PassPipe().release());
+    std::ignore = receiver_.Unbind().PassPipe().release();
   }
 
  private:
@@ -407,8 +233,9 @@ class InterfacePassingTestDriverImpl : public mojom::InterfacePassingTestDriver,
   }
 
   void Quit() override {
-    if (quit_closure_)
+    if (!quit_closure_.is_null()) {
       std::move(quit_closure_).Run();
+    }
   }
 
   // mojom::PingReceiver implementation:
@@ -425,6 +252,10 @@ class InterfacePassingTestDriverImpl : public mojom::InterfacePassingTestDriver,
 class MojoInterfacePassingPerfTest : public mojo::core::test::MojoTestBase {
  public:
   MojoInterfacePassingPerfTest() = default;
+
+  MojoInterfacePassingPerfTest(const MojoInterfacePassingPerfTest&) = delete;
+  MojoInterfacePassingPerfTest& operator=(const MojoInterfacePassingPerfTest&) =
+      delete;
 
  protected:
   void RunInterfacePassingServer(MojoHandle mp,
@@ -455,7 +286,7 @@ class MojoInterfacePassingPerfTest : public mojo::core::test::MojoTestBase {
 
     driver_remote_->Quit();
 
-    ignore_result(driver_remote_.Unbind().PassPipe().release());
+    std::ignore = driver_remote_.Unbind().PassPipe().release();
   }
 
   void OnInitCallback() {
@@ -508,7 +339,9 @@ class MojoInterfacePassingPerfTest : public mojo::core::test::MojoTestBase {
 
     if (count_down_ == 0) {
       perf_logger_.reset();
-      std::move(quit_closure_).Run();
+      if (!quit_closure_.is_null()) {
+        std::move(quit_closure_).Run();
+      }
       return;
     }
 
@@ -541,49 +374,25 @@ class MojoInterfacePassingPerfTest : public mojo::core::test::MojoTestBase {
   mojo::Remote<mojom::InterfacePassingTestDriver> driver_remote_;
 
   base::OnceClosure quit_closure_;
-
-  DISALLOW_COPY_AND_ASSIGN(MojoInterfacePassingPerfTest);
 };
 
 DEFINE_TEST_CLIENT_WITH_PIPE(InterfacePassingClient,
                              MojoInterfacePassingPerfTest,
                              h) {
   base::test::SingleThreadTaskEnvironment task_environment;
+  base::test::ScopedRunLoopTimeout increased_timeout(FROM_HERE,
+                                                     kLongTestTimeout);
   return RunInterfacePassingClient(h);
 }
 
-enum class InProcessMessageMode {
-  kSerialized,
-  kUnserialized,
-};
-
-template <class TestBase>
-class InProcessPerfTest
-    : public TestBase,
-      public testing::WithParamInterface<InProcessMessageMode> {
- public:
-  InProcessPerfTest() {
-    switch (GetParam()) {
-      case InProcessMessageMode::kSerialized:
-        mojo::Connector::OverrideDefaultSerializationBehaviorForTesting(
-            mojo::Connector::OutgoingSerializationMode::kEager,
-            mojo::Connector::IncomingSerializationMode::kDispatchAsIs);
-        break;
-      case InProcessMessageMode::kUnserialized:
-        mojo::Connector::OverrideDefaultSerializationBehaviorForTesting(
-            mojo::Connector::OutgoingSerializationMode::kLazy,
-            mojo::Connector::IncomingSerializationMode::kDispatchAsIs);
-        break;
-    }
-  }
-};
-
-using MojoInProcessInterfacePerfTest = InProcessPerfTest<MojoInterfacePerfTest>;
-using MojoInProcessInterfacePassingPerfTest =
-    InProcessPerfTest<MojoInterfacePassingPerfTest>;
+class MojoInProcessInterfacePerfTest : public MojoInterfacePerfTest {};
+class MojoInProcessInterfacePassingPerfTest
+    : public MojoInterfacePassingPerfTest {};
 
 DEFINE_TEST_CLIENT_WITH_PIPE(PingPongClient, MojoInterfacePerfTest, h) {
   base::test::SingleThreadTaskEnvironment task_environment;
+  base::test::ScopedRunLoopTimeout increased_timeout(
+      FROM_HERE, TestTimeouts::action_max_timeout());
   return RunPingPongClient(h);
 }
 
@@ -607,6 +416,8 @@ TEST_F(MojoInterfacePerfTest, MultiprocessSyncPing) {
 TEST_F(MojoInterfacePassingPerfTest, MultiprocessInterfacePassing) {
   RunTestClient("InterfacePassingClient", [&](MojoHandle h) {
     base::test::SingleThreadTaskEnvironment task_environment;
+    base::test::ScopedRunLoopTimeout increased_timeout(FROM_HERE,
+                                                       kLongTestTimeout);
     RunInterfacePassingServer(h, "InterfacePassing", false /* associated */);
   });
 }
@@ -614,13 +425,15 @@ TEST_F(MojoInterfacePassingPerfTest, MultiprocessInterfacePassing) {
 TEST_F(MojoInterfacePassingPerfTest, MultiprocessAssociatedInterfacePassing) {
   RunTestClient("InterfacePassingClient", [&](MojoHandle h) {
     base::test::SingleThreadTaskEnvironment task_environment;
+    base::test::ScopedRunLoopTimeout increased_timeout(
+        FROM_HERE, TestTimeouts::action_max_timeout());
     RunInterfacePassingServer(h, "AssociatedInterfacePassing",
                               true /* associated*/);
   });
 }
 
 // A single process version of the above test.
-TEST_P(MojoInProcessInterfacePerfTest, MultiThreadPingPong) {
+TEST_F(MojoInProcessInterfacePerfTest, MultiThreadPingPong) {
   MojoHandle server_handle, client_handle;
   CreateMessagePipe(&server_handle, &client_handle);
 
@@ -634,7 +447,7 @@ TEST_P(MojoInProcessInterfacePerfTest, MultiThreadPingPong) {
   RunPingPongServer(server_handle, "SingleProcess");
 }
 
-TEST_P(MojoInProcessInterfacePerfTest, SingleThreadPingPong) {
+TEST_F(MojoInProcessInterfacePerfTest, SingleThreadPingPong) {
   MojoHandle server_handle, client_handle;
   CreateMessagePipe(&server_handle, &client_handle);
 
@@ -647,12 +460,7 @@ TEST_P(MojoInProcessInterfacePerfTest, SingleThreadPingPong) {
   RunPingPongServer(server_handle, "SingleProcess");
 }
 
-INSTANTIATE_TEST_SUITE_P(All,
-                         MojoInProcessInterfacePerfTest,
-                         testing::Values(InProcessMessageMode::kSerialized,
-                                         InProcessMessageMode::kUnserialized));
-
-TEST_P(MojoInProcessInterfacePassingPerfTest, MultiThreadInterfacePassing) {
+TEST_F(MojoInProcessInterfacePassingPerfTest, MultiThreadInterfacePassing) {
   MojoHandle server_handle, client_handle;
   CreateMessagePipe(&server_handle, &client_handle);
 
@@ -663,11 +471,13 @@ TEST_P(MojoInProcessInterfacePassingPerfTest, MultiThreadInterfacePassing) {
                                 client_handle));
 
   base::test::SingleThreadTaskEnvironment task_environment;
+  base::test::ScopedRunLoopTimeout increased_timeout(
+      FROM_HERE, TestTimeouts::action_max_timeout());
   RunInterfacePassingServer(server_handle, "SingleProcess",
                             false /* associated */);
 }
 
-TEST_P(MojoInProcessInterfacePassingPerfTest,
+TEST_F(MojoInProcessInterfacePassingPerfTest,
        MultiThreadAssociatedInterfacePassing) {
   MojoHandle server_handle, client_handle;
   CreateMessagePipe(&server_handle, &client_handle);
@@ -679,15 +489,19 @@ TEST_P(MojoInProcessInterfacePassingPerfTest,
                                 client_handle));
 
   base::test::SingleThreadTaskEnvironment task_environment;
+  base::test::ScopedRunLoopTimeout increased_timeout(
+      FROM_HERE, TestTimeouts::action_max_timeout());
   RunInterfacePassingServer(server_handle, "SingleProcess",
                             true /* associated */);
 }
 
-TEST_P(MojoInProcessInterfacePassingPerfTest, SingleThreadInterfacePassing) {
+TEST_F(MojoInProcessInterfacePassingPerfTest, SingleThreadInterfacePassing) {
   MojoHandle server_handle, client_handle;
   CreateMessagePipe(&server_handle, &client_handle);
 
   base::test::SingleThreadTaskEnvironment task_environment;
+  base::test::ScopedRunLoopTimeout increased_timeout(
+      FROM_HERE, TestTimeouts::action_max_timeout());
   mojo::MessagePipeHandle mp_handle(client_handle);
   mojo::ScopedMessagePipeHandle scoped_mp(mp_handle);
   LockThreadAffinity thread_locker(kSharedCore);
@@ -698,12 +512,14 @@ TEST_P(MojoInProcessInterfacePassingPerfTest, SingleThreadInterfacePassing) {
                             false /* associated */);
 }
 
-TEST_P(MojoInProcessInterfacePassingPerfTest,
+TEST_F(MojoInProcessInterfacePassingPerfTest,
        SingleThreadAssociatedInterfacePassing) {
   MojoHandle server_handle, client_handle;
   CreateMessagePipe(&server_handle, &client_handle);
 
   base::test::SingleThreadTaskEnvironment task_environment;
+  base::test::ScopedRunLoopTimeout increased_timeout(
+      FROM_HERE, TestTimeouts::action_max_timeout());
   mojo::MessagePipeHandle mp_handle(client_handle);
   mojo::ScopedMessagePipeHandle scoped_mp(mp_handle);
   LockThreadAffinity thread_locker(kSharedCore);
@@ -714,15 +530,13 @@ TEST_P(MojoInProcessInterfacePassingPerfTest,
                             true /* associated */);
 }
 
-INSTANTIATE_TEST_SUITE_P(All,
-                         MojoInProcessInterfacePassingPerfTest,
-                         testing::Values(InProcessMessageMode::kSerialized,
-                                         InProcessMessageMode::kUnserialized));
-
 class CallbackPerfTest : public testing::Test {
  public:
   CallbackPerfTest()
       : client_thread_("PingPongClient"), message_count_(0), count_down_(0) {}
+
+  CallbackPerfTest(const CallbackPerfTest&) = delete;
+  CallbackPerfTest& operator=(const CallbackPerfTest&) = delete;
 
  protected:
   void RunMultiThreadPingPongServer() {
@@ -732,23 +546,26 @@ class CallbackPerfTest : public testing::Test {
     std::vector<PingPongTestParams> params = GetDefaultTestParams();
     for (size_t i = 0; i < params.size(); i++) {
       std::string hello("hello");
+      base::RunLoop loop;
       client_thread_.task_runner()->PostTask(
-          FROM_HERE, base::BindOnce(&CallbackPerfTest::Ping,
-                                    base::Unretained(this), hello));
+          FROM_HERE,
+          base::BindOnce(&CallbackPerfTest::Ping, base::Unretained(this), hello,
+                         loop.QuitWhenIdleClosure()));
       message_count_ = count_down_ = params[i].message_count();
       payload_ = std::string(params[i].message_size(), 'a');
 
-      base::RunLoop().Run();
+      loop.Run();
     }
   }
 
-  void Ping(const std::string& value) {
+  void Ping(const std::string& value, base::OnceClosure quit_closure) {
     task_environment_.GetMainThreadTaskRunner()->PostTask(
-        FROM_HERE, base::BindOnce(&CallbackPerfTest::OnPong,
-                                  base::Unretained(this), value));
+        FROM_HERE,
+        base::BindOnce(&CallbackPerfTest::OnPong, base::Unretained(this), value,
+                       std::move(quit_closure)));
   }
 
-  void OnPong(const std::string& value) {
+  void OnPong(const std::string& value, base::OnceClosure quit_closure) {
     if (value == "hello") {
       DCHECK(!perf_logger_.get());
       std::string test_name =
@@ -762,14 +579,17 @@ class CallbackPerfTest : public testing::Test {
       count_down_--;
       if (count_down_ == 0) {
         perf_logger_.reset();
-        base::RunLoop::QuitCurrentWhenIdleDeprecated();
+        if (!quit_closure.is_null()) {
+          std::move(quit_closure).Run();
+        }
         return;
       }
     }
 
     client_thread_.task_runner()->PostTask(
-        FROM_HERE, base::BindOnce(&CallbackPerfTest::Ping,
-                                  base::Unretained(this), payload_));
+        FROM_HERE,
+        base::BindOnce(&CallbackPerfTest::Ping, base::Unretained(this),
+                       payload_, std::move(quit_closure)));
   }
 
   void RunSingleThreadNoPostTaskPingPongServer() {
@@ -810,23 +630,28 @@ class CallbackPerfTest : public testing::Test {
     std::vector<PingPongTestParams> params = GetDefaultTestParams();
     for (size_t i = 0; i < params.size(); i++) {
       std::string hello("hello");
-      base::ThreadTaskRunnerHandle::Get()->PostTask(
+      base::RunLoop loop;
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE, base::BindOnce(&CallbackPerfTest::SingleThreadPingPostTask,
-                                    base::Unretained(this), hello));
+                                    base::Unretained(this), hello,
+                                    loop.QuitWhenIdleClosure()));
       message_count_ = count_down_ = params[i].message_count();
       payload_ = std::string(params[i].message_size(), 'a');
 
-      base::RunLoop().Run();
+      loop.Run();
     }
   }
 
-  void SingleThreadPingPostTask(const std::string& value) {
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
-        FROM_HERE, base::BindOnce(&CallbackPerfTest::SingleThreadPongPostTask,
-                                  base::Unretained(this), value));
+  void SingleThreadPingPostTask(const std::string& value,
+                                base::OnceClosure quit_closure) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(&CallbackPerfTest::SingleThreadPongPostTask,
+                       base::Unretained(this), value, std::move(quit_closure)));
   }
 
-  void SingleThreadPongPostTask(const std::string& value) {
+  void SingleThreadPongPostTask(const std::string& value,
+                                base::OnceClosure quit_closure) {
     if (value == "hello") {
       DCHECK(!perf_logger_.get());
       std::string test_name =
@@ -840,14 +665,17 @@ class CallbackPerfTest : public testing::Test {
       count_down_--;
       if (count_down_ == 0) {
         perf_logger_.reset();
-        base::RunLoop::QuitCurrentWhenIdleDeprecated();
+        if (!quit_closure.is_null()) {
+          std::move(quit_closure).Run();
+        }
         return;
       }
     }
 
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&CallbackPerfTest::SingleThreadPingPostTask,
-                                  base::Unretained(this), payload_));
+                                  base::Unretained(this), payload_,
+                                  std::move(quit_closure)));
   }
 
  private:
@@ -857,8 +685,6 @@ class CallbackPerfTest : public testing::Test {
   int count_down_;
   std::string payload_;
   std::unique_ptr<base::PerfTimeLogger> perf_logger_;
-
-  DISALLOW_COPY_AND_ASSIGN(CallbackPerfTest);
 };
 
 // Sends the same data as above using PostTask to a different thread instead of

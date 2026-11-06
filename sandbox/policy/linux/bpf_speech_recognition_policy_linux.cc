@@ -1,16 +1,22 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "sandbox/policy/linux/bpf_speech_recognition_policy_linux.h"
 
+#include <sys/mman.h>
+
 #include "sandbox/linux/bpf_dsl/bpf_dsl.h"
 #include "sandbox/linux/seccomp-bpf-helpers/syscall_parameters_restrictions.h"
+#include "sandbox/linux/seccomp-bpf-helpers/syscall_sets.h"
 #include "sandbox/linux/syscall_broker/broker_process.h"
+#include "sandbox/linux/system_headers/linux_prctl.h"
 #include "sandbox/linux/system_headers/linux_syscalls.h"
 #include "sandbox/policy/linux/sandbox_linux.h"
 
 using sandbox::bpf_dsl::Allow;
+using sandbox::bpf_dsl::Arg;
+using sandbox::bpf_dsl::If;
 using sandbox::bpf_dsl::ResultExpr;
 using sandbox::bpf_dsl::Trap;
 using sandbox::syscall_broker::BrokerProcess;
@@ -34,13 +40,27 @@ ResultExpr SpeechRecognitionProcessPolicy::EvaluateSyscall(
     case __NR_getdents:
       return Allow();
 #endif
-    case __NR_sched_setscheduler:
-      // Used for starting an AudioStream when recognizing microphone data.
-      return RestrictSchedTarget(GetPolicyPid(), system_call_number);
+#if defined(__NR_prlimit64)
+    case __NR_prlimit64:
+      return RestrictPrlimitToGetrlimit(GetPolicyPid());
+#endif
+#if defined(__NR_prctl)
+    case __NR_prctl: {
+      const Arg<int> option(0);
+      return If(option == PR_CAPBSET_READ, Allow())
+          .Else(BPFBasePolicy::EvaluateSyscall(system_call_number));
+    }
+#endif
     default:
+      if (SyscallSets::IsMmap(system_call_number)) {
+        // The speech recognition sandbox requires the MAP_POPULATE flag in
+        // addition to the default flags.
+        return RestrictMmapFlags(system_call_number, MAP_POPULATE);
+      }
+
       auto* sandbox_linux = SandboxLinux::GetInstance();
       if (sandbox_linux->ShouldBrokerHandleSyscall(system_call_number))
-        return sandbox_linux->HandleViaBroker();
+        return sandbox_linux->HandleViaBroker(system_call_number);
 
       // Default on the content baseline policy.
       return BPFBasePolicy::EvaluateSyscall(system_call_number);

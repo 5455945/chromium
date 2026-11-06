@@ -1,12 +1,18 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 
 #ifndef COMPONENTS_PAGE_LOAD_METRICS_BROWSER_OBSERVERS_AD_METRICS_AGGREGATE_FRAME_DATA_H_
 #define COMPONENTS_PAGE_LOAD_METRICS_BROWSER_OBSERVERS_AD_METRICS_AGGREGATE_FRAME_DATA_H_
 
 #include <stdint.h>
 
+#include <array>
+#include <optional>
+
+#include "base/byte_size.h"
+#include "base/time/time.h"
 #include "components/page_load_metrics/browser/observers/ad_metrics/frame_data_utils.h"
 #include "components/page_load_metrics/common/page_load_metrics.mojom-forward.h"
 
@@ -22,17 +28,26 @@ class AggregateFrameData {
   ~AggregateFrameData();
 
   void ProcessResourceLoadInFrame(const mojom::ResourceDataUpdatePtr& resource,
-                                  bool is_main_frame);
+                                  bool is_outermost_main_frame);
 
   // Adjusts the overall page and potentially main frame ad bytes.
-  void AdjustAdBytes(int64_t unaccounted_ad_bytes,
+  void AdjustAdBytes(base::ByteSize unaccounted_ad_bytes,
                      ResourceMimeType mime_type,
-                     bool is_main_frame);
+                     bool is_outermost_main_frame);
 
   // Updates the cpu usage for the page, given whether update is for an ad.
   void UpdateCpuUsage(base::TimeTicks update_time,
                       base::TimeDelta update,
+                      base::TimeDelta ad_update,
                       bool is_ad);
+
+  // Called for each new ad frame FCP calculation, this method keeps track of
+  // the earliest FCP after main frame nav start.
+  void UpdateFirstAdFCPSinceNavStart(base::TimeDelta time_since_nav_start);
+
+  std::optional<base::TimeDelta> first_ad_fcp_after_main_nav_start() const {
+    return first_ad_fcp_after_main_nav_start_;
+  }
 
   int peak_windowed_non_ad_cpu_percent() const {
     return non_ad_peak_cpu_.peak_windowed_percent();
@@ -42,14 +57,11 @@ class AggregateFrameData {
     return total_peak_cpu_.peak_windowed_percent();
   }
 
-  // TODO(crbug.com/1136068): The size_t members should probably be int64_t.
   struct AdDataByVisibility {
     // The following are aggregated when metrics are recorded on navigation.
-    size_t bytes = 0;
-    size_t network_bytes = 0;
+    base::ByteSize bytes;
+    base::ByteSize network_bytes;
     size_t frames = 0;
-    // MemoryUsage is aggregated when a memory update is received.
-    MemoryUsageAggregator memory;
   };
 
   // Returns the appropriate AdDataByVisibility given the |visibility|.
@@ -60,64 +72,72 @@ class AggregateFrameData {
 
   // These functions update the various members of AdDataByVisibility given the
   // visibility.  They all increment the current value.
-  void update_ad_bytes_by_visibility(FrameVisibility visibility, size_t bytes) {
+  void update_ad_bytes_by_visibility(FrameVisibility visibility,
+                                     base::ByteSize bytes) {
     ad_data_[static_cast<size_t>(visibility)].bytes += bytes;
   }
   void update_ad_network_bytes_by_visibility(FrameVisibility visibility,
-                                             size_t network_bytes) {
+                                             base::ByteSize network_bytes) {
     ad_data_[static_cast<size_t>(visibility)].network_bytes += network_bytes;
   }
   void update_ad_frames_by_visibility(FrameVisibility visibility,
                                       size_t frames) {
     ad_data_[static_cast<size_t>(visibility)].frames += frames;
   }
-  void update_ad_memory_by_visibility(FrameVisibility visibility,
-                                      int64_t delta_bytes) {
-    ad_data_[static_cast<size_t>(visibility)].memory.UpdateUsage(delta_bytes);
-  }
 
-  // Updates the memory for the main frame of the page.
-  void update_main_frame_memory(int64_t delta_memory) {
-    main_frame_memory_.UpdateUsage(delta_memory);
-  }
-
-  // Updates the total ad cpu usage for the page.
+  // Updates the total ad-frame cpu usage for the page.
   void update_ad_cpu_usage(base::TimeDelta usage) { ad_cpu_usage_ += usage; }
-
-  // Get the total memory usage for this page.
-  int64_t main_frame_max_memory() const {
-    return main_frame_memory_.max_bytes_used();
-  }
 
   // Get the total cpu usage of this page.
   base::TimeDelta total_cpu_usage() const { return cpu_usage_; }
-  base::TimeDelta total_ad_cpu_usage() const { return ad_cpu_usage_; }
+  base::TimeDelta total_ad_frame_cpu_usage() const { return ad_cpu_usage_; }
+  base::TimeDelta non_ad_frame_ad_cpu_usage() const {
+    return non_ad_frame_ad_cpu_usage_;
+  }
+  base::TimeDelta total_ad_cpu_usage() const {
+    return ad_cpu_usage_ + non_ad_frame_ad_cpu_usage_;
+  }
+  base::TimeDelta live_ad_cpu_usage() const { return live_ad_cpu_usage_; }
 
   // Accessor for the total resource data of the page.
   const ResourceLoadAggregator& resource_data() const { return resource_data_; }
-  const ResourceLoadAggregator& main_frame_resource_data() const {
-    return main_frame_resource_data_;
+  const ResourceLoadAggregator& outermost_main_frame_resource_data() const {
+    return outermost_main_frame_resource_data_;
   }
 
  private:
   // Stores the data for ads on a page according to visibility.
-  AdDataByVisibility
-      ad_data_[static_cast<size_t>(FrameVisibility::kMaxValue) + 1] = {};
+  std::array<AdDataByVisibility,
+             static_cast<size_t>(FrameVisibility::kMaxValue) + 1>
+      ad_data_ = {};
 
   // The overall cpu usage for this page.
-  base::TimeDelta cpu_usage_ = base::TimeDelta();
-  base::TimeDelta ad_cpu_usage_ = base::TimeDelta();
+  base::TimeDelta cpu_usage_;
 
-  // The memory used by the main frame.
-  MemoryUsageAggregator main_frame_memory_;
+  // The total ad-frame cpu usage, updated in batches when frames are destroyed
+  // or when the page load ends. Aggregate ad-attributed cpu usage (including ad
+  // scripts in non-ad frames) is calculated via `total_ad_cpu_usage()`.
+  base::TimeDelta ad_cpu_usage_;
+
+  // The total ad cpu usage spent executing ad scripts in non-ad frames.
+  base::TimeDelta non_ad_frame_ad_cpu_usage_;
+
+  // The total ad cpu usage (both ad frames and ad scripts in non-ad frames),
+  // updated continuously as CPU timing updates arrive. Useful for live metrics
+  // reporting (e.g. DevTools). Conceptually, this will eventually match
+  // `total_ad_cpu_usage()`.
+  base::TimeDelta live_ad_cpu_usage_;
 
   // The resource data for this page.
   ResourceLoadAggregator resource_data_;
-  ResourceLoadAggregator main_frame_resource_data_;
+  ResourceLoadAggregator outermost_main_frame_resource_data_;
 
   // The peak cpu usages for this page.
   PeakCpuAggregator total_peak_cpu_;
   PeakCpuAggregator non_ad_peak_cpu_;
+
+  // The first FCP of any ad frame on the page.
+  std::optional<base::TimeDelta> first_ad_fcp_after_main_nav_start_;
 };
 
 }  // namespace page_load_metrics

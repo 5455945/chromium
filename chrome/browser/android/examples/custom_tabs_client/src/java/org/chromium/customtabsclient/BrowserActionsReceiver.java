@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,13 @@ import android.content.Context;
 import android.content.Intent;
 import android.widget.Toast;
 
+import org.chromium.build.annotations.NullMarked;
+
 /**
  * A {@link BroadcastReceiver} that handles the callback if default menu items are chosen from
  * Browser Actions.
  */
+@NullMarked
 public class BrowserActionsReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context context, Intent intent) {

@@ -1,30 +1,34 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 
 #include "skia/ext/skia_utils_base.h"
 
 #include <stdint.h>
 
+#include <string_view>
+
 #include "base/pickle.h"
+#include "base/strings/stringprintf.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "third_party/skia/include/core/SkColorSpace.h"
 #include "third_party/skia/include/core/SkData.h"
-#include "third_party/skia/include/core/SkEncodedImageFormat.h"
 #include "third_party/skia/include/core/SkImage.h"
 #include "third_party/skia/include/core/SkImageInfo.h"
 #include "third_party/skia/include/core/SkSerialProcs.h"
+#include "third_party/skia/modules/skcms/skcms.h"
 
 namespace skia {
 
 bool ReadSkString(base::PickleIterator* iter, SkString* str) {
-  int reply_length;
-  const char* reply_text;
-
-  if (!iter->ReadData(&reply_text, &reply_length))
+  std::string_view reply;
+  if (!iter->ReadStringPiece(&reply)) {
     return false;
+  }
 
   if (str)
-    str->set(reply_text, reply_length);
+    str->set(reply);
   return true;
 }
 
@@ -32,18 +36,17 @@ bool ReadSkFontIdentity(base::PickleIterator* iter,
                         SkFontConfigInterface::FontIdentity* identity) {
   uint32_t reply_id;
   uint32_t reply_ttcIndex;
-  int reply_length;
-  const char* reply_text;
+  std::string_view reply;
 
-  if (!iter->ReadUInt32(&reply_id) ||
-      !iter->ReadUInt32(&reply_ttcIndex) ||
-      !iter->ReadData(&reply_text, &reply_length))
+  if (!iter->ReadUInt32(&reply_id) || !iter->ReadUInt32(&reply_ttcIndex) ||
+      !iter->ReadStringPiece(&reply)) {
     return false;
+  }
 
   if (identity) {
     identity->fID = reply_id;
     identity->fTTCIndex = reply_ttcIndex;
-    identity->fString.set(reply_text, reply_length);
+    identity->fString.set(reply);
   }
   return true;
 }
@@ -113,6 +116,65 @@ bool SkBitmapToN32OpaqueOrPremul(const SkBitmap& in, SkBitmap* out) {
     return false;
   }
   return true;
+}
+
+std::string SkColorToHexString(SkColor color) {
+  if (SkColorGetA(color) == 0xFF) {
+    return base::StringPrintf("#%02X%02X%02X", SkColorGetR(color),
+                              SkColorGetG(color), SkColorGetB(color));
+  } else {
+    return base::StringPrintf("#%02X%02X%02X%02X", SkColorGetR(color),
+                              SkColorGetG(color), SkColorGetB(color),
+                              SkColorGetA(color));
+  }
+}
+
+std::string SkColorSpaceToString(const SkColorSpace* cs) {
+  if (!cs) {
+    return "null";
+  }
+  skcms_TransferFunction trfn;
+  skcms_Matrix3x3 to_xyzd50;
+  cs->toXYZD50(&to_xyzd50);
+  cs->transferFn(&trfn);
+  return base::StringPrintf("{trfn:%s, toXYZD50:%s}",
+                            SkcmsTransferFunctionToString(trfn).c_str(),
+                            SkcmsMatrix3x3ToString(to_xyzd50).c_str());
+}
+
+std::string SkcmsTransferFunctionToString(const skcms_TransferFunction& fn) {
+  return base::StringPrintf(
+      "{%1.4f*x + %1.4f if abs(x) < %1.4f else "
+      "sign(x)*((%1.4f*abs(x) + %1.4f)**%1.4f + %1.4f)}",
+      fn.c, fn.f, fn.d, fn.a, fn.b, fn.g, fn.e);
+}
+
+std::string SkcmsMatrix3x3ToString(const skcms_Matrix3x3& m) {
+  return base::StringPrintf(
+      "{rows:[[%1.4f,%1.4f,%1.4f],[%1.4f,%1.4f,%1.4f],[%1.4f,%1.4f,%1.4f]]}",
+      m.vals[0][0], m.vals[0][1], m.vals[0][2], m.vals[1][0], m.vals[1][1],
+      m.vals[1][2], m.vals[2][0], m.vals[2][1], m.vals[2][2]);
+}
+
+base::span<const uint8_t> as_byte_span(const SkData& sk_data LIFETIME_BOUND) {
+  // This useless local dodges an issue (false positive?) with the
+  // checker for `LIFETIME_BOUND`, which will complain that this is
+  // "returning address of local temporary object
+  // [-Werror,-Wreturn-stack-address]." It might be some strange
+  // interaction with the function `base::as_byte_span()`?
+  //
+  // The returned value is bounded by the same lifetime as `sk_data`.
+  SkSpan<const uint8_t> skspan = sk_data.byteSpan();
+  return base::span(skspan);
+}
+
+base::span<uint8_t> as_writable_byte_span(SkData& data LIFETIME_BOUND) {
+  // An empty SkData may be shared.
+  CHECK(data.empty() || data.unique());
+  // SAFETY: `data` is not null. `writable_data` and `size` come from the same
+  // container.
+  return UNSAFE_BUFFERS(
+      base::span(static_cast<uint8_t*>(data.writable_data()), data.size()));
 }
 
 }  // namespace skia

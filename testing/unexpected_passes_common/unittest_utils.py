@@ -1,35 +1,93 @@
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """Helper methods for unittests."""
 
-from __future__ import print_function
+from typing import Generator, Iterable, List, Optional, Set, Tuple, Type
 
+# vpython-provided modules.
+import pandas
+
+# //testing imports.
+from unexpected_passes_common import builders
+from unexpected_passes_common import expectations
 from unexpected_passes_common import data_types
-from unexpected_passes_common import queries
+from unexpected_passes_common import queries as queries_module
 
 
-def CreateStatsWithPassFails(passes, fails):
+def CreateStatsWithPassFails(passes: int, fails: int) -> data_types.BuildStats:
   stats = data_types.BuildStats()
   for _ in range(passes):
-    stats.AddPassedBuild()
+    stats.AddPassedBuild(frozenset())
   for i in range(fails):
-    stats.AddFailedBuild('build_id%d' % i)
+    stats.AddFailedBuild('build_id%d' % i, frozenset())
   return stats
 
 
-def CreateGenericQuerier(suite=None,
-                         project=None,
-                         num_samples=None,
-                         large_query_mode=None):
+# id_ is used instead of id since id is a python built-in.
+def FakeQueryResult(
+  builder_name: str,
+  id_: str,
+  test_id: str,
+  status: str,
+  typ_tags: Iterable[str],
+  step_name: str,
+) -> pandas.Series:
+  return pandas.Series(
+    data={
+      'builder_name': builder_name,
+      'id': id_,
+      'test_id': test_id,
+      'test_name': test_id.split('.')[-1],
+      'status': status,
+      'typ_tags': list(typ_tags),
+      'step_name': step_name,
+    }
+  )
+
+
+class SimpleBigQueryQuerier(queries_module.BigQueryQuerier):
+  def __init__(self, *args, **kwargs):
+    super().__init__(*args, **kwargs)
+    self.query_results = []
+
+  def _GetSeriesForQuery(self, _) -> Generator[pandas.Series, None, None]:
+    for r in self.query_results:
+      yield r
+
+  def _GetRelevantExpectationFilesForQueryResult(self, _) -> None:
+    return None
+
+  def _GetPublicCiQuery(self) -> str:
+    return 'public_ci'
+
+  def _GetInternalCiQuery(self) -> str:
+    return 'internal_ci'
+
+  def _GetPublicTryQuery(self) -> str:
+    return 'public_try'
+
+  def _GetInternalTryQuery(self) -> str:
+    return 'internal_try'
+
+
+def CreateGenericQuerier(
+  suite: Optional[str] = None,
+  project: Optional[str] = None,
+  num_samples: Optional[int] = None,
+  keep_unmatched_results: bool = False,
+  cls: Optional[Type[queries_module.BigQueryQuerier]] = None,
+) -> queries_module.BigQueryQuerier:
   suite = suite or 'pixel'
   project = project or 'project'
   num_samples = num_samples or 5
-  large_query_mode = large_query_mode or False
-  return queries.BigQueryQuerier(suite, project, num_samples, large_query_mode)
+  cls = cls or SimpleBigQueryQuerier
+  return cls(suite, project, num_samples, keep_unmatched_results)
 
 
-def GetArgsForMockCall(call_args_list, call_number):
+def GetArgsForMockCall(
+  call_args_list: List[tuple], call_number: int
+) -> Tuple[tuple, dict]:
   """Helper to more sanely get call args from a mocked method.
 
   Args:
@@ -46,52 +104,47 @@ def GetArgsForMockCall(call_args_list, call_number):
   return args, kwargs
 
 
-class FakePool(object):
-  """A fake pathos.pools.ProcessPool instance.
+class GenericBuilders(builders.Builders):
+  def __init__(
+    self, suite: Optional[str] = None, include_internal_builders: bool = False
+  ):
+    super().__init__(suite, include_internal_builders)
 
-  Real pools don't like being given MagicMocks, so this allows testing of
-  code that uses pathos.pools.ProcessPool by returning this from
-  multiprocessing_utils.GetProcessPool().
-  """
-
-  def map(self, f, inputs):
-    retval = []
-    for i in inputs:
-      retval.append(f(i))
-    return retval
-
-  def apipe(self, f, inputs):
-    return FakeAsyncResult(f(inputs))
-
-
-class FakeAsyncResult(object):
-  """A fake AsyncResult like the one from multiprocessing or pathos."""
-
-  def __init__(self, result):
-    self._result = result
-
-  def ready(self):
+  def _BuilderRunsTestOfInterest(self, _test_map) -> bool:
     return True
 
-  def get(self):
-    return self._result
+  def GetIsolateNames(self) -> Set[str]:
+    return set()
+
+  def GetFakeCiBuilders(self) -> dict:
+    return {}
+
+  def GetNonChromiumBuilders(self) -> Set[data_types.BuilderEntry]:
+    return set()
 
 
-class FakeProcess(object):
-  """A fake subprocess Process object."""
+def RegisterGenericBuildersImplementation() -> None:
+  builders.RegisterInstance(GenericBuilders())
 
-  def __init__(self, returncode=None, stdout=None, stderr=None, finish=True):
-    if finish:
-      self.returncode = returncode or 0
-    else:
-      self.returncode = None
-    self.stdout = stdout or ''
-    self.stderr = stderr or ''
-    self.finish = finish
 
-  def communicate(self, _):
-    return self.stdout, self.stderr
+class GenericExpectations(expectations.Expectations):
+  def GetExpectationFilepaths(self) -> list:
+    return []
 
-  def terminate(self):
-    if self.finish:
-      raise OSError('Tried to terminate a finished process')
+  def _GetExpectationFileTagHeader(self, _) -> str:
+    return """\
+# tags: [ linux mac win ]
+# tags: [ amd intel nvidia ]
+# results: [ Failure RetryOnFailure Skip Pass ]
+"""
+
+  def _GetKnownTags(self) -> Set[str]:
+    return set(['linux', 'mac', 'win', 'amd', 'intel', 'nvidia'])
+
+
+def CreateGenericExpectations() -> GenericExpectations:
+  return GenericExpectations()
+
+
+def RegisterGenericExpectationsImplementation() -> None:
+  expectations.RegisterInstance(CreateGenericExpectations())

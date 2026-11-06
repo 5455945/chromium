@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,21 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
 #include <memory>
 #include <sstream>
 
 #include "content/test/fuzzer/fuzzer_support.h"
-#include "content/test/fuzzer/html_tree.pb.h"
+#include "content/test/fuzzer/html_tree_fuzzable.pb.h"
 #include "third_party/libprotobuf-mutator/src/src/libfuzzer/libfuzzer_macro.h"
 
 namespace content {
+
+using fuzzable::Attribute;
+using fuzzable::Attribute_Name_Name;
+using fuzzable::Document;
+using fuzzable::Tag;
+using fuzzable::Tag_Name_Name;
 
 class HtmlTreeWriter {
  public:

@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,12 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
-#include "base/macros.h"
-#include "base/memory/weak_ptr.h"
+#include "base/check.h"
+#include "base/check_op.h"
+#include "base/functional/callback.h"
 #include "base/values.h"
-#include "third_party/dom_distiller_js/dom_distiller.pb.h"
+#include "components/dom_distiller/core/distiller_options.h"
+#include "components/dom_distiller/core/proto/distilled_page.pb.h"
 #include "ui/gfx/geometry/size.h"
 #include "url/gurl.h"
 
@@ -23,6 +24,19 @@ class SourcePageHandle {
   virtual ~SourcePageHandle() = default;
 };
 
+// This enum is used to record histograms for OnDistillationDone results.
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// LINT.IfChange(DistillationParseResult)
+enum class DistillationParseResult {
+  kSuccess = 0,
+  kParseFailure = 1,
+  kNoData = 2,
+  kContentTooShort = 3,
+  kMaxValue = kContentTooShort,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/accessibility/enums.xml:DistillationParseResult)
+
 // Injects JavaScript into a page, and uses it to extract and return long-form
 // content. The class can be reused to load and distill multiple pages,
 // following the state transitions described along with the class's states.
@@ -31,8 +45,8 @@ class SourcePageHandle {
 class DistillerPage {
  public:
   using DistillerPageCallback = base::OnceCallback<void(
-      std::unique_ptr<proto::DomDistillerResult> distilled_page,
-      bool distillation_successful)>;
+      std::unique_ptr<DistilledPageProto> distilled_page,
+      DistillationParseResult result)>;
 
   DistillerPage();
   virtual ~DistillerPage();
@@ -42,13 +56,22 @@ class DistillerPage {
   // for a given |url| and |options|, any DistillerPage implementation will
   // extract the same content.
   void DistillPage(const GURL& url,
-                   const proto::DomDistillerOptions options,
+                   const DistillerOptions& options,
                    DistillerPageCallback callback);
 
   // Called when the JavaScript execution completes. |page_url| is the url of
   // the distilled page. |value| contains data returned by the script.
   virtual void OnDistillationDone(const GURL& page_url,
                                   const base::Value* value);
+
+  // Sets the minimum word count required for distillation to succeed. Shorter
+  // pages fail with `DistillationParseResult::kContentTooShort`. Must be
+  // called when the distiller is idle with a non-negative `length`.
+  void SetMinimumAllowableDistilledContentLength(int length) {
+    DCHECK(ready_);
+    DCHECK_GE(length, 0);
+    min_content_length_ = length;
+  }
 
   DistillerPage(const DistillerPage&) = delete;
   DistillerPage& operator=(const DistillerPage&) = delete;
@@ -59,14 +82,14 @@ class DistillerPage {
   // should be the same regardless of the DistillerPage implementation.
   virtual void DistillPageImpl(const GURL& url, const std::string& script) = 0;
 
-  // The value returned between the JavaScript and the DistillerPage can be
-  // either a dictionary with all the content, or a stringified version.
-  virtual bool StringifyOutput() = 0;
+  int GetMinimumAllowableDistilledContentLength() const {
+    return min_content_length_;
+  }
 
  private:
   bool ready_;
   DistillerPageCallback distiller_page_callback_;
-  base::TimeTicks distillation_start_;
+  int min_content_length_;
 };
 
 // Factory for generating a |DistillerPage|.

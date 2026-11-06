@@ -1,207 +1,197 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2025 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/autofill/core/common/autofill_prefs.h"
 
-#include <memory>
-
-#include "base/json/json_reader.h"
-#include "base/json/json_writer.h"
-#include "build/build_config.h"
-#include "components/pref_registry/pref_registry_syncable.h"
-#include "components/prefs/pref_service.h"
-#include "components/prefs/pref_service_factory.h"
-#include "components/prefs/testing_pref_store.h"
+#include "base/json/values_util.h"
+#include "base/test/metrics/histogram_tester.h"
+#include "base/test/values_test_util.h"
+#include "base/time/time.h"
+#include "base/values.h"
+#include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace autofill {
-namespace prefs {
+namespace autofill::prefs {
 
-class AutofillPrefsTest : public testing::Test {
- protected:
-  AutofillPrefsTest() {}
-  ~AutofillPrefsTest() override {}
+namespace {
 
-  void SetUp() override { pref_service_ = CreatePrefServiceAndRegisterPrefs(); }
+class AutofillProfilePrefsTest : public ::testing::Test {
+ public:
+  void SetUp() override { RegisterProfilePrefs(pref_service_.registry()); }
 
-  // Creates a PrefService and registers Autofill prefs.
-  std::unique_ptr<PrefService> CreatePrefServiceAndRegisterPrefs() {
-    scoped_refptr<user_prefs::PrefRegistrySyncable> registry(
-        new user_prefs::PrefRegistrySyncable());
-    RegisterProfilePrefs(registry.get());
-    PrefServiceFactory factory;
-    factory.set_user_prefs(base::MakeRefCounted<TestingPrefStore>());
-    return factory.Create(registry);
-  }
-
-  PrefService* pref_service() { return pref_service_.get(); }
+  PrefService* pref_service() { return &pref_service_; }
 
  private:
-  std::unique_ptr<PrefService> pref_service_;
+  sync_preferences::TestingPrefServiceSyncable pref_service_;
 };
 
-// Tests migrating the value of the deprecated Autofill master pref to the new
-// prefs and that this operation takes place only once.
-TEST_F(AutofillPrefsTest, MigrateDeprecatedAutofillPrefs) {
-  // All prefs should be enabled by default.
-  ASSERT_TRUE(pref_service()->GetBoolean(kAutofillEnabledDeprecated));
-  ASSERT_TRUE(pref_service()->GetBoolean(kAutofillProfileEnabled));
-  ASSERT_TRUE(pref_service()->GetBoolean(kAutofillCreditCardEnabled));
+// Tests that `SetAutofillProfileEnabled` modifies the prefs and records a
+// metric.
+TEST_F(AutofillProfilePrefsTest, SetAutofillProfileEnabled) {
+  constexpr int kOptIn = 0;
+  constexpr int kOptOut = 1;
+  ASSERT_TRUE(IsAutofillProfileEnabled(pref_service()));
 
-  // Disable the deprecated master pref and make sure the new fine-grained prefs
-  // are not affected by that.
-  pref_service()->SetBoolean(kAutofillEnabledDeprecated, false);
-  EXPECT_FALSE(pref_service()->GetBoolean(kAutofillEnabledDeprecated));
-  EXPECT_TRUE(pref_service()->GetBoolean(kAutofillProfileEnabled));
-  EXPECT_TRUE(pref_service()->GetBoolean(kAutofillCreditCardEnabled));
+  {
+    base::HistogramTester histogram_tester;
+    SetAutofillProfileEnabled(pref_service(), false);
+    EXPECT_FALSE(IsAutofillProfileEnabled(pref_service()));
+    histogram_tester.ExpectUniqueSample("Autofill.Address.IsEnabled.Change",
+                                        kOptOut, 1);
+  }
 
-  // Migrate the deprecated master pref's value to the new fine-grained prefs.
-  // Their values should become the same as the deprecated master pref's value.
+  {
+    base::HistogramTester histogram_tester;
+    SetAutofillProfileEnabled(pref_service(), true);
+    EXPECT_TRUE(IsAutofillProfileEnabled(pref_service()));
+    histogram_tester.ExpectUniqueSample("Autofill.Address.IsEnabled.Change",
+                                        kOptIn, 1);
+  }
+}
+
+// Tests that `SetAutofillProfileEnabled` does not emit a metric if there is no
+// pref change.
+TEST_F(AutofillProfilePrefsTest, SetAutofillProfileEnabledAsNoOp) {
+  ASSERT_TRUE(IsAutofillProfileEnabled(pref_service()));
+
+  base::HistogramTester histogram_tester;
+  SetAutofillProfileEnabled(pref_service(), true);
+  EXPECT_TRUE(IsAutofillProfileEnabled(pref_service()));
+  histogram_tester.ExpectTotalCount("Autofill.Address.IsEnabled.Change", 0);
+}
+
+TEST_F(AutofillProfilePrefsTest, AutofillGmailOtpFillingEnabled_Default) {
+  EXPECT_FALSE(IsAutofillGmailOtpFillingEnabled(pref_service()));
+}
+
+TEST_F(AutofillProfilePrefsTest, AutofillGmailOtpFillingEnabled_Set) {
+  ASSERT_FALSE(IsAutofillGmailOtpFillingEnabled(pref_service()));
+  SetAutofillGmailOtpFillingEnabled(pref_service(), true);
+  EXPECT_TRUE(IsAutofillGmailOtpFillingEnabled(pref_service()));
+  SetAutofillGmailOtpFillingEnabled(pref_service(), false);
+  EXPECT_FALSE(IsAutofillGmailOtpFillingEnabled(pref_service()));
+}
+
+TEST_F(AutofillProfilePrefsTest,
+       AutofillGmailOtpFillingActivationDismissalTimestamp_Default) {
+  EXPECT_TRUE(
+      GetAutofillGmailOtpFillingActivationDismissalTimestamp(pref_service())
+          .is_null());
+}
+
+TEST_F(AutofillProfilePrefsTest,
+       AutofillGmailOtpFillingActivationDismissalTimestamp_Set) {
+  base::Time now = base::Time::Now();
+  ASSERT_FALSE(now.is_null());
+  SetAutofillGmailOtpFillingActivationDismissalTimestamp(pref_service(), now);
+  EXPECT_EQ(
+      GetAutofillGmailOtpFillingActivationDismissalTimestamp(pref_service()),
+      now);
+}
+
+TEST_F(AutofillProfilePrefsTest, DeduplicateEmailVerificationState) {
+  // Calling on an empty pref is a safe no-op.
+  EXPECT_TRUE(pref_service()->GetDict(kAutofillEmailVerificationState).empty());
+  DeduplicateEmailVerificationState(pref_service());
+  EXPECT_TRUE(pref_service()->GetDict(kAutofillEmailVerificationState).empty());
+
+  // Setup initial state with mixed case, duplicates with varying
+  // timestamps/permissions, and corrupted entries.
+  pref_service()->SetDict(kAutofillEmailVerificationState,
+                          base::test::ParseJsonDict(R"({
+    "already.normalized@example.com": {
+      "allowed": true,
+      "issuer_site": "https://issuer-normal.com",
+      "timestamp": "1000"
+    },
+    "SingleMixedCase@Example.COM": {
+      "allowed": true,
+      "issuer_site": "https://issuer-single.com",
+      "timestamp": "1000"
+    },
+    "merge_user1@example.com": {
+      "allowed": false,
+      "issuer_site": "https://old-issuer1.com",
+      "timestamp": "1000"
+    },
+    "MERGE_USER1@EXAMPLE.COM": {
+      "allowed": true,
+      "issuer_site": "https://new-issuer1.com",
+      "timestamp": "2000"
+    },
+    "MERGE_USER2@EXAMPLE.COM": {
+      "allowed": true,
+      "issuer_site": "https://old-issuer2.com",
+      "timestamp": "1000"
+    },
+    "merge_user2@example.com": {
+      "allowed": false,
+      "issuer_site": "https://new-issuer2.com",
+      "timestamp": "2000"
+    },
+    "merge_user3@example.com": {
+      "allowed": false,
+      "issuer_site": "https://old-issuer3.com",
+      "timestamp": "1000"
+    },
+    "Merge_User3@Example.Com": {
+      "allowed": false,
+      "issuer_site": "https://new-issuer3.com",
+      "timestamp": "2000"
+    },
+    "corrupted_string": "not_a_dict",
+    "corrupted_int": 42
+  })"));
+
+  // Trigger migration via MigrateDeprecatedAutofillPrefs on profile startup.
   MigrateDeprecatedAutofillPrefs(pref_service());
-  EXPECT_FALSE(pref_service()->GetBoolean(kAutofillProfileEnabled));
-  EXPECT_FALSE(pref_service()->GetBoolean(kAutofillCreditCardEnabled));
 
-  // Enable the deprecated master pref and make sure the new fine-grained prefs
-  // are not affected by that.
-  pref_service()->SetBoolean(kAutofillEnabledDeprecated, true);
-  EXPECT_TRUE(pref_service()->GetBoolean(kAutofillEnabledDeprecated));
-  EXPECT_FALSE(pref_service()->GetBoolean(kAutofillProfileEnabled));
-  EXPECT_FALSE(pref_service()->GetBoolean(kAutofillCreditCardEnabled));
+  base::DictValue expected_state = base::test::ParseJsonDict(R"({
+    "already.normalized@example.com": {
+      "allowed": true,
+      "issuer_site": "https://issuer-normal.com",
+      "timestamp": "1000"
+    },
+    "singlemixedcase@example.com": {
+      "allowed": true,
+      "issuer_site": "https://issuer-single.com",
+      "timestamp": "1000"
+    },
+    "merge_user1@example.com": {
+      "allowed": true,
+      "issuer_site": "https://new-issuer1.com",
+      "timestamp": "2000"
+    },
+    "merge_user2@example.com": {
+      "allowed": true,
+      "issuer_site": "https://new-issuer2.com",
+      "timestamp": "2000"
+    },
+    "merge_user3@example.com": {
+      "allowed": false,
+      "issuer_site": "https://new-issuer3.com",
+      "timestamp": "2000"
+    }
+  })");
 
-  // Migrate the deprecated master pref's value to the new fine-grained prefs.
-  // Their values should not be affected when migration happens a second time.
-  MigrateDeprecatedAutofillPrefs(pref_service());
-  EXPECT_FALSE(pref_service()->GetBoolean(kAutofillProfileEnabled));
-  EXPECT_FALSE(pref_service()->GetBoolean(kAutofillCreditCardEnabled));
+  EXPECT_EQ(pref_service()->GetDict(kAutofillEmailVerificationState),
+            expected_state);
+
+  // Idempotence: Running deduplication again on already normalized state is a
+  // no-op.
+  DeduplicateEmailVerificationState(pref_service());
+  EXPECT_EQ(pref_service()->GetDict(kAutofillEmailVerificationState),
+            expected_state);
 }
 
-// Tests that setting and getting the AutofillSyncTransportOptIn works as
-// expected.
-// On mobile, no dedicated opt-in is required for WalletSyncTransport - the
-// user is always considered opted-in and thus this test doesn't make sense.
-#if !defined(OS_ANDROID) && !defined(OS_IOS)
-TEST_F(AutofillPrefsTest, WalletSyncTransportPref_GetAndSet) {
-  const CoreAccountId account1("account1");
-  const CoreAccountId account2("account2");
+TEST_F(AutofillProfilePrefsTest, SetHasShownWalletReminderNotice) {
+  EXPECT_FALSE(HasShownWalletReminderNotice(pref_service()));
 
-  // There should be no opt-in recorded at first.
-  ASSERT_FALSE(IsUserOptedInWalletSyncTransport(pref_service(), account1));
-  ASSERT_FALSE(IsUserOptedInWalletSyncTransport(pref_service(), account2));
-  // There should be no entry for the accounts in the dictionary.
-  EXPECT_TRUE(pref_service()
-                  ->GetDictionary(prefs::kAutofillSyncTransportOptIn)
-                  ->DictEmpty());
-
-  // Set the opt-in for the first account.
-  SetUserOptedInWalletSyncTransport(pref_service(), account1, true);
-  EXPECT_TRUE(IsUserOptedInWalletSyncTransport(pref_service(), account1));
-  EXPECT_FALSE(IsUserOptedInWalletSyncTransport(pref_service(), account2));
-  // There should only be one entry in the dictionary.
-  EXPECT_EQ(1U, pref_service()
-                    ->GetDictionary(prefs::kAutofillSyncTransportOptIn)
-                    ->DictSize());
-
-  // Unset the opt-in for the first account.
-  SetUserOptedInWalletSyncTransport(pref_service(), account1, false);
-  EXPECT_FALSE(IsUserOptedInWalletSyncTransport(pref_service(), account1));
-  EXPECT_FALSE(IsUserOptedInWalletSyncTransport(pref_service(), account2));
-  // There should be no entry for the accounts in the dictionary.
-  EXPECT_TRUE(pref_service()
-                  ->GetDictionary(prefs::kAutofillSyncTransportOptIn)
-                  ->DictEmpty());
-
-  // Set the opt-in for the second account.
-  SetUserOptedInWalletSyncTransport(pref_service(), account2, true);
-  EXPECT_FALSE(IsUserOptedInWalletSyncTransport(pref_service(), account1));
-  EXPECT_TRUE(IsUserOptedInWalletSyncTransport(pref_service(), account2));
-  // There should only be one entry in the dictionary.
-  EXPECT_EQ(1U, pref_service()
-                    ->GetDictionary(prefs::kAutofillSyncTransportOptIn)
-                    ->DictSize());
-
-  // Set the opt-in for the first account too.
-  SetUserOptedInWalletSyncTransport(pref_service(), account1, true);
-  EXPECT_TRUE(IsUserOptedInWalletSyncTransport(pref_service(), account1));
-  EXPECT_TRUE(IsUserOptedInWalletSyncTransport(pref_service(), account1));
-  // There should be tow entries in the dictionary.
-  EXPECT_EQ(2U, pref_service()
-                    ->GetDictionary(prefs::kAutofillSyncTransportOptIn)
-                    ->DictSize());
-}
-#endif  // !defined(OS_ANDROID) && !defined(OS_IOS)
-
-// Tests that AutofillSyncTransportOptIn is not stored using the plain text
-// account id.
-TEST_F(AutofillPrefsTest, WalletSyncTransportPref_UsesHashAccountId) {
-  const CoreAccountId account1("account1");
-
-  // There should be no opt-in recorded at first.
-  EXPECT_TRUE(pref_service()
-                  ->GetDictionary(prefs::kAutofillSyncTransportOptIn)
-                  ->DictEmpty());
-
-  // Set the opt-in for the first account.
-  SetUserOptedInWalletSyncTransport(pref_service(), account1, true);
-  EXPECT_FALSE(pref_service()
-                   ->GetDictionary(prefs::kAutofillSyncTransportOptIn)
-                   ->DictEmpty());
-
-  // Make sure that the dictionary keys don't contain the account id.
-  auto* dictionary =
-      pref_service()->GetDictionary(prefs::kAutofillSyncTransportOptIn);
-  EXPECT_EQ(nullptr, dictionary->FindKeyOfType(account1.ToString(),
-                                               base::Value::Type::INTEGER));
+  SetHasShownWalletReminderNotice(pref_service());
+  EXPECT_TRUE(HasShownWalletReminderNotice(pref_service()));
 }
 
-// Tests that clearing the AutofillSyncTransportOptIn works as expected.
-TEST_F(AutofillPrefsTest, WalletSyncTransportPref_Clear) {
-  const CoreAccountId account1("account1");
-  const CoreAccountId account2("account2");
+}  // namespace
 
-  // There should be no opt-in recorded at first.
-  EXPECT_TRUE(pref_service()
-                  ->GetDictionary(prefs::kAutofillSyncTransportOptIn)
-                  ->DictEmpty());
-
-  // Set the opt-in for the first account.
-  SetUserOptedInWalletSyncTransport(pref_service(), account1, true);
-  EXPECT_FALSE(pref_service()
-                   ->GetDictionary(prefs::kAutofillSyncTransportOptIn)
-                   ->DictEmpty());
-
-  // Set the opt-in for the second account.
-  SetUserOptedInWalletSyncTransport(pref_service(), account2, true);
-  EXPECT_FALSE(pref_service()
-                   ->GetDictionary(prefs::kAutofillSyncTransportOptIn)
-                   ->DictEmpty());
-
-  // Clear all opt-ins. The dictionary should be empty.
-  ClearSyncTransportOptIns(pref_service());
-  EXPECT_TRUE(pref_service()
-                  ->GetDictionary(prefs::kAutofillSyncTransportOptIn)
-                  ->DictEmpty());
-}
-
-// Tests that the account id hash that we generate can be written and read from
-// JSON properly.
-TEST_F(AutofillPrefsTest, WalletSyncTransportPref_CanBeSetAndReadFromJSON) {
-  const CoreAccountId account1("account1");
-
-  // Set the opt-in for the first account.
-  SetUserOptedInWalletSyncTransport(pref_service(), account1, true);
-  EXPECT_FALSE(pref_service()
-                   ->GetDictionary(prefs::kAutofillSyncTransportOptIn)
-                   ->DictEmpty());
-
-  const base::Value* dictionary =
-      pref_service()->GetDictionary(prefs::kAutofillSyncTransportOptIn);
-  ASSERT_TRUE(dictionary);
-
-  std::string output_js;
-  ASSERT_TRUE(base::JSONWriter::Write(*dictionary, &output_js));
-  EXPECT_EQ(*dictionary, *base::JSONReader::Read(output_js));
-}
-
-}  // namespace prefs
-}  // namespace autofill
+}  // namespace autofill::prefs

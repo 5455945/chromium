@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -16,7 +16,8 @@
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/containers/span.h"
+#include "base/strings/cstring_view.h"
 #include "chrome/installer/util/work_item.h"
 
 namespace base {
@@ -38,9 +39,22 @@ class InstallServiceWorkItem : public WorkItem {
   // |display_name| is the human-readable name that is visible in the Service
   // control panel. For example, "Chrome Elevation Service".
   //
+  // |description| is the human-readable description, a comment that explains
+  // the purpose of the service, and is visible in the Service control panel.
+  // For example, "Foo Service keeps Bar up to date".
+  //
+  // |start_type| is typically SERVICE_DEMAND_START or SERVICE_AUTO_START.
+  //
   // |service_cmd_line| is the command line with which the service is invoked by
   // the SCM. For example,
   // "C:\Program Files (x86)\Google\Chrome\ElevationService.exe" /svc
+  //
+  // |com_service_cmd_line_args| indicates switches that the SCM needs to pass
+  // to ServiceMain() during COM activation. This is used to distinguish a
+  // non-COM SCM activation (for example, an AUTO start, or when someone
+  // manually starts the service using the control panel) from a COM service
+  // activation. For example, "comsvc" could be a switch used to indicate a COM
+  // activation.
   //
   // NOTE: |registry_path| is mapped to the 32-bit view of the registry for
   // legacy reasons. |registry_path| is the path in HKEY_LOCAL_MACHINE under
@@ -50,13 +64,21 @@ class InstallServiceWorkItem : public WorkItem {
   //
   // If COM CLSID/AppId registration is required, |clsids| should contain the
   // CLSIDs and AppIds to register. If COM Interface/Typelib registration is
-  // required, |iids| should contain the Interfaces and Typelibs to register.
+  // required, |iids| should contain the Interfaces and Typelibs to register
+  // and |previous_iids| should contain all old IIDs to be deleted on update.
   InstallServiceWorkItem(const std::wstring& service_name,
                          const std::wstring& display_name,
+                         const std::wstring& description,
+                         uint32_t start_type,
                          const base::CommandLine& service_cmd_line,
+                         const base::CommandLine& com_service_cmd_line_args,
                          const std::wstring& registry_path,
                          const std::vector<GUID>& clsids,
-                         const std::vector<GUID>& iids);
+                         const std::vector<GUID>& iids,
+                         base::span<const GUID> previous_iids);
+
+  InstallServiceWorkItem(const InstallServiceWorkItem&) = delete;
+  InstallServiceWorkItem& operator=(const InstallServiceWorkItem&) = delete;
 
   ~InstallServiceWorkItem() override;
 
@@ -64,6 +86,14 @@ class InstallServiceWorkItem : public WorkItem {
                             const std::wstring& registry_path,
                             const std::vector<GUID>& clsids,
                             const std::vector<GUID>& iids);
+
+  // Returns true if a cursory check appears to indicate that the service
+  // hosting `clsid` is installed.
+  static bool IsComServiceInstalled(const GUID& clsid);
+
+  // Returns the current name of the service as registered with the SCM.
+  static std::wstring GetCurrentServiceName(base::wcstring_view service_name,
+                                            base::wcstring_view registry_path);
 
  private:
   friend class InstallServiceWorkItemTest;
@@ -73,8 +103,6 @@ class InstallServiceWorkItem : public WorkItem {
   void RollbackImpl() override;
 
   std::unique_ptr<InstallServiceWorkItemImpl> impl_;
-
-  DISALLOW_COPY_AND_ASSIGN(InstallServiceWorkItem);
 };
 
 }  // namespace installer

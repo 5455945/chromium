@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,10 @@
 
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ref.h"
 #include "ui/compositor/test/multi_layer_animator_test_controller.h"
 #include "ui/compositor/test/multi_layer_animator_test_controller_delegate.h"
-#include "ui/gfx/transform.h"
+#include "ui/gfx/geometry/transform.h"
 
 namespace ui {
 class LayerAnimator;
@@ -29,6 +29,10 @@ class InkDropHighlightTestApi
       public ui::test::MultiLayerAnimatorTestControllerDelegate {
  public:
   explicit InkDropHighlightTestApi(InkDropHighlight* ink_drop_highlight);
+
+  InkDropHighlightTestApi(const InkDropHighlightTestApi&) = delete;
+  InkDropHighlightTestApi& operator=(const InkDropHighlightTestApi&) = delete;
+
   ~InkDropHighlightTestApi() override;
 
   // MultiLayerAnimatorTestControllerDelegate:
@@ -36,19 +40,9 @@ class InkDropHighlightTestApi
 
   gfx::Transform CalculateTransform();
 
- protected:
-  InkDropHighlight* ink_drop_highlight() {
-    return static_cast<const InkDropHighlightTestApi*>(this)
-        ->ink_drop_highlight();
-  }
-
-  InkDropHighlight* ink_drop_highlight() const { return ink_drop_highlight_; }
-
  private:
   // The InkDropHighlight to provide internal access to.
-  InkDropHighlight* ink_drop_highlight_;
-
-  DISALLOW_COPY_AND_ASSIGN(InkDropHighlightTestApi);
+  const raw_ref<InkDropHighlight> ink_drop_highlight_;
 };
 
 }  // namespace test

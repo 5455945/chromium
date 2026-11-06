@@ -1,16 +1,17 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.android_webview.test;
 
-import static org.chromium.android_webview.test.OnlyRunIn.ProcessMode.SINGLE_PROCESS;
+import static org.chromium.android_webview.test.OnlyRunIn.ProcessMode.EITHER_PROCESS;
 
+import android.graphics.Color;
 import android.graphics.Picture;
 import android.os.Handler;
 import android.os.Looper;
-import android.support.test.InstrumentationRegistry;
 
+import androidx.test.InstrumentationRegistry;
 import androidx.test.filters.SmallTest;
 
 import org.junit.Assert;
@@ -18,30 +19,36 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
+import org.junit.runners.Parameterized.UseParametersRunnerFactory;
 
-import org.chromium.android_webview.AwContentsClient;
+import org.chromium.android_webview.AwContents;
 import org.chromium.android_webview.AwContentsClientCallbackHelper;
+import org.chromium.android_webview.AwWebResourceError;
+import org.chromium.android_webview.AwWebResourceRequest;
 import org.chromium.android_webview.test.TestAwContentsClient.OnDownloadStartHelper;
 import org.chromium.android_webview.test.TestAwContentsClient.OnLoadResourceHelper;
+import org.chromium.android_webview.test.TestAwContentsClient.OnReceivedErrorHelper;
 import org.chromium.android_webview.test.TestAwContentsClient.OnReceivedLoginRequestHelper;
+import org.chromium.android_webview.test.TestAwContentsClient.OnReceivedThemeColorHelper;
 import org.chromium.android_webview.test.TestAwContentsClient.PictureListenerHelper;
+import org.chromium.android_webview.test.util.CommonResources;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.Feature;
 import org.chromium.content_public.browser.test.util.TestCallbackHelperContainer.OnPageStartedHelper;
-import org.chromium.content_public.browser.test.util.TestCallbackHelperContainer.OnReceivedErrorHelper;
+import org.chromium.net.test.util.TestWebServer;
 
+import java.util.Collections;
 import java.util.concurrent.Callable;
 
-/**
- * Test suite for AwContentsClientCallbackHelper.
- */
-@RunWith(AwJUnit4ClassRunner.class)
-@OnlyRunIn(SINGLE_PROCESS) // These are unit tests. No need to repeat for multiprocess.
-@Batch(Batch.UNIT_TESTS)
-public class AwContentsClientCallbackHelperTest {
-    @Rule
-    public AwActivityTestRule mActivityTestRule = new AwActivityTestRule();
+/** Test suite for AwContentsClientCallbackHelper. */
+@RunWith(Parameterized.class)
+@UseParametersRunnerFactory(AwJUnit4ClassRunnerWithParameters.Factory.class)
+@OnlyRunIn(EITHER_PROCESS) // These are unit tests. No need to repeat in both modes.
+@Batch(Batch.PER_CLASS)
+public class AwContentsClientCallbackHelperTest extends AwParameterizedTest {
+    @Rule public AwActivityTestRule mActivityTestRule;
 
     private static class TestCancelCallbackPoller
             implements AwContentsClientCallbackHelper.CancelCallbackPoller {
@@ -63,7 +70,6 @@ public class AwContentsClientCallbackHelperTest {
         }
     }
 
-    static final int PICTURE_TIMEOUT = 5000;
     static final String TEST_URL = "www.example.com";
     static final String REALM = "www.example.com";
     static final String ACCOUNT = "account";
@@ -75,13 +81,18 @@ public class AwContentsClientCallbackHelperTest {
 
     static final float NEW_SCALE = 1.0f;
     static final float OLD_SCALE = 2.0f;
-    static final int ERROR_CODE = 2;
+    static final int NET_ERROR_CODE = -2;
+    static final int WEBVIEW_ERROR_CODE = -1;
     static final String ERROR_MESSAGE = "A horrible thing has occurred!";
 
     private TestAwContentsClient mContentsClient;
     private AwContentsClientCallbackHelper mClientHelper;
     private TestCancelCallbackPoller mCancelCallbackPoller;
     private Looper mLooper;
+
+    public AwContentsClientCallbackHelperTest(AwSettingsMutation param) {
+        this.mActivityTestRule = new AwActivityTestRule(param.getMutation());
+    }
 
     @Before
     public void setUp() {
@@ -123,8 +134,8 @@ public class AwContentsClientCallbackHelperTest {
         OnDownloadStartHelper downloadStartHelper = mContentsClient.getOnDownloadStartHelper();
 
         int onDownloadStartCount = downloadStartHelper.getCallCount();
-        mClientHelper.postOnDownloadStart(TEST_URL, USER_AGENT, CONTENT_DISPOSITION,
-                MIME_TYPE, CONTENT_LENGTH);
+        mClientHelper.postOnDownloadStart(
+                TEST_URL, USER_AGENT, CONTENT_DISPOSITION, MIME_TYPE, CONTENT_LENGTH);
         downloadStartHelper.waitForCallback(onDownloadStartCount);
         Assert.assertEquals(TEST_URL, downloadStartHelper.getUrl());
         Assert.assertEquals(USER_AGENT, downloadStartHelper.getUserAgent());
@@ -151,10 +162,11 @@ public class AwContentsClientCallbackHelperTest {
         // before mLooper processes the first. To do this we run both posts as a single block
         // and we do it in the thread that is processes the callbacks (mLooper).
         Handler mainHandler = new Handler(mLooper);
-        Runnable postPictures = () -> {
-            mClientHelper.postOnNewPicture(pictureProvider);
-            mClientHelper.postOnNewPicture(pictureProvider);
-        };
+        Runnable postPictures =
+                () -> {
+                    mClientHelper.postOnNewPicture(pictureProvider);
+                    mClientHelper.postOnNewPicture(pictureProvider);
+                };
         mainHandler.post(postPictures);
 
         // We want to check that one and only one callback is fired,
@@ -165,8 +177,7 @@ public class AwContentsClientCallbackHelperTest {
         // Then we post a runnable on the callback handler thread. Since both posts have happened
         // and the first callback has happened a second callback (if it exists) must be
         // in the queue before this runnable.
-        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
-        });
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {});
 
         // When that runnable has finished we assert that one and only on callback happened.
         Assert.assertEquals(thePicture, pictureListenerHelper.getPicture());
@@ -192,21 +203,25 @@ public class AwContentsClientCallbackHelperTest {
     @Feature({"AndroidWebView"})
     @SmallTest
     public void testOnReceivedError() throws Exception {
-        OnReceivedErrorHelper receivedErrorHelper =
-                mContentsClient.getOnReceivedErrorHelper();
+        OnReceivedErrorHelper receivedErrorHelper = mContentsClient.getOnReceivedErrorHelper();
 
         int onReceivedErrorCount = receivedErrorHelper.getCallCount();
-        AwContentsClient.AwWebResourceRequest request = new AwContentsClient.AwWebResourceRequest();
-        request.url = TEST_URL;
-        request.isMainFrame = true;
-        AwContentsClient.AwWebResourceError error = new AwContentsClient.AwWebResourceError();
-        error.errorCode = ERROR_CODE;
-        error.description = ERROR_MESSAGE;
+        AwWebResourceRequest request =
+                new AwWebResourceRequest(
+                        TEST_URL,
+                        /* isOutermostMainFrame= */ true,
+                        /* hasUserGesture= */ false,
+                        /* isRedirect= */ false,
+                        "GET",
+                        Collections.emptyMap());
+        AwWebResourceError error =
+                AwWebResourceError.createFromNetError(NET_ERROR_CODE, ERROR_MESSAGE);
         mClientHelper.postOnReceivedError(request, error);
         receivedErrorHelper.waitForCallback(onReceivedErrorCount);
-        Assert.assertEquals(ERROR_CODE, receivedErrorHelper.getErrorCode());
-        Assert.assertEquals(ERROR_MESSAGE, receivedErrorHelper.getDescription());
-        Assert.assertEquals(TEST_URL, receivedErrorHelper.getFailingUrl());
+        Assert.assertEquals(NET_ERROR_CODE, receivedErrorHelper.getError().getNetError());
+        Assert.assertEquals(WEBVIEW_ERROR_CODE, receivedErrorHelper.getError().getWebviewError());
+        Assert.assertEquals(ERROR_MESSAGE, receivedErrorHelper.getError().getDescription());
+        Assert.assertEquals(TEST_URL, receivedErrorHelper.getRequest().getUrl());
     }
 
     @Test
@@ -241,10 +256,65 @@ public class AwContentsClientCallbackHelperTest {
         cancelCallbackPollerHelper.waitForCallback(pollCount);
 
         // Flush main queue.
-        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
-        });
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {});
 
         // Neither callback should actually happen.
         Assert.assertEquals(onPageStartedCount, pageStartedHelper.getCallCount());
+    }
+
+    @Test
+    @Feature({"AndroidWebView"})
+    @SmallTest
+    public void testOnReceivedThemeColor() throws Exception {
+        AwTestContainerView testContainerView =
+                mActivityTestRule.createAwTestContainerViewOnMainSync(mContentsClient);
+        AwContents awContents = testContainerView.getAwContents();
+
+        AwActivityTestRule.enableJavaScriptOnUiThread(awContents);
+
+        OnReceivedThemeColorHelper themeColorHelper =
+                mContentsClient.getOnReceivedThemeColorHelper();
+        int onThemeColorChangeCount = themeColorHelper.getCallCount();
+
+        try (TestWebServer webServer = TestWebServer.start()) {
+            final String pageUrl =
+                    webServer.setResponse(
+                            "/index.html",
+                            CommonResources.makeHtmlPageFrom(
+                                    "<meta name=\"theme-color\" content=\"red\">", "Body"),
+                            CommonResources.getTextHtmlHeaders(true));
+
+            mActivityTestRule.loadUrlSync(
+                    awContents, mContentsClient.getOnPageFinishedHelper(), pageUrl);
+        }
+
+        themeColorHelper.waitForCallback(onThemeColorChangeCount);
+        Assert.assertNotNull(themeColorHelper.getColor());
+        Assert.assertEquals(Color.RED, themeColorHelper.getColor().toArgb());
+
+        onThemeColorChangeCount = themeColorHelper.getCallCount();
+        final String changeCode =
+                """
+                document.querySelector('meta[name="theme-color"]')?.setAttribute("content", "rgb(0 0 255 / 50%)");
+                """;
+        mActivityTestRule.executeJavaScriptAndWaitForResult(
+                awContents, mContentsClient, changeCode);
+
+        themeColorHelper.waitForCallback(onThemeColorChangeCount);
+        Assert.assertNotNull(themeColorHelper.getColor());
+        // Blue, at 50% opacity
+        Assert.assertEquals(0x800000ff, themeColorHelper.getColor().toArgb());
+
+        onThemeColorChangeCount = themeColorHelper.getCallCount();
+        final String removeCode =
+                """
+                document.querySelector('meta[name="theme-color"]')?.remove();
+                """;
+        mActivityTestRule.executeJavaScriptAndWaitForResult(
+                awContents, mContentsClient, removeCode);
+
+        themeColorHelper.waitForCallback(onThemeColorChangeCount);
+        Assert.assertNotNull(themeColorHelper.getColor());
+        Assert.assertEquals(Color.TRANSPARENT, themeColorHelper.getColor().toArgb());
     }
 }

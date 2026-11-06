@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,11 +9,14 @@
 #include <unordered_set>
 #include <utility>
 
-#include "base/containers/contains.h"
+#include "base/test/gtest_util.h"
+#include "base/test/scoped_feature_list.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/accessibility/accessibility_features.h"
 #include "ui/accessibility/ax_enum_util.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_role_properties.h"
+#include "ui/accessibility/ax_text_attributes.h"
 
 namespace ui {
 
@@ -41,50 +44,67 @@ TEST(AXNodeDataTest, TextAttributes) {
 
   AXNodeData node_2;
   node_2.AddFloatAttribute(ax::mojom::FloatAttribute::kFontSize, 1.5);
-  EXPECT_TRUE(node_1.GetTextStyles() == node_2.GetTextStyles());
+  EXPECT_TRUE(node_1.GetTextAttributes() == node_2.GetTextAttributes());
 
   node_2.AddIntAttribute(ax::mojom::IntAttribute::kColor, 100);
-  EXPECT_TRUE(node_1.GetTextStyles() != node_2.GetTextStyles());
+  EXPECT_TRUE(node_1.GetTextAttributes() != node_2.GetTextAttributes());
 
   node_1.AddIntAttribute(ax::mojom::IntAttribute::kColor, 100);
-  EXPECT_TRUE(node_1.GetTextStyles() == node_2.GetTextStyles());
+  EXPECT_TRUE(node_1.GetTextAttributes() == node_2.GetTextAttributes());
 
   node_2.RemoveIntAttribute(ax::mojom::IntAttribute::kColor);
-  EXPECT_TRUE(node_1.GetTextStyles() != node_2.GetTextStyles());
+  EXPECT_TRUE(node_1.GetTextAttributes() != node_2.GetTextAttributes());
 
   node_2.AddIntAttribute(ax::mojom::IntAttribute::kColor, 100);
-  EXPECT_TRUE(node_1.GetTextStyles() == node_2.GetTextStyles());
+  EXPECT_TRUE(node_1.GetTextAttributes() == node_2.GetTextAttributes());
 
   node_1.AddStringAttribute(ax::mojom::StringAttribute::kFontFamily,
                             "test font");
-  EXPECT_TRUE(node_1.GetTextStyles() != node_2.GetTextStyles());
+  EXPECT_TRUE(node_1.GetTextAttributes() != node_2.GetTextAttributes());
 
   node_2.AddStringAttribute(ax::mojom::StringAttribute::kFontFamily,
                             "test font");
-  EXPECT_TRUE(node_1.GetTextStyles() == node_2.GetTextStyles());
+  EXPECT_TRUE(node_1.GetTextAttributes() == node_2.GetTextAttributes());
 
   node_2.RemoveStringAttribute(ax::mojom::StringAttribute::kFontFamily);
-  EXPECT_TRUE(node_1.GetTextStyles() != node_2.GetTextStyles());
+  EXPECT_TRUE(node_1.GetTextAttributes() != node_2.GetTextAttributes());
 
   node_2.AddStringAttribute(ax::mojom::StringAttribute::kFontFamily,
                             "test font");
-  EXPECT_TRUE(node_1.GetTextStyles() == node_2.GetTextStyles());
+  EXPECT_TRUE(node_1.GetTextAttributes() == node_2.GetTextAttributes());
 
   node_2.AddStringAttribute(ax::mojom::StringAttribute::kFontFamily,
                             "different font");
-  EXPECT_TRUE(node_1.GetTextStyles() != node_2.GetTextStyles());
+  EXPECT_TRUE(node_1.GetTextAttributes() != node_2.GetTextAttributes());
 
-  std::string tooltip;
   node_2.AddStringAttribute(ax::mojom::StringAttribute::kTooltip,
                             "test tooltip");
-  EXPECT_TRUE(node_2.GetStringAttribute(ax::mojom::StringAttribute::kTooltip,
-                                        &tooltip));
+  EXPECT_TRUE(node_2.HasStringAttribute(ax::mojom::StringAttribute::kTooltip));
+  const std::string& tooltip =
+      node_2.GetStringAttribute(ax::mojom::StringAttribute::kTooltip);
+
   EXPECT_EQ(tooltip, "test tooltip");
 
-  AXNodeTextStyles node1_styles = node_1.GetTextStyles();
-  AXNodeTextStyles moved_styles = std::move(node1_styles);
-  EXPECT_TRUE(node1_styles != moved_styles);
-  EXPECT_TRUE(moved_styles == node_1.GetTextStyles());
+  AXTextAttributes node1_attributes = node_1.GetTextAttributes();
+  AXTextAttributes moved_attributes = std::move(node1_attributes);
+  EXPECT_TRUE(node1_attributes != moved_attributes);
+  EXPECT_TRUE(moved_attributes == node_1.GetTextAttributes());
+
+  AXNodeData node_3;
+  AXTextAttributes node3_attributes = node_3.GetTextAttributes();
+  EXPECT_TRUE(node3_attributes.IsUnset());
+  node_3.AddIntAttribute(ax::mojom::IntAttribute::kColor,
+                         static_cast<int>(0xFFFF0000));
+  node3_attributes = node_3.GetTextAttributes();
+  EXPECT_FALSE(node3_attributes.IsUnset());
+
+  AXNodeData node_4;
+  AXTextAttributes node4_attributes = node_4.GetTextAttributes();
+  EXPECT_TRUE(node4_attributes.IsUnset());
+  const float kFontSize = 1001.5;
+  node_4.AddFloatAttribute(ax::mojom::FloatAttribute::kFontSize, kFontSize);
+  node4_attributes = node_4.GetTextAttributes();
+  EXPECT_EQ(node4_attributes.font_size, kFontSize);
 }
 
 TEST(AXNodeDataTest, IsButtonPressed) {
@@ -165,9 +185,11 @@ TEST(AXNodeDataTest, IsClickable) {
       ax::mojom::Role::kCheckBox,
       ax::mojom::Role::kColorWell,
       ax::mojom::Role::kComboBoxMenuButton,
+      ax::mojom::Role::kComboBoxSelect,
       ax::mojom::Role::kDate,
       ax::mojom::Role::kDateTime,
       ax::mojom::Role::kDisclosureTriangle,
+      ax::mojom::Role::kDisclosureTriangleGrouped,
       ax::mojom::Role::kDocBackLink,
       ax::mojom::Role::kDocBiblioRef,
       ax::mojom::Role::kDocGlossRef,
@@ -183,7 +205,6 @@ TEST(AXNodeDataTest, IsClickable) {
       ax::mojom::Role::kMenuListOption,
       ax::mojom::Role::kPdfActionableHighlight,
       ax::mojom::Role::kPopUpButton,
-      ax::mojom::Role::kPortal,
       ax::mojom::Role::kRadioButton,
       ax::mojom::Role::kSearchBox,
       ax::mojom::Role::kSpinButton,
@@ -205,22 +226,22 @@ TEST(AXNodeDataTest, IsClickable) {
                  << ", Actual: isClickable=" << is_clickable
                  << ", Expected: isClickable=" << !is_clickable);
 
-    EXPECT_EQ(base::Contains(roles_expected_is_clickable, data.role),
-              is_clickable);
+    EXPECT_EQ(roles_expected_is_clickable.contains(data.role), is_clickable);
   }
 }
 
 TEST(AXNodeDataTest, IsInvocable) {
   // Test for iterating through all roles and validate if a role is invocable.
-  // A role is invocable if it is clickable and supports neither expand collpase
-  // nor toggle.
+  // A role is invocable if it is clickable and supports neither expand collapse
+  // nor toggle. A link should always be invocable, regardless of whether it is
+  // clickable or supports expand/collapse or toggle.
   AXNodeData data;
   for (int role_idx = static_cast<int>(ax::mojom::Role::kMinValue);
        role_idx <= static_cast<int>(ax::mojom::Role::kMaxValue); role_idx++) {
     data.role = static_cast<ax::mojom::Role>(role_idx);
     bool is_activatable = data.IsActivatable();
     const bool supports_expand_collapse = data.SupportsExpandCollapse();
-    const bool supports_toggle = ui::SupportsToggle(data.role);
+    const bool supports_toggle = SupportsToggle(data.role);
     const bool is_clickable = data.IsClickable();
     const bool is_invocable = data.IsInvocable();
 
@@ -232,11 +253,12 @@ TEST(AXNodeDataTest, IsInvocable) {
                  << ", Actual: isInvocable=" << is_invocable
                  << ", Expected: isInvocable=" << !is_invocable);
 
-    if (is_clickable && !is_activatable && !supports_toggle &&
-        !supports_expand_collapse)
+    if (IsLink(data.role) || (is_clickable && !is_activatable &&
+                              !supports_toggle && !supports_expand_collapse)) {
       EXPECT_TRUE(is_invocable);
-    else
+    } else {
       EXPECT_FALSE(is_invocable);
+    }
   }
 }
 
@@ -336,9 +358,13 @@ TEST(AXNodeDataTest, SupportsExpandCollapse) {
   AXNodeData data;
 
   std::unordered_set<ax::mojom::Role> roles_expected_supports_expand_collapse =
-      {ax::mojom::Role::kComboBoxGrouping, ax::mojom::Role::kComboBoxMenuButton,
+      {ax::mojom::Role::kComboBoxGrouping,
+       ax::mojom::Role::kComboBoxMenuButton,
+       ax::mojom::Role::kComboBoxSelect,
        ax::mojom::Role::kDisclosureTriangle,
-       ax::mojom::Role::kTextFieldWithComboBox, ax::mojom::Role::kTreeItem};
+       ax::mojom::Role::kDisclosureTriangleGrouped,
+       ax::mojom::Role::kTextFieldWithComboBox,
+       ax::mojom::Role::kTreeItem};
 
   for (int role_idx = static_cast<int>(ax::mojom::Role::kMinValue);
        role_idx <= static_cast<int>(ax::mojom::Role::kMaxValue); role_idx++) {
@@ -359,11 +385,133 @@ TEST(AXNodeDataTest, SupportsExpandCollapse) {
   }
 }
 
-TEST(AXNodeDataTest, BitFieldsSanityCheck) {
+TEST(AXNodeDataTest, SetName) {
+  AXNodeData data;
+  // SetName should not be called on a role of kUnknown. That role means the
+  // role has not yet been set, and we need a role to identify the NameFrom on
+  // objects where it has not been set. This is enforced by a DCHECK.
+  EXPECT_DCHECK_DEATH(data.SetName("no role yet"));
+
+  // SetName should not be called on a role of kNone. That role is used for
+  // presentational objects which should not be included in the accessibility
+  // tree. This is enforced by a DCHECK.
+  data.role = ax::mojom::Role::kNone;
+  EXPECT_DCHECK_DEATH(data.SetName("role is presentational"));
+
+  // For roles other than text, setting the name should result in the NameFrom
+  // source being kAttribute.
+  data.role = ax::mojom::Role::kButton;
+  data.SetName("foo");
+  EXPECT_EQ("foo", data.GetStringAttribute(ax::mojom::StringAttribute::kName));
+  EXPECT_EQ(data.GetNameFrom(), ax::mojom::NameFrom::kAttribute);
+
+  // TODO(accessibility): The static text role should have a NameFrom source of
+  // kContents. But nothing clears the NameFrom if the role of an existing
+  // object changes because currently there is no AXNodeData::SetRole method.
+  data.role = ax::mojom::Role::kStaticText;
+  data.SetName("bar");
+  EXPECT_EQ("bar", data.GetStringAttribute(ax::mojom::StringAttribute::kName));
+  EXPECT_EQ(data.GetNameFrom(), ax::mojom::NameFrom::kAttribute);
+
+  data.RemoveIntAttribute(ax::mojom::IntAttribute::kNameFrom);
+  data.SetName("baz");
+  EXPECT_EQ("baz", data.GetStringAttribute(ax::mojom::StringAttribute::kName));
+  EXPECT_EQ(data.GetNameFrom(), ax::mojom::NameFrom::kContents);
+
+  // Setting the name to the empty string should not be done by
+  // `SetNameChecked`, which enforces that expectation with a DCHECK.
+  EXPECT_DCHECK_DEATH(data.SetNameChecked(""));
+
+  data.SetNameExplicitlyEmpty();
+  EXPECT_EQ("", data.GetStringAttribute(ax::mojom::StringAttribute::kName));
+  EXPECT_EQ(data.GetNameFrom(), ax::mojom::NameFrom::kAttributeExplicitlyEmpty);
+
+  data.SetName("foo");
+  EXPECT_EQ("foo", data.GetStringAttribute(ax::mojom::StringAttribute::kName));
+  EXPECT_EQ(data.GetNameFrom(), ax::mojom::NameFrom::kContents);
+}
+
+TEST(AXNodeDataTest, SetDescription) {
+  AXNodeData data;
+  data.role = ax::mojom::Role::kButton;
+
+  // Initially there is no description and no DescriptionFrom.
+  EXPECT_EQ("",
+            data.GetStringAttribute(ax::mojom::StringAttribute::kDescription));
+  EXPECT_EQ(data.GetDescriptionFrom(), ax::mojom::DescriptionFrom::kNone);
+
+  // When the DescriptionFrom is not specified it defaults to kAriaDescription.
+  data.SetDescription("foo");
+  EXPECT_EQ("foo",
+            data.GetStringAttribute(ax::mojom::StringAttribute::kDescription));
+  EXPECT_EQ(data.GetDescriptionFrom(),
+            ax::mojom::DescriptionFrom::kAriaDescription);
+
+  // Setting the description explicitly empty should both clear the string
+  // and update the DescriptionFrom.
+  data.SetDescriptionExplicitlyEmpty();
+  EXPECT_EQ("",
+            data.GetStringAttribute(ax::mojom::StringAttribute::kDescription));
+  EXPECT_EQ(data.GetDescriptionFrom(),
+            ax::mojom::DescriptionFrom::kAttributeExplicitlyEmpty);
+
+  // We currently do not enforce that the description gets set prior to the
+  // DescriptionFrom. As a result it is possible to have a DescriptionFrom
+  // value other than kNone and kAttributeExplicitlyEmpty while the description
+  // is an empty string.
+  data.SetDescriptionFrom(ax::mojom::DescriptionFrom::kTitle);
+  EXPECT_EQ("",
+            data.GetStringAttribute(ax::mojom::StringAttribute::kDescription));
+  EXPECT_EQ(data.GetDescriptionFrom(), ax::mojom::DescriptionFrom::kTitle);
+
+  // Setting the description to the empty string should not be done by
+  // SetDescription, which enforces that expectation with a DCHECK.
+  EXPECT_DCHECK_DEATH(data.SetDescription(""));
+}
+
+TEST(AXNodeDataTest, BitFieldsConfidenceCheck) {
   EXPECT_LT(static_cast<size_t>(ax::mojom::State::kMaxValue),
             sizeof(AXNodeData::state) * 8);
   EXPECT_LT(static_cast<size_t>(ax::mojom::Action::kMaxValue),
             sizeof(AXNodeData::actions) * 8);
+}
+
+TEST(AXNodeDataTest, IsValidAXNodeDataFromRenderer) {
+  // Test IsValidAXNodeIDFromRenderer directly.
+  EXPECT_TRUE(IsValidAXNodeIDFromRenderer(1));
+  EXPECT_TRUE(IsValidAXNodeIDFromRenderer(42));
+  EXPECT_TRUE(IsValidAXNodeIDFromRenderer(kInvalidAXNodeID));
+  EXPECT_TRUE(IsValidAXNodeIDFromRenderer(kFirstGeneratedRendererNodeID));
+  EXPECT_TRUE(IsValidAXNodeIDFromRenderer(kFirstGeneratedRendererNodeID - 1));
+  EXPECT_TRUE(IsValidAXNodeIDFromRenderer(kLastGeneratedRendererNodeID));
+
+  EXPECT_FALSE(IsValidAXNodeIDFromRenderer(kFirstGeneratedBrowserNodeID));
+  EXPECT_FALSE(IsValidAXNodeIDFromRenderer(-100));
+  EXPECT_FALSE(IsValidAXNodeIDFromRenderer(kLastGeneratedBrowserNodeID));
+  EXPECT_FALSE(IsValidAXNodeIDFromRenderer(kInitialEmptyDocumentRootNodeID));
+
+  // Test AXNodeData.HasValidAXNodeIDsFromRenderer.
+  AXNodeData valid_node;
+  valid_node.id = 1;
+  valid_node.child_ids = {2, 3, kFirstGeneratedRendererNodeID};
+  EXPECT_TRUE(valid_node.HasValidAXNodeIDsFromRenderer());
+
+  AXNodeData invalid_node_id;
+  invalid_node_id.id = kFirstGeneratedBrowserNodeID;
+  EXPECT_FALSE(invalid_node_id.HasValidAXNodeIDsFromRenderer());
+
+  AXNodeData invalid_child_id;
+  invalid_child_id.id = 1;
+  invalid_child_id.child_ids = {2, kInitialEmptyDocumentRootNodeID};
+  EXPECT_FALSE(invalid_child_id.HasValidAXNodeIDsFromRenderer());
+
+  // When feature flag is disabled, all IDs are accepted.
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      ::features::kAccessibilityCheckAXNodeIDs);
+  EXPECT_TRUE(IsValidAXNodeIDFromRenderer(kFirstGeneratedBrowserNodeID));
+  EXPECT_TRUE(invalid_node_id.HasValidAXNodeIDsFromRenderer());
+  EXPECT_TRUE(invalid_child_id.HasValidAXNodeIDsFromRenderer());
 }
 
 }  // namespace ui

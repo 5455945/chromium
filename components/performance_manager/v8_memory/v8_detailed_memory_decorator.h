@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,10 @@
 
 #include <memory>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
+#include "base/functional/function_ref.h"
 #include "base/sequence_checker.h"
 #include "base/types/pass_key.h"
-#include "components/performance_manager/public/graph/graph.h"
 #include "components/performance_manager/public/graph/graph_registered.h"
 #include "components/performance_manager/public/graph/node_data_describer.h"
 #include "components/performance_manager/public/graph/process_node.h"
@@ -21,6 +21,7 @@
 namespace performance_manager {
 
 class FrameNode;
+class Graph;
 
 namespace v8_memory {
 
@@ -31,9 +32,8 @@ class V8DetailedMemoryRequestQueue;
 // decorator is in
 // //components/performance_manager/public/v8_detailed_memory.h.
 class V8DetailedMemoryDecorator
-    : public GraphOwned,
-      public GraphRegisteredImpl<V8DetailedMemoryDecorator>,
-      public ProcessNode::ObserverDefaultImpl,
+    : public ProcessNodeObserver,
+      public GraphOwnedAndRegistered<V8DetailedMemoryDecorator>,
       public NodeDataDescriberDefaultImpl {
  public:
   V8DetailedMemoryDecorator();
@@ -52,8 +52,9 @@ class V8DetailedMemoryDecorator
   void OnBeforeProcessNodeRemoved(const ProcessNode* process_node) override;
 
   // NodeDataDescriber overrides.
-  base::Value DescribeFrameNodeData(const FrameNode* node) const override;
-  base::Value DescribeProcessNodeData(const ProcessNode* node) const override;
+  base::DictValue DescribeFrameNodeData(const FrameNode* node) const override;
+  base::DictValue DescribeProcessNodeData(
+      const ProcessNode* node) const override;
 
   // Returns the next measurement request that should be scheduled.
   const V8DetailedMemoryRequest* GetNextRequest() const;
@@ -97,16 +98,12 @@ class V8DetailedMemoryDecorator
       const ProcessNode* node);
 
  private:
-  using RequestQueueCallback =
-      base::RepeatingCallback<void(V8DetailedMemoryRequestQueue*)>;
-
   // Runs the given |callback| for every V8DetailedMemoryRequestQueue (global
   // and per-process).
-  void ApplyToAllRequestQueues(RequestQueueCallback callback) const;
+  void ApplyToAllRequestQueues(
+      base::FunctionRef<void(V8DetailedMemoryRequestQueue*)> func) const;
 
   void UpdateProcessMeasurementSchedules() const;
-
-  Graph* graph_ GUARDED_BY_CONTEXT(sequence_checker_) = nullptr;
 
   std::unique_ptr<V8DetailedMemoryRequestQueue> measurement_requests_
       GUARDED_BY_CONTEXT(sequence_checker_);

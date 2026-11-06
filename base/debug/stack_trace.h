@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,28 +7,28 @@
 
 #include <stddef.h>
 
+#include <array>
 #include <iosfwd>
 #include <string>
 
 #include "base/base_export.h"
+#include "base/containers/span.h"
 #include "base/debug/debugging_buildflags.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/strings/cstring_view.h"
 #include "build/build_config.h"
 
-#if defined(OS_POSIX)
-#if !defined(OS_NACL)
+#if BUILDFLAG(IS_POSIX)
 #include <signal.h>
-#endif
 #include <unistd.h>
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 struct _EXCEPTION_POINTERS;
 struct _CONTEXT;
 #endif
 
-namespace base {
-namespace debug {
+namespace base::debug {
 
 // Enables stack dump to console output on exception and signals.
 // When enabled, the process will quit immediately. This is meant to be used in
@@ -41,7 +41,16 @@ namespace debug {
 // done in official builds because it has security implications).
 BASE_EXPORT bool EnableInProcessStackDumping();
 
-#if defined(OS_POSIX) && !defined(OS_NACL)
+#if BUILDFLAG(IS_WIN)
+// Returns `true` if EnableInProcessStackDumping() was called and succeeded.
+// Only supported on Windows.
+BASE_EXPORT bool InProcessStackDumpingEnabledForTesting();
+
+// Allows tests to exercise code that runs when symbolization is not available.
+BASE_EXPORT bool DisableInProcessStackDumpingForTesting();
+#endif  // BUILDFLAG(IS_WIN)
+
+#if BUILDFLAG(IS_POSIX)
 // Sets a first-chance callback for the stack dump signal handler. This callback
 // is called at the beginning of the signal handler to handle special kinds of
 // signals, like out-of-bounds memory accesses in WebAssembly (WebAssembly Trap
@@ -64,6 +73,18 @@ BASE_EXPORT uintptr_t GetStackEnd();
 // can later see where the given object was created from.
 class BASE_EXPORT StackTrace {
  public:
+  // LINT.IfChange(max_stack_frames)
+#if BUILDFLAG(IS_ANDROID)
+  // TODO(crbug.com/41437515): Testing indicates that Android has issues
+  // with a larger value here, so leave Android at 62.
+  static constexpr size_t kMaxTraces = 62;
+#else
+  // For other platforms, use 250. This seems reasonable without
+  // being huge.
+  static constexpr size_t kMaxTraces = 250;
+#endif
+  // LINT.ThenChange(dwarf_line_no.cc:max_stack_frames)
+
   // Creates a stacktrace from the current location.
   StackTrace();
 
@@ -71,12 +92,17 @@ class BASE_EXPORT StackTrace {
   // |count| will be limited to at most |kMaxTraces|.
   explicit StackTrace(size_t count);
 
-  // Creates a stacktrace from an existing array of instruction
-  // pointers (such as returned by Addresses()).  |count| will be
-  // limited to at most |kMaxTraces|.
-  StackTrace(const void* const* trace, size_t count);
+  // Creates a stacktrace from an existing array of instruction pointers (such
+  // as returned by Addresses()). Only the first `kMaxTraces` of the span will
+  // be used.
+  explicit StackTrace(span<const void* const> trace);
 
-#if defined(OS_WIN)
+  // Creates a stacktrace from an existing array of instruction pointers (such
+  // as returned by TaskTrace). Only the first `kMaxTraces` of the span will
+  // be used.
+  explicit StackTrace(span<const uintptr_t> trace);
+
+#if BUILDFLAG(IS_WIN)
   // Creates a stacktrace for an exception.
   // Note: this function will throw an import not found (StackWalk64) exception
   // on system without dbghelp 5.1.
@@ -88,20 +114,23 @@ class BASE_EXPORT StackTrace {
   // symbolized frames when printing a stack trace.
   static bool WillSymbolizeToStreamForTesting();
 
+  // Initialize features.
+  static void InitializeFeatures();
+
   // Copying and assignment are allowed with the default functions.
 
   // Gets an array of instruction pointer values. |*count| will be set to the
   // number of elements in the returned array. Addresses()[0] will contain an
   // address from the leaf function, and Addresses()[count-1] will contain an
   // address from the root function (i.e.; the thread's entry point).
-  const void* const* Addresses(size_t* count) const;
+  span<const void* const> addresses() const;
 
   // Prints the stack trace to stderr.
   void Print() const;
 
   // Prints the stack trace to stderr, prepending the given string before
   // each output line.
-  void PrintWithPrefix(const char* prefix_string) const;
+  void PrintWithPrefix(cstring_view prefix_string) const;
 
 #if !defined(__UCLIBC__) && !defined(_AIX)
   // Resolves backtrace to symbols and write to stream.
@@ -109,7 +138,7 @@ class BASE_EXPORT StackTrace {
   // Resolves backtrace to symbols and write to stream, with the provided
   // prefix string prepended to each line.
   void OutputToStreamWithPrefix(std::ostream* os,
-                                const char* prefix_string) const;
+                                cstring_view prefix_string) const;
 #endif
 
   // Resolves backtrace to symbols and returns as string.
@@ -117,27 +146,35 @@ class BASE_EXPORT StackTrace {
 
   // Resolves backtrace to symbols and returns as string, prepending the
   // provided prefix string to each line.
-  std::string ToStringWithPrefix(const char* prefix_string) const;
+  std::string ToStringWithPrefix(cstring_view prefix_string) const;
+
+  // Sets a message to be emitted in place of symbolized stack traces. When
+  // such a message is provided, collection and symbolization of stack traces
+  // is suppressed. Suppression is cancelled if `message` is empty.
+  static void SuppressStackTracesWithMessageForTesting(std::string message);
 
  private:
-#if defined(OS_WIN)
+  // Prints `message` with an optional prefix.
+  static void PrintMessageWithPrefix(cstring_view prefix_string,
+                                     cstring_view message);
+
+  void PrintWithPrefixImpl(cstring_view prefix_string) const;
+#if !defined(__UCLIBC__) && !defined(_AIX)
+  void OutputToStreamWithPrefixImpl(std::ostream* os,
+                                    cstring_view prefix_string) const;
+#endif
+
+  // Returns true if generation of symbolized stack traces is to be suppressed.
+  static bool ShouldSuppressOutput();
+
+#if BUILDFLAG(IS_WIN)
   void InitTrace(const _CONTEXT* context_record);
 #endif
 
-#if defined(OS_ANDROID)
-  // TODO(https://crbug.com/925525): Testing indicates that Android has issues
-  // with a larger value here, so leave Android at 62.
-  static constexpr int kMaxTraces = 62;
-#else
-  // For other platforms, use 250. This seems reasonable without
-  // being huge.
-  static constexpr int kMaxTraces = 250;
-#endif
+  std::array<const void*, kMaxTraces> trace_;
 
-  void* trace_[kMaxTraces];
-
-  // The number of valid frames in |trace_|.
-  size_t count_;
+  // The number of valid frames in |trace_|, or 0 if collection was suppressed.
+  size_t count_ = 0;
 };
 
 // Forwards to StackTrace::OutputToStream().
@@ -145,7 +182,25 @@ BASE_EXPORT std::ostream& operator<<(std::ostream& os, const StackTrace& s);
 
 // Record a stack trace with up to |count| frames into |trace|. Returns the
 // number of frames read.
-BASE_EXPORT size_t CollectStackTrace(void** trace, size_t count);
+BASE_EXPORT size_t CollectStackTrace(span<const void*> trace);
+
+// A helper for tests that must either override the default suppression of
+// symbolized stack traces in death tests, or the default generation of them in
+// normal tests.
+class BASE_EXPORT OverrideStackTraceOutputForTesting {
+ public:
+  enum class Mode {
+    kUnset,
+    kForceOutput,
+    kSuppressOutput,
+  };
+  explicit OverrideStackTraceOutputForTesting(Mode mode);
+  OverrideStackTraceOutputForTesting(
+      const OverrideStackTraceOutputForTesting&) = delete;
+  OverrideStackTraceOutputForTesting& operator=(
+      const OverrideStackTraceOutputForTesting&) = delete;
+  ~OverrideStackTraceOutputForTesting();
+};
 
 #if BUILDFLAG(CAN_UNWIND_WITH_FRAME_POINTERS)
 
@@ -156,7 +211,7 @@ BASE_EXPORT size_t CollectStackTrace(void** trace, size_t count);
 // scanning area at the origin of the stack, wasting time and not finding any
 // frames (since Android libraries don't have frame pointers). Scanning is not
 // enabled on other posix platforms due to legacy reasons.
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 constexpr bool kEnableScanningByDefault = true;
 #else
 constexpr bool kEnableScanningByDefault = false;
@@ -172,22 +227,9 @@ constexpr bool kEnableScanningByDefault = false;
 // Returns number of frames written. |enable_scanning| enables scanning on
 // platforms that do not enable scanning by default.
 BASE_EXPORT size_t
-TraceStackFramePointers(const void** out_trace,
-                        size_t max_depth,
+TraceStackFramePointers(span<const void*> out_trace,
                         size_t skip_initial,
                         bool enable_scanning = kEnableScanningByDefault);
-
-// Same as above function, but allows to pass in frame pointer and stack end
-// address for unwinding. This is useful when unwinding based on a copied stack
-// segment. Note that the client has to take care of rewriting all the pointers
-// in the stack pointing within the stack to point to the copied addresses.
-BASE_EXPORT size_t TraceStackFramePointersFromBuffer(
-    uintptr_t fp,
-    uintptr_t stack_end,
-    const void** out_trace,
-    size_t max_depth,
-    size_t skip_initial,
-    bool enable_scanning = kEnableScanningByDefault);
 
 // Links stack frame |fp| to |parent_fp|, so that during stack unwinding
 // TraceStackFramePointers() visits |parent_fp| after visiting |fp|.
@@ -229,37 +271,37 @@ BASE_EXPORT size_t TraceStackFramePointersFromBuffer(
 class BASE_EXPORT ScopedStackFrameLinker {
  public:
   ScopedStackFrameLinker(void* fp, void* parent_fp);
+
+  ScopedStackFrameLinker(const ScopedStackFrameLinker&) = delete;
+  ScopedStackFrameLinker& operator=(const ScopedStackFrameLinker&) = delete;
+
   ~ScopedStackFrameLinker();
 
  private:
-  void* fp_;
-  void* parent_fp_;
-  void* original_parent_fp_;
-
-  DISALLOW_COPY_AND_ASSIGN(ScopedStackFrameLinker);
+  raw_ptr<void> fp_;
+  raw_ptr<void> parent_fp_;
+  raw_ptr<void> original_parent_fp_;
 };
 
 #endif  // BUILDFLAG(CAN_UNWIND_WITH_FRAME_POINTERS)
 
 namespace internal {
 
-#if defined(OS_POSIX) && !defined(OS_ANDROID)
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID)
 // POSIX doesn't define any async-signal safe function for converting
 // an integer to ASCII. We'll have to define our own version.
 // itoa_r() converts a (signed) integer to ASCII. It returns "buf", if the
 // conversion was successful or NULL otherwise. It never writes more than "sz"
 // bytes. Output will be truncated as needed, and a NUL character is always
 // appended.
-BASE_EXPORT char *itoa_r(intptr_t i,
-                         char *buf,
-                         size_t sz,
-                         int base,
-                         size_t padding);
-#endif  // defined(OS_POSIX) && !defined(OS_ANDROID)
+BASE_EXPORT void itoa_r(intptr_t i,
+                        int base,
+                        size_t padding,
+                        base::span<char> buf);
+#endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID)
 
 }  // namespace internal
 
-}  // namespace debug
-}  // namespace base
+}  // namespace base::debug
 
 #endif  // BASE_DEBUG_STACK_TRACE_H_

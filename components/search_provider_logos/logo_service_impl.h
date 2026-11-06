@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,12 +9,12 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/files/file_path.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/clock.h"
 #include "base/time/time.h"
 #include "components/search_provider_logos/logo_common.h"
@@ -52,6 +52,9 @@ class LogoServiceImpl : public LogoService,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       base::RepeatingCallback<bool()> want_gray_logo_getter);
 
+  LogoServiceImpl(const LogoServiceImpl&) = delete;
+  LogoServiceImpl& operator=(const LogoServiceImpl&) = delete;
+
   ~LogoServiceImpl() override;
 
   // KeyedService implementation.
@@ -76,9 +79,13 @@ class LogoServiceImpl : public LogoService,
   // and/or fresh logos are available.
   //
   // At least one callback must be non-null. All non-null callbacks will be
-  // invoked exactly once.
+  // invoked exactly once. If |for_webui_ntp| is true fetches a logo that is
+  // compatible with the WebUI NTP. If |enable_animated_logo| is true, fetches
+  // an animated logo and mural if available.
   void GetLogo(LogoObserver* observer) override;
-  void GetLogo(LogoCallbacks callbacks, bool for_webui_ntp) override;
+  void GetLogo(LogoCallbacks callbacks,
+               bool for_webui_ntp,
+               bool enable_animated_logo) override;
 
   // Overrides the cache used to store logos.
   void SetLogoCacheForTests(std::unique_ptr<LogoCache> cache);
@@ -101,8 +108,6 @@ class LogoServiceImpl : public LogoService,
     DOWNLOAD_OUTCOME_COUNT,
   };
 
-  const int kDownloadOutcomeNotTracked = -1;
-
   // signin::IdentityManager::Observer implementation.
   void OnAccountsInCookieUpdated(const signin::AccountsInCookieJarInfo&,
                                  const GoogleServiceAuthError&) override;
@@ -113,8 +118,8 @@ class LogoServiceImpl : public LogoService,
 
   // Cancels the current asynchronous operation, if any, and resets all member
   // variables that change as the logo is fetched. This method also records UMA
-  // histograms for for the given LogoDownloadOutcome.
-  void ReturnToIdle(int outcome);
+  // histograms for for the given LogoDownloadOutcome, if set.
+  void ReturnToIdle(std::optional<LogoDownloadOutcome> outcome);
 
   // Called when the cached logo has been read from the cache. |cached_logo|
   // will be NULL if there wasn't a valid, up-to-date logo in the cache.
@@ -167,12 +172,12 @@ class LogoServiceImpl : public LogoService,
 
   // Invoked by |loader|.
   void OnURLLoadComplete(const network::SimpleURLLoader* source,
-                         std::unique_ptr<std::string> body);
+                         std::optional<std::string> body);
 
   // Constructor arguments.
   const base::FilePath cache_directory_;
-  signin::IdentityManager* const identity_manager_;
-  TemplateURLService* const template_url_service_;
+  const raw_ptr<signin::IdentityManager> identity_manager_;
+  const raw_ptr<TemplateURLService> template_url_service_;
   const scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
 
   // Callback to get the type of logo to fetch. Returns whether we want a logo
@@ -226,11 +231,12 @@ class LogoServiceImpl : public LogoService,
   std::unique_ptr<LogoCache, base::OnTaskRunnerDeleter> logo_cache_;
 
   // Clock used to determine current time. Can be overridden in tests.
-  base::Clock* clock_ = nullptr;
+  raw_ptr<base::Clock> clock_ = nullptr;
+
+  // Whether the default search engine (DSE) is Google.
+  bool is_google_ = false;
 
   base::WeakPtrFactory<LogoServiceImpl> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(LogoServiceImpl);
 };
 
 }  // namespace search_provider_logos

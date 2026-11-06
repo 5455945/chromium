@@ -1,78 +1,25 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "sandbox/policy/switches.h"
 
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
-#include "printing/buildflags/buildflags.h"
 
-#if defined(OS_WIN)
-#include "base/command_line.h"
-#include "base/win/windows_version.h"
-#endif
-
-namespace sandbox {
-namespace policy {
-namespace switches {
+namespace sandbox::policy::switches {
 
 // Type of sandbox to apply to the process running the service, one of the
 // values in the next block.
 const char kServiceSandboxType[] = "service-sandbox-type";
-
-// Must be in sync with "sandbox_type" values as used in service manager's
-// manifest.json catalog files.
-const char kNoneSandbox[] = "none";
-const char kNoneSandboxAndElevatedPrivileges[] = "none_and_elevated";
-const char kNetworkSandbox[] = "network";
-const char kPpapiSandbox[] = "ppapi";
-const char kUtilitySandbox[] = "utility";
-const char kCdmSandbox[] = "cdm";
-#if BUILDFLAG(ENABLE_PRINTING)
-const char kPrintBackendSandbox[] = "print_backend";
-#endif
-const char kPrintCompositorSandbox[] = "print_compositor";
-const char kAudioSandbox[] = "audio";
-const char kServiceSandbox[] = "service";
-const char kSpeechRecognitionSandbox[] = "speech_recognition";
-const char kVideoCaptureSandbox[] = "video_capture";
-
-#if defined(OS_WIN)
-const char kPdfConversionSandbox[] = "pdf_conversion";
-const char kProxyResolverSandbox[] = "proxy_resolver";
-const char kXrCompositingSandbox[] = "xr_compositing";
-const char kIconReaderSandbox[] = "icon_reader";
-const char kMediaFoundationCdmSandbox[] = "mf_cdm";
-#endif  // OS_WIN
-
-#if defined(OS_MAC)
-const char kMirroringSandbox[] = "mirroring";
-#endif  // OS_MAC
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-const char kImeSandbox[] = "ime";
-const char kTtsSandbox[] = "tts";
-#if BUILDFLAG(ENABLE_CROS_LIBASSISTANT)
-const char kLibassistantSandbox[] = "libassistant";
-#endif  // BUILDFLAG(ENABLE_CROS_LIBASSISTANT)
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-
-// Flags owned by the service manager sandbox.
-
-// Enables the sandboxed processes to run without a job object assigned to them.
-// This flag is required to allow Chrome to run in RemoteApps or Citrix. This
-// flag can reduce the security of the sandboxed processes and allow them to do
-// certain API calls like shut down Windows or access the clipboard. Also we
-// lose the chance to kill some processes until the outer job that owns them
-// finishes.
-const char kAllowNoSandboxJob[] = "allow-no-sandbox-job";
 
 // Allows debugging of sandboxed processes (see zygote_main_linux.cc).
 const char kAllowSandboxDebugging[] = "allow-sandbox-debugging";
 
 // Disables the GPU process sandbox.
 const char kDisableGpuSandbox[] = "disable-gpu-sandbox";
+
+// Disables the Landlock sandbox (Android only).
+const char kDisableLandlockSandbox[] = "disable-landlock-sandbox";
 
 // Disables usage of the namespace sandbox.
 const char kDisableNamespaceSandbox[] = "disable-namespace-sandbox";
@@ -82,6 +29,9 @@ const char kDisableSeccompFilterSandbox[] = "disable-seccomp-filter-sandbox";
 
 // Disable the setuid sandbox (Linux only).
 const char kDisableSetuidSandbox[] = "disable-setuid-sandbox";
+
+// Disables the WebNN compiler process sandbox.
+const char kDisableWebNNCompilerSandbox[] = "disable-webnn-compiler-sandbox";
 
 // Allows shmat() system call in the GPU sandbox.
 const char kGpuSandboxAllowSysVShm[] = "gpu-sandbox-allow-sysv-shm";
@@ -93,29 +43,24 @@ const char kGpuSandboxFailuresFatal[] = "gpu-sandbox-failures-fatal";
 // Meant to be used as a browser-level switch for testing purposes only.
 const char kNoSandbox[] = "no-sandbox";
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 // Instructs the zygote to launch without a sandbox. Processes forked from this
 // type of zygote will apply their own custom sandboxes later.
 const char kNoZygoteSandbox[] = "no-zygote-sandbox";
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 // Allows third party modules to inject by disabling the BINARY_SIGNATURE
 // mitigation policy on Win10+. Also has other effects in ELF.
 const char kAllowThirdPartyModules[] = "allow-third-party-modules";
 
-// Add additional capabilities to the AppContainer sandbox on the GPU process.
-const char kAddGpuAppContainerCaps[] = "add-gpu-appcontainer-caps";
-
-// Disables the sandbox and gives the process elevated privileges.
-const char kNoSandboxAndElevatedPrivileges[] = "no-sandbox-and-elevated";
-
 // Add additional capabilities to the AppContainer sandbox used for XR
 // compositing.
 const char kAddXrAppContainerCaps[] = "add-xr-appcontainer-caps";
+
 #endif
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 // Cause the OS X sandbox write to syslog every time an access to a resource
 // is denied by the sandbox.
 const char kEnableSandboxLogging[] = "enable-sandbox-logging";
@@ -127,15 +72,12 @@ const char kDisableMetalShaderCache[] = "disable-metal-shader-cache";
 // Flags spied upon from other layers.
 const char kProcessType[] = "type";
 const char kGpuProcess[] = "gpu-process";
-const char kNaClBrokerProcess[] = "nacl-broker";
-const char kNaClLoaderProcess[] = "nacl-loader";
-const char kPpapiPluginProcess[] = "ppapi";
 const char kRendererProcess[] = "renderer";
 const char kUtilityProcess[] = "utility";
-const char kCloudPrintServiceProcess[] = "service";
 const char kZygoteProcessType[] = "zygote";
 const char kRelauncherProcessType[] = "relauncher";
+const char kCodeSignCloneCleanupProcessType[] = "code-sign-clone-cleanup";
+const char kAppShimProcessType[] = "app-shim";
+const char kNoOpForTestingProcessType[] = "no-op-for-testing";
 
-}  // namespace switches
-}  // namespace policy
-}  // namespace sandbox
+}  // namespace sandbox::policy::switches

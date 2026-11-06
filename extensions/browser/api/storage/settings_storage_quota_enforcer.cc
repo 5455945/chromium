@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,21 +6,23 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/strings/stringprintf.h"
 #include "extensions/common/extension_api.h"
+
+using value_store::ValueStore;
 
 namespace extensions {
 
 namespace {
 
 // Resources there are a quota for.
-enum Resource {
-  QUOTA_BYTES,
-  QUOTA_BYTES_PER_ITEM,
-  MAX_ITEMS
+enum class Resource {
+  kQuotaBytes,
+  kQuotaBytesPerItem,
+  kMaxItems,
 };
 
 // Allocates a setting in a record of total and per-setting usage.
@@ -33,8 +35,7 @@ void Allocate(
   // TODO(kalman): Does this work with different encodings?
   // TODO(kalman): This is duplicating work that the leveldb delegate
   // implementation is about to do, and it would be nice to avoid this.
-  std::string value_as_json;
-  base::JSONWriter::Write(value, &value_as_json);
+  std::string value_as_json = base::WriteJson(value).value_or("");
   size_t new_size = key.size() + value_as_json.size();
   size_t existing_size = (*used_per_setting)[key];
 
@@ -43,16 +44,16 @@ void Allocate(
 }
 
 ValueStore::Status QuotaExceededError(Resource resource) {
-  const char* name = NULL;
+  const char* name = nullptr;
   switch (resource) {
-    case QUOTA_BYTES:
-      name = "QUOTA_BYTES";
+    case Resource::kQuotaBytes:
+      name = "Resource::kQuotaBytes";
       break;
-    case QUOTA_BYTES_PER_ITEM:
-      name = "QUOTA_BYTES_PER_ITEM";
+    case Resource::kQuotaBytesPerItem:
+      name = "Resource::kQuotaBytesPerItem";
       break;
-    case MAX_ITEMS:
-      name = "MAX_ITEMS";
+    case Resource::kMaxItems:
+      name = "Resource::kMaxItems";
       break;
   }
   CHECK(name);
@@ -70,7 +71,7 @@ SettingsStorageQuotaEnforcer::SettingsStorageQuotaEnforcer(
       used_total_(0),
       usage_calculated_(false) {}
 
-SettingsStorageQuotaEnforcer::~SettingsStorageQuotaEnforcer() {}
+SettingsStorageQuotaEnforcer::~SettingsStorageQuotaEnforcer() = default;
 
 size_t SettingsStorageQuotaEnforcer::GetBytesInUse(const std::string& key) {
   LazyCalculateUsage();
@@ -91,6 +92,10 @@ size_t SettingsStorageQuotaEnforcer::GetBytesInUse() {
   // implemented here.
   LazyCalculateUsage();
   return used_total_;
+}
+
+ValueStore::ReadResult SettingsStorageQuotaEnforcer::GetKeys() {
+  return HandleResult(delegate_->GetKeys());
 }
 
 ValueStore::ReadResult SettingsStorageQuotaEnforcer::Get(
@@ -116,11 +121,11 @@ ValueStore::WriteResult SettingsStorageQuotaEnforcer::Set(
 
   if (!(options & IGNORE_QUOTA)) {
     if (new_used_total > limits_.quota_bytes)
-      return WriteResult(QuotaExceededError(QUOTA_BYTES));
+      return WriteResult(QuotaExceededError(Resource::kQuotaBytes));
     if (new_used_per_setting[key] > limits_.quota_bytes_per_item)
-      return WriteResult(QuotaExceededError(QUOTA_BYTES_PER_ITEM));
+      return WriteResult(QuotaExceededError(Resource::kQuotaBytesPerItem));
     if (new_used_per_setting.size() > limits_.max_items)
-      return WriteResult(QuotaExceededError(MAX_ITEMS));
+      return WriteResult(QuotaExceededError(Resource::kMaxItems));
   }
 
   WriteResult result = HandleResult(delegate_->Set(options, key, value));
@@ -135,25 +140,25 @@ ValueStore::WriteResult SettingsStorageQuotaEnforcer::Set(
 }
 
 ValueStore::WriteResult SettingsStorageQuotaEnforcer::Set(
-    WriteOptions options, const base::DictionaryValue& values) {
+    WriteOptions options,
+    const base::DictValue& values) {
   LazyCalculateUsage();
   size_t new_used_total = used_total_;
   std::map<std::string, size_t> new_used_per_setting = used_per_setting_;
-  for (base::DictionaryValue::Iterator it(values); !it.IsAtEnd();
-       it.Advance()) {
-    Allocate(it.key(), it.value(), &new_used_total, &new_used_per_setting);
+  for (const auto [key, value] : values) {
+    Allocate(key, value, &new_used_total, &new_used_per_setting);
 
     if (!(options & IGNORE_QUOTA) &&
-        new_used_per_setting[it.key()] > limits_.quota_bytes_per_item) {
-      return WriteResult(QuotaExceededError(QUOTA_BYTES_PER_ITEM));
+        new_used_per_setting[key] > limits_.quota_bytes_per_item) {
+      return WriteResult(QuotaExceededError(Resource::kQuotaBytesPerItem));
     }
   }
 
   if (!(options & IGNORE_QUOTA)) {
     if (new_used_total > limits_.quota_bytes)
-      return WriteResult(QuotaExceededError(QUOTA_BYTES));
+      return WriteResult(QuotaExceededError(Resource::kQuotaBytes));
     if (new_used_per_setting.size() > limits_.max_items)
-      return WriteResult(QuotaExceededError(MAX_ITEMS));
+      return WriteResult(QuotaExceededError(Resource::kMaxItems));
   }
 
   WriteResult result = HandleResult(delegate_->Set(options, values));
@@ -230,9 +235,8 @@ void SettingsStorageQuotaEnforcer::LazyCalculateUsage() {
     return;
   }
 
-  for (base::DictionaryValue::Iterator it(maybe_settings.settings());
-       !it.IsAtEnd(); it.Advance()) {
-    Allocate(it.key(), it.value(), &used_total_, &used_per_setting_);
+  for (const auto [key, value] : maybe_settings.settings()) {
+    Allocate(key, value, &used_total_, &used_per_setting_);
   }
 
   usage_calculated_ = true;

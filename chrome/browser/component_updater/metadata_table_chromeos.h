@@ -1,15 +1,17 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_COMPONENT_UPDATER_METADATA_TABLE_CHROMEOS_H_
 #define CHROME_BROWSER_COMPONENT_UPDATER_METADATA_TABLE_CHROMEOS_H_
 
+#include <stddef.h>
+
 #include <memory>
 #include <string>
 
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/values.h"
 
 class PrefRegistrySimple;
@@ -23,6 +25,10 @@ namespace component_updater {
 class MetadataTable {
  public:
   explicit MetadataTable(PrefService* pref_service);
+
+  MetadataTable(const MetadataTable&) = delete;
+  MetadataTable& operator=(const MetadataTable&) = delete;
+
   ~MetadataTable();
 
   // Create and return a MetadataTable instance for testing purpose.
@@ -30,9 +36,6 @@ class MetadataTable {
 
   // Register a Dictionary in PrefService.
   static void RegisterPrefs(PrefRegistrySimple* registry);
-
-  // Adds or updates a component usage item for current active user.
-  bool AddComponentForCurrentUser(const std::string& component_name);
 
   // Deletes a component usage item for current active user.
   bool DeleteComponentForCurrentUser(const std::string& component_name);
@@ -66,18 +69,16 @@ class MetadataTable {
                            const std::string& component_name) const;
 
   // Returns the index of an installed item with the given |hashed_user_id| and
-  // |component_name|. Returns `installed_items_.GetList().size()` if no such
-  // item exists.
+  // |component_name|. Returns `installed_items_.size()` if
+  // no such item exists.
   size_t GetInstalledItemIndex(const std::string& hashed_user_id,
                                const std::string& component_name) const;
 
   // Information about installed items.
-  base::Value installed_items_;
+  base::ListValue installed_items_;
 
   // Local state PrefService.
-  PrefService* const pref_service_;
-
-  DISALLOW_COPY_AND_ASSIGN(MetadataTable);
+  const raw_ptr<PrefService> pref_service_;
 };
 
 }  // namespace component_updater

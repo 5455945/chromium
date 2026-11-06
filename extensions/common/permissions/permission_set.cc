@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,7 +17,7 @@ using extensions::mojom::APIPermissionID;
 
 namespace extensions {
 
-PermissionSet::PermissionSet() {}
+PermissionSet::PermissionSet() = default;
 PermissionSet::PermissionSet(APIPermissionSet apis,
                              ManifestPermissionSet manifest_permissions,
                              URLPatternSet explicit_hosts,
@@ -26,42 +26,18 @@ PermissionSet::PermissionSet(APIPermissionSet apis,
       manifest_permissions_(std::move(manifest_permissions)),
       explicit_hosts_(std::move(explicit_hosts)),
       scriptable_hosts_(std::move(scriptable_hosts)) {
-  // For explicit hosts, we require the path to be "/*". This is a little
-  // tricky, since URLPatternSets are backed by a std::set<>, where the
-  // elements are immutable (because they themselves are the keys). In order to
-  // work around this, we find the patterns we need to update, collect updated
-  // versions, remove them, and then insert the updated ones. This isn't very
-  // clean, but does mean that all the other URLPatterns in the set (which is
-  // likely the majority) get to be std::move'd efficiently.
-  // NOTE(devlin): This would be non-issue if URLPatternSet() was backed by e.g.
-  // a vector.
-  std::vector<URLPattern> modified_patterns;
-  for (auto iter = explicit_hosts_.begin(); iter != explicit_hosts_.end();) {
-    if (iter->path() == "/*") {
-      ++iter;
-      continue;
-    }
-    URLPattern modified_pattern(*iter);
-    modified_pattern.SetPath("/*");
-    modified_patterns.push_back(std::move(modified_pattern));
-    iter = explicit_hosts_.erase(iter);
-  }
-
-  for (URLPattern& pattern : modified_patterns)
-    explicit_hosts_.AddPattern(std::move(pattern));
-
-  InitImplicitPermissions();
+  CleanExplicitHostPaths();
   InitEffectiveHosts();
 }
 
-PermissionSet::~PermissionSet() {}
+PermissionSet::~PermissionSet() = default;
 
 PermissionSet::PermissionSet(PermissionSet&& other) = default;
 
 PermissionSet& PermissionSet::operator=(PermissionSet&& other) = default;
 
 // static
-std::unique_ptr<const PermissionSet> PermissionSet::CreateDifference(
+std::unique_ptr<PermissionSet> PermissionSet::CreateDifference(
     const PermissionSet& set1,
     const PermissionSet& set2) {
   APIPermissionSet apis;
@@ -78,13 +54,13 @@ std::unique_ptr<const PermissionSet> PermissionSet::CreateDifference(
   URLPatternSet scriptable_hosts = URLPatternSet::CreateDifference(
       set1.scriptable_hosts(), set2.scriptable_hosts());
 
-  return base::WrapUnique(new PermissionSet(
+  return std::make_unique<PermissionSet>(
       std::move(apis), std::move(manifest_permissions),
-      std::move(explicit_hosts), std::move(scriptable_hosts)));
+      std::move(explicit_hosts), std::move(scriptable_hosts));
 }
 
 // static
-std::unique_ptr<const PermissionSet> PermissionSet::CreateIntersection(
+std::unique_ptr<PermissionSet> PermissionSet::CreateIntersection(
     const PermissionSet& set1,
     const PermissionSet& set2,
     URLPatternSet::IntersectionBehavior intersection_behavior) {
@@ -101,13 +77,13 @@ std::unique_ptr<const PermissionSet> PermissionSet::CreateIntersection(
   URLPatternSet scriptable_hosts = URLPatternSet::CreateIntersection(
       set1.scriptable_hosts(), set2.scriptable_hosts(), intersection_behavior);
 
-  return base::WrapUnique(new PermissionSet(
+  return std::make_unique<PermissionSet>(
       std::move(apis), std::move(manifest_permissions),
-      std::move(explicit_hosts), std::move(scriptable_hosts)));
+      std::move(explicit_hosts), std::move(scriptable_hosts));
 }
 
 // static
-std::unique_ptr<const PermissionSet> PermissionSet::CreateUnion(
+std::unique_ptr<PermissionSet> PermissionSet::CreateUnion(
     const PermissionSet& set1,
     const PermissionSet& set2) {
   APIPermissionSet apis;
@@ -124,9 +100,9 @@ std::unique_ptr<const PermissionSet> PermissionSet::CreateUnion(
   URLPatternSet scriptable_hosts = URLPatternSet::CreateUnion(
       set1.scriptable_hosts(), set2.scriptable_hosts());
 
-  return base::WrapUnique(new PermissionSet(
+  return std::make_unique<PermissionSet>(
       std::move(apis), std::move(manifest_permissions),
-      std::move(explicit_hosts), std::move(scriptable_hosts)));
+      std::move(explicit_hosts), std::move(scriptable_hosts));
 }
 
 bool PermissionSet::operator==(
@@ -171,10 +147,10 @@ bool PermissionSet::IsEmpty() const {
 }
 
 bool PermissionSet::HasAPIPermission(APIPermissionID id) const {
-  return apis().find(id) != apis().end();
+  return apis().count(id);
 }
 
-bool PermissionSet::HasAPIPermission(const std::string& permission_name) const {
+bool PermissionSet::HasAPIPermission(std::string_view permission_name) const {
   const APIPermissionInfo* permission =
       PermissionsInfo::GetInstance()->GetByName(permission_name);
   // Ensure our PermissionsProvider is aware of this permission.
@@ -183,7 +159,7 @@ bool PermissionSet::HasAPIPermission(const std::string& permission_name) const {
 }
 
 bool PermissionSet::CheckAPIPermission(APIPermissionID permission) const {
-  return CheckAPIPermissionWithParam(permission, NULL);
+  return CheckAPIPermissionWithParam(permission, nullptr);
 }
 
 bool PermissionSet::CheckAPIPermissionWithParam(
@@ -216,23 +192,65 @@ bool PermissionSet::HasEffectiveAccessToAllHosts() const {
 }
 
 bool PermissionSet::ShouldWarnAllHosts(bool include_api_permissions) const {
-  if (host_permissions_should_warn_all_hosts_ == UNINITIALIZED)
+  if (host_permissions_should_warn_all_hosts_ ==
+      ShouldWarnAllHostsType::kUninitialized) {
     InitShouldWarnAllHostsForHostPermissions();
+  }
 
-  if (host_permissions_should_warn_all_hosts_ == WARN_ALL_HOSTS)
+  if (host_permissions_should_warn_all_hosts_ ==
+      ShouldWarnAllHostsType::kWarnAllHosts) {
     return true;
+  }
 
   if (!include_api_permissions)
     return false;
 
-  if (api_permissions_should_warn_all_hosts_ == UNINITIALIZED)
+  if (api_permissions_should_warn_all_hosts_ ==
+      ShouldWarnAllHostsType::kUninitialized) {
     InitShouldWarnAllHostsForAPIPermissions();
+  }
 
-  return api_permissions_should_warn_all_hosts_ == WARN_ALL_HOSTS;
+  return api_permissions_should_warn_all_hosts_ ==
+         ShouldWarnAllHostsType::kWarnAllHosts;
 }
 
 bool PermissionSet::HasEffectiveAccessToURL(const GURL& url) const {
   return effective_hosts().MatchesURL(url);
+}
+
+void PermissionSet::SetAPIPermissions(APIPermissionSet new_apis) {
+  apis_ = std::move(new_apis);
+  // Since we're rewriting the API permissions, we need to re-initialize the
+  // value of whether to warn about all hosts.
+  api_permissions_should_warn_all_hosts_ =
+      ShouldWarnAllHostsType::kUninitialized;
+}
+
+void PermissionSet::SetManifestPermissions(
+    ManifestPermissionSet new_manifest_permissions) {
+  manifest_permissions_ = std::move(new_manifest_permissions);
+}
+
+void PermissionSet::SetExplicitHosts(URLPatternSet new_explicit_hosts) {
+  explicit_hosts_ = std::move(new_explicit_hosts);
+  // Since we're rewriting the host permissions, we need to re-initialize the
+  // value of whether to warn about all hosts, clean up the paths for the
+  // explicit hosts, and re-calculate the effective hosts (the combination of
+  // explicit and scriptable hosts).
+  host_permissions_should_warn_all_hosts_ =
+      ShouldWarnAllHostsType::kUninitialized;
+  CleanExplicitHostPaths();
+  InitEffectiveHosts();
+}
+
+void PermissionSet::SetScriptableHosts(URLPatternSet new_scriptable_hosts) {
+  scriptable_hosts_ = std::move(new_scriptable_hosts);
+  // Since we're rewriting the host permissions, we need to re-initialize the
+  // value of whether to warn about all hosts and also the effective hosts (the
+  // combination of explicit and scriptable hosts).
+  host_permissions_should_warn_all_hosts_ =
+      ShouldWarnAllHostsType::kUninitialized;
+  InitEffectiveHosts();
 }
 
 PermissionSet::PermissionSet(const PermissionSet& other)
@@ -242,14 +260,30 @@ PermissionSet::PermissionSet(const PermissionSet& other)
       scriptable_hosts_(other.scriptable_hosts_.Clone()),
       effective_hosts_(other.effective_hosts_.Clone()) {}
 
-void PermissionSet::InitImplicitPermissions() {
-  // The downloads permission implies the internal version as well.
-  if (apis_.find(APIPermissionID::kDownloads) != apis_.end())
-    apis_.insert(APIPermissionID::kDownloadsInternal);
+void PermissionSet::CleanExplicitHostPaths() {
+  // For explicit hosts, we require the path to be "/*". This is a little
+  // tricky, since URLPatternSets are backed by a std::set<>, where the
+  // elements are immutable (because they themselves are the keys). In order to
+  // work around this, we find the patterns we need to update, collect updated
+  // versions, remove them, and then insert the updated ones. This isn't very
+  // clean, but does mean that all the other URLPatterns in the set (which is
+  // likely the majority) get to be std::move'd efficiently.
+  // NOTE(devlin): This would be non-issue if URLPatternSet() was backed by e.g.
+  // a vector.
+  std::vector<URLPattern> modified_patterns;
+  for (auto iter = explicit_hosts_.begin(); iter != explicit_hosts_.end();) {
+    if (iter->path() == "/*") {
+      ++iter;
+      continue;
+    }
+    URLPattern modified_pattern(*iter);
+    modified_pattern.SetPath("/*");
+    modified_patterns.push_back(std::move(modified_pattern));
+    iter = explicit_hosts_.erase(iter);
+  }
 
-  // The fileBrowserHandler permission implies the internal version as well.
-  if (apis_.find(APIPermissionID::kFileBrowserHandler) != apis_.end())
-    apis_.insert(APIPermissionID::kFileBrowserHandlerInternal);
+  for (URLPattern& pattern : modified_patterns)
+    explicit_hosts_.AddPattern(std::move(pattern));
 }
 
 void PermissionSet::InitEffectiveHosts() {
@@ -258,28 +292,35 @@ void PermissionSet::InitEffectiveHosts() {
 }
 
 void PermissionSet::InitShouldWarnAllHostsForHostPermissions() const {
-  DCHECK_EQ(UNINITIALIZED, host_permissions_should_warn_all_hosts_);
-  host_permissions_should_warn_all_hosts_ = DONT_WARN_ALL_HOSTS;
+  DCHECK_EQ(ShouldWarnAllHostsType::kUninitialized,
+            host_permissions_should_warn_all_hosts_);
+  host_permissions_should_warn_all_hosts_ =
+      ShouldWarnAllHostsType::kDontWarnAllHosts;
   if (effective_hosts().MatchesAllURLs()) {
-    host_permissions_should_warn_all_hosts_ = WARN_ALL_HOSTS;
+    host_permissions_should_warn_all_hosts_ =
+        ShouldWarnAllHostsType::kWarnAllHosts;
     return;
   }
 
   for (const auto& pattern : effective_hosts_) {
     if (pattern.MatchesEffectiveTld()) {
-      host_permissions_should_warn_all_hosts_ = WARN_ALL_HOSTS;
+      host_permissions_should_warn_all_hosts_ =
+          ShouldWarnAllHostsType::kWarnAllHosts;
       break;
     }
   }
 }
 
 void PermissionSet::InitShouldWarnAllHostsForAPIPermissions() const {
-  DCHECK_EQ(UNINITIALIZED, api_permissions_should_warn_all_hosts_);
-  api_permissions_should_warn_all_hosts_ = DONT_WARN_ALL_HOSTS;
+  DCHECK_EQ(ShouldWarnAllHostsType::kUninitialized,
+            api_permissions_should_warn_all_hosts_);
+  api_permissions_should_warn_all_hosts_ =
+      ShouldWarnAllHostsType::kDontWarnAllHosts;
 
   for (const auto* api : apis_) {
     if (api->info()->implies_full_url_access()) {
-      api_permissions_should_warn_all_hosts_ = WARN_ALL_HOSTS;
+      api_permissions_should_warn_all_hosts_ =
+          ShouldWarnAllHostsType::kWarnAllHosts;
       break;
     }
   }

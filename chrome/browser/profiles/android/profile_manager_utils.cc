@@ -1,29 +1,29 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
 #include <vector>
 
 #include "base/android/jni_android.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/profiles/android/jni_headers/ProfileManagerUtils_jni.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "components/prefs/pref_service.h"
+#include "components/variations/service/variations_service.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/storage_partition.h"
 #include "services/network/public/mojom/cookie_manager.mojom.h"
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/browser/profiles/android/jni_headers/ProfileManagerUtils_jni.h"
+
+using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
 
 namespace {
-
-void FlushStoragePartition(content::StoragePartition* partition) {
-  partition->Flush();
-}
 
 void CommitPendingWritesForProfile(Profile* profile) {
   // These calls are asynchronous. They may not finish (and may not even
@@ -34,7 +34,7 @@ void CommitPendingWritesForProfile(Profile* profile) {
       ->GetCookieManagerForBrowserProcess()
       ->FlushCookieStore(
           network::mojom::CookieManager::FlushCookieStoreCallback());
-  profile->ForEachStoragePartition(base::BindRepeating(FlushStoragePartition));
+  profile->ForEachLoadedStoragePartition(&content::StoragePartition::Flush);
 }
 
 void RemoveSessionCookiesForProfile(Profile* profile) {
@@ -51,19 +51,24 @@ void RemoveSessionCookiesForProfile(Profile* profile) {
 
 static void JNI_ProfileManagerUtils_FlushPersistentDataForAllProfiles(
     JNIEnv* env) {
-  std::vector<Profile*> loaded_profiles =
-      g_browser_process->profile_manager()->GetLoadedProfiles();
-  std::for_each(loaded_profiles.begin(), loaded_profiles.end(),
-                CommitPendingWritesForProfile);
+  std::ranges::for_each(
+      g_browser_process->profile_manager()->GetLoadedProfiles(),
+      CommitPendingWritesForProfile);
 
-  if (g_browser_process->local_state())
+  if (g_browser_process->local_state()) {
     g_browser_process->local_state()->CommitPendingWrite();
+  }
+
+  if (g_browser_process->variations_service()) {
+    g_browser_process->variations_service()->CommitPendingWrite();
+  }
 }
 
 static void JNI_ProfileManagerUtils_RemoveSessionCookiesForAllProfiles(
     JNIEnv* env) {
-  std::vector<Profile*> loaded_profiles =
-      g_browser_process->profile_manager()->GetLoadedProfiles();
-  std::for_each(loaded_profiles.begin(), loaded_profiles.end(),
-                RemoveSessionCookiesForProfile);
+  std::ranges::for_each(
+      g_browser_process->profile_manager()->GetLoadedProfiles(),
+      RemoveSessionCookiesForProfile);
 }
+
+DEFINE_JNI(ProfileManagerUtils)

@@ -28,41 +28,54 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_CANVAS_CANVAS2D_PATH_2D_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_CANVAS_CANVAS2D_PATH_2D_H_
 
-#include "base/macros.h"
-#include "third_party/blink/renderer/bindings/core/v8/v8_dom_matrix_2d_init.h"
+#include <cmath>
+
+#include "base/check.h"
+#include "base/compiler_specific.h"
+#include "base/notreached.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_union_path2d_string.h"
-#include "third_party/blink/renderer/core/geometry/dom_matrix.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/core/geometry/dom_matrix_read_only.h"
 #include "third_party/blink/renderer/core/svg/svg_path_utilities.h"
 #include "third_party/blink/renderer/modules/canvas/canvas2d/canvas_path.h"
+#include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
-#include "third_party/blink/renderer/platform/transforms/affine_transform.h"
+#include "third_party/blink/renderer/platform/geometry/path.h"
+#include "third_party/blink/renderer/platform/geometry/path_builder.h"
+#include "third_party/blink/renderer/platform/heap/forward.h"  // IWYU pragma: keep (blink::Visitor)
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+
+// IWYU pragma: no_include "third_party/blink/renderer/platform/heap/visitor.h"
 
 namespace blink {
 
+class DOMMatrix2DInit;
 class ExceptionState;
+class ScriptState;
 
 class MODULES_EXPORT Path2D final : public ScriptWrappable, public CanvasPath {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  static Path2D* Create(const V8UnionPath2DOrString* path) {
+  static Path2D* Create(ScriptState* script_state,
+                        const V8UnionPath2DOrString* path) {
     DCHECK(path);
     switch (path->GetContentType()) {
       case V8UnionPath2DOrString::ContentType::kPath2D:
-        return MakeGarbageCollected<Path2D>(path->GetAsPath2D());
+        return MakeGarbageCollected<Path2D>(script_state, path->GetAsPath2D());
       case V8UnionPath2DOrString::ContentType::kString:
-        return MakeGarbageCollected<Path2D>(path->GetAsString());
+        return MakeGarbageCollected<Path2D>(script_state, path->GetAsString());
     }
     NOTREACHED();
-    return nullptr;
   }
-  static Path2D* Create() { return MakeGarbageCollected<Path2D>(); }
-  static Path2D* Create(const Path& path) {
-    return MakeGarbageCollected<Path2D>(path);
+  static Path2D* Create(ScriptState* script_state) {
+    return MakeGarbageCollected<Path2D>(script_state);
   }
-
-  const Path& GetPath() const { return path_; }
+  static Path2D* Create(ScriptState* script_state, const Path& path) {
+    return MakeGarbageCollected<Path2D>(script_state, path);
+  }
 
   void addPath(Path2D* path,
                DOMMatrix2DInit* transform,
@@ -74,19 +87,38 @@ class MODULES_EXPORT Path2D final : public ScriptWrappable, public CanvasPath {
         !std::isfinite(matrix->m22()) || !std::isfinite(matrix->m41()) ||
         !std::isfinite(matrix->m42()))
       return;
-    path_.AddPath(path->GetPath(), matrix->GetAffineTransform());
+    GetModifiablePath().AddPath(path->GetPath(), matrix->GetAffineTransform());
   }
 
-  Path2D() : CanvasPath() {}
-  Path2D(const Path& path) : CanvasPath(path) {}
-  Path2D(Path2D* path) : CanvasPath(path->GetPath()) {}
-  Path2D(const String& path_data) : CanvasPath() {
-    BuildPathFromString(path_data, path_);
+  void Trace(Visitor*) const override;
+
+  ExecutionContext* GetTopExecutionContext() const override {
+    return context_.Get();
   }
+
+  explicit Path2D(ScriptState* script_state)
+      : context_(ExecutionContext::From(script_state)) {
+    GetModifiablePath().SetIsVolatile(false);
+  }
+  Path2D(ScriptState* script_state, const Path& path)
+      : CanvasPath(path), context_(ExecutionContext::From(script_state)) {
+    GetModifiablePath().SetIsVolatile(false);
+  }
+  Path2D(ScriptState* script_state, Path2D* path)
+      : Path2D(script_state, path->GetPath()) {}
+  Path2D(ScriptState* script_state, const String& path_data)
+      : context_(ExecutionContext::From(script_state)) {
+    GetModifiablePath() = PathBuilder(BuildPathFromString(path_data));
+    GetModifiablePath().SetIsVolatile(false);
+  }
+
+  Path2D(const Path2D&) = delete;
+  Path2D& operator=(const Path2D&) = delete;
+
   ~Path2D() override = default;
 
  private:
-  DISALLOW_COPY_AND_ASSIGN(Path2D);
+  Member<ExecutionContext> context_;
 };
 
 }  // namespace blink

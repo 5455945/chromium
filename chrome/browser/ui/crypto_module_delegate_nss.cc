@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,8 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/synchronization/waitable_event.h"
 #include "base/threading/thread_restrictions.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
@@ -22,13 +23,13 @@ ChromeNSSCryptoModuleDelegate::ChromeNSSCryptoModuleDelegate(
              base::WaitableEvent::InitialState::NOT_SIGNALED),
       cancelled_(false) {}
 
-ChromeNSSCryptoModuleDelegate::~ChromeNSSCryptoModuleDelegate() {}
+ChromeNSSCryptoModuleDelegate::~ChromeNSSCryptoModuleDelegate() = default;
 
 std::string ChromeNSSCryptoModuleDelegate::RequestPassword(
     const std::string& slot_name,
     bool retry,
     bool* cancelled) {
-  DCHECK(!event_.IsSignaled());
+  CHECK(!event_.IsSignaled(), base::NotFatalUntil::M162);
   event_.Reset();
 
   if (content::GetUIThreadTaskRunner({})->PostTask(
@@ -48,7 +49,7 @@ std::string ChromeNSSCryptoModuleDelegate::RequestPassword(
 
 void ChromeNSSCryptoModuleDelegate::ShowDialog(const std::string& slot_name,
                                                bool retry) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
   ShowCryptoModulePasswordDialog(
       slot_name, retry, reason_, server_.host(),
       nullptr,  // TODO(mattm): Supply parent window.
@@ -59,10 +60,11 @@ void ChromeNSSCryptoModuleDelegate::ShowDialog(const std::string& slot_name,
 }
 
 void ChromeNSSCryptoModuleDelegate::GotPassword(const std::string& password) {
-  if (!password.empty())
+  if (!password.empty()) {
     password_ = password;
-  else
+  } else {
     cancelled_ = true;
+  }
   event_.Signal();
 }
 

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,39 +24,31 @@ enum RTCRtcpMuxPolicy {
     "require"
 };
 
-// Nonstandard
-// For usage, see transition plan referenced from https://crbug.com/799030
-enum SdpSemantics {
-  "plan-b",
-  "unified-plan"
+// https://w3c.github.io/webrtc-extensions/#rtp-header-extension-encryption-policy
+
+enum RTCRtpHeaderEncryptionPolicy {
+    "disable",
+    "negotiate",
+    "require"
 };
 
 // https://w3c.github.io/webrtc-pc/#rtcconfiguration-dictionary
 
 dictionary RTCConfiguration {
-    sequence<RTCIceServer> iceServers;
-    // TODO(foolip): |iceTransportPolicy| default should be "all", but it is
-    // omitted to allow fallback to |iceTransports| if not specified.
+    sequence<RTCIceServer> iceServers = [];
     RTCIceTransportPolicy iceTransportPolicy;
-    // TODO(foolip): |iceTransports| is not in the spec.
-    // https://crbug.com/659131
-    RTCIceTransportPolicy iceTransports;
+    [RuntimeEnabled=RTCConfigurationIceTransports] RTCIceTransportPolicy iceTransports;
     RTCBundlePolicy bundlePolicy = "balanced";
     RTCRtcpMuxPolicy rtcpMuxPolicy = "require";
+    // https://w3c.github.io/webrtc-extensions/#rtp-header-extension-encryption
+    [RuntimeEnabled=RtcRtpHeaderEncryptionPolicy] RTCRtpHeaderEncryptionPolicy rtpHeaderEncryptionPolicy = "negotiate";
     // TODO(foolip): DOMString peerIdentity;
-    sequence<RTCCertificate> certificates;
+    sequence<RTCCertificate> certificates = [];
     [EnforceRange] octet iceCandidatePoolSize = 0;
-    // Nonstandard, added for Unified Plan migration
-    [RuntimeEnabled=RTCUnifiedPlan] SdpSemantics sdpSemantics;
-    // Nonstandard, added for backward compatibility reasons during a
-    // transitional phase. https://crbug.com/908377
-    boolean offerExtmapAllowMixed;
     [RuntimeEnabled=RtcAudioJitterBufferMaxPackets] long rtcAudioJitterBufferMaxPackets;
     [RuntimeEnabled=RtcAudioJitterBufferMaxPackets] boolean rtcAudioJitterBufferFastAccelerate;
     [RuntimeEnabled=RtcAudioJitterBufferMaxPackets] long rtcAudioJitterBufferMinDelayMs;
     boolean encodedInsertableStreams = false;
-    [DeprecateAs=ForceEncodedAudioInsertableStreams,
-     RuntimeEnabled=RTCInsertableStreams] boolean forceEncodedAudioInsertableStreams = false;
-    [DeprecateAs=ForceEncodedVideoInsertableStreams,
-     RuntimeEnabled=RTCInsertableStreams] boolean forceEncodedVideoInsertableStreams = false;
+    // https://w3c.github.io/webrtc-extensions/#always-negotiating-datachannels
+    [RuntimeEnabled=RtcAlwaysNegotiateDataChannels] boolean alwaysNegotiateDataChannels = false;
 };

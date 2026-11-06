@@ -1,32 +1,53 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/system/holding_space/holding_space_item_chip_view.h"
 
 #include <algorithm>
+#include <optional>
+#include <variant>
 
 #include "ash/bubble/bubble_utils.h"
 #include "ash/public/cpp/holding_space/holding_space_client.h"
+#include "ash/public/cpp/holding_space/holding_space_colors.h"
 #include "ash/public/cpp/holding_space/holding_space_constants.h"
 #include "ash/public/cpp/holding_space/holding_space_controller.h"
+#include "ash/public/cpp/holding_space/holding_space_image.h"
 #include "ash/public/cpp/holding_space/holding_space_item.h"
+#include "ash/public/cpp/holding_space/holding_space_metrics.h"
 #include "ash/public/cpp/holding_space/holding_space_progress.h"
+#include "ash/public/cpp/holding_space/holding_space_util.h"
 #include "ash/public/cpp/rounded_image_view.h"
 #include "ash/resources/vector_icons/vector_icons.h"
-#include "ash/style/ash_color_provider.h"
+#include "ash/strings/grit/ash_strings.h"
+#include "ash/style/ash_color_id.h"
+#include "ash/style/dark_light_mode_controller_impl.h"
+#include "ash/style/typography.h"
 #include "ash/system/holding_space/holding_space_item_view.h"
-#include "ash/system/holding_space/holding_space_progress_ring.h"
+#include "ash/system/holding_space/holding_space_progress_indicator_util.h"
 #include "ash/system/holding_space/holding_space_view_delegate.h"
-#include "base/bind.h"
+#include "ash/system/progress_indicator/progress_indicator.h"
+#include "ash/system/progress_indicator/progress_indicator_animation_registry.h"
+#include "ash/system/progress_indicator/progress_ring_animation.h"
+#include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
+#include "third_party/abseil-cpp/absl/functional/overload.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/models/image_model.h"
+#include "ui/chromeos/styles/cros_styles.h"
+#include "ui/color/color_id.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_owner.h"
 #include "ui/compositor/paint_recorder.h"
+#include "ui/compositor/scoped_layer_animation_settings.h"
+#include "ui/gfx/geometry/transform_util.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/gfx/scoped_canvas.h"
 #include "ui/gfx/skia_paint_util.h"
-#include "ui/gfx/transform_util.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/image_button.h"
@@ -36,23 +57,38 @@
 #include "ui/views/layout/box_layout_view.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/layout/flex_layout.h"
+#include "ui/views/metadata/view_factory.h"
 
 namespace ash {
 namespace {
 
 // Appearance.
 constexpr int kChildSpacing = 8;
-constexpr float kInProgressImageScaleFactor = 0.7f;
 constexpr int kLabelMaskGradientWidth = 16;
-constexpr gfx::Insets kLabelMargins(/*top=*/4, 0, /*bottom=*/4, /*right=*/2);
-constexpr gfx::Insets kPadding(0, /*left=*/8, 0, /*right=*/10);
+constexpr auto kLabelMargins = gfx::Insets::TLBR(4, 0, 4, 2);
+constexpr auto kPadding = gfx::Insets::TLBR(0, 8, 0, 10);
 constexpr int kPreferredHeight = 40;
 constexpr int kPreferredWidth = 160;
+constexpr int kProgressIndicatorSize = 26;
 constexpr int kSecondaryActionIconSize = 16;
+
+// Animation.
+constexpr base::TimeDelta kInProgressImageScaleDuration =
+    base::Milliseconds(150);
+constexpr float kInProgressImageScaleFactor = 0.7f;
+
+// Helpers ---------------------------------------------------------------------
+
+void ToCenteredSize(gfx::Rect* rect, const gfx::Size& size) {
+  rect->Outset(gfx::Outsets::VH(size.height(), size.width()));
+  rect->ClampToCenteredSize(size);
+}
 
 // ObservableRoundedImageView --------------------------------------------------
 
 class ObservableRoundedImageView : public RoundedImageView {
+  METADATA_HEADER(ObservableRoundedImageView, RoundedImageView)
+
  public:
   ObservableRoundedImageView() = default;
   ObservableRoundedImageView(const ObservableRoundedImageView&) = delete;
@@ -76,6 +112,9 @@ class ObservableRoundedImageView : public RoundedImageView {
   BoundsChangedCallback bounds_changed_callback_;
 };
 
+BEGIN_METADATA(ObservableRoundedImageView)
+END_METADATA
+
 BEGIN_VIEW_BUILDER(/*no export*/, ObservableRoundedImageView, RoundedImageView)
 VIEW_BUILDER_PROPERTY(ObservableRoundedImageView::BoundsChangedCallback,
                       BoundsChangedCallback)
@@ -84,6 +123,8 @@ END_VIEW_BUILDER
 // PaintCallbackLabel ----------------------------------------------------------
 
 class PaintCallbackLabel : public views::Label {
+  METADATA_HEADER(PaintCallbackLabel, views::Label)
+
  public:
   PaintCallbackLabel() = default;
   PaintCallbackLabel(const PaintCallbackLabel&) = delete;
@@ -98,12 +139,12 @@ class PaintCallbackLabel : public views::Label {
     layer()->SetFillsBoundsOpaquely(fills_bounds_opaquely);
   }
 
-  void SetStyle(bubble_utils::LabelStyle style) {
+  void SetStyle(TypographyToken style) {
     bubble_utils::ApplyStyle(this, style);
   }
 
   void SetViewAccessibilityIsIgnored(bool is_ignored) {
-    GetViewAccessibility().OverrideIsIgnored(is_ignored);
+    GetViewAccessibility().SetIsIgnored(is_ignored);
   }
 
  private:
@@ -117,50 +158,75 @@ class PaintCallbackLabel : public views::Label {
   Callback callback_;
 };
 
+BEGIN_METADATA(PaintCallbackLabel)
+END_METADATA
+
 BEGIN_VIEW_BUILDER(/*no export*/, PaintCallbackLabel, views::Label)
 VIEW_BUILDER_PROPERTY(PaintCallbackLabel::Callback, Callback)
-VIEW_BUILDER_PROPERTY(bubble_utils::LabelStyle, Style)
+VIEW_BUILDER_PROPERTY(TypographyToken, Style)
 VIEW_BUILDER_PROPERTY(bool, PaintToLayer)
 VIEW_BUILDER_PROPERTY(bool, ViewAccessibilityIsIgnored)
 END_VIEW_BUILDER
 
-// ProgressRingView ------------------------------------------------------------
+// ProgressIndicatorView -------------------------------------------------------
 
-class ProgressRingView : public views::View {
+class ProgressIndicatorView : public views::View {
+  METADATA_HEADER(ProgressIndicatorView, views::View)
+
  public:
-  ProgressRingView() = default;
-  ProgressRingView(const ProgressRingView&) = delete;
-  ProgressRingView& operator=(const ProgressRingView&) = delete;
-  ~ProgressRingView() override = default;
+  ProgressIndicatorView() = default;
+  ProgressIndicatorView(const ProgressIndicatorView&) = delete;
+  ProgressIndicatorView& operator=(const ProgressIndicatorView&) = delete;
+  ~ProgressIndicatorView() override = default;
+
+  // Copies the address of `progress_indicator_` to the specified `ptr`.
+  // NOTE: This method should only be invoked after `SetHoldingSpaceItem()`.
+  void CopyProgressIndicatorAddressTo(raw_ptr<ProgressIndicator>* ptr) {
+    DCHECK(progress_indicator_);
+    *ptr = progress_indicator_.get();
+  }
 
   // Sets the underlying `item` for which to indicate progress.
   // NOTE: This method should be invoked only once.
   void SetHoldingSpaceItem(const HoldingSpaceItem* item) {
-    DCHECK(!progress_ring_);
-    progress_ring_ = HoldingSpaceProgressRing::CreateForItem(item);
+    DCHECK(!progress_indicator_);
+    progress_indicator_ =
+        holding_space_util::CreateProgressIndicatorForItem(item);
 
     SetPaintToLayer();
     layer()->SetFillsBoundsOpaquely(false);
-    layer()->Add(progress_ring_->layer());
+    layer()->Add(progress_indicator_->CreateLayer(base::BindRepeating(
+        [](const ProgressIndicatorView* self, ui::ColorId color_id) {
+          return self->GetColorProvider()->GetColor(color_id);
+        },
+        base::Unretained(this))));
   }
 
  private:
   // views::View:
   void OnBoundsChanged(const gfx::Rect& previous_bounds) override {
-    if (progress_ring_)
-      progress_ring_->layer()->SetBounds(GetLocalBounds());
+    if (progress_indicator_) {
+      gfx::Rect bounds(GetLocalBounds());
+      ToCenteredSize(&bounds,
+                     gfx::Size(kProgressIndicatorSize, kProgressIndicatorSize));
+      progress_indicator_->layer()->SetBounds(bounds);
+    }
   }
 
   void OnThemeChanged() override {
     views::View::OnThemeChanged();
-    if (progress_ring_)
-      progress_ring_->InvalidateLayer();
+    if (progress_indicator_)
+      progress_indicator_->InvalidateLayer();
   }
 
-  std::unique_ptr<HoldingSpaceProgressRing> progress_ring_;
+  std::unique_ptr<ProgressIndicator> progress_indicator_;
 };
 
-BEGIN_VIEW_BUILDER(/*no export*/, ProgressRingView, views::View)
+BEGIN_METADATA(ProgressIndicatorView)
+END_METADATA
+
+BEGIN_VIEW_BUILDER(/*no export*/, ProgressIndicatorView, views::View)
+VIEW_BUILDER_METHOD(CopyProgressIndicatorAddressTo, raw_ptr<ProgressIndicator>*)
 VIEW_BUILDER_PROPERTY(const HoldingSpaceItem*, HoldingSpaceItem)
 END_VIEW_BUILDER
 
@@ -169,7 +235,7 @@ END_VIEW_BUILDER
 
 DEFINE_VIEW_BUILDER(/*no export*/, ash::ObservableRoundedImageView)
 DEFINE_VIEW_BUILDER(/*no export*/, ash::PaintCallbackLabel)
-DEFINE_VIEW_BUILDER(/*no export*/, ash::ProgressRingView)
+DEFINE_VIEW_BUILDER(/*no export*/, ash::ProgressIndicatorView)
 
 namespace ash {
 namespace {
@@ -197,13 +263,6 @@ views::Builder<views::ImageButton> CreateSecondaryActionBuilder() {
   return secondary_action;
 }
 
-// TODO(crbug.com/1202796): Create ash colors.
-// Returns the theme color to use for text in multiselect.
-SkColor GetMultiSelectTextColor() {
-  return AshColorProvider::Get()->IsDarkModeEnabled() ? gfx::kGoogleBlue100
-                                                      : gfx::kGoogleBlue800;
-}
-
 }  // namespace
 
 // HoldingSpaceItemChipView ----------------------------------------------------
@@ -222,7 +281,7 @@ HoldingSpaceItemChipView::HoldingSpaceItemChipView(
       .SetCollapseMargins(true)
       .SetIgnoreDefaultMainAxisMargins(true)
       .SetInteriorMargin(gfx::Insets(kPadding))
-      .SetDefault(views::kMarginsKey, gfx::Insets(0, kChildSpacing));
+      .SetDefault(views::kMarginsKey, gfx::Insets::VH(0, kChildSpacing));
 
   auto paint_label_mask_callback = base::BindRepeating(
       &HoldingSpaceItemChipView::OnPaintLabelMask, base::Unretained(this));
@@ -235,8 +294,9 @@ HoldingSpaceItemChipView::HoldingSpaceItemChipView(
       .SetPreferredSize(gfx::Size(kPreferredWidth, kPreferredHeight))
       .SetLayoutManager(std::move(layout_manager))
       .AddChild(
-          views::Builder<ProgressRingView>()
+          views::Builder<ProgressIndicatorView>()
               .SetHoldingSpaceItem(item)
+              .CopyProgressIndicatorAddressTo(&progress_indicator_)
               .SetUseDefaultFillLayout(true)
               .AddChild(views::Builder<ObservableRoundedImageView>()
                             .SetCornerRadius(kHoldingSpaceChipIconSize / 2)
@@ -245,24 +305,36 @@ HoldingSpaceItemChipView::HoldingSpaceItemChipView(
                                 base::Unretained(this)))
                             .CopyAddressTo(&image_)
                             .SetID(kHoldingSpaceItemImageId))
-              .AddChild(CreateCheckmarkBuilder())
+              .AddChild(CreateCheckmarkBuilder(kHoldingSpaceChipIconSize))
               .AddChild(
                   views::Builder<views::View>()
                       .CopyAddressTo(&secondary_action_container_)
                       .SetID(kHoldingSpaceItemSecondaryActionContainerId)
                       .SetUseDefaultFillLayout(true)
                       .SetVisible(false)
-                      .AddChild(CreateSecondaryActionBuilder()
-                                    .CopyAddressTo(&secondary_action_pause_)
-                                    .SetID(kHoldingSpaceItemPauseButtonId)
-                                    .SetCallback(secondary_action_callback)
-                                    .SetVisible(false))
-                      .AddChild(CreateSecondaryActionBuilder()
-                                    .CopyAddressTo(&secondary_action_resume_)
-                                    .SetID(kHoldingSpaceItemResumeButtonId)
-                                    .SetCallback(secondary_action_callback)
-                                    .SetFlipCanvasOnPaintForRTLUI(false)
-                                    .SetVisible(false))))
+                      .AddChild(
+                          CreateSecondaryActionBuilder()
+                              .CopyAddressTo(&secondary_action_pause_)
+                              .SetID(kHoldingSpaceItemPauseButtonId)
+                              .SetCallback(secondary_action_callback)
+                              .SetVisible(false)
+                              .SetImageModel(
+                                  views::Button::STATE_NORMAL,
+                                  ui::ImageModel::FromVectorIcon(
+                                      kPauseIcon, kColorAshButtonIconColor,
+                                      kSecondaryActionIconSize)))
+                      .AddChild(
+                          CreateSecondaryActionBuilder()
+                              .CopyAddressTo(&secondary_action_resume_)
+                              .SetID(kHoldingSpaceItemResumeButtonId)
+                              .SetCallback(secondary_action_callback)
+                              .SetFlipCanvasOnPaintForRTLUI(false)
+                              .SetVisible(false)
+                              .SetImageModel(
+                                  views::Button::STATE_NORMAL,
+                                  ui::ImageModel::FromVectorIcon(
+                                      kResumeIcon, kColorAshButtonIconColor,
+                                      kSecondaryActionIconSize)))))
       .AddChild(
           views::Builder<views::View>()
               .SetUseDefaultFillLayout(true)
@@ -276,34 +348,72 @@ HoldingSpaceItemChipView::HoldingSpaceItemChipView(
                       .SetMainAxisAlignment(MainAxisAlignment::kCenter)
                       .SetCrossAxisAlignment(CrossAxisAlignment::kStretch)
                       .SetInsideBorderInsets(kLabelMargins)
-                      .AddChild(
-                          CreateLabelBuilder()
-                              .CopyAddressTo(&primary_label_)
-                              .SetID(kHoldingSpaceItemPrimaryChipLabelId)
-                              .SetStyle(bubble_utils::LabelStyle::kChipTitle)
-                              .SetElideBehavior(gfx::ELIDE_MIDDLE)
-                              .SetCallback(paint_label_mask_callback))
+                      .AddChild(CreateLabelBuilder()
+                                    .CopyAddressTo(&primary_label_)
+                                    .SetID(kHoldingSpaceItemPrimaryChipLabelId)
+                                    .SetStyle(TypographyToken::kCrosBody2)
+                                    .SetElideBehavior(gfx::ELIDE_MIDDLE)
+                                    .SetCallback(paint_label_mask_callback))
                       .AddChild(
                           CreateLabelBuilder()
                               .CopyAddressTo(&secondary_label_)
                               .SetID(kHoldingSpaceItemSecondaryChipLabelId)
-                              .SetStyle(bubble_utils::LabelStyle::kChipBody)
+                              .SetStyle(TypographyToken::kCrosLabel1)
                               .SetElideBehavior(gfx::FADE_TAIL)
-                              .SetCallback(paint_label_mask_callback)))
+                              .SetCallback(paint_label_mask_callback))
+                      .AfterBuild(base::BindOnce(
+                          [](HoldingSpaceItemChipView* self,
+                             views::BoxLayoutView* box_layout_view) {
+                            // Synchronize line heights between primary and
+                            // secondary labels so that text will be vertically
+                            // centered when both are shown despite differences
+                            // in font sizes.
+                            self->secondary_label_->SetLineHeight(
+                                self->primary_label_->GetLineHeight());
+                          },
+                          base::Unretained(this))))
               .AddChild(views::Builder<views::BoxLayoutView>()
                             .SetOrientation(Orientation::kHorizontal)
                             .SetMainAxisAlignment(MainAxisAlignment::kEnd)
                             .SetCrossAxisAlignment(CrossAxisAlignment::kCenter)
-                            .AddChild(CreatePrimaryActionBuilder(
-                                /*min_size=*/gfx::Size()))))
+                            .AddChild(CreatePrimaryActionBuilder())))
       .BuildChildren();
 
-  // Subscribe to be notified of changes to `item_`'s image.
-  image_subscription_ =
+  // Subscribe to be notified of changes to `item`'s image.
+  image_skia_changed_subscription_ =
       item->image().AddImageSkiaChangedCallback(base::BindRepeating(
           &HoldingSpaceItemChipView::UpdateImage, base::Unretained(this)));
 
+  // Subscribe to be notified of changes to `item`'s progress ring animation.
+  progress_ring_animation_changed_subscription_ =
+      HoldingSpaceAnimationRegistry::GetInstance()
+          ->AddProgressRingAnimationChangedCallbackForKey(
+              ProgressIndicatorAnimationRegistry::AsAnimationKey(item),
+              base::IgnoreArgs<ProgressRingAnimation*>(base::BindRepeating(
+                  &HoldingSpaceItemChipView::UpdateImageTransform,
+                  base::Unretained(this))));
+
+  // Subscribe to be notified of changes to tooltip text dependencies.
+  tooltip_text_dependency_changed_subscriptions_.reserve(4);
+  tooltip_text_dependency_changed_subscriptions_.push_back(
+      primary_label_->AddTextChangedCallback(base::BindRepeating(
+          &HoldingSpaceItemChipView::ScheduleUpdateTooltipText,
+          base::Unretained(this))));
+  tooltip_text_dependency_changed_subscriptions_.push_back(
+      primary_label_->AddTooltipTextChangedCallback(base::BindRepeating(
+          &HoldingSpaceItemChipView::ScheduleUpdateTooltipText,
+          base::Unretained(this))));
+  tooltip_text_dependency_changed_subscriptions_.push_back(
+      secondary_label_->AddTextChangedCallback(base::BindRepeating(
+          &HoldingSpaceItemChipView::ScheduleUpdateTooltipText,
+          base::Unretained(this))));
+  tooltip_text_dependency_changed_subscriptions_.push_back(
+      secondary_label_->AddTooltipTextChangedCallback(base::BindRepeating(
+          &HoldingSpaceItemChipView::ScheduleUpdateTooltipText,
+          base::Unretained(this))));
+
   UpdateImage();
+  UpdateImageAndProgressIndicatorVisibility();
   UpdateLabels();
 }
 
@@ -311,15 +421,14 @@ HoldingSpaceItemChipView::~HoldingSpaceItemChipView() = default;
 
 views::View* HoldingSpaceItemChipView::GetTooltipHandlerForPoint(
     const gfx::Point& point) {
-  // Tooltips for this view are handled by `primary_label_`, which will only
-  // show tooltips if the underlying text has been elided due to insufficient
-  // space.
-  return HitTestPoint(point) ? primary_label_ : nullptr;
+  // Tooltip events should be handled top level, not by descendents.
+  return HitTestPoint(point) ? this : nullptr;
 }
 
 void HoldingSpaceItemChipView::OnHoldingSpaceItemUpdated(
-    const HoldingSpaceItem* item) {
-  HoldingSpaceItemView::OnHoldingSpaceItemUpdated(item);
+    const HoldingSpaceItem* item,
+    const HoldingSpaceItemUpdatedFields& updated_fields) {
+  HoldingSpaceItemView::OnHoldingSpaceItemUpdated(item, updated_fields);
   if (this->item() == item) {
     UpdateImage();
     UpdateLabels();
@@ -343,8 +452,8 @@ void HoldingSpaceItemChipView::OnSelectionUiChanged() {
 void HoldingSpaceItemChipView::OnMouseEvent(ui::MouseEvent* event) {
   HoldingSpaceItemView::OnMouseEvent(event);
   switch (event->type()) {
-    case ui::ET_MOUSE_ENTERED:
-    case ui::ET_MOUSE_EXITED:
+    case ui::EventType::kMouseEntered:
+    case ui::EventType::kMouseExited:
       UpdateSecondaryAction();
       break;
     default:
@@ -354,20 +463,9 @@ void HoldingSpaceItemChipView::OnMouseEvent(ui::MouseEvent* event) {
 
 void HoldingSpaceItemChipView::OnThemeChanged() {
   HoldingSpaceItemView::OnThemeChanged();
+
   UpdateImage();
   UpdateLabels();
-
-  // Pause.
-  const SkColor icon_color = AshColorProvider::Get()->GetContentLayerColor(
-      AshColorProvider::ContentLayerType::kButtonIconColor);
-  secondary_action_pause_->SetImage(
-      views::Button::STATE_NORMAL,
-      gfx::CreateVectorIcon(kPauseIcon, kSecondaryActionIconSize, icon_color));
-
-  // Resume.
-  secondary_action_resume_->SetImage(
-      views::Button::STATE_NORMAL,
-      gfx::CreateVectorIcon(kResumeIcon, kSecondaryActionIconSize, icon_color));
 }
 
 void HoldingSpaceItemChipView::OnPaintLabelMask(views::Label* label,
@@ -397,33 +495,100 @@ void HoldingSpaceItemChipView::OnPaintLabelMask(views::Label* label,
 }
 
 void HoldingSpaceItemChipView::OnSecondaryActionPressed() {
+  // If the associated `item()` has been deleted then `this` is in the process
+  // of being destroyed and no action needs to be taken.
+  if (!item())
+    return;
+
   DCHECK_NE(secondary_action_pause_->GetVisible(),
             secondary_action_resume_->GetVisible());
 
-  // Pause.
-  if (secondary_action_pause_->GetVisible()) {
-    HoldingSpaceController::Get()->client()->PauseItems({item()});
-    return;
-  }
+  if (delegate())
+    delegate()->OnHoldingSpaceItemViewSecondaryActionPressed(this);
 
-  // Resume.
-  HoldingSpaceController::Get()->client()->ResumeItems({item()});
+  // Pause/Resume.
+  const HoldingSpaceCommandId command_id =
+      secondary_action_pause_->GetVisible()
+          ? HoldingSpaceCommandId::kPauseItem
+          : HoldingSpaceCommandId::kResumeItem;
+  const bool success =
+      holding_space_util::ExecuteInProgressCommand(item(), command_id);
+  CHECK(success);
+}
+
+void HoldingSpaceItemChipView::ScheduleUpdateTooltipText() {
+  if (!update_tooltip_text_scheduler_.IsRunning()) {
+    update_tooltip_text_scheduler_.Start(
+        FROM_HERE, base::TimeDelta(),
+        base::BindOnce(&HoldingSpaceItemChipView::UpdateTooltipText,
+                       base::Unretained(this)));
+  }
 }
 
 void HoldingSpaceItemChipView::UpdateImage() {
+  // If the associated `item()` has been deleted then `this` is in the process
+  // of being destroyed and no action needs to be taken.
+  if (!item())
+    return;
+
   // Image.
   image_->SetImage(item()->image().GetImageSkia(
       gfx::Size(kHoldingSpaceChipIconSize, kHoldingSpaceChipIconSize),
-      /*dark_background=*/AshColorProvider::Get()->IsDarkModeEnabled()));
+      /*dark_background=*/DarkLightModeControllerImpl::Get()
+          ->IsDarkModeEnabled()));
   SchedulePaint();
 
   // Transform.
   UpdateImageTransform();
 }
 
+void HoldingSpaceItemChipView::UpdateImageAndProgressIndicatorVisibility() {
+  // If the associated `item()` has been deleted then `this` is in the process
+  // of being destroyed and no action needs to be taken.
+  if (!item())
+    return;
+
+  const bool is_secondary_action_visible =
+      secondary_action_container_->GetVisible();
+
+  // The inner icon of the `progress_indicator_` may be visible iff there is
+  // no visible secondary action or multiselect UI.
+  const bool is_progress_indicator_inner_icon_visible =
+      !is_secondary_action_visible && !checkmark()->GetVisible();
+
+  // Similarly, the `image_` may be visible iff there is no visible secondary
+  // action or multiselect UI but additionally the `image_` may only be visible
+  // when `progress` is hidden or complete.
+  bool is_image_visible = is_progress_indicator_inner_icon_visible;
+  const HoldingSpaceProgress& progress = item()->progress();
+  is_image_visible &= progress.IsHidden() || progress.IsComplete();
+
+  image_->SetVisible(is_image_visible);
+  progress_indicator_->SetInnerIconVisible(
+      is_progress_indicator_inner_icon_visible);
+}
+
 void HoldingSpaceItemChipView::UpdateImageTransform() {
+  // If the associated `item()` has been deleted then `this` is in the process
+  // of being destroyed and no action needs to be taken.
+  if (!item())
+    return;
+
+  // Wait until `image_` has been laid out before updating transform. Once
+  // bounds have been set, `UpdateImageTransform()` will be invoked again.
+  if (image_->bounds().IsEmpty())
+    return;
+
+  const bool is_item_visibly_in_progress =
+      !item()->progress().IsHidden() && !item()->progress().IsComplete();
+
+  const ProgressRingAnimation* progress_ring_animation =
+      HoldingSpaceAnimationRegistry::GetInstance()
+          ->GetProgressRingAnimationForKey(
+              ProgressIndicatorAnimationRegistry::AsAnimationKey(item()));
+
   gfx::Transform transform;
-  if (!item()->progress().IsComplete() && !image_->bounds().IsEmpty()) {
+  if (is_item_visibly_in_progress || progress_ring_animation) {
     transform = gfx::GetScaleTransform(image_->bounds().CenterPoint(),
                                        kInProgressImageScaleFactor);
   }
@@ -433,54 +598,137 @@ void HoldingSpaceItemChipView::UpdateImageTransform() {
     image_->layer()->SetFillsBoundsOpaquely(false);
   }
 
+  if (image_->layer()->GetTargetTransform() == transform)
+    return;
+
+  // Non-identity transforms take effect immediately so as not to cause overlap
+  // between the `image_` and progress ring.
+  if (!transform.IsIdentity()) {
+    image_->layer()->SetTransform(transform);
+    return;
+  }
+
+  // Identify transforms are animated.
+  ui::ScopedLayerAnimationSettings settings(image_->layer()->GetAnimator());
+  settings.SetTransitionDuration(kInProgressImageScaleDuration);
+  settings.SetTweenType(gfx::Tween::Type::LINEAR_OUT_SLOW_IN);
   image_->layer()->SetTransform(transform);
 }
 
 void HoldingSpaceItemChipView::UpdateLabels() {
+  // If the associated `item()` has been deleted then `this` is in the process
+  // of being destroyed and no action needs to be taken.
+  if (!item())
+    return;
+
   const bool multiselect =
       delegate() && delegate()->selection_ui() ==
                         HoldingSpaceViewDelegate::SelectionUi::kMultiSelect;
 
   // Primary.
   primary_label_->SetText(item()->GetText());
-  primary_label_->SetEnabledColor(
-      selected() && multiselect
-          ? GetMultiSelectTextColor()
-          : AshColorProvider::Get()->GetContentLayerColor(
-                AshColorProvider::ContentLayerType::kTextColorPrimary));
+  primary_label_->SetEnabledColor(selected() && multiselect
+                                      ? kColorAshMultiSelectTextColor
+                                      : kColorAshTextColorPrimary);
 
   // Secondary.
   secondary_label_->SetText(
-      item()->secondary_text().value_or(base::EmptyString16()));
-  secondary_label_->SetEnabledColor(
-      selected() && multiselect
-          ? GetMultiSelectTextColor()
-          : AshColorProvider::Get()->GetContentLayerColor(
-                AshColorProvider::ContentLayerType::kTextColorSecondary));
+      item()->secondary_text().value_or(std::u16string()));
+
+  if (selected() && multiselect) {
+    secondary_label_->SetEnabledColor(kColorAshMultiSelectTextColor);
+  } else if (const std::optional<HoldingSpaceColorVariant>& color_variant =
+                 item()->secondary_text_color_variant()) {
+    // Handle the case where the `color_variant` is set.
+    std::visit(absl::Overload{
+                   [&](const ui::ColorId& color_id) {
+                     secondary_label_->SetEnabledColor(color_id);
+                   },
+                   [&](const HoldingSpaceColors& colors) {
+                     secondary_label_->SetEnabledColor(
+                         DarkLightModeControllerImpl::Get()->IsDarkModeEnabled()
+                             ? colors.dark_mode()
+                             : colors.light_mode());
+                   },
+               },
+               *color_variant);
+  } else {
+    // Use the default color.
+    secondary_label_->SetEnabledColor(kColorAshTextColorSecondary);
+  }
+
   secondary_label_->SetVisible(!secondary_label_->GetText().empty());
 }
 
 void HoldingSpaceItemChipView::UpdateSecondaryAction() {
-  const bool has_secondary_action = !checkmark()->GetVisible() &&
-                                    !item()->progress().IsComplete() &&
-                                    IsMouseHovered();
+  // If the associated `item()` has been deleted then `this` is in the process
+  // of being destroyed and no action needs to be taken.
+  if (!item())
+    return;
+
+  // NOTE: Only in-progress items currently support secondary actions.
+  const bool has_secondary_action =
+      !checkmark()->GetVisible() && !item()->progress().IsComplete() &&
+      (holding_space_util::SupportsInProgressCommand(
+           item(), HoldingSpaceCommandId::kPauseItem) ||
+       holding_space_util::SupportsInProgressCommand(
+           item(), HoldingSpaceCommandId::kResumeItem)) &&
+      IsMouseHovered();
 
   if (!has_secondary_action) {
-    image_->SetVisible(!checkmark()->GetVisible());
     secondary_action_container_->SetVisible(false);
+    UpdateImageAndProgressIndicatorVisibility();
     return;
   }
 
   // Pause/resume.
-  const bool is_item_paused = item()->IsPaused();
+  const bool is_item_paused = holding_space_util::SupportsInProgressCommand(
+      item(), HoldingSpaceCommandId::kResumeItem);
   secondary_action_pause_->SetVisible(!is_item_paused);
   secondary_action_resume_->SetVisible(is_item_paused);
 
-  image_->SetVisible(false);
   secondary_action_container_->SetVisible(true);
+  UpdateImageAndProgressIndicatorVisibility();
 }
 
-BEGIN_METADATA(HoldingSpaceItemChipView, HoldingSpaceItemView)
+void HoldingSpaceItemChipView::UpdateTooltipText() {
+  std::u16string primary_tooltip = primary_label_->GetTooltipText();
+  std::u16string secondary_tooltip = secondary_label_->GetTooltipText();
+
+  // If there is neither a primary nor a secondary tooltip which should be
+  // shown, then there is no tooltip to be shown at all.
+  if (primary_tooltip.empty() && secondary_tooltip.empty()) {
+    SetTooltipText(std::u16string());
+    return;
+  }
+
+  // If there is no primary tooltip, fallback to using the primary text. This
+  // would occur if the `primary_label_` is not elided in same way.
+  if (primary_tooltip.empty()) {
+    primary_tooltip = primary_label_->GetText();
+  }
+
+  // If there is no secondary tooltip, fallback to using the secondary text.
+  // This would occur if the `secondary_label_` is not elided in some way.
+  if (secondary_tooltip.empty()) {
+    secondary_tooltip = secondary_label_->GetText();
+  }
+
+  // If there still is no secondary tooltip, only the primary tooltip should be
+  // shown. This would occur if there is no visible `secondary_label_`.
+  if (secondary_tooltip.empty()) {
+    SetTooltipText(primary_tooltip);
+    return;
+  }
+
+  // Otherwise, concatenate and return the primary and secondary tooltips. This
+  // will look something of the form: "filename.txt, Paused, 10/100 MB".
+  SetTooltipText(l10n_util::GetStringFUTF16(
+      IDS_ASH_HOLDING_SPACE_ITEM_A11Y_NAME_AND_TOOLTIP, primary_tooltip,
+      secondary_tooltip));
+}
+
+BEGIN_METADATA(HoldingSpaceItemChipView)
 END_METADATA
 
 }  // namespace ash

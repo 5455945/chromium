@@ -49,14 +49,10 @@ absl_cc_library(
     "internal/cctz/include/cctz/civil_time.h"
     "internal/cctz/include/cctz/civil_time_detail.h"
   SRCS
-  "internal/cctz/src/civil_time_detail.cc"
+    "internal/cctz/src/civil_time_detail.cc"
   COPTS
     ${ABSL_DEFAULT_COPTS}
 )
-
-if(APPLE)
-  find_library(CoreFoundation CoreFoundation)
-endif()
 
 absl_cc_library(
   NAME
@@ -81,12 +77,18 @@ absl_cc_library(
     "internal/cctz/src/time_zone_posix.h"
     "internal/cctz/src/tzfile.h"
     "internal/cctz/src/zone_info_source.cc"
+    $<$<PLATFORM_ID:Windows,WindowsStore>:internal/cctz/src/time_zone_name_win.cc>
+    $<$<PLATFORM_ID:Windows,WindowsStore>:internal/cctz/src/time_zone_name_win.h>
   COPTS
     ${ABSL_DEFAULT_COPTS}
   DEPS
-    $<$<PLATFORM_ID:Darwin>:${CoreFoundation}>
+    Threads::Threads
+    # TODO(#1495): Use $<LINK_LIBRARY:FRAMEWORK,CoreFoundation> once our
+    # minimum CMake version >= 3.24
+    $<$<PLATFORM_ID:Darwin,iOS,tvOS,visionOS,watchOS>:-Wl,-framework,CoreFoundation>
 )
 
+# Internal-only target, do not depend on directly.
 absl_cc_library(
   NAME
     time_internal_test_util
@@ -94,15 +96,13 @@ absl_cc_library(
     "internal/test_util.h"
   SRCS
     "internal/test_util.cc"
-    "internal/zoneinfo.inc"
   COPTS
     ${ABSL_DEFAULT_COPTS}
   DEPS
-    absl::time
     absl::config
     absl::raw_logging_internal
+    absl::time
     absl::time_zone
-    GTest::gmock
   TESTONLY
 )
 
@@ -119,10 +119,137 @@ absl_cc_test(
   COPTS
     ${ABSL_TEST_COPTS}
   DEPS
-    absl::time_internal_test_util
-    absl::time
     absl::config
     absl::core_headers
+    absl::hash_testing
+    absl::random_random
+    absl::str_format
+    absl::strings
+    absl::time
+    absl::time_internal_test_util
     absl::time_zone
+    GTest::gmock_main
+)
+
+absl_cc_library(
+  NAME
+    clock_interface
+  HDRS
+    "clock_interface.h"
+  SRCS
+    "clock_interface.cc"
+  COPTS
+    ${ABSL_DEFAULT_COPTS}
+  DEPS
+    absl::config
+    absl::core_headers
+    absl::no_destructor
+    absl::nullability
+    absl::raw_logging_internal
+    absl::synchronization
+    absl::time
+)
+
+absl_cc_test(
+  NAME
+    clock_interface_test
+  SRCS
+    "clock_interface_test.cc"
+  COPTS
+    ${ABSL_TEST_COPTS}
+  DEPS
+    absl::bind_front
+    absl::clock_interface
+    absl::config
+    absl::synchronization
+    absl::time
+    GTest::gmock_main
+)
+
+absl_cc_library(
+  NAME
+    mock_clock
+  HDRS
+    "mock_clock.h"
+  COPTS
+    ${ABSL_DEFAULT_COPTS}
+  DEPS
+    absl::clock_interface
+    absl::config
+    absl::core_headers
+    absl::synchronization
+    absl::time
+    GTest::gmock
+    GTest::gtest
+  PUBLIC
+  TESTONLY
+)
+
+absl_cc_test(
+  NAME
+    mock_clock_test
+  SRCS
+    "mock_clock_test.cc"
+  COPTS
+    ${ABSL_TEST_COPTS}
+  DEPS
+    absl::clock_interface
+    absl::core_headers
+    absl::mock_clock
+    absl::synchronization
+    absl::time
+    GTest::gmock_main
+)
+
+absl_cc_library(
+  NAME
+    simulated_clock
+  HDRS
+    "simulated_clock.h"
+  SRCS
+    "simulated_clock.cc"
+  COPTS
+    ${ABSL_DEFAULT_COPTS}
+  DEPS
+    absl::clock_interface
+    absl::config
+    absl::core_headers
+    absl::nullability
+    absl::synchronization
+    absl::time
+  TESTONLY
+)
+
+absl_cc_test(
+  NAME
+    simulated_clock_test
+  SRCS
+    "simulated_clock_test.cc"
+  COPTS
+    ${ABSL_TEST_COPTS}
+  DEPS
+    absl::bind_front
+    absl::clock_interface
+    absl::config
+    absl::random_random
+    absl::raw_logging_internal
+    absl::simulated_clock
+    absl::synchronization
+    absl::time
+    GTest::gmock_main
+  SHARD_COUNT
+    4
+)
+
+absl_cc_test(
+  NAME
+    flag_test
+  SRCS
+    "flag_test.cc"
+  COPTS
+    ${ABSL_TEST_COPTS}
+  DEPS
+    absl::flags
+    absl::flags_reflection
     GTest::gmock_main
 )

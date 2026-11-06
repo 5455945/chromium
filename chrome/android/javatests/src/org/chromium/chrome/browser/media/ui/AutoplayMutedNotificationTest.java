@@ -1,18 +1,18 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.media.ui;
 
-import static org.chromium.base.test.util.Restriction.RESTRICTION_TYPE_NON_LOW_END_DEVICE;
-
 import android.content.Context;
+import android.content.res.Resources;
 import android.media.AudioManager;
-import android.os.Build.VERSION_CODES;
-import android.support.test.InstrumentationRegistry;
+import android.provider.Settings;
 
 import androidx.test.filters.SmallTest;
 
+import org.hamcrest.Matcher;
+import org.hamcrest.Matchers;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
@@ -20,44 +20,68 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import org.chromium.base.ContextUtils;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
-import org.chromium.base.test.util.DisableIf;
-import org.chromium.base.test.util.Restriction;
+import org.chromium.base.test.util.Criteria;
+import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
+import org.chromium.chrome.test.transit.ChromeTransitTestRules;
+import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.components.browser_ui.media.MediaNotificationManager;
 import org.chromium.content_public.browser.test.util.DOMUtils;
 import org.chromium.content_public.browser.test.util.JavaScriptUtils;
-import org.chromium.net.test.EmbeddedTestServer;
 
 /**
  * Integration test that checks that autoplay muted doesn't show a notification nor take audio focus
  */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+@Batch(Batch.PER_CLASS)
 public class AutoplayMutedNotificationTest {
     @Rule
-    public ChromeTabbedActivityTestRule mActivityTestRule = new ChromeTabbedActivityTestRule();
+    public FreshCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.freshChromeTabbedActivityRule();
 
     private static final String TEST_PATH = "/content/test/data/media/session/autoplay-muted.html";
     private static final String VIDEO_ID = "video";
     private static final String PLAY_BUTTON_ID = "play";
     private static final String UNMUTE_BUTTON_ID = "unmute";
-    private static final int AUDIO_FOCUS_CHANGE_TIMEOUT = 500;  // ms
-
-    private EmbeddedTestServer mTestServer;
+    private static final int AUDIO_FOCUS_CHANGE_TIMEOUT = 500; // ms
+    private static final String AUDIO_FOCUS_REQUEST_RESULT_HISTOGRAM =
+            "Media.Android.AudioFocusRequestResult";
+    // Must match AudioFocusDelegate.AudioFocusRequestResult.GRANTED.
+    private static final int AUDIO_FOCUS_REQUEST_GRANTED = 1;
 
     private AudioManager getAudioManager() {
-        return (AudioManager) mActivityTestRule.getActivity()
-                .getApplicationContext()
-                .getSystemService(Context.AUDIO_SERVICE);
+        return (AudioManager)
+                mActivityTestRule
+                        .getActivity()
+                        .getApplicationContext()
+                        .getSystemService(Context.AUDIO_SERVICE);
+    }
+
+    private boolean isMultiAudioFocusEnabled() {
+        Context context = ContextUtils.getApplicationContext();
+        Resources res = context.getResources();
+        int resId =
+                res.getIdentifier("config_multi_audio_focus_enabled_default", "bool", "android");
+        boolean defaultEnabled = resId != 0 && res.getBoolean(resId);
+        return Settings.System.getInt(
+                        context.getContentResolver(),
+                        "multi_audio_focus_enabled",
+                        defaultEnabled ? 1 : 0)
+                != 0;
     }
 
     private boolean isMediaNotificationVisible() {
-        return MediaNotificationManager.getController(R.id.media_playback_notification) != null;
+        return MediaNotificationManager.getActiveOrFallbackControllerByMediaTypeId(
+                        R.id.media_playback_notification)
+                != null;
     }
 
     private class MockAudioFocusChangeListener implements AudioManager.OnAudioFocusChangeListener {
@@ -73,8 +97,8 @@ public class AutoplayMutedNotificationTest {
         }
 
         public void requestAudioFocus(int focusType) {
-            int result = getAudioManager().requestAudioFocus(
-                    this, AudioManager.STREAM_MUSIC, focusType);
+            int result =
+                    getAudioManager().requestAudioFocus(this, AudioManager.STREAM_MUSIC, focusType);
             if (result != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
                 Assert.fail("Did not get audio focus");
             } else {
@@ -84,24 +108,30 @@ public class AutoplayMutedNotificationTest {
     }
 
     private MockAudioFocusChangeListener mAudioFocusChangeListener;
+    private HistogramWatcher mMutedHistogramWatcher;
 
     @Before
     public void setUp() {
-        mTestServer = EmbeddedTestServer.createAndStartServer(InstrumentationRegistry.getContext());
         mAudioFocusChangeListener = new MockAudioFocusChangeListener();
-        mActivityTestRule.startMainActivityWithURL(mTestServer.getURL(TEST_PATH));
+        mMutedHistogramWatcher =
+                HistogramWatcher.newBuilder()
+                        .expectNoRecords(AUDIO_FOCUS_REQUEST_RESULT_HISTOGRAM)
+                        .build();
+        mActivityTestRule.startOnTestServerUrl(TEST_PATH);
     }
 
     @After
     public void tearDown() {
-        mTestServer.stopAndDestroyServer();
+        if (mAudioFocusChangeListener != null) {
+            getAudioManager().abandonAudioFocus(mAudioFocusChangeListener);
+        }
+        MediaNotificationManager.resetForTesting();
     }
 
     @Test
     @SmallTest
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     public void testBasic() throws Exception {
-        Tab tab = mActivityTestRule.getActivity().getActivityTab();
+        Tab tab = mActivityTestRule.getActivityTab();
 
         // Taking audio focus.
         Assert.assertEquals(
@@ -119,14 +149,14 @@ public class AutoplayMutedNotificationTest {
         // Audio focus was not taken and no notification is visible.
         Assert.assertEquals(
                 AudioManager.AUDIOFOCUS_GAIN, mAudioFocusChangeListener.getAudioFocusState());
+        mMutedHistogramWatcher.assertExpected();
         Assert.assertFalse(isMediaNotificationVisible());
     }
 
     @Test
     @SmallTest
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     public void testDoesNotReactToAudioFocus() throws Exception {
-        Tab tab = mActivityTestRule.getActivity().getActivityTab();
+        Tab tab = mActivityTestRule.getActivityTab();
 
         // The page will autoplay the video.
         DOMUtils.waitForMediaPlay(tab.getWebContents(), VIDEO_ID);
@@ -145,14 +175,14 @@ public class AutoplayMutedNotificationTest {
         Assert.assertFalse(DOMUtils.isMediaPaused(tab.getWebContents(), VIDEO_ID));
 
         // Still no notification.
+        mMutedHistogramWatcher.assertExpected();
         Assert.assertFalse(isMediaNotificationVisible());
     }
 
     @Test
     @SmallTest
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     public void testAutoplayMutedThenUnmute() throws Exception {
-        Tab tab = mActivityTestRule.getActivity().getActivityTab();
+        Tab tab = mActivityTestRule.getActivityTab();
 
         // Taking audio focus.
         Assert.assertEquals(
@@ -172,8 +202,9 @@ public class AutoplayMutedNotificationTest {
         sb.append("})();");
 
         // Unmute from script.
-        String result = JavaScriptUtils.executeJavaScriptAndWaitForResult(
-                tab.getWebContents(), sb.toString());
+        String result =
+                JavaScriptUtils.executeJavaScriptAndWaitForResult(
+                        tab.getWebContents(), sb.toString());
         Assert.assertTrue(result.trim().equalsIgnoreCase("false"));
 
         // Video is paused.
@@ -185,14 +216,14 @@ public class AutoplayMutedNotificationTest {
         // Audio focus was not taken and no notification is visible.
         Assert.assertEquals(
                 AudioManager.AUDIOFOCUS_GAIN, mAudioFocusChangeListener.getAudioFocusState());
+        mMutedHistogramWatcher.assertExpected();
         Assert.assertFalse(isMediaNotificationVisible());
     }
 
     @Test
     @SmallTest
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     public void testMutedPlaybackDoesNotTakeAudioFocus() throws Exception {
-        Tab tab = mActivityTestRule.getActivity().getActivityTab();
+        Tab tab = mActivityTestRule.getActivityTab();
 
         // Taking audio focus.
         Assert.assertEquals(
@@ -210,23 +241,23 @@ public class AutoplayMutedNotificationTest {
         DOMUtils.pauseMedia(tab.getWebContents(), VIDEO_ID);
 
         // Restart the video with a gesture: no longer "muted autoplay".
-        DOMUtils.clickNode(tab.getWebContents(), PLAY_BUTTON_ID);
+        DOMUtils.clickNodeWithJavaScript(tab.getWebContents(), PLAY_BUTTON_ID);
         DOMUtils.waitForMediaPlay(tab.getWebContents(), VIDEO_ID);
+
+        // Audio focus notification is OS-driven.
+        Thread.sleep(AUDIO_FOCUS_CHANGE_TIMEOUT);
 
         // Audio focus was not taken and no notification is visible.
         Assert.assertEquals(
                 AudioManager.AUDIOFOCUS_GAIN, mAudioFocusChangeListener.getAudioFocusState());
+        mMutedHistogramWatcher.assertExpected();
         Assert.assertFalse(isMediaNotificationVisible());
     }
 
     @Test
     @SmallTest
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
-    @DisableIf.
-    Build(sdk_is_greater_than = VERSION_CODES.LOLLIPOP_MR1, sdk_is_less_than = VERSION_CODES.N,
-            message = "Flaky on Marshmallow https://crbug.com/1122185")
     public void testUnmutedPlaybackTakesAudioFocus() throws Exception {
-        Tab tab = mActivityTestRule.getActivity().getActivityTab();
+        Tab tab = mActivityTestRule.getActivityTab();
 
         // Taking audio focus.
         Assert.assertEquals(
@@ -240,16 +271,31 @@ public class AutoplayMutedNotificationTest {
 
         // Audio focus notification is OS-driven.
         Thread.sleep(AUDIO_FOCUS_CHANGE_TIMEOUT);
+        Assert.assertEquals(
+                AudioManager.AUDIOFOCUS_GAIN, mAudioFocusChangeListener.getAudioFocusState());
+        mMutedHistogramWatcher.assertExpected();
+
+        HistogramWatcher unmutedHistogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(
+                        AUDIO_FOCUS_REQUEST_RESULT_HISTOGRAM, AUDIO_FOCUS_REQUEST_GRANTED);
 
         // Restart the video with a gesture: no longer "muted autoplay".
-        DOMUtils.clickNode(tab.getWebContents(), UNMUTE_BUTTON_ID);
+        DOMUtils.clickNodeWithJavaScript(tab.getWebContents(), UNMUTE_BUTTON_ID);
         Assert.assertFalse(DOMUtils.isMediaPaused(tab.getWebContents(), VIDEO_ID));
 
-        Thread.sleep(AUDIO_FOCUS_CHANGE_TIMEOUT);
-
-        // Audio focus was taken and a notification is visible.
-        Assert.assertNotEquals(
-                AudioManager.AUDIOFOCUS_GAIN, mAudioFocusChangeListener.getAudioFocusState());
-        Assert.assertTrue(isMediaNotificationVisible());
+        // Audio focus was requested by Chrome and a notification is visible.
+        // The pre-existing audio focus holder only loses focus if multi-audio focus is disabled.
+        unmutedHistogramWatcher.pollInstrumentationThreadUntilSatisfied();
+        Matcher<Integer> expectedFocusStateMatcher =
+                isMultiAudioFocusEnabled()
+                        ? Matchers.is(AudioManager.AUDIOFOCUS_GAIN)
+                        : Matchers.not(AudioManager.AUDIOFOCUS_GAIN);
+        CriteriaHelper.pollInstrumentationThread(
+                () -> {
+                    Criteria.checkThat(
+                            mAudioFocusChangeListener.getAudioFocusState(),
+                            expectedFocusStateMatcher);
+                    Criteria.checkThat(isMediaNotificationVisible(), Matchers.is(true));
+                });
     }
 }

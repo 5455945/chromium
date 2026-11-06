@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,13 @@
 
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
-#include "base/macros.h"
-#include "base/sequenced_task_runner.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/system/sys_info.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
@@ -38,14 +37,18 @@ class FreezerCgroupProcessManager::FileWorker {
         file_thread_(file_thread),
         enabled_(false),
         froze_successfully_(false) {
-    DCHECK(ui_thread_->RunsTasksInCurrentSequence());
+    CHECK(ui_thread_->RunsTasksInCurrentSequence(), base::NotFatalUntil::M160);
   }
+
+  FileWorker(const FileWorker&) = delete;
+  FileWorker& operator=(const FileWorker&) = delete;
 
   // Called on FILE thread.
   virtual ~FileWorker() { DCHECK(file_thread_->RunsTasksInCurrentSequence()); }
 
   void Start() {
-    DCHECK(file_thread_->RunsTasksInCurrentSequence());
+    CHECK(file_thread_->RunsTasksInCurrentSequence(),
+          base::NotFatalUntil::M160);
 
     default_control_path_ = base::FilePath(kFreezerPath).Append(kCgroupProcs);
     to_be_frozen_control_path_ = base::FilePath(kFreezerPath)
@@ -73,7 +76,8 @@ class FreezerCgroupProcessManager::FileWorker {
   }
 
   void SetShouldFreezeRenderer(base::ProcessHandle handle, bool frozen) {
-    DCHECK(file_thread_->RunsTasksInCurrentSequence());
+    CHECK(file_thread_->RunsTasksInCurrentSequence(),
+          base::NotFatalUntil::M160);
 
     WriteCommandToFile(
         base::NumberToString(handle),
@@ -81,7 +85,8 @@ class FreezerCgroupProcessManager::FileWorker {
   }
 
   void FreezeRenderers() {
-    DCHECK(file_thread_->RunsTasksInCurrentSequence());
+    CHECK(file_thread_->RunsTasksInCurrentSequence(),
+          base::NotFatalUntil::M160);
 
     if (!enabled_) {
       LOG(ERROR) << "Attempting to freeze renderers when the freezer cgroup is "
@@ -94,7 +99,8 @@ class FreezerCgroupProcessManager::FileWorker {
   }
 
   void ThawRenderers(ResultCallback callback) {
-    DCHECK(file_thread_->RunsTasksInCurrentSequence());
+    CHECK(file_thread_->RunsTasksInCurrentSequence(),
+          base::NotFatalUntil::M160);
 
     if (!enabled_) {
       LOG(ERROR) << "Attempting to thaw renderers when the freezer cgroup is "
@@ -106,7 +112,7 @@ class FreezerCgroupProcessManager::FileWorker {
 
     // TODO(derat): For now, lie and report success if thawing failed but
     // freezing also failed previously. Remove after weird EBADF and ENOENT
-    // problems tracked at http://crbug.com/661310 are fixed.
+    // problems tracked at http://crbug.com/172221050 are fixed.
     if (!result && !froze_successfully_)
       result = true;
 
@@ -115,7 +121,8 @@ class FreezerCgroupProcessManager::FileWorker {
   }
 
   void CheckCanFreezeRenderers(ResultCallback callback) {
-    DCHECK(file_thread_->RunsTasksInCurrentSequence());
+    CHECK(file_thread_->RunsTasksInCurrentSequence(),
+          base::NotFatalUntil::M160);
 
     ui_thread_->PostTask(FROM_HERE,
                          base::BindOnce(std::move(callback), enabled_));
@@ -124,14 +131,9 @@ class FreezerCgroupProcessManager::FileWorker {
  private:
   bool WriteCommandToFile(const std::string& command,
                           const base::FilePath& file) {
-    int bytes = base::WriteFile(file, command.c_str(), command.size());
-    if (bytes == -1) {
+    if (!base::WriteFile(file, command)) {
       PLOG(ERROR) << "Writing " << command << " to " << file.value()
                   << " failed";
-      return false;
-    } else if (bytes != static_cast<int>(command.size())) {
-      LOG(ERROR) << "Only wrote " << bytes << " byte(s) when writing "
-                 << command << " to " << file.value();
       return false;
     }
     return true;
@@ -152,8 +154,6 @@ class FreezerCgroupProcessManager::FileWorker {
   // True iff FreezeRenderers() wrote its command successfully the last time it
   // was called.
   bool froze_successfully_;
-
-  DISALLOW_COPY_AND_ASSIGN(FileWorker);
 };
 
 FreezerCgroupProcessManager::FreezerCgroupProcessManager()

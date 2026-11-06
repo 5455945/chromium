@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,8 @@
 #include <iostream>
 
 #include "base/check.h"
+#include "base/json/values_util.h"
 #include "base/notreached.h"
-#include "base/util/values/values_util.h"
 #include "base/values.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 
@@ -29,8 +29,8 @@ AXTreeID::AXTreeID(const std::string& string) {
     type_ = ax::mojom::AXTreeIDType::kUnknown;
   } else {
     type_ = ax::mojom::AXTreeIDType::kToken;
-    absl::optional<base::UnguessableToken> token =
-        util::ValueToUnguessableToken(base::Value(string));
+    std::optional<base::UnguessableToken> token =
+        base::ValueToUnguessableToken(base::Value(string));
     CHECK(token);
     token_ = *token;
   }
@@ -61,11 +61,8 @@ std::string AXTreeID::ToString() const {
     case ax::mojom::AXTreeIDType::kUnknown:
       return "";
     case ax::mojom::AXTreeIDType::kToken:
-      return util::UnguessableTokenToValue(*token_).GetString();
+      return base::UnguessableTokenToValue(*token_).GetString();
   }
-
-  NOTREACHED();
-  return std::string();
 }
 
 void swap(AXTreeID& first, AXTreeID& second) {
@@ -73,32 +70,9 @@ void swap(AXTreeID& first, AXTreeID& second) {
   std::swap(first.token_, second.token_);
 }
 
-bool AXTreeID::operator==(const AXTreeID& rhs) const {
-  return type_ == rhs.type_ && token_ == rhs.token_;
-}
-
-bool AXTreeID::operator!=(const AXTreeID& rhs) const {
-  return !(*this == rhs);
-}
-
-bool AXTreeID::operator<(const AXTreeID& rhs) const {
-  return std::tie(type_, token_) < std::tie(rhs.type_, rhs.token_);
-}
-
-bool AXTreeID::operator<=(const AXTreeID& rhs) const {
-  return std::tie(type_, token_) <= std::tie(rhs.type_, rhs.token_);
-}
-
-bool AXTreeID::operator>(const AXTreeID& rhs) const {
-  return !(*this <= rhs);
-}
-
-bool AXTreeID::operator>=(const AXTreeID& rhs) const {
-  return !(*this < rhs);
-}
-
-size_t AXTreeIDHash::operator()(const ui::AXTreeID& tree_id) const {
-  DCHECK(tree_id.type() == ax::mojom::AXTreeIDType::kToken);
+size_t AXTreeIDHash::operator()(const AXTreeID& tree_id) const {
+  CHECK(tree_id.type() == ax::mojom::AXTreeIDType::kToken,
+        base::NotFatalUntil::M163);
   return base::UnguessableTokenHash()(tree_id.token().value());
 }
 

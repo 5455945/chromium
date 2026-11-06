@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,11 @@
 
 #include <cstring>
 
+#include "base/check.h"
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/notreached.h"
-#include "base/numerics/safe_math.h"
-#include "mojo/public/c/system/message_pipe.h"
+#include "base/numerics/safe_conversions.h"
 #include "mojo/public/cpp/bindings/lib/bindings_internal.h"
 
 namespace mojo {
@@ -56,7 +57,6 @@ size_t Buffer::Allocate(size_t num_bytes) {
   if (new_cursor < cursor_ || (new_cursor > size_ && !message_.is_valid())) {
     // Either we've overflowed or exceeded a fixed capacity.
     NOTREACHED();
-    return 0;
   }
 
   if (new_cursor > size_) {
@@ -84,29 +84,35 @@ size_t Buffer::Allocate(size_t num_bytes) {
   // TODO(rockot): We should consider only clearing the alignment padding. This
   // means being careful about generated bindings zeroing padding explicitly,
   // which itself gets particularly messy with e.g. packed bool bitfields.
-  memset(static_cast<uint8_t*>(data_) + block_start, 0, aligned_num_bytes);
+  UNSAFE_TODO(
+      memset(static_cast<uint8_t*>(data_) + block_start, 0, aligned_num_bytes));
 
   return block_start;
 }
 
-void Buffer::AttachHandles(std::vector<ScopedHandle>* handles) {
+bool Buffer::AttachHandles(std::vector<ScopedHandle>* handles) {
   DCHECK(message_.is_valid());
 
   uint32_t new_size = 0;
   MojoResult rv = MojoAppendMessageData(
       message_.value(), 0, reinterpret_cast<MojoHandle*>(handles->data()),
       static_cast<uint32_t>(handles->size()), nullptr, &data_, &new_size);
-  if (rv != MOJO_RESULT_OK)
-    return;
+  if (rv != MOJO_RESULT_OK) {
+    return false;
+  }
 
   size_ = new_size;
-  for (auto& handle : *handles)
-    ignore_result(handle.release());
+  for (auto& handle : *handles) {
+    std::ignore = handle.release();
+  }
+  handles->clear();
+  return true;
 }
 
 void Buffer::Seal() {
-  if (!message_.is_valid())
+  if (!message_.is_valid()) {
     return;
+  }
 
   // Ensure that the backing message has the final accumulated payload size.
   DCHECK_LE(message_payload_size_, cursor_);

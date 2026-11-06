@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,9 +9,14 @@
 #include <string>
 #include <vector>
 
-#include "base/supports_user_data.h"
+#include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
 #include "base/values.h"
+#include "extensions/browser/extension_registry.h"
+#include "extensions/browser/extension_registry_observer.h"
 #include "extensions/common/extension_id.h"
+
+class BrowserContextKeyedServiceFactory;
 
 namespace extensions {
 
@@ -21,11 +26,12 @@ namespace extensions {
 // base::Values; this is because these values could potentially be rather
 // large in size. This results in some slightly unwieldy function
 // signatures.
-class SessionStorageManager : public base::SupportsUserData::Data {
+class SessionStorageManager : public KeyedService,
+                              public ExtensionRegistryObserver {
  public:
   struct ValueChange {
     ValueChange(std::string key,
-                absl::optional<base::Value> old_value,
+                std::optional<base::Value> old_value,
                 base::Value* new_value);
     ~ValueChange();
     ValueChange(const ValueChange& other) = delete;
@@ -34,17 +40,29 @@ class SessionStorageManager : public base::SupportsUserData::Data {
 
     std::string key;
 
-    absl::optional<base::Value> old_value;
+    std::optional<base::Value> old_value;
 
     // Owned by the SessionStorageManager. Caller cannot rely on it after any
     // subsequent calls to SessionStorageManager methods.
-    const base::Value* new_value;
+    raw_ptr<const base::Value, DanglingUntriaged> new_value;
   };
 
-  explicit SessionStorageManager(size_t quota_bytes_per_extension);
+  SessionStorageManager(size_t quota_bytes_per_extension,
+                        content::BrowserContext* browser_context);
   ~SessionStorageManager() override;
   SessionStorageManager(const SessionStorageManager& other) = delete;
   SessionStorageManager& operator=(SessionStorageManager& other) = delete;
+
+  // Retrieves the SessionStorageManager for a given `browser_context`.
+  static SessionStorageManager* GetForBrowserContext(
+      content::BrowserContext* browser_context);
+
+  // Retrieves the factory instance for the SessionStorageManager.
+  static BrowserContextKeyedServiceFactory* GetFactory();
+
+  // Returns a vector with all keys found in storage for the given
+  // `extension_id`.
+  std::vector<std::string> GetKeys(const ExtensionId& extension_id) const;
 
   // Returns the value for the given `extension_id` and `key`, or null if none
   // exists.
@@ -62,22 +80,32 @@ class SessionStorageManager : public base::SupportsUserData::Data {
   std::map<std::string, const base::Value*> GetAll(
       const ExtensionId& extension_id) const;
 
-  // Stores multiple values of an extension id.
+  // Stores multiple `values` for an `extension_id`. If storing the values
+  // succeeds, returns true and populates `changes` with the inserted values. If
+  // storing the values fails (e.g. due to going over quota), returns false and
+  // leaves `changes` untouched, storing an error in `error`.
   bool Set(const ExtensionId& extension_id,
            std::map<std::string, base::Value> values,
-           std::vector<ValueChange>& changes);
+           std::vector<ValueChange>& changes,
+           std::string* error);
 
-  // Removes multiple keys for the given `extension_id`.
+  // Removes multiple `keys` for an `extension_id`. Populates `changes` with the
+  // removed values.
   void Remove(const ExtensionId& extension_id,
               const std::vector<std::string>& keys,
               std::vector<ValueChange>& changes);
 
-  // Removes a key for the given `extension_id`.
+  // Removes a `key` for an `extension_id`. Populates `changes` with the removed
+  // value.
   void Remove(const ExtensionId& extension_id,
               const std::string& key,
               std::vector<ValueChange>& changes);
 
-  // Clears the storage of the given `extension_id`.
+  // Clears all keys for an `extension_id`.
+  void Clear(const ExtensionId& extension_id);
+
+  // Clears all keys for an `extension_id`. Populates `changes` with the cleared
+  // values.
   void Clear(const ExtensionId& extension_id,
              std::vector<ValueChange>& changes);
 
@@ -109,6 +137,9 @@ class SessionStorageManager : public base::SupportsUserData::Data {
     explicit ExtensionStorage(size_t quota_bytes);
     ~ExtensionStorage();
 
+    // Returns a vector with keys found in storage.
+    std::vector<std::string> GetKeys() const;
+
     // Returns a map with keys and values found in storage.
     std::map<std::string, const base::Value*> Get(
         const std::vector<std::string>& keys) const;
@@ -117,9 +148,11 @@ class SessionStorageManager : public base::SupportsUserData::Data {
     std::map<std::string, const base::Value*> GetAll() const;
 
     // Stores the input values in the values map, and updates the changes list
-    // if a change occurs.
+    // if a change occurs. If storing fails, returns false and populates
+    // `error`.
     bool Set(std::map<std::string, base::Value> input_values,
-             std::vector<ValueChange>& changes);
+             std::vector<ValueChange>& changes,
+             std::string* error);
 
     // Removes multiple keys from the storage.
     void Remove(const std::vector<std::string>& keys,
@@ -127,6 +160,7 @@ class SessionStorageManager : public base::SupportsUserData::Data {
 
     // Clears the storage.
     void Clear(std::vector<ValueChange>& changes);
+    void Clear();
 
     // Gets the total amount of bytes being used by multiple keys and values.
     size_t GetBytesInUse(const std::vector<std::string>& keys) const;
@@ -151,6 +185,14 @@ class SessionStorageManager : public base::SupportsUserData::Data {
     // Map of value key to its session value.
     std::map<std::string, std::unique_ptr<SessionValue>> values_;
   };
+
+  // ExtensionRegistryObserver:
+  void OnExtensionUnloaded(content::BrowserContext* browser_context,
+                           const Extension* extension,
+                           UnloadedExtensionReason reason) override;
+
+  base::ScopedObservation<ExtensionRegistry, ExtensionRegistryObserver>
+      extension_registry_observation_{this};
 
   // Map of extension id to its storage.
   std::map<ExtensionId, std::unique_ptr<ExtensionStorage>> extensions_storage_;

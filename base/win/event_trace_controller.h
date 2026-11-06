@@ -1,7 +1,7 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-//
+
 // Declaration of a Windows event trace controller class.
 // The controller takes care of creating and manipulating event trace
 // sessions.
@@ -29,7 +29,8 @@
 #include <string>
 
 #include "base/base_export.h"
-#include "base/macros.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 
 namespace base {
 namespace win {
@@ -41,6 +42,9 @@ class BASE_EXPORT EtwTraceProperties {
  public:
   EtwTraceProperties();
 
+  EtwTraceProperties(const EtwTraceProperties&) = delete;
+  EtwTraceProperties& operator=(const EtwTraceProperties&) = delete;
+
   EVENT_TRACE_PROPERTIES* get() { return &properties_; }
 
   const EVENT_TRACE_PROPERTIES* get() const {
@@ -48,13 +52,15 @@ class BASE_EXPORT EtwTraceProperties {
   }
 
   const wchar_t* GetLoggerName() const {
-    return reinterpret_cast<const wchar_t*>(buffer_ + get()->LoggerNameOffset);
+    return reinterpret_cast<const wchar_t*>(
+        UNSAFE_TODO(buffer_ + get())->LoggerNameOffset);
   }
 
   // Copies logger_name to the properties structure.
   HRESULT SetLoggerName(const wchar_t* logger_name);
   const wchar_t* GetLoggerFileName() const {
-    return reinterpret_cast<const wchar_t*>(buffer_ + get()->LogFileNameOffset);
+    return reinterpret_cast<const wchar_t*>(
+        UNSAFE_TODO(buffer_ + get())->LogFileNameOffset);
   }
 
   // Copies logger_file_name to the properties structure.
@@ -72,14 +78,11 @@ class BASE_EXPORT EtwTraceProperties {
   // larger buffer to allow storing the logger name and logger file
   // name contiguously with the structure.
   union {
-   public:
     // Our properties header.
     EVENT_TRACE_PROPERTIES properties_;
     // The actual size of the buffer is forced by this member.
     char buffer_[kBufSize];
   };
-
-  DISALLOW_COPY_AND_ASSIGN(EtwTraceProperties);
 };
 
 // This class implements an ETW controller, which knows how to start and
@@ -88,6 +91,10 @@ class BASE_EXPORT EtwTraceProperties {
 class BASE_EXPORT EtwTraceController {
  public:
   EtwTraceController();
+
+  EtwTraceController(const EtwTraceController&) = delete;
+  EtwTraceController& operator=(const EtwTraceController&) = delete;
+
   ~EtwTraceController();
 
   // Start a session with given name and properties.
@@ -110,6 +117,9 @@ class BASE_EXPORT EtwTraceController {
                          ULONG flags = 0xFFFFFFFF);
   // Disables "provider".
   HRESULT DisableProvider(const GUID& provider);
+
+  // Enables call stacks for the given `events`.
+  HRESULT EnableCallStacks(base::span<const CLASSIC_EVENT_ID> events);
 
   // Stops our session and retrieve the new properties of the session,
   // properties may be NULL.
@@ -143,8 +153,6 @@ class BASE_EXPORT EtwTraceController {
  private:
   std::wstring session_name_;
   TRACEHANDLE session_ = NULL;
-
-  DISALLOW_COPY_AND_ASSIGN(EtwTraceController);
 };
 
 }  // namespace win

@@ -1,13 +1,13 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_ASH_ARC_SESSION_ADB_SIDELOADING_AVAILABILITY_DELEGATE_IMPL_H_
 #define CHROME_BROWSER_ASH_ARC_SESSION_ADB_SIDELOADING_AVAILABILITY_DELEGATE_IMPL_H_
 
-#include "components/arc/session/adb_sideloading_availability_delegate.h"
-
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chromeos/ash/experiences/arc/session/adb_sideloading_availability_delegate.h"
 
 namespace arc {
 
@@ -32,7 +32,7 @@ class AdbSideloadingAvailabilityDelegateImpl
 
  private:
   // Unowned pointer. Keeps current profile.
-  Profile* profile_ = nullptr;
+  raw_ptr<Profile, DanglingUntriaged> profile_ = nullptr;
 };
 
 }  // namespace arc

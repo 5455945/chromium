@@ -1,20 +1,23 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_VIEWS_WIDGET_DESKTOP_AURA_DESKTOP_WINDOW_TREE_HOST_LINUX_H_
 #define UI_VIEWS_WIDGET_DESKTOP_AURA_DESKTOP_WINDOW_TREE_HOST_LINUX_H_
 
-#include <list>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/gtest_prod_util.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "ui/aura/scoped_window_targeter.h"
 #include "ui/base/buildflags.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/native_theme/native_theme.h"
+#include "ui/native_theme/native_theme_observer.h"
 #include "ui/platform_window/extensions/x11_extension_delegate.h"
 #include "ui/views/views_export.h"
 #include "ui/views/widget/desktop_aura/desktop_window_tree_host_platform.h"
@@ -25,84 +28,93 @@ class ScopedWindowTargeter;
 
 namespace ui {
 class X11Extension;
-class WaylandExtension;
 }  // namespace ui
 
 namespace views {
 
-class WindowEventFilterLinux;
+class FrameView;
 
-// Contains Linux specific implementation.
+class WindowEventFilterLinux;
+using WindowEventFilterClass = WindowEventFilterLinux;
+
+// Contains Linux specific implementation, which supports both X11 and Wayland
+// backend.
 class VIEWS_EXPORT DesktopWindowTreeHostLinux
     : public DesktopWindowTreeHostPlatform,
-      public ui::X11ExtensionDelegate {
+      public ui::X11ExtensionDelegate,
+      public ui::NativeThemeObserver {
  public:
+  static const char kWindowKey[];
+
   DesktopWindowTreeHostLinux(
       internal::NativeWidgetDelegate* native_widget_delegate,
       DesktopNativeWidgetAura* desktop_native_widget_aura);
+
+  DesktopWindowTreeHostLinux(const DesktopWindowTreeHostLinux&) = delete;
+  DesktopWindowTreeHostLinux& operator=(const DesktopWindowTreeHostLinux&) =
+      delete;
+
   ~DesktopWindowTreeHostLinux() override;
-
-  // Get all open top-level windows. This includes windows that may not be
-  // visible. This list is sorted in their stacking order, i.e. the first window
-  // is the topmost window.
-  static std::vector<aura::Window*> GetAllOpenWindows();
-
-  // Runs the |func| callback for each content-window, and deallocates the
-  // internal list of open windows.
-  static void CleanUpWindowList(void (*func)(aura::Window* window));
-
-  // Casts from a base WindowTreeHost instance.
-  static DesktopWindowTreeHostLinux* From(WindowTreeHost* wth);
 
   // Returns the current bounds in terms of the X11 Root Window including the
   // borders provided by the window manager (if any). Not in use for Wayland.
   gfx::Rect GetXRootWindowOuterBounds() const;
 
-  // Tells if the point is within X11 Root Window's region. Not in use for
-  // Wayland.
-  bool ContainsPointInXRegion(const gfx::Point& point) const;
-
-  // Tells the X server to lower the |platform_window()| owned by this host down
-  // the stack so that it does not obscure any sibling windows. Not in use for
-  // Wayland.
-  void LowerXWindow();
-
-  // Disables event listening to make |dialog| modal.
+  // DesktopWindowTreeHostPlatform:
+  std::unique_ptr<FrameView> CreateFrameView() override;
+  void LowerWindow() override;
+  // Disables event listening to make |dialog| modal, cancelling any active
+  // touches and clearing tracked mouse button state on the host window.
   base::OnceClosure DisableEventListening();
 
-  ui::WaylandExtension* GetWaylandExtension();
-  const ui::WaylandExtension* GetWaylandExtension() const;
+  // Sets hints for the WM/compositor that reflect the extents of the
+  // client-drawn shadow.
+  virtual void UpdateFrameHints();
 
  protected:
   // Overridden from DesktopWindowTreeHost:
   void Init(const Widget::InitParams& params) override;
   void OnNativeWidgetCreated(const Widget::InitParams& params) override;
-  base::flat_map<std::string, std::string> GetKeyboardLayoutMap() override;
-  void InitModalType(ui::ModalType modal_type) override;
+  void InitModalType(ui::mojom::ModalType modal_type) override;
+  void PrepareForMoveLoop(Widget::MoveLoopSource source) override;
+  void SetBypassWindowManager(bool bypass) override;
   Widget::MoveLoopResult RunMoveLoop(
       const gfx::Vector2d& drag_offset,
       Widget::MoveLoopSource source,
       Widget::MoveLoopEscapeBehavior escape_behavior) override;
 
   // PlatformWindowDelegate:
+  gfx::Insets CalculateInsetsInDIP(
+      ui::PlatformWindowState window_state) const override;
   void DispatchEvent(ui::Event* event) override;
   void OnClosed() override;
-  void OnAcceleratedWidgetAvailable(gfx::AcceleratedWidget widget) override;
-  void OnActivationChanged(bool active) override;
+  void OnBoundsChanged(const BoundsChange& change) override;
+  void OnWindowTiledStateChanged(ui::WindowTiledEdges new_tiled_edges) override;
 
   ui::X11Extension* GetX11Extension();
   const ui::X11Extension* GetX11Extension() const;
 
- private:
-  FRIEND_TEST_ALL_PREFIXES(DesktopWindowTreeHostLinuxTest, HitTest);
-  FRIEND_TEST_ALL_PREFIXES(DesktopWindowTreeHostLinuxTest, MouseNCEvents);
-  FRIEND_TEST_ALL_PREFIXES(DesktopWindowTreeHostLinuxHighDPITest,
-                           MouseNCEvents);
-
-  // DesktopWindowTreeHostPlatform overrides:
+  // DesktopWindowTreeHostPlatform:
   void AddAdditionalInitProperties(
       const Widget::InitParams& params,
       ui::PlatformWindowInitProperties* properties) override;
+
+  // ui::NativeThemeObserver:
+  void OnNativeThemeUpdated(ui::NativeTheme* observed_theme) override;
+
+ private:
+  FRIEND_TEST_ALL_PREFIXES(DesktopWindowTreeHostPlatformImplTestWithTouch,
+                           HitTest);
+  FRIEND_TEST_ALL_PREFIXES(DesktopWindowTreeHostPlatformImplTest,
+                           CaptionHoldHandsOffMoveAfterThreshold);
+
+  // DesktopWindowTreeHostPlatform:
+  base::flat_map<std::string, std::string> GetKeyboardLayoutMap() override;
+
+  // WindowTreeHost:
+  bool SupportsMouseLock() override;
+  void LockMouse(aura::Window* window) override;
+  void UnlockMouse(aura::Window* window) override;
 
   // Called back by compositor_observer_ if the latter is set.
   virtual void OnCompleteSwapWithNewSize(const gfx::Size& size);
@@ -110,23 +122,25 @@ class VIEWS_EXPORT DesktopWindowTreeHostLinux
   void CreateNonClientEventFilter();
   void DestroyNonClientEventFilter();
 
+  // Sets the opaque and input regions for the window based on
+  // FrameViewLinux decorations.
+  void UpdateFrameRegions();
+
   // X11ExtensionDelegate overrides:
   void OnLostMouseGrab() override;
 #if BUILDFLAG(USE_ATK)
   bool OnAtkKeyEvent(AtkKeyEventStruct* atk_key_event, bool transient) override;
-#endif
-  bool IsOverrideRedirect(bool is_tiling_wm) const override;
+#endif  // BUILDFLAG(USE_ATK)
+  bool IsOverrideRedirect(const ui::X11Extension& x11_extension) const override;
+  gfx::Rect GetGuessedFullScreenSizeInPx() const override;
 
   // Enables event listening after closing |dialog|.
   void EnableEventListening();
 
-  // See comment for variable open_windows_.
-  static std::list<gfx::AcceleratedWidget>& open_windows();
-
   // A handler for events intended for non client area.
   // A posthandler for events intended for non client area. Handles events if no
   // other consumer handled them.
-  std::unique_ptr<WindowEventFilterLinux> non_client_window_event_filter_;
+  std::unique_ptr<WindowEventFilterClass> non_client_window_event_filter_;
 
   std::unique_ptr<CompositorObserver> compositor_observer_;
 
@@ -134,14 +148,11 @@ class VIEWS_EXPORT DesktopWindowTreeHostLinux
 
   uint32_t modal_dialog_counter_ = 0;
 
-  // A list of all (top-level) windows that have been created but not yet
-  // destroyed.
-  static std::list<gfx::AcceleratedWidget>* open_windows_;
+  base::ScopedObservation<ui::NativeTheme, ui::NativeThemeObserver>
+      theme_observation_{this};
 
   // The display and the native X window hosting the root window.
   base::WeakPtrFactory<DesktopWindowTreeHostLinux> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(DesktopWindowTreeHostLinux);
 };
 
 }  // namespace views

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,20 +6,20 @@
 
 #include <stddef.h>
 
+#include <optional>
+#include <string>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/rand_util.h"
-#include "base/single_thread_task_runner.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "components/omnibox/browser/intranet_redirector_state.h"
@@ -40,7 +40,6 @@
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 
-// TODO(crbug.com/181671): Write test to verify we handle the policy toggling.
 IntranetRedirectDetector::IntranetRedirectDetector()
     : redirect_origin_(g_browser_process->local_state()->GetString(
           prefs::kLastKnownIntranetRedirectOrigin)) {
@@ -50,9 +49,8 @@ IntranetRedirectDetector::IntranetRedirectDetector()
   // Ideally, instead of this timer, we'd do something like "check if the
   // browser is starting up, and if so, come back later", but there is currently
   // no function to do this.
-  static constexpr base::TimeDelta kStartFetchDelay =
-      base::TimeDelta::FromSeconds(7);
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+  static constexpr base::TimeDelta kStartFetchDelay = base::Seconds(7);
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE,
       base::BindOnce(&IntranetRedirectDetector::FinishSleep,
                      weak_ptr_factory_.GetWeakPtr()),
@@ -78,7 +76,6 @@ void IntranetRedirectDetector::RegisterPrefs(PrefRegistrySimple* registry) {
   registry->RegisterStringPref(prefs::kLastKnownIntranetRedirectOrigin,
                                std::string());
   registry->RegisterBooleanPref(prefs::kDNSInterceptionChecksEnabled, true);
-  registry->RegisterIntegerPref(omnibox::kIntranetRedirectBehavior, 0);
 }
 
 void IntranetRedirectDetector::Restart() {
@@ -97,9 +94,8 @@ void IntranetRedirectDetector::Restart() {
   // Since presumably many programs open connections after network changes,
   // delay this a little bit.
   in_sleep_ = true;
-  static constexpr base::TimeDelta kRestartDelay =
-      base::TimeDelta::FromSeconds(1);
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+  static constexpr base::TimeDelta kRestartDelay = base::Seconds(1);
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE,
       base::BindOnce(&IntranetRedirectDetector::FinishSleep,
                      weak_ptr_factory_.GetWeakPtr()),
@@ -125,7 +121,8 @@ void IntranetRedirectDetector::FinishSleep() {
   if (cmd_line->HasSwitch(switches::kDisableBackgroundNetworking))
     return;
 
-  DCHECK(simple_loaders_.empty() && resulting_origins_.empty());
+  CHECK(simple_loaders_.empty() && resulting_origins_.empty(),
+        base::NotFatalUntil::M162);
 
   // Create traffic annotation tag.
   net::NetworkTrafficAnnotationTag traffic_annotation =
@@ -154,9 +151,9 @@ void IntranetRedirectDetector::FinishSleep() {
   for (size_t i = 0; i < 3; ++i) {
     std::string url_string("http://");
     // We generate a random hostname with between 7 and 15 characters.
-    const int num_chars = base::RandInt(7, 15);
+    const int num_chars = base::RandIntInclusive(7, 15);
     for (int j = 0; j < num_chars; ++j)
-      url_string += ('a' + base::RandInt(0, 'z' - 'a'));
+      url_string += ('a' + base::RandIntInclusive(0, 'z' - 'a'));
     GURL random_url(url_string + '/');
 
     auto resource_request = std::make_unique<network::ResourceRequest>();
@@ -183,10 +180,10 @@ void IntranetRedirectDetector::FinishSleep() {
 
 void IntranetRedirectDetector::OnSimpleLoaderComplete(
     network::SimpleURLLoader* source,
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   // Delete the loader on this function's exit.
   auto it = simple_loaders_.find(source);
-  DCHECK(it != simple_loaders_.end());
+  CHECK(it != simple_loaders_.end());
   std::unique_ptr<network::SimpleURLLoader> simple_loader =
       std::move(it->second);
   simple_loaders_.erase(it);
@@ -194,8 +191,8 @@ void IntranetRedirectDetector::OnSimpleLoaderComplete(
   // If any two loaders result in the same domain/host, we set the redirect
   // origin to that; otherwise we set it to nothing.
   if (response_body) {
-    DCHECK(source->GetFinalURL().is_valid());
-    GURL origin(source->GetFinalURL().GetOrigin());
+    CHECK(source->GetFinalURL().is_valid(), base::NotFatalUntil::M162);
+    GURL origin(source->GetFinalURL().DeprecatedGetOriginAsURL());
     if (resulting_origins_.empty()) {
       resulting_origins_.push_back(origin);
       return;
@@ -207,7 +204,7 @@ void IntranetRedirectDetector::OnSimpleLoaderComplete(
       redirect_origin_ = origin;
       if (!simple_loaders_.empty()) {
         // Cancel remaining loader, we don't need it.
-        DCHECK(simple_loaders_.size() == 1);
+        CHECK(simple_loaders_.size() == 1, base::NotFatalUntil::M162);
         simple_loaders_.clear();
       }
     }
@@ -215,7 +212,7 @@ void IntranetRedirectDetector::OnSimpleLoaderComplete(
       resulting_origins_.push_back(origin);
       return;
     }
-    DCHECK(resulting_origins_.size() == 2);
+    CHECK(resulting_origins_.size() == 2, base::NotFatalUntil::M162);
     const bool same_domain_or_host =
         net::registry_controlled_domains::SameDomainOrHost(
             resulting_origins_.back(),
@@ -237,9 +234,10 @@ void IntranetRedirectDetector::OnSimpleLoaderComplete(
 }
 
 void IntranetRedirectDetector::OnConnectionChanged(
-    network::mojom::ConnectionType type) {
-  if (type != network::mojom::ConnectionType::CONNECTION_NONE)
+    net::NetworkChangeNotifier::ConnectionType type) {
+  if (type != net::NetworkChangeNotifier::ConnectionType::CONNECTION_NONE) {
     Restart();
+  }
 }
 
 void IntranetRedirectDetector::OnDnsConfigChanged() {
@@ -247,7 +245,7 @@ void IntranetRedirectDetector::OnDnsConfigChanged() {
 }
 
 void IntranetRedirectDetector::SetupDnsConfigClient() {
-  DCHECK(!dns_config_client_receiver_.is_bound());
+  CHECK(!dns_config_client_receiver_.is_bound(), base::NotFatalUntil::M162);
 
   mojo::Remote<network::mojom::DnsConfigChangeManager> manager_remote;
   content::GetNetworkService()->GetDnsConfigChangeManager(
@@ -270,7 +268,7 @@ bool IntranetRedirectDetector::IsEnabledByPolicy() {
   // interception checks. Therefore, we enable the redirect detector iff allowed
   // by both policies.
 
-  // Check IntranetRedirectorBehavior pref and experiment.
+  // Check IntranetRedirectorBehavior pref.
   auto behavior =
       omnibox::GetInterceptionChecksBehavior(g_browser_process->local_state());
   if (behavior == omnibox::IntranetRedirectorBehavior::DISABLE_FEATURE ||

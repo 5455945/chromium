@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,6 +14,7 @@
 #ifndef COMPONENTS_SUBRESOURCE_FILTER_CORE_COMMON_TIME_MEASUREMENTS_H_
 #define COMPONENTS_SUBRESOURCE_FILTER_CORE_COMMON_TIME_MEASUREMENTS_H_
 
+#include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram.h"
 #include "base/time/time.h"
 #include "components/subresource_filter/core/common/scoped_timers.h"
@@ -64,10 +65,9 @@ namespace subresource_filter {
 // the histogram stores times in microseconds, up to 1 second, in 50 buckets.
 //
 // WARNING: The generated code is not thread-safe.
-#define UMA_HISTOGRAM_MICRO_TIMES(name, sample)                          \
-  UMA_HISTOGRAM_CUSTOM_MICRO_TIMES(name, sample,                         \
-                                   base::TimeDelta::FromMicroseconds(1), \
-                                   base::TimeDelta::FromSeconds(1), 50)
+#define UMA_HISTOGRAM_MICRO_TIMES(name, sample)                         \
+  UMA_HISTOGRAM_CUSTOM_MICRO_TIMES(name, sample, base::Microseconds(1), \
+                                   base::Seconds(1), 50)
 
 // This can be used when the default ranges are not sufficient. This macro lets
 // the metric developer customize the min and max of the sampled range, as well
@@ -130,20 +130,84 @@ class ExportTimeDeltaToHistogram {
       : histogram_(histogram) {}
 
   void operator()(base::TimeDelta duration) {
-    if (is_microsec_precision)
+    if (is_microsec_precision) {
       histogram_->Add(duration.InMicroseconds());
-    else
+    } else {
       histogram_->Add(duration.InMilliseconds());
+    }
   }
 
  private:
-  base::HistogramBase* histogram_;
+  raw_ptr<base::HistogramBase> histogram_;
 };
 
 using ExportMillisecondsToHistogram = ExportTimeDeltaToHistogram<false>;
 using ExportMicrosecondsToHistogram = ExportTimeDeltaToHistogram<true>;
 
 }  // namespace impl
+
+// Classes for scoped thread timers --------------------------------------------
+
+// Creates a scoped object that measures its lifetime using base::ThreadTicks,
+// and reports the result in milliseconds as a UMA statistic to a histogram with
+// the provided `name` which is expected to be a runtime constant. The histogram
+// collects times up to 10 seconds in 50 buckets.
+//
+// Example:
+//   void Function() {
+//     auto scoped_timer =
+//       ScopedUmaHistogramThreadTimer("Component.FunctionTime");
+//     ... Useful things happen here ...
+//   }
+//
+// WARNING: The generated code is not thread-safe.
+class ScopedUmaHistogramThreadTimer {
+ public:
+  ScopedUmaHistogramThreadTimer() = delete;
+  explicit ScopedUmaHistogramThreadTimer(const std::string& name);
+
+  ScopedUmaHistogramThreadTimer(const ScopedUmaHistogramThreadTimer&) = delete;
+  ScopedUmaHistogramThreadTimer& operator=(
+      const ScopedUmaHistogramThreadTimer&) = delete;
+
+  ~ScopedUmaHistogramThreadTimer();
+
+ private:
+  impl::ScopedTimerImpl<base::ThreadTicks, impl::ExportMillisecondsToHistogram>
+      scoped_uma_histogram_thread_timer_;
+};
+
+// Creates a scoped object that measures its lifetime using base::ThreadTicks,
+// and reports the result in milliseconds as a UMA statistic to a histogram with
+// the provided `name` which is expected to be a runtime constant.
+//
+// Similar to ScopedUmaHistogramThreadTimer above, but the histogram
+// collects times in microseconds, up to 1 second, and using 50 buckets.
+//
+// Example:
+//   void Function() {
+//     auto scoped_timer =
+//       ScopedUmaHistogramMicroThreadTimer("Component.FunctionTime");
+//     ... Useful things happen here ...
+//   }
+//
+// WARNING: The generated code is not thread-safe.
+class ScopedUmaHistogramMicroThreadTimer {
+ public:
+  ScopedUmaHistogramMicroThreadTimer() = delete;
+  explicit ScopedUmaHistogramMicroThreadTimer(const std::string& name);
+
+  ScopedUmaHistogramMicroThreadTimer(
+      const ScopedUmaHistogramMicroThreadTimer&) = delete;
+  ScopedUmaHistogramMicroThreadTimer& operator=(
+      const ScopedUmaHistogramMicroThreadTimer&) = delete;
+
+  ~ScopedUmaHistogramMicroThreadTimer();
+
+ private:
+  impl::ScopedTimerImpl<base::ThreadTicks, impl::ExportMicrosecondsToHistogram>
+      scoped_uma_histogram_micro_thread_timer_;
+};
 
 }  // namespace subresource_filter
 

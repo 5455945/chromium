@@ -1,4 +1,4 @@
-(async function(testRunner) {
+(async function(/** @type {import('test_runner').TestRunner} */ testRunner) {
   var {page, session, dp} = await testRunner.startBlank(
       `Tests that service worker requests are intercepted.`);
 
@@ -20,7 +20,7 @@
   });
 
   await dp.ServiceWorker.enable();
-  await session.navigate("resources/service-worker.html");
+  await session.navigate("resources/empty.html");
   session.evaluateAsync(`navigator.serviceWorker.register('service-worker.js')`);
 
   async function waitForServiceWorkerActivation() {

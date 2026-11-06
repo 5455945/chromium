@@ -1,55 +1,85 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.searchwidget;
 
 import android.content.Context;
-import android.text.TextUtils;
 import android.util.AttributeSet;
 import android.view.View;
 
-import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
+import androidx.annotation.StringRes;
 import androidx.annotation.VisibleForTesting;
+import androidx.core.content.ContextCompat;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.lens.LensEntryPoint;
 import org.chromium.chrome.browser.locale.LocaleManager;
+import org.chromium.chrome.browser.omnibox.LocationBarBackgroundDrawable;
 import org.chromium.chrome.browser.omnibox.LocationBarDataProvider;
 import org.chromium.chrome.browser.omnibox.LocationBarLayout;
-import org.chromium.chrome.browser.omnibox.SearchEngineLogoUtils;
-import org.chromium.chrome.browser.omnibox.UrlBar;
 import org.chromium.chrome.browser.omnibox.UrlBarCoordinator;
-import org.chromium.chrome.browser.omnibox.UrlBarCoordinator.SelectionState;
-import org.chromium.chrome.browser.omnibox.UrlBarData;
 import org.chromium.chrome.browser.omnibox.status.StatusCoordinator;
+import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
 import org.chromium.chrome.browser.omnibox.suggestions.AutocompleteCoordinator;
-import org.chromium.chrome.browser.omnibox.voice.VoiceRecognitionHandler;
+import org.chromium.chrome.browser.omnibox.voice.VoiceRecognitionIntentHandler;
 import org.chromium.chrome.browser.toolbar.top.ToolbarPhone;
+import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityExtras.IntentOrigin;
+import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityExtras.SearchType;
+import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityPreferencesManager;
+import org.chromium.ui.base.WindowAndroid;
+import org.chromium.ui.widget.Toast;
 
 /** Implementation of the {@link LocationBarLayout} that is displayed for widget searches. */
+@NullMarked
 public class SearchActivityLocationBarLayout extends LocationBarLayout {
     private boolean mPendingSearchPromoDecision;
     private boolean mPendingBeginQuery;
-    private boolean mHasWindowFocus;
-    private boolean mUrlBarFocusRequested;
+    private boolean mInteractionFromWidget;
 
     public SearchActivityLocationBarLayout(Context context, AttributeSet attrs) {
-        super(context, attrs, R.layout.location_bar_base);
-        setBackground(ToolbarPhone.createModernLocationBarBackground(getResources()));
+        super(context, attrs, R.layout.location_bar);
     }
 
     @Override
-    public void initialize(@NonNull AutocompleteCoordinator autocompleteCoordinator,
-            @NonNull UrlBarCoordinator urlCoordinator, @NonNull StatusCoordinator statusCoordinator,
-            @NonNull LocationBarDataProvider locationBarDataProvider,
-            @NonNull SearchEngineLogoUtils searchEngineLogoUtils) {
-        super.initialize(autocompleteCoordinator, urlCoordinator, statusCoordinator,
-                locationBarDataProvider, searchEngineLogoUtils);
+    public void initialize(
+            AutocompleteCoordinator autocompleteCoordinator,
+            UrlBarCoordinator urlCoordinator,
+            StatusCoordinator statusCoordinator,
+            LocationBarDataProvider locationBarDataProvider,
+            WindowAndroid windowAndroid,
+            OmniboxResourceProvider resourceProvider) {
+        super.initialize(
+                autocompleteCoordinator,
+                urlCoordinator,
+                statusCoordinator,
+                locationBarDataProvider,
+                windowAndroid,
+                resourceProvider);
         mPendingSearchPromoDecision = LocaleManager.getInstance().needToCheckForSearchEnginePromo();
-        getAutocompleteCoordinator().setShouldPreventOmniboxAutocomplete(
-                mPendingSearchPromoDecision);
-        findViewById(R.id.url_action_container).setVisibility(View.VISIBLE);
+        mAutocompleteCoordinator.setShouldPreventOmniboxAutocomplete(mPendingSearchPromoDecision);
+
+        var backgroundDrawable = ToolbarPhone.createModernLocationBarBackground(getContext());
+        backgroundDrawable.setBackgroundColor(
+                ContextCompat.getColor(getContext(), R.color.search_suggestion_bg_color));
+        backgroundDrawable.setCornerRadius(
+                getResources()
+                        .getDimensionPixelSize(R.dimen.omnibox_suggestion_bg_round_corner_radius));
+
+        // Replicate LocationBarBackground bounds from ToolbarPhone.
+        int verticalInsets =
+                getResources().getDimensionPixelSize(R.dimen.location_bar_vertical_margin)
+                        - resourceProvider.getLocationBarBackgroundOnFocusHeightIncrease() / 2;
+        backgroundDrawable.setInsets(0, verticalInsets, 0, verticalInsets);
+
+        setBackground(backgroundDrawable);
+
+        // Expand status view's left and right space, and expand the vertical padding of the
+        // location bar to match the expanded interface on the regular omnibox.
+        setUrlFocusChangePercent(1f, 1f, /* isUrlFocusChangeInProgress= */ false);
+        requestOmniboxFocus();
     }
 
     @Override
@@ -57,107 +87,129 @@ public class SearchActivityLocationBarLayout extends LocationBarLayout {
         super.onFinishNativeInitialization();
 
         mPendingSearchPromoDecision = LocaleManager.getInstance().needToCheckForSearchEnginePromo();
-        getAutocompleteCoordinator().setShouldPreventOmniboxAutocomplete(
-                mPendingSearchPromoDecision);
+        mAutocompleteCoordinator.setShouldPreventOmniboxAutocomplete(mPendingSearchPromoDecision);
     }
 
     /** Called when the SearchActivity has finished initialization. */
-    void onDeferredStartup(
-            boolean isVoiceSearchIntent, @NonNull VoiceRecognitionHandler voiceRecognitionHandler) {
-        getAutocompleteCoordinator().prefetchZeroSuggestResults();
-
-        SearchWidgetProvider.updateCachedVoiceSearchAvailability(
-                voiceRecognitionHandler.isVoiceSearchEnabled());
-
+    void onDeferredStartup(@SearchType int searchType, WindowAndroid windowAndroid) {
+        SearchActivityPreferencesManager.updateFeatureAvailability(getContext(), windowAndroid);
         assert !LocaleManager.getInstance().needToCheckForSearchEnginePromo();
         mPendingSearchPromoDecision = false;
-        getAutocompleteCoordinator().setShouldPreventOmniboxAutocomplete(
-                mPendingSearchPromoDecision);
-        String textWithAutocomplete = mUrlCoordinator.getTextWithAutocomplete();
-        if (!TextUtils.isEmpty(textWithAutocomplete)) {
-            mAutocompleteCoordinator.onTextChanged(
-                    mUrlCoordinator.getTextWithoutAutocomplete(), textWithAutocomplete);
-        }
+        mAutocompleteCoordinator.setShouldPreventOmniboxAutocomplete(mPendingSearchPromoDecision);
+        // Do not prefetch suggestions here; instead, we're asking the server for ZPS directly.
+        // Issuing multiple requests would result with only the final one being executed.
+        mAutocompleteCoordinator.onInputChanged();
 
         if (mPendingBeginQuery) {
-            beginQueryInternal(isVoiceSearchIntent, voiceRecognitionHandler);
+            beginQueryInternal(searchType, windowAndroid);
             mPendingBeginQuery = false;
         }
     }
 
     /**
      * Begins a new query.
-     * @param isVoiceSearchIntent Whether this is a voice search.
-     * @param optionalText Prepopulate with a query, this may be null.
+     *
+     * @param origin The SearchActivity requestor.
+     * @param searchType The type of search to invoke.
+     * @param windowAndroid WindowAndroid context.
      */
     @VisibleForTesting
-    public void beginQuery(boolean isVoiceSearchIntent, @Nullable String optionalText,
-            @NonNull VoiceRecognitionHandler voiceRecognitionHandler) {
-        // Clear the text regardless of the promo decision.  This allows the user to enter text
-        // before native has been initialized and have it not be cleared one the delayed beginQuery
-        // logic is performed.
-        mUrlCoordinator.setUrlBarData(
-                UrlBarData.forNonUrlText(optionalText == null ? "" : optionalText),
-                UrlBar.ScrollType.NO_SCROLL, SelectionState.SELECT_ALL);
+    public void beginQuery(
+            @IntentOrigin int origin,
+            @SearchType int searchType,
+            @Nullable WindowAndroid windowAndroid) {
 
-        if (mPendingSearchPromoDecision || (isVoiceSearchIntent && !mNativeInitialized)) {
+        // TODO(crbug.com/372036449): Move setting the hint text from the layout to using the URL
+        // bar view binder and model properties.
+        if (origin == IntentOrigin.HUB) {
+            boolean isIncognito = mLocationBarDataProvider.isIncognitoBranded();
+            @StringRes
+            int hintTextRes =
+                    isIncognito
+                            ? R.string.hub_search_empty_hint_incognito
+                            : R.string.hub_search_empty_hint;
+            mUrlBar.setHint(hintTextRes);
+        } else {
+            mUrlBar.setHint(R.string.omnibox_empty_hint);
+        }
+
+        if (mPendingSearchPromoDecision || (searchType != SearchType.TEXT && !mNativeInitialized)) {
             mPendingBeginQuery = true;
             return;
         }
 
-        beginQueryInternal(isVoiceSearchIntent, voiceRecognitionHandler);
+        beginQueryInternal(searchType, windowAndroid);
     }
 
     private void beginQueryInternal(
-            boolean isVoiceSearchIntent, @NonNull VoiceRecognitionHandler voiceRecognitionHandler) {
+            @SearchType int searchType, @Nullable WindowAndroid windowAndroid) {
         assert !mPendingSearchPromoDecision;
-        assert !isVoiceSearchIntent || mNativeInitialized;
 
-        if (voiceRecognitionHandler.isVoiceSearchEnabled() && isVoiceSearchIntent) {
-            voiceRecognitionHandler.startVoiceRecognition(
-                    VoiceRecognitionHandler.VoiceInteractionSource.SEARCH_WIDGET);
-        } else {
-            focusTextBox();
+        // Update voice and lens eligibility in case anything changed in the process.
+        if (mNativeInitialized) {
+            assert windowAndroid != null;
+            SearchActivityPreferencesManager.updateFeatureAvailability(getContext(), windowAndroid);
+        }
+
+        mInteractionFromWidget = true;
+        if (searchType == SearchType.VOICE) {
+            runVoiceSearch();
+        } else if (searchType == SearchType.LENS) {
+            runGoogleLens();
+        }
+        mInteractionFromWidget = false;
+    }
+
+    /** Begins a new Voice query. */
+    @VisibleForTesting
+    void runVoiceSearch() {
+        View micButton = findViewById(R.id.mic_button);
+        if (!micButton.performClick()) {
+            // Voice recognition is not available. Fall back to regular text search.
+            Toast.makeText(
+                            getContext(),
+                            R.string.quick_action_search_widget_message_no_voice_search,
+                            Toast.LENGTH_LONG)
+                    .show();
         }
     }
 
-    // TODO(tedchoc): Investigate focusing regardless of the search promo state and just ensure
-    //                we don't start processing non-cached suggestion requests until that state
-    //                is finalized after native has been initialized.
-    private void focusTextBox() {
-        mUrlBarFocusRequested |= !mUrlBar.hasFocus();
-        ensureUrlBarFocusedAndTriggerZeroSuggest();
+    /** Begins a new Lens query. */
+    private void runGoogleLens() {
+        View lensButton = findViewById(R.id.lens_camera_button);
+        if (!lensButton.performClick()) {
+            Toast.makeText(
+                            getContext(),
+                            R.string.quick_action_search_widget_message_no_google_lens,
+                            Toast.LENGTH_LONG)
+                    .show();
+        }
+    }
+
+    void requestOmniboxFocus() {
+        mUrlBar.requestFocus();
+    }
+
+    void clearOmniboxFocus() {
+        mUrlBar.clearFocus();
     }
 
     @Override
-    public void onWindowFocusChanged(boolean hasFocus) {
-        super.onWindowFocusChanged(hasFocus);
-        mHasWindowFocus = hasFocus;
-        if (hasFocus) {
-            ensureUrlBarFocusedAndTriggerZeroSuggest();
-        } else {
-            mUrlBar.clearFocus();
-        }
+    public int getVoiceRecognitionSource() {
+        return mInteractionFromWidget
+                ? VoiceRecognitionIntentHandler.VoiceInteractionSource.SEARCH_WIDGET
+                : super.getVoiceRecognitionSource();
     }
 
-    /**
-     * Since there is a race condition between {@link #focusTextBox()} and {@link
-     * #onWindowFocusChanged(boolean)}, if call mUrlBar.requestFocus() before onWindowFocusChanged
-     * is called, clipboard data will not been received since receive clipboard data needs focus
-     * (https://developer.android.com/reference/android/content/ClipboardManager#getPrimaryClip()).
-     *
-     * Requesting focus ahead of window activation completion results with inability to call up
-     * soft keyboard on an early releases of Android S. The remedy is to defer the focus requests
-     * until after Window focus change completes. This is tracked by Android bug http://b/186331446.
-     */
-    private void ensureUrlBarFocusedAndTriggerZeroSuggest() {
-        if (mUrlBarFocusRequested && mHasWindowFocus) {
-            mUrlBar.post(() -> {
-                mUrlBar.requestFocus();
-                mUrlCoordinator.setKeyboardVisibility(true, false);
-                getAutocompleteCoordinator().startCachedZeroSuggest();
-            });
-            mUrlBarFocusRequested = false;
-        }
+    @Override
+    public int getLensEntryPoint() {
+        return mInteractionFromWidget
+                ? LensEntryPoint.QUICK_ACTION_SEARCH_WIDGET
+                : super.getLensEntryPoint();
+    }
+
+    @Override
+    public LocationBarBackgroundDrawable getBackground() {
+        return (LocationBarBackgroundDrawable) super.getBackground();
     }
 }

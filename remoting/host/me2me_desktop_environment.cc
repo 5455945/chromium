@@ -1,41 +1,76 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "remoting/host/me2me_desktop_environment.h"
 
 #include <memory>
+#include <string>
 #include <utility>
 
+#include "base/check.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
-#include "base/single_thread_task_runner.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
+#include "base/notimplemented.h"
+#include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
-#include "remoting/base/logging.h"
 #include "remoting/host/action_executor.h"
+#include "remoting/host/audio_injector.h"
+#include "remoting/host/base/desktop_environment_options.h"
+#include "remoting/host/base/screen_controls.h"
+#include "remoting/host/basic_desktop_environment.h"
 #include "remoting/host/client_session_control.h"
 #include "remoting/host/curtain_mode.h"
-#include "remoting/host/desktop_resizer.h"
+#include "remoting/host/desktop_environment.h"
+#include "remoting/host/desktop_interaction_strategy.h"
 #include "remoting/host/host_window.h"
 #include "remoting/host/host_window_proxy.h"
-#include "remoting/host/input_injector.h"
 #include "remoting/host/input_monitor/local_input_monitor.h"
 #include "remoting/host/resizing_host_observer.h"
-#include "remoting/host/screen_controls.h"
 #include "remoting/protocol/capability_names.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_capture_options.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_capturer.h"
 
-#if defined(OS_POSIX)
+#if BUILDFLAG(IS_POSIX)
 #include <sys/types.h>
 #include <unistd.h>
-#endif  // defined(OS_POSIX)
+#endif  // BUILDFLAG(IS_POSIX)
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "base/win/windows_version.h"
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
+
+#if defined(REMOTING_USE_X11)
+#include "remoting/host/linux/desktop_resizer_x11.h"
+#include "remoting/host/linux/x11_util.h"
+#include "ui/gfx/x/connection.h"
+#endif  // defined(REMOTING_USE_X11)
 
 namespace remoting {
+
+namespace {
+
+#if defined(REMOTING_USE_X11)
+
+// Helper function that caches the result of IsUsingVideoDummyDriver().
+bool UsingVideoDummyDriver() {
+  static bool is_using_dummy_driver =
+      IsUsingVideoDummyDriver(x11::Connection::Get());
+  return is_using_dummy_driver;
+}
+
+bool RunningUnderWayland() {
+  static bool is_running_under_wayland =
+      webrtc::DesktopCapturer::IsRunningUnderWayland();
+  return is_running_under_wayland;
+}
+
+#endif  // defined(REMOTING_USE_X11)
+
+}  // namespace
 
 Me2MeDesktopEnvironment::~Me2MeDesktopEnvironment() {
   DCHECK(caller_task_runner()->BelongsToCurrentThread());
@@ -45,7 +80,7 @@ std::unique_ptr<ActionExecutor>
 Me2MeDesktopEnvironment::CreateActionExecutor() {
   DCHECK(caller_task_runner()->BelongsToCurrentThread());
 
-  return ActionExecutor::Create();
+  return interaction_strategy().CreateActionExecutor();
 }
 
 std::unique_ptr<ScreenControls>
@@ -57,25 +92,20 @@ Me2MeDesktopEnvironment::CreateScreenControls() {
   // they disconnect and reconnect. Both OS X and Windows will restore the
   // resolution automatically when the user logs back in on the console, and on
   // Linux the curtain-mode uses a separate session.
-  return base::WrapUnique(new ResizingHostObserver(DesktopResizer::Create(),
-                                                   curtain_ == nullptr));
+  auto resizer = std::make_unique<ResizingHostObserver>(
+      interaction_strategy().CreateDesktopResizer(), curtain_ == nullptr);
+  resizer->RegisterForDisplayChanges(*GetDisplayInfoMonitor());
+  return resizer;
 }
 
 std::string Me2MeDesktopEnvironment::GetCapabilities() const {
-  std::string capabilities;
+  std::string capabilities = BasicDesktopEnvironment::GetCapabilities();
+  if (!capabilities.empty()) {
+    capabilities += " ";
+  }
   capabilities += protocol::kRateLimitResizeRequests;
 
-  if (InputInjector::SupportsTouchEvents()) {
-    capabilities += " ";
-    capabilities += protocol::kTouchEventsCapability;
-  }
-
-  if (desktop_environment_options().enable_file_transfer()) {
-    capabilities += " ";
-    capabilities += protocol::kFileTransferCapability;
-  }
-
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   capabilities += " ";
   capabilities += protocol::kSendAttentionSequenceAction;
 
@@ -84,27 +114,55 @@ std::string Me2MeDesktopEnvironment::GetCapabilities() const {
     capabilities += " ";
     capabilities += protocol::kLockWorkstationAction;
   }
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
-#if defined(OS_LINUX)
+  if (desktop_environment_options().enable_remote_webauthn()) {
+    capabilities += " ";
+    capabilities += protocol::kRemoteWebAuthnCapability;
+  }
+
+  if (AudioInjector::IsSupported()) {
+    capabilities += " ";
+    capabilities += protocol::kMicrophoneRemotingCapability;
+  }
+
+#if BUILDFLAG(IS_LINUX) && defined(REMOTING_USE_X11)
   capabilities += " ";
-  capabilities += protocol::kRemoteOpenUrlCapability;
-#endif  // defined(OS_LINUX)
+  capabilities += protocol::kMultiStreamCapability;
+  capabilities += " ";
+  capabilities += protocol::kDefaultResizeCapability;
+
+  if (RunningUnderWayland()) {
+    capabilities += " ";
+    capabilities += protocol::kClientControlledLayoutCapability;
+    capabilities += " ";
+    capabilities += protocol::kHighDpiCapability;
+  } else if (UsingVideoDummyDriver()) {
+    capabilities += " ";
+    capabilities += protocol::kClientControlledLayoutCapability;
+
+    if (DesktopResizerX11::supportsHighDpiResize()) {
+      capabilities += " ";
+      capabilities += protocol::kHighDpiCapability;
+    }
+  }
+#elif BUILDFLAG(IS_MAC)
+  capabilities += " ";
+  capabilities += protocol::kMultiStreamCapability;
+#endif  // BUILDFLAG(IS_LINUX) && defined(REMOTING_USE_X11)
 
   return capabilities;
 }
 
 Me2MeDesktopEnvironment::Me2MeDesktopEnvironment(
     scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner,
-    scoped_refptr<base::SingleThreadTaskRunner> video_capture_task_runner,
-    scoped_refptr<base::SingleThreadTaskRunner> input_task_runner,
     scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
+    std::unique_ptr<DesktopInteractionStrategy> interaction_strategy,
     base::WeakPtr<ClientSessionControl> client_session_control,
     const DesktopEnvironmentOptions& options)
     : BasicDesktopEnvironment(caller_task_runner,
-                              video_capture_task_runner,
-                              input_task_runner,
                               ui_task_runner,
+                              std::move(interaction_strategy),
                               client_session_control,
                               options) {
   DCHECK(caller_task_runner->BelongsToCurrentThread());
@@ -116,6 +174,15 @@ Me2MeDesktopEnvironment::Me2MeDesktopEnvironment(
   // see http://crbug.com/73423. It's safe to enable it here because it works
   // properly under Xvfb.
   mutable_desktop_capture_options()->set_use_update_notifications(true);
+
+#if BUILDFLAG(IS_LINUX)
+  // Setting this option to false means that the capture differ wrapper will not
+  // be used when the X11 capturer is selected. This reduces the X11 capture
+  // time by a few milliseconds per frame and is safe because we can rely on
+  // XDAMAGE to identify the changed regions rather than checking each pixel
+  // ourselves.
+  mutable_desktop_capture_options()->set_detect_updated_region(false);
+#endif
 }
 
 bool Me2MeDesktopEnvironment::InitializeSecurity(
@@ -124,8 +191,7 @@ bool Me2MeDesktopEnvironment::InitializeSecurity(
 
   // Detach the session from the local console if the caller requested.
   if (desktop_environment_options().enable_curtaining()) {
-    curtain_ = CurtainMode::Create(
-        caller_task_runner(), ui_task_runner(), client_session_control);
+    curtain_ = interaction_strategy().CreateCurtainMode(client_session_control);
     if (!curtain_->Activate()) {
       LOG(ERROR) << "Failed to activate the curtain mode.";
       curtain_ = nullptr;
@@ -136,9 +202,9 @@ bool Me2MeDesktopEnvironment::InitializeSecurity(
 
   // Otherwise, if the session is shared with the local user start monitoring
   // the local input and create the in-session UI.
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   bool want_user_interface = false;
-#elif defined(OS_APPLE)
+#elif BUILDFLAG(IS_APPLE)
   // Don't try to display any UI on top of the system's login screen as this
   // is rejected by the Window Server on OS X 10.7.4, and prevents the
   // capturer from working (http://crbug.com/140984).
@@ -148,23 +214,44 @@ bool Me2MeDesktopEnvironment::InitializeSecurity(
   // function to be used here and in CurtainMode::ActivateCurtain().
   bool want_user_interface = getuid() != 0;
 #else
-  bool want_user_interface =
-      desktop_environment_options().enable_user_interface();
+  // TODO: crbug.com/499225384 - Re-enable this and extract the value from
+  // desktop_environment_options().enable_user_interface() after the network
+  // process has been split into low- and high-trust processes.
+  bool want_user_interface = true;
 #endif
 
   if (want_user_interface) {
     // Create the local input monitor.
-    local_input_monitor_ = LocalInputMonitor::Create(
-        caller_task_runner(), input_task_runner(), ui_task_runner());
+    local_input_monitor_ = interaction_strategy().CreateLocalInputMonitor();
     local_input_monitor_->StartMonitoringForClientSession(
         client_session_control);
 
-    // Create the disconnect window.
-#if defined(OS_WIN)
-    disconnect_window_ =
-        HostWindow::CreateAutoHidingDisconnectWindow(LocalInputMonitor::Create(
-            caller_task_runner(), input_task_runner(), ui_task_runner()));
+    // Create the disconnect window or privacy overlay.
+#if BUILDFLAG(IS_WIN)
+    if (desktop_environment_options().enable_privacy_overlay() &&
+        base::win::GetVersion() >= base::win::Version::WIN10_20H1) {
+      disconnect_window_ = HostWindow::CreatePrivacyOverlay(
+          interaction_strategy().CreateLocalInputMonitor());
+    } else {
+      if (desktop_environment_options().enable_privacy_overlay()) {
+        LOG(WARNING) << "Privacy overlay requires Windows 10 version 2004 "
+                        "(Build 19041) or later; falling back to standard "
+                        "disconnect window.";
+      }
+      disconnect_window_ = HostWindow::CreateAutoHidingDisconnectWindow(
+          interaction_strategy().CreateLocalInputMonitor());
+    }
+#elif BUILDFLAG(IS_MAC)
+    if (desktop_environment_options().enable_privacy_overlay()) {
+      // TODO(crbug.com/451238243): Hook up HostWindow::CreatePrivacyOverlay().
+      NOTIMPLEMENTED();
+    }
+    disconnect_window_ = HostWindow::CreateAutoHidingDisconnectWindow(
+        interaction_strategy().CreateLocalInputMonitor());
 #else
+    if (desktop_environment_options().enable_privacy_overlay()) {
+      NOTIMPLEMENTED();
+    }
     disconnect_window_ = HostWindow::CreateDisconnectWindow();
 #endif
     disconnect_window_ = std::make_unique<HostWindowProxy>(
@@ -177,32 +264,47 @@ bool Me2MeDesktopEnvironment::InitializeSecurity(
 
 Me2MeDesktopEnvironmentFactory::Me2MeDesktopEnvironmentFactory(
     scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner,
-    scoped_refptr<base::SingleThreadTaskRunner> video_capture_task_runner,
-    scoped_refptr<base::SingleThreadTaskRunner> input_task_runner,
-    scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner)
-    : BasicDesktopEnvironmentFactory(caller_task_runner,
-                                     video_capture_task_runner,
-                                     input_task_runner,
-                                     ui_task_runner) {}
+    scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
+    std::unique_ptr<DesktopInteractionStrategyFactory>
+        interaction_strategy_factory)
+    : BasicDesktopEnvironmentFactory(std::move(caller_task_runner),
+                                     std::move(ui_task_runner),
+                                     std::move(interaction_strategy_factory)) {}
 
-Me2MeDesktopEnvironmentFactory::~Me2MeDesktopEnvironmentFactory() {
-}
+Me2MeDesktopEnvironmentFactory::~Me2MeDesktopEnvironmentFactory() = default;
 
-std::unique_ptr<DesktopEnvironment> Me2MeDesktopEnvironmentFactory::Create(
+void Me2MeDesktopEnvironmentFactory::Create(
     base::WeakPtr<ClientSessionControl> client_session_control,
-    const DesktopEnvironmentOptions& options) {
+    base::WeakPtr<ClientSessionEvents> client_session_events,
+    const DesktopEnvironmentOptions& options,
+    CreateCallback callback) {
   DCHECK(caller_task_runner()->BelongsToCurrentThread());
 
-  std::unique_ptr<Me2MeDesktopEnvironment> desktop_environment(
-      new Me2MeDesktopEnvironment(caller_task_runner(),
-                                  video_capture_task_runner(),
-                                  input_task_runner(), ui_task_runner(),
-                                  client_session_control, options));
-  if (!desktop_environment->InitializeSecurity(client_session_control)) {
-    return nullptr;
-  }
+  auto create_with_interaction_strategy =
+      [](scoped_refptr<base::SingleThreadTaskRunner> caller_task_runner,
+         scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
+         base::WeakPtr<ClientSessionControl> client_session_control,
+         const DesktopEnvironmentOptions& options,
+         std::unique_ptr<DesktopInteractionStrategy> interaction_strategy)
+      -> std::unique_ptr<DesktopEnvironment> {
+    if (!interaction_strategy) {
+      return nullptr;
+    }
+    auto desktop_environment = base::WrapUnique(new Me2MeDesktopEnvironment(
+        std::move(caller_task_runner), std::move(ui_task_runner),
+        std::move(interaction_strategy), client_session_control, options));
+    if (!desktop_environment->InitializeSecurity(client_session_control)) {
+      return nullptr;
+    }
 
-  return std::move(desktop_environment);
+    return desktop_environment;
+  };
+
+  CreateInteractionStrategy(
+      options, base::BindOnce(create_with_interaction_strategy,
+                              caller_task_runner(), ui_task_runner(),
+                              std::move(client_session_control), options)
+                   .Then(std::move(callback)));
 }
 
 }  // namespace remoting

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,15 @@
 #include <tuple>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
+#include "base/notimplemented.h"
+#include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/views/layout/layout_types.h"
 #include "ui/views/view.h"
 
 namespace views {
@@ -23,12 +28,73 @@ namespace {
 constexpr MaximumFlexSizeRule kDefaultMaximumFlexSizeRule =
     MaximumFlexSizeRule::kPreferred;
 
+class LazySize;
+
+// Helper object that lazily returns either the width or height of a LazySize
+// (see below).
+class LazyDimension {
+ public:
+  LazyDimension(const LazySize* size, LayoutOrientation dimension)
+      : size_(size), dimension_(dimension) {}
+
+  int operator*() const { return get(); }
+  int get() const;
+
+ private:
+  const raw_ptr<const LazySize> size_;
+  LayoutOrientation dimension_;
+};
+
+// Some of a view's sizing methods can be expensive to compute. This provides
+// a lazy-eval value that behaves like a smart pointer but is more lightweight
+// than base::LazyInstance.
+class LazySize {
+ public:
+  using SizeFunc = gfx::Size (View::*)() const;
+
+  explicit LazySize(const View* view, SizeFunc size_func)
+      : view_(view), size_func_(size_func) {}
+  LazySize(const LazySize& other) = default;
+  ~LazySize() = default;
+  // Note: copy operator is implicitly deleted due to const data member.
+
+  const gfx::Size* operator->() const { return get(); }
+  const gfx::Size& operator*() const { return *get(); }
+  const gfx::Size* get() const {
+    if (!size_) {
+      size_ = (view_->*size_func_)();
+    }
+    return &size_.value();
+  }
+  LazyDimension width() const {
+    return LazyDimension(this, LayoutOrientation::kHorizontal);
+  }
+  LazyDimension height() const {
+    return LazyDimension(this, LayoutOrientation::kVertical);
+  }
+
+ private:
+  const raw_ptr<const View> view_;
+  SizeFunc size_func_;
+  mutable std::optional<gfx::Size> size_;
+};
+
+int LazyDimension::get() const {
+  switch (dimension_) {
+    case LayoutOrientation::kHorizontal:
+      return (*size_)->width();
+    case LayoutOrientation::kVertical:
+      return (*size_)->height();
+  }
+}
+
 // Interpolates a size between minimum, preferred size, and upper bound based on
 // sizing rules, returning the resulting ideal size.
 int InterpolateSize(MinimumFlexSizeRule minimum_size_rule,
                     MaximumFlexSizeRule maximum_size_rule,
                     int minimum_size,
                     int preferred_size,
+                    LazyDimension maximum_size,
                     int available_size) {
   // A view may (mistakenly) report a minimum size larger than its preferred
   // size. While in principle this shouldn't happen, by the time we've gotten
@@ -36,6 +102,8 @@ int InterpolateSize(MinimumFlexSizeRule minimum_size_rule,
   // cross.
   minimum_size = std::min(minimum_size, preferred_size);
 
+  // TODO(dfried): this could be rearranged to allow lazy evaluation of
+  // minimum_size.
   if (available_size < minimum_size) {
     switch (minimum_size_rule) {
       case MinimumFlexSizeRule::kScaleToZero:
@@ -67,31 +135,18 @@ int InterpolateSize(MinimumFlexSizeRule minimum_size_rule,
   switch (maximum_size_rule) {
     case MaximumFlexSizeRule::kPreferred:
       return preferred_size;
+    case MaximumFlexSizeRule::kScaleToMaximum: {
+      // A view may (mistakenly) report a maximum size smaller than its
+      // preferred size. While in principle this shouldn't happen, by the
+      // time we're here it's better to simply make sure the maximum and
+      // preferred size don't cross.
+      const int actual_maximum_size = std::max(preferred_size, *maximum_size);
+      return std::min(available_size, actual_maximum_size);
+    }
     case MaximumFlexSizeRule::kUnbounded:
       return available_size;
   }
 }
-
-// A view's minimum size can in some cases be expensive to compute. This
-// provides a lazy-eval value that behaves like a smart pointer but is more
-// lightweight than base::LazyInstance.
-class LazyMinimumSize {
- public:
-  explicit LazyMinimumSize(const View* view) : view_(view) {}
-  ~LazyMinimumSize() = default;
-
-  const gfx::Size* operator->() const { return get(); }
-  const gfx::Size& operator*() const { return *get(); }
-  const gfx::Size* get() const {
-    if (!size_)
-      size_ = view_->GetMinimumSize();
-    return &size_.value();
-  }
-
- private:
-  const View* const view_;
-  mutable absl::optional<gfx::Size> size_;
-};
 
 gfx::Size GetPreferredSize(MinimumFlexSizeRule minimum_width_rule,
                            MaximumFlexSizeRule maximum_width_rule,
@@ -99,62 +154,66 @@ gfx::Size GetPreferredSize(MinimumFlexSizeRule minimum_width_rule,
                            MaximumFlexSizeRule maximum_height_rule,
                            bool adjust_height_for_width,
                            const View* view,
-                           const SizeBounds& maximum_size) {
-  LazyMinimumSize min(view);
-  gfx::Size preferred = view->GetPreferredSize();
+                           const SizeBounds& size_bounds) {
+  LazySize minimum_size(view, &View::GetMinimumSize);
+  LazySize maximum_size(view, &View::GetMaximumSize);
+  gfx::Size preferred = view->GetPreferredSize(size_bounds);
 
   int width;
-  if (!maximum_size.width().is_bounded()) {
+  if (!size_bounds.width().is_bounded()) {
     // Not having a maximum size is different from having a large available
     // size; a view can't grow infinitely, so we go with its preferred size.
     width = preferred.width();
   } else {
-    width =
-        InterpolateSize(minimum_width_rule, maximum_width_rule, min->width(),
-                        preferred.width(), maximum_size.width().value());
-  }
+    width = InterpolateSize(minimum_width_rule, maximum_width_rule,
+                            minimum_size->width(), preferred.width(),
+                            maximum_size.width(), size_bounds.width().value());
 
-  int preferred_height = preferred.height();
-  if (adjust_height_for_width) {
-    // The |adjust_height_for_width| flag is used in vertical layouts where we
-    // want views to be able to adapt to the horizontal available space by
-    // growing vertically. We therefore allow the horizontal size to shrink even
-    // if there's otherwise no flex allowed.
-    if (maximum_size.width() > 0)
-      width = maximum_size.width().min_of(width);
-
-    if (width < preferred.width()) {
-      // Allow views that need to grow vertically when they're compressed
-      // horizontally to do so.
-      //
-      // If we just went with GetHeightForWidth() we would have situations where
-      // an empty text control wanted no (or very little) height which could
-      // cause a layout to shrink vertically; we will always try to allocate at
-      // least the view's reported preferred height.
-      //
-      // Note that this is an adjustment made for practical considerations, and
-      // may not be "correct" in some absolute sense. Let's revisit at some
-      // point.
-      preferred_height =
-          std::max(preferred_height, view->GetHeightForWidth(width));
+    // TODO(crbug.com/363806071): Delete this when we delete
+    // `adjust_height_for_width`
+    if (adjust_height_for_width && size_bounds.width() > 0) {
+      width = size_bounds.width().min_of(width);
     }
   }
 
   int height;
-  if (!maximum_size.height().is_bounded()) {
+  if (!size_bounds.height().is_bounded()) {
     // Not having a maximum size is different from having a large available
     // size; a view can't grow infinitely, so we go with its preferred size.
-    height = preferred_height;
+    height = preferred.height();
   } else {
     height =
-        InterpolateSize(minimum_height_rule, maximum_height_rule, min->height(),
-                        preferred_height, maximum_size.height().value());
+        InterpolateSize(minimum_height_rule, maximum_height_rule,
+                        minimum_size->height(), preferred.height(),
+                        maximum_size.height(), size_bounds.height().value());
   }
 
   return gfx::Size(width, height);
 }
 
 }  // namespace
+
+// RuleAndPredicate
+// --------------------------------------------------------
+
+RuleAndPredicate::RuleAndPredicate(int order,
+                                   FlexRule rule,
+                                   RuleEnabledPredicate rule_enabled_predicate)
+    : order(order),
+      rule(std::move(rule)),
+      rule_enabled_predicate(std::move(rule_enabled_predicate)) {}
+
+RuleAndPredicate::RuleAndPredicate(const RuleAndPredicate& other) = default;
+
+RuleAndPredicate& RuleAndPredicate::operator=(const RuleAndPredicate& other) =
+    default;
+
+RuleAndPredicate::RuleAndPredicate(RuleAndPredicate&& other) noexcept = default;
+
+RuleAndPredicate& RuleAndPredicate::operator=(
+    RuleAndPredicate&& other) noexcept = default;
+
+RuleAndPredicate::~RuleAndPredicate() = default;
 
 // FlexSpecification -----------------------------------------------------------
 
@@ -168,6 +227,24 @@ FlexSpecification::FlexSpecification()
 
 FlexSpecification::FlexSpecification(FlexRule rule)
     : rule_(std::move(rule)), weight_(1) {}
+
+FlexSpecification::FlexSpecification(
+    std::vector<RuleAndPredicate> rules_and_predicates)
+    : weight_(1), rules_and_predicates_(std::move(rules_and_predicates)) {
+  CHECK(!rules_and_predicates_.empty());
+
+  // These shouldn't be necessary, but best to initialize everything. Done down
+  // here instead of using initializers to be after the CHECK().
+  rule_ = rules_and_predicates_.front().rule;
+  order_ = rules_and_predicates_.front().order;
+
+  // The last rule, and only the last rule, must have a null
+  // `rule_enabled_predicate`.
+  for (size_t i = 0; i < rules_and_predicates_.size(); ++i) {
+    CHECK_EQ(rules_and_predicates_[i].rule_enabled_predicate.is_null(),
+             i == rules_and_predicates_.size() - 1);
+  }
+}
 
 FlexSpecification::FlexSpecification(MinimumFlexSizeRule minimum_size_rule,
                                      MaximumFlexSizeRule maximum_size_rule,
@@ -208,14 +285,17 @@ FlexSpecification& FlexSpecification::operator=(
 FlexSpecification::~FlexSpecification() = default;
 
 FlexSpecification FlexSpecification::WithWeight(int weight) const {
-  DCHECK_GE(weight, 0);
+  CHECK_GE(weight, 0, base::NotFatalUntil::M163);
   FlexSpecification spec = *this;
   spec.weight_ = weight;
   return spec;
 }
 
 FlexSpecification FlexSpecification::WithOrder(int order) const {
-  DCHECK_GE(order, 1);
+  CHECK_GE(order, 1, base::NotFatalUntil::M163);
+  // This doesn't do anything meaningful for FlexSpecifications with non-empty
+  // `rules_and_predicates_`.
+  CHECK(rules_and_predicates_.empty(), base::NotFatalUntil::M163);
   FlexSpecification spec = *this;
   spec.order_ = order;
   return spec;
@@ -228,6 +308,22 @@ FlexSpecification FlexSpecification::WithAlignment(
   return spec;
 }
 
+std::pair<FlexRule, int> FlexSpecification::GetRuleAndOrderForBounds(
+    const SizeBounds& bounds) const {
+  if (rules_and_predicates_.empty()) {
+    return {rule_, order_};
+  }
+  for (const auto& item : rules_and_predicates_) {
+    if (item.rule_enabled_predicate.is_null() ||
+        item.rule_enabled_predicate.Run(bounds)) {
+      return {item.rule, item.order};
+    }
+  }
+  // If `rules_and_predicates_` is non-null, the last one must have a null
+  // `rule_enabled_predicate`.
+  NOTREACHED();
+}
+
 // Inset1D ---------------------------------------------------------------------
 
 void Inset1D::SetInsets(int leading, int trailing) {
@@ -238,20 +334,6 @@ void Inset1D::SetInsets(int leading, int trailing) {
 void Inset1D::Expand(int leading, int trailing) {
   leading_ += leading;
   trailing_ += trailing;
-}
-
-bool Inset1D::operator==(const Inset1D& other) const {
-  return std::tie(leading_, trailing_) ==
-         std::tie(other.leading_, other.trailing_);
-}
-
-bool Inset1D::operator!=(const Inset1D& other) const {
-  return !(*this == other);
-}
-
-bool Inset1D::operator<(const Inset1D& other) const {
-  return std::tie(leading_, trailing_) <
-         std::tie(other.leading_, other.trailing_);
 }
 
 std::string Inset1D::ToString() const {
@@ -318,19 +400,10 @@ void Span::Align(const Span& container,
       SetSpan(container.start() + margins.leading(),
               std::max(0, container.length() - margins.size()));
       break;
+    case LayoutAlignment::kBaseline:
+      NOTIMPLEMENTED();
+      break;
   }
-}
-
-bool Span::operator==(const Span& other) const {
-  return std::tie(start_, length_) == std::tie(other.start_, other.length_);
-}
-
-bool Span::operator!=(const Span& other) const {
-  return !(*this == other);
-}
-
-bool Span::operator<(const Span& other) const {
-  return std::tie(start_, length_) < std::tie(other.start_, other.length_);
 }
 
 std::string Span::ToString() const {
@@ -338,3 +411,7 @@ std::string Span::ToString() const {
 }
 
 }  // namespace views
+
+DEFINE_ENUM_CONVERTERS(views::FlexAllocationOrder,
+                       {views::FlexAllocationOrder::kNormal, u"kNormal"},
+                       {views::FlexAllocationOrder::kReverse, u"kReverse"})

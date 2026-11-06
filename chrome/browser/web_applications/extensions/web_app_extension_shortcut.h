@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,11 @@
 #include <memory>
 #include <string>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "build/build_config.h"
-#include "chrome/browser/web_applications/components/web_app_shortcut.h"
+#include "chrome/browser/web_applications/os_integration/os_integration_sub_manager.h"
+#include "chrome/browser/web_applications/os_integration/web_app_shortcut.h"
+#include "components/webapps/common/web_app_id.h"
 
 class Profile;
 
@@ -58,18 +60,14 @@ void CreateShortcuts(ShortcutCreationReason reason,
                      const extensions::Extension* app,
                      CreateShortcutsCallback callback);
 
-// Creates shortcuts for a webapp. This loads the app's icon from disk, and
-// calls CreateShortcutsWithInfo(). If you already have a ShortcutInfo with the
-// app's icon loaded, you should use CreateShortcutsWithInfo() directly.
-void CreateShortcutsForWebApp(ShortcutCreationReason reason,
-                              const ShortcutLocations& locations,
-                              Profile* profile,
-                              const std::string& app_id,
-                              CreateShortcutsCallback callback);
-
 // Delete all shortcuts that have been created for the given profile and
 // extension.
 void DeleteAllShortcuts(Profile* profile, const extensions::Extension* app);
+
+// Register a callback that will be run once |app_id|'s shortcuts have been
+// deleted.
+void WaitForExtensionShortcutsDeleted(const webapps::AppId& app_id,
+                                      base::OnceClosure callback);
 
 // Updates shortcuts for |app|, but does not create new ones if shortcuts are
 // not present in user-facing locations. Some platforms may still (re)create
@@ -85,13 +83,17 @@ void UpdateAllShortcuts(const std::u16string& old_app_title,
 // on the UI thread.
 void UpdateShortcutsForAllApps(Profile* profile, base::OnceClosure callback);
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 // Update the relaunch details for the given app's window, making the taskbar
 // group's "Pin to the taskbar" button function correctly.
 void UpdateRelaunchDetailsForApp(Profile* profile,
                                  const extensions::Extension* extension,
                                  HWND hwnd);
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
+
+SynchronizeOsOptions ConvertShortcutLocationsToSynchronizeOptions(
+    const ShortcutLocations& locations,
+    ShortcutCreationReason reason);
 
 }  // namespace web_app
 

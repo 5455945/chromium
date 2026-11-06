@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,8 @@
 
 #include <string>
 
-#include "base/macros.h"
 #include "base/time/time.h"
-#include "chrome/browser/memory_details.h"
+#include "chrome/browser/memory_details.h"  // nogncheck crbug.com/490408287
 
 namespace memory {
 
@@ -18,12 +17,15 @@ namespace memory {
 // memory event in an attempt to identify the culprit.
 class OomMemoryDetails : public MemoryDetails {
  public:
+  OomMemoryDetails(const OomMemoryDetails&) = delete;
+  OomMemoryDetails& operator=(const OomMemoryDetails&) = delete;
+
   // Logs the memory details asynchronously.
   // The |title| is printed at the beginning of the message.
   static void Log(const std::string& title);
 
  private:
-  OomMemoryDetails(const std::string& title);
+  explicit OomMemoryDetails(const std::string& title);
   ~OomMemoryDetails() override;
 
   // MemoryDetails overrides:
@@ -31,8 +33,6 @@ class OomMemoryDetails : public MemoryDetails {
 
   std::string title_;
   base::TimeTicks start_time_;
-
-  DISALLOW_COPY_AND_ASSIGN(OomMemoryDetails);
 };
 
 }  // namespace memory

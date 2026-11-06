@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,9 @@
 #include <set>
 
 #include "base/sequence_checker.h"
-#include "base/sequenced_task_runner.h"
 #include "base/synchronization/lock.h"
+#include "base/thread_annotations.h"
+#include "base/task/sequenced_task_runner.h"
 #include "services/metrics/public/cpp/metrics_export.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
 #include "services/metrics/public/mojom/ukm_interface.mojom.h"
@@ -29,6 +30,10 @@ class SourceUrlRecorderWebStateObserver;
 class METRICS_EXPORT DelegatingUkmRecorder : public UkmRecorder {
  public:
   DelegatingUkmRecorder();
+
+  DelegatingUkmRecorder(const DelegatingUkmRecorder&) = delete;
+  DelegatingUkmRecorder& operator=(const DelegatingUkmRecorder&) = delete;
+
   ~DelegatingUkmRecorder() override;
 
   // Lazy global instance getter.
@@ -42,8 +47,11 @@ class METRICS_EXPORT DelegatingUkmRecorder : public UkmRecorder {
   // The pointer is only used as a key.
   void RemoveDelegate(UkmRecorder* delegate);
 
+  bool HasMultipleDelegates();
+
  private:
   friend class AppSourceUrlRecorder;
+  friend class IwaSourceUrlRecorder;
   friend class internal::SourceUrlRecorderWebContentsObserver;
   friend class internal::SourceUrlRecorderWebStateObserver;
 
@@ -56,6 +64,9 @@ class METRICS_EXPORT DelegatingUkmRecorder : public UkmRecorder {
       SourceId source_id,
       const UkmSource::NavigationData& navigation_data) override;
   void AddEntry(mojom::UkmEntryPtr entry) override;
+  void RecordWebDXFeatures(SourceId source_id,
+                           const std::set<int32_t>& features,
+                           const size_t max_feature_value) override;
   void MarkSourceForDeletion(SourceId source_id) override;
 
   class Delegate final {
@@ -72,6 +83,9 @@ class METRICS_EXPORT DelegatingUkmRecorder : public UkmRecorder {
     void RecordNavigation(SourceId source_id,
                           const UkmSource::NavigationData& navigation_data);
     void AddEntry(mojom::UkmEntryPtr entry);
+    void RecordWebDXFeatures(SourceId source_id,
+                             const std::set<int32_t>& features,
+                             const size_t max_feature_value);
     void MarkSourceForDeletion(SourceId source_id);
 
    private:
@@ -79,14 +93,11 @@ class METRICS_EXPORT DelegatingUkmRecorder : public UkmRecorder {
     base::WeakPtr<UkmRecorder> ptr_;
   };
 
-  // Synchronizes access to |delegates_|.
   // Not using ObserverListThreadSafe since we need to make copies of call
   // arguments.
   mutable base::Lock lock_;
 
-  std::unordered_map<UkmRecorder*, Delegate> delegates_;
-
-  DISALLOW_COPY_AND_ASSIGN(DelegatingUkmRecorder);
+  std::unordered_map<UkmRecorder*, Delegate> delegates_ GUARDED_BY(lock_);
 };
 
 }  // namespace ukm

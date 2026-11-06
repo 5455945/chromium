@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,8 @@
 #include "base/android/jni_string.h"
 #include "base/json/json_writer.h"
 #include "base/values.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "components/policy/android/jni_headers/PolicyMap_jni.h"
 
 namespace policy {
@@ -18,36 +20,32 @@ PolicyMapAndroid::PolicyMapAndroid(const PolicyMap& policy_map)
 
 PolicyMapAndroid::~PolicyMapAndroid() = default;
 
-jboolean PolicyMapAndroid::HasValue(
+bool PolicyMapAndroid::HasValue(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& caller,
     const base::android::JavaRef<jstring>& policy) const {
   return GetValue(env, policy) != nullptr;
 }
 
-jint PolicyMapAndroid::GetIntValue(
+int32_t PolicyMapAndroid::GetIntValue(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& caller,
     const base::android::JavaRef<jstring>& policy) const {
   const base::Value* value = GetValue(env, policy);
   DCHECK(value && value->is_int())
-      << "The policy must be exist and stored as integer.";
+      << "The policy must exist and be stored as integer.";
   return value->GetInt();
 }
 
-jboolean PolicyMapAndroid::GetBooleanValue(
+bool PolicyMapAndroid::GetBooleanValue(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& caller,
     const base::android::JavaRef<jstring>& policy) const {
   const base::Value* value = GetValue(env, policy);
   DCHECK(value && value->is_bool())
-      << "The policy must be exist and stored as boolean.";
+      << "The policy must exist and be stored as boolean.";
   return value->GetBool();
 }
 
 base::android::ScopedJavaLocalRef<jstring> PolicyMapAndroid::GetStringValue(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& caller,
     const base::android::JavaRef<jstring>& policy) const {
   const base::Value* value = GetValue(env, policy);
   if (!value)
@@ -58,24 +56,19 @@ base::android::ScopedJavaLocalRef<jstring> PolicyMapAndroid::GetStringValue(
 
 base::android::ScopedJavaLocalRef<jstring> PolicyMapAndroid::GetListValue(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& caller,
     const base::android::JavaRef<jstring>& policy) const {
   return GetListOrDictValue(env, policy, /* is_dict */ false);
 }
 
 base::android::ScopedJavaLocalRef<jstring> PolicyMapAndroid::GetDictValue(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& caller,
     const base::android::JavaRef<jstring>& policy) const {
   return GetListOrDictValue(env, policy, /* is_dict */ true);
 }
 
-jboolean PolicyMapAndroid::Equals(
-    JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& caller,
-    jlong other) const {
-  return policy_map_.Equals(
-      reinterpret_cast<PolicyMapAndroid*>(other)->policy_map_);
+bool PolicyMapAndroid::Equals(JNIEnv* env, int64_t other) const {
+  return policy_map_->Equals(
+      *reinterpret_cast<PolicyMapAndroid*>(other)->policy_map_);
 }
 
 base::android::ScopedJavaLocalRef<jobject> PolicyMapAndroid::GetJavaObject() {
@@ -100,17 +93,19 @@ base::android::ScopedJavaLocalRef<jstring> PolicyMapAndroid::GetListOrDictValue(
   else
     DCHECK(value->is_list()) << "The policy must be stored as list.";
 #endif  // DCHECK_IS_ON()
-  std::string json_string;
-  base::JSONWriter::Write(*value, &json_string);
+  std::string json_string = base::WriteJson(*value).value_or("");
   return base::android::ConvertUTF8ToJavaString(env, json_string);
 }
 
 const base::Value* PolicyMapAndroid::GetValue(
     JNIEnv* env,
     const base::android::JavaRef<jstring>& policy) const {
-  return policy_map_.GetValue(
+  // It is safe to use `GetValueUnsafe()` as multiple policy types are handled.
+  return policy_map_->GetValueUnsafe(
       base::android::ConvertJavaStringToUTF8(env, policy));
 }
 
 }  // namespace android
 }  // namespace policy
+
+DEFINE_JNI(PolicyMap)

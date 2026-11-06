@@ -32,7 +32,7 @@
 
 #include "third_party/blink/renderer/core/svg/svg_transform_tear_off.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -64,7 +64,7 @@ void SVGMatrixTearOff::CommitChange() {
     return;
 
   context_transform_->Target()->OnMatrixChange();
-  context_transform_->CommitChange();
+  context_transform_->CommitChange(SVGPropertyCommitReason::kUpdated);
 }
 
 #define DEFINE_SETTER(ATTRIBUTE)                                          \

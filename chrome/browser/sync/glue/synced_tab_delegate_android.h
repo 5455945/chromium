@@ -1,20 +1,25 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_SYNC_GLUE_SYNCED_TAB_DELEGATE_ANDROID_H_
 #define CHROME_BROWSER_SYNC_GLUE_SYNCED_TAB_DELEGATE_ANDROID_H_
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/ui/sync/tab_contents_synced_tab_delegate.h"
+#include "components/sync_sessions/synced_tab_delegate.h"
 
 namespace content {
 class WebContents;
 }
 
-class TabAndroid;
+class SupervisedUserNavigationObserver;
+class TabAndroidDataProvider;
 
-namespace browser_sync {
+namespace tasks {
+class TaskTabHelper;
+}
+
 // On Android a tab can exist even without web contents.
 
 // SyncedTabDelegateAndroid specializes TabContentsSyncedTabDelegate with
@@ -22,25 +27,34 @@ namespace browser_sync {
 // when the tab is brought to memory.
 class SyncedTabDelegateAndroid : public TabContentsSyncedTabDelegate {
  public:
-  explicit SyncedTabDelegateAndroid(TabAndroid* owning_tab_);
+  explicit SyncedTabDelegateAndroid(
+      TabAndroidDataProvider* tab_android_data_provider);
+
+  SyncedTabDelegateAndroid(const SyncedTabDelegateAndroid&) = delete;
+  SyncedTabDelegateAndroid& operator=(const SyncedTabDelegateAndroid&) = delete;
+
   ~SyncedTabDelegateAndroid() override;
 
   // SyncedTabDelegate:
   SessionID GetWindowId() const override;
   SessionID GetSessionId() const override;
   bool IsPlaceholderTab() const override;
+  std::unique_ptr<SyncedTabDelegate> ReadPlaceholderTabSnapshotIfItShouldSync(
+      sync_sessions::SyncSessionsClient* sessions_client) override;
 
-  // Set the web contents for this tab and handles source tab ID initialization.
-  void SetWebContents(content::WebContents* web_contents, int source_tab_id);
+  // Set the web contents and associated tab helpers for this tab.
+  void SetWebContents(
+      content::WebContents* web_contents,
+      tasks::TaskTabHelper* task_tab_helper,
+      SupervisedUserNavigationObserver* supervised_user_navigation_observer);
 
   // Set web contents to null.
   void ResetWebContents();
 
- private:
-  TabAndroid* tab_android_;
+  static SessionID SessionIdFromAndroidId(int android_tab_id);
 
-  DISALLOW_COPY_AND_ASSIGN(SyncedTabDelegateAndroid);
+ private:
+  const raw_ptr<TabAndroidDataProvider> tab_android_data_provider_;
 };
-}  // namespace browser_sync
 
 #endif  // CHROME_BROWSER_SYNC_GLUE_SYNCED_TAB_DELEGATE_ANDROID_H_

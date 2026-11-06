@@ -1,20 +1,20 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/extensions/api/messaging/native_messaging_launch_from_native.h"
 
 #include <memory>
+#include <string_view>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/extensions/api/messaging/native_message_port.h"
 #include "chrome/browser/extensions/api/messaging/native_message_process_host.h"
 #include "chrome/browser/extensions/api/messaging/native_process_launcher.h"
 #include "chrome/browser/profiles/profile.h"
@@ -26,11 +26,16 @@
 #include "extensions/browser/api/messaging/channel_endpoint.h"
 #include "extensions/browser/api/messaging/message_service.h"
 #include "extensions/browser/api/messaging/native_message_host.h"
+#include "extensions/browser/api/messaging/native_message_port.h"
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/api/messaging/messaging_endpoint.h"
+#include "extensions/common/extension_features.h"
+#include "extensions/common/extension_id.h"
+#include "extensions/common/mojom/message_port.mojom-shared.h"
 #include "extensions/common/permissions/permission_set.h"
 #include "extensions/common/permissions/permissions_data.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace extensions {
 namespace {
@@ -38,8 +43,7 @@ namespace {
 ScopedAllowNativeAppConnectionForTest* g_allow_native_app_connection_for_test =
     nullptr;
 
-constexpr base::TimeDelta kNativeMessagingHostErrorTimeout =
-    base::TimeDelta::FromSeconds(10);
+constexpr base::TimeDelta kNativeMessagingHostErrorTimeout = base::Seconds(10);
 
 ScopedNativeMessagingErrorTimeoutOverrideForTest*
     g_native_messaging_host_timeout_override = nullptr;
@@ -56,21 +60,26 @@ class NativeMessagingHostErrorReporter : public NativeMessageHost::Client {
       std::unique_ptr<ScopedKeepAlive,
                       content::BrowserThread::DeleteOnUIThread>;
 
-  static void Report(const std::string& extension_id,
+  NativeMessagingHostErrorReporter(const NativeMessagingHostErrorReporter&) =
+      delete;
+  NativeMessagingHostErrorReporter& operator=(
+      const NativeMessagingHostErrorReporter&) = delete;
+
+  static void Report(const ExtensionId& extension_id,
                      const std::string& host_id,
                      const std::string& connection_id,
                      Profile* profile,
                      const std::string& error_arg) {
-    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
     std::unique_ptr<NativeMessageHost> host =
         NativeMessageProcessHost::CreateWithLauncher(
             extension_id, host_id,
             NativeProcessLauncher::CreateDefault(
-                /* allow_user_level = */ true,
-                /* native_view = */ nullptr, profile->GetPath(),
-                /* require_native_initiated_connections = */ false,
-                connection_id, error_arg));
+                /* allow_user_level_hosts= */ true,
+                /* native_view= */ gfx::NativeView(), profile->GetPath(),
+                /* require_native_initiated_connections= */ false,
+                connection_id, error_arg, profile));
     MovableScopedKeepAlive keep_alive(
         new ScopedKeepAlive(KeepAliveOrigin::NATIVE_MESSAGING_HOST_ERROR_REPORT,
                             KeepAliveRestartOption::DISABLED));
@@ -90,7 +99,7 @@ class NativeMessagingHostErrorReporter : public NativeMessageHost::Client {
   NativeMessagingHostErrorReporter(std::unique_ptr<NativeMessageHost> process,
                                    MovableScopedKeepAlive keep_alive)
       : keep_alive_(std::move(keep_alive)), process_(std::move(process)) {
-    DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+    CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
     timeout_.Start(
         FROM_HERE,
         g_native_messaging_host_timeout_override
@@ -106,23 +115,21 @@ class NativeMessagingHostErrorReporter : public NativeMessageHost::Client {
   void PostMessageFromNativeHost(const std::string& message) override {}
 
   void CloseChannel(const std::string& error_message) override {
-    DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+    CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
 
-    timeout_.AbandonAndStop();
+    timeout_.Stop();
 
-    base::SequencedTaskRunnerHandle::Get()->DeleteSoon(FROM_HERE, this);
+    base::SequencedTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE, this);
   }
 
   MovableScopedKeepAlive keep_alive_;
   std::unique_ptr<NativeMessageHost> process_;
   base::OneShotTimer timeout_;
-
-  DISALLOW_COPY_AND_ASSIGN(NativeMessagingHostErrorReporter);
 };
 
 }  // namespace
 
-bool ExtensionSupportsConnectionFromNativeApp(const std::string& extension_id,
+bool ExtensionSupportsConnectionFromNativeApp(const ExtensionId& extension_id,
                                               const std::string& host_id,
                                               Profile* profile,
                                               bool log_errors) {
@@ -178,37 +185,39 @@ bool ExtensionSupportsConnectionFromNativeApp(const std::string& extension_id,
 ScopedAllowNativeAppConnectionForTest::ScopedAllowNativeAppConnectionForTest(
     bool allow)
     : allow_(allow) {
-  DCHECK(!g_allow_native_app_connection_for_test);
+  CHECK(!g_allow_native_app_connection_for_test, base::NotFatalUntil::M161);
   g_allow_native_app_connection_for_test = this;
 }
 
 ScopedAllowNativeAppConnectionForTest::
     ~ScopedAllowNativeAppConnectionForTest() {
-  DCHECK_EQ(this, g_allow_native_app_connection_for_test);
+  CHECK_EQ(this, g_allow_native_app_connection_for_test,
+           base::NotFatalUntil::M161);
   g_allow_native_app_connection_for_test = nullptr;
 }
 
 ScopedNativeMessagingErrorTimeoutOverrideForTest::
     ScopedNativeMessagingErrorTimeoutOverrideForTest(base::TimeDelta timeout)
     : timeout_(timeout) {
-  DCHECK(!g_native_messaging_host_timeout_override);
+  CHECK(!g_native_messaging_host_timeout_override, base::NotFatalUntil::M161);
   g_native_messaging_host_timeout_override = this;
 }
 
 ScopedNativeMessagingErrorTimeoutOverrideForTest::
     ~ScopedNativeMessagingErrorTimeoutOverrideForTest() {
-  DCHECK_EQ(this, g_native_messaging_host_timeout_override);
+  CHECK_EQ(this, g_native_messaging_host_timeout_override,
+           base::NotFatalUntil::M161);
   g_native_messaging_host_timeout_override = nullptr;
 }
 
-bool IsValidConnectionId(const base::StringPiece connection_id) {
+bool IsValidConnectionId(std::string_view connection_id) {
   return connection_id.size() <= 20 &&
          base::ContainsOnlyChars(
              connection_id,
              "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-");
 }
 
-void LaunchNativeMessageHostFromNativeApp(const std::string& extension_id,
+void LaunchNativeMessageHostFromNativeApp(const ExtensionId& extension_id,
                                           const std::string& host_id,
                                           const std::string& connection_id,
                                           Profile* profile) {
@@ -225,18 +234,19 @@ void LaunchNativeMessageHostFromNativeApp(const std::string& extension_id,
                                              "--extension-not-installed");
     return;
   }
-  const extensions::PortId port_id(base::UnguessableToken::Create(),
-                                   1 /* port_number */, true /* is_opener */);
+  const extensions::PortId port_id(
+      base::UnguessableToken::Create(), 1 /* port_number */,
+      true /* is_opener */, extensions::mojom::SerializationFormat::kJson);
   extensions::MessageService* const message_service =
       extensions::MessageService::Get(profile);
-  // TODO(crbug.com/967262): Apply policy for allow_user_level.
+  // TODO(crbug.com/41461105): Apply policy for allow_user_level.
   auto native_message_host = NativeMessageProcessHost::CreateWithLauncher(
       extension_id, host_id,
       NativeProcessLauncher::CreateDefault(
-          /* allow_user_level = */ true, /* native_view = */ nullptr,
-          profile->GetPath(),
-          /* require_native_initiated_connections = */ true, connection_id,
-          ""));
+          /* allow_user_level_hosts= */ true,
+          /* native_view= */ gfx::NativeView(), profile->GetPath(),
+          /* require_native_initiated_connections= */ true, connection_id, "",
+          profile));
   auto native_message_port = std::make_unique<extensions::NativeMessagePort>(
       message_service->GetChannelDelegate(), port_id,
       std::move(native_message_host));
@@ -244,7 +254,7 @@ void LaunchNativeMessageHostFromNativeApp(const std::string& extension_id,
       extensions::ChannelEndpoint(profile), port_id,
       extensions::MessagingEndpoint::ForNativeApp(host_id),
       std::move(native_message_port), extension_id, GURL(),
-      std::string() /* channel_name */);
+      mojom::ChannelType::kNative, std::string() /* channel_name */);
 }
 
 }  // namespace extensions

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include "base/feature_list.h"
 #include "base/metrics/field_trial.h"
 #include "base/test/scoped_feature_list.h"
+#include "build/build_config.h"
 #include "components/feature_engagement/internal/editable_configuration.h"
 #include "components/feature_engagement/internal/event_model.h"
 #include "components/feature_engagement/internal/proto/feature_event.pb.h"
@@ -19,10 +20,18 @@ namespace feature_engagement {
 
 namespace {
 
-const base::Feature kEventStorageTestFeatureFoo{
-    "test_foo", base::FEATURE_DISABLED_BY_DEFAULT};
-const base::Feature kEventStorageTestFeatureBar{
-    "test_bar", base::FEATURE_DISABLED_BY_DEFAULT};
+BASE_FEATURE(kEventStorageTestFeatureFoo,
+             "test_foo",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kEventStorageTestFeatureBar,
+             "test_bar",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kEventStorageTestGroupOne,
+             "test_group_one",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kEventStorageTestGroupTwo,
+             "test_group_two",
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 FeatureConfig kNeverStored;
 FeatureConfig kStoredInUsed1Day;
@@ -35,67 +44,86 @@ FeatureConfig kStoredInEventConfigs1Day;
 FeatureConfig kStoredInEventConfigs2Days;
 FeatureConfig kStoredInEventConfigs10Days;
 
+GroupConfig kGroupNeverStored;
+
 void InitializeStorageFeatureConfigs() {
   FeatureConfig default_config;
   default_config.valid = true;
-  default_config.used = EventConfig("myevent", Comparator(ANY, 0), 0, 0);
-  default_config.trigger = EventConfig("myevent", Comparator(ANY, 0), 0, 0);
+  default_config.used =
+      EventConfig("myevent", Comparator(ANY, 0), /*window=*/0, /*storage=*/0);
+  default_config.trigger =
+      EventConfig("myevent", Comparator(ANY, 0), /*window=*/0, /*storage=*/0);
   default_config.event_configs.insert(
-      EventConfig("myevent", Comparator(ANY, 0), 0, 0));
-  default_config.event_configs.insert(
-      EventConfig("unrelated_event", Comparator(ANY, 0), 0, 100));
+      EventConfig("myevent", Comparator(ANY, 0), /*window=*/0, /*storage=*/0));
+  default_config.event_configs.insert(EventConfig(
+      "unrelated_event", Comparator(ANY, 0), /*window=*/0, /*storage=*/100));
   default_config.session_rate = Comparator(ANY, 0);
   default_config.availability = Comparator(ANY, 0);
 
   kNeverStored = default_config;
 
   kStoredInUsed1Day = default_config;
-  kStoredInUsed1Day.used = EventConfig("myevent", Comparator(ANY, 0), 0, 1);
+  kStoredInUsed1Day.used =
+      EventConfig("myevent", Comparator(ANY, 0), /*window=*/0, /*storage=*/1);
 
   kStoredInUsed2Days = default_config;
-  kStoredInUsed2Days.used = EventConfig("myevent", Comparator(ANY, 0), 0, 2);
+  kStoredInUsed2Days.used =
+      EventConfig("myevent", Comparator(ANY, 0), /*window=*/0, /*storage=*/2);
 
   kStoredInUsed10Days = default_config;
-  kStoredInUsed10Days.used = EventConfig("myevent", Comparator(ANY, 0), 0, 10);
+  kStoredInUsed10Days.used =
+      EventConfig("myevent", Comparator(ANY, 0), /*window=*/0, /*storage=*/10);
 
   kStoredInTrigger1Day = default_config;
   kStoredInTrigger1Day.trigger =
-      EventConfig("myevent", Comparator(ANY, 0), 0, 1);
+      EventConfig("myevent", Comparator(ANY, 0), /*window=*/0, /*storage=*/1);
 
   kStoredInTrigger2Days = default_config;
   kStoredInTrigger2Days.trigger =
-      EventConfig("myevent", Comparator(ANY, 0), 0, 2);
+      EventConfig("myevent", Comparator(ANY, 0), /*window=*/0, /*storage=*/2);
 
   kStoredInTrigger10Days = default_config;
   kStoredInTrigger10Days.trigger =
-      EventConfig("myevent", Comparator(ANY, 0), 0, 10);
+      EventConfig("myevent", Comparator(ANY, 0), /*window=*/0, /*storage=*/10);
 
   kStoredInEventConfigs1Day = default_config;
   kStoredInEventConfigs1Day.event_configs.clear();
   kStoredInEventConfigs1Day.event_configs.insert(
-      EventConfig("myevent", Comparator(ANY, 0), 0, 0));
+      EventConfig("myevent", Comparator(ANY, 0), /*window=*/0, /*storage=*/0));
   kStoredInEventConfigs1Day.event_configs.insert(
-      EventConfig("myevent", Comparator(ANY, 0), 0, 1));
-  kStoredInEventConfigs1Day.event_configs.insert(
-      EventConfig("unrelated_event", Comparator(ANY, 0), 0, 100));
+      EventConfig("myevent", Comparator(ANY, 0), /*window=*/0, /*storage=*/1));
+  kStoredInEventConfigs1Day.event_configs.insert(EventConfig(
+      "unrelated_event", Comparator(ANY, 0), /*window=*/0, /*storage=*/100));
 
   kStoredInEventConfigs2Days = default_config;
   kStoredInEventConfigs2Days.event_configs.clear();
   kStoredInEventConfigs2Days.event_configs.insert(
-      EventConfig("myevent", Comparator(ANY, 0), 0, 0));
+      EventConfig("myevent", Comparator(ANY, 0), /*window=*/0, /*storage=*/0));
   kStoredInEventConfigs2Days.event_configs.insert(
-      EventConfig("myevent", Comparator(ANY, 0), 0, 2));
-  kStoredInEventConfigs2Days.event_configs.insert(
-      EventConfig("unrelated_event", Comparator(ANY, 0), 0, 100));
+      EventConfig("myevent", Comparator(ANY, 0), /*window=*/0, /*storage=*/2));
+  kStoredInEventConfigs2Days.event_configs.insert(EventConfig(
+      "unrelated_event", Comparator(ANY, 0), /*window=*/0, /*storage=*/100));
 
   kStoredInEventConfigs10Days = default_config;
   kStoredInEventConfigs10Days.event_configs.clear();
   kStoredInEventConfigs10Days.event_configs.insert(
-      EventConfig("myevent", Comparator(ANY, 0), 0, 0));
+      EventConfig("myevent", Comparator(ANY, 0), /*window=*/0, /*storage=*/0));
   kStoredInEventConfigs10Days.event_configs.insert(
-      EventConfig("myevent", Comparator(ANY, 0), 0, 10));
-  kStoredInEventConfigs10Days.event_configs.insert(
-      EventConfig("unrelated_event", Comparator(ANY, 0), 0, 100));
+      EventConfig("myevent", Comparator(ANY, 0), /*window=*/0, /*storage=*/10));
+  kStoredInEventConfigs10Days.event_configs.insert(EventConfig(
+      "unrelated_event", Comparator(ANY, 0), /*window=*/0, /*storage=*/100));
+
+  GroupConfig default_group_config;
+  default_config.valid = true;
+  default_config.trigger =
+      EventConfig("myevent", Comparator(ANY, 0), /*window=*/0, /*storage=*/0);
+  default_config.event_configs.insert(
+      EventConfig("myevent", Comparator(ANY, 0), /*window=*/0, /*storage=*/0));
+  default_config.event_configs.insert(EventConfig(
+      "unrelated_event", Comparator(ANY, 0), /*window=*/0, /*storage=*/100));
+  default_config.session_rate = Comparator(ANY, 0);
+
+  kGroupNeverStored = default_group_config;
 }
 
 class FeatureConfigEventStorageValidatorTest : public ::testing::Test {
@@ -104,13 +132,29 @@ class FeatureConfigEventStorageValidatorTest : public ::testing::Test {
     InitializeStorageFeatureConfigs();
   }
 
+  FeatureConfigEventStorageValidatorTest(
+      const FeatureConfigEventStorageValidatorTest&) = delete;
+  FeatureConfigEventStorageValidatorTest& operator=(
+      const FeatureConfigEventStorageValidatorTest&) = delete;
+
   void UseConfig(const FeatureConfig& foo_config) {
     FeatureVector features = {&kEventStorageTestFeatureFoo};
 
     validator_.ClearForTesting();
     EditableConfiguration configuration;
     configuration.SetConfiguration(&kEventStorageTestFeatureFoo, foo_config);
-    validator_.InitializeFeatures(features, configuration);
+    validator_.InitializeFeatures(features, {}, configuration);
+  }
+
+  void UseConfigEventPrefix(const FeatureConfig& foo_config,
+                            const std::string& foo_prefix) {
+    FeatureVector features = {&kEventStorageTestFeatureFoo};
+
+    validator_.ClearForTesting();
+    EditableConfiguration configuration;
+    configuration.SetConfiguration(&kEventStorageTestFeatureFoo, foo_config);
+    configuration.AddAllowedEventPrefix(foo_prefix);
+    validator_.InitializeFeatures(features, {}, configuration);
   }
 
   void UseConfigs(const FeatureConfig& foo_config,
@@ -122,7 +166,27 @@ class FeatureConfigEventStorageValidatorTest : public ::testing::Test {
     EditableConfiguration configuration;
     configuration.SetConfiguration(&kEventStorageTestFeatureFoo, foo_config);
     configuration.SetConfiguration(&kEventStorageTestFeatureBar, bar_config);
-    validator_.InitializeFeatures(features, configuration);
+    validator_.InitializeFeatures(features, {}, configuration);
+  }
+
+  void UseConfigs(const FeatureConfig& foo_config,
+                  const FeatureConfig& bar_config,
+                  const GroupConfig& group_one_config,
+                  const GroupConfig& group_two_config) {
+    FeatureVector features = {&kEventStorageTestFeatureFoo,
+                              &kEventStorageTestFeatureBar};
+    GroupVector groups = {&kEventStorageTestGroupOne,
+                          &kEventStorageTestGroupTwo};
+
+    validator_.ClearForTesting();
+    EditableConfiguration configuration;
+    configuration.SetConfiguration(&kEventStorageTestFeatureFoo, foo_config);
+    configuration.SetConfiguration(&kEventStorageTestFeatureBar, bar_config);
+    configuration.SetConfiguration(&kEventStorageTestGroupOne,
+                                   group_one_config);
+    configuration.SetConfiguration(&kEventStorageTestGroupTwo,
+                                   group_two_config);
+    validator_.InitializeFeatures(features, groups, configuration);
   }
 
   void VerifyNeverKeep() {
@@ -173,27 +237,35 @@ class FeatureConfigEventStorageValidatorTest : public ::testing::Test {
   FeatureConfigEventStorageValidator validator_;
   uint32_t current_day_;
   base::test::ScopedFeatureList scoped_feature_list_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(FeatureConfigEventStorageValidatorTest);
 };
 
 }  // namespace
 
 TEST_F(FeatureConfigEventStorageValidatorTest,
        ShouldOnlyUseConfigFromEnabledFeatures) {
-  scoped_feature_list_.InitWithFeatures({kEventStorageTestFeatureFoo},
-                                        {kEventStorageTestFeatureBar});
+  scoped_feature_list_.InitWithFeatures(
+      {kEventStorageTestFeatureFoo, kEventStorageTestGroupOne},
+      {kEventStorageTestFeatureBar, kEventStorageTestGroupTwo});
 
   FeatureConfig foo_config = kNeverStored;
-  foo_config.used = EventConfig("fooevent", Comparator(ANY, 0), 0, 1);
+  foo_config.used =
+      EventConfig("fooevent", Comparator(ANY, 0), /*window=*/0, /*storage=*/1);
   FeatureConfig bar_config = kNeverStored;
-  bar_config.used = EventConfig("barevent", Comparator(ANY, 0), 0, 1);
-  UseConfigs(foo_config, bar_config);
+  bar_config.used =
+      EventConfig("barevent", Comparator(ANY, 0), /*window=*/0, /*storage=*/1);
+  GroupConfig group_one_config = kGroupNeverStored;
+  group_one_config.trigger = EventConfig("grouponeevent", Comparator(ANY, 0),
+                                         /*window=*/0, /*storage=*/1);
+  GroupConfig group_two_config = kGroupNeverStored;
+  group_two_config.trigger = EventConfig("grouptwoevent", Comparator(ANY, 0),
+                                         /*window=*/0, /*storage=*/1);
+  UseConfigs(foo_config, bar_config, group_one_config, group_two_config);
 
   EXPECT_FALSE(validator_.ShouldStore("myevent"));
   EXPECT_TRUE(validator_.ShouldStore("fooevent"));
   EXPECT_FALSE(validator_.ShouldStore("barevent"));
+  EXPECT_TRUE(validator_.ShouldStore("grouponeevent"));
+  EXPECT_FALSE(validator_.ShouldStore("grouptwoevent"));
 }
 
 TEST_F(FeatureConfigEventStorageValidatorTest,
@@ -295,5 +367,86 @@ TEST_F(FeatureConfigEventStorageValidatorTest,
     VerifyKeep10Days();
   }
 }
+
+#if BUILDFLAG(IS_CHROMEOS)
+TEST_F(FeatureConfigEventStorageValidatorTest,
+       ShouldStoreIfEventStartsWithPrefix) {
+  scoped_feature_list_.InitWithFeatures({kEventStorageTestFeatureFoo}, {});
+
+  UseConfig(kNeverStored);
+  EXPECT_FALSE(validator_.ShouldStore("myevent"));
+
+  UseConfigEventPrefix(kNeverStored, /*foo_prefix=*/"event");
+  EXPECT_FALSE(validator_.ShouldStore("myevent"));
+
+  UseConfigEventPrefix(kNeverStored, /*foo_prefix=*/"tneveym");
+  EXPECT_FALSE(validator_.ShouldStore("myevent"));
+
+  UseConfigEventPrefix(kNeverStored, /*foo_prefix=*/"eventmy");
+  EXPECT_FALSE(validator_.ShouldStore("myevent"));
+
+  UseConfigEventPrefix(kNeverStored, /*foo_prefix=*/"ymevent");
+  EXPECT_FALSE(validator_.ShouldStore("myevent"));
+
+  UseConfigEventPrefix(kNeverStored, /*foo_prefix=*/"myeventfoo");
+  EXPECT_FALSE(validator_.ShouldStore("myevent"));
+
+  UseConfigEventPrefix(kNeverStored, /*foo_prefix=*/"myevent");
+  EXPECT_FALSE(validator_.ShouldStore("my_event"));
+
+  UseConfigEventPrefix(kNeverStored, /*foo_prefix=*/"myevent");
+  EXPECT_FALSE(validator_.ShouldStore("_myevent"));
+
+  UseConfigEventPrefix(kNeverStored, /*foo_prefix=*/"myevent");
+  EXPECT_FALSE(validator_.ShouldStore("1myevent"));
+
+  UseConfigEventPrefix(kNeverStored, /*foo_prefix=*/"myevent");
+  EXPECT_TRUE(validator_.ShouldStore("myevent"));
+
+  UseConfigEventPrefix(kNeverStored, /*foo_prefix=*/"myevent");
+  EXPECT_TRUE(validator_.ShouldStore("myevent_a"));
+
+  UseConfigEventPrefix(kNeverStored, /*foo_prefix=*/"myevent");
+  EXPECT_TRUE(validator_.ShouldStore("myevent1"));
+
+  // Tests with case sensitivity.
+  UseConfigEventPrefix(kNeverStored, /*foo_prefix=*/"Myevent");
+  EXPECT_FALSE(validator_.ShouldStore("myevent"));
+
+  UseConfigEventPrefix(kNeverStored, /*foo_prefix=*/"myEvent");
+  EXPECT_FALSE(validator_.ShouldStore("myevent"));
+
+  UseConfigEventPrefix(kNeverStored, /*foo_prefix=*/"Myevent");
+  EXPECT_TRUE(validator_.ShouldStore("Myevent"));
+
+  UseConfigEventPrefix(kNeverStored, /*foo_prefix=*/"MyEvent");
+  EXPECT_FALSE(validator_.ShouldStore("Myevent"));
+
+  UseConfigEventPrefix(kNeverStored, /*foo_prefix=*/"MyEvent");
+  EXPECT_TRUE(validator_.ShouldStore("MyEvent"));
+
+  // Tests with empty string or with spaces.
+  UseConfigEventPrefix(kNeverStored, /*foo_prefix=*/"myevent");
+  EXPECT_FALSE(validator_.ShouldStore(""));
+
+  UseConfigEventPrefix(kNeverStored, /*foo_prefix=*/"myevent");
+  EXPECT_FALSE(validator_.ShouldStore(" "));
+
+  UseConfigEventPrefix(kNeverStored, /*foo_prefix=*/"myevent");
+  EXPECT_FALSE(validator_.ShouldStore("  "));
+
+  UseConfigEventPrefix(kNeverStored, /*foo_prefix=*/" myevent");
+  EXPECT_FALSE(validator_.ShouldStore(" "));
+
+  UseConfigEventPrefix(kNeverStored, /*foo_prefix=*/"myevent");
+  EXPECT_FALSE(validator_.ShouldStore(" myevent"));
+
+  UseConfigEventPrefix(kNeverStored, /*foo_prefix=*/"myevent");
+  EXPECT_FALSE(validator_.ShouldStore("  myevent"));
+
+  UseConfigEventPrefix(kNeverStored, /*foo_prefix=*/" myevent");
+  EXPECT_FALSE(validator_.ShouldStore("  myevent"));
+}
+#endif
 
 }  // namespace feature_engagement

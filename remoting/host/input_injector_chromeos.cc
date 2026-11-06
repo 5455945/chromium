@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,22 +9,24 @@
 #include <string>
 #include <utility>
 
+#include "ash/display/window_tree_host_manager.h"
 #include "ash/shell.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/i18n/icu_string_conversions.h"
 #include "base/location.h"
-#include "base/macros.h"
+#include "base/notimplemented.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/system/sys_info.h"
+#include "base/task/single_thread_task_runner.h"
 #include "remoting/host/chromeos/point_transformer.h"
 #include "remoting/host/clipboard.h"
 #include "remoting/proto/internal.pb.h"
 #include "ui/aura/client/cursor_client.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_tree_host.h"
-#include "ui/base/ime/chromeos/ime_keyboard.h"
-#include "ui/base/ime/chromeos/input_method_manager.h"
+#include "ui/base/ime/ash/ime_keyboard.h"
+#include "ui/base/ime/ash/input_method_manager.h"
 #include "ui/base/ime/input_method.h"
 #include "ui/base/ime/text_input_client.h"
 #include "ui/events/keycodes/dom/dom_code.h"
@@ -52,7 +54,6 @@ ui::EventFlags MouseButtonToUIFlags(MouseEvent::MouseButton button) {
       return ui::EF_MIDDLE_MOUSE_BUTTON;
     default:
       NOTREACHED();
-      return ui::EF_NONE;
   }
 }
 
@@ -60,7 +61,7 @@ ui::EventFlags MouseButtonToUIFlags(MouseEvent::MouseButton button) {
 bool IsLockKey(ui::DomCode dom_code) {
   switch (dom_code) {
     // Ignores all the keys that could possibly be mapped to Caps Lock in event
-    // rewriter. Please refer to ui::EventRewriterChromeOS::RewriteModifierKeys.
+    // rewriter. Please refer to ui::EventRewriterAsh::RewriteModifierKeys.
     case ui::DomCode::F16:
     case ui::DomCode::CAPS_LOCK:
     case ui::DomCode::META_LEFT:
@@ -79,8 +80,7 @@ bool IsLockKey(ui::DomCode dom_code) {
 
 // If caps_lock is specified, sets local keyboard state to match.
 void SetCapsLockState(bool caps_lock) {
-  chromeos::input_method::InputMethodManager* ime =
-      chromeos::input_method::InputMethodManager::Get();
+  auto* ime = ash::input_method::InputMethodManager::Get();
   ime->GetImeKeyboard()->SetCapsLockEnabled(caps_lock);
 }
 
@@ -95,6 +95,7 @@ class SystemInputInjectorStub : public ui::SystemInputInjector {
   ~SystemInputInjectorStub() override = default;
 
   // SystemInputInjector implementation:
+  void SetDeviceId(int device_id) override {}
   void MoveCursorTo(const gfx::PointF& location) override {}
   void InjectMouseButton(ui::EventFlags button, bool down) override {}
   void InjectMouseWheel(int delta_x, int delta_y) override {}
@@ -109,6 +110,10 @@ class SystemInputInjectorStub : public ui::SystemInputInjector {
 class InputInjectorChromeos::Core {
  public:
   Core();
+
+  Core(const Core&) = delete;
+  Core& operator=(const Core&) = delete;
+
   ~Core();
 
   // Mirrors the public InputInjectorChromeos interface.
@@ -117,19 +122,18 @@ class InputInjectorChromeos::Core {
   void InjectTextEvent(const TextEvent& event);
   void InjectMouseEvent(const MouseEvent& event);
   void Start(std::unique_ptr<protocol::ClipboardStub> client_clipboard);
+  void StartWithDelegate(
+      std::unique_ptr<ui::SystemInputInjector> delegate,
+      std::unique_ptr<protocol::ClipboardStub> client_clipboard);
 
  private:
   void SetLockStates(uint32_t states);
 
+  void InjectMouseMove(const MouseEvent& event);
+
   bool hide_cursor_on_disconnect_ = false;
   std::unique_ptr<ui::SystemInputInjector> delegate_;
   std::unique_ptr<Clipboard> clipboard_;
-
-  // Used to rotate the input coordinates appropriately based on the current
-  // display rotation settings.
-  std::unique_ptr<PointTransformer> point_transformer_;
-
-  DISALLOW_COPY_AND_ASSIGN(Core);
 };
 
 InputInjectorChromeos::Core::Core() = default;
@@ -167,6 +171,8 @@ void InputInjectorChromeos::Core::InjectKeyEvent(const KeyEvent& event) {
 
   // Ignore events which can't be mapped.
   if (dom_code != ui::DomCode::NONE) {
+    VLOG(3) << "Injecting key " << (event.pressed() ? "down" : "up")
+            << " event.";
     delegate_->InjectKeyEvent(dom_code, event.pressed(),
                               true /* suppress_auto_repeat */);
   }
@@ -191,8 +197,9 @@ void InputInjectorChromeos::Core::InjectTextEvent(const TextEvent& event) {
     return;
   }
   ui::TextInputClient* text_input_client = input_method->GetTextInputClient();
-  if (!text_input_client) {
-    LOG(ERROR) << "text_input_client is null, can't inject text.";
+  if (!text_input_client ||
+      text_input_client->GetTextInputType() == ui::TEXT_INPUT_TYPE_NONE) {
+    LOG(ERROR) << "text_input_client is null or none, can't inject text.";
     return;
   }
 
@@ -208,34 +215,56 @@ void InputInjectorChromeos::Core::InjectTextEvent(const TextEvent& event) {
 
 void InputInjectorChromeos::Core::InjectMouseEvent(const MouseEvent& event) {
   if (event.has_button() && event.has_button_down()) {
+    if (event.has_x() || event.has_y()) {
+      // Ensure the mouse button click happens at the correct position.
+      InjectMouseMove(event);
+    }
     delegate_->InjectMouseButton(MouseButtonToUIFlags(event.button()),
                                  event.button_down());
-  } else if (event.has_wheel_delta_y() || event.has_wheel_delta_x()) {
+  } else if (event.has_wheel_delta_x() || event.has_wheel_delta_y()) {
     delegate_->InjectMouseWheel(event.wheel_delta_x(), event.wheel_delta_y());
+  } else if (event.has_x() || event.has_y()) {
+    InjectMouseMove(event);
   } else {
-    DCHECK(event.has_x() && event.has_y());
-    delegate_->MoveCursorTo(point_transformer_->ToScreenCoordinates(
-        gfx::PointF(event.x(), event.y())));
+    LOG(WARNING) << "Ignoring mouse event of unknown type";
   }
+}
+
+void InputInjectorChromeos::Core::InjectMouseMove(const MouseEvent& event) {
+  gfx::PointF location_in_screen_in_dip = gfx::PointF(event.x(), event.y());
+  gfx::PointF location_in_screen_in_pixels =
+      PointTransformer::ConvertScreenInDipToScreenInPixel(
+          location_in_screen_in_dip);
+
+  delegate_->MoveCursorTo(location_in_screen_in_pixels);
 }
 
 void InputInjectorChromeos::Core::Start(
     std::unique_ptr<protocol::ClipboardStub> client_clipboard) {
-  delegate_ = ui::OzonePlatform::GetInstance()->CreateSystemInputInjector();
-  if (!delegate_ && !base::SysInfo::IsRunningOnChromeOS()) {
+  auto delegate = ui::OzonePlatform::GetInstance()->CreateSystemInputInjector();
+  if (!delegate && !base::SysInfo::IsRunningOnChromeOS()) {
     // This happens when directly running the Chrome binary on linux.
     // We'll simply ignore all input there (instead of crashing).
     // Note: it would be nicer to swap this out with input_injector_x11.cc
     // on linux instead (and properly handle the input), but that runs into
     // dependency issues.
-    delegate_ = std::make_unique<SystemInputInjectorStub>();
+    delegate = std::make_unique<SystemInputInjectorStub>();
   }
-  DCHECK(delegate_);
+  CHECK(delegate);
+
+  StartWithDelegate(std::move(delegate), std::move(client_clipboard));
+}
+
+void InputInjectorChromeos::Core::StartWithDelegate(
+    std::unique_ptr<ui::SystemInputInjector> delegate,
+    std::unique_ptr<protocol::ClipboardStub> client_clipboard) {
+  delegate_ = std::move(delegate);
+
+  delegate_->SetDeviceId(ui::ED_REMOTE_INPUT_DEVICE);
 
   // Implemented by remoting::ClipboardAura.
   clipboard_ = Clipboard::Create();
   clipboard_->Start(std::move(client_clipboard));
-  point_transformer_ = std::make_unique<PointTransformer>();
 
   // If the cursor was hidden before we start injecting input then we should try
   // to restore its state when the remote user disconnects.  The main scenario
@@ -290,6 +319,15 @@ void InputInjectorChromeos::Start(
   input_task_runner_->PostTask(
       FROM_HERE, base::BindOnce(&Core::Start, base::Unretained(core_.get()),
                                 std::move(client_clipboard)));
+}
+
+void InputInjectorChromeos::StartForTesting(
+    std::unique_ptr<ui::SystemInputInjector> input_injector,
+    std::unique_ptr<protocol::ClipboardStub> client_clipboard) {
+  input_task_runner_->PostTask(
+      FROM_HERE,
+      base::BindOnce(&Core::StartWithDelegate, base::Unretained(core_.get()),
+                     std::move(input_injector), std::move(client_clipboard)));
 }
 
 // static

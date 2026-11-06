@@ -1,45 +1,74 @@
-# Chrome DevTools Protocol Contribution Guidelines
+# Chrome DevTools Protocol contribution guidelines
 
 This document summarizes the design guidelines for the APIs exposed through
 Chrome DevTools protocol (_CDP_ further in the document) and provides a
 brief overview of CDP terminology and related DevTools backend architecture.
 
+## Scope and contributions
+
+Chrome DevTools Protocol (CDP) connects debug and automation targets (such as
+browsing contexts and workers) with trusted debug and automation clients. CDP
+is not a public or supported API for Chrome. Direct use by third-party
+applications is unsupported, and syntax or semantics may change without notice
+based on Chromium's requirements.
+
+We only support official Chrome products built on CDP:
+
+* Chrome
+* Chrome DevTools frontend
+* Chrome DevTools for agents
+* Lighthouse
+* Puppeteer
+* ChromeDriver
+
+Third-party tools that automate Chrome should use supported products such as
+Chrome DevTools for agents, Puppeteer, or ChromeDriver rather than connecting
+to CDP directly. Use of the `chrome.debugger` extension API is supported only
+on a best-effort basis for developer-facing debugging extensions. Non-debugger
+use cases and extensions aimed at end users are unsupported.
+
+Changes to CDP must be approved by CDP owners, meet high technical design
+standards, and serve web developer debugging or testing use cases. Only in
+exceptional cases do we accept additions to automate Chrome's UI. We reject
+contributions that are not directly motivated by our supported products. Every
+change must be motivated by at least one of the following:
+
+* Addressing security vulnerabilities or preemptively mitigating security
+  weaknesses.
+* Product requirements from one of our supported products listed above.
+* Removing outdated functionality no longer required by our supported products.
+* Reflecting changes to Chrome's architecture.
+
 ## API stability
 
-Although the CDP was originally conceived with Chrome DevTools front-end as
-the primary client, it is currently used by multiple clients, most of which
-reside outside of Chromium source tree. We aim at maintaining a reasonably
-stable and future-proof API for such clients, so we offer certain
-compatibility terms for the CDP API:
+CDP does not guarantee backwards compatibility. To coordinate changes across our
+supported products in and outside the Chromium repository, we use the following
+conventions:
 
-* The commands, events and types not marked as `experimental` are guaranteed
-  to remain backwards compatible until the next version of the protocol
-  after the one where they have been marked as deprecated.
-  This implies that no new mandatory input parameters (or fields in input
-  types) will be added, and no output parameters (or fields in output
-  types) will be removed or will become optional.
-* The commands, events and types marked as `deprecated` will remain supported
-  until the protocol version is incremented. We will keep deprecated commands,
-  events and types for at least 3 Chrome releases before they are removed.
-* The commands, events and types marked as experimental may be changed at
-  any time without a notice.
+* Commands, events, and types not marked as `experimental` are kept reasonably
+  stable while required by our supported products, avoiding uncoordinated
+  changes to mandatory input parameters or required output parameters where
+  practical.
+* Commands, events, and types marked as `deprecated` are scheduled for removal
+  once our supported products migrate away from them.
+* Commands, events, and types marked as `experimental` may be changed or removed
+  at any time without notice.
 
-The following principles should help contributors to maintain a
-comprehensive and stable API:
+The following principles help contributors maintain a clean protocol surface:
 
-* The API should, to the extent practical, avoid exposing any chrome-specific
-  implementation detail and should, when possible, be expressed in terms
-  generally meaningful for the web platform, so that the same interface could
-  be supported by a different browser implementation.
+* The protocol should, to the extent practical, avoid exposing Chrome-specific
+  implementation details and should, when possible, be expressed in terms
+  generally meaningful for the web platform, so that the interface design is not
+  dictated by internal implementation choices.
 * Interfaces should be expressed in terms of strong types and, when possible,
   rely on built-in protocol type validation rather than explicitly implementing
   parameters validity and consistency checks.
-* The functionality exposed through CDP should be limited to that immediately
-  required by at least one client.
-* The compatibility risks introduced by exposing of additional API surface
-  should by justified by sound user stories for protocol clients.
+* The functionality exposed through CDP must be limited to that immediately
+  required by at least one of our supported products.
+* The security and maintenance costs introduced by exposing additional protocol
+  surface must be justified by requirements from our supported products.
 
-## Domains, Commands and Events
+## Domains, commands, and events
 
 - *Domains* are modules used to logically group related types, events and
 commands, e.g. `Network`, `Performance` or `DOM`.
@@ -66,7 +95,7 @@ it was disabled.
 buffered events), these are guaranteed to be emitted before the method
 returns.
 
-## Naming Convention
+## Naming convention
 
 Types are named using PascalCase (AKA UpperCamelCase), e.g. `ResourceTiming`.
 Methods, events, parameters and object properties are named using camelCase.
@@ -77,7 +106,7 @@ Methods should follow \<verb\>\[Object\] pattern. e.g. `enable`, `getCookies`,
 Event names should follow \<object\>\<Verb-in-passive-voice\> pattern, e.g.
 `consoleMessageAdded` or `requestWillBeSent`.
 
-## Agents, Targets and Sessions
+## Agents, targets, and sessions
 
 *Agents* are backend classes that implement individual protocol domains. Some
 agents are implemented in the renderer process (either in Blink or v8; no
@@ -116,7 +145,7 @@ per layer -- for example, when a client connects to a frame, a PageHandler
 from chrome/, a PageHandler from content/ and an InspectorPageAgent (from
 blink) are instantiated for the given session.
 
-## Multiple Sessions
+## Multiple sessions
 
 DevTools support multiple sessions with the same target, which implies that
 multiple agents for the same domain should be designed to co-exist.
@@ -134,20 +163,21 @@ State that was configured by the client and is not associated to current
 document should be maintained using type aliases offered by
 `InspectorAgentState` class.
 
-## Security Considerations
+## Security considerations
 
-Protocol clients are typcally considered trusted, as they can navigate to
-arbitrary origins and have access to all origin data. However, since the
-protocol is also exposed to chrome extensions through `chrome.debugger` API,
-the backend implements additional access control in some of the methods to
-prevent extensios form accessing file system or otherwise escaping the sandbox.
-These restrictions are not extended to other types of clients.
+CDP exposes a wide range of high-privilege capabilities. Protocol clients are
+therefore assumed to be trusted, as they can navigate to arbitrary origins and
+access all origin data. Because the protocol is also exposed to developer
+debugging extensions on a best-effort basis through the `chrome.debugger` API,
+the backend implements additional access controls in some methods to prevent
+extensions from accessing the file system or otherwise escaping the browser
+sandbox. These restrictions are not extended to other types of clients.
 
 Protocol clients should be prepared to handle data coming from untrusted
 sources such as malicious web pages and potentially compromised renderer
 processes.
 
-## Object Identifiers
+## Object identifiers
 
 String identifiers are preferred to integers even when the underlying
 implementation currently offers an integer identifier. This is so that
@@ -155,7 +185,7 @@ we have flexibility of using composite identifiers in the future to avoid
 identifier collisions, for example, by prepending process identifier
 to renderer-issued ids.
 
-## Wire Format, Strings and Binary Values
+## Wire format, strings, binary, and number values
 
 CDP is designed with JSON-RPC 2.0 as the primary wire format (though other
 representations exist). When exposed outside of the browser, the JSON
@@ -172,9 +202,90 @@ which is mapped to base64-encoded strings when sent over JSON, and uses
 a more efficient representation when protocol is represented using
 a binary wire format.
 
+Note that JSON has no way of representing IEEE 754 ±Infinity or NaN values for
+floating point types, so in case of underlying representation being JSON, these
+values can't be passed through the protocol and are implicitly converted to
+null.
+
 ## Localizability
 
 Data passed over the protocol should be suitable for handling by automated
 tools as well as UI clients supporting i18n, so passing messages (such as
 errors) in English is rarely appropriate, structured types and enums
 should be used instead.
+
+## Testing
+
+There are two main types of tests for the Chrome DevTools Protocol (CDP).
+
+### 1. Web tests (for the Blink engine)
+
+These tests check the core parts of the protocol that are implemented in the
+Blink rendering engine. They are written in JavaScript.
+
+**Test file locations**
+
+Where you save your test file depends on if it needs a web server:
+
+*   **If the test does NOT need a web server, use this directory:**
+    `third_party/blink/web_tests/inspector-protocol/`
+*   **If the test REQUIRES a web server, use this directory:**
+    `third_party/blink/web_tests/http/tests/inspector-protocol/`
+
+**How they work**
+
+Each JavaScript test file (`.js`) has a matching file that contains the correct
+output (`-expected.txt`). A test passes if its output is identical to the
+content of the `-expected.txt` file.
+
+**How to run web tests**
+
+You can run these tests with the following script:
+`third_party/blink/tools/run_web_tests.py`
+
+For more detailed information, please see the "Web Tests" documentation:
+
+*   https://chromium.googlesource.com/chromium/src/+/HEAD/docs/testing/web_tests.md
+*   https://chromium.googlesource.com/chromium/src/+/HEAD/docs/testing/writing_web_tests.md
+
+### 2. Headless mode protocol tests (for Chrome-specific features)
+
+These tests are for parts of the protocol that are specific to Chrome, and not
+part of the core Blink engine (for example, features in
+`chrome/browser/devtools/protocol/`).
+
+These tests also use JavaScript, but they are encapsulated in Chrome Browser
+Tests in Headless Mode.
+
+**How to write and run Chrome browser tests in headless mode**
+
+Example CL: https://crrev.com/c/6658682.
+
+1.  **Write a JavaScript test file.** (Analogous to Web Tests).
+
+    *   Place new test files in
+        `chrome/browser/headless/test/data/protocol/sanity`. If a new class of
+        tests needs a dedicated subdirectory, create it under
+        `chrome/browser/headless/test/data/protocol/`.
+    *   For an example, see
+        [`chrome/browser/headless/test/data/protocol/input/document-focus-on-load.js`](https://source.chromium.org/chromium/chromium/src/+/main:chrome/browser/headless/test/data/protocol/input/document-focus-on-load.js;drc=28499a22affcf0aa290ab68d84401a6fc1433460).
+
+2.  **Add your test to the HeadlessModeProtocolBrowserTest test suite.**
+
+    *   In the file
+        [`chrome/browser/headless/headless_mode_protocol_browsertest.cc`](https://source.chromium.org/chromium/chromium/src/+/main:chrome/browser/headless/headless_mode_protocol_browsertest.cc;drc=190220758aecdeb7d5a8839e9946dd381e8857a0;l=214),
+        add a `HEADLESS_MODE_PROTOCOL_TEST` with the test file path from the
+        previous step.
+
+3.  **Build the `browser_tests` target:** `autoninja -C out/Default
+    browser_tests`
+
+4.  **Run your test.**
+
+    *   Use `--gtest_filter` to select the test you added. For example, to run a
+        test named `DocumentFocusOnLoad`: `bash out/Default/browser_tests
+        --gtest_filter="*HeadlessMode*DocumentFocusOnLoad*"`
+    *   To update the `-expected.txt` file with new output, add the
+        `--reset-results` flag.
+
+    *   To get the verbose CDP log, add the `--dump-devtools-protocol` flag.

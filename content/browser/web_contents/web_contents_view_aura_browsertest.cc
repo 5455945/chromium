@@ -1,36 +1,48 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/web_contents/web_contents_view_aura.h"
 
 #include <stddef.h>
-#include <tuple>
 
-#include "base/bind.h"
+#include <memory>
+#include <optional>
+#include <tuple>
+#include <utility>
+
 #include "base/command_line.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
-#include "base/macros.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
+#include "base/no_destructor.h"
 #include "base/run_loop.h"
-#include "base/single_thread_task_runner.h"
+#include "base/scoped_observation.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/test/bind.h"
+#include "base/test/gtest_util.h"
 #include "base/test/test_timeouts.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "content/browser/renderer_host/navigation_controller_impl.h"
 #include "content/browser/renderer_host/navigation_entry_impl.h"
 #include "content/browser/renderer_host/overscroll_controller.h"
+#include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_view_aura.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/browser/web_contents/web_contents_view.h"
-#include "content/public/browser/browser_message_filter.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/overscroll_configuration.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_widget_host.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_view_delegate.h"
 #include "content/public/browser/web_drag_dest_delegate.h"
@@ -39,22 +51,29 @@
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
+#include "content/public/test/popup_test_utils.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/test_utils.h"
 #include "content/shell/browser/shell.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "third_party/blink/public/common/input/synthetic_web_input_event_builders.h"
+#include "ui/aura/client/window_types.h"
+#include "ui/aura/env.h"
+#include "ui/aura/env_observer.h"
 #include "ui/aura/window.h"
+#include "ui/aura/window_observer.h"
 #include "ui/aura/window_tree_host.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/dragdrop/drop_target_event.h"
+#include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/event_sink.h"
 #include "ui/events/event_utils.h"
 #include "ui/events/test/event_generator.h"
+#include "ui/gfx/geometry/transform.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 
 namespace content {
 
@@ -64,9 +83,8 @@ namespace {
 // for details.
 void GiveItSomeTime() {
   base::RunLoop run_loop;
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
-      FROM_HERE, run_loop.QuitClosure(),
-      base::TimeDelta::FromMillisecondsD(10));
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE, run_loop.QuitClosure(), base::Milliseconds(10));
   run_loop.Run();
 }
 
@@ -74,25 +92,421 @@ void GiveItSomeTime() {
 // deep scans of data.
 class TestWebContentsViewDelegate : public WebContentsViewDelegate {
  public:
-  TestWebContentsViewDelegate(DropCompletionResult result) : result_(result) {}
+  explicit TestWebContentsViewDelegate(bool allow_drop)
+      : allow_drop_(allow_drop) {}
 
-  void OnPerformDrop(const DropData& drop_data,
-                     DropCompletionCallback callback) override {
-    callback_ = std::move(callback);
+  void OnPerformingDrop(const DropData& drop_data,
+                        DropCompletionCallback callback) override {
+    if (allow_drop_) {
+      drop_callback_ = base::BindOnce(std::move(callback), drop_data);
+    } else {
+      drop_callback_ = base::BindOnce(std::move(callback), std::nullopt);
+    }
+
+    renderer_told_to_force_default_action_ =
+        !drop_data.document_is_handling_drag;
   }
 
-  void FinishScan() { std::move(callback_).Run(result_); }
+  void FinishOnPerformingDrop() {
+    if (drop_callback_) {
+      std::move(drop_callback_).Run();
+    }
+  }
+
+  void DelayedFinishOnPerformingDrop() {
+    ASSERT_TRUE(drop_callback_);
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, std::move(drop_callback_), TestTimeouts::tiny_timeout());
+  }
+
+  bool IsRendererToldToForceDefaultAction() {
+    return renderer_told_to_force_default_action_;
+  }
 
  private:
-  DropCompletionResult result_;
-  DropCompletionCallback callback_;
+  bool allow_drop_;
+  bool renderer_told_to_force_default_action_ = false;
+  base::OnceClosure drop_callback_;
+};
+
+// Where SelfDestructingRenderWidgetHostViewAura runs the pending nested loop
+// task: from InitAsChild(), or while the view is being shown (from
+// EnsurePlatformVisibility(), since ShowWithVisibility() is final).
+enum class NestedLoopPoint {
+  kInitAsChild,
+  kShow,
+  // While InitAsChild() adds the view's window to its parent, which is where
+  // UpdateLegacyWin() runs.
+  kAddChild,
+};
+NestedLoopPoint g_nested_loop_point = NestedLoopPoint::kInitAsChild;
+
+// Work to do in a nested message loop. It runs `done` when finished, which ends
+// the loop.
+using NestedLoopTask = base::OnceCallback<void(base::OnceClosure done)>;
+
+// If set, the next view created runs this from `g_nested_loop_point`.
+NestedLoopTask& PendingNestedLoopTask() {
+  static base::NoDestructor<NestedLoopTask> task;
+  return *task;
+}
+
+NestedLoopTask CloseShellTask(Shell* shell) {
+  return base::BindOnce(
+      [](Shell* shell, base::OnceClosure done) {
+        shell->Close();
+        std::move(done).Run();
+      },
+      shell);
+}
+
+// The view that is running the pending nested loop task.
+RenderWidgetHostViewAura* g_view_running_nested_loop = nullptr;
+
+// Destroys the view running the nested loop, the way it is destroyed when its
+// renderer goes away.
+NestedLoopTask DestroyViewTask() {
+  return base::BindOnce([](base::OnceClosure done) {
+    g_view_running_nested_loop->RenderProcessGone();
+    std::move(done).Run();
+  });
+}
+
+// Runs a closure once a window has been added to the observed window, at the
+// end of aura::Window::AddChild().
+class WindowAddedCallback : public aura::WindowObserver {
+ public:
+  WindowAddedCallback(aura::Window* window, base::OnceClosure callback)
+      : callback_(std::move(callback)) {
+    observation_.Observe(window);
+  }
+
+  // aura::WindowObserver:
+  void OnWindowHierarchyChanged(const HierarchyChangeParams& params) override {
+    if (params.new_parent == observation_.GetSource() && callback_) {
+      std::move(callback_).Run();
+    }
+  }
+
+ private:
+  base::OnceClosure callback_;
+  base::ScopedObservation<aura::Window, aura::WindowObserver> observation_{
+      this};
+};
+
+// A view that simulates a nested message loop running while it is initialized
+// or shown (as can happen on Windows, e.g. in UpdateLegacyWin() or when a
+// synchronous TSF lock session is started), in which it runs the pending nested
+// loop task, e.g. to close the tab.
+class SelfDestructingRenderWidgetHostViewAura
+    : public RenderWidgetHostViewAura {
+ public:
+  explicit SelfDestructingRenderWidgetHostViewAura(RenderWidgetHost* host)
+      : RenderWidgetHostViewAura(host),
+        // Only views created after the task is set run it, so that existing
+        // views, like the opener's, don't.
+        armed_(!PendingNestedLoopTask().is_null()) {}
+  ~SelfDestructingRenderWidgetHostViewAura() override = default;
+
+  void InitAsChild(gfx::NativeView parent_view) override {
+    std::optional<WindowAddedCallback> window_added;
+    if (parent_view) {
+      window_added.emplace(
+          parent_view,
+          base::BindOnce(
+              &SelfDestructingRenderWidgetHostViewAura::MaybeRunNestedLoop,
+              base::Unretained(this), NestedLoopPoint::kAddChild));
+    }
+    base::WeakPtr<RenderWidgetHostViewBase> weak_this = GetWeakPtr();
+    RenderWidgetHostViewAura::InitAsChild(parent_view);
+    window_added.reset();
+    // InitAsChild() deletes this view if it was destroyed while its window was
+    // added.
+    if (!weak_this) {
+      return;
+    }
+    MaybeRunNestedLoop(NestedLoopPoint::kInitAsChild);
+  }
+
+ protected:
+  void EnsurePlatformVisibility(PageVisibilityState page_visibility) override {
+    RenderWidgetHostViewAura::EnsurePlatformVisibility(page_visibility);
+    MaybeRunNestedLoop(NestedLoopPoint::kShow);
+  }
+
+ private:
+  void MaybeRunNestedLoop(NestedLoopPoint point) {
+    if (!armed_ || point != g_nested_loop_point ||
+        PendingNestedLoopTask().is_null()) {
+      return;
+    }
+    base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(PendingNestedLoopTask()),
+                                  run_loop.QuitClosure()));
+    g_view_running_nested_loop = this;
+    run_loop.Run();
+    g_view_running_nested_loop = nullptr;
+  }
+
+  const bool armed_;
+};
+
+void InstallSelfDestructingRenderWidgetHostViewCreateHook() {
+  WebContentsViewAura::InstallCreateHookForTests(
+      [](RenderWidgetHost* host) -> RenderWidgetHostViewAura* {
+        return new SelfDestructingRenderWidgetHostViewAura(host);
+      });
+}
+
+// Runs a closure when a frame is deleted. Unlike RenderFrameDeletedObserver,
+// this doesn't spin a RunLoop, so it can be used from a nested loop task.
+class FrameDeletedCallback : public WebContentsObserver {
+ public:
+  FrameDeletedCallback(RenderFrameHost* frame, base::OnceClosure callback)
+      : WebContentsObserver(WebContents::FromRenderFrameHost(frame)),
+        frame_id_(frame->GetGlobalId()),
+        callback_(std::move(callback)) {}
+
+  // WebContentsObserver:
+  void RenderFrameDeleted(RenderFrameHost* render_frame_host) override {
+    if (render_frame_host->GetGlobalId() == frame_id_ && callback_) {
+      std::move(callback_).Run();
+    }
+  }
+
+ private:
+  const GlobalRenderFrameHostId frame_id_;
+  base::OnceClosure callback_;
+};
+
+// Closes the next popup that is created, the way `parent_view` closes its popup
+// when it loses focus, from a nested message loop run once the popup's window
+// is added to a root window (which is where UpdateLegacyWin() runs on Windows)
+// while RenderWidgetHostViewAura::InitAsPopup() initializes it.
+class PopupClosingObserver : public aura::EnvObserver,
+                             public aura::WindowObserver {
+ public:
+  explicit PopupClosingObserver(RenderWidgetHostViewAura* parent_view)
+      : parent_view_(parent_view) {
+    env_observation_.Observe(aura::Env::GetInstance());
+  }
+
+  bool closed_popup() const { return closed_popup_; }
+
+  // aura::EnvObserver:
+  void OnWindowInitialized(aura::Window* window) override {
+    // The popup's window is the first menu window created. On desktop Aura, the
+    // window it is added to is created later, in a root window of its own.
+    if (window->GetType() == aura::client::WINDOW_TYPE_MENU) {
+      env_observation_.Reset();
+      popup_window_observation_.Observe(window);
+    }
+  }
+
+  // aura::WindowObserver:
+  void OnWindowAddedToRootWindow(aura::Window* window) override {
+    popup_window_observation_.Reset();
+    closed_popup_ = true;
+    base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindLambdaForTesting([&]() {
+          parent_view_->OnWindowFocused(/*gained_focus=*/nullptr,
+                                        parent_view_->GetNativeView());
+          run_loop.Quit();
+        }));
+    run_loop.Run();
+  }
+  void OnWindowDestroying(aura::Window* window) override {
+    popup_window_observation_.Reset();
+  }
+
+ private:
+  const raw_ptr<RenderWidgetHostViewAura> parent_view_;
+  bool closed_popup_ = false;
+  base::ScopedObservation<aura::Env, aura::EnvObserver> env_observation_{this};
+  base::ScopedObservation<aura::Window, aura::WindowObserver>
+      popup_window_observation_{this};
 };
 
 }  // namespace
 
+class WebContentsViewAuraReentrantDestructionTest : public ContentBrowserTest {
+ public:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    IsolateAllSitesForTesting(command_line);
+  }
+
+  void SetUpInProcessBrowserTestFixture() override {
+    InstallSelfDestructingRenderWidgetHostViewCreateHook();
+    ContentBrowserTest::SetUpInProcessBrowserTestFixture();
+  }
+
+  void SetUpOnMainThread() override {
+    g_nested_loop_point = NestedLoopPoint::kInitAsChild;
+    PendingNestedLoopTask().Reset();
+    host_resolver()->AddRule("*", "127.0.0.1");
+    ASSERT_TRUE(embedded_test_server()->Start());
+  }
+
+ protected:
+  // Closes the opener from a nested message loop at `point` while
+  // WebContentsImpl::CreateNewWindow() creates the window it opens.
+  void CloseOpenerWhileCreatingNewWindow(NestedLoopPoint point) {
+    Shell* opener = CreateBrowser();
+    ASSERT_TRUE(NavigateToURL(
+        opener, embedded_test_server()->GetURL("a.com", "/title1.html")));
+    const size_t web_contents_count = GetAllWebContents().size();
+
+    WebContentsDestroyedWatcher destroyed_watcher(opener->web_contents());
+    g_nested_loop_point = point;
+    PendingNestedLoopTask() = CloseShellTask(opener);
+    // Without noopener, the new window's view is created and shown in
+    // WebContentsImpl::CreateNewWindow().
+    ExecuteScriptAsync(opener, "window.open('about:blank')");
+    destroyed_watcher.Wait();
+
+    // Only the opener's WebContents is gone; the new window's was destroyed
+    // before it was opened.
+    EXPECT_EQ(web_contents_count - 1, GetAllWebContents().size());
+  }
+};
+
+// WebContentsViewAura::CreateViewForWidget() runs InitAsChild(), which can pump
+// a nested message loop, and then keeps using the view and the
+// WebContentsViewAura. Closing the tab inside that loop destroys both, so this
+// verifies that destroying the WebContents re-entrantly there fails a CHECK
+// instead of using freed memory.
+IN_PROC_BROWSER_TEST_F(WebContentsViewAuraReentrantDestructionTest,
+                       WebContentsDestroyedDuringInitAsChild) {
+  Shell* tab = CreateBrowser();
+
+  // The embedded b.com subframe gives this tab a live RenderViewHost for b.com
+  // that has no view yet. A same-BrowsingInstance main-frame navigation to
+  // b.com reuses it and creates its view during the navigation, rather than
+  // when a new RenderViewHost is created.
+  const GURL initial_url = embedded_test_server()->GetURL(
+      "a.com", "/cross_site_iframe_factory.html?a(b)");
+  ASSERT_TRUE(NavigateToURL(tab, initial_url));
+
+  // Stay in the same BrowsingInstance so the navigation reuses that
+  // RenderViewHost.
+  static_cast<WebContentsImpl*>(tab->web_contents())
+      ->GetPrimaryMainFrame()
+      ->DisableProactiveBrowsingInstanceSwapForTesting();
+
+  const GURL target_url =
+      embedded_test_server()->GetURL("b.com", "/title1.html");
+
+  // Destroying the WebContents while its view is being created is not
+  // supported, so it must fail a CHECK rather than touch freed memory.
+  EXPECT_CHECK_DEATH_WITH(
+      {
+        PendingNestedLoopTask() = CloseShellTask(tab);
+        // Not NavigateToURL(), which would use the Shell after it is
+        // destroyed.
+        tab->web_contents()->GetController().LoadURLWithParams(
+            NavigationController::LoadURLParams(target_url));
+      },
+      "prevent_destruction_");
+}
+
+// WebContentsImpl::CreateNewWindow() creates the new window's view, which runs
+// InitAsChild() and can pump a nested message loop, and then keeps using the
+// opener. If the opener is closed in that loop, the window must not be created,
+// and the opener must not be used after it is destroyed.
+IN_PROC_BROWSER_TEST_F(WebContentsViewAuraReentrantDestructionTest,
+                       OpenerDestroyedDuringNewWindowInitAsChild) {
+  CloseOpenerWhileCreatingNewWindow(NestedLoopPoint::kInitAsChild);
+}
+
+// Same, but with the opener closed while CreateNewWindow() shows the new
+// window's view.
+IN_PROC_BROWSER_TEST_F(WebContentsViewAuraReentrantDestructionTest,
+                       OpenerDestroyedDuringNewWindowShow) {
+  CloseOpenerWhileCreatingNewWindow(NestedLoopPoint::kShow);
+}
+
+// Same, but with only the opener frame removed in that loop, by its parent in
+// another process, which isn't blocked by the opener's window.open(). The
+// opener's WebContents is still used afterwards, but the opener frame must not
+// be.
+IN_PROC_BROWSER_TEST_F(WebContentsViewAuraReentrantDestructionTest,
+                       OpenerFrameRemovedDuringNewWindowInitAsChild) {
+  Shell* tab = CreateBrowser();
+  ASSERT_TRUE(
+      NavigateToURL(tab, embedded_test_server()->GetURL(
+                             "a.com", "/cross_site_iframe_factory.html?a(b)")));
+  RenderFrameHost* main_frame = tab->web_contents()->GetPrimaryMainFrame();
+  RenderFrameHost* opener_frame = ChildFrameAt(main_frame, 0);
+  ASSERT_TRUE(opener_frame);
+  ASSERT_NE(main_frame->GetProcess(), opener_frame->GetProcess());
+  const size_t web_contents_count = GetAllWebContents().size();
+
+  RenderFrameDeletedObserver opener_frame_deleted(opener_frame);
+  std::unique_ptr<FrameDeletedCallback> end_nested_loop;
+  PendingNestedLoopTask() =
+      base::BindLambdaForTesting([&](base::OnceClosure done) {
+        end_nested_loop = std::make_unique<FrameDeletedCallback>(
+            opener_frame, std::move(done));
+        ExecuteScriptAsync(main_frame,
+                           "document.querySelector('iframe').remove();");
+      });
+  ExecuteScriptAsync(opener_frame, "window.open('about:blank')");
+  ASSERT_TRUE(opener_frame_deleted.WaitUntilDeleted());
+
+  // The new window's WebContents was destroyed before it was opened.
+  EXPECT_EQ(web_contents_count, GetAllWebContents().size());
+  EXPECT_TRUE(main_frame->IsRenderFrameLive());
+}
+
+// The new window's view itself can also be destroyed while CreateNewWindow()
+// creates it, e.g. because its renderer goes away while InitAsChild() adds its
+// window to its parent, which is where UpdateLegacyWin() runs.
+IN_PROC_BROWSER_TEST_F(WebContentsViewAuraReentrantDestructionTest,
+                       NewWindowViewDestroyedWhileAddedToParent) {
+  Shell* opener = CreateBrowser();
+  ASSERT_TRUE(NavigateToURL(
+      opener, embedded_test_server()->GetURL("a.com", "/title1.html")));
+  const size_t web_contents_count = GetAllWebContents().size();
+
+  g_nested_loop_point = NestedLoopPoint::kAddChild;
+  PendingNestedLoopTask() = DestroyViewTask();
+  // window.open() returns null when the window isn't created.
+  EXPECT_EQ(true, EvalJs(opener, "window.open('about:blank') === null"));
+  // The new window's WebContents was destroyed before it was opened.
+  EXPECT_EQ(web_contents_count, GetAllWebContents().size());
+}
+
+// A popup can be closed while WebContentsImpl::ShowCreatedWidget() initializes
+// it, e.g. because its parent loses focus in a nested message loop, which
+// deletes its RenderWidgetHost. Neither may be used after that.
+IN_PROC_BROWSER_TEST_F(WebContentsViewAuraReentrantDestructionTest,
+                       PopupClosedWhileParented) {
+  ASSERT_TRUE(NavigateToURL(
+      shell(), GURL("data:text/html,<select id='s'><option>a</option>"
+                    "<option>b</option></select>")));
+  WebContents* web_contents = shell()->web_contents();
+  RenderFrameHost* main_frame = web_contents->GetPrimaryMainFrame();
+  PopupClosingObserver popup_closer(static_cast<RenderWidgetHostViewAura*>(
+      web_contents->GetRenderWidgetHostView()));
+
+  ShowPopupWidgetWaiter popup_waiter(web_contents, main_frame);
+  ASSERT_TRUE(ExecJs(main_frame, "document.getElementById('s').showPicker();"));
+  popup_waiter.Wait();
+
+  EXPECT_TRUE(popup_closer.closed_popup());
+  EXPECT_FALSE(
+      RenderWidgetHost::FromID(main_frame->GetProcess()->GetDeprecatedID(),
+                               popup_waiter.last_routing_id()));
+}
+
 class WebContentsViewAuraTest : public ContentBrowserTest {
  public:
   WebContentsViewAuraTest() = default;
+
+  WebContentsViewAuraTest(const WebContentsViewAuraTest&) = delete;
+  WebContentsViewAuraTest& operator=(const WebContentsViewAuraTest&) = delete;
 
   // Starts the test server and navigates to the given url. Sets a large enough
   // size to the root window.  Returns after the navigation to the url is
@@ -100,10 +514,11 @@ class WebContentsViewAuraTest : public ContentBrowserTest {
   void StartTestWithPage(const std::string& url) {
     ASSERT_TRUE(embedded_test_server()->Start());
     GURL test_url;
-    if (url == "about:blank")
+    if (url == "about:blank") {
       test_url = GURL(url);
-    else
+    } else {
       test_url = GURL(embedded_test_server()->GetURL(url));
+    }
     EXPECT_TRUE(NavigateToURL(shell(), test_url));
 
     frame_observer_ = std::make_unique<RenderFrameSubmissionObserver>(
@@ -121,6 +536,52 @@ class WebContentsViewAuraTest : public ContentBrowserTest {
                            switches::kTouchEventFeatureDetectionEnabled);
   }
 
+  WebContentsImpl* GetWebContentsImpl() {
+    return static_cast<WebContentsImpl*>(shell()->web_contents());
+  }
+
+  WebContentsViewAura* GetWebContentsViewAura() {
+    WebContentsImpl* contents = GetWebContentsImpl();
+    return static_cast<WebContentsViewAura*>(contents->GetView());
+  }
+
+  TestWebContentsViewDelegate* PrepareWebContentsViewForDropTest(
+      bool delegate_allows_drop) {
+    WebContentsViewAura* view = GetWebContentsViewAura();
+
+    drag_dest_delegate_.Reset();
+    view->SetDragDestDelegateForTesting(&drag_dest_delegate_);
+    view->drag_in_progress_ = true;
+
+    auto delegate = std::make_unique<TestWebContentsViewDelegate>(
+        /*allow_drop=*/delegate_allows_drop);
+    TestWebContentsViewDelegate* delegate_ptr = delegate.get();
+    view->SetDelegateForTesting(std::move(delegate));
+    view->RegisterDropCallbackForTesting(base::BindOnce(
+        &WebContentsViewAuraTest::OnDropComplete, base::Unretained(this)));
+
+    return delegate_ptr;
+  }
+
+  void SimulateDragEnterAndDrop(bool document_is_handling_drag) {
+    WebContentsViewAura* view = GetWebContentsViewAura();
+    std::unique_ptr<ui::OSExchangeData> data =
+        std::make_unique<ui::OSExchangeData>();
+    gfx::PointF point = {10, 10};
+    ui::DropTargetEvent event(*data.get(), point, point,
+                              ui::DragDropTypes::DRAG_COPY);
+    view->OnDragEntered(event);
+    view->UpdateDragOperation(
+        ui::mojom::DragOperation::kCopy, document_is_handling_drag,
+        GetWebContentsImpl()->GetPrimaryMainFrame()->GetRenderWidgetHost());
+    EXPECT_TRUE(drag_dest_delegate_.GetDragInitializeCalled());
+    auto drop_cb = view->GetDropCallback(event);
+    ASSERT_TRUE(drop_cb);
+    ui::mojom::DragOperation output_drag_op = ui::mojom::DragOperation::kNone;
+    std::move(drop_cb).Run(std::move(data), output_drag_op,
+                           /*drag_image_layer_owner=*/nullptr);
+  }
+
   void OnDropComplete(RenderWidgetHostImpl* target_rwh,
                       const DropData& drop_data,
                       const gfx::PointF& client_pt,
@@ -132,27 +593,29 @@ class WebContentsViewAuraTest : public ContentBrowserTest {
     std::move(async_drop_closure_).Run();
   }
 
+  void EndDrag() {
+    ASSERT_FALSE(async_drop_closure_);
+    ASSERT_TRUE(async_end_drag_closure_);
+    std::move(async_end_drag_closure_).Run();
+  }
+
   void TestOverscrollNavigation(bool touch_handler) {
     ASSERT_NO_FATAL_FAILURE(StartTestWithPage("/overscroll_navigation.html"));
-    WebContentsImpl* web_contents =
-        static_cast<WebContentsImpl*>(shell()->web_contents());
+    WebContentsImpl* web_contents = GetWebContentsImpl();
     NavigationController& controller = web_contents->GetController();
-    RenderFrameHost* main_frame = web_contents->GetMainFrame();
+    RenderFrameHost* main_frame = web_contents->GetPrimaryMainFrame();
 
     EXPECT_FALSE(controller.CanGoBack());
     EXPECT_FALSE(controller.CanGoForward());
-    base::Value value = ExecuteScriptAndGetValue(main_frame, "get_current()");
-    int index = value.GetInt();
-    EXPECT_EQ(0, index);
+    EXPECT_EQ(0, EvalJs(main_frame, "get_current()"));
 
-    if (touch_handler)
-      content::ExecuteScriptAndGetValue(main_frame, "install_touch_handler()");
+    if (touch_handler) {
+      ASSERT_TRUE(content::ExecJs(main_frame, "install_touch_handler()"));
+    }
 
-    content::ExecuteScriptAndGetValue(main_frame, "navigate_next()");
-    content::ExecuteScriptAndGetValue(main_frame, "navigate_next()");
-    value = content::ExecuteScriptAndGetValue(main_frame, "get_current()");
-    index = value.GetInt();
-    EXPECT_EQ(2, index);
+    ASSERT_TRUE(content::ExecJs(main_frame, "navigate_next()"));
+    ASSERT_TRUE(content::ExecJs(main_frame, "navigate_next()"));
+    EXPECT_EQ(2, EvalJs(main_frame, "get_current()"));
     EXPECT_TRUE(controller.CanGoBack());
     EXPECT_FALSE(controller.CanGoForward());
 
@@ -169,13 +632,10 @@ class WebContentsViewAuraTest : public ContentBrowserTest {
       generator.GestureScrollSequence(
           gfx::Point(bounds.x() + 2, bounds.y() + 10),
           gfx::Point(bounds.right() - 10, bounds.y() + 10),
-          base::TimeDelta::FromMilliseconds(kScrollDurationMs),
-          kScrollSteps);
+          base::Milliseconds(kScrollDurationMs), kScrollSteps);
       std::u16string actual_title = title_watcher.WaitAndGetTitle();
       EXPECT_EQ(expected_title, actual_title);
-      value = ExecuteScriptAndGetValue(main_frame, "get_current()");
-      index = value.GetInt();
-      EXPECT_EQ(1, index);
+      EXPECT_EQ(1, EvalJs(main_frame, "get_current()"));
       EXPECT_TRUE(controller.CanGoBack());
       EXPECT_TRUE(controller.CanGoForward());
     }
@@ -187,13 +647,10 @@ class WebContentsViewAuraTest : public ContentBrowserTest {
       generator.GestureScrollSequence(
           gfx::Point(bounds.x() + 2, bounds.y() + 10),
           gfx::Point(bounds.right() - 10, bounds.y() + 10),
-          base::TimeDelta::FromMilliseconds(kScrollDurationMs),
-          kScrollSteps);
+          base::Milliseconds(kScrollDurationMs), kScrollSteps);
       std::u16string actual_title = title_watcher.WaitAndGetTitle();
       EXPECT_EQ(expected_title, actual_title);
-      value = ExecuteScriptAndGetValue(main_frame, "get_current()");
-      index = value.GetInt();
-      EXPECT_EQ(0, index);
+      EXPECT_EQ(0, EvalJs(main_frame, "get_current()"));
       EXPECT_FALSE(controller.CanGoBack());
       EXPECT_TRUE(controller.CanGoForward());
     }
@@ -205,35 +662,24 @@ class WebContentsViewAuraTest : public ContentBrowserTest {
       generator.GestureScrollSequence(
           gfx::Point(bounds.right() - 10, bounds.y() + 10),
           gfx::Point(bounds.x() + 2, bounds.y() + 10),
-          base::TimeDelta::FromMilliseconds(kScrollDurationMs),
-          kScrollSteps);
+          base::Milliseconds(kScrollDurationMs), kScrollSteps);
       std::u16string actual_title = title_watcher.WaitAndGetTitle();
       EXPECT_EQ(expected_title, actual_title);
-      value = ExecuteScriptAndGetValue(main_frame, "get_current()");
-      index = value.GetInt();
-      EXPECT_EQ(1, index);
+      EXPECT_EQ(1, EvalJs(main_frame, "get_current()"));
       EXPECT_TRUE(controller.CanGoBack());
       EXPECT_TRUE(controller.CanGoForward());
     }
   }
 
   int GetCurrentIndex() {
-    WebContentsImpl* web_contents =
-        static_cast<WebContentsImpl*>(shell()->web_contents());
-    RenderFrameHost* main_frame = web_contents->GetMainFrame();
-    base::Value value = ExecuteScriptAndGetValue(main_frame, "get_current()");
-    if (!value.is_int())
-      return -1;
-    return value.GetInt();
-  }
-
-  int ExecuteScriptAndExtractInt(const std::string& script) {
-    return EvalJs(shell(), script).ExtractInt();
+    WebContentsImpl* web_contents = GetWebContentsImpl();
+    RenderFrameHost* main_frame = web_contents->GetPrimaryMainFrame();
+    return EvalJs(main_frame, "get_current()").ExtractInt();
   }
 
   RenderViewHost* GetRenderViewHost() const {
     RenderViewHost* const rvh =
-        shell()->web_contents()->GetMainFrame()->GetRenderViewHost();
+        shell()->web_contents()->GetPrimaryMainFrame()->GetRenderViewHost();
     CHECK(rvh);
     return rvh;
   }
@@ -254,8 +700,9 @@ class WebContentsViewAuraTest : public ContentBrowserTest {
   }
 
   void WaitAFrame() {
-    while (!GetRenderWidgetHost()->RequestRepaintForTesting())
+    while (!GetRenderWidgetHost()->RequestRepaintOnNewSurface()) {
       GiveItSomeTime();
+    }
     frame_observer_->WaitForAnyFrameSubmission();
   }
 
@@ -269,18 +716,18 @@ class WebContentsViewAuraTest : public ContentBrowserTest {
     }
     void OnDragOver() override {}
     void OnDragEnter() override {}
-    void OnDrop() override { on_drop_called_ = true; }
+    void OnDrop() override { ++on_drop_called_count_; }
     void OnDragLeave() override { on_drag_leave_called_ = true; }
     void OnReceiveDragData(const ui::OSExchangeData& data) override {}
 
     void Reset() { drag_initialize_called_ = false; }
     bool GetDragInitializeCalled() { return drag_initialize_called_; }
-    bool GetOnDropCalled() { return on_drop_called_; }
+    int GetOnDropCalledCount() { return on_drop_called_count_; }
     bool GetOnDragLeaveCalled() { return on_drag_leave_called_; }
 
    private:
     bool drag_initialize_called_ = false;
-    bool on_drop_called_ = false;
+    int on_drop_called_count_ = 0;
     bool on_drag_leave_called_ = false;
   };
 
@@ -291,22 +738,24 @@ class WebContentsViewAuraTest : public ContentBrowserTest {
     ContentBrowserTest::PostRunTestOnMainThread();
   }
 
-  RenderWidgetHostImpl* drop_target_widget_;
+  raw_ptr<RenderWidgetHostImpl, DanglingUntriaged> drop_target_widget_;
 
   // A closure indicating that async drop operation has completed.
   base::OnceClosure async_drop_closure_;
+
+  base::OnceClosure async_end_drag_closure_;
 
   MockWebDragDestDelegate drag_dest_delegate_;
 
  private:
   std::unique_ptr<RenderFrameSubmissionObserver> frame_observer_;
-
-  DISALLOW_COPY_AND_ASSIGN(WebContentsViewAuraTest);
 };
 
 // Flaky on Windows: http://crbug.com/305722
 // The test frequently times out on Linux, too. See crbug.com/440043.
-#if defined(OS_WIN) || defined(OS_LINUX) || defined(OS_CHROMEOS)
+// For Fuchsia, see https://crbug.com/1318245.
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || \
+    BUILDFLAG(IS_FUCHSIA)
 #define MAYBE_OverscrollNavigation DISABLED_OverscrollNavigation
 #else
 #define MAYBE_OverscrollNavigation OverscrollNavigation
@@ -319,7 +768,9 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest, MAYBE_OverscrollNavigation) {
 // Flaky on Windows (might be related to the above test):
 // http://crbug.com/305722
 // On Linux, the test frequently times out. (See crbug.com/440043).
-#if defined(OS_WIN) || defined(OS_LINUX) || defined(OS_CHROMEOS)
+// For Fuchsia, see https://crbug.com/1318245.
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || \
+    BUILDFLAG(IS_FUCHSIA)
 #define MAYBE_OverscrollNavigationWithTouchHandler \
   DISABLED_OverscrollNavigationWithTouchHandler
 #else
@@ -341,19 +792,24 @@ class SpuriousMouseMoveEventObserver
     host_->AddInputEventObserver(this);
   }
 
+  SpuriousMouseMoveEventObserver(const SpuriousMouseMoveEventObserver&) =
+      delete;
+  SpuriousMouseMoveEventObserver& operator=(
+      const SpuriousMouseMoveEventObserver&) = delete;
+
   ~SpuriousMouseMoveEventObserver() override {
     host_->RemoveInputEventObserver(this);
   }
 
-  void OnInputEvent(const blink::WebInputEvent& event) override {
+  void OnInputEvent(const RenderWidgetHost& widget,
+                    const blink::WebInputEvent& event,
+                    InputEventSource source) override {
     EXPECT_NE(blink::WebInputEvent::Type::kMouseMove, event.GetType())
         << "Unexpected mouse move event.";
   }
 
  private:
-  RenderWidgetHost* host_;
-
-  DISALLOW_COPY_AND_ASSIGN(SpuriousMouseMoveEventObserver);
+  raw_ptr<RenderWidgetHost> host_;
 };
 }  // namespace
 
@@ -366,21 +822,16 @@ class SpuriousMouseMoveEventObserver
 IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest,
                        DISABLED_OverscrollNotInterruptedBySpuriousMouseEvents) {
   ASSERT_NO_FATAL_FAILURE(StartTestWithPage("/overscroll_navigation.html"));
-  WebContentsImpl* web_contents =
-      static_cast<WebContentsImpl*>(shell()->web_contents());
+  WebContentsImpl* web_contents = GetWebContentsImpl();
   NavigationController& controller = web_contents->GetController();
-  RenderFrameHost* main_frame = web_contents->GetMainFrame();
+  RenderFrameHost* main_frame = web_contents->GetPrimaryMainFrame();
 
   EXPECT_FALSE(controller.CanGoBack());
   EXPECT_FALSE(controller.CanGoForward());
-  base::Value value = ExecuteScriptAndGetValue(main_frame, "get_current()");
-  int index = value.GetInt();
-  EXPECT_EQ(0, index);
+  EXPECT_EQ(0, EvalJs(main_frame, "get_current()"));
 
-  content::ExecuteScriptAndGetValue(main_frame, "navigate_next()");
-  value = content::ExecuteScriptAndGetValue(main_frame, "get_current()");
-  index = value.GetInt();
-  EXPECT_EQ(1, index);
+  ASSERT_TRUE(content::ExecJs(main_frame, "navigate_next()"));
+  EXPECT_EQ(1, EvalJs(main_frame, "get_current()"));
   EXPECT_TRUE(controller.CanGoBack());
   EXPECT_FALSE(controller.CanGoForward());
 
@@ -420,7 +871,7 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest,
   // incorrectly. That said, the event we're worried about happens almost
   // instantly after the start of the overscroll gesture.
   base::RunLoop run_loop;
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE, run_loop.QuitClosure(), TestTimeouts::tiny_timeout());
   run_loop.Run();
 
@@ -433,8 +884,9 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest,
 
 // Disabled because the test always fails the first time it runs on the Win Aura
 // bots, and usually but not always passes second-try (See crbug.com/179532).
-// Flaky on CrOS as well: https://crbug.com/856079
-#if defined(OS_WIN) || BUILDFLAG(IS_CHROMEOS_ASH)
+// Flaky on CrOS, Linux, and Fuchsia as well: https://crbug.com/856079
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || \
+    BUILDFLAG(IS_FUCHSIA)
 #define MAYBE_QuickOverscrollDirectionChange \
   DISABLED_QuickOverscrollDirectionChange
 #else
@@ -443,19 +895,18 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest,
 IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest,
                        MAYBE_QuickOverscrollDirectionChange) {
   ASSERT_NO_FATAL_FAILURE(StartTestWithPage("/overscroll_navigation.html"));
-  WebContentsImpl* web_contents =
-      static_cast<WebContentsImpl*>(shell()->web_contents());
-  RenderFrameHost* main_frame = web_contents->GetMainFrame();
+  WebContentsImpl* web_contents = GetWebContentsImpl();
+  RenderFrameHost* main_frame = web_contents->GetPrimaryMainFrame();
 
   // This test triggers a large number of animations. Speed them up to ensure
   // the test completes within its time limit.
-  ui::ScopedAnimationDurationScaleMode fast_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::FAST_DURATION);
+  gfx::ScopedAnimationDurationScaleMode fast_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::FAST_DURATION);
 
   // Make sure the page has both back/forward history.
-  content::ExecuteScriptAndGetValue(main_frame, "navigate_next()");
+  ASSERT_TRUE(content::ExecJs(main_frame, "navigate_next()"));
   EXPECT_EQ(1, GetCurrentIndex());
-  content::ExecuteScriptAndGetValue(main_frame, "navigate_next()");
+  ASSERT_TRUE(content::ExecJs(main_frame, "navigate_next()"));
   EXPECT_EQ(2, GetCurrentIndex());
   web_contents->GetController().GoToOffset(-1);
   EXPECT_EQ(1, GetCurrentIndex());
@@ -468,19 +919,22 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest,
   // this test to fail. This observer will let us know if this is happening.
   SpuriousMouseMoveEventObserver mouse_observer(GetRenderWidgetHost());
 
-  base::TimeTicks timestamp = ui::EventTimeForNow();
+  // TODO(crbug.com/40838320): Use a mock timer to generate timestamps for
+  // events. This would need injecting the mock timer into
+  // `cc::CompositorFrameReportingController`.
   ui::TouchEvent press(
-      ui::ET_TOUCH_PRESSED,
-      gfx::Point(bounds.x() + bounds.width() / 2, bounds.y() + 5), timestamp,
+      ui::EventType::kTouchPressed,
+      gfx::Point(bounds.x() + bounds.width() / 2, bounds.y() + 5),
+      ui::EventTimeForNow(),
       ui::PointerDetails(ui::EventPointerType::kTouch, 0));
   ui::EventDispatchDetails details = sink->OnEventFromSource(&press);
   ASSERT_FALSE(details.dispatcher_destroyed);
   EXPECT_EQ(1, GetCurrentIndex());
 
-  timestamp += base::TimeDelta::FromMilliseconds(10);
-  ui::TouchEvent move1(
-      ui::ET_TOUCH_MOVED, gfx::Point(bounds.right() - 10, bounds.y() + 5),
-      timestamp, ui::PointerDetails(ui::EventPointerType::kTouch, 0));
+  ui::TouchEvent move1(ui::EventType::kTouchMoved,
+                       gfx::Point(bounds.right() - 10, bounds.y() + 5),
+                       ui::EventTimeForNow(),
+                       ui::PointerDetails(ui::EventPointerType::kTouch, 0));
   details = sink->OnEventFromSource(&move1);
   ASSERT_FALSE(details.dispatcher_destroyed);
   EXPECT_EQ(1, GetCurrentIndex());
@@ -488,30 +942,27 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest,
   // Swipe back from the right edge, back to the left edge, back to the right
   // edge.
 
-  for (int x = bounds.right() - 10; x >= bounds.x() + 10; x-= 10) {
-    timestamp += base::TimeDelta::FromMilliseconds(10);
-    ui::TouchEvent inc(ui::ET_TOUCH_MOVED, gfx::Point(x, bounds.y() + 5),
-                       timestamp,
+  for (int x = bounds.right() - 10; x >= bounds.x() + 10; x -= 10) {
+    ui::TouchEvent inc(ui::EventType::kTouchMoved,
+                       gfx::Point(x, bounds.y() + 5), ui::EventTimeForNow(),
                        ui::PointerDetails(ui::EventPointerType::kTouch, 0));
     details = sink->OnEventFromSource(&inc);
     ASSERT_FALSE(details.dispatcher_destroyed);
     EXPECT_EQ(1, GetCurrentIndex());
   }
 
-  for (int x = bounds.x() + 10; x <= bounds.width() - 10; x+= 10) {
-    timestamp += base::TimeDelta::FromMilliseconds(10);
-    ui::TouchEvent inc(ui::ET_TOUCH_MOVED, gfx::Point(x, bounds.y() + 5),
-                       timestamp,
+  for (int x = bounds.x() + 10; x <= bounds.width() - 10; x += 10) {
+    ui::TouchEvent inc(ui::EventType::kTouchMoved,
+                       gfx::Point(x, bounds.y() + 5), ui::EventTimeForNow(),
                        ui::PointerDetails(ui::EventPointerType::kTouch, 0));
     details = sink->OnEventFromSource(&inc);
     ASSERT_FALSE(details.dispatcher_destroyed);
     EXPECT_EQ(1, GetCurrentIndex());
   }
 
-  for (int x = bounds.width() - 10; x >= bounds.x() + 10; x-= 10) {
-    timestamp += base::TimeDelta::FromMilliseconds(10);
-    ui::TouchEvent inc(ui::ET_TOUCH_MOVED, gfx::Point(x, bounds.y() + 5),
-                       timestamp,
+  for (int x = bounds.width() - 10; x >= bounds.x() + 10; x -= 10) {
+    ui::TouchEvent inc(ui::EventType::kTouchMoved,
+                       gfx::Point(x, bounds.y() + 5), ui::EventTimeForNow(),
                        ui::PointerDetails(ui::EventPointerType::kTouch, 0));
     details = sink->OnEventFromSource(&inc);
     ASSERT_FALSE(details.dispatcher_destroyed);
@@ -535,10 +986,9 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest,
   std::unique_ptr<aura::Window> window(new aura::Window(nullptr));
   window->Init(ui::LAYER_NOT_DRAWN);
 
-  WebContentsImpl* web_contents =
-      static_cast<WebContentsImpl*>(shell()->web_contents());
-  content::ExecuteScriptAndGetValue(web_contents->GetMainFrame(),
-                                    "navigate_next()");
+  WebContentsImpl* web_contents = GetWebContentsImpl();
+  ASSERT_TRUE(
+      content::ExecJs(web_contents->GetPrimaryMainFrame(), "navigate_next()"));
   EXPECT_EQ(1, GetCurrentIndex());
 
   aura::Window* content = web_contents->GetContentNativeView();
@@ -546,8 +996,7 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest,
   ui::test::EventGenerator generator(content->GetRootWindow(), content);
   generator.GestureScrollSequence(
       gfx::Point(bounds.x() + 2, bounds.y() + 10),
-      gfx::Point(bounds.right() - 10, bounds.y() + 10),
-      base::TimeDelta::FromMilliseconds(20),
+      gfx::Point(bounds.right() - 10, bounds.y() + 10), base::Milliseconds(20),
       1);
 
   window->AddChild(shell()->web_contents()->GetContentNativeView());
@@ -559,10 +1008,8 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest, DragDropOnOopif) {
       "a.com", "/overlapping_cross_site_iframe.html");
   EXPECT_TRUE(NavigateToURL(shell(), url));
 
-  WebContentsImpl* contents =
-      static_cast<WebContentsImpl*>(shell()->web_contents());
-  WebContentsViewAura* view =
-      static_cast<WebContentsViewAura*>(contents->GetView());
+  WebContentsImpl* contents = GetWebContentsImpl();
+  WebContentsViewAura* view = GetWebContentsViewAura();
 
   view->SetDragDestDelegateForTesting(&drag_dest_delegate_);
 
@@ -581,13 +1028,17 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest, DragDropOnOopif) {
                               ui::DragDropTypes::DRAG_COPY);
     view->OnDragEntered(event);
     EXPECT_TRUE(drag_dest_delegate_.GetDragInitializeCalled());
-    view->OnPerformDrop(event, std::move(data));
+    auto drop_cb = view->GetDropCallback(event);
+    ASSERT_TRUE(drop_cb);
+    ui::mojom::DragOperation output_drag_op = ui::mojom::DragOperation::kNone;
+    std::move(drop_cb).Run(std::move(data), output_drag_op,
+                           /*drag_image_layer_owner=*/nullptr);
 
     run_loop.Run();
 
     EXPECT_EQ(drop_target_widget_,
-              RenderWidgetHostImpl::From(contents->GetFrameTree()
-                                             ->root()
+              RenderWidgetHostImpl::From(contents->GetPrimaryFrameTree()
+                                             .root()
                                              ->current_frame_host()
                                              ->GetRenderWidgetHost()));
   }
@@ -614,133 +1065,120 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest, DragDropOnOopif) {
                               ui::DragDropTypes::DRAG_COPY);
     view->OnDragEntered(event);
     EXPECT_TRUE(drag_dest_delegate_.GetDragInitializeCalled());
-    view->OnPerformDrop(event, std::move(data));
+    auto drop_cb = view->GetDropCallback(event);
+    ASSERT_TRUE(drop_cb);
+    ui::mojom::DragOperation output_drag_op = ui::mojom::DragOperation::kNone;
+    std::move(drop_cb).Run(std::move(data), output_drag_op,
+                           /*drag_image_layer_owner=*/nullptr);
 
     run_loop.Run();
 
     EXPECT_EQ(drop_target_widget_,
-              RenderWidgetHostImpl::From(contents->GetFrameTree()
-                                             ->root()
+              RenderWidgetHostImpl::From(contents->GetPrimaryFrameTree()
+                                             .root()
                                              ->current_frame_host()
                                              ->GetRenderWidgetHost()));
   }
 }
 
-IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest, OnPerformDrop_DeepScanOK) {
+// When the user drops data onto a web page that does not handle drops and the
+// web view delegate allows it, the renderer sees this as a "drop" and not a
+// "drag leave".
+IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest,
+                       Drop_NoDropZone_DelegateAllows) {
   StartTestWithPage("/simple_page.html");
-  WebContentsImpl* contents =
-      static_cast<WebContentsImpl*>(shell()->web_contents());
-  WebContentsViewAura* view =
-      static_cast<WebContentsViewAura*>(contents->GetView());
+  WebContentsViewAura* view = GetWebContentsViewAura();
 
-  drag_dest_delegate_.Reset();
-  view->SetDragDestDelegateForTesting(&drag_dest_delegate_);
-
-  // The view takes ownership of the delegate.  The delegate simulates that
-  // the scans passed.
-  auto* delegate = new TestWebContentsViewDelegate(
-      WebContentsViewDelegate::DropCompletionResult::kContinue);
-  view->SetDelegateForTesting(delegate);
-
-  std::unique_ptr<ui::OSExchangeData> data =
-      std::make_unique<ui::OSExchangeData>();
-  view->RegisterDropCallbackForTesting(base::BindOnce(
-      &WebContentsViewAuraTest::OnDropComplete, base::Unretained(this)));
   base::RunLoop run_loop;
   async_drop_closure_ = run_loop.QuitClosure();
 
-  gfx::PointF point = {10, 10};
-  ui::DropTargetEvent event(*data.get(), point, point,
-                            ui::DragDropTypes::DRAG_COPY);
-  view->OnDragEntered(event);
-  EXPECT_TRUE(drag_dest_delegate_.GetDragInitializeCalled());
-  view->OnPerformDrop(event, std::move(data));
+  TestWebContentsViewDelegate* delegate =
+      PrepareWebContentsViewForDropTest(/*delegate_allows_drop=*/true);
+  SimulateDragEnterAndDrop(/*document_is_handling_drag=*/false);
+  delegate->FinishOnPerformingDrop();
 
-  // The user should be able to drag other content over Chrome while the scan is
-  // occurring without affecting it.
-  contents->SetIgnoreInputEvents(true);
-
-  // The user can drag something in and then drag it away.
-  auto new_data = std::make_unique<ui::OSExchangeData>();
-  ui::DropTargetEvent new_event(*new_data.get(), point, point,
-                                ui::DragDropTypes::DRAG_COPY);
-  view->OnDragEntered(new_event);
-  view->OnDragExited();
-  EXPECT_FALSE(drag_dest_delegate_.GetOnDragLeaveCalled());
-
-  // The user can drag something in and drop it.
-  view->OnDragEntered(new_event);
-  view->OnPerformDrop(new_event, std::move(new_data));
-  EXPECT_FALSE(drag_dest_delegate_.GetOnDropCalled());
-
-  delegate->FinishScan();
   run_loop.Run();
 
-  EXPECT_TRUE(drag_dest_delegate_.GetOnDropCalled());
+  ASSERT_FALSE(view->drag_in_progress_);
+  EXPECT_TRUE(delegate->IsRendererToldToForceDefaultAction());
+  EXPECT_EQ(1, drag_dest_delegate_.GetOnDropCalledCount());
   EXPECT_FALSE(drag_dest_delegate_.GetOnDragLeaveCalled());
 }
 
-IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest, OnPerformDrop_DeepScanBad) {
+// When the user drops data onto a web page that does not handle drops and the
+// web view delegate blocks it, the renderer sees this as a "drag leave" and not
+// a "drop".
+IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest,
+                       Drop_NoDropZone_DelegateBlocks) {
   StartTestWithPage("/simple_page.html");
-  WebContentsImpl* contents =
-      static_cast<WebContentsImpl*>(shell()->web_contents());
-  WebContentsViewAura* view =
-      static_cast<WebContentsViewAura*>(contents->GetView());
+  WebContentsViewAura* view = GetWebContentsViewAura();
 
-  drag_dest_delegate_.Reset();
-  view->SetDragDestDelegateForTesting(&drag_dest_delegate_);
-
-  // The view takes ownership of the delegate.  The delegate simulates that
-  // the scans failed.
-  auto* delegate = new TestWebContentsViewDelegate(
-      WebContentsViewDelegate::DropCompletionResult::kAbort);
-  view->SetDelegateForTesting(delegate);
-
-  std::unique_ptr<ui::OSExchangeData> data =
-      std::make_unique<ui::OSExchangeData>();
-  view->RegisterDropCallbackForTesting(base::BindOnce(
-      &WebContentsViewAuraTest::OnDropComplete, base::Unretained(this)));
   base::RunLoop run_loop;
   async_drop_closure_ = run_loop.QuitClosure();
 
-  gfx::PointF point = {10, 10};
-  ui::DropTargetEvent event(*data.get(), point, point,
-                            ui::DragDropTypes::DRAG_COPY);
-  view->OnDragEntered(event);
-  EXPECT_TRUE(drag_dest_delegate_.GetDragInitializeCalled());
-  view->OnPerformDrop(event, std::move(data));
+  TestWebContentsViewDelegate* delegate =
+      PrepareWebContentsViewForDropTest(/*delegate_allows_drop=*/false);
+  SimulateDragEnterAndDrop(/*document_is_handling_drag=*/false);
+  delegate->FinishOnPerformingDrop();
 
-  // The user should be able to drag other content over Chrome while the scan is
-  // occurring without affecting it.
-  contents->SetIgnoreInputEvents(true);
-
-  // The user can drag something in and then drag it away.
-  auto new_data = std::make_unique<ui::OSExchangeData>();
-  ui::DropTargetEvent new_event(*new_data.get(), point, point,
-                                ui::DragDropTypes::DRAG_COPY);
-  view->OnDragEntered(new_event);
-  view->OnDragExited();
-  EXPECT_FALSE(drag_dest_delegate_.GetOnDragLeaveCalled());
-
-  // The user can drag something in and drop it.
-  view->OnDragEntered(new_event);
-  view->OnPerformDrop(new_event, std::move(new_data));
-  EXPECT_FALSE(drag_dest_delegate_.GetOnDropCalled());
-
-  delegate->FinishScan();
   run_loop.Run();
 
-  EXPECT_FALSE(drag_dest_delegate_.GetOnDropCalled());
+  ASSERT_FALSE(view->drag_in_progress_);
+  EXPECT_EQ(0, drag_dest_delegate_.GetOnDropCalledCount());
+  EXPECT_TRUE(drag_dest_delegate_.GetOnDragLeaveCalled());
+}
+
+// When the user drops data onto a web page that handles drops and the web view
+// delegate allows it, the renderer sees this as a "drop" and not a "drag
+// leave".
+IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest, Drop_DropZone_DelegateAllow) {
+  StartTestWithPage("/accept-drop.html");
+  WebContentsViewAura* view = GetWebContentsViewAura();
+
+  base::RunLoop run_loop;
+  async_drop_closure_ = run_loop.QuitClosure();
+
+  TestWebContentsViewDelegate* delegate =
+      PrepareWebContentsViewForDropTest(/*delegate_allows_drop=*/true);
+  SimulateDragEnterAndDrop(/*document_is_handling_drag=*/true);
+  delegate->FinishOnPerformingDrop();
+
+  run_loop.Run();
+
+  ASSERT_FALSE(view->drag_in_progress_);
+  EXPECT_FALSE(delegate->IsRendererToldToForceDefaultAction());
+  EXPECT_EQ(1, drag_dest_delegate_.GetOnDropCalledCount());
+  EXPECT_FALSE(drag_dest_delegate_.GetOnDragLeaveCalled());
+}
+
+// When the user drops data onto a web page that handles drops and the web view
+// delegate blocks it, the renderer sees this as a "drag leave" and not a
+// "drop".
+IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest, Drop_DropZone_DelegateBlocks) {
+  StartTestWithPage("/accept-drop.html");
+  WebContentsViewAura* view = GetWebContentsViewAura();
+
+  base::RunLoop run_loop;
+  async_drop_closure_ = run_loop.QuitClosure();
+
+  TestWebContentsViewDelegate* delegate =
+      PrepareWebContentsViewForDropTest(/*delegate_allows_drop=*/false);
+  SimulateDragEnterAndDrop(/*document_is_handling_drag=*/true);
+  delegate->FinishOnPerformingDrop();
+
+  run_loop.Run();
+
+  ASSERT_FALSE(view->drag_in_progress_);
+  EXPECT_EQ(0, drag_dest_delegate_.GetOnDropCalledCount());
   EXPECT_TRUE(drag_dest_delegate_.GetOnDragLeaveCalled());
 }
 
 IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest, ContentWindowClose) {
   ASSERT_NO_FATAL_FAILURE(StartTestWithPage("/overscroll_navigation.html"));
 
-  WebContentsImpl* web_contents =
-      static_cast<WebContentsImpl*>(shell()->web_contents());
-  content::ExecuteScriptAndGetValue(web_contents->GetMainFrame(),
-                                    "navigate_next()");
+  WebContentsImpl* web_contents = GetWebContentsImpl();
+  ASSERT_TRUE(
+      content::ExecJs(web_contents->GetPrimaryMainFrame(), "navigate_next()"));
   EXPECT_EQ(1, GetCurrentIndex());
 
   aura::Window* content = web_contents->GetContentNativeView();
@@ -748,20 +1186,22 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest, ContentWindowClose) {
   ui::test::EventGenerator generator(content->GetRootWindow(), content);
   generator.GestureScrollSequence(
       gfx::Point(bounds.x() + 2, bounds.y() + 10),
-      gfx::Point(bounds.right() - 10, bounds.y() + 10),
-      base::TimeDelta::FromMilliseconds(20),
+      gfx::Point(bounds.right() - 10, bounds.y() + 10), base::Milliseconds(20),
       1);
 
   delete web_contents->GetContentNativeView();
 }
 
-#if defined(OS_WIN) || defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || \
+    BUILDFLAG(IS_FUCHSIA)
 // This appears to be flaky in the same was as the other overscroll
 // tests. Enabling for non-Windows platforms.
 // See http://crbug.com/369871.
 // For linux, see http://crbug.com/381294.
 // For ChromeOS, see http://crbug.com/668128.
-#define MAYBE_RepeatedQuickOverscrollGestures DISABLED_RepeatedQuickOverscrollGestures
+// For Fuchsia, see https://crbug.com/1318245.
+#define MAYBE_RepeatedQuickOverscrollGestures \
+  DISABLED_RepeatedQuickOverscrollGestures
 #else
 #define MAYBE_RepeatedQuickOverscrollGestures RepeatedQuickOverscrollGestures
 #endif
@@ -770,15 +1210,14 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest,
                        MAYBE_RepeatedQuickOverscrollGestures) {
   ASSERT_NO_FATAL_FAILURE(StartTestWithPage("/overscroll_navigation.html"));
 
-  WebContentsImpl* web_contents =
-      static_cast<WebContentsImpl*>(shell()->web_contents());
+  WebContentsImpl* web_contents = GetWebContentsImpl();
   NavigationController& controller = web_contents->GetController();
-  RenderFrameHost* main_frame = web_contents->GetMainFrame();
-  content::ExecuteScriptAndGetValue(main_frame, "install_touch_handler()");
+  RenderFrameHost* main_frame = web_contents->GetPrimaryMainFrame();
+  ASSERT_TRUE(content::ExecJs(main_frame, "install_touch_handler()"));
 
   // Navigate twice, then navigate back in history once.
-  content::ExecuteScriptAndGetValue(main_frame, "navigate_next()");
-  content::ExecuteScriptAndGetValue(main_frame, "navigate_next()");
+  ASSERT_TRUE(content::ExecJs(main_frame, "navigate_next()"));
+  ASSERT_TRUE(content::ExecJs(main_frame, "navigate_next()"));
   EXPECT_EQ(2, GetCurrentIndex());
   EXPECT_TRUE(controller.CanGoBack());
   EXPECT_FALSE(controller.CanGoForward());
@@ -798,27 +1237,60 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest,
   // right.
   std::u16string expected_title = u"Title: #2";
   content::TitleWatcher title_watcher(web_contents, expected_title);
-  TestNavigationManager nav_watcher(web_contents,
+  TestNavigationManager nav_watcher(
+      web_contents,
       embedded_test_server()->GetURL("/overscroll_navigation.html#2"));
 
   generator.GestureScrollSequence(
       gfx::Point(bounds.right() - 10, bounds.y() + 10),
-      gfx::Point(bounds.x() + 2, bounds.y() + 10),
-      base::TimeDelta::FromMilliseconds(2000),
+      gfx::Point(bounds.x() + 2, bounds.y() + 10), base::Milliseconds(2000),
       10);
-  nav_watcher.WaitForNavigationFinished();
+  ASSERT_TRUE(nav_watcher.WaitForNavigationFinished());
 
   generator.GestureScrollSequence(
       gfx::Point(bounds.x() + 2, bounds.y() + 10),
       gfx::Point(bounds.right() - 10, bounds.y() + 10),
-      base::TimeDelta::FromMilliseconds(2000),
-      10);
+      base::Milliseconds(2000), 10);
   std::u16string actual_title = title_watcher.WaitAndGetTitle();
   EXPECT_EQ(expected_title, actual_title);
 
   EXPECT_EQ(2, GetCurrentIndex());
   EXPECT_TRUE(controller.CanGoBack());
   EXPECT_FALSE(controller.CanGoForward());
+}
+
+class OverscrollWebContentsDelegate : public WebContentsDelegate {
+ public:
+  void SetCanOverscrollContent(bool can_overscroll_content) {
+    can_overscroll_content_ = can_overscroll_content;
+  }
+
+  // WebContentsDelegate:
+  bool CanOverscrollContent() override { return can_overscroll_content_; }
+
+ private:
+  bool can_overscroll_content_ = true;
+};
+
+IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest, RenderViewHostChanged) {
+  ASSERT_NO_FATAL_FAILURE(StartTestWithPage("/overscroll_navigation.html"));
+
+  WebContentsImpl* contents = GetWebContentsImpl();
+  WebContentsViewAura* view = GetWebContentsViewAura();
+  OverscrollWebContentsDelegate delegate;
+  contents->SetDelegate(&delegate);
+
+  delegate.SetCanOverscrollContent(false);
+  view->RenderViewHostChanged(nullptr, nullptr);
+  EXPECT_FALSE(
+      !!static_cast<RenderWidgetHostViewAura*>(GetRenderWidgetHostView())
+            ->overscroll_controller());
+
+  delegate.SetCanOverscrollContent(true);
+  view->RenderViewHostChanged(nullptr, nullptr);
+  EXPECT_TRUE(
+      !!static_cast<RenderWidgetHostViewAura*>(GetRenderWidgetHostView())
+            ->overscroll_controller());
 }
 
 // Ensure that SnapToPhysicalPixelBoundary() is called on WebContentsView parent
@@ -837,14 +1309,12 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest,
 // tests. http://crbug.com/305722
 // TODO(tdresser): Re-enable this once eager GR is back on. See
 // crbug.com/410280.
-// TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
-// of lacros-chrome is complete.
-#if defined(OS_WIN) || (defined(OS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS))
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
 #define MAYBE_OverscrollNavigationTouchThrottling \
-        DISABLED_OverscrollNavigationTouchThrottling
+  DISABLED_OverscrollNavigationTouchThrottling
 #else
 #define MAYBE_OverscrollNavigationTouchThrottling \
-        DISABLED_OverscrollNavigationTouchThrottling
+  DISABLED_OverscrollNavigationTouchThrottling
 #endif
 
 // Tests that touch moves are not throttled when performing a scroll gesture on
@@ -853,23 +1323,22 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest,
                        MAYBE_OverscrollNavigationTouchThrottling) {
   ASSERT_NO_FATAL_FAILURE(StartTestWithPage("/overscroll_navigation.html"));
 
-  WebContentsImpl* web_contents =
-      static_cast<WebContentsImpl*>(shell()->web_contents());
+  WebContentsImpl* web_contents = GetWebContentsImpl();
   aura::Window* content = web_contents->GetContentNativeView();
   gfx::Rect bounds = content->GetBoundsInRootWindow();
   const int dx = 20;
 
-  content::ExecuteScriptAndGetValue(web_contents->GetMainFrame(),
-                                    "install_touchmove_handler()");
+  ASSERT_TRUE(content::ExecJs(web_contents->GetPrimaryMainFrame(),
+                              "install_touchmove_handler()"));
 
   WaitAFrame();
 
   for (int navigated = 0; navigated <= 1; ++navigated) {
     if (navigated) {
-      content::ExecuteScriptAndGetValue(web_contents->GetMainFrame(),
-                                        "navigate_next()");
-      content::ExecuteScriptAndGetValue(web_contents->GetMainFrame(),
-                                        "reset_touchmove_count()");
+      ASSERT_TRUE(content::ExecJs(web_contents->GetPrimaryMainFrame(),
+                                  "navigate_next()"));
+      ASSERT_TRUE(content::ExecJs(web_contents->GetPrimaryMainFrame(),
+                                  "reset_touchmove_count()"));
     }
     InputEventAckWaiter touch_start_waiter(
         GetRenderWidgetHost(),
@@ -882,8 +1351,9 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest,
     // Send touch press.
     blink::SyntheticWebTouchEvent touch;
     touch.PressPoint(bounds.x() + 2, bounds.y() + 10);
-    GetRenderWidgetHost()->ForwardTouchEventWithLatencyInfo(touch,
-                                                            ui::LatencyInfo());
+    GetRenderWidgetHost()
+        ->GetRenderInputRouter()
+        ->ForwardTouchEventWithLatencyInfo(touch, ui::LatencyInfo());
     touch_start_waiter.Wait();
     WaitAFrame();
 
@@ -897,15 +1367,17 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest,
           return event.GetType() == blink::WebGestureEvent::Type::kTouchMove &&
                  state == blink::mojom::InputEventResultState::kNotConsumed;
         }));
-    GetRenderWidgetHost()->ForwardTouchEventWithLatencyInfo(touch,
-                                                            ui::LatencyInfo());
+    GetRenderWidgetHost()
+        ->GetRenderInputRouter()
+        ->ForwardTouchEventWithLatencyInfo(touch, ui::LatencyInfo());
     touch_move_waiter.Wait();
 
     blink::WebGestureEvent scroll_begin =
         blink::SyntheticWebGestureEventBuilder::BuildScrollBegin(
             1, 1, blink::WebGestureDevice::kTouchscreen);
-    GetRenderWidgetHost()->ForwardGestureEventWithLatencyInfo(
-        scroll_begin, ui::LatencyInfo());
+    GetRenderWidgetHost()
+        ->GetRenderInputRouter()
+        ->ForwardGestureEventWithLatencyInfo(scroll_begin, ui::LatencyInfo());
     // Scroll begin ignores ack disposition, so don't wait for the ack.
     WaitAFrame();
 
@@ -913,37 +1385,283 @@ IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest,
     for (int i = 2; i <= 10; ++i) {
       // Send a touch move, followed by a scroll update
       touch.MovePoint(0, bounds.x() + 20 + i * dx, bounds.y() + 100);
-      GetRenderWidgetHost()->ForwardTouchEventWithLatencyInfo(
-          touch, ui::LatencyInfo());
+      GetRenderWidgetHost()
+          ->GetRenderInputRouter()
+          ->ForwardTouchEventWithLatencyInfo(touch, ui::LatencyInfo());
       WaitAFrame();
 
       blink::WebGestureEvent scroll_update =
           blink::SyntheticWebGestureEventBuilder::BuildScrollUpdate(
               dx, 5, 0, blink::WebGestureDevice::kTouchscreen);
 
-      GetRenderWidgetHost()->ForwardGestureEventWithLatencyInfo(
-          scroll_update, ui::LatencyInfo());
+      GetRenderWidgetHost()
+          ->GetRenderInputRouter()
+          ->ForwardGestureEventWithLatencyInfo(scroll_update,
+                                               ui::LatencyInfo());
 
       WaitAFrame();
     }
 
     touch.ReleasePoint(0);
-    GetRenderWidgetHost()->ForwardTouchEventWithLatencyInfo(touch,
-                                                            ui::LatencyInfo());
+    GetRenderWidgetHost()
+        ->GetRenderInputRouter()
+        ->ForwardTouchEventWithLatencyInfo(touch, ui::LatencyInfo());
     WaitAFrame();
 
     blink::WebGestureEvent scroll_end(
         blink::WebInputEvent::Type::kGestureScrollEnd,
         blink::WebInputEvent::kNoModifiers, ui::EventTimeForNow());
-    GetRenderWidgetHost()->ForwardGestureEventWithLatencyInfo(
-        scroll_end, ui::LatencyInfo());
+    GetRenderWidgetHost()
+        ->GetRenderInputRouter()
+        ->ForwardGestureEventWithLatencyInfo(scroll_end, ui::LatencyInfo());
     WaitAFrame();
 
-    if (!navigated)
-      EXPECT_EQ(10, ExecuteScriptAndExtractInt("touchmoveCount"));
-    else
-      EXPECT_GT(10, ExecuteScriptAndExtractInt("touchmoveCount"));
+    if (!navigated) {
+      EXPECT_EQ(10, EvalJs(shell(), "touchmoveCount"));
+    } else {
+      EXPECT_GT(10, EvalJs(shell(), "touchmoveCount"));
+    }
   }
+}
+
+// Tests that running the drop callback will perform drop.
+IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest, GetDropCallback_Run) {
+  StartTestWithPage("/simple_page.html");
+  WebContentsImpl* contents = GetWebContentsImpl();
+  WebContentsViewAura* view = GetWebContentsViewAura();
+
+  view->SetDragDestDelegateForTesting(&drag_dest_delegate_);
+  view->drag_in_progress_ = true;
+
+  std::unique_ptr<ui::OSExchangeData> data =
+      std::make_unique<ui::OSExchangeData>();
+  view->RegisterDropCallbackForTesting(base::BindOnce(
+      &WebContentsViewAuraTest::OnDropComplete, base::Unretained(this)));
+  base::RunLoop run_loop;
+  async_drop_closure_ = run_loop.QuitClosure();
+
+  gfx::PointF point = {10, 10};
+  ui::DropTargetEvent event(*data.get(), point, point,
+                            ui::DragDropTypes::DRAG_COPY);
+  view->OnDragEntered(event);
+  EXPECT_TRUE(drag_dest_delegate_.GetDragInitializeCalled());
+  auto drop_cb = view->GetDropCallback(event);
+  ASSERT_TRUE(drop_cb);
+  ui::mojom::DragOperation output_drag_op = ui::mojom::DragOperation::kNone;
+  std::move(drop_cb).Run(std::move(data), output_drag_op,
+                         /*drag_image_layer_owner=*/nullptr);
+
+  run_loop.Run();
+
+  ASSERT_FALSE(view->drag_in_progress_);
+  EXPECT_EQ(1, drag_dest_delegate_.GetOnDropCalledCount());
+  EXPECT_FALSE(drag_dest_delegate_.GetOnDragLeaveCalled());
+  EXPECT_EQ(drop_target_widget_,
+            RenderWidgetHostImpl::From(contents->GetPrimaryFrameTree()
+                                           .root()
+                                           ->current_frame_host()
+                                           ->GetRenderWidgetHost()));
+}
+
+// Tests that resetting the drop callback won't complete the drop and will exit
+// the drag insead.
+IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest, GetDropCallback_Cancelled) {
+  StartTestWithPage("/simple_page.html");
+  WebContentsViewAura* view = GetWebContentsViewAura();
+
+  view->SetDragDestDelegateForTesting(&drag_dest_delegate_);
+  view->drag_in_progress_ = true;
+
+  std::unique_ptr<ui::OSExchangeData> data =
+      std::make_unique<ui::OSExchangeData>();
+  view->RegisterDropCallbackForTesting(base::BindOnce(
+      &WebContentsViewAuraTest::OnDropComplete, base::Unretained(this)));
+
+  gfx::PointF point = {10, 10};
+  ui::DropTargetEvent event(*data.get(), point, point,
+                            ui::DragDropTypes::DRAG_COPY);
+  view->OnDragEntered(event);
+  EXPECT_TRUE(drag_dest_delegate_.GetDragInitializeCalled());
+  auto drop_cb = view->GetDropCallback(event);
+  ASSERT_TRUE(drop_cb);
+  drop_cb.Reset();
+
+  ASSERT_FALSE(view->drag_in_progress_);
+  EXPECT_EQ(0, drag_dest_delegate_.GetOnDropCalledCount());
+  EXPECT_TRUE(drag_dest_delegate_.GetOnDragLeaveCalled());
+}
+
+// This test simulates a drag and drop scenario where input events start being
+// ignored after the drag started. When this happens, we still need to keep
+// track of whether or not a drag and drop is ongoing in the window irrespective
+// of our intentions for the result of the drop.
+IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest,
+                       IgnoreInputs_OngoingDropGetsCleared) {
+  StartTestWithPage("/simple_page.html");
+  WebContentsImpl* contents = GetWebContentsImpl();
+  WebContentsViewAura* view = GetWebContentsViewAura();
+
+  base::RunLoop run_loop;
+  async_drop_closure_ = run_loop.QuitClosure();
+
+  PrepareWebContentsViewForDropTest(/*delegate_allows_drop=*/true);
+  SimulateDragEnterAndDrop(/*document_is_handling_drag=*/false);
+  EXPECT_TRUE(view->drag_in_progress_);
+  std::optional<WebContents::ScopedIgnoreInputEvents> ignore_inputs =
+      contents->IgnoreInputEvents(std::nullopt);
+  view->OnDragExited();
+  // Even though input events are being ignored, the flag should still be
+  // cleared.
+  EXPECT_FALSE(view->drag_in_progress_);
+  EXPECT_EQ(0, drag_dest_delegate_.GetOnDropCalledCount());
+  ignore_inputs.reset();
+}
+
+// Tests that the content is not focusable when inputs are ignored, and that it
+// is focusable when inputs are not ignored.
+IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest, IgnoreInputs_Focus) {
+  ASSERT_NO_FATAL_FAILURE(StartTestWithPage("/simple_page.html"));
+  WebContentsImpl* contents = GetWebContentsImpl();
+  aura::WindowDelegate* view = GetWebContentsViewAura();
+
+  std::optional<WebContents::ScopedIgnoreInputEvents> ignore_inputs =
+      contents->IgnoreInputEvents(std::nullopt);
+  EXPECT_FALSE(view->CanFocus());
+  ignore_inputs.reset();
+  EXPECT_TRUE(view->CanFocus());
+}
+
+IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest,
+                       DragInProgressFinishesAfterDrop) {
+  StartTestWithPage("/simple_page.html");
+  WebContentsImpl* contents = GetWebContentsImpl();
+  WebContentsViewAura* view = GetWebContentsViewAura();
+
+  base::RunLoop async_drop_run_loop;
+  async_drop_closure_ = async_drop_run_loop.QuitClosure();
+
+  base::RunLoop end_drag_run_loop;
+  async_end_drag_closure_ = end_drag_run_loop.QuitClosure();
+  view->end_drag_runner_.ReplaceClosure(base::BindOnce(
+      &WebContentsViewAuraTest::EndDrag, base::Unretained(this)));
+
+  TestWebContentsViewDelegate* delegate =
+      PrepareWebContentsViewForDropTest(/*delegate_allows_drop=*/true);
+  SimulateDragEnterAndDrop(/*document_is_handling_drag=*/true);
+  view->end_drag_runner_session_id_ = view->drag_session_id_;
+  // `drag_in_progress_` should still be true before `CompleteDrop()` is called.
+  ASSERT_TRUE(view->drag_in_progress_);
+
+  delegate->DelayedFinishOnPerformingDrop();
+  async_drop_run_loop.Run();
+  EXPECT_EQ(1, drag_dest_delegate_.GetOnDropCalledCount());
+  ASSERT_FALSE(view->drag_in_progress_);
+  end_drag_run_loop.Run();
+
+  EXPECT_EQ(drop_target_widget_,
+            RenderWidgetHostImpl::From(contents->GetPrimaryFrameTree()
+                                           .root()
+                                           ->current_frame_host()
+                                           ->GetRenderWidgetHost()));
+}
+
+// This test is the same as `DragInProgressFinishesAfterDrop`, but it tests the
+// scenario where drag_in_progress_ should still be flipped even when drop is
+// blocked.
+IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTest,
+                       DragInProgressFinishesAfterNoDrop) {
+  StartTestWithPage("/simple_page.html");
+  WebContentsImpl* contents = GetWebContentsImpl();
+  WebContentsViewAura* view = GetWebContentsViewAura();
+
+  base::RunLoop async_drop_run_loop;
+  async_drop_closure_ = async_drop_run_loop.QuitClosure();
+
+  base::RunLoop end_drag_run_loop;
+  async_end_drag_closure_ = end_drag_run_loop.QuitClosure();
+  view->end_drag_runner_.ReplaceClosure(base::BindOnce(
+      &WebContentsViewAuraTest::EndDrag, base::Unretained(this)));
+
+  TestWebContentsViewDelegate* delegate =
+      PrepareWebContentsViewForDropTest(/*delegate_allows_drop=*/false);
+  SimulateDragEnterAndDrop(/*document_is_handling_drag=*/true);
+  view->end_drag_runner_session_id_ = view->drag_session_id_;
+  // `drag_in_progress_` should still be true before `CompleteDrop()` is called.
+  ASSERT_TRUE(view->drag_in_progress_);
+
+  delegate->DelayedFinishOnPerformingDrop();
+  async_drop_run_loop.Run();
+  EXPECT_EQ(0, drag_dest_delegate_.GetOnDropCalledCount());
+  ASSERT_FALSE(view->drag_in_progress_);
+  end_drag_run_loop.Run();
+
+  EXPECT_EQ(drop_target_widget_,
+            RenderWidgetHostImpl::From(contents->GetPrimaryFrameTree()
+                                           .root()
+                                           ->current_frame_host()
+                                           ->GetRenderWidgetHost()));
+}
+
+class WebContentsViewAuraTransformTest : public WebContentsViewAuraTest {
+ public:
+  void SetUpCommandLine(base::CommandLine* cmd) override {
+    WebContentsViewAuraTest::SetUpCommandLine(cmd);
+#if BUILDFLAG(IS_WIN)
+    cmd->AppendSwitch(switches::kDisableLegacyIntermediateWindow);
+#endif
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(WebContentsViewAuraTransformTest,
+                       WindowTransformDoesNotUpdateScreenRects) {
+  StartTestWithPage("/simple_page.html");
+  WebContentsImpl* contents = GetWebContentsImpl();
+
+  aura::Window* top_level = contents->GetNativeView()->GetToplevelWindow();
+  ASSERT_TRUE(top_level);
+  auto wait_for_coordinate = [this](const std::string& prop, int expected) {
+    static constexpr char script[] =
+        R"(new Promise((resolve) => {
+             function check() {
+               if (window.$1 === $2) {
+                 resolve(window.$1);
+               } else {
+                 requestAnimationFrame(check);
+               }
+             }
+             check();
+           });)";
+    std::string js = base::ReplaceStringPlaceholders(
+        script, {prop, base::NumberToString(expected)}, nullptr);
+    return EvalJs(shell(), js).ExtractInt();
+  };
+
+  int initial_x = EvalJs(shell(), "window.screenX").ExtractInt();
+  int initial_y = EvalJs(shell(), "window.screenY").ExtractInt();
+
+  gfx::Transform transform;
+  transform.Translate(100, 50);
+  top_level->SetTransform(transform);
+
+  // Move the window slightly to trigger the bounds update.
+  gfx::Rect new_bounds = top_level->bounds();
+  new_bounds.Offset(10, 10);
+  top_level->SetBounds(new_bounds);
+
+  // The new coordinates should remove the slight move, but not the transform.
+  int transformed_x = wait_for_coordinate("screenX", initial_x + 10);
+  int transformed_y = wait_for_coordinate("screenY", initial_y + 10);
+  EXPECT_EQ(transformed_x, initial_x + 10);
+  EXPECT_EQ(transformed_y, initial_y + 10);
+
+  top_level->SetTransform(gfx::Transform());
+  new_bounds.Offset(-10, -10);
+  top_level->SetBounds(new_bounds);
+
+  int restored_x = wait_for_coordinate("screenX", initial_x);
+  int restored_y = wait_for_coordinate("screenY", initial_y);
+  EXPECT_EQ(restored_x, initial_x);
+  EXPECT_EQ(restored_y, initial_y);
 }
 
 }  // namespace content

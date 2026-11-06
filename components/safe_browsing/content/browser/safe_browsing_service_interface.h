@@ -1,15 +1,28 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_SAFE_BROWSING_CONTENT_BROWSER_SAFE_BROWSING_SERVICE_INTERFACE_H_
 #define COMPONENTS_SAFE_BROWSING_CONTENT_BROWSER_SAFE_BROWSING_SERVICE_INTERFACE_H_
 
-#include "base/macros.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ref_counted.h"
-#include "content/public/browser/browser_context.h"
+#include "build/build_config.h"
+#include "components/safe_browsing/core/browser/db/database_manager.h"
 #include "content/public/browser/browser_thread.h"
-#include "services/network/public/mojom/network_context.mojom.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "components/safe_browsing/core/browser/referring_app_info/referring_app_info.h"
+#endif
+
+namespace content {
+class BrowserContext;
+class WebContents;
+}  // namespace content
+
+namespace network::mojom {
+class NetworkContext;
+}
 
 namespace safe_browsing {
 
@@ -34,43 +47,70 @@ class SafeBrowsingServiceInterface
   // Create an instance of the safe browsing service.
   static SafeBrowsingServiceInterface* CreateSafeBrowsingService();
 
+  SafeBrowsingServiceInterface(const SafeBrowsingServiceInterface&) = delete;
+  SafeBrowsingServiceInterface& operator=(const SafeBrowsingServiceInterface&) =
+      delete;
+
   virtual network::mojom::NetworkContext* GetNetworkContext(
       content::BrowserContext* browser_context) = 0;
 
   virtual ReferrerChainProvider* GetReferrerChainProviderFromBrowserContext(
       content::BrowserContext* browser_context) = 0;
 
+  virtual const scoped_refptr<SafeBrowsingDatabaseManager>& database_manager()
+      const = 0;
+
+#if BUILDFLAG(IS_ANDROID)
+  virtual internal::ReferringAppInfo GetReferringAppInfo(
+      content::WebContents* web_contents) = 0;
+#endif
+
+  void SetAddProfileTasksCompletedClosureForTesting(
+      base::OnceClosure completion_closure) {
+    add_profile_tasks_completed_closure_for_testing_ =
+        std::move(completion_closure);
+  }
+
  protected:
-  SafeBrowsingServiceInterface() {}
-  virtual ~SafeBrowsingServiceInterface() {}
+  SafeBrowsingServiceInterface();
+  virtual ~SafeBrowsingServiceInterface();
+
+  // Take the add-profile-tasks-completed closure if it has been set.
+  base::OnceClosure TakeAddProfileTasksCompletedClosureForTesting();
 
  private:
   friend struct content::BrowserThread::DeleteOnThread<
       content::BrowserThread::UI>;
   friend class base::DeleteHelper<SafeBrowsingServiceInterface>;
 
+  // For testing only: A closure that is queued to run after any tasks
+  // posted by the SafeBrowsingServiceInterface implementation of
+  // ProfileManagerObserver::OnProfileAdded() have completed.
+  base::OnceClosure add_profile_tasks_completed_closure_for_testing_;
+
   // The factory used to instantiate a SafeBrowsingServiceInterface object.
   // Useful for tests, so they can provide their own implementation of
   // SafeBrowsingServiceInterface.
   static SafeBrowsingServiceFactory* factory_;
-
-  DISALLOW_COPY_AND_ASSIGN(SafeBrowsingServiceInterface);
 };
 
 // Factory for creating SafeBrowsingServiceInterface.  Useful for tests.
 class SafeBrowsingServiceFactory {
  public:
-  SafeBrowsingServiceFactory() {}
-  virtual ~SafeBrowsingServiceFactory() {}
+  SafeBrowsingServiceFactory() = default;
 
-  // TODO(crbug/925153): Once callers of this function are no longer downcasting
-  // it to the SafeBrowsingService, we can make this a scoped_refptr.
+  SafeBrowsingServiceFactory(const SafeBrowsingServiceFactory&) = delete;
+  SafeBrowsingServiceFactory& operator=(const SafeBrowsingServiceFactory&) =
+      delete;
+
+  virtual ~SafeBrowsingServiceFactory() = default;
+
+  // TODO(crbug.com/41437292): Once callers of this function are no longer
+  // downcasting it to the SafeBrowsingService, we can make this a
+  // scoped_refptr.
   virtual SafeBrowsingServiceInterface* CreateSafeBrowsingService() = 0;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(SafeBrowsingServiceFactory);
 };
 
 }  // namespace safe_browsing
 
-#endif  //  COMPONENTS_SAFE_BROWSING_CONTENT_BROWSER_SAFE_BROWSING_SERVICE_INTERFACE_H_
+#endif  // COMPONENTS_SAFE_BROWSING_CONTENT_BROWSER_SAFE_BROWSING_SERVICE_INTERFACE_H_

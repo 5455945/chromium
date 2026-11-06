@@ -40,11 +40,12 @@ class ExceptionState;
 class NumberInputType final : public TextFieldInputType {
  public:
   explicit NumberInputType(HTMLInputElement& element)
-      : TextFieldInputType(element) {}
+      : TextFieldInputType(Type::kNumber, element) {}
+  bool TypeMismatchFor(const String&) const;
+  CORE_EXPORT static String NormalizeFullWidthNumberChars(const String& input);
 
  private:
   void CountUsage() override;
-  const AtomicString& FormControlType() const override;
   void SetValue(const String&,
                 bool value_changed,
                 TextFieldEventBehavior,
@@ -53,17 +54,14 @@ class NumberInputType final : public TextFieldInputType {
   void SetValueAsDouble(double,
                         TextFieldEventBehavior,
                         ExceptionState&) const override;
-  void SetValueAsDecimal(const Decimal&,
-                         TextFieldEventBehavior,
-                         ExceptionState&) const override;
-  bool TypeMismatchFor(const String&) const override;
+  void SetValueAsDecimal(const Decimal&, TextFieldEventBehavior) const override;
   bool TypeMismatch() const override;
-  bool SizeShouldIncludeDecoration(int default_size,
-                                   int& preferred_size) const override;
-  bool IsSteppable() const override;
+  bool GetSizeWithDecoration(int default_size,
+                             int& preferred_size) const override;
   StepRange CreateStepRange(AnyStepHandling) const override;
   void HandleKeydownEvent(KeyboardEvent&) override;
   void HandleBeforeTextInsertedEvent(BeforeTextInsertedEvent&) override;
+  String FilterBeforeTextInserted(const String& text) override;
   Decimal ParseToNumber(const String&, const Decimal&) const override;
   String Serialize(const Decimal&) const override;
   String LocalizeValue(const String&) const override;
@@ -76,10 +74,19 @@ class NumberInputType final : public TextFieldInputType {
   String ValueNotEqualText(const Decimal& value) const override;
   String RangeOverflowText(const Decimal& maxmum) const override;
   String RangeUnderflowText(const Decimal& minimum) const override;
+  String RangeInvalidText(const Decimal& minimum,
+                          const Decimal& maximum) const override;
   bool SupportsPlaceholder() const override;
   void MinOrMaxAttributeChanged() override;
   void StepAttributeChanged() override;
   bool SupportsSelectionAPI() const override;
+};
+
+template <>
+struct DowncastTraits<NumberInputType> {
+  static bool AllowFrom(const InputType& type) {
+    return type.IsNumberInputType();
+  }
 };
 
 }  // namespace blink

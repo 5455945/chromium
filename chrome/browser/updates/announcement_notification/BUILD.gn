@@ -1,4 +1,4 @@
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -8,44 +8,65 @@ if (is_android) {
 
 source_set("announcement_notification") {
   sources = [
-    "announcement_notification_service.cc",
     "announcement_notification_service.h",
-    "announcement_notification_service_factory.cc",
     "announcement_notification_service_factory.h",
-    "empty_announcement_notification_service.cc",
     "empty_announcement_notification_service.h",
   ]
 
-  # TODO(xingliu): Move code depends on //chrome/browser out of this module.
-  deps = [
+  public_deps = [
     "//base",
-    "//chrome/app:generated_resources",
-    "//chrome/browser:browser_process",
-    "//components/keyed_service/content",
-    "//components/pref_registry",
-    "//components/prefs:prefs",
-    "//skia",
-    "//ui/base",
+    "//chrome/browser/profiles:profile",
+    "//components/keyed_service/core",
     "//url",
   ]
 
   if (is_android) {
+    sources += [ "announcement_notification_delegate_android.h" ]
+  } else {
     sources += [
-      "announcement_notification_delegate_android.cc",
-      "announcement_notification_delegate_android.h",
+      "announcement_notification_delegate.h",
+      "announcement_notification_handler.h",
     ]
+  }
+}
+
+source_set("impl") {
+  sources = [
+    "announcement_notification_service.cc",
+    "announcement_notification_service_factory.cc",
+    "empty_announcement_notification_service.cc",
+  ]
+
+  # TODO(xingliu): Move code depends on //chrome/browser out of this module.
+  deps = [
+    ":announcement_notification",
+    "//base",
+    "//chrome/app:generated_resources",
+    "//chrome/browser:browser_process",
+    "//chrome/browser/profiles:profile",
+    "//components/keyed_service/content",
+    "//components/pref_registry",
+    "//components/prefs",
+    "//skia",
+    "//ui/base",
+    "//url",
+  ]
+  if (is_chromeos) {
+    deps += [ "//ash/constants" ]
+  }
+
+  if (is_android) {
+    sources += [ "announcement_notification_delegate_android.cc" ]
 
     deps += [ "//chrome/android:chrome_jni_headers" ]
   } else {
     sources += [
       "announcement_notification_delegate.cc",
-      "announcement_notification_delegate.h",
       "announcement_notification_handler.cc",
-      "announcement_notification_handler.h",
     ]
 
     deps += [
-      "//chrome/browser/ui",
+      "//chrome/browser/ui/navigator",
       "//ui/message_center/public/cpp",
     ]
   }
@@ -59,6 +80,7 @@ source_set("unit_tests") {
     ":announcement_notification",
     "//build:chromeos_buildflags",
     "//chrome/test:test_support",
+    "//chrome/test/base:testing_browser_process",
     "//components/sync_preferences",
     "//skia",
     "//testing/gmock",

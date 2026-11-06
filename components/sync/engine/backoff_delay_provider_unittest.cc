@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,10 @@
 
 #include <memory>
 
-#include "components/sync/base/syncer_error.h"
 #include "components/sync/engine/cycle/model_neutral_state.h"
 #include "components/sync/engine/polling_constants.h"
+#include "components/sync/engine/sync_protocol_error.h"
+#include "components/sync/engine/syncer_error.h"
 #include "net/base/net_errors.h"
 #include "net/http/http_status_code.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -18,64 +19,52 @@ namespace syncer {
 
 namespace {
 
-using base::TimeDelta;
 using testing::Gt;
 using testing::Lt;
 
 TEST(BackoffDelayProviderTest, GetRecommendedDelay) {
   std::unique_ptr<BackoffDelayProvider> delay(
       BackoffDelayProvider::FromDefaults());
-  EXPECT_EQ(TimeDelta::FromSeconds(1),
-            delay->GetDelay(TimeDelta::FromSeconds(0)));
-  EXPECT_LE(TimeDelta::FromSeconds(1),
-            delay->GetDelay(TimeDelta::FromSeconds(1)));
-  EXPECT_LE(TimeDelta::FromSeconds(50),
-            delay->GetDelay(TimeDelta::FromSeconds(50)));
-  EXPECT_LE(TimeDelta::FromSeconds(10),
-            delay->GetDelay(TimeDelta::FromSeconds(10)));
+  EXPECT_EQ(base::Seconds(1), delay->GetDelay(base::Seconds(0)));
+  EXPECT_LE(base::Seconds(1), delay->GetDelay(base::Seconds(1)));
+  EXPECT_LE(base::Seconds(50), delay->GetDelay(base::Seconds(50)));
+  EXPECT_LE(base::Seconds(10), delay->GetDelay(base::Seconds(10)));
   EXPECT_EQ(kMaxBackoffTime, delay->GetDelay(kMaxBackoffTime));
   EXPECT_EQ(kMaxBackoffTime,
-            delay->GetDelay(kMaxBackoffTime + TimeDelta::FromSeconds(1)));
+            delay->GetDelay(kMaxBackoffTime + base::Seconds(1)));
 }
 
 TEST(BackoffDelayProviderTest, GetInitialDelay) {
   std::unique_ptr<BackoffDelayProvider> delay(
       BackoffDelayProvider::FromDefaults());
   ModelNeutralState state;
-  state.last_get_key_result =
-      SyncerError::HttpError(net::HTTP_INTERNAL_SERVER_ERROR);
+  state.last_get_key_failed = true;
   EXPECT_EQ(kInitialBackoffRetryTime, delay->GetInitialDelay(state));
 
-  state.last_get_key_result = SyncerError();
+  state.last_get_key_failed = false;
   state.last_download_updates_result =
-      SyncerError(SyncerError::SERVER_RETURN_MIGRATION_DONE);
+      SyncerError::ProtocolError(MIGRATION_DONE);
   EXPECT_EQ(kInitialBackoffImmediateRetryTime, delay->GetInitialDelay(state));
 
   state.last_download_updates_result =
-      SyncerError::NetworkConnectionUnavailable(net::ERR_FAILED);
-  EXPECT_EQ(kInitialBackoffRetryTime, delay->GetInitialDelay(state));
+      SyncerError::NetworkError(net::ERR_FAILED);
+  EXPECT_EQ(kInitialBackoffShortRetryTime, delay->GetInitialDelay(state));
 
   state.last_download_updates_result =
-      SyncerError(SyncerError::SERVER_RETURN_TRANSIENT_ERROR);
+      SyncerError::ProtocolError(TRANSIENT_ERROR);
   EXPECT_EQ(kInitialBackoffRetryTime, delay->GetInitialDelay(state));
 
-  state.last_download_updates_result =
-      SyncerError(SyncerError::SERVER_RESPONSE_VALIDATION_FAILED);
+  state.last_download_updates_result = SyncerError::ProtocolViolationError();
   EXPECT_EQ(kInitialBackoffRetryTime, delay->GetInitialDelay(state));
 
-  state.last_download_updates_result =
-      SyncerError(SyncerError::DATATYPE_TRIGGERED_RETRY);
+  state.last_download_updates_result = SyncerError::Success();
+  state.commit_result = SyncerError::ProtocolError(MIGRATION_DONE);
   EXPECT_EQ(kInitialBackoffImmediateRetryTime, delay->GetInitialDelay(state));
 
-  state.last_download_updates_result = SyncerError(SyncerError::SYNCER_OK);
-  state.commit_result = SyncerError(SyncerError::SERVER_RETURN_MIGRATION_DONE);
-  EXPECT_EQ(kInitialBackoffImmediateRetryTime, delay->GetInitialDelay(state));
+  state.commit_result = SyncerError::NetworkError(net::ERR_FAILED);
+  EXPECT_EQ(kInitialBackoffShortRetryTime, delay->GetInitialDelay(state));
 
-  state.commit_result =
-      SyncerError::NetworkConnectionUnavailable(net::ERR_FAILED);
-  EXPECT_EQ(kInitialBackoffRetryTime, delay->GetInitialDelay(state));
-
-  state.commit_result = SyncerError(SyncerError::SERVER_RETURN_CONFLICT);
+  state.commit_result = SyncerError::ProtocolError(CONFLICT);
   EXPECT_EQ(kInitialBackoffImmediateRetryTime, delay->GetInitialDelay(state));
 }
 
@@ -83,32 +72,26 @@ TEST(BackoffDelayProviderTest, GetInitialDelayWithOverride) {
   std::unique_ptr<BackoffDelayProvider> delay(
       BackoffDelayProvider::WithShortInitialRetryOverride());
   ModelNeutralState state;
-  state.last_get_key_result =
-      SyncerError::HttpError(net::HTTP_INTERNAL_SERVER_ERROR);
+  state.last_get_key_failed = true;
   EXPECT_EQ(kInitialBackoffShortRetryTime, delay->GetInitialDelay(state));
 
-  state.last_get_key_result = SyncerError();
+  state.last_get_key_failed = false;
   state.last_download_updates_result =
-      SyncerError(SyncerError::SERVER_RETURN_MIGRATION_DONE);
+      SyncerError::ProtocolError(MIGRATION_DONE);
   EXPECT_EQ(kInitialBackoffImmediateRetryTime, delay->GetInitialDelay(state));
 
   state.last_download_updates_result =
-      SyncerError(SyncerError::SERVER_RETURN_TRANSIENT_ERROR);
+      SyncerError::ProtocolError(TRANSIENT_ERROR);
   EXPECT_EQ(kInitialBackoffShortRetryTime, delay->GetInitialDelay(state));
 
-  state.last_download_updates_result =
-      SyncerError(SyncerError::SERVER_RESPONSE_VALIDATION_FAILED);
+  state.last_download_updates_result = SyncerError::ProtocolViolationError();
   EXPECT_EQ(kInitialBackoffShortRetryTime, delay->GetInitialDelay(state));
 
-  state.last_download_updates_result =
-      SyncerError(SyncerError::DATATYPE_TRIGGERED_RETRY);
+  state.last_download_updates_result = SyncerError::Success();
+  state.commit_result = SyncerError::ProtocolError(MIGRATION_DONE);
   EXPECT_EQ(kInitialBackoffImmediateRetryTime, delay->GetInitialDelay(state));
 
-  state.last_download_updates_result = SyncerError(SyncerError::SYNCER_OK);
-  state.commit_result = SyncerError(SyncerError::SERVER_RETURN_MIGRATION_DONE);
-  EXPECT_EQ(kInitialBackoffImmediateRetryTime, delay->GetInitialDelay(state));
-
-  state.commit_result = SyncerError(SyncerError::SERVER_RETURN_CONFLICT);
+  state.commit_result = SyncerError::ProtocolError(CONFLICT);
   EXPECT_EQ(kInitialBackoffImmediateRetryTime, delay->GetInitialDelay(state));
 }
 
@@ -122,14 +105,14 @@ TEST(BackoffDelayProviderTest, GetExponentiallyIncreasingDelay) {
   // multiplicative factor bigger than 1).
   ASSERT_THAT(kBackoffJitterFactor, Lt(kBackoffMultiplyFactor - 1.0));
 
-  const TimeDelta delay0 = TimeDelta::FromSeconds(1);
-  const TimeDelta delay1_min =
+  const base::TimeDelta delay0 = base::Seconds(1);
+  const base::TimeDelta delay1_min =
       delay_provider->GetDelayForTesting(delay0, /*jitter_sign=*/-1);
-  const TimeDelta delay2_min =
+  const base::TimeDelta delay2_min =
       delay_provider->GetDelayForTesting(delay1_min, /*jitter_sign=*/-1);
-  const TimeDelta delay1_max =
+  const base::TimeDelta delay1_max =
       delay_provider->GetDelayForTesting(delay0, /*jitter_sign=*/1);
-  const TimeDelta delay2_max =
+  const base::TimeDelta delay2_max =
       delay_provider->GetDelayForTesting(delay1_max, /*jitter_sign=*/1);
 
   ASSERT_THAT(delay1_min, Lt(delay1_max));

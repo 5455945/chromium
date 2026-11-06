@@ -1,8 +1,9 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/css/parser/css_parser_idioms.h"
+
 #include "third_party/blink/renderer/core/css/parser/css_tokenizer_input_stream.h"
 #include "third_party/blink/renderer/core/html/parser/html_parser_idioms.h"
 #include "third_party/blink/renderer/core/html/parser/input_stream_preprocessor.h"
@@ -14,10 +15,11 @@ namespace blink {
 void ConsumeSingleWhitespaceIfNext(CSSTokenizerInputStream& input) {
   // We check for \r\n and HTML spaces since we don't do preprocessing
   UChar next = input.PeekWithoutReplacement(0);
-  if (next == '\r' && input.PeekWithoutReplacement(1) == '\n')
+  if (next == '\r' && input.PeekWithoutReplacement(1) == '\n') {
     input.Advance(2);
-  else if (IsHTMLSpace(next))
+  } else if (IsHTMLSpace(next)) {
     input.Advance();
+  }
 }
 
 // https://drafts.csswg.org/css-syntax/#consume-an-escaped-code-point
@@ -25,29 +27,30 @@ UChar32 ConsumeEscape(CSSTokenizerInputStream& input) {
   UChar cc = input.NextInputChar();
   input.Advance();
   DCHECK(!IsCSSNewLine(cc));
-  if (IsASCIIHexDigit(cc)) {
+  if (IsAsciiHexDigit(cc)) {
+    // At most six hex digits, so this cannot overflow.
+    UChar32 code_point = ToAsciiHexValue(cc);
     unsigned consumed_hex_digits = 1;
-    StringBuilder hex_chars;
-    hex_chars.Append(cc);
-    while (consumed_hex_digits < 6 &&
-           IsASCIIHexDigit(input.PeekWithoutReplacement(0))) {
-      cc = input.NextInputChar();
+    while (consumed_hex_digits < 6) {
+      cc = input.PeekWithoutReplacement(0);
+      if (!IsAsciiHexDigit(cc)) {
+        break;
+      }
       input.Advance();
-      hex_chars.Append(cc);
+      code_point = (code_point << 4) | ToAsciiHexValue(cc);
       consumed_hex_digits++;
-    };
+    }
     ConsumeSingleWhitespaceIfNext(input);
-    bool ok = false;
-    UChar32 code_point = hex_chars.ToString().HexToUIntStrict(&ok);
-    DCHECK(ok);
     if (code_point == 0 || (0xD800 <= code_point && code_point <= 0xDFFF) ||
-        code_point > 0x10FFFF)
+        code_point > 0x10FFFF) {
       return kReplacementCharacter;
+    }
     return code_point;
   }
 
-  if (cc == kEndOfFileMarker)
+  if (cc == kEndOfFileMarker) {
     return kReplacementCharacter;
+  }
   return cc;
 }
 
@@ -56,25 +59,24 @@ String ConsumeName(CSSTokenizerInputStream& input) {
   StringBuilder result;
   while (true) {
     UChar cc = input.NextInputChar();
-    input.Advance();
     if (IsNameCodePoint(cc)) {
+      input.Advance();
       result.Append(cc);
-      continue;
-    }
-    if (TwoCharsAreValidEscape(cc, input.PeekWithoutReplacement(0))) {
+    } else if (TwoCharsAreValidEscape(cc, input.PeekWithoutReplacement(1))) {
+      input.Advance();
       result.Append(ConsumeEscape(input));
-      continue;
+    } else {
+      return result.ReleaseString();
     }
-    input.PushBack(cc);
-    return result.ToString();
   }
 }
 
 // https://drafts.csswg.org/css-syntax/#would-start-an-identifier
 bool NextCharsAreIdentifier(UChar first, const CSSTokenizerInputStream& input) {
-  UChar second = input.PeekWithoutReplacement(0);
-  if (IsNameStartCodePoint(first) || TwoCharsAreValidEscape(first, second))
+  UChar second = input.NextInputChar();
+  if (IsNameStartCodePoint(first) || TwoCharsAreValidEscape(first, second)) {
     return true;
+  }
 
   if (first == '-') {
     return IsNameStartCodePoint(second) || second == '-' ||

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,6 +11,7 @@ void HeapObject::Trace(Visitor* visitor) const {
   // field.
   TraceIfNeeded<Member<HeapObject>>::Trace(visitor, m_one);
   TraceIfNeeded<int>::Trace(visitor, m_two);
+  TraceIfNeeded<std::unique_ptr<Foo>>::Trace(visitor, m_three);
 }
 
 }  // namespace blink

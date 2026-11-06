@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,7 @@
 
 #include <stdint.h>
 
-#include <cmath>
-
 #include "base/containers/circular_deque.h"
-#include "base/macros.h"
 #include "base/time/time.h"
 #include "media/base/media_export.h"
 
@@ -53,6 +50,10 @@ namespace media {
 class MEDIA_EXPORT AudioClock {
  public:
   AudioClock(base::TimeDelta start_timestamp, int sample_rate);
+
+  AudioClock(const AudioClock&) = delete;
+  AudioClock& operator=(const AudioClock&) = delete;
+
   ~AudioClock();
 
   // |frames_written| amount of audio data scaled to |playback_rate| written.
@@ -91,12 +92,10 @@ class MEDIA_EXPORT AudioClock {
   // media data has been played yet.             by AudioClock, which would be
   //                                             1000 + 500 + 250 = 1750 ms.
   base::TimeDelta front_timestamp() const {
-    return base::TimeDelta::FromMicroseconds(
-        std::round(front_timestamp_micros_));
+    return base::Microseconds(std::round(front_timestamp_micros_));
   }
   base::TimeDelta back_timestamp() const {
-    return base::TimeDelta::FromMicroseconds(
-        std::round(back_timestamp_micros_));
+    return base::Microseconds(std::round(back_timestamp_micros_));
   }
 
   // Returns the amount of wall time until |timestamp| will be played by the
@@ -111,7 +110,7 @@ class MEDIA_EXPORT AudioClock {
 
  private:
   // Even with a ridiculously high sample rate of 256kHz, using 64 bits will
-  // permit tracking up to 416999965 days worth of time (that's 1141 millenia).
+  // permit tracking up to 416999965 days worth of time (that's 1141 millennia).
   //
   // 32 bits on the other hand would top out at measly 2 hours and 20 minutes.
   struct AudioData {
@@ -130,7 +129,7 @@ class MEDIA_EXPORT AudioClock {
   const double microseconds_per_frame_;
 
   base::circular_deque<AudioData> buffered_;
-  int64_t total_buffered_frames_;
+  int64_t total_buffered_frames_ = 0;
 
   // Use double rather than TimeDelta to avoid loss of partial microseconds when
   // converting between frames-written/delayed and time-passed (see conversion
@@ -140,8 +139,6 @@ class MEDIA_EXPORT AudioClock {
   // See http://crbug.com/564604.
   double front_timestamp_micros_;
   double back_timestamp_micros_;
-
-  DISALLOW_COPY_AND_ASSIGN(AudioClock);
 };
 
 }  // namespace media

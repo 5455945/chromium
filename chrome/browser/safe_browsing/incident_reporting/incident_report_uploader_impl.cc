@@ -1,24 +1,28 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/safe_browsing/incident_reporting/incident_report_uploader_impl.h"
 
 #include <memory>
+#include <optional>
+#include <string>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/strings/escape.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
 #include "google_apis/google_api_keys.h"
-#include "net/base/escape.h"
 #include "net/base/load_flags.h"
 #include "net/http/http_status_code.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
+#include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 
 namespace safe_browsing {
 
@@ -43,6 +47,7 @@ constexpr net::NetworkTrafficAnnotationTag
         "information. See ClientIncidentReport in 'https://cs.chromium.org/"
         "chromium/src/components/safe_browsing/csd.proto' for more details."
       destination: GOOGLE_OWNED_SERVICE
+      legacy_api_url: "https://sb-ssl.google.com/safebrowsing/clientreport/incident"
     }
     policy {
       cookies_allowed: YES
@@ -60,13 +65,7 @@ constexpr net::NetworkTrafficAnnotationTag
 
 }  // namespace
 
-// This is initialized here rather than in the class definition due to an
-// "extension" in MSVC that defies the standard.
-// static
-const int IncidentReportUploaderImpl::kTestUrlFetcherId = 47;
-
-IncidentReportUploaderImpl::~IncidentReportUploaderImpl() {
-}
+IncidentReportUploaderImpl::~IncidentReportUploaderImpl() = default;
 
 // static
 std::unique_ptr<IncidentReportUploader>
@@ -90,8 +89,7 @@ IncidentReportUploaderImpl::IncidentReportUploaderImpl(
   resource_request->url = GetIncidentReportUrl();
   resource_request->method = "POST";
   resource_request->load_flags = net::LOAD_DISABLE_CACHE;
-  if (base::FeatureList::IsEnabled(kSafeBrowsingRemoveCookies))
-    resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
+  resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
   url_loader_ = network::SimpleURLLoader::Create(
       std::move(resource_request), kSafeBrowsingIncidentTrafficAnnotation);
   url_loader_->AttachStringForUpload(post_data, "application/octet-stream");
@@ -109,23 +107,19 @@ GURL IncidentReportUploaderImpl::GetIncidentReportUrl() {
   std::string api_key(google_apis::GetAPIKey());
   if (api_key.empty())
     return url;
-  return url.Resolve("?key=" + net::EscapeQueryParamValue(api_key, true));
+  return url.Resolve("?key=" + base::EscapeQueryParamValue(api_key, true));
 }
 
 void IncidentReportUploaderImpl::OnURLLoaderComplete(
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   // Take ownership of the loader in this scope.
   std::unique_ptr<network::SimpleURLLoader> url_loader(std::move(url_loader_));
   int response_code = 0;
   if (url_loader->ResponseInfo() && url_loader->ResponseInfo()->headers)
     response_code = url_loader->ResponseInfo()->headers->response_code();
 
-  std::string response_body_str;
-  if (response_body.get())
-    response_body_str = std::move(*response_body.get());
-
-  OnURLLoaderCompleteInternal(response_body_str, response_code,
-                              url_loader->NetError());
+  OnURLLoaderCompleteInternal(std::move(response_body).value_or(""),
+                              response_code, url_loader->NetError());
 }
 
 void IncidentReportUploaderImpl::OnURLLoaderCompleteInternal(

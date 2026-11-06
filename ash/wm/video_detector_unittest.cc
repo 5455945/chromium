@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,6 +14,7 @@
 #include "ash/wm/wm_event.h"
 #include "base/compiler_specific.h"
 #include "base/containers/circular_deque.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/aura/client/aura_constants.h"
@@ -21,6 +22,7 @@
 #include "ui/aura/test/test_windows.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_event_dispatcher.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/gfx/geometry/rect.h"
 
 namespace ash {
@@ -29,6 +31,9 @@ namespace ash {
 class TestObserver : public VideoDetector::Observer {
  public:
   TestObserver() = default;
+
+  TestObserver(const TestObserver&) = delete;
+  TestObserver& operator=(const TestObserver&) = delete;
 
   bool empty() const { return states_.empty(); }
   void reset() { states_.clear(); }
@@ -49,13 +54,15 @@ class TestObserver : public VideoDetector::Observer {
  private:
   // States in the order they were received.
   base::circular_deque<VideoDetector::State> states_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestObserver);
 };
 
 class VideoDetectorTest : public AshTestBase {
  public:
   VideoDetectorTest() = default;
+
+  VideoDetectorTest(const VideoDetectorTest&) = delete;
+  VideoDetectorTest& operator=(const VideoDetectorTest&) = delete;
+
   ~VideoDetectorTest() override = default;
 
   void SetUp() override {
@@ -67,6 +74,8 @@ class VideoDetectorTest : public AshTestBase {
 
   void TearDown() override {
     detector_->RemoveObserver(observer_.get());
+    detector_ = nullptr;
+    observer_.reset();
     AshTestBase::TearDown();
   }
 
@@ -80,11 +89,8 @@ class VideoDetectorTest : public AshTestBase {
         .Build();
   }
 
-  VideoDetector* detector_;  // not owned
+  raw_ptr<VideoDetector> detector_;  // not owned
   std::unique_ptr<TestObserver> observer_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(VideoDetectorTest);
 };
 
 // Verify that the video detector can distinguish fullscreen and windowed video

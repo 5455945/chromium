@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,11 +9,13 @@
 #include <string>
 #include <vector>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/singleton.h"
+#include "extensions/browser/disable_reason.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/manifest.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 class Profile;
 class SyncTest;
@@ -26,6 +28,9 @@ class SyncExtensionHelper {
  public:
   // Singleton implementation.
   static SyncExtensionHelper* GetInstance();
+
+  SyncExtensionHelper(const SyncExtensionHelper&) = delete;
+  SyncExtensionHelper& operator=(const SyncExtensionHelper&) = delete;
 
   // Initializes the profiles in |test| and registers them with
   // internal data structures.
@@ -64,8 +69,8 @@ class SyncExtensionHelper {
 
   // Returns true iff the extension with the given id is pending
   // install in |profile|.
-  bool IsExtensionPendingInstallForSync(
-      Profile* profile, const std::string& id) const;
+  bool IsExtensionPendingInstallForSync(Profile* profile,
+                                        const std::string& id) const;
 
   // Installs all extensions pending sync in |profile|.
   void InstallExtensionsPendingForSync(Profile* profile);
@@ -81,17 +86,26 @@ class SyncExtensionHelper {
   // Returns true if successful, false on failure.
   bool ExtensionNameToIndex(const std::string& name, int* index);
 
+  // Returns the extension ID of the extension with the given `name`.
+  extensions::ExtensionId GetExtensionId(const std::string& name) const;
+
  private:
   struct ExtensionState {
     enum EnabledState { DISABLED, PENDING, ENABLED };
 
-    ExtensionState();
+    ExtensionState(EnabledState state,
+                   const extensions::DisableReasonSet& reasons,
+                   bool incognito_enabled);
+    ExtensionState(ExtensionState&& other);
+    ExtensionState(const ExtensionState& other) = delete;
+    ExtensionState& operator=(const ExtensionState& other) = delete;
     ~ExtensionState();
-    bool Equals(const ExtensionState &other) const;
 
-    EnabledState enabled_state;
-    int disable_reasons;
-    bool incognito_enabled;
+    bool operator==(const ExtensionState& other) const = default;
+
+    EnabledState enabled_state = ENABLED;
+    extensions::DisableReasonSet disable_reasons;
+    bool incognito_enabled = false;
   };
 
   using ExtensionStateMap = std::map<std::string, ExtensionState>;
@@ -116,17 +130,15 @@ class SyncExtensionHelper {
   // Returns an extension for the given name in |profile|.  type and
   // index.  Two extensions with the name but different profiles will
   // have the same id.
-  scoped_refptr<extensions::Extension> GetExtension(
-      Profile* profile, const std::string& name,
-      extensions::Manifest::Type type) WARN_UNUSED_RESULT;
+  [[nodiscard]] scoped_refptr<extensions::Extension> GetExtension(
+      Profile* profile,
+      const std::string& name,
+      extensions::Manifest::Type type);
 
-  std::string extension_name_prefix_;
   ProfileExtensionNameMap profile_extensions_;
   StringMap id_to_name_;
   TypeMap id_to_type_;
-  bool setup_completed_;
-
-  DISALLOW_COPY_AND_ASSIGN(SyncExtensionHelper);
+  bool setup_completed_ = false;
 };
 
 #endif  // CHROME_BROWSER_SYNC_TEST_INTEGRATION_SYNC_EXTENSION_HELPER_H_

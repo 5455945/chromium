@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,7 +16,6 @@ enum ViewID {
 
   // Views which make up the skyline. These are used only
   // on views.
-  VIEW_ID_TAB_SEARCH_BUTTON,
   VIEW_ID_MINIMIZE_BUTTON,
   VIEW_ID_MAXIMIZE_BUTTON,
   VIEW_ID_RESTORE_BUTTON,
@@ -24,6 +23,7 @@ enum ViewID {
   VIEW_ID_WINDOW_ICON,
   VIEW_ID_WINDOW_TITLE,
   VIEW_ID_WEB_APP_FRAME_TOOLBAR,
+  VIEW_ID_WEB_APP_ORIGIN_TEXT,
 
   // Tabs within a window/tab strip, counting from the left.
   VIEW_ID_TAB_0,
@@ -61,10 +61,14 @@ enum ViewID {
   VIEW_ID_OMNIBOX,
   VIEW_ID_SCRIPT_BUBBLE,
   VIEW_ID_SAVE_CREDIT_CARD_BUTTON,
+  VIEW_ID_SAVE_IBAN_BUTTON,
   VIEW_ID_MIGRATE_LOCAL_CREDIT_CARD_BUTTON,
   VIEW_ID_TRANSLATE_BUTTON,
   VIEW_ID_AVATAR_BUTTON,
   VIEW_ID_WEBAUTHN_BUTTON,
+  VIEW_ID_SHARING_HUB_BUTTON,
+  VIEW_ID_MANAGEMENT_BUTTON,
+  VIEW_ID_RECORD_REPLAY_BUTTON,
 
   // Location bar content settings icons.
   VIEW_ID_CONTENT_SETTING_JAVASCRIPT,
@@ -72,7 +76,7 @@ enum ViewID {
 
   // The Bookmark Bar.
   VIEW_ID_BOOKMARK_BAR,
-  VIEW_ID_OTHER_BOOKMARKS,
+  VIEW_ID_ALL_BOOKMARKS,
   VIEW_ID_MANAGED_BOOKMARKS,
   // Used for bookmarks/folders on the bookmark bar.
   VIEW_ID_BOOKMARK_BAR_ELEMENT,
@@ -81,6 +85,9 @@ enum ViewID {
   VIEW_ID_FIND_IN_PAGE_TEXT_FIELD,
   VIEW_ID_FIND_IN_PAGE_PREVIOUS_BUTTON,
   VIEW_ID_FIND_IN_PAGE_NEXT_BUTTON,
+  VIEW_ID_FIND_IN_PAGE_PREVIOUS_OUTSIDE_VIEWPORT_BUTTON,
+  VIEW_ID_FIND_IN_PAGE_NEXT_OUTSIDE_VIEWPORT_BUTTON,
+  VIEW_ID_FIND_IN_PAGE_MATCH_CASE_BUTTON,
   VIEW_ID_FIND_IN_PAGE_CLOSE_BUTTON,
 
   // Tab Container window.
@@ -89,14 +96,23 @@ enum ViewID {
   // Docked dev tools.
   VIEW_ID_DEV_TOOLS_DOCKED,
 
+  // Lens overlay.
+  VIEW_ID_LENS_OVERLAY,
+
+  // The view that hosts the immersive Reading Mode.
+  VIEW_ID_READ_ANYTHING_OVERLAY,
+
+  // Glic Actor Overlay
+  VIEW_ID_ACTOR_OVERLAY,
+
   // The contents split.
   VIEW_ID_CONTENTS_SPLIT,
 
   // The Infobar container.
   VIEW_ID_INFO_BAR_CONTAINER,
 
-  // The Download shelf.
-  VIEW_ID_DOWNLOAD_SHELF,
+  // The header in the App Identity Update dialog.
+  VIEW_ID_APP_IDENTITY_UPDATE_HEADER,
 
   // Used in chrome/browser/ui/cocoa/view_id_util_browsertest.mm.
   // If you add new ids, make sure the above test passes.
@@ -104,6 +120,9 @@ enum ViewID {
 
   // Plus button on location bar.
   VIEW_ID_ACTION_BOX_BUTTON,
+
+  // Media Picker screen scroll view.
+  VIEW_ID_MEDIA_PICKER_SCREEN_SCROLL_VIEW,
 };
 
 #endif  // CHROME_BROWSER_UI_VIEW_IDS_H_

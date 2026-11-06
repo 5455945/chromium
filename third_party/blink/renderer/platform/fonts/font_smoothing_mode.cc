@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,13 +10,13 @@ namespace blink {
 
 String ToString(FontSmoothingMode mode) {
   switch (mode) {
-    case kAutoSmoothing:
+    case FontSmoothingMode::kAuto:
       return "Auto";
-    case kNoSmoothing:
+    case FontSmoothingMode::kNone:
       return "None";
-    case kAntialiased:
+    case FontSmoothingMode::kAntialiased:
       return "Antialiased";
-    case kSubpixelAntialiased:
+    case FontSmoothingMode::kSubpixelAntialiased:
       return "SubpixelAntialiased";
   }
   return "Unknown";

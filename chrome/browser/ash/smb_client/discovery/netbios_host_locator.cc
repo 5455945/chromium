@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,16 +6,16 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/smb_client/smb_constants.h"
+#include "net/base/ip_address.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/network_change_notifier.h"
 
-namespace ash {
-namespace smb_client {
+namespace ash::smb_client {
 namespace {
 
 bool IsMLan(const net::NetworkInterface& interface) {
@@ -43,9 +43,10 @@ net::IPAddress CalculateBroadcastAddress(
 }
 
 // TODO(baileyberro): Some devices' wifi interface has CONNECTION_UNKNOWN as
-// type rather than CONNECTION_WIFI. https://crbug.com/872665
+// type rather than CONNECTION_WIFI. https://crbug.com/40588714
 bool ShouldUseInterface(const net::NetworkInterface& interface) {
   return interface.address.IsIPv4() &&
+         interface.prefix_length < (net::IPAddress::kIPv4AddressSize * 8) &&
          (interface.type == net::NetworkChangeNotifier::CONNECTION_ETHERNET ||
           interface.type == net::NetworkChangeNotifier::CONNECTION_WIFI ||
           IsMLan(interface));
@@ -72,8 +73,8 @@ NetBiosHostLocator::NetBiosHostLocator(
 NetBiosHostLocator::~NetBiosHostLocator() = default;
 
 void NetBiosHostLocator::FindHosts(FindHostsCallback callback) {
-  DCHECK(!running_);
-  DCHECK(callback);
+  CHECK(!running_, base::NotFatalUntil::M160);
+  CHECK(callback, base::NotFatalUntil::M160);
   callback_ = std::move(callback);
   running_ = true;
 
@@ -93,9 +94,8 @@ void NetBiosHostLocator::FindHosts(FindHostsCallback callback) {
     return;
   }
 
-  timer_->Start(FROM_HERE,
-                base::TimeDelta::FromSeconds(kNetBiosDiscoveryTimeoutSeconds),
-                this, &NetBiosHostLocator::StopDiscovery);
+  timer_->Start(FROM_HERE, base::Seconds(kNetBiosDiscoveryTimeoutSeconds), this,
+                &NetBiosHostLocator::StopDiscovery);
 }
 
 net::NetworkInterfaceList NetBiosHostLocator::GetNetworkInterfaceList() {
@@ -135,14 +135,14 @@ void NetBiosHostLocator::PacketReceived(const std::vector<uint8_t>& packet,
   ++outstanding_parse_requests_;
   smb_provider_client_->ParseNetBiosPacket(
       packet, transaction_id,
-      base::BindOnce(&NetBiosHostLocator::OnPacketParsed, AsWeakPtr(),
-                     sender_ip));
+      base::BindOnce(&NetBiosHostLocator::OnPacketParsed,
+                     weak_ptr_factory_.GetWeakPtr(), sender_ip));
 }
 
 void NetBiosHostLocator::OnPacketParsed(
     const net::IPEndPoint& sender_ip,
     const std::vector<std::string>& hostnames) {
-  DCHECK_GE(outstanding_parse_requests_, 0);
+  CHECK_GE(outstanding_parse_requests_, 0, base::NotFatalUntil::M160);
 
   --outstanding_parse_requests_;
   for (const auto& hostname : hostnames) {
@@ -155,7 +155,7 @@ void NetBiosHostLocator::OnPacketParsed(
 }
 
 void NetBiosHostLocator::StopDiscovery() {
-  DCHECK(!discovery_done_);
+  CHECK(!discovery_done_, base::NotFatalUntil::M160);
 
   discovery_done_ = true;
   netbios_clients_.clear();
@@ -171,8 +171,8 @@ void NetBiosHostLocator::FinishFindHosts() {
 }
 
 void NetBiosHostLocator::ResetHostLocator() {
-  DCHECK_EQ(0, outstanding_parse_requests_);
-  DCHECK(netbios_clients_.empty());
+  CHECK_EQ(0, outstanding_parse_requests_, base::NotFatalUntil::M160);
+  CHECK(netbios_clients_.empty(), base::NotFatalUntil::M160);
 
   results_.clear();
   discovery_done_ = false;
@@ -192,9 +192,8 @@ void NetBiosHostLocator::AddHostToResult(const net::IPEndPoint& sender_ip,
 bool NetBiosHostLocator::WouldOverwriteResult(
     const net::IPEndPoint& sender_ip,
     const std::string& hostname) const {
-  return results_.count(hostname) &&
-         results_.at(hostname) != sender_ip.address();
+  auto it = results_.find(hostname);
+  return it != results_.end() && it->second != sender_ip.address();
 }
 
-}  // namespace smb_client
-}  // namespace ash
+}  // namespace ash::smb_client

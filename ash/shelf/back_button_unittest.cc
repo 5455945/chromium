@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,18 +7,21 @@
 #include <memory>
 
 #include "ash/accelerators/accelerator_controller_impl.h"
-#include "ash/accessibility/accessibility_controller_impl.h"
+#include "ash/accessibility/accessibility_controller.h"
 #include "ash/app_list/test/app_list_test_helper.h"
 #include "ash/app_list/views/app_list_view.h"
 #include "ash/constants/ash_features.h"
+#include "ash/public/cpp/keyboard/keyboard_controller.h"
 #include "ash/shelf/shelf.h"
 #include "ash/shelf/shelf_navigation_widget.h"
 #include "ash/shelf/shelf_view.h"
 #include "ash/shelf/shelf_view_test_api.h"
 #include "ash/shelf/shelf_widget.h"
 #include "ash/shell.h"
+#include "ash/system/model/system_tray_model.h"
 #include "ash/test/ash_test_base.h"
-#include "ash/wm/tablet_mode/tablet_mode_controller.h"
+#include "ash/wm/tablet_mode/tablet_mode_controller_test_api.h"
+#include "ash/wm/window_state.h"
 #include "base/run_loop.h"
 #include "base/test/scoped_feature_list.h"
 #include "ui/base/accelerators/accelerator.h"
@@ -34,6 +37,10 @@ class BackButtonTest : public AshTestBase,
                        public testing::WithParamInterface<bool> {
  public:
   BackButtonTest() = default;
+
+  BackButtonTest(const BackButtonTest&) = delete;
+  BackButtonTest& operator=(const BackButtonTest&) = delete;
+
   ~BackButtonTest() override = default;
 
   BackButton* back_button() {
@@ -47,13 +54,10 @@ class BackButtonTest : public AshTestBase,
 
   void SetUp() override {
     AshTestBase::SetUp();
-    // Set a11y setting to show back button in tablet mode, if the feature to
-    // hide it is enabled.
-    if (features::IsHideShelfControlsInTabletModeEnabled()) {
-      Shell::Get()
-          ->accessibility_controller()
-          ->SetTabletModeShelfNavigationButtonsEnabled(true);
-    }
+    // Set a11y setting to show back button in tablet mode.
+    Shell::Get()
+        ->accessibility_controller()
+        ->SetTabletModeShelfNavigationButtonsEnabled(true);
 
     test_api_ = std::make_unique<ShelfViewTestAPI>(
         GetPrimaryShelf()->GetShelfViewForTesting());
@@ -73,9 +77,6 @@ class BackButtonTest : public AshTestBase,
 
  protected:
   std::unique_ptr<ShelfViewTestAPI> test_api_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(BackButtonTest);
 };
 
 enum class TestAccessibilityFeature {
@@ -133,20 +134,21 @@ TEST_F(BackButtonTest, Visibility) {
   EXPECT_FALSE(back_button());
   EXPECT_FALSE(IsBackButtonVisible());
 
-  Shell::Get()->tablet_mode_controller()->SetEnabledForTest(true);
+  ash::TabletModeControllerTestApi().EnterTabletMode();
   test_api()->RunMessageLoopUntilAnimationsDone();
 
   // The back button should only be visible for in-app shelf in tablet mode.
   EXPECT_FALSE(IsBackButtonVisible());
   ASSERT_TRUE(!back_button());
 
-  std::unique_ptr<views::Widget> widget = CreateTestWidget();
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   test_api()->RunMessageLoopUntilAnimationsDone();
 
   EXPECT_TRUE(IsBackButtonVisible());
   EXPECT_EQ(1.f, back_button()->layer()->opacity());
 
-  Shell::Get()->tablet_mode_controller()->SetEnabledForTest(false);
+  ash::TabletModeControllerTestApi().LeaveTabletMode();
   test_api()->RunMessageLoopUntilAnimationsDone();
 
   EXPECT_FALSE(IsBackButtonVisible());
@@ -159,15 +161,16 @@ TEST_F(BackButtonTest, VisibilityWithVerticalShelf) {
   EXPECT_FALSE(back_button());
   EXPECT_FALSE(IsBackButtonVisible());
 
-  Shell::Get()->tablet_mode_controller()->SetEnabledForTest(true);
+  ash::TabletModeControllerTestApi().EnterTabletMode();
   // Create a test widget to transition to in-app shelf.
-  std::unique_ptr<views::Widget> widget = CreateTestWidget();
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
 
   test_api()->RunMessageLoopUntilAnimationsDone();
   EXPECT_TRUE(back_button());
   EXPECT_TRUE(IsBackButtonVisible());
 
-  Shell::Get()->tablet_mode_controller()->SetEnabledForTest(false);
+  ash::TabletModeControllerTestApi().LeaveTabletMode();
   test_api()->RunMessageLoopUntilAnimationsDone();
 
   EXPECT_FALSE(back_button());
@@ -176,9 +179,10 @@ TEST_F(BackButtonTest, VisibilityWithVerticalShelf) {
 
 TEST_F(BackButtonTest, BackKeySequenceGenerated) {
   // Enter tablet mode; the back button is not visible in non tablet mode.
-  Shell::Get()->tablet_mode_controller()->SetEnabledForTest(true);
+  ash::TabletModeControllerTestApi().EnterTabletMode();
   // Create a test widget to transition to in-app shelf.
-  std::unique_ptr<views::Widget> widget = CreateTestWidget();
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
 
   ShelfNavigationWidget::TestApi navigation_widget_test_api(
       GetPrimaryShelf()->navigation_widget());
@@ -222,6 +226,84 @@ TEST_F(BackButtonTest, BackKeySequenceGenerated) {
   EXPECT_EQ(1, target_back_release.accelerator_count());
 }
 
+// Tests the back button behavior when an Android IME is visible. Due to the
+// way the Android IME is implemented, a lot of this test is fake behavior, but
+// it will help catch regressions.
+TEST_F(BackButtonTest, BackButtonWithAndroidKeyboard) {
+  Shell::Get()
+      ->accessibility_controller()
+      ->SetTabletModeShelfNavigationButtonsEnabled(false);
+
+  // Enter tablet mode; the back button is not visible in non tablet mode.
+  ash::TabletModeControllerTestApi().EnterTabletMode();
+
+  AcceleratorControllerImpl* controller =
+      Shell::Get()->accelerator_controller();
+
+  // Register an accelerator that looks for back presses. Note there is already
+  // an accelerator on AppListView, which will handle the accelerator since it
+  // is targeted before AcceleratorController (switching to tablet mode with no
+  // other windows activates the app list). First remove that accelerator. In
+  // release, there's only the AppList's accelerator, so it's always hit when
+  // the app list is active. (ash/accelerators.cc has VKEY_BROWSER_BACK, but it
+  // also needs Ctrl pressed).
+  GetAppListTestHelper()->GetAppListView()->ResetAccelerators();
+
+  ui::Accelerator accelerator_back_press(ui::VKEY_BROWSER_BACK, ui::EF_NONE);
+  accelerator_back_press.set_key_state(ui::Accelerator::KeyState::PRESSED);
+  ui::TestAcceleratorTarget target_back_press;
+  controller->Register({accelerator_back_press}, &target_back_press);
+
+  // Register an accelerator that looks for back releases.
+  ui::Accelerator accelerator_back_release(ui::VKEY_BROWSER_BACK, ui::EF_NONE);
+  accelerator_back_release.set_key_state(ui::Accelerator::KeyState::RELEASED);
+  ui::TestAcceleratorTarget target_back_release;
+  controller->Register({accelerator_back_release}, &target_back_release);
+
+  // Create a test widget to transition to in-app shelf.
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
+
+  // Fakes showing a virtual keyboard.
+  VirtualKeyboardModel* keyboard =
+      Shell::Get()->system_tray_model()->virtual_keyboard();
+  ASSERT_TRUE(keyboard);
+  keyboard->OnArcInputMethodBoundsChanged(gfx::Rect(400, 400));
+  EXPECT_TRUE(keyboard->arc_keyboard_visible());
+
+  EXPECT_TRUE(IsBackButtonVisible());
+  ASSERT_TRUE(back_button());
+
+  // Wait for the navigation widget's animation.
+  ShelfNavigationWidget* navigation_widget =
+      GetPrimaryShelf()->navigation_widget();
+  ShelfNavigationWidget::TestApi navigation_widget_test_api(navigation_widget);
+  test_api()->RunMessageLoopUntilAnimationsDone(
+      navigation_widget_test_api.GetBoundsAnimator());
+
+  ui::test::EventGenerator* generator = GetEventGenerator();
+  // Click within the navigation widget where back button is expected to be.
+  // Not using back button screen bounds directly because `GetBoundsInScreen()`
+  // returns bounds outside navigation widget when called on the back button.
+  // `GetBoundsInScreen()` converts the view bounds by applying layer transform
+  // on the view's origin, and uses the transformed origin as the origin of
+  // converted bounds. Assumption that the transformed origin point is the
+  // origin point of transformed bounds does not hold after rotation (which is
+  // the case for the back button).
+  generator->MoveMouseTo(
+      navigation_widget->GetWindowBoundsInScreen().origin() +
+      back_button()->bounds().CenterPoint().OffsetFromOrigin());
+  generator->ClickLeftButton();
+
+  // Unfortunately we cannot hook this all the way up to see if the Android IME
+  // is hidden, but we can check that back key events are generated.
+  EXPECT_EQ(1, target_back_press.accelerator_count());
+  EXPECT_EQ(1, target_back_release.accelerator_count());
+
+  // Verify that the test widget has not been minimized.
+  EXPECT_FALSE(WindowState::Get(widget->GetNativeWindow())->IsMinimized());
+}
+
 // Tests that the back button does not show a context menu.
 TEST_F(BackButtonTest, NoContextMenuOnBackButton) {
   ui::test::EventGenerator* generator = GetEventGenerator();
@@ -229,10 +311,11 @@ TEST_F(BackButtonTest, NoContextMenuOnBackButton) {
   // Enable tablet mode to show the back button. Wait for tablet mode animations
   // to finish in order for the back button to move out from under the
   // home button.
-  Shell::Get()->tablet_mode_controller()->SetEnabledForTest(true);
+  ash::TabletModeControllerTestApi().EnterTabletMode();
 
   // Create a test widget to transition to in-app shelf.
-  std::unique_ptr<views::Widget> widget = CreateTestWidget();
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
 
   // Wait for the navigation widget's animation.
   ShelfNavigationWidget::TestApi navigation_widget_test_api(
@@ -257,7 +340,8 @@ INSTANTIATE_TEST_SUITE_P(
 
 TEST_P(BackButtonVisibilityWithAccessibilityFeaturesTest,
        TabletModeSwitchWithA11yFeatureEnabled) {
-  std::unique_ptr<views::Widget> widget = CreateTestWidget();
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
 
   SetTestA11yFeatureEnabled(true /*enabled*/);
 
@@ -267,7 +351,7 @@ TEST_P(BackButtonVisibilityWithAccessibilityFeaturesTest,
   EXPECT_FALSE(test_api.IsBackButtonVisible());
 
   // Switch to tablet mode, and verify the back button is now visible.
-  Shell::Get()->tablet_mode_controller()->SetEnabledForTest(true);
+  ash::TabletModeControllerTestApi().EnterTabletMode();
   EXPECT_TRUE(test_api.IsBackButtonVisible());
 
   // The button should be hidden if the feature gets disabled.
@@ -277,7 +361,8 @@ TEST_P(BackButtonVisibilityWithAccessibilityFeaturesTest,
 
 TEST_P(BackButtonVisibilityWithAccessibilityFeaturesTest,
        FeatureEnabledWhileInTabletMode) {
-  std::unique_ptr<views::Widget> widget = CreateTestWidget();
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
 
   ShelfNavigationWidget::TestApi test_api(
       GetPrimaryShelf()->navigation_widget());
@@ -285,7 +370,7 @@ TEST_P(BackButtonVisibilityWithAccessibilityFeaturesTest,
   EXPECT_FALSE(test_api.IsBackButtonVisible());
 
   // Switch to tablet mode, and verify the back button is still hidden.
-  Shell::Get()->tablet_mode_controller()->SetEnabledForTest(true);
+  ash::TabletModeControllerTestApi().EnterTabletMode();
   EXPECT_FALSE(test_api.IsBackButtonVisible());
 
   // The button should be shown if the feature gets enabled.

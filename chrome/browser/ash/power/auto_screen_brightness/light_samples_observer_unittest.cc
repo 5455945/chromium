@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,7 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/cxx17_backports.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
@@ -41,8 +40,8 @@ class LightSamplesObserverTest : public testing::Test {
     channels_data.push_back(std::move(illuminance_data));
 
     if (is_color_sensor) {
-      for (size_t i = 0; i < base::size(kIlluminanceColorChannels); ++i) {
-        illuminance_data.id = kIlluminanceColorChannels[i];
+      for (const char* channel : kIlluminanceColorChannels) {
+        illuminance_data.id = channel;
         illuminance_data.sample_data = kFakeColorSampleData;
         channels_data.push_back(std::move(illuminance_data));
       }
@@ -59,15 +58,8 @@ class LightSamplesObserverTest : public testing::Test {
     als_reader_->AddObserver(&fake_observer_);
   }
 
-  void DisableIlluminanceChannel() {
-    sensor_device_->SetChannelsEnabled(
-        {0}, false,
-        base::BindOnce(&LightSamplesObserverTest::SetChannelsEnabledCallback,
-                       base::Unretained(this)));
-  }
-
-  void SetChannelsEnabledCallback(const std::vector<int32_t>& failed_indices) {
-    EXPECT_EQ(failed_indices.size(), 0u);
+  void DisableIlluminanceChannel(mojo::ReceiverId id) {
+    sensor_device_->SetChannelsEnabledWithId(id, {0}, false);
   }
 
   std::unique_ptr<chromeos::sensors::FakeSensorDevice> sensor_device_;
@@ -91,9 +83,6 @@ TEST_F(LightSamplesObserverTest, MissingChannels) {
   // Wait until the mojo connection is reset.
   base::RunLoop().RunUntilIdle();
 
-  histogram_tester_.ExpectUniqueSample(
-      "AutoScreenBrightness.DataError",
-      static_cast<int>(DataError::kMojoSamplesObserver), 1);
   EXPECT_FALSE(sensor_device_->HasReceivers());
   EXPECT_EQ(fake_observer_.num_received_ambient_lights(), 0);
 }
@@ -114,9 +103,6 @@ TEST_F(LightSamplesObserverTest, StartReadingTwiceError) {
   // Wait until the mojo connection is reset.
   base::RunLoop().RunUntilIdle();
 
-  histogram_tester_.ExpectUniqueSample(
-      "AutoScreenBrightness.DataError",
-      static_cast<int>(DataError::kMojoSamplesObserver), 1);
   EXPECT_FALSE(sensor_device_->HasReceivers());
   EXPECT_EQ(fake_observer_.num_received_ambient_lights(), 0);
 }
@@ -125,7 +111,7 @@ TEST_F(LightSamplesObserverTest, GetSamplesWithoutColorChannels) {
   SetChannels(false);
 
   mojo::Remote<chromeos::sensors::mojom::SensorDevice> light;
-  sensor_device_->AddReceiver(light.BindNewPipeAndPassReceiver());
+  auto id = sensor_device_->AddReceiver(light.BindNewPipeAndPassReceiver());
   SetProvider(std::move(light));
 
   // Wait until a sample is received.
@@ -135,7 +121,7 @@ TEST_F(LightSamplesObserverTest, GetSamplesWithoutColorChannels) {
   EXPECT_EQ(fake_observer_.num_received_ambient_lights(), 1);
   EXPECT_EQ(fake_observer_.ambient_light(), kFakeSampleData);
 
-  DisableIlluminanceChannel();
+  DisableIlluminanceChannel(id);
 
   // Wait until a sample is received.
   base::RunLoop().RunUntilIdle();
@@ -144,7 +130,7 @@ TEST_F(LightSamplesObserverTest, GetSamplesWithoutColorChannels) {
   EXPECT_EQ(fake_observer_.num_received_ambient_lights(), 1);
 
   // Simulate a disconnection of the observer's mojo channel in IIO Service.
-  sensor_device_->StopReadingSamples();
+  sensor_device_->ResetObserverRemote(id);
 
   // Wait until the disconnection is done.
   base::RunLoop().RunUntilIdle();

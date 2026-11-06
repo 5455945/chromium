@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -30,11 +30,20 @@ public abstract class ChromeSwitches {{
     /** Don't restore persistent state from saved files on startup. */
     public static final String NO_RESTORE_STATE = "no-restore-state";
 
+    /** Prevents all IPHs from showing. */
+    public static final String DISABLE_ALL_IPH = "propagate-iph-for-testing";
+
     /** Disable the First Run Experience. */
     public static final String DISABLE_FIRST_RUN_EXPERIENCE = "disable-fre";
 
     /** Disable promos shown on startup. */
     public static final String DISABLE_STARTUP_PROMOS = "disable-startup-promos-for-testing";
+
+    /** Disable NTP theme customization promo bottom sheet. */
+    public static final String DISABLE_NTP_THEME_PROMO_BOTTOM_SHEET_FOR_TESTING = "disable-ntp-theme-promo-bottom-sheet";
+
+    /** Sets the test type (e.g. "browser" or "ui"). Used to enable appropriate testing features. */
+    public static final String TEST_TYPE = "test-type";
 
     /** Force the crash dump to be uploaded regardless of preferences. */
     public static final String FORCE_CRASH_DUMP_UPLOAD = "force-dump-upload";
@@ -72,10 +81,19 @@ public abstract class ChromeSwitches {{
     public static final String DISABLE_TAB_MERGING_FOR_TESTING = "disable-tab-merging";
 
 
+
     /**
-     * Disable native initialization for testing.
+     * Force the app to turn off windowOptOutEdgeToEdgeEnforcement.
      */
-    public static final String DISABLE_NATIVE_INITIALIZATION = "disable-native-initialization";
+    public static final String DISABLE_OPT_OUT_EDGE_TO_EDGE = "disable-opt-out-edge-to-edge";
+
+    /**
+     * Override the tab strip height transition threshold in DP.
+     */
+    public static final String TAB_STRIP_HEIGHT_TRANSITION_THRESHOLD = "tab-strip-height-transition-threshold";
+
+    /** Force opening incognito tabs in a separate window. */
+    public static final String OPEN_INCOGNITO_AS_WINDOW = "open-incognito-as-window";
 
     ///////////////////////////////////////////////////////////////////////////////////////////////
     // Native Switches
@@ -107,12 +125,6 @@ public abstract class ChromeSwitches {{
      */
     public static final String PARTNER_HOMEPAGE_FOR_TESTING = "partner-homepage-for-testing";
 
-    /**
-     * Forces the WebAPK runtime dex to be extracted each time that Chrome is started.
-     */
-    public static final String ALWAYS_EXTRACT_WEBAPK_RUNTIME_DEX_ON_STARTUP =
-            "always-extract-webapk-dex-on-startup";
-
     /** Treats all WebAPKs as valid - useful only for local testing. */
     public static final String SKIP_WEBAPK_VERIFICATION = "skip-webapk-verification";
 
@@ -126,24 +138,8 @@ public abstract class ChromeSwitches {{
     /** Enable Vr Shell development environment. */
     public static final String ENABLE_VR_SHELL_DEV = "enable-vr-shell-dev";
 
-    /** Command line switch for Chrome Home's swipe logic. */
-    public static final String CHROME_HOME_SWIPE_LOGIC = "chrome-home-swipe-logic";
-
-    /** Switch for enabling "restricted area" swipe logic for Chrome Home. */
-    public static final String CHROME_HOME_SWIPE_LOGIC_RESTRICT_AREA = "restrict-area";
-
-    /**
-     * Switch for enabling "velocity" swipe logic for Chrome Home. This means the flings will not
-     * open the sheet; the user must slide up the sheet relatively slowly.
-     */
-    public static final String CHROME_HOME_SWIPE_LOGIC_VELOCITY = "velocity";
-
     /** Switch for enabling the Chrome Survey. Only works when UMA is accepted. */
     public static final String CHROME_FORCE_ENABLE_SURVEY = "force-enable-chrome-survey";
-
-    /** Switch to enable incognito tabs to be seen in Android Recents. */
-    public static final String ENABLE_INCOGNITO_SNAPSHOTS_IN_ANDROID_RECENTS =
-            "enable-incognito-snapshots-in-android-recents";
 
     /** Open all custom tabs in a new task. Used only for experimental purposes. */
     public static final String OPEN_CUSTOM_TABS_IN_NEW_TASK = "open-custom-tabs-in-new-task";
@@ -178,13 +174,8 @@ public abstract class ChromeSwitches {{
     public static final String FEED_HEADER_MENU_IPH_TRIGGER_CONFIG =
             "feed-header-menu-iph-trigger-config";
 
-    /** Disable the default browser promo. */
-    public static final String DISABLE_DEFAULT_BROWSER_PROMO =
-            "disable-default-browser-promo";
-
-    /** Debug Chime notifications. */
-    public static final String DEBUG_CHIME_NOTIFICATION =
-            "debug-chime-notification";
+    /** b/323252296: Force enable Revenue Stats tracking for testing purposes. */
+    public static final String FORCE_REVENUE_STATS_REPORTING = "force-revenue-stats-reporting";
 
 {NATIVE_STRINGS}
 

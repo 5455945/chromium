@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,32 +8,91 @@ import android.graphics.Rect;
 import android.view.View;
 import android.view.ViewTreeObserver;
 
-import androidx.core.view.ViewCompat;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
 /**
- * Provides a {@Rect} for the location of a {@View} in its window, see
- * {@link View#getLocationOnScreen(int[])}.
+ * Provides a {@link Rect} for the location of a {@link View} in its window, see {@link
+ * View#getLocationOnScreen(int[])}. When view bound changes, {@link RectProvider.Observer} will be
+ * notified.
  */
+@NullMarked
 public class ViewRectProvider extends RectProvider
-        implements ViewTreeObserver.OnGlobalLayoutListener, View.OnAttachStateChangeListener,
-                   ViewTreeObserver.OnPreDrawListener {
-    private final int[] mCachedWindowCoordinates = new int[2];
-    private final Rect mInsetRect = new Rect();
+        implements ViewTreeObserver.OnGlobalLayoutListener,
+                View.OnAttachStateChangeListener,
+                ViewTreeObserver.OnPreDrawListener {
+    /** The strategy for calculating the {@link Rect} bounds based on a {@link View}. */
+    public interface ViewRectUpdateStrategy {
+        /**
+         * Recalculates the view's bounds based on its current position, dimensions, and the
+         * configured inset, margin, padding, and center point settings.
+         *
+         * @param forceRefresh Whether the rect bounds should be refreshed even when the window
+         *     coordinates and view sizes haven't changed. This is needed when inset or padding
+         *     changes.
+         */
+        void refreshRectBounds(boolean forceRefresh);
+
+        /**
+         * Specifies the inset values in pixels that determine how to shrink the {@link View} bounds
+         * when creating the {@link Rect}.
+         */
+        default void setInsetPx(Rect insetRect) {}
+
+        /**
+         * Specifies the margin values in pixels that determine how to expand the {@link View}
+         * bounds when creating the {@link Rect}.
+         */
+        default void setMarginPx(Rect marginRect) {}
+
+        /**
+         * Whether padding should be included in the {@link Rect} for the {@link View}.
+         *
+         * @param includePadding Whether padding should be included. Defaults to false.
+         */
+        default void setIncludePadding(boolean includePadding) {}
+
+        /**
+         * Whether use the center of the view after all the adjustment applied (insets, margins).
+         * The Rect being provided will be a single point.
+         *
+         * @param useCenterPoint Whether the rect represents the center of the view after
+         *     adjustments.
+         */
+        default void setUseCenter(boolean useCenterPoint) {}
+    }
+
+    /** A factory for creating instances of {@link ViewRectUpdateStrategy}. */
+    @FunctionalInterface
+    public interface ViewRectUpdateStrategyFactory {
+        /**
+         * @param view The {@link View} whose bounds will be tracked.
+         * @param rect The {@link Rect} instance that will be updated by this class with the view's
+         *     calculated bounds. This object is modified directly.
+         * @param onRectChanged A {@link Runnable} that will be executed whenever the |rect|
+         *     parameter is updated.
+         */
+        ViewRectUpdateStrategy create(View view, Rect rect, Runnable onRectChanged);
+    }
+
     private final View mView;
+    private final ViewRectUpdateStrategy mUpdateStrategy;
 
     /** If not {@code null}, the {@link ViewTreeObserver} that we are registered to. */
-    private ViewTreeObserver mViewTreeObserver;
-
-    private boolean mIncludePadding;
+    private @Nullable ViewTreeObserver mViewTreeObserver;
 
     /**
      * Creates an instance of a {@link ViewRectProvider}.
+     *
      * @param view The {@link View} used to generate a {@link Rect}.
      */
     public ViewRectProvider(View view) {
+        this(view, ViewRectUpdater::new);
+    }
+
+    public ViewRectProvider(View view, ViewRectUpdateStrategyFactory factory) {
         mView = view;
-        mCachedWindowCoordinates[0] = -1;
-        mCachedWindowCoordinates[1] = -1;
+        mUpdateStrategy = factory.create(view, mRect, this::notifyRectChanged);
     }
 
     /**
@@ -41,25 +100,35 @@ public class ViewRectProvider extends RectProvider
      * when creating the {@link Rect}.
      */
     public void setInsetPx(int left, int top, int right, int bottom) {
-        mInsetRect.set(left, top, right, bottom);
-        refreshRectBounds();
+        setInsetPx(new Rect(left, top, right, bottom));
+    }
+
+    /** See {@link ViewRectUpdateStrategy#setInsetPx(Rect)}. */
+    public void setInsetPx(Rect insetRect) {
+        mUpdateStrategy.setInsetPx(insetRect);
     }
 
     /**
-     * Specifies the inset values in pixels that determine how to shrink the {@link View} bounds
+     * Specifies the margin values in pixels that determine how to expand the {@link View} bounds
      * when creating the {@link Rect}.
      */
-    public void setInsetPx(Rect insetRect) {
-        mInsetRect.set(insetRect);
-        refreshRectBounds();
+    public void setMarginPx(int left, int top, int right, int bottom) {
+        setMarginPx(new Rect(left, top, right, bottom));
     }
 
-    /**
-     * Whether padding should be included in the {@link Rect} for the {@link View}.
-     * @param includePadding Whether padding should be included. Defaults to false.
-     */
+    /** See {@link ViewRectUpdateStrategy#setMarginPx(Rect)}. */
+    public void setMarginPx(Rect marginRect) {
+        mUpdateStrategy.setMarginPx(marginRect);
+    }
+
+    /** See {@link ViewRectUpdateStrategy#setIncludePadding(boolean)}. */
     public void setIncludePadding(boolean includePadding) {
-        mIncludePadding = includePadding;
+        mUpdateStrategy.setIncludePadding(includePadding);
+    }
+
+    /** See {@link ViewRectUpdateStrategy#setUseCenter(boolean)}. */
+    public void setUseCenter(boolean useCenterPoint) {
+        mUpdateStrategy.setUseCenter(useCenterPoint);
     }
 
     @Override
@@ -69,7 +138,7 @@ public class ViewRectProvider extends RectProvider
         mViewTreeObserver.addOnGlobalLayoutListener(this);
         mViewTreeObserver.addOnPreDrawListener(this);
 
-        refreshRectBounds();
+        refreshRectBounds(/* forceRefresh= */ false);
 
         super.startObserving(observer);
     }
@@ -99,7 +168,7 @@ public class ViewRectProvider extends RectProvider
         if (!mView.isShown()) {
             notifyRectHidden();
         } else {
-            refreshRectBounds();
+            refreshRectBounds(/* forceRefresh= */ false);
         }
 
         return true;
@@ -114,48 +183,20 @@ public class ViewRectProvider extends RectProvider
         notifyRectHidden();
     }
 
-    private void refreshRectBounds() {
-        int previousPositionX = mCachedWindowCoordinates[0];
-        int previousPositionY = mCachedWindowCoordinates[1];
-        mView.getLocationInWindow(mCachedWindowCoordinates);
+    /**
+     * @param forceRefresh Whether the rect bounds should be refreshed even when the window
+     *     coordinates and view sizes haven't changed. This is needed when inset or padding changes.
+     */
+    private void refreshRectBounds(boolean forceRefresh) {
+        mUpdateStrategy.refreshRectBounds(forceRefresh);
+    }
 
-        mCachedWindowCoordinates[0] = Math.max(mCachedWindowCoordinates[0], 0);
-        mCachedWindowCoordinates[1] = Math.max(mCachedWindowCoordinates[1], 0);
+    /** Returns true if the view is shown. */
+    public boolean isViewShown() {
+        return mView.isShown();
+    }
 
-        // Return if the window coordinates haven't changed.
-        if (mCachedWindowCoordinates[0] == previousPositionX
-                && mCachedWindowCoordinates[1] == previousPositionY) {
-            return;
-        }
-
-        mRect.left = mCachedWindowCoordinates[0];
-        mRect.top = mCachedWindowCoordinates[1];
-        mRect.right = mRect.left + mView.getWidth();
-        mRect.bottom = mRect.top + mView.getHeight();
-
-        mRect.left += mInsetRect.left;
-        mRect.top += mInsetRect.top;
-        mRect.right -= mInsetRect.right;
-        mRect.bottom -= mInsetRect.bottom;
-
-        // Account for the padding.
-        if (!mIncludePadding) {
-            boolean isRtl = mView.getLayoutDirection() == View.LAYOUT_DIRECTION_RTL;
-            mRect.left +=
-                    isRtl ? ViewCompat.getPaddingEnd(mView) : ViewCompat.getPaddingStart(mView);
-            mRect.right -=
-                    isRtl ? ViewCompat.getPaddingStart(mView) : ViewCompat.getPaddingEnd(mView);
-            mRect.top += mView.getPaddingTop();
-            mRect.bottom -= mView.getPaddingBottom();
-        }
-
-        // Make sure we still have a valid Rect after applying the inset.
-        mRect.right = Math.max(mRect.left, mRect.right);
-        mRect.bottom = Math.max(mRect.top, mRect.bottom);
-
-        mRect.right = Math.min(mRect.right, mView.getRootView().getWidth());
-        mRect.bottom = Math.min(mRect.bottom, mView.getRootView().getHeight());
-
-        notifyRectChanged();
+    public View getViewForTesting() {
+        return mView;
     }
 }

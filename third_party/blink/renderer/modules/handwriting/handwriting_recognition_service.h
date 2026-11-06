@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,7 +16,8 @@ namespace blink {
 
 class ExecutionContext;
 class HandwritingModelConstraint;
-class HandwritingFeatureQuery;
+class HandwritingRecognizer;
+class HandwritingRecognizerQueryResult;
 class ScriptState;
 
 class HandwritingRecognitionService final
@@ -30,16 +31,16 @@ class HandwritingRecognitionService final
   static HandwritingRecognitionService& From(Navigator&);
 
   // IDL Interface:
-  static ScriptPromise createHandwritingRecognizer(
+  static ScriptPromise<HandwritingRecognizer> createHandwritingRecognizer(
       ScriptState*,
       Navigator&,
       const HandwritingModelConstraint*,
       ExceptionState&);
-  static ScriptPromise queryHandwritingRecognizerSupport(
-      ScriptState*,
-      Navigator&,
-      const HandwritingFeatureQuery*,
-      ExceptionState&);
+  static ScriptPromise<IDLNullable<HandwritingRecognizerQueryResult>>
+  queryHandwritingRecognizer(ScriptState*,
+                             Navigator&,
+                             const HandwritingModelConstraint*,
+                             ExceptionState&);
 
   void Trace(Visitor* visitor) const override;
 
@@ -49,14 +50,15 @@ class HandwritingRecognitionService final
   // detached) and an exception will be thrown.
   // Otherwise returns true.
   bool BootstrapMojoConnectionIfNeeded(ScriptState*, ExceptionState&);
-  ScriptPromise CreateHandwritingRecognizer(ScriptState*,
-                                            const HandwritingModelConstraint*,
-                                            ExceptionState&);
-
-  ScriptPromise QueryHandwritingRecognizerSupport(
+  ScriptPromise<HandwritingRecognizer> CreateHandwritingRecognizer(
       ScriptState*,
-      const HandwritingFeatureQuery*,
+      const HandwritingModelConstraint*,
       ExceptionState&);
+
+  ScriptPromise<IDLNullable<HandwritingRecognizerQueryResult>>
+  QueryHandwritingRecognizer(ScriptState*,
+                             const HandwritingModelConstraint* constraint,
+                             ExceptionState&);
 
   HeapMojoRemote<handwriting::mojom::blink::HandwritingRecognitionService>
       remote_service_;

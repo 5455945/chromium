@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -93,8 +93,10 @@
 #ifndef MEDIA_AUDIO_WIN_AUDIO_LOW_LATENCY_OUTPUT_WIN_H_
 #define MEDIA_AUDIO_WIN_AUDIO_LOW_LATENCY_OUTPUT_WIN_H_
 
-#include <Audioclient.h>
 #include <MMDeviceAPI.h>
+
+#include <Audioclient.h>
+#include <audiopolicy.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <wrl/client.h>
@@ -103,15 +105,19 @@
 #include <string>
 
 #include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/simple_thread.h"
+#include "base/time/time.h"
+#include "base/unguessable_token.h"
 #include "base/win/scoped_co_mem.h"
 #include "base/win/scoped_com_initializer.h"
 #include "base/win/scoped_handle.h"
 #include "media/audio/audio_io.h"
+#include "media/audio/system_glitch_reporter.h"
 #include "media/audio/win/audio_manager_win.h"
+#include "media/base/audio_glitch_info.h"
 #include "media/base/audio_parameters.h"
 #include "media/base/media_export.h"
 
@@ -119,10 +125,11 @@ namespace media {
 
 class AudioManagerWin;
 class AudioSessionEventListener;
+class AmplitudePeakDetector;
 
 // AudioOutputStream implementation using Windows Core Audio APIs.
-class MEDIA_EXPORT WASAPIAudioOutputStream :
-      public AudioOutputStream,
+class MEDIA_EXPORT WASAPIAudioOutputStream
+    : public AudioOutputStream,
       public base::DelegateSimpleThread::Delegate {
  public:
   // The ctor takes all the usual parameters, plus |manager| which is the
@@ -132,6 +139,9 @@ class MEDIA_EXPORT WASAPIAudioOutputStream :
                           const AudioParameters& params,
                           ERole device_role,
                           AudioManager::LogCallback log_callback);
+
+  WASAPIAudioOutputStream(const WASAPIAudioOutputStream&) = delete;
+  WASAPIAudioOutputStream& operator=(const WASAPIAudioOutputStream&) = delete;
 
   // The dtor is typically called by the AudioManager only and it is usually
   // triggered by calling AudioOutputStream::Close().
@@ -150,10 +160,68 @@ class MEDIA_EXPORT WASAPIAudioOutputStream :
   // as command-line flag and AUDCLNT_SHAREMODE_SHARED otherwise (default).
   static AUDCLNT_SHAREMODE GetShareMode();
 
-  bool started() const { return render_thread_.get() != NULL; }
+  bool started() const { return render_thread_ != nullptr; }
+
+  // Handles glitch detection, buffer underrun checks, recovery grouping,
+  // and reporting glitch metrics to UMA and text logs.
+  // Public for unit testing.
+  class MEDIA_EXPORT GlitchDetector {
+   public:
+    explicit GlitchDetector(base::TimeDelta buffer_duration);
+    ~GlitchDetector();
+
+    // Resets state between playout streams or test cases.
+    void Reset();
+
+    // Evaluates the render callback state (audio clock position, QPC time, and
+    // buffer padding) to detect glitches and accumulate lost duration across
+    // buffer recovery windows.
+    // Note: `device_position` has undefined units and is meaningful only in
+    // relation to `device_frequency` from IAudioClock::GetFrequency().
+    void ProcessRenderCallback(uint64_t device_position,
+                               uint64_t qpc_position,
+                               uint64_t device_frequency,
+                               uint32_t current_padding_frames,
+                               size_t packet_size_frames,
+                               bool is_shared_mode);
+
+    // Extracts accumulated glitch info to hand to OnMoreData().
+    [[nodiscard]] AudioGlitchInfo GetGlitchInfoAndReset();
+
+    // Returns long-term glitch stats for stream end logging and UMA reporting.
+    [[nodiscard]] SystemGlitchReporter::Stats GetLongTermStatsAndReset();
+
+   private:
+    // Maximum number of consecutive callbacks (~100ms for 10ms packets) to
+    // keep the recovery window active while the client refills the endpoint
+    // buffer and the hardware playout clock resynchronizes to real time.
+    // If playout has not caught up after this limit, the recovery window
+    // times out and commits the accumulated lost duration.
+    static constexpr int kRecoveryWindowCallbacks = 10;
+
+    // Number of callbacks that a recent empty buffer remains valid for.
+    // When buffer padding drops below one packet on callback N, the hardware
+    // playout clock position gap often registers on callback N+1 after the
+    // client writes a refill packet. Keeping this at 2 callbacks bridges this
+    // 1-callback offset across the refill boundary.
+    static constexpr int kRecentEmptyBufferCallbacks = 2;
+
+    const base::TimeDelta glitch_threshold_;
+
+    bool initialized_ = false;
+    uint64_t last_device_position_ = 0;
+    uint64_t last_qpc_position_ = 0;
+
+    int recovery_window_countdown_ = 0;
+    int recent_empty_buffer_countdown_ = 0;
+    base::TimeDelta accumulated_glitch_duration_;
+
+    SystemGlitchReporter glitch_reporter_;
+    AudioGlitchInfo::Accumulator glitch_info_accumulator_;
+  };
 
  private:
-  void SendLogMessage(const char* format, ...) PRINTF_FORMAT(2, 3);
+  void SendLogMessage(std::string message);
 
   // DelegateSimpleThread::Delegate implementation.
   void Run() override;
@@ -162,7 +230,7 @@ class MEDIA_EXPORT WASAPIAudioOutputStream :
   // Checks available amount of space in the endpoint buffer and reads
   // data from the client to fill up the buffer without causing audio
   // glitches.
-  bool RenderAudioFromSource(UINT64 device_frequency);
+  HRESULT RenderAudioFromSource(UINT64 device_frequency);
 
   // Called when the device will be opened in exclusive mode and use the
   // application specified format.
@@ -180,14 +248,32 @@ class MEDIA_EXPORT WASAPIAudioOutputStream :
   // Reports audio stream glitch stats and resets them to their initial values.
   void ReportAndResetStats();
 
+  // Start or stop listening for Windows audio session disconnected events. Uses
+  // `audio_session_control_` to call
+  // IAudioSessionControl::Register/UnregisterAudioSessionNotification() with
+  // `session_listener_` as the event target.
+  void StartAudioSessionEventListener();
+  void StopAudioSessionEventListener();
+
   // Called by AudioSessionEventListener() when a device change occurs.
   void OnDeviceChanged();
+
+  // Set up the desired render format specified by the client.
+  void SetupWaveFormat();
+
+  const base::UnguessableToken id_;
 
   // Contains the thread ID of the creating thread.
   const base::PlatformThreadId creating_thread_id_;
 
   // Our creator, the audio manager needs to be notified when we close.
-  AudioManagerWin* const manager_;
+  const raw_ptr<AudioManagerWin> manager_;
+
+  // Handles glitch detection, buffer underrun checks, recovery grouping,
+  // and reporting glitch metrics to UMA and text logs.
+  std::unique_ptr<GlitchDetector> glitch_detector_;
+
+  std::unique_ptr<AmplitudePeakDetector> peak_detector_;
 
   // Rendering is driven by this thread (which has no message loop).
   // All OnMoreData() callbacks will be called from this thread.
@@ -197,6 +283,9 @@ class MEDIA_EXPORT WASAPIAudioOutputStream :
   // Extended PCM waveform format structure based on WAVEFORMATEXTENSIBLE.
   // Use this for multiple channel and hi-resolution PCM data.
   WAVEFORMATPCMEX format_;
+
+  // AudioParameters from the constructor.
+  const AudioParameters params_;
 
   // Set to true when stream is successfully opened.
   bool opened_;
@@ -233,23 +322,8 @@ class MEDIA_EXPORT WASAPIAudioOutputStream :
   // Counts the number of audio frames written to the endpoint buffer.
   UINT64 num_written_frames_;
 
-  // The position read during the last call to RenderAudioFromSource
-  UINT64 last_position_ = 0;
-
-  // The performance counter read during the last call to RenderAudioFromSource
-  UINT64 last_qpc_position_ = 0;
-
-  // The number of glitches detected while this stream was active.
-  int num_glitches_detected_ = 0;
-
-  // The approximate amount of audio lost due to glitches.
-  base::TimeDelta cumulative_audio_lost_;
-
-  // The largest single glitch recorded.
-  base::TimeDelta largest_glitch_;
-
   // Pointer to the client that will deliver audio samples to be played out.
-  AudioSourceCallback* source_;
+  raw_ptr<AudioSourceCallback> source_;
 
   // Callback to send log messages to registered clients.
   AudioManager::LogCallback log_callback_;
@@ -275,14 +349,17 @@ class MEDIA_EXPORT WASAPIAudioOutputStream :
   Microsoft::WRL::ComPtr<IAudioClock> audio_clock_;
 
   bool device_changed_ = false;
-  std::unique_ptr<AudioSessionEventListener> session_listener_;
+
+  bool enable_audio_offload_ = false;
+
+  // Generates Windows audio session events for `session_listener_` to handle.
+  Microsoft::WRL::ComPtr<IAudioSessionControl> audio_session_control_;
+  Microsoft::WRL::ComPtr<AudioSessionEventListener> session_listener_;
 
   // Since AudioSessionEventListener needs to posts tasks back to the audio
   // thread, it's possible to end up in a state where that task would execute
   // after destruction of this class -- so use a WeakPtr to cancel safely.
   base::WeakPtrFactory<WASAPIAudioOutputStream> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(WASAPIAudioOutputStream);
 };
 
 }  // namespace media

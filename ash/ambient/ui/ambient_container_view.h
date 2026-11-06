@@ -1,39 +1,36 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ASH_AMBIENT_UI_AMBIENT_CONTAINER_VIEW_H_
 #define ASH_AMBIENT_UI_AMBIENT_CONTAINER_VIEW_H_
 
+#include <memory>
+
 #include "ash/ash_export.h"
-#include "base/macros.h"
 #include "ui/views/view.h"
 
 namespace ash {
 
-class AmbientAssistantContainerView;
-class AmbientViewDelegate;
-class PhotoView;
+class AmbientUiSettings;
 
 // Container view to display all Ambient Mode related views, i.e. photo frame,
 // weather info.
 class ASH_EXPORT AmbientContainerView : public views::View {
- public:
-  METADATA_HEADER(AmbientContainerView);
+  METADATA_HEADER(AmbientContainerView, views::View)
 
-  explicit AmbientContainerView(AmbientViewDelegate* delegate);
+ public:
+  // |main_rendering_view| should contain the primary content; it becomes a
+  // child of |AmbientContainerView|, and |AmbientContainerView| sets up some
+  // parameters in the view hierarchy that are common to all ambient UIs.
+  AmbientContainerView(AmbientUiSettings ui_settings,
+                       std::unique_ptr<views::View> main_rendering_view);
   ~AmbientContainerView() override;
 
  private:
   friend class AmbientAshTestBase;
 
-  void Init();
-
-  AmbientViewDelegate* delegate_ = nullptr;
-
-  // Owned by view hierarchy.
-  PhotoView* photo_view_ = nullptr;
-  AmbientAssistantContainerView* ambient_assistant_container_view_ = nullptr;
+  void InitializeCommonSettings();
 };
 
 }  // namespace ash

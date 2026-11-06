@@ -1,21 +1,26 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_PLATFORM_WINDOW_PLATFORM_WINDOW_INIT_PROPERTIES_H_
 #define UI_PLATFORM_WINDOW_PLATFORM_WINDOW_INIT_PROPERTIES_H_
 
+#include <optional>
 #include <string>
 
 #include "base/component_export.h"
+#include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "third_party/skia/include/core/SkColor.h"
+#include "ui/base/ui_base_types.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
-#if defined(OS_FUCHSIA)
+#if BUILDFLAG(IS_FUCHSIA)
+#include <fuchsia/element/cpp/fidl.h>
+#include <fuchsia/ui/composition/cpp/fidl.h>
 #include <fuchsia/ui/views/cpp/fidl.h>
-#include <lib/ui/scenic/cpp/view_ref_pair.h>
+#include <ui/platform_window/fuchsia/view_ref_pair.h>
 #endif
 
 namespace gfx {
@@ -47,7 +52,11 @@ enum class PlatformWindowShadowType {
 
 class WorkspaceExtensionDelegate;
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_FUCHSIA)
+class ScenicWindowDelegate;
+#endif
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 class X11ExtensionDelegate;
 #endif
 
@@ -57,11 +66,10 @@ struct COMPONENT_EXPORT(PLATFORM_WINDOW) PlatformWindowInitProperties {
   PlatformWindowInitProperties();
 
   // Initializes properties with the specified |bounds|.
-  explicit PlatformWindowInitProperties(
-      const gfx::Rect& bounds,
-      bool enable_compositing_based_throttling = false);
+  explicit PlatformWindowInitProperties(const gfx::Rect& bounds);
 
   PlatformWindowInitProperties(PlatformWindowInitProperties&& props);
+  PlatformWindowInitProperties& operator=(PlatformWindowInitProperties&&);
 
   ~PlatformWindowInitProperties();
 
@@ -76,33 +84,46 @@ struct COMPONENT_EXPORT(PLATFORM_WINDOW) PlatformWindowInitProperties {
   // Widget::InitProperties::WindowOpacity.
   PlatformWindowOpacity opacity = PlatformWindowOpacity::kOpaqueWindow;
 
-#if defined(OS_FUCHSIA)
+#if BUILDFLAG(IS_FUCHSIA)
+  // Scenic 3D API uses `view_token` for links, whereas Flatland
+  // API uses `view_creation_token`. Therefore, at most one of these fields must
+  // be set. If `allow_null_view_token_for_test` is true, they may both be
+  // false.
   fuchsia::ui::views::ViewToken view_token;
-  scenic::ViewRefPair view_ref_pair;
-  static bool allow_null_view_token_for_test;
+  fuchsia::ui::views::ViewCreationToken view_creation_token;
+
+  ViewRefPair view_ref_pair;
+
+  // Used to coordinate window closure requests with the shell.
+  fuchsia::element::ViewControllerPtr view_controller;
 
   // Specifies whether handling of keypress events from the system is enabled.
   bool enable_keyboard = false;
 
   // Specifies whether system virtual keyboard support is enabled.
   bool enable_virtual_keyboard = false;
+
+  raw_ptr<ScenicWindowDelegate> scenic_window_delegate = nullptr;
 #endif
 
+  // See Widget::InitParams for details.
+  bool accept_events = true;
   bool activatable = true;
-  bool force_show_in_taskbar;
   bool keep_on_top = false;
+  bool is_security_surface = false;
   bool visible_on_all_workspaces = false;
   bool remove_standard_frame = false;
   std::string workspace;
+  ZOrderLevel z_order = ZOrderLevel::kNormal;
 
-  WorkspaceExtensionDelegate* workspace_extension_delegate = nullptr;
+  raw_ptr<WorkspaceExtensionDelegate> workspace_extension_delegate = nullptr;
 
   PlatformWindowShadowType shadow_type = PlatformWindowShadowType::kDefault;
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   bool prefer_dark_theme = false;
-  gfx::ImageSkia* icon = nullptr;
-  absl::optional<int> background_color;
+  raw_ptr<gfx::ImageSkia> icon = nullptr;
+  std::optional<SkColor> background_color;
 
   // Specifies the res_name and res_class fields,
   // respectively, of the WM_CLASS window property. Controls window grouping
@@ -111,10 +132,35 @@ struct COMPONENT_EXPORT(PLATFORM_WINDOW) PlatformWindowInitProperties {
   std::string wm_class_name;
   std::string wm_class_class;
 
-  X11ExtensionDelegate* x11_extension_delegate = nullptr;
+  raw_ptr<X11ExtensionDelegate> x11_extension_delegate = nullptr;
+
+  // Wayland specific.  Holds the application ID that is used by the window
+  // manager to match the desktop entry and group windows.
+  std::string wayland_app_id;
+  // The startup ID (or XDG activation token) used to associate the window
+  // with the launch event that created it. Used for both X11 and Wayland.
+  std::string startup_id;
+
+  // Specifies the id of the target display the window will be created on.
+  std::optional<int64_t> display_id;
+#endif
+
+#if BUILDFLAG(IS_OZONE)
+  // Specifies whether the current window requests key-events that matches
+  // system shortcuts.
+  bool inhibit_keyboard_shortcuts = false;
+
+  // Session Management related properties. Analogue to ui::PlatformSessionData
+  // fields though as separate variables to avoid platform_window => ozone
+  // circular dependency.
+  std::string session_id;
+  int32_t session_window_new_id = 0;
+  std::optional<int32_t> session_window_restore_id;
 #endif
 
   bool enable_compositing_based_throttling = false;
+
+  size_t compositor_memory_limit_mb = 0;
 };
 
 }  // namespace ui

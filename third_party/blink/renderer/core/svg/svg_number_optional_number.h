@@ -33,7 +33,7 @@
 
 #include "third_party/blink/renderer/core/svg/svg_number.h"
 #include "third_party/blink/renderer/core/svg/svg_parsing_error.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
 
 namespace blink {
@@ -47,14 +47,13 @@ class SVGNumberOptionalNumber final : public SVGPropertyBase {
   SVGNumberOptionalNumber(SVGNumber* first_number, SVGNumber* second_number);
 
   SVGNumberOptionalNumber* Clone() const;
-  SVGPropertyBase* CloneForAnimation(const String&) const override;
 
   String ValueAsString() const override;
   SVGParsingError SetValueAsString(const String&);
   void SetInitial(unsigned);
   static constexpr int kInitialValueBits = SVGNumber::kInitialValueBits;
 
-  void Add(const SVGPropertyBase*, const SVGElement*) override;
+  bool Add(const SVGPropertyBase*, const SVGElement*) override;
   void CalculateAnimatedValue(
       const SMILAnimationEffectParameters&,
       float percentage,
@@ -71,8 +70,8 @@ class SVGNumberOptionalNumber final : public SVGPropertyBase {
   }
   AnimatedPropertyType GetType() const override { return ClassType(); }
 
-  SVGNumber* FirstNumber() const { return first_number_; }
-  SVGNumber* SecondNumber() const { return second_number_; }
+  SVGNumber* FirstNumber() const { return first_number_.Get(); }
+  SVGNumber* SecondNumber() const { return second_number_.Get(); }
 
   void Trace(Visitor*) const override;
 

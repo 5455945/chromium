@@ -29,13 +29,14 @@
 #include "third_party/blink/public/common/page/drag_operation.h"
 #include "third_party/blink/renderer/core/clipboard/data_object.h"
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/core/keywords.h"
 #include "third_party/blink/renderer/core/loader/resource/image_resource_content.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
-#include "third_party/blink/renderer/platform/geometry/int_point.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom-blink-forward.h"
+#include "ui/gfx/geometry/point.h"
 
 namespace blink {
 
@@ -81,8 +82,9 @@ class CORE_EXPORT DataTransfer final : public ScriptWrappable,
   bool IsForDragAndDrop() const { return transfer_type_ == kDragAndDrop; }
 
   AtomicString dropEffect() const {
-    return DropEffectIsInitialized() ? drop_effect_ : "none";
+    return DropEffectIsInitialized() ? drop_effect_ : keywords::kNone;
   }
+  void resetDropEffect();
   void setDropEffect(const AtomicString&);
   bool DropEffectIsInitialized() const { return !drop_effect_.IsNull(); }
   AtomicString effectAllowed() const { return effect_allowed_; }
@@ -98,13 +100,17 @@ class CORE_EXPORT DataTransfer final : public ScriptWrappable,
   Vector<String> types();
   FileList* files() const;
 
-  IntPoint DragLocation() const { return drag_loc_; }
+  // Returns drag location (offset) within the dragged object.  This is (0,0)
+  // unless set by setDragImage().
+  gfx::Point DragLocation() const { return drag_loc_; }
+
   void setDragImage(Element*, int x, int y);
   void ClearDragImage();
-  void SetDragImageResource(ImageResourceContent*, const IntPoint&);
-  void SetDragImageElement(Node*, const IntPoint&);
+  void SetDragImageResource(ImageResourceContent*, const gfx::Point&);
+  void SetDragImageElement(Node*, const gfx::Point&);
 
-  std::unique_ptr<DragImage> CreateDragImage(IntPoint& drag_location,
+  std::unique_ptr<DragImage> CreateDragImage(gfx::Point& drag_location,
+                                             float device_scale_factor,
                                              LocalFrame*) const;
   void DeclareAndWriteDragImage(Element*,
                                 const KURL& link_url,
@@ -126,7 +132,9 @@ class CORE_EXPORT DataTransfer final : public ScriptWrappable,
 
   DragOperationsMask SourceOperation() const;
   ui::mojom::blink::DragOperation DestinationOperation() const;
+  void SetSourceEffectAllowed(const AtomicString&);
   void SetSourceOperation(DragOperationsMask);
+  void SetDestinationOperationFromEffectAllowed();
   void SetDestinationOperation(ui::mojom::blink::DragOperation);
 
   DataTransferItemList* items();
@@ -134,21 +142,17 @@ class CORE_EXPORT DataTransfer final : public ScriptWrappable,
   DataObject* GetDataObject() const;
 
   // Clip to the visible area of the visual viewport.
-  static FloatRect ClipByVisualViewport(const FloatRect& rect_in_document,
-                                        const LocalFrame&);
+  static gfx::RectF ClipByVisualViewport(const gfx::RectF& rect_in_document,
+                                         const LocalFrame&);
 
-  // Returns the size with device scale factor and page scale factor applied.
-  static FloatSize DeviceSpaceSize(const FloatSize& css_size,
-                                   const LocalFrame&);
-
-  // |css_size| is the size of the image in CSS pixels.
-  // |paint_offset| is the offset from the origin of the dragged
-  // object of the PaintRecordBuilder.
+  // |layout_size| is the size of the image in layout pixels.
+  // |paint_offset| is the offset from the origin of the dragged object of the
+  // PaintRecordBuilder.
   static std::unique_ptr<DragImage> CreateDragImageForFrame(
       LocalFrame&,
       float,
-      const FloatSize& css_size,
-      const FloatPoint& paint_offset,
+      const gfx::SizeF& layout_size,
+      const gfx::Vector2dF& paint_offset,
       PaintRecordBuilder&,
       const PropertyTreeState&);
   static std::unique_ptr<DragImage> NodeImage(LocalFrame&, Node&);
@@ -156,10 +160,7 @@ class CORE_EXPORT DataTransfer final : public ScriptWrappable,
   void Trace(Visitor*) const override;
 
  private:
-  void setDragImage(ImageResourceContent*, Node*, const IntPoint&);
-
-  bool HasFileOfType(const String&) const;
-  bool HasStringOfType(const String&) const;
+  void setDragImage(ImageResourceContent*, Node*, const gfx::Point&);
 
   // DataObject::Observer override.
   void OnItemListChanged() override;
@@ -174,9 +175,10 @@ class CORE_EXPORT DataTransfer final : public ScriptWrappable,
 
   bool data_store_item_list_changed_;
 
-  IntPoint drag_loc_;
+  gfx::Point drag_loc_;
   Member<ImageResourceContent> drag_image_;
   Member<Node> drag_image_element_;
+  Member<FileList> files_;
 };
 
 }  // namespace blink

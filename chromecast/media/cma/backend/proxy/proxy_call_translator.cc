@@ -1,18 +1,17 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chromecast/media/cma/backend/proxy/proxy_call_translator.h"
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/time/time.h"
 #include "chromecast/media/cma/backend/proxy/push_buffer_pending_handler.h"
 #include "chromecast/media/cma/backend/proxy/push_buffer_queue.h"
 #include "chromecast/public/media/decoder_config.h"
 #include "chromecast/public/task_runner.h"
-#include "third_party/openscreen/src/cast/cast_core/api/runtime/cast_audio_channel_service.grpc.pb.h"
-#include "third_party/protobuf/src/google/protobuf/util/time_util.h"
+#include "third_party/cast_core/public/src/proto/runtime/cast_audio_channel_service.grpc.pb.h"
 
 namespace chromecast {
 namespace media {
@@ -35,7 +34,6 @@ CmaProxyHandler::PipelineState ToClientTypes(
       return CmaProxyHandler::PipelineState::kPaused;
     default:
       NOTREACHED();
-      return CmaProxyHandler::PipelineState::kUninitialized;
   }
 }
 
@@ -66,9 +64,11 @@ cast::media::AudioConfiguration_AudioCodec ToGrpcTypes(AudioCodec codec) {
     case kCodecMpegHAudio:
       return cast::media::
           AudioConfiguration_AudioCodec_AUDIO_CODEC_MPEG_H_AUDIO;
+    case kCodecDTSXP2:
+    case kCodecDTSE:
+      return cast::media::AudioConfiguration_AudioCodec_AUDIO_CODEC_UNKNOWN;
     default:
       NOTREACHED();
-      return cast::media::AudioConfiguration_AudioCodec_AUDIO_CODEC_UNKNOWN;
   }
 }
 
@@ -94,8 +94,6 @@ cast::media::AudioConfiguration_ChannelLayout ToGrpcTypes(
           AudioConfiguration_ChannelLayout_CHANNEL_LAYOUT_DISCRETE;
     default:
       NOTREACHED();
-      return cast::media::
-          AudioConfiguration_ChannelLayout_CHANNEL_LAYOUT_UNSUPPORTED;
   }
 }
 
@@ -123,9 +121,10 @@ cast::media::AudioConfiguration_SampleFormat ToGrpcTypes(
           AudioConfiguration_SampleFormat_SAMPLE_FORMAT_PLANAR_S32;
     case kSampleFormatS24:
       return cast::media::AudioConfiguration_SampleFormat_SAMPLE_FORMAT_S24;
+    case kSampleFormatPlanarU8:
+      return cast::media::AudioConfiguration_SampleFormat_SAMPLE_FORMAT_UNKNOWN;
     default:
       NOTREACHED();
-      return cast::media::AudioConfiguration_SampleFormat_SAMPLE_FORMAT_UNKNOWN;
   }
 }
 
@@ -190,9 +189,13 @@ CastRuntimeAudioChannelBroker::TimestampInfo ToGrpcTypes(
     const BufferIdManager::TargetBufferInfo& target_buffer) {
   CastRuntimeAudioChannelBroker::TimestampInfo ts_info;
   ts_info.set_buffer_id(target_buffer.buffer_id);
-  *ts_info.mutable_system_timestamp() =
-      google::protobuf::util::TimeUtil::MicrosecondsToDuration(
-          target_buffer.timestamp_micros);
+  cast::common::Duration cc_duration;
+  cc_duration.set_seconds(target_buffer.timestamp_micros /
+                          base::Time::kMicrosecondsPerSecond);
+  cc_duration.set_nanoseconds(
+      (target_buffer.timestamp_micros % base::Time::kMicrosecondsPerSecond) *
+      base::Time::kNanosecondsPerMicrosecond);
+  *ts_info.mutable_system_timestamp() = std::move(cc_duration);
   return ts_info;
 }
 
@@ -227,9 +230,9 @@ ProxyCallTranslator::ProxyCallTranslator(
       client_(client),
       push_buffer_handler_(client_task_runner, push_buffer_client),
       weak_factory_(this) {
-  DCHECK(decoder_channel_.get());
-  DCHECK(client_task_runner_);
-  DCHECK(client_);
+  CHECK(decoder_channel_.get(), base::NotFatalUntil::M163);
+  CHECK(client_task_runner_, base::NotFatalUntil::M163);
+  CHECK(client_, base::NotFatalUntil::M163);
 }
 
 ProxyCallTranslator::~ProxyCallTranslator() = default;
@@ -268,6 +271,12 @@ void ProxyCallTranslator::SetVolume(float multiplier) {
 }
 
 bool ProxyCallTranslator::SetConfig(const AudioConfig& config) {
+  if (!IsValidConfig(config) ||
+      config.codec == kCodecDTSXP2 ||
+      config.codec == kCodecDTSE ||
+      config.sample_format == kSampleFormatPlanarU8) {
+    return false;
+  }
   return push_buffer_handler_.PushBuffer(ToGrpcTypes(config)) !=
          CmaBackend::BufferStatus::kBufferFailed;
 }
@@ -284,7 +293,7 @@ CmaBackend::BufferStatus ProxyCallTranslator::PushBuffer(
       ToGrpcTypes(std::move(buffer), buffer_id));
 }
 
-absl::optional<ProxyCallTranslator::PushBufferRequest>
+std::optional<ProxyCallTranslator::PushBufferRequest>
 ProxyCallTranslator::GetBufferedData() {
   return push_buffer_handler_.GetBufferedData();
 }
@@ -335,7 +344,7 @@ void ProxyCallTranslator::HandlePushBufferResponse(
 }
 
 void ProxyCallTranslator::HandleGetMediaTimeResponse(
-    absl::optional<MediaTime> time,
+    std::optional<MediaTime> time,
     CastRuntimeAudioChannelBroker::StatusCode status) {
   NOTREACHED();
 }

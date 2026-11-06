@@ -1,15 +1,17 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/network/trust_tokens/trust_token_key_commitments.h"
+
+#include <algorithm>
+#include <array>
 
 #include "base/base64.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_command_line.h"
 #include "base/test/task_environment.h"
 #include "services/network/public/cpp/network_switches.h"
-#include "services/network/public/mojom/trust_tokens.mojom-forward.h"
 #include "services/network/public/mojom/trust_tokens.mojom.h"
 #include "services/network/trust_tokens/suitable_trust_token_origin.h"
 #include "services/network/trust_tokens/trust_token_parameterization.h"
@@ -110,15 +112,15 @@ TEST(TrustTokenKeyCommitments, CantRetrieveRecordForOriginNotPresent) {
 TEST(TrustTokenKeyCommitments, MultipleOrigins) {
   TrustTokenKeyCommitments commitments;
 
-  SuitableTrustTokenOrigin origins[] = {
+  auto origins = std::to_array<SuitableTrustTokenOrigin>({
       *SuitableTrustTokenOrigin::Create(GURL("https://an-origin.example")),
       *SuitableTrustTokenOrigin::Create(GURL("https://another-origin.example")),
-  };
+  });
 
-  mojom::TrustTokenKeyCommitmentResultPtr expectations[] = {
+  auto expectations = std::to_array<mojom::TrustTokenKeyCommitmentResultPtr>({
       mojom::TrustTokenKeyCommitmentResult::New(),
       mojom::TrustTokenKeyCommitmentResult::New(),
-  };
+  });
 
   expectations[0]->protocol_version =
       mojom::TrustTokenProtocolVersion::kTrustTokenV3Pmb;
@@ -144,8 +146,9 @@ TEST(TrustTokenKeyCommitments, MultipleOrigins) {
 TEST(TrustTokenKeyCommitments, ParseAndSet) {
   TrustTokenKeyCommitments commitments;
   commitments.ParseAndSet(
-      R"( { "https://issuer.example": { "TrustTokenV3PMB": {
-      "protocol_version": "TrustTokenV3PMB", "id": 1, "batchsize": 5 } } } )");
+      R"( { "https://issuer.example": { "PrivateStateTokenV1VOPRF": {
+      "protocol_version": "PrivateStateTokenV1VOPRF", "id": 1,
+      "batchsize": 5 } } } )");
 
   EXPECT_TRUE(GetCommitmentForOrigin(
       commitments,
@@ -156,8 +159,9 @@ TEST(TrustTokenKeyCommitments, KeysFromCommandLine) {
   base::test::ScopedCommandLine command_line;
   command_line.GetProcessCommandLine()->AppendSwitchASCII(
       switches::kAdditionalTrustTokenKeyCommitments,
-      R"( { "https://issuer.example": { "TrustTokenV3PMB": {
-      "protocol_version": "TrustTokenV3PMB", "id": 1, "batchsize": 5 } }} )");
+      R"( { "https://issuer.example": { "PrivateStateTokenV1VOPRF": {
+      "protocol_version": "PrivateStateTokenV1VOPRF", "id": 1,
+      "batchsize": 5 } }} )");
 
   TrustTokenKeyCommitments commitments;
 
@@ -166,15 +170,16 @@ TEST(TrustTokenKeyCommitments, KeysFromCommandLine) {
       *SuitableTrustTokenOrigin::Create(GURL("https://issuer.example"))));
 
   commitments.ParseAndSet(
-      R"( { "https://issuer.example": { "TrustTokenV3PMB": {
-      "protocol_version": "TrustTokenV3PMB", "id": 1, "batchsize": 10 } }} )");
+      R"( { "https://issuer.example": { "PrivateStateTokenV1VOPRF": {
+      "protocol_version": "PrivateStateTokenV1VOPRF", "id": 1,
+      "batchsize": 10 } }} )");
 
   auto result = GetCommitmentForOrigin(
       commitments,
       *SuitableTrustTokenOrigin::Create(GURL("https://issuer.example")));
   ASSERT_TRUE(result);
   EXPECT_EQ(result->protocol_version,
-            mojom::TrustTokenProtocolVersion::kTrustTokenV3Pmb);
+            mojom::TrustTokenProtocolVersion::kPrivateStateTokenV1Voprf);
   EXPECT_EQ(result->id, 1);
   EXPECT_EQ(result->batch_size, 5);
 }
@@ -189,21 +194,19 @@ TEST(TrustTokenKeyCommitments, FiltersKeys) {
       *SuitableTrustTokenOrigin::Create(GURL("https://an-origin.example"));
   auto commitment_result = mojom::TrustTokenKeyCommitmentResult::New();
   auto expired_key = mojom::TrustTokenVerificationKey::New();
-  expired_key->expiry = base::Time::Now() - base::TimeDelta::FromMinutes(1);
+  expired_key->expiry = base::Time::Now() - base::Minutes(1);
   commitment_result->keys.push_back(std::move(expired_key));
 
   size_t max_keys = TrustTokenMaxKeysForVersion(
       mojom::TrustTokenProtocolVersion::kTrustTokenV3Pmb);
   for (size_t i = 0; i < max_keys; ++i) {
     auto not_expired_key = mojom::TrustTokenVerificationKey::New();
-    not_expired_key->expiry =
-        base::Time::Now() + base::TimeDelta::FromMinutes(1);
+    not_expired_key->expiry = base::Time::Now() + base::Minutes(1);
     commitment_result->keys.push_back(std::move(not_expired_key));
   }
 
   auto late_to_expire_key = mojom::TrustTokenVerificationKey::New();
-  late_to_expire_key->expiry =
-      base::Time::Now() + base::TimeDelta::FromMinutes(2);
+  late_to_expire_key->expiry = base::Time::Now() + base::Minutes(2);
 
   // We expect to get rid of the expired key and the farthest-in-the-future key
   // (since there are more than |max_keys| many keys yet to expire).
@@ -213,12 +216,10 @@ TEST(TrustTokenKeyCommitments, FiltersKeys) {
 
   auto result = GetCommitmentForOrigin(commitments, origin);
   EXPECT_EQ(result->keys.size(), max_keys);
-  EXPECT_TRUE(std::all_of(result->keys.begin(), result->keys.end(),
-                          [](const mojom::TrustTokenVerificationKeyPtr& key) {
-                            return key->expiry ==
-                                   base::Time::Now() +
-                                       base::TimeDelta::FromMinutes(1);
-                          }));
+  EXPECT_TRUE(std::ranges::all_of(
+      result->keys, [](const mojom::TrustTokenVerificationKeyPtr& key) {
+        return key->expiry == base::Time::Now() + base::Minutes(1);
+      }));
 }
 
 TEST(TrustTokenKeyCommitments, GetSync) {

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +8,10 @@
 #define NET_COOKIES_COOKIE_OPTIONS_H_
 
 #include <ostream>
-#include <set>
+#include <string>
 
+#include "base/check_op.h"
 #include "net/base/net_export.h"
-#include "net/cookies/cookie_constants.h"
-#include "net/cookies/cookie_inclusion_status.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "url/gurl.h"
 
 namespace net {
 
@@ -45,10 +42,92 @@ class NET_EXPORT CookieOptions {
     //
     // When adding a field, also update CompleteEquivalenceForTesting.
     struct NET_EXPORT ContextMetadata {
-      // Whether the ContextType calculation was affected by the bugfix for
-      // crbug.com/1166211.
-      // TODO(crbug.com/1166211): Remove once no longer needed.
-      bool affected_by_bugfix_1166211 = false;
+      // Possible "downgrades" for the SameSite context type, e.g. from a more
+      // trusted context to a less trusted context, as a result of some behavior
+      // change affecting the same-site calculation.
+      enum class ContextDowngradeType {
+        // Context not downgraded.
+        kNoDowngrade,
+        // Context was originally strictly same-site, was downgraded to laxly
+        // same-site.
+        kStrictToLax,
+        // Context was originally strictly same-site, was downgraded to
+        // cross-site.
+        kStrictToCross,
+        // Context was originally laxly same-site, was downgraded to cross-site.
+        kLaxToCross,
+      };
+
+      // These values are persisted to logs. Entries should not be renumbered
+      // and numeric values should never be reused.
+      // This enum is to help collect metrics for https://crbug.com/1221316.
+      // Specifically it's to help indicate how many cookies are accessed with a
+      // given redirect type in order to provide a denominator for the
+      // Cookie.CrossSiteRedirectDowngradeChangesInclusion2.* metrics.
+      // Note: for this enum the notation A->B->C means that a navigation from
+      // A to B was redirected to C. I.e.: A is the initator of the navigation
+      // and C is the final url.
+      enum class ContextRedirectTypeBug1221316 {
+        kUnset =
+            0,  // Indicates this value was unused and shouldn't be read. E.x.:
+                // A javascript access means this value is meaningless.
+        kNoRedirect = 1,  // There weren't any redirects. E.x.: A->B, A->A
+        kCrossSiteRedirect =
+            2,  // There was a redirect but it didn't start and
+                // end at the same site or the redirect was to a different site
+                // than the site-for-cookies. E.x.: A->B->C or B->B->B when the
+                // site-for-cookies is A.
+        kPartialSameSiteRedirect =
+            3,  // There was a redirect and the start and
+                // end are the same site. E.x.: A->B->A. Only this one could
+                // potentially set cross_site_redirect_downgrade.
+        kAllSameSiteRedirect = 4,  // There was a redirect and all urls are the
+                                   // same site. E.x.:, A->A->A
+        kMaxValue = kAllSameSiteRedirect
+      };
+
+      // These values are persisted to logs. Entries should not be renumbered
+      // and numeric values should never be reused.
+      enum class HttpMethod {
+        // kUnset indicates this enum wasn't applicable in the context.
+        kUnset = -1,
+        // kUnknown indicates we were unable to convert the method string to
+        // this enum.
+        kUnknown = 0,
+        kGet = 1,
+        kHead = 2,
+        kPost = 3,
+        KPut = 4,
+        kDelete = 5,
+        kConnect = 6,
+        kOptions = 7,
+        kTrace = 8,
+        kPatch = 9,
+        kMaxValue = kPatch
+      };
+
+      friend bool operator==(const ContextMetadata&,
+                             const ContextMetadata&) = default;
+
+      // Records the type of any context downgrade due to a cross-site redirect,
+      // i.e. whether the spec change in
+      // https://github.com/httpwg/http-extensions/pull/1348 changed the result
+      // of the context calculation. Note that a lax-to-cross downgrade can only
+      // happen for response cookies, because a laxly same-site context only
+      // happens for a top-level cross-site request, which cannot be downgraded
+      // due to a cross-site redirect to a non-top-level cross-site request.
+      // This only records whether the context was downgraded, not whether the
+      // cookie's inclusion result was changed.
+      ContextDowngradeType cross_site_redirect_downgrade =
+          ContextDowngradeType::kNoDowngrade;
+
+      // Records if the initiator for this particular request is null. We want
+      // to separately measure when a context downgrade due to cross-site
+      // redirect specifically impacts pages with null initiator.
+      bool has_null_initiator = false;
+
+      ContextRedirectTypeBug1221316 redirect_type_bug_1221316 =
+          ContextRedirectTypeBug1221316::kUnset;
     };
 
     // The following three constructors apply default values for the metadata
@@ -109,31 +188,16 @@ class NET_EXPORT CookieOptions {
     // these getters, since that takes into account the applicable schemeful
     // mode.
     const ContextMetadata& metadata() const { return metadata_; }
+    ContextMetadata& metadata() { return metadata_; }
     const ContextMetadata& schemeful_metadata() const {
       return schemeful_metadata_;
     }
+    ContextMetadata& schemeful_metadata() { return schemeful_metadata_; }
 
     // Sets context types. Does not check for consistency between context and
     // schemeful context. Does not touch the metadata.
     void SetContextTypesForTesting(ContextType context_type,
                                    ContextType schemeful_context_type);
-
-    // Whether the request was affected by the bugfix, either schemefully or
-    // schemelessly. This only takes the current Schemeful Same-Site Feature
-    // status into account, and does not take into account the access semantics
-    // used to access the cookie. (This is fine, because the call sites only
-    // look at cookies which were actually excluded due to SameSite=Lax or
-    // unspecified-Lax, which means that cookies with access semantics not
-    // matching the Feature state will be ignored.)
-    // TODO(crbug.com/1166211): Remove once no longer needed.
-    bool AffectedByBugfix1166211() const;
-
-    // If the cookie was excluded solely due to the bugfix, this applies a
-    // warning to the status that will show up in the netlog. Also logs a
-    // histogram showing whether the warning was applied.
-    // TODO(crbug.com/1166211): Remove once no longer needed.
-    void MaybeApplyBugfix1166211WarningToStatusAndLogHistogram(
-        CookieInclusionStatus& status) const;
 
     // Returns whether the context types and all fields of the metadata structs
     // are the same.
@@ -145,9 +209,6 @@ class NET_EXPORT CookieOptions {
     NET_EXPORT friend bool operator==(
         const CookieOptions::SameSiteCookieContext& lhs,
         const CookieOptions::SameSiteCookieContext& rhs);
-    NET_EXPORT friend bool operator!=(
-        const CookieOptions::SameSiteCookieContext& lhs,
-        const CookieOptions::SameSiteCookieContext& rhs);
 
    private:
     ContextType context_;
@@ -157,30 +218,18 @@ class NET_EXPORT CookieOptions {
     ContextMetadata schemeful_metadata_;
   };
 
-  // Computed in URLRequestHttpJob for every cookie access attempt but is only
-  // relevant for SameParty cookies.
-  enum class SamePartyCookieContextType {
-    // The opposite to kSameParty. Should be the default value.
-    kCrossParty = 0,
-    // If the request URL is in the same First-Party Sets as the top-frame site
-    // and each member of the isolation_info.party_context.
-    kSameParty = 1,
-  };
-
   // Creates a CookieOptions object which:
   //
   // * Excludes HttpOnly cookies
   // * Excludes SameSite cookies
   // * Updates last-accessed time.
   // * Does not report excluded cookies in APIs that can do so.
-  // * Excludes SameParty cookies.
   //
   // These settings can be altered by calling:
   //
   // * |set_{include,exclude}_httponly()|
   // * |set_same_site_cookie_context()|
   // * |set_do_not_update_access_time()|
-  // * |set_same_party_cookie_context_type()|
   CookieOptions();
   CookieOptions(const CookieOptions& other);
   CookieOptions(CookieOptions&& other);
@@ -211,29 +260,6 @@ class NET_EXPORT CookieOptions {
   void unset_return_excluded_cookies() { return_excluded_cookies_ = false; }
   bool return_excluded_cookies() const { return return_excluded_cookies_; }
 
-  // How trusted is the current browser environment when it comes to accessing
-  // SameParty cookies. Default is not trusted, e.g. kCrossParty.
-  void set_same_party_cookie_context_type(
-      SamePartyCookieContextType context_type) {
-    same_party_cookie_context_type_ = context_type;
-  }
-  SamePartyCookieContextType same_party_cookie_context_type() const {
-    return same_party_cookie_context_type_;
-  }
-
-  // Getter/setter of |full_party_context_size_| for logging purposes.
-  void set_full_party_context_size(uint32_t len) {
-    full_party_context_size_ = len;
-  }
-  uint32_t full_party_context_size() const { return full_party_context_size_; }
-
-  void set_is_in_nontrivial_first_party_set(bool is_member) {
-    is_in_nontrivial_first_party_set_ = is_member;
-  }
-  bool is_in_nontrivial_first_party_set() const {
-    return is_in_nontrivial_first_party_set_;
-  }
-
   // Convenience method for where you need a CookieOptions that will
   // work for getting/setting all types of cookies, including HttpOnly and
   // SameSite cookies. Also specifies not to update the access time, because
@@ -249,19 +275,6 @@ class NET_EXPORT CookieOptions {
   SameSiteCookieContext same_site_cookie_context_;
   bool update_access_time_ = true;
   bool return_excluded_cookies_ = false;
-
-  SamePartyCookieContextType same_party_cookie_context_type_ =
-      SamePartyCookieContextType::kCrossParty;
-  // The size of the isolation_info.party_context plus the top-frame site.
-  // Stored for logging purposes.
-  uint32_t full_party_context_size_ = 0;
-  // Whether the site requesting cookie access (as opposed to e.g. the
-  // `site_for_cookies`) is a member (or owner) of a nontrivial First-Party
-  // Set.
-  // This is included here temporarily, for the purpose of ignoring SameParty
-  // for sites that are not participating in the Origin Trial.
-  // TODO(https://crbug.com/1163990): remove this field.
-  bool is_in_nontrivial_first_party_set_ = false;
 };
 
 // Allows gtest to print more helpful error messages instead of printing hex.
@@ -272,12 +285,27 @@ inline void PrintTo(CookieOptions::SameSiteCookieContext::ContextType ct,
   *os << static_cast<int>(ct);
 }
 
+inline void PrintTo(
+    const CookieOptions::SameSiteCookieContext::ContextMetadata& m,
+    std::ostream* os) {
+  *os << "{";
+  *os << " cross_site_redirect_downgrade: "
+      << static_cast<int>(m.cross_site_redirect_downgrade);
+  *os << ", redirect_type_bug_1221316: "
+      << static_cast<int>(m.redirect_type_bug_1221316);
+  *os << " }";
+}
+
 inline void PrintTo(const CookieOptions::SameSiteCookieContext& sscc,
                     std::ostream* os) {
   *os << "{ context: ";
   PrintTo(sscc.context(), os);
   *os << ", schemeful_context: ";
   PrintTo(sscc.schemeful_context(), os);
+  *os << ", metadata: ";
+  PrintTo(sscc.metadata(), os);
+  *os << ", schemeful_metadata: ";
+  PrintTo(sscc.schemeful_metadata(), os);
   *os << " }";
 }
 

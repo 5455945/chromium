@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 #include <stdint.h>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "chrome/browser/sync_file_system/drive_backend/drive_backend_constants.h"
 #include "chrome/browser/sync_file_system/drive_backend/folder_creator.h"
@@ -39,8 +39,7 @@ RegisterAppTask::RegisterAppTask(SyncEngineContext* sync_context,
       create_folder_retry_count_(0),
       app_id_(app_id) {}
 
-RegisterAppTask::~RegisterAppTask() {
-}
+RegisterAppTask::~RegisterAppTask() = default;
 
 bool RegisterAppTask::CanFinishImmediately() {
   return metadata_database() &&
@@ -73,8 +72,9 @@ void RegisterAppTask::RunExclusive(SyncStatusCallback callback) {
   }
 
   if (candidate.active()) {
-    DCHECK(candidate.tracker_kind() == TRACKER_KIND_APP_ROOT ||
-           candidate.tracker_kind() == TRACKER_KIND_DISABLED_APP_ROOT);
+    CHECK(candidate.tracker_kind() == TRACKER_KIND_APP_ROOT ||
+              candidate.tracker_kind() == TRACKER_KIND_DISABLED_APP_ROOT,
+          base::NotFatalUntil::M162);
     std::move(callback).Run(SYNC_STATUS_OK);
     return;
   }
@@ -88,9 +88,9 @@ void RegisterAppTask::CreateAppRootFolder(SyncStatusCallback callback) {
   bool should_success = metadata_database()->FindTrackerByTrackerID(
       sync_root_tracker_id,
       &sync_root_tracker);
-  DCHECK(should_success);
+  CHECK(should_success, base::NotFatalUntil::M162);
 
-  DCHECK(!folder_creator_);
+  CHECK(!folder_creator_, base::NotFatalUntil::M162);
   folder_creator_ =
       std::make_unique<FolderCreator>(drive_service(), metadata_database(),
                                       sync_root_tracker.file_id(), app_id_);
@@ -113,7 +113,7 @@ void RegisterAppTask::DidCreateAppRootFolder(SyncStatusCallback callback,
 
 bool RegisterAppTask::FilterCandidates(const TrackerIDSet& trackers,
                                        FileTracker* candidate) {
-  DCHECK(candidate);
+  CHECK(candidate, base::NotFatalUntil::M162);
   if (trackers.has_active()) {
     if (metadata_database()->FindTrackerByTrackerID(
             trackers.active_tracker(), candidate)) {
@@ -128,20 +128,18 @@ bool RegisterAppTask::FilterCandidates(const TrackerIDSet& trackers,
     if (!metadata_database()->FindTrackerByTrackerID(
             *itr, tracker.get())) {
       NOTREACHED();
-      continue;
     }
 
     FileMetadata file;
-    DCHECK(!tracker->active());
-    DCHECK(tracker->has_synced_details());
+    CHECK(!tracker->active(), base::NotFatalUntil::M162);
+    CHECK(tracker->has_synced_details(), base::NotFatalUntil::M162);
 
     if (!metadata_database()->FindFileByFileID(tracker->file_id(), &file)) {
-      NOTREACHED();
       // The parent folder is sync-root, whose contents are fetched in
       // initialization sequence.
       // So at this point, direct children of sync-root should have
       // FileMetadata.
-      continue;
+      NOTREACHED();
     }
 
     if (file.details().file_kind() != FILE_KIND_FOLDER)

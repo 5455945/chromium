@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,20 +7,21 @@
 #include "content/public/browser/file_select_listener.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
-namespace ui {
-namespace test {
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
 
-TestWebContentsHandler::TestWebContentsHandler() {
-}
+namespace ui::test {
 
-TestWebContentsHandler::~TestWebContentsHandler() {
-}
+TestWebContentsHandler::TestWebContentsHandler() = default;
+
+TestWebContentsHandler::~TestWebContentsHandler() = default;
 
 content::WebContents* TestWebContentsHandler::OpenURLFromTab(
-      content::BrowserContext* context,
-      content::WebContents* source,
-      const content::OpenURLParams& params) {
-  return NULL;
+    content::BrowserContext* context,
+    content::WebContents* source,
+    const content::OpenURLParams& params,
+    base::OnceCallback<void(content::NavigationHandle&)>
+        navigation_handle_callback) {
+  return nullptr;
 }
 
 void TestWebContentsHandler::AddNewContents(
@@ -28,8 +29,8 @@ void TestWebContentsHandler::AddNewContents(
     content::WebContents* source,
     std::unique_ptr<content::WebContents> new_contents,
     const GURL& target_url,
-    WindowOpenDisposition disposition,
-    const gfx::Rect& initial_rect,
+    ui::mojom::WindowOpenDisposition disposition,
+    const blink::mojom::WindowFeatures& window_features,
     bool user_gesture) {}
 
 void TestWebContentsHandler::RunFileChooser(
@@ -37,5 +38,4 @@ void TestWebContentsHandler::RunFileChooser(
     scoped_refptr<content::FileSelectListener> listener,
     const blink::mojom::FileChooserParams& params) {}
 
-}  // namespace test
-}  // namespace ui
+}  // namespace ui::test

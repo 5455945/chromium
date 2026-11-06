@@ -1,10 +1,11 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/nearby_sharing/text_attachment.h"
 
 #include <string>
+#include <string_view>
 
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -12,9 +13,11 @@ namespace {
 
 struct TextAttachmentTextTitleTestData {
   TextAttachment::Type type;
-  std::string text_body;
-  std::string expected_text_title;
-} kTextAttachmentTextTitleTestData[] = {
+  std::string_view text_body;
+  std::string_view expected_text_title;
+};
+
+constexpr TextAttachmentTextTitleTestData kTextAttachmentTextTitleTestData[] = {
     {TextAttachment::Type::kText, "Short text", "Short text"},
     {TextAttachment::Type::kText, "Long text that should be truncated",
      "Long text that should be truncat…"},
@@ -67,12 +70,12 @@ using TextAttachmentTextTitleTest =
 }  // namespace
 
 TEST_P(TextAttachmentTextTitleTest, TextTitleMatches) {
-  TextAttachment attachment(GetParam().type, GetParam().text_body,
-                            /*title=*/absl::nullopt,
-                            /*mime_type=*/absl::nullopt);
+  TextAttachment attachment(GetParam().type, std::string(GetParam().text_body),
+                            /*title=*/std::nullopt,
+                            /*mime_type=*/std::nullopt);
   EXPECT_EQ(GetParam().expected_text_title, attachment.text_title());
 }
 
-INSTANTIATE_TEST_CASE_P(TextAttachmentTextTitleTest,
-                        TextAttachmentTextTitleTest,
-                        testing::ValuesIn(kTextAttachmentTextTitleTestData));
+INSTANTIATE_TEST_SUITE_P(TextAttachmentTextTitleTest,
+                         TextAttachmentTextTitleTest,
+                         testing::ValuesIn(kTextAttachmentTextTitleTestData));

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -35,21 +35,26 @@ void SwitchAccessBackButtonBubbleController::ShowBackButton(
     back_button_view_ = new SwitchAccessBackButtonView(for_menu);
 
     TrayBubbleView::InitParams init_params;
-    init_params.delegate = this;
+    init_params.delegate = GetWeakPtr();
     // Anchor within the overlay container.
     init_params.parent_window =
         Shell::GetContainer(Shell::GetPrimaryRootWindow(),
                             kShellWindowId_AccessibilityBubbleContainer);
     init_params.anchor_mode = TrayBubbleView::AnchorMode::kRect;
     init_params.is_anchored_to_status_area = false;
-    init_params.has_shadow = false;
     init_params.preferred_width = back_button_view_->size().width();
     init_params.translucent = true;
+    init_params.type = TrayBubbleView::TrayBubbleType::kAccessibilityBubble;
 
     bubble_view_ = new TrayBubbleView(init_params);
     bubble_view_->SetArrow(views::BubbleBorder::BOTTOM_RIGHT);
-    bubble_view_->AddChildView(back_button_view_);
-    bubble_view_->SetPaintToLayer();
+    bubble_view_->AddChildViewRaw(back_button_view_.get());
+
+    // Only call `SetPaintToLayer()` when necessary since a layer could have
+    // been created for `ViewShadow` and re-creating here breaks the z-order set
+    // by `ViewShadow`.
+    if (!bubble_view_->layer())
+      bubble_view_->SetPaintToLayer();
     bubble_view_->layer()->SetFillsBoundsOpaquely(false);
 
     widget_ = views::BubbleDialogDelegateView::CreateBubble(bubble_view_);
@@ -63,8 +68,8 @@ void SwitchAccessBackButtonBubbleController::ShowBackButton(
   back_button_view_->SetFocusRing(show_focus_ring);
   bubble_view_->ChangeAnchorRect(AdjustAnchorRect(anchor));
   widget_->Show();
-  bubble_view_->NotifyAccessibilityEvent(ax::mojom::Event::kChildrenChanged,
-                                         true);
+  bubble_view_->NotifyAccessibilityEventDeprecated(
+      ax::mojom::Event::kChildrenChanged, true);
 }
 
 void SwitchAccessBackButtonBubbleController::HideFocusRing() {
@@ -75,14 +80,20 @@ void SwitchAccessBackButtonBubbleController::Hide() {
   if (widget_)
     widget_->Hide();
   if (bubble_view_)
-    bubble_view_->NotifyAccessibilityEvent(ax::mojom::Event::kChildrenChanged,
-                                           true);
+    bubble_view_->NotifyAccessibilityEventDeprecated(
+        ax::mojom::Event::kChildrenChanged, true);
 }
 
 void SwitchAccessBackButtonBubbleController::BubbleViewDestroyed() {
   back_button_view_ = nullptr;
   bubble_view_ = nullptr;
   widget_ = nullptr;
+}
+
+void SwitchAccessBackButtonBubbleController::HideBubble(
+    const TrayBubbleView* bubble_view) {
+  // This function is currently not unused for bubbles of type
+  // `kAccessibilityBubble`, so can leave this empty.
 }
 
 // The back button should display to the right of the anchor rect provided.
@@ -111,9 +122,9 @@ gfx::Rect SwitchAccessBackButtonBubbleController::AdjustAnchorRect(
   adjusted_anchor.Offset(0, offset_height);
 
   gfx::Rect display_bounds =
-      display::Screen::GetScreen()->GetDisplayMatching(anchor).bounds();
+      display::Screen::Get()->GetDisplayMatching(anchor).bounds();
   // Ensure that the back button displays onscreen.
-  display_bounds.Inset(0, button_size.height(), 0, 0);
+  display_bounds.Inset(gfx::Insets::TLBR(button_size.height(), 0, 0, 0));
 
   if (adjusted_anchor.Intersects(display_bounds)) {
     adjusted_anchor.Intersect(display_bounds);

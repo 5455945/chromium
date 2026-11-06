@@ -1,13 +1,14 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_PUSH_MESSAGING_PUSH_MESSAGING_BRIDGE_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_PUSH_MESSAGING_PUSH_MESSAGING_BRIDGE_H_
 
-#include "base/macros.h"
 #include "third_party/blink/public/mojom/permissions/permission.mojom-blink.h"
 #include "third_party/blink/public/mojom/permissions/permission_status.mojom-blink.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/modules/service_worker/service_worker_registration.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_remote.h"
@@ -17,8 +18,8 @@
 namespace blink {
 
 class PushSubscriptionOptionsInit;
-class ScriptPromiseResolver;
 class ScriptState;
+class V8PermissionState;
 
 // The bridge is responsible for establishing and maintaining the Mojo
 // connection to the permission service. It's keyed on an active Service Worker
@@ -33,23 +34,27 @@ class PushMessagingBridge final : public GarbageCollected<PushMessagingBridge>,
   static PushMessagingBridge* From(ServiceWorkerRegistration* registration);
 
   explicit PushMessagingBridge(ServiceWorkerRegistration& registration);
-  virtual ~PushMessagingBridge();
+
+  PushMessagingBridge(const PushMessagingBridge&) = delete;
+  PushMessagingBridge& operator=(const PushMessagingBridge&) = delete;
+
+  ~PushMessagingBridge();
 
   // Asynchronously determines the permission state for the current origin.
-  ScriptPromise GetPermissionState(ScriptState* script_state,
-                                   const PushSubscriptionOptionsInit* options);
+  ScriptPromise<V8PermissionState> GetPermissionState(
+      ScriptState* script_state,
+      const PushSubscriptionOptionsInit* options);
 
   void Trace(Visitor*) const override;
 
  private:
   // Method to be invoked when the permission status has been retrieved from the
   // permission service. Will settle the given |resolver|.
-  void DidGetPermissionState(ScriptPromiseResolver* resolver,
-                             mojom::blink::PermissionStatus status);
+  void DidGetPermissionState(
+      ScriptPromiseResolver<V8PermissionState>* resolver,
+      mojom::blink::PermissionStatusWithDetailsPtr result);
 
   HeapMojoRemote<mojom::blink::PermissionService> permission_service_;
-
-  DISALLOW_COPY_AND_ASSIGN(PushMessagingBridge);
 };
 
 }  // namespace blink

@@ -1,46 +1,32 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/system/time/time_tray_item_view.h"
 
-#include "ash/constants/ash_features.h"
-#include "ash/session/session_controller_impl.h"
+#include <memory>
+
 #include "ash/shelf/shelf.h"
 #include "ash/shell.h"
+#include "ash/style/ash_color_id.h"
 #include "ash/system/model/clock_model.h"
 #include "ash/system/model/system_tray_model.h"
 #include "ash/system/time/time_view.h"
-#include "ash/system/tray/tray_utils.h"
+#include "chromeos/constants/chromeos_features.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 
 namespace ash {
 
-namespace tray {
-
-namespace {
-
-// The top padding of time tray item view so that the time is aligned properly
-// in status area.
-constexpr int kTimeTrayItemTopPadding = 1;
-
-}  // namespace
-
-TimeTrayItemView::TimeTrayItemView(Shelf* shelf, UnifiedSystemTrayModel* model)
-    : TrayItemView(shelf), model_(model), session_observer_(this) {
-  system_tray_model_observation_.Observe(model_);
-
+TimeTrayItemView::TimeTrayItemView(Shelf* shelf, TimeView::Type type)
+    : TrayItemView(shelf) {
   TimeView::ClockLayout clock_layout =
       shelf->IsHorizontalAlignment() ? TimeView::ClockLayout::HORIZONTAL_CLOCK
                                      : TimeView::ClockLayout::VERTICAL_CLOCK;
-  time_view_ =
-      new TimeView(clock_layout, Shell::Get()->system_tray_model()->clock());
-  int top_padding =
-      shelf->IsHorizontalAlignment() ? kTimeTrayItemTopPadding : 0;
-  time_view_->SetBorder(
-      views::CreateEmptyBorder(gfx::Insets(0, 0, top_padding, 0)));
-  AddChildView(time_view_);
-
-  OnSystemTrayButtonSizeChanged(model_->GetSystemTrayButtonSize());
+  time_view_ = AddChildView(std::make_unique<TimeView>(
+      clock_layout, Shell::Get()->system_tray_model()->clock(), type));
+  time_view_->SetTextColorId(kColorAshIconColorPrimary);
+  UpdateLabelOrImageViewColor(/*active=*/false);
 }
 
 TimeTrayItemView::~TimeTrayItemView() = default;
@@ -50,41 +36,22 @@ void TimeTrayItemView::UpdateAlignmentForShelf(Shelf* shelf) {
       shelf->IsHorizontalAlignment() ? TimeView::ClockLayout::HORIZONTAL_CLOCK
                                      : TimeView::ClockLayout::VERTICAL_CLOCK;
   time_view_->UpdateClockLayout(clock_layout);
-  int top_padding =
-      shelf->IsHorizontalAlignment() ? kTimeTrayItemTopPadding : 0;
-  time_view_->SetBorder(
-      views::CreateEmptyBorder(gfx::Insets(0, 0, top_padding, 0)));
 }
 
 void TimeTrayItemView::HandleLocaleChange() {
   time_view_->Refresh();
 }
 
-void TimeTrayItemView::OnSessionStateChanged(
-    session_manager::SessionState state) {
-  time_view_->SetTextColor(TrayIconColor(state));
+void TimeTrayItemView::UpdateLabelOrImageViewColor(bool active) {
+  TrayItemView::UpdateLabelOrImageViewColor(active);
+
+  const auto color_id = active ? cros_tokens::kCrosSysSystemOnPrimaryContainer
+                               : cros_tokens::kCrosSysOnSurface;
+  time_view_->SetTextColorId(color_id);
+  time_view_->SetDateViewColorId(color_id);
 }
 
-void TimeTrayItemView::OnSystemTrayButtonSizeChanged(
-    UnifiedSystemTrayModel::SystemTrayButtonSize system_tray_size) {
-  time_view_->SetShowDateWhenHorizontal(
-      features::IsShowDateInTrayButtonEnabled() &&
-      system_tray_size == UnifiedSystemTrayModel::SystemTrayButtonSize::kLarge);
-}
+BEGIN_METADATA(TimeTrayItemView)
+END_METADATA
 
-void TimeTrayItemView::Reset() {
-  system_tray_model_observation_.Reset();
-}
-
-const char* TimeTrayItemView::GetClassName() const {
-  return "TimeTrayItemView";
-}
-
-void TimeTrayItemView::OnThemeChanged() {
-  TrayItemView::OnThemeChanged();
-  time_view_->SetTextColor(
-      TrayIconColor(Shell::Get()->session_controller()->GetSessionState()));
-}
-
-}  // namespace tray
 }  // namespace ash

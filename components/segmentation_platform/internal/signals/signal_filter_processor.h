@@ -1,23 +1,24 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_SEGMENTATION_PLATFORM_INTERNAL_SIGNALS_SIGNAL_FILTER_PROCESSOR_H_
 #define COMPONENTS_SEGMENTATION_PLATFORM_INTERNAL_SIGNALS_SIGNAL_FILTER_PROCESSOR_H_
 
-#include "base/memory/weak_ptr.h"
-#include "components/optimization_guide/proto/models.pb.h"
+#include <set>
 
-using optimization_guide::proto::OptimizationTarget;
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
+#include "components/segmentation_platform/internal/database/segment_info_database.h"
+#include "components/segmentation_platform/public/proto/segmentation_platform.pb.h"
 
 namespace segmentation_platform {
 
-namespace proto {
-class SegmentInfo;
-}  // namespace proto
+using proto::SegmentId;
 
 class HistogramSignalHandler;
-class SegmentInfoDatabase;
+class HistoryServiceObserver;
+class StorageService;
 class UserActionSignalHandler;
 
 // Responsible for listening to the metadata updates for the models and
@@ -25,9 +26,11 @@ class UserActionSignalHandler;
 // the metadata.
 class SignalFilterProcessor {
  public:
-  SignalFilterProcessor(SegmentInfoDatabase* segment_database,
+  SignalFilterProcessor(StorageService* storage_service,
                         UserActionSignalHandler* user_action_signal_handler,
-                        HistogramSignalHandler* histogram_signal_handler);
+                        HistogramSignalHandler* histogram_signal_handler,
+                        HistoryServiceObserver* history_observer,
+                        const base::flat_set<SegmentId>& segment_ids);
   ~SignalFilterProcessor();
 
   // Disallow copy/assign.
@@ -47,12 +50,16 @@ class SignalFilterProcessor {
 
  private:
   void FilterSignals(
-      std::vector<std::pair<OptimizationTarget, proto::SegmentInfo>>
-          segment_infos);
+      std::unique_ptr<SegmentInfoDatabase::SegmentInfoList> segment_infos);
 
-  SegmentInfoDatabase* segment_database_;
-  UserActionSignalHandler* user_action_signal_handler_;
-  HistogramSignalHandler* histogram_signal_handler_;
+  // Boolean to only record metrics the first time models are updated.
+  bool is_first_time_model_update_{true};
+
+  const raw_ptr<StorageService, DanglingUntriaged> storage_service_;
+  const raw_ptr<UserActionSignalHandler> user_action_signal_handler_;
+  const raw_ptr<HistogramSignalHandler> histogram_signal_handler_;
+  const raw_ptr<HistoryServiceObserver> history_observer_;
+  const base::flat_set<SegmentId> segment_ids_;
 
   base::WeakPtrFactory<SignalFilterProcessor> weak_ptr_factory_{this};
 };

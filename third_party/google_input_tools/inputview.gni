@@ -1,4 +1,4 @@
-# Copyright 2014 The Chromium Authors. All rights reserved.
+# Copyright 2014 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -232,7 +232,6 @@ inputview_sources = rebase_path(
           "third_party/closure_library/closure/goog/ui/decorate.js",
           "third_party/closure_library/closure/goog/ui/idgenerator.js",
           "third_party/closure_library/closure/goog/ui/registry.js",
-          "third_party/closure_library/closure/goog/uri/utils.js",
           "third_party/closure_library/closure/goog/useragent/product.js",
           "third_party/closure_library/closure/goog/useragent/product_isversion.js",
           "third_party/closure_library/closure/goog/useragent/useragent.js",

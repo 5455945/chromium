@@ -37,11 +37,16 @@ namespace blink {
 class CSSRuleList;
 class CSSKeyframeRule;
 class StyleRuleKeyframe;
+class CSSParserContext;
 
 class StyleRuleKeyframes final : public StyleRuleBase {
  public:
   StyleRuleKeyframes();
-  explicit StyleRuleKeyframes(const StyleRuleKeyframes&);
+  StyleRuleKeyframes(HeapVector<Member<StyleRuleKeyframe>>&& keyframes,
+                     const AtomicString& name,
+                     unsigned version,
+                     bool is_vendor_prefixed);
+  StyleRuleKeyframes(const StyleRuleKeyframes&);
   ~StyleRuleKeyframes();
 
   const HeapVector<Member<StyleRuleKeyframe>>& Keyframes() const {
@@ -58,7 +63,7 @@ class StyleRuleKeyframes final : public StyleRuleBase {
   bool IsVendorPrefixed() const { return is_prefixed_; }
   void SetVendorPrefixed(bool is_prefixed) { is_prefixed_ = is_prefixed; }
 
-  int FindKeyframeIndex(const String& key) const;
+  int FindKeyframeIndex(const CSSParserContext*, const String& key) const;
 
   StyleRuleKeyframes* Copy() const {
     return MakeGarbageCollected<StyleRuleKeyframes>(*this);
@@ -101,12 +106,12 @@ class CSSKeyframesRule final : public CSSRule {
   CSSRuleList* cssRules() const override;
 
   void appendRule(const ExecutionContext*, const String& rule);
-  void deleteRule(const String& key);
-  CSSKeyframeRule* findRule(const String& key);
+  void deleteRule(const ExecutionContext*, const String& key);
+  CSSKeyframeRule* findRule(const ExecutionContext*, const String& key);
 
   // For IndexedGetter and CSSRuleList.
   unsigned length() const;
-  CSSKeyframeRule* Item(unsigned index) const;
+  CSSKeyframeRule* Item(unsigned index, bool trigger_use_counters = true) const;
   CSSKeyframeRule* AnonymousIndexedGetter(unsigned index) const;
 
   bool IsVendorPrefixed() const { return is_prefixed_; }

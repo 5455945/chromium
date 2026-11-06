@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,8 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
 #include "base/time/time.h"
+#include "media/base/audio_hash.h"
 #include "media/base/audio_renderer_sink.h"
 
 namespace media {
@@ -22,13 +22,16 @@ class MEDIA_EXPORT ClocklessAudioSink : public AudioRendererSink {
   ClocklessAudioSink();
   explicit ClocklessAudioSink(const OutputDeviceInfo& device_info);
 
+  ClocklessAudioSink(const ClocklessAudioSink&) = delete;
+  ClocklessAudioSink& operator=(const ClocklessAudioSink&) = delete;
+
   // AudioRendererSink implementation.
   void Initialize(const AudioParameters& params,
                   RenderCallback* callback) override;
   void Start() override;
   void Stop() override;
   void Flush() override;
-  void Pause() override;
+  void Pause(PauseReason reason) override;
   void Play() override;
   bool SetVolume(double volume) override;
   OutputDeviceInfo GetOutputDeviceInfo() override;
@@ -43,14 +46,13 @@ class MEDIA_EXPORT ClocklessAudioSink : public AudioRendererSink {
   void StartAudioHashForTesting();
 
   // Returns the hash of all audio frames seen since construction.
-  std::string GetAudioHashForTesting();
+  const AudioHash& GetAudioHashForTesting() const;
 
   void SetIsOptimizedForHardwareParametersForTesting(bool value);
 
- protected:
+ private:
   ~ClocklessAudioSink() override;
 
- private:
   const OutputDeviceInfo device_info_;
   std::unique_ptr<ClocklessAudioSinkThread> thread_;
   bool initialized_;
@@ -60,8 +62,6 @@ class MEDIA_EXPORT ClocklessAudioSink : public AudioRendererSink {
 
   // Time taken in last set of Render() calls.
   base::TimeDelta playback_time_;
-
-  DISALLOW_COPY_AND_ASSIGN(ClocklessAudioSink);
 };
 
 }  // namespace media

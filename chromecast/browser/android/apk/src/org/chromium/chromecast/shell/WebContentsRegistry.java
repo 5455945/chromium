@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,12 +18,11 @@ import java.util.HashMap;
  */
 public class WebContentsRegistry {
     private static class WebContentsHolder {
-        public WebContents webContents;
+        public final WebContents webContents;
         public boolean initialized;
 
         public WebContentsHolder(WebContents webContents) {
             this.webContents = webContents;
-            this.initialized = false;
         }
     }
 
@@ -49,8 +48,12 @@ public class WebContentsRegistry {
             if (holder.webContents.equals(webContents)) {
                 if (!holder.initialized) {
                     // TODO(derekjchow): productVersion
-                    webContents.initialize("", ViewAndroidDelegate.createBasicDelegate(contentView),
-                            contentView, window, WebContents.createDefaultInternalsHolder());
+                    webContents.setDelegates(
+                            "",
+                            ViewAndroidDelegate.createBasicDelegate(contentView),
+                            contentView,
+                            window,
+                            WebContents.createDefaultInternalsHolder());
                 } else {
                     webContents.getViewAndroidDelegate().setContainerView(contentView);
                     webContents.setTopLevelNativeWindow(window);

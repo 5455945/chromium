@@ -1,10 +1,11 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_OFFLINE_PAGES_OFFLINE_PAGE_BOOKMARK_OBSERVER_H_
 #define CHROME_BROWSER_OFFLINE_PAGES_OFFLINE_PAGE_BOOKMARK_OBSERVER_H_
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/offline_pages/offline_page_model_factory.h"
 #include "components/bookmarks/browser/base_bookmark_model_observer.h"
@@ -13,7 +14,6 @@
 class GURL;
 
 namespace bookmarks {
-class BookmarkModel;
 class BookmarkNode;
 }
 
@@ -31,11 +31,11 @@ class OfflinePageBookmarkObserver
 
   // Implement bookmarks::OfflinePageBookmarkObserver
   void BookmarkModelChanged() override;
-  void BookmarkNodeRemoved(bookmarks::BookmarkModel* model,
-                           const bookmarks::BookmarkNode* parent,
+  void BookmarkNodeRemoved(const bookmarks::BookmarkNode* parent,
                            size_t old_index,
                            const bookmarks::BookmarkNode* node,
-                           const std::set<GURL>& removed_urls) override;
+                           const std::set<GURL>& removed_urls,
+                           const base::Location& location) override;
 
  private:
   // Does work for actual deleting removed bookmark pages.
@@ -44,9 +44,9 @@ class OfflinePageBookmarkObserver
   // Callback for deleting removed bookmark pages.
   void OnDeleteRemovedBookmarkPagesDone(DeletePageResult result);
 
-  content::BrowserContext* context_;
+  raw_ptr<content::BrowserContext> context_;
 
-  OfflinePageModel* offline_page_model_;
+  raw_ptr<OfflinePageModel> offline_page_model_;
 
   base::WeakPtrFactory<OfflinePageBookmarkObserver> weak_ptr_factory_{this};
 };

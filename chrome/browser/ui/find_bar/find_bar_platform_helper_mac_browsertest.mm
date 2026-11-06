@@ -1,15 +1,16 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import <Cocoa/Cocoa.h>
 
-#include "base/macros.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/find_bar/find_bar.h"
 #include "chrome/browser/ui/find_bar/find_bar_controller.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "chrome/test/base/find_result_waiter.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -22,8 +23,9 @@
 const char kSimple[] = "simple.html";
 
 GURL GetURL(const std::string& filename) {
-  return ui_test_utils::GetTestUrl(base::FilePath().AppendASCII("find_in_page"),
-                                   base::FilePath().AppendASCII(filename));
+  return chrome_test_utils::GetTestUrl(
+      base::FilePath().AppendASCII("find_in_page"),
+      base::FilePath().AppendASCII(filename));
 }
 
 int WaitForFind(content::WebContents* web_contents, int* ordinal) {
@@ -38,6 +40,11 @@ int WaitForFind(content::WebContents* web_contents, int* ordinal) {
 class FindBarPlatformHelperMacTest : public InProcessBrowserTest {
  public:
   FindBarPlatformHelperMacTest() {}
+
+  FindBarPlatformHelperMacTest(const FindBarPlatformHelperMacTest&) = delete;
+  FindBarPlatformHelperMacTest& operator=(const FindBarPlatformHelperMacTest&) =
+      delete;
+
   ~FindBarPlatformHelperMacTest() override = default;
 
   void SetUpOnMainThread() override {
@@ -52,20 +59,17 @@ class FindBarPlatformHelperMacTest : public InProcessBrowserTest {
 
  private:
   NSString* old_find_text_ = nullptr;
-
-  DISALLOW_COPY_AND_ASSIGN(FindBarPlatformHelperMacTest);
 };
 
 // Tests that the find bar is populated with the pasteboard at construction.
 IN_PROC_BROWSER_TEST_F(FindBarPlatformHelperMacTest,
                        FindBarPopulatedWithPasteboardOnConstruction) {
-  ASSERT_FALSE(browser()->HasFindBarController());
+  FindBarController* find_bar_controller = FindBarController::From(browser());
+  ASSERT_NE(nullptr, find_bar_controller);
+  ASSERT_FALSE(find_bar_controller->HasFindBar());
 
   NSString* initial_find_string = @"Initial String";
   [[FindPasteboard sharedInstance] setFindText:initial_find_string];
-
-  FindBarController* find_bar_controller = browser()->GetFindBarController();
-  ASSERT_NE(nullptr, find_bar_controller);
 
   EXPECT_EQ(base::SysNSStringToUTF16(initial_find_string),
             find_bar_controller->find_bar()->GetFindText());
@@ -81,9 +85,9 @@ IN_PROC_BROWSER_TEST_F(FindBarPlatformHelperMacTest,
 //    remain in the findbar and the old find results to remain highlighted.
 IN_PROC_BROWSER_TEST_F(FindBarPlatformHelperMacTest,
                        FindBarUpdatedFromPasteboard) {
-  ui_test_utils::NavigateToURL(browser(), GetURL(kSimple));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetURL(kSimple)));
 
-  FindBarController* find_bar_controller = browser()->GetFindBarController();
+  FindBarController* find_bar_controller = FindBarController::From(browser());
   ASSERT_NE(nullptr, find_bar_controller);
   FindBar* find_bar = find_bar_controller->find_bar();
   ASSERT_NE(nullptr, find_bar);

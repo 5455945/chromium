@@ -1,10 +1,15 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/base/network_delegate_impl.h"
 
+#include <optional>
+
 #include "net/base/net_errors.h"
+#include "net/cookies/cookie_setting_override.h"
+#include "net/cookies/cookie_util.h"
+#include "net/ssl/ssl_info.h"
 
 namespace net {
 
@@ -16,8 +21,8 @@ int NetworkDelegateImpl::OnBeforeURLRequest(URLRequest* request,
 
 int NetworkDelegateImpl::OnBeforeStartTransaction(
     URLRequest* request,
-    CompletionOnceCallback callback,
-    HttpRequestHeaders* headers) {
+    const HttpRequestHeaders& headers,
+    OnBeforeStartTransactionCallback callback) {
   return OK;
 }
 
@@ -27,12 +32,15 @@ int NetworkDelegateImpl::OnHeadersReceived(
     const HttpResponseHeaders* original_response_headers,
     scoped_refptr<HttpResponseHeaders>* override_response_headers,
     const IPEndPoint& endpoint,
-    absl::optional<GURL>* preserve_fragment_on_redirect_url) {
+    std::optional<GURL>* preserve_fragment_on_redirect_url,
+    const std::optional<net::SSLInfo>& ssl_info) {
   return OK;
 }
 
 void NetworkDelegateImpl::OnBeforeRedirect(URLRequest* request,
                                            const GURL& new_location) {}
+
+void NetworkDelegateImpl::OnBeforeRetry(URLRequest* request) {}
 
 void NetworkDelegateImpl::OnResponseStarted(URLRequest* request,
                                             int net_error) {}
@@ -50,28 +58,33 @@ void NetworkDelegateImpl::OnPACScriptError(int line_number,
 bool NetworkDelegateImpl::OnAnnotateAndMoveUserBlockedCookies(
     const URLRequest& request,
     net::CookieAccessResultList& maybe_included_cookies,
-    net::CookieAccessResultList& excluded_cookies,
-    bool allowed_from_caller) {
-  if (!allowed_from_caller)
-    ExcludeAllCookies(CookieInclusionStatus::EXCLUDE_USER_PREFERENCES,
-                      maybe_included_cookies, excluded_cookies);
-  return allowed_from_caller;
+    net::CookieAccessResultList& excluded_cookies) {
+  return true;
 }
 
-bool NetworkDelegateImpl::OnCanSetCookie(const URLRequest& request,
-                                         const net::CanonicalCookie& cookie,
-                                         CookieOptions* options,
-                                         bool allowed_from_caller) {
-  return allowed_from_caller;
+bool NetworkDelegateImpl::OnCanSetCookie(
+    const URLRequest& request,
+    const net::CanonicalCookie& cookie,
+    CookieOptions* options,
+    CookieInclusionStatus* inclusion_status) {
+  return true;
 }
 
-bool NetworkDelegateImpl::OnForcePrivacyMode(
-    const GURL& url,
-    const SiteForCookies& site_for_cookies,
-    const absl::optional<url::Origin>& top_frame_origin,
-    CookieOptions::SamePartyCookieContextType same_party_cookie_context_type)
-    const {
+bool NetworkDelegateImpl::OnShouldForceIgnoreSiteForCookies(
+    const URLRequest& request) {
   return false;
+}
+
+std::optional<cookie_util::StorageAccessStatus>
+NetworkDelegateImpl::OnGetStorageAccessStatus(
+    const URLRequest& request,
+    base::optional_ref<const RedirectInfo> redirect_info) const {
+  return std::nullopt;
+}
+
+NetworkDelegate::PrivacySetting NetworkDelegateImpl::OnForcePrivacyMode(
+    const URLRequest& request) const {
+  return NetworkDelegate::PrivacySetting::kStateAllowed;
 }
 
 bool NetworkDelegateImpl::OnCancelURLRequestWithPolicyViolatingReferrerHeader(

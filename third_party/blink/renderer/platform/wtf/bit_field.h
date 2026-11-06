@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,9 @@
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_BIT_FIELD_H_
 
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/atomic_operations.h"
 
-namespace WTF {
+namespace blink {
 
 enum class BitFieldValueConstness {
   kNonConst,
@@ -108,7 +109,7 @@ class WTF_EXPORT SingleThreadedBitField {
   using DefineFirstValue =
       internal::BitFieldValue<Type, 0, size, BitFieldType, is_const>;
 
-  explicit SingleThreadedBitField() : SingleThreadedBitField(0) {}
+  explicit SingleThreadedBitField() = default;
   explicit SingleThreadedBitField(BitFieldType bits) : bits_(bits) {}
 
   template <typename Value>
@@ -124,7 +125,7 @@ class WTF_EXPORT SingleThreadedBitField {
   BitFieldType bits() const { return bits_; }
 
  protected:
-  BitFieldType bits_;
+  BitFieldType bits_ = 0;
 };
 
 // BitField that can be written by a single thread but read by multiple threads.
@@ -135,7 +136,7 @@ class WTF_EXPORT ConcurrentlyReadBitField
   using Base::bits_;
 
  public:
-  explicit ConcurrentlyReadBitField() : Base(0) {}
+  explicit ConcurrentlyReadBitField() = default;
   explicit ConcurrentlyReadBitField(BitFieldType bits) : Base(bits) {}
 
   template <typename Value>
@@ -150,6 +151,6 @@ class WTF_EXPORT ConcurrentlyReadBitField
   }
 };
 
-}  // namespace WTF
+}  // namespace blink
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_BIT_FIELD_H_

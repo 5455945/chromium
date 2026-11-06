@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -33,7 +33,8 @@ void ElementSMILAnimations::RemoveAnimation(const QualifiedName& attribute,
 
 bool ElementSMILAnimations::Apply(SMILTime elapsed) {
   bool did_apply = false;
-  for (SMILAnimationSandwich* sandwich : sandwiches_.Values()) {
+  HeapVector<Member<SMILAnimationSandwich>> sandwiches(sandwiches_.Values());
+  for (SMILAnimationSandwich* sandwich : sandwiches) {
     sandwich->UpdateActiveAnimationStack(elapsed);
     if (sandwich->ApplyAnimationValues())
       did_apply = true;

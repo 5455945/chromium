@@ -1,15 +1,16 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ANDROID_WEBVIEW_BROWSER_NETWORK_SERVICE_AW_WEB_RESOURCE_REQUEST_H_
 #define ANDROID_WEBVIEW_BROWSER_NETWORK_SERVICE_AW_WEB_RESOURCE_REQUEST_H_
 
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "base/android/scoped_java_ref.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "net/http/http_response_headers.h"
 
 namespace net {
 class HttpRequestHeaders;
@@ -29,7 +30,7 @@ struct AwWebResourceRequest final {
   explicit AwWebResourceRequest(const network::ResourceRequest& request);
   AwWebResourceRequest(const std::string& in_url,
                        const std::string& in_method,
-                       bool in_is_main_frame,
+                       bool in_is_outermost_main_frame,
                        bool in_has_user_gesture,
                        const net::HttpRequestHeaders& in_headers);
 
@@ -40,31 +41,29 @@ struct AwWebResourceRequest final {
   AwWebResourceRequest& operator=(AwWebResourceRequest&& other);
   ~AwWebResourceRequest();
 
-  // The java equivalent
-  struct AwJavaWebResourceRequest {
-    AwJavaWebResourceRequest();
-    ~AwJavaWebResourceRequest();
+  // Gets a copy of the headers as `net::HttpRequestHeaders`.
+  net::HttpRequestHeaders GetHeadersAsHttpRequestHeaders() const;
 
-    base::android::ScopedJavaLocalRef<jstring> jurl;
-    base::android::ScopedJavaLocalRef<jstring> jmethod;
-    base::android::ScopedJavaLocalRef<jobjectArray> jheader_names;
-    base::android::ScopedJavaLocalRef<jobjectArray> jheader_values;
-  };
-
-  // Convenience method to convert AwWebResourceRequest to Java equivalent.
-  static void ConvertToJava(JNIEnv* env,
-                            const AwWebResourceRequest& request,
-                            AwJavaWebResourceRequest* jRequest);
+  // Updates the headers on this request from the given
+  // `net::HttpRequestHeaders`.
+  void SetHeadersFromHttpRequestHeaders(const net::HttpRequestHeaders& headers);
 
   std::string url;
   std::string method;
-  bool is_main_frame;
+  bool is_outermost_main_frame;
   bool has_user_gesture;
   std::vector<std::string> header_names;
   std::vector<std::string> header_values;
-  absl::optional<bool> is_renderer_initiated;
+  std::optional<bool> is_renderer_initiated;
 };
 
 }  // namespace android_webview
+
+namespace jni_zero {
+template <>
+ScopedJavaLocalRef<jobject> ToJniType(
+    JNIEnv* env,
+    const android_webview::AwWebResourceRequest& request);
+}
 
 #endif  // ANDROID_WEBVIEW_BROWSER_NETWORK_SERVICE_AW_WEB_RESOURCE_REQUEST_H_

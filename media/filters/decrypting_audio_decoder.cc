@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,16 +9,16 @@
 #include <cstdlib>
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/sequenced_task_runner.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/task/bind_post_task.h"
+#include "base/task/sequenced_task_runner.h"
 #include "media/base/audio_buffer.h"
 #include "media/base/audio_decoder_config.h"
 #include "media/base/audio_timestamp_helper.h"
-#include "media/base/bind_to_current_loop.h"
 #include "media/base/decoder_buffer.h"
 #include "media/base/media_log.h"
 #include "media/base/timestamp_constants.h"
@@ -29,15 +29,14 @@ static inline bool IsOutOfSync(const base::TimeDelta& timestamp_1,
                                const base::TimeDelta& timestamp_2) {
   // Out of sync of 100ms would be pretty noticeable and we should keep any
   // drift below that.
-  const int64_t kOutOfSyncThresholdInMilliseconds = 100;
-  return std::abs(timestamp_1.InMilliseconds() - timestamp_2.InMilliseconds()) >
-         kOutOfSyncThresholdInMilliseconds;
+  const base::TimeDelta kOutOfSyncThreshold = base::Milliseconds(100);
+  return (timestamp_1 - timestamp_2).magnitude() > kOutOfSyncThreshold;
 }
 
 DecryptingAudioDecoder::DecryptingAudioDecoder(
     const scoped_refptr<base::SequencedTaskRunner>& task_runner,
     MediaLog* media_log)
-    : task_runner_(task_runner), media_log_(media_log) {}
+    : task_runner_(task_runner), media_log_(MediaLog::CloneSafely(media_log)) {}
 
 bool DecryptingAudioDecoder::SupportsDecryption() const {
   return true;
@@ -57,16 +56,16 @@ void DecryptingAudioDecoder::Initialize(const AudioDecoderConfig& config,
   DCHECK(!decode_cb_);
   DCHECK(!reset_cb_);
 
-  init_cb_ = BindToCurrentLoop(std::move(init_cb));
+  init_cb_ = base::BindPostTaskToCurrentDefault(std::move(init_cb));
   if (!cdm_context) {
     // Once we have a CDM context, one should always be present.
     DCHECK(!support_clear_content_);
-    std::move(init_cb_).Run(StatusCode::kDecoderMissingCdmForEncryptedContent);
+    std::move(init_cb_).Run(DecoderStatus::Codes::kUnsupportedEncryptionMode);
     return;
   }
 
   if (!config.is_encrypted() && !support_clear_content_) {
-    std::move(init_cb_).Run(StatusCode::kClearContentUnsupported);
+    std::move(init_cb_).Run(DecoderStatus::Codes::kUnsupportedEncryptionMode);
     return;
   }
 
@@ -74,7 +73,7 @@ void DecryptingAudioDecoder::Initialize(const AudioDecoderConfig& config,
   // the decryptor for clear content as well.
   support_clear_content_ = true;
 
-  output_cb_ = BindToCurrentLoop(output_cb);
+  output_cb_ = base::BindPostTaskToCurrentDefault(output_cb);
 
   DCHECK(waiting_cb);
   waiting_cb_ = waiting_cb;
@@ -82,7 +81,7 @@ void DecryptingAudioDecoder::Initialize(const AudioDecoderConfig& config,
   // TODO(xhwang): We should be able to DCHECK config.IsValidConfig().
   if (!config.IsValidConfig()) {
     DLOG(ERROR) << "Invalid audio stream config.";
-    std::move(init_cb_).Run(StatusCode::kDecoderUnsupportedCodec);
+    std::move(init_cb_).Run(DecoderStatus::Codes::kUnsupportedCodec);
     return;
   }
 
@@ -91,7 +90,7 @@ void DecryptingAudioDecoder::Initialize(const AudioDecoderConfig& config,
   if (state_ == kUninitialized) {
     if (!cdm_context->GetDecryptor()) {
       DVLOG(1) << __func__ << ": no decryptor";
-      std::move(init_cb_).Run(StatusCode::kDecoderFailedInitialization);
+      std::move(init_cb_).Run(DecoderStatus::Codes::kUnsupportedEncryptionMode);
       return;
     }
 
@@ -116,19 +115,18 @@ void DecryptingAudioDecoder::Decode(scoped_refptr<DecoderBuffer> buffer,
   DCHECK(decode_cb);
   CHECK(!decode_cb_) << "Overlapping decodes are not supported.";
 
-  decode_cb_ = BindToCurrentLoop(std::move(decode_cb));
+  decode_cb_ = base::BindPostTaskToCurrentDefault(std::move(decode_cb));
 
   // Return empty (end-of-stream) frames if decoding has finished.
   if (state_ == kDecodeFinished) {
     output_cb_.Run(AudioBuffer::CreateEOSBuffer());
-    std::move(decode_cb_).Run(DecodeStatus::OK);
+    std::move(decode_cb_).Run(DecoderStatus::Codes::kOk);
     return;
   }
 
   // Initialize the |next_output_timestamp_| to be the timestamp of the first
   // non-EOS buffer.
-  if (timestamp_helper_->base_timestamp() == kNoTimestamp &&
-      !buffer->end_of_stream()) {
+  if (!timestamp_helper_->base_timestamp() && !buffer->end_of_stream()) {
     timestamp_helper_->SetBaseTimestamp(buffer->timestamp());
   }
 
@@ -146,7 +144,7 @@ void DecryptingAudioDecoder::Reset(base::OnceClosure closure) {
   DCHECK(!init_cb_);  // No Reset() during pending initialization.
   DCHECK(!reset_cb_);
 
-  reset_cb_ = BindToCurrentLoop(std::move(closure));
+  reset_cb_ = base::BindPostTaskToCurrentDefault(std::move(closure));
 
   decryptor_->ResetDecoder(Decryptor::kAudio);
 
@@ -162,7 +160,7 @@ void DecryptingAudioDecoder::Reset(base::OnceClosure closure) {
   if (state_ == kWaitingForKey) {
     DCHECK(decode_cb_);
     pending_buffer_to_decode_.reset();
-    std::move(decode_cb_).Run(DecodeStatus::ABORTED);
+    std::move(decode_cb_).Run(DecoderStatus::Codes::kAborted);
   }
 
   DCHECK(!decode_cb_);
@@ -182,9 +180,9 @@ DecryptingAudioDecoder::~DecryptingAudioDecoder() {
   }
   pending_buffer_to_decode_.reset();
   if (init_cb_)
-    std::move(init_cb_).Run(StatusCode::kDecoderInitializeNeverCompleted);
+    std::move(init_cb_).Run(DecoderStatus::Codes::kInterrupted);
   if (decode_cb_)
-    std::move(decode_cb_).Run(DecodeStatus::ABORTED);
+    std::move(decode_cb_).Run(DecoderStatus::Codes::kAborted);
   if (reset_cb_)
     std::move(reset_cb_).Run();
 }
@@ -192,7 +190,7 @@ DecryptingAudioDecoder::~DecryptingAudioDecoder() {
 void DecryptingAudioDecoder::InitializeDecoder() {
   state_ = kPendingDecoderInit;
   decryptor_->InitializeAudioDecoder(
-      config_, BindToCurrentLoop(
+      config_, base::BindPostTaskToCurrentDefault(
                    base::BindOnce(&DecryptingAudioDecoder::FinishInitialization,
                                   weak_factory_.GetWeakPtr())));
 }
@@ -207,7 +205,7 @@ void DecryptingAudioDecoder::FinishInitialization(bool success) {
 
   if (!success) {
     DVLOG(1) << __func__ << ": failed to init audio decoder on decryptor";
-    std::move(init_cb_).Run(StatusCode::kDecoderInitializeNeverCompleted);
+    std::move(init_cb_).Run(DecoderStatus::Codes::kFailedToCreateDecoder);
     decryptor_ = nullptr;
     event_cb_registration_.reset();
     state_ = kError;
@@ -219,7 +217,7 @@ void DecryptingAudioDecoder::FinishInitialization(bool success) {
       std::make_unique<AudioTimestampHelper>(config_.samples_per_second());
 
   state_ = kIdle;
-  std::move(init_cb_).Run(OkStatus());
+  std::move(init_cb_).Run(DecoderStatus::Codes::kOk);
 }
 
 void DecryptingAudioDecoder::DecodePendingBuffer() {
@@ -228,13 +226,22 @@ void DecryptingAudioDecoder::DecodePendingBuffer() {
 
   int buffer_size = 0;
   if (!pending_buffer_to_decode_->end_of_stream()) {
-    buffer_size = pending_buffer_to_decode_->data_size();
+    buffer_size = pending_buffer_to_decode_->size();
+  }
+
+  if (!DecoderBuffer::DoSubsamplesMatch(*pending_buffer_to_decode_)) {
+    MEDIA_LOG(ERROR, media_log_)
+        << "DecryptingAudioDecoder: Subsamples for Buffer do not match";
+    state_ = kError;
+    std::move(decode_cb_).Run(DecoderStatus::Codes::kFailed);
+    return;
   }
 
   decryptor_->DecryptAndDecodeAudio(
-      pending_buffer_to_decode_, BindToCurrentLoop(base::BindRepeating(
-                                     &DecryptingAudioDecoder::DeliverFrame,
-                                     weak_factory_.GetWeakPtr(), buffer_size)));
+      pending_buffer_to_decode_,
+      base::BindPostTaskToCurrentDefault(
+          base::BindRepeating(&DecryptingAudioDecoder::DeliverFrame,
+                              weak_factory_.GetWeakPtr(), buffer_size)));
 }
 
 void DecryptingAudioDecoder::DeliverFrame(
@@ -254,7 +261,7 @@ void DecryptingAudioDecoder::DeliverFrame(
       std::move(pending_buffer_to_decode_);
 
   if (reset_cb_) {
-    std::move(decode_cb_).Run(DecodeStatus::ABORTED);
+    std::move(decode_cb_).Run(DecoderStatus::Codes::kAborted);
     DoReset();
     return;
   }
@@ -265,7 +272,7 @@ void DecryptingAudioDecoder::DeliverFrame(
     DVLOG(2) << "DeliverFrame() - kError";
     MEDIA_LOG(ERROR, media_log_) << GetDecoderType() << ": decode error";
     state_ = kDecodeFinished;  // TODO add kError state
-    std::move(decode_cb_).Run(DecodeStatus::DECODE_ERROR);
+    std::move(decode_cb_).Run(DecoderStatus::Codes::kFailed);
     return;
   }
 
@@ -273,7 +280,7 @@ void DecryptingAudioDecoder::DeliverFrame(
     std::string key_id =
         scoped_pending_buffer_to_decode->decrypt_config()->key_id();
     std::string log_message =
-        "no key for key ID " + base::HexEncode(key_id.data(), key_id.size()) +
+        "no key for key ID " + base::HexEncode(key_id) +
         "; will resume decoding after new usable key is available";
     DVLOG(1) << __func__ << ": " << log_message;
     MEDIA_LOG(INFO, media_log_) << GetDecoderType() << ": " << log_message;
@@ -299,7 +306,7 @@ void DecryptingAudioDecoder::DeliverFrame(
     DVLOG(2) << "DeliverFrame() - kNeedMoreData";
     state_ = scoped_pending_buffer_to_decode->end_of_stream() ? kDecodeFinished
                                                               : kIdle;
-    std::move(decode_cb_).Run(DecodeStatus::OK);
+    std::move(decode_cb_).Run(DecoderStatus::Codes::kOk);
     return;
   }
 
@@ -316,7 +323,7 @@ void DecryptingAudioDecoder::DeliverFrame(
   }
 
   state_ = kIdle;
-  std::move(decode_cb_).Run(DecodeStatus::OK);
+  std::move(decode_cb_).Run(DecoderStatus::Codes::kOk);
 }
 
 void DecryptingAudioDecoder::OnCdmContextEvent(CdmContext::Event event) {
@@ -341,7 +348,7 @@ void DecryptingAudioDecoder::OnCdmContextEvent(CdmContext::Event event) {
 void DecryptingAudioDecoder::DoReset() {
   DCHECK(!init_cb_);
   DCHECK(!decode_cb_);
-  timestamp_helper_->SetBaseTimestamp(kNoTimestamp);
+  timestamp_helper_->Reset();
   state_ = kIdle;
   std::move(reset_cb_).Run();
 }

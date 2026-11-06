@@ -1,21 +1,19 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "storage/browser/test/test_file_system_backend.h"
 
 #include <set>
-#include <string>
 #include <utility>
 #include <vector>
 
 #include "base/files/file.h"
 #include "base/files/file_util.h"
-#include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
-#include "base/sequenced_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
+#include "components/file_access/scoped_file_access_delegate.h"
 #include "storage/browser/file_system/copy_or_move_file_validator.h"
 #include "storage/browser/file_system/file_observers.h"
 #include "storage/browser/file_system/file_system_operation.h"
@@ -28,6 +26,10 @@
 #include "storage/browser/file_system/sandbox_file_stream_writer.h"
 #include "storage/browser/quota/quota_manager.h"
 #include "storage/common/file_system/file_system_util.h"
+
+namespace blink {
+class StorageKey;
+}  // namespace blink
 
 namespace storage {
 
@@ -44,7 +46,14 @@ class TestFileUtil : public LocalFileUtil {
   base::File::Error GetLocalFilePath(FileSystemOperationContext* context,
                                      const FileSystemURL& file_system_url,
                                      base::FilePath* local_file_path) override {
-    *local_file_path = base_path_.Append(file_system_url.path());
+    if (file_system_url.path().IsAbsolute()) {
+      *local_file_path = file_system_url.path();
+    } else {
+      *local_file_path = base_path_.Append(file_system_url.path());
+    }
+    if (IsHiddenItemUnderRoot(*local_file_path, base_path_)) {
+      return base::File::FILE_ERROR_NOT_FOUND;
+    }
     return base::File::FILE_OK;
   }
 
@@ -59,16 +68,24 @@ class TestFileSystemBackend::QuotaUtil : public FileSystemQuotaUtil,
                                          public FileUpdateObserver {
  public:
   QuotaUtil() : usage_(0) {}
+
+  QuotaUtil(const QuotaUtil&) = delete;
+  QuotaUtil& operator=(const QuotaUtil&) = delete;
+
   ~QuotaUtil() override = default;
 
   // FileSystemQuotaUtil overrides.
-  base::File::Error DeleteOriginDataOnFileTaskRunner(
+  void DeleteCachedDefaultBucket(
+      const blink::StorageKey& storage_key) override {
+    NOTREACHED();
+  }
+
+  base::File::Error DeleteBucketDataOnFileTaskRunner(
       FileSystemContext* context,
       QuotaManagerProxy* proxy,
-      const url::Origin& origin,
+      const BucketLocator& bucket_locator,
       FileSystemType type) override {
     NOTREACHED();
-    return base::File::FILE_OK;
   }
 
   void PerformStorageCleanupOnFileTaskRunner(FileSystemContext* context,
@@ -76,41 +93,48 @@ class TestFileSystemBackend::QuotaUtil : public FileSystemQuotaUtil,
                                              FileSystemType type) override {}
 
   scoped_refptr<QuotaReservation> CreateQuotaReservationOnFileTaskRunner(
-      const url::Origin& origin,
+      const blink::StorageKey& storage_key,
       FileSystemType type) override {
     NOTREACHED();
-    return scoped_refptr<QuotaReservation>();
   }
 
-  std::vector<url::Origin> GetOriginsForTypeOnFileTaskRunner(
+  std::vector<blink::StorageKey> GetDefaultStorageKeysOnFileTaskRunner(
       FileSystemType type) override {
     NOTREACHED();
-    return std::vector<url::Origin>();
   }
 
-  std::vector<url::Origin> GetOriginsForHostOnFileTaskRunner(
-      FileSystemType type,
-      const std::string& host) override {
-    NOTREACHED();
-    return std::vector<url::Origin>();
-  }
-
-  int64_t GetOriginUsageOnFileTaskRunner(FileSystemContext* context,
-                                         const url::Origin& origin,
+  int64_t GetBucketUsageOnFileTaskRunner(FileSystemContext* context,
+                                         const BucketLocator& bucket_locator,
                                          FileSystemType type) override {
     return usage_;
   }
 
   // FileUpdateObserver overrides.
-  void OnStartUpdate(const FileSystemURL& url) override {}
+  void AddRef() const override {}
+  void Release() const override {}
+
+  void Disable() override { is_disabled_ = true; }
+
+  void OnStartUpdate(const FileSystemURL& url) override {
+    if (is_disabled_) {
+      return;
+    }
+  }
   void OnUpdate(const FileSystemURL& url, int64_t delta) override {
+    if (is_disabled_) {
+      return;
+    }
     usage_ += delta;
   }
-  void OnEndUpdate(const FileSystemURL& url) override {}
+  void OnEndUpdate(const FileSystemURL& url) override {
+    if (is_disabled_) {
+      return;
+    }
+  }
 
  private:
   int64_t usage_;
-  DISALLOW_COPY_AND_ASSIGN(QuotaUtil);
+  bool is_disabled_ = false;
 };
 
 TestFileSystemBackend::TestFileSystemBackend(
@@ -136,7 +160,7 @@ void TestFileSystemBackend::Initialize(FileSystemContext* context) {}
 
 void TestFileSystemBackend::ResolveURL(const FileSystemURL& url,
                                        OpenFileSystemMode mode,
-                                       OpenFileSystemCallback callback) {
+                                       ResolveURLCallback callback) {
   std::move(callback).Run(
       GetFileSystemRootURI(url.origin().GetURL(), url.type()),
       GetFileSystemName(url.origin().GetURL(), url.type()),
@@ -171,7 +195,9 @@ void TestFileSystemBackend::InitializeCopyOrMoveFileValidatorFactory(
     copy_or_move_file_validator_factory_ = std::move(factory);
 }
 
-FileSystemOperation* TestFileSystemBackend::CreateFileSystemOperation(
+std::unique_ptr<FileSystemOperation>
+TestFileSystemBackend::CreateFileSystemOperation(
+    OperationType type,
     const FileSystemURL& url,
     FileSystemContext* context,
     base::File::Error* error_code) const {
@@ -179,7 +205,7 @@ FileSystemOperation* TestFileSystemBackend::CreateFileSystemOperation(
       std::make_unique<FileSystemOperationContext>(context));
   operation_context->set_update_observers(*GetUpdateObservers(url.type()));
   operation_context->set_change_observers(*GetChangeObservers(url.type()));
-  return FileSystemOperation::Create(url, context,
+  return FileSystemOperation::Create(type, url, context,
                                      std::move(operation_context));
 }
 
@@ -197,7 +223,9 @@ std::unique_ptr<FileStreamReader> TestFileSystemBackend::CreateFileStreamReader(
     int64_t offset,
     int64_t max_bytes_to_read,
     const base::Time& expected_modification_time,
-    FileSystemContext* context) const {
+    FileSystemContext* context,
+    file_access::ScopedFileAccessDelegate::
+        RequestFilesAccessIOCallback /*file_access*/) const {
   return std::make_unique<SandboxFileStreamReader>(context, url, offset,
                                                    expected_modification_time);
 }

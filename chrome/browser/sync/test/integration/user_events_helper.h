@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "chrome/browser/sync/test/integration/single_client_status_change_checker.h"
 #include "components/sync/protocol/user_event_specifics.pb.h"
@@ -28,15 +29,17 @@ class UserEventEqualityChecker : public SingleClientStatusChangeChecker {
       syncer::SyncServiceImpl* service,
       fake_server::FakeServer* fake_server,
       std::vector<sync_pb::UserEventSpecifics> expected_specifics);
+
+  UserEventEqualityChecker(const UserEventEqualityChecker&) = delete;
+  UserEventEqualityChecker& operator=(const UserEventEqualityChecker&) = delete;
+
   ~UserEventEqualityChecker() override;
 
   bool IsExitConditionSatisfied(std::ostream* os) override;
 
  private:
-  fake_server::FakeServer* fake_server_;
+  const raw_ptr<fake_server::FakeServer> fake_server_;
   const std::vector<sync_pb::UserEventSpecifics> expected_specifics_;
-
-  DISALLOW_COPY_AND_ASSIGN(UserEventEqualityChecker);
 };
 
 #endif  // CHROME_BROWSER_SYNC_TEST_INTEGRATION_USER_EVENTS_HELPER_H_

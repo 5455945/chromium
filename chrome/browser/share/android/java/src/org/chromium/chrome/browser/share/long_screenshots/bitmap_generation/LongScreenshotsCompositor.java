@@ -1,19 +1,20 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.share.long_screenshots.bitmap_generation;
 
 import android.graphics.Bitmap;
+import android.graphics.Point;
 import android.graphics.Rect;
+import android.util.Size;
 
-import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.Callback;
 import org.chromium.base.UnguessableToken;
-import org.chromium.components.paint_preview.common.proto.PaintPreview.PaintPreviewProto;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.components.paintpreview.browser.NativePaintPreviewServiceProvider;
 import org.chromium.components.paintpreview.player.CompositorStatus;
 import org.chromium.components.paintpreview.player.PlayerCompositorDelegate;
@@ -24,9 +25,12 @@ import org.chromium.url.GURL;
  * Compositor for LongScreenshots. Responsible for calling into Freeze-dried tabs to composite the
  * captured webpage.
  */
+@NullMarked
 public class LongScreenshotsCompositor {
+    private final Callback<Integer> mCompositorCallback;
+    private @Nullable Size mContentSize;
+    private @Nullable Point mScrollOffset;
     private PlayerCompositorDelegate mDelegate;
-    private Callback<Integer> mCompositorCallback;
 
     private static PlayerCompositorDelegate.Factory sCompositorDelegateFactory =
             new CompositorDelegateFactory();
@@ -37,22 +41,31 @@ public class LongScreenshotsCompositor {
      * @param url The URL for which the content should be composited for.
      * @param nativePaintPreviewServiceProvider The native paint preview service.
      * @param directoryKey The key for the directory storing the data.
-     * @param response The proto with the address of the captured bitmap.
+     * @param nativeCaptureResultPtr A pointer to a native paint_preview::CaptureResult.
      */
-    public LongScreenshotsCompositor(GURL url,
+    public LongScreenshotsCompositor(
+            GURL url,
             NativePaintPreviewServiceProvider nativePaintPreviewServiceProvider,
-            String directoryKey, PaintPreviewProto response, Callback<Integer> compositorCallback) {
+            String directoryKey,
+            long nativeCaptureResultPtr,
+            Callback<Integer> compositorCallback) {
         mCompositorCallback = compositorCallback;
 
-        mDelegate = getCompositorDelegateFactory().createForProto(nativePaintPreviewServiceProvider,
-                response, url, directoryKey, true, this::onCompositorReady,
-                this::onCompositorError);
+        mDelegate =
+                getCompositorDelegateFactory()
+                        .createForCaptureResult(
+                                nativePaintPreviewServiceProvider,
+                                nativeCaptureResultPtr,
+                                url,
+                                directoryKey,
+                                true,
+                                this::onCompositorReady,
+                                this::onCompositorError);
     }
 
-    /**
-     * Called when the compositor cannot be successfully initialized.
-     */
-    private void onCompositorError(@CompositorStatus int status) {
+    /** Called when the compositor cannot be successfully initialized. */
+    @VisibleForTesting
+    protected void onCompositorError(@CompositorStatus int status) {
         mCompositorCallback.onResult(status);
     }
 
@@ -62,10 +75,27 @@ public class LongScreenshotsCompositor {
      * {@link #mHostView}.
      */
     @VisibleForTesting
-    protected void onCompositorReady(UnguessableToken rootFrameGuid, UnguessableToken[] frameGuids,
-            int[] frameContentSize, int[] scrollOffsets, int[] subFramesCount,
-            UnguessableToken[] subFrameGuids, int[] subFrameClipRects, long nativeAxTree) {
+    protected void onCompositorReady(
+            UnguessableToken rootFrameGuid,
+            UnguessableToken[] frameGuids,
+            int[] frameContentSize,
+            int[] scrollOffsets,
+            int[] subFramesCount,
+            UnguessableToken[] subFrameGuids,
+            int[] subFrameClipRects,
+            float pageScaleFactor,
+            long nativeAxTree) {
+        mContentSize = getMainFrameValues(frameContentSize);
+        Size offsetSize = getMainFrameValues(scrollOffsets);
+        mScrollOffset = new Point(offsetSize.getWidth(), offsetSize.getHeight());
         mCompositorCallback.onResult(CompositorStatus.OK);
+    }
+
+    private Size getMainFrameValues(int[] arr) {
+        if (arr != null && arr.length >= 2) {
+            return new Size(arr[0], arr[1]);
+        }
+        return new Size(0, 0);
     }
 
     /**
@@ -76,11 +106,13 @@ public class LongScreenshotsCompositor {
      * @param bitmapCallback Called when a bitmap was successfully generated.
      * @return id for the request.
      */
-    public int requestBitmap(Rect rect, Runnable errorCallback, Callback<Bitmap> bitmapCallback) {
+    public int requestBitmap(
+            Rect rect, float scaleFactor, Runnable errorCallback, Callback<Bitmap> bitmapCallback) {
         // Check that the rect is within the bounds.
-        return mDelegate.requestBitmap(rect, 1, bitmapCallback, errorCallback);
+        return mDelegate.requestBitmap(rect, scaleFactor, bitmapCallback, errorCallback);
     }
 
+    @SuppressWarnings("NullAway")
     public void destroy() {
         if (mDelegate != null) {
             mDelegate.destroy();
@@ -90,22 +122,40 @@ public class LongScreenshotsCompositor {
 
     static class CompositorDelegateFactory implements PlayerCompositorDelegate.Factory {
         @Override
-        public PlayerCompositorDelegate create(NativePaintPreviewServiceProvider service,
-                @NonNull GURL url, String directoryKey, boolean mainFrameMode,
-                @NonNull PlayerCompositorDelegate.CompositorListener compositorListener,
+        public PlayerCompositorDelegate create(
+                NativePaintPreviewServiceProvider service,
+                GURL url,
+                String directoryKey,
+                boolean mainFrameMode,
+                PlayerCompositorDelegate.CompositorListener compositorListener,
                 Callback<Integer> compositorErrorCallback) {
-            return new PlayerCompositorDelegateImpl(service, null, url, directoryKey, mainFrameMode,
-                    compositorListener, compositorErrorCallback);
+            return new PlayerCompositorDelegateImpl(
+                    service,
+                    0,
+                    url,
+                    directoryKey,
+                    mainFrameMode,
+                    compositorListener,
+                    compositorErrorCallback);
         }
 
         @Override
-        public PlayerCompositorDelegate createForProto(NativePaintPreviewServiceProvider service,
-                @Nullable PaintPreviewProto proto, @NonNull GURL url, String directoryKey,
+        public PlayerCompositorDelegate createForCaptureResult(
+                NativePaintPreviewServiceProvider service,
+                long nativeCaptureResultPtr,
+                GURL url,
+                String directoryKey,
                 boolean mainFrameMode,
-                @NonNull PlayerCompositorDelegate.CompositorListener compositorListener,
+                PlayerCompositorDelegate.CompositorListener compositorListener,
                 Callback<Integer> compositorErrorCallback) {
-            return new PlayerCompositorDelegateImpl(service, proto, url, directoryKey,
-                    mainFrameMode, compositorListener, compositorErrorCallback);
+            return new PlayerCompositorDelegateImpl(
+                    service,
+                    nativeCaptureResultPtr,
+                    url,
+                    directoryKey,
+                    mainFrameMode,
+                    compositorListener,
+                    compositorErrorCallback);
         }
     }
 
@@ -113,7 +163,14 @@ public class LongScreenshotsCompositor {
         return sCompositorDelegateFactory;
     }
 
-    @VisibleForTesting
+    public @Nullable Size getContentSize() {
+        return mContentSize;
+    }
+
+    public @Nullable Point getScrollOffset() {
+        return mScrollOffset;
+    }
+
     public static void overrideCompositorDelegateFactoryForTesting(
             PlayerCompositorDelegate.Factory factory) {
         sCompositorDelegateFactory = factory; // IN-TEST

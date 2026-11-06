@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,8 @@
 
 #include <stddef.h>
 
-#include "base/callback.h"
 #include "base/containers/circular_deque.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "base/threading/thread_checker.h"
 #include "content/public/common/resource_usage_reporter.mojom.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -50,8 +49,7 @@
 //         service.InitWithNewPipeAndPassReceiver();
 //     content::GetIOThreadTaskRunner({})->PostTask(
 //         FROM_HERE,
-//         base::BindOnce(&Foo::ConnectToService, this,
-//         base::Passed(&receiver)));
+//         base::BindOnce(&Foo::ConnectToService, this, std::move(receiver)));
 //     resource_usage_.reset(new ProcessResourceUsage(std::move(service)));
 //   ...
 //
@@ -62,6 +60,10 @@ class ProcessResourceUsage {
   // Must be called from the same thread that created |service|.
   explicit ProcessResourceUsage(
       mojo::PendingRemote<content::mojom::ResourceUsageReporter> service);
+
+  ProcessResourceUsage(const ProcessResourceUsage&) = delete;
+  ProcessResourceUsage& operator=(const ProcessResourceUsage&) = delete;
+
   ~ProcessResourceUsage();
 
   // Refresh the resource usage information. |callback| is invoked when the
@@ -69,12 +71,15 @@ class ProcessResourceUsage {
   void Refresh(base::OnceClosure callback);
 
   // Get V8 memory usage information.
-  bool ReportsV8MemoryStats() const;
   size_t GetV8MemoryAllocated() const;
   size_t GetV8MemoryUsed() const;
 
   // Get Blink resource cache information.
   blink::WebCacheResourceTypeStats GetBlinkMemoryCacheStats() const;
+
+  // Get CppGC memory usage information.
+  size_t GetCppGCMemoryAllocated() const;
+  size_t GetCppGCMemoryUsed() const;
 
  private:
   // Mojo IPC callback.
@@ -89,8 +94,6 @@ class ProcessResourceUsage {
   content::mojom::ResourceUsageDataPtr stats_;
 
   base::ThreadChecker thread_checker_;
-
-  DISALLOW_COPY_AND_ASSIGN(ProcessResourceUsage);
 };
 
 #endif  // CHROME_BROWSER_PROCESS_RESOURCE_USAGE_H_

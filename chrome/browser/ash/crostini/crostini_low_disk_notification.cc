@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,24 +6,22 @@
 
 #include <stdint.h>
 
+#include "ash/constants/notifier_catalogs.h"
 #include "ash/public/cpp/notification_utils.h"
-#include "base/bind.h"
-#include "base/strings/utf_string_conversions.h"
-#include "chrome/app/vector_icons/vector_icons.h"
+#include "ash/resources/vector_icons/vector_icons.h"
+#include "ash/strings/grit/ash_strings.h"
+#include "ash/webui/settings/public/constants/routes.mojom.h"
+#include "base/check_deref.h"
+#include "base/functional/bind.h"
 #include "chrome/browser/ash/crostini/crostini_util.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/notifications/system_notification_helper.h"
-#include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/settings_window_manager_chromeos.h"
-#include "chrome/browser/ui/webui/settings/chromeos/constants/routes.mojom-forward.h"
-#include "chrome/common/webui_url_constants.h"
-#include "chrome/grit/generated_resources.h"
-#include "chromeos/settings/cros_settings_names.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
+#include "chromeos/ash/components/settings/cros_settings_names.h"
+#include "chromeos/ash/experiences/settings_ui/settings_app_manager.h"
+#include "components/session_manager/core/session.h"
+#include "components/session_manager/core/session_manager.h"
 #include "components/user_manager/user_manager.h"
-#include "content/public/browser/browser_thread.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/chromeos/resources/grit/ui_chromeos_resources.h"
+#include "ui/message_center/message_center.h"
 #include "ui/message_center/public/cpp/notification.h"
 #include "ui/message_center/public/cpp/notification_types.h"
 #include "ui/message_center/public/cpp/notifier_id.h"
@@ -34,11 +32,10 @@ const char kLowDiskId[] = "crostini_low_disk";
 const char kNotifierLowDisk[] = "crostini.disk";
 const uint64_t kNotificationThreshold = 1 << 30;          // 1GB
 const uint64_t kNotificationSevereThreshold = 512 << 20;  // 512MB
-constexpr base::TimeDelta kNotificationInterval =
-    base::TimeDelta::FromMinutes(2);
+constexpr base::TimeDelta kNotificationInterval = base::Minutes(2);
 
-chromeos::CiceroneClient* GetCiceroneClient() {
-  return chromeos::CiceroneClient::Get();
+ash::CiceroneClient* GetCiceroneClient() {
+  return ash::CiceroneClient::Get();
 }
 
 }  // namespace
@@ -56,9 +53,7 @@ CrostiniLowDiskNotification::~CrostiniLowDiskNotification() {
 
 void CrostiniLowDiskNotification::OnLowDiskSpaceTriggered(
     const vm_tools::cicerone::LowDiskSpaceTriggeredSignal& signal) {
-
   if (signal.vm_name() != kCrostiniDefaultVmName) {
-    // TODO(crbug/1189009): Support VMs with different names
     return;
   }
   ShowNotificationIfAppropriate(signal.free_bytes());
@@ -72,8 +67,8 @@ void CrostiniLowDiskNotification::ShowNotificationIfAppropriate(
   if (severity == Severity::NONE) {
     return;
   }
-  if (!chromeos::CrosSettings::Get()->GetBoolean(
-          chromeos::kDeviceShowLowDiskSpaceNotification,
+  if (!ash::CrosSettings::Get()->GetBoolean(
+          ash::kDeviceShowLowDiskSpaceNotification,
           &show_low_disk_space_notification)) {
     DVLOG(1) << "DeviceShowLowDiskSpaceNotification not set, "
                 "defaulting to showing the notification.";
@@ -82,7 +77,7 @@ void CrostiniLowDiskNotification::ShowNotificationIfAppropriate(
   // We suppress the low-space notifications when there are multiple users on an
   // enterprise managed device based on policy configuration.
   if (!show_low_disk_space_notification &&
-      user_manager::UserManager::Get()->GetUsers().size() > 1) {
+      user_manager::UserManager::Get()->GetPersistedUsers().size() > 1) {
     LOG(WARNING) << "Crostini is low on disk space, but the notification was "
                  << "suppressed on a managed device.";
     return;
@@ -91,8 +86,8 @@ void CrostiniLowDiskNotification::ShowNotificationIfAppropriate(
   if (severity != last_notification_severity_ ||
       (severity == Severity::HIGH &&
        now - last_notification_time_ > notification_interval_)) {
-    SystemNotificationHelper::GetInstance()->Display(
-        *CreateNotification(severity));
+    message_center::MessageCenter::Get()->AddNotification(
+        CreateNotification(severity));
     last_notification_time_ = now;
     last_notification_severity_ = severity;
   }
@@ -123,22 +118,28 @@ CrostiniLowDiskNotification::CreateNotification(Severity severity) {
   optional_fields.buttons.push_back(storage_settings);
 
   message_center::NotifierId notifier_id(
-      message_center::NotifierType::SYSTEM_COMPONENT, kNotifierLowDisk);
+      message_center::NotifierType::SYSTEM_COMPONENT, kNotifierLowDisk,
+      ash::NotificationCatalogName::kCrostiniLowDisk);
 
-  auto on_click = base::BindRepeating([](absl::optional<int> button_index) {
+  auto on_click = base::BindRepeating([](std::optional<int> button_index) {
     if (button_index) {
-      DCHECK_EQ(0, *button_index);
-      chrome::SettingsWindowManager::GetInstance()->ShowOSSettings(
-          ProfileManager::GetActiveUserProfile(),
-          chromeos::settings::mojom::kCrostiniDetailsSubpagePath);
+      CHECK_EQ(0, *button_index, base::NotFatalUntil::M160);
+      auto* session =
+          session_manager::SessionManager::Get()->GetActiveSession();
+      CHECK(session);
+      auto* user =
+          user_manager::UserManager::Get()->FindUser(session->account_id());
+      ash::SettingsAppManager::Get()->Open(
+          CHECK_DEREF(user),
+          {.sub_page = chromeos::settings::mojom::kCrostiniDetailsSubpagePath});
     }
   });
   std::unique_ptr<message_center::Notification> notification =
-      ash::CreateSystemNotification(
+      ash::CreateSystemNotificationPtr(
           message_center::NOTIFICATION_TYPE_SIMPLE, kLowDiskId, title, message,
-          std::u16string(), GURL(), notifier_id, optional_fields,
+          std::u16string(), notifier_id, optional_fields,
           new message_center::HandleNotificationClickDelegate(on_click),
-          kNotificationStorageFullIcon, warning_level);
+          ash::kNotificationStorageFullIcon, warning_level);
 
   return notification;
 }

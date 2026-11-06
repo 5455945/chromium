@@ -1,11 +1,10 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_EXTENSIONS_API_IMAGE_WRITER_PRIVATE_ZIP_EXTRACTOR_H_
 #define CHROME_BROWSER_EXTENSIONS_API_IMAGE_WRITER_PRIVATE_ZIP_EXTRACTOR_H_
 
-#include "base/callback.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/api/image_writer_private/extraction_properties.h"
 #include "third_party/zlib/google/zip_reader.h"
@@ -22,8 +21,8 @@ class ZipExtractor {
  public:
   static bool IsZipFile(const base::FilePath& image_path);
 
-  // Start extracting the archive at |image_path| to |temp_dir_path| in
-  // |properties|.
+  // Start extracting the archive at `image_path` to `temp_dir_path` in
+  // `properties`.
   static void Extract(ExtractionProperties properties);
 
   ZipExtractor(const ZipExtractor&) = delete;

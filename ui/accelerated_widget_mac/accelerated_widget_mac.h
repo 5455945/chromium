@@ -1,15 +1,15 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_ACCELERATED_WIDGET_MAC_ACCELERATED_WIDGET_MAC_H_
 #define UI_ACCELERATED_WIDGET_MAC_ACCELERATED_WIDGET_MAC_H_
 
-
+#include "base/memory/raw_ptr.h"
 #include "ui/accelerated_widget_mac/accelerated_widget_mac_export.h"
 #include "ui/accelerated_widget_mac/ca_layer_frame_sink.h"
 #include "ui/gfx/geometry/size.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace ui {
 
@@ -22,7 +22,7 @@ class AcceleratedWidgetMacNSView {
   // UpdateCALayerTree method is called. This is used to update background
   // colors and to suppressing drawing of blank windows until content is
   // available.
-  virtual void AcceleratedWidgetCALayerParamsUpdated() = 0;
+  virtual void AcceleratedWidgetCALayerParamsUpdated(gfx::CALayerParams) = 0;
 };
 
 // AcceleratedWidgetMac owns a tree of CALayers. The widget may be passed
@@ -33,6 +33,10 @@ class ACCELERATED_WIDGET_MAC_EXPORT AcceleratedWidgetMac
     : public CALayerFrameSink {
  public:
   AcceleratedWidgetMac();
+
+  AcceleratedWidgetMac(const AcceleratedWidgetMac&) = delete;
+  AcceleratedWidgetMac& operator=(const AcceleratedWidgetMac&) = delete;
+
   ~AcceleratedWidgetMac() override;
 
   gfx::AcceleratedWidget accelerated_widget() { return native_widget_; }
@@ -61,10 +65,10 @@ class ACCELERATED_WIDGET_MAC_EXPORT AcceleratedWidgetMac
   static AcceleratedWidgetMac* Get(gfx::AcceleratedWidget widget);
 
   // gfx::CALayerFrameSink implementation:
-  void UpdateCALayerTree(const gfx::CALayerParams& ca_layer_params) override;
+  void UpdateCALayerTree(gfx::CALayerParams ca_layer_params) override;
 
   // The AcceleratedWidgetMacNSView that is using this as its internals.
-  AcceleratedWidgetMacNSView* view_ = nullptr;
+  raw_ptr<AcceleratedWidgetMacNSView> view_ = nullptr;
 
   // A phony NSView handle used to identify this.
   gfx::AcceleratedWidget native_widget_ = gfx::kNullAcceleratedWidget;
@@ -74,10 +78,7 @@ class ACCELERATED_WIDGET_MAC_EXPORT AcceleratedWidgetMac
   bool is_suspended_ = false;
 
   // The last CALayer parameter update from the CALayerFrameSink interface.
-  bool last_ca_layer_params_valid_ = false;
-  gfx::CALayerParams last_ca_layer_params_;
-
-  DISALLOW_COPY_AND_ASSIGN(AcceleratedWidgetMac);
+  std::optional<gfx::CALayerParams> last_ca_layer_params_;
 };
 
 }  // namespace ui

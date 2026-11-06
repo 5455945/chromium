@@ -1,10 +1,12 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/download/public/background_service/download_params.h"
 
 #include "components/download/public/background_service/clients.h"
+
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 
 namespace download {
 
@@ -21,9 +23,16 @@ bool SchedulingParams::operator==(const SchedulingParams& rhs) const {
 }
 
 RequestParams::RequestParams()
-    : method("GET"), fetch_error_body(false), require_safety_checks(true) {}
+    : method("GET"),
+      fetch_error_body(false),
+      require_safety_checks(true),
+      credentials_mode(::network::mojom::CredentialsMode::kInclude) {}
 
 RequestParams::RequestParams(const RequestParams& other) = default;
+RequestParams& RequestParams::operator=(const RequestParams& other) = default;
+RequestParams::RequestParams(RequestParams&& other) = default;
+RequestParams& RequestParams::operator=(RequestParams&& other) = default;
+RequestParams::~RequestParams() = default;
 
 DownloadParams::DownloadParams() : client(DownloadClient::INVALID) {}
 DownloadParams::~DownloadParams() = default;

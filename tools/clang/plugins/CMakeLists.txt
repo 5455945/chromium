@@ -1,8 +1,14 @@
 set(plugin_sources
+  BlinkDataMemberTypeChecker.cpp
   ChromeClassTester.cpp
+  FilteredASTConsumer.cpp
   FindBadConstructsAction.cpp
   FindBadConstructsConsumer.cpp
   CheckIPCVisitor.cpp
+  CheckLayoutObjectMethodsVisitor.cpp
+  StackAllocatedChecker.cpp
+  StrictDepsPlugin.cpp
+  UnsafeBuffersPlugin.cpp
   Util.cpp
 )
 
@@ -22,6 +28,6 @@ endforeach()
 set_property(TARGET clang APPEND PROPERTY SOURCES ${absolute_sources})
 
 cr_add_test(plugins_test
-  python tests/test.py
+  python3 tests/test.py
   ${CMAKE_BINARY_DIR}/bin/clang
   )

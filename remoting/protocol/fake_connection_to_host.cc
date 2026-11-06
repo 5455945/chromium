@@ -1,17 +1,16 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "remoting/protocol/fake_connection_to_host.h"
 
+#include "base/task/single_thread_task_runner.h"
 #include "remoting/protocol/authenticator.h"
 #include "remoting/protocol/transport_context.h"
 
-namespace remoting {
-namespace test {
+namespace remoting::test {
 
-FakeConnectionToHost::FakeConnectionToHost()
-    : session_config_(protocol::SessionConfig::ForTest()) {}
+FakeConnectionToHost::FakeConnectionToHost() = default;
 FakeConnectionToHost::~FakeConnectionToHost() = default;
 
 void FakeConnectionToHost::set_client_stub(protocol::ClientStub* client_stub) {}
@@ -34,7 +33,7 @@ void FakeConnectionToHost::Connect(
 
   event_callback_ = event_callback;
 
-  SetState(CONNECTING, protocol::OK);
+  SetState(CONNECTING, ErrorCode::OK);
 }
 
 void FakeConnectionToHost::Disconnect(protocol::ErrorCode error) {}
@@ -76,10 +75,6 @@ void FakeConnectionToHost::SignalConnectionReady(bool ready) {
   event_callback_->OnConnectionReady(ready);
 }
 
-const protocol::SessionConfig& FakeConnectionToHost::config() {
-  return *session_config_;
-}
-
 protocol::ClipboardStub* FakeConnectionToHost::clipboard_forwarder() {
   return &mock_clipboard_stub_;
 }
@@ -98,7 +93,7 @@ protocol::ConnectionToHost::State FakeConnectionToHost::state() const {
 
 void FakeConnectionToHost::SetState(State state, protocol::ErrorCode error) {
   // |error| should be specified only when |state| is set to FAILED.
-  DCHECK(state == FAILED || error == protocol::OK);
+  DCHECK(state == FAILED || error == ErrorCode::OK);
 
   if (state != state_) {
     state_ = state;
@@ -106,5 +101,4 @@ void FakeConnectionToHost::SetState(State state, protocol::ErrorCode error) {
   }
 }
 
-}  // namespace test
-}  // namespace remoting
+}  // namespace remoting::test

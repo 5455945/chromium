@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "extensions/browser/extension_function.h"
 
 namespace base {
@@ -15,13 +16,13 @@ class Clock;
 
 namespace extensions {
 struct Alarm;
-using AlarmList = std::vector<std::unique_ptr<Alarm>>;
+using AlarmList = std::vector<Alarm>;
 
 class AlarmsCreateFunction : public ExtensionFunction {
  public:
   AlarmsCreateFunction();
-  // Use |clock| instead of the default clock. Does not take ownership
-  // of |clock|. Used for testing.
+  // Use `clock` instead of the default clock. Does not take ownership
+  // of `clock`. Used for testing.
   explicit AlarmsCreateFunction(base::Clock* clock);
 
  protected:
@@ -33,24 +34,24 @@ class AlarmsCreateFunction : public ExtensionFunction {
  private:
   void Callback();
 
-  base::Clock* const clock_;
+  const raw_ptr<base::Clock> clock_;
 };
 
 class AlarmsGetFunction : public ExtensionFunction {
  protected:
-  ~AlarmsGetFunction() override {}
+  ~AlarmsGetFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
 
  private:
-  void Callback(const std::string& name, Alarm* alarm);
+  void Callback(Alarm* alarm);
   DECLARE_EXTENSION_FUNCTION("alarms.get", ALARMS_GET)
 };
 
 class AlarmsGetAllFunction : public ExtensionFunction {
  protected:
-  ~AlarmsGetAllFunction() override {}
+  ~AlarmsGetAllFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
@@ -62,19 +63,19 @@ class AlarmsGetAllFunction : public ExtensionFunction {
 
 class AlarmsClearFunction : public ExtensionFunction {
  protected:
-  ~AlarmsClearFunction() override {}
+  ~AlarmsClearFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;
 
  private:
-  void Callback(const std::string& name, bool success);
+  void Callback(bool removed);
   DECLARE_EXTENSION_FUNCTION("alarms.clear", ALARMS_CLEAR)
 };
 
 class AlarmsClearAllFunction : public ExtensionFunction {
  protected:
-  ~AlarmsClearAllFunction() override {}
+  ~AlarmsClearAllFunction() override = default;
 
   // ExtensionFunction:
   ResponseAction Run() override;

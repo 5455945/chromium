@@ -25,12 +25,42 @@
 
 #include "third_party/blink/renderer/platform/geometry/length.h"
 
+#include <array>
+
 #include "third_party/blink/renderer/platform/geometry/blend.h"
 #include "third_party/blink/renderer/platform/geometry/calculation_value.h"
-#include "third_party/blink/renderer/platform/wtf/hash_map.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
+#include "third_party/blink/renderer/platform/heap/persistent.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/hash_traits.h"
 #include "third_party/blink/renderer/platform/wtf/size_assertions.h"
+#include "third_party/blink/renderer/platform/wtf/static_constructors.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
+#include "third_party/blink/renderer/platform/wtf/vector.h"
+#include "third_party/blink/renderer/platform/wtf/wtf.h"
 
 namespace blink {
+
+DEFINE_GLOBAL(PLATFORM_EXPORT, Length, g_auto_length);
+DEFINE_GLOBAL(PLATFORM_EXPORT, Length, g_stretch_length);
+DEFINE_GLOBAL(PLATFORM_EXPORT, Length, g_fit_content_length);
+DEFINE_GLOBAL(PLATFORM_EXPORT, Length, g_max_content_length);
+DEFINE_GLOBAL(PLATFORM_EXPORT, Length, g_min_content_length);
+DEFINE_GLOBAL(PLATFORM_EXPORT, Length, g_min_intrinsic_length);
+
+// static
+void Length::Initialize() {
+  new (base::NotNullTag::kNotNull, (void*)&g_auto_length) Length(kAuto);
+  new (base::NotNullTag::kNotNull, (void*)&g_stretch_length) Length(kStretch);
+  new (base::NotNullTag::kNotNull, (void*)&g_fit_content_length)
+      Length(kFitContent);
+  new (base::NotNullTag::kNotNull, (void*)&g_max_content_length)
+      Length(kMaxContent);
+  new (base::NotNullTag::kNotNull, (void*)&g_min_content_length)
+      Length(kMinContent);
+  new (base::NotNullTag::kNotNull, (void*)&g_min_intrinsic_length)
+      Length(kMinIntrinsic);
+}
 
 class CalculationValueHandleMap {
   USING_FAST_MALLOC(CalculationValueHandleMap);
@@ -41,62 +71,98 @@ class CalculationValueHandleMap {
   CalculationValueHandleMap& operator=(const CalculationValueHandleMap&) =
       delete;
 
-  int insert(scoped_refptr<const CalculationValue> calc_value) {
-    DCHECK(index_);
+  struct MemberWithCount {
+    DISALLOW_NEW();
+   public:
+    MemberWithCount() = default;
+    MemberWithCount(const CalculationValue* value) : value(value) {}
+    void Trace(Visitor* visitor) const { visitor->Trace(value); }
+
+    Member<const CalculationValue> value;
+    unsigned count = 1u;
+  };
+
+  unsigned insert(const CalculationValue* calc_value) {
+    FlushDecrements();
+
     // FIXME calc(): https://bugs.webkit.org/show_bug.cgi?id=80489
     // This monotonically increasing handle generation scheme is potentially
     // wasteful of the handle space. Consider reusing empty handles.
-    while (map_.Contains(index_))
+    do {
       index_++;
-
-    map_.Set(index_, std::move(calc_value));
-
+    } while (IsHashTraitsEmptyOrDeletedValue<HashTraits<unsigned>>(index_) ||
+             !map_->insert(index_, calc_value).is_new_entry);
     return index_;
   }
 
-  void Remove(int index) {
-    DCHECK(map_.Contains(index));
-    map_.erase(index);
+  const CalculationValue& Get(unsigned index) const {
+    return *map_->at(index).value;
   }
 
-  const CalculationValue& Get(int index) {
-    DCHECK(map_.Contains(index));
-    return *map_.at(index);
+  unsigned GetCount(unsigned index) {
+    FlushDecrements();
+    return map_->at(index).count;
   }
 
-  void DecrementRef(int index) {
-    DCHECK(map_.Contains(index));
-    const CalculationValue* value = map_.at(index);
-    if (value->HasOneRef()) {
-      // Force the CalculationValue destructor early to avoid a potential
-      // recursive call inside HashMap remove().
-      map_.Set(index, nullptr);
-      map_.erase(index);
-    } else {
-      value->Release();
+  wtf_size_t GetMapSize() {
+    FlushDecrements();
+    return map_->size();
+  }
+
+  void DecrementCount(unsigned index) {
+    auto iter = map_->find(index);
+    CHECK(iter != map_->end());
+    unsigned count = --iter->value.count;
+    if (count == 0u) {
+      map_->erase(iter);
     }
   }
 
+  void DeferredDecrementCount(unsigned index) {
+    // This is called from `~Length()`, which may execute during a GC sweep
+    // when touching `map_` is forbidden.
+    decrements_.push_back(index);
+  }
+
+  void IncrementCount(unsigned index) {
+    FlushDecrements();
+    auto iter = map_->find(index);
+    CHECK(iter != map_->end());
+    unsigned count = ++iter->value.count;
+    CHECK_GT(count, 0u);
+  }
+
  private:
-  int index_ = 1;
-  HashMap<int, scoped_refptr<const CalculationValue>> map_;
+  void FlushDecrements() {
+    while (!decrements_.empty()) {
+      unsigned index = decrements_.back();
+      decrements_.pop_back();
+      DecrementCount(index);
+    }
+  }
+
+  unsigned index_ = 0;
+  Vector<unsigned, 32> decrements_;
+  Persistent<GCedHeapHashMap<unsigned, MemberWithCount>> map_ =
+      MakeGarbageCollected<GCedHeapHashMap<unsigned, MemberWithCount>>();
 };
 
 static CalculationValueHandleMap& CalcHandles() {
+  CHECK(IsMainThread());
   DEFINE_STATIC_LOCAL(CalculationValueHandleMap, handle_map, ());
   return handle_map;
 }
 
-Length::Length(scoped_refptr<const CalculationValue> calc)
-    : quirk_(false), type_(kCalculated), is_float_(false) {
-  int_value_ = CalcHandles().insert(std::move(calc));
+Length::Length(const CalculationValue* calc)
+    : quirk_(false), type_(kCalculated) {
+  calculation_handle_ = CalcHandles().insert(calc);
 }
 
 Length Length::BlendMixedTypes(const Length& from,
                                double progress,
                                ValueRange range) const {
-  DCHECK(from.IsSpecified());
-  DCHECK(IsSpecified());
+  DCHECK(from.CanConvertToCalculation());
+  DCHECK(CanConvertToCalculation());
   return Length(
       AsCalculationValue()->Blend(*from.AsCalculationValue(), progress, range));
 }
@@ -108,45 +174,54 @@ Length Length::BlendSameTypes(const Length& from,
   if (IsZero())
     result_type = from.GetType();
 
-  float blended_value = blink::Blend(from.Value(), Value(), progress);
-  if (range == kValueRangeNonNegative)
-    blended_value = clampTo<float>(blended_value, 0);
+  float blended_value =
+      blink::Blend(from.GetFloatValue(), GetFloatValue(), progress);
+  if (std::isinf(blended_value)) {
+    blended_value = blended_value > 0 ? std::numeric_limits<float>::max()
+                                      : std::numeric_limits<float>::lowest();
+  }
+  if (range == ValueRange::kNonNegative)
+    blended_value = ClampTo<float>(blended_value, 0);
   return Length(blended_value, result_type);
 }
 
 PixelsAndPercent Length::GetPixelsAndPercent() const {
   switch (GetType()) {
     case kFixed:
-      return PixelsAndPercent(Value(), 0);
+      return PixelsAndPercent(Pixels());
     case kPercent:
-      return PixelsAndPercent(0, Value());
+      return PixelsAndPercent(0.0f, Percent(), /*has_explicit_pixels=*/false,
+                              /*has_explicit_percent=*/true);
     case kCalculated:
       return GetCalculationValue().GetPixelsAndPercent();
     default:
       NOTREACHED();
-      return PixelsAndPercent(0, 0);
   }
 }
 
-scoped_refptr<const CalculationValue> Length::AsCalculationValue() const {
+const CalculationValue* Length::AsCalculationValue() const {
   if (IsCalculated())
     return &GetCalculationValue();
-  return CalculationValue::Create(GetPixelsAndPercent(), kValueRangeAll);
+  return MakeGarbageCollected<CalculationValue>(GetPixelsAndPercent(),
+                                                ValueRange::kAll);
 }
 
 Length Length::SubtractFromOneHundredPercent() const {
   if (IsPercent())
-    return Length::Percent(100 - Value());
-  DCHECK(IsSpecified());
-  scoped_refptr<const CalculationValue> result =
-      AsCalculationValue()->SubtractFromOneHundredPercent();
-  if (result->IsExpression() ||
-      (result->Pixels() != 0 && result->Percent() != 0)) {
-    return Length(std::move(result));
+    return Length::Percent(100 - Percent());
+  DCHECK(CanConvertToCalculation());
+  return Length(AsCalculationValue()->SubtractFromOneHundredPercent());
+}
+
+Length Length::Add(const Length& other) const {
+  CHECK(CanConvertToCalculation());
+  if (IsFixed() && other.IsFixed()) {
+    return Length::Fixed(Pixels() + other.Pixels());
   }
-  if (result->Percent())
-    return Length::Percent(result->Percent());
-  return Length::Fixed(result->Pixels());
+  if (IsPercent() && other.IsPercent()) {
+    return Length::Percent(Percent() + other.Percent());
+  }
+  return Length(AsCalculationValue()->Add(*other.AsCalculationValue()));
 }
 
 Length Length::Zoom(double factor) const {
@@ -160,33 +235,187 @@ Length Length::Zoom(double factor) const {
   }
 }
 
+Length Length::Multiplied(float max_value, double factor) const {
+  if (GetType() == kCalculated) {
+    Length resolved = Length::Fixed(NonNanCalculatedValue(max_value, {}));
+    resolved.value_ *= factor;
+    return resolved;
+  }
+  Length copy = *this;
+  copy.value_ *= factor;
+  return copy;
+}
+
 const CalculationValue& Length::GetCalculationValue() const {
   DCHECK(IsCalculated());
   return CalcHandles().Get(CalculationHandle());
 }
 
-void Length::IncrementCalculatedRef() const {
+void Length::IncrementCalculatedCount() const {
   DCHECK(IsCalculated());
-  GetCalculationValue().AddRef();
+  CalcHandles().IncrementCount(CalculationHandle());
 }
 
-void Length::DecrementCalculatedRef() const {
+void Length::DecrementCalculatedCount() const {
   DCHECK(IsCalculated());
-  CalcHandles().DecrementRef(CalculationHandle());
+  CalcHandles().DecrementCount(CalculationHandle());
 }
 
-float Length::NonNanCalculatedValue(LayoutUnit max_value) const {
+void Length::DeferredDecrementCalculatedCount() const {
   DCHECK(IsCalculated());
-  float result = GetCalculationValue().Evaluate(max_value.ToFloat());
-  if (std::isnan(result))
-    return 0;
-  return result;
+  CalcHandles().DeferredDecrementCount(CalculationHandle());
+}
+
+Length& Length::AssignSlow(const Length& length) {
+  if (this == &length) {
+    return *this;
+  }
+  if (length.IsCalculated()) {
+    length.IncrementCalculatedCount();
+  }
+  if (IsCalculated()) {
+    DecrementCalculatedCount();
+  }
+  type_ = length.type_;
+  quirk_ = length.quirk_;
+  if (length.IsCalculated()) {
+    calculation_handle_ = length.calculation_handle_;
+  } else {
+    value_ = length.value_;
+  }
+  return *this;
+}
+
+unsigned Length::GetCalculatedCountForTest() const {
+  DCHECK(IsCalculated());
+  return CalcHandles().GetCount(CalculationHandle());
+}
+
+wtf_size_t Length::GetCalcHandleMapSizeForTest() {
+  return CalcHandles().GetMapSize();
+}
+
+float Length::NonNanCalculatedValue(float max_value,
+                                    const EvaluationInput& input) const {
+  DCHECK(IsCalculated());
+  return GetCalculationValue().Evaluate(max_value, input);
+}
+
+bool Length::HasOnlyFixedAndPercent() const {
+  if (GetType() == kFixed || GetType() == kPercent) {
+    return true;
+  }
+  if (GetType() == kCalculated) {
+    return GetCalculationValue().HasOnlyFixedAndPercent();
+  }
+  return false;
+}
+
+bool Length::HasAuto() const {
+  if (GetType() == kCalculated) {
+    return GetCalculationValue().HasAuto();
+  }
+  return GetType() == kAuto;
+}
+
+bool Length::HasContentOrIntrinsic() const {
+  if (GetType() == kCalculated) {
+    return GetCalculationValue().HasContentOrIntrinsicSize();
+  }
+  return GetType() == kMinContent || GetType() == kMaxContent ||
+         GetType() == kFitContent || GetType() == kMinIntrinsic ||
+         GetType() == kContent;
+}
+
+bool Length::HasAutoOrContentOrIntrinsic() const {
+  if (GetType() == kCalculated) {
+    return GetCalculationValue().HasAutoOrContentOrIntrinsicSize();
+  }
+  return GetType() == kAuto || HasContentOrIntrinsic();
+}
+
+bool Length::HasPercent() const {
+  if (GetType() == kCalculated) {
+    return GetCalculationValue().HasPercent();
+  }
+  return GetType() == kPercent;
+}
+
+bool Length::HasPercentOrStretch() const {
+  if (GetType() == kCalculated) {
+    return GetCalculationValue().HasPercentOrStretch();
+  }
+  return GetType() == kPercent || GetType() == kStretch;
+}
+
+bool Length::HasStretch() const {
+  if (GetType() == kCalculated) {
+    return GetCalculationValue().HasStretch();
+  }
+  return GetType() == kStretch;
+}
+
+bool Length::HasMinContent() const {
+  if (GetType() == kCalculated) {
+    return GetCalculationValue().HasMinContent();
+  }
+  return GetType() == kMinContent;
+}
+
+bool Length::HasMaxContent() const {
+  if (GetType() == kCalculated) {
+    return GetCalculationValue().HasMaxContent();
+  }
+  return GetType() == kMaxContent;
+}
+
+bool Length::HasFitContent() const {
+  if (GetType() == kCalculated) {
+    return GetCalculationValue().HasFitContent();
+  }
+  return GetType() == kFitContent;
 }
 
 bool Length::IsCalculatedEqual(const Length& o) const {
   return IsCalculated() &&
          (&GetCalculationValue() == &o.GetCalculationValue() ||
           GetCalculationValue() == o.GetCalculationValue());
+}
+
+String Length::ToString() const {
+  StringBuilder builder;
+  builder.Append("Length(");
+  static const auto kTypeNames = std::to_array<const char* const>(
+      {"Auto", "Percent", "Fixed", "MinContent", "MaxContent", "MinIntrinsic",
+       "FillAvailable", "Stretch", "FitContent", "Calculated", "Flex",
+       "ExtendToZoom", "DeviceWidth", "DeviceHeight", "None", "Content"});
+  if (type_ < std::size(kTypeNames))
+    builder.Append(kTypeNames[type_]);
+  else
+    builder.Append("?");
+  builder.Append(", ");
+  if (IsCalculated()) {
+    builder.AppendNumber(calculation_handle_);
+  } else {
+    builder.AppendNumber(value_);
+  }
+  if (quirk_)
+    builder.Append(", Quirk");
+  builder.Append(")");
+  return builder.ToString();
+}
+
+uint32_t Length::GetHash() const {
+  uint32_t hash = 0;
+  AddFloatToHash(hash, value_);
+  AddIntToHash(hash, type_);
+  AddIntToHash(hash, quirk_);
+  AddIntToHash(hash, calculation_handle_);
+  return hash;
+}
+
+std::ostream& operator<<(std::ostream& ostream, const Length& value) {
+  return ostream << value.ToString();
 }
 
 struct SameSizeAsLength {

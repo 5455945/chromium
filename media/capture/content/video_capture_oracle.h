@@ -1,13 +1,14 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef MEDIA_CAPTURE_CONTENT_VIDEO_CAPTURE_ORACLE_H_
 #define MEDIA_CAPTURE_CONTENT_VIDEO_CAPTURE_ORACLE_H_
 
+#include <array>
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/time/time.h"
 #include "media/base/feedback_signal_accumulator.h"
 #include "media/capture/capture_export.h"
@@ -27,7 +28,17 @@ class CAPTURE_EXPORT VideoCaptureOracle {
  public:
   enum Event {
     kCompositorUpdate,
+
+    // A "refresh request" means that we want to update to keep things
+    // relatively fresh and in sync, and thus should capture a frame as long as
+    // it's not happening too frequently (in practice this ends up being 1-5
+    // frames per second).
     kRefreshRequest,
+
+    // A "refresh demand" means that we know we have new information, such as a
+    // mouse cursor location change, and thus generating a frame is higher
+    // priority than a "refresh request."
+    kRefreshDemand,
     kNumEvents,
   };
 
@@ -44,6 +55,7 @@ class CAPTURE_EXPORT VideoCaptureOracle {
   base::TimeDelta min_capture_period() const {
     return smoothing_sampler_.min_capture_period();
   }
+
   void SetMinCapturePeriod(base::TimeDelta period);
 
   // Sets the range of acceptable capture sizes and whether a fixed aspect ratio
@@ -59,6 +71,19 @@ class CAPTURE_EXPORT VideoCaptureOracle {
   //
   // See: SetMinSizeChangePeriod().
   void SetAutoThrottlingEnabled(bool enabled);
+
+  // Specifies whether the oracle should detect animation and try to target
+  // the animation frame rate. If |enabled|, the oracle will try to detect a
+  // majority damaged rect and its animation frame rate, and will respect the
+  // minimum damaged pixel ratio of the majority rect's area among all damaged
+  // rect areas set by |majority_damaged_pixel_min_ratio|. If the threshold not
+  // met, it will not use the animated content frame rate.
+  void SetAnimationFpsLockIn(bool enabled,
+                             float majority_damaged_pixel_min_ratio) {
+    content_sampler_.SetEnabled(enabled);
+    content_sampler_.SetMajorityDamagedRectMinRatio(
+        majority_damaged_pixel_min_ratio);
+  }
 
   // Get/Update the source content size.  Changes may not have an immediate
   // effect on the proposed capture size, as the oracle will prevent too-
@@ -82,8 +107,8 @@ class CAPTURE_EXPORT VideoCaptureOracle {
   // the current buffer pool utilization relative to a sustainable maximum (not
   // the absolute maximum).  This method should only be called if the last call
   // to ObserveEventAndDecideCapture() returned true.
-  void RecordCapture(double pool_utilization);
-  void RecordWillNotCapture(double pool_utilization);
+  void RecordCapture(float pool_utilization);
+  void RecordWillNotCapture(float pool_utilization);
 
   // Notify of the completion of a capture, and whether it was successful.
   // Returns true iff the captured frame should be delivered.  |frame_timestamp|
@@ -139,11 +164,11 @@ class CAPTURE_EXPORT VideoCaptureOracle {
   // Clients are expected to set a better minimum capture period after
   // VideoCaptureOracle is constructed.
   static constexpr base::TimeDelta kDefaultMinCapturePeriod =
-      base::TimeDelta::FromMicroseconds(1000000 / 5);  // 5 FPS
+      base::Milliseconds(200);  // 5 FPS
 
   // Default minimum size change period if SetMinSizeChangePeriod is not called.
   static constexpr base::TimeDelta kDefaultMinSizeChangePeriod =
-      base::TimeDelta::FromSeconds(3);
+      base::Seconds(3);
 
   void SetLogCallback(
       base::RepeatingCallback<void(const std::string&)> emit_log_cb);
@@ -213,7 +238,7 @@ class CAPTURE_EXPORT VideoCaptureOracle {
 
   // Stores the last |event_time| from the last observation/decision.  Used to
   // sanity-check that event times are monotonically non-decreasing.
-  base::TimeTicks last_event_time_[kNumEvents];
+  std::array<base::TimeTicks, kNumEvents> last_event_time_;
 
   // Updated by the last call to ObserveEventAndDecideCapture() with the
   // estimated duration of the next frame to sample.  This is zero if the method
@@ -246,7 +271,7 @@ class CAPTURE_EXPORT VideoCaptureOracle {
 
   // The current capture size.  |resolution_chooser_| may hold an updated value
   // because the oracle prevents this size from changing too frequently.  This
-  // avoids over-stressing consumers (e.g., when a window is being activly
+  // avoids over-stressing consumers (e.g., when a window is being actively
   // drag-resized) and allowing the end-to-end system time to stabilize.
   gfx::Size capture_size_;
 
@@ -254,7 +279,7 @@ class CAPTURE_EXPORT VideoCaptureOracle {
   // a ring-buffer, and should only be accessed by the Get/SetFrameTimestamp()
   // methods.
   enum { kMaxFrameTimestamps = 16 };
-  base::TimeTicks frame_timestamps_[kMaxFrameTimestamps];
+  std::array<base::TimeTicks, kMaxFrameTimestamps> frame_timestamps_;
 
   // Recent average buffer pool utilization for capture.
   FeedbackSignalAccumulator<base::TimeTicks> buffer_pool_utilization_;

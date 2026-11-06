@@ -1,25 +1,31 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "cc/paint/display_item_list.h"
 
-#include <stddef.h>
-
+#include <cinttypes>
+#include <cstdint>
+#include <limits>
 #include <map>
 #include <string>
 
+#include "base/memory/safety_checks.h"
+#include "base/strings/stringprintf.h"
 #include "base/trace_event/trace_event.h"
 #include "base/trace_event/traced_value.h"
 #include "cc/base/math_util.h"
 #include "cc/debug/picture_debug_util.h"
+#include "cc/paint/paint_op_buffer_iterator.h"
+#include "cc/paint/raster_inducing_values.h"
 #include "cc/paint/solid_color_analyzer.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkPictureRecorder.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/rect_f.h"
-#include "ui/gfx/skia_util.h"
+#include "ui/gfx/geometry/skia_conversions.h"
 
 namespace cc {
 
@@ -39,12 +45,12 @@ void IterateTextContent(const PaintOpBuffer& buffer,
                         const gfx::Rect& rect) {
   if (!buffer.has_draw_text_ops())
     return;
-  for (auto* op : PaintOpBuffer::Iterator(&buffer)) {
-    if (op->GetType() == PaintOpType::DrawTextBlob) {
-      yield(static_cast<DrawTextBlobOp*>(op), rect);
-    } else if (op->GetType() == PaintOpType::DrawRecord) {
-      IterateTextContent(*static_cast<DrawRecordOp*>(op)->record.get(), yield,
-                         rect);
+  for (const PaintOp& op : buffer) {
+    if (op.GetType() == PaintOpType::kDrawTextBlob) {
+      yield(static_cast<const DrawTextBlobOp&>(op), rect);
+    } else if (op.GetType() == PaintOpType::kDrawRecord) {
+      IterateTextContent(static_cast<const DrawRecordOp&>(op).record.buffer(),
+                         yield, rect);
     }
   }
 }
@@ -57,43 +63,82 @@ void IterateTextContentByOffsets(const PaintOpBuffer& buffer,
   DCHECK(buffer.has_draw_text_ops());
   DCHECK_EQ(rects.size(), offsets.size());
   size_t index = 0;
-  for (auto* op : PaintOpBuffer::OffsetIterator(&buffer, &offsets)) {
-    if (op->GetType() == PaintOpType::DrawTextBlob) {
-      yield(static_cast<DrawTextBlobOp*>(op), rects[index]);
-    } else if (op->GetType() == PaintOpType::DrawRecord) {
-      IterateTextContent(*static_cast<DrawRecordOp*>(op)->record.get(), yield,
-                         rects[index]);
+  for (const PaintOp& op : PaintOpBuffer::OffsetIterator(buffer, offsets)) {
+    if (op.GetType() == PaintOpType::kDrawTextBlob) {
+      yield(static_cast<const DrawTextBlobOp&>(op), rects[index]);
+    } else if (op.GetType() == PaintOpType::kDrawRecord) {
+      IterateTextContent(static_cast<const DrawRecordOp&>(op).record.buffer(),
+                         yield, rects[index]);
     }
     ++index;
   }
 }
+
+constexpr gfx::Rect kMaxBounds(std::numeric_limits<int>::max(),
+                               std::numeric_limits<int>::max());
+
 }  // namespace
 
-DisplayItemList::DisplayItemList(UsageHint usage_hint)
-    : usage_hint_(usage_hint) {
-  if (usage_hint_ == kTopLevelDisplayItemList) {
-    visual_rects_.reserve(1024);
-    offsets_.reserve(1024);
-    paired_begin_stack_.reserve(32);
-  }
+DisplayItemList::DisplayItemList() {
+  visual_rects_.reserve(1024);
+  offsets_.reserve(1024);
+  paired_begin_stack_.reserve(32);
 }
 
 DisplayItemList::~DisplayItemList() = default;
 
-void DisplayItemList::Raster(SkCanvas* canvas,
-                             ImageProvider* image_provider) const {
-  DCHECK(usage_hint_ == kTopLevelDisplayItemList);
-  gfx::Rect canvas_playback_rect;
-  if (!GetCanvasClipBounds(canvas, &canvas_playback_rect))
-    return;
+void DisplayItemList::Raster(
+    SkCanvas* canvas,
+    ImageProvider* image_provider,
+    const RasterInducingValues* raster_inducing_values) const {
+  PlaybackParams params(image_provider);
+  params.raster_inducing_values = raster_inducing_values;
+  Raster(canvas, params);
+}
 
+void DisplayItemList::Raster(SkCanvas* canvas,
+                             const PlaybackParams& params) const {
+#if DCHECK_IS_ON()
+  DCHECK(IsFinalized());
+#endif
+
+  TRACE_EVENT_BEGIN("cc", "DisplayItemList::Raster", "total_op_count",
+                    TotalOpCount());
+  std::vector<size_t> offsets = OffsetsOfOpsToRaster(canvas);
+  if (offsets.empty()) {
+    TRACE_EVENT_END1("cc", "DisplayItemList::Raster", "rastered_op_count", 0);
+    return;
+  }
+  paint_op_buffer_.Playback(canvas, params, /*local_ctm=*/true, &offsets);
+
+  bool trace_enabled = false;
+  TRACE_EVENT_CATEGORY_GROUP_ENABLED("cc", &trace_enabled);
+  if (trace_enabled) {
+    size_t rastered_op_count = 0;
+    for (PaintOpBuffer::PlaybackFoldingIterator it(paint_op_buffer_, &offsets);
+         it; ++it) {
+      rastered_op_count += 1 + PaintOp::OpAdditionalOpCount(*it);
+    }
+    TRACE_EVENT_END("cc", "rastered_op_count", rastered_op_count);
+  }
+}
+
+std::vector<size_t> DisplayItemList::OffsetsOfOpsToRaster(
+    SkCanvas* canvas) const {
   std::vector<size_t> offsets;
-  rtree_.Search(canvas_playback_rect, &offsets);
-  paint_op_buffer_.Playback(canvas, PlaybackParams(image_provider), &offsets);
+  gfx::Rect canvas_playback_rect;
+  if (GetCanvasClipBounds(canvas, &canvas_playback_rect)) {
+    rtree_.Search(canvas_playback_rect, &offsets);
+  }
+  return offsets;
 }
 
 void DisplayItemList::CaptureContent(const gfx::Rect& rect,
                                      std::vector<NodeInfo>* content) const {
+#if DCHECK_IS_ON()
+  DCHECK(IsFinalized());
+#endif
+
   if (!paint_op_buffer_.has_draw_text_ops())
     return;
   std::vector<size_t> offsets;
@@ -101,12 +146,12 @@ void DisplayItemList::CaptureContent(const gfx::Rect& rect,
   rtree_.Search(rect, &offsets, &rects);
   IterateTextContentByOffsets(
       paint_op_buffer_, offsets, rects,
-      [content](const DrawTextBlobOp* op, const gfx::Rect& rect) {
+      [content](const DrawTextBlobOp& op, const gfx::Rect& rect) {
         // Only union the rect if the current is the same as the last one.
-        if (!content->empty() && content->back().node_id == op->node_id)
+        if (!content->empty() && content->back().node_id == op.node_id)
           content->back().visual_rect.Union(rect);
         else
-          content->emplace_back(op->node_id, rect);
+          content->emplace_back(op.node_id, rect);
       });
 }
 
@@ -120,14 +165,10 @@ double DisplayItemList::AreaOfDrawText(const gfx::Rect& rect) const {
 
   double area = 0;
   size_t index = 0;
-  for (auto* op : PaintOpBuffer::OffsetIterator(&paint_op_buffer_, &offsets)) {
-    if (op->GetType() == PaintOpType::DrawTextBlob ||
-        // Don't walk into the record because the visual rect is already the
-        // bounding box of the sub paint operations. This works for most paint
-        // results for text generated by blink.
-        (op->GetType() == PaintOpType::DrawRecord &&
-         static_cast<DrawRecordOp*>(op)->record->has_draw_text_ops())) {
-      area += static_cast<double>(rects[index].width()) * rects[index].height();
+  for (const PaintOp& op :
+       PaintOpBuffer::OffsetIterator(paint_op_buffer_, offsets)) {
+    if (PaintOp::OpHasDrawTextOps(op)) {
+      area += rects[index].size().Area64();
     }
     ++index;
   }
@@ -140,9 +181,6 @@ void DisplayItemList::EndPaintOfPairedEnd() {
   DCHECK_LT(current_range_start_, paint_op_buffer_.size());
   current_range_start_ = kNotPainting;
 #endif
-  if (usage_hint_ == kToBeReleasedAsPaintOpBuffer)
-    return;
-
   DCHECK(paired_begin_stack_.size());
   size_t last_begin_index = paired_begin_stack_.back().first_index;
   size_t last_begin_count = paired_begin_stack_.back().count;
@@ -175,45 +213,46 @@ void DisplayItemList::Finalize() {
   // to EndPaintOfPairedEnd().
   DCHECK(paired_begin_stack_.empty());
   DCHECK_EQ(visual_rects_.size(), offsets_.size());
+  current_range_start_ = kFinalized;
 #endif
 
-  if (usage_hint_ == kTopLevelDisplayItemList) {
-    rtree_.Build(visual_rects_,
-                 [](const std::vector<gfx::Rect>& rects, size_t index) {
-                   return rects[index];
-                 },
-                 [this](const std::vector<gfx::Rect>& rects, size_t index) {
-                   // Ignore the given rects, since the payload comes from
-                   // offsets. However, the indices match, so we can just index
-                   // into offsets.
-                   return offsets_[index];
-                 });
-  }
-  paint_op_buffer_.ShrinkToFit();
+  // Safe to exclude from safety checks: `Finalize()` only frees internal POD
+  // rect/offset recording scratch vectors, `RTree::Build()` `Branch`
+  // temporaries, and excess `PaintOpBuffer` backing memory, with no script
+  // execution or escaping untrusted pointers. Avoids high-frequency quarantine
+  // zapping and page-fault churn on transient paint recording buffers.
+  base::ScopedSafetyChecksExclusion excluded;
+  rtree_.Build(
+      visual_rects_.size(),
+      [this](size_t index) { return visual_rects_[index]; },
+      [this](size_t index) { return offsets_[index]; });
   visual_rects_.clear();
   visual_rects_.shrink_to_fit();
   offsets_.clear();
   offsets_.shrink_to_fit();
   paired_begin_stack_.shrink_to_fit();
+  paint_op_buffer_.ShrinkToFit();
 }
 
-size_t DisplayItemList::BytesUsed() const {
-  // TODO(jbroman): Does anything else owned by this class substantially
-  // contribute to memory usage?
-  // TODO(vmpstr): Probably DiscardableImageMap is worth counting here.
-  return sizeof(*this) + paint_op_buffer_.bytes_used();
+PaintRecord DisplayItemList::FinalizeAndReleaseAsRecordForTesting() {
+  Finalize();
+  return paint_op_buffer_.ReleaseAsRecord();
 }
 
-void DisplayItemList::EmitTraceSnapshot() const {
+void DisplayItemList::EmitTraceSnapshot(int layer_id) const {
   bool include_items;
   TRACE_EVENT_CATEGORY_GROUP_ENABLED(
       TRACE_DISABLED_BY_DEFAULT("cc.debug.display_items"), &include_items);
-  TRACE_EVENT_OBJECT_SNAPSHOT_WITH_ID(
+  // Emit both the pointer-based "id" (used by Catapult's ObjectCollection to
+  // resolve the id_ref emitted by RasterSource::AsValueInto) and "layer_id".
+  TRACE_EVENT_INSTANT(
       TRACE_DISABLED_BY_DEFAULT("cc.debug.display_items") ","
       TRACE_DISABLED_BY_DEFAULT("cc.debug.picture") ","
       TRACE_DISABLED_BY_DEFAULT("devtools.timeline.picture"),
-      "cc::DisplayItemList", TRACE_ID_LOCAL(this),
-      CreateTracedValue(include_items));
+      "cc::DisplayItemList:snapshot",
+      perfetto::Flow::FromPointer(this, "DisplayItemList"), "id",
+      base::StringPrintf("0x%" PRIxPTR, reinterpret_cast<uintptr_t>(this)),
+      "layer_id", layer_id, "snapshot", CreateTracedValue(include_items));
 }
 
 std::string DisplayItemList::ToString() const {
@@ -233,34 +272,42 @@ void DisplayItemList::AddToValue(base::trace_event::TracedValue* state,
                                  bool include_items) const {
   state->BeginDictionary("params");
 
-  gfx::Rect bounds;
-  if (rtree_.has_valid_bounds()) {
-    bounds = rtree_.GetBoundsOrDie();
-  } else {
-    // For tracing code, just use the entire positive quadrant if the |rtree_|
-    // has invalid bounds.
-    bounds = gfx::Rect(INT_MAX, INT_MAX);
+  // DisplayItemList doesn't know the current scroll offsets, so use zero.
+  RasterInducingValues zero_values;
+  for (auto [element_id, _] : raster_inducing_scrolls()) {
+    zero_values.scroll_offsets[element_id] = gfx::PointF();
   }
 
+  // For tracing code, just use the entire positive quadrant if the |rtree_|
+  // has invalid bounds.
+  gfx::Rect bounds = rtree_.bounds().value_or(kMaxBounds);
   if (include_items) {
     state->BeginArray("items");
 
     PlaybackParams params(nullptr, SkM44());
+    params.raster_inducing_values = &zero_values;
     std::map<size_t, gfx::Rect> visual_rects = rtree_.GetAllBoundsForTracing();
-    for (const PaintOp* op : PaintOpBuffer::Iterator(&paint_op_buffer_)) {
+    for (const PaintOp& op : paint_op_buffer_) {
       state->BeginDictionary();
-      state->SetString("name", PaintOpTypeToString(op->GetType()));
+      state->SetString("name", PaintOpTypeToString(op.GetType()));
 
       MathUtil::AddToTracedValue(
           "visual_rect",
           visual_rects[paint_op_buffer_.GetOpOffsetForTracing(op)], state);
 
       SkPictureRecorder recorder;
-      SkCanvas* canvas = recorder.beginRecording(gfx::RectToSkRect(bounds));
-      op->Raster(canvas, params);
+      SkCanvas* canvas =
+          recorder.beginRecording(bounds.width(), bounds.height());
+      if (!bounds.origin().IsOrigin()) {
+        canvas->translate(-bounds.x(), -bounds.y());
+      }
+      op.Raster(canvas, params);
       sk_sp<SkPicture> picture = recorder.finishRecordingAsPicture();
 
-      if (picture->approximateOpCount()) {
+      // `translate` adds 1 op to the recording when `bounds.origin()` is
+      // non-zero.
+      const int initial_op_count = bounds.origin().IsOrigin() ? 0 : 1;
+      if (picture->approximateOpCount() > initial_op_count) {
         std::string b64_picture;
         PictureDebugUtil::SerializeAsBase64(picture.get(), &b64_picture);
         state->SetString("skp64", b64_picture);
@@ -277,10 +324,10 @@ void DisplayItemList::AddToValue(base::trace_event::TracedValue* state,
 
   {
     SkPictureRecorder recorder;
-    SkCanvas* canvas = recorder.beginRecording(gfx::RectToSkRect(bounds));
+    SkCanvas* canvas = recorder.beginRecording(bounds.width(), bounds.height());
     canvas->translate(-bounds.x(), -bounds.y());
     canvas->clipRect(gfx::RectToSkRect(bounds));
-    Raster(canvas);
+    Raster(canvas, /*image_provider=*/nullptr, &zero_values);
     sk_sp<SkPicture> picture = recorder.finishRecordingAsPicture();
 
     std::string b64_picture;
@@ -289,59 +336,37 @@ void DisplayItemList::AddToValue(base::trace_event::TracedValue* state,
   }
 }
 
-void DisplayItemList::GenerateDiscardableImagesMetadata() {
-  DCHECK(usage_hint_ == kTopLevelDisplayItemList);
-
-  gfx::Rect bounds;
-  if (rtree_.has_valid_bounds()) {
-    bounds = rtree_.GetBoundsOrDie();
-  } else {
-    // Bounds are only used to size an SkNoDrawCanvas, pass INT_MAX.
-    bounds = gfx::Rect(INT_MAX, INT_MAX);
-  }
-
-  image_map_.Generate(&paint_op_buffer_, bounds);
-}
-
-void DisplayItemList::Reset() {
+scoped_refptr<DiscardableImageMap> DisplayItemList::GenerateDiscardableImageMap(
+    const ScrollOffsetMap& raster_inducing_scroll_offsets,
+    DiscardableImageMap::DecodingModeMap* decoding_mode_map,
+    DiscardableImageMap::PaintWorkletInputs* paint_worklet_inputs) const {
 #if DCHECK_IS_ON()
-  DCHECK(!IsPainting());
-  DCHECK(paired_begin_stack_.empty());
+  DCHECK(IsFinalized());
 #endif
 
-  rtree_.Reset();
-  image_map_.Reset();
-  paint_op_buffer_.Reset();
-  visual_rects_.clear();
-  visual_rects_.shrink_to_fit();
-  offsets_.clear();
-  offsets_.shrink_to_fit();
-  paired_begin_stack_.clear();
-  paired_begin_stack_.shrink_to_fit();
-}
-
-sk_sp<PaintRecord> DisplayItemList::ReleaseAsRecord() {
-  sk_sp<PaintRecord> record =
-      sk_make_sp<PaintOpBuffer>(std::move(paint_op_buffer_));
-
-  Reset();
-  return record;
+  // Bounds are only used to size an SkNoDrawCanvas.
+  return DiscardableImageMap::Generate(
+      paint_op_buffer_, bounds().value_or(kMaxBounds),
+      raster_inducing_scroll_offsets, decoding_mode_map, paint_worklet_inputs);
 }
 
 bool DisplayItemList::GetColorIfSolidInRect(const gfx::Rect& rect,
-                                            SkColor* color,
-                                            int max_ops_to_analyze) {
-  DCHECK(usage_hint_ == kTopLevelDisplayItemList);
+                                            SkColor4f* color,
+                                            int max_ops_to_analyze) const {
+#if DCHECK_IS_ON()
+  DCHECK(IsFinalized());
+#endif
+
   std::vector<size_t>* offsets_to_use = nullptr;
   std::vector<size_t> offsets;
-  if (rtree_.has_valid_bounds() && !rect.Contains(rtree_.GetBoundsOrDie())) {
+  if (rtree_.has_valid_bounds() && !rect.Contains(*bounds())) {
     rtree_.Search(rect, &offsets);
     offsets_to_use = &offsets;
   }
 
-  absl::optional<SkColor> solid_color =
+  std::optional<SkColor4f> solid_color =
       SolidColorAnalyzer::DetermineIfSolidColor(
-          &paint_op_buffer_, rect, max_ops_to_analyze, offsets_to_use);
+          paint_op_buffer_, rect, max_ops_to_analyze, offsets_to_use);
   if (solid_color) {
     *color = *solid_color;
     return true;
@@ -349,114 +374,123 @@ bool DisplayItemList::GetColorIfSolidInRect(const gfx::Rect& rect,
   return false;
 }
 
-absl::optional<DisplayItemList::DirectlyCompositedImageResult>
-DisplayItemList::GetDirectlyCompositedImageResult(
-    gfx::Size containing_layer_bounds) const {
-  const PaintOpBuffer* op_buffer = nullptr;
-  if (paint_op_buffer_.size() == 1) {
-    // The actual ops are wrapped in DrawRecord if they were previously
-    // recorded.
-    if (paint_op_buffer_.GetFirstOp()->GetType() == PaintOpType::DrawRecord) {
-      const DrawRecordOp* draw_record =
-          static_cast<const DrawRecordOp*>(paint_op_buffer_.GetFirstOp());
-      op_buffer = draw_record->record.get();
-    } else {
-      op_buffer = &paint_op_buffer_;
-    }
-  } else {
-    return absl::nullopt;
-  }
+namespace {
 
-  const DrawImageRectOp* draw_image_rect_op = nullptr;
+std::optional<DirectlyCompositedImageInfo>
+DirectlyCompositedImageInfoForPaintOpBuffer(const PaintOpBuffer& op_buffer) {
+  // A PaintOpBuffer for an image may have 1 (a kDrawimagerect or a kDrawrecord
+  // that recursively contains a PaintOpBuffer for an image) or 4 paint
+  // operations:
+  //  (1) kSave
+  //  (2) kTranslate which applies an offset of the image in the layer
+  //   or kConcat with a transformation rotating the image by +/-90 degrees for
+  //      image orientation
+  //  (3) kDrawimagerect or kDrawrecord (see the 1 operation case above)
+  //  (4) kRestore
+  // The following algorithm also supports kTranslate and kConcat in the same
+  // PaintOpBuffer (i.e. 5 operations).
+  constexpr size_t kMaxDrawImageOps = 5;
+  if (op_buffer.size() > kMaxDrawImageOps)
+    return std::nullopt;
+
   bool transpose_image_size = false;
-  constexpr size_t kNumDrawImageForOrientationOps = 10;
-  if (op_buffer->size() == 1 &&
-      op_buffer->GetFirstOp()->GetType() == PaintOpType::DrawImageRect) {
-    draw_image_rect_op =
-        static_cast<const DrawImageRectOp*>(op_buffer->GetFirstOp());
-  } else if (op_buffer->size() < kNumDrawImageForOrientationOps) {
-    // Images that respect orientation will have 5 paint operations:
-    //  (1) Save
-    //  (2) Translate
-    //  (3) Concat (with a transformation that preserves axis alignment)
-    //  (4) DrawImageRect
-    //  (5) Restore
-    // Detect these the paint op buffer and disqualify the layer as a directly
-    // composited image if any other paint op is detected.
-    for (auto* op : PaintOpBuffer::Iterator(op_buffer)) {
-      switch (op->GetType()) {
-        case PaintOpType::Save:
-        case PaintOpType::Restore:
-          break;
-        case PaintOpType::Translate: {
-          const TranslateOp* translate = static_cast<const TranslateOp*>(op);
-          if (translate->dx != 0 || translate->dy != 0)
-            return absl::nullopt;
-          break;
-        }
-        case PaintOpType::Concat: {
-          // We only expect a single transformation. If we see another one, then
-          // this image won't be eligible for directly compositing.
-          if (transpose_image_size)
-            return absl::nullopt;
+  std::optional<DirectlyCompositedImageInfo> result;
+  for (const PaintOp& op : op_buffer) {
+    switch (op.GetType()) {
+      case PaintOpType::kSave:
+      case PaintOpType::kRestore:
+      case PaintOpType::kTranslate:
+        break;
+      case PaintOpType::kConcat: {
+        // We only expect a single transformation. If we see another one, then
+        // this image won't be eligible for directly compositing.
+        if (transpose_image_size)
+          return std::nullopt;
+        // The transformation must be before the kDrawimagerect operation.
+        if (result)
+          return std::nullopt;
 
-          const ConcatOp* concat_op = static_cast<const ConcatOp*>(op);
-          if (!MathUtil::SkM44Preserves2DAxisAlignment(concat_op->matrix))
-            return absl::nullopt;
+        const ConcatOp& concat_op = static_cast<const ConcatOp&>(op);
+        if (!MathUtil::SkM44Preserves2DAxisAlignment(concat_op.matrix))
+          return std::nullopt;
 
-          // If the image has been rotated +/-90 degrees we'll need to transpose
-          // the width and height dimensions to account for the same transform
-          // applying when the layer bounds were calculated. Since we already
-          // know that the transformation preserves axis alignment, we only
-          // need to confirm that this is not a scaling operation.
-          transpose_image_size = (concat_op->matrix.rc(0, 0) == 0);
-          break;
-        }
-        case PaintOpType::DrawImageRect:
-          if (draw_image_rect_op)
-            return absl::nullopt;
-          draw_image_rect_op = static_cast<const DrawImageRectOp*>(op);
-          break;
-        default:
-          return absl::nullopt;
+        // If the image has been rotated +/-90 degrees we'll need to transpose
+        // the width and height dimensions to account for the same transform
+        // applying when the layer bounds were calculated. Since we already
+        // know that the transformation preserves axis alignment, we only
+        // need to confirm that this is not a scaling operation.
+        transpose_image_size = (concat_op.matrix.rc(0, 0) == 0);
+        break;
       }
+      case PaintOpType::kDrawImageRect: {
+        if (result)
+          return std::nullopt;
+        const auto& draw_image_rect_op =
+            static_cast<const DrawImageRectOp&>(op);
+        const SkRect& src = draw_image_rect_op.src;
+        const SkRect& dst = draw_image_rect_op.dst;
+        if (src.isEmpty() || dst.isEmpty())
+          return std::nullopt;
+        result.emplace();
+        result->default_raster_scale = gfx::Vector2dF(
+            src.width() / dst.width(), src.height() / dst.height());
+        // Ensure the layer will use nearest neighbor when drawn by the display
+        // compositor, if required.
+        result->nearest_neighbor =
+            draw_image_rect_op.flags.getFilterQuality() ==
+            PaintFlags::FilterQuality::kNone;
+        break;
+      }
+      case PaintOpType::kDrawRecord:
+        if (result)
+          return std::nullopt;
+        result = DirectlyCompositedImageInfoForPaintOpBuffer(
+            static_cast<const DrawRecordOp&>(op).record.buffer());
+        if (!result)
+          return std::nullopt;
+        break;
+      default:
+        // Disqualify the layer as a directly composited image if any other
+        // paint op is detected.
+        return std::nullopt;
     }
   }
 
-  if (!draw_image_rect_op)
-    return absl::nullopt;
-
-  // The src rect must match the image size exactly, i.e. the entire image
-  // must be drawn.
-  const SkRect& src = draw_image_rect_op->src;
-  if (src.fLeft != 0 || src.fTop != 0 ||
-      src.fRight != draw_image_rect_op->image.width() ||
-      src.fBottom != draw_image_rect_op->image.height())
-    return absl::nullopt;
-
-  // The DrawImageRect op's destination rect must match the layer bounds
-  // exactly. Note that the layer bounds have already taken into account image
-  // orientation so transpose the dst width/height before comparing, if
-  // appropriate.
-  const SkRect& dst = draw_image_rect_op->dst;
-  int dst_width = transpose_image_size ? dst.fBottom : dst.fRight;
-  int dst_height = transpose_image_size ? dst.fRight : dst.fBottom;
-  if (dst.fLeft != 0 || dst.fTop != 0 ||
-      dst_width != containing_layer_bounds.width() ||
-      dst_height != containing_layer_bounds.height())
-    return absl::nullopt;
-
-  int width = transpose_image_size ? draw_image_rect_op->image.height()
-                                   : draw_image_rect_op->image.width();
-  int height = transpose_image_size ? draw_image_rect_op->image.width()
-                                    : draw_image_rect_op->image.height();
-  DirectlyCompositedImageResult result;
-  result.intrinsic_image_size = gfx::Size(width, height);
-  // Ensure the layer will use nearest neighbor when drawn by the display
-  // compositor, if required.
-  result.nearest_neighbor =
-      draw_image_rect_op->flags.getFilterQuality() == kNone_SkFilterQuality;
+  if (result && transpose_image_size)
+    result->default_raster_scale.Transpose();
   return result;
+}
+
+}  // anonymous namespace
+
+std::optional<DirectlyCompositedImageInfo>
+DisplayItemList::GetDirectlyCompositedImageInfo() const {
+#if DCHECK_IS_ON()
+  DCHECK(IsFinalized());
+#endif
+  return DirectlyCompositedImageInfoForPaintOpBuffer(paint_op_buffer_);
+}
+
+void DisplayItemList::PushDrawScrollingContentsOp(
+    ElementId scroll_element_id,
+    scoped_refptr<DisplayItemList> display_item_list,
+    const gfx::Rect& visual_rect) {
+  StartPaint();
+  push<DrawScrollingContentsOp>(scroll_element_id, display_item_list);
+  for (auto& [nested_scroll_element_id, info] :
+       std::move(display_item_list->raster_inducing_scrolls_)) {
+    // For a nested scroller, we use the parent scroller's visual rect (which
+    // will eventually use the top-level scroller's visual rect in the layer).
+    // This will cause over-invalidation when the nested scroller scrolls, but
+    // avoids the complexity and cost of mapping the visual rect of nested
+    // scroller to the layer space, especially when the parent scroller scrolls.
+    // TODO(crbug.com/359279553): Evaluate if the optimization is worth it.
+    raster_inducing_scrolls_[nested_scroll_element_id] =
+        RasterInducingScrollInfo{visual_rect, info.has_discardable_images};
+  }
+  raster_inducing_scrolls_[scroll_element_id] = RasterInducingScrollInfo{
+      visual_rect, display_item_list->has_discardable_images()};
+  EndPaintOfUnpaired(visual_rect);
 }
 
 }  // namespace cc

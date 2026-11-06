@@ -1,4 +1,4 @@
-(async function(testRunner) {
+(async function(/** @type {import('test_runner').TestRunner} */ testRunner) {
   var {page, session, dp} = await testRunner.startBlank(`Tests Input.dispatchKeyEvent method.`);
 
   await session.evaluate(`
@@ -80,5 +80,13 @@
   }));
 
   testRunner.log(await session.evaluate(`window.logs.join('\\n')`));
+
+  testRunner.log('Expect error for invalid text or unmodifiedText:')
+  dumpError(await dp.Input.dispatchKeyEvent({
+    type: 'char',
+    text: 'oops',
+    unmodifiedText: 'SNAP'
+  }));
+
   testRunner.completeTest();
 })

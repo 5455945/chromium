@@ -1,13 +1,17 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "remoting/protocol/webrtc_event_log_data.h"
 
+#include "base/barrier_closure.h"
+#include "base/functional/bind.h"
+#include "base/run_loop.h"
+#include "base/task/thread_pool.h"
+#include "base/test/task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace remoting {
-namespace protocol {
+namespace remoting::protocol {
 
 namespace {
 
@@ -68,5 +72,32 @@ TEST(WebrtcEventLogDataTest, StoreThenClear_IsEmpty) {
   EXPECT_TRUE(data.empty());
 }
 
-}  // namespace protocol
-}  // namespace remoting
+TEST(WebrtcEventLogDataTest, MultiThreadedAccess) {
+  base::test::TaskEnvironment task_environment;
+  WebrtcEventLogData event_log;
+  event_log.SetMaxSectionSizeForTest(100);
+
+  constexpr int kNumTasks = 10;
+  base::RunLoop run_loop;
+  auto barrier_closure =
+      base::BarrierClosure(kNumTasks, run_loop.QuitClosure());
+
+  for (int i = 0; i < kNumTasks; ++i) {
+    base::ThreadPool::PostTask(FROM_HERE, base::BindOnce(
+                                              [](WebrtcEventLogData* log,
+                                                 base::RepeatingClosure done) {
+                                                for (int j = 0; j < 100; ++j) {
+                                                  log->Write("test");
+                                                  if (j % 10 == 0) {
+                                                    log->TakeLogData();
+                                                  }
+                                                }
+                                                done.Run();
+                                              },
+                                              &event_log, barrier_closure));
+  }
+
+  run_loop.Run();
+}
+
+}  // namespace remoting::protocol

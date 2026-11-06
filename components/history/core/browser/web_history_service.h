@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,20 +9,28 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
+#include "base/scoped_observation.h"
+#include "base/types/optional_ref.h"
 #include "components/history/core/browser/history_types.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/sync/service/sync_service_observer.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 
 namespace base {
-class DictionaryValue;
+class DictValue;
+}
+
+namespace syncer {
+class SyncService;
 }
 
 namespace signin {
@@ -44,7 +52,8 @@ class WebHistoryServiceObserver;
 // Provides an API for querying Google servers for a signed-in user's
 // synced history visits. It is roughly analogous to HistoryService, and
 // supports a similar API.
-class WebHistoryService : public KeyedService {
+class WebHistoryService : public KeyedService,
+                          public syncer::SyncServiceObserver {
  public:
   // Handles all the work of making an API request. This class encapsulates
   // the entire state of the request. When an instance is destroyed, all
@@ -55,14 +64,14 @@ class WebHistoryService : public KeyedService {
 
     // Returns true if the request is "pending" (i.e., it has been started, but
     // is not yet been complete).
-    virtual bool IsPending() = 0;
+    virtual bool IsPending() const = 0;
 
     // Returns the response code received from the server, which will only be
     // valid if the request succeeded.
-    virtual int GetResponseCode() = 0;
+    virtual int GetResponseCode() const = 0;
 
     // Returns the contents of the response body received from the server.
-    virtual const std::string& GetResponseBody() = 0;
+    virtual const std::string& GetResponseBody() const = 0;
 
     virtual void SetPostData(const std::string& post_data) = 0;
 
@@ -78,16 +87,35 @@ class WebHistoryService : public KeyedService {
     Request();
   };
 
-  // Callback with the result of a call to QueryHistory(). Currently, the
-  // DictionaryValue is just the parsed JSON response from the server.
-  // TODO(dubroy): Extract the DictionaryValue into a structured results object.
+  struct QueryHistoryResult {
+    QueryHistoryResult();
+    QueryHistoryResult(const QueryHistoryResult&);
+    QueryHistoryResult(QueryHistoryResult&&);
+    ~QueryHistoryResult();
+
+    struct Visit {
+      Visit();
+      Visit(const Visit&);
+      Visit(Visit&&);
+      ~Visit();
+
+      GURL url;
+      std::string title;
+      GURL favicon_url;
+      std::string client_id;
+      base::Time timestamp;
+    };
+
+    std::vector<Visit> visits;
+    bool has_more_results = false;
+  };
+
+  // Callback with the result of a call to QueryHistory().
   using QueryWebHistoryCallback =
-      base::OnceCallback<void(Request*, const base::DictionaryValue*)>;
+      base::OnceCallback<void(Request*,
+                              base::optional_ref<const QueryHistoryResult>)>;
 
   using ExpireWebHistoryCallback = base::OnceCallback<void(bool success)>;
-
-  using AudioWebHistoryCallback =
-      base::OnceCallback<void(bool success, bool new_enabled_value)>;
 
   using QueryWebAndAppActivityCallback = base::OnceCallback<void(bool success)>;
 
@@ -97,18 +125,32 @@ class WebHistoryService : public KeyedService {
   using CompletionCallback = base::OnceCallback<void(Request*, bool success)>;
 
   WebHistoryService(
+      syncer::SyncService* sync_service,
       signin::IdentityManager* identity_manager,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
+
+  WebHistoryService(const WebHistoryService&) = delete;
+  WebHistoryService& operator=(const WebHistoryService&) = delete;
+
   ~WebHistoryService() override;
 
   void AddObserver(WebHistoryServiceObserver* observer);
   void RemoveObserver(WebHistoryServiceObserver* observer);
 
+  // Returns whether the history sync is enabled.
+  //
+  // If this is false, then it is an error to call any method on the instance
+  // (except AddObserver/RemoveObserver). The method OnWebHistoryEnabled() on
+  // WebHistoryServiceObserver will be called when this becomes true.
+  bool IsEnabled() const { return is_enabled_; }
+
   // Searches synced history for visits matching `text_query`. The timeframe to
   // search, along with other options, is specified in `options`. If
   // `text_query` is empty, all visits in the timeframe will be returned.
-  // This method is the equivalent of HistoryService::QueryHistory.
-  // The caller takes ownership of the returned Request. If it is destroyed, the
+  // This method is the equivalent of `HistoryService::QueryHistory`, except
+  // that this method cannot honor `QueryOptions::policy_for_404_visits`; 404
+  // visits will always be included, regardless of the policy specified. The
+  // caller takes ownership of the returned `Request`. If it is destroyed, the
   // request is cancelled.
   std::unique_ptr<Request> QueryHistory(
       const std::u16string& text_query,
@@ -133,27 +175,10 @@ class WebHistoryService : public KeyedService {
                             const net::PartialNetworkTrafficAnnotationTag&
                                 partial_traffic_annotation);
 
-  // Requests whether audio history recording is enabled.
-  virtual void GetAudioHistoryEnabled(
-      AudioWebHistoryCallback callback,
-      const net::PartialNetworkTrafficAnnotationTag&
-          partial_traffic_annotation);
-
-  // Sets the state of audio history recording to `new_enabled_value`.
-  virtual void SetAudioHistoryEnabled(
-      bool new_enabled_value,
-      AudioWebHistoryCallback callback,
-      const net::PartialNetworkTrafficAnnotationTag&
-          partial_traffic_annotation);
-
   // Queries whether web and app activity is enabled on the server.
-  virtual void QueryWebAndAppActivity(
-      QueryWebAndAppActivityCallback callback,
-      const net::PartialNetworkTrafficAnnotationTag&
-          partial_traffic_annotation);
-
-  // Used for tests.
-  size_t GetNumberOfPendingAudioHistoryRequests();
+  void QueryWebAndAppActivity(QueryWebAndAppActivityCallback callback,
+                              const net::PartialNetworkTrafficAnnotationTag&
+                                  partial_traffic_annotation);
 
   // Whether there are other forms of browsing history stored on the server.
   void QueryOtherFormsOfBrowsingHistory(
@@ -162,23 +187,45 @@ class WebHistoryService : public KeyedService {
       const net::PartialNetworkTrafficAnnotationTag&
           partial_traffic_annotation);
 
- protected:
-  // This function is pulled out for testing purposes. Caller takes ownership of
-  // the new Request.
-  virtual Request* CreateRequest(const GURL& url,
-                                 CompletionCallback callback,
-                                 const net::PartialNetworkTrafficAnnotationTag&
-                                     partial_traffic_annotation);
+  // KeyedService implementation.
+  void Shutdown() override;
 
-  // Extracts a JSON-encoded HTTP response into a DictionaryValue.
+  // SyncServiceObserver implementation.
+  void OnStateChanged(syncer::SyncService* sync_service) override;
+  void OnSyncShutdown(syncer::SyncService* sync_service) override;
+
+ protected:
+  // LINT.IfChange(WebHistoryRequestOutcome)
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  enum class RequestOutcome {
+    kSuccess = 0,
+    kInvalidResponse = 1,
+    kFailure = 2,
+    kMaxValue = kFailure
+  };
+  // LINT.ThenChange(/tools/metrics/histograms/metadata/history/enums.xml:WebHistoryRequestOutcome)
+
+  // Virtual for testing.
+  virtual std::unique_ptr<Request> CreateRequest(
+      const GURL& url,
+      CompletionCallback callback,
+      const net::PartialNetworkTrafficAnnotationTag&
+          partial_traffic_annotation);
+
+  // Extracts a JSON-encoded HTTP response into a base::DictValue.
   // If `request`'s HTTP response code indicates failure, or if the response
-  // body is not JSON, a null pointer is returned.
-  static std::unique_ptr<base::DictionaryValue> ReadResponse(Request* request);
+  // body is not JSON, nullopt is returned.
+  static std::optional<base::DictValue> ReadResponse(const Request& request);
 
   // Called by `request` when a web history query has completed. Unpacks the
   // response and calls `callback`, which is the original callback that was
   // passed to QueryHistory().
   static void QueryHistoryCompletionCallback(
+      WebHistoryService::QueryWebHistoryCallback callback,
+      WebHistoryService::Request* request,
+      bool success);
+  static RequestOutcome QueryHistoryCompletionCallbackImpl(
       WebHistoryService::QueryWebHistoryCallback callback,
       WebHistoryService::Request* request,
       bool success);
@@ -190,12 +237,8 @@ class WebHistoryService : public KeyedService {
       WebHistoryService::ExpireWebHistoryCallback callback,
       WebHistoryService::Request* request,
       bool success);
-
-  // Called by `request` when a request to get or set audio history from the
-  // server has completed. Unpacks the response and calls `callback`, which is
-  // the original callback that was passed to AudioHistory().
-  void AudioHistoryCompletionCallback(
-      WebHistoryService::AudioWebHistoryCallback callback,
+  RequestOutcome ExpireHistoryCompletionCallbackImpl(
+      WebHistoryService::ExpireWebHistoryCallback callback,
       WebHistoryService::Request* request,
       bool success);
 
@@ -203,6 +246,10 @@ class WebHistoryService : public KeyedService {
   // Unpacks the response and calls `callback`, which is the original callback
   // that was passed to QueryWebAndAppActivity().
   void QueryWebAndAppActivityCompletionCallback(
+      WebHistoryService::QueryWebAndAppActivityCallback callback,
+      WebHistoryService::Request* request,
+      bool success);
+  RequestOutcome QueryWebAndAppActivityCompletionCallbackImpl(
       WebHistoryService::QueryWebAndAppActivityCallback callback,
       WebHistoryService::Request* request,
       bool success);
@@ -215,12 +262,21 @@ class WebHistoryService : public KeyedService {
       WebHistoryService::Request* request,
       bool success);
 
+  const std::string& server_version_info_for_test() const {
+    return server_version_info_;
+  }
+
+ protected:
+  // Cache whether the WebHistoryService is enabled. Protected to allow
+  // sub-classes to override the value (e.g. test double classes).
+  bool is_enabled_ = false;
+
  private:
   friend class WebHistoryServiceTest;
 
   // Stores pointer to IdentityManager instance. It must outlive the
   // WebHistoryService and can be null during tests.
-  signin::IdentityManager* identity_manager_;
+  raw_ptr<signin::IdentityManager> identity_manager_;
 
   // Request context getter to use.
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
@@ -233,9 +289,6 @@ class WebHistoryService : public KeyedService {
   // Pending expiration requests to be canceled if not complete by profile
   // shutdown.
   std::map<Request*, std::unique_ptr<Request>> pending_expire_requests_;
-
-  // Pending requests to be canceled if not complete by profile shutdown.
-  std::map<Request*, std::unique_ptr<Request>> pending_audio_history_requests_;
 
   // Pending web and app activity queries to be canceled if not complete by
   // profile shutdown.
@@ -250,9 +303,11 @@ class WebHistoryService : public KeyedService {
   // Observers.
   base::ObserverList<WebHistoryServiceObserver, true>::Unchecked observer_list_;
 
-  base::WeakPtrFactory<WebHistoryService> weak_ptr_factory_{this};
+  // SyncService observation.
+  base::ScopedObservation<syncer::SyncService, syncer::SyncServiceObserver>
+      sync_service_observation_{this};
 
-  DISALLOW_COPY_AND_ASSIGN(WebHistoryService);
+  base::WeakPtrFactory<WebHistoryService> weak_ptr_factory_{this};
 };
 
 }  // namespace history

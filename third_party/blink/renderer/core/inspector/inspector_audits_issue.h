@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,25 +6,39 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_INSPECTOR_INSPECTOR_AUDITS_ISSUE_H_
 
 #include <memory>
-#include "base/unguessable_token.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/core/dom/dom_node_ids.h"
+#include <optional>
+#include <string>
 
-namespace WTF {
-class String;
-}
+#include "services/network/public/mojom/blocked_by_response_reason.mojom-forward.h"
+#include "third_party/blink/public/mojom/devtools/inspector_issue.mojom-blink-forward.h"
+#include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink-forward.h"
+#include "third_party/blink/renderer/core/ad_tracker/ad_tracker.h"
+#include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/core/frame/csp/content_security_policy_violation_type.h"
+#include "third_party/blink/renderer/core/inspector/protocol/audits.h"
+#include "third_party/blink/renderer/platform/graphics/dom_node_id.h"
+#include "third_party/blink/renderer/platform/wtf/forward.h"
+
+namespace base {
+class UnguessableToken;
+}  // namespace base
 
 namespace blink {
 
+class Document;
+class DocumentLoader;
 class Element;
 class ExecutionContext;
+class KURL;
+class LocalDOMWindow;
+class LocalFrame;
+class ResourceError;
+class SecurityPolicyViolationEventInit;
+class SourceLocation;
 
-namespace protocol {
-namespace Audits {
+namespace protocol::Audits {
 class InspectorIssue;
-}
-}  // namespace protocol
+}  // namespace protocol::Audits
 
 enum class RendererCorsIssueCode {
   kDisallowedByMode,
@@ -32,12 +46,30 @@ enum class RendererCorsIssueCode {
   kNoCorsRedirectModeNotFollow,
 };
 
-enum class AttributionReportingIssueType {
-  kPermissionPolicyDisabled,
-  kInvalidAttributionSourceEventId,
-  kInvalidAttributionData,
-  kAttributionSourceUntrustworthyOrigin,
-  kAttributionUntrustworthyOrigin,
+enum class SharedArrayBufferIssueType {
+  kTransferIssue,
+  kCreationIssue,
+};
+
+enum class MixedContentResolutionStatus {
+  kMixedContentBlocked,
+  kMixedContentAutomaticallyUpgraded,
+  kMixedContentWarning,
+};
+
+enum class ClientHintIssueReason {
+  kMetaTagAllowListInvalidOrigin,
+  kMetaTagModifiedHTML,
+};
+
+enum class ElementAccessibilityIssueReason {
+  kDisallowedSelectChild,
+  kDisallowedOptGroupChild,
+  kNonPhrasingContentOptionChild,
+  kInteractiveContentOptionChild,
+  kInteractiveContentLegendChild,
+  kInteractiveContentSummaryDescendant,
+  kValidChild,
 };
 
 // |AuditsIssue| is a thin wrapper around the Audits::InspectorIssue
@@ -54,6 +86,8 @@ enum class AttributionReportingIssueType {
 //     would have to be included in various cc files.
 class CORE_EXPORT AuditsIssue {
  public:
+  explicit AuditsIssue(std::unique_ptr<protocol::Audits::InspectorIssue> issue);
+
   AuditsIssue() = delete;
   AuditsIssue(const AuditsIssue&) = delete;
   AuditsIssue& operator=(const AuditsIssue&) = delete;
@@ -73,43 +107,128 @@ class CORE_EXPORT AuditsIssue {
                                     String frame_id,
                                     String loader_id);
 
+  static void ReportDocumentCookiePerformanceIssue(
+      ExecutionContext* execution_context);
+
   static void ReportCorsIssue(ExecutionContext* execution_context,
-                              int64_t identifier,
                               RendererCorsIssueCode code,
-                              WTF::String url,
-                              WTF::String initiator_origin,
-                              WTF::String failedParameter,
-                              absl::optional<base::UnguessableToken> issue_id);
-  // Reports an Attribution Reporting API issue to DevTools.
-  // |reporting_execution_context| is the current execution context in which the
-  // issue happens and is reported in (the "target" in DevTools terms).
-  // |offending_frame_token| is the offending frame that triggered the issue.
-  // |offending_frame_token| does not necessarly correspond to
-  // |reporting_execution_context|, e.g. when an impression click in an iframe
-  // is blocked due to an insecure main frame.
-  static void ReportAttributionIssue(
-      ExecutionContext* reporting_execution_context,
-      AttributionReportingIssueType type,
-      const absl::optional<base::UnguessableToken>& offending_frame_token =
-          absl::nullopt,
-      Element* element = nullptr,
-      const absl::optional<String>& request_id = absl::nullopt,
-      const absl::optional<String>& invalid_parameter = absl::nullopt);
+                              String url,
+                              String initiator_origin,
+                              String failedParameter,
+                              std::optional<base::UnguessableToken> issue_id);
 
-  static void ReportNavigatorUserAgentAccess(
+  static void ReportSharedArrayBufferIssue(
       ExecutionContext* execution_context,
-      WTF::String url);
+      bool shared_buffer_transfer_allowed,
+      SharedArrayBufferIssueType issue_type);
 
-  static void ReportCrossOriginWasmModuleSharingIssue(
+  // Reports a Deprecation issue to DevTools.
+  // `execution_context` is used to extract the affected frame and source.
+  // `type` is the enum used to differentiate messages.
+  static void ReportDeprecationIssue(ExecutionContext* execution_context,
+                                     String type);
+
+  static void ReportClientHintIssue(LocalDOMWindow* local_dom_window,
+                                    ClientHintIssueReason reason);
+
+  static AuditsIssue CreateBlockedByResponseIssue(
+      network::mojom::BlockedByResponseReason reason,
+      uint64_t identifier,
+      DocumentLoader* loader,
+      const ResourceError& error,
+      const base::UnguessableToken& token);
+
+  static void ReportMixedContentIssue(
+      const KURL& main_resource_url,
+      const KURL& insecure_url,
+      const mojom::blink::RequestContextType request_context,
+      LocalFrame* frame,
+      const MixedContentResolutionStatus resolution_status,
+      const String& devtools_id);
+
+  static AuditsIssue CreateContentSecurityPolicyIssue(
+      const blink::SecurityPolicyViolationEventInit& violation_data,
+      bool is_report_only,
+      ContentSecurityPolicyViolationType violation_type,
+      LocalFrame* frame_ancestor,
+      Element* element,
+      SourceLocation* source_location,
+      std::optional<base::UnguessableToken> issue_id);
+
+  static protocol::Audits::GenericIssueErrorType
+  GenericIssueErrorTypeToProtocol(
+      mojom::blink::GenericIssueErrorType error_type);
+
+  static void ReportGenericIssue(LocalFrame* frame,
+                                 mojom::blink::GenericIssueErrorType error_type,
+                                 int violating_node_id);
+  static void ReportGenericIssue(LocalFrame* frame,
+                                 mojom::blink::GenericIssueErrorType error_type,
+                                 int violating_node_id,
+                                 const String& violating_node_attribute);
+  static void ReportPartitioningBlobURLIssue(
+      LocalDOMWindow* window,
+      String blob_url,
+      mojom::blink::PartitioningBlobURLInfo info);
+  static void ReportStylesheetLoadingLateImportIssue(Document* document,
+                                                     const KURL& url,
+                                                     OrdinalNumber line,
+                                                     OrdinalNumber column);
+
+  static void ReportPropertyRuleIssue(
+      Document* document,
+      const KURL& url,
+      OrdinalNumber line,
+      OrdinalNumber column,
+      protocol::Audits::PropertyRuleIssueReason reason,
+      const String& propertyValue);
+
+  static void ReportStylesheetLoadingRequestFailedIssue(
+      Document* document,
+      const KURL& url,
+      const String& request_id,
+      const KURL& initiator_url,
+      OrdinalNumber initiator_line,
+      OrdinalNumber initiator_column,
+      const String& failureMessage);
+
+  static void ReportElementAccessibilityIssue(
+      Document* document,
+      DOMNodeId node_id,
+      ElementAccessibilityIssueReason issue_reason,
+      bool has_disallowed_attributes);
+
+  static void ReportUserReidentificationResourceBlockedIssue(
+      LocalFrame* frame,
+      std::optional<std::string> devtools_request_id,
+      const KURL& affected_request_url);
+
+  static void ReportUserReidentificationCanvasNoisedIssue(
+      SourceLocation* source_location,
+      ExecutionContext* execution_context);
+
+  static void ReportPermissionElementIssue(
       ExecutionContext* execution_context,
-      const std::string& wasm_source_url,
-      WTF::String source_origin,
-      WTF::String target_origin,
-      bool is_warning);
+      DOMNodeId node_id,
+      protocol::Audits::PermissionElementIssueType issue_type,
+      const String& type,
+      bool is_warning,
+      const String& permissionName = String(),
+      const String& occluderNodeInfo = String(),
+      const String& occluderParentNodeInfo = String(),
+      const String& disableReason = String());
+
+  static void ReportSelectivePermissionsInterventionIssue(
+      ExecutionContext* execution_context,
+      const String& api_name,
+      const AdTracker::AdScriptAncestry& ad_ancestry,
+      const SourceLocation& source_location);
+
+  static void ReportLazyLoadImageIssue(ExecutionContext* execution_context,
+                                       Element* element,
+                                       const String& url);
 
  private:
-  explicit AuditsIssue(std::unique_ptr<protocol::Audits::InspectorIssue> issue);
-
   std::unique_ptr<protocol::Audits::InspectorIssue> issue_;
 };
 

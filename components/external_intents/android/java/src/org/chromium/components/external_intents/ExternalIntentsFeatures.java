@@ -1,38 +1,51 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.external_intents;
 
+import org.jni_zero.JNINamespace;
+import org.jni_zero.NativeMethods;
+
 import org.chromium.base.Features;
-import org.chromium.base.annotations.JNINamespace;
-import org.chromium.base.annotations.NativeMethods;
+import org.chromium.build.annotations.NullMarked;
 
 /**
  * Java accessor for base/feature_list.h state.
  *
- * This class provides methods to access values of feature flags registered in
- * |kFeaturesExposedToJava| in components/external_intents/android/external_intents_feature_list.cc.
- *
+ * <p>This class provides methods to access values of feature flags registered in
+ * |kFeaturesExposedToJava| in components/external_intents/android/external_intents_features.cc.
  */
 @JNINamespace("external_intents")
-public class ExternalIntentsFeatures extends Features {
-    public static final String INTENT_BLOCK_EXTERNAL_FORM_REDIRECT_NO_GESTURE_NAME =
-            "IntentBlockExternalFormRedirectsNoGesture";
+@NullMarked
+public class ExternalIntentsFeatures {
+    public static final String EXTERNAL_NAVIGATION_DEBUG_LOGS_NAME = "ExternalNavigationDebugLogs";
+    public static final String DONT_CLOBBER_TABS_WITH_CHROME_APP_ID_NAME =
+            "DontClobberTabsWithChromeAppId";
+    public static final String WEBAPK_SELF_OWNED_RENDERER_NAV_LAUNCH_NAME =
+            "WebApkSelfOwnedRendererNavLaunch";
 
-    public static final ExternalIntentsFeatures INTENT_BLOCK_EXTERNAL_FORM_REDIRECT_NO_GESTURE =
-            new ExternalIntentsFeatures(0, INTENT_BLOCK_EXTERNAL_FORM_REDIRECT_NO_GESTURE_NAME);
+    public static final ExternalIntentsFeature EXTERNAL_NAVIGATION_DEBUG_LOGS =
+            new ExternalIntentsFeature(0, EXTERNAL_NAVIGATION_DEBUG_LOGS_NAME);
 
-    private final int mOrdinal;
+    public static final ExternalIntentsFeature DONT_CLOBBER_TABS_WITH_CHROME_APP_ID =
+            new ExternalIntentsFeature(1, DONT_CLOBBER_TABS_WITH_CHROME_APP_ID_NAME);
 
-    private ExternalIntentsFeatures(int ordinal, String name) {
-        super(name);
-        mOrdinal = ordinal;
-    }
+    public static final ExternalIntentsFeature WEBAPK_SELF_OWNED_RENDERER_NAV_LAUNCH =
+            new ExternalIntentsFeature(2, WEBAPK_SELF_OWNED_RENDERER_NAV_LAUNCH_NAME);
 
-    @Override
-    protected long getFeaturePointer() {
-        return ExternalIntentsFeaturesJni.get().getFeature(mOrdinal);
+    public static class ExternalIntentsFeature extends Features {
+        private final int mOrdinal;
+
+        private ExternalIntentsFeature(int ordinal, String name) {
+            super(name);
+            mOrdinal = ordinal;
+        }
+
+        @Override
+        protected long getFeaturePointer() {
+            return ExternalIntentsFeaturesJni.get().getFeature(mOrdinal);
+        }
     }
 
     @NativeMethods

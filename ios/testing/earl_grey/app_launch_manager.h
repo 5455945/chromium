@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,10 @@
 
 #import <Foundation/Foundation.h>
 
+#import "base/test/scoped_feature_list.h"
 #import "ios/testing/earl_grey/app_launch_configuration.h"
 
 @class AppLaunchManager;
-
 
 // Protocol that test cases can implement to be notified by AppLaunchManager.
 @protocol AppLaunchManagerObserver
@@ -26,42 +26,55 @@
 // Provides control of the single application-under-test to EarlGrey 2 tests.
 @interface AppLaunchManager : NSObject
 
+// True if the app has been successfully launched.
+@property(readonly) BOOL appIsLaunched;
+
+// True if the app is currently running (in the foreground).
+@property(readonly) BOOL appIsRunning;
+
 // Returns the singleton instance of this class.
 + (AppLaunchManager*)sharedManager;
 
 - (instancetype)init NS_UNAVAILABLE;
 
-// Makes sure the app has been started with the |configuration|. Provides
+// Makes sure the app has been started with the `configuration`. Provides
 // different ways of killing and resetting app during relaunch. In EG2, the app
 // will be launched from scratch if:
 // * The app is not running, or
 // * The app is currently running with a different feature set, or
-// * |relaunchPolicy| forces a relaunch.
+// * `relaunchPolicy` forces a relaunch.
 // Otherwise, the app will be activated instead of (re)launched.
 // Will wait until app is activated or launched, and fail the test if it
 // fails to do so.
-// |configuration| sets features, variations, arguments and relaunch manners.
-// If you're trying to call this method in |-setUp()|, please specify an
-// |AppLaunchConfiguration| in |-appConfigurationForTestCase()| instead for
+// `configuration` sets features, variations, arguments and relaunch manners.
+// If you're trying to call this method in `-setUp()`, please specify an
+// `AppLaunchConfiguration` in `-appConfigurationForTestCase()` instead for
 // better efficiency.
 - (void)ensureAppLaunchedWithConfiguration:
     (AppLaunchConfiguration)configuration;
 
-// DEPRECATED. Use |ensureAppLaunchedWithConfiguration:| instead.
+// DEPRECATED. Use `ensureAppLaunchedWithConfiguration:` instead. Ensures the
+// app is launched with `featuresEnabled`, `featuresDisabled`, and
+// `relaunchPolicy`.
 - (void)ensureAppLaunchedWithFeaturesEnabled:
-            (std::vector<base::Feature>)featuresEnabled
-                                    disabled:(std::vector<base::Feature>)
-                                                 featuresDisabled
+            (std::vector<base::test::FeatureRef>)featuresEnabled
+                                    disabled:
+                                        (std::vector<base::test::FeatureRef>)
+                                            featuresDisabled
                               relaunchPolicy:(RelaunchPolicy)relaunchPolicy;
 
 // Moves app to background and then moves it back. In EG1, this method is a
 // no-op.
 - (void)backgroundAndForegroundApp;
 
-// Adds an observer for AppLaunchManager.
+// Moves app to background and waits until it is backgrounded. Returns YES if
+// the app was successfully backgrounded.
+- (BOOL)backgroundApplication;
+
+// Adds `observer` for AppLaunchManager.
 - (void)addObserver:(id<AppLaunchManagerObserver>)observer;
 
-// Removes an observer for AppLaunchManager.
+// Removes `observer` for AppLaunchManager.
 - (void)removeObserver:(id<AppLaunchManagerObserver>)observer;
 
 @end

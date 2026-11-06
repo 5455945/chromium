@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -29,16 +29,6 @@ DeviceStatus::DeviceStatus(BatteryStatus battery,
     : battery_status(battery),
       battery_percentage(battery_percentage),
       network_status(network) {}
-
-bool DeviceStatus::operator==(const DeviceStatus& rhs) const {
-  return network_status == rhs.network_status &&
-         battery_status == rhs.battery_status &&
-         battery_percentage == rhs.battery_percentage;
-}
-
-bool DeviceStatus::operator!=(const DeviceStatus& rhs) const {
-  return !(*this == rhs);
-}
 
 DeviceStatus::Result DeviceStatus::MeetsCondition(
     const SchedulingParams& params,

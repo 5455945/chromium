@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,16 +6,16 @@
 #define CHROME_BROWSER_ASH_CHILD_ACCOUNTS_PARENT_ACCESS_CODE_PARENT_ACCESS_SERVICE_H_
 
 #include <memory>
+#include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
 #include "base/no_destructor.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
 #include "chrome/browser/ash/child_accounts/parent_access_code/config_source.h"
 #include "components/account_id/account_id.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class PrefRegistrySimple;
 
@@ -39,7 +39,7 @@ class ParentAccessService {
     // specifically to the account identified by the parameter.
     virtual void OnAccessCodeValidation(
         ParentCodeValidationResult result,
-        absl::optional<AccountId> account_id) = 0;
+        std::optional<AccountId> account_id) = 0;
   };
 
   // Registers preferences.
@@ -48,7 +48,15 @@ class ParentAccessService {
   // Gets the service singleton.
   static ParentAccessService& Get();
 
+  // `local_state` must be non-null, and must outlive `this`.
+  explicit ParentAccessService(PrefService* local_state);
+  ParentAccessService(const ParentAccessService&) = delete;
+  ParentAccessService& operator=(const ParentAccessService&) = delete;
+  ~ParentAccessService();
+
   // Checks if the provided |action| requires parental approval to be performed.
+  // Requires owner_account_id to be available in the UserManager, so if calling
+  // close to startup, ensure owner account is set before calling.
   static bool IsApprovalRequired(SupervisedAction action);
 
   // Checks if |access_code| is valid for the user identified by |account_id|.
@@ -61,38 +69,30 @@ class ParentAccessService {
       const std::string& access_code,
       base::Time validation_time);
 
-  // Reloads config for the provided user.
-  void LoadConfigForUser(const user_manager::User* user);
+  // Updates and reloads config for the provided user. If `config` is null, the
+  // config will be removed.
+  void UpdateConfigForUser(const AccountId& account_id,
+                           std::optional<base::DictValue> config);
 
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
 
+  bool IsTimezoneChangeApproved(const AccountId& account_id) const;
+  void SetTimezoneChangeApproved(const AccountId& account_id, bool is_approved);
+
  private:
-  friend class base::NoDestructor<ParentAccessService>;
-
-  ParentAccessService();
-  ~ParentAccessService();
-
   void NotifyObservers(ParentCodeValidationResult validation_result,
                        const AccountId& account_id);
 
   // Provides configurations to be used for validation of access codes.
   ConfigSource config_source_;
 
-  base::ObserverList<Observer> observers_;
+  std::set<AccountId> timezone_change_approved_users_;
 
-  DISALLOW_COPY_AND_ASSIGN(ParentAccessService);
+  base::ObserverList<Observer> observers_;
 };
 
 }  // namespace parent_access
 }  // namespace ash
-
-// TODO(https://crbug.com/1164001): remove when Chrome OS code migration is
-// done.
-namespace chromeos {
-namespace parent_access {
-using ::ash::parent_access::ParentAccessService;
-}  // namespace parent_access
-}  // namespace chromeos
 
 #endif  // CHROME_BROWSER_ASH_CHILD_ACCOUNTS_PARENT_ACCESS_CODE_PARENT_ACCESS_SERVICE_H_

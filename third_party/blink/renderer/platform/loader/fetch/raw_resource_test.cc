@@ -31,24 +31,26 @@
 #include "third_party/blink/renderer/platform/loader/fetch/raw_resource.h"
 
 #include <memory>
+
+#include "base/numerics/safe_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/web_url.h"
 #include "third_party/blink/public/platform/web_url_response.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/loader/fetch/memory_cache.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h"
-#include "third_party/blink/renderer/platform/loader/fetch/resource_timing_info.h"
 #include "third_party/blink/renderer/platform/loader/fetch/response_body_loader.h"
 #include "third_party/blink/renderer/platform/loader/fetch/response_body_loader_client.h"
 #include "third_party/blink/renderer/platform/loader/testing/replaying_bytes_consumer.h"
+#include "third_party/blink/renderer/platform/scheduler/main_thread/main_thread_scheduler_impl.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread_scheduler.h"
-#include "third_party/blink/renderer/platform/testing/testing_platform_support_with_mock_scheduler.h"
+#include "third_party/blink/renderer/platform/scheduler/test/task_environment.h"
+#include "third_party/blink/renderer/platform/testing/testing_platform_support.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
-#include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 
 namespace blink {
 
@@ -66,33 +68,20 @@ class RawResourceTest : public testing::Test {
    public:
     ~NoopResponseBodyLoaderClient() override {}
     void DidReceiveData(base::span<const char>) override {}
+    void DidReceiveDecodedData(
+        const String& data,
+        std::unique_ptr<SecureStringDigest> digest) override {}
     void DidFinishLoadingBody() override {}
     void DidFailLoadingBody() override {}
     void DidCancelLoadingBody() override {}
+    void WillCreateBlobFromDrainedDataPipe() override {}
+    void DidCreateBlobFromDrainedDataPipe(
+        const scoped_refptr<BlobDataHandle>&) override {}
   };
 
-  ScopedTestingPlatformSupport<TestingPlatformSupportWithMockScheduler>
-      platform_;
+  test::TaskEnvironmentWithMainThreadScheduler task_environment_;
+  ScopedTestingPlatformSupport<TestingPlatformSupport> platform_;
 };
-
-TEST_F(RawResourceTest, DontIgnoreAcceptForCacheReuse) {
-  scoped_refptr<const SecurityOrigin> source_origin =
-      SecurityOrigin::CreateUniqueOpaque();
-
-  ResourceRequest jpeg_request;
-  jpeg_request.SetHTTPAccept("image/jpeg");
-  jpeg_request.SetRequestorOrigin(source_origin);
-
-  RawResource* jpeg_resource(
-      RawResource::CreateForTest(jpeg_request, ResourceType::kRaw));
-
-  ResourceRequest png_request;
-  png_request.SetHTTPAccept("image/png");
-  png_request.SetRequestorOrigin(source_origin);
-  EXPECT_NE(jpeg_resource->CanReuse(
-                FetchParameters::CreateForTest(std::move(png_request))),
-            Resource::MatchStatus::kOk);
-}
 
 class DummyClient final : public GarbageCollected<DummyClient>,
                           public RawResourceClient {
@@ -104,8 +93,8 @@ class DummyClient final : public GarbageCollected<DummyClient>,
   void NotifyFinished(Resource* resource) override { called_ = true; }
   String DebugName() const override { return "DummyClient"; }
 
-  void DataReceived(Resource*, const char* data, size_t length) override {
-    data_.Append(data, SafeCast<wtf_size_t>(length));
+  void DataReceived(Resource*, base::span<const char> data) override {
+    data_.append_range(data);
   }
 
   bool RedirectReceived(Resource*,
@@ -134,23 +123,23 @@ class DummyClient final : public GarbageCollected<DummyClient>,
 class AddingClient final : public GarbageCollected<AddingClient>,
                            public RawResourceClient {
  public:
-  AddingClient(DummyClient* client, Resource* resource)
-      : dummy_client_(client), resource_(resource) {}
+  AddingClient(DummyClient* client,
+               Resource* resource,
+               scoped_refptr<base::SingleThreadTaskRunner> task_runner)
+      : dummy_client_(client),
+        resource_(resource),
+        task_runner_(std::move(task_runner)) {}
 
   ~AddingClient() override = default;
 
   // ResourceClient implementation.
   void NotifyFinished(Resource* resource) override {
-    auto* platform = static_cast<TestingPlatformSupportWithMockScheduler*>(
-        Platform::Current());
-
     // First schedule an asynchronous task to remove the client.
     // We do not expect a client to be called if the client is removed before
     // a callback invocation task queued inside addClient() is scheduled.
-    platform->test_task_runner()->PostTask(
-        FROM_HERE,
-        WTF::Bind(&AddingClient::RemoveClient, WrapPersistent(this)));
-    resource->AddClient(dummy_client_, platform->test_task_runner().get());
+    task_runner_->PostTask(
+        FROM_HERE, BindOnce(&AddingClient::RemoveClient, WrapPersistent(this)));
+    resource->AddClient(dummy_client_, task_runner_.get());
   }
   String DebugName() const override { return "AddingClient"; }
 
@@ -165,6 +154,7 @@ class AddingClient final : public GarbageCollected<AddingClient>,
  private:
   Member<DummyClient> dummy_client_;
   Member<Resource> resource_;
+  scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
 };
 
 TEST_F(RawResourceTest, AddClientDuringCallback) {
@@ -176,9 +166,10 @@ TEST_F(RawResourceTest, AddClientDuringCallback) {
   EXPECT_FALSE(raw->GetResponse().IsNull());
 
   Persistent<DummyClient> dummy_client = MakeGarbageCollected<DummyClient>();
-  Persistent<AddingClient> adding_client =
-      MakeGarbageCollected<AddingClient>(dummy_client.Get(), raw);
-  raw->AddClient(adding_client, platform_->test_task_runner().get());
+  Persistent<AddingClient> adding_client = MakeGarbageCollected<AddingClient>(
+      dummy_client.Get(), raw, task_environment_.GetMainThreadTaskRunner());
+  raw->AddClient(adding_client,
+                 task_environment_.GetMainThreadTaskRunner().get());
   platform_->RunUntilIdle();
   raw->RemoveClient(adding_client);
   EXPECT_FALSE(dummy_client->Called());
@@ -219,8 +210,10 @@ TEST_F(RawResourceTest, RemoveClientDuringCallback) {
   Persistent<DummyClient> dummy_client = MakeGarbageCollected<DummyClient>();
   Persistent<RemovingClient> removing_client =
       MakeGarbageCollected<RemovingClient>(dummy_client.Get());
-  raw->AddClient(dummy_client, platform_->test_task_runner().get());
-  raw->AddClient(removing_client, platform_->test_task_runner().get());
+  raw->AddClient(dummy_client,
+                 task_environment_.GetMainThreadTaskRunner().get());
+  raw->AddClient(removing_client,
+                 task_environment_.GetMainThreadTaskRunner().get());
   platform_->RunUntilIdle();
   EXPECT_FALSE(raw->IsAlive());
 }
@@ -234,14 +227,14 @@ TEST_F(RawResourceTest, PreloadWithAsynchronousAddClient) {
   raw->MarkAsPreload();
 
   auto* bytes_consumer = MakeGarbageCollected<ReplayingBytesConsumer>(
-      platform_->test_task_runner());
+      task_environment_.GetMainThreadTaskRunner());
   bytes_consumer->Add(ReplayingBytesConsumer::Command(
       ReplayingBytesConsumer::Command::kData, "hello"));
   bytes_consumer->Add(
       ReplayingBytesConsumer::Command(ReplayingBytesConsumer::Command::kDone));
   ResponseBodyLoader* body_loader = MakeGarbageCollected<ResponseBodyLoader>(
       *bytes_consumer, *MakeGarbageCollected<NoopResponseBodyLoaderClient>(),
-      platform_->test_task_runner().get(), nullptr);
+      task_environment_.GetMainThreadTaskRunner().get(), nullptr);
   Persistent<DummyClient> dummy_client = MakeGarbageCollected<DummyClient>();
 
   // Set the response first to make ResourceClient addition asynchronous.
@@ -251,17 +244,18 @@ TEST_F(RawResourceTest, PreloadWithAsynchronousAddClient) {
   params.MutableResourceRequest().SetUseStreamOnResponse(false);
   raw->MatchPreload(params);
   EXPECT_FALSE(raw->IsUnusedPreload());
-  raw->AddClient(dummy_client, platform_->test_task_runner().get());
+  raw->AddClient(dummy_client,
+                 task_environment_.GetMainThreadTaskRunner().get());
 
-  raw->ResponseBodyReceived(*body_loader, platform_->test_task_runner());
+  raw->ResponseBodyReceived(*body_loader,
+                            task_environment_.GetMainThreadTaskRunner());
   raw->FinishForTest();
   EXPECT_FALSE(dummy_client->Called());
 
   platform_->RunUntilIdle();
 
   EXPECT_TRUE(dummy_client->Called());
-  EXPECT_EQ("hello",
-            String(dummy_client->Data().data(), dummy_client->Data().size()));
+  EXPECT_EQ("hello", String(dummy_client->Data()));
 }
 
 }  // namespace blink

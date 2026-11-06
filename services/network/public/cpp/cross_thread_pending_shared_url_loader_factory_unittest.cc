@@ -1,21 +1,20 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/network/public/cpp/cross_thread_pending_shared_url_loader_factory.h"
 
+#include <optional>
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
-#include "base/sequenced_task_runner.h"
-#include "base/task/post_task.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
-#include "base/threading/sequenced_task_runner_handle.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
@@ -54,7 +53,7 @@ class CloneCheckingURLLoaderFactory : public TestURLLoaderFactory {
 class CrossThreadPendingSharedURLLoaderFactoryTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    main_thread_ = base::SequencedTaskRunnerHandle::Get();
+    main_thread_ = base::SequencedTaskRunner::GetCurrentDefault();
     loader_thread_ = base::ThreadPool::CreateSequencedTaskRunner(
         {base::MayBlock(), base::WithBaseSyncPrimitives()});
 
@@ -125,7 +124,7 @@ class CrossThreadPendingSharedURLLoaderFactoryTest : public ::testing::Test {
             [](scoped_refptr<base::SequencedTaskRunner> client_runner,
                base::OnceClosure quit_closure,
                std::unique_ptr<SimpleURLLoader> loader,
-               std::unique_ptr<std::string> result) {
+               std::optional<std::string> result) {
               EXPECT_TRUE(client_runner->RunsTasksInCurrentSequence());
               if (!result) {
                 ADD_FAILURE();

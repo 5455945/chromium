@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,10 @@
 #define BASE_WIN_SCOPED_COM_INITIALIZER_H_
 
 #include <objbase.h>
+
 #include <wrl/client.h>
 
 #include "base/base_export.h"
-#include "base/macros.h"
 #include "base/threading/thread_checker.h"
 #include "base/win/com_init_balancer.h"
 #include "base/win/scoped_windows_thread_environment.h"
@@ -35,7 +35,6 @@ class BASE_EXPORT ScopedCOMInitializer : public ScopedWindowsThreadEnvironment {
 
   // Enum values which enumerates uninitialization modes for the COM library.
   enum class Uninitialization {
-
     // Default value. Used in threads where no third-party code is executed.
     kAllow,
 
@@ -53,10 +52,16 @@ class BASE_EXPORT ScopedCOMInitializer : public ScopedWindowsThreadEnvironment {
       SelectMTA mta,
       Uninitialization uninitialization = Uninitialization::kAllow);
 
+  ScopedCOMInitializer(const ScopedCOMInitializer&) = delete;
+  ScopedCOMInitializer& operator=(const ScopedCOMInitializer&) = delete;
+
   ~ScopedCOMInitializer() override;
 
   // ScopedWindowsThreadEnvironment:
   bool Succeeded() const override;
+
+  // Returns the value returned by `CoInitializeEx` at initialization.
+  HRESULT hr() const { return hr_; }
 
   // Used for testing. Returns the COM balancer's apartment thread ref count.
   DWORD GetCOMBalancerReferenceCountForTesting() const;
@@ -67,8 +72,6 @@ class BASE_EXPORT ScopedCOMInitializer : public ScopedWindowsThreadEnvironment {
   HRESULT hr_ = S_OK;
   Microsoft::WRL::ComPtr<internal::ComInitBalancer> com_balancer_;
   THREAD_CHECKER(thread_checker_);
-
-  DISALLOW_COPY_AND_ASSIGN(ScopedCOMInitializer);
 };
 
 }  // namespace win

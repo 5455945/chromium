@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,18 @@
 
 #include <string.h>
 
+#include <algorithm>
+#include <string_view>
+#include <tuple>
+
 #include "base/base64.h"
-#include "base/big_endian.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/numerics/byte_conversions.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/string_util.h"
 #include "net/base/io_buffer.h"
+#include "net/filter/source_stream_type.h"
 
 namespace content {
 
@@ -26,7 +33,7 @@ constexpr size_t kMiSha256HeaderLength = sizeof(kMiSha256Header) - 1;
 // Copies as many bytes from |input| as will fit in |output| and advances both.
 size_t CopyClamped(base::span<const char>* input, base::span<char>* output) {
   size_t size = std::min(output->size(), input->size());
-  memcpy(output->data(), input->data(), size);
+  std::ranges::copy(input->first(size), output->data());
   *output = output->subspan(size);
   *input = input->subspan(size);
   return size;
@@ -35,10 +42,11 @@ size_t CopyClamped(base::span<const char>* input, base::span<char>* output) {
 }  // namespace
 
 MerkleIntegritySourceStream::MerkleIntegritySourceStream(
-    base::StringPiece digest_header_value,
+    std::string_view digest_header_value,
     std::unique_ptr<SourceStream> upstream)
     // TODO(ksakamoto): Use appropriate SourceType.
-    : net::FilterSourceStream(SourceStream::TYPE_NONE, std::move(upstream)) {
+    : net::FilterSourceStream(net::SourceStreamType::kNone,
+                              std::move(upstream)) {
   std::string next_proof;
   if (!base::StartsWith(digest_header_value, kMiSha256Header) ||
       !base::Base64Decode(digest_header_value.substr(kMiSha256HeaderLength),
@@ -46,35 +54,36 @@ MerkleIntegritySourceStream::MerkleIntegritySourceStream(
       next_proof.size() != SHA256_DIGEST_LENGTH) {
     failed_ = true;
   } else {
-    memcpy(next_proof_, next_proof.data(), SHA256_DIGEST_LENGTH);
+    base::span(next_proof_).copy_from(base::as_byte_span(next_proof));
   }
 }
 
 MerkleIntegritySourceStream::~MerkleIntegritySourceStream() = default;
 
-int MerkleIntegritySourceStream::FilterData(net::IOBuffer* output_buffer,
-                                            int output_buffer_size,
-                                            net::IOBuffer* input_buffer,
-                                            int input_buffer_size,
-                                            int* consumed_bytes,
-                                            bool upstream_eof_reached) {
+base::expected<size_t, net::Error> MerkleIntegritySourceStream::FilterData(
+    net::IOBuffer* output_buffer,
+    size_t output_buffer_size,
+    net::IOBuffer* input_buffer,
+    size_t input_buffer_size,
+    size_t* consumed_bytes,
+    bool upstream_eof_reached) {
   if (failed_) {
-    return net::ERR_CONTENT_DECODING_FAILED;
+    return base::unexpected(net::ERR_CONTENT_DECODING_FAILED);
   }
 
-  base::span<const char> remaining_input = base::make_span(
-      input_buffer->data(), base::checked_cast<size_t>(input_buffer_size));
-  base::span<char> remaining_output = base::make_span(
-      output_buffer->data(), base::checked_cast<size_t>(output_buffer_size));
+  base::span<const char> remaining_input =
+      base::as_chars(input_buffer->first(input_buffer_size));
+  base::span<char> remaining_output =
+      base::as_writable_chars(output_buffer->first(output_buffer_size));
+
   bool ok =
       FilterDataImpl(&remaining_output, &remaining_input, upstream_eof_reached);
-  *consumed_bytes =
-      input_buffer_size - base::checked_cast<int>(remaining_input.size());
+  *consumed_bytes = input_buffer_size - remaining_input.size();
   if (!ok) {
     failed_ = true;
-    return net::ERR_CONTENT_DECODING_FAILED;
+    return base::unexpected(net::ERR_CONTENT_DECODING_FAILED);
   }
-  return output_buffer_size - base::checked_cast<int>(remaining_output.size());
+  return output_buffer_size - remaining_output.size();
 }
 
 std::string MerkleIntegritySourceStream::GetTypeAsString() const {
@@ -102,9 +111,9 @@ bool MerkleIntegritySourceStream::FilterDataImpl(base::span<char>* output,
       }
       return false;
     }
-    uint64_t record_size;
-    base::ReadBigEndian(bytes.data(), &record_size);
-    if (record_size == 0) {
+    uint64_t record_size =
+        base::U64FromBigEndian(base::as_bytes(bytes).first<8u>());
+    if (record_size == 0u) {
       return false;
     }
     if (record_size > kMaxRecordSize) {
@@ -118,7 +127,7 @@ bool MerkleIntegritySourceStream::FilterDataImpl(base::span<char>* output,
 
   // Clear any previous output before continuing.
   if (!CopyPartialOutput(output)) {
-    DCHECK(output->empty());
+    CHECK(output->empty(), base::NotFatalUntil::M160);
     return true;
   }
 
@@ -127,7 +136,7 @@ bool MerkleIntegritySourceStream::FilterDataImpl(base::span<char>* output,
     base::span<const char> record;
     if (!ConsumeBytes(input, record_size_ + SHA256_DIGEST_LENGTH, &record,
                       &storage)) {
-      DCHECK(input->empty());
+      CHECK(input->empty(), base::NotFatalUntil::M160);
       if (!upstream_eof_reached) {
         return true;  // Wait for more data later.
       }
@@ -146,8 +155,8 @@ bool MerkleIntegritySourceStream::FilterDataImpl(base::span<char>* output,
   }
 
   if (final_record_done_) {
-    DCHECK(upstream_eof_reached);
-    DCHECK(input->empty());
+    CHECK(upstream_eof_reached, base::NotFatalUntil::M160);
+    CHECK(input->empty(), base::NotFatalUntil::M160);
   }
   return true;
 }
@@ -157,7 +166,7 @@ bool MerkleIntegritySourceStream::CopyPartialOutput(base::span<char>* output) {
     return true;
   }
   base::span<const char> partial =
-      base::make_span(partial_output_).subspan(partial_output_offset_);
+      base::span(partial_output_).subspan(partial_output_offset_);
   partial_output_offset_ += CopyClamped(&partial, output);
   if (partial_output_offset_ < partial_output_.size()) {
     return false;
@@ -173,12 +182,11 @@ bool MerkleIntegritySourceStream::ConsumeBytes(base::span<const char>* input,
                                                std::string* storage) {
   // This comes from the requirement that, when ConsumeBytes returns false, the
   // next call must use the same |len|.
-  DCHECK_LT(partial_input_.size(), len);
+  CHECK_LT(partial_input_.size(), len, base::NotFatalUntil::M160);
 
   // Return data directly from |input| if possible.
   if (partial_input_.empty() && input->size() >= len) {
-    *result = input->subspan(0, len);
-    *input = input->subspan(len);
+    std::tie(*result, *input) = input->split_at(len);
     return true;
   }
 
@@ -199,7 +207,7 @@ bool MerkleIntegritySourceStream::ConsumeBytes(base::span<const char>* input,
 bool MerkleIntegritySourceStream::ProcessRecord(base::span<const char> record,
                                                 bool is_final,
                                                 base::span<char>* output) {
-  DCHECK(partial_output_.empty());
+  CHECK(partial_output_.empty(), base::NotFatalUntil::M160);
 
   // Check the hash.
   SHA256_CTX ctx;
@@ -213,27 +221,27 @@ bool MerkleIntegritySourceStream::ProcessRecord(base::span<const char> record,
 #ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
   // The fuzzer will have a hard time fixing up chains of hashes, so, if
   // building in fuzzer mode, everything hashes to the same garbage value.
-  memset(sha256, 0x42, SHA256_DIGEST_LENGTH);
+  std::ranges::fill(sha256, 0x42);
 #endif
-  if (memcmp(sha256, next_proof_, SHA256_DIGEST_LENGTH) != 0) {
+  if (base::span(sha256) != base::span(next_proof_)) {
     return false;
   }
 
   if (!is_final) {
     // Split into data and a hash.
     base::span<const char> hash = record.subspan(record_size_);
-    record = record.subspan(0, record_size_);
+    record = record.first(record_size_);
 
     // Save the next proof.
     CHECK_EQ(static_cast<size_t>(SHA256_DIGEST_LENGTH), hash.size());
-    memcpy(next_proof_, hash.data(), SHA256_DIGEST_LENGTH);
+    base::span(next_proof_).copy_from(base::as_bytes(hash));
   }
 
   // Copy whatever output there is room for.
   CopyClamped(&record, output);
 
   // If it didn't all fit, save the remaining in |partial_output_|.
-  DCHECK(record.empty() || output->empty());
+  CHECK(record.empty() || output->empty(), base::NotFatalUntil::M160);
   partial_output_.append(record.data(), record.size());
   return true;
 }

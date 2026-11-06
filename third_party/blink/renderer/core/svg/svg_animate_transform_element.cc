@@ -25,7 +25,7 @@
 #include "third_party/blink/renderer/core/svg/properties/svg_animated_property.h"
 #include "third_party/blink/renderer/core/svg/svg_transform_list.h"
 #include "third_party/blink/renderer/core/svg_names.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -55,18 +55,33 @@ void SVGAnimateTransformElement::ResolveTargetProperty() {
   css_property_id_ = CSSPropertyID::kInvalid;
 }
 
-SVGPropertyBase* SVGAnimateTransformElement::ParseValue(
+SVGPropertyBase* SVGAnimateTransformElement::CreateUnderlyingValueForAnimation()
+    const {
+  DCHECK(IsAnimatingSVGDom());
+  return To<SVGTransformList>(target_property_->BaseValueBase()).Clone();
+}
+
+ParsedAnimationValue SVGAnimateTransformElement::ParseValue(
     const String& value) const {
   DCHECK(IsAnimatingSVGDom());
-  return MakeGarbageCollected<SVGTransformList>(transform_type_, value);
+  auto* transform_list =
+      MakeGarbageCollected<SVGTransformList>(transform_type_, value);
+  SVGParseStatus status = SVGParseStatus::kNoError;
+
+  if (transform_list->length() != 1) {
+    status = SVGParseStatus::kParsingFailed;
+  }
+
+  return {transform_list, kRegularPropertyValue, status};
 }
 
 static SVGTransformType ParseTypeAttribute(const String& value) {
   if (value.IsNull())
     return SVGTransformType::kTranslate;
   SVGTransformType transform_type = ParseTransformType(value);
-  // Since ParseTransformType() is also used when parsing transform lists, it accepts the value
-  // "matrix". That value is however not recognized by the 'type' attribute, so treat it as invalid.
+  // Since ParseTransformType() is also used when parsing transform lists, it
+  // accepts the value "matrix". That value is however not recognized by the
+  // 'type' attribute, so treat it as invalid.
   if (transform_type == SVGTransformType::kMatrix)
     transform_type = SVGTransformType::kUnknown;
   return transform_type;

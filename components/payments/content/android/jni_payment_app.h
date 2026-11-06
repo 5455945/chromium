@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -29,8 +29,8 @@ class JniPaymentApp : public PaymentApp::Delegate {
 
   bool IsValidForPaymentMethodData(
       JNIEnv* env,
-      const base::android::JavaParamRef<jstring>& jmethod,
-      const base::android::JavaParamRef<jobject>& jdata_byte_buffer);
+      const base::android::JavaRef<jstring>& jmethod,
+      const base::android::JavaRef<jobject>& jdata_byte_buffer);
 
   bool HandlesShippingAddress(JNIEnv* env);
 
@@ -40,33 +40,24 @@ class JniPaymentApp : public PaymentApp::Delegate {
 
   bool HandlesPayerPhone(JNIEnv* env);
 
-  base::android::ScopedJavaLocalRef<jstring> GetCountryCode(JNIEnv* env);
-
-  bool CanMakePayment(JNIEnv* env);
+  bool HasEnrolledInstrument(JNIEnv* env);
 
   bool CanPreselect(JNIEnv* env);
 
-  bool IsUserGestureRequiredToSkipUi(JNIEnv* env);
+  base::android::ScopedJavaLocalRef<jbyteArray> GetTotalForSpc(JNIEnv* env);
 
   void InvokePaymentApp(JNIEnv* env,
-                        const base::android::JavaParamRef<jobject>& jcallback);
+                        const base::android::JavaRef<jobject>& jcallback);
 
-  void UpdateWith(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& jresponse_byte_buffer);
+  void UpdateWith(JNIEnv* env,
+                  const base::android::JavaRef<jobject>& jresponse_byte_buffer);
 
   void OnPaymentDetailsNotUpdated(JNIEnv* env);
 
   bool IsWaitingForPaymentDetailsUpdate(JNIEnv* env);
 
   void AbortPaymentApp(JNIEnv* env,
-                       const base::android::JavaParamRef<jobject>& jcallback);
-
-  bool IsReadyForMinimalUI(JNIEnv* env);
-
-  base::android::ScopedJavaLocalRef<jstring> AccountBalance(JNIEnv* env);
-
-  void DisableShowingOwnUI(JNIEnv* env);
+                       const base::android::JavaRef<jobject>& jcallback);
 
   base::android::ScopedJavaLocalRef<jstring> GetApplicationIdentifierToHide(
       JNIEnv* env);
@@ -74,23 +65,29 @@ class JniPaymentApp : public PaymentApp::Delegate {
   base::android::ScopedJavaLocalRef<jobjectArray>
   GetApplicationIdentifiersThatHideThisApp(JNIEnv* env);
 
-  jlong GetUkmSourceId(JNIEnv* env);
+  int64_t GetUkmSourceId(JNIEnv* env);
 
   void SetPaymentHandlerHost(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& jpayment_handler_host);
+      const base::android::JavaRef<jobject>& jpayment_handler_host);
 
-  void FreeNativeObject(JNIEnv* env);
+  base::android::ScopedJavaLocalRef<jbyteArray> SetAppSpecificResponseFields(
+      JNIEnv* env,
+      const base::android::JavaRef<jobject>& jpayment_response);
+
+  void FreeNativeObjectSoon(JNIEnv* env);
+
+  ~JniPaymentApp() override;
 
  private:
   // PaymentApp::Delegate implementation:
   void OnInstrumentDetailsReady(const std::string& method_name,
                                 const std::string& stringified_details,
                                 const PayerData& payer_data) override;
-  void OnInstrumentDetailsError(const std::string& error_message) override;
+  void OnInstrumentDetailsError(mojom::PaymentEventResponseType error,
+                                const std::string& error_message) override;
 
   explicit JniPaymentApp(std::unique_ptr<PaymentApp> payment_app);
-  ~JniPaymentApp() override;
 
   std::unique_ptr<PaymentApp> payment_app_;
   base::android::ScopedJavaGlobalRef<jobject> invoke_callback_;
@@ -98,6 +95,22 @@ class JniPaymentApp : public PaymentApp::Delegate {
   base::WeakPtrFactory<JniPaymentApp> weak_ptr_factory_{this};
 };
 
+jni_zero::ScopedJavaLocalRef<jobject> ConvertPaymentEntityLogoToJavaObject(
+    JNIEnv* env,
+    const payments::PaymentApp::PaymentEntityLogo& logo);
+
 }  // namespace payments
+
+namespace jni_zero {
+
+template <>
+inline jni_zero::ScopedJavaLocalRef<jobject>
+ToJniType<payments::PaymentApp::PaymentEntityLogo>(
+    JNIEnv* env,
+    const payments::PaymentApp::PaymentEntityLogo& logo) {
+  return payments::ConvertPaymentEntityLogoToJavaObject(env, logo);
+}
+
+}  // namespace jni_zero
 
 #endif  // COMPONENTS_PAYMENTS_CONTENT_ANDROID_JNI_PAYMENT_APP_H_

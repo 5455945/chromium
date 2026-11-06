@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,8 +17,6 @@ namespace test_data {
 const int kIndex = 3;
 const int kUniqueID = 50;
 const int kReferrerPolicy = 0;
-const std::u16string kTitle = u"title";
-const std::string kEncodedPageState = "page state";
 const ui::PageTransition kTransitionType =
     ui::PageTransitionFromInt(
         ui::PAGE_TRANSITION_AUTO_SUBFRAME |
@@ -27,15 +25,10 @@ const ui::PageTransition kTransitionType =
 const bool kHasPostData = true;
 const int64_t kPostID = 100;
 const bool kIsOverridingUserAgent = true;
-const base::Time kTimestamp =
-    base::Time::UnixEpoch() + base::TimeDelta::FromMilliseconds(100);
+const base::Time kTimestamp = base::Time::UnixEpoch() + base::Milliseconds(100);
 const int kHttpStatusCode = 404;
 const SerializedNavigationEntry::PasswordState kPasswordState =
     SerializedNavigationEntry::HAS_PASSWORD_FIELD;
-const std::string kExtendedInfoKey1 = "key 1";
-const std::string kExtendedInfoKey2 = "key 2";
-const std::string kExtendedInfoValue1 = "value 1";
-const std::string kExtendedInfoValue2 = "value 2";
 const int64_t kTaskId = 2;
 const int64_t kParentTaskId = 1;
 const int64_t kRootTaskId = 0;
@@ -148,13 +141,6 @@ void SerializedNavigationEntryTestHelper::SetTimestamp(
     base::Time timestamp,
     SerializedNavigationEntry* navigation) {
   navigation->timestamp_ = timestamp;
-}
-
-// static
-void SerializedNavigationEntryTestHelper::SetReplacedEntryData(
-    const SerializedNavigationEntry::ReplacedNavigationEntryData& data,
-    SerializedNavigationEntry* navigation) {
-  navigation->replaced_entry_data_ = data;
 }
 
 }  // namespace sessions

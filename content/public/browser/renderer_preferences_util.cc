@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,14 +15,18 @@ namespace content {
 
 void UpdateFontRendererPreferencesFromSystemSettings(
     blink::RendererPreferences* prefs) {
-  static const gfx::FontRenderParams params(
-      gfx::GetFontRenderParams(gfx::FontRenderParamsQuery(), nullptr));
+  const gfx::FontRenderParams params =
+      gfx::GetFontRenderParams(gfx::FontRenderParamsQuery(), nullptr);
   prefs->should_antialias_text = params.antialiasing;
   prefs->use_subpixel_positioning = params.subpixel_positioning;
   prefs->hinting = params.hinting;
   prefs->use_autohinter = params.autohinter;
   prefs->use_bitmaps = params.use_bitmaps;
   prefs->subpixel_rendering = params.subpixel_rendering;
+#if BUILDFLAG(IS_WIN)
+  prefs->text_contrast = params.text_contrast;
+  prefs->text_gamma = params.text_gamma;
+#endif  // BUILDFLAG(IS_WIN)
 }
 
 }  // namespace content

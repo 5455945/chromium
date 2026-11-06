@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,30 @@
 
 #include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/core/fileapi/url_registry.h"
-#include "third_party/blink/renderer/core/html/media/media_source_attachment.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/forward.h"
 
 namespace blink {
 
-// Core interface extension of URLRegistry to allow interactions with a
-// URLRegistry for registered MediaSourceAttachments handled with a
-// scoped_refptr.
-class CORE_EXPORT MediaSourceRegistry : public URLRegistry {
+class KURL;
+class MediaSourceAttachment;
+class SecurityOrigin;
+
+// Core interface for registering, unregistering, and looking up
+// MediaSourceAttachments. The production implementation lives in
+// modules/mediasource.
+class CORE_EXPORT MediaSourceRegistry {
+  USING_FAST_MALLOC(MediaSourceRegistry);
+
  public:
+  virtual ~MediaSourceRegistry() = default;
+
+  // Generates a URL using `security_origin`, registers `attachment` under it,
+  // and retains the attachment's reference until the URL is unregistered.
+  virtual KURL RegisterUrl(const SecurityOrigin* security_origin,
+                           scoped_refptr<MediaSourceAttachment> attachment) = 0;
+  virtual void UnregisterUrl(const KURL& url) = 0;
+
   // Finds the attachment, if any, registered with |url| in the
   // MediaSourceRegistry implementation. |url| must be non-empty. If such an
   // active registration for |url| is not found, returns an unset

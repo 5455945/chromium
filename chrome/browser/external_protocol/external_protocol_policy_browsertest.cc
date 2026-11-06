@@ -1,12 +1,17 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <string_view>
+
+#include "base/test/scoped_feature_list.h"
 #include "base/values.h"
 #include "chrome/browser/external_protocol/auto_launch_protocols_policy_handler.h"
+#include "chrome/browser/external_protocol/constants.h"
 #include "chrome/browser/external_protocol/external_protocol_handler.h"
+#include "chrome/browser/external_protocol/features.h"
 #include "chrome/browser/policy/policy_test_utils.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/policy_constants.h"
 #include "content/public/test/browser_test.h"
@@ -14,6 +19,12 @@
 #include "url/origin.h"
 
 namespace policy {
+
+namespace {
+
+constexpr char kLocalOnlyScheme[] = "local+custom";
+
+}  // namespace
 
 class ExternalProtocolPolicyBrowserTest : public PolicyTest {};
 
@@ -25,28 +36,28 @@ IN_PROC_BROWSER_TEST_F(ExternalProtocolPolicyBrowserTest,
   url::Origin test_origin = url::Origin::Create(GURL("https://example.test"));
   ExternalProtocolHandler::BlockState block_state =
       ExternalProtocolHandler::GetBlockState(kExampleScheme, &test_origin,
-                                             browser()->profile());
+                                             browser()->GetProfile());
   EXPECT_EQ(ExternalProtocolHandler::UNKNOWN, block_state);
 
   // Single dictionary for this test case, but erroneously not embedded
   // in a list.
-  base::DictionaryValue protocol_origins_map;
+  base::DictValue protocol_origins_map;
   // Set a protocol list with a matching protocol.
-  protocol_origins_map.SetStringKey(
-      AutoLaunchProtocolsPolicyHandler::kProtocolNameKey, kExampleScheme);
+  protocol_origins_map.Set(policy::external_protocol::kProtocolNameKey,
+                           kExampleScheme);
   // Set origins list with a wildcard origin matching pattern.
   base::ListValue origins;
   origins.Append(kWildcardOrigin);
-  protocol_origins_map.SetKey(AutoLaunchProtocolsPolicyHandler::kOriginListKey,
-                              std::move(origins));
+  protocol_origins_map.Set(policy::external_protocol::kOriginListKey,
+                           base::Value(std::move(origins)));
   PolicyMap policies;
   policies.Set(key::kAutoLaunchProtocolsFromOrigins, POLICY_LEVEL_MANDATORY,
                POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD,
-               protocol_origins_map.Clone(), nullptr);
+               base::Value(protocol_origins_map.Clone()), nullptr);
   UpdateProviderPolicy(policies);
 
   block_state = ExternalProtocolHandler::GetBlockState(
-      kExampleScheme, &test_origin, browser()->profile());
+      kExampleScheme, &test_origin, browser()->GetProfile());
   EXPECT_EQ(ExternalProtocolHandler::UNKNOWN, block_state);
 }
 
@@ -57,27 +68,27 @@ IN_PROC_BROWSER_TEST_F(ExternalProtocolPolicyBrowserTest,
 
   base::ListValue protocol_origins_map_list;
   // Single dictionary in the list for this test case.
-  base::DictionaryValue protocol_origins_map;
+  base::DictValue protocol_origins_map;
   // Set a protocol.
-  protocol_origins_map.SetStringKey(
-      AutoLaunchProtocolsPolicyHandler::kProtocolNameKey, kExampleScheme);
+  protocol_origins_map.Set(policy::external_protocol::kProtocolNameKey,
+                           kExampleScheme);
   // Set an origins list with the wildcard origin matching pattern.
   base::ListValue origins;
   origins.Append(kWildcardOrigin);
-  protocol_origins_map.SetKey(AutoLaunchProtocolsPolicyHandler::kOriginListKey,
-                              std::move(origins));
+  protocol_origins_map.Set(policy::external_protocol::kOriginListKey,
+                           base::Value(std::move(origins)));
   protocol_origins_map_list.Append(std::move(protocol_origins_map));
   PolicyMap policies;
   policies.Set(key::kAutoLaunchProtocolsFromOrigins, POLICY_LEVEL_MANDATORY,
                POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD,
-               protocol_origins_map_list.Clone(), nullptr);
+               base::Value(protocol_origins_map_list.Clone()), nullptr);
   UpdateProviderPolicy(policies);
 
   // Calling GetBlockState with a null initiating_origin should
   // return UNKNOWN.
   ExternalProtocolHandler::BlockState block_state =
       ExternalProtocolHandler::GetBlockState(kExampleScheme, nullptr,
-                                             browser()->profile());
+                                             browser()->GetProfile());
   EXPECT_EQ(ExternalProtocolHandler::UNKNOWN, block_state);
 }
 
@@ -88,28 +99,28 @@ IN_PROC_BROWSER_TEST_F(ExternalProtocolPolicyBrowserTest,
   url::Origin test_origin = url::Origin::Create(GURL("https://example.test"));
   ExternalProtocolHandler::BlockState block_state =
       ExternalProtocolHandler::GetBlockState(kExampleScheme, &test_origin,
-                                             browser()->profile());
+                                             browser()->GetProfile());
   EXPECT_EQ(ExternalProtocolHandler::UNKNOWN, block_state);
 
   base::ListValue protocol_origins_map_list;
   // Single dictionary in the list for this test case.
-  base::DictionaryValue protocol_origins_map;
+  base::DictValue protocol_origins_map;
   // Set a protocol list with a matching protocol.
-  protocol_origins_map.SetStringKey(
-      AutoLaunchProtocolsPolicyHandler::kProtocolNameKey, kExampleScheme);
+  protocol_origins_map.Set(policy::external_protocol::kProtocolNameKey,
+                           kExampleScheme);
   // Set an empty origins list.
   base::ListValue origins;
-  protocol_origins_map.SetKey(AutoLaunchProtocolsPolicyHandler::kOriginListKey,
-                              std::move(origins));
+  protocol_origins_map.Set(policy::external_protocol::kOriginListKey,
+                           base::Value(std::move(origins)));
   protocol_origins_map_list.Append(std::move(protocol_origins_map));
   PolicyMap policies;
   policies.Set(key::kAutoLaunchProtocolsFromOrigins, POLICY_LEVEL_MANDATORY,
                POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD,
-               protocol_origins_map_list.Clone(), nullptr);
+               base::Value(protocol_origins_map_list.Clone()), nullptr);
   UpdateProviderPolicy(policies);
 
   block_state = ExternalProtocolHandler::GetBlockState(
-      kExampleScheme, &test_origin, browser()->profile());
+      kExampleScheme, &test_origin, browser()->GetProfile());
   EXPECT_EQ(ExternalProtocolHandler::UNKNOWN, block_state);
 }
 
@@ -120,26 +131,26 @@ IN_PROC_BROWSER_TEST_F(ExternalProtocolPolicyBrowserTest,
 
   base::ListValue protocol_origins_map_list;
   // Single dictionary in the list for this test case.
-  base::DictionaryValue protocol_origins_map;
+  base::DictValue protocol_origins_map;
   // Set a protocol to match the test.
-  protocol_origins_map.SetStringKey(
-      AutoLaunchProtocolsPolicyHandler::kProtocolNameKey, kExampleScheme);
+  protocol_origins_map.Set(policy::external_protocol::kProtocolNameKey,
+                           kExampleScheme);
   // Set an origins list with the wildcard origin matching pattern.
   base::ListValue origins;
   origins.Append(kWildcardOrigin);
-  protocol_origins_map.SetKey(AutoLaunchProtocolsPolicyHandler::kOriginListKey,
-                              std::move(origins));
+  protocol_origins_map.Set(policy::external_protocol::kOriginListKey,
+                           base::Value(std::move(origins)));
   protocol_origins_map_list.Append(std::move(protocol_origins_map));
   PolicyMap policies;
   policies.Set(key::kAutoLaunchProtocolsFromOrigins, POLICY_LEVEL_MANDATORY,
                POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD,
-               protocol_origins_map_list.Clone(), nullptr);
+               base::Value(protocol_origins_map_list.Clone()), nullptr);
   UpdateProviderPolicy(policies);
 
   url::Origin test_origin = url::Origin::Create(GURL("https://example.test"));
   ExternalProtocolHandler::BlockState block_state =
       ExternalProtocolHandler::GetBlockState(kExampleScheme, &test_origin,
-                                             browser()->profile());
+                                             browser()->GetProfile());
   EXPECT_EQ(ExternalProtocolHandler::DONT_BLOCK, block_state);
 }
 
@@ -154,45 +165,45 @@ IN_PROC_BROWSER_TEST_F(ExternalProtocolPolicyBrowserTest,
   base::ListValue protocol_origins_map_list;
 
   // Three dictionaries in the list for this test case.
-  base::DictionaryValue protocol_origins_map1;
-  base::DictionaryValue protocol_origins_map2;
-  base::DictionaryValue protocol_origins_map3;
+  base::DictValue protocol_origins_map1;
+  base::DictValue protocol_origins_map2;
+  base::DictValue protocol_origins_map3;
 
   // Set invalid protocols, each with the wildcard origin matching pattern.
-  protocol_origins_map1.SetStringKey(
-      AutoLaunchProtocolsPolicyHandler::kProtocolNameKey, kInvalidProtocol1);
+  protocol_origins_map1.Set(policy::external_protocol::kProtocolNameKey,
+                            kInvalidProtocol1);
   base::ListValue origins1;
   origins1.Append(kWildcardOrigin);
-  protocol_origins_map1.SetKey(AutoLaunchProtocolsPolicyHandler::kOriginListKey,
-                               std::move(origins1));
+  protocol_origins_map1.Set(policy::external_protocol::kOriginListKey,
+                            base::Value(std::move(origins1)));
   protocol_origins_map_list.Append(std::move(protocol_origins_map1));
 
-  protocol_origins_map2.SetStringKey(
-      AutoLaunchProtocolsPolicyHandler::kProtocolNameKey, kInvalidProtocol2);
+  protocol_origins_map2.Set(policy::external_protocol::kProtocolNameKey,
+                            kInvalidProtocol2);
   base::ListValue origins2;
   origins2.Append(kWildcardOrigin);
-  protocol_origins_map2.SetKey(AutoLaunchProtocolsPolicyHandler::kOriginListKey,
-                               std::move(origins2));
+  protocol_origins_map2.Set(policy::external_protocol::kOriginListKey,
+                            base::Value(std::move(origins2)));
   protocol_origins_map_list.Append(std::move(protocol_origins_map2));
 
-  protocol_origins_map3.SetStringKey(
-      AutoLaunchProtocolsPolicyHandler::kProtocolNameKey, kInvalidProtocol3);
+  protocol_origins_map3.Set(policy::external_protocol::kProtocolNameKey,
+                            kInvalidProtocol3);
   base::ListValue origins3;
   origins3.Append(kWildcardOrigin);
-  protocol_origins_map3.SetKey(AutoLaunchProtocolsPolicyHandler::kOriginListKey,
-                               std::move(origins3));
+  protocol_origins_map3.Set(policy::external_protocol::kOriginListKey,
+                            base::Value(std::move(origins3)));
   protocol_origins_map_list.Append(std::move(protocol_origins_map3));
 
   PolicyMap policies;
   policies.Set(key::kAutoLaunchProtocolsFromOrigins, POLICY_LEVEL_MANDATORY,
                POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD,
-               protocol_origins_map_list.Clone(), nullptr);
+               base::Value(protocol_origins_map_list.Clone()), nullptr);
   UpdateProviderPolicy(policies);
 
   url::Origin test_origin = url::Origin::Create(GURL("https://example.test"));
   ExternalProtocolHandler::BlockState block_state =
       ExternalProtocolHandler::GetBlockState(kExampleScheme, &test_origin,
-                                             browser()->profile());
+                                             browser()->GetProfile());
   EXPECT_EQ(ExternalProtocolHandler::UNKNOWN, block_state);
 }
 
@@ -203,21 +214,21 @@ IN_PROC_BROWSER_TEST_F(ExternalProtocolPolicyBrowserTest,
 
   base::ListValue protocol_origins_map_list;
   // Single dictionary in the list for this test case.
-  base::DictionaryValue protocol_origins_map;
+  base::DictValue protocol_origins_map;
   // Set a protocol to match the test.
-  protocol_origins_map.SetStringKey(
-      AutoLaunchProtocolsPolicyHandler::kProtocolNameKey, kExampleScheme);
+  protocol_origins_map.Set(policy::external_protocol::kProtocolNameKey,
+                           kExampleScheme);
   // Set an origins list with an origin matching pattern that matches but is
   // only the host name.
   base::ListValue origins;
   origins.Append(kHost);
-  protocol_origins_map.SetKey(AutoLaunchProtocolsPolicyHandler::kOriginListKey,
-                              std::move(origins));
+  protocol_origins_map.Set(policy::external_protocol::kOriginListKey,
+                           base::Value(std::move(origins)));
   protocol_origins_map_list.Append(std::move(protocol_origins_map));
   PolicyMap policies;
   policies.Set(key::kAutoLaunchProtocolsFromOrigins, POLICY_LEVEL_MANDATORY,
                POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD,
-               protocol_origins_map_list.Clone(), nullptr);
+               base::Value(protocol_origins_map_list.Clone()), nullptr);
   UpdateProviderPolicy(policies);
 
   // Test that secure origin matches.
@@ -225,19 +236,19 @@ IN_PROC_BROWSER_TEST_F(ExternalProtocolPolicyBrowserTest,
       url::Origin::Create(GURL("https://www.example.test"));
   ExternalProtocolHandler::BlockState block_state =
       ExternalProtocolHandler::GetBlockState(kExampleScheme, &test_origin,
-                                             browser()->profile());
+                                             browser()->GetProfile());
   EXPECT_EQ(ExternalProtocolHandler::DONT_BLOCK, block_state);
 
   // Test that insecure origin matches.
   test_origin = url::Origin::Create(GURL("http://www.example.test"));
   block_state = ExternalProtocolHandler::GetBlockState(
-      kExampleScheme, &test_origin, browser()->profile());
+      kExampleScheme, &test_origin, browser()->GetProfile());
   EXPECT_EQ(ExternalProtocolHandler::DONT_BLOCK, block_state);
 
   // Test that different origin does not match.
   test_origin = url::Origin::Create(GURL("http://www.other.test"));
   block_state = ExternalProtocolHandler::GetBlockState(
-      kExampleScheme, &test_origin, browser()->profile());
+      kExampleScheme, &test_origin, browser()->GetProfile());
   EXPECT_EQ(ExternalProtocolHandler::UNKNOWN, block_state);
 }
 
@@ -248,21 +259,21 @@ IN_PROC_BROWSER_TEST_F(ExternalProtocolPolicyBrowserTest,
 
   base::ListValue protocol_origins_map_list;
   // Single dictionary in the list for this test case.
-  base::DictionaryValue protocol_origins_map;
+  base::DictValue protocol_origins_map;
   // Set a protocol to match the test.
-  protocol_origins_map.SetStringKey(
-      AutoLaunchProtocolsPolicyHandler::kProtocolNameKey, kExampleScheme);
+  protocol_origins_map.Set(policy::external_protocol::kProtocolNameKey,
+                           kExampleScheme);
   // Set an origins list with an origin matching pattern that matches exactly
   // but has no scheme.
   base::ListValue origins;
   origins.Append(kExactHostName);
-  protocol_origins_map.SetKey(AutoLaunchProtocolsPolicyHandler::kOriginListKey,
-                              std::move(origins));
+  protocol_origins_map.Set(policy::external_protocol::kOriginListKey,
+                           base::Value(std::move(origins)));
   protocol_origins_map_list.Append(std::move(protocol_origins_map));
   PolicyMap policies;
   policies.Set(key::kAutoLaunchProtocolsFromOrigins, POLICY_LEVEL_MANDATORY,
                POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD,
-               protocol_origins_map_list.Clone(), nullptr);
+               base::Value(protocol_origins_map_list.Clone()), nullptr);
   UpdateProviderPolicy(policies);
 
   // Test that secure origin matches.
@@ -270,19 +281,19 @@ IN_PROC_BROWSER_TEST_F(ExternalProtocolPolicyBrowserTest,
       url::Origin::Create(GURL("https://www.example.test"));
   ExternalProtocolHandler::BlockState block_state =
       ExternalProtocolHandler::GetBlockState(kExampleScheme, &test_origin,
-                                             browser()->profile());
+                                             browser()->GetProfile());
   EXPECT_EQ(ExternalProtocolHandler::DONT_BLOCK, block_state);
 
   // Test that insecure origin matches.
   test_origin = url::Origin::Create(GURL("http://www.example.test"));
   block_state = ExternalProtocolHandler::GetBlockState(
-      kExampleScheme, &test_origin, browser()->profile());
+      kExampleScheme, &test_origin, browser()->GetProfile());
   EXPECT_EQ(ExternalProtocolHandler::DONT_BLOCK, block_state);
 
   // Test that different origin does not match.
   test_origin = url::Origin::Create(GURL("http://www.other.test"));
   block_state = ExternalProtocolHandler::GetBlockState(
-      kExampleScheme, &test_origin, browser()->profile());
+      kExampleScheme, &test_origin, browser()->GetProfile());
   EXPECT_EQ(ExternalProtocolHandler::UNKNOWN, block_state);
 }
 
@@ -293,21 +304,21 @@ IN_PROC_BROWSER_TEST_F(ExternalProtocolPolicyBrowserTest,
 
   base::ListValue protocol_origins_map_list;
   // Single dictionary in the list for this test case.
-  base::DictionaryValue protocol_origins_map;
+  base::DictValue protocol_origins_map;
   // Set a protocol to match the test.
-  protocol_origins_map.SetStringKey(
-      AutoLaunchProtocolsPolicyHandler::kProtocolNameKey, kExampleScheme);
+  protocol_origins_map.Set(policy::external_protocol::kProtocolNameKey,
+                           kExampleScheme);
   // Set an origins list with an origin matching pattern that is the parent
   // domain but should match subdomains.
   base::ListValue origins;
   origins.Append(kParentDomain);
-  protocol_origins_map.SetKey(AutoLaunchProtocolsPolicyHandler::kOriginListKey,
-                              std::move(origins));
+  protocol_origins_map.Set(policy::external_protocol::kOriginListKey,
+                           base::Value(std::move(origins)));
   protocol_origins_map_list.Append(std::move(protocol_origins_map));
   PolicyMap policies;
   policies.Set(key::kAutoLaunchProtocolsFromOrigins, POLICY_LEVEL_MANDATORY,
                POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD,
-               protocol_origins_map_list.Clone(), nullptr);
+               base::Value(protocol_origins_map_list.Clone()), nullptr);
   UpdateProviderPolicy(policies);
 
   // Test that a subdomain matches.
@@ -315,7 +326,7 @@ IN_PROC_BROWSER_TEST_F(ExternalProtocolPolicyBrowserTest,
       url::Origin::Create(GURL("https://www.example.test"));
   ExternalProtocolHandler::BlockState block_state =
       ExternalProtocolHandler::GetBlockState(kExampleScheme, &test_origin,
-                                             browser()->profile());
+                                             browser()->GetProfile());
   EXPECT_EQ(ExternalProtocolHandler::DONT_BLOCK, block_state);
 }
 
@@ -326,21 +337,21 @@ IN_PROC_BROWSER_TEST_F(ExternalProtocolPolicyBrowserTest,
 
   base::ListValue protocol_origins_map_list;
   // Single dictionary in the list for this test case.
-  base::DictionaryValue protocol_origins_map;
+  base::DictValue protocol_origins_map;
   // Set a protocol to match the test.
-  protocol_origins_map.SetStringKey(
-      AutoLaunchProtocolsPolicyHandler::kProtocolNameKey, kExampleScheme);
+  protocol_origins_map.Set(policy::external_protocol::kProtocolNameKey,
+                           kExampleScheme);
   // Set an origins list with an origin matching pattern that matches the scheme
   // and all hosts.
   base::ListValue origins;
   origins.Append(kProtocolWithWildcardHostname);
-  protocol_origins_map.SetKey(AutoLaunchProtocolsPolicyHandler::kOriginListKey,
-                              std::move(origins));
+  protocol_origins_map.Set(policy::external_protocol::kOriginListKey,
+                           base::Value(std::move(origins)));
   protocol_origins_map_list.Append(std::move(protocol_origins_map));
   PolicyMap policies;
   policies.Set(key::kAutoLaunchProtocolsFromOrigins, POLICY_LEVEL_MANDATORY,
                POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD,
-               protocol_origins_map_list.Clone(), nullptr);
+               base::Value(protocol_origins_map_list.Clone()), nullptr);
   UpdateProviderPolicy(policies);
 
   // Test that secure origin matches.
@@ -348,13 +359,13 @@ IN_PROC_BROWSER_TEST_F(ExternalProtocolPolicyBrowserTest,
       url::Origin::Create(GURL("https://www.example.test"));
   ExternalProtocolHandler::BlockState block_state =
       ExternalProtocolHandler::GetBlockState(kExampleScheme, &test_origin,
-                                             browser()->profile());
+                                             browser()->GetProfile());
   EXPECT_EQ(ExternalProtocolHandler::DONT_BLOCK, block_state);
 
   // Test that insecure origin does not match.
   test_origin = url::Origin::Create(GURL("http://www.example.test"));
   block_state = ExternalProtocolHandler::GetBlockState(
-      kExampleScheme, &test_origin, browser()->profile());
+      kExampleScheme, &test_origin, browser()->GetProfile());
   EXPECT_EQ(ExternalProtocolHandler::UNKNOWN, block_state);
 }
 
@@ -365,21 +376,21 @@ IN_PROC_BROWSER_TEST_F(ExternalProtocolPolicyBrowserTest,
 
   base::ListValue protocol_origins_map_list;
   // Single dictionary in the list for this test case.
-  base::DictionaryValue protocol_origins_map;
+  base::DictValue protocol_origins_map;
   // Set a protocol to match the test.
-  protocol_origins_map.SetStringKey(
-      AutoLaunchProtocolsPolicyHandler::kProtocolNameKey, kExampleScheme);
+  protocol_origins_map.Set(policy::external_protocol::kProtocolNameKey,
+                           kExampleScheme);
   // Set an origins list with an origin matching pattern that matches the full
   // origin exactly.
   base::ListValue origins;
   origins.Append(kFullOrigin);
-  protocol_origins_map.SetKey(AutoLaunchProtocolsPolicyHandler::kOriginListKey,
-                              std::move(origins));
+  protocol_origins_map.Set(policy::external_protocol::kOriginListKey,
+                           base::Value(std::move(origins)));
   protocol_origins_map_list.Append(std::move(protocol_origins_map));
   PolicyMap policies;
   policies.Set(key::kAutoLaunchProtocolsFromOrigins, POLICY_LEVEL_MANDATORY,
                POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD,
-               protocol_origins_map_list.Clone(), nullptr);
+               base::Value(protocol_origins_map_list.Clone()), nullptr);
   UpdateProviderPolicy(policies);
 
   // Test that default HTTPS port 443 matches.
@@ -387,19 +398,19 @@ IN_PROC_BROWSER_TEST_F(ExternalProtocolPolicyBrowserTest,
       url::Origin::Create(GURL("https://www.example.test"));
   ExternalProtocolHandler::BlockState block_state =
       ExternalProtocolHandler::GetBlockState(kExampleScheme, &test_origin,
-                                             browser()->profile());
+                                             browser()->GetProfile());
   EXPECT_EQ(ExternalProtocolHandler::DONT_BLOCK, block_state);
 
   // Test that explicit port 443 matches.
   test_origin = url::Origin::Create(GURL("https://www.example.test:443"));
   block_state = ExternalProtocolHandler::GetBlockState(
-      kExampleScheme, &test_origin, browser()->profile());
+      kExampleScheme, &test_origin, browser()->GetProfile());
   EXPECT_EQ(ExternalProtocolHandler::DONT_BLOCK, block_state);
 
   // Test that explicit other port does not match.
   test_origin = url::Origin::Create(GURL("https://www.example.test:8080"));
   block_state = ExternalProtocolHandler::GetBlockState(
-      kExampleScheme, &test_origin, browser()->profile());
+      kExampleScheme, &test_origin, browser()->GetProfile());
   EXPECT_EQ(ExternalProtocolHandler::UNKNOWN, block_state);
 }
 
@@ -410,28 +421,28 @@ IN_PROC_BROWSER_TEST_F(ExternalProtocolPolicyBrowserTest,
 
   base::ListValue protocol_origins_map_list;
   // Single dictionary in the list for this test case.
-  base::DictionaryValue protocol_origins_map;
+  base::DictValue protocol_origins_map;
   // Set a protocol to match the test.
-  protocol_origins_map.SetStringKey(
-      AutoLaunchProtocolsPolicyHandler::kProtocolNameKey, kExampleScheme);
+  protocol_origins_map.Set(policy::external_protocol::kProtocolNameKey,
+                           kExampleScheme);
   // Set an origins list with an origin matching pattern that doesn't match
   // because it is a parent domain that does not match subdomains.
   base::ListValue origins;
   origins.Append(kExactParentDomain);
-  protocol_origins_map.SetKey(AutoLaunchProtocolsPolicyHandler::kOriginListKey,
-                              std::move(origins));
+  protocol_origins_map.Set(policy::external_protocol::kOriginListKey,
+                           base::Value(std::move(origins)));
   protocol_origins_map_list.Append(std::move(protocol_origins_map));
   PolicyMap policies;
   policies.Set(key::kAutoLaunchProtocolsFromOrigins, POLICY_LEVEL_MANDATORY,
                POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD,
-               protocol_origins_map_list.Clone(), nullptr);
+               base::Value(protocol_origins_map_list.Clone()), nullptr);
   UpdateProviderPolicy(policies);
 
   url::Origin test_origin =
       url::Origin::Create(GURL("https://www.example.test"));
   ExternalProtocolHandler::BlockState block_state =
       ExternalProtocolHandler::GetBlockState(kExampleScheme, &test_origin,
-                                             browser()->profile());
+                                             browser()->GetProfile());
   EXPECT_EQ(ExternalProtocolHandler::UNKNOWN, block_state);
 }
 
@@ -442,28 +453,118 @@ IN_PROC_BROWSER_TEST_F(ExternalProtocolPolicyBrowserTest,
 
   base::ListValue protocol_origins_map_list;
   // Single dictionary in the list for this test case.
-  base::DictionaryValue protocol_origins_map;
+  base::DictValue protocol_origins_map;
   // Set a protocol to match the test.
-  protocol_origins_map.SetStringKey(
-      AutoLaunchProtocolsPolicyHandler::kProtocolNameKey, kExampleScheme);
+  protocol_origins_map.Set(policy::external_protocol::kProtocolNameKey,
+                           kExampleScheme);
   // Set an origins list with an origin matching pattern that doesn't match
   // because it contains a [/path] element.
   base::ListValue origins;
   origins.Append(kFullUrlWithPath);
-  protocol_origins_map.SetKey(AutoLaunchProtocolsPolicyHandler::kOriginListKey,
-                              std::move(origins));
+  protocol_origins_map.Set(policy::external_protocol::kOriginListKey,
+                           base::Value(std::move(origins)));
   protocol_origins_map_list.Append(std::move(protocol_origins_map));
   PolicyMap policies;
   policies.Set(key::kAutoLaunchProtocolsFromOrigins, POLICY_LEVEL_MANDATORY,
                POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD,
-               protocol_origins_map_list.Clone(), nullptr);
+               base::Value(protocol_origins_map_list.Clone()), nullptr);
   UpdateProviderPolicy(policies);
 
   url::Origin test_origin = url::Origin::Create(GURL(kFullUrlWithPath));
   ExternalProtocolHandler::BlockState block_state =
       ExternalProtocolHandler::GetBlockState(kExampleScheme, &test_origin,
-                                             browser()->profile());
+                                             browser()->GetProfile());
   EXPECT_EQ(ExternalProtocolHandler::UNKNOWN, block_state);
+}
+
+// Exercises policy precedence through the provider rather than setting prefs
+// directly.
+class ExternalProtocolLocalOnlyPrefixPolicyBrowserTest : public PolicyTest {
+ public:
+  ExternalProtocolLocalOnlyPrefixPolicyBrowserTest() {
+    feature_list_.InitAndEnableFeature(::features::kLocalOnlyAppProtocolPrefix);
+  }
+
+ protected:
+  void SetAutoLaunchPolicy(std::string_view scheme, std::string_view origin) {
+    base::DictValue protocol_origins_map;
+    protocol_origins_map.Set(policy::external_protocol::kProtocolNameKey,
+                             scheme);
+    base::ListValue origins;
+    origins.Append(origin);
+    protocol_origins_map.Set(policy::external_protocol::kOriginListKey,
+                             std::move(origins));
+    base::ListValue protocol_origins_map_list;
+    protocol_origins_map_list.Append(std::move(protocol_origins_map));
+    PolicyMap policies;
+    policies.Set(key::kAutoLaunchProtocolsFromOrigins, POLICY_LEVEL_MANDATORY,
+                 POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD,
+                 base::Value(std::move(protocol_origins_map_list)), nullptr);
+    UpdateProviderPolicy(policies);
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(ExternalProtocolLocalOnlyPrefixPolicyBrowserTest,
+                       LocalOnlyPrefixBlockedFromWebOrigin) {
+  url::Origin test_origin = url::Origin::Create(GURL("https://example.test"));
+  EXPECT_EQ(ExternalProtocolHandler::BLOCK,
+            ExternalProtocolHandler::GetBlockState(
+                kLocalOnlyScheme, &test_origin, browser()->GetProfile()));
+}
+
+IN_PROC_BROWSER_TEST_F(ExternalProtocolLocalOnlyPrefixPolicyBrowserTest,
+                       LocalOnlyPrefixAllowedByEnterprisePolicy) {
+  url::Origin test_origin = url::Origin::Create(GURL("https://example.test"));
+  EXPECT_EQ(ExternalProtocolHandler::BLOCK,
+            ExternalProtocolHandler::GetBlockState(
+                kLocalOnlyScheme, &test_origin, browser()->GetProfile()));
+
+  SetAutoLaunchPolicy(kLocalOnlyScheme, "https://example.test");
+
+  EXPECT_EQ(ExternalProtocolHandler::DONT_BLOCK,
+            ExternalProtocolHandler::GetBlockState(
+                kLocalOnlyScheme, &test_origin, browser()->GetProfile()));
+}
+
+IN_PROC_BROWSER_TEST_F(ExternalProtocolLocalOnlyPrefixPolicyBrowserTest,
+                       LocalOnlyPrefixPolicyDoesNotLeakToOtherOrigins) {
+  SetAutoLaunchPolicy(kLocalOnlyScheme, "https://allowed.test");
+
+  url::Origin other_origin = url::Origin::Create(GURL("https://example.test"));
+  EXPECT_EQ(ExternalProtocolHandler::BLOCK,
+            ExternalProtocolHandler::GetBlockState(
+                kLocalOnlyScheme, &other_origin, browser()->GetProfile()));
+}
+
+IN_PROC_BROWSER_TEST_F(ExternalProtocolLocalOnlyPrefixPolicyBrowserTest,
+                       LocalOnlyPrefixIgnoredForNullInitiatingOrigin) {
+  // A null origin is not web-initiated, so the usual prompt path remains.
+  EXPECT_EQ(ExternalProtocolHandler::UNKNOWN,
+            ExternalProtocolHandler::GetBlockState(kLocalOnlyScheme, nullptr,
+                                                   browser()->GetProfile()));
+}
+
+class ExternalProtocolLocalOnlyPrefixDisabledPolicyBrowserTest
+    : public PolicyTest {
+ public:
+  ExternalProtocolLocalOnlyPrefixDisabledPolicyBrowserTest() {
+    feature_list_.InitAndDisableFeature(
+        ::features::kLocalOnlyAppProtocolPrefix);
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(ExternalProtocolLocalOnlyPrefixDisabledPolicyBrowserTest,
+                       LocalOnlyPrefixNotBlockedWhenFeatureDisabled) {
+  url::Origin test_origin = url::Origin::Create(GURL("https://example.test"));
+  EXPECT_EQ(ExternalProtocolHandler::UNKNOWN,
+            ExternalProtocolHandler::GetBlockState(
+                kLocalOnlyScheme, &test_origin, browser()->GetProfile()));
 }
 
 }  // namespace policy

@@ -1,17 +1,17 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/power/ml/smart_dim/builtin_worker.h"
 
 #include "ash/constants/ash_features.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ref_counted_memory.h"
+#include "chrome/browser/ash/power/ml/smart_dim/example_preprocessor.pb.h"
 #include "chrome/browser/ash/power/ml/smart_dim/ml_agent_util.h"
 #include "chrome/grit/browser_resources.h"
 #include "chromeos/services/machine_learning/public/cpp/service_connection.h"
-#include "components/assist_ranker/proto/example_preprocessor.pb.h"
 #include "ui/base/resource/resource_bundle.h"
 
 namespace ash {
@@ -91,8 +91,9 @@ void BuiltinWorker::LazyInitialize() {
 
   if (!executor_) {
     // Get the graph executor.
-    model_->CreateGraphExecutor(executor_.BindNewPipeAndPassReceiver(),
-                                base::DoNothing());
+    model_->CreateGraphExecutor(
+        chromeos::machine_learning::mojom::GraphExecutorOptions::New(),
+        executor_.BindNewPipeAndPassReceiver(), base::DoNothing());
     executor_.set_disconnect_handler(base::BindOnce(
         &BuiltinWorker::OnConnectionError, base::Unretained(this)));
   }

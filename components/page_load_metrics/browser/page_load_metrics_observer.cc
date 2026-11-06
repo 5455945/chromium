@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,48 +6,22 @@
 
 #include <utility>
 
-namespace {
-
-int BucketWithOffsetAndUnit(int num, int offset, int unit) {
-  // Bucketing raw number with `offset` centered.
-  const int grid = (num - offset) / unit;
-  const int bucketed =
-      grid == 0 ? 0
-                : grid > 0 ? std::pow(2, static_cast<int>(std::log2(grid)))
-                           : -std::pow(2, static_cast<int>(std::log2(-grid)));
-  return bucketed * unit + offset;
-}
-
-}  // namespace
+#include "base/byte_size.h"
+#include "net/base/load_timing_info.h"
 
 namespace page_load_metrics {
 
-int GetBucketedViewportInitialScale(const blink::MobileFriendliness& mf) {
-  return mf.viewport_initial_scale_x10 <= -1
-             ? -1
-             : BucketWithOffsetAndUnit(mf.viewport_initial_scale_x10, 10, 2);
-}
-
-int GetBucketedViewportHardcodedWidth(const blink::MobileFriendliness& mf) {
-  return mf.viewport_hardcoded_width <= -1
-             ? -1
-             : BucketWithOffsetAndUnit(mf.viewport_hardcoded_width, 500, 10);
-}
-
-MemoryUpdate::MemoryUpdate(content::GlobalRenderFrameHostId id, int64_t delta)
-    : routing_id(id), delta_bytes(delta) {}
-
 ExtraRequestCompleteInfo::ExtraRequestCompleteInfo(
-    const url::Origin& origin_of_final_url,
+    const url::SchemeHostPort& final_url,
     const net::IPEndPoint& remote_endpoint,
-    int frame_tree_node_id,
+    content::FrameTreeNodeId frame_tree_node_id,
     bool was_cached,
-    int64_t raw_body_bytes,
-    int64_t original_network_content_length,
+    base::ByteSize raw_body_bytes,
+    base::ByteSize original_network_content_length,
     network::mojom::RequestDestination request_destination,
     int net_error,
     std::unique_ptr<net::LoadTimingInfo> load_timing_info)
-    : origin_of_final_url(origin_of_final_url),
+    : final_url(final_url),
       remote_endpoint(remote_endpoint),
       frame_tree_node_id(frame_tree_node_id),
       was_cached(was_cached),
@@ -59,7 +33,7 @@ ExtraRequestCompleteInfo::ExtraRequestCompleteInfo(
 
 ExtraRequestCompleteInfo::ExtraRequestCompleteInfo(
     const ExtraRequestCompleteInfo& other)
-    : origin_of_final_url(other.origin_of_final_url),
+    : final_url(other.final_url),
       remote_endpoint(other.remote_endpoint),
       frame_tree_node_id(other.frame_tree_node_id),
       was_cached(other.was_cached),
@@ -72,13 +46,25 @@ ExtraRequestCompleteInfo::ExtraRequestCompleteInfo(
                            : std::make_unique<net::LoadTimingInfo>(
                                  *other.load_timing_info)) {}
 
-ExtraRequestCompleteInfo::~ExtraRequestCompleteInfo() {}
+ExtraRequestCompleteInfo::~ExtraRequestCompleteInfo() = default;
 
-FailedProvisionalLoadInfo::FailedProvisionalLoadInfo(base::TimeDelta interval,
-                                                     net::Error error)
-    : time_to_failed_provisional_load(interval), error(error) {}
+FailedProvisionalLoadInfo::FailedProvisionalLoadInfo(
+    base::TimeDelta interval,
+    net::Error error,
+    int net_extended_error_code,
+    std::optional<content::ErrorNavigationTrigger> error_navigation_trigger,
+    content::NavigationDiscardReason discard_reason)
+    : time_to_failed_provisional_load(interval),
+      error(error),
+      net_extended_error_code(net_extended_error_code),
+      error_navigation_trigger(error_navigation_trigger),
+      discard_reason(discard_reason) {}
 
-FailedProvisionalLoadInfo::~FailedProvisionalLoadInfo() {}
+FailedProvisionalLoadInfo::~FailedProvisionalLoadInfo() = default;
+
+const char* PageLoadMetricsObserver::GetObserverName() const {
+  return nullptr;
+}
 
 PageLoadMetricsObserver::ObservePolicy PageLoadMetricsObserver::OnStart(
     content::NavigationHandle* navigation_handle,
@@ -88,10 +74,9 @@ PageLoadMetricsObserver::ObservePolicy PageLoadMetricsObserver::OnStart(
 }
 
 PageLoadMetricsObserver::ObservePolicy
-PageLoadMetricsObserver::OnPrerenderStart(
-    content::NavigationHandle* navigation_handle,
-    const GURL& currently_committed_url) {
-  return STOP_OBSERVING;
+PageLoadMetricsObserver::OnNavigationHandleTimingUpdated(
+    content::NavigationHandle* navigation_handle) {
+  return CONTINUE_OBSERVING;
 }
 
 PageLoadMetricsObserver::ObservePolicy PageLoadMetricsObserver::OnRedirect(
@@ -100,8 +85,7 @@ PageLoadMetricsObserver::ObservePolicy PageLoadMetricsObserver::OnRedirect(
 }
 
 PageLoadMetricsObserver::ObservePolicy PageLoadMetricsObserver::OnCommit(
-    content::NavigationHandle* navigation_handle,
-    ukm::SourceId source_id) {
+    content::NavigationHandle* navigation_handle) {
   return CONTINUE_OBSERVING;
 }
 
@@ -135,16 +119,26 @@ PageLoadMetricsObserver::ShouldObserveMimeType(
                                               : STOP_OBSERVING;
 }
 
+PageLoadMetricsObserver::ObservePolicy
+PageLoadMetricsObserver::ShouldObserveScheme(const GURL& url) const {
+  bool should_observe_scheme = url.SchemeIsHTTPOrHTTPS() ||
+                               delegate_->ShouldObserveScheme(url.GetScheme());
+  return should_observe_scheme ? CONTINUE_OBSERVING : STOP_OBSERVING;
+}
+
 // static
 bool PageLoadMetricsObserver::IsStandardWebPageMimeType(
     const std::string& mime_type) {
   return mime_type == "text/html" || mime_type == "application/xhtml+xml";
 }
 
+PageLoadMetricsObserver::PageLoadMetricsObserver() = default;
+PageLoadMetricsObserver::~PageLoadMetricsObserver() = default;
+
 const PageLoadMetricsObserverDelegate& PageLoadMetricsObserver::GetDelegate()
     const {
   // The delegate must exist and outlive the page load metrics observer.
-  DCHECK(delegate_);
+  CHECK(delegate_);
   return *delegate_;
 }
 

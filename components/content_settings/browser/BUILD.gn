@@ -1,4 +1,4 @@
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -11,17 +11,20 @@ source_set("browser") {
   ]
   deps = [
     "//base",
-    "//build:chromeos_buildflags",
     "//components/browsing_data/content",
+    "//components/browsing_data/core",
     "//components/content_settings/common:mojom",
     "//components/content_settings/core/browser",
+    "//components/content_settings/core/browser:cookie_settings",
     "//components/content_settings/core/common",
     "//components/page_load_metrics/browser",
     "//components/prefs",
+    "//components/privacy_sandbox",
     "//components/security_state/core",
     "//components/url_formatter",
     "//content/public/browser",
     "//content/public/common",
+    "//third_party/blink/public:buildflags",
   ]
 }
 
@@ -39,12 +42,19 @@ source_set("test_support") {
 
 source_set("unit_tests") {
   testonly = true
-  sources = [ "page_specific_content_settings_unittest.cc" ]
+  sources = [
+    "content_settings_manager_impl_unittest.cc",
+    "page_specific_content_settings_unittest.cc",
+  ]
   deps = [
     ":browser",
     ":test_support",
     "//base",
+    "//base/test:test_support",
+    "//components/browsing_data/content",
+    "//components/browsing_data/core",
     "//components/content_settings/core/browser",
+    "//components/content_settings/core/browser:cookie_settings",
     "//components/security_state/core",
     "//components/services/storage/public/cpp",
     "//components/sync_preferences:test_support",

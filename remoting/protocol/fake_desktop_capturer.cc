@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,15 +8,14 @@
 
 #include <memory>
 
-#include "base/bind.h"
 #include "base/check.h"
-#include "base/macros.h"
-#include "base/notreached.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_frame.h"
 
-namespace remoting {
-namespace protocol {
+namespace remoting::protocol {
 
 // FakeDesktopCapturer generates a white picture of size kWidth x kHeight
 // with a rectangle of size kBoxWidth x kBoxHeight. The rectangle moves kSpeed
@@ -29,7 +28,7 @@ static const int kSpeed = 20;
 
 static_assert(kBoxWidth < kWidth && kBoxHeight < kHeight, "bad box size");
 static_assert((kBoxWidth % kSpeed == 0) && (kWidth % kSpeed == 0) &&
-              (kBoxHeight % kSpeed == 0) && (kHeight % kSpeed == 0),
+                  (kBoxHeight % kSpeed == 0) && (kHeight % kSpeed == 0),
               "sizes must be multiple of kSpeed");
 
 namespace {
@@ -44,6 +43,9 @@ class DefaultFrameGenerator
         box_speed_y_(kSpeed),
         first_frame_(true) {}
 
+  DefaultFrameGenerator(const DefaultFrameGenerator&) = delete;
+  DefaultFrameGenerator& operator=(const DefaultFrameGenerator&) = delete;
+
   std::unique_ptr<webrtc::DesktopFrame> GenerateFrame(
       webrtc::SharedMemoryFactory* shared_memory_factory);
 
@@ -57,8 +59,6 @@ class DefaultFrameGenerator
   int box_speed_x_;
   int box_speed_y_;
   bool first_frame_;
-
-  DISALLOW_COPY_AND_ASSIGN(DefaultFrameGenerator);
 };
 
 std::unique_ptr<webrtc::DesktopFrame> DefaultFrameGenerator::GenerateFrame(
@@ -69,42 +69,46 @@ std::unique_ptr<webrtc::DesktopFrame> DefaultFrameGenerator::GenerateFrame(
     int buffer_size = kWidth * kHeight * kBytesPerPixel;
     frame = std::make_unique<webrtc::SharedMemoryDesktopFrame>(
         webrtc::DesktopSize(kWidth, kHeight), kWidth * kBytesPerPixel,
-        shared_memory_factory->CreateSharedMemory(buffer_size).release());
+        webrtc::FOURCC_ARGB,
+        shared_memory_factory->CreateSharedMemory(buffer_size));
   } else {
     frame = std::make_unique<webrtc::BasicDesktopFrame>(
-        webrtc::DesktopSize(kWidth, kHeight));
+        webrtc::DesktopSize(kWidth, kHeight), webrtc::FOURCC_ARGB);
   }
 
   // Move the box.
   bool old_box_pos_x = box_pos_x_;
   box_pos_x_ += box_speed_x_;
-  if (box_pos_x_ + kBoxWidth >= kWidth || box_pos_x_ == 0)
+  if (box_pos_x_ + kBoxWidth >= kWidth || box_pos_x_ == 0) {
     box_speed_x_ = -box_speed_x_;
+  }
 
   bool old_box_pos_y = box_pos_y_;
   box_pos_y_ += box_speed_y_;
-  if (box_pos_y_ + kBoxHeight >= kHeight || box_pos_y_ == 0)
+  if (box_pos_y_ + kBoxHeight >= kHeight || box_pos_y_ == 0) {
     box_speed_y_ = -box_speed_y_;
+  }
 
-  memset(frame->data(), 0xff, kHeight * frame->stride());
+  UNSAFE_TODO(memset(frame->data(), 0xff, kHeight * frame->stride()));
 
   // Draw rectangle with the following colors in its corners:
   //     cyan....yellow
   //     ..............
   //     blue.......red
-  uint8_t* row = frame->data() +
-                 (box_pos_y_ * size_.width() + box_pos_x_) * kBytesPerPixel;
+  uint8_t* row =
+      UNSAFE_TODO(frame->data() +
+                  (box_pos_y_ * size_.width() + box_pos_x_) * kBytesPerPixel);
   for (int y = 0; y < kBoxHeight; ++y) {
     for (int x = 0; x < kBoxWidth; ++x) {
       int r = x * 255 / kBoxWidth;
       int g = y * 255 / kBoxHeight;
       int b = 255 - (x * 255 / kBoxWidth);
-      row[x * kBytesPerPixel] = r;
-      row[x * kBytesPerPixel + 1] = g;
-      row[x * kBytesPerPixel + 2] = b;
-      row[x * kBytesPerPixel + 3] = 0xff;
+      UNSAFE_TODO(row[x * kBytesPerPixel]) = r;
+      UNSAFE_TODO(row[x * kBytesPerPixel + 1]) = g;
+      UNSAFE_TODO(row[x * kBytesPerPixel + 2]) = b;
+      UNSAFE_TODO(row[x * kBytesPerPixel + 3]) = 0xff;
     }
-    row += frame->stride();
+    UNSAFE_TODO(row += frame->stride());
   }
 
   if (first_frame_) {
@@ -123,8 +127,7 @@ std::unique_ptr<webrtc::DesktopFrame> DefaultFrameGenerator::GenerateFrame(
 
 }  // namespace
 
-FakeDesktopCapturer::FakeDesktopCapturer()
-    : callback_(nullptr) {
+FakeDesktopCapturer::FakeDesktopCapturer() : callback_(nullptr) {
   frame_generator_ =
       base::BindRepeating(&DefaultFrameGenerator::GenerateFrame,
                           base::MakeRefCounted<DefaultFrameGenerator>());
@@ -137,10 +140,18 @@ void FakeDesktopCapturer::set_frame_generator(FrameGenerator frame_generator) {
   frame_generator_ = std::move(frame_generator);
 }
 
+void FakeDesktopCapturer::set_on_started_closure(
+    base::OnceClosure on_started_closure) {
+  on_started_closure_ = std::move(on_started_closure);
+}
+
 void FakeDesktopCapturer::Start(Callback* callback) {
   DCHECK(!callback_);
   DCHECK(callback);
   callback_ = callback;
+  if (on_started_closure_) {
+    std::move(on_started_closure_).Run();
+  }
 }
 
 void FakeDesktopCapturer::SetSharedMemoryFactory(
@@ -149,6 +160,10 @@ void FakeDesktopCapturer::SetSharedMemoryFactory(
 }
 
 void FakeDesktopCapturer::CaptureFrame() {
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE,
+      base::BindOnce(&webrtc::DesktopCapturer::Callback::OnFrameCaptureStart,
+                     base::Unretained(callback_)));
   base::Time capture_start_time = base::Time::Now();
   std::unique_ptr<webrtc::DesktopFrame> frame =
       frame_generator_.Run(shared_memory_factory_.get());
@@ -156,21 +171,21 @@ void FakeDesktopCapturer::CaptureFrame() {
     frame->set_capture_time_ms(
         (base::Time::Now() - capture_start_time).InMillisecondsRoundedUp());
   }
-  callback_->OnCaptureResult(
-      frame ? webrtc::DesktopCapturer::Result::SUCCESS
-            : webrtc::DesktopCapturer::Result::ERROR_TEMPORARY,
-      std::move(frame));
+  auto result = frame ? webrtc::DesktopCapturer::Result::SUCCESS
+                      : webrtc::DesktopCapturer::Result::ERROR_TEMPORARY;
+  // Post a task for the OnCaptureResult call to allow the stack to unwind and
+  // simulate the actual product more accurately. Calling OnCaptureResult()
+  // directly also leads to issues when testing with shared memory regions and
+  // IPC as the callback invocation will occur before the shared region can be
+  // set up.
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE,
+      base::BindOnce(&webrtc::DesktopCapturer::Callback::OnCaptureResult,
+                     base::Unretained(callback_), result, std::move(frame)));
 }
 
-bool FakeDesktopCapturer::GetSourceList(SourceList* sources) {
-  NOTIMPLEMENTED();
-  return false;
+base::WeakPtr<FakeDesktopCapturer> FakeDesktopCapturer::GetWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
 }
 
-bool FakeDesktopCapturer::SelectSource(SourceId id) {
-  NOTIMPLEMENTED();
-  return false;
-}
-
-}  // namespace protocol
-}  // namespace remoting
+}  // namespace remoting::protocol

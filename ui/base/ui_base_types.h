@@ -1,49 +1,53 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_BASE_UI_BASE_TYPES_H_
 #define UI_BASE_UI_BASE_TYPES_H_
 
-#include "base/component_export.h"
+#include <cstdint>
+
+#include "build/build_config.h"
 
 namespace ui {
 
-class Event;
+// Specifies which edges of the window are tiled.
+//
+// Wayland can notify the application if certain edge of the window is
+// "tiled": https://wayland.app/protocols/xdg-shell#xdg_toplevel:enum:state.
+// Chromium should not draw frame decorations for the tiled edges.
+struct WindowTiledEdges {
+  bool left{false};
+  bool right{false};
+  bool top{false};
+  bool bottom{false};
 
-// Window "show" state.
-enum WindowShowState {
-  // A default un-set state.
-  SHOW_STATE_DEFAULT = 0,
-  SHOW_STATE_NORMAL = 1,
-  SHOW_STATE_MINIMIZED = 2,
-  SHOW_STATE_MAXIMIZED = 3,
-  SHOW_STATE_INACTIVE = 4,  // Views only, not persisted.
-  SHOW_STATE_FULLSCREEN = 5,
-  SHOW_STATE_END = 6  // The end of show state enum.
+  friend bool operator==(const WindowTiledEdges&,
+                         const WindowTiledEdges&) = default;
 };
 
-// Dialog button identifiers used to specify which buttons to show the user.
-enum DialogButton {
-  DIALOG_BUTTON_NONE = 0,
-  DIALOG_BUTTON_OK = 1,
-  DIALOG_BUTTON_CANCEL = 2,
-  DIALOG_BUTTON_LAST = DIALOG_BUTTON_CANCEL,
+// MdTextButtons have various button styles that can change the button's
+// relative prominence/priority. The relative priority (least to greatest) is
+// as follows:
+// kText -> kDefault -> kTonal -> kProminent
+// The default styles are described as below.
+// kDefault: White background with blue text and a solid outline.
+// kProminent: Blue background with white text.
+// kTonal: Cyan background with black text.
+// kText: White background with blue text but no outline.
+enum class ButtonStyle {
+  kText,
+  kDefault,
+  kTonal,
+  kProminent,
 };
 
-// Specifies the type of modality applied to a window. Different modal
-// treatments may be handled differently by the window manager.
-enum ModalType {
-  MODAL_TYPE_NONE   = 0,  // Window is not modal.
-  MODAL_TYPE_WINDOW = 1,  // Window is modal to its transient parent.
-  MODAL_TYPE_CHILD  = 2,  // Window is modal to a child of its transient parent.
-  MODAL_TYPE_SYSTEM = 3   // Window is modal to all other windows.
-};
-
-// The class of window and its overall z-order. Not all platforms provide this
-// level of z-order granularity. For such platforms, which only provide a
+// The class of window and its overall z-order. Only the Mac provides this
+// level of z-order granularity. For other platforms, which only provide a
 // distinction between "normal" and "always on top" windows, any of the values
-// here that aren't |kNormal| are treated equally as "always on top".
+// here that aren't `kNormal` are treated equally as "always on top".
+// TODO(crbug.com/40237029): For non-desktop widgets on Linux and Windows,
+// this z-order currently does not have any effect.
 enum class ZOrderLevel {
   // The default level for windows.
   kNormal = 0,
@@ -72,43 +76,99 @@ enum class ZOrderLevel {
   kSecuritySurface,
 };
 
-// TODO(varunjain): Remove MENU_SOURCE_NONE (crbug.com/250964)
-// A Java counterpart will be generated for this enum.
+// Where an owned anchored window should be anchored to. Used by such backends
+// as Wayland, which doesn't provide clients with on screen coordinates, but
+// rather forces them to position children windows relative to toplevel windows.
+// They use anchor bounds, anchor position, gravity and constraints to
+// reposition such windows if the originally intended position caused the
+// surface to be constrained.
+enum class OwnedWindowAnchorPosition {
+  kNone,
+  kTop,
+  kBottom,
+  kLeft,
+  kRight,
+  kTopLeft,
+  kBottomLeft,
+  kTopRight,
+  kBottomRight,
+};
+
+// What direction an owned window should be positioned relatively to its anchor.
+enum class OwnedWindowAnchorGravity {
+  kNone,
+  kTop,
+  kBottom,
+  kLeft,
+  kRight,
+  kTopLeft,
+  kBottomLeft,
+  kTopRight,
+  kBottomRight,
+};
+
+// How an owned window can be resized/repositioned by a system compositor.
+enum class OwnedWindowConstraintAdjustment : uint32_t {
+  kAdjustmentNone = 0,
+  kAdjustmentSlideX = 1 << 0,
+  kAdjustmentSlideY = 1 << 1,
+  kAdjustmentFlipX = 1 << 2,
+  kAdjustmentFlipY = 1 << 3,
+  kAdjustmentResizeX = 1 << 4,
+  kAdjustmentRezizeY = 1 << 5,
+};
+
 // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.ui.base
-// These are used in histograms, do not remove/renumber entries. Only add at the
-// end just before MENU_SOURCE_TYPE_LAST. Also remember to update the
-// MenuSourceType enum listing in tools/metrics/histograms/enums.xml.
-// Lastly, any new type here needs to be synced with ui_base_types.mojom.
-enum MenuSourceType {
-  MENU_SOURCE_NONE = 0,
-  MENU_SOURCE_MOUSE = 1,
-  MENU_SOURCE_KEYBOARD = 2,
-  MENU_SOURCE_TOUCH = 3,
-  MENU_SOURCE_TOUCH_EDIT_MENU = 4,
-  MENU_SOURCE_LONG_PRESS = 5,
-  MENU_SOURCE_LONG_TAP = 6,
-  MENU_SOURCE_TOUCH_HANDLE = 7,
-  MENU_SOURCE_STYLUS = 8,
-  MENU_SOURCE_ADJUST_SELECTION = 9,
-  MENU_SOURCE_ADJUST_SELECTION_RESET = 10,
-  MENU_SOURCE_TYPE_LAST = MENU_SOURCE_ADJUST_SELECTION_RESET
+// GENERATED_JAVA_CLASS_NAME_OVERRIDE: WindowResizePrecheckResult
+// GENERATED_JAVA_PREFIX_TO_STRIP: kAndroid
+enum class WindowResizePrecheckResult {
+  // The window can be successfully resized.
+  kOk = 0,
+
+#if !BUILDFLAG(IS_ANDROID)
+  // Window has size controls preventing resize. See
+  // ui/views/widget/widget_delegate.h for more detail.
+  kHasWindowSizeControls = 1,
+
+  // Resizing for Web API is disallowed for this window. See
+  // ui/views/widget/widget_delegate.h for more detail.
+  kNotResizableFromWebApi = 2,
+
+  // Window has a hit-test mask. See ui/views/widget/widget_delegate.h for more
+  // detail.
+  kWindowHasHitTestMask = 3,
+#else
+  // The app must hold the browser role to change window bounds.
+  kAndroidBrowserRoleNotHeld = 4,
+
+  // The Android API to change window bounds is available on BAKLAVA+. Also
+  // returned if calling R+ methods like maximize/restore on earlier versions.
+  kAndroidSdkTooLow = 5,
+
+  // Only free-form windows can change bounds (the app must be in desktop
+  // windowing mode).
+  kAndroidNotAFreeformWindow = 6,
+
+  // The Android API to change window bounds is accessed via AppTask, which can
+  // be null when ChromeAndroidTask is for a Custom Tab (CCT) window.
+  kAndroidNullAppTask = 7,
+
+  // The Android API to change window bounds is accessed via the top
+  // Activity of an Android Task, but it's possible for a Task to
+  // contain no Activity.
+  kAndroidNoActivity = 8,
+
+  // Chrome wraps the Android window resizing API in AconfigFlaggedApiDelegate,
+  // so it must be non-null.
+  kAndroidNullAconfigFlaggedApiDelegate = 9,
+#endif
 };
 
-// Menu types that are used to position menu windows correctly.
-enum class MenuType {
-  // A context menu opened either via a right click or a long tap.
-  kRootContextMenu = 0,
-
-  // A root non-context menu. Example: The three dot menu.
-  kRootMenu,
-
-  // A child menu opened by clicking on a nested menu entry of either
-  // |kRootContextMenu| or |kRootParentMenu|.
-  kChildMenu,
+// Distinguishes browser from non-browser windows for frame decoration styling.
+enum class FrameType {
+  kBrowser,
+  kDefault,
 };
-
-COMPONENT_EXPORT(UI_BASE)
-MenuSourceType GetMenuSourceTypeForEvent(const ui::Event& event);
 
 }  // namespace ui
 

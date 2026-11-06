@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,27 +7,80 @@
 
 #include <stdint.h>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/containers/span.h"
+#include "base/functional/callback_forward.h"
 #include "media/base/media_export.h"
+#include "url/gurl.h"
 
 namespace media {
 
-class MEDIA_EXPORT DataSource {
+// Abstracting informational methods into DataSourceInfo allows
+// "meta-datasource" objects like HlsDataSourceProvider to query it's entire
+// set of dependent data sources when calculating the data here.
+class MEDIA_EXPORT DataSourceInfo {
+ public:
+  virtual ~DataSourceInfo();
+
+  // The total memory size used.
+  virtual int64_t GetMemoryUsage() = 0;
+
+  // DataSource implementations that might make requests must ensure the value
+  // is accurate for cross origin resources.
+  virtual bool WouldTaintOrigin() const = 0;
+
+  // Returns true if we are performing streaming. In this case seeking is
+  // not possible.
+  virtual bool IsStreaming() const = 0;
+};
+
+class MEDIA_EXPORT DataSource : public DataSourceInfo {
  public:
   using ReadCB = base::OnceCallback<void(int)>;
+  using DataSourceCb = base::OnceCallback<void(std::unique_ptr<DataSource>)>;
+  using EventCb = base::RepeatingCallback<void(const DataSource*)>;
+
+  enum class RangeMode {
+    kRangeRequest,
+    kFullRequest,
+  };
+
+  enum class CacheMode {
+    kBypassCache,
+    kHitCache,
+  };
+
+  enum class EncodingMode {
+    kIdentity,
+    kAllowGzip,
+  };
 
   enum { kReadError = -1, kAborted = -2 };
 
-  DataSource();
-  virtual ~DataSource();
+  // Used to specify video preload states. They are "hints" to the browser about
+  // how aggressively the browser should load and buffer data.
+  // Please see the HTML5 spec for the descriptions of these values:
+  // http://www.w3.org/TR/html5/video.html#attr-media-preload
+  //
+  // Enum values must match the values in WebMediaPlayer::Preload and
+  // there will be assertions at compile time if they do not match.
+  enum Preload {
+    NONE,
+    METADATA,
+    AUTO,
+  };
 
-  // Reads |size| bytes from |position| into |data|. And when the read is done
-  // or failed, |read_cb| is called with the number of bytes read or
+  DataSource();
+
+  DataSource(const DataSource&) = delete;
+  DataSource& operator=(const DataSource&) = delete;
+
+  ~DataSource() override;
+
+  // Reads `data.size()` bytes from `position` into `data`. And when the read
+  // is done or failed, `read_cb` is called with the number of bytes read or
   // kReadError in case of error.
   virtual void Read(int64_t position,
-                    int size,
-                    uint8_t* data,
+                    base::span<uint8_t> data,
                     DataSource::ReadCB read_cb) = 0;
 
   // Stops the DataSource. Once this is called all future Read() calls will
@@ -41,24 +94,49 @@ class MEDIA_EXPORT DataSource {
 
   // Returns true and the file size, false if the file size could not be
   // retrieved.
-  virtual bool GetSize(int64_t* size_out) = 0;
-
-  // Returns true if we are performing streaming. In this case seeking is
-  // not possible.
-  virtual bool IsStreaming() = 0;
+  [[nodiscard]] virtual bool GetSize(int64_t* size_out) = 0;
 
   // Notify the DataSource of the bitrate of the media.
   // Values of |bitrate| <= 0 are invalid and should be ignored.
   virtual void SetBitrate(int bitrate) = 0;
 
-  // Assume fully bufferred by default.
+  // If there is a MultiBuffer associated with this data source, then defer to
+  // it. This will return false if any HTTP response so far has failed the TAO
+  // check.
+  virtual bool PassedTimingAllowOriginCheck() = 0;
+
+  // Assume fully buffered by default.
   virtual bool AssumeFullyBuffered() const;
 
   // By default this just returns GetSize().
-  virtual int64_t GetMemoryUsage();
+  int64_t GetMemoryUsage() override;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(DataSource);
+  // Adjusts the buffering algorithm (if there is one) based on the given
+  // preload value.
+  virtual void SetPreload(media::DataSource::Preload preload);
+
+  // Returns whether this data source was involved in a web-based redirection.
+  // The default implementation is always false, as most data source objects
+  // (like MemoryDataSource and FileDataSource) cannot do redirection at all.
+  virtual bool DidRedirect() const;
+
+  // Gets the url for this data source, if it exists. By default this returns
+  // an empty GURL.
+  virtual GURL GetUrlAfterRedirects() const;
+
+  // The final URL from which data was loaded. If the request was intercepted
+  // by a service worker, this may differ from GetUrlAfterRedirects.
+  virtual GURL GetUrlDataOrigin() const;
+
+  // Stops any outstanding speculative loading. Active and future Read() calls
+  // will not be stopped. OnMediaIsPlaying() or OnMediaPlaybackRateChanged()
+  // with a rate > 0 will reset this flag.
+  virtual void StopPreloading();
+
+  // Allows a holder to notify certain events to the data source. Most data
+  // sources won't care too much about these events though.
+  virtual void OnMediaPlaybackRateChanged(double playback_rate);
+  virtual void OnMediaIsPlaying();
 };
 
 }  // namespace media

@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -39,7 +39,15 @@ bool TimingInformation::operator==(const TimingInformation& rhs) const {
 SpeechRecognitionResult::SpeechRecognitionResult() = default;
 SpeechRecognitionResult::SpeechRecognitionResult(const std::string transcript,
                                                  bool is_final)
-    : transcription(transcript), is_final(is_final) {}
+    : SpeechRecognitionResult(transcript, is_final, std::nullopt) {}
+
+SpeechRecognitionResult::SpeechRecognitionResult(
+    const std::string transcript,
+    bool is_final,
+    std::optional<TimingInformation> timing_info)
+    : transcription(transcript),
+      is_final(is_final),
+      timing_information(std::move(timing_info)) {}
 
 SpeechRecognitionResult::SpeechRecognitionResult(
     const SpeechRecognitionResult&) = default;

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,22 +9,38 @@
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
 #include "chrome/browser/autocomplete/chrome_autocomplete_scheme_classifier.h"
 #include "components/omnibox/browser/autocomplete_provider_client.h"
+#include "components/saved_tab_groups/public/tab_group_sync_service.h"
+#if BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/android/autocomplete/tab_matcher_android.h"
+#else
+#include "chrome/browser/autocomplete/tab_matcher_desktop.h"
+#endif
 
-#if defined(OS_ANDROID)
-class TabAndroid;
-class TabModel;
-#endif  // defined(OS_ANDROID)
-
+class AiModeButtonService;
+class AimEligibilityService;
+class AutocompleteScoringModelService;
+class OnDeviceTailModelService;
 class Profile;
+class TabMatcher;
 
 namespace content {
 class StoragePartition;
 class WebContents;
-}
+}  // namespace content
+
+namespace sessions {
+class TabRestoreService;
+}  // namespace sessions
+
+namespace sync_sessions {
+class SessionSyncService;
+}  // namespace sync_sessions
 
 namespace unified_consent {
 class UrlKeyedDataCollectionConsentHelper;
@@ -33,53 +49,80 @@ class UrlKeyedDataCollectionConsentHelper;
 class ChromeAutocompleteProviderClient : public AutocompleteProviderClient {
  public:
   explicit ChromeAutocompleteProviderClient(Profile* profile);
+  using WebContentsGetter = base::RepeatingCallback<content::WebContents*()>;
+  ChromeAutocompleteProviderClient(Profile* profile,
+                                   WebContentsGetter web_contents_getter);
+
+  ChromeAutocompleteProviderClient(const ChromeAutocompleteProviderClient&) =
+      delete;
+  ChromeAutocompleteProviderClient& operator=(
+      const ChromeAutocompleteProviderClient&) = delete;
+
   ~ChromeAutocompleteProviderClient() override;
 
   // AutocompleteProviderClient:
   scoped_refptr<network::SharedURLLoaderFactory> GetURLLoaderFactory() override;
   PrefService* GetPrefs() const override;
   PrefService* GetLocalState() override;
+  std::string GetApplicationLocale() const override;
   const AutocompleteSchemeClassifier& GetSchemeClassifier() const override;
   AutocompleteClassifier* GetAutocompleteClassifier() override;
   history::HistoryService* GetHistoryService() override;
   history_clusters::HistoryClustersService* GetHistoryClustersService()
       override;
   scoped_refptr<history::TopSites> GetTopSites() override;
-  ntp_tiles::MostVisitedSites* GetNtpMostVisitedSites() override;
   bookmarks::BookmarkModel* GetBookmarkModel() override;
   history::URLDatabase* GetInMemoryDatabase() override;
   InMemoryURLIndex* GetInMemoryURLIndex() override;
   TemplateURLService* GetTemplateURLService() override;
   const TemplateURLService* GetTemplateURLService() const override;
+  GeolocationHeaderService* GetGeolocationHeaderService() const override;
+  void ResetGeolocationPermissionToAsk(const GURL& url) const override;
+  DocumentSuggestionsService* GetDocumentSuggestionsService() const override;
   RemoteSuggestionsService* GetRemoteSuggestionsService(
       bool create_if_necessary) const override;
-  DocumentSuggestionsService* GetDocumentSuggestionsService(
-      bool create_if_necessary) const override;
+  ZeroSuggestCacheService* GetZeroSuggestCacheService() override;
+  const ZeroSuggestCacheService* GetZeroSuggestCacheService() const override;
   OmniboxPedalProvider* GetPedalProvider() const override;
   scoped_refptr<ShortcutsBackend> GetShortcutsBackend() override;
   scoped_refptr<ShortcutsBackend> GetShortcutsBackendIfExists() override;
   std::unique_ptr<KeywordExtensionsDelegate> GetKeywordExtensionsDelegate(
       KeywordProvider* keyword_provider) override;
+  std::unique_ptr<UnscopedExtensionProviderDelegate>
+  GetUnscopedExtensionProviderDelegate(
+      UnscopedExtensionProvider* provider) override;
   std::string GetAcceptLanguages() const override;
   std::string GetEmbedderRepresentationOfAboutScheme() const override;
   std::vector<std::u16string> GetBuiltinURLs() override;
   std::vector<std::u16string> GetBuiltinsToProvideAsUserTypes() override;
   component_updater::ComponentUpdateService* GetComponentUpdateService()
       override;
-  query_tiles::TileService* GetQueryTileService() const override;
   OmniboxTriggeredFeatureService* GetOmniboxTriggeredFeatureService()
       const override;
   signin::IdentityManager* GetIdentityManager() const override;
+  AutocompleteScoringModelService* GetAutocompleteScoringModelService()
+      const override;
+  OnDeviceTailModelService* GetOnDeviceTailModelService() const override;
+  ProviderStateService* GetProviderStateService() const override;
+  tab_groups::TabGroupSyncService* GetTabGroupSyncService() const override;
+  sync_sessions::SessionSyncService* GetSessionSyncService() const override;
+  sessions::TabRestoreService* GetTabRestoreService() const override;
+  AimEligibilityService* GetAimEligibilityService() const override;
+  AiModeButtonService* GetAiModeButtonService() const override;
+
   bool IsOffTheRecord() const override;
+  bool IsPrimaryOTRProfileWithRegularParent() const override;
+  bool IsIncognitoProfile() const override;
+  bool IsGuestSession() const override;
   bool SearchSuggestEnabled() const override;
   bool AllowDeletingBrowserHistory() const override;
+  bool IsUrlDataCollectionActive() const override;
   bool IsPersonalizedUrlDataCollectionActive() const override;
   bool IsAuthenticated() const override;
-  bool IsSyncActive() const override;
   std::string ProfileUserName() const override;
   void Classify(
       const std::u16string& text,
-      bool prefer_keyword,
+      bool in_keyword_mode,
       bool allow_exact_keyword_match,
       metrics::OmniboxEventProto::PageClassification page_classification,
       AutocompleteMatch* match,
@@ -89,60 +132,71 @@ class ChromeAutocompleteProviderClient : public AutocompleteProviderClient {
       const std::u16string& term) override;
   void PrefetchImage(const GURL& url) override;
   void StartServiceWorker(const GURL& destination_url) override;
-  bool IsTabOpenWithURL(const GURL& url,
-                        const AutocompleteInput* input) override;
+  const TabMatcher& GetTabMatcher() const override;
   bool IsIncognitoModeAvailable() const override;
-  void OnAutocompleteControllerResultReady(
-      AutocompleteController* controller) override;
+  bool IsSharingHubAvailable() const override;
+  bool IsLensEnabled() const override;
+  bool AreLensEntrypointsVisible() const override;
+  std::optional<bool> IsPagePaywalled() const override;
+  bool ShouldSendContextualUrlSuggestParam() const override;
+  bool ShouldSendPageTitleSuggestParam() const override;
+  bool IsAskGShowChipEnabled() const override;
+  bool IsOmniboxNextAimPopupEnabled() const override;
+  bool IsGeminiStarterPackEnabled() const override;
+  base::CallbackListSubscription GetLensSuggestInputsWhenReady(
+      LensOverlaySuggestInputsCallback callback) const override;
+  base::WeakPtr<AutocompleteProviderClient> GetWeakPtr() override;
+  bool IsWebUiNtpEnabledForDesktopAndroid() const override;
+
+  // OmniboxAction::Client:
+  void OpenSharingHub() override;
+  void NewIncognitoWindow() override;
+  void OpenIncognitoClearBrowsingDataDialog() override;
+  void CloseIncognitoWindows() override;
+  void PromptPageTranslation() override;
+  bool OpenJourneys(const std::string& query) override;
+  void OpenLensOverlay(
+      bool show,
+      lens::LensOverlayInvocationSource invocation_source) override;
+  bool ShouldOpenCoBrowsePanel() const override;
+  void OpenCoBrowsePanel() override;
+  bool ShouldOpenComposeboxForAskG() const override;
+  void OpenComposeboxForAskG() override;
+  void IssueContextualSearchRequest(const GURL& destination_url,
+                                    omnibox::AutocompleteMatchType match_type,
+                                    bool is_zero_prefix_suggestion) override;
 
   // For testing.
   void set_storage_partition(content::StoragePartition* storage_partition) {
     storage_partition_ = storage_partition;
   }
 
-  bool StrippedURLsAreEqual(const GURL& url1,
-                            const GURL& url2,
-                            const AutocompleteInput* input) const;
-
-  // Performs a comparison of |stripped_url| to the stripped last committed
-  // URL of |web_contents|, using the internal cache to avoid repeatedly
-  // re-stripping the URL.
-  bool IsStrippedURLEqualToWebContentsURL(const GURL& stripped_url,
-                                          content::WebContents* web_contents);
-
-#if defined(OS_ANDROID)
-  // Returns a TabAndroid has opened same URL as |url|.
-  TabAndroid* GetTabOpenWithURL(const GURL& url,
-                                const AutocompleteInput* input);
-  // Make a JNI call to get all the hidden tabs and non Custom tabs in
-  // |tab_model|.
-  std::vector<TabAndroid*> GetAllHiddenAndNonCCTTabs(
-      const std::vector<TabModel*>& tab_models);
-#endif  // defined(OS_ANDROID)
-
  private:
-  Profile* profile_;
+  raw_ptr<Profile> profile_;
+  // Callback to get the current WebContents. In the context of the Omnibox, it
+  // returns the currently active tab's WebContents.
+  // May be a null callback, must be checked before using.
+  WebContentsGetter web_contents_getter_;
   ChromeAutocompleteSchemeClassifier scheme_classifier_;
   std::unique_ptr<OmniboxPedalProvider> pedal_provider_;
   std::unique_ptr<unified_consent::UrlKeyedDataCollectionConsentHelper>
       url_consent_helper_;
-
-  // The |most_visited_sites_| is created upon request. It is created at
-  // most once by requesting in MostVisitedSitesProvider when the page
-  // classification of the input is
-  // metrics::OmniboxEventProto::START_SURFACE_HOMEPAGE or
-  // metrics::OmniboxEventProto::START_SURFACE_NEW_TAB. It remains empty for any
-  // ChromeAutocompleteProviderClient which doesn't have a
-  // MostVisitedSitesProvider.
-  std::unique_ptr<ntp_tiles::MostVisitedSites> most_visited_sites_;
+  std::unique_ptr<unified_consent::UrlKeyedDataCollectionConsentHelper>
+      personalized_url_consent_helper_;
+#if BUILDFLAG(IS_ANDROID)
+  TabMatcherAndroid tab_matcher_;
+#else
+  TabMatcherDesktop tab_matcher_;
+#endif
 
   // Injectable storage partitiion, used for testing.
-  content::StoragePartition* storage_partition_;
+  raw_ptr<content::StoragePartition> storage_partition_;
 
   std::unique_ptr<OmniboxTriggeredFeatureService>
       omnibox_triggered_feature_service_;
 
-  DISALLOW_COPY_AND_ASSIGN(ChromeAutocompleteProviderClient);
+  base::WeakPtrFactory<ChromeAutocompleteProviderClient> weak_ptr_factory_{
+      this};
 };
 
 #endif  // CHROME_BROWSER_AUTOCOMPLETE_CHROME_AUTOCOMPLETE_PROVIDER_CLIENT_H_

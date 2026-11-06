@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,9 +20,9 @@ const char kAndroidWebViewVideoPosterScheme[] = "android-webview-video-poster";
 bool IsAndroidSpecialFileUrl(const GURL& url) {
   if (!url.is_valid() || !url.SchemeIsFile() || !url.has_path())
     return false;
-  return base::StartsWith(url.path(), kAndroidAssetPath,
+  return base::StartsWith(url.GetPath(), kAndroidAssetPath,
                           base::CompareCase::SENSITIVE) ||
-         base::StartsWith(url.path(), kAndroidResourcePath,
+         base::StartsWith(url.GetPath(), kAndroidResourcePath,
                           base::CompareCase::SENSITIVE);
 }
 

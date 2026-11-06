@@ -1,12 +1,18 @@
-# Copyright 2015 The Chromium Authors. All rights reserved.
+# Copyright 2015 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
+import("//build/config/chromeos/args.gni")
 import("//build/config/compiler/compiler.gni")
 if (is_android) {
   # Pull in enable_chrome_android_internal and public_android_sdk
   import("//build/config/android/config.gni")
+  import("//build/config/gclient_args.gni")
+  import("//tools/perf/chrome_telemetry_build/android_browser_types.gni")
+}
+is_remote_platform = is_android || is_fuchsia || is_chromeos
+if (is_remote_platform) {
+  import("//build/symlink.gni")
 }
 
 if (is_chromeos_device) {
@@ -14,47 +20,36 @@ if (is_chromeos_device) {
 
   generate_runner_script("cros_update_wrapper") {
     generated_script = "$root_build_dir/bin/cros_update_wrapper"
-    if (is_chromeos_ash) {
-      deploy_chrome = true
-    } else {
-      deploy_lacros = true
-      skip_generating_board_args = true
-      data = [
-        # A script needed to launch Lacros in testing environment.
-        "//build/lacros/mojo_connection_lacros_launcher.py",
-      ]
-    }
+    deploy_chrome = true
+  }
+}
+
+if (is_remote_platform) {
+  # Create a symlink from root_build_dir -> clang_x64/trace_processor_shell so
+  # the stripped binary is actually included in the isolate.
+  binary_symlink("host_trace_processor_shell") {
+    binary_label = "//third_party/perfetto/src/trace_processor:trace_processor_shell($host_toolchain)"
+    output_name = "host_trace_processor_shell"
   }
 }
 
 group("telemetry_chrome_test") {
   testonly = true
 
-  data_deps = [
-    ":telemetry_chrome_test_without_chrome",
-    "//third_party/perfetto/src/trace_processor:trace_processor_shell",
-  ]
+  data_deps = [ ":telemetry_chrome_test_without_chrome" ]
   data = []
 
-  if (is_android) {
-    # TODO(crbug.com/1213269): Remove these APK dependencies and fully switch to
-    # the separate Android targets below once all Android uses of the old target
-    # have been cleaned up.
+  # Compile the host's version of trace_processor_shell for remote platforms.
+  if (is_remote_platform) {
     data_deps += [
-      ":telemetry_weblayer_apks",
-      "//android_webview:system_webview_apk",
-      "//android_webview/test:webview_instrumentation_apk",
-      "//android_webview/tools/system_webview_shell:system_webview_shell_apk",
-      "//chrome/android:chrome_public_apk",
-      "//chrome/android:monochrome_public_apk",
-      "//chrome/android:monochrome_public_bundle",
-      "//chrome/android/webapk/shell_apk:maps_go_webapk",
+      ":host_trace_processor_shell",
+      "//third_party/perfetto/src/trace_processor:trace_processor_shell($host_toolchain)",
     ]
+  } else {
+    data_deps += [ "//third_party/perfetto/src/trace_processor:trace_processor_shell($default_toolchain)" ]
+  }
 
-    if (enable_chrome_android_internal) {
-      data_deps += [ "//clank:telemetry_clank_test" ]
-    }
-  } else if (!is_fuchsia) {
+  if (!is_fuchsia && !is_android && !is_castos && !is_ios) {
     data_deps += [ "//chrome" ]
   }
 
@@ -63,7 +58,7 @@ group("telemetry_chrome_test") {
   }
 
   if (is_linux || is_chromeos) {
-    data_deps += [ "//third_party/breakpad:dump_syms($host_toolchain)" ]
+    data_deps += [ "//third_party/breakpad:dump_syms" ]
 
     # CrOS currently has issues with the locally compiled version of
     # crashpad_database_util, so only include it on traditional Linux
@@ -87,7 +82,7 @@ group("telemetry_chrome_test") {
     data_deps += [ ":cros_update_wrapper" ]
   }
 
-  if (is_chromeos_ash && is_chromeos_device) {
+  if (is_chromeos && is_chromeos_device) {
     data_deps += [
       "//:chromiumos_preflight",
       "//chromeos:cros_chrome_deploy",
@@ -110,6 +105,13 @@ group("telemetry_chrome_test") {
 # overhead. A new one should be added each time a new type of APK is supported
 # and its suffix added to android_browser_types.gni.
 if (is_android) {
+  _webview_bitness_if_needed = ""
+  if (defined(android_app_secondary_abi)) {
+    _webview_bitness_if_needed = "_64_32"
+  } else if (android_64bit_target_cpu) {
+    _webview_bitness_if_needed = "_64"
+  }
+
   group("telemetry_chrome_test_android_chrome") {
     testonly = true
 
@@ -119,49 +121,57 @@ if (is_android) {
     ]
   }
 
-  group("telemetry_chrome_test_android_monochrome") {
-    testonly = true
-
-    data_deps = [
-      ":telemetry_chrome_test",
-      "//chrome/android:monochrome_public_apk",
-    ]
-  }
-
-  group("telemetry_chrome_test_android_weblayer") {
-    testonly = true
-
-    data_deps = [
-      ":telemetry_chrome_test",
-      ":telemetry_weblayer_apks",
-    ]
-  }
-
   group("telemetry_chrome_test_android_webview") {
     testonly = true
 
     data_deps = [
       ":telemetry_chrome_test",
-      "//android_webview:system_webview_apk",
+      "//android_webview:system_webview${_webview_bitness_if_needed}_apk",
       "//android_webview/test:webview_instrumentation_apk",
       "//android_webview/tools/system_webview_shell:system_webview_shell_apk",
     ]
   }
-}
 
-group("telemetry_weblayer_apks") {
-  testonly = true
-
-  data_deps = []
-  if (is_android) {
-    data_deps += [
-      "//weblayer/shell/android:weblayer_shell_system_webview_apk",
-
-      # TODO(crbug.com/1022823): Remove the following two deps once our tooling
-      # is configured to use weblayer_shell_system_webview_apk.
-      "//weblayer/shell/android:weblayer_shell_apk",
-      "//weblayer/shell/android:weblayer_support_apk",
+  group("telemetry_chrome_test_android_webview_bundle") {
+    testonly = true
+    data_deps = [
+      ":telemetry_chrome_test",
+      "//android_webview:system_webview${_webview_bitness_if_needed}_bundle",
+      "//android_webview/test:webview_instrumentation_apk",
+      "//android_webview/tools/system_webview_shell:system_webview_shell_apk",
     ]
+  }
+
+  group("telemetry_chrome_test_android_chrome_bundle") {
+    testonly = true
+
+    data_deps = [
+      ":telemetry_chrome_test",
+      "//chrome/android:chrome_public_bundle",
+    ]
+  }
+
+  if (enable_chrome_android_internal) {
+    import("//clank/telemetry_browser_types.gni")
+
+    template("telemetry_chrome_test_clank_template") {
+      forward_variables_from(invoker, [ "telemetry_target_suffix" ])
+
+      group(target_name) {
+        testonly = true
+        data_deps = [
+          ":telemetry_chrome_test",
+          "//clank:telemetry_clank_test${telemetry_target_suffix}",
+        ]
+      }
+    }
+
+    foreach(_target_suffix, telemetry_clank_browser_target_suffixes) {
+      telemetry_chrome_test_clank_template(
+          "telemetry_chrome_test${_target_suffix}") {
+        telemetry_target_suffix = _target_suffix
+      }
+    }
   }
 }
 
@@ -169,8 +179,10 @@ group("telemetry_chrome_test_without_chrome") {
   testonly = true
 
   data = [
-    "//build/android/pylib/",  # chromium_config.py uses pylib to look for Java
+    # chromium_config.py imports java_home.py to locate Java.
+    "//build/android/java_home.py",
     "//components/crash/content/tools/generate_breakpad_symbols.py",
+    "//third_party/webpagereplay/",
     "//tools/perf/chrome_telemetry_build/",
     "//tools/perf/core/",  # chrome_telemetry_build/ depends on core/
   ]
@@ -194,6 +206,14 @@ group("telemetry_chrome_test_without_chrome") {
     ]
   }
 
+  if (is_win) {
+    data_deps += [
+      # This is a stand-in for minidump_stackwalk on Windows since
+      # minidump_stackwalk is not defined on Windows.
+      "//third_party/crashpad/crashpad/tools:dump_minidump_annotations",
+    ]
+  }
+
   if (is_mac) {
     data += [
       # Required for the hermetic otool binary, which is required for
@@ -204,6 +224,8 @@ group("telemetry_chrome_test_without_chrome") {
 
   if (is_android) {
     data += [
+      "//build/android/pylib/",
+
       # TODO(httpss://crbug.com/833808): Remove this once bots always set
       # CHROMIUM_OUTPUT_DIR correctly. Currently, this is necessary in order
       # for //build/android/pylib/constants/__init__.py to detect the output
@@ -212,7 +234,7 @@ group("telemetry_chrome_test_without_chrome") {
 
       # These dependencies are necessary for running Telemetry tests in an
       # Android emulator.
-      "//third_party/android_ndk/simpleperf/",
+      "//third_party/android_toolchain/ndk/simpleperf/",
       "//third_party/android_sdk/public/",
       "//tools/android/avd/proto/",
     ]
@@ -220,6 +242,9 @@ group("telemetry_chrome_test_without_chrome") {
       "//build/android:devil_chromium_py",
       "//build/android:stack_tools",
     ]
+    if (checkout_fuchsia) {
+      data_deps += [ "//build/fuchsia/starview:run_cuttlefish" ]
+    }
   } else if (!is_fuchsia) {
     data_deps += [ "//third_party/catapult/telemetry:bitmaptools" ]
   }

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,20 +8,27 @@
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
-#include "ash/style/ash_color_provider.h"
+#include "ash/style/ash_color_id.h"
+#include "ash/style/rounded_container.h"
+#include "ash/style/typography.h"
 #include "ash/system/model/locale_model.h"
 #include "ash/system/model/system_tray_model.h"
-#include "ash/system/tray/actionable_view.h"
 #include "ash/system/tray/tray_popup_utils.h"
 #include "base/check.h"
+#include "base/functional/bind.h"
 #include "base/i18n/case_conversion.h"
+#include "base/i18n/legacy_language_tag_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/models/image_model.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/gfx/paint_vector_icon.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
@@ -36,30 +43,30 @@ namespace {
 // portion of |iso_code| is shown at the beginning of the row, and
 // |display_name| is shown in the middle. A checkmark is shown in the end if
 // |checked| is true.
-class LocaleItem : public ActionableView {
+class LocaleItemView : public views::Button {
+  METADATA_HEADER(LocaleItemView, views::Button)
+
  public:
-  METADATA_HEADER(LocaleItem);
+  LocaleItemView(LocaleDetailedView* locale_detailed_view,
+                 const std::string& iso_code,
+                 const std::u16string& display_name,
+                 bool checked)
+      : locale_detailed_view_(locale_detailed_view), checked_(checked) {
+    SetCallback(base::BindRepeating(&LocaleItemView::PerformAction,
+                                    base::Unretained(this)));
+    TrayPopupUtils::ConfigureRowButtonInkdrop(views::InkDrop::Get(this));
 
-  LocaleItem(tray::LocaleDetailedView* locale_detailed_view,
-             const std::string& iso_code,
-             const std::u16string& display_name,
-             bool checked)
-      : ActionableView(TrayPopupInkDropStyle::FILL_BOUNDS),
-        locale_detailed_view_(locale_detailed_view),
-        checked_(checked) {
-    views::InkDrop::Get(this)->SetMode(views::InkDropHost::InkDropMode::ON);
-
-    TriView* tri_view = TrayPopupUtils::CreateDefaultRowView();
-    AddChildView(tri_view);
+    TriView* tri_view = TrayPopupUtils::CreateDefaultRowView(
+        /*use_wide_layout=*/false);
+    AddChildViewRaw(tri_view);
     SetLayoutManager(std::make_unique<views::FillLayout>());
 
-    auto* color_provider = AshColorProvider::Get();
     views::Label* iso_code_label = TrayPopupUtils::CreateDefaultLabel();
-    iso_code_label->SetEnabledColor(color_provider->GetContentLayerColor(
-        AshColorProvider::ContentLayerType::kTextColorPrimary));
+    iso_code_label->SetEnabledColor(
+        static_cast<ui::ColorId>(cros_tokens::kCrosSysOnSurface));
     iso_code_label->SetAutoColorReadabilityEnabled(false);
-    iso_code_label->SetText(base::i18n::ToUpper(
-        base::UTF8ToUTF16(l10n_util::GetLanguage(iso_code))));
+    iso_code_label->SetText(base::i18n::ToUpper(base::UTF8ToUTF16(
+        base::i18n::GetLanguageSubtagUsingLanguageTag(iso_code))));
     ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
     const gfx::FontList& base_font_list =
         rb.GetFontList(ui::ResourceBundle::MediumBoldFont);
@@ -68,57 +75,51 @@ class LocaleItem : public ActionableView {
 
     auto* display_name_view = TrayPopupUtils::CreateDefaultLabel();
     display_name_view->SetText(display_name);
-    display_name_view->SetEnabledColor(color_provider->GetContentLayerColor(
-        AshColorProvider::ContentLayerType::kTextColorPrimary));
-    TrayPopupUtils::SetLabelFontList(
-        display_name_view, TrayPopupUtils::FontStyle::kDetailedViewLabel);
+    display_name_view->SetEnabledColor(cros_tokens::kCrosSysOnSurface);
+    TypographyProvider::Get()->StyleLabel(TypographyToken::kCrosButton2,
+                                          *display_name_view);
     display_name_view->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     tri_view->AddView(TriView::Container::CENTER, display_name_view);
 
     if (checked_) {
-      views::ImageView* checked_image = TrayPopupUtils::CreateMainImageView();
-      checked_image->SetImage(gfx::CreateVectorIcon(
-          kCheckCircleIcon, kMenuIconSize,
-          color_provider->GetContentLayerColor(
-              AshColorProvider::ContentLayerType::kIconColorProminent)));
+      views::ImageView* checked_image = TrayPopupUtils::CreateMainImageView(
+          /*use_wide_layout=*/false);
+      checked_image->SetImage(ui::ImageModel::FromVectorIcon(
+          kCheckCircleIcon,
+          static_cast<ui::ColorId>(cros_tokens::kCrosSysPrimary),
+          kMenuIconSize));
       tri_view->AddView(TriView::Container::END, checked_image);
     }
-    SetAccessibleName(display_name_view->GetText());
+    GetViewAccessibility().SetName(
+        std::u16string(display_name_view->GetText()));
+    GetViewAccessibility().SetRole(ax::mojom::Role::kCheckBox);
+    GetViewAccessibility().SetCheckedState(
+        checked_ ? ax::mojom::CheckedState::kTrue
+                 : ax::mojom::CheckedState::kFalse);
   }
-  LocaleItem(const LocaleItem&) = delete;
-  LocaleItem& operator=(const LocaleItem&) = delete;
-  ~LocaleItem() override = default;
+  LocaleItemView(const LocaleItemView&) = delete;
+  LocaleItemView& operator=(const LocaleItemView&) = delete;
+  ~LocaleItemView() override = default;
 
-  // ActionableView:
-  bool PerformAction(const ui::Event& event) override {
+  void PerformAction(const ui::Event& event) {
     locale_detailed_view_->HandleViewClicked(this);
-    return true;
   }
 
   // views::View:
   void OnFocus() override {
-    ActionableView::OnFocus();
+    views::Button::OnFocus();
     ScrollViewToVisible();
   }
 
-  void GetAccessibleNodeData(ui::AXNodeData* node_data) override {
-    ActionableView::GetAccessibleNodeData(node_data);
-    node_data->role = ax::mojom::Role::kCheckBox;
-    node_data->SetCheckedState(checked_ ? ax::mojom::CheckedState::kTrue
-                                        : ax::mojom::CheckedState::kFalse);
-  }
-
  private:
-  tray::LocaleDetailedView* locale_detailed_view_;
+  raw_ptr<LocaleDetailedView> locale_detailed_view_;
   const bool checked_;
 };
 
-BEGIN_METADATA(LocaleItem, ActionableView)
+BEGIN_METADATA(LocaleItemView)
 END_METADATA
 
 }  // namespace
-
-namespace tray {
 
 LocaleDetailedView::LocaleDetailedView(DetailedViewDelegate* delegate)
     : TrayDetailedView(delegate) {
@@ -131,6 +132,10 @@ void LocaleDetailedView::CreateItems() {
   CreateTitleRow(IDS_ASH_STATUS_TRAY_LOCALE_TITLE);
   CreateScrollableList();
 
+  // Setup the container for the locale list views.
+  views::View* container =
+      scroll_content()->AddChildView(std::make_unique<RoundedContainer>());
+
   const std::vector<LocaleInfo>& locales =
       Shell::Get()->system_tray_model()->locale()->locale_list();
   int id = 0;
@@ -138,14 +143,14 @@ void LocaleDetailedView::CreateItems() {
     const bool checked =
         entry.iso_code ==
         Shell::Get()->system_tray_model()->locale()->current_locale_iso_code();
-    LocaleItem* item =
-        new LocaleItem(this, entry.iso_code, entry.display_name, checked);
-    scroll_content()->AddChildView(item);
+    auto* item =
+        new LocaleItemView(this, entry.iso_code, entry.display_name, checked);
+    container->AddChildViewRaw(item);
     item->SetID(id);
     id_to_locale_[id] = entry.iso_code;
     ++id;
   }
-  Layout();
+  DeprecatedLayoutImmediately();
 }
 
 void LocaleDetailedView::HandleViewClicked(views::View* view) {
@@ -159,8 +164,12 @@ void LocaleDetailedView::HandleViewClicked(views::View* view) {
   }
 }
 
-BEGIN_METADATA(LocaleDetailedView, TrayDetailedView)
+views::View* LocaleDetailedView::GetScrollContentForTest() {
+  // Provide access to the protected scroll_content() in the base class.
+  return scroll_content();
+}
+
+BEGIN_METADATA(LocaleDetailedView)
 END_METADATA
 
-}  // namespace tray
 }  // namespace ash

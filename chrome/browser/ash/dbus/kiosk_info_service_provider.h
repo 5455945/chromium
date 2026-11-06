@@ -1,29 +1,32 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_ASH_DBUS_KIOSK_INFO_SERVICE_PROVIDER_H_
 #define CHROME_BROWSER_ASH_DBUS_KIOSK_INFO_SERVICE_PROVIDER_H_
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "chromeos/dbus/services/cros_dbus_service.h"
+#include "chromeos/ash/components/dbus/services/cros_dbus_service.h"
 #include "dbus/exported_object.h"
 
 namespace dbus {
 class MethodCall;
-}
+}  // namespace dbus
 
-namespace chromeos {
+namespace ash {
 
 // Exports a "GetKioskAppRequiredPlatformVersion" D-Bus method that
 // update_engine calls to get the required platform version of the
 // kiosk app that is configured to auto launch.
-// See http://crbug.com/577783 for details.
+// See http://crbug.com/41234378 for details.
 class KioskInfoService : public CrosDBusService::ServiceProviderInterface {
  public:
   KioskInfoService();
+
+  KioskInfoService(const KioskInfoService&) = delete;
+  KioskInfoService& operator=(const KioskInfoService&) = delete;
+
   ~KioskInfoService() override;
 
   // CrosDBusService::ServiceProviderInterface
@@ -42,10 +45,8 @@ class KioskInfoService : public CrosDBusService::ServiceProviderInterface {
       dbus::ExportedObject::ResponseSender response_sender);
 
   base::WeakPtrFactory<KioskInfoService> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(KioskInfoService);
 };
 
-}  // namespace chromeos
+}  // namespace ash
 
 #endif  // CHROME_BROWSER_ASH_DBUS_KIOSK_INFO_SERVICE_PROVIDER_H_

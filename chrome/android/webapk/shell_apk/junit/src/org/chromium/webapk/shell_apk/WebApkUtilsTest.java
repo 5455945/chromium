@@ -1,29 +1,50 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.webapk.shell_apk;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotEquals;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
+import static org.robolectric.Robolectric.setupActivity;
+
+import android.app.Activity;
+import android.content.ClipData;
+import android.content.ComponentName;
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.graphics.Color;
+import android.net.Uri;
 import android.os.Bundle;
+import android.os.Process;
+import android.view.View;
 
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.Shadows;
-import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowPackageManager;
 
 import org.chromium.components.webapk.lib.common.WebApkMetaDataKeys;
-import org.chromium.testing.local.LocalRobolectricTestRunner;
+import org.chromium.webapk.test.WebApkTestHelper;
+
+import java.util.ArrayList;
+import java.util.Arrays;
 
 /** Tests for WebApkUtils. */
-@RunWith(LocalRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
+@RunWith(RobolectricTestRunner.class)
 public class WebApkUtilsTest {
     protected static final String WEBAPK_PACKAGE_NAME = "org.chromium.test";
 
@@ -32,7 +53,7 @@ public class WebApkUtilsTest {
 
     @Before
     public void setUp() {
-        mContext = RuntimeEnvironment.application;
+        mContext = RuntimeEnvironment.getApplication();
         mPackageManager = Shadows.shadowOf(mContext.getPackageManager());
     }
 
@@ -56,7 +77,8 @@ public class WebApkUtilsTest {
         bundle.putString(WebApkMetaDataKeys.RUNTIME_HOST, browserPackageName);
         bundle.putString(WebApkMetaDataKeys.LOGGED_INTENT_URL_PARAM, "originalUrl");
 
-        Assert.assertEquals(expectedRewrittenStartUrl,
+        Assert.assertEquals(
+                expectedRewrittenStartUrl,
                 WebApkUtils.rewriteIntentUrlIfNecessary(intentStartUrl, bundle));
     }
 
@@ -72,7 +94,7 @@ public class WebApkUtilsTest {
         final String manifestScope = "https://www.google.com";
         final String expectedRewrittenStartUrl =
                 "https://www.google.com/maps?force=qVTs2FOxxTmHHo79-pwa&intent="
-                + "https%3A%2F%2Fwww.google.com%2Fmaps%2Fsearch%2FA";
+                        + "https%3A%2F%2Fwww.google.com%2Fmaps%2Fsearch%2FA";
         final String browserPackageName = "browser.support.webapks";
 
         Bundle bundle = new Bundle();
@@ -81,7 +103,8 @@ public class WebApkUtilsTest {
         bundle.putString(WebApkMetaDataKeys.RUNTIME_HOST, browserPackageName);
         bundle.putString(WebApkMetaDataKeys.LOGGED_INTENT_URL_PARAM, "intent");
 
-        Assert.assertEquals(expectedRewrittenStartUrl,
+        Assert.assertEquals(
+                expectedRewrittenStartUrl,
                 WebApkUtils.rewriteIntentUrlIfNecessary(intentStartUrl, bundle));
     }
 
@@ -95,8 +118,203 @@ public class WebApkUtilsTest {
         info.packageName = packageName;
         info.applicationInfo = new ApplicationInfo();
         info.applicationInfo.enabled = false;
-        mPackageManager.addPackage(info);
+        mPackageManager.installPackage(info);
 
         Assert.assertFalse(WebApkUtils.isInstalled(mContext.getPackageManager(), packageName));
+    }
+
+    /** Test status bar is always black in Automotive devices. */
+    @Test
+    public void testStatusBarBlackInAutomotive() {
+        // Create an "automotive" Activity.
+        mPackageManager.setSystemFeature(PackageManager.FEATURE_AUTOMOTIVE, true);
+        Activity testActivity = setupActivity(Activity.class);
+        View rootView = testActivity.getWindow().getDecorView().getRootView();
+
+        WebApkUtils.setStatusBarColor(testActivity, Color.RED);
+        WebApkUtils.setStatusBarIconColor(rootView, false, testActivity);
+
+        // No matter what color the status bar is being set on other form factors, it should always
+        // be black on automotive devices.
+        assertEquals(
+                "Status bar should always be black in automotive devices.",
+                Color.BLACK,
+                testActivity.getWindow().getStatusBarColor());
+        assertNotEquals(
+                "Status bar should NOT use dark icons in automotive devices.",
+                View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR,
+                rootView.getSystemUiVisibility() & View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
+
+        testActivity.finish();
+    }
+
+    /**
+     * Tests that {@link WebApkUtils#grantUriPermissionToHostBrowserIfShare} catches {@link
+     * SecurityException} when granting URI permission fails (e.g. when the sending app omits {@link
+     * Intent#FLAG_GRANT_READ_URI_PERMISSION}) and continues granting permissions for remaining
+     * URIs.
+     */
+    @Test
+    public void testGrantUriPermissionToHostBrowserIfShareCatchesSecurityException() {
+        Context spyContext = spy(mContext);
+        Uri ungrantedUri = Uri.parse("content://com.example.provider/ungranted");
+        Uri grantedUri = Uri.parse("content://com.example.provider/granted");
+        doThrow(new SecurityException("No permission"))
+                .when(spyContext)
+                .grantUriPermission(
+                        anyString(), eq(ungrantedUri), eq(Intent.FLAG_GRANT_READ_URI_PERMISSION));
+
+        String shareActivityClassName =
+                WebApkTestHelper.getGeneratedShareTargetActivityClassName(0);
+        Bundle metadata = new Bundle();
+        metadata.putString(WebApkMetaDataKeys.START_URL, "https://pwa.rocks/");
+        Bundle shareMetadata = new Bundle();
+        shareMetadata.putString(WebApkMetaDataKeys.SHARE_ACTION, "https://pwa.rocks/share");
+        shareMetadata.putString(WebApkMetaDataKeys.SHARE_METHOD, "POST");
+        WebApkTestHelper.registerWebApkWithMetaData(
+                mContext.getPackageName(), metadata, new Bundle[] {shareMetadata});
+
+        // Test single ungranted URI in ACTION_SEND.
+        Intent sendIntent = new Intent(Intent.ACTION_SEND);
+        sendIntent.setComponent(
+                new ComponentName(mContext.getPackageName(), shareActivityClassName));
+        sendIntent.putExtra(Intent.EXTRA_STREAM, ungrantedUri);
+        HostBrowserLauncherParams sendParams =
+                HostBrowserLauncherParams.createForIntent(
+                        spyContext,
+                        sendIntent,
+                        new HostBrowserUtils.PackageNameAndComponentName("com.chrome.beta"),
+                        /* dialogShown= */ false,
+                        /* launchTimeMs= */ -1,
+                        /* splashShownTimeMs= */ -1);
+        WebApkUtils.grantUriPermissionToHostBrowserIfShare(spyContext, sendParams);
+
+        // Test multiple URIs in ACTION_SEND_MULTIPLE (including null and ungranted URI).
+        Intent sendMultipleIntent = new Intent(Intent.ACTION_SEND_MULTIPLE);
+        sendMultipleIntent.setComponent(
+                new ComponentName(mContext.getPackageName(), shareActivityClassName));
+        ArrayList<Uri> streamUris = new ArrayList<>(Arrays.asList(null, ungrantedUri, grantedUri));
+        sendMultipleIntent.putParcelableArrayListExtra(Intent.EXTRA_STREAM, streamUris);
+        HostBrowserLauncherParams sendMultipleParams =
+                HostBrowserLauncherParams.createForIntent(
+                        spyContext,
+                        sendMultipleIntent,
+                        new HostBrowserUtils.PackageNameAndComponentName("com.chrome.beta"),
+                        /* dialogShown= */ false,
+                        /* launchTimeMs= */ -1,
+                        /* splashShownTimeMs= */ -1);
+        WebApkUtils.grantUriPermissionToHostBrowserIfShare(spyContext, sendMultipleParams);
+
+        verify(spyContext)
+                .grantUriPermission(
+                        eq("com.chrome.beta"),
+                        eq(grantedUri),
+                        eq(Intent.FLAG_GRANT_READ_URI_PERMISSION));
+    }
+
+    /** Also drops duplicates and nulls. */
+    @Test
+    public void testGetReadableSharedUrisFiltersUnreadable() {
+        Context spyContext = spy(mContext);
+        Uri readable = Uri.parse("content://com.example.provider/readable");
+        Uri unreadable = Uri.parse("content://com.example.provider/unreadable");
+        doReturn(PackageManager.PERMISSION_GRANTED)
+                .when(spyContext)
+                .checkUriPermission(
+                        eq(readable),
+                        eq(Process.myPid()),
+                        eq(Process.myUid()),
+                        eq(Intent.FLAG_GRANT_READ_URI_PERMISSION));
+        doReturn(PackageManager.PERMISSION_DENIED)
+                .when(spyContext)
+                .checkUriPermission(
+                        eq(unreadable),
+                        eq(Process.myPid()),
+                        eq(Process.myUid()),
+                        eq(Intent.FLAG_GRANT_READ_URI_PERMISSION));
+
+        Intent intent = new Intent(Intent.ACTION_SEND_MULTIPLE);
+        intent.putParcelableArrayListExtra(
+                Intent.EXTRA_STREAM,
+                new ArrayList<>(Arrays.asList(null, readable, unreadable, readable)));
+
+        assertEquals(
+                Arrays.asList(readable), WebApkUtils.getReadableSharedUris(spyContext, intent));
+    }
+
+    @Test
+    public void testGetReadableSharedUrisSingleStream() {
+        Context spyContext = spy(mContext);
+        Uri readable = Uri.parse("content://com.example.provider/readable");
+        doReturn(PackageManager.PERMISSION_GRANTED)
+                .when(spyContext)
+                .checkUriPermission(
+                        eq(readable),
+                        eq(Process.myPid()),
+                        eq(Process.myUid()),
+                        eq(Intent.FLAG_GRANT_READ_URI_PERMISSION));
+
+        Intent intent = new Intent(Intent.ACTION_SEND);
+        intent.putExtra(Intent.EXTRA_STREAM, readable);
+
+        assertEquals(
+                Arrays.asList(readable), WebApkUtils.getReadableSharedUris(spyContext, intent));
+    }
+
+    @Test
+    public void testAttachAndDetachUrisWithReadGrant() {
+        Uri first = Uri.parse("content://com.example.provider/first");
+        Uri second = Uri.parse("content://com.example.provider/second");
+        Intent intent = new Intent();
+
+        WebApkUtils.attachUrisWithReadGrant(intent, Arrays.asList(first, second));
+
+        ClipData clipData = intent.getClipData();
+        Assert.assertNotNull(clipData);
+        assertEquals(2, clipData.getItemCount());
+        assertEquals(first, clipData.getItemAt(0).getUri());
+        assertEquals(second, clipData.getItemAt(1).getUri());
+        Assert.assertNotEquals(0, intent.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION);
+
+        WebApkUtils.detachUrisWithReadGrant(intent);
+
+        Assert.assertNull(intent.getClipData());
+        assertEquals(0, intent.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION);
+    }
+
+    @Test
+    public void testAttachUrisWithReadGrantEmpty() {
+        Intent intent = new Intent();
+
+        WebApkUtils.attachUrisWithReadGrant(intent, new ArrayList<>());
+
+        Assert.assertNull(intent.getClipData());
+        assertEquals(0, intent.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION);
+    }
+
+    @Test
+    public void testAttachUrisWithReadGrantSkipsNullEntries() {
+        Uri first = Uri.parse("content://com.example.provider/first");
+        Uri second = Uri.parse("content://com.example.provider/second");
+        Intent intent = new Intent();
+
+        WebApkUtils.attachUrisWithReadGrant(intent, Arrays.asList(null, first, null, second));
+
+        ClipData clipData = intent.getClipData();
+        Assert.assertNotNull(clipData);
+        assertEquals(2, clipData.getItemCount());
+        assertEquals(first, clipData.getItemAt(0).getUri());
+        assertEquals(second, clipData.getItemAt(1).getUri());
+        Assert.assertNotEquals(0, intent.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION);
+    }
+
+    @Test
+    public void testAttachUrisWithReadGrantAllNull() {
+        Intent intent = new Intent();
+
+        WebApkUtils.attachUrisWithReadGrant(intent, Arrays.asList(null, null));
+
+        Assert.assertNull(intent.getClipData());
+        assertEquals(0, intent.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION);
     }
 }

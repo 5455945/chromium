@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,18 @@
 #define REMOTING_HOST_SETUP_DAEMON_CONTROLLER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 
-#include "base/callback.h"
+#include "base/containers/fixed_flat_set.h"
 #include "base/containers/queue.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
+#include "base/values.h"
+#include "remoting/host/host_config.h"
 
 namespace base {
-class DictionaryValue;
 class SingleThreadTaskRunner;
 }  // namespace base
 
@@ -22,6 +25,7 @@ namespace remoting {
 
 class AutoThread;
 class AutoThreadTaskRunner;
+class HostType;
 
 class DaemonController : public base::RefCountedThreadSafe<DaemonController> {
  public:
@@ -63,11 +67,10 @@ class DaemonController : public base::RefCountedThreadSafe<DaemonController> {
   };
 
   // Callback type for GetConfig(). If the host is configured then a dictionary
-  // is returned containing host_id and xmpp_login, with security-sensitive
+  // is returned containing host_id and service_account, with security-sensitive
   // fields filtered out. An empty dictionary is returned if the host is not
   // configured, and nullptr if the configuration is corrupt or cannot be read.
-  typedef base::OnceCallback<void(
-      std::unique_ptr<base::DictionaryValue> config)>
+  typedef base::OnceCallback<void(std::optional<base::DictValue> config)>
       GetConfigCallback;
 
   // Callback used for asynchronous operations, e.g. when
@@ -93,6 +96,12 @@ class DaemonController : public base::RefCountedThreadSafe<DaemonController> {
   typedef base::OnceCallback<void(const UsageStatsConsent&)>
       GetUsageStatsConsentCallback;
 
+  // The configuration keys whose values may be read by GetConfig().
+  static constexpr auto kUnprivilegedConfigKeys =
+      base::MakeFixedFlatSet<std::string_view>(
+          {kHostIdConfigPath, kServiceAccountConfigPath,
+           kDeprecatedXmppLoginConfigPath, kUsageStatsConsentConfigPath});
+
   // Interface representing the platform-spacific back-end. Most of its methods
   // are blocking and should be called on a background thread. There are two
   // exceptions:
@@ -111,7 +120,7 @@ class DaemonController : public base::RefCountedThreadSafe<DaemonController> {
 
     // Queries current host configuration. Any values that might be security
     // sensitive have been filtered out.
-    virtual std::unique_ptr<base::DictionaryValue> GetConfig() = 0;
+    virtual std::optional<base::DictValue> GetConfig() = 0;
 
     // Checks to verify that the required OS permissions have been granted to
     // the host process, querying the user if necessary. Notifies the callback
@@ -122,17 +131,17 @@ class DaemonController : public base::RefCountedThreadSafe<DaemonController> {
     // Starts the daemon process. This may require that the daemon be
     // downloaded and installed. |done| is invoked on the calling thread when
     // the operation is completed.
-    virtual void SetConfigAndStart(
-        std::unique_ptr<base::DictionaryValue> config,
-        bool consent,
-        CompletionCallback done) = 0;
+    virtual void SetConfigAndStart(base::DictValue config,
+                                   bool consent,
+                                   CompletionCallback done) = 0;
 
     // Updates current host configuration with the values specified in
     // |config|. Any value in the existing configuration that isn't specified in
-    // |config| is preserved. |config| must not contain host_id or xmpp_login
-    // values, because implementations of this method cannot change them. |done|
-    // is invoked on the calling thread when the operation is completed.
-    virtual void UpdateConfig(std::unique_ptr<base::DictionaryValue> config,
+    // |config| is preserved. |config| must not contain host_id, xmpp_login, or
+    // service_account values, because implementations of this method cannot
+    // change them. |done| is invoked on the calling thread when the operation
+    // is completed.
+    virtual void UpdateConfig(base::DictValue config,
                               CompletionCallback done) = 0;
 
     // Stops the daemon process. |done| is invoked on the calling thread when
@@ -141,11 +150,31 @@ class DaemonController : public base::RefCountedThreadSafe<DaemonController> {
 
     // Get the user's consent to crash reporting.
     virtual UsageStatsConsent GetUsageStatsConsent() = 0;
+
+    // Returns true if the current process has the required privileges to change
+    // the daemon. Note that read-only operations such as GetState() are always
+    // unprivileged.
+    virtual bool is_privileged() const = 0;
+
+#if BUILDFLAG(IS_LINUX)
+    // Returns true if the host has a multi-process architecture.
+    virtual bool is_multi_process() const = 0;
+#endif
   };
+
+#if BUILDFLAG(IS_LINUX)
+  // Set the host type. If nullptr is passed (the default), the host type will
+  // be automatically determined by checking which host type is running. If none
+  // is running, HostType::GetDefaultHostType() will be used.
+  static void SetHostType(const HostType* type);
+#endif
 
   static scoped_refptr<DaemonController> Create();
 
   explicit DaemonController(std::unique_ptr<Delegate> delegate);
+
+  DaemonController(const DaemonController&) = delete;
+  DaemonController& operator=(const DaemonController&) = delete;
 
   // Return the "installed/running" state of the daemon process.
   //
@@ -174,17 +203,17 @@ class DaemonController : public base::RefCountedThreadSafe<DaemonController> {
   // these two steps are merged for simplicity. Consider splitting it
   // into SetConfig() and Start() once we have basic host setup flow
   // working.
-  void SetConfigAndStart(std::unique_ptr<base::DictionaryValue> config,
+  void SetConfigAndStart(base::DictValue config,
                          bool consent,
                          CompletionCallback done);
 
   // Updates current host configuration with the values specified in
   // |config|. Changes must take effect before the call completes.
   // Any value in the existing configuration that isn't specified in |config|
-  // is preserved. |config| must not contain host_id or xmpp_login values,
-  // because implementations of this method cannot change them.
-  void UpdateConfig(std::unique_ptr<base::DictionaryValue> config,
-                    CompletionCallback done);
+  // is preserved. |config| must not contain host_id, xmpp_login, or
+  // service_account values, because implementations of this method cannot
+  // change them.
+  void UpdateConfig(base::DictValue config, CompletionCallback done);
 
   // Stop the daemon process. It is permitted to call Stop while the daemon
   // process is being installed, in which case the installation should be
@@ -197,17 +226,26 @@ class DaemonController : public base::RefCountedThreadSafe<DaemonController> {
   // Get the user's consent to crash reporting.
   void GetUsageStatsConsent(GetUsageStatsConsentCallback done);
 
+  // Returns true if the current process has the required privileges to change
+  // the daemon. Note that read-only operations such as GetState() are always
+  // unprivileged.
+  bool is_privileged() const;
+
+#if BUILDFLAG(IS_LINUX)
+  // Returns true if the host has a multi-process architecture.
+  bool is_multi_process() const;
+#endif
+
  private:
   friend class base::RefCountedThreadSafe<DaemonController>;
   virtual ~DaemonController();
 
   // Blocking helper methods used to call the delegate.
   void DoGetConfig(GetConfigCallback done);
-  void DoSetConfigAndStart(std::unique_ptr<base::DictionaryValue> config,
+  void DoSetConfigAndStart(base::DictValue config,
                            bool consent,
                            CompletionCallback done);
-  void DoUpdateConfig(std::unique_ptr<base::DictionaryValue> config,
-                      CompletionCallback done);
+  void DoUpdateConfig(base::DictValue config, CompletionCallback done);
   void DoStop(CompletionCallback done);
   void DoGetUsageStatsConsent(GetUsageStatsConsentCallback done);
 
@@ -217,7 +255,7 @@ class DaemonController : public base::RefCountedThreadSafe<DaemonController> {
                                                AsyncResult result);
   void InvokeConfigCallbackAndScheduleNext(
       GetConfigCallback done,
-      std::unique_ptr<base::DictionaryValue> config);
+      std::optional<base::DictValue> config);
   void InvokeConsentCallbackAndScheduleNext(GetUsageStatsConsentCallback done,
                                             const UsageStatsConsent& consent);
 
@@ -240,8 +278,6 @@ class DaemonController : public base::RefCountedThreadSafe<DaemonController> {
 
   bool servicing_request_ = false;
   base::queue<base::OnceClosure> pending_requests_;
-
-  DISALLOW_COPY_AND_ASSIGN(DaemonController);
 };
 
 }  // namespace remoting

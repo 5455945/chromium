@@ -1,16 +1,16 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.paint_preview;
 
 import android.graphics.Bitmap;
+import android.graphics.Point;
 import android.graphics.Rect;
 import android.os.Handler;
 import android.os.Parcel;
 
 import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
 import androidx.test.filters.MediumTest;
 
 import org.junit.After;
@@ -22,8 +22,9 @@ import org.junit.runner.RunWith;
 import org.mockito.Mockito;
 
 import org.chromium.base.Callback;
+import org.chromium.base.ThreadUtils;
 import org.chromium.base.UnguessableToken;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
@@ -31,46 +32,58 @@ import org.chromium.chrome.browser.browser_controls.BrowserStateBrowserControlsV
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.paint_preview.services.PaintPreviewTabService;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tabmodel.TabClosureParams;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
-import org.chromium.components.paint_preview.common.proto.PaintPreview.PaintPreviewProto;
+import org.chromium.chrome.test.transit.ChromeTransitTestRules;
+import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
+import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.components.paintpreview.browser.NativePaintPreviewServiceProvider;
 import org.chromium.components.paintpreview.player.PlayerCompositorDelegate;
 import org.chromium.components.paintpreview.player.PlayerManager;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
 import org.chromium.ui.util.TokenHolder;
 import org.chromium.url.GURL;
 
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 
-/**
- * Tests for the {@link TabbedPaintPreview} class.
- */
+/** Tests for the {@link TabbedPaintPreview} class. */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 public class TabbedPaintPreviewTest {
     @Rule
-    public ChromeTabbedActivityTestRule mActivityTestRule = new ChromeTabbedActivityTestRule();
+    public FreshCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.freshChromeTabbedActivityRule();
 
     private static final String TEST_URL = "/chrome/test/data/android/about.html";
 
-    /**
-     * Implementation of {@link PlayerCompositorDelegate.Factory} for tests.
-     */
+    private WebPageStation mPage;
+
+    /** Implementation of {@link PlayerCompositorDelegate.Factory} for tests. */
     public static class TestCompositorDelegateFactory implements PlayerCompositorDelegate.Factory {
         @Override
-        public PlayerCompositorDelegate create(NativePaintPreviewServiceProvider service, GURL url,
-                String directoryKey, boolean mainFrameMode,
+        public PlayerCompositorDelegate create(
+                NativePaintPreviewServiceProvider service,
+                GURL url,
+                String directoryKey,
+                boolean mainFrameMode,
                 @NonNull PlayerCompositorDelegate.CompositorListener compositorListener,
                 Callback<Integer> compositorErrorCallback) {
-            return new TestCompositorDelegate(service, null, url, directoryKey, mainFrameMode,
-                    compositorListener, compositorErrorCallback);
+            return new TestCompositorDelegate(
+                    service,
+                    0,
+                    url,
+                    directoryKey,
+                    mainFrameMode,
+                    compositorListener,
+                    compositorErrorCallback);
         }
 
         @Override
-        public PlayerCompositorDelegate createForProto(NativePaintPreviewServiceProvider service,
-                @Nullable PaintPreviewProto proto, GURL url, String directoryKey,
+        public PlayerCompositorDelegate createForCaptureResult(
+                NativePaintPreviewServiceProvider service,
+                long nativeCaptureResultPtr,
+                GURL url,
+                String directoryKey,
                 boolean mainFrameMode,
                 @NonNull PlayerCompositorDelegate.CompositorListener compositorListener,
                 Callback<Integer> compositorErrorCallback) {
@@ -86,8 +99,7 @@ public class TabbedPaintPreviewTest {
         TabbedPaintPreview.overridePaintPreviewTabServiceForTesting(mockService);
         PlayerManager.overrideCompositorDelegateFactoryForTesting(
                 new TestCompositorDelegateFactory());
-        mActivityTestRule.startMainActivityWithURL(
-                mActivityTestRule.getTestServer().getURL(TEST_URL));
+        mPage = mActivityTestRule.startOnTestServerUrl(TEST_URL);
     }
 
     @After
@@ -103,38 +115,40 @@ public class TabbedPaintPreviewTest {
     @Test
     @MediumTest
     public void testDisplayedCorrectly() throws ExecutionException, TimeoutException {
-        Tab tab = mActivityTestRule.getActivity().getActivityTab();
+        Tab tab = mPage.getTab();
         TabbedPaintPreview tabbedPaintPreview =
-                TestThreadUtils.runOnUiThreadBlocking(() -> TabbedPaintPreview.get(tab));
+                ThreadUtils.runOnUiThreadBlocking(() -> TabbedPaintPreview.get(tab));
         CallbackHelper viewReadyCallback = new CallbackHelper();
         CallbackHelper firstPaintCallback = new CallbackHelper();
-        PlayerManager.Listener listener = new EmptyPlayerListener() {
-            @Override
-            public void onCompositorError(int status) {
-                Assert.fail("Paint Preview should have been displayed successfully"
-                        + "with no errors.");
-            }
+        PlayerManager.Listener listener =
+                new EmptyPlayerListener() {
+                    @Override
+                    public void onCompositorError(int status) {
+                        Assert.fail(
+                                "Paint Preview should have been displayed successfully"
+                                        + "with no errors.");
+                    }
 
-            @Override
-            public void onViewReady() {
-                viewReadyCallback.notifyCalled();
-            }
+                    @Override
+                    public void onViewReady() {
+                        viewReadyCallback.notifyCalled();
+                    }
 
-            @Override
-            public void onFirstPaint() {
-                firstPaintCallback.notifyCalled();
-            }
-        };
+                    @Override
+                    public void onFirstPaint() {
+                        firstPaintCallback.notifyCalled();
+                    }
+                };
 
         boolean showed =
-                TestThreadUtils.runOnUiThreadBlocking(() -> tabbedPaintPreview.maybeShow(listener));
+                ThreadUtils.runOnUiThreadBlocking(() -> tabbedPaintPreview.maybeShow(listener));
         Assert.assertTrue("Paint Preview failed to display.", showed);
         Assert.assertTrue("Paint Preview was not displayed.", tabbedPaintPreview.isShowing());
         Assert.assertTrue(
                 "Paint Preview was not attached to tab.", tabbedPaintPreview.isAttached());
-        viewReadyCallback.waitForFirst("Paint preview view ready never happened.");
-        firstPaintCallback.waitForFirst("Paint preview first paint never happened.");
-        TestThreadUtils.runOnUiThreadBlocking(() -> tabbedPaintPreview.remove(false, false));
+        viewReadyCallback.waitForOnly("Paint preview view ready never happened.");
+        firstPaintCallback.waitForOnly("Paint preview first paint never happened.");
+        ThreadUtils.runOnUiThreadBlocking(() -> tabbedPaintPreview.remove(false, false));
     }
 
     /**
@@ -145,36 +159,44 @@ public class TabbedPaintPreviewTest {
     @MediumTest
     public void testBrowserControlsPersistent() throws ExecutionException {
         TestControlsVisibilityDelegate visibilityDelegate =
-                TestThreadUtils.runOnUiThreadBlocking(TestControlsVisibilityDelegate::new);
-        Tab tab = mActivityTestRule.getActivity().getActivityTab();
+                ThreadUtils.runOnUiThreadBlocking(TestControlsVisibilityDelegate::new);
+        Tab tab = mPage.getTab();
         TabbedPaintPreview tabbedPaintPreview =
-                TestThreadUtils.runOnUiThreadBlocking(() -> TabbedPaintPreview.get(tab));
+                ThreadUtils.runOnUiThreadBlocking(() -> TabbedPaintPreview.get(tab));
         tabbedPaintPreview.setBrowserVisibilityDelegate(visibilityDelegate);
         PlayerManager.Listener emptyListener = new EmptyPlayerListener();
 
         // Assert toolbar persistence is changed based on paint preview visibility.
         assertToolbarPersistence(false, visibilityDelegate);
-        boolean showed = TestThreadUtils.runOnUiThreadBlocking(
-                () -> tabbedPaintPreview.maybeShow(emptyListener));
+        boolean showed =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () -> tabbedPaintPreview.maybeShow(emptyListener));
         Assert.assertTrue("Paint Preview failed to display.", showed);
         assertToolbarPersistence(true, visibilityDelegate);
-        TestThreadUtils.runOnUiThreadBlocking(() -> tabbedPaintPreview.remove(false, false));
+        ThreadUtils.runOnUiThreadBlocking(() -> tabbedPaintPreview.remove(false, false));
         assertToolbarPersistence(false, visibilityDelegate);
 
         // Assert toolbar persistence is changed based visibility of the tab that is showing the
         // paint preview.
-        showed = TestThreadUtils.runOnUiThreadBlocking(
-                () -> tabbedPaintPreview.maybeShow(emptyListener));
+        showed =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () -> tabbedPaintPreview.maybeShow(emptyListener));
         Assert.assertTrue("Paint Preview failed to display.", showed);
         assertToolbarPersistence(true, visibilityDelegate);
-        Tab newTab = mActivityTestRule.loadUrlInNewTab(
-                mActivityTestRule.getTestServer().getURL(TEST_URL));
+        Tab newTab =
+                mActivityTestRule.loadUrlInNewTab(
+                        mActivityTestRule.getTestServer().getURL(TEST_URL));
         assertToolbarPersistence(false, visibilityDelegate);
-        TestThreadUtils.runOnUiThreadBlocking(()
-                                                      -> mActivityTestRule.getActivity()
-                                                                 .getTabModelSelector()
-                                                                 .getCurrentModel()
-                                                                 .closeTab(newTab));
+        ThreadUtils.runOnUiThreadBlocking(
+                () ->
+                        mActivityTestRule
+                                .getActivity()
+                                .getTabModelSelector()
+                                .getCurrentModel()
+                                .getTabRemover()
+                                .closeTabs(
+                                        TabClosureParams.closeTab(newTab).allowUndo(false).build(),
+                                        /* allowDialog= */ false));
         assertToolbarPersistence(true, visibilityDelegate);
     }
 
@@ -186,9 +208,9 @@ public class TabbedPaintPreviewTest {
     @Test
     @MediumTest
     public void testProgressbar() throws ExecutionException {
-        Tab tab = mActivityTestRule.getActivity().getActivityTab();
+        Tab tab = mPage.getTab();
         TabbedPaintPreview tabbedPaintPreview =
-                TestThreadUtils.runOnUiThreadBlocking(() -> TabbedPaintPreview.get(tab));
+                ThreadUtils.runOnUiThreadBlocking(() -> TabbedPaintPreview.get(tab));
 
         CallbackHelper simulateCallback = new CallbackHelper();
         BooleanCallbackHelper preventionCallback = new BooleanCallbackHelper();
@@ -197,32 +219,44 @@ public class TabbedPaintPreviewTest {
         PlayerManager.Listener emptyListener = new EmptyPlayerListener();
 
         // Paint Preview not showing.
-        Assert.assertEquals("Progressbar simulate callback shouldn't have been called.", 0,
+        Assert.assertEquals(
+                "Progressbar simulate callback shouldn't have been called.",
+                0,
                 simulateCallback.getCallCount());
         assertProgressbarUpdatePreventionCallback(false, preventionCallback);
 
         // Paint Preview showing in the current tab.
-        TestThreadUtils.runOnUiThreadBlocking(() -> tabbedPaintPreview.maybeShow(emptyListener));
+        ThreadUtils.runOnUiThreadBlocking(() -> tabbedPaintPreview.maybeShow(emptyListener));
         assertProgressbarUpdatePreventionCallback(true, preventionCallback);
 
         // Switch to a new tab that doesn't show paint preview.
-        Tab newTab = mActivityTestRule.loadUrlInNewTab(
-                mActivityTestRule.getTestServer().getURL(TEST_URL));
+        Tab newTab =
+                mActivityTestRule.loadUrlInNewTab(
+                        mActivityTestRule.getTestServer().getURL(TEST_URL));
         assertProgressbarUpdatePreventionCallback(false, preventionCallback);
 
         // Close the new tab, we should be back at the old tab with the paint preview showing.
-        TestThreadUtils.runOnUiThreadBlocking(()
-                                                      -> mActivityTestRule.getActivity()
-                                                                 .getTabModelSelector()
-                                                                 .getCurrentModel()
-                                                                 .closeTab(newTab));
+        ThreadUtils.runOnUiThreadBlocking(
+                () ->
+                        mActivityTestRule
+                                .getActivity()
+                                .getTabModelSelector()
+                                .getCurrentModel()
+                                .getTabRemover()
+                                .closeTabs(
+                                        TabClosureParams.closeTab(newTab).allowUndo(false).build(),
+                                        /* allowDialog= */ false));
         assertProgressbarUpdatePreventionCallback(true, preventionCallback);
 
         // Remove paint preview.
-        Assert.assertEquals("Should have not requested progressbar fill simulation.", 0,
+        Assert.assertEquals(
+                "Should have not requested progressbar fill simulation.",
+                0,
                 simulateCallback.getCallCount());
-        TestThreadUtils.runOnUiThreadBlocking(() -> tabbedPaintPreview.remove(false, false));
-        Assert.assertEquals("Should have requested progressbar fill simulation.", 1,
+        ThreadUtils.runOnUiThreadBlocking(() -> tabbedPaintPreview.remove(false, false));
+        Assert.assertEquals(
+                "Should have requested progressbar fill simulation.",
+                1,
                 simulateCallback.getCallCount());
         assertProgressbarUpdatePreventionCallback(false, preventionCallback);
     }
@@ -241,8 +275,10 @@ public class TabbedPaintPreviewTest {
 
     private void assertProgressbarUpdatePreventionCallback(
             boolean expected, BooleanCallbackHelper callbackHelper) {
-        String message = expected ? "Progressbar updates should be prevented."
-                                  : "Progressbar updates should not be prevented.";
+        String message =
+                expected
+                        ? "Progressbar updates should be prevented."
+                        : "Progressbar updates should not be prevented.";
         CriteriaHelper.pollInstrumentationThread(() -> expected == callbackHelper.get(), message);
     }
 
@@ -256,8 +292,10 @@ public class TabbedPaintPreviewTest {
 
     public static void assertAttachedAndShown(
             TabbedPaintPreview tabbedPaintPreview, boolean attached, boolean shown) {
-        String attachedMessage = attached ? "Paint Preview should be attached."
-                                          : "Paint Preview should not be attached.";
+        String attachedMessage =
+                attached
+                        ? "Paint Preview should be attached."
+                        : "Paint Preview should not be attached.";
         String shownMessage =
                 shown ? "Paint Preview should be shown." : "Paint Preview should not be shown.";
         CriteriaHelper.pollUiThread(
@@ -266,11 +304,13 @@ public class TabbedPaintPreviewTest {
     }
 
     public static void assertWasEverShown(
-            TabbedPaintPreview tabbedPaintPreview, boolean everShown) {
-        String shownMessage = everShown ? "Paint Preview should was never shown."
-                                        : "Paint Preview should was shown.";
+            TabbedPaintPreview tabbedPaintPreview, boolean expectedShown) {
+        String message =
+                expectedShown
+                        ? "Paint Preview should have been shown, but never was."
+                        : "Paint Preview should not have been shown, but was.";
         CriteriaHelper.pollUiThread(
-                () -> tabbedPaintPreview.wasEverShown() == everShown, shownMessage);
+                () -> tabbedPaintPreview.wasEverShown() == expectedShown, message);
     }
 
     private static class TestControlsVisibilityDelegate
@@ -278,20 +318,7 @@ public class TabbedPaintPreviewTest {
         private int mLastToken = TokenHolder.INVALID_TOKEN;
 
         public TestControlsVisibilityDelegate() {
-            super(new ObservableSupplier<Boolean>() {
-                @Override
-                public Boolean addObserver(Callback<Boolean> obs) {
-                    return false;
-                }
-
-                @Override
-                public void removeObserver(Callback<Boolean> obs) {}
-
-                @Override
-                public Boolean get() {
-                    return false;
-                }
-            });
+            super(ObservableSuppliers.alwaysFalse());
         }
 
         public boolean isPersistent() {
@@ -300,67 +327,94 @@ public class TabbedPaintPreviewTest {
 
         @Override
         public int showControlsPersistent() {
-            Assert.assertEquals("Lock toolbar persistence is called before releasing a "
-                            + "previous token.",
-                    mLastToken, TokenHolder.INVALID_TOKEN);
+            Assert.assertEquals(
+                    "Lock toolbar persistence is called before releasing a " + "previous token.",
+                    TokenHolder.INVALID_TOKEN,
+                    mLastToken);
             mLastToken = super.showControlsPersistent();
             return mLastToken;
         }
 
         @Override
         public void releasePersistentShowingToken(int token) {
-            Assert.assertEquals("Release toolbar persistence is called with the wrong"
-                            + "token.",
-                    mLastToken, token);
+            Assert.assertEquals(
+                    "Release toolbar persistence is called with the wrong" + "token.",
+                    mLastToken,
+                    token);
             super.releasePersistentShowingToken(token);
             mLastToken = TokenHolder.INVALID_TOKEN;
         }
     }
 
-    /**
-     * Dummy implementation of {@link PlayerCompositorDelegate}.
-     */
+    /** Dummy implementation of {@link PlayerCompositorDelegate}. */
     public static class TestCompositorDelegate implements PlayerCompositorDelegate {
         private int mNextRequestId;
 
-        TestCompositorDelegate(NativePaintPreviewServiceProvider service,
-                @Nullable PaintPreviewProto proto, GURL url, String directoryKey,
-                boolean mainFrameMode, @NonNull CompositorListener compositorListener,
+        TestCompositorDelegate(
+                NativePaintPreviewServiceProvider service,
+                long nativeCaptureResultPtr,
+                GURL url,
+                String directoryKey,
+                boolean mainFrameMode,
+                @NonNull CompositorListener compositorListener,
                 Callback<Integer> compositorErrorCallback) {
-            Assert.assertNull(proto);
+            Assert.assertEquals(0, nativeCaptureResultPtr);
             Assert.assertFalse(mainFrameMode);
-            new Handler().postDelayed(() -> {
-                Parcel parcel = Parcel.obtain();
-                parcel.writeLong(4577L);
-                parcel.writeLong(23L);
-                parcel.setDataPosition(0);
-                UnguessableToken token = UnguessableToken.CREATOR.createFromParcel(parcel);
-                compositorListener.onCompositorReady(token, new UnguessableToken[] {token},
-                        new int[] {500, 500}, new int[] {0, 0}, new int[] {0}, null, null, 0);
-            }, 250);
+            new Handler()
+                    .postDelayed(
+                            () -> {
+                                Parcel parcel = Parcel.obtain();
+                                parcel.writeLong(4577L);
+                                parcel.writeLong(23L);
+                                parcel.setDataPosition(0);
+                                UnguessableToken token =
+                                        UnguessableToken.CREATOR.createFromParcel(parcel);
+                                compositorListener.onCompositorReady(
+                                        token,
+                                        new UnguessableToken[] {token},
+                                        new int[] {500, 500},
+                                        new int[] {0, 0},
+                                        new int[] {0},
+                                        null,
+                                        null,
+                                        0f,
+                                        0);
+                            },
+                            250);
         }
 
         @Override
-        public void addMemoryPressureListener(Runnable runnable) {}
-
-        @Override
-        public int requestBitmap(UnguessableToken frameGuid, Rect clipRect, float scaleFactor,
-                Callback<Bitmap> bitmapCallback, Runnable errorCallback) {
-            new Handler().postDelayed(() -> {
-                Bitmap emptyBitmap = Bitmap.createBitmap(
-                        clipRect.width(), clipRect.height(), Bitmap.Config.ARGB_4444);
-                bitmapCallback.onResult(emptyBitmap);
-            }, 100);
+        public int requestBitmap(
+                UnguessableToken frameGuid,
+                Rect clipRect,
+                float scaleFactor,
+                Callback<Bitmap> bitmapCallback,
+                Runnable errorCallback) {
+            new Handler()
+                    .postDelayed(
+                            () -> {
+                                Bitmap emptyBitmap =
+                                        Bitmap.createBitmap(
+                                                clipRect.width(),
+                                                clipRect.height(),
+                                                Bitmap.Config.ARGB_4444);
+                                bitmapCallback.onResult(emptyBitmap);
+                            },
+                            100);
             int requestId = mNextRequestId;
             mNextRequestId++;
             return requestId;
         }
 
         @Override
-        public int requestBitmap(Rect clipRect, float scaleFactor, Callback<Bitmap> bitmapCallback,
+        public int requestBitmap(
+                Rect clipRect,
+                float scaleFactor,
+                Callback<Bitmap> bitmapCallback,
                 Runnable errorCallback) {
-            Assert.fail("The GUIDless version of TestCompositorDelegate#requestBitmap() shouldn't"
-                    + " be called.");
+            Assert.fail(
+                    "The GUIDless version of TestCompositorDelegate#requestBitmap() shouldn't"
+                            + " be called.");
             return 0;
         }
 
@@ -378,15 +432,18 @@ public class TabbedPaintPreviewTest {
         }
 
         @Override
+        public Point getRootFrameOffsets() {
+            return new Point();
+        }
+
+        @Override
         public void setCompressOnClose(boolean compressOnClose) {}
 
         @Override
         public void destroy() {}
     }
 
-    /**
-     * Blank implementation of {@link PlayerManager.Listener}.
-     */
+    /** Blank implementation of {@link PlayerManager.Listener}. */
     public static class EmptyPlayerListener implements PlayerManager.Listener {
         @Override
         public void onCompositorError(int status) {}

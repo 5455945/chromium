@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,21 @@
 #include <fuchsia/hardware/power/statecontrol/cpp/fidl.h>
 #include <fuchsia/hardware/power/statecontrol/cpp/fidl_test_base.h>
 #include <fuchsia/io/cpp/fidl.h>
+#include <fuchsia/recovery/cpp/fidl.h>
+#include <fuchsia/recovery/cpp/fidl_test_base.h>
 #include <lib/fidl/cpp/interface_request.h>
+#include <lib/fpromise/result.h>
 #include <lib/sys/cpp/outgoing_directory.h>
 #include <lib/sys/cpp/service_directory.h>
+
 #include <memory>
+#include <string_view>
 #include <tuple>
 
-#include "base/bind.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/fuchsia/scoped_service_binding.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/message_loop/message_pump_type.h"
@@ -38,15 +43,16 @@ using ::testing::Eq;
 using ::testing::Ne;
 
 using fuchsia::feedback::RebootReason;
-using StateControlRebootReason =
-    fuchsia::hardware::power::statecontrol::RebootReason;
+using fuchsia::hardware::power::statecontrol::ShutdownOptions;
+using StateControlShutdownReason =
+    fuchsia::hardware::power::statecontrol::ShutdownReason;
 
 struct RebootReasonParam {
   RebootReason reason;
   RebootShlib::RebootSource source;
   bool graceful;
-  StateControlRebootReason state_control_reason =
-      StateControlRebootReason::USER_REQUEST;
+  StateControlShutdownReason state_control_reason =
+      StateControlShutdownReason::USER_REQUEST;
 };
 
 const RebootReasonParam kRebootReasonParams[] = {
@@ -65,11 +71,11 @@ const RebootReasonParam kRebootReasonParams[] = {
 
     // Graceful reboot reasons.
     {RebootReason::USER_REQUEST, RebootShlib::RebootSource::API, true,
-     StateControlRebootReason::USER_REQUEST},
+     StateControlShutdownReason::USER_REQUEST},
     {RebootReason::SYSTEM_UPDATE, RebootShlib::RebootSource::OTA, true,
-     StateControlRebootReason::SYSTEM_UPDATE},
+     StateControlShutdownReason::SYSTEM_UPDATE},
     {RebootReason::HIGH_TEMPERATURE, RebootShlib::RebootSource::OVERHEAT, true,
-     StateControlRebootReason::HIGH_TEMPERATURE},
+     StateControlShutdownReason::HIGH_TEMPERATURE},
     {RebootReason::SESSION_FAILURE, RebootShlib::RebootSource::SW_OTHER, true},
 };
 
@@ -87,24 +93,28 @@ const RestartReasonParam kRestartReasonParams[] = {
     {RebootShlib::RebootSource::GRACEFUL_RESTART, true, kGracefulTeardown},
 };
 
-
 class FakeAdmin
     : public fuchsia::hardware::power::statecontrol::testing::Admin_TestBase {
  public:
   explicit FakeAdmin(sys::OutgoingDirectory* outgoing_directory)
       : binding_(outgoing_directory, this) {}
 
-  void GetLastRebootReason(StateControlRebootReason* reason) {
+  void GetLastRebootReason(StateControlShutdownReason* reason) {
     *reason = last_reboot_reason_;
   }
 
  private:
-  void Reboot(StateControlRebootReason reason, RebootCallback callback) final {
-    last_reboot_reason_ = reason;
-    fuchsia::hardware::power::statecontrol::Admin_Reboot_Response response;
-    fuchsia::hardware::power::statecontrol::Admin_Reboot_Result result;
-    result.set_response(response);
-    callback(std::move(result));
+  void Shutdown(fuchsia::hardware::power::statecontrol::ShutdownOptions options,
+                ShutdownCallback callback) final {
+    if (options.has_action() &&
+        options.action() ==
+            fuchsia::hardware::power::statecontrol::ShutdownAction::REBOOT) {
+      if (options.has_reasons() && !options.reasons().empty()) {
+        last_reboot_reason_ = options.reasons()[0];
+      }
+    }
+
+    callback(fpromise::ok());
   }
 
   void NotImplemented_(const std::string& name) final {
@@ -113,7 +123,7 @@ class FakeAdmin
 
   base::ScopedServiceBinding<fuchsia::hardware::power::statecontrol::Admin>
       binding_;
-  StateControlRebootReason last_reboot_reason_;
+  StateControlShutdownReason last_reboot_reason_;
 };
 
 class FakeLastRebootInfoProvider
@@ -139,7 +149,29 @@ class FakeLastRebootInfoProvider
   fuchsia::feedback::LastReboot last_reboot_;
 };
 
-class RebootFuchsiaTest: public ::testing::Test {
+class FakeFactoryReset
+    : public fuchsia::recovery::testing::FactoryReset_TestBase {
+ public:
+  explicit FakeFactoryReset(sys::OutgoingDirectory* outgoing_directory)
+      : binding_(outgoing_directory, this) {}
+
+  void reset_called(bool* reset_called) { *reset_called = reset_called_; }
+
+ private:
+  void Reset(ResetCallback callback) final {
+    reset_called_ = true;
+    callback(ZX_OK);
+  }
+
+  void NotImplemented_(const std::string& name) final {
+    ADD_FAILURE() << "NotImplemented_: " << name;
+  }
+
+  base::ScopedServiceBinding<fuchsia::recovery::FactoryReset> binding_;
+  bool reset_called_ = false;
+};
+
+class RebootFuchsiaTest : public ::testing::Test {
  public:
   RebootFuchsiaTest()
       : task_environment_(base::test::TaskEnvironment::MainThreadType::IO),
@@ -150,7 +182,7 @@ class RebootFuchsiaTest: public ::testing::Test {
 
   void SetUp() override {
     // Create incoming (service) and outgoing directories that are connected.
-    fidl::InterfaceHandle<::fuchsia::io::Directory> directory;
+    fidl::InterfaceHandle<fuchsia::io::Directory> directory;
 
     // The thread handling fidl calls to the fake service must also be the
     // thread that we start the serve operation on. Since all fakes require the
@@ -169,6 +201,8 @@ class RebootFuchsiaTest: public ::testing::Test {
     last_reboot_info_provider_ =
         base::SequenceBound<FakeLastRebootInfoProvider>(
             thread_.task_runner(), outgoing_directory_.get());
+    factory_reset_service_ = base::SequenceBound<FakeFactoryReset>(
+        thread_.task_runner(), outgoing_directory_.get());
 
     // Ensure that the services above finish publishing themselves.
     thread_.FlushForTesting();
@@ -181,8 +215,8 @@ class RebootFuchsiaTest: public ::testing::Test {
     full_path_ = InitializeFlagFileDirForTesting(dir_.GetPath());
   }
 
-  StateControlRebootReason GetLastRebootReason() {
-    StateControlRebootReason reason;
+  StateControlShutdownReason GetLastRebootReason() {
+    StateControlShutdownReason reason;
     admin_.AsyncCall(&FakeAdmin::GetLastRebootReason).WithArgs(&reason);
     thread_.FlushForTesting();
     return reason;
@@ -195,13 +229,21 @@ class RebootFuchsiaTest: public ::testing::Test {
     thread_.FlushForTesting();
   }
 
+  bool FdrTriggered() {
+    bool reset_called;
+    factory_reset_service_.AsyncCall(&FakeFactoryReset::reset_called)
+        .WithArgs(&reset_called);
+    thread_.FlushForTesting();
+    return reset_called;
+  }
+
  private:
   void ServeOutgoingDirectory(
       fidl::InterfaceRequest<fuchsia::io::Directory> channel) {
     outgoing_directory_ = std::make_unique<sys::OutgoingDirectory>();
     outgoing_directory_->GetOrCreateDirectory("svc")->Serve(
-        fuchsia::io::OPEN_RIGHT_READABLE | fuchsia::io::OPEN_RIGHT_WRITABLE,
-        channel.TakeChannel());
+        fuchsia_io::wire::kPermReadable,
+        fidl::ServerEnd<fuchsia_io::Directory>(channel.TakeChannel()));
   }
 
   const base::test::SingleThreadTaskEnvironment task_environment_;
@@ -209,12 +251,13 @@ class RebootFuchsiaTest: public ::testing::Test {
   std::unique_ptr<sys::ServiceDirectory> incoming_directory_;
   base::SequenceBound<FakeAdmin> admin_;
   base::SequenceBound<FakeLastRebootInfoProvider> last_reboot_info_provider_;
+  base::SequenceBound<FakeFactoryReset> factory_reset_service_;
   base::ScopedTempDir dir_;
   base::FilePath full_path_;
 
  protected:
-  base::FilePath GenerateFlagFilePath(const base::StringPiece& name) {
-    return  full_path_.Append(name);
+  base::FilePath GenerateFlagFilePath(std::string_view name) {
+    return full_path_.Append(name);
   }
 
   base::Thread thread_;
@@ -245,7 +288,7 @@ fuchsia::feedback::LastReboot GenerateLastReboot(bool graceful,
 
 // RetrySystemUpdate must be handled separately because it does not work with
 // the RebootFuchsiaParamTest family of tests. Those tests expect
-// RebootSource::OTA to map to exactly one StateControlRebootReason, which is
+// RebootSource::OTA to map to exactly one StateControlShutdownReason, which is
 // now not the case.
 TEST_F(RebootFuchsiaTest, RebootReasonRetrySystemUpdateTranslatesFromFuchsia) {
   SetLastReboot(GenerateLastReboot(true, RebootReason::RETRY_SYSTEM_UPDATE));
@@ -259,8 +302,18 @@ TEST_F(RebootFuchsiaTest, RebootReasonZbiSwapTranslatesFromFuchsia) {
               Eq(RebootShlib::RebootSource::OTA));
 }
 
-class RebootFuchsiaParamTest : public RebootFuchsiaTest,
-                               public ::testing::WithParamInterface<RebootReasonParam> {
+TEST_F(RebootFuchsiaTest, RebootNowTriggersFdr) {
+  EXPECT_TRUE(RebootShlib::IsFdrForNextRebootSupported());
+
+  RebootShlib::SetFdrForNextReboot();
+
+  EXPECT_TRUE(RebootShlib::RebootNow(RebootShlib::RebootSource::API));
+  EXPECT_TRUE(FdrTriggered());
+}
+
+class RebootFuchsiaParamTest
+    : public RebootFuchsiaTest,
+      public ::testing::WithParamInterface<RebootReasonParam> {
  public:
   RebootFuchsiaParamTest() = default;
 };
@@ -280,8 +333,9 @@ INSTANTIATE_TEST_SUITE_P(RebootReasonParamSweep,
                          RebootFuchsiaParamTest,
                          ::testing::ValuesIn(kRebootReasonParams));
 
-class RestartFuchsiaParamTest : public RebootFuchsiaTest,
-                                public ::testing::WithParamInterface<RestartReasonParam> {
+class RestartFuchsiaParamTest
+    : public RebootFuchsiaTest,
+      public ::testing::WithParamInterface<RestartReasonParam> {
  public:
   RestartFuchsiaParamTest() = default;
 
@@ -298,15 +352,13 @@ TEST_P(RestartFuchsiaParamTest, GetLastRestartReasons) {
   EXPECT_FALSE(last_reboot.has_reason());
   SetLastReboot(std::move(last_reboot));
 
-  EXPECT_THAT(RebootUtil::GetLastRebootSource(),
-              Eq(GetParam().source));
+  EXPECT_THAT(RebootUtil::GetLastRebootSource(), Eq(GetParam().source));
 
   EXPECT_TRUE(base::PathExists(GenerateFlagFilePath(kStartedOnce)));
   EXPECT_FALSE(base::PathExists(GenerateFlagFilePath(kGracefulTeardown)));
 
   base::WriteFile(GenerateFlagFilePath(kGracefulTeardown), "");
-  EXPECT_THAT(RebootUtil::GetLastRebootSource(),
-              Eq(GetParam().source));
+  EXPECT_THAT(RebootUtil::GetLastRebootSource(), Eq(GetParam().source));
 }
 
 INSTANTIATE_TEST_SUITE_P(RestartReasonParamSweep,
@@ -327,13 +379,13 @@ TEST_F(RebootFuchsiaTest, ThoroughTestLastRestartReason) {
   EXPECT_THAT(RebootUtil::GetLastRebootSource(),
               Ne(RebootShlib::RebootSource::UNGRACEFUL_RESTART));
 
-  //Check files are created/deleted as expected
-  const auto once =  GenerateFlagFilePath(kStartedOnce);
+  // Check files are created/deleted as expected
+  const auto once = GenerateFlagFilePath(kStartedOnce);
   LOG(INFO) << "looking at file " << once << " " << base::PathExists(once);
   EXPECT_TRUE(base::PathExists(once));
   EXPECT_FALSE(base::PathExists(GenerateFlagFilePath(kGracefulTeardown)));
 
-  //Confirm reboot reason will not change after create files when check again
+  // Confirm reboot reason will not change after create files when check again
   base::WriteFile(GenerateFlagFilePath(kStartedOnce), "");
   base::WriteFile(GenerateFlagFilePath(kGracefulTeardown), "");
   EXPECT_THAT(RebootUtil::GetLastRebootSource(),
@@ -341,7 +393,7 @@ TEST_F(RebootFuchsiaTest, ThoroughTestLastRestartReason) {
   EXPECT_THAT(RebootUtil::GetLastRebootSource(),
               Ne(RebootShlib::RebootSource::UNGRACEFUL_RESTART));
 
-  //Emulate Reboot
+  // Emulate Reboot
   RebootUtil::Finalize();
   InitializeRestartCheck();
   EXPECT_THAT(RebootUtil::GetLastRebootSource(),

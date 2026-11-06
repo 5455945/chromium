@@ -1,8 +1,10 @@
-// Copyright (c) 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/events/ozone/chromeos/cursor_controller.h"
+
+#include "base/check.h"
 
 namespace ui {
 
@@ -44,16 +46,6 @@ CursorController* CursorController::GetInstance() {
   return base::Singleton<CursorController>::get();
 }
 
-void CursorController::AddCursorObserver(CursorObserver* observer) {
-  base::AutoLock lock(cursor_observers_lock_);
-  cursor_observers_.AddObserver(observer);
-}
-
-void CursorController::RemoveCursorObserver(CursorObserver* observer) {
-  base::AutoLock lock(cursor_observers_lock_);
-  cursor_observers_.RemoveObserver(observer);
-}
-
 void CursorController::SetCursorConfigForWindow(
     gfx::AcceleratedWidget widget,
     display::Display::Rotation rotation,
@@ -65,6 +57,7 @@ void CursorController::SetCursorConfigForWindow(
 
 void CursorController::ClearCursorConfigForWindow(
     gfx::AcceleratedWidget widget) {
+  base::AutoLock lock(window_to_cursor_configuration_map_lock_);
   window_to_cursor_configuration_map_.erase(widget);
 }
 
@@ -74,12 +67,6 @@ void CursorController::ApplyCursorConfigForWindow(gfx::AcceleratedWidget widget,
   auto it = window_to_cursor_configuration_map_.find(widget);
   if (it != window_to_cursor_configuration_map_.end())
     TransformCursorMove(it->second.rotation, it->second.scale, delta);
-}
-
-void CursorController::SetCursorLocation(const gfx::PointF& location) {
-  base::AutoLock lock(cursor_observers_lock_);
-  for (auto& observer : cursor_observers_)
-    observer.OnCursorLocationChanged(location);
 }
 
 CursorController::CursorController() {

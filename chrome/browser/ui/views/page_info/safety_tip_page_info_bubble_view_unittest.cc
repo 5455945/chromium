@@ -1,10 +1,11 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/views/page_info/safety_tip_page_info_bubble_view.h"
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/content_settings/page_specific_content_settings_delegate.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/views/chrome_test_views_delegate.h"
@@ -26,6 +27,10 @@ class ScopedWebContentsTestHelper {
     web_contents_ = factory_.CreateWebContents(&profile_);
   }
 
+  ScopedWebContentsTestHelper(const ScopedWebContentsTestHelper&) = delete;
+  ScopedWebContentsTestHelper& operator=(const ScopedWebContentsTestHelper&) =
+      delete;
+
   Profile* profile() { return &profile_; }
   content::WebContents* web_contents() { return web_contents_; }
 
@@ -33,18 +38,22 @@ class ScopedWebContentsTestHelper {
   content::BrowserTaskEnvironment task_environment_;
   TestingProfile profile_;
   content::TestWebContentsFactory factory_;
-  content::WebContents* web_contents_;  // Weak. Owned by factory_.
-
-  DISALLOW_COPY_AND_ASSIGN(ScopedWebContentsTestHelper);
+  raw_ptr<content::WebContents> web_contents_;  // Weak. Owned by factory_.
 };
 
 class SafetyTipPageInfoBubbleViewTest : public testing::Test {
  public:
-  SafetyTipPageInfoBubbleViewTest() {}
+  SafetyTipPageInfoBubbleViewTest() = default;
+
+  SafetyTipPageInfoBubbleViewTest(const SafetyTipPageInfoBubbleViewTest&) =
+      delete;
+  SafetyTipPageInfoBubbleViewTest& operator=(
+      const SafetyTipPageInfoBubbleViewTest&) = delete;
 
   // testing::Test:
   void SetUp() override {
-    views::Widget::InitParams parent_params;
+    views::Widget::InitParams parent_params(
+        views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
     parent_params.context = views_helper_.GetContext();
     parent_window_ = new views::Widget();
     parent_window_->Init(std::move(parent_params));
@@ -52,12 +61,11 @@ class SafetyTipPageInfoBubbleViewTest : public testing::Test {
     content::WebContents* web_contents = web_contents_helper_.web_contents();
     content_settings::PageSpecificContentSettings::CreateForWebContents(
         web_contents,
-        std::make_unique<chrome::PageSpecificContentSettingsDelegate>(
-            web_contents));
+        std::make_unique<PageSpecificContentSettingsDelegate>(web_contents));
 
     bubble_ = CreateSafetyTipBubbleForTesting(
         parent_window_->GetNativeView(), web_contents,
-        security_state::SafetyTipStatus::kBadReputation,
+        security_state::SafetyTipStatus::kLookalike,
         GURL("https://www.google.tld"), base::DoNothing());
   }
 
@@ -68,11 +76,9 @@ class SafetyTipPageInfoBubbleViewTest : public testing::Test {
   views::ScopedViewsTestHelper views_helper_{
       std::make_unique<ChromeTestViewsDelegate<>>()};
 
-  PageInfoBubbleViewBase* bubble_ = nullptr;
-  views::Widget* parent_window_ = nullptr;  // Weak. Owned by the NativeWidget.
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(SafetyTipPageInfoBubbleViewTest);
+  raw_ptr<PageInfoBubbleViewBase, DanglingUntriaged> bubble_ = nullptr;
+  raw_ptr<views::Widget, DanglingUntriaged> parent_window_ =
+      nullptr;  // Weak. Owned by the NativeWidget.
 };
 
 }  // namespace

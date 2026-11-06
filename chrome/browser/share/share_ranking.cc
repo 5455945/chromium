@@ -1,16 +1,39 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/share/share_ranking.h"
 
+#include <algorithm>
+#include <vector>
+
+#include "base/containers/span.h"
+#include "base/containers/to_vector.h"
+#include "base/functional/callback_helpers.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
+#include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/share/default_ranking.h"
 #include "chrome/browser/share/share_history.h"
 #include "components/leveldb_proto/public/proto_database_provider.h"
 #include "content/public/browser/storage_partition.h"
+#include "ui/base/l10n/l10n_util.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/callback_android.h"
+#include "base/android/jni_array.h"
+#include "base/android/jni_string.h"
+#include "base/i18n/android_locale.h"
+
+// Must come after other includes, because FromJniType() uses Profile.
+#include "chrome/browser/share/jni_headers/ShareRankingBridge_jni.h"
+
+using base::android::JavaRef;
+#endif
 
 namespace sharing {
 
@@ -19,6 +42,7 @@ const char* const ShareRanking::kMoreTarget = "$more";
 namespace {
 
 const char* const kShareRankingFolder = "share_ranking";
+const char* const kShareRankingKey = "share_ranking";
 
 // TODO(ellyjones): This should probably be a field trial.
 const int kRecentWindowDays = 7;
@@ -29,54 +53,56 @@ std::unique_ptr<ShareRanking::BackingDb> MakeDefaultDbForProfile(
       ->GetProtoDatabaseProvider()
       ->GetDB<proto::ShareRanking>(
           leveldb_proto::ProtoDbType::SHARE_RANKING_DATABASE,
-          profile->GetPath().Append(kShareRankingFolder),
+          profile->GetPath().AppendASCII(kShareRankingFolder),
           base::ThreadPool::CreateSequencedTaskRunner(
               {base::MayBlock(), base::TaskPriority::BEST_EFFORT}));
 }
 
-bool RankingContains(const std::vector<std::string>& ranking,
-                     const std::string& element,
-                     unsigned int upto_index = UINT_MAX) {
-  for (unsigned int i = 0; i < ranking.size() && i < upto_index; ++i) {
-    if (ranking[i] == element)
-      return true;
-  }
-  return false;
-}
-
-std::vector<std::string> RankByUses(const std::map<std::string, int>& uses) {
-  std::vector<std::string> ranked_uses;
-  std::transform(uses.begin(), uses.end(), std::back_inserter(ranked_uses),
-                 [](const auto& entry) { return entry.first; });
-  std::sort(ranked_uses.begin(), ranked_uses.end(),
-            [&](const std::string& a, const std::string& b) {
-              return uses.at(a) < uses.at(b);
+std::vector<std::string> OrderByUses(const std::vector<std::string>& ranking,
+                                     const std::map<std::string, int>& uses) {
+  std::vector<std::string> ordered_ranking(ranking.begin(), ranking.end());
+  std::sort(ordered_ranking.begin(), ordered_ranking.end(),
+            [&](const std::string& a, const std::string& b) -> bool {
+              int ua = 0;
+              int ub = 0;
+              if (auto it = uses.find(a); it != uses.end()) {
+                ua = it->second;
+              }
+              if (auto it = uses.find(b); it != uses.end()) {
+                ub = it->second;
+              }
+              return ua > ub;
             });
-  return ranked_uses;
+  return ordered_ranking;
 }
 
-std::string HighestUnshown(const std::vector<std::string>& shown,
+std::string HighestUnshown(const std::vector<std::string>& ranking,
                            const std::map<std::string, int>& uses,
-                           unsigned int fold) {
-  std::vector<std::string> ranked = RankByUses(uses);
-  auto in_shown_above_fold = [&](const std::string& e) {
-    return RankingContains(shown, e, fold);
-  };
+                           size_t length) {
+  CHECK_GT(length, 0u);
+  std::vector<std::string> unshown =
+      base::ToVector(base::span(ranking).subspan(length));
+  return !unshown.empty() ? OrderByUses(unshown, uses).front() : "";
+}
 
-  ranked.erase(
-      std::remove_if(ranked.begin(), ranked.end(), in_shown_above_fold),
-      ranked.end());
-  return ranked.empty() ? "" : ranked.front();
+std::string LowestShown(const std::vector<std::string>& ranking,
+                        const std::map<std::string, int>& uses,
+                        size_t length) {
+  CHECK_GT(length, 0u);
+  std::vector<std::string> shown =
+      base::ToVector(base::span(ranking).first(length));
+  return !shown.empty() ? OrderByUses(shown, uses).back() : "";
 }
 
 void SwapRankingElement(std::vector<std::string>& ranking,
                         const std::string& from,
                         const std::string& to) {
-  DCHECK(RankingContains(ranking, from));
-  DCHECK(RankingContains(ranking, to));
+  auto from_loc = std::ranges::find(ranking, from);
+  auto to_loc = std::ranges::find(ranking, to);
 
-  auto from_loc = std::find(ranking.begin(), ranking.end(), from);
-  auto to_loc = std::find(ranking.begin(), ranking.end(), to);
+  CHECK(from_loc != ranking.end());
+  CHECK(to_loc != ranking.end());
+
   *from_loc = to;
   *to_loc = from;
 }
@@ -85,31 +111,54 @@ std::vector<std::string> ReplaceUnavailableEntries(
     const std::vector<std::string>& ranking,
     const std::vector<std::string>& available) {
   std::vector<std::string> result;
-  std::transform(ranking.begin(), ranking.end(), std::back_inserter(result),
-                 [&](const std::string& e) {
-                   return RankingContains(available, e) ? e : "";
-                 });
+  std::ranges::transform(
+      ranking, std::back_inserter(result), [&](const std::string& e) {
+        return std::ranges::contains(available, e) ? e : std::string();
+      });
   return result;
 }
 
 void FillGaps(std::vector<std::string>& ranking,
               const std::vector<std::string>& available,
-              unsigned int fold) {
-  std::vector<std::string> unused_available = available;
+              base::span<const std::string> old_above_fold,
+              size_t length) {
+  // Only above-the-fold slots have position stability. Harvest available
+  // candidates from below the fold first (in rank order), then remaining system
+  // apps (lowest priority targets like "Bluetooth").
+  auto above = base::span(ranking).first(old_above_fold.size());
+  std::vector<std::string> unused_available;
+  auto add_candidate = [&](const std::string& app) {
+    if (!app.empty() && !std::ranges::contains(above, app) &&
+        !std::ranges::contains(unused_available, app)) {
+      unused_available.push_back(app);
+    }
+  };
+  for (const auto& app : base::span(ranking).subspan(old_above_fold.size())) {
+    add_candidate(app);
+  }
+  for (const auto& app : available) {
+    add_candidate(app);
+  }
+  ranking.resize(old_above_fold.size());
+  ranking.resize(length);
 
-  unused_available.erase(
-      std::remove_if(unused_available.begin(), unused_available.end(),
-                     [&](const std::string& e) {
-                       return RankingContains(ranking, e, fold);
-                     }),
-      unused_available.end());
-  auto next_unused = unused_available.begin();
-
-  DCHECK_GE(ranking.size(), fold);
-
-  for (unsigned int i = 0; i < fold; ++i) {
-    if (ranking[i] == "" && *next_unused != "")
-      ranking[i] = *(next_unused++);
+  for (size_t i = 0; i < length; ++i) {
+    if (!ranking[i].empty()) {
+      continue;
+    }
+    auto it = unused_available.begin();
+    if (i < old_above_fold.size()) {
+      it = std::ranges::find(unused_available, old_above_fold[i]);
+      if (it == unused_available.end()) {
+        it = std::ranges::find_if(unused_available, [&](const std::string& c) {
+          return !std::ranges::contains(old_above_fold, c);
+        });
+      }
+    }
+    if (it != unused_available.end()) {
+      ranking[i] = std::move(*it);
+      unused_available.erase(it);
+    }
   }
 }
 
@@ -117,57 +166,96 @@ std::vector<std::string> MaybeUpdateRankingFromHistory(
     const std::vector<std::string>& old_ranking,
     const std::map<std::string, int>& recent_share_history,
     const std::map<std::string, int>& all_share_history,
-    unsigned int fold) {
-  const double RECENCY_WEIGHT = 2.0;
+    size_t length) {
   const double DAMPENING = 1.1;
 
-  const std::string lowest_shown = old_ranking[fold - 1];
+  if (length == 0) {
+    // Special case: if length is 0 here, the only thing that will be shown is
+    // the "More" tile, and the logic below to find lowest/highest within the
+    // first length tiles will all break. Bail out here.
+    return old_ranking;
+  }
+
+  const std::string lowest_shown_recent =
+      LowestShown(old_ranking, recent_share_history, length);
+  const std::string lowest_shown_all =
+      LowestShown(old_ranking, all_share_history, length);
   const std::string highest_unshown_recent =
-      HighestUnshown(old_ranking, recent_share_history, fold);
+      HighestUnshown(old_ranking, recent_share_history, length);
   const std::string highest_unshown_all =
-      HighestUnshown(old_ranking, all_share_history, fold);
+      HighestUnshown(old_ranking, all_share_history, length);
 
   std::vector<std::string> new_ranking = old_ranking;
 
-  if (highest_unshown_recent != "" &&
-      recent_share_history.at(highest_unshown_recent) * RECENCY_WEIGHT >
-          recent_share_history.at(lowest_shown) * DAMPENING) {
-    SwapRankingElement(new_ranking, lowest_shown, highest_unshown_recent);
-  } else if (highest_unshown_all != "" &&
-             all_share_history.at(highest_unshown_all) >
-                 all_share_history.at(lowest_shown) * DAMPENING) {
-    SwapRankingElement(new_ranking, lowest_shown, highest_unshown_all);
+  auto recent_count_for = [&](const std::string& key) {
+    if (auto it = recent_share_history.find(key);
+        it != recent_share_history.end()) {
+      return it->second;
+    }
+    return 0;
+  };
+
+  auto all_count_for = [&](const std::string& key) {
+    if (auto it = all_share_history.find(key); it != all_share_history.end()) {
+      return it->second;
+    }
+    return 0;
+  };
+
+  if (!highest_unshown_recent.empty() &&
+      recent_count_for(highest_unshown_recent) >
+          recent_count_for(lowest_shown_recent) * DAMPENING) {
+    SwapRankingElement(new_ranking, lowest_shown_recent,
+                       highest_unshown_recent);
+  } else if (!highest_unshown_all.empty() &&
+             all_count_for(highest_unshown_all) >
+                 all_count_for(lowest_shown_all) * DAMPENING) {
+    SwapRankingElement(new_ranking, lowest_shown_all, highest_unshown_all);
   }
 
-  DCHECK_EQ(old_ranking.size(), new_ranking.size());
+  CHECK_EQ(old_ranking.size(), new_ranking.size());
   return new_ranking;
 }
+
+#if BUILDFLAG(IS_ANDROID)
+void RunJniRankCallback(base::android::ScopedJavaGlobalRef<jobject> callback,
+                        JNIEnv* env,
+                        std::optional<ShareRanking::Ranking> ranking) {
+  auto result = base::android::ToJavaArrayOfStrings(env, ranking.value());
+  base::android::RunObjectCallbackAndroid(callback, result);
+}
+#endif
 
 #if DCHECK_IS_ON()
 bool EveryElementInList(const std::vector<std::string>& ranking,
                         const std::vector<std::string>& available) {
   for (const auto& e : ranking) {
-    if (!RankingContains(available, e))
+    if (!e.empty() && !std::ranges::contains(available, e)) {
       return false;
+    }
   }
   return true;
 }
 
 bool ElementIndexesAreUnchanged(const std::vector<std::string>& display,
                                 const std::vector<std::string>& old,
-                                unsigned int fold) {
-  for (unsigned int i = 0; i < display.size() && i < fold; ++i) {
-    if (RankingContains(old, display[i], fold) && display[i] != old[i])
+                                size_t length) {
+  for (size_t i = 0u; i < display.size() && i < length; ++i) {
+    if (!display[i].empty() &&
+        std::ranges::contains(base::span(old).subspan(/*offset=*/0u, length),
+                              display[i]) &&
+        display[i] != old[i]) {
       return false;
+    }
   }
   return true;
 }
 
 bool AtMostOneSlotChanged(const std::vector<std::string>& old_ranking,
                           const std::vector<std::string>& new_ranking,
-                          unsigned int fold) {
+                          size_t length) {
   bool change_seen = false;
-  for (unsigned int i = 0; i < old_ranking.size() && i < fold; ++i) {
+  for (size_t i = 0; i < old_ranking.size() && i < length; ++i) {
     if (old_ranking[i] != new_ranking[i]) {
       if (change_seen)
         return false;
@@ -178,16 +266,6 @@ bool AtMostOneSlotChanged(const std::vector<std::string>& old_ranking,
   return true;
 }
 
-bool NoEmptySlots(const std::vector<std::string>& display_ranking,
-                  unsigned int fold) {
-  if (display_ranking.size() < fold)
-    return false;
-  for (unsigned int i = 0; i < fold; i++) {
-    if (display_ranking[i] == "")
-      return false;
-  }
-  return true;
-}
 #endif  // DCHECK_IS_ON()
 
 std::map<std::string, int> BuildHistoryMap(
@@ -198,12 +276,33 @@ std::map<std::string, int> BuildHistoryMap(
   return result;
 }
 
-bool ShouldFixMore() {
-  // TODO(ellyjones): Add a field trial and wire it up here.
-  return true;
+std::vector<std::string> AddMissingItemsFromHistory(
+    const std::vector<std::string>& existing,
+    const std::map<std::string, int>& history) {
+  std::vector<std::string> updated = existing;
+  for (const auto& item : history) {
+    if (!std::ranges::contains(updated, item.first)) {
+      updated.push_back(item.first);
+    }
+  }
+  return updated;
 }
 
 }  // namespace
+
+ShareRanking* ShareRanking::Get(Profile* profile) {
+  if (profile->IsOffTheRecord())
+    return nullptr;
+
+  base::SupportsUserData::Data* instance =
+      profile->GetUserData(kShareRankingKey);
+  if (!instance) {
+    auto new_instance = std::make_unique<ShareRanking>(profile);
+    instance = new_instance.get();
+    profile->SetUserData(kShareRankingKey, std::move(new_instance));
+  }
+  return static_cast<ShareRanking*>(instance);
+}
 
 ShareRanking::ShareRanking(Profile* profile,
                            std::unique_ptr<BackingDb> backing_db)
@@ -236,15 +335,15 @@ void ShareRanking::GetRanking(const std::string& type,
   }
 
   if (db_init_status_ != leveldb_proto::Enums::kOK) {
-    base::SequencedTaskRunnerHandle::Get()->PostTask(
-        FROM_HERE, base::BindOnce(std::move(callback), absl::nullopt));
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback), std::nullopt));
     return;
   }
 
-  if (ranking_.contains(type)) {
-    base::SequencedTaskRunnerHandle::Get()->PostTask(
-        FROM_HERE, base::BindOnce(std::move(callback),
-                                  absl::make_optional(ranking_[type])));
+  if (auto it = ranking_.find(type); it != ranking_.end()) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(std::move(callback), std::make_optional(it->second)));
     return;
   }
 
@@ -256,13 +355,15 @@ void ShareRanking::GetRanking(const std::string& type,
 void ShareRanking::Rank(ShareHistory* history,
                         const std::string& type,
                         const std::vector<std::string>& available_on_system,
-                        unsigned int fold,
+                        size_t fold,
+                        size_t length,
                         bool persist_update,
                         GetRankingCallback callback) {
   auto pending_call = std::make_unique<PendingRankCall>();
   pending_call->type = type;
   pending_call->available_on_system = available_on_system;
   pending_call->fold = fold;
+  pending_call->length = length;
   pending_call->persist_update = persist_update;
   pending_call->callback = std::move(callback);
   pending_call->history_db = history->GetWeakPtr();
@@ -272,48 +373,78 @@ void ShareRanking::Rank(ShareHistory* history,
                                               std::move(pending_call)));
 }
 
+void ShareRanking::Clear(const base::Time& start, const base::Time& end) {
+  // Since the ranking doesn't contain timestamps (they wouldn't really make
+  // sense), there's no way to remove only ranking data that came from the
+  // specified deletion interval. Instead, we forget all the ranking data
+  // altogether whenever we're clearing any interval - this almost always
+  // over-deletes, unfortunately.
+  ranking_.clear();
+  db_->UpdateEntriesWithRemoveFilter(
+      std::make_unique<BackingDb::KeyEntryVector>(),
+      base::BindRepeating([](const std::string& key) -> bool { return true; }),
+      base::DoNothing());
+}
+
 // static
 void ShareRanking::ComputeRanking(
     const std::map<std::string, int>& all_share_history,
     const std::map<std::string, int>& recent_share_history,
     const Ranking& old_ranking,
     const std::vector<std::string>& available_on_system,
-    unsigned int fold,
-    bool fix_more,
+    size_t fold,
+    size_t length,
     Ranking* display_ranking,
     Ranking* persisted_ranking) {
   // Preconditions:
-  DCHECK_GE(old_ranking.size(), fold);
-  DCHECK_GE(available_on_system.size(), fold);
+  CHECK_GT(fold, 0u);
+  CHECK_GT(length, 0u);
+  CHECK_LE(fold, length);
+  CHECK_GE(old_ranking.size(), length - 1);
 
-  std::vector<std::string> new_ranking = MaybeUpdateRankingFromHistory(
-      old_ranking, all_share_history, recent_share_history, fold);
+  const size_t above_fold = std::min(fold, length - 1);
+
+  Ranking augmented_old_ranking = AddMissingItemsFromHistory(
+      AddMissingItemsFromHistory(old_ranking, all_share_history),
+      recent_share_history);
+
+  std::vector<std::string> new_ranking =
+      MaybeUpdateRankingFromHistory(augmented_old_ranking, recent_share_history,
+                                    all_share_history, above_fold);
 
   Ranking computed_display_ranking =
       ReplaceUnavailableEntries(new_ranking, available_on_system);
 
-  FillGaps(computed_display_ranking, available_on_system, fold);
+  FillGaps(computed_display_ranking, available_on_system,
+           base::span(old_ranking).first(above_fold), length - 1);
 
-  computed_display_ranking.resize(fold);
-
-  if (fix_more)
-    computed_display_ranking[fold - 1] = kMoreTarget;
+  computed_display_ranking.resize(length);
+  computed_display_ranking[length - 1] = kMoreTarget;
 
   *persisted_ranking = new_ranking;
   *display_ranking = computed_display_ranking;
 
-  // Postconditions:
+  // Postconditions. These ones require a bunch of computation so they're
+  // DCHECK-only.
 #if DCHECK_IS_ON()
   {
     std::vector<std::string> available = available_on_system;
     available.push_back(kMoreTarget);
 
-    DCHECK(EveryElementInList(*display_ranking, available));
-    DCHECK(ElementIndexesAreUnchanged(*display_ranking, old_ranking, fold));
-    DCHECK(AtMostOneSlotChanged(old_ranking, *persisted_ranking, fold));
-    DCHECK(NoEmptySlots(*display_ranking, fold));
+    CHECK(EveryElementInList(*display_ranking, available),
+          base::NotFatalUntil::M163);
+    CHECK(ElementIndexesAreUnchanged(*display_ranking, old_ranking, above_fold),
+          base::NotFatalUntil::M163);
+    CHECK(AtMostOneSlotChanged(old_ranking, *persisted_ranking, above_fold),
+          base::NotFatalUntil::M163);
+
+    CHECK(std::ranges::contains(*display_ranking, kMoreTarget),
+          base::NotFatalUntil::M163);
   }
 #endif  // DCHECK_IS_ON()
+
+  CHECK_EQ(display_ranking->size(), length);
+  CHECK_GE(persisted_ranking->size(), length - 1);
 }
 
 ShareRanking::PendingRankCall::PendingRankCall() = default;
@@ -336,7 +467,7 @@ void ShareRanking::OnBackingGetDone(
     bool ok,
     std::unique_ptr<proto::ShareRanking> ranking) {
   if (!ok || db_init_status_ != leveldb_proto::Enums::kOK || !ranking) {
-    std::move(callback).Run(absl::nullopt);
+    std::move(callback).Run(std::nullopt);
     return;
   }
 
@@ -345,7 +476,7 @@ void ShareRanking::OnBackingGetDone(
     ranking_[key].push_back(it);
   }
 
-  std::move(callback).Run(absl::make_optional(ranking_[key]));
+  std::move(callback).Run(std::make_optional(ranking_[key]));
 }
 
 void ShareRanking::FlushToBackingDb(const std::string& key) {
@@ -365,32 +496,35 @@ void ShareRanking::OnRankGetAllDone(std::unique_ptr<PendingRankCall> pending,
                                     std::vector<ShareHistory::Target> history) {
   pending->all_history = history;
   if (pending->history_db) {
-    pending->history_db->GetFlatShareHistory(
+    auto history_db = pending->history_db;
+    history_db->GetFlatShareHistory(
         base::BindOnce(&ShareRanking::OnRankGetRecentDone,
                        weak_factory_.GetWeakPtr(), std::move(pending)),
         kRecentWindowDays);
   } else {
-    std::move(pending->callback).Run(absl::nullopt);
+    std::move(pending->callback).Run(std::nullopt);
   }
 }
 void ShareRanking::OnRankGetRecentDone(
     std::unique_ptr<PendingRankCall> pending,
     std::vector<ShareHistory::Target> history) {
   pending->recent_history = history;
-  GetRanking(pending->type,
+  // Grab the type out of pending before std::move()ing from it.
+  std::string type = pending->type;
+  GetRanking(type,
              base::BindOnce(&ShareRanking::OnRankGetOldRankingDone,
                             weak_factory_.GetWeakPtr(), std::move(pending)));
 }
 void ShareRanking::OnRankGetOldRankingDone(
     std::unique_ptr<PendingRankCall> pending,
-    absl::optional<Ranking> ranking) {
+    std::optional<Ranking> ranking) {
   if (!ranking)
-    ranking = GetDefaultInitialRanking();
+    ranking = GetDefaultInitialRankingForType(pending->type);
 
   Ranking display, persisted;
   ComputeRanking(BuildHistoryMap(pending->all_history),
                  BuildHistoryMap(pending->recent_history), *ranking,
-                 pending->available_on_system, pending->fold, ShouldFixMore(),
+                 pending->available_on_system, pending->fold, pending->length,
                  &display, &persisted);
 
   if (pending->persist_update)
@@ -399,10 +533,65 @@ void ShareRanking::OnRankGetOldRankingDone(
   std::move(pending->callback).Run(display);
 }
 
-ShareRanking::Ranking ShareRanking::GetDefaultInitialRanking() {
-  // TODO(https://crbug.com/1222156): Use default per-locale ranking values
-  // rather than an empty list.
-  return initial_ranking_for_test_.value_or(Ranking{});
+ShareRanking::Ranking ShareRanking::GetDefaultInitialRankingForType(
+    const std::string& type) {
+#if BUILDFLAG(IS_ANDROID)
+  // On Android, just use the app's default locale string - we don't have a pref
+  // locale to consult regardless, and l10n_util::GetApplicationLocale can do
+  // blocking disk IO (!) while it checks whether we have a string pack for the
+  // various eligible locales. We don't care about strings here, so just go with
+  // what the system is set to, and don't block on the UI thread.
+  std::string locale =
+      std::string(base::i18n::GetAndroidDefaultLocale().tag_string());
+#else
+  std::string locale = l10n_util::GetApplicationLocale("", false);
+#endif
+  return initial_ranking_for_test_.value_or(
+      DefaultRankingForLocaleAndType(locale, type));
 }
 
 }  // namespace sharing
+
+#if BUILDFLAG(IS_ANDROID)
+
+static void JNI_ShareRankingBridge_Rank(
+    JNIEnv* env,
+    Profile* profile,
+    const std::string& type,
+    const std::vector<std::string>& available,
+    int32_t jfold,
+    int32_t jlength,
+    bool jpersist,
+    const JavaRef<jobject>& jcallback) {
+  base::android::ScopedJavaGlobalRef<jobject> callback(jcallback);
+
+  if (profile->IsOffTheRecord()) {
+    // For incognito/guest profiles, we use the source ranking from the parent
+    // normal profile but never write anything back to that profile, meaning the
+    // user will get their existing ranking but no change to it will be made
+    // based on incognito activity.
+    CHECK(!jpersist);
+    profile = profile->GetOriginalProfile();
+  }
+
+  auto* history = sharing::ShareHistory::Get(profile);
+  auto* ranking = sharing::ShareRanking::Get(profile);
+
+  CHECK(history);
+  CHECK(ranking);
+
+  size_t fold = base::checked_cast<size_t>(jfold);
+  size_t length = base::checked_cast<size_t>(jlength);
+
+  ranking->Rank(
+      history, type, available, fold, length, jpersist,
+      base::BindOnce(&sharing::RunJniRankCallback, std::move(callback),
+                     // TODO(ellyjones): Is it safe to unretained env here?
+                     base::Unretained(env)));
+}
+
+#endif  // BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_ANDROID)
+DEFINE_JNI(ShareRankingBridge)
+#endif

@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,6 +11,9 @@
 
 #include "chrome/browser/extensions/activity_log/activity_database.h"
 #include "chrome/browser/extensions/activity_log/activity_log_policy.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 class GURL;
 
@@ -53,12 +56,6 @@ class FullStreamUIPolicy : public ActivityLogDatabasePolicy {
 
   // Delete everything in the database.
   void DeleteDatabase() override;
-
-  // Database table schema.
-  static const char kTableName[];
-  static const char* const kTableContentFields[];
-  static const char* const kTableFieldTypes[];
-  static const int kTableFieldCount;
 
  protected:
   // Only ever run by OnDatabaseClose() below; see the comments on the

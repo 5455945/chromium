@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,8 @@
 
 #include <stddef.h>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "media/base/media_resource.h"
 #include "media/mojo/services/mojo_demuxer_stream_adapter.h"
@@ -25,10 +25,14 @@ class MediaResourceShim : public MediaResource {
   MediaResourceShim(
       std::vector<mojo::PendingRemote<mojom::DemuxerStream>> streams,
       base::OnceClosure demuxer_ready_cb);
+
+  MediaResourceShim(const MediaResourceShim&) = delete;
+  MediaResourceShim& operator=(const MediaResourceShim&) = delete;
+
   ~MediaResourceShim() override;
 
   // MediaResource interface.
-  std::vector<DemuxerStream*> GetAllStreams() override;
+  std::vector<raw_ptr<DemuxerStream>> GetAllStreams() override;
 
  private:
   // Called as each mojom::DemuxerStream becomes ready.  Once all streams
@@ -48,8 +52,6 @@ class MediaResourceShim : public MediaResource {
 
   // WeakPtrFactorys must always be the last member variable.
   base::WeakPtrFactory<MediaResourceShim> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(MediaResourceShim);
 };
 
 }  // namespace media

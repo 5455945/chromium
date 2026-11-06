@@ -1,37 +1,42 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/scanning/scan_service.h"
 
 #include <cstdint>
+#include <optional>
+#include <string>
 #include <utility>
 
 #include "ash/constants/ash_features.h"
+#include "ash/webui/scanning/mojom/scanning_mojom_traits.h"
 #include "ash/webui/scanning/scanning_uma.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/check.h"
 #include "base/check_op.h"
+#include "base/containers/span.h"
 #include "base/feature_list.h"
+#include "base/files/file.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
+#include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
-#include "base/sequenced_task_runner.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
-#include "base/task_runner_util.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/scanning/lorgnette_scanner_manager.h"
-#include "chrome/browser/ash/scanning/scanning_type_converters.h"
+#include "chrome/browser/ash/scanning/scanning_file_path_helper.h"
 #include "chrome/browser/ui/ash/holding_space/holding_space_keyed_service.h"
 #include "chrome/browser/ui/ash/holding_space/holding_space_keyed_service_factory.h"
 #include "chromeos/utils/pdf_conversion.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "third_party/re2/src/re2/re2.h"
+#include "mojo/public/cpp/bindings/enum_traits.h"
+#include "mojo/public/cpp/bindings/struct_traits.h"
 
 namespace ash {
 
@@ -42,19 +47,22 @@ namespace mojo_ipc = scanning::mojom;
 // The max progress percent that can be reported for a scanned page.
 constexpr uint32_t kMaxProgressPercent = 100;
 
+// The number of minutes to wait before the scan times out and is canceled.
+constexpr base::TimeDelta kTimeout = base::Minutes(15);
+
 // Creates a filename for a scanned image using |start_time|, |page_number|, and
 // |file_ext|.
-std::string CreateFilename(const base::Time::Exploded& start_time,
+std::string CreateFilename(const base::Time& start_time,
                            uint32_t page_number,
                            const mojo_ipc::FileType file_type) {
+  base::Time::Exploded exploded;
+  start_time.LocalExplode(&exploded);
+  const std::string timestamp = base::StringPrintf(
+      "%02d%02d%02d-%02d%02d%02d", exploded.year % 100, exploded.month,
+      exploded.day_of_month, exploded.hour, exploded.minute, exploded.second);
+
   std::string file_ext;
   switch (file_type) {
-    case mojo_ipc::FileType::kSearchablePdf:
-      DCHECK(base::FeatureList::IsEnabled(
-          chromeos::features::kScanAppSearchablePdf));
-      // Temporarily set searchable pdfs to follow png pipeline while
-      // implementing.
-      FALLTHROUGH;
     case mojo_ipc::FileType::kPng:
       file_ext = "png";
       break;
@@ -63,23 +71,25 @@ std::string CreateFilename(const base::Time::Exploded& start_time,
       break;
     case mojo_ipc::FileType::kPdf:
       // The filename of a PDF doesn't include the page number.
-      return base::StringPrintf("scan_%02d%02d%02d-%02d%02d%02d.pdf",
-                                start_time.year, start_time.month,
-                                start_time.day_of_month, start_time.hour,
-                                start_time.minute, start_time.second);
+      return base::StringPrintf("scan_%s.pdf", timestamp.c_str());
   }
 
-  return base::StringPrintf(
-      "scan_%02d%02d%02d-%02d%02d%02d_%d.%s", start_time.year, start_time.month,
-      start_time.day_of_month, start_time.hour, start_time.minute,
-      start_time.second, page_number, file_ext.c_str());
+  return base::StringPrintf("scan_%s_%d.%s", timestamp.c_str(), page_number,
+                            file_ext.c_str());
 }
 
 // Helper function that writes |scanned_image| to |file_path|.
 // Returns whether the image was successfully written.
 bool WriteImage(const base::FilePath& file_path,
                 const std::string& scanned_image) {
-  if (!base::WriteFile(file_path, scanned_image)) {
+  // SECURITY: open with FLAG_CREATE (O_CREAT | O_EXCL) instead of
+  // base::WriteFile (creat(), which follows symlinks and truncates the
+  // target). O_EXCL fails if any directory entry - including a symlink
+  // planted in a guest-shared folder - already exists at |file_path|, and
+  // never follows a symlink in the final path component.
+  base::File file(file_path, base::File::FLAG_CREATE | base::File::FLAG_WRITE);
+  if (!file.IsValid() ||
+      !file.WriteAndCheck(0, base::as_byte_span(scanned_image))) {
     LOG(ERROR) << "Failed to save scanned image: " << file_path.value().c_str();
     return false;
   }
@@ -92,9 +102,41 @@ bool WriteImage(const base::FilePath& file_path,
 // Returns whether the PDF was successfully saved.
 bool SaveAsPdf(const std::vector<std::string>& jpg_images,
                const base::FilePath& file_path,
-               bool rotate_alternate_pages) {
-  return chromeos::ConvertJpgImagesToPdf(jpg_images, file_path,
-                                         rotate_alternate_pages);
+               bool rotate_alternate_pages,
+               bool is_multi_page_scan,
+               std::optional<int> dpi) {
+  size_t total_image_size = 0;
+  for (const std::string& image : jpg_images) {
+    total_image_size += image.size();
+  }
+  base::UmaHistogramCounts1M(
+      is_multi_page_scan
+          ? "Scanning.MultiPageScan.CombinedImageSizeInKbBeforePdf"
+          : "Scanning.CombinedImageSizeInKbBeforePdf",
+      total_image_size / 1024);
+
+  // SECURITY: create the destination exclusively (O_CREAT | O_EXCL) before
+  // handing the path to ConvertJpgImagesToPdf, whose SkFILEWStream opens
+  // with fopen("wb") (follows symlinks and truncates). This fails the scan
+  // if any directory entry - including a symlink planted in a guest-shared
+  // folder - already exists at |file_path|, instead of following it.
+  {
+    base::File pdf_file(file_path,
+                        base::File::FLAG_CREATE | base::File::FLAG_WRITE);
+    if (!pdf_file.IsValid()) {
+      LOG(ERROR) << "Failed to create PDF file: " << file_path.value().c_str();
+      return false;
+    }
+  }
+
+  const base::TimeTicks pdf_start_time = base::TimeTicks::Now();
+  const bool pdf_saved = chromeos::ConvertJpgImagesToPdf(
+      jpg_images, file_path, rotate_alternate_pages, dpi);
+  base::UmaHistogramTimes(is_multi_page_scan
+                              ? "Scanning.MultiPageScan.PDFGenerationTime"
+                              : "Scanning.PDFGenerationTime",
+                          base::TimeTicks::Now() - pdf_start_time);
+  return pdf_saved;
 }
 
 // Saves |scanned_image| to a file after converting it if necessary. Returns the
@@ -103,7 +145,7 @@ base::FilePath SavePage(const base::FilePath& scan_to_path,
                         const mojo_ipc::FileType file_type,
                         std::string scanned_image,
                         uint32_t page_number,
-                        const base::Time::Exploded& start_time) {
+                        const base::Time& start_time) {
   std::string filename = CreateFilename(start_time, page_number, file_type);
   if (!WriteImage(scan_to_path.Append(filename), scanned_image))
     return base::FilePath();
@@ -131,14 +173,13 @@ scanning::ScanJobFailureReason GetScanJobFailureReason(
     case lorgnette::ScanFailureMode_INT_MIN_SENTINEL_DO_NOT_USE_:
     case lorgnette::ScanFailureMode_INT_MAX_SENTINEL_DO_NOT_USE_:
       NOTREACHED();
-      return scanning::ScanJobFailureReason::kUnknownScannerError;
   }
 }
 
 // Records the histograms based on the scan job result.
 void RecordScanJobResult(
     bool success,
-    const absl::optional<scanning::ScanJobFailureReason>& failure_reason,
+    const std::optional<scanning::ScanJobFailureReason>& failure_reason,
     int num_files_created,
     int num_pages_scanned) {
   base::UmaHistogramBoolean("Scanning.ScanJobSuccessful", success);
@@ -154,6 +195,15 @@ void RecordScanJobResult(
   }
 }
 
+std::unique_ptr<device::PowerSaveBlocker> RequestWakeLock(
+    const std::string& description) {
+  return std::make_unique<device::PowerSaveBlocker>(
+      /*type=*/device::mojom::WakeLockType::kPreventDisplaySleepAllowDimming,
+      /*reason=*/device::mojom::WakeLockReason::kOther,
+      /*description=*/description,
+      /*ui_task_runner=*/base::SequencedTaskRunner::GetCurrentDefault());
+}
+
 }  // namespace
 
 ScanService::ScanService(LorgnetteScannerManager* lorgnette_scanner_manager,
@@ -161,14 +211,14 @@ ScanService::ScanService(LorgnetteScannerManager* lorgnette_scanner_manager,
                          base::FilePath google_drive_path,
                          content::BrowserContext* context)
     : lorgnette_scanner_manager_(lorgnette_scanner_manager),
-      my_files_path_(std::move(my_files_path)),
-      google_drive_path_(std::move(google_drive_path)),
       context_(context),
       task_runner_(base::ThreadPool::CreateSequencedTaskRunner(
           {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
-           base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN})) {
-  DCHECK(lorgnette_scanner_manager_);
-  DCHECK(context_);
+           base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN})),
+      file_path_helper_(std::move(google_drive_path),
+                        std::move(my_files_path)) {
+  CHECK(lorgnette_scanner_manager_, base::NotFatalUntil::M160);
+  CHECK(context_, base::NotFatalUntil::M160);
 }
 
 ScanService::~ScanService() = default;
@@ -200,73 +250,198 @@ void ScanService::StartScan(
     mojo_ipc::ScanSettingsPtr settings,
     mojo::PendingRemote<mojo_ipc::ScanJobObserver> observer,
     StartScanCallback callback) {
-  const std::string scanner_name = GetScannerName(scanner_id);
-  if (scanner_name.empty()) {
-    std::move(callback).Run(false);
-    RecordScanJobResult(false, scanning::ScanJobFailureReason::kScannerNotFound,
-                        /*not used*/ 0, /*not used*/ 0);
+  ClearScanState();
+  SetScanJobObserver(std::move(observer));
+
+  wake_lock_ = RequestWakeLock("Scan Job in Progress");
+
+  std::move(callback).Run(SendScanRequest(
+      scanner_id, std::move(settings), /*page_index_to_replace=*/std::nullopt,
+      base::BindOnce(&ScanService::OnScanCompleted,
+                     weak_ptr_factory_.GetWeakPtr(),
+                     /*is_multi_page_scan=*/false)));
+}
+
+void ScanService::StartMultiPageScan(
+    const base::UnguessableToken& scanner_id,
+    scanning::mojom::ScanSettingsPtr settings,
+    mojo::PendingRemote<scanning::mojom::ScanJobObserver> observer,
+    StartMultiPageScanCallback callback) {
+  if (multi_page_controller_receiver_.is_bound()) {
+    LOG(ERROR) << "Unable to start multi-page scan, controller already bound.";
+    std::move(callback).Run(mojo::NullRemote());
     return;
   }
 
-  // Determine if an ADF scanner that flips alternate pages was selected.
-  rotate_alternate_pages_ =
-      RE2::PartialMatch(scanner_name, RE2("([Ee][Pp][Ss][Oo][Nn])(.*)")) &&
-      RE2::PartialMatch(settings->source_name,
-                        RE2("([Aa][Dd][Ff] [Dd][Uu][Pp][Ll][Ee][Xx])"));
+  ClearScanState();
+  SetScanJobObserver(std::move(observer));
 
-  if (!FilePathSupported(settings->scan_to_path)) {
-    std::move(callback).Run(false);
+  wake_lock_ = RequestWakeLock("Multi Page Scan in Progress");
+
+  const bool success = SendScanRequest(
+      scanner_id, std::move(settings), /*page_index_to_replace=*/std::nullopt,
+      base::BindOnce(&ScanService::OnMultiPageScanPageCompleted,
+                     weak_ptr_factory_.GetWeakPtr()));
+  if (!success) {
+    std::move(callback).Run(mojo::NullRemote());
+    return;
+  }
+
+  mojo::PendingRemote<scanning::mojom::MultiPageScanController> pending_remote =
+      multi_page_controller_receiver_.BindNewPipeAndPassRemote();
+  // This allows a multi-page scan session to be cancelled by resetting the
+  // message pipe.
+  multi_page_controller_receiver_.set_disconnect_handler(
+      base::BindOnce(&ScanService::ResetMultiPageScanController,
+                     weak_ptr_factory_.GetWeakPtr()));
+  std::move(callback).Run(std::move(pending_remote));
+
+  multi_page_start_time_ = base::TimeTicks::Now();
+}
+
+bool ScanService::SendScanRequest(
+    const base::UnguessableToken& scanner_id,
+    mojo_ipc::ScanSettingsPtr settings,
+    const std::optional<uint32_t> page_index_to_replace,
+    base::OnceCallback<void(lorgnette::ScanFailureMode failure_mode)>
+        completion_callback) {
+  const std::string scanner_name = GetScannerName(scanner_id);
+  if (scanner_name.empty()) {
+    RecordScanJobResult(false, scanning::ScanJobFailureReason::kScannerNotFound,
+                        /*not used*/ 0, /*not used*/ 0);
+    return false;
+  }
+
+  if (!file_path_helper_.IsFilePathSupported(settings->scan_to_path)) {
     RecordScanJobResult(false,
                         scanning::ScanJobFailureReason::kUnsupportedScanToPath,
                         /*not used*/ 0, /*not used*/ 0);
-    return;
+    return false;
   }
 
-  scan_job_observer_.reset();
-  scan_job_observer_.Bind(std::move(observer));
-  // Unretained is safe here, because `this` owns `scan_job_observer_`, and no
-  // reply callbacks will be invoked once the mojo::Remote is destroyed.
-  scan_job_observer_.set_disconnect_handler(
-      base::BindOnce(&ScanService::CancelScan, base::Unretained(this)));
+  // Determine if an ADF scanner that flips alternate pages was selected.
+  rotate_alternate_pages_ = lorgnette_scanner_manager_->IsRotateAlternate(
+      scanner_name, settings->source_name);
 
-  base::Time::Now().LocalExplode(&start_time_);
-  ClearScanState();
+  // Save the DPI information for the scan.
+  scan_dpi_ = settings->resolution_dpi;
+
+  // If this callback is called, `is_multi_page_scan` does not matter.
+  // Always setting it to false here makes it simpler.
+  timeout_callback_.Reset(base::BindOnce(
+      &ScanService::OnScanCompleted, weak_ptr_factory_.GetWeakPtr(),
+      /*is_multi_page_scan=*/false, lorgnette::SCAN_FAILURE_MODE_IO_ERROR));
+  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE, timeout_callback_.callback(), kTimeout);
+
+  start_time_ = base::Time::Now();
   lorgnette_scanner_manager_->Scan(
-      scanner_name, mojo::ConvertTo<lorgnette::ScanSettings>(settings),
+      scanner_name,
+      mojo::StructTraits<lorgnette::ScanSettings,
+                         mojo_ipc::ScanSettingsPtr>::ToMojom(settings),
       base::BindRepeating(&ScanService::OnProgressPercentReceived,
                           weak_ptr_factory_.GetWeakPtr()),
-      base::BindRepeating(&ScanService::OnPageReceived,
-                          weak_ptr_factory_.GetWeakPtr(),
-                          settings->scan_to_path, settings->file_type),
-      base::BindOnce(&ScanService::OnScanCompleted,
-                     weak_ptr_factory_.GetWeakPtr()));
-  std::move(callback).Run(true);
+      base::BindRepeating(
+          &ScanService::OnPageReceived, weak_ptr_factory_.GetWeakPtr(),
+          settings->scan_to_path, settings->file_type, page_index_to_replace),
+      std::move(completion_callback));
+  return true;
 }
 
 void ScanService::CancelScan() {
+  // In case the user cancels, we don't want to cancel again in the future.
+  timeout_callback_.Cancel();
   lorgnette_scanner_manager_->CancelScan(base::BindOnce(
       &ScanService::OnCancelCompleted, weak_ptr_factory_.GetWeakPtr()));
 }
 
+void ScanService::ScanNextPage(const base::UnguessableToken& scanner_id,
+                               scanning::mojom::ScanSettingsPtr settings,
+                               ScanNextPageCallback callback) {
+  std::move(callback).Run(SendScanRequest(
+      scanner_id, std::move(settings), /*page_index_to_replace=*/std::nullopt,
+      base::BindOnce(&ScanService::OnMultiPageScanPageCompleted,
+                     weak_ptr_factory_.GetWeakPtr())));
+}
+
+void ScanService::RemovePage(uint32_t page_index) {
+  if (page_index >= scanned_images_.size()) {
+    multi_page_controller_receiver_.ReportBadMessage(
+        "Invalid page_index passed to ScanService::RemovePage()");
+    return;
+  }
+
+  if (scanned_images_.size() == 0) {
+    multi_page_controller_receiver_.ReportBadMessage(
+        "Invalid call to ScanService::RemovePage(), no scanned images "
+        "available to remove");
+    return;
+  }
+
+  base::UmaHistogramEnumeration(
+      "Scanning.MultiPageScan.ToolbarAction",
+      scanning::ScanMultiPageToolbarAction::kRemovePage);
+  if (scanned_images_.size() == 1) {
+    ClearScanState();
+    multi_page_controller_receiver_.reset();
+    return;
+  }
+
+  scanned_images_.erase(scanned_images_.begin() + page_index);
+  --num_pages_scanned_;
+}
+
+void ScanService::RescanPage(const base::UnguessableToken& scanner_id,
+                             scanning::mojom::ScanSettingsPtr settings,
+                             uint32_t page_index,
+                             ScanNextPageCallback callback) {
+  if (scanned_images_.size() == 0) {
+    multi_page_controller_receiver_.ReportBadMessage(
+        "Invalid call to ScanService::RescanPage(), no scanned images "
+        "available to rescan");
+    return;
+  }
+
+  if (page_index >= scanned_images_.size()) {
+    multi_page_controller_receiver_.ReportBadMessage(
+        "Invalid page_index passed to ScanService::RescanPage()");
+    return;
+  }
+
+  std::move(callback).Run(
+      SendScanRequest(scanner_id, std::move(settings), page_index,
+                      base::BindOnce(&ScanService::OnMultiPageScanPageCompleted,
+                                     weak_ptr_factory_.GetWeakPtr())));
+  base::UmaHistogramEnumeration(
+      "Scanning.MultiPageScan.ToolbarAction",
+      scanning::ScanMultiPageToolbarAction::kRescanPage);
+}
+
+void ScanService::CompleteMultiPageScan() {
+  OnScanCompleted(/*is_multi_page_scan=*/true,
+                  lorgnette::SCAN_FAILURE_MODE_NO_FAILURE);
+  base::UmaHistogramCounts100("Scanning.MultiPageScan.NumPagesScanned",
+                              num_pages_scanned_);
+  base::UmaHistogramLongTimes100(
+      "Scanning.MultiPageScan.SessionDuration",
+      base::TimeTicks::Now() - multi_page_start_time_);
+  multi_page_start_time_ = base::TimeTicks();
+  multi_page_controller_receiver_.reset();
+}
+
 void ScanService::BindInterface(
     mojo::PendingReceiver<mojo_ipc::ScanService> pending_receiver) {
+  receiver_.reset();
   receiver_.Bind(std::move(pending_receiver));
 }
 
-void ScanService::SetGoogleDrivePathForTesting(
-    const base::FilePath& google_drive_path) {
-  google_drive_path_ = google_drive_path;
-}
-
-void ScanService::SetMyFilesPathForTesting(
-    const base::FilePath& my_files_path) {
-  my_files_path_ = my_files_path;
-}
-
 void ScanService::Shutdown() {
+  timeout_callback_.Cancel();
   lorgnette_scanner_manager_ = nullptr;
   receiver_.reset();
+  multi_page_controller_receiver_.reset();
   weak_ptr_factory_.InvalidateWeakPtrs();
+  wake_lock_.reset();
 }
 
 void ScanService::OnScannerNamesReceived(
@@ -289,7 +464,7 @@ void ScanService::OnScannerNamesReceived(
 
 void ScanService::OnScannerCapabilitiesReceived(
     GetScannerCapabilitiesCallback callback,
-    const absl::optional<lorgnette::ScannerCapabilities>& capabilities) {
+    const std::optional<lorgnette::ScannerCapabilities>& capabilities) {
   if (!capabilities) {
     LOG(ERROR) << "Failed to get scanner capabilities.";
     std::move(callback).Run(mojo_ipc::ScannerCapabilities::New());
@@ -309,79 +484,132 @@ void ScanService::OnScannerCapabilitiesReceived(
   }
 
   std::move(callback).Run(
-      mojo::ConvertTo<mojo_ipc::ScannerCapabilitiesPtr>(capabilities.value()));
+      mojo::StructTraits<
+          ash::scanning::mojom::ScannerCapabilitiesPtr,
+          lorgnette::ScannerCapabilities>::ToMojom(capabilities.value()));
 }
 
 void ScanService::OnProgressPercentReceived(uint32_t progress_percent,
                                             uint32_t page_number) {
-  DCHECK_LE(progress_percent, kMaxProgressPercent);
+  CHECK_LE(progress_percent, kMaxProgressPercent, base::NotFatalUntil::M160);
   scan_job_observer_->OnPageProgress(page_number, progress_percent);
 }
 
-void ScanService::OnPageReceived(const base::FilePath& scan_to_path,
-                                 const mojo_ipc::FileType file_type,
-                                 std::string scanned_image,
-                                 uint32_t page_number) {
+void ScanService::OnPageReceived(
+    const base::FilePath& scan_to_path,
+    const mojo_ipc::FileType file_type,
+    const std::optional<uint32_t> page_index_to_replace,
+    std::string scanned_image,
+    uint32_t page_number) {
+  timeout_callback_.Cancel();
   // TODO(b/172670649): Update LorgnetteManagerClient to pass scan data as a
   // vector.
   // In case the last reported progress percent was less than 100, send one
   // final progress event before the page complete event.
   scan_job_observer_->OnPageProgress(page_number, kMaxProgressPercent);
+
+  uint32_t new_page_index;
+  if (file_type == mojo_ipc::FileType::kPdf) {
+    new_page_index = page_index_to_replace.has_value()
+                         ? page_index_to_replace.value()
+                         : scanned_images_.size();
+  } else {
+    // Non-PDF scans do not save images in |scanned_images_| so the next index
+    // is based off |page_number|.
+    CHECK(!page_index_to_replace.has_value(), base::NotFatalUntil::M160);
+    new_page_index = page_number - 1;
+  }
   scan_job_observer_->OnPageComplete(
-      std::vector<uint8_t>(scanned_image.begin(), scanned_image.end()));
-  ++num_pages_scanned_;
+      std::vector<uint8_t>(scanned_image.begin(), scanned_image.end()),
+      new_page_index);
+
+  // Only increment the |num_pages_scanned_| tracker if appending, not
+  // replacing, a page.
+  if (!page_index_to_replace.has_value()) {
+    ++num_pages_scanned_;
+  }
 
   // If the selected file type is PDF, the PDF will be created after all the
   // scanned images are received.
   if (file_type == mojo_ipc::FileType::kPdf) {
-    scanned_images_.push_back(std::move(scanned_image));
+    if (!page_index_to_replace.has_value()) {
+      scanned_images_.push_back(std::move(scanned_image));
+    } else {
+      // TODO(crbug.com/578890935): CHECK-exclusion: Convert to a CHECK once we
+      // are confident it won't be triggered.
+      DCHECK(page_index_to_replace.value() >= 0 &&
+             page_index_to_replace.value() < scanned_images_.size());
+      scanned_images_[page_index_to_replace.value()] = std::move(scanned_image);
+    }
 
     // The output of multi-page PDF scans is a single file so only create and
     // append a single file path.
     if (scanned_file_paths_.empty()) {
-      DCHECK_EQ(1, page_number);
+      CHECK_EQ(1u, page_number, base::NotFatalUntil::M160);
       scanned_file_paths_.push_back(scan_to_path.Append(CreateFilename(
           start_time_, /*not used*/ 0, mojo_ipc::FileType::kPdf)));
     }
     return;
   }
 
-  base::PostTaskAndReplyWithResult(
-      task_runner_.get(), FROM_HERE,
+  task_runner_->PostTaskAndReplyWithResult(
+      FROM_HERE,
       base::BindOnce(&SavePage, scan_to_path, file_type,
                      std::move(scanned_image), page_number, start_time_),
       base::BindOnce(&ScanService::OnPageSaved,
                      weak_ptr_factory_.GetWeakPtr()));
 }
 
-void ScanService::OnScanCompleted(lorgnette::ScanFailureMode failure_mode) {
+void ScanService::OnScanCompleted(bool is_multi_page_scan,
+                                  lorgnette::ScanFailureMode failure_mode) {
   // |scanned_images_| only has data for PDF scans.
   if (failure_mode == lorgnette::SCAN_FAILURE_MODE_NO_FAILURE &&
       !scanned_images_.empty()) {
-    DCHECK(!scanned_file_paths_.empty());
-    base::PostTaskAndReplyWithResult(
-        task_runner_.get(), FROM_HERE,
+    CHECK(!scanned_file_paths_.empty(), base::NotFatalUntil::M160);
+    timeout_callback_.Cancel();
+    task_runner_->PostTaskAndReplyWithResult(
+        FROM_HERE,
         base::BindOnce(&SaveAsPdf, scanned_images_, scanned_file_paths_.back(),
-                       rotate_alternate_pages_),
+                       rotate_alternate_pages_, is_multi_page_scan, scan_dpi_),
         base::BindOnce(&ScanService::OnPdfSaved,
                        weak_ptr_factory_.GetWeakPtr()));
   }
 
   // Post a task to the task runner to ensure all the pages have been saved
   // before reporting the scan job as complete.
-  base::PostTaskAndReplyWithResult(
-      task_runner_.get(), FROM_HERE,
+  task_runner_->PostTaskAndReplyWithResult(
+      FROM_HERE,
       base::BindOnce(
           [](lorgnette::ScanFailureMode failure_mode) { return failure_mode; },
           failure_mode),
       base::BindOnce(&ScanService::OnAllPagesSaved,
                      weak_ptr_factory_.GetWeakPtr()));
+  wake_lock_.reset();
+}
+
+void ScanService::OnMultiPageScanPageCompleted(
+    lorgnette::ScanFailureMode failure_mode) {
+  if (failure_mode ==
+      lorgnette::ScanFailureMode::SCAN_FAILURE_MODE_NO_FAILURE) {
+    base::UmaHistogramEnumeration("Scanning.MultiPageScan.PageScanResult",
+                                  scanning::ScanJobFailureReason::kSuccess);
+    // Reset the timeout for each page in a multi page scan so timeout isn't
+    // triggered for a long scan.
+    timeout_callback_.Cancel();
+    return;
+  }
+
+  scan_job_observer_->OnMultiPageScanFail(failure_mode);
+
+  base::UmaHistogramEnumeration("Scanning.MultiPageScan.PageScanResult",
+                                GetScanJobFailureReason(failure_mode));
 }
 
 void ScanService::OnCancelCompleted(bool success) {
   if (success)
     ClearScanState();
   scan_job_observer_->OnCancelComplete(success);
+  wake_lock_.reset();
 }
 
 void ScanService::OnPdfSaved(const bool success) {
@@ -398,7 +626,7 @@ void ScanService::OnPageSaved(const base::FilePath& saved_file_path) {
 }
 
 void ScanService::OnAllPagesSaved(lorgnette::ScanFailureMode failure_mode) {
-  absl::optional<scanning::ScanJobFailureReason> failure_reason = absl::nullopt;
+  std::optional<scanning::ScanJobFailureReason> failure_reason;
   if (failure_mode != lorgnette::SCAN_FAILURE_MODE_NO_FAILURE) {
     failure_reason = GetScanJobFailureReason(failure_mode);
     scanned_file_paths_.clear();
@@ -408,15 +636,13 @@ void ScanService::OnAllPagesSaved(lorgnette::ScanFailureMode failure_mode) {
     scanned_file_paths_.clear();
   }
 
-  scan_job_observer_->OnScanComplete(
-      mojo::ConvertTo<mojo_ipc::ScanResult>(
-          static_cast<lorgnette::ScanFailureMode>(failure_mode)),
-      scanned_file_paths_);
+  scan_job_observer_->OnScanComplete(failure_mode, scanned_file_paths_);
   HoldingSpaceKeyedService* holding_space_keyed_service =
       HoldingSpaceKeyedServiceFactory::GetInstance()->GetService(context_);
   if (holding_space_keyed_service) {
     for (const auto& saved_scan_path : scanned_file_paths_)
-      holding_space_keyed_service->AddScan(saved_scan_path);
+      holding_space_keyed_service->AddItemOfType(HoldingSpaceItem::Type::kScan,
+                                                 saved_scan_path);
   }
   RecordScanJobResult(failure_mode == lorgnette::SCAN_FAILURE_MODE_NO_FAILURE &&
                           !page_save_failed_,
@@ -426,20 +652,25 @@ void ScanService::OnAllPagesSaved(lorgnette::ScanFailureMode failure_mode) {
 
 void ScanService::ClearScanState() {
   page_save_failed_ = false;
+  rotate_alternate_pages_ = false;
+  scan_dpi_ = std::nullopt;
   scanned_file_paths_.clear();
   scanned_images_.clear();
   num_pages_scanned_ = 0;
+  wake_lock_.reset();
 }
 
-bool ScanService::FilePathSupported(const base::FilePath& file_path) {
-  if (file_path == my_files_path_ ||
-      (!file_path.ReferencesParent() &&
-       (my_files_path_.IsParent(file_path) ||
-        google_drive_path_.IsParent(file_path)))) {
-    return true;
-  }
+void ScanService::SetScanJobObserver(
+    mojo::PendingRemote<mojo_ipc::ScanJobObserver> observer) {
+  scan_job_observer_.reset();
+  scan_job_observer_.Bind(std::move(observer));
+  scan_job_observer_.set_disconnect_handler(
+      base::BindOnce(&ScanService::CancelScan, weak_ptr_factory_.GetWeakPtr()));
+}
 
-  return false;
+void ScanService::ResetMultiPageScanController() {
+  multi_page_controller_receiver_.reset();
+  ClearScanState();
 }
 
 std::string ScanService::GetScannerName(
@@ -451,6 +682,10 @@ std::string ScanService::GetScannerName(
   }
 
   return it->second;
+}
+
+std::vector<std::string> ScanService::GetScannedImagesForTesting() const {
+  return scanned_images_;
 }
 
 }  // namespace ash

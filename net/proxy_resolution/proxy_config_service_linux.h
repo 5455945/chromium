@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,19 +8,21 @@
 #include <stddef.h>
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/compiler_specific.h"
 #include "base/environment.h"
-#include "base/macros.h"
 #include "base/memory/ref_counted.h"
+#include "base/notreached.h"
 #include "base/observer_list.h"
+#include "base/strings/cstring_view.h"
 #include "net/base/net_export.h"
 #include "net/base/proxy_server.h"
 #include "net/proxy_resolution/proxy_config_service.h"
 #include "net/proxy_resolution/proxy_config_with_annotation.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
 class SingleThreadTaskRunner;
@@ -41,8 +43,12 @@ class NET_EXPORT_PRIVATE ProxyConfigServiceLinux : public ProxyConfigService {
     // files. Defined here so unit tests can construct worst-case inputs.
     static const size_t BUFFER_SIZE = 512;
 
-    SettingGetter() {}
-    virtual ~SettingGetter() {}
+    SettingGetter() = default;
+
+    SettingGetter(const SettingGetter&) = delete;
+    SettingGetter& operator=(const SettingGetter&) = delete;
+
+    virtual ~SettingGetter() = default;
 
     // Initializes the class: obtains a gconf/gsettings client, or simulates
     // one, in the concrete implementations. Returns true on success. Must be
@@ -111,7 +117,6 @@ class NET_EXPORT_PRIVATE ProxyConfigServiceLinux : public ProxyConfigService {
           return PROXY_SOCKS_PORT;
         default:
           NOTREACHED();
-          return PROXY_HTTP_PORT;  // Placate compiler.
       }
     }
 
@@ -137,9 +142,6 @@ class NET_EXPORT_PRIVATE ProxyConfigServiceLinux : public ProxyConfigService {
     // considered a match for "google.com", even though the bypass rule does not
     // include a wildcard, and the matched host is not a subdomain.
     virtual bool UseSuffixMatching() = 0;
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(SettingGetter);
   };
 
   // ProxyConfigServiceLinux is created on the glib thread, and
@@ -172,8 +174,11 @@ class NET_EXPORT_PRIVATE ProxyConfigServiceLinux : public ProxyConfigService {
     // Test code can set |setting_getter| and |traffic_annotation|. If left
     // unspecified, reasonable defaults will be used.
     Delegate(std::unique_ptr<base::Environment> env_var_getter,
-             absl::optional<std::unique_ptr<SettingGetter>> setting_getter,
-             absl::optional<NetworkTrafficAnnotationTag> traffic_annotation);
+             std::optional<std::unique_ptr<SettingGetter>> setting_getter,
+             std::optional<NetworkTrafficAnnotationTag> traffic_annotation);
+
+    Delegate(const Delegate&) = delete;
+    Delegate& operator=(const Delegate&) = delete;
 
     // Synchronously obtains the proxy configuration. If gconf,
     // gsettings, or kioslaverc are used, also enables notifications for
@@ -213,18 +218,18 @@ class NET_EXPORT_PRIVATE ProxyConfigServiceLinux : public ProxyConfigService {
 
     ~Delegate();
 
-    // Obtains an environment variable's value. Parses a proxy server
+    // Obtains an environment variable's value. Parses a proxy chain
     // specification from it and puts it in result. Returns true if the
     // requested variable is defined and the value valid.
-    bool GetProxyFromEnvVarForScheme(base::StringPiece variable,
+    bool GetProxyFromEnvVarForScheme(base::cstring_view variable,
                                      ProxyServer::Scheme scheme,
-                                     ProxyServer* result_server);
+                                     ProxyChain* result_chain);
     // As above but with scheme set to HTTP, for convenience.
-    bool GetProxyFromEnvVar(base::StringPiece variable,
-                            ProxyServer* result_server);
+    bool GetProxyFromEnvVar(base::cstring_view variable,
+                            ProxyChain* result_chain);
     // Returns a proxy config based on the environment variables, or empty value
     // on failure.
-    absl::optional<ProxyConfigWithAnnotation> GetConfigFromEnv();
+    std::optional<ProxyConfigWithAnnotation> GetConfigFromEnv();
 
     // Obtains host and port config settings and parses a proxy server
     // specification from it and puts it in result. Returns true if the
@@ -233,12 +238,12 @@ class NET_EXPORT_PRIVATE ProxyConfigServiceLinux : public ProxyConfigService {
                               ProxyServer* result_server);
     // Returns a proxy config based on the settings, or empty value
     // on failure.
-    absl::optional<ProxyConfigWithAnnotation> GetConfigFromSettings();
+    std::optional<ProxyConfigWithAnnotation> GetConfigFromSettings();
 
     // This method is posted from the glib thread to the main TaskRunner to
     // carry the new config information.
     void SetNewProxyConfig(
-        const absl::optional<ProxyConfigWithAnnotation>& new_config);
+        const std::optional<ProxyConfigWithAnnotation>& new_config);
 
     // This method is run on the getter's notification thread.
     void SetUpNotifications();
@@ -249,12 +254,12 @@ class NET_EXPORT_PRIVATE ProxyConfigServiceLinux : public ProxyConfigService {
     // Cached proxy configuration, to be returned by
     // GetLatestProxyConfig. Initially populated from the glib thread, but
     // afterwards only accessed from the main TaskRunner.
-    absl::optional<ProxyConfigWithAnnotation> cached_config_;
+    std::optional<ProxyConfigWithAnnotation> cached_config_;
 
     // A copy kept on the glib thread of the last seen proxy config, so as
     // to avoid posting a call to SetNewProxyConfig when we get a
     // notification but the config has not actually changed.
-    absl::optional<ProxyConfigWithAnnotation> reference_config_;
+    std::optional<ProxyConfigWithAnnotation> reference_config_;
 
     // The task runner for the glib thread, aka main browser thread. This thread
     // is where we run the glib main loop (see
@@ -273,8 +278,6 @@ class NET_EXPORT_PRIVATE ProxyConfigServiceLinux : public ProxyConfigService {
     base::ObserverList<Observer>::Unchecked observers_;
 
     MutableNetworkTrafficAnnotationTag traffic_annotation_;
-
-    DISALLOW_COPY_AND_ASSIGN(Delegate);
   };
 
   // Thin wrapper shell around Delegate.
@@ -288,8 +291,11 @@ class NET_EXPORT_PRIVATE ProxyConfigServiceLinux : public ProxyConfigService {
       const NetworkTrafficAnnotationTag& traffic_annotation);
   ProxyConfigServiceLinux(
       std::unique_ptr<base::Environment> env_var_getter,
-      SettingGetter* setting_getter,  // TODO(eroman): Use std::unique_ptr.
+      std::unique_ptr<SettingGetter> setting_getter,
       const NetworkTrafficAnnotationTag& traffic_annotation);
+
+  ProxyConfigServiceLinux(const ProxyConfigServiceLinux&) = delete;
+  ProxyConfigServiceLinux& operator=(const ProxyConfigServiceLinux&) = delete;
 
   ~ProxyConfigServiceLinux() override;
 
@@ -313,8 +319,6 @@ class NET_EXPORT_PRIVATE ProxyConfigServiceLinux : public ProxyConfigService {
 
  private:
   scoped_refptr<Delegate> delegate_;
-
-  DISALLOW_COPY_AND_ASSIGN(ProxyConfigServiceLinux);
 };
 
 }  // namespace net

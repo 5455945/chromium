@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,32 +6,33 @@
 
 #include <memory>
 
-#include "base/cxx17_backports.h"
+#include "base/compiler_specific.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
+#include "base/notimplemented.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/rlz/rlz_tracker_delegate.h"
 #include "net/url_request/url_request_test_util.h"
 #include "rlz/test/rlz_test_helpers.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if defined(OS_IOS)
+#if BUILDFLAG(IS_IOS)
 #include "ui/base/device_form_factor.h"
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chromeos/system/fake_statistics_provider.h"
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chromeos/ash/components/system/fake_statistics_provider.h"
 #endif
 
-using testing::AssertionResult;
-using testing::AssertionSuccess;
-using testing::AssertionFailure;
+using ::testing::HasSubstr;
+using ::testing::Not;
 
 namespace rlz {
 namespace {
@@ -40,7 +41,10 @@ class TestRLZTrackerDelegate : public RLZTrackerDelegate {
  public:
   TestRLZTrackerDelegate()
       : request_context_getter_(new net::TestURLRequestContextGetter(
-            base::ThreadTaskRunnerHandle::Get())) {}
+            base::SingleThreadTaskRunner::GetCurrentDefault())) {}
+
+  TestRLZTrackerDelegate(const TestRLZTrackerDelegate&) = delete;
+  TestRLZTrackerDelegate& operator=(const TestRLZTrackerDelegate&) = delete;
 
   void set_brand(const char* brand) { brand_override_ = brand; }
 
@@ -105,6 +109,12 @@ class TestRLZTrackerDelegate : public RLZTrackerDelegate {
     on_homepage_search_callback_ = std::move(callback);
   }
 
+  void RunHomepageSearchCallback() override {
+    if (!on_homepage_search_callback_.is_null()) {
+      std::move(on_homepage_search_callback_).Run();
+    }
+  }
+
   // A speculative fix for https://crbug.com/907379.
   bool ShouldUpdateExistingAccessPointRlz() override { return false; }
 
@@ -115,53 +125,19 @@ class TestRLZTrackerDelegate : public RLZTrackerDelegate {
   std::string reactivation_brand_override_;
   base::OnceClosure on_omnibox_search_callback_;
   base::OnceClosure on_homepage_search_callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestRLZTrackerDelegate);
 };
 
 // Dummy RLZ string for the access points.
 const char kOmniboxRlzString[] = "test_omnibox";
 const char kNewOmniboxRlzString[] = "new_omnibox";
-#if !defined(OS_IOS)
+#if !BUILDFLAG(IS_IOS)
 const char kHomepageRlzString[] = "test_homepage";
 const char kNewHomepageRlzString[] = "new_homepage";
 const char kAppListRlzString[] = "test_applist";
 const char kNewAppListRlzString[] = "new_applist";
-#endif  // !defined(OS_IOS)
+#endif  // !BUILDFLAG(IS_IOS)
 
-// Some helper macros to test it a string contains/does not contain a substring.
 
-AssertionResult CmpHelperSTRC(const char* str_expression,
-                              const char* substr_expression,
-                              const char* str,
-                              const char* substr) {
-  if (nullptr != strstr(str, substr)) {
-    return AssertionSuccess();
-  }
-
-  return AssertionFailure() << "Expected: (" << substr_expression << ") in ("
-                            << str_expression << "), actual: '"
-                            << substr << "' not in '" << str << "'";
-}
-
-AssertionResult CmpHelperSTRNC(const char* str_expression,
-                               const char* substr_expression,
-                               const char* str,
-                               const char* substr) {
-  if (nullptr == strstr(str, substr)) {
-    return AssertionSuccess();
-  }
-
-  return AssertionFailure() << "Expected: (" << substr_expression
-                            << ") not in (" << str_expression << "), actual: '"
-                            << substr << "' in '" << str << "'";
-}
-
-#define EXPECT_STR_CONTAINS(str, substr) \
-    EXPECT_PRED_FORMAT2(CmpHelperSTRC, str, substr)
-
-#define EXPECT_STR_NOT_CONTAIN(str, substr) \
-    EXPECT_PRED_FORMAT2(CmpHelperSTRNC, str, substr)
 
 }  // namespace
 
@@ -173,6 +149,9 @@ class TestRLZTracker : public RLZTracker {
   using RLZTracker::DelayedInit;
 
   TestRLZTracker() : assume_not_ui_thread_(true) { set_tracker(this); }
+
+  TestRLZTracker(const TestRLZTracker&) = delete;
+  TestRLZTracker& operator=(const TestRLZTracker&) = delete;
 
   ~TestRLZTracker() override { set_tracker(nullptr); }
 
@@ -208,7 +187,7 @@ class TestRLZTracker : public RLZTracker {
     return !assume_not_ui_thread_;
   }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   bool ScheduleClearRlzState() override { return !assume_not_ui_thread_; }
 #endif
 
@@ -223,19 +202,17 @@ class TestRLZTracker : public RLZTracker {
     // done.
     rlz_lib::SetAccessPointRlz(RLZTracker::ChromeOmnibox(),
                                kNewOmniboxRlzString);
-#if !defined(OS_IOS)
+#if !BUILDFLAG(IS_IOS)
     rlz_lib::SetAccessPointRlz(RLZTracker::ChromeHomePage(),
                                kNewHomepageRlzString);
     rlz_lib::SetAccessPointRlz(RLZTracker::ChromeAppList(),
                                kNewAppListRlzString);
-#endif  // !defined(OS_IOS)
+#endif  // !BUILDFLAG(IS_IOS)
     return true;
   }
 
   std::set<std::string> pinged_brands_;
   bool assume_not_ui_thread_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestRLZTracker);
 };
 
 class RlzLibTest : public testing::Test {
@@ -256,13 +233,12 @@ class RlzLibTest : public testing::Test {
   void ExpectReactivationRlzPingSent(bool expected);
 
   base::test::TaskEnvironment task_environment_;
-  TestRLZTrackerDelegate* delegate_;
+  raw_ptr<TestRLZTrackerDelegate> delegate_;
   std::unique_ptr<TestRLZTracker> tracker_;
   RlzLibTestNoMachineStateHelper m_rlz_test_helper_;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  std::unique_ptr<chromeos::system::FakeStatisticsProvider>
-      statistics_provider_;
+#if BUILDFLAG(IS_CHROMEOS)
+  std::unique_ptr<ash::system::FakeStatisticsProvider> statistics_provider_;
 #endif
 };
 
@@ -272,22 +248,21 @@ void RlzLibTest::SetUp() {
 
   delegate_ = new TestRLZTrackerDelegate;
   tracker_ = std::make_unique<TestRLZTracker>();
-  RLZTracker::SetRlzDelegate(base::WrapUnique(delegate_));
+  RLZTracker::SetRlzDelegate(base::WrapUnique(delegate_.get()));
 
   // Make sure a non-organic brand code is set in the registry or the RLZTracker
   // is pretty much a no-op.
   SetMainBrand("TEST");
   SetReactivationBrand("");
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   statistics_provider_ =
-      std::make_unique<chromeos::system::FakeStatisticsProvider>();
-  chromeos::system::StatisticsProvider::SetTestProvider(
-      statistics_provider_.get());
+      std::make_unique<ash::system::FakeStatisticsProvider>();
+  ash::system::StatisticsProvider::SetTestProvider(statistics_provider_.get());
   statistics_provider_->SetMachineStatistic(
-      chromeos::system::kShouldSendRlzPingKey,
-      chromeos::system::kShouldSendRlzPingValueTrue);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+      ash::system::kShouldSendRlzPingKey,
+      ash::system::kShouldSendRlzPingValueTrue);
+#endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
 void RlzLibTest::TearDown() {
@@ -296,9 +271,9 @@ void RlzLibTest::TearDown() {
   testing::Test::TearDown();
   m_rlz_test_helper_.TearDown();
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  chromeos::system::StatisticsProvider::SetTestProvider(nullptr);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
+  ash::system::StatisticsProvider::SetTestProvider(nullptr);
+#endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
 void RlzLibTest::SetMainBrand(const char* brand) {
@@ -318,9 +293,9 @@ void RlzLibTest::SimulateHomepageUsage() {
 }
 
 void RlzLibTest::SimulateAppListUsage() {
-#if !defined(OS_IOS)
+#if !BUILDFLAG(IS_IOS)
   RLZTracker::RecordAppListSearch();
-#endif  // !defined(OS_IOS)
+#endif  // !BUILDFLAG(IS_IOS)
 }
 
 void RlzLibTest::InvokeDelayedInit() {
@@ -328,12 +303,11 @@ void RlzLibTest::InvokeDelayedInit() {
 }
 
 void RlzLibTest::ExpectEventRecorded(const char* event_name, bool expected) {
-  char cgi[rlz_lib::kMaxCgiLength];
-  GetProductEventsAsCgi(rlz_lib::CHROME, cgi, base::size(cgi));
+  std::string cgi = GetProductEventsAsCgi(rlz_lib::CHROME).value_or("");
   if (expected) {
-    EXPECT_STR_CONTAINS(cgi, event_name);
+    EXPECT_THAT(cgi, HasSubstr(event_name));
   } else {
-    EXPECT_STR_NOT_CONTAIN(cgi, event_name);
+    EXPECT_THAT(cgi, Not(HasSubstr(event_name)));
   }
 }
 
@@ -389,7 +363,7 @@ void RlzLibTest::ExpectReactivationRlzPingSent(bool expected) {
 //
 // Also want to test that pre-warming the RLZ string cache works correctly.
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 const char kOmniboxInstall[] = "C1I";
 const char kOmniboxSetToGoogle[] = "C1S";
 const char kOmniboxFirstSearch[] = "C1F";
@@ -401,15 +375,30 @@ const char kHomepageFirstSearch[] = "C2F";
 const char kAppListInstall[] = "C7I";
 const char kAppListSetToGoogle[] = "C7S";
 const char kAppListFirstSearch[] = "C7F";
-#elif defined(OS_IOS)
+
+const char kEnterpriseEnrollment[] = "C1X";
+const char kEnterpriseUnenrollment[] = "C1Y";
+const char kEnterpriseEnrolledActivate[] = "C1Z";
+const char kEnterpriseEnrolledFirstSearch[] = "C1W";
+#elif BUILDFLAG(IS_IOS)
 const char kOmniboxInstallPhone[] = "CDI";
 const char kOmniboxSetToGooglePhone[] = "CDS";
 const char kOmniboxFirstSearchPhone[] = "CDF";
 
+const char kEnterpriseEnrollmentPhone[] = "CDX";
+const char kEnterpriseUnenrollmentPhone[] = "CDY";
+const char kEnterpriseEnrolledActivatePhone[] = "CDZ";
+const char kEnterpriseEnrolledFirstSearchPhone[] = "CDW";
+
 const char kOmniboxInstallTablet[] = "C9I";
 const char kOmniboxSetToGoogleTablet[] = "C9S";
 const char kOmniboxFirstSearchTablet[] = "C9F";
-#elif defined(OS_MAC)
+
+const char kEnterpriseEnrollmentTablet[] = "C9X";
+const char kEnterpriseUnenrollmentTablet[] = "C9Y";
+const char kEnterpriseEnrolledActivateTablet[] = "C9Z";
+const char kEnterpriseEnrolledFirstSearchTablet[] = "C9W";
+#elif BUILDFLAG(IS_MAC)
 const char kOmniboxInstall[] = "C5I";
 const char kOmniboxSetToGoogle[] = "C5S";
 const char kOmniboxFirstSearch[] = "C5F";
@@ -421,7 +410,12 @@ const char kHomepageFirstSearch[] = "C6F";
 const char kAppListInstall[] = "C8I";
 const char kAppListSetToGoogle[] = "C8S";
 const char kAppListFirstSearch[] = "C8F";
-#elif BUILDFLAG(IS_CHROMEOS_ASH)
+
+const char kEnterpriseEnrollment[] = "C5X";
+const char kEnterpriseUnenrollment[] = "C5Y";
+const char kEnterpriseEnrolledActivate[] = "C5Z";
+const char kEnterpriseEnrolledFirstSearch[] = "C5W";
+#elif BUILDFLAG(IS_CHROMEOS)
 const char kOmniboxInstall[] = "CAI";
 const char kOmniboxSetToGoogle[] = "CAS";
 const char kOmniboxFirstSearch[] = "CAF";
@@ -433,10 +427,15 @@ const char kHomepageFirstSearch[] = "CBF";
 const char kAppListInstall[] = "CCI";
 const char kAppListSetToGoogle[] = "CCS";
 const char kAppListFirstSearch[] = "CCF";
+
+const char kEnterpriseEnrollment[] = "CAX";
+const char kEnterpriseUnenrollment[] = "CAY";
+const char kEnterpriseEnrolledActivate[] = "CAZ";
+const char kEnterpriseEnrolledFirstSearch[] = "CAW";
 #endif
 
 const char* OmniboxInstall() {
-#if defined(OS_IOS)
+#if BUILDFLAG(IS_IOS)
   return ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET
              ? kOmniboxInstallTablet
              : kOmniboxInstallPhone;
@@ -446,7 +445,7 @@ const char* OmniboxInstall() {
 }
 
 const char* OmniboxSetToGoogle() {
-#if defined(OS_IOS)
+#if BUILDFLAG(IS_IOS)
   return ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET
              ? kOmniboxSetToGoogleTablet
              : kOmniboxSetToGooglePhone;
@@ -456,7 +455,7 @@ const char* OmniboxSetToGoogle() {
 }
 
 const char* OmniboxFirstSearch() {
-#if defined(OS_IOS)
+#if BUILDFLAG(IS_IOS)
   return ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET
              ? kOmniboxFirstSearchTablet
              : kOmniboxFirstSearchPhone;
@@ -465,13 +464,69 @@ const char* OmniboxFirstSearch() {
 #endif
 }
 
-const base::TimeDelta kDelay = base::TimeDelta::FromMilliseconds(20);
+const char* EnterpriseEnrollment() {
+#if BUILDFLAG(IS_IOS)
+  return ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET
+             ? kEnterpriseEnrollmentTablet
+             : kEnterpriseEnrollmentPhone;
+#else
+  return kEnterpriseEnrollment;
+#endif
+}
+
+const char* EnterpriseUnenrollment() {
+#if BUILDFLAG(IS_IOS)
+  return ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET
+             ? kEnterpriseUnenrollmentTablet
+             : kEnterpriseUnenrollmentPhone;
+#else
+  return kEnterpriseUnenrollment;
+#endif
+}
+
+const char* EnterpriseEnrolledActivate() {
+#if BUILDFLAG(IS_IOS)
+  return ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET
+             ? kEnterpriseEnrolledActivateTablet
+             : kEnterpriseEnrolledActivatePhone;
+#else
+  return kEnterpriseEnrolledActivate;
+#endif
+}
+
+const char* EnterpriseEnrolledFirstSearch() {
+#if BUILDFLAG(IS_IOS)
+  return ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET
+             ? kEnterpriseEnrolledFirstSearchTablet
+             : kEnterpriseEnrolledFirstSearchPhone;
+#else
+  return kEnterpriseEnrolledFirstSearch;
+#endif
+}
+
+const base::TimeDelta kDelay = base::Milliseconds(20);
 
 TEST_F(RlzLibTest, RecordProductEvent) {
   RLZTracker::RecordProductEvent(rlz_lib::CHROME, RLZTracker::ChromeOmnibox(),
                                  rlz_lib::FIRST_SEARCH);
 
   ExpectEventRecorded(OmniboxFirstSearch(), true);
+}
+
+TEST_F(RlzLibTest, RecordEnterpriseEvents) {
+  task_environment_.RunUntilIdle();
+
+  RLZTracker::RecordEnterpriseEnrollment();
+  RLZTracker::RecordEnterpriseUnenrollment();
+  RLZTracker::RecordEnterpriseEnrolledActivate();
+  RLZTracker::RecordEnterpriseEnrolledFirstSearch();
+
+  task_environment_.RunUntilIdle();
+
+  ExpectEventRecorded(EnterpriseEnrollment(), true);
+  ExpectEventRecorded(EnterpriseUnenrollment(), true);
+  ExpectEventRecorded(EnterpriseEnrolledActivate(), true);
+  ExpectEventRecorded(EnterpriseEnrolledFirstSearch(), true);
 }
 
 TEST_F(RlzLibTest, QuickStopAfterStart) {
@@ -482,7 +537,7 @@ TEST_F(RlzLibTest, QuickStopAfterStart) {
   ExpectEventRecorded(OmniboxSetToGoogle(), false);
   ExpectEventRecorded(OmniboxFirstSearch(), false);
 
-#if !defined(OS_IOS)
+#if !BUILDFLAG(IS_IOS)
   // Home page events.
   ExpectEventRecorded(kHomepageInstall, false);
   ExpectEventRecorded(kHomepageSetToGoogle, false);
@@ -492,7 +547,7 @@ TEST_F(RlzLibTest, QuickStopAfterStart) {
   ExpectEventRecorded(kAppListInstall, false);
   ExpectEventRecorded(kAppListSetToGoogle, false);
   ExpectEventRecorded(kAppListFirstSearch, false);
-#endif  // !defined(OS_IOS)
+#endif  // !BUILDFLAG(IS_IOS)
 
   ExpectRlzPingSent(false);
 }
@@ -506,7 +561,7 @@ TEST_F(RlzLibTest, DelayedInitOnly) {
   ExpectEventRecorded(OmniboxSetToGoogle(), true);
   ExpectEventRecorded(OmniboxFirstSearch(), false);
 
-#if !defined(OS_IOS)
+#if !BUILDFLAG(IS_IOS)
   // Home page events.
   ExpectEventRecorded(kHomepageInstall, true);
   ExpectEventRecorded(kHomepageSetToGoogle, true);
@@ -516,7 +571,7 @@ TEST_F(RlzLibTest, DelayedInitOnly) {
   ExpectEventRecorded(kAppListInstall, true);
   ExpectEventRecorded(kAppListSetToGoogle, true);
   ExpectEventRecorded(kAppListFirstSearch, false);
-#endif  // !defined(OS_IOS)
+#endif  // !BUILDFLAG(IS_IOS)
 
   ExpectRlzPingSent(true);
 }
@@ -530,7 +585,7 @@ TEST_F(RlzLibTest, DelayedInitOnlyGoogleAsStartup) {
   ExpectEventRecorded(OmniboxSetToGoogle(), false);
   ExpectEventRecorded(OmniboxFirstSearch(), false);
 
-#if !defined(OS_IOS)
+#if !BUILDFLAG(IS_IOS)
   // Home page events.
   ExpectEventRecorded(kHomepageInstall, true);
   ExpectEventRecorded(kHomepageSetToGoogle, true);
@@ -540,7 +595,7 @@ TEST_F(RlzLibTest, DelayedInitOnlyGoogleAsStartup) {
   ExpectEventRecorded(kAppListInstall, true);
   ExpectEventRecorded(kAppListSetToGoogle, false);
   ExpectEventRecorded(kAppListFirstSearch, false);
-#endif  // !defined(OS_IOS)
+#endif  // !BUILDFLAG(IS_IOS)
 
   ExpectRlzPingSent(true);
 }
@@ -554,7 +609,7 @@ TEST_F(RlzLibTest, DelayedInitOnlyNoFirstRunNoRlzStrings) {
   ExpectEventRecorded(OmniboxSetToGoogle(), true);
   ExpectEventRecorded(OmniboxFirstSearch(), false);
 
-#if !defined(OS_IOS)
+#if !BUILDFLAG(IS_IOS)
   // Home page events.
   ExpectEventRecorded(kHomepageInstall, true);
   ExpectEventRecorded(kHomepageSetToGoogle, true);
@@ -564,7 +619,7 @@ TEST_F(RlzLibTest, DelayedInitOnlyNoFirstRunNoRlzStrings) {
   ExpectEventRecorded(kAppListInstall, true);
   ExpectEventRecorded(kAppListSetToGoogle, true);
   ExpectEventRecorded(kAppListFirstSearch, false);
-#endif  // !defined(OS_IOS)
+#endif  // !BUILDFLAG(IS_IOS)
 
   ExpectRlzPingSent(true);
 }
@@ -578,7 +633,7 @@ TEST_F(RlzLibTest, DelayedInitOnlyNoFirstRunNoRlzStringsGoogleAsStartup) {
   ExpectEventRecorded(OmniboxSetToGoogle(), false);
   ExpectEventRecorded(OmniboxFirstSearch(), false);
 
-#if !defined(OS_IOS)
+#if !BUILDFLAG(IS_IOS)
   // Home page events.
   ExpectEventRecorded(kHomepageInstall, true);
   ExpectEventRecorded(kHomepageSetToGoogle, true);
@@ -588,7 +643,7 @@ TEST_F(RlzLibTest, DelayedInitOnlyNoFirstRunNoRlzStringsGoogleAsStartup) {
   ExpectEventRecorded(kAppListInstall, true);
   ExpectEventRecorded(kAppListSetToGoogle, false);
   ExpectEventRecorded(kAppListFirstSearch, false);
-#endif  // !defined(OS_IOS)
+#endif  // !BUILDFLAG(IS_IOS)
 
   ExpectRlzPingSent(true);
 }
@@ -597,10 +652,10 @@ TEST_F(RlzLibTest, DelayedInitOnlyNoFirstRun) {
   // Set some dummy RLZ strings to simulate that we already ran before and
   // performed a successful ping to the RLZ server.
   rlz_lib::SetAccessPointRlz(RLZTracker::ChromeOmnibox(), kOmniboxRlzString);
-#if !defined(OS_IOS)
+#if !BUILDFLAG(IS_IOS)
   rlz_lib::SetAccessPointRlz(RLZTracker::ChromeHomePage(), kHomepageRlzString);
   rlz_lib::SetAccessPointRlz(RLZTracker::ChromeAppList(), kAppListRlzString);
-#endif  // !defined(OS_IOS)
+#endif  // !BUILDFLAG(IS_IOS)
 
   TestRLZTracker::InitRlzDelayed(false, false, kDelay, true, true, true);
   InvokeDelayedInit();
@@ -610,7 +665,7 @@ TEST_F(RlzLibTest, DelayedInitOnlyNoFirstRun) {
   ExpectEventRecorded(OmniboxSetToGoogle(), false);
   ExpectEventRecorded(OmniboxFirstSearch(), false);
 
-#if !defined(OS_IOS)
+#if !BUILDFLAG(IS_IOS)
   // Home page events.
   ExpectEventRecorded(kHomepageInstall, true);
   ExpectEventRecorded(kHomepageSetToGoogle, false);
@@ -620,7 +675,7 @@ TEST_F(RlzLibTest, DelayedInitOnlyNoFirstRun) {
   ExpectEventRecorded(kAppListInstall, true);
   ExpectEventRecorded(kAppListSetToGoogle, false);
   ExpectEventRecorded(kAppListFirstSearch, false);
-#endif  // !defined(OS_IOS)
+#endif  // !BUILDFLAG(IS_IOS)
 
   ExpectRlzPingSent(true);
 }
@@ -634,7 +689,7 @@ TEST_F(RlzLibTest, DelayedInitOnlyNoGoogleDefaultSearchOrHomepageOrStartup) {
   ExpectEventRecorded(OmniboxSetToGoogle(), false);
   ExpectEventRecorded(OmniboxFirstSearch(), false);
 
-#if !defined(OS_IOS)
+#if !BUILDFLAG(IS_IOS)
   // Home page events.
   ExpectEventRecorded(kHomepageInstall, true);
   ExpectEventRecorded(kHomepageSetToGoogle, false);
@@ -644,7 +699,7 @@ TEST_F(RlzLibTest, DelayedInitOnlyNoGoogleDefaultSearchOrHomepageOrStartup) {
   ExpectEventRecorded(kAppListInstall, true);
   ExpectEventRecorded(kAppListSetToGoogle, false);
   ExpectEventRecorded(kAppListFirstSearch, false);
-#endif  // !defined(OS_IOS)
+#endif  // !BUILDFLAG(IS_IOS)
 
   ExpectRlzPingSent(true);
 }
@@ -658,7 +713,7 @@ TEST_F(RlzLibTest, OmniboxUsageOnly) {
   ExpectEventRecorded(OmniboxSetToGoogle(), false);
   ExpectEventRecorded(OmniboxFirstSearch(), true);
 
-#if !defined(OS_IOS)
+#if !BUILDFLAG(IS_IOS)
   // Home page events.
   ExpectEventRecorded(kHomepageInstall, false);
   ExpectEventRecorded(kHomepageSetToGoogle, false);
@@ -668,7 +723,7 @@ TEST_F(RlzLibTest, OmniboxUsageOnly) {
   ExpectEventRecorded(kAppListInstall, false);
   ExpectEventRecorded(kAppListSetToGoogle, false);
   ExpectEventRecorded(kAppListFirstSearch, false);
-#endif  // !defined(OS_IOS)
+#endif  // !BUILDFLAG(IS_IOS)
 
   ExpectRlzPingSent(false);
 }
@@ -682,7 +737,7 @@ TEST_F(RlzLibTest, HomepageUsageOnly) {
   ExpectEventRecorded(OmniboxSetToGoogle(), false);
   ExpectEventRecorded(OmniboxFirstSearch(), false);
 
-#if !defined(OS_IOS)
+#if !BUILDFLAG(IS_IOS)
   // Home page events.
   ExpectEventRecorded(kHomepageInstall, false);
   ExpectEventRecorded(kHomepageSetToGoogle, false);
@@ -692,7 +747,7 @@ TEST_F(RlzLibTest, HomepageUsageOnly) {
   ExpectEventRecorded(kAppListInstall, false);
   ExpectEventRecorded(kAppListSetToGoogle, false);
   ExpectEventRecorded(kAppListFirstSearch, false);
-#endif  // !defined(OS_IOS)
+#endif  // !BUILDFLAG(IS_IOS)
 
   ExpectRlzPingSent(false);
 }
@@ -706,7 +761,7 @@ TEST_F(RlzLibTest, AppListUsageOnly) {
   ExpectEventRecorded(OmniboxSetToGoogle(), false);
   ExpectEventRecorded(OmniboxFirstSearch(), false);
 
-#if !defined(OS_IOS)
+#if !BUILDFLAG(IS_IOS)
   // Home page events.
   ExpectEventRecorded(kHomepageInstall, false);
   ExpectEventRecorded(kHomepageSetToGoogle, false);
@@ -716,7 +771,7 @@ TEST_F(RlzLibTest, AppListUsageOnly) {
   ExpectEventRecorded(kAppListInstall, false);
   ExpectEventRecorded(kAppListSetToGoogle, false);
   ExpectEventRecorded(kAppListFirstSearch, true);
-#endif  // !defined(OS_IOS)
+#endif  // !BUILDFLAG(IS_IOS)
 
   ExpectRlzPingSent(false);
 }
@@ -733,7 +788,7 @@ TEST_F(RlzLibTest, UsageBeforeDelayedInit) {
   ExpectEventRecorded(OmniboxSetToGoogle(), true);
   ExpectEventRecorded(OmniboxFirstSearch(), true);
 
-#if !defined(OS_IOS)
+#if !BUILDFLAG(IS_IOS)
   // Home page events.
   ExpectEventRecorded(kHomepageInstall, true);
   ExpectEventRecorded(kHomepageSetToGoogle, true);
@@ -743,7 +798,7 @@ TEST_F(RlzLibTest, UsageBeforeDelayedInit) {
   ExpectEventRecorded(kAppListInstall, true);
   ExpectEventRecorded(kAppListSetToGoogle, true);
   ExpectEventRecorded(kAppListFirstSearch, true);
-#endif  // !defined(OS_IOS)
+#endif  // !BUILDFLAG(IS_IOS)
 
   ExpectRlzPingSent(true);
 }
@@ -760,7 +815,7 @@ TEST_F(RlzLibTest, UsageAfterDelayedInit) {
   ExpectEventRecorded(OmniboxSetToGoogle(), true);
   ExpectEventRecorded(OmniboxFirstSearch(), true);
 
-#if !defined(OS_IOS)
+#if !BUILDFLAG(IS_IOS)
   // Home page events.
   ExpectEventRecorded(kHomepageInstall, true);
   ExpectEventRecorded(kHomepageSetToGoogle, true);
@@ -770,7 +825,7 @@ TEST_F(RlzLibTest, UsageAfterDelayedInit) {
   ExpectEventRecorded(kAppListInstall, true);
   ExpectEventRecorded(kAppListSetToGoogle, true);
   ExpectEventRecorded(kAppListFirstSearch, true);
-#endif  // !defined(OS_IOS)
+#endif  // !BUILDFLAG(IS_IOS)
 
   ExpectRlzPingSent(true);
 }
@@ -784,7 +839,7 @@ TEST_F(RlzLibTest, OmniboxUsageSendsPingWhenSendPingImmediately) {
   ExpectEventRecorded(OmniboxSetToGoogle(), true);
   ExpectEventRecorded(OmniboxFirstSearch(), true);
 
-#if !defined(OS_IOS)
+#if !BUILDFLAG(IS_IOS)
   // Home page events.
   ExpectEventRecorded(kHomepageInstall, true);
   ExpectEventRecorded(kHomepageSetToGoogle, true);
@@ -794,7 +849,7 @@ TEST_F(RlzLibTest, OmniboxUsageSendsPingWhenSendPingImmediately) {
   ExpectEventRecorded(kAppListInstall, true);
   ExpectEventRecorded(kAppListSetToGoogle, true);
   ExpectEventRecorded(kAppListFirstSearch, false);
-#endif  // !defined(OS_IOS)
+#endif  // !BUILDFLAG(IS_IOS)
 
   ExpectRlzPingSent(true);
 }
@@ -808,7 +863,7 @@ TEST_F(RlzLibTest, HomepageUsageDoesNotSendPingWhenSendPingImmediately) {
   ExpectEventRecorded(OmniboxSetToGoogle(), false);
   ExpectEventRecorded(OmniboxFirstSearch(), false);
 
-#if !defined(OS_IOS)
+#if !BUILDFLAG(IS_IOS)
   // Home page events.
   ExpectEventRecorded(kHomepageInstall, false);
   ExpectEventRecorded(kHomepageSetToGoogle, false);
@@ -818,7 +873,7 @@ TEST_F(RlzLibTest, HomepageUsageDoesNotSendPingWhenSendPingImmediately) {
   ExpectEventRecorded(kAppListInstall, false);
   ExpectEventRecorded(kAppListSetToGoogle, false);
   ExpectEventRecorded(kAppListFirstSearch, false);
-#endif  // !defined(OS_IOS)
+#endif  // !BUILDFLAG(IS_IOS)
 
   ExpectRlzPingSent(false);
 }
@@ -832,7 +887,7 @@ TEST_F(RlzLibTest, StartupUsageDoesNotSendPingWhenSendPingImmediately) {
   ExpectEventRecorded(OmniboxSetToGoogle(), false);
   ExpectEventRecorded(OmniboxFirstSearch(), false);
 
-#if !defined(OS_IOS)
+#if !BUILDFLAG(IS_IOS)
   // Home page events.
   ExpectEventRecorded(kHomepageInstall, false);
   ExpectEventRecorded(kHomepageSetToGoogle, false);
@@ -842,7 +897,7 @@ TEST_F(RlzLibTest, StartupUsageDoesNotSendPingWhenSendPingImmediately) {
   ExpectEventRecorded(kAppListInstall, false);
   ExpectEventRecorded(kAppListSetToGoogle, false);
   ExpectEventRecorded(kAppListFirstSearch, false);
-#endif  // !defined(OS_IOS)
+#endif  // !BUILDFLAG(IS_IOS)
 
   ExpectRlzPingSent(false);
 }
@@ -856,7 +911,7 @@ TEST_F(RlzLibTest, AppListUsageDoesNotSendPingWhenSendPingImmediately) {
   ExpectEventRecorded(OmniboxSetToGoogle(), false);
   ExpectEventRecorded(OmniboxFirstSearch(), false);
 
-#if !defined(OS_IOS)
+#if !BUILDFLAG(IS_IOS)
   // Home page events.
   ExpectEventRecorded(kHomepageInstall, false);
   ExpectEventRecorded(kHomepageSetToGoogle, false);
@@ -866,7 +921,7 @@ TEST_F(RlzLibTest, AppListUsageDoesNotSendPingWhenSendPingImmediately) {
   ExpectEventRecorded(kAppListInstall, false);
   ExpectEventRecorded(kAppListSetToGoogle, false);
   ExpectEventRecorded(kAppListFirstSearch, true);
-#endif  // !defined(OS_IOS)
+#endif  // !BUILDFLAG(IS_IOS)
 
   ExpectRlzPingSent(false);
 }
@@ -912,16 +967,16 @@ TEST_F(RlzLibTest, GetAccessPointRlzIsCached) {
   EXPECT_STREQ(kOmniboxRlzString, base::UTF16ToUTF8(rlz).c_str());
 }
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS)
 // By design, on Chrome OS the RLZ string can only be set once.  Once set,
 // pings cannot change int.
 TEST_F(RlzLibTest, PingUpdatesRlzCache) {
   // Set dummy RLZ string.
   rlz_lib::SetAccessPointRlz(RLZTracker::ChromeOmnibox(), kOmniboxRlzString);
-#if !defined(OS_IOS)
+#if !BUILDFLAG(IS_IOS)
   rlz_lib::SetAccessPointRlz(RLZTracker::ChromeHomePage(), kHomepageRlzString);
   rlz_lib::SetAccessPointRlz(RLZTracker::ChromeAppList(), kAppListRlzString);
-#endif  // !defined(OS_IOS)
+#endif  // !BUILDFLAG(IS_IOS)
 
   std::u16string rlz;
 
@@ -930,26 +985,26 @@ TEST_F(RlzLibTest, PingUpdatesRlzCache) {
 
   EXPECT_TRUE(RLZTracker::GetAccessPointRlz(RLZTracker::ChromeOmnibox(), &rlz));
   EXPECT_STREQ(kOmniboxRlzString, base::UTF16ToUTF8(rlz).c_str());
-#if !defined(OS_IOS)
+#if !BUILDFLAG(IS_IOS)
   EXPECT_TRUE(RLZTracker::GetAccessPointRlz(
         RLZTracker::ChromeHomePage(), &rlz));
   EXPECT_STREQ(kHomepageRlzString, base::UTF16ToUTF8(rlz).c_str());
   EXPECT_TRUE(RLZTracker::GetAccessPointRlz(RLZTracker::ChromeAppList(), &rlz));
   EXPECT_STREQ(kAppListRlzString, base::UTF16ToUTF8(rlz).c_str());
-#endif  // !defined(OS_IOS)
+#endif  // !BUILDFLAG(IS_IOS)
 
   // Make sure cache is valid.
   tracker_->set_assume_not_ui_thread(false);
 
   EXPECT_TRUE(RLZTracker::GetAccessPointRlz(RLZTracker::ChromeOmnibox(), &rlz));
   EXPECT_STREQ(kOmniboxRlzString, base::UTF16ToUTF8(rlz).c_str());
-#if !defined(OS_IOS)
+#if !BUILDFLAG(IS_IOS)
   EXPECT_TRUE(RLZTracker::GetAccessPointRlz(
         RLZTracker::ChromeHomePage(), &rlz));
   EXPECT_STREQ(kHomepageRlzString, base::UTF16ToUTF8(rlz).c_str());
   EXPECT_TRUE(RLZTracker::GetAccessPointRlz(RLZTracker::ChromeAppList(), &rlz));
   EXPECT_STREQ(kAppListRlzString, base::UTF16ToUTF8(rlz).c_str());
-#endif  // !defined(OS_IOS)
+#endif  // !BUILDFLAG(IS_IOS)
 
   // Perform ping.
   tracker_->set_assume_not_ui_thread(true);
@@ -962,15 +1017,15 @@ TEST_F(RlzLibTest, PingUpdatesRlzCache) {
 
   EXPECT_TRUE(RLZTracker::GetAccessPointRlz(RLZTracker::ChromeOmnibox(), &rlz));
   EXPECT_STREQ(kNewOmniboxRlzString, base::UTF16ToUTF8(rlz).c_str());
-#if !defined(OS_IOS)
+#if !BUILDFLAG(IS_IOS)
   EXPECT_TRUE(RLZTracker::GetAccessPointRlz(
         RLZTracker::ChromeHomePage(), &rlz));
   EXPECT_STREQ(kNewHomepageRlzString, base::UTF16ToUTF8(rlz).c_str());
   EXPECT_TRUE(RLZTracker::GetAccessPointRlz(RLZTracker::ChromeAppList(), &rlz));
   EXPECT_STREQ(kNewAppListRlzString, base::UTF16ToUTF8(rlz).c_str());
-#endif  // !defined(OS_IOS)
+#endif  // !BUILDFLAG(IS_IOS)
 }
-#endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
 // TODO(thakis): Reactivation doesn't exist on Mac yet.
 TEST_F(RlzLibTest, ReactivationNonOrganicNonOrganic) {
@@ -1016,7 +1071,7 @@ TEST_F(RlzLibTest, ReactivationOrganicOrganic) {
   ExpectReactivationRlzPingSent(false);
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 TEST_F(RlzLibTest, ClearRlzState) {
   RLZTracker::RecordProductEvent(rlz_lib::CHROME, RLZTracker::ChromeOmnibox(),
                                  rlz_lib::FIRST_SEARCH);
@@ -1030,11 +1085,9 @@ TEST_F(RlzLibTest, ClearRlzState) {
 
 TEST_F(RlzLibTest, DoNotRecordEventUnlessShouldSendRlzPingKeyIsTrue) {
   // Verify the event is recorded when |kShouldSendRlzPingKey| is true.
-  std::string should_send_rlz_ping_value;
-  ASSERT_TRUE(statistics_provider_->GetMachineStatistic(
-      chromeos::system::kShouldSendRlzPingKey, &should_send_rlz_ping_value));
-  ASSERT_EQ(should_send_rlz_ping_value,
-            chromeos::system::kShouldSendRlzPingValueTrue);
+  ASSERT_EQ(statistics_provider_->GetMachineStatistic(
+                ash::system::kShouldSendRlzPingKey),
+            ash::system::kShouldSendRlzPingValueTrue);
   RLZTracker::RecordProductEvent(rlz_lib::CHROME, RLZTracker::ChromeOmnibox(),
                                  rlz_lib::FIRST_SEARCH);
   ExpectEventRecorded(OmniboxFirstSearch(), true);
@@ -1043,12 +1096,11 @@ TEST_F(RlzLibTest, DoNotRecordEventUnlessShouldSendRlzPingKeyIsTrue) {
   RLZTracker::ClearRlzState();
   ExpectEventRecorded(OmniboxFirstSearch(), false);
   statistics_provider_->SetMachineStatistic(
-      chromeos::system::kShouldSendRlzPingKey,
-      chromeos::system::kShouldSendRlzPingValueFalse);
-  ASSERT_TRUE(statistics_provider_->GetMachineStatistic(
-      chromeos::system::kShouldSendRlzPingKey, &should_send_rlz_ping_value));
-  ASSERT_EQ(should_send_rlz_ping_value,
-            chromeos::system::kShouldSendRlzPingValueFalse);
+      ash::system::kShouldSendRlzPingKey,
+      ash::system::kShouldSendRlzPingValueFalse);
+  ASSERT_EQ(statistics_provider_->GetMachineStatistic(
+                ash::system::kShouldSendRlzPingKey),
+            ash::system::kShouldSendRlzPingValueFalse);
   RLZTracker::RecordProductEvent(rlz_lib::CHROME, RLZTracker::ChromeOmnibox(),
                                  rlz_lib::FIRST_SEARCH);
   ExpectEventRecorded(OmniboxFirstSearch(), false);
@@ -1056,13 +1108,30 @@ TEST_F(RlzLibTest, DoNotRecordEventUnlessShouldSendRlzPingKeyIsTrue) {
   // Verify the event is not recorded when |kShouldSendRlzPingKey| does not
   // exist.
   statistics_provider_->ClearMachineStatistic(
-      chromeos::system::kShouldSendRlzPingKey);
+      ash::system::kShouldSendRlzPingKey);
   ASSERT_FALSE(statistics_provider_->GetMachineStatistic(
-      chromeos::system::kShouldSendRlzPingKey, &should_send_rlz_ping_value));
+      ash::system::kShouldSendRlzPingKey));
   RLZTracker::RecordProductEvent(rlz_lib::CHROME, RLZTracker::ChromeOmnibox(),
                                  rlz_lib::FIRST_SEARCH);
   ExpectEventRecorded(OmniboxFirstSearch(), false);
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+#if !BUILDFLAG(IS_IOS)
+TEST_F(RlzLibTest, RecordChromeHomePageSearch) {
+  TestRLZTracker::InitRlzDelayed(true, false, kDelay, true, true, false);
+  EXPECT_TRUE(TestRLZTracker::ShouldRecordChromeHomePageSearch());
+
+  TestRLZTracker::RecordChromeHomePageSearch();
+  EXPECT_FALSE(TestRLZTracker::ShouldRecordChromeHomePageSearch());
+  ExpectEventRecorded(kHomepageFirstSearch, true);
+}
+
+TEST_F(RlzLibTest, ShouldNotRecordChromeHomePageSearch) {
+  SetMainBrand("GGLS");
+  TestRLZTracker::InitRlzDelayed(true, false, kDelay, true, true, false);
+  EXPECT_FALSE(TestRLZTracker::ShouldRecordChromeHomePageSearch());
+}
+#endif  // !BUILDFLAG(IS_IOS)
 
 }  // namespace rlz

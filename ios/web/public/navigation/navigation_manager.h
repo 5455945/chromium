@@ -1,24 +1,22 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef IOS_WEB_PUBLIC_NAVIGATION_NAVIGATION_MANAGER_H_
 #define IOS_WEB_PUBLIC_NAVIGATION_NAVIGATION_MANAGER_H_
 
+#import <Foundation/Foundation.h>
 #include <stddef.h>
 
 #include <memory>
+#include <optional>
 
-#include "base/callback.h"
 #include "ios/web/common/user_agent.h"
-#include "ios/web/public/deprecated/navigation_item_list.h"
 #include "ios/web/public/navigation/browser_url_rewriter.h"
+#include "ios/web/public/navigation/https_upgrade_type.h"
 #include "ios/web/public/navigation/referrer.h"
 #include "ios/web/public/navigation/reload_type.h"
 #include "ui/base/page_transition_types.h"
-
-@class NSDictionary;
-@class NSData;
 
 namespace web {
 
@@ -40,32 +38,40 @@ class NavigationManager {
     // The URL to load. Must be set.
     GURL url;
 
-    // The URL to display in Omnibox. If empty, |url| will be displayed.
+    // The URL to display in Omnibox. If empty, `url` will be displayed.
     GURL virtual_url;
 
     // The referrer for the load. May be empty.
     Referrer referrer;
 
     // The transition type for the load. Defaults to PAGE_TRANSITION_LINK.
-    ui::PageTransition transition_type;
+    ui::PageTransition transition_type = ui::PAGE_TRANSITION_LINK;
 
-    // True for renderer-initiated navigations. This is
+    // Whether the load is renderer-initiated or not. This is
     // important for tracking whether to display pending URLs.
-    bool is_renderer_initiated;
+    bool is_renderer_initiated = false;
+
+    // A text fragment selector (that uses the syntax defined in
+    // https://wicg.github.io/scroll-to-text-fragment/#syntax) to scroll the
+    // matched text into the viewport without applying the standard highlight
+    // styling. This is used for cross-device scroll restoration.
+    // This is named "internal" to match
+    // content::NavigationController::LoadURLParams, as it is passed through the
+    // navigation stack rather than being extracted from the URL's hash
+    // fragment. The string should contain only the selector value (the part
+    // after "text=" in a URL directive), not the "text=" prefix itself.
+    std::optional<std::string> internal_scroll_to_text_fragment;
 
     // Any extra HTTP headers to add to the load.
-    NSDictionary* extra_headers;
+    NSDictionary<NSString*, NSString*>* extra_headers = nil;
 
     // Any post data to send with the load. When setting this, you should
     // generally set a Content-Type header as well.
-    NSData* post_data;
+    NSData* post_data = nil;
 
-    // True if the navigation was initiated by typing in the omnibox but the
-    // typed text didn't have a scheme such as http or https (e.g. google.com),
-    // and https was used as the default scheme for the navigation. This is used
-    // by TypedNavigationUpgradeThrottle to determine if the navigation should
-    // be observed and fall back to using http scheme if necessary.
-    bool is_using_https_as_default_scheme;
+    // Indicates the type of the HTTPS upgrade applied on the navigation, if
+    // any.
+    HttpsUpgradeType https_upgrade_type = HttpsUpgradeType::kNone;
 
     // Create a new WebLoadParams with the given URL and defaults for all other
     // parameters.
@@ -102,7 +108,7 @@ class NavigationManager {
   // Removes the pending NavigationItem.
   virtual void DiscardNonCommittedItems() = 0;
 
-  // Loads the URL with specified |params|.
+  // Loads the URL with specified `params`.
   virtual void LoadURLWithParams(
       const NavigationManager::WebLoadParams& params) = 0;
 
@@ -113,33 +119,33 @@ class NavigationManager {
   //  - Web usage was disabled and re-enabled.
   virtual void LoadIfNecessary() = 0;
 
-  // Adds |rewriter| to a transient list of URL rewriters.  Transient URL
+  // Adds `rewriter` to a transient list of URL rewriters.  Transient URL
   // rewriters will be executed before the rewriters already added to the
   // BrowserURLRewriter singleton, and the list will be cleared after the next
-  // attempted page load.  |rewriter| must not be null.
+  // attempted page load.  `rewriter` must not be null.
   virtual void AddTransientURLRewriter(
       BrowserURLRewriter::URLRewriter rewriter) = 0;
 
   // Returns the number of items in the NavigationManager, excluding
   // pending entries.
-  // TODO(crbug.com/533848): Update to return size_t.
+  // TODO(crbug.com/40436539): Update to return size_t.
   virtual int GetItemCount() const = 0;
 
-  // Returns the committed NavigationItem at |index|.
+  // Returns the committed NavigationItem at `index`.
   virtual NavigationItem* GetItemAtIndex(size_t index) const = 0;
 
-  // Returns the index of |item| in the committed session history.
+  // Returns the index of `item` in the committed session history.
   virtual int GetIndexOfItem(const NavigationItem* item) const = 0;
 
   // Returns the index of the last committed item or -1 if the last
   // committed item correspond to a new navigation  or session restoration is
   // in-progress.
-  // TODO(crbug.com/533848): Update to return size_t.
+  // TODO(crbug.com/40436539): Update to return size_t.
   virtual int GetLastCommittedItemIndex() const = 0;
 
   // Returns the index of the pending item or -1 if the pending item
   // corresponds to a new navigation.
-  // TODO(crbug.com/533848): Update to return size_t.
+  // TODO(crbug.com/40436539): Update to return size_t.
   virtual int GetPendingItemIndex() const = 0;
 
   // Navigation relative to the current item.
@@ -150,42 +156,31 @@ class NavigationManager {
   virtual void GoForward() = 0;
 
   // Navigates to the specified absolute index.
-  // TODO(crbug.com/533848): Update to use size_t.
+  // TODO(crbug.com/40436539): Update to use size_t.
   virtual void GoToIndex(int index) = 0;
 
   // Reloads the visible item under the specified ReloadType. If
-  // |check_for_repost| is true and the current item has POST data the user is
+  // `check_for_repost` is true and the current item has POST data the user is
   // prompted to see if they really want to reload the page. Pass in true if the
   // reload is explicitly initiated by the user.
-  // TODO(crbug.com/700958): implement the logic for |check_for_repost|.
+  // TODO(crbug.com/41307037): implement the logic for `check_for_repost`.
   virtual void Reload(ReloadType reload_type, bool check_for_repost) = 0;
 
   // Reloads the visible item under the specified UserAgentType.
-  // TODO(crbug.com/738020): combine both Reload() implementations.
+  // TODO(crbug.com/40528091): combine both Reload() implementations.
   virtual void ReloadWithUserAgentType(UserAgentType user_agent_type) = 0;
 
-  // Returns a list of all non-redirected NavigationItems whose index precedes
-  // or follows the current index.
-  virtual NavigationItemList GetBackwardItems() const = 0;
-  virtual NavigationItemList GetForwardItems() const = 0;
+  // Returns the NavigationItems whose index precedes or follows the current
+  // index, ordered nearest first. The returned pointers are never null.
+  virtual std::vector<NavigationItem*> GetBackwardItems() const = 0;
+  virtual std::vector<NavigationItem*> GetForwardItems() const = 0;
 
   // Initializes this NavigationManager with the given saved navigations, using
-  // |last_committed_item_index| as the currently loaded item. Before this call
+  // `last_committed_item_index` as the currently loaded item. Before this call
   // the NavigationManager should be unused (there should be no current item).
-  // This takes ownership of |items| (must be moved).
+  // This takes ownership of `items` (must be moved).
   virtual void Restore(int last_committed_item_index,
                        std::vector<std::unique_ptr<NavigationItem>> items) = 0;
-
-  // Returns true after session restoration has started, until the first
-  // post-restore navigation is started.
-  virtual bool IsRestoreSessionInProgress() const = 0;
-
-  // Registers a callback to be run when session restoration is completed.
-  // If there is no in-progress session restoration, the callback is run
-  // immediately.
-  // TODO(crbug.com/904502): This API is only needed for clearing cookies.
-  // Remove after //ios/web exposes a proper cookie clearing API.
-  virtual void AddRestoreCompletionCallback(base::OnceClosure callback) = 0;
 };
 
 }  // namespace web

@@ -13,12 +13,32 @@
     "help": "Output a hosts file to stdout",
     "virtualenv": false
   },
+  "macos-display-configuration": {
+    "path": "macos_display_configuration.py",
+    "script": "run",
+    "parser": "create_parser",
+    "help": "Configure macOS displays (scale, color profile)",
+    "virtualenv": true,
+    "requirements": [
+      "requirements_macos_display_configuration.txt"
+    ]
+  },
   "regen-certs": {
     "path": "regen_certs.py",
     "script": "run",
     "parser": "get_parser",
     "help": "Regenerate the WPT certificates",
     "virtualenv": false
+  },
+  "update-built": {
+    "path": "update_built.py",
+    "script": "run",
+    "parser": "get_parser",
+    "help": "Update built tests",
+    "virtualenv": true,
+    "requirements": [
+      "requirements_build.txt"
+    ]
   },
   "tc-download": {
     "path": "tc/download.py",
@@ -27,9 +47,8 @@
     "parse_known": true,
     "help": "Download logs from taskcluster",
     "virtualenv": true,
-    "install": [
-      "requests",
-      "pygithub"
+    "requirements": [
+      "requirements_tc.txt"
     ]
   },
   "tc-taskgraph": {
@@ -37,9 +56,8 @@
     "script": "run",
     "help": "Build the taskgraph",
     "virtualenv": true,
-    "install": [
-      "requests",
-      "pyyaml"
+    "requirements": [
+      "requirements_tc.txt"
     ]
   },
   "tc-decision": {
@@ -48,10 +66,8 @@
     "script": "run",
     "help": "Run the decision task",
     "virtualenv": true,
-    "install": [
-        "requests",
-        "pyyaml",
-        "taskcluster"
+    "requirements": [
+      "requirements_tc.txt"
     ]
   },
   "tc-sink-task": {
@@ -60,8 +76,29 @@
     "script": "run",
     "help": "Run the sink task",
     "virtualenv": true,
-    "install": [
-        "taskcluster"
+    "requirements": [
+      "requirements_tc.txt"
+    ]
+  },
+  "tc-run": {
+    "path": "run_tc.py",
+    "script": "run_tc",
+    "parser": "get_parser",
+    "parse_known": true,
+    "help": "Run command in Taskcluster CI environment (for use in Docker image)",
+    "virtualenv": true,
+    "requirements": [
+      "requirements_tc.txt"
+    ]
+  },
+  "update-codeowners": {
+    "path": "update_codeowners.py",
+    "parser": "get_parser",
+    "script": "run_update_codeowners",
+    "help": "Update CODEOWNERS file",
+    "virtualenv": true,
+    "requirements": [
+      "requirements_update_codeowners.txt"
     ]
   }
 }

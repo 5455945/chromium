@@ -33,8 +33,9 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "third_party/blink/renderer/core/inspector/inspector_base_agent.h"
-#include "third_party/blink/renderer/core/inspector/protocol/IndexedDB.h"
+#include "third_party/blink/renderer/core/inspector/protocol/indexed_db.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
@@ -43,14 +44,16 @@
 namespace blink {
 
 class InspectedFrames;
+class WorkerGlobalScope;
 
 class MODULES_EXPORT InspectorIndexedDBAgent final
     : public InspectorBaseAgent<protocol::IndexedDB::Metainfo> {
  public:
-  InspectorIndexedDBAgent(InspectedFrames*, v8_inspector::V8InspectorSession*);
+  InspectorIndexedDBAgent(InspectedFrames*, WorkerGlobalScope*);
   ~InspectorIndexedDBAgent() override;
   void Trace(Visitor*) const override;
 
+  void Dispose() override;
   void Restore() override;
   void DidCommitLoadForLocalFrame(LocalFrame*) override;
 
@@ -58,40 +61,63 @@ class MODULES_EXPORT InspectorIndexedDBAgent final
   protocol::Response enable() override;
   protocol::Response disable() override;
   void requestDatabaseNames(
-      const String& security_origin,
+      std::optional<String> security_origin,
+      std::optional<String> storage_key,
+      std::unique_ptr<protocol::Storage::StorageBucket> storage_bucket,
       std::unique_ptr<RequestDatabaseNamesCallback>) override;
-  void requestDatabase(const String& security_origin,
-                       const String& database_name,
-                       std::unique_ptr<RequestDatabaseCallback>) override;
-  void requestData(const String& security_origin,
-                   const String& database_name,
-                   const String& object_store_name,
-                   const String& index_name,
-                   int skip_count,
-                   int page_size,
-                   protocol::Maybe<protocol::IndexedDB::KeyRange>,
-                   std::unique_ptr<RequestDataCallback>) override;
-  void getMetadata(const String& security_origin,
-                   const String& database_name,
-                   const String& object_store_name,
-                   std::unique_ptr<GetMetadataCallback>) override;
+  void requestDatabase(
+      std::optional<String> security_origin,
+      std::optional<String> storage_key,
+      std::unique_ptr<protocol::Storage::StorageBucket> in_storageBucket,
+      const String& database_name,
+      std::unique_ptr<RequestDatabaseCallback>) override;
+  void requestData(
+      std::optional<String> security_origin,
+      std::optional<String> storage_key,
+      std::unique_ptr<protocol::Storage::StorageBucket> storage_bucket,
+      const String& database_name,
+      const String& object_store_name,
+      std::optional<String> index_name,
+      int skip_count,
+      int page_size,
+      std::unique_ptr<protocol::IndexedDB::KeyRange>,
+      std::unique_ptr<RequestDataCallback>) override;
+  void getMetadata(
+      std::optional<String> security_origin,
+      std::optional<String> storage_key,
+      std::unique_ptr<protocol::Storage::StorageBucket> storage_bucket,
+      const String& database_name,
+      const String& object_store_name,
+      std::unique_ptr<GetMetadataCallback>) override;
   void deleteObjectStoreEntries(
-      const String& security_origin,
+      std::optional<String> security_origin,
+      std::optional<String> storage_key,
+      std::unique_ptr<protocol::Storage::StorageBucket> storage_bucket,
       const String& database_name,
       const String& object_store_name,
       std::unique_ptr<protocol::IndexedDB::KeyRange>,
       std::unique_ptr<DeleteObjectStoreEntriesCallback>) override;
-  void clearObjectStore(const String& security_origin,
-                        const String& database_name,
-                        const String& object_store_name,
-                        std::unique_ptr<ClearObjectStoreCallback>) override;
-  void deleteDatabase(const String& security_origin,
-                      const String& database_name,
-                      std::unique_ptr<DeleteDatabaseCallback>) override;
+  void clearObjectStore(
+      std::optional<String> security_origin,
+      std::optional<String> storage_key,
+      std::unique_ptr<protocol::Storage::StorageBucket> storage_bucket,
+      const String& database_name,
+      const String& object_store_name,
+      std::unique_ptr<ClearObjectStoreCallback>) override;
+  void deleteDatabase(
+      std::optional<String> security_origin,
+      std::optional<String> storage_key,
+      std::unique_ptr<protocol::Storage::StorageBucket> storage_bucket,
+      const String& database_name,
+      std::unique_ptr<DeleteDatabaseCallback>) override;
 
  private:
+  void ReleaseObjectGroup();
+
+  // This is null while inspecting workers.
   Member<InspectedFrames> inspected_frames_;
-  v8_inspector::V8InspectorSession* v8_session_;
+  // This is null while inspecting frames.
+  Member<WorkerGlobalScope> worker_global_scope_;
   InspectorAgentState::Boolean enabled_;
 };
 

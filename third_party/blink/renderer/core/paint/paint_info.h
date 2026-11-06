@@ -27,28 +27,50 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_PAINT_PAINT_INFO_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_PAINT_PAINT_INFO_H_
 
+#include "base/check_op.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/core/layout/layout_object.h"
-#include "third_party/blink/renderer/core/layout/ng/ng_physical_fragment.h"
-// TODO(jchaffraix): Once we unify PaintBehavior and PaintLayerFlags, we should
-// move PaintLayerFlags to PaintPhase and rename it. Thus removing the need for
-// this #include
-// "third_party/blink/renderer/core/paint/paint_layer_painting_info.h"
-#include "third_party/blink/renderer/core/paint/paint_layer_painting_info.h"
+#include "third_party/blink/renderer/core/layout/layout_box.h"
+#include "third_party/blink/renderer/core/paint/fragment_data.h"
+#include "third_party/blink/renderer/core/paint/paint_flags.h"
 #include "third_party/blink/renderer/core/paint/paint_phase.h"
-#include "third_party/blink/renderer/platform/geometry/int_rect.h"
-#include "third_party/blink/renderer/platform/geometry/layout_rect.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_context.h"
-#include "third_party/blink/renderer/platform/graphics/image.h"
 #include "third_party/blink/renderer/platform/graphics/paint/cull_rect.h"
 #include "third_party/blink/renderer/platform/graphics/paint/display_item.h"
-#include "third_party/blink/renderer/platform/transforms/affine_transform.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
-#include "third_party/blink/renderer/platform/wtf/hash_map.h"
 
 namespace blink {
 
-class LayoutBoxModelObject;
+// To support context-fill and context-stroke:
+//   https://svgwg.org/svg2-draft/painting.html#context-paint
+struct CORE_EXPORT SvgContextPaints {
+  STACK_ALLOCATED();
+
+ public:
+  struct CORE_EXPORT ContextPaint {
+    STACK_ALLOCATED();
+
+   public:
+    ContextPaint(const LayoutObject& o, const SVGPaint& p)
+        : object(o), paint(p) {}
+    ContextPaint(const ContextPaint&) = default;
+    ContextPaint(ContextPaint&&) = default;
+
+    const LayoutObject& object;
+    SVGPaint paint;
+  };
+
+  SvgContextPaints(const ContextPaint& f, const ContextPaint& s)
+      : fill(f), stroke(s) {}
+  SvgContextPaints(const ContextPaint& f,
+                   const ContextPaint& s,
+                   const AffineTransform& t)
+      : fill(f), stroke(s), transform(t) {}
+  SvgContextPaints(const SvgContextPaints&) = default;
+
+  ContextPaint fill;
+  ContextPaint stroke;
+  AffineTransform transform;
+};
 
 struct CORE_EXPORT PaintInfo {
   STACK_ALLOCATED();
@@ -57,32 +79,15 @@ struct CORE_EXPORT PaintInfo {
   PaintInfo(GraphicsContext& context,
             const CullRect& cull_rect,
             PaintPhase phase,
-            GlobalPaintFlags global_paint_flags,
-            PaintLayerFlags paint_flags,
-            const LayoutBoxModelObject* paint_container = nullptr,
-            LayoutUnit fragment_logical_top_in_flow_thread = LayoutUnit())
+            bool descendant_painting_blocked,
+            PaintFlags paint_flags = PaintFlag::kNoFlag,
+            const SvgContextPaints* context_paints = nullptr)
       : context(context),
         phase(phase),
         cull_rect_(cull_rect),
-        paint_container_(paint_container),
-        fragment_logical_top_in_flow_thread_(
-            fragment_logical_top_in_flow_thread),
+        svg_context_paints_(context_paints),
         paint_flags_(paint_flags),
-        global_paint_flags_(global_paint_flags) {}
-
-  PaintInfo(GraphicsContext& new_context,
-            const PaintInfo& copy_other_fields_from)
-      : context(new_context),
-        phase(copy_other_fields_from.phase),
-        cull_rect_(copy_other_fields_from.cull_rect_),
-        paint_container_(copy_other_fields_from.paint_container_),
-        fragment_logical_top_in_flow_thread_(
-            copy_other_fields_from.fragment_logical_top_in_flow_thread_),
-        paint_flags_(copy_other_fields_from.paint_flags_),
-        global_paint_flags_(copy_other_fields_from.global_paint_flags_) {
-    // We should never pass is_painting_scrolling_background_ other PaintInfo.
-    DCHECK(!copy_other_fields_from.is_painting_scrolling_background_);
-  }
+        descendant_painting_blocked_(descendant_painting_blocked) {}
 
   // Creates a PaintInfo for painting descendants. See comments about the paint
   // phases in PaintPhase.h for details.
@@ -90,49 +95,47 @@ struct CORE_EXPORT PaintInfo {
     PaintInfo result(*this);
 
     // We should never start to paint descendant when the flag is set.
-    DCHECK(!result.is_painting_scrolling_background_);
+    DCHECK(!result.is_painting_background_in_contents_space);
 
     if (phase == PaintPhase::kDescendantOutlinesOnly)
       result.phase = PaintPhase::kOutline;
     else if (phase == PaintPhase::kDescendantBlockBackgroundsOnly)
       result.phase = PaintPhase::kBlockBackground;
+
+    result.fragment_data_override_ = nullptr;
+
     return result;
   }
 
+  bool ShouldOmitCompositingInfo() const {
+    return paint_flags_ & PaintFlag::kOmitCompositingInfo;
+  }
+
   bool IsRenderingClipPathAsMaskImage() const {
-    return paint_flags_ & kPaintLayerPaintingRenderingClipPathAsMask;
+    return paint_flags_ & PaintFlag::kPaintingClipPathAsMask;
   }
   bool IsRenderingResourceSubtree() const {
-    return paint_flags_ & kPaintLayerPaintingRenderingResourceSubtree;
+    return paint_flags_ & PaintFlag::kPaintingResourceSubtree;
+  }
+  bool IsReadBackAllowedRendering() const {
+    return paint_flags_ & PaintFlag::kReadBackAllowedRendering;
   }
 
-  // TODO(wangxianzhu): Rename this function to SkipBackground() for CAP.
-  bool SkipRootBackground() const {
-    return paint_flags_ & kPaintLayerPaintingSkipRootBackground;
-  }
-  void SetSkipsBackground(bool b) {
-    DCHECK(RuntimeEnabledFeatures::CompositeAfterPaintEnabled());
-    if (b)
-      paint_flags_ |= kPaintLayerPaintingSkipRootBackground;
-    else
-      paint_flags_ &= ~kPaintLayerPaintingSkipRootBackground;
-  }
+  bool ShouldSkipBackground() const { return skips_background_; }
+  void SetSkipsBackground(bool b) { skips_background_ = b; }
+
+  bool ShouldSkipGapDecorations() const { return skips_gap_decorations_; }
+  void SetSkipsGapDecorations(bool skip) { skips_gap_decorations_ = skip; }
 
   bool ShouldAddUrlMetadata() const {
-    return global_paint_flags_ & kGlobalPaintAddUrlMetadata;
+    return paint_flags_ & PaintFlag::kAddUrlMetadata;
   }
 
   DisplayItem::Type DisplayItemTypeForClipping() const {
     return DisplayItem::PaintPhaseToClipType(phase);
   }
 
-  const LayoutBoxModelObject* PaintContainer() const {
-    return paint_container_;
-  }
-
-  GlobalPaintFlags GetGlobalPaintFlags() const { return global_paint_flags_; }
-
-  PaintLayerFlags PaintFlags() const { return paint_flags_; }
+  PaintFlags GetPaintFlags() const { return paint_flags_; }
 
   const CullRect& GetCullRect() const { return cull_rect_; }
   void SetCullRect(const CullRect& cull_rect) { cull_rect_ = cull_rect; }
@@ -141,7 +144,7 @@ struct CORE_EXPORT PaintInfo {
       const PhysicalRect& rect,
       const PhysicalOffset& offset = PhysicalOffset()) const {
     return cull_rect_.Intersects(
-        EnclosingIntRect(PhysicalRect(rect.offset + offset, rect.size)));
+        ToEnclosingRect(PhysicalRect(rect.offset + offset, rect.size)));
   }
 
   void ApplyInfiniteCullRect() { cull_rect_ = CullRect::Infinite(); }
@@ -150,77 +153,58 @@ struct CORE_EXPORT PaintInfo {
     cull_rect_.ApplyTransform(transform);
   }
 
-  // Returns the fragment of the current painting object matching the current
-  // layer fragment.
-  const FragmentData* FragmentToPaint(const LayoutObject& object) const {
-    for (const auto* fragment = &object.FirstFragment(); fragment;
-         fragment = fragment->NextFragment()) {
-      if (fragment->LogicalTopInFlowThread() ==
-          fragment_logical_top_in_flow_thread_)
-        return fragment;
-    }
-    // No fragment of the current painting object matches the layer fragment,
-    // which means the object should not paint in this fragment.
-    return nullptr;
+  void SetFragmentDataOverride(const FragmentData* fragment_data) {
+    fragment_data_override_ = fragment_data;
+  }
+  const FragmentData* FragmentDataOverride() const {
+    return fragment_data_override_;
   }
 
-  // Returns the FragmentData of the specified physical fragment. If fragment
-  // traversal is supported, it will map directly to the right FragmentData.
-  // Otherwise we'll fall back to matching against the current
-  // PaintLayerFragment.
-  const FragmentData* FragmentToPaint(
-      const NGPhysicalFragment& fragment) const {
-    if (fragment.CanTraverse())
-      return fragment.GetFragmentData();
-    return FragmentToPaint(*fragment.GetLayoutObject());
+  const SvgContextPaints* GetSvgContextPaints() const {
+    return svg_context_paints_;
+  }
+  void SetSvgContextPaints(const SvgContextPaints* context_paints) {
+    svg_context_paints_ = context_paints;
   }
 
-  void SetFragmentLogicalTopInFlowThread(LayoutUnit fragment_logical_top) {
-    fragment_logical_top_in_flow_thread_ = fragment_logical_top;
+  bool IsPaintingBackgroundInContentsSpace() const {
+    return is_painting_background_in_contents_space;
   }
-
-  bool IsPaintingScrollingBackground() const {
-    DCHECK(RuntimeEnabledFeatures::CompositeAfterPaintEnabled());
-    return is_painting_scrolling_background_;
-  }
-  void SetIsPaintingScrollingBackground(bool b) {
-    DCHECK(RuntimeEnabledFeatures::CompositeAfterPaintEnabled());
-    is_painting_scrolling_background_ = b;
+  void SetIsPaintingBackgroundInContentsSpace(bool b) {
+    is_painting_background_in_contents_space = b;
   }
 
   bool DescendantPaintingBlocked() const {
     return descendant_painting_blocked_;
   }
-  void SetDescendantPaintingBlocked(bool blocked) {
-    descendant_painting_blocked_ = blocked;
-  }
+  void SetDescendantPaintingBlocked() { descendant_painting_blocked_ = true; }
 
-  // FIXME: Introduce setters/getters at some point. Requires a lot of changes
-  // throughout paint/.
   GraphicsContext& context;
   PaintPhase phase;
 
  private:
   CullRect cull_rect_;
 
-  // The box model object that originates the current painting.
-  const LayoutBoxModelObject* paint_container_;
+  // Only set when entering legacy painters. Legacy painters are only used for
+  // certain types of monolithic content, but there may still be multiple
+  // fragments in such cases, due to repeated table headers/footers or repeated
+  // fixed positioned objects when printing. The correct FragmentData is
+  // typically obtained via an PhysicalBoxFragment object, but there are no
+  // physical fragments passed to legacy painters.
+  const FragmentData* fragment_data_override_ = nullptr;
 
-  // The logical top of the current fragment of the self-painting PaintLayer
-  // which initiated the current painting, in the containing flow thread.
-  LayoutUnit fragment_logical_top_in_flow_thread_;
+  // This holds references to the SVGPaint values from an ancestor <use> or
+  // LayoutSVGResourceMarker that are used when a descendant specifies
+  // context-fill and/or context-paint paint values.
+  const SvgContextPaints* svg_context_paints_ = nullptr;
 
-  PaintLayerFlags paint_flags_;
-  const GlobalPaintFlags global_paint_flags_;
+  const PaintFlags paint_flags_;
 
-  // For CAP only.
-  bool is_painting_scrolling_background_ = false;
-
-  // Used by display-locking.
+  bool is_painting_background_in_contents_space = false;
+  bool skips_background_ = false;
+  bool skips_gap_decorations_ = false;
   bool descendant_painting_blocked_ = false;
 };
-
-Image::ImageDecodingMode GetImageDecodingMode(Node*);
 
 }  // namespace blink
 

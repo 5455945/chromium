@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,12 @@
 #include <memory>
 #include <string>
 
+#import "base/memory/raw_ptr.h"
+#include "components/language/core/browser/accept_languages_service.h"
 #include "components/language/core/browser/language_model.h"
 #include "components/prefs/pref_service.h"
-#include "components/translate/core/browser/translate_accept_languages.h"
 #include "components/translate/core/browser/translate_client.h"
+#include "components/translate/core/browser/translate_driver.h"
 #include "components/translate/core/browser/translate_manager.h"
 #include "components/translate/core/browser/translate_prefs.h"
 #include "components/translate/core/browser/translate_ranker.h"
@@ -24,7 +26,9 @@
 
 namespace ios_web_view {
 
-class WebViewTranslateClient : public translate::TranslateClient {
+class WebViewTranslateClient
+    : public translate::TranslateClient,
+      public translate::TranslateDriver::LanguageDetectionObserver {
  public:
   static std::unique_ptr<WebViewTranslateClient> Create(
       WebViewBrowserState* browser_state,
@@ -34,8 +38,13 @@ class WebViewTranslateClient : public translate::TranslateClient {
       PrefService* pref_service,
       translate::TranslateRanker* translate_ranker,
       language::LanguageModel* language_model,
+      language::UrlLanguageHistogram* url_language_histogram,
       web::WebState* web_state,
-      translate::TranslateAcceptLanguages* accept_languages);
+      language::AcceptLanguagesService* accept_languages);
+
+  WebViewTranslateClient(const WebViewTranslateClient&) = delete;
+  WebViewTranslateClient& operator=(const WebViewTranslateClient&) = delete;
+
   ~WebViewTranslateClient() override;
 
   // This |controller| is assumed to outlive this WebViewTranslateClient.
@@ -63,30 +72,39 @@ class WebViewTranslateClient : public translate::TranslateClient {
   translate::IOSTranslateDriver* GetTranslateDriver() override;
   PrefService* GetPrefs() override;
   std::unique_ptr<translate::TranslatePrefs> GetTranslatePrefs() override;
-  translate::TranslateAcceptLanguages* GetTranslateAcceptLanguages() override;
-  int GetInfobarIconID() const override;
+  language::AcceptLanguagesService* GetAcceptLanguagesService() override;
   std::unique_ptr<infobars::InfoBar> CreateInfoBar(
       std::unique_ptr<translate::TranslateInfoBarDelegate> delegate)
       const override;
   bool ShowTranslateUI(translate::TranslateStep step,
                        const std::string& source_language,
                        const std::string& target_language,
-                       translate::TranslateErrors::Type error_type,
+                       translate::TranslateErrors error_type,
                        bool triggered_from_menu) override;
   bool IsTranslatableURL(const GURL& url) override;
-  void ShowReportLanguageDetectionErrorUI(const GURL& report_url) override;
-  bool IsAutofillAssistantRunning() const override;
+  bool IsReadingModeOpen() const override;
 
  private:
-  PrefService* pref_service_;
-  translate::TranslateManager translate_manager_;
+  friend class CWVTranslationControllerTest;
+
+  raw_ptr<PrefService> pref_service_;
   translate::IOSTranslateDriver translate_driver_;
-  translate::TranslateAcceptLanguages* accept_languages_;
+  translate::TranslateManager translate_manager_;
+  language::AcceptLanguagesService* accept_languages_;
+
+  // LanguageDetectionObserver implementation.
+  void OnTranslateDriverDestroyed(translate::TranslateDriver* driver) override;
+  void OnLanguageDetermined(
+      const translate::LanguageDetectionDetails& details) override;
+
+  // Observes LanguageDetectionObserver, which notifies us when the language of
+  // the contents of the current page has been determined.
+  base::ScopedObservation<translate::TranslateDriver,
+                          translate::TranslateDriver::LanguageDetectionObserver>
+      translate_observation_{this};
 
   // ObjC class that wraps this class.
   __weak CWVTranslationController* translation_controller_ = nil;
-
-  DISALLOW_COPY_AND_ASSIGN(WebViewTranslateClient);
 };
 
 }  // namespace ios_web_view

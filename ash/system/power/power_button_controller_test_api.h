@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,7 @@
 #define ASH_SYSTEM_POWER_POWER_BUTTON_CONTROLLER_TEST_API_H_
 
 #include "ash/system/power/power_button_controller.h"
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 
 namespace base {
 class TickClock;
@@ -29,6 +28,11 @@ class PowerButtonScreenshotController;
 class PowerButtonControllerTestApi {
  public:
   explicit PowerButtonControllerTestApi(PowerButtonController* controller);
+
+  PowerButtonControllerTestApi(const PowerButtonControllerTestApi&) = delete;
+  PowerButtonControllerTestApi& operator=(const PowerButtonControllerTestApi&) =
+      delete;
+
   ~PowerButtonControllerTestApi();
 
   // Returns true when |controller_->pre_shutdown_timer_| is running.
@@ -36,14 +40,14 @@ class PowerButtonControllerTestApi {
 
   // If |controller_->pre_shutdown_timer_| is running, stops it, runs its task,
   // and returns true. Otherwise, returns false.
-  bool TriggerPreShutdownTimeout() WARN_UNUSED_RESULT;
+  [[nodiscard]] bool TriggerPreShutdownTimeout();
 
   // Returns true when |power_button_menu_timer_| is running.
   bool PowerButtonMenuTimerIsRunning() const;
 
   // If |controller_->power_button_menu_timer_| is running, stops it, runs its
   // task, and returns true. Otherwise, returns false.
-  bool TriggerPowerButtonMenuTimeout() WARN_UNUSED_RESULT;
+  [[nodiscard]] bool TriggerPowerButtonMenuTimeout();
 
   // Sends |event| to |controller_->display_controller_|.
   void SendKeyEvent(ui::KeyEvent* event);
@@ -55,8 +59,15 @@ class PowerButtonControllerTestApi {
   // GetMenuBoundsInScreen.
   PowerButtonMenuView* GetPowerButtonMenuView() const;
 
+  // Gets the layer associated with the `controller_`'s menu background
+  // (a `PowerButtonMenuBackgroundView`).
+  ui::Layer* GetPowerButtonMenuBackgroundLayer() const;
+
   // True if the menu is opened.
   bool IsMenuOpened() const;
+
+  // True if |controller_|'s menu has a power off item.
+  bool MenuHasPowerOffItem() const;
 
   // True if |controller_|'s menu has a sign out item.
   bool MenuHasSignOutItem() const;
@@ -64,12 +75,13 @@ class PowerButtonControllerTestApi {
   // True if |controller_|'s menu has a lock screen item.
   bool MenuHasLockScreenItem() const;
 
+  // True if |controller_|'s menu has a capture mode item.
+  bool MenuHasCaptureModeItem() const;
+
   // True if |controller_|'s menu has a feedback item.
   bool MenuHasFeedbackItem() const;
 
   PowerButtonScreenshotController* GetScreenshotController();
-
-  void SetPowerButtonType(PowerButtonController::ButtonType button_type);
 
   void SetTickClock(const base::TickClock* tick_clock);
 
@@ -79,9 +91,7 @@ class PowerButtonControllerTestApi {
   bool ShowMenuAnimationDone() const;
 
  private:
-  PowerButtonController* controller_;  // Not owned.
-
-  DISALLOW_COPY_AND_ASSIGN(PowerButtonControllerTestApi);
+  raw_ptr<PowerButtonController, DanglingUntriaged> controller_;  // Not owned.
 };
 
 }  // namespace ash

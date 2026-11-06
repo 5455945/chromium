@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright 2010 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include <memory>
 
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/diagnostics/diagnostics_test.h"
 
 namespace diagnostics {
@@ -30,10 +29,10 @@ std::unique_ptr<DiagnosticsTest> MakeSqliteFaviconsDbTest();
 std::unique_ptr<DiagnosticsTest> MakeSqliteHistoryDbTest();
 std::unique_ptr<DiagnosticsTest> MakeSqliteTopSitesDbTest();
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 std::unique_ptr<DiagnosticsTest> MakeSqliteNssCertDbTest();
 std::unique_ptr<DiagnosticsTest> MakeSqliteNssKeyDbTest();
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 std::unique_ptr<DiagnosticsTest> MakeSqliteWebDatabaseTrackerDbTest();
 std::unique_ptr<DiagnosticsTest> MakeSqliteWebDataDbTest();

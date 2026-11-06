@@ -2,6 +2,7 @@
   "name": "chromium-polymer",
   "version": "1.0.0",
   "author": "dpapad@chromium.org",
+  "type": "module",
   "dependencies": {
     "@polymer/iron-a11y-announcer": "3.2.0",
     "@polymer/iron-a11y-keys": "3.0.1",
@@ -26,17 +27,15 @@
     "@polymer/iron-selector": "3.0.1",
     "@polymer/iron-test-helpers": "3.0.1",
     "@polymer/neon-animation": "3.0.1",
-    "@polymer/paper-behaviors": "3.0.1",
     "@polymer/paper-progress": "3.0.1",
     "@polymer/paper-ripple": "3.0.1",
     "@polymer/paper-spinner": "3.0.2",
     "@polymer/paper-styles": "3.0.1",
     "@polymer/paper-tooltip": "3.0.1",
-    "@polymer/polymer": "3.2.0",
+    "@polymer/polymer": "3.5.0",
     "@webcomponents/shadycss": "1.9.1"
   },
   "devDependencies": {
-    "acorn": "6.1.1",
-    "rollup": "1.12.4"
+    "acorn": "6.1.1"
   }
 }

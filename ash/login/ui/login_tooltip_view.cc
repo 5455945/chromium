@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,13 @@
 #include "ash/login/ui/non_accessible_view.h"
 #include "ash/login/ui/views_utils.h"
 #include "ui/accessibility/ax_enums.mojom.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/models/image_model.h"
+#include "ui/base/ui_base_features.h"
+#include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
-#include "ui/gfx/paint_vector_icon.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout.h"
@@ -25,28 +29,25 @@ constexpr int kInfoIconSizeDp = 20;
 }  // namespace
 
 LoginTooltipView::LoginTooltipView(const std::u16string& message,
-                                   views::View* anchor_view)
-    : LoginBaseBubbleView(anchor_view) {
+                                   base::WeakPtr<views::View> anchor_view)
+    : LoginBaseBubbleView(std::move(anchor_view)) {
   info_icon_ = AddChildView(std::make_unique<views::ImageView>());
-  info_icon_->SetPreferredSize(gfx::Size(kInfoIconSizeDp, kInfoIconSizeDp));
+  info_icon_->SetImage(ui::ImageModel::FromVectorIcon(
+      ::features::IsRoundedIconsEnabled() ? views::kInfoIcon
+                                          : views::kInfoOldIcon,
+      static_cast<ui::ColorId>(cros_tokens::kCrosSysOnSurface),
+      kInfoIconSizeDp));
 
   label_ = AddChildView(login_views_utils::CreateBubbleLabel(message, this));
+  label_->SetEnabledColor(
+      static_cast<ui::ColorId>(cros_tokens::kCrosSysOnSurface));
+
+  GetViewAccessibility().SetRole(ax::mojom::Role::kTooltip);
 }
 
 LoginTooltipView::~LoginTooltipView() = default;
 
-void LoginTooltipView::GetAccessibleNodeData(ui::AXNodeData* node_data) {
-  node_data->role = ax::mojom::Role::kTooltip;
-}
-
-void LoginTooltipView::OnThemeChanged() {
-  LoginBaseBubbleView::OnThemeChanged();
-  info_icon_->SetImage(gfx::CreateVectorIcon(
-      views::kInfoIcon,
-      AshColorProvider::Get()->GetContentLayerColor(
-          AshColorProvider::ContentLayerType::kIconColorPrimary)));
-  label_->SetEnabledColor(AshColorProvider::Get()->GetContentLayerColor(
-      AshColorProvider::ContentLayerType::kTextColorPrimary));
-}
+BEGIN_METADATA(LoginTooltipView)
+END_METADATA
 
 }  // namespace ash

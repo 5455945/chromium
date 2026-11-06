@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,8 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
 #include "content/public/test/test_utils.h"
 #include "ui/base/ime/mojom/text_input_state.mojom.h"
@@ -20,7 +21,7 @@
 #include "ui/events/event_constants.h"
 #endif
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 #include "content/public/test/fake_local_frame.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #endif
@@ -44,6 +45,9 @@ class WebContents;
 // Returns the |TextInputState.type| from the TextInputManager owned by
 // |web_contents|.
 ui::TextInputType GetTextInputTypeFromWebContents(WebContents* web_contents);
+
+const ui::mojom::TextInputState* GetTextInputStateFromWebContents(
+    WebContents* web_contents);
 
 // This method returns true if |view| is registered in the TextInputManager that
 // is owned by |web_contents|. If that is the case, the value of |type| will be
@@ -89,6 +93,11 @@ void SendImeSetCompositionTextToWidget(
     int selection_start,
     int selection_end);
 
+// Triggers the TextInputStateChanged event on the RenderWidget corresponding to
+// |rwh|.
+void SendTextInputStateChangedToWidget(RenderWidgetHost* rwh,
+                                       ui::mojom::TextInputStatePtr state);
+
 // Immediately destroys the RenderWidgetHost corresponding to the local root
 // which is identified by the given process ID and RenderFrameHost routing ID.
 bool DestroyRenderWidgetHost(int32_t process_id, int32_t local_root_routing_id);
@@ -98,6 +107,10 @@ bool DestroyRenderWidgetHost(int32_t process_id, int32_t local_root_routing_id);
 class TextInputManagerTester {
  public:
   TextInputManagerTester(WebContents* web_contents);
+
+  TextInputManagerTester(const TextInputManagerTester&) = delete;
+  TextInputManagerTester& operator=(const TextInputManagerTester&) = delete;
+
   virtual ~TextInputManagerTester();
 
   // Sets a callback which is invoked when a RWHV calls UpdateTextInputState
@@ -168,8 +181,6 @@ class TextInputManagerTester {
   class InternalObserver;
 
   std::unique_ptr<InternalObserver> observer_;
-
-  DISALLOW_COPY_AND_ASSIGN(TextInputManagerTester);
 };
 
 // TextInputManager Observers
@@ -240,6 +251,12 @@ class TextInputManagerTypeObserver : public TextInputManagerObserverBase {
 class TestRenderWidgetHostViewDestructionObserver {
  public:
   TestRenderWidgetHostViewDestructionObserver(RenderWidgetHostView* view);
+
+  TestRenderWidgetHostViewDestructionObserver(
+      const TestRenderWidgetHostViewDestructionObserver&) = delete;
+  TestRenderWidgetHostViewDestructionObserver& operator=(
+      const TestRenderWidgetHostViewDestructionObserver&) = delete;
+
   virtual ~TestRenderWidgetHostViewDestructionObserver();
 
   // Waits for the RWHV which is being observed to get destroyed.
@@ -250,8 +267,6 @@ class TestRenderWidgetHostViewDestructionObserver {
   class InternalObserver;
 
   std::unique_ptr<InternalObserver> observer_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestRenderWidgetHostViewDestructionObserver);
 };
 
 // Helper class to create TextInputState structs on the browser side and send it
@@ -260,6 +275,10 @@ class TestRenderWidgetHostViewDestructionObserver {
 class TextInputStateSender {
  public:
   explicit TextInputStateSender(RenderWidgetHostView* view);
+
+  TextInputStateSender(const TextInputStateSender&) = delete;
+  TextInputStateSender& operator=(const TextInputStateSender&) = delete;
+
   virtual ~TextInputStateSender();
 
   void Send();
@@ -280,9 +299,7 @@ class TextInputStateSender {
 
  private:
   ui::mojom::TextInputStatePtr text_input_state_;
-  RenderWidgetHostViewBase* const view_;
-
-  DISALLOW_COPY_AND_ASSIGN(TextInputStateSender);
+  const raw_ptr<RenderWidgetHostViewBase> view_;
 };
 
 // This class is intended to observe the InputMethod.
@@ -298,18 +315,22 @@ class TestInputMethodObserver {
 
   virtual ui::TextInputType GetTextInputTypeFromClient() = 0;
 
-  virtual void SetOnShowVirtualKeyboardIfEnabledCallback(
-      const base::RepeatingClosure& callback) = 0;
+  virtual void SetOnVirtualKeyboardVisibilityChangedIfEnabledCallback(
+      const base::RepeatingCallback<void(bool)>& callback) = 0;
 
  protected:
   TestInputMethodObserver();
 };
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 // Helper class to test LocalFrame::GetStringForRange.
 class TextInputTestLocalFrame : public FakeLocalFrame {
  public:
   TextInputTestLocalFrame();
+
+  TextInputTestLocalFrame(const TextInputTestLocalFrame&) = delete;
+  TextInputTestLocalFrame& operator=(const TextInputTestLocalFrame&) = delete;
+
   ~TextInputTestLocalFrame() override;
 
   void SetUp(content::RenderFrameHost* render_frame_host);
@@ -332,8 +353,6 @@ class TextInputTestLocalFrame : public FakeLocalFrame {
   base::RepeatingClosure string_for_range_callback_;
   std::string string_from_range_;
   mojo::AssociatedRemote<blink::mojom::LocalFrame> local_frame_;
-
-  DISALLOW_COPY_AND_ASSIGN(TextInputTestLocalFrame);
 };
 
 // Requests the |tab_view| for the definition of the word identified by the

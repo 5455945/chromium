@@ -32,11 +32,10 @@
 #define THIRD_PARTY_BLINK_RENDERER_BINDINGS_CORE_V8_WINDOW_PROXY_H_
 
 #include "base/dcheck_is_on.h"
-#include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/platform/bindings/dom_wrapper_world.h"
 #include "third_party/blink/renderer/platform/bindings/trace_wrapper_v8_reference.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "v8/include/v8.h"
 
 namespace blink {
@@ -141,7 +140,7 @@ class Frame;
 // ====== References ======
 // https://wiki.mozilla.org/Gecko:SplitWindow
 // https://whatwg.org/C/browsers.html#the-windowproxy-exotic-object
-class WindowProxy : public GarbageCollected<WindowProxy> {
+class CORE_EXPORT WindowProxy : public GarbageCollected<WindowProxy> {
  public:
   virtual ~WindowProxy();
 
@@ -154,7 +153,7 @@ class WindowProxy : public GarbageCollected<WindowProxy> {
   void ClearForSwap();
   void ClearForV8MemoryPurge();
 
-  CORE_EXPORT v8::Local<v8::Object> GlobalProxyIfNotDetached();
+  v8::Local<v8::Object> GetGlobalProxy();
   v8::Local<v8::Object> ReleaseGlobalProxy();
   // This does not initialize the window proxy, either Initialize or
   // InitializeIfNeeded needs to be called after this method.
@@ -254,7 +253,7 @@ class WindowProxy : public GarbageCollected<WindowProxy> {
     kFrameIsDetachedAndV8MemoryIsPurged,
   };
 
-  WindowProxy(v8::Isolate*, Frame&, scoped_refptr<DOMWrapperWorld>);
+  WindowProxy(v8::Isolate*, Frame&, DOMWrapperWorld*);
 
   virtual void Initialize() = 0;
 
@@ -277,7 +276,7 @@ class WindowProxy : public GarbageCollected<WindowProxy> {
 
  protected:
   // TODO(dcheng): Consider making these private and using getters.
-  const scoped_refptr<DOMWrapperWorld> world_;
+  const Member<DOMWrapperWorld> world_;
   // Note: this used to be a ScopedPersistent, making `global_proxy_` a strong
   // GC root from Blink to v8::Context. When the context was disposed (e.g. when
   // detaching the frame or purging v8), it was important to call `SetPhantom()`

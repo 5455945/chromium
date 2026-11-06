@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,9 @@
 
 #include <vector>
 
+#include "base/run_loop.h"
 #include "base/test/bind.h"
+#include "base/time/time.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/history/core/browser/history_types.h"
 #include "components/history/core/test/history_service_test_util.h"
@@ -26,35 +28,62 @@ class HistoryClustersServiceTestApi {
 
   // Gets the annotated visits from HistoryService synchronously for testing.
   std::vector<history::AnnotatedVisit> GetVisits() {
-    std::vector<history::AnnotatedVisit> result;
+    std::vector<history::AnnotatedVisit> annotated_visits;
 
     base::CancelableTaskTracker tracker;
+    history::QueryOptions options;
+    options.duplicate_policy = history::QueryOptions::KEEP_ALL_DUPLICATES;
     history_service_->GetAnnotatedVisits(
-        1000,  // Getting 1000 clusters for testing is a reasonable fake value.
+        options,
+        /*compute_redirect_chain_start_properties=*/true,
+        /*get_unclustered_visits_only=*/false,
         base::BindLambdaForTesting(
             [&](std::vector<history::AnnotatedVisit> visits) {
-              result = std::move(visits);
+              annotated_visits = std::move(visits);
             }),
         &tracker);
     history::BlockUntilHistoryProcessesPendingRequests(history_service_);
 
-    return result;
+    return annotated_visits;
   }
 
   void SetClusteringBackendForTest(std::unique_ptr<ClusteringBackend> backend) {
     DCHECK(backend.get());
-
     history_clusters_service_->backend_ = std::move(backend);
-    // TODO(tommycli): Eliminate this `backend_weak_factory_` idiom. It's error
-    // prone, and I think we can work around the need for it.
-    history_clusters_service_->backend_weak_factory_ =
-        std::make_unique<base::WeakPtrFactory<ClusteringBackend>>(
-            history_clusters_service_->backend_.get());
+  }
+
+  void SetAllKeywordsCacheTimestamp(base::Time time) {
+    history_clusters_service_->all_keywords_cache_timestamp_ = time;
+  }
+
+  void SetShortKeywordCacheTimestamp(base::Time time) {
+    history_clusters_service_->short_keyword_cache_timestamp_ = time;
+  }
+
+  void SetShortKeywordCache(HistoryClustersService::KeywordMap cache) {
+    history_clusters_service_->short_keyword_cache_ = cache;
+  }
+
+  void SetAllKeywordsCache(HistoryClustersService::KeywordMap cache) {
+    history_clusters_service_->all_keywords_cache_ = cache;
   }
 
   HistoryClustersService* const history_clusters_service_;
   history::HistoryService* const history_service_;
 };
+
+// Fetches two hardcoded test visits.
+std::vector<history::AnnotatedVisit> GetHardcodedTestVisits();
+
+// Fetches the hardcoded `ClusterVisit` with ID `visit_id`.
+history::ClusterVisit GetHardcodedClusterVisit(history::VisitID visit_id,
+                                               float score = 0.5,
+                                               int engagement_score = 0);
+
+history::ClusterVisit AnnotatedVisitToClusterVisit(
+    const history::AnnotatedVisit& visit,
+    float score = .5,
+    int engagement_score = 0);
 
 }  // namespace history_clusters
 

@@ -1,52 +1,59 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/policy/core/common/management/platform_management_status_provider_win.h"
 
-#include "components/policy/core/common/cloud/cloud_policy_store.h"
-#if defined(OS_WIN)
+#include "base/feature_list.h"
 #include "base/win/win_util.h"
 #include "base/win/windows_version.h"
-#endif
+#include "components/policy/core/common/cloud/cloud_policy_store.h"
+#include "components/policy/core/common/features.h"
+#include "components/policy/core/common/policy_pref_names.h"
 
 namespace policy {
-#if defined(OS_WIN)
-bool DomainEnrollmentStatusProvider::IsManaged() {
-  return DomainEnrollmentStatusProvider::IsEnrolledToDomain();
-}
+DomainEnrollmentStatusProvider::DomainEnrollmentStatusProvider() = default;
 
-EnterpriseManagementAuthority DomainEnrollmentStatusProvider::GetAuthority() {
-  return EnterpriseManagementAuthority::DOMAIN_LOCAL;
+EnterpriseManagementAuthority DomainEnrollmentStatusProvider::FetchAuthority() {
+  return DomainEnrollmentStatusProvider::IsEnrolledToDomain() ? DOMAIN_LOCAL
+                                                              : NONE;
 }
 
 bool DomainEnrollmentStatusProvider::IsEnrolledToDomain() {
   return base::win::IsEnrolledToDomain();
 }
 
-bool AzureActiveDirectoryStatusProvider::IsManaged() {
-  return base::win::IsJoinedToAzureAD();
-}
+EnterpriseMDMManagementStatusProvider::EnterpriseMDMManagementStatusProvider()
+    : ManagementStatusProvider(policy_prefs::kEnterpriseMDMManagementWindows) {}
 
 EnterpriseManagementAuthority
-AzureActiveDirectoryStatusProvider::GetAuthority() {
-  return EnterpriseManagementAuthority::CLOUD_DOMAIN;
+EnterpriseMDMManagementStatusProvider::FetchAuthority() {
+  return base::win::IsDeviceRegisteredWithManagement() ? CLOUD : NONE;
 }
-#endif
 
-bool EnterpriseMDMManagementStatusProvider::IsManaged() {
-#if defined(OS_WIN)
-  return base::win::OSInfo::GetInstance()->version_type() !=
-             base::win::SUITE_HOME &&
-         base::win::IsDeviceRegisteredWithManagement();
-#else
-  return false;
-#endif
-}
+AzureActiveDirectoryStatusProvider::AzureActiveDirectoryStatusProvider()
+    : ManagementStatusProvider(policy_prefs::kAzureActiveDirectoryManagement) {}
 
 EnterpriseManagementAuthority
-EnterpriseMDMManagementStatusProvider::GetAuthority() {
-  return EnterpriseManagementAuthority::CLOUD;
+AzureActiveDirectoryStatusProvider::FetchAuthority() {
+  return base::win::IsJoinedToAzureAD() ? CLOUD_DOMAIN : NONE;
+}
+
+AzureActiveDirectoryDeviceStatusProvider::
+    AzureActiveDirectoryDeviceStatusProvider()
+    : ManagementStatusProvider(
+          policy_prefs::kAzureActiveDirectoryDeviceManagement) {}
+
+EnterpriseManagementAuthority
+AzureActiveDirectoryDeviceStatusProvider::FetchAuthority() {
+  // The initial policy load happens before the `base::FeatureList` is
+  // initialized.
+  if (base::FeatureList::GetInstance() &&
+      !base::FeatureList::IsEnabled(
+          features::kFilterSensitivePoliciesOnWorkplaceJoinedDevices)) {
+    return base::win::IsJoinedToAzureAD() ? CLOUD_DOMAIN : NONE;
+  }
+  return base::win::IsDeviceJoinedToAzureAD() ? CLOUD_DOMAIN : NONE;
 }
 
 }  // namespace policy

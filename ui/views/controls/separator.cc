@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,12 @@
 #include <algorithm>
 
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/color/color_id.h"
+#include "ui/color/color_provider.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/scoped_canvas.h"
-#include "ui/native_theme/native_theme.h"
+#include "ui/views/metadata/type_conversion.h"
+#include "ui/views/property_effects.h"
 
 namespace views {
 
@@ -19,45 +22,74 @@ Separator::Separator() = default;
 
 Separator::~Separator() = default;
 
-SkColor Separator::GetColor() const {
-  return overridden_color_.value_or(0);
+ui::ColorId Separator::GetColorId() const {
+  return color_id_;
 }
 
-void Separator::SetColor(SkColor color) {
-  if (overridden_color_ == color)
+void Separator::SetColorId(ui::ColorId color_id) {
+  if (color_id_ == color_id) {
     return;
+  }
 
-  overridden_color_ = color;
-  OnPropertyChanged(&overridden_color_, kPropertyEffectsPaint);
+  color_id_ = color_id;
+  OnPropertyChanged(&color_id_, PropertyEffects::kPaint);
 }
 
-int Separator::GetPreferredHeight() const {
-  return preferred_height_;
+int Separator::GetPreferredLength() const {
+  return preferred_length_;
 }
 
-void Separator::SetPreferredHeight(int height) {
-  if (preferred_height_ == height)
+void Separator::SetPreferredLength(int length) {
+  if (preferred_length_ == length) {
     return;
+  }
 
-  preferred_height_ = height;
-  OnPropertyChanged(&preferred_height_, kPropertyEffectsPreferredSizeChanged);
+  preferred_length_ = length;
+  OnPropertyChanged(&preferred_length_, PropertyEffects::kPreferredSizeChanged);
+}
+
+Separator::Orientation Separator::GetOrientation() const {
+  return orientation_;
+}
+
+void Separator::SetOrientation(Orientation orientation) {
+  orientation_ = orientation;
+}
+
+int Separator::GetBorderRadius() const {
+  return border_radius_;
+}
+
+void Separator::SetBorderRadius(int radius) {
+  border_radius_ = radius;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // Separator, View overrides:
 
-gfx::Size Separator::CalculatePreferredSize() const {
-  gfx::Size size(kThickness, preferred_height_);
+gfx::Size Separator::CalculatePreferredSize(
+    const SizeBounds& /*available_size*/) const {
+  gfx::Size size(kThickness, preferred_length_);
+  if (orientation_ == Orientation::kHorizontal) {
+    size.Transpose();
+  }
+
   gfx::Insets insets = GetInsets();
   size.Enlarge(insets.width(), insets.height());
   return size;
 }
 
+void Separator::OnThemeChanged() {
+  View::OnThemeChanged();
+
+  // Separators almost always use colors which are tied to theme, so separators
+  // should invoke painting on theme changes.
+  SchedulePaint();
+}
+
 void Separator::OnPaint(gfx::Canvas* canvas) {
-  const SkColor color = overridden_color_
-                            ? *overridden_color_
-                            : GetNativeTheme()->GetSystemColor(
-                                  ui::NativeTheme::kColorId_SeparatorColor);
+  const SkColor color = GetForegroundColor();
+
   // Paint background and border, if any.
   View::OnPaint(canvas);
 
@@ -91,12 +123,31 @@ void Separator::OnPaint(gfx::Canvas* canvas) {
   const int w = std::max(1, r - x);
   const int h = std::max(1, b - y);
 
-  canvas->FillRect({x, y, w, h}, color);
+  if (border_radius_) {
+    cc::PaintFlags flags;
+    flags.setColor(color);
+    flags.setStyle(cc::PaintFlags::kFill_Style);
+    flags.setBlendMode(SkBlendMode::kSrcOver);
+    canvas->DrawRoundRect({x, y, w, h}, border_radius_, flags);
+  } else {
+    canvas->FillRect({x, y, w, h}, color);
+  }
 }
 
-BEGIN_METADATA(Separator, View)
-ADD_PROPERTY_METADATA(SkColor, Color, ui::metadata::SkColorConverter)
-ADD_PROPERTY_METADATA(int, PreferredHeight)
+SkColor Separator::GetForegroundColor() const {
+  return GetColorProvider()->GetColor(color_id_);
+}
+
+BEGIN_METADATA(Separator)
+ADD_PROPERTY_METADATA(ui::ColorId, ColorId)
+ADD_PROPERTY_METADATA(int, PreferredLength)
+ADD_PROPERTY_METADATA(Separator::Orientation, Orientation)
+ADD_PROPERTY_METADATA(int, BorderRadius)
 END_METADATA
 
 }  // namespace views
+
+DEFINE_ENUM_CONVERTERS(views::Separator::Orientation,
+                       {views::Separator::Orientation::kHorizontal,
+                        u"kHorizontal"},
+                       {views::Separator::Orientation::kVertical, u"kVertical"})

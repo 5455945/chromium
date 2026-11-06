@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 #
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -13,8 +13,10 @@ import argparse
 import os
 import sh
 
+
 def qtcreator_open_file(filepath, line=1):
   sh.qtcreator("-client", filepath + ":" + str(line))
+
 
 CHROMIUM_ROOT = os.environ['HOME'] + "/workspace/chromium/src"
 

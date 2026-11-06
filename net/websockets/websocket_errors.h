@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,10 +10,10 @@
 
 namespace net {
 
-// Reason codes used with close messages. NoStatusReceived,
-// AbnormalClosure and TlsHandshake are special in that they
-// should never be sent on the wire; they are only used within the
-// implementation.
+// Reason codes used with close messages. `kWebSocketErrorNoStatusReceived`,
+// `kWebSocketErrorAbnormalClosure`, and `kWebSocketErrorTlsHandshake` are
+// special in that they should never be sent on the wire; they are only used
+// within the implementation.
 enum WebSocketError {
   // Status codes in the range 0 to 999 are not used.
 

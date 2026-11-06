@@ -1,13 +1,14 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_AUTOFILL_IOS_BROWSER_IOS_TEST_EVENT_WAITER_H_
 #define COMPONENTS_AUTOFILL_IOS_BROWSER_IOS_TEST_EVENT_WAITER_H_
 
-#include <list>
+#import <list>
 
 #import "base/test/ios/wait_util.h"
+#import "base/time/time.h"
 
 namespace autofill {
 
@@ -24,8 +25,11 @@ namespace autofill {
 template <typename Event>
 class IOSTestEventWaiter {
  public:
-  explicit IOSTestEventWaiter(std::list<Event> expected_events,
-                              double timeout = 0);
+  IOSTestEventWaiter(std::list<Event> expected_events, base::TimeDelta timeout);
+
+  IOSTestEventWaiter(const IOSTestEventWaiter&) = delete;
+  IOSTestEventWaiter& operator=(const IOSTestEventWaiter&) = delete;
+
   ~IOSTestEventWaiter() = default;
 
   // Either returns true right away if all events were observed between this
@@ -42,14 +46,12 @@ class IOSTestEventWaiter {
  private:
   std::list<Event> expected_events_;
   bool runloop_running_;
-  double timeout_;
-
-  DISALLOW_COPY_AND_ASSIGN(IOSTestEventWaiter);
+  base::TimeDelta timeout_;
 };
 
 template <typename Event>
 IOSTestEventWaiter<Event>::IOSTestEventWaiter(std::list<Event> expected_events,
-                                              double timeout)
+                                              base::TimeDelta timeout)
     : expected_events_(std::move(expected_events)),
       runloop_running_(false),
       timeout_(timeout) {}

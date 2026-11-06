@@ -1,29 +1,29 @@
 Document
-++Edit Name='not editable' Value.Value='focusable: ok link name: '
+++Edit Name='not editable' Value.Value='focusable: oklink name: <newline>'
 ++++Text Name='focusable: '
 ++++Button Name='ok'
 ++++Hyperlink Name='link'
 ++++++Text Name='link' IsControlElement=false
 ++++Text Name=' '
-++++Text
+++++Group IsControlElement=false
 ++++++Text Name='name: '
 ++++++Edit Name='name:'
-++Edit Name='editable' Value.Value='focusable: ok link name: '
+++Edit Name='editable' Value.Value='focusable: oklink name: <newline>'
 ++++Text Name='focusable: '
 ++++Button Name='ok'
 ++++Hyperlink Name='link'
 ++++++Text Name='link' IsControlElement=false
 ++++Text Name=' '
-++++Text
+++++Group IsControlElement=false
 ++++++Text Name='name: '
 ++++++Edit Name='name:'
-++Edit Name='not editable or focusable' Value.Value='focusable: ok link name: '
+++Edit Name='not editable or focusable' Value.Value='focusable: oklink name: <newline>'
 ++++Text Name='focusable: '
 ++++Button Name='ok'
 ++++Hyperlink Name='link'
 ++++++Text Name='link' IsControlElement=false
 ++++Text Name=' '
-++++Text
+++++Group IsControlElement=false
 ++++++Text Name='name: '
 ++++++Edit Name='name:'
 ++Edit Name='not editable, img child'

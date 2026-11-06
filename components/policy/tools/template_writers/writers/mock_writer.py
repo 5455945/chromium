@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2012 The Chromium Authors. All rights reserved.
+# Copyright 2012 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -7,8 +7,7 @@ from .template_writer import TemplateWriter
 
 
 class MockWriter(TemplateWriter):
-  '''Helper class for unit tests in policy_template_generator_unittest.py
-  '''
+  '''Helper class for unit tests in policy_template_generator_unittest.py'''
 
   def __init__(self, platforms=[], config={}):
     super(MockWriter, self).__init__(platforms, config)

@@ -1,11 +1,11 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef EXTENSIONS_RENDERER_SCOPED_WEB_FRAME_H_
 #define EXTENSIONS_RENDERER_SCOPED_WEB_FRAME_H_
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "third_party/blink/public/platform/scheduler/web_agent_group_scheduler.h"
 #include "third_party/blink/public/web/web_local_frame.h"
 #include "third_party/blink/public/web/web_local_frame_client.h"
@@ -18,6 +18,10 @@ namespace extensions {
 class ScopedWebFrame {
 public:
   ScopedWebFrame();
+
+  ScopedWebFrame(const ScopedWebFrame&) = delete;
+  ScopedWebFrame& operator=(const ScopedWebFrame&) = delete;
+
   ~ScopedWebFrame();
 
   blink::WebLocalFrame* frame() { return frame_; }
@@ -30,10 +34,8 @@ private:
  // ~ScopedWebFrame explicitly closes the WebView.
  std::unique_ptr<blink::scheduler::WebAgentGroupScheduler>
      agent_group_scheduler_;
- blink::WebView* view_;
- blink::WebLocalFrame* frame_;
-
- DISALLOW_COPY_AND_ASSIGN(ScopedWebFrame);
+ raw_ptr<blink::WebView, DanglingUntriaged> view_;
+ raw_ptr<blink::WebLocalFrame> frame_;
 };
 
 }  // namespace extensions

@@ -1,18 +1,20 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
 #include "base/barrier_closure.h"
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/containers/flat_map.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/synchronization/lock.h"
-#include "base/task/post_task.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/test/bind.h"
 #include "mojo/public/cpp/bindings/async_flusher.h"
@@ -24,7 +26,6 @@
 #include "mojo/public/cpp/bindings/tests/bindings_test_base.h"
 #include "mojo/public/cpp/bindings/tests/flush_async_unittest.test-mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace mojo {
 namespace test {
@@ -101,7 +102,7 @@ class KeyValueStoreImpl : public base::RefCountedThreadSafe<KeyValueStoreImpl>,
     }
 
     const scoped_refptr<base::SequencedTaskRunner> task_runner_;
-    KeyValueStoreImpl* const key_value_store_;
+    const raw_ptr<KeyValueStoreImpl> key_value_store_;
     std::unique_ptr<Receiver<mojom::Writer>> receiver_;
   };
 
@@ -116,8 +117,9 @@ class KeyValueStoreImpl : public base::RefCountedThreadSafe<KeyValueStoreImpl>,
 
     // Shutdown all WriterImpls too.
     auto shutdown = base::BarrierClosure(writers_.size(), std::move(callback));
-    for (auto& writer : writers_)
+    for (auto& writer : writers_) {
       writer->ShutDown(base::BindOnce(shutdown));
+    }
   }
 
   // mojom::KeyValueStore implementation:
@@ -188,7 +190,7 @@ class FlushAsyncTest : public BindingsTestBase {
       base::MakeRefCounted<KeyValueStoreImpl>()};
 };
 
-TEST_P(FlushAsyncTest, WaitForMultipleFlushes) {
+TEST_F(FlushAsyncTest, WaitForMultipleFlushes) {
   const std::string kKey1 = "bar";
   const std::string kKey2 = "foo";
   const std::string kValue1 = "42";
@@ -217,7 +219,7 @@ TEST_P(FlushAsyncTest, WaitForMultipleFlushes) {
   EXPECT_EQ(kValue2, snapshot[kKey2]);
 }
 
-TEST_P(FlushAsyncTest, MultipleFlushesInSequence) {
+TEST_F(FlushAsyncTest, MultipleFlushesInSequence) {
   const std::string kKey1 = "foo";
   const std::string kKey2 = "bar";
   const std::string kKey3 = "baz";
@@ -250,7 +252,7 @@ TEST_P(FlushAsyncTest, MultipleFlushesInSequence) {
   EXPECT_EQ(kValue1, snapshot[kKey1]);
 }
 
-TEST_P(FlushAsyncTest, DroppedFlusherCompletesPendingFlush) {
+TEST_F(FlushAsyncTest, DroppedFlusherCompletesPendingFlush) {
   const std::string kKey = "foo";
   const std::string kValue = "bar";
   Remote<mojom::Writer> writer = MakeWriter();
@@ -261,7 +263,7 @@ TEST_P(FlushAsyncTest, DroppedFlusherCompletesPendingFlush) {
   // corresponding AsyncFlusher. The call should eventually execute.
   base::RunLoop loop;
   base::flat_map<std::string, std::string> snapshot;
-  absl::optional<AsyncFlusher> flusher(absl::in_place);
+  std::optional<AsyncFlusher> flusher(std::in_place);
   key_value_store().PauseReceiverUntilFlushCompletes(
       PendingFlush(&flusher.value()));
   key_value_store()->GetSnapshot(base::BindLambdaForTesting(
@@ -291,7 +293,7 @@ class PingerImpl : public mojom::Pinger {
   Receiver<mojom::Pinger> receiver_;
 };
 
-TEST_P(FlushAsyncTest, PausedInterfaceDoesNotAutoResumeOnFlush) {
+TEST_F(FlushAsyncTest, PausedInterfaceDoesNotAutoResumeOnFlush) {
   // Verifies that if a receiver is implicitly paused via a remote call to
   // |PauseReceiverUntilFlushCompletes()|, but also explicitly paused by its
   // owner calling |Pause()|, it does not auto-resume when the flush completes.
@@ -299,7 +301,7 @@ TEST_P(FlushAsyncTest, PausedInterfaceDoesNotAutoResumeOnFlush) {
   Remote<mojom::Pinger> pinger;
   PingerImpl impl(pinger.BindNewPipeAndPassReceiver());
 
-  absl::optional<AsyncFlusher> flusher(absl::in_place);
+  std::optional<AsyncFlusher> flusher(std::in_place);
   PendingFlush flush(&flusher.value());
   pinger.PauseReceiverUntilFlushCompletes(std::move(flush));
 
@@ -335,7 +337,7 @@ TEST_P(FlushAsyncTest, PausedInterfaceDoesNotAutoResumeOnFlush) {
   EXPECT_TRUE(got_reply);
 }
 
-TEST_P(FlushAsyncTest, ResumeDoesNotInterruptWaitingOnFlush) {
+TEST_F(FlushAsyncTest, ResumeDoesNotInterruptWaitingOnFlush) {
   // Verifies that an explicit |Resume()| does not actually resume message
   // processing if the endpoint is still waiting on an asynchronous flush
   // operation.
@@ -343,7 +345,7 @@ TEST_P(FlushAsyncTest, ResumeDoesNotInterruptWaitingOnFlush) {
   Remote<mojom::Pinger> pinger;
   PingerImpl impl(pinger.BindNewPipeAndPassReceiver());
 
-  absl::optional<AsyncFlusher> flusher(absl::in_place);
+  std::optional<AsyncFlusher> flusher(std::in_place);
   PendingFlush flush(&flusher.value());
   pinger.PauseReceiverUntilFlushCompletes(std::move(flush));
 
@@ -388,8 +390,9 @@ class KeyValueStoreClientImpl : public mojom::KeyValueStoreClient {
 
   // mojom::KeyValueStoreClient implementation:
   void OnSnapshotTaken() override {
-    if (snapshot_taken_callback_)
+    if (snapshot_taken_callback_) {
       snapshot_taken_callback_.Run();
+    }
   }
 
  private:
@@ -397,7 +400,7 @@ class KeyValueStoreClientImpl : public mojom::KeyValueStoreClient {
   base::RepeatingClosure snapshot_taken_callback_;
 };
 
-TEST_P(FlushAsyncTest, PauseRemote) {
+TEST_F(FlushAsyncTest, PauseRemote) {
   // Smoke test to exercise the async flushing APIs on a Receiver to pause
   // callback dispatch on its corresponding Remote. |GetSnapshot()| replies are
   // strictly ordered against corresponding calls to |OnSnapshotTaken()| on the
@@ -444,8 +447,6 @@ TEST_P(FlushAsyncTest, PauseRemote) {
       }));
   loop.Run();
 }
-
-INSTANTIATE_MOJO_BINDINGS_TEST_SUITE_P(FlushAsyncTest);
 
 }  // namespace flush_async_unittest
 }  // namespace test

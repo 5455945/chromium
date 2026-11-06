@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,147 +11,136 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/macros.h"
 #include "chrome/browser/bitmap_fetcher/bitmap_fetcher.h"
 #include "chrome/browser/ui/android/layouts/scene_layer.h"
 
-namespace cc {
+class Profile;
+
+namespace cc::slim {
 class Layer;
 class SolidColorLayer;
-}
+}  // namespace cc::slim
+
+namespace content {
+class WebContents;
+}  // namespace content
 
 namespace android {
 
 class ContextualSearchLayer;
 
-// A native-side, cc::Layer-based representation of how a Contextual Search
-// scene should be drawn.
-// This class delegates to the ContextualSearchLayer
-// that does the actual rendering of the Contextual Search Bar and content.
+// A native-side, cc::slim::Layer-based representation of how a Contextual
+// Search scene should be drawn. This class delegates to the
+// ContextualSearchLayer that does the actual rendering of the Contextual Search
+// Bar and content.
 class ContextualSearchSceneLayer : public SceneLayer,
                                    public BitmapFetcherDelegate {
  public:
   ContextualSearchSceneLayer(JNIEnv* env,
                              const base::android::JavaRef<jobject>& jobj);
+
+  ContextualSearchSceneLayer(const ContextualSearchSceneLayer&) = delete;
+  ContextualSearchSceneLayer& operator=(const ContextualSearchSceneLayer&) =
+      delete;
+
   ~ContextualSearchSceneLayer() override;
 
   void CreateContextualSearchLayer(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& object,
-      const base::android::JavaParamRef<jobject>& jresource_manager);
+      const base::android::JavaRef<jobject>& jresource_manager);
 
   void UpdateContextualSearchLayer(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& object,
-      jint search_bar_background_resource_id,
-      jint search_bar_background_color,
-      jint search_context_resource_id,
-      jint search_term_resource_id,
-      jint search_caption_resource_id,
-      jint search_bar_shadow_resource_id,
-      jint search_provider_icon_resource_id,
-      jint quick_action_icon_resource_id,
-      jint drag_handlebar_resource_id,
-      jint open_tab_icon_resource_id,
-      jint close_icon_resource_id,
-      jint progress_bar_background_resource_id,
-      jint progress_bar_resource_id,
-      jint search_promo_resource_id,
-      jint bar_banner_ripple_resource_id,
-      jint bar_banner_text_resource_id,
-      jfloat dp_to_px,
-      jfloat layout_width,
-      jfloat layout_height,
-      jfloat base_page_brightness,
-      jfloat base_page_offset,
-      const base::android::JavaParamRef<jobject>& jweb_contents,
-      jboolean search_promo_visible,
-      jfloat search_promo_height,
-      jfloat search_promo_opacity,
-      jint search_promo_background_color,
-      // Panel Help
-      jint panel_help_resource_id,
-      jboolean panel_help_visible,
-      jfloat panel_help_height,
-      jfloat panel_help_opacity,
-      jint panel_help_container_background_color,
+      int32_t search_bar_background_resource_id,
+      int32_t search_bar_background_color,
+      int32_t search_context_resource_id,
+      int32_t search_term_resource_id,
+      int32_t search_caption_resource_id,
+      int32_t search_bar_shadow_resource_id,
+      int32_t search_provider_icon_resource_id,
+      int32_t quick_action_icon_resource_id,
+      int32_t drag_handlebar_resource_id,
+      int32_t open_tab_icon_resource_id,
+      int32_t close_icon_resource_id,
+      int32_t progress_bar_background_resource_id,
+      int32_t progress_bar_background_tint,
+      int32_t progress_bar_resource_id,
+      int32_t progress_bar_tint,
+      int32_t search_promo_resource_id,
+      float dp_to_px,
+      float layout_width,
+      float layout_height,
+      float layout_margin_x,
+      float base_page_brightness,
+      float base_page_offset_y,
+      content::WebContents* web_contents,
+      bool search_promo_visible,
+      float search_promo_height,
+      float search_promo_opacity,
+      int32_t search_promo_background_color,
       // Related Searches
-      jint related_searches_in_content_resource_id,
-      jboolean related_searches_in_content_visible,
-      jfloat related_searches_in_content_height,
-      jint related_searches_in_bar_resource_id,
-      jboolean related_searches_in_bar_visible,
-      jfloat related_searches_in_bar_height,
-      jfloat related_searches_in_bar_redundant_padding,
-      // Banner etc
-      jboolean search_bar_banner_visible,
-      jfloat search_bar_banner_height,
-      jfloat search_bar_banner_padding,
-      jfloat search_bar_banner_ripple_width,
-      jfloat search_bar_banner_ripple_opacity,
-      jfloat search_bar_banner_text_opacity,
-      jfloat search_panel_x,
-      jfloat search_panel_y,
-      jfloat search_panel_width,
-      jfloat search_panel_height,
-      jfloat search_bar_margin_side,
-      jfloat search_bar_margin_top,
-      jfloat search_bar_height,
-      jfloat search_context_opacity,
-      jfloat search_text_layer_min_height,
-      jfloat search_term_opacity,
-      jfloat search_term_caption_spacing,
-      jfloat search_caption_animation_percentage,
-      jboolean search_caption_visible,
-      jboolean search_bar_border_visible,
-      jfloat search_bar_border_height,
-      jboolean quick_action_icon_visible,
-      jboolean thumbnail_visible,
-      jstring j_thumbnail_url,
-      jfloat custom_image_visibility_percentage,
-      jint bar_image_size,
-      jint icon_color,
-      jint drag_handlebar_color,
-      jfloat close_icon_opacity,
-      jboolean progress_bar_visible,
-      jfloat progress_bar_height,
-      jfloat progress_bar_opacity,
-      jfloat progress_bar_completion,
-      jboolean touch_highlight_visible,
-      jfloat touch_highlight_x_offset,
-      jfloat touch_highlight_width,
-      const base::android::JavaRef<jobject>& j_profile,
-      jint bar_background_resource_id,
-      jint separator_line_color);
+      int32_t related_searches_in_bar_resource_id,
+      bool related_searches_in_bar_visible,
+      float related_searches_in_bar_height,
+      float related_searches_in_bar_redundant_padding,
+      // Panel position etc
+      float search_panel_x,
+      float search_panel_y,
+      float search_panel_width,
+      float search_panel_height,
+      float search_bar_margin_side,
+      float search_bar_margin_top,
+      float search_bar_margin_bottom,
+      float search_bar_height,
+      float search_context_opacity,
+      float search_text_layer_min_height,
+      float search_term_opacity,
+      float search_term_caption_spacing,
+      float search_caption_animation_percentage,
+      bool search_caption_visible,
+      bool search_bar_border_visible,
+      float search_bar_border_height,
+      bool quick_action_icon_visible,
+      bool thumbnail_visible,
+      const std::string& thumbnail_url,
+      float custom_image_visibility_percentage,
+      int32_t bar_image_size,
+      int32_t icon_color,
+      int32_t drag_handlebar_color,
+      float close_icon_opacity,
+      bool progress_bar_visible,
+      float progress_bar_height,
+      float progress_bar_opacity,
+      float progress_bar_completion,
+      bool touch_highlight_visible,
+      float touch_highlight_x_offset,
+      float touch_highlight_width,
+      Profile* profile,
+      int32_t bar_background_resource_id,
+      int32_t separator_line_color,
+      int32_t callout_resource_id,
+      float callout_opacity);
 
   // Inherited from BitmapFetcherDelegate
   void OnFetchComplete(
       const GURL& url,
       const SkBitmap* bitmap) override;
 
-  void SetContentTree(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& jobj,
-      const base::android::JavaParamRef<jobject>& jcontent_tree);
+  void SetContentTree(JNIEnv* env,
+                      const base::android::JavaRef<jobject>& jcontent_tree);
 
-  void HideTree(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& jobj);
+  void HideTree(JNIEnv* env);
 
  private:
-  void FetchThumbnail(const base::android::JavaRef<jobject>& j_profile);
+  void FetchThumbnail(Profile* profile);
 
-  JNIEnv* env_;
-  base::android::ScopedJavaGlobalRef<jobject> object_;
   std::string thumbnail_url_;
   std::unique_ptr<BitmapFetcher> fetcher_;
 
   scoped_refptr<ContextualSearchLayer> contextual_search_layer_;
   // Responsible for fading the base page content.
-  scoped_refptr<cc::SolidColorLayer> color_overlay_;
-  scoped_refptr<cc::Layer> content_container_;
-
-  DISALLOW_COPY_AND_ASSIGN(ContextualSearchSceneLayer);
+  scoped_refptr<cc::slim::SolidColorLayer> color_overlay_;
+  scoped_refptr<cc::slim::Layer> content_container_;
 };
 
 }  // namespace android

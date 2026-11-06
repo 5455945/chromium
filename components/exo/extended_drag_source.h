@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,14 @@
 #define COMPONENTS_EXO_EXTENDED_DRAG_SOURCE_H_
 
 #include <memory>
-#include <string>
+#include <optional>
 
 #include "ash/drag_drop/toplevel_window_drag_delegate.h"
 #include "ash/wm/toplevel_window_event_handler.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "components/exo/data_source_observer.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/aura/scoped_window_event_targeting_blocker.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom-shared.h"
 #include "ui/gfx/geometry/point.h"
@@ -36,16 +37,15 @@ class DataSource;
 class Surface;
 
 class ExtendedDragSource : public DataSourceObserver,
+                           public aura::WindowObserver,
                            public ash::ToplevelWindowDragDelegate {
  public:
   class Delegate {
    public:
     virtual bool ShouldAllowDropAnywhere() const = 0;
     virtual bool ShouldLockCursor() const = 0;
-    virtual void OnSwallowed(const std::string& mime_type) = 0;
-    virtual void OnUnswallowed(const std::string& mime_type,
-                               const gfx::Vector2d& offset) = 0;
     virtual void OnDataSourceDestroying() = 0;
+    virtual base::WeakPtr<Delegate> GetWeakPtr() = 0;
 
    protected:
     virtual ~Delegate() = default;
@@ -69,13 +69,14 @@ class ExtendedDragSource : public DataSourceObserver,
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
 
-  void Drag(Surface* surface, const gfx::Vector2d& offset);
-
   bool IsActive() const;
+
+  void Drag(Surface* surface, const gfx::Vector2d& offset);
 
   // ash::ToplevelWindowDragDelegate:
   void OnToplevelWindowDragStarted(const gfx::PointF& start_location,
-                                   ui::mojom::DragEventSource source) override;
+                                   ui::mojom::DragEventSource source,
+                                   aura::Window* drag_source_window) override;
   ui::mojom::DragOperation OnToplevelWindowDragDropped() override;
   void OnToplevelWindowDragCancelled() override;
   void OnToplevelWindowDragEvent(ui::LocatedEvent* event) override;
@@ -83,34 +84,40 @@ class ExtendedDragSource : public DataSourceObserver,
   // DataSourceObserver:
   void OnDataSourceDestroying(DataSource* source) override;
 
+  // aura::WindowObserver:
+  void OnWindowDestroyed(aura::Window* window) override;
+
   aura::Window* GetDraggedWindowForTesting();
-  absl::optional<gfx::Vector2d> GetDragOffsetForTesting() const;
+  std::optional<gfx::Vector2d> GetDragOffsetForTesting() const;
+  aura::Window* GetDragSourceWindowForTesting();
 
  private:
   class DraggedWindowHolder;
 
   void MaybeLockCursor();
   void UnlockCursor();
-  void StartDrag(aura::Window* toplevel,
-                 const gfx::PointF& pointer_location_in_screen);
+  void StartDrag(aura::Window* toplevel);
   void OnDraggedWindowVisibilityChanging(bool visible);
-  gfx::Point CalculateOrigin(aura::Window* target) const;
+  void OnDraggedWindowVisibilityChanged(bool visible);
   void Cleanup();
 
   static ExtendedDragSource* instance_;
 
-  DataSource* source_ = nullptr;
+  raw_ptr<DataSource> source_ = nullptr;
 
   // Created and destroyed at wayland/zcr_extended_drag.cc and its lifetime is
   // tied to the zcr_extended_drag_source_v1 object it's attached to.
-  Delegate* const delegate_;
+  base::WeakPtr<Delegate> delegate_;
 
+  // The pointer location in screen coordinates.
   gfx::PointF pointer_location_;
   ui::mojom::DragEventSource drag_event_source_;
   bool cursor_locked_ = false;
 
   std::unique_ptr<DraggedWindowHolder> dragged_window_holder_;
   std::unique_ptr<aura::ScopedWindowEventTargetingBlocker> event_blocker_;
+  raw_ptr<aura::Window> drag_source_window_ = nullptr;
+  bool pending_drag_start_ = false;
 
   base::ObserverList<Observer>::Unchecked observers_;
 

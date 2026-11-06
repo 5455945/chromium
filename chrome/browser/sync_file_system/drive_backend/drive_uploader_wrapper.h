@@ -1,11 +1,11 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_SYNC_FILE_SYSTEM_DRIVE_BACKEND_DRIVE_UPLOADER_WRAPPER_H_
 #define CHROME_BROWSER_SYNC_FILE_SYSTEM_DRIVE_BACKEND_DRIVE_UPLOADER_WRAPPER_H_
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "components/drive/drive_uploader.h"
@@ -17,10 +17,13 @@ namespace drive_backend {
 // pointer.  Each method wraps corresponding name method of
 // DriveUploaderInterface.  See comments in drive_uploader_interface.h
 // for details.
-class DriveUploaderWrapper
-    : public base::SupportsWeakPtr<DriveUploaderWrapper> {
+class DriveUploaderWrapper {
  public:
   explicit DriveUploaderWrapper(drive::DriveUploaderInterface* drive_uploader);
+  ~DriveUploaderWrapper();
+
+  DriveUploaderWrapper(const DriveUploaderWrapper&) = delete;
+  DriveUploaderWrapper& operator=(const DriveUploaderWrapper&) = delete;
 
   void UploadExistingFile(const std::string& resource_id,
                           const base::FilePath& local_file_path,
@@ -35,11 +38,14 @@ class DriveUploaderWrapper
                      const drive::UploadNewFileOptions& options,
                      drive::UploadCompletionCallback callback);
 
- private:
-  drive::DriveUploaderInterface* drive_uploader_;
-  base::SequenceChecker sequence_checker_;
+  base::WeakPtr<DriveUploaderWrapper> AsWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
 
-  DISALLOW_COPY_AND_ASSIGN(DriveUploaderWrapper);
+ private:
+  raw_ptr<drive::DriveUploaderInterface> drive_uploader_;
+  SEQUENCE_CHECKER(sequence_checker_);
+  base::WeakPtrFactory<DriveUploaderWrapper> weak_ptr_factory_{this};
 };
 
 }  // namespace drive_backend

@@ -1,4 +1,4 @@
-# Copyright 2014 The Chromium Authors. All rights reserved.
+# Copyright 2014 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -20,9 +20,9 @@ class ClobberCommand(cr.Command):
   def __init__(self):
     super(ClobberCommand, self).__init__()
     self.help = 'Clobber the current output directory'
-    self.description = ("""
+    self.description = """
         This deletes all generated files from the output directory.
-        """)
+        """
 
   def Run(self):
     self.Clobber()

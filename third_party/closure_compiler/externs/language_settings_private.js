@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,12 @@
 // NOTE: The format of types has changed. 'FooType' is now
 //   'chrome.languageSettingsPrivate.FooType'.
 // Please run the closure compiler before committing changes.
-// See https://chromium.googlesource.com/chromium/src/+/master/docs/closure_compilation.md
+// See https://chromium.googlesource.com/chromium/src/+/main/docs/closure_compilation.md
 
-/** @fileoverview Externs generated from namespace: languageSettingsPrivate */
+/**
+ * @fileoverview Externs generated from namespace: languageSettingsPrivate
+ * @externs
+ */
 
 /** @const */
 chrome.languageSettingsPrivate = {};
@@ -70,7 +73,7 @@ chrome.languageSettingsPrivate.InputMethodLists;
 
 /**
  * Gets languages available for translate, spell checking, input and locale.
- * @param {function(!Array<!chrome.languageSettingsPrivate.Language>): void}
+ * @param {function(!Array<!chrome.languageSettingsPrivate.Language>): void=}
  *     callback
  */
 chrome.languageSettingsPrivate.getLanguageList = function(callback) {};
@@ -104,7 +107,7 @@ chrome.languageSettingsPrivate.moveLanguage = function(languageCode, moveType) {
 
 /**
  * Gets languages that should always be automatically translated.
- * @param {function(!Array<string>): void} callback
+ * @param {function(!Array<string>): void=} callback
  */
 chrome.languageSettingsPrivate.getAlwaysTranslateLanguages = function(callback) {};
 
@@ -112,25 +115,25 @@ chrome.languageSettingsPrivate.getAlwaysTranslateLanguages = function(callback) 
  * Sets whether a given language should always be automatically translated.
  * @param {string} languageCode
  * @param {boolean} alwaysTranslate
-*/
+ */
 chrome.languageSettingsPrivate.setLanguageAlwaysTranslateState = function(languageCode, alwaysTranslate) {};
 
 /**
  * Gets languages that should never be offered to translate.
- * @param {function(!Array<string>): void} callback
+ * @param {function(!Array<string>): void=} callback
  */
 chrome.languageSettingsPrivate.getNeverTranslateLanguages = function(callback) {};
 
 /**
  * Gets the current status of the chosen spell check dictionaries.
- * @param {function(!Array<!chrome.languageSettingsPrivate.SpellcheckDictionaryStatus>): void}
+ * @param {function(!Array<!chrome.languageSettingsPrivate.SpellcheckDictionaryStatus>): void=}
  *     callback
  */
 chrome.languageSettingsPrivate.getSpellcheckDictionaryStatuses = function(callback) {};
 
 /**
  * Gets the custom spell check words, in sorted order.
- * @param {function(!Array<string>): void} callback
+ * @param {function(!Array<string>): void=} callback
  */
 chrome.languageSettingsPrivate.getSpellcheckWords = function(callback) {};
 
@@ -148,7 +151,7 @@ chrome.languageSettingsPrivate.removeSpellcheckWord = function(word) {};
 
 /**
  * Gets the translate target language (in most cases, the display locale).
- * @param {function(string): void} callback
+ * @param {function(string): void=} callback
  */
 chrome.languageSettingsPrivate.getTranslateTargetLanguage = function(callback) {};
 
@@ -160,7 +163,7 @@ chrome.languageSettingsPrivate.setTranslateTargetLanguage = function(languageCod
 
 /**
  * Gets all supported input methods, including third-party IMEs. Chrome OS only.
- * @param {function(!chrome.languageSettingsPrivate.InputMethodLists): void}
+ * @param {function(!chrome.languageSettingsPrivate.InputMethodLists): void=}
  *     callback
  */
 chrome.languageSettingsPrivate.getInputMethodLists = function(callback) {};

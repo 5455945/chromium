@@ -20,6 +20,7 @@
 
 #include "third_party/blink/renderer/core/svg/svg_uri_reference.h"
 
+#include "third_party/blink/renderer/core/display_lock/display_lock_utilities.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/id_target_observer.h"
@@ -27,7 +28,7 @@
 #include "third_party/blink/renderer/core/svg/svg_animated_href.h"
 #include "third_party/blink/renderer/core/svg/svg_element.h"
 #include "third_party/blink/renderer/core/xlink_names.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 
 namespace blink {
@@ -39,19 +40,22 @@ class SVGElementReferenceObserver : public IdTargetObserver {
   SVGElementReferenceObserver(TreeScope& tree_scope,
                               const AtomicString& id,
                               base::RepeatingClosure closure)
-      : IdTargetObserver(tree_scope.GetIdTargetObserverRegistry(), id),
+      : IdTargetObserver(tree_scope.EnsureIdTargetObserverRegistry(), id),
         closure_(std::move(closure)) {}
 
  private:
   void IdTargetChanged() override { closure_.Run(); }
   base::RepeatingClosure closure_;
 };
-}
+}  // namespace
 
 SVGURIReference::SVGURIReference(SVGElement* element)
     : href_(MakeGarbageCollected<SVGAnimatedHref>(element)) {
   DCHECK(element);
-  href_->AddToPropertyMap(element);
+}
+
+bool SVGURIReference::HrefIsSpecified() const {
+  return href_->IsSpecified();
 }
 
 const String& SVGURIReference::HrefString() const {
@@ -60,6 +64,16 @@ const String& SVGURIReference::HrefString() const {
 
 SVGAnimatedString* SVGURIReference::href() const {
   return href_.Get();
+}
+
+SVGAnimatedPropertyBase* SVGURIReference::PropertyFromAttribute(
+    const QualifiedName& attribute_name) const {
+  return href_->PropertyFromAttribute(attribute_name);
+}
+
+void SVGURIReference::SynchronizeAllSVGAttributes() const {
+  SVGAnimatedPropertyBase* attrs[]{href_.Get()};
+  SVGElement::SynchronizeListOfSVGAttributes(attrs);
 }
 
 void SVGURIReference::Trace(Visitor* visitor) const {
@@ -77,15 +91,11 @@ const AtomicString& SVGURIReference::LegacyHrefString(
   return element.getAttribute(xlink_names::kHrefAttr);
 }
 
-KURL SVGURIReference::LegacyHrefURL(const Document& document) const {
-  return document.CompleteURL(StripLeadingAndTrailingHTMLSpaces(HrefString()));
-}
-
 SVGURLReferenceResolver::SVGURLReferenceResolver(const String& url_string,
                                                  const Document& document)
     : relative_url_(url_string),
       document_(&document),
-      is_local_(url_string.StartsWith('#')) {}
+      is_local_(url_string.starts_with('#')) {}
 
 KURL SVGURLReferenceResolver::AbsoluteUrl() const {
   if (absolute_url_.IsNull())
@@ -101,8 +111,8 @@ bool SVGURLReferenceResolver::IsLocal() const {
 AtomicString SVGURLReferenceResolver::FragmentIdentifier() const {
   // Use KURL's FragmentIdentifier to ensure that we're handling the
   // fragment in a consistent manner.
-  return AtomicString(DecodeURLEscapeSequences(
-      AbsoluteUrl().FragmentIdentifier(), DecodeURLMode::kUTF8OrIsomorphic));
+  return AtomicString(DecodeUrlEscapeSequences(
+      AbsoluteUrl().FragmentIdentifier(), DecodeUrlMode::kUtf8OrIsomorphic));
 }
 
 AtomicString SVGURIReference::FragmentIdentifierFromIRIString(
@@ -119,11 +129,20 @@ Element* SVGURIReference::TargetElementFromIRIString(
     const TreeScope& tree_scope,
     AtomicString* fragment_identifier) {
   AtomicString id = FragmentIdentifierFromIRIString(url_string, tree_scope);
-  if (id.IsEmpty())
+  if (id.empty())
     return nullptr;
   if (fragment_identifier)
     *fragment_identifier = id;
-  return tree_scope.getElementById(id);
+  Element* target = tree_scope.getElementById(id);
+  // TODO(crbug.com/576326793): Skipping all paint-locked targets here means
+  // forced-layout queries (e.g., getBBox) on elements inside a display-locked
+  // subtree will not resolve targets in the same subtree (such as <textPath>
+  // or <mpath>).
+  if (!target || DisplayLockUtilities::IsDisplayLockedPreventingPaint(
+                     target, /*inclusive_check=*/true)) {
+    return nullptr;
+  }
+  return target;
 }
 
 Element* SVGURIReference::ObserveTarget(Member<IdTargetObserver>& observer,
@@ -136,10 +155,9 @@ Element* SVGURIReference::ObserveTarget(Member<IdTargetObserver>& observer,
                                         const String& href_string) {
   TreeScope& tree_scope = context_element.OriginatingTreeScope();
   AtomicString id = FragmentIdentifierFromIRIString(href_string, tree_scope);
-  return ObserveTarget(
-      observer, tree_scope, id,
-      WTF::BindRepeating(&SVGElement::BuildPendingResource,
-                         WrapWeakPersistent(&context_element)));
+  return ObserveTarget(observer, tree_scope, id,
+                       BindRepeating(&SVGElement::BuildPendingResource,
+                                     WrapWeakPersistent(&context_element)));
 }
 
 Element* SVGURIReference::ObserveTarget(Member<IdTargetObserver>& observer,
@@ -147,7 +165,7 @@ Element* SVGURIReference::ObserveTarget(Member<IdTargetObserver>& observer,
                                         const AtomicString& id,
                                         base::RepeatingClosure closure) {
   DCHECK(!observer);
-  if (id.IsEmpty())
+  if (id.empty())
     return nullptr;
   observer = MakeGarbageCollected<SVGElementReferenceObserver>(
       tree_scope, id, std::move(closure));

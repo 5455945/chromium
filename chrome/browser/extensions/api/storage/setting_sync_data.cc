@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,8 +12,12 @@
 #include "base/logging.h"
 #include "components/sync/model/sync_data.h"
 #include "components/sync/protocol/app_setting_specifics.pb.h"
+#include "components/sync/protocol/entity_specifics.pb.h"
 #include "components/sync/protocol/extension_setting_specifics.pb.h"
-#include "components/sync/protocol/sync.pb.h"
+#include "extensions/buildflags/buildflags.h"
+#include "extensions/common/extension_id.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -23,29 +27,33 @@ SettingSyncData::SettingSyncData(const syncer::SyncChange& sync_change)
 }
 
 SettingSyncData::SettingSyncData(const syncer::SyncData& sync_data)
-    : change_type_(absl::nullopt) {
+    : change_type_(std::nullopt) {
   ExtractSyncData(sync_data);
 }
 
 SettingSyncData::SettingSyncData(syncer::SyncChange::SyncChangeType change_type,
-                                 const std::string& extension_id,
+                                 const ExtensionId& extension_id,
                                  const std::string& key,
-                                 std::unique_ptr<base::Value> value)
+                                 base::Value value)
     : change_type_(change_type),
       extension_id_(extension_id),
       key_(key),
       value_(std::move(value)) {}
 
-SettingSyncData::~SettingSyncData() {}
+SettingSyncData::~SettingSyncData() = default;
 
-std::unique_ptr<base::Value> SettingSyncData::PassValue() {
-  DCHECK(value_) << "value has already been Pass()ed";
-  return std::move(value_);
+base::Value SettingSyncData::ExtractValue() {
+  DCHECK(value_) << "value has already been Extract()ed";
+  base::Value ret_value = std::move(*value_);
+  value_.reset();
+  return ret_value;
 }
 
 void SettingSyncData::ExtractSyncData(const syncer::SyncData& sync_data) {
   sync_pb::EntitySpecifics specifics = sync_data.GetSpecifics();
   // The specifics are exclusively either extension or app settings.
+  // TODO(crbug.com/573845270): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK_NE(specifics.has_extension_setting(), specifics.has_app_setting());
   const sync_pb::ExtensionSettingSpecifics& extension_specifics =
       specifics.has_extension_setting()
@@ -54,12 +62,13 @@ void SettingSyncData::ExtractSyncData(const syncer::SyncData& sync_data) {
 
   extension_id_ = extension_specifics.extension_id();
   key_ = extension_specifics.key();
-  value_ = base::JSONReader::ReadDeprecated(extension_specifics.value());
+  value_ = base::JSONReader::Read(extension_specifics.value(),
+                                  base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
   if (!value_) {
     LOG(WARNING) << "Specifics for " << extension_id_ << "/" << key_
                  << " had bad JSON for value: " << extension_specifics.value();
-    value_ = std::make_unique<base::DictionaryValue>();
+    value_ = base::Value(base::DictValue());
   }
 }
 

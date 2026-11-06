@@ -1,12 +1,10 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.content.browser.accessibility;
 
-/**
- * Singleton used for tracking accessibility data during content shell unit tests.
- */
+/** Singleton used for tracking accessibility data during content shell unit tests. */
 public class AccessibilityContentShellTestData {
     private static AccessibilityContentShellTestData sInstance;
 
@@ -28,7 +26,10 @@ public class AccessibilityContentShellTestData {
     public String announcementText;
     public int typeWindowContentChangedCount;
     public boolean receivedEvent;
+    public boolean receivedHoverEvent;
     public boolean receivedAccessibilityFocusEvent;
+    public boolean receivedTraversalEvent;
+    public boolean receivedSelectionEvent;
 
     private AccessibilityContentShellTestData() {
         traverseFromIndex = -1;
@@ -38,7 +39,10 @@ public class AccessibilityContentShellTestData {
         announcementText = "";
         typeWindowContentChangedCount = 0;
         receivedEvent = false;
+        receivedHoverEvent = false;
         receivedAccessibilityFocusEvent = false;
+        receivedTraversalEvent = false;
+        receivedSelectionEvent = false;
     }
 
     public int getTraverseFromIndex() {
@@ -101,11 +105,35 @@ public class AccessibilityContentShellTestData {
         this.receivedEvent = receivedEvent;
     }
 
+    public boolean hasReceivedHoverEvent() {
+        return receivedHoverEvent;
+    }
+
+    public void setReceivedHoverEvent(boolean receivedHoverEvent) {
+        this.receivedHoverEvent = receivedHoverEvent;
+    }
+
     public boolean hasReceivedAccessibilityFocusEvent() {
         return receivedAccessibilityFocusEvent;
     }
 
     public void setReceivedAccessibilityFocusEvent(boolean receivedAccessibilityFocusEvent) {
         this.receivedAccessibilityFocusEvent = receivedAccessibilityFocusEvent;
+    }
+
+    public boolean hasReceivedTraversalEvent() {
+        return receivedTraversalEvent;
+    }
+
+    public void setReceivedTraversalEvent(boolean receivedTraversalEvent) {
+        this.receivedTraversalEvent = receivedTraversalEvent;
+    }
+
+    public boolean hasReceivedSelectionEvent() {
+        return receivedSelectionEvent;
+    }
+
+    public void setReceivedSelectionEvent(boolean receivedSelectionEvent) {
+        this.receivedSelectionEvent = receivedSelectionEvent;
     }
 }

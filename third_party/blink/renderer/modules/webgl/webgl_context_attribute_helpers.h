@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,18 +19,12 @@ namespace blink {
 WebGLContextAttributes* ToWebGLContextAttributes(
     const CanvasContextCreationAttributesCore&);
 
-// Set up the attributes that can be used to create a GL context via the
-// Platform API.
-Platform::ContextAttributes ToPlatformContextAttributes(
-    const CanvasContextCreationAttributesCore&,
-    Platform::ContextType context_type,
-    bool support_own_offscreen_surface);
-
 // Turns the powerPreference context creation attribute into the
 // gl::GpuPreference enum which is sent along with GPU switching
 // notifications. This must not return the kDefault constant, but
 // choose either the low-power or high-performance GPU.
-gl::GpuPreference PowerPreferenceToGpuPreference(String power_preference);
+gl::GpuPreference PowerPreferenceToGpuPreference(
+    CanvasContextCreationAttributesCore::PowerPreference power_preference);
 
 }  // namespace blink
 

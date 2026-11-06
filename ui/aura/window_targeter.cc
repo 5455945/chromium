@@ -1,10 +1,11 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/aura/window_targeter.h"
 
-#include "build/chromeos_buildflags.h"
+#include <tuple>
+
 #include "ui/aura/client/capture_client.h"
 #include "ui/aura/client/event_client.h"
 #include "ui/aura/client/focus_client.h"
@@ -36,13 +37,20 @@ bool WindowTargeter::SubtreeShouldBeExploredForEvent(
 bool WindowTargeter::GetHitTestRects(Window* window,
                                      gfx::Rect* hit_test_rect_mouse,
                                      gfx::Rect* hit_test_rect_touch) const {
-  DCHECK(hit_test_rect_mouse);
-  DCHECK(hit_test_rect_touch);
+  CHECK(hit_test_rect_mouse, base::NotFatalUntil::M163);
+  CHECK(hit_test_rect_touch, base::NotFatalUntil::M163);
   *hit_test_rect_mouse = *hit_test_rect_touch = window->bounds();
 
   if (ShouldUseExtendedBounds(window)) {
     hit_test_rect_mouse->Inset(mouse_extend_);
     hit_test_rect_touch->Inset(touch_extend_);
+  }
+
+  if (window->layer() && !window->layer()->clip_rect().IsEmpty()) {
+    gfx::Rect clip = window->layer()->clip_rect();
+    clip.Offset(window->bounds().OffsetFromOrigin());
+    hit_test_rect_mouse->Intersect(clip);
+    hit_test_rect_touch->Intersect(clip);
   }
 
   return true;
@@ -69,7 +77,8 @@ void WindowTargeter::SetInsets(const gfx::Insets& mouse_extend,
 Window* WindowTargeter::GetPriorityTargetInRootWindow(
     Window* root_window,
     const ui::LocatedEvent& event) {
-  DCHECK_EQ(root_window, root_window->GetRootWindow());
+  CHECK_EQ(root_window, root_window->GetRootWindow(),
+           base::NotFatalUntil::M163);
 
   // Mouse events should be dispatched to the window that processed the
   // mouse-press events (if any).
@@ -85,8 +94,8 @@ Window* WindowTargeter::GetPriorityTargetInRootWindow(
     return capture_window;
 
   if (event.IsPinchEvent()) {
-    DCHECK_EQ(event.AsGestureEvent()->details().device_type(),
-              ui::GestureDeviceType::DEVICE_TOUCHPAD);
+    CHECK_EQ(event.AsGestureEvent()->details().device_type(),
+             ui::GestureDeviceType::DEVICE_TOUCHPAD, base::NotFatalUntil::M163);
     WindowEventDispatcher* dispatcher = root_window->GetHost()->dispatcher();
     if (dispatcher->touchpad_pinch_handler())
       return dispatcher->touchpad_pinch_handler();
@@ -106,7 +115,8 @@ Window* WindowTargeter::GetPriorityTargetInRootWindow(
 
 Window* WindowTargeter::FindTargetInRootWindow(Window* root_window,
                                                const ui::LocatedEvent& event) {
-  DCHECK_EQ(root_window, root_window->GetRootWindow());
+  CHECK_EQ(root_window, root_window->GetRootWindow(),
+           base::NotFatalUntil::M163);
 
   Window* priority_target = GetPriorityTargetInRootWindow(root_window, event);
   if (priority_target)
@@ -118,17 +128,18 @@ Window* WindowTargeter::FindTargetInRootWindow(Window* root_window,
     // GetTouchLockedTarget() is handled in GetPriorityTargetInRootWindow().
     ui::GestureRecognizer* gesture_recognizer =
         Env::GetInstance()->gesture_recognizer();
-    DCHECK(!gesture_recognizer->GetTouchLockedTarget(touch));
+    CHECK(!gesture_recognizer->GetTouchLockedTarget(touch),
+          base::NotFatalUntil::M163);
     ui::GestureConsumer* consumer = gesture_recognizer->GetTargetForLocation(
         event.location_f(), touch.source_device_id());
     if (consumer)
       return static_cast<Window*>(consumer);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     // If the initial touch is outside the window's display, target the root.
     // This is used for bezel gesture events (eg. swiping in from screen edge).
     display::Display display =
-        display::Screen::GetScreen()->GetDisplayNearestWindow(root_window);
+        display::Screen::Get()->GetDisplayNearestWindow(root_window);
     // The window target may be null, so use the root's ScreenPositionClient.
     gfx::Point screen_location = event.root_location();
     if (client::GetScreenPositionClient(root_window)) {
@@ -148,46 +159,11 @@ Window* WindowTargeter::FindTargetInRootWindow(Window* root_window,
   return nullptr;
 }
 
-bool WindowTargeter::ProcessEventIfTargetsDifferentRootWindow(
-    Window* root_window,
-    Window* target,
-    ui::Event* event) {
-  if (root_window->Contains(target))
-    return false;
-
-  // |window| is the root window, but |target| is not a descendent of
-  // |window|. So do not allow dispatching from here. Instead, dispatch the
-  // event through the WindowEventDispatcher that owns |target|.
-  Window* new_root = target->GetRootWindow();
-  DCHECK(new_root);
-  if (event->IsLocatedEvent()) {
-    // The event has been transformed to be in |target|'s coordinate system.
-    // But dispatching the event through the EventProcessor requires the event
-    // to be in the host's coordinate system. So, convert the event to be in
-    // the root's coordinate space, and then to the host's coordinate space by
-    // applying the host's transform.
-    ui::LocatedEvent* located_event = event->AsLocatedEvent();
-    located_event->ConvertLocationToTarget(target, new_root);
-    WindowTreeHost* window_tree_host = new_root->GetHost();
-    located_event->UpdateForRootTransform(
-        window_tree_host->GetRootTransform(),
-        window_tree_host->GetRootTransformForLocalEventCoordinates());
-  }
-  ignore_result(new_root->GetHost()->GetEventSink()->OnEventFromSource(event));
-  return true;
-}
-
 ui::EventTarget* WindowTargeter::FindTargetForEvent(ui::EventTarget* root,
                                                     ui::Event* event) {
   Window* window = static_cast<Window*>(root);
-  Window* target = event->IsKeyEvent()
-                       ? FindTargetForKeyEvent(window)
-                       : FindTargetForNonKeyEvent(window, event);
-  if (target && !window->parent() &&
-      ProcessEventIfTargetsDifferentRootWindow(window, target, event)) {
-    return nullptr;
-  }
-  return target;
+  return event->IsKeyEvent() ? FindTargetForKeyEvent(window)
+                             : FindTargetForNonKeyEvent(window, event);
 }
 
 ui::EventTarget* WindowTargeter::FindNextBestTarget(
@@ -225,7 +201,7 @@ Window* WindowTargeter::FindTargetForLocatedEvent(Window* window,
     if (target) {
       window->ConvertEventToTarget(target, event);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
       if (window->IsRootWindow() && event->HasNativeEvent()) {
         // If window is root, and the target is in a different host, we need to
         // convert the native event to the target's host as well. This happens
@@ -247,6 +223,38 @@ Window* WindowTargeter::FindTargetForLocatedEvent(Window* window,
     }
   }
   return FindTargetForLocatedEventRecursively(window, event);
+}
+
+ui::EventSink* WindowTargeter::GetNewEventSinkForEvent(
+    const ui::EventTarget* current_root,
+    ui::EventTarget* target,
+    ui::Event* in_out_event) {
+  const aura::Window* root_window = static_cast<const Window*>(current_root);
+  aura::Window* target_window = static_cast<Window*>(target);
+  if (!target_window || root_window->parent() ||
+      root_window->Contains(target_window)) {
+    // no need to re-target.
+    return nullptr;
+  }
+  // |window| is the root window, but |target| is not a descendent of
+  // |window|. So do not allow dispatching from here. Instead, dispatch the
+  // event through the WindowEventDispatcher that owns |target|.
+  Window* new_root = target_window->GetRootWindow();
+  CHECK(new_root, base::NotFatalUntil::M163);
+  if (in_out_event->IsLocatedEvent()) {
+    // The event has been transformed to be in |target|'s coordinate system.
+    // But dispatching the event through the EventProcessor requires the event
+    // to be in the host's coordinate system. So, convert the event to be in
+    // the root's coordinate space, and then to the host's coordinate space by
+    // applying the host's transform.
+    ui::LocatedEvent* located_event = in_out_event->AsLocatedEvent();
+    located_event->ConvertLocationToTarget(target_window, new_root);
+    WindowTreeHost* window_tree_host = new_root->GetHost();
+    located_event->UpdateForRootTransform(
+        window_tree_host->GetRootTransform(),
+        window_tree_host->GetRootTransformForLocalEventCoordinates());
+  }
+  return new_root->GetHost()->GetEventSink();
 }
 
 bool WindowTargeter::SubtreeCanAcceptEvent(
@@ -290,8 +298,8 @@ bool WindowTargeter::ShouldUseExtendedBounds(const aura::Window* w) const {
   // WindowEventDispatcher). Insets should never be set in this case, so the
   // return should not matter.
   if (!window()) {
-    DCHECK(mouse_extend_.IsEmpty());
-    DCHECK(touch_extend_.IsEmpty());
+    CHECK(mouse_extend_.IsEmpty(), base::NotFatalUntil::M163);
+    CHECK(touch_extend_.IsEmpty(), base::NotFatalUntil::M163);
     return false;
   }
 

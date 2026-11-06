@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,10 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "build/chromeos_buildflags.h"
+#include "build/build_config.h"
 #include "chrome/browser/device_identity/device_oauth2_token_store.h"
 #include "google_apis/gaia/core_account_id.h"
 #include "google_apis/gaia/gaia_oauth_client.h"
@@ -36,6 +36,9 @@ class DeviceOAuth2TokenService : public OAuth2AccessTokenManager::Delegate,
  public:
   using RefreshTokenAvailableCallback = base::RepeatingClosure;
   using StatusCallback = base::OnceCallback<void(bool)>;
+
+  DeviceOAuth2TokenService(const DeviceOAuth2TokenService&) = delete;
+  DeviceOAuth2TokenService& operator=(const DeviceOAuth2TokenService&) = delete;
 
   // Persist the given refresh token on the device. Overwrites any previous
   // value. Should only be called during initial device setup. Signals
@@ -75,7 +78,7 @@ class DeviceOAuth2TokenService : public OAuth2AccessTokenManager::Delegate,
 
   OAuth2AccessTokenManager* GetAccessTokenManager();
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS)
   // Used on non-ChromeOS platforms to set the email associated with the
   // current service account. On ChromeOS, this function isn't used because
   // the service account identity comes from CrosSettings.
@@ -112,8 +115,7 @@ class DeviceOAuth2TokenService : public OAuth2AccessTokenManager::Delegate,
   // gaia::GaiaOAuthClient::Delegate implementation.
   void OnRefreshTokenResponse(const std::string& access_token,
                               int expires_in_seconds) override;
-  void OnGetTokenInfoResponse(
-      std::unique_ptr<base::DictionaryValue> token_info) override;
+  void OnGetTokenInfoResponse(const base::DictValue& token_info) override;
   void OnOAuthError() override;
   void OnNetworkError(int response_code) override;
 
@@ -129,7 +131,8 @@ class DeviceOAuth2TokenService : public OAuth2AccessTokenManager::Delegate,
   std::unique_ptr<OAuth2AccessTokenFetcher> CreateAccessTokenFetcher(
       const CoreAccountId& account_id,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-      OAuth2AccessTokenConsumer* consumer) override;
+      OAuth2AccessTokenConsumer* consumer,
+      const std::string& token_binding_challenge) override;
   bool HasRefreshToken(const CoreAccountId& account_id) const override;
   scoped_refptr<network::SharedURLLoaderFactory> GetURLLoaderFactory()
       const override;
@@ -151,11 +154,11 @@ class DeviceOAuth2TokenService : public OAuth2AccessTokenManager::Delegate,
 
   // Flushes |pending_requests_|, indicating the specified result.
   void FlushPendingRequests(bool token_is_valid,
-                            GoogleServiceAuthError::State error);
+                            const GoogleServiceAuthError& error);
 
   // Signals failure on the specified request, passing |error| as the reason.
   void FailRequest(OAuth2AccessTokenManager::RequestImpl* request,
-                   GoogleServiceAuthError::State error);
+                   const GoogleServiceAuthError& error);
 
   // Starts the token validation flow, i.e. token info fetch.
   void StartValidation();
@@ -165,7 +168,7 @@ class DeviceOAuth2TokenService : public OAuth2AccessTokenManager::Delegate,
   // Returns the refresh token for the robot account id.
   std::string GetRefreshToken() const;
 
-  void ReportServiceError(GoogleServiceAuthError::State error);
+  void ReportServiceError(const GoogleServiceAuthError& error);
 
   // Returns true if this object has already received the validation result for
   // the token, false otherwise.
@@ -175,7 +178,7 @@ class DeviceOAuth2TokenService : public OAuth2AccessTokenManager::Delegate,
 
   // Currently open requests that are waiting while loading the system salt or
   // validating the token.
-  std::vector<PendingRequest*> pending_requests_;
+  std::vector<raw_ptr<PendingRequest, VectorExperimental>> pending_requests_;
 
   // Callbacks to invoke, if set, for refresh token-related events.
   RefreshTokenAvailableCallback on_refresh_token_available_callback_;
@@ -197,8 +200,6 @@ class DeviceOAuth2TokenService : public OAuth2AccessTokenManager::Delegate,
   std::unique_ptr<DeviceOAuth2TokenStore> store_;
 
   base::WeakPtrFactory<DeviceOAuth2TokenService> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(DeviceOAuth2TokenService);
 };
 
 #endif  // CHROME_BROWSER_DEVICE_IDENTITY_DEVICE_OAUTH2_TOKEN_SERVICE_H_

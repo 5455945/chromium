@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,7 @@
 
 #include <memory>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "net/base/completion_once_callback.h"
 #include "storage/browser/file_system/file_stream_writer.h"
@@ -17,8 +16,7 @@ namespace net {
 class IOBuffer;
 }  // namespace net
 
-namespace ash {
-namespace file_system_provider {
+namespace ash::file_system_provider {
 
 // Wraps the file stream writer implementation with an intermediate buffer.
 // Writes data from the inner file stream writer in chunks of size at least
@@ -34,6 +32,10 @@ class BufferingFileStreamWriter : public storage::FileStreamWriter {
       std::unique_ptr<storage::FileStreamWriter> file_stream_writer,
       int intermediate_buffer_length);
 
+  BufferingFileStreamWriter(const BufferingFileStreamWriter&) = delete;
+  BufferingFileStreamWriter& operator=(const BufferingFileStreamWriter&) =
+      delete;
+
   ~BufferingFileStreamWriter() override;
 
   // storage::FileStreamWriter overrides.
@@ -41,7 +43,8 @@ class BufferingFileStreamWriter : public storage::FileStreamWriter {
             int buf_len,
             net::CompletionOnceCallback callback) override;
   int Cancel(net::CompletionOnceCallback callback) override;
-  int Flush(net::CompletionOnceCallback callback) override;
+  int Flush(storage::FlushMode flush_mode,
+            net::CompletionOnceCallback callback) override;
 
  private:
   // Copies |buffer_length| bytes of data from the |buffer| starting at
@@ -82,6 +85,7 @@ class BufferingFileStreamWriter : public storage::FileStreamWriter {
   // with either a success or an error.
   void OnFlushIntermediateBufferForFlushCompleted(
       net::CompletionOnceCallback callback,
+      storage::FlushMode flush_mode,
       int result);
 
   std::unique_ptr<storage::FileStreamWriter> file_stream_writer_;
@@ -90,10 +94,8 @@ class BufferingFileStreamWriter : public storage::FileStreamWriter {
   int buffered_bytes_;
 
   base::WeakPtrFactory<BufferingFileStreamWriter> weak_ptr_factory_{this};
-  DISALLOW_COPY_AND_ASSIGN(BufferingFileStreamWriter);
 };
 
-}  // namespace file_system_provider
-}  // namespace ash
+}  // namespace ash::file_system_provider
 
 #endif  // CHROME_BROWSER_ASH_FILE_SYSTEM_PROVIDER_FILEAPI_BUFFERING_FILE_STREAM_WRITER_H_

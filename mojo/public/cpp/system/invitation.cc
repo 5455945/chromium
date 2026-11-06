@@ -1,25 +1,45 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "mojo/public/cpp/system/invitation.h"
 
+#include <memory>
+#include <tuple>
+#include <utility>
+
 #include "base/numerics/safe_conversions.h"
+#include "base/strings/string_view_util.h"
 #include "build/build_config.h"
+#include "mojo/core/embedder/embedder.h"
 #include "mojo/public/c/system/invitation.h"
 #include "mojo/public/c/system/platform_handle.h"
 #include "mojo/public/cpp/system/platform_handle.h"
+
+#if BUILDFLAG(IS_WIN)
+#include <windows.h>
+#endif
+
+#if BUILDFLAG(IS_MAC)
+#include <optional>
+
+#include "base/mac/process_requirement.h"
+#endif
+
+#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_IOS)
+#include "mojo/public/cpp/platform/platform_channel_server.h"
+#endif
 
 namespace mojo {
 
 namespace {
 
-static constexpr base::StringPiece kIsolatedPipeName = {"\0\0\0\0", 4};
+static constexpr std::string_view kIsolatedPipeName = {"\0\0\0\0", 4};
 
 void ProcessHandleToMojoProcessHandle(base::ProcessHandle target_process,
                                       MojoPlatformProcessHandle* handle) {
   handle->struct_size = sizeof(*handle);
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   handle->value =
       static_cast<uint64_t>(reinterpret_cast<uintptr_t>(target_process));
 #else
@@ -38,6 +58,7 @@ void PlatformHandleToTransportEndpoint(
   endpoint->struct_size = sizeof(*endpoint);
   endpoint->num_platform_handles = 1;
   endpoint->platform_handles = endpoint_handle;
+  endpoint->peer_process_requirement = nullptr;
 }
 
 void RunErrorCallback(uintptr_t context,
@@ -55,19 +76,32 @@ void RunErrorCallback(uintptr_t context,
 
 void SendInvitation(ScopedInvitationHandle invitation,
                     base::ProcessHandle target_process,
-                    PlatformHandle endpoint_handle,
+                    PlatformChannelEndpoint channel_endpoint,
                     MojoInvitationTransportType transport_type,
                     MojoSendInvitationFlags flags,
                     const ProcessErrorCallback& error_callback,
-                    base::StringPiece isolated_connection_name) {
-  MojoPlatformProcessHandle process_handle;
-  ProcessHandleToMojoProcessHandle(target_process, &process_handle);
+                    std::string_view isolated_connection_name) {
+  std::unique_ptr<MojoPlatformProcessHandle> process_handle;
+  if (target_process != base::kNullProcessHandle) {
+    process_handle = std::make_unique<MojoPlatformProcessHandle>();
+    ProcessHandleToMojoProcessHandle(target_process, process_handle.get());
+  }
+
+#if BUILDFLAG(IS_MAC)
+  std::optional<base::mac::ProcessRequirement> peer_process_requirement =
+      channel_endpoint.TakePeerProcessRequirement();
+#endif
 
   MojoPlatformHandle platform_handle;
   MojoInvitationTransportEndpoint endpoint;
-  PlatformHandleToTransportEndpoint(std::move(endpoint_handle),
+  PlatformHandleToTransportEndpoint(channel_endpoint.TakePlatformHandle(),
                                     &platform_handle, &endpoint);
   endpoint.type = transport_type;
+#if BUILDFLAG(IS_MAC)
+  if (peer_process_requirement) {
+    endpoint.peer_process_requirement = &*peer_process_requirement;
+  }
+#endif
 
   MojoProcessErrorHandler error_handler = nullptr;
   uintptr_t error_handler_context = 0;
@@ -89,13 +123,48 @@ void SendInvitation(ScopedInvitationHandle invitation,
     options.isolated_connection_name_length =
         static_cast<uint32_t>(isolated_connection_name.size());
   }
-  MojoResult result =
-      MojoSendInvitation(invitation.get().value(), &process_handle, &endpoint,
-                         error_handler, error_handler_context, &options);
+  MojoResult result = MojoSendInvitation(
+      invitation.get().value(), process_handle.get(), &endpoint, error_handler,
+      error_handler_context, &options);
   // If successful, the invitation handle is already closed for us.
-  if (result == MOJO_RESULT_OK)
-    ignore_result(invitation.release());
+  if (result == MOJO_RESULT_OK) {
+    std::ignore = invitation.release();
+  }
 }
+
+#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_IOS)
+void WaitForServerConnection(
+    PlatformChannelServerEndpoint server_endpoint,
+    PlatformChannelServer::ConnectionCallback callback) {
+  core::GetIOTaskRunner()->PostTask(
+      FROM_HERE,
+      base::BindOnce(&PlatformChannelServer::WaitForConnection,
+                     std::move(server_endpoint), std::move(callback)));
+}
+
+base::Process CloneProcessFromHandle(base::ProcessHandle handle) {
+  if (handle == base::kNullProcessHandle) {
+    return base::Process{};
+  }
+
+#if BUILDFLAG(IS_WIN)
+  // We can't use the hack below on Windows, because handle verification will
+  // explode when a new Process instance tries to own the already-owned
+  // `handle`.
+  HANDLE new_handle;
+  BOOL ok =
+      ::DuplicateHandle(::GetCurrentProcess(), handle, ::GetCurrentProcess(),
+                        &new_handle, 0, FALSE, DUPLICATE_SAME_ACCESS);
+  CHECK(ok);
+  return base::Process(new_handle);
+#else
+  base::Process temporary_owner(handle);
+  base::Process clone = temporary_owner.Duplicate();
+  std::ignore = temporary_owner.Release();
+  return clone;
+#endif
+}
+#endif  // !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_IOS)
 
 }  // namespace
 
@@ -115,7 +184,7 @@ OutgoingInvitation& OutgoingInvitation::operator=(OutgoingInvitation&& other) =
     default;
 
 ScopedMessagePipeHandle OutgoingInvitation::AttachMessagePipe(
-    base::StringPiece name) {
+    std::string_view name) {
   DCHECK(!name.empty());
   DCHECK(base::IsValueInRangeForNumericType<uint32_t>(name.size()));
   MojoHandle message_pipe_handle;
@@ -128,11 +197,11 @@ ScopedMessagePipeHandle OutgoingInvitation::AttachMessagePipe(
 
 ScopedMessagePipeHandle OutgoingInvitation::AttachMessagePipe(uint64_t name) {
   return AttachMessagePipe(
-      base::StringPiece(reinterpret_cast<const char*>(&name), sizeof(name)));
+      base::as_string_view(base::byte_span_from_ref(name)));
 }
 
 ScopedMessagePipeHandle OutgoingInvitation::ExtractMessagePipe(
-    base::StringPiece name) {
+    std::string_view name) {
   DCHECK(!name.empty());
   DCHECK(base::IsValueInRangeForNumericType<uint32_t>(name.size()));
   MojoHandle message_pipe_handle;
@@ -145,7 +214,7 @@ ScopedMessagePipeHandle OutgoingInvitation::ExtractMessagePipe(
 
 ScopedMessagePipeHandle OutgoingInvitation::ExtractMessagePipe(uint64_t name) {
   return ExtractMessagePipe(
-      base::StringPiece(reinterpret_cast<const char*>(&name), sizeof(name)));
+      base::as_string_view(base::byte_span_from_ref(name)));
 }
 
 // static
@@ -154,9 +223,9 @@ void OutgoingInvitation::Send(OutgoingInvitation invitation,
                               PlatformChannelEndpoint channel_endpoint,
                               const ProcessErrorCallback& error_callback) {
   SendInvitation(std::move(invitation.handle_), target_process,
-                 channel_endpoint.TakePlatformHandle(),
+                 std::move(channel_endpoint),
                  MOJO_INVITATION_TRANSPORT_TYPE_CHANNEL,
-                 MOJO_SEND_INVITATION_FLAG_NONE, error_callback, "");
+                 invitation.extra_flags_, error_callback, "");
 }
 
 // static
@@ -164,10 +233,21 @@ void OutgoingInvitation::Send(OutgoingInvitation invitation,
                               base::ProcessHandle target_process,
                               PlatformChannelServerEndpoint server_endpoint,
                               const ProcessErrorCallback& error_callback) {
-  SendInvitation(std::move(invitation.handle_), target_process,
-                 server_endpoint.TakePlatformHandle(),
-                 MOJO_INVITATION_TRANSPORT_TYPE_CHANNEL_SERVER,
-                 MOJO_SEND_INVITATION_FLAG_NONE, error_callback, "");
+#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_IOS)
+  WaitForServerConnection(
+      std::move(server_endpoint),
+      base::BindOnce(
+          [](OutgoingInvitation invitation, base::Process target_process,
+             const ProcessErrorCallback& error_callback,
+             PlatformChannelEndpoint endpoint) {
+            SendInvitation(std::move(invitation.handle_),
+                           target_process.Handle(), std::move(endpoint),
+                           MOJO_INVITATION_TRANSPORT_TYPE_CHANNEL,
+                           invitation.extra_flags_, error_callback, "");
+          },
+          std::move(invitation), CloneProcessFromHandle(target_process),
+          error_callback));
+#endif  // !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_IOS)
 }
 
 // static
@@ -176,38 +256,55 @@ void OutgoingInvitation::SendAsync(OutgoingInvitation invitation,
                                    PlatformChannelEndpoint channel_endpoint,
                                    const ProcessErrorCallback& error_callback) {
   SendInvitation(std::move(invitation.handle_), target_process,
-                 channel_endpoint.TakePlatformHandle(),
+                 std::move(channel_endpoint),
                  MOJO_INVITATION_TRANSPORT_TYPE_CHANNEL_ASYNC,
-                 MOJO_SEND_INVITATION_FLAG_NONE, error_callback, "");
+                 invitation.extra_flags_, error_callback, "");
 }
 
 // static
 ScopedMessagePipeHandle OutgoingInvitation::SendIsolated(
     PlatformChannelEndpoint channel_endpoint,
-    base::StringPiece connection_name) {
-  mojo::OutgoingInvitation invitation;
+    std::string_view connection_name,
+    base::ProcessHandle target_process,
+    MojoSendInvitationFlags invitation_flags) {
+  OutgoingInvitation invitation;
+  invitation.set_extra_flags(invitation_flags);
   ScopedMessagePipeHandle pipe =
       invitation.AttachMessagePipe(kIsolatedPipeName);
-  SendInvitation(std::move(invitation.handle_), base::kNullProcessHandle,
-                 channel_endpoint.TakePlatformHandle(),
+  SendInvitation(std::move(invitation.handle_), target_process,
+                 std::move(channel_endpoint),
                  MOJO_INVITATION_TRANSPORT_TYPE_CHANNEL,
-                 MOJO_SEND_INVITATION_FLAG_ISOLATED, ProcessErrorCallback(),
-                 connection_name);
+                 MOJO_SEND_INVITATION_FLAG_ISOLATED | invitation.extra_flags_,
+                 ProcessErrorCallback(), connection_name);
   return pipe;
 }
 
 // static
 ScopedMessagePipeHandle OutgoingInvitation::SendIsolated(
     PlatformChannelServerEndpoint server_endpoint,
-    base::StringPiece connection_name) {
-  mojo::OutgoingInvitation invitation;
+    std::string_view connection_name,
+    base::ProcessHandle target_process,
+    MojoSendInvitationFlags invitation_flags) {
+  OutgoingInvitation invitation;
+  invitation.set_extra_flags(invitation_flags);
   ScopedMessagePipeHandle pipe =
       invitation.AttachMessagePipe(kIsolatedPipeName);
-  SendInvitation(std::move(invitation.handle_), base::kNullProcessHandle,
-                 server_endpoint.TakePlatformHandle(),
-                 MOJO_INVITATION_TRANSPORT_TYPE_CHANNEL_SERVER,
-                 MOJO_SEND_INVITATION_FLAG_ISOLATED, ProcessErrorCallback(),
-                 connection_name);
+#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_IOS)
+  WaitForServerConnection(
+      std::move(server_endpoint),
+      base::BindOnce(
+          [](OutgoingInvitation invitation, base::Process target_process,
+             const std::string& connection_name,
+             PlatformChannelEndpoint endpoint) {
+            SendInvitation(
+                std::move(invitation.handle_), target_process.Handle(),
+                std::move(endpoint), MOJO_INVITATION_TRANSPORT_TYPE_CHANNEL,
+                MOJO_SEND_INVITATION_FLAG_ISOLATED | invitation.extra_flags_,
+                ProcessErrorCallback(), connection_name);
+          },
+          std::move(invitation), CloneProcessFromHandle(target_process),
+          std::string(connection_name)));
+#endif  // !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_IOS)
   return pipe;
 }
 
@@ -227,6 +324,11 @@ IncomingInvitation& IncomingInvitation::operator=(IncomingInvitation&& other) =
 IncomingInvitation IncomingInvitation::Accept(
     PlatformChannelEndpoint channel_endpoint,
     MojoAcceptInvitationFlags flags) {
+#if BUILDFLAG(IS_MAC)
+  std::optional<base::mac::ProcessRequirement> peer_process_requirement =
+      channel_endpoint.TakePeerProcessRequirement();
+#endif
+
   MojoPlatformHandle endpoint_handle;
   PlatformHandle::ToMojoPlatformHandle(channel_endpoint.TakePlatformHandle(),
                                        &endpoint_handle);
@@ -237,6 +339,12 @@ IncomingInvitation IncomingInvitation::Accept(
   transport_endpoint.type = MOJO_INVITATION_TRANSPORT_TYPE_CHANNEL;
   transport_endpoint.num_platform_handles = 1;
   transport_endpoint.platform_handles = &endpoint_handle;
+  transport_endpoint.peer_process_requirement = nullptr;
+#if BUILDFLAG(IS_MAC)
+  if (peer_process_requirement) {
+    transport_endpoint.peer_process_requirement = &*peer_process_requirement;
+  }
+#endif
 
   MojoAcceptInvitationOptions options;
   options.struct_size = sizeof(options);
@@ -245,8 +353,9 @@ IncomingInvitation IncomingInvitation::Accept(
   MojoHandle invitation_handle;
   MojoResult result =
       MojoAcceptInvitation(&transport_endpoint, &options, &invitation_handle);
-  if (result != MOJO_RESULT_OK)
+  if (result != MOJO_RESULT_OK) {
     return IncomingInvitation();
+  }
 
   return IncomingInvitation(
       ScopedInvitationHandle(InvitationHandle(invitation_handle)));
@@ -255,6 +364,11 @@ IncomingInvitation IncomingInvitation::Accept(
 // static
 IncomingInvitation IncomingInvitation::AcceptAsync(
     PlatformChannelEndpoint channel_endpoint) {
+#if BUILDFLAG(IS_MAC)
+  std::optional<base::mac::ProcessRequirement> peer_process_requirement =
+      channel_endpoint.TakePeerProcessRequirement();
+#endif
+
   MojoPlatformHandle endpoint_handle;
   PlatformHandle::ToMojoPlatformHandle(channel_endpoint.TakePlatformHandle(),
                                        &endpoint_handle);
@@ -265,12 +379,19 @@ IncomingInvitation IncomingInvitation::AcceptAsync(
   transport_endpoint.type = MOJO_INVITATION_TRANSPORT_TYPE_CHANNEL_ASYNC;
   transport_endpoint.num_platform_handles = 1;
   transport_endpoint.platform_handles = &endpoint_handle;
+  transport_endpoint.peer_process_requirement = nullptr;
+#if BUILDFLAG(IS_MAC)
+  if (peer_process_requirement) {
+    transport_endpoint.peer_process_requirement = &*peer_process_requirement;
+  }
+#endif
 
   MojoHandle invitation_handle;
   MojoResult result =
       MojoAcceptInvitation(&transport_endpoint, nullptr, &invitation_handle);
-  if (result != MOJO_RESULT_OK)
+  if (result != MOJO_RESULT_OK) {
     return IncomingInvitation();
+  }
 
   return IncomingInvitation(
       ScopedInvitationHandle(InvitationHandle(invitation_handle)));
@@ -279,6 +400,11 @@ IncomingInvitation IncomingInvitation::AcceptAsync(
 // static
 ScopedMessagePipeHandle IncomingInvitation::AcceptIsolated(
     PlatformChannelEndpoint channel_endpoint) {
+#if BUILDFLAG(IS_MAC)
+  std::optional<base::mac::ProcessRequirement> peer_process_requirement =
+      channel_endpoint.TakePeerProcessRequirement();
+#endif
+
   MojoPlatformHandle endpoint_handle;
   PlatformHandle::ToMojoPlatformHandle(channel_endpoint.TakePlatformHandle(),
                                        &endpoint_handle);
@@ -289,6 +415,12 @@ ScopedMessagePipeHandle IncomingInvitation::AcceptIsolated(
   transport_endpoint.type = MOJO_INVITATION_TRANSPORT_TYPE_CHANNEL;
   transport_endpoint.num_platform_handles = 1;
   transport_endpoint.platform_handles = &endpoint_handle;
+  transport_endpoint.peer_process_requirement = nullptr;
+#if BUILDFLAG(IS_MAC)
+  if (peer_process_requirement) {
+    transport_endpoint.peer_process_requirement = &*peer_process_requirement;
+  }
+#endif
 
   MojoAcceptInvitationOptions options;
   options.struct_size = sizeof(options);
@@ -297,8 +429,9 @@ ScopedMessagePipeHandle IncomingInvitation::AcceptIsolated(
   MojoHandle invitation_handle;
   MojoResult result =
       MojoAcceptInvitation(&transport_endpoint, &options, &invitation_handle);
-  if (result != MOJO_RESULT_OK)
+  if (result != MOJO_RESULT_OK) {
     return ScopedMessagePipeHandle();
+  }
 
   IncomingInvitation invitation{
       ScopedInvitationHandle(InvitationHandle(invitation_handle))};
@@ -306,7 +439,7 @@ ScopedMessagePipeHandle IncomingInvitation::AcceptIsolated(
 }
 
 ScopedMessagePipeHandle IncomingInvitation::ExtractMessagePipe(
-    base::StringPiece name) {
+    std::string_view name) {
   DCHECK(!name.empty());
   DCHECK(base::IsValueInRangeForNumericType<uint32_t>(name.size()));
   DCHECK(handle_.is_valid());
@@ -320,7 +453,7 @@ ScopedMessagePipeHandle IncomingInvitation::ExtractMessagePipe(
 
 ScopedMessagePipeHandle IncomingInvitation::ExtractMessagePipe(uint64_t name) {
   return ExtractMessagePipe(
-      base::StringPiece(reinterpret_cast<const char*>(&name), sizeof(name)));
+      base::as_string_view(base::byte_span_from_ref(name)));
 }
 
 }  // namespace mojo

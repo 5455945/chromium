@@ -1,23 +1,25 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/metrics/usertype_by_devicetype_metrics_provider.h"
 
+#include "base/check.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
-#include "chrome/browser/ash/policy/core/browser_policy_connector_chromeos.h"
-#include "chrome/browser/ash/policy/core/user_cloud_policy_manager_chromeos.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
+#include "chrome/browser/ash/login/demo_mode/demo_session.h"
+#include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
+#include "chrome/browser/ash/policy/core/user_cloud_policy_manager_ash.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profiles_state.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "chromeos/components/kiosk/kiosk_utils.h"
+#include "chromeos/components/mgs/managed_guest_session_utils.h"
+#include "components/session_manager/core/session.h"
 #include "components/session_manager/core/session_manager.h"
-#include "components/user_manager/user.h"
-#include "components/user_manager/user_manager.h"
 
 namespace {
 
@@ -47,20 +49,20 @@ UserTypeByDeviceTypeMetricsProvider::~UserTypeByDeviceTypeMetricsProvider() {
     session_manager->RemoveObserver(this);
 }
 
-void UserTypeByDeviceTypeMetricsProvider::ProvideCurrentSessionData(
-    metrics::ChromeUserMetricsExtension* uma_proto_unused) {
+bool UserTypeByDeviceTypeMetricsProvider::ProvideHistograms() {
   if (!user_segment_ || !device_segment_)
-    return;
+    return false;
 
   int uma_val =
       ConstructUmaValue(user_segment_.value(), device_segment_.value());
 
   if (uma_val == kMgsOnUnmanagedDevice) {
     LOG(WARNING) << "Can't have MGS on unmanaged device!";
-    return;
+    return false;
   }
 
   base::UmaHistogramSparse(kHistogramName, uma_val);
+  return true;
 }
 
 void UserTypeByDeviceTypeMetricsProvider::OnUserSessionStarted(
@@ -71,36 +73,42 @@ void UserTypeByDeviceTypeMetricsProvider::OnUserSessionStarted(
   if (!device_segment_) {
     // Calculate the device enrollment type. Should never change during this
     // session, so should only need to do it once.
-    policy::BrowserPolicyConnectorChromeOS* connector =
-        g_browser_process->platform_part()->browser_policy_connector_chromeos();
+    policy::BrowserPolicyConnectorAsh* connector =
+        g_browser_process->platform_part()->browser_policy_connector_ash();
     device_segment_ = connector->GetEnterpriseMarketSegment();
   }
 
-  const user_manager::User* primary_user =
-      user_manager::UserManager::Get()->GetPrimaryUser();
-  DCHECK(primary_user);
-  DCHECK(primary_user->is_profile_created());
-  Profile* profile =
-      chromeos::ProfileHelper::Get()->GetProfileByUser(primary_user);
-  DCHECK(profile);
+  const session_manager::Session* primary_session =
+      session_manager::SessionManager::Get()->GetPrimarySession();
+  CHECK(primary_session);
+  Profile* profile = Profile::FromBrowserContext(
+      ash::BrowserContextHelper::Get()->GetBrowserContextByAccountId(
+          primary_session->account_id()));
+  CHECK(profile);
 
   user_segment_ = GetUserSegment(profile);
 }
 
 UserTypeByDeviceTypeMetricsProvider::UserSegment
 UserTypeByDeviceTypeMetricsProvider::GetUserSegment(Profile* profile) {
-  // Check for Managed Guest Session
-  if (profiles::IsPublicSession()) {
+  if (profiles::IsDemoSession()) {
+    return UserSegment::kDemoMode;
+  }
+
+  if (chromeos::IsManagedGuestSession()) {
     return UserSegment::kManagedGuestSession;
   }
 
-  // Check for off-the-record profiles.
+  if (chromeos::IsKioskSession()) {
+    return UserSegment::kKioskApp;
+  }
+
   if (profile->IsOffTheRecord()) {
     return UserSegment::kUnmanaged;
   }
 
-  const policy::UserCloudPolicyManagerChromeOS* user_cloud_policy_manager =
-      profile->GetUserCloudPolicyManagerChromeOS();
+  const policy::UserCloudPolicyManagerAsh* user_cloud_policy_manager =
+      profile->GetUserCloudPolicyManagerAsh();
   if (!user_cloud_policy_manager)
     return UserSegment::kUnmanaged;
   const em::PolicyData* policy =
@@ -120,7 +128,6 @@ UserTypeByDeviceTypeMetricsProvider::GetUserSegment(Profile* profile) {
       return UserSegment::kEnterprise;
   }
   NOTREACHED();
-  return UserSegment::kUnmanaged;
 }
 
 // static

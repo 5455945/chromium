@@ -1,15 +1,18 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.metrics;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.chrome.browser.browserservices.metrics.WebApkUmaRecorder;
 import org.chromium.chrome.browser.browserservices.ui.splashscreen.SplashscreenObserver;
 
 /**
  * This class records cold start WebApk splashscreen metrics starting from the launch of the WebAPK
  * shell.
  */
+@NullMarked
 public class WebApkSplashscreenMetrics implements SplashscreenObserver {
     private final long mShellApkLaunchTimestamp;
     private final long mNewStyleSplashShownTimestamp;
@@ -25,18 +28,19 @@ public class WebApkSplashscreenMetrics implements SplashscreenObserver {
 
     @Override
     public void onSplashscreenHidden(long startTimestamp, long endTimestamp) {
-        if (!UmaUtils.hasComeToForeground() || UmaUtils.hasComeToBackground()
+        if (!UmaUtils.hasComeToForegroundWithNative()
+                || UmaUtils.hasComeToBackgroundWithNative()
                 || mShellApkLaunchTimestamp == -1) {
             return;
         }
 
-        // commit both shown/hidden histograms here because native may not be loaded when the
+        // commit shown histograms here because native may not be loaded when the
         // splashscreen is shown.
-        WebApkUma.recordShellApkLaunchToSplashVisible(startTimestamp - mShellApkLaunchTimestamp);
-        WebApkUma.recordShellApkLaunchToSplashHidden(endTimestamp - mShellApkLaunchTimestamp);
+        WebApkUmaRecorder.recordShellApkLaunchToSplashVisible(
+                startTimestamp - mShellApkLaunchTimestamp);
 
         if (mNewStyleSplashShownTimestamp != -1) {
-            WebApkUma.recordNewStyleShellApkLaunchToSplashVisible(
+            WebApkUmaRecorder.recordNewStyleShellApkLaunchToSplashVisible(
                     mNewStyleSplashShownTimestamp - mShellApkLaunchTimestamp);
         }
     }

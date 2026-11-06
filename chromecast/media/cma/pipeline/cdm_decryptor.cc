@@ -1,10 +1,10 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chromecast/media/cma/pipeline/cdm_decryptor.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "chromecast/media/api/decoder_buffer_base.h"
 #include "chromecast/media/base/decrypt_context_impl.h"
 #include "chromecast/media/cma/pipeline/decrypt_util.h"
@@ -20,7 +20,7 @@ CdmDecryptor::CdmDecryptor(bool clear_buffer_needed)
 CdmDecryptor::~CdmDecryptor() = default;
 
 void CdmDecryptor::Init(const DecryptCB& decrypt_cb) {
-  DCHECK(!decrypt_cb_);
+  CHECK(!decrypt_cb_, base::NotFatalUntil::M163);
   decrypt_cb_ = decrypt_cb;
 }
 
@@ -32,7 +32,7 @@ void CdmDecryptor::Decrypt(scoped_refptr<DecoderBufferBase> buffer) {
 
   DecryptContextImpl* decrypt_context =
       static_cast<DecryptContextImpl*>(buffer->decrypt_context());
-  DCHECK(decrypt_context);
+  CHECK(decrypt_context, base::NotFatalUntil::M163);
 
   DecryptContextImpl::OutputType output_type = decrypt_context->GetOutputType();
   if (output_type == DecryptContextImpl::OutputType::kClearRequired ||
@@ -52,7 +52,7 @@ void CdmDecryptor::OnResult(scoped_refptr<DecoderBufferBase> buffer,
   BufferQueue ready_buffers;
   ready_buffers.push(buffer);
 
-  DCHECK(decrypt_cb_);
+  CHECK(decrypt_cb_, base::NotFatalUntil::M163);
   decrypt_cb_.Run(success, std::move(ready_buffers));
 }
 

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,12 +11,11 @@
 #include "net/base/privacy_mode.h"
 #include "net/http/http_server_properties.h"
 #include "net/test/gtest_util.h"
-#include "net/third_party/quiche/src/quic/core/quic_server_id.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_server_id.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace net {
-namespace test {
+namespace net::test {
 
 namespace {
 const char kServerConfigA[] = "server_config_a";
@@ -31,9 +30,10 @@ const char kCertB[] = "cert_b";
 class PropertiesBasedQuicServerInfoTest : public ::testing::Test {
  protected:
   PropertiesBasedQuicServerInfoTest()
-      : server_id_("www.google.com", 443, PRIVACY_MODE_DISABLED),
+      : server_id_("www.google.com", 443),
         server_info_(server_id_,
-                     NetworkIsolationKey(),
+                     PRIVACY_MODE_DISABLED,
+                     NetworkAnonymizationKey(),
                      &http_server_properties_) {}
 
   // Initialize |server_info_| object and persist it.
@@ -70,7 +70,8 @@ TEST_F(PropertiesBasedQuicServerInfoTest, Update) {
   InitializeAndPersist();
 
   // Read the persisted data and verify we have read the data correctly.
-  PropertiesBasedQuicServerInfo server_info1(server_id_, NetworkIsolationKey(),
+  PropertiesBasedQuicServerInfo server_info1(server_id_, PRIVACY_MODE_DISABLED,
+                                             NetworkAnonymizationKey(),
                                              &http_server_properties_);
   EXPECT_TRUE(server_info1.Load());
 
@@ -85,7 +86,8 @@ TEST_F(PropertiesBasedQuicServerInfoTest, Update) {
   server_info1.Persist();
 
   // Read the persisted data and verify we have read the data correctly.
-  PropertiesBasedQuicServerInfo server_info2(server_id_, NetworkIsolationKey(),
+  PropertiesBasedQuicServerInfo server_info2(server_id_, PRIVACY_MODE_DISABLED,
+                                             NetworkAnonymizationKey(),
                                              &http_server_properties_);
   EXPECT_TRUE(server_info2.Load());
 
@@ -96,5 +98,4 @@ TEST_F(PropertiesBasedQuicServerInfoTest, Update) {
   EXPECT_EQ(kCertB, state3.certs[1]);
 }
 
-}  // namespace test
-}  // namespace net
+}  // namespace net::test

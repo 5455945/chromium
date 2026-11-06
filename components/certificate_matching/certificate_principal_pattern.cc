@@ -1,12 +1,13 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/certificate_matching/certificate_principal_pattern.h"
 
+#include <algorithm>
 #include <string>
+#include <string_view>
 
-#include "base/strings/string_piece.h"
 #include "base/values.h"
 #include "net/cert/x509_cert_types.h"
 #include "net/cert/x509_certificate.h"
@@ -14,9 +15,9 @@
 namespace certificate_matching {
 namespace {
 
-std::string GetOptionalStringKey(const base::Value& dictionary,
-                                 base::StringPiece key) {
-  auto* value = dictionary.FindStringKey(key);
+std::string GetOptionalStringKey(const base::DictValue& dictionary,
+                                 std::string_view key) {
+  auto* value = dictionary.FindString(key);
   return value ? *value : std::string();
 }
 
@@ -63,18 +64,14 @@ bool CertificatePrincipalPattern::Matches(
   }
 
   if (!organization_.empty()) {
-    if (std::find(principal.organization_names.begin(),
-                  principal.organization_names.end(),
-                  organization_) == principal.organization_names.end()) {
+    if (!std::ranges::contains(principal.organization_names, organization_)) {
       return false;
     }
   }
 
   if (!organization_unit_.empty()) {
-    if (std::find(principal.organization_unit_names.begin(),
-                  principal.organization_unit_names.end(),
-                  organization_unit_) ==
-        principal.organization_unit_names.end()) {
+    if (!std::ranges::contains(principal.organization_unit_names,
+                               organization_unit_)) {
       return false;
     }
   }
@@ -84,13 +81,14 @@ bool CertificatePrincipalPattern::Matches(
 
 // static
 CertificatePrincipalPattern CertificatePrincipalPattern::ParseFromOptionalDict(
-    const base::Value* dict,
-    base::StringPiece key_common_name,
-    base::StringPiece key_locality,
-    base::StringPiece key_organization,
-    base::StringPiece key_organization_unit) {
-  if (!dict || !dict->is_dict())
+    const base::DictValue* dict,
+    std::string_view key_common_name,
+    std::string_view key_locality,
+    std::string_view key_organization,
+    std::string_view key_organization_unit) {
+  if (!dict) {
     return CertificatePrincipalPattern();
+  }
   return CertificatePrincipalPattern(
       GetOptionalStringKey(*dict, key_common_name),
       GetOptionalStringKey(*dict, key_locality),

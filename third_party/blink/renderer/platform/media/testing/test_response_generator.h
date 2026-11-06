@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,11 @@
 
 #include <stdint.h>
 
+#include "third_party/blink/public/platform/web_url.h"
 #include "third_party/blink/public/platform/web_url_error.h"
 #include "third_party/blink/public/platform/web_url_response.h"
-#include "url/gurl.h"
 
-namespace media {
+namespace blink {
 
 // Generates WebURLErrors and WebURLResponses suitable for testing purposes.
 class TestResponseGenerator {
@@ -26,57 +26,57 @@ class TestResponseGenerator {
 
   // Build an HTTP response generator for the given URL. |content_length| is
   // used to generate Content-Length and Content-Range headers.
-  TestResponseGenerator(const GURL& gurl, int64_t content_length);
+  TestResponseGenerator(const KURL& url, int64_t content_length);
   TestResponseGenerator(const TestResponseGenerator&) = delete;
   TestResponseGenerator& operator=(const TestResponseGenerator&) = delete;
 
   // Generates a WebURLError object.
-  blink::WebURLError GenerateError();
+  WebURLError GenerateError();
 
   // Generates a regular HTTP 200 response.
-  blink::WebURLResponse Generate200();
+  WebURLResponse Generate200();
 
   // Generates a regular HTTP 206 response starting from |first_byte_offset|
   // until the end of the resource.
-  blink::WebURLResponse Generate206(int64_t first_byte_offset);
+  WebURLResponse Generate206(int64_t first_byte_offset);
 
   // Generates a custom HTTP 206 response starting from |first_byte_offset|
   // until the end of the resource. You can tweak what gets included in the
   // headers via |flags|.
-  blink::WebURLResponse Generate206(int64_t first_byte_offset, Flags flags);
+  WebURLResponse Generate206(int64_t first_byte_offset, Flags flags);
 
   // Generates a regular HTTP 206 response starting from |first_byte_offset|
   // until |last_byte_offset|.
-  blink::WebURLResponse GeneratePartial206(int64_t first_byte_offset,
-                                           int64_t last_byte_offset);
+  WebURLResponse GeneratePartial206(int64_t first_byte_offset,
+                                    int64_t last_byte_offset);
 
   // Generates a custom HTTP 206 response starting from |first_byte_offset|
   // until |last_byte_offset|. You can tweak what gets included in the
   // headers via |flags|.
-  blink::WebURLResponse GeneratePartial206(int64_t first_byte_offset,
-                                           int64_t last_byte_offset,
-                                           Flags flags);
+  WebURLResponse GeneratePartial206(int64_t first_byte_offset,
+                                    int64_t last_byte_offset,
+                                    Flags flags);
 
   // Generates a regular HTTP 404 response.
-  blink::WebURLResponse Generate404();
+  WebURLResponse Generate404();
 
   // Generate a HTTP response with specified code.
-  blink::WebURLResponse GenerateResponse(int code);
+  WebURLResponse GenerateResponse(int code);
 
   // Generates a file:// response starting from |first_byte_offset| until the
   // end of the resource.
   //
   // If |first_byte_offset| is negative a response containing no content length
   // will be returned.
-  blink::WebURLResponse GenerateFileResponse(int64_t first_byte_offset);
+  WebURLResponse GenerateFileResponse(int64_t first_byte_offset);
 
   int64_t content_length() { return content_length_; }
 
  private:
-  GURL gurl_;
+  WebURL url_;
   int64_t content_length_;
 };
 
-}  // namespace media
+}  // namespace blink
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_MEDIA_TESTING_TEST_RESPONSE_GENERATOR_H_

@@ -21,7 +21,7 @@ key = null;
 key = request.result;
 checkAddedKey():
 PASS key is data.key
-objectStore = db.transaction('foo').objectStore('foo');
+objectStore = db.transaction('foo', 'readonly').objectStore('foo');
 request = objectStore.get(data.key);
 getSuccess():
 record = null;

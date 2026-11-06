@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,9 @@
 
 #include <stddef.h>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "components/safe_browsing/core/browser/db/database_manager.h"
@@ -16,39 +17,46 @@
 
 class GURL;
 
-namespace base {
-class SingleThreadTaskRunner;
-}  // namespace base
-
 namespace safe_browsing {
-struct ThreatMetadata;
+class V5GetHashProtocolManager;
 }  // namespace safe_browsing
 
 namespace subresource_filter {
 
 class SubresourceFilterSafeBrowsingClient;
 
-// This class is scoped to a single database check, and it lives on the IO
+// This class is scoped to a single database check, and it lives on the UI
 // thread exclusively.
 class SubresourceFilterSafeBrowsingClientRequest
     : public safe_browsing::SafeBrowsingDatabaseManager::Client {
  public:
   SubresourceFilterSafeBrowsingClientRequest(
       size_t request_id,
-      base::TimeTicks start_time_,
+      base::TimeTicks start_time,
       scoped_refptr<safe_browsing::SafeBrowsingDatabaseManager>
           database_manager,
-      scoped_refptr<base::SingleThreadTaskRunner> io_task_runner,
-      SubresourceFilterSafeBrowsingClient* client);
+      SubresourceFilterSafeBrowsingClient* client,
+      base::WeakPtr<safe_browsing::V5GetHashProtocolManager>
+          v5_get_hash_protocol_manager);
+
+  SubresourceFilterSafeBrowsingClientRequest(
+      const SubresourceFilterSafeBrowsingClientRequest&) = delete;
+  SubresourceFilterSafeBrowsingClientRequest& operator=(
+      const SubresourceFilterSafeBrowsingClientRequest&) = delete;
+
   ~SubresourceFilterSafeBrowsingClientRequest() override;
 
   void Start(const GURL& url);
 
   // safe_browsing::SafeBrowsingDatabaseManager::Client:
-  void OnCheckBrowseUrlResult(
+  void OnCheckSubresourceFilterUrlResult(
       const GURL& url,
       safe_browsing::SBThreatType threat_type,
-      const safe_browsing::ThreatMetadata& metadata) override;
+      const safe_browsing::SubresourceFilterMatch& subresource_filter_match)
+      override;
+
+  base::WeakPtr<safe_browsing::V5GetHashProtocolManager>
+  GetV5GetHashProtocolManager() override;
 
   size_t request_id() const { return request_id_; }
 
@@ -56,17 +64,17 @@ class SubresourceFilterSafeBrowsingClientRequest
   // verify a URL. After this amount of time the outstanding check will be
   // aborted, and the URL will be treated as if it didn't belong to the
   // Subresource Filter only list.
-  static constexpr base::TimeDelta kCheckURLTimeout =
-      base::TimeDelta::FromSeconds(5);
+  static constexpr base::TimeDelta kCheckURLTimeout = base::Seconds(5);
 
  private:
   // Callback for when the safe browsing check has taken longer than
   // kCheckURLTimeout.
   void OnCheckUrlTimeout();
 
-  void SendCheckResultToClient(bool served_from_network,
-                               safe_browsing::SBThreatType threat_type,
-                               const safe_browsing::ThreatMetadata& metadata);
+  void SendCheckResultToClient(
+      bool served_from_network,
+      safe_browsing::SBThreatType threat_type,
+      const safe_browsing::SubresourceFilterMatch& subresource_filter_match);
 
   // The |request_id_| identifies a particular request, as issued from the
   // SubresourceFilterSafeBrowsingClient. It will be unique in the scope of a
@@ -78,14 +86,16 @@ class SubresourceFilterSafeBrowsingClientRequest
   const base::TimeTicks start_time_;
 
   scoped_refptr<safe_browsing::SafeBrowsingDatabaseManager> database_manager_;
-  SubresourceFilterSafeBrowsingClient* client_ = nullptr;
+  raw_ptr<SubresourceFilterSafeBrowsingClient> client_ = nullptr;
+
+  // The protocol manager used for Safe Browsing v5 get hash requests.
+  base::WeakPtr<safe_browsing::V5GetHashProtocolManager>
+      v5_get_hash_protocol_manager_;
 
   // Timer to abort the safe browsing check if it takes too long.
   base::OneShotTimer timer_;
 
   bool request_completed_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(SubresourceFilterSafeBrowsingClientRequest);
 };
 
 }  // namespace subresource_filter

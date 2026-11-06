@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,9 +9,7 @@
 
 #include <vector>
 
-#include "base/lazy_instance.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/no_destructor.h"
 
 namespace device {
 namespace mojom {
@@ -24,8 +22,6 @@ class UsbBlocklist final {
   // An entry in the blocklist. Represents a device that should not be
   // accessible using WebUSB.
   struct Entry {
-    Entry(uint16_t vendor_id, uint16_t product_id, uint16_t version);
-
     // Matched against the idVendor field of the USB Device Descriptor.
     uint16_t vendor_id;
 
@@ -36,6 +32,9 @@ class UsbBlocklist final {
     // value less than or equal to this will be considered a match.
     uint16_t max_version;
   };
+
+  UsbBlocklist(const UsbBlocklist&) = delete;
+  UsbBlocklist& operator=(const UsbBlocklist&) = delete;
 
   ~UsbBlocklist();
 
@@ -53,8 +52,8 @@ class UsbBlocklist final {
   void ResetToDefaultValuesForTest();
 
  private:
-  // friend LazyInstance to permit access to private constructor.
-  friend base::LazyInstanceTraitsBase<UsbBlocklist>;
+  // friend NoDestructor to permit access to private constructor.
+  friend class base::NoDestructor<UsbBlocklist>;
 
   UsbBlocklist();
 
@@ -76,8 +75,6 @@ class UsbBlocklist final {
 
   // Set of blocklist entries.
   std::vector<Entry> dynamic_entries_;
-
-  DISALLOW_COPY_AND_ASSIGN(UsbBlocklist);
 };
 
 #endif  // CHROME_BROWSER_USB_USB_BLOCKLIST_H_

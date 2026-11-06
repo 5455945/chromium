@@ -1,13 +1,14 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/permissions/crowd_deny_preload_data.h"
 
+#include <string_view>
+
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/numerics/safe_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/test/task_environment.h"
 #include "base/version.h"
 #include "chrome/browser/permissions/crowd_deny.pb.h"
@@ -46,7 +47,11 @@ class CrowdDenyPreloadDataTest : public testing::Test {
  public:
   using SiteReputation = chrome_browser_crowd_deny::SiteReputation;
 
-  CrowdDenyPreloadDataTest() {}
+  CrowdDenyPreloadDataTest() = default;
+
+  CrowdDenyPreloadDataTest(const CrowdDenyPreloadDataTest&) = delete;
+  CrowdDenyPreloadDataTest& operator=(const CrowdDenyPreloadDataTest&) = delete;
+
   ~CrowdDenyPreloadDataTest() override = default;
 
  protected:
@@ -56,14 +61,12 @@ class CrowdDenyPreloadDataTest : public testing::Test {
   CrowdDenyPreloadData* preload_data() { return &preload_data_; }
 
   base::FilePath GetPathInTempDir(
-      base::FilePath::StringPieceType filename) const {
+      base::FilePath::StringViewType filename) const {
     return scoped_temp_dir_.GetPath().Append(filename);
   }
 
-  void SerializeTestRawData(base::StringPiece raw_data, base::FilePath path) {
-    const int bytes_to_write = base::checked_cast<int>(raw_data.size());
-    ASSERT_EQ(bytes_to_write,
-              base::WriteFile(path, raw_data.data(), bytes_to_write));
+  void SerializeTestRawData(std::string_view raw_data, base::FilePath path) {
+    ASSERT_TRUE(base::WriteFile(path, raw_data));
   }
 
   void SerializeTestPreloadData(
@@ -139,8 +142,6 @@ class CrowdDenyPreloadDataTest : public testing::Test {
   base::test::TaskEnvironment task_environment_;
   base::ScopedTempDir scoped_temp_dir_;
   CrowdDenyPreloadData preload_data_;
-
-  DISALLOW_COPY_AND_ASSIGN(CrowdDenyPreloadDataTest);
 };
 
 TEST_F(CrowdDenyPreloadDataTest, NoData) {
@@ -155,7 +156,7 @@ TEST_F(CrowdDenyPreloadDataTest, MissingFile) {
 TEST_F(CrowdDenyPreloadDataTest, EmptyData) {
   const base::FilePath empty_file_path =
       GetPathInTempDir(FILE_PATH_LITERAL("EmptyFile"));
-  SerializeTestRawData(base::StringPiece(), empty_file_path);
+  SerializeTestRawData(std::string_view(), empty_file_path);
   LoadTestDataAndWait(empty_file_path);
   ExpectEmptyPreloadData();
 }
@@ -359,7 +360,7 @@ TEST_F(CrowdDenyPreloadDataTest, UpdateToEmptyFileWipesInMemoryState) {
 
   const base::FilePath empty_file_path =
       GetPathInTempDir(FILE_PATH_LITERAL("EmptyFile"));
-  SerializeTestRawData(base::StringPiece(), empty_file_path);
+  SerializeTestRawData(std::string_view(), empty_file_path);
   LoadTestDataAndWait(empty_file_path);
   ExpectEmptyPreloadData();
 }
@@ -401,9 +402,9 @@ TEST_F(CrowdDenyPreloadDataTest, LastOneSurvivesFromUpdatesInQuickSuccession) {
 
   // Trigger three loads without pumping the message loop.
   //
-  // TODO(crbug.com/1028642): Think about making this test stronger. Even if the
-  // ordering were random, given the generous retry policy in continuous build,
-  // the test would still pass most of the time.
+  // TODO(crbug.com/40109238): Think about making this test stronger. Even if
+  // the ordering were random, given the generous retry policy in continuous
+  // build, the test would still pass most of the time.
   preload_data()->LoadFromDisk(data_path_v2, base::Version());
   preload_data()->LoadFromDisk(data_path_v3, base::Version());
   task_environment()->RunUntilIdle();

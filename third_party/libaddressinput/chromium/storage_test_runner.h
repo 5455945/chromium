@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,8 @@
 #include "third_party/libaddressinput/src/cpp/include/libaddressinput/storage.h"
 
 #include <memory>
+#include <optional>
 #include <string>
-
-#include "base/macros.h"
 
 namespace autofill {
 
@@ -19,6 +18,10 @@ class StorageTestRunner {
  public:
   // Does not take ownership of |storage|.
   explicit StorageTestRunner(::i18n::addressinput::Storage* storage);
+
+  StorageTestRunner(const StorageTestRunner&) = delete;
+  StorageTestRunner& operator=(const StorageTestRunner&) = delete;
+
   ~StorageTestRunner();
 
   // Runs all the tests from the standard test suite.
@@ -27,7 +30,9 @@ class StorageTestRunner {
  private:
   void ClearValues();
   std::unique_ptr<::i18n::addressinput::Storage::Callback> BuildCallback();
-  void OnDataReady(bool success, const std::string& key, std::string* data);
+  void OnDataReady(bool success,
+                   const std::string& key,
+                   std::optional<std::string> data);
 
   // Test suite.
   void GetWithoutPutReturnsEmptyData();
@@ -38,8 +43,6 @@ class StorageTestRunner {
   bool success_;
   std::string key_;
   std::string data_;
-
-  DISALLOW_COPY_AND_ASSIGN(StorageTestRunner);
 };
 
 }  // namespace autofill

@@ -38,7 +38,7 @@
 #include "third_party/blink/renderer/core/animation/sampled_effect.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/properties/css_bitset.h"
-#include "third_party/blink/renderer/platform/geometry/float_box.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
@@ -61,13 +61,15 @@ class CORE_EXPORT EffectStack {
   }
   static bool CompareSampledEffects(const Member<SampledEffect>&,
                                     const Member<SampledEffect>&);
-  bool IsEmpty() const { return sampled_effects_.IsEmpty(); }
+  bool IsEmpty() const { return sampled_effects_.empty(); }
   bool HasActiveAnimationsOnCompositor(const PropertyHandle&) const;
 
   using PropertyHandleFilter = bool (*)(const PropertyHandle&);
   bool AffectsProperties(PropertyHandleFilter) const;
   bool AffectsProperties(const CSSBitset&,
                          KeyframeEffect::Priority priority) const;
+  HashSet<PropertyHandle> AffectedProperties(
+      KeyframeEffect::Priority priority) const;
   bool HasRevert() const;
 
   // Produces a map of properties to active effects.
@@ -77,8 +79,6 @@ class CORE_EXPORT EffectStack {
   // |suppressed_animations| is an optional list of animations to ignore.
   // |priority| is for matching the effect priority and may be kDefaultPriority
   // or kTransitionPriority.
-  // |property_handle_filter| is an optional filter for determining which
-  // properties to include in the interpolations map.
   // |partial_effect_stack_cutoff| is an optional cutoff point, used to create
   // a partial effect stack.
   static ActiveInterpolationsMap ActiveInterpolations(
@@ -86,7 +86,6 @@ class CORE_EXPORT EffectStack {
       const HeapVector<Member<const InertEffect>>* new_animations,
       const HeapHashSet<Member<const Animation>>* suppressed_animations,
       KeyframeEffect::Priority priority,
-      PropertyHandleFilter property_handle_filter = nullptr,
       KeyframeEffect* partial_effect_stack_cutoff = nullptr);
 
   void Trace(Visitor*) const;

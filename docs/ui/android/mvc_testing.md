@@ -41,7 +41,6 @@ Ideally, the Mediator should be testable using Robolectric on the host machine (
 ### Good examples of Mediator/Test pairs:
 
  * [TabListMediator](/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListMediator.java) / [TabListMediatorUnitTest](/chrome/android/features/tab_ui/junit/src/org/chromium/chrome/browser/tasks/tab_management/TabListMediatorUnitTest.java)
- * [TabSwitcherMediator](/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherMediator.java) / [TabSwitcherMediatorUnitTest](/chrome/android/features/tab_ui/junit/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherMediatorUnitTest.java)
 
 
 ## Testing your View
@@ -50,7 +49,7 @@ The View/ViewBinder should be tested as an independent unit.
 
 ### Best practices for testability for your View:
 
- * Tests for UI should be based on the [DummyUiActivity](/ui/android/javatests/src/org/chromium/ui/test/util/DummyUiActivity.java).  This activity does not have any dependencies on the Chrome browser and allows you to test your UI in isolation.  This ensures you are not competing against other Chrome tasks and can write a test that is much faster and less flaky than legacy UI instrumentation tests.
+ * Tests for UI should be based on the [BlankUiTestActivity](/ui/android/javatests/src/org/chromium/ui/test/util/BlankUiTestActivity.java).  This activity does not have any dependencies on the Chrome browser and allows you to test your UI in isolation.  This ensures you are not competing against other Chrome tasks and can write a test that is much faster and less flaky than legacy UI instrumentation tests.
  * When adding tests for your UI component, add a [RenderTest](/ui/android/javatests/src/org/chromium/ui/test/util/RENDER_TESTS.md) to ensure the UI is consistent from release to release unless you explicitly changed it.
 
 ### Useful helpers / Links

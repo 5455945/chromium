@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,8 @@
 #define NET_DISK_CACHE_SIMPLE_SIMPLE_ENTRY_FORMAT_H_
 
 #include <stdint.h>
+
+#include <type_traits>
 
 #include "net/base/net_export.h"
 
@@ -51,11 +53,16 @@ static const int kSimpleEntryTotalFileCount = kSimpleEntryNormalFileCount + 1;
 struct NET_EXPORT_PRIVATE SimpleFileHeader {
   SimpleFileHeader();
 
-  uint64_t initial_magic_number;
-  uint32_t version;
-  uint32_t key_length;
-  uint32_t key_hash;
+  uint64_t initial_magic_number = 0;
+  uint32_t version = 0;
+  uint32_t key_length = 0;
+  uint32_t key_hash = 0;
+
+  // Avoid implicit padding so `std::has_unique_object_representations_v<>` will
+  // hold.
+  uint32_t unused_padding = 0;
 };
+static_assert(std::has_unique_object_representations_v<SimpleFileHeader>);
 
 struct NET_EXPORT_PRIVATE SimpleFileEOF {
   enum Flags {
@@ -65,20 +72,32 @@ struct NET_EXPORT_PRIVATE SimpleFileEOF {
 
   SimpleFileEOF();
 
-  uint64_t final_magic_number;
-  uint32_t flags;
-  uint32_t data_crc32;
-  // |stream_size| is only used in the EOF record for stream 0.
-  uint32_t stream_size;
+  uint64_t final_magic_number = 0;
+  uint32_t flags = 0;
+  uint32_t data_crc32 = 0;
+  // |stream_size| is only used in the EOF record for stream 0. The value must
+  // smaller than int32 max.
+  uint32_t stream_size = 0;
+
+  // Avoid implicit padding so `std::has_unique_object_representations_v<>` will
+  // hold.
+  uint32_t unused_padding = 0;
 };
 
 struct SimpleFileSparseRangeHeader {
   SimpleFileSparseRangeHeader();
 
-  uint64_t sparse_range_magic_number;
-  int64_t offset;
-  int64_t length;
-  uint32_t data_crc32;
+  uint64_t sparse_range_magic_number = 0;
+  uint64_t offset = 0;
+
+  // `length` must be size-fixed to avoid padding, so using uint64_t instead of
+  // size_t.
+  uint64_t length = 0;
+  uint32_t data_crc32 = 0;
+
+  // Avoid implicit padding so `std::has_unique_object_representations_v<>` will
+  // hold.
+  uint32_t unused_padding = 0;
 };
 
 }  // namespace disk_cache

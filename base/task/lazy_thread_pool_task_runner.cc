@@ -1,17 +1,18 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/task/lazy_thread_pool_task_runner.h"
 
+#include <atomic>
 #include <utility>
 
 #include "base/check_op.h"
 #include "base/lazy_instance_helpers.h"
 #include "base/task/thread_pool.h"
+#include "build/build_config.h"
 
-namespace base {
-namespace internal {
+namespace base::internal {
 
 namespace {
 ScopedLazyTaskRunnerListForTesting* g_scoped_lazy_task_runner_list_for_testing =
@@ -20,22 +21,23 @@ ScopedLazyTaskRunnerListForTesting* g_scoped_lazy_task_runner_list_for_testing =
 
 template <typename TaskRunnerType, bool com_sta>
 void LazyThreadPoolTaskRunner<TaskRunnerType, com_sta>::Reset() {
-  subtle::AtomicWord state = subtle::Acquire_Load(&state_);
+  uintptr_t state = state_.load(std::memory_order_acquire);
 
   DCHECK_NE(state, kLazyInstanceStateCreating) << "Race: all threads should be "
                                                   "unwound in unittests before "
                                                   "resetting TaskRunners.";
 
   // Return if no reference is held by this instance.
-  if (!state)
+  if (!state) {
     return;
+  }
 
   // Release the reference acquired in Get().
   SequencedTaskRunner* task_runner = reinterpret_cast<TaskRunnerType*>(state);
   task_runner->Release();
 
   // Clear the state.
-  subtle::NoBarrier_Store(&state_, 0);
+  state_.store(0, std::memory_order_relaxed);
 }
 
 template <>
@@ -54,7 +56,7 @@ LazyThreadPoolTaskRunner<SingleThreadTaskRunner, false>::Create() {
   return ThreadPool::CreateSingleThreadTaskRunner(traits_, thread_mode_);
 }
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 template <>
 scoped_refptr<SingleThreadTaskRunner>
 LazyThreadPoolTaskRunner<SingleThreadTaskRunner, true>::Create() {
@@ -93,14 +95,14 @@ template <typename TaskRunnerType, bool com_sta>
 scoped_refptr<TaskRunnerType>
 LazyThreadPoolTaskRunner<TaskRunnerType, com_sta>::Get() {
   return WrapRefCounted(subtle::GetOrCreateLazyPointer(
-      &state_, &LazyThreadPoolTaskRunner<TaskRunnerType, com_sta>::CreateRaw,
+      state_, &LazyThreadPoolTaskRunner<TaskRunnerType, com_sta>::CreateRaw,
       reinterpret_cast<void*>(this), nullptr, nullptr));
 }
 
 template class LazyThreadPoolTaskRunner<SequencedTaskRunner, false>;
 template class LazyThreadPoolTaskRunner<SingleThreadTaskRunner, false>;
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 template class LazyThreadPoolTaskRunner<SingleThreadTaskRunner, true>;
 #endif
 
@@ -111,8 +113,9 @@ ScopedLazyTaskRunnerListForTesting::ScopedLazyTaskRunnerListForTesting() {
 
 ScopedLazyTaskRunnerListForTesting::~ScopedLazyTaskRunnerListForTesting() {
   internal::CheckedAutoLock auto_lock(lock_);
-  for (auto& callback : callbacks_)
+  for (auto& callback : callbacks_) {
     std::move(callback).Run();
+  }
   g_scoped_lazy_task_runner_list_for_testing = nullptr;
 }
 
@@ -121,5 +124,4 @@ void ScopedLazyTaskRunnerListForTesting::AddCallback(OnceClosure callback) {
   callbacks_.push_back(std::move(callback));
 }
 
-}  // namespace internal
-}  // namespace base
+}  // namespace base::internal

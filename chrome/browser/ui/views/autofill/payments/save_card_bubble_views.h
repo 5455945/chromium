@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,12 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/ui/autofill/autofill_bubble_base.h"
 #include "chrome/browser/ui/autofill/payments/save_card_bubble_controller.h"
-#include "chrome/browser/ui/sync/bubble_sync_promo_delegate.h"
-#include "chrome/browser/ui/views/location_bar/location_bar_bubble_delegate_view.h"
-#include "components/autofill/core/browser/ui/payments/payments_bubble_closed_reasons.h"
+#include "chrome/browser/ui/views/autofill/autofill_location_bar_bubble.h"
 #include "components/signin/public/base/signin_metrics.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 
 namespace content {
 class WebContents;
@@ -25,13 +25,16 @@ namespace autofill {
 // Autofill has not previously saved. The base view establishes the button
 // handlers, the calculated size, the Super G logo, testing methods, and the
 // window title (controller eventually handles the title for each sub-class).
-class SaveCardBubbleViews : public AutofillBubbleBase,
-                            public LocationBarBubbleDelegateView {
+class SaveCardBubbleViews : public AutofillLocationBarBubble {
+  METADATA_HEADER(SaveCardBubbleViews, AutofillLocationBarBubble)
  public:
   // Bubble will be anchored to |anchor_view|.
-  SaveCardBubbleViews(views::View* anchor_view,
+  SaveCardBubbleViews(views::BubbleAnchor anchor_view,
                       content::WebContents* web_contents,
                       SaveCardBubbleController* controller);
+
+  SaveCardBubbleViews(const SaveCardBubbleViews&) = delete;
+  SaveCardBubbleViews& operator=(const SaveCardBubbleViews&) = delete;
 
   void Show(DisplayReason reason);
 
@@ -39,10 +42,11 @@ class SaveCardBubbleViews : public AutofillBubbleBase,
   void Hide() override;
 
   // LocationBarBubbleDelegateView:
+  void OnBeforeBubbleWidgetInit(views::Widget::InitParams* params,
+                                views::Widget* widget) const override;
   void AddedToWidget() override;
   std::u16string GetWindowTitle() const override;
   void WindowClosing() override;
-  void OnWidgetClosing(views::Widget* widget) override;
 
   // Returns the footnote view, so it can be searched for clickable views.
   // Exists for testing (specifically, browsertests).
@@ -67,21 +71,17 @@ class SaveCardBubbleViews : public AutofillBubbleBase,
   void Init() override;
 
   void OnDialogAccepted();
-  void OnDialogCancelled();
 
   ~SaveCardBubbleViews() override;
 
  private:
   friend class SaveCardBubbleViewsFullFormBrowserTest;
 
-  views::View* footnote_view_ = nullptr;
+  std::unique_ptr<views::View> GetCardIdentifierView();
 
-  SaveCardBubbleController* controller_;  // Weak reference.
+  raw_ptr<views::View> footnote_view_ = nullptr;
 
-  PaymentsBubbleClosedReason closed_reason_ =
-      PaymentsBubbleClosedReason::kUnknown;
-
-  DISALLOW_COPY_AND_ASSIGN(SaveCardBubbleViews);
+  raw_ptr<SaveCardBubbleController> controller_;  // Weak reference.
 };
 
 }  // namespace autofill

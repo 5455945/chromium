@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,11 @@
 #include <cmath>
 #include <vector>
 
+#include "ash/ash_export.h"
 #include "ash/login/ui/animation_frame.h"
-#include "base/macros.h"
 #include "base/timer/timer.h"
+#include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/base/models/image_model.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/views/view.h"
@@ -18,10 +20,13 @@
 namespace ash {
 
 // A custom image view with rounded edges.
-class AnimatedRoundedImageView : public views::View {
+class ASH_EXPORT AnimatedRoundedImageView : public views::View {
+  METADATA_HEADER(AnimatedRoundedImageView, views::View)
+
  public:
   enum class Playback {
     kFirstFrameOnly,  // Only the first frame in the animation will be shown.
+    kLastFrameOnly,   // Only the last frame in the animation will be shown.
     kSingle,          // Play the animation only once.
     kRepeat,          // Play the animation repeatedly.
   };
@@ -36,6 +41,10 @@ class AnimatedRoundedImageView : public views::View {
   // Constructs a new rounded image view with rounded corners of radius
   // |corner_radius|.
   AnimatedRoundedImageView(const gfx::Size& size, int corner_radius);
+
+  AnimatedRoundedImageView(const AnimatedRoundedImageView&) = delete;
+  AnimatedRoundedImageView& operator=(const AnimatedRoundedImageView&) = delete;
+
   ~AnimatedRoundedImageView() override;
 
   // Show an animation with specified playback mode.
@@ -45,12 +54,19 @@ class AnimatedRoundedImageView : public views::View {
   // Show a static image.
   void SetImage(const gfx::ImageSkia& image);
 
+  // Show a static image from image model.
+  void SetImageModel(const ui::ImageModel& image_model);
+
   // Set playback type of the animation.
   void SetAnimationPlayback(Playback playback);
 
   // views::View:
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   void OnPaint(gfx::Canvas* canvas) override;
+
+  // Invalidate frames. The next OnPaint will rebuild the frames.
+  void InvalidateFrames();
 
  private:
   void StartOrStopAnimation();
@@ -73,8 +89,6 @@ class AnimatedRoundedImageView : public views::View {
   const int corner_radius_;
 
   base::OneShotTimer update_frame_timer_;
-
-  DISALLOW_COPY_AND_ASSIGN(AnimatedRoundedImageView);
 };
 
 }  // namespace ash

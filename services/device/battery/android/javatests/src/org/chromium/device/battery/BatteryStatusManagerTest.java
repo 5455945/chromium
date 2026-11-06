@@ -1,11 +1,16 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.device.battery;
 
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.ContextWrapper;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.os.BatteryManager;
+import android.os.Handler;
 
 import androidx.test.filters.SmallTest;
 
@@ -14,12 +19,13 @@ import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseJUnit4ClassRunner;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.device.DeviceFeatureList;
 import org.chromium.device.mojom.BatteryStatus;
 
-/**
- * Test suite for BatteryStatusManager.
- */
+/** Test suite for BatteryStatusManager. */
 @RunWith(BaseJUnit4ClassRunner.class)
 public class BatteryStatusManagerTest {
     // Values reported in the most recent callback from |mManager|.
@@ -96,8 +102,9 @@ public class BatteryStatusManagerTest {
     }
 
     public void initializeBatteryManager(FakeAndroidBatteryManager managerForTesting) {
-        mManager = BatteryStatusManager.createBatteryStatusManagerForTesting(
-                mCallback, managerForTesting);
+        mManager =
+                BatteryStatusManager.createBatteryStatusManagerForTesting(
+                        mCallback, managerForTesting);
     }
 
     @Test
@@ -180,8 +187,40 @@ public class BatteryStatusManagerTest {
     @Test
     @SmallTest
     public void testStartStopSucceeds() {
-        Assert.assertTrue(mManager.start());
+        mManager.start();
         mManager.stop();
+    }
+
+    @Test
+    @SmallTest
+    @DisableFeatures(DeviceFeatureList.BATTERY_STATUS_MANAGER_BROADCAST_RECEIVER_IN_BACKGROUND)
+    public void testStartStopWithoutStickyIntent() {
+        Context originalContext = ContextUtils.getApplicationContext();
+        Context contextWithoutStickyIntent =
+                new ContextWrapper(originalContext) {
+                    @Override
+                    public Intent registerReceiver(
+                            BroadcastReceiver receiver,
+                            IntentFilter filter,
+                            String broadcastPermission,
+                            Handler scheduler,
+                            int flags) {
+                        return null;
+                    }
+
+                    @Override
+                    public void unregisterReceiver(BroadcastReceiver receiver) {}
+                };
+        ContextUtils.initApplicationContextForTests(contextWithoutStickyIntent);
+        try {
+            Assert.assertFalse(mManager.isEnabledForTesting());
+            mManager.start();
+            Assert.assertTrue(mManager.isEnabledForTesting());
+            mManager.stop();
+            Assert.assertFalse(mManager.isEnabledForTesting());
+        } finally {
+            ContextUtils.initApplicationContextForTests(originalContext);
+        }
     }
 
     @Test

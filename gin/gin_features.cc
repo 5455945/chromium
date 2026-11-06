@@ -1,98 +1,184 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "gin/gin_features.h"
+
 #include "base/metrics/field_trial_params.h"
 
 namespace features {
 
+// Enable code space compaction when finalizing a full GC with stack.
+BASE_FEATURE(kV8CompactCodeSpaceWithStack, kFeatureDefaultStateControlledByV8);
+
+// Enable compaction when finalizing a full GC with stack.
+BASE_FEATURE(kV8CompactWithStack, kFeatureDefaultStateControlledByV8);
+
 // Enables optimization of JavaScript in V8.
-const base::Feature kV8OptimizeJavascript{"V8OptimizeJavascript",
-                                          base::FEATURE_ENABLED_BY_DEFAULT};
+BASE_FEATURE(kV8OptimizeJavascript, kFeatureDefaultStateControlledByV8);
 
 // Enables flushing of JS bytecode in V8.
-const base::Feature kV8FlushBytecode{"V8FlushBytecode",
-                                     base::FEATURE_ENABLED_BY_DEFAULT};
+BASE_FEATURE(kV8FlushBytecode, kFeatureDefaultStateControlledByV8);
+const base::FeatureParam<int> kV8FlushBytecodeOldAge{
+    &kV8FlushBytecode, "V8FlushBytecodeOldAge", 5};
+
+// Enables flushing of baseline code in V8.
+BASE_FEATURE(kV8FlushBaselineCode, kFeatureDefaultStateControlledByV8);
+
+// Enables code flushing based on tab visibility.
+BASE_FEATURE(kV8FlushCodeBasedOnTabVisibility,
+             kFeatureDefaultStateControlledByV8);
+
+// Enables code flushing based on time.
+BASE_FEATURE(kV8FlushCodeBasedOnTime, kFeatureDefaultStateControlledByV8);
+const base::FeatureParam<int> kV8FlushCodeOldTime{&kV8FlushCodeBasedOnTime,
+                                                  "V8FlushCodeOldTime", 30};
 
 // Enables finalizing streaming JS compilations on a background thread.
-const base::Feature kV8OffThreadFinalization{"V8OffThreadFinalization",
-                                             base::FEATURE_ENABLED_BY_DEFAULT};
+BASE_FEATURE(kV8OffThreadFinalization, kFeatureDefaultStateControlledByV8);
 
 // Enables lazy feedback allocation in V8.
-const base::Feature kV8LazyFeedbackAllocation{"V8LazyFeedbackAllocation",
-                                              base::FEATURE_ENABLED_BY_DEFAULT};
-
-// Enables concurrent inlining in TurboFan.
-const base::Feature kV8ConcurrentInlining{"V8ConcurrentInlining",
-                                          base::FEATURE_DISABLED_BY_DEFAULT};
+BASE_FEATURE(kV8LazyFeedbackAllocation, kFeatureDefaultStateControlledByV8);
 
 // Enables per-context marking worklists in V8 GC.
-const base::Feature kV8PerContextMarkingWorklist{
-    "V8PerContextMarkingWorklist", base::FEATURE_DISABLED_BY_DEFAULT};
+BASE_FEATURE(kV8PerContextMarkingWorklist, kFeatureDefaultStateControlledByV8);
 
 // Enables flushing of the instruction cache for the embedded blob.
-const base::Feature kV8FlushEmbeddedBlobICache{
-    "V8FlushEmbeddedBlobICache", base::FEATURE_DISABLED_BY_DEFAULT};
+BASE_FEATURE(kV8FlushEmbeddedBlobICache, kFeatureDefaultStateControlledByV8);
 
 // Enables reduced number of concurrent marking tasks.
-const base::Feature kV8ReduceConcurrentMarkingTasks{
-    "V8ReduceConcurrentMarkingTasks", base::FEATURE_DISABLED_BY_DEFAULT};
+BASE_FEATURE(kV8ReduceConcurrentMarkingTasks,
+             kFeatureDefaultStateControlledByV8);
 
 // Disables reclaiming of unmodified wrappers objects.
-const base::Feature kV8NoReclaimUnmodifiedWrappers{
-    "V8NoReclaimUnmodifiedWrappers", base::FEATURE_DISABLED_BY_DEFAULT};
+BASE_FEATURE(kV8NoReclaimUnmodifiedWrappers,
+             kFeatureDefaultStateControlledByV8);
 
-// Enables concurrent heap access and allocation.
-const base::Feature kV8LocalHeaps{"V8LocalHeaps",
-                                  base::FEATURE_ENABLED_BY_DEFAULT};
-
-// Enables TurboFan's direct heap access.
-const base::Feature kV8TurboDirectHeapAccess{"V8TurboDirectHeapAccess",
-                                             base::FEATURE_ENABLED_BY_DEFAULT};
+// Enables W^X code memory protection in V8.
+// This is enabled in V8 by default. To test the performance impact, we are
+// going to disable this feature in a finch experiment.
+BASE_FEATURE(kV8CodeMemoryWriteProtection, kFeatureDefaultStateControlledByV8);
 
 // Enables fallback to a breadth-first regexp engine on excessive backtracking.
-const base::Feature kV8ExperimentalRegexpEngine{
-    "V8ExperimentalRegexpEngine", base::FEATURE_ENABLED_BY_DEFAULT};
+BASE_FEATURE(kV8ExperimentalRegexpEngine, kFeatureDefaultStateControlledByV8);
 
-// Enables experimental Turboprop compiler.
-const base::Feature kV8Turboprop{"V8Turboprop",
-                                 base::FEATURE_DISABLED_BY_DEFAULT};
+// Enables the Turbofan compiler.
+BASE_FEATURE(kV8Turbofan, kFeatureDefaultStateControlledByV8);
 
-// Enables experimental Sparkplug compiler.
-const base::Feature kV8Sparkplug{"V8Sparkplug",
-                                 base::FEATURE_DISABLED_BY_DEFAULT};
+// Enables Turbofan's new compiler IR Turboshaft.
+BASE_FEATURE(kV8Turboshaft, kFeatureDefaultStateControlledByV8);
 
+// Enable running instruction selection on Turboshaft IR directly.
+BASE_FEATURE(kV8TurboshaftInstructionSelection,
+             kFeatureDefaultStateControlledByV8);
+
+// Enables Maglev compiler. Note that this only sets the V8 flag when
+// manually overridden; otherwise it defers to whatever the V8 default is.
+BASE_FEATURE(kV8Maglev, kFeatureDefaultStateControlledByV8);
+BASE_FEATURE(kV8ConcurrentMaglevHighPriorityThreads,
+             kFeatureDefaultStateControlledByV8);
+
+BASE_FEATURE(kV8MaxValidPolymorphicMapCount, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kV8HighEndAndroid, kFeatureDefaultStateControlledByV8);
+
+const base::FeatureParam<int> kV8HighEndAndroidMemoryThreshold{
+    &kV8HighEndAndroid, "V8HighEndAndroidMemoryThreshold", 8};
+
+BASE_FEATURE(kV8MemoryReducer, base::FEATURE_DISABLED_BY_DEFAULT);
+
+const base::FeatureParam<int> kV8MemoryReducerGCCount{
+    &kV8MemoryReducer, "V8MemoryReducerGCCount", 3};
+
+BASE_FEATURE(kV8MemoryPoolReleaseOnMallocFailures,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kV8PreconfigureOldGen, kFeatureDefaultStateControlledByV8);
+
+const base::FeatureParam<int> kV8PreconfigureOldGenSize{
+    &kV8PreconfigureOldGen, "V8PreconfigureOldGenSize", 32};
+
+BASE_FEATURE(kV8MemoryReducerDelay, base::FEATURE_DISABLED_BY_DEFAULT);
+
+const base::FeatureParam<int> kV8MemoryReducerDelayInSeconds{
+    &kV8MemoryReducerDelay, "V8MemoryReducerDelayInSeconds", 8};
+
+BASE_FEATURE(kV8ScavengerHigherCapacity, base::FEATURE_DISABLED_BY_DEFAULT);
+
+const base::FeatureParam<int> kV8ScavengerMaxCapacity{
+    &kV8ScavengerHigherCapacity, "V8ScavengerMaxCapacity", 16};
+
+// Enables Sparkplug compiler. Note that this only sets the V8 flag when
+// manually overridden; otherwise it defers to whatever the V8 default is.
+BASE_FEATURE(kV8Sparkplug, kFeatureDefaultStateControlledByV8);
+
+// Enables the concurrent Sparkplug compiler.
+BASE_FEATURE(kV8ConcurrentSparkplug, kFeatureDefaultStateControlledByV8);
+const base::FeatureParam<int> kV8ConcurrentSparkplugMaxThreads{
+    &kV8ConcurrentSparkplug, "V8ConcurrentSparkplugMaxThreads", 0};
+BASE_FEATURE(kV8ConcurrentSparkplugHighPriorityThreads,
+             kFeatureDefaultStateControlledByV8);
 // Makes sure the experimental Sparkplug compiler is only enabled if short
 // builtin calls are enabled too.
-const base::Feature kV8SparkplugNeedsShortBuiltinCalls{
-    "V8SparkplugNeedsShortBuiltinCalls", base::FEATURE_DISABLED_BY_DEFAULT};
+BASE_FEATURE(kV8SparkplugNeedsShortBuiltinCalls,
+             kFeatureDefaultStateControlledByV8);
+
+// Enables batch compilation for Sparkplug (baseline) compilation.
+BASE_FEATURE(kV8BaselineBatchCompilation, kFeatureDefaultStateControlledByV8);
 
 // Enables short builtin calls feature.
-const base::Feature kV8ShortBuiltinCalls{"V8ShortBuiltinCalls",
-                                         base::FEATURE_ENABLED_BY_DEFAULT};
+BASE_FEATURE(kV8ShortBuiltinCalls, kFeatureDefaultStateControlledByV8);
 
 // Enables fast API calls in TurboFan.
-const base::Feature kV8TurboFastApiCalls{"V8TurboFastApiCalls",
-                                         base::FEATURE_DISABLED_BY_DEFAULT};
+BASE_FEATURE(kV8TurboFastApiCalls, kFeatureDefaultStateControlledByV8);
 
-// Enables untrusted code mitigations.
-const base::Feature kV8UntrustedCodeMitigations{
-    "V8UntrustedCodeMitigations", base::FEATURE_DISABLED_BY_DEFAULT};
+// Enables faster DOM methods for megamorphic ICs
+BASE_FEATURE(kV8MegaDomIC, kFeatureDefaultStateControlledByV8);
 
-// Artificially delays script execution.
-const base::Feature kV8ScriptAblation{"V8ScriptAblation",
-                                      base::FEATURE_DISABLED_BY_DEFAULT};
-const base::FeatureParam<int> kV8ScriptDelayOnceMs{&kV8ScriptAblation,
-                                                   "V8ScriptDelayOnceMs", 0};
-const base::FeatureParam<int> kV8ScriptDelayMs{&kV8ScriptAblation,
-                                               "V8ScriptDelayMs", 0};
-const base::FeatureParam<double> kV8ScriptDelayFraction{
-    &kV8ScriptAblation, "V8ScriptDelayFraction", 0.0};
+// Faster object cloning
+BASE_FEATURE(kV8SideStepTransitions, kFeatureDefaultStateControlledByV8);
 
-// Experiment to determine the maximum size of the ArrayBuffer cage.
-const base::Feature kV8ArrayBufferCageReservationExperiment{
-    "V8ArrayBufferCageReservationExperiment",
-    base::FEATURE_DISABLED_BY_DEFAULT};
+// Avoids background threads for GC if isolate is in background.
+BASE_FEATURE(kV8SingleThreadedGCInBackground,
+             kFeatureDefaultStateControlledByV8);
+
+BASE_FEATURE(kV8SingleThreadedGCInBackgroundParallelPause,
+             kFeatureDefaultStateControlledByV8);
+
+BASE_FEATURE(kV8SingleThreadedGCInBackgroundNoIncrementalMarking,
+             kFeatureDefaultStateControlledByV8);
+
+// Enables slow histograms that provide detailed information at increased
+// runtime overheads.
+BASE_FEATURE(kV8SlowHistograms, kFeatureDefaultStateControlledByV8);
+// Multiple finch experiments might use slow-histograms. We introduce
+// separate feature flags to circumvent finch limitations.
+BASE_FEATURE(kV8SlowHistogramsCodeMemoryWriteProtection,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kV8SlowHistogramsSparkplug, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kV8SlowHistogramsSparkplugAndroid,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kV8ConcurrentMarkingHighPriorityThreads,
+             kFeatureDefaultStateControlledByV8);
+
+BASE_FEATURE(kV8CppGCAllocationSampler, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kV8UseOriginalMessageForStackTrace,
+             kFeatureDefaultStateControlledByV8);
+
+BASE_FEATURE(kV8IdleGcOnContextDisposal, kFeatureDefaultStateControlledByV8);
+
+// Elide redundant TDZ hole checks in bytecode. This only sets the V8 flag when
+// manually overridden.
+BASE_FEATURE(kV8IgnitionElideRedundantTdzChecks,
+             kFeatureDefaultStateControlledByV8);
+
+// JavaScript language features.
+
+// Enables the `with` syntax for the Import Attributes proposal.
+BASE_FEATURE(kJavaScriptImportAttributes, kFeatureDefaultStateControlledByV8);
+
+// WebAssembly features (currently none).
 
 }  // namespace features

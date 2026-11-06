@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,18 +9,18 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 
 #include "base/check.h"
 #include "base/component_export.h"
 #include "base/containers/circular_deque.h"
 #include "base/containers/small_map.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/sequence_checker.h"
 #include "base/synchronization/lock.h"
 #include "base/types/pass_key.h"
 #include "mojo/public/cpp/bindings/associated_group_controller.h"
-#include "mojo/public/cpp/bindings/connection_group.h"
 #include "mojo/public/cpp/bindings/connector.h"
 #include "mojo/public/cpp/bindings/interface_id.h"
 #include "mojo/public/cpp/bindings/message_dispatcher.h"
@@ -29,7 +29,6 @@
 #include "mojo/public/cpp/bindings/pipe_control_message_handler_delegate.h"
 #include "mojo/public/cpp/bindings/pipe_control_message_proxy.h"
 #include "mojo/public/cpp/bindings/scoped_interface_endpoint_handle.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
 class SequencedTaskRunner;
@@ -38,8 +37,12 @@ class SequencedTaskRunner;
 namespace mojo {
 
 class AsyncFlusher;
-class MessageHeaderValidator;
+class ConnectionGroupRef;
 class PendingFlush;
+
+namespace test {
+class TestableMultiplexRouter;
+}  // namespace test
 
 namespace internal {
 
@@ -111,6 +114,16 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) MultiplexRouter
                   scoped_refptr<base::SequencedTaskRunner> runner,
                   const char* primary_interface_name = "unknown interface");
 
+  MultiplexRouter(base::PassKey<test::TestableMultiplexRouter>,
+                  ScopedMessagePipeHandle message_pipe,
+                  Config config,
+                  bool set_interface_id_namespace_bit,
+                  scoped_refptr<base::SequencedTaskRunner> runner,
+                  const char* primary_interface_name = "unknown interface");
+
+  MultiplexRouter(const MultiplexRouter&) = delete;
+  MultiplexRouter& operator=(const MultiplexRouter&) = delete;
+
   // Sets a MessageReceiver which can filter a message after validation but
   // before dispatch.
   void SetIncomingMessageFilter(std::unique_ptr<MessageFilter> filter);
@@ -118,7 +131,7 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) MultiplexRouter
   // Adds this object to a ConnectionGroup identified by |ref|. All receiving
   // pipe endpoints decoded from inbound messages on this MultiplexRouter will
   // be added to the same group.
-  void SetConnectionGroup(ConnectionGroup::Ref ref);
+  void SetConnectionGroup(ConnectionGroupRef ref);
 
   // ---------------------------------------------------------------------------
   // The following public methods are safe to call from any sequence.
@@ -130,7 +143,8 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) MultiplexRouter
       InterfaceId id) override;
   void CloseEndpointHandle(
       InterfaceId id,
-      const absl::optional<DisconnectReason>& reason) override;
+      const std::optional<DisconnectReason>& reason) override;
+  void NotifyLocalEndpointOfPeerClosure(InterfaceId id) override;
   InterfaceEndpointController* AttachEndpointClient(
       const ScopedInterfaceEndpointHandle& handle,
       InterfaceEndpointClient* endpoint_client,
@@ -138,7 +152,6 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) MultiplexRouter
   void DetachEndpointClient(
       const ScopedInterfaceEndpointHandle& handle) override;
   void RaiseError() override;
-  bool PrefersSerializedMessages() override;
 
   // ---------------------------------------------------------------------------
   // The following public methods are called on the creating sequence.
@@ -196,16 +209,19 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) MultiplexRouter
     return connector_.handle();
   }
 
-  bool SimulateReceivingMessageForTesting(Message* message) {
-    return dispatcher_.Accept(message);
+  bool SimulateReceivingMessageForTesting(ScopedMessageHandle handle) {
+    return connector_.SimulateReadMessage(std::move(handle));
   }
+
+  Connector& GetConnectorForTesting() { return connector_; }
+
+ protected:
+  ~MultiplexRouter() override;
 
  private:
   class InterfaceEndpoint;
   class MessageWrapper;
   struct Task;
-
-  ~MultiplexRouter() override;
 
   // Indicates whether `message` can unblock any active external sync waiter.
   bool CanUnblockExternalSyncWait(const Message& message);
@@ -220,7 +236,7 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) MultiplexRouter
   // PipeControlMessageHandlerDelegate implementation:
   bool OnPeerAssociatedEndpointClosed(
       InterfaceId id,
-      const absl::optional<DisconnectReason>& reason) override;
+      const std::optional<DisconnectReason>& reason) override;
   bool WaitForFlushToComplete(ScopedMessagePipeHandle flush_pipe) override;
 
   void OnPipeConnectionError(bool force_async_dispatch);
@@ -295,21 +311,24 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) MultiplexRouter
 
   const Config config_;
 
+  // The small fields below are grouped here so that they don't each occupy
+  // their own 8-byte slot between pointer-sized members.
+  uint32_t next_interface_id_value_ = 1;
+
   // Whether to set the namespace bit when generating interface IDs. Please see
   // comments of kInterfaceIdNamespaceMask.
   const bool set_interface_id_namespace_bit_;
 
-  scoped_refptr<base::SequencedTaskRunner> task_runner_;
-
-  // Owned by |dispatcher_| below.
-  MessageHeaderValidator* header_validator_ = nullptr;
+  bool posted_to_process_tasks_ = false;
 
   MessageDispatcher dispatcher_;
   Connector connector_;
 
   // Active whenever dispatch is blocked by a pending remote flush.
   ScopedMessagePipeHandle active_flush_pipe_;
-  absl::optional<mojo::SimpleWatcher> flush_pipe_watcher_;
+  // Only exists while a flush is in progress; out of line because there is a
+  // MultiplexRouter per message pipe and a SimpleWatcher is 88 bytes.
+  std::unique_ptr<mojo::SimpleWatcher> flush_pipe_watcher_;
 
   // Tracks information about the current exclusive sync wait, if any, on the
   // MultiplexRouter's primary thread. Note that exclusive off-thread sync waits
@@ -319,13 +338,14 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) MultiplexRouter
     uint64_t request_id = 0;
     bool finished = false;
   };
-  absl::optional<ExclusiveSyncWaitInfo> exclusive_sync_wait_;
+  // Only exists during an exclusive sync wait; out of line, see above.
+  std::unique_ptr<ExclusiveSyncWaitInfo> exclusive_sync_wait_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 
   // Protects the following members.
   // Not set in Config::SINGLE_INTERFACE* mode.
-  mutable absl::optional<base::Lock> lock_;
+  mutable std::optional<base::Lock> lock_;
   PipeControlMessageHandler control_message_handler_;
 
   // NOTE: It is unsafe to call into this object while holding |lock_|.
@@ -333,14 +353,17 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) MultiplexRouter
 
   base::small_map<std::map<InterfaceId, scoped_refptr<InterfaceEndpoint>>, 1>
       endpoints_;
-  uint32_t next_interface_id_value_ = 1;
 
   base::circular_deque<std::unique_ptr<Task>> tasks_;
   // It refers to tasks in |tasks_| and doesn't own any of them.
-  std::map<InterfaceId, base::circular_deque<Task*>> sync_message_tasks_;
+  std::map<InterfaceId, base::circular_deque<raw_ptr<Task>>>
+      sync_message_tasks_;
 
-  bool posted_to_process_tasks_ = false;
   scoped_refptr<base::SequencedTaskRunner> posted_to_task_runner_;
+
+  // Indicates whether we're currently within ProcessTasks(). Used to avoid
+  // re-entrancy into that method.
+  bool processing_tasks_ = false;
 
   bool encountered_error_ = false;
 
@@ -357,8 +380,6 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) MultiplexRouter
   bool testing_mode_ = false;
 
   bool being_destructed_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(MultiplexRouter);
 };
 
 }  // namespace internal

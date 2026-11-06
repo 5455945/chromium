@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -58,14 +58,19 @@ function runTest(test, onPass) {
  */
 function runTests() {
   window.CDCJStestRunStatus;
-  var tests = [];
-  for (var i in window) {
+  let tests = [];
+  for (let i in window) {
     if (i.indexOf('test') == 0)
       tests.push(window[i]);
   }
-  console.log('Running %d tests...', tests.length);
 
-  var testNo = 0;
+  if (tests.length == 0) {
+    window.CDCJStestRunStatus = "FAIL: no tests found, compilation error?";
+    return;
+  }
+
+  console.log('Running %d tests...', tests.length);
+  let testNo = 0;
   function runNextTest() {
     if (testNo >= tests.length) {
       window.CDCJStestRunStatus = "PASS"
@@ -78,7 +83,7 @@ function runTests() {
       runNextTest();
     }
 
-    var test = tests[testNo];
+    let test = tests[testNo];
     console.log('Running (%d/%d) -- %s', testNo + 1, tests.length, test.name);
     runTest(test, onPass);
   }
@@ -91,4 +96,5 @@ window.addEventListener('load', function() {
 
 window.cdc_adoQpoasnfa76pfcZLmcfl_Array = window.Array;
 window.cdc_adoQpoasnfa76pfcZLmcfl_Promise = window.Promise;
+window.cdc_adoQpoasnfa76pfcZLmcfl_ShadowRoot = window.ShadowRoot;
 window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol = window.Symbol;

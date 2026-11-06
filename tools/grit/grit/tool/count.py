@@ -1,10 +1,8 @@
-# Copyright (c) 2012 The Chromium Authors. All rights reserved.
+# Copyright 2012 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 '''Count number of occurrences of a given message ID.'''
-
-from __future__ import print_function
 
 import getopt
 import sys
@@ -34,8 +32,10 @@ class CountMessage(interface.Tool):
   def Run(self, opts, args):
     args = self.ParseOptions(args)
     if len(args) != 1:
-      print('This tool takes a single tool-specific argument, the message '
-            'ID to count.')
+      print(
+        'This tool takes a single tool-specific argument, the message '
+        'ID to count.'
+      )
       return 2
     self.SetOptions(opts)
 

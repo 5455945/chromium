@@ -1,56 +1,94 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/performance_manager/mechanisms/page_discarder.h"
 
-#include "base/bind.h"
-#include "base/task/task_traits.h"
-#include "build/build_config.h"
-#include "chrome/browser/resource_coordinator/lifecycle_unit_state.mojom.h"
-#include "chrome/browser/resource_coordinator/tab_lifecycle_unit.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "components/performance_manager/public/graph/page_node.h"
-#include "components/performance_manager/public/web_contents_proxy.h"
-#include "content/public/browser/browser_task_traits.h"
-#include "content/public/browser/browser_thread.h"
-#include "content/public/browser/render_process_host.h"
-#include "content/public/browser/web_contents.h"
+#include <utility>
 
-namespace performance_manager {
-namespace mechanism {
+#include "base/byte_size.h"
+#include "base/memory/weak_ptr.h"
+#include "base/metrics/histogram_functions.h"
+#include "chrome/browser/performance_manager/public/user_tuning/user_tuning_utils.h"
+#include "chrome/browser/resource_coordinator/lifecycle_unit_state.mojom.h"
+#include "components/performance_manager/public/graph/page_node.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/common/content_features.h"
+#include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/resource_coordinator/utils.h"
+#else
+#include "chrome/browser/resource_coordinator/tab_lifecycle_unit.h"
+#include "chrome/browser/resource_coordinator/tab_lifecycle_unit_external.h"
+#endif  // BUILDFLAG(IS_ANDROID)
+
+namespace performance_manager::mechanism {
 namespace {
 
-// Discards a page on the UI thread.
-bool DiscardPageOnUIThread(const WebContentsProxy& contents_proxy) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  content::WebContents* const contents = contents_proxy.Get();
-  if (!contents)
-    return false;
-
-  auto* lifecycle_unit =
-      resource_coordinator::TabLifecycleUnitSource::GetTabLifecycleUnitExternal(
-          contents);
-  if (!lifecycle_unit)
-    return false;
-
-  return lifecycle_unit->DiscardTab(
-      resource_coordinator::LifecycleUnitDiscardReason::URGENT);
-}
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// LINT.IfChange(DiscardPageOnUIThreadOutcome)
+enum class DiscardPageOnUIThreadOutcome {
+  kSuccess = 0,
+  kNoContents = 1,
+  kDiscardTabFailure = 2,
+  kNoLifecycleUnit = 3,
+  kMaxValue = kNoLifecycleUnit
+};
+// LINT.ThenChange(/tools/metrics/histograms/metadata/tab/enums.xml:DiscardPageOnUIThreadOutcome)
 
 }  // namespace
 
-void PageDiscarder::DiscardPageNode(
+std::optional<base::ByteSize> PageDiscarder::DiscardPageNode(
     const PageNode* page_node,
-    base::OnceCallback<void(bool)> post_discard_cb) {
-  DCHECK(page_node);
-  content::GetUIThreadTaskRunner({})->PostTaskAndReplyWithResult(
-      FROM_HERE,
-      base::BindOnce(&DiscardPageOnUIThread, page_node->GetContentsProxy()),
-      std::move(post_discard_cb));
+    ::mojom::LifecycleUnitDiscardReason discard_reason) {
+  base::WeakPtr<content::WebContents> contents = page_node->GetWebContents();
+
+  std::optional<DiscardPageOnUIThreadOutcome> outcome;
+  absl::Cleanup record_discard_outcome = [&]() {
+    CHECK(outcome.has_value());
+    base::UmaHistogramEnumeration("Discarding.DiscardPageOnUIThreadOutcome",
+                                  outcome.value());
+  };
+
+  CHECK(contents);
+  if (!contents) {
+    outcome = DiscardPageOnUIThreadOutcome::kNoContents;
+    return std::nullopt;
+  }
+
+  base::ByteSize memory_footprint_estimate =
+      user_tuning::GetDiscardedMemoryEstimateForPage(page_node);
+
+#if BUILDFLAG(IS_ANDROID)
+  CHECK(base::FeatureList::IsEnabled(features::kWebContentsDiscard));
+  resource_coordinator::AttemptFastKillForDiscard(contents.get(),
+                                                  discard_reason);
+  if (!contents) {
+    outcome = DiscardPageOnUIThreadOutcome::kDiscardTabFailure;
+    return std::nullopt;
+  }
+  contents->Discard(base::NullCallback());
+#else
+  auto* lifecycle_unit =
+      resource_coordinator::TabLifecycleUnitSource::GetTabLifecycleUnitExternal(
+          contents.get());
+  if (!lifecycle_unit) {
+    outcome = DiscardPageOnUIThreadOutcome::kNoLifecycleUnit;
+    return std::nullopt;
+  }
+
+  if (!lifecycle_unit->DiscardTab(discard_reason,
+                                  memory_footprint_estimate.InKiB())) {
+    outcome = DiscardPageOnUIThreadOutcome::kDiscardTabFailure;
+    return std::nullopt;
+  }
+
+#endif  // BUILDFLAG(IS_ANDROID)
+
+  outcome = DiscardPageOnUIThreadOutcome::kSuccess;
+  return memory_footprint_estimate;
 }
 
-}  // namespace mechanism
-}  // namespace performance_manager
+}  // namespace performance_manager::mechanism

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,17 @@
 #include <set>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/task/post_task.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
+#include "components/file_access/scoped_file_access_delegate.h"
 #include "components/services/app_service/public/cpp/file_handler.h"
 #include "components/services/app_service/public/cpp/file_handler_info.h"
 #include "content/public/browser/browser_context.h"
@@ -32,7 +33,7 @@
 #include "storage/common/file_system/file_system_mount_option.h"
 #include "storage/common/file_system/file_system_types.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "extensions/browser/api/file_handlers/non_native_file_system_delegate.h"
 #endif
 
@@ -40,6 +41,7 @@ namespace extensions {
 
 namespace app_file_handler_util {
 
+const char kFallbackMimeType[] = "application/octet-stream";
 const char kInvalidParameters[] = "Invalid parameters";
 const char kSecurityError[] = "Security error";
 
@@ -87,14 +89,8 @@ bool FileHandlerCanHandleFileWithMimeType(const apps::FileHandlerInfo& handler,
 bool WebAppFileHandlerCanHandleFileWithExtension(
     const apps::FileHandler& file_handler,
     const base::FilePath& path) {
-  // Build a list of file extensions supported by the handler.
-  //
-  // TODO(crbug.com/938103): Duplicates functionality from
-  // FileHandlerManager::GetFileExtensionsFromFileHandlers.
-  std::set<std::string> file_extensions;
-  for (const auto& accept_entry : file_handler.accept)
-    file_extensions.insert(accept_entry.file_extensions.begin(),
-                           accept_entry.file_extensions.end());
+  std::set<std::string> file_extensions =
+      apps::GetFileExtensionsFromFileHandler(file_handler);
 
   for (const auto& file_extension : file_extensions) {
     if (file_extension == "*")
@@ -124,16 +120,33 @@ bool WebAppFileHandlerCanHandleFileWithMimeType(
 }
 
 bool PrepareNativeLocalFileForWritableApp(const base::FilePath& path,
-                                          bool is_directory) {
+                                          bool is_directory,
+                                          const base::FilePath& root_path) {
   // Don't allow links.
-  if (base::PathExists(path) && base::IsLink(path))
+  if (base::IsLink(path)) {
     return false;
+  }
+
+  // IsLink() and FLAG_NO_FOLLOW only check the final path component. Also
+  // reject links in every component between |root_path| and |path|, which
+  // would otherwise allow |path| to escape the granted directory.
+  if (!root_path.empty()) {
+    for (base::FilePath current = path; current != root_path;
+         current = current.DirName()) {
+      if (current == current.DirName() || base::IsLink(current)) {
+        return false;
+      }
+    }
+  }
 
   if (is_directory)
     return base::DirectoryExists(path);
 
   // Create the file if it doesn't already exist.
-  int creation_flags = base::File::FLAG_OPEN_ALWAYS | base::File::FLAG_READ;
+  // Use FLAG_NO_FOLLOW to prevent TOCTOU races where the final path component
+  // is replaced with a symlink after the IsLink() check above.
+  int creation_flags = base::File::FLAG_OPEN_ALWAYS | base::File::FLAG_READ |
+                       base::File::FLAG_NO_FOLLOW;
   base::File file(path, creation_flags);
 
   return file.IsValid();
@@ -144,6 +157,7 @@ bool PrepareNativeLocalFileForWritableApp(const base::FilePath& path,
 // is not a symlink, is not in a blocklisted path and can be opened for writing.
 // Creates files if they do not exist, but fails for non-existent directory
 // paths. On Chrome OS, also fails for non-local files that don't already exist.
+// If |root_path| is not empty, local paths must not traverse a link below it.
 class WritableFileChecker
     : public base::RefCountedThreadSafe<WritableFileChecker> {
  public:
@@ -152,7 +166,8 @@ class WritableFileChecker
       content::BrowserContext* context,
       const std::set<base::FilePath>& directory_paths,
       base::OnceClosure on_success,
-      base::OnceCallback<void(const base::FilePath&)> on_failure);
+      base::OnceCallback<void(const base::FilePath&)> on_failure,
+      const base::FilePath& root_path);
 
   void Check();
 
@@ -175,12 +190,13 @@ class WritableFileChecker
   void OnPrepareFileDone(const base::FilePath& path, bool success);
 
   const std::vector<base::FilePath> paths_;
-  content::BrowserContext* context_;
+  raw_ptr<content::BrowserContext> context_;
   const std::set<base::FilePath> directory_paths_;
   size_t outstanding_tasks_;
   base::FilePath error_path_;
   base::OnceClosure on_success_;
   base::OnceCallback<void(const base::FilePath&)> on_failure_;
+  const base::FilePath root_path_;
 };
 
 WritableFileChecker::WritableFileChecker(
@@ -188,19 +204,21 @@ WritableFileChecker::WritableFileChecker(
     content::BrowserContext* context,
     const std::set<base::FilePath>& directory_paths,
     base::OnceClosure on_success,
-    base::OnceCallback<void(const base::FilePath&)> on_failure)
+    base::OnceCallback<void(const base::FilePath&)> on_failure,
+    const base::FilePath& root_path)
     : paths_(paths),
       context_(context),
       directory_paths_(directory_paths),
       outstanding_tasks_(1),
       on_success_(std::move(on_success)),
-      on_failure_(std::move(on_failure)) {}
+      on_failure_(std::move(on_failure)),
+      root_path_(root_path) {}
 
 void WritableFileChecker::Check() {
   outstanding_tasks_ = paths_.size();
   for (const auto& path : paths_) {
-    bool is_directory = directory_paths_.find(path) != directory_paths_.end();
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+    bool is_directory = directory_paths_.contains(path);
+#if BUILDFLAG(IS_CHROMEOS)
     NonNativeFileSystemDelegate* delegate =
         ExtensionsAPIClient::Get()->GetNonNativeFileSystemDelegate();
     if (delegate && delegate->IsUnderNonNativeLocalPath(context_, path)) {
@@ -218,15 +236,28 @@ void WritableFileChecker::Check() {
       continue;
     }
 #endif
-    base::ThreadPool::PostTaskAndReplyWithResult(
-        FROM_HERE, {base::TaskPriority::USER_BLOCKING, base::MayBlock()},
-        base::BindOnce(&PrepareNativeLocalFileForWritableApp, path,
-                       is_directory),
-        base::BindOnce(&WritableFileChecker::OnPrepareFileDone, this, path));
+    base::TaskTraits traits = {base::TaskPriority::USER_BLOCKING,
+                               base::MayBlock()};
+    base::OnceCallback<bool()> task = base::BindOnce(
+        &PrepareNativeLocalFileForWritableApp, path, is_directory, root_path_);
+    base::OnceCallback<void(bool)> reply = base::BindOnce(
+        &WritableFileChecker::OnPrepareFileDone, base::RetainedRef(this), path);
+
+    // If ChromeOS dlp is used (dlp policies are configured) we have to gain dlp
+    // file access rights for `path` by the dlp daemon to be able to access the
+    // file in PrepareNativeLocalFileForWritableApp.
+    if (file_access::ScopedFileAccessDelegate::HasInstance()) {
+      file_access::ScopedFileAccessDelegate::Get()
+          ->AccessScopedPostTaskAndReplyWithResult(
+              path, FROM_HERE, traits, std::move(task), std::move(reply));
+    } else {
+      base::ThreadPool::PostTaskAndReplyWithResult(
+          FROM_HERE, traits, std::move(task), std::move(reply));
+    }
   }
 }
 
-WritableFileChecker::~WritableFileChecker() {}
+WritableFileChecker::~WritableFileChecker() = default;
 
 void WritableFileChecker::TaskDone() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
@@ -276,7 +307,7 @@ bool WebAppFileHandlerMatch::matched_file_extension() const {
 }
 
 bool WebAppFileHandlerMatch::DoMatch(const EntryInfo& entry) {
-  // TODO(crbug.com/1060026): At the moment, apps::FileHandler doesn't have
+  // TODO(crbug.com/40678811): At the moment, apps::FileHandler doesn't have
   // an include_directories flag. It may be necessary to add one as this new
   // representation replaces apps::FileHandlerInfo.
   if (entry.is_directory)
@@ -300,13 +331,13 @@ const apps::FileHandlerInfo* FileHandlerForId(const Extension& app,
                                               const std::string& handler_id) {
   const FileHandlersInfo* file_handlers = FileHandlers::GetFileHandlers(&app);
   if (!file_handlers)
-    return NULL;
+    return nullptr;
 
-  for (auto i = file_handlers->cbegin(); i != file_handlers->cend(); i++) {
-    if (i->id == handler_id)
-      return &*i;
+  for (const auto& file_handler : *file_handlers) {
+    if (file_handler.id == handler_id)
+      return &file_handler;
   }
-  return NULL;
+  return nullptr;
 }
 
 std::vector<FileHandlerMatch> FindFileHandlerMatchesForEntries(
@@ -400,7 +431,7 @@ bool FileHandlerCanHandleEntry(const apps::FileHandlerInfo& handler,
 
 bool WebAppFileHandlerCanHandleEntry(const apps::FileHandler& handler,
                                      const EntryInfo& entry) {
-  // TODO(crbug.com/938103): At the moment, apps::FileHandler doesn't have an
+  // TODO(crbug.com/41444843): At the moment, apps::FileHandler doesn't have an
   // include_directories flag. It may be necessary to add one as this new
   // representation replaces apps::FileHandlerInfo.
   if (entry.is_directory)
@@ -410,11 +441,11 @@ bool WebAppFileHandlerCanHandleEntry(const apps::FileHandler& handler,
          WebAppFileHandlerCanHandleFileWithExtension(handler, entry.path);
 }
 
-GrantedFileEntry CreateFileEntry(content::BrowserContext* context,
-                                 const Extension* extension,
-                                 int renderer_id,
-                                 const base::FilePath& path,
-                                 bool is_directory) {
+GrantedFileEntry CreateFileEntryWithPermissions(int renderer_id,
+                                                const base::FilePath& path,
+                                                bool can_write,
+                                                bool can_create,
+                                                bool can_delete) {
   GrantedFileEntry result;
   storage::IsolatedContext* isolated_context =
       storage::IsolatedContext::GetInstance();
@@ -429,17 +460,31 @@ GrantedFileEntry CreateFileEntry(content::BrowserContext* context,
   content::ChildProcessSecurityPolicy* policy =
       content::ChildProcessSecurityPolicy::GetInstance();
   policy->GrantReadFileSystem(renderer_id, result.filesystem_id);
-  if (HasFileSystemWritePermission(extension)) {
-    if (is_directory) {
-      policy->GrantCreateReadWriteFileSystem(renderer_id, result.filesystem_id);
-    } else {
-      policy->GrantWriteFileSystem(renderer_id, result.filesystem_id);
-      policy->GrantDeleteFromFileSystem(renderer_id, result.filesystem_id);
-    }
+  if (can_create) {
+    DCHECK(can_write);
+    policy->GrantCreateReadWriteFileSystem(renderer_id, result.filesystem_id);
+  } else if (can_write) {
+    policy->GrantWriteFileSystem(renderer_id, result.filesystem_id);
+  }
+  if (can_delete) {
+    DCHECK(can_write);
+    policy->GrantDeleteFromFileSystem(renderer_id, result.filesystem_id);
   }
 
   result.id = result.filesystem_id + ":" + result.registered_name;
   return result;
+}
+
+GrantedFileEntry CreateFileEntry(content::BrowserContext* /* context */,
+                                 const Extension* extension,
+                                 int renderer_id,
+                                 const base::FilePath& path,
+                                 bool is_directory) {
+  bool can_write = HasFileSystemWritePermission(extension);
+  return CreateFileEntryWithPermissions(
+      renderer_id, path, can_write,
+      /* can_create */ can_write && is_directory,
+      /* can_delete */ can_write && !is_directory);
 }
 
 void PrepareFilesForWritableApp(
@@ -447,10 +492,11 @@ void PrepareFilesForWritableApp(
     content::BrowserContext* context,
     const std::set<base::FilePath>& directory_paths,
     base::OnceClosure on_success,
-    base::OnceCallback<void(const base::FilePath&)> on_failure) {
+    base::OnceCallback<void(const base::FilePath&)> on_failure,
+    const base::FilePath& root_path) {
   auto checker = base::MakeRefCounted<WritableFileChecker>(
       paths, context, directory_paths, std::move(on_success),
-      std::move(on_failure));
+      std::move(on_failure), root_path);
   checker->Check();
 }
 
@@ -463,7 +509,8 @@ bool ValidateFileEntryAndGetPath(const std::string& filesystem_name,
                                  const std::string& filesystem_path,
                                  int render_process_id,
                                  base::FilePath* file_path,
-                                 std::string* error) {
+                                 std::string* error,
+                                 base::FilePath* root_path) {
   if (filesystem_path.empty()) {
     *error = kInvalidParameters;
     return false;
@@ -507,7 +554,40 @@ bool ValidateFileEntryAndGetPath(const std::string& filesystem_name,
     return false;
   }
 
+  // If requested, also return the platform path of the granted file or
+  // directory that contains |file_path|. |relative_path| has the form
+  // "<registered name>/<path inside it>", where the registered name identifies
+  // the granted file or directory. Resolving the virtual path made of only the
+  // file system ID and that name (e.g. "<fsid>/<name>") to a platform path
+  // gives the granted root.
+  if (root_path && !file_path->empty()) {
+    base::FilePath root_virtual_path =
+        context->CreateVirtualRootPath(filesystem_id)
+            .Append(relative_path.GetComponents().front());
+    if (!context->CrackVirtualPath(root_virtual_path, &filesystem_id, &type,
+                                   &cracked_id, root_path, &mount_option) ||
+        root_path->empty()) {
+      *error = kInvalidParameters;
+      return false;
+    }
+  }
+
   return true;
+}
+
+std::vector<extensions::EntryInfo> CreateEntryInfos(
+    const std::vector<base::FilePath>& entry_paths,
+    const std::vector<std::string>& mime_types,
+    const std::set<base::FilePath>& directory_paths) {
+  CHECK_EQ(entry_paths.size(), mime_types.size());
+  std::vector<extensions::EntryInfo> entry_infos;
+  for (size_t i = 0; i < entry_paths.size(); ++i) {
+    const std::string mime_type =
+        mime_types[i].empty() ? kFallbackMimeType : mime_types[i];
+    bool is_directory = directory_paths.contains(entry_paths[i]);
+    entry_infos.emplace_back(entry_paths[i], mime_type, is_directory);
+  }
+  return entry_infos;
 }
 
 }  // namespace app_file_handler_util

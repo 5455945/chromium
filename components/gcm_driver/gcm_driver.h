@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,9 +9,11 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/containers/circular_deque.h"
+#include "base/containers/flat_map.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/threading/thread_checker.h"
 #include "base/time/time.h"
@@ -24,13 +26,15 @@ class FilePath;
 class SequencedTaskRunner;
 }  // namespace base
 
+namespace fcm {
+enum class FcmDecryptionResult;
+}  // namespace fcm
+
 namespace gcm {
 
 class GCMAppHandler;
 class GCMConnectionObserver;
-enum class GCMDecryptionResult;
 enum class GCMEncryptionResult;
-struct AccountMapping;
 
 // Provides the InstanceID support via GCMDriver.
 class InstanceIDHandler {
@@ -45,6 +49,10 @@ class InstanceIDHandler {
                               const std::string& extra_data)>;
 
   InstanceIDHandler();
+
+  InstanceIDHandler(const InstanceIDHandler&) = delete;
+  InstanceIDHandler& operator=(const InstanceIDHandler&) = delete;
+
   virtual ~InstanceIDHandler();
 
   // Token service.
@@ -72,9 +80,6 @@ class InstanceIDHandler {
   virtual void RemoveInstanceIDData(const std::string& app_id) = 0;
   virtual void GetInstanceIDData(const std::string& app_id,
                                  GetInstanceIDDataCallback callback) = 0;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(InstanceIDHandler);
 };
 
 // Bridge between GCM users in Chrome and the platform-specific implementation.
@@ -84,7 +89,8 @@ class GCMDriver {
   // Max number of sender IDs that can be passed to |Register| on desktop.
   constexpr static size_t kMaxSenders = 100;
 
-  using GCMAppHandlerMap = std::map<std::string, GCMAppHandler*>;
+  using GCMAppHandlerMap =
+      std::map<std::string, raw_ptr<GCMAppHandler, CtnExperimental>>;
   using RegisterCallback =
       base::OnceCallback<void(const std::string& registration_id,
                               GCMClient::Result result)>;
@@ -97,7 +103,8 @@ class GCMDriver {
   using EncryptMessageCallback =
       base::OnceCallback<void(GCMEncryptionResult result, std::string message)>;
   using DecryptMessageCallback =
-      base::OnceCallback<void(GCMDecryptionResult result, std::string message)>;
+      base::OnceCallback<void(fcm::FcmDecryptionResult result,
+                              std::string message)>;
 
   using GetGCMStatisticsCallback =
       base::OnceCallback<void(const GCMClient::GCMStatistics& stats)>;
@@ -111,6 +118,10 @@ class GCMDriver {
   GCMDriver(
       const base::FilePath& store_path,
       const scoped_refptr<base::SequencedTaskRunner>& blocking_task_runner);
+
+  GCMDriver(const GCMDriver&) = delete;
+  GCMDriver& operator=(const GCMDriver&) = delete;
+
   virtual ~GCMDriver();
 
   // Registers |sender_ids| for an app. *Use |InstanceID| instead in new code.*
@@ -186,7 +197,7 @@ class GCMDriver {
   // |callback| will be called asynchronously when |message| has been decrypted.
   // A dispatchable message will be used in case of success, an empty message in
   // case of failure.
-  // TODO(crbug/1045907): Decouple this from GCMDriver.
+  // TODO(crbug.com/40116239): Decouple this from GCMDriver.
   virtual void DecryptMessage(const std::string& app_id,
                               const std::string& authorized_entity,
                               const std::string& message,
@@ -197,10 +208,6 @@ class GCMDriver {
   // This method must be called before destroying the GCMDriver. Once it has
   // been called, no other GCMDriver methods may be used.
   virtual void Shutdown();
-
-  // Called when the user signs in to or out of a GAIA account.
-  virtual void OnSignedIn() = 0;
-  virtual void OnSignedOut() = 0;
 
   // Adds a handler for a given app.
   virtual void AddAppHandler(const std::string& app_id, GCMAppHandler* handler);
@@ -221,6 +228,14 @@ class GCMDriver {
   // For testing purpose. Always NULL on Android.
   virtual GCMClient* GetGCMClientForTesting() const = 0;
 
+  // Simulates incoming message dispatch for testing message routing and
+  // buffering.
+  void DispatchMessageForTesting(const std::string& app_id,
+                                 const IncomingMessage& message);
+
+  // Returns the number of unhandled messages currently buffered for `app_id`.
+  size_t GetBufferedMessagesCountForTesting(const std::string& app_id) const;
+
   // Returns true if the service was started.
   virtual bool IsStarted() const = 0;
 
@@ -237,52 +252,11 @@ class GCMDriver {
   virtual void SetGCMRecording(const GCMStatisticsRecordingCallback& callback,
                                bool recording) = 0;
 
-  // sets a list of signed in accounts with OAuth2 access tokens, when GCMDriver
-  // works in context of a signed in entity (e.g. browser profile where user is
-  // signed into sync).
-  // |account_tokens|: list of email addresses, account IDs and OAuth2 access
-  //                   tokens.
-  virtual void SetAccountTokens(
-      const std::vector<GCMClient::AccountTokenInfo>& account_tokens) = 0;
-
-  // Updates the |account_mapping| information in persistent store.
-  virtual void UpdateAccountMapping(const AccountMapping& account_mapping) = 0;
-
-  // Removes the account mapping information reated to |account_id| from
-  // persistent store.
-  virtual void RemoveAccountMapping(const CoreAccountId& account_id) = 0;
-
-  // Getter and setter of last token fetch time.
-  virtual base::Time GetLastTokenFetchTime() = 0;
-  virtual void SetLastTokenFetchTime(const base::Time& time) = 0;
-
   // These methods must only be used by the InstanceID system.
   // The InstanceIDHandler provides an implementation for the InstanceID system.
   virtual InstanceIDHandler* GetInstanceIDHandlerInternal() = 0;
   // Allows the InstanceID system to integrate with GCM encryption storage.
   virtual GCMEncryptionProvider* GetEncryptionProviderInternal();
-
-  // Adds or removes a custom client requested heartbeat interval. If multiple
-  // components set that setting, the lowest setting will be used. If the
-  // setting is outside of GetMax/MinClientHeartbeatIntervalMs() it will be
-  // ignored. If a new setting is less than the currently used, the connection
-  // will be reset with the new heartbeat. Client that no longer require
-  // aggressive heartbeats, should remove their requested interval. Heartbeats
-  // set this way survive connection/Chrome restart.
-  //
-  // GCM Driver can decide to postpone the action until Client is properly
-  // initialized, hence this setting can be called at any time.
-  //
-  // Server can overwrite the setting to a different value.
-  //
-  // |scope| is used to identify the component that requests a custom interval
-  // to be set, and allows that component to later revoke the setting.
-  // |interval_ms| should be between 2 minues and 15 minues (28 minues on
-  // cellular networks). For details check
-  // GetMin/MaxClientHeartbeatItnervalMs() in HeartbeatManager.
-  virtual void AddHeartbeatInterval(const std::string& scope,
-                                    int interval_ms) = 0;
-  virtual void RemoveHeartbeatInterval(const std::string& scope) = 0;
 
  protected:
   // Ensures that the GCM service starts (if necessary conditions are met).
@@ -306,7 +280,10 @@ class GCMDriver {
 
   // Platform-specific implementation of recording message decryption failures.
   virtual void RecordDecryptionFailure(const std::string& app_id,
-                                       GCMDecryptionResult result) = 0;
+                                       fcm::FcmDecryptionResult result) = 0;
+
+  static void LogDeliveredToAppHandler(const std::string& app_id,
+                                       bool has_app_handler);
 
   // Runs the Register callback.
   void RegisterFinished(const std::string& app_id,
@@ -339,6 +316,25 @@ class GCMDriver {
                        const IncomingMessage& message);
 
  private:
+  // Stores unhandled incoming messages and receipt timestamps for TTL pruning.
+  struct BufferedMessage {
+    IncomingMessage message;
+    base::TimeTicks receive_time;
+  };
+
+  // Prunes unhandled messages whose age exceeds `GetGCMMessageBufferingTTL()`
+  // across all buffered apps.
+  void PruneExpiredBufferedMessages();
+
+  // Logs drop telemetry for `count` unhandled messages.
+  void LogMessagesDropped(const std::string& app_id, size_t count);
+
+  // Clears all buffered messages across all apps and logs drop telemetry.
+  void ClearBufferedMessages();
+
+  // Delivers matching buffered messages to `handler` upon registration.
+  void DeliverBufferedMessagesForHandler(GCMAppHandler* handler);
+
   // Common code shared by Unregister and UnregisterWithSenderId.
   void UnregisterInternal(const std::string& app_id,
                           const std::string* sender_id,
@@ -348,8 +344,13 @@ class GCMDriver {
   // if |result| indicates that it is safe to do so, or will report a decryption
   // failure for the |app_id| otherwise.
   void DispatchMessageInternal(const std::string& app_id,
-                               GCMDecryptionResult result,
+                               fcm::FcmDecryptionResult result,
                                IncomingMessage message);
+
+  // Buffers an unhandled message when no app handler is registered for
+  // `app_id`.
+  void BufferUnhandledMessage(const std::string& app_id,
+                              IncomingMessage message);
 
   // Called after unregistration completes in order to trigger the pending
   // registration.
@@ -364,7 +365,7 @@ class GCMDriver {
                           std::string message);
 
   void OnMessageDecrypted(DecryptMessageCallback callback,
-                          GCMDecryptionResult result,
+                          fcm::FcmDecryptionResult result,
                           IncomingMessage message);
 
   // Callback map (from app_id to callback) for Register.
@@ -382,10 +383,10 @@ class GCMDriver {
 
   // App handler map (from app_id to handler pointer). The handler is not owned.
   GCMAppHandlerMap app_handlers_;
+  base::flat_map<std::string, base::circular_deque<BufferedMessage>>
+      buffered_messages_;
 
   base::WeakPtrFactory<GCMDriver> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(GCMDriver);
 };
 
 }  // namespace gcm

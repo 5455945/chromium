@@ -1,15 +1,13 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_ASH_LOGIN_LOGIN_AUTH_RECORDER_H_
 #define CHROME_BROWSER_ASH_LOGIN_LOGIN_AUTH_RECORDER_H_
 
-#include "base/macros.h"
 #include "components/session_manager/core/session_manager_observer.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
-namespace chromeos {
+namespace ash {
 
 // A metrics recorder that records login authentication related metrics.
 // This keeps track of the last authentication method we used and records
@@ -20,6 +18,7 @@ class LoginAuthRecorder : public session_manager::SessionManagerObserver {
   // Authentication method to unlock the screen. This enum is used to back an
   // UMA histogram and new values should be inserted immediately above
   // kMaxValue.
+  // LINT.IfChange(AuthMethod)
   enum class AuthMethod {
     kPassword = 0,
     kPin = 1,
@@ -29,10 +28,12 @@ class LoginAuthRecorder : public session_manager::SessionManagerObserver {
     kNothing = 5,
     kMaxValue = kNothing,
   };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/ash/enums.xml:AuthMethod)
 
   // The type of switching between auth methods. This enum is used to back an
   // UMA histogram and new values should be inserted immediately above
   // kMaxValue.
+  // LINT.IfChange(AuthMethodSwitchType)
   enum class AuthMethodSwitchType {
     kPasswordToPin = 0,
     kPasswordToSmartlock = 1,
@@ -54,6 +55,7 @@ class LoginAuthRecorder : public session_manager::SessionManagerObserver {
     kNothingToChallengeResponse = 17,
     kMaxValue = kNothingToChallengeResponse,
   };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/ash/enums.xml:AuthMethodSwitchType)
 
   // The result of fingerprint auth attempt on the lock screen. These values are
   // persisted to logs. Entries should not be renumbered and numeric values
@@ -68,6 +70,10 @@ class LoginAuthRecorder : public session_manager::SessionManagerObserver {
   };
 
   LoginAuthRecorder();
+
+  LoginAuthRecorder(const LoginAuthRecorder&) = delete;
+  LoginAuthRecorder& operator=(const LoginAuthRecorder&) = delete;
+
   ~LoginAuthRecorder() override;
 
   // Called when user attempts authentication using AuthMethod `type`.
@@ -78,10 +84,8 @@ class LoginAuthRecorder : public session_manager::SessionManagerObserver {
 
  private:
   AuthMethod last_auth_method_ = AuthMethod::kNothing;
-
-  DISALLOW_COPY_AND_ASSIGN(LoginAuthRecorder);
 };
 
-}  // namespace chromeos
+}  // namespace ash
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_LOGIN_AUTH_RECORDER_H_

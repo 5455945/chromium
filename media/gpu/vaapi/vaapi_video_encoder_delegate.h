@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,30 +6,26 @@
 #define MEDIA_GPU_VAAPI_VAAPI_VIDEO_ENCODER_DELEGATE_H_
 
 #include <va/va.h>
+
+#include <optional>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/containers/queue.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
 #include "media/base/video_bitrate_allocation.h"
 #include "media/base/video_codecs.h"
+#include "media/gpu/vaapi/vaapi_utils.h"
 #include "media/video/video_encode_accelerator.h"
 #include "media/video/video_encoder_info.h"
 #include "ui/gfx/geometry/size.h"
 
-namespace base {
-class RefCountedBytes;
-}
-
 namespace media {
 struct BitstreamBufferMetadata;
 class CodecPicture;
-class ScopedVABuffer;
 class VideoFrame;
-class VASurface;
 class VaapiWrapper;
 
 // An VaapiVideoEncoderDelegate  performs high-level, platform-independent
@@ -44,27 +40,34 @@ class VaapiWrapper;
 // clients, and associated with the EncodeJob object.
 class VaapiVideoEncoderDelegate {
  public:
-  VaapiVideoEncoderDelegate(scoped_refptr<VaapiWrapper> vaapi_wrapper,
-                            base::RepeatingClosure error_cb);
-  virtual ~VaapiVideoEncoderDelegate();
-
-  enum class BitrateControl {
-    kConstantBitrate,  // Constant Bitrate mode. This class relies on other
-                       // parts (e.g. driver) to achieve the specified bitrate.
-    kConstantQuantizationParameter  // Constant Quantization Parameter mode.
-                                    // This class needs to compute a proper
-                                    // quantization parameter and give other
-                                    // parts (e.g. the driver) the value.
-  };
-
   struct Config {
-    // Maxium number of reference frames.
+    // Maximum number of reference frames.
     // For H.264 encoding, the value represents the maximum number of reference
     // frames for both the reference picture list 0 (bottom 16 bits) and the
     // reference picture list 1 (top 16 bits).
     size_t max_num_ref_frames;
+  };
 
-    BitrateControl bitrate_control = BitrateControl::kConstantBitrate;
+  // EncodeResult owns the necessary resource to keep the encoded buffer. The
+  // encoded buffer can be downloaded with the EncodeResult, for example, by
+  // calling VaapiWrapper::DownloadFromVABuffer().
+  class EncodeResult {
+   public:
+    EncodeResult(std::unique_ptr<ScopedVABuffer> coded_buffer,
+                 const BitstreamBufferMetadata& metadata);
+    ~EncodeResult();
+    EncodeResult(EncodeResult&&);
+    EncodeResult& operator=(EncodeResult&&);
+    EncodeResult(const EncodeResult&) = delete;
+    EncodeResult& operator=(const EncodeResult&) = delete;
+
+    VABufferID coded_buffer_id() const;
+    const BitstreamBufferMetadata& metadata() const;
+    bool IsFrameDropped() const { return !coded_buffer_; }
+
+   private:
+    std::unique_ptr<ScopedVABuffer> coded_buffer_;
+    BitstreamBufferMetadata metadata_;
   };
 
   // An abstraction of an encode job for one frame. Parameters required for an
@@ -72,50 +75,32 @@ class VaapiVideoEncoderDelegate {
   // while the accelerator-specific callbacks required to set up and execute it
   // are provided by the accelerator itself, based on these parameters.
   // Accelerators are also responsible for providing any resources (such as
-  // memory for output and reference pictures, etc.) as needed.
+  // memory for output, etc.) as needed.
   class EncodeJob {
    public:
-    // Creates an EncodeJob to encode |input_frame|, which will be executed
-    // by calling |execute_cb|. If |keyframe| is true, requests this job
-    // to produce a keyframe.
-    EncodeJob(scoped_refptr<VideoFrame> input_frame,
-              bool keyframe,
-              base::OnceClosure execute_cb);
-    // Constructor for VA-API.
-    EncodeJob(scoped_refptr<VideoFrame> input_frame,
-              bool keyframe,
-              base::OnceClosure execute_cb,
-              scoped_refptr<VASurface> input_surface,
+    // Creates an EncodeJob to encode the va surface associated with
+    // |input_surface_id|, which will be executed by
+    // VaapiVideoEncoderDelegate::Encode().
+    // If |keyframe| is true, requests this job to produce a keyframe.
+    // |picture| is for a reconstructed frame and the encoded chunk is written
+    // into the buffer of |coded_buffer|.
+    EncodeJob(bool keyframe,
+              base::TimeDelta timestamp,
+              uint8_t spatial_index,
+              bool end_of_picture,
+              VASurfaceID input_surface_id,
               scoped_refptr<CodecPicture> picture,
               std::unique_ptr<ScopedVABuffer> coded_buffer);
+
+    EncodeJob(const EncodeJob&) = delete;
+    EncodeJob& operator=(const EncodeJob&) = delete;
+
     ~EncodeJob();
 
-    // Schedules a callback to be run immediately before this job is executed.
-    // Can be called multiple times to schedule multiple callbacks, and all
-    // of them will be run, in order added.
-    // Callbacks can be used to e.g. set up hardware parameters before the job
-    // is executed.
-    void AddSetupCallback(base::OnceClosure cb);
-
-    // Schedules a callback to be run immediately after this job is executed.
-    // Can be called multiple times to schedule multiple callbacks, and all
-    // of them will be run, in order added. Callbacks can be used to e.g. get
-    // the encoded buffer linear size.
-    void AddPostExecuteCallback(base::OnceClosure cb);
-
-    // Adds |ref_pic| to the list of pictures to be used as reference pictures
-    // for this frame, to ensure they remain valid until the job is executed
-    // (or discarded).
-    void AddReferencePicture(scoped_refptr<CodecPicture> ref_pic);
-
-    // Runs all setup callbacks previously scheduled, if any, in order added,
-    // and executes the job by calling the execute callback. Note that the
-    // actual job execution may be asynchronous, and returning from this method
-    // does not have to indicate that the job has been finished. The execute
-    // callback is responsible for retaining references to any resources that
-    // may be in use after this method returns however, so it is safe to release
-    // the EncodeJob object itself immediately after this method returns.
-    void Execute();
+    // Creates EncodeResult with |metadata|. This passes ownership of the
+    // resources owned by EncodeJob and therefore must be called with
+    // std::move().
+    EncodeResult CreateEncodeResult(const BitstreamBufferMetadata& metadata) &&;
 
     // Requests this job to produce a keyframe; requesting a keyframe may not
     // always result in one being produced by the encoder (e.g. if it would
@@ -125,47 +110,38 @@ class VaapiVideoEncoderDelegate {
     // Returns true if this job has been requested to produce a keyframe.
     bool IsKeyframeRequested() const { return keyframe_; }
 
-    // Returns the timestamp associated with this job.
-    base::TimeDelta timestamp() const { return timestamp_; }
+    void DropFrame() { coded_buffer_.reset(); }
+    bool IsFrameDropped() const { return !coded_buffer_; }
+
+    base::TimeDelta timestamp() const;
+    uint8_t spatial_index() const;
+    // This is a frame in the top spatial layer.
+    bool end_of_picture() const;
+    uint8_t spatial_idx() const;
 
     // VA-API specific methods.
     VABufferID coded_buffer_id() const;
-    const scoped_refptr<VASurface>& input_surface() const;
+    VASurfaceID input_surface_id() const;
     const scoped_refptr<CodecPicture>& picture() const;
-
    private:
-    // Input VideoFrame to be encoded.
-    const scoped_refptr<VideoFrame> input_frame_;
-
-    // Source timestamp for |input_frame_|.
-    const base::TimeDelta timestamp_;
-
     // True if this job is to produce a keyframe.
     bool keyframe_;
+    // |timestamp_| to be added to the produced encoded chunk.
+    const base::TimeDelta timestamp_;
+    const uint8_t spatial_index_ = 0;
+    const bool end_of_picture_;
 
     // VA-API specific members.
-    // Input surface for video frame data or scaled data.
-    const scoped_refptr<VASurface> input_surface_;
+    // Input surface ID and size for video frame data or scaled data.
+    const VASurfaceID input_surface_id_;
     const scoped_refptr<CodecPicture> picture_;
     // Buffer that will contain the output bitstream data for this frame.
-    const std::unique_ptr<ScopedVABuffer> coded_buffer_;
-
-    // Callbacks to be run (in the same order as the order of AddSetupCallback()
-    // calls) to set up the job.
-    base::queue<base::OnceClosure> setup_callbacks_;
-
-    // Callbacks to be run (in the same order as the order of
-    // AddPostExecuteCallback() calls) to do post processing after execute.
-    base::queue<base::OnceClosure> post_execute_callbacks_;
-
-    // Callback to be run to execute this job.
-    base::OnceClosure execute_callback_;
-
-    // Reference pictures required for this job.
-    std::vector<scoped_refptr<CodecPicture>> reference_pictures_;
-
-    DISALLOW_COPY_AND_ASSIGN(EncodeJob);
+    std::unique_ptr<ScopedVABuffer> coded_buffer_;
   };
+
+  VaapiVideoEncoderDelegate(scoped_refptr<VaapiWrapper> vaapi_wrapper,
+                            base::RepeatingClosure error_cb);
+  virtual ~VaapiVideoEncoderDelegate();
 
   // Initializes the encoder with requested parameter set |config| and
   // |ave_config|. Returns false if the requested set of parameters is not
@@ -192,35 +168,55 @@ class VaapiVideoEncoderDelegate {
   // at least this many frames simultaneously for encode to make progress.
   virtual size_t GetMaxNumOfRefFrames() const = 0;
 
-  // Prepares a new |encode_job| to be executed in Accelerator and returns true
-  // on success. The caller may then call Execute() on the job to run it.
-  virtual bool PrepareEncodeJob(EncodeJob* encode_job) = 0;
+  // Prepares and submits the encode operation to underlying driver for an
+  // EncodeJob for one frame and returns true on success.
+  bool Encode(EncodeJob& encode_job);
 
-  // Notifies the encoded chunk size in bytes to update a bitrate controller in
-  // VaapiVideoEncoderDelegate. This should be called only if
-  // VaapiVideoEncoderDelegate is configured with
-  // BitrateControl::kConstantQuantizationParameter.
-  virtual void BitrateControlUpdate(uint64_t encoded_chunk_size_bytes);
+  // Creates and returns the encode result for specified EncodeJob by
+  // synchronizing the corresponding encode operation. std::nullopt is returned
+  // on failure.
+  std::optional<EncodeResult> GetEncodeResult(
+      std::unique_ptr<EncodeJob> encode_job);
 
-  virtual BitstreamBufferMetadata GetMetadata(EncodeJob* encode_job,
-                                              size_t payload_size);
-
-  // Submits |buffer| of |type| to the driver.
-  void SubmitBuffer(VABufferType type,
-                    scoped_refptr<base::RefCountedBytes> buffer);
-
-  // Submits a VAEncMiscParameterBuffer |buffer| of type |type| to the driver.
-  void SubmitVAEncMiscParamBuffer(VAEncMiscParameterType type,
-                                  scoped_refptr<base::RefCountedBytes> buffer);
+  // Gets the active spatial layer resolutions for K-SVC encoding, VaapiVEA
+  // can get this info from the encoder delegate. Returns empty vector on
+  // failure.
+  virtual std::vector<gfx::Size> GetSVCLayerResolutions() = 0;
 
  protected:
+  // Friend in order o access PrepareEncodeJobResult declaration.
+  friend class H264VaapiVideoEncoderDelegateTest;
+  friend class VP9VaapiVideoEncoderDelegateTest;
+  friend class VaapiVideoEncodeAcceleratorTest;
+
+  enum class PrepareEncodeJobResult {
+    kSuccess,  // Submit the encode job successfully.
+    kFail,     // Error happens in submitting the encode job.
+    kDrop,     // Encode job is dropped. An returned encoded chunk is empty.
+  };
+
   const scoped_refptr<VaapiWrapper> vaapi_wrapper_;
 
   base::RepeatingClosure error_cb_;
 
   SEQUENCE_CHECKER(sequence_checker_);
-};
 
+ private:
+  virtual BitstreamBufferMetadata GetMetadata(const EncodeJob& encode_job,
+                                              size_t payload_size) = 0;
+
+  // Prepares a new |encode_job| to be executed in Accelerator. Returns
+  // kSuccess on success, and kFail on failure.
+  virtual PrepareEncodeJobResult PrepareEncodeJob(EncodeJob& encode_job) = 0;
+
+  // Notifies the encoded chunk size in bytes with layers info through
+  // BitstreamBufferMetadata to update a bitrate controller in
+  // VaapiVideoEncoderDelegate. This should be called only if constant
+  // quantization encoding is used, which currently is true for VP8, VP9, H264
+  // and AV1.
+  virtual void BitrateControlUpdate(
+      const BitstreamBufferMetadata& metadata) = 0;
+};
 }  // namespace media
 
 #endif  // MEDIA_GPU_VAAPI_VAAPI_VIDEO_ENCODER_DELEGATE_H_

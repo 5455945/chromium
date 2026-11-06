@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,32 +6,32 @@
 
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
-#include "base/single_thread_task_runner.h"
 #include "base/task/current_thread.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/threading/thread.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "content/browser/after_startup_task_utils.h"
 #include "content/browser/browser_process_io_thread.h"
 #include "content/browser/browser_thread_impl.h"
 #include "content/browser/scheduler/browser_io_thread_delegate.h"
 #include "content/browser/scheduler/browser_task_executor.h"
+#include "content/browser/scheduler/browser_task_priority.h"
 #include "content/browser/scheduler/browser_ui_thread_scheduler.h"
+#include "content/public/browser/audio_service.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/test/test_utils.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include "base/android/task_scheduler/post_task_android.h"
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "base/win/scoped_com_initializer.h"
 #endif
 
@@ -46,6 +46,9 @@ class TestBrowserThread {
   // |real_thread_|).
   TestBrowserThread(BrowserThread::ID identifier,
                     scoped_refptr<base::SingleThreadTaskRunner> thread_runner);
+
+  TestBrowserThread(const TestBrowserThread&) = delete;
+  TestBrowserThread& operator=(const TestBrowserThread&) = delete;
 
   ~TestBrowserThread();
 
@@ -66,8 +69,6 @@ class TestBrowserThread {
   // Binds |identifier_| to |thread_runner| when the public constructor is used
   // (null otherwise).
   std::unique_ptr<BrowserThreadImpl> fake_thread_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestBrowserThread);
 };
 
 // static
@@ -117,6 +118,12 @@ void TestBrowserThread::Stop() {
     real_thread_->Stop();
 }
 
+// static
+base::sequence_manager::SequenceManager::PrioritySettings
+BrowserTaskEnvironment::CreateBrowserTaskPrioritySettings() {
+  return internal::CreateBrowserTaskPrioritySettings();
+}
+
 BrowserTaskEnvironment::~BrowserTaskEnvironment() {
   // This is required to ensure we run all remaining MessageLoop and
   // ThreadPool tasks in an atomic step. This is a bit different than
@@ -126,6 +133,10 @@ BrowserTaskEnvironment::~BrowserTaskEnvironment() {
   // blocked upon it could make a test flaky whereas by flushing we guarantee
   // it will blow up).
   RunUntilIdle();
+
+  // Reset audio service state (NoDestructor remote + listener) so each test
+  // starts clean. This replaces the old SequenceLocalStorageSlot auto-teardown.
+  ResetAudioServiceForTesting();
 
   // When REAL_IO_THREAD, we need to stop the IO thread explicitly and flush
   // again.
@@ -143,9 +154,9 @@ BrowserTaskEnvironment::~BrowserTaskEnvironment() {
 
   // Run DestructionObservers before our fake threads go away to ensure
   // BrowserThread::CurrentlyOn() returns the results expected by the observers.
-  NotifyDestructionObserversAndReleaseSequenceManager();
+  DestroyTaskEnvironment();
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   com_initializer_.reset();
 #endif
 }
@@ -165,7 +176,7 @@ void BrowserTaskEnvironment::Init() {
 
   CHECK(!real_io_thread_ || !HasIOMainLoop()) << "Can't have two IO threads";
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   // Similar to Chrome's UI thread, we need to initialize COM separately for
   // this thread as we don't call Start() for the UI TestBrowserThread; it's
   // already started!
@@ -173,10 +184,10 @@ void BrowserTaskEnvironment::Init() {
   CHECK(com_initializer_->Succeeded());
 #endif
 
-  auto browser_ui_thread_scheduler = BrowserUIThreadScheduler::CreateForTesting(
-      sequence_manager(), GetTimeDomain());
-  auto default_ui_task_runner =
-      browser_ui_thread_scheduler->GetHandle()->GetDefaultTaskRunner();
+  auto browser_ui_thread_scheduler =
+      BrowserUIThreadScheduler::CreateForTesting(sequence_manager());
+  auto* default_ui_task_queue =
+      browser_ui_thread_scheduler->GetDefaultTaskQueue();
   auto browser_io_thread_delegate =
       real_io_thread_
           ? std::make_unique<BrowserIOThreadDelegate>()
@@ -185,8 +196,7 @@ void BrowserTaskEnvironment::Init() {
 
   BrowserTaskExecutor::CreateForTesting(std::move(browser_ui_thread_scheduler),
                                         std::move(browser_io_thread_delegate));
-  BrowserTaskExecutor::BindToUIThreadForTesting();
-  DeferredInitFromSubclass(std::move(default_ui_task_runner));
+  DeferredInitFromSubclass(default_ui_task_queue);
 
   if (HasIOMainLoop()) {
     CHECK(base::CurrentIOThread::IsSet());
@@ -196,13 +206,13 @@ void BrowserTaskEnvironment::Init() {
 
   // Set the current thread as the UI thread.
   ui_thread_ = std::make_unique<TestBrowserThread>(
-      BrowserThread::UI, base::ThreadTaskRunnerHandle::Get());
+      BrowserThread::UI, base::SingleThreadTaskRunner::GetCurrentDefault());
 
   if (real_io_thread_) {
     io_thread_ = TestBrowserThread::StartIOThread();
   } else {
     io_thread_ = std::make_unique<TestBrowserThread>(
-        BrowserThread::IO, base::ThreadTaskRunnerHandle::Get());
+        BrowserThread::IO, base::SingleThreadTaskRunner::GetCurrentDefault());
   }
 
   // Consider startup complete such that after-startup-tasks always run in
@@ -233,6 +243,10 @@ void BrowserTaskEnvironment::RunIOThreadUntilIdle() {
                      },
                      Unretained(&io_thread_idle)));
   io_thread_idle.Wait();
+}
+
+void BrowserTaskEnvironment::ShutdownBrowserTaskExecutor() {
+  BrowserTaskExecutor::Shutdown();
 }
 
 }  // namespace content

@@ -1,17 +1,21 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <stddef.h>
-#include <stdint.h>
-
+#include <optional>
 #include <string>
+#include <string_view>
+#include <tuple>
 #include <vector>
 
-#include "base/at_exit.h"
-#include "base/i18n/icu_util.h"
+#include "base/base_paths.h"
+#include "base/check.h"
+#include "base/files/file_path.h"
+#include "base/path_service.h"
+#include "base/types/expected.h"
+#include "components/password_manager/core/browser/import/csv_password.h"
 #include "components/password_manager/core/browser/import/csv_password_sequence.h"
-#include "components/password_manager/core/browser/password_form.h"
+#include "third_party/fuzztest/src/fuzztest/fuzztest.h"
 
 namespace password_manager {
 
@@ -27,34 +31,50 @@ bool IsValid(CSVPassword::Status status) {
   return false;
 }
 
-}  // namespace
+base::FilePath GetImportSourceDir() {
+  return base::PathService::CheckedGet(base::DIR_SRC_TEST_DATA_ROOT)
+      .AppendASCII("components/password_manager/core/browser/import");
+}
 
-struct IcuEnvironment {
-  IcuEnvironment() { CHECK(base::i18n::InitializeICU()); }
-  // used by ICU integration.
-  base::AtExitManager at_exit_manager;
-};
+std::vector<std::string> ReadDictionary() {
+  return fuzztest::ReadDictionaryFromFile(
+      GetImportSourceDir()
+          .AppendASCII("password_csv_reader_fuzzer.dict")
+          .AsUTF8Unsafe());
+}
 
-IcuEnvironment* env = new IcuEnvironment();
+std::vector<std::tuple<std::string>> ReadCorpus() {
+  return fuzztest::ReadFilesFromDirectory(
+      GetImportSourceDir()
+          .AppendASCII("password_csv_reader_corpus")
+          .AsUTF8Unsafe());
+}
 
-extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
-  CSVPasswordSequence seq(
-      std::string(reinterpret_cast<const char*>(data), size));
-  CHECK(IsValid(seq.result()))
-      << "Invalid parsing result of the whole sequence: "
-      << static_cast<int>(seq.result());
-  PasswordForm form, copy;
-  for (const auto& pwd : seq) {
-    const CSVPassword::Status status = pwd.Parse(&form);
+void ParseDoesNotCrash(std::string_view input) {
+  auto seq = CSVPasswordSequence::Create(input);
+  if (!seq.has_value()) {
+    CHECK(IsValid(seq.error()))
+        << "Invalid parsing result of the whole sequence: "
+        << static_cast<int>(seq.error());
+    return;
+  }
+  CSVPassword copy;
+  while (std::optional<CSVPassword> pwd = seq->NextPassword()) {
+    const CSVPassword::Status status = pwd->GetParseStatus();
     CHECK(IsValid(status)) << "Invalid parsing result of one row: "
                            << static_cast<int>(status);
     if (status == CSVPassword::Status::kOK) {
       // Copy the parsed password to access all its data members and allow the
       // ASAN to detect any corrupted memory inside.
-      copy = form;
+      copy = *pwd;
     }
   }
-  return 0;
 }
+
+FUZZ_TEST(PasswordCsvReaderFuzzTest, ParseDoesNotCrash)
+    .WithDomains(fuzztest::String().WithDictionary(ReadDictionary))
+    .WithSeeds(ReadCorpus);
+
+}  // namespace
 
 }  // namespace password_manager

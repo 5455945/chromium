@@ -1,28 +1,27 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/android/compositor/layer/overlay_panel_layer.h"
 
-#include "cc/layers/layer.h"
-#include "cc/layers/nine_patch_layer.h"
-#include "cc/layers/solid_color_layer.h"
-#include "cc/layers/ui_resource_layer.h"
 #include "cc/resources/scoped_ui_resource.h"
+#include "cc/slim/layer.h"
+#include "cc/slim/nine_patch_layer.h"
+#include "cc/slim/solid_color_layer.h"
+#include "cc/slim/ui_resource_layer.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/android/resources/nine_patch_resource.h"
 #include "ui/android/resources/resource_manager.h"
 #include "ui/base/l10n/l10n_util_android.h"
-#include "ui/gfx/color_utils.h"
 
 namespace android {
 
-scoped_refptr<cc::Layer> OverlayPanelLayer::GetIconLayer() {
+scoped_refptr<cc::slim::Layer> OverlayPanelLayer::GetIconLayer() {
   if (panel_icon_resource_id_ == kInvalidResourceID)
     return nullptr;
   ui::Resource* panel_icon_resource = resource_manager_->GetResource(
       ui::ANDROID_RESOURCE_TYPE_STATIC, panel_icon_resource_id_);
-  DCHECK(panel_icon_resource);
+  CHECK(panel_icon_resource, base::NotFatalUntil::M161);
 
   if (panel_icon_->parent() != layer_) {
     layer_->AddChild(panel_icon_);
@@ -34,7 +33,8 @@ scoped_refptr<cc::Layer> OverlayPanelLayer::GetIconLayer() {
   return panel_icon_;
 }
 
-void OverlayPanelLayer::AddBarTextLayer(scoped_refptr<cc::Layer> text_layer) {
+void OverlayPanelLayer::AddBarTextLayer(
+    scoped_refptr<cc::slim::Layer> text_layer) {
   if (text_container_->parent() != layer_)
     layer_->AddChild(text_container_);
   if (text_layer->parent() != text_container_)
@@ -61,7 +61,7 @@ void OverlayPanelLayer::SetResourceIds(int bar_text_resource_id,
 
 void OverlayPanelLayer::SetProperties(
     float dp_to_px,
-    const scoped_refptr<cc::Layer>& content_layer,
+    const scoped_refptr<cc::slim::Layer>& content_layer,
     float content_offset_y,
     float panel_x,
     float panel_y,
@@ -70,6 +70,7 @@ void OverlayPanelLayer::SetProperties(
     int bar_background_color,
     float bar_margin_side,
     float bar_margin_top,
+    float bar_margin_bottom,
     float bar_height,
     float bar_offset_y,
     float bar_text_opacity,
@@ -102,6 +103,7 @@ void OverlayPanelLayer::SetProperties(
   ui::NinePatchResource* rounded_bar_top_resource = nullptr;
   content_top_y += bar_margin_top;
   content_height -= bar_margin_top;
+  content_height -= bar_margin_bottom;
 
   rounded_bar_top_resource =
       ui::NinePatchResource::From(resource_manager_->GetStaticResourceWithTint(
@@ -128,13 +130,13 @@ void OverlayPanelLayer::SetProperties(
     ui::NinePatchResource* panel_shadow_resource =
         ui::NinePatchResource::From(resource_manager_->GetResource(
             ui::ANDROID_RESOURCE_TYPE_STATIC, panel_shadow_resource_id_));
-    DCHECK(panel_shadow_resource);
+    CHECK(panel_shadow_resource, base::NotFatalUntil::M161);
 
     gfx::Size shadow_res_size = panel_shadow_resource->size();
     panel_shadow_->SetUIResourceId(panel_shadow_resource->ui_resource()->id());
     panel_shadow_->SetAperture(panel_shadow_resource->aperture());
 
-    DCHECK(rounded_bar_top_resource);
+    CHECK(rounded_bar_top_resource, base::NotFatalUntil::M161);
 
     int shadow_thickness = shadow_res_size.height() - rounded_top_height;
 
@@ -151,10 +153,11 @@ void OverlayPanelLayer::SetProperties(
   // Rounded Bar Top
   // ---------------------------------------------------------------------------
 
-  DCHECK(rounded_bar_top_resource_id_ != kInvalidResourceID);
+  CHECK(rounded_bar_top_resource_id_ != kInvalidResourceID,
+        base::NotFatalUntil::M161);
   rounded_bar_top_->SetIsDrawable(true);
 
-  DCHECK(rounded_bar_top_resource);
+  CHECK(rounded_bar_top_resource, base::NotFatalUntil::M161);
 
   gfx::Size bounds(panel_width, rounded_bar_top_resource->size().height());
 
@@ -175,7 +178,9 @@ void OverlayPanelLayer::SetProperties(
   bar_background_->SetBounds(background_size);
   bar_background_->SetPosition(
       gfx::PointF(0.f, bar_top_y + rounded_top_height));
-  bar_background_->SetBackgroundColor(bar_background_color);
+  // TODO(crbug.com/40219248): Remove FromColor and make all SkColor4f.
+  bar_background_->SetBackgroundColor(
+      SkColor4f::FromColor(bar_background_color));
 
   // ---------------------------------------------------------------------------
   // Bar Text
@@ -197,7 +202,7 @@ void OverlayPanelLayer::SetProperties(
   // ---------------------------------------------------------------------------
   // Panel Icon
   // ---------------------------------------------------------------------------
-  scoped_refptr<cc::Layer> icon_layer = GetIconLayer();
+  scoped_refptr<cc::slim::Layer> icon_layer = GetIconLayer();
   if (icon_layer) {
     // If the icon is not the default width, add or remove padding so it appears
     // centered.
@@ -307,7 +312,8 @@ void OverlayPanelLayer::SetProperties(
   content_container_->SetPosition(
       gfx::PointF(0.f, content_offset_y));
   content_container_->SetBounds(gfx::Size(panel_width, panel_height));
-  content_container_->SetBackgroundColor(bar_background_color);
+  content_container_->SetBackgroundColor(
+      SkColor4f::FromColor(bar_background_color));
   if (content_layer) {
     if (content_layer->parent() != content_container_)
       content_container_->AddChild(content_layer);
@@ -349,7 +355,7 @@ void OverlayPanelLayer::SetProperties(
     bar_border_->SetBounds(bar_border_size);
     bar_border_->SetPosition(
         gfx::PointF(0.f, border_y));
-    bar_border_->SetBackgroundColor(separator_line_color);
+    bar_border_->SetBackgroundColor(SkColor4f::FromColor(separator_line_color));
     if (bar_border_->parent() != layer_)
       layer_->AddChild(bar_border_);
   } else if (bar_border_.get() && bar_border_->parent()) {
@@ -358,7 +364,9 @@ void OverlayPanelLayer::SetProperties(
 }
 
 void OverlayPanelLayer::SetProgressBar(int progress_bar_background_resource_id,
+                                       int progress_bar_background_tint,
                                        int progress_bar_resource_id,
+                                       int progress_bar_tint,
                                        bool progress_bar_visible,
                                        float progress_bar_position_y,
                                        float progress_bar_height,
@@ -370,15 +378,16 @@ void OverlayPanelLayer::SetProgressBar(int progress_bar_background_resource_id,
 
   if (should_render_progress_bar) {
     ui::NinePatchResource* progress_bar_background_resource =
-        ui::NinePatchResource::From(resource_manager_->GetResource(
-            ui::ANDROID_RESOURCE_TYPE_STATIC,
-            progress_bar_background_resource_id));
-    ui::NinePatchResource* progress_bar_resource =
-        ui::NinePatchResource::From(resource_manager_->GetResource(
-            ui::ANDROID_RESOURCE_TYPE_STATIC, progress_bar_resource_id));
+        ui::NinePatchResource::From(
+            resource_manager_->GetStaticResourceWithTint(
+                progress_bar_background_resource_id,
+                progress_bar_background_tint));
+    ui::NinePatchResource* progress_bar_resource = ui::NinePatchResource::From(
+        resource_manager_->GetStaticResourceWithTint(progress_bar_resource_id,
+                                                     progress_bar_tint));
 
-    DCHECK(progress_bar_background_resource);
-    DCHECK(progress_bar_resource);
+    CHECK(progress_bar_background_resource, base::NotFatalUntil::M161);
+    CHECK(progress_bar_resource, base::NotFatalUntil::M161);
 
     // Progress Bar Background
     if (progress_bar_background_->parent() != layer_)
@@ -421,21 +430,21 @@ void OverlayPanelLayer::SetProgressBar(int progress_bar_background_resource_id,
 
 OverlayPanelLayer::OverlayPanelLayer(ui::ResourceManager* resource_manager)
     : resource_manager_(resource_manager),
-      layer_(cc::Layer::Create()),
-      panel_shadow_(cc::NinePatchLayer::Create()),
-      rounded_bar_top_(cc::NinePatchLayer::Create()),
-      bar_background_(cc::SolidColorLayer::Create()),
-      bar_text_(cc::UIResourceLayer::Create()),
-      bar_shadow_(cc::UIResourceLayer::Create()),
-      panel_icon_(cc::UIResourceLayer::Create()),
-      drag_handlebar_(cc::UIResourceLayer::Create()),
-      open_tab_icon_(cc::UIResourceLayer::Create()),
-      close_icon_(cc::UIResourceLayer::Create()),
-      content_container_(cc::SolidColorLayer::Create()),
-      text_container_(cc::Layer::Create()),
-      bar_border_(cc::SolidColorLayer::Create()),
-      progress_bar_(cc::NinePatchLayer::Create()),
-      progress_bar_background_(cc::NinePatchLayer::Create()) {
+      layer_(cc::slim::Layer::Create()),
+      panel_shadow_(cc::slim::NinePatchLayer::Create()),
+      rounded_bar_top_(cc::slim::NinePatchLayer::Create()),
+      bar_background_(cc::slim::SolidColorLayer::Create()),
+      bar_text_(cc::slim::UIResourceLayer::Create()),
+      bar_shadow_(cc::slim::UIResourceLayer::Create()),
+      panel_icon_(cc::slim::UIResourceLayer::Create()),
+      drag_handlebar_(cc::slim::UIResourceLayer::Create()),
+      open_tab_icon_(cc::slim::UIResourceLayer::Create()),
+      close_icon_(cc::slim::UIResourceLayer::Create()),
+      content_container_(cc::slim::SolidColorLayer::Create()),
+      text_container_(cc::slim::Layer::Create()),
+      bar_border_(cc::slim::SolidColorLayer::Create()),
+      progress_bar_(cc::slim::NinePatchLayer::Create()),
+      progress_bar_background_(cc::slim::NinePatchLayer::Create()) {
   // Background colors for each widget are set in SetProperties, where variable
   // colors are available.
   layer_->SetMasksToBounds(false);
@@ -495,10 +504,9 @@ OverlayPanelLayer::OverlayPanelLayer(ui::ResourceManager* resource_manager)
   progress_bar_->SetFillCenter(true);
 }
 
-OverlayPanelLayer::~OverlayPanelLayer() {
-}
+OverlayPanelLayer::~OverlayPanelLayer() = default;
 
-scoped_refptr<cc::Layer> OverlayPanelLayer::layer() {
+scoped_refptr<cc::slim::Layer> OverlayPanelLayer::layer() {
   return layer_;
 }
 

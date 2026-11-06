@@ -1,17 +1,12 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_THUMBNAILS_THUMBNAIL_SCHEDULER_H_
 #define CHROME_BROWSER_UI_THUMBNAILS_THUMBNAIL_SCHEDULER_H_
 
-#include "chrome/browser/ui/thumbnails/thumbnail_capture_driver.h"
-#include "chrome/browser/ui/thumbnails/thumbnail_readiness_tracker.h"
-
 class ThumbnailScheduler {
  public:
-  using PageReadiness = ThumbnailReadinessTracker::Readiness;
-
   class TabCapturer {
    public:
     // Called with true when the scheduler permits a tab to start

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,11 +10,13 @@ namespace mojo {
 payments::mojom::blink::PaymentAddressPtr
 TypeConverter<payments::mojom::blink::PaymentAddressPtr,
               blink::AddressInit*>::Convert(const blink::AddressInit* input) {
+  using blink::g_empty_string;
   payments::mojom::blink::PaymentAddressPtr output =
       payments::mojom::blink::PaymentAddress::New();
   output->country = input->hasCountry() ? input->country() : g_empty_string;
-  output->address_line =
-      input->hasAddressLine() ? input->addressLine() : Vector<String>();
+  output->address_line = input->hasAddressLine()
+                             ? input->addressLine()
+                             : blink::Vector<blink::String>();
   output->region = input->hasRegion() ? input->region() : g_empty_string;
   output->city = input->hasCity() ? input->city() : g_empty_string;
   output->dependent_locality = input->hasDependentLocality()

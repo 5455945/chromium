@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,24 +22,22 @@ class ProcessIdFeedbackSource
     : public base::RefCountedThreadSafe<ProcessIdFeedbackSource> {
  public:
   ProcessIdFeedbackSource(JNIEnv* env,
-                          const base::android::JavaParamRef<jobject>& obj);
+                          const base::android::JavaRef<jobject>& obj);
+
+  ProcessIdFeedbackSource(const ProcessIdFeedbackSource&) = delete;
+  ProcessIdFeedbackSource& operator=(const ProcessIdFeedbackSource&) = delete;
+
   base::android::ScopedJavaLocalRef<jlongArray> GetProcessIdsForType(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj,
-      jint process_type);
+      int32_t process_type);
   void PrepareProcessIds();
 
  private:
   friend base::RefCountedThreadSafe<ProcessIdFeedbackSource>;
   ~ProcessIdFeedbackSource();
 
-  void PrepareProcessIdsOnProcessThread();
-  void PrepareCompleted();
-
   std::map<int, std::vector<base::ProcessHandle>> process_ids_;
   JavaObjectWeakGlobalRef java_ref_;
-
-  DISALLOW_COPY_AND_ASSIGN(ProcessIdFeedbackSource);
 };
 
 }  // namespace android

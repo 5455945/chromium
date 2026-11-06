@@ -1,10 +1,9 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/handwriting/handwriting_drawing.h"
 
-#include "base/macros.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_handwriting_drawing_segment.h"
@@ -21,9 +20,9 @@ namespace blink {
 namespace {
 // The callback to get the recognition result.
 void OnRecognitionResult(
-    ScriptPromiseResolver* resolver,
+    ScriptPromiseResolver<IDLSequence<HandwritingPrediction>>* resolver,
     ScriptState* script_state,
-    absl::optional<Vector<handwriting::mojom::blink::HandwritingPredictionPtr>>
+    std::optional<Vector<handwriting::mojom::blink::HandwritingPredictionPtr>>
         predictions) {
   // If `predictions` does not have value, it means the some error happened in
   // recognition. Otherwise, if it has value but the vector is empty, it means
@@ -72,9 +71,11 @@ const HeapVector<Member<HandwritingStroke>>& HandwritingDrawing::getStrokes() {
   return strokes_;
 }
 
-ScriptPromise HandwritingDrawing::getPrediction(ScriptState* script_state) {
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
-  ScriptPromise promise = resolver->Promise();
+ScriptPromise<IDLSequence<HandwritingPrediction>>
+HandwritingDrawing::getPrediction(ScriptState* script_state) {
+  auto* resolver = MakeGarbageCollected<
+      ScriptPromiseResolver<IDLSequence<HandwritingPrediction>>>(script_state);
+  auto promise = resolver->Promise();
 
   if (!IsValid()) {
     resolver->Reject(MakeGarbageCollected<DOMException>(
@@ -94,8 +95,8 @@ ScriptPromise HandwritingDrawing::getPrediction(ScriptState* script_state) {
       std::move(strokes),
       mojo::ConvertTo<handwriting::mojom::blink::HandwritingHintsPtr>(
           hints_.Get()),
-      WTF::Bind(&OnRecognitionResult, WrapPersistent(resolver),
-                WrapPersistent(script_state)));
+      BindOnce(&OnRecognitionResult, WrapPersistent(resolver),
+               WrapPersistent(script_state)));
 
   return promise;
 }

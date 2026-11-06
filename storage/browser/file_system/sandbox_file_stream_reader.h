@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,15 +9,17 @@
 
 #include <memory>
 
-#include "base/bind.h"
 #include "base/component_export.h"
 #include "base/files/file.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/time/time.h"
+#include "base/types/expected.h"
 #include "net/base/completion_once_callback.h"
-#include "storage/browser/blob/shareable_file_reference.h"
+#include "net/base/net_errors.h"
 #include "storage/browser/file_system/file_stream_reader.h"
+#include "storage/browser/file_system/file_system_operation_runner.h"
 #include "storage/browser/file_system/file_system_url.h"
 
 namespace base {
@@ -27,6 +29,7 @@ class FilePath;
 namespace storage {
 
 class FileSystemContext;
+class ScopedFile;
 
 // FileStreamReader implementation for Sandboxed FileSystem files.
 // This wraps either a LocalFileStreamReader or a MemoryFileStreamReader,
@@ -43,39 +46,48 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) SandboxFileStreamReader
                           const FileSystemURL& url,
                           int64_t initial_offset,
                           const base::Time& expected_modification_time);
+
+  SandboxFileStreamReader(const SandboxFileStreamReader&) = delete;
+  SandboxFileStreamReader& operator=(const SandboxFileStreamReader&) = delete;
+
   ~SandboxFileStreamReader() override;
 
   // FileStreamReader overrides.
-  int Read(net::IOBuffer* buf,
+  int Read(scoped_refptr<net::IOBuffer> buf,
            int buf_len,
            net::CompletionOnceCallback callback) override;
-  int64_t GetLength(net::Int64CompletionOnceCallback callback) override;
+  int64_t GetLength(GetLengthCallback callback) override;
 
  private:
   friend class FileStreamReader;
+  using SnapshotCallback = FileSystemOperationRunner::SnapshotFileCallback;
 
-  int CreateSnapshot();
-  void DidCreateSnapshot(base::File::Error file_error,
-                         const base::File::Info& file_info,
-                         const base::FilePath& platform_path,
-                         scoped_refptr<ShareableFileReference> file_ref);
-  void OnRead(int rv);
-  void OnGetLength(int64_t rv);
+  int CreateSnapshot(SnapshotCallback callback);
+  void DidCreateSnapshotForRead(scoped_refptr<net::IOBuffer> read_buf,
+                                int read_len,
+                                net::CompletionOnceCallback callback,
+                                base::File::Error file_error,
+                                const base::File::Info& file_info,
+                                const base::FilePath& platform_path,
+                                ScopedFile temp_file);
+  void DidCreateSnapshotForGetLength(GetLengthCallback callback,
+                                     base::File::Error file_error,
+                                     const base::File::Info& file_info,
+                                     const base::FilePath& platform_path,
+                                     ScopedFile temp_file);
+  void CreateFileReader(const base::FilePath& platform_path);
 
-  net::IOBuffer* read_buf_;
-  int read_buf_len_;
-  net::CompletionOnceCallback read_callback_;
-  net::Int64CompletionOnceCallback get_length_callback_;
+  void OnRead(net::CompletionOnceCallback callback, int rv);
+  void OnGetLength(GetLengthCallback callback,
+                   base::expected<int64_t, net::Error> rv);
+
   scoped_refptr<FileSystemContext> file_system_context_;
   FileSystemURL url_;
   const int64_t initial_offset_;
   const base::Time expected_modification_time_;
   std::unique_ptr<FileStreamReader> file_reader_;
-  scoped_refptr<ShareableFileReference> snapshot_ref_;
   bool has_pending_create_snapshot_;
   base::WeakPtrFactory<SandboxFileStreamReader> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(SandboxFileStreamReader);
 };
 
 }  // namespace storage

@@ -23,46 +23,56 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_SVG_LAYOUT_SVG_RESOURCE_GRADIENT_H_
 
 #include <memory>
+
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_resource_paint_server.h"
 #include "third_party/blink/renderer/core/svg/svg_gradient_element.h"
-#include "third_party/blink/renderer/platform/transforms/affine_transform.h"
-#include "third_party/blink/renderer/platform/wtf/hash_map.h"
+#include "third_party/blink/renderer/platform/graphics/gradient.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
 
 namespace blink {
 
+class AffineTransform;
+class SVGLength;
 struct GradientData;
 
 class LayoutSVGResourceGradient : public LayoutSVGResourcePaintServer {
  public:
   explicit LayoutSVGResourceGradient(SVGGradientElement*);
+  void Trace(Visitor*) const override;
 
   void RemoveAllClientsFromCache() final;
   bool RemoveClientFromCache(SVGResourceClient&) final;
+  void LastClientRemoved() final;
 
   bool ApplyShader(const SVGResourceClient&,
-                   const FloatRect& reference_box,
+                   const gfx::RectF& reference_box,
                    const AffineTransform* additional_transform,
-                   PaintFlags&) final;
+                   const AutoDarkMode& auto_dark_mode,
+                   cc::PaintFlags& flags,
+                   PaintFlags paint_flags) final;
 
   bool IsChildAllowed(LayoutObject* child, const ComputedStyle&) const final;
 
  protected:
-  virtual SVGUnitTypes::SVGUnitType GradientUnits() const = 0;
-  virtual AffineTransform CalculateGradientTransform() const = 0;
-  virtual void CollectGradientAttributes() = 0;
-  virtual scoped_refptr<Gradient> BuildGradient() const = 0;
+  virtual const GradientAttributes& EnsureAttributes() const = 0;
+  virtual std::unique_ptr<Gradient> BuildGradient() const = 0;
 
-  static GradientSpreadMethod PlatformSpreadMethodFromSVGType(
+  gfx::PointF ResolvePoint(SVGUnitTypes::SVGUnitType,
+                           const SVGLength& x,
+                           const SVGLength& y) const;
+  float ResolveRadius(SVGUnitTypes::SVGUnitType type, const SVGLength& r) const;
+  static Gradient::SpreadMethod PlatformSpreadMethodFromSVGType(
       SVGSpreadMethodType);
+
+  mutable bool should_collect_gradient_attributes_ = true;
 
  private:
   std::unique_ptr<GradientData> BuildGradientData(
-      const FloatRect& object_bounding_box);
+      const gfx::RectF& object_bounding_box) const;
 
-  bool should_collect_gradient_attributes_ : 1;
   using GradientMap = HeapHashMap<Member<const SVGResourceClient>,
                                   std::unique_ptr<GradientData>>;
-  Persistent<GradientMap> gradient_map_;
+  GradientMap gradient_map_;
 };
 
 }  // namespace blink

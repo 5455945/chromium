@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,20 @@
 #include <utility>
 
 #include "base/check_op.h"
+#include "base/no_destructor.h"
 
 namespace mojo_bootstrap {
 
 // static
-PendingConnectionManager& PendingConnectionManager::Get() {
-  static base::NoDestructor<PendingConnectionManager> connection_manager;
-  return *connection_manager;
+PendingConnectionManager& PendingConnectionManager::GetForDriveFs() {
+  static base::NoDestructor<PendingConnectionManager> instance;
+  return *instance;
+}
+
+// static
+PendingConnectionManager& PendingConnectionManager::GetForSmbFs() {
+  static base::NoDestructor<PendingConnectionManager> instance;
+  return *instance;
 }
 
 bool PendingConnectionManager::OpenIpcChannel(const std::string& token,

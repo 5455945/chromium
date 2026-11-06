@@ -1,11 +1,13 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <memory>
 #include <set>
 
-#include "base/bind.h"
+#include "base/enterprise_util.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/threading/thread_restrictions.h"
@@ -16,9 +18,11 @@
 #include "chrome/browser/net/dns_probe_test_util.h"
 #include "chrome/browser/net/net_error_tab_helper.h"
 #include "chrome/browser/net/secure_dns_config.h"
+#include "chrome/browser/net/stub_resolver_config_reader.h"
+#include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
@@ -27,9 +31,13 @@
 #include "components/embedder_support/pref_names.h"
 #include "components/error_page/common/net_error_info.h"
 #include "components/google/core/common/google_util.h"
+#include "components/policy/core/browser/browser_policy_connector.h"
+#include "components/policy/core/common/mock_configuration_policy_provider.h"
+#include "components/policy/core/common/policy_map.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/network_service_instance.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -43,9 +51,11 @@
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/url_request/url_request_failed_job.h"
 #include "services/network/public/cpp/features.h"
+#include "services/network/public/cpp/network_context_getter.h"
+#include "services/network/public/mojom/clear_data_filter.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "base/win/win_util.h"
 #endif
 
@@ -69,8 +79,7 @@ namespace {
 class DelayingDnsProbeService : public DnsProbeService {
  public:
   DelayingDnsProbeService(
-      const DnsProbeServiceFactory::NetworkContextGetter&
-          network_context_getter,
+      const network::NetworkContextGetter& network_context_getter,
       const DnsProbeServiceFactory::DnsConfigChangeManagerGetter&
           dns_config_change_manager_getter)
       : dns_probe_service_impl_(DnsProbeServiceFactory::CreateForTesting(
@@ -81,8 +90,7 @@ class DelayingDnsProbeService : public DnsProbeService {
   ~DelayingDnsProbeService() override { EXPECT_TRUE(delayed_probes_.empty()); }
 
   static std::unique_ptr<KeyedService> Create(
-      const DnsProbeServiceFactory::NetworkContextGetter&
-          network_context_getter,
+      const network::NetworkContextGetter& network_context_getter,
       const DnsProbeServiceFactory::DnsConfigChangeManagerGetter&
           dns_config_change_manager_getter,
       content::BrowserContext* context) {
@@ -134,7 +142,7 @@ class DnsProbeBrowserTest : public InProcessBrowserTest {
 
   // Sets the browser object that other methods apply to, and that has the
   // DnsProbeStatus messages of its currently active tab monitored.
-  void SetActiveBrowser(Browser* browser);
+  void SetActiveBrowser(BrowserWindowInterface* browser);
 
   // Sets the results the FakeHostResolver will return for the current config
   // and Google config DnsProbeRunners. Since this mocks out the NetworkContext
@@ -173,12 +181,14 @@ class DnsProbeBrowserTest : public InProcessBrowserTest {
 
   std::unique_ptr<FakeHostResolverNetworkContext> network_context_;
   std::unique_ptr<FakeDnsConfigChangeManager> dns_config_change_manager_;
-  DelayingDnsProbeService* delaying_dns_probe_service_;
+  raw_ptr<DelayingDnsProbeService, AcrossTasksDanglingUntriaged>
+      delaying_dns_probe_service_;
 
   // Browser that methods apply to.
-  Browser* active_browser_;
+  raw_ptr<BrowserWindowInterface, AcrossTasksDanglingUntriaged> active_browser_;
   // Helper that current has its DnsProbeStatus messages monitored.
-  NetErrorTabHelper* monitored_tab_helper_;
+  raw_ptr<NetErrorTabHelper, AcrossTasksDanglingUntriaged>
+      monitored_tab_helper_;
 
   std::unique_ptr<base::RunLoop> awaiting_dns_probe_status_run_loop_;
   // Queue of statuses received but not yet consumed by WaitForSentStatus().
@@ -198,7 +208,7 @@ DnsProbeBrowserTest::~DnsProbeBrowserTest() {
 void DnsProbeBrowserTest::SetUpOnMainThread() {
   NetErrorTabHelper::set_state_for_testing(NetErrorTabHelper::TESTING_DEFAULT);
 
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       embedder_support::kAlternateErrorPagesEnabled, true);
 
   ASSERT_TRUE(embedded_test_server()->Start());
@@ -230,10 +240,10 @@ bool DnsProbeBrowserTest::InterceptURLLoaderRequest(
   return false;
 }
 
-void DnsProbeBrowserTest::SetActiveBrowser(Browser* browser) {
+void DnsProbeBrowserTest::SetActiveBrowser(BrowserWindowInterface* browser) {
   delaying_dns_probe_service_ = static_cast<DelayingDnsProbeService*>(
       DnsProbeServiceFactory::GetInstance()->SetTestingFactoryAndUse(
-          browser->profile(),
+          browser->GetProfile(),
           base::BindRepeating(
               &DelayingDnsProbeService::Create,
               base::BindRepeating(&DnsProbeBrowserTest::GetNetworkContext,
@@ -248,8 +258,8 @@ void DnsProbeBrowserTest::SetActiveBrowser(Browser* browser) {
         NetErrorTabHelper::DnsProbeStatusSnoopCallback());
   }
   active_browser_ = browser;
-  monitored_tab_helper_ = NetErrorTabHelper::FromWebContents(
-      active_browser_->tab_strip_model()->GetActiveWebContents());
+  monitored_tab_helper_ = NetErrorTabHelper::From(
+      active_browser_->GetTabStripModel()->GetActiveTab());
   monitored_tab_helper_->set_dns_probe_status_snoop_callback_for_testing(
       BindRepeating(&DnsProbeBrowserTest::OnDnsProbeStatusSent,
                     Unretained(this)));
@@ -265,13 +275,15 @@ void DnsProbeBrowserTest::SetFakeHostResolverResults(
 }
 
 void DnsProbeBrowserTest::NavigateToDnsError() {
-  NavigateToURL(active_browser_, URLRequestFailedJob::GetMockHttpUrl(
-                                     net::ERR_NAME_NOT_RESOLVED));
+  ASSERT_TRUE(NavigateToURL(
+      active_browser_,
+      URLRequestFailedJob::GetMockHttpsUrl(net::ERR_NAME_NOT_RESOLVED)));
 }
 
 void DnsProbeBrowserTest::NavigateToOtherError() {
-  NavigateToURL(active_browser_, URLRequestFailedJob::GetMockHttpUrl(
-                                     net::ERR_CONNECTION_REFUSED));
+  ASSERT_TRUE(NavigateToURL(
+      active_browser_,
+      URLRequestFailedJob::GetMockHttpUrl(net::ERR_CONNECTION_REFUSED)));
 }
 
 void DnsProbeBrowserTest::StartDelayedProbes(int expected_delayed_probe_count) {
@@ -384,18 +396,52 @@ class DnsProbeCurrentConfigFailingProbesTest : public DnsProbeBrowserTest {
 class DnsProbeCurrentSecureConfigFailingProbesTest
     : public DnsProbeBrowserTest {
  protected:
+  void SetUpInProcessBrowserTestFixture() override {
+    // Normal boilerplate to setup a MockConfigurationPolicyProvider.
+    ON_CALL(policy_provider_, IsInitializationComplete(testing::_))
+        .WillByDefault(testing::Return(true));
+    ON_CALL(policy_provider_, IsFirstPolicyLoadComplete(testing::_))
+        .WillByDefault(testing::Return(true));
+    policy::BrowserPolicyConnector::SetPolicyProviderForTesting(
+        &policy_provider_);
+  }
+
   void SetUpOnMainThread() override {
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
     // Mark as not enterprise managed to prevent the secure DNS mode from
     // being downgraded to off.
     base::win::ScopedDomainStateForTesting scoped_domain(false);
+    // TODO(crbug.com/40229843): What is the correct function to use here?
+    EXPECT_FALSE(base::win::IsEnrolledToDomain());
 #endif
 
-    PrefService* local_state = g_browser_process->local_state();
-    local_state->SetString(prefs::kDnsOverHttpsMode,
-                           SecureDnsConfig::kModeSecure);
-    local_state->SetString(prefs::kDnsOverHttpsTemplates,
-                           "https://bar.test/dns-query{?dns}");
+    // Set the mocked policy provider to act as if no policies are in use by
+    // updating to an empty PolicyMap. Done to prevent potential unintended
+    // Secure DNS downgrade.
+    policy_provider_.UpdateChromePolicy(policy::PolicyMap());
+
+    // Override parental-controls detection to not detect anything, to prevent a
+    // potential Secure DNS downgrade of off. Trigger an update to network
+    // service to ensure the override takes effect if parental controls have
+    // already been read.
+    StubResolverConfigReader* config_reader =
+        SystemNetworkContextManager::GetStubResolverConfigReader();
+    config_reader->OverrideParentalControlsForTesting(
+        /*parental_controls_override=*/false);
+    config_reader->UpdateNetworkService(/*record_metrics=*/false);
+    content::FlushNetworkServiceInstanceForTesting();
+
+    // Update prefs to enable Secure DNS in secure mode.
+    PrefService* pref_service = g_browser_process->local_state();
+#if BUILDFLAG(IS_CHROMEOS)
+    // On Chrome OS, the local_state is shared between all users so the user-set
+    // pref is stored in the profile's pref service.
+    pref_service = browser()->GetProfile()->GetPrefs();
+#endif  // BUILDFLAG(IS_CHROMEOS)
+    pref_service->SetString(prefs::kDnsOverHttpsMode,
+                            SecureDnsConfig::kModeSecure);
+    pref_service->SetString(prefs::kDnsOverHttpsTemplates,
+                            "https://bar.test/dns-query{?dns}");
 
     SetFakeHostResolverResults(
         {{net::ERR_NAME_NOT_RESOLVED,
@@ -405,6 +451,8 @@ class DnsProbeCurrentSecureConfigFailingProbesTest
           FakeHostResolver::kOneAddressResponse}});
     DnsProbeBrowserTest::SetUpOnMainThread();
   }
+
+  testing::NiceMock<policy::MockConfigurationPolicyProvider> policy_provider_;
 };
 
 // Test Fixture for tests where the DNS probes should fail to connect to a DNS
@@ -510,8 +558,8 @@ IN_PROC_BROWSER_TEST_F(DnsProbeFailingProbesTest, SyncFailure) {
 
 // Make sure probes don't run for subframe DNS errors.
 IN_PROC_BROWSER_TEST_F(DnsProbeSuccessfulProbesTest, NoProbeInSubframe) {
-  NavigateToURL(browser(),
-                embedded_test_server()->GetURL("/iframe_dns_error.html"));
+  ASSERT_TRUE(NavigateToURL(
+      browser(), embedded_test_server()->GetURL("/iframe_dns_error.html")));
 
   // By the time NavigateToURL returns, the browser will have seen the failed
   // provisional load.  If a probe was started (or considered but not run),
@@ -524,7 +572,7 @@ IN_PROC_BROWSER_TEST_F(DnsProbeSuccessfulProbesTest, NoProbeInSubframe) {
 // Make sure browser sends NOT_RUN properly when probes are disabled.
 IN_PROC_BROWSER_TEST_F(DnsProbeUnreachableProbesTest, ProbesDisabled) {
   // Disable probes (And corrections).
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       embedder_support::kAlternateErrorPagesEnabled, false);
 
   NavigateToDnsError();
@@ -538,7 +586,7 @@ IN_PROC_BROWSER_TEST_F(DnsProbeUnreachableProbesTest, ProbesDisabled) {
 
 // Test incognito mode. DNS probes should still be enabled.
 IN_PROC_BROWSER_TEST_F(DnsProbeFailingProbesTest, Incognito) {
-  Browser* incognito = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito = CreateIncognitoBrowser();
   SetActiveBrowser(incognito);
 
   // Just one commit and one sent status, since the corrections are disabled.

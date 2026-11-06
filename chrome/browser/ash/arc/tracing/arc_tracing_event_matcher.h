@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,11 @@
 #define CHROME_BROWSER_ASH_ARC_TRACING_ARC_TRACING_EVENT_MATCHER_H_
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include <map>
+#include <optional>
 #include <string>
-
-#include "base/macros.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace arc {
 
@@ -21,6 +20,11 @@ class ArcTracingEvent;
 class ArcTracingEventMatcher {
  public:
   ArcTracingEventMatcher();
+  ~ArcTracingEventMatcher();
+
+  ArcTracingEventMatcher(const ArcTracingEventMatcher&) = delete;
+  ArcTracingEventMatcher& operator=(const ArcTracingEventMatcher&) = delete;
+
   // Format category:name[*]?(arg_name=arg_value;..)
   // For example:
   // exo:Surface::Attach
@@ -31,7 +35,7 @@ class ArcTracingEventMatcher {
   // Returns true in case |event| matches criteria set.
   bool Match(const ArcTracingEvent& event) const;
 
-  absl::optional<int64_t> ReadAndroidEventInt64(
+  std::optional<int64_t> ReadAndroidEventInt64(
       const ArcTracingEvent& event) const;
 
   // Sets the expected phase. Tested event does not match if its phase does not
@@ -60,8 +64,6 @@ class ArcTracingEventMatcher {
   bool name_prefix_match_ = false;
   // Defines set of arguments to match if needed.
   std::map<std::string, std::string> args_;
-
-  DISALLOW_COPY_AND_ASSIGN(ArcTracingEventMatcher);
 };
 
 }  // namespace arc

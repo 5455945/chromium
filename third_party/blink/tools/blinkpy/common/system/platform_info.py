@@ -29,8 +29,11 @@
 import re
 import sys
 
+from blinkpy.common.memoized import memoized
+from blinkpy.common.system.executive import ScriptError
 
-class PlatformInfo(object):
+
+class PlatformInfo:
     """This class provides a consistent (and mockable) interpretation of
     system-specific values (like sys.platform and platform.mac_ver())
     to be used by the rest of the blinkpy code base.
@@ -43,22 +46,29 @@ class PlatformInfo(object):
     newer than one known to the code.
     """
 
-    def __init__(self, sys_module, platform_module, filesystem_module,
-                 executive):
+    def __init__(
+        self, sys_module, platform_module, filesystem_module, executive
+    ):
         self._executive = executive
         self._filesystem = filesystem_module
         self._platform_module = platform_module
         self.os_name = self._determine_os_name(sys_module.platform)
         if self.os_name == 'linux':
-            self.os_version = self._determine_linux_version(platform_module)
-        if self.os_name == 'freebsd':
-            self.os_version = platform_module.release()
+            # Assume we only test against one Linux version at a time (see
+            # crbug.com/40277076). Therefore, there's no need to name that
+            # version.
+            self.os_version = 'linux'
         if self.os_name.startswith('mac'):
             self.os_version = self._determine_mac_version(
-                platform_module.mac_ver()[0])
+                self._raw_mac_version(platform_module)
+            )
         if self.os_name.startswith('win'):
             self.os_version = self._determine_win_version(
-                self._win_version_tuple(sys_module))
+                self._win_version_tuple()
+            )
+        self.interactive = sys_module.stdin.isatty()
+        self._processor = platform_module.processor() or ""
+
         assert sys.platform != 'cygwin', 'Cygwin is not supported.'
 
     def is_mac(self):
@@ -70,32 +80,8 @@ class PlatformInfo(object):
     def is_linux(self):
         return self.os_name == 'linux'
 
-    def is_freebsd(self):
-        return self.os_name == 'freebsd'
-
-    def is_highdpi(self):
-        if self.is_mac():
-            output = self._executive.run_command(
-                ['system_profiler', 'SPDisplaysDataType'],
-                error_handler=self._executive.ignore_error)
-            if output and re.search(r'Resolution:.*Retina$', output,
-                                    re.MULTILINE):
-                return True
-        return False
-
-    def is_running_rosetta(self):
-        if self.is_mac():
-            # If we are running under Rosetta, platform.machine() is
-            # 'x86_64'; we need to use a sysctl to see if we're being
-            # translated.
-            import ctypes
-            libSystem = ctypes.CDLL("libSystem.dylib")
-            ret = ctypes.c_int(0)
-            size = ctypes.c_size_t(4)
-            e = libSystem.sysctlbyname(ctypes.c_char_p(b'sysctl.proc_translated'),
-                                       ctypes.byref(ret), ctypes.byref(size), None, 0)
-            return e == 0 and ret.value == 1
-        return False
+    def processor(self):
+        return self._processor
 
     def display_name(self):
         # platform.platform() returns Darwin information for Mac, which is just confusing.
@@ -107,10 +93,12 @@ class PlatformInfo(object):
         # Windows-2008ServerR2-6.1.7600
         return self._platform_module.platform()
 
+    @memoized
     def total_bytes_memory(self):
         if self.is_mac():
-            return long(
-                self._executive.run_command(['sysctl', '-n', 'hw.memsize']))
+            return int(
+                self._executive.run_command(['sysctl', '-n', 'hw.memsize'])
+            )
         return None
 
     def terminal_width(self):
@@ -119,14 +107,18 @@ class PlatformInfo(object):
             if self.is_win():
                 # From http://code.activestate.com/recipes/440694-determine-size-of-console-window-on-windows/
                 from ctypes import windll, create_string_buffer
+
                 handle = windll.kernel32.GetStdHandle(-12)  # -12 == stderr
                 # 22 == sizeof(console_screen_buffer_info)
                 console_screen_buffer_info = create_string_buffer(22)
                 if windll.kernel32.GetConsoleScreenBufferInfo(
-                        handle, console_screen_buffer_info):
+                    handle, console_screen_buffer_info
+                ):
                     import struct
+
                     _, _, _, _, _, left, _, right, _, _, _ = struct.unpack(
-                        'hhhhHhhhhhh', console_screen_buffer_info.raw)
+                        'hhhhHhhhhhh', console_screen_buffer_info.raw
+                    )
                     # Note that we return 1 less than the width since writing into the rightmost column
                     # automatically performs a line feed.
                     return right - left
@@ -135,28 +127,30 @@ class PlatformInfo(object):
                 import fcntl
                 import struct
                 import termios
-                packed = fcntl.ioctl(sys.stderr.fileno(), termios.TIOCGWINSZ,
-                                     '\0' * 8)
+
+                packed = fcntl.ioctl(
+                    sys.stderr.fileno(), termios.TIOCGWINSZ, '\0' * 8
+                )
                 _, columns, _, _ = struct.unpack('HHHH', packed)
                 return columns
-        except Exception:  # pylint: disable=broad-except
+        except Exception:
             return sys.maxsize
 
-    def linux_distribution(self):
-        if not self.is_linux():
-            return None
+    def get_machine(self):
+        return self._platform_module.machine()
 
-        # Fedora also has /etc/redhat-release, this check must go first.
-        if self._filesystem.exists('/etc/fedora-release'):
-            return 'fedora'
-        if self._filesystem.exists('/etc/redhat-release'):
-            return 'redhat'
-        if self._filesystem.exists('/etc/debian_version'):
-            return 'debian'
-        if self._filesystem.exists('/etc/arch-release'):
-            return 'arch'
-
-        return 'unknown'
+    @memoized
+    def _raw_mac_version(self, platform_module):
+        """Read this Mac's version string (starts with "<major>.<minor>")."""
+        try:
+            # crbug/1294954: Python's `platform.mac_ver()` can be unreliable.
+            command = ['sw_vers', '-productVersion']
+            output = self._executive.run_command(command).strip()
+            if re.match(r'\d+\.\d+', output):
+                return output
+        except (OSError, SystemError, ScriptError):
+            pass
+        return platform_module.mac_ver()[0]
 
     def _determine_os_name(self, sys_platform):
         if sys_platform == 'darwin':
@@ -165,61 +159,47 @@ class PlatformInfo(object):
             return 'linux'
         if sys_platform == 'win32':
             return 'win'
-        if sys_platform.startswith('freebsd'):
-            return 'freebsd'
-        raise AssertionError(
-            'unrecognized platform string "%s"' % sys_platform)
+        raise AssertionError('unrecognized platform string "%s"' % sys_platform)
 
     def _determine_mac_version(self, mac_version_string):
         major_release = int(mac_version_string.split('.')[0])
-        minor_release = int(mac_version_string.split('.')[1])
-        if major_release == 10:
-            assert 10 <= minor_release <= 16, 'Unsupported mac OS version: %s' % mac_version_string
-        elif major_release == 11:
-            assert minor_release == 0, 'Unsupported mac OS version: %s' % mac_version_string
-        else:
-            raise AssertionError('Unsupported mac OS version: %s' %
-                                 mac_version_string)
-
-        return 'mac{major_release}.{minor_release}'.format(
-            major_release=major_release,
-            minor_release=minor_release,
+        minor_release = int(mac_version_string.split('.')[1])  # noqa: F841
+        assert 13 <= major_release, (
+            'Unsupported mac OS version: %s' % mac_version_string
         )
-
-    def _determine_linux_version(self, _):
-        return 'trusty'
+        return 'mac{major_release}'.format(major_release=min(26, major_release))
 
     def _determine_win_version(self, win_version_tuple):
         if win_version_tuple[:2] == (10, 0):
-            return '10'
-        if win_version_tuple[:2] == (6, 3):
-            return '8.1'
-        if win_version_tuple[:2] == (6, 2):
-            return '8'
-        if win_version_tuple[:3] == (6, 1, 7601):
-            return '7sp1'
-        if win_version_tuple[:3] == (6, 1, 7600):
-            return '7sp0'
-        if win_version_tuple[:2] == (6, 0):
-            return 'vista'
-        if win_version_tuple[:2] == (5, 1):
-            return 'xp'
-        assert (win_version_tuple[0] > 10
-                or win_version_tuple[0] == 10 and win_version_tuple[1] > 0), (
-                    'Unrecognized Windows version tuple: "%s"' %
-                    (win_version_tuple, ))
+            # For win11 platform.win32_ver() returns (10, 0, 22000)
+            if win_version_tuple[2] >= 22000:
+                return '11'
+            else:
+                return '10.20h2'
+        assert (
+            win_version_tuple[0] > 10
+            or win_version_tuple[0] == 10
+            and win_version_tuple[1] > 0
+        ), 'Unrecognized Windows version tuple: "%s"' % (win_version_tuple,)
         return 'future'
 
-    def _win_version_tuple(self, sys_module):
-        if hasattr(sys_module, 'getwindowsversion'):
-            return sys_module.getwindowsversion()
+    def _win_version_tuple(self):
+        version_str = self._platform_module.win32_ver()[1]
+        if version_str:
+            return tuple(map(int, version_str.split('.')))
+
         return self._win_version_tuple_from_cmd()
 
+    @memoized
     def _win_version_tuple_from_cmd(self):
         # Note that this should only ever be called on windows, so this should always work.
-        ver_output = self._executive.run_command(['cmd', '/c', 'ver'],
-                                                 decode_output=False)
+        ver_output = self._executive.run_command(
+            ['cmd', '/c', 'ver'], decode_output=False
+        )
         match_object = re.search(
-            r'(?P<major>\d+)\.(?P<minor>\d)\.(?P<build>\d+)', ver_output)
-        assert match_object, 'cmd returned an unexpected version string: ' + ver_output
+            r'(?P<major>\d+)\.(?P<minor>\d)\.(?P<build>\d+)', ver_output
+        )
+        assert match_object, (
+            'cmd returned an unexpected version string: ' + ver_output
+        )
         return tuple(map(int, match_object.groups()))

@@ -1,9 +1,11 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CC_INPUT_SNAP_FLING_CURVE_H_
 #define CC_INPUT_SNAP_FLING_CURVE_H_
+
+#include <optional>
 
 #include "base/time/time.h"
 #include "cc/cc_export.h"
@@ -18,22 +20,27 @@ class CC_EXPORT SnapFlingCurve {
  public:
   // Creates the curve based on the start offset, target offset, and the first
   // inertial GSU's time_stamp.
-  SnapFlingCurve(const gfx::Vector2dF& start_offset,
-                 const gfx::Vector2dF& target_offset,
+  SnapFlingCurve(const gfx::PointF& start_offset,
+                 const gfx::PointF& target_offset,
                  base::TimeTicks first_gsu_time);
 
   virtual ~SnapFlingCurve();
 
-  // Estimate the total distance that will be scrolled given the first GSU's
-  // delta
-  static gfx::Vector2dF EstimateDisplacement(const gfx::Vector2dF& first_delta);
+  // Estimate the total distance that will be scrolled given the current GSU's
+  // delta and the previous GSU's delta. Returns std::nullopt if the estimate
+  // cannot be determined (e.g. when decay prediction is enabled and we don't
+  // have enough data yet).
+  static std::optional<gfx::Vector2dF> EstimateDisplacement(
+      const gfx::Vector2dF& current_delta,
+      const std::optional<gfx::Vector2dF>& previous_delta,
+      bool allow_slow_decay);
 
   // Returns the delta that should be scrolled at |time|.
   virtual gfx::Vector2dF GetScrollDelta(base::TimeTicks time);
 
   // Updates |current_displacement_|. This sync is necessary because the node
   // might be scrolled by other calls and the scrolls might be clamped.
-  void UpdateCurrentOffset(const gfx::Vector2dF& current_offset);
+  void UpdateCurrentOffset(const gfx::PointF& current_offset);
 
   // Returns true if the scroll has arrived at the snap destination.
   virtual bool IsFinished() const;
@@ -45,7 +52,7 @@ class CC_EXPORT SnapFlingCurve {
   double GetCurrentCurveDistance(base::TimeDelta current_time);
 
   // The initial scroll offset of the scroller.
-  const gfx::Vector2dF start_offset_;
+  const gfx::PointF start_offset_;
 
   // The total displacement to the snap position.
   const gfx::Vector2dF total_displacement_;

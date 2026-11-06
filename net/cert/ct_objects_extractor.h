@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,17 @@
 #define NET_CERT_CT_OBJECTS_EXTRACTOR_H_
 
 #include <string>
+#include <string_view>
 
-#include "base/strings/string_piece.h"
 #include "net/base/net_export.h"
 #include "net/cert/x509_certificate.h"
 
-namespace net {
+namespace net::ct {
 
-namespace ct {
+// The wire form of the OID 1.3.6.1.4.1.11129.2.4.2. See Section 3.3 of
+// RFC6962.
+inline constexpr uint8_t kEmbeddedSCTOid[] = {0x2B, 0x06, 0x01, 0x04, 0x01,
+                                              0xD6, 0x79, 0x02, 0x04, 0x02};
 
 struct SignedEntryData;
 
@@ -45,20 +48,6 @@ NET_EXPORT_PRIVATE bool GetPrecertSignedEntry(const CRYPTO_BUFFER* leaf,
 NET_EXPORT_PRIVATE bool GetX509SignedEntry(const CRYPTO_BUFFER* leaf,
                                            SignedEntryData* result);
 
-// Extracts a SignedCertificateTimestampList that has been embedded within
-// an OCSP response as an extension with the OID 1.3.6.1.4.1.11129.2.4.5.
-// If the extension is present, and the response matches the issuer and
-// serial number, returns true, updating |*sct_list| to contain
-// the encoded list, minus the DER encoding necessary for the extension.
-// |*sct_list| can then be further decoded with ct::DecodeSCTList.
-NET_EXPORT_PRIVATE bool ExtractSCTListFromOCSPResponse(
-    const CRYPTO_BUFFER* issuer,
-    const std::string& cert_serial_number,
-    base::StringPiece ocsp_response,
-    std::string* sct_list);
-
-}  // namespace ct
-
-}  // namespace net
+}  // namespace net::ct
 
 #endif  // NET_CERT_CT_OBJECTS_EXTRACTOR_H_

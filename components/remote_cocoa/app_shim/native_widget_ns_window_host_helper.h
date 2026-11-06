@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -59,6 +59,7 @@ class REMOTE_COCOA_APP_SHIM_EXPORT NativeWidgetNSWindowHostHelper {
   // Return a pointer to the host's ui::TextInputClient.
   // TODO(ccameron): Remove the needs for this call.
   virtual ui::TextInputClient* GetTextInputClient() = 0;
+
 };
 
 }  // namespace remote_cocoa

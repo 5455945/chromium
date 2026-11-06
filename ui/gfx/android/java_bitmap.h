@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,15 @@
 #define UI_GFX_ANDROID_JAVA_BITMAP_H_
 
 #include <jni.h>
-#include <stdint.h>
+
+#include <cstdint>
 
 #include "base/android/scoped_java_ref.h"
-#include "base/macros.h"
+#include "base/component_export.h"
+#include "base/memory/raw_ptr.h"
+#include "base/numerics/checked_math.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gfx/geometry/size.h"
-#include "ui/gfx/gfx_export.h"
 
 namespace gfx {
 
@@ -31,27 +33,30 @@ enum BitmapFormat {
 // This class wraps a JNI AndroidBitmap object to make it easier to use. It
 // handles locking and unlocking of the underlying pixels, along with wrapping
 // various JNI methods.
-class GFX_EXPORT JavaBitmap {
+class COMPONENT_EXPORT(GFX) JavaBitmap {
  public:
   explicit JavaBitmap(const base::android::JavaRef<jobject>& bitmap);
+
+  JavaBitmap(const JavaBitmap&) = delete;
+  JavaBitmap& operator=(const JavaBitmap&) = delete;
+
   ~JavaBitmap();
 
-  inline void* pixels() { return pixels_; }
-  inline const void* pixels() const { return pixels_; }
-  inline const gfx::Size& size() const { return size_; }
-  inline BitmapFormat format() const { return format_; }
-  inline uint32_t bytes_per_row() const { return bytes_per_row_; }
-  inline int byte_count() const { return byte_count_; }
+  void* pixels() { return pixels_; }
+  const void* pixels() const { return pixels_; }
+  const gfx::Size& size() const { return size_; }
+  BitmapFormat format() const { return format_; }
+  uint32_t bytes_per_row() const { return bytes_per_row_; }
+  int byte_count() const {
+    return base::CheckMul<int>(bytes_per_row_, size_.height()).ValueOrDie();
+  }
 
  private:
   base::android::ScopedJavaGlobalRef<jobject> bitmap_;
-  void* pixels_;
+  raw_ptr<void> pixels_ = nullptr;
   gfx::Size size_;
-  BitmapFormat format_;
-  uint32_t bytes_per_row_;
-  int byte_count_;
-
-  DISALLOW_COPY_AND_ASSIGN(JavaBitmap);
+  BitmapFormat format_ = BITMAP_FORMAT_NO_CONFIG;
+  uint32_t bytes_per_row_ = 0;
 };
 
 enum class OomBehavior {
@@ -62,18 +67,32 @@ enum class OomBehavior {
 // Converts |skbitmap| to a Java-backed bitmap (android.graphics.Bitmap).
 // Note: |skbitmap| is assumed to be non-null, non-empty and one of RGBA_8888 or
 // RGB_565 formats.
-GFX_EXPORT base::android::ScopedJavaLocalRef<jobject> ConvertToJavaBitmap(
+COMPONENT_EXPORT(GFX)
+base::android::ScopedJavaLocalRef<jobject> ConvertToJavaBitmap(
     const SkBitmap& skbitmap,
     OomBehavior reaction = OomBehavior::kCrashOnOom);
 
 // Converts |bitmap| to an SkBitmap of the same size and format.
 // Note: |jbitmap| is assumed to be non-null, non-empty and of format RGBA_8888.
-GFX_EXPORT SkBitmap CreateSkBitmapFromJavaBitmap(const JavaBitmap& jbitmap);
-
-// Returns a Skia color type value for the requested input java Bitmap.Config.
-GFX_EXPORT SkColorType
-ConvertToSkiaColorType(const base::android::JavaRef<jobject>& jbitmap_config);
+COMPONENT_EXPORT(GFX)
+SkBitmap CreateSkBitmapFromJavaBitmap(const JavaBitmap& jbitmap);
 
 }  // namespace gfx
+
+namespace jni_zero {
+// Converts |bitmap| to an SkBitmap of the same size and format.
+// Note: |j_bitmap| is assumed to be non-null, non-empty and of format
+// RGBA_8888.
+template <>
+COMPONENT_EXPORT(GFX)
+SkBitmap FromJniType<SkBitmap>(JNIEnv* env, const JavaRef<jobject>& j_bitmap);
+
+// Converts |skbitmap| to a Java-backed bitmap (android.graphics.Bitmap).
+// Note: return nullptr jobject if |skbitmap| is null or empty.
+template <>
+COMPONENT_EXPORT(GFX)
+ScopedJavaLocalRef<jobject> ToJniType<SkBitmap>(JNIEnv* env,
+                                                const SkBitmap& skbitmap);
+}  // namespace jni_zero
 
 #endif  // UI_GFX_ANDROID_JAVA_BITMAP_H_

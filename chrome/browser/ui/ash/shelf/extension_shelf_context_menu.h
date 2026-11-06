@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@
 
 #include <memory>
 
-#include "base/macros.h"
 #include "chrome/browser/ui/ash/shelf/shelf_context_menu.h"
 #include "extensions/common/constants.h"
 
@@ -21,14 +20,22 @@ class ExtensionShelfContextMenu : public ShelfContextMenu {
   ExtensionShelfContextMenu(ChromeShelfController* controller,
                             const ash::ShelfItem* item,
                             int64_t display_id);
+
+  ExtensionShelfContextMenu(const ExtensionShelfContextMenu&) = delete;
+  ExtensionShelfContextMenu& operator=(const ExtensionShelfContextMenu&) =
+      delete;
+
   ~ExtensionShelfContextMenu() override;
 
   // ShelfContextMenu overrides:
   void GetMenuModel(GetMenuModelCallback callback) override;
 
   // ui::SimpleMenuModel::Delegate overrides:
+  ui::ImageModel GetIconForCommandId(int command_id) const override;
+  std::u16string GetLabelForCommandId(int command_id) const override;
   bool IsCommandIdChecked(int command_id) const override;
   bool IsCommandIdEnabled(int command_id) const override;
+  bool IsItemForCommandIdDynamic(int command_id) const override;
   void ExecuteCommand(int command_id, int event_flags) override;
 
  private:
@@ -47,8 +54,6 @@ class ExtensionShelfContextMenu : public ShelfContextMenu {
   std::unique_ptr<ui::SimpleMenuModel> open_new_submenu_model_;
 
   std::unique_ptr<extensions::ContextMenuMatcher> extension_items_;
-
-  DISALLOW_COPY_AND_ASSIGN(ExtensionShelfContextMenu);
 };
 
 #endif  // CHROME_BROWSER_UI_ASH_SHELF_EXTENSION_SHELF_CONTEXT_MENU_H_

@@ -1,9 +1,10 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/editing/iterators/fully_clipped_state_stack.h"
 
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/container_node.h"
 #include "third_party/blink/renderer/core/dom/node.h"
 #include "third_party/blink/renderer/core/editing/editing_utilities.h"
@@ -20,19 +21,19 @@ inline bool FullyClipsContents(const Node* node) {
   if (!layout_object || !layout_object->IsBox() ||
       !layout_object->IsScrollContainer() || IsA<LayoutView>(layout_object))
     return false;
-  return To<LayoutBox>(layout_object)->Size().IsEmpty();
+  return To<LayoutBox>(layout_object)->StitchedSize().IsEmpty();
 }
 
 inline bool IgnoresContainerClip(const Node* node) {
   LayoutObject* layout_object = node->GetLayoutObject();
   if (!layout_object || layout_object->IsText())
     return false;
-  return layout_object->Style()->HasOutOfFlowPosition();
+  return layout_object->Style().HasOutOfFlowPosition();
 }
 
 template <typename Strategy>
-unsigned DepthCrossingShadowBoundaries(const Node& node) {
-  unsigned depth = 0;
+wtf_size_t DepthCrossingShadowBoundaries(const Node& node) {
+  wtf_size_t depth = 0;
   for (ContainerNode* parent = ParentCrossingShadowBoundaries<Strategy>(node);
        parent; parent = ParentCrossingShadowBoundaries<Strategy>(*parent))
     ++depth;

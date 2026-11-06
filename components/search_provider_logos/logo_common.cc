@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,13 @@
 namespace search_provider_logos {
 
 const int64_t kMaxTimeToLiveMS = INT64_C(30 * 24 * 60 * 60 * 1000);  // 30 days
+
+MuralMetadata::MuralMetadata() = default;
+MuralMetadata::MuralMetadata(const MuralMetadata&) = default;
+MuralMetadata::MuralMetadata(MuralMetadata&&) noexcept = default;
+MuralMetadata& MuralMetadata::operator=(const MuralMetadata&) = default;
+MuralMetadata& MuralMetadata::operator=(MuralMetadata&&) noexcept = default;
+MuralMetadata::~MuralMetadata() = default;
 
 LogoMetadata::LogoMetadata() = default;
 LogoMetadata::LogoMetadata(const LogoMetadata&) = default;

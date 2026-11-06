@@ -1,10 +1,14 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/platform/graphics/paint/paint_chunk.h"
 
+#include "base/memory/values_equivalent.h"
+#include "third_party/blink/renderer/platform/graphics/paint/drawing_display_item.h"
+#include "third_party/blink/renderer/platform/graphics/paint/paint_artifact.h"
 #include "third_party/blink/renderer/platform/wtf/size_assertions.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
@@ -13,16 +17,19 @@ namespace blink {
 struct SameSizeAsPaintChunk {
   wtf_size_t begin_index;
   wtf_size_t end_index;
-  Color background_color;
-  float background_color_area;
   PaintChunk::Id id;
-  PropertyTreeState properties;
-  IntRect bounds;
-  IntRect drawable_bounds;
-  IntRect rect_known_to_be_opaque;
-  void* hit_test_data;
-  void* layer_selection;
-  bool b[2];
+  PaintChunk::BackgroundColorInfo background_color;
+  TraceablePropertyTreeState properties;
+  Member<HitTestData> hit_test_data;
+  Member<RegionCaptureData> region_capture_data;
+  Member<LayerSelectionData> layer_selection;
+  Member<TrackedElementRects> tracked_element_rects;
+  gfx::Rect bounds;
+  gfx::Rect drawable_bounds;
+  gfx::Rect rect_known_to_be_opaque;
+  uint8_t raster_effect_outset;
+  uint8_t hit_test_opaqueness;
+  bool b;
 };
 
 ASSERT_SIZE(PaintChunk, SameSizeAsPaintChunk);
@@ -31,11 +38,14 @@ bool PaintChunk::EqualsForUnderInvalidationChecking(
     const PaintChunk& other) const {
   return size() == other.size() && id == other.id &&
          properties == other.properties && bounds == other.bounds &&
+         base::ValuesEquivalent(hit_test_data, other.hit_test_data) &&
+         base::ValuesEquivalent(region_capture_data,
+                                other.region_capture_data) &&
+         base::ValuesEquivalent(tracked_element_rects,
+                                other.tracked_element_rects) &&
          drawable_bounds == other.drawable_bounds &&
          raster_effect_outset == other.raster_effect_outset &&
-         ((!hit_test_data && !other.hit_test_data) ||
-          (hit_test_data && other.hit_test_data &&
-           *hit_test_data == *other.hit_test_data)) &&
+         hit_test_opaqueness == other.hit_test_opaqueness &&
          effectively_invisible == other.effectively_invisible;
   // Derived fields like rect_known_to_be_opaque are not checked because they
   // are updated when we create the next chunk or release chunks. We ensure
@@ -47,31 +57,66 @@ size_t PaintChunk::MemoryUsageInBytes() const {
   size_t total_size = sizeof(*this);
   if (hit_test_data) {
     total_size += sizeof(*hit_test_data);
-    total_size +=
-        hit_test_data->touch_action_rects.capacity() * sizeof(TouchActionRect);
-    total_size += hit_test_data->wheel_event_rects.capacity() * sizeof(IntRect);
+    total_size += hit_test_data->touch_action_rects.CapacityInBytes();
+    total_size += hit_test_data->wheel_event_rects.CapacityInBytes();
+#if BUILDFLAG(IS_ANDROID)
+    total_size += hit_test_data->xr_regions.CapacityInBytes();
+#endif
+  }
+  if (region_capture_data) {
+    total_size += sizeof(*region_capture_data);
+  }
+  if (tracked_element_rects) {
+    total_size += sizeof(*tracked_element_rects);
+  }
+  if (layer_selection_data) {
+    total_size += sizeof(*layer_selection_data);
   }
   return total_size;
 }
 
-String PaintChunk::ToString() const {
+static String ToStringImpl(const PaintChunk& c,
+                           const String& id_string,
+                           bool concise) {
   StringBuilder sb;
-  sb.AppendFormat(
-      "PaintChunk(begin=%u, end=%u, id=%s cacheable=%d props=(%s) bounds=%s "
-      "rect_known_to_be_opaque=%s effectively_invisible=%d",
-      begin_index, end_index, id.ToString().Utf8().c_str(), is_cacheable,
-      properties.ToString().Utf8().c_str(), bounds.ToString().Utf8().c_str(),
-      rect_known_to_be_opaque.ToString().Utf8().c_str(), effectively_invisible);
-  if (hit_test_data) {
-    sb.Append(", hit_test_data=");
-    sb.Append(hit_test_data->ToString());
+  FormatTo(sb, "PaintChunk({}-{} id={} cacheable={} bounds={} from_cache={}",
+           c.begin_index, c.end_index, id_string, c.is_cacheable,
+           c.bounds.ToString(), c.is_moved_from_cached_subsequence);
+  if (!concise) {
+    FormatTo(sb,
+             " props=({}) rect_known_to_be_opaque={} hit_test_opaqueness={} "
+             "effectively_invisible={} drawscontent={}",
+             c.properties.ToString(), c.rect_known_to_be_opaque.ToString(),
+             cc::HitTestOpaquenessToString(c.hit_test_opaqueness),
+             c.effectively_invisible, c.DrawsContent());
+    if (c.hit_test_data) {
+      sb.Append(" hit_test_data=");
+      sb.Append(c.hit_test_data->ToString());
+    }
+    if (c.region_capture_data) {
+      sb.Append(" region_capture_data=");
+      sb.Append(c.region_capture_data->ToString());
+    }
+    if (c.tracked_element_rects) {
+      sb.Append(" tracked_element_rects=");
+      sb.Append(c.tracked_element_rects->ToString());
+    }
   }
   sb.Append(')');
   return sb.ToString();
 }
 
+String PaintChunk::ToString(bool concise) const {
+  return ToStringImpl(*this, id.ToString(), concise);
+}
+
+String PaintChunk::ToString(const PaintArtifact& paint_artifact,
+                            bool concise) const {
+  return ToStringImpl(*this, id.ToString(paint_artifact), concise);
+}
+
 std::ostream& operator<<(std::ostream& os, const PaintChunk& chunk) {
-  return os << chunk.ToString().Utf8() << "\n";
+  return os << chunk.ToString().Utf8();
 }
 
 }  // namespace blink

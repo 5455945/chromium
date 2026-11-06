@@ -1,147 +1,166 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/apps/app_service/browser_app_launcher.h"
 
+#include <memory>
 #include <utility>
 
 #include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/run_loop.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/extensions/app_launch_params.h"
 #include "chrome/browser/ui/extensions/application_launch.h"
+#include "chrome/browser/web_applications/web_app_command_scheduler.h"
+#include "chrome/browser/web_applications/web_app_provider.h"
+#include "content/public/browser/web_contents.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/browser/extension_util.h"
 #include "extensions/common/extension.h"
 #include "url/gurl.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/apps/app_service/app_platform_metrics.h"
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/apps/app_service/launch_utils.h"
-#include "components/full_restore/app_launch_info.h"
-#include "components/full_restore/full_restore_utils.h"
+#include "chrome/browser/apps/app_service/metrics/app_platform_metrics.h"
+#include "chrome/browser/ash/app_list/arc/arc_app_utils.h"
+#include "chromeos/ash/experiences/arc/app/arc_app_constants.h"
+#include "components/app_restore/app_launch_info.h"
+#include "components/app_restore/full_restore_save_handler.h"
+#include "components/app_restore/full_restore_utils.h"
+#include "components/services/app_service/public/cpp/app_launch_util.h"
+#include "components/services/app_service/public/cpp/app_types.h"
+#include "components/services/app_service/public/cpp/intent.h"
 #include "components/sessions/core/session_id.h"
-#endif
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
-namespace apps {
+namespace {
 
-BrowserAppLauncher::BrowserAppLauncher(Profile* profile)
-    : profile_(profile), web_app_launch_manager_(profile) {}
+void OnLaunchCompleteReportRestoreMetrics(
+    base::OnceCallback<void(content::WebContents*)> callback,
+    Profile* profile,
+    int restore_id,
+    apps::AppLaunchParams params_for_restore,
+    base::WeakPtr<BrowserWindowInterface> browser,
+    base::WeakPtr<content::WebContents> web_contents,
+    apps::LaunchContainer launch_container) {
+#if BUILDFLAG(IS_CHROMEOS)
+  if (!SessionID::IsValidValue(restore_id)) {
+    RecordAppLaunchMetrics(
+        profile, apps::AppType::kWeb, params_for_restore.app_id,
+        params_for_restore.launch_source, params_for_restore.container);
+    std::move(callback).Run(web_contents.get());
+    return;
+  }
 
-BrowserAppLauncher::~BrowserAppLauncher() = default;
+  RecordAppLaunchMetrics(
+      profile, apps::AppType::kWeb, params_for_restore.app_id,
+      apps::LaunchSource::kFromFullRestore, params_for_restore.container);
 
-content::WebContents* BrowserAppLauncher::LaunchAppWithParams(
-    AppLaunchParams&& params) {
+  int session_id =
+      apps::GetSessionIdForRestoreFromWebContents(web_contents.get());
+  if (!SessionID::IsValidValue(session_id)) {
+    std::move(callback).Run(web_contents.get());
+    return;
+  }
+
+  // If the restore id is available, save the launch parameters to the full
+  // restore file for the system web apps.
+  auto launch_info = std::make_unique<app_restore::AppLaunchInfo>(
+      params_for_restore.app_id, session_id, params_for_restore.container,
+      params_for_restore.disposition, params_for_restore.display_id,
+      std::move(params_for_restore.launch_files),
+      std::move(params_for_restore.intent));
+  full_restore::SaveAppLaunchInfo(profile->GetPath(), std::move(launch_info));
+
+#endif  // BUILDFLAG(IS_CHROMEOS)
+  std::move(callback).Run(web_contents.get());
+}
+
+void LaunchAppWithParamsImpl(
+    apps::AppLaunchParams params,
+    Profile* profile,
+    base::OnceCallback<void(content::WebContents*)> on_complete) {
   const extensions::Extension* extension =
-      extensions::ExtensionRegistry::Get(profile_)->GetInstalledExtension(
+      extensions::ExtensionRegistry::Get(profile)->GetInstalledExtension(
           params.app_id);
-  if (!extension || extension->from_bookmark()) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-    AppLaunchParams params_for_restore(
-        params.app_id, params.container, params.disposition, params.source,
-        params.display_id, params.launch_files, params.intent);
-    std::string app_id = params.app_id;
-    apps::mojom::AppLaunchSource source = params.source;
-    apps::mojom::LaunchContainer container = params.container;
-    int restore_id = params.restore_id;
 
-    auto* web_contents =
-        web_app_launch_manager_.OpenApplication(std::move(params));
+  apps::AppLaunchParams params_for_restore(
+      params.app_id, params.container, params.disposition, params.launch_source,
+      params.display_id, params.launch_files, params.intent);
+  int restore_id = params.restore_id;
+  std::string app_id = params.app_id;
 
-    if (!SessionID::IsValidValue(restore_id)) {
-      RecordAppLaunchMetrics(profile_, apps::mojom::AppType::kWeb, app_id,
-                             GetLaunchSource(source), container);
-      return web_contents;
-    }
-
-    RecordAppLaunchMetrics(profile_, apps::mojom::AppType::kWeb, app_id,
-                           apps::mojom::LaunchSource::kFromFullRestore,
-                           container);
-
-    int session_id = GetSessionIdForRestoreFromWebContents(web_contents);
-    if (!SessionID::IsValidValue(session_id)) {
-      return web_contents;
-    }
-
-    // If the restore id is available, save the launch parameters to the full
-    // restore file for the system web apps.
-    auto launch_info = std::make_unique<full_restore::AppLaunchInfo>(
-        params_for_restore.app_id, session_id, params_for_restore.container,
-        params_for_restore.disposition, params_for_restore.display_id,
-        std::move(params_for_restore.launch_files),
-        std::move(params_for_restore.intent));
-    full_restore::SaveAppLaunchInfo(profile_->GetPath(),
-                                    std::move(launch_info));
-
-    return web_contents;
-#else
-    return web_app_launch_manager_.OpenApplication(std::move(params));
-#endif
+  if (!extension) {
+    web_app::WebAppProvider* provider =
+        web_app::WebAppProvider::GetForLocalAppsUnchecked(profile);
+#if BUILDFLAG(IS_CHROMEOS)
+    // Create the FullRestoreSaveHandler instance before launching the app to
+    // observe the browser window.
+    full_restore::FullRestoreSaveHandler::GetInstance();
+#endif  // BUILDFLAG(IS_CHROMEOS)
+    provider->scheduler().LaunchAppWithCustomParams(
+        std::move(params),
+        base::BindOnce(OnLaunchCompleteReportRestoreMetrics,
+                       std::move(on_complete), profile, restore_id,
+                       std::move(params_for_restore)));
+    return;
   }
 
-  if (params.container ==
-          apps::mojom::LaunchContainer::kLaunchContainerWindow &&
-      extension && extension->from_bookmark()) {
-    web_app::RecordAppWindowLaunch(profile_, params.app_id);
-  }
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // If the restore id is available, save the launch parameters to the full
   // restore file.
-  if (SessionID::IsValidValue(params.restore_id)) {
-    RecordAppLaunchMetrics(
-        profile_, apps::mojom::AppType::kExtension, params.app_id,
-        apps::mojom::LaunchSource::kFromFullRestore, params.container);
+  if (SessionID::IsValidValue(restore_id)) {
+    RecordAppLaunchMetrics(profile, apps::AppType::kChromeApp, app_id,
+                           apps::LaunchSource::kFromFullRestore,
+                           params.container);
 
-    AppLaunchParams params_for_restore(
-        params.app_id, params.container, params.disposition, params.source,
-        params.display_id, params.launch_files, params.intent);
-
-    auto launch_info = std::make_unique<full_restore::AppLaunchInfo>(
+    auto launch_info = std::make_unique<app_restore::AppLaunchInfo>(
         params_for_restore.app_id, params_for_restore.container,
         params_for_restore.disposition, params_for_restore.display_id,
         std::move(params_for_restore.launch_files),
         std::move(params_for_restore.intent));
-    full_restore::SaveAppLaunchInfo(profile_->GetPath(),
-                                    std::move(launch_info));
+    full_restore::SaveAppLaunchInfo(profile->GetPath(), std::move(launch_info));
   } else {
-    RecordAppLaunchMetrics(profile_, apps::mojom::AppType::kExtension,
-                           params.app_id, GetLaunchSource(params.source),
-                           params.container);
+    RecordAppLaunchMetrics(profile, apps::AppType::kChromeApp, params.app_id,
+                           params.launch_source, params.container);
   }
-#endif
-
-  return ::OpenApplication(profile_, std::move(params));
+#endif  // BUILDFLAG(IS_CHROMEOS)
+  std::move(on_complete).Run(::OpenApplication(profile, std::move(params)));
 }
+}  // namespace
 
-void BrowserAppLauncher::LaunchAppWithCallback(
-    const std::string& app_id,
-    const base::CommandLine& command_line,
-    const base::FilePath& current_directory,
-    const absl::optional<GURL>& url_handler_launch_url,
-    const absl::optional<GURL>& protocol_handler_launch_url,
-    base::OnceCallback<void(Browser* browser,
-                            apps::mojom::LaunchContainer container)> callback) {
-  // old-style app shortcuts
-  if (app_id.empty()) {
-    ::LaunchAppWithCallback(profile_, app_id, command_line, current_directory,
-                            std::move(callback));
-    return;
-  }
+namespace apps {
 
-  const extensions::Extension* extension =
-      extensions::ExtensionRegistry::Get(profile_)->GetInstalledExtension(
-          app_id);
-  if (!extension || extension->from_bookmark()) {
-    web_app_launch_manager_.LaunchApplication(
-        app_id, command_line, current_directory, url_handler_launch_url,
-        protocol_handler_launch_url, std::move(callback));
-    return;
-  }
+BrowserAppLauncher::BrowserAppLauncher(Profile* profile) : profile_(profile) {}
 
-  ::LaunchAppWithCallback(profile_, app_id, command_line, current_directory,
-                          std::move(callback));
+BrowserAppLauncher::~BrowserAppLauncher() = default;
+
+content::WebContents* BrowserAppLauncher::LaunchAppWithParamsForTesting(
+    AppLaunchParams params) {
+  // For some ChromeOS tests (and specifically ones that use SpeechMonitor),
+  // they use a base::RunLoop already to wait for accessibility tasks to
+  // complete. Because that makes this base::RunLoop nested,
+  // `kNestableTasksAllowed` is required to allow the posted launch command to
+  // execute, as it is not a system task.
+  base::RunLoop launch_waiter(base::RunLoop::Type::kNestableTasksAllowed);
+  content::WebContents* web_contents_holder;
+  LaunchAppWithParamsImpl(
+      std::move(params), profile_,
+      base::BindOnce(
+          [](base::OnceClosure done, content::WebContents** output,
+             content::WebContents* contents) {
+            *output = contents;
+            std::move(done).Run();
+          },
+          launch_waiter.QuitClosure(), &web_contents_holder));
+  launch_waiter.Run();
+  return web_contents_holder;
 }
 
 }  // namespace apps

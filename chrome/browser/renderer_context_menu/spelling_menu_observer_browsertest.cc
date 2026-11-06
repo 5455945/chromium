@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,6 @@
 
 #include <memory>
 
-#include "base/macros.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/values.h"
@@ -31,34 +30,35 @@ namespace {
 // accesses resources.
 class SpellingMenuObserverTest : public InProcessBrowserTest {
  public:
-  SpellingMenuObserverTest();
+  SpellingMenuObserverTest() = default;
 
   void SetUpOnMainThread() override {
     Reset(false);
 
-#if defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
-    // Windows versions that don't support platform
-    // spellchecker fallback to Hunspell.
-    if (!spellcheck::WindowsVersionSupportsSpellchecker())
-      return;
-
+#if BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
     base::ListValue dictionary;
-    dictionary.AppendString("en-US");
-    menu()->GetPrefs()->Set(spellcheck::prefs::kSpellCheckDictionaries,
-                            dictionary);
+    dictionary.Append("en-US");
+    menu()->GetPrefs()->SetList(spellcheck::prefs::kSpellCheckDictionaries,
+                                std::move(dictionary));
     // Use SetTestingFactoryAndUse to force creation and initialization of
     // SpellcheckService using the TestingProfile browser context.
     SpellcheckServiceFactory::GetInstance()->SetTestingFactoryAndUse(
         menu()->GetBrowserContext(),
         base::BindRepeating(&SpellingMenuObserverTest::BuildSpellcheckService,
                             base::Unretained(this)));
-#endif  // defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+#endif  // BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
   }
 
-#if defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+#if BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
   std::unique_ptr<KeyedService> BuildSpellcheckService(
       content::BrowserContext* context) {
     auto spellcheck_service = std::make_unique<SpellcheckService>(context);
+
+    // With delayed initialization, we need to initialize dictionaries.
+    spellcheck_service->InitializeDictionaries(
+        base::BindOnce(&SpellingMenuObserverTest::OnSuggestionsComplete,
+                       base::Unretained(this)));
+    RunUntilCallbackReceived();
 
     // Call SetLanguage to assure that the platform spellchecker is initialized.
     spellcheck_platform::SetLanguage(
@@ -94,7 +94,7 @@ class SpellingMenuObserverTest : public InProcessBrowserTest {
     // Reset status.
     callback_received_ = false;
   }
-#endif  // defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+#endif  // BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
 
   void TearDownOnMainThread() override {
     observer_.reset();
@@ -116,17 +116,15 @@ class SpellingMenuObserverTest : public InProcessBrowserTest {
     if (suggestion)
       params.dictionary_suggestions.push_back(base::ASCIIToUTF16(suggestion));
 
-#if defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+#if BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
     // Expect early return if word is spelled correctly.
     if (params.misspelled_word.empty())
       callback_received_ = true;
 
-    if (spellcheck::WindowsVersionSupportsSpellchecker()) {
-      observer_->RegisterSuggestionsCompleteCallbackForTesting(
-          base::BindOnce(&SpellingMenuObserverTest::OnSuggestionsComplete,
-                         base::Unretained(this)));
-    }
-#endif  // defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+    observer_->RegisterSuggestionsCompleteCallbackForTesting(
+        base::BindOnce(&SpellingMenuObserverTest::OnSuggestionsComplete,
+                       base::Unretained(this)));
+#endif  // BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
 
     observer_->InitMenu(params);
 
@@ -134,10 +132,9 @@ class SpellingMenuObserverTest : public InProcessBrowserTest {
     // menu items. Doesn't hurt for non-Windows platforms either.
     observer_->OnContextMenuShown(params, gfx::Rect());
 
-#if defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
-    if (spellcheck::WindowsVersionSupportsSpellchecker())
-      RunUntilCallbackReceived();
-#endif  // defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+#if BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+    RunUntilCallbackReceived();
+#endif  // BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
   }
 
   void ForceSuggestMode() {
@@ -145,15 +142,18 @@ class SpellingMenuObserverTest : public InProcessBrowserTest {
         spellcheck::prefs::kSpellCheckUseSpellingService, true);
     // Force a non-empty and non-"en" locale so SUGGEST is available.
     base::ListValue dictionary;
-    dictionary.AppendString("fr");
-    menu()->GetPrefs()->Set(spellcheck::prefs::kSpellCheckDictionaries,
-                            dictionary);
+    dictionary.Append("fr");
+    menu()->GetPrefs()->SetList(spellcheck::prefs::kSpellCheckDictionaries,
+                                std::move(dictionary));
 
     ASSERT_TRUE(SpellingServiceClient::IsAvailable(
         menu()->GetBrowserContext(), SpellingServiceClient::SUGGEST));
     ASSERT_FALSE(SpellingServiceClient::IsAvailable(
         menu()->GetBrowserContext(), SpellingServiceClient::SPELLCHECK));
   }
+
+  SpellingMenuObserverTest(const SpellingMenuObserverTest&) = delete;
+  SpellingMenuObserverTest& operator=(const SpellingMenuObserverTest&) = delete;
 
   ~SpellingMenuObserverTest() override;
   MockRenderViewContextMenu* menu() { return menu_.get(); }
@@ -162,7 +162,7 @@ class SpellingMenuObserverTest : public InProcessBrowserTest {
   std::unique_ptr<SpellingMenuObserver> observer_;
   std::unique_ptr<MockRenderViewContextMenu> menu_;
 
-#if defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+#if BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
   // Quits the RunLoop on receiving callbacks.
   base::OnceClosure quit_;
 
@@ -170,21 +170,8 @@ class SpellingMenuObserverTest : public InProcessBrowserTest {
   bool callback_received_ = false;
 
   base::test::ScopedFeatureList feature_list_;
-#endif  // defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
-
-  DISALLOW_COPY_AND_ASSIGN(SpellingMenuObserverTest);
+#endif  // BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
 };
-
-#if defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
-SpellingMenuObserverTest::SpellingMenuObserverTest() {
-  feature_list_.InitWithFeatures(
-      /*enabled_features=*/{spellcheck::kWinUseBrowserSpellChecker,
-                            spellcheck::kWinRetrieveSuggestionsOnlyOnDemand},
-      /*disabled_features=*/{spellcheck::kWinDelaySpellcheckServiceInit});
-}
-#else
-SpellingMenuObserverTest::SpellingMenuObserverTest() = default;
-#endif  // defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
 
 SpellingMenuObserverTest::~SpellingMenuObserverTest() = default;
 
@@ -220,15 +207,11 @@ IN_PROC_BROWSER_TEST_F(SpellingMenuObserverTest, InitMenuWithMisspelledWord) {
   menu()->GetMenuItem(2, &item);
 }
 
-#if defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+#if BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
 // Tests that right-clicking a misspelled word that is identified as misspelled
 // by both Hunspell and Windows platform combines their suggestions.
 IN_PROC_BROWSER_TEST_F(SpellingMenuObserverTest,
                        WinInitMenuWithMisspelledWordCombined) {
-  // Test invalid for Windows versions that don't support platform spellchecker.
-  if (!spellcheck::WindowsVersionSupportsSpellchecker())
-    return;
-
   InitMenu("mispelled", "misspelling");
   EXPECT_EQ(6U, menu()->GetMenuSize());
 
@@ -275,10 +258,6 @@ IN_PROC_BROWSER_TEST_F(SpellingMenuObserverTest,
 // single suggestion.
 IN_PROC_BROWSER_TEST_F(SpellingMenuObserverTest,
                        WinInitMenuWithMisspelledWordNoDuplicateSuggestions) {
-  // Test invalid for Windows versions that don't support platform spellchecker.
-  if (!spellcheck::WindowsVersionSupportsSpellchecker())
-    return;
-
   InitMenu("mispelled", "misspelled");
   EXPECT_EQ(5U, menu()->GetMenuSize());
 
@@ -319,15 +298,23 @@ IN_PROC_BROWSER_TEST_F(SpellingMenuObserverTest,
 // 3 suggestions.
 IN_PROC_BROWSER_TEST_F(SpellingMenuObserverTest,
                        WinInitMenuWithMisspelledWordMaxSuggestions) {
-  // Test invalid for Windows versions that don't support platform spellchecker.
-  if (!spellcheck::WindowsVersionSupportsSpellchecker())
-    return;
-
   InitMenu("wtree", "wee");
   EXPECT_EQ(7U, menu()->GetMenuSize());
 
+  std::set<std::u16string> suggestions(
+      {u"tree", u"twee", u"wee", u"ware", u"were"});
+  bool wee_suggested = false;
+  for (unsigned int i = 1; i < menu()->GetMenuSize(); i++) {
+    MockRenderViewContextMenu::MockMenuItem item;
+    menu()->GetMenuItem(i, &item);
+    if (!item.title.compare(u"wee")) {
+      wee_suggested = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(wee_suggested);
   // Read all the context-menu items added by this test and verify they are
-  // expected ones.
+  // among the expected possibilities.
   MockRenderViewContextMenu::MockMenuItem item;
   // First separator.
   menu()->GetMenuItem(0, &item);
@@ -339,19 +326,19 @@ IN_PROC_BROWSER_TEST_F(SpellingMenuObserverTest,
   EXPECT_EQ(IDC_SPELLCHECK_SUGGESTION_0, item.command_id);
   EXPECT_TRUE(item.enabled);
   EXPECT_FALSE(item.hidden);
-  EXPECT_EQ(u"tree", item.title);
+  EXPECT_TRUE(suggestions.contains(item.title));
   // Second suggestion.
   menu()->GetMenuItem(2, &item);
   EXPECT_EQ(IDC_SPELLCHECK_SUGGESTION_0 + 1, item.command_id);
   EXPECT_TRUE(item.enabled);
   EXPECT_FALSE(item.hidden);
-  EXPECT_EQ(u"wee", item.title);
+  EXPECT_TRUE(suggestions.contains(item.title));
   // Third suggestion.
   menu()->GetMenuItem(3, &item);
   EXPECT_EQ(IDC_SPELLCHECK_SUGGESTION_0 + 2, item.command_id);
   EXPECT_TRUE(item.enabled);
   EXPECT_FALSE(item.hidden);
-  EXPECT_EQ(u"were", item.title);
+  EXPECT_TRUE(suggestions.contains(item.title));
   // Second separator.
   menu()->GetMenuItem(4, &item);
   EXPECT_EQ(-1, item.command_id);
@@ -369,7 +356,7 @@ IN_PROC_BROWSER_TEST_F(SpellingMenuObserverTest,
   EXPECT_FALSE(item.checked);
   EXPECT_FALSE(item.hidden);
 }
-#endif  // defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+#endif  // BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
 
 // Tests that right-clicking a correct word when we enable spelling-service
 // integration to verify an item "Use enhanced spell check" is checked. Even
@@ -393,8 +380,8 @@ IN_PROC_BROWSER_TEST_F(SpellingMenuObserverTest, EnableSpellingService) {
   menu()->GetPrefs()->SetBoolean(
       spellcheck::prefs::kSpellCheckUseSpellingService, true);
   base::ListValue dictionary;
-  menu()->GetPrefs()->Set(spellcheck::prefs::kSpellCheckDictionaries,
-                          dictionary);
+  menu()->GetPrefs()->SetList(spellcheck::prefs::kSpellCheckDictionaries,
+                              std::move(dictionary));
 
   // Pick word that Windows platform spellcheck has no suggestions for.
   InitMenu("missssspelling", nullptr);
@@ -432,16 +419,23 @@ IN_PROC_BROWSER_TEST_F(SpellingMenuObserverTest,
 
 // Test that we don't show "No more suggestions from Google" if the spelling
 // service is enabled and that there is only one suggestion.
+// TODO(crbug.com/434222699): Fix flakiness and re-enable on Windows.
+#if BUILDFLAG(IS_WIN)
+#define MAYBE_NoMoreSuggestionsNotDisplayed \
+  DISABLED_NoMoreSuggestionsNotDisplayed
+#else
+#define MAYBE_NoMoreSuggestionsNotDisplayed NoMoreSuggestionsNotDisplayed
+#endif
 IN_PROC_BROWSER_TEST_F(SpellingMenuObserverTest,
-                       NoMoreSuggestionsNotDisplayed) {
+                       MAYBE_NoMoreSuggestionsNotDisplayed) {
   menu()->GetPrefs()->SetBoolean(
       spellcheck::prefs::kSpellCheckUseSpellingService, true);
 
   // Force a non-empty locale so SPELLCHECK is available.
   base::ListValue dictionary;
-  dictionary.AppendString("en");
-  menu()->GetPrefs()->Set(spellcheck::prefs::kSpellCheckDictionaries,
-                          dictionary);
+  dictionary.Append("en");
+  menu()->GetPrefs()->SetList(spellcheck::prefs::kSpellCheckDictionaries,
+                              std::move(dictionary));
 
   EXPECT_TRUE(SpellingServiceClient::IsAvailable(
       menu()->GetBrowserContext(), SpellingServiceClient::SPELLCHECK));
@@ -480,8 +474,8 @@ IN_PROC_BROWSER_TEST_F(SpellingMenuObserverTest,
   EXPECT_FALSE(item.hidden);
 }
 
-// crbug.com/899935
-#if defined(OS_WIN)
+// crbug.com/41423263
+#if BUILDFLAG(IS_WIN)
 #define MAYBE_NoSpellingServiceWhenOffTheRecord \
   DISABLED_NoSpellingServiceWhenOffTheRecord
 #else
@@ -506,9 +500,9 @@ IN_PROC_BROWSER_TEST_F(SpellingMenuObserverTest,
 
   // Force a non-empty locale so SUGGEST normally would be available.
   base::ListValue dictionary;
-  dictionary.AppendString("en");
-  menu()->GetPrefs()->Set(spellcheck::prefs::kSpellCheckDictionaries,
-                          dictionary);
+  dictionary.Append("en");
+  menu()->GetPrefs()->SetList(spellcheck::prefs::kSpellCheckDictionaries,
+                              std::move(dictionary));
 
   EXPECT_FALSE(SpellingServiceClient::IsAvailable(
       menu()->GetBrowserContext(), SpellingServiceClient::SUGGEST));
@@ -535,8 +529,8 @@ IN_PROC_BROWSER_TEST_F(SpellingMenuObserverTest,
   EXPECT_FALSE(item.hidden);
 }
 
-// crbug.com/899935
-#if defined(OS_WIN)
+// crbug.com/41423263
+#if BUILDFLAG(IS_WIN)
 #define MAYBE_SuggestionsForceTopSeparator DISABLED_SuggestionsForceTopSeparator
 #else
 #define MAYBE_SuggestionsForceTopSeparator SuggestionsForceTopSeparator

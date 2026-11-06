@@ -1,17 +1,17 @@
-# Copyright (c) 2012 The Chromium Authors. All rights reserved.
+# Copyright 2012 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-"""Miscellaneous node types.
-"""
+"""Miscellaneous node types."""
 
-from __future__ import print_function
-
+import gc
+import multiprocessing
+import os
 import os.path
 import re
 import sys
-
-import six
+import threading
+import traceback
 
 from grit import constants
 from grit import exception
@@ -34,22 +34,22 @@ except NameError:
 # TODO(jennyz): remove this fixed set of RTL language array
 # now that generic expand_variable code exists.
 _RTL_LANGS = (
-    'ar',  # Arabic
-    'fa',  # Farsi
-    'iw',  # Hebrew
-    'ks',  # Kashmiri
-    'ku',  # Kurdish
-    'ps',  # Pashto
-    'ur',  # Urdu
-    'yi',  # Yiddish
+  'ar',  # Arabic
+  'fa',  # Farsi
+  'iw',  # Hebrew
+  'ks',  # Kashmiri
+  'ku',  # Kurdish
+  'ps',  # Pashto
+  'ur',  # Urdu
+  'yi',  # Yiddish
 )
 
 
 def _GetIdMapKeyFromFilename(filename, src_root_dir):
   new_grd_filename = filename
   abs_grd_filename = os.path.abspath(filename)
-  if abs_grd_filename[:len(src_root_dir)] == src_root_dir:
-    new_grd_filename = abs_grd_filename[len(src_root_dir) + 1:]
+  if abs_grd_filename[: len(src_root_dir)] == src_root_dir:
+    new_grd_filename = abs_grd_filename[len(src_root_dir) + 1 :]
   else:
     new_grd_filename = abs_grd_filename
 
@@ -65,8 +65,9 @@ def _ReadFirstIdsFromFile(filename, defines):
   first_ids dictionary.
   """
   first_ids_dict = eval(util.ReadFile(filename, 'utf-8'))
-  src_root_dir = os.path.abspath(os.path.join(os.path.dirname(filename),
-                                              first_ids_dict['SRCDIR']))
+  src_root_dir = os.path.abspath(
+    os.path.join(os.path.dirname(filename), first_ids_dict['SRCDIR'])
+  )
   EMPTY_REPLACEMENT = 'EMPTY'
 
   def ReplaceVariable(matchobj):
@@ -77,28 +78,30 @@ def _ReadFirstIdsFromFile(filename, defines):
 
   renames = []
   for grd_filename in first_ids_dict:
-    new_grd_filename = re.sub(r'<\(([A-Za-z_]+)\)', ReplaceVariable,
-                              grd_filename)
+    new_grd_filename = re.sub(
+      r'<\(([A-Za-z_]+)\)', ReplaceVariable, grd_filename
+    )
     new_grd_filename = new_grd_filename.replace('\\', '/')
 
     if new_grd_filename != grd_filename:
       # Empty or failed replacements at the start of the path can cause the path
       # to appear to be absolute, when it in fact represents the path from the
       # current (output) directory. Replace these with '.' instead.
-      if (new_grd_filename.startswith(EMPTY_REPLACEMENT + '/')):
-        new_grd_filename = '.' + new_grd_filename[len(EMPTY_REPLACEMENT):]
+      if new_grd_filename.startswith(EMPTY_REPLACEMENT + '/'):
+        new_grd_filename = '.' + new_grd_filename[len(EMPTY_REPLACEMENT) :]
 
       # Any other empty replacements in the middle of the path can be left
       # as-is.
       new_grd_filename = new_grd_filename.replace(EMPTY_REPLACEMENT, '')
-      new_grd_filename = _GetIdMapKeyFromFilename(new_grd_filename,
-                                                  src_root_dir)
+      new_grd_filename = _GetIdMapKeyFromFilename(
+        new_grd_filename, src_root_dir
+      )
       renames.append((grd_filename, new_grd_filename))
 
   for grd_filename, new_grd_filename in renames:
     assert new_grd_filename not in first_ids_dict
     first_ids_dict[new_grd_filename] = first_ids_dict[grd_filename]
-    del(first_ids_dict[grd_filename])
+    del first_ids_dict[grd_filename]
 
   return (src_root_dir, first_ids_dict)
 
@@ -123,20 +126,44 @@ def _ComputeIds(root, predetermined_tids):
   id_reasons = {}  # Maps numeric id to text id and a human-readable explanation
   group = None
   last_id = None
-  predetermined_ids = {value: key
-                       for key, value in predetermined_tids.items()}
+  predetermined_ids = {value: key for key, value in predetermined_tids.items()}
+
+  # For entries that set in their first_ids_file (generated .grd files):
+  # "META": {"sizes": {"includes": [50]}}
+  # Check that "sizes" was big enough.
+  def check_group_count():
+    if root.skip_validation_checks or group is None or last_id is None:
+      return
+    max_ids = group.attrs.get('max_ids')
+    if max_ids is not None:
+      first_id = int(group.attrs['first_id'])
+      num_ids = last_id - first_id + 1
+      if num_ids > int(max_ids):
+        msg = (
+          'Generated .grd file used more IDs (%d) than were allocated '
+          'for it (%s) for type %s. You need to update %s '
+          'for this .grd.'
+        ) % (num_ids, max_ids, group.name, root.attrs['first_ids_file'])
+        raise exception.IdRangeOverflow(msg)
 
   for item in root:
     if isinstance(item, empty.GroupingNode):
+      check_group_count()
       # Note: this won't work if any GroupingNode can be contained inside
       # another.
       group = item
       last_id = None
       continue
 
-    assert not item.GetTextualIds() or isinstance(item,
-        (include.IncludeNode, message.MessageNode,
-         misc.IdentifierNode, structure.StructureNode))
+    assert not item.GetTextualIds() or isinstance(
+      item,
+      (
+        include.IncludeNode,
+        message.MessageNode,
+        misc.IdentifierNode,
+        structure.StructureNode,
+      ),
+    )
 
     # Resources that use the RES protocol don't need
     # any numerical ids generated, so we skip them altogether.
@@ -163,8 +190,11 @@ def _ComputeIds(root, predetermined_tids):
         id = long(item.GetId())
         reason = 'returned by GetId() method'
 
-      elif ('offset' in item.attrs and group and
-            group.attrs.get('first_id', '') != ''):
+      elif (
+        'offset' in item.attrs
+        and group
+        and group.attrs.get('first_id', '') != ''
+      ):
         offset_text = item.attrs['offset']
         parent_text = group.attrs['first_id']
 
@@ -217,23 +247,30 @@ def _ComputeIds(root, predetermined_tids):
       reason = "%s (%s)" % (tid, reason)
       # Don't fail when 'offset' is specified, as the base and the 0th
       # offset will have the same ID.
-      if id in id_reasons and not 'offset' in item.attrs:
-        raise exception.IdRangeOverlap('ID %d was assigned to both %s and %s.'
-                                       % (id, id_reasons[id], reason))
+      if id in id_reasons and 'offset' not in item.attrs:
+        raise exception.IdRangeOverlap(
+          'ID %d was assigned to both %s and %s.' % (id, id_reasons[id], reason)
+        )
 
       if id < 101:
-        print('WARNING: Numeric resource IDs should be greater than 100 to\n'
-              'avoid conflicts with system-defined resource IDs.')
+        print(
+          'WARNING: Numeric resource IDs should be greater than 100 to\n'
+          'avoid conflicts with system-defined resource IDs.'
+        )
 
       if tid not in predetermined_tids and id in predetermined_ids:
-        raise exception.IdRangeOverlap('ID %d overlaps between %s and %s'
-                                       % (id, tid, predetermined_ids[tid]))
+        raise exception.IdRangeOverlap(
+          'ID %d overlaps between %s and %s' % (id, tid, predetermined_ids[id])
+        )
 
       ids[id] = tid
       tids[tid] = id
       id_reasons[id] = reason
 
+  check_group_count()
+
   return tids
+
 
 class SplicingNode(base.Node):
   """A node whose children should be considered to be at the same level as
@@ -248,24 +285,28 @@ class SplicingNode(base.Node):
 
 
 class IfNode(SplicingNode):
-  """A node for conditional inclusion of resources.
-  """
+  """A node for conditional inclusion of resources."""
 
   def MandatoryAttributes(self):
     return ['expr']
 
   def _IsValidChild(self, child):
-    return (isinstance(child, (ThenNode, ElseNode)) or
-            super(IfNode, self)._IsValidChild(child))
+    return isinstance(child, (ThenNode, ElseNode)) or super()._IsValidChild(
+      child
+    )
 
   def EndParsing(self):
     children = self.children
     self.if_then_else = False
     if any(isinstance(node, (ThenNode, ElseNode)) for node in children):
-      if (len(children) != 2 or not isinstance(children[0], ThenNode) or
-                                not isinstance(children[1], ElseNode)):
+      if (
+        len(children) != 2
+        or not isinstance(children[0], ThenNode)
+        or not isinstance(children[1], ElseNode)
+      ):
         raise exception.UnexpectedChild(
-            '<if> element must be <if><then>...</then><else>...</else></if>')
+          '<if> element must be <if><then>...</then><else>...</else></if>'
+        )
       self.if_then_else = True
 
   def ActiveChildren(self):
@@ -274,32 +315,33 @@ class IfNode(SplicingNode):
       return self.children[0 if cond else 1].ActiveChildren()
     else:
       # Equivalent to having all children inside <then> with an empty <else>
-      return super(IfNode, self).ActiveChildren() if cond else []
+      return super().ActiveChildren() if cond else []
 
 
 class ThenNode(SplicingNode):
   """A <then> node. Can only appear directly inside an <if> node."""
+
   pass
 
 
 class ElseNode(SplicingNode):
   """An <else> node. Can only appear directly inside an <if> node."""
+
   pass
 
 
 class PartNode(SplicingNode):
-  """A node for inclusion of sub-grd (*.grp) files.
-  """
+  """A node for inclusion of sub-grd (*.grp) files."""
 
   def __init__(self):
-    super(PartNode, self).__init__()
+    super().__init__()
     self.started_inclusion = False
 
   def MandatoryAttributes(self):
     return ['file']
 
   def _IsValidChild(self, child):
-    return self.started_inclusion and super(PartNode, self)._IsValidChild(child)
+    return self.started_inclusion and super()._IsValidChild(child)
 
 
 class ReleaseNode(base.Node):
@@ -307,27 +349,34 @@ class ReleaseNode(base.Node):
 
   def _IsValidChild(self, child):
     from grit.node import empty
-    return isinstance(child, (empty.IncludesNode, empty.MessagesNode,
-                              empty.StructuresNode, empty.IdentifiersNode))
+
+    return isinstance(
+      child,
+      (
+        empty.IncludesNode,
+        empty.MessagesNode,
+        empty.StructuresNode,
+        empty.IdentifiersNode,
+      ),
+    )
 
   def _IsValidAttribute(self, name, value):
     return (
-      (name == 'seq' and int(value) <= self.GetRoot().GetCurrentRelease()) or
-      name == 'allow_pseudo'
-    )
+      name == 'seq' and int(value) <= self.GetRoot().GetCurrentRelease()
+    ) or name == 'allow_pseudo'
 
   def MandatoryAttributes(self):
     return ['seq']
 
   def DefaultAttributes(self):
-    return { 'allow_pseudo' : 'true' }
+    return {'allow_pseudo': 'true'}
 
 
 class GritNode(base.Node):
   """The <grit> root element."""
 
   def __init__(self):
-    super(GritNode, self).__init__()
+    super().__init__()
     self.output_language = ''
     self.defines = {}
     self.substituter = None
@@ -336,19 +385,33 @@ class GritNode(base.Node):
     self._predetermined_ids_file = None
     self._id_map = None  # Dict of textual_id -> numeric_id.
 
+    # Option to skip any post-parsing validation, useful when only interested
+    # in getting a reference to the parse tree.
+    self.skip_validation_checks = False
+
   def _IsValidChild(self, child):
     from grit.node import empty
-    return isinstance(child, (ReleaseNode, empty.TranslationsNode,
-                              empty.OutputsNode))
+
+    return isinstance(
+      child, (ReleaseNode, empty.TranslationsNode, empty.OutputsNode)
+    )
 
   def _IsValidAttribute(self, name, value):
-    if name not in ['base_dir', 'first_ids_file', 'source_lang_id',
-                    'latest_public_release', 'current_release',
-                    'enc_check', 'tc_project', 'grit_version',
-                    'output_all_resource_defines']:
+    if name not in [
+      'base_dir',
+      'first_ids_file',
+      'source_lang_id',
+      'latest_public_release',
+      'current_release',
+      'enc_check',
+      'tc_project',
+      'grit_version',
+    ]:
       return False
-    if name in ['latest_public_release', 'current_release'] and value.strip(
-      '0123456789') != '':
+    if (
+      name in ['latest_public_release', 'current_release']
+      and value.strip('0123456789') != ''
+    ):
       return False
     return True
 
@@ -357,20 +420,25 @@ class GritNode(base.Node):
 
   def DefaultAttributes(self):
     return {
-      'base_dir' : '.',
+      'base_dir': '.',
       'first_ids_file': '',
       'grit_version': 1,
-      'source_lang_id' : 'en',
-      'enc_check' : constants.ENCODING_CHECK,
-      'tc_project' : 'NEED_TO_SET_tc_project_ATTRIBUTE',
+      'source_lang_id': 'en',
+      'enc_check': constants.ENCODING_CHECK,
+      'tc_project': 'NEED_TO_SET_tc_project_ATTRIBUTE',
     }
 
   def EndParsing(self):
-    super(GritNode, self).EndParsing()
-    if (int(self.attrs['latest_public_release'])
-        > int(self.attrs['current_release'])):
-      raise exception.Parsing('latest_public_release cannot have a greater '
-                              'value than current_release')
+    super().EndParsing()
+    if int(self.attrs['latest_public_release']) > int(
+      self.attrs['current_release']
+    ):
+      raise exception.Parsing(
+        'latest_public_release cannot have a greater value than current_release'
+      )
+
+    if self.skip_validation_checks:
+      return
 
     self.ValidateUniqueIds()
 
@@ -381,7 +449,8 @@ class GritNode(base.Node):
       self.attrs['enc_check'] = constants.ENCODING_CHECK
     else:
       assert self.attrs['enc_check'] == constants.ENCODING_CHECK, (
-        'Are you sure your .grd file is in the correct encoding (UTF-8)?')
+        'Are you sure your .grd file is in the correct encoding (UTF-8)?'
+      )
 
   def ValidateUniqueIds(self):
     """Validate that 'name' attribute is unique in all nodes in this tree
@@ -406,7 +475,6 @@ class GritNode(base.Node):
 
     if len(duplicate_names):
       raise exception.DuplicateKey(', '.join(duplicate_names))
-
 
   def GetCurrentRelease(self):
     """Returns the current release number."""
@@ -449,8 +517,7 @@ class GritNode(base.Node):
       return self.GetOriginalBaseDir()
 
   def GetOriginalBaseDir(self):
-    """Returns the base directory, as set in the .grd file.
-    """
+    """Returns the base directory, as set in the .grd file."""
     return self.attrs['base_dir']
 
   def IsAllowlistSupportEnabled(self):
@@ -463,7 +530,6 @@ class GritNode(base.Node):
     """Returns the list of files that are read to produce the output."""
 
     # Importing this here avoids a circular dependency in the imports.
-    # pylint: disable-msg=C6204
     from grit.node import include
     from grit.node import misc
     from grit.node import structure
@@ -483,15 +549,23 @@ class GritNode(base.Node):
       self.SetFallbackToDefaultLayout(fallback)
 
       for node in self.ActiveDescendants():
-        if isinstance(node, (node_io.FileNode, include.IncludeNode,
-                             structure.StructureNode, variant.SkeletonNode)):
+        if isinstance(
+          node,
+          (
+            node_io.FileNode,
+            include.IncludeNode,
+            structure.StructureNode,
+            variant.SkeletonNode,
+          ),
+        ):
           input_path = node.GetInputPath()
           if input_path is not None:
             input_files.add(self.ToRealPath(input_path))
 
           # If it's a flattened node, grab inlined resources too.
-          if ((node.name == 'structure' or node.name == 'include')
-              and node.attrs['flattenhtml'] == 'true'):
+          if (
+            node.name == 'structure' or node.name == 'include'
+          ) and node.attrs['flattenhtml'] == 'true':
             if node.name == 'structure':
               node.RunPreSubstitutionGatherer()
             input_files.update(node.GetHtmlResourceFilenames())
@@ -513,9 +587,11 @@ class GritNode(base.Node):
 
     path = self.attrs['first_ids_file']
     GRIT_DIR_PREFIX = 'GRIT_DIR'
-    if (path.startswith(GRIT_DIR_PREFIX)
-        and path[len(GRIT_DIR_PREFIX)] in ['/', '\\']):
-      return util.PathFromRoot(path[len(GRIT_DIR_PREFIX) + 1:])
+    if path.startswith(GRIT_DIR_PREFIX) and path[len(GRIT_DIR_PREFIX)] in [
+      '/',
+      '\\',
+    ]:
+      return util.PathFromRoot(path[len(GRIT_DIR_PREFIX) + 1 :])
     else:
       return self.ToRealPath(path)
 
@@ -525,22 +601,28 @@ class GritNode(base.Node):
     """
     for child in self.children:
       if child.name == 'outputs':
-        return [node for node in child.ActiveDescendants()
-                     if node.name == 'output']
+        return [
+          node for node in child.ActiveDescendants() if node.name == 'output'
+        ]
     raise exception.MissingElement()
 
   def GetConfigurations(self):
     """Returns the distinct (language, context, fallback_to_default_layout)
     triples from the output nodes.
     """
-    return set((n.GetLanguage(), n.GetContext(), n.GetFallbackToDefaultLayout())
-               for n in self.GetOutputFiles())
+    return {
+      (n.GetLanguage(), n.GetContext(), n.GetFallbackToDefaultLayout())
+      for n in self.GetOutputFiles()
+    }
 
   def GetSubstitutionMessages(self):
     """Returns the list of <message sub_variable="true"> nodes."""
-    return [n for n in self.ActiveDescendants()
-            if isinstance(n, message.MessageNode)
-                and n.attrs['sub_variable'] == 'true']
+    return [
+      n
+      for n in self.ActiveDescendants()
+      if isinstance(n, message.MessageNode)
+      and n.attrs['sub_variable'] == 'true'
+    ]
 
   def SetOutputLanguage(self, output_language):
     """Set the output language. Prepares substitutions.
@@ -579,17 +661,21 @@ class GritNode(base.Node):
   def GetSubstituter(self):
     if self.substituter is None:
       self.substituter = util.Substituter()
-      self.substituter.AddMessages(self.GetSubstitutionMessages(),
-                                   self.output_language)
+      self.substituter.AddMessages(
+        self.GetSubstitutionMessages(), self.output_language
+      )
       if self.output_language in _RTL_LANGS:
         direction = 'dir="RTL"'
       else:
         direction = 'dir="LTR"'
-      self.substituter.AddSubstitutions({
+      self.substituter.AddSubstitutions(
+        {
           'GRITLANGCODE': self.output_language,
           'GRITDIR': direction,
-      })
+        }
+      )
       from grit.format import rc  # avoid circular dep
+
       rc.RcSubstitutions(self.substituter, self.output_language)
     return self.substituter
 
@@ -600,7 +686,7 @@ class GritNode(base.Node):
     assert self._id_map is None, 'AssignFirstIds() after InitializeIds()'
     # If the input is a stream, then we're probably in a unit test and
     # should skip this step.
-    if not isinstance(filename_or_stream, six.string_types):
+    if not isinstance(filename_or_stream, str):
       return
 
     # Nothing to do if the first_ids_filename attribute isn't set.
@@ -608,35 +694,39 @@ class GritNode(base.Node):
     if not first_ids_filename:
       return
 
-    src_root_dir, first_ids = _ReadFirstIdsFromFile(first_ids_filename,
-                                                    defines)
+    src_root_dir, first_ids = _ReadFirstIdsFromFile(first_ids_filename, defines)
     from grit.node import empty
-    for node in self.Preorder():
-      if isinstance(node, empty.GroupingNode):
-        filename = _GetIdMapKeyFromFilename(filename_or_stream, src_root_dir)
 
-        if node.attrs['first_id'] != '':
-          raise Exception(
-              "Don't set the first_id attribute when using the first_ids_file "
-              "attribute on the <grit> node, update %s instead." %
-              first_ids_filename)
+    grouping_nodes = [
+      n for n in self.Preorder() if isinstance(n, empty.GroupingNode)
+    ]
+    if not grouping_nodes:
+      return
 
-        try:
-          id_list = first_ids[filename][node.name]
-        except KeyError as e:
-          print('-' * 78)
-          print('Resource id not set for %s (%s)!' % (filename, node.name))
-          print('Please update %s to include an entry for %s.  See the '
-                'comments in resource_ids for information on why you need to '
-                'update that file.' % (first_ids_filename, filename))
-          print('-' * 78)
-          raise e
+    grd_filename = _GetIdMapKeyFromFilename(filename_or_stream, src_root_dir)
+    first_ids_dict = first_ids.get(grd_filename, {})
 
-        try:
-          node.attrs['first_id'] = str(id_list.pop(0))
-        except IndexError as e:
-          raise Exception('Please update %s and add a first id for %s (%s).'
-                          % (first_ids_filename, filename, node.name))
+    for node in grouping_nodes:
+      if node.attrs['first_id'] != '':
+        raise Exception(
+          "Don't set the first_id attribute when using the first_ids_file "
+          "attribute on the <grit> node. Update %s instead."
+          % first_ids_filename
+        )
+
+      try:
+        id_list = first_ids_dict[node.name]
+        node.attrs['first_id'] = str(id_list.pop(0))
+      except (KeyError, IndexError) as e:
+        raise Exception(
+          'Please update %s and add a first id for %s (%s).'
+          % (first_ids_filename, grd_filename, node.name)
+        )
+
+      # E.g.: "META": {"sizes": {"includes": [50]}}
+      sizes = first_ids_dict.get('META', {}).get('sizes', {}).get(node.name)
+      if sizes:
+        node.attrs['max_ids'] = str(sizes.pop(0))
 
   def GetIdMap(self):
     '''Return a dictionary mapping textual ids to numeric ids.'''
@@ -644,7 +734,8 @@ class GritNode(base.Node):
 
   def SetPredeterminedIdsFile(self, predetermined_ids_file):
     assert self._id_map is None, (
-        'SetPredeterminedIdsFile() after InitializeIds()')
+      'SetPredeterminedIdsFile() after InitializeIds()'
+    )
     self._predetermined_ids_file = predetermined_ids_file
 
   def InitializeIds(self):
@@ -676,10 +767,105 @@ class GritNode(base.Node):
     assert self.output_language
     self.SubstituteMessages(self.GetSubstituter())
 
-    for node in self.ActiveDescendants():
-      if hasattr(node, 'RunPostSubstitutionGatherer'):
+    post_nodes = [
+      node
+      for node in self.ActiveDescendants()
+      if hasattr(node, 'RunPostSubstitutionGatherer') and node.ShouldLoad()
+    ]
+    # Preserve sequential debug log output when --extra-verbose is used.
+    if not debug and len(post_nodes) > 1 and _CanFork():
+      self._RunPostSubstitutionGatherersConcurrently(post_nodes)
+    else:
+      for node in post_nodes:
         with node:
           node.RunPostSubstitutionGatherer(debug=debug)
+
+  def _RunPostSubstitutionGatherersConcurrently(self, post_nodes):
+    """Parses .xtb translation files across worker processes.
+
+    Shards `post_nodes` (where each element is a FileNode for one language's
+    .xtb file) across a fork pool. Workers run the XML parser and filter to
+    message IDs present in this .grd's UberClique, returning lightweight
+    (msg_id, structures) tuples that the parent process then registers into
+    UberClique in deterministic `post_nodes` order.
+    """
+    global _worker_nodes
+    # Benchmarked with generated_resources.grd (81 .xtb files) on a 96-core
+    # machine: Speedups level off after 8 workers (16 was no faster, and 32+
+    # was slower) because the parent's serial processing of the results
+    # dominates.
+    num_workers = min(8, _CpuCount(), len(post_nodes))
+    _worker_nodes = post_nodes
+    gc_enabled = gc.isenabled()
+    try:
+      # Disable cyclic GC during the parallel phase (~2x speedup):
+      # 1. In forked workers, prevents GC sweeps from modifying object headers
+      #    (gc_refs) across the inherited AST, avoiding Copy-On-Write page
+      #    faults.
+      # 2. In the parent process, prevents repeated O(N) Gen-2 GC scans while
+      #    unpickling results and allocating hundreds of thousands of cycle-free
+      #    tclib.Translation objects.
+      gc.disable()
+      with multiprocessing.get_context('fork').Pool(num_workers) as pool:
+        results = pool.map(_ParseXtbWorker, range(len(post_nodes)))
+
+      uber_clique = self.UberClique()
+      # Apply parsed translations in deterministic post_nodes order.
+      for node, matched in zip(post_nodes, results):
+        with node:
+          cb = uber_clique.GenerateXtbParserCallback(node.GetLang())
+          for msg_id, structures in matched:
+            cb(msg_id, structures)
+    finally:
+      _worker_nodes = None
+      # Restore GC state for callers that invoke RunGatherers() multiple times
+      # in the same process (e.g. unit tests or library callers).
+      if gc_enabled:
+        gc.enable()
+
+
+# Passed to forked workers via a module global (indexed by integer) so
+# multiprocessing.Pool does not attempt to pickle FileNode / GritNode ASTs.
+_worker_nodes = None
+
+
+def _CpuCount():
+  # Respect CPU affinity restrictions (e.g. on bots) where available.
+  if hasattr(os, 'sched_getaffinity'):
+    return len(os.sched_getaffinity(0))
+  return os.cpu_count() or 1
+
+
+def _CanFork():
+  return (
+    # Requires 'fork' so worker processes inherit _worker_nodes (and the rest
+    # of the parsed GritNode AST) via Copy-On-Write without pickling.
+    hasattr(os, 'fork')
+    # No benefit to spawning worker processes on a single-core machine.
+    and _CpuCount() > 1
+    # multiprocessing.Pool raises an AssertionError if created inside a
+    # daemonic process (e.g., when running under parallel unit test runners).
+    and not multiprocessing.current_process().daemon
+    # Forking a process that has other threads running is unsafe (they might
+    # be holding locks), so stick to a single process when used as a library.
+    and threading.active_count() == 1
+    # Allow test suites and debugging workflows to force single-process
+    # execution.
+    and os.environ.get('GRIT_DISABLE_MULTIPROCESSING') != '1'
+  )
+
+
+def _ParseXtbWorker(index):
+  node = _worker_nodes[index]
+  try:
+    return node.ParseXtb()
+  except Exception:
+    # Pool.map() re-raises exceptions in the parent process, but some (e.g.
+    # xml.sax.SAXParseException) cannot be pickled. Raise one that can be.
+    raise RuntimeError(
+      'Exception during parsing of %s:\n%s'
+      % (node.GetInputPath(), traceback.format_exc())
+    ) from None
 
 
 class IdentifierNode(base.Node):
@@ -692,18 +878,17 @@ class IdentifierNode(base.Node):
     return ['name']
 
   def DefaultAttributes(self):
-    return { 'comment' : '', 'id' : '', 'systemid': 'false' }
+    return {'comment': '', 'id': '', 'systemid': 'false'}
 
   def GetId(self):
-    """Returns the id of this identifier if it has one, None otherwise
-    """
+    """Returns the id of this identifier if it has one, None otherwise"""
     if 'id' in self.attrs:
       return self.attrs['id']
     return None
 
   def EndParsing(self):
     """Handles system identifiers."""
-    super(IdentifierNode, self).EndParsing()
+    super().EndParsing()
     if self.attrs['systemid'] == 'true':
       util.SetupSystemIdentifiers((self.attrs['name'],))
 

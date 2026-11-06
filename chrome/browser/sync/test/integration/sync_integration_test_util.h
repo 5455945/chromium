@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,9 @@
 
 #include "chrome/browser/sync/test/integration/fake_server_match_status_checker.h"
 #include "chrome/browser/sync/test/integration/single_client_status_change_checker.h"
-#include "components/sync/base/model_type.h"
+#include "components/sync/base/data_type.h"
 
 class Profile;
-
-namespace syncer {
-class SyncServiceImpl;
-}  // namespace syncer
 
 // Sets a custom theme and wait until the asynchronous process is done.
 void SetCustomTheme(Profile* profile, int theme_index = 0);
@@ -22,32 +18,21 @@ void SetCustomTheme(Profile* profile, int theme_index = 0);
 class ServerCountMatchStatusChecker
     : public fake_server::FakeServerMatchStatusChecker {
  public:
-  ServerCountMatchStatusChecker(syncer::ModelType type, size_t count);
+  ServerCountMatchStatusChecker(syncer::DataType type, size_t count);
 
   // StatusChangeChecker implementation.
   bool IsExitConditionSatisfied(std::ostream* os) override;
 
  private:
-  const syncer::ModelType type_;
+  const syncer::DataType type_;
   const size_t count_;
 };
 
-// Checker to block until service is waiting for a passphrase.
-class PassphraseRequiredChecker : public SingleClientStatusChangeChecker {
- public:
-  explicit PassphraseRequiredChecker(syncer::SyncServiceImpl* service);
+namespace sync_integration_test_util {
 
-  // StatusChangeChecker implementation.
-  bool IsExitConditionSatisfied(std::ostream* os) override;
-};
+// Returns true if the test is enabled to run in E2E mode.
+bool IsCurrentTestAllowlistedForE2EMode();
 
-// Checker to block until service has accepted a new passphrase.
-class PassphraseAcceptedChecker : public SingleClientStatusChangeChecker {
- public:
-  explicit PassphraseAcceptedChecker(syncer::SyncServiceImpl* service);
-
-  // StatusChangeChecker implementation.
-  bool IsExitConditionSatisfied(std::ostream* os) override;
-};
+}  // namespace sync_integration_test_util
 
 #endif  // CHROME_BROWSER_SYNC_TEST_INTEGRATION_SYNC_INTEGRATION_TEST_UTIL_H_

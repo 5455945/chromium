@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,16 +6,19 @@
 #define CC_ANIMATION_ANIMATION_EVENTS_H_
 
 #include <memory>
+#include <optional>
+#include <variant>
 #include <vector>
 
+#include "base/time/time.h"
 #include "cc/animation/animation_export.h"
 #include "cc/trees/mutator_host.h"
 #include "ui/gfx/animation/keyframe/animation_curve.h"
 
 namespace cc {
 
-struct CC_ANIMATION_EXPORT AnimationEvent {
-  enum Type { STARTED, FINISHED, ABORTED, TAKEOVER, TIME_UPDATED };
+struct CC_ANIMATION_EXPORT AnimationPlaybackEvent {
+  enum class Type { kStarted, kFinished, kAborted, kTakeOver, kTimeUpdated };
 
   typedef size_t KeyframeEffectId;
   struct UniqueKeyframeModelId {
@@ -24,21 +27,21 @@ struct CC_ANIMATION_EXPORT AnimationEvent {
     int model_id;
   };
 
-  AnimationEvent(Type type,
-                 UniqueKeyframeModelId uid,
-                 int group_id,
-                 int target_property,
-                 base::TimeTicks monotonic_time);
+  AnimationPlaybackEvent(Type type,
+                         UniqueKeyframeModelId uid,
+                         int group_id,
+                         int target_property,
+                         base::TimeTicks monotonic_time);
 
-  // Constructs AnimationEvent of TIME_UPDATED type.
-  AnimationEvent(int timeline_id,
-                 int animation_id,
-                 absl::optional<base::TimeDelta> local_time);
+  // Constructs AnimationPlaybackEvent of TIME_UPDATED type.
+  AnimationPlaybackEvent(int timeline_id,
+                         int animation_id,
+                         std::optional<base::TimeDelta> local_time);
 
-  AnimationEvent(const AnimationEvent& other);
-  AnimationEvent& operator=(const AnimationEvent& other);
+  AnimationPlaybackEvent(const AnimationPlaybackEvent& other);
+  AnimationPlaybackEvent& operator=(const AnimationPlaybackEvent& other);
 
-  ~AnimationEvent();
+  ~AnimationPlaybackEvent();
 
   bool ShouldDispatchToKeyframeEffectAndModel() const;
 
@@ -53,8 +56,24 @@ struct CC_ANIMATION_EXPORT AnimationEvent {
   base::TimeTicks animation_start_time;
   std::unique_ptr<gfx::AnimationCurve> curve;
 
-  // Set for TIME_UPDATED events.
-  absl::optional<base::TimeDelta> local_time;
+  std::optional<base::TimeDelta> local_time;
+};
+
+// This describes the occurrence of an event for an animation-trigger[1]
+// that occurs on the impl thread.
+// [1] https://drafts.csswg.org/css-animations-2/#animation-triggers
+struct CC_ANIMATION_EXPORT AnimationTriggerEvent {
+  enum class Type {
+    kActivate,
+    kDeactivate,
+  };
+
+  AnimationTriggerEvent(int trigger_id, Type type, base::TimeTicks time);
+  AnimationTriggerEvent(const AnimationTriggerEvent& other);
+
+  int trigger_id;
+  Type type;
+  base::TimeTicks time;
 };
 
 class CC_ANIMATION_EXPORT AnimationEvents : public MutatorEvents {
@@ -70,12 +89,14 @@ class CC_ANIMATION_EXPORT AnimationEvents : public MutatorEvents {
     needs_time_updated_events_ = value;
   }
 
-  // TODO(gerchiko): Make events_ a private member variable with methods to add
-  // and retrieve the events.
-  std::vector<AnimationEvent> events_;
+  using Event = std::variant<AnimationPlaybackEvent, AnimationTriggerEvent>;
+
+  const std::vector<Event>& events() const { return events_; }
+  std::vector<Event>& events() { return events_; }
 
  private:
-  bool needs_time_updated_events_;
+  std::vector<Event> events_;
+  bool needs_time_updated_events_ = false;
 };
 
 }  // namespace cc

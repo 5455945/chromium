@@ -1,4 +1,4 @@
-# Copyright 2015 The Chromium Authors. All rights reserved.
+# Copyright 2015 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -31,11 +31,11 @@ source_set("blink") {
   public_deps = [ ":blink_features" ]
 
   deps = [
-    "//cc:cc",
-    "//services/tracing/public/cpp:cpp",
+    "//cc",
+    "//services/tracing/public/cpp",
     "//third_party/blink/public:blink_headers",
     "//third_party/one_euro_filter",
-    "//ui/base:base",
+    "//ui/base",
     "//ui/events",
     "//ui/events:dom_keycode_converter",
     "//ui/events:events_base",
@@ -44,10 +44,6 @@ source_set("blink") {
     "//ui/gfx/geometry",
     "//ui/latency",
   ]
-
-  if (use_x11) {
-    deps += [ "//ui/gfx/x" ]
-  }
 
   if (is_win) {
     sources += [

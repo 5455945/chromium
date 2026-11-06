@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,17 +6,24 @@
 #define CHROME_BROWSER_UI_FIND_BAR_FIND_BAR_CONTROLLER_H_
 
 #include <memory>
-#include <string>
+#include <string_view>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/scoped_observation.h"
-#include "chrome/browser/ui/find_bar/find_bar_platform_helper.h"
+#include "chrome/browser/ui/page_action/page_action_controller.h"
 #include "components/find_in_page/find_result_observer.h"
 #include "components/find_in_page/find_tab_helper.h"
-#include "content/public/browser/notification_observer.h"
-#include "content/public/browser/notification_registrar.h"
+#include "content/public/browser/web_contents_observer.h"
+#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 
+class BrowserWindowInterface;
 class FindBar;
+class FindBarPlatformHelper;
+
+namespace chrome {
+class BrowserCommandController;
+}
 
 namespace content {
 class WebContents;
@@ -31,12 +38,23 @@ enum class SelectionAction;
 enum class ResultAction;
 }  // namespace find_in_page
 
-class FindBarController : public content::NotificationObserver,
+class FindBarController : public content::WebContentsObserver,
                           public find_in_page::FindResultObserver {
  public:
-  explicit FindBarController(std::unique_ptr<FindBar> find_bar);
+  DECLARE_USER_DATA(FindBarController);
+
+  // `browser` is used to create the FindBar the first time it is needed; see
+  // GetOrCreateFindBar().
+  FindBarController(
+      BrowserWindowInterface& browser,
+      chrome::BrowserCommandController* browser_command_controller);
+
+  FindBarController(const FindBarController&) = delete;
+  FindBarController& operator=(const FindBarController&) = delete;
 
   ~FindBarController() override;
+
+  static FindBarController* From(BrowserWindowInterface* browser);
 
   // Shows the find bar. Any previous search string will again be visible.
   // The find operation will also be started depending on |find_next| and
@@ -51,18 +69,18 @@ class FindBarController : public content::NotificationObserver,
   void EndFindSession(find_in_page::SelectionAction selection_action,
                       find_in_page::ResultAction result_action);
 
-  // Accessor for the attached WebContents.
-  content::WebContents* web_contents() const { return web_contents_; }
-
   // Changes the WebContents that this FindBar is attached to. This
   // occurs when the user switches tabs in the Browser window. |contents| can be
   // NULL.
   void ChangeWebContents(content::WebContents* contents);
 
-  // Overridden from content::NotificationObserver:
-  void Observe(int type,
-               const content::NotificationSource& source,
-               const content::NotificationDetails& details) override;
+  // content::WebContentsObserver:
+  void DidStartNavigation(
+      content::NavigationHandle* navigation_handle) override;
+  void DidFinishNavigation(
+      content::NavigationHandle* navigation_handle) override;
+  void NavigationEntryCommitted(
+      const content::LoadCommittedDetails& load_details) override;
 
   // find_in_page::FindResultObserver:
   void OnFindEmptyText(content::WebContents* web_contents) override;
@@ -71,13 +89,32 @@ class FindBarController : public content::NotificationObserver,
   void SetText(std::u16string text);
 
   // Called when the find text is updated in response to a user action.
-  void OnUserChangedFindText(std::u16string text);
+  void OnUserChangedFindText(std::u16string_view text);
 
-  FindBar* find_bar() const { return find_bar_.get(); }
+  // Will be called only from `Browser`.
+  void HandleActiveTabChanged(content::WebContents* new_contents);
+
+  // Returns the FindBar, creating it on first use. Creating the FindBar builds
+  // a widget, so this is deliberately deferred until something actually needs
+  // it rather than done at construction.
+  FindBar* find_bar();
+
+  // Returns whether the FindBar has been created yet. Does not create one.
+  bool HasFindBar() const { return find_bar_ != nullptr; }
+
+  // Updates the page action, which the find bar appears anchored to.
+  void UpdatePageAction();
+
+  // Called when the find bar visibility changes.
+  void OnFindBarVisibilityChanged();
 
  private:
+  // Creates the FindBar and performs its one-time setup on first call, then
+  // returns it. Subsequent calls just return the existing bar.
+  FindBar* GetOrCreateFindBar();
+
   // Sends an update to the find bar with the tab contents' current result. The
-  // web_contents_ must be non-NULL before this call. This handles
+  // `web_contents()` must be non-NULL before this call. This handles
   // de-flickering in addition to just calling the update function.
   void UpdateFindBarForCurrentResult();
 
@@ -91,12 +128,9 @@ class FindBarController : public content::NotificationObserver,
   // Gets the text that is selected in the current tab, or an empty string.
   std::u16string GetSelectedText();
 
-  content::NotificationRegistrar registrar_;
+  const raw_ref<BrowserWindowInterface> browser_;
 
   std::unique_ptr<FindBar> find_bar_;
-
-  // The WebContents we are currently associated with.  Can be NULL.
-  content::WebContents* web_contents_ = nullptr;
 
   std::unique_ptr<FindBarPlatformHelper> find_bar_platform_helper_;
 
@@ -109,11 +143,30 @@ class FindBarController : public content::NotificationObserver,
   // replacing user-entered text with selection.
   bool has_user_modified_text_ = false;
 
+  // Manages the highlight on the page action.
+  std::optional<page_actions::ScopedPageActionActivity>
+      find_bar_page_action_activity_ = std::nullopt;
+
   base::ScopedObservation<find_in_page::FindTabHelper,
                           find_in_page::FindResultObserver>
       find_tab_observation_{this};
 
-  DISALLOW_COPY_AND_ASSIGN(FindBarController);
+  // Tracks whether find bar was visible when the current main frame navigation
+  // started. See crbug.com/469819146.
+  // - If true, find bar should close when navigation commits (user was
+  //   searching old page).
+  // - If false, user opened find bar after the current navigation started and
+  //   likely intends to search the new page, so find bar stays open.
+  // - If nullopt, no navigation is in progress and find bar follows default
+  //   close behavior.
+  // Set in DidStartNavigation and cleared in NavigationEntryCommitted and
+  // DidFinishNavigation.
+  std::optional<bool> close_find_bar_on_navigation_commit_;
+
+  raw_ptr<chrome::BrowserCommandController> browser_command_controller_ =
+      nullptr;
+
+  ui::ScopedUnownedUserData<FindBarController> scoped_unowned_user_data_;
 };
 
 #endif  // CHROME_BROWSER_UI_FIND_BAR_FIND_BAR_CONTROLLER_H_

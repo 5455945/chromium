@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -37,7 +37,7 @@ class MockAutoplayUmaHelper : public AutoplayUmaHelper {
 class AutoplayUmaHelperTest : public PageTestBase {
  protected:
   HTMLMediaElement& MediaElement() {
-    Element* element = GetDocument().getElementById("video");
+    Element* element = GetElementById("video");
     DCHECK(element);
     return To<HTMLVideoElement>(*element);
   }
@@ -47,8 +47,8 @@ class AutoplayUmaHelperTest : public PageTestBase {
  private:
   void SetUp() override {
     PageTestBase::SetUp();
-    GetDocument().documentElement()->setInnerHTML("<video id=video></video>",
-                                                  ASSERT_NO_EXCEPTION);
+    GetDocument().documentElement()->SetInnerHTMLWithoutTrustedTypes(
+        "<video id=video></video>", ASSERT_NO_EXCEPTION);
     HTMLMediaElement& element = MediaElement();
     uma_helper_ = MakeGarbageCollected<MockAutoplayUmaHelper>(&element);
     element.autoplay_policy_->autoplay_uma_helper_ = uma_helper_;

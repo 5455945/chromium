@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,6 +11,7 @@
 
 #include "base/containers/flat_map.h"
 #include "base/memory/weak_ptr.h"
+#include "base/values.h"
 #include "chromecast/browser/webui/mojom/webui.mojom.h"
 #include "chromecast/chromecast_buildflags.h"
 #include "content/public/browser/web_ui_controller.h"
@@ -43,16 +44,14 @@ class CastWebUI : public mojom::WebUi, public content::WebUIController {
   content::BrowserContext* const browser_context_;
 
  private:
-  void AddWebviewSupport();
-  void OnWebUIReady(const base::ListValue* args);
-  void InvokeCallback(const std::string& message, const base::ListValue* args);
+  void InvokeCallback(const std::string& message, const base::ListValue& args);
 
   // mojom::WebUI implementation:
   void RegisterMessageCallback(
       const std::string& message,
       mojo::PendingRemote<mojom::MessageCallback> callback) override;
   void CallJavascriptFunction(const std::string& function,
-                              std::vector<base::Value> args) override;
+                              base::ListValue args) override;
 
   // Pointer to the generic message handler owned by the Web UI. The message
   // handler is guaranteed to outlive CastWebUI since |this| is the first member

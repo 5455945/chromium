@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,16 @@
 
 #include <memory>
 
-#include "base/bind.h"
 #include "base/debug/leak_annotations.h"
 #include "base/files/file_path.h"
 #include "base/format_macros.h"
+#include "base/functional/bind.h"
 #include "net/base/net_errors.h"
 #include "net/base/test_completion_callback.h"
 #include "net/cert/cert_verify_proc.h"
 #include "net/cert/cert_verify_result.h"
+#include "net/cert/crl_set.h"
+#include "net/cert/mock_cert_verifier.h"
 #include "net/cert/x509_certificate.h"
 #include "net/log/net_log_with_source.h"
 #include "net/test/cert_test_util.h"
@@ -22,6 +24,7 @@
 #include "net/test/test_with_task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/strings/str_format.h"
 
 using net::test::IsError;
 using net::test::IsOk;
@@ -31,6 +34,9 @@ using testing::Return;
 
 namespace net {
 
+class ChromeRootStoreData;
+class CertNetFetcher;
+
 namespace {
 
 void FailTest(int /* result */) {
@@ -39,14 +45,13 @@ void FailTest(int /* result */) {
 
 class MockCertVerifyProc : public CertVerifyProc {
  public:
-  MOCK_METHOD9(VerifyInternal,
+  MockCertVerifyProc() : CertVerifyProc(CRLSet::BuiltinCRLSet()) {}
+  MOCK_METHOD7(VerifyInternal,
                int(X509Certificate*,
                    const std::string&,
                    const std::string&,
                    const std::string&,
                    int,
-                   CRLSet*,
-                   const CertificateList&,
                    CertVerifyResult*,
                    const NetLogWithSource&));
   MOCK_CONST_METHOD0(SupportsAdditionalTrustAnchors, bool());
@@ -57,7 +62,7 @@ class MockCertVerifyProc : public CertVerifyProc {
 
 ACTION(SetCertVerifyResult) {
   X509Certificate* cert = arg0;
-  CertVerifyResult* result = arg7;
+  CertVerifyResult* result = arg5;
   result->Reset();
   result->verified_cert = cert;
   result->cert_status = CERT_STATUS_COMMON_NAME_INVALID;
@@ -65,11 +70,28 @@ ACTION(SetCertVerifyResult) {
 
 ACTION(SetCertVerifyRevokedResult) {
   X509Certificate* cert = arg0;
-  CertVerifyResult* result = arg7;
+  CertVerifyResult* result = arg5;
   result->Reset();
   result->verified_cert = cert;
   result->cert_status = CERT_STATUS_REVOKED;
 }
+
+class SwapWithNewProcFactory : public CertVerifyProcFactory {
+ public:
+  explicit SwapWithNewProcFactory(scoped_refptr<CertVerifyProc> new_mock_proc)
+      : mock_verify_proc_(std::move(new_mock_proc)) {}
+
+  scoped_refptr<net::CertVerifyProc> CreateCertVerifyProc(
+      scoped_refptr<CertNetFetcher> cert_net_fetcher,
+      const CertVerifyProc::ImplParams& impl_params,
+      const CertVerifyProc::InstanceParams& instance_params) override {
+    return mock_verify_proc_;
+  }
+
+ protected:
+  ~SwapWithNewProcFactory() override = default;
+  scoped_refptr<CertVerifyProc> mock_verify_proc_;
+};
 
 }  // namespace
 
@@ -77,11 +99,14 @@ class MultiThreadedCertVerifierTest : public TestWithTaskEnvironment {
  public:
   MultiThreadedCertVerifierTest()
       : mock_verify_proc_(base::MakeRefCounted<MockCertVerifyProc>()),
-        verifier_(
-            std::make_unique<MultiThreadedCertVerifier>(mock_verify_proc_)) {
+        mock_new_verify_proc_(base::MakeRefCounted<MockCertVerifyProc>()),
+        verifier_(std::make_unique<MultiThreadedCertVerifier>(
+            mock_verify_proc_,
+            base::MakeRefCounted<SwapWithNewProcFactory>(
+                mock_new_verify_proc_))) {
     EXPECT_CALL(*mock_verify_proc_, SupportsAdditionalTrustAnchors())
         .WillRepeatedly(Return(true));
-    EXPECT_CALL(*mock_verify_proc_, VerifyInternal(_, _, _, _, _, _, _, _, _))
+    EXPECT_CALL(*mock_verify_proc_, VerifyInternal(_, _, _, _, _, _, _))
         .WillRepeatedly(
             DoAll(SetCertVerifyResult(), Return(ERR_CERT_COMMON_NAME_INVALID)));
   }
@@ -89,6 +114,8 @@ class MultiThreadedCertVerifierTest : public TestWithTaskEnvironment {
 
  protected:
   scoped_refptr<MockCertVerifyProc> mock_verify_proc_;
+  // The new verify_proc_ swapped in if the proc is updated.
+  scoped_refptr<MockCertVerifyProc> mock_new_verify_proc_;
   std::unique_ptr<MultiThreadedCertVerifier> verifier_;
 };
 
@@ -238,10 +265,6 @@ TEST_F(MultiThreadedCertVerifierTest, ConvertsConfigToFlags) {
        CertVerifyProc::VERIFY_REV_CHECKING_ENABLED},
       {&CertVerifier::Config::require_rev_checking_local_anchors,
        CertVerifyProc::VERIFY_REV_CHECKING_REQUIRED_LOCAL_ANCHORS},
-      {&CertVerifier::Config::enable_sha1_local_anchors,
-       CertVerifyProc::VERIFY_ENABLE_SHA1_LOCAL_ANCHORS},
-      {&CertVerifier::Config::disable_symantec_enforcement,
-       CertVerifyProc::VERIFY_DISABLE_SYMANTEC_ENFORCEMENT},
   };
   for (const auto& test_config : kTestConfig) {
     CertVerifier::Config config;
@@ -249,9 +272,8 @@ TEST_F(MultiThreadedCertVerifierTest, ConvertsConfigToFlags) {
 
     verifier_->SetConfig(config);
 
-    EXPECT_CALL(
-        *mock_verify_proc_,
-        VerifyInternal(_, _, _, _, test_config.expected_flag, _, _, _, _))
+    EXPECT_CALL(*mock_verify_proc_,
+                VerifyInternal(_, _, _, _, test_config.expected_flag, _, _))
         .WillRepeatedly(
             DoAll(SetCertVerifyRevokedResult(), Return(ERR_CERT_REVOKED)));
 
@@ -271,6 +293,114 @@ TEST_F(MultiThreadedCertVerifierTest, ConvertsConfigToFlags) {
 
     testing::Mock::VerifyAndClearExpectations(mock_verify_proc_.get());
   }
+}
+
+// Tests propagation of CertVerifier flags into CertVerifyProc flags
+TEST_F(MultiThreadedCertVerifierTest, ConvertsFlagsToFlags) {
+  scoped_refptr<X509Certificate> test_cert(
+      ImportCertFromFile(GetTestCertsDirectory(), "ok_cert.pem"));
+  ASSERT_TRUE(test_cert);
+
+  const struct TestConfig {
+    int verifier_flag;
+    int expected_proc_flag;
+  } kTestConfig[] = {
+      {CertVerifier::VERIFY_DISABLE_NETWORK_FETCHES,
+       CertVerifyProc::VERIFY_DISABLE_NETWORK_FETCHES},
+      {CertVerifier::VERIFY_SXG_CT_REQUIREMENTS,
+       CertVerifyProc::VERIFY_SXG_CT_REQUIREMENTS},
+  };
+  for (const auto& test_config : kTestConfig) {
+    SCOPED_TRACE(absl::StrFormat("verifier_flag=%i expected_proc_flag=%i",
+                                 test_config.verifier_flag,
+                                 test_config.expected_proc_flag));
+
+    EXPECT_CALL(
+        *mock_verify_proc_,
+        VerifyInternal(_, _, _, _, test_config.expected_proc_flag, _, _))
+        .WillRepeatedly(
+            DoAll(SetCertVerifyRevokedResult(), Return(ERR_CERT_REVOKED)));
+
+    CertVerifyResult verify_result;
+    TestCompletionCallback callback;
+    std::unique_ptr<CertVerifier::Request> request;
+    int error = verifier_->Verify(
+        CertVerifier::RequestParams(test_cert, "www.example.com",
+                                    test_config.verifier_flag,
+                                    /*ocsp_response=*/std::string(),
+                                    /*sct_list=*/std::string()),
+        &verify_result, callback.callback(), &request, NetLogWithSource());
+    ASSERT_THAT(error, IsError(ERR_IO_PENDING));
+    EXPECT_TRUE(request);
+    error = callback.WaitForResult();
+    EXPECT_TRUE(IsCertificateError(error));
+    EXPECT_THAT(error, IsError(ERR_CERT_REVOKED));
+
+    testing::Mock::VerifyAndClearExpectations(mock_verify_proc_.get());
+  }
+}
+
+// Tests swapping in new Chrome Root Store Data.
+TEST_F(MultiThreadedCertVerifierTest, VerifyProcChangeChromeRootStore) {
+  CertVerifierObserverCounter observer_counter(verifier_.get());
+
+  base::FilePath certs_dir = GetTestCertsDirectory();
+  scoped_refptr<X509Certificate> test_cert(
+      ImportCertFromFile(certs_dir, "ok_cert.pem"));
+  ASSERT_TRUE(test_cert);
+
+  EXPECT_EQ(observer_counter.change_count(), 0u);
+
+  EXPECT_CALL(*mock_new_verify_proc_, VerifyInternal(_, _, _, _, _, _, _))
+      .WillRepeatedly(
+          DoAll(SetCertVerifyRevokedResult(), Return(ERR_CERT_REVOKED)));
+  verifier_->UpdateVerifyProcData(nullptr, {}, {});
+
+  EXPECT_EQ(observer_counter.change_count(), 1u);
+
+  CertVerifyResult verify_result;
+  TestCompletionCallback callback;
+  std::unique_ptr<CertVerifier::Request> request;
+  int error = verifier_->Verify(
+      CertVerifier::RequestParams(test_cert, "www.example.com", 0,
+                                  /*ocsp_response=*/std::string(),
+                                  /*sct_list=*/std::string()),
+      &verify_result, callback.callback(), &request, NetLogWithSource());
+  ASSERT_THAT(error, IsError(ERR_IO_PENDING));
+  EXPECT_TRUE(request);
+  error = callback.WaitForResult();
+  EXPECT_TRUE(IsCertificateError(error));
+  EXPECT_THAT(error, IsError(ERR_CERT_REVOKED));
+
+  testing::Mock::VerifyAndClearExpectations(mock_verify_proc_.get());
+  testing::Mock::VerifyAndClearExpectations(mock_new_verify_proc_.get());
+}
+
+// Tests swapping out a new proc while a request is pending still uses
+// the old proc for the old request.
+TEST_F(MultiThreadedCertVerifierTest, VerifyProcChangeRequest) {
+  base::FilePath certs_dir = GetTestCertsDirectory();
+  scoped_refptr<X509Certificate> test_cert(
+      ImportCertFromFile(certs_dir, "ok_cert.pem"));
+  ASSERT_TRUE(test_cert);
+
+  CertVerifyResult verify_result;
+  TestCompletionCallback callback;
+  std::unique_ptr<CertVerifier::Request> request;
+  int error = verifier_->Verify(
+      CertVerifier::RequestParams(test_cert, "www.example.com", 0,
+                                  /*ocsp_response=*/std::string(),
+                                  /*sct_list=*/std::string()),
+      &verify_result, callback.callback(), &request, NetLogWithSource());
+  ASSERT_THAT(error, IsError(ERR_IO_PENDING));
+  EXPECT_TRUE(request);
+  verifier_->UpdateVerifyProcData(nullptr, {}, {});
+  error = callback.WaitForResult();
+  EXPECT_TRUE(IsCertificateError(error));
+  EXPECT_THAT(error, IsError(ERR_CERT_COMMON_NAME_INVALID));
+
+  testing::Mock::VerifyAndClearExpectations(mock_verify_proc_.get());
+  testing::Mock::VerifyAndClearExpectations(mock_new_verify_proc_.get());
 }
 
 }  // namespace net

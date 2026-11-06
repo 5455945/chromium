@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,9 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "media/audio/mock_audio_debug_recording_manager.h"
 #include "media/base/audio_parameters.h"
 
@@ -79,9 +79,19 @@ void MockAudioManager::RemoveOutputDeviceChangeListener(
     AudioDeviceListener* listener) {
 }
 
-AudioParameters MockAudioManager::GetDefaultOutputStreamParameters() {
-  DCHECK(GetTaskRunner()->BelongsToCurrentThread());
-  return default_output_params_;
+std::optional<base::CallbackListSubscription>
+MockAudioManager::AddInputMuteStateChangeCallback(
+    base::RepeatingCallback<void(bool)> callback) {
+  if (!supports_input_mute_state_change_notifications_) {
+    return std::nullopt;
+  }
+  return input_mute_state_change_callbacks_.Add(std::move(callback));
+}
+
+std::string MockAudioManager::GetDeviceNameFromCache(
+    const std::string& device_id,
+    bool is_input) {
+  return std::string();
 }
 
 AudioParameters MockAudioManager::GetOutputStreamParameters(
@@ -132,8 +142,7 @@ void MockAudioManager::InitializeDebugRecording() {
   }
 
   DCHECK(!debug_recording_manager_);
-  debug_recording_manager_ =
-      std::make_unique<MockAudioDebugRecordingManager>(GetTaskRunner());
+  debug_recording_manager_ = std::make_unique<MockAudioDebugRecordingManager>();
 }
 
 AudioDebugRecordingManager* MockAudioManager::GetAudioDebugRecordingManager() {
@@ -141,8 +150,14 @@ AudioDebugRecordingManager* MockAudioManager::GetAudioDebugRecordingManager() {
   return debug_recording_manager_.get();
 }
 
-const char* MockAudioManager::GetName() {
-  return nullptr;
+void MockAudioManager::SetAecDumpRecordingManager(
+    base::WeakPtr<AecdumpRecordingManager>) {
+  DCHECK(GetTaskRunner()->BelongsToCurrentThread());
+  // This is no-op by default.
+}
+
+const std::string_view MockAudioManager::GetName() {
+  return "Mock";
 }
 
 void MockAudioManager::SetMakeOutputStreamCB(MakeOutputStreamCallback cb) {
@@ -190,4 +205,13 @@ void MockAudioManager::SetAssociatedOutputDeviceIDCallback(
   get_associated_output_device_id_cb_ = std::move(callback);
 }
 
-}  // namespace media.
+void MockAudioManager::SetSupportsInputMuteStateChangeNotifications(
+    bool supported) {
+  supports_input_mute_state_change_notifications_ = supported;
+}
+
+void MockAudioManager::NotifyInputMuteStateChanged(bool is_muted) {
+  input_mute_state_change_callbacks_.Notify(is_muted);
+}
+
+}  // namespace media

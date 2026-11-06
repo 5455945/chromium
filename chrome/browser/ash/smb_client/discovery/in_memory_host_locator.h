@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,7 @@
 
 #include "chrome/browser/ash/smb_client/discovery/host_locator.h"
 
-namespace ash {
-namespace smb_client {
+namespace ash::smb_client {
 
 // HostLocator implementation that uses a map as the source for hosts. New hosts
 // can be registered through AddHost().
@@ -16,6 +15,9 @@ class InMemoryHostLocator : public HostLocator {
  public:
   InMemoryHostLocator();
   explicit InMemoryHostLocator(bool should_run_synchronously);
+
+  InMemoryHostLocator(const InMemoryHostLocator&) = delete;
+  InMemoryHostLocator& operator=(const InMemoryHostLocator&) = delete;
 
   ~InMemoryHostLocator() override;
 
@@ -38,11 +40,8 @@ class InMemoryHostLocator : public HostLocator {
   HostMap host_map_;
   FindHostsCallback stored_callback_;
   bool should_run_synchronously_ = true;
-
-  DISALLOW_COPY_AND_ASSIGN(InMemoryHostLocator);
 };
 
-}  // namespace smb_client
-}  // namespace ash
+}  // namespace ash::smb_client
 
 #endif  // CHROME_BROWSER_ASH_SMB_CLIENT_DISCOVERY_IN_MEMORY_HOST_LOCATOR_H_

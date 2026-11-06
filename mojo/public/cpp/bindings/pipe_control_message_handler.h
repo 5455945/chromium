@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 
 #include "base/compiler_specific.h"
 #include "base/component_export.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "mojo/public/cpp/bindings/message.h"
 
 namespace mojo {
@@ -22,6 +22,11 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) PipeControlMessageHandler
  public:
   explicit PipeControlMessageHandler(
       PipeControlMessageHandlerDelegate* delegate);
+
+  PipeControlMessageHandler(const PipeControlMessageHandler&) = delete;
+  PipeControlMessageHandler& operator=(const PipeControlMessageHandler&) =
+      delete;
+
   ~PipeControlMessageHandler() override;
 
   // Sets the description for this handler. Used only when reporting validation
@@ -30,6 +35,12 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) PipeControlMessageHandler
 
   // NOTE: |message| must have passed message header validation.
   static bool IsPipeControlMessage(const Message* message);
+
+  // NOTE: |message| must have passed message header validation.
+  // If message is a PeerAssociatedEndpointClosed event, this returns the
+  // interface id of the endpoint being closed.
+  static std::optional<InterfaceId> IsPeerAssociatedEndpointClosedEvent(
+      const Message& message);
 
   // MessageReceiver implementation:
 
@@ -45,9 +56,7 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS) PipeControlMessageHandler
   bool RunOrClosePipe(Message* message);
 
   std::string description_;
-  PipeControlMessageHandlerDelegate* const delegate_;
-
-  DISALLOW_COPY_AND_ASSIGN(PipeControlMessageHandler);
+  const raw_ptr<PipeControlMessageHandlerDelegate> delegate_;
 };
 
 }  // namespace mojo

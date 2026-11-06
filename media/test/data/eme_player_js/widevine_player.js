@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -26,10 +26,7 @@ WidevinePlayer.prototype.onMessage = function(message) {
     mediaKeySession.update(key)
         .catch(function(error) { Utils.failTest(error, EME_UPDATE_FAILED); });
   }
-  Utils.sendRequest('POST',
-                    'arraybuffer',
-                    Utils.convertToUint8Array(message.message),
-                    this.testConfig.licenseServerURL,
+  Utils.sendRequest(Utils.convertToUint8Array(message.message),
                     onSuccess,
                     this.testConfig.forceInvalidResponse);
 };

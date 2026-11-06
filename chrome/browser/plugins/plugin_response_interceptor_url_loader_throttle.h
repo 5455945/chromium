@@ -1,12 +1,14 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_PLUGINS_PLUGIN_RESPONSE_INTERCEPTOR_URL_LOADER_THROTTLE_H_
 #define CHROME_BROWSER_PLUGINS_PLUGIN_RESPONSE_INTERCEPTOR_URL_LOADER_THROTTLE_H_
 
-#include "base/macros.h"
+#include <cstdint>
+
 #include "base/memory/weak_ptr.h"
+#include "content/public/browser/frame_tree_node_id.h"
 #include "services/network/public/mojom/fetch_api.mojom-shared.h"
 #include "third_party/blink/public/common/loader/url_loader_throttle.h"
 
@@ -23,25 +25,36 @@ class PluginResponseInterceptorURLLoaderThrottle
  public:
   PluginResponseInterceptorURLLoaderThrottle(
       network::mojom::RequestDestination request_destination,
-      int frame_tree_node_id);
+      content::FrameTreeNodeId frame_tree_node_id,
+      int64_t navigation_id);
+
+  PluginResponseInterceptorURLLoaderThrottle(
+      const PluginResponseInterceptorURLLoaderThrottle&) = delete;
+  PluginResponseInterceptorURLLoaderThrottle& operator=(
+      const PluginResponseInterceptorURLLoaderThrottle&) = delete;
+
   ~PluginResponseInterceptorURLLoaderThrottle() override;
 
- private:
-  // blink::URLLoaderThrottle overrides;
+  // blink::URLLoaderThrottle:
   void WillProcessResponse(const GURL& response_url,
                            network::mojom::URLResponseHead* response_head,
                            bool* defer) override;
+  const char* NameForLoggingWillProcessResponse() override;
+
+ private:
   // Resumes loading for an intercepted response. This would give the extension
   // layer chance to initialize its browser side state.
   void ResumeLoad();
 
   const network::mojom::RequestDestination request_destination_;
-  const int frame_tree_node_id_;
+  const content::FrameTreeNodeId frame_tree_node_id_;
+
+  // Navigation this throttle's request belongs to. Recorded on the stream
+  // when the response is intercepted.
+  const int64_t navigation_id_;
 
   base::WeakPtrFactory<PluginResponseInterceptorURLLoaderThrottle>
       weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(PluginResponseInterceptorURLLoaderThrottle);
 };
 
 #endif  // CHROME_BROWSER_PLUGINS_PLUGIN_RESPONSE_INTERCEPTOR_URL_LOADER_THROTTLE_H_

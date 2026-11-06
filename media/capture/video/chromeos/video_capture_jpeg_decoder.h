@@ -1,14 +1,15 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef MEDIA_CAPTURE_VIDEO_CHROMEOS_VIDEO_CAPTURE_JPEG_DECODER_H_
 #define MEDIA_CAPTURE_VIDEO_CHROMEOS_VIDEO_CAPTURE_JPEG_DECODER_H_
 
-#include "base/callback.h"
+#include "base/containers/span.h"
+#include "base/functional/callback.h"
 #include "media/capture/capture_export.h"
 #include "media/capture/video/video_capture_device.h"
-#include "media/capture/video/video_frame_receiver.h"
+#include "media/capture/video/video_frame_receiver_types.h"
 
 namespace media {
 
@@ -25,22 +26,20 @@ class CAPTURE_EXPORT VideoCaptureJpegDecoder {
                    // decode error.
   };
 
-  using DecodeDoneCB =
-      base::RepeatingCallback<void(ReadyFrameInBuffer,
-                                   std::vector<ReadyFrameInBuffer>)>;
+  using DecodeDoneCB = base::RepeatingCallback<void(ReadyFrameInBuffer)>;
 
   virtual ~VideoCaptureJpegDecoder() {}
 
-  // Creates and intializes decoder asynchronously.
+  // Creates and initializes decoder asynchronously.
   virtual void Initialize() = 0;
 
   // Returns initialization status.
   virtual STATUS GetStatus() const = 0;
 
-  // Decodes a JPEG picture.
+  // Decodes a JPEG picture. The memory referenced by `data` only needs to
+  // remain valid until this method returns.
   virtual void DecodeCapturedData(
-      const uint8_t* data,
-      size_t in_buffer_size,
+      base::span<const uint8_t> data,
       const VideoCaptureFormat& frame_format,
       base::TimeTicks reference_time,
       base::TimeDelta timestamp,

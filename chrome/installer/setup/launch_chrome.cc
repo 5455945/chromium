@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,8 @@
 #include "base/logging.h"
 #include "base/process/launch.h"
 #include "base/process/process.h"
+#include "base/types/expected_macros.h"
+#include "base/win/elevation_util.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/installer/util/util_constants.h"
 
@@ -22,8 +24,9 @@ base::CommandLine GetPostInstallLaunchCommand(
 }
 
 bool LaunchChromeBrowser(const base::FilePath& application_path) {
-  if (application_path.empty())
+  if (application_path.empty()) {
     return false;
+  }
 
   return base::LaunchProcess(GetPostInstallLaunchCommand(application_path),
                              base::LaunchOptions())
@@ -33,17 +36,20 @@ bool LaunchChromeBrowser(const base::FilePath& application_path) {
 bool LaunchChromeAndWait(const base::FilePath& application_path,
                          const base::CommandLine& options,
                          int32_t* exit_code) {
-  if (application_path.empty())
+  if (application_path.empty()) {
     return false;
+  }
 
   base::CommandLine cmd(application_path.Append(kChromeExe));
   cmd.AppendArguments(options, false);
 
-  base::Process chrome_handle = base::LaunchProcess(cmd, base::LaunchOptions());
-  if (!chrome_handle.IsValid()) {
-    PLOG(ERROR) << "Failed to launch: " << cmd.GetCommandLineString();
-    return false;
-  }
+  ASSIGN_OR_RETURN(base::Process chrome_handle, base::win::RunDeElevated(cmd),
+                   [&cmd](DWORD error_code) {
+                     ::SetLastError(error_code);
+                     PLOG(ERROR)
+                         << "Failed to launch: " << cmd.GetCommandLineString();
+                     return false;
+                   });
 
   int ret = STILL_ACTIVE;
   if (!chrome_handle.WaitForExit(&ret)) {
@@ -52,8 +58,9 @@ bool LaunchChromeAndWait(const base::FilePath& application_path,
   }
   DCHECK_NE(ret, static_cast<int>(STILL_ACTIVE));
 
-  if (exit_code)
+  if (exit_code) {
     *exit_code = ret;
+  }
 
   return true;
 }

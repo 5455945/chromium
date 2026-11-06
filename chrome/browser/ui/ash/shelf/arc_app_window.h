@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,12 +9,11 @@
 #include <vector>
 
 #include "ash/public/cpp/shelf_types.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/timer/timer.h"
-#include "chrome/browser/image_decoder/image_decoder.h"
-#include "chrome/browser/ui/app_icon_loader.h"
 #include "chrome/browser/ui/ash/shelf/app_window_base.h"
 #include "chrome/browser/ui/ash/shelf/arc_app_shelf_id.h"
+#include "components/app_icon_loader/app_icon_loader.h"
 
 class AppServiceAppIconLoader;
 class ArcAppWindowDelegate;
@@ -30,13 +29,15 @@ class Widget;
 class Profile;
 
 // A ui::BaseWindow for a chromeos launcher to control ARC applications.
-class ArcAppWindow : public AppWindowBase,
-                     public AppIconLoaderDelegate {
+class ArcAppWindow : public AppWindowBase, public AppIconLoaderDelegate {
  public:
   ArcAppWindow(const arc::ArcAppShelfId& app_shelf_id,
                views::Widget* widget,
                ArcAppWindowDelegate* owner,
                Profile* profile);
+
+  ArcAppWindow(const ArcAppWindow&) = delete;
+  ArcAppWindow& operator=(const ArcAppWindow&) = delete;
 
   ~ArcAppWindow() override;
 
@@ -55,8 +56,11 @@ class ArcAppWindow : public AppWindowBase,
   void Close() override;
 
   // AppIconLoaderDelegate:
-  void OnAppImageUpdated(const std::string& app_id,
-                         const gfx::ImageSkia& image) override;
+  void OnAppImageUpdated(
+      const std::string& app_id,
+      const gfx::ImageSkia& image,
+      bool is_placeholder_icon,
+      const std::optional<gfx::ImageSkia>& badge_image) override;
 
  private:
   // Ensures that default app icon is set.
@@ -69,20 +73,18 @@ class ArcAppWindow : public AppWindowBase,
   const arc::ArcAppShelfId app_shelf_id_;
   // Keeps current full-screen mode.
   FullScreenMode fullscreen_mode_ = FullScreenMode::kNotDefined;
-  ArcAppWindowDelegate* const owner_;
+  const raw_ptr<ArcAppWindowDelegate> owner_;
 
   // Set to true in case image fetch is requested. This indicates that default
   // app icon is returned in |OnAppImageUpdated|.
   bool image_fetching_ = false;
   base::OneShotTimer apply_default_image_timer_;
 
-  Profile* const profile_;
+  const raw_ptr<Profile> profile_;
 
   // Loads the ARC app icon to the window icon keys. Nullptr once a custom icon
   // has been successfully set.
   std::unique_ptr<AppServiceAppIconLoader> app_icon_loader_;
-
-  DISALLOW_COPY_AND_ASSIGN(ArcAppWindow);
 };
 
 #endif  // CHROME_BROWSER_UI_ASH_SHELF_ARC_APP_WINDOW_H_

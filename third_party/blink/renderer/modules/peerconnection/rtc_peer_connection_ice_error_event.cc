@@ -1,16 +1,27 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/peerconnection/rtc_peer_connection_ice_error_event.h"
+
+#include <climits>
+#include <cstdint>
+#include <optional>
+
+#include "base/check.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_peer_connection_ice_error_event_init.h"
+#include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/event_type_names.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/visitor.h"
+#include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
 
 RTCPeerConnectionIceErrorEvent* RTCPeerConnectionIceErrorEvent::Create(
     const String& address,
-    absl::optional<uint16_t> port,
+    std::optional<uint16_t> port,
     const String& host_candidate,
     const String& url,
     int error_code,
@@ -30,7 +41,7 @@ RTCPeerConnectionIceErrorEvent* RTCPeerConnectionIceErrorEvent::Create(
 
 RTCPeerConnectionIceErrorEvent::RTCPeerConnectionIceErrorEvent(
     const String& address,
-    absl::optional<uint16_t> port,
+    std::optional<uint16_t> port,
     const String& host_candidate,
     const String& url,
     uint16_t error_code,
@@ -67,7 +78,7 @@ String RTCPeerConnectionIceErrorEvent::address() const {
   return address_;
 }
 
-absl::optional<uint16_t> RTCPeerConnectionIceErrorEvent::port() const {
+std::optional<uint16_t> RTCPeerConnectionIceErrorEvent::port() const {
   return port_;
 }
 

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,11 +10,12 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/sequence_checker.h"
 #include "services/device/public/mojom/usb_device.mojom.h"
@@ -30,8 +31,8 @@ class SequencedTaskRunner;
 namespace device {
 
 struct EndpointMapValue {
-  const mojom::UsbInterfaceInfo* interface;
-  const mojom::UsbEndpointInfo* endpoint;
+  raw_ptr<const mojom::UsbInterfaceInfo> interface;
+  raw_ptr<const mojom::UsbEndpointInfo> endpoint;
 };
 
 class UsbDeviceImpl;
@@ -42,6 +43,9 @@ typedef libusb_transfer* PlatformUsbTransferHandle;
 // UsbDeviceHandle class provides basic I/O related functionalities.
 class UsbDeviceHandleImpl : public UsbDeviceHandle {
  public:
+  UsbDeviceHandleImpl(const UsbDeviceHandleImpl&) = delete;
+  UsbDeviceHandleImpl& operator=(const UsbDeviceHandleImpl&) = delete;
+
   scoped_refptr<UsbDevice> GetDevice() const override;
   void Close() override;
   void SetConfiguration(int configuration_value,
@@ -116,6 +120,7 @@ class UsbDeviceHandleImpl : public UsbDeviceHandle {
                                             bool success,
                                             ResultCallback callback);
   void ResetDeviceBlocking(ResultCallback callback);
+  void ResetDeviceComplete(ResultCallback callback, bool success);
   void ClearHaltBlocking(uint8_t endpoint_address, ResultCallback callback);
 
   // Refresh endpoint_map_ after ClaimInterface, ReleaseInterface and
@@ -127,9 +132,19 @@ class UsbDeviceHandleImpl : public UsbDeviceHandle {
   scoped_refptr<InterfaceClaimer> GetClaimedInterfaceForEndpoint(
       uint8_t endpoint_address);
 
+  // Returns the first colliding endpoint address if the given
+  // |interface_number| has any endpoints that collide with other currently
+  // claimed interfaces' active alternate settings. Returns std::nullopt if no
+  // collision is found. If |alternate_setting| is provided, only that specific
+  // alternate setting is checked; otherwise, all alternate settings of the
+  // interface are checked.
+  std::optional<uint8_t> FindFirstCollidingEndpointAddress(
+      int interface_number,
+      std::optional<int> alternate_setting);
+
   void ReportIsochronousTransferError(
       UsbDeviceHandle::IsochronousTransferCallback callback,
-      const std::vector<uint32_t> packet_lengths,
+      const std::vector<uint32_t>& packet_lengths,
       mojom::UsbTransferStatus status);
 
   // Submits a transfer and starts tracking it. Retains the buffer and copies
@@ -149,7 +164,7 @@ class UsbDeviceHandleImpl : public UsbDeviceHandle {
   ClaimedInterfaceMap claimed_interfaces_;
 
   // This set holds weak pointers to pending transfers.
-  std::set<Transfer*> transfers_;
+  std::set<raw_ptr<Transfer>> transfers_;
 
   // A map from endpoints to EndpointMapValue
   typedef std::map<int, EndpointMapValue> EndpointMap;
@@ -159,8 +174,6 @@ class UsbDeviceHandleImpl : public UsbDeviceHandle {
   scoped_refptr<base::SequencedTaskRunner> blocking_task_runner_;
 
   SEQUENCE_CHECKER(sequence_checker_);
-
-  DISALLOW_COPY_AND_ASSIGN(UsbDeviceHandleImpl);
 };
 
 }  // namespace device

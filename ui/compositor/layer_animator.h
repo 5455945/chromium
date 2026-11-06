@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,14 @@
 
 #include <vector>
 
-#include "base/compiler_specific.h"
+#include "base/callback_list.h"
 #include "base/containers/circular_deque.h"
+#include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/time/time.h"
 #include "cc/animation/animation_delegate.h"
@@ -20,6 +23,7 @@
 #include "ui/compositor/layer_animation_element.h"
 #include "ui/compositor/layer_threaded_animation_delegate.h"
 #include "ui/gfx/animation/tween.h"
+#include "ui/gfx/geometry/linear_gradient.h"
 
 namespace cc {
 class Animation;
@@ -28,7 +32,6 @@ class Layer;
 }
 
 namespace gfx {
-class Animation;
 class AnimationCurve;
 class Rect;
 class Transform;
@@ -37,7 +40,6 @@ class Transform;
 namespace ui {
 class Compositor;
 class ImplicitAnimationObserver;
-class Layer;
 class LayerAnimationSequence;
 class LayerAnimationDelegate;
 class LayerAnimationObserver;
@@ -64,13 +66,19 @@ class COMPOSITOR_EXPORT LayerAnimator : public base::RefCounted<LayerAnimator>,
     REPLACE_QUEUED_ANIMATIONS
   };
 
+  using SequenceScheduledCallbacks =
+      base::RepeatingCallbackList<void(LayerAnimationSequence*)>;
+  using SequenceScheduledCallback = SequenceScheduledCallbacks::CallbackType;
+
   explicit LayerAnimator(base::TimeDelta transition_duration);
+  LayerAnimator(const LayerAnimator&) = delete;
+  LayerAnimator& operator=(const LayerAnimator&) = delete;
 
   // No implicit animations when properties are set.
-  static LayerAnimator* CreateDefaultAnimator();
+  static scoped_refptr<LayerAnimator> CreateDefaultAnimator();
 
   // Implicitly animates when properties are set.
-  static LayerAnimator* CreateImplicitAnimator();
+  static scoped_refptr<LayerAnimator> CreateImplicitAnimator();
 
   // Sets the transform on the delegate. May cause an implicit animation.
   virtual void SetTransform(const gfx::Transform& transform);
@@ -97,8 +105,8 @@ class COMPOSITOR_EXPORT LayerAnimator : public base::RefCounted<LayerAnimator>,
   float GetTargetGrayscale() const;
 
   // Sets the color on the delegate. May cause an implicit animation.
-  virtual void SetColor(SkColor color);
-  SkColor GetTargetColor() const;
+  virtual void SetColor(SkColor4f color);
+  SkColor4f GetTargetColor() const;
 
   // Sets the clip rect on the delegate. May cause an implicit animation.
   virtual void SetClipRect(const gfx::Rect& clip_rect);
@@ -107,6 +115,11 @@ class COMPOSITOR_EXPORT LayerAnimator : public base::RefCounted<LayerAnimator>,
   // Sets the rounded corners on the delegate. May cause an implicit animation.
   virtual void SetRoundedCorners(const gfx::RoundedCornersF& rounded_corners);
   gfx::RoundedCornersF GetTargetRoundedCorners() const;
+
+  // Sets the linear gradient mask on the delegate. Requires that the bounds are
+  // set by SetRoundedCorners. May cause an implicit animation.
+  virtual void SetGradientMask(const gfx::LinearGradient& linear_gradient);
+  gfx::LinearGradient GetTargetGradientMask() const;
 
   // Returns the default length of animations, including adjustment for slow
   // animation mode if set.
@@ -214,6 +227,14 @@ class COMPOSITOR_EXPORT LayerAnimator : public base::RefCounted<LayerAnimator>,
   void RemoveAndDestroyOwnedObserver(
       ImplicitAnimationObserver* animation_observer);
 
+  // Adds callback to list which is invoked when a new sequence is scheduled.
+  // Prefer using this callback to better managed LayerAnimationObservers.
+  // Caller must retain the result for as long as the callback needs to remain
+  // active. Clearing the result (add_sequence_subscription.reset()) will also
+  // remove the subscription.
+  [[nodiscard]] base::CallbackListSubscription AddSequenceScheduledCallback(
+      SequenceScheduledCallback callback);
+
   // Called when a threaded animation is actually started.
   void OnThreadedAnimationStarted(base::TimeTicks monotonic_time,
                                   cc::TargetProperty::Type target_property,
@@ -293,8 +314,8 @@ class COMPOSITOR_EXPORT LayerAnimator : public base::RefCounted<LayerAnimator>,
   // Removes the sequences from both the running animations and the queue.
   // Returns a pointer to the removed animation, if any. NOTE: the caller is
   // responsible for deleting the returned pointer.
-  LayerAnimationSequence* RemoveAnimation(
-      LayerAnimationSequence* sequence) WARN_UNUSED_RESULT;
+  [[nodiscard]] LayerAnimationSequence* RemoveAnimation(
+      LayerAnimationSequence* sequence);
 
   // Progresses to the end of the sequence before removing it.
   void FinishAnimation(LayerAnimationSequence* sequence, bool abort);
@@ -378,7 +399,7 @@ class COMPOSITOR_EXPORT LayerAnimator : public base::RefCounted<LayerAnimator>,
       base::TimeTicks animation_start_time,
       std::unique_ptr<gfx::AnimationCurve> curve) override {}
   void NotifyLocalTimeUpdated(
-      absl::optional<base::TimeDelta> local_time) override {}
+      std::optional<base::TimeDelta> local_time) override {}
 
   // Implementation of LayerThreadedAnimationDelegate.
   void AddThreadedAnimation(
@@ -392,7 +413,7 @@ class COMPOSITOR_EXPORT LayerAnimator : public base::RefCounted<LayerAnimator>,
   AnimationQueue animation_queue_;
 
   // The target of all layer animations.
-  LayerAnimationDelegate* delegate_;
+  raw_ptr<LayerAnimationDelegate> delegate_ = nullptr;
 
   // Plays CC animations.
   scoped_refptr<cc::Animation> animation_;
@@ -401,39 +422,48 @@ class COMPOSITOR_EXPORT LayerAnimator : public base::RefCounted<LayerAnimator>,
   RunningAnimations running_animations_;
 
   // Determines how animations are replaced.
-  PreemptionStrategy preemption_strategy_;
+  PreemptionStrategy preemption_strategy_ = IMMEDIATELY_SET_NEW_TARGET;
 
   // Whether the length of animations is locked. While it is locked
   // SetTransitionDuration does not set |transition_duration_|.
-  bool is_transition_duration_locked_;
+  bool is_transition_duration_locked_ = false;
 
   // The default length of animations.
   base::TimeDelta transition_duration_;
 
   // The default tween type for implicit transitions
-  gfx::Tween::Type tween_type_;
+  gfx::Tween::Type tween_type_ = gfx::Tween::LINEAR;
 
   // Used for coordinating the starting of animations.
   base::TimeTicks last_step_time_;
 
   // True if we are being stepped by our container.
-  bool is_started_;
+  bool is_started_ = false;
 
   // This prevents the animator from automatically stepping through animations
   // and allows for manual stepping.
-  bool disable_timer_for_test_;
+  bool disable_timer_for_test_ = false;
 
   // Prevents timer adjustments in case when we start multiple animations
   // with preemption strategies that discard previous animations.
-  bool adding_animations_;
+  bool adding_animations_ = false;
 
   // Observers are notified when layer animations end, are scheduled or are
   // aborted.
-  base::ObserverList<LayerAnimationObserver>::Unchecked observers_;
+  // TODO(crbug.com/40197146): Once all references to Add/RemoveObserver
+  // functions are removed, delete these, the associated methods other internal
+  // related code.
+  base::ObserverList<
+      LayerAnimationObserver,
+      /*check_empty=*/false,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>::
+      UncheckedAndDanglingUntriaged observers_;
 
   std::vector<std::unique_ptr<ImplicitAnimationObserver>> owned_observer_list_;
 
-  DISALLOW_COPY_AND_ASSIGN(LayerAnimator);
+  SequenceScheduledCallbacks sequence_scheduled_callbacks_;
+
+  base::WeakPtrFactory<LayerAnimator> weak_ptr_factory_{this};
 };
 
 }  // namespace ui

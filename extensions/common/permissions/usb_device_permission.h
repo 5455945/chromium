@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -33,7 +33,7 @@ class UsbDevicePermission
     // permission properties. It will accept all interfaceClass properties. For
     // example, created param would always accept {"intefaceClass": 3}
     // permission, and it would accept {"vendorId": 2, "interfaceClass": 4} iff
-    // |vendor_id| is 2.
+    // `vendor_id` is 2.
     // Created check param failing means there are no permissions allowing
     // access to the USB device. On the other hand, created check param passing
     // does not necessarily mean there is a permission allowing access to the
@@ -60,6 +60,10 @@ class UsbDevicePermission
                uint16_t product_id,
                std::unique_ptr<std::set<int>> interface_classes,
                int interface_id);
+
+    CheckParam(const CheckParam&) = delete;
+    CheckParam& operator=(const CheckParam&) = delete;
+
     ~CheckParam();
 
     const uint16_t vendor_id;
@@ -67,9 +71,6 @@ class UsbDevicePermission
     const std::unique_ptr<std::set<int>> interface_classes;
     const int interface_id;
     const bool interface_class_allowed;
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(CheckParam);
   };
 
   explicit UsbDevicePermission(const APIPermissionInfo* info);

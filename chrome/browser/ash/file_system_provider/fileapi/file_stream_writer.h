@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,21 +8,22 @@
 #include <stdint.h>
 
 #include "base/files/file.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "net/base/completion_once_callback.h"
 #include "storage/browser/file_system/file_stream_writer.h"
 #include "storage/browser/file_system/file_system_url.h"
 
-namespace ash {
-namespace file_system_provider {
+namespace ash::file_system_provider {
 
 // Implements a streamed file writer. It is lazily initialized by the first call
 // to Write().
 class FileStreamWriter : public storage::FileStreamWriter {
  public:
   FileStreamWriter(const storage::FileSystemURL& url, int64_t initial_offset);
+
+  FileStreamWriter(const FileStreamWriter&) = delete;
+  FileStreamWriter& operator=(const FileStreamWriter&) = delete;
 
   ~FileStreamWriter() override;
 
@@ -31,7 +32,8 @@ class FileStreamWriter : public storage::FileStreamWriter {
             int buf_len,
             net::CompletionOnceCallback callback) override;
   int Cancel(net::CompletionOnceCallback callback) override;
-  int Flush(net::CompletionOnceCallback callback) override;
+  int Flush(storage::FlushMode flush_mode,
+            net::CompletionOnceCallback callback) override;
 
  private:
   // Helper class for executing operations on the provided file system. All
@@ -46,7 +48,8 @@ class FileStreamWriter : public storage::FileStreamWriter {
     INITIALIZED,
     EXECUTING,
     FAILED,
-    CANCELLING
+    CANCELLING,
+    FINALIZED,
   };
 
   // Called when OperationRunner::WriteOnUIThread is completed.
@@ -57,6 +60,9 @@ class FileStreamWriter : public storage::FileStreamWriter {
   // Called when Write() operation is completed with either a success or an
   // error.
   void OnWriteCompleted(int result);
+
+  void OnFlushFileCompleted(net::CompletionOnceCallback callback,
+                            base::File::Error result);
 
   // Initializes the writer by opening the file. When completed with success,
   // runs the |pending_closure|. Otherwise, calls the |error_callback|.
@@ -80,10 +86,8 @@ class FileStreamWriter : public storage::FileStreamWriter {
   State state_;
 
   base::WeakPtrFactory<FileStreamWriter> weak_ptr_factory_{this};
-  DISALLOW_COPY_AND_ASSIGN(FileStreamWriter);
 };
 
-}  // namespace file_system_provider
-}  // namespace ash
+}  // namespace ash::file_system_provider
 
 #endif  // CHROME_BROWSER_ASH_FILE_SYSTEM_PROVIDER_FILEAPI_FILE_STREAM_WRITER_H_

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,15 @@
 
 #include <memory>
 
+#include "base/android/jni_android.h"
+#include "base/android/jni_string.h"
 #include "base/android/scoped_java_ref.h"
+#include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
+#include "components/permissions/android/jni_headers/BluetoothChooserDialog_shared_jni.h"
 #include "content/public/browser/bluetooth_chooser.h"
 #include "content/public/browser/web_contents.h"
+#include "third_party/jni_zero/jni_zero.h"
 
 namespace permissions {
 
@@ -19,6 +25,16 @@ class BluetoothChooserAndroidDelegate;
 // options.
 class BluetoothChooserAndroid : public content::BluetoothChooser {
  public:
+  // The callback type for creating the java dialog object.
+  using CreateJavaDialogCallback =
+      base::OnceCallback<base::android::ScopedJavaLocalRef<jobject>(
+          JNIEnv*,
+          const base::android::JavaRef<jobject>&,
+          const std::u16string&,
+          JniIntWrapper,
+          const base::android::JavaRef<jobject>&,
+          int64_t)>;
+
   // Both frame and event_handler must outlive the BluetoothChooserAndroid.
   BluetoothChooserAndroid(
       content::RenderFrameHost* frame,
@@ -38,24 +54,36 @@ class BluetoothChooserAndroid : public content::BluetoothChooser {
                          int signal_strength_level) override;
 
   // Report the dialog's result.
-  void OnDialogFinished(JNIEnv* env,
-                        jint event_type,
-                        const base::android::JavaParamRef<jstring>& device_id);
+  void OnDialogFinished(content::BluetoothChooserEvent event,
+                        const std::string& device_id);
 
   // Notify bluetooth stack that the search needs to be re-issued.
   void RestartSearch();
   // Calls RestartSearch(). Unused JNI parameters enable calls from Java.
   void RestartSearch(JNIEnv*);
 
-  void ShowBluetoothOverviewLink(JNIEnv* env);
-  void ShowBluetoothAdapterOffLink(JNIEnv* env);
-  void ShowNeedLocationPermissionLink(JNIEnv* env);
+  void ShowBluetoothOverviewLink();
+  void ShowBluetoothAdapterOffLink();
+  void ShowNeedLocationPermissionLink();
+
+  static std::unique_ptr<BluetoothChooserAndroid> CreateForTesting(
+      content::RenderFrameHost* frame,
+      const EventHandler& event_handler,
+      std::unique_ptr<BluetoothChooserAndroidDelegate> delegate,
+      CreateJavaDialogCallback create_java_dialog_callback);
 
  private:
+  BluetoothChooserAndroid(
+      content::RenderFrameHost* frame,
+      const EventHandler& event_handler,
+      std::unique_ptr<BluetoothChooserAndroidDelegate> delegate,
+      CreateJavaDialogCallback create_java_dialog_callback);
+
   void OpenURL(const char* url);
+
   base::android::ScopedJavaGlobalRef<jobject> java_dialog_;
 
-  content::WebContents* web_contents_;
+  raw_ptr<content::WebContents> web_contents_;
   BluetoothChooser::EventHandler event_handler_;
   std::unique_ptr<BluetoothChooserAndroidDelegate> delegate_;
 };

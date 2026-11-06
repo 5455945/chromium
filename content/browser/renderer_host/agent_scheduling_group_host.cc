@@ -1,32 +1,33 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 #include "content/browser/renderer_host/agent_scheduling_group_host.h"
 
 #include <memory>
 
-#include "base/containers/contains.h"
 #include "base/containers/unique_ptr_adapters.h"
 #include "base/feature_list.h"
+#include "base/memory/raw_ptr.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
+#include "base/state_transitions.h"
 #include "base/supports_user_data.h"
+#include "base/task/single_thread_task_runner.h"
 #include "content/browser/bad_message.h"
 #include "content/browser/renderer_host/agent_scheduling_group_host_factory.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
 #include "content/common/agent_scheduling_group.mojom.h"
 #include "content/common/renderer.mojom.h"
-#include "content/common/state_transitions.h"
-#include "content/public/browser/browser_message_filter.h"
 #include "content/public/browser/render_process_host.h"
-#include "ipc/ipc_channel_mojo.h"
-#include "ipc/ipc_message.h"
+#include "ipc/constants.mojom.h"
+#include "ipc/ipc_channel_proxy.h"
+#include "third_party/blink/public/mojom/worker/worklet_global_scope_creation_params.mojom.h"
 
 namespace content {
 
 namespace {
 
-using ::IPC::ChannelMojo;
 using ::IPC::ChannelProxy;
 using ::IPC::Listener;
 using ::mojo::AssociatedReceiver;
@@ -54,10 +55,11 @@ struct AgentSchedulingGroupHostUserData : public base::SupportsUserData::Data {
 
   std::set<std::unique_ptr<AgentSchedulingGroupHost>, base::UniquePtrComparator>
       owned_host_set;
-  // This is used solely to DCHECK the invariant that a SiteInstance cannot
+  // This is used solely to DCHECK the invariant that a SiteInstanceGroup cannot
   // request an AgentSchedulingGroup twice from the same RenderProcessHost.
 #if DCHECK_IS_ON()
-  std::set<const SiteInstance*> site_instances;
+  std::set<raw_ptr<const SiteInstanceGroup, SetExperimental>>
+      site_instance_groups;
 #endif
 };
 
@@ -71,7 +73,7 @@ static features::MBIMode GetMBIMode() {
 
 // static
 AgentSchedulingGroupHost* AgentSchedulingGroupHost::GetOrCreate(
-    const SiteInstance& instance,
+    const SiteInstanceGroup& site_instance_group,
     RenderProcessHost& process) {
   AgentSchedulingGroupHostUserData* data =
       static_cast<AgentSchedulingGroupHostUserData*>(
@@ -84,14 +86,14 @@ AgentSchedulingGroupHost* AgentSchedulingGroupHost::GetOrCreate(
         process.GetUserData(kAgentSchedulingGroupHostDataKey));
   }
 
-  DCHECK(data);
+  CHECK(data, base::NotFatalUntil::M153);
 
   if (GetMBIMode() == features::MBIMode::kLegacy ||
       GetMBIMode() == features::MBIMode::kEnabledPerRenderProcessHost) {
-    // We don't use |data->site_instances| at all when AgentSchedulingGroupHost
-    // is 1:1 with RenderProcessHost.
+    // We don't use |data->site_instance_groups| at all when
+    // AgentSchedulingGroupHost is 1:1 with RenderProcessHost.
 #if DCHECK_IS_ON()
-    DCHECK(data->site_instances.empty());
+    CHECK(data->site_instance_groups.empty(), base::NotFatalUntil::M153);
 #endif
 
     if (data->owned_host_set.empty()) {
@@ -107,11 +109,12 @@ AgentSchedulingGroupHost* AgentSchedulingGroupHost::GetOrCreate(
     // RenderProcessHosts, we expect to know about at most one
     // AgentSchedulingGroupHost, since it should be the only one associated
     // with the RenderProcessHost.
-    DCHECK_EQ(data->owned_host_set.size(), 1ul);
+    CHECK_EQ(data->owned_host_set.size(), 1ul, base::NotFatalUntil::M153);
     return data->owned_host_set.begin()->get();
   }
 
-  DCHECK_EQ(GetMBIMode(), features::MBIMode::kEnabledPerSiteInstance);
+  CHECK_EQ(GetMBIMode(), features::MBIMode::kEnabledPerSiteInstance,
+           base::NotFatalUntil::M153);
 
   // If we're in an MBI mode that creates multiple AgentSchedulingGroupHosts
   // per RenderProcessHost, then this will be called whenever SiteInstance needs
@@ -120,13 +123,14 @@ AgentSchedulingGroupHost* AgentSchedulingGroupHost::GetOrCreate(
       std::make_unique<AgentSchedulingGroupHost>(process);
   AgentSchedulingGroupHost* return_host = host.get();
 
-  // In the MBI mode where we AgentSchedulingGroupHosts are 1:1 with
-  // SiteInstances, a SiteInstance may see different RenderProcessHosts
-  // throughout its lifetime, but it should only ever see a single
-  // AgentSchedulingGroupHost for a given RenderProcessHost.
+  // In the MBI mode where AgentSchedulingGroupHosts are 1:1 with
+  // SiteInstanceGroups, a SiteInstanceGroup may see different
+  // RenderProcessHosts throughout its lifetime, but it should only ever see a
+  // single AgentSchedulingGroupHost for a given RenderProcessHost.
 #if DCHECK_IS_ON()
-  DCHECK(!base::Contains(data->site_instances, &instance));
-  data->site_instances.insert(&instance);
+  CHECK(!data->site_instance_groups.contains(&site_instance_group),
+        base::NotFatalUntil::M153);
+  data->site_instance_groups.insert(&site_instance_group);
 #endif
 
   data->owned_host_set.insert(std::move(host));
@@ -139,9 +143,8 @@ int32_t AgentSchedulingGroupHost::GetNextID() {
 }
 
 AgentSchedulingGroupHost::AgentSchedulingGroupHost(RenderProcessHost& process)
-    : process_(process),
-      receiver_(this) {
-  process_.AddObserver(this);
+    : process_(process), receiver_(this) {
+  process_->AddObserver(this);
 
   // The RenderProcessHost's channel and other mojo interfaces are bound by the
   // time this class is constructed, so we eagerly initialize this class's IPC
@@ -155,29 +158,35 @@ AgentSchedulingGroupHost::AgentSchedulingGroupHost(RenderProcessHost& process)
 // DO NOT USE |process_| HERE! At this point it (or at least parts of it) is no
 // longer valid.
 AgentSchedulingGroupHost::~AgentSchedulingGroupHost() {
-  DCHECK_EQ(state_, LifecycleState::kRenderProcessHostDestroyed);
+  CHECK_EQ(state_, LifecycleState::kRenderProcessHostDestroyed,
+           base::NotFatalUntil::M153);
 }
 
 void AgentSchedulingGroupHost::RenderProcessExited(
     RenderProcessHost* host,
     const ChildProcessTerminationInfo& info) {
   SetState(LifecycleState::kRenderProcessExited);
-  DCHECK_EQ(host, &process_);
+  CHECK_EQ(host, &*process_, base::NotFatalUntil::M153);
 
   // We mirror the RenderProcessHost flow here by resetting our mojos, and
   // reinitializing them once the process's IPC::ChannelProxy and renderer
   // interface are reinitialized.
   ResetIPC();
 
-  // RenderProcessHostImpl will attempt to call this method later if it has not
-  // already been called. We call it now since `SetUpIPC()` relies on it being
-  // called, thus setting up the IPC channel and mojom::Renderer interface.
-  process_.EnableSendQueue();
+  // We don't want to reinitialize the RenderProcessHost's IPC channel when
+  // we are going to immediately get a call to RenderProcessHostDestroyed.
+  if (!process_->IsDeletingSoon()) {
+    // RenderProcessHostImpl will attempt to call this method later if it has
+    // not already been called. We call it now since `SetUpIPC()` relies on it
+    // being called, thus setting up the IPC channel and mojom::Renderer
+    // interface.
+    process_->EnableSendQueue();
 
-  // We call this so that we can immediately queue IPC and mojo messages on the
-  // new channel/interfaces that are bound for the next renderer process, should
-  // one eventually be spun up.
-  SetUpIPC();
+    // We call this so that we can immediately queue IPC and mojo messages on
+    // the new channel/interfaces that are bound for the next renderer process,
+    // should one eventually be spun up.
+    SetUpIPC();
+  }
 }
 
 void AgentSchedulingGroupHost::RenderProcessHostDestroyed(
@@ -188,33 +197,15 @@ void AgentSchedulingGroupHost::RenderProcessHostDestroyed(
       RenderProcessExited(host, ChildProcessTerminationInfo());
     }
   }
-  DCHECK_EQ(state_, LifecycleState::kBound);
+  CHECK(state_ == LifecycleState::kBound ||
+            state_ == LifecycleState::kRenderProcessExited,
+        base::NotFatalUntil::M153);
 
-  DCHECK_EQ(host, &process_);
-  process_.RemoveObserver(this);
+  CHECK_EQ(host, &*process_, base::NotFatalUntil::M153);
+  process_->RemoveObserver(this);
   SetState(LifecycleState::kRenderProcessHostDestroyed);
 }
 
-bool AgentSchedulingGroupHost::OnMessageReceived(const IPC::Message& message) {
-  if (message.routing_id() == MSG_ROUTING_CONTROL) {
-    bad_message::ReceivedBadMessage(&process_,
-                                    bad_message::ASGH_RECEIVED_CONTROL_MESSAGE);
-    return false;
-  }
-
-  auto* listener = GetListener(message.routing_id());
-  if (!listener)
-    return false;
-
-  return listener->OnMessageReceived(message);
-}
-
-void AgentSchedulingGroupHost::OnBadMessageReceived(
-    const IPC::Message& message) {
-  // If a bad message is received, it should be treated the same as a bad
-  // message on the renderer-wide channel (i.e., kill the renderer).
-  return process_.OnBadMessageReceived(message);
-}
 
 void AgentSchedulingGroupHost::OnAssociatedInterfaceRequest(
     const std::string& interface_name,
@@ -223,30 +214,16 @@ void AgentSchedulingGroupHost::OnAssociatedInterfaceRequest(
   // interfaces should be requested via the process-wide channel, and
   // ASG-related interfaces should go through `RouteProvider`.
   bad_message::ReceivedBadMessage(
-      &process_, bad_message::ASGH_ASSOCIATED_INTERFACE_REQUEST);
-}
-
-void AgentSchedulingGroupHost::AddFilter(BrowserMessageFilter* filter) {
-  DCHECK(filter);
-  // When MBI mode is disabled, we forward these kinds of requests straight to
-  // the underlying `RenderProcessHost`.
-  if (GetMBIMode() == features::MBIMode::kLegacy) {
-    process_.AddFilter(filter);
-    return;
-  }
-
-  filter->RegisterAssociatedInterfaces(channel_.get());
-  channel_->AddFilter(filter->GetFilter());
+      &*process_, bad_message::ASGH_ASSOCIATED_INTERFACE_REQUEST);
 }
 
 RenderProcessHost* AgentSchedulingGroupHost::GetProcess() {
-  // TODO(crbug.com/1111231): Make the condition below hold.
-  // Currently the DCHECK doesn't hold, since RenderViewHostImpl outlives
-  // its associated AgentSchedulingGroupHost, and the dtor queries the
-  // associated RenderProcessHost to remove itself from the
-  // PerProcessRenderViewHostSet and RemoveObserver() itself.
-  // DCHECK_NE(state_, LifecycleState::kRenderProcessHostDestroyed);
-  return &process_;
+  // `process_` can still be accessed here even if `state_` has been set to
+  // `kRenderProcessHostDestroyed`. This is because a `RenderProcessHostImpl` is
+  // scheduled to be destroyed asynchronously after the
+  // `RenderProcessHostDestroyed()` observer notification is dispatched, so
+  // `process_` and `this` may still be around within that gap.
+  return &*process_;
 }
 
 bool AgentSchedulingGroupHost::Init() {
@@ -256,107 +233,65 @@ bool AgentSchedulingGroupHost::Init() {
   // own mojos. This is because the lifetime of our mojos should match the
   // lifetime of the RenderProcessHost's IPC::ChannelProxy and renderer
   // interfaces.
-  DCHECK(process_.GetRendererInterface());
-  DCHECK(mojo_remote_.is_bound());
-  DCHECK_EQ(state_, LifecycleState::kBound);
+  CHECK(process_->GetRendererInterface(), base::NotFatalUntil::M153);
+  CHECK(mojo_remote_.is_bound(), base::NotFatalUntil::M153);
+  CHECK_EQ(state_, LifecycleState::kBound, base::NotFatalUntil::M153);
 
-  return process_.Init();
+  return process_->Init();
+}
+
+base::SafeRef<AgentSchedulingGroupHost> AgentSchedulingGroupHost::GetSafeRef()
+    const {
+  return weak_ptr_factory_.GetSafeRef();
 }
 
 ChannelProxy* AgentSchedulingGroupHost::GetChannel() {
-  DCHECK_EQ(state_, LifecycleState::kBound);
+  CHECK_EQ(state_, LifecycleState::kBound, base::NotFatalUntil::M153);
 
   if (GetMBIMode() == features::MBIMode::kLegacy)
-    return process_.GetChannel();
+    return process_->GetChannel();
 
-  DCHECK(channel_);
+  CHECK(channel_, base::NotFatalUntil::M153);
   return channel_.get();
-}
-
-bool AgentSchedulingGroupHost::Send(IPC::Message* message) {
-  DCHECK_EQ(state_, LifecycleState::kBound);
-
-  std::unique_ptr<IPC::Message> msg(message);
-
-  if (GetMBIMode() == features::MBIMode::kLegacy)
-    return process_.Send(msg.release());
-
-  // This DCHECK is too idealistic for now - messages that are handled by
-  // filters are sent as control messages since they are intercepted before
-  // routing. It is put here as documentation for now, since this code would not
-  // be reached until we activate
-  // `features::MBIMode::kEnabledPerRenderProcessHost` or
-  // `features::MBIMode::kEnabledPerSiteInstance`.
-  DCHECK_NE(message->routing_id(), MSG_ROUTING_CONTROL);
-
-  DCHECK(channel_);
-  return channel_->Send(msg.release());
 }
 
 void AgentSchedulingGroupHost::AddRoute(int32_t routing_id,
                                         Listener* listener) {
+  // TODO(crbug.com/557077751): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK_EQ(state_, LifecycleState::kBound);
-  DCHECK(!listener_map_.Lookup(routing_id));
+  CHECK(!listener_map_.Lookup(routing_id), base::NotFatalUntil::M153);
   listener_map_.AddWithID(listener, routing_id);
-  process_.AddRoute(routing_id, listener);
+  process_->AddRoute(routing_id, listener);
 }
 
 void AgentSchedulingGroupHost::RemoveRoute(int32_t routing_id) {
+  TRACE_EVENT0("navigation", "AgentSchedulingGroupHost::RemoveRoute");
+  base::ScopedUmaHistogramTimer histogram_timer(
+      "Navigation.AgentSchedulingGroupHost.RemoveRoute");
+  // TODO(crbug.com/558680516): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK_EQ(state_, LifecycleState::kBound);
   listener_map_.Remove(routing_id);
-  process_.RemoveRoute(routing_id);
+  process_->RemoveRoute(routing_id);
 }
 mojom::RouteProvider* AgentSchedulingGroupHost::GetRemoteRouteProvider() {
-  DCHECK_EQ(state_, LifecycleState::kBound);
+  CHECK_EQ(state_, LifecycleState::kBound, base::NotFatalUntil::M153);
   return remote_route_provider_.get();
 }
 
 void AgentSchedulingGroupHost::CreateFrame(mojom::CreateFrameParamsPtr params) {
-  DCHECK_EQ(state_, LifecycleState::kBound);
-  DCHECK(process_.IsInitializedAndNotDead());
-  DCHECK(mojo_remote_.is_bound());
+  CHECK_EQ(state_, LifecycleState::kBound, base::NotFatalUntil::M153);
+  CHECK(process_->IsInitializedAndNotDead(), base::NotFatalUntil::M153);
+  CHECK(mojo_remote_.is_bound(), base::NotFatalUntil::M153);
   mojo_remote_.get()->CreateFrame(std::move(params));
 }
 
 void AgentSchedulingGroupHost::CreateView(mojom::CreateViewParamsPtr params) {
-  DCHECK_EQ(state_, LifecycleState::kBound);
-  DCHECK(process_.IsInitializedAndNotDead());
-  DCHECK(mojo_remote_.is_bound());
+  CHECK_EQ(state_, LifecycleState::kBound, base::NotFatalUntil::M153);
+  CHECK(process_->IsInitializedAndNotDead(), base::NotFatalUntil::M153);
+  CHECK(mojo_remote_.is_bound(), base::NotFatalUntil::M153);
   mojo_remote_.get()->CreateView(std::move(params));
-}
-
-void AgentSchedulingGroupHost::DestroyView(
-    int32_t routing_id,
-    mojom::AgentSchedulingGroup::DestroyViewCallback callback) {
-  DCHECK_EQ(state_, LifecycleState::kBound);
-  if (mojo_remote_.is_bound()) {
-    mojo_remote_.get()->DestroyView(routing_id, std::move(callback));
-  } else {
-    std::move(callback).Run();
-  }
-}
-
-void AgentSchedulingGroupHost::CreateFrameProxy(
-    const blink::RemoteFrameToken& token,
-    int32_t routing_id,
-    const absl::optional<blink::FrameToken>& opener_frame_token,
-    int32_t view_routing_id,
-    int32_t parent_routing_id,
-    blink::mojom::TreeScopeType tree_scope_type,
-    blink::mojom::FrameReplicationStatePtr replicated_state,
-    const base::UnguessableToken& devtools_frame_token,
-    mojom::RemoteMainFrameInterfacesPtr remote_main_frame_interfaces) {
-  DCHECK_EQ(state_, LifecycleState::kBound);
-  mojo_remote_.get()->CreateFrameProxy(
-      token, routing_id, opener_frame_token, view_routing_id, parent_routing_id,
-      tree_scope_type, std::move(replicated_state), devtools_frame_token,
-      std::move(remote_main_frame_interfaces));
-}
-
-void AgentSchedulingGroupHost::ReportNoBinderForInterface(
-    const std::string& error) {
-  broker_receiver_.ReportBadMessage(error +
-                                    " for the agent scheduling group scope");
 }
 
 // static
@@ -369,7 +304,7 @@ void AgentSchedulingGroupHost::
 // static
 AgentSchedulingGroupHostFactory* AgentSchedulingGroupHost::
     get_agent_scheduling_group_host_factory_for_testing() {
-  DCHECK(g_agent_scheduling_group_host_factory_);
+  CHECK(g_agent_scheduling_group_host_factory_, base::NotFatalUntil::M153);
   return g_agent_scheduling_group_host_factory_;
 }
 
@@ -377,63 +312,38 @@ void AgentSchedulingGroupHost::DidUnloadRenderFrame(
     const blink::LocalFrameToken& frame_token) {
   // |frame_host| could be null if we decided to remove the RenderFrameHostImpl
   // because the Unload request took too long.
-  if (auto* frame_host =
-          RenderFrameHostImpl::FromFrameToken(process_.GetID(), frame_token)) {
+  if (auto* frame_host = RenderFrameHostImpl::FromFrameToken(
+          process_->GetDeprecatedID(), frame_token)) {
     frame_host->OnUnloadACK();
   }
 }
 
-void AgentSchedulingGroupHost::GetRoute(
-    int32_t routing_id,
-    mojo::PendingAssociatedReceiver<blink::mojom::AssociatedInterfaceProvider>
-        receiver) {
-  DCHECK_EQ(state_, LifecycleState::kBound);
-  DCHECK(receiver.is_valid());
-  associated_interface_provider_receivers_.Add(this, std::move(receiver),
-                                               routing_id);
-}
-
-void AgentSchedulingGroupHost::GetAssociatedInterface(
-    const std::string& name,
-    mojo::PendingAssociatedReceiver<blink::mojom::AssociatedInterface>
-        receiver) {
-  DCHECK_EQ(state_, LifecycleState::kBound);
-  int32_t routing_id =
-      associated_interface_provider_receivers_.current_context();
-
-  if (auto* listener = GetListener(routing_id))
-    listener->OnAssociatedInterfaceRequest(name, receiver.PassHandle());
-}
-
 void AgentSchedulingGroupHost::ResetIPC() {
-  DCHECK_EQ(state_, LifecycleState::kRenderProcessExited);
+  CHECK_EQ(state_, LifecycleState::kRenderProcessExited,
+           base::NotFatalUntil::M153);
   receiver_.reset();
   mojo_remote_.reset();
   remote_route_provider_.reset();
-  route_provider_receiver_.reset();
-  associated_interface_provider_receivers_.Clear();
-  broker_receiver_.reset();
   channel_ = nullptr;
 }
 
 void AgentSchedulingGroupHost::SetUpIPC() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(state_ == LifecycleState::kNewborn ||
-         state_ == LifecycleState::kRenderProcessExited);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M153);
+  CHECK(state_ == LifecycleState::kNewborn ||
+            state_ == LifecycleState::kRenderProcessExited,
+        base::NotFatalUntil::M153);
 
   // The RenderProcessHostImpl's renderer interface must be initialized at this
   // point. We don't DCHECK |process_.IsInitializedAndNotDead()| here because
   // we may end up here after the renderer process has died but before
   // RenderProcessHostImpl::Init() is called. Therefore, the process can accept
   // IPCs that will be queued for the next renderer process if one is spun up.
-  DCHECK(process_.GetRendererInterface());
+  CHECK(process_->GetRendererInterface(), base::NotFatalUntil::M153);
 
-  DCHECK(!channel_);
-  DCHECK(!mojo_remote_.is_bound());
-  DCHECK(!receiver_.is_bound());
-  DCHECK(!remote_route_provider_.is_bound());
-  DCHECK(!route_provider_receiver_.is_bound());
-  DCHECK(!broker_receiver_.is_bound());
+  CHECK(!channel_, base::NotFatalUntil::M153);
+  CHECK(!mojo_remote_.is_bound(), base::NotFatalUntil::M153);
+  CHECK(!receiver_.is_bound(), base::NotFatalUntil::M153);
+  CHECK(!remote_route_provider_.is_bound(), base::NotFatalUntil::M153);
 
   // After this function returns, all of `this`'s mojo interfaces need to be
   // bound, and associated interfaces need to be associated "properly" - in
@@ -453,59 +363,53 @@ void AgentSchedulingGroupHost::SetUpIPC() {
   //    `mojo_remote_`, and will be transitively associated with the appropriate
   //    IPC channel/pipe.
   if (GetMBIMode() == features::MBIMode::kLegacy) {
-    process_.GetRendererInterface()->CreateAssociatedAgentSchedulingGroup(
-        mojo_remote_.BindNewEndpointAndPassReceiver(),
-        broker_receiver_.BindNewPipeAndPassRemote());
+    process_->GetRendererInterface()->CreateAssociatedAgentSchedulingGroup(
+        mojo_remote_.BindNewEndpointAndPassReceiver());
   } else {
     auto io_task_runner = GetIOThreadTaskRunner({});
 
     // Empty interface endpoint to pass pipes more easily.
     PendingRemote<IPC::mojom::ChannelBootstrap> bootstrap;
 
-    process_.GetRendererInterface()->CreateAgentSchedulingGroup(
-        bootstrap.InitWithNewPipeAndPassReceiver(),
-        broker_receiver_.BindNewPipeAndPassRemote());
-
-    auto channel_factory = ChannelMojo::CreateServerFactory(
-        bootstrap.PassPipe(), /*ipc_task_runner=*/io_task_runner,
-        /*proxy_task_runner=*/base::ThreadTaskRunnerHandle::Get());
+    process_->GetRendererInterface()->CreateAgentSchedulingGroup(
+        bootstrap.InitWithNewPipeAndPassReceiver());
 
     channel_ = ChannelProxy::Create(
-        std::move(channel_factory), /*listener=*/this,
+        bootstrap.PassPipe(), IPC::Channel::MODE_SERVER, /*listener=*/this,
         /*ipc_task_runner=*/io_task_runner,
-        /*listener_task_runner=*/base::ThreadTaskRunnerHandle::Get());
+        /*listener_task_runner=*/
+        base::SingleThreadTaskRunner::GetCurrentDefault());
 
-    // TODO(crbug.com/1111231): Add necessary filters.
+    // TODO(crbug.com/40142495): Add necessary filters.
     // Most of the filters currently installed on the process-wide channel are:
     // 1. "Process-bound", that is, they do not handle messages sent using ASG,
-    // 2. Pepper/NaCl-related, that are going away, and are not supported, or
-    // 3. Related to Android WebViews, which are not currently supported.
+    // 2. Related to Android WebViews, which are not currently supported.
 
     channel_->GetRemoteAssociatedInterface(&mojo_remote_);
   }
 
-  DCHECK(mojo_remote_.is_bound());
+  CHECK(mojo_remote_.is_bound(), base::NotFatalUntil::M153);
 
   mojo_remote_.get()->BindAssociatedInterfaces(
       receiver_.BindNewEndpointAndPassRemote(),
-      route_provider_receiver_.BindNewEndpointAndPassRemote(),
       remote_route_provider_.BindNewEndpointAndPassReceiver());
   SetState(LifecycleState::kBound);
 }
 
 void AgentSchedulingGroupHost::SetState(
     AgentSchedulingGroupHost::LifecycleState state) {
-  static const base::NoDestructor<StateTransitions<LifecycleState>> transitions(
-      StateTransitions<LifecycleState>({
+  static const base::NoDestructor<base::StateTransitions<LifecycleState>>
+      transitions(base::StateTransitions<LifecycleState>({
           {LifecycleState::kNewborn, {LifecycleState::kBound}},
           {LifecycleState::kBound,
            {LifecycleState::kRenderProcessExited,
-            // Note: kRenderProcessHostDestroyed is only reached through kBound
-            //       state. Upon kRenderProcessExited, we immediately setup a
-            //       unclaimed mojo endpoint to be consumed by the next
-            //       renderer process.
+            // Note: If a renderer process is never spawned to claim the
+            //       mojo endpoint created at initialization, then we will
+            //       skip straight to the destroyed state.
             LifecycleState::kRenderProcessHostDestroyed}},
-          {LifecycleState::kRenderProcessExited, {LifecycleState::kBound}},
+          {LifecycleState::kRenderProcessExited,
+           {LifecycleState::kBound,
+            LifecycleState::kRenderProcessHostDestroyed}},
       }));
 
   DCHECK_STATE_TRANSITION(transitions, state_, state);
@@ -534,7 +438,8 @@ std::ostream& operator<<(std::ostream& os,
 }
 
 Listener* AgentSchedulingGroupHost::GetListener(int32_t routing_id) {
-  DCHECK_NE(routing_id, MSG_ROUTING_CONTROL);
+  CHECK_NE(routing_id, IPC::mojom::kRoutingIdControl,
+           base::NotFatalUntil::M153);
 
   return listener_map_.Lookup(routing_id);
 }

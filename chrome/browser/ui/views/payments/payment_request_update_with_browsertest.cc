@@ -1,12 +1,13 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/strings/utf_string_conversions.h"
+#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ui/views/payments/payment_request_browsertest_base.h"
 #include "chrome/browser/ui/views/payments/payment_request_dialog_view_ids.h"
-#include "components/autofill/core/browser/autofill_test_utils.h"
-#include "components/autofill/core/browser/data_model/autofill_profile.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
+#include "components/payments/core/features.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -14,35 +15,46 @@
 namespace payments {
 
 class PaymentRequestUpdateWithTest : public PaymentRequestBrowserTestBase {
+ public:
+  PaymentRequestUpdateWithTest(const PaymentRequestUpdateWithTest&) = delete;
+  PaymentRequestUpdateWithTest& operator=(const PaymentRequestUpdateWithTest&) =
+      delete;
+
  protected:
-  PaymentRequestUpdateWithTest() {}
+  PaymentRequestUpdateWithTest() { SetBypassUserInteractionForTesting(); }
 
   void RunJavaScriptFunctionToOpenPaymentRequestUI(
-      const std::string& function_name) {
+      const std::string& function_name,
+      const std::string& payment_method_name) {
     ResetEventWaiterForDialogOpened();
 
     content::WebContents* web_contents = GetActiveWebContents();
-    ASSERT_TRUE(content::ExecuteScript(web_contents, function_name + "();"));
+    ASSERT_TRUE(content::ExecJs(
+        web_contents, function_name + "('" + payment_method_name + "');"));
 
-    WaitForObservedEvent();
+    ASSERT_TRUE(WaitForObservedEvent());
   }
 
  private:
-  DISALLOW_COPY_AND_ASSIGN(PaymentRequestUpdateWithTest);
+  base::test::ScopedFeatureList feature_list_{
+      features::kPaymentRequestMandatoryPaymentAppUi};
 };
 
 IN_PROC_BROWSER_TEST_F(PaymentRequestUpdateWithTest, UpdateWithEmpty) {
-  NavigateTo("/payment_request_update_with_test.html");
   autofill::AutofillProfile billing_address = autofill::test::GetFullProfile();
   AddAutofillProfile(billing_address);
   AddAutofillProfile(autofill::test::GetFullProfile2());
-  autofill::CreditCard card = autofill::test::GetCreditCard();
-  card.set_billing_address_id(billing_address.guid());
-  AddCreditCard(card);
 
-  RunJavaScriptFunctionToOpenPaymentRequestUI("updateWithEmpty");
+  std::string payment_method_name;
+  InstallPaymentApp("a.com", "/payment_request_success_responder.js",
+                    &payment_method_name);
+
+  NavigateTo("/payment_request_update_with_test.html");
+  RunJavaScriptFunctionToOpenPaymentRequestUI("updateWithEmpty",
+                                              payment_method_name);
 
   OpenOrderSummaryScreen();
+
   EXPECT_EQ(u"$5.00",
             GetLabelText(DialogViewID::ORDER_SUMMARY_TOTAL_AMOUNT_LABEL));
   EXPECT_EQ(u"$2.00", GetLabelText(DialogViewID::ORDER_SUMMARY_LINE_ITEM_1));
@@ -73,21 +85,27 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestUpdateWithTest, UpdateWithEmpty) {
   EXPECT_EQ(u"$0.00", GetLabelText(DialogViewID::ORDER_SUMMARY_LINE_ITEM_3));
   ClickOnBackArrow();
 
-  PayWithCreditCardAndWait(u"123");
+  // Click on pay.
+  EXPECT_TRUE(IsPayButtonEnabled());
+  ResetEventWaiterForSequence(
+      {DialogEvent::LOADING_VIEW_SHOWN, DialogEvent::DIALOG_CLOSED});
+  ClickOnDialogViewAndWait(DialogViewID::PAY_BUTTON, dialog_view());
 
   ExpectBodyContains({"freeShipping"});
 }
 
 IN_PROC_BROWSER_TEST_F(PaymentRequestUpdateWithTest, UpdateWithTotal) {
-  NavigateTo("/payment_request_update_with_test.html");
   autofill::AutofillProfile billing_address = autofill::test::GetFullProfile();
   AddAutofillProfile(billing_address);
   AddAutofillProfile(autofill::test::GetFullProfile2());
-  autofill::CreditCard card = autofill::test::GetCreditCard();
-  card.set_billing_address_id(billing_address.guid());
-  AddCreditCard(card);
 
-  RunJavaScriptFunctionToOpenPaymentRequestUI("updateWithTotal");
+  std::string payment_method_name;
+  InstallPaymentApp("a.com", "/payment_request_success_responder.js",
+                    &payment_method_name);
+
+  NavigateTo("/payment_request_update_with_test.html");
+  RunJavaScriptFunctionToOpenPaymentRequestUI("updateWithTotal",
+                                              payment_method_name);
 
   OpenOrderSummaryScreen();
   EXPECT_EQ(u"$5.00",
@@ -120,21 +138,27 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestUpdateWithTest, UpdateWithTotal) {
   EXPECT_EQ(u"$0.00", GetLabelText(DialogViewID::ORDER_SUMMARY_LINE_ITEM_3));
   ClickOnBackArrow();
 
-  PayWithCreditCardAndWait(u"123");
+  // Click on pay.
+  EXPECT_TRUE(IsPayButtonEnabled());
+  ResetEventWaiterForSequence(
+      {DialogEvent::LOADING_VIEW_SHOWN, DialogEvent::DIALOG_CLOSED});
+  ClickOnDialogViewAndWait(DialogViewID::PAY_BUTTON, dialog_view());
 
   ExpectBodyContains({"freeShipping"});
 }
 
 IN_PROC_BROWSER_TEST_F(PaymentRequestUpdateWithTest, UpdateWithDisplayItems) {
-  NavigateTo("/payment_request_update_with_test.html");
   autofill::AutofillProfile billing_address = autofill::test::GetFullProfile();
   AddAutofillProfile(billing_address);
   AddAutofillProfile(autofill::test::GetFullProfile2());
-  autofill::CreditCard card = autofill::test::GetCreditCard();
-  card.set_billing_address_id(billing_address.guid());
-  AddCreditCard(card);
 
-  RunJavaScriptFunctionToOpenPaymentRequestUI("updateWithDisplayItems");
+  std::string payment_method_name;
+  InstallPaymentApp("a.com", "/payment_request_success_responder.js",
+                    &payment_method_name);
+
+  NavigateTo("/payment_request_update_with_test.html");
+  RunJavaScriptFunctionToOpenPaymentRequestUI("updateWithDisplayItems",
+                                              payment_method_name);
 
   OpenOrderSummaryScreen();
   EXPECT_EQ(u"$5.00",
@@ -167,22 +191,28 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestUpdateWithTest, UpdateWithDisplayItems) {
   EXPECT_EQ(u"$0.00", GetLabelText(DialogViewID::ORDER_SUMMARY_LINE_ITEM_3));
   ClickOnBackArrow();
 
-  PayWithCreditCardAndWait(u"123");
+  // Click on pay.
+  EXPECT_TRUE(IsPayButtonEnabled());
+  ResetEventWaiterForSequence(
+      {DialogEvent::LOADING_VIEW_SHOWN, DialogEvent::DIALOG_CLOSED});
+  ClickOnDialogViewAndWait(DialogViewID::PAY_BUTTON, dialog_view());
 
   ExpectBodyContains({"freeShipping"});
 }
 
 IN_PROC_BROWSER_TEST_F(PaymentRequestUpdateWithTest,
                        UpdateWithShippingOptions) {
-  NavigateTo("/payment_request_update_with_test.html");
   autofill::AutofillProfile billing_address = autofill::test::GetFullProfile();
   AddAutofillProfile(billing_address);
   AddAutofillProfile(autofill::test::GetFullProfile2());
-  autofill::CreditCard card = autofill::test::GetCreditCard();
-  card.set_billing_address_id(billing_address.guid());
-  AddCreditCard(card);
 
-  RunJavaScriptFunctionToOpenPaymentRequestUI("updateWithShippingOptions");
+  std::string payment_method_name;
+  InstallPaymentApp("a.com", "/payment_request_success_responder.js",
+                    &payment_method_name);
+
+  NavigateTo("/payment_request_update_with_test.html");
+  RunJavaScriptFunctionToOpenPaymentRequestUI("updateWithShippingOptions",
+                                              payment_method_name);
 
   OpenOrderSummaryScreen();
   EXPECT_EQ(u"$5.00",
@@ -215,21 +245,27 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestUpdateWithTest,
   EXPECT_EQ(u"$0.00", GetLabelText(DialogViewID::ORDER_SUMMARY_LINE_ITEM_3));
   ClickOnBackArrow();
 
-  PayWithCreditCardAndWait(u"123");
+  // Click on pay.
+  EXPECT_TRUE(IsPayButtonEnabled());
+  ResetEventWaiterForSequence(
+      {DialogEvent::LOADING_VIEW_SHOWN, DialogEvent::DIALOG_CLOSED});
+  ClickOnDialogViewAndWait(DialogViewID::PAY_BUTTON, dialog_view());
 
   ExpectBodyContains({"updatedShipping"});
 }
 
 IN_PROC_BROWSER_TEST_F(PaymentRequestUpdateWithTest, UpdateWithModifiers) {
-  NavigateTo("/payment_request_update_with_test.html");
   autofill::AutofillProfile billing_address = autofill::test::GetFullProfile();
   AddAutofillProfile(billing_address);
   AddAutofillProfile(autofill::test::GetFullProfile2());
-  autofill::CreditCard card = autofill::test::GetCreditCard();
-  card.set_billing_address_id(billing_address.guid());
-  AddCreditCard(card);
 
-  RunJavaScriptFunctionToOpenPaymentRequestUI("updateWithModifiers");
+  std::string payment_method_name;
+  InstallPaymentApp("a.com", "/payment_request_success_responder.js",
+                    &payment_method_name);
+
+  NavigateTo("/payment_request_update_with_test.html");
+  RunJavaScriptFunctionToOpenPaymentRequestUI("updateWithModifiers",
+                                              payment_method_name);
 
   OpenOrderSummaryScreen();
   EXPECT_EQ(u"$5.00",
@@ -262,7 +298,11 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestUpdateWithTest, UpdateWithModifiers) {
   EXPECT_EQ(u"-$1.00", GetLabelText(DialogViewID::ORDER_SUMMARY_LINE_ITEM_3));
   ClickOnBackArrow();
 
-  PayWithCreditCardAndWait(u"123");
+  // Click on pay.
+  EXPECT_TRUE(IsPayButtonEnabled());
+  ResetEventWaiterForSequence(
+      {DialogEvent::LOADING_VIEW_SHOWN, DialogEvent::DIALOG_CLOSED});
+  ClickOnDialogViewAndWait(DialogViewID::PAY_BUTTON, dialog_view());
 
   ExpectBodyContains({"freeShipping"});
 }
@@ -270,15 +310,17 @@ IN_PROC_BROWSER_TEST_F(PaymentRequestUpdateWithTest, UpdateWithModifiers) {
 // Show the shipping address validation error message even if the merchant
 // provided some shipping options.
 IN_PROC_BROWSER_TEST_F(PaymentRequestUpdateWithTest, UpdateWithError) {
-  NavigateTo("/payment_request_update_with_test.html");
   autofill::AutofillProfile billing_address = autofill::test::GetFullProfile();
   AddAutofillProfile(billing_address);
   AddAutofillProfile(autofill::test::GetFullProfile2());
-  autofill::CreditCard card = autofill::test::GetCreditCard();
-  card.set_billing_address_id(billing_address.guid());
-  AddCreditCard(card);
 
-  RunJavaScriptFunctionToOpenPaymentRequestUI("updateWithError");
+  std::string payment_method_name;
+  InstallPaymentApp("a.com", "/payment_request_success_responder.js",
+                    &payment_method_name);
+
+  NavigateTo("/payment_request_update_with_test.html");
+  RunJavaScriptFunctionToOpenPaymentRequestUI("updateWithError",
+                                              payment_method_name);
 
   OpenShippingAddressSectionScreen();
   ResetEventWaiterForSequence({DialogEvent::PROCESSING_SPINNER_SHOWN,

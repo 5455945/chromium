@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,12 +10,7 @@ LifecycleUnitObserver::~LifecycleUnitObserver() = default;
 
 void LifecycleUnitObserver::OnLifecycleUnitStateChanged(
     LifecycleUnit* lifecycle_unit,
-    LifecycleUnitState last_state,
-    LifecycleUnitStateChangeReason reason) {}
-
-void LifecycleUnitObserver::OnLifecycleUnitVisibilityChanged(
-    LifecycleUnit* lifecycle_unit,
-    content::Visibility visibility) {}
+    LifecycleUnitState last_state) {}
 
 void LifecycleUnitObserver::OnLifecycleUnitDestroyed(
     LifecycleUnit* lifecycle_unit) {}

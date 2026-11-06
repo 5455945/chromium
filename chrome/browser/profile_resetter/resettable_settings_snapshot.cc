@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,18 +7,17 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/guid.h"
-#include "base/hash/md5.h"
+#include "base/functional/bind.h"
 #include "base/stl_util.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/atomic_flag.h"
-#include "base/task/post_task.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
-#include "base/task_runner_util.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profile_resetter/profile_reset_report.pb.h"
 #include "chrome/browser/profile_resetter/reset_report_uploader.h"
@@ -27,7 +26,7 @@
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/common/channel_info.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/embedder_support/user_agent_utils.h"
 #include "components/prefs/pref_service.h"
@@ -35,19 +34,20 @@
 #include "components/strings/grit/components_strings.h"
 #include "components/version_info/version_info.h"
 #include "content/public/browser/browser_thread.h"
+#include "crypto/random.h"
 #include "extensions/browser/extension_registry.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace {
 
 template <class StringType>
-void AddPair(base::ListValue* list,
+void AddPair(base::ListValue& list,
              const std::u16string& key,
              const StringType& value) {
-  std::unique_ptr<base::DictionaryValue> results(new base::DictionaryValue());
-  results->SetString("key", key);
-  results->SetString("value", value);
-  list->Append(std::move(results));
+  base::DictValue results;
+  results.Set("key", key);
+  results.Set("value", value);
+  list.Append(std::move(results));
 }
 
 }  // namespace
@@ -55,19 +55,19 @@ void AddPair(base::ListValue* list,
 ResettableSettingsSnapshot::ResettableSettingsSnapshot(Profile* profile)
     : startup_(SessionStartupPref::GetStartupPref(profile)),
       shortcuts_determined_(false) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M163);
   // URLs are always stored sorted.
   std::sort(startup_.urls.begin(), startup_.urls.end());
 
   PrefService* prefs = profile->GetPrefs();
-  DCHECK(prefs);
+  CHECK(prefs, base::NotFatalUntil::M163);
   homepage_ = prefs->GetString(prefs::kHomePage);
   homepage_is_ntp_ = prefs->GetBoolean(prefs::kHomePageIsNewTabPage);
   show_home_button_ = prefs->GetBoolean(prefs::kShowHomeButton);
 
   TemplateURLService* service =
       TemplateURLServiceFactory::GetForProfile(profile);
-  DCHECK(service);
+  CHECK(service, base::NotFatalUntil::M163);
   const TemplateURL* dse = service->GetDefaultSearchProvider();
   if (dse)
     dse_url_ = dse->url();
@@ -83,20 +83,19 @@ ResettableSettingsSnapshot::ResettableSettingsSnapshot(Profile* profile)
   // ExtensionSet is sorted but it seems to be an implementation detail.
   std::sort(enabled_extensions_.begin(), enabled_extensions_.end());
 
-  // Calculate the MD5 sum of the GUID to make sure that no part of the GUID
-  // contains information identifying the sender of the report.
-  guid_ = base::MD5String(base::GenerateGUID());
+  // Choose a random ID for this snapshot and store it.
+  guid_ = base::HexEncodeLower(crypto::RandBytesAsArray<16>());
 }
 
 ResettableSettingsSnapshot::~ResettableSettingsSnapshot() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M163);
   if (cancellation_flag_.get())
     cancellation_flag_->data.Set();
 }
 
 void ResettableSettingsSnapshot::Subtract(
     const ResettableSettingsSnapshot& snapshot) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M163);
   ExtensionList extensions = base::STLSetDifference<ExtensionList>(
       enabled_extensions_, snapshot.enabled_extensions_);
   enabled_extensions_.swap(extensions);
@@ -104,7 +103,7 @@ void ResettableSettingsSnapshot::Subtract(
 
 int ResettableSettingsSnapshot::FindDifferentFields(
     const ResettableSettingsSnapshot& snapshot) const {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M163);
   int bit_mask = 0;
 
   if (startup_.type != snapshot.startup_.type ||
@@ -132,33 +131,34 @@ int ResettableSettingsSnapshot::FindDifferentFields(
 }
 
 void ResettableSettingsSnapshot::RequestShortcuts(base::OnceClosure callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(!cancellation_flag_.get() && !shortcuts_determined());
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M163);
+  CHECK(!cancellation_flag_.get() && !shortcuts_determined(),
+        base::NotFatalUntil::M163);
 
   cancellation_flag_ = new SharedCancellationFlag;
-#if defined(OS_WIN)
-  base::PostTaskAndReplyWithResult(
-      base::ThreadPool::CreateCOMSTATaskRunner(
-          {base::MayBlock(), base::TaskPriority::USER_VISIBLE})
-          .get(),
-      FROM_HERE, base::BindOnce(&GetChromeLaunchShortcuts, cancellation_flag_),
-      base::BindOnce(&ResettableSettingsSnapshot::SetShortcutsAndReport,
-                     weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
-#else   // defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
+  base::ThreadPool::CreateCOMSTATaskRunner(
+      {base::MayBlock(), base::TaskPriority::USER_VISIBLE})
+      ->PostTaskAndReplyWithResult(
+          FROM_HERE,
+          base::BindOnce(&GetChromeLaunchShortcuts, cancellation_flag_),
+          base::BindOnce(&ResettableSettingsSnapshot::SetShortcutsAndReport,
+                         weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
+#else   // BUILDFLAG(IS_WIN)
   // Shortcuts are only supported on Windows.
   std::vector<ShortcutCommand> no_shortcuts;
-  base::SequencedTaskRunnerHandle::Get()->PostTask(
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
       base::BindOnce(&ResettableSettingsSnapshot::SetShortcutsAndReport,
                      weak_ptr_factory_.GetWeakPtr(), std::move(callback),
                      std::move(no_shortcuts)));
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 }
 
 void ResettableSettingsSnapshot::SetShortcutsAndReport(
     base::OnceClosure callback,
     const std::vector<ShortcutCommand>& shortcuts) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M163);
   shortcuts_ = shortcuts;
   shortcuts_determined_ = true;
   cancellation_flag_.reset();
@@ -170,13 +170,14 @@ void ResettableSettingsSnapshot::SetShortcutsAndReport(
 std::unique_ptr<reset_report::ChromeResetReport> SerializeSettingsReportToProto(
     const ResettableSettingsSnapshot& snapshot,
     int field_mask) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M163);
   std::unique_ptr<reset_report::ChromeResetReport> report(
       new reset_report::ChromeResetReport());
 
   if (field_mask & ResettableSettingsSnapshot::STARTUP_MODE) {
-    for (const auto& url : snapshot.startup_urls())
-      report->add_startup_url_path(url.spec());
+    for (const auto& url : snapshot.startup_urls()) {
+      report->add_startup_url_path(url.is_valid() ? url.spec() : std::string());
+    }
     switch (snapshot.startup_type()) {
       case SessionStartupPref::DEFAULT:
         report->set_startup_type(
@@ -189,6 +190,10 @@ std::unique_ptr<reset_report::ChromeResetReport> SerializeSettingsReportToProto(
       case SessionStartupPref::URLS:
         report->set_startup_type(
             reset_report::ChromeResetReport_SessionStartupType_URLS);
+        break;
+      case SessionStartupPref::LAST_AND_URLS:
+        report->set_startup_type(
+            reset_report::ChromeResetReport_SessionStartupType_LAST_AND_URLS);
         break;
     }
   }
@@ -229,20 +234,20 @@ void SendSettingsFeedbackProto(const reset_report::ChromeResetReport& report,
       ->DispatchReport(report);
 }
 
-std::unique_ptr<base::ListValue> GetReadableFeedbackForSnapshot(
+base::ListValue GetReadableFeedbackForSnapshot(
     Profile* profile,
     const ResettableSettingsSnapshot& snapshot) {
-  DCHECK(profile);
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  std::unique_ptr<base::ListValue> list(new base::ListValue);
-  AddPair(list.get(),
+  CHECK(profile, base::NotFatalUntil::M163);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M163);
+  base::ListValue list;
+  AddPair(list,
           l10n_util::GetStringUTF16(IDS_RESET_PROFILE_SETTINGS_LOCALE),
           g_browser_process->GetApplicationLocale());
-  AddPair(list.get(), l10n_util::GetStringUTF16(IDS_VERSION_UI_USER_AGENT),
+  AddPair(list, l10n_util::GetStringUTF16(IDS_VERSION_UI_USER_AGENT),
           embedder_support::GetUserAgent());
-  std::string version = version_info::GetVersionNumber();
+  std::string version(version_info::GetVersionNumber());
   version += chrome::GetChannelName(chrome::WithExtendedStable(true));
-  AddPair(list.get(),
+  AddPair(list,
           l10n_util::GetStringUTF16(IDS_PRODUCT_NAME),
           version);
 
@@ -252,10 +257,10 @@ std::unique_ptr<base::ListValue> GetReadableFeedbackForSnapshot(
   for (auto i = urls.begin(); i != urls.end(); ++i) {
     if (!startup_urls.empty())
       startup_urls += ' ';
-    startup_urls += i->host();
+    startup_urls += i->GetHost();
   }
   if (!startup_urls.empty()) {
-    AddPair(list.get(),
+    AddPair(list,
             l10n_util::GetStringUTF16(IDS_RESET_PROFILE_SETTINGS_STARTUP_URLS),
             startup_urls);
   }
@@ -274,15 +279,19 @@ std::unique_ptr<base::ListValue> GetReadableFeedbackForSnapshot(
       startup_type =
           l10n_util::GetStringUTF16(IDS_SETTINGS_ON_STARTUP_OPEN_SPECIFIC);
       break;
+    case SessionStartupPref::LAST_AND_URLS:
+      startup_type = l10n_util::GetStringUTF16(
+          IDS_SETTINGS_ON_STARTUP_CONTINUE_AND_OPEN_SPECIFIC);
+      break;
     default:
       break;
   }
-  AddPair(list.get(),
+  AddPair(list,
           l10n_util::GetStringUTF16(IDS_RESET_PROFILE_SETTINGS_STARTUP_TYPE),
           startup_type);
 
   if (!snapshot.homepage().empty()) {
-    AddPair(list.get(),
+    AddPair(list,
             l10n_util::GetStringUTF16(IDS_RESET_PROFILE_SETTINGS_HOMEPAGE),
             snapshot.homepage());
   }
@@ -290,7 +299,7 @@ std::unique_ptr<base::ListValue> GetReadableFeedbackForSnapshot(
   int is_ntp_message_id = snapshot.homepage_is_ntp()
       ? IDS_RESET_PROFILE_SETTINGS_YES
       : IDS_RESET_PROFILE_SETTINGS_NO;
-  AddPair(list.get(),
+  AddPair(list,
           l10n_util::GetStringUTF16(IDS_RESET_PROFILE_SETTINGS_HOMEPAGE_IS_NTP),
           l10n_util::GetStringUTF16(is_ntp_message_id));
 
@@ -298,18 +307,17 @@ std::unique_ptr<base::ListValue> GetReadableFeedbackForSnapshot(
       ? IDS_RESET_PROFILE_SETTINGS_YES
       : IDS_RESET_PROFILE_SETTINGS_NO;
   AddPair(
-      list.get(),
+      list,
       l10n_util::GetStringUTF16(IDS_RESET_PROFILE_SETTINGS_SHOW_HOME_BUTTON),
       l10n_util::GetStringUTF16(show_home_button_id));
 
   TemplateURLService* service =
       TemplateURLServiceFactory::GetForProfile(profile);
-  DCHECK(service);
+  CHECK(service, base::NotFatalUntil::M163);
   const TemplateURL* dse = service->GetDefaultSearchProvider();
   if (dse) {
-    AddPair(list.get(),
-            l10n_util::GetStringUTF16(IDS_RESET_PROFILE_SETTINGS_DSE),
-            dse->GenerateSearchURL(service->search_terms_data()).host());
+    AddPair(list, l10n_util::GetStringUTF16(IDS_RESET_PROFILE_SETTINGS_DSE),
+            dse->GenerateSearchURL(service->search_terms_data()).GetHost());
   }
 
   if (snapshot.shortcuts_determined()) {
@@ -322,12 +330,12 @@ std::unique_ptr<base::ListValue> GetReadableFeedbackForSnapshot(
       shortcut_targets += base::WideToUTF16(i->second);
     }
     if (!shortcut_targets.empty()) {
-      AddPair(list.get(),
+      AddPair(list,
               l10n_util::GetStringUTF16(IDS_RESET_PROFILE_SETTINGS_SHORTCUTS),
               shortcut_targets);
     }
   } else {
-    AddPair(list.get(),
+    AddPair(list,
             l10n_util::GetStringUTF16(IDS_RESET_PROFILE_SETTINGS_SHORTCUTS),
             l10n_util::GetStringUTF16(
                 IDS_RESET_PROFILE_SETTINGS_PROCESSING_SHORTCUTS));
@@ -342,7 +350,7 @@ std::unique_ptr<base::ListValue> GetReadableFeedbackForSnapshot(
     extension_names += i->second;
   }
   if (!extension_names.empty()) {
-    AddPair(list.get(),
+    AddPair(list,
             l10n_util::GetStringUTF16(IDS_RESET_PROFILE_SETTINGS_EXTENSIONS),
             extension_names);
   }

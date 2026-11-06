@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,18 +9,21 @@
 #include <memory>
 #include <set>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "build/chromeos_buildflags.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_registry_observer.h"
+#include "extensions/buildflags/buildflags.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ui/ash/shelf/shelf_extension_app_updater.h"
 #endif
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace content {
 class BrowserContext;
@@ -42,7 +45,7 @@ class ChromeAppIconDelegate;
 // is bound to content::BrowserContext.
 // Usage: ChromeAppIconService::Get(context)->CreateIcon().
 class ChromeAppIconService : public KeyedService,
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
                              public ShelfAppUpdater::Delegate,
 #endif
                              public ExtensionRegistryObserver {
@@ -52,6 +55,9 @@ class ChromeAppIconService : public KeyedService,
 
   explicit ChromeAppIconService(content::BrowserContext* context);
 
+  ChromeAppIconService(const ChromeAppIconService&) = delete;
+  ChromeAppIconService& operator=(const ChromeAppIconService&) = delete;
+
   ~ChromeAppIconService() override;
 
   // Convenience function to get the ChromeAppIconService for a
@@ -59,9 +65,9 @@ class ChromeAppIconService : public KeyedService,
   static ChromeAppIconService* Get(content::BrowserContext* context);
 
   // Creates extension app icon for requested app and size. Icon updates are
-  // dispatched via |delegate|.
-  // |resize_function| overrides icon resizing behavior if non-null. Otherwise
-  // IconLoader with perform the resizing. In both cases |resource_size_in_dip|
+  // dispatched via `delegate`.
+  // `resize_function` overrides icon resizing behavior if non-null. Otherwise
+  // IconLoader with perform the resizing. In both cases `resource_size_in_dip`
   // is used to pick the correct icon representation from resources.
   std::unique_ptr<ChromeAppIcon> CreateIcon(
       ChromeAppIconDelegate* delegate,
@@ -81,7 +87,8 @@ class ChromeAppIconService : public KeyedService,
 
   // System may have multiple icons for the same app id with different
   // dimensions. For example icon in shelf and app launcher.
-  using IconMap = std::map<std::string, std::set<ChromeAppIcon*>>;
+  using IconMap =
+      std::map<std::string, std::set<raw_ptr<ChromeAppIcon, SetExperimental>>>;
 
   // Called from ChromeAppIcon DTOR.
   void OnIconDestroyed(ChromeAppIcon* icon);
@@ -96,7 +103,7 @@ class ChromeAppIconService : public KeyedService,
                            const Extension* extension,
                            UnloadedExtensionReason reason) override;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // ShelfAppUpdater::Delegate:
   void OnAppUpdated(content::BrowserContext* browser_context,
                     const std::string& app_id,
@@ -104,15 +111,15 @@ class ChromeAppIconService : public KeyedService,
 #endif
 
   // Unowned pointer.
-  content::BrowserContext* context_;
+  raw_ptr<content::BrowserContext> context_;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // On Chrome OS this handles Chrome app life-cycle events that may change how
   // extension based app icon looks like.
   std::unique_ptr<ShelfExtensionAppUpdater> app_updater_;
 #endif
 
-  // Deletes the icon set for |app_id| from the map if it is empty.
+  // Deletes the icon set for `app_id` from the map if it is empty.
   void MaybeCleanupIconSet(const std::string& app_id);
 
   IconMap icon_map_;
@@ -121,8 +128,6 @@ class ChromeAppIconService : public KeyedService,
       observation_{this};
 
   base::WeakPtrFactory<ChromeAppIconService> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ChromeAppIconService);
 };
 
 }  // namespace extensions

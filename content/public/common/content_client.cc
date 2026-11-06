@@ -1,27 +1,40 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/public/common/content_client.h"
 
-#include "base/files/file_path.h"
+#include <algorithm>
+#include <string_view>
+
+#include "base/feature_list.h"
+#include "base/memory/ref_counted_memory.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
-#include "base/notreached.h"
-#include "base/sequenced_task_runner.h"
-#include "base/strings/string_piece.h"
+#include "base/notimplemented.h"
+#include "base/strings/string_split.h"
+#include "base/strings/string_view_util.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
 #include "build/build_config.h"
+#include "content/public/common/content_features.h"
 #include "content/public/common/origin_util.h"
-#include "content/public/common/user_agent.h"
 #include "ui/gfx/image/image.h"
 
 namespace content {
 
 static ContentClient* g_client;
 
+static bool g_can_change_browser_client = true;
+
 class InternalTestInitializer {
  public:
   static ContentBrowserClient* SetBrowser(ContentBrowserClient* b) {
+    CHECK(g_can_change_browser_client)
+        << "The wrong ContentBrowserClient subclass is being used. In "
+           "content_browsertests, subclass "
+           "ContentBrowserTestContentBrowserClient.";
     ContentBrowserClient* rv = g_client->browser_;
     g_client->browser_ = b;
     return rv;
@@ -40,11 +53,29 @@ class InternalTestInitializer {
   }
 };
 
+// static
+void ContentClient::SetCanChangeContentBrowserClientForTesting(bool value) {
+  g_can_change_browser_client = value;
+}
+
+// static
+void ContentClient::SetBrowserClientAlwaysAllowForTesting(
+    ContentBrowserClient* b) {
+  bool old = g_can_change_browser_client;
+  g_can_change_browser_client = true;
+  SetBrowserClientForTesting(b);  // IN-TEST
+  g_can_change_browser_client = old;
+}
+
 void SetContentClient(ContentClient* client) {
   g_client = client;
 }
 
 ContentClient* GetContentClient() {
+  return g_client;
+}
+
+ContentClient* GetContentClientForTesting() {
   return g_client;
 }
 
@@ -79,28 +110,34 @@ std::u16string ContentClient::GetLocalizedString(
   return std::u16string();
 }
 
-base::StringPiece ContentClient::GetDataResource(int resource_id,
-                                                 ui::ScaleFactor scale_factor) {
-  return base::StringPiece();
+bool ContentClient::HasDataResource(int resource_id) const {
+  return false;
 }
 
-base::RefCountedMemory* ContentClient::GetDataResourceBytes(int resource_id) {
+std::string_view ContentClient::GetDataResource(
+    int resource_id,
+    ui::ResourceScaleFactor scale_factor) {
+  return std::string_view();
+}
+
+scoped_refptr<base::RefCountedMemory> ContentClient::GetDataResourceBytes(
+    int resource_id) {
   return nullptr;
+}
+
+std::string ContentClient::GetDataResourceString(int resource_id) {
+  // Default implementation in terms of GetDataResourceBytes.
+  scoped_refptr<base::RefCountedMemory> memory =
+      GetDataResourceBytes(resource_id);
+  if (!memory)
+    return std::string();
+  return std::string(base::as_string_view(*memory));
 }
 
 gfx::Image& ContentClient::GetNativeImageNamed(int resource_id) {
   static base::NoDestructor<gfx::Image> kEmptyImage;
   return *kEmptyImage;
 }
-
-#if defined(OS_MAC)
-base::FilePath ContentClient::GetChildProcessPath(
-    int child_flags,
-    const base::FilePath& helpers_path) {
-  NOTIMPLEMENTED();
-  return base::FilePath();
-}
-#endif
 
 std::string ContentClient::GetProcessTypeNameInEnglish(int type) {
   NOTIMPLEMENTED();
@@ -111,7 +148,7 @@ blink::OriginTrialPolicy* ContentClient::GetOriginTrialPolicy() {
   return nullptr;
 }
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 bool ContentClient::UsingSynchronousCompositing() {
   return false;
 }
@@ -119,10 +156,77 @@ bool ContentClient::UsingSynchronousCompositing() {
 media::MediaDrmBridgeClient* ContentClient::GetMediaDrmBridgeClient() {
   return nullptr;
 }
-#endif  // OS_ANDROID
+#endif  // BUILDFLAG(IS_ANDROID)
 
 void ContentClient::ExposeInterfacesToBrowser(
     scoped_refptr<base::SequencedTaskRunner> io_task_runner,
     mojo::BinderMap* binders) {}
+
+bool ContentClient::ShouldAllowDefaultSiteInstanceGroup() {
+  return true;
+}
+
+base::TimeDelta ContentClient::GetIgnoreDuplicateNavsThreshold() const {
+  return features::kDuplicateNavThreshold.Get();
+}
+
+bool ContentClient::ShouldIgnoreDuplicateNavs(
+    const GURL& url,
+    bool is_renderer_initiated) const {
+  if (!base::FeatureList::IsEnabled(features::kIgnoreDuplicateNavs)) {
+    return false;
+  }
+
+  const std::string& origins_list_str =
+      features::kIgnoreDuplicateNavsOrigins.Get();
+
+  bool is_match = false;
+  // Check if the origin matches the origins list if it is not empty.
+  if (!origins_list_str.empty()) {
+    is_match = IsUrlInIgnoreDuplicateNavsOrigins(url);
+    base::UmaHistogramBoolean(
+        is_renderer_initiated
+            ? "Navigation.RendererInitiated.DuplicateNavOriginMatch"
+            : "Navigation.BrowserInitiated.DuplicateNavOriginMatch",
+        is_match);
+  }
+
+  // Browser-initiated navigations are ignored if the skip flag is off.
+  if (!is_renderer_initiated) {
+    return !features::kSkipIgnoreBrowserInitiatedNavs.Get();
+  }
+  // Renderer-initiated navigations are ignored if the origin matches and the
+  // skip flag is off.
+  return (origins_list_str.empty() || is_match) &&
+         !features::kSkipIgnoreRendererInitiatedNavs.Get();
+}
+
+bool ContentClient::IsUrlInIgnoreDuplicateNavsOrigins(const GURL& url) const {
+  const std::string& origins_list_str =
+      features::kIgnoreDuplicateNavsOrigins.Get();
+  if (origins_list_str.empty()) {
+    return false;
+  }
+  static const base::NoDestructor<std::vector<url::Origin>>
+      target_origin_ignorelist([&origins_list_str] {
+        std::vector<url::Origin> origins;
+        const auto& origin_strings =
+            base::SplitString(origins_list_str, ",", base::TRIM_WHITESPACE,
+                              base::SPLIT_WANT_NONEMPTY);
+        origins.reserve(origin_strings.size());
+        for (const auto& origin_str : origin_strings) {
+          origins.push_back(url::Origin::Create(GURL(origin_str)));
+        }
+        return origins;
+      }());
+
+  return std::ranges::contains(*target_origin_ignorelist,
+                               url::Origin::Create(url));
+}
+
+bool ContentClient::IsFilePickerAllowedForCrossOriginSubframe(
+    const url::Origin& origin) {
+  return false;
+}
 
 }  // namespace content

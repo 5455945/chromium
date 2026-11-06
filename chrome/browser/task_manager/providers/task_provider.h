@@ -1,10 +1,11 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_TASK_MANAGER_PROVIDERS_TASK_PROVIDER_H_
 #define CHROME_BROWSER_TASK_MANAGER_PROVIDERS_TASK_PROVIDER_H_
 
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/task_manager/providers/task_provider_observer.h"
 
 namespace task_manager {
@@ -55,7 +56,7 @@ class TaskProvider {
       Task* existing_task,
       base::ProcessHandle new_process_handle,
       base::ProcessId new_process_id) const;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   void NotifyObserverTaskIdsListToBeInvalidated() const;
 #endif
 
@@ -72,7 +73,7 @@ class TaskProvider {
   virtual void StopUpdating() = 0;
 
   // We support only one single obsever which will be the sampler in this case.
-  TaskProviderObserver* observer_;
+  raw_ptr<TaskProviderObserver> observer_;
 };
 
 }  // namespace task_manager

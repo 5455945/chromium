@@ -1,14 +1,15 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
 #include "content/browser/media/media_browsertest.h"
 #include "content/browser/media/media_web_contents_observer.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test_utils.h"
@@ -32,7 +33,7 @@ class MediaSuspendTest : public MediaBrowserTest {
         media::GetTestDataFilePath("media_suspend_test.html"),
         media::GetURLQueryString(query_params));
 
-    const std::u16string kError = base::ASCIIToUTF16(media::kError);
+    const std::u16string kError = base::ASCIIToUTF16(media::kErrorTitle);
 
     {
       VLOG(0) << "Waiting for test URL: " << gurl << ", to load.";
@@ -61,7 +62,7 @@ class MediaSuspendTest : public MediaBrowserTest {
 
     {
       VLOG(0) << "Waiting for playback to resume.";
-      const std::u16string kEnded = base::ASCIIToUTF16(media::kEnded);
+      const std::u16string kEnded = base::ASCIIToUTF16(media::kEndedTitle);
       TitleWatcher title_watcher(shell()->web_contents(), kEnded);
       title_watcher.AlsoWaitForTitle(kError);
       ASSERT_TRUE(ExecJs(shell(), "video.play();"));

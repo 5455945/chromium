@@ -9,6 +9,7 @@
 <translation id="1591070050619849194">എല്ലാ ചിത്ര ആനിമേഷനും പ്രവർത്തനരഹിതമാക്കുക.</translation>
 <translation id="1703735871906654364">കാരറ്റ് ബ്രൗസുചെയ്യൽ</translation>
 <translation id="1791496371305830581">ആനിമേറ്റുചെയ്‌ത എല്ലാ ചിത്രങ്ങളും അനുവദിക്കുക.</translation>
+<translation id="1974060860693918893">വിപുലമായത്</translation>
 <translation id="1996252509865389616">പ്രവർത്തനക്ഷമമാക്കണോ?</translation>
 <translation id="2079545284768500474">പഴയപടിയാക്കുക</translation>
 <translation id="2179565792157161713">ദൈർഘ്യവിവരണം പുതിയ ടാബിൽ തുറക്കുക</translation>
@@ -26,6 +27,7 @@
 <translation id="3812541808639806898">ചിത്ര Alt ടെക്‌സ്‌റ്റ് വ്യൂവർ</translation>
 <translation id="381767806621926835">ഏതിന്റെയെങ്കിലും ദൈഘ്യമുള്ള വിവരണത്തിലേക്ക് ആക്‌സസ് ചെയ്യുന്നതിന് "aria-describedat" അല്ലെങ്കിൽ "longdesc" എന്ന ആട്രി‌ബ്യൂട്ടിനൊപ്പം അതിൽ വലത് ക്ലിക്ക് ചെയ്യുക.</translation>
 <translation id="4023902424053835668">അമ്പടയാള കീകൾ ഉപയോഗിച്ച് വെബ് പേജുകളുടെ ടെക്‌സ്റ്റ് ബ്രൗസ് ചെയ്യുക.</translation>
+<translation id="4384008284958619421">ആധുനിക സ്‌ക്രീൻ റീഡറുകളും Google Chrome-ഉം ഇപ്പോൾ ആക്‌സസ് ചെയ്യാനാകുന്ന എലമെന്റ് വിവരണങ്ങളെയും ARIA മാനദണ്ഡങ്ങളെയും നേറ്റീവായി പിന്തുണയ്ക്കുന്നു.</translation>
 <translation id="4388820049312272371">പെട്ടെന്നുള്ള ഒരു ഫ്ലാഷ് ഉപയോഗിച്ച് കഴ്‌സറിന്റെ സ്ഥാനം ഹൈലൈറ്റ് ചെയ്യുക.</translation>
 <translation id="4394049700291259645">അപ്രാപ്‌തമാക്കുക</translation>
 <translation id="4769065380738716500">അവരുടെ alt ടെക്‌സ്റ്റ് ഉപയോഗിച്ചുകൊണ്ട് ചിത്രങ്ങൾ മാറ്റിസ്ഥാപിച്ചു.</translation>
@@ -51,6 +53,7 @@
 <translation id="6170146920149900756">വർണ്ണ മെച്ചപ്പെടുത്തൽ</translation>
 <translation id="633394792577263429">വാക്കുകൾ പ്രകാരം നീക്കുന്നതിന് &lt;span class='key'&gt;Control&lt;/span&gt; അമർത്തിപ്പിടിക്കുക.</translation>
 <translation id="6550675742724504774">ഓപ്ഷനുകൾ</translation>
+<translation id="6699630355767768222">ഘട്ടം 3: തിരുത്തലിനായി വർണ്ണ ആക്‌സിസ് അസാധുവാക്കുക.</translation>
 <translation id="6838518108677880446">സജ്ജീകരിക്കുക:</translation>
 <translation id="690628312087070417">ഒരു വലിയ അകലത്തിൽ കാരറ്റ് നീങ്ങുമ്പോൾ:</translation>
 <translation id="6965382102122355670">ശരി</translation>
@@ -61,9 +64,11 @@
 <translation id="7658239707568436148">റദ്ദാക്കൂ</translation>
 <translation id="786423340267544509">"aria-describedat" അല്ലെങ്കിൽ "longdesc" എന്ന ആട്രി‌ബ്യൂട്ടുള്ള ഘടകങ്ങളിലേക്ക് ബോർഡർ ചേർക്കുക.</translation>
 <translation id="7942349550061667556">ചുവപ്പ്</translation>
+<translation id="8081200409424070383">2026 നവംബർ 20-ന് Long Descriptions അവസാനിപ്പിക്കും.</translation>
 <translation id="8260673944985561857">കാരറ്റ് ബ്രൗസുചെയ്യൽ ഓപ്‌ഷനുകൾ</translation>
 <translation id="8321034316479930120">ആനിമേഷൻ നയം</translation>
 <translation id="8480209185614411573">ഉയർന്ന ദൃശ്യതീവ്രത</translation>
 <translation id="8609925175482059018">കാരറ്റ് ബ്രൗസുചെയ്യൽ ഓണാക്കുന്നതിന് &lt;span class='key'&gt;F7&lt;/span&gt; അമർത്തുക. ഓഫാക്കാൻ, അത് വീണ്ടും അമർത്തുക.</translation>
+<translation id="8798099450830957504">ഡിഫോൾട്ട്</translation>
 <translation id="894241283505723656">സന്ദർഭമെനുവിലെ ദൈർഘ്യമേറിയ വിവരണം</translation>
 </translationbundle>

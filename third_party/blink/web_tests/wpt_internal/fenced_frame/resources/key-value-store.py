@@ -16,14 +16,14 @@ def main(request, response):
     value = request.GET.get(b"value")
 
     # Store the value.
-    # We have to ways to check the truthiness of `value`:
+    # We have two ways to check the truthiness of `value`:
     #   1. `if value`
     #   2. `if value != None`
     # While (1) is the most intuitive, we actually need (2), which is a looser
     # check. We need the looser check so that if the URL contains `&value=` to
     # set the value equal to the empty string (a case we need to support), this
     # condition still evaluates to true and we enter this branch.
-    if value != None:
+    if value != None:  # noqa: E711
         # We opted for (2) above which is the looser of the truthiness tests
         # that lets empty strings into this branch. So you might think that when
         # the URL contains `&value=`, then the `value` variable here would be

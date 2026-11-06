@@ -1,20 +1,20 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/net/dns_probe_runner.h"
 
+#include <optional>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "mojo/public/cpp/bindings/message.h"
 #include "net/base/address_list.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/net_errors.h"
-#include "net/base/network_isolation_key.h"
+#include "net/base/network_anonymization_key.h"
 #include "net/dns/public/resolve_error_info.h"
 #include "services/network/public/mojom/network_context.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace chrome_browser_net {
 
@@ -24,7 +24,7 @@ namespace {
 
 DnsProbeRunner::Result EvaluateResponse(
     int net_error,
-    const absl::optional<net::AddressList>& resolved_addresses) {
+    const net::AddressList& resolved_addresses) {
   switch (net_error) {
     case net::OK:
       break;
@@ -47,7 +47,11 @@ DnsProbeRunner::Result EvaluateResponse(
     case net::ERR_DNS_MALFORMED_RESPONSE:
     case net::ERR_DNS_SERVER_REQUIRES_TCP:  // Shouldn't happen; DnsTransaction
                                             // will retry with TCP.
-    case net::ERR_DNS_SERVER_FAILED:
+    case net::ERR_DNS_FORMAT_ERROR:
+    case net::ERR_DNS_SERVER_FAILURE:
+    case net::ERR_DNS_NOT_IMPLEMENTED:
+    case net::ERR_DNS_REFUSED:
+    case net::ERR_DNS_OTHER_FAILURE:
     case net::ERR_DNS_SORT_ERROR:  // Can only happen if the server responds.
       return DnsProbeRunner::FAILING;
 
@@ -58,12 +62,7 @@ DnsProbeRunner::Result EvaluateResponse(
       return DnsProbeRunner::UNREACHABLE;
   }
 
-  if (!resolved_addresses) {
-    // If net_error is OK, resolved_addresses should be set. The binding is not
-    // closed here since it will be closed by the caller anyway.
-    mojo::ReportBadMessage("resolved_addresses not set when net_error=OK");
-    return DnsProbeRunner::UNKNOWN;
-  } else if (resolved_addresses.value().empty()) {
+  if (resolved_addresses.empty()) {
     return DnsProbeRunner::INCORRECT;
   } else {
     return DnsProbeRunner::CORRECT;
@@ -74,7 +73,7 @@ DnsProbeRunner::Result EvaluateResponse(
 
 DnsProbeRunner::DnsProbeRunner(
     net::DnsConfigOverrides dns_config_overrides,
-    const NetworkContextGetter& network_context_getter)
+    const network::NetworkContextGetter& network_context_getter)
     : dns_config_overrides_(dns_config_overrides),
       network_context_getter_(network_context_getter) {
   CreateHostResolver();
@@ -86,10 +85,10 @@ DnsProbeRunner::~DnsProbeRunner() {
 
 void DnsProbeRunner::RunProbe(base::OnceClosure callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(!callback.is_null());
-  DCHECK(host_resolver_);
-  DCHECK(callback_.is_null());
-  DCHECK(!receiver_.is_bound());
+  CHECK(!callback.is_null(), base::NotFatalUntil::M161);
+  CHECK(host_resolver_, base::NotFatalUntil::M161);
+  CHECK(callback_.is_null(), base::NotFatalUntil::M161);
+  CHECK(!receiver_.is_bound(), base::NotFatalUntil::M161);
 
   network::mojom::ResolveHostParametersPtr parameters =
       network::mojom::ResolveHostParameters::New();
@@ -98,10 +97,13 @@ void DnsProbeRunner::RunProbe(base::OnceClosure callback) {
   parameters->cache_usage =
       network::mojom::ResolveHostParameters::CacheUsage::DISALLOWED;
 
-  // Use transient NIKs - don't want cached responses anyways, so no benefit
+  // Intentionally using a HostPortPair not to trigger HTTPS DNS resource
+  // record query.
+  // Use transient NAKs - don't want cached responses anyways, so no benefit
   // from sharing a cache, beyond multiple probes not evicting anything.
-  host_resolver_->ResolveHost(net::HostPortPair(kKnownGoodHostname, 80),
-                              net::NetworkIsolationKey::CreateTransient(),
+  host_resolver_->ResolveHost(network::mojom::HostResolverHost::NewHostPortPair(
+                                  net::HostPortPair(kKnownGoodHostname, 443)),
+                              net::NetworkAnonymizationKey::CreateTransient(),
                               std::move(parameters),
                               receiver_.BindNewPipeAndPassRemote());
   receiver_.set_disconnect_handler(base::BindOnce(
@@ -118,9 +120,10 @@ bool DnsProbeRunner::IsRunning() const {
 void DnsProbeRunner::OnComplete(
     int32_t result,
     const net::ResolveErrorInfo& resolve_error_info,
-    const absl::optional<net::AddressList>& resolved_addresses) {
+    const net::AddressList& resolved_addresses,
+    const net::HostResolverEndpointResults& alternative_endpoints) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(!callback_.is_null());
+  CHECK(!callback_.is_null(), base::NotFatalUntil::M161);
 
   result_ = EvaluateResponse(resolve_error_info.error, resolved_addresses);
   receiver_.reset();
@@ -141,7 +144,8 @@ void DnsProbeRunner::OnMojoConnectionError() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   CreateHostResolver();
   OnComplete(net::ERR_NAME_NOT_RESOLVED, net::ResolveErrorInfo(net::ERR_FAILED),
-             absl::nullopt);
+             /*resolved_addresses=*/{},
+             /*alternative_endpoints=*/{});
 }
 
 }  // namespace chrome_browser_net

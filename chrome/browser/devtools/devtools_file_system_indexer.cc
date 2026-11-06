@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,29 +6,30 @@
 
 #include <stddef.h>
 
+#include <algorithm>
+#include <array>
 #include <iterator>
 #include <memory>
+#include <set>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
+#include "base/containers/heap_array.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
-#include "base/lazy_instance.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/no_destructor.h"
 #include "base/sequence_checker.h"
 #include "base/stl_util.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/lazy_thread_pool_task_runner.h"
-#include "content/public/browser/browser_task_traits.h"
-
 #include "content/public/browser/browser_thread.h"
 
 using base::FileEnumerator;
 using base::FilePath;
 using base::Time;
-using base::TimeDelta;
 using base::TimeTicks;
 using content::BrowserThread;
 using std::map;
@@ -51,7 +52,7 @@ typedef int32_t Trigram;
 typedef char TrigramChar;
 typedef uint16_t FileId;
 
-const int kMinTimeoutBetweenWorkedNitification = 200;
+const int kMinTimeoutBetweenWorkedNotification = 200;
 // Trigram characters include all ASCII printable characters (32-126) except for
 // the capital letters, because the index is case insensitive.
 const size_t kTrigramCharacterCount = 126 - 'Z' - 1 + 'A' - ' ' + 1;
@@ -65,6 +66,10 @@ const Trigram kUndefinedTrigram = -1;
 class Index {
  public:
   Index();
+
+  Index(const Index&) = delete;
+  Index& operator=(const Index&) = delete;
+
   // Index is only instantiated as a leak LazyInstance, so the destructor is
   // never called.
   ~Index() = delete;
@@ -90,19 +95,19 @@ class Index {
   IndexedFilesMap index_times_;
   vector<bool> is_normalized_;
   SEQUENCE_CHECKER(sequence_checker_);
-
-  DISALLOW_COPY_AND_ASSIGN(Index);
 };
 
-base::LazyInstance<Index>::Leaky g_trigram_index = LAZY_INSTANCE_INITIALIZER;
+Index& GetTrigramIndex() {
+  static base::NoDestructor<Index> trigram_index;
+  return *trigram_index;
+}
 
 TrigramChar TrigramCharForChar(char c) {
-  static TrigramChar* trigram_chars = nullptr;
-  if (!trigram_chars) {
-    trigram_chars = new TrigramChar[256];
+  static const auto trigram_chars = []() {
+    std::array<TrigramChar, 256> chars;
     for (size_t i = 0; i < 256; ++i) {
       if (i > 127) {
-        trigram_chars[i] = kUndefinedTrigramChar;
+        chars[i] = kUndefinedTrigramChar;
         continue;
       }
       char ch = static_cast<char>(i);
@@ -113,12 +118,12 @@ TrigramChar TrigramCharForChar(char c) {
 
       bool is_binary_char = ch < 9 || (ch >= 14 && ch < 32) || ch == 127;
       if (is_binary_char) {
-        trigram_chars[i] = kBinaryTrigramChar;
+        chars[i] = kBinaryTrigramChar;
         continue;
       }
 
       if (ch < ' ') {
-        trigram_chars[i] = kUndefinedTrigramChar;
+        chars[i] = kUndefinedTrigramChar;
         continue;
       }
 
@@ -127,9 +132,10 @@ TrigramChar TrigramCharForChar(char c) {
       ch -= ' ';
       char signed_trigram_count = static_cast<char>(kTrigramCharacterCount);
       CHECK(ch >= 0 && ch < signed_trigram_count);
-      trigram_chars[i] = ch;
+      chars[i] = ch;
     }
-  }
+    return chars;
+  }();
   unsigned char uc = static_cast<unsigned char>(c);
   return trigram_chars[uc];
 }
@@ -194,14 +200,13 @@ void Index::SetTrigramsForFile(const FilePath& file_path,
 vector<FilePath> Index::Search(const string& query) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   EnsureInitialized();
-  const char* data = query.c_str();
   vector<TrigramChar> trigram_chars;
   trigram_chars.reserve(query.size());
   for (size_t i = 0; i < query.size(); ++i) {
-      TrigramChar trigram_char = TrigramCharForChar(data[i]);
-      if (trigram_char == kBinaryTrigramChar)
-        trigram_char = kUndefinedTrigramChar;
-      trigram_chars.push_back(trigram_char);
+    TrigramChar trigram_char = TrigramCharForChar(query[i]);
+    if (trigram_char == kBinaryTrigramChar)
+      trigram_char = kUndefinedTrigramChar;
+    trigram_chars.push_back(trigram_char);
   }
   vector<Trigram> trigrams;
   for (size_t i = 0; i + 2 < query.size(); ++i) {
@@ -215,9 +220,8 @@ vector<FilePath> Index::Search(const string& query) {
   for (; it != trigrams.end(); ++it) {
     Trigram trigram = *it;
     if (first) {
-      std::copy(index_[trigram].begin(),
-                index_[trigram].end(),
-                std::inserter(file_ids, file_ids.begin()));
+      std::ranges::copy(index_[trigram],
+                        std::inserter(file_ids, file_ids.begin()));
       first = false;
       continue;
     }
@@ -238,7 +242,6 @@ vector<FilePath> Index::Search(const string& query) {
 FileId Index::GetFileId(const FilePath& file_path) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   EnsureInitialized();
-  string file_path_str = file_path.AsUTF8Unsafe();
   if (file_ids_.find(file_path) != file_ids_.end())
     return file_ids_[file_path];
   file_ids_[file_path] = ++last_file_id_;
@@ -278,16 +281,17 @@ DevToolsFileSystemIndexer::FileSystemIndexingJob::FileSystemIndexingJob(
   pending_folders_.push_back(file_system_path);
 }
 
-DevToolsFileSystemIndexer::FileSystemIndexingJob::~FileSystemIndexingJob() {}
+DevToolsFileSystemIndexer::FileSystemIndexingJob::~FileSystemIndexingJob() =
+    default;
 
 void DevToolsFileSystemIndexer::FileSystemIndexingJob::Start() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   impl_task_runner()->PostTask(
       FROM_HERE, BindOnce(&FileSystemIndexingJob::CollectFilesToIndex, this));
 }
 
 void DevToolsFileSystemIndexer::FileSystemIndexingJob::Stop() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   impl_task_runner()->PostTask(
       FROM_HERE, BindOnce(&FileSystemIndexingJob::StopOnImplSequence, this));
 }
@@ -297,7 +301,8 @@ void DevToolsFileSystemIndexer::FileSystemIndexingJob::StopOnImplSequence() {
 }
 
 void DevToolsFileSystemIndexer::FileSystemIndexingJob::CollectFilesToIndex() {
-  DCHECK(impl_task_runner()->RunsTasksInCurrentSequence());
+  CHECK(impl_task_runner()->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M161);
   if (stopped_)
     return;
   if (!file_enumerator_) {
@@ -339,10 +344,10 @@ void DevToolsFileSystemIndexer::FileSystemIndexingJob::CollectFilesToIndex() {
   }
 
   Time saved_last_modified_time =
-      g_trigram_index.Get().LastModifiedTimeForFile(file_path);
+      GetTrigramIndex().LastModifiedTimeForFile(file_path);
   FileEnumerator::FileInfo file_info = file_enumerator_->GetInfo();
   Time current_last_modified_time = file_info.GetLastModifiedTime();
-  if (current_last_modified_time > saved_last_modified_time) {
+  if (current_last_modified_time >= saved_last_modified_time) {
     file_path_times_[file_path] = current_last_modified_time;
   }
   impl_task_runner()->PostTask(
@@ -350,11 +355,12 @@ void DevToolsFileSystemIndexer::FileSystemIndexingJob::CollectFilesToIndex() {
 }
 
 void DevToolsFileSystemIndexer::FileSystemIndexingJob::IndexFiles() {
-  DCHECK(impl_task_runner()->RunsTasksInCurrentSequence());
+  CHECK(impl_task_runner()->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M161);
   if (stopped_)
     return;
   if (indexing_it_ == file_path_times_.end()) {
-    g_trigram_index.Get().NormalizeVectors();
+    GetTrigramIndex().NormalizeVectors();
     content::GetUIThreadTaskRunner({})->PostTask(FROM_HERE, std::move(done_callback_));
     return;
   }
@@ -377,21 +383,21 @@ void DevToolsFileSystemIndexer::FileSystemIndexingJob::ReadFromFile() {
     CloseFile();
     return;
   }
-  std::unique_ptr<char[]> data_ptr(new char[kMaxReadLength]);
-  const char* const data = data_ptr.get();
-  int bytes_read =
-      current_file_.Read(current_file_offset_, data_ptr.get(), kMaxReadLength);
-  if (bytes_read < 0) {
+
+  auto data = base::HeapArray<uint8_t>::Uninit(kMaxReadLength);
+  std::optional<size_t> bytes_read =
+      current_file_.Read(current_file_offset_, data);
+  if (!bytes_read.has_value()) {
     FinishFileIndexing(false);
     return;
   }
 
-  if (bytes_read < 3) {
+  size_t size = bytes_read.value();
+  if (size < 3) {
     FinishFileIndexing(true);
     return;
   }
 
-  size_t size = static_cast<size_t>(bytes_read);
   vector<TrigramChar> trigram_chars;
   trigram_chars.reserve(size);
   for (size_t i = 0; i < size; ++i) {
@@ -411,19 +417,20 @@ void DevToolsFileSystemIndexer::FileSystemIndexingJob::ReadFromFile() {
       current_trigrams_.push_back(trigram);
     }
   }
-  current_file_offset_ += bytes_read - 2;
+  current_file_offset_ += size - 2;
   impl_task_runner()->PostTask(
       FROM_HERE, base::BindOnce(&FileSystemIndexingJob::ReadFromFile, this));
 }
 
 void DevToolsFileSystemIndexer::FileSystemIndexingJob::FinishFileIndexing(
     bool success) {
-  DCHECK(impl_task_runner()->RunsTasksInCurrentSequence());
+  CHECK(impl_task_runner()->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M161);
   CloseFile();
   if (success) {
     FilePath file_path = indexing_it_->first;
-    g_trigram_index.Get().SetTrigramsForFile(
-        file_path, current_trigrams_, file_path_times_[file_path]);
+    GetTrigramIndex().SetTrigramsForFile(file_path, current_trigrams_,
+                                         file_path_times_[file_path]);
   }
   ReportWorked();
   ++indexing_it_;
@@ -438,14 +445,15 @@ void DevToolsFileSystemIndexer::FileSystemIndexingJob::CloseFile() {
 
 void DevToolsFileSystemIndexer::FileSystemIndexingJob::ReportWorked() {
   TimeTicks current_time = TimeTicks::Now();
-  bool should_send_worked_nitification = true;
+  bool should_send_worked_notification = true;
   if (!last_worked_notification_time_.is_null()) {
-    TimeDelta delta = current_time - last_worked_notification_time_;
-    if (delta.InMilliseconds() < kMinTimeoutBetweenWorkedNitification)
-      should_send_worked_nitification = false;
+    base::TimeDelta delta = current_time - last_worked_notification_time_;
+    if (delta.InMilliseconds() < kMinTimeoutBetweenWorkedNotification) {
+      should_send_worked_notification = false;
+    }
   }
   ++files_indexed_;
-  if (should_send_worked_nitification) {
+  if (should_send_worked_notification) {
     last_worked_notification_time_ = current_time;
     content::GetUIThreadTaskRunner({})->PostTask(
         FROM_HERE, BindOnce(worked_callback_, files_indexed_));
@@ -464,7 +472,7 @@ DevToolsFileSystemIndexer::~DevToolsFileSystemIndexer() {
   impl_task_runner()->PostTask(FROM_HERE, base::BindOnce([]() {
                                  --g_instance_count;
                                  if (!g_instance_count)
-                                   g_trigram_index.Get().Reset();
+                                   GetTrigramIndex().Reset();
                                }));
 }
 
@@ -475,14 +483,15 @@ DevToolsFileSystemIndexer::IndexPath(
     TotalWorkCallback total_work_callback,
     const WorkedCallback& worked_callback,
     DoneCallback done_callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   vector<base::FilePath> paths;
   for (const string& path : excluded_folders) {
     paths.push_back(FilePath::FromUTF8Unsafe(path));
   }
-  scoped_refptr<FileSystemIndexingJob> indexing_job = new FileSystemIndexingJob(
-      FilePath::FromUTF8Unsafe(file_system_path), paths, std::move(total_work_callback),
-      worked_callback, std::move(done_callback));
+  scoped_refptr<FileSystemIndexingJob> indexing_job =
+      new FileSystemIndexingJob(FilePath::FromUTF8Unsafe(file_system_path),
+                                paths, std::move(total_work_callback),
+                                worked_callback, std::move(done_callback));
   indexing_job->Start();
   return indexing_job;
 }
@@ -491,7 +500,7 @@ void DevToolsFileSystemIndexer::SearchInPath(
     const std::string& file_system_path,
     const std::string& query,
     SearchCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
   impl_task_runner()->PostTask(
       FROM_HERE,
       BindOnce(&DevToolsFileSystemIndexer::SearchInPathOnImplSequence, this,
@@ -502,8 +511,9 @@ void DevToolsFileSystemIndexer::SearchInPathOnImplSequence(
     const std::string& file_system_path,
     const std::string& query,
     SearchCallback callback) {
-  DCHECK(impl_task_runner()->RunsTasksInCurrentSequence());
-  vector<FilePath> file_paths = g_trigram_index.Get().Search(query);
+  CHECK(impl_task_runner()->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M161);
+  vector<FilePath> file_paths = GetTrigramIndex().Search(query);
   vector<string> result;
   FilePath path = FilePath::FromUTF8Unsafe(file_system_path);
   vector<FilePath>::const_iterator it = file_paths.begin();

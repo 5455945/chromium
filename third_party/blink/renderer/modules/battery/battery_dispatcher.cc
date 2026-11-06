@@ -1,14 +1,13 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/battery/battery_dispatcher.h"
 
 #include "services/device/public/mojom/battery_status.mojom-blink.h"
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
-#include "third_party/blink/renderer/platform/mojo/mojo_helper.h"
 
 namespace blink {
 
@@ -22,7 +21,7 @@ void BatteryDispatcher::Trace(Visitor* visitor) const {
 
 void BatteryDispatcher::QueryNextStatus() {
   monitor_->QueryNextStatus(
-      WTF::Bind(&BatteryDispatcher::OnDidChange, WrapPersistent(this)));
+      BindOnce(&BatteryDispatcher::OnDidChange, WrapPersistent(this)));
 }
 
 void BatteryDispatcher::OnDidChange(
@@ -31,9 +30,9 @@ void BatteryDispatcher::OnDidChange(
 
   DCHECK(battery_status);
 
-  UpdateBatteryStatus(
-      BatteryStatus(battery_status->charging, battery_status->charging_time,
-                    battery_status->discharging_time, battery_status->level));
+  UpdateBatteryStatus(BatteryStatus(
+      battery_status->charging, base::Seconds(battery_status->charging_time),
+      base::Seconds(battery_status->discharging_time), battery_status->level));
 }
 
 void BatteryDispatcher::UpdateBatteryStatus(

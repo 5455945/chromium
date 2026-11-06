@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -123,8 +123,17 @@ struct MOJO_ALIGNAS(8) MojoInvitationTransportEndpoint {
   //   - On other POSIX systems, this is a single Unix domain socket file
   //     descriptor.
   MOJO_POINTER_FIELD(const struct MojoPlatformHandle*, platform_handles);
+
+  // An optional constraint on the identity of the process at the remote end of
+  // this endpoint, or null. Only supported on macOS, where a non-null value
+  // must point to a base::mac::ProcessRequirement owned by the caller and
+  // valid for the duration of the |MojoSendInvitation()| or
+  // |MojoAcceptInvitation()| call. Messages received over the endpoint are not
+  // accepted, and the connection cannot be established, unless the sending
+  // process satisfies the requirement. Must be null on all other platforms.
+  MOJO_POINTER_FIELD(const void*, peer_process_requirement);
 };
-MOJO_STATIC_ASSERT(sizeof(struct MojoInvitationTransportEndpoint) == 24,
+MOJO_STATIC_ASSERT(sizeof(struct MojoInvitationTransportEndpoint) == 32,
                    "MojoInvitationTransportEndpoint has wrong size.");
 
 // Flags passed to |MojoCreateInvitation()| via |MojoCreateInvitationOptions|.
@@ -200,6 +209,23 @@ typedef uint32_t MojoSendInvitationFlags;
 // message pipe attached with a name of exactly four zero-bytes ("\0\0\0\0").
 #define MOJO_SEND_INVITATION_FLAG_ISOLATED ((MojoSendInvitationFlags)1)
 
+// Indicates that the invitation is being sent to a process which should be
+// considered "untrusted."" This may impose various security constraints on what
+// can be transferred by Mojo between e.g. a broker process and the remote
+// process in question.
+#define MOJO_SEND_INVITATION_FLAG_UNTRUSTED_PROCESS ((MojoSendInvitationFlags)2)
+
+// Indicates that the invitation is being sent to a process which may be running
+// at an elevated privilege level compared to the broker. Such processes are
+// implicitly trusted more than others.
+#define MOJO_SEND_INVITATION_FLAG_ELEVATED ((MojoSendInvitationFlags)4)
+
+// Indicates that the invitation is being sent from a non-broker to another
+// non-broker and that the sender is referring its broker to the recipient.
+// The recipient must expect this and accept the invitation with
+// MOJO_ACCEPT_INVITATION_FLAG_INHERIT_BROKER.
+#define MOJO_SEND_INVITATION_FLAG_SHARE_BROKER ((MojoSendInvitationFlags)8)
+
 // Options passed to |MojoSendInvitation()|.
 struct MOJO_ALIGNAS(8) MojoSendInvitationOptions {
   // The size of this structure, used for versioning.
@@ -239,6 +265,18 @@ typedef uint32_t MojoAcceptInvitationFlags;
 // invitations over the course of its lifetime.
 #define MOJO_ACCEPT_INVITATION_FLAG_LEAK_TRANSPORT_ENDPOINT \
   ((MojoAcceptInvitationFlags)2)
+
+// The process accepting this invitation is running at an elevated privilege
+// level relative to the broker. In order for IPC to function properly when this
+// flag is specified, the invitation sender must also specify
+// MOJO_SEND_INVITATION_FLAG_ELEVATED.
+#define MOJO_ACCEPT_INVITATION_FLAG_ELEVATED ((MojoAcceptInvitationFlags)4)
+
+// This invitation is being accepted by a non-broker who expects the sender to
+// refer its own broker to the caller. Invitations accepted with this flag must
+// have been sent with MOJO_SEND_INVITATION_FLAG_SHARE_BROKER.
+#define MOJO_ACCEPT_INVITATION_FLAG_INHERIT_BROKER \
+  ((MojoAcceptInvitationFlags)8)
 
 // Options passed to |MojoAcceptInvitation()|.
 struct MOJO_ALIGNAS(8) MojoAcceptInvitationOptions {

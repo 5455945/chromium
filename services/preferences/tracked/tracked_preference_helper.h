@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,8 @@
 #include <stddef.h>
 
 #include <string>
+#include <string_view>
 
-#include "base/macros.h"
 #include "services/preferences/tracked/pref_hash_filter.h"
 #include "services/preferences/tracked/pref_hash_store_transaction.h"
 
@@ -20,9 +20,13 @@ class TrackedPreferenceHelper {
  public:
   enum ResetAction {
     DONT_RESET,
+    // Specifies that a pref, which is known to be encrypted, should be reset.
+    DO_RESET_ENCRYPTED,
     // WANTED_RESET is reported when DO_RESET would have been reported but the
     // current |enforcement_level| doesn't allow a reset for the detected state.
     WANTED_RESET,
+    // A reset was wanted through the encryption verification.
+    WANTED_RESET_ENCRYPTED,
     DO_RESET,
   };
 
@@ -33,6 +37,9 @@ class TrackedPreferenceHelper {
       prefs::mojom::TrackedPreferenceMetadata::EnforcementLevel
           enforcement_level,
       prefs::mojom::TrackedPreferenceMetadata::ValueType value_type);
+
+  TrackedPreferenceHelper(const TrackedPreferenceHelper&) = delete;
+  TrackedPreferenceHelper& operator=(const TrackedPreferenceHelper&) = delete;
 
   // Returns a ResetAction stating whether a reset is desired (DO_RESET) or not
   // (DONT_RESET) based on observing |value_state|. Can also return WANTED_RESET
@@ -49,10 +56,16 @@ class TrackedPreferenceHelper {
   // |validation_type_suffix| is appended to the reported histogram's name.
   void ReportValidationResult(
       prefs::mojom::TrackedPreferenceValidationDelegate::ValueState value_state,
-      base::StringPiece validation_type_suffix) const;
+      std::string_view validation_type_suffix) const;
 
   // Reports |reset_action| via UMA under |reporting_id_|.
   void ReportAction(ResetAction reset_action) const;
+
+  // Reports the calculation of new auth data via UMA under `reporting_id_`.
+  void ReportAuthDataCalculated() const;
+
+  // Returns the reporting ID for this tracked preference.
+  size_t GetReportingId() const;
 
  private:
   const std::string pref_path_;
@@ -64,8 +77,6 @@ class TrackedPreferenceHelper {
   const bool enforce_;
 
   const bool personal_;
-
-  DISALLOW_COPY_AND_ASSIGN(TrackedPreferenceHelper);
 };
 
 #endif  // SERVICES_PREFERENCES_TRACKED_TRACKED_PREFERENCE_HELPER_H_

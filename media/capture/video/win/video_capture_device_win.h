@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,17 +16,19 @@
 #include <wrl/client.h>
 
 #include <map>
+#include <optional>
 #include <string>
 
 #include "base/containers/queue.h"
-#include "base/macros.h"
+#include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
 #include "base/threading/thread_checker.h"
+#include "base/time/time.h"
 #include "media/capture/video/video_capture_device.h"
 #include "media/capture/video/win/capability_list_win.h"
 #include "media/capture/video/win/sink_filter_win.h"
 #include "media/capture/video/win/sink_input_pin_win.h"
 #include "media/capture/video_capture_types.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
 class Location;
@@ -49,13 +51,13 @@ class VideoCaptureDeviceWin : public VideoCaptureDevice,
     AM_MEDIA_TYPE* operator->() { return media_type_; }
     AM_MEDIA_TYPE* get() { return media_type_; }
     void Free();
-    AM_MEDIA_TYPE** Receive();
+    raw_ptr<AM_MEDIA_TYPE>* Receive();
 
    private:
     void FreeMediaType(AM_MEDIA_TYPE* mt);
     void DeleteMediaType(AM_MEDIA_TYPE* mt);
 
-    AM_MEDIA_TYPE* media_type_;
+    raw_ptr<AM_MEDIA_TYPE> media_type_;
   };
 
   static VideoCaptureControlSupport GetControlSupport(
@@ -77,9 +79,16 @@ class VideoCaptureDeviceWin : public VideoCaptureDevice,
   static VideoPixelFormat TranslateMediaSubtypeToPixelFormat(
       const GUID& sub_type);
 
+  VideoCaptureDeviceWin() = delete;
+
   VideoCaptureDeviceWin(const VideoCaptureDeviceDescriptor& device_descriptor,
                         Microsoft::WRL::ComPtr<IBaseFilter> capture_filter);
+
+  VideoCaptureDeviceWin(const VideoCaptureDeviceWin&) = delete;
+  VideoCaptureDeviceWin& operator=(const VideoCaptureDeviceWin&) = delete;
+
   ~VideoCaptureDeviceWin() override;
+
   // Opens the device driver for this device.
   bool Init();
 
@@ -88,6 +97,7 @@ class VideoCaptureDeviceWin : public VideoCaptureDevice,
       const VideoCaptureParams& params,
       std::unique_ptr<VideoCaptureDevice::Client> client) override;
   void StopAndDeAllocate() override;
+  void InvalidateBuffers() override;
   void TakePhoto(TakePhotoCallback callback) override;
   void GetPhotoState(GetPhotoStateCallback callback) override;
   void SetPhotoOptions(mojom::PhotoSettingsPtr settings,
@@ -107,8 +117,7 @@ class VideoCaptureDeviceWin : public VideoCaptureDevice,
       IVideoProcAmp** video_control);
 
   // Implements SinkFilterObserver.
-  void FrameReceived(const uint8_t* buffer,
-                     int length,
+  void FrameReceived(base::span<const uint8_t> buffer,
                      const VideoCaptureFormat& format,
                      base::TimeDelta timestamp,
                      bool flip_y) override;
@@ -122,8 +131,14 @@ class VideoCaptureDeviceWin : public VideoCaptureDevice,
                      HRESULT hr);
 
   const VideoCaptureDeviceDescriptor device_descriptor_;
-  InternalState state_;
-  std::unique_ptr<VideoCaptureDevice::Client> client_;
+
+  // Used to guard between race checking capture state between the thread used
+  // in |thread_checker_| and a thread used in
+  // |SinkFilterObserver::SinkFilterObserver| callbacks.
+  base::Lock lock_;
+
+  InternalState state_ GUARDED_BY(lock_);
+  std::unique_ptr<VideoCaptureDevice::Client> client_ GUARDED_BY(lock_);
 
   Microsoft::WRL::ComPtr<IBaseFilter> capture_filter_;
 
@@ -150,15 +165,13 @@ class VideoCaptureDeviceWin : public VideoCaptureDevice,
 
   base::TimeTicks first_ref_time_;
 
-  base::queue<TakePhotoCallback> take_photo_callbacks_;
+  base::queue<TakePhotoCallback> take_photo_callbacks_ GUARDED_BY(lock_);
 
   base::ThreadChecker thread_checker_;
 
   bool enable_get_photo_state_;
 
-  absl::optional<int> camera_rotation_;
-
-  DISALLOW_IMPLICIT_CONSTRUCTORS(VideoCaptureDeviceWin);
+  std::optional<int> camera_rotation_;
 };
 
 }  // namespace media

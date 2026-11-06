@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,18 @@
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_SHAPING_RUN_SEGMENTER_H_
 
 #include <unicode/uscript.h>
+
 #include <memory>
+#include <optional>
+
+#include "base/containers/span.h"
 #include "third_party/blink/renderer/platform/fonts/font_orientation.h"
 #include "third_party/blink/renderer/platform/fonts/orientation_iterator.h"
 #include "third_party/blink/renderer/platform/fonts/script_run_iterator.h"
 #include "third_party/blink/renderer/platform/fonts/small_caps_iterator.h"
 #include "third_party/blink/renderer/platform/fonts/symbols_iterator.h"
-#include "third_party/blink/renderer/platform/fonts/utf16_text_iterator.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
 
 namespace blink {
 
@@ -26,41 +30,37 @@ class PLATFORM_EXPORT RunSegmenter {
  public:
   // Indices into the UTF-16 buffer that is passed in
   struct PLATFORM_EXPORT RunSegmenterRange {
-    unsigned start;
-    unsigned end;
-    UScriptCode script;
-    OrientationIterator::RenderOrientation render_orientation;
-    FontFallbackPriority font_fallback_priority;
+    wtf_size_t start = 0;
+    wtf_size_t end = 0;
+    UScriptCode script = USCRIPT_INVALID_CODE;
+    OrientationIterator::RenderOrientation render_orientation =
+        OrientationIterator::kOrientationKeep;
+    FontFallbackPriority font_fallback_priority = FontFallbackPriority::kText;
   };
 
   // Initialize a RunSegmenter.
-  RunSegmenter(const UChar* buffer, unsigned buffer_size, FontOrientation);
+  RunSegmenter(base::span<const UChar> buffer, FontOrientation);
   RunSegmenter(const RunSegmenter&) = delete;
   RunSegmenter& operator=(const RunSegmenter&) = delete;
 
   bool Consume(RunSegmenterRange*);
 
-  static RunSegmenterRange NullRange() {
-    return {0, 0, USCRIPT_INVALID_CODE, OrientationIterator::kOrientationKeep,
-            FontFallbackPriority::kText};
-  }
-
  private:
   template <class Iterator, typename SegmentationCategory>
   void ConsumeIteratorPastLastSplit(
-      std::unique_ptr<Iterator>& iterator,
-      unsigned* iterator_position,
+      Iterator& iterator,
+      wtf_size_t* iterator_position,
       SegmentationCategory* segmentation_category);
 
-  unsigned buffer_size_;
+  wtf_size_t buffer_size_;
   RunSegmenterRange candidate_range_;
-  std::unique_ptr<ScriptRunIterator> script_run_iterator_;
-  std::unique_ptr<OrientationIterator> orientation_iterator_;
-  std::unique_ptr<SymbolsIterator> symbols_iterator_;
-  unsigned last_split_;
-  unsigned script_run_iterator_position_;
-  unsigned orientation_iterator_position_;
-  unsigned symbols_iterator_position_;
+  ScriptRunIterator script_run_iterator_;
+  std::optional<OrientationIterator> orientation_iterator_;
+  SymbolsIterator symbols_iterator_;
+  wtf_size_t last_split_ = 0;
+  wtf_size_t script_run_iterator_position_ = 0;
+  wtf_size_t orientation_iterator_position_ = 0;
+  wtf_size_t symbols_iterator_position_ = 0;
   bool at_end_;
 };
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,19 +7,24 @@
 
 #include <stddef.h>
 
+#include <string>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/component_export.h"
-#include "base/macros.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
+#include "build/build_config.h"
 #include "ui/base/x/selection_utils.h"
+#include "ui/gfx/x/connection.h"
 #include "ui/gfx/x/event.h"
 
+#if BUILDFLAG(IS_LINUX)
+#include "base/memory/weak_ptr.h"
+#endif
+
 namespace x11 {
-class XScopedEventSelector;
+class ScopedEventSelector;
 }
 
 namespace ui {
@@ -35,9 +40,13 @@ COMPONENT_EXPORT(UI_BASE_X) extern const char kTargets[];
 // processes.
 class COMPONENT_EXPORT(UI_BASE_X) SelectionOwner {
  public:
-  SelectionOwner(x11::Connection* connection,
+  SelectionOwner(x11::Connection& connection,
                  x11::Window xwindow,
                  x11::Atom selection_name);
+
+  SelectionOwner(const SelectionOwner&) = delete;
+  SelectionOwner& operator=(const SelectionOwner&) = delete;
+
   ~SelectionOwner();
 
   // Returns the current selection data. Useful for fast paths.
@@ -67,14 +76,17 @@ class COMPONENT_EXPORT(UI_BASE_X) SelectionOwner {
  private:
   // Holds state related to an incremental data transfer.
   struct IncrementalTransfer {
-    IncrementalTransfer(
-        x11::Window window,
-        x11::Atom target,
-        x11::Atom property,
-        std::unique_ptr<x11::XScopedEventSelector> event_selector,
-        const scoped_refptr<base::RefCountedMemory>& data,
-        int offset,
-        base::TimeTicks timeout);
+    IncrementalTransfer(x11::Window window,
+                        x11::Atom target,
+                        x11::Atom property,
+                        x11::ScopedEventSelector event_selector,
+                        const scoped_refptr<base::RefCountedMemory>& data,
+                        int offset,
+                        base::TimeTicks timeout);
+
+    IncrementalTransfer(const IncrementalTransfer&) = delete;
+    IncrementalTransfer& operator=(const IncrementalTransfer&) = delete;
+
     ~IncrementalTransfer();
 
     // Move-only class.
@@ -88,7 +100,7 @@ class COMPONENT_EXPORT(UI_BASE_X) SelectionOwner {
     x11::Atom property;
 
     // Selects events on |window|.
-    std::unique_ptr<x11::XScopedEventSelector> event_selector;
+    x11::ScopedEventSelector event_selector;
 
     // The data to be transferred.
     scoped_refptr<base::RefCountedMemory> data;
@@ -100,9 +112,6 @@ class COMPONENT_EXPORT(UI_BASE_X) SelectionOwner {
     // Time when the transfer should be aborted because the selection requestor
     // is taking too long to notify us that we can send the next chunk.
     base::TimeTicks timeout;
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(IncrementalTransfer);
   };
 
   // Attempts to convert the selection to |target|. If the conversion is
@@ -127,6 +136,13 @@ class COMPONENT_EXPORT(UI_BASE_X) SelectionOwner {
   std::vector<IncrementalTransfer>::iterator FindIncrementalTransferForEvent(
       const x11::PropertyNotifyEvent& event);
 
+#if BUILDFLAG(IS_LINUX)
+  void OnPortalPathsRegistered(x11::SelectionRequestEvent request,
+                               std::string key);
+#endif
+
+  raw_ref<x11::Connection> connection_;
+
   // Our X11 state.
   x11::Window x_window_;
 
@@ -144,7 +160,9 @@ class COMPONENT_EXPORT(UI_BASE_X) SelectionOwner {
   // Used to abort stale incremental data transfers.
   base::RepeatingTimer incremental_transfer_abort_timer_;
 
-  DISALLOW_COPY_AND_ASSIGN(SelectionOwner);
+#if BUILDFLAG(IS_LINUX)
+  base::WeakPtrFactory<SelectionOwner> weak_factory_{this};
+#endif
 };
 
 }  // namespace ui

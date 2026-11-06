@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,14 +10,19 @@
 #include <limits>
 #include <memory>
 
-#include "base/bind.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "base/strings/string_number_conversions.h"
 #include "extensions/renderer/script_context.h"
 #include "gin/data_object_builder.h"
 #include "skia/public/mojom/bitmap.mojom.h"
 #include "third_party/blink/public/web/web_array_buffer_converter.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "v8/include/v8-context.h"
+#include "v8/include/v8-exception.h"
+#include "v8/include/v8-function-callback.h"
+#include "v8/include/v8-isolate.h"
+#include "v8/include/v8-object.h"
+#include "v8/include/v8-primitive.h"
 
 // TODO(devlin): Looks like there are lots of opportunities to use gin helpers
 // like gin::Dictionary and gin::DataObjectBuilder here.
@@ -41,7 +46,7 @@ int GetIntPropertyFromV8Object(v8::Local<v8::Object> v8_object,
   v8::Local<v8::Value> v8_property_value;
   if (!v8_object
            ->Get(v8_context, v8::String::NewFromUtf8(
-                                 v8_context->GetIsolate(), property_name,
+                                 v8::Isolate::GetCurrent(), property_name,
                                  v8::NewStringType::kInternalized)
                                  .ToLocalChecked())
            .ToLocal(&v8_property_value)) {
@@ -55,7 +60,7 @@ int GetIntPropertyFromV8Object(v8::Local<v8::Object> v8_object,
                                int index) {
   v8::Local<v8::Value> v8_property_value;
   if (!v8_object
-           ->Get(v8_context, v8::Integer::New(v8_context->GetIsolate(), index))
+           ->Get(v8_context, v8::Integer::New(v8::Isolate::GetCurrent(), index))
            .ToLocal(&v8_property_value)) {
     return 0;
   }
@@ -70,9 +75,6 @@ SetIconNatives::SetIconNatives(ScriptContext* context)
     : ObjectBackedNativeHandler(context) {}
 
 void SetIconNatives::AddRoutes() {
-  RouteHandlerFunction("IsInServiceWorker",
-                       base::BindRepeating(&SetIconNatives::IsInServiceWorker,
-                                           base::Unretained(this)));
   RouteHandlerFunction("SetIconCommon",
                        base::BindRepeating(&SetIconNatives::SetIconCommon,
                                            base::Unretained(this)));
@@ -82,7 +84,7 @@ bool SetIconNatives::ConvertImageDataToBitmapValue(
     const v8::Local<v8::Object> image_data,
     v8::Local<v8::Value>* image_data_bitmap) {
   v8::Local<v8::Context> v8_context = context()->v8_context();
-  v8::Isolate* isolate = v8_context->GetIsolate();
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
   v8::Local<v8::Value> value;
   if (!image_data
            ->Get(v8_context,
@@ -128,26 +130,28 @@ bool SetIconNatives::ConvertImageDataToBitmapValue(
   }
   bitmap.eraseARGB(0, 0, 0, 0);
 
-  uint32_t* pixels = bitmap.getAddr32(0, 0);
-  for (int t = 0; t < width * height; t++) {
-    // |data| is RGBA, pixels is ARGB.
-    pixels[t] = SkPreMultiplyColor(
-        ((GetIntPropertyFromV8Object(data, v8_context, 4 * t + 3) & 0xFF)
-         << 24) |
-        ((GetIntPropertyFromV8Object(data, v8_context, 4 * t + 0) & 0xFF)
-         << 16) |
-        ((GetIntPropertyFromV8Object(data, v8_context, 4 * t + 1) & 0xFF)
-         << 8) |
-        ((GetIntPropertyFromV8Object(data, v8_context, 4 * t + 2) & 0xFF)
-         << 0));
+  auto image_data_bytes = [&](int index) {
+    return GetIntPropertyFromV8Object(data, v8_context, index) & 0xFF;
+  };
+  for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
+      int t = y * width + x;
+      // |data| is RGBA, pixels is ARGB.
+      *bitmap.getAddr32(x, y) =
+          SkPreMultiplyColor((image_data_bytes(4 * t + 3) << 24) |
+                             (image_data_bytes(4 * t + 0) << 16) |
+                             (image_data_bytes(4 * t + 1) << 8) |
+                             (image_data_bytes(4 * t + 2) << 0));
+    }
   }
 
   // Construct the Value object.
   std::vector<uint8_t> s = skia::mojom::InlineBitmap::Serialize(&bitmap);
   blink::WebArrayBuffer buffer = blink::WebArrayBuffer::Create(s.size(), 1);
-  memcpy(buffer.Data(), s.data(), s.size());
-  *image_data_bitmap = blink::WebArrayBufferConverter::ToV8Value(
-      &buffer, context()->v8_context()->Global(), isolate);
+  buffer.ByteSpan().copy_from(s);
+
+  *image_data_bitmap =
+      blink::WebArrayBufferConverter::ToV8Value(&buffer, isolate);
 
   return true;
 }
@@ -156,7 +160,7 @@ bool SetIconNatives::ConvertImageDataSetToBitmapValueSet(
     v8::Local<v8::Object>& details,
     v8::Local<v8::Object>* bitmap_set_value) {
   v8::Local<v8::Context> v8_context = context()->v8_context();
-  v8::Isolate* isolate = v8_context->GetIsolate();
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
   v8::Local<v8::Value> v8_value;
   if (!details
            ->Get(v8_context,
@@ -181,8 +185,9 @@ bool SetIconNatives::ConvertImageDataSetToBitmapValueSet(
         property_names->Get(v8_context, i).ToLocalChecked();
     v8::String::Utf8Value utf8_key(isolate, key);
     int size;
-    if (!base::StringToInt(std::string(*utf8_key), &size))
+    if (!base::StringToInt(*utf8_key, &size)) {
       continue;
+    }
     v8::Local<v8::Value> v8_image_value;
     if (!image_data_set->Get(v8_context, key).ToLocal(&v8_image_value)) {
       return false;
@@ -199,14 +204,6 @@ bool SetIconNatives::ConvertImageDataSetToBitmapValueSet(
         .FromMaybe(false);
   }
   return true;
-}
-
-void SetIconNatives::IsInServiceWorker(
-    const v8::FunctionCallbackInfo<v8::Value>& args) {
-  CHECK_EQ(0, args.Length());
-  const bool is_in_service_worker = context()->IsForServiceWorker();
-  args.GetReturnValue().Set(
-      v8::Boolean::New(args.GetIsolate(), is_in_service_worker));
 }
 
 void SetIconNatives::SetIconCommon(

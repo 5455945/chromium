@@ -1,52 +1,57 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.ui.resources;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.content.Context;
 import android.content.res.Resources;
 import android.graphics.Bitmap;
+import android.graphics.Rect;
 import android.util.SparseArray;
 
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.JNINamespace;
-import org.chromium.base.annotations.MainDex;
-import org.chromium.base.annotations.NativeMethods;
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JNINamespace;
+import org.jni_zero.JniPtr;
+import org.jni_zero.JniRawPtr;
+import org.jni_zero.JniType;
+import org.jni_zero.JniTypeToken;
+import org.jni_zero.NativeMethods;
+
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.display.DisplayAndroid;
 import org.chromium.ui.resources.ResourceLoader.ResourceLoaderCallback;
 import org.chromium.ui.resources.dynamics.BitmapDynamicResource;
-import org.chromium.ui.resources.dynamics.DynamicResource;
 import org.chromium.ui.resources.dynamics.DynamicResourceLoader;
 import org.chromium.ui.resources.statics.StaticResourceLoader;
 import org.chromium.ui.resources.system.SystemResourceLoader;
 
 /**
- * The Java component of a manager for all static resources to be loaded and used by CC layers.
- * This class does not hold any resource state, but passes it directly to native as they are loaded.
+ * The Java component of a manager for all static resources to be loaded and used by CC layers. This
+ * class does not hold any resource state, but passes it directly to native as they are loaded.
  */
 @JNINamespace("ui")
-@MainDex
+@NullMarked
 public class ResourceManager implements ResourceLoaderCallback {
-    private final SparseArray<ResourceLoader> mResourceLoaders = new SparseArray<ResourceLoader>();
-    private final SparseArray<SparseArray<LayoutResource>> mLoadedResources =
-            new SparseArray<SparseArray<LayoutResource>>();
+    @JniType("::ui::ResourceManagerImpl")
+    interface NativeResourceManagerImpl extends JniTypeToken {}
 
-    private final float mPxToDp;
+    private final SparseArray<ResourceLoader> mResourceLoaders = new SparseArray<>();
 
-    private long mNativeResourceManagerPtr;
+    private @Nullable JniRawPtr<NativeResourceManagerImpl> mNativeResourceManagerPtr;
 
     private ResourceManager(
-            Resources resources, int minScreenSideLength, long staticResourceManagerPtr) {
-        mPxToDp = 1.f / resources.getDisplayMetrics().density;
-
-        registerResourceLoader(new StaticResourceLoader(
-                AndroidResourceType.STATIC, this, resources));
-        registerResourceLoader(new DynamicResourceLoader(
-                AndroidResourceType.DYNAMIC, this));
-        registerResourceLoader(new DynamicResourceLoader(
-                AndroidResourceType.DYNAMIC_BITMAP, this));
+            Resources resources,
+            int minScreenSideLength,
+            JniRawPtr<NativeResourceManagerImpl> staticResourceManagerPtr) {
+        registerResourceLoader(
+                new StaticResourceLoader(AndroidResourceType.STATIC, this, resources));
+        registerResourceLoader(new DynamicResourceLoader(AndroidResourceType.DYNAMIC, this));
+        registerResourceLoader(new DynamicResourceLoader(AndroidResourceType.DYNAMIC_BITMAP, this));
         registerResourceLoader(
                 new SystemResourceLoader(AndroidResourceType.SYSTEM, this, minScreenSideLength));
 
@@ -55,14 +60,16 @@ public class ResourceManager implements ResourceLoaderCallback {
 
     /**
      * Creates an instance of a {@link ResourceManager}.
-     * @param windowAndroid            A {@link WindowAndroid} instance to fetch a {@link Context}
-     * and thus grab {@link Resources} from.
+     *
+     * @param windowAndroid A {@link WindowAndroid} instance to fetch a {@link Context} and thus
+     *     grab {@link Resources} from.
      * @param staticResourceManagerPtr A pointer to the native component of this class.
-     * @return                         A new instance of a {@link ResourceManager}.
+     * @return A new instance of a {@link ResourceManager}.
      */
     @CalledByNative
-    private static ResourceManager create(
-            WindowAndroid windowAndroid, long staticResourceManagerPtr) {
+    static ResourceManager create(
+            WindowAndroid windowAndroid,
+            JniRawPtr<NativeResourceManagerImpl> staticResourceManagerPtr) {
         Context context = windowAndroid.getContext().get();
         // This call should happen early enough (i.e. during construction) that this context should
         // not yet have been released.
@@ -79,75 +86,75 @@ public class ResourceManager implements ResourceLoaderCallback {
     }
 
     /**
-     * @return A reference to the {@link DynamicResourceLoader} that provides
-     *         {@link DynamicResource} objects to this class.
+     * @return A reference to the {@link DynamicResourceLoader} that provides {@link Resource}
+     *     objects to this class.
      */
     public DynamicResourceLoader getDynamicResourceLoader() {
-        return (DynamicResourceLoader) mResourceLoaders.get(
-                AndroidResourceType.DYNAMIC);
+        DynamicResourceLoader ret =
+                (DynamicResourceLoader) mResourceLoaders.get(AndroidResourceType.DYNAMIC);
+        assert ret != null;
+        return ret;
     }
 
     /**
-     * @return A reference to the {@link DynamicResourceLoader} for bitmaps that provides
-     *         {@link BitmapDynamicResource} objects to this class.
+     * @return A reference to the {@link DynamicResourceLoader} for bitmaps that provides {@link
+     *     BitmapDynamicResource} objects to this class.
      */
     public DynamicResourceLoader getBitmapDynamicResourceLoader() {
-        return (DynamicResourceLoader) mResourceLoaders.get(
-                AndroidResourceType.DYNAMIC_BITMAP);
+        DynamicResourceLoader ret =
+                (DynamicResourceLoader) mResourceLoaders.get(AndroidResourceType.DYNAMIC_BITMAP);
+        assert ret != null;
+        return ret;
     }
 
     /**
      * Automatically loads any synchronous resources specified in |syncIds| and will start
      * asynchronous reads for any asynchronous resources specified in |asyncIds|.
+     *
      * @param type AndroidResourceType which will be loaded.
      * @param syncIds Resource ids which will be loaded synchronously.
      * @param asyncIds Resource ids which will be loaded asynchronously.
      */
-    public void preloadResources(int type, int[] syncIds, int[] asyncIds) {
+    public void preloadResources(int type, int @Nullable [] syncIds, int @Nullable [] asyncIds) {
         ResourceLoader loader = mResourceLoaders.get(type);
+        assumeNonNull(loader);
         if (asyncIds != null) {
-            for (Integer resId : asyncIds) {
+            for (int resId : asyncIds) {
                 loader.preloadResource(resId);
             }
         }
 
         if (syncIds != null) {
-            for (Integer resId : syncIds) {
+            for (int resId : syncIds) {
                 loader.loadResource(resId);
             }
         }
     }
 
-    /**
-     * @param resType The type of the Android resource.
-     * @param resId   The id of the Android resource.
-     * @return The corresponding {@link LayoutResource}.
-     */
-    public LayoutResource getResource(@AndroidResourceType int resType, int resId) {
-        SparseArray<LayoutResource> bucket = mLoadedResources.get(resType);
-        return bucket != null ? bucket.get(resId) : null;
-    }
-
-    @SuppressWarnings("cast")
     @Override
-    public void onResourceLoaded(@AndroidResourceType int resType, int resId, Resource resource) {
+    public void onResourceLoaded(
+            @AndroidResourceType int resType, int resId, @Nullable Resource resource) {
         if (resource == null) return;
         Bitmap bitmap = resource.getBitmap();
-        if (bitmap == null) {
-            if (resource.shouldRemoveResourceOnNullBitmap() && mNativeResourceManagerPtr != 0) {
-                ResourceManagerJni.get().removeResource(
-                        mNativeResourceManagerPtr, ResourceManager.this, resType, resId);
-            }
+        if (bitmap == null
+                || bitmap.isRecycled()
+                || bitmap.getWidth() <= 0
+                || bitmap.getHeight() <= 0) {
             return;
         }
 
-        saveMetadataForLoadedResource(resType, resId, resource);
+        if (mNativeResourceManagerPtr == null) return;
 
-        if (mNativeResourceManagerPtr == 0) return;
-
-        ResourceManagerJni.get().onResourceReady(mNativeResourceManagerPtr, ResourceManager.this,
-                resType, resId, bitmap, resource.getBitmapSize().width(),
-                resource.getBitmapSize().height(), resource.createNativeResource());
+        Rect bitmapSize = resource.getBitmapSize();
+        ResourceManagerJni.get()
+                .onResourceReady(
+                        mNativeResourceManagerPtr,
+                        resType,
+                        resId,
+                        bitmap,
+                        bitmapSize.width(),
+                        bitmapSize.height(),
+                        resource.createNativeResource());
     }
 
     @Override
@@ -158,35 +165,22 @@ public class ResourceManager implements ResourceLoaderCallback {
             return;
         }
 
-        if (mNativeResourceManagerPtr == 0) return;
+        if (mNativeResourceManagerPtr == null) return;
 
-        ResourceManagerJni.get().removeResource(
-                mNativeResourceManagerPtr, ResourceManager.this, resType, resId);
+        ResourceManagerJni.get().removeResource(mNativeResourceManagerPtr, resType, resId);
     }
 
-    /**
-     * Clear the cache of tinted assets that the native manager holds.
-     */
+    /** Clear the cache of tinted assets that the native manager holds. */
     public void clearTintedResourceCache() {
-        if (mNativeResourceManagerPtr == 0) return;
-        ResourceManagerJni.get().clearTintedResourceCache(
-                mNativeResourceManagerPtr, ResourceManager.this);
-    }
-
-    private void saveMetadataForLoadedResource(
-            @AndroidResourceType int resType, int resId, Resource resource) {
-        SparseArray<LayoutResource> bucket = mLoadedResources.get(resType);
-        if (bucket == null) {
-            bucket = new SparseArray<LayoutResource>();
-            mLoadedResources.put(resType, bucket);
-        }
-        bucket.put(resId, new LayoutResource(mPxToDp, resource));
+        if (mNativeResourceManagerPtr == null) return;
+        ResourceManagerJni.get().clearTintedResourceCache(mNativeResourceManagerPtr);
     }
 
     @CalledByNative
     private void destroy() {
-        assert mNativeResourceManagerPtr != 0;
-        mNativeResourceManagerPtr = 0;
+        assert mNativeResourceManagerPtr != null;
+        mNativeResourceManagerPtr.release();
+        mNativeResourceManagerPtr = null;
     }
 
     @CalledByNative
@@ -202,7 +196,7 @@ public class ResourceManager implements ResourceLoaderCallback {
     }
 
     @CalledByNative
-    private long getNativePtr() {
+    @Nullable JniPtr<NativeResourceManagerImpl> getNativePtr() {
         return mNativeResourceManagerPtr;
     }
 
@@ -210,12 +204,26 @@ public class ResourceManager implements ResourceLoaderCallback {
         mResourceLoaders.put(loader.getResourceType(), loader);
     }
 
+    public void assertResourceExists(int resType, int resId) {
+        ResourceManagerJni.get()
+                .assertResourceExists(assumeNonNull(mNativeResourceManagerPtr), resType, resId);
+    }
+
     @NativeMethods
     interface Natives {
-        void onResourceReady(long nativeResourceManagerImpl, ResourceManager caller, int resType,
-                int resId, Bitmap bitmap, int width, int height, long nativeResource);
-        void removeResource(
-                long nativeResourceManagerImpl, ResourceManager caller, int resType, int resId);
-        void clearTintedResourceCache(long nativeResourceManagerImpl, ResourceManager caller);
+        void onResourceReady(
+                JniPtr<NativeResourceManagerImpl> self,
+                int resType,
+                int resId,
+                @JniType("SkBitmap") Bitmap bitmap,
+                int width,
+                int height,
+                long nativeResource);
+
+        void removeResource(JniPtr<NativeResourceManagerImpl> self, int resType, int resId);
+
+        void clearTintedResourceCache(JniPtr<NativeResourceManagerImpl> self);
+
+        void assertResourceExists(JniPtr<NativeResourceManagerImpl> self, int resType, int resId);
     }
 }

@@ -1,4 +1,5 @@
 include_rules = [
+  "+components/enterprise/common",
   "+components/policy/core/browser",
   "+components/policy/core/common",
   "+components/policy/policy_constants.h",
@@ -7,8 +8,9 @@ include_rules = [
   "+components/strings/grit/components_strings.h",
   "+crypto/sha2.h",
   "+ipc",
+  "+skia/ext",
   "+third_party/opencv",
   "+third_party/skia/include",
   "+ui/gfx",
-  "+url"
+  "+url",
 ]

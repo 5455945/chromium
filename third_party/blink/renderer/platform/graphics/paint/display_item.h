@@ -1,16 +1,22 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_PAINT_DISPLAY_ITEM_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_PAINT_DISPLAY_ITEM_H_
 
+#include "base/check_op.h"
 #include "base/dcheck_is_on.h"
-#include "third_party/blink/renderer/platform/geometry/int_rect.h"
-#include "third_party/blink/renderer/platform/graphics/paint/display_item_client.h"
+#include "third_party/blink/renderer/platform/graphics/paint/display_item_client_types.h"
+#include "third_party/blink/renderer/platform/graphics/paint_invalidation_reason.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/assertions.h"
+#include "third_party/blink/renderer/platform/wtf/forward.h"
+#include "third_party/blink/renderer/platform/wtf/hash_functions.h"
+#include "third_party/blink/renderer/platform/wtf/hash_traits.h"
+#include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
+#include "ui/gfx/geometry/rect.h"
 
 #if DCHECK_IS_ON()
 #include "third_party/blink/renderer/platform/json/json_values.h"
@@ -19,6 +25,7 @@
 
 namespace blink {
 
+class PaintArtifact;
 enum class PaintPhase;
 
 class PLATFORM_EXPORT DisplayItem {
@@ -50,31 +57,26 @@ class PLATFORM_EXPORT DisplayItem {
   //     <Category>[<Subset>]PaintPhaseFirst + PaintPhaseMax;
   // - DEFINE_PAINT_PHASE_CONVERSION_METHOD(<Category>[<Subset>]) to define
   //   paintPhaseTo<Category>[<Subset>]Type(PaintPhase) method.
-  enum Type {
+  enum Type : uint8_t {
     kUninitializedType,
 
     kDrawingFirst,
     kDrawingPaintPhaseFirst = kDrawingFirst,
     kDrawingPaintPhaseLast = kDrawingFirst + kPaintPhaseMax,
     kBoxDecorationBackground,
+    kFixedAttachmentBackground,
     kCapsLockIndicator,
     kCaret,
-    kClippingMask,
-    kColumnRules,
-    kDebugDrawing,
+    kGapRules,
+    kCustomHighlightTint,
     kDocumentRootBackdrop,
     kDocumentBackground,
-    kDragImage,
     kDragCaret,
     kForcedColorsModeBackplate,
     kSVGImage,
-    kLinkHighlight,
     kImageAreaFocusRing,
     kOverflowControls,
     kFrameOverlay,
-    kPopupContainerBorder,
-    kPopupListBoxBackground,
-    kPopupListBoxRow,
     kPrintedContentDestinationLocations,
     kPrintedContentPDFURLRect,
     kReflectionMask,
@@ -90,8 +92,6 @@ class PLATFORM_EXPORT DisplayItem {
     kScrollbarTickmarks,
     kSelectionTint,
     kTableCollapsedBorders,
-    kVideoBitmap,
-    kWebFont,
     kWebPlugin,
     kDrawingLast = kWebPlugin,
 
@@ -101,11 +101,11 @@ class PLATFORM_EXPORT DisplayItem {
     kForeignLayerPlugin,
     kForeignLayerVideo,
     kForeignLayerRemoteFrame,
-    kForeignLayerContentsWrapper,
     kForeignLayerLinkHighlight,
     kForeignLayerViewportScroll,
     kForeignLayerViewportScrollbar,
-    kForeignLayerLast = kForeignLayerViewportScrollbar,
+    kForeignLayerViewTransitionContent,
+    kForeignLayerLast = kForeignLayerViewTransitionContent,
 
     kClipPaintPhaseFirst,
     kClipPaintPhaseLast = kClipPaintPhaseFirst + kPaintPhaseMax,
@@ -128,16 +128,24 @@ class PLATFORM_EXPORT DisplayItem {
     // include content that does not paint. Hit test data ensure a layer exists
     // and is sized properly even if no content would otherwise be painted.
     kHitTest,
+    // Web plugin needs a separate id to avoid conflict with the hit test data
+    // for LayoutReplaced.
+    kWebPluginHitTest,
+
+    // Used for paint chunks that contain region capture data.
+    kRegionCapture,
+
+    // Used for paint chunks that contain tracking highlight data.
+    kTrackedElement,
 
     // Used both for specifying the paint-order scroll location, and for non-
     // composited scroll hit testing (see: hit_test_data.h).
     kScrollHitTest,
     // Used to prevent composited scrolling on the resize handle.
     kResizerScrollHitTest,
-    // Used to prevent composited scrolling on plugins with wheel handlers.
-    kPluginScrollHitTest,
-    // Used to prevent composited scrolling on custom scrollbars.
-    kCustomScrollbarHitTest,
+    // Used to prevent composited scrolling and set touch action region, on
+    // custom scrollbars and non-composited native scrollbars.
+    kScrollbarHitTest,
 
     // These are for paint chunks that are forced for layers.
     kLayerChunk,
@@ -160,34 +168,57 @@ class PLATFORM_EXPORT DisplayItem {
   // Ids are for matching new DisplayItems with existing DisplayItems.
   struct Id {
     DISALLOW_NEW();
-    Id(const DisplayItemClient& client, Type type, wtf_size_t fragment = 0)
-        : client(client), type(type), fragment(fragment) {}
+    Id(DisplayItemClientId client_id, Type type, wtf_size_t fragment = 0)
+        : client_id(client_id), type(type), fragment(fragment) {}
     Id(const Id& id, wtf_size_t fragment)
-        : client(id.client), type(id.type), fragment(fragment) {}
+        : client_id(id.client_id), type(id.type), fragment(fragment) {}
 
+    // The no-argument version is for operator<< which is used in DCHECK and
+    // unit tests.
     String ToString() const;
+    // This version will output the debug name of the client.
+    String ToString(const PaintArtifact&) const;
 
-    const DisplayItemClient& client;
+    const DisplayItemClientId client_id;
     const Type type;
     const wtf_size_t fragment;
+
+    struct HashKey {
+      DISALLOW_NEW();
+
+     public:
+      HashKey() = default;
+      explicit HashKey(const DisplayItem::Id& id)
+          : client_id(id.client_id), type(id.type), fragment(id.fragment) {}
+      bool operator==(const HashKey& other) const {
+        return client_id == other.client_id && type == other.type &&
+               fragment == other.fragment;
+      }
+
+      DisplayItemClientId client_id = kInvalidDisplayItemClientId;
+      DisplayItem::Type type = kUninitializedType;
+      wtf_size_t fragment = 0;
+    };
+
+    HashKey AsHashKey() const { return HashKey(*this); }
   };
 
-  Id GetId() const { return Id(*client_, GetType(), fragment_); }
+  Id GetId() const { return Id(client_id_, GetType(), fragment_); }
 
-  const DisplayItemClient& Client() const {
-    DCHECK(client_);
-    return *client_;
+  DisplayItemClientId ClientId() const {
+    DCHECK_NE(client_id_, kInvalidDisplayItemClientId);
+    return client_id_;
   }
 
   // The bounding box of all pixels of this display item, in the transform space
   // of the containing paint chunk.
-  const IntRect& VisualRect() const { return visual_rect_; }
+  const gfx::Rect& VisualRect() const { return visual_rect_; }
 
   RasterEffectOutset GetRasterEffectOutset() const {
-    return static_cast<RasterEffectOutset>(raster_effect_outset_);
+    return raster_effect_outset_;
   }
 
-  Type GetType() const { return static_cast<Type>(type_); }
+  Type GetType() const { return type_; }
 
   // The fragment is part of the id, to uniquely identify display items in
   // different fragments for the same client and type.
@@ -226,8 +257,15 @@ class PLATFORM_EXPORT DisplayItem {
     return type_ == kScrollbarHorizontal || type_ == kScrollbarVertical;
   }
 
-  bool IsCacheable() const { return is_cacheable_; }
-  void SetUncacheable() { is_cacheable_ = false; }
+  PaintInvalidationReason GetPaintInvalidationReason() const {
+    return paint_invalidation_reason_;
+  }
+  void SetPaintInvalidationReason(PaintInvalidationReason reason) {
+    paint_invalidation_reason_ = reason;
+  }
+  bool IsCacheable() const {
+    return paint_invalidation_reason_ != PaintInvalidationReason::kUncacheable;
+  }
 
   bool EqualsForUnderInvalidation(const DisplayItem& other) const;
 
@@ -239,35 +277,33 @@ class PLATFORM_EXPORT DisplayItem {
 
 #if DCHECK_IS_ON()
   // A subsequence tombstone is full of zeros set by memset(0);
-  bool IsSubsequenceTombstone() const { return !is_not_tombstone_ && !client_; }
+  bool IsSubsequenceTombstone() const {
+    return !is_not_tombstone_ && client_id_ == kInvalidDisplayItemClientId;
+  }
   static String TypeAsDebugString(DisplayItem::Type);
-  String AsDebugString() const;
-  String IdAsString() const;
-  void PropertiesAsJSON(JSONObject&,
-                        bool client_known_to_be_alive = false) const;
+  String AsDebugString(const PaintArtifact&) const;
+  String IdAsString(const PaintArtifact&) const;
+  void PropertiesAsJSON(JSONObject&, const PaintArtifact&) const;
 #endif
 
  protected:
   // Some fields are copied from |client|, because we need to access them in
   // later paint cycles when |client| may have been destroyed.
-  DisplayItem(const DisplayItemClient& client,
+  DisplayItem(const DisplayItemClientId client_id,
               Type type,
-              const IntRect& visual_rect,
-              bool draws_content = false)
-      : client_(&client),
+              const gfx::Rect& visual_rect,
+              RasterEffectOutset raster_effect_outset,
+              PaintInvalidationReason paint_invalidation_reason,
+              bool draws_content)
+      : client_id_(client_id),
         visual_rect_(visual_rect),
         fragment_(0),
+        paint_invalidation_reason_(paint_invalidation_reason),
         type_(type),
-        raster_effect_outset_(
-            static_cast<unsigned>(client.VisualRectOutsetForRasterEffects())),
+        raster_effect_outset_(raster_effect_outset),
         draws_content_(draws_content),
-        is_cacheable_(client.IsCacheable()),
         is_not_tombstone_(true),
-        known_to_be_opaque_is_set_(false),
-        known_to_be_opaque_(false) {
-    DCHECK_EQ(client.VisualRectOutsetForRasterEffects(),
-              GetRasterEffectOutset());
-  }
+        opaqueness_(0) {}
 
   ~DisplayItem() = default;
 
@@ -288,36 +324,55 @@ class PLATFORM_EXPORT DisplayItem {
     is_not_tombstone_ = false;
   }
 
-  const DisplayItemClient* client_;
-  IntRect visual_rect_;
+  DisplayItemClientId client_id_;
+  gfx::Rect visual_rect_;
   wtf_size_t fragment_;
-  static_assert(kTypeLast < (1 << 8),
-                "DisplayItem::Type should fit in uint8_t");
-  unsigned type_ : 8;
-  unsigned raster_effect_outset_ : 2;
-  unsigned draws_content_ : 1;
-  unsigned is_cacheable_ : 1;
+  // paint_invalidation_reason_ is set during construction (or, in the case of a
+  // DisplayItem copied from the cache, shortly thereafter). Once set, it is
+  // never modified. It is used to inform raster invalidation.
+  PaintInvalidationReason paint_invalidation_reason_;
+  Type type_;
+  RasterEffectOutset raster_effect_outset_;
+  uint8_t draws_content_ : 1;
   // This is not |is_tombstone_| to allow memset(0) to clear a display item to
   // be a tombstone.
-  unsigned is_not_tombstone_ : 1;
+  uint8_t is_not_tombstone_ : 1;
 
  protected:
-  // These are for DrawingDisplayItem to save memory.
-  mutable unsigned known_to_be_opaque_is_set_ : 1;
-  mutable unsigned known_to_be_opaque_ : 1;
+  // For DrawingDisplayItem to save memory.
+  mutable uint8_t opaqueness_ : 2;
 };
 
 inline bool operator==(const DisplayItem::Id& a, const DisplayItem::Id& b) {
-  return a.client == b.client && a.type == b.type && a.fragment == b.fragment;
-}
-
-inline bool operator!=(const DisplayItem::Id& a, const DisplayItem::Id& b) {
-  return !(a == b);
+  return a.client_id == b.client_id && a.type == b.type &&
+         a.fragment == b.fragment;
 }
 
 PLATFORM_EXPORT std::ostream& operator<<(std::ostream&, DisplayItem::Type);
+// These are mainly for DCHECK and unit tests. They don't output debug names of
+// DisplayItemClients. Use the argumented version of DisplayItem::Id::ToString()
+// or DisplayItem::AsDebugString() if you want to see debug names.
 PLATFORM_EXPORT std::ostream& operator<<(std::ostream&, const DisplayItem::Id&);
 PLATFORM_EXPORT std::ostream& operator<<(std::ostream&, const DisplayItem&);
+
+template <>
+struct HashTraits<DisplayItem::Id::HashKey>
+    : GenericHashTraits<DisplayItem::Id::HashKey> {
+  using Key = DisplayItem::Id::HashKey;
+  static constexpr bool kEmptyValueIsZero = true;
+  static void ConstructDeletedValue(Key& slot) {
+    const_cast<wtf_size_t&>(slot.fragment) = kNotFound;
+  }
+  static bool IsDeletedValue(const Key& id) { return id.fragment == kNotFound; }
+
+  static uint32_t GetHash(const Key& id) {
+    uint32_t hash = blink::GetHash(id.client_id);
+    AddIntToHash(hash, id.type);
+    AddIntToHash(hash, id.fragment);
+    return hash;
+  }
+  static constexpr bool kSafeToCompareToEmptyOrDeleted = false;
+};
 
 }  // namespace blink
 

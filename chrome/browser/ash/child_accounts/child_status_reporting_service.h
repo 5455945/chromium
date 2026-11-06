@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "components/keyed_service/core/keyed_service.h"
 
@@ -19,7 +20,7 @@ class BrowserContext;
 namespace policy {
 class CloudPolicyClient;
 class StatusUploader;
-class UserCloudPolicyManagerChromeOS;
+class UserCloudPolicyManagerAsh;
 }  // namespace policy
 
 namespace ash {
@@ -28,7 +29,7 @@ namespace ash {
 // Child user should be registered with DMServer and periodically upload the
 // information about the device usage. The reports are only sent during user's
 // session and they do not interfere with enterprise reporting that is
-// controlled by DeviceCloudPolicyManagerChromeOS.
+// controlled by DeviceCloudPolicyManagerAsh.
 class ChildStatusReportingService : public KeyedService {
  public:
   explicit ChildStatusReportingService(content::BrowserContext* context);
@@ -62,9 +63,9 @@ class ChildStatusReportingService : public KeyedService {
   // reporting.
   base::TimeDelta day_reset_time_;
 
-  content::BrowserContext* const context_;
+  const raw_ptr<content::BrowserContext> context_;
 
-  policy::UserCloudPolicyManagerChromeOS* user_cloud_policy_manager_;
+  raw_ptr<policy::UserCloudPolicyManagerAsh> user_cloud_policy_manager_;
 };
 
 }  // namespace ash

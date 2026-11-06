@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,9 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "components/services/storage/public/mojom/service_worker_storage_control.mojom.h"
-#include "content/common/content_export.h"
 #include "mojo/public/cpp/base/big_buffer.h"
-#include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/system/data_pipe.h"
 #include "mojo/public/cpp/system/simple_watcher.h"
@@ -21,8 +20,7 @@ namespace content {
 // Reads a single service worker script from installed script storage. This acts
 // as a wrapper of ServiceWorkerResourceReader and converts script code cache
 // (metadata) from a BigBuffer to a mojo data pipe.
-class ServiceWorkerInstalledScriptReader
-    : public storage::mojom::ServiceWorkerDataPipeStateNotifier {
+class ServiceWorkerInstalledScriptReader {
  public:
   // Do not change the order. This is used for UMA.
   enum class FinishedReason {
@@ -43,7 +41,7 @@ class ServiceWorkerInstalledScriptReader
    public:
     virtual void OnStarted(
         network::mojom::URLResponseHeadPtr response_head,
-        absl::optional<mojo_base::BigBuffer> metadata,
+        std::optional<mojo_base::BigBuffer> metadata,
         mojo::ScopedDataPipeConsumerHandle body_handle,
         mojo::ScopedDataPipeConsumerHandle meta_data_handle) = 0;
     // Called after both body and metadata have finished being written to the
@@ -56,7 +54,7 @@ class ServiceWorkerInstalledScriptReader
   ServiceWorkerInstalledScriptReader(
       mojo::Remote<storage::mojom::ServiceWorkerResourceReader> reader,
       Client* client);
-  ~ServiceWorkerInstalledScriptReader() override;
+  ~ServiceWorkerInstalledScriptReader();
 
   // Starts reading the script.
   void Start();
@@ -66,10 +64,10 @@ class ServiceWorkerInstalledScriptReader
   void OnReadResponseHeadComplete(
       int result,
       network::mojom::URLResponseHeadPtr response_head,
-      absl::optional<mojo_base::BigBuffer> metadata);
-  void OnReadDataStarted(
+      std::optional<mojo_base::BigBuffer> metadata);
+  void OnReadDataPrepared(
       network::mojom::URLResponseHeadPtr response_head,
-      absl::optional<mojo_base::BigBuffer> metadata,
+      std::optional<mojo_base::BigBuffer> metadata,
       mojo::ScopedDataPipeConsumerHandle body_consumer_handle);
   void OnMetaDataSent(bool success);
   void OnReaderDisconnected();
@@ -81,12 +79,11 @@ class ServiceWorkerInstalledScriptReader
     return weak_factory_.GetWeakPtr();
   }
 
-  // storage::mojom::ServiceWorkerDataPipeStateNotifier implementations:
-  void OnComplete(int32_t status) override;
+  void OnComplete(int32_t status);
 
   mojo::Remote<storage::mojom::ServiceWorkerResourceReader> reader_;
   // |client_| must outlive this.
-  Client* client_;
+  raw_ptr<Client> client_;
 
   // For meta data.
   std::unique_ptr<MetaDataSender> meta_data_sender_;
@@ -96,9 +93,6 @@ class ServiceWorkerInstalledScriptReader
   // to an expected body size in OnReadInfoCompete().
   uint64_t body_size_ = std::numeric_limits<uint64_t>::max();
   bool was_body_written_ = false;
-
-  mojo::Receiver<storage::mojom::ServiceWorkerDataPipeStateNotifier> receiver_{
-      this};
 
   base::WeakPtrFactory<ServiceWorkerInstalledScriptReader> weak_factory_{this};
 };

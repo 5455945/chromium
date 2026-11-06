@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,26 +11,29 @@
 #include <algorithm>
 #include <memory>
 
-#include "base/atomicops.h"
-#include "base/bind.h"
+#include "base/feature_list.h"
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/lazy_instance.h"
 #include "base/logging.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/memory/ptr_util.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/notimplemented.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
-#include "base/task/post_task.h"
 #include "base/time/time.h"
+#include "base/trace_event/trace_event.h"
+#include "base/values.h"
 #include "build/build_config.h"
 #include "net/base/address_list.h"
+#include "net/base/features.h"
 #include "net/base/io_buffer.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/net_errors.h"
 #include "net/base/network_activity_monitor.h"
 #include "net/base/network_change_notifier.h"
 #include "net/base/sockaddr_storage.h"
+#include "net/base/sys_addrinfo.h"
 #include "net/http/http_util.h"
 #include "net/log/net_log.h"
 #include "net/log/net_log_event_type.h"
@@ -43,15 +46,23 @@
 #include "net/socket/socket_tag.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 
+#if BUILDFLAG(IS_ANDROID)
+#include "net/android/network_library.h"
+#endif  // BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_MAC)
+#include "net/socket/ephemeral_port_randomizer_mac.h"
+#endif  // BUILDFLAG(IS_MAC)
+
 // If we don't have a definition for TCPI_OPT_SYN_DATA, create one.
 #if !defined(TCPI_OPT_SYN_DATA)
 #define TCPI_OPT_SYN_DATA 32
 #endif
 
 // Fuchsia defines TCP_INFO, but it's not implemented.
-// TODO(crbug.com/758294): Enable TCP_INFO on Fuchsia once it's implemented
+// TODO(crbug.com/42050612): Enable TCP_INFO on Fuchsia once it's implemented
 // there (see NET-160).
-#if defined(TCP_INFO) && !defined(OS_FUCHSIA)
+#if defined(TCP_INFO) && !BUILDFLAG(IS_FUCHSIA)
 #define HAVE_TCP_INFO
 #endif
 
@@ -72,25 +83,30 @@ bool SetTCPKeepAlive(int fd, bool enable, int delay) {
   if (!enable)
     return true;
 
-#if defined(OS_LINUX) || defined(OS_CHROMEOS) || defined(OS_ANDROID)
-  // Setting the keepalive interval varies by platform.
+  // A delay of 0 doesn't work, and is the default, so ignore that and rely on
+  // whatever the OS defaults are once we turned it on above.
+  if (delay) {
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
+    // Setting the keepalive interval varies by platform.
 
-  // Set seconds until first TCP keep alive.
-  if (setsockopt(fd, SOL_TCP, TCP_KEEPIDLE, &delay, sizeof(delay))) {
-    PLOG(ERROR) << "Failed to set TCP_KEEPIDLE on fd: " << fd;
-    return false;
-  }
-  // Set seconds between TCP keep alives.
-  if (setsockopt(fd, SOL_TCP, TCP_KEEPINTVL, &delay, sizeof(delay))) {
-    PLOG(ERROR) << "Failed to set TCP_KEEPINTVL on fd: " << fd;
-    return false;
-  }
-#elif defined(OS_APPLE)
-  if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE, &delay, sizeof(delay))) {
-    PLOG(ERROR) << "Failed to set TCP_KEEPALIVE on fd: " << fd;
-    return false;
-  }
+    // Set seconds until first TCP keep alive.
+    if (setsockopt(fd, SOL_TCP, TCP_KEEPIDLE, &delay, sizeof(delay))) {
+      PLOG(ERROR) << "Failed to set TCP_KEEPIDLE on fd: " << fd;
+      return false;
+    }
+    // Set seconds between TCP keep alives.
+    if (setsockopt(fd, SOL_TCP, TCP_KEEPINTVL, &delay, sizeof(delay))) {
+      PLOG(ERROR) << "Failed to set TCP_KEEPINTVL on fd: " << fd;
+      return false;
+    }
+#elif BUILDFLAG(IS_APPLE)
+    if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE, &delay, sizeof(delay))) {
+      PLOG(ERROR) << "Failed to set TCP_KEEPALIVE on fd: " << fd;
+      return false;
+    }
 #endif
+  }
+
   return true;
 }
 
@@ -124,8 +140,7 @@ base::TimeDelta GetTransportRtt(SocketDescriptor fd) {
     return base::TimeDelta();
   }
 
-  return base::TimeDelta::FromMicroseconds(
-      std::max(info.tcpi_rtt, kMinValidRttMicros));
+  return base::Microseconds(std::max(info.tcpi_rtt, kMinValidRttMicros));
 }
 
 #endif  // defined(TCP_INFO)
@@ -134,14 +149,38 @@ base::TimeDelta GetTransportRtt(SocketDescriptor fd) {
 
 //-----------------------------------------------------------------------------
 
+// static
+std::unique_ptr<TCPSocketPosix> TCPSocketPosix::Create(
+    std::unique_ptr<SocketPerformanceWatcher> socket_performance_watcher,
+    NetLog* net_log,
+    const NetLogSource& source) {
+  return base::WrapUnique(new TCPSocketPosix(
+      std::move(socket_performance_watcher), net_log, source));
+}
+
+// static
+std::unique_ptr<TCPSocketPosix> TCPSocketPosix::Create(
+    std::unique_ptr<SocketPerformanceWatcher> socket_performance_watcher,
+    NetLogWithSource net_log_source) {
+  return base::WrapUnique(new TCPSocketPosix(
+      std::move(socket_performance_watcher), net_log_source));
+}
+
 TCPSocketPosix::TCPSocketPosix(
     std::unique_ptr<SocketPerformanceWatcher> socket_performance_watcher,
     NetLog* net_log,
     const NetLogSource& source)
     : socket_performance_watcher_(std::move(socket_performance_watcher)),
-      logging_multiple_connect_attempts_(false),
       net_log_(NetLogWithSource::Make(net_log, NetLogSourceType::SOCKET)) {
   net_log_.BeginEventReferencingSource(NetLogEventType::SOCKET_ALIVE, source);
+}
+
+TCPSocketPosix::TCPSocketPosix(
+    std::unique_ptr<SocketPerformanceWatcher> socket_performance_watcher,
+    NetLogWithSource net_log_source)
+    : socket_performance_watcher_(std::move(socket_performance_watcher)),
+      net_log_(net_log_source) {
+  net_log_.BeginEvent(NetLogEventType::SOCKET_ALIVE);
 }
 
 TCPSocketPosix::~TCPSocketPosix() {
@@ -160,12 +199,27 @@ int TCPSocketPosix::Open(AddressFamily family) {
   return rv;
 }
 
+int TCPSocketPosix::BindToNetwork(handles::NetworkHandle network) {
+  DCHECK(IsValid());
+  DCHECK(!IsConnected());
+#if BUILDFLAG(IS_ANDROID)
+  int rv = net::android::BindToNetwork(socket_->socket_fd(), network);
+  if (rv == OK) {
+    bound_network_ = network;
+  }
+  return rv;
+#else
+  NOTIMPLEMENTED();
+  return ERR_NOT_IMPLEMENTED;
+#endif  // BUILDFLAG(IS_ANDROID)
+}
+
 int TCPSocketPosix::AdoptConnectedSocket(SocketDescriptor socket,
                                          const IPEndPoint& peer_address) {
   DCHECK(!socket_);
 
   SockaddrStorage storage;
-  if (!peer_address.ToSockAddr(storage.addr, &storage.addr_len) &&
+  if (!peer_address.ToSockAddr(storage.addr(), &storage.addr_len) &&
       // For backward compatibility, allows the empty address.
       !(peer_address == IPEndPoint())) {
     return ERR_ADDRESS_INVALID;
@@ -196,8 +250,9 @@ int TCPSocketPosix::Bind(const IPEndPoint& address) {
   DCHECK(socket_);
 
   SockaddrStorage storage;
-  if (!address.ToSockAddr(storage.addr, &storage.addr_len))
+  if (!address.ToSockAddr(storage.addr(), &storage.addr_len)) {
     return ERR_ADDRESS_INVALID;
+  }
 
   return socket_->Bind(storage);
 }
@@ -230,15 +285,90 @@ int TCPSocketPosix::Connect(const IPEndPoint& address,
                             CompletionOnceCallback callback) {
   DCHECK(socket_);
 
-  if (!logging_multiple_connect_attempts_)
-    LogConnectBegin(AddressList(address));
+  IPEndPoint target_address =
+      handles::MaybeTranslateEmulatedNetworkAddressForTesting(address,
+                                                              bound_network_);
 
-  net_log_.BeginEvent(NetLogEventType::TCP_CONNECT_ATTEMPT,
-                      [&] { return CreateNetLogIPEndPointParams(&address); });
+  if (!logging_multiple_connect_attempts_)
+    LogConnectBegin(AddressList(target_address));
+
+  net_log_.BeginEvent(NetLogEventType::TCP_CONNECT_ATTEMPT, [&] {
+    return CreateNetLogIPEndPointParams(&target_address);
+  });
 
   SockaddrStorage storage;
-  if (!address.ToSockAddr(storage.addr, &storage.addr_len))
+  if (!target_address.ToSockAddr(storage.addr(), &storage.addr_len)) {
     return ERR_ADDRESS_INVALID;
+  }
+
+#if BUILDFLAG(IS_MAC)
+  // Even if `kTcpPortRandomizationMac` is enabled, we still skip this code for
+  // non-public targets if `kTcpPortRandomizationMacForPrivateRoutes` is false.
+  // See https://crbug.com/575343797 for context.
+  if (base::FeatureList::IsEnabled(features::kTcpPortRandomizationMac) &&
+      (target_address.address().IsPubliclyRoutable() ||
+       features::kTcpPortRandomizationMacForPrivateRoutes.Get())) {
+    port_randomization_data_.reset();
+    EphemeralPortRandomizer& randomizer =
+        EphemeralPortRandomizer::GetInstance();
+    constexpr int kMaxBindAttempts = 5;
+    for (int attempt = 0; attempt < kMaxBindAttempts; ++attempt) {
+      net_log_.BeginEvent(NetLogEventType::TCP_RANDOMIZER_BIND_ATTEMPT, [&] {
+        return randomizer.CreateNetLogTCPBindAttemptStartParams(target_address,
+                                                                attempt);
+      });
+
+      std::optional<uint16_t> port = randomizer.PickPort(target_address);
+      if (!port) {
+        net_log_.EndEvent(NetLogEventType::TCP_RANDOMIZER_BIND_ATTEMPT);
+        break;
+      }
+
+      IPAddress local_ip = target_address.address().IsIPv6()
+                               ? IPAddress::IPv6AllZeros()
+                               : IPAddress::IPv4AllZeros();
+      IPEndPoint local_endpoint(local_ip, *port);
+      SockaddrStorage local_storage;
+      if (!local_endpoint.ToSockAddr(local_storage.addr(),
+                                     &local_storage.addr_len)) {
+        net_log_.EndEvent(NetLogEventType::TCP_RANDOMIZER_BIND_ATTEMPT, [&] {
+          return base::DictValue()
+              .Set("local_address", local_ip.ToString())
+              .Set("attempted_port", *port);
+        });
+        break;
+      }
+
+      int bind_result = HANDLE_EINTR(bind(
+          socket_->socket_fd(), local_storage.addr(), local_storage.addr_len));
+      if (bind_result == 0) {
+        port_randomization_data_ = {target_address, *port};
+        net_log_.EndEvent(NetLogEventType::TCP_RANDOMIZER_BIND_ATTEMPT, [&] {
+          return base::DictValue().Set("local_endpoint",
+                                       local_endpoint.ToString());
+        });
+        break;
+      }
+
+      int bind_error = errno;
+      net_log_.EndEvent(NetLogEventType::TCP_RANDOMIZER_BIND_ATTEMPT, [&] {
+        return base::DictValue()
+            .Set("attempted_local_endpoint", local_endpoint.ToString())
+            .Set("os_error", bind_error);
+      });
+      if (bind_error == EADDRINUSE || bind_error == EACCES) {
+        // Someone else is using this port. Record it as used so we won't
+        // try it again in the near future.
+        randomizer.RecordPortUse(target_address, *port);
+        continue;
+      }
+      if (bind_error != EINVAL) {
+        DPLOG(ERROR) << "bind() failed while randomizing source port";
+      }
+      break;
+    }
+  }
+#endif  // BUILDFLAG(IS_MAC)
 
   int rv = socket_->Connect(
       storage, base::BindOnce(&TCPSocketPosix::ConnectCompleted,
@@ -335,8 +465,9 @@ int TCPSocketPosix::GetLocalAddress(IPEndPoint* address) const {
   if (rv != OK)
     return rv;
 
-  if (!address->FromSockAddr(storage.addr, storage.addr_len))
+  if (!address->FromSockAddr(storage.addr(), storage.addr_len)) {
     return ERR_ADDRESS_INVALID;
+  }
 
   return OK;
 }
@@ -352,8 +483,9 @@ int TCPSocketPosix::GetPeerAddress(IPEndPoint* address) const {
   if (rv != OK)
     return rv;
 
-  if (!address->FromSockAddr(storage.addr, storage.addr_len))
+  if (!address->FromSockAddr(storage.addr(), storage.addr_len)) {
     return ERR_ADDRESS_INVALID;
+  }
 
   return OK;
 }
@@ -382,7 +514,7 @@ void TCPSocketPosix::SetDefaultOptionsForClient() {
   // are very high (on the order of seconds). Given the number of
   // retransmissions required before killing the connection, this can lead to
   // tens of seconds or even minutes of delay, depending on OS.
-#if !defined(OS_ANDROID) && !defined(OS_IOS)
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
   const int kTCPKeepAliveSeconds = 45;
 
   SetTCPKeepAlive(socket_->socket_fd(), true, kTCPKeepAliveSeconds);
@@ -421,13 +553,27 @@ bool TCPSocketPosix::SetNoDelay(bool no_delay) {
   return SetTCPNoDelay(socket_->socket_fd(), no_delay) == OK;
 }
 
+int TCPSocketPosix::SetIPv6Only(bool ipv6_only) {
+  CHECK(socket_);
+  return ::net::SetIPv6Only(socket_->socket_fd(), ipv6_only);
+}
+
 void TCPSocketPosix::Close() {
+  TRACE_EVENT("base", perfetto::StaticString{"CloseSocketTCP"});
+#if BUILDFLAG(IS_MAC)
+  if (port_randomization_data_) {
+    EphemeralPortRandomizer::GetInstance().RecordPortUse(
+        port_randomization_data_->peer_address,
+        port_randomization_data_->local_port);
+    port_randomization_data_.reset();
+  }
+#endif  // BUILDFLAG(IS_MAC)
   socket_.reset();
   tag_ = SocketTag();
 }
 
 bool TCPSocketPosix::IsValid() const {
-  return socket_ != NULL && socket_->socket_fd() != kInvalidSocket;
+  return socket_ != nullptr && socket_->socket_fd() != kInvalidSocket;
 }
 
 void TCPSocketPosix::DetachFromThread() {
@@ -503,13 +649,13 @@ int TCPSocketPosix::BuildTcpSocketPosix(
 
   SockaddrStorage storage;
   if (accept_socket_->GetPeerAddress(&storage) != OK ||
-      !address->FromSockAddr(storage.addr, storage.addr_len)) {
+      !address->FromSockAddr(storage.addr(), storage.addr_len)) {
     accept_socket_.reset();
     return ERR_ADDRESS_INVALID;
   }
 
-  *tcp_socket = std::make_unique<TCPSocketPosix>(nullptr, net_log_.net_log(),
-                                                 net_log_.source());
+  *tcp_socket =
+      TCPSocketPosix::Create(nullptr, net_log_.net_log(), net_log_.source());
   (*tcp_socket)->socket_ = std::move(accept_socket_);
   return OK;
 }
@@ -529,6 +675,12 @@ int TCPSocketPosix::HandleConnectCompleted(int rv) {
     net_log_.EndEvent(NetLogEventType::TCP_CONNECT_ATTEMPT);
     NotifySocketPerformanceWatcher();
   }
+
+#if BUILDFLAG(IS_MAC)
+  if (port_randomization_data_.has_value()) {
+    base::UmaHistogramSparse("Net.EphemeralPortRandomizer.ConnectResult", -rv);
+  }
+#endif  // BUILDFLAG(IS_MAC)
 
   // Give a more specific error when the user is offline.
   if (rv == ERR_ADDRESS_UNREACHABLE && NetworkChangeNotifier::IsOffline())

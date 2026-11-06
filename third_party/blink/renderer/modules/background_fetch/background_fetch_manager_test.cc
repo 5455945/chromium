@@ -1,11 +1,10 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/background_fetch/background_fetch_manager.h"
 
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_testing.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_request_init.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_request_requestorusvstringsequence_usvstring.h"
@@ -14,6 +13,8 @@
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/blob/blob_data.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
+#include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 
 namespace blink {
 
@@ -24,13 +25,11 @@ class BackgroundFetchManagerTest : public testing::Test {
   // declarations necessary in the BackgroundFetchManager.
   Vector<mojom::blink::FetchAPIRequestPtr> CreateFetchAPIRequestVector(
       V8TestingScope& scope,
-      const V8UnionRequestInfoOrRequestOrUSVStringSequence* requests
-  ) {
-    bool has_requests_with_body;
+      const V8UnionRequestInfoOrRequestOrUSVStringSequence* requests) {
     return BackgroundFetchManager::CreateFetchAPIRequestVector(
-        scope.GetScriptState(), requests, scope.GetExceptionState(),
-        &has_requests_with_body);
+        scope.GetScriptState(), requests, scope.GetExceptionState());
   }
+  test::TaskEnvironment task_environment_;
 };
 
 TEST_F(BackgroundFetchManagerTest, SingleUSVString) {
@@ -150,7 +149,8 @@ TEST_F(BackgroundFetchManagerTest, BlobsExtracted) {
   RequestInit* request_init = RequestInit::Create();
   request_init->setMethod("POST");
   request_init->setBody(blink::ScriptValue(
-      scope.GetIsolate(), ToV8(body_text, scope.GetScriptState())));
+      scope.GetIsolate(),
+      ToV8Traits<IDLString>::ToV8(scope.GetScriptState(), body_text)));
   Request* image_request =
       Request::Create(scope.GetScriptState(), image_url.GetString(),
                       request_init, scope.GetExceptionState());
@@ -183,6 +183,48 @@ TEST_F(BackgroundFetchManagerTest, BlobsExtracted) {
   EXPECT_EQ(fetch_api_requests[0]->blob->size(), body_text.length());
 
   EXPECT_FALSE(fetch_api_requests[1]->blob);
+}
+
+TEST_F(BackgroundFetchManagerTest, ParseAllowlistEmpty) {
+  auto origins = BackgroundFetchManager::ParseAllowlist("");
+  EXPECT_TRUE(origins.empty());
+}
+
+TEST_F(BackgroundFetchManagerTest, ParseAllowlistSingleOrigin) {
+  auto origins = BackgroundFetchManager::ParseAllowlist("https://example.com");
+  EXPECT_EQ(origins.size(), 1u);
+  scoped_refptr<const SecurityOrigin> expected =
+      SecurityOrigin::CreateFromString("https://example.com");
+  EXPECT_TRUE(origins.Contains(expected));
+}
+
+TEST_F(BackgroundFetchManagerTest, ParseAllowlistMultipleOrigins) {
+  auto origins = BackgroundFetchManager::ParseAllowlist(
+      "https://example.com, https://api.allowed-origin.org,http://loopback.ip");
+  EXPECT_EQ(origins.size(), 3u);
+
+  EXPECT_TRUE(origins.Contains(
+      SecurityOrigin::CreateFromString("https://example.com")));
+  EXPECT_TRUE(origins.Contains(
+      SecurityOrigin::CreateFromString("https://api.allowed-origin.org")));
+  EXPECT_TRUE(
+      origins.Contains(SecurityOrigin::CreateFromString("http://loopback.ip")));
+}
+
+TEST_F(BackgroundFetchManagerTest, ParseAllowlistInvalidAndOpaqueOrigins) {
+  auto origins = BackgroundFetchManager::ParseAllowlist(
+      "data:text/html,https://example.com,opaque");
+  EXPECT_EQ(origins.size(), 1u);
+  EXPECT_TRUE(origins.Contains(
+      SecurityOrigin::CreateFromString("https://example.com")));
+}
+
+TEST_F(BackgroundFetchManagerTest, GetServiceWorkerFetchStatusWindowContext) {
+  V8TestingScope scope;
+  EXPECT_EQ(
+      BackgroundFetchManager::GetServiceWorkerFetchStatus(
+          scope.GetExecutionContext()),
+      BackgroundFetchManager::ServiceWorkerFetchStatus::kNotServiceWorker);
 }
 
 }  // namespace blink

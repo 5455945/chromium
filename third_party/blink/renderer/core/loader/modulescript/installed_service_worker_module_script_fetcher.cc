@@ -1,18 +1,17 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/loader/modulescript/installed_service_worker_module_script_fetcher.h"
 
 #include "third_party/blink/public/common/features.h"
-#include "third_party/blink/public/mojom/appcache/appcache.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_source_location_type.h"
 #include "third_party/blink/renderer/core/dom/dom_implementation.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
 #include "third_party/blink/renderer/core/workers/installed_scripts_manager.h"
 #include "third_party/blink/renderer/core/workers/worker_global_scope.h"
 #include "third_party/blink/renderer/core/workers/worker_thread.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/network/mime/mime_type_registry.h"
 #include "third_party/blink/renderer/platform/weborigin/security_policy.h"
 
@@ -31,7 +30,8 @@ void InstalledServiceWorkerModuleScriptFetcher::Fetch(
     ModuleType expected_module_type,
     ResourceFetcher*,
     ModuleGraphLevel level,
-    ModuleScriptFetcher::Client* client) {
+    ModuleScriptFetcher::Client* client,
+    ModuleImportPhase import_phase) {
   DCHECK_EQ(fetch_params.GetScriptType(), mojom::blink::ScriptType::kModule);
   DCHECK(global_scope_->IsContextThread());
   auto* installed_scripts_manager = global_scope_->GetInstalledScriptsManager();
@@ -53,13 +53,15 @@ void InstalledServiceWorkerModuleScriptFetcher::Fetch(
     return;
   }
 
+  network::mojom::ReferrerPolicy response_referrer_policy =
+      network::mojom::ReferrerPolicy::kDefault;
+
   if (level == ModuleGraphLevel::kTopLevelModuleFetch) {
     // |fetch_params.Url()| is always equal to the response URL because service
     // worker script fetch disallows redirect.
     // https://w3c.github.io/ServiceWorker/#ref-for-concept-request-redirect-mode
     KURL response_url = fetch_params.Url();
 
-    auto response_referrer_policy = network::mojom::ReferrerPolicy::kDefault;
     if (!script_data->GetReferrerPolicy().IsNull()) {
       SecurityPolicy::ReferrerPolicyFromHeaderValue(
           script_data->GetReferrerPolicy(),
@@ -68,16 +70,16 @@ void InstalledServiceWorkerModuleScriptFetcher::Fetch(
 
     global_scope_->Initialize(
         response_url, response_referrer_policy,
-        script_data->GetResponseAddressSpace(),
         ParseContentSecurityPolicyHeaders(
             script_data->GetContentSecurityPolicyResponseHeaders()),
-        script_data->CreateOriginTrialTokens().get(),
-        mojom::blink::kAppCacheNoCacheId);
+        // TODO(crbug.com/488089240): Plumb Document Policy in Service Workers.
+        DocumentPolicy::DocumentPolicyBundle{},
+        script_data->CreateOriginTrialTokens().get());
   }
 
   // TODO(sasebree) De-duplicate similar logic that lives in
   // ModuleScriptFetcher::WasModuleLoadSuccessful
-  if (expected_module_type_ != ModuleType::kJavaScript ||
+  if (expected_module_type_ != ModuleType::kJavaScriptOrWasm ||
       !MIMETypeRegistry::IsSupportedJavaScriptMIMEType(
           script_data->GetHttpContentType())) {
     // This should never happen.
@@ -93,13 +95,16 @@ void InstalledServiceWorkerModuleScriptFetcher::Fetch(
     return;
   }
 
+  // Use the resolved module type since only JS scripts can be installed.
+  ResolvedModuleType resolved_module_type = ResolvedModuleType::kJavaScript;
   // Create an external module script where base_url == source_url.
   // https://html.spec.whatwg.org/multipage/webappapis.html#concept-script-base-url
   client->NotifyFetchFinishedSuccess(ModuleScriptCreationParams(
       /*source_url=*/fetch_params.Url(), /*base_url=*/fetch_params.Url(),
-      ScriptSourceLocationType::kExternalFile, expected_module_type_,
+      ScriptSourceLocationType::kExternalFile, resolved_module_type,
       ParkableString(script_data->TakeSourceText().Impl()),
-      /*cache_handler=*/nullptr));
+      /*cache_handler=*/nullptr, response_referrer_policy,
+      /*source_map_url=*/String()));
 }
 
 void InstalledServiceWorkerModuleScriptFetcher::Trace(Visitor* visitor) const {

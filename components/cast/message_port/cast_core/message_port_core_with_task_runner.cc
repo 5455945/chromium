@@ -1,13 +1,13 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/cast/message_port/cast_core/message_port_core_with_task_runner.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/sequence_checker.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
 
 namespace cast_api_bindings {
 
@@ -51,15 +51,16 @@ MessagePortCoreWithTaskRunner& MessagePortCoreWithTaskRunner::operator=(
 }
 
 void MessagePortCoreWithTaskRunner::SetTaskRunner() {
-  task_runner_ = base::SequencedTaskRunnerHandle::Get();
+  task_runner_ = base::SequencedTaskRunner::GetCurrentDefault();
 }
 
 void MessagePortCoreWithTaskRunner::AcceptOnSequence(Message message) {
   DCHECK(task_runner_);
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_);
   task_runner_->PostTask(
-      FROM_HERE, base::BindOnce(&MessagePortCoreWithTaskRunner::AcceptInternal,
-                                base::Unretained(this), std::move(message)));
+      FROM_HERE,
+      base::BindOnce(&MessagePortCoreWithTaskRunner::AcceptInternal,
+                     weak_factory_.GetWeakPtr(), std::move(message)));
 }
 
 void MessagePortCoreWithTaskRunner::AcceptResultOnSequence(bool result) {

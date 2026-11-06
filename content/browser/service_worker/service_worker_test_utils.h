@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,23 +7,31 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/byte_size.h"
 #include "base/command_line.h"
+#include "base/containers/queue.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
 #include "components/services/storage/public/mojom/service_worker_storage_control.mojom.h"
+#include "content/browser/renderer_host/policy_container_host.h"
 #include "content/browser/service_worker/service_worker_cache_writer.h"
 #include "content/browser/service_worker/service_worker_host.h"
 #include "content/browser/service_worker/service_worker_single_script_update_checker.h"
 #include "content/common/navigation_client.mojom.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/frame_tree_node_id.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
+#include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/completion_once_callback.h"
+#include "services/network/public/mojom/referrer_policy.mojom-shared.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/mojom/loader/fetch_client_settings_object.mojom-forward.h"
+#include "third_party/blink/public/mojom/service_worker/service_worker_ancestor_frame_type.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_provider.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_registration.mojom.h"
 
@@ -34,62 +42,83 @@ class StorageKey;
 namespace content {
 
 class EmbeddedWorkerTestHelper;
-class ServiceWorkerContextCore;
+class ScopedServiceWorkerClient;
+class ServiceWorkerClient;
+class ServiceWorkerContainerHost;
+class ServiceWorkerContext;
 class ServiceWorkerHost;
+class ServiceWorkerRegistration;
 class ServiceWorkerRegistry;
-class ServiceWorkerStorage;
 class ServiceWorkerVersion;
 
-template <typename Arg>
-void ReceiveResult(BrowserThread::ID run_quit_thread,
-                   base::OnceClosure quit,
-                   absl::optional<Arg>* out,
-                   Arg actual) {
-  *out = actual;
-  if (!quit.is_null()) {
-    BrowserThread::GetTaskRunnerForThread(run_quit_thread)
-        ->PostTask(FROM_HERE, std::move(quit));
-  }
-}
-
-template <typename Arg>
-base::OnceCallback<void(Arg)> CreateReceiver(BrowserThread::ID run_quit_thread,
-                                             base::OnceClosure quit,
-                                             absl::optional<Arg>* out) {
-  return base::BindOnce(&ReceiveResult<Arg>, run_quit_thread, std::move(quit),
-                        out);
-}
+blink::mojom::FetchClientSettingsObjectPtr CreateFetchClientSettingsObject(
+    network::mojom::ReferrerPolicy referrer_policy =
+        network::mojom::ReferrerPolicy::kMinValue);
 
 base::OnceCallback<void(blink::ServiceWorkerStatusCode)>
-ReceiveServiceWorkerStatus(absl::optional<blink::ServiceWorkerStatusCode>* out,
+ReceiveServiceWorkerStatus(std::optional<blink::ServiceWorkerStatusCode>* out,
                            base::OnceClosure quit_closure);
+
+blink::ServiceWorkerStatusCode WarmUpServiceWorker(
+    ServiceWorkerVersion* version);
+
+bool WarmUpServiceWorker(ServiceWorkerContext& service_worker_context,
+                         const GURL& url);
 
 blink::ServiceWorkerStatusCode StartServiceWorker(
     ServiceWorkerVersion* version);
 
 void StopServiceWorker(ServiceWorkerVersion* version);
 
-// Container for keeping the Mojo connection to the service worker container on
-// the renderer alive.
-class ServiceWorkerRemoteContainerEndpoint {
+// A smart pointer of a committed `ServiceWorkerClient`, used for tests
+// involving `ServiceWorkerContainerHost`. The underlying `ServiceWorkerClient`
+// is kept alive until `this` is destroyed or `host_remote()` is closed.
+class CommittedServiceWorkerClient final {
  public:
-  ServiceWorkerRemoteContainerEndpoint();
-  ServiceWorkerRemoteContainerEndpoint(
-      ServiceWorkerRemoteContainerEndpoint&& other);
-  ~ServiceWorkerRemoteContainerEndpoint();
+  // For Window client: emulate the navigation commit for the service worker
+  // client and takes the keep-aliveness of `ServiceWorkerClient`.
+  CommittedServiceWorkerClient(
+      ScopedServiceWorkerClient service_worker_client,
+      const GlobalRenderFrameHostId& render_frame_host_id,
+      const PolicyContainerPolicies& policy_container_policies =
+          PolicyContainerPolicies());
 
-  void BindForWindow(blink::mojom::ServiceWorkerContainerInfoForClientPtr info);
-  void BindForServiceWorker(
-      blink::mojom::ServiceWorkerProviderInfoForStartWorkerPtr info);
+  // For Worker client.
+  explicit CommittedServiceWorkerClient(
+      ScopedServiceWorkerClient service_worker_client,
+      const PolicyContainerPolicies& policy_container_policies =
+          PolicyContainerPolicies());
 
-  mojo::AssociatedRemote<blink::mojom::ServiceWorkerContainerHost>*
-  host_remote() {
-    return &host_remote_;
+  CommittedServiceWorkerClient(CommittedServiceWorkerClient&& other);
+  CommittedServiceWorkerClient& operator=(
+      CommittedServiceWorkerClient&& other) = delete;
+
+  CommittedServiceWorkerClient(const CommittedServiceWorkerClient&) = delete;
+  CommittedServiceWorkerClient& operator=(const CommittedServiceWorkerClient&) =
+      delete;
+
+  ~CommittedServiceWorkerClient();
+
+  const base::WeakPtr<ServiceWorkerClient>& AsWeakPtr() const {
+    return service_worker_client_;
+  }
+  ServiceWorkerClient* get() const { return service_worker_client_.get(); }
+  ServiceWorkerClient* operator->() const {
+    return service_worker_client_.get();
   }
 
-  mojo::PendingAssociatedReceiver<blink::mojom::ServiceWorkerContainer>*
-  client_receiver() {
-    return &client_receiver_;
+  ServiceWorkerContainerHost& container_host() const;
+
+  // NOTE: These pipes are usable only for Window clients, because for workers
+  // the mojo call is not emulated and thus the associated mojo pipes here don't
+  // have associated connections.
+  mojo::AssociatedRemote<blink::mojom::ServiceWorkerContainerHost>&
+  host_remote() {
+    return host_remote_;
+  }
+  mojo::PendingAssociatedReceiver<blink::mojom::ServiceWorkerContainer>
+  TakeClientReceiver() {
+    return std::move(client_receiver_);
   }
 
  private:
@@ -109,52 +138,45 @@ class ServiceWorkerRemoteContainerEndpoint {
   mojo::PendingAssociatedReceiver<blink::mojom::ServiceWorkerContainer>
       client_receiver_;
 
-  DISALLOW_COPY_AND_ASSIGN(ServiceWorkerRemoteContainerEndpoint);
+  base::WeakPtr<ServiceWorkerClient> service_worker_client_;
 };
 
-struct ServiceWorkerContainerHostAndInfo {
-  ServiceWorkerContainerHostAndInfo(
-      base::WeakPtr<ServiceWorkerContainerHost> host,
-      blink::mojom::ServiceWorkerContainerInfoForClientPtr);
-  ~ServiceWorkerContainerHostAndInfo();
-
-  base::WeakPtr<ServiceWorkerContainerHost> host;
-  blink::mojom::ServiceWorkerContainerInfoForClientPtr info;
-
-  DISALLOW_COPY_AND_ASSIGN(ServiceWorkerContainerHostAndInfo);
-};
-
-// Creates a container host that finished navigation. Test code can typically
-// use this function, but if more control is required
-// CreateContainerHostAndInfoForWindow() can be used instead.
-base::WeakPtr<ServiceWorkerContainerHost> CreateContainerHostForWindow(
-    int process_id,
-    bool is_parent_frame_secure,
-    base::WeakPtr<ServiceWorkerContextCore> context,
-    ServiceWorkerRemoteContainerEndpoint* output_endpoint);
-
-// Creates a container host that can be used for a navigation.
-std::unique_ptr<ServiceWorkerContainerHostAndInfo>
-CreateContainerHostAndInfoForWindow(
-    base::WeakPtr<ServiceWorkerContextCore> context,
-    bool are_ancestors_secure);
+// Creates an uncommitted service worker client.
+// For clients/ServiceWorkerContainerHost that finished navigation, use
+// `CommittedServiceWorkerClient`.
+ScopedServiceWorkerClient CreateServiceWorkerClient(
+    ServiceWorkerContextCore* context,
+    const GURL& document_url,
+    const url::Origin& top_frame_origin,
+    bool are_ancestors_secure = true,
+    FrameTreeNodeId frame_tree_node_id = FrameTreeNodeId(1));
+ScopedServiceWorkerClient CreateServiceWorkerClient(
+    ServiceWorkerContextCore* context,
+    const GURL& document_url,
+    bool are_ancestors_secure = true,
+    FrameTreeNodeId frame_tree_node_id = FrameTreeNodeId());
+ScopedServiceWorkerClient CreateServiceWorkerClient(
+    ServiceWorkerContextCore* context,
+    bool are_ancestors_secure = true,
+    FrameTreeNodeId frame_tree_node_id = FrameTreeNodeId());
 
 std::unique_ptr<ServiceWorkerHost> CreateServiceWorkerHost(
-    int process_id,
+    ChildProcessId process_id,
     bool is_parent_frame_secure,
-    ServiceWorkerVersion* hosted_version,
-    base::WeakPtr<ServiceWorkerContextCore> context,
-    ServiceWorkerRemoteContainerEndpoint* output_endpoint);
+    ServiceWorkerVersion& hosted_version,
+    base::WeakPtr<ServiceWorkerContextCore> context);
 
 // Calls CreateNewRegistration() synchronously.
 scoped_refptr<ServiceWorkerRegistration> CreateNewServiceWorkerRegistration(
-    ServiceWorkerRegistry* registry,
+    ServiceWorkerRegistry& registry,
     const blink::mojom::ServiceWorkerRegistrationOptions& options,
-    const blink::StorageKey& key);
+    const blink::StorageKey& key,
+    blink::mojom::AncestorFrameType ancestor_frame_type =
+        blink::mojom::AncestorFrameType::kNormalFrame);
 
 // Calls CreateNewVersion() synchronously.
 scoped_refptr<ServiceWorkerVersion> CreateNewServiceWorkerVersion(
-    ServiceWorkerRegistry* registry,
+    ServiceWorkerRegistry& registry,
     scoped_refptr<ServiceWorkerRegistration> registration,
     const GURL& script_url,
     blink::mojom::ScriptType script_type);
@@ -220,7 +242,9 @@ int64_t GetNewResourceIdSync(
 // Expects these calls, in this order:
 //    reader->ReadResponseHead(...);  // reader writes 5 into
 //                                    // |response_head->content_length|
+//    reader->PrepareReadData();
 //    reader->ReadData(...);          // reader writes "abcdef" into |buf|
+//    reader->PrepareReadData();
 //    reader->ReadData(...);          // reader writes "ghijkl" into |buf|
 // If an unexpected call happens, this class DCHECKs.
 // An expected read will not complete immediately. It  must be completed by the
@@ -231,6 +255,12 @@ class MockServiceWorkerResourceReader
     : public storage::mojom::ServiceWorkerResourceReader {
  public:
   MockServiceWorkerResourceReader();
+
+  MockServiceWorkerResourceReader(const MockServiceWorkerResourceReader&) =
+      delete;
+  MockServiceWorkerResourceReader& operator=(
+      const MockServiceWorkerResourceReader&) = delete;
+
   ~MockServiceWorkerResourceReader() override;
 
   mojo::PendingRemote<storage::mojom::ServiceWorkerResourceReader>
@@ -240,11 +270,8 @@ class MockServiceWorkerResourceReader
   void ReadResponseHead(
       storage::mojom::ServiceWorkerResourceReader::ReadResponseHeadCallback
           callback) override;
-  void ReadData(
-      int64_t,
-      mojo::PendingRemote<storage::mojom::ServiceWorkerDataPipeStateNotifier>
-          notifier,
-      ReadDataCallback callback) override;
+  void PrepareReadData(int64_t, PrepareReadDataCallback callback) override;
+  void ReadData(ReadDataCallback callback) override;
 
   // Test helpers. ExpectReadResponseHead() and ExpectReadData() give precise
   // control over both the data to be written and the result to return.
@@ -299,8 +326,6 @@ class MockServiceWorkerResourceReader
   storage::mojom::ServiceWorkerResourceReader::ReadDataCallback
       pending_read_data_callback_;
   mojo::ScopedDataPipeProducerHandle body_;
-
-  DISALLOW_COPY_AND_ASSIGN(MockServiceWorkerResourceReader);
 };
 
 // A test implementation of ServiceWorkerResourceWriter.
@@ -327,6 +352,12 @@ class MockServiceWorkerResourceWriter
     : public storage::mojom::ServiceWorkerResourceWriter {
  public:
   MockServiceWorkerResourceWriter();
+
+  MockServiceWorkerResourceWriter(const MockServiceWorkerResourceWriter&) =
+      delete;
+  MockServiceWorkerResourceWriter& operator=(
+      const MockServiceWorkerResourceWriter&) = delete;
+
   ~MockServiceWorkerResourceWriter() override;
 
   mojo::PendingRemote<storage::mojom::ServiceWorkerResourceWriter>
@@ -369,30 +400,6 @@ class MockServiceWorkerResourceWriter
   net::CompletionOnceCallback pending_callback_;
 
   mojo::Receiver<storage::mojom::ServiceWorkerResourceWriter> receiver_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(MockServiceWorkerResourceWriter);
-};
-
-// A test implementation of ServiceWorkerDataPipeStateNotifier.
-class MockServiceWorkerDataPipeStateNotifier
-    : public storage::mojom::ServiceWorkerDataPipeStateNotifier {
- public:
-  MockServiceWorkerDataPipeStateNotifier();
-  ~MockServiceWorkerDataPipeStateNotifier() override;
-
-  mojo::PendingRemote<storage::mojom::ServiceWorkerDataPipeStateNotifier>
-  BindNewPipeAndPassRemote();
-
-  int32_t WaitUntilComplete();
-
- private:
-  // storage::mojom::ServiceWorkerDataPipeStateNotifier implementations:
-  void OnComplete(int32_t status) override;
-
-  absl::optional<int32_t> complete_status_;
-  base::OnceClosure on_complete_callback_;
-  mojo::Receiver<storage::mojom::ServiceWorkerDataPipeStateNotifier> receiver_{
-      this};
 };
 
 class ServiceWorkerUpdateCheckTestUtils {
@@ -404,15 +411,15 @@ class ServiceWorkerUpdateCheckTestUtils {
   // the old and new script data). |bytes_compared| is the length compared
   // until the difference was found. |new_headers| is the new script's headers.
   // |pending_network_buffer| is a buffer that has the first block of new script
-  // data that differs from the old data. |concumsed_size| is the number of
+  // data that differs from the old data. |consumed_size| is the number of
   // bytes of the data consumed from the Mojo data pipe kept in
   // |pending_network_buffer|.
   static std::unique_ptr<ServiceWorkerCacheWriter> CreatePausedCacheWriter(
       EmbeddedWorkerTestHelper* worker_test_helper,
-      size_t bytes_compared,
+      base::ByteSize bytes_compared,
       const std::string& new_headers,
       scoped_refptr<network::MojoToNetPendingBuffer> pending_network_buffer,
-      uint32_t consumed_size,
+      base::ByteSize consumed_size,
       int64_t old_resource_id,
       int64_t new_resource_id);
 
@@ -422,7 +429,7 @@ class ServiceWorkerUpdateCheckTestUtils {
       ServiceWorkerUpdatedScriptLoader::LoaderState network_loader_state,
       ServiceWorkerUpdatedScriptLoader::WriterState body_writer_state,
       scoped_refptr<network::MojoToNetPendingBuffer> pending_network_buffer,
-      uint32_t consumed_size);
+      base::ByteSize consumed_size);
 
   static void SetComparedScriptInfoForVersion(
       const GURL& script_url,
@@ -436,7 +443,7 @@ class ServiceWorkerUpdateCheckTestUtils {
   // state and compared script info. Then set it to the service worker version.
   static void CreateAndSetComparedScriptInfoForVersion(
       const GURL& script_url,
-      size_t bytes_compared,
+      base::ByteSize bytes_compared,
       const std::string& new_headers,
       const std::string& diff_data_block,
       int64_t old_resource_id,

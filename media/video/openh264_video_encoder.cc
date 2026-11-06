@@ -1,34 +1,69 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/video/openh264_video_encoder.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
+#include <numeric>
 
+#include "base/feature_list.h"
 #include "base/logging.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/system/sys_info.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
-#include "media/base/bind_to_current_loop.h"
+#include "media/base/media_switches.h"
+#include "media/base/svc_scalability_mode.h"
+#include "media/base/video_aspect_ratio.h"
 #include "media/base/video_frame.h"
 #include "media/base/video_util.h"
+#include "media/media_buildflags.h"
+#include "media/parsers/h264_level_limits.h"
+#include "media/parsers/h264_parser.h"
+#include "media/video/video_encoder_info.h"
 
 namespace media {
 
 namespace {
 
-Status SetUpOpenH264Params(const VideoEncoder::Options& options,
-                           SEncParamExt* params) {
-  params->bEnableFrameSkip = false;
+#ifndef RUST_OPENH264_BUILD
+using c_void = void;
+#endif
+
+EProfileIdc ToOpenH264Profile(VideoCodecProfile profile) {
+  switch (profile) {
+    case media::H264PROFILE_BASELINE:
+      return PRO_BASELINE;
+    case media::H264PROFILE_MAIN:
+      return PRO_MAIN;
+    case media::H264PROFILE_EXTENDED:
+      return PRO_EXTENDED;
+    case media::H264PROFILE_HIGH:
+      return PRO_HIGH;
+    default:
+      return PRO_UNKNOWN;
+  }
+}
+
+void SetUpOpenH264Params(VideoCodecProfile profile,
+                         const VideoEncoder::Options& options,
+                         const VideoColorSpace& itu_cs,
+                         SEncParamExt* params) {
+  int threads = GetNumberOfThreadsForSoftwareEncoding(options.frame_size);
+  params->bEnableFrameSkip =
+      base::FeatureList::IsEnabled(kWebCodecsVideoEncoderFrameDrop) &&
+      options.latency_mode == VideoEncoder::LatencyMode::Realtime;
   params->iPaddingFlag = 0;
   params->iComplexityMode = MEDIUM_COMPLEXITY;
-  params->iUsageType = CAMERA_VIDEO_REAL_TIME;
+  params->iUsageType = options.content_hint == VideoEncoder::ContentHint::Screen
+                           ? SCREEN_CONTENT_REAL_TIME
+                           : CAMERA_VIDEO_REAL_TIME;
   params->bEnableDenoise = false;
-  // Set to 1 due to https://crbug.com/583348
-  params->iMultipleThreadIdc = 1;
+  params->eSpsPpsIdStrategy = SPS_LISTING;
+  params->iMultipleThreadIdc = threads;
   if (options.framerate.has_value())
     params->fMaxFrameRate = options.framerate.value();
   params->iPicHeight = options.frame_size.height();
@@ -38,28 +73,162 @@ Status SetUpOpenH264Params(const VideoEncoder::Options& options,
     params->uiIntraPeriod = options.keyframe_interval.value();
 
   if (options.bitrate.has_value()) {
+    auto& bitrate = options.bitrate.value();
     params->iRCMode = RC_BITRATE_MODE;
-    params->iTargetBitrate = base::saturated_cast<int>(options.bitrate.value());
+    if (bitrate.target_bps() != 0) {
+      params->iTargetBitrate = base::saturated_cast<int>(bitrate.target_bps());
+    } else {
+      params->iTargetBitrate =
+          base::saturated_cast<int>(GetDefaultVideoEncodeBitrate(
+              options.frame_size, options.framerate.value_or(30)));
+    }
   } else {
     params->iRCMode = RC_OFF_MODE;
   }
 
-  params->iTemporalLayerNum = options.temporal_layers;
-  params->iSpatialLayerNum = 1;
-  params->sSpatialLayers[0].fFrameRate = params->fMaxFrameRate;
-  params->sSpatialLayers[0].iMaxSpatialBitrate = params->iTargetBitrate;
-  params->sSpatialLayers[0].iSpatialBitrate = params->iTargetBitrate;
-  params->sSpatialLayers[0].iVideoHeight = params->iPicHeight;
-  params->sSpatialLayers[0].iVideoWidth = params->iPicWidth;
-  params->sSpatialLayers[0].sSliceArgument.uiSliceMode = SM_SINGLE_SLICE;
+  int num_temporal_layers = 1;
+  if (options.scalability_mode) {
+    switch (options.scalability_mode.value()) {
+      case SVCScalabilityMode::kL1T1:
+        // Nothing to do
+        break;
+      case SVCScalabilityMode::kL1T2:
+        num_temporal_layers = 2;
+        break;
+      case SVCScalabilityMode::kL1T3:
+        num_temporal_layers = 3;
+        break;
+      default:
+        NOTREACHED() << "Unsupported SVC: "
+                     << GetScalabilityModeName(
+                            options.scalability_mode.value());
+    }
+  }
 
-  return Status();
+  if (options.content_hint == VideoEncoder::ContentHint::Screen &&
+      num_temporal_layers > 2) {
+    // Currently, OpenH264 only supports up to 2 temporal layers for screen
+    // content. Otherwise,
+    // https://github.com/cisco/openh264/blob/6a6cb82eef8e83bc52bafab21e996f5d3e211eb4/codec/encoder/core/src/ref_list_mgr_svc.cpp#L650
+    // triggers an assert.
+    // See https://bugs.webrtc.org/15582 for more details.
+    LOG(ERROR) << "Screen content only supports up to 2 temporal layers.";
+    params->iUsageType = CAMERA_VIDEO_REAL_TIME;
+  }
+
+  params->iTemporalLayerNum = num_temporal_layers;
+  params->iSpatialLayerNum = 1;
+  auto& layer = params->sSpatialLayers[0];
+  layer.fFrameRate = params->fMaxFrameRate;
+  layer.uiProfileIdc = ToOpenH264Profile(profile);
+  layer.iMaxSpatialBitrate = params->iTargetBitrate;
+  layer.iSpatialBitrate = params->iTargetBitrate;
+  layer.iVideoHeight = params->iPicHeight;
+  layer.iVideoWidth = params->iPicWidth;
+  if (threads > 1) {
+    layer.sSliceArgument.uiSliceMode = SM_FIXEDSLCNUM_SLICE;
+    layer.sSliceArgument.uiSliceNum = threads;
+  } else {
+    layer.sSliceArgument.uiSliceMode = SM_SINGLE_SLICE;
+  }
+
+  if (!itu_cs.IsSpecified())
+    return;
+
+  layer.bVideoSignalTypePresent = true;
+  layer.bColorDescriptionPresent = true;
+
+  if (itu_cs.primaries() != VideoColorSpace::PrimaryID::INVALID &&
+      itu_cs.primaries() != VideoColorSpace::PrimaryID::UNSPECIFIED) {
+    layer.uiColorPrimaries = static_cast<unsigned char>(itu_cs.primaries());
+  }
+  if (itu_cs.transfer() != VideoColorSpace::TransferID::INVALID &&
+      itu_cs.transfer() != VideoColorSpace::TransferID::UNSPECIFIED) {
+    layer.uiTransferCharacteristics =
+        static_cast<unsigned char>(itu_cs.transfer());
+  }
+  if (itu_cs.matrix() != VideoColorSpace::MatrixID::INVALID &&
+      itu_cs.matrix() != VideoColorSpace::MatrixID::UNSPECIFIED) {
+    layer.uiColorMatrix = static_cast<unsigned char>(itu_cs.matrix());
+  }
+  if (itu_cs.range() == gfx::ColorSpace::RangeID::FULL ||
+      itu_cs.range() == gfx::ColorSpace::RangeID::LIMITED) {
+    layer.bFullRange = itu_cs.range() == gfx::ColorSpace::RangeID::FULL;
+  }
 }
+
+// OpenH264 silently fails during preprocessing when a frame's area
+// exceeds its internal macroblock limit (MAX_MBS_PER_FRAME in
+// third_party/openh264). We must manually resize such frames.
+// MAX_MBS_PER_FRAME is 36864.
+constexpr int kOpenH264MaxMBs = 36864;
+
+bool IsFrameSizeTooLarge(const gfx::Size& frame_size) {
+  uint64_t mb_width = (static_cast<uint64_t>(frame_size.width()) + 15) / 16;
+  uint64_t mb_height = (static_cast<uint64_t>(frame_size.height()) + 15) / 16;
+  return mb_width * mb_height > kOpenH264MaxMBs;
+}
+
+// OpenH264 can resize frames automatically as long as
+// - the input and output aspect ratios are the same and
+// - the input is larger than the output in both dimensions.
+bool NeedsManualResizing(const gfx::Size& src, const gfx::Size& dst) {
+  if (src.IsEmpty() || dst.IsEmpty()) {
+    return true;
+  }
+
+  if (IsFrameSizeTooLarge(src)) {
+    return true;
+  }
+
+  if (dst.width() > src.width() || dst.height() > src.height()) {
+    return true;
+  }
+
+  return VideoAspectRatio::PAR(src.width(), src.height()) !=
+         VideoAspectRatio::PAR(dst.width(), dst.height());
+}
+
+// Validates that the frame size is within the limits defined by H.264
+// Level 6.1.
+EncoderStatus ValidateH264Resolution(const gfx::Size& frame_size) {
+  uint8_t level = H264SPS::kLevelIDC6p1;
+  uint32_t max_fs = H264LevelToMaxFS(level);
+  if (max_fs == 0) {
+    return EncoderStatus(EncoderStatus::Codes::kEncoderUnsupportedConfig,
+                         "Invalid H.264 level");
+  }
+
+  uint64_t mb_width = (static_cast<uint64_t>(frame_size.width()) + 15) / 16;
+  uint64_t mb_height = (static_cast<uint64_t>(frame_size.height()) + 15) / 16;
+  uint64_t mb_count = mb_width * mb_height;
+
+  if (mb_count > max_fs) {
+    return EncoderStatus(
+        EncoderStatus::Codes::kEncoderUnsupportedConfig,
+        "Configured frame size exceeds H.264 level max macroblocks");
+  }
+
+  // Aspect ratio constraint from H.264 standard Annex A:
+  // PicWidthInMbs <= Sqrt(MaxFS * 8)
+  // FrameHeightInMbs <= Sqrt(MaxFS * 8)
+  double max_mb_dim = std::sqrt(static_cast<double>(max_fs) * 8.0);
+  if (mb_width > max_mb_dim || mb_height > max_mb_dim) {
+    return EncoderStatus(EncoderStatus::Codes::kEncoderUnsupportedConfig,
+                         "Configured aspect ratio exceeds H.264 level limits");
+  }
+
+  return EncoderStatus::Codes::kOk;
+}
+
 }  // namespace
 
 OpenH264VideoEncoder::ISVCEncoderDeleter::ISVCEncoderDeleter() = default;
 OpenH264VideoEncoder::ISVCEncoderDeleter::ISVCEncoderDeleter(
     const ISVCEncoderDeleter&) = default;
+OpenH264VideoEncoder::ISVCEncoderDeleter&
+OpenH264VideoEncoder::ISVCEncoderDeleter::operator=(const ISVCEncoderDeleter&) =
+    default;
 void OpenH264VideoEncoder::ISVCEncoderDeleter::operator()(ISVCEncoder* codec) {
   if (codec) {
     if (initialized_) {
@@ -78,201 +247,285 @@ OpenH264VideoEncoder::~OpenH264VideoEncoder() = default;
 
 void OpenH264VideoEncoder::Initialize(VideoCodecProfile profile,
                                       const Options& options,
+                                      EncoderInfoCB info_cb,
                                       OutputCB output_cb,
-                                      StatusCB done_cb) {
-  done_cb = BindToCurrentLoop(std::move(done_cb));
+                                      EncoderStatusCB done_cb) {
+  done_cb = BindCallbackToCurrentLoopIfNeeded(std::move(done_cb));
   if (codec_) {
-    std::move(done_cb).Run(StatusCode::kEncoderInitializeTwice);
+    std::move(done_cb).Run(EncoderStatus::Codes::kEncoderInitializeTwice);
     return;
   }
 
+  if (options.subsampling.value_or(VideoChromaSampling::k420) !=
+          VideoChromaSampling::k420 ||
+      options.bit_depth.value_or(8) != 8) {
+    std::move(done_cb).Run(
+        EncoderStatus(EncoderStatus::Codes::kEncoderUnsupportedConfig,
+                      "Unsupported subsampling or bit depth"));
+    return;
+  }
+
+  if (ToOpenH264Profile(profile) == PRO_UNKNOWN) {
+    std::move(done_cb).Run(
+        EncoderStatus(EncoderStatus::Codes::kEncoderUnsupportedProfile,
+                      "Unsupported profile: " + GetProfileName(profile)));
+    return;
+  }
   profile_ = profile;
-  if (profile != H264PROFILE_BASELINE) {
-    auto status =
-        Status(StatusCode::kEncoderInitializationError, "Unsupported profile");
-    std::move(done_cb).Run(status);
+
+  if (options.bitrate.has_value() &&
+      options.bitrate->mode() == Bitrate::Mode::kExternal) {
+    std::move(done_cb).Run(
+        EncoderStatus(EncoderStatus::Codes::kEncoderUnsupportedConfig,
+                      "Unsupported bitrate mode"));
     return;
   }
 
   ISVCEncoder* raw_codec = nullptr;
   if (WelsCreateSVCEncoder(&raw_codec) != 0) {
-    auto status = Status(StatusCode::kEncoderInitializationError,
-                         "Failed to create OpenH264 encoder.");
-    std::move(done_cb).Run(status);
+    std::move(done_cb).Run(
+        EncoderStatus(EncoderStatus::Codes::kEncoderInitializationError,
+                      "Failed to create OpenH264 encoder."));
     return;
   }
   svc_encoder_unique_ptr codec(raw_codec, ISVCEncoderDeleter());
   raw_codec = nullptr;
 
-  Status status;
-
   SEncParamExt params = {};
   if (int err = codec->GetDefaultParams(&params)) {
-    status = Status(StatusCode::kEncoderInitializationError,
-                    "Failed to get default params.")
-                 .WithData("error", err);
+    std::move(done_cb).Run(
+        EncoderStatus(EncoderStatus::Codes::kEncoderInitializationError,
+                      "Failed to get default params.")
+            .WithData("error", err));
+    return;
+  }
+
+  if (options.frame_size.height() < 16 || options.frame_size.width() < 16) {
+    std::move(done_cb).Run(
+        EncoderStatus(EncoderStatus::Codes::kEncoderUnsupportedConfig,
+                      "Unsupported frame size which is less than 16"));
+    return;
+  }
+
+  if (IsFrameSizeTooLarge(options.frame_size)) {
+    std::move(done_cb).Run(EncoderStatus(
+        EncoderStatus::Codes::kEncoderUnsupportedConfig,
+        "Configured frame size exceeds OpenH264 max macroblocks"));
+    return;
+  }
+
+  if (auto status = ValidateH264Resolution(options.frame_size);
+      !status.is_ok()) {
     std::move(done_cb).Run(status);
     return;
   }
 
-  status = SetUpOpenH264Params(options, &params);
-  if (!status.is_ok()) {
-    std::move(done_cb).Run(status);
-    return;
-  }
+  SetUpOpenH264Params(
+      profile_, options,
+      VideoColorSpace::FromGfxColorSpace(last_frame_color_space_), &params);
 
   if (int err = codec->InitializeExt(&params)) {
-    status = Status(StatusCode::kEncoderInitializationError,
-                    "Failed to initialize OpenH264 encoder.")
-                 .WithData("error", err);
-    std::move(done_cb).Run(status);
+    std::move(done_cb).Run(
+        EncoderStatus(EncoderStatus::Codes::kEncoderInitializationError,
+                      "Failed to initialize OpenH264 encoder.")
+            .WithData("error", err));
     return;
   }
   codec.get_deleter().MarkInitialized();
 
   int video_format = EVideoFormatType::videoFormatI420;
-  if (int err = codec->SetOption(ENCODER_OPTION_DATAFORMAT, &video_format)) {
-    status = Status(StatusCode::kEncoderInitializationError,
-                    "Failed to set data format for OpenH264 encoder")
-                 .WithData("error", err);
-    std::move(done_cb).Run(status);
+  if (int err = codec->SetOption(ENCODER_OPTION_DATAFORMAT,
+                                 reinterpret_cast<c_void*>(&video_format))) {
+    std::move(done_cb).Run(
+        EncoderStatus(EncoderStatus::Codes::kEncoderInitializationError,
+                      "Failed to set data format for OpenH264 encoder")
+            .WithData("error", err));
     return;
   }
 
   if (!options.avc.produce_annexb)
-    h264_converter_ = std::make_unique<H264AnnexBToAvcBitstreamConverter>();
+    h264_converter_ = std::make_unique<H264AnnexBToAvcBitstreamConverter>(
+        /*add_parameter_sets_in_bitstream=*/false);
 
   options_ = options;
-  output_cb_ = BindToCurrentLoop(std::move(output_cb));
+  output_cb_ = BindCallbackToCurrentLoopIfNeeded(std::move(output_cb));
   codec_ = std::move(codec);
-  std::move(done_cb).Run(OkStatus());
+
+  if (info_cb) {
+    VideoEncoderInfo info;
+#ifdef RUST_OPENH264_BUILD
+    info.implementation_name = "OpenH264RsVideoEncoder";
+#else
+    info.implementation_name = "OpenH264VideoEncoder";
+#endif
+    info.is_hardware_accelerated = false;
+    BindCallbackToCurrentLoopIfNeeded(std::move(info_cb)).Run(info);
+  }
+
+  std::move(done_cb).Run(EncoderStatus::Codes::kOk);
 }
 
-Status OpenH264VideoEncoder::DrainOutputs(const SFrameBSInfo& frame_info,
-                                          base::TimeDelta timestamp) {
+EncoderStatus OpenH264VideoEncoder::DrainOutputs(const SFrameBSInfo& frame_info,
+                                                 base::TimeDelta timestamp,
+                                                 gfx::ColorSpace color_space) {
   VideoEncoderOutput result;
-  result.key_frame = (frame_info.eFrameType == videoFrameTypeIDR);
   result.timestamp = timestamp;
 
-  DCHECK_GT(frame_info.iFrameSizeInBytes, 0);
-  size_t total_chunk_size = frame_info.iFrameSizeInBytes;
-  result.data.reset(new uint8_t[total_chunk_size]);
-  auto* gather_buffer = result.data.get();
+  const size_t total_chunk_size = frame_info.iFrameSizeInBytes;
+  if (total_chunk_size == 0) {
+    // Drop frame.
+    output_cb_.Run(std::move(result), {});
+    return EncoderStatus::Codes::kOk;
+  }
+
+  result.key_frame = (frame_info.eFrameType == videoFrameTypeIDR);
+  result.color_space = color_space;
+  SEncoderStatistics stats = {};
+  if (codec_->GetOption(ENCODER_OPTION_GET_STATISTICS,
+                        reinterpret_cast<c_void*>(&stats)) == cmResultSuccess) {
+    constexpr double kMaxH264Qp = 51.0;
+    result.qp = std::clamp(stats.uiAverageFrameQP / kMaxH264Qp, 0.0, 1.0);
+  }
+  result.data = base::HeapArray<uint8_t>::Uninit(total_chunk_size);
+  auto gather_buffer = result.data.as_span();
 
   if (h264_converter_) {
     // Copy data to a temporary buffer instead.
     conversion_buffer_.resize(total_chunk_size);
-    gather_buffer = conversion_buffer_.data();
+    gather_buffer = base::span(conversion_buffer_);
   }
 
   result.temporal_id = -1;
   size_t written_size = 0;
+  auto frame_layer_info = base::span(frame_info.sLayerInfo);
   for (int layer_idx = 0; layer_idx < frame_info.iLayerNum; ++layer_idx) {
-    const SLayerBSInfo& layer_info = frame_info.sLayerInfo[layer_idx];
+    const SLayerBSInfo& layer_info = frame_layer_info[layer_idx];
 
     // All layers in the same frame must have the same temporal_id.
-    if (result.temporal_id == -1)
+    if (result.temporal_id == -1) {
       result.temporal_id = layer_info.uiTemporalId;
-    else if (result.temporal_id != layer_info.uiTemporalId)
-      return Status(StatusCode::kEncoderFailedEncode);
+    } else if (result.temporal_id != layer_info.uiTemporalId) {
+      return EncoderStatus::Codes::kEncoderFailedEncode;
+    }
 
-    size_t layer_len = 0;
-    for (int nal_idx = 0; nal_idx < layer_info.iNalCount; ++nal_idx)
-      layer_len += layer_info.pNalLengthInByte[nal_idx];
-    if (written_size + layer_len > total_chunk_size)
-      return Status(StatusCode::kEncoderFailedEncode);
+    // SAFETY: OpenH264 documents that layer_info.pNalLengthInByte has
+    // layer_info.iNalCount elements.
+    UNSAFE_BUFFERS(
+        base::span nal_len_bytes(layer_info.pNalLengthInByte,
+                                 static_cast<size_t>(layer_info.iNalCount)));
+    size_t layer_len =
+        std::accumulate(nal_len_bytes.begin(), nal_len_bytes.end(), 0);
+    if (written_size + layer_len > total_chunk_size) {
+      return EncoderStatus::Codes::kEncoderFailedEncode;
+    }
 
-    memcpy(gather_buffer + written_size, layer_info.pBsBuf, layer_len);
+    // SAFETY: The whole buffer size is equal to the size of all NALs combined.
+    UNSAFE_BUFFERS(base::span layer_data(layer_info.pBsBuf, layer_len));
+    gather_buffer.subspan(written_size, layer_len).copy_from(layer_data);
     written_size += layer_len;
   }
   DCHECK_EQ(written_size, total_chunk_size);
 
   if (!h264_converter_) {
-    result.size = total_chunk_size;
-
-    output_cb_.Run(std::move(result), absl::optional<CodecDescription>());
-    return OkStatus();
+    output_cb_.Run(std::move(result), std::optional<CodecDescription>());
+    return EncoderStatus::Codes::kOk;
   }
 
   size_t converted_output_size = 0;
   bool config_changed = false;
-  auto status = h264_converter_->ConvertChunk(
-      conversion_buffer_,
-      base::span<uint8_t>(result.data.get(), total_chunk_size), &config_changed,
-      &converted_output_size);
+  MP4Status status = OkStatus();
+  do {
+    status =
+        h264_converter_->ConvertChunk(conversion_buffer_, result.data,
+                                      &config_changed, &converted_output_size);
+    if (status.code() == MP4Status::Codes::kBufferTooSmall) {
+      result.data = base::HeapArray<uint8_t>::Uninit(converted_output_size);
+      continue;
+    } else if (!status.is_ok()) {
+      return EncoderStatus(EncoderStatus::Codes::kBitstreamConversionError)
+          .AddCause(std::move(status));
+    }
+  } while (!status.is_ok());
 
-  if (!status.is_ok())
-    return status;
+  result.data = std::move(result.data).take_first(converted_output_size);
 
-  result.size = converted_output_size;
-
-  absl::optional<CodecDescription> desc;
+  std::optional<CodecDescription> desc;
   if (config_changed) {
     const auto& config = h264_converter_->GetCurrentConfig();
     desc = CodecDescription();
     if (!config.Serialize(desc.value())) {
-      return Status(StatusCode::kEncoderFailedEncode,
-                    "Failed to serialize AVC decoder config");
+      return EncoderStatus(EncoderStatus::Codes::kBitstreamConversionError,
+                           "Failed to serialize AVC decoder config");
     }
   }
 
   output_cb_.Run(std::move(result), std::move(desc));
-  return OkStatus();
+  return EncoderStatus::Codes::kOk;
 }
 
 void OpenH264VideoEncoder::Encode(scoped_refptr<VideoFrame> frame,
-                                  bool key_frame,
-                                  StatusCB done_cb) {
-  Status status;
-  done_cb = BindToCurrentLoop(std::move(done_cb));
+                                  const EncodeOptions& encode_options,
+                                  EncoderStatusCB done_cb) {
+  done_cb = BindCallbackToCurrentLoopIfNeeded(std::move(done_cb));
   if (!codec_) {
-    std::move(done_cb).Run(StatusCode::kEncoderInitializeNeverCompleted);
+    std::move(done_cb).Run(
+        EncoderStatus::Codes::kEncoderInitializeNeverCompleted);
     return;
   }
 
   if (!frame) {
-    std::move(done_cb).Run(Status(StatusCode::kEncoderFailedEncode,
-                                  "No frame provided for encoding."));
-    return;
-  }
-  const bool supported_format = frame->format() == PIXEL_FORMAT_NV12 ||
-                                frame->format() == PIXEL_FORMAT_I420 ||
-                                frame->format() == PIXEL_FORMAT_XBGR ||
-                                frame->format() == PIXEL_FORMAT_XRGB ||
-                                frame->format() == PIXEL_FORMAT_ABGR ||
-                                frame->format() == PIXEL_FORMAT_ARGB;
-  if ((!frame->IsMappable() && !frame->HasGpuMemoryBuffer()) ||
-      !supported_format) {
-    status =
-        Status(StatusCode::kEncoderFailedEncode, "Unexpected frame format.")
-            .WithData("IsMappable", frame->IsMappable())
-            .WithData("format", frame->format());
-    std::move(done_cb).Run(std::move(status));
+    std::move(done_cb).Run(
+        EncoderStatus(EncoderStatus::Codes::kInvalidInputFrame,
+                      "No frame provided for encoding."));
     return;
   }
 
-  if (frame->format() == PIXEL_FORMAT_NV12 && frame->HasGpuMemoryBuffer()) {
+  TRACE_EVENT1("media", "OpenH264::EncodeFrame", "timestamp",
+               frame->timestamp());
+  if (!frame->HasDirectCpuAccess() && !frame->HasMappableSharedImage()) {
+    std::move(done_cb).Run(
+        EncoderStatus(EncoderStatus::Codes::kUnsupportedFrameFormat,
+                      "Unexpected frame format.")
+            .WithData("HasDirectCpuAccess", frame->HasDirectCpuAccess())
+            .WithData("storage type", frame->storage_type())
+            .WithData("format", frame->format()));
+    return;
+  }
+
+  if (frame->HasMappableSharedImage()) {
     frame = ConvertToMemoryMappedFrame(frame);
     if (!frame) {
-      std::move(done_cb).Run(
-          Status(StatusCode::kEncoderFailedEncode,
-                 "Convert GMB frame to MemoryMappedFrame failed."));
+      std::move(done_cb).Run(EncoderStatus(
+          EncoderStatus::Codes::kSystemAPICallError,
+          "Convert MappableSI frame to MemoryMappedFrame failed."));
       return;
     }
   }
 
-  if (frame->format() != PIXEL_FORMAT_I420) {
-    // OpenH264 can resize frame automatically, but since we're converting
-    // pixel fromat anyway we can do resize as well.
+  bool requires_copy =
+      frame->format() != PIXEL_FORMAT_I420 ||
+      NeedsManualResizing(frame->visible_rect().size(), options_.frame_size) ||
+      frame->stride(VideoFrame::Plane::kU) !=
+          frame->stride(VideoFrame::Plane::kV);
+
+  if (requires_copy) {
+    // In cases where we need to
+    // - enlarge the frame
+    // - change the pixel format
+    // - change the aspect ratio or
+    // - use matching U and V strides
+    // we are forced to convert and rescale manually.
     auto i420_frame = frame_pool_.CreateFrame(
         PIXEL_FORMAT_I420, options_.frame_size, gfx::Rect(options_.frame_size),
         options_.frame_size, frame->timestamp());
-    if (i420_frame) {
-      status = ConvertAndScaleFrame(*frame, *i420_frame, conversion_buffer_);
-    } else {
-      status = Status(StatusCode::kEncoderFailedEncode,
-                      "Can't allocate an I420 frame.");
+    if (!i420_frame) {
+      std::move(done_cb).Run(
+          EncoderStatus(EncoderStatus::Codes::kOutOfMemoryError,
+                        "Can't allocate an I420 frame."));
+      return;
     }
+    // If `frame->format()` is unsupported ConvertAndScale() will fail.
+    auto status = frame_converter_.ConvertAndScale(*frame, *i420_frame);
     if (!status.is_ok()) {
       std::move(done_cb).Run(std::move(status));
       return;
@@ -280,94 +533,184 @@ void OpenH264VideoEncoder::Encode(scoped_refptr<VideoFrame> frame,
     frame = std::move(i420_frame);
   }
 
+  bool key_frame = encode_options.key_frame;
+  if (last_frame_color_space_ != frame->ColorSpace()) {
+    last_frame_color_space_ = frame->ColorSpace();
+    key_frame = true;
+    UpdateEncoderColorSpace();
+  }
+
   SSourcePicture picture = {};
   picture.iPicWidth = frame->visible_rect().width();
   picture.iPicHeight = frame->visible_rect().height();
   picture.iColorFormat = EVideoFormatType::videoFormatI420;
   picture.uiTimeStamp = frame->timestamp().InMilliseconds();
-  picture.pData[0] = frame->visible_data(VideoFrame::kYPlane);
-  picture.pData[1] = frame->visible_data(VideoFrame::kUPlane);
-  picture.pData[2] = frame->visible_data(VideoFrame::kVPlane);
-  picture.iStride[0] = frame->stride(VideoFrame::kYPlane);
-  picture.iStride[1] = frame->stride(VideoFrame::kUPlane);
-  picture.iStride[2] = frame->stride(VideoFrame::kVPlane);
+  auto picture_data = base::span(picture.pData);
+  picture_data[0] =
+      const_cast<uint8_t*>(frame->visible_data(VideoFrame::Plane::kY));
+  picture_data[1] =
+      const_cast<uint8_t*>(frame->visible_data(VideoFrame::Plane::kU));
+  picture_data[2] =
+      const_cast<uint8_t*>(frame->visible_data(VideoFrame::Plane::kV));
+  auto picture_stride = base::span(picture.iStride);
+  picture_stride[0] = frame->stride(VideoFrame::Plane::kY);
+  picture_stride[1] = frame->stride(VideoFrame::Plane::kU);
+  picture_stride[2] = frame->stride(VideoFrame::Plane::kV);
 
   if (key_frame) {
-    if (int err = codec_->ForceIntraFrame(true)) {
+    // `iLayerId = -1` forces an IDR frame across all spatial layers.
+    if (int err = codec_->ForceIntraFrame(true, /*iLayerId=*/-1)) {
       std::move(done_cb).Run(
-          Status(StatusCode::kEncoderFailedEncode, "Can't make keyframe.")
+          EncoderStatus(EncoderStatus::Codes::kEncoderFailedEncode,
+                        "Can't make keyframe.")
               .WithData("error", err));
       return;
     }
   }
 
   SFrameBSInfo frame_info = {};
-  TRACE_EVENT0("media", "OpenH264::EncodeFrame");
   if (int err = codec_->EncodeFrame(&picture, &frame_info)) {
-    std::move(done_cb).Run(Status(StatusCode::kEncoderFailedEncode,
-                                  "Failed to encode using OpenH264.")
-                               .WithData("error", err));
+    std::move(done_cb).Run(
+        EncoderStatus(EncoderStatus::Codes::kEncoderFailedEncode,
+                      "Failed to encode using OpenH264.")
+            .WithData("error", err));
     return;
   }
 
-  status = DrainOutputs(frame_info, frame->timestamp());
-  std::move(done_cb).Run(std::move(status));
+  std::move(done_cb).Run(
+      DrainOutputs(frame_info, frame->timestamp(), frame->ColorSpace()));
 }
 
 void OpenH264VideoEncoder::ChangeOptions(const Options& options,
                                          OutputCB output_cb,
-                                         StatusCB done_cb) {
-  done_cb = BindToCurrentLoop(std::move(done_cb));
+                                         EncoderStatusCB done_cb) {
+  done_cb = BindCallbackToCurrentLoopIfNeeded(std::move(done_cb));
   if (!codec_) {
-    std::move(done_cb).Run(StatusCode::kEncoderInitializeNeverCompleted);
+    std::move(done_cb).Run(
+        EncoderStatus::Codes::kEncoderInitializeNeverCompleted);
     return;
   }
 
-  Status status;
+  if (options.frame_size.width() < 16 || options.frame_size.height() < 16) {
+    std::move(done_cb).Run(
+        EncoderStatus(EncoderStatus::Codes::kEncoderUnsupportedConfig,
+                      "Unsupported frame size which is less than 16"));
+    return;
+  }
+
+  if (IsFrameSizeTooLarge(options.frame_size)) {
+    std::move(done_cb).Run(EncoderStatus(
+        EncoderStatus::Codes::kEncoderUnsupportedConfig,
+        "Configured frame size exceeds OpenH264 max macroblocks"));
+    return;
+  }
+
+  if (auto status = ValidateH264Resolution(options.frame_size);
+      !status.is_ok()) {
+    std::move(done_cb).Run(status);
+    return;
+  }
+
   SEncParamExt params = {};
   if (int err = codec_->GetDefaultParams(&params)) {
-    status = Status(StatusCode::kEncoderInitializationError,
-                    "Failed to get default params.")
-                 .WithData("error", err);
-    std::move(done_cb).Run(status);
+    std::move(done_cb).Run(
+        EncoderStatus(EncoderStatus::Codes::kEncoderInitializationError,
+                      "Failed to get default params.")
+            .WithData("error", err));
     return;
   }
 
-  status = SetUpOpenH264Params(options, &params);
-  if (!status.is_ok()) {
-    std::move(done_cb).Run(status);
-    return;
-  }
+  SetUpOpenH264Params(
+      profile_, options,
+      VideoColorSpace::FromGfxColorSpace(last_frame_color_space_), &params);
 
-  if (int err =
-          codec_->SetOption(ENCODER_OPTION_SVC_ENCODE_PARAM_EXT, &params)) {
-    status = Status(StatusCode::kEncoderInitializationError,
-                    "OpenH264 encoder failed to set new SEncParamExt.")
-                 .WithData("error", err);
-    std::move(done_cb).Run(status);
+  if (int err = codec_->SetOption(ENCODER_OPTION_SVC_ENCODE_PARAM_EXT,
+                                  reinterpret_cast<c_void*>(&params))) {
+    std::move(done_cb).Run(
+        EncoderStatus(EncoderStatus::Codes::kEncoderInitializationError,
+                      "OpenH264 encoder failed to set new SEncParamExt.")
+            .WithData("error", err));
     return;
   }
 
   if (options.avc.produce_annexb) {
     h264_converter_.reset();
   } else if (!h264_converter_) {
-    h264_converter_ = std::make_unique<H264AnnexBToAvcBitstreamConverter>();
+    h264_converter_ = std::make_unique<H264AnnexBToAvcBitstreamConverter>(
+        /*add_parameter_sets_in_bitstream=*/false);
   }
 
+  options_ = options;
   if (!output_cb.is_null())
-    output_cb_ = BindToCurrentLoop(std::move(output_cb));
-  std::move(done_cb).Run(OkStatus());
+    output_cb_ = BindCallbackToCurrentLoopIfNeeded(std::move(output_cb));
+  std::move(done_cb).Run(EncoderStatus::Codes::kOk);
 }
 
-void OpenH264VideoEncoder::Flush(StatusCB done_cb) {
-  done_cb = BindToCurrentLoop(std::move(done_cb));
+void OpenH264VideoEncoder::Flush(EncoderStatusCB done_cb) {
+  done_cb = BindCallbackToCurrentLoopIfNeeded(std::move(done_cb));
   if (!codec_) {
-    std::move(done_cb).Run(StatusCode::kEncoderInitializeNeverCompleted);
+    std::move(done_cb).Run(
+        EncoderStatus::Codes::kEncoderInitializeNeverCompleted);
     return;
   }
 
   // Nothing to do really.
-  std::move(done_cb).Run(OkStatus());
+  std::move(done_cb).Run(EncoderStatus::Codes::kOk);
 }
+
+void OpenH264VideoEncoder::UpdateEncoderColorSpace() {
+  auto itu_cs = VideoColorSpace::FromGfxColorSpace(last_frame_color_space_);
+  if (!itu_cs.IsSpecified())
+    return;
+
+  SEncParamExt params = {};
+  if (int err = codec_->GetDefaultParams(&params)) {
+    DLOG(ERROR) << "Failed to GetDefaultParams to set color space: " << err;
+    return;
+  }
+
+  SetUpOpenH264Params(profile_, options_, itu_cs, &params);
+
+  // It'd be nice if SetOption(ENCODER_OPTION_SVC_ENCODE_PARAM_EXT) worked, but
+  // alas it doesn't seem to, so we must reinitialize.
+  if (int err = codec_->InitializeExt(&params))
+    DLOG(ERROR) << "Failed to reinitialize codec to set color space: " << err;
+}
+
+// When `BUILDFLAG(ENABLE_RUST_OPENH264)` (`media_use_rust_openh264`) is
+// enabled, this file is compiled twice:
+// 1. Without `RUST_OPENH264_BUILD` (in `//media/video`): builds Cisco's C++
+//    `OpenH264VideoEncoder`, defines `kRustOpenH264Encoding`, and defines
+//    `CreateOpenH264VideoEncoder()`.
+// 2. With `RUST_OPENH264_BUILD` (in `//media/video:openh264rs_video_encoder`):
+//    `openh264_video_encoder.h` includes `third_party/openh264rs/codec_api.h`
+//    and `#define`s `OpenH264VideoEncoder` to `OpenH264RsVideoEncoder`, and
+//    this file defines `CreateOpenH264RsVideoEncoder()` to instantiate it.
+//
+// `CreateOpenH264VideoEncoder()` checks `kRustOpenH264Encoding` at runtime to
+// return `OpenH264RsVideoEncoder` when enabled, or fall back to Cisco's C++
+// `OpenH264VideoEncoder` when disabled (or when `ENABLE_RUST_OPENH264` is off).
+#if BUILDFLAG(ENABLE_RUST_OPENH264)
+std::unique_ptr<VideoEncoder> CreateOpenH264RsVideoEncoder();
+#endif
+
+#ifdef RUST_OPENH264_BUILD
+std::unique_ptr<VideoEncoder> CreateOpenH264RsVideoEncoder() {
+  return std::make_unique<OpenH264VideoEncoder>();
+}
+#else
+#if BUILDFLAG(ENABLE_RUST_OPENH264)
+BASE_FEATURE(kRustOpenH264Encoding, base::FEATURE_ENABLED_BY_DEFAULT);
+#endif
+
+std::unique_ptr<VideoEncoder> CreateOpenH264VideoEncoder() {
+#if BUILDFLAG(ENABLE_RUST_OPENH264)
+  if (base::FeatureList::IsEnabled(kRustOpenH264Encoding)) {
+    return CreateOpenH264RsVideoEncoder();
+  }
+#endif
+  return std::make_unique<OpenH264VideoEncoder>();
+}
+#endif
 
 }  // namespace media

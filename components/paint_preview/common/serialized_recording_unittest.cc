@@ -1,11 +1,17 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/paint_preview/common/serialized_recording.h"
+
+#include <optional>
+
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/test/task_environment.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/unguessable_token.h"
 #include "components/paint_preview/common/capture_result.h"
@@ -14,14 +20,18 @@
 #include "components/paint_preview/common/recording_map.h"
 #include "components/paint_preview/common/serial_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "third_party/skia/include/core/SkImage.h"
+#include "third_party/skia/include/core/SkImageInfo.h"
+#include "third_party/skia/include/core/SkMatrix.h"
 #include "third_party/skia/include/core/SkPaint.h"
 #include "third_party/skia/include/core/SkPicture.h"
 #include "third_party/skia/include/core/SkPictureRecorder.h"
 #include "third_party/skia/include/core/SkRect.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
+#include "third_party/skia/include/core/SkSurfaceProps.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 
@@ -86,7 +96,7 @@ sk_sp<const SkPicture> PaintPictureLargeImage(gfx::Size bounds) {
   paint.setStyle(SkPaint::kFill_Style);
   paint.setColor(SK_ColorRED);
   canvas->drawRect(sk_bounds, paint);
-  canvas->drawImage(SkImage::MakeFromBitmap(bitmap), 0, 0);
+  canvas->drawImage(SkImages::RasterFromBitmap(bitmap), 0, 0);
   return recorder.finishRecordingAsPicture();
 }
 
@@ -117,15 +127,29 @@ void ExpectPicturesEqual(sk_sp<const SkPicture> pic,
   // Assert that all the bytes of the backing memory are equal. This check is
   // only safe if all of the width, height and bytesPerPixel are equal between
   // the two bitmaps.
-  EXPECT_EQ(memcmp(bitmap.getPixels(), expected_bitmap.getPixels(),
-                   expected_bitmap.bytesPerPixel() * expected_bitmap.width() *
-                       expected_bitmap.height()),
-            0);
+  const size_t bytes = expected_bitmap.bytesPerPixel() *
+                       expected_bitmap.width() * expected_bitmap.height();
+  // SAFETY: `getPixels()` returns a buffer of at least `bytes` size when
+  // width/height/bytesPerPixel are equal.
+  EXPECT_EQ(
+      UNSAFE_BUFFERS(base::span(static_cast<const uint8_t*>(bitmap.getPixels()),
+                                bytes)),
+      UNSAFE_BUFFERS(base::span(
+          static_cast<const uint8_t*>(expected_bitmap.getPixels()), bytes)));
 }
 
 }  // namespace
 
-TEST(PaintPreviewSerializedRecordingTest, RoundtripWithFileBacking) {
+class PaintPreviewSerializedRecordingTest : public testing::Test {
+ public:
+  PaintPreviewSerializedRecordingTest() = default;
+  ~PaintPreviewSerializedRecordingTest() override = default;
+
+ protected:
+  base::test::TaskEnvironment task_environment_;
+};
+
+TEST_F(PaintPreviewSerializedRecordingTest, RoundtripWithFileBacking) {
   base::ScopedAllowBlockingForTesting scoped_blocking;
   base::ScopedTempDir temp_dir;
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
@@ -133,31 +157,31 @@ TEST(PaintPreviewSerializedRecordingTest, RoundtripWithFileBacking) {
   sk_sp<const SkPicture> pic = PaintPictureSingleGrayPixel();
 
   base::FilePath path = temp_dir.GetPath().AppendASCII("root.skp");
-  PaintPreviewTracker tracker(base::UnguessableToken::Create(), absl::nullopt,
+  PaintPreviewTracker tracker(base::UnguessableToken::Create(), std::nullopt,
                               /*is_main_frame=*/true);
   size_t serialized_size = 0;
   ASSERT_TRUE(RecordToFile(
       base::File(path, base::File::FLAG_CREATE_ALWAYS | base::File::FLAG_WRITE),
-      pic, &tracker, absl::nullopt, &serialized_size));
+      pic, &tracker, std::nullopt, &serialized_size));
   ASSERT_GE(serialized_size, 0u);
 
   SerializedRecording recording(path);
   ASSERT_TRUE(recording.IsValid());
 
-  absl::optional<SkpResult> result = std::move(recording).Deserialize();
+  std::optional<SkpResult> result = std::move(recording).Deserialize();
   ASSERT_TRUE(result.has_value());
   ASSERT_TRUE(result->ctx.empty());
   ExpectPicturesEqual(result->skp, pic);
 }
 
-TEST(PaintPreviewSerializedRecordingTest, RoundtripWithMemoryBufferBacking) {
+TEST_F(PaintPreviewSerializedRecordingTest, RoundtripWithMemoryBufferBacking) {
   sk_sp<const SkPicture> pic = PaintPictureSingleGrayPixel();
 
-  PaintPreviewTracker tracker(base::UnguessableToken::Create(), absl::nullopt,
+  PaintPreviewTracker tracker(base::UnguessableToken::Create(), std::nullopt,
                               /*is_main_frame=*/true);
   size_t serialized_size = 0;
-  absl::optional<mojo_base::BigBuffer> buffer =
-      RecordToBuffer(pic, &tracker, absl::nullopt, &serialized_size);
+  std::optional<mojo_base::BigBuffer> buffer =
+      RecordToBuffer(pic, &tracker, std::nullopt, &serialized_size);
   ASSERT_GE(serialized_size, 0u);
   ASSERT_TRUE(buffer.has_value());
 
@@ -165,23 +189,23 @@ TEST(PaintPreviewSerializedRecordingTest, RoundtripWithMemoryBufferBacking) {
       SerializedRecording(std::move(buffer.value()));
   ASSERT_TRUE(recording.IsValid());
 
-  absl::optional<SkpResult> result = std::move(recording).Deserialize();
+  std::optional<SkpResult> result = std::move(recording).Deserialize();
   ASSERT_TRUE(result.has_value());
   ASSERT_TRUE(result->ctx.empty());
   ExpectPicturesEqual(result->skp, pic);
 }
 
-TEST(PaintPreviewSerializedRecordingTest, ImageDiscardingTolerated) {
+TEST_F(PaintPreviewSerializedRecordingTest, ImageDiscardingTolerated) {
   sk_sp<const SkPicture> pic = PaintPictureLargeImage(gfx::Size(200, 200));
 
-  PaintPreviewTracker tracker(base::UnguessableToken::Create(), absl::nullopt,
+  PaintPreviewTracker tracker(base::UnguessableToken::Create(), std::nullopt,
                               /*is_main_frame=*/true);
   auto* image_context = tracker.GetImageSerializationContext();
   image_context->remaining_image_size = 200;
   image_context->max_decoded_image_size_bytes = 300 * 300 * 4;
   size_t serialized_size = 0;
-  absl::optional<mojo_base::BigBuffer> buffer =
-      RecordToBuffer(pic, &tracker, absl::nullopt, &serialized_size);
+  std::optional<mojo_base::BigBuffer> buffer =
+      RecordToBuffer(pic, &tracker, std::nullopt, &serialized_size);
   ASSERT_GE(serialized_size, 0u);
   ASSERT_TRUE(buffer.has_value());
   ASSERT_TRUE(image_context->memory_budget_exceeded);
@@ -191,33 +215,33 @@ TEST(PaintPreviewSerializedRecordingTest, ImageDiscardingTolerated) {
   ASSERT_TRUE(recording.IsValid());
 }
 
-TEST(PaintPreviewSerializedRecordingTest, ImageDiscardingNotTolerated) {
+TEST_F(PaintPreviewSerializedRecordingTest, ImageDiscardingNotTolerated) {
   sk_sp<const SkPicture> pic = PaintPictureLargeImage(gfx::Size(200, 200));
 
-  PaintPreviewTracker tracker(base::UnguessableToken::Create(), absl::nullopt,
+  PaintPreviewTracker tracker(base::UnguessableToken::Create(), std::nullopt,
                               /*is_main_frame=*/true);
   auto* image_context = tracker.GetImageSerializationContext();
   image_context->remaining_image_size = 200;
   size_t serialized_size = 0;
-  absl::optional<mojo_base::BigBuffer> buffer =
-      RecordToBuffer(pic, &tracker, absl::nullopt, &serialized_size);
+  std::optional<mojo_base::BigBuffer> buffer =
+      RecordToBuffer(pic, &tracker, std::nullopt, &serialized_size);
   ASSERT_FALSE(buffer.has_value());
   ASSERT_EQ(serialized_size, 0U);
   ASSERT_TRUE(image_context->memory_budget_exceeded);
 }
 
-TEST(PaintPreviewSerializedRecordingTest, InvalidBacking) {
+TEST_F(PaintPreviewSerializedRecordingTest, InvalidBacking) {
   SerializedRecording recording;
   ASSERT_FALSE(recording.IsValid());
 }
 
-TEST(PaintPreviewSerializedRecordingTest, RoundtripHasEmbeddedContent) {
+TEST_F(PaintPreviewSerializedRecordingTest, RoundtripHasEmbeddedContent) {
   base::ScopedAllowBlockingForTesting scoped_blocking;
   base::ScopedTempDir temp_dir;
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
 
   base::FilePath path = temp_dir.GetPath().AppendASCII("root.skp");
-  PaintPreviewTracker tracker(base::UnguessableToken::Create(), absl::nullopt,
+  PaintPreviewTracker tracker(base::UnguessableToken::Create(), std::nullopt,
                               /*is_main_frame=*/true);
 
   base::UnguessableToken subframe0 = base::UnguessableToken::Create();
@@ -233,13 +257,13 @@ TEST(PaintPreviewSerializedRecordingTest, RoundtripHasEmbeddedContent) {
   size_t serialized_size = 0;
   ASSERT_TRUE(RecordToFile(
       base::File(path, base::File::FLAG_CREATE_ALWAYS | base::File::FLAG_WRITE),
-      pic, &tracker, absl::nullopt, &serialized_size));
+      pic, &tracker, std::nullopt, &serialized_size));
   ASSERT_GE(serialized_size, 0u);
 
   SerializedRecording recording(path);
   ASSERT_TRUE(recording.IsValid());
 
-  absl::optional<SkpResult> result = std::move(recording).Deserialize();
+  std::optional<SkpResult> result = std::move(recording).Deserialize();
   ASSERT_TRUE(result.has_value());
 
   EXPECT_FALSE(result->ctx.empty());
@@ -248,17 +272,17 @@ TEST(PaintPreviewSerializedRecordingTest, RoundtripHasEmbeddedContent) {
   ExpectPicturesEqual(result->skp, pic);
 }
 
-TEST(PaintPreviewSerializedRecordingTest,
-     RecordingMapFromCaptureResultSingleFrame) {
+TEST_F(PaintPreviewSerializedRecordingTest,
+       RecordingMapFromCaptureResultSingleFrame) {
   sk_sp<const SkPicture> pic = PaintPictureSingleGrayPixel();
 
   const base::UnguessableToken root_frame_guid =
       base::UnguessableToken::Create();
-  PaintPreviewTracker tracker(base::UnguessableToken::Create(), absl::nullopt,
+  PaintPreviewTracker tracker(base::UnguessableToken::Create(), std::nullopt,
                               /*is_main_frame=*/true);
   size_t serialized_size = 0;
-  absl::optional<mojo_base::BigBuffer> buffer =
-      RecordToBuffer(pic, &tracker, absl::nullopt, &serialized_size);
+  std::optional<mojo_base::BigBuffer> buffer =
+      RecordToBuffer(pic, &tracker, std::nullopt, &serialized_size);
   ASSERT_GE(serialized_size, 0u);
   ASSERT_TRUE(buffer.has_value());
 
@@ -273,15 +297,15 @@ TEST(PaintPreviewSerializedRecordingTest,
   RecordingMap recording_map = std::move(pair.first);
   EXPECT_FALSE(recording_map.empty());
   ASSERT_NE(recording_map.find(root_frame_guid), recording_map.end());
-  absl::optional<SkpResult> result =
+  std::optional<SkpResult> result =
       std::move(recording_map.at(root_frame_guid)).Deserialize();
   ASSERT_TRUE(result.has_value());
 
   ExpectPicturesEqual(result->skp, pic);
 }
 
-TEST(PaintPreviewSerializedRecordingTest,
-     RecordingMapFromPaintPreviewProtoSingleFrame) {
+TEST_F(PaintPreviewSerializedRecordingTest,
+       RecordingMapFromPaintPreviewProtoSingleFrame) {
   base::ScopedAllowBlockingForTesting scoped_blocking;
   base::ScopedTempDir temp_dir;
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
@@ -292,13 +316,13 @@ TEST(PaintPreviewSerializedRecordingTest,
 
   const base::UnguessableToken root_frame_guid =
       base::UnguessableToken::Create();
-  PaintPreviewTracker tracker(base::UnguessableToken::Create(), absl::nullopt,
+  PaintPreviewTracker tracker(base::UnguessableToken::Create(), std::nullopt,
                               /*is_main_frame=*/true);
   size_t serialized_size = 0;
   ASSERT_TRUE(RecordToFile(
       base::File(root_path,
                  base::File::FLAG_CREATE_ALWAYS | base::File::FLAG_WRITE),
-      pic, &tracker, absl::nullopt, &serialized_size));
+      pic, &tracker, std::nullopt, &serialized_size));
   ASSERT_GE(serialized_size, 0u);
 
   PaintPreviewProto proto;
@@ -312,7 +336,7 @@ TEST(PaintPreviewSerializedRecordingTest,
   RecordingMap recording_map = RecordingMapFromPaintPreviewProto(proto);
   EXPECT_FALSE(recording_map.empty());
   ASSERT_NE(recording_map.find(root_frame_guid), recording_map.end());
-  absl::optional<SkpResult> result =
+  std::optional<SkpResult> result =
       std::move(recording_map.at(root_frame_guid)).Deserialize();
   ASSERT_TRUE(result.has_value());
 

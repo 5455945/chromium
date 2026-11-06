@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,16 +6,18 @@
 
 #include <functional>
 #include <set>
+#include <string>
 #include <utility>
 
 #include "base/base_paths.h"
 #include "base/base_switches.h"
-#include "base/bind.h"
 #include "base/check.h"
 #include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/files/file_path.h"
-#include "base/lazy_instance.h"
+#include "base/functional/bind.h"
 #include "base/memory/ref_counted.h"
+#include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/path_service.h"
 #include "base/process/kill.h"
@@ -23,9 +25,10 @@
 #include "base/rand_util.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/task_runner.h"
+#include "base/test/test_switches.h"
 #include "build/build_config.h"
+#include "mojo/public/c/system/types.h"
 #include "mojo/public/cpp/platform/platform_channel.h"
 #include "mojo/public/cpp/platform/platform_channel_endpoint.h"
 #include "mojo/public/cpp/platform/platform_channel_server_endpoint.h"
@@ -34,7 +37,7 @@
 #include "mojo/public/cpp/system/platform_handle.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if !defined(OS_FUCHSIA)
+#if !BUILDFLAG(IS_FUCHSIA)
 #include "mojo/public/cpp/platform/named_platform_channel.h"
 #endif
 
@@ -44,22 +47,25 @@ namespace test {
 
 namespace {
 
-#if !defined(OS_FUCHSIA)
+#if !BUILDFLAG(IS_FUCHSIA)
 const char kNamedPipeName[] = "named-pipe-name";
 #endif
 const char kRunAsBrokerClient[] = "run-as-broker-client";
 const char kAcceptInvitationAsync[] = "accept-invitation-async";
 const char kTestChildMessagePipeName[] = "test_pipe";
-const char kDisableAllCapabilities[] = "disable-all-capabilities";
+
+MojoHandle g_primordial_pipe = MOJO_HANDLE_INVALID;
 
 // For use (and only valid) in a test child process:
-base::LazyInstance<IsolatedConnection>::Leaky g_child_isolated_connection;
+IsolatedConnection& GetChildIsolatedConnection() {
+  static base::NoDestructor<IsolatedConnection> connection;
+  return *connection;
+}
 
 int RunClientFunction(base::OnceCallback<int(MojoHandle)> handler,
                       bool pass_pipe_ownership_to_main) {
-  CHECK(MultiprocessTestHelper::primordial_pipe.is_valid());
-  ScopedMessagePipeHandle pipe =
-      std::move(MultiprocessTestHelper::primordial_pipe);
+  ScopedMessagePipeHandle pipe = MultiprocessTestHelper::TakePrimordialPipe();
+  CHECK(pipe.is_valid());
   MessagePipeHandle pipe_handle =
       pass_pipe_ownership_to_main ? pipe.release() : pipe.get();
   return std::move(handler).Run(pipe_handle.value());
@@ -71,6 +77,13 @@ MultiprocessTestHelper::MultiprocessTestHelper() = default;
 
 MultiprocessTestHelper::~MultiprocessTestHelper() {
   CHECK(!test_child_.IsValid());
+}
+
+// static
+void MultiprocessTestHelper::InitForMultiprocessTest() {
+  auto& command_line = *base::CommandLine::ForCurrentProcess();
+  bool is_broker = !command_line.HasSwitch(kRunAsBrokerClient);
+  mojo::core::Init({.is_broker_process = is_broker});
 }
 
 ScopedMessagePipeHandle MultiprocessTestHelper::StartChild(
@@ -95,44 +108,58 @@ ScopedMessagePipeHandle MultiprocessTestHelper::StartChildWithExtraSwitch(
   base::CommandLine command_line(
       base::GetMultiProcessTestChildBaseCommandLine().GetProgram());
 
+#if BUILDFLAG(IS_WIN)
+  // Some mojo unit tests launch child processes and send invalid handles to
+  // them which would usually cause a STATUS_INVALID_HANDLE (0xC0000008) to be
+  // raised, so this disables that for child test processes only.
+  command_line.AppendSwitch(::switches::kDisableStrictHandleCheckingForTesting);
+#endif  // BUILDFLAG(IS_WIN)
+
   std::set<std::string> uninherited_args;
   uninherited_args.insert("mojo-platform-channel-handle");
   uninherited_args.insert(switches::kTestChildProcess);
+
+  std::string enable_overrides;
+  std::string disable_overrides;
+  base::FeatureList::GetInstance()->GetCommandLineFeatureOverrides(
+      &enable_overrides, &disable_overrides);
+  command_line.AppendSwitchASCII(switches::kEnableFeatures, enable_overrides);
+  command_line.AppendSwitchASCII(switches::kDisableFeatures, disable_overrides);
 
   // Copy commandline switches from the parent process, except for the
   // multiprocess client name and mojo message pipe handle; this allows test
   // clients to spawn other test clients.
   for (const auto& entry :
        base::CommandLine::ForCurrentProcess()->GetSwitches()) {
-    if (uninherited_args.find(entry.first) == uninherited_args.end())
+    if (!uninherited_args.contains(entry.first)) {
       command_line.AppendSwitchNative(entry.first, entry.second);
+    }
   }
 
-#if !defined(OS_FUCHSIA)
+#if !BUILDFLAG(IS_FUCHSIA)
   NamedPlatformChannel::ServerName server_name;
 #endif
   PlatformChannel channel;
   base::LaunchOptions options;
   switch (launch_type) {
     case LaunchType::CHILD:
-    case LaunchType::CHILD_WITHOUT_CAPABILITIES:
     case LaunchType::PEER:
     case LaunchType::ASYNC:
       channel.PrepareToPassRemoteEndpoint(&options, &command_line);
       break;
-#if !defined(OS_FUCHSIA)
+#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_IOS)
     case LaunchType::NAMED_CHILD:
     case LaunchType::NAMED_PEER: {
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
       server_name = NamedPlatformChannel::ServerNameFromUTF8(
           "mojo.test." + base::NumberToString(base::RandUint64()));
-#elif defined(OS_POSIX)
+#elif BUILDFLAG(IS_POSIX)
       base::FilePath temp_dir;
       CHECK(base::PathService::Get(base::DIR_TEMP, &temp_dir));
       server_name =
           temp_dir.AppendASCII(base::NumberToString(base::RandUint64()))
               .value();
-#elif defined(OS_WIN)
+#elif BUILDFLAG(IS_WIN)
       server_name = base::NumberToWString(base::RandUint64());
 #else
 #error "Platform not yet supported."
@@ -140,18 +167,19 @@ ScopedMessagePipeHandle MultiprocessTestHelper::StartChildWithExtraSwitch(
       command_line.AppendSwitchNative(kNamedPipeName, server_name);
       break;
     }
-#endif  // !defined(OS_FUCHSIA)
+#endif  // !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_IOS)
   }
 
   if (!switch_string.empty()) {
     CHECK(!command_line.HasSwitch(switch_string));
-    if (!switch_value.empty())
+    if (!switch_value.empty()) {
       command_line.AppendSwitchASCII(switch_string, switch_value);
-    else
+    } else {
       command_line.AppendSwitch(switch_string);
+    }
   }
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   options.start_hidden = true;
 #endif
 
@@ -162,12 +190,11 @@ ScopedMessagePipeHandle MultiprocessTestHelper::StartChildWithExtraSwitch(
   PlatformChannelServerEndpoint server_endpoint;
   switch (launch_type) {
     case LaunchType::CHILD:
-    case LaunchType::CHILD_WITHOUT_CAPABILITIES:
     case LaunchType::PEER:
     case LaunchType::ASYNC:
       local_channel_endpoint = channel.TakeLocalEndpoint();
       break;
-#if !defined(OS_FUCHSIA)
+#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_IOS)
     case LaunchType::NAMED_CHILD:
     case LaunchType::NAMED_PEER: {
       NamedPlatformChannel::Options channel_options;
@@ -176,35 +203,31 @@ ScopedMessagePipeHandle MultiprocessTestHelper::StartChildWithExtraSwitch(
       server_endpoint = named_channel.TakeServerEndpoint();
       break;
     }
-#endif  // !defined(OS_FUCHSIA)
+#endif  // !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_IOS)
   };
 
   OutgoingInvitation child_invitation;
   ScopedMessagePipeHandle pipe;
   switch (launch_type) {
-    case LaunchType::CHILD_WITHOUT_CAPABILITIES:
     case LaunchType::ASYNC:
-      // It's one or the other
-      command_line.AppendSwitch(launch_type == LaunchType::ASYNC
-                                    ? kAcceptInvitationAsync
-                                    : kDisableAllCapabilities);
-      FALLTHROUGH;
+      command_line.AppendSwitch(kAcceptInvitationAsync);
+      [[fallthrough]];
     case LaunchType::CHILD:
-#if !defined(OS_FUCHSIA)
+#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_IOS)
     case LaunchType::NAMED_CHILD:
 #endif
       pipe = child_invitation.AttachMessagePipe(kTestChildMessagePipeName);
       command_line.AppendSwitch(kRunAsBrokerClient);
       break;
     case LaunchType::PEER:
-#if !defined(OS_FUCHSIA)
+#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_IOS)
     case LaunchType::NAMED_PEER:
 #endif
       isolated_connection_ = std::make_unique<IsolatedConnection>();
       if (local_channel_endpoint.is_valid()) {
         pipe = isolated_connection_->Connect(std::move(local_channel_endpoint));
       } else {
-#if defined(OS_POSIX) || defined(OS_WIN)
+#if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_WIN)
         DCHECK(server_endpoint.is_valid());
         pipe = isolated_connection_->Connect(std::move(server_endpoint));
 #else
@@ -217,14 +240,12 @@ ScopedMessagePipeHandle MultiprocessTestHelper::StartChildWithExtraSwitch(
   test_child_ =
       base::SpawnMultiProcessTestChild(test_child_main, command_line, options);
 
-  if (launch_type == LaunchType::CHILD ||
-      launch_type == LaunchType::CHILD_WITHOUT_CAPABILITIES ||
-      launch_type == LaunchType::PEER || launch_type == LaunchType::ASYNC) {
+  if (launch_type == LaunchType::CHILD || launch_type == LaunchType::PEER ||
+      launch_type == LaunchType::ASYNC) {
     channel.RemoteProcessLaunchAttempted();
   }
 
-  if (launch_type == LaunchType::CHILD ||
-      launch_type == LaunchType::CHILD_WITHOUT_CAPABILITIES) {
+  if (launch_type == LaunchType::CHILD) {
     DCHECK(local_channel_endpoint.is_valid());
     OutgoingInvitation::Send(std::move(child_invitation), test_child_.Handle(),
                              std::move(local_channel_endpoint),
@@ -235,14 +256,14 @@ ScopedMessagePipeHandle MultiprocessTestHelper::StartChildWithExtraSwitch(
         std::move(child_invitation), test_child_.Handle(),
         std::move(local_channel_endpoint), ProcessErrorCallback());
   }
-#if !defined(OS_FUCHSIA)
+#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_IOS)
   else if (launch_type == LaunchType::NAMED_CHILD) {
     DCHECK(server_endpoint.is_valid());
     OutgoingInvitation::Send(std::move(child_invitation), test_child_.Handle(),
                              std::move(server_endpoint),
                              ProcessErrorCallback());
   }
-#endif  //  !defined(OS_FUCHSIA)
+#endif  //  !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_IOS)
 
   CHECK(test_child_.IsValid());
   return pipe;
@@ -272,29 +293,31 @@ void MultiprocessTestHelper::ChildSetup() {
   const bool async = command_line.HasSwitch(kAcceptInvitationAsync);
 
   PlatformChannelEndpoint endpoint;
-#if !defined(OS_FUCHSIA)
+#if !BUILDFLAG(IS_FUCHSIA)
   NamedPlatformChannel::ServerName named_pipe(
       command_line.GetSwitchValueNative(kNamedPipeName));
   if (!named_pipe.empty()) {
     endpoint = NamedPlatformChannel::ConnectToServer(named_pipe);
   } else
-#endif  // !defined(OS_FUCHSIA)
+#endif  // !BUILDFLAG(IS_FUCHSIA)
   {
     endpoint =
         PlatformChannel::RecoverPassedEndpointFromCommandLine(command_line);
   }
 
+  ScopedMessagePipeHandle pipe;
   if (run_as_broker_client) {
     IncomingInvitation invitation;
-    if (async)
+    if (async) {
       invitation = IncomingInvitation::AcceptAsync(std::move(endpoint));
-    else
+    } else {
       invitation = IncomingInvitation::Accept(std::move(endpoint));
-    primordial_pipe = invitation.ExtractMessagePipe(kTestChildMessagePipeName);
+    }
+    pipe = invitation.ExtractMessagePipe(kTestChildMessagePipeName);
   } else {
-    primordial_pipe =
-        g_child_isolated_connection.Get().Connect(std::move(endpoint));
+    pipe = GetChildIsolatedConnection().Connect(std::move(endpoint));
   }
+  g_primordial_pipe = pipe.release().value();
 }
 
 // static
@@ -320,7 +343,11 @@ int MultiprocessTestHelper::RunClientTestMain(
       true /* pass_pipe_ownership_to_main */);
 }
 
-ScopedMessagePipeHandle MultiprocessTestHelper::primordial_pipe;
+// static
+ScopedMessagePipeHandle MultiprocessTestHelper::TakePrimordialPipe() {
+  return ScopedMessagePipeHandle(
+      MessagePipeHandle(std::exchange(g_primordial_pipe, MOJO_HANDLE_INVALID)));
+}
 
 }  // namespace test
 }  // namespace core

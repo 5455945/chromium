@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,23 +11,27 @@
 
 #include "base/files/scoped_file.h"
 #include "base/logging.h"
+#include "base/notreached.h"
 #include "base/posix/eintr_wrapper.h"
 #include "sandbox/policy/mac/audio.sb.h"
 #include "sandbox/policy/mac/cdm.sb.h"
 #include "sandbox/policy/mac/common.sb.h"
 #include "sandbox/policy/mac/gpu.sb.h"
 #include "sandbox/policy/mac/mirroring.sb.h"
-#include "sandbox/policy/mac/nacl_loader.sb.h"
 #include "sandbox/policy/mac/network.sb.h"
-#include "sandbox/policy/mac/ppapi.sb.h"
+#include "sandbox/policy/mac/on_device_model_execution.sb.h"
+#include "sandbox/policy/mac/on_device_translation.sb.h"
 #include "sandbox/policy/mac/print_backend.sb.h"
 #include "sandbox/policy/mac/print_compositor.sb.h"
+#include "sandbox/policy/mac/proxy_resolver.sb.h"
 #include "sandbox/policy/mac/renderer.sb.h"
+#include "sandbox/policy/mac/screen_ai.sb.h"
 #include "sandbox/policy/mac/speech_recognition.sb.h"
 #include "sandbox/policy/mac/utility.sb.h"
+#include "sandbox/policy/mac/webnn_model_compilation.sb.h"
+#include "sandbox/policy/mojom/sandbox.mojom.h"
 
-namespace sandbox {
-namespace policy {
+namespace sandbox::policy {
 
 base::FilePath GetCanonicalPath(const base::FilePath& path) {
   base::ScopedFD fd(HANDLE_EINTR(open(path.value().c_str(), O_RDONLY)));
@@ -45,53 +49,62 @@ base::FilePath GetCanonicalPath(const base::FilePath& path) {
   return base::FilePath(canonical_path);
 }
 
-std::string GetSandboxProfile(SandboxType sandbox_type) {
-  std::string profile = std::string(kSeatbeltPolicyString_common);
+std::string GetSandboxProfile(sandbox::mojom::Sandbox sandbox_type) {
+  std::string profile_suffix = [](sandbox::mojom::Sandbox sandbox_type) {
+    switch (sandbox_type) {
+      case sandbox::mojom::Sandbox::kAudio:
+        return kSeatbeltPolicyString_audio;
+      case sandbox::mojom::Sandbox::kCdm:
+        return kSeatbeltPolicyString_cdm;
+      case sandbox::mojom::Sandbox::kGpu:
+        return kSeatbeltPolicyString_gpu;
+      case sandbox::mojom::Sandbox::kMirroring:
+        return kSeatbeltPolicyString_mirroring;
+      case sandbox::mojom::Sandbox::kNetwork:
+        return kSeatbeltPolicyString_network;
+      case sandbox::mojom::Sandbox::kPrintBackend:
+        return kSeatbeltPolicyString_print_backend;
+      case sandbox::mojom::Sandbox::kPrintCompositor:
+        return kSeatbeltPolicyString_print_compositor;
+      case sandbox::mojom::Sandbox::kScreenAI:
+        return kSeatbeltPolicyString_screen_ai;
+      case sandbox::mojom::Sandbox::kSpeechRecognition:
+        return kSeatbeltPolicyString_speech_recognition;
+      case sandbox::mojom::Sandbox::kOnDeviceModelExecution:
+        return kSeatbeltPolicyString_on_device_model_execution;
+      case sandbox::mojom::Sandbox::kOnDeviceTranslation:
+        return kSeatbeltPolicyString_on_device_translation;
+      case sandbox::mojom::Sandbox::kProxyResolver:
+        return kSeatbeltPolicyString_proxy_resolver;
+      case sandbox::mojom::Sandbox::kWebNNModelCompilation:
+        return kSeatbeltPolicyString_webnn_model_compilation;
+      // `kService` and `kUtility` are the same on OS_MAC, so fallthrough.
+      case sandbox::mojom::Sandbox::kService:
+      case sandbox::mojom::Sandbox::kServiceWithJit:
+      case sandbox::mojom::Sandbox::kPlatformRuntime:
+      case sandbox::mojom::Sandbox::kUtility:
+        return kSeatbeltPolicyString_utility;
+      case sandbox::mojom::Sandbox::kRenderer:
+        return kSeatbeltPolicyString_renderer;
+      case sandbox::mojom::Sandbox::kNoSandbox:
+        NOTREACHED();
+    }
+    NOTREACHED();
+  }(sandbox_type);
 
-  switch (sandbox_type) {
-    case SandboxType::kAudio:
-      profile += kSeatbeltPolicyString_audio;
-      break;
-    case SandboxType::kCdm:
-      profile += kSeatbeltPolicyString_cdm;
-      break;
-    case SandboxType::kGpu:
-      profile += kSeatbeltPolicyString_gpu;
-      break;
-    case SandboxType::kMirroring:
-      profile += kSeatbeltPolicyString_mirroring;
-      break;
-    case SandboxType::kNaClLoader:
-      profile += kSeatbeltPolicyString_nacl_loader;
-      break;
-    case SandboxType::kNetwork:
-      profile += kSeatbeltPolicyString_network;
-      break;
-    case SandboxType::kPpapi:
-      profile += kSeatbeltPolicyString_ppapi;
-      break;
-    case SandboxType::kPrintBackend:
-      profile += kSeatbeltPolicyString_print_backend;
-      break;
-    case SandboxType::kPrintCompositor:
-      profile += kSeatbeltPolicyString_print_compositor;
-      break;
-    case SandboxType::kSpeechRecognition:
-      profile += kSeatbeltPolicyString_speech_recognition;
-      break;
-    case SandboxType::kUtility:
-      profile += kSeatbeltPolicyString_utility;
-      break;
-    case SandboxType::kRenderer:
-      profile += kSeatbeltPolicyString_renderer;
-      break;
-    case SandboxType::kNoSandbox:
-    case SandboxType::kVideoCapture:
-      CHECK(false);
-      break;
-  }
-  return profile;
+  return kSeatbeltPolicyString_common + profile_suffix;
 }
 
-}  // namespace policy
-}  // namespace sandbox
+bool CanCacheSandboxPolicy(sandbox::mojom::Sandbox sandbox_type) {
+  switch (sandbox_type) {
+    case sandbox::mojom::Sandbox::kRenderer:
+    case sandbox::mojom::Sandbox::kService:
+    case sandbox::mojom::Sandbox::kServiceWithJit:
+    case sandbox::mojom::Sandbox::kUtility:
+      return true;
+    default:
+      return false;
+  }
+}
+
+}  // namespace sandbox::policy

@@ -1,8 +1,8 @@
-// Copyright (c) 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "third_party/blink/renderer/core/inspector/protocol/Protocol.h"
+#include "third_party/blink/renderer/core/inspector/protocol/protocol.h"
 
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -18,14 +18,10 @@ using protocol::Value;
 static std::unique_ptr<protocol::Value> ParseJSON(const String& string) {
   std::vector<uint8_t> cbor;
   if (string.Is8Bit()) {
-    crdtp::json::ConvertJSONToCBOR(
-        crdtp::span<uint8_t>(string.Characters8(), string.length()), &cbor);
+    crdtp::json::ConvertJSONToCBOR(crdtp::span<uint8_t>(string.Span8()), &cbor);
   } else {
-    crdtp::json::ConvertJSONToCBOR(
-        crdtp::span<uint16_t>(
-            reinterpret_cast<const uint16_t*>(string.Characters16()),
-            string.length()),
-        &cbor);
+    crdtp::json::ConvertJSONToCBOR(crdtp::span<uint16_t>(string.SpanUint16()),
+                                   &cbor);
   }
   return protocol::Value::parseBinary(cbor.data(), cbor.size());
 }
@@ -51,60 +47,13 @@ TEST(ProtocolParserTest, Reading) {
   ASSERT_TRUE(root.get());
   EXPECT_EQ(Value::TypeBoolean, root->type());
 
-  // Embedded comment
+  // Comments are not allowed.
   root = ParseJSON("40 /*/");
   EXPECT_FALSE(root.get());
-  root = ParseJSON("/* comment */null");
-  ASSERT_TRUE(root.get());
-  EXPECT_EQ(Value::TypeNull, root->type());
   root = ParseJSON("40 /* comment */");
-  ASSERT_TRUE(root.get());
-  EXPECT_EQ(Value::TypeInteger, root->type());
-  EXPECT_TRUE(root->asInteger(&int_val));
-  EXPECT_EQ(40, int_val);
-  root = ParseJSON("/**/ 40 /* multi-line\n comment */ // more comment");
-  ASSERT_TRUE(root.get());
-  EXPECT_EQ(Value::TypeInteger, root->type());
-  EXPECT_TRUE(root->asInteger(&int_val));
-  EXPECT_EQ(40, int_val);
+  EXPECT_FALSE(root.get());
   root = ParseJSON("true // comment");
-  ASSERT_TRUE(root.get());
-  EXPECT_EQ(Value::TypeBoolean, root->type());
-  root = ParseJSON("/* comment */\"sample string\"");
-  ASSERT_TRUE(root.get());
-  EXPECT_TRUE(root->asString(&str_val));
-  EXPECT_EQ("sample string", str_val);
-  root = ParseJSON("[1, /* comment, 2 ] */ \n 3]");
-  ASSERT_TRUE(root.get());
-  ListValue* list = ListValue::cast(root.get());
-  ASSERT_TRUE(list);
-  EXPECT_EQ(2u, list->size());
-  tmp_value = list->at(0);
-  ASSERT_TRUE(tmp_value);
-  EXPECT_TRUE(tmp_value->asInteger(&int_val));
-  EXPECT_EQ(1, int_val);
-  tmp_value = list->at(1);
-  ASSERT_TRUE(tmp_value);
-  EXPECT_TRUE(tmp_value->asInteger(&int_val));
-  EXPECT_EQ(3, int_val);
-  root = ParseJSON("[1, /*a*/2, 3]");
-  ASSERT_TRUE(root.get());
-  list = ListValue::cast(root.get());
-  ASSERT_TRUE(list);
-  EXPECT_EQ(3u, list->size());
-  root = ParseJSON("/* comment **/42");
-  ASSERT_TRUE(root.get());
-  EXPECT_EQ(Value::TypeInteger, root->type());
-  EXPECT_TRUE(root->asInteger(&int_val));
-  EXPECT_EQ(42, int_val);
-  root = ParseJSON(
-      "/* comment **/\n"
-      "// */ 43\n"
-      "44");
-  ASSERT_TRUE(root.get());
-  EXPECT_EQ(Value::TypeInteger, root->type());
-  EXPECT_TRUE(root->asInteger(&int_val));
-  EXPECT_EQ(44, int_val);
+  EXPECT_FALSE(root.get());
 
   // Test number formats
   root = ParseJSON("43");
@@ -260,7 +209,7 @@ TEST(ProtocolParserTest, Reading) {
   root = ParseJSON("[true, false, null]");
   ASSERT_TRUE(root.get());
   EXPECT_EQ(Value::TypeArray, root->type());
-  list = ListValue::cast(root.get());
+  ListValue* list = ListValue::cast(root.get());
   ASSERT_TRUE(list);
   EXPECT_EQ(3U, list->size());
 
@@ -463,14 +412,14 @@ TEST(ProtocolParserTest, Reading) {
   EXPECT_EQ(Value::TypeString, root->type());
   EXPECT_TRUE(root->asString(&str_val));
   UChar tmp2[] = {0x20ac, 0x33, 0x2c, 0x31, 0x34};
-  EXPECT_EQ(String(tmp2, 5), str_val);
+  EXPECT_EQ(String(base::span(tmp2)), str_val);
 
   root = ParseJSON("\"\\ud83d\\udca9\\ud83d\\udc6c\"");
   ASSERT_TRUE(root.get());
   EXPECT_EQ(Value::TypeString, root->type());
   EXPECT_TRUE(root->asString(&str_val));
   UChar tmp3[] = {0xd83d, 0xdca9, 0xd83d, 0xdc6c};
-  EXPECT_EQ(String(tmp3, 4), str_val);
+  EXPECT_EQ(String(base::span(tmp3)), str_val);
 
   // Test literal root objects.
   root = ParseJSON("null");
@@ -493,12 +442,12 @@ TEST(ProtocolParserTest, Reading) {
 }
 
 TEST(ProtocolParserTest, InvalidSanity) {
-  const char* const kInvalidJson[] = {
-      "/* test *", "{\"foo\"", "{\"foo\":", "  [", "\"\\u123g\"", "{\n\"eh:\n}",
-      "////",      "*/**/",    "/**/",      "/*/", "//**/"};
+  const auto kInvalidJson = std::to_array<const char*>(
+      {"/* test *", "{\"foo\"", "{\"foo\":", "  [", "\"\\u123g\"",
+       "{\n\"eh:\n}", "////", "*/**/", "/**/", "/*/", "//**/"});
 
-  for (size_t i = 0; i < 11; ++i) {
-    std::unique_ptr<Value> result = ParseJSON(kInvalidJson[i]);
+  for (const auto* invalid_json : kInvalidJson) {
+    std::unique_ptr<Value> result = ParseJSON(invalid_json);
     EXPECT_FALSE(result.get());
   }
 }

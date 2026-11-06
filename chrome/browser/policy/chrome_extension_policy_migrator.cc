@@ -1,8 +1,10 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/policy/chrome_extension_policy_migrator.h"
+
+#include <algorithm>
 
 #include "base/logging.h"
 #include "components/strings/grit/components_strings.h"
@@ -17,9 +19,8 @@ void ChromeExtensionPolicyMigrator::CopyPoliciesIfUnset(
   // HashedExtensionId gives an all-uppercase output, so make sure the input is
   // all uppercase.
   std::string hashed_extension_id_uppercase = hashed_extension_id;
-  std::transform(hashed_extension_id_uppercase.begin(),
-                 hashed_extension_id_uppercase.end(),
-                 hashed_extension_id_uppercase.begin(), ::toupper);
+  std::ranges::transform(hashed_extension_id_uppercase,
+                         hashed_extension_id_uppercase.begin(), ::toupper);
 
   // Look for an extension with this hash.
   PolicyMap* extension_map = nullptr;

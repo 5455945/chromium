@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -29,11 +29,12 @@
 
 #include "base/compiler_specific.h"
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/tick_clock.h"
 #include "base/time/time.h"
 #include "media/audio/audio_io.h"
@@ -50,17 +51,19 @@ class MEDIA_EXPORT AlsaPcmOutputStream : public AudioOutputStream {
  public:
   // String for the generic "default" ALSA device that has the highest
   // compatibility and chance of working.
-  static const char kDefaultDevice[];
+  static constexpr char kDefaultDevice[] = "default";
 
   // Pass this to the AlsaPcmOutputStream if you want to attempt auto-selection
   // of the audio device.
-  static const char kAutoSelectDevice[];
+  static constexpr char kAutoSelectDevice[] = "";
 
   // Prefix for device names to enable ALSA library resampling.
-  static const char kPlugPrefix[];
+  static constexpr char kPlugPrefix[] = "plug:";
 
   // The minimum latency that is accepted by the device.
-  static const uint32_t kMinLatencyMicros;
+  // We use 40ms as our minimum required latency. If it is needed, we may be
+  // able to get it down to 20ms.
+  static constexpr uint32_t kMinLatencyMicros = 40 * 1000;
 
   // Create a PCM Output stream for the ALSA device identified by
   // |device_name|.  The AlsaPcmOutputStream uses |wrapper| to communicate with
@@ -73,6 +76,9 @@ class MEDIA_EXPORT AlsaPcmOutputStream : public AudioOutputStream {
                       const AudioParameters& params,
                       AlsaWrapper* wrapper,
                       AudioManagerBase* manager);
+
+  AlsaPcmOutputStream(const AlsaPcmOutputStream&) = delete;
+  AlsaPcmOutputStream& operator=(const AlsaPcmOutputStream&) = delete;
 
   ~AlsaPcmOutputStream() override;
 
@@ -151,7 +157,7 @@ class MEDIA_EXPORT AlsaPcmOutputStream : public AudioOutputStream {
   //
   // TODO(ajwong): This is necessary because the ownership semantics for the
   // |source_callback_| object are incorrect in AudioRenderHost. The callback
-  // is passed into the output stream, but ownership is not transfered which
+  // is passed into the output stream, but ownership is not transferred which
   // requires a synchronization on access of the |source_callback_| to avoid
   // using a deleted callback.
   int RunDataCallback(base::TimeDelta delay,
@@ -178,32 +184,32 @@ class MEDIA_EXPORT AlsaPcmOutputStream : public AudioOutputStream {
   uint32_t packet_size_;
   base::TimeDelta latency_;
   uint32_t bytes_per_output_frame_;
-  uint32_t alsa_buffer_frames_;
+  uint32_t alsa_buffer_frames_ = 0;
 
   // Flag indicating the code should stop reading from the data source or
   // writing to the ALSA device.  This is set because the device has entered
   // an unrecoverable error state, or the ClosedTask() has executed.
-  bool stop_stream_;
+  bool stop_stream_ = false;
 
   // Wrapper class to invoke all the ALSA functions.
-  AlsaWrapper* wrapper_;
+  raw_ptr<AlsaWrapper> wrapper_;
 
   // Audio manager that created us.  Used to report that we've been closed.
-  AudioManagerBase* manager_;
+  const raw_ref<AudioManagerBase> manager_;
 
   // Task runner to use for polling.
   const scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
 
   // Handle to the actual PCM playback device.
-  snd_pcm_t* playback_handle_;
+  raw_ptr<snd_pcm_t> playback_handle_ = nullptr;
 
   std::unique_ptr<SeekableBuffer> buffer_;
   uint32_t frames_per_packet_;
 
-  InternalState state_;
-  float volume_;  // Volume level from 0.0 to 1.0.
+  InternalState state_ = kCreated;
+  float volume_ = 1.0f;  // Volume level from 0.0 to 1.0.
 
-  AudioSourceCallback* source_callback_;
+  raw_ptr<AudioSourceCallback> source_callback_ = nullptr;
 
   // Container for retrieving data from AudioSourceCallback::OnMoreData().
   std::unique_ptr<AudioBus> audio_bus_;
@@ -212,7 +218,7 @@ class MEDIA_EXPORT AlsaPcmOutputStream : public AudioOutputStream {
   std::unique_ptr<ChannelMixer> channel_mixer_;
   std::unique_ptr<AudioBus> mixed_audio_bus_;
 
-  const base::TickClock* tick_clock_;
+  raw_ptr<const base::TickClock> tick_clock_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 
@@ -220,8 +226,6 @@ class MEDIA_EXPORT AlsaPcmOutputStream : public AudioOutputStream {
   // bound by its lifetime.
   // NOTE: Weak pointers must be invalidated before all other member variables.
   base::WeakPtrFactory<AlsaPcmOutputStream> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(AlsaPcmOutputStream);
 };
 
 MEDIA_EXPORT std::ostream& operator<<(std::ostream& os,

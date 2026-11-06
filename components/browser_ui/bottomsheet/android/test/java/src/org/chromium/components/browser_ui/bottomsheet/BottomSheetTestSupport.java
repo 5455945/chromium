@@ -1,43 +1,59 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.browser_ui.bottomsheet;
 
+import android.view.MotionEvent;
+import android.view.ViewGroup;
+
+import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.CallbackHelper;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.SheetState;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.StateChangeReason;
 
 import java.util.concurrent.TimeoutException;
+import java.util.function.Supplier;
 
 /** Utilities to support testing with the {@link BottomSheetController}. */
 public class BottomSheetTestSupport {
     /** A handle to the actual implementation class of the {@link BottomSheetController}. */
     BottomSheetControllerImpl mController;
 
-    /**
-     * @param controller A handle to the public {@link BottomSheetController}.
-     */
+    /** @param controller A handle to the public {@link BottomSheetController}. */
     public BottomSheetTestSupport(BottomSheetController controller) {
         mController = (BottomSheetControllerImpl) controller;
     }
 
-    /** @param isSmallScreen Whether the screen should be considered small for testing. */
+    /**
+     * Sets whether the screen should be considered small for testing.
+     *
+     * @param isSmallScreen Whether the screen should be considered small for testing.
+     */
     public static void setSmallScreen(boolean isSmallScreen) {
-        BottomSheet.setSmallScreenForTesting(isSmallScreen);
+        BottomSheetCoordinator.setSmallScreenForTesting(isSmallScreen);
     }
 
-    /** @see {@link ManagedBottomSheetController#suppressSheet(int)} */
+    /**
+     * See {@link ManagedBottomSheetController#suppressSheet(int)}.
+     *
+     * @param reason The reason the bottom sheet is being suppressed.
+     */
     public int suppressSheet(@StateChangeReason int reason) {
         return mController.suppressSheet(reason);
     }
 
-    /** @see {@link ManagedBottomSheetController#unsuppressSheet(int)} */
+    /**
+     * See {@link ManagedBottomSheetController#unsuppressSheet(int)}.
+     *
+     * @param token The token used to suppress the bottom sheet.
+     */
     public void unsuppressSheet(int token) {
         mController.unsuppressSheet(token);
     }
 
-    /** @see {@link ManagedBottomSheetController#handleBackPress()} */
+    /** See {@link ManagedBottomSheetController#handleBackPress()}. */
     public boolean handleBackPress() {
         return mController.handleBackPress();
     }
@@ -47,30 +63,63 @@ public class BottomSheetTestSupport {
         if (getBottomSheet() != null) mController.endAnimationsForTesting();
     }
 
-    /** @see {@link BottomSheet#setSheetOffsetFromBottom(float, int)} */
+    /**
+     * See {@link BottomSheetCoordinator#setSheetOffsetFromBottom(float, int)}.
+     *
+     * @param offset The offset from the bottom in pixels.
+     * @param reason The reason the sheet offset is being set.
+     */
     public void setSheetOffsetFromBottom(float offset, @StateChangeReason int reason) {
         getBottomSheet().setSheetOffsetFromBottom(offset, reason);
     }
 
-    /** @see {@link BottomSheet#getFullRatio()} */
+    public void setBottomMargin(int offset) {
+        getBottomSheet().setBottomMargin(offset);
+    }
+
+    /** See {@link BottomSheetCoordinator#getMaxOffsetPx()}. */
+    public float getMaxOffsetPx() {
+        return getBottomSheet().getMaxOffsetPx();
+    }
+
+    /** See {@link BottomSheetCoordinator#getCurrentOffsetPx()}. */
+    public float getCurrentOffsetPx() {
+        return getBottomSheet().getCurrentOffsetPx();
+    }
+
+    /** See {@link BottomSheetCoordinator#getFullRatio()}. */
     public float getFullRatio() {
         return getBottomSheet().getFullRatio();
     }
 
-    /** @see {@link BottomSheet#getHiddenRatio()} */
+    /** See {@link BottomSheetCoordinator#getHiddenRatio()}. */
     public float getHiddenRatio() {
         return getBottomSheet().getHiddenRatio();
     }
 
-    /** @see {@link BottomSheet#getOpeningState()} */
+    /** See {@link BottomSheetCoordinator#getOpeningState()}. */
     @SheetState
     public int getOpeningState() {
         return getBottomSheet().getOpeningState();
     }
 
-    /** @see {@link BottomSheet#showContent(BottomSheetContent)}} */
+    /**
+     * See {@link BottomSheetCoordinator#showContent(BottomSheetContent)}.
+     *
+     * @param content The content to show in the bottom sheet.
+     */
     public void showContent(BottomSheetContent content) {
         getBottomSheet().showContent(content);
+    }
+
+    /**
+     * See {@link BottomSheetCoordinator#shouldGestureMoveSheet()}.
+     *
+     * @param initialEvent The initial motion event of the gesture.
+     * @param currentEvent The current motion event of the gesture.
+     */
+    public boolean shouldGestureMoveSheet(MotionEvent initialEvent, MotionEvent currentEvent) {
+        return getBottomSheet().shouldGestureMoveSheet(initialEvent, currentEvent);
     }
 
     /**
@@ -83,9 +132,19 @@ public class BottomSheetTestSupport {
     }
 
     /**
+     * Force triggering `onSheetStateChanged` events.
+     *
+     * @param state The state the sheet should be in.
+     */
+    public void setInternalCurrentState(@SheetState int state) {
+        getBottomSheet().setInternalCurrentState(state, StateChangeReason.NONE);
+    }
+
+    /**
      * WARNING: This destroys the internal sheet state. Only use in tests and only use once!
      *
-     * To simulate scrolling, this method puts the sheet in a permanent scrolling state.
+     * <p>To simulate scrolling, this method puts the sheet in a permanent scrolling state.
+     *
      * @return The target state of the bottom sheet (to check thresholds).
      */
     @SheetState
@@ -98,46 +157,112 @@ public class BottomSheetTestSupport {
         mController.forceDismissAllContent();
     }
 
-    /** @return The bottom sheet view. */
-    private BottomSheet getBottomSheet() {
-        return (BottomSheet) mController.getBottomSheetViewForTesting();
+    public void forceClickOutsideTheSheet() {
+        getBottomSheet().setSheetState(SheetState.HIDDEN, false, StateChangeReason.TAP_SCRIM);
     }
 
-    /**
-     * @return Whether has any token to suppress the bottom sheet.
-     */
+    /** Returns the bottom sheet coordinator. */
+    private BottomSheetCoordinator getBottomSheet() {
+        return mController.getBottomSheetForTesting();
+    }
+
+    /** Returns the container for the bottom sheet. */
+    public ViewGroup getSheetContainer() {
+        return mController.getBottomSheetContainerForTesting();
+    }
+
+    /** Returns whether has any token to suppress the bottom sheet. */
     public boolean hasSuppressionTokens() {
-        return mController.hasSuppressionTokensForTesting();
+        return ThreadUtils.runOnUiThreadBlocking(
+                () -> mController.hasSuppressionTokensForTesting());
+    }
+
+    public void setEdgeToEdgeBottomInsetSupplier(Supplier<Integer> edgeToEdgeBottomInsetSupplier) {
+        getBottomSheet().setEdgeToEdgeBottomInsetSupplierForTesting(edgeToEdgeBottomInsetSupplier);
     }
 
     /**
      * Wait for the bottom sheet to enter the specified state. If the sheet is already in the
      * specified state, this method returns immediately.
+     *
      * @param controller The controller for the bottom sheet.
      * @param state The state to wait for.
      */
     public static void waitForState(BottomSheetController controller, @SheetState int state) {
-        if (controller.getSheetState() == state) return;
         CallbackHelper stateChangeHelper = new CallbackHelper();
-        BottomSheetObserver observer = new EmptyBottomSheetObserver() {
-            @Override
-            public void onSheetStateChanged(int newState) {
-                if (state == newState) stateChangeHelper.notifyCalled();
-            }
-        };
-        controller.addObserver(observer);
+        final BottomSheetObserver observer =
+                new BottomSheetObserver() {
+                    @Override
+                    public void onSheetStateChanged(int newState, int reason) {
+                        if (state == newState) stateChangeHelper.notifyCalled();
+                    }
+                };
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    if (controller.getSheetState() == state) {
+                        stateChangeHelper.notifyCalled();
+                    } else {
+                        controller.addObserver(observer);
+                    }
+                });
+
         try {
-            stateChangeHelper.waitForFirst();
+            stateChangeHelper.waitForOnly();
         } catch (TimeoutException ex) {
             assert false : "Bottom sheet state never changed to " + sheetStateToString(state);
         }
-        controller.removeObserver(observer);
+
+        ThreadUtils.runOnUiThreadBlocking(() -> controller.removeObserver(observer));
+    }
+
+    /**
+     * Wait for the bottom sheet to enter the half or full state. If the sheet is already in either
+     * state, this method returns immediately.
+     *
+     * @param controller The controller for the bottom sheet.
+     */
+    public static void waitForOpen(BottomSheetController controller) {
+        CallbackHelper stateChangeHelper = new CallbackHelper();
+
+        final BottomSheetObserver observer =
+                new BottomSheetObserver() {
+                    @Override
+                    public void onSheetStateChanged(int newState, int reason) {
+                        if (newState == BottomSheetController.SheetState.HALF
+                                || newState == SheetState.FULL) {
+                            stateChangeHelper.notifyCalled();
+                        }
+                    }
+                };
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    if (controller.getSheetState() == BottomSheetController.SheetState.HALF
+                            || controller.getSheetState()
+                                    == BottomSheetController.SheetState.FULL) {
+                        stateChangeHelper.notifyCalled();
+                    } else {
+                        controller.addObserver(observer);
+                    }
+                });
+
+        try {
+            stateChangeHelper.waitForOnly();
+        } catch (TimeoutException ex) {
+            assert false
+                    : "Bottom sheet state never half or full. Current State: "
+                            + sheetStateToString(controller.getSheetState());
+        }
+
+        ThreadUtils.runOnUiThreadBlocking(() -> controller.removeObserver(observer));
     }
 
     /**
      * Wait for the specified content to be shown. If the content is already showing this method
      * returns immediately. If the sheet is suppressed when this method is called, the expected
      * content change is to null.
+     *
      * @param controller The controller for the bottom sheet.
      * @param content The content to wait for.
      */
@@ -152,17 +277,18 @@ public class BottomSheetTestSupport {
         }
 
         CallbackHelper contentChangeHelper = new CallbackHelper();
-        BottomSheetObserver observer = new EmptyBottomSheetObserver() {
-            @Override
-            public void onSheetContentChanged(BottomSheetContent newContent) {
-                if ((contentShouldBeNull && newContent == null) || content == newContent) {
-                    contentChangeHelper.notifyCalled();
-                }
-            }
-        };
+        BottomSheetObserver observer =
+                new BottomSheetObserver() {
+                    @Override
+                    public void onSheetContentChanged(@Nullable BottomSheetContent newContent) {
+                        if ((contentShouldBeNull && newContent == null) || content == newContent) {
+                            contentChangeHelper.notifyCalled();
+                        }
+                    }
+                };
         controller.addObserver(observer);
         try {
-            contentChangeHelper.waitForFirst();
+            contentChangeHelper.waitForOnly();
         } catch (TimeoutException ex) {
             assert false : "Bottom sheet content never changed!";
         }

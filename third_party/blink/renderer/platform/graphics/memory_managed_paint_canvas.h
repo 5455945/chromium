@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,14 +17,17 @@ namespace blink {
 // drawing methods of PaintCanvas and keeps track of how much memory is
 // being pinned between flushes. This allows the rendering context to flush if
 // too much memory is used.
+
 class PLATFORM_EXPORT MemoryManagedPaintCanvas final
-    : public cc::RecordPaintCanvas {
+    : public cc::InspectableRecordPaintCanvas {
  public:
-  MemoryManagedPaintCanvas(cc::DisplayItemList* list,
-                           const SkRect& bounds,
-                           base::RepeatingClosure set_needs_flush_callback);
+  explicit MemoryManagedPaintCanvas(const gfx::Size& size);
   explicit MemoryManagedPaintCanvas(const cc::RecordPaintCanvas&) = delete;
   ~MemoryManagedPaintCanvas() override;
+
+  std::unique_ptr<MemoryManagedPaintCanvas> CreateChildCanvas();
+
+  cc::PaintRecord ReleaseAsRecord() override;
 
   void drawImage(const cc::PaintImage& image,
                  SkScalar left,
@@ -39,20 +42,23 @@ class PLATFORM_EXPORT MemoryManagedPaintCanvas final
                      SkCanvas::SrcRectConstraint constraint) override;
 
   bool IsCachingImage(const cc::PaintImage::ContentId content_id) const;
+  size_t ImageBytesUsed() const { return image_bytes_used_; }
 
  private:
+  // Creates a child canvas that has the same transform matrix and size as
+  // `parent`. `CreateChildCanvasTag` is used to differentiate this from a copy
+  // constructor.
+  MemoryManagedPaintCanvas(CreateChildCanvasTag,
+                           const MemoryManagedPaintCanvas& parent);
+
   void UpdateMemoryUsage(const cc::PaintImage& image);
 
   HashSet<cc::PaintImage::ContentId,
-          DefaultHash<cc::PaintImage::ContentId>::Hash,
-          WTF::UnsignedWithZeroKeyHashTraits<cc::PaintImage::ContentId>>
+          IntWithZeroKeyHashTraits<cc::PaintImage::ContentId>>
       cached_image_ids_;
-  uint64_t total_stored_image_memory_ = 0;
 
-  base::RepeatingClosure set_needs_flush_callback_;
-
-  // The same value as is used in content::WebGraphicsConext3DProviderImpl.
-  static constexpr uint64_t kMaxPinnedMemory = 64 * 1024 * 1024;
+  // Total size of images stored in this recording.
+  size_t image_bytes_used_ = 0;
 };
 
 }  // namespace blink

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,26 +7,29 @@
 
 #include "ash/system/model/locale_model.h"
 #include "ash/system/tray/tray_item_view.h"
-#include "base/macros.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 
 namespace ash {
 
 // The current locale view in UnifiedSystemTray button. The view shows the
 // abbreviation of the current locale (e.g. "DA").
 class CurrentLocaleView : public TrayItemView, public LocaleModel::Observer {
+  METADATA_HEADER(CurrentLocaleView, TrayItemView)
+
  public:
   explicit CurrentLocaleView(Shelf* shelf);
+
+  CurrentLocaleView(const CurrentLocaleView&) = delete;
+  CurrentLocaleView& operator=(const CurrentLocaleView&) = delete;
+
   ~CurrentLocaleView() override;
 
   // LocaleModel::Observer:
   void OnLocaleListSet() override;
 
   // views::TrayItemView:
-  const char* GetClassName() const override;
   void HandleLocaleChange() override;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(CurrentLocaleView);
+  void UpdateLabelOrImageViewColor(bool active) override;
 };
 
 }  // namespace ash

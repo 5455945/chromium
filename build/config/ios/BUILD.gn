@@ -1,28 +1,17 @@
-# Copyright 2014 The Chromium Authors. All rights reserved.
+# Copyright 2014 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//build/buildflag_header.gni")
+import("//build/config/apple/arch.gni")
+import("//build/config/apple/mobile_config.gni")
+import("//build/config/ios/config.gni")
 import("//build/config/ios/ios_sdk.gni")
-import("//build/toolchain/goma.gni")
+import("//build/toolchain/apple/toolchain.gni")
+import("//build/toolchain/rbe.gni")
+import("//build/toolchain/siso.gni")
 import("//build/toolchain/toolchain.gni")
 import("//build_overrides/build.gni")
-
-declare_args() {
-  # Enabling this option makes clang compile to an intermediate
-  # representation ("bitcode"), and not to native code. This is preferred
-  # when including WebRTC in the apps that will be sent to Apple's App Store
-  # and mandatory for the apps that run on watchOS or tvOS.
-  # The option only works when building with Xcode (use_xcode_clang = true).
-  # Mimicking how Xcode handles it, the production builds (is_debug = false)
-  # get real bitcode sections added, while the debug builds (is_debug = true)
-  # only get bitcode-section "markers" added in them.
-  # NOTE: This option is ignored when building versions for the iOS simulator,
-  # where a part of libvpx is compiled from the assembly code written using
-  # Intel assembly syntax; Yasm / Nasm do not support emitting bitcode parts.
-  # That is not a limitation for now as Xcode mandates the presence of bitcode
-  # only when building bitcode-enabled projects for real devices (ARM CPUs).
-  enable_ios_bitcode = false
-}
 
 # This is included by reference in the //build/config/compiler config that
 # is applied to all targets. It is here to separate out the logic.
@@ -31,15 +20,12 @@ config("compiler") {
   common_flags = []
 
   # CPU architecture.
-  if (current_cpu == "x64") {
-    triplet_cpu = "x86_64"
-  } else if (current_cpu == "x86") {
-    triplet_cpu = "i386"
-  } else if (current_cpu == "arm" || current_cpu == "armv7") {
-    triplet_cpu = "armv7"
-  } else if (current_cpu == "arm64") {
-    triplet_cpu = "arm64"
+  _archs_mapping_os = archs_mapping[current_os]
+  if (defined(_archs_mapping_os[current_cpu])) {
+    _archs_mapping_os_cpu = _archs_mapping_os[current_cpu]
+    triplet_cpu = _archs_mapping_os_cpu.clang_arch
   } else {
+    notneeded([ "_archs_mapping_os" ])
     assert(false, "unsupported cpu: $current_cpu")
   }
 
@@ -55,7 +41,11 @@ config("compiler") {
   }
 
   # OS.
-  triplet_os = "apple-ios"
+  if (target_platform == "iphoneos") {
+    triplet_os = "apple-ios"
+  } else if (target_platform == "tvos") {
+    triplet_os = "apple-tvos"
+  }
 
   # Set target.
   common_flags = [
@@ -66,7 +56,7 @@ config("compiler") {
   # This is here so that all files get recompiled after an Xcode update.
   # (defines are passed via the command line, and build system rebuild things
   # when their commandline changes). Nothing should ever read this define.
-  defines = [ "CR_XCODE_VERSION=$xcode_version" ]
+  defines = [ "CR_XCODE_BUILD=$xcode_build" ]
 
   asmflags = common_flags
   cflags = common_flags
@@ -74,14 +64,39 @@ config("compiler") {
 
   swiftflags += [
     "-swift-version",
-    "5",
+    "6",
   ]
 
-  # Without this, the constructors and destructors of a C++ object inside
-  # an Objective C struct won't be called, which is very bad.
-  cflags_objcc = [ "-fobjc-call-cxx-cdtors" ]
+  cflags_objcc = [
+    # When using -std=c++20 or higher, clang automatically returns true for
+    # `__has_feature(modules)` as it enables cxx modules. This is problematic
+    # because Objective-C code uses this to detect whether `@import` can be
+    # used (this feature is also named modules).
+    #
+    # Since Chromium does not yet enable cxx modules, nor clang modules,
+    # force disable the cxx modules, which cause `__has_features(modules)`
+    # to return false unless clang modules are explicitly enabled.
+    "-Xclang",
+    "-fno-cxx-modules",
+  ]
+  if (ios_chrome_generate_order_file) {
+    cflags_objcc += [ "-fsanitize-coverage=func,trace-pc-guard" ]
+  }
 
   ldflags = common_flags
+
+  # This is on by default in ld64 for our deployment target, but not yet
+  # in ld64.lld. Force it on.
+  if (ios_deployment_target != "11.0" && ios_deployment_target != "12.0" &&
+      ios_deployment_target != "13.0" && ios_deployment_target != "13.4" &&
+      ios_deployment_target != "14.0") {
+    ldflags += [ "-Wl,-fixup_chains" ]
+  }
+
+  if (ios_is_app_extension) {
+    ldflags += [ "-fapplication-extension" ]
+    cflags += [ "-fapplication-extension" ]
+  }
 }
 
 # This is included by reference in the //build/config/compiler:runtime_library
@@ -89,12 +104,12 @@ config("compiler") {
 # that is iOS-only. Please see that target for advice on what should go in
 # :runtime_library vs. :compiler.
 config("runtime_library") {
-  # The variable ios_sdk_path is relative to root_build_dir when using Goma RBE
-  # and system Xcode (since Goma RBE only supports paths relative to source).
+  # The variable ios_sdk_path is relative to root_build_dir when using RBE
+  # and system Xcode (since RBE only supports paths relative to source).
   # Rebase the value in that case since gn does not convert paths in compiler
   # flags (since it is not aware they are paths).
   _sdk_root = ios_sdk_path
-  if (use_system_xcode && use_goma) {
+  if (ios_use_xcode_symlinks) {
     _sdk_root = rebase_path(ios_sdk_path, root_build_dir)
   }
 
@@ -107,6 +122,12 @@ config("runtime_library") {
     _sdk_root,
   ]
 
+  # rustc locates the SDK via `SDKROOT` and falls back to `xcrun`, which is
+  # unavailable on non-Mac hosts.
+  # TODO(https://crbug.com/442128549): see if we can convince upstream rust to
+  # add an -isysroot flag instead.
+  rustenv = [ "SDKROOT=$_sdk_root" ]
+
   if (target_environment == "catalyst") {
     common_flags += [
       "-isystem",
@@ -114,14 +135,13 @@ config("runtime_library") {
       "-iframework",
       "$_sdk_root/System/iOSSupport/System/Library/Frameworks",
     ]
-  }
 
-  if (use_xcode_clang && enable_ios_bitcode && target_environment == "device") {
-    if (is_debug) {
-      common_flags += [ "-fembed-bitcode-marker" ]
-    } else {
-      common_flags += [ "-fembed-bitcode" ]
-    }
+    swiftflags += [
+      "-isystem",
+      "$_sdk_root/System/iOSSupport/usr/include",
+      "-Fsystem",
+      "$_sdk_root/System/iOSSupport/System/Library/Frameworks",
+    ]
   }
 
   asmflags = common_flags
@@ -139,6 +159,17 @@ config("ios_executable_flags") {
   }
 
   ldflags += [ "-Wl,-rpath,@executable_path/Frameworks" ]
+
+  # TODO(crbug.com/424634516): Remove once Apple fixes the issue.
+  if (xcode_version_int >= 2600) {
+    framework_dirs = [ "$ios_sdk_path/System/Library/SubFrameworks" ]
+  }
+  if (xcode_version_int >= 2640 && use_lld) {
+    ldflags += [
+      "-Wl,--ignore-auto-link-option,UIUtilities",
+      "-Wl,--ignore-auto-link-option,CoreAudioTypes",
+    ]
+  }
 }
 
 config("ios_extension_executable_flags") {
@@ -147,7 +178,6 @@ config("ios_extension_executable_flags") {
   ldflags = [
     "-e",
     "_NSExtensionMain",
-    "-fapplication-extension",
   ]
 
   # On "catalyst", the bundle structure is different (uses the same structure
@@ -157,36 +187,64 @@ config("ios_extension_executable_flags") {
   }
 
   ldflags += [ "-Wl,-rpath,@executable_path/../../Frameworks" ]
+
+  # TODO(crbug.com/424634516): Remove once Apple fixes the issue.
+  if (xcode_version_int >= 2600) {
+    framework_dirs = [ "$ios_sdk_path/System/Library/SubFrameworks" ]
+  }
+  if (xcode_version_int >= 2640 && use_lld) {
+    ldflags += [
+      "-Wl,--ignore-auto-link-option,UIUtilities",
+      "-Wl,--ignore-auto-link-option,CoreAudioTypes",
+    ]
+  }
 }
 
 config("ios_dynamic_flags") {
   ldflags = [
     # Always load Objective-C categories and class.
     "-Wl,-ObjC",
-
-    # Uses version 2 of Objective-C ABI.
-    "-Wl,-objc_abi_version,2",
   ]
 
   # The path to the Swift compatibility libraries (required to run code built
   # with version N of the SDK on older version of the OS) is relative to the
-  # toolchains directory and changes with the environment.
-  _swift_compatibility_libs_dir_prefix = "$ios_toolchains_path/usr/lib/swift"
+  # toolchains directory and changes with the environment when using the
+  # system toolchain. When using the hermetic macOS swift toolchain instead,
+  # those libraries are relative to $swift_toolchain_path. On non-macOS hosts,
+  # $swift_toolchain_path holds only Linux host binaries, and the target
+  # libraries stay in $ios_toolchains_path.
+  if (swift_toolchain_path == "" || host_os != "mac") {
+    _swift_compatibility_libs_prefix = ios_toolchains_path
+  } else {
+    _swift_compatibility_libs_prefix = swift_toolchain_path
+  }
+
   if (target_environment == "simulator") {
-    _swift_compatibility_libs_dir =
-        "$_swift_compatibility_libs_dir_prefix/iphonesimulator"
+    _swift_compatibility_libs_suffix = "iphonesimulator"
   } else if (target_environment == "device") {
-    _swift_compatibility_libs_dir =
-        "$_swift_compatibility_libs_dir_prefix/iphoneos"
+    _swift_compatibility_libs_suffix = "iphoneos"
   } else if (target_environment == "catalyst") {
-    _swift_compatibility_libs_dir =
-        "$_swift_compatibility_libs_dir_prefix/maccatalyst"
+    # The Swift compatibility libraries have changed location starting with
+    # Xcode 13.0, so check the version of Xcode when deciding which path to
+    # use.
+    if (xcode_version_int >= 1300) {
+      _swift_compatibility_libs_suffix = "macosx"
+    } else {
+      _swift_compatibility_libs_suffix = "maccatalyst"
+    }
   }
 
   lib_dirs = [
     "$ios_sdk_path/usr/lib/swift",
-    _swift_compatibility_libs_dir,
+    "$_swift_compatibility_libs_prefix/usr/lib/swift/" +
+        "$_swift_compatibility_libs_suffix",
   ]
+
+  # When building for catalyst, some Swift support libraries are in a
+  # different directory which needs to be added to the search path.
+  if (target_environment == "catalyst") {
+    lib_dirs += [ "$ios_sdk_path/System/iOSSupport/usr/lib/swift" ]
+  }
 }
 
 config("ios_shared_library_flags") {
@@ -194,28 +252,133 @@ config("ios_shared_library_flags") {
     "-Wl,-rpath,@executable_path/Frameworks",
     "-Wl,-rpath,@loader_path/Frameworks",
   ]
-}
 
-config("disable_implicit_retain_self_warning") {
-  cflags_objc = [ "-Wno-implicit-retain-self" ]
-  cflags_objcc = cflags_objc
+  # TODO(crbug.com/424634516): Remove once Apple fixes the issue.
+  if (xcode_version_int >= 2600) {
+    framework_dirs = [ "$ios_sdk_path/System/Library/SubFrameworks" ]
+  }
+  if (xcode_version_int >= 2640 && use_lld) {
+    ldflags += [
+      "-Wl,--ignore-auto-link-option,UIUtilities",
+      "-Wl,--ignore-auto-link-option,CoreAudioTypes",
+    ]
+  }
 }
 
 config("xctest_config") {
-  # Use -iframework for XCTest.framework so that the compiler will treat it as a
-  # system framework and ignore warnings in XCTest framework headers.
+  # Add some directories to the system framework search path to make
+  # them available to the compiler while silencing warnings in the
+  # framework headers. This is required for XCTest.
   common_flags = [
     "-iframework",
     rebase_path("$ios_sdk_platform_path/Developer/Library/Frameworks",
                 root_build_dir),
+    "-iframework",
+    rebase_path("$ios_sdk_path/Developer/Library/Frameworks", root_build_dir),
   ]
+  asmflags = common_flags
   cflags = common_flags
   ldflags = common_flags
+  swiftflags = common_flags
 
+  include_dirs = [ "$ios_sdk_platform_path/Developer/usr/lib" ]
+  lib_dirs = [ "$ios_sdk_platform_path/Developer/usr/lib" ]
   frameworks = [
     "Foundation.framework",
     "XCTest.framework",
   ]
+
+  # TODO(crbug.com/424634516): Remove once Apple fixes the issue.
+  if (xcode_version_int >= 2600) {
+    framework_dirs = [ "$ios_sdk_path/System/Library/SubFrameworks" ]
+  }
+  if (xcode_version_int >= 2640) {
+    if (use_lld) {
+      ldflags += [
+        "-Wl,--ignore-auto-link-option,UIUtilities",
+        "-Wl,--ignore-auto-link-option,CoreAudioTypes",
+      ]
+    }
+    ldflags += [ "-Wl,-needed-lXCTestSwiftSupport,-lXCTestSwiftSupport" ]
+  }
+
+  # Starting with Xcode 27, Apple supports a "Deployment Target" of iOS 15.0 for
+  # binaries, but test runtime binaries (XCTest.framework,
+  # libXCTestSwiftSupport, etc.) have a minimum OS version of iOS 17.0 ("device
+  # support" of iOS 17+).
+  #
+  # In Chromium, ios_deployment_target is 18.0+, but //ios/web_view targets
+  # build with an overridden ios_deployment_target of 15.0 for embedders.
+  # When linking XCTest-based test targets (e.g. ios_web_view_inttests),
+  # ld64.lld fails because the XCTest framework version (17.0.0) is newer than
+  # the target minimum (15.0.0).
+  #
+  # This workaround overrides the linker -target flag to 17.0 specifically
+  # for XCTest targets when building with Xcode 27+ and targeting iOS 15 or 16.
+  # Darwin linkers allow linking iOS 15 static libraries and object files into
+  # an iOS 17 test binary. Keeping compilation at the base deployment target
+  # avoids Clang C++ module mismatches (-Wmodule-file-config-mismatch).
+  #
+  # TODO(crbug.com/558255805): Remove this workaround when //ios/web_view bumps
+  # its minimum deployment target to iOS 17.0+.
+  if (xcode_version_int >= 2700 &&
+      (ios_deployment_target == "15.0" || ios_deployment_target == "16.0")) {
+    _archs_mapping_os = archs_mapping[current_os]
+    _archs_mapping_os_cpu = _archs_mapping_os[current_cpu]
+    _triplet_cpu = _archs_mapping_os_cpu.clang_arch
+
+    if (target_environment == "simulator") {
+      _triplet_environment = "-simulator"
+    } else if (target_environment == "device") {
+      _triplet_environment = ""
+    } else if (target_environment == "catalyst") {
+      _triplet_environment = "-macabi"
+    }
+
+    if (target_platform == "iphoneos") {
+      _triplet_os = "apple-ios"
+    } else if (target_platform == "tvos") {
+      _triplet_os = "apple-tvos"
+    }
+    _xctest_target_flags = [
+      "-target",
+      "${_triplet_cpu}-${_triplet_os}17.0${_triplet_environment}",
+    ]
+    ldflags += _xctest_target_flags
+  }
+}
+
+if (enable_swift_cxx_interop) {
+  config("swift_cxx_interop") {
+    swiftflags = [
+      "-cxx-interoperability-mode=default",
+
+      # Add a path to the bridging code. This is used for <swift/bridging>.
+      "-I",
+      rebase_path("$ios_toolchains_path/usr/include", root_build_dir),
+      "-Xcc=-fmodule-map-file=" + rebase_path(
+              "$ios_toolchains_path/usr/include/swift/bridging.modulemap",
+              root_build_dir),
+    ]
+
+    # TODO(crbug.com/451945291): Move the following compiler flags to
+    # build/config/compiler/BUILD.gn when Swift/C++ interop is enabled by
+    # default. The '-std=c++' flag is not allowed with 'Objective-C'.
+    if (use_cxx23) {
+      swiftflags += [ "-Xcc=-std=c++23" ]
+    } else {
+      swiftflags += [ "-Xcc=-std=c++20" ]
+    }
+  }
+}
+
+config("swift_cxx_interop_includes") {
+  if (swift_toolchain_path == "" || host_os != "mac") {
+    _swift_compatibility_libs_prefix = ios_toolchains_path
+  } else {
+    _swift_compatibility_libs_prefix = swift_toolchain_path
+  }
+  include_dirs = [ "${_swift_compatibility_libs_prefix}/usr/lib/swift" ]
 }
 
 group("xctest") {
@@ -225,7 +388,7 @@ group("xctest") {
 _xctrunner_path =
     "$ios_sdk_platform_path/Developer/Library/Xcode/Agents/XCTRunner.app"
 
-# When building with Goma RBE, $ios_sdk_platform_path corresponds to a symlink
+# When building with RBE, $ios_sdk_platform_path corresponds to a symlink
 # below $root_build_dir that points to the real SDK to use. Because the files
 # are below $root_build_dir, it is not possible to list them as a target input
 # without gn complaining (as it can't find a target creating those files).
@@ -237,7 +400,7 @@ _xctrunner_path =
 #
 # To workaround this, add a target that pretends to create those files
 # (but does nothing). See https://crbug.com/1061487 for why this is needed.
-if (use_system_xcode && use_goma) {
+if (ios_use_xcode_symlinks) {
   action("copy_xctrunner_app") {
     testonly = true
     script = "//build/noop.py"
@@ -266,7 +429,28 @@ action("xctest_runner_without_arm64e") {
     xcode_version,
   ]
 
-  if (use_system_xcode && use_goma) {
-    deps = [ ":copy_xctrunner_app" ]
+  # When running under ASan, the ASan runtime library must be packaged alongside
+  # the test runner binary.
+  deps = [ "//build/config/sanitizers:deps" ]
+  if (ios_use_xcode_symlinks) {
+    deps += [ ":copy_xctrunner_app" ]
   }
+}
+
+# Generates build flags to allow code to detect whether the target is an App
+# Extension (which cannot access APIs like UIApplication.sharedApplication).
+buildflag_header("buildflags") {
+  header = "buildflags.h"
+  flags = [ "IOS_IS_APP_EXTENSION=$ios_is_app_extension" ]
+}
+
+# Generates build flags to allow code to detect specific compilation contexts:
+# - Whether Swift/C++ interoperability is enabled.
+# - Whether Swift 6.3 (XCode 27.*) is supported.
+buildflag_header("swift_buildflags") {
+  header = "swift_buildflags.h"
+  flags = [
+    "ENABLE_SWIFT_CXX_INTEROP=$enable_swift_cxx_interop",
+    "HAS_SWIFT_6_3_SUPPORT=$has_swift_6_3_support",
+  ]
 }

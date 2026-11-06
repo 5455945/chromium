@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,29 +6,41 @@
 
 #include <stddef.h>
 
+#include <array>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <utility>
 
-#include "base/cxx17_backports.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/json/json_string_value_serializer.h"
+#include "base/json/json_reader.h"
 #include "base/path_service.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/utf_ostream_operators.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/values_test_util.h"
+#include "base/types/optional_ref.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "extensions/common/constants.h"
+#include "extensions/common/error_utils.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_paths.h"
 #include "extensions/common/manifest.h"
 #include "extensions/common/manifest_constants.h"
+#include "extensions/common/manifest_handlers/description_info.h"
 #include "extensions/strings/grit/extensions_strings.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "url/gurl.h"
+
+#if BUILDFLAG(IS_WIN)
+#include "base/test/file_path_reparse_point_win.h"
+#endif
 
 using extensions::mojom::ManifestLocation;
 
@@ -36,23 +48,24 @@ namespace extensions {
 
 namespace {
 
-const char manifest_content[] =
-    "{\n"
-    "  \"name\": \"Underscore folder test\",\n"
-    "  \"version\": \"1.0\",\n"
-    "  \"manifest_version\": 2\n"
-    "}\n";
+constexpr char kManifestContent[] =
+    R"({
+         "name": "Underscore folder test",
+         "version": "1.0",
+         "manifest_version": 3
+       })";
+constexpr char kExtensionId[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 const char kCustomManifest[] = "custom_manifest.json";
 const base::FilePath::CharType kCustomManifestFilename[] =
     FILE_PATH_LITERAL("custom_manifest.json");
 
 scoped_refptr<Extension> LoadExtensionManifest(
-    const base::DictionaryValue& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& manifest_dir,
     ManifestLocation location,
     int extra_flags,
-    std::string* error) {
+    std::u16string* error) {
   scoped_refptr<Extension> extension =
       Extension::Create(manifest_dir, location, manifest, extra_flags, error);
   return extension;
@@ -63,15 +76,14 @@ scoped_refptr<Extension> LoadExtensionManifest(
     const base::FilePath& manifest_dir,
     ManifestLocation location,
     int extra_flags,
-    std::string* error) {
-  JSONStringValueDeserializer deserializer(manifest_value);
-  std::unique_ptr<base::Value> result =
-      deserializer.Deserialize(nullptr, error);
-  if (!result.get())
+    std::u16string* error) {
+  std::optional<base::DictValue> result = base::JSONReader::ReadDict(
+      manifest_value, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!result) {
     return nullptr;
-  CHECK_EQ(base::Value::Type::DICTIONARY, result->type());
-  return LoadExtensionManifest(*base::DictionaryValue::From(std::move(result)),
-                               manifest_dir, location, extra_flags, error);
+  }
+  return LoadExtensionManifest(std::move(*result), manifest_dir, location,
+                               extra_flags, error);
 }
 
 void RunUnderscoreDirectoriesTest(
@@ -82,14 +94,14 @@ void RunUnderscoreDirectoriesTest(
   base::FilePath ext_path = temp.GetPath();
   ASSERT_TRUE(base::CreateDirectory(ext_path));
 
-  for (const auto& dir : underscore_directories)
+  for (const auto& dir : underscore_directories) {
     ASSERT_TRUE(base::CreateDirectory(ext_path.AppendASCII(dir)));
+  }
 
-  ASSERT_EQ(static_cast<int>(strlen(manifest_content)),
-            base::WriteFile(ext_path.AppendASCII("manifest.json"),
-                            manifest_content, strlen(manifest_content)));
+  ASSERT_TRUE(
+      base::WriteFile(ext_path.AppendASCII("manifest.json"), kManifestContent));
 
-  std::string error;
+  std::u16string error;
   scoped_refptr<Extension> extension = file_util::LoadExtension(
       ext_path, ManifestLocation::kUnpacked, Extension::NO_FLAGS, &error);
   ASSERT_TRUE(extension) << error;
@@ -105,8 +117,9 @@ void RunUnderscoreDirectoriesTest(
         "Cannot load extension with file or directory name %s. Filenames "
         "starting with \"_\" are reserved for use by the system.",
         dir.c_str());
-    if (expected_warning == warnings[0].message)
+    if (expected_warning == warnings[0].message) {
       warning_matched = true;
+    }
   }
 
   EXPECT_TRUE(warning_matched)
@@ -114,18 +127,114 @@ void RunUnderscoreDirectoriesTest(
       << base::JoinString(underscore_directories, ",") << " directories.";
 }
 
+struct UninstallTestData {
+  std::optional<const base::FilePath> profile_dir;
+  std::optional<const base::FilePath> extensions_install_dir;
+  std::optional<const base::FilePath> extension_dir_to_delete;
+  bool extension_directory_deleted;
+};
+
+const std::vector<UninstallTestData>& GetTestData() {
+  // TODO(crbug.com/40875193): Condense/enhance with testing::Combine to try all
+  // permutations of known bad values.
+  static const auto* test_data = new std::vector<UninstallTestData>{
+      // Valid directory.
+      {/*profile_dir=*/std::nullopt,
+       /*extensions_install_dir=*/std::nullopt,
+       /*extension_dir_to_delete=*/std::nullopt,
+       /*extension_directory_deleted=*/true},
+
+      // Empty profile directory.
+      {/*profile_dir=*/base::FilePath(),
+       /*extensions_install_dir=*/std::nullopt,
+       /*extension_dir_to_delete=*/std::nullopt,
+       /*extension_directory_deleted=*/false},
+      // Empty extensions directory.
+      {/*profile_dir=*/std::nullopt,
+       /*extensions_install_dir=*/base::FilePath(),
+       /*extension_dir_to_delete=*/std::nullopt,
+       /*extension_directory_deleted=*/false},
+      // Empty extensions directory to delete.
+      {/*profile_dir=*/std::nullopt,
+       /*extensions_install_dir=*/std::nullopt, base::FilePath(),
+       /*extension_directory_deleted=*/false},
+
+      // Nonabsolute profile directory.
+      {/*profile_dir=*/base::FilePath(FILE_PATH_LITERAL("not/absolutepath")),
+       /*extensions_install_dir=*/std::nullopt,
+       /*extension_dir_to_delete=*/std::nullopt,
+       /*extension_directory_deleted=*/false},
+      // Nonabsolute extensions directory.
+      {/*profile_dir=*/std::nullopt,
+       /*extensions_install_dir=*/
+       base::FilePath(FILE_PATH_LITERAL("not/absolutepath")),
+       /*extension_dir_to_delete=*/std::nullopt,
+       /*extension_directory_deleted=*/false},
+      // Nonabsolute extensions directory to delete.
+      {/*profile_dir=*/std::nullopt,
+       /*extensions_install_dir=*/std::nullopt,
+       /*extension_dir_to_delete=*/
+       base::FilePath(FILE_PATH_LITERAL("not/absolutepath")),
+       /*extension_directory_deleted=*/false},
+
+      // Dangerous extensions directory to delete values.
+      {/*profile_dir=*/std::nullopt,
+       /*extensions_install_dir=*/std::nullopt,
+       /*extension_dir_to_delete=*/base::FilePath(FILE_PATH_LITERAL(".")),
+       /*extension_directory_deleted=*/false},
+      {/*profile_dir=*/std::nullopt,
+       /*extensions_install_dir=*/std::nullopt,
+       /*extension_dir_to_delete=*/base::FilePath(FILE_PATH_LITERAL("..")),
+       /*extension_directory_deleted=*/false},
+      {/*profile_dir=*/std::nullopt,
+       /*extensions_install_dir=*/std::nullopt,
+       /*extension_dir_to_delete=*/base::FilePath(FILE_PATH_LITERAL("/")),
+       /*extension_directory_deleted=*/false},
+
+      // Dangerous profile directory values.
+      {/*profile_dir=*/base::FilePath(FILE_PATH_LITERAL(".")),
+       /*extensions_install_dir=*/std::nullopt,
+       /*extension_dir_to_delete=*/std::nullopt,
+       /*extension_directory_deleted=*/false},
+      {/*profile_dir=*/base::FilePath(FILE_PATH_LITERAL("..")),
+       /*extensions_install_dir=*/std::nullopt,
+       /*extension_dir_to_delete=*/std::nullopt,
+       /*extension_directory_deleted=*/false},
+      {/*profile_dir=*/base::FilePath(FILE_PATH_LITERAL("/")),
+       /*extensions_install_dir=*/std::nullopt,
+       /*extension_dir_to_delete=*/std::nullopt,
+       /*extension_directory_deleted=*/false},
+
+      // Dangerous extensions directory values.
+      {/*profile_dir=*/std::nullopt,
+       /*extensions_install_dir=*/base::FilePath(FILE_PATH_LITERAL(".")),
+       /*extension_dir_to_delete=*/std::nullopt,
+       /*extension_directory_deleted=*/false},
+      {/*profile_dir=*/std::nullopt,
+       /*extensions_install_dir=*/base::FilePath(FILE_PATH_LITERAL("..")),
+       /*extension_dir_to_delete=*/std::nullopt,
+       /*extension_directory_deleted=*/false},
+      {/*profile_dir=*/std::nullopt,
+       /*extensions_install_dir=*/base::FilePath(FILE_PATH_LITERAL("/")),
+       /*extension_dir_to_delete=*/std::nullopt,
+       /*extension_directory_deleted=*/false}};
+
+  return *test_data;
+}
+
 }  // namespace
 
-typedef testing::Test FileUtilTest;
+using FileUtilTest = testing::Test;
 
-TEST_F(FileUtilTest, InstallUninstallGarbageCollect) {
+// Tests that packed extensions have all their versions deleted when the
+// extension is uninstalled.
+TEST_F(FileUtilTest, UninstallRemovesAllPackedExtensionVersions) {
   base::ScopedTempDir temp;
   ASSERT_TRUE(temp.CreateUniqueTempDir());
 
   // Create a source extension.
-  std::string extension_id("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
   std::string version("1.0");
-  base::FilePath src = temp.GetPath().AppendASCII(extension_id);
+  base::FilePath src = temp.GetPath().AppendASCII(kExtensionId);
   ASSERT_TRUE(base::CreateDirectory(src));
 
   base::FilePath extension_content;
@@ -133,15 +242,18 @@ TEST_F(FileUtilTest, InstallUninstallGarbageCollect) {
   ASSERT_TRUE(base::PathExists(extension_content));
 
   // Create a extensions tree.
-  base::FilePath all_extensions = temp.GetPath().AppendASCII("extensions");
-  ASSERT_TRUE(base::CreateDirectory(all_extensions));
+  base::FilePath profile_dir = temp.GetPath().AppendASCII("Default");
+  base::FilePath extensions_dir = profile_dir.AppendASCII("TestExtensions");
+  ASSERT_TRUE(base::CreateDirectory(extensions_dir));
+
+  base::FilePath extensions_dir_to_delete =
+      extensions_dir.AppendASCII(kExtensionId);
 
   // Install in empty directory. Should create parent directories as needed.
   base::FilePath version_1 =
-      file_util::InstallExtension(src, extension_id, version, all_extensions);
-  ASSERT_EQ(
-      version_1.value(),
-      all_extensions.AppendASCII(extension_id).AppendASCII("1.0_0").value());
+      file_util::InstallExtension(src, kExtensionId, version, extensions_dir);
+  EXPECT_EQ(version_1.value(),
+            extensions_dir_to_delete.AppendASCII("1.0_0").value());
   ASSERT_TRUE(base::DirectoryExists(version_1));
   ASSERT_TRUE(base::PathExists(version_1.Append(extension_content.BaseName())));
 
@@ -151,10 +263,9 @@ TEST_F(FileUtilTest, InstallUninstallGarbageCollect) {
   // Install again. Should create a new one with different name.
   ASSERT_TRUE(base::CreateDirectory(src));
   base::FilePath version_2 =
-      file_util::InstallExtension(src, extension_id, version, all_extensions);
-  ASSERT_EQ(
-      version_2.value(),
-      all_extensions.AppendASCII(extension_id).AppendASCII("1.0_1").value());
+      file_util::InstallExtension(src, kExtensionId, version, extensions_dir);
+  EXPECT_EQ(version_2.value(),
+            extensions_dir_to_delete.AppendASCII("1.0_1").value());
   ASSERT_TRUE(base::DirectoryExists(version_2));
 
   // Should have moved the source.
@@ -163,19 +274,162 @@ TEST_F(FileUtilTest, InstallUninstallGarbageCollect) {
   // Install yet again. Should create a new one with a different name.
   ASSERT_TRUE(base::CreateDirectory(src));
   base::FilePath version_3 =
-      file_util::InstallExtension(src, extension_id, version, all_extensions);
-  ASSERT_EQ(
-      version_3.value(),
-      all_extensions.AppendASCII(extension_id).AppendASCII("1.0_2").value());
+      file_util::InstallExtension(src, kExtensionId, version, extensions_dir);
+  EXPECT_EQ(version_3.value(),
+            extensions_dir_to_delete.AppendASCII("1.0_2").value());
   ASSERT_TRUE(base::DirectoryExists(version_3));
 
   // Uninstall. Should remove entire extension subtree.
-  file_util::UninstallExtension(all_extensions, extension_id);
-  ASSERT_FALSE(base::DirectoryExists(version_1.DirName()));
-  ASSERT_FALSE(base::DirectoryExists(version_2.DirName()));
-  ASSERT_FALSE(base::DirectoryExists(version_3.DirName()));
-  ASSERT_TRUE(base::DirectoryExists(all_extensions));
+  file_util::UninstallExtension(profile_dir, extensions_dir,
+                                extensions_dir_to_delete);
+  EXPECT_FALSE(base::DirectoryExists(version_1.DirName()));
+  EXPECT_FALSE(base::DirectoryExists(version_2.DirName()));
+  EXPECT_FALSE(base::DirectoryExists(version_3.DirName()));
+  EXPECT_TRUE(base::DirectoryExists(extensions_dir));
 }
+
+// Verifies that InstallExtension refuses to install an extension whose
+// destination directory is a symlink pointing to a sibling extension
+// directory (https://crbug.com/561892119).
+TEST_F(FileUtilTest, InstallExtensionRejectsSymlinkToSiblingExtension) {
+  base::ScopedTempDir temp;
+  ASSERT_TRUE(temp.CreateUniqueTempDir());
+
+  base::FilePath profile_dir = temp.GetPath().AppendASCII("Default");
+  base::FilePath extensions_dir = profile_dir.AppendASCII("TestExtensions");
+  ASSERT_TRUE(base::CreateDirectory(extensions_dir));
+
+  base::FilePath sibling_dir = extensions_dir.AppendASCII("sibling_dir");
+  ASSERT_TRUE(base::CreateDirectory(sibling_dir));
+
+  base::FilePath target_dir = extensions_dir.AppendASCII(kExtensionId);
+#if BUILDFLAG(IS_POSIX)
+  ASSERT_TRUE(base::CreateSymbolicLink(sibling_dir, target_dir));
+#elif BUILDFLAG(IS_WIN)
+  ASSERT_TRUE(base::CreateDirectory(target_dir));
+  auto reparse_point =
+      base::test::FilePathReparsePoint::Create(target_dir, sibling_dir);
+  ASSERT_TRUE(reparse_point.has_value());
+#endif
+
+  base::FilePath src = temp.GetPath().AppendASCII("src");
+  ASSERT_TRUE(base::CreateDirectory(src));
+  base::FilePath extension_content;
+  ASSERT_TRUE(base::CreateTemporaryFileInDir(src, &extension_content));
+
+  base::FilePath installed_path =
+      file_util::InstallExtension(src, kExtensionId, "1.0", extensions_dir);
+  EXPECT_TRUE(installed_path.empty());
+
+  EXPECT_TRUE(base::IsDirectoryEmpty(sibling_dir));
+  EXPECT_TRUE(base::DirectoryExists(src));
+}
+
+// Verifies that InstallExtension refuses to install an extension whose
+// destination directory is a symlink pointing outside the extensions
+// directory (https://crbug.com/561892119).
+TEST_F(FileUtilTest, InstallExtensionRejectsSymlinkOutsideExtensionsDir) {
+  base::ScopedTempDir temp;
+  ASSERT_TRUE(temp.CreateUniqueTempDir());
+
+  base::FilePath profile_dir = temp.GetPath().AppendASCII("Default");
+  base::FilePath extensions_dir = profile_dir.AppendASCII("TestExtensions");
+  ASSERT_TRUE(base::CreateDirectory(extensions_dir));
+
+  base::FilePath outside_dir = temp.GetPath().AppendASCII("outside");
+  ASSERT_TRUE(base::CreateDirectory(outside_dir));
+
+  base::FilePath target_dir = extensions_dir.AppendASCII(kExtensionId);
+#if BUILDFLAG(IS_POSIX)
+  ASSERT_TRUE(base::CreateSymbolicLink(outside_dir, target_dir));
+#elif BUILDFLAG(IS_WIN)
+  ASSERT_TRUE(base::CreateDirectory(target_dir));
+  auto reparse_point =
+      base::test::FilePathReparsePoint::Create(target_dir, outside_dir);
+  ASSERT_TRUE(reparse_point.has_value());
+#endif
+
+  base::FilePath src = temp.GetPath().AppendASCII("src");
+  ASSERT_TRUE(base::CreateDirectory(src));
+  base::FilePath extension_content;
+  ASSERT_TRUE(base::CreateTemporaryFileInDir(src, &extension_content));
+
+  base::FilePath installed_path =
+      file_util::InstallExtension(src, kExtensionId, "1.0", extensions_dir);
+  EXPECT_TRUE(installed_path.empty());
+
+  EXPECT_TRUE(base::IsDirectoryEmpty(outside_dir));
+  EXPECT_TRUE(base::DirectoryExists(src));
+}
+
+// Verifies that InstallExtension refuses to install an extension when
+// `extensions_dir/Temp` is a symlink pointing outside the expected temp
+// directory (https://crbug.com/561892119).
+TEST_F(FileUtilTest, InstallExtensionRejectsSymlinkTempDir) {
+  base::ScopedTempDir temp;
+  ASSERT_TRUE(temp.CreateUniqueTempDir());
+
+  base::FilePath profile_dir = temp.GetPath().AppendASCII("Default");
+  base::FilePath extensions_dir = profile_dir.AppendASCII("TestExtensions");
+  ASSERT_TRUE(base::CreateDirectory(extensions_dir));
+
+  base::FilePath outside_dir = temp.GetPath().AppendASCII("outside");
+  ASSERT_TRUE(base::CreateDirectory(outside_dir));
+
+  base::FilePath temp_dir =
+      extensions_dir.Append(file_util::kTempDirectoryName);
+#if BUILDFLAG(IS_POSIX)
+  ASSERT_TRUE(base::CreateSymbolicLink(outside_dir, temp_dir));
+#elif BUILDFLAG(IS_WIN)
+  ASSERT_TRUE(base::CreateDirectory(temp_dir));
+  auto reparse_point =
+      base::test::FilePathReparsePoint::Create(temp_dir, outside_dir);
+  ASSERT_TRUE(reparse_point.has_value());
+#endif
+
+  base::FilePath src = temp.GetPath().AppendASCII("src");
+  ASSERT_TRUE(base::CreateDirectory(src));
+  base::FilePath extension_content;
+  ASSERT_TRUE(base::CreateTemporaryFileInDir(src, &extension_content));
+
+  EXPECT_TRUE(file_util::GetInstallTempDir(extensions_dir).empty());
+
+  base::FilePath installed_path =
+      file_util::InstallExtension(src, kExtensionId, "1.0", extensions_dir);
+  EXPECT_TRUE(installed_path.empty());
+
+  EXPECT_TRUE(base::IsDirectoryEmpty(outside_dir));
+  EXPECT_TRUE(base::DirectoryExists(src));
+}
+
+#if BUILDFLAG(IS_POSIX)
+// Verifies that on POSIX, InstallExtension does not fall back to
+// base::CopyDirectory when the final rename() into `version_dir` fails.
+TEST_F(FileUtilTest, InstallExtensionDoesNotFallBackToCopyOnPosix) {
+  base::ScopedTempDir temp;
+  ASSERT_TRUE(temp.CreateUniqueTempDir());
+
+  base::FilePath profile_dir = temp.GetPath().AppendASCII("Default");
+  base::FilePath extensions_dir = profile_dir.AppendASCII("TestExtensions");
+  base::FilePath extension_dir = extensions_dir.AppendASCII(kExtensionId);
+  ASSERT_TRUE(base::CreateDirectory(extension_dir));
+
+  // A dangling symlink at `1.0_0` is picked as `version_dir` (base::PathExists
+  // follows symlinks) and makes the final rename() fail.
+  base::FilePath dangling_version_dir = extension_dir.AppendASCII("1.0_0");
+  ASSERT_TRUE(base::CreateSymbolicLink(temp.GetPath().AppendASCII("missing"),
+                                       dangling_version_dir));
+
+  base::FilePath src = temp.GetPath().AppendASCII("src");
+  ASSERT_TRUE(base::CreateDirectory(src));
+
+  base::FilePath installed_path =
+      file_util::InstallExtension(src, kExtensionId, "1.0", extensions_dir);
+  EXPECT_TRUE(installed_path.empty());
+  EXPECT_TRUE(base::IsLink(dangling_version_dir));
+  EXPECT_FALSE(base::DirectoryExists(dangling_version_dir));
+}
+#endif  // BUILDFLAG(IS_POSIX)
 
 TEST_F(FileUtilTest, LoadExtensionWithMetadataFolder) {
   RunUnderscoreDirectoriesTest({"_metadata"});
@@ -194,11 +448,12 @@ TEST_F(FileUtilTest, LoadExtensionWithValidLocales) {
   ASSERT_TRUE(base::PathService::Get(DIR_TEST_DATA, &install_dir));
   install_dir = install_dir.AppendASCII("extension_with_locales");
 
-  std::string error;
+  std::u16string error;
   scoped_refptr<Extension> extension(file_util::LoadExtension(
       install_dir, ManifestLocation::kUnpacked, Extension::NO_FLAGS, &error));
   ASSERT_TRUE(extension.get() != nullptr);
-  EXPECT_EQ("The first extension that I made.", extension->description());
+  EXPECT_EQ("The first extension that I made.",
+            DescriptionInfo::GetDescription(*extension));
 }
 
 TEST_F(FileUtilTest, LoadExtensionWithGzippedLocalesAllowed) {
@@ -206,11 +461,12 @@ TEST_F(FileUtilTest, LoadExtensionWithGzippedLocalesAllowed) {
   ASSERT_TRUE(base::PathService::Get(DIR_TEST_DATA, &install_dir));
   install_dir = install_dir.AppendASCII("extension_with_gzipped_locales");
 
-  std::string error;
+  std::u16string error;
   scoped_refptr<Extension> extension(file_util::LoadExtension(
       install_dir, ManifestLocation::kComponent, Extension::NO_FLAGS, &error));
   ASSERT_TRUE(extension.get() != nullptr);
-  EXPECT_EQ("The first extension that I made.", extension->description());
+  EXPECT_EQ("The first extension that I made.",
+            DescriptionInfo::GetDescription(*extension));
   ASSERT_TRUE(error.empty());
 }
 
@@ -219,11 +475,11 @@ TEST_F(FileUtilTest, LoadExtensionWithGzippedLocalesNotAllowed) {
   ASSERT_TRUE(base::PathService::Get(DIR_TEST_DATA, &install_dir));
   install_dir = install_dir.AppendASCII("extension_with_gzipped_locales");
 
-  std::string error;
+  std::u16string error;
   scoped_refptr<Extension> extension(file_util::LoadExtension(
       install_dir, ManifestLocation::kUnpacked, Extension::NO_FLAGS, &error));
   ASSERT_TRUE(extension.get() == nullptr);
-  EXPECT_EQ("Catalog file is missing for locale en.", error);
+  EXPECT_EQ(u"Catalog file is missing for locale en.", error);
 }
 
 TEST_F(FileUtilTest, LoadExtensionWithoutLocalesFolder) {
@@ -231,7 +487,7 @@ TEST_F(FileUtilTest, LoadExtensionWithoutLocalesFolder) {
   ASSERT_TRUE(base::PathService::Get(DIR_TEST_DATA, &install_dir));
   install_dir = install_dir.AppendASCII("extension_without_locales");
 
-  std::string error;
+  std::u16string error;
   scoped_refptr<Extension> extension(file_util::LoadExtension(
       install_dir, ManifestLocation::kUnpacked, Extension::NO_FLAGS, &error));
   ASSERT_FALSE(extension.get() == nullptr);
@@ -246,10 +502,8 @@ TEST_F(FileUtilTest, CheckIllegalFilenamesNoUnderscores) {
   ASSERT_TRUE(base::CreateDirectory(src_path));
 
   std::string data = "{ \"name\": { \"message\": \"foobar\" } }";
-  ASSERT_EQ(static_cast<int>(data.length()),
-            base::WriteFile(src_path.AppendASCII("some_file.txt"), data.c_str(),
-                            data.length()));
-  std::string error;
+  ASSERT_TRUE(base::WriteFile(src_path.AppendASCII("some_file.txt"), data));
+  std::u16string error;
   EXPECT_TRUE(file_util::CheckForIllegalFilenames(temp.GetPath(), &error));
 }
 
@@ -257,15 +511,15 @@ TEST_F(FileUtilTest, CheckIllegalFilenamesOnlyReserved) {
   base::ScopedTempDir temp;
   ASSERT_TRUE(temp.CreateUniqueTempDir());
 
-  static const base::FilePath::CharType* const folders[] = {
-      kLocaleFolder, kPlatformSpecificFolder};
+  static const auto folders = std::to_array<const base::FilePath::CharType*>(
+      {kLocaleFolder, kPlatformSpecificFolder});
 
-  for (size_t i = 0; i < base::size(folders); i++) {
-    base::FilePath src_path = temp.GetPath().Append(folders[i]);
+  for (const auto* folder : folders) {
+    base::FilePath src_path = temp.GetPath().Append(folder);
     ASSERT_TRUE(base::CreateDirectory(src_path));
   }
 
-  std::string error;
+  std::u16string error;
   EXPECT_TRUE(file_util::CheckForIllegalFilenames(temp.GetPath(), &error));
 }
 
@@ -279,14 +533,14 @@ TEST_F(FileUtilTest, CheckIllegalFilenamesReservedAndIllegal) {
   src_path = temp.GetPath().AppendASCII("_some_dir");
   ASSERT_TRUE(base::CreateDirectory(src_path));
 
-  std::string error;
+  std::u16string error;
   EXPECT_FALSE(file_util::CheckForIllegalFilenames(temp.GetPath(), &error));
 }
 
 // These tests do not work on Windows, because it is illegal to create a
 // file/directory with a Windows reserved name. Because we cannot create a
 // file that will cause the test to fail, let's skip the test.
-#if !defined(OS_WIN)
+#if !BUILDFLAG(IS_WIN)
 TEST_F(FileUtilTest, CheckIllegalFilenamesDirectoryWindowsReserved) {
   base::ScopedTempDir temp;
   ASSERT_TRUE(temp.CreateUniqueTempDir());
@@ -294,7 +548,7 @@ TEST_F(FileUtilTest, CheckIllegalFilenamesDirectoryWindowsReserved) {
   base::FilePath src_path = temp.GetPath().AppendASCII("aux");
   ASSERT_TRUE(base::CreateDirectory(src_path));
 
-  std::string error;
+  std::u16string error;
   EXPECT_FALSE(
       file_util::CheckForWindowsReservedFilenames(temp.GetPath(), &error));
 }
@@ -308,11 +562,9 @@ TEST_F(FileUtilTest,
   ASSERT_TRUE(base::CreateDirectory(src_path));
 
   std::string data = "{ \"name\": { \"message\": \"foobar\" } }";
-  ASSERT_EQ(static_cast<int>(data.length()),
-            base::WriteFile(src_path.AppendASCII("lpt1.txt"), data.c_str(),
-                            data.length()));
+  ASSERT_TRUE(base::WriteFile(src_path.AppendASCII("lpt1.txt"), data));
 
-  std::string error;
+  std::u16string error;
   EXPECT_FALSE(
       file_util::CheckForWindowsReservedFilenames(temp.GetPath(), &error));
 }
@@ -324,12 +576,12 @@ TEST_F(FileUtilTest, LoadExtensionGivesHelpfullErrorOnMissingManifest) {
   install_dir =
       install_dir.AppendASCII("file_util").AppendASCII("missing_manifest");
 
-  std::string error;
+  std::u16string error;
   scoped_refptr<Extension> extension(file_util::LoadExtension(
       install_dir, ManifestLocation::kUnpacked, Extension::NO_FLAGS, &error));
   ASSERT_TRUE(extension.get() == nullptr);
   ASSERT_FALSE(error.empty());
-  ASSERT_EQ(manifest_errors::kManifestUnreadable, error);
+  ASSERT_EQ(manifest_errors::kManifestUnreadable, base::UTF16ToUTF8(error));
 }
 
 TEST_F(FileUtilTest, LoadExtensionGivesHelpfullErrorOnBadManifest) {
@@ -338,14 +590,15 @@ TEST_F(FileUtilTest, LoadExtensionGivesHelpfullErrorOnBadManifest) {
   install_dir =
       install_dir.AppendASCII("file_util").AppendASCII("bad_manifest");
 
-  std::string error;
+  std::u16string error;
   scoped_refptr<Extension> extension(file_util::LoadExtension(
       install_dir, ManifestLocation::kUnpacked, Extension::NO_FLAGS, &error));
   ASSERT_TRUE(extension.get() == nullptr);
   ASSERT_FALSE(error.empty());
   ASSERT_NE(std::string::npos,
-            error.find(manifest_errors::kManifestParseError +
-                       std::string("  Line: 2, column: 16,")));
+            base::UTF16ToUTF8(error).find(
+                manifest_errors::kManifestParseError +
+                std::string("  expected `,` or `}` at line 2 column 16")));
 }
 
 TEST_F(FileUtilTest, ValidateThemeUTF8) {
@@ -356,18 +609,19 @@ TEST_F(FileUtilTest, ValidateThemeUTF8) {
   std::string non_ascii_file = "\xC3\xA0\xC3\xA8\xC3\xB2.png";
   base::FilePath non_ascii_path =
       temp.GetPath().Append(base::FilePath::FromUTF8Unsafe(non_ascii_file));
-  base::WriteFile(non_ascii_path, "", 0);
+  base::WriteFile(non_ascii_path, "");
 
   std::string kManifest = base::StringPrintf(
       "{ \"name\": \"Test\", \"version\": \"1.0\", "
       "  \"theme\": { \"images\": { \"theme_frame\": \"%s\" } }"
       "}",
       non_ascii_file.c_str());
-  std::string error;
+  std::u16string utf16_error;
   scoped_refptr<Extension> extension = LoadExtensionManifest(
-      kManifest, temp.GetPath(), ManifestLocation::kUnpacked, 0, &error);
-  ASSERT_TRUE(extension.get()) << error;
+      kManifest, temp.GetPath(), ManifestLocation::kUnpacked, 0, &utf16_error);
+  ASSERT_TRUE(extension.get()) << utf16_error;
 
+  std::u16string error;
   std::vector<InstallWarning> warnings;
   EXPECT_TRUE(file_util::ValidateExtension(extension.get(), &error, &warnings))
       << error;
@@ -378,48 +632,44 @@ TEST_F(FileUtilTest, BackgroundScriptsMustExist) {
   base::ScopedTempDir temp;
   ASSERT_TRUE(temp.CreateUniqueTempDir());
 
-  std::unique_ptr<base::DictionaryValue> value(new base::DictionaryValue());
-  value->SetString("name", "test");
-  value->SetString("version", "1");
-  value->SetInteger("manifest_version", 2);
+  base::DictValue value;
+  value.Set("name", "test");
+  value.Set("version", "1");
+  value.Set("manifest_version", 2);
 
   base::ListValue* scripts =
-      value->SetList("background.scripts", std::make_unique<base::ListValue>());
-  scripts->AppendString("foo.js");
+      value.EnsureDict("background")->EnsureList("scripts");
+  scripts->Append("foo.js");
 
-  std::string error;
-  std::vector<InstallWarning> warnings;
+  std::u16string error;
   scoped_refptr<Extension> extension = LoadExtensionManifest(
-      *value, temp.GetPath(), ManifestLocation::kUnpacked, 0, &error);
+      value, temp.GetPath(), ManifestLocation::kUnpacked, 0, &error);
   ASSERT_TRUE(extension.get()) << error;
 
+  std::vector<InstallWarning> warnings;
   EXPECT_FALSE(
       file_util::ValidateExtension(extension.get(), &error, &warnings));
-  EXPECT_EQ(l10n_util::GetStringFUTF8(
+  EXPECT_EQ(l10n_util::GetStringFUTF16(
                 IDS_EXTENSION_LOAD_BACKGROUND_SCRIPT_FAILED, u"foo.js"),
             error);
   EXPECT_EQ(0U, warnings.size());
 
-  scripts->Clear();
-  scripts->AppendString("http://google.com/foo.js");
+  scripts->clear();
+  scripts->Append("http://google.com/foo.js");
 
-  extension = LoadExtensionManifest(*value, temp.GetPath(),
+  extension = LoadExtensionManifest(value, temp.GetPath(),
                                     ManifestLocation::kUnpacked, 0, &error);
-  ASSERT_TRUE(extension.get()) << error;
-
-  warnings.clear();
-  EXPECT_FALSE(
-      file_util::ValidateExtension(extension.get(), &error, &warnings));
-  EXPECT_EQ(
-      l10n_util::GetStringFUTF8(IDS_EXTENSION_LOAD_BACKGROUND_SCRIPT_FAILED,
-                                u"http://google.com/foo.js"),
-      error);
-  EXPECT_EQ(0U, warnings.size());
+  ASSERT_FALSE(extension.get());
+  ASSERT_FALSE(error.empty());
+  ASSERT_EQ(
+      ErrorUtils::FormatErrorMessage(manifest_errors::kInvalidBackgroundScript,
+                                     base::NumberToString(0)),
+      base::UTF16ToUTF8(error));
 }
 
 // Private key, generated by Chrome specifically for this test, and
 // never used elsewhere.
-const char private_key[] =
+constexpr std::string_view private_key =
     "-----BEGIN PRIVATE KEY-----\n"
     "MIICdgIBADANBgkqhkiG9w0BAQEFAASCAmAwggJcAgEAAoGBAKt02SR0FYaYy6fpW\n"
     "MAA+kU1BgK3d+OmmWfdr+JATIjhRkyeSF4lTd/71JQsyKqPzYkQPi3EeROWM+goTv\n"
@@ -444,20 +694,17 @@ TEST_F(FileUtilTest, FindPrivateKeyFiles) {
   base::FilePath src_path = temp.GetPath().AppendASCII("some_dir");
   ASSERT_TRUE(base::CreateDirectory(src_path));
 
-  ASSERT_EQ(static_cast<int>(base::size(private_key)),
-            base::WriteFile(src_path.AppendASCII("a_key.pem"), private_key,
-                            base::size(private_key)));
-  ASSERT_EQ(static_cast<int>(base::size(private_key)),
-            base::WriteFile(src_path.AppendASCII("second_key.pem"), private_key,
-                            base::size(private_key)));
+  ASSERT_TRUE(base::WriteFile(src_path.AppendASCII("a_key.pem"), private_key));
+  ASSERT_TRUE(
+      base::WriteFile(src_path.AppendASCII("second_key.pem"), private_key));
   // Shouldn't find a key with a different extension.
-  ASSERT_EQ(static_cast<int>(base::size(private_key)),
-            base::WriteFile(src_path.AppendASCII("key.diff_ext"), private_key,
-                            base::size(private_key)));
+  ASSERT_TRUE(
+      base::WriteFile(src_path.AppendASCII("key.diff_ext"), private_key));
   // Shouldn't find a key that isn't parsable.
-  ASSERT_EQ(static_cast<int>(base::size(private_key)) - 30,
-            base::WriteFile(src_path.AppendASCII("unparsable_key.pem"),
-                            private_key, base::size(private_key) - 30));
+  std::string_view private_key_substring =
+      private_key.substr(0, private_key.size() - 30);
+  ASSERT_TRUE(base::WriteFile(src_path.AppendASCII("unparsable_key.pem"),
+                              private_key_substring));
   std::vector<base::FilePath> private_keys =
       file_util::FindPrivateKeyFiles(temp.GetPath());
   EXPECT_EQ(2U, private_keys.size());
@@ -481,14 +728,10 @@ TEST_F(FileUtilTest, WarnOnPrivateKey) {
       "  \"manifest_version\": 2,\n"
       "  \"description\": \"The first extension that I made.\"\n"
       "}\n";
-  ASSERT_EQ(static_cast<int>(strlen(manifest)),
-            base::WriteFile(ext_path.AppendASCII("manifest.json"), manifest,
-                            strlen(manifest)));
-  ASSERT_EQ(static_cast<int>(strlen(private_key)),
-            base::WriteFile(ext_path.AppendASCII("a_key.pem"), private_key,
-                            strlen(private_key)));
+  ASSERT_TRUE(base::WriteFile(ext_path.AppendASCII("manifest.json"), manifest));
+  ASSERT_TRUE(base::WriteFile(ext_path.AppendASCII("a_key.pem"), private_key));
 
-  std::string error;
+  std::u16string error;
   scoped_refptr<Extension> extension(file_util::LoadExtension(
       ext_path, "the_id", ManifestLocation::kExternalPref, Extension::NO_FLAGS,
       &error));
@@ -505,7 +748,7 @@ TEST_F(FileUtilTest, WarnOnPrivateKey) {
                                        ManifestLocation::kExternalPref,
                                        Extension::ERROR_ON_PRIVATE_KEY, &error);
   EXPECT_FALSE(extension.get());
-  EXPECT_THAT(error,
+  EXPECT_THAT(base::UTF16ToUTF8(error),
               testing::ContainsRegex(
                   "extension includes the key file.*ext_root.a_key.pem"));
 }
@@ -525,11 +768,9 @@ TEST_F(FileUtilTest, SpecifyManifestFile) {
       "  \"manifest_version\": 2,\n"
       "  \"description\": \"The first extension that I made.\"\n"
       "}\n";
-  ASSERT_EQ(static_cast<int>(strlen(manifest)),
-            base::WriteFile(ext_path.AppendASCII(kCustomManifest), manifest,
-                            strlen(manifest)));
+  ASSERT_TRUE(base::WriteFile(ext_path.AppendASCII(kCustomManifest), manifest));
 
-  std::string error;
+  std::u16string error;
   scoped_refptr<Extension> extension(file_util::LoadExtension(
       ext_path, kCustomManifestFilename, "the_id",
       ManifestLocation::kExternalPref, Extension::NO_FLAGS, &error));
@@ -545,7 +786,7 @@ TEST_F(FileUtilTest, CheckZeroLengthAndMissingIconFile) {
   base::FilePath ext_dir =
       install_dir.AppendASCII("file_util").AppendASCII("bad_icon");
 
-  std::string error;
+  std::u16string error;
   scoped_refptr<Extension> extension(file_util::LoadExtension(
       ext_dir, ManifestLocation::kInternal, Extension::NO_FLAGS, &error));
   ASSERT_FALSE(extension);
@@ -559,11 +800,11 @@ TEST_F(FileUtilTest, CheckZeroLengthAndMissingIconFileUnpacked) {
   base::FilePath ext_dir =
       install_dir.AppendASCII("file_util").AppendASCII("bad_icon");
 
-  std::string error;
+  std::u16string error;
   scoped_refptr<Extension> extension(file_util::LoadExtension(
       ext_dir, ManifestLocation::kUnpacked, Extension::NO_FLAGS, &error));
   EXPECT_FALSE(extension);
-  EXPECT_EQ("Could not load icon 'missing-icon.png' specified in 'icons'.",
+  EXPECT_EQ(u"Could not load icon 'missing-icon.png' specified in 'icons'.",
             error);
 }
 
@@ -578,14 +819,14 @@ TEST_F(FileUtilTest, CheckInvisibleIconFileUnpacked) {
 
   // Set the flag that enables the error.
   file_util::SetReportErrorForInvisibleIconForTesting(true);
-  std::string error;
+  std::u16string error;
   scoped_refptr<Extension> extension(file_util::LoadExtension(
       ext_dir, ManifestLocation::kUnpacked, Extension::NO_FLAGS, &error));
   file_util::SetReportErrorForInvisibleIconForTesting(false);
   EXPECT_FALSE(extension);
   EXPECT_EQ(
-      "Icon 'invisible_icon.png' specified in 'icons' is not "
-      "sufficiently visible.",
+      u"Icon 'invisible_icon.png' specified in 'icons' is not "
+      u"sufficiently visible.",
       error);
 }
 
@@ -600,7 +841,7 @@ TEST_F(FileUtilTest, CheckInvisibleIconFilePacked) {
 
   // Set the flag that enables the error.
   file_util::SetReportErrorForInvisibleIconForTesting(true);
-  std::string error;
+  std::u16string error;
   scoped_refptr<Extension> extension(file_util::LoadExtension(
       ext_dir, ManifestLocation::kInternal, Extension::NO_FLAGS, &error));
   file_util::SetReportErrorForInvisibleIconForTesting(false);
@@ -610,44 +851,154 @@ TEST_F(FileUtilTest, CheckInvisibleIconFilePacked) {
 
 TEST_F(FileUtilTest, ExtensionURLToRelativeFilePath) {
 #define URL_PREFIX "chrome-extension://extension-id/"
-  struct TestCase {
+  static constexpr struct {
     const char* url;
     const char* expected_relative_path;
   } test_cases[] = {
-    {URL_PREFIX "simple.html", "simple.html"},
-    {URL_PREFIX "directory/to/file.html", "directory/to/file.html"},
-    {URL_PREFIX "escape%20spaces.html", "escape spaces.html"},
-    {URL_PREFIX "%C3%9Cber.html",
-     "\xC3\x9C"
-     "ber.html"},
-#if defined(OS_WIN)
-    {URL_PREFIX "C%3A/simple.html", ""},
+      {URL_PREFIX "simple.html", "simple.html"},
+      {URL_PREFIX "directory/to/file.html", "directory/to/file.html"},
+      {URL_PREFIX "escape%20spaces.html", "escape spaces.html"},
+      {URL_PREFIX "%C3%9Cber.html",
+       "\xC3\x9C"
+       "ber.html"},
+#if BUILDFLAG(IS_WIN)
+      {URL_PREFIX "C%3A/simple.html", ""},
 #endif
-    {URL_PREFIX "////simple.html", "simple.html"},
-    {URL_PREFIX "/simple.html", "simple.html"},
-    {URL_PREFIX "\\simple.html", "simple.html"},
-    {URL_PREFIX "\\\\foo\\simple.html", "foo/simple.html"},
-    // Escaped file paths result in failure.
-    {URL_PREFIX "..%2f..%2fsimple.html", ""},
-    // Escaped things that look like escaped file paths, on the other hand,
-    // should work.
-    {URL_PREFIX "..%252f..%252fsimple.html", "..%2f..%2fsimple.html"},
-    // This is a UTF-8 lock icon, which is unsafe to display in the omnibox, but
-    // is a valid, if unusual, file name.
-    {URL_PREFIX "%F0%9F%94%93.html", "\xF0\x9F\x94\x93.html"},
+      {URL_PREFIX "////simple.html", "simple.html"},
+      {URL_PREFIX "/simple.html", "simple.html"},
+      {URL_PREFIX "\\simple.html", "simple.html"},
+      {URL_PREFIX "\\\\foo\\simple.html", "foo/simple.html"},
+      // Escaped file paths result in failure.
+      {URL_PREFIX "..%2f..%2fsimple.html", ""},
+      // Escaped things that look like escaped file paths, on the other hand,
+      // should work.
+      {URL_PREFIX "..%252f..%252fsimple.html", "..%2f..%2fsimple.html"},
+      // This is a UTF-8 lock icon, which is unsafe to display in the omnibox,
+      // but is a valid, if unusual, file name.
+      {URL_PREFIX "%F0%9F%94%93.html", "\xF0\x9F\x94\x93.html"},
   };
 #undef URL_PREFIX
 
-  for (size_t i = 0; i < base::size(test_cases); ++i) {
-    GURL url(test_cases[i].url);
+  for (const auto& test_case : test_cases) {
+    GURL url(test_case.url);
     base::FilePath expected_path =
-        base::FilePath::FromUTF8Unsafe(test_cases[i].expected_relative_path);
+        base::FilePath::FromUTF8Unsafe(test_case.expected_relative_path);
     base::FilePath actual_path = file_util::ExtensionURLToRelativeFilePath(url);
     EXPECT_FALSE(actual_path.IsAbsolute()) <<
       " For the path " << actual_path.value();
     EXPECT_EQ(expected_path.value(), actual_path.value()) <<
       " For the path " << url;
   }
+}
+
+class UninstallTest : public testing::Test {
+ public:
+  UninstallTest() = default;
+
+  void SetUp() override {
+    ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
+    ASSERT_TRUE(SetupExtensionsDirForUninstall());
+  }
+
+ protected:
+  // Create a directory in a temp dir that has an extension version folder
+  // inside it.
+  bool SetupExtensionsDirForUninstall();
+  bool ExtensionDirectoryDeleted();
+  bool ExtensionDirectoryNotDeleted();
+
+  base::FilePath profile_dir_;
+  base::FilePath extensions_install_dir_;
+  base::FilePath extension_dir_to_delete_;
+  base::FilePath extension_id_dir_;
+  base::FilePath extension_version_dir_;
+
+ private:
+  base::ScopedTempDir temp_dir_;
+};
+
+bool UninstallTest::SetupExtensionsDirForUninstall() {
+  profile_dir_ = temp_dir_.GetPath().AppendASCII("Default");
+  extensions_install_dir_ = profile_dir_.AppendASCII("TestExtensions");
+  extension_id_dir_ = extensions_install_dir_.AppendASCII(kExtensionId);
+  std::string version("1.0_0");
+  extension_version_dir_ = extension_id_dir_.AppendASCII(version);
+  base::CreateDirectory(profile_dir_);
+  base::CreateDirectory(extensions_install_dir_);
+  base::CreateDirectory(extension_id_dir_);
+  base::CreateDirectory(extension_version_dir_);
+  return base::DirectoryExists(extension_version_dir_);
+}
+
+bool UninstallTest::ExtensionDirectoryDeleted() {
+  return base::DirectoryExists(extensions_install_dir_) &&
+         !base::DirectoryExists(extension_id_dir_);
+}
+
+bool UninstallTest::ExtensionDirectoryNotDeleted() {
+  return base::DirectoryExists(extension_version_dir_);
+}
+
+class UninstallTestParameterized
+    : public UninstallTest,
+      public testing::WithParamInterface<UninstallTestData> {
+ public:
+  UninstallTestParameterized() = default;
+
+  void SetUp() override {
+    UninstallTest::SetUp();
+
+    // Overrides with parameterized values.
+    if (GetParam().profile_dir.has_value()) {
+      profile_dir_ = GetParam().profile_dir.value();
+    }
+    if (GetParam().extensions_install_dir.has_value()) {
+      extensions_install_dir_ = GetParam().extensions_install_dir.value();
+    }
+    if (GetParam().extension_dir_to_delete.has_value()) {
+      extension_id_dir_ = GetParam().extension_dir_to_delete.value();
+    }
+  }
+};
+
+// TODO(crbug.com/40875193): Create a custom test name generator that is more
+// readable.
+// go/gunitadvanced#specifying-names-for-value-parameterized-test-parameters
+INSTANTIATE_TEST_SUITE_P(All,
+                         UninstallTestParameterized,
+                         testing::ValuesIn(GetTestData()));
+
+TEST_P(UninstallTestParameterized, UninstallDirectory) {
+  file_util::UninstallExtension(profile_dir_, extensions_install_dir_,
+                                /*extension_dir_to_delete=*/extension_id_dir_);
+  if (GetParam().extension_directory_deleted) {
+    EXPECT_TRUE(ExtensionDirectoryDeleted());
+  } else {
+    EXPECT_TRUE(ExtensionDirectoryNotDeleted());
+  }
+}
+
+// Tests when the extensions install directory is outside of the profile
+// directory.
+TEST_F(UninstallTest,
+       UninstallDirectory_ExtensionsInstallDirNotSubdirOfProfileDir) {
+  file_util::UninstallExtension(profile_dir_,
+                                /*extensions_install_dir=*/
+                                profile_dir_.AppendASCII("OutsideProfileDir"),
+                                /*extension_dir_to_delete=*/extension_id_dir_);
+  EXPECT_TRUE(ExtensionDirectoryNotDeleted());
+}
+
+// Tests when the extension directory to delete is outside of the extensions
+// install directory.
+TEST_F(
+    UninstallTest,
+    UninstallDirectory_ExtensionsDirToDeleteNotSubdirOfExtensionsInstallDir) {
+  file_util::UninstallExtension(
+      profile_dir_, extensions_install_dir_,
+      /*extension_dir_to_delete=*/
+      extensions_install_dir_.AppendASCII("OutsideExtensionsInstallDir"));
+  EXPECT_TRUE(ExtensionDirectoryNotDeleted());
 }
 
 }  // namespace extensions

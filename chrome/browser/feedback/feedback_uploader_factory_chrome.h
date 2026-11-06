@@ -1,11 +1,11 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_FEEDBACK_FEEDBACK_UPLOADER_FACTORY_CHROME_H_
 #define CHROME_BROWSER_FEEDBACK_FEEDBACK_UPLOADER_FACTORY_CHROME_H_
 
-#include "base/macros.h"
+#include "base/no_destructor.h"
 #include "components/feedback/content/feedback_uploader_factory.h"
 
 namespace feedback {
@@ -22,8 +22,12 @@ class FeedbackUploaderFactoryChrome : public FeedbackUploaderFactory {
   static FeedbackUploaderChrome* GetForBrowserContext(
       content::BrowserContext* context);
 
+  FeedbackUploaderFactoryChrome(const FeedbackUploaderFactoryChrome&) = delete;
+  FeedbackUploaderFactoryChrome& operator=(
+      const FeedbackUploaderFactoryChrome&) = delete;
+
  private:
-  friend struct base::DefaultSingletonTraits<FeedbackUploaderFactoryChrome>;
+  friend base::NoDestructor<FeedbackUploaderFactoryChrome>;
 
   FeedbackUploaderFactoryChrome();
   ~FeedbackUploaderFactoryChrome() override;
@@ -33,10 +37,8 @@ class FeedbackUploaderFactoryChrome : public FeedbackUploaderFactory {
       content::BrowserContext* context) const override;
   bool ServiceIsCreatedWithBrowserContext() const override;
   bool ServiceIsNULLWhileTesting() const override;
-  KeyedService* BuildServiceInstanceFor(
+  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
       content::BrowserContext* context) const override;
-
-  DISALLOW_COPY_AND_ASSIGN(FeedbackUploaderFactoryChrome);
 };
 
 }  // namespace feedback

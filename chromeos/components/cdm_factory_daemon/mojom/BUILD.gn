@@ -1,11 +1,14 @@
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 import("//mojo/public/tools/bindings/mojom.gni")
 
+assert(is_chromeos)
+
 mojom_component("mojom") {
   sources = [
+    "browser_cdm_factory.mojom",
     "cdm_factory_daemon.mojom",
     "cdm_storage.mojom",
     "content_decryption_module.mojom",
@@ -13,9 +16,10 @@ mojom_component("mojom") {
   ]
 
   public_deps = [
-    "//components/arc/mojom:oemcrypto",
-    "//components/arc/mojom:protected_buffer_manager",
+    "//chromeos/ash/experiences/arc/mojom:oemcrypto",
+    "//chromeos/ash/experiences/arc/mojom:protected_buffer_manager",
     "//mojo/public/mojom/base",
+    "//sandbox/policy/mojom",
     "//ui/gfx/geometry/mojom",
   ]
 
@@ -41,14 +45,6 @@ mojom_component("mojom") {
         {
           mojom = "chromeos.cdm.mojom.PromiseException"
           cpp = "::media::CdmPromise::Exception"
-        },
-        {
-          mojom = "chromeos.cdm.mojom.ProtectionType"
-          cpp = "::display::ContentProtectionMethod"
-        },
-        {
-          mojom = "chromeos.cdm.mojom.LinkType"
-          cpp = "::display::DisplayConnectionType"
         },
       ]
       traits_headers = [ "cdm_types_enum_mojom_traits.h" ]

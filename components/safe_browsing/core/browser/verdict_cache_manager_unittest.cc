@@ -1,36 +1,78 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/safe_browsing/core/browser/verdict_cache_manager.h"
 
 #include "base/base64.h"
+#include "base/command_line.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
 #include "base/values.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/safe_browsing/core/browser/db/sb_protocol_manager_util.h"
+#include "components/safe_browsing/core/browser/safe_browsing_sync_observer.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
 #include "components/safe_browsing/core/common/proto/realtimeapi.pb.h"
+#include "components/safe_browsing/core/common/safe_browsing_prefs.h"
+#include "components/safe_browsing/core/common/safebrowsing_switches.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace safe_browsing {
 
+namespace {
+
+using testing::SizeIs;
+
+const char kArtificialEntepriseBlockedUrl[] = "https://blocked.test";
+const char kArtificialEntepriseWarnUrl[] = "https://warn.test";
+
+class MockSafeBrowsingSyncObserver : public SafeBrowsingSyncObserver {
+ public:
+  MockSafeBrowsingSyncObserver() : SafeBrowsingSyncObserver() {}
+
+  ~MockSafeBrowsingSyncObserver() override = default;
+
+  void ObserveHistorySyncStateChanged(
+      SafeBrowsingSyncObserver::Callback callback) override {
+    callback_ = std::move(callback);
+  }
+
+  void OnSyncStateChanged() { callback_.Run(); }
+
+ private:
+  Callback callback_;
+};
+
+}  // namespace
+
 class VerdictCacheManagerTest : public ::testing::Test {
  public:
-  VerdictCacheManagerTest() {}
+  VerdictCacheManagerTest() = default;
 
   void SetUp() override {
+    test_pref_service_.registry()->RegisterBooleanPref(
+        prefs::kSafeBrowsingEnabled, true);
+    test_pref_service_.registry()->RegisterBooleanPref(
+        prefs::kSafeBrowsingEnhanced, false);
     HostContentSettingsMap::RegisterProfilePrefs(test_pref_service_.registry());
     content_setting_map_ = new HostContentSettingsMap(
         &test_pref_service_, false /* is_off_the_record */,
-        false /* store_last_modified */, false /* restore_session */);
+        false /* store_last_modified */, false /* restore_session */,
+        false /* should_record_metrics */);
+    auto sync_observer = std::make_unique<MockSafeBrowsingSyncObserver>();
+    raw_sync_observer_ = sync_observer.get();
     cache_manager_ = std::make_unique<VerdictCacheManager>(
-        nullptr, content_setting_map_.get());
+        nullptr, content_setting_map_.get(), &test_pref_service_,
+        std::move(sync_observer));
   }
 
   void TearDown() override {
+    cache_manager_->Shutdown();
     cache_manager_.reset();
     content_setting_map_->ShutdownOnUIThread();
   }
@@ -68,14 +110,61 @@ class VerdictCacheManagerTest : public ::testing::Test {
         cache_expression_match_type);
   }
 
+  ChromeUserPopulation::PageLoadToken CreatePageLoadToken(
+      int64_t token_time_msec,
+      std::string token_value) {
+    ChromeUserPopulation::PageLoadToken token;
+    token.set_token_source(
+        ChromeUserPopulation::PageLoadToken::CLIENT_GENERATION);
+    token.set_token_time_msec(token_time_msec);
+    token.set_token_value(token_value);
+    return token;
+  }
+
  protected:
+  size_t GetStoredRealTimeUrlCheckVerdictCount() {
+    int count = 0;
+    for (const ContentSettingPatternSource& source :
+         content_setting_map_->GetSettingsForOneType(
+             ContentSettingsType::SAFE_BROWSING_URL_CHECK_DATA)) {
+      for (auto item : source.setting_value.GetDict()) {
+        if (item.first == std::string_view("real_time_url_cache_key")) {
+          if (item.second.is_dict()) {
+            count += item.second.GetDict().size();
+          } else {
+            count++;
+          }
+        }
+      }
+    }
+    return count;
+  }
+
   std::unique_ptr<VerdictCacheManager> cache_manager_;
   scoped_refptr<HostContentSettingsMap> content_setting_map_;
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
-
- private:
   sync_preferences::TestingPrefServiceSyncable test_pref_service_;
+  raw_ptr<MockSafeBrowsingSyncObserver, DanglingUntriaged> raw_sync_observer_ =
+      nullptr;
+};
+
+class ArtificialEnterpriseVerdictCacheManagerTest
+    : public VerdictCacheManagerTest {
+ public:
+  ArtificialEnterpriseVerdictCacheManagerTest() {
+    auto* command_line = base::CommandLine::ForCurrentProcess();
+    command_line->AppendSwitchASCII(
+        safe_browsing::switches::kArtificialCachedEnterpriseBlockedVerdictFlag,
+        kArtificialEntepriseBlockedUrl);
+    command_line->AppendSwitchASCII(
+        safe_browsing::switches::kArtificialCachedEnterpriseWarnedVerdictFlag,
+        kArtificialEntepriseWarnUrl);
+  }
+  void TearDown() override {
+    VerdictCacheManagerTest::TearDown();
+    VerdictCacheManager::ResetHasArtificialCachedUrlForTesting();
+  }
 };
 
 TEST_F(VerdictCacheManagerTest, TestCanRetrieveCachedVerdict) {
@@ -98,6 +187,30 @@ TEST_F(VerdictCacheManagerTest, TestCanRetrieveCachedVerdict) {
             cache_manager_->GetCachedPhishGuardVerdict(
                 url, LoginReputationClientRequest::PASSWORD_REUSE_EVENT,
                 password_type, &cached_verdict));
+}
+
+TEST_F(VerdictCacheManagerTest, TestCanRetrieveCachedOtpVerdict) {
+  GURL url("https://www.google.com/");
+  ReusedPasswordAccountType password_type;
+  password_type.set_account_type(ReusedPasswordAccountType::UNKNOWN);
+  LoginReputationClientResponse cached_verdict;
+  cached_verdict.set_cache_expression("www.google.com/");
+  EXPECT_EQ(
+      LoginReputationClientResponse::VERDICT_TYPE_UNSPECIFIED,
+      cache_manager_->GetCachedPhishGuardVerdict(
+          url, LoginReputationClientRequest::ONE_TIME_PASSWORD_FIELD_DETECTED,
+          password_type, &cached_verdict));
+
+  CachePhishGuardVerdict(
+      LoginReputationClientRequest::ONE_TIME_PASSWORD_FIELD_DETECTED,
+      password_type, LoginReputationClientResponse::SAFE, 60, "www.google.com/",
+      base::Time::Now());
+
+  EXPECT_EQ(
+      LoginReputationClientResponse::SAFE,
+      cache_manager_->GetCachedPhishGuardVerdict(
+          url, LoginReputationClientRequest::ONE_TIME_PASSWORD_FIELD_DETECTED,
+          password_type, &cached_verdict));
 }
 
 TEST_F(VerdictCacheManagerTest, TestCacheSplitByTriggerType) {
@@ -186,19 +299,20 @@ TEST_F(VerdictCacheManagerTest, TestParseInvalidVerdictEntry) {
 
   std::string verdict_serialized;
   verdict.SerializeToString(&verdict_serialized);
-  base::Base64Encode(verdict_serialized, &verdict_serialized);
+  verdict_serialized = base::Base64Encode(verdict_serialized);
 
-  auto cache_dictionary = std::make_unique<base::DictionaryValue>();
-  auto* verdict_dictionary =
-      cache_dictionary->SetKey("2", base::Value(base::Value::Type::DICTIONARY));
-  auto* verdict_entry = verdict_dictionary->SetKey(
-      "www.google.com/", base::Value(base::Value::Type::DICTIONARY));
-  verdict_entry->SetStringKey("cache_creation_time", "invalid_time");
-  verdict_entry->SetStringKey("verdict_proto", verdict_serialized);
+  base::DictValue verdict_entry;
+  verdict_entry.Set("cache_creation_time", "invalid_time");
+  verdict_entry.Set("verdict_proto", std::move(verdict_serialized));
+  base::DictValue verdict_dictionary;
+  verdict_dictionary.Set("www.google.com/", std::move(verdict_entry));
+  base::DictValue cache_dictionary;
+  cache_dictionary.Set("2", std::move(verdict_dictionary));
 
   content_setting_map_->SetWebsiteSettingDefaultScope(
       GURL("http://www.google.com/"), GURL(),
-      ContentSettingsType::PASSWORD_PROTECTION, std::move(cache_dictionary));
+      ContentSettingsType::PASSWORD_PROTECTION,
+      base::Value(std::move(cache_dictionary)));
 
   ReusedPasswordAccountType password_type;
   password_type.set_account_type(ReusedPasswordAccountType::GSUITE);
@@ -217,7 +331,10 @@ TEST_F(VerdictCacheManagerTest, TestRemoveCachedVerdictOnURLsDeleted) {
                     LoginReputationClientRequest::PASSWORD_REUSE_EVENT));
   ASSERT_EQ(0u, cache_manager_->GetStoredPhishGuardVerdictCount(
                     LoginReputationClientRequest::UNFAMILIAR_LOGIN_PAGE));
-  // Prepare 5 verdicts. Three are for origin "http://foo.com", and the others
+  ASSERT_EQ(
+      0u, cache_manager_->GetStoredPhishGuardVerdictCount(
+              LoginReputationClientRequest::ONE_TIME_PASSWORD_FIELD_DETECTED));
+  // Prepare 6 verdicts. Three are for origin "http://foo.com", and the others
   // are for "http://bar.com".
   base::Time now = base::Time::Now();
   ReusedPasswordAccountType password_type;
@@ -247,6 +364,15 @@ TEST_F(VerdictCacheManagerTest, TestRemoveCachedVerdictOnURLsDeleted) {
   ASSERT_EQ(2u, cache_manager_->GetStoredPhishGuardVerdictCount(
                     LoginReputationClientRequest::UNFAMILIAR_LOGIN_PAGE));
 
+  password_type.set_account_type(ReusedPasswordAccountType::UNKNOWN);
+  CachePhishGuardVerdict(
+      LoginReputationClientRequest::ONE_TIME_PASSWORD_FIELD_DETECTED,
+      password_type, LoginReputationClientResponse::PHISHING, 600, "bar.com",
+      now);
+  ASSERT_EQ(
+      1u, cache_manager_->GetStoredPhishGuardVerdictCount(
+              LoginReputationClientRequest::ONE_TIME_PASSWORD_FIELD_DETECTED));
+
   // Delete a bar.com URL. Corresponding content setting keyed on
   // origin "http://bar.com" should be removed,
   history::URLRows deleted_urls;
@@ -262,6 +388,9 @@ TEST_F(VerdictCacheManagerTest, TestRemoveCachedVerdictOnURLsDeleted) {
                     LoginReputationClientRequest::PASSWORD_REUSE_EVENT));
   EXPECT_EQ(1u, cache_manager_->GetStoredPhishGuardVerdictCount(
                     LoginReputationClientRequest::UNFAMILIAR_LOGIN_PAGE));
+  EXPECT_EQ(
+      0u, cache_manager_->GetStoredPhishGuardVerdictCount(
+              LoginReputationClientRequest::ONE_TIME_PASSWORD_FIELD_DETECTED));
 
   LoginReputationClientResponse actual_verdict;
   password_type.set_account_type(ReusedPasswordAccountType::GSUITE);
@@ -285,6 +414,9 @@ TEST_F(VerdictCacheManagerTest, TestRemoveCachedVerdictOnURLsDeleted) {
                     LoginReputationClientRequest::PASSWORD_REUSE_EVENT));
   EXPECT_EQ(0u, cache_manager_->GetStoredPhishGuardVerdictCount(
                     LoginReputationClientRequest::UNFAMILIAR_LOGIN_PAGE));
+  EXPECT_EQ(
+      0u, cache_manager_->GetStoredPhishGuardVerdictCount(
+              LoginReputationClientRequest::ONE_TIME_PASSWORD_FIELD_DETECTED));
 }
 
 TEST_F(VerdictCacheManagerTest, TestCleanUpExpiredVerdict) {
@@ -324,6 +456,22 @@ TEST_F(VerdictCacheManagerTest, TestCleanUpExpiredVerdict) {
   ASSERT_EQ(2u, cache_manager_->GetStoredPhishGuardVerdictCount(
                     LoginReputationClientRequest::UNFAMILIAR_LOGIN_PAGE));
 
+  // Prepare 2 verdicts for ONE_TIME_PASSWORD_FIELD_DETECTED:
+  // (1) "otp.com/def/" valid
+  // (2) "otp.com/xyz/" expired
+  password_type.set_account_type(ReusedPasswordAccountType::UNKNOWN);
+  CachePhishGuardVerdict(
+      LoginReputationClientRequest::ONE_TIME_PASSWORD_FIELD_DETECTED,
+      password_type, LoginReputationClientResponse::SAFE, 600, "otp.com/def/",
+      now);
+  CachePhishGuardVerdict(
+      LoginReputationClientRequest::ONE_TIME_PASSWORD_FIELD_DETECTED,
+      password_type, LoginReputationClientResponse::PHISHING, 0, "otp.com/xyz/",
+      now);
+  ASSERT_EQ(
+      2u, cache_manager_->GetStoredPhishGuardVerdictCount(
+              LoginReputationClientRequest::ONE_TIME_PASSWORD_FIELD_DETECTED));
+
   // Prepare 2 verdicts for SAFE_BROWSING_URL_CHECK_DATA:
   // (1) "www.example.com/" expired
   // (2) "www.example.com/path" valid
@@ -336,17 +484,36 @@ TEST_F(VerdictCacheManagerTest, TestCleanUpExpiredVerdict) {
                           RTLookupResponse::ThreatInfo::UNWANTED_SOFTWARE, 60,
                           "www.example.com/path",
                           RTLookupResponse::ThreatInfo::EXACT_MATCH);
-  cache_manager_->CacheRealTimeUrlVerdict(GURL("https://www.example.com/"),
-                                          response, base::Time::Now());
-  ASSERT_EQ(2u, cache_manager_->GetStoredRealTimeUrlCheckVerdictCount());
+  cache_manager_->CacheRealTimeUrlVerdict(response, base::Time::Now());
+  ASSERT_EQ(2u, GetStoredRealTimeUrlCheckVerdictCount());
 
+  // Prepare 2 page load tokens:
+  // (1) "www.example.com" expired
+  // (2) "www.example1.com" valid
+  cache_manager_->SetPageLoadTokenForTesting(
+      GURL("https://www.example.com"),
+      CreatePageLoadToken((now - base::Hours(1)).InMillisecondsSinceUnixEpoch(),
+                          "token1"));
+  cache_manager_->SetPageLoadTokenForTesting(
+      GURL("https://www.example1.com"),
+      CreatePageLoadToken(now.InMillisecondsSinceUnixEpoch(), "token2"));
+
+  // Verdict creation times are truncated to whole seconds when cached, and
+  // IsCacheExpired() checks whether base::Time::Now() is strictly greater than
+  // creation_time + duration. Advance the clock by 1 second so verdicts with
+  // cache_duration_sec = 0 are guaranteed to be expired even when Now() starts
+  // on an exact second boundary.
+  task_environment_.AdvanceClock(base::Seconds(1));
   cache_manager_->CleanUpExpiredVerdicts();
 
   ASSERT_EQ(1u, cache_manager_->GetStoredPhishGuardVerdictCount(
                     LoginReputationClientRequest::PASSWORD_REUSE_EVENT));
   ASSERT_EQ(1u, cache_manager_->GetStoredPhishGuardVerdictCount(
                     LoginReputationClientRequest::UNFAMILIAR_LOGIN_PAGE));
-  ASSERT_EQ(1u, cache_manager_->GetStoredRealTimeUrlCheckVerdictCount());
+  ASSERT_EQ(
+      1u, cache_manager_->GetStoredPhishGuardVerdictCount(
+              LoginReputationClientRequest::ONE_TIME_PASSWORD_FIELD_DETECTED));
+  ASSERT_EQ(1u, GetStoredRealTimeUrlCheckVerdictCount());
   LoginReputationClientResponse actual_verdict;
   password_type.set_account_type(ReusedPasswordAccountType::GSUITE);
   // Has cached PASSWORD_REUSE_EVENT verdict for foo.com/abc/.
@@ -389,6 +556,20 @@ TEST_F(VerdictCacheManagerTest, TestCleanUpExpiredVerdict) {
                 LoginReputationClientRequest::UNFAMILIAR_LOGIN_PAGE,
                 password_type, &actual_verdict));
 
+  // Has cached ONE_TIME_PASSWORD_FIELD_DETECTED verdict for otp.com/def.
+  EXPECT_EQ(LoginReputationClientResponse::SAFE,
+            cache_manager_->GetCachedPhishGuardVerdict(
+                GURL("https://otp.com/def/index.jsp"),
+                LoginReputationClientRequest::ONE_TIME_PASSWORD_FIELD_DETECTED,
+                password_type, &actual_verdict));
+
+  // No cached ONE_TIME_PASSWORD_FIELD_DETECTED verdict for otp.com/xyz.
+  EXPECT_EQ(LoginReputationClientResponse::VERDICT_TYPE_UNSPECIFIED,
+            cache_manager_->GetCachedPhishGuardVerdict(
+                GURL("https://otp.com/xyz/index.jsp"),
+                LoginReputationClientRequest::ONE_TIME_PASSWORD_FIELD_DETECTED,
+                password_type, &actual_verdict));
+
   RTLookupResponse::ThreatInfo actual_real_time_threat_info;
   // No cached SAFE_BROWSING_URL_CHECK_DATA verdict for www.example.com/.
   EXPECT_EQ(
@@ -400,6 +581,15 @@ TEST_F(VerdictCacheManagerTest, TestCleanUpExpiredVerdict) {
       RTLookupResponse::ThreatInfo::DANGEROUS,
       cache_manager_->GetCachedRealTimeUrlVerdict(
           GURL("https://www.example.com/path"), &actual_real_time_threat_info));
+
+  // token1 is cleaned up.
+  EXPECT_FALSE(
+      cache_manager_->GetPageLoadToken(GURL("https://www.example.com/"))
+          .has_token_value());
+  // token2 will be returned for www.example1.com.
+  EXPECT_EQ("token2",
+            cache_manager_->GetPageLoadToken(GURL("https://www.example1.com/"))
+                .token_value());
 }
 
 TEST_F(VerdictCacheManagerTest, TestCleanUpExpiredVerdictWithInvalidEntry) {
@@ -411,19 +601,20 @@ TEST_F(VerdictCacheManagerTest, TestCleanUpExpiredVerdictWithInvalidEntry) {
 
   std::string verdict_serialized;
   verdict.SerializeToString(&verdict_serialized);
-  base::Base64Encode(verdict_serialized, &verdict_serialized);
+  verdict_serialized = base::Base64Encode(verdict_serialized);
 
-  auto cache_dictionary = std::make_unique<base::DictionaryValue>();
-  auto* verdict_dictionary =
-      cache_dictionary->SetKey("1", base::Value(base::Value::Type::DICTIONARY));
-  auto* verdict_entry = verdict_dictionary->SetKey(
-      "www.google.com/path", base::Value(base::Value::Type::DICTIONARY));
-  verdict_entry->SetStringKey("cache_creation_time", "invalid_time");
-  verdict_entry->SetStringKey("verdict_proto", verdict_serialized);
+  base::DictValue verdict_entry;
+  verdict_entry.Set("cache_creation_time", "invalid_time");
+  verdict_entry.Set("verdict_proto", std::move(verdict_serialized));
+  base::DictValue verdict_dictionary;
+  verdict_dictionary.Set("www.google.com/path", std::move(verdict_entry));
+  base::DictValue cache_dictionary;
+  cache_dictionary.Set("1", std::move(verdict_dictionary));
 
   content_setting_map_->SetWebsiteSettingDefaultScope(
       GURL("http://www.google.com/"), GURL(),
-      ContentSettingsType::PASSWORD_PROTECTION, std::move(cache_dictionary));
+      ContentSettingsType::PASSWORD_PROTECTION,
+      base::Value(std::move(cache_dictionary)));
 
   ReusedPasswordAccountType password_type;
   password_type.set_account_type(ReusedPasswordAccountType::GSUITE);
@@ -433,26 +624,25 @@ TEST_F(VerdictCacheManagerTest, TestCleanUpExpiredVerdictWithInvalidEntry) {
                          "www.google.com/", base::Time::Now());
 
   // Verify we saved two entries under PasswordType PRIMARY_ACCOUNT_PASSWORD
-  EXPECT_EQ(2U, content_setting_map_
-                    ->GetWebsiteSetting(
-                        GURL("http://www.google.com/"), GURL(),
-                        ContentSettingsType::PASSWORD_PROTECTION, nullptr)
-                    ->FindDictKey("1")
-                    ->DictSize());
+  base::Value setting_entry = content_setting_map_->GetWebsiteSetting(
+      GURL("http://www.google.com/"), GURL(),
+      ContentSettingsType::PASSWORD_PROTECTION, nullptr);
+  const base::DictValue* setting_dict = setting_entry.GetIfDict();
+  ASSERT_TRUE(setting_dict);
+  EXPECT_THAT(*setting_dict->FindDict("1"), SizeIs(2u));
 
   cache_manager_->CleanUpExpiredVerdicts();
 
   // One should have been cleaned up
-  EXPECT_EQ(1U, content_setting_map_
-                    ->GetWebsiteSetting(
-                        GURL("http://www.google.com/"), GURL(),
-                        ContentSettingsType::PASSWORD_PROTECTION, nullptr)
-                    ->FindDictKey("1")
-                    ->DictSize());
+  setting_entry = content_setting_map_->GetWebsiteSetting(
+      GURL("http://www.google.com/"), GURL(),
+      ContentSettingsType::PASSWORD_PROTECTION, nullptr);
+  ASSERT_TRUE(setting_entry.is_dict());
+  setting_dict = setting_entry.GetIfDict();
+  EXPECT_THAT(*setting_dict->FindDict("1"), SizeIs(1u));
 }
 
 TEST_F(VerdictCacheManagerTest, TestCanRetrieveCachedRealTimeUrlCheckVerdict) {
-  base::HistogramTester histograms;
   GURL url("https://www.example.com/path");
 
   RTLookupResponse response;
@@ -464,7 +654,7 @@ TEST_F(VerdictCacheManagerTest, TestCanRetrieveCachedRealTimeUrlCheckVerdict) {
                           RTLookupResponse::ThreatInfo::SOCIAL_ENGINEERING, 60,
                           "www.example.com/path",
                           RTLookupResponse::ThreatInfo::EXACT_MATCH);
-  cache_manager_->CacheRealTimeUrlVerdict(url, response, base::Time::Now());
+  cache_manager_->CacheRealTimeUrlVerdict(response, base::Time::Now());
 
   RTLookupResponse::ThreatInfo out_verdict;
   EXPECT_EQ(RTLookupResponse::ThreatInfo::DANGEROUS,
@@ -474,9 +664,7 @@ TEST_F(VerdictCacheManagerTest, TestCanRetrieveCachedRealTimeUrlCheckVerdict) {
   EXPECT_EQ(60, out_verdict.cache_duration_sec());
   EXPECT_EQ(RTLookupResponse::ThreatInfo::SOCIAL_ENGINEERING,
             out_verdict.threat_type());
-  histograms.ExpectUniqueSample(
-      "SafeBrowsing.RT.CacheManager.RealTimeVerdictCount",
-      /* sample */ 2, /* expected_count */ 1);
+  ASSERT_EQ(2u, GetStoredRealTimeUrlCheckVerdictCount());
 }
 
 TEST_F(VerdictCacheManagerTest,
@@ -501,7 +689,7 @@ TEST_F(VerdictCacheManagerTest,
                           RTLookupResponse::ThreatInfo::UNCLEAR_BILLING, 60,
                           "www.example.com/path",
                           RTLookupResponse::ThreatInfo::EXACT_MATCH);
-  cache_manager_->CacheRealTimeUrlVerdict(url2, response, base::Time::Now());
+  cache_manager_->CacheRealTimeUrlVerdict(response, base::Time::Now());
 
   RTLookupResponse::ThreatInfo out_verdict;
   EXPECT_EQ(RTLookupResponse::ThreatInfo::DANGEROUS,
@@ -528,7 +716,7 @@ TEST_F(VerdictCacheManagerTest,
                           RTLookupResponse::ThreatInfo::SOCIAL_ENGINEERING, 0,
                           "www.example.com/path",
                           RTLookupResponse::ThreatInfo::EXACT_MATCH);
-  cache_manager_->CacheRealTimeUrlVerdict(url, response, base::Time::Now());
+  cache_manager_->CacheRealTimeUrlVerdict(response, base::Time::Now());
 
   RTLookupResponse::ThreatInfo out_verdict;
   EXPECT_EQ(RTLookupResponse::ThreatInfo::VERDICT_TYPE_UNSPECIFIED,
@@ -544,7 +732,7 @@ TEST_F(VerdictCacheManagerTest,
                           RTLookupResponse::ThreatInfo::SOCIAL_ENGINEERING, 60,
                           "www.example.com/path",
                           RTLookupResponse::ThreatInfo::EXACT_MATCH);
-  cache_manager_->CacheRealTimeUrlVerdict(url, response, base::Time::Now());
+  cache_manager_->CacheRealTimeUrlVerdict(response, base::Time::Now());
   RTLookupResponse::ThreatInfo out_verdict;
   EXPECT_EQ(RTLookupResponse::ThreatInfo::DANGEROUS,
             cache_manager_->GetCachedRealTimeUrlVerdict(url, &out_verdict));
@@ -554,14 +742,66 @@ TEST_F(VerdictCacheManagerTest,
 
   cache_manager_->RemoveContentSettingsOnURLsDeleted(false /* all_history */,
                                                      deleted_urls);
-  EXPECT_EQ(0u, cache_manager_->GetStoredRealTimeUrlCheckVerdictCount());
+  EXPECT_EQ(0u, GetStoredRealTimeUrlCheckVerdictCount());
   EXPECT_EQ(RTLookupResponse::ThreatInfo::VERDICT_TYPE_UNSPECIFIED,
             cache_manager_->GetCachedRealTimeUrlVerdict(url, &out_verdict));
 }
 
+TEST_F(VerdictCacheManagerTest,
+       TestCanRetrieveCachedRealTimeClientSideDetectionTypeCheck) {
+  GURL url("https://www.example.com/path");
+
+  RTLookupResponse response;
+  AddThreatInfoToResponse(response, RTLookupResponse::ThreatInfo::SAFE,
+                          RTLookupResponse::ThreatInfo::THREAT_TYPE_UNSPECIFIED,
+                          60, "www.example.com/",
+                          RTLookupResponse::ThreatInfo::EXACT_MATCH);
+  AddThreatInfoToResponse(response, RTLookupResponse::ThreatInfo::SUSPICIOUS,
+                          RTLookupResponse::ThreatInfo::SOCIAL_ENGINEERING, 60,
+                          "www.example.com/path",
+                          RTLookupResponse::ThreatInfo::EXACT_MATCH);
+
+  response.set_client_side_detection_type(
+      safe_browsing::ClientSideDetectionType::
+          CLIENT_SIDE_DETECTION_TYPE_UNSPECIFIED);
+
+  cache_manager_->CacheRealTimeUrlVerdict(response, base::Time::Now());
+
+  RTLookupResponse::ThreatInfo out_verdict;
+  EXPECT_EQ(RTLookupResponse::ThreatInfo::SUSPICIOUS,
+            cache_manager_->GetCachedRealTimeUrlVerdict(url, &out_verdict));
+  EXPECT_EQ("www.example.com/path",
+            out_verdict.cache_expression_using_match_type());
+  EXPECT_EQ(60, out_verdict.cache_duration_sec());
+  EXPECT_EQ(RTLookupResponse::ThreatInfo::SOCIAL_ENGINEERING,
+            out_verdict.threat_type());
+  EXPECT_EQ(static_cast<int>(safe_browsing::ClientSideDetectionType::
+                                 CLIENT_SIDE_DETECTION_TYPE_UNSPECIFIED),
+            cache_manager_->GetCachedRealTimeUrlClientSideDetectionType(url));
+
+  GURL url2("https://www.example2.com/path2");
+
+  RTLookupResponse response2;
+  AddThreatInfoToResponse(response2, RTLookupResponse::ThreatInfo::SAFE,
+                          RTLookupResponse::ThreatInfo::THREAT_TYPE_UNSPECIFIED,
+                          60, "www.example2.com/",
+                          RTLookupResponse::ThreatInfo::EXACT_MATCH);
+  AddThreatInfoToResponse(response2, RTLookupResponse::ThreatInfo::SAFE,
+                          RTLookupResponse::ThreatInfo::SOCIAL_ENGINEERING, 60,
+                          "www.example2.com/path2",
+                          RTLookupResponse::ThreatInfo::EXACT_MATCH);
+
+  response2.set_client_side_detection_type(
+      safe_browsing::ClientSideDetectionType::FORCE_REQUEST);
+  cache_manager_->CacheRealTimeUrlVerdict(response2, base::Time::Now());
+
+  EXPECT_EQ(
+      static_cast<int>(safe_browsing::ClientSideDetectionType::FORCE_REQUEST),
+      cache_manager_->GetCachedRealTimeUrlClientSideDetectionType(url2));
+}
+
 TEST_F(VerdictCacheManagerTest, TestHostSuffixMatching) {
   // Password protection verdict.
-  GURL url("https://a.example.test/path");
   ReusedPasswordAccountType password_type;
   password_type.set_account_type(ReusedPasswordAccountType::GSUITE);
   password_type.set_is_account_syncing(true);
@@ -583,7 +823,7 @@ TEST_F(VerdictCacheManagerTest, TestHostSuffixMatching) {
                           RTLookupResponse::ThreatInfo::SOCIAL_ENGINEERING, 60,
                           "example.test/path/",
                           RTLookupResponse::ThreatInfo::COVERING_MATCH);
-  cache_manager_->CacheRealTimeUrlVerdict(url, response, base::Time::Now());
+  cache_manager_->CacheRealTimeUrlVerdict(response, base::Time::Now());
   RTLookupResponse::ThreatInfo out_verdict;
   EXPECT_EQ(RTLookupResponse::ThreatInfo::DANGEROUS,
             cache_manager_->GetCachedRealTimeUrlVerdict(
@@ -622,8 +862,7 @@ TEST_F(VerdictCacheManagerTest, TestExactMatching) {
                           RTLookupResponse::ThreatInfo::SOCIAL_ENGINEERING, 60,
                           "a.example.test/path1/",
                           RTLookupResponse::ThreatInfo::EXACT_MATCH);
-  cache_manager_->CacheRealTimeUrlVerdict(
-      GURL("https://a.example.test/path1/path2"), response, base::Time::Now());
+  cache_manager_->CacheRealTimeUrlVerdict(response, base::Time::Now());
 
   RTLookupResponse::ThreatInfo out_verdict;
   EXPECT_EQ(RTLookupResponse::ThreatInfo::DANGEROUS,
@@ -637,7 +876,6 @@ TEST_F(VerdictCacheManagerTest, TestExactMatching) {
 }
 
 TEST_F(VerdictCacheManagerTest, TestMatchingTypeNotSet) {
-  base::HistogramTester histograms;
   std::string cache_expression = "a.example.test/path1";
   GURL url("https://a.example.test/path1");
 
@@ -648,25 +886,21 @@ TEST_F(VerdictCacheManagerTest, TestMatchingTypeNotSet) {
       RTLookupResponse::ThreatInfo::SOCIAL_ENGINEERING);
   new_threat_info->set_cache_duration_sec(60);
   new_threat_info->set_cache_expression_using_match_type(cache_expression);
-  cache_manager_->CacheRealTimeUrlVerdict(url, response, base::Time::Now());
+  cache_manager_->CacheRealTimeUrlVerdict(response, base::Time::Now());
 
   RTLookupResponse::ThreatInfo out_verdict;
   // If |cache_expression_match_type| is not set, ignore this cache.
   EXPECT_EQ(RTLookupResponse::ThreatInfo::VERDICT_TYPE_UNSPECIFIED,
             cache_manager_->GetCachedRealTimeUrlVerdict(url, &out_verdict));
-  histograms.ExpectBucketCount(
-      "SafeBrowsing.RT.CacheManager.RealTimeVerdictCount",
-      /* sample */ 0, /* expected_count */ 1);
+  ASSERT_EQ(0u, GetStoredRealTimeUrlCheckVerdictCount());
 
   new_threat_info->set_cache_expression_match_type(
       RTLookupResponse::ThreatInfo::EXACT_MATCH);
-  cache_manager_->CacheRealTimeUrlVerdict(url, response, base::Time::Now());
+  cache_manager_->CacheRealTimeUrlVerdict(response, base::Time::Now());
   // Should be able to get the cache if |cache_expression_match_type| is set.
   EXPECT_EQ(RTLookupResponse::ThreatInfo::DANGEROUS,
             cache_manager_->GetCachedRealTimeUrlVerdict(url, &out_verdict));
-  histograms.ExpectBucketCount(
-      "SafeBrowsing.RT.CacheManager.RealTimeVerdictCount",
-      /* sample */ 1, /* expected_count */ 1);
+  ASSERT_EQ(1u, GetStoredRealTimeUrlCheckVerdictCount());
 }
 
 TEST_F(VerdictCacheManagerTest, TestCleanUpExpiredVerdictInBackground) {
@@ -676,32 +910,29 @@ TEST_F(VerdictCacheManagerTest, TestCleanUpExpiredVerdictInBackground) {
                           "www.example.com/",
                           RTLookupResponse::ThreatInfo::EXACT_MATCH);
 
-  cache_manager_->CacheRealTimeUrlVerdict(GURL("https://www.example.com/"),
-                                          response, base::Time::Now());
-  ASSERT_EQ(1u, cache_manager_->GetStoredRealTimeUrlCheckVerdictCount());
-  task_environment_.FastForwardBy(base::TimeDelta::FromSeconds(119));
-  ASSERT_EQ(1u, cache_manager_->GetStoredRealTimeUrlCheckVerdictCount());
+  cache_manager_->CacheRealTimeUrlVerdict(response, base::Time::Now());
+  ASSERT_EQ(1u, GetStoredRealTimeUrlCheckVerdictCount());
+  task_environment_.FastForwardBy(base::Seconds(119));
+  ASSERT_EQ(1u, GetStoredRealTimeUrlCheckVerdictCount());
   // The first cleanup task should happen at 120 seconds after construction.
-  task_environment_.FastForwardBy(base::TimeDelta::FromSeconds(2));
-  ASSERT_EQ(0u, cache_manager_->GetStoredRealTimeUrlCheckVerdictCount());
+  task_environment_.FastForwardBy(base::Seconds(2));
+  ASSERT_EQ(0u, GetStoredRealTimeUrlCheckVerdictCount());
 
-  cache_manager_->CacheRealTimeUrlVerdict(GURL("https://www.example.com/"),
-                                          response, base::Time::Now());
-  task_environment_.FastForwardBy(base::TimeDelta::FromSeconds(1798));
-  ASSERT_EQ(1u, cache_manager_->GetStoredRealTimeUrlCheckVerdictCount());
+  cache_manager_->CacheRealTimeUrlVerdict(response, base::Time::Now());
+  task_environment_.FastForwardBy(base::Seconds(1798));
+  ASSERT_EQ(1u, GetStoredRealTimeUrlCheckVerdictCount());
   // The second cleanup task should happen at 120 + 1800 seconds after
   // construction.
-  task_environment_.FastForwardBy(base::TimeDelta::FromSeconds(2));
-  ASSERT_EQ(0u, cache_manager_->GetStoredRealTimeUrlCheckVerdictCount());
+  task_environment_.FastForwardBy(base::Seconds(2));
+  ASSERT_EQ(0u, GetStoredRealTimeUrlCheckVerdictCount());
 
-  cache_manager_->CacheRealTimeUrlVerdict(GURL("https://www.example.com/"),
-                                          response, base::Time::Now());
-  task_environment_.FastForwardBy(base::TimeDelta::FromSeconds(1798));
-  ASSERT_EQ(1u, cache_manager_->GetStoredRealTimeUrlCheckVerdictCount());
+  cache_manager_->CacheRealTimeUrlVerdict(response, base::Time::Now());
+  task_environment_.FastForwardBy(base::Seconds(1798));
+  ASSERT_EQ(1u, GetStoredRealTimeUrlCheckVerdictCount());
   // The third cleanup task should happen at 120 + 1800 + 1800 seconds after
   // construction.
-  task_environment_.FastForwardBy(base::TimeDelta::FromSeconds(2));
-  ASSERT_EQ(0u, cache_manager_->GetStoredRealTimeUrlCheckVerdictCount());
+  task_environment_.FastForwardBy(base::Seconds(2));
+  ASSERT_EQ(0u, GetStoredRealTimeUrlCheckVerdictCount());
 }
 
 TEST_F(VerdictCacheManagerTest, TestCleanUpVerdictOlderThanUpperBound) {
@@ -713,15 +944,322 @@ TEST_F(VerdictCacheManagerTest, TestCleanUpVerdictOlderThanUpperBound) {
                           "www.example.com/",
                           RTLookupResponse::ThreatInfo::EXACT_MATCH);
 
-  cache_manager_->CacheRealTimeUrlVerdict(GURL("https://www.example.com/"),
-                                          response, base::Time::Now());
-  ASSERT_EQ(1u, cache_manager_->GetStoredRealTimeUrlCheckVerdictCount());
+  cache_manager_->CacheRealTimeUrlVerdict(response, base::Time::Now());
+  ASSERT_EQ(1u, GetStoredRealTimeUrlCheckVerdictCount());
   // Fast forward by 8 days.
-  task_environment_.FastForwardBy(
-      base::TimeDelta::FromSeconds(8 * 24 * 60 * 60));
+  task_environment_.FastForwardBy(base::Seconds(8 * 24 * 60 * 60));
   // Although the cache duration is set to 20 days, it is stored longer than the
   // upper bound(7 days). The cache should be cleaned up.
-  ASSERT_EQ(0u, cache_manager_->GetStoredRealTimeUrlCheckVerdictCount());
+  ASSERT_EQ(0u, GetStoredRealTimeUrlCheckVerdictCount());
+}
+
+TEST_F(VerdictCacheManagerTest, TestCleanUpTooManyExpiredRealTimeUrlEntries) {
+  cache_manager_->max_removed_entries_count_override_ = 10;
+  // Add more than the allowed number of entries.
+  for (int i = 0; i < 15; i++) {
+    RTLookupResponse response;
+    std::string cache_expression =
+        base::StrCat({"example", base::NumberToString(i), ".com/"});
+    AddThreatInfoToResponse(response, RTLookupResponse::ThreatInfo::DANGEROUS,
+                            RTLookupResponse::ThreatInfo::SOCIAL_ENGINEERING, 0,
+                            cache_expression,
+                            RTLookupResponse::ThreatInfo::EXACT_MATCH);
+    cache_manager_->CacheRealTimeUrlVerdict(response, base::Time::Now());
+  }
+
+  {
+    base::HistogramTester histogram_tester;
+    ASSERT_EQ(15u, GetStoredRealTimeUrlCheckVerdictCount());
+    // The first cleanup task should happen at 120 seconds after construction.
+    task_environment_.FastForwardBy(base::Seconds(120));
+    // There should still be 5 entries left.
+    ASSERT_EQ(5u, GetStoredRealTimeUrlCheckVerdictCount());
+    histogram_tester.ExpectUniqueSample(
+        "SafeBrowsing.RT.CacheManager.CleanupReachedThreshold", /*sample=*/1,
+        /*expected_bucket_count=*/1);
+    histogram_tester.ExpectUniqueSample(
+        "SafeBrowsing.RT.CacheManager.RealTimeVerdictCount2", /*sample=*/15,
+        /*expected_bucket_count=*/1);
+  }
+  {
+    base::HistogramTester histogram_tester;
+    // The second cleanup task should happen at 120 + 1800 seconds after
+    // construction.
+    task_environment_.FastForwardBy(base::Seconds(1800));
+    ASSERT_EQ(0u, GetStoredRealTimeUrlCheckVerdictCount());
+    histogram_tester.ExpectUniqueSample(
+        "SafeBrowsing.RT.CacheManager.CleanupReachedThreshold", /*sample=*/0,
+        /*expected_bucket_count=*/1);
+    histogram_tester.ExpectUniqueSample(
+        "SafeBrowsing.RT.CacheManager.RealTimeVerdictCount2", /*sample=*/5,
+        /*expected_bucket_count=*/1);
+  }
+  {
+    base::HistogramTester histogram_tester;
+    // Cleanup with an empty cache should still log the relevant histograms.
+    task_environment_.FastForwardBy(base::Seconds(1800));
+    ASSERT_EQ(0u, GetStoredRealTimeUrlCheckVerdictCount());
+    histogram_tester.ExpectUniqueSample(
+        "SafeBrowsing.RT.CacheManager.CleanupReachedThreshold", /*sample=*/0,
+        /*expected_bucket_count=*/1);
+    histogram_tester.ExpectUniqueSample(
+        "SafeBrowsing.RT.CacheManager.RealTimeVerdictCount2", /*sample=*/0,
+        /*expected_bucket_count=*/1);
+  }
+}
+
+// Tests the cleanup optimization `has_stored_verdicts_real_time_url_check_`.
+TEST_F(VerdictCacheManagerTest, TestSkipRealTimeUrlCleanupOptimization) {
+  base::HistogramTester histogram_tester;
+  RTLookupResponse response;
+  AddThreatInfoToResponse(response, RTLookupResponse::ThreatInfo::DANGEROUS,
+                          RTLookupResponse::ThreatInfo::SOCIAL_ENGINEERING, 0,
+                          "example.com/",
+                          RTLookupResponse::ThreatInfo::EXACT_MATCH);
+  RTLookupResponse response2;
+  AddThreatInfoToResponse(response2, RTLookupResponse::ThreatInfo::DANGEROUS,
+                          RTLookupResponse::ThreatInfo::SOCIAL_ENGINEERING,
+                          1801, "example2.com/",
+                          RTLookupResponse::ThreatInfo::EXACT_MATCH);
+
+  // No entries in the cache yet, so the optimization should be enabled.
+  ASSERT_FALSE(cache_manager_->has_stored_verdicts_real_time_url_check_);
+  ASSERT_EQ(0u, GetStoredRealTimeUrlCheckVerdictCount());
+  // The first cleanup task should happen at 120 seconds after construction.
+  task_environment_.FastForwardBy(base::Seconds(120));
+  ASSERT_EQ(0u, GetStoredRealTimeUrlCheckVerdictCount());
+  ASSERT_FALSE(cache_manager_->has_stored_verdicts_real_time_url_check_);
+
+  // Add one entry. The optimization should be disabled.
+  cache_manager_->CacheRealTimeUrlVerdict(response, base::Time::Now());
+  ASSERT_TRUE(cache_manager_->has_stored_verdicts_real_time_url_check_);
+  ASSERT_EQ(1u, GetStoredRealTimeUrlCheckVerdictCount());
+  task_environment_.FastForwardBy(base::Seconds(1800));
+  ASSERT_EQ(0u, GetStoredRealTimeUrlCheckVerdictCount());
+  ASSERT_FALSE(cache_manager_->has_stored_verdicts_real_time_url_check_);
+
+  // Re-add an entry and clear the full URL history. The optimization should be
+  // enabled.
+  cache_manager_->CacheRealTimeUrlVerdict(response, base::Time::Now());
+  ASSERT_TRUE(cache_manager_->has_stored_verdicts_real_time_url_check_);
+  ASSERT_EQ(1u, GetStoredRealTimeUrlCheckVerdictCount());
+  cache_manager_->RemoveContentSettingsOnURLsDeleted(/*all_history=*/true,
+                                                     history::URLRows());
+  ASSERT_FALSE(cache_manager_->has_stored_verdicts_real_time_url_check_);
+  ASSERT_EQ(0u, GetStoredRealTimeUrlCheckVerdictCount());
+  task_environment_.FastForwardBy(base::Seconds(1800));
+  ASSERT_EQ(0u, GetStoredRealTimeUrlCheckVerdictCount());
+  ASSERT_FALSE(cache_manager_->has_stored_verdicts_real_time_url_check_);
+
+  // Re-add an entry and clear the single URL's history. The optimization should
+  // be disabled.
+  cache_manager_->CacheRealTimeUrlVerdict(response, base::Time::Now());
+  ASSERT_TRUE(cache_manager_->has_stored_verdicts_real_time_url_check_);
+  ASSERT_EQ(1u, GetStoredRealTimeUrlCheckVerdictCount());
+  cache_manager_->RemoveContentSettingsOnURLsDeleted(
+      /*all_history=*/false, {history::URLRow(GURL("http://example.com"))});
+  ASSERT_TRUE(cache_manager_->has_stored_verdicts_real_time_url_check_);
+  ASSERT_EQ(0u, GetStoredRealTimeUrlCheckVerdictCount());
+  task_environment_.FastForwardBy(base::Seconds(1800));
+  ASSERT_EQ(0u, GetStoredRealTimeUrlCheckVerdictCount());
+  ASSERT_FALSE(cache_manager_->has_stored_verdicts_real_time_url_check_);
+
+  // Add two entries; only one is set to expire by the first cleanup time. The
+  // optimization should be disabled.
+  cache_manager_->CacheRealTimeUrlVerdict(response, base::Time::Now());
+  cache_manager_->CacheRealTimeUrlVerdict(response2, base::Time::Now());
+  ASSERT_TRUE(cache_manager_->has_stored_verdicts_real_time_url_check_);
+  ASSERT_EQ(2u, GetStoredRealTimeUrlCheckVerdictCount());
+  task_environment_.FastForwardBy(base::Seconds(1800));
+  ASSERT_EQ(1u, GetStoredRealTimeUrlCheckVerdictCount());
+  ASSERT_TRUE(cache_manager_->has_stored_verdicts_real_time_url_check_);
+  task_environment_.FastForwardBy(base::Seconds(1800));
+  ASSERT_EQ(0u, GetStoredRealTimeUrlCheckVerdictCount());
+  ASSERT_FALSE(cache_manager_->has_stored_verdicts_real_time_url_check_);
+
+  // Add one entry. Temporarily disable the optimization and confirm the expired
+  // entry is not removed.
+  cache_manager_->CacheRealTimeUrlVerdict(response, base::Time::Now());
+  ASSERT_TRUE(cache_manager_->has_stored_verdicts_real_time_url_check_);
+  ASSERT_EQ(1u, GetStoredRealTimeUrlCheckVerdictCount());
+  cache_manager_->has_stored_verdicts_real_time_url_check_ = false;
+  task_environment_.FastForwardBy(base::Seconds(1800));
+  ASSERT_EQ(1u, GetStoredRealTimeUrlCheckVerdictCount());
+  ASSERT_FALSE(cache_manager_->has_stored_verdicts_real_time_url_check_);
+}
+
+TEST_F(VerdictCacheManagerTest, TestCleanupWithInvalidRealTimeUrlVerdict) {
+  // // Add a normal entry to the cache with a long cache duration.
+  RTLookupResponse response;
+  AddThreatInfoToResponse(response, RTLookupResponse::ThreatInfo::DANGEROUS,
+                          RTLookupResponse::ThreatInfo::SOCIAL_ENGINEERING,
+                          1000, "www.example.com/",
+                          RTLookupResponse::ThreatInfo::EXACT_MATCH);
+  cache_manager_->CacheRealTimeUrlVerdict(response, base::Time::Now());
+
+  // Add another entry with corrupted data.
+  base::DictValue cache_dictionary;
+  cache_dictionary.Set("real_time_url_cache_key", base::Value(12345));
+  content_setting_map_->SetWebsiteSettingDefaultScope(
+      GURL("http://www.google.com/"), GURL(),
+      ContentSettingsType::SAFE_BROWSING_URL_CHECK_DATA,
+      base::Value(std::move(cache_dictionary)));
+
+  // Add a normal entry to the cache with a short cache duration.
+  RTLookupResponse response2;
+  AddThreatInfoToResponse(response2, RTLookupResponse::ThreatInfo::DANGEROUS,
+                          RTLookupResponse::ThreatInfo::SOCIAL_ENGINEERING, 0,
+                          "www.example2.com/",
+                          RTLookupResponse::ThreatInfo::EXACT_MATCH);
+  cache_manager_->CacheRealTimeUrlVerdict(response2, base::Time::Now());
+
+  // The corrupt entry and the expired entry should be removed.
+  ASSERT_EQ(3u, GetStoredRealTimeUrlCheckVerdictCount());
+  task_environment_.FastForwardBy(base::Seconds(120));
+  ASSERT_EQ(1u, GetStoredRealTimeUrlCheckVerdictCount());
+  // Confirm the normal unexpired entry is the one that is not removed.
+  RTLookupResponse::ThreatInfo out_verdict;
+  EXPECT_EQ(RTLookupResponse::ThreatInfo::DANGEROUS,
+            cache_manager_->GetCachedRealTimeUrlVerdict(
+                GURL("https://www.example.com/"), &out_verdict));
+}
+
+TEST_F(VerdictCacheManagerTest,
+       TestCleanupWithInvalidRealTimeUrlCacheDictionary) {
+  // Add a normal entry to the cache with a long cache duration.
+  RTLookupResponse response;
+  AddThreatInfoToResponse(response, RTLookupResponse::ThreatInfo::DANGEROUS,
+                          RTLookupResponse::ThreatInfo::SOCIAL_ENGINEERING,
+                          1000, "example.com/",
+                          RTLookupResponse::ThreatInfo::EXACT_MATCH);
+  cache_manager_->CacheRealTimeUrlVerdict(response, base::Time::Now());
+  ASSERT_EQ(1u, GetStoredRealTimeUrlCheckVerdictCount());
+
+  // Simulate corrupting the cache dictionary.
+  cache_manager_->corrupt_real_time_cache_dictionary_override_ = true;
+
+  // The entry should be removed due to corruption, even though it hasn't
+  // expired yet.
+  task_environment_.FastForwardBy(base::Seconds(120));
+  ASSERT_EQ(0u, GetStoredRealTimeUrlCheckVerdictCount());
+}
+
+TEST_F(VerdictCacheManagerTest, TestGetPageLoadToken) {
+  GURL url1("https://www.example.com/path1");
+  GURL url2("http://www.example.com/path2");  // different scheme and path
+  GURL url3("https://www.example1.com/path1");
+  cache_manager_->CreatePageLoadToken(url1);
+  ChromeUserPopulation::PageLoadToken token1 =
+      cache_manager_->GetPageLoadToken(url1);
+  ChromeUserPopulation::PageLoadToken token2 =
+      cache_manager_->GetPageLoadToken(url2);
+  // token1 and token2 are the same, because the hostname is the same.
+  ASSERT_TRUE(token1.has_token_value());
+  ASSERT_TRUE(token2.has_token_value());
+  ASSERT_EQ(token1.token_value(), token2.token_value());
+
+  cache_manager_->CreatePageLoadToken(url1);
+  ChromeUserPopulation::PageLoadToken token3 =
+      cache_manager_->GetPageLoadToken(url1);
+  // token1 and token3 are different, because CreatePageLoadToken should
+  // create a new token for the hostname.
+  ASSERT_TRUE(token3.has_token_value());
+  ASSERT_NE(token1.token_value(), token3.token_value());
+  ChromeUserPopulation::PageLoadToken token4 =
+      cache_manager_->GetPageLoadToken(url3);
+  // token4 should be empty, because url3 has a different hostname.
+  ASSERT_FALSE(token4.has_token_value());
+}
+
+TEST_F(VerdictCacheManagerTest, TestGetExpiredPageLoadToken) {
+  GURL url("https://www.example.com/path");
+  cache_manager_->CreatePageLoadToken(url);
+  ChromeUserPopulation::PageLoadToken token =
+      cache_manager_->GetPageLoadToken(url);
+  ASSERT_TRUE(token.has_token_value());
+
+  task_environment_.FastForwardBy(base::Minutes(11));
+  token = cache_manager_->GetPageLoadToken(url);
+  // Token is not found because it has already expired.
+  ASSERT_FALSE(token.has_token_value());
+}
+
+TEST_F(VerdictCacheManagerTest, TestClearTokenOnSafeBrowsingStateChanged) {
+  SetSafeBrowsingState(&test_pref_service_,
+                       SafeBrowsingState::STANDARD_PROTECTION);
+  GURL url("https://www.example.com/path");
+  cache_manager_->CreatePageLoadToken(url);
+  ChromeUserPopulation::PageLoadToken token =
+      cache_manager_->GetPageLoadToken(url);
+  ASSERT_TRUE(token.has_token_value());
+
+  SetSafeBrowsingState(&test_pref_service_,
+                       SafeBrowsingState::NO_SAFE_BROWSING);
+  token = cache_manager_->GetPageLoadToken(url);
+  // Token is not found because the Safe Browsing state has changed.
+  ASSERT_FALSE(token.has_token_value());
+}
+
+TEST_F(VerdictCacheManagerTest, TestClearTokenOnSyncStateChanged) {
+  GURL url("https://www.example.com/path");
+  cache_manager_->CreatePageLoadToken(url);
+  ChromeUserPopulation::PageLoadToken token =
+      cache_manager_->GetPageLoadToken(url);
+  ASSERT_TRUE(token.has_token_value());
+
+  raw_sync_observer_->OnSyncStateChanged();
+  token = cache_manager_->GetPageLoadToken(url);
+  // Token is not found because the sync state has changed.
+  ASSERT_FALSE(token.has_token_value());
+}
+
+TEST_F(VerdictCacheManagerTest, TestShutdown) {
+  cache_manager_->Shutdown();
+  RTLookupResponse rt_response;
+  // Call to cache_manager after shutdown should not cause a crash.
+  cache_manager_->CacheRealTimeUrlVerdict(rt_response, base::Time::Now());
+  RTLookupResponse::ThreatInfo out_rt_verdict;
+  cache_manager_->GetCachedRealTimeUrlVerdict(
+      GURL("https://www.example.com/path"), &out_rt_verdict);
+  LoginReputationClientResponse pg_response;
+  ReusedPasswordAccountType password_type;
+  cache_manager_->CachePhishGuardVerdict(
+      LoginReputationClientRequest::UNFAMILIAR_LOGIN_PAGE, password_type,
+      pg_response, base::Time::Now());
+  cache_manager_->GetStoredPhishGuardVerdictCount(
+      LoginReputationClientRequest::UNFAMILIAR_LOGIN_PAGE);
+  LoginReputationClientResponse out_pg_verdict;
+  cache_manager_->GetCachedPhishGuardVerdict(
+      GURL("https://www.example.com/path"),
+      LoginReputationClientRequest::UNFAMILIAR_LOGIN_PAGE, password_type,
+      &out_pg_verdict);
+}
+
+TEST_F(ArtificialEnterpriseVerdictCacheManagerTest,
+       TestArtificialEnterpriseBlockCache) {
+  ASSERT_TRUE(VerdictCacheManager::has_artificial_cached_url_);
+
+  RTLookupResponse::ThreatInfo cached_threat_info;
+  auto cached_verdict = cache_manager_->GetCachedRealTimeUrlVerdict(
+      GURL(kArtificialEntepriseBlockedUrl), &cached_threat_info);
+  EXPECT_EQ(cached_verdict,
+            safe_browsing::RTLookupResponse::ThreatInfo::DANGEROUS);
+  ASSERT_TRUE(cached_threat_info.has_threat_type());
+  EXPECT_EQ(cached_threat_info.threat_type(),
+            RTLookupResponse::ThreatInfo::MANAGED_POLICY);
+}
+
+TEST_F(ArtificialEnterpriseVerdictCacheManagerTest,
+       TestArtificialEnterpriseWarnCache) {
+  ASSERT_TRUE(VerdictCacheManager::has_artificial_cached_url_);
+
+  RTLookupResponse::ThreatInfo cached_threat_info;
+  auto cached_verdict = cache_manager_->GetCachedRealTimeUrlVerdict(
+      GURL(kArtificialEntepriseWarnUrl), &cached_threat_info);
+  EXPECT_EQ(cached_verdict, safe_browsing::RTLookupResponse::ThreatInfo::WARN);
+  ASSERT_TRUE(cached_threat_info.has_threat_type());
+  EXPECT_EQ(cached_threat_info.threat_type(),
+            RTLookupResponse::ThreatInfo::MANAGED_POLICY);
 }
 
 }  // namespace safe_browsing

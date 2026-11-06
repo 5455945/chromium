@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,27 +7,27 @@
 
 #include <stddef.h>
 
-#include <map>
 #include <memory>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include "base/containers/flat_map.h"
-#include "base/containers/small_map.h"
-#include "base/threading/thread_checker.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ptr_exclusion.h"
+#include "base/memory/stack_allocated.h"
+#include "base/memory/weak_ptr.h"
+#include "base/sequence_checker.h"
 #include "base/trace_event/memory_dump_provider.h"
 #include "build/build_config.h"
 #include "components/viz/common/resources/resource_id.h"
 #include "components/viz/common/resources/return_callback.h"
-#include "components/viz/common/resources/shared_bitmap.h"
 #include "components/viz/common/resources/transferable_resource.h"
 #include "components/viz/common/surfaces/surface_id.h"
 #include "components/viz/service/display/external_use_client.h"
 #include "components/viz/service/display/resource_fence.h"
 #include "components/viz/service/viz_service_export.h"
 #include "gpu/command_buffer/common/sync_token.h"
-#include "third_party/khronos/GLES2/gl2.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/size.h"
 
@@ -70,30 +70,51 @@ class VIZ_SERVICE_EXPORT DisplayResourceProvider
   bool OnMemoryDump(const base::trace_event::MemoryDumpArgs& args,
                     base::trace_event::ProcessMemoryDump* pmd) override;
 
-#if defined(OS_ANDROID)
-  // Indicates if this resource is backed by an Android SurfaceTexture, and thus
-  // can't really be promoted to an overlay.
-  bool IsBackedBySurfaceTexture(ResourceId id);
+  base::WeakPtr<DisplayResourceProvider> GetWeakPtr();
 
+#if BUILDFLAG(IS_ANDROID)
+  // Indicates if this resource is backed by an Android SurfaceView, and thus
+  // can be promoted to an overlay via legacy (SurfaceView/Dialog) overlay
+  // system.
+  bool IsBackedBySurfaceView(ResourceId id) const;
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
   // Indicates if this resource wants to receive promotion hints.
-  bool DoesResourceWantPromotionHint(ResourceId id);
+  bool DoesResourceWantPromotionHint(ResourceId id) const;
 #endif
 
   // Returns the size in pixels of the underlying gpu mailbox/software bitmap.
-  const gfx::Size GetResourceBackedSize(ResourceId id);
+  const gfx::Size GetResourceBackedSize(ResourceId id) const;
 
-  bool IsResourceSoftwareBacked(ResourceId id);
-  // Return the format of the underlying buffer that can be used for scanout.
-  gfx::BufferFormat GetBufferFormat(ResourceId id);
-  ResourceFormat GetResourceFormat(ResourceId id);
-  const gfx::ColorSpace& GetColorSpace(ResourceId id);
+  bool IsResourceSoftwareBacked(ResourceId id) const;
+  // Return the SharedImageFormat of the underlying buffer that can be used for
+  // scanout.
+  SharedImageFormat GetSharedImageFormat(ResourceId id) const;
+  // Returns the color space of the resource.
+  gfx::ColorSpace GetColorSpace(ResourceId id) const;
+  // Returns true if the resource needs a detiling pass before scanout.
+  bool GetNeedsDetiling(ResourceId id) const;
+
+  const gfx::HDRMetadata& GetHDRMetadata(ResourceId id) const;
+
+  GrSurfaceOrigin GetOrigin(ResourceId id) const;
+  SkAlphaType GetAlphaType(ResourceId id) const;
+
   // Indicates if this resource may be used for a hardware overlay plane.
-  bool IsOverlayCandidate(ResourceId id);
-  SurfaceId GetSurfaceId(ResourceId id);
-  int GetChildId(ResourceId id);
+  bool IsOverlayCandidate(ResourceId id) const;
+  // Indicates if this resource uses low latency rendering.
+  bool IsLowLatencyRendering(ResourceId id) const;
+
+  SurfaceId GetSurfaceId(ResourceId id) const;
+  int GetChildId(ResourceId id) const;
 
   // Checks whether a resource is in use.
-  bool InUse(ResourceId id);
+  bool InUse(ResourceId id) const;
+
+  // Try removing the resources that are pending the |resource_fence|.
+  void OnResourceFencePassed(ResourceFence* resource_fence,
+                             base::flat_set<ResourceId> resources);
 
   // The following lock classes are part of the DisplayResourceProvider API and
   // are needed to read the resource contents. The user must ensure that they
@@ -117,19 +138,20 @@ class VIZ_SERVICE_EXPORT DisplayResourceProvider
 
     const gpu::Mailbox& mailbox() const {
       DCHECK(resource_);
-      return resource_->transferable.mailbox_holder.mailbox;
+      return resource_->transferable.mailbox();
     }
-    const gpu::SyncToken& sync_token() const {
+    std::vector<gpu::SyncToken> GetSyncTokens() const {
       DCHECK(resource_);
-      return resource_->sync_token();
+      return resource_->transferable.shared_image()
+          ->GetSyncTokensForDisplayCompositor(resource_->sync_token());
     }
 
     // Sets the given |release_fence| onto this resource.
     // This is propagated to ReturnedResource when the resource is freed.
     void SetReleaseFence(gfx::GpuFenceHandle release_fence);
 
-    // Returns true iff this resource has a read lock fence set.
-    bool HasReadLockFence() const;
+    // Returns the synchronization type for the underlying resource.
+    TransferableResource::SynchronizationType SynchronizationType() const;
 
    protected:
     ChildResource* resource() { return resource_; }
@@ -137,14 +159,16 @@ class VIZ_SERVICE_EXPORT DisplayResourceProvider
    private:
     void Reset();
 
-    DisplayResourceProvider* resource_provider_ = nullptr;
+    raw_ptr<DisplayResourceProvider> resource_provider_ = nullptr;
     ResourceId resource_id_ = kInvalidResourceId;
-    ChildResource* resource_ = nullptr;
+    raw_ptr<ChildResource> resource_ = nullptr;
   };
 
   // All resources that are returned to children while an instance of this
   // class exists will be stored and returned when the instance is destroyed.
   class VIZ_SERVICE_EXPORT ScopedBatchReturnResources {
+    STACK_ALLOCATED();
+
    public:
     explicit ScopedBatchReturnResources(
         DisplayResourceProvider* resource_provider,
@@ -152,16 +176,9 @@ class VIZ_SERVICE_EXPORT DisplayResourceProvider
     ~ScopedBatchReturnResources();
 
    private:
-    DisplayResourceProvider* const resource_provider_;
+    DisplayResourceProvider* const resource_provider_ = nullptr;
     const bool was_access_to_gpu_thread_allowed_;
   };
-
-  // Sets the current read fence. If a resource is locked for read
-  // and has read fences enabled, the resource will not allow writes
-  // until this fence has passed.
-  void SetReadLockFence(ResourceFence* fence) {
-    current_read_lock_fence_ = fence;
-  }
 
   // Creates accounting for a child. Returns a child ID. surface_id is used to
   // associate resources to the surface they belong to. This is used for
@@ -196,7 +213,7 @@ class VIZ_SERVICE_EXPORT DisplayResourceProvider
                                      const ResourceIdSet& resources_from_child);
 
   // Returns the mailbox corresponding to a resource id.
-  gpu::Mailbox GetMailbox(ResourceId resource_id);
+  gpu::Mailbox GetMailbox(ResourceId resource_id) const;
 
   // Sets if the GPU thread is available (it always is for Chrome, but for
   // WebView it happens only when Android calls us on RenderThread.
@@ -210,35 +227,6 @@ class VIZ_SERVICE_EXPORT DisplayResourceProvider
   enum DeleteStyle {
     NORMAL,
     FOR_SHUTDOWN,
-  };
-
-  enum SynchronizationState {
-    // The LOCALLY_USED state is the state each resource defaults to when
-    // constructed or modified or read. This state indicates that the
-    // resource has not been properly synchronized and it would be an error
-    // to return this resource to a client.
-    LOCALLY_USED,
-
-    // The NEEDS_WAIT state is the state that indicates a resource has been
-    // modified but it also has an associated sync token assigned to it.
-    // The sync token has not been waited on with the local context. When
-    // a sync token arrives from a client, it is automatically initialized as
-    // NEEDS_WAIT as well since we still need to wait on it before the resource
-    // is synchronized on the current context. It is an error to use the
-    // resource locally for reading or writing if the resource is in this state.
-    NEEDS_WAIT,
-
-    // The SYNCHRONIZED state indicates that the resource has been properly
-    // synchronized locally. This can either synchronized externally (such
-    // as the case of software rasterized bitmaps), or synchronized
-    // internally using a sync token that has been waited upon. In the
-    // former case where the resource was synchronized externally, a
-    // corresponding sync token will not exist. In the latter case which was
-    // synchronized from the NEEDS_WAIT state, a corresponding sync token will
-    // exist which is associated with the resource. This sync token is still
-    // valid and still associated with the resource and can be passed as an
-    // external resource for others to wait on.
-    SYNCHRONIZED,
   };
 
   struct Child {
@@ -265,27 +253,14 @@ class VIZ_SERVICE_EXPORT DisplayResourceProvider
     ChildResource(ChildResource&& other);
     ~ChildResource();
 
-    bool is_gpu_resource_type() const { return !transferable.is_software; }
-    bool needs_sync_token() const {
-      return is_gpu_resource_type() && synchronization_state_ == LOCALLY_USED;
-    }
+    bool is_gpu_resource_type() const { return !transferable.GetIsSoftware(); }
     const gpu::SyncToken& sync_token() const { return sync_token_; }
-    SynchronizationState synchronization_state() const {
-      return synchronization_state_;
-    }
-    // If true the gpu resource needs its SyncToken waited on in order to be
-    // synchronized for use.
-    bool ShouldWaitSyncToken() const {
-      return synchronization_state_ == NEEDS_WAIT;
-    }
 
     bool InUse() const {
       return lock_for_read_count > 0 || locked_for_external_use ||
              lock_for_overlay_count > 0;
     }
 
-    void SetLocallyUsed();
-    void SetSynchronized();
     void UpdateSyncToken(const gpu::SyncToken& sync_token);
 
     // This is the id of the client the resource comes from.
@@ -314,27 +289,17 @@ class VIZ_SERVICE_EXPORT DisplayResourceProvider
     // When the resource should be deleted until it is actually reaped.
     bool marked_for_deletion = false;
 
-    // Texture id for texture-backed resources, when the mailbox is mapped into
-    // a client GL id in this process.
-    GLuint gl_id = 0;
-    // The current min/mag filter for GL texture-backed resources. The original
-    // filter as given from the client is saved in |transferable|.
-    GLenum filter;
-    // A pointer to the shared memory structure for software-backed resources,
-    // when it is mapped into memory in this process.
-    std::unique_ptr<SharedBitmap> shared_bitmap;
-    // A GUID for reporting the |shared_bitmap| to memory tracing. The GUID is
-    // known by other components in the system as well to give the same id for
-    // this shared memory bitmap everywhere. This is empty until the resource is
-    // mapped for use in the display compositor.
-    base::UnguessableToken shared_bitmap_tracing_guid;
+    // Indicate whether the shared_image has been locked at lease once.
+    bool shared_image_representation_created_and_set = false;
 
-    // A fence used for accessing a gpu resource for reading, that ensures any
-    // writing done to the resource has been completed. This is implemented and
-    // used to implement transferring ownership of the resource from the client
-    // to the service, and in the GL drawing code before reading from the
-    // texture.
-    scoped_refptr<ResourceFence> read_lock_fence;
+    // A fence used for returning resources after the display compositor has
+    // completed accessing the resources it received from a client. This can
+    // either be a read lock or a release fence. If the |transferable| has
+    // synchronization type set as kGpuCommandsCompleted, the resource can be
+    // returned after ResourceFence::HasPassed is true. If the |transferable|
+    // has the synchronization type set as kReleaseFence, the resource can be
+    // returned after the fence has a release fence set.
+    scoped_refptr<ResourceFence> resource_fence;
 
     // SkiaRenderer specific details about this resource. Added to ChildResource
     // to avoid map lookups further down the pipeline.
@@ -345,11 +310,9 @@ class VIZ_SERVICE_EXPORT DisplayResourceProvider
     gfx::GpuFenceHandle release_fence;
 
    private:
-    // Tracks if a sync token needs to be waited on before using the resource.
-    SynchronizationState synchronization_state_;
     // A SyncToken associated with a texture-backed or GpuMemoryBuffer-backed
     // resource. It is given from a child to the service, and waited on in order
-    // to use the resource, and this is tracked by the |synchronization_state_|.
+    // to use the resource.
     gpu::SyncToken sync_token_;
   };
 
@@ -359,31 +322,30 @@ class VIZ_SERVICE_EXPORT DisplayResourceProvider
 
   explicit DisplayResourceProvider(Mode mode);
 
+  const ChildResource* GetResource(ResourceId id) const;
   ChildResource* GetResource(ResourceId id);
 
   // TODO(ericrk): TryGetResource is part of a temporary workaround for cases
   // where resources which should be available are missing. This version may
   // return nullptr if a resource is not found. https://crbug.com/811858
+  const ChildResource* TryGetResource(ResourceId id) const;
   ChildResource* TryGetResource(ResourceId id);
 
   void TryReleaseResource(ResourceId id, ChildResource* resource);
-  // Binds the given GL resource to a texture target for sampling using the
-  // specified filter for both minification and magnification. Returns the
-  // texture target used. The resource must be locked for reading.
-  bool ReadLockFenceHasPassed(const ChildResource* resource);
+  bool ResourceFenceHasPassed(const ChildResource* resource) const;
 
   void DeleteAndReturnUnusedResourcesToChild(
       ChildMap::iterator child_it,
       DeleteStyle style,
       const std::vector<ResourceId>& unused);
-  virtual std::vector<ReturnedResource>
+  virtual std::vector<ReturnedResourceViz>
   DeleteAndReturnUnusedResourcesToChildImpl(
       Child& child_info,
       DeleteStyle style,
       const std::vector<ResourceId>& unused) = 0;
   CanDeleteNowResult CanDeleteNow(const Child& child_info,
                                   const ChildResource& resource,
-                                  DeleteStyle style);
+                                  DeleteStyle style) const;
 
   // Destroys DisplayResourceProvider, must be called before destructor because
   // it might call virtual functions from inside.
@@ -393,14 +355,13 @@ class VIZ_SERVICE_EXPORT DisplayResourceProvider
   void SetBatchReturnResources(bool aggregate);
   void TryFlushBatchedResources();
 
-  THREAD_CHECKER(thread_checker_);
+  SEQUENCE_CHECKER(sequence_checker_);
   const Mode mode_;
 
   ResourceMap resources_;
   ChildMap children_;
 
   base::flat_map<int, std::vector<ResourceId>> batched_returning_resources_;
-  scoped_refptr<ResourceFence> current_read_lock_fence_;
   // Keep track of whether deleted resources should be batched up or returned
   // immediately.
   int batch_return_resources_lock_count_ = 0;
@@ -417,6 +378,10 @@ class VIZ_SERVICE_EXPORT DisplayResourceProvider
   // ReleaseImageContexts() are expected to finish in finite time. It's always
   // true for Chrome, but on WebView we need to have access to RenderThread.
   bool can_access_gpu_thread_ = true;
+
+  // OnResourceFencePassed() may be called by resource_fence that lives past
+  // destruction of this class.
+  base::WeakPtrFactory<DisplayResourceProvider> weak_factory_{this};
 };
 
 }  // namespace viz

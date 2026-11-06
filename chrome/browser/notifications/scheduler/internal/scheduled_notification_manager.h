@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,8 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/notifications/scheduler/internal/collection_store.h"
 #include "chrome/browser/notifications/scheduler/public/notification_scheduler_types.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -25,8 +26,9 @@ class IconStore;
 // Class to manage in-memory scheduled notifications loaded from the storage.
 class ScheduledNotificationManager {
  public:
-  using Notifications =
-      std::map<SchedulerClientType, std::vector<const NotificationEntry*>>;
+  using Notifications = std::map<
+      SchedulerClientType,
+      std::vector<raw_ptr<const NotificationEntry, VectorExperimental>>>;
   using InitCallback = base::OnceCallback<void(bool)>;
   using ScheduleCallback = base::OnceCallback<void(bool)>;
   using DisplayCallback =
@@ -64,7 +66,7 @@ class ScheduledNotificationManager {
   // Gets all notifications for a particular type, notifications are not sorted.
   virtual void GetNotifications(
       SchedulerClientType type,
-      std::vector<const NotificationEntry*>* notifications) const = 0;
+      std::vector<raw_ptr<const NotificationEntry>>* notifications) const = 0;
 
   // Deletes all notifications of given SchedulerClientType.
   virtual void DeleteNotifications(SchedulerClientType type) = 0;

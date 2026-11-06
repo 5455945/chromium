@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include <memory>
 
 #include "third_party/blink/public/mojom/timing/performance_mark_or_measure.mojom-blink-forward.h"
-#include "third_party/blink/public/mojom/timing/worker_timing_container.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_property.h"
@@ -19,7 +18,7 @@
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/modules/service_worker/extendable_event.h"
 #include "third_party/blink/renderer/modules/service_worker/wait_until_observer.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/loader/fetch/data_pipe_bytes_consumer.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_response.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_remote.h"
@@ -48,8 +47,7 @@ class MODULES_EXPORT FetchEvent final
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  using PreloadResponseProperty =
-      ScriptPromiseProperty<Member<Response>, Member<DOMException>>;
+  using PreloadResponseProperty = ScriptPromiseProperty<IDLAny, DOMException>;
   static FetchEvent* Create(ScriptState*,
                             const AtomicString& type,
                             const FetchEventInit*);
@@ -59,8 +57,6 @@ class MODULES_EXPORT FetchEvent final
              const FetchEventInit*,
              FetchRespondWithObserver*,
              WaitUntilObserver*,
-             mojo::PendingRemote<mojom::blink::WorkerTimingContainer>
-                 worker_timing_remote,
              bool navigation_preload_sent);
   ~FetchEvent() override;
 
@@ -69,9 +65,9 @@ class MODULES_EXPORT FetchEvent final
   String resultingClientId() const;
   bool isReload() const;
 
-  void respondWith(ScriptState*, ScriptPromise, ExceptionState&);
-  ScriptPromise preloadResponse(ScriptState*);
-  ScriptPromise handled(ScriptState*);
+  void respondWith(ScriptState*, ScriptPromise<Response>, ExceptionState&);
+  ScriptPromise<IDLAny> preloadResponse(ScriptState*);
+  ScriptPromise<IDLUndefined> handled(ScriptState*);
 
   void ResolveHandledPromise();
   void RejectHandledPromise(const String& error_message);
@@ -103,11 +99,7 @@ class MODULES_EXPORT FetchEvent final
   Member<PreloadResponseProperty> preload_response_property_;
   std::unique_ptr<WebURLResponse> preload_response_;
   Member<DataPipeBytesConsumer::CompletionNotifier> body_completion_notifier_;
-  Member<ScriptPromiseProperty<ToV8UndefinedGenerator, Member<DOMException>>>
-      handled_property_;
-  // This is currently null for navigation while https://crbug.com/900700 is
-  // being implemented.
-  HeapMojoRemote<mojom::blink::WorkerTimingContainer> worker_timing_remote_;
+  Member<ScriptPromiseProperty<IDLUndefined, DOMException>> handled_property_;
   String client_id_;
   String resulting_client_id_;
   bool is_reload_;

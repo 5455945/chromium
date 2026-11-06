@@ -1,27 +1,20 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <memory>
 
-#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/renderer_context_menu/context_menu_content_type_factory.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu_test_util.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "components/renderer_context_menu/context_menu_content_type.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/mojom/context_menu/context_menu.mojom-shared.h"
 #include "url/gurl.h"
 
 using extensions::MenuItem;
 
-class ContextMenuContentTypeTest : public ChromeRenderViewHostTestHarness {
- public:
-  static std::unique_ptr<ContextMenuContentType> Create(
-      content::WebContents* web_contents,
-      const content::ContextMenuParams& params) {
-    return std::make_unique<ContextMenuContentType>(web_contents, params, true);
-  }
-};
+using ContextMenuContentTypeTest = ChromeRenderViewHostTestHarness;
 
 // Generates a ContextMenuParams that matches the specified contexts.
 content::ContextMenuParams CreateParams(int contexts) {
@@ -29,6 +22,7 @@ content::ContextMenuParams CreateParams(int contexts) {
   rv.is_editable = false;
   rv.media_type = blink::mojom::ContextMenuDataMediaType::kNone;
   rv.page_url = GURL("http://test.page/");
+  rv.frame_url = rv.page_url;
 
   static const std::u16string selected_text = u"sel";
   if (contexts & MenuItem::SELECTION)
@@ -58,7 +52,7 @@ content::ContextMenuParams CreateParams(int contexts) {
   }
 
   if (contexts & MenuItem::FRAME)
-    rv.frame_url = GURL("http://test.frame/");
+    rv.is_subframe = true;
 
   return rv;
 }
@@ -66,22 +60,18 @@ content::ContextMenuParams CreateParams(int contexts) {
 TEST_F(ContextMenuContentTypeTest, CheckTypes) {
   {
     content::ContextMenuParams params = CreateParams(MenuItem::LINK);
-    std::unique_ptr<ContextMenuContentType> content_type(
-        Create(web_contents(), params));
+    auto content_type = std::make_unique<ContextMenuContentType>(params, true);
     EXPECT_TRUE(content_type->SupportsGroup(
                     ContextMenuContentType::ITEM_GROUP_LINK));
     EXPECT_TRUE(content_type->SupportsGroup(
                     ContextMenuContentType::ITEM_GROUP_ALL_EXTENSION));
-    EXPECT_TRUE(content_type->SupportsGroup(
-        ContextMenuContentType::ITEM_GROUP_LENS_REGION_SEARCH));
     EXPECT_FALSE(content_type->SupportsGroup(
                     ContextMenuContentType::ITEM_GROUP_CURRENT_EXTENSION));
   }
 
   {
     content::ContextMenuParams params = CreateParams(MenuItem::SELECTION);
-    std::unique_ptr<ContextMenuContentType> content_type(
-        Create(web_contents(), params));
+    auto content_type = std::make_unique<ContextMenuContentType>(params, true);
     EXPECT_FALSE(content_type->SupportsGroup(
                     ContextMenuContentType::ITEM_GROUP_LINK));
     EXPECT_TRUE(content_type->SupportsGroup(
@@ -90,36 +80,40 @@ TEST_F(ContextMenuContentTypeTest, CheckTypes) {
                     ContextMenuContentType::ITEM_GROUP_EDITABLE));
     EXPECT_TRUE(content_type->SupportsGroup(
                     ContextMenuContentType::ITEM_GROUP_SEARCH_PROVIDER));
-    EXPECT_TRUE(content_type->SupportsGroup(
-        ContextMenuContentType::ITEM_GROUP_LENS_REGION_SEARCH));
+    EXPECT_TRUE(
+        content_type->SupportsGroup(ContextMenuContentType::ITEM_GROUP_GLIC));
+  }
+
+  {
+    content::ContextMenuParams params = CreateParams(MenuItem::SELECTION);
+    params.media_type = blink::mojom::ContextMenuDataMediaType::kImage;
+    auto content_type = std::make_unique<ContextMenuContentType>(params, true);
+    EXPECT_TRUE(
+        content_type->SupportsGroup(ContextMenuContentType::ITEM_GROUP_GLIC));
   }
 
   {
     content::ContextMenuParams params = CreateParams(MenuItem::EDITABLE);
-    std::unique_ptr<ContextMenuContentType> content_type(
-        Create(web_contents(), params));
+    auto content_type = std::make_unique<ContextMenuContentType>(params, true);
     EXPECT_FALSE(content_type->SupportsGroup(
                     ContextMenuContentType::ITEM_GROUP_LINK));
     EXPECT_FALSE(content_type->SupportsGroup(
                     ContextMenuContentType::ITEM_GROUP_COPY));
     EXPECT_TRUE(content_type->SupportsGroup(
                     ContextMenuContentType::ITEM_GROUP_EDITABLE));
-    EXPECT_TRUE(content_type->SupportsGroup(
-        ContextMenuContentType::ITEM_GROUP_LENS_REGION_SEARCH));
   }
 
   {
     content::ContextMenuParams params = CreateParams(MenuItem::IMAGE);
-    std::unique_ptr<ContextMenuContentType> content_type(
-        Create(web_contents(), params));
+    auto content_type = std::make_unique<ContextMenuContentType>(params, true);
     EXPECT_TRUE(content_type->SupportsGroup(
                     ContextMenuContentType::ITEM_GROUP_MEDIA_IMAGE));
     EXPECT_TRUE(content_type->SupportsGroup(
                     ContextMenuContentType::ITEM_GROUP_SEARCHWEBFORIMAGE));
     EXPECT_TRUE(content_type->SupportsGroup(
                     ContextMenuContentType::ITEM_GROUP_PRINT));
-    EXPECT_TRUE(content_type->SupportsGroup(
-        ContextMenuContentType::ITEM_GROUP_LENS_REGION_SEARCH));
+    EXPECT_FALSE(
+        content_type->SupportsGroup(ContextMenuContentType::ITEM_GROUP_GLIC));
 
     EXPECT_FALSE(content_type->SupportsGroup(
                     ContextMenuContentType::ITEM_GROUP_MEDIA_VIDEO));
@@ -131,12 +125,9 @@ TEST_F(ContextMenuContentTypeTest, CheckTypes) {
 
   {
     content::ContextMenuParams params = CreateParams(MenuItem::VIDEO);
-    std::unique_ptr<ContextMenuContentType> content_type(
-        Create(web_contents(), params));
+    auto content_type = std::make_unique<ContextMenuContentType>(params, true);
     EXPECT_TRUE(content_type->SupportsGroup(
                     ContextMenuContentType::ITEM_GROUP_MEDIA_VIDEO));
-    EXPECT_TRUE(content_type->SupportsGroup(
-        ContextMenuContentType::ITEM_GROUP_LENS_REGION_SEARCH));
 
     EXPECT_FALSE(content_type->SupportsGroup(
                     ContextMenuContentType::ITEM_GROUP_MEDIA_IMAGE));
@@ -148,12 +139,9 @@ TEST_F(ContextMenuContentTypeTest, CheckTypes) {
 
   {
     content::ContextMenuParams params = CreateParams(MenuItem::AUDIO);
-    std::unique_ptr<ContextMenuContentType> content_type(
-        Create(web_contents(), params));
+    auto content_type = std::make_unique<ContextMenuContentType>(params, true);
     EXPECT_TRUE(content_type->SupportsGroup(
                     ContextMenuContentType::ITEM_GROUP_MEDIA_AUDIO));
-    EXPECT_TRUE(content_type->SupportsGroup(
-        ContextMenuContentType::ITEM_GROUP_LENS_REGION_SEARCH));
 
     EXPECT_FALSE(content_type->SupportsGroup(
                     ContextMenuContentType::ITEM_GROUP_MEDIA_IMAGE));
@@ -165,13 +153,29 @@ TEST_F(ContextMenuContentTypeTest, CheckTypes) {
 
   {
     content::ContextMenuParams params = CreateParams(MenuItem::FRAME);
-    std::unique_ptr<ContextMenuContentType> content_type(
-        Create(web_contents(), params));
+    auto content_type = std::make_unique<ContextMenuContentType>(params, true);
     EXPECT_TRUE(content_type->SupportsGroup(
                     ContextMenuContentType::ITEM_GROUP_FRAME));
     EXPECT_TRUE(content_type->SupportsGroup(
                     ContextMenuContentType::ITEM_GROUP_PAGE));
-    EXPECT_TRUE(content_type->SupportsGroup(
-        ContextMenuContentType::ITEM_GROUP_LENS_REGION_SEARCH));
   }
+}
+
+TEST_F(ContextMenuContentTypeTest, ReadAnythingType) {
+  content::ContextMenuParams params;
+  params.page_url =
+      GURL("chrome-untrusted://read-anything-side-panel.top-chrome/");
+
+  std::unique_ptr<ContextMenuContentType> content_type =
+      ContextMenuContentTypeFactory::Create(main_rfh(), params);
+
+  // Verify it behaves like ReadAnything content type (rejects PAGE group).
+  EXPECT_FALSE(
+      content_type->SupportsGroup(ContextMenuContentType::ITEM_GROUP_PAGE));
+
+  // Verify a normal page DOES support ITEM_GROUP_PAGE.
+  params.page_url = GURL("http://www.google.com");
+  content_type = ContextMenuContentTypeFactory::Create(main_rfh(), params);
+  EXPECT_TRUE(
+      content_type->SupportsGroup(ContextMenuContentType::ITEM_GROUP_PAGE));
 }

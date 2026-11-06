@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 
 #include "base/thread_annotations.h"
 #include "media/midi/midi_manager.h"
+#include "media/midi/task_service.h"
 
 namespace midi {
 
@@ -20,6 +21,10 @@ class MIDI_EXPORT MidiManagerWinrt final : public MidiManager {
   class MidiOutPortManager;
 
   explicit MidiManagerWinrt(MidiService* service);
+
+  MidiManagerWinrt(const MidiManagerWinrt&) = delete;
+  MidiManagerWinrt& operator=(const MidiManagerWinrt&) = delete;
+
   ~MidiManagerWinrt() override;
 
   // MidiManager overrides:
@@ -38,7 +43,7 @@ class MIDI_EXPORT MidiManagerWinrt final : public MidiManager {
   class MidiPortManager;
 
   // Callbacks on kComTaskRunner.
-  void InitializeOnComRunner();
+  void InitializeOnComRunner(TaskService::InstanceId instance_id);
   void SendOnComRunner(uint32_t port_index, const std::vector<uint8_t>& data);
 
   // Callback from MidiPortManager::OnEnumerationComplete on kComTaskRunner.
@@ -58,8 +63,6 @@ class MIDI_EXPORT MidiManagerWinrt final : public MidiManager {
 
   // Incremented when a MidiPortManager is ready.
   uint8_t port_manager_ready_count_ = 0;
-
-  DISALLOW_COPY_AND_ASSIGN(MidiManagerWinrt);
 };
 
 }  // namespace midi

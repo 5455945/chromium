@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,9 +21,9 @@ class Owned {
   Owned(const Owned&) = delete;
   Owned& operator=(const Owned) = delete;
 
-  MOCK_METHOD1(OnPassedTo, void(void*));
-  MOCK_METHOD1(OnTakenFrom, void(void*));
-  MOCK_METHOD0(OnDestructor, void());
+  MOCK_METHOD(void, OnPassedTo, (void*));
+  MOCK_METHOD(void, OnTakenFrom, (void*));
+  MOCK_METHOD(void, OnDestructor, ());
 };
 
 }  // namespace
@@ -31,10 +31,10 @@ class Owned {
 TEST(OwnedObjectsTest, ContainerWorksAsAdvertised) {
   using Owner =
       OwnedObjects<Owned, void*, &Owned::OnPassedTo, &Owned::OnTakenFrom>;
-  std::unique_ptr<Owner> owner = base::WrapUnique(new Owner());
+  std::unique_ptr<Owner> owner = std::make_unique<Owner>();
 
-  std::unique_ptr<Owned> owned1 = base::WrapUnique(new Owned());
-  std::unique_ptr<Owned> owned2 = base::WrapUnique(new Owned());
+  std::unique_ptr<Owned> owned1 = std::make_unique<Owned>();
+  std::unique_ptr<Owned> owned2 = std::make_unique<Owned>();
   auto* raw1 = owned1.get();
   auto* raw2 = owned2.get();
 
@@ -58,7 +58,7 @@ TEST(OwnedObjectsTest, ContainerWorksAsAdvertised) {
   raw1 = nullptr;
 
   // Expect the container to explode if deleted with objects.
-  EXPECT_DCHECK_DEATH(owner.reset());
+  EXPECT_CHECK_DEATH(owner.reset());
 
   // Ask the container to release the remaining objects.
   EXPECT_CALL(*raw2, OnTakenFrom(owner.get()));

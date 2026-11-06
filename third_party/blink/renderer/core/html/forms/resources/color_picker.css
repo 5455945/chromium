@@ -1,4 +1,4 @@
-/* Copyright (C) 2019 The Chromium Authors. All rights reserved.
+/* Copyright 2019 The Chromium Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
@@ -17,9 +17,25 @@ color-picker {
   width: 232px;
 }
 
+color-picker.alpha-enabled {
+  height: 282px;
+}
+
 visual-color-picker {
   height: 71.5%;
   min-height: 0;
+}
+
+color-picker.alpha-enabled > visual-color-picker {
+  height: 75%;
+}
+
+color-picker.alpha-enabled color-well {
+  height: 65%;
+}
+
+color-picker.alpha-enabled #visual-color-picker-strip {
+  height: 15%;
 }
 
 color-well {
@@ -45,10 +61,6 @@ hue-slider {
 }
 
 eye-dropper {
-  background-image: -webkit-image-set(url(eye_dropper_icon.svg) 1x);
-  background-origin: content-box;
-  background-repeat: no-repeat;
-  background-size: contain;
   border-radius: 2px;
   box-sizing: border-box;
   height: 32px;
@@ -91,6 +103,67 @@ hue-slider > canvas {
   width: 100%;
 }
 
+alpha-slider {
+  display: grid;
+  font-family: inherit;
+  font-size: 12px;
+  grid-template-columns: auto 1fr 40px auto;
+  grid-template-rows: 16px 18px;
+  height: 15%;
+  margin-left: 10%;
+  margin-top: 2%;
+  width: 80%;
+}
+
+alpha-slider > label {
+  grid-column: 1;
+}
+
+alpha-slider > input[type='number'] {
+  font-size: 12px;
+  grid-column: 3;
+  height: 16px;
+  padding: 0 2px;
+  text-align: right;
+}
+
+alpha-slider > span {
+  align-items: center;
+  display: flex;
+  grid-column: 4;
+}
+
+alpha-slider > input[type='range'] {
+  appearance: none;
+  background:
+      linear-gradient(to right, transparent, var(--alpha-slider-color)),
+      conic-gradient(#d0d0d0 25%, #ffffff 0 50%, #d0d0d0 0 75%, #ffffff 0);
+  background-size: 100% 100%, 8px 8px;
+  border: 1px solid rgba(0, 0, 0, 0.19);
+  border-radius: 2px;
+  grid-column: 1 / 5;
+  height: 14px;
+  margin: 4px 0 0;
+  padding: 0;
+  width: 100%;
+}
+
+alpha-slider > input[type='range']::-webkit-slider-thumb {
+  appearance: none;
+  background: transparent;
+  border: 2px solid #FFFFFF;
+  border-radius: 50%;
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.4);
+  box-sizing: border-box;
+  height: 18px;
+  width: 18px;
+}
+
+alpha-slider > input[type='range']:focus {
+  box-shadow: 0 0 0 2px -webkit-focus-ring-color;
+  outline: none;
+}
+
 color-selection-ring {
   border: 2px solid #FFFFFF;
   border-radius: 50%;
@@ -122,6 +195,10 @@ hue-slider > color-selection-ring {
 manual-color-picker {
   height: 28%;
   min-height: 0;
+}
+
+color-picker.alpha-enabled > manual-color-picker {
+  height: 25%;
 }
 
 color-value-container:not(.hidden-color-value-container) {
@@ -168,7 +245,7 @@ format-toggler:hover {
   background-color: #F7F7F7;
 }
 
-#up-down-icon {
+.icon-container {
   display: flex;
   align-items: center;
 }
@@ -204,6 +281,12 @@ channel-label {
   color-selection-ring {
     forced-color-adjust: none;
   }
+  alpha-slider > input[type='range'] {
+    forced-color-adjust: none;
+  }
+  color-selection-ring:focus {
+    color: Highlight;
+  }
   color-picker {
     border: 1px solid WindowText;
     border-radius: 2px;
@@ -228,10 +311,6 @@ channel-label {
     border: 1px solid #858585;
   }
 
-  eye-dropper {
-    background-image: -webkit-image-set(url(eye_dropper_icon_dark.svg) 1x);
-  }
-
   eye-dropper.selected {
     background-color: #454545;
   }
@@ -254,4 +333,5 @@ channel-label {
   .up-down-icon path {
     fill: #FFFFFF;
   }
+
  }

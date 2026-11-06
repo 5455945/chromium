@@ -1,41 +1,69 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/policy/core/common/cloud/encrypted_reporting_job_configuration.h"
 
-#include "base/base64.h"
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+
+#include "base/containers/fixed_flat_set.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_util.h"
-#include "components/policy/core/common/cloud/cloud_policy_client.h"
-#include "components/reporting/proto/record_constants.pb.h"
+#include "components/reporting/proto/synced/record_constants.pb.h"
+#include "components/reporting/util/encrypted_reporting_json_keys.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
 namespace policy {
-
 namespace {
 
-// EncryptedReportingJobConfiguration strings
-constexpr char kEncryptedRecordListKey[] = "encryptedRecord";
-constexpr char kAttachEncryptionSettingsKey[] = "attachEncryptionSettings";
-constexpr char kDeviceKey[] = "device";
-constexpr char kBrowserKey[] = "browser";
+constexpr auto kTopLevelKeyAllowList = base::MakeFixedFlatSet<std::string_view>(
+    {reporting::json_keys::kAttachEncryptionSettings,
+     reporting::json_keys::kBrowser,
+     reporting::json_keys::kConfigurationFileVersion,
+     reporting::json_keys::kDevice, reporting::json_keys::kEncryptedRecordList,
+     reporting::json_keys::kRequestId, reporting::json_keys::kSource});
 
+DMAuth GetAuthData(const std::string& dm_token) {
+  if (dm_token.empty()) {
+    // This is the case for uploading managed user events from an unmanaged
+    // device. The server will authenticate by looking at the user dm tokens
+    // inside the records instead of a single request-level device dm token.
+    return DMAuth::NoAuth();
+  } else {
+    // The device cloud policy client only exists on managed devices and is the
+    // source of the DM token. So if the device is managed, we use the device dm
+    // token as authentication.
+    return DMAuth::FromDMToken(dm_token);
+  }
+}
 }  // namespace
 
 EncryptedReportingJobConfiguration::EncryptedReportingJobConfiguration(
-    CloudPolicyClient* client,
+    scoped_refptr<network::SharedURLLoaderFactory> factory,
     const std::string& server_url,
-    base::Value merging_payload,
-    UploadCompleteCallback complete_cb)
+    base::DictValue merging_payload,
+    const std::string& dm_token,
+    const std::string& client_id,
+    UploadResponseCallback response_cb,
+    UploadCompleteCallbackDeprecated complete_cb)
     : ReportingJobConfigurationBase(TYPE_UPLOAD_ENCRYPTED_REPORT,
-                                    client->GetURLLoaderFactory(),
-                                    client,
+                                    factory,
+                                    GetAuthData(dm_token),
                                     server_url,
-                                    /*include_device_info*/ true,
-                                    std::move(complete_cb)) {
+                                    std::move(complete_cb)),
+      is_device_managed_(!dm_token.empty()),
+      response_cb_(std::move(response_cb)) {
+  if (is_device_managed_) {
+    // Payload for managed device
+    InitializePayloadWithDeviceInfo(dm_token, client_id);
+  } else {
+    // Payload for unmanaged device
+    InitializePayloadWithoutDeviceInfo();
+  }
   // Merge it into the base class payload.
-  payload_.MergeDictionary(&merging_payload);
+  payload_.Merge(std::move(merging_payload));
 }
 
 EncryptedReportingJobConfiguration::~EncryptedReportingJobConfiguration() {
@@ -44,40 +72,52 @@ EncryptedReportingJobConfiguration::~EncryptedReportingJobConfiguration() {
     // failure to the callback.
     std::move(callback_).Run(/*job=*/nullptr,
                              DeviceManagementStatus::DM_STATUS_REQUEST_FAILED,
-                             /*net_error=*/418,
-                             /*response_body=*/base::Value());
+                             /*response_code=*/418,
+                             /*response_body=*/std::nullopt);
   }
 }
 
 void EncryptedReportingJobConfiguration::UpdatePayloadBeforeGetInternal() {
-  // Can't mutate payload_ and iterate it at the same time, so build a
-  // disallowed list and then remove the values.
-  std::set<std::string> disallowed_keys;
-  for (auto key_value_pair : payload_.DictItems()) {
-    if (GetTopLevelKeyAllowList().count(key_value_pair.first) == 0) {
-      disallowed_keys.insert(key_value_pair.first);
+  for (auto it = payload_.begin(); it != payload_.end();) {
+    const auto& [key, value] = *it;
+    if (!kTopLevelKeyAllowList.contains(key)) {
+      it = payload_.erase(it);
+      continue;
     }
-  }
-
-  for (auto key : disallowed_keys) {
-    payload_.RemoveKey(key);
+    ++it;
   }
 }
 
-void EncryptedReportingJobConfiguration::UpdateContext(base::Value& context) {
+void EncryptedReportingJobConfiguration::UpdateContext(
+    base::DictValue context) {
   context_ = std::move(context);
 }
 
+DeviceManagementService::Job::RetryMethod
+EncryptedReportingJobConfiguration::ShouldRetry(
+    int response_code,
+    const std::string& response_body) {
+  // Do not retry on the Job level - ERP has its own retry mechanism.
+  return DeviceManagementService::Job::NO_RETRY;
+}
+
+void EncryptedReportingJobConfiguration::OnURLLoadComplete(
+    DeviceManagementService::Job* job,
+    int net_error,
+    int response_code,
+    const std::string& response_body) {
+  // Delegate net error and response code for further analysis that may
+  // affect retries and back-off.
+  std::move(response_cb_).Run(net_error, response_code);
+  // Then forward response to the base class.
+  ReportingJobConfigurationBase::OnURLLoadComplete(
+      job, net_error, response_code, response_body);
+}
+
 std::string EncryptedReportingJobConfiguration::GetUmaString() const {
-  return "Enterprise.EncryptedReportingSuccess";
+  if (is_device_managed_) {
+    return "Browser.ERP.Managed";
+  }
+  return "Browser.ERP.Unmanaged";
 }
-
-std::set<std::string>
-EncryptedReportingJobConfiguration::GetTopLevelKeyAllowList() {
-  static std::set<std::string> kTopLevelKeyAllowList{
-      kEncryptedRecordListKey, kAttachEncryptionSettingsKey, kDeviceKey,
-      kBrowserKey};
-  return kTopLevelKeyAllowList;
-}
-
 }  // namespace policy

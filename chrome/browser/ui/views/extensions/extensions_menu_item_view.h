@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,78 +7,87 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
+#include "chrome/browser/ui/extensions/extensions_menu_view_model.h"
+#include "chrome/browser/ui/views/extensions/extension_context_menu_controller.h"
 #include "ui/base/metadata/metadata_header_macros.h"
-#include "ui/views/view.h"
+#include "ui/views/controls/button/button.h"
+#include "ui/views/layout/flex_layout_view.h"
+#include "ui/views/metadata/view_factory.h"
 
-class Browser;
+class BrowserWindowInterface;
 class ExtensionContextMenuController;
 class ExtensionsMenuButton;
 class HoverButton;
-class Profile;
-class ToolbarActionViewController;
+class ToolbarActionViewModel;
 class ToolbarActionsModel;
 
-// ExtensionsMenuItemView is a single row inside the extensions menu for a
-// particular extension. Includes information about the extension in addition to
-// a button to pin the extension to the toolbar and a button for accessing the
-// associated context menu.
-class ExtensionsMenuItemView : public views::View {
+// Single row inside the extensions menu for every installed extension. Includes
+// information about the extension, a button to pin the extension to the toolbar
+// and a button for accessing the associated context menu.
+class ExtensionMenuItemView : public views::FlexLayoutView,
+                              public ExtensionContextMenuController::Observer {
+  METADATA_HEADER(ExtensionMenuItemView, views::FlexLayoutView)
+
  public:
-  METADATA_HEADER(ExtensionsMenuItemView);
+  ExtensionMenuItemView(BrowserWindowInterface* browser,
+                        std::unique_ptr<ToolbarActionViewModel> view_model,
+                        bool allow_pinning);
+  ExtensionMenuItemView(const ExtensionMenuItemView&) = delete;
+  ExtensionMenuItemView& operator=(const ExtensionMenuItemView&) = delete;
+  ~ExtensionMenuItemView() override;
 
-  static constexpr int kMenuItemHeightDp = 40;
-  static constexpr gfx::Size kIconSize{28, 28};
+  // Updates the pin button.
+  void UpdatePinButton(bool is_force_pinned, bool is_pinned);
 
-  ExtensionsMenuItemView(
-      Browser* browser,
-      std::unique_ptr<ToolbarActionViewController> controller,
-      bool allow_pinning);
-  ExtensionsMenuItemView(const ExtensionsMenuItemView&) = delete;
-  ExtensionsMenuItemView& operator=(const ExtensionsMenuItemView&) = delete;
-  ~ExtensionsMenuItemView() override;
-
-  // views::View:
-  void OnThemeChanged() override;
-
-  void UpdatePinButton();
-
-  bool IsPinned() const;
-
-  void ContextMenuPressed();
-  void PinButtonPressed();
-
-  ToolbarActionViewController* view_controller() { return controller_.get(); }
-  const ToolbarActionViewController* view_controller() const {
-    return controller_.get();
-  }
+  ToolbarActionViewModel* view_model() { return view_model_.get(); }
+  const ToolbarActionViewModel* view_model() const { return view_model_.get(); }
 
   bool IsContextMenuRunningForTesting() const;
   ExtensionsMenuButton* primary_action_button_for_testing();
-  HoverButton* context_menu_button_for_testing() {
-    return context_menu_button_;
-  }
-  HoverButton* pin_button_for_testing() { return pin_button_; }
+  HoverButton* context_menu_button_for_testing();
+  HoverButton* pin_button_for_testing();
 
  private:
-  // Maybe adjust |icon_color| to assure high enough contrast with the
-  // background.
-  SkColor GetAdjustedIconColor(SkColor icon_color) const;
+  // ExtensionContextMenuController::Observer:
+  void OnContextMenuShown() override;
+  void OnContextMenuClosed() override;
 
-  Profile* const profile_;
+  // Sets ups the context menu button controllers. Must be called by the
+  // constructor.
+  void SetupContextMenuButton();
 
-  ExtensionsMenuButton* const primary_action_button_;
+  // Handles the context menu button press. This is passed as a callback to
+  // `context_menu_button_`.
+  void OnContextMenuPressed();
 
-  std::unique_ptr<ToolbarActionViewController> controller_;
+  // Handles the pin button press. This is passed as a callback to
+  // `pin_button_`.
+  void OnPinButtonPressed();
 
-  HoverButton* context_menu_button_ = nullptr;
+  const raw_ptr<BrowserWindowInterface> browser_;
 
-  ToolbarActionsModel* const model_;
+  // View Model for an action that is shown in the toolbar.
+  const std::unique_ptr<ToolbarActionViewModel> view_model_;
 
-  HoverButton* pin_button_ = nullptr;
+  // Model for the browser actions toolbar that provides information such as the
+  // action pin status or visibility.
+  const raw_ptr<ToolbarActionsModel> model_;
 
-  // This controller is responsible for showing the context menu for an
-  // extension.
+  raw_ptr<ExtensionsMenuButton> primary_action_button_;
+
+  raw_ptr<HoverButton> pin_button_ = nullptr;
+
+  raw_ptr<HoverButton> context_menu_button_ = nullptr;
+  // Controller responsible for showing the context menu for an extension.
   std::unique_ptr<ExtensionContextMenuController> context_menu_controller_;
 };
+
+BEGIN_VIEW_BUILDER(/* no export */,
+                   ExtensionMenuItemView,
+                   views::FlexLayoutView)
+END_VIEW_BUILDER
+
+DEFINE_VIEW_BUILDER(/* no export */, ExtensionMenuItemView)
 
 #endif  // CHROME_BROWSER_UI_VIEWS_EXTENSIONS_EXTENSIONS_MENU_ITEM_VIEW_H_

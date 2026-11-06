@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Copyright 2020 The Chromium Authors. All rights reserved.
-     Use of this source code is governed by a BSD-style license that can be
-     found in the LICENSE file.
+<!--
+Copyright 2020 The Chromium Authors
+Use of this source code is governed by a BSD-style license that can be
+found in the LICENSE file.
 -->
 
 <!-- This manifest is required for tests using
@@ -15,5 +16,7 @@
 
   <application android:theme="@style/Theme.AppCompat.Light">
     <activity android:name="org.chromium.ui.base.TestActivity"/>
+
+    <activity android:name="org.chromium.ui.theme.ThemeResourceWrapperJavaUnitTest$ThemeResourceTestActivity"/>
   </application>
 </manifest>

@@ -1,8 +1,10 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.android_webview.services;
+
+import static org.chromium.components.minidump_uploader.CrashFileManager.recordMinidumpLoss;
 
 import android.app.Service;
 import android.content.Intent;
@@ -12,39 +14,43 @@ import android.os.ParcelFileDescriptor;
 
 import androidx.annotation.VisibleForTesting;
 
-import org.chromium.android_webview.common.crash.CrashInfo;
-import org.chromium.android_webview.common.crash.CrashUploadUtil;
-import org.chromium.android_webview.common.crash.SystemWideCrashDirectories;
 import org.chromium.android_webview.common.services.ICrashReceiverService;
+import org.chromium.android_webview.nonembedded.crash.CrashUploadUtil;
+import org.chromium.android_webview.nonembedded.crash.SystemWideCrashDirectories;
 import org.chromium.base.Log;
 import org.chromium.components.minidump_uploader.CrashFileManager;
 
 import java.io.File;
-import java.io.FileWriter;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Service that is responsible for receiving crash dumps from an application, for upload.
- */
+import javax.annotation.concurrent.GuardedBy;
+
+/** Service that is responsible for receiving crash dumps from an application, for upload. */
 public class CrashReceiverService extends Service {
     private static final String TAG = "CrashReceiverService";
 
     private final Object mCopyingLock = new Object();
+
+    @GuardedBy("mCopyingLock")
     private boolean mIsCopying;
 
-    private final ICrashReceiverService.Stub mBinder = new ICrashReceiverService.Stub() {
-        @Override
-        public void transmitCrashes(ParcelFileDescriptor[] fileDescriptors, List crashInfo) {
-            int uid = Binder.getCallingUid();
-            if (crashInfo != null) {
-                assert crashInfo.size() == fileDescriptors.length;
-            }
-            performMinidumpCopyingSerially(
-                    uid, fileDescriptors, crashInfo, true /* scheduleUploads */);
-        }
-    };
+    private final ICrashReceiverService.Stub mBinder =
+            new ICrashReceiverService.Stub() {
+                // AIDL `List` is raw: List<Map<String, String>> is not a supported AIDL type.
+                @SuppressWarnings("unchecked")
+                @Override
+                public void transmitCrashes(
+                        ParcelFileDescriptor[] fileDescriptors, List crashInfo) {
+                    int uid = Binder.getCallingUid();
+                    if (crashInfo != null) {
+                        assert crashInfo.size() == fileDescriptors.length;
+                    }
+                    performMinidumpCopyingSerially(
+                            uid, fileDescriptors, crashInfo, /* scheduleUploads= */ true);
+                }
+            };
 
     /**
      * Copies minidumps in a synchronized way, waiting for any already started copying operations to
@@ -53,8 +59,11 @@ public class CrashReceiverService extends Service {
      * during testing).
      */
     @VisibleForTesting
-    public void performMinidumpCopyingSerially(int uid, ParcelFileDescriptor[] fileDescriptors,
-            List<Map<String, String>> crashesInfo, boolean scheduleUploads) {
+    public void performMinidumpCopyingSerially(
+            int uid,
+            ParcelFileDescriptor[] fileDescriptors,
+            List<Map<String, String>> crashesInfo,
+            boolean scheduleUploads) {
         if (!waitUntilWeCanCopy()) {
             Log.e(TAG, "something went wrong when waiting to copy minidumps, bailing!");
             return;
@@ -94,92 +103,75 @@ public class CrashReceiverService extends Service {
     }
 
     /**
-     * Copy minidumps from the {@param fileDescriptors} to the directory where WebView stores its
-     * minidump files. Also writes a new log file for each mindump, the log file contains a JSON
-     * object with info from {@param crashesInfo}. The log file name is: <copied-file-name> +
-     * {@code "_log.json"} suffix.
+     * Copy minidumps from the {@code fileDescriptors} to the directory where WebView stores its
+     * minidump files. Also writes a new log file for each minidump, the log file contains a JSON
+     * object with info from {@code crashesInfo}. The log file name is: <copied-file-name> + {@code
+     * "_log.json"} suffix.
      *
      * @return whether any minidump was copied.
      */
     @VisibleForTesting
-    public static boolean copyMinidumps(int uid, ParcelFileDescriptor[] fileDescriptors,
+    public static boolean copyMinidumps(
+            int uid,
+            ParcelFileDescriptor[] fileDescriptors,
             List<Map<String, String>> crashesInfo) {
         CrashFileManager crashFileManager =
                 new CrashFileManager(SystemWideCrashDirectories.getOrCreateWebViewCrashDir());
         boolean copiedAnything = false;
-        if (fileDescriptors != null) {
-            for (int i = 0; i < fileDescriptors.length; i++) {
-                ParcelFileDescriptor fd = fileDescriptors[i];
-                if (fd == null) continue;
-                try {
-                    File copiedFile = crashFileManager.copyMinidumpFromFD(fd.getFileDescriptor(),
-                            SystemWideCrashDirectories.getWebViewTmpCrashDir(), uid);
-                    if (copiedFile == null) {
-                        Log.w(TAG, "failed to copy minidump from " + fd.toString());
-                        // TODO(gsennton): add UMA metric to ensure we aren't losing too many
-                        // minidumps here.
-                    } else {
-                        copiedAnything = true;
-                        if (crashesInfo != null) {
-                            Map<String, String> crashInfo = crashesInfo.get(i);
-                            File logFile = SystemWideCrashDirectories.createCrashJsonLogFile(
-                                    copiedFile.getName());
-                            writeCrashInfoToLogFile(logFile, copiedFile, crashInfo);
-                        }
+        for (int i = 0; i < fileDescriptors.length; i++) {
+            ParcelFileDescriptor fd = fileDescriptors[i];
+            Map<String, String> crashInfo = crashesInfo.get(i);
+            if (fd == null) continue;
+            try {
+                File copiedFile =
+                        crashFileManager.copyMinidumpFromFD(
+                                fd.getFileDescriptor(),
+                                SystemWideCrashDirectories.getWebViewTmpCrashDir(),
+                                uid);
+                if (copiedFile == null) {
+                    // We also log a UMA metric within the method to signal that the minidump copy
+                    // failed.
+                    Log.w(TAG, "failed to copy minidump from " + fd);
+                } else {
+                    copiedAnything = true;
+                    File logFile =
+                            SystemWideCrashDirectories.createCrashJsonLogFile(copiedFile.getName());
+                    if (!CrashLoggingUtils.writeCrashInfoToLogFile(
+                            logFile, copiedFile, crashInfo)) {
+                        recordMinidumpLoss(
+                                CrashFileManager.MinidumpLossReason.LOG_FILE_WRITE_FAILED);
                     }
-                } catch (IOException e) {
-                    Log.w(TAG, "failed to copy minidump from " + fd.toString() + ": "
-                            + e.getMessage());
-                } finally {
-                    deleteFilesInWebViewTmpDirIfExists();
                 }
+            } catch (IOException e) {
+                Log.w(TAG, "failed to copy minidump from " + fd, e);
+                recordMinidumpLoss(CrashFileManager.MinidumpLossReason.COPY_FAILED);
+            } finally {
+                deleteFilesInWebViewTmpDirIfExists();
             }
         }
         return copiedAnything;
     }
 
-    /**
-     * Writes info about crash in a separate log file for each crash as a JSON Object.
-     */
-    @VisibleForTesting
-    public static boolean writeCrashInfoToLogFile(
-            File logFile, File crashFile, Map<String, String> crashInfoMap) {
-        try {
-            String localId = CrashFileManager.getCrashLocalIdFromFileName(crashFile.getName());
-            if (localId == null || crashInfoMap == null) return false;
-            CrashInfo crashInfo = new CrashInfo(localId, crashInfoMap);
-            crashInfo.captureTime = crashFile.lastModified();
-
-            FileWriter writer = new FileWriter(logFile);
-            try {
-                writer.write(crashInfo.serializeToJson());
-            } finally {
-                writer.close();
-            }
-            return true;
-        } catch (IOException e) {
-            Log.w(TAG, "failed to write JSON log entry for crash", e);
-        }
-        return false;
-    }
-
-    /**
-     * Delete all files in the directory where temporary files from this Service are stored.
-     */
+    /** Delete all files in the directory where temporary files from this Service are stored. */
     @VisibleForTesting
     public static void deleteFilesInWebViewTmpDirIfExists() {
         deleteFilesInDirIfExists(SystemWideCrashDirectories.getWebViewTmpCrashDir());
     }
 
     private static void deleteFilesInDirIfExists(File directory) {
-        if (directory.isDirectory()) {
-            File[] files = directory.listFiles();
-            if (files != null) {
-                for (File file : files) {
-                    if (!file.delete()) {
-                        Log.w(TAG, "Couldn't delete file " + file.getAbsolutePath());
-                    }
-                }
+        if (!directory.isDirectory()) {
+            return;
+        }
+        File[] files = directory.listFiles();
+        if (files == null) {
+            return;
+        }
+        if (files.length > 1) {
+            recordMinidumpLoss(CrashFileManager.MinidumpLossReason.LEFTOVER_TEMP_FILES);
+        }
+        for (File file : files) {
+            if (!file.delete()) {
+                Log.w(TAG, "Couldn't delete file " + file.getAbsolutePath());
             }
         }
     }

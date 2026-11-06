@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 
 #include "base/files/file_path.h"
 #include "components/account_id/account_id.h"
+#include "google_apis/gaia/gaia_id.h"
 
 // Move-only struct holding the parameters of a profile being added into
 // ProfileAttributesStorage.
@@ -31,7 +32,7 @@ struct ProfileAttributesInitParams {
   std::u16string profile_name;
   // GAIA id of the user signed into the profile. Empty string if the
   // user is not signed in.
-  std::string gaia_id;
+  GaiaId gaia_id;
   // Email address of the user signed into the profile. Empty string if the user
   // is not signed in.
   std::u16string user_name;
@@ -45,8 +46,6 @@ struct ProfileAttributesInitParams {
   // `AccountId` of the user of the profile. Empty if the profile doesn't have
   // any associated `user_manager::User`.
   AccountId account_id{EmptyAccountId()};
-  // Whether the profile is guest.
-  bool is_guest = false;
   // Whether the profile is ephemeral. Ephemeral profiles are cleaned up on
   // every Chrome restart.
   bool is_ephemeral = false;

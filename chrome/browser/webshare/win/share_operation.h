@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 #ifndef CHROME_BROWSER_WEBSHARE_WIN_SHARE_OPERATION_H_
@@ -10,42 +10,40 @@
 
 #include "base/memory/weak_ptr.h"
 #include "base/win/core_winrt_util.h"
-#include "content/public/browser/web_contents_observer.h"
 #include "third_party/blink/public/mojom/webshare/webshare.mojom.h"
 #include "url/gurl.h"
 
 #include <wrl/client.h>
 
-namespace ABI {
-namespace Windows {
-namespace ApplicationModel {
-namespace DataTransfer {
+namespace ABI::Windows {
+namespace ApplicationModel::DataTransfer {
 struct IDataPackage;
 class IDataRequest;
 class IDataRequestDeferral;
 class IDataRequestedEventArgs;
-}  // namespace DataTransfer
-}  // namespace ApplicationModel
+}  // namespace ApplicationModel::DataTransfer
 namespace Storage {
 class IStorageFile;
 class IStorageItem;
 }  // namespace Storage
-}  // namespace Windows
-}  // namespace ABI
+}  // namespace ABI::Windows
 
-namespace base {
-namespace win {
+namespace base::win {
 template <typename T>
 class Vector;
-}  // namespace win
-}  // namespace base
+}  // namespace base::win
+
+namespace content {
+class WebContents;
+}  // namespace content
 
 namespace webshare {
 
 class ShowShareUIForWindowOperation;
 
-class ShareOperation final : content::WebContentsObserver {
+class ShareOperation final {
  public:
+  using SharedFiles = std::vector<blink::mojom::SharedFilePtr>;
   static void SetMaxFileBytesForTesting(uint64_t max_file_bytes);
 
   // Test hook for overriding the base RoGetActivationFactory function
@@ -55,37 +53,40 @@ class ShareOperation final : content::WebContentsObserver {
   ShareOperation(const std::string& title,
                  const std::string& text,
                  const GURL& url,
-                 std::vector<blink::mojom::SharedFilePtr> files,
                  content::WebContents* web_contents);
   ShareOperation(const ShareOperation&) = delete;
   ShareOperation& operator=(const ShareOperation&) = delete;
-  ~ShareOperation() final;
+  ~ShareOperation();
 
   base::WeakPtr<ShareOperation> AsWeakPtr();
-
-  // Starts this Windows Share operation for the previously provided content.
-  // The |callback| will be invoked upon completion of the operation with a
-  // value indicating the success of the operation, or if the returned instance
-  // is destroyed before the operation is completed the |callback| will be
-  // invoked with a CANCELLED value and the underlying Windows operation will be
-  // aborted.
-  void Run(blink::mojom::ShareService::ShareCallback callback);
+  // Starts this Windows Share operation for the previously provided content
+  // and a set of files. The |callback| will be invoked upon completion of the
+  // operation with a value indicating the success of the operation, or if the
+  // returned instance is destroyed before the operation is completed the
+  // |callback| will be invoked with a CANCELLED value and the underlying
+  // Windows operation will be aborted.
+  void Run(SharedFiles files,
+           blink::mojom::ShareService::ShareCallback callback);
 
  private:
   void OnDataRequested(
+      SharedFiles files,
       ABI::Windows::ApplicationModel::DataTransfer::IDataRequestedEventArgs* e);
   bool PutShareContentInDataPackage(
+      SharedFiles files,
       ABI::Windows::ApplicationModel::DataTransfer::IDataRequest* data_request);
   bool PutShareContentInEventArgs(
+      SharedFiles files,
       ABI::Windows::ApplicationModel::DataTransfer::IDataRequestedEventArgs* e);
   void OnStreamedFileCreated(
+      uint32_t expected_file_count,
       Microsoft::WRL::ComPtr<ABI::Windows::Storage::IStorageFile> storage_file);
   void Complete(const blink::mojom::ShareError share_error);
 
+  const base::WeakPtr<content::WebContents> web_contents_;
   const std::string title_;
   const std::string text_;
   const GURL url_;
-  const std::vector<blink::mojom::SharedFilePtr> files_;
 
   std::vector<Microsoft::WRL::ComPtr<IUnknown>> async_operations_;
   blink::mojom::ShareService::ShareCallback callback_;

@@ -1,260 +1,538 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.share.link_to_text;
 
-import android.content.Context;
-import android.net.Uri;
+import static org.chromium.build.NullUtil.assumeNonNull;
+
+import android.text.TextUtils;
 
 import androidx.annotation.IntDef;
+import androidx.annotation.VisibleForTesting;
 
-import org.chromium.base.metrics.RecordHistogram;
+import org.chromium.base.Callback;
+import org.chromium.base.Log;
+import org.chromium.base.ResettersForTesting;
+import org.chromium.base.TriState;
+import org.chromium.base.TriStateUtils;
 import org.chromium.base.task.PostTask;
+import org.chromium.base.task.TaskTraits;
 import org.chromium.blink.mojom.TextFragmentReceiver;
+import org.chromium.build.annotations.Initializer;
+import org.chromium.build.annotations.MonotonicNonNull;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.share.ChromeShareExtras;
 import org.chromium.chrome.browser.share.share_sheet.ChromeOptionShareCallback;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
+import org.chromium.chrome.browser.share.share_sheet.ShareSheetLinkToggleCoordinator.LinkToggleState;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabHidingType;
+import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.components.browser_ui.share.ShareParams;
-import org.chromium.content_public.browser.UiThreadTaskTraits;
-import org.chromium.ui.widget.Toast;
+import org.chromium.content_public.browser.NavigationHandle;
+import org.chromium.content_public.browser.RenderFrameHost;
+import org.chromium.content_public.browser.SelectionPopupController;
+import org.chromium.content_public.browser.WebContents;
+import org.chromium.ui.base.Clipboard;
 import org.chromium.url.GURL;
 
-/**
- * Handles the Link To Text action in the Sharing Hub.
- */
-public class LinkToTextCoordinator extends EmptyTabObserver {
-    @IntDef({LinkGeneration.TEXT, LinkGeneration.LINK, LinkGeneration.FAILURE, LinkGeneration.MAX})
+/** Handles the Link To Text action in the Sharing Hub. */
+@NullMarked
+public class LinkToTextCoordinator implements TabObserver {
+    @IntDef({LinkGeneration.TEXT, LinkGeneration.LINK, LinkGeneration.FAILURE, LinkGeneration.COUNT})
     public @interface LinkGeneration {
         int TEXT = 0;
         int LINK = 1;
         int FAILURE = 2;
-        int MAX = 3;
+        int COUNT = 3;
     }
 
+    /**
+     * Represents the different lifecycle phases of the asynchronous Link-to-Text remote request.
+     *
+     * <p>The flow typically progresses through the following phases: 1. Initialization (NONE) 2.
+     * Renderer Selector Generation (REQUESTED) -> Subject to a 100ms timeout. 3. Canonical URL
+     * Retrieval (SELECTOR_RECEIVED) -> Timeout is ignored here. 4. Finalization (COMPLETED /
+     * CANCELLED) -> Share sheet shown or aborted.
+     */
+    @IntDef({
+        RemoteRequestStatus.NONE,
+        RemoteRequestStatus.REQUESTED,
+        RemoteRequestStatus.SELECTOR_RECEIVED,
+        RemoteRequestStatus.COMPLETED,
+        RemoteRequestStatus.CANCELLED
+    })
+    public @interface RemoteRequestStatus {
+        /** No remote request has been initiated yet. */
+        int NONE = 0;
+
+        /** The request has been sent to the renderer process to generate the text selector. */
+        int REQUESTED = 1;
+
+        /**
+         * The text selector request and canonical URL generation have successfully finished (share
+         * sheet is ready to open).
+         */
+        int COMPLETED = 2;
+
+        /** The request was cancelled (e.g. due to user navigation, tab hiding, or timeout). */
+        int CANCELLED = 3;
+
+        /**
+         * The text selector was successfully generated, and the browser is now fetching the
+         * canonical URL.
+         */
+        int SELECTOR_RECEIVED = 4;
+    }
+
+    private static final String TAG = "LinkToTextCoord";
     private static final String SHARE_TEXT_TEMPLATE = "\"%s\"\n";
-    private static final String TEXT_FRAGMENT_PREFIX = ":~:text=";
     private static final String INVALID_SELECTOR = "";
-    private static final long TIMEOUT_MS = 50;
-    private final Context mContext;
-    private final ChromeOptionShareCallback mChromeOptionShareCallback;
-    private final String mVisibleUrl;
-    private final Tab mTab;
-    private final ChromeShareExtras mChromeShareExtras;
-    private final long mShareStartTime;
-    private final long mRequestSelectorStartTime;
+    private static final int TIMEOUT_MS = 100;
+    private static final int PREVIEW_MAX_LENGTH = 35;
+    private static final int PREVIEW_SELECTED_TEXT_CUTOFF_LENGTH = 32;
+    private static final String PREVIEW_ELLIPSIS = "...";
 
-    private ShareParams mShareLinkParams;
-    private TextFragmentReceiver mProducer;
-    private boolean mCancelRequest;
+    private ChromeOptionShareCallback mChromeOptionShareCallback;
+    private Tab mTab;
+    private ChromeShareExtras mChromeShareExtras;
+    private long mShareStartTime;
+
+    private String mShareUrl;
+    private @Nullable TextFragmentReceiver mProducer;
     private String mSelectedText;
-    private ShareParams mShareTextParams;
+    private @Nullable ShareParams mShareLinkParams;
+    private @MonotonicNonNull ShareParams mShareTextParams;
+    private boolean mIncludeOriginInTitle;
+    public @RemoteRequestStatus int mRemoteRequestStatus;
 
-    public LinkToTextCoordinator(Context context, Tab tab,
-            ChromeOptionShareCallback chromeOptionShareCallback, String visibleUrl,
-            String selectedText) {
-        mContext = context;
-        mChromeOptionShareCallback = chromeOptionShareCallback;
-        mVisibleUrl = visibleUrl;
-        mSelectedText = selectedText;
-        mTab = tab;
-        mTab.addObserver(this);
-        mCancelRequest = false;
-        mChromeShareExtras = null;
-        mShareStartTime = 0;
-        mShareTextParams = null;
-        mRequestSelectorStartTime = System.currentTimeMillis();
+    private static @Nullable String sForceSelectorForTesting;
 
-        requestSelector();
+    /**
+     * Generates a URL with a text fragment highlighting the selected text in the given tab and
+     * copies it to the system clipboard upon successful generation.
+     *
+     * @param tab The {@link Tab} containing the selected text.
+     * @param rfh The {@link RenderFrameHost} of the focused frame with the selected text.
+     */
+    public static void copyLinkToText(Tab tab, RenderFrameHost rfh) {
+        assumeNonNull(tab);
+        assumeNonNull(rfh);
+        GURL tabUrl = tab.getUrl();
+        if (tabUrl == null || tabUrl.isEmpty()) return;
+        String urlSpec = tabUrl.getSpec();
+
+        WebContents webContents = tab.getWebContents();
+        if (webContents == null) return;
+        SelectionPopupController controller =
+                SelectionPopupController.fromWebContentsNoCreate(webContents);
+        if (controller == null) return;
+        String selectedText = controller.getSelectedText();
+        if (selectedText.isEmpty()) return;
+
+        ChromeOptionShareCallback callback =
+                new ChromeOptionShareCallback() {
+                    @Override
+                    public void showShareSheet(
+                            ShareParams params,
+                            ChromeShareExtras chromeShareExtras,
+                            long shareStartTime) {
+                        if (params.getLinkToTextSuccessful() == TriState.TRUE
+                                && !TextUtils.isEmpty(params.getUrl())) {
+                            Clipboard.getInstance().copyUrlToClipboard(new GURL(params.getUrl()));
+                        } else {
+                            // TODO(crbug.com/524042582): Add a valid failing mechanism once UX has
+                            // approved it.
+                            Log.w(TAG, "Link to text generation failed.");
+                        }
+                    }
+
+                    @Override
+                    public void showThirdPartyShareSheet(
+                            ShareParams params,
+                            ChromeShareExtras chromeShareExtras,
+                            long shareStartTime) {}
+                };
+
+        LinkToTextCoordinator coordinator =
+                new LinkToTextCoordinator(
+                        tab,
+                        callback,
+                        new ChromeShareExtras.Builder().setRenderFrameHost(rfh).build(),
+                        System.currentTimeMillis(),
+                        urlSpec,
+                        selectedText,
+                        /* includeOriginInTitle= */ false);
+        coordinator.shareLinkToText();
     }
 
-    // Constructor for preemptive link-to-text generation.
-    public LinkToTextCoordinator(ShareParams shareParams, Tab tab,
+    public static void setForceSelectorForTesting(String selector) {
+        sForceSelectorForTesting = selector;
+        ResettersForTesting.register(() -> sForceSelectorForTesting = null);
+    }
+
+    @VisibleForTesting
+    LinkToTextCoordinator() {}
+
+    public LinkToTextCoordinator(
+            Tab tab,
             ChromeOptionShareCallback chromeOptionShareCallback,
-            ChromeShareExtras chromeShareExtras, long shareStartTime, String visibleUrl) {
-        mShareTextParams = shareParams;
+            ChromeShareExtras chromeShareExtras,
+            long shareStartTime,
+            String visibleUrl,
+            String selectedText,
+            boolean includeOriginInTitle) {
+        initLinkToTextCoordinator(
+                tab,
+                chromeOptionShareCallback,
+                chromeShareExtras,
+                shareStartTime,
+                visibleUrl,
+                selectedText,
+                includeOriginInTitle);
+    }
+
+    @Initializer
+    @VisibleForTesting
+    void initLinkToTextCoordinator(
+            Tab tab,
+            ChromeOptionShareCallback chromeOptionShareCallback,
+            ChromeShareExtras chromeShareExtras,
+            long shareStartTime,
+            String visibleUrl,
+            String selectedText,
+            boolean includeOriginInTitle) {
         mTab = tab;
         mChromeOptionShareCallback = chromeOptionShareCallback;
         mChromeShareExtras = chromeShareExtras;
         mShareStartTime = shareStartTime;
-        mVisibleUrl = visibleUrl;
-        mSelectedText = shareParams.getText();
+        mShareUrl = visibleUrl;
+        // When sharing from mobile selection action mode, visibleUrl is passed as empty string.
+        // Fall back to the tab's current visible URL so link generation and title formatting have
+        // a valid base URL.
+        if (TextUtils.isEmpty(mShareUrl) && mTab.getUrl() != null && !mTab.getUrl().isEmpty()) {
+            mShareUrl = mTab.getUrl().getSpec();
+        }
+        mSelectedText = selectedText;
+        mIncludeOriginInTitle = includeOriginInTitle;
+
         mTab.addObserver(this);
-        mCancelRequest = false;
-        mContext = null;
-
-        mRequestSelectorStartTime = System.currentTimeMillis();
-        requestSelector();
-        PostTask.postDelayedTask(UiThreadTaskTraits.DEFAULT, () -> timeout(), TIMEOUT_MS);
+        mRemoteRequestStatus = RemoteRequestStatus.NONE;
     }
 
-    public ShareParams getShareParams(@LinkGeneration int linkGeneration) {
-        switch (linkGeneration) {
-            case LinkGeneration.LINK:
-                return mShareLinkParams;
-            default:
-                return mShareTextParams;
+    public ShareParams getShareParams(@LinkToggleState int linkToggleState) {
+        if (linkToggleState == LinkToggleState.LINK && mShareLinkParams != null) {
+            return mShareLinkParams;
         }
+        return assumeNonNull(mShareTextParams);
     }
 
-    public void onSelectorReady(String selector) {
-        RecordHistogram.recordTimesHistogram(
-                "Sharing.SharingHubAndroid.SharedHighlights.TimeToGetLinkToText",
-                System.currentTimeMillis() - mRequestSelectorStartTime);
-        if (mCancelRequest) return;
-
-        if (ChromeFeatureList.isEnabled(ChromeFeatureList.PREEMPTIVE_LINK_TO_TEXT_GENERATION)) {
-            mShareLinkParams = selector.isEmpty()
-                    ? null
-                    : new ShareParams
-                              .Builder(mTab.getWindowAndroid(), /*title=*/"",
-                                      getUrlToShare(selector))
-                              .setText(mSelectedText, SHARE_TEXT_TEMPLATE)
-                              .setLinkToTextSuccessful(true)
-                              .build();
-            mShareTextParams =
-                    new ShareParams.Builder(mTab.getWindowAndroid(), /*title=*/"", /*url=*/"")
-                            .setText(mSelectedText)
-                            .setLinkToTextSuccessful(selector.isEmpty() ? false : true)
-                            .build();
-            mChromeOptionShareCallback.showShareSheet(
-                    getShareParams(
-                            selector.isEmpty() ? LinkGeneration.FAILURE : LinkGeneration.LINK),
-                    mChromeShareExtras, mShareStartTime);
-            cleanup();
+    public void shareLinkToText() {
+        if (sForceSelectorForTesting != null) {
+            onSelectorReady(sForceSelectorForTesting);
             return;
         }
-
-        ShareParams params =
-                new ShareParams
-                        .Builder(mTab.getWindowAndroid(), /*title=*/"", getUrlToShare(selector))
-                        .setText(mSelectedText, SHARE_TEXT_TEMPLATE)
-                        .build();
-
-        mChromeOptionShareCallback.showThirdPartyShareSheet(params,
-                new ChromeShareExtras.Builder().setIsUserHighlightedText(true).build(),
-                System.currentTimeMillis());
-
-        if (selector.isEmpty()) {
-            // TODO(gayane): Android toast should be replace by another toast like UI which allows
-            // custom positioning as |setView| and |setGravity| are deprecated starting API 30.
-            String toastMessage =
-                    mContext.getResources().getString(R.string.link_to_text_failure_toast_message);
-            Toast toast = Toast.makeText(mContext, toastMessage, Toast.LENGTH_SHORT);
-            toast.setGravity(toast.getGravity(), toast.getXOffset(),
-                    mContext.getResources().getDimensionPixelSize(
-                            R.dimen.y_offset_thirdparty_sharesheet));
-            toast.show();
-        }
-        // After generation results are communicated to users, cleanup to remove tab listener.
-        cleanup();
-    }
-
-    public void requestSelector() {
-        if (ChromeFeatureList.isEnabled(ChromeFeatureList.PREEMPTIVE_LINK_TO_TEXT_GENERATION)
-                && mChromeShareExtras.isReshareHighlightedText()) {
+        if (mChromeShareExtras.isReshareHighlightedText()) {
             reshareHighlightedText();
-            return;
+        } else {
+            startRequestSelector();
         }
-        if (!LinkToTextBridge.shouldOfferLinkToText(new GURL(mVisibleUrl))) {
-            LinkToTextBridge.logGenerateErrorBlockList();
-            onSelectorReady(INVALID_SELECTOR);
-            return;
-        }
-
-        if (mTab.getWebContents().getMainFrame() != mTab.getWebContents().getFocusedFrame()) {
-            LinkToTextBridge.logGenerateErrorIFrame();
-            onSelectorReady(INVALID_SELECTOR);
-            return;
-        }
-        if (ChromeFeatureList.isEnabled(ChromeFeatureList.PREEMPTIVE_LINK_TO_TEXT_GENERATION)) {
-            LinkToTextMetricsHelper.recordLinkToTextDiagnoseStatus(
-                    LinkToTextMetricsHelper.LinkToTextDiagnoseStatus.REQUEST_SELECTOR);
-        }
-
-        mProducer = mTab.getWebContents().getMainFrame().getInterfaceToRendererFrame(
-                TextFragmentReceiver.MANAGER);
-        mProducer.requestSelector(new TextFragmentReceiver.RequestSelectorResponse() {
-            @Override
-            public void call(String selector) {
-                if (ChromeFeatureList.isEnabled(
-                            ChromeFeatureList.PREEMPTIVE_LINK_TO_TEXT_GENERATION)) {
-                    LinkToTextMetricsHelper.recordLinkToTextDiagnoseStatus(
-                            LinkToTextMetricsHelper.LinkToTextDiagnoseStatus.SELECTOR_RECEIVED);
-                }
-                onSelectorReady(selector);
-            }
-        });
     }
 
-    public void reshareHighlightedText() {
+    @VisibleForTesting
+    public void onSelectorReady(String selector) {
+        boolean isSelectorEmpty = TextUtils.isEmpty(selector);
+        mShareLinkParams =
+                isSelectorEmpty
+                        ? null
+                        : new ShareParams.Builder(
+                                        assumeNonNull(mTab.getWindowAndroid()),
+                                        getTitle(),
+                                        LinkToTextHelper.getUrlToShare(mShareUrl, selector))
+                                .setText(mSelectedText, SHARE_TEXT_TEMPLATE)
+                                .setPreviewText(getPreviewText(), SHARE_TEXT_TEMPLATE)
+                                .setLinkToTextSuccessful(TriState.TRUE)
+                                .build();
+        mShareTextParams =
+                new ShareParams.Builder(
+                                assumeNonNull(mTab.getWindowAndroid()),
+                                mTab.getTitle(),
+                                /* url= */ "")
+                        .setText(mSelectedText)
+                        .setLinkToTextSuccessful(TriStateUtils.from(!isSelectorEmpty))
+                        .build();
+        mChromeOptionShareCallback.showShareSheet(
+                getShareParams(isSelectorEmpty ? LinkToggleState.NO_LINK : LinkToggleState.LINK),
+                mChromeShareExtras,
+                mShareStartTime);
+    }
+
+    @VisibleForTesting
+    String getPreviewText() {
+        if (mSelectedText.length() <= PREVIEW_MAX_LENGTH) {
+            return mSelectedText;
+        }
+
+        return mSelectedText.substring(0, PREVIEW_SELECTED_TEXT_CUTOFF_LENGTH) + PREVIEW_ELLIPSIS;
+    }
+
+    private void startRequestSelector() {
+        if (!LinkToTextBridge.shouldOfferLinkToText(new GURL(mShareUrl))) {
+            completeRequestWithFailure(LinkGenerationError.BLOCK_LIST);
+            return;
+        }
+
+        if (assumeNonNull(mTab.getWebContents()).getMainFrame()
+                != mTab.getWebContents().getFocusedFrame()) {
+            if (!LinkToTextBridge.supportsLinkGenerationInIframe(new GURL(mShareUrl))) {
+                completeRequestWithFailure(LinkGenerationError.I_FRAME);
+                return;
+            }
+        }
+
+        PostTask.postDelayedTask(TaskTraits.UI_DEFAULT, () -> timeout(), TIMEOUT_MS);
+        requestSelector();
+    }
+
+    @VisibleForTesting
+    void reshareHighlightedText() {
         setTextFragmentReceiver();
-        mProducer.extractTextFragmentsMatches(
-                new TextFragmentReceiver.ExtractTextFragmentsMatchesResponse() {
-                    @Override
-                    public void call(String[] matches) {
-                        mSelectedText = String.join(",", matches);
-                        onSelectorReady(mVisibleUrl);
-                    }
+        if (mProducer == null) {
+            completeReshareWithFailure(LinkToTextReshareStatus.NO_REMOTE_CONNECTION);
+            return;
+        }
+
+        PostTask.postDelayedTask(TaskTraits.UI_DEFAULT, () -> timeout(), TIMEOUT_MS);
+        mRemoteRequestStatus = RemoteRequestStatus.REQUESTED;
+        LinkToTextHelper.extractTextFragmentsMatches(
+                mProducer,
+                (matches) -> {
+                    mSelectedText = String.join(",", matches);
+                    LinkToTextHelper.getExistingSelectorsAllFrames(
+                            mTab, this::onReshareSelectorsRemoteRequestCompleted);
                 });
     }
 
-    public String getUrlToShare(String selector) {
-        String url = mVisibleUrl;
-        if (!selector.isEmpty()) {
-            // Set the fragment which will also remove existing fragment, including text fragments.
-            Uri uri = Uri.parse(url);
-            url = uri.buildUpon().encodedFragment(TEXT_FRAGMENT_PREFIX + selector).toString();
+    @VisibleForTesting
+    void onReshareSelectorsRemoteRequestCompleted(String selectors) {
+        if (mRemoteRequestStatus == RemoteRequestStatus.CANCELLED) return;
+        if (selectors.isEmpty()) {
+            completeReshareWithFailure(LinkToTextReshareStatus.EMPTY_SELECTOR);
+            return;
         }
-        return url;
+
+        mRemoteRequestStatus = RemoteRequestStatus.SELECTOR_RECEIVED;
+        completeWithCanonicalUrlOrFullUrl(selectors, this::reshareRequestCompleted);
+    }
+
+    @VisibleForTesting
+    void reshareRequestCompleted(String selectors) {
+        if (mRemoteRequestStatus == RemoteRequestStatus.CANCELLED) return;
+
+        completeRemoteRequestWithSuccess(selectors);
     }
 
     // Discard results if tab is not on foreground anymore.
     @Override
     public void onHidden(Tab tab, @TabHidingType int type) {
-        LinkToTextBridge.logGenerateErrorTabHidden();
-        cleanup();
+        if (mChromeShareExtras.isReshareHighlightedText()) {
+            completeReshareWithFailure(LinkToTextReshareStatus.TAB_HIDDEN);
+        } else {
+            completeRequestWithFailure(LinkGenerationError.TAB_HIDDEN);
+        }
     }
 
-    // Discard results if tab content is changed by typing new URL in omnibox.
+    // Discard results if tab content is changed by a cross-document navigation.
     @Override
-    public void onUpdateUrl(Tab tab, GURL url) {
-        LinkToTextBridge.logGenerateErrorOmniboxNavigation();
-        cleanup();
+    public void onDidStartNavigationInPrimaryMainFrame(Tab tab, NavigationHandle navigationHandle) {
+        if (navigationHandle.isSameDocument()) return;
+
+        if (mChromeShareExtras.isReshareHighlightedText()) {
+            completeReshareWithFailure(LinkToTextReshareStatus.OMNIBOX_NAVIGATION);
+        } else {
+            completeRequestWithFailure(LinkGenerationError.OMNIBOX_NAVIGATION);
+        }
     }
 
     // Discard results if tab content crashes.
     @Override
     public void onCrash(Tab tab) {
-        LinkToTextBridge.logGenerateErrorTabCrash();
-        cleanup();
+        if (mChromeShareExtras.isReshareHighlightedText()) {
+            completeReshareWithFailure(LinkToTextReshareStatus.TAB_CRASH);
+        } else {
+            completeRequestWithFailure(LinkGenerationError.TAB_CRASH);
+        }
+    }
+
+    @VisibleForTesting
+    void onRemoteRequestCompleted(String selector, Integer error, Integer readyStatus) {
+        if (mRemoteRequestStatus == RemoteRequestStatus.CANCELLED) return;
+
+        boolean success = !selector.isEmpty();
+        assert error != null;
+
+        if (success) {
+            assert error == LinkGenerationError.NONE;
+
+            mRemoteRequestStatus = RemoteRequestStatus.SELECTOR_RECEIVED;
+            completeWithCanonicalUrlOrFullUrl(selector, this::completeRemoteRequestWithSuccess);
+        } else {
+            mRemoteRequestStatus = RemoteRequestStatus.COMPLETED;
+            assert error != LinkGenerationError.NONE;
+            completeRequestWithFailure(error.intValue());
+        }
+
+        assert readyStatus != null;
+
+        @LinkGenerationStatus
+        int status = success ? LinkGenerationStatus.FAILURE : LinkGenerationStatus.SUCCESS;
+        LinkToTextBridge.logLinkRequestedBeforeStatus(status, readyStatus.intValue());
+    }
+
+    private void completeWithCanonicalUrlOrFullUrl(
+            String selector, Callback<String> completionCallback) {
+        if (ChromeFeatureList.isEnabled(ChromeFeatureList.TEXT_HIGHLIGHT_FULL_LINK)) {
+            completionCallback.onResult(selector);
+        } else {
+            // Request canonical url when we have a successful generation.
+            LinkToTextHelper.requestCanonicalUrl(
+                    mTab,
+                    (canonicalUrl) -> {
+                        if (mRemoteRequestStatus == RemoteRequestStatus.CANCELLED) return;
+                        if (canonicalUrl != null && !canonicalUrl.isEmpty()) {
+                            mShareUrl = canonicalUrl.getSpec();
+                        }
+                        completionCallback.onResult(selector);
+                    });
+        }
+    }
+
+    @VisibleForTesting
+    void requestSelector() {
+        LinkToTextMetricsHelper.recordLinkToTextDiagnoseStatus(
+                LinkToTextMetricsHelper.LinkToTextDiagnoseStatus.REQUEST_SELECTOR);
+
+        setTextFragmentReceiver();
+
+        if (mProducer == null) {
+            completeRequestWithFailure(LinkGenerationError.NO_REMOTE_CONNECTION);
+            return;
+        }
+
+        mRemoteRequestStatus = RemoteRequestStatus.REQUESTED;
+        LinkToTextHelper.requestSelector(mProducer, this::onRemoteRequestCompleted);
     }
 
     private void setTextFragmentReceiver() {
-        mProducer = mChromeShareExtras.getRenderFrameHost() != null
-                ? mChromeShareExtras.getRenderFrameHost().getInterfaceToRendererFrame(
-                        TextFragmentReceiver.MANAGER)
-                : mTab.getWebContents().getMainFrame().getInterfaceToRendererFrame(
-                        TextFragmentReceiver.MANAGER);
+        if (mChromeShareExtras.getRenderFrameHost() != null
+                && mChromeShareExtras.getRenderFrameHost().isRenderFrameLive()) {
+            mProducer =
+                    mChromeShareExtras
+                            .getRenderFrameHost()
+                            .getInterfaceToRendererFrame(TextFragmentReceiver.MANAGER);
+            return;
+        }
+
+        if (mTab.getWebContents() != null && mTab.getWebContents().getMainFrame() != null) {
+            mProducer =
+                    mTab.getWebContents()
+                            .getMainFrame()
+                            .getInterfaceToRendererFrame(TextFragmentReceiver.MANAGER);
+        }
+    }
+
+    private void cancel() {
+        // Cancel can be called before remote task was requested, for example, blocklist
+        // case. Cancel only if remote request was requested or selector was received.
+        if (mRemoteRequestStatus == RemoteRequestStatus.REQUESTED
+                || mRemoteRequestStatus == RemoteRequestStatus.SELECTOR_RECEIVED) {
+            // Only cancel the renderer producer if we were still actively generating the
+            // selector (REQUESTED). If we are in SELECTOR_RECEIVED, the renderer has already
+            // completed its work, only mark the request as cancelled. This prevents requests
+            // which outlive the webpage from completing.
+            boolean wasRequested = mRemoteRequestStatus == RemoteRequestStatus.REQUESTED;
+            mRemoteRequestStatus = RemoteRequestStatus.CANCELLED;
+            // Cancelling remote request for reshare is not implemented. Cancelling only for
+            // generated selector request.
+            if (wasRequested
+                    && !mChromeShareExtras.isReshareHighlightedText()
+                    && mProducer != null) {
+                mProducer.cancel();
+            }
+        }
     }
 
     private void cleanup() {
         if (mProducer != null) {
-            mProducer.cancel();
             mProducer.close();
         }
-        mCancelRequest = true;
         mTab.removeObserver(this);
     }
 
-    private void timeout() {
-        if (!mCancelRequest) {
-            LinkToTextBridge.logGenerateErrorTimeout();
-            onSelectorReady(INVALID_SELECTOR);
+    @VisibleForTesting
+    void timeout() {
+        assert (mRemoteRequestStatus == RemoteRequestStatus.REQUESTED
+                || mRemoteRequestStatus == RemoteRequestStatus.SELECTOR_RECEIVED
+                || mRemoteRequestStatus == RemoteRequestStatus.COMPLETED);
+
+        // If the request is already completed or selector was received, then ignore the timeout.
+        if (mRemoteRequestStatus == RemoteRequestStatus.REQUESTED) {
+            if (mChromeShareExtras.isReshareHighlightedText()) {
+                completeReshareWithFailure(LinkToTextReshareStatus.TIMEOUT);
+            } else {
+                completeRequestWithFailure(LinkGenerationError.TIMEOUT);
+            }
         }
+    }
+
+    private void completeRequestWithFailure(@LinkGenerationError int error) {
+        LinkToTextBridge.logFailureMetrics(mTab.getWebContents(), error);
+
+        switch (error) {
+            case LinkGenerationError.TAB_HIDDEN:
+            case LinkGenerationError.OMNIBOX_NAVIGATION:
+            case LinkGenerationError.TAB_CRASH:
+                break;
+            default:
+                onSelectorReady(INVALID_SELECTOR);
+        }
+
+        cancel();
+        cleanup();
+    }
+
+    private void completeRemoteRequestWithSuccess(String selector) {
+        mRemoteRequestStatus = RemoteRequestStatus.COMPLETED;
+        if (mChromeShareExtras.isReshareHighlightedText()) {
+            LinkToTextBridge.logLinkToTextReshareStatus(LinkToTextReshareStatus.SUCCESS);
+        } else {
+            LinkToTextBridge.logSuccessMetrics(mTab.getWebContents());
+        }
+        onSelectorReady(selector);
+        cleanup();
+    }
+
+    private void completeReshareWithFailure(@LinkToTextReshareStatus int status) {
+        LinkToTextBridge.logLinkToTextReshareStatus(status);
+
+        switch (status) {
+            case LinkToTextReshareStatus.TAB_HIDDEN:
+            case LinkToTextReshareStatus.OMNIBOX_NAVIGATION:
+            case LinkToTextReshareStatus.TAB_CRASH:
+                break;
+            default:
+                onSelectorReady(INVALID_SELECTOR);
+        }
+        cancel();
+        cleanup();
+    }
+
+    private String getTitle() {
+        if (!mIncludeOriginInTitle) return mTab.getTitle();
+        String origin = new GURL(mShareUrl).getOrigin().getSpec();
+        return mTab.getContext().getString(R.string.sharing_including_link_title_template, origin);
     }
 }

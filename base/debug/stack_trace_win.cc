@@ -1,28 +1,32 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/debug/stack_trace.h"
 
 #include <windows.h>
+
 #include <dbghelp.h>
 #include <stddef.h>
 
 #include <algorithm>
 #include <iostream>
+#include <iterator>
 #include <memory>
 
-#include "base/cxx17_backports.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/memory/singleton.h"
+#include "base/strings/strcat_win.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/synchronization/lock.h"
+#include "base/win/delayload_helpers.h"
 #include "build/build_config.h"
 
-namespace base {
-namespace debug {
+namespace base::debug {
 
 namespace {
 
@@ -32,6 +36,13 @@ LPTOP_LEVEL_EXCEPTION_FILTER g_previous_filter = NULL;
 
 bool g_initialized_symbols = false;
 DWORD g_init_error = ERROR_SUCCESS;
+// STATUS_INFO_LENGTH_MISMATCH is declared in <ntstatus.h>, but including that
+// header creates a conflict with base/win/windows_types.h, so re-declaring it
+// here.
+DWORD g_status_info_length_mismatch = 0xC0000004;
+
+// Disable to force use of the non-symbolizing path when dbghelp is available.
+bool g_should_use_dbghelp = true;
 
 // Prints the exception call stack.
 // This is the unit tests exception filter.
@@ -100,32 +111,59 @@ long WINAPI StackDumpExceptionFilter(EXCEPTION_POINTERS* info) {
       std::cerr << "EXCEPTION_STACK_OVERFLOW";
       break;
     default:
-      std::cerr << "0x" << std::hex << exc_code;
+      std::cerr << base::StringPrintf("0x%08x", exc_code);
       break;
   }
   std::cerr << "\n";
 
   debug::StackTrace(info).Print();
-  if (g_previous_filter)
+  if (g_previous_filter) {
     return g_previous_filter(info);
+  }
   return EXCEPTION_CONTINUE_SEARCH;
 }
 
+// Not using PathService as stack traces might be needed where that is not
+// available.
 FilePath GetExePath() {
-  wchar_t system_buffer[MAX_PATH];
-  GetModuleFileName(NULL, system_buffer, MAX_PATH);
-  system_buffer[MAX_PATH - 1] = L'\0';
-  return FilePath(system_buffer);
+  std::array<wchar_t, MAX_PATH> system_buffer;
+  ::GetModuleFileName(nullptr, system_buffer.data(), system_buffer.size());
+  system_buffer.back() = L'\0';
+  return FilePath(system_buffer.data());
+}
+
+constexpr size_t kSymInitializeRetryCount = 3;
+
+// A wrapper for SymInitialize. SymInitialize seems to occasionally fail
+// because of an internal race condition. So  wrap it and retry a finite
+// number of times.
+// See crbug.com/1339753
+bool SymInitializeWrapper(HANDLE handle, BOOL invade_process) {
+  for (size_t i = 0; i < kSymInitializeRetryCount; ++i) {
+    if (SymInitialize(handle, nullptr, invade_process)) {
+      return true;
+    }
+
+    g_init_error = GetLastError();
+    if (g_init_error != g_status_info_length_mismatch) {
+      return false;
+    }
+  }
+  DLOG(ERROR) << "SymInitialize failed repeatedly.";
+  return false;
 }
 
 bool SymInitializeCurrentProc() {
   const HANDLE current_process = GetCurrentProcess();
-  if (SymInitialize(current_process, nullptr, TRUE))
+  if (SymInitializeWrapper(current_process, TRUE)) {
     return true;
+  }
 
-  g_init_error = GetLastError();
-  if (g_init_error != ERROR_INVALID_PARAMETER)
+  // g_init_error is updated by SymInitializeWrapper.
+  // No need to do "g_init_error = GetLastError()" here.
+  if (g_init_error != ERROR_INVALID_PARAMETER) {
     return false;
+  }
 
   // SymInitialize() can fail with ERROR_INVALID_PARAMETER when something has
   // already called SymInitialize() in this process. For example, when absl
@@ -133,14 +171,47 @@ bool SymInitializeCurrentProc() {
   // almost immediately after startup. In such a case, try to reinit to see if
   // that succeeds.
   SymCleanup(current_process);
-  if (SymInitialize(current_process, nullptr, TRUE))
+  if (SymInitializeWrapper(current_process, TRUE)) {
     return true;
+  }
 
-  g_init_error = GetLastError();
   return false;
 }
 
+bool MaybeLoadDbghelp() {
+  // Check if dbghelp is already loaded.
+  HANDLE dbghelp_handle = ::GetModuleHandle(L"dbghelp.dll");
+  if (!dbghelp_handle) {
+    // Probe to load dbghelp. This may fail in some sandboxes.
+    dbghelp_handle = ::LoadLibrary(L"dbghelp.dll");
+  }
+  if (!dbghelp_handle) {
+    return false;
+  }
+
+  // Starting in SDK 10.0.28000, dbghelp loads msdia140.dll dynamically at
+  // runtime instead of through delayloads, so we need to pre-load it manually.
+  HANDLE msdia140_handle = ::GetModuleHandle(L"msdia140.dll");
+  if (!msdia140_handle) {
+    msdia140_handle = ::LoadLibrary(L"msdia140.dll");
+  }
+  if (!msdia140_handle) {
+    return false;
+  }
+
+  // If the module is loaded, force resolve delayloads.
+  auto loaded = base::win::LoadAllImportsForDllUnchecked("dbghelp.dll");
+  // In tests where dbghelp is not delayloaded this can safely be 'false', a
+  // failure only occurs when an error code is returned.
+  return loaded.has_value();
+}
+
 bool InitializeSymbols() {
+  static bool has_dbghelp = MaybeLoadDbghelp();
+  if (!has_dbghelp) {
+    return false;
+  }
+
   if (g_initialized_symbols) {
     // Force a reinitialization. Will ensure any modules loaded after process
     // startup also get symbolized.
@@ -150,9 +221,7 @@ bool InitializeSymbols() {
   g_initialized_symbols = true;
   // Defer symbol load until they're needed, use undecorated names, and get line
   // numbers.
-  SymSetOptions(SYMOPT_DEFERRED_LOADS |
-                SYMOPT_UNDNAME |
-                SYMOPT_LOAD_LINES);
+  SymSetOptions(SYMOPT_DEFERRED_LOADS | SYMOPT_UNDNAME | SYMOPT_LOAD_LINES);
   if (!SymInitializeCurrentProc()) {
     // When it fails, we should not call debugbreak since it kills the current
     // process (prevents future tests from running or kills the browser
@@ -177,8 +246,8 @@ bool InitializeSymbols() {
     return false;
   }
 
-  std::wstring new_path = StringPrintf(L"%ls;%ls", symbols_path,
-                                       GetExePath().DirName().value().c_str());
+  std::wstring new_path =
+      StrCat({symbols_path, L";", GetExePath().DirName().value()});
   if (!SymSetSearchPathW(GetCurrentProcess(), new_path.c_str())) {
     g_init_error = GetLastError();
     DLOG(WARNING) << "SymSetSearchPath failed." << g_init_error;
@@ -209,9 +278,11 @@ class SymbolContext {
   static SymbolContext* GetInstance() {
     // We use a leaky singleton because code may call this during process
     // termination.
-    return
-      Singleton<SymbolContext, LeakySingletonTraits<SymbolContext> >::get();
+    return Singleton<SymbolContext, LeakySingletonTraits<SymbolContext>>::get();
   }
+
+  SymbolContext(const SymbolContext&) = delete;
+  SymbolContext& operator=(const SymbolContext&) = delete;
 
   // For the given trace, attempts to resolve the symbols, and output a trace
   // to the ostream os.  The format for each line of the backtrace is:
@@ -222,85 +293,107 @@ class SymbolContext {
   // LOG(FATAL) here because this code is called might be triggered by a
   // LOG(FATAL) itself. Also, it should not be calling complex code that is
   // extensible like PathService since that can in turn fire CHECKs.
-  void OutputTraceToStream(const void* const* trace,
-                           size_t count,
+  void OutputTraceToStream(base::span<const void* const> traces,
                            std::ostream* os,
-                           const char* prefix_string) {
+                           cstring_view prefix_string) {
     AutoLock lock(lock_);
 
-    for (size_t i = 0; (i < count) && os->good(); ++i) {
+    IMAGEHLP_MODULE64 module_info{.SizeOfStruct = sizeof(IMAGEHLP_MODULE64)};
+    for (size_t i = 0; (i < traces.size()) && os->good(); ++i) {
       const int kMaxNameLength = 256;
-      DWORD_PTR frame = reinterpret_cast<DWORD_PTR>(trace[i]);
+      DWORD_PTR frame = reinterpret_cast<DWORD_PTR>(traces[i]);
 
       // Code adapted from MSDN example:
       // http://msdn.microsoft.com/en-us/library/ms680578(VS.85).aspx
-      ULONG64 buffer[
-        (sizeof(SYMBOL_INFO) +
-          kMaxNameLength * sizeof(wchar_t) +
-          sizeof(ULONG64) - 1) /
-        sizeof(ULONG64)];
-      memset(buffer, 0, sizeof(buffer));
+      ULONG64 buffer[(sizeof(SYMBOL_INFO) + kMaxNameLength * sizeof(wchar_t) +
+                      sizeof(ULONG64) - 1) /
+                     sizeof(ULONG64)] = {};
 
       // Initialize symbol information retrieval structures.
       DWORD64 sym_displacement = 0;
       PSYMBOL_INFO symbol = reinterpret_cast<PSYMBOL_INFO>(&buffer[0]);
       symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
       symbol->MaxNameLen = kMaxNameLength - 1;
-      BOOL has_symbol = SymFromAddr(GetCurrentProcess(), frame,
-                                    &sym_displacement, symbol);
+
+      // Avoid calling Sym functions in sandboxes where dbghelp is not loaded.
+      BOOL has_symbol = use_dbghelp() && SymFromAddr(GetCurrentProcess(), frame,
+                                                     &sym_displacement, symbol);
 
       // Attempt to retrieve line number information.
       DWORD line_displacement = 0;
       IMAGEHLP_LINE64 line = {};
       line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
-      BOOL has_line = SymGetLineFromAddr64(GetCurrentProcess(), frame,
-                                           &line_displacement, &line);
+      BOOL has_line =
+          use_dbghelp() && SymGetLineFromAddr64(GetCurrentProcess(), frame,
+                                                &line_displacement, &line);
+
+      // Attempt to retrieve the module information.
+      BOOL has_module =
+          use_dbghelp() &&
+          SymGetModuleInfo64(GetCurrentProcess(), frame, &module_info);
 
       // Output the backtrace line.
-      if (prefix_string)
-        (*os) << prefix_string;
-      (*os) << "\t";
+      (*os) << prefix_string << "\t";
+      if (has_module) {  // Start with the module name (if found).
+        (*os) << module_info.ModuleName << "!";
+      }
       if (has_symbol) {
-        (*os) << symbol->Name << " [0x" << trace[i] << "+"
-              << sym_displacement << "]";
+        (*os) << symbol->Name << " "
+              << base::StringPrintf("[%p+%x]", traces[i], sym_displacement);
       } else {
         // If there is no symbol information, add a spacer.
-        (*os) << "(No symbol) [0x" << trace[i] << "]";
+        (*os) << "(No symbol) " << base::StringPrintf("[%p]", traces[i]);
       }
       if (has_line) {
-        (*os) << " (" << line.FileName << ":" << line.LineNumber << ")";
+        (*os) << " (" << line.FileName << ":"
+              << base::StringPrintf("%lu", line.LineNumber) << ")";
       }
       (*os) << "\n";
     }
   }
 
+  bool use_dbghelp() const { return g_should_use_dbghelp && has_dbghelp_; }
+
  private:
   friend struct DefaultSingletonTraits<SymbolContext>;
 
-  SymbolContext() {
-    InitializeSymbols();
-  }
+  SymbolContext() { has_dbghelp_ = InitializeSymbols(); }
 
+  bool has_dbghelp_ = false;
   Lock lock_;
-  DISALLOW_COPY_AND_ASSIGN(SymbolContext);
 };
 
 }  // namespace
 
 bool EnableInProcessStackDumping() {
-  // Add stack dumping support on exception on windows. Similar to OS_POSIX
+  // Add stack dumping support on exception on Windows. Similar to OS_POSIX
   // signal() handling in process_util_posix.cc.
   g_previous_filter = SetUnhandledExceptionFilter(&StackDumpExceptionFilter);
 
   // Need to initialize symbols early in the process or else this fails on
   // swarming (since symbols are in different directory than in the exes) and
   // also release x64.
-  return InitializeSymbols();
+  SymbolContext* context = SymbolContext::GetInstance();
+  // Allow tests to turn symbols on again.
+  g_should_use_dbghelp = true;
+  return context->use_dbghelp();
 }
 
-NOINLINE size_t CollectStackTrace(void** trace, size_t count) {
+bool DisableInProcessStackDumpingForTesting() {
+  g_previous_filter = SetUnhandledExceptionFilter(g_previous_filter);
+  g_should_use_dbghelp = false;
+  return true;
+}
+
+bool InProcessStackDumpingEnabledForTesting() {
+  SymbolContext* context = SymbolContext::GetInstance();
+  return context->use_dbghelp();
+}
+
+NOINLINE size_t CollectStackTrace(span<const void*> trace) {
   // When walking our own stack, use CaptureStackBackTrace().
-  return CaptureStackBackTrace(0, count, trace, NULL);
+  return CaptureStackBackTrace(0, trace.size(),
+                               const_cast<void**>(trace.data()), NULL);
 }
 
 StackTrace::StackTrace(EXCEPTION_POINTERS* exception_pointers) {
@@ -312,31 +405,35 @@ StackTrace::StackTrace(const CONTEXT* context) {
 }
 
 void StackTrace::InitTrace(const CONTEXT* context_record) {
+  if (ShouldSuppressOutput()) {
+    CHECK_EQ(count_, 0U);
+    std::ranges::fill(trace_, nullptr);
+    return;
+  }
+
   // StackWalk64 modifies the register context in place, so we have to copy it
   // so that downstream exception handlers get the right context.  The incoming
   // context may have had more register state (YMM, etc) than we need to unwind
   // the stack. Typically StackWalk64 only needs integer and control registers.
-  CONTEXT context_copy;
-  memcpy(&context_copy, context_record, sizeof(context_copy));
+  CONTEXT context_copy = *context_record;
   context_copy.ContextFlags = CONTEXT_INTEGER | CONTEXT_CONTROL;
 
   // When walking an exception stack, we need to use StackWalk64().
   count_ = 0;
   // Initialize stack walking.
-  STACKFRAME64 stack_frame;
-  memset(&stack_frame, 0, sizeof(stack_frame));
+  STACKFRAME64 stack_frame = {};
 #if defined(ARCH_CPU_X86_64)
-  int machine_type = IMAGE_FILE_MACHINE_AMD64;
+  DWORD machine_type = IMAGE_FILE_MACHINE_AMD64;
   stack_frame.AddrPC.Offset = context_record->Rip;
   stack_frame.AddrFrame.Offset = context_record->Rbp;
   stack_frame.AddrStack.Offset = context_record->Rsp;
 #elif defined(ARCH_CPU_ARM64)
-  int machine_type = IMAGE_FILE_MACHINE_ARM64;
+  DWORD machine_type = IMAGE_FILE_MACHINE_ARM64;
   stack_frame.AddrPC.Offset = context_record->Pc;
   stack_frame.AddrFrame.Offset = context_record->Fp;
   stack_frame.AddrStack.Offset = context_record->Sp;
 #elif defined(ARCH_CPU_X86)
-  int machine_type = IMAGE_FILE_MACHINE_I386;
+  DWORD machine_type = IMAGE_FILE_MACHINE_I386;
   stack_frame.AddrPC.Offset = context_record->Eip;
   stack_frame.AddrFrame.Offset = context_record->Ebp;
   stack_frame.AddrStack.Offset = context_record->Esp;
@@ -349,34 +446,33 @@ void StackTrace::InitTrace(const CONTEXT* context_record) {
   while (StackWalk64(machine_type, GetCurrentProcess(), GetCurrentThread(),
                      &stack_frame, &context_copy, NULL,
                      &SymFunctionTableAccess64, &SymGetModuleBase64, NULL) &&
-         count_ < size(trace_)) {
+         count_ < std::size(trace_)) {
     trace_[count_++] = reinterpret_cast<void*>(stack_frame.AddrPC.Offset);
   }
 
-  for (size_t i = count_; i < size(trace_); ++i)
-    trace_[i] = NULL;
+  std::ranges::fill(span(trace_).last(trace_.size() - count_), nullptr);
 }
 
-void StackTrace::PrintWithPrefix(const char* prefix_string) const {
-  OutputToStreamWithPrefix(&std::cerr, prefix_string);
+// static
+void StackTrace::PrintMessageWithPrefix(cstring_view prefix_string,
+                                        cstring_view message) {
+  std::cerr << prefix_string << message;
 }
 
-void StackTrace::OutputToStreamWithPrefix(std::ostream* os,
-                                          const char* prefix_string) const {
+void StackTrace::PrintWithPrefixImpl(cstring_view prefix_string) const {
+  OutputToStreamWithPrefixImpl(&std::cerr, prefix_string);
+}
+
+void StackTrace::OutputToStreamWithPrefixImpl(
+    std::ostream* os,
+    cstring_view prefix_string) const {
   SymbolContext* context = SymbolContext::GetInstance();
-  if (g_init_error != ERROR_SUCCESS) {
-    (*os) << "Error initializing symbols (" << g_init_error
-          << ").  Dumping unresolved backtrace:\n";
-    for (size_t i = 0; (i < count_) && os->good(); ++i) {
-      if (prefix_string)
-        (*os) << prefix_string;
-      (*os) << "\t" << trace_[i] << "\n";
-    }
-  } else {
-    (*os) << "Backtrace:\n";
-    context->OutputTraceToStream(trace_, count_, os, prefix_string);
+  if (!context->use_dbghelp()) {
+    // In developer builds call base::debug::EnableInProcessStackDumping()
+    // before sandbox lockdown to allow best-efforts symbolization.
+    (*os) << "Symbols not available. Dumping unresolved backtrace:\n";
   }
+  context->OutputTraceToStream(addresses(), os, prefix_string);
 }
 
-}  // namespace debug
-}  // namespace base
+}  // namespace base::debug

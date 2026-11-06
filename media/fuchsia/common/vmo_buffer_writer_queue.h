@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,13 +12,11 @@
 #include <memory>
 #include <vector>
 
-#include "base/containers/span.h"
 #include "base/memory/weak_ptr.h"
 #include "base/threading/thread_checker.h"
 #include "media/base/media_export.h"
 #include "media/fuchsia/common/stream_processor_helper.h"
 #include "media/fuchsia/common/vmo_buffer.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace media {
 
@@ -84,7 +82,29 @@ class MEDIA_EXPORT VmoBufferWriterQueue {
   bool IsBlocked() const;
 
  private:
-  struct PendingBuffer;
+  struct PendingBuffer {
+    PendingBuffer(scoped_refptr<DecoderBuffer> buffer);
+    ~PendingBuffer();
+
+    PendingBuffer(PendingBuffer&& other);
+    PendingBuffer& operator=(PendingBuffer&& other) = default;
+
+    const uint8_t* data() const;
+    size_t bytes_left() const;
+    void AdvanceCurrentPos(size_t bytes);
+
+    scoped_refptr<DecoderBuffer> buffer;
+    size_t buffer_pos = 0;
+
+    // Set to true when the consumer has finished processing the buffer and it
+    // can be released.
+    bool is_complete = false;
+
+    // Index of the last buffer in the sysmem buffer collection that was used to
+    // send this input buffer. Should be set only when |bytes_left()==0|.
+    std::optional<size_t> tail_sysmem_buffer_index;
+  };
+
   class SysmemBuffer;
 
   // Pumps pending buffers to SendPacketCB.

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,10 @@
 #include <memory>
 #include <utility>
 
-#include "base/memory/ptr_util.h"
 #include "third_party/blink/renderer/core/animation/interpolable_transform_list.h"
 #include "third_party/blink/renderer/core/animation/length_units_checker.h"
+#include "third_party/blink/renderer/core/animation/tree_counting_checker.h"
+#include "third_party/blink/renderer/core/animation/underlying_value_owner.h"
 #include "third_party/blink/renderer/core/css/css_function_value.h"
 #include "third_party/blink/renderer/core/css/css_primitive_value.h"
 #include "third_party/blink/renderer/core/css/css_value_list.h"
@@ -23,8 +24,9 @@
 namespace blink {
 namespace {
 InterpolationValue ConvertTransform(TransformOperations&& transform) {
-  return InterpolationValue(
-      InterpolableTransformList::Create(std::move(transform)));
+  return InterpolationValue(MakeGarbageCollected<InterpolableTransformList>(
+      std::move(transform),
+      TransformOperations::BoxSizeDependentMatrixBlending::kAllow));
 }
 
 InterpolationValue ConvertTransform(const TransformOperations& transform) {
@@ -36,6 +38,11 @@ class InheritedTransformChecker
  public:
   InheritedTransformChecker(const TransformOperations& inherited_transform)
       : inherited_transform_(inherited_transform) {}
+
+  void Trace(Visitor* visitor) const final {
+    CSSConversionChecker::Trace(visitor);
+    visitor->Trace(inherited_transform_);
+  }
 
   bool IsValid(const StyleResolverState& state,
                const InterpolationValue& underlying) const final {
@@ -75,17 +82,19 @@ InterpolationValue CSSTransformInterpolationType::MaybeConvertInherit(
   const TransformOperations& inherited_transform =
       state.ParentStyle()->Transform();
   conversion_checkers.push_back(
-      std::make_unique<InheritedTransformChecker>(inherited_transform));
+      MakeGarbageCollected<InheritedTransformChecker>(inherited_transform));
   return ConvertTransform(inherited_transform);
 }
 
 InterpolationValue CSSTransformInterpolationType::MaybeConvertValue(
     const CSSValue& value,
-    const StyleResolverState* state,
+    const StyleResolverState& state,
     ConversionCheckers& conversion_checkers) const {
-  DCHECK(state);
+  const CSSToLengthConversionData& conversion_data =
+      state.CssToLengthConversionData();
   if (auto* list_value = DynamicTo<CSSValueList>(value)) {
     CSSPrimitiveValue::LengthTypeFlags types;
+    bool needs_tree_counting_checker = false;
     for (const CSSValue* item : *list_value) {
       const auto& transform_function = To<CSSFunctionValue>(*item);
       if (transform_function.FunctionType() == CSSValueID::kMatrix ||
@@ -94,23 +103,41 @@ InterpolationValue CSSTransformInterpolationType::MaybeConvertValue(
         continue;
       }
       for (const CSSValue* argument : transform_function) {
-        const auto& primitive_value = To<CSSPrimitiveValue>(*argument);
-        if (!primitive_value.IsLength() &&
-            !primitive_value.IsCalculatedPercentageWithLength()) {
+        // perspective(none) is an identifier value rather than a
+        // primitive value, but since it represents infinity and
+        // perspective() interpolates by reciprocals, it interpolates as
+        // 0.
+        const auto* primitive_value = DynamicTo<CSSPrimitiveValue>(argument);
+        DCHECK(primitive_value ||
+               (transform_function.FunctionType() == CSSValueID::kPerspective &&
+                argument->IsIdentifierValue()));
+        if (!primitive_value) {
           continue;
         }
-        primitive_value.AccumulateLengthUnitTypes(types);
+        if (primitive_value->IsElementDependent()) {
+          needs_tree_counting_checker = true;
+        }
+        if (!primitive_value || (!primitive_value->IsLength() &&
+                                 primitive_value->IsResolvableBeforeLayout())) {
+          continue;
+        }
+        primitive_value->AccumulateLengthUnitTypes(types);
       }
     }
-    std::unique_ptr<InterpolationType::ConversionChecker> length_units_checker =
-        LengthUnitsChecker::MaybeCreate(types, *state);
 
-    if (length_units_checker)
-      conversion_checkers.push_back(std::move(length_units_checker));
+    if (InterpolationType::ConversionChecker* length_units_checker =
+            LengthUnitsChecker::MaybeCreate(types, state)) {
+      conversion_checkers.push_back(length_units_checker);
+    }
+    if (needs_tree_counting_checker) {
+      conversion_checkers.push_back(
+          TreeCountingChecker::Create(conversion_data));
+    }
   }
 
-  return InterpolationValue(
-      InterpolableTransformList::ConvertCSSValue(value, state));
+  return InterpolationValue(InterpolableTransformList::ConvertCSSValue(
+      value, conversion_data,
+      TransformOperations::BoxSizeDependentMatrixBlending::kAllow));
 }
 
 InterpolationValue
@@ -126,7 +153,12 @@ CSSTransformInterpolationType::PreInterpolationCompositeIfNeeded(
   // to disable that caching in this case.
   // TODO(crbug.com/1009230): Remove this once our interpolation code isn't
   // caching composited values.
-  conversion_checkers.push_back(std::make_unique<AlwaysInvalidateChecker>());
+  conversion_checkers.push_back(
+      MakeGarbageCollected<AlwaysInvalidateChecker>());
+
+  if (!underlying) {
+    return value;
+  }
 
   InterpolableTransformList& transform_list =
       To<InterpolableTransformList>(*value.interpolable_value);
@@ -167,14 +199,14 @@ void CSSTransformInterpolationType::Composite(
     double interpolation_fraction) const {
   // We do our compositing behavior in |PreInterpolationCompositeIfNeeded|; see
   // the documentation on that method.
-  underlying_value_owner.Set(*this, value);
+  underlying_value_owner.Set(this, value);
 }
 
 void CSSTransformInterpolationType::ApplyStandardPropertyValue(
     const InterpolableValue& interpolable_value,
     const NonInterpolableValue* untyped_non_interpolable_value,
     StyleResolverState& state) const {
-  state.Style()->SetTransform(
+  state.StyleBuilder().SetTransform(
       To<InterpolableTransformList>(interpolable_value).operations());
 }
 

@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,36 +7,19 @@
 //    ../../third_party/xcbproto/src \
 //    gen/ui/gfx/x \
 //    bigreq \
-//    composite \
-//    damage \
-//    dpms \
-//    dri2 \
 //    dri3 \
-//    ge \
 //    glx \
-//    present \
 //    randr \
-//    record \
 //    render \
-//    res \
 //    screensaver \
 //    shape \
 //    shm \
 //    sync \
-//    xc_misc \
-//    xevie \
-//    xf86dri \
-//    xf86vidmode \
 //    xfixes \
-//    xinerama \
 //    xinput \
 //    xkb \
-//    xprint \
 //    xproto \
-//    xselinux \
-//    xtest \
-//    xv \
-//    xvmc
+//    xtest
 
 #ifndef UI_GFX_X_GENERATED_PROTOS_XFIXES_H_
 #define UI_GFX_X_GENERATED_PROTOS_XFIXES_H_
@@ -45,17 +28,17 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <vector>
 
 #include "base/component_export.h"
 #include "base/files/scoped_file.h"
-#include "base/memory/ref_counted_memory.h"
 #include "base/memory/scoped_refptr.h"
 #include "render.h"
 #include "shape.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/gfx/x/error.h"
 #include "ui/gfx/x/ref_counted_fd.h"
+#include "ui/gfx/x/xproto_types.h"
 #include "xproto.h"
 
 namespace x11 {
@@ -70,7 +53,7 @@ class Future;
 
 class COMPONENT_EXPORT(X11) XFixes {
  public:
-  static constexpr unsigned major_version = 5;
+  static constexpr unsigned major_version = 6;
   static constexpr unsigned minor_version = 0;
 
   XFixes(Connection* connection, const x11::QueryExtensionReply& info);
@@ -130,10 +113,14 @@ class COMPONENT_EXPORT(X11) XFixes {
     NegativeY = 1 << 3,
   };
 
+  enum class ClientDisconnectFlags : int {
+    Default = 0,
+    Terminate = 1 << 0,
+  };
+
   struct SelectionNotifyEvent {
-    static constexpr int type_id = 18;
+    static constexpr uint8_t type_id = 10;
     static constexpr uint8_t opcode = 0;
-    bool send_event{};
     SelectionEvent subtype{};
     uint16_t sequence{};
     Window window{};
@@ -141,26 +128,24 @@ class COMPONENT_EXPORT(X11) XFixes {
     Atom selection{};
     Time timestamp{};
     Time selection_timestamp{};
-
-    x11::Window* GetWindow() { return reinterpret_cast<x11::Window*>(&window); }
   };
 
   struct CursorNotifyEvent {
-    static constexpr int type_id = 19;
+    static constexpr uint8_t type_id = 11;
     static constexpr uint8_t opcode = 1;
-    bool send_event{};
     CursorNotify subtype{};
     uint16_t sequence{};
     Window window{};
     uint32_t cursor_serial{};
     Time timestamp{};
     Atom name{};
-
-    x11::Window* GetWindow() { return reinterpret_cast<x11::Window*>(&window); }
   };
 
   struct BadRegionError : public x11::Error {
     uint16_t sequence{};
+    uint32_t bad_value{};
+    uint16_t minor_opcode{};
+    uint8_t major_opcode{};
 
     std::string ToString() const override;
   };
@@ -643,6 +628,33 @@ class COMPONENT_EXPORT(X11) XFixes {
 
   Future<void> DeletePointerBarrier(const Barrier& barrier = {});
 
+  struct SetClientDisconnectModeRequest {
+    ClientDisconnectFlags disconnect_mode{};
+  };
+
+  using SetClientDisconnectModeResponse = Response<void>;
+
+  Future<void> SetClientDisconnectMode(
+      const SetClientDisconnectModeRequest& request);
+
+  Future<void> SetClientDisconnectMode(
+      const ClientDisconnectFlags& disconnect_mode = {});
+
+  struct GetClientDisconnectModeRequest {};
+
+  struct GetClientDisconnectModeReply {
+    uint16_t sequence{};
+    ClientDisconnectFlags disconnect_mode{};
+  };
+
+  using GetClientDisconnectModeResponse =
+      Response<GetClientDisconnectModeReply>;
+
+  Future<GetClientDisconnectModeReply> GetClientDisconnectMode(
+      const GetClientDisconnectModeRequest& request);
+
+  Future<GetClientDisconnectModeReply> GetClientDisconnectMode();
+
  private:
   Connection* const connection_;
   x11::QueryExtensionReply info_{};
@@ -790,6 +802,22 @@ inline constexpr x11::XFixes::BarrierDirections operator&(
   using T = std::underlying_type_t<x11::XFixes::BarrierDirections>;
   return static_cast<x11::XFixes::BarrierDirections>(static_cast<T>(l) &
                                                      static_cast<T>(r));
+}
+
+inline constexpr x11::XFixes::ClientDisconnectFlags operator|(
+    x11::XFixes::ClientDisconnectFlags l,
+    x11::XFixes::ClientDisconnectFlags r) {
+  using T = std::underlying_type_t<x11::XFixes::ClientDisconnectFlags>;
+  return static_cast<x11::XFixes::ClientDisconnectFlags>(static_cast<T>(l) |
+                                                         static_cast<T>(r));
+}
+
+inline constexpr x11::XFixes::ClientDisconnectFlags operator&(
+    x11::XFixes::ClientDisconnectFlags l,
+    x11::XFixes::ClientDisconnectFlags r) {
+  using T = std::underlying_type_t<x11::XFixes::ClientDisconnectFlags>;
+  return static_cast<x11::XFixes::ClientDisconnectFlags>(static_cast<T>(l) &
+                                                         static_cast<T>(r));
 }
 
 #endif  // UI_GFX_X_GENERATED_PROTOS_XFIXES_H_

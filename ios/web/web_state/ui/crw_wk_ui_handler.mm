@@ -1,48 +1,127 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "ios/web/web_state/ui/crw_wk_ui_handler.h"
 
-#include "base/logging.h"
-#include "base/strings/sys_string_conversions.h"
+#import "base/logging.h"
+#import "base/metrics/histogram_functions.h"
+#import "base/sequence_checker.h"
+#import "base/strings/sys_string_conversions.h"
+#import "base/task/sequenced_task_runner.h"
+#import "ios/web/common/features.h"
 #import "ios/web/navigation/wk_navigation_action_util.h"
 #import "ios/web/navigation/wk_navigation_util.h"
+#import "ios/web/public/permissions/permissions.h"
 #import "ios/web/public/ui/context_menu_params.h"
-#import "ios/web/public/ui/java_script_dialog_type.h"
 #import "ios/web/public/web_client.h"
-#import "ios/web/web_state/ui/crw_legacy_context_menu_controller.h"
+#import "ios/web/util/wk_security_origin_util.h"
+#import "ios/web/web_state/ui/crw_permission_request.h"
 #import "ios/web/web_state/ui/crw_wk_ui_handler_delegate.h"
 #import "ios/web/web_state/user_interaction_state.h"
 #import "ios/web/web_state/web_state_impl.h"
-#import "ios/web/web_view/wk_security_origin_util.h"
-#import "ios/web/webui/mojo_facade.h"
-#import "net/base/mac/url_conversions.h"
-#include "url/gurl.h"
+#import "net/base/apple/url_conversions.h"
+#import "url/gurl.h"
+#import "url/origin.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+namespace {
 
-@interface CRWWKUIHandler () {
-  // Backs up property with the same name.
-  std::unique_ptr<web::MojoFacade> _mojoFacade;
+// Values for UMA permission histograms. These values are based on
+// WKMediaCaptureType and persisted to logs. Entries should not be renumbered
+// and numeric values should never be reused.
+enum class PermissionRequest {
+  RequestCamera = 0,
+  RequestMicrophone = 1,
+  RequestCameraAndMicrophone = 2,
+  kMaxValue = RequestCameraAndMicrophone,
+};
+
+// Records permission histogram enum for `media_capture_type` on UMA.
+void RecordHistogramForPermissionRequestForWKMediaCaptureType(
+    WKMediaCaptureType media_capture_type) {
+  PermissionRequest type;
+  switch (media_capture_type) {
+    case WKMediaCaptureTypeCamera:
+      type = PermissionRequest::RequestCamera;
+      break;
+    case WKMediaCaptureTypeMicrophone:
+      type = PermissionRequest::RequestMicrophone;
+      break;
+    case WKMediaCaptureTypeCameraAndMicrophone:
+      type = PermissionRequest::RequestCameraAndMicrophone;
+      break;
+  }
+  base::UmaHistogramEnumeration("IOS.Permission.Requests", type);
+}
+
+}  // namespace
+
+@interface CRWWKUIHandler () <CRWPermissionPresenter> {
+  // Check that public API is called from the correct sequence.
+  SEQUENCE_CHECKER(_sequenceChecker);
 }
 
 @property(nonatomic, assign, readonly) web::WebStateImpl* webStateImpl;
 
-// Facade for Mojo API.
-@property(nonatomic, readonly) web::MojoFacade* mojoFacade;
+// Task runner that creates this object.
+@property(nonatomic, readonly) scoped_refptr<base::SequencedTaskRunner>
+    mainTaskRunner;
 
 @end
 
 @implementation CRWWKUIHandler
 
+- (instancetype)init {
+  if ((self = [super init])) {
+    _mainTaskRunner = base::SequencedTaskRunner::GetCurrentDefault();
+    CHECK(_mainTaskRunner);
+  }
+  return self;
+}
+
+#pragma mark - NSObject
+
+// Overriden to return NO for
+// -webView:runOpenPanelWithParameters:initiatedByFrame:completionHandler:
+// -webView:requestGeolocationPermissionForOrigin:
+// initiatedByFrame:decisionHandler:
+// if there is no delegate or `delegate->CanRunOpenPanel()` returns false.
+- (BOOL)respondsToSelector:(SEL)selector {
+  SEL runOpenPanelWithParametersSelector = @selector
+      (webView:runOpenPanelWithParameters:initiatedByFrame:completionHandler:);
+  if (selector == runOpenPanelWithParametersSelector) {
+    if (@available(iOS 18.4, *)) {
+      return self.webStateImpl->IsCustomOpenPanelSupported() &&
+             web::GetWebClient()->CanRunOpenPanel(self.webStateImpl);
+    } else {
+      NOTREACHED() << "@selector(-webView:runOpenPanelWithParameters:"
+                      "initiatedByFrame:completionHandler:) only exists on "
+                      "18.4+ so it should not be used in former versions.";
+    }
+  }
+
+  SEL requestGeolocationPermissionSelector =
+      @selector(webView:requestGeolocationPermissionForOrigin:initiatedByFrame:
+                decisionHandler:);
+  if (selector == requestGeolocationPermissionSelector) {
+    if (@available(iOS 27.0, *)) {
+      return base::FeatureList::IsEnabled(
+          web::features::kNewGeolocationPermissionDelegate);
+    } else {
+      NOTREACHED()
+          << "@selector(-webView:requestGeolocationPermissionForOrigin:"
+             "initiatedByFrame:decisionHandler:) only exists on "
+             "27.0+ so it should not be used in former versions.";
+    }
+  }
+
+  return [super respondsToSelector:selector];
+}
+
 #pragma mark - CRWWebViewHandler
 
 - (void)close {
   [super close];
-  _mojoFacade.reset();
 }
 
 #pragma mark - Property
@@ -51,13 +130,54 @@
   return [self.delegate webStateImplForWebViewHandler:self];
 }
 
-- (web::MojoFacade*)mojoFacade {
-  if (!_mojoFacade)
-    _mojoFacade = std::make_unique<web::MojoFacade>(self.webStateImpl);
-  return _mojoFacade.get();
+#pragma mark - WKUIDelegate
+
+- (void)webView:(WKWebView*)webView
+    requestMediaCapturePermissionForOrigin:(WKSecurityOrigin*)origin
+                          initiatedByFrame:(WKFrameInfo*)frame
+                                      type:(WKMediaCaptureType)type
+                           decisionHandler:
+                               (void (^)(WKPermissionDecision decision))
+                                   decisionHandler {
+  RecordHistogramForPermissionRequestForWKMediaCaptureType(type);
+  CRWPermissionRequest* request =
+      [[CRWPermissionRequest alloc] initWithPresenter:self
+                                      decisionHandler:decisionHandler
+                                         onTaskRunner:self.mainTaskRunner];
+  GURL securityOrigin = web::GURLOriginWithWKSecurityOrigin(origin);
+  if (web::GetWebClient()->EnableFullscreenAPI()) {
+    if (@available(iOS 16, *)) {
+      if (webView.fullscreenState == WKFullscreenStateInFullscreen ||
+          webView.fullscreenState == WKFullscreenStateEnteringFullscreen) {
+        [webView closeAllMediaPresentationsWithCompletionHandler:^{
+          [request displayPromptForMediaCaptureType:type origin:securityOrigin];
+        }];
+        return;
+      }
+    }
+  }
+  [request displayPromptForMediaCaptureType:type origin:securityOrigin];
 }
 
-#pragma mark - WKUIDelegate
+- (void)webView:(WKWebView*)webView
+    requestGeolocationPermissionForOrigin:(WKSecurityOrigin*)origin
+                         initiatedByFrame:(WKFrameInfo*)frame
+                          decisionHandler:
+                              (void (^)(WKPermissionDecision decision))
+                                  decisionHandler API_AVAILABLE(ios(27.0)) {
+  if (!base::FeatureList::IsEnabled(
+          web::features::kNewGeolocationPermissionDelegate)) {
+    decisionHandler(WKPermissionDecisionPrompt);
+    return;
+  }
+
+  CRWPermissionRequest* request =
+      [[CRWPermissionRequest alloc] initWithPresenter:self
+                                      decisionHandler:decisionHandler
+                                         onTaskRunner:self.mainTaskRunner];
+  GURL securityOrigin = web::GURLOriginWithWKSecurityOrigin(origin);
+  [request displayPromptForGeolocationOrigin:securityOrigin];
+}
 
 - (WKWebView*)webView:(WKWebView*)webView
     createWebViewWithConfiguration:(WKWebViewConfiguration*)configuration
@@ -78,7 +198,7 @@
                        : [self.delegate documentURLForWebViewHandler:self];
 
   // There is no reliable way to tell if there was a user gesture, so this code
-  // checks if user has recently tapped on web view. TODO(crbug.com/809706):
+  // checks if user has recently tapped on web view. TODO(crbug.com/40561701):
   // Remove the usage of -userIsInteracting when rdar://19989909 is fixed.
   bool initiatedByUser = [self.delegate UIHandler:self
                             isUserInitiatedAction:action];
@@ -95,36 +215,61 @@
 
   web::WebState* childWebState = self.webStateImpl->CreateNewWebState(
       requestURL, openerURL, initiatedByUser);
-  if (!childWebState)
+  if (!childWebState) {
     return nil;
+  }
 
   // WKWebView requires WKUIDelegate to return a child view created with
-  // exactly the same |configuration| object (exception is raised if config is
-  // different). |configuration| param and config returned by
+  // exactly the same `configuration` object (exception is raised if config is
+  // different). `configuration` param and config returned by
   // WKWebViewConfigurationProvider are different objects because WKWebView
   // makes a shallow copy of the config inside init, so every WKWebView
   // owns a separate shallow copy of WKWebViewConfiguration.
-  return [self.delegate UIHandler:self
-      createWebViewWithConfiguration:configuration
-                         forWebState:childWebState];
+  WKWebView* newWebView = [self.delegate UIHandler:self
+                    createWebViewWithConfiguration:configuration
+                                       forWebState:childWebState];
+
+  if (childWebState->GetDelegate()) {
+    childWebState->GetDelegate()->OnNewWebViewCreated(childWebState);
+  }
+
+  return newWebView;
 }
 
 - (void)webViewDidClose:(WKWebView*)webView {
-  if (self.webStateImpl && self.webStateImpl->HasOpener())
-    self.webStateImpl->CloseWebState();
+  // This is triggered by a JavaScript `close()` method call, only if the tab
+  // was opened using `window.open`. WebKit is checking that this is the case,
+  // so we can close the tab unconditionally here.
+  if (self.webStateImpl) {
+    __weak __typeof(self) weakSelf = self;
+    // -webViewDidClose will typically trigger another webState to activate,
+    // which may in turn also close. To prevent reentrant modificationre in
+    // WebStateList, trigger a PostTask here.
+    self.mainTaskRunner->PostTask(FROM_HERE, base::BindOnce(^{
+                                    web::WebStateImpl* webStateImpl =
+                                        weakSelf.webStateImpl;
+                                    if (webStateImpl) {
+                                      webStateImpl->CloseWebState();
+                                    }
+                                  }));
+  }
 }
 
 - (void)webView:(WKWebView*)webView
     runJavaScriptAlertPanelWithMessage:(NSString*)message
                       initiatedByFrame:(WKFrameInfo*)frame
                      completionHandler:(void (^)())completionHandler {
-  [self runJavaScriptDialogOfType:web::JAVASCRIPT_DIALOG_TYPE_ALERT
-                 initiatedByFrame:frame
-                          message:message
-                      defaultText:nil
-                       completion:^(BOOL, NSString*) {
-                         completionHandler();
-                       }];
+  DCHECK(completionHandler);
+  GURL requestURL = net::GURLWithNSURL(frame.request.URL);
+  if (![self shouldPresentJavaScriptDialogForRequestURL:requestURL
+                                            isMainFrame:frame.mainFrame]) {
+    completionHandler();
+    return;
+  }
+
+  url::Origin origin = web::OriginWithWKSecurityOrigin(frame.securityOrigin);
+  self.webStateImpl->RunJavaScriptAlertDialog(
+      origin, message, base::BindOnce(completionHandler));
 }
 
 - (void)webView:(WKWebView*)webView
@@ -132,15 +277,18 @@
                         initiatedByFrame:(WKFrameInfo*)frame
                        completionHandler:
                            (void (^)(BOOL result))completionHandler {
-  [self runJavaScriptDialogOfType:web::JAVASCRIPT_DIALOG_TYPE_CONFIRM
-                 initiatedByFrame:frame
-                          message:message
-                      defaultText:nil
-                       completion:^(BOOL success, NSString*) {
-                         if (completionHandler) {
-                           completionHandler(success);
-                         }
-                       }];
+  DCHECK(completionHandler);
+
+  GURL requestURL = net::GURLWithNSURL(frame.request.URL);
+  if (![self shouldPresentJavaScriptDialogForRequestURL:requestURL
+                                            isMainFrame:frame.mainFrame]) {
+    completionHandler(NO);
+    return;
+  }
+
+  url::Origin origin = web::OriginWithWKSecurityOrigin(frame.securityOrigin);
+  self.webStateImpl->RunJavaScriptConfirmDialog(
+      origin, message, base::BindOnce(completionHandler));
 }
 
 - (void)webView:(WKWebView*)webView
@@ -149,60 +297,25 @@
                          initiatedByFrame:(WKFrameInfo*)frame
                         completionHandler:
                             (void (^)(NSString* result))completionHandler {
-  GURL origin(web::GURLOriginWithWKSecurityOrigin(frame.securityOrigin));
-  if (web::GetWebClient()->IsAppSpecificURL(origin)) {
-    std::string mojoResponse =
-        self.mojoFacade->HandleMojoMessage(base::SysNSStringToUTF8(prompt));
-    completionHandler(base::SysUTF8ToNSString(mojoResponse));
+  DCHECK(completionHandler);
+
+  GURL requestURL = net::GURLWithNSURL(frame.request.URL);
+  if (![self shouldPresentJavaScriptDialogForRequestURL:requestURL
+                                            isMainFrame:frame.mainFrame]) {
+    completionHandler(nil);
     return;
   }
 
-  [self runJavaScriptDialogOfType:web::JAVASCRIPT_DIALOG_TYPE_PROMPT
-                 initiatedByFrame:frame
-                          message:prompt
-                      defaultText:defaultText
-                       completion:^(BOOL, NSString* input) {
-                         if (completionHandler) {
-                           completionHandler(input);
-                         }
-                       }];
+  url::Origin origin = web::OriginWithWKSecurityOrigin(frame.securityOrigin);
+  self.webStateImpl->RunJavaScriptPromptDialog(
+      origin, prompt, defaultText, base::BindOnce(completionHandler));
 }
-
-#if !defined(__IPHONE_13_0) || __IPHONE_OS_VERSION_MIN_REQUIRED < __IPHONE_13_0
-
-// TODO(crbug.com/1131852): Preview depracted is iOS13+
-- (BOOL)webView:(WKWebView*)webView
-    shouldPreviewElement:(WKPreviewElementInfo*)elementInfo {
-  return self.webStateImpl->ShouldPreviewLink(
-      net::GURLWithNSURL(elementInfo.linkURL));
-}
-
-- (UIViewController*)webView:(WKWebView*)webView
-    previewingViewControllerForElement:(WKPreviewElementInfo*)elementInfo
-                        defaultActions:
-                            (NSArray<id<WKPreviewActionItem>>*)previewActions {
-  // Prevent |_contextMenuController| from intercepting the default behavior for
-  // the current on-going touch. Otherwise it would cancel the on-going Peek&Pop
-  // action and show its own context menu instead (crbug.com/770619).
-  [self.contextMenuController allowSystemUIForCurrentGesture];
-
-  return self.webStateImpl->GetPreviewingViewController(
-      net::GURLWithNSURL(elementInfo.linkURL));
-}
-
-- (void)webView:(WKWebView*)webView
-    commitPreviewingViewController:(UIViewController*)previewingViewController {
-  return self.webStateImpl->CommitPreviewingViewController(
-      previewingViewController);
-}
-
-#endif  // End of >iOS13 deprecated block.
 
 - (void)webView:(WKWebView*)webView
     contextMenuConfigurationForElement:(WKContextMenuElementInfo*)elementInfo
                      completionHandler:
                          (void (^)(UIContextMenuConfiguration* _Nullable))
-                             completionHandler API_AVAILABLE(ios(13.0)) {
+                             completionHandler {
   web::WebStateDelegate* delegate = self.webStateImpl->GetDelegate();
   if (!delegate) {
     completionHandler(nil);
@@ -212,84 +325,85 @@
   web::ContextMenuParams params;
   params.link_url = net::GURLWithNSURL(elementInfo.linkURL);
 
-  delegate->ContextMenuConfiguration(
-      self.webStateImpl, params, /*preview_provider=*/nil, completionHandler);
+  delegate->ContextMenuConfiguration(self.webStateImpl, params,
+                                     completionHandler);
 }
 
 - (void)webView:(WKWebView*)webView
-    contextMenuDidEndForElement:(WKContextMenuElementInfo*)elementInfo
-    API_AVAILABLE(ios(13.0)) {
-  web::WebStateDelegate* delegate = self.webStateImpl->GetDelegate();
-  if (!delegate) {
-    return;
-  }
-
-  delegate->ContextMenuDidEnd(self.webStateImpl,
-                              net::GURLWithNSURL(elementInfo.linkURL));
-}
-
-- (void)webView:(WKWebView*)webView
-     contextMenuForElement:(nonnull WKContextMenuElementInfo*)elementInfo
+     contextMenuForElement:(WKContextMenuElementInfo*)elementInfo
     willCommitWithAnimator:
-        (nonnull id<UIContextMenuInteractionCommitAnimating>)animator
-    API_AVAILABLE(ios(13.0)) {
+        (id<UIContextMenuInteractionCommitAnimating>)animator {
   web::WebStateDelegate* delegate = self.webStateImpl->GetDelegate();
   if (!delegate) {
     return;
   }
 
-  delegate->ContextMenuWillCommitWithAnimator(
-      self.webStateImpl, net::GURLWithNSURL(elementInfo.linkURL), animator);
+  delegate->ContextMenuWillCommitWithAnimator(self.webStateImpl, animator);
 }
 
 - (void)webView:(WKWebView*)webView
-    contextMenuWillPresentForElement:(WKContextMenuElementInfo*)elementInfo
-    API_AVAILABLE(ios(13.0)) {
-  web::WebStateDelegate* delegate = self.webStateImpl->GetDelegate();
-  if (!delegate) {
-    return;
-  }
+    runOpenPanelWithParameters:(WKOpenPanelParameters*)parameters
+              initiatedByFrame:(WKFrameInfo*)frame
+             completionHandler:(void (^)(NSArray<NSURL*>*))completionHandler
+    API_AVAILABLE(ios(18.4)) {
+  CHECK(self.webStateImpl->IsCustomOpenPanelSupported())
+      << "-[CRWWKUIHandler "
+         "webView:runOpenPanelWithParameters:initiatedByFrame:"
+         "completionHandler:] was called while "
+         "self.webStateImpl->IsCustomOpenPanelSupported() returned false.";
+  CHECK(web::GetWebClient()->CanRunOpenPanel(self.webStateImpl))
+      << "-[CRWWKUIHandler "
+         "webView:runOpenPanelWithParameters:initiatedByFrame:"
+         "completionHandler:] was called while "
+         "web::GetWebClient()->CanRunOpenPanel() returned false.";
+  web::GetWebClient()->RunOpenPanel(self.webStateImpl, parameters, frame,
+                                    base::BindOnce(completionHandler));
+}
 
-  delegate->ContextMenuWillPresent(self.webStateImpl,
-                                   net::GURLWithNSURL(elementInfo.linkURL));
+#pragma mark - CRWPermissionPresenter
+
+- (web::WebStateImpl*)presentingWebState {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(_sequenceChecker);
+  return self.webStateImpl;
 }
 
 #pragma mark - Helper
 
-// Helper to respond to |webView:runJavaScript...| delegate methods.
-// |completionHandler| must not be nil.
-- (void)runJavaScriptDialogOfType:(web::JavaScriptDialogType)type
-                 initiatedByFrame:(WKFrameInfo*)frame
-                          message:(NSString*)message
-                      defaultText:(NSString*)defaultText
-                       completion:(void (^)(BOOL, NSString*))completionHandler {
-  DCHECK(completionHandler);
-
+// Helper that returns whether or not a dialog should be presented for a
+// frame with `requestURL`.
+- (BOOL)shouldPresentJavaScriptDialogForRequestURL:(const GURL&)requestURL
+                                       isMainFrame:(BOOL)isMainFrame {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(_sequenceChecker);
   // JavaScript dialogs should not be presented if there is no information about
   // the requesting page's URL.
-  GURL requestURL = net::GURLWithNSURL(frame.request.URL);
   if (!requestURL.is_valid()) {
-    completionHandler(NO, nil);
-    return;
+    return NO;
   }
 
-  if (self.webStateImpl->GetVisibleURL().GetOrigin() !=
-          requestURL.GetOrigin() &&
-      frame.mainFrame) {
+  if (!self.webStateImpl->IsVisible()) {
+    return NO;
+  }
+
+  if (isMainFrame && url::Origin::Create(self.webStateImpl->GetVisibleURL()) !=
+                         url::Origin::Create(requestURL)) {
     // Dialog was requested by web page's main frame, but visible URL has
     // different origin. This could happen if the user has started a new
     // browser initiated navigation. There is no value in showing dialogs
     // requested by page, which this WebState is about to leave. But presenting
     // the dialog can lead to phishing and other abusive behaviors.
-    completionHandler(NO, nil);
-    return;
+    return NO;
   }
 
-  self.webStateImpl->RunJavaScriptDialog(
-      requestURL, type, message, defaultText,
-      base::BindOnce(^(bool success, NSString* input) {
-        completionHandler(success, input);
-      }));
+  if (!isMainFrame &&
+      url::Origin::Create(self.webStateImpl->GetVisibleURL()) !=
+          url::Origin::Create(self.webStateImpl->GetLastCommittedURL())) {
+    // Do not show a dialog if the visible URL does not match the last
+    // committed URL. This could happen when a browser-initiated navigation is
+    // pending and a subframe requests a dialog.
+    return NO;
+  }
+
+  return YES;
 }
 
 @end

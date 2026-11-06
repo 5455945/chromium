@@ -1,4 +1,4 @@
-// Copyright (c) 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,10 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/ash/login/session/user_session_manager.h"
+
+class Profile;
 
 namespace ash {
 namespace test {
@@ -18,13 +20,17 @@ class UserSessionManagerTestApi {
  public:
   explicit UserSessionManagerTestApi(UserSessionManager* session_manager);
 
+  UserSessionManagerTestApi(const UserSessionManagerTestApi&) = delete;
+  UserSessionManagerTestApi& operator=(const UserSessionManagerTestApi&) =
+      delete;
+
   // Injects `user_context` that will be used to create StubAuthenticator
   // instance when UserSessionManager::CreateAuthenticator() is called.
   // DEPRECATED: Use InjectStubAuthenticatorBuilder instead.
   void InjectStubUserContext(const UserContext& user_context);
 
   void InjectAuthenticatorBuilder(
-      std::unique_ptr<StubAuthenticatorBuilder> builder);
+      std::unique_ptr<AuthenticatorBuilder> builder);
 
   // Controls whether browser instance should be launched after sign in
   // (used in tests).
@@ -33,27 +39,22 @@ class UserSessionManagerTestApi {
   // Controls whether token handle fetching is enabled (used in tests).
   void SetShouldObtainTokenHandleInTests(bool should_obtain_handle);
 
+  // Proxy to `UserSessionManager::InitializeDeviceId()`.
+  void InitializeDeviceId(bool is_ephemeral_user,
+                          user_manager::KnownUser& known_user);
+
+  // Proxy to `UserSessionManager::MaybeMigrateConsentLevelToSync()`.
+  void MaybeMigrateConsentLevelToSync(Profile* profile);
+
   // Sets the function which is used to request a chrome restart.
   void SetAttemptRestartClosureInTests(
       const base::RepeatingClosure& attempt_restart_closure);
 
-  OnboardingUserActivityCounter* get_onboarding_user_activity_counter();
-
  private:
-  UserSessionManager* session_manager_;  // not owned
-
-  DISALLOW_COPY_AND_ASSIGN(UserSessionManagerTestApi);
+  raw_ptr<UserSessionManager> session_manager_;  // not owned
 };
 
 }  // namespace test
 }  // namespace ash
-
-// TODO(https://crbug.com/1164001): remove after the //chrome/browser/chromeos
-// source migration is finished.
-namespace chromeos {
-namespace test {
-using ::ash::test::UserSessionManagerTestApi;
-}
-}  // namespace chromeos
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_SESSION_USER_SESSION_MANAGER_TEST_API_H_

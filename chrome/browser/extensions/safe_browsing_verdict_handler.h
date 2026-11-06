@@ -1,48 +1,49 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_EXTENSIONS_SAFE_BROWSING_VERDICT_HANDLER_H_
 #define CHROME_BROWSER_EXTENSIONS_SAFE_BROWSING_VERDICT_HANDLER_H_
 
-#include "chrome/browser/extensions/blocklist.h"
+#include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
+#include "extensions/browser/blocklist.h"
+#include "extensions/browser/extension_registry.h"
+#include "extensions/browser/extension_registry_observer.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_set.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 class ExtensionPrefs;
-class ExtensionRegistry;
-class ExtensionService;
+class ExtensionRegistrar;
 
 // Manages the Safe Browsing blocklist/greylist state in extension pref.
-class SafeBrowsingVerdictHandler {
+class SafeBrowsingVerdictHandler : public ExtensionRegistryObserver {
  public:
   SafeBrowsingVerdictHandler(ExtensionPrefs* extension_prefs,
                              ExtensionRegistry* registry,
-                             ExtensionService* extension_service);
+                             ExtensionRegistrar* registrar);
   SafeBrowsingVerdictHandler(const SafeBrowsingVerdictHandler&) = delete;
   SafeBrowsingVerdictHandler& operator=(const SafeBrowsingVerdictHandler&) =
       delete;
-  ~SafeBrowsingVerdictHandler() = default;
-
-  // Partitions `before`, `after` and `unchanged` into `no_longer` and
-  // `not_yet`. `no_longer` = `before` - `after` - `unchanged`. `not_yet` =
-  // `after` - `before`.
-  static void Partition(const ExtensionIdSet& before,
-                        const ExtensionIdSet& after,
-                        const ExtensionIdSet& unchanged,
-                        ExtensionIdSet* no_longer,
-                        ExtensionIdSet* not_yet);
+  ~SafeBrowsingVerdictHandler() override;
 
   // Initializes and load greylist from prefs.
   void Init();
 
   // Manages the blocklisted extensions. Enables/disables/loads/unloads
   // extensions based on the current `state_map`.
-  // TODO(crbug.com/1193695): This function currently only handles greylist
-  // states. We should move blocklist handling into this class too.
   void ManageBlocklist(const Blocklist::BlocklistStateMap& state_map);
 
  private:
+  // Adds extensions in `blocklist` to `blocklist_` and maybe unload them.
+  // Removes extensions that are neither in `blocklist`, nor in `unchanged` from
+  // `blocklist_` and maybe reload them.
+  void UpdateBlocklistedExtensions(const ExtensionIdSet& blocklist,
+                                   const ExtensionIdSet& unchanged);
+
   // Adds extensions in `greylist` to `greylist_` and disables them. Removes
   // extensions that are neither in `greylist`, nor in `unchanged` from
   // `greylist_` and maybe re-enable them.
@@ -51,10 +52,24 @@ class SafeBrowsingVerdictHandler {
       const ExtensionIdSet& unchanged,
       const Blocklist::BlocklistStateMap& state_map);
 
-  ExtensionPrefs* extension_prefs_ = nullptr;
-  ExtensionRegistry* registry_ = nullptr;
-  ExtensionService* extension_service_ = nullptr;
+  // ExtensionRegistryObserver overrides.
+  void OnExtensionUninstalled(content::BrowserContext* browser_context,
+                              const Extension* extension,
+                              UninstallReason reason) override;
 
+  base::ScopedObservation<ExtensionRegistry, ExtensionRegistryObserver>
+      extension_registry_observation_{this};
+
+  raw_ptr<ExtensionPrefs> extension_prefs_ = nullptr;
+  raw_ptr<ExtensionRegistry> registry_ = nullptr;
+  raw_ptr<ExtensionRegistrar> registrar_ = nullptr;
+
+  // Set of blocklisted extensions. These extensions are unloaded if they are
+  // already installed in Chromium at the time when they are added to
+  // the blocklist. This blocklist_ only contains extensions blocklisted by Safe
+  // Browsing while ExtensionRegistry::blocklisted_extensions_ contains
+  // extensions blocklisted by other sources such as Omaha attribute.
+  ExtensionSet blocklist_;
   // Set of greylisted extensions. These extensions are disabled if they are
   // already installed in Chromium at the time when they are added to
   // the greylist. Unlike blocklisted extensions, greylisted ones are visible

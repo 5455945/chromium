@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,7 @@
 #include "base/logging.h"
 #include "base/process/process_handle.h"
 #include "base/strings/stringprintf.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/memory_allocator_dump.h"
 #include "base/trace_event/memory_dump_manager.h"
 #include "base/trace_event/process_memory_dump.h"
@@ -22,14 +22,16 @@
 
 namespace gpu {
 
-TransferBufferManager::TransferBufferManager(MemoryTracker* memory_tracker)
-    : shared_memory_bytes_allocated_(0), memory_tracker_(memory_tracker) {
+TransferBufferManager::TransferBufferManager(
+    scoped_refptr<MemoryTracker> memory_tracker)
+    : shared_memory_bytes_allocated_(0),
+      memory_tracker_(std::move(memory_tracker)) {
   // When created from InProcessCommandBuffer, we won't have a |memory_tracker_|
   // so don't register a dump provider.
   if (memory_tracker_) {
     base::trace_event::MemoryDumpManager::GetInstance()->RegisterDumpProvider(
         this, "gpu::TransferBufferManager",
-        base::ThreadTaskRunnerHandle::Get());
+        base::SingleThreadTaskRunner::GetCurrentDefault());
   }
 }
 
@@ -55,7 +57,7 @@ bool TransferBufferManager::RegisterTransferBuffer(
   }
 
   // Fail if the ID is in use.
-  if (registered_buffers_.find(id) != registered_buffers_.end()) {
+  if (registered_buffers_.contains(id)) {
     DVLOG(0) << "Buffer ID already in use.";
     return false;
   }
@@ -100,10 +102,13 @@ bool TransferBufferManager::OnMemoryDump(
     base::trace_event::ProcessMemoryDump* pmd) {
   using base::trace_event::MemoryAllocatorDump;
   using base::trace_event::MemoryDumpLevelOfDetail;
+  const int client_id = memory_tracker_ ? memory_tracker_->ClientId() : 0;
+  const uint64_t client_tracking_id =
+      memory_tracker_ ? memory_tracker_->ClientTracingId() : 0;
 
-  if (args.level_of_detail == MemoryDumpLevelOfDetail::BACKGROUND) {
-    std::string dump_name = base::StringPrintf("gpu/transfer_memory/client_%d",
-                                               memory_tracker_->ClientId());
+  if (args.level_of_detail == MemoryDumpLevelOfDetail::kBackground) {
+    std::string dump_name =
+        base::StringPrintf("gpu/transfer_memory/client_%d", client_id);
     MemoryAllocatorDump* dump = pmd->CreateAllocatorDump(dump_name);
     dump->AddScalar(MemoryAllocatorDump::kNameSize,
                     MemoryAllocatorDump::kUnitsBytes,
@@ -116,9 +121,8 @@ bool TransferBufferManager::OnMemoryDump(
   for (const auto& buffer_entry : registered_buffers_) {
     int32_t buffer_id = buffer_entry.first;
     const Buffer* buffer = buffer_entry.second.get();
-    std::string dump_name =
-        base::StringPrintf("gpu/transfer_memory/client_%d/buffer_%d",
-                           memory_tracker_->ClientId(), buffer_id);
+    std::string dump_name = base::StringPrintf(
+        "gpu/transfer_memory/client_%d/buffer_%d", client_id, buffer_id);
     MemoryAllocatorDump* dump = pmd->CreateAllocatorDump(dump_name);
     dump->AddScalar(MemoryAllocatorDump::kNameSize,
                     MemoryAllocatorDump::kUnitsBytes, buffer->size());
@@ -128,8 +132,7 @@ bool TransferBufferManager::OnMemoryDump(
       pmd->CreateSharedMemoryOwnershipEdge(dump->guid(), shared_memory_guid,
                                            0 /* importance */);
     } else {
-      auto guid = GetBufferGUIDForTracing(memory_tracker_->ClientTracingId(),
-                                          buffer_id);
+      auto guid = GetBufferGUIDForTracing(client_tracking_id, buffer_id);
       pmd->CreateSharedGlobalAllocatorDump(guid);
       pmd->AddOwnershipEdge(dump->guid(), guid);
     }

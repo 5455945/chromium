@@ -29,6 +29,7 @@
 #include "third_party/blink/renderer/platform/fonts/string_truncator.h"
 
 #include "third_party/blink/renderer/platform/fonts/font.h"
+#include "third_party/blink/renderer/platform/fonts/plain_text_painter.h"
 #include "third_party/blink/renderer/platform/text/text_break_iterator.h"
 #include "third_party/blink/renderer/platform/text/text_run.h"
 #include "third_party/blink/renderer/platform/wtf/text/character_names.h"
@@ -37,14 +38,12 @@ namespace blink {
 
 #define STRING_BUFFER_SIZE 2048
 
-typedef unsigned TruncationFunction(const String&,
-                                    unsigned length,
-                                    unsigned keep_count,
-                                    UChar* buffer);
+using TruncationFunction = base::span<const UChar>(const String&,
+                                                   wtf_size_t keep_count,
+                                                   base::span<UChar> buffer);
 
-static inline int TextBreakAtOrPreceding(
-    const NonSharedCharacterBreakIterator& it,
-    int offset) {
+static inline int TextBreakAtOrPreceding(const CharacterBreakIterator& it,
+                                         int offset) {
   if (it.IsBreak(offset))
     return offset;
 
@@ -52,96 +51,94 @@ static inline int TextBreakAtOrPreceding(
   return result == kTextBreakDone ? 0 : result;
 }
 
-static inline int BoundedTextBreakFollowing(
-    const NonSharedCharacterBreakIterator& it,
-    int offset,
-    int length) {
+static inline int BoundedTextBreakFollowing(const CharacterBreakIterator& it,
+                                            int offset,
+                                            int length) {
   int result = it.Following(offset);
   return result == kTextBreakDone ? length : result;
 }
 
-static unsigned CenterTruncateToBuffer(const String& string,
-                                       unsigned length,
-                                       unsigned keep_count,
-                                       UChar* buffer) {
-  DCHECK_LT(keep_count, length);
+static base::span<const UChar> CenterTruncateToBuffer(
+    const String& string,
+    wtf_size_t keep_count,
+    base::span<UChar> buffer) {
+  DCHECK_LT(keep_count, string.length());
   DCHECK(keep_count < STRING_BUFFER_SIZE);
 
-  unsigned omit_start = (keep_count + 1) / 2;
-  NonSharedCharacterBreakIterator it(string);
-  unsigned omit_end = BoundedTextBreakFollowing(
-      it, omit_start + (length - keep_count) - 1, length);
+  wtf_size_t omit_start = (keep_count + 1) / 2;
+  CharacterBreakIterator it(string);
+  wtf_size_t omit_end = BoundedTextBreakFollowing(
+      it, omit_start + (string.length() - keep_count) - 1, string.length());
   omit_start = TextBreakAtOrPreceding(it, omit_start);
 
-  unsigned truncated_length = omit_start + 1 + (length - omit_end);
-  DCHECK_LE(truncated_length, length);
+  wtf_size_t truncated_length = omit_start + 1 + (string.length() - omit_end);
+  DCHECK_LE(truncated_length, string.length());
 
-  string.CopyTo(buffer, 0, omit_start);
-  buffer[omit_start] = kHorizontalEllipsisCharacter;
-  string.CopyTo(&buffer[omit_start + 1], omit_end, length - omit_end);
+  string.CopyTo(buffer.first(omit_start), 0);
+  buffer[omit_start] = uchar::kHorizontalEllipsis;
+  string.CopyTo(buffer.subspan(omit_start + 1, string.length() - omit_end),
+                omit_end);
 
-  return truncated_length;
+  return buffer.first(truncated_length);
 }
 
-static unsigned RightTruncateToBuffer(const String& string,
-                                      unsigned length,
-                                      unsigned keep_count,
-                                      UChar* buffer) {
-  DCHECK_LT(keep_count, length);
+static base::span<const UChar> RightTruncateToBuffer(const String& string,
+                                                     wtf_size_t keep_count,
+                                                     base::span<UChar> buffer) {
+  DCHECK_LT(keep_count, string.length());
   DCHECK(keep_count < STRING_BUFFER_SIZE);
 
-  NonSharedCharacterBreakIterator it(string);
-  unsigned keep_length = TextBreakAtOrPreceding(it, keep_count);
-  unsigned truncated_length = keep_length + 1;
+  CharacterBreakIterator it(string);
+  wtf_size_t keep_length = TextBreakAtOrPreceding(it, keep_count);
+  wtf_size_t truncated_length = keep_length + 1;
 
-  string.CopyTo(buffer, 0, keep_length);
-  buffer[keep_length] = kHorizontalEllipsisCharacter;
+  string.CopyTo(buffer.first(keep_length), 0);
+  buffer[keep_length] = uchar::kHorizontalEllipsis;
 
-  return truncated_length;
+  return buffer.first(truncated_length);
 }
 
 static float StringWidth(const Font& renderer,
-                         const UChar* characters,
-                         unsigned length) {
-  TextRun run(characters, length);
-  return renderer.Width(run);
+                         base::span<const UChar> characters) {
+  return PlainTextPainter::Shared().ComputeInlineSize(TextRun(characters),
+                                                      renderer);
 }
 
 static String TruncateString(const String& string,
                              float max_width,
                              const Font& font,
                              TruncationFunction truncate_to_buffer) {
-  if (string.IsEmpty())
+  if (string.empty())
     return string;
 
   DCHECK_GE(max_width, 0);
 
-  float current_ellipsis_width =
-      StringWidth(font, &kHorizontalEllipsisCharacter, 1);
+  const float current_ellipsis_width =
+      StringWidth(font, base::span_from_ref(uchar::kHorizontalEllipsis));
 
   UChar string_buffer[STRING_BUFFER_SIZE];
-  unsigned truncated_length;
-  unsigned keep_count;
-  unsigned length = string.length();
+  base::span<const UChar> truncated_string;
+  wtf_size_t keep_count;
 
-  if (length > STRING_BUFFER_SIZE) {
+  if (string.length() > STRING_BUFFER_SIZE) {
     keep_count = STRING_BUFFER_SIZE - 1;  // need 1 character for the ellipsis
-    truncated_length =
-        CenterTruncateToBuffer(string, length, keep_count, string_buffer);
+    truncated_string =
+        CenterTruncateToBuffer(string, keep_count, string_buffer);
   } else {
-    keep_count = length;
-    string.CopyTo(string_buffer, 0, length);
-    truncated_length = length;
+    keep_count = string.length();
+    auto string_buffer_piece = base::span(string_buffer).first(keep_count);
+    string.CopyTo(string_buffer_piece, 0);
+    truncated_string = string_buffer_piece;
   }
 
-  float width = StringWidth(font, string_buffer, truncated_length);
+  float width = StringWidth(font, truncated_string);
   if (width <= max_width)
     return string;
 
-  unsigned keep_count_for_largest_known_to_fit = 0;
+  wtf_size_t keep_count_for_largest_known_to_fit = 0;
   float width_for_largest_known_to_fit = current_ellipsis_width;
 
-  unsigned keep_count_for_smallest_known_to_not_fit = keep_count;
+  wtf_size_t keep_count_for_smallest_known_to_not_fit = keep_count;
   float width_for_smallest_known_to_not_fit = width;
 
   if (current_ellipsis_width >= max_width) {
@@ -158,7 +155,7 @@ static String TruncateString(const String& string,
         (keep_count_for_smallest_known_to_not_fit -
          keep_count_for_largest_known_to_fit) /
         (width_for_smallest_known_to_not_fit - width_for_largest_known_to_fit);
-    keep_count = static_cast<unsigned>(max_width * ratio);
+    keep_count = static_cast<wtf_size_t>(max_width * ratio);
 
     if (keep_count <= keep_count_for_largest_known_to_fit) {
       keep_count = keep_count_for_largest_known_to_fit + 1;
@@ -166,15 +163,15 @@ static String TruncateString(const String& string,
       keep_count = keep_count_for_smallest_known_to_not_fit - 1;
     }
 
-    DCHECK_LT(keep_count, length);
+    DCHECK_LT(keep_count, string.length());
     DCHECK_GT(keep_count, 0u);
     DCHECK_LT(keep_count, keep_count_for_smallest_known_to_not_fit);
     DCHECK_GT(keep_count, keep_count_for_largest_known_to_fit);
 
-    truncated_length =
-        truncate_to_buffer(string, length, keep_count, string_buffer);
+    truncated_string = truncate_to_buffer(string, keep_count,
+      base::span(string_buffer));
 
-    width = StringWidth(font, string_buffer, truncated_length);
+    width = StringWidth(font, truncated_string);
     if (width <= max_width) {
       keep_count_for_largest_known_to_fit = keep_count;
       width_for_largest_known_to_fit = width;
@@ -189,22 +186,18 @@ static String TruncateString(const String& string,
 
   if (keep_count != keep_count_for_largest_known_to_fit) {
     keep_count = keep_count_for_largest_known_to_fit;
-    truncated_length =
-        truncate_to_buffer(string, length, keep_count, string_buffer);
+    truncated_string = truncate_to_buffer(string, keep_count,
+      base::span(string_buffer));
   }
 
-  return String(string_buffer, truncated_length);
+  return String(truncated_string);
 }
 
-String StringTruncator::CenterTruncate(const String& string,
-                                       float max_width,
-                                       const Font& font) {
+String TruncateCenter(const String& string, float max_width, const Font& font) {
   return TruncateString(string, max_width, font, CenterTruncateToBuffer);
 }
 
-String StringTruncator::RightTruncate(const String& string,
-                                      float max_width,
-                                      const Font& font) {
+String TruncateRight(const String& string, float max_width, const Font& font) {
   return TruncateString(string, max_width, font, RightTruncateToBuffer);
 }
 

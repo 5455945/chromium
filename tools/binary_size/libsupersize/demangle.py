@@ -1,21 +1,40 @@
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 """Utilities for demangling C++ symbols."""
 
 import collections
+import concurrent.futures
 import itertools
 import logging
+import os
 import re
 import subprocess
 
+import parallel
 import path_util
 
 _LOWER_HEX_PATTERN = re.compile(r'^[0-9a-f]*$')
+# Matches LLVM promoted global names suffix in demangled names.
+# E.g. matches the suffix in:
+#   "foo (.llvm.1234)"
+#   "foo (.490f3479656f7a156e853d39281f6211)"
+#   "foo (.1.llvm.1234)"
+#   "foo (.1.490f3479656f7a156e853d39281f6211)"
 _PROMOTED_GLOBAL_NAME_DEMANGLED_PATTERN = re.compile(
-    r' \((\.\d+)?\.llvm\.\d+\)$')
-_PROMOTED_GLOBAL_NAME_RAW_PATTERN = re.compile(r'(\.\d+)?\.llvm\.\d+$')
+  r' \((\.\d+)?(?:\.llvm\.\d+|\.[0-9a-f]{16,32})\)$'
+)
+# Matches LLVM promoted global names suffix in raw (mangled) names.
+# E.g. matches the suffix in:
+#   "_ZN3fooEv.llvm.1234"
+#   "_ZN3fooEv.490f3479656f7a156e853d39281f6211"
+#   "_ZN3fooEv.1.llvm.1234"
+#   "_ZN3fooEv.1.490f3479656f7a156e853d39281f6211"
+_PROMOTED_GLOBAL_NAME_RAW_PATTERN = re.compile(
+  r'(\.\d+)?(?:\.llvm\.\d+|\.[0-9a-f]{16,32})$'
+)
+
 
 def StripLlvmPromotedGlobalNames(name):
   """Strips LLVM promoted global names suffix, and returns the result.
@@ -26,16 +45,21 @@ def StripLlvmPromotedGlobalNames(name):
   ' (.1.llvm.1234)'. Otherwise the suffix is left as is. This function strips
   the suffix to prevent it from intefering with name comparison.
   """
-  llvm_pos = name.find('.llvm.')
-  if llvm_pos < 0:
-    return name  # Handles most cases.
+  if '.' not in name:
+    return name
   if name.endswith(')'):
+    if ' (.' not in name:
+      return name
     return _PROMOTED_GLOBAL_NAME_DEMANGLED_PATTERN.sub('', name)
   return _PROMOTED_GLOBAL_NAME_RAW_PATTERN.sub('', name)
 
 
 def _CanDemangle(name):
-  return name.startswith('_Z') or name.startswith('.Lswitch.table._Z')
+  return (
+    name.startswith('_Z')
+    or name.startswith('.Lswitch.table._Z')
+    or name.startswith('_R')
+  )
 
 
 def _ExtractDemanglablePart(names):
@@ -51,7 +75,7 @@ def _ExtractDemanglablePart(names):
       name = name[pos:]
 
     # Some mangled symbols end with '$' followed by 32 lower-case hex digits,
-    # and possibly '.cfi'. These interfere with demangling by c++filt, and
+    # and possibly '.cfi'. These interfere with demangling by cxxfilt, and
     # should be stripped.
     if name.endswith('.cfi'):
       name = name[:-4]
@@ -68,20 +92,37 @@ def _PostProcessDemangledSymbol(old_name, new_name):
   return new_name
 
 
-def _DemangleNames(names, tool_prefix):
-  """Uses c++filt to demangle a list of names."""
-  # pylint: disable=unexpected-keyword-arg
-  proc = subprocess.Popen([path_util.GetCppFiltPath(tool_prefix)],
-                          stdin=subprocess.PIPE,
-                          stdout=subprocess.PIPE,
-                          encoding='utf-8')
-  in_data = '\n'.join(_ExtractDemanglablePart(names))
-  stdout = proc.communicate(in_data)[0]
-  assert proc.returncode == 0
-  ret = [
+def _DemangleNames(names):
+  """Uses cxxfilt to demangle a list of names."""
+
+  def _RunChunk(chunk):
+    proc = subprocess.Popen(
+      [path_util.GetCppFiltPath()],
+      stdin=subprocess.PIPE,
+      stdout=subprocess.PIPE,
+      encoding='utf-8',
+    )
+    in_data = '\n'.join(_ExtractDemanglablePart(chunk))
+    stdout = proc.communicate(in_data)[0]
+    assert proc.returncode == 0
+    return [
       _PostProcessDemangledSymbol(old_name, new_name)
-      for (old_name, new_name) in zip(names, stdout.splitlines())
-  ]
+      for (old_name, new_name) in zip(chunk, stdout.splitlines())
+    ]
+
+  if len(names) >= 50000 and not parallel.DISABLE_ASYNC:
+    num_workers = min(8, os.cpu_count() or 4)
+    chunk_size = (len(names) + num_workers - 1) // num_workers
+    chunks = [
+      names[i : i + chunk_size] for i in range(0, len(names), chunk_size)
+    ]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(chunks)) as pool:
+      ret = [
+        name for chunk_ret in pool.map(_RunChunk, chunks) for name in chunk_ret
+      ]
+  else:
+    ret = _RunChunk(names)
+
   if logging.getLogger().isEnabledFor(logging.INFO):
     fail_count = sum(1 for s in ret if _CanDemangle(s))
     if fail_count:
@@ -89,20 +130,20 @@ def _DemangleNames(names, tool_prefix):
   return ret
 
 
-def DemangleRemainingSymbols(raw_symbols, tool_prefix):
+def DemangleRemainingSymbols(raw_symbols):
   """Demangles any symbols that need it."""
   to_process = [s for s in raw_symbols if _CanDemangle(s.full_name)]
   if not to_process:
     return
 
   logging.info('Demangling %d symbols', len(to_process))
-  names = _DemangleNames([s.full_name for s in to_process], tool_prefix)
+  names = _DemangleNames([s.full_name for s in to_process])
   for i, name in enumerate(names):
     to_process[i].full_name = name
 
 
-def DemangleSetsInDicts(key_to_names, tool_prefix):
-  """Demangles values as sets, and returns the result.
+def DemangleSetsInDictsInPlace(key_to_names):
+  """Demangles values as sets.
 
   |key_to_names| is a dict from key to sets (or lists) of mangled names.
   """
@@ -113,29 +154,35 @@ def DemangleSetsInDicts(key_to_names, tool_prefix):
     return key_to_names
 
   logging.info('Demangling %d values', len(all_names))
-  it = iter(_DemangleNames(all_names, tool_prefix))
-  ret = {}
+  it = iter(_DemangleNames(all_names))
   for key, names in key_to_names.items():
-    ret[key] = set(next(it) if _CanDemangle(n) else n for n in names)
-  assert(next(it, None) is None)
-  return ret
+    key_to_names[key] = set(next(it) if _CanDemangle(n) else n for n in names)
+  assert next(it, None) is None
+
+  return None
 
 
-def DemangleKeysAndMergeLists(name_to_list, tool_prefix):
+def DemangleKeysAndMergeLists(name_to_list):
   """Demangles keys of a dict of lists, and returns the result.
 
   Keys may demangle to a common name. When this happens, the corresponding lists
-  are merged in arbitrary order.
+  are merged in arbitrary order. Lists from |name_to_list| may be reused (and
+  modified).
   """
   keys = [key for key in name_to_list if _CanDemangle(key)]
   if not keys:
     return name_to_list
 
   logging.info('Demangling %d keys', len(keys))
-  key_iter = iter(_DemangleNames(keys, tool_prefix))
+  key_iter = iter(_DemangleNames(keys))
   ret = collections.defaultdict(list)
   for key, val in name_to_list.items():
-    ret[next(key_iter) if _CanDemangle(key) else key] += val
-  assert(next(key_iter, None) is None)
+    key = next(key_iter) if _CanDemangle(key) else key
+    existing = ret.get(key)
+    if existing is None:
+      ret[key] = val
+    else:
+      existing += val
+  assert next(key_iter, None) is None
   logging.info('* %d keys become %d keys' % (len(name_to_list), len(ret)))
   return ret

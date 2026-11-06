@@ -1,10 +1,10 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "gpu/command_buffer/service/gl_context_virtual.h"
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "build/build_config.h"
 #include "gpu/command_buffer/service/decoder_context.h"
 #include "gpu/command_buffer/service/gl_state_restorer_impl.h"
@@ -23,13 +23,14 @@ GLContextVirtual::GLContextVirtual(
       shared_context_(shared_context),
       delegate_(delegate) {}
 
-bool GLContextVirtual::Initialize(gl::GLSurface* compatible_surface,
-                                  const gl::GLContextAttribs& attribs) {
+bool GLContextVirtual::InitializeImpl(gl::GLSurface* compatible_surface,
+                                      const gl::GLContextAttribs& attribs) {
   SetGLStateRestorer(new GLStateRestorerImpl(delegate_));
   return shared_context_->MakeVirtuallyCurrent(this, compatible_surface);
 }
 
 void GLContextVirtual::Destroy() {
+  OnContextWillDestroy();
   shared_context_->OnReleaseVirtuallyCurrent(this);
   shared_context_ = nullptr;
 }
@@ -91,35 +92,26 @@ unsigned int GLContextVirtual::CheckStickyGraphicsResetStatusImpl() {
   if (reset_status == GL_NO_ERROR)
     return GL_NO_ERROR;
   // Don't pretend we know which one of the virtual contexts was responsible.
-  return GL_UNKNOWN_CONTEXT_RESET_ARB;
+  return GL_UNKNOWN_CONTEXT_RESET_EXT;
 }
 
 void GLContextVirtual::SetUnbindFboOnMakeCurrent() {
   shared_context_->SetUnbindFboOnMakeCurrent();
 }
 
-gl::YUVToRGBConverter* GLContextVirtual::GetYUVToRGBConverter(
-    const gfx::ColorSpace& color_space) {
-  return shared_context_->GetYUVToRGBConverter(color_space);
-}
-
 void GLContextVirtual::ForceReleaseVirtuallyCurrent() {
   shared_context_->OnReleaseVirtuallyCurrent(this);
 }
 
-#if defined(OS_MAC)
-uint64_t GLContextVirtual::BackpressureFenceCreate() {
-  return shared_context_->BackpressureFenceCreate();
-}
-
-void GLContextVirtual::BackpressureFenceWait(uint64_t fence) {
-  shared_context_->BackpressureFenceWait(fence);
-}
-
+#if BUILDFLAG(IS_MAC)
 void GLContextVirtual::FlushForDriverCrashWorkaround() {
   shared_context_->FlushForDriverCrashWorkaround();
 }
 #endif
+
+gl::GLDisplayEGL* GLContextVirtual::GetGLDisplayEGL() {
+  return shared_context_->GetGLDisplayEGL();
+}
 
 GLContextVirtual::~GLContextVirtual() {
   Destroy();

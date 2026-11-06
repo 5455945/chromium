@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,15 +7,16 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/task/post_task.h"
 #include "base/task/thread_pool.h"
-#include "base/task_runner_util.h"
 #include "services/device/generic_sensor/linux/sensor_data_linux.h"
+#include "services/device/generic_sensor/linux/sensor_device_manager.h"
 #include "services/device/generic_sensor/platform_sensor_linux.h"
 #include "services/device/generic_sensor/platform_sensor_reader_linux.h"
+#include "services/device/public/cpp/generic_sensor/sensor_reading_shared_buffer.h"
 
 namespace device {
 namespace {
@@ -27,9 +28,7 @@ constexpr base::TaskTraits kBlockingTaskRunnerTraits = {
 }  // namespace
 
 PlatformSensorProviderLinux::PlatformSensorProviderLinux()
-    : sensor_nodes_enumerated_(false),
-      sensor_nodes_enumeration_started_(false),
-      blocking_task_runner_(base::ThreadPool::CreateSequencedTaskRunner(
+    : blocking_task_runner_(base::ThreadPool::CreateSequencedTaskRunner(
           kBlockingTaskRunnerTraits)),
       sensor_device_manager_(nullptr,
                              base::OnTaskRunnerDeleter(blocking_task_runner_)) {
@@ -39,27 +38,33 @@ PlatformSensorProviderLinux::PlatformSensorProviderLinux()
 
 PlatformSensorProviderLinux::~PlatformSensorProviderLinux() = default;
 
+base::WeakPtr<PlatformSensorProvider> PlatformSensorProviderLinux::AsWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
+}
+
 void PlatformSensorProviderLinux::CreateSensorInternal(
     mojom::SensorType type,
-    SensorReadingSharedBuffer* reading_buffer,
     CreateSensorCallback callback) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
-  if (!sensor_nodes_enumerated_) {
-    if (!sensor_nodes_enumeration_started_) {
-      // Unretained() is safe because the deletion of |sensor_device_manager_|
-      // is scheduled on |blocking_task_runner_| when
-      // PlatformSensorProviderLinux is deleted.
-      sensor_nodes_enumeration_started_ = blocking_task_runner_->PostTask(
-          FROM_HERE,
-          base::BindOnce(&SensorDeviceManager::Start,
-                         base::Unretained(sensor_device_manager_.get())));
-    }
-    return;
-  }
+  blocking_task_runner_->PostTaskAndReply(
+      FROM_HERE,
+      base::BindOnce(&SensorDeviceManager::MaybeStartEnumeration,
+                     // Unretained() is safe because the deletion of
+                     // |sensor_device_manager_|
+                     // is scheduled on |blocking_task_runner_| when
+                     // PlatformSensorProviderLinux is deleted.
+                     base::Unretained(sensor_device_manager_.get())),
+      base::BindOnce(&PlatformSensorProviderLinux::DidEnumerateSensors,
+                     weak_ptr_factory_.GetWeakPtr(), type,
+                     std::move(callback)));
+}
 
+void PlatformSensorProviderLinux::DidEnumerateSensors(
+    mojom::SensorType type,
+    CreateSensorCallback callback) {
   if (IsFusionSensorType(type)) {
-    CreateFusionSensor(type, reading_buffer, std::move(callback));
+    CreateFusionSensor(type, std::move(callback));
     return;
   }
 
@@ -70,7 +75,8 @@ void PlatformSensorProviderLinux::CreateSensorInternal(
   }
 
   std::move(callback).Run(base::MakeRefCounted<PlatformSensorLinux>(
-      type, reading_buffer, this, sensor_device));
+      type, GetSensorReadingSharedBufferForType(type), AsWeakPtr(),
+      sensor_device));
 }
 
 void PlatformSensorProviderLinux::FreeResources() {
@@ -98,57 +104,12 @@ void PlatformSensorProviderLinux::SetSensorDeviceManagerForTesting(
   sensor_device_manager_.reset(sensor_device_manager.release());
 }
 
-void PlatformSensorProviderLinux::ProcessStoredRequests() {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  std::vector<mojom::SensorType> request_types = GetPendingRequestTypes();
-  if (request_types.empty())
-    return;
-
-  for (auto const& type : request_types) {
-    if (IsFusionSensorType(type)) {
-      SensorReadingSharedBuffer* reading_buffer =
-          GetSensorReadingSharedBufferForType(type);
-      CreateFusionSensor(
-          type, reading_buffer,
-          base::BindOnce(&PlatformSensorProviderLinux::NotifySensorCreated,
-                         base::Unretained(this), type));
-      continue;
-    }
-
-    SensorInfoLinux* device = nullptr;
-    auto device_entry = sensor_devices_by_type_.find(type);
-    if (device_entry != sensor_devices_by_type_.end())
-      device = device_entry->second.get();
-    CreateSensorAndNotify(type, device);
-  }
-}
-
-void PlatformSensorProviderLinux::CreateSensorAndNotify(
-    mojom::SensorType type,
-    SensorInfoLinux* sensor_device) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  scoped_refptr<PlatformSensorLinux> sensor;
-  SensorReadingSharedBuffer* reading_buffer =
-      GetSensorReadingSharedBufferForType(type);
-  if (sensor_device && reading_buffer) {
-    sensor = new PlatformSensorLinux(type, reading_buffer, this, sensor_device);
-  }
-  NotifySensorCreated(type, sensor);
-}
-
-void PlatformSensorProviderLinux::OnSensorNodesEnumerated() {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  DCHECK(!sensor_nodes_enumerated_);
-  sensor_nodes_enumerated_ = true;
-  ProcessStoredRequests();
-}
-
 void PlatformSensorProviderLinux::OnDeviceAdded(
     mojom::SensorType type,
     std::unique_ptr<SensorInfoLinux> sensor_device) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   // At the moment, we support only one device per type.
-  if (base::Contains(sensor_devices_by_type_, type)) {
+  if (sensor_devices_by_type_.contains(type)) {
     DVLOG(1) << "Sensor ignored. Type " << type
              << ". Node: " << sensor_device->device_node;
     return;

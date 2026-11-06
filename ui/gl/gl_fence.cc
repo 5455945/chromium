@@ -1,30 +1,29 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/gl/gl_fence.h"
 
 #include "base/compiler_specific.h"
+#include "base/notimplemented.h"
 #include "build/build_config.h"
 #include "ui/gl/gl_bindings.h"
 #include "ui/gl/gl_context.h"
+#include "ui/gl/gl_context_egl.h"
+#include "ui/gl/gl_display.h"
 #include "ui/gl/gl_fence_arb.h"
 #include "ui/gl/gl_fence_egl.h"
 #include "ui/gl/gl_fence_nv.h"
 #include "ui/gl/gl_implementation.h"
+#include "ui/gl/gl_surface_egl.h"
 #include "ui/gl/gl_version_info.h"
 
-#if defined(OS_APPLE)
-#include "ui/gl/gl_fence_apple.h"
-#endif
-
-#if defined(USE_EGL) && defined(OS_POSIX) && !defined(OS_APPLE)
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
 #define USE_GL_FENCE_ANDROID_NATIVE_FENCE_SYNC
 #include "ui/gl/gl_fence_android_native_fence_sync.h"
-#include "ui/gl/gl_surface_egl.h"
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "ui/gl/gl_fence_win.h"
 #endif
 
@@ -38,14 +37,10 @@ GLFence::~GLFence() {
 
 bool GLFence::IsSupported() {
   DCHECK(g_current_gl_version && g_current_gl_driver);
-  return g_current_gl_driver->ext.b_GL_ARB_sync ||
-         g_current_gl_version->is_es3 ||
-         g_current_gl_version->is_desktop_core_profile ||
-#if defined(OS_APPLE)
-         g_current_gl_driver->ext.b_GL_APPLE_fence ||
-#else
-         g_driver_egl.ext.b_EGL_KHR_fence_sync ||
-#endif
+  GLDisplayEGL* display = GLDisplayEGL::GetDisplayForCurrentContext();
+
+  return g_current_gl_version->is_es3 ||
+         (display && display->ext->b_EGL_KHR_fence_sync) ||
          g_current_gl_driver->ext.b_GL_NV_fence;
 }
 
@@ -54,29 +49,29 @@ std::unique_ptr<GLFence> GLFence::Create() {
       << "Trying to create fence with no context";
 
   std::unique_ptr<GLFence> fence;
-#if !defined(OS_APPLE)
-  if (g_driver_egl.ext.b_EGL_KHR_fence_sync &&
-      g_driver_egl.ext.b_EGL_KHR_wait_sync) {
+
+  GLDisplayEGL* display = GLDisplayEGL::GetDisplayForCurrentContext();
+  if (display && display->ext->b_EGL_KHR_fence_sync &&
+      display->ext->b_EGL_KHR_wait_sync) {
     // Prefer GLFenceEGL which doesn't require GL context switching.
     fence = GLFenceEGL::Create();
     DCHECK(fence);
-  } else
-#endif
-      if (g_current_gl_driver->ext.b_GL_ARB_sync ||
-          g_current_gl_version->is_es3 ||
-          g_current_gl_version->is_desktop_core_profile) {
+    DCHECK(GLFence::IsSupported());
+    return fence;
+  }
+
+  if (g_current_gl_version->is_es3) {
     // Prefer ARB_sync which supports server-side wait.
     fence = std::make_unique<GLFenceARB>();
-#if defined(OS_APPLE)
-  } else if (g_current_gl_driver->ext.b_GL_APPLE_fence) {
-    fence = std::make_unique<GLFenceAPPLE>();
-#else
-  } else if (g_driver_egl.ext.b_EGL_KHR_fence_sync) {
+    DCHECK(fence);
+#if !BUILDFLAG(IS_APPLE)
+  } else if (display && display->ext->b_EGL_KHR_fence_sync) {
     fence = GLFenceEGL::Create();
     DCHECK(fence);
-#endif
+#endif  // IS_APPLE
   } else if (g_current_gl_driver->ext.b_GL_NV_fence) {
     fence = std::make_unique<GLFenceNV>();
+    DCHECK(fence);
   }
 
   DCHECK_EQ(!!fence.get(), GLFence::IsSupported());
@@ -98,8 +93,9 @@ void GLFence::Invalidate() {
 
 bool GLFence::IsGpuFenceSupported() {
 #if defined(USE_GL_FENCE_ANDROID_NATIVE_FENCE_SYNC)
-  return gl::GLSurfaceEGL::IsAndroidNativeFenceSyncSupported();
-#elif defined(OS_WIN)
+  return gl::GLSurfaceEGL::GetGLDisplayEGL()
+      ->IsAndroidNativeFenceSyncSupported();
+#elif BUILDFLAG(IS_WIN)
   return gl::GLFenceWin::IsSupported();
 #else
   return false;
@@ -109,14 +105,21 @@ bool GLFence::IsGpuFenceSupported() {
 // static
 std::unique_ptr<GLFence> GLFence::CreateFromGpuFence(
     const gfx::GpuFence& gpu_fence) {
+  auto handle = gpu_fence.GetGpuFenceHandle().Clone();
+  return CreateFromGpuFenceHandle(std::move(handle));
+}
+
+// static
+std::unique_ptr<GLFence> GLFence::CreateFromGpuFenceHandle(
+    gfx::GpuFenceHandle gpu_fence_handle) {
   DCHECK(IsGpuFenceSupported());
 #if defined(USE_GL_FENCE_ANDROID_NATIVE_FENCE_SYNC)
-  return GLFenceAndroidNativeFenceSync::CreateFromGpuFence(gpu_fence);
-#elif defined(OS_WIN)
-  return GLFenceWin::CreateFromGpuFence(gpu_fence);
+  return GLFenceAndroidNativeFenceSync::CreateFromGpuFenceHandle(
+      std::move(gpu_fence_handle));
+#elif BUILDFLAG(IS_WIN)
+  return GLFenceWin::CreateFromGpuFenceHandle(std::move(gpu_fence_handle));
 #else
   NOTREACHED();
-  return nullptr;
 #endif
 }
 
@@ -125,16 +128,22 @@ std::unique_ptr<GLFence> GLFence::CreateForGpuFence() {
   DCHECK(IsGpuFenceSupported());
 #if defined(USE_GL_FENCE_ANDROID_NATIVE_FENCE_SYNC)
   return GLFenceAndroidNativeFenceSync::CreateForGpuFence();
-#elif defined(OS_WIN)
+#elif BUILDFLAG(IS_WIN)
   return GLFenceWin::CreateForGpuFence();
 #else
   NOTREACHED();
-  return nullptr;
 #endif
+}
+gfx::GpuFenceHandle GLFence::GetGpuFenceHandle() {
+  return gfx::GpuFenceHandle();
 }
 
 std::unique_ptr<gfx::GpuFence> GLFence::GetGpuFence() {
-  return nullptr;
+  auto handle = GetGpuFenceHandle();
+  if (handle.is_null()) {
+    return nullptr;
+  }
+  return std::make_unique<gfx::GpuFence>(std::move(handle));
 }
 
 }  // namespace gl

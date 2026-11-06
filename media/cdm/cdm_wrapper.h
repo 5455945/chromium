@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,8 @@
 #include <stdint.h>
 
 #include "base/check.h"
-#include "base/compiler_specific.h"
-#include "base/feature_list.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "media/base/cdm_config.h"
 #include "media/base/media_switches.h"
 #include "media/cdm/api/content_decryption_module.h"
 #include "media/cdm/cdm_helpers.h"
@@ -60,15 +59,15 @@ typedef void* (*CreateCdmFunc)(int cdm_interface_version,
 // Since this file is highly templated and default implementations are short
 // (just a shim layer in most cases), everything is done in this header file.
 //
-// TODO(crbug.com/799169): After pepper CDM support is removed, this file can
-// depend on media/ and we can clean this class up, e.g. pass in CdmConfig.
 class CdmWrapper {
  public:
   static CdmWrapper* Create(CreateCdmFunc create_cdm_func,
-                            const char* key_system,
-                            uint32_t key_system_size,
+                            const CdmConfig& cdm_config,
                             GetCdmHostFunc get_cdm_host_func,
                             void* user_data);
+
+  CdmWrapper(const CdmWrapper&) = delete;
+  CdmWrapper& operator=(const CdmWrapper&) = delete;
 
   virtual ~CdmWrapper() {}
 
@@ -78,9 +77,7 @@ class CdmWrapper {
   // Initializes the CDM instance and returns whether OnInitialized() will be
   // called on the host. The caller should NOT wait for OnInitialized() if false
   // is returned.
-  virtual bool Initialize(bool allow_distinctive_identifier,
-                          bool allow_persistent_state,
-                          bool use_hw_secure_codecs) = 0;
+  virtual bool Initialize(const CdmConfig& cdm_config) = 0;
 
   virtual void SetServerCertificate(uint32_t promise_id,
                                     const uint8_t* server_certificate_data,
@@ -90,9 +87,9 @@ class CdmWrapper {
   // Returns whether GetStatusForPolicy() is supported. If true, the CDM should
   // resolve or reject the promise. If false, the caller will reject the
   // promise.
-  virtual bool GetStatusForPolicy(uint32_t promise_id,
-                                  cdm::HdcpVersion min_hdcp_version)
-      WARN_UNUSED_RESULT = 0;
+  [[nodiscard]] virtual bool GetStatusForPolicy(
+      uint32_t promise_id,
+      cdm::HdcpVersion min_hdcp_version) = 0;
 
   virtual void CreateSessionAndGenerateRequest(uint32_t promise_id,
                                                cdm::SessionType session_type,
@@ -141,9 +138,6 @@ class CdmWrapper {
 
  protected:
   CdmWrapper() {}
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(CdmWrapper);
 };
 
 // Template class that does the CdmWrapper -> CdmInterface conversion. Default
@@ -158,13 +152,13 @@ class CdmWrapperImpl : public CdmWrapper {
                 "CDM interface version mismatch.");
 
   static CdmWrapper* Create(CreateCdmFunc create_cdm_func,
-                            const char* key_system,
-                            uint32_t key_system_size,
+                            const CdmConfig& cdm_config,
                             GetCdmHostFunc get_cdm_host_func,
                             void* user_data) {
-    void* cdm_instance =
-        create_cdm_func(CdmInterfaceVersion, key_system, key_system_size,
-                        get_cdm_host_func, user_data);
+    void* cdm_instance = create_cdm_func(
+        CdmInterfaceVersion, cdm_config.key_system.data(),
+        base::checked_cast<uint32_t>(cdm_config.key_system.size()),
+        get_cdm_host_func, user_data);
     if (!cdm_instance)
       return nullptr;
 
@@ -172,15 +166,17 @@ class CdmWrapperImpl : public CdmWrapper {
         static_cast<CdmInterface*>(cdm_instance));
   }
 
-  ~CdmWrapperImpl() override { cdm_->Destroy(); }
+  CdmWrapperImpl(const CdmWrapperImpl&) = delete;
+  CdmWrapperImpl& operator=(const CdmWrapperImpl&) = delete;
+
+  ~CdmWrapperImpl() override = default;
 
   int GetInterfaceVersion() override { return CdmInterfaceVersion; }
 
-  bool Initialize(bool allow_distinctive_identifier,
-                  bool allow_persistent_state,
-                  bool use_hw_secure_codecs) override {
-    cdm_->Initialize(allow_distinctive_identifier, allow_persistent_state,
-                     use_hw_secure_codecs);
+  bool Initialize(const CdmConfig& cdm_config) override {
+    cdm_->Initialize(cdm_config.allow_distinctive_identifier,
+                     cdm_config.allow_persistent_state,
+                     cdm_config.use_hw_secure_codecs);
     return true;
   }
 
@@ -290,14 +286,18 @@ class CdmWrapperImpl : public CdmWrapper {
   }
 
  private:
-  CdmWrapperImpl(CdmInterface* cdm) : cdm_(cdm) { DCHECK(cdm_); }
+  // Used to clean up a CDM instance owned by a std::unique_ptr.
+  struct CdmDeleter {
+    void operator()(CdmInterface* cdm) const { cdm->Destroy(); }
+  };
 
-  CdmInterface* cdm_;
+  explicit CdmWrapperImpl(CdmInterface* cdm) : cdm_(cdm) { CHECK(cdm_); }
 
-  DISALLOW_COPY_AND_ASSIGN(CdmWrapperImpl);
+  std::unique_ptr<CdmInterface, CdmDeleter> cdm_;
 };
 
-// Specialization for cdm::ContentDecryptionModule_10 methods.
+// Specialization for cdm::ContentDecryptionModule_10 methods and
+// cdm::ContentDecryptionModule_11 methods.
 
 template <>
 cdm::Status CdmWrapperImpl<10>::InitializeVideoDecoder(
@@ -306,38 +306,48 @@ cdm::Status CdmWrapperImpl<10>::InitializeVideoDecoder(
       ToVideoDecoderConfig_2(video_decoder_config));
 }
 
-// static
-CdmWrapper* CdmWrapper::Create(CreateCdmFunc create_cdm_func,
-                               const char* key_system,
-                               uint32_t key_system_size,
+template <>
+cdm::Status CdmWrapperImpl<11>::InitializeVideoDecoder(
+    const cdm::VideoDecoderConfig_3& video_decoder_config) {
+  return cdm_->InitializeVideoDecoder(
+      ToVideoDecoderConfig_2(video_decoder_config));
+}
+
+// Method to try creating CdmWrapper recursively iterating through the listed
+// versions.
+template <int FirstVersion, int... RemainingVersions>
+CdmWrapper* CreateWithVersions(CreateCdmFunc create_cdm_func,
+                               const CdmConfig& cdm_config,
                                GetCdmHostFunc get_cdm_host_func,
                                void* user_data) {
-  static_assert(CheckSupportedCdmInterfaceVersions(10, 11),
+  if (IsSupportedAndEnabledCdmInterfaceVersion(FirstVersion)) {
+    CdmWrapper* wrapper = CdmWrapperImpl<FirstVersion>::Create(
+        create_cdm_func, cdm_config, get_cdm_host_func, user_data);
+    if (wrapper) {
+      return wrapper;
+    }
+  }
+
+  if constexpr (sizeof...(RemainingVersions) > 0) {
+    return CreateWithVersions<RemainingVersions...>(
+        create_cdm_func, cdm_config, get_cdm_host_func, user_data);
+  } else {
+    // Base case for the last version not succeeding.
+    return nullptr;
+  }
+}
+
+// static
+CdmWrapper* CdmWrapper::Create(CreateCdmFunc create_cdm_func,
+                               const CdmConfig& cdm_config,
+                               GetCdmHostFunc get_cdm_host_func,
+                               void* user_data) {
+  static_assert(CheckSupportedCdmInterfaceVersions(10, 12),
                 "Mismatch between CdmWrapper::Create() and "
                 "IsSupportedCdmInterfaceVersion()");
 
-  // Try to create the CDM using the latest CDM interface version.
-  // This is only attempted if requested.
-  CdmWrapper* cdm_wrapper = nullptr;
-
-  // TODO(xhwang): Check whether we can use static loops to simplify this code.
-
-  // Try to use the latest supported and enabled CDM interface first. If it's
-  // not supported by the CDM, try to create the CDM using older supported
-  // versions.
-  if (IsSupportedAndEnabledCdmInterfaceVersion(11)) {
-    cdm_wrapper =
-        CdmWrapperImpl<11>::Create(create_cdm_func, key_system, key_system_size,
-                                   get_cdm_host_func, user_data);
-  }
-
-  if (!cdm_wrapper && IsSupportedAndEnabledCdmInterfaceVersion(10)) {
-    cdm_wrapper =
-        CdmWrapperImpl<10>::Create(create_cdm_func, key_system, key_system_size,
-                                   get_cdm_host_func, user_data);
-  }
-
-  return cdm_wrapper;
+  return CreateWithVersions<12, 11, 10>(create_cdm_func, cdm_config,
+                                        get_cdm_host_func, user_data);
 }
 
 }  // namespace media

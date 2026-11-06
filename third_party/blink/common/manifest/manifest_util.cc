@@ -1,14 +1,53 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/public/common/manifest/manifest_util.h"
 
+#include <string>
+
+#include "base/notreached.h"
 #include "base/strings/string_util.h"
-#include "third_party/blink/public/mojom/manifest/capture_links.mojom.h"
+#include "base/strings/utf_string_conversions.h"
+#include "services/network/public/cpp/permissions_policy/permissions_policy.h"
+#include "third_party/blink/public/common/manifest/manifest.h"
 #include "third_party/blink/public/mojom/manifest/display_mode.mojom.h"
+#include "third_party/blink/public/mojom/manifest/manifest.mojom.h"
 
 namespace blink {
+
+bool IsDefaultManifest(const Manifest& manifest, const GURL& document_url) {
+  auto default_manifest = Manifest::CreateDefault(document_url);
+  return default_manifest.has_value() && manifest == *default_manifest;
+}
+
+std::optional<blink::mojom::Manifest_TextDirection> TextDirectionFromString(
+    const std::string& dir) {
+  using TextDirection = blink::mojom::Manifest_TextDirection;
+  if (base::EqualsCaseInsensitiveASCII(dir, "auto")) {
+    return TextDirection::kAuto;
+  }
+  if (base::EqualsCaseInsensitiveASCII(dir, "ltr")) {
+    return TextDirection::kLTR;
+  }
+  if (base::EqualsCaseInsensitiveASCII(dir, "rtl")) {
+    return TextDirection::kRTL;
+  }
+  return std::nullopt;
+}
+
+std::string TextDirectionToString(
+    blink::mojom::Manifest_TextDirection direction) {
+  switch (direction) {
+    case blink::mojom::Manifest_TextDirection::kAuto:
+      return "auto";
+    case blink::mojom::Manifest_TextDirection::kLTR:
+      return "ltr";
+    case blink::mojom::Manifest_TextDirection::kRTL:
+      return "rtl";
+  }
+  NOTREACHED();
+}
 
 std::string DisplayModeToString(blink::mojom::DisplayMode display) {
   switch (display) {
@@ -26,23 +65,39 @@ std::string DisplayModeToString(blink::mojom::DisplayMode display) {
       return "window-controls-overlay";
     case blink::mojom::DisplayMode::kTabbed:
       return "tabbed";
+    case blink::mojom::DisplayMode::kUnframed:
+      return "unframed";
+    case blink::mojom::DisplayMode::kPictureInPicture:
+      return "picture-in-picture";
   }
-  return "";
+  NOTREACHED();
 }
 
 blink::mojom::DisplayMode DisplayModeFromString(const std::string& display) {
-  if (base::LowerCaseEqualsASCII(display, "browser"))
+  if (base::EqualsCaseInsensitiveASCII(display, "browser")) {
     return blink::mojom::DisplayMode::kBrowser;
-  if (base::LowerCaseEqualsASCII(display, "minimal-ui"))
+  }
+  if (base::EqualsCaseInsensitiveASCII(display, "minimal-ui")) {
     return blink::mojom::DisplayMode::kMinimalUi;
-  if (base::LowerCaseEqualsASCII(display, "standalone"))
+  }
+  if (base::EqualsCaseInsensitiveASCII(display, "standalone")) {
     return blink::mojom::DisplayMode::kStandalone;
-  if (base::LowerCaseEqualsASCII(display, "fullscreen"))
+  }
+  if (base::EqualsCaseInsensitiveASCII(display, "fullscreen")) {
     return blink::mojom::DisplayMode::kFullscreen;
-  if (base::LowerCaseEqualsASCII(display, "window-controls-overlay"))
+  }
+  if (base::EqualsCaseInsensitiveASCII(display, "window-controls-overlay")) {
     return blink::mojom::DisplayMode::kWindowControlsOverlay;
-  if (base::LowerCaseEqualsASCII(display, "tabbed"))
+  }
+  if (base::EqualsCaseInsensitiveASCII(display, "tabbed")) {
     return blink::mojom::DisplayMode::kTabbed;
+  }
+  if (base::EqualsCaseInsensitiveASCII(display, "unframed")) {
+    return blink::mojom::DisplayMode::kUnframed;
+  }
+  if (base::EqualsCaseInsensitiveASCII(display, "picture-in-picture")) {
+    return blink::mojom::DisplayMode::kPictureInPicture;
+  }
   return blink::mojom::DisplayMode::kUndefined;
 }
 
@@ -84,33 +139,49 @@ std::string WebScreenOrientationLockTypeToString(
 
 device::mojom::ScreenOrientationLockType WebScreenOrientationLockTypeFromString(
     const std::string& orientation) {
-  if (base::LowerCaseEqualsASCII(orientation, "portrait-primary"))
+  if (base::EqualsCaseInsensitiveASCII(orientation, "portrait-primary")) {
     return device::mojom::ScreenOrientationLockType::PORTRAIT_PRIMARY;
-  if (base::LowerCaseEqualsASCII(orientation, "portrait-secondary"))
+  }
+  if (base::EqualsCaseInsensitiveASCII(orientation, "portrait-secondary")) {
     return device::mojom::ScreenOrientationLockType::PORTRAIT_SECONDARY;
-  if (base::LowerCaseEqualsASCII(orientation, "landscape-primary"))
+  }
+  if (base::EqualsCaseInsensitiveASCII(orientation, "landscape-primary")) {
     return device::mojom::ScreenOrientationLockType::LANDSCAPE_PRIMARY;
-  if (base::LowerCaseEqualsASCII(orientation, "landscape-secondary"))
+  }
+  if (base::EqualsCaseInsensitiveASCII(orientation, "landscape-secondary")) {
     return device::mojom::ScreenOrientationLockType::LANDSCAPE_SECONDARY;
-  if (base::LowerCaseEqualsASCII(orientation, "any"))
+  }
+  if (base::EqualsCaseInsensitiveASCII(orientation, "any")) {
     return device::mojom::ScreenOrientationLockType::ANY;
-  if (base::LowerCaseEqualsASCII(orientation, "landscape"))
+  }
+  if (base::EqualsCaseInsensitiveASCII(orientation, "landscape")) {
     return device::mojom::ScreenOrientationLockType::LANDSCAPE;
-  if (base::LowerCaseEqualsASCII(orientation, "portrait"))
+  }
+  if (base::EqualsCaseInsensitiveASCII(orientation, "portrait")) {
     return device::mojom::ScreenOrientationLockType::PORTRAIT;
-  if (base::LowerCaseEqualsASCII(orientation, "natural"))
+  }
+  if (base::EqualsCaseInsensitiveASCII(orientation, "natural")) {
     return device::mojom::ScreenOrientationLockType::NATURAL;
+  }
   return device::mojom::ScreenOrientationLockType::DEFAULT;
 }
 
-mojom::CaptureLinks CaptureLinksFromString(const std::string& capture_links) {
-  if (base::LowerCaseEqualsASCII(capture_links, "none"))
-    return mojom::CaptureLinks::kNone;
-  if (base::LowerCaseEqualsASCII(capture_links, "new-client"))
-    return mojom::CaptureLinks::kNewClient;
-  if (base::LowerCaseEqualsASCII(capture_links, "existing-client-navigate"))
-    return mojom::CaptureLinks::kExistingClientNavigate;
-  return mojom::CaptureLinks::kUndefined;
+std::optional<mojom::ManifestLaunchHandler::ClientMode> ClientModeFromString(
+    const std::string& client_mode) {
+  using ClientMode = Manifest::LaunchHandler::ClientMode;
+  if (base::EqualsCaseInsensitiveASCII(client_mode, "auto")) {
+    return ClientMode::kAuto;
+  }
+  if (base::EqualsCaseInsensitiveASCII(client_mode, "navigate-new")) {
+    return ClientMode::kNavigateNew;
+  }
+  if (base::EqualsCaseInsensitiveASCII(client_mode, "navigate-existing")) {
+    return ClientMode::kNavigateExisting;
+  }
+  if (base::EqualsCaseInsensitiveASCII(client_mode, "focus-existing")) {
+    return ClientMode::kFocusExisting;
+  }
+  return std::nullopt;
 }
 
 }  // namespace blink

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,12 @@
 
 #include <string>
 
-namespace chromeos {
+namespace ash {
 
 // This structure encapsulates some specific parameters of signin flows that are
 // not general enough to be put to UserContext.
 struct SigninSpecifics {
-  SigninSpecifics() {}
+  SigninSpecifics() = default;
 
   // Specifies url that should be shown during Guest signin.
   std::string guest_mode_url;
@@ -24,12 +24,6 @@ struct SigninSpecifics {
   bool is_auto_login = false;
 };
 
-}  // namespace chromeos
-
-// TODO(https://crbug.com/1164001): remove after the //chrome/browser/chromeos
-// source migration is finished.
-namespace ash {
-using ::chromeos::SigninSpecifics;
-}
+}  // namespace ash
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_SIGNIN_SPECIFICS_H_

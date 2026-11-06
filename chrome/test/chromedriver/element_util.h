@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,25 +8,18 @@
 #include <memory>
 #include <string>
 
+#include "base/values.h"
 #include "chrome/test/chromedriver/basic_types.h"
-
-namespace base {
-class DictionaryValue;
-class Value;
-}
 
 struct Session;
 class Status;
 class WebView;
 
-std::string GetElementKey();
+std::string GetElementKey(bool w3c_compliant);
 
-std::unique_ptr<base::DictionaryValue> CreateElement(
-    const std::string& element_id);
+base::Value CreateElement(const std::string& element_id, bool w3c_compliant);
 
-std::unique_ptr<base::DictionaryValue> CreateValueFrom(const WebPoint& point);
-
-Status CheckElement(const std::string& element_id);
+base::DictValue CreateValueFrom(const WebPoint& point);
 
 // |root_element_id| could be null when no root element is given.
 Status FindElement(int interval_ms,
@@ -34,8 +27,16 @@ Status FindElement(int interval_ms,
                    const std::string* root_element_id,
                    Session* session,
                    WebView* web_view,
-                   const base::DictionaryValue& params,
+                   const base::DictValue& params,
                    std::unique_ptr<base::Value>* value);
+
+Status FindShadowElement(int interval_ms,
+                         bool only_one,
+                         const std::string* shadow_root_id,
+                         Session* session,
+                         WebView* web_view,
+                         const base::DictValue& params,
+                         std::unique_ptr<base::Value>* value);
 
 Status GetActiveElement(Session* session,
                         WebView* web_view,
@@ -46,6 +47,11 @@ Status IsElementFocused(
     WebView* web_view,
     const std::string& element_id,
     bool* is_focused);
+
+Status IsElementActive(Session* session,
+                       WebView* web_view,
+                       const std::string& element_id,
+                       bool* is_active);
 
 Status IsDocumentTypeXml(
     Session* session,

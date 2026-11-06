@@ -1,13 +1,13 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/extensions/extension_management_test_util.h"
 
 #include <string>
+#include <string_view>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/run_loop.h"
 #include "components/crx_file/id_util.h"
 #include "components/policy/core/common/configuration_policy_provider.h"
@@ -31,10 +31,24 @@ std::string make_path(const std::string& a, const std::string& b) {
   return a + "." + b;
 }
 
+void RemoveDictionaryPath(base::DictValue& dict, std::string_view path) {
+  std::string_view current_path(path);
+  base::DictValue* current_dictionary = &dict;
+  size_t delimiter_position = current_path.rfind('.');
+  if (delimiter_position != std::string_view::npos) {
+    current_dictionary =
+        dict.FindDictByDottedPath(current_path.substr(0, delimiter_position));
+    if (!current_dictionary)
+      return;
+    current_path = current_path.substr(delimiter_position + 1);
+  }
+  current_dictionary->Remove(current_path);
+}
+
 }  // namespace
 
-ExtensionManagementPrefUpdaterBase::ExtensionManagementPrefUpdaterBase() {
-}
+ExtensionManagementPrefUpdaterBase::ExtensionManagementPrefUpdaterBase() =
+    default;
 
 ExtensionManagementPrefUpdaterBase::~ExtensionManagementPrefUpdaterBase() {
   // Make asynchronous calls finished to deliver all preference changes to the
@@ -47,31 +61,31 @@ ExtensionManagementPrefUpdaterBase::~ExtensionManagementPrefUpdaterBase() {
 void ExtensionManagementPrefUpdaterBase::UnsetPerExtensionSettings(
     const ExtensionId& id) {
   DCHECK(crx_file::id_util::IdIsValid(id));
-  pref_->RemoveKey(id);
+  pref_.Remove(id);
 }
 
 void ExtensionManagementPrefUpdaterBase::ClearPerExtensionSettings(
     const ExtensionId& id) {
   DCHECK(crx_file::id_util::IdIsValid(id));
-  pref_->SetKey(id, base::DictionaryValue());
+  pref_.Set(id, base::DictValue());
 }
 
 // Helper functions for 'installation_mode' manipulation -----------------------
 
 void ExtensionManagementPrefUpdaterBase::SetBlocklistedByDefault(bool value) {
-  pref_->SetString(make_path(schema::kWildcard, schema::kInstallationMode),
-                   value ? schema::kBlocked : schema::kAllowed);
+  pref_.SetByDottedPath(make_path(schema::kWildcard, schema::kInstallationMode),
+                        value ? schema::kBlocked : schema::kAllowed);
 }
 
 void ExtensionManagementPrefUpdaterBase::
     ClearInstallationModesForIndividualExtensions() {
-  for (base::DictionaryValue::Iterator it(*pref_); !it.IsAtEnd();
-       it.Advance()) {
-    DCHECK(it.value().is_dict());
-    if (it.key() != schema::kWildcard) {
-      DCHECK(crx_file::id_util::IdIsValid(it.key()));
-      pref_->Remove(make_path(it.key(), schema::kInstallationMode), nullptr);
-      pref_->Remove(make_path(it.key(), schema::kUpdateUrl), nullptr);
+  for (auto it : pref_) {
+    DCHECK(it.second.is_dict());
+    if (it.first != schema::kWildcard) {
+      DCHECK(crx_file::id_util::IdIsValid(it.first));
+      RemoveDictionaryPath(pref_,
+                           make_path(it.first, schema::kInstallationMode));
+      RemoveDictionaryPath(pref_, make_path(it.first, schema::kUpdateUrl));
     }
   }
 }
@@ -81,9 +95,9 @@ ExtensionManagementPrefUpdaterBase::SetIndividualExtensionInstallationAllowed(
     const ExtensionId& id,
     bool allowed) {
   DCHECK(crx_file::id_util::IdIsValid(id));
-  pref_->SetString(make_path(id, schema::kInstallationMode),
-                   allowed ? schema::kAllowed : schema::kBlocked);
-  pref_->Remove(make_path(id, schema::kUpdateUrl), nullptr);
+  pref_.SetByDottedPath(make_path(id, schema::kInstallationMode),
+                        allowed ? schema::kAllowed : schema::kBlocked);
+  RemoveDictionaryPath(pref_, make_path(id, schema::kUpdateUrl));
 }
 
 void ExtensionManagementPrefUpdaterBase::SetIndividualExtensionAutoInstalled(
@@ -91,15 +105,24 @@ void ExtensionManagementPrefUpdaterBase::SetIndividualExtensionAutoInstalled(
     const std::string& update_url,
     bool forced) {
   DCHECK(crx_file::id_util::IdIsValid(id));
-  pref_->SetString(make_path(id, schema::kInstallationMode),
-                   forced ? schema::kForceInstalled : schema::kNormalInstalled);
-  pref_->SetString(make_path(id, schema::kUpdateUrl), update_url);
+  pref_.SetByDottedPath(
+      make_path(id, schema::kInstallationMode),
+      forced ? schema::kForceInstalled : schema::kNormalInstalled);
+  pref_.SetByDottedPath(make_path(id, schema::kUpdateUrl), update_url);
+}
+
+void ExtensionManagementPrefUpdaterBase::SetIndividualExtensionRemoved(
+    const ExtensionId& id) {
+  DCHECK(crx_file::id_util::IdIsValid(id));
+  pref_.SetByDottedPath(make_path(id, schema::kInstallationMode),
+                        schema::kRemoved);
+  RemoveDictionaryPath(pref_, make_path(id, schema::kUpdateUrl));
 }
 
 // Helper functions for 'install_sources' manipulation -------------------------
 
 void ExtensionManagementPrefUpdaterBase::UnsetInstallSources() {
-  pref_->Remove(kInstallSourcesPath, nullptr);
+  RemoveDictionaryPath(pref_, kInstallSourcesPath);
 }
 
 void ExtensionManagementPrefUpdaterBase::ClearInstallSources() {
@@ -119,7 +142,7 @@ void ExtensionManagementPrefUpdaterBase::RemoveInstallSource(
 // Helper functions for 'allowed_types' manipulation ---------------------------
 
 void ExtensionManagementPrefUpdaterBase::UnsetAllowedTypes() {
-  pref_->Remove(kAllowedTypesPath, nullptr);
+  RemoveDictionaryPath(pref_, kAllowedTypesPath);
 }
 
 void ExtensionManagementPrefUpdaterBase::ClearAllowedTypes() {
@@ -141,7 +164,7 @@ void ExtensionManagementPrefUpdaterBase::RemoveAllowedType(
 void ExtensionManagementPrefUpdaterBase::UnsetBlockedPermissions(
     const std::string& prefix) {
   DCHECK(prefix == schema::kWildcard || crx_file::id_util::IdIsValid(prefix));
-  pref_->Remove(make_path(prefix, schema::kBlockedPermissions), nullptr);
+  RemoveDictionaryPath(pref_, make_path(prefix, schema::kBlockedPermissions));
 }
 
 void ExtensionManagementPrefUpdaterBase::ClearBlockedPermissions(
@@ -171,8 +194,8 @@ void ExtensionManagementPrefUpdaterBase::SetBlockedInstallMessage(
     const ExtensionId& id,
     const std::string& blocked_install_message) {
   DCHECK(id == schema::kWildcard || crx_file::id_util::IdIsValid(id));
-  pref_->SetString(make_path(id, schema::kBlockedInstallMessage),
-                   blocked_install_message);
+  pref_.SetByDottedPath(make_path(id, schema::kBlockedInstallMessage),
+                        blocked_install_message);
 }
 
 // Helper functions for 'runtime_blocked_hosts' manipulation ------------------
@@ -180,7 +203,7 @@ void ExtensionManagementPrefUpdaterBase::SetBlockedInstallMessage(
 void ExtensionManagementPrefUpdaterBase::UnsetPolicyBlockedHosts(
     const std::string& prefix) {
   DCHECK(prefix == schema::kWildcard || crx_file::id_util::IdIsValid(prefix));
-  pref_->Remove(make_path(prefix, schema::kPolicyBlockedHosts), nullptr);
+  RemoveDictionaryPath(pref_, make_path(prefix, schema::kPolicyBlockedHosts));
 }
 
 void ExtensionManagementPrefUpdaterBase::ClearPolicyBlockedHosts(
@@ -208,7 +231,7 @@ void ExtensionManagementPrefUpdaterBase::RemovePolicyBlockedHost(
 void ExtensionManagementPrefUpdaterBase::UnsetPolicyAllowedHosts(
     const std::string& prefix) {
   DCHECK(prefix == schema::kWildcard || crx_file::id_util::IdIsValid(prefix));
-  pref_->Remove(make_path(prefix, schema::kPolicyAllowedHosts), nullptr);
+  RemoveDictionaryPath(pref_, make_path(prefix, schema::kPolicyAllowedHosts));
 }
 
 void ExtensionManagementPrefUpdaterBase::ClearPolicyAllowedHosts(
@@ -236,7 +259,7 @@ void ExtensionManagementPrefUpdaterBase::RemovePolicyAllowedHost(
 void ExtensionManagementPrefUpdaterBase::UnsetAllowedPermissions(
     const std::string& id) {
   DCHECK(crx_file::id_util::IdIsValid(id));
-  pref_->Remove(make_path(id, schema::kAllowedPermissions), nullptr);
+  RemoveDictionaryPath(pref_, make_path(id, schema::kAllowedPermissions));
 }
 
 void ExtensionManagementPrefUpdaterBase::ClearAllowedPermissions(
@@ -265,81 +288,79 @@ void ExtensionManagementPrefUpdaterBase::SetMinimumVersionRequired(
     const std::string& id,
     const std::string& version) {
   DCHECK(crx_file::id_util::IdIsValid(id));
-  pref_->SetString(make_path(id, schema::kMinimumVersionRequired), version);
+  pref_.SetByDottedPath(make_path(id, schema::kMinimumVersionRequired),
+                        version);
 }
 
 void ExtensionManagementPrefUpdaterBase::UnsetMinimumVersionRequired(
     const std::string& id) {
   DCHECK(crx_file::id_util::IdIsValid(id));
-  pref_->Remove(make_path(id, schema::kMinimumVersionRequired), nullptr);
+  RemoveDictionaryPath(pref_, make_path(id, schema::kMinimumVersionRequired));
 }
 
 // Expose a read-only preference to user ---------------------------------------
 
-const base::DictionaryValue* ExtensionManagementPrefUpdaterBase::GetPref() {
-  return pref_.get();
+const base::DictValue* ExtensionManagementPrefUpdaterBase::GetPref() {
+  return &pref_;
 }
 
 // Private section functions ---------------------------------------------------
 
-void ExtensionManagementPrefUpdaterBase::SetPref(base::DictionaryValue* pref) {
-  pref_.reset(pref);
+void ExtensionManagementPrefUpdaterBase::SetPref(base::DictValue pref) {
+  pref_ = std::move(pref);
 }
 
-std::unique_ptr<base::DictionaryValue>
-ExtensionManagementPrefUpdaterBase::TakePref() {
+base::DictValue ExtensionManagementPrefUpdaterBase::TakePref() {
   return std::move(pref_);
 }
 
 void ExtensionManagementPrefUpdaterBase::ClearList(const std::string& path) {
-  pref_->Set(path, std::make_unique<base::ListValue>());
+  pref_.SetByDottedPath(path, base::ListValue());
 }
 
 void ExtensionManagementPrefUpdaterBase::AddStringToList(
     const std::string& path,
     const std::string& str) {
-  base::ListValue* list_value_weak = nullptr;
-  if (!pref_->GetList(path, &list_value_weak)) {
-    auto list_value = std::make_unique<base::ListValue>();
-    list_value_weak = list_value.get();
-    pref_->Set(path, std::move(list_value));
+  base::ListValue* list_value_weak = pref_.FindListByDottedPath(path);
+  if (!list_value_weak) {
+    list_value_weak =
+        &pref_.SetByDottedPath(path, base::ListValue())->GetList();
   }
-  CHECK(!base::Contains(list_value_weak->GetList(), base::Value(str)));
+  CHECK(!list_value_weak->contains(str));
   list_value_weak->Append(str);
 }
 
 void ExtensionManagementPrefUpdaterBase::RemoveStringFromList(
     const std::string& path,
     const std::string& str) {
-  base::ListValue* list_value = nullptr;
-  if (pref_->GetList(path, &list_value))
-    CHECK_GT(list_value->EraseListValue(base::Value(str)), 0u);
+  base::ListValue* list_value = pref_.FindListByDottedPath(path);
+  if (list_value)
+    CHECK_GT(list_value->EraseValue(base::Value(str)), 0u);
 }
 
 // ExtensionManagementPolicyUpdater --------------------------------------------
 
 ExtensionManagementPolicyUpdater::ExtensionManagementPolicyUpdater(
     policy::MockConfigurationPolicyProvider* policy_provider)
-    : provider_(policy_provider), policies_(new policy::PolicyBundle) {
-  policies_->CopyFrom(provider_->policies());
+    : provider_(policy_provider), policies_(provider_->policies().Clone()) {
   const base::Value* policy_value =
-      policies_->Get(policy::PolicyNamespace(policy::POLICY_DOMAIN_CHROME,
-                                             std::string()))
-          .GetValue(policy::key::kExtensionSettings);
-  const base::DictionaryValue* dict_value = nullptr;
-  if (policy_value && policy_value->GetAsDictionary(&dict_value))
-    SetPref(dict_value->DeepCopy());
-  else
-    SetPref(new base::DictionaryValue);
+      policies_
+          .Get(policy::PolicyNamespace(policy::POLICY_DOMAIN_CHROME,
+                                       std::string()))
+          .GetValue(policy::key::kExtensionSettings, base::Value::Type::DICT);
+  base::DictValue dict;
+  if (policy_value && policy_value->is_dict()) {
+    dict = policy_value->GetDict().Clone();
+  }
+  SetPref(std::move(dict));
 }
 
 ExtensionManagementPolicyUpdater::~ExtensionManagementPolicyUpdater() {
   policies_
-      ->Get(
-          policy::PolicyNamespace(policy::POLICY_DOMAIN_CHROME, std::string()))
+      .Get(policy::PolicyNamespace(policy::POLICY_DOMAIN_CHROME, std::string()))
       .Set(policy::key::kExtensionSettings, policy::POLICY_LEVEL_MANDATORY,
            policy::POLICY_SCOPE_USER, policy::POLICY_SOURCE_CLOUD,
-           std::move(*TakePref()), nullptr);
+           base::Value(TakePref()), nullptr);
   provider_->UpdatePolicy(std::move(policies_));
 }
 

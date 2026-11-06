@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,12 +25,14 @@ class AX_EXPORT NullAXActionTarget : public AXActionTarget {
   gfx::Point MinimumScrollOffset() const override;
   gfx::Point MaximumScrollOffset() const override;
   void SetScrollOffset(const gfx::Point& point) const override;
-  bool SetSelected(bool selected) const override;
   bool SetSelection(const AXActionTarget* anchor_object,
                     int anchor_offset,
                     const AXActionTarget* focus_object,
                     int focus_offset) const override;
-  bool ScrollToMakeVisible() const override;
+  bool ScrollToMakeVisible(
+      ax::mojom::ScrollAlignment horizontal_scroll_alignment,
+      ax::mojom::ScrollAlignment vertical_scroll_alignment,
+      ax::mojom::ScrollBehavior scroll_behavior) const override;
   bool ScrollToMakeVisibleWithSubFocus(
       const gfx::Rect& rect,
       ax::mojom::ScrollAlignment horizontal_scroll_alignment,

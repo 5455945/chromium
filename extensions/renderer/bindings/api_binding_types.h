@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,8 @@
 #define EXTENSIONS_RENDERER_BINDINGS_API_BINDING_TYPES_H_
 
 #include <memory>
-#include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "v8/include/v8.h"
 
 namespace extensions {
@@ -33,7 +32,7 @@ enum class EventListenersChanged {
   kLastUnfilteredListenerForContextOwnerRemoved,
 
   // Filtered Events:
-  // TODO(https://crbug.com/873017): The fact that we only have added/removed
+  // TODO(crbug.com/40588885): The fact that we only have added/removed
   // at the context owner level for filtered events can cause issues.
 
   // The first listener for the associated context owner with a specific
@@ -60,6 +59,13 @@ enum class AsyncResponseType {
 // Adds an error message to the context's console.
 using AddConsoleError = base::RepeatingCallback<void(v8::Local<v8::Context>,
                                                      const std::string& error)>;
+
+using V8ArgumentList = v8::LocalVector<v8::Value>;
+
+using ResultModifierFunction =
+    base::OnceCallback<V8ArgumentList(const V8ArgumentList&,
+                                      v8::Local<v8::Context>,
+                                      AsyncResponseType)>;
 
 }  // namespace binding
 }  // namespace extensions

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,18 +16,15 @@ import java.io.DataOutputStream;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Unit test serialization code.
- */
+/** Unit test serialization code. */
 @RunWith(BlockJUnit4ClassRunner.class)
 public class CanonicalCookieTest {
     // Name meant to match CanonicalCookie method.
-    private static byte[] saveListToStream(final List<CanonicalCookie> cookies)
-            throws Exception {
+    private static byte[] saveListToStream(final List<CanonicalCookie> cookies) throws Exception {
         ByteArrayOutputStream outByteStream = new ByteArrayOutputStream();
         DataOutputStream out = new DataOutputStream(outByteStream);
         try {
-            CanonicalCookie cookiesArray[] = new CanonicalCookie[cookies.size()];
+            CanonicalCookie[] cookiesArray = new CanonicalCookie[cookies.size()];
             cookies.toArray(cookiesArray);
             CanonicalCookie.saveListToStream(out, cookiesArray);
         } finally {
@@ -58,13 +55,14 @@ public class CanonicalCookieTest {
         Assert.assertEquals(lhs.getCreationDate(), rhs.getCreationDate());
         Assert.assertEquals(lhs.getExpirationDate(), rhs.getExpirationDate());
         Assert.assertEquals(lhs.getLastAccessDate(), rhs.getLastAccessDate());
+        Assert.assertEquals(lhs.getLastUpdateDate(), rhs.getLastUpdateDate());
         Assert.assertEquals(lhs.isSecure(), rhs.isSecure());
         Assert.assertEquals(lhs.isHttpOnly(), rhs.isHttpOnly());
         Assert.assertEquals(lhs.getSameSite(), rhs.getSameSite());
         Assert.assertEquals(lhs.getPriority(), rhs.getPriority());
-        Assert.assertEquals(lhs.isSameParty(), rhs.isSameParty());
         Assert.assertEquals(lhs.sourceScheme(), rhs.sourceScheme());
         Assert.assertEquals(lhs.sourcePort(), rhs.sourcePort());
+        Assert.assertEquals(lhs.sourceType(), rhs.sourceType());
     }
 
     private static void doSaveRestoreCookiesListTest(final List<CanonicalCookie> cookies)
@@ -80,24 +78,66 @@ public class CanonicalCookieTest {
 
     @Test
     public void testSaveRestoreEmptyList() throws Exception {
-        doSaveRestoreCookiesListTest(new ArrayList<CanonicalCookie>());
+        doSaveRestoreCookiesListTest(new ArrayList<>());
     }
 
     @Test
     public void testSaveRestore() throws Exception {
         ArrayList<CanonicalCookie> cookies = new ArrayList<>();
-        cookies.add(new CanonicalCookie("name", "value", "domain", "path", 0 /* creation */,
-                1 /* expiration */, 0 /* lastAccess */, false /* secure */, true /* httpOnly */,
-                0 /* sameSite */, 0 /* priority */, false /* same_party */, 1 /* sourceScheme */,
-                72 /* sourcePort */));
-        cookies.add(new CanonicalCookie("name2", "value2", ".domain2", "path2", 10 /* creation */,
-                20 /* expiration */, 15 /* lastAccess */, true /* secure */, false /* httpOnly */,
-                1 /* sameSite */, 1 /* priority */, true /* same_party */, 2 /* sourceScheme */,
-                445 /* sourcePort */));
-        cookies.add(new CanonicalCookie("name3", "value3", "domain3", "path3", 10 /* creation */,
-                20 /* expiration */, 15 /* lastAccess */, true /* secure */, false /* httpOnly */,
-                2 /* sameSite */, 2 /* priority */, false /* same_party */, 2 /* sourceScheme */,
-                -1 /* sourcePort */));
+        cookies.add(
+                new CanonicalCookie(
+                        "name",
+                        "value",
+                        "domain",
+                        "path",
+                        /* creation= */ 0,
+                        /* expiration= */ 1,
+                        /* lastAccess= */ 0,
+                        /* lastUpdate= */ 0,
+                        /* secure= */ false,
+                        /* httpOnly= */ true,
+                        /* sameSite= */ 0,
+                        /* priority= */ 0,
+                        /* partitionKey= */ "",
+                        /* sourceScheme= */ 1,
+                        /* sourcePort= */ 72,
+                        /* sourceType= */ 0));
+        cookies.add(
+                new CanonicalCookie(
+                        "name2",
+                        "value2",
+                        ".domain2",
+                        "path2",
+                        /* creation= */ 10,
+                        /* expiration= */ 20,
+                        /* lastAccess= */ 15,
+                        /* lastUpdate= */ 15,
+                        /* secure= */ true,
+                        /* httpOnly= */ false,
+                        /* sameSite= */ 1,
+                        /* priority= */ 1,
+                        /* partitionKey= */ "",
+                        /* sourceScheme= */ 2,
+                        /* sourcePort= */ 445,
+                        /* sourceType= */ 1));
+        cookies.add(
+                new CanonicalCookie(
+                        "name3",
+                        "value3",
+                        "domain3",
+                        "path3",
+                        /* creation= */ 10,
+                        /* expiration= */ 20,
+                        /* lastAccess= */ 15,
+                        /* lastUpdate= */ 15,
+                        /* secure= */ true,
+                        /* httpOnly= */ false,
+                        /* sameSite= */ 2,
+                        /* priority= */ 2,
+                        /* partitionKey= */ "https://toplevelsite.com",
+                        /* sourceScheme= */ 2,
+                        /* sourcePort= */ -1,
+                        /* sourceType= */ 2));
 
         doSaveRestoreCookiesListTest(cookies);
     }

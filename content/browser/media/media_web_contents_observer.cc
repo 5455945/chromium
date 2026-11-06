@@ -1,21 +1,25 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/media/media_web_contents_observer.h"
 
+#include <algorithm>
 #include <memory>
 #include <tuple>
 
-#include "base/bind.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/debug/crash_logging.h"
 #include "base/debug/dump_without_crashing.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "build/build_config.h"
+#include "content/browser/browser_main_loop.h"
 #include "content/browser/media/audible_metrics.h"
 #include "content/browser/media/media_devices_util.h"
+#include "content/browser/media/media_web_contents_observer.h"
 #include "content/browser/renderer_host/media/media_stream_manager.h"
+#include "content/browser/renderer_host/media/preferred_audio_output_device_manager.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/render_frame_host.h"
@@ -37,17 +41,18 @@ AudibleMetrics* GetAudibleMetrics() {
   return metrics;
 }
 
-static void OnAudioOutputDeviceIdTranslated(
-    base::WeakPtr<MediaWebContentsObserver> observer,
-    const MediaPlayerId& player_id,
-    const absl::optional<std::string>& raw_device_id) {
-  if (!raw_device_id)
-    return;
+PreferredAudioOutputDeviceManager* GetPreferredAudioOutputDeviceManager() {
+  if (!content::BrowserMainLoop::GetInstance()) {
+    return nullptr;
+  }
 
-  content::GetUIThreadTaskRunner({})->PostTask(
-      FROM_HERE,
-      base::BindOnce(&MediaWebContentsObserver::OnReceivedTranslatedDeviceId,
-                     std::move(observer), player_id, raw_device_id.value()));
+  if (!content::BrowserMainLoop::GetInstance()->media_stream_manager()) {
+    return nullptr;
+  }
+
+  return content::BrowserMainLoop::GetInstance()
+      ->media_stream_manager()
+      ->preferred_audio_output_device_manager();
 }
 
 }  // anonymous namespace
@@ -79,14 +84,14 @@ class MediaWebContentsObserver::PlayerInfo {
   bool is_playing() const { return is_playing_; }
 
   void SetIsPlaying() {
-    DCHECK(!is_playing_);
+    CHECK(!is_playing_, base::NotFatalUntil::M160);
     is_playing_ = true;
 
     NotifyPlayerStarted();
   }
 
   void SetIsStopped(bool reached_end_of_stream) {
-    DCHECK(is_playing_);
+    CHECK(is_playing_, base::NotFatalUntil::M160);
     is_playing_ = false;
 
     NotifyPlayerStopped(
@@ -98,6 +103,8 @@ class MediaWebContentsObserver::PlayerInfo {
 
   bool IsAudible() const { return has_audio_ && is_playing_ && !muted_; }
 
+  GlobalRenderFrameHostId GetHostId() { return id_.frame_routing_id; }
+
  private:
   void NotifyPlayerStarted() {
     observer_->web_contents_impl()->MediaStartedPlaying(
@@ -105,7 +112,7 @@ class MediaWebContentsObserver::PlayerInfo {
 
     if (observer_->power_experiment_manager_) {
       auto* render_frame_host = RenderFrameHost::FromID(id_.frame_routing_id);
-      DCHECK(render_frame_host);
+      CHECK(render_frame_host, base::NotFatalUntil::M160);
 
       // Bind the callback to a WeakPtr for the frame, so that we won't try to
       // notify the frame after it's been destroyed.
@@ -130,7 +137,7 @@ class MediaWebContentsObserver::PlayerInfo {
   }
 
   const MediaPlayerId id_;
-  MediaWebContentsObserver* const observer_;
+  const raw_ptr<MediaWebContentsObserver> observer_;
 
   bool has_audio_ = false;
   bool has_video_ = false;
@@ -149,6 +156,7 @@ MediaWebContentsObserver::MediaWebContentsObserver(
 MediaWebContentsObserver::~MediaWebContentsObserver() = default;
 
 void MediaWebContentsObserver::WebContentsDestroyed() {
+  CHECK_CURRENTLY_ON(BrowserThread::UI);
   use_after_free_checker_.check();
   AudioStreamMonitor* audio_stream_monitor =
       web_contents_impl()->audio_stream_monitor();
@@ -173,15 +181,30 @@ void MediaWebContentsObserver::WebContentsDestroyed() {
 
 void MediaWebContentsObserver::RenderFrameDeleted(
     RenderFrameHost* render_frame_host) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI);
   use_after_free_checker_.check();
 
   GlobalRenderFrameHostId frame_routing_id = render_frame_host->GetGlobalId();
 
-  base::EraseIf(
-      player_info_map_,
-      [frame_routing_id](const PlayerInfoMap::value_type& id_and_player_info) {
-        return frame_routing_id == id_and_player_info.first.frame_routing_id;
-      });
+  // This cannot just use `base::EraseIf()`, because some observers call back
+  // into `this` and query player info when a PlayerInfo is destroyed (!!).
+  // Re-entering a container while erasing an entry is generally not very safe
+  // or robust.
+  for (auto it = player_info_map_.begin(); it != player_info_map_.end();) {
+    if (it->first.frame_routing_id != frame_routing_id) {
+      ++it;
+      continue;
+    }
+    // Instead, remove entries in a multi-step process:
+    // 1. Move ownership of the PlayerInfo out of the map.
+    // 2. Erase the entry from the map.
+    // 3. Destroy the PlayerInfo (by letting it go out of scope).
+    //    Because the entry is already gone from the map, GetPlayerInfo() will
+    //    return null instead of trying to compare keys that are potentially
+    //    destroyed.
+    auto player_info = std::move(it->second);
+    it = player_info_map_.erase(it);
+  }
 
   base::EraseIf(media_player_hosts_,
                 [frame_routing_id](const MediaPlayerHostImplMap::value_type&
@@ -198,12 +221,25 @@ void MediaWebContentsObserver::RenderFrameDeleted(
                media_player_observer_hosts_value_type.first.frame_routing_id;
       });
 
-  base::EraseIf(media_player_remotes_,
-                [frame_routing_id](const MediaPlayerRemotesMap::value_type&
-                                       media_player_remotes_value_type) {
-                  return frame_routing_id ==
-                         media_player_remotes_value_type.first.frame_routing_id;
-                });
+  std::vector<MediaPlayerId> removed_media_players;
+  base::EraseIf(
+      media_player_remotes_, [&](const MediaPlayerRemotesMap::value_type&
+                                     media_player_remotes_value_type) {
+        const MediaPlayerId& player_id = media_player_remotes_value_type.first;
+        if (frame_routing_id == player_id.frame_routing_id) {
+          removed_media_players.push_back(player_id);
+          return true;
+        }
+        return false;
+      });
+
+  for (const MediaPlayerId& player_id : removed_media_players) {
+    // Call MediaDestroyed() after all state associated with the media player is
+    // deleted, to ensure that observers see up-to-date state. For example,
+    // HasActiveEffectivelyFullscreenVideo() should return false if `player_id`
+    // was the only fullscreen media.
+    web_contents_impl()->MediaDestroyed(player_id);
+  }
 
   session_controllers_manager_->RenderFrameDeleted(render_frame_host);
 
@@ -213,9 +249,44 @@ void MediaWebContentsObserver::RenderFrameDeleted(
     fullscreen_player_.reset();
   }
 
+  PreferredAudioOutputDeviceManager* preferred_audio_output_device_manager =
+      GetPreferredAudioOutputDeviceManager();
+  if (preferred_audio_output_device_manager) {
+    preferred_audio_output_device_manager->UnregisterMainFrameOnUIThread(
+        render_frame_host);
+  }
+
   // Cancel any pending callbacks for players from this frame.
   use_after_free_checker_.check();
   per_frame_factory_.erase(render_frame_host);
+}
+
+void MediaWebContentsObserver::DidStartNavigation(
+    NavigationHandle* navigation_handle) {
+  if (!navigation_handle->IsInPrimaryMainFrame()) {
+    return;
+  }
+
+  PreferredAudioOutputDeviceManager* preferred_audio_output_device_manager =
+      GetPreferredAudioOutputDeviceManager();
+
+  // Invalidates the render frame host by refresh.
+  if (preferred_audio_output_device_manager) {
+    preferred_audio_output_device_manager->UnregisterMainFrameOnUIThread(
+        RenderFrameHost::FromID(
+            navigation_handle->GetPreviousRenderFrameHostId()));
+  }
+}
+
+void MediaWebContentsObserver::RenderFrameHostChanged(
+    RenderFrameHost* old_host,
+    RenderFrameHost* new_host) {
+  PreferredAudioOutputDeviceManager* preferred_audio_output_device_manager =
+      GetPreferredAudioOutputDeviceManager();
+  if (old_host && preferred_audio_output_device_manager) {
+    preferred_audio_output_device_manager->UnregisterMainFrameOnUIThread(
+        old_host);
+  }
 }
 
 void MediaWebContentsObserver::MaybeUpdateAudibleState() {
@@ -233,6 +304,10 @@ void MediaWebContentsObserver::MaybeUpdateAudibleState() {
 }
 
 bool MediaWebContentsObserver::HasActiveEffectivelyFullscreenVideo() const {
+  CHECK_CURRENTLY_ON(BrowserThread::UI);
+  use_after_free_checker_.check();
+  CHECK(!fullscreen_player_.has_value() ||
+        picture_in_picture_allowed_in_fullscreen_.has_value());
   if (!web_contents()->IsFullscreen() || !fullscreen_player_)
     return false;
 
@@ -245,24 +320,39 @@ bool MediaWebContentsObserver::HasActiveEffectivelyFullscreenVideo() const {
 
 bool MediaWebContentsObserver::IsPictureInPictureAllowedForFullscreenVideo()
     const {
-  DCHECK(picture_in_picture_allowed_in_fullscreen_.has_value());
+  CHECK_CURRENTLY_ON(BrowserThread::UI);
+  use_after_free_checker_.check();
+  CHECK(fullscreen_player_.has_value());
+  CHECK(picture_in_picture_allowed_in_fullscreen_.has_value());
 
   return *picture_in_picture_allowed_in_fullscreen_;
 }
 
-const absl::optional<MediaPlayerId>&
+const std::optional<MediaPlayerId>&
 MediaWebContentsObserver::GetFullscreenVideoMediaPlayerId() const {
   return fullscreen_player_;
 }
 
-void MediaWebContentsObserver::MediaPictureInPictureChanged(
+void MediaWebContentsObserver::OnPictureInPictureStateChanged(
+    const MediaPlayerId& player_id,
     bool is_picture_in_picture) {
   session_controllers_manager_->PictureInPictureStateChanged(
-      is_picture_in_picture);
+      player_id, is_picture_in_picture);
 }
 
 void MediaWebContentsObserver::DidUpdateAudioMutingState(bool muted) {
   session_controllers_manager_->WebContentsMutedStateChanged(muted);
+}
+
+void MediaWebContentsObserver::GetHasPlayedBefore(
+    GetHasPlayedBeforeCallback callback) {
+  std::move(callback).Run(has_played_before_);
+}
+
+void MediaWebContentsObserver::BindMediaPlayerObserverClient(
+    mojo::PendingReceiver<media::mojom::MediaPlayerObserverClient>
+        pending_receiver) {
+  receivers_.Add(this, std::move(pending_receiver));
 }
 
 void MediaWebContentsObserver::RequestPersistentVideo(bool value) {
@@ -272,6 +362,14 @@ void MediaWebContentsObserver::RequestPersistentVideo(bool value) {
   // The message is sent to the renderer even though the video is already the
   // fullscreen element itself. It will eventually be handled by Blink.
   GetMediaPlayerRemote(*fullscreen_player_)->SetPersistentState(value);
+}
+
+int MediaWebContentsObserver::GetCurrentlyPlayingVideoCount() const {
+  return std::ranges::count_if(
+      player_info_map_, [](const PlayerInfoMap::value_type& id_and_info) {
+        const PlayerInfo& info = *id_and_info.second;
+        return info.is_playing() && info.has_video();
+      });
 }
 
 bool MediaWebContentsObserver::IsPlayerActive(
@@ -292,7 +390,7 @@ MediaWebContentsObserver::MediaPlayerHostImpl::MediaPlayerHostImpl(
 
 MediaWebContentsObserver::MediaPlayerHostImpl::~MediaPlayerHostImpl() = default;
 
-void MediaWebContentsObserver::MediaPlayerHostImpl::BindMediaPlayerHostReceiver(
+void MediaWebContentsObserver::MediaPlayerHostImpl::AddMediaPlayerHostReceiver(
     mojo::PendingAssociatedReceiver<media::mojom::MediaPlayerHost> receiver) {
   receivers_.Add(this, std::move(receiver));
 }
@@ -337,6 +435,9 @@ void MediaWebContentsObserver::MediaPlayerObserverHostImpl::
   media_web_contents_observer_->web_contents_impl()->MediaMutedStatusChanged(
       media_player_id_, muted);
 
+  media_web_contents_observer_->session_controllers_manager()
+      ->OnMediaMutedStatusChanged(media_player_id_, muted);
+
   PlayerInfo* player_info = GetPlayerInfo();
   if (!player_info)
     return;
@@ -349,6 +450,9 @@ void MediaWebContentsObserver::MediaPlayerObserverHostImpl::
     OnMediaMetadataChanged(bool has_audio,
                            bool has_video,
                            media::MediaContentType media_content_type) {
+  media_web_contents_observer_->web_contents_impl()->MediaMetadataChanged(
+      WebContentsObserver::MediaPlayerInfo(has_video, has_audio),
+      media_player_id_);
   media_web_contents_observer_->OnMediaMetadataChanged(
       media_player_id_, has_audio, has_video, media_content_type);
 
@@ -383,8 +487,25 @@ void MediaWebContentsObserver::MediaPlayerObserverHostImpl::
 
 void MediaWebContentsObserver::MediaPlayerObserverHostImpl::
     OnAudioOutputSinkChanged(const std::string& hashed_device_id) {
-  media_web_contents_observer_->OnAudioOutputSinkChanged(media_player_id_,
-                                                         hashed_device_id);
+  auto* render_frame_host =
+      RenderFrameHost::FromID(media_player_id_.frame_routing_id);
+  CHECK(render_frame_host, base::NotFatalUntil::M160);
+
+  content::GetRawDeviceIdFromHMAC(
+      render_frame_host->GetGlobalId(), hashed_device_id,
+      blink::mojom::MediaDeviceType::kMediaAudioOutput,
+      base::BindOnce(&MediaPlayerObserverHostImpl::OnReceivedTranslatedDeviceId,
+                     weak_factory_.GetWeakPtr()));
+}
+
+void MediaWebContentsObserver::MediaPlayerObserverHostImpl::
+    OnReceivedTranslatedDeviceId(
+        const std::optional<std::string>& translated_id) {
+  if (!translated_id)
+    return;
+
+  media_web_contents_observer_->OnAudioOutputSinkChangedWithRawDeviceId(
+      media_player_id_, *translated_id);
 }
 
 void MediaWebContentsObserver::MediaPlayerObserverHostImpl::
@@ -400,14 +521,11 @@ void MediaWebContentsObserver::MediaPlayerObserverHostImpl::
 }
 
 void MediaWebContentsObserver::MediaPlayerObserverHostImpl::
-    OnBufferUnderflow() {
-  media_web_contents_observer_->web_contents_impl()->MediaBufferUnderflow(
-      media_player_id_);
-}
-
-void MediaWebContentsObserver::MediaPlayerObserverHostImpl::OnSeek() {
-  media_web_contents_observer_->web_contents_impl()->MediaPlayerSeek(
-      media_player_id_);
+    OnRemotePlaybackMetadataChange(
+        media_session::mojom::RemotePlaybackMetadataPtr
+            remote_playback_metadata) {
+  media_web_contents_observer_->OnRemotePlaybackMetadataChange(
+      media_player_id_, std::move(remote_playback_metadata));
 }
 
 void MediaWebContentsObserver::MediaPlayerObserverHostImpl::OnMediaPlaying() {
@@ -426,6 +544,7 @@ void MediaWebContentsObserver::MediaPlayerObserverHostImpl::OnMediaPlaying() {
   if (!player_info->is_playing())
     player_info->SetIsPlaying();
 
+  media_web_contents_observer_->OnMediaPlaying();
   NotifyAudioStreamMonitorIfNeeded();
 }
 
@@ -449,12 +568,19 @@ void MediaWebContentsObserver::MediaPlayerObserverHostImpl::
   if (!player_info)
     return;
 
-  bool should_add_client = player_info->IsAudible() && !uses_audio_service_;
+  // Register as an audible client if the player is audible and bypasses the
+  // standard audio service (currently only for `MediaFoundationRenderer`).
+  // This requires explicit browser-side authorization to prevent spoofing.
+  bool should_add_client =
+      player_info->IsAudible() && !uses_audio_service_ &&
+      AudibilityBypassTracker::ClaimGrant(media_player_id_);
+
   auto* audio_stream_monitor =
       media_web_contents_observer_->web_contents_impl()->audio_stream_monitor();
 
   if (should_add_client && !audio_client_registration_) {
-    audio_client_registration_ = audio_stream_monitor->RegisterAudibleClient();
+    audio_client_registration_ =
+        audio_stream_monitor->RegisterAudibleClient(player_info->GetHostId());
   } else if (!should_add_client && audio_client_registration_) {
     audio_client_registration_.reset();
   }
@@ -496,6 +622,10 @@ void MediaWebContentsObserver::OnMediaMetadataChanged(
 void MediaWebContentsObserver::OnMediaEffectivelyFullscreenChanged(
     const MediaPlayerId& player_id,
     blink::WebFullscreenVideoStatus fullscreen_status) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI);
+  use_after_free_checker_.check();
+  CHECK(!fullscreen_player_.has_value() ||
+        picture_in_picture_allowed_in_fullscreen_.has_value());
   switch (fullscreen_status) {
     case blink::WebFullscreenVideoStatus::kFullscreenAndPictureInPictureEnabled:
       fullscreen_player_ = player_id;
@@ -521,40 +651,42 @@ void MediaWebContentsObserver::OnMediaEffectivelyFullscreenChanged(
   web_contents_impl()->MediaEffectivelyFullscreenChanged(is_fullscreen);
 }
 
-void MediaWebContentsObserver::OnAudioOutputSinkChanged(
-    const MediaPlayerId& player_id,
-    std::string hashed_device_id) {
-  auto* render_frame_host = RenderFrameHost::FromID(player_id.frame_routing_id);
-  DCHECK(render_frame_host);
-
-  auto salt_and_origin = content::GetMediaDeviceSaltAndOrigin(
-      render_frame_host->GetProcess()->GetID(),
-      render_frame_host->GetRoutingID());
-
-  auto callback_on_io_thread = base::BindOnce(
-      [](const std::string& salt, const url::Origin& origin,
-         const std::string& hashed_device_id,
-         base::OnceCallback<void(const absl::optional<std::string>&)>
-             callback) {
-        MediaStreamManager::GetMediaDeviceIDForHMAC(
-            blink::mojom::MediaDeviceType::MEDIA_AUDIO_OUTPUT, salt,
-            std::move(origin), hashed_device_id,
-            base::SequencedTaskRunnerHandle::Get(), std::move(callback));
-      },
-      salt_and_origin.device_id_salt, std::move(salt_and_origin.origin),
-      hashed_device_id,
-      base::BindOnce(&OnAudioOutputDeviceIdTranslated,
-                     weak_ptr_factory_.GetWeakPtr(), player_id));
-
-  content::GetIOThreadTaskRunner({})->PostTask(
-      FROM_HERE, std::move(callback_on_io_thread));
+void MediaWebContentsObserver::OnMediaPlaying() {
+  has_played_before_ = true;
 }
 
-void MediaWebContentsObserver::OnReceivedTranslatedDeviceId(
+void MediaWebContentsObserver::OnAudibilityBypassRevoked(
+    const MediaPlayerId& id) {
+  auto it = media_player_observer_hosts_.find(id);
+  if (it != media_player_observer_hosts_.end()) {
+    it->second->NotifyAudioStreamMonitorIfNeeded();
+  }
+}
+
+void MediaWebContentsObserver::OnAudioOutputSinkChangedWithRawDeviceId(
     const MediaPlayerId& player_id,
     const std::string& raw_device_id) {
   session_controllers_manager_->OnAudioOutputSinkChanged(player_id,
                                                          raw_device_id);
+}
+
+void MediaWebContentsObserver::OnRemotePlaybackMetadataChange(
+    const MediaPlayerId& player_id,
+    media_session::mojom::RemotePlaybackMetadataPtr remote_playback_metadata) {
+  session_controllers_manager_->OnRemotePlaybackMetadataChange(
+      player_id, std::move(remote_playback_metadata));
+}
+
+void MediaWebContentsObserver::MediaPlayerObserverHostImpl::
+    OnVideoVisibilityChanged(bool meets_visibility_threshold) {
+  media_web_contents_observer_->session_controllers_manager()
+      ->OnVideoVisibilityChanged(media_player_id_, meets_visibility_threshold);
+}
+
+void MediaWebContentsObserver::MediaPlayerObserverHostImpl::
+    OnVideoFrameAvailabilityChanged(bool available) {
+  media_web_contents_observer_->session_controllers_manager()
+      ->OnVideoFrameAvailabilityChanged(media_player_id_, available);
 }
 
 bool MediaWebContentsObserver::IsMediaPlayerRemoteAvailable(
@@ -569,7 +701,8 @@ MediaWebContentsObserver::GetMediaPlayerRemote(const MediaPlayerId& player_id) {
 
 void MediaWebContentsObserver::OnMediaPlayerObserverDisconnected(
     const MediaPlayerId& player_id) {
-  DCHECK(media_player_observer_hosts_.contains(player_id));
+  CHECK(media_player_observer_hosts_.contains(player_id),
+        base::NotFatalUntil::M160);
   media_player_observer_hosts_.erase(player_id);
 }
 
@@ -609,13 +742,15 @@ void MediaWebContentsObserver::BindMediaPlayerHost(
     GlobalRenderFrameHostId frame_routing_id,
     mojo::PendingAssociatedReceiver<media::mojom::MediaPlayerHost>
         player_receiver) {
-  if (!media_player_hosts_.contains(frame_routing_id)) {
-    media_player_hosts_[frame_routing_id] =
-        std::make_unique<MediaPlayerHostImpl>(frame_routing_id, this);
+  auto it = media_player_hosts_.find(frame_routing_id);
+  if (it == media_player_hosts_.end()) {
+    it = media_player_hosts_
+             .try_emplace(
+                 frame_routing_id,
+                 std::make_unique<MediaPlayerHostImpl>(frame_routing_id, this))
+             .first;
   }
-
-  media_player_hosts_[frame_routing_id]->BindMediaPlayerHostReceiver(
-      std::move(player_receiver));
+  it->second->AddMediaPlayerHostReceiver(std::move(player_receiver));
 }
 
 void MediaWebContentsObserver::OnMediaPlayerAdded(
@@ -623,26 +758,37 @@ void MediaWebContentsObserver::OnMediaPlayerAdded(
     mojo::PendingAssociatedReceiver<media::mojom::MediaPlayerObserver>
         media_player_observer,
     MediaPlayerId player_id) {
-  auto* const rfh = RenderFrameHost::FromID(player_id.frame_routing_id);
-  DCHECK(rfh);
-
-  if (media_player_remotes_.contains(player_id)) {
-    // Original remote associated with |player_id| will be overridden. If the
-    // original player is still alive, this will break our ability to control
-    // it from the browser process. We don't know that the original player is
-    // actually still alive.
-    // TODO(https://crbug.com/1172882): Determine the root cause of duplication
-    // and/or refactor to make ID purely a browser-side concept.
-    LOG(ERROR) << __func__ << " Duplicate media player id ("
-               << player_id.delegate_id << ")";
+  if (!RenderFrameHost::FromID(player_id.frame_routing_id) ||
+      media_player_remotes_.contains(player_id) ||
+      media_player_observer_hosts_.contains(player_id)) {
+    // If you see this, it's likely due to https://crbug.com/1392441
+    mojo::ReportBadMessage("Bad MediaPlayer request.");
+    return;
   }
 
-  media_player_remotes_[player_id].Bind(std::move(player_remote));
-  media_player_remotes_[player_id].set_disconnect_handler(base::BindOnce(
+  auto remote_it = media_player_remotes_.try_emplace(player_id);
+  remote_it.first->second.Bind(std::move(player_remote));
+  remote_it.first->second.set_disconnect_handler(base::BindOnce(
       [](MediaWebContentsObserver* observer, const MediaPlayerId& player_id) {
-        observer->player_info_map_.erase(player_id);
+        // This cannot just use `erase()`, because some observers call back
+        // into `this` and query player info when a PlayerInfo is destroyed
+        // (!!).  Re-entering a container while erasing an entry is generally
+        // not very safe or robust.
+        if (auto it = observer->player_info_map_.find(player_id);
+            it != observer->player_info_map_.end()) {
+          // Instead, remove entries in a multi-step process:
+          // 1. Move ownership of the PlayerInfo out of the map.
+          // 2. Erase the entry from the map.
+          // 3. Destroy the PlayerInfo (by letting it go out of scope).
+          //    Because the entry is already gone from the map, GetPlayerInfo()
+          //    will return null instead of trying to compare keys that are
+          //    potentially destroyed.
+          auto player_info = std::move(it->second);
+          observer->player_info_map_.erase(it);
+        }
         observer->media_player_remotes_.erase(player_id);
         observer->session_controllers_manager_->OnEnd(player_id);
+        AudibilityBypassTracker::ReleaseGrant(player_id);
         if (observer->fullscreen_player_ &&
             *observer->fullscreen_player_ == player_id) {
           observer->fullscreen_player_.reset();
@@ -651,14 +797,10 @@ void MediaWebContentsObserver::OnMediaPlayerAdded(
       },
       base::Unretained(this), player_id));
 
-  // Create a new MediaPlayerObserverHostImpl for |player_id|, implementing the
-  // media::mojom::MediaPlayerObserver mojo interface, to handle messages sent
-  // from the MediaPlayer element in the renderer process.
-  if (!media_player_observer_hosts_.contains(player_id)) {
-    media_player_observer_hosts_[player_id] =
-        std::make_unique<MediaPlayerObserverHostImpl>(player_id, this);
-  }
-  media_player_observer_hosts_[player_id]->BindMediaPlayerObserverReceiver(
+  auto observer_it = media_player_observer_hosts_.try_emplace(
+      player_id,
+      std::make_unique<MediaPlayerObserverHostImpl>(player_id, this));
+  observer_it.first->second->BindMediaPlayerObserverReceiver(
       std::move(media_player_observer));
 }
 
@@ -687,5 +829,86 @@ MediaWebContentsObserver::GetWeakPtrForFrame(
       std::make_unique<base::WeakPtrFactory<MediaWebContentsObserver>>(this)));
   return result.first->second->GetWeakPtr();
 }
+
+AudibilityBypassTracker::AudibilityBypassTracker(RenderFrameHost* rfh)
+    : DocumentUserData<AudibilityBypassTracker>(rfh) {}
+
+AudibilityBypassTracker::~AudibilityBypassTracker() = default;
+
+// static
+AudibilityBypassTracker::ScopedGrant AudibilityBypassTracker::AddGrant(
+    RenderFrameHost* rfh) {
+  if (rfh) {
+    auto* tracker = GetOrCreateForCurrentDocument(rfh);
+    int grant_id = ++tracker->next_grant_id_;
+    tracker->pending_grants_.insert(grant_id);
+    return ScopedGrant(base::BindOnce(&AudibilityBypassTracker::RevokeGrant,
+                                      rfh->GetGlobalId(), grant_id));
+  }
+  return ScopedGrant();
+}
+
+// static
+bool AudibilityBypassTracker::ClaimGrant(const MediaPlayerId& id) {
+  auto* rfh = RenderFrameHost::FromID(id.frame_routing_id);
+  if (!rfh) {
+    return false;
+  }
+  auto* tracker = GetForCurrentDocument(rfh);
+  if (tracker && tracker->active_grants_.contains(id)) {
+    return true;
+  }
+  if (tracker && !tracker->pending_grants_.empty()) {
+    int grant_id = *tracker->pending_grants_.begin();
+    tracker->pending_grants_.erase(tracker->pending_grants_.begin());
+    tracker->active_grants_[id] = grant_id;
+    return true;
+  }
+  return false;
+}
+
+// static
+void AudibilityBypassTracker::ReleaseGrant(const MediaPlayerId& id) {
+  auto* rfh = RenderFrameHost::FromID(id.frame_routing_id);
+  if (!rfh) {
+    return;
+  }
+  auto* tracker = GetForCurrentDocument(rfh);
+  if (tracker) {
+    tracker->active_grants_.erase(id);
+  }
+}
+
+// static
+void AudibilityBypassTracker::RevokeGrant(GlobalRenderFrameHostId rfh_id,
+                                          int grant_id) {
+  auto* rfh = RenderFrameHost::FromID(rfh_id);
+  if (!rfh) {
+    return;
+  }
+  auto* tracker = GetForCurrentDocument(rfh);
+  if (!tracker) {
+    return;
+  }
+  if (tracker->pending_grants_.erase(grant_id)) {
+    return;
+  }
+  for (auto it = tracker->active_grants_.begin();
+       it != tracker->active_grants_.end(); ++it) {
+    if (it->second == grant_id) {
+      MediaPlayerId id = it->first;
+      tracker->active_grants_.erase(it);
+      auto* web_contents =
+          static_cast<WebContentsImpl*>(WebContents::FromRenderFrameHost(rfh));
+      if (web_contents && web_contents->media_web_contents_observer()) {
+        web_contents->media_web_contents_observer()->OnAudibilityBypassRevoked(
+            id);
+      }
+      break;
+    }
+  }
+}
+
+DOCUMENT_USER_DATA_KEY_IMPL(AudibilityBypassTracker);
 
 }  // namespace content

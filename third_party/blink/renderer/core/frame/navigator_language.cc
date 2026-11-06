@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,26 +6,24 @@
 
 #include "third_party/blink/renderer/core/probe/core_probes.h"
 #include "third_party/blink/renderer/platform/language.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
 
 Vector<String> ParseAndSanitize(const String& accept_languages) {
-  Vector<String> languages;
-  accept_languages.Split(',', languages);
+  Vector<String> languages = accept_languages.SplitSkippingEmpty(',');
 
   // Sanitizing tokens. We could do that more extensively but we should assume
   // that the accept languages are already sane and support BCP47. It is
   // likely a waste of time to make sure the tokens matches that spec here.
-  for (size_t i = 0; i < languages.size(); ++i) {
+  for (wtf_size_t i = 0; i < languages.size(); ++i) {
     String& token = languages[i];
     token = token.StripWhiteSpace();
     if (token.length() >= 3 && token[2] == '_')
       token.replace(2, 1, "-");
   }
 
-  if (languages.IsEmpty())
+  if (languages.empty())
     languages.push_back(DefaultLanguage());
 
   return languages;
@@ -35,39 +33,26 @@ NavigatorLanguage::NavigatorLanguage(ExecutionContext* execution_context)
     : execution_context_(execution_context) {}
 
 AtomicString NavigatorLanguage::language() {
-  if (RuntimeEnabledFeatures::NavigatorLanguageInInsecureContextEnabled() ||
-      (execution_context_ && execution_context_->IsSecureContext())) {
-    return AtomicString(languages().front());
-  }
-  return AtomicString();
+  return AtomicString(languages().front());
 }
 
 const Vector<String>& NavigatorLanguage::languages() {
-  if (RuntimeEnabledFeatures::NavigatorLanguageInInsecureContextEnabled() ||
-      (execution_context_ && execution_context_->IsSecureContext())) {
-    EnsureUpdatedLanguage();
-    return languages_;
-  }
-  DEFINE_STATIC_LOCAL(const Vector<String>, empty_vector, {});
-  return empty_vector;
-}
-
-AtomicString NavigatorLanguage::SerializeLanguagesForClientHintHeader() {
   EnsureUpdatedLanguage();
-
-  StringBuilder builder;
-  for (size_t i = 0; i < languages_.size(); i++) {
-    if (i)
-      builder.Append(", ");
-    builder.Append('"');
-    builder.Append(languages_[i]);
-    builder.Append('"');
-  }
-  return builder.ToAtomicString();
+  return languages_;
 }
 
 bool NavigatorLanguage::IsLanguagesDirty() const {
-  return languages_dirty_;
+  // Check if the language has override. If so, consider the language is dirty.
+  // This is required, as `IsLanguagesDirty` properly is used to cache
+  // v8 value of `languages` in `navigator_language.idl`, while the
+  // `languages_dirty_` represents the state of the `languages_`. If `languages`
+  // was accessed, the `languages_dirty_` is set to false, but the
+  // `navigator_language.idl` still holds the old cached value.
+  String accept_languages_override;
+  probe::ApplyAcceptLanguageOverride(execution_context_,
+                                     &accept_languages_override);
+
+  return languages_dirty_ || !accept_languages_override.IsNull();
 }
 
 void NavigatorLanguage::SetLanguagesDirty() {
@@ -75,22 +60,23 @@ void NavigatorLanguage::SetLanguagesDirty() {
   languages_.clear();
 }
 
-void NavigatorLanguage::SetLanguagesForTesting(const String& languages) {
-  languages_ = ParseAndSanitize(languages);
-}
-
 void NavigatorLanguage::EnsureUpdatedLanguage() {
+  String accept_languages_override;
+  probe::ApplyAcceptLanguageOverride(execution_context_,
+                                     &accept_languages_override);
+  if (!accept_languages_override.IsNull()) {
+    // If the language has override, force use the override regardless of the
+    // `languages_dirty_` state. This is required to allow for workers to
+    // respect the override.
+    languages_ = ParseAndSanitize(accept_languages_override);
+    // Mark the language as dirty, so that if the override is removed, the
+    // language will be updated.
+    languages_dirty_ = true;
+    return;
+  }
+
   if (languages_dirty_) {
-    String accept_languages_override;
-    probe::ApplyAcceptLanguageOverride(execution_context_,
-                                       &accept_languages_override);
-
-    if (!accept_languages_override.IsNull()) {
-      languages_ = ParseAndSanitize(accept_languages_override);
-    } else {
-      languages_ = ParseAndSanitize(GetAcceptLanguages());
-    }
-
+    languages_ = ParseAndSanitize(GetAcceptLanguages());
     languages_dirty_ = false;
   }
 }

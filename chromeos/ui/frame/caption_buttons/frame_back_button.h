@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,14 +16,16 @@ class COMPONENT_EXPORT(CHROMEOS_UI_FRAME) FrameBackButton
     : public views::FrameCaptionButton {
  public:
   FrameBackButton();
+
+  FrameBackButton(const FrameBackButton&) = delete;
+  FrameBackButton& operator=(const FrameBackButton&) = delete;
+
   ~FrameBackButton() override;
 
  private:
   void ButtonPressed();
-
-  DISALLOW_COPY_AND_ASSIGN(FrameBackButton);
 };
 
 }  // namespace chromeos
 
-#endif  //  CHROMEOS_UI_FRAME_CAPTION_BUTTONS_FRAME_BACK_BUTTON_H_
+#endif  // CHROMEOS_UI_FRAME_CAPTION_BUTTONS_FRAME_BACK_BUTTON_H_

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,8 +16,8 @@ struct EnumTraits<media::mojom::CdmKeyStatus,
   static media::mojom::CdmKeyStatus ToMojom(
       media::CdmKeyInformation::KeyStatus key_status);
 
-  static bool FromMojom(media::mojom::CdmKeyStatus input,
-                        media::CdmKeyInformation::KeyStatus* out);
+  static media::CdmKeyInformation::KeyStatus FromMojom(
+      media::mojom::CdmKeyStatus input);
 };
 
 template <>

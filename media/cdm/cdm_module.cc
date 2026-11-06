@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,17 @@
 #include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
-#include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/time/time.h"
+#include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "components/crash/core/common/crash_key.h"
+#include "load_cdm_uma_helper.h"
+
+#if BUILDFLAG(IS_WIN)
+#include <windows.h>
+#endif
 
 #if BUILDFLAG(ENABLE_CDM_HOST_VERIFICATION)
 #include "base/feature_list.h"
@@ -32,12 +37,15 @@ namespace {
 
 static CdmModule* g_cdm_module = nullptr;
 
+// UMA report prefix
+const char kUmaPrefix[] = "Media.EME.Cdm";
+
 #if BUILDFLAG(ENABLE_CDM_HOST_VERIFICATION)
 void InitCdmHostVerification(
     base::NativeLibrary cdm_library,
     const base::FilePath& cdm_path,
     const std::vector<CdmHostFilePath>& cdm_host_file_paths) {
-  DCHECK(cdm_library);
+  CHECK(cdm_library);
 
   CdmHostFiles cdm_host_files;
   cdm_host_files.Initialize(cdm_path, cdm_host_file_paths);
@@ -48,34 +56,6 @@ void InitCdmHostVerification(
                             CdmHostFiles::Status::kStatusCount);
 }
 #endif  // BUILDFLAG(ENABLE_CDM_HOST_VERIFICATION)
-
-// These enums are reported to UMA so values should not be renumbered or reused.
-enum class LoadResult {
-  kLoadSuccess,
-  kFileMissing,        // The CDM does not exist.
-  kLoadFailed,         // CDM exists but LoadNativeLibrary() failed.
-  kEntryPointMissing,  // CDM loaded but somce required entry point missing.
-  // NOTE: Add new values only immediately above this line.
-  kLoadResultCount  // Boundary value for UMA_HISTOGRAM_ENUMERATION.
-};
-
-void ReportLoadResult(LoadResult load_result) {
-  DCHECK_LT(load_result, LoadResult::kLoadResultCount);
-  UMA_HISTOGRAM_ENUMERATION("Media.EME.CdmLoadResult", load_result,
-                            LoadResult::kLoadResultCount);
-}
-
-void ReportLoadErrorCode(const base::NativeLibraryLoadError* error) {
-// Only report load error code on Windows because that's the only platform that
-// has a numerical error value.
-#if defined(OS_WIN)
-  base::UmaHistogramSparse("Media.EME.CdmLoadErrorCode", error->code);
-#endif
-}
-
-void ReportLoadTime(const base::TimeDelta load_time) {
-  UMA_HISTOGRAM_TIMES("Media.EME.CdmLoadTime", load_time);
-}
 
 }  // namespace
 
@@ -118,6 +98,14 @@ CdmModule::CreateCdmFunc CdmModule::GetCreateCdmFunc() {
   return create_cdm_func_;
 }
 
+void CdmModule::SetDebuggerAttached(bool is_debugger_attached) {
+  is_debugger_attached_ = is_debugger_attached;
+}
+
+bool CdmModule::GetDebuggerAttached() const {
+  return is_debugger_attached_;
+}
+
 #if BUILDFLAG(ENABLE_CDM_HOST_VERIFICATION)
 bool CdmModule::Initialize(const base::FilePath& cdm_path,
                            std::vector<CdmHostFilePath> cdm_host_file_paths) {
@@ -137,14 +125,15 @@ bool CdmModule::Initialize(const base::FilePath& cdm_path) {
   if (!library_.is_valid()) {
     LOG(ERROR) << "CDM at " << cdm_path.value() << " could not be loaded.";
     LOG(ERROR) << "Error: " << library_.GetError()->ToString();
-    ReportLoadResult(base::PathExists(cdm_path) ? LoadResult::kLoadFailed
-                                                : LoadResult::kFileMissing);
-    ReportLoadErrorCode(library_.GetError());
+    ReportLoadResult(kUmaPrefix, base::PathExists(cdm_path)
+                                     ? CdmLoadResult::kLoadFailed
+                                     : CdmLoadResult::kFileMissing);
+    ReportLoadErrorCode(kUmaPrefix, library_.GetError());
     return false;
   }
 
   // Only report load time for success loads.
-  ReportLoadTime(load_time);
+  ReportLoadTime(kUmaPrefix, load_time);
 
   // Get function pointers.
   // TODO(xhwang): Define function names in macros to avoid typo errors.
@@ -165,35 +154,37 @@ bool CdmModule::Initialize(const base::FilePath& cdm_path) {
     create_cdm_func_ = nullptr;
     get_cdm_version_func_ = nullptr;
     library_.reset();
-    ReportLoadResult(LoadResult::kEntryPointMissing);
+    ReportLoadResult(kUmaPrefix, CdmLoadResult::kEntryPointMissing);
     return false;
   }
 
   // In case of crashes, provide CDM version to facilitate investigation.
   std::string cdm_version = get_cdm_version_func_();
   DVLOG(2) << __func__ << ": cdm_version = " << cdm_version;
+  TRACE_EVENT1("media", "CdmModule::Initialize", "cdm_version", cdm_version);
 
   static crash_reporter::CrashKeyString<32> cdm_version_key("cdm-version");
   cdm_version_key.Set(cdm_version);
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   // Load DXVA before sandbox lockdown to give CDM access to Output Protection
   // Manager (OPM).
-  LoadLibraryA("dxva2.dll");
-#endif  // defined(OS_WIN)
+  ::LoadLibraryA("dxva2.dll");
+#endif  // BUILDFLAG(IS_WIN)
 
 #if BUILDFLAG(ENABLE_CDM_HOST_VERIFICATION)
   if (base::FeatureList::IsEnabled(media::kCdmHostVerification))
     InitCdmHostVerification(library_.get(), cdm_path_, cdm_host_file_paths);
 #endif  // BUILDFLAG(ENABLE_CDM_HOST_VERIFICATION)
 
-  ReportLoadResult(LoadResult::kLoadSuccess);
+  ReportLoadResult(kUmaPrefix, CdmLoadResult::kLoadSuccess);
   return true;
 }
 
 void CdmModule::InitializeCdmModule() {
-  DCHECK(initialized_);
-  DCHECK(initialize_cdm_module_func_);
+  CHECK(initialized_);
+  CHECK(initialize_cdm_module_func_);
+  TRACE_EVENT0("media", "CdmModule::InitializeCdmModule");
   initialize_cdm_module_func_();
 }
 

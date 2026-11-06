@@ -1,25 +1,28 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/system/session/logout_confirmation_controller.h"
 
-#include "ash/public/cpp/ash_pref_names.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/session/test_session_controller_client.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
 #include "ash/test/test_window_builder.h"
 #include "ash/wm/desks/desks_util.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ref_counted.h"
+#include "base/scoped_observation.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/test_mock_time_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/tick_clock.h"
 #include "components/prefs/pref_service.h"
 #include "components/session_manager/session_manager_types.h"
 #include "components/user_manager/user_type.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/aura/window.h"
 #include "ui/views/widget/widget.h"
@@ -28,7 +31,19 @@ namespace ash {
 
 constexpr char kUserEmail[] = "user1@test.com";
 
+class MockLogoutConfirmationControllerObserver
+    : public LogoutConfirmationController::Observer {
+ public:
+  MOCK_METHOD(void, OnLogoutConfirmationStarted, (), (override));
+};
+
 class LogoutConfirmationControllerTest : public testing::Test {
+ public:
+  LogoutConfirmationControllerTest(const LogoutConfirmationControllerTest&) =
+      delete;
+  LogoutConfirmationControllerTest& operator=(
+      const LogoutConfirmationControllerTest&) = delete;
+
  protected:
   LogoutConfirmationControllerTest();
   ~LogoutConfirmationControllerTest() override;
@@ -38,21 +53,24 @@ class LogoutConfirmationControllerTest : public testing::Test {
   bool log_out_called_;
 
   scoped_refptr<base::TestMockTimeTaskRunner> runner_;
-  base::ThreadTaskRunnerHandle runner_handle_;
+  base::SingleThreadTaskRunner::CurrentDefaultHandle
+      runner_current_default_handle_;
 
   LogoutConfirmationController controller_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(LogoutConfirmationControllerTest);
+  testing::NiceMock<MockLogoutConfirmationControllerObserver> mock_observer_;
+  base::ScopedObservation<LogoutConfirmationController,
+                          LogoutConfirmationController::Observer>
+      scoped_observation_{&mock_observer_};
 };
 
 LogoutConfirmationControllerTest::LogoutConfirmationControllerTest()
     : log_out_called_(false),
       runner_(new base::TestMockTimeTaskRunner),
-      runner_handle_(runner_) {
+      runner_current_default_handle_(runner_) {
   controller_.SetClockForTesting(runner_->GetMockTickClock());
   controller_.SetLogoutCallbackForTesting(base::BindRepeating(
       &LogoutConfirmationControllerTest::LogOut, base::Unretained(this)));
+  scoped_observation_.Observe(&controller_);
 }
 
 LogoutConfirmationControllerTest::~LogoutConfirmationControllerTest() = default;
@@ -65,6 +83,7 @@ void LogoutConfirmationControllerTest::LogOut(
 // Verifies that the user is logged out immediately if logout confirmation with
 // a zero-length countdown is requested.
 TEST_F(LogoutConfirmationControllerTest, ZeroDuration) {
+  EXPECT_CALL(mock_observer_, OnLogoutConfirmationStarted()).Times(1);
   controller_.ConfirmLogout(
       runner_->NowTicks(),
       LogoutConfirmationController::Source::kShelfExitButton);
@@ -75,13 +94,14 @@ TEST_F(LogoutConfirmationControllerTest, ZeroDuration) {
 
 // Verifies that the user is logged out when the countdown expires.
 TEST_F(LogoutConfirmationControllerTest, DurationExpired) {
+  EXPECT_CALL(mock_observer_, OnLogoutConfirmationStarted()).Times(1);
   controller_.ConfirmLogout(
-      runner_->NowTicks() + base::TimeDelta::FromSeconds(10),
+      runner_->NowTicks() + base::Seconds(10),
       LogoutConfirmationController::Source::kShelfExitButton);
   EXPECT_FALSE(log_out_called_);
-  runner_->FastForwardBy(base::TimeDelta::FromSeconds(9));
+  runner_->FastForwardBy(base::Seconds(9));
   EXPECT_FALSE(log_out_called_);
-  runner_->FastForwardBy(base::TimeDelta::FromSeconds(2));
+  runner_->FastForwardBy(base::Seconds(2));
   EXPECT_TRUE(log_out_called_);
 }
 
@@ -89,18 +109,19 @@ TEST_F(LogoutConfirmationControllerTest, DurationExpired) {
 // request's countdown ends before the original request's, the user is logged
 // out when the new countdown expires.
 TEST_F(LogoutConfirmationControllerTest, DurationShortened) {
+  EXPECT_CALL(mock_observer_, OnLogoutConfirmationStarted()).Times(2);
   controller_.ConfirmLogout(
-      runner_->NowTicks() + base::TimeDelta::FromSeconds(30),
+      runner_->NowTicks() + base::Seconds(30),
       LogoutConfirmationController::Source::kShelfExitButton);
   EXPECT_FALSE(log_out_called_);
-  runner_->FastForwardBy(base::TimeDelta::FromSeconds(9));
+  runner_->FastForwardBy(base::Seconds(9));
   EXPECT_FALSE(log_out_called_);
   controller_.ConfirmLogout(
-      runner_->NowTicks() + base::TimeDelta::FromSeconds(10),
+      runner_->NowTicks() + base::Seconds(10),
       LogoutConfirmationController::Source::kShelfExitButton);
-  runner_->FastForwardBy(base::TimeDelta::FromSeconds(9));
+  runner_->FastForwardBy(base::Seconds(9));
   EXPECT_FALSE(log_out_called_);
-  runner_->FastForwardBy(base::TimeDelta::FromSeconds(2));
+  runner_->FastForwardBy(base::Seconds(2));
   EXPECT_TRUE(log_out_called_);
 }
 
@@ -108,24 +129,26 @@ TEST_F(LogoutConfirmationControllerTest, DurationShortened) {
 // request's countdown ends after the original request's, the user is logged
 // out when the original countdown expires.
 TEST_F(LogoutConfirmationControllerTest, DurationExtended) {
+  EXPECT_CALL(mock_observer_, OnLogoutConfirmationStarted()).Times(1);
   controller_.ConfirmLogout(
-      runner_->NowTicks() + base::TimeDelta::FromSeconds(10),
+      runner_->NowTicks() + base::Seconds(10),
       LogoutConfirmationController::Source::kShelfExitButton);
   EXPECT_FALSE(log_out_called_);
-  runner_->FastForwardBy(base::TimeDelta::FromSeconds(9));
+  runner_->FastForwardBy(base::Seconds(9));
   EXPECT_FALSE(log_out_called_);
   controller_.ConfirmLogout(
-      runner_->NowTicks() + base::TimeDelta::FromSeconds(10),
+      runner_->NowTicks() + base::Seconds(10),
       LogoutConfirmationController::Source::kShelfExitButton);
-  runner_->FastForwardBy(base::TimeDelta::FromSeconds(2));
+  runner_->FastForwardBy(base::Seconds(2));
   EXPECT_TRUE(log_out_called_);
 }
 
 // Verifies that when the screen is locked while the countdown is running, the
 // user is not logged out, even when the original countdown expires.
 TEST_F(LogoutConfirmationControllerTest, Lock) {
+  EXPECT_CALL(mock_observer_, OnLogoutConfirmationStarted()).Times(1);
   controller_.ConfirmLogout(
-      runner_->NowTicks() + base::TimeDelta::FromSeconds(10),
+      runner_->NowTicks() + base::Seconds(10),
       LogoutConfirmationController::Source::kShelfExitButton);
   EXPECT_FALSE(log_out_called_);
   controller_.OnLockStateChanged(true);
@@ -136,8 +159,9 @@ TEST_F(LogoutConfirmationControllerTest, Lock) {
 // Verifies that when the user confirms the logout request, the user is logged
 // out immediately.
 TEST_F(LogoutConfirmationControllerTest, UserAccepted) {
+  EXPECT_CALL(mock_observer_, OnLogoutConfirmationStarted()).Times(1);
   controller_.ConfirmLogout(
-      runner_->NowTicks() + base::TimeDelta::FromSeconds(10),
+      runner_->NowTicks() + base::Seconds(10),
       LogoutConfirmationController::Source::kShelfExitButton);
   EXPECT_FALSE(log_out_called_);
   controller_.OnLogoutConfirmed();
@@ -147,8 +171,9 @@ TEST_F(LogoutConfirmationControllerTest, UserAccepted) {
 // Verifies that when the user denies the logout request, the user is not logged
 // out, even when the original countdown expires.
 TEST_F(LogoutConfirmationControllerTest, UserDenied) {
+  EXPECT_CALL(mock_observer_, OnLogoutConfirmationStarted()).Times(1);
   controller_.ConfirmLogout(
-      runner_->NowTicks() + base::TimeDelta::FromSeconds(10),
+      runner_->NowTicks() + base::Seconds(10),
       LogoutConfirmationController::Source::kShelfExitButton);
   EXPECT_FALSE(log_out_called_);
   controller_.OnDialogClosed();
@@ -160,8 +185,9 @@ TEST_F(LogoutConfirmationControllerTest, UserDenied) {
 // request is handled correctly and the user is logged out when the countdown
 // expires.
 TEST_F(LogoutConfirmationControllerTest, DurationExpiredAfterDeniedRequest) {
+  EXPECT_CALL(mock_observer_, OnLogoutConfirmationStarted()).Times(2);
   controller_.ConfirmLogout(
-      runner_->NowTicks() + base::TimeDelta::FromSeconds(10),
+      runner_->NowTicks() + base::Seconds(10),
       LogoutConfirmationController::Source::kShelfExitButton);
   EXPECT_FALSE(log_out_called_);
   controller_.OnDialogClosed();
@@ -169,26 +195,29 @@ TEST_F(LogoutConfirmationControllerTest, DurationExpiredAfterDeniedRequest) {
   EXPECT_FALSE(log_out_called_);
 
   controller_.ConfirmLogout(
-      runner_->NowTicks() + base::TimeDelta::FromSeconds(10),
+      runner_->NowTicks() + base::Seconds(10),
       LogoutConfirmationController::Source::kShelfExitButton);
   EXPECT_FALSE(log_out_called_);
-  runner_->FastForwardBy(base::TimeDelta::FromSeconds(9));
+  runner_->FastForwardBy(base::Seconds(9));
   EXPECT_FALSE(log_out_called_);
-  runner_->FastForwardBy(base::TimeDelta::FromSeconds(2));
+  runner_->FastForwardBy(base::Seconds(2));
   EXPECT_TRUE(log_out_called_);
 }
 
 class LastWindowClosedTest : public NoSessionAshTestBase {
  public:
   LastWindowClosedTest() = default;
+
+  LastWindowClosedTest(const LastWindowClosedTest&) = delete;
+  LastWindowClosedTest& operator=(const LastWindowClosedTest&) = delete;
+
   ~LastWindowClosedTest() override = default;
 
   // Simulate a managed guest session (non-demo session) login.
   void StartManagedGuestSession() {
-    TestSessionControllerClient* session = GetSessionControllerClient();
-    session->Reset();
-    session->AddUserSession(kUserEmail, user_manager::USER_TYPE_PUBLIC_ACCOUNT);
-    session->SetSessionState(session_manager::SessionState::ACTIVE);
+    ClearLogin();
+    SimulateUserLogin({.account_id = AccountId::FromUserEmail(kUserEmail),
+                       .user_type = user_manager::UserType::kPublicAccount});
   }
 
   // Simulate a demo session signing in.
@@ -204,9 +233,6 @@ class LastWindowClosedTest : public NoSessionAshTestBase {
     return Shell::Get()->session_controller()->GetUserPrefServiceForUser(
         AccountId::FromUserEmail(kUserEmail));
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(LastWindowClosedTest);
 };
 
 TEST_F(LastWindowClosedTest, RegularSession) {
@@ -216,7 +242,7 @@ TEST_F(LastWindowClosedTest, RegularSession) {
   EXPECT_FALSE(controller->dialog_for_testing());
 
   // Dialog is not visible after login.
-  CreateUserSessions(1);
+  SimulateUserLogin(kRegularUserLoginInfo);
   EXPECT_FALSE(controller->dialog_for_testing());
 
   // Creating and closing a window does not show the dialog because this is not
@@ -253,8 +279,10 @@ TEST_F(LastWindowClosedTest, ManagedGuestSession) {
   EXPECT_FALSE(controller->dialog_for_testing());
 
   // Opening windows does not show the dialog.
-  std::unique_ptr<views::Widget> widget1 = CreateTestWidget();
-  std::unique_ptr<views::Widget> widget2 = CreateTestWidget();
+  std::unique_ptr<views::Widget> widget1 =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
+  std::unique_ptr<views::Widget> widget2 =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   EXPECT_FALSE(controller->dialog_for_testing());
 
   // Closing the last window shows the dialog.
@@ -275,8 +303,10 @@ TEST_F(LastWindowClosedTest, SuggestLogoutAfterClosingLastWindowPolicy) {
   EXPECT_FALSE(controller->dialog_for_testing());
 
   // Opening windows does not show the dialog.
-  std::unique_ptr<views::Widget> widget1 = CreateTestWidget();
-  std::unique_ptr<views::Widget> widget2 = CreateTestWidget();
+  std::unique_ptr<views::Widget> widget1 =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
+  std::unique_ptr<views::Widget> widget2 =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   EXPECT_FALSE(controller->dialog_for_testing());
 
   // Closing the last window does not show the dialog because the
@@ -318,7 +348,8 @@ TEST_F(LastWindowClosedTest, AlwaysOnTop) {
   StartManagedGuestSession();
 
   // The new widget starts in the default window container.
-  std::unique_ptr<views::Widget> widget = CreateTestWidget();
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
 
   // Moving the widget to the always-on-top container does not trigger the
   // dialog because the window didn't close.
@@ -336,8 +367,10 @@ TEST_F(LastWindowClosedTest, MultipleContainers) {
   StartManagedGuestSession();
 
   // Create two windows in different containers.
-  std::unique_ptr<views::Widget> normal_widget = CreateTestWidget();
-  std::unique_ptr<views::Widget> always_on_top_widget = CreateTestWidget();
+  std::unique_ptr<views::Widget> normal_widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
+  std::unique_ptr<views::Widget> always_on_top_widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   always_on_top_widget->SetZOrderLevel(ui::ZOrderLevel::kFloatingWindow);
 
   // Closing the last window shows the dialog.

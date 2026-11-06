@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,20 +6,19 @@
 
 #include <string>
 
+#include "ash/public/cpp/message_center/oobe_notification_constants.h"
 #include "ash/public/cpp/notification_utils.h"
+#include "base/check_is_test.h"
 #include "base/location.h"
-#include "base/task/post_task.h"
-#include "chrome/browser/notifications/notification_display_service.h"
-#include "chrome/browser/notifications/system_notification_helper.h"
 #include "chrome/grit/generated_resources.h"
-#include "chromeos/dbus/dbus_thread_manager.h"
+#include "chromeos/ash/components/dbus/gnubby/gnubby_client.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/message_center/message_center.h"
 #include "ui/message_center/public/cpp/notification.h"
 #include "ui/message_center/public/cpp/notification_delegate.h"
 
 namespace {
-constexpr base::TimeDelta kNotificationTimeout =
-    base::TimeDelta::FromSeconds(2);
+constexpr base::TimeDelta kNotificationTimeout = base::Seconds(2);
 }  // namespace
 
 namespace ash {
@@ -27,19 +26,28 @@ namespace ash {
 GnubbyNotification::GnubbyNotification()
     : update_dismiss_notification_timer_(new base::OneShotTimer()),
       weak_ptr_factory_(this) {
-  DCHECK(DBusThreadManager::Get()->GetGnubbyClient());
-  DBusThreadManager::Get()->GetGnubbyClient()->AddObserver(this);
+  CHECK(GnubbyClient::Get(), base::NotFatalUntil::M160);
+  GnubbyClient::Get()->AddObserver(this);
 }
+
 GnubbyNotification::~GnubbyNotification() {
-  DCHECK(DBusThreadManager::Get()->GetGnubbyClient());
-  DBusThreadManager::Get()->GetGnubbyClient()->RemoveObserver(this);
+  CHECK(GnubbyClient::Get(), base::NotFatalUntil::M160);
+  if (message_center::MessageCenter::Get()) {
+    DismissNotification();
+  } else {
+    // TODO(crbug.com/454766826): Fix shutdown order so this isn't needed.
+    CHECK_IS_TEST();
+  }
+  GnubbyClient::Get()->RemoveObserver(this);
 }
 
 void GnubbyNotification::PromptUserAuth() {
   ShowNotification();
 }
 
-void GnubbyNotification::CreateNotification() {
+void GnubbyNotification::ShowNotification() {
+  update_dismiss_notification_timer_->Stop();
+
   const std::u16string title =
       l10n_util::GetStringUTF16(IDS_GNUBBY_NOTIFICATION_TITLE);
   const std::u16string message =
@@ -47,37 +55,26 @@ void GnubbyNotification::CreateNotification() {
   const message_center::SystemNotificationWarningLevel colorType =
       message_center::SystemNotificationWarningLevel::NORMAL;
 
-  GnubbyNotification::notification_prompt_ = ash::CreateSystemNotification(
-      message_center::NOTIFICATION_TYPE_SIMPLE,
-      GnubbyNotification::kNotificationID, title, message, std::u16string(),
-      GURL(), message_center::NotifierId(),
+  auto notification = ash::CreateSystemNotificationPtr(
+      message_center::NOTIFICATION_TYPE_SIMPLE, kOOBEGnubbyNotificationId,
+      title, message, std::u16string(), message_center::NotifierId(),
       message_center::RichNotificationData(),
-      new message_center::HandleNotificationClickDelegate(
+      base::MakeRefCounted<message_center::HandleNotificationClickDelegate>(
           base::BindRepeating(&GnubbyNotification::DismissNotification,
                               weak_ptr_factory_.GetWeakPtr())),
-      gfx::VectorIcon(), colorType);
-}
+      gfx::VectorIcon::EmptyIcon(), colorType);
+  message_center::MessageCenter::Get()->AddNotification(
+      std::move(notification));
 
-void GnubbyNotification::ShowNotification() {
-  GnubbyNotification::update_dismiss_notification_timer_->Stop();
-
-  if (GnubbyNotification::notificationActive == false) {
-    GnubbyNotification::notification_prompt_.reset();
-    CreateNotification();
-  }
-  SystemNotificationHelper::GetInstance()->Display(
-      *GnubbyNotification::notification_prompt_);
-  GnubbyNotification::update_dismiss_notification_timer_->Start(
+  update_dismiss_notification_timer_->Start(
       FROM_HERE, kNotificationTimeout,
       base::BindOnce(&GnubbyNotification::DismissNotification,
-                     base::Unretained(this)));
-  GnubbyNotification::notificationActive = true;
+                     weak_ptr_factory_.GetWeakPtr()));
 }
 
 void GnubbyNotification::DismissNotification() {
-  GnubbyNotification::notificationActive = false;
-  SystemNotificationHelper::GetInstance()->Close(
-      GnubbyNotification::kNotificationID);
+  message_center::MessageCenter::Get()->RemoveNotification(
+      kOOBEGnubbyNotificationId, false /* by_user */);
 }
 
 }  // namespace ash

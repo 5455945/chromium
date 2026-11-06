@@ -1,8 +1,10 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/metrics/public/cpp/ukm_source_id.h"
+
+#include <array>
 
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -10,7 +12,7 @@ namespace ukm {
 
 TEST(UkmSourceIdTest, AssignSourceIds) {
   const size_t numIds = 5;
-  SourceId ids[numIds] = {};
+  std::array<SourceId, numIds> ids = {};
 
   for (size_t i = 0; i < numIds; i++) {
     ids[i] = AssignNewSourceId();
@@ -24,7 +26,7 @@ TEST(UkmSourceIdTest, AssignSourceIds) {
 
 TEST(UkmSourceIdTest, ConvertToNavigationType) {
   const size_t numIds = 5;
-  SourceId ids[numIds] = {};
+  std::array<SourceId, numIds> ids = {};
 
   for (size_t i = 0; i < numIds; i++) {
     ids[i] = ConvertToSourceId(i, SourceIdType::NAVIGATION_ID);
@@ -45,7 +47,9 @@ TEST(UkmSourceIdTest, GetSourceIdType) {
   for (int64_t type_index = 0; type_index <= num_types; type_index++) {
     const SourceIdType expected_type = SourceIdType(type_index);
     if (expected_type == SourceIdType::WEBAPK_ID ||
-        expected_type == SourceIdType::PAYMENT_APP_ID) {
+        expected_type == SourceIdType::PAYMENT_APP_ID ||
+        expected_type == SourceIdType::WEB_IDENTITY_ID ||
+        expected_type == SourceIdType::IWA_BUNDLE_ID) {
       // See comment in ConvertToSourceId regarding these special cases.
       continue;
     }

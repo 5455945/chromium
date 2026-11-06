@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 
 #include <limits>
 
-#include "base/cxx17_backports.h"
+#include "base/compiler_specific.h"
 #include "base/numerics/safe_conversions.h"
 #include "cc/paint/paint_flags.h"
 #include "third_party/skia/include/core/SkRect.h"
@@ -17,9 +17,10 @@
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_conversions.h"
+#include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/gfx/image/image_skia_operations.h"
+#include "ui/gfx/image/image_skia_rep.h"
 #include "ui/gfx/scoped_canvas.h"
-#include "ui/gfx/skia_util.h"
 
 namespace gfx {
 
@@ -52,9 +53,9 @@ void Fill(Canvas* c,
 }  // namespace
 
 NineImagePainter::NineImagePainter(const std::vector<ImageSkia>& images) {
-  DCHECK_EQ(base::size(images_), images.size());
-  for (size_t i = 0; i < base::size(images_); ++i)
-    images_[i] = images[i];
+  DCHECK_EQ(std::size(images_), images.size());
+  base::span dest_span(images_);
+  dest_span.copy_from(base::span(images).first(dest_span.size()));
 }
 
 NineImagePainter::NineImagePainter(const ImageSkia& image,
@@ -63,8 +64,9 @@ NineImagePainter::NineImagePainter(const ImageSkia& image,
   GetSubsetRegions(image, insets, &regions);
   DCHECK_EQ(9u, regions.size());
 
-  for (size_t i = 0; i < 9; ++i)
+  for (size_t i = 0; i < images_.size(); ++i) {
     images_[i] = ImageSkiaOperations::ExtractSubset(image, regions[i]);
+  }
 }
 
 NineImagePainter::~NineImagePainter() {
@@ -111,9 +113,10 @@ void NineImagePainter::Paint(Canvas* canvas,
   // is at (0,0), we need to translate the canvas to the mapped origin.
   canvas->Translate(gfx::Vector2d(left_in_pixels, top_in_pixels));
 
-  ImageSkiaRep image_reps[9];
-  static_assert(base::size(image_reps) == std::extent<decltype(images_)>(), "");
-  for (size_t i = 0; i < base::size(image_reps); ++i) {
+  std::array<ImageSkiaRep, 9> image_reps;
+  static_assert(std::size(image_reps) == std::tuple_size_v<decltype(images_)>,
+                "");
+  for (size_t i = 0; i < std::size(image_reps); ++i) {
     image_reps[i] = images_[i].GetRepresentation(scale);
     DCHECK(image_reps[i].is_null() || image_reps[i].scale() == scale);
   }
@@ -156,7 +159,7 @@ void NineImagePainter::Paint(Canvas* canvas,
   int i4h = std::max(height_in_pixels - i4y - std::min({i6h, i7h, i8h}), 0);
 
   cc::PaintFlags flags;
-  flags.setAlpha(alpha);
+  flags.setAlphaf(alpha / 255.0f);
 
   Fill(canvas, image_reps[4], i4x, i4y, i4w, i4h, flags);
   Fill(canvas, image_reps[0], 0, 0, i0w, i0h, flags);
@@ -181,10 +184,18 @@ void NineImagePainter::GetSubsetRegions(const ImageSkia& image,
 
   std::vector<Rect> result(9);
 
-  const int x[] = {
-      0, insets.left(), image.width() - insets.right(), image.width()};
-  const int y[] = {
-      0, insets.top(), image.height() - insets.bottom(), image.height()};
+  const auto x = std::to_array<int>({
+      0,
+      insets.left(),
+      image.width() - insets.right(),
+      image.width(),
+  });
+  const auto y = std::to_array<int>({
+      0,
+      insets.top(),
+      image.height() - insets.bottom(),
+      image.height(),
+  });
 
   for (size_t j = 0; j < 3; ++j) {
     for (size_t i = 0; i < 3; ++i) {

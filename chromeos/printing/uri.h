@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,12 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include "chromeos/chromeos_export.h"
+#include "base/component_export.h"
+#include "base/containers/flat_map.h"
 
 namespace chromeos {
 
@@ -193,7 +195,8 @@ namespace chromeos {
 //   Query = [ pairs [ "&" ] ]
 //   pairs = pair [ "&" pairs ]
 //   pair = name [ "=" value ]
-// The parser replaces all occurrences of "+" in Name and Value by " " (space).
+// All " " (spaces) in parsed Name and Value can be encoded as "+". However, in
+// the normalized form all " " (spaces) are always encoded as %20.
 // Name cannot be empty. When Value is empty, the separator "=" is omitted in
 // the normalized form.
 // Name and Value are strings with the following properties:
@@ -208,7 +211,7 @@ namespace chromeos {
 // Case-sensitive      : YES
 //
 
-class CHROMEOS_EXPORT Uri {
+class COMPONENT_EXPORT(CHROMEOS_PRINTING) Uri {
  public:
   enum class ParserStatus {
     kNoErrors,
@@ -263,7 +266,7 @@ class CHROMEOS_EXPORT Uri {
 
   // Constructor, it tries to parse |uri|.
   // Leading and trailing whitespaces (space, \t, \n, \r, \f, \v) are ignored.
-  explicit Uri(const std::string& uri);
+  explicit Uri(std::string_view uri);
 
   Uri(const Uri&);
   Uri(Uri&&);
@@ -319,6 +322,8 @@ class CHROMEOS_EXPORT Uri {
   std::vector<std::string> GetPath() const;
   std::vector<std::pair<std::string, std::string>> GetQuery() const;
   std::string GetFragment() const;
+  // In the returned flat_map, vectors are never empty.
+  base::flat_map<std::string, std::vector<std::string>> GetQueryAsMap() const;
 
   // These methods are similar to aforementioned Get* methods. The only
   // difference is that all strings are %-escaped according to the

@@ -1,64 +1,52 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "testing/gtest/include/gtest/gtest.h"
+#include "chrome/updater/external_constants_builder.h"
 
-#include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
-#include "base/logging.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/time/time.h"
+#include "base/values.h"
+#include "build/build_config.h"
 #include "chrome/updater/constants.h"
 #include "chrome/updater/external_constants.h"
-#include "chrome/updater/external_constants_builder.h"
 #include "chrome/updater/external_constants_default.h"
 #include "chrome/updater/external_constants_override.h"
+#include "chrome/updater/test/test_scope.h"
+#include "chrome/updater/test/unit_test_util.h"
 #include "chrome/updater/updater_branding.h"
-#include "chrome/updater/updater_scope.h"
-#include "chrome/updater/util.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "chrome/updater/util/util.h"
+#include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
 namespace updater {
-namespace {
-
-void DeleteOverridesFile() {
-  const absl::optional<base::FilePath> target =
-      GetBaseDirectory(GetUpdaterScope());
-  if (!target) {
-    LOG(ERROR) << "Could not get base directory to clean out overrides file.";
-    return;
-  }
-  if (!base::DeleteFile(target->AppendASCII(kDevOverrideFileName))) {
-    // Note: base::DeleteFile returns `true` if there is no such file, which
-    // is what we want; "file already doesn't exist" is not an error here.
-    LOG(ERROR) << "Could not delete override file.";
-  }
-}
-
-}  // namespace
 
 class ExternalConstantsBuilderTests : public ::testing::Test {
  protected:
-  void SetUp() override;
-  void TearDown() override;
+  void SetUp() override {
+    EXPECT_TRUE(
+        test::DeleteFileAndEmptyParentDirectories(overrides_file_path_));
+  }
+  void TearDown() override {
+    EXPECT_TRUE(
+        test::DeleteFileAndEmptyParentDirectories(overrides_file_path_));
+  }
+
+ private:
+  // This test runs non-elevated.
+  const std::optional<base::FilePath> overrides_file_path_ =
+      GetOverrideFilePath(UpdaterScope::kUser);
 };
-
-void ExternalConstantsBuilderTests::SetUp() {
-  DeleteOverridesFile();
-}
-
-void ExternalConstantsBuilderTests::TearDown() {
-  DeleteOverridesFile();
-}
 
 TEST_F(ExternalConstantsBuilderTests, TestOverridingNothing) {
   EXPECT_TRUE(ExternalConstantsBuilder().Overwrite());
 
-  std::unique_ptr<ExternalConstantsOverrider> verifier =
+  scoped_refptr<ExternalConstantsOverrider> verifier =
       ExternalConstantsOverrider::FromDefaultJSONFile(
           CreateDefaultExternalConstants());
 
@@ -69,18 +57,30 @@ TEST_F(ExternalConstantsBuilderTests, TestOverridingNothing) {
   EXPECT_EQ(urls[0], GURL(UPDATE_CHECK_URL));
 
   EXPECT_EQ(verifier->InitialDelay(), kInitialDelay);
-  EXPECT_EQ(verifier->ServerKeepAliveSeconds(), kServerKeepAliveSeconds);
+  EXPECT_EQ(verifier->ServerKeepAliveTime(), kServerKeepAliveTime);
+  EXPECT_EQ(verifier->DictPolicies().size(), 0U);
 }
 
 TEST_F(ExternalConstantsBuilderTests, TestOverridingEverything) {
+  base::DictValue dict_policies;
+  dict_policies.Set("a", 1);
+  dict_policies.Set("b", 2);
+
   ExternalConstantsBuilder builder;
-  builder.SetUpdateURL(std::vector<std::string>{"https://www.example.com"})
+  builder.SetUpdateURL(std::vector<std::string>{"https://localhost/1/www"})
+      .SetCrashUploadURL("https://localhost/1/crash")
+      .SetAppLogoURL("https://localhost/1/applogo/")
       .SetUseCUP(false)
-      .SetInitialDelay(123)
-      .SetServerKeepAliveSeconds(2);
+      .SetInitialDelay(base::Seconds(123))
+      .SetServerKeepAliveTime(base::Seconds(2))
+      .SetDictPolicies(dict_policies)
+      .SetOverinstallTimeout(base::Seconds(3))
+      .SetIdleCheckPeriod(base::Seconds(4))
+      .SetMachineManaged(std::make_optional(true))
+      .SetCecaConnectionTimeout(base::Seconds(7));
   EXPECT_TRUE(builder.Overwrite());
 
-  std::unique_ptr<ExternalConstantsOverrider> verifier =
+  scoped_refptr<ExternalConstantsOverrider> verifier =
       ExternalConstantsOverrider::FromDefaultJSONFile(
           CreateDefaultExternalConstants());
 
@@ -88,20 +88,28 @@ TEST_F(ExternalConstantsBuilderTests, TestOverridingEverything) {
 
   std::vector<GURL> urls = verifier->UpdateURL();
   ASSERT_EQ(urls.size(), 1ul);
-  EXPECT_EQ(urls[0], GURL("https://www.example.com"));
+  EXPECT_EQ(urls[0], GURL("https://localhost/1/www"));
 
-  EXPECT_EQ(verifier->InitialDelay(), 123);
-  EXPECT_EQ(verifier->ServerKeepAliveSeconds(), 2);
+  EXPECT_EQ(verifier->CrashUploadURL(), GURL("https://localhost/1/crash"));
+  EXPECT_EQ(verifier->AppLogoURL(), GURL("https://localhost/1/applogo/"));
+  EXPECT_EQ(verifier->InitialDelay(), base::Seconds(123));
+  EXPECT_EQ(verifier->ServerKeepAliveTime(), base::Seconds(2));
+  EXPECT_EQ(verifier->DictPolicies().size(), 2U);
+  EXPECT_EQ(verifier->OverinstallTimeout(), base::Seconds(3));
+  EXPECT_EQ(verifier->IdleCheckPeriod(), base::Seconds(4));
+  EXPECT_TRUE(verifier->IsMachineManaged().has_value());
+  EXPECT_TRUE(verifier->IsMachineManaged().value());
+  EXPECT_EQ(verifier->CecaConnectionTimeout(), base::Seconds(7));
 }
 
 TEST_F(ExternalConstantsBuilderTests, TestPartialOverrideWithMultipleURLs) {
   ExternalConstantsBuilder builder;
   EXPECT_TRUE(builder
                   .SetUpdateURL(std::vector<std::string>{
-                      "https://www.google.com", "https://www.example.com"})
+                      "https://localhost/update", "https://localhost/update2"})
                   .Overwrite());
 
-  std::unique_ptr<ExternalConstantsOverrider> verifier =
+  scoped_refptr<ExternalConstantsOverrider> verifier =
       ExternalConstantsOverrider::FromDefaultJSONFile(
           CreateDefaultExternalConstants());
 
@@ -109,27 +117,39 @@ TEST_F(ExternalConstantsBuilderTests, TestPartialOverrideWithMultipleURLs) {
 
   std::vector<GURL> urls = verifier->UpdateURL();
   ASSERT_EQ(urls.size(), 2ul);
-  EXPECT_EQ(urls[0], GURL("https://www.google.com"));
-  EXPECT_EQ(urls[1], GURL("https://www.example.com"));
+  EXPECT_EQ(urls[0], GURL("https://localhost/update"));
+  EXPECT_EQ(urls[1], GURL("https://localhost/update2"));
 
+  EXPECT_EQ(verifier->CrashUploadURL(), GURL(CRASH_UPLOAD_URL));
+  EXPECT_EQ(verifier->AppLogoURL(), GURL(APP_LOGO_URL));
   EXPECT_EQ(verifier->InitialDelay(), kInitialDelay);
-  EXPECT_EQ(verifier->ServerKeepAliveSeconds(), kServerKeepAliveSeconds);
+  EXPECT_EQ(verifier->ServerKeepAliveTime(), kServerKeepAliveTime);
+  EXPECT_EQ(verifier->DictPolicies().size(), 0U);
 }
 
 TEST_F(ExternalConstantsBuilderTests, TestClearedEverything) {
   ExternalConstantsBuilder builder;
   EXPECT_TRUE(builder
                   .SetUpdateURL(std::vector<std::string>{
-                      "https://www.google.com", "https://www.example.com"})
+                      "https://localhost/1/localhost/update", "https://www"})
+                  .SetCrashUploadURL("https://localhost/1/crash")
+                  .SetAppLogoURL("https://localhost/1/applogo/")
                   .SetUseCUP(false)
-                  .SetInitialDelay(123.4)
+                  .SetInitialDelay(base::Seconds(123.4))
                   .ClearUpdateURL()
+                  .ClearCrashUploadURL()
+                  .ClearAppLogoURL()
                   .ClearUseCUP()
                   .ClearInitialDelay()
                   .ClearServerKeepAliveSeconds()
+                  .ClearDictPolicies()
+                  .ClearOverinstallTimeout()
+                  .ClearIdleCheckPeriod()
+                  .ClearMachineManaged()
+                  .ClearCecaConnectionTimeout()
                   .Overwrite());
 
-  std::unique_ptr<ExternalConstantsOverrider> verifier =
+  scoped_refptr<ExternalConstantsOverrider> verifier =
       ExternalConstantsOverrider::FromDefaultJSONFile(
           CreateDefaultExternalConstants());
   EXPECT_TRUE(verifier->UseCUP());
@@ -138,48 +158,80 @@ TEST_F(ExternalConstantsBuilderTests, TestClearedEverything) {
   ASSERT_EQ(urls.size(), 1ul);
   EXPECT_EQ(urls[0], GURL(UPDATE_CHECK_URL));
 
+  EXPECT_EQ(verifier->CrashUploadURL(), GURL(CRASH_UPLOAD_URL));
+  EXPECT_EQ(verifier->AppLogoURL(), GURL(APP_LOGO_URL));
   EXPECT_EQ(verifier->InitialDelay(), kInitialDelay);
-  EXPECT_EQ(verifier->ServerKeepAliveSeconds(), kServerKeepAliveSeconds);
+  EXPECT_EQ(verifier->ServerKeepAliveTime(), kServerKeepAliveTime);
+  EXPECT_EQ(verifier->DictPolicies().size(), 0U);
+  EXPECT_FALSE(verifier->IsMachineManaged().has_value());
+  EXPECT_EQ(verifier->CecaConnectionTimeout(), kCecaConnectionTimeout);
 }
 
 TEST_F(ExternalConstantsBuilderTests, TestOverSet) {
+  base::DictValue dict_policies;
+  dict_policies.Set("a", 1);
+
   EXPECT_TRUE(
       ExternalConstantsBuilder()
-          .SetUpdateURL(std::vector<std::string>{"https://www.google.com"})
+          .SetUpdateURL(std::vector<std::string>{"https://localhost/update"})
+          .SetCrashUploadURL("https://localhost/crash")
+          .SetAppLogoURL("https://localhost/logo/")
           .SetUseCUP(true)
-          .SetInitialDelay(123.4)
-          .SetServerKeepAliveSeconds(2)
-          .SetUpdateURL(std::vector<std::string>{"https://www.example.com"})
+          .SetInitialDelay(base::Seconds(123.4))
+          .SetServerKeepAliveTime(base::Seconds(2))
+          .SetMachineManaged(std::make_optional(true))
+          .SetDictPolicies(dict_policies)
+          .SetUpdateURL(std::vector<std::string>{"https://localhost/1/www"})
+          .SetCrashUploadURL("https://localhost/1/crash")
+          .SetAppLogoURL("https://localhost/1/applogo/")
           .SetUseCUP(false)
-          .SetInitialDelay(937.6)
-          .SetServerKeepAliveSeconds(3)
+          .SetInitialDelay(base::Seconds(937.6))
+          .SetServerKeepAliveTime(base::Seconds(3))
+          .SetMachineManaged(std::make_optional(false))
+          .SetCecaConnectionTimeout(base::Seconds(38))
           .Overwrite());
 
   // Only the second set of values should be observed.
-  std::unique_ptr<ExternalConstantsOverrider> verifier =
+  scoped_refptr<ExternalConstantsOverrider> verifier =
       ExternalConstantsOverrider::FromDefaultJSONFile(
           CreateDefaultExternalConstants());
   EXPECT_FALSE(verifier->UseCUP());
 
   std::vector<GURL> urls = verifier->UpdateURL();
   ASSERT_EQ(urls.size(), 1ul);
-  EXPECT_EQ(urls[0], GURL("https://www.example.com"));
+  EXPECT_EQ(urls[0], GURL("https://localhost/1/www"));
 
-  EXPECT_EQ(verifier->InitialDelay(), 937.6);
-  EXPECT_EQ(verifier->ServerKeepAliveSeconds(), 3);
+  EXPECT_EQ(verifier->CrashUploadURL(), GURL("https://localhost/1/crash"));
+  EXPECT_EQ(verifier->AppLogoURL(), GURL("https://localhost/1/applogo/"));
+  EXPECT_EQ(verifier->InitialDelay(), base::Seconds(937.6));
+  EXPECT_EQ(verifier->ServerKeepAliveTime(), base::Seconds(3));
+  EXPECT_EQ(verifier->DictPolicies().size(), 1U);
+  EXPECT_TRUE(verifier->IsMachineManaged().has_value());
+  EXPECT_FALSE(verifier->IsMachineManaged().value());
+  EXPECT_EQ(verifier->CecaConnectionTimeout(), base::Seconds(38));
 }
 
 TEST_F(ExternalConstantsBuilderTests, TestReuseBuilder) {
   ExternalConstantsBuilder builder;
+
+  base::DictValue dict_policies;
+  dict_policies.Set("a", 1);
+  dict_policies.Set("b", 2);
+
   EXPECT_TRUE(
-      builder.SetUpdateURL(std::vector<std::string>{"https://www.google.com"})
+      builder.SetUpdateURL(std::vector<std::string>{"https://localhost/update"})
+          .SetCrashUploadURL("https://localhost/crash")
+          .SetAppLogoURL("https://localhost/logo/")
           .SetUseCUP(false)
-          .SetInitialDelay(123.4)
-          .SetServerKeepAliveSeconds(3)
-          .SetUpdateURL(std::vector<std::string>{"https://www.example.com"})
+          .SetInitialDelay(base::Seconds(123.4))
+          .SetServerKeepAliveTime(base::Seconds(3))
+          .SetUpdateURL(std::vector<std::string>{"https://localhost/1/www"})
+          .SetDictPolicies(dict_policies)
+          .SetMachineManaged(std::make_optional(true))
+          .SetCecaConnectionTimeout(base::Seconds(5))
           .Overwrite());
 
-  std::unique_ptr<ExternalConstantsOverrider> verifier =
+  scoped_refptr<ExternalConstantsOverrider> verifier =
       ExternalConstantsOverrider::FromDefaultJSONFile(
           CreateDefaultExternalConstants());
 
@@ -187,19 +239,33 @@ TEST_F(ExternalConstantsBuilderTests, TestReuseBuilder) {
 
   std::vector<GURL> urls = verifier->UpdateURL();
   ASSERT_EQ(urls.size(), 1ul);
-  EXPECT_EQ(urls[0], GURL("https://www.example.com"));
+  EXPECT_EQ(urls[0], GURL("https://localhost/1/www"));
 
-  EXPECT_EQ(verifier->InitialDelay(), 123.4);
-  EXPECT_EQ(verifier->ServerKeepAliveSeconds(), 3);
+  EXPECT_EQ(verifier->CrashUploadURL(), GURL("https://localhost/crash"));
+  EXPECT_EQ(verifier->AppLogoURL(), GURL("https://localhost/logo/"));
+  EXPECT_EQ(verifier->InitialDelay(), base::Seconds(123.4));
+  EXPECT_EQ(verifier->ServerKeepAliveTime(), base::Seconds(3));
+  EXPECT_EQ(verifier->DictPolicies().size(), 2U);
+  EXPECT_TRUE(verifier->IsMachineManaged().has_value());
+  EXPECT_TRUE(verifier->IsMachineManaged().value());
+  EXPECT_EQ(verifier->CecaConnectionTimeout(), base::Seconds(5));
+
+  base::DictValue dict_policies2;
+  dict_policies2.Set("b", 2);
 
   // But now we can use the builder again:
-  EXPECT_TRUE(builder.SetInitialDelay(92.3)
-                  .SetServerKeepAliveSeconds(4)
+  EXPECT_TRUE(builder.SetInitialDelay(base::Seconds(92.3))
+                  .SetServerKeepAliveTime(base::Seconds(4))
                   .ClearUpdateURL()
+                  .ClearCrashUploadURL()
+                  .ClearAppLogoURL()
+                  .SetDictPolicies(dict_policies2)
+                  .ClearMachineManaged()
+                  .ClearCecaConnectionTimeout()
                   .Overwrite());
 
   // We need a new overrider to verify because it only loads once.
-  std::unique_ptr<ExternalConstantsOverrider> verifier2 =
+  scoped_refptr<ExternalConstantsOverrider> verifier2 =
       ExternalConstantsOverrider::FromDefaultJSONFile(
           CreateDefaultExternalConstants());
 
@@ -209,9 +275,85 @@ TEST_F(ExternalConstantsBuilderTests, TestReuseBuilder) {
   ASSERT_EQ(urls2.size(), 1ul);
   EXPECT_EQ(urls2[0], GURL(UPDATE_CHECK_URL));  // Cleared; should be default.
 
+  EXPECT_EQ(verifier2->CrashUploadURL(), GURL(CRASH_UPLOAD_URL));
+  EXPECT_EQ(verifier2->AppLogoURL(), GURL(APP_LOGO_URL));
   EXPECT_EQ(verifier2->InitialDelay(),
-            92.3);  // Updated; update should be seen.
-  EXPECT_EQ(verifier2->ServerKeepAliveSeconds(), 4);
+            base::Seconds(92.3));  // Updated; update should be seen.
+  EXPECT_EQ(verifier2->ServerKeepAliveTime(), base::Seconds(4));
+  EXPECT_EQ(verifier2->DictPolicies().size(), 1U);
+  EXPECT_FALSE(verifier2->IsMachineManaged().has_value());
+  EXPECT_EQ(verifier2->CecaConnectionTimeout(), kCecaConnectionTimeout);
+}
+
+TEST_F(ExternalConstantsBuilderTests, TestModify) {
+  ExternalConstantsBuilder builder;
+
+  base::DictValue dict_policies;
+  dict_policies.Set("a", 1);
+  dict_policies.Set("b", 2);
+
+  EXPECT_TRUE(
+      builder.SetUpdateURL(std::vector<std::string>{"https://localhost/update"})
+          .SetCrashUploadURL("https://localhost/crash")
+          .SetAppLogoURL("https://localhost/logo/")
+          .SetUseCUP(false)
+          .SetInitialDelay(base::Seconds(123.4))
+          .SetServerKeepAliveTime(base::Seconds(3))
+          .SetUpdateURL(std::vector<std::string>{"https://localhost/1/www"})
+          .SetCrashUploadURL("https://localhost/1/crash")
+          .SetAppLogoURL("https://localhost/1/applogo/")
+          .SetDictPolicies(dict_policies)
+          .SetMachineManaged(std::make_optional(false))
+          .SetCecaConnectionTimeout(base::Seconds(55))
+          .Overwrite());
+
+  scoped_refptr<ExternalConstantsOverrider> verifier =
+      ExternalConstantsOverrider::FromDefaultJSONFile(
+          CreateDefaultExternalConstants());
+
+  EXPECT_FALSE(verifier->UseCUP());
+
+  std::vector<GURL> urls = verifier->UpdateURL();
+  ASSERT_EQ(urls.size(), 1ul);
+  EXPECT_EQ(urls[0], GURL("https://localhost/1/www"));
+
+  EXPECT_EQ(verifier->CrashUploadURL(), GURL("https://localhost/1/crash"));
+  EXPECT_EQ(verifier->AppLogoURL(), GURL("https://localhost/1/applogo/"));
+  EXPECT_EQ(verifier->InitialDelay(), base::Seconds(123.4));
+  EXPECT_EQ(verifier->ServerKeepAliveTime(), base::Seconds(3));
+  EXPECT_EQ(verifier->DictPolicies().size(), 2U);
+  EXPECT_TRUE(verifier->IsMachineManaged().has_value());
+  EXPECT_FALSE(verifier->IsMachineManaged().value());
+  EXPECT_EQ(verifier->CecaConnectionTimeout(), base::Seconds(55));
+
+  // Now we use a new builder to modify just the group policies.
+  ExternalConstantsBuilder builder2;
+
+  base::DictValue dict_policies2;
+  dict_policies2.Set("b", 2);
+
+  EXPECT_TRUE(builder2.SetDictPolicies(dict_policies2).Modify());
+
+  // We need a new overrider to verify because it only loads once.
+  scoped_refptr<ExternalConstantsOverrider> verifier2 =
+      ExternalConstantsOverrider::FromDefaultJSONFile(
+          CreateDefaultExternalConstants());
+
+  // Only the group policies are different.
+  EXPECT_EQ(verifier2->DictPolicies().size(), 1U);
+
+  // All the values below are unchanged.
+  EXPECT_FALSE(verifier2->UseCUP());
+  urls = verifier2->UpdateURL();
+  ASSERT_EQ(urls.size(), 1ul);
+  EXPECT_EQ(urls[0], GURL("https://localhost/1/www"));
+  EXPECT_EQ(verifier2->CrashUploadURL(), GURL("https://localhost/1/crash"));
+  EXPECT_EQ(verifier2->AppLogoURL(), GURL("https://localhost/1/applogo/"));
+  EXPECT_EQ(verifier2->InitialDelay(), base::Seconds(123.4));
+  EXPECT_EQ(verifier2->ServerKeepAliveTime(), base::Seconds(3));
+  EXPECT_TRUE(verifier2->IsMachineManaged().has_value());
+  EXPECT_FALSE(verifier2->IsMachineManaged().value());
+  EXPECT_EQ(verifier2->CecaConnectionTimeout(), base::Seconds(55));
 }
 
 }  // namespace updater

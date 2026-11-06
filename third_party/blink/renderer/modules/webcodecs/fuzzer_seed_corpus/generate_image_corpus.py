@@ -1,4 +1,4 @@
-# Copyright 2021 The Chromium Authors. All rights reserved.
+# Copyright 2021 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """
@@ -12,8 +12,10 @@ import sys
 
 # go up 6 parent directories to //src/third_party/blink
 path_to_blink = os.path.abspath(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                 *[os.path.pardir] * 4))
+    os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), *[os.path.pardir] * 4
+    )
+)
 
 # go up 2 parent directories to //src
 path_to_src_root = os.path.join(path_to_blink, *[os.path.pardir] * 2)
@@ -22,9 +24,11 @@ path_to_src_root = os.path.join(path_to_blink, *[os.path.pardir] * 2)
 sys.path.insert(
     0,
     os.path.normpath(
-        os.path.join(path_to_src_root, 'components/resources/protobufs')))
+        os.path.join(path_to_src_root, 'components/resources/protobufs')
+    ),
+)
 
-from binary_proto_generator import BinaryProtoGenerator
+from binary_proto_generator import BinaryProtoGenerator  # noqa: E402
 
 EXTENSIONS_MAP = {
     "avif": "image/avif",
@@ -32,7 +36,6 @@ EXTENSIONS_MAP = {
     "ico": "image/x-icon",
     "bmp": "image/bmp",
     "jpg": "image/jpeg",
-    "jxl": "image/jxl",
     "gif": "image/gif",
     "cur": "image/x-icon",
     "webp": "image/webp",
@@ -42,10 +45,12 @@ EXTENSIONS_MAP = {
 class ImageDecoderProtoGenerator(BinaryProtoGenerator):
     def ImportProtoModule(self):
         import fuzzer_inputs_pb2
+
         globals()['fuzzer_inputs_pb2'] = fuzzer_inputs_pb2
 
     def EmptyProtoInstance(self):
-        return fuzzer_inputs_pb2.ImageDecoderApiInvocationSequence()
+        # `fuzzer_inputs_pb2` is placed directly in `globals()`
+        return fuzzer_inputs_pb2.ImageDecoderApiInvocationSequence()  # noqa: F821
 
     def ProcessPb(self, opts, pb):
         self._outdir = opts.outdir
@@ -74,8 +79,9 @@ def main():
             _, ext = os.path.splitext(fn)
             ext = ext.lower().split('.')[1]
             if ext.lower() in EXTENSIONS_MAP:
-                generator.WritePb(os.path.join(root, fn),
-                                  EXTENSIONS_MAP[ext.lower()])
+                generator.WritePb(
+                    os.path.join(root, fn), EXTENSIONS_MAP[ext.lower()]
+                )
 
 
 if __name__ == '__main__':

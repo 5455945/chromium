@@ -1,10 +1,14 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/extensions/api/identity/extension_token_key.h"
 
 #include <tuple>
+
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -15,7 +19,7 @@ ExtensionTokenKey::ExtensionTokenKey(const std::string& extension_id,
 
 ExtensionTokenKey::ExtensionTokenKey(const ExtensionTokenKey& other) = default;
 
-ExtensionTokenKey::~ExtensionTokenKey() {}
+ExtensionTokenKey::~ExtensionTokenKey() = default;
 
 bool ExtensionTokenKey::operator<(const ExtensionTokenKey& rhs) const {
   return std::tie(extension_id, account_info.account_id, scopes) <

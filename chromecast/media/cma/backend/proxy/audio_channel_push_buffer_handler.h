@@ -1,13 +1,14 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROMECAST_MEDIA_CMA_BACKEND_PROXY_AUDIO_CHANNEL_PUSH_BUFFER_HANDLER_H_
 #define CHROMECAST_MEDIA_CMA_BACKEND_PROXY_AUDIO_CHANNEL_PUSH_BUFFER_HANDLER_H_
 
+#include <optional>
+
 #include "chromecast/media/api/cma_backend.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "third_party/openscreen/src/cast/cast_core/api/runtime/cast_audio_channel_service.pb.h"
+#include "third_party/cast_core/public/src/proto/runtime/cast_audio_channel_service.pb.h"
 
 namespace chromecast {
 namespace media {
@@ -62,7 +63,7 @@ class AudioChannelPushBufferHandler {
   // true.
   //
   // May only be called by the CONSUMER.
-  virtual absl::optional<PushBufferRequest> GetBufferedData() = 0;
+  virtual std::optional<PushBufferRequest> GetBufferedData() = 0;
 };
 
 }  // namespace media

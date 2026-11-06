@@ -1,16 +1,8 @@
-// Copyright 2014 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 /**
  * @fileoverview Utility methods to deal with CSS3 transforms programmatically.
@@ -23,30 +15,7 @@ goog.require('goog.math.Coordinate');
 goog.require('goog.math.Coordinate3');
 goog.require('goog.style');
 goog.require('goog.userAgent');
-goog.require('goog.userAgent.product.isVersion');
 
-
-/**
- * Whether CSS3 transform translate() is supported. IE 9 supports 2D transforms
- * and IE 10 supports 3D transforms. IE 8 supports neither.
- * @return {boolean} Whether the current environment supports CSS3 transforms.
- */
-goog.style.transform.isSupported = goog.functions.cacheReturnValue(function() {
-  return !goog.userAgent.IE || goog.userAgent.product.isVersion(9);
-});
-
-
-/**
- * Whether CSS3 transform translate3d() is supported. If the current browser
- * supports this transform strategy.
- * @return {boolean} Whether the current environment supports CSS3 transforms.
- */
-goog.style.transform.is3dSupported =
-    goog.functions.cacheReturnValue(function() {
-      return goog.userAgent.WEBKIT || goog.userAgent.EDGE ||
-          (goog.userAgent.GECKO && goog.userAgent.product.isVersion(10)) ||
-          (goog.userAgent.IE && goog.userAgent.product.isVersion(10));
-    });
 
 
 /**
@@ -57,6 +26,7 @@ goog.style.transform.is3dSupported =
  * @return {!goog.math.Coordinate} The CSS translation of the element in px.
  */
 goog.style.transform.getTranslation = function(element) {
+  'use strict';
   var transform = goog.style.getComputedTransform(element);
   var matrixConstructor = goog.style.transform.matrixConstructor_();
   if (transform && matrixConstructor) {
@@ -78,15 +48,11 @@ goog.style.transform.getTranslation = function(element) {
  * @return {boolean} Whether the CSS translation was set.
  */
 goog.style.transform.setTranslation = function(element, x, y) {
-  if (!goog.style.transform.isSupported()) {
-    return false;
-  }
+  'use strict';
   // TODO(user): After http://crbug.com/324107 is fixed, it will be faster to
   // use something like: translation = new CSSMatrix().translate(x, y, 0);
-  var translation = goog.style.transform.is3dSupported() ?
-      'translate3d(' + x + 'px,' + y + 'px,' +
-          '0px)' :
-      'translate(' + x + 'px,' + y + 'px)';
+  var translation = 'translate3d(' + x + 'px,' + y + 'px,' +
+      '0px)';
   goog.style.setStyle(
       element, goog.style.transform.getTransformProperty_(), translation);
   return true;
@@ -101,6 +67,7 @@ goog.style.transform.setTranslation = function(element, x, y) {
  * @return {!goog.math.Coordinate3} The scale of the element.
  */
 goog.style.transform.getScale = function(element) {
+  'use strict';
   var transform = goog.style.getComputedTransform(element);
   var matrixConstructor = goog.style.transform.matrixConstructor_();
   if (transform && matrixConstructor) {
@@ -123,12 +90,8 @@ goog.style.transform.getScale = function(element) {
  * @return {boolean} Whether the CSS scale was set.
  */
 goog.style.transform.setScale = function(element, x, y, z) {
-  if (!goog.style.transform.isSupported()) {
-    return false;
-  }
-  var scale = goog.style.transform.is3dSupported() ?
-      'scale3d(' + x + ',' + y + ',' + z + ')' :
-      'scale(' + x + ',' + y + ')';
+  'use strict';
+  var scale = 'scale3d(' + x + ',' + y + ',' + z + ')';
   goog.style.setStyle(
       element, goog.style.transform.getTransformProperty_(), scale);
   return true;
@@ -141,6 +104,7 @@ goog.style.transform.setScale = function(element, x, y, z) {
  * @return {number} The rotation of the element in degrees.
  */
 goog.style.transform.getRotation = function(element) {
+  'use strict';
   var transform = goog.style.getComputedTransform(element);
   var matrixConstructor = goog.style.transform.matrixConstructor_();
   if (transform && matrixConstructor) {
@@ -163,12 +127,8 @@ goog.style.transform.getRotation = function(element) {
  * @return {boolean} Whether the CSS rotation was set.
  */
 goog.style.transform.setRotation = function(element, degrees) {
-  if (!goog.style.transform.isSupported()) {
-    return false;
-  }
-  var rotation = goog.style.transform.is3dSupported() ?
-      'rotate3d(0,0,1,' + degrees + 'deg)' :
-      'rotate(' + degrees + 'deg)';
+  'use strict';
+  var rotation = 'rotate3d(0,0,1,' + degrees + 'deg)';
   goog.style.setStyle(
       element, goog.style.transform.getTransformProperty_(), rotation);
   return true;
@@ -184,6 +144,7 @@ goog.style.transform.setRotation = function(element, degrees) {
  */
 goog.style.transform.getTransformProperty_ =
     goog.functions.cacheReturnValue(function() {
+      'use strict';
       return goog.userAgent.IE && goog.userAgent.DOCUMENT_MODE == 9 ?
           '-ms-transform' :
           'transform';
@@ -198,6 +159,7 @@ goog.style.transform.getTransformProperty_ =
  */
 goog.style.transform.matrixConstructor_ =
     goog.functions.cacheReturnValue(function() {
+      'use strict';
       if (goog.global['WebKitCSSMatrix'] !== undefined) {
         return goog.global['WebKitCSSMatrix'];
       }

@@ -1,25 +1,28 @@
 <style include="cr-shared-style shimless-rma-shared">
 </style>
 
-<base-page>
-  <div slot="header">
-    <!-- TODO(gavindodd): Update text for i18n -->
-    <h1>Choose Hardware Write Protection Disable Method</h1>
-  </div>
-  <div slot="body">
+<base-page left-pane-only>
+  <div slot="left-pane">
+    <h1 tabindex="-1">[[i18n('chooseWpDisableMethodPageTitleText')]]</h1>
     <cr-radio-group
-        id="hwwpDisableMethod"
-        on-selected-changed="onHwwpDisableMethodSelectionChanged_">
+        id="hwwpDisableMethod" disabled="[[allButtonsDisabled]]"
+        on-selected-changed="onHwwpDisableMethodSelectionChanged">
       <cr-radio-button
           name="hwwpDisableMethodManual"
-          id="hwwpDisableMethodManual">
-        Manual
+          id="hwwpDisableMethodManual"
+          label="[[i18n('manualWpDisableMethodOptionText')]]">
+        <div class="indented-description" aria-hidden="true">
+          [[i18n('manualWpDisableMethodDescriptionText')]]
+        </div>
       </cr-radio-button>
       <cr-radio-button
           name="hwwpDisableMethodRsu"
-          id="hwwpDisableMethodRsu">
-        RSU
+          id="hwwpDisableMethodRsu"
+          label="[[i18n('rsuWpDisableMethodOptionText')]]">
+        <div class="indented-description" aria-hidden>
+          [[i18n('rsuWpDisableMethodDescriptionText')]]
+        </div>
       </cr-radio-button>
     </cr-radio-group>
-</div>
+  </div>
 </base-page>

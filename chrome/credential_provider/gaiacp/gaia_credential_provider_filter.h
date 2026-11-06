@@ -1,13 +1,13 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_CREDENTIAL_PROVIDER_GAIACP_GAIA_CREDENTIAL_PROVIDER_FILTER_H_
 #define CHROME_CREDENTIAL_PROVIDER_GAIACP_GAIA_CREDENTIAL_PROVIDER_FILTER_H_
 
-#include <atlbase.h>
-#include <atlcom.h>
 #include <credentialprovider.h>
+
+#include "base/win/atl.h"
 
 namespace credential_provider {
 
@@ -21,7 +21,7 @@ namespace credential_provider {
 
 extern const CLSID CLSID_CGaiaCredentialProviderFilter;
 
-class ATL_NO_VTABLE CGaiaCredentialProviderFilter
+class __declspec(novtable) CGaiaCredentialProviderFilter
     : public CComObjectRootEx<CComMultiThreadModel>,
       public CComCoClass<CGaiaCredentialProviderFilter,
                          &CLSID_CGaiaCredentialProviderFilter>,

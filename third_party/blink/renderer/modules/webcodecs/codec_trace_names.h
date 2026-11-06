@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,7 @@
 namespace blink {
 
 // Holds the names of various codec operations for tracing. Uses std::string
-// instead of WTF::String for ease of use with the tracing macros.
+// instead of blink::String for ease of use with the tracing macros.
 struct CodecTraceNames {
   explicit CodecTraceNames(const std::string& codec_name) {
     configure = codec_name + "::Configure";
@@ -19,6 +19,7 @@ struct CodecTraceNames {
     flush = codec_name + "::Flush";
     handle_error = codec_name + "::HandleError";
     output = codec_name + "::Ouput";
+    reclaimed = codec_name + "::OnCodecReclaimed";
     reset = codec_name + "::Reset";
     reconfigure = codec_name + "::Reconfigure";
     requests_counter = codec_name + " requests";
@@ -37,6 +38,7 @@ struct CodecTraceNames {
   std::string flush;
   std::string handle_error;
   std::string output;
+  std::string reclaimed;
   std::string reset;
   std::string reconfigure;
   std::string requests_counter;

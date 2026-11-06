@@ -1,23 +1,26 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/media/router/discovery/mdns/dns_sd_registry.h"
+
 #include <memory>
 
-#include "chrome/browser/media/router/discovery/mdns/dns_sd_registry.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/media/router/discovery/mdns/dns_sd_delegate.h"
 #include "chrome/browser/media/router/discovery/mdns/dns_sd_device_lister.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using testing::_;
+using testing::NiceMock;
 
 namespace media_router {
 
 class MockDnsSdDeviceLister : public DnsSdDeviceLister {
  public:
   MockDnsSdDeviceLister() : DnsSdDeviceLister(nullptr, nullptr, "") {}
-  ~MockDnsSdDeviceLister() override {}
+  ~MockDnsSdDeviceLister() override = default;
 
   MOCK_METHOD0(Discover, void());
 };
@@ -25,15 +28,16 @@ class MockDnsSdDeviceLister : public DnsSdDeviceLister {
 class TestDnsSdRegistry : public DnsSdRegistry {
  public:
   TestDnsSdRegistry() : DnsSdRegistry(nullptr), delegate_(nullptr) {}
-  ~TestDnsSdRegistry() override {}
+  ~TestDnsSdRegistry() override = default;
 
   MockDnsSdDeviceLister* GetListerForService(const std::string& service_type) {
     return listers_[service_type];
   }
 
   int GetServiceListenerCount(const std::string& service_type) {
-    if (service_data_map_.find(service_type) == service_data_map_.end())
+    if (service_data_map_.find(service_type) == service_data_map_.end()) {
       return 0;
+    }
 
     return service_data_map_[service_type]->GetListenerCount();
   }
@@ -53,28 +57,30 @@ class TestDnsSdRegistry : public DnsSdRegistry {
       local_discovery::ServiceDiscoverySharedClient* discovery_client)
       override {
     delegate_ = delegate;
-    MockDnsSdDeviceLister* lister = new MockDnsSdDeviceLister();
+    MockDnsSdDeviceLister* lister = new NiceMock<MockDnsSdDeviceLister>();
     listers_[service_type] = lister;
     return lister;
   }
 
  private:
-  std::map<std::string, MockDnsSdDeviceLister*> listers_;
+  std::map<std::string, raw_ptr<MockDnsSdDeviceLister, CtnExperimental>>
+      listers_;
   // The last delegate used or NULL.
-  DnsSdDelegate* delegate_;
+  raw_ptr<DnsSdDelegate> delegate_;
 };
 
 class MockDnsSdObserver : public DnsSdRegistry::DnsSdObserver {
  public:
-  MOCK_METHOD2(OnDnsSdEvent,
-               void(const std::string&,
-                    const DnsSdRegistry::DnsSdServiceList&));
+  MOCK_METHOD(void,
+              OnDnsSdEvent,
+              (const std::string&, const DnsSdRegistry::DnsSdServiceList&));
+  MOCK_METHOD(void, OnDnsSdPermissionRejected, ());
 };
 
 class DnsSdRegistryTest : public testing::Test {
  public:
-  DnsSdRegistryTest() {}
-  ~DnsSdRegistryTest() override {}
+  DnsSdRegistryTest() = default;
+  ~DnsSdRegistryTest() override = default;
 
   void SetUp() override {
     registry_ = std::make_unique<TestDnsSdRegistry>();

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,13 +13,16 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/scoped_observation.h"
 #include "ui/base/cursor/cursor_factory.h"
-#include "ui/base/cursor/cursor_theme_manager.h"
-#include "ui/base/cursor/cursor_theme_manager_observer.h"
-#include "ui/base/cursor/mojom/cursor_type.mojom-forward.h"
+#include "ui/base/cursor/mojom/cursor_type.mojom-shared.h"
+#include "ui/linux/cursor_theme_manager_observer.h"
 
 namespace ui {
 class X11Cursor;
 class XCursorLoader;
+
+#if BUILDFLAG(IS_LINUX)
+class LinuxUi;
+#endif
 
 // CursorFactory implementation for X11 cursors.
 class COMPONENT_EXPORT(UI_BASE_X) X11CursorFactory
@@ -34,14 +37,15 @@ class COMPONENT_EXPORT(UI_BASE_X) X11CursorFactory
   // CursorFactory:
   scoped_refptr<PlatformCursor> GetDefaultCursor(
       mojom::CursorType type) override;
-  scoped_refptr<PlatformCursor> CreateImageCursor(
-      mojom::CursorType type,
-      const SkBitmap& bitmap,
-      const gfx::Point& hotspot) override;
+  scoped_refptr<PlatformCursor> CreateImageCursor(mojom::CursorType type,
+                                                  const SkBitmap& bitmap,
+                                                  const gfx::Point& hotspot,
+                                                  float scale) override;
   scoped_refptr<PlatformCursor> CreateAnimatedCursor(
       mojom::CursorType type,
       const std::vector<SkBitmap>& bitmaps,
       const gfx::Point& hotspot,
+      float scale,
       base::TimeDelta frame_delay) override;
   void ObserveThemeChanges() override;
 
@@ -52,12 +56,16 @@ class COMPONENT_EXPORT(UI_BASE_X) X11CursorFactory
 
   void ClearThemeCursors();
 
-  std::unique_ptr<XCursorLoader> cursor_loader_;
-
   std::map<mojom::CursorType, scoped_refptr<X11Cursor>> default_cursors_;
 
-  base::ScopedObservation<CursorThemeManager, CursorThemeManagerObserver>
+  // `cursor_loader_` must be declared after `default_cursors_` since
+  // initializing `cursor_loader_` will modify `default_cursors_`.
+  std::unique_ptr<XCursorLoader> cursor_loader_;
+
+#if BUILDFLAG(IS_LINUX)
+  base::ScopedObservation<LinuxUi, CursorThemeManagerObserver>
       cursor_theme_observation_{this};
+#endif
 };
 
 }  // namespace ui

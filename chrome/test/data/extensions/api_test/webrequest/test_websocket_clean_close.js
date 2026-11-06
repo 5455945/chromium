@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,17 @@
 // close was clean. If it fails, it will fail flakily, so repeat it 10 times to
 // get a deterministic answer.
 function sendDoesntError(iteration = 0, done = undefined) {
-  let ws = new WebSocket('ws://localhost:' + testWebSocketPort +
-                         '/close-immediately');
+  const ws =
+      new WebSocket(`ws://localhost:${testWebSocketPort}/close-immediately`);
 
-  if (!done)
+  if (!done) {
     done = chrome.test.callbackAdded();
+  }
 
   ws.onclose = event => {
-    chrome.test.log('WebSocket ' + iteration + ' closed ' +
-                    (event.wasClean ? 'cleanly.' : 'uncleanly.'));
+    chrome.test.log(
+        `WebSocket ${iteration} closed ` +
+        (event.wasClean ? 'cleanly.' : 'uncleanly.'));
     chrome.test.assertTrue(event.wasClean);
     if (iteration < 10) {
       ++iteration;
@@ -22,12 +24,13 @@ function sendDoesntError(iteration = 0, done = undefined) {
     } else {
       done();
     }
-  }
+  };
 
   ws.onopen = () => {
-    chrome.test.log('WebSocket ' + iteration + ' opened.');
+    chrome.test.log(`WebSocket ${iteration} opened.`);
     const start = performance.now();
-    while (performance.now() - start < 100) {}
+    while (performance.now() - start < 100) {
+    }
     ws.send('message');
   };
 }

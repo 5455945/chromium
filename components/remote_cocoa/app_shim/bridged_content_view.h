@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 
 #include <string>
 
+#include "base/memory/raw_ptr_exclusion.h"
 #include "components/remote_cocoa/app_shim/remote_cocoa_app_shim_export.h"
 #import "ui/base/cocoa/tool_tip_base_view.h"
 #import "ui/base/cocoa/tracking_area.h"
@@ -31,13 +32,14 @@ REMOTE_COCOA_APP_SHIM_EXPORT
                                                  NSServicesMenuRequestor> {
  @private
   // Weak, reset by clearView.
-  remote_cocoa::NativeWidgetNSWindowBridge* _bridge;
+  // This field is not a raw_ptr<> because it requires @property rewrite.
+  RAW_PTR_EXCLUSION remote_cocoa::NativeWidgetNSWindowBridge* _bridge;
 
   // A tracking area installed to enable mouseMoved events.
   ui::ScopedCrTrackingArea _cursorTrackingArea;
 
   // The keyDown event currently being handled, nil otherwise.
-  NSEvent* _keyDownEvent;
+  NSEvent* __strong _keyDownEvent;
 
   // Whether there's an active key down event which is not handled yet.
   BOOL _hasUnhandledKeyDownEvent;
@@ -53,7 +55,21 @@ REMOTE_COCOA_APP_SHIM_EXPORT
 
 @property(readonly, nonatomic) remote_cocoa::NativeWidgetNSWindowBridge* bridge;
 @property(assign, nonatomic) BOOL drawMenuBackgroundForBlur;
-@property(assign, nonatomic) NSEvent* keyDownEventForTesting;
+@property(strong, nonatomic) NSEvent* keyDownEventForTesting;
+
+// While YES, -inputContext returns nil even if a text field has focus. AppKit
+// then skips activating the input method for this view, which with some input
+// methods (for example Japanese) blocks the main thread for tens of
+// milliseconds. Browser windows set this before they first show, so that the
+// focused location bar does not delay the first frame.
+//
+// Setting it to NO calls -[NSApp updateWindows] if this view is the first
+// responder of the key window, so that AppKit activates the input method
+// right away. A key press also sets it back to NO, so a typed key always
+// reaches the input method. Text that does not arrive as a key press (for
+// example from the Character Viewer or dictation) waits until the deferral
+// ends.
+@property(assign, nonatomic) BOOL deferInputContextActivation;
 
 // Initialize the NSView -> views::View bridge. |viewToHost| must be non-NULL.
 - (instancetype)initWithBridge:(remote_cocoa::NativeWidgetNSWindowBridge*)bridge
@@ -69,19 +85,40 @@ REMOTE_COCOA_APP_SHIM_EXPORT
 // Updates the tooltip on the ToolTipBaseView if the text needs to change.
 // |locationInContent| is the position from the top left of the window's
 // contentRect (also this NSView's frame), as given by a ui::LocatedEvent.
-- (void)updateTooltipIfRequiredAt:(const gfx::Point&)locationInContent;
+- (void)updateTooltipIfRequiredAt:(const gfx::Point&)locationInContent
+                           bridge:(remote_cocoa::NativeWidgetNSWindowBridge*)
+                                      bridge;
 
 // Notifies the associated FocusManager whether full keyboard access is enabled
 // or not.
 - (void)updateFullKeyboardAccess;
 
+// Update the cursor tracking area in response to the parent window's level
+// changing.
+// https://crbug.com/1214013
+- (void)updateCursorTrackingArea;
+
+// Returns YES if there is an active Views MenuController associated with this
+// view's window.
+- (BOOL)hasActiveMenuController;
+
+// Forwards a key equivalent |theEvent| to the active Views menu or its focused
+// text input view. Returns YES if the menu or text input view consumed it.
+// While a menu Textfield has a text input context, key equivalents that the
+// key bindings map to a text editing action (e.g. Cmd+Left) perform that
+// action instead.
+- (BOOL)performMenuKeyEquivalent:(NSEvent*)theEvent;
+
 // The TextInputClient of the currently focused views::View.
 // TODO(ccameron): This cannot be relied on across processes.
-- (ui::TextInputClient*)textInputClient;
+- (ui::TextInputClient*)textInputClientForTesting;
 
 // Returns true if it is needed to call -[NSApp updateWindows] while updating
 // the text input client.
 - (bool)needsUpdateWindows;
+
+// Action for Cmd-E
+- (void)copyToFindPboard:(id)sender;
 
 @end
 

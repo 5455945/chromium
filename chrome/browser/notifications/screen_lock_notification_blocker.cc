@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,12 +13,9 @@ const int kUserStatePollingIntervalSeconds = 1;
 
 ScreenLockNotificationBlocker::ScreenLockNotificationBlocker(
     message_center::MessageCenter* message_center)
-    : NotificationBlocker(message_center),
-      is_locked_(false) {
-}
+    : NotificationBlocker(message_center), is_locked_(false) {}
 
-ScreenLockNotificationBlocker::~ScreenLockNotificationBlocker() {
-}
+ScreenLockNotificationBlocker::~ScreenLockNotificationBlocker() = default;
 
 void ScreenLockNotificationBlocker::CheckState() {
   bool was_locked = is_locked_;
@@ -27,10 +24,8 @@ void ScreenLockNotificationBlocker::CheckState() {
     NotifyBlockingStateChanged();
 
   if (is_locked_) {
-    timer_.Start(FROM_HERE,
-                 base::TimeDelta::FromSeconds(kUserStatePollingIntervalSeconds),
-                 this,
-                 &ScreenLockNotificationBlocker::CheckState);
+    timer_.Start(FROM_HERE, base::Seconds(kUserStatePollingIntervalSeconds),
+                 this, &ScreenLockNotificationBlocker::CheckState);
   }
 }
 

@@ -1,10 +1,13 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.offline_items_collection;
 
 import android.text.TextUtils;
+
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
 /**
  * This class is a Java counterpart to the C++ ContentId
@@ -13,19 +16,21 @@ import android.text.TextUtils;
  * For all member variable descriptions see the C++ class.
  * TODO(dtrainor): Investigate making all class members for this and the C++ counterpart const.
  */
+@NullMarked
 public class ContentId {
-    public String namespace;
-    public String id;
+    public @Nullable String namespace;
+    public @Nullable String id;
 
     public ContentId() {}
-    public ContentId(String namespace, String id) {
+
+    public ContentId(@Nullable String namespace, @Nullable String id) {
         assert namespace == null || !namespace.contains(",");
         this.namespace = namespace != null ? namespace : "";
         this.id = id != null ? id : "";
     }
 
     @Override
-    public boolean equals(Object o) {
+    public boolean equals(@Nullable Object o) {
         if (this == o) return true;
         if (!(o instanceof ContentId)) return false;
 

@@ -1,8 +1,10 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "device/gamepad/gamepad_test_helpers.h"
+
+#include "base/compiler_specific.h"
 
 namespace device {
 
@@ -14,7 +16,7 @@ MockGamepadDataFetcher::MockGamepadDataFetcher(const Gamepads& test_data)
 MockGamepadDataFetcher::~MockGamepadDataFetcher() = default;
 
 GamepadSource MockGamepadDataFetcher::source() {
-  return GAMEPAD_SOURCE_TEST;
+  return GamepadSource::kTest;
 }
 
 void MockGamepadDataFetcher::GetGamepadData(bool devices_changed_hint) {
@@ -24,8 +26,11 @@ void MockGamepadDataFetcher::GetGamepadData(bool devices_changed_hint) {
     for (size_t i = 0; i < Gamepads::kItemsLengthCap; ++i) {
       if (test_data_.items[i].connected) {
         PadState* pad = GetPadState(i);
-        if (pad)
-          memcpy(&pad->data, &test_data_.items[i], sizeof(Gamepad));
+        if (pad) {
+          base::byte_span_from_ref(base::allow_nonunique_obj, pad->data)
+              .copy_from(base::byte_span_from_ref(base::allow_nonunique_obj,
+                                                  test_data_.items[i]));
+        }
       }
     }
   }

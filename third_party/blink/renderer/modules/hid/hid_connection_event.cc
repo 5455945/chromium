@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,8 +16,9 @@ HIDConnectionEvent* HIDConnectionEvent::Create(
 }
 
 HIDConnectionEvent* HIDConnectionEvent::Create(const AtomicString& type,
-                                               HIDDevice* device) {
-  return MakeGarbageCollected<HIDConnectionEvent>(type, device);
+                                               HIDDevice* device,
+                                               const DOMWrapperWorld* world) {
+  return MakeGarbageCollected<HIDConnectionEvent>(type, device, world);
 }
 
 HIDConnectionEvent::HIDConnectionEvent(
@@ -26,11 +27,20 @@ HIDConnectionEvent::HIDConnectionEvent(
     : Event(type, initializer) {}
 
 HIDConnectionEvent::HIDConnectionEvent(const AtomicString& type,
-                                       HIDDevice* device)
-    : Event(type, Bubbles::kNo, Cancelable::kNo), device_(device) {}
+                                       HIDDevice* device,
+                                       const DOMWrapperWorld* world)
+    : Event(type, Bubbles::kNo, Cancelable::kNo),
+      device_(device),
+      world_(world) {}
+
+bool HIDConnectionEvent::CanBeDispatchedInWorld(
+    const DOMWrapperWorld& world) const {
+  return !world_ || &world == world_.Get();
+}
 
 void HIDConnectionEvent::Trace(Visitor* visitor) const {
   visitor->Trace(device_);
+  visitor->Trace(world_);
   Event::Trace(visitor);
 }
 

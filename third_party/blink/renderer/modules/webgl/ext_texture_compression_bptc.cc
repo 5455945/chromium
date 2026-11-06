@@ -1,16 +1,21 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/webgl/ext_texture_compression_bptc.h"
 
+#include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 
 namespace blink {
 
 EXTTextureCompressionBPTC::EXTTextureCompressionBPTC(
-    WebGLRenderingContextBase* context)
+    WebGLRenderingContextBase* context,
+    ExecutionContext* execution_context)
     : WebGLExtension(context) {
+  UseCounter::CountWebDXFeature(execution_context,
+                                WebDXFeature::kExtTextureCompressionBptc);
   context->ExtensionsUtil()->EnsureExtensionEnabled(
       "GL_EXT_texture_compression_bptc");
   context->AddCompressedTextureFormat(GL_COMPRESSED_RGBA_BPTC_UNORM_EXT);

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,8 +25,9 @@ interface NonPersistentNotificationListener {
 // side to provide a more useful error message to developers.
 enum PersistentNotificationError {
   NONE,
-  INTERNAL_ERROR,
   PERMISSION_DENIED,
+  NOTIFICATION_SERVICE_NOT_FOUND,
+  DATABASE_ERROR,
 };
 
 // Service through which Blink can request notifications to be shown, closed or

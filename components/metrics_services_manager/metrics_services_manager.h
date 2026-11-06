@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,26 +7,44 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "base/memory/weak_ptr.h"
 #include "base/metrics/field_trial.h"
 #include "base/threading/thread_checker.h"
-
-namespace base {
-class FilePath;
-}
+#include "components/metrics/metrics_log_uploader.h"
+#include "components/variations/synthetic_trial_registry.h"
 
 namespace metrics {
 class MetricsService;
 class MetricsServiceClient;
+class ClonedInstallDetector;
+class ReportingService;
+}  // namespace metrics
+
+namespace metrics::structured {
+class StructuredMetricsService;
+}
+
+namespace search_engines {
+class SearchEngineChoiceServiceClient;
 }
 
 namespace ukm {
 class UkmService;
 }
 
-namespace variations {
-class VariationsService;
+namespace metrics::dwa {
+class DwaService;
 }
+
+namespace metrics::private_metrics {
+class PumaService;
+}
+
+namespace variations {
+class EntropyProviders;
+class SyntheticTrialRegistry;
+class VariationsService;
+}  // namespace variations
 
 namespace metrics_services_manager {
 
@@ -37,20 +55,27 @@ class MetricsServicesManagerClient;
 // client) and VariationsService.
 class MetricsServicesManager {
  public:
+  using OnDidStartLoadingCb = base::RepeatingClosure;
+  using OnDidStopLoadingCb = base::RepeatingClosure;
+  using OnRendererUnresponsiveCb = base::RepeatingClosure;
+
   // Creates the MetricsServicesManager with the given client.
   explicit MetricsServicesManager(
       std::unique_ptr<MetricsServicesManagerClient> client);
+
+  MetricsServicesManager(const MetricsServicesManager&) = delete;
+  MetricsServicesManager& operator=(const MetricsServicesManager&) = delete;
+
   virtual ~MetricsServicesManager();
 
-  // Returns the preferred entropy provider used to seed persistent activities
-  // based on whether or not metrics reporting is permitted on this client.
+  // Instantiates the FieldTrialList using Chrome's default entropy provider.
   //
-  // If there's consent to report metrics, this method returns an entropy
-  // provider that has a high source of entropy, partially based on the client
-  // ID. Otherwise, it returns an entropy provider that is based on a low
-  // entropy source.
-  std::unique_ptr<const base::FieldTrial::EntropyProvider>
-  CreateEntropyProvider();
+  // Side effect: Initializes the CleanExitBeacon.
+  void InstantiateFieldTrialList() const;
+
+  // Returns the SyntheticTrialRegistry, creating it if it hasn't been created
+  // yet.
+  variations::SyntheticTrialRegistry* GetSyntheticTrialRegistry();
 
   // Returns the MetricsService, creating it if it hasn't been created yet (and
   // additionally creating the MetricsServiceClient in that case).
@@ -59,18 +84,37 @@ class MetricsServicesManager {
   // Returns the UkmService, creating it if it hasn't been created yet.
   ukm::UkmService* GetUkmService();
 
+  // Returns the DwaService, creating it if it hasn't been created yet.
+  metrics::dwa::DwaService* GetDwaService();
+
+  // Returns the PumaService, creating it if it hasn't been created yet.
+  metrics::private_metrics::PumaService* GetPumaService();
+
+  // Returns the StructuredMetricsService associated with the
+  // |metrics_service_client_|.
+  metrics::structured::StructuredMetricsService* GetStructuredMetricsService();
+
+  // Returns the ReportingService associated with the given service type.
+  metrics::ReportingService* GetReportingService(
+      metrics::MetricsLogUploader::MetricServiceType service_type);
+
   // Returns the VariationsService, creating it if it hasn't been created yet.
   variations::VariationsService* GetVariationsService();
 
-  // Should be called when a plugin loading error occurs.
-  void OnPluginLoadingError(const base::FilePath& plugin_path);
+  // Returns an |OnDidStartLoadingCb| callback.
+  OnDidStartLoadingCb GetOnDidStartLoadingCb();
 
-  // Some embedders use this method to notify the metrics system when a
-  // renderer process exits unexpectedly.
-  void OnRendererProcessCrash();
+  // Returns an |OnDidStopLoadingCb| callback.
+  OnDidStopLoadingCb GetOnDidStopLoadingCb();
 
-  // Update the managed services when permissions for uploading metrics change.
-  void UpdateUploadPermissions(bool may_upload);
+  // Returns an |OnRendererUnresponsiveCb| callback.
+  OnRendererUnresponsiveCb GetOnRendererUnresponsiveCb();
+
+  // Updates the managed services when permissions for uploading metrics change.
+  // Note: Normally, uploads will happen when collection is enabled, but the
+  // `may_upload` params allows disabling uploads separately from collection
+  // (e.g. if network is unavailable).
+  void UpdateUploadPermissions(bool may_upload = true);
 
   // Gets the current state of metric reporting.
   bool IsMetricsReportingEnabled() const;
@@ -78,37 +122,80 @@ class MetricsServicesManager {
   // Gets the current state of metrics consent.
   bool IsMetricsConsentGiven() const;
 
+  // Returns true iff UKM is allowed for all profiles.
+  bool IsUkmAllowedForAllProfiles();
+
+  // Returns true iff DWA is allowed for all profiles.
+  bool IsDwaAllowedForAllProfiles();
+
+  // Returns a low entropy provider.
+  std::unique_ptr<const variations::EntropyProviders>
+  CreateEntropyProvidersForTesting();
+
+  // Returns the ClonedInstallDetector associated with the `client_`.
+  metrics::ClonedInstallDetector* GetClonedInstallDetectorForTesting();
+
  private:
+  friend class search_engines::SearchEngineChoiceServiceClient;
+
+  // Returns the ClonedInstallDetector associated with the `client_`.
+  // Marked as private (exposed selectively via friend classes) for the metrics
+  // team to be able to control and monitor if/how this function gets called.
+  const metrics::ClonedInstallDetector& GetClonedInstallDetector() const;
+
   // Returns the MetricsServiceClient, creating it if it hasn't been
   // created yet (and additionally creating the MetricsService in that case).
   metrics::MetricsServiceClient* GetMetricsServiceClient();
 
-  // Update which services are running to match current permissions.
-  void UpdateRunningServices();
+  // Updates which services are running to match current permissions.
+  void UpdateRunningServices(bool may_record_and_upload_changed);
 
-  // Update the state of UkmService to match current permissions.
+  // Updates the state of UkmService to match current permissions.
   void UpdateUkmService();
 
-  // Update the managed services when permissions for recording/uploading
+  // Updates the state of StructuredMetricsService to match current permissions.
+  void UpdateStructuredMetricsService();
+
+  // Updates the state of DwaService to match current permissions.
+  void UpdateDwaService();
+
+  // Updates the state of PumaService to match current permissions.
+  void UpdatePumaService();
+
+  // Updates the managed services when permissions for recording/uploading
   // metrics change.
   void UpdatePermissions(bool current_may_record,
                          bool current_consent_given,
                          bool current_may_upload);
 
+  // Called when loading state changed.
+  void LoadingStateChanged(bool is_loading);
+
+
+  // Used by |GetOnRendererUnresponsiveCb| to construct the callback that will
+  // be run by |MetricsServicesWebContentsObserver|.
+  void OnRendererUnresponsive();
+
   // The client passed in from the embedder.
   const std::unique_ptr<MetricsServicesManagerClient> client_;
+
 
   // Ensures that all functions are called from the same thread.
   base::ThreadChecker thread_checker_;
 
   // The current metrics reporting setting.
-  bool may_upload_;
+  bool may_upload_ = false;
 
   // The current metrics recording setting.
-  bool may_record_;
+  bool may_record_ = false;
 
-  // The current metrics setting reflecting if consent was given.
-  bool consent_given_;
+  // The current metrics setting for reporting metrics.
+  bool consent_given_ = false;
+
+  // Whether `UpdatePermissions()` has been called at least once.
+  bool permissions_initialized_ = false;
+
+  std::unique_ptr<variations::SyntheticTrialRegistry> synthetic_trial_registry_;
 
   // The MetricsServiceClient. Owns the MetricsService.
   std::unique_ptr<metrics::MetricsServiceClient> metrics_service_client_;
@@ -116,7 +203,7 @@ class MetricsServicesManager {
   // The VariationsService, for server-side experiments infrastructure.
   std::unique_ptr<variations::VariationsService> variations_service_;
 
-  DISALLOW_COPY_AND_ASSIGN(MetricsServicesManager);
+  base::WeakPtrFactory<MetricsServicesManager> weak_ptr_factory_{this};
 };
 
 }  // namespace metrics_services_manager

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,10 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/metrics/histogram.h"
-#include "base/metrics/histogram_macros.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
+#include "build/build_config.h"
 #include "chrome/browser/media/media_engagement_preloaded_list.h"
 #include "chrome/browser/media/media_engagement_service.h"
 #include "chrome/browser/media/media_engagement_session.h"
@@ -22,12 +22,14 @@
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "third_party/blink/public/mojom/autoplay/autoplay.mojom.h"
+#include "ui/base/page_transition_types.h"
 
-#if !defined(OS_ANDROID)
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
+#if !BUILDFLAG(IS_ANDROID)
+#include "base/time/time.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#endif  // !defined(OS_ANDROID)
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 namespace {
 
@@ -47,44 +49,26 @@ const gfx::Size MediaEngagementContentsObserver::kSignificantSize =
     gfx::Size(200, 140);
 
 const base::TimeDelta MediaEngagementContentsObserver::kMaxShortPlaybackTime =
-    base::TimeDelta::FromSeconds(3);
-
-const char* const
-    MediaEngagementContentsObserver::kHistogramScoreAtPlaybackName =
-        "Media.Engagement.ScoreAtPlayback";
-
-const char* const MediaEngagementContentsObserver::
-    kHistogramSignificantNotAddedFirstTimeName =
-        "Media.Engagement.SignificantPlayers.PlayerNotAdded.FirstTime";
-
-const char* const MediaEngagementContentsObserver::
-    kHistogramSignificantNotAddedAfterFirstTimeName =
-        "Media.Engagement.SignificantPlayers.PlayerNotAdded.AfterFirstTime";
-
-const char* const
-    MediaEngagementContentsObserver::kHistogramSignificantRemovedName =
-        "Media.Engagement.SignificantPlayers.PlayerRemoved";
-
-const int MediaEngagementContentsObserver::kMaxInsignificantPlaybackReason =
-    static_cast<int>(MediaEngagementContentsObserver::
-                         InsignificantPlaybackReason::kReasonMax);
+    base::Seconds(3);
 
 const base::TimeDelta
     MediaEngagementContentsObserver::kSignificantMediaPlaybackTime =
-        base::TimeDelta::FromSeconds(7);
+        base::Seconds(7);
 
 MediaEngagementContentsObserver::MediaEngagementContentsObserver(
     content::WebContents* web_contents,
     MediaEngagementService* service)
     : WebContentsObserver(web_contents),
       service_(service),
-      task_runner_(nullptr) {}
+      task_runner_(service->task_runner_for_test_) {}
 
 MediaEngagementContentsObserver::~MediaEngagementContentsObserver() = default;
 
 MediaEngagementContentsObserver::PlaybackTimer::PlaybackTimer(
     base::Clock* clock)
     : clock_(clock) {}
+
+MediaEngagementContentsObserver::PlaybackTimer::~PlaybackTimer() = default;
 
 void MediaEngagementContentsObserver::PlaybackTimer::Start() {
   start_time_ = clock_->Now();
@@ -111,6 +95,17 @@ void MediaEngagementContentsObserver::PlaybackTimer::Reset() {
   start_time_.reset();
 }
 
+void MediaEngagementContentsObserver::PlaybackTimer::SetClockForTest(
+    base::Clock* clock) {
+  if (IsRunning()) {
+    clock_ = clock;
+    start_time_ = clock_->Now();
+    recorded_time_ = base::TimeDelta();
+  } else {
+    clock_ = clock;
+  }
+}
+
 void MediaEngagementContentsObserver::WebContentsDestroyed() {
   RegisterAudiblePlayersWithSession();
   session_ = nullptr;
@@ -123,7 +118,6 @@ void MediaEngagementContentsObserver::WebContentsDestroyed() {
 void MediaEngagementContentsObserver::ClearPlayerStates() {
   playback_timer_.Stop();
   player_states_.clear();
-  significant_players_.clear();
   audio_context_players_.clear();
   audio_context_timer_.Stop();
 }
@@ -135,28 +129,29 @@ void MediaEngagementContentsObserver::RegisterAudiblePlayersWithSession() {
   int32_t significant_players = 0;
   int32_t audible_players = 0;
 
-  for (const auto& row : audible_players_) {
-    const PlayerState& player_state = GetPlayerState(row.first);
+  for (auto& [player_id, player_state] : player_states_) {
+    if (!player_state.was_audible) {
+      continue;
+    }
     const base::TimeDelta elapsed = player_state.playback_timer->Elapsed();
 
     if (elapsed < kMaxShortPlaybackTime && player_state.reached_end_of_stream) {
       session_->RecordShortPlaybackIgnored(elapsed.InMilliseconds());
-      continue;
+    } else {
+      significant_players += player_state.significant_playback_recorded;
+      ++audible_players;
     }
 
-    significant_players += row.second.first;
-    ++audible_players;
+    player_state.was_audible = false;
+    player_state.significant_playback_recorded = false;
+    player_state.significant_playback_timer.reset();
   }
 
   session_->RegisterAudiblePlayers(audible_players, significant_players);
-  audible_players_.clear();
 }
 
 void MediaEngagementContentsObserver::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
-  // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
-  // frames. This caller was converted automatically to the primary main frame
-  // to preserve its semantics. Follow up to confirm correctness.
   if (!navigation_handle->IsInPrimaryMainFrame() ||
       !navigation_handle->HasCommitted() ||
       navigation_handle->IsSameDocument() || navigation_handle->IsErrorPage()) {
@@ -166,8 +161,7 @@ void MediaEngagementContentsObserver::DidFinishNavigation(
   RegisterAudiblePlayersWithSession();
   ClearPlayerStates();
 
-  url::Origin new_origin = url::Origin::Create(navigation_handle->GetURL());
-  if (session_ && session_->IsSameOriginWith(new_origin))
+  if (session_ && session_->IsSameOriginWith(navigation_handle->GetURL()))
     return;
 
   // Only get the opener if the navigation originated from a link.
@@ -199,7 +193,7 @@ MediaEngagementContentsObserver::GetPlayerState(
     return state->second;
 
   auto iter =
-      player_states_.insert(std::make_pair(id, PlayerState(service_->clock_)));
+      player_states_.emplace(id, PlayerState(service_->clock_));
   return iter.first->second;
 }
 
@@ -220,28 +214,6 @@ void MediaEngagementContentsObserver::MediaStartedPlaying(
 
   MaybeInsertRemoveSignificantPlayer(media_player_id);
   UpdatePlayerTimer(media_player_id);
-  RecordEngagementScoreToHistogramAtPlayback(media_player_id);
-}
-
-void MediaEngagementContentsObserver::
-    RecordEngagementScoreToHistogramAtPlayback(
-        const content::MediaPlayerId& id) {
-  if (!session_)
-    return;
-
-  PlayerState& state = GetPlayerState(id);
-  if (!state.playing.value_or(false) || state.muted.value_or(true) ||
-      !state.has_audio.value_or(false) || !state.has_video.value_or(false) ||
-      state.score_recorded) {
-    return;
-  }
-
-  int percentage =
-      round(service_->GetEngagementScore(session_->origin()) * 100);
-  UMA_HISTOGRAM_PERCENTAGE(
-      MediaEngagementContentsObserver::kHistogramScoreAtPlaybackName,
-      percentage);
-  state.score_recorded = true;
 }
 
 void MediaEngagementContentsObserver::MediaMutedStatusChanged(
@@ -250,7 +222,6 @@ void MediaEngagementContentsObserver::MediaMutedStatusChanged(
   GetPlayerState(id).muted = muted;
   MaybeInsertRemoveSignificantPlayer(id);
   UpdatePlayerTimer(id);
-  RecordEngagementScoreToHistogramAtPlayback(id);
 }
 
 void MediaEngagementContentsObserver::MediaResized(
@@ -266,8 +237,6 @@ void MediaEngagementContentsObserver::MediaResized(
 void MediaEngagementContentsObserver::MediaDestroyed(
     const content::MediaPlayerId& id) {
   player_states_.erase(id);
-  audible_players_.erase(id);
-  significant_players_.erase(id);
 }
 
 void MediaEngagementContentsObserver::MediaStoppedPlaying(
@@ -303,36 +272,6 @@ void MediaEngagementContentsObserver::DidUpdateAudioMutingState(bool muted) {
   UpdateAudioContextTimer();
 }
 
-std::vector<MediaEngagementContentsObserver::InsignificantPlaybackReason>
-MediaEngagementContentsObserver::GetInsignificantPlayerReasons(
-    const PlayerState& state) {
-  std::vector<MediaEngagementContentsObserver::InsignificantPlaybackReason>
-      reasons;
-
-  if (state.muted.value_or(true)) {
-    reasons.push_back(MediaEngagementContentsObserver::
-                          InsignificantPlaybackReason::kAudioMuted);
-  }
-
-  if (!state.playing.value_or(false)) {
-    reasons.push_back(MediaEngagementContentsObserver::
-                          InsignificantPlaybackReason::kMediaPaused);
-  }
-
-  if (!state.significant_size.value_or(false) &&
-      state.has_video.value_or(false)) {
-    reasons.push_back(MediaEngagementContentsObserver::
-                          InsignificantPlaybackReason::kFrameSizeTooSmall);
-  }
-
-  if (!state.has_audio.value_or(false)) {
-    reasons.push_back(MediaEngagementContentsObserver::
-                          InsignificantPlaybackReason::kNoAudioTrack);
-  }
-
-  return reasons;
-}
-
 bool MediaEngagementContentsObserver::IsPlayerStateComplete(
     const PlayerState& state) {
   return state.muted.has_value() && state.playing.has_value() &&
@@ -344,20 +283,25 @@ bool MediaEngagementContentsObserver::IsPlayerStateComplete(
 void MediaEngagementContentsObserver::OnSignificantMediaPlaybackTimeForPlayer(
     const content::MediaPlayerId& id) {
   // Clear the timer.
-  auto audible_row = audible_players_.find(id);
-  audible_row->second.second = nullptr;
+  auto state_it = player_states_.find(id);
+  CHECK(state_it != player_states_.end());
+  CHECK(state_it->second.was_audible);
+
+  state_it->second.significant_playback_timer = nullptr;
 
   // Check that the tab is not muted.
   auto* audible_helper = RecentlyAudibleHelper::FromWebContents(web_contents());
-  if (web_contents()->IsAudioMuted() || !audible_helper->WasRecentlyAudible())
+  if (web_contents()->IsAudioMuted() || !audible_helper ||
+      !audible_helper->WasRecentlyAudible()) {
     return;
+  }
 
   // Record significant audible playback.
-  audible_row->second.first = true;
+  state_it->second.significant_playback_recorded = true;
 }
 
 void MediaEngagementContentsObserver::OnSignificantMediaPlaybackTimeForPage() {
-  DCHECK(session_);
+  CHECK(session_, base::NotFatalUntil::M161);
 
   if (session_->significant_media_element_playback_recorded())
     return;
@@ -365,15 +309,16 @@ void MediaEngagementContentsObserver::OnSignificantMediaPlaybackTimeForPage() {
   // Do not record significant playback if the tab did not make
   // a sound recently.
   auto* audible_helper = RecentlyAudibleHelper::FromWebContents(web_contents());
-  if (!audible_helper->WasRecentlyAudible())
+  if (!audible_helper || !audible_helper->WasRecentlyAudible()) {
     return;
+  }
 
   session_->RecordSignificantMediaElementPlayback();
 }
 
 void MediaEngagementContentsObserver::
     OnSignificantAudioContextPlaybackTimeForPage() {
-  DCHECK(session_);
+  CHECK(session_, base::NotFatalUntil::M161);
 
   if (session_->significant_audio_context_playback_recorded())
     return;
@@ -381,52 +326,11 @@ void MediaEngagementContentsObserver::
   // Do not record significant playback if the tab did not make
   // a sound recently.
   auto* audible_helper = RecentlyAudibleHelper::FromWebContents(web_contents());
-  if (!audible_helper->WasRecentlyAudible())
+  if (!audible_helper || !audible_helper->WasRecentlyAudible()) {
     return;
-
-  session_->RecordSignificantAudioContextPlayback();
-}
-
-void MediaEngagementContentsObserver::RecordInsignificantReasons(
-    std::vector<MediaEngagementContentsObserver::InsignificantPlaybackReason>
-        reasons,
-    const PlayerState& state,
-    MediaEngagementContentsObserver::InsignificantHistogram histogram) {
-  DCHECK(IsPlayerStateComplete(state));
-
-  std::string histogram_name;
-  switch (histogram) {
-    case MediaEngagementContentsObserver::InsignificantHistogram::
-        kPlayerRemoved:
-      histogram_name =
-          MediaEngagementContentsObserver::kHistogramSignificantRemovedName;
-      break;
-    case MediaEngagementContentsObserver::InsignificantHistogram::
-        kPlayerNotAddedFirstTime:
-      histogram_name = MediaEngagementContentsObserver::
-          kHistogramSignificantNotAddedFirstTimeName;
-      break;
-    case MediaEngagementContentsObserver::InsignificantHistogram::
-        kPlayerNotAddedAfterFirstTime:
-      histogram_name = MediaEngagementContentsObserver::
-          kHistogramSignificantNotAddedAfterFirstTimeName;
-      break;
-    default:
-      NOTREACHED();
-      break;
   }
 
-  base::HistogramBase* base_histogram = base::LinearHistogram::FactoryGet(
-      histogram_name, 1,
-      MediaEngagementContentsObserver::kMaxInsignificantPlaybackReason,
-      MediaEngagementContentsObserver::kMaxInsignificantPlaybackReason + 1,
-      base::HistogramBase::kUmaTargetedHistogramFlag);
-
-  for (auto reason : reasons)
-    base_histogram->Add(static_cast<int>(reason));
-
-  base_histogram->Add(static_cast<int>(
-      MediaEngagementContentsObserver::InsignificantPlaybackReason::kCount));
+  session_->RecordSignificantAudioContextPlayback();
 }
 
 void MediaEngagementContentsObserver::MaybeInsertRemoveSignificantPlayer(
@@ -438,45 +342,39 @@ void MediaEngagementContentsObserver::MaybeInsertRemoveSignificantPlayer(
     return;
 
   // If the player has an audio track, is un-muted and is playing then we should
-  // add it to the audible players map.
+  // mark it as audible.
   if (state.muted == false && state.playing == true &&
-      state.has_audio == true &&
-      audible_players_.find(id) == audible_players_.end()) {
-    audible_players_.emplace(id, std::make_pair(false, nullptr));
+      state.has_audio == true && !state.was_audible) {
+    state.was_audible = true;
+    state.significant_playback_recorded = false;
+    state.significant_playback_timer = nullptr;
   }
 
-  bool is_currently_significant =
-      significant_players_.find(id) != significant_players_.end();
-  std::vector<MediaEngagementContentsObserver::InsignificantPlaybackReason>
-      reasons = GetInsignificantPlayerReasons(state);
+  state.is_significant = IsSignificantPlayer(id);
+}
 
-  if (is_currently_significant) {
-    if (!reasons.empty()) {
-      // We are considered significant and we have reasons why we shouldn't
-      // be, so we should make the player not significant.
-      significant_players_.erase(id);
-      RecordInsignificantReasons(reasons, state,
-                                 MediaEngagementContentsObserver::
-                                     InsignificantHistogram::kPlayerRemoved);
-    }
-  } else {
-    if (reasons.empty()) {
-      // We are not considered significant but we don't have any reasons
-      // why we shouldn't be. Make the player significant.
-      significant_players_.insert(id);
-    } else if (state.reasons_recorded) {
-      RecordInsignificantReasons(
-          reasons, state,
-          MediaEngagementContentsObserver::InsignificantHistogram::
-              kPlayerNotAddedAfterFirstTime);
-    } else {
-      RecordInsignificantReasons(
-          reasons, state,
-          MediaEngagementContentsObserver::InsignificantHistogram::
-              kPlayerNotAddedFirstTime);
-      state.reasons_recorded = true;
-    }
+bool MediaEngagementContentsObserver::IsSignificantPlayer(
+    const content::MediaPlayerId& id) {
+  const PlayerState& state = GetPlayerState(id);
+
+  if (state.muted.value_or(true)) {
+    return false;
   }
+
+  if (!state.playing.value_or(false)) {
+    return false;
+  }
+
+  if (!state.significant_size.value_or(false) &&
+      state.has_video.value_or(false)) {
+    return false;
+  }
+
+  if (!state.has_audio.value_or(false)) {
+    return false;
+  }
+
+  return true;
 }
 
 void MediaEngagementContentsObserver::UpdatePlayerTimer(
@@ -484,13 +382,13 @@ void MediaEngagementContentsObserver::UpdatePlayerTimer(
   UpdatePageTimer();
 
   // The player should be considered audible.
-  auto audible_row = audible_players_.find(id);
-  if (audible_row == audible_players_.end())
+  auto state_it = player_states_.find(id);
+  if (state_it == player_states_.end() || !state_it->second.was_audible)
     return;
 
   // If we meet all the reqirements for being significant then start a timer.
-  if (significant_players_.find(id) != significant_players_.end()) {
-    if (audible_row->second.second)
+  if (state_it->second.is_significant) {
+    if (state_it->second.significant_playback_timer)
       return;
 
     auto new_timer = std::make_unique<base::OneShotTimer>();
@@ -504,18 +402,20 @@ void MediaEngagementContentsObserver::UpdatePlayerTimer(
                            OnSignificantMediaPlaybackTimeForPlayer,
                        base::Unretained(this), id));
 
-    audible_row->second.second = std::move(new_timer);
-  } else if (audible_row->second.second) {
+    state_it->second.significant_playback_timer = std::move(new_timer);
+  } else if (state_it->second.significant_playback_timer) {
     // We no longer meet the requirements so we should get rid of the timer.
-    audible_row->second.second = nullptr;
+    state_it->second.significant_playback_timer = nullptr;
   }
 }
 
 bool MediaEngagementContentsObserver::AreConditionsMet() const {
-  if (significant_players_.empty())
+  if (web_contents()->IsAudioMuted())
     return false;
 
-  return !web_contents()->IsAudioMuted();
+  return std::ranges::any_of(
+      player_states_,
+      [](const auto& pair) { return pair.second.is_significant; });
 }
 
 void MediaEngagementContentsObserver::UpdatePageTimer() {
@@ -577,61 +477,75 @@ void MediaEngagementContentsObserver::UpdateAudioContextTimer() {
 void MediaEngagementContentsObserver::SetTaskRunnerForTest(
     scoped_refptr<base::SequencedTaskRunner> task_runner) {
   task_runner_ = std::move(task_runner);
+  for (auto& pair : player_states_) {
+    pair.second.playback_timer->SetClockForTest(service_->clock_);  // IN-TEST
+  }
+  if (playback_timer_.IsRunning()) {
+    playback_timer_.Stop();
+    UpdatePageTimer();
+  }
+  if (audio_context_timer_.IsRunning()) {
+    audio_context_timer_.Stop();
+    UpdateAudioContextTimer();
+  }
+  for (auto& pair : player_states_) {
+    if (pair.second.significant_playback_timer &&
+        pair.second.significant_playback_timer->IsRunning()) {
+      pair.second.significant_playback_timer = nullptr;
+      UpdatePlayerTimer(pair.first);
+    }
+  }
 }
 
 void MediaEngagementContentsObserver::ReadyToCommitNavigation(
     content::NavigationHandle* handle) {
-  // If the navigation is occuring in the main frame we should use the URL
-  // provided by |handle| as the navigation has not committed yet. If the
-  // navigation is in a sub frame then use the URL from the main frame.
-  // TODO(https://crbug.com/1218946): With MPArch there may be multiple main
-  // frames. This caller was converted automatically to the primary main frame
-  // to preserve its semantics. Follow up to confirm correctness.
-  url::Origin origin = url::Origin::Create(
-      handle->IsInPrimaryMainFrame()
-          ? handle->GetURL()
-          : handle->GetWebContents()->GetLastCommittedURL());
-  MediaEngagementScore score = service_->CreateEngagementScore(origin);
-  bool has_high_engagement = score.high_score();
-
-  if (base::FeatureList::IsEnabled(media::kMediaEngagementHTTPSOnly))
-    DCHECK(!has_high_engagement || (origin.scheme() == url::kHttpsScheme));
-
-  // If the preloaded feature flag is enabled and the number of visits is less
-  // than the number of visits required to have an MEI score we should check the
-  // global data.
-  if (!has_high_engagement &&
-      score.visits() < MediaEngagementScore::GetScoreMinVisits() &&
-      base::FeatureList::IsEnabled(media::kPreloadMediaEngagementData)) {
-    has_high_engagement =
-        MediaEngagementPreloadedList::GetInstance()->CheckOriginIsPresent(
-            origin);
+  // Do nothing if prerendering.
+  if (handle->GetRenderFrameHost()->GetLifecycleState() ==
+          content::RenderFrameHost::LifecycleState::kPrerendering &&
+      !handle->IsPrerenderedPageActivation()) {
+    return;
   }
 
+  // If the navigation is occurring in the main frame we should use the URL
+  // provided by |handle| as the navigation has not committed yet. If the
+  // navigation is in a subframe or fenced frame, use the URL from the outermost
+  // main frame.
+  url::Origin origin = url::Origin::Create(handle->IsInPrimaryMainFrame()
+                                               ? handle->GetURL()
+                                               : handle->GetRenderFrameHost()
+                                                     ->GetOutermostMainFrame()
+                                                     ->GetLastCommittedURL());
+
   // If we have high media engagement then we should send that to Blink.
-  if (has_high_engagement) {
+  if (service_->HasHighEngagement(origin)) {
     SendEngagementLevelToFrame(url::Origin::Create(handle->GetURL()),
                                handle->GetRenderFrameHost());
   }
 }
 
 content::WebContents* MediaEngagementContentsObserver::GetOpener() const {
-#if !defined(OS_ANDROID)
-  for (auto* browser : *BrowserList::GetInstance()) {
-    if (browser->profile() != service_->profile())
-      continue;
+  content::WebContents* result = nullptr;
+#if !BUILDFLAG(IS_ANDROID)
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [this, &result](BrowserWindowInterface* browser) {
+        if (browser->GetProfile() != service_->profile()) {
+          return true;  // Continue iteration
+        }
 
-    int index =
-        browser->tab_strip_model()->GetIndexOfWebContents(web_contents());
-    if (index == TabStripModel::kNoTab)
-      continue;
+        const TabStripModel* tab_strip_model = browser->GetTabStripModel();
+        int index = tab_strip_model->GetIndexOfWebContents(web_contents());
+        if (index == TabStripModel::kNoTab) {
+          return true;
+        }
 
-    // Whether or not the |opener| is null, this is the right tab strip.
-    return browser->tab_strip_model()->GetOpenerOfWebContentsAt(index);
-  }
-#endif  // !defined(OS_ANDROID)
-
-  return nullptr;
+        // Whether or not the `opener` is null, this is the right tab strip.
+        const tabs::TabInterface* tab =
+            tab_strip_model->GetOpenerOfTabAt(index);
+        result = tab ? tab->GetContents() : nullptr;
+        return false;  // Stop iteration, we found what we need
+      });
+#endif  // !BUILDFLAG(IS_ANDROID)
+  return result;
 }
 
 scoped_refptr<MediaEngagementSession>
@@ -650,7 +564,8 @@ MediaEngagementContentsObserver::GetOrCreateSession(
       service_->GetContentsObserverFor(opener);
 
   if (opener_observer && opener_observer->session_ &&
-      opener_observer->session_->IsSameOriginWith(origin)) {
+      opener_observer->session_->IsSameOriginWith(
+          navigation_handle->GetURL())) {
     return opener_observer->session_;
   }
 

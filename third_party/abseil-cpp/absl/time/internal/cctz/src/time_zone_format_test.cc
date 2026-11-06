@@ -13,15 +13,21 @@
 //   limitations under the License.
 
 #include <chrono>
+#include <cstdint>
 #include <iomanip>
+#include <ratio>  // NOLINT: We use std::ratio in this header
 #include <sstream>
 #include <string>
 
+#include "absl/base/config.h"
+#include "absl/time/internal/cctz/include/cctz/time_zone.h"
+#if defined(__linux__)
+#include <features.h>
+#endif
+
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-#include "absl/base/config.h"
 #include "absl/time/internal/cctz/include/cctz/civil_time.h"
-#include "absl/time/internal/cctz/include/cctz/time_zone.h"
 
 namespace chrono = std::chrono;
 
@@ -59,10 +65,13 @@ const char RFC1123_no_wday[] = "%d %b %Y %H:%M:%S %z";
 template <typename D>
 void TestFormatSpecifier(time_point<D> tp, time_zone tz, const std::string& fmt,
                          const std::string& ans) {
-  EXPECT_EQ(ans, format(fmt, tp, tz)) << fmt;
-  EXPECT_EQ("xxx " + ans, format("xxx " + fmt, tp, tz));
-  EXPECT_EQ(ans + " yyy", format(fmt + " yyy", tp, tz));
-  EXPECT_EQ("xxx " + ans + " yyy", format("xxx " + fmt + " yyy", tp, tz));
+  EXPECT_EQ(ans, absl::time_internal::cctz::format(fmt, tp, tz)) << fmt;
+  EXPECT_EQ("xxx " + ans,
+            absl::time_internal::cctz::format("xxx " + fmt, tp, tz));
+  EXPECT_EQ(ans + " yyy",
+            absl::time_internal::cctz::format(fmt + " yyy", tp, tz));
+  EXPECT_EQ("xxx " + ans + " yyy",
+            absl::time_internal::cctz::format("xxx " + fmt + " yyy", tp, tz));
 }
 
 }  // namespace
@@ -78,26 +87,29 @@ TEST(Format, TimePointResolution) {
       chrono::system_clock::from_time_t(1420167845) +
       chrono::milliseconds(123) + chrono::microseconds(456) +
       chrono::nanoseconds(789);
-  EXPECT_EQ(
-      "03:04:05.123456789",
-      format(kFmt, chrono::time_point_cast<chrono::nanoseconds>(t0), utc));
-  EXPECT_EQ(
-      "03:04:05.123456",
-      format(kFmt, chrono::time_point_cast<chrono::microseconds>(t0), utc));
-  EXPECT_EQ(
-      "03:04:05.123",
-      format(kFmt, chrono::time_point_cast<chrono::milliseconds>(t0), utc));
+  EXPECT_EQ("03:04:05.123456789",
+            absl::time_internal::cctz::format(
+                kFmt, chrono::time_point_cast<chrono::nanoseconds>(t0), utc));
+  EXPECT_EQ("03:04:05.123456",
+            absl::time_internal::cctz::format(
+                kFmt, chrono::time_point_cast<chrono::microseconds>(t0), utc));
+  EXPECT_EQ("03:04:05.123",
+            absl::time_internal::cctz::format(
+                kFmt, chrono::time_point_cast<chrono::milliseconds>(t0), utc));
   EXPECT_EQ("03:04:05",
-            format(kFmt, chrono::time_point_cast<chrono::seconds>(t0), utc));
+            absl::time_internal::cctz::format(
+                kFmt, chrono::time_point_cast<chrono::seconds>(t0), utc));
   EXPECT_EQ(
       "03:04:05",
-      format(kFmt,
-             chrono::time_point_cast<absl::time_internal::cctz::seconds>(t0),
-             utc));
+      absl::time_internal::cctz::format(
+          kFmt, chrono::time_point_cast<absl::time_internal::cctz::seconds>(t0),
+          utc));
   EXPECT_EQ("03:04:00",
-            format(kFmt, chrono::time_point_cast<chrono::minutes>(t0), utc));
+            absl::time_internal::cctz::format(
+                kFmt, chrono::time_point_cast<chrono::minutes>(t0), utc));
   EXPECT_EQ("03:00:00",
-            format(kFmt, chrono::time_point_cast<chrono::hours>(t0), utc));
+            absl::time_internal::cctz::format(
+                kFmt, chrono::time_point_cast<chrono::hours>(t0), utc));
 }
 
 TEST(Format, TimePointExtendedResolution) {
@@ -131,46 +143,49 @@ TEST(Format, Basics) {
   time_zone tz = utc_time_zone();
   time_point<chrono::nanoseconds> tp = chrono::system_clock::from_time_t(0);
 
-  // Starts with a couple basic edge cases.
-  EXPECT_EQ("", format("", tp, tz));
-  EXPECT_EQ(" ", format(" ", tp, tz));
-  EXPECT_EQ("  ", format("  ", tp, tz));
-  EXPECT_EQ("xxx", format("xxx", tp, tz));
+  // Start with basic edge cases.
+  EXPECT_EQ("", absl::time_internal::cctz::format("", tp, tz));
+  EXPECT_EQ(" ", absl::time_internal::cctz::format(" ", tp, tz));
+  EXPECT_EQ("  ", absl::time_internal::cctz::format("  ", tp, tz));
+  EXPECT_EQ("xxx", absl::time_internal::cctz::format("xxx", tp, tz));
   std::string big(128, 'x');
-  EXPECT_EQ(big, format(big, tp, tz));
+  EXPECT_EQ(big, absl::time_internal::cctz::format(big, tp, tz));
   // Cause the 1024-byte buffer to grow.
   std::string bigger(100000, 'x');
-  EXPECT_EQ(bigger, format(bigger, tp, tz));
+  EXPECT_EQ(bigger, absl::time_internal::cctz::format(bigger, tp, tz));
 
   tp += chrono::hours(13) + chrono::minutes(4) + chrono::seconds(5);
   tp += chrono::milliseconds(6) + chrono::microseconds(7) +
         chrono::nanoseconds(8);
-  EXPECT_EQ("1970-01-01", format("%Y-%m-%d", tp, tz));
-  EXPECT_EQ("13:04:05", format("%H:%M:%S", tp, tz));
-  EXPECT_EQ("13:04:05.006", format("%H:%M:%E3S", tp, tz));
-  EXPECT_EQ("13:04:05.006007", format("%H:%M:%E6S", tp, tz));
-  EXPECT_EQ("13:04:05.006007008", format("%H:%M:%E9S", tp, tz));
+  EXPECT_EQ("1970-01-01",
+            absl::time_internal::cctz::format("%Y-%m-%d", tp, tz));
+  EXPECT_EQ("13:04:05", absl::time_internal::cctz::format("%H:%M:%S", tp, tz));
+  EXPECT_EQ("13:04:05.006",
+            absl::time_internal::cctz::format("%H:%M:%E3S", tp, tz));
+  EXPECT_EQ("13:04:05.006007",
+            absl::time_internal::cctz::format("%H:%M:%E6S", tp, tz));
+  EXPECT_EQ("13:04:05.006007008",
+            absl::time_internal::cctz::format("%H:%M:%E9S", tp, tz));
 }
 
 TEST(Format, PosixConversions) {
   const time_zone tz = utc_time_zone();
-  auto tp = chrono::system_clock::from_time_t(0);
+  auto tp =
+      chrono::system_clock::from_time_t(308189482);  // 1979-10-08T00:11:22Z
 
-  TestFormatSpecifier(tp, tz, "%d", "01");
-  TestFormatSpecifier(tp, tz, "%e", " 1");  // extension but internal support
+  TestFormatSpecifier(tp, tz, "%d", "08");
+  TestFormatSpecifier(tp, tz, "%e", " 8");  // extension but internal support
   TestFormatSpecifier(tp, tz, "%H", "00");
   TestFormatSpecifier(tp, tz, "%I", "12");
-  TestFormatSpecifier(tp, tz, "%j", "001");
-  TestFormatSpecifier(tp, tz, "%m", "01");
-  TestFormatSpecifier(tp, tz, "%M", "00");
-  TestFormatSpecifier(tp, tz, "%S", "00");
-  TestFormatSpecifier(tp, tz, "%U", "00");
-#if !defined(__EMSCRIPTEN__)
-  TestFormatSpecifier(tp, tz, "%w", "4");  // 4=Thursday
-#endif
-  TestFormatSpecifier(tp, tz, "%W", "00");
-  TestFormatSpecifier(tp, tz, "%y", "70");
-  TestFormatSpecifier(tp, tz, "%Y", "1970");
+  TestFormatSpecifier(tp, tz, "%j", "281");
+  TestFormatSpecifier(tp, tz, "%m", "10");
+  TestFormatSpecifier(tp, tz, "%M", "11");
+  TestFormatSpecifier(tp, tz, "%S", "22");
+  TestFormatSpecifier(tp, tz, "%U", "40");
+  TestFormatSpecifier(tp, tz, "%w", "1");  // 1=Monday
+  TestFormatSpecifier(tp, tz, "%W", "41");
+  TestFormatSpecifier(tp, tz, "%y", "79");
+  TestFormatSpecifier(tp, tz, "%Y", "1979");
   TestFormatSpecifier(tp, tz, "%z", "+0000");
   TestFormatSpecifier(tp, tz, "%Z", "UTC");
   TestFormatSpecifier(tp, tz, "%%", "%");
@@ -178,19 +193,21 @@ TEST(Format, PosixConversions) {
 #if defined(__linux__)
   // SU/C99/TZ extensions
   TestFormatSpecifier(tp, tz, "%C", "19");
-  TestFormatSpecifier(tp, tz, "%D", "01/01/70");
-  TestFormatSpecifier(tp, tz, "%F", "1970-01-01");
-  TestFormatSpecifier(tp, tz, "%g", "70");
-  TestFormatSpecifier(tp, tz, "%G", "1970");
+  TestFormatSpecifier(tp, tz, "%D", "10/08/79");
+  TestFormatSpecifier(tp, tz, "%F", "1979-10-08");
+  TestFormatSpecifier(tp, tz, "%g", "79");
+  TestFormatSpecifier(tp, tz, "%G", "1979");
+#if defined(__GLIBC__)
   TestFormatSpecifier(tp, tz, "%k", " 0");
   TestFormatSpecifier(tp, tz, "%l", "12");
+#endif
   TestFormatSpecifier(tp, tz, "%n", "\n");
-  TestFormatSpecifier(tp, tz, "%R", "00:00");
+  TestFormatSpecifier(tp, tz, "%R", "00:11");
   TestFormatSpecifier(tp, tz, "%t", "\t");
-  TestFormatSpecifier(tp, tz, "%T", "00:00:00");
-  TestFormatSpecifier(tp, tz, "%u", "4");  // 4=Thursday
-  TestFormatSpecifier(tp, tz, "%V", "01");
-  TestFormatSpecifier(tp, tz, "%s", "0");
+  TestFormatSpecifier(tp, tz, "%T", "00:11:22");
+  TestFormatSpecifier(tp, tz, "%u", "1");  // 1=Monday
+  TestFormatSpecifier(tp, tz, "%V", "41");
+  TestFormatSpecifier(tp, tz, "%s", "308189482");
 #endif
 }
 
@@ -204,7 +221,8 @@ TEST(Format, LocaleSpecific) {
   TestFormatSpecifier(tp, tz, "%B", "January");
 
   // %c should at least produce the numeric year and time-of-day.
-  const std::string s = format("%c", tp, utc_time_zone());
+  const std::string s =
+      absl::time_internal::cctz::format("%c", tp, utc_time_zone());
   EXPECT_THAT(s, testing::HasSubstr("1970"));
   EXPECT_THAT(s, testing::HasSubstr("00:00:00"));
 
@@ -212,10 +230,16 @@ TEST(Format, LocaleSpecific) {
   TestFormatSpecifier(tp, tz, "%x", "01/01/70");
   TestFormatSpecifier(tp, tz, "%X", "00:00:00");
 
+  // %I renders midnight and noon as 12, with %p disambiguating them.
+  TestFormatSpecifier(tp, tz, "%I %p", "12 AM");
+  TestFormatSpecifier(tp + chrono::hours(12), tz, "%I %p", "12 PM");
+
 #if defined(__linux__)
   // SU/C99/TZ extensions
   TestFormatSpecifier(tp, tz, "%h", "Jan");  // Same as %b
+#if defined(__GLIBC__)
   TestFormatSpecifier(tp, tz, "%P", "am");
+#endif
   TestFormatSpecifier(tp, tz, "%r", "12:00:00 AM");
 
   // Modified conversion specifiers %E_
@@ -268,49 +292,61 @@ TEST(Format, ExtendedSeconds) {
   // No subseconds.
   time_point<chrono::nanoseconds> tp = chrono::system_clock::from_time_t(0);
   tp += chrono::seconds(5);
-  EXPECT_EQ("05", format("%E*S", tp, tz));
-  EXPECT_EQ("05", format("%E0S", tp, tz));
-  EXPECT_EQ("05.0", format("%E1S", tp, tz));
-  EXPECT_EQ("05.00", format("%E2S", tp, tz));
-  EXPECT_EQ("05.000", format("%E3S", tp, tz));
-  EXPECT_EQ("05.0000", format("%E4S", tp, tz));
-  EXPECT_EQ("05.00000", format("%E5S", tp, tz));
-  EXPECT_EQ("05.000000", format("%E6S", tp, tz));
-  EXPECT_EQ("05.0000000", format("%E7S", tp, tz));
-  EXPECT_EQ("05.00000000", format("%E8S", tp, tz));
-  EXPECT_EQ("05.000000000", format("%E9S", tp, tz));
-  EXPECT_EQ("05.0000000000", format("%E10S", tp, tz));
-  EXPECT_EQ("05.00000000000", format("%E11S", tp, tz));
-  EXPECT_EQ("05.000000000000", format("%E12S", tp, tz));
-  EXPECT_EQ("05.0000000000000", format("%E13S", tp, tz));
-  EXPECT_EQ("05.00000000000000", format("%E14S", tp, tz));
-  EXPECT_EQ("05.000000000000000", format("%E15S", tp, tz));
+  EXPECT_EQ("05", absl::time_internal::cctz::format("%E*S", tp, tz));
+  EXPECT_EQ("05", absl::time_internal::cctz::format("%E0S", tp, tz));
+  EXPECT_EQ("05.0", absl::time_internal::cctz::format("%E1S", tp, tz));
+  EXPECT_EQ("05.00", absl::time_internal::cctz::format("%E2S", tp, tz));
+  EXPECT_EQ("05.000", absl::time_internal::cctz::format("%E3S", tp, tz));
+  EXPECT_EQ("05.0000", absl::time_internal::cctz::format("%E4S", tp, tz));
+  EXPECT_EQ("05.00000", absl::time_internal::cctz::format("%E5S", tp, tz));
+  EXPECT_EQ("05.000000", absl::time_internal::cctz::format("%E6S", tp, tz));
+  EXPECT_EQ("05.0000000", absl::time_internal::cctz::format("%E7S", tp, tz));
+  EXPECT_EQ("05.00000000", absl::time_internal::cctz::format("%E8S", tp, tz));
+  EXPECT_EQ("05.000000000", absl::time_internal::cctz::format("%E9S", tp, tz));
+  EXPECT_EQ("05.0000000000",
+            absl::time_internal::cctz::format("%E10S", tp, tz));
+  EXPECT_EQ("05.00000000000",
+            absl::time_internal::cctz::format("%E11S", tp, tz));
+  EXPECT_EQ("05.000000000000",
+            absl::time_internal::cctz::format("%E12S", tp, tz));
+  EXPECT_EQ("05.0000000000000",
+            absl::time_internal::cctz::format("%E13S", tp, tz));
+  EXPECT_EQ("05.00000000000000",
+            absl::time_internal::cctz::format("%E14S", tp, tz));
+  EXPECT_EQ("05.000000000000000",
+            absl::time_internal::cctz::format("%E15S", tp, tz));
 
   // With subseconds.
   tp += chrono::milliseconds(6) + chrono::microseconds(7) +
         chrono::nanoseconds(8);
-  EXPECT_EQ("05.006007008", format("%E*S", tp, tz));
-  EXPECT_EQ("05", format("%E0S", tp, tz));
-  EXPECT_EQ("05.0", format("%E1S", tp, tz));
-  EXPECT_EQ("05.00", format("%E2S", tp, tz));
-  EXPECT_EQ("05.006", format("%E3S", tp, tz));
-  EXPECT_EQ("05.0060", format("%E4S", tp, tz));
-  EXPECT_EQ("05.00600", format("%E5S", tp, tz));
-  EXPECT_EQ("05.006007", format("%E6S", tp, tz));
-  EXPECT_EQ("05.0060070", format("%E7S", tp, tz));
-  EXPECT_EQ("05.00600700", format("%E8S", tp, tz));
-  EXPECT_EQ("05.006007008", format("%E9S", tp, tz));
-  EXPECT_EQ("05.0060070080", format("%E10S", tp, tz));
-  EXPECT_EQ("05.00600700800", format("%E11S", tp, tz));
-  EXPECT_EQ("05.006007008000", format("%E12S", tp, tz));
-  EXPECT_EQ("05.0060070080000", format("%E13S", tp, tz));
-  EXPECT_EQ("05.00600700800000", format("%E14S", tp, tz));
-  EXPECT_EQ("05.006007008000000", format("%E15S", tp, tz));
+  EXPECT_EQ("05.006007008", absl::time_internal::cctz::format("%E*S", tp, tz));
+  EXPECT_EQ("05", absl::time_internal::cctz::format("%E0S", tp, tz));
+  EXPECT_EQ("05.0", absl::time_internal::cctz::format("%E1S", tp, tz));
+  EXPECT_EQ("05.00", absl::time_internal::cctz::format("%E2S", tp, tz));
+  EXPECT_EQ("05.006", absl::time_internal::cctz::format("%E3S", tp, tz));
+  EXPECT_EQ("05.0060", absl::time_internal::cctz::format("%E4S", tp, tz));
+  EXPECT_EQ("05.00600", absl::time_internal::cctz::format("%E5S", tp, tz));
+  EXPECT_EQ("05.006007", absl::time_internal::cctz::format("%E6S", tp, tz));
+  EXPECT_EQ("05.0060070", absl::time_internal::cctz::format("%E7S", tp, tz));
+  EXPECT_EQ("05.00600700", absl::time_internal::cctz::format("%E8S", tp, tz));
+  EXPECT_EQ("05.006007008", absl::time_internal::cctz::format("%E9S", tp, tz));
+  EXPECT_EQ("05.0060070080",
+            absl::time_internal::cctz::format("%E10S", tp, tz));
+  EXPECT_EQ("05.00600700800",
+            absl::time_internal::cctz::format("%E11S", tp, tz));
+  EXPECT_EQ("05.006007008000",
+            absl::time_internal::cctz::format("%E12S", tp, tz));
+  EXPECT_EQ("05.0060070080000",
+            absl::time_internal::cctz::format("%E13S", tp, tz));
+  EXPECT_EQ("05.00600700800000",
+            absl::time_internal::cctz::format("%E14S", tp, tz));
+  EXPECT_EQ("05.006007008000000",
+            absl::time_internal::cctz::format("%E15S", tp, tz));
 
   // Times before the Unix epoch.
   tp = chrono::system_clock::from_time_t(0) + chrono::microseconds(-1);
   EXPECT_EQ("1969-12-31 23:59:59.999999",
-            format("%Y-%m-%d %H:%M:%E*S", tp, tz));
+            absl::time_internal::cctz::format("%Y-%m-%d %H:%M:%E*S", tp, tz));
 
   // Here is a "%E*S" case we got wrong for a while.  While the first
   // instant below is correctly rendered as "...:07.333304", the second
@@ -318,10 +354,10 @@ TEST(Format, ExtendedSeconds) {
   tp = chrono::system_clock::from_time_t(0) +
        chrono::microseconds(1395024427333304);
   EXPECT_EQ("2014-03-17 02:47:07.333304",
-            format("%Y-%m-%d %H:%M:%E*S", tp, tz));
+            absl::time_internal::cctz::format("%Y-%m-%d %H:%M:%E*S", tp, tz));
   tp += chrono::microseconds(1);
   EXPECT_EQ("2014-03-17 02:47:07.333305",
-            format("%Y-%m-%d %H:%M:%E*S", tp, tz));
+            absl::time_internal::cctz::format("%Y-%m-%d %H:%M:%E*S", tp, tz));
 }
 
 TEST(Format, ExtendedSubeconds) {
@@ -330,60 +366,69 @@ TEST(Format, ExtendedSubeconds) {
   // No subseconds.
   time_point<chrono::nanoseconds> tp = chrono::system_clock::from_time_t(0);
   tp += chrono::seconds(5);
-  EXPECT_EQ("0", format("%E*f", tp, tz));
-  EXPECT_EQ("", format("%E0f", tp, tz));
-  EXPECT_EQ("0", format("%E1f", tp, tz));
-  EXPECT_EQ("00", format("%E2f", tp, tz));
-  EXPECT_EQ("000", format("%E3f", tp, tz));
-  EXPECT_EQ("0000", format("%E4f", tp, tz));
-  EXPECT_EQ("00000", format("%E5f", tp, tz));
-  EXPECT_EQ("000000", format("%E6f", tp, tz));
-  EXPECT_EQ("0000000", format("%E7f", tp, tz));
-  EXPECT_EQ("00000000", format("%E8f", tp, tz));
-  EXPECT_EQ("000000000", format("%E9f", tp, tz));
-  EXPECT_EQ("0000000000", format("%E10f", tp, tz));
-  EXPECT_EQ("00000000000", format("%E11f", tp, tz));
-  EXPECT_EQ("000000000000", format("%E12f", tp, tz));
-  EXPECT_EQ("0000000000000", format("%E13f", tp, tz));
-  EXPECT_EQ("00000000000000", format("%E14f", tp, tz));
-  EXPECT_EQ("000000000000000", format("%E15f", tp, tz));
+  EXPECT_EQ("0", absl::time_internal::cctz::format("%E*f", tp, tz));
+  EXPECT_EQ("", absl::time_internal::cctz::format("%E0f", tp, tz));
+  EXPECT_EQ("0", absl::time_internal::cctz::format("%E1f", tp, tz));
+  EXPECT_EQ("00", absl::time_internal::cctz::format("%E2f", tp, tz));
+  EXPECT_EQ("000", absl::time_internal::cctz::format("%E3f", tp, tz));
+  EXPECT_EQ("0000", absl::time_internal::cctz::format("%E4f", tp, tz));
+  EXPECT_EQ("00000", absl::time_internal::cctz::format("%E5f", tp, tz));
+  EXPECT_EQ("000000", absl::time_internal::cctz::format("%E6f", tp, tz));
+  EXPECT_EQ("0000000", absl::time_internal::cctz::format("%E7f", tp, tz));
+  EXPECT_EQ("00000000", absl::time_internal::cctz::format("%E8f", tp, tz));
+  EXPECT_EQ("000000000", absl::time_internal::cctz::format("%E9f", tp, tz));
+  EXPECT_EQ("0000000000", absl::time_internal::cctz::format("%E10f", tp, tz));
+  EXPECT_EQ("00000000000", absl::time_internal::cctz::format("%E11f", tp, tz));
+  EXPECT_EQ("000000000000", absl::time_internal::cctz::format("%E12f", tp, tz));
+  EXPECT_EQ("0000000000000",
+            absl::time_internal::cctz::format("%E13f", tp, tz));
+  EXPECT_EQ("00000000000000",
+            absl::time_internal::cctz::format("%E14f", tp, tz));
+  EXPECT_EQ("000000000000000",
+            absl::time_internal::cctz::format("%E15f", tp, tz));
 
   // With subseconds.
   tp += chrono::milliseconds(6) + chrono::microseconds(7) +
         chrono::nanoseconds(8);
-  EXPECT_EQ("006007008", format("%E*f", tp, tz));
-  EXPECT_EQ("", format("%E0f", tp, tz));
-  EXPECT_EQ("0", format("%E1f", tp, tz));
-  EXPECT_EQ("00", format("%E2f", tp, tz));
-  EXPECT_EQ("006", format("%E3f", tp, tz));
-  EXPECT_EQ("0060", format("%E4f", tp, tz));
-  EXPECT_EQ("00600", format("%E5f", tp, tz));
-  EXPECT_EQ("006007", format("%E6f", tp, tz));
-  EXPECT_EQ("0060070", format("%E7f", tp, tz));
-  EXPECT_EQ("00600700", format("%E8f", tp, tz));
-  EXPECT_EQ("006007008", format("%E9f", tp, tz));
-  EXPECT_EQ("0060070080", format("%E10f", tp, tz));
-  EXPECT_EQ("00600700800", format("%E11f", tp, tz));
-  EXPECT_EQ("006007008000", format("%E12f", tp, tz));
-  EXPECT_EQ("0060070080000", format("%E13f", tp, tz));
-  EXPECT_EQ("00600700800000", format("%E14f", tp, tz));
-  EXPECT_EQ("006007008000000", format("%E15f", tp, tz));
+  EXPECT_EQ("006007008", absl::time_internal::cctz::format("%E*f", tp, tz));
+  EXPECT_EQ("", absl::time_internal::cctz::format("%E0f", tp, tz));
+  EXPECT_EQ("0", absl::time_internal::cctz::format("%E1f", tp, tz));
+  EXPECT_EQ("00", absl::time_internal::cctz::format("%E2f", tp, tz));
+  EXPECT_EQ("006", absl::time_internal::cctz::format("%E3f", tp, tz));
+  EXPECT_EQ("0060", absl::time_internal::cctz::format("%E4f", tp, tz));
+  EXPECT_EQ("00600", absl::time_internal::cctz::format("%E5f", tp, tz));
+  EXPECT_EQ("006007", absl::time_internal::cctz::format("%E6f", tp, tz));
+  EXPECT_EQ("0060070", absl::time_internal::cctz::format("%E7f", tp, tz));
+  EXPECT_EQ("00600700", absl::time_internal::cctz::format("%E8f", tp, tz));
+  EXPECT_EQ("006007008", absl::time_internal::cctz::format("%E9f", tp, tz));
+  EXPECT_EQ("0060070080", absl::time_internal::cctz::format("%E10f", tp, tz));
+  EXPECT_EQ("00600700800", absl::time_internal::cctz::format("%E11f", tp, tz));
+  EXPECT_EQ("006007008000", absl::time_internal::cctz::format("%E12f", tp, tz));
+  EXPECT_EQ("0060070080000",
+            absl::time_internal::cctz::format("%E13f", tp, tz));
+  EXPECT_EQ("00600700800000",
+            absl::time_internal::cctz::format("%E14f", tp, tz));
+  EXPECT_EQ("006007008000000",
+            absl::time_internal::cctz::format("%E15f", tp, tz));
 
   // Times before the Unix epoch.
   tp = chrono::system_clock::from_time_t(0) + chrono::microseconds(-1);
-  EXPECT_EQ("1969-12-31 23:59:59.999999",
-            format("%Y-%m-%d %H:%M:%S.%E*f", tp, tz));
+  EXPECT_EQ(
+      "1969-12-31 23:59:59.999999",
+      absl::time_internal::cctz::format("%Y-%m-%d %H:%M:%S.%E*f", tp, tz));
 
   // Here is a "%E*S" case we got wrong for a while.  While the first
   // instant below is correctly rendered as "...:07.333304", the second
   // one used to appear as "...:07.33330499999999999".
   tp = chrono::system_clock::from_time_t(0) +
        chrono::microseconds(1395024427333304);
-  EXPECT_EQ("2014-03-17 02:47:07.333304",
-            format("%Y-%m-%d %H:%M:%S.%E*f", tp, tz));
+  EXPECT_EQ(
+      "2014-03-17 02:47:07.333304",
+      absl::time_internal::cctz::format("%Y-%m-%d %H:%M:%S.%E*f", tp, tz));
   tp += chrono::microseconds(1);
-  EXPECT_EQ("2014-03-17 02:47:07.333305",
-            format("%Y-%m-%d %H:%M:%S.%E*f", tp, tz));
+  EXPECT_EQ(
+      "2014-03-17 02:47:07.333305",
+      absl::time_internal::cctz::format("%Y-%m-%d %H:%M:%S.%E*f", tp, tz));
 }
 
 TEST(Format, CompareExtendSecondsVsSubseconds) {
@@ -399,15 +444,17 @@ TEST(Format, CompareExtendSecondsVsSubseconds) {
   time_point<chrono::nanoseconds> tp = chrono::system_clock::from_time_t(0);
   tp += chrono::seconds(5);
   // ... %E*S and %S.%E*f are different.
-  EXPECT_EQ("05", format(fmt_A("*"), tp, tz));
-  EXPECT_EQ("05.0", format(fmt_B("*"), tp, tz));
+  EXPECT_EQ("05", absl::time_internal::cctz::format(fmt_A("*"), tp, tz));
+  EXPECT_EQ("05.0", absl::time_internal::cctz::format(fmt_B("*"), tp, tz));
   // ... %E0S and %S.%E0f are different.
-  EXPECT_EQ("05", format(fmt_A("0"), tp, tz));
-  EXPECT_EQ("05.", format(fmt_B("0"), tp, tz));
+  EXPECT_EQ("05", absl::time_internal::cctz::format(fmt_A("0"), tp, tz));
+  EXPECT_EQ("05.", absl::time_internal::cctz::format(fmt_B("0"), tp, tz));
   // ... %E<prec>S and %S.%E<prec>f are the same for prec in [1:15].
   for (int prec = 1; prec <= 15; ++prec) {
-    const std::string a = format(fmt_A(std::to_string(prec)), tp, tz);
-    const std::string b = format(fmt_B(std::to_string(prec)), tp, tz);
+    const std::string a =
+        absl::time_internal::cctz::format(fmt_A(std::to_string(prec)), tp, tz);
+    const std::string b =
+        absl::time_internal::cctz::format(fmt_B(std::to_string(prec)), tp, tz);
     EXPECT_EQ(a, b) << "prec=" << prec;
   }
 
@@ -415,15 +462,19 @@ TEST(Format, CompareExtendSecondsVsSubseconds) {
   // ... %E*S and %S.%E*f are the same.
   tp += chrono::milliseconds(6) + chrono::microseconds(7) +
         chrono::nanoseconds(8);
-  EXPECT_EQ("05.006007008", format(fmt_A("*"), tp, tz));
-  EXPECT_EQ("05.006007008", format(fmt_B("*"), tp, tz));
+  EXPECT_EQ("05.006007008",
+            absl::time_internal::cctz::format(fmt_A("*"), tp, tz));
+  EXPECT_EQ("05.006007008",
+            absl::time_internal::cctz::format(fmt_B("*"), tp, tz));
   // ... %E0S and %S.%E0f are different.
-  EXPECT_EQ("05", format(fmt_A("0"), tp, tz));
-  EXPECT_EQ("05.", format(fmt_B("0"), tp, tz));
+  EXPECT_EQ("05", absl::time_internal::cctz::format(fmt_A("0"), tp, tz));
+  EXPECT_EQ("05.", absl::time_internal::cctz::format(fmt_B("0"), tp, tz));
   // ... %E<prec>S and %S.%E<prec>f are the same for prec in [1:15].
   for (int prec = 1; prec <= 15; ++prec) {
-    const std::string a = format(fmt_A(std::to_string(prec)), tp, tz);
-    const std::string b = format(fmt_B(std::to_string(prec)), tp, tz);
+    const std::string a =
+        absl::time_internal::cctz::format(fmt_A(std::to_string(prec)), tp, tz);
+    const std::string b =
+        absl::time_internal::cctz::format(fmt_B(std::to_string(prec)), tp, tz);
     EXPECT_EQ(a, b) << "prec=" << prec;
   }
 }
@@ -596,31 +647,31 @@ TEST(Format, ExtendedYears) {
 
   // %E4Y zero-pads the year to produce at least 4 chars, including the sign.
   auto tp = convert(civil_second(-999, 11, 27, 0, 0, 0), utc);
-  EXPECT_EQ("-9991127", format(e4y_fmt, tp, utc));
+  EXPECT_EQ("-9991127", absl::time_internal::cctz::format(e4y_fmt, tp, utc));
   tp = convert(civil_second(-99, 11, 27, 0, 0, 0), utc);
-  EXPECT_EQ("-0991127", format(e4y_fmt, tp, utc));
+  EXPECT_EQ("-0991127", absl::time_internal::cctz::format(e4y_fmt, tp, utc));
   tp = convert(civil_second(-9, 11, 27, 0, 0, 0), utc);
-  EXPECT_EQ("-0091127", format(e4y_fmt, tp, utc));
+  EXPECT_EQ("-0091127", absl::time_internal::cctz::format(e4y_fmt, tp, utc));
   tp = convert(civil_second(-1, 11, 27, 0, 0, 0), utc);
-  EXPECT_EQ("-0011127", format(e4y_fmt, tp, utc));
+  EXPECT_EQ("-0011127", absl::time_internal::cctz::format(e4y_fmt, tp, utc));
   tp = convert(civil_second(0, 11, 27, 0, 0, 0), utc);
-  EXPECT_EQ("00001127", format(e4y_fmt, tp, utc));
+  EXPECT_EQ("00001127", absl::time_internal::cctz::format(e4y_fmt, tp, utc));
   tp = convert(civil_second(1, 11, 27, 0, 0, 0), utc);
-  EXPECT_EQ("00011127", format(e4y_fmt, tp, utc));
+  EXPECT_EQ("00011127", absl::time_internal::cctz::format(e4y_fmt, tp, utc));
   tp = convert(civil_second(9, 11, 27, 0, 0, 0), utc);
-  EXPECT_EQ("00091127", format(e4y_fmt, tp, utc));
+  EXPECT_EQ("00091127", absl::time_internal::cctz::format(e4y_fmt, tp, utc));
   tp = convert(civil_second(99, 11, 27, 0, 0, 0), utc);
-  EXPECT_EQ("00991127", format(e4y_fmt, tp, utc));
+  EXPECT_EQ("00991127", absl::time_internal::cctz::format(e4y_fmt, tp, utc));
   tp = convert(civil_second(999, 11, 27, 0, 0, 0), utc);
-  EXPECT_EQ("09991127", format(e4y_fmt, tp, utc));
+  EXPECT_EQ("09991127", absl::time_internal::cctz::format(e4y_fmt, tp, utc));
   tp = convert(civil_second(9999, 11, 27, 0, 0, 0), utc);
-  EXPECT_EQ("99991127", format(e4y_fmt, tp, utc));
+  EXPECT_EQ("99991127", absl::time_internal::cctz::format(e4y_fmt, tp, utc));
 
   // When the year is outside [-999:9999], more than 4 chars are produced.
   tp = convert(civil_second(-1000, 11, 27, 0, 0, 0), utc);
-  EXPECT_EQ("-10001127", format(e4y_fmt, tp, utc));
+  EXPECT_EQ("-10001127", absl::time_internal::cctz::format(e4y_fmt, tp, utc));
   tp = convert(civil_second(10000, 11, 27, 0, 0, 0), utc);
-  EXPECT_EQ("100001127", format(e4y_fmt, tp, utc));
+  EXPECT_EQ("100001127", absl::time_internal::cctz::format(e4y_fmt, tp, utc));
 }
 
 TEST(Format, RFC3339Format) {
@@ -629,45 +680,64 @@ TEST(Format, RFC3339Format) {
 
   time_point<chrono::nanoseconds> tp =
       convert(civil_second(1977, 6, 28, 9, 8, 7), tz);
-  EXPECT_EQ("1977-06-28T09:08:07-07:00", format(RFC3339_full, tp, tz));
-  EXPECT_EQ("1977-06-28T09:08:07-07:00", format(RFC3339_sec, tp, tz));
+  EXPECT_EQ("1977-06-28T09:08:07-07:00",
+            absl::time_internal::cctz::format(RFC3339_full, tp, tz));
+  EXPECT_EQ("1977-06-28T09:08:07-07:00",
+            absl::time_internal::cctz::format(RFC3339_sec, tp, tz));
 
   tp += chrono::milliseconds(100);
-  EXPECT_EQ("1977-06-28T09:08:07.1-07:00", format(RFC3339_full, tp, tz));
-  EXPECT_EQ("1977-06-28T09:08:07-07:00", format(RFC3339_sec, tp, tz));
+  EXPECT_EQ("1977-06-28T09:08:07.1-07:00",
+            absl::time_internal::cctz::format(RFC3339_full, tp, tz));
+  EXPECT_EQ("1977-06-28T09:08:07-07:00",
+            absl::time_internal::cctz::format(RFC3339_sec, tp, tz));
 
   tp += chrono::milliseconds(20);
-  EXPECT_EQ("1977-06-28T09:08:07.12-07:00", format(RFC3339_full, tp, tz));
-  EXPECT_EQ("1977-06-28T09:08:07-07:00", format(RFC3339_sec, tp, tz));
+  EXPECT_EQ("1977-06-28T09:08:07.12-07:00",
+            absl::time_internal::cctz::format(RFC3339_full, tp, tz));
+  EXPECT_EQ("1977-06-28T09:08:07-07:00",
+            absl::time_internal::cctz::format(RFC3339_sec, tp, tz));
 
   tp += chrono::milliseconds(3);
-  EXPECT_EQ("1977-06-28T09:08:07.123-07:00", format(RFC3339_full, tp, tz));
-  EXPECT_EQ("1977-06-28T09:08:07-07:00", format(RFC3339_sec, tp, tz));
+  EXPECT_EQ("1977-06-28T09:08:07.123-07:00",
+            absl::time_internal::cctz::format(RFC3339_full, tp, tz));
+  EXPECT_EQ("1977-06-28T09:08:07-07:00",
+            absl::time_internal::cctz::format(RFC3339_sec, tp, tz));
 
   tp += chrono::microseconds(400);
-  EXPECT_EQ("1977-06-28T09:08:07.1234-07:00", format(RFC3339_full, tp, tz));
-  EXPECT_EQ("1977-06-28T09:08:07-07:00", format(RFC3339_sec, tp, tz));
+  EXPECT_EQ("1977-06-28T09:08:07.1234-07:00",
+            absl::time_internal::cctz::format(RFC3339_full, tp, tz));
+  EXPECT_EQ("1977-06-28T09:08:07-07:00",
+            absl::time_internal::cctz::format(RFC3339_sec, tp, tz));
 
   tp += chrono::microseconds(50);
-  EXPECT_EQ("1977-06-28T09:08:07.12345-07:00", format(RFC3339_full, tp, tz));
-  EXPECT_EQ("1977-06-28T09:08:07-07:00", format(RFC3339_sec, tp, tz));
+  EXPECT_EQ("1977-06-28T09:08:07.12345-07:00",
+            absl::time_internal::cctz::format(RFC3339_full, tp, tz));
+  EXPECT_EQ("1977-06-28T09:08:07-07:00",
+            absl::time_internal::cctz::format(RFC3339_sec, tp, tz));
 
   tp += chrono::microseconds(6);
-  EXPECT_EQ("1977-06-28T09:08:07.123456-07:00", format(RFC3339_full, tp, tz));
-  EXPECT_EQ("1977-06-28T09:08:07-07:00", format(RFC3339_sec, tp, tz));
+  EXPECT_EQ("1977-06-28T09:08:07.123456-07:00",
+            absl::time_internal::cctz::format(RFC3339_full, tp, tz));
+  EXPECT_EQ("1977-06-28T09:08:07-07:00",
+            absl::time_internal::cctz::format(RFC3339_sec, tp, tz));
 
   tp += chrono::nanoseconds(700);
-  EXPECT_EQ("1977-06-28T09:08:07.1234567-07:00", format(RFC3339_full, tp, tz));
-  EXPECT_EQ("1977-06-28T09:08:07-07:00", format(RFC3339_sec, tp, tz));
+  EXPECT_EQ("1977-06-28T09:08:07.1234567-07:00",
+            absl::time_internal::cctz::format(RFC3339_full, tp, tz));
+  EXPECT_EQ("1977-06-28T09:08:07-07:00",
+            absl::time_internal::cctz::format(RFC3339_sec, tp, tz));
 
   tp += chrono::nanoseconds(80);
-  EXPECT_EQ("1977-06-28T09:08:07.12345678-07:00", format(RFC3339_full, tp, tz));
-  EXPECT_EQ("1977-06-28T09:08:07-07:00", format(RFC3339_sec, tp, tz));
+  EXPECT_EQ("1977-06-28T09:08:07.12345678-07:00",
+            absl::time_internal::cctz::format(RFC3339_full, tp, tz));
+  EXPECT_EQ("1977-06-28T09:08:07-07:00",
+            absl::time_internal::cctz::format(RFC3339_sec, tp, tz));
 
   tp += chrono::nanoseconds(9);
   EXPECT_EQ("1977-06-28T09:08:07.123456789-07:00",
-            format(RFC3339_full, tp, tz));
-  EXPECT_EQ("1977-06-28T09:08:07-07:00", format(RFC3339_sec, tp, tz));
+            absl::time_internal::cctz::format(RFC3339_full, tp, tz));
+  EXPECT_EQ("1977-06-28T09:08:07-07:00",
+            absl::time_internal::cctz::format(RFC3339_sec, tp, tz));
 }
 
 TEST(Format, RFC1123Format) {  // locale specific
@@ -675,36 +745,80 @@ TEST(Format, RFC1123Format) {  // locale specific
   EXPECT_TRUE(load_time_zone("America/Los_Angeles", &tz));
 
   auto tp = convert(civil_second(1977, 6, 28, 9, 8, 7), tz);
-  EXPECT_EQ("Tue, 28 Jun 1977 09:08:07 -0700", format(RFC1123_full, tp, tz));
-  EXPECT_EQ("28 Jun 1977 09:08:07 -0700", format(RFC1123_no_wday, tp, tz));
+  EXPECT_EQ("Tue, 28 Jun 1977 09:08:07 -0700",
+            absl::time_internal::cctz::format(RFC1123_full, tp, tz));
+  EXPECT_EQ("28 Jun 1977 09:08:07 -0700",
+            absl::time_internal::cctz::format(RFC1123_no_wday, tp, tz));
 }
 
 TEST(Format, Week) {
   const time_zone utc = utc_time_zone();
 
   auto tp = convert(civil_second(2017, 1, 1, 0, 0, 0), utc);
-  EXPECT_EQ("2017-01-7", format("%Y-%U-%u", tp, utc));
-  EXPECT_EQ("2017-00-0", format("%Y-%W-%w", tp, utc));
+  EXPECT_EQ("2017-01-7",
+            absl::time_internal::cctz::format("%Y-%U-%u", tp, utc));
+  EXPECT_EQ("2017-00-0",
+            absl::time_internal::cctz::format("%Y-%W-%w", tp, utc));
 
   tp = convert(civil_second(2017, 12, 31, 0, 0, 0), utc);
-  EXPECT_EQ("2017-53-7", format("%Y-%U-%u", tp, utc));
-  EXPECT_EQ("2017-52-0", format("%Y-%W-%w", tp, utc));
+  EXPECT_EQ("2017-53-7",
+            absl::time_internal::cctz::format("%Y-%U-%u", tp, utc));
+  EXPECT_EQ("2017-52-0",
+            absl::time_internal::cctz::format("%Y-%W-%w", tp, utc));
 
   tp = convert(civil_second(2018, 1, 1, 0, 0, 0), utc);
-  EXPECT_EQ("2018-00-1", format("%Y-%U-%u", tp, utc));
-  EXPECT_EQ("2018-01-1", format("%Y-%W-%w", tp, utc));
+  EXPECT_EQ("2018-00-1",
+            absl::time_internal::cctz::format("%Y-%U-%u", tp, utc));
+  EXPECT_EQ("2018-01-1",
+            absl::time_internal::cctz::format("%Y-%W-%w", tp, utc));
 
   tp = convert(civil_second(2018, 12, 31, 0, 0, 0), utc);
-  EXPECT_EQ("2018-52-1", format("%Y-%U-%u", tp, utc));
-  EXPECT_EQ("2018-53-1", format("%Y-%W-%w", tp, utc));
+  EXPECT_EQ("2018-52-1",
+            absl::time_internal::cctz::format("%Y-%U-%u", tp, utc));
+  EXPECT_EQ("2018-53-1",
+            absl::time_internal::cctz::format("%Y-%W-%w", tp, utc));
 
   tp = convert(civil_second(2019, 1, 1, 0, 0, 0), utc);
-  EXPECT_EQ("2019-00-2", format("%Y-%U-%u", tp, utc));
-  EXPECT_EQ("2019-00-2", format("%Y-%W-%w", tp, utc));
+  EXPECT_EQ("2019-00-2",
+            absl::time_internal::cctz::format("%Y-%U-%u", tp, utc));
+  EXPECT_EQ("2019-00-2",
+            absl::time_internal::cctz::format("%Y-%W-%w", tp, utc));
 
   tp = convert(civil_second(2019, 12, 31, 0, 0, 0), utc);
-  EXPECT_EQ("2019-52-2", format("%Y-%U-%u", tp, utc));
-  EXPECT_EQ("2019-52-2", format("%Y-%W-%w", tp, utc));
+  EXPECT_EQ("2019-52-2",
+            absl::time_internal::cctz::format("%Y-%U-%u", tp, utc));
+  EXPECT_EQ("2019-52-2",
+            absl::time_internal::cctz::format("%Y-%W-%w", tp, utc));
+}
+
+TEST(Format, NULsInFormatString) {
+  time_zone tz = utc_time_zone();
+  time_point<chrono::nanoseconds> tp = chrono::system_clock::from_time_t(0);
+
+  // All NULs.
+  std::string nuls(32, '\0');
+  EXPECT_EQ(nuls, absl::time_internal::cctz::format(nuls, tp, tz));
+
+  // NULs amongst ordinary text plus the internal "%\0" specifier.
+  std::string percent_nul("\0X\0\0X%\0\0X\0\0X\0", 13);
+  EXPECT_EQ(percent_nul,
+            absl::time_internal::cctz::format(percent_nul, tp, tz));
+
+  // NULs amongst ordinary text plus a non-internal specifier (%I).
+  EXPECT_EQ(std::string("X\0\0\0X12\0X\0\0\0X", 13),
+            absl::time_internal::cctz::format(
+                std::string("X\0\0\0X%I\0X\0\0\0X", 13), tp, tz));
+
+#if defined(__linux__) && defined(__GLIBC__)
+  // Depending upon strftime() behavior on "%E"
+  // and "%O", "%E\0" and "%0\0" produce themselves.
+  std::string percent_E_nul("abc%E\0xyz", 9);
+  EXPECT_EQ(percent_E_nul,
+            absl::time_internal::cctz::format(percent_E_nul, tp, tz));
+  std::string percent_O_nul("abc%O\0xyz", 9);
+  EXPECT_EQ(percent_O_nul,
+            absl::time_internal::cctz::format(percent_O_nul, tp, tz));
+#endif
 }
 
 //
@@ -717,39 +831,56 @@ TEST(Parse, TimePointResolution) {
 
   time_point<chrono::nanoseconds> tp_ns;
   EXPECT_TRUE(parse(kFmt, "03:04:05.123456789", utc, &tp_ns));
-  EXPECT_EQ("03:04:05.123456789", format(kFmt, tp_ns, utc));
+  EXPECT_EQ("03:04:05.123456789",
+            absl::time_internal::cctz::format(kFmt, tp_ns, utc));
   EXPECT_TRUE(parse(kFmt, "03:04:05.123456", utc, &tp_ns));
-  EXPECT_EQ("03:04:05.123456", format(kFmt, tp_ns, utc));
+  EXPECT_EQ("03:04:05.123456",
+            absl::time_internal::cctz::format(kFmt, tp_ns, utc));
 
   time_point<chrono::microseconds> tp_us;
   EXPECT_TRUE(parse(kFmt, "03:04:05.123456789", utc, &tp_us));
-  EXPECT_EQ("03:04:05.123456", format(kFmt, tp_us, utc));
+  EXPECT_EQ("03:04:05.123456",
+            absl::time_internal::cctz::format(kFmt, tp_us, utc));
   EXPECT_TRUE(parse(kFmt, "03:04:05.123456", utc, &tp_us));
-  EXPECT_EQ("03:04:05.123456", format(kFmt, tp_us, utc));
+  EXPECT_EQ("03:04:05.123456",
+            absl::time_internal::cctz::format(kFmt, tp_us, utc));
   EXPECT_TRUE(parse(kFmt, "03:04:05.123", utc, &tp_us));
-  EXPECT_EQ("03:04:05.123", format(kFmt, tp_us, utc));
+  EXPECT_EQ("03:04:05.123",
+            absl::time_internal::cctz::format(kFmt, tp_us, utc));
 
   time_point<chrono::milliseconds> tp_ms;
   EXPECT_TRUE(parse(kFmt, "03:04:05.123456", utc, &tp_ms));
-  EXPECT_EQ("03:04:05.123", format(kFmt, tp_ms, utc));
+  EXPECT_EQ("03:04:05.123",
+            absl::time_internal::cctz::format(kFmt, tp_ms, utc));
   EXPECT_TRUE(parse(kFmt, "03:04:05.123", utc, &tp_ms));
-  EXPECT_EQ("03:04:05.123", format(kFmt, tp_ms, utc));
+  EXPECT_EQ("03:04:05.123",
+            absl::time_internal::cctz::format(kFmt, tp_ms, utc));
   EXPECT_TRUE(parse(kFmt, "03:04:05", utc, &tp_ms));
-  EXPECT_EQ("03:04:05", format(kFmt, tp_ms, utc));
+  EXPECT_EQ("03:04:05", absl::time_internal::cctz::format(kFmt, tp_ms, utc));
 
   time_point<chrono::seconds> tp_s;
   EXPECT_TRUE(parse(kFmt, "03:04:05.123", utc, &tp_s));
-  EXPECT_EQ("03:04:05", format(kFmt, tp_s, utc));
+  EXPECT_EQ("03:04:05", absl::time_internal::cctz::format(kFmt, tp_s, utc));
   EXPECT_TRUE(parse(kFmt, "03:04:05", utc, &tp_s));
-  EXPECT_EQ("03:04:05", format(kFmt, tp_s, utc));
+  EXPECT_EQ("03:04:05", absl::time_internal::cctz::format(kFmt, tp_s, utc));
 
   time_point<chrono::minutes> tp_m;
   EXPECT_TRUE(parse(kFmt, "03:04:05", utc, &tp_m));
-  EXPECT_EQ("03:04:00", format(kFmt, tp_m, utc));
+  EXPECT_EQ("03:04:00", absl::time_internal::cctz::format(kFmt, tp_m, utc));
+
+  // Verify that pre-epoch times floor towards negative infinity.
+  EXPECT_TRUE(parse(RFC3339_full, "1969-12-31T23:59:05+00:00", utc, &tp_m));
+  EXPECT_EQ("1969-12-31T23:59:00+00:00",
+            absl::time_internal::cctz::format(RFC3339_full, tp_m, utc));
 
   time_point<chrono::hours> tp_h;
   EXPECT_TRUE(parse(kFmt, "03:04:05", utc, &tp_h));
-  EXPECT_EQ("03:00:00", format(kFmt, tp_h, utc));
+  EXPECT_EQ("03:00:00", absl::time_internal::cctz::format(kFmt, tp_h, utc));
+
+  // Verify that pre-epoch times floor towards negative infinity.
+  EXPECT_TRUE(parse(RFC3339_full, "1969-12-31T23:59:05+00:00", utc, &tp_h));
+  EXPECT_EQ("1969-12-31T23:00:00+00:00",
+            absl::time_internal::cctz::format(RFC3339_full, tp_h, utc));
 }
 
 TEST(Parse, TimePointExtendedResolution) {
@@ -844,6 +975,9 @@ TEST(Parse, ErrorCases) {
   const time_zone tz = utc_time_zone();
   auto tp = chrono::system_clock::from_time_t(0);
 
+  // No data.
+  EXPECT_FALSE(parse("X", "", tz, &tp));
+
   // Illegal trailing data.
   EXPECT_FALSE(parse("%S", "123", tz, &tp));
 
@@ -881,6 +1015,27 @@ TEST(Parse, ErrorCases) {
   EXPECT_FALSE(parse("%Ez", "+-0:00", tz, &tp));
   EXPECT_FALSE(parse("%z", "-00-0", tz, &tp));
   EXPECT_FALSE(parse("%Ez", "-00:-0", tz, &tp));
+}
+
+TEST(Parse, NonAsciiInput) {
+  const time_zone tz = utc_time_zone();
+  auto tp = chrono::system_clock::from_time_t(0);
+
+  // High-bit-set bytes reach the ctype functions during parsing. 0xA0 is not
+  // ASCII whitespace, so the leading-whitespace skip must not consume it and
+  // the parse must fail rather than pass a negative char to std::isspace().
+  EXPECT_FALSE(parse("%Y-%m-%d",
+                     "\xA0"
+                     "2016-01-02",
+                     tz, &tp));
+  EXPECT_FALSE(parse("%Y",
+                     "\xA0"
+                     "2016",
+                     tz, &tp));
+
+  // A leading ASCII space is still skipped as before.
+  EXPECT_TRUE(parse("%Y-%m-%d", " 2016-01-02", tz, &tp));
+  EXPECT_EQ(2016, convert(tp, utc_time_zone()).year());
 }
 
 TEST(Parse, PosixConversions) {
@@ -1021,6 +1176,22 @@ TEST(Parse, LocaleSpecific) {
   EXPECT_TRUE(parse("%I %p", "5 PM", tz, &tp));
   EXPECT_EQ(17, convert(tp, tz).hour());
 
+  // %I maps 12 to 0 and a following %p shifts to the afternoon,
+  // so "12 AM" is midnight and "12 PM" is noon.
+  tp = reset;
+  EXPECT_TRUE(parse("%I %p", "12 AM", tz, &tp));
+  EXPECT_EQ(0, convert(tp, tz).hour());
+  tp = reset;
+  EXPECT_TRUE(parse("%I %p", "12 PM", tz, &tp));
+  EXPECT_EQ(12, convert(tp, tz).hour());
+
+  tp = reset;
+  EXPECT_TRUE(parse("%I %p", "01 AM", tz, &tp));
+  EXPECT_EQ(1, convert(tp, tz).hour());
+  tp = reset;
+  EXPECT_TRUE(parse("%I %p", "11 PM", tz, &tp));
+  EXPECT_EQ(23, convert(tp, tz).hour());
+
   tp = reset;
   EXPECT_TRUE(parse("%x", "02/03/04", tz, &tp));
   if (convert(tp, tz).month() == 2) {
@@ -1044,9 +1215,11 @@ TEST(Parse, LocaleSpecific) {
   EXPECT_TRUE(parse("%h", "Feb", tz, &tp));
   EXPECT_EQ(2, convert(tp, tz).month());  // Equivalent to %b
 
+#if defined(__GLIBC__)
   tp = reset;
   EXPECT_TRUE(parse("%l %p", "5 PM", tz, &tp));
   EXPECT_EQ(17, convert(tp, tz).hour());
+#endif
 
   tp = reset;
   EXPECT_TRUE(parse("%r", "03:44:55 PM", tz, &tp));
@@ -1054,6 +1227,20 @@ TEST(Parse, LocaleSpecific) {
   EXPECT_EQ(44, convert(tp, tz).minute());
   EXPECT_EQ(55, convert(tp, tz).second());
 
+  // %r must land on the correct side of the AM/PM boundary too.
+  tp = reset;
+  EXPECT_TRUE(parse("%r", "12:00:00 AM", tz, &tp));
+  EXPECT_EQ(0, convert(tp, tz).hour());
+  EXPECT_EQ(0, convert(tp, tz).minute());
+  EXPECT_EQ(0, convert(tp, tz).second());
+
+  tp = reset;
+  EXPECT_TRUE(parse("%r", "12:00:00 PM", tz, &tp));
+  EXPECT_EQ(12, convert(tp, tz).hour());
+  EXPECT_EQ(0, convert(tp, tz).minute());
+  EXPECT_EQ(0, convert(tp, tz).second());
+
+#if defined(__GLIBC__)
   tp = reset;
   EXPECT_TRUE(parse("%Ec", "Tue Nov 19 05:06:07 2013", tz, &tp));
   EXPECT_EQ(convert(civil_second(2013, 11, 19, 5, 6, 7), tz), tp);
@@ -1124,6 +1311,7 @@ TEST(Parse, LocaleSpecific) {
   tp = reset;
   EXPECT_TRUE(parse("%Oy", "04", tz, &tp));
   EXPECT_EQ(2004, convert(tp, tz).year());
+#endif
 #endif
 }
 
@@ -1488,6 +1676,41 @@ TEST(Parse, WeekYearShift) {
   EXPECT_FALSE(parse("%Y-%U-%u", "9223372036854775807-53-7", utc, &tp));
 }
 
+TEST(Parse, NULsInFormatAndInputStrings) {
+  const time_zone utc = utc_time_zone();
+  time_point<absl::time_internal::cctz::seconds> tp;
+
+  // Check that NULs are parsed just like any other chars.
+  EXPECT_FALSE(
+      parse(std::string("abc\0def", 7), std::string("abc\0xyz", 7), utc, &tp));
+  EXPECT_FALSE(
+      parse(std::string("%Y\0def", 6), std::string("2026\0xyz", 8), utc, &tp));
+  EXPECT_TRUE(
+      parse(std::string("%Y\0xyz", 6), std::string("2026\0xyz", 8), utc, &tp));
+  ExpectTime(tp, utc, 2026, 1, 1, 0, 0, 0, 0, false, "UTC");
+
+  // All NULs.
+  std::string nuls(32, '\0');
+  EXPECT_TRUE(parse(nuls, nuls, utc, &tp));
+  ExpectTime(tp, utc, 1970, 1, 1, 0, 0, 0, 0, false, "UTC");
+
+  // The "%\0" specifier never matches, even on the empty string and itself.
+  std::string percent_nul("%\0", 2);
+  EXPECT_FALSE(parse(percent_nul, "", utc, &tp));
+  EXPECT_FALSE(parse(percent_nul, percent_nul, utc, &tp));
+
+#if defined(__linux__) && defined(__GLIBC__)
+  // Depending upon strptime() behavior on "%E"
+  // and "%O", "%E\0" and "%0\0" also never match.
+  std::string percent_E_nul("%E\0", 3);
+  EXPECT_FALSE(parse(percent_E_nul, "", utc, &tp));
+  EXPECT_FALSE(parse(percent_E_nul, percent_E_nul, utc, &tp));
+  std::string percent_O_nul("%O\0", 3);
+  EXPECT_FALSE(parse(percent_O_nul, "", utc, &tp));
+  EXPECT_FALSE(parse(percent_O_nul, percent_O_nul, utc, &tp));
+#endif
+}
+
 TEST(Parse, MaxRange) {
   const time_zone utc = utc_time_zone();
   time_point<absl::time_internal::cctz::seconds> tp;
@@ -1504,7 +1727,7 @@ TEST(Parse, MaxRange) {
       parse(RFC3339_sec, "292277026596-12-04T14:30:07-01:00", utc, &tp));
   EXPECT_EQ(tp, time_point<absl::time_internal::cctz::seconds>::max());
   EXPECT_FALSE(
-      parse(RFC3339_sec, "292277026596-12-04T15:30:07-01:00", utc, &tp));
+      parse(RFC3339_sec, "292277026596-12-04T14:30:08-01:00", utc, &tp));
 
   // tests the lower limit using +00:00 offset
   EXPECT_TRUE(
@@ -1525,10 +1748,219 @@ TEST(Parse, MaxRange) {
       parse(RFC3339_sec, "9223372036854775807-12-31T23:59:59-00:01", utc, &tp));
   EXPECT_FALSE(parse(RFC3339_sec, "-9223372036854775808-01-01T00:00:00+00:01",
                      utc, &tp));
+}
 
-  // TODO: Add tests that parsing times with fractional seconds overflow
-  // appropriately. This can't be done until cctz::parse() properly detects
-  // overflow when combining the chrono seconds and femto.
+TEST(Parse, TimePointOverflow) {
+  const time_zone utc = utc_time_zone();
+  {
+    // Test with nanosecond resolution (typical 64-bit time_point).
+    using D = chrono::duration<std::int64_t, std::nano>;
+    time_point<D> tp;
+
+    // Max time_point<D> is 2262-04-11T23:47:16.854775807+00:00.
+    EXPECT_TRUE(
+        parse(RFC3339_full, "2262-04-11T23:47:16.8547758079+00:00", utc, &tp));
+    EXPECT_EQ(tp, time_point<D>::max());
+    EXPECT_EQ("2262-04-11T23:47:16.854775807+00:00",
+              absl::time_internal::cctz::format(RFC3339_full, tp, utc));
+    // 1 nanosecond beyond max should fail.
+    EXPECT_FALSE(
+        parse(RFC3339_full, "2262-04-11T23:47:16.8547758080+00:00", utc, &tp));
+
+    // Min time_point<D> is 1677-09-21T00:12:43.145224192+00:00.
+    EXPECT_TRUE(
+        parse(RFC3339_full, "1677-09-21T00:12:43.1452241920+00:00", utc, &tp));
+    EXPECT_EQ(tp, time_point<D>::min());
+    EXPECT_EQ("1677-09-21T00:12:43.145224192+00:00",
+              absl::time_internal::cctz::format(RFC3339_full, tp, utc));
+    // 1 nanosecond below min should fail.
+    EXPECT_FALSE(
+        parse(RFC3339_full, "1677-09-21T00:12:43.1452241919+00:00", utc, &tp));
+  }
+  {
+    // Test with femtosecond resolution.
+    using D = chrono::duration<std::int64_t, std::femto>;
+    time_point<D> tp;
+
+    // Max time_point<D> is 1970-01-01T02:33:43.372036854775807+00:00.
+    EXPECT_TRUE(parse(RFC3339_full,
+                      "1970-01-01T02:33:43.3720368547758079+00:00", utc, &tp));
+    EXPECT_EQ(tp.time_since_epoch(), time_point<D>::max().time_since_epoch());
+    EXPECT_EQ("1970-01-01T02:33:43.372036854775807+00:00",
+              absl::time_internal::cctz::format(RFC3339_full, tp, utc));
+    // 1 femtosecond beyond max should fail.
+    EXPECT_FALSE(parse(RFC3339_full,
+                       "1970-01-01T02:33:43.3720368547758080+00:00", utc, &tp));
+
+    // Min time_point<D> is 1969-12-31T21:26:16.627963145224192+00:00.
+    EXPECT_TRUE(parse(RFC3339_full,
+                      "1969-12-31T21:26:16.6279631452241920+00:00", utc, &tp));
+    EXPECT_EQ(tp.time_since_epoch(), time_point<D>::min().time_since_epoch());
+    EXPECT_EQ("1969-12-31T21:26:16.627963145224192+00:00",
+              absl::time_internal::cctz::format(RFC3339_full, tp, utc));
+    // 1 femtosecond below min should fail.
+    EXPECT_FALSE(parse(RFC3339_full,
+                       "1969-12-31T21:26:16.6279631452241919+00:00", utc, &tp));
+  }
+  {
+    // Test with attosecond resolution.
+    using D = chrono::duration<std::int64_t, std::atto>;
+    time_point<D> tp;
+
+    // Max time_point<D> is 1970-01-01T00:00:09.223372036854775807+00:00,
+    // but cctz::parse() truncates (towards zero) to a femtosecond boundary,
+    // so the last three decimal places are lost.
+    EXPECT_TRUE(parse(RFC3339_full,
+                      "1970-01-01T00:00:09.223372036854775807+00:00", utc,
+                      &tp));
+    EXPECT_EQ(tp.time_since_epoch(), D{9223372036854775000LL});
+    EXPECT_EQ("1970-01-01T00:00:09.223372036854775+00:00",
+              absl::time_internal::cctz::format(RFC3339_full, tp, utc));
+    // Moving into the next femtosecond should fail.
+    EXPECT_FALSE(parse(RFC3339_full,
+                       "1970-01-01T00:00:09.223372036854776000+00:00", utc,
+                       &tp));
+
+    // Min time_point<D> is 1969-12-31T23:59:50.776627963145224192+00:00,
+    // but cctz::parse() truncates (towards zero) to a femtosecond boundary,
+    // so we must round up.
+    EXPECT_TRUE(parse(RFC3339_full,
+                      "1969-12-31T23:59:50.776627963145225000+00:00", utc,
+                      &tp));
+    EXPECT_EQ(tp.time_since_epoch(), D{-9223372036854775000LL});
+    EXPECT_EQ("1969-12-31T23:59:50.776627963145225+00:00",
+              absl::time_internal::cctz::format(RFC3339_full, tp, utc));
+    // 1 attosecond below min should fail.
+    EXPECT_FALSE(parse(RFC3339_full,
+                       "1969-12-31T23:59:50.776627963145224999+00:00", utc,
+                       &tp));
+  }
+  {
+    // Test with 1-second resolution using int8_t ([-128, 127] seconds).
+    using D = chrono::duration<std::int8_t>;
+    time_point<D> tp;
+
+    // Max time_point<D> is 1970-01-01T00:02:07+00:00.
+    EXPECT_TRUE(parse(RFC3339_full, "1970-01-01T00:02:07.9+00:00", utc, &tp));
+    EXPECT_EQ(tp, time_point<D>::max());
+    EXPECT_EQ("1970-01-01T00:02:07+00:00",
+              absl::time_internal::cctz::format(RFC3339_full, tp, utc));
+    // 1 second beyond max should fail.
+    EXPECT_FALSE(parse(RFC3339_full, "1970-01-01T00:02:08+00:00", utc, &tp));
+
+    // Min time_point<D> is 1969-12-31T23:57:52+00:00.
+    EXPECT_TRUE(parse(RFC3339_full, "1969-12-31T23:57:52+00:00", utc, &tp));
+    EXPECT_EQ(tp, time_point<D>::min());
+    EXPECT_EQ("1969-12-31T23:57:52+00:00",
+              absl::time_internal::cctz::format(RFC3339_full, tp, utc));
+    // 1 second below min should fail.
+    EXPECT_FALSE(parse(RFC3339_full, "1969-12-31T23:57:51+00:00", utc, &tp));
+  }
+  {
+    // Test with 1-minute resolution using int8_t ([-128, 127] minutes).
+    using D = chrono::duration<std::int8_t, std::ratio<60>>;
+    time_point<D> tp;
+
+    // Max time_point<D> is 1970-01-01T02:07:00+00:00.
+    EXPECT_TRUE(parse(RFC3339_full, "1970-01-01T02:07:00+00:00", utc, &tp));
+    EXPECT_EQ(tp, time_point<D>::max());
+    EXPECT_EQ("1970-01-01T02:07:00+00:00",
+              absl::time_internal::cctz::format(RFC3339_full, tp, utc));
+    // 1 minute beyond max should fail.
+    EXPECT_FALSE(parse(RFC3339_full, "1970-01-01T02:08:00+00:00", utc, &tp));
+
+    // Min time_point<D> is 1969-12-31T21:52:00+00:00.
+    EXPECT_TRUE(parse(RFC3339_full, "1969-12-31T21:52:00+00:00", utc, &tp));
+    EXPECT_EQ(tp, time_point<D>::min());
+    EXPECT_EQ("1969-12-31T21:52:00+00:00",
+              absl::time_internal::cctz::format(RFC3339_full, tp, utc));
+    // 1 minute below min should fail.
+    EXPECT_FALSE(parse(RFC3339_full, "1969-12-31T21:51:00+00:00", utc, &tp));
+  }
+  {
+    // Test with millisecond resolution using int8_t ([-128, 127] milliseconds).
+    // This tests the case where Denom (1000) is larger than Rep max/min.
+    using D = chrono::duration<std::int8_t, std::milli>;
+    time_point<D> tp;
+
+    // Max time_point<D> is 1970-01-01T00:00:00.127+00:00.
+    EXPECT_TRUE(parse(RFC3339_full, "1970-01-01T00:00:00.127+00:00", utc, &tp));
+    EXPECT_EQ(tp, time_point<D>::max());
+    // 1 millisecond beyond max should fail (tests sub > max check).
+    EXPECT_FALSE(
+        parse(RFC3339_full, "1970-01-01T00:00:00.128+00:00", utc, &tp));
+
+    // Min time_point<D> is 1969-12-31T23:59:59.872+00:00.
+    EXPECT_TRUE(parse(RFC3339_full, "1969-12-31T23:59:59.872+00:00", utc, &tp));
+    EXPECT_EQ(tp, time_point<D>::min());
+    // 1 millisecond below min should fail (tests min with Denom > -min).
+    EXPECT_FALSE(
+        parse(RFC3339_full, "1969-12-31T23:59:59.871+00:00", utc, &tp));
+  }
+}
+
+TEST(Parse, TimePointFloatingPoint) {
+  const time_zone utc = utc_time_zone();
+  {
+    using D = chrono::duration<double>;
+    time_point<D> tp;
+
+    EXPECT_TRUE(parse(RFC3339_full, "1970-01-01T00:00:59.25+00:00", utc, &tp));
+    EXPECT_EQ(tp.time_since_epoch(), D{59.25});
+    EXPECT_TRUE(parse(RFC3339_full, "1969-12-31T23:59:00.75+00:00", utc, &tp));
+    EXPECT_EQ(tp.time_since_epoch(), D{-59.25});
+  }
+  {
+    using D = chrono::duration<double, std::milli>;
+    time_point<D> tp;
+
+    EXPECT_TRUE(
+        parse(RFC3339_full, "1970-01-01T00:00:00.015625+00:00", utc, &tp));
+    EXPECT_EQ(tp.time_since_epoch(), D{15.625});
+    EXPECT_TRUE(
+        parse(RFC3339_full, "1969-12-31T23:59:59.984375+00:00", utc, &tp));
+    EXPECT_EQ(tp.time_since_epoch(), D{-15.625});
+  }
+  {
+    using D = chrono::duration<double, std::ratio<60>>;
+    time_point<D> tp;
+
+    EXPECT_TRUE(parse(RFC3339_full, "1970-01-01T00:01:15+00:00", utc, &tp));
+    EXPECT_EQ(tp.time_since_epoch(), D{1.25});
+    EXPECT_TRUE(parse(RFC3339_full, "1969-12-31T23:58:45+00:00", utc, &tp));
+    EXPECT_EQ(tp.time_since_epoch(), D{-1.25});
+  }
+}
+
+TEST(Parse, RatioNonLowestTerms) {
+  const time_zone utc = utc_time_zone();
+  using D = chrono::duration<std::int64_t, std::ratio<2, 2>>;
+  time_point<D> tp;
+
+  EXPECT_TRUE(parse(RFC3339_full, "2026-08-17T11:42:16-04:00", utc, &tp));
+  ExpectTime(tp, utc, 2026, 8, 17, 15, 42, 16, 0, false, "UTC");
+}
+
+TEST(Parse, TimePointOverflowFloor) {
+  const time_zone utc = utc_time_zone();
+
+  using D = chrono::duration<std::int64_t, std::micro>;
+  time_point<D> tp;
+
+  EXPECT_TRUE(
+      parse(RFC3339_full, "294247-01-10T04:00:54.7758079+00:00", utc, &tp));
+  EXPECT_EQ(tp, time_point<D>::max());
+  EXPECT_EQ("294247-01-10T04:00:54.775807+00:00",
+            absl::time_internal::cctz::format(RFC3339_full, tp, utc));
+  EXPECT_FALSE(
+      parse(RFC3339_full, "294247-01-10T04:00:54.7758080+00:00", utc, &tp));
+  EXPECT_TRUE(
+      parse(RFC3339_full, "-290308-12-21T19:59:05.2241920+00:00", utc, &tp));
+  EXPECT_EQ(tp, time_point<D>::min());
+  EXPECT_EQ("-290308-12-21T19:59:05.224192+00:00",
+            absl::time_internal::cctz::format(RFC3339_full, tp, utc));
+  EXPECT_FALSE(
+      parse(RFC3339_full, "-290308-12-21T19:59:05.2241919+00:00", utc, &tp));
 }
 
 //
@@ -1541,10 +1973,19 @@ TEST(FormatParse, RoundTrip) {
   const auto in = convert(civil_second(1977, 6, 28, 9, 8, 7), lax);
   const auto subseconds = chrono::nanoseconds(654321);
 
+  // No format specifiers, but include NUL.
+  {
+    time_point<chrono::nanoseconds> out;
+    const auto fmt = std::string("\0\1\2\3\4\5\6\7abcdefgh01234567");
+    const auto s = absl::time_internal::cctz::format(fmt, in, lax);
+    EXPECT_TRUE(parse(fmt, s, lax, &out)) << s;
+  }
+
   // RFC3339, which renders subseconds.
   {
     time_point<chrono::nanoseconds> out;
-    const std::string s = format(RFC3339_full, in + subseconds, lax);
+    const auto s =
+        absl::time_internal::cctz::format(RFC3339_full, in + subseconds, lax);
     EXPECT_TRUE(parse(RFC3339_full, s, lax, &out)) << s;
     EXPECT_EQ(in + subseconds, out);  // RFC3339_full includes %Ez
   }
@@ -1552,12 +1993,12 @@ TEST(FormatParse, RoundTrip) {
   // RFC1123, which only does whole seconds.
   {
     time_point<chrono::nanoseconds> out;
-    const std::string s = format(RFC1123_full, in, lax);
+    const auto s = absl::time_internal::cctz::format(RFC1123_full, in, lax);
     EXPECT_TRUE(parse(RFC1123_full, s, lax, &out)) << s;
     EXPECT_EQ(in, out);  // RFC1123_full includes %z
   }
 
-#if defined(_WIN32) || defined(_WIN64)
+#if defined(_WIN32)
   // Initial investigations indicate the %c does not roundtrip on Windows.
   // TODO: Figure out what is going on here (perhaps a locale problem).
 #elif defined(__EMSCRIPTEN__)
@@ -1570,7 +2011,7 @@ TEST(FormatParse, RoundTrip) {
   {
     time_point<chrono::nanoseconds> out;
     time_zone utc = utc_time_zone();
-    const std::string s = format("%c", in, utc);
+    const auto s = absl::time_internal::cctz::format("%c", in, utc);
     EXPECT_TRUE(parse("%c", s, utc, &out)) << s;
     EXPECT_EQ(in, out);
   }
@@ -1581,7 +2022,8 @@ TEST(FormatParse, RoundTripDistantFuture) {
   const time_zone utc = utc_time_zone();
   const time_point<absl::time_internal::cctz::seconds> in =
       time_point<absl::time_internal::cctz::seconds>::max();
-  const std::string s = format(RFC3339_full, in, utc);
+  const std::string s =
+      absl::time_internal::cctz::format(RFC3339_full, in, utc);
   time_point<absl::time_internal::cctz::seconds> out;
   EXPECT_TRUE(parse(RFC3339_full, s, utc, &out)) << s;
   EXPECT_EQ(in, out);
@@ -1591,7 +2033,8 @@ TEST(FormatParse, RoundTripDistantPast) {
   const time_zone utc = utc_time_zone();
   const time_point<absl::time_internal::cctz::seconds> in =
       time_point<absl::time_internal::cctz::seconds>::min();
-  const std::string s = format(RFC3339_full, in, utc);
+  const std::string s =
+      absl::time_internal::cctz::format(RFC3339_full, in, utc);
   time_point<absl::time_internal::cctz::seconds> out;
   EXPECT_TRUE(parse(RFC3339_full, s, utc, &out)) << s;
   EXPECT_EQ(in, out);

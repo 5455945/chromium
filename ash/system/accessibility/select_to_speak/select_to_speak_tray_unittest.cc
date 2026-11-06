@@ -1,23 +1,33 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/system/accessibility/select_to_speak/select_to_speak_tray.h"
 
 #include "ash/accelerators/accelerator_controller_impl.h"
-#include "ash/accessibility/accessibility_controller_impl.h"
+#include "ash/accessibility/accessibility_controller.h"
 #include "ash/accessibility/test_accessibility_controller_client.h"
+#include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/shell.h"
+#include "ash/strings/grit/ash_strings.h"
+#include "ash/style/ash_color_id.h"
 #include "ash/system/status_area_widget.h"
 #include "ash/system/status_area_widget_test_helper.h"
 #include "ash/test/ash_test_base.h"
 #include "base/command_line.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
+#include "ui/accessibility/accessibility_features.h"
 #include "ui/accessibility/ax_node_data.h"
-#include "ui/base/ime/chromeos/ime_bridge.h"
+#include "ui/base/ime/ash/ime_bridge.h"
 #include "ui/base/ime/text_input_flags.h"
+#include "ui/base/l10n/l10n_util.h"
+#include "ui/events/base_event_utils.h"
 #include "ui/events/event.h"
+#include "ui/gfx/image/image_unittest_util.h"
+#include "ui/gfx/paint_vector_icon.h"
+#include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 
 namespace ash {
@@ -29,16 +39,15 @@ SelectToSpeakTray* GetTray() {
       ->select_to_speak_tray();
 }
 
-ui::GestureEvent CreateTapEvent() {
-  return ui::GestureEvent(0, 0, 0, base::TimeTicks(),
-                          ui::GestureEventDetails(ui::ET_GESTURE_TAP));
-}
-
 }  // namespace
 
 class SelectToSpeakTrayTest : public AshTestBase {
  public:
   SelectToSpeakTrayTest() = default;
+
+  SelectToSpeakTrayTest(const SelectToSpeakTrayTest&) = delete;
+  SelectToSpeakTrayTest& operator=(const SelectToSpeakTrayTest&) = delete;
+
   ~SelectToSpeakTrayTest() override = default;
 
   void SetUp() override {
@@ -55,23 +64,39 @@ class SelectToSpeakTrayTest : public AshTestBase {
   bool IsTrayBackgroundActive() { return GetTray()->is_active(); }
 
   // Gets the current tray image view.
-  views::ImageView* GetImageView() { return GetTray()->icon_; }
+  views::ImageView* GetImageView() { return GetTray()->image_view(); }
 
-  gfx::ImageSkia GetInactiveImage() { return GetTray()->inactive_image_; }
-
-  gfx::ImageSkia GetSelectingImage() { return GetTray()->selecting_image_; }
-
-  gfx::ImageSkia GetSpeakingImage() { return GetTray()->speaking_image_; }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(SelectToSpeakTrayTest);
+  // Gets the corresponding image given the |select_to_speak_state|.
+  gfx::ImageSkia GetIconImage(SelectToSpeakState select_to_speak_state) {
+    const auto color_id =
+        select_to_speak_state == SelectToSpeakState::kSelectToSpeakStateInactive
+            ? cros_tokens::kCrosSysOnSurface
+            : cros_tokens::kCrosSysSystemOnPrimaryContainer;
+    const auto icon_color = GetTray()->GetColorProvider()->GetColor(color_id);
+    switch (select_to_speak_state) {
+      case SelectToSpeakState::kSelectToSpeakStateInactive:
+        return gfx::CreateVectorIcon(kSystemTraySelectToSpeakNewuiIcon,
+                                     icon_color);
+      case SelectToSpeakState::kSelectToSpeakStateSelecting:
+        return gfx::CreateVectorIcon(kSystemTraySelectToSpeakActiveNewuiIcon,
+                                     icon_color);
+      case SelectToSpeakState::kSelectToSpeakStateSpeaking:
+        return gfx::CreateVectorIcon(kSystemTrayStopNewuiIcon, icon_color);
+    }
+  }
 };
 
 // Ensures that creation doesn't cause any crashes and adds the image icon.
-// Also checks that the tray is visible.
+// Also checks that the tray is visible and has an accessible name.
 TEST_F(SelectToSpeakTrayTest, BasicConstruction) {
   EXPECT_TRUE(GetImageView());
   EXPECT_TRUE(IsVisible());
+
+  ui::AXNodeData tray_data;
+  GetTray()->GetViewAccessibility().GetAccessibleNodeData(&tray_data);
+  EXPECT_EQ(
+      tray_data.GetString16Attribute(ax::mojom::StringAttribute::kName),
+      l10n_util::GetStringUTF16(IDS_ASH_SELECT_TO_SPEAK_TRAY_ACCESSIBLE_NAME));
 }
 
 // Tests the icon disapears when select-to-speak is disabled and re-appears
@@ -88,35 +113,72 @@ TEST_F(SelectToSpeakTrayTest, ButtonRequestsSelectToSpeakStateChange) {
   TestAccessibilityControllerClient client;
   EXPECT_EQ(0, client.select_to_speak_change_change_requests());
 
-  GetTray()->PerformAction(CreateTapEvent());
+  GestureTapOn(GetTray());
   EXPECT_EQ(1, client.select_to_speak_change_change_requests());
 
-  GetTray()->PerformAction(CreateTapEvent());
+  GestureTapOn(GetTray());
   EXPECT_EQ(2, client.select_to_speak_change_change_requests());
 }
 
 // Test that changing the SelectToSpeakState in the AccessibilityController
 // results in a change of icon and activation in the tray.
 TEST_F(SelectToSpeakTrayTest, SelectToSpeakStateImpactsImageAndActivation) {
-  AccessibilityControllerImpl* controller =
+  AccessibilityController* controller =
       Shell::Get()->accessibility_controller();
   controller->SetSelectToSpeakState(
       SelectToSpeakState::kSelectToSpeakStateSelecting);
   EXPECT_TRUE(IsTrayBackgroundActive());
-  EXPECT_TRUE(
-      GetSelectingImage().BackedBySameObjectAs(GetImageView()->GetImage()));
 
+  gfx::ImageSkia expected_icon_image =
+      GetIconImage(SelectToSpeakState::kSelectToSpeakStateSelecting);
+  gfx::ImageSkia actual_icon_image = GetImageView()->GetImage();
+  EXPECT_TRUE(gfx::test::AreBitmapsEqual(*expected_icon_image.bitmap(),
+                                         *actual_icon_image.bitmap()));
   controller->SetSelectToSpeakState(
       SelectToSpeakState::kSelectToSpeakStateSpeaking);
   EXPECT_TRUE(IsTrayBackgroundActive());
-  EXPECT_TRUE(
-      GetSpeakingImage().BackedBySameObjectAs(GetImageView()->GetImage()));
+
+  expected_icon_image =
+      GetIconImage(SelectToSpeakState::kSelectToSpeakStateSpeaking);
+  actual_icon_image = GetImageView()->GetImage();
+  EXPECT_TRUE(gfx::test::AreBitmapsEqual(*expected_icon_image.bitmap(),
+                                         *actual_icon_image.bitmap()));
 
   controller->SetSelectToSpeakState(
       SelectToSpeakState::kSelectToSpeakStateInactive);
   EXPECT_FALSE(IsTrayBackgroundActive());
-  EXPECT_TRUE(
-      GetInactiveImage().BackedBySameObjectAs(GetImageView()->GetImage()));
+  expected_icon_image =
+      GetIconImage(SelectToSpeakState::kSelectToSpeakStateInactive);
+  actual_icon_image = GetImageView()->GetImage();
+  EXPECT_TRUE(gfx::test::AreBitmapsEqual(*expected_icon_image.bitmap(),
+                                         *actual_icon_image.bitmap()));
+}
+
+// Test that changing the SelectToSpeakState in the AccessibilityController
+// results in a change of tooltip text in the tray.
+TEST_F(SelectToSpeakTrayTest, SelectToSpeakStateImpactsTooltipText) {
+  AccessibilityController* controller =
+      Shell::Get()->accessibility_controller();
+  controller->SetSelectToSpeakState(
+      SelectToSpeakState::kSelectToSpeakStateSelecting);
+  std::u16string expected_tooltip_text = l10n_util::GetStringUTF16(
+      IDS_ASH_STATUS_TRAY_ACCESSIBILITY_SELECT_TO_SPEAK_INSTRUCTIONS);
+  std::u16string actual_tooltip_text = GetImageView()->GetTooltipText();
+  EXPECT_TRUE(expected_tooltip_text == actual_tooltip_text);
+
+  controller->SetSelectToSpeakState(
+      SelectToSpeakState::kSelectToSpeakStateSpeaking);
+  expected_tooltip_text = l10n_util::GetStringUTF16(
+      IDS_ASH_STATUS_TRAY_ACCESSIBILITY_SELECT_TO_SPEAK_STOP_INSTRUCTIONS);
+  actual_tooltip_text = GetImageView()->GetTooltipText();
+  EXPECT_TRUE(expected_tooltip_text == actual_tooltip_text);
+
+  controller->SetSelectToSpeakState(
+      SelectToSpeakState::kSelectToSpeakStateInactive);
+  expected_tooltip_text = l10n_util::GetStringUTF16(
+      IDS_ASH_STATUS_TRAY_ACCESSIBILITY_SELECT_TO_SPEAK);
+  actual_tooltip_text = GetImageView()->GetTooltipText();
+  EXPECT_TRUE(expected_tooltip_text == actual_tooltip_text);
 }
 
 // Trivial test to increase coverage of select_to_speak_tray.h. The
@@ -124,7 +186,10 @@ TEST_F(SelectToSpeakTrayTest, SelectToSpeakStateImpactsImageAndActivation) {
 // Without this test, coverage of select_to_speak_tray.h is 0%.
 TEST_F(SelectToSpeakTrayTest, OverriddenFunctionsDoNothing) {
   GetTray()->HideBubbleWithView(nullptr);
-  GetTray()->ClickedOutsideBubble();
+
+  const ui::MouseEvent event(ui::EventType::kMousePressed, gfx::Point(),
+                             gfx::Point(), ui::EventTimeForNow(), 0, 0);
+  GetTray()->ClickedOutsideBubble(event);
 }
 
 }  // namespace ash

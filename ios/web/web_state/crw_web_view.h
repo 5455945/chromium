@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,27 @@
 
 #import <WebKit/WebKit.h>
 
+#import "ios/web/common/crw_viewport_controller.h"
+
+@protocol CRWEditMenuBuilder;
 @protocol CRWInputViewProvider;
+@protocol CRWDataControlsDelegate;
 
 // Subclass of WKWebView which supports custom input views.
-@interface CRWWebView : WKWebView
+@interface CRWWebView : WKWebView <CRWViewportController>
 
 // Provider for custom input views and their respective view controllers.
 @property(nonatomic, weak) id<CRWInputViewProvider> inputViewProvider;
+
+// Customizer for the edit menu.
+@property(nonatomic, weak) id<CRWEditMenuBuilder> editMenuBuilder;
+
+// Delegate for controlling clipboard user interactions.
+@property(nonatomic, weak) id<CRWDataControlsDelegate> dataControlsDelegate;
+
+// Whether input views (the software keyboard, input accessory views, and
+// tablet shortcut bar) should be suppressed. Defaults to `NO`.
+@property(nonatomic, assign) BOOL shouldSuppressInputViews;
 
 @end
 

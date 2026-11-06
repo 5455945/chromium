@@ -1,15 +1,15 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
-#include "services/device/wake_lock/wake_lock.h"
 
 #include <map>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
-#include "build/chromeos_buildflags.h"
+#include "base/test/run_until.h"
+#include "base/test/test_future.h"
+#include "build/build_config.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
@@ -18,11 +18,6 @@
 #include "services/device/public/mojom/wake_lock.mojom.h"
 #include "services/device/public/mojom/wake_lock_context.mojom.h"
 #include "services/device/public/mojom/wake_lock_provider.mojom.h"
-#include "services/device/wake_lock/wake_lock_provider.h"
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "chromeos/lacros/lacros_test_helper.h"
-#endif
 
 namespace device {
 
@@ -38,6 +33,9 @@ class TestWakeLockObserver : public mojom::WakeLockObserver {
     wake_lock_events_.emplace(
         mojom::WakeLockType::kPreventDisplaySleepAllowDimming, EventCount());
   }
+
+  TestWakeLockObserver(const TestWakeLockObserver&) = delete;
+  TestWakeLockObserver& operator=(const TestWakeLockObserver&) = delete;
 
   ~TestWakeLockObserver() override = default;
 
@@ -65,13 +63,15 @@ class TestWakeLockObserver : public mojom::WakeLockObserver {
   mojo::ReceiverSet<mojom::WakeLockObserver> receivers_;
 
   std::map<mojom::WakeLockType, EventCount> wake_lock_events_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestWakeLockObserver);
 };
 
 class WakeLockTest : public DeviceServiceTestBase {
  public:
   WakeLockTest() = default;
+
+  WakeLockTest(const WakeLockTest&) = delete;
+  WakeLockTest& operator=(const WakeLockTest&) = delete;
+
   ~WakeLockTest() override = default;
 
  protected:
@@ -139,15 +139,8 @@ class WakeLockTest : public DeviceServiceTestBase {
   bool has_wakelock_;
   bool result_;
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  // Instantiate LacrosService for WakeLock support.
-  chromeos::ScopedLacrosServiceTestHelper scoped_lacros_service_test_helper_;
-#endif
-
   mojo::Remote<device::mojom::WakeLockProvider> wake_lock_provider_;
   mojo::Remote<mojom::WakeLock> wake_lock_;
-
-  DISALLOW_COPY_AND_ASSIGN(WakeLockTest);
 };
 
 // Request a wake lock, then cancel.
@@ -197,10 +190,9 @@ TEST_F(WakeLockTest, MultipleRequests) {
 }
 
 // Test Change Type. ChangeType() has no effect when wake lock is shared by
-// multiple clients. Has no effect on Android either.
+// multiple clients.
 TEST_F(WakeLockTest, ChangeType) {
   EXPECT_FALSE(HasWakeLock());
-#if !defined(OS_ANDROID)
   // Call ChangeType() on a wake lock that is in inactive status.
   EXPECT_TRUE(ChangeType(device::mojom::WakeLockType::kPreventAppSuspension));
   EXPECT_TRUE(ChangeType(device::mojom::WakeLockType::kPreventDisplaySleep));
@@ -266,16 +258,34 @@ TEST_F(WakeLockTest, ChangeType) {
   EXPECT_EQ(0, GetActiveWakeLocks(mojom::WakeLockType::kPreventDisplaySleep));
   EXPECT_EQ(0, GetActiveWakeLocks(
                    mojom::WakeLockType::kPreventDisplaySleepAllowDimming));
-#else  // OS_ANDROID:
-  EXPECT_FALSE(ChangeType(device::mojom::WakeLockType::kPreventAppSuspension));
-  EXPECT_FALSE(ChangeType(device::mojom::WakeLockType::kPreventDisplaySleep));
-  EXPECT_FALSE(ChangeType(
-      device::mojom::WakeLockType::kPreventDisplaySleepAllowDimming));
-  EXPECT_EQ(0, GetActiveWakeLocks(mojom::WakeLockType::kPreventAppSuspension));
-  EXPECT_EQ(0, GetActiveWakeLocks(mojom::WakeLockType::kPreventDisplaySleep));
-  EXPECT_EQ(0, GetActiveWakeLocks(
-                   mojom::WakeLockType::kPreventDisplaySleepAllowDimming));
+
+#if BUILDFLAG(IS_ANDROID)
+  // Wake locks associated with a WakeLockContext cannot change type on Android.
+  mojo::Remote<mojom::WakeLockContext> wake_lock_context;
+  wake_lock_provider_->GetWakeLockContextForID(
+      1, wake_lock_context.BindNewPipeAndPassReceiver());
+  mojo::Remote<mojom::WakeLock> context_wake_lock;
+  wake_lock_context->GetWakeLock(
+      mojom::WakeLockType::kPreventDisplaySleep, mojom::WakeLockReason::kOther,
+      "WakeLockTestWithContext",
+      context_wake_lock.BindNewPipeAndPassReceiver());
+  base::test::TestFuture<bool> context_change_result;
+  context_wake_lock->ChangeType(mojom::WakeLockType::kPreventAppSuspension,
+                                context_change_result.GetCallback());
+  EXPECT_FALSE(context_change_result.Get());
 #endif
+
+  // Disconnecting after changing type from kPreventAppSuspension to
+  // kPreventDisplaySleepAllowDimming must clean up cleanly in WakeLockProvider.
+  wake_lock_->RequestWakeLock();
+  EXPECT_EQ(1, GetActiveWakeLocks(
+                   mojom::WakeLockType::kPreventDisplaySleepAllowDimming));
+  wake_lock_.reset();
+  wake_lock_1.reset();
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return GetActiveWakeLocks(
+               mojom::WakeLockType::kPreventDisplaySleepAllowDimming) == 0;
+  }));
 }
 
 // WakeLockProvider connection broken doesn't affect WakeLock.

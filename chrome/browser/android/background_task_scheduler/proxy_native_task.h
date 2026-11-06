@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,9 @@
 #include "base/android/scoped_java_ref.h"
 #include "components/background_task_scheduler/background_task.h"
 
-using base::android::JavaParamRef;
+using base::android::JavaRef;
+
+class Profile;
 
 // A task managing the background activity of the offline page prefetcher.
 class ProxyNativeTask {
@@ -17,32 +19,27 @@ class ProxyNativeTask {
       std::unique_ptr<background_task::BackgroundTask> background_task,
       const background_task::TaskParameters& task_params,
       background_task::TaskFinishedCallback finish_callback);
+
+  ProxyNativeTask(const ProxyNativeTask&) = delete;
+  ProxyNativeTask& operator=(const ProxyNativeTask&) = delete;
+
   ~ProxyNativeTask();
 
   void StartBackgroundTaskInReducedMode(JNIEnv* env,
-                                        const JavaParamRef<jobject>& jcaller,
-                                        const JavaParamRef<jobject>& jkey);
+                                        const JavaRef<jobject>& jkey);
 
-  void StartBackgroundTaskWithFullBrowser(
-      JNIEnv* env,
-      const JavaParamRef<jobject>& jcaller,
-      const JavaParamRef<jobject>& jprofile);
+  void StartBackgroundTaskWithFullBrowser(JNIEnv* env,
+                                          Profile* profile);
 
   void OnFullBrowserLoaded(JNIEnv* env,
-                           const JavaParamRef<jobject>& jcaller,
-                           const JavaParamRef<jobject>& jprofile);
+                           Profile* profile);
 
-  jboolean StopBackgroundTask(JNIEnv* env,
-                              const JavaParamRef<jobject>& jcaller);
-
-  void Destroy(JNIEnv* env, const JavaParamRef<jobject>& jcaller);
+  bool StopBackgroundTask(JNIEnv* env);
 
  private:
   std::unique_ptr<background_task::BackgroundTask> background_task_;
   background_task::TaskParameters task_params_;
   background_task::TaskFinishedCallback finish_callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(ProxyNativeTask);
 };
 
 #endif  // CHROME_BROWSER_ANDROID_BACKGROUND_TASK_SCHEDULER_PROXY_NATIVE_TASK_H_

@@ -1,180 +1,479 @@
-// Copyright (c) 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/accessibility/accessibility_features.h"
 
 #include "base/feature_list.h"
+#include "base/metrics/field_trial_params.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "ui/accessibility/ax_features.mojom-features.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/android_info.h"
+#endif
+
+#if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_features.h"
+#endif
 
 namespace features {
 
-// Enable recognizing "aria-virtualcontent" as a valid aria property.
-const base::Feature kEnableAccessibilityAriaVirtualContent{
-    "AccessibilityAriaVirtualContent", base::FEATURE_DISABLED_BY_DEFAULT};
-
-bool IsAccessibilityAriaVirtualContentEnabled() {
+BASE_FEATURE(kAccessibilityPdfOcrForSelectToSpeak,
+             "kAccessibilityPdfOcrForSelectToSpeak",
+#if BUILDFLAG(IS_CHROMEOS)
+             base::FEATURE_ENABLED_BY_DEFAULT
+#else
+             base::FEATURE_DISABLED_BY_DEFAULT
+#endif  // BUILDFLAG(IS_CHROMEOS)
+);
+bool IsAccessibilityPdfOcrForSelectToSpeakEnabled() {
   return base::FeatureList::IsEnabled(
-      ::features::kEnableAccessibilityAriaVirtualContent);
+      ::features::kAccessibilityPdfOcrForSelectToSpeak);
 }
 
-// Enable exposing "display: none" nodes to the browser process AXTree
-const base::Feature kEnableAccessibilityExposeDisplayNone{
-    "AccessibilityExposeDisplayNone", base::FEATURE_DISABLED_BY_DEFAULT};
-
-bool IsAccessibilityExposeDisplayNoneEnabled() {
+BASE_FEATURE(kAccessibilityExposeSummaryAsHeading,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+bool IsAccessibilityExposeSummaryAsHeadingEnabled() {
   return base::FeatureList::IsEnabled(
-      ::features::kEnableAccessibilityExposeDisplayNone);
+      ::features::kAccessibilityExposeSummaryAsHeading);
 }
 
-// Enable exposing the <html> element to the browser process AXTree
-// (as an ignored node).
-const base::Feature kEnableAccessibilityExposeHTMLElement{
-    "AccessibilityExposeHTMLElement", base::FEATURE_ENABLED_BY_DEFAULT};
-
-bool IsAccessibilityExposeHTMLElementEnabled() {
+BASE_FEATURE(kAccessibilityPruneRedundantInlineConnectivity,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+bool IsAccessibilityPruneRedundantInlineConnectivityEnabled() {
   return base::FeatureList::IsEnabled(
-      ::features::kEnableAccessibilityExposeHTMLElement);
+      ::features::kAccessibilityPruneRedundantInlineConnectivity);
 }
 
-// Enable exposing ignored nodes from Blink to the browser process AXTree.
-// This will allow us to simplify logic by eliminating the distiction between
-// "ignored and included in the tree" from "ignored and not included in the
-// tree".
-const base::Feature kEnableAccessibilityExposeIgnoredNodes{
-    "AccessibilityExposeIgnoredNodes", base::FEATURE_DISABLED_BY_DEFAULT};
-
-bool IsAccessibilityExposeIgnoredNodesEnabled() {
-  return base::FeatureList::IsEnabled(
-      ::features::kEnableAccessibilityExposeIgnoredNodes);
+BASE_FEATURE(kAccessibilityCheckAXNodeIDs, base::FEATURE_ENABLED_BY_DEFAULT);
+bool IsAccessibilityCheckAXNodeIDsEnabled() {
+  return base::FeatureList::IsEnabled(::features::kAccessibilityCheckAXNodeIDs);
 }
 
-// Enable language detection to determine language used in page text, exposed
-// on the browser process AXTree.
-const base::Feature kEnableAccessibilityLanguageDetection{
-    "AccessibilityLanguageDetection", base::FEATURE_DISABLED_BY_DEFAULT};
-
-bool IsAccessibilityLanguageDetectionEnabled() {
-  return base::FeatureList::IsEnabled(
-      ::features::kEnableAccessibilityLanguageDetection);
+BASE_FEATURE(kAccessibilityTextFormatting, base::FEATURE_ENABLED_BY_DEFAULT);
+bool IsAccessibilityTextFormattingEnabled() {
+  return base::FeatureList::IsEnabled(::features::kAccessibilityTextFormatting);
 }
 
-// Serializes accessibility information from the Views tree and deserializes it
-// into an AXTree in the browser process.
-const base::Feature kEnableAccessibilityTreeForViews{
-    "AccessibilityTreeForViews", base::FEATURE_DISABLED_BY_DEFAULT};
+BASE_FEATURE(kAccessibilityHandleOccludingViews,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+bool IsAccessibilityHandleOccludingViewsEnabled() {
+  return base::FeatureList::IsEnabled(
+      ::features::kAccessibilityHandleOccludingViews);
+}
 
+BASE_FEATURE(kAccessibilityLabeledBy, base::FEATURE_DISABLED_BY_DEFAULT);
+bool IsAccessibilityLabeledByEnabled() {
+  return base::FeatureList::IsEnabled(::features::kAccessibilityLabeledBy);
+}
+
+BASE_FEATURE(kAccessibilityTreeForViews, base::FEATURE_DISABLED_BY_DEFAULT);
 bool IsAccessibilityTreeForViewsEnabled() {
+  return base::FeatureList::IsEnabled(::features::kAccessibilityTreeForViews);
+}
+
+BASE_FEATURE(kViewsAccessibilitySerializeOnDataChanged,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+bool IsViewsAccessibilitySerializeOnDataChangeEnabled() {
   return base::FeatureList::IsEnabled(
-      ::features::kEnableAccessibilityTreeForViews);
+      ::features::kViewsAccessibilitySerializeOnDataChanged);
 }
 
-const base::Feature kAccessibilityFocusHighlight{
-    "AccessibilityFocusHighlight", base::FEATURE_ENABLED_BY_DEFAULT};
-
-bool IsAccessibilityFocusHighlightEnabled() {
-  return base::FeatureList::IsEnabled(::features::kAccessibilityFocusHighlight);
-}
-
-const base::Feature kAutoDisableAccessibility{
-    "AutoDisableAccessibility", base::FEATURE_DISABLED_BY_DEFAULT};
-
-bool IsAutoDisableAccessibilityEnabled() {
-  return base::FeatureList::IsEnabled(::features::kAutoDisableAccessibility);
-}
-
-#if defined(OS_WIN)
-const base::Feature kIChromeAccessible{"IChromeAccessible",
-                                       base::FEATURE_DISABLED_BY_DEFAULT};
-
-bool IsIChromeAccessibleEnabled() {
-  return base::FeatureList::IsEnabled(::features::kIChromeAccessible);
-}
-#endif  // defined(OS_WIN)
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-const base::Feature kMagnifierPanningImprovements{
-    "MagnifierPanningImprovements", base::FEATURE_ENABLED_BY_DEFAULT};
-
-bool IsMagnifierPanningImprovementsEnabled() {
+BASE_FEATURE(kImageDescriptionsAlternateRouting,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+bool IsImageDescriptionsAlternateRoutingEnabled() {
   return base::FeatureList::IsEnabled(
-      ::features::kMagnifierPanningImprovements);
+      ::features::kImageDescriptionsAlternateRouting);
 }
 
-const base::Feature kMagnifierContinuousMouseFollowingModeSetting{
-    "MagnifierContinuousMouseFollowingModeSetting",
-    base::FEATURE_DISABLED_BY_DEFAULT};
-
-bool IsMagnifierContinuousMouseFollowingModeSettingEnabled() {
+BASE_FEATURE(kExtensionManifestV3NetworkSpeechSynthesis,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+bool IsExtensionManifestV3NetworkSpeechSynthesisEnabled() {
   return base::FeatureList::IsEnabled(
-      ::features::kMagnifierContinuousMouseFollowingModeSetting);
+      ::features::kExtensionManifestV3NetworkSpeechSynthesis);
 }
 
-const base::Feature kEnableSwitchAccessPointScanning{
-    "EnableSwitchAccessPointScanning", base::FEATURE_ENABLED_BY_DEFAULT};
-
-bool IsSwitchAccessPointScanningEnabled() {
-  return base::FeatureList::IsEnabled(
-      ::features::kEnableSwitchAccessPointScanning);
-}
-
-const base::Feature kExperimentalAccessibilityDictationListening{
-    "ExperimentalAccessibilityDictationListening",
-    base::FEATURE_ENABLED_BY_DEFAULT};
-
-bool IsExperimentalAccessibilityDictationListeningEnabled() {
-  return base::FeatureList::IsEnabled(
-      ::features::kExperimentalAccessibilityDictationListening);
-}
-
-const base::Feature kEnhancedNetworkVoices{"EnhancedNetworkVoices",
-                                           base::FEATURE_DISABLED_BY_DEFAULT};
-
-bool IsEnhancedNetworkVoicesEnabled() {
-  return base::FeatureList::IsEnabled(::features::kEnhancedNetworkVoices);
-}
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-
-const base::Feature kAugmentExistingImageLabels{
-    "AugmentExistingImageLabels", base::FEATURE_DISABLED_BY_DEFAULT};
-
-bool IsAugmentExistingImageLabelsEnabled() {
-  return base::FeatureList::IsEnabled(::features::kAugmentExistingImageLabels);
-}
-
-const base::Feature kUseAXPositionForDocumentMarkers{
-    "UseAXPositionForDocumentMarkers", base::FEATURE_DISABLED_BY_DEFAULT};
-
+BASE_FEATURE(kUseAXPositionForDocumentMarkers,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 bool IsUseAXPositionForDocumentMarkersEnabled() {
   return base::FeatureList::IsEnabled(
       ::features::kUseAXPositionForDocumentMarkers);
 }
 
-const base::Feature kEnableAriaElementReflection{
-    "EnableAriaElementReflection", base::FEATURE_DISABLED_BY_DEFAULT};
-
-bool IsAriaElementReflectionEnabled() {
-  return base::FeatureList::IsEnabled(::features::kEnableAriaElementReflection);
+BASE_FEATURE(kAXRandomizedStressTests, base::FEATURE_DISABLED_BY_DEFAULT);
+bool IsAXRandomizedStressTestsEnabled() {
+  return base::FeatureList::IsEnabled(::features::kAXRandomizedStressTests);
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-const base::Feature kSelectToSpeakNavigationControl{
-    "SelectToSpeakNavigationControl", base::FEATURE_ENABLED_BY_DEFAULT};
+BASE_FEATURE(kAccessibilityOnScreenMode,
+             "AccessibilityOnScreenAXMode",
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
-bool IsSelectToSpeakNavigationControlEnabled() {
+bool IsAccessibilityOnScreenAXModeEnabled() {
+  return base::FeatureList::IsEnabled(::features::kAccessibilityOnScreenMode);
+}
+
+BASE_FEATURE(kAccessibilityCanvas, base::FEATURE_DISABLED_BY_DEFAULT);
+
+namespace {
+
+constexpr base::FeatureParam<CanvasAccessibilityMode>::Option
+    kAccessibilityCanvasParamOptions[2] = {
+        {CanvasAccessibilityMode::kBasic, "Basic"},
+        {CanvasAccessibilityMode::kAdvanced, "Advanced"}};
+
+BASE_FEATURE_ENUM_PARAM(CanvasAccessibilityMode,
+                        kCanvasAccessibilityMode,
+                        &kAccessibilityCanvas,
+                        CanvasAccessibilityMode::kBasic,
+                        &kAccessibilityCanvasParamOptions);
+
+}  // namespace
+
+CanvasAccessibilityMode GetCanvasAccessibilityMode() {
+  if (!base::FeatureList::IsEnabled(::features::kAccessibilityCanvas)) {
+    return CanvasAccessibilityMode::kDisabled;
+  }
+  return kCanvasAccessibilityMode.Get();
+}
+
+BASE_FEATURE(kEnableCollectAccessibilityHeuristicInCanvasUkm,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+bool IsCollectAccessibilityHeuristicInCanvasUkmEnabled() {
   return base::FeatureList::IsEnabled(
-      ::features::kSelectToSpeakNavigationControl);
+      ::features::kEnableCollectAccessibilityHeuristicInCanvasUkm);
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
-#if defined(OS_ANDROID)
-const base::Feature kComputeAXMode{"ComputeAXMode",
-                                   base::FEATURE_DISABLED_BY_DEFAULT};
-
-bool IsComputeAXModeEnabled() {
-  return base::FeatureList::IsEnabled(::features::kComputeAXMode);
+#if BUILDFLAG(IS_WIN)
+BASE_FEATURE(kAccessibilityWinAXFragmentRootParent,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+bool IsAccessibilityWinAXFragmentRootParentEnabled() {
+  return base::FeatureList::IsEnabled(
+      ::features::kAccessibilityWinAXFragmentRootParent);
 }
-#endif  // defined(OS_ANDROID)
+
+BASE_FEATURE(kFixNarratorWebContentContainment,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+bool IsFixNarratorWebContentContainmentEnabled() {
+  return base::FeatureList::IsEnabled(
+      ::features::kFixNarratorWebContentContainment);
+}
+
+BASE_FEATURE(kIChromeAccessible, base::FEATURE_DISABLED_BY_DEFAULT);
+bool IsIChromeAccessibleEnabled() {
+  return base::FeatureList::IsEnabled(::features::kIChromeAccessible);
+}
+
+BASE_FEATURE(kUiaDisconnectRootProviders, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kUiaEventOptimization, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kUiaMathMlSupport, base::FEATURE_ENABLED_BY_DEFAULT);
+bool IsUiaMathMlSupportEnabled() {
+  return base::FeatureList::IsEnabled(::features::kUiaMathMlSupport);
+}
+
+BASE_FEATURE(kAccessibilityGroupLocationChangeByCommonAncestor,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+bool IsAccessibilityGroupLocationChangeByCommonAncestorEnabled() {
+  return base::FeatureList::IsEnabled(
+      ::features::kAccessibilityGroupLocationChangeByCommonAncestor);
+}
+#endif  // BUILDFLAG(IS_WIN)
+
+#if BUILDFLAG(IS_CHROMEOS)
+bool IsDictationOfflineAvailable() {
+  return base::FeatureList::IsEnabled(
+      ash::features::kOnDeviceSpeechRecognition);
+}
+
+BASE_FEATURE(kExperimentalAccessibilityDictationContextChecking,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+bool IsExperimentalAccessibilityDictationContextCheckingEnabled() {
+  return base::FeatureList::IsEnabled(
+      ::features::kExperimentalAccessibilityDictationContextChecking);
+}
+
+BASE_FEATURE(kAccessibilityShakeToLocate, base::FEATURE_ENABLED_BY_DEFAULT);
+bool IsAccessibilityShakeToLocateEnabled() {
+  return base::FeatureList::IsEnabled(::features::kAccessibilityShakeToLocate);
+}
+
+BASE_FEATURE(kAccessibilityManifestV3ChromeVox,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+bool IsAccessibilityManifestV3EnabledForChromeVox() {
+  return base::FeatureList::IsEnabled(
+      ::features::kAccessibilityManifestV3ChromeVox);
+}
+
+BASE_FEATURE(kAccessibilityManifestV3GoogleTts,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+bool IsAccessibilityManifestV3EnabledForGoogleTts() {
+  return base::FeatureList::IsEnabled(
+      ::features::kAccessibilityManifestV3GoogleTts);
+}
+
+BASE_FEATURE(kAccessibilityChromeVoxJapaneseBraille,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+bool IsAccessibilityChromeVoxJapaneseBrailleEnabled() {
+  return base::FeatureList::IsEnabled(
+      ::features::kAccessibilityChromeVoxJapaneseBraille);
+}
+
+BASE_FEATURE(kAccessibilityGoogleTtsAutomaticReconnect,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+bool IsAccessibilityGoogleTtsAutomaticReconnectEnabled() {
+  return base::FeatureList::IsEnabled(
+      ::features::kAccessibilityGoogleTtsAutomaticReconnect);
+}
+
+BASE_FEATURE(kAccessibilityHoverText, base::FEATURE_DISABLED_BY_DEFAULT);
+bool IsAccessibilityHoverTextEnabled() {
+  return base::FeatureList::IsEnabled(::features::kAccessibilityHoverText);
+}
+
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+#if BUILDFLAG(IS_ANDROID)
+
+BASE_FEATURE(kAccessibilityInlineLineSeparators,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+bool IsAccessibilityInlineLineSeparatorsEnabled() {
+  return base::FeatureList::IsEnabled(
+      ::features::kAccessibilityInlineLineSeparators);
+}
+
+BASE_FEATURE(kAccessibilityMagnificationFollowsFocusKeyboardAttached,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kAccessibilityMagnificationFollowsFocusNoKeyboard,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kAccessibilityAndroidMath, base::FEATURE_DISABLED_BY_DEFAULT);
+bool IsAccessibilityAndroidMathEnabled() {
+  return base::FeatureList::IsEnabled(::features::kAccessibilityAndroidMath);
+}
+
+BASE_FEATURE(kAccessibilityAndroidBackgroundThread,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+bool IsAccessibilityAndroidBackgroundThreadEnabled() {
+  // The background thread owns an embedded window, which needs
+  // `SurfaceControlViewHost` from Android R. Check the feature last, so that
+  // only devices that can use it join a field trial.
+  return base::android::android_info::sdk_int() >=
+             base::android::android_info::SDK_VERSION_R &&
+         base::FeatureList::IsEnabled(
+             ::features::kAccessibilityAndroidBackgroundThread);
+}
+
+#endif  // BUILDFLAG(IS_ANDROID)
+
+bool IsReadAloudNativeEnabled() {
+  return base::FeatureList::IsEnabled(ax::mojom::features::kReadAloudNative);
+}
+
+bool IsReadAloudServerSynthesizerEnabled() {
+  std::optional<bool> override_state = base::FeatureList::GetStateIfOverridden(
+      ax::mojom::features::kReadAloudServerSynthesizer);
+  if (override_state.has_value() && !override_state.value()) {
+    return false;
+  }
+  return base::FeatureList::IsEnabled(
+             ax::mojom::features::kReadAloudServerSynthesizer) ||
+         base::FeatureList::IsEnabled(ax::mojom::features::kReadAloudNative);
+}
+
+#if !BUILDFLAG(IS_ANDROID)
+BASE_FEATURE(kAXTreeFixing, base::FEATURE_DISABLED_BY_DEFAULT);
+bool IsAXTreeFixingEnabled() {
+  return base::FeatureList::IsEnabled(::features::kAXTreeFixing);
+}
+
+#if !BUILDFLAG(IS_CHROMEOS)
+BASE_FEATURE(kPageColorsSettings, base::FEATURE_DISABLED_BY_DEFAULT);
+bool IsPageColorsSettingsEnabled() {
+  return base::FeatureList::IsEnabled(::features::kPageColorsSettings);
+}
+#endif  // !BUILDFLAG(IS_CHROMEOS)
+
+bool IsScreenAIMainContentExtractionEnabled() {
+  return base::FeatureList::IsEnabled(
+      ax::mojom::features::kScreenAIMainContentExtractionEnabled);
+}
+
+bool IsScreenAIOCREnabled() {
+  return base::FeatureList::IsEnabled(ax::mojom::features::kScreenAIOCREnabled);
+}
+
+BASE_FEATURE(kMainNodeAnnotations, base::FEATURE_DISABLED_BY_DEFAULT);
+bool IsMainNodeAnnotationsEnabled() {
+  return base::FeatureList::IsEnabled(::features::kMainNodeAnnotations);
+}
+
+BASE_FEATURE(kImprovedReadAloud, base::FEATURE_DISABLED_BY_DEFAULT);
+bool IsImprovedReadAloudEnabled() {
+  return base::FeatureList::IsEnabled(::features::kImprovedReadAloud);
+}
+
+BASE_FEATURE(kReadAnythingImprovedUi, base::FEATURE_DISABLED_BY_DEFAULT);
+bool IsReadAnythingImprovedUiEnabled() {
+  return base::FeatureList::IsEnabled(::features::kReadAnythingImprovedUi);
+}
+
+BASE_FEATURE(kPdfAccessibilityHeuristicEnhancements,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+bool IsPdfAccessibilityHeuristicEnhancementsEnabled() {
+  return base::FeatureList::IsEnabled(
+      ::features::kPdfAccessibilityHeuristicEnhancements);
+}
+
+BASE_FEATURE(kReadAnythingMenuShuffleExperiment,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+bool IsReadAnythingMenuShuffleExperimentEnabled() {
+  return base::FeatureList::IsEnabled(
+      ::features::kReadAnythingMenuShuffleExperiment);
+}
+
+namespace {
+constexpr base::FeatureParam<ReadAnythingMenuShuffleExperimentGroup>::Option
+    kReadAnythingMenuShuffleExperimentParamOptions[3] = {
+        {ReadAnythingMenuShuffleExperimentGroup::kDefault,
+         "MenuShuffleDefault"},
+        {ReadAnythingMenuShuffleExperimentGroup::kPlaceWithSeparation,
+         "MenuShuffleSeparation"},
+        {ReadAnythingMenuShuffleExperimentGroup::kPlaceAtBottom,
+         "MenuShufflePlaceAtBottom"}};
+
+BASE_FEATURE_ENUM_PARAM(ReadAnythingMenuShuffleExperimentGroup,
+                        kReadAnythingMenuShuffleExperimentParam,
+                        &kReadAnythingMenuShuffleExperiment,
+                        "read_anything_menu_shuffle_group_name",
+                        ReadAnythingMenuShuffleExperimentGroup::kDefault,
+                        &kReadAnythingMenuShuffleExperimentParamOptions);
+}  // namespace
+
+ReadAnythingMenuShuffleExperimentGroup
+GetReadAnythingMenuShuffleExperimentGroup() {
+  CHECK(IsReadAnythingMenuShuffleExperimentEnabled());
+  return kReadAnythingMenuShuffleExperimentParam.Get();
+}
+
+BASE_FEATURE(kReadAnythingReadAloudExperimentalPlaybackUi,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+bool IsReadAnythingReadAloudExperimentalPlaybackUiEnabled() {
+  return base::FeatureList::IsEnabled(
+      ::features::kReadAnythingReadAloudExperimentalPlaybackUi);
+}
+
+BASE_FEATURE(kReadAnythingReadAloudPhraseHighlighting,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+bool IsReadAnythingReadAloudPhraseHighlightingEnabled() {
+  return base::FeatureList::IsEnabled(
+      ::features::kReadAnythingReadAloudPhraseHighlighting);
+}
+
+BASE_FEATURE(kReadAnythingOmniboxChip, base::FEATURE_ENABLED_BY_DEFAULT);
+bool IsReadAnythingOmniboxChipEnabled() {
+  return base::FeatureList::IsEnabled(::features::kReadAnythingOmniboxChip);
+}
+
+BASE_FEATURE(kReadAnythingTranslateEntryPoint,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+bool IsReadAnythingTranslateEntryPointEnabled() {
+  return base::FeatureList::IsEnabled(
+      ::features::kReadAnythingTranslateEntryPoint);
+}
+
+BASE_FEATURE(kReadAnythingLineFocus, base::FEATURE_ENABLED_BY_DEFAULT);
+bool IsReadAnythingLineFocusEnabled() {
+  return base::FeatureList::IsEnabled(::features::kReadAnythingLineFocus);
+}
+
+BASE_FEATURE(kHatsReadingModeSurvey, base::FEATURE_DISABLED_BY_DEFAULT);
+bool IsHatsReadingModeSurveyEnabled() {
+  return base::FeatureList::IsEnabled(::features::kHatsReadingModeSurvey);
+}
+
+BASE_FEATURE(kReadAnythingWithReadability, base::FEATURE_ENABLED_BY_DEFAULT);
+bool IsReadAnythingWithReadabilityEnabled() {
+  return base::FeatureList::IsEnabled(::features::kReadAnythingWithReadability);
+}
+
+BASE_FEATURE(kReadAnythingDistillationQualityEvaluation,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+bool IsReadAnythingDistillationQualityEvaluationEnabled() {
+  return base::FeatureList::IsEnabled(
+      ::features::kReadAnythingDistillationQualityEvaluation);
+}
+
+BASE_FEATURE(kReadAnythingDistillerRefactor, base::FEATURE_DISABLED_BY_DEFAULT);
+bool IsReadAnythingDistillerRefactorEnabled() {
+  return base::FeatureList::IsEnabled(
+      ::features::kReadAnythingDistillerRefactor);
+}
+
+BASE_FEATURE(kImmersiveReadAnythingPrint, base::FEATURE_DISABLED_BY_DEFAULT);
+bool IsImmersiveReadAnythingPrintEnabled() {
+  return base::FeatureList::IsEnabled(::features::kImmersiveReadAnythingPrint);
+}
+
+BASE_FEATURE(kReadAnythingSendFeedback, base::FEATURE_DISABLED_BY_DEFAULT);
+bool IsReadAnythingSendFeedbackEnabled() {
+  return base::FeatureList::IsEnabled(::features::kReadAnythingSendFeedback);
+}
+
+// This feature is only used in tests and must not be enabled by default.
+BASE_FEATURE(kScreenAITestMode, base::FEATURE_DISABLED_BY_DEFAULT);
+bool IsScreenAITestModeEnabled() {
+  return base::FeatureList::IsEnabled(::features::kScreenAITestMode);
+}
+
+#endif  // !BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_MAC)
+// Enables the switchover to the newer NSAccessibility property-based API.
+BASE_FEATURE(kMacAccessibilityAPIMigration, base::FEATURE_DISABLED_BY_DEFAULT);
+bool IsMacAccessibilityAPIMigrationEnabled() {
+  return base::FeatureList::IsEnabled(
+      ::features::kMacAccessibilityAPIMigration);
+}
+
+BASE_FEATURE(kMacAccessibilityOptimizeChildrenChanged,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+bool IsMacAccessibilityOptimizeChildrenChangedEnabled() {
+  return base::FeatureList::IsEnabled(
+      ::features::kMacAccessibilityOptimizeChildrenChanged);
+}
+
+BASE_FEATURE(kAccessibilityRemoteUIApp, base::FEATURE_ENABLED_BY_DEFAULT);
+bool IsAccessibilityRemoteUIAppEnabled() {
+  return base::FeatureList::IsEnabled(::features::kAccessibilityRemoteUIApp);
+}
+
+BASE_FEATURE(kBlockRootWindowAccessibleNameChangeEvent,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+bool IsBlockRootWindowAccessibleNameChangeEventEnabled() {
+  return base::FeatureList::IsEnabled(
+      ::features::kBlockRootWindowAccessibleNameChangeEvent);
+}
+
+BASE_FEATURE(kMacAccessibilityTextOperation, base::FEATURE_DISABLED_BY_DEFAULT);
+bool IsMacAccessibilityTextOperationEnabled() {
+  return base::FeatureList::IsEnabled(
+      ::features::kMacAccessibilityTextOperation);
+}
+#endif  // BUILDFLAG(IS_MAC)
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+BASE_FEATURE(kWasmTtsEngineAutoInstallDisabled,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+bool IsWasmTtsEngineAutoInstallDisabled() {
+  return base::FeatureList::IsEnabled(
+      ::features::kWasmTtsEngineAutoInstallDisabled);
+}
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
 }  // namespace features

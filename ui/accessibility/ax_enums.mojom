@@ -1,12 +1,12 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// Must also be kept in sync with extensions/common/api/automation.idl.
+// Must also be kept in sync with extensions/common/api/automation.webidl.
 module ax.mojom;
 
 // For new entries to the following four enums, also add to
-// extensions/common/api/automation.idl. This is enforced
+// extensions/common/api/automation.webidl. This is enforced
 // by a PRESUBMIT check.
 //
 // Explanation of in-lined comments next to some enum values/attributes:
@@ -25,14 +25,20 @@ module ax.mojom;
 // If unspecified, the attribute is used across web and native on multiple
 // platforms.
 
-// Next version: 1
-// Next value: 59
+// Keep these values in sync with AXEventType in
+// tools/metrics/histograms/enums.xml.
+// Next version: 2
+// Next value: 60
 [Extensible, Stable, Uuid="686e661e-f8c7-4214-8713-1f66d95d3ffa"]
 enum Event {
   [Default]kNone = 0,
   kActiveDescendantChanged = 1,
   kAlert = 2,
-  kAriaAttributeChanged = 3,   // Implicit
+  // TODO(crbug.com/1464633) Fully remove kAriaAttributeChangedDeprecated
+  // starting in 122, because although it was removed in 118, it is still
+  // present in earlier versions of LaCros. We can remove the enum as long as
+  // the ordinal value 3 is still skipped.
+  kAriaAttributeChangedDeprecated = 3,  // Deprecated: Do not use.
   kAutocorrectionOccured = 4,  // Unknown: http://crbug.com/392498
   kBlur = 5,                   // Remove: http://crbug.com/392502
   kCheckedStateChanged = 6,    // Implicit
@@ -42,12 +48,12 @@ enum Event {
   kDocumentSelectionChanged = 10,
   kDocumentTitleChanged = 11,
   kEndOfTest = 12,        // Sentinel value indicating the end of a test
+  [MinVersion=1] kEnabledChanged = 59,   // Native
   kExpandedChanged = 13,  // Web
   kFocus = 14,
   kFocusAfterMenuClose = 15,
 
-  // Contextual focus event that must delay the next focus event.
-  kFocusContext = 16,
+  kFocusContextDeprecated = 16,  // Deprecated: Do not use.
   kHide = 17,          // Remove: http://crbug.com/392502
   kHitTestResult = 18,
   kHover = 19,
@@ -61,7 +67,7 @@ enum Event {
   kMediaStartedPlaying = 27,   // Native / Automation
   kMediaStoppedPlaying = 28,   // Native / Automation
   kMenuEnd = 29,               // Native / web: menu interaction has ended.
-  kMenuListValueChanged = 30,  // Web
+  kMenuListValueChangedDeprecated = 30,  // Web
   kMenuPopupEnd = 31,          // Native / web: a menu/submenu is hidden/closed.
   kMenuPopupStart = 32,        // Native / web: a menu/submenu is shown/opened.
   kMenuStart = 33,             // Native / web: menu interaction has begun.
@@ -106,11 +112,17 @@ enum Event {
 // Web: this attribute is only used in web content.
 //
 // Native: this attribute is only used in native UI.
-// Next value: 185
+//
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+//
+// LINT.IfChange(Role)
+//
+// Next version: 9
+// Next value: 214
 [Extensible, Stable, Uuid="d258eb73-e0cc-490c-b881-80ee11d3fec2"]
 enum Role {
-  // Used for role="none"/"presentation" -- ignored in platform tree.
-  [Default]kNone = 0,
+  [Default]kUnknown = 181, // The role has not been set.
   kAbbr = 1,
   kAlert = 2,
   kAlertDialog = 3,
@@ -130,8 +142,16 @@ enum Role {
   kColorWell = 17,
   kColumn = 18,
   kColumnHeader = 19,
+  // kComboBoxGrouping represents a combobox container that groups
+  // subcomponents. It always contains a button and a listbox. It may also
+  // contain a listbox as in case of an editable combobox (e.g. Views'
+  // EditableCombobox).
   kComboBoxGrouping = 20,
+  // kComboBoxMenuButton represents the arrow button part of a combobox, or a
+  // <button> with and explicit combobox role set.
   kComboBoxMenuButton = 21,
+  // kComboBoxSelect represents an HTML single-value <select> element.
+  [MinVersion=4] kComboBoxSelect = 209,
   kComplementary = 22,
   kComment = 23,
   kContentDeletion = 24,
@@ -141,13 +161,14 @@ enum Role {
   kDateTime = 28,
   kDefinition = 29,
   kDescriptionList = 30,
-  kDescriptionListDetail = 31,
-  kDescriptionListTerm = 32,
+  kDescriptionListDetailDeprecated = 31, // Replaced with kDefinition.
+  kDescriptionListTermDeprecated = 32,  // Replaced with kTerm.
   kDesktop = 33,  // internal
   kDetails = 34,
   kDialog = 35,
-  kDirectory = 36,
+  kDirectoryDeprecated = 36,
   kDisclosureTriangle = 37,
+  [MinVersion=5] kDisclosureTriangleGrouped = 210,
   // --------------------------------------------------------------
   // DPub Roles:
   // https://www.w3.org/TR/dpub-aam-1.0/#mapping_role_table
@@ -201,21 +222,22 @@ enum Role {
   kFigcaption = 83,
   kFigure = 84,
   kFooter = 85,
-  kFooterAsNonLandmark = 86,
+  kSectionFooter = 86, // Previously kFooterAsNonLandmark.
   kForm = 87,
   kGenericContainer = 88,
   // --------------------------------------------------------------
   // ARIA Graphics module roles:
-  // https://rawgit.com/w3c/graphics-aam/master/#mapping_role_table
+  // https://rawgit.com/w3c/graphics-aam/main/#mapping_role_table
   kGraphicsDocument = 89,
   kGraphicsObject = 90,
   kGraphicsSymbol = 91,
   // End ARIA Graphics module roles.
   // --------------------------------------------------------------
   kGrid = 92,
+  [MinVersion=7] kGridCell = 212,
   kGroup = 93,
   kHeader = 94,
-  kHeaderAsNonLandmark = 95,
+  kSectionHeader = 95, // Previously kHeaderAsNonLandmark.
   kHeading = 96,
   kIframe = 97,
   kIframePresentational = 98,
@@ -245,24 +267,52 @@ enum Role {
   kMark = 119,
   kMarquee = 120,
   kMath = 121,
+  // MathML roles
+  // https://w3c.github.io/mathml-aam
+  [MinVersion=3] kMathMLFraction = 188,
+  [MinVersion=3] kMathMLIdentifier = 189,
+  [MinVersion=2] kMathMLMath = 187,
+  [MinVersion=3] kMathMLMultiscripts = 190,
+  [MinVersion=3] kMathMLNoneScript = 191,
+  [MinVersion=3] kMathMLNumber = 192,
+  [MinVersion=3] kMathMLOperator = 193,
+  [MinVersion=3] kMathMLOver = 194,
+  [MinVersion=3] kMathMLPrescriptDelimiter = 195,
+  [MinVersion=3] kMathMLRoot = 196,
+  [MinVersion=3] kMathMLRow = 197,
+  [MinVersion=3] kMathMLSquareRoot = 198,
+  [MinVersion=3] kMathMLStringLiteral = 199,
+  [MinVersion=3] kMathMLSub = 200,
+  [MinVersion=3] kMathMLSubSup = 201,
+  [MinVersion=3] kMathMLSup = 202,
+  [MinVersion=3] kMathMLTable = 203,
+  [MinVersion=3] kMathMLTableCell = 204,
+  [MinVersion=3] kMathMLTableRow = 205,
+  [MinVersion=3] kMathMLText = 206,
+  [MinVersion=3] kMathMLUnder = 207,
+  [MinVersion=3] kMathMLUnderOver = 208,
   kMenu = 122,
   kMenuBar = 123,
   kMenuItem = 124,
   kMenuItemCheckBox = 125,
   kMenuItemRadio = 126,
+  [MinVersion=8] kMenuItemSeparator = 213,
   kMenuListOption = 127,
   kMenuListPopup = 128,
   kMeter = 129,
   kNavigation = 130,
+  kNone = 0, // Used for role="none"/"presentation"; ignored in platform tree.
   kNote = 131,
   kPane = 132,
   kParagraph = 133,
   kPdfActionableHighlight = 134,
   kPdfRoot = 135,
   kPluginObject = 136,
+  // kPopUpButton is used for a button role that has a popup. It is not a
+  // combobox which can contain a value and associated list of values.
   kPopUpButton = 137,
-  kPortal = 138,
-  kPre = 139,
+  kPortalDeprecated = 138,
+  kPreDeprecated = 139,
   kProgressIndicator = 140,
   kRadioButton = 141,
   kRadioGroup = 142,
@@ -278,13 +328,16 @@ enum Role {
   kSearch = 152,
   kSearchBox = 153,
   kSection = 154,
+  [MinVersion=6] kSectionWithoutName = 211,
   kSlider = 155,
   kSpinButton = 156,
   kSplitter = 157,
   kStaticText = 158,
   kStatus = 159,
   kStrong = 160,
+  [MinVersion=1] kSubscript = 185,
   kSuggestion = 161,
+  [MinVersion=1] kSuperscript = 186,
   kSvgRoot = 162,
   kSwitch = 163,
   kTab = 164,
@@ -294,6 +347,8 @@ enum Role {
   kTableHeaderContainer = 168,
   kTerm = 169,
   kTextField = 170,
+  // kTextFieldWithComboBox represents an HTML <input> element with a datalist.
+  // <input type=text role=combobox> is one such example.
   kTextFieldWithComboBox = 171,
   kTime = 172,
   kTimer = 173,
@@ -304,13 +359,16 @@ enum Role {
   kTree = 178,
   kTreeGrid = 179,
   kTreeItem = 180,
-  kUnknown = 181,
   kVideo = 182,
   kWebView = 183,
   kWindow = 184,
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/accessibility/enums.xml:AccessibilityRole)
 
-// Next value: 19
+// Bitfield value. Each state can either be true or false.
+//
+// Next version: 3
+// Next value: 21
 [Extensible, Stable, Uuid="35e7123a-f31f-4de7-94a4-3412dcb6bd5a"]
 enum State {
   [Default]kNone = 0,
@@ -335,13 +393,15 @@ enum State {
   // Grows vertically, e.g. menu or combo box.
   kVertical = 17,
   kVisited = 18,
+  [MinVersion=1] kHasActions = 19,
+  [MinVersion=2] kHasInterestFor = 20,
 };
 
 // An action to be taken on an accessibility node.
 // In contrast to |AXDefaultActionVerb|, these describe what happens to the
 // object, e.g. "FOCUS".
-// Next version: 2
-// Next value: 38
+// Next version: 7
+// Next value: 43
 [Extensible, Stable, Uuid="ed8e4466-0522-4f98-ac28-59a523b70232"]
 enum Action {
   [Default]kNone = 0,
@@ -352,13 +412,16 @@ enum Action {
   kBlur = 2,
 
   // Notifies a node that it no longer has accessibility focus.
-  // Currently used only on Android and only internally, it's not
-  // exposed to the open web. See kSetAccessibilityFocus, below.
+  // On Android, this comes from an official Android accessibility api.
+  // On other platforms, we derive this from other actions such as
+  // kScrollToMakeVisible.
   kClearAccessibilityFocus = 3,
 
   // Collapse the collapsible node.
   kCollapse = 4,
 
+  // Used for custom actions in Android window. See kCustomActionIds for
+  // more info.
   kCustomAction = 5,
 
   // Decrement a slider or range control by one step value.
@@ -396,10 +459,17 @@ enum Action {
   // bounding boxes.
   kLoadInlineTextBoxes = 16,
 
+  [MinVersion=2] kLongClick = 38,
+
+  // Replace ranges provided via the kTextOperationStart*/kTextOperationEnd*
+  // int list attributes with the corresponding replacements strings provided
+  // in the kTextOperationReplacementStrings string list attribute.
+  [MinVersion=6] kReplaceRanges = 42,
+
   // Delete any selected text in the control's text value and
   // insert |AXActionData::value| in its place, like when typing or pasting.
   kReplaceSelectedText = 17,
-
+  [MinVersion=5] kRequestLayoutBasedAction = 41,
   [MinVersion=1] kResumeMedia = 34,
 
   // Scrolls by approximately one screen in a specific direction. Should be
@@ -419,10 +489,12 @@ enum Action {
   // Scroll the given object to a specified point on the screen in
   // global screen coordinates. Pass a point in AXActionData.target_point.
   kScrollToPoint = 25,
+  [MinVersion=3] kScrollToPositionAtRowColumn = 39,
 
   // Notifies a node that it has accessibility focus.
-  // Currently used only on Android and only internally, it's not
-  // exposed to the open web. See kClearAccessibilityFocus, above.
+  // On Android, this comes from an official Android accessibility api.
+  // On other platforms, we derive this from other actions  such as
+  // kScrollToMakeVisible.
   kSetAccessibilityFocus = 26,
 
   kSetScrollOffset = 27,
@@ -442,16 +514,18 @@ enum Action {
   kSignalEndOfTest = 32,
   kShowTooltip = 33,
 
+  // Joins the current tree with another tree by adding the latter as a child
+  // tree at a particular node.
+  //
+  // The closest example in HTML is an iframe, but this action extends the same
+  // functionality to all accessibility nodes.
+  [MinVersion=4] kStitchChildTree = 40,
+
   [MinVersion=1] kStartDuckingMedia = 35,
   [MinVersion=1] kStopDuckingMedia = 36,
   [MinVersion=1] kSuspendMedia = 37,
 };
 
-enum ActionFlags {
-  kNone,
-  kRequestImages,
-  kRequestInlineTextBoxes,
-};
 
 // A list of valid values for the horizontal and vertical scroll alignment
 // arguments in |AXActionData|. These values control where a node is scrolled
@@ -498,6 +572,12 @@ enum DefaultActionVerb {
   // as it bubbles up.
   kClickAncestor,
 
+  // A click on this node will result in event dispatch to this node.
+  kClickInHitTest,
+
+  // A click on this node will not result in event dispatch to this node.
+  kClickNotInHitTest,
+
   kJump,
   kOpen,
   kPress,
@@ -512,40 +592,63 @@ enum Mutation {
   kSubtreeCreated,
   kNodeChanged,
   kNodeRemoved,
+  kTextChanged,
+  kSubtreeUpdateEnd,
 };
 
-// Next value: 31
+// Next version: 12
+// Next value: 47
 [Extensible, Stable, Uuid="e5a4cd0c-3152-4427-93d5-35ff7d0f1ae8"]
 enum StringAttribute {
   [Default]kNone = 0,
   kAccessKey = 1,
   kAppId = 2,
-  // Only used when invalid_state == invalid_state_other.
-  kAriaInvalidValue = 3,
+  // Deprecated - Do not use.
+  // AriaInvalidValue is deprecated. Spelling and Grammar errors are stored
+  // using markers and invalid state in general is stored using invalidState.
+  kAriaInvalidValueDeprecated = 3,
   kAutoComplete = 4,
+  [MinVersion=2] kAriaBrailleLabel = 33,
+  [MinVersion=2] kAriaBrailleRoleDescription = 34,
+  [MinVersion=6] kAriaCellColumnIndexText = 39,
+  [MinVersion=6] kAriaCellRowIndexText = 40,
+  // Deprecated - Do not use.
+  // These attributes are replaced by its `StringListAttribute` equivalents to
+  // support multiple contiguous calls to `ariaNotify`.
+  [MinVersion=4] kAriaNotificationAnnouncementDeprecated = 36,
+  [MinVersion=4] kAriaNotificationIdDeprecated = 37,
+  [MinVersion=10] kCanvasAnnotation = 45,
   kCheckedStateDescription = 5,
   kChildTreeId = 6,
   kChildTreeNodeAppId = 7,
   kClassName = 8,
   kContainerLiveRelevant = 9,
   kContainerLiveStatus = 10,
+  [MinVersion=7] kDateTime = 41,
   kDescription = 11,  // Any description = 11, from any description source.
   kDisplay = 12,
+  [MinVersion=1] kDoDefaultLabel = 31, // Only for ARC
   // Only present when different from parent.
   kFontFamily = 13,
+  [MinVersion=5] kHtmlId = 38,
   kHtmlTag = 14,
+  [MinVersion=8] kHtmlInputName = 42,
   // Stores an automatic image annotation if one is available. Only valid on
   // ax::mojom::Role::kImage. See kImageAnnotationStatus, too.
   kImageAnnotation = 15,
   kImageDataUrl = 16,
-  kInnerHtml = 17,
   kInputType = 18,
   kKeyShortcuts = 19,
   // Only present when different from parent.
   kLanguage = 20,
-  kName = 21,
+  [MinVersion=3] kLinkTarget = 35,  // E.g. "self", "blank", "top".
+  [MinVersion=1] kLongClickLabel = 32, // Only for ARC
   kLiveRelevant = 22,
   kLiveStatus = 23,
+  [MinVersion=9]kMathArg = 43,
+  kMathContent = 17,
+  [MinVersion=9]kMathIntent = 44,
+  kName = 21,
   // Only if not already exposed in kName (NameFrom::kPlaceholder)
   kPlaceholder = 24,
   kRole = 25,
@@ -557,9 +660,11 @@ enum StringAttribute {
   // TODO(bebeaudr): kAriaVirtualContent is currently a string attribute to
   // facilitate prototyping. Make it an enum when we're done prototyping.
   kVirtualContent = 30,
+  [MinVersion=11] kAriaValueText = 46,
 };
 
-// Next value: 61
+// Next version: 8
+// Next value: 70
 [Extensible, Stable, Uuid="c350e50f-5177-405d-b155-79868449ba7b"]
 enum IntAttribute {
   [Default]kNone = 0,
@@ -617,7 +722,9 @@ enum IntAttribute {
 
   // Relationships between this element and other elements.
   kActivedescendantId = 31,
-  kErrormessageId = 32,
+  // Obsolete, as aria-errormessage supports multiple IDREFs in
+  // WAI-ARIA 1.3.
+  kErrormessageIdDeprecated = 32,
   kInPageLinkTargetId = 33,
   kMemberOfId = 34,
   kNextOnLineId = 35,
@@ -646,6 +753,8 @@ enum IntAttribute {
   kBackgroundColor = 43,
   kColor = 44,
 
+  // Indicates the availability and type of interactive popup element that can
+  // be triggered by the element on which the attribute is set.
   kHasPopup = 45,
 
   // Image annotation status, of type ImageAnnotationStatus.
@@ -686,18 +795,43 @@ enum IntAttribute {
   kPreviousFocusId = 57,
   kNextFocusId = 58,
 
+  // Deprecated - Do not use.
   // For indicating what functions can be performed when a dragged object
   // is released on the drop target.
   // Note: aria-dropeffect is deprecated in WAI-ARIA 1.1.
-  kDropeffect = 59,
+  kDropeffectDeprecated = 59,
 
-  // The DOMNodeID from Blink. Currently only populated when using
-  // the accessibility tree for PDF exporting. Warning, this is totally
-  // unrelated to the accessibility node ID, or the ID attribute for an
-  // HTML element - it's an ID used to uniquely identify nodes in Blink.
-  kDOMNodeId = 60,
+  // Deprecated, use AXNodeData.id (see ui/accessibility/ax_node_id_forward.h).
+  kDOMNodeIdDeprecated = 60,
+
+  // Indicates whether the element is a popover ("popup") and if so, what type.
+  [MinVersion=1] kIsPopup = 61,
+  [MinVersion=2] kNextWindowFocusId = 62,
+  [MinVersion=2] kPreviousWindowFocusId = 63,
+
+  // Deprecated - Do not use.
+  // These attributes are replaced by its `IntListAttribute` equivalents to
+  // support multiple contiguous calls to `ariaNotify`.
+  [MinVersion=3] kAriaNotificationInterruptDeprecated = 64,
+  [MinVersion=3] kAriaNotificationPriorityDeprecated = 65,
+
+  // What information was used to compute the object's details
+  // (of type AXDetailsFrom).
+  [MinVersion=4] kDetailsFrom = 66,
+
+  // The maximum length of a textfield.
+  [MinVersion=5] kMaxLength = 67,
+
+  // Paint order, indicates when this node is painted relative to
+  // other nodes, larger is later.
+  [MinVersion=6] kPaintOrder = 68,
+
+  // This used for adjusting the text changed event attribute
+  // (e.g. fromIndex, addedCount) when IME committing text.
+  [MinVersion=7] kCommittedTextLength = 69,
 };
 
+// Next version: 2
 // Next value: 8
 [Extensible, Stable, Uuid="6ee6b6eb-8af4-488f-96d5-343e56be5beb"]
 enum FloatAttribute {
@@ -719,6 +853,10 @@ enum FloatAttribute {
 
   // The text indent of the text, in mm.
   kTextIndent = 7,
+
+  // Only on ChromeOS. The scaling factor applied to the child tree.
+  // Used with kChildTreeId.
+  [MinVersion=1] kChildTreeScale = 8,
 };
 
 // These attributes can take three states:
@@ -729,7 +867,8 @@ enum FloatAttribute {
 //
 // Finally, note that different tree sources can use all three states for a
 // given attribute, while another tree source only uses two.
-// Next value: 21
+// Next value: 25
+// Next Version: 4
 [Extensible, Stable, Uuid="ed1f1b8c-c89c-483f-9840-ca3b10042e81"]
 enum BoolAttribute {
   [Default]kNone = 0,
@@ -785,9 +924,10 @@ enum BoolAttribute {
   // Indicates whether this node supports text location.
   kSupportsTextLocation = 15,
 
+  // Deprecated - Do not use.
   // Indicates whether this node can be grabbed for drag-and-drop operation.
   // Note: aria-grabbed is deprecated in WAI-ARIA 1.1.
-  kGrabbed = 16,
+  kGrabbedDeprecated = 16,
 
   // Indicates whether this node causes a hard line-break
   // (e.g. block level elements, or <br>)
@@ -799,16 +939,31 @@ enum BoolAttribute {
   // True if the node has any ARIA attributes set.
   kHasAriaAttribute = 19,
 
-  // This element allows touches to be passed through when a screen reader
-  // is in touch exploration mode, e.g. a virtual keyboard normally
-  // behaves this way.
-  kTouchPassthrough = 20,
+  // Deprecated - Do not use.
+  kTouchPassthroughDeprecated = 20,
+
+  // A hint to clients that the node is long clickable.
+  [MinVersion=1] kLongClickable = 21,
+
+  // Android does not provide nodes that are not on screen.
+  // We need to distinguish containers that are like this.
+  [MinVersion=2] kHasHiddenOffscreenNodes = 22,
+
+  // This used for determining text change types when
+  // sending text changed accessibility events to android.
+  [MinVersion=3] kHasComposition = 23,
+  [MinVersion=3] kTextSuggestionSelectedByIME = 24,
 };
 
-// Next value: 16
+// Next version: 8
+// Next value: 30
+// Note: if changing an IntListAttribute property that stores a relation where
+// the reverse should be computed, be sure to also update
+// kReverseRelationIntListAttributes in AXTree.
 [Extensible, Stable, Uuid="6d1f823f-28a9-4263-bc4a-69fb19a4ef46"]
 enum IntListAttribute {
   [Default]kNone = 0,
+
   // Ids of nodes that are children of this node logically, but are
   // not children of this node in the tree structure. As an example,
   // a table cell is a child of a row, and an 'indirect' child of a
@@ -819,16 +974,23 @@ enum IntListAttribute {
   kControlsIds = 2,
   kDetailsIds = 3,
   kDescribedbyIds = 4,
+  [MinVersion=5] kErrormessageIds = 26,
   kFlowtoIds = 5,
   kLabelledbyIds = 6,
   kRadioGroupIds = 7,
+  [MinVersion=7]kActionsIds = 29,
 
   // For static text. These int lists must be the same size; they represent
   // the start and end character offset of each marker. Examples of markers
-  // include spelling and grammar errors, and find-in-page matches.
+  // include spelling and grammar errors, highlights, and find-in-page matches.
   kMarkerTypes = 8,
   kMarkerStarts = 9,
   kMarkerEnds = 10,
+  // Types of the custom highlights (if any) (see |HighlightType|).
+  [MinVersion=3] kHighlightTypes = 20,
+
+  // Caret bounds in screen coordinates - [left, top, width, height].
+  [MinVersion=1] kCaretBounds = 16,
 
   // For inline text. This is the pixel position of the end of this
   // character within the bounding rectangle of this object, in the
@@ -838,14 +1000,18 @@ enum IntListAttribute {
   // is the right coordinate of the second character, and so on.
   kCharacterOffsets = 11,
 
-  // Used for caching. Do not read directly. Use
-  // |AXNode::GetOrComputeLineStartOffsets|
-  // For all text fields and content editable roots: A list of the start
-  // offsets of each line inside this object.
-  kCachedLineStarts = 12,
+  // A list of the start and end character offsets of each line inside this
+  // node's on-screen text.
+  kLineStarts = 12,
+  [MinVersion=2] kLineEnds = 17,
 
-  // For inline text. These int lists must be the same size; they represent
-  // the start and end character offset of each word within this text.
+  // A list of the start and end character offsets of each sentence inside this
+  // node's on-screen text.
+  [MinVersion=2] kSentenceStarts = 18,
+  [MinVersion=2] kSentenceEnds = 19,
+
+  // A list of the start and end character offsets of each word inside this
+  // node's on-screen text.
   kWordStarts = 13,
   kWordEnds = 14,
 
@@ -854,15 +1020,35 @@ enum IntListAttribute {
   // items. Developer can expose those actions as custom actions. Currently
   // custom actions are used only in Android window.
   kCustomActionIds = 15,
+
+  // These are used for serializing operations on text fields.
+  // They all correspond, in the sense that each position on the list
+  // correspond to that same position on all other lists, meaning they are
+  // are generated from the same individual operation, whether it was an
+  // insertion or a deletion.
+  [MinVersion=4] kTextOperationStartAnchorIds = 21,
+  [MinVersion=4] kTextOperationStartOffsets = 22,
+  [MinVersion=4] kTextOperationEndAnchorIds = 23,
+  [MinVersion=4] kTextOperationEndOffsets = 24,
+  [MinVersion=4] kTextOperations = 25,
+
+  // List of `AriaNotificationInterrupt` and `AriaNotificationPriority`
+  // properties for their respective ARIA notifications.
+  [MinVersion=6] kAriaNotificationInterruptProperties = 27,
+  [MinVersion=6] kAriaNotificationPriorityProperties = 28,
 };
 
-// Next value: 2
+// Next version: 3
+// Next value: 5
 [Extensible, Stable, Uuid="b3b576a7-9335-4f79-bc8c-595fd9346d81"]
 enum StringListAttribute {
   [Default]kNone = 0,
+  [MinVersion=1] kAriaNotificationAnnouncements = 2,
+  [MinVersion=1] kAriaNotificationTypes = 3,
   // Descriptions for custom actions. This must be aligned with
   // custom_action_ids.
   kCustomActionDescriptions = 1,
+  [MinVersion=2] kTextOperationReplacementStrings = 4,
 };
 
 enum ListStyle {
@@ -884,6 +1070,14 @@ enum MarkerType {
   // purposes
   kActiveSuggestion = 16,
   kSuggestion = 32,
+  kHighlight = 64,
+};
+
+enum HighlightType {
+  kNone = 0,
+  kHighlight = 1,
+  kSpellingError = 2,
+  kGrammarError = 3,
 };
 
 // Describes a move direction in the accessibility tree that is independent of
@@ -905,7 +1099,8 @@ enum MoveDirection {
 // "InputEvent" - see the relevant enum in this file.
 // A selection command may be further described by its "TextBoundary" and
 // "MoveDirection" - see the relevant enums in this file.
-// Next value: 11
+// Next version: 2
+// Next value: 13
 [Extensible, Stable, Uuid="f389c8cf-8382-45bc-a447-656ba2ed8fcf"]
 enum Command {
   [Default]kNone = 0,
@@ -919,6 +1114,8 @@ enum Command {
   kMarker = 8,  // Document markers have been added or removed.
   kMoveSelection = 9,  // The selection moved by a specific granularity.
   kSetSelection = 10,  // A completely new selection has been set.
+  [MinVersion=1] kSpinButtonIncrement = 11,  // Increment in a spin button
+  [MinVersion=1] kSpinButtonDecrement = 12,  // Decrement in a spin button
 };
 
 // Describes an edit command in more detail.
@@ -926,7 +1123,8 @@ enum Command {
 // Please keep in sync with the following specification and file:
 // https://w3c.github.io/input-events/#h-interface-inputevent-attributes
 // //third_party/blink/renderer/core/events/input_event.h
-// Next value: 39
+// Next Version: 2
+// Next value: 40
 [Extensible, Stable, Uuid="f53115ff-b29d-4a07-a497-9c49dc5b5ebd"]
 enum InputEventType {
   [Default]kNone = 0,
@@ -934,7 +1132,7 @@ enum InputEventType {
   kInsertText = 1,
   kInsertLineBreak = 2,
   kInsertParagraph = 3,
-  kInsertOrderedList= 4,
+  kInsertOrderedList = 4,
   kInsertUnorderedList = 5,
   kInsertHorizontalRule = 6,
   kInsertFromPaste = 7,
@@ -943,6 +1141,7 @@ enum InputEventType {
   kInsertTranspose = 10,
   kInsertReplacementText = 11,
   kInsertCompositionText = 12,
+  [MinVersion=1] kInsertLink = 39,
   // Deletion.
   kDeleteWordBackward = 13,
   kDeleteWordForward = 14,
@@ -985,12 +1184,15 @@ enum InputEventType {
 // e.g. at the start or end of a text field.
 //
 // TODO(nektar): Split TextBoundary into TextUnit and TextBoundary.
-// Next value: 20
+// Next version: 3
+// Next value: 23
 [Extensible, Stable, Uuid="8e6e10f0-5c0f-4c1e-a67e-9407ee10bd85"]
 enum TextBoundary {
   [Default]kNone = 0,
   kCharacter = 1,
-  kFormat = 2,
+  kFormatEnd = 2,
+  [MinVersion=2] kFormatStart = 21,
+  [MinVersion=2] kFormatStartOrEnd = 22,
   kLineEnd = 3,
   kLineStart = 4,
   kLineStartOrEnd = 5,
@@ -1000,6 +1202,13 @@ enum TextBoundary {
   kPageStartOrEnd = 9,
   kParagraphEnd = 10,
   kParagraphStart = 11,
+
+  // For UI Automation, empty lines after a paragraph should be merged into the
+  // preceding paragraph.
+  //
+  // See https://docs.microsoft.com/en-us/windows/desktop/api/UIAutomationCore/ne-uiautomationcore-textunit
+  [MinVersion=1] kParagraphStartSkippingEmptyParagraphs = 20,
+
   kParagraphStartOrEnd = 12,
   kSentenceEnd = 13,
   kSentenceStart = 14,
@@ -1075,11 +1284,17 @@ enum HasPopup {
   kNone = kFalse
 };
 
+enum IsPopup {
+  kNone = 0,
+  kManual,
+  kAuto,
+  kHint,
+};
+
 enum InvalidState {
   kNone,
   kFalse,
   kTrue,
-  kOther,
 };
 
 // Input restriction associated with an object.
@@ -1107,28 +1322,150 @@ enum SortDirection {
   kOther,
 };
 
+// The source of the accessible name. The source can influence which platform
+// accessibility API is used to expose the name (e.g. label versus title).
+// It can also impact whether or not whitespace is inserted between objects
+// (e.g. when the name of some other object should be constructed from a
+// container's children).
 enum NameFrom {
+  // No name has been provided. (See also kAttributeExplicitlyEmpty)
   kNone,
-  kUninitialized,
-  kAttribute,  // E.g. aria-label.
+
+  // The name comes from a flat string which is typically not displayed,
+  // such as aria-label (in the case of web content) or provided by the
+  // View.
+  kAttribute,
+
+  // The name has been removed to improve accessibility. Example: The name of
+  // this View is the same as the name of the View's parent, causing screen
+  // readers to speak the name twice. In order to prevent that, the name can
+  // be removed from one View. Note that as a general rule, the name should
+  // not be removed from the interactive/focusable View.
   kAttributeExplicitlyEmpty,
-  kCaption,  // E.g. in the case of a table, from a caption element.
+
+  // The name of this table comes from the table's caption.
+  kCaption,
+
+  // The name comes from the displayed text contents. This is appropriate for
+  // labels, links, static text nodes, etc. It is typically not appropriate for
+  // text fields.
   kContents,
-  kPlaceholder,  // E.g. from an HTML placeholder attribute on a text field.
-  kRelatedElement, // E.g. from a figcaption Element in a figure.
-  kTitle,  // E.g. <input type="text" title="title">.
-  kValue,  // E.g. <input type="button" value="Button's name">.
+
+  // The name comes from CSS alt text.
+  kCssAltText,
+
+  // The name of this text field comes from its placeholder.
+  kPlaceholder,
+
+  // The name comes from some other object in the content or UI, such as
+  // the figcaption element in a figure, or another View present in the UI.
+  kRelatedElement,
+
+  // Applies to roles that cannot be named as per the ARIA spec, where the
+  // name may be repaired by moving to the description.
+  kProhibited,
+
+  // Applies to roles that cannot be named as per the ARIA spec, where the
+  // name would have been redundant with the inner text.
+  kProhibitedAndRedundant,
+
+  // The name comes from the title attribute (HTML), the title element (SVG),
+  // or a View's tooltip.
+  kTitle,
+
+  // The name comes from the value attribute, such as in a button element.
+  kValue,
+
+  // The name comes from a tooltip-style popover (aka hint popover), where the
+  // contents could be distilled to a plain text string.
+  kPopoverTarget,
+
+  // The name comes from an interest for, where the contents could be
+  // distilled to a plain text string.
+  kInterestFor,
 };
 
+// The source of the accessible description. Used by some screen readers
+// to determine if and how the description should be presented to the user.
 enum DescriptionFrom {
+  // No description has been provided. (See also kAttributeExplicitlyEmpty)
   kNone,
+
+  // The description comes from a flat string, such as aria-description (in the
+  // case of web content) or provided by the View.
   kAriaDescription,
-  kButtonLabel,  // HTML-AAM 5.2.2
+
+  // The description has been removed to improve accessibility. Example: The
+  // description normally provided by this View's tooltip contains text which
+  // is also present in this View's name. This could cause screen readers to
+  // speak the information twice, which is not desired. Therefore the
+  // description has been deliberately set to the empty string to prevent
+  // double presentation.
+  kAttributeExplicitlyEmpty,
+
+  // The description comes from the label/text of a button.
+  // See HTML-AAM's Accessible Name and Description Computation.
+  kButtonLabel,
+
+  // The description comes from some other object such as an element referenced
+  // by aria-describedby (in the case of web content), or another View present
+  // in the UI.
   kRelatedElement,
+
+  // The description comes from a Ruby annotation.
   kRubyAnnotation,
-  kSummary,  // HTML-AAM 5.8.2
-  kTableCaption,  // HTML-AAM 5.9.2
-  kTitle
+
+  // The description contains a name that was prohibited because of the
+  // object's role. Exposing as a description allows screen reader users to
+  // experience the prohibited name as an annotation.
+  kProhibitedNameRepair,
+
+  // The description comes from the contents of a summary element.
+  // See HTML-AAM's Accessible Name and Description Computation.
+  kSummary,
+
+  // The description comes from the text of an SVG desc element.
+  // See SVG-AAM's Accessible Name and Description Computation.
+  kSvgDescElement,
+
+  // The description comes from a table's caption element.
+  // See HTML-AAM's Accessible Name and Description Computation.
+  kTableCaption,
+
+  // The description comes from the title attribute (HTML), the title element
+  // (SVG), or a View's tooltip.
+  kTitle,
+
+  // The description comes from a tooltip popover, e.g. the
+  // |popovertarget| attribute pointing to a `popover=hint`.
+  kPopoverTarget,
+
+  // The description comes from an interest for.
+  kInterestFor,
+};
+
+// The source of the accessible details.
+enum DetailsFrom {
+  // The details comes from the aria-details attribute.
+  kAriaDetails,
+
+  // The details comes from an element anchored to this element by CSS.
+  // https://www.w3.org/TR/css-anchor-position-1/
+  kCssAnchor,
+
+  // The details comes from a popover that will show when the current element
+  // is triggered (e.g. click or space key on a button).
+  kPopoverTarget,
+
+  // The details comes from a popover that will show when the user shows
+  // interest in the current element, e.g. hovers.
+  kInterestFor,
+
+  // The details comes from a commandFor attribute.
+  kCommandfor,
+
+  // The details comes from a scroll marker pseudo-element target.
+  kCssScrollMarkerPseudoElement,
 };
 
 // Next value: 4
@@ -1190,7 +1527,7 @@ enum TreeOrder {
   kAfter,
 };
 
-// For internal use by ui::AXTreeID / ax::mojom::AXTreeID.
+// For internal use by AXTreeID / ax::mojom::AXTreeID.
 enum AXTreeIDType {
   kUnknown,  // The Tree ID is unknown.
   kToken,    // Every other tree ID must have a valid unguessable token.
@@ -1236,11 +1573,13 @@ enum ImageAnnotationStatus {
   kAnnotationProcessFailed,
 };
 
-enum Dropeffect {
+enum AriaNotificationInterrupt {
   kNone,
-  kCopy,
-  kExecute,
-  kLink,
-  kMove,
-  kPopup,
+  kAll,
+  kPending,
+};
+
+enum AriaNotificationPriority {
+  kNormal,
+  kHigh,
 };

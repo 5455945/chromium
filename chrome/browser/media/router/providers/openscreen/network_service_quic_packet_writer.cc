@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,9 +12,10 @@
 #include "base/check.h"
 #include "base/containers/span.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/task/single_thread_task_runner.h"
 #include "net/base/io_buffer.h"
 #include "net/base/ip_endpoint.h"
-#include "net/third_party/quiche/src/quic/core/quic_constants.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_constants.h"
 
 namespace media_router {
 namespace {
@@ -43,9 +44,9 @@ NetworkServiceQuicPacketWriter::NetworkServiceQuicPacketWriter(
       task_runner_(task_runner),
       async_packet_sender_(std::move(async_packet_sender)),
       delegate_(delegate) {
-  DCHECK(async_packet_sender_ != nullptr);
-  DCHECK(delegate_ != nullptr);
-  DCHECK(task_runner_ != nullptr);
+  CHECK(async_packet_sender_ != nullptr, base::NotFatalUntil::M161);
+  CHECK(delegate_ != nullptr, base::NotFatalUntil::M161);
+  CHECK(task_runner_ != nullptr, base::NotFatalUntil::M161);
 }
 
 NetworkServiceQuicPacketWriter::~NetworkServiceQuicPacketWriter() = default;
@@ -72,7 +73,7 @@ quic::QuicByteCount NetworkServiceQuicPacketWriter::GetMaxPacketSize(
 }
 
 quic::QuicPacketBuffer NetworkServiceQuicPacketWriter::GetNextWriteLocation(
-    const quic::QuicIpAddress& self_address,
+    const quiche::QuicheIpAddress& self_address,
     const quic::QuicSocketAddress& peer_address) {
   // In PassThrough mode, this method isn't used and should return
   // a null QuicPacketBuffer.
@@ -89,6 +90,11 @@ void NetworkServiceQuicPacketWriter::SetWritable() {
   UpdateIsWriteBlocked();
 }
 
+std::optional<int> NetworkServiceQuicPacketWriter::MessageTooBigErrorCode()
+    const {
+  return net::ERR_MSG_TOO_BIG;
+}
+
 bool NetworkServiceQuicPacketWriter::SupportsReleaseTime() const {
   return false;
 }
@@ -96,7 +102,7 @@ bool NetworkServiceQuicPacketWriter::SupportsReleaseTime() const {
 quic::WriteResult NetworkServiceQuicPacketWriter::WritePacket(
     const char* buffer,
     size_t buf_len,
-    const quic::QuicIpAddress& self_address,
+    const quiche::QuicheIpAddress& self_address,
     const quic::QuicSocketAddress& peer_address,
     quic::PerPacketOptions* options) {
   if (is_write_blocked_) {
@@ -107,7 +113,7 @@ quic::WriteResult NetworkServiceQuicPacketWriter::WritePacket(
   // it will enqueue a task.
   WritePacketHelper(
       ConvertToEndpoint(peer_address),
-      base::make_span(reinterpret_cast<const uint8_t*>(buffer), buf_len));
+      base::span(reinterpret_cast<const uint8_t*>(buffer), buf_len));
 
   // Assume we successfully wrote the entire packet. The client will receive
   // any write errors through the delegate they are forced to provide us.

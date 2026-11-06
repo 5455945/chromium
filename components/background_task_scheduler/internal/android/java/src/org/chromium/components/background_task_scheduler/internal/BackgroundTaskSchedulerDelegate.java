@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,14 @@ package org.chromium.components.background_task_scheduler.internal;
 
 import android.content.Context;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.components.background_task_scheduler.TaskInfo;
 
 /**
  * The internal representation of a {@link BackgroundTaskScheduler} to make it possible to use
- * system APIs ({@link android.app.job.JobScheduler} on newer platforms and GCM
- * ({@link com.google.android.gms.gcm.GcmNetworkManager}) on older platforms.
+ * system API ({@link android.app.job.JobScheduler}.
  */
+@NullMarked
 interface BackgroundTaskSchedulerDelegate {
     String BACKGROUND_TASK_ID_KEY = "_background_task_id";
     String BACKGROUND_TASK_EXTRAS_KEY = "_background_task_extras";

@@ -1,61 +1,88 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/password_manager/core/browser/possible_username_data.h"
 
 #include <string>
-#include <vector>
 
-#include "base/containers/contains.h"
-#include "base/strings/string_piece.h"
+#include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/browser/leak_detection/encryption_utils.h"
-
-using base::TimeDelta;
+#include "components/password_manager/core/browser/password_manager_constants.h"
+#include "components/password_manager/core/browser/password_manager_util.h"
 
 namespace password_manager {
+
+namespace {
+
+// Find a field in |predictions| with given renderer id.
+const PasswordFieldPrediction* FindFieldPrediction(
+    const FormPredictions& predictions,
+    autofill::FieldRendererId field_renderer_id) {
+  for (const auto& field : predictions.fields) {
+    if (field.renderer_id == field_renderer_id) {
+      return &field;
+    }
+  }
+  return nullptr;
+}
+
+}  // namespace
 
 PossibleUsernameData::PossibleUsernameData(
     std::string signon_realm,
     autofill::FieldRendererId renderer_id,
-    const std::u16string& field_name,
     const std::u16string& value,
     base::Time last_change,
-    int driver_id)
+    DriverId driver_id,
+    bool autocomplete_attribute_has_username,
+    bool is_likely_otp)
     : signon_realm(std::move(signon_realm)),
       renderer_id(renderer_id),
-      field_name(field_name),
       value(value),
       last_change(last_change),
-      driver_id(driver_id) {}
+      driver_id(driver_id),
+      autocomplete_attribute_has_username(autocomplete_attribute_has_username),
+      is_likely_otp(is_likely_otp) {}
 PossibleUsernameData::PossibleUsernameData(const PossibleUsernameData&) =
     default;
 PossibleUsernameData::~PossibleUsernameData() = default;
 
-bool IsPossibleUsernameValid(
-    const PossibleUsernameData& possible_username,
-    const std::string& submitted_signon_realm,
-    const std::vector<std::u16string>& possible_usernames) {
-  if (submitted_signon_realm != possible_username.signon_realm)
-    return false;
+bool PossibleUsernameData::IsStale() const {
+  return base::Time::Now() - last_change > kSingleUsernameTimeToLive;
+}
 
-  // The goal is to avoid false positives in considering which strings might be
-  // username. In the initial version of the username first flow it is better to
-  // be conservative in that. This check only allows usernames that match
-  // existing usernames after canonicalization.
-
-  // This line is a workaround to pass the method to overloaded base::Contains
-  // as a projection that will be moved and applied to all container methods.
-  std::u16string (*Canonicalize)(base::StringPiece16) = &CanonicalizeUsername;
-  std::u16string canonicalized_username = Canonicalize(possible_username.value);
-  if (canonicalized_username.empty() ||
-      !base::Contains(possible_usernames, canonicalized_username,
-                      Canonicalize)) {
+bool PossibleUsernameData::HasSingleUsernameServerPrediction() const {
+  // Check if there is a server prediction.
+  if (!form_predictions) {
     return false;
   }
+  const PasswordFieldPrediction* field_prediction =
+      FindFieldPrediction(*form_predictions, renderer_id);
+  return field_prediction &&
+         password_manager_util::IsSingleUsernameType(field_prediction->type);
+}
 
-  return base::Time::Now() - possible_username.last_change <=
-         kMaxDelayBetweenTypingUsernameAndSubmission;
+bool PossibleUsernameData::HasSingleUsernameOverride() const {
+  // Check if there is a server prediction.
+  if (!form_predictions) {
+    return false;
+  }
+  const PasswordFieldPrediction* field_prediction =
+      FindFieldPrediction(*form_predictions, renderer_id);
+  return field_prediction && field_prediction->is_override &&
+         password_manager_util::IsSingleUsernameType(field_prediction->type);
+}
+
+bool PossibleUsernameData::HasServerPrediction() const {
+  // Check if there is a server prediction.
+  if (!form_predictions) {
+    return false;
+  }
+  const PasswordFieldPrediction* field_prediction =
+      FindFieldPrediction(*form_predictions, renderer_id);
+  return field_prediction != nullptr &&
+         field_prediction->type != autofill::NO_SERVER_DATA;
 }
 
 }  // namespace password_manager

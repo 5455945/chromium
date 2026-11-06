@@ -1,12 +1,38 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/peerconnection/rtc_rtp_transceiver_impl.h"
 
-#include "base/bind.h"
+#include <algorithm>
+#include <cstdint>
+#include <iterator>
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "base/check.h"
 #include "base/check_op.h"
+#include "base/location.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/task/single_thread_task_runner.h"
+#include "third_party/blink/renderer/modules/peerconnection/rtc_rtp_receiver_impl.h"
+#include "third_party/blink/renderer/modules/peerconnection/rtc_rtp_sender_impl.h"
+#include "third_party/blink/renderer/modules/peerconnection/webrtc_media_stream_track_adapter_map.h"
+#include "third_party/blink/renderer/platform/peerconnection/rtc_rtp_receiver_platform.h"
+#include "third_party/blink/renderer/platform/peerconnection/rtc_rtp_sender_platform.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/thread_safe_ref_counted.h"
+#include "third_party/blink/renderer/platform/wtf/vector.h"
+#include "third_party/webrtc/api/metronome/metronome.h"
+#include "third_party/webrtc/api/peer_connection_interface.h"
+#include "third_party/webrtc/api/rtc_error.h"
+#include "third_party/webrtc/api/rtp_parameters.h"
+#include "third_party/webrtc/api/rtp_transceiver_direction.h"
+#include "third_party/webrtc/api/rtp_transceiver_interface.h"
 #include "third_party/webrtc/api/scoped_refptr.h"
 
 namespace blink {
@@ -15,15 +41,13 @@ RtpTransceiverState::RtpTransceiverState(
     scoped_refptr<base::SingleThreadTaskRunner> main_task_runner,
     scoped_refptr<base::SingleThreadTaskRunner> signaling_task_runner,
     scoped_refptr<webrtc::RtpTransceiverInterface> webrtc_transceiver,
-    absl::optional<blink::RtpSenderState> sender_state,
-    absl::optional<blink::RtpReceiverState> receiver_state,
-    absl::optional<std::string> mid,
-    bool stopped,
+    std::optional<blink::RtpSenderState> sender_state,
+    std::optional<blink::RtpReceiverState> receiver_state,
+    std::optional<std::string> mid,
     webrtc::RtpTransceiverDirection direction,
-    absl::optional<webrtc::RtpTransceiverDirection> current_direction,
-    absl::optional<webrtc::RtpTransceiverDirection> fired_direction,
-    WTF::Vector<webrtc::RtpHeaderExtensionCapability>
-        header_extensions_negotiated)
+    std::optional<webrtc::RtpTransceiverDirection> current_direction,
+    std::optional<webrtc::RtpTransceiverDirection> fired_direction,
+    Vector<webrtc::RtpHeaderExtensionCapability> header_extensions_negotiated)
     : main_task_runner_(std::move(main_task_runner)),
       signaling_task_runner_(std::move(signaling_task_runner)),
       webrtc_transceiver_(std::move(webrtc_transceiver)),
@@ -31,7 +55,6 @@ RtpTransceiverState::RtpTransceiverState(
       sender_state_(std::move(sender_state)),
       receiver_state_(std::move(receiver_state)),
       mid_(std::move(mid)),
-      stopped_(std::move(stopped)),
       direction_(std::move(direction)),
       current_direction_(std::move(current_direction)),
       fired_direction_(std::move(fired_direction)),
@@ -49,7 +72,6 @@ RtpTransceiverState::RtpTransceiverState(RtpTransceiverState&& other)
       sender_state_(std::move(other.sender_state_)),
       receiver_state_(std::move(other.receiver_state_)),
       mid_(std::move(other.mid_)),
-      stopped_(std::move(other.stopped_)),
       direction_(std::move(other.direction_)),
       current_direction_(std::move(other.current_direction_)),
       fired_direction_(std::move(other.fired_direction_)),
@@ -81,7 +103,6 @@ RtpTransceiverState& RtpTransceiverState::operator=(
   sender_state_ = std::move(other.sender_state_);
   receiver_state_ = std::move(other.receiver_state_);
   mid_ = std::move(other.mid_);
-  stopped_ = std::move(other.stopped_);
   direction_ = std::move(other.direction_);
   current_direction_ = std::move(other.current_direction_);
   fired_direction_ = std::move(other.fired_direction_);
@@ -123,7 +144,7 @@ RtpTransceiverState::webrtc_transceiver() const {
   return webrtc_transceiver_;
 }
 
-const absl::optional<blink::RtpSenderState>& RtpTransceiverState::sender_state()
+const std::optional<blink::RtpSenderState>& RtpTransceiverState::sender_state()
     const {
   DCHECK(main_task_runner_->BelongsToCurrentThread());
   return sender_state_;
@@ -131,12 +152,12 @@ const absl::optional<blink::RtpSenderState>& RtpTransceiverState::sender_state()
 
 blink::RtpSenderState RtpTransceiverState::MoveSenderState() {
   DCHECK(main_task_runner_->BelongsToCurrentThread());
-  absl::optional<blink::RtpSenderState> temp(absl::nullopt);
+  std::optional<blink::RtpSenderState> temp(std::nullopt);
   sender_state_.swap(temp);
   return *std::move(temp);
 }
 
-const absl::optional<blink::RtpReceiverState>&
+const std::optional<blink::RtpReceiverState>&
 RtpTransceiverState::receiver_state() const {
   DCHECK(main_task_runner_->BelongsToCurrentThread());
   return receiver_state_;
@@ -144,23 +165,14 @@ RtpTransceiverState::receiver_state() const {
 
 blink::RtpReceiverState RtpTransceiverState::MoveReceiverState() {
   DCHECK(main_task_runner_->BelongsToCurrentThread());
-  absl::optional<blink::RtpReceiverState> temp(absl::nullopt);
+  std::optional<blink::RtpReceiverState> temp(std::nullopt);
   receiver_state_.swap(temp);
   return *std::move(temp);
 }
 
-absl::optional<std::string> RtpTransceiverState::mid() const {
+std::optional<std::string> RtpTransceiverState::mid() const {
   DCHECK(main_task_runner_->BelongsToCurrentThread());
   return mid_;
-}
-
-void RtpTransceiverState::set_mid(absl::optional<std::string> mid) {
-  mid_ = mid;
-}
-
-bool RtpTransceiverState::stopped() const {
-  DCHECK(main_task_runner_->BelongsToCurrentThread());
-  return stopped_;
 }
 
 webrtc::RtpTransceiverDirection RtpTransceiverState::direction() const {
@@ -174,13 +186,13 @@ void RtpTransceiverState::set_direction(
   direction_ = direction;
 }
 
-absl::optional<webrtc::RtpTransceiverDirection>
+std::optional<webrtc::RtpTransceiverDirection>
 RtpTransceiverState::current_direction() const {
   DCHECK(main_task_runner_->BelongsToCurrentThread());
   return current_direction_;
 }
 
-absl::optional<webrtc::RtpTransceiverDirection>
+std::optional<webrtc::RtpTransceiverDirection>
 RtpTransceiverState::fired_direction() const {
   DCHECK(main_task_runner_->BelongsToCurrentThread());
   return fired_direction_;
@@ -192,28 +204,25 @@ RtpTransceiverState::header_extensions_negotiated() const {
 }
 
 class RTCRtpTransceiverImpl::RTCRtpTransceiverInternal
-    : public WTF::ThreadSafeRefCounted<
+    : public ThreadSafeRefCounted<
           RTCRtpTransceiverImpl::RTCRtpTransceiverInternal,
           RTCRtpTransceiverImpl::RTCRtpTransceiverInternalTraits> {
  public:
   RTCRtpTransceiverInternal(
-      scoped_refptr<webrtc::PeerConnectionInterface> native_peer_connection,
+      webrtc::scoped_refptr<webrtc::PeerConnectionInterface>
+          native_peer_connection,
       scoped_refptr<blink::WebRtcMediaStreamTrackAdapterMap> track_map,
       RtpTransceiverState state,
-      bool force_encoded_audio_insertable_streams,
-      bool force_encoded_video_insertable_streams)
+      std::unique_ptr<webrtc::Metronome> decode_metronome)
       : main_task_runner_(state.main_task_runner()),
         signaling_task_runner_(state.signaling_task_runner()),
         webrtc_transceiver_(state.webrtc_transceiver()),
         state_(std::move(state)) {
     sender_ = std::make_unique<blink::RTCRtpSenderImpl>(
-        native_peer_connection, track_map, state_.MoveSenderState(),
-        force_encoded_audio_insertable_streams,
-        force_encoded_video_insertable_streams);
+        native_peer_connection, track_map, state_.MoveSenderState());
     receiver_ = std::make_unique<blink::RTCRtpReceiverImpl>(
         native_peer_connection, state_.MoveReceiverState(),
-        force_encoded_audio_insertable_streams,
-        force_encoded_video_insertable_streams);
+        std::move(decode_metronome));
   }
 
   const RtpTransceiverState& state() const {
@@ -233,20 +242,24 @@ class RTCRtpTransceiverImpl::RTCRtpTransceiverInternal
     auto sender_state = state_.MoveSenderState();
     if (update_mode == TransceiverStateUpdateMode::kSetDescription) {
       // setLocalDescription() and setRemoteDescription() cannot modify
-      // "sender.track" or "direction", so this part of the state information is
-      // either identical to the current state or out-dated information.
-      // Surfacing out-dated information has caused crashes and other problems,
+      // "sender.track" so this part of the state information is either
+      // identical to the current state or out-dated information. Surfacing
+      // out-dated information has caused crashes and other problems,
       // see https://crbug.com/950280.
       sender_state.set_track_ref(sender_->state().track_ref()
                                      ? sender_->state().track_ref()->Copy()
                                      : nullptr);
-      state_.set_direction(previous_direction);
+      // The direction attribute is normally controlled by the JavaScript layer
+      // and we want to keep `previous_state` to avoid getting out-of-sync.
+      // There is one exception to this though: setting SDP can make it
+      // permanently stopped and must be surfaced.
+      if (state_.direction() != webrtc::RtpTransceiverDirection::kStopped) {
+        state_.set_direction(previous_direction);
+      }
     }
     sender_->set_state(std::move(sender_state));
     receiver_->set_state(state_.MoveReceiverState());
   }
-
-  void set_mid(absl::optional<std::string> mid) { state_.set_mid(mid); }
 
   blink::RTCRtpSenderImpl* content_sender() {
     DCHECK(main_task_runner_->BelongsToCurrentThread());
@@ -271,8 +284,9 @@ class RTCRtpTransceiverImpl::RTCRtpTransceiverInternal
 
   webrtc::RTCError Stop() {
     auto error = webrtc_transceiver_->StopStandard();
-    // After stop(), direction always returns 'stopped'.
-    state_.set_direction(webrtc::RtpTransceiverDirection::kStopped);
+    if (error.ok()) {
+      state_.set_direction(webrtc::RtpTransceiverDirection::kStopped);
+    }
     return error;
   }
 
@@ -281,26 +295,25 @@ class RTCRtpTransceiverImpl::RTCRtpTransceiverInternal
     return webrtc_transceiver_->SetCodecPreferences(codec_preferences);
   }
 
-  webrtc::RTCError SetOfferedRtpHeaderExtensions(
-      std::vector<webrtc::RtpHeaderExtensionCapability>
-          header_extensions_to_offer) {
-    return webrtc_transceiver_->SetOfferedRtpHeaderExtensions(
-        header_extensions_to_offer);
+  webrtc::RTCError SetHeaderExtensionsToNegotiate(
+      std::vector<webrtc::RtpHeaderExtensionCapability> header_extensions) {
+    return webrtc_transceiver_->SetHeaderExtensionsToNegotiate(
+        header_extensions);
   }
 
-  Vector<webrtc::RtpHeaderExtensionCapability> HeaderExtensionsNegotiated()
+  Vector<webrtc::RtpHeaderExtensionCapability> GetNegotiatedHeaderExtensions()
       const {
     return state_.header_extensions_negotiated();
   }
 
-  std::vector<webrtc::RtpHeaderExtensionCapability> HeaderExtensionsToOffer()
-      const {
-    return webrtc_transceiver_->HeaderExtensionsToOffer();
+  std::vector<webrtc::RtpHeaderExtensionCapability>
+  GetHeaderExtensionsToNegotiate() const {
+    return webrtc_transceiver_->GetHeaderExtensionsToNegotiate();
   }
 
  private:
-  friend class WTF::ThreadSafeRefCounted<RTCRtpTransceiverInternal,
-                                         RTCRtpTransceiverInternalTraits>;
+  friend class ThreadSafeRefCounted<RTCRtpTransceiverInternal,
+                                    RTCRtpTransceiverInternalTraits>;
   friend struct RTCRtpTransceiverImpl::RTCRtpTransceiverInternalTraits;
 
   ~RTCRtpTransceiverInternal() {
@@ -326,9 +339,9 @@ struct RTCRtpTransceiverImpl::RTCRtpTransceiverInternalTraits {
     if (!transceiver->main_task_runner_->BelongsToCurrentThread()) {
       transceiver->main_task_runner_->PostTask(
           FROM_HERE,
-          base::BindOnce(
+          blink::BindOnce(
               &RTCRtpTransceiverImpl::RTCRtpTransceiverInternalTraits::Destruct,
-              base::Unretained(transceiver)));
+              blink::Unretained(transceiver)));
       return;
     }
     delete transceiver;
@@ -341,17 +354,16 @@ uintptr_t RTCRtpTransceiverImpl::GetId(
 }
 
 RTCRtpTransceiverImpl::RTCRtpTransceiverImpl(
-    scoped_refptr<webrtc::PeerConnectionInterface> native_peer_connection,
+    webrtc::scoped_refptr<webrtc::PeerConnectionInterface>
+        native_peer_connection,
     scoped_refptr<blink::WebRtcMediaStreamTrackAdapterMap> track_map,
     RtpTransceiverState transceiver_state,
-    bool force_encoded_audio_insertable_streams,
-    bool force_encoded_video_insertable_streams)
+    std::unique_ptr<webrtc::Metronome> decode_metronome)
     : internal_(base::MakeRefCounted<RTCRtpTransceiverInternal>(
           std::move(native_peer_connection),
           std::move(track_map),
           std::move(transceiver_state),
-          force_encoded_audio_insertable_streams,
-          force_encoded_video_insertable_streams)) {}
+          std::move(decode_metronome))) {}
 
 RTCRtpTransceiverImpl::RTCRtpTransceiverImpl(const RTCRtpTransceiverImpl& other)
     : internal_(other.internal_) {}
@@ -386,23 +398,13 @@ void RTCRtpTransceiverImpl::set_state(RtpTransceiverState transceiver_state,
   internal_->set_state(std::move(transceiver_state), update_mode);
 }
 
-RTCRtpTransceiverPlatformImplementationType
-RTCRtpTransceiverImpl::ImplementationType() const {
-  return RTCRtpTransceiverPlatformImplementationType::kFullTransceiver;
-}
-
 uintptr_t RTCRtpTransceiverImpl::Id() const {
   return GetId(internal_->state().webrtc_transceiver().get());
 }
 
 String RTCRtpTransceiverImpl::Mid() const {
   const auto& mid = internal_->state().mid();
-  return mid ? String::FromUTF8(*mid) : String();
-}
-
-void RTCRtpTransceiverImpl::SetMid(absl::optional<String> mid) {
-  internal_->set_mid(mid ? absl::optional<std::string>(mid->Utf8())
-                         : absl::nullopt);
+  return mid ? String::FromUtf8(*mid) : String();
 }
 
 std::unique_ptr<blink::RTCRtpSenderPlatform> RTCRtpTransceiverImpl::Sender()
@@ -415,10 +417,6 @@ std::unique_ptr<RTCRtpReceiverPlatform> RTCRtpTransceiverImpl::Receiver()
   return internal_->content_receiver()->ShallowCopy();
 }
 
-bool RTCRtpTransceiverImpl::Stopped() const {
-  return internal_->state().stopped();
-}
-
 webrtc::RtpTransceiverDirection RTCRtpTransceiverImpl::Direction() const {
   return internal_->state().direction();
 }
@@ -428,12 +426,12 @@ webrtc::RTCError RTCRtpTransceiverImpl::SetDirection(
   return internal_->SetDirection(direction);
 }
 
-absl::optional<webrtc::RtpTransceiverDirection>
+std::optional<webrtc::RtpTransceiverDirection>
 RTCRtpTransceiverImpl::CurrentDirection() const {
   return internal_->state().current_direction();
 }
 
-absl::optional<webrtc::RtpTransceiverDirection>
+std::optional<webrtc::RtpTransceiverDirection>
 RTCRtpTransceiverImpl::FiredDirection() const {
   return internal_->state().fired_direction();
 }
@@ -451,23 +449,22 @@ webrtc::RTCError RTCRtpTransceiverImpl::SetCodecPreferences(
   return internal_->setCodecPreferences(std_codec_preferences);
 }
 
-webrtc::RTCError RTCRtpTransceiverImpl::SetOfferedRtpHeaderExtensions(
-    Vector<webrtc::RtpHeaderExtensionCapability> header_extensions_to_offer) {
+webrtc::RTCError RTCRtpTransceiverImpl::SetHeaderExtensionsToNegotiate(
+    Vector<webrtc::RtpHeaderExtensionCapability> header_extensions) {
   std::vector<webrtc::RtpHeaderExtensionCapability> std_header_extensions;
-  std::move(header_extensions_to_offer.begin(),
-            header_extensions_to_offer.end(),
+  std::move(header_extensions.begin(), header_extensions.end(),
             std::back_inserter(std_header_extensions));
-  return internal_->SetOfferedRtpHeaderExtensions(std_header_extensions);
+  return internal_->SetHeaderExtensionsToNegotiate(std_header_extensions);
 }
 
 Vector<webrtc::RtpHeaderExtensionCapability>
-RTCRtpTransceiverImpl::HeaderExtensionsNegotiated() const {
-  return internal_->HeaderExtensionsNegotiated();
+RTCRtpTransceiverImpl::GetNegotiatedHeaderExtensions() const {
+  return internal_->GetNegotiatedHeaderExtensions();
 }
 
 Vector<webrtc::RtpHeaderExtensionCapability>
-RTCRtpTransceiverImpl::HeaderExtensionsToOffer() const {
-  auto std_extensions = internal_->HeaderExtensionsToOffer();
+RTCRtpTransceiverImpl::GetHeaderExtensionsToNegotiate() const {
+  auto std_extensions = internal_->GetHeaderExtensionsToNegotiate();
   Vector<webrtc::RtpHeaderExtensionCapability> extensions;
   std::move(std_extensions.begin(), std_extensions.end(),
             std::back_inserter(extensions));

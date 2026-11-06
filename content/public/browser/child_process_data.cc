@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,20 +6,21 @@
 
 namespace content {
 
-ChildProcessData::ChildProcessData(int process_type)
-    : process_type(process_type) {}
+ChildProcessData::ChildProcessData(int process_type, ChildProcessId id)
+    : process_type(process_type),
+      child_process_id_(id) {}
 
-ChildProcessData::ChildProcessData(ChildProcessData&& rhs) = default;
+ChildProcessData::ChildProcessData(const ChildProcessData&) = default;
+ChildProcessData& ChildProcessData::operator=(const ChildProcessData&) =
+    default;
+
+ChildProcessData::ChildProcessData(ChildProcessData&&) = default;
+ChildProcessData& ChildProcessData::operator=(ChildProcessData&&) = default;
 
 ChildProcessData::~ChildProcessData() {}
 
-ChildProcessData ChildProcessData::Duplicate() const {
-  ChildProcessData result(process_type);
-  result.name = name;
-  result.metrics_name = metrics_name;
-  result.id = id;
-  result.SetProcess(process_.Duplicate());
-  return result;
+const ChildProcessId& ChildProcessData::GetChildProcessId() const {
+  return child_process_id_;
 }
 
 }  // namespace content

@@ -1,43 +1,42 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/component_updater/subresource_filter_component_installer.h"
 
+#include <stdint.h>
+
+#include <memory>
+#include <optional>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/callback.h"
+#include "base/logging.h"
 #include "base/memory/ref_counted.h"
 #include "base/path_service.h"
-#include "base/strings/string_piece.h"
+#include "base/values.h"
 #include "base/version.h"
 #include "chrome/browser/browser_process.h"
 #include "components/component_updater/component_updater_paths.h"
 #include "components/subresource_filter/content/browser/ruleset_service.h"
 #include "components/subresource_filter/core/browser/subresource_filter_constants.h"
 #include "components/subresource_filter/core/browser/subresource_filter_features.h"
-
-using component_updater::ComponentUpdateService;
+#include "components/subresource_filter/core/common/constants.h"
 
 namespace component_updater {
 
 // The extension id is: gcmjkmgdlgnkkcocmoeiminaijmmjnii
-const uint8_t kSubresourceFilterPublicKeySHA256[32] = {
+constexpr uint8_t kSubresourceFilterPublicKeySHA256[32] = {
     0x62, 0xc9, 0xac, 0x63, 0xb6, 0xda, 0xa2, 0xe2, 0xce, 0x48, 0xc8,
     0xd0, 0x89, 0xcc, 0x9d, 0x88, 0x02, 0x7c, 0x3e, 0x71, 0xcf, 0x5d,
     0x6b, 0xb5, 0xdf, 0x21, 0x65, 0x82, 0x08, 0x97, 0x6a, 0x26};
 
-const char kSubresourceFilterSetFetcherManifestName[] =
+constexpr char kSubresourceFilterSetFetcherManifestName[] =
     "Subresource Filter Rules";
-
-// static
-const char
-    SubresourceFilterComponentInstallerPolicy::kManifestRulesetFormatKey[] =
-        "ruleset_format";
-
-// static
-const int SubresourceFilterComponentInstallerPolicy::kCurrentRulesetFormat = 1;
 
 SubresourceFilterComponentInstallerPolicy::
     SubresourceFilterComponentInstallerPolicy() = default;
@@ -58,7 +57,7 @@ bool SubresourceFilterComponentInstallerPolicy::RequiresNetworkEncryption()
 
 update_client::CrxInstaller::Result
 SubresourceFilterComponentInstallerPolicy::OnCustomInstall(
-    const base::DictionaryValue& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) {
   return update_client::CrxInstaller::Result(0);  // Nothing custom here.
 }
@@ -68,13 +67,15 @@ void SubresourceFilterComponentInstallerPolicy::OnCustomUninstall() {}
 void SubresourceFilterComponentInstallerPolicy::ComponentReady(
     const base::Version& version,
     const base::FilePath& install_dir,
-    std::unique_ptr<base::DictionaryValue> manifest) {
-  DCHECK(!install_dir.empty());
+    base::DictValue manifest) {
+  CHECK(!install_dir.empty(), base::NotFatalUntil::M161);
   DVLOG(1) << "Subresource Filter Version Ready: " << install_dir.value();
-  int ruleset_format = 0;
-  if (!manifest->GetInteger(kManifestRulesetFormatKey, &ruleset_format) ||
-      ruleset_format != kCurrentRulesetFormat) {
-    DVLOG(1) << "Bailing out. Future ruleset version: " << ruleset_format;
+  std::optional<int> ruleset_format =
+      manifest.FindInt(kManifestRulesetFormatKey);
+  if (!ruleset_format || *ruleset_format != kCurrentRulesetFormat) {
+    DVLOG(1) << "Bailing out.";
+    DVLOG_IF(1, ruleset_format)
+        << "Future ruleset version: " << *ruleset_format;
     return;
   }
   subresource_filter::UnindexedRulesetInfo ruleset_info;
@@ -92,21 +93,21 @@ void SubresourceFilterComponentInstallerPolicy::ComponentReady(
 
 // Called during startup and installation before ComponentReady().
 bool SubresourceFilterComponentInstallerPolicy::VerifyInstallation(
-    const base::DictionaryValue& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) const {
   return base::PathExists(install_dir);
 }
 
 base::FilePath
 SubresourceFilterComponentInstallerPolicy::GetRelativeInstallDir() const {
-  return base::FilePath(subresource_filter::kTopLevelDirectoryName)
+  return base::FilePath(
+             subresource_filter::kSafeBrowsingRulesetConfig.top_level_directory)
       .Append(subresource_filter::kUnindexedRulesetBaseDirectoryName);
 }
 
 void SubresourceFilterComponentInstallerPolicy::GetHash(
     std::vector<uint8_t>* hash) const {
-  hash->assign(std::begin(kSubresourceFilterPublicKeySHA256),
-               std::end(kSubresourceFilterPublicKeySHA256));
+  hash->assign_range(kSubresourceFilterPublicKeySHA256);
 }
 
 std::string SubresourceFilterComponentInstallerPolicy::GetName() const {
@@ -120,8 +121,9 @@ std::string SubresourceFilterComponentInstallerPolicy::GetInstallerTag() {
           ->lexicographically_greatest_ruleset_flavor());
 
   // Allow the empty, and 4 non-empty ruleset flavor identifiers: a, b, c, d.
-  if (ruleset_flavor.empty())
+  if (ruleset_flavor.empty()) {
     return ruleset_flavor;
+  }
 
   if (ruleset_flavor.size() == 1 && ruleset_flavor.at(0) >= 'a' &&
       ruleset_flavor.at(0) <= 'd') {
@@ -138,8 +140,9 @@ update_client::InstallerAttributes
 SubresourceFilterComponentInstallerPolicy::GetInstallerAttributes() const {
   update_client::InstallerAttributes attributes;
   std::string installer_tag = GetInstallerTag();
-  if (!installer_tag.empty())
+  if (!installer_tag.empty()) {
     attributes["tag"] = installer_tag;
+  }
   return attributes;
 }
 

@@ -1,11 +1,11 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/renderer_host/input/mock_input_disposition_handler.h"
 
-#include "base/bind.h"
-#include "content/browser/renderer_host/input/input_router.h"
+#include "base/functional/bind.h"
+#include "components/input/input_router.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using blink::WebInputEvent;
@@ -20,48 +20,65 @@ MockInputDispositionHandler::MockInputDispositionHandler()
 
 MockInputDispositionHandler::~MockInputDispositionHandler() {}
 
-InputRouter::KeyboardEventCallback
+input::InputRouter::KeyboardEventCallback
 MockInputDispositionHandler::CreateKeyboardEventCallback() {
   return base::BindOnce(&MockInputDispositionHandler::OnKeyboardEventAck,
                         base::Unretained(this));
 }
 
-InputRouter::MouseEventCallback
+input::InputRouter::MouseEventCallback
 MockInputDispositionHandler::CreateMouseEventCallback() {
   return base::BindOnce(&MockInputDispositionHandler::OnMouseEventAck,
                         base::Unretained(this));
 }
 
 void MockInputDispositionHandler::OnWheelEventAck(
-    const MouseWheelEventWithLatencyInfo& event,
+    const input::MouseWheelEventWithLatencyInfo& event,
     blink::mojom::InputEventResultSource ack_source,
     blink::mojom::InputEventResultState ack_result) {
   VLOG(1) << __FUNCTION__ << " called!";
   acked_wheel_event_ = event.event;
   acked_wheel_event_state_ = ack_result;
   RecordAckCalled(event.event.GetType(), ack_result);
+  if (on_wheel_event_ack_closure_) {
+    std::move(on_wheel_event_ack_closure_).Run();
+  }
 }
 
 void MockInputDispositionHandler::OnTouchEventAck(
-    const TouchEventWithLatencyInfo& event,
+    const input::TouchEventWithLatencyInfo& event,
     blink::mojom::InputEventResultSource ack_source,
     blink::mojom::InputEventResultState ack_result) {
   VLOG(1) << __FUNCTION__ << " called!";
   acked_touch_event_ = event;
   RecordAckCalled(event.event.GetType(), ack_result);
-  if (touch_followup_event_)
-    input_router_->SendTouchEvent(*touch_followup_event_);
-  if (gesture_followup_event_)
-    input_router_->SendGestureEvent(*gesture_followup_event_);
+  if (touch_followup_event_) {
+    input::ScopedDispatchToRendererCallback dispatch_callback(
+        base::DoNothing());
+    input_router_->SendTouchEvent(*touch_followup_event_,
+                                  dispatch_callback.callback);
+  }
+  if (gesture_followup_event_) {
+    input::ScopedDispatchToRendererCallback dispatch_callback(
+        base::DoNothing());
+    input_router_->SendGestureEvent(*gesture_followup_event_,
+                                    dispatch_callback.callback);
+  }
+  if (on_touch_event_ack_closure_) {
+    std::move(on_touch_event_ack_closure_).Run();
+  }
 }
 
 void MockInputDispositionHandler::OnGestureEventAck(
-    const GestureEventWithLatencyInfo& event,
+    const input::GestureEventWithLatencyInfo& event,
     blink::mojom::InputEventResultSource ack_source,
     blink::mojom::InputEventResultState ack_result) {
   VLOG(1) << __FUNCTION__ << " called!";
   acked_gesture_event_ = event.event;
   RecordAckCalled(event.event.GetType(), ack_result);
+  if (on_gesture_event_ack_closure_) {
+    std::move(on_gesture_event_ack_closure_).Run();
+  }
 }
 
 size_t MockInputDispositionHandler::GetAndResetAckCount() {
@@ -79,16 +96,17 @@ void MockInputDispositionHandler::RecordAckCalled(
 }
 
 void MockInputDispositionHandler::OnKeyboardEventAck(
-    const NativeWebKeyboardEventWithLatencyInfo& event,
+    const input::NativeWebKeyboardEventWithLatencyInfo& event,
     blink::mojom::InputEventResultSource ack_source,
     blink::mojom::InputEventResultState ack_result) {
   VLOG(1) << __FUNCTION__ << " called!";
-  acked_key_event_ = std::make_unique<NativeWebKeyboardEvent>(event.event);
+  acked_key_event_ =
+      std::make_unique<input::NativeWebKeyboardEvent>(event.event);
   RecordAckCalled(event.event.GetType(), ack_result);
 }
 
 void MockInputDispositionHandler::OnMouseEventAck(
-    const MouseEventWithLatencyInfo& event,
+    const input::MouseEventWithLatencyInfo& event,
     blink::mojom::InputEventResultSource ack_source,
     blink::mojom::InputEventResultState ack_result) {
   VLOG(1) << __FUNCTION__ << " called!";

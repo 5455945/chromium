@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,11 @@
 #include <utility>
 #include <vector>
 
+#include "base/i18n/language_tag.h"
 #include "base/i18n/rtl.h"
-#include "base/macros.h"
+#include "base/i18n/tag_converters.h"
+#include "base/i18n/test/scoped_rtl_for_testing.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
@@ -21,11 +24,11 @@
 #include "ui/events/gesture_event_details.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/events/test/event_generator.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/test/ax_event_counter.h"
 #include "ui/views/test/slider_test_api.h"
 #include "ui/views/test/views_test_base.h"
 #include "ui/views/view.h"
-#include "ui/views/widget/unique_widget_ptr.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "ui/views/widget/widget_utils.h"
@@ -35,8 +38,12 @@ namespace {
 // A views::SliderListener that tracks simple event call history.
 class TestSliderListener : public views::SliderListener {
  public:
-  TestSliderListener();
-  ~TestSliderListener() override;
+  TestSliderListener() = default;
+
+  TestSliderListener(const TestSliderListener&) = delete;
+  TestSliderListener& operator=(const TestSliderListener&) = delete;
+
+  ~TestSliderListener() override = default;
 
   int last_event_epoch() { return last_event_epoch_; }
 
@@ -49,9 +56,6 @@ class TestSliderListener : public views::SliderListener {
   }
 
   views::Slider* last_drag_ended_sender() { return last_drag_ended_sender_; }
-
-  // Resets the state of this as if it were newly created.
-  virtual void ResetCallHistory();
 
   // views::SliderListener:
   void SliderValueChanged(views::Slider* sender,
@@ -69,27 +73,10 @@ class TestSliderListener : public views::SliderListener {
   // The epoch of the last time SliderDragEnded was called.
   int last_drag_ended_epoch_ = -1;
   // The sender from the last SliderDragStarted call.
-  views::Slider* last_drag_started_sender_ = nullptr;
+  raw_ptr<views::Slider> last_drag_started_sender_ = nullptr;
   // The sender from the last SliderDragEnded call.
-  views::Slider* last_drag_ended_sender_ = nullptr;
-
-  DISALLOW_COPY_AND_ASSIGN(TestSliderListener);
+  raw_ptr<views::Slider> last_drag_ended_sender_ = nullptr;
 };
-
-TestSliderListener::TestSliderListener() = default;
-
-TestSliderListener::~TestSliderListener() {
-  last_drag_started_sender_ = nullptr;
-  last_drag_ended_sender_ = nullptr;
-}
-
-void TestSliderListener::ResetCallHistory() {
-  last_event_epoch_ = 0;
-  last_drag_started_epoch_ = -1;
-  last_drag_ended_epoch_ = -1;
-  last_drag_started_sender_ = nullptr;
-  last_drag_ended_sender_ = nullptr;
-}
 
 void TestSliderListener::SliderValueChanged(views::Slider* sender,
                                             float value,
@@ -125,12 +112,14 @@ class SliderTest : public views::ViewsTestBase,
                    public testing::WithParamInterface<TestSliderType> {
  public:
   SliderTest() = default;
+
+  SliderTest(const SliderTest&) = delete;
+  SliderTest& operator=(const SliderTest&) = delete;
+
   ~SliderTest() override = default;
 
  protected:
-  Slider* slider() { return slider_; }
-
-  TestSliderListener& slider_listener() { return slider_listener_; }
+  Slider* slider() { return static_cast<Slider*>(widget_->GetContentsView()); }
 
   int max_x() { return max_x_; }
 
@@ -152,32 +141,21 @@ class SliderTest : public views::ViewsTestBase,
   float GetMaxValue() const;
 
  private:
-  // The Slider to be tested.
-  Slider* slider_ = nullptr;
-
   // Populated values for discrete slider.
   base::flat_set<float> values_;
-
-  // A simple SliderListener test double.
-  TestSliderListener slider_listener_;
-  // Stores the default locale at test setup so it can be restored
-  // during test teardown.
-  std::string default_locale_;
   // The maximum x value within the bounds of the slider.
   int max_x_ = 0;
   // The maximum y value within the bounds of the slider.
   int max_y_ = 0;
   // The widget container for the slider being tested.
-  views::UniqueWidgetPtr widget_;
+  std::unique_ptr<Widget> widget_;
   // An event generator.
   std::unique_ptr<ui::test::EventGenerator> event_generator_;
-
-  DISALLOW_COPY_AND_ASSIGN(SliderTest);
 };
 
 void SliderTest::ClickAt(int x, int y) {
   gfx::Point point =
-      slider_->GetBoundsInScreen().origin() + gfx::Vector2d(x, y);
+      slider()->GetBoundsInScreen().origin() + gfx::Vector2d(x, y);
   event_generator_->MoveMouseTo(point);
   event_generator_->ClickLeftButton();
 }
@@ -200,19 +178,19 @@ void SliderTest::SetUp() {
     default:
       NOTREACHED();
   }
-  gfx::Size size = slider->GetPreferredSize();
+  gfx::Size size = slider->GetPreferredSize({});
   slider->SetSize(size);
   max_x_ = size.width() - 1;
   max_y_ = size.height() - 1;
-  default_locale_ = base::i18n::GetConfiguredLocale();
 
   views::Widget::InitParams init_params(
-      CreateParams(views::Widget::InitParams::TYPE_WINDOW_FRAMELESS));
+      CreateParams(Widget::InitParams::CLIENT_OWNS_WIDGET,
+                   views::Widget::InitParams::TYPE_WINDOW_FRAMELESS));
   init_params.bounds = gfx::Rect(size);
 
   widget_ = std::make_unique<Widget>();
   widget_->Init(std::move(init_params));
-  slider_ = widget_->SetContentsView(std::move(slider));
+  widget_->SetContentsView(std::move(slider));
   widget_->Show();
 
   event_generator_ =
@@ -221,21 +199,21 @@ void SliderTest::SetUp() {
 
 void SliderTest::TearDown() {
   widget_.reset();
-  base::i18n::SetICUDefaultLocale(default_locale_);
-
   views::ViewsTestBase::TearDown();
 }
 
 float SliderTest::GetMinValue() const {
-  if (GetParam() == TestSliderType::kContinuousTest)
+  if (GetParam() == TestSliderType::kContinuousTest) {
     return 0.0f;
+  }
 
   return *values().cbegin();
 }
 
 float SliderTest::GetMaxValue() const {
-  if (GetParam() == TestSliderType::kContinuousTest)
+  if (GetParam() == TestSliderType::kContinuousTest) {
     return 1.0f;
+  }
 
   return *values().crbegin();
 }
@@ -249,7 +227,7 @@ TEST_P(SliderTest, UpdateFromClickHorizontal) {
 }
 
 TEST_P(SliderTest, UpdateFromClickRTLHorizontal) {
-  base::i18n::SetICUDefaultLocale("he");
+  base::i18n::ScopedRTLForTesting scoped_rtl(true);
 
   ClickAt(0, 0);
   EXPECT_EQ(GetMaxValue(), slider()->GetValue());
@@ -285,8 +263,107 @@ TEST_P(SliderTest, NukeAllowedValues) {
       slider()->GetValue());
 }
 
+TEST_P(SliderTest, AccessibleRole) {
+  ui::AXNodeData data;
+  slider()->GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ(data.role, ax::mojom::Role::kSlider);
+
+  slider()->GetViewAccessibility().SetRole(ax::mojom::Role::kMeter);
+
+  data = ui::AXNodeData();
+  slider()->GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ(data.role, ax::mojom::Role::kMeter);
+}
+
+TEST_P(SliderTest, AccessibleValue) {
+  slider()->SetAllowedValues(nullptr);
+  // Initial test where slider is at 0 by default.
+  ui::AXNodeData data;
+  slider()->GetViewAccessibility().GetAccessibleNodeData(&data);
+  if (GetParam() == TestSliderType::kContinuousTest) {
+    EXPECT_EQ(std::string(""),
+              data.GetStringAttribute(ax::mojom::StringAttribute::kValue));
+  } else if (GetParam() == TestSliderType::kDiscreteEnd2EndTest) {
+    EXPECT_EQ(std::string(""),
+              data.GetStringAttribute(ax::mojom::StringAttribute::kValue));
+  } else {
+    EXPECT_EQ(std::string("10%"),
+              data.GetStringAttribute(ax::mojom::StringAttribute::kValue));
+  }
+
+  slider()->SetValue(0.1);
+  data = ui::AXNodeData();
+  slider()->GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ(std::string("10%"),
+            data.GetStringAttribute(ax::mojom::StringAttribute::kValue));
+
+  slider()->SetValue(0.5);
+  data = ui::AXNodeData();
+  slider()->GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ(std::string("50%"),
+            data.GetStringAttribute(ax::mojom::StringAttribute::kValue));
+}
+
+TEST_P(SliderTest, AccessibleRangeAttributes) {
+  // Range attributes reflect the slider's actual range: [0, 1] for continuous
+  // sliders, or the bounds of the allowed values for discrete sliders.
+  ui::AXNodeData data;
+  slider()->GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ(GetMinValue(),
+            data.GetFloatAttribute(ax::mojom::FloatAttribute::kMinValueForRange));
+  EXPECT_EQ(GetMaxValue(),
+            data.GetFloatAttribute(ax::mojom::FloatAttribute::kMaxValueForRange));
+  EXPECT_EQ(slider()->GetValue(),
+            data.GetFloatAttribute(ax::mojom::FloatAttribute::kValueForRange));
+
+  // After setting the value, kValueForRange should update.
+  slider()->SetValue(0.5f);
+  data = ui::AXNodeData();
+  slider()->GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ(0.5f,
+            data.GetFloatAttribute(ax::mojom::FloatAttribute::kValueForRange));
+  EXPECT_EQ(GetMinValue(),
+            data.GetFloatAttribute(ax::mojom::FloatAttribute::kMinValueForRange));
+  EXPECT_EQ(GetMaxValue(),
+            data.GetFloatAttribute(ax::mojom::FloatAttribute::kMaxValueForRange));
+
+  // Setting to a value at the boundary. For discrete sliders that exclude 1
+  // from the allowed set, the value is snapped to the largest allowed value.
+  slider()->SetValue(1.0f);
+  data = ui::AXNodeData();
+  slider()->GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ(slider()->GetValue(),
+            data.GetFloatAttribute(ax::mojom::FloatAttribute::kValueForRange));
+}
+
+// Checks the pending value update when the slider is invisible and becomes
+// visible again.
+TEST_P(SliderTest, SliderPendingValueUpdate) {
+  test::AXEventCounter ax_counter(views::AXUpdateNotifier::Get());
+  EXPECT_EQ(0, ax_counter.GetCount(ax::mojom::Event::kValueChanged));
+
+  // Initially, the slider should be visible.
+  EXPECT_TRUE(slider()->GetVisible());
+  slider()->SetValue(0.5);
+  EXPECT_EQ(1, ax_counter.GetCount(ax::mojom::Event::kValueChanged));
+
+  // Set the slider to invisible.
+  slider()->SetVisible(false);
+  EXPECT_FALSE(slider()->GetVisible());
+
+  // Set a pending value update while the slider is invisible.
+  slider()->SetValue(0.8);
+  EXPECT_EQ(1, ax_counter.GetCount(ax::mojom::Event::kValueChanged));
+
+  // Make the slider visible again.
+  slider()->SetVisible(true);
+
+  // Verify that the pending value update triggers the accessibility event.
+  EXPECT_EQ(2, ax_counter.GetCount(ax::mojom::Event::kValueChanged));
+}
+
 // No touch on desktop Mac. Tracked in http://crbug.com/445520.
-#if !defined(OS_MAC) || defined(USE_AURA)
+#if !BUILDFLAG(IS_MAC) || defined(USE_AURA)
 
 // Test the slider location after a tap gesture.
 TEST_P(SliderTest, SliderValueForTapGesture) {
@@ -318,14 +395,14 @@ TEST_P(SliderTest, SliderValueForScrollGesture) {
   slider()->SetValue(0.5);
   event_generator()->GestureScrollSequence(
       gfx::Point(0.5 * max_x(), 0.5 * max_y()), gfx::Point(0, 0),
-      base::TimeDelta::FromMilliseconds(10), 5 /* steps */);
+      base::Milliseconds(10), 5 /* steps */);
   EXPECT_EQ(GetMinValue(), slider()->GetValue());
 
   // Scroll above the maximum.
   slider()->SetValue(0.5);
   event_generator()->GestureScrollSequence(
       gfx::Point(0.5 * max_x(), 0.5 * max_y()), gfx::Point(max_x(), max_y()),
-      base::TimeDelta::FromMilliseconds(10), 5 /* steps */);
+      base::Milliseconds(10), 5 /* steps */);
   EXPECT_EQ(GetMaxValue(), slider()->GetValue());
 
   // Scroll somewhere in the middle.
@@ -333,8 +410,8 @@ TEST_P(SliderTest, SliderValueForScrollGesture) {
   slider()->SetValue(0.25);
   event_generator()->GestureScrollSequence(
       gfx::Point(0.25 * max_x(), 0.25 * max_y()),
-      gfx::Point(0.78 * max_x(), 0.78 * max_y()),
-      base::TimeDelta::FromMilliseconds(10), 5 /* steps */);
+      gfx::Point(0.78 * max_x(), 0.78 * max_y()), base::Milliseconds(10),
+      5 /* steps */);
   if (GetParam() == TestSliderType::kContinuousTest) {
     // Continuous slider.
     EXPECT_NEAR(0.78, slider()->GetValue(), 0.03);
@@ -365,7 +442,7 @@ TEST_P(SliderTest, SliderValueForKeyboard) {
   EXPECT_LT(slider()->GetValue(), value);
 
   // RTL reverse left/right but not up/down.
-  base::i18n::SetICUDefaultLocale("he");
+  base::i18n::ScopedRTLForTesting scoped_rtl(true);
   EXPECT_TRUE(base::i18n::IsRTL());
 
   event_generator()->PressKey(ui::VKEY_RIGHT, 0);
@@ -386,80 +463,107 @@ TEST_P(SliderTest, SliderValueForKeyboard) {
 
 // Verifies the correct SliderListener events are raised for a tap gesture.
 TEST_P(SliderTest, SliderListenerEventsForTapGesture) {
-  test::SliderTestApi slider_test_api(slider());
-  slider_test_api.SetListener(&slider_listener());
+  TestSliderListener slider_listener;
+  test::SliderTestApi(slider()).SetListener(&slider_listener);
 
   event_generator()->GestureTapAt(gfx::Point(0, 0));
-  EXPECT_EQ(1, slider_listener().last_drag_started_epoch());
-  EXPECT_EQ(2, slider_listener().last_drag_ended_epoch());
-  EXPECT_EQ(slider(), slider_listener().last_drag_started_sender());
-  EXPECT_EQ(slider(), slider_listener().last_drag_ended_sender());
+  EXPECT_EQ(1, slider_listener.last_drag_started_epoch());
+  EXPECT_EQ(2, slider_listener.last_drag_ended_epoch());
+  EXPECT_EQ(slider(), slider_listener.last_drag_started_sender());
+  EXPECT_EQ(slider(), slider_listener.last_drag_ended_sender());
+  test::SliderTestApi(slider()).SetListener(nullptr);
 }
 
 // Verifies the correct SliderListener events are raised for a scroll gesture.
 TEST_P(SliderTest, SliderListenerEventsForScrollGesture) {
-  test::SliderTestApi slider_test_api(slider());
-  slider_test_api.SetListener(&slider_listener());
+  TestSliderListener slider_listener;
+  test::SliderTestApi(slider()).SetListener(&slider_listener);
 
   event_generator()->GestureScrollSequence(
       gfx::Point(0.25 * max_x(), 0.25 * max_y()),
-      gfx::Point(0.75 * max_x(), 0.75 * max_y()),
-      base::TimeDelta::FromMilliseconds(0), 5 /* steps */);
+      gfx::Point(0.75 * max_x(), 0.75 * max_y()), base::Milliseconds(0),
+      5 /* steps */);
 
-  EXPECT_EQ(1, slider_listener().last_drag_started_epoch());
-  EXPECT_GT(slider_listener().last_drag_ended_epoch(),
-            slider_listener().last_drag_started_epoch());
-  EXPECT_EQ(slider(), slider_listener().last_drag_started_sender());
-  EXPECT_EQ(slider(), slider_listener().last_drag_ended_sender());
+  EXPECT_EQ(1, slider_listener.last_drag_started_epoch());
+  EXPECT_GT(slider_listener.last_drag_ended_epoch(),
+            slider_listener.last_drag_started_epoch());
+  EXPECT_EQ(slider(), slider_listener.last_drag_started_sender());
+  EXPECT_EQ(slider(), slider_listener.last_drag_ended_sender());
+  test::SliderTestApi(slider()).SetListener(nullptr);
 }
 
 // Verifies the correct SliderListener events are raised for a multi
 // finger scroll gesture.
 TEST_P(SliderTest, SliderListenerEventsForMultiFingerScrollGesture) {
-  test::SliderTestApi slider_test_api(slider());
-  slider_test_api.SetListener(&slider_listener());
+  TestSliderListener slider_listener;
+  test::SliderTestApi(slider()).SetListener(&slider_listener);
 
   gfx::Point points[] = {gfx::Point(0, 0.1 * max_y()),
                          gfx::Point(0, 0.2 * max_y())};
   event_generator()->GestureMultiFingerScroll(
-      2 /* count */, points, 0 /* event_separation_time_ms */, 5 /* steps */,
-      2 /* move_x */, 0 /* move_y */);
+      points, 0 /* event_separation_time_ms */, 5 /* steps */, 2 /* move_x */,
+      0 /* move_y */);
 
-  EXPECT_EQ(1, slider_listener().last_drag_started_epoch());
-  EXPECT_GT(slider_listener().last_drag_ended_epoch(),
-            slider_listener().last_drag_started_epoch());
-  EXPECT_EQ(slider(), slider_listener().last_drag_started_sender());
-  EXPECT_EQ(slider(), slider_listener().last_drag_ended_sender());
+  EXPECT_EQ(1, slider_listener.last_drag_started_epoch());
+  EXPECT_GT(slider_listener.last_drag_ended_epoch(),
+            slider_listener.last_drag_started_epoch());
+  EXPECT_EQ(slider(), slider_listener.last_drag_started_sender());
+  EXPECT_EQ(slider(), slider_listener.last_drag_ended_sender());
+  test::SliderTestApi(slider()).SetListener(nullptr);
 }
 
 // Verifies the correct SliderListener events are raised for an accessible
 // slider.
 TEST_P(SliderTest, SliderRaisesA11yEvents) {
-  test::AXEventCounter ax_counter(views::AXEventManager::Get());
+  test::AXEventCounter ax_counter(views::AXUpdateNotifier::Get());
   EXPECT_EQ(0, ax_counter.GetCount(ax::mojom::Event::kValueChanged));
 
   // First, detach/reattach the slider without setting value.
   // Temporarily detach the slider.
   View* root_view = slider()->parent();
-  root_view->RemoveChildView(slider());
+  auto owning_slider = root_view->RemoveChildViewT(slider());
 
   // Re-attachment should cause nothing to get fired.
-  root_view->AddChildView(slider());
+  root_view->AddChildView(std::move(owning_slider));
   EXPECT_EQ(0, ax_counter.GetCount(ax::mojom::Event::kValueChanged));
 
   // Now, set value before reattaching.
-  root_view->RemoveChildView(slider());
+  owning_slider = root_view->RemoveChildViewT(slider());
 
   // Value changes won't trigger accessibility events before re-attachment.
-  slider()->SetValue(22);
+  owning_slider->SetValue(22);
   EXPECT_EQ(0, ax_counter.GetCount(ax::mojom::Event::kValueChanged));
 
   // Re-attachment should trigger the value change.
-  root_view->AddChildView(slider());
+  root_view->AddChildView(std::move(owning_slider));
   EXPECT_EQ(1, ax_counter.GetCount(ax::mojom::Event::kValueChanged));
 }
 
-#endif  // !defined(OS_MAC) || defined(USE_AURA)
+// Verifies that a slider can have its value set before being added to a
+// widget hierarchy.
+TEST_P(SliderTest, SetValueBeforeHostedByWidget) {
+  auto slider_unique = std::make_unique<views::Slider>();
+  views::Slider* slider = slider_unique.get();
+
+  // Set value on the slider before it is visible/parented
+  slider->SetValue(0.1f);
+
+  auto widget = std::make_unique<views::Widget>();
+  views::Widget::InitParams params =
+      CreateParams(views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
+  params.ownership = views::Widget::InitParams::CLIENT_OWNS_WIDGET;
+  widget->Init(std::move(params));
+  widget->SetBounds(gfx::Rect(0, 0, 100, 40));
+  widget->Show();
+
+  widget->SetContentsView(std::move(slider_unique));
+  ui::test::EventGenerator generator(GetContext(), widget->GetNativeWindow());
+  generator.MoveMouseTo(slider->GetBoundsInScreen().CenterPoint());
+
+  generator.ClickLeftButton();
+}
+
+#endif  // !BUILDFLAG(IS_MAC) || defined(USE_AURA)
 
 INSTANTIATE_TEST_SUITE_P(All,
                          SliderTest,

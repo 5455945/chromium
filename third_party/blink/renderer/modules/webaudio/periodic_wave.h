@@ -29,12 +29,11 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_WEBAUDIO_PERIODIC_WAVE_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_WEBAUDIO_PERIODIC_WAVE_H_
 
-#include <memory>
-#include "third_party/blink/renderer/core/typed_arrays/array_buffer_view_helpers.h"
-#include "third_party/blink/renderer/core/typed_arrays/dom_typed_array.h"
-#include "third_party/blink/renderer/platform/audio/audio_array.h"
+#include "base/memory/scoped_refptr.h"
+#include "third_party/blink/renderer/modules/modules_export.h"
+#include "third_party/blink/renderer/modules/webaudio/periodic_wave_handler.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
-#include "third_party/blink/renderer/platform/wtf/forward.h"
+#include "third_party/blink/renderer/platform/bindings/v8_external_memory_accounter.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
@@ -43,7 +42,10 @@ class BaseAudioContext;
 class ExceptionState;
 class PeriodicWaveOptions;
 
-class PeriodicWave final : public ScriptWrappable {
+// PeriodicWave represents a periodic audio waveform defined by its Fourier
+// coefficients, used by OscillatorNode to shape its output. It is a
+// main-thread ScriptWrappable wrapper around PeriodicWaveHandler.
+class MODULES_EXPORT PeriodicWave final : public ScriptWrappable {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
@@ -57,77 +59,29 @@ class PeriodicWave final : public ScriptWrappable {
   static PeriodicWave* Create(BaseAudioContext&,
                               const Vector<float>& real,
                               const Vector<float>& imag,
-                              bool normalize,
+                              bool disable_normalization,
                               ExceptionState&);
 
   static PeriodicWave* Create(BaseAudioContext*,
                               const PeriodicWaveOptions*,
                               ExceptionState&);
 
-  explicit PeriodicWave(float sample_rate);
-  ~PeriodicWave() override;
+  explicit PeriodicWave(scoped_refptr<const PeriodicWaveHandler> handler);
+  ~PeriodicWave() final;
 
-  // Returns pointers to the lower and higher wave data for the pitch range
-  // containing the given fundamental frequency. These two tables are in
-  // adjacent "pitch" ranges where the higher table will have the maximum number
-  // of partials which won't alias when played back at this fundamental
-  // frequency. The lower wave is the next range containing fewer partials than
-  // the higher wave.  Interpolation between these two tables can be made
-  // according to tableInterpolationFactor.
-  // Where values from 0 -> 1 interpolate between lower -> higher.
-  void WaveDataForFundamentalFrequency(float,
-                                       float*& lower_wave_data,
-                                       float*& higher_wave_data,
-                                       float& table_interpolation_factor);
-
-  // Like the above, except we compute accept 4 frequencies at a time and return
-  // 4 lower/higher wave data tables and the 4 corresponding table interpolation
-  // factors.  Intended for use with the OscillatorNode for faster a-rate
-  // processing.
-  void WaveDataForFundamentalFrequency(const float fundamental_frequency[4],
-                                       float* lower_wave_data[4],
-                                       float* higher_wave_data[4],
-                                       float table_interpolation_factor[4]);
-
-  // Returns the scalar multiplier to the oscillator frequency to calculate wave
-  // buffer phase increment.
-  float RateScale() const { return rate_scale_; }
-
-  // The size of the FFT to use based on the sampling rate.
-  unsigned PeriodicWaveSize() const;
-
-  // The number of ranges needed for the given sampling rate and FFT size.
-  unsigned NumberOfRanges() const { return number_of_ranges_; }
+  scoped_refptr<const PeriodicWaveHandler> handler() const {
+    return periodic_wave_handler_;
+  }
 
  private:
-  void GenerateBasicWaveform(int);
+  static PeriodicWave* CreateBasicWaveform(float sample_rate, int shape);
 
-  size_t v8_external_memory_;
+  const scoped_refptr<const PeriodicWaveHandler> periodic_wave_handler_;
 
-  float sample_rate_;
-  unsigned number_of_ranges_;
-  float cents_per_range_;
-
-  // The lowest frequency (in Hertz) where playback will include all of the
-  // partials.  Playing back lower than this frequency will gradually lose more
-  // high-frequency information.  This frequency is quite low (~10Hz @ 44.1KHz)
-  float lowest_fundamental_frequency_;
-
-  float rate_scale_;
-
-  // Maximum possible number of partials (before culling).
-  unsigned MaxNumberOfPartials() const;
-
-  unsigned NumberOfPartialsForRange(unsigned range_index) const;
-
-  void AdjustV8ExternalMemory(int64_t delta);
-
-  // Creates tables based on numberOfComponents Fourier coefficients.
-  void CreateBandLimitedTables(const float* real,
-                               const float* imag,
-                               unsigned number_of_components,
-                               bool disable_normalization);
-  Vector<std::unique_ptr<AudioFloatArray>> band_limited_tables_;
+  // Held by PeriodicWave rather than PeriodicWaveHandler so that V8 external
+  // memory accounting remains associated with the script wrapper on the main
+  // thread while PeriodicWaveHandler remains a pure audio data structure.
+  V8ExternalMemoryAccounter external_memory_accounter_;
 };
 
 }  // namespace blink

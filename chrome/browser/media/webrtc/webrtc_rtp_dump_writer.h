@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,12 +10,12 @@
 
 #include <memory>
 
-#include "base/callback.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "chrome/browser/media/webrtc/rtp_dump_type.h"
 
@@ -48,12 +48,16 @@ class WebRtcRtpDumpWriter {
                       size_t max_dump_size,
                       base::RepeatingClosure max_dump_size_reached_callback);
 
+  WebRtcRtpDumpWriter(const WebRtcRtpDumpWriter&) = delete;
+  WebRtcRtpDumpWriter& operator=(const WebRtcRtpDumpWriter&) = delete;
+
   virtual ~WebRtcRtpDumpWriter();
 
-  // Adds a RTP packet to the dump. The caller must make sure it's a valid RTP
-  // packet. No validation is done by this method.
-  virtual void WriteRtpPacket(const uint8_t* packet_header,
-                              size_t header_length,
+  // Adds an RTP packet header to the dump. `packet_length` is the full packet
+  // length, including its payload. The caller must provide a valid RTP header;
+  // no validation is done by this method. The header is copied before
+  // returning.
+  virtual void WriteRtpPacket(base::span<const uint8_t> packet_header,
                               size_t packet_length,
                               bool incoming);
 
@@ -139,8 +143,6 @@ class WebRtcRtpDumpWriter {
   SEQUENCE_CHECKER(sequence_checker_);
 
   base::WeakPtrFactory<WebRtcRtpDumpWriter> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(WebRtcRtpDumpWriter);
 };
 
 #endif  // CHROME_BROWSER_MEDIA_WEBRTC_WEBRTC_RTP_DUMP_WRITER_H_

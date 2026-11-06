@@ -1,19 +1,20 @@
-# Copyright 2014 The Chromium Authors. All rights reserved.
+# Copyright 2014 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 import("//build/config/ui.gni")
 import("//gpu/vulkan/features.gni")
 import("//skia/features.gni")
+import("//third_party/dawn/scripts/dawn_features.gni")
 import("//third_party/protobuf/proto_library.gni")
 import("//ui/gl/features.gni")
 
-group("service") {
-  if (is_component_build) {
-    public_deps = [ "//gpu" ]
-  } else {
-    public_deps = [ ":service_sources" ]
-  }
+config("implementation") {
+  defines = [ "GPU_COMMAND_BUFFER_SERVICE_IMPLEMENTATION" ]
+}
+
+component("service") {
+  public_deps = [ ":service_sources" ]
 }
 
 group("gles2") {
@@ -29,13 +30,16 @@ if (is_component_build) {
 } else {
   link_target_type = "static_library"
 }
-target(link_target_type, "service_sources") {
+
+source_set("service_sources") {
   # External code should depend on this via //gpu/command_buffer/service above
   # rather than depending on this directly or the component build will break.
-  visibility = [ "//gpu/*" ]
+  visibility = [ ":service" ]
 
   sources = [
     "async_api_interface.h",
+    "blocking_sequence_runner.cc",
+    "blocking_sequence_runner.h",
     "command_buffer_direct.cc",
     "command_buffer_direct.h",
     "command_buffer_service.cc",
@@ -43,15 +47,13 @@ target(link_target_type, "service_sources") {
     "common_decoder.cc",
     "common_decoder.h",
     "decoder_client.h",
+    "gpu_command_buffer_service_export.h",
     "gpu_switches.cc",
     "gpu_switches.h",
-    "image_factory.cc",
-    "image_factory.h",
-    "image_manager.cc",
-    "image_manager.h",
-    "mailbox_manager.h",
     "memory_tracking.cc",
     "memory_tracking.h",
+    "retaining_one_shot_timer_holder.cc",
+    "retaining_one_shot_timer_holder.h",
     "scheduler.cc",
     "scheduler.h",
     "scheduler_task_runner.cc",
@@ -59,6 +61,8 @@ target(link_target_type, "service_sources") {
     "sequence_id.h",
     "sync_point_manager.cc",
     "sync_point_manager.h",
+    "task_graph.cc",
+    "task_graph.h",
     "texture_base.cc",
     "texture_base.h",
     "transfer_buffer_manager.cc",
@@ -66,28 +70,23 @@ target(link_target_type, "service_sources") {
   ]
 
   configs += [
-    # TODO(jschuh): crbug.com/167187 fix size_t to int truncations.
-    "//build/config/compiler:no_size_t_to_int_warning",
     "//build/config:precompiled_headers",
-    "//gpu:gpu_implementation",
-    "//third_party/khronos:khronos_headers",
+    ":implementation",
+    "//gpu:gl_headers",
   ]
 
   public_deps = [
-    "//base/util/type_safety",
-    "//gpu/command_buffer/common:common_sources",
-    "//url:url",
+    "//base",
+    "//gpu/command_buffer/common",
+    "//url",
   ]
   deps = [
     "//base",
-    "//base/third_party/dynamic_annotations",
-    "//gpu/command_buffer/client:client_sources",
-    "//gpu/config:config_sources",
-    "//gpu/ipc/common:ipc_common_sources",
-    "//gpu/ipc/common:surface_handle_type",
+    "//gpu/command_buffer/client",
+    "//gpu/config",
+    "//gpu/ipc/common",
     "//ui/gfx",
     "//ui/gfx/geometry",
-    "//ui/gfx/ipc/color",
     "//ui/gl",
   ]
 
@@ -98,26 +97,42 @@ target(link_target_type, "service_sources") {
   }
 }
 
+if (is_win) {
+  config("service_win_linker_flags") {
+    # This is in a separate config so the flags can be applied to dependents.
+    # ldflags in GN aren't automatically inherited.
+    ldflags = [
+      # Linking with OneCore.lib causes the following dlls to load.
+      "/DELAYLOAD:api-ms-win-core-handle-l1-1-0.dll",
+    ]
+  }
+}
+
 target(link_target_type, "gles2_sources") {
   # External code should depend on this via //gpu/command_buffer/service:gles2
   # above rather than depending on this directly or the component build will
   # break.
   visibility = [ "//gpu/*" ]
 
+  deps = []
+  defines = []
   sources = [
-    "abstract_texture.h",
-    "abstract_texture_impl.cc",
-    "abstract_texture_impl.h",
     "buffer_manager.cc",
     "buffer_manager.h",
     "client_service_map.h",
+    "command_buffer_task_executor.cc",
+    "command_buffer_task_executor.h",
     "context_group.cc",
     "context_group.h",
     "context_state.cc",
     "context_state.h",
     "context_state_autogen.h",
     "context_state_impl_autogen.h",
+    "copy_shared_image_helper.cc",
+    "copy_shared_image_helper.h",
     "decoder_context.h",
+    "display_compositor_memory_and_task_controller_on_gpu.cc",
+    "display_compositor_memory_and_task_controller_on_gpu.h",
     "error_state.cc",
     "error_state.h",
     "feature_info.cc",
@@ -148,48 +163,49 @@ target(link_target_type, "gles2_sources") {
     "gles2_cmd_decoder_passthrough_doers.cc",
     "gles2_cmd_decoder_passthrough_handlers.cc",
     "gles2_cmd_decoder_passthrough_handlers_autogen.cc",
-    "gles2_cmd_srgb_converter.cc",
-    "gles2_cmd_srgb_converter.h",
     "gles2_cmd_validation.cc",
     "gles2_cmd_validation.h",
     "gles2_cmd_validation_autogen.h",
     "gles2_cmd_validation_implementation_autogen.h",
     "gles2_query_manager.cc",
     "gles2_query_manager.h",
-    "gpu_command_buffer_memory_tracker.cc",
-    "gpu_command_buffer_memory_tracker.h",
     "gpu_fence_manager.cc",
     "gpu_fence_manager.h",
+    "gpu_persistent_cache.cc",
+    "gpu_persistent_cache.h",
     "gpu_state_tracer.cc",
     "gpu_state_tracer.h",
+    "gpu_task_scheduler_helper.cc",
+    "gpu_task_scheduler_helper.h",
     "gpu_tracer.cc",
     "gpu_tracer.h",
     "gr_cache_controller.cc",
     "gr_cache_controller.h",
     "gr_shader_cache.cc",
     "gr_shader_cache.h",
+    "graphite_cache_controller.cc",
+    "graphite_cache_controller.h",
+    "graphite_image_provider.cc",
+    "graphite_image_provider.h",
+    "graphite_precompile.cc",
+    "graphite_precompile.h",
+    "graphite_shared_context.cc",
+    "graphite_shared_context.h",
+    "graphite_utils.cc",
+    "graphite_utils.h",
     "id_manager.cc",
     "id_manager.h",
     "indexed_buffer_binding_host.cc",
     "indexed_buffer_binding_host.h",
+    "isolation_key_provider.h",
     "logger.cc",
     "logger.h",
-    "mailbox_manager_dummy.cc",
-    "mailbox_manager_dummy.h",
-    "mailbox_manager_factory.cc",
-    "mailbox_manager_factory.h",
-    "mailbox_manager_impl.cc",
-    "mailbox_manager_impl.h",
+    "memory_cache.cc",
+    "memory_cache.h",
     "memory_program_cache.cc",
     "memory_program_cache.h",
     "multi_draw_manager.cc",
     "multi_draw_manager.h",
-    "native_image_buffer.cc",
-    "native_image_buffer.h",
-    "passthrough_abstract_texture_impl.cc",
-    "passthrough_abstract_texture_impl.h",
-    "passthrough_discardable_manager.cc",
-    "passthrough_discardable_manager.h",
     "passthrough_program_cache.cc",
     "passthrough_program_cache.h",
     "program_cache.cc",
@@ -208,8 +224,8 @@ target(link_target_type, "gles2_sources") {
     "renderbuffer_manager.h",
     "sampler_manager.cc",
     "sampler_manager.h",
-    "service_discardable_manager.cc",
-    "service_discardable_manager.h",
+    "scheduler_sequence.cc",
+    "scheduler_sequence.h",
     "service_font_manager.cc",
     "service_font_manager.h",
     "service_transfer_cache.cc",
@@ -224,40 +240,76 @@ target(link_target_type, "gles2_sources") {
     "shader_translator_cache.h",
     "shared_context_state.cc",
     "shared_context_state.h",
-    "shared_image_backing.cc",
-    "shared_image_backing.h",
-    "shared_image_backing_factory.cc",
-    "shared_image_backing_factory.h",
-    "shared_image_backing_factory_gl_common.cc",
-    "shared_image_backing_factory_gl_common.h",
-    "shared_image_backing_factory_gl_image.cc",
-    "shared_image_backing_factory_gl_image.h",
-    "shared_image_backing_factory_gl_texture.cc",
-    "shared_image_backing_factory_gl_texture.h",
-    "shared_image_backing_gl_common.cc",
-    "shared_image_backing_gl_common.h",
-    "shared_image_backing_gl_image.cc",
-    "shared_image_backing_gl_image.h",
-    "shared_image_backing_gl_texture.cc",
-    "shared_image_backing_gl_texture.h",
-    "shared_image_factory.cc",
-    "shared_image_factory.h",
-    "shared_image_manager.cc",
-    "shared_image_manager.h",
-    "shared_image_representation.cc",
-    "shared_image_representation.h",
-    "shared_image_representation_skia_gl.cc",
-    "shared_image_representation_skia_gl.h",
+    "shared_image/compound_image_backing.cc",
+    "shared_image/compound_image_backing.h",
+    "shared_image/copy_image_plane.cc",
+    "shared_image/copy_image_plane.h",
+    "shared_image/cpu_readback_upload_copy_strategy.cc",
+    "shared_image/cpu_readback_upload_copy_strategy.h",
+    "shared_image/egl_image_backing.cc",
+    "shared_image/egl_image_backing.h",
+    "shared_image/egl_image_backing_factory.cc",
+    "shared_image/egl_image_backing_factory.h",
+    "shared_image/end_access_state.cc",
+    "shared_image/end_access_state.h",
+    "shared_image/gl_common_image_backing_factory.cc",
+    "shared_image/gl_common_image_backing_factory.h",
+    "shared_image/gl_repack_utils.cc",
+    "shared_image/gl_repack_utils.h",
+    "shared_image/gl_texture_holder.cc",
+    "shared_image/gl_texture_holder.h",
+    "shared_image/gl_texture_image_backing.cc",
+    "shared_image/gl_texture_image_backing.h",
+    "shared_image/gl_texture_image_backing_factory.cc",
+    "shared_image/gl_texture_image_backing_factory.h",
+    "shared_image/gl_texture_passthrough_fallback_image_representation.cc",
+    "shared_image/gl_texture_passthrough_fallback_image_representation.h",
+    "shared_image/shared_image_backing.cc",
+    "shared_image/shared_image_backing.h",
+    "shared_image/shared_image_backing_factory.cc",
+    "shared_image/shared_image_backing_factory.h",
+    "shared_image/shared_image_copy_manager.cc",
+    "shared_image/shared_image_copy_manager.h",
+    "shared_image/shared_image_copy_strategy.h",
+    "shared_image/shared_image_factory.cc",
+    "shared_image/shared_image_factory.h",
+    "shared_image/shared_image_format_service_utils.cc",
+    "shared_image/shared_image_format_service_utils.h",
+    "shared_image/shared_image_gl_utils.cc",
+    "shared_image/shared_image_gl_utils.h",
+    "shared_image/shared_image_manager.cc",
+    "shared_image/shared_image_manager.h",
+    "shared_image/shared_image_pool_service.cc",
+    "shared_image/shared_image_pool_service.h",
+    "shared_image/shared_image_representation.cc",
+    "shared_image/shared_image_representation.h",
+    "shared_image/shared_memory_image_backing.cc",
+    "shared_image/shared_memory_image_backing.h",
+    "shared_image/shared_memory_image_backing_factory.cc",
+    "shared_image/shared_memory_image_backing_factory.h",
+    "shared_image/skia_gl_image_representation.cc",
+    "shared_image/skia_gl_image_representation.h",
+    "shared_image/wrapped_graphite_texture_backing.cc",
+    "shared_image/wrapped_graphite_texture_backing.h",
+    "shared_image/wrapped_graphite_texture_holder.cc",
+    "shared_image/wrapped_graphite_texture_holder.h",
+    "shared_image/wrapped_sk_image_backing.cc",
+    "shared_image/wrapped_sk_image_backing.h",
+    "shared_image/wrapped_sk_image_backing_factory.cc",
+    "shared_image/wrapped_sk_image_backing_factory.h",
+    "shared_image_interface_in_process.cc",
+    "shared_image_interface_in_process.h",
+    "shared_image_interface_in_process_base.cc",
+    "shared_image_interface_in_process_base.h",
     "shared_memory_region_wrapper.cc",
     "shared_memory_region_wrapper.h",
+    "single_task_sequence.h",
     "skia_utils.cc",
     "skia_utils.h",
     "texture_manager.cc",
     "texture_manager.h",
     "transform_feedback_manager.cc",
     "transform_feedback_manager.h",
-    "validating_abstract_texture_impl.cc",
-    "validating_abstract_texture_impl.h",
     "value_validator.h",
     "vertex_array_manager.cc",
     "vertex_array_manager.h",
@@ -269,16 +321,31 @@ target(link_target_type, "gles2_sources") {
     "webgpu_cmd_validation_implementation_autogen.h",
     "webgpu_decoder.cc",
     "webgpu_decoder.h",
-    "wrapped_sk_image.cc",
-    "wrapped_sk_image.h",
   ]
 
   if (use_dawn) {
+    deps += [ "//gpu/webgpu:common" ]
     sources += [
+      "dawn_caching_interface.cc",
+      "dawn_caching_interface.h",
+      "dawn_instance.cc",
+      "dawn_instance.h",
       "dawn_platform.cc",
       "dawn_platform.h",
       "dawn_service_memory_transfer_service.cc",
       "dawn_service_memory_transfer_service.h",
+      "dawn_service_serializer.cc",
+      "dawn_service_serializer.h",
+      "dawn_wire_server.cc",
+      "dawn_wire_server.h",
+      "shared_image/dawn_copy_strategy.cc",
+      "shared_image/dawn_copy_strategy.h",
+      "shared_image/dawn_fallback_image_representation.cc",
+      "shared_image/dawn_fallback_image_representation.h",
+      "shared_image/dawn_image_backing.cc",
+      "shared_image/dawn_image_backing.h",
+      "shared_image/dawn_image_backing_factory.cc",
+      "shared_image/dawn_image_backing_factory.h",
       "webgpu_decoder_impl.cc",
       "webgpu_decoder_impl.h",
     ]
@@ -289,147 +356,211 @@ target(link_target_type, "gles2_sources") {
     "//gpu:gpu_gles2_implementation",
     "//gpu:raster_implementation",
     "//gpu:webgpu_implementation",
-    "//third_party/khronos:khronos_headers",
+    "//gpu:gl_headers",
   ]
 
-  # Prefer mesa GL headers to system headers, which cause problems on Win.
-  include_dirs = [ "//third_party/mesa_headers" ]
+  # This target pulls in angle headers that can't be built with this
+  # warning active: crbug.com/430317494
+  cflags_cc = [ "-Wno-thread-safety" ]
 
   public_deps = [
-    "//base/util/type_safety",
+    "//base",
     "//cc/paint",
     "//gpu/command_buffer/common",
     "//gpu/command_buffer/common:gles2_sources",
     "//gpu/command_buffer/common:raster_sources",
     "//gpu/command_buffer/common:webgpu_sources",
+    "//gpu/ipc/common:surface_handle_type",
     "//skia",
-    "//third_party/dawn/src/dawn:dawn_headers",
+    "//third_party/blink/public/common/tokens:tokens_headers",
+    "//third_party/dawn/include/dawn:cpp_headers",
   ]
-  deps = [
+  deps += [
     ":disk_cache_proto",
     ":service",
     "//base",
-    "//base/third_party/dynamic_annotations",
     "//build:chromecast_buildflags",
-    "//build:chromeos_buildflags",
     "//components/crash/core/common",
-    "//components/viz/common:resource_format_utils",
+    "//components/persistent_cache",
+    "//components/version_info",
+    "//components/viz/common/resources:shared_image_format",
     "//gpu/command_buffer/client",
     "//gpu/command_buffer/common:gles2_utils",
     "//gpu/config",
     "//gpu/ipc/common",
     "//gpu/vulkan:buildflags",
+    "//ipc:mojom_constants",
     "//skia:buildflags",
-    "//third_party/angle:angle_commit_id",
     "//third_party/angle:angle_image_util",
+    "//third_party/angle:angle_version_info",
+    "//third_party/angle:translator",
+    "//third_party/dawn/include/dawn:cpp_headers",
+    "//third_party/dawn/src/dawn:proc",
     "//third_party/libyuv",
     "//third_party/protobuf:protobuf_lite",
     "//third_party/re2",
     "//third_party/zlib",
+    "//ui/base:features",
+    "//ui/base:ozone_buildflags",
     "//ui/gfx",
     "//ui/gfx/geometry",
     "//ui/gl",
     "//ui/gl:buildflags",
+    "//ui/gl:gl_headers",
     "//ui/gl/init",
   ]
 
-  # If statically linked against ANGLE, link against angle:translator which is already included with ANGLE.
-  if (use_static_angle) {
-    deps += [ "//third_party/angle:translator" ]
-  } else {
-    deps += [ "//third_party/angle:translator_gl_d3d_only" ]
-  }
-
   if (use_ozone) {
+    sources += [
+      "shared_image/gl_ozone_image_representation.cc",
+      "shared_image/gl_ozone_image_representation.h",
+      "shared_image/ozone_image_backing.cc",
+      "shared_image/ozone_image_backing.h",
+      "shared_image/ozone_image_backing_factory.cc",
+      "shared_image/ozone_image_backing_factory.h",
+      "shared_image/ozone_image_gl_textures_holder.cc",
+      "shared_image/ozone_image_gl_textures_holder.h",
+    ]
     deps += [
       "//ui/base:features",
       "//ui/ozone",
     ]
+    if (is_chromeos) {
+      deps += [
+        "//ash/constants",
+        "//ui/gfx/linux:drm",
+      ]
+    }
   }
 
   if (enable_vulkan) {
-    deps += [
-      "//components/viz/common:vulkan_context_provider",
-      "//gpu/vulkan",
+    deps += [ "//gpu/vulkan" ]
+
+    sources += [
+      "shared_image/angle_vulkan_image_backing.cc",
+      "shared_image/angle_vulkan_image_backing.h",
+      "shared_image/angle_vulkan_image_backing_factory.cc",
+      "shared_image/angle_vulkan_image_backing_factory.h",
+      "shared_image/texture_holder_vk.cc",
+      "shared_image/texture_holder_vk.h",
+      "vulkan_context_provider.h",
+      "vulkan_in_process_context_provider.cc",
+      "vulkan_in_process_context_provider.h",
     ]
 
-    if (is_linux || is_chromeos || is_fuchsia || is_android || is_win) {
+    if (is_linux || is_fuchsia) {
       sources += [
         "external_semaphore.cc",
         "external_semaphore.h",
         "external_semaphore_pool.cc",
         "external_semaphore_pool.h",
-        "external_vk_image_backing.cc",
-        "external_vk_image_backing.h",
-        "external_vk_image_factory.cc",
-        "external_vk_image_factory.h",
-        "external_vk_image_gl_representation.cc",
-        "external_vk_image_gl_representation.h",
-        "external_vk_image_overlay_representation.cc",
-        "external_vk_image_overlay_representation.h",
-        "external_vk_image_skia_representation.cc",
-        "external_vk_image_skia_representation.h",
+        "shared_image/external_vk_image_backing.cc",
+        "shared_image/external_vk_image_backing.h",
+        "shared_image/external_vk_image_backing_factory.cc",
+        "shared_image/external_vk_image_backing_factory.h",
+        "shared_image/external_vk_image_gl_representation.cc",
+        "shared_image/external_vk_image_gl_representation.h",
+        "shared_image/external_vk_image_overlay_representation.cc",
+        "shared_image/external_vk_image_overlay_representation.h",
+        "shared_image/external_vk_image_skia_representation.cc",
+        "shared_image/external_vk_image_skia_representation.h",
       ]
     }
 
     if (use_ozone) {
       sources += [
-        "shared_image_backing_factory_ozone.cc",
-        "shared_image_backing_factory_ozone.h",
-        "shared_image_backing_ozone.cc",
-        "shared_image_backing_ozone.h",
-        "shared_image_representation_gl_ozone.cc",
-        "shared_image_representation_gl_ozone.h",
+        "drm_modifiers_filter_vulkan.cc",
+        "drm_modifiers_filter_vulkan.h",
+        "shared_image/skia_vk_ozone_image_representation.cc",
+        "shared_image/skia_vk_ozone_image_representation.h",
+        "shared_image/vulkan_ozone_image_representation.cc",
+        "shared_image/vulkan_ozone_image_representation.h",
       ]
+
+      deps += [ "//ui/ozone" ]
+
+      if (is_linux || is_chromeos) {
+        deps += [ "//third_party/libsync" ]
+        deps += [ "//ui/gfx/linux:drm" ]
+      }
     }
 
-    if ((is_linux || is_chromeos) && use_dawn) {
+    if (is_linux && use_dawn) {
       sources += [
-        "external_vk_image_dawn_representation.cc",
-        "external_vk_image_dawn_representation.h",
+        "shared_image/external_vk_image_dawn_representation.cc",
+        "shared_image/external_vk_image_dawn_representation.h",
       ]
-    }
-
-    if (use_ozone && use_dawn) {
-      sources += [
-        "shared_image_representation_dawn_ozone.cc",
-        "shared_image_representation_dawn_ozone.h",
-      ]
-    }
-    if (use_x11) {
-      deps += [ "//ui/base:features" ]
     }
   }
 
   if (use_dawn) {
     deps += [
-      "//third_party/dawn/src/dawn_native",
-      "//third_party/dawn/src/dawn_platform",
+      "//net",
+      "//third_party/dawn/src/dawn:proc",
+      "//third_party/dawn/src/dawn/native",
+      "//third_party/dawn/src/dawn/platform",
     ]
+    if (dawn_enable_opengles) {
+      sources += [
+        "shared_image/dawn_egl_image_representation.cc",
+        "shared_image/dawn_egl_image_representation.h",
+        "shared_image/dawn_gl_texture_representation.cc",
+        "shared_image/dawn_gl_texture_representation.h",
+      ]
+    }
+    if (use_ozone) {
+      sources += [
+        "shared_image/dawn_ozone_image_representation.cc",
+        "shared_image/dawn_ozone_image_representation.h",
+      ]
+    }
   }
 
-  if (is_mac) {
-    deps += [ "//components/viz/common:metal_context_provider" ]
+  if (is_apple) {
     sources += [
-      "shared_image_backing_factory_iosurface.h",
-      "shared_image_backing_factory_iosurface.mm",
+      "shared_image/iosurface_image_backing.h",
+      "shared_image/iosurface_image_backing.mm",
+      "shared_image/iosurface_image_backing_factory.h",
+      "shared_image/iosurface_image_backing_factory.mm",
     ]
 
-    # Required by gles2_cmd_decoder.cc on Mac.
+    # Do not compile with ARC because Dawn is not (yet) compatible with being
+    # called from code compiled with ARC.
+    configs -= [ "//build/config/compiler:enable_arc" ]
+
+    # Required by gles2_cmd_decoder.cc on Apple.
     frameworks = [
-      "Cocoa.framework",
+      "CoreVideo.framework",
+      "Foundation.framework",
       "IOSurface.framework",
       "Metal.framework",
-      "OpenGL.framework",
     ]
+    if (is_mac) {
+      frameworks += [
+        "Cocoa.framework",
+        "OpenGL.framework",
+      ]
+    }
   }
 
   if (skia_use_dawn) {
-    deps += [
-      "//components/viz/common:dawn_context_provider",
-      "//third_party/dawn/src/dawn:dawn_proc",
-      "//third_party/dawn/src/dawn:dawncpp",
+    sources += [
+      "dawn_context_provider.cc",
+      "dawn_context_provider.h",
+      "shared_image/dawn_shared_texture_cache.cc",
+      "shared_image/dawn_shared_texture_cache.h",
+      "shared_image/skia_graphite_dawn_image_representation.cc",
+      "shared_image/skia_graphite_dawn_image_representation.h",
     ]
+    deps += [ "//third_party/dawn/src/dawn:cpp" ]
+
+    if (is_chromeos) {
+      sources += [
+        "drm_modifiers_filter_dawn.cc",
+        "drm_modifiers_filter_dawn.h",
+      ]
+      deps += [ "//ui/gfx/linux:drm" ]
+    }
   }
 
   if (is_android) {
@@ -443,58 +574,92 @@ target(link_target_type, "gles2_sources") {
       "ahardwarebuffer_utils.h",
       "image_reader_gl_owner.cc",
       "image_reader_gl_owner.h",
-      "shared_image_backing_android.cc",
-      "shared_image_backing_android.h",
-      "shared_image_backing_egl_image.cc",
-      "shared_image_backing_egl_image.h",
-      "shared_image_backing_factory_ahardwarebuffer.cc",
-      "shared_image_backing_factory_ahardwarebuffer.h",
-      "shared_image_backing_factory_egl.cc",
-      "shared_image_backing_factory_egl.h",
-      "shared_image_backing_scoped_hardware_buffer_fence_sync.cc",
-      "shared_image_backing_scoped_hardware_buffer_fence_sync.h",
-      "shared_image_batch_access_manager.cc",
-      "shared_image_batch_access_manager.h",
-      "shared_image_representation_gl_texture_android.cc",
-      "shared_image_representation_gl_texture_android.h",
-      "shared_image_representation_gl_texture_passthrough_android.cc",
-      "shared_image_representation_gl_texture_passthrough_android.h",
-      "shared_image_representation_skia_vk_android.cc",
-      "shared_image_representation_skia_vk_android.h",
-      "shared_image_video.cc",
-      "shared_image_video.h",
+      "ref_counted_lock.cc",
+      "ref_counted_lock.h",
+      "shared_image/ahardwarebuffer_image_backing_factory.cc",
+      "shared_image/ahardwarebuffer_image_backing_factory.h",
+      "shared_image/android_image_backing.cc",
+      "shared_image/android_image_backing.h",
+      "shared_image/android_video_image_backing.cc",
+      "shared_image/android_video_image_backing.h",
+      "shared_image/gl_texture_android_image_representation.cc",
+      "shared_image/gl_texture_android_image_representation.h",
+      "shared_image/gl_texture_passthrough_android_image_representation.cc",
+      "shared_image/gl_texture_passthrough_android_image_representation.h",
+      "shared_image/skia_vk_android_image_representation.cc",
+      "shared_image/skia_vk_android_image_representation.h",
+      "shared_image/video_image_reader_image_backing.cc",
+      "shared_image/video_image_reader_image_backing.h",
       "stream_texture_shared_image_interface.h",
-      "surface_texture_gl_owner.cc",
-      "surface_texture_gl_owner.h",
       "texture_owner.cc",
       "texture_owner.h",
     ]
+    if (skia_use_graphite_vulkan) {
+      sources += [
+        "shared_image/skia_graphite_vk_android_image_representation.cc",
+        "shared_image/skia_graphite_vk_android_image_representation.h",
+      ]
+    }
 
-    deps += [ "//base" ]
+    # For AImageReader.
+    libs = [ "mediandk" ]
+
+    if (use_dawn) {
+      sources += [
+        "shared_image/dawn_ahardwarebuffer_image_representation.cc",
+        "shared_image/dawn_ahardwarebuffer_image_representation.h",
+      ]
+    }
+
+    deps += [
+      "//base",
+      "//third_party/jni_zero",
+    ]
 
     # TODO(cblume): http://crbug.com/911313
     # Abstract out the platform specific defines. Right now we need the android
     # platform specific define here to be able to include android specific
     # functions.
-    defines = [ "VK_USE_PLATFORM_ANDROID_KHR" ]
+    defines += [ "VK_USE_PLATFORM_ANDROID_KHR" ]
     deps += [ "//third_party/libsync" ]
     if (enable_vulkan) {
-      deps += [
-        "//gpu/ipc/common:android_image_reader_utils",
-        "//gpu/vulkan",
-      ]
+      deps += [ "//gpu/vulkan" ]
     }
   }
 
   if (is_win) {
     sources += [
-      "shared_image_backing_d3d.cc",
-      "shared_image_backing_d3d.h",
-      "shared_image_backing_factory_d3d.cc",
-      "shared_image_backing_factory_d3d.h",
-      "shared_image_representation_d3d.cc",
-      "shared_image_representation_d3d.h",
+      "dxgi_shared_handle_manager.cc",
+      "dxgi_shared_handle_manager.h",
+      "shared_image/d3d11_image_same_adapter_copy_strategy.cc",
+      "shared_image/d3d11_image_same_adapter_copy_strategy.h",
+      "shared_image/d3d_access_object.h",
+      "shared_image/d3d_image_backing.cc",
+      "shared_image/d3d_image_backing.h",
+      "shared_image/d3d_image_backing_factory.cc",
+      "shared_image/d3d_image_backing_factory.h",
+      "shared_image/d3d_image_representation.cc",
+      "shared_image/d3d_image_representation.h",
+      "shared_image/d3d_image_utils.cc",
+      "shared_image/d3d_image_utils.h",
+      "shared_image/dcomp_image_backing_factory.cc",
+      "shared_image/dcomp_image_backing_factory.h",
+      "shared_image/dcomp_surface_image_backing.cc",
+      "shared_image/dcomp_surface_image_backing.h",
+      "shared_image/dcomp_surface_image_representation.cc",
+      "shared_image/dcomp_surface_image_representation.h",
+      "shared_image/dxgi_swap_chain_image_backing.cc",
+      "shared_image/dxgi_swap_chain_image_backing.h",
+      "shared_image/dxgi_swap_chain_image_representation.cc",
+      "shared_image/dxgi_swap_chain_image_representation.h",
     ]
+    libs = [
+      "d3d11.lib",
+      "d3d12.lib",
+      "dxguid.lib",
+      "onecore.lib",
+    ]
+    all_dependent_configs = [ ":service_win_linker_flags" ]
   }
 }
 
@@ -506,10 +671,10 @@ if (is_android) {
   static_library("android_texture_owner_test_support") {
     testonly = true
     sources = [
-      "mock_abstract_texture.cc",
-      "mock_abstract_texture.h",
       "mock_texture_owner.cc",
       "mock_texture_owner.h",
+      "ref_counted_lock_for_test.cc",
+      "ref_counted_lock_for_test.h",
     ]
     deps = [
       ":gles2",
@@ -526,11 +691,10 @@ if (is_android) {
 if (is_android) {
   source_set("android_texture_owner_unittests") {
     testonly = true
-    sources = [
-      "image_reader_gl_owner_unittest.cc",
-      "surface_texture_gl_owner_unittest.cc",
-      "surface_texture_transform_unittest.cc",
-    ]
+    sources = [ "image_reader_gl_owner_unittest.cc" ]
+
+    # For AImageReader_getFormat()
+    libs = [ "mediandk" ]
 
     deps = [
       ":android_texture_owner_test_support",

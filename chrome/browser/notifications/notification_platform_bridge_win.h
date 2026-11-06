@@ -1,18 +1,20 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_NOTIFICATIONS_NOTIFICATION_PLATFORM_BRIDGE_WIN_H_
 #define CHROME_BROWSER_NOTIFICATIONS_NOTIFICATION_PLATFORM_BRIDGE_WIN_H_
 
-#include <string>
-
 #include <windows.ui.notifications.h>
 #include <wrl/client.h>
 
+#include <optional>
+#include <string>
+
+#include "base/gtest_prod_util.h"
 #include "chrome/browser/notifications/notification_platform_bridge.h"
 #include "chrome/browser/notifications/win/notification_launch_id.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "chrome/common/notifications/notification_operation.h"
 
 namespace base {
 class CommandLine;
@@ -40,6 +42,10 @@ class NotificationPlatformBridgeWin : public NotificationPlatformBridge {
   void Close(Profile* profile, const std::string& notification_id) override;
   void GetDisplayed(Profile* profile,
                     GetDisplayedNotificationsCallback callback) const override;
+  void GetDisplayedForOrigin(
+      Profile* profile,
+      const GURL& origin,
+      GetDisplayedNotificationsCallback callback) const override;
   void SetReadyCallback(NotificationBridgeReadyCallback callback) override;
   void DisplayServiceShutDown(Profile* profile) override;
 
@@ -56,6 +62,7 @@ class NotificationPlatformBridgeWin : public NotificationPlatformBridge {
   struct NotificationKeyType {
     std::string profile_id;
     std::string notification_id;
+    std::wstring app_user_model_id;  // Either browser aumi or web app aumi.
 
     bool operator<(const NotificationKeyType& key) const {
       return profile_id < key.profile_id ||
@@ -67,12 +74,15 @@ class NotificationPlatformBridgeWin : public NotificationPlatformBridge {
  private:
   friend class NotificationPlatformBridgeWinImpl;
   friend class NotificationPlatformBridgeWinTest;
+  friend class NotificationPlatformBridgeWinAppInstalledTest;
   FRIEND_TEST_ALL_PREFIXES(NotificationPlatformBridgeWinTest, Suppress);
   FRIEND_TEST_ALL_PREFIXES(NotificationPlatformBridgeWinUITest, GetDisplayed);
   FRIEND_TEST_ALL_PREFIXES(NotificationPlatformBridgeWinUITest, HandleEvent);
   FRIEND_TEST_ALL_PREFIXES(NotificationPlatformBridgeWinUITest, HandleSettings);
   FRIEND_TEST_ALL_PREFIXES(NotificationPlatformBridgeWinUITest,
                            DisplayWithFakeAC);
+  FRIEND_TEST_ALL_PREFIXES(NotificationPlatformBridgeWinUITest,
+                           DisplayWebAppNotificationWithFakeAC);
   FRIEND_TEST_ALL_PREFIXES(NotificationPlatformBridgeWinUITest,
                            SynchronizeNotifications);
   FRIEND_TEST_ALL_PREFIXES(NotificationPlatformBridgeWinUITest,
@@ -83,10 +93,10 @@ class NotificationPlatformBridgeWin : public NotificationPlatformBridge {
   // Simulates a click/dismiss event. Only for use in testing.
   // Note: Ownership of |notification| and |args| is retained by the caller.
   void ForwardHandleEventForTesting(
-      NotificationCommon::Operation operation,
+      NotificationOperation operation,
       ABI::Windows::UI::Notifications::IToastNotification* notification,
       ABI::Windows::UI::Notifications::IToastActivatedEventArgs* args,
-      const absl::optional<bool>& by_user);
+      const std::optional<bool>& by_user);
 
   // Initializes the expected displayed notification map. For testing use only.
   void SetExpectedDisplayedNotificationsForTesting(
@@ -114,6 +124,7 @@ class NotificationPlatformBridgeWin : public NotificationPlatformBridge {
       const message_center::Notification& notification,
       const std::wstring& xml_template,
       const std::string& profile_id,
+      const std::wstring& app_user_model_id,
       bool incognito);
 
   scoped_refptr<NotificationPlatformBridgeWinImpl> impl_;

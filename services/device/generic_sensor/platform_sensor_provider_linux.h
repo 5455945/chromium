@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include "services/device/generic_sensor/platform_sensor_provider_linux_base.h"
 
 #include "base/memory/weak_ptr.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
 #include "services/device/generic_sensor/linux/sensor_device_manager.h"
 
 namespace device {
@@ -19,7 +19,14 @@ class PlatformSensorProviderLinux : public PlatformSensorProviderLinuxBase,
                                     public SensorDeviceManager::Delegate {
  public:
   PlatformSensorProviderLinux();
+
+  PlatformSensorProviderLinux(const PlatformSensorProviderLinux&) = delete;
+  PlatformSensorProviderLinux& operator=(const PlatformSensorProviderLinux&) =
+      delete;
+
   ~PlatformSensorProviderLinux() override;
+
+  base::WeakPtr<PlatformSensorProvider> AsWeakPtr() override;
 
   // Sets another service provided by tests.
   void SetSensorDeviceManagerForTesting(
@@ -28,7 +35,6 @@ class PlatformSensorProviderLinux : public PlatformSensorProviderLinuxBase,
  protected:
   // PlatformSensorProviderLinuxBase overrides:
   void CreateSensorInternal(mojom::SensorType type,
-                            SensorReadingSharedBuffer* reading_buffer,
                             CreateSensorCallback callback) override;
   void FreeResources() override;
   bool IsSensorTypeAvailable(mojom::SensorType type) const override;
@@ -49,25 +55,14 @@ class PlatformSensorProviderLinux : public PlatformSensorProviderLinuxBase,
   // enumeration is ready.
   SensorInfoLinux* GetSensorDevice(mojom::SensorType type) const;
 
-  // Processed stored requests in |request_map_|.
-  void ProcessStoredRequests();
-
-  // Called when sensors are created asynchronously after enumeration is done.
-  void CreateSensorAndNotify(mojom::SensorType type,
-                             SensorInfoLinux* sensor_device);
+  void DidEnumerateSensors(mojom::SensorType type,
+                           CreateSensorCallback callback);
 
   // SensorDeviceManager::Delegate overrides:
-  void OnSensorNodesEnumerated() override;
   void OnDeviceAdded(mojom::SensorType type,
                      std::unique_ptr<SensorInfoLinux> sensor_device) override;
   void OnDeviceRemoved(mojom::SensorType type,
                        const std::string& device_node) override;
-
-  // Set to true when enumeration is ready.
-  bool sensor_nodes_enumerated_;
-
-  // Set to true when |sensor_device_manager_| has already started enumeration.
-  bool sensor_nodes_enumeration_started_;
 
   // Stores all available sensor devices by type.
   SensorDeviceMap sensor_devices_by_type_;
@@ -82,8 +77,6 @@ class PlatformSensorProviderLinux : public PlatformSensorProviderLinuxBase,
       sensor_device_manager_;
 
   base::WeakPtrFactory<PlatformSensorProviderLinux> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(PlatformSensorProviderLinux);
 };
 
 }  // namespace device

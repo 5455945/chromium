@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,26 @@
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
+#include <optional>
+#include <ostream>  // IWYU pragma: keep to use operator << with NOTREACHED().
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
+#include "base/check.h"
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/files/file.h"
+#include "base/files/file_path.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/threading/platform_thread.h"
-#include "build/build_config.h"
+#include "base/time/time.h"
 #include "sql/initialization.h"
 #include "sql/sandboxed_vfs_file.h"
+#include "sql/vfs_wrapper.h"
 #include "third_party/sqlite/sqlite3.h"
 
 namespace sql {
@@ -108,12 +116,33 @@ sqlite3_vfs SqliteVfsFor(SandboxedVfs* sandboxed_vfs, const char* name) {
 
 // SQLite measures time according to the Julian calendar.
 base::Time SqliteEpoch() {
-  constexpr const double kMicroSecondsPerDay = 24 * 60 * 60 * 1000;
   // The ".5" is intentional -- days in the Julian calendar start at noon.
   // The offset is in the SQLite source code (os_unix.c) multiplied by 10.
   constexpr const double kUnixEpochAsJulianDay = 2440587.5;
 
-  return base::Time::FromJsTime(-kUnixEpochAsJulianDay * kMicroSecondsPerDay);
+  return base::Time::FromMillisecondsSinceUnixEpoch(
+      -kUnixEpochAsJulianDay * base::Time::kMillisecondsPerDay);
+}
+
+// `full_path_cstr` must be a filename argument passed to the VFS from SQLite.
+SandboxedVfsFileType VfsFileTypeFromPath(const char* full_path_cstr) {
+  std::string_view full_path(full_path_cstr);
+
+  if (full_path == sqlite3_filename_database(full_path_cstr)) {
+    return SandboxedVfsFileType::kDatabase;
+  }
+
+  if (full_path == sqlite3_filename_journal(full_path_cstr)) {
+    return SandboxedVfsFileType::kJournal;
+  }
+
+  if (full_path == sqlite3_filename_wal(full_path_cstr)) {
+    return SandboxedVfsFileType::kWal;
+  }
+
+  NOTREACHED()
+      << "Argument is not a file name buffer passed from SQLite to a VFS: "
+      << full_path;
 }
 
 }  // namespace
@@ -124,7 +153,7 @@ void SandboxedVfs::Register(const char* name,
                             bool make_default) {
   static base::NoDestructor<std::vector<SandboxedVfs*>>
       registered_vfs_instances;
-  sql::EnsureSqliteInitialized();
+  sql::EnsureSqliteInitialized(/*create_wrapper=*/false);
   registered_vfs_instances->push_back(
       new SandboxedVfs(name, std::move(delegate), make_default));
 }
@@ -149,8 +178,20 @@ int SandboxedVfs::Open(const char* full_path,
     return Open(full_path, result_file, new_flags, granted_flags);
   }
 
-  SandboxedVfsFile::Create(std::move(file), std::move(file_path), this,
-                           result_file);
+  SandboxedVfsFile* vfs_file =
+      delegate_->RetrieveSandboxedVfsFile(std::move(file), std::move(file_path),
+                                          VfsFileTypeFromPath(full_path), this);
+  if (!vfs_file) {
+    return SQLITE_CANTOPEN;
+  }
+
+  // Bind the sandboxed file pointer with the sqlite_file structure. This
+  // pointer can later be unboxed (retrieved from the vfs_file structure after
+  // an upcast from sqlite_file* to a SandboxedVfsFileSqliteBridge*) and use
+  // this pointer to redirect the calls (from the sqlite io_methods calls) to
+  // their corresponding sandboxed implementation.
+  SandboxedVfsFile::BindSandboxedFile(vfs_file, result_file);
+
   if (granted_flags)
     *granted_flags = requested_flags;
   return SQLITE_OK;
@@ -164,7 +205,7 @@ int SandboxedVfs::Delete(const char* full_path, int sync_dir) {
 
 int SandboxedVfs::Access(const char* full_path, int flags, int& result) {
   DCHECK(full_path);
-  absl::optional<PathAccessInfo> access =
+  std::optional<PathAccessInfo> access =
       delegate_->GetPathAccess(base::FilePath::FromUTF8Unsafe(full_path));
   if (!access) {
     result = 0;
@@ -183,7 +224,6 @@ int SandboxedVfs::Access(const char* full_path, int flags, int& result) {
       break;
     default:
       NOTREACHED() << "Unsupported xAccess flags: " << flags;
-      return SQLITE_ERROR;
   }
   return SQLITE_OK;
 }
@@ -200,7 +240,7 @@ int SandboxedVfs::FullPathname(const char* file_path,
   size_t file_path_size = std::strlen(file_path) + 1;
   if (static_cast<size_t>(result_size) < file_path_size)
     return SQLITE_CANTOPEN;
-  std::memcpy(result, file_path, file_path_size);
+  UNSAFE_TODO(std::memcpy(result, file_path, file_path_size));
   return SQLITE_OK;
 }
 
@@ -209,13 +249,13 @@ int SandboxedVfs::Randomness(int result_size, char* result) {
   DCHECK(result);
 
   // TODO(pwnall): Figure out if we need a real implementation.
-  std::memset(result, 0, result_size);
+  UNSAFE_TODO(std::memset(result, 0, result_size));
   return result_size;
 }
 
 int SandboxedVfs::Sleep(int microseconds) {
   DCHECK_GE(microseconds, 0);
-  base::PlatformThread::Sleep(base::TimeDelta::FromMicroseconds(microseconds));
+  base::PlatformThread::Sleep(base::Microseconds(microseconds));
   return SQLITE_OK;
 }
 
@@ -227,7 +267,7 @@ int SandboxedVfs::GetLastError(int message_size, char* message) const {
   size_t error_string_size = error_string.length() + 1;
   size_t copy_length =
       std::min(static_cast<size_t>(message_size), error_string_size);
-  std::memcpy(message, error_string.c_str(), copy_length);
+  std::copy_n(error_string.c_str(), copy_length, message);
   // The return value is zero if the message fits in the buffer, and non-zero if
   // it does not fit.
   return copy_length != error_string_size;
@@ -248,6 +288,11 @@ SandboxedVfs::SandboxedVfs(const char* name,
       sqlite_epoch_(SqliteEpoch()),
       delegate_(std::move(delegate)),
       last_error_(base::File::FILE_OK) {
+  if (make_default) {
+    // This shouldn't override the VFS wrapper.
+    DCHECK_NE(std::string_view(sqlite3_vfs_find(nullptr)->zName),
+              kVfsWrapperName);
+  }
   // The register function returns a SQLite status as an int. The status is
   // ignored here. If registration fails, we'd want to report the error while
   // attempting to open a database. This is exactly what will happen, because

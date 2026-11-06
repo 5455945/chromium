@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -221,7 +221,6 @@ void DecodeInfoCallback(png_struct* png_ptr, png_info* info_ptr) {
         break;
       default:
         NOTREACHED() << "Unknown output format";
-        break;
     }
   } else if (channels == 4) {
     switch (state->output_format) {
@@ -239,11 +238,9 @@ void DecodeInfoCallback(png_struct* png_ptr, png_info* info_ptr) {
         break;
       default:
         NOTREACHED() << "Unknown output format";
-        break;
     }
   } else {
     NOTREACHED() << "Unknown input channels";
-    longjmp(png_jmpbuf(png_ptr), 1);
   }
 
   state->output->resize(
@@ -258,7 +255,6 @@ void DecodeRowCallback(png_struct* png_ptr, png_byte* new_row,
   DCHECK(pass == 0);
   if (static_cast<int>(row_num) > state->height) {
     NOTREACHED() << "Invalid row";
-    return;
   }
 
   unsigned char* base = NULL;
@@ -399,7 +395,7 @@ void ConvertBGRAtoRGB(const unsigned char* bgra, int pixel_width,
 #ifdef PNG_TEXT_SUPPORTED
 
 inline char* strdup(const char* str) {
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   return _strdup(str);
 #else
   return ::strdup(str);
@@ -573,7 +569,6 @@ bool EncodeWithCompressionLevel(const unsigned char* input, ColorFormat format,
 
     default:
       NOTREACHED() << "Unknown pixel format";
-      return false;
   }
 
   // Row stride should be at least as long as the length of the data.

@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,8 +13,6 @@ namespace cc {
 
 std::string TileResolutionToString(TileResolution resolution) {
   switch (resolution) {
-  case LOW_RESOLUTION:
-    return "LOW_RESOLUTION";
   case HIGH_RESOLUTION:
     return "HIGH_RESOLUTION";
   case NON_IDEAL_RESOLUTION:
@@ -60,6 +58,17 @@ std::string TileMemoryLimitPolicyToString(TileMemoryLimitPolicy policy) {
   }
 }
 
+bool IsTileMemoryLimitPolicyMoreRestictive(TileMemoryLimitPolicy policy1,
+                                           TileMemoryLimitPolicy policy2) {
+  static_assert(
+      ALLOW_NOTHING < ALLOW_ABSOLUTE_MINIMUM &&
+          ALLOW_ABSOLUTE_MINIMUM < ALLOW_PREPAINT_ONLY &&
+          ALLOW_PREPAINT_ONLY < ALLOW_ANYTHING,
+      "TileMemoryLimitPolicy must be ordered from most restrictive to least "
+      "restrictive");
+  return policy1 < policy2;
+}
+
 std::string TreePriorityToString(TreePriority prio) {
   switch (prio) {
   case SAME_PRIORITY_FOR_BOTH_TREES:
@@ -74,19 +83,20 @@ std::string TreePriorityToString(TreePriority prio) {
   }
 }
 
-perfetto::protos::pbzero::ChromeCompositorStateMachine::MinorState::TreePriority
-TreePriorityToProtozeroEnum(TreePriority priority) {
-  using pbzeroMinorState =
-      perfetto::protos::pbzero::ChromeCompositorStateMachine::MinorState;
+perfetto::protos::pbzero::ChromeCompositorStateMachineV2::MinorStateV2::
+    TreePriority
+    TreePriorityToProtozeroEnum(TreePriority priority) {
+  using pbzeroMinorStateV2 =
+      perfetto::protos::pbzero::ChromeCompositorStateMachineV2::MinorStateV2;
   switch (priority) {
     case TreePriority::SAME_PRIORITY_FOR_BOTH_TREES:
-      return pbzeroMinorState::TREE_PRIORITY_SAME_PRIORITY_FOR_BOTH_TREES;
+      return pbzeroMinorStateV2::TREE_PRIORITY_SAME_PRIORITY_FOR_BOTH_TREES;
     case TreePriority::SMOOTHNESS_TAKES_PRIORITY:
-      return pbzeroMinorState::TREE_PRIORITY_SMOOTHNESS_TAKES_PRIORITY;
+      return pbzeroMinorStateV2::TREE_PRIORITY_SMOOTHNESS_TAKES_PRIORITY;
     case TreePriority::NEW_CONTENT_TAKES_PRIORITY:
-      return pbzeroMinorState::TREE_PRIORITY_NEW_CONTENT_TAKES_PRIORITY;
+      return pbzeroMinorStateV2::TREE_PRIORITY_NEW_CONTENT_TAKES_PRIORITY;
   }
-  return pbzeroMinorState::TREE_PRIORITY_UNSPECIFIED;
+  return pbzeroMinorStateV2::TREE_PRIORITY_UNSPECIFIED;
 }
 
 void GlobalStateThatImpactsTilePriority::AsValueInto(
@@ -100,6 +110,7 @@ void GlobalStateThatImpactsTilePriority::AsValueInto(
   state->SetInteger("num_resources_limit",
                     base::saturated_cast<int>(num_resources_limit));
   state->SetString("tree_priority", TreePriorityToString(tree_priority));
+  MathUtil::AddToTracedValue("viewport_size", viewport_size, state);
 }
 
 }  // namespace cc

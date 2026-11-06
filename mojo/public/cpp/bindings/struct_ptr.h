@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,13 +9,12 @@
 #include <functional>
 #include <memory>
 #include <new>
+#include <type_traits>
+#include <utility>
 
 #include "base/check.h"
-#include "base/macros.h"
-#include "base/template_util.h"
 #include "mojo/public/cpp/bindings/lib/hash_util.h"
 #include "mojo/public/cpp/bindings/type_converter.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/perfetto/include/perfetto/tracing/traced_value_forward.h"
 
 namespace mojo {
@@ -44,6 +43,9 @@ class StructPtr {
   StructPtr() = default;
   StructPtr(std::nullptr_t) {}
 
+  StructPtr(const StructPtr&) = delete;
+  StructPtr& operator=(const StructPtr&) = delete;
+
   ~StructPtr() = default;
 
   StructPtr& operator=(std::nullptr_t) {
@@ -51,14 +53,11 @@ class StructPtr {
     return *this;
   }
 
-  StructPtr(StructPtr&& other) { Take(&other); }
-  StructPtr& operator=(StructPtr&& other) {
-    Take(&other);
-    return *this;
-  }
+  StructPtr(StructPtr&& other) noexcept : ptr_(std::move(other.ptr_)) {}
+  StructPtr& operator=(StructPtr&& other) noexcept = default;
 
   template <typename... Args>
-  StructPtr(base::in_place_t, Args&&... args)
+  StructPtr(std::in_place_t, Args&&... args)
       : ptr_(new Struct(std::forward<Args>(args)...)) {}
 
   template <typename U>
@@ -93,18 +92,20 @@ class StructPtr {
   StructPtr Clone() const { return is_null() ? StructPtr() : ptr_->Clone(); }
 
   // Compares the pointees (which might both be null).
-  // TODO(crbug.com/735302): Get rid of Equals in favor of the operator. Same
+  // TODO(crbug.com/41326459): Get rid of Equals in favor of the operator. Same
   // for Hash.
   bool Equals(const StructPtr& other) const {
-    if (is_null() || other.is_null())
+    if (is_null() || other.is_null()) {
       return is_null() && other.is_null();
+    }
     return ptr_->Equals(*other.ptr_);
   }
 
   // Hashes based on the pointee (which might be null).
   size_t Hash(size_t seed) const {
-    if (is_null())
+    if (is_null()) {
       return internal::HashCombine(seed, 0);
+    }
     return ptr_->Hash(seed);
   }
 
@@ -119,17 +120,20 @@ class StructPtr {
 
  private:
   friend class internal::StructPtrWTFHelper<Struct>;
-  void Take(StructPtr* other) {
-    reset();
-    Swap(other);
-  }
 
   std::unique_ptr<Struct> ptr_;
-
-  DISALLOW_COPY_AND_ASSIGN(StructPtr);
 };
 
 // Designed to be used when Struct is small and copyable.
+//
+// Implementation note: the external interface is intended to mirror `StructPtr`
+// as closely as possible; in particular, this means that a moved-from
+// `InlinedStructPtr` should be treated as nil.
+//
+// Currently, this is implemented by promptly destroying the contained value as
+// soon as it is moved from; it might be interesting to consider tracking the
+// `valid-but-moved-from` state explicitly and deferring destruction of the
+// contained value to the destructor, but it adds quite a bit of complexity.
 template <typename S>
 class InlinedStructPtr {
  public:
@@ -142,22 +146,37 @@ class InlinedStructPtr {
   InlinedStructPtr() = default;
   InlinedStructPtr(std::nullptr_t) {}
 
-  ~InlinedStructPtr() = default;
+  InlinedStructPtr(const InlinedStructPtr&) = delete;
+  InlinedStructPtr& operator=(const InlinedStructPtr&) = delete;
+
+  ~InlinedStructPtr()
+    requires(!std::is_trivially_destructible_v<Struct>)
+  {
+    reset();
+  }
 
   InlinedStructPtr& operator=(std::nullptr_t) {
     reset();
     return *this;
   }
 
-  InlinedStructPtr(InlinedStructPtr&& other) noexcept { Take(&other); }
+  InlinedStructPtr(InlinedStructPtr&& other) noexcept
+      : storage_(CreateValue(other)), state_(other.state_) {
+    other.reset();
+  }
   InlinedStructPtr& operator=(InlinedStructPtr&& other) noexcept {
-    Take(&other);
+    reset();
+    state_ = other.state_;
+    if (other.state_ != NIL) {
+      new (&storage_.value) Struct(std::move(other.storage_.value));
+      other.reset();
+    }
     return *this;
   }
 
   template <typename... Args>
-  InlinedStructPtr(base::in_place_t, Args&&... args)
-      : value_(std::forward<Args>(args)...), state_(VALID) {}
+  InlinedStructPtr(std::in_place_t, Args&&... args)
+      : storage_(std::in_place, std::forward<Args>(args)...), state_(VALID) {}
 
   template <typename U>
   U To() const {
@@ -165,48 +184,55 @@ class InlinedStructPtr {
   }
 
   void reset() {
-    state_ = NIL;
-    value_. ~Struct();
-    new (&value_) Struct();
+    if constexpr (std::is_trivially_destructible_v<Struct>) {
+      state_ = NIL;
+    } else if (state_ != NIL) {
+      state_ = NIL;
+      storage_.value.~Struct();
+    }
   }
 
-  bool is_null() const { return state_ == NIL; }
+  bool is_null() const { return state_ != VALID; }
 
   Struct& operator*() const {
-    DCHECK(state_ == VALID);
-    return value_;
+    CHECK(state_ == VALID);
+    return storage_.value;
   }
   Struct* operator->() const {
-    DCHECK(state_ == VALID);
-    return &value_;
+    CHECK(state_ == VALID);
+    return &storage_.value;
   }
   Struct* get() const {
-    if (state_ == NIL)
-      return nullptr;
-    return &value_;
+    if (state_ == VALID) {
+      return &storage_.value;
+    }
+    return nullptr;
   }
 
   void Swap(InlinedStructPtr* other) {
-    std::swap(value_, other->value_);
-    std::swap(state_, other->state_);
+    InlinedStructPtr tmp = std::move(*this);
+    *this = std::move(*other);
+    *other = std::move(tmp);
   }
 
   InlinedStructPtr Clone() const {
-    return is_null() ? InlinedStructPtr() : value_.Clone();
+    return is_null() ? InlinedStructPtr() : storage_.value.Clone();
   }
 
   // Compares the pointees (which might both be null).
   bool Equals(const InlinedStructPtr& other) const {
-    if (is_null() || other.is_null())
+    if (is_null() || other.is_null()) {
       return is_null() && other.is_null();
-    return value_.Equals(other.value_);
+    }
+    return storage_.value.Equals(other.storage_.value);
   }
 
   // Hashes based on the pointee (which might be null).
   size_t Hash(size_t seed) const {
-    if (is_null())
+    if (is_null()) {
       return internal::HashCombine(seed, 0);
-    return value_.Hash(seed);
+    }
+    return storage_.value.Hash(seed);
   }
 
   explicit operator bool() const { return !is_null(); }
@@ -220,21 +246,40 @@ class InlinedStructPtr {
 
  private:
   friend class internal::InlinedStructPtrWTFHelper<Struct>;
-  void Take(InlinedStructPtr* other) {
-    reset();
-    Swap(other);
-  }
 
   enum State {
     NIL,
     VALID,
-    DELETED,  // For use in WTF::HashMap only
+    // For use in blink::HashMap only. There is only one way to construct an
+    // `InlinedStructPtr` with this state, and it will never be deleted or
+    // destroyed in this state.
+    DELETED,
   };
 
-  mutable Struct value_;
-  State state_ = NIL;
+  union Storage {
+    Storage() {}
+    ~Storage() {}
 
-  DISALLOW_COPY_AND_ASSIGN(InlinedStructPtr);
+    template <typename... Args>
+    explicit Storage(std::in_place_t, Args&&... args)
+        : value(std::forward<Args>(args)...) {}
+
+    mutable Struct value;
+  };
+
+  struct DeletedValue {};
+  explicit InlinedStructPtr(DeletedValue) : state_(DELETED) {}
+
+  Storage CreateValue(InlinedStructPtr& other) {
+    if (other.state_ != NIL) {
+      return Storage(std::in_place, std::move(other.storage_.value));
+    } else {
+      return Storage();
+    }
+  }
+
+  Storage storage_;
+  State state_ = NIL;
 };
 
 namespace internal {
@@ -269,8 +314,8 @@ class InlinedStructPtrWTFHelper {
     // |slot| refers to a previous, real value that got deleted and had its
     // destructor run, so this is the first time the "deleted value" has its
     // constructor called.
-    new (&slot) InlinedStructPtr<Struct>();
-    slot.state_ = InlinedStructPtr<Struct>::DELETED;
+    new (&slot) InlinedStructPtr<Struct>(
+        typename InlinedStructPtr<Struct>::DeletedValue());
   }
 };
 
@@ -290,36 +335,43 @@ struct IsStructPtrImpl<InlinedStructPtr<S>> : std::true_type {};
 template <typename T>
 constexpr bool IsStructPtrV = internal::IsStructPtrImpl<std::decay_t<T>>::value;
 
-template <typename Ptr, std::enable_if_t<IsStructPtrV<Ptr>>* = nullptr>
+template <typename Ptr>
+  requires(IsStructPtrV<Ptr>)
 bool operator==(const Ptr& lhs, const Ptr& rhs) {
   return lhs.Equals(rhs);
 }
 
-template <typename Ptr, std::enable_if_t<IsStructPtrV<Ptr>>* = nullptr>
+template <typename Ptr>
+  requires(IsStructPtrV<Ptr>)
 bool operator!=(const Ptr& lhs, const Ptr& rhs) {
   return !(lhs == rhs);
 }
 
 // Perform a deep comparison if possible. Otherwise treat null pointers less
 // than valid pointers.
-template <typename Ptr, std::enable_if_t<IsStructPtrV<Ptr>>* = nullptr>
+template <typename Ptr>
+  requires(IsStructPtrV<Ptr>)
 bool operator<(const Ptr& lhs, const Ptr& rhs) {
-  if (!lhs || !rhs)
+  if (!lhs || !rhs) {
     return bool{lhs} < bool{rhs};
+  }
   return *lhs < *rhs;
 }
 
-template <typename Ptr, std::enable_if_t<IsStructPtrV<Ptr>>* = nullptr>
+template <typename Ptr>
+  requires(IsStructPtrV<Ptr>)
 bool operator<=(const Ptr& lhs, const Ptr& rhs) {
   return !(rhs < lhs);
 }
 
-template <typename Ptr, std::enable_if_t<IsStructPtrV<Ptr>>* = nullptr>
+template <typename Ptr>
+  requires(IsStructPtrV<Ptr>)
 bool operator>(const Ptr& lhs, const Ptr& rhs) {
   return rhs < lhs;
 }
 
-template <typename Ptr, std::enable_if_t<IsStructPtrV<Ptr>>* = nullptr>
+template <typename Ptr>
+  requires(IsStructPtrV<Ptr>)
 bool operator>=(const Ptr& lhs, const Ptr& rhs) {
   return !(lhs < rhs);
 }

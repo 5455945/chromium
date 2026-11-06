@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,10 +12,13 @@
 #include <unordered_map>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/memory/ref_counted.h"
 #include "content/browser/service_worker/service_worker_context_core_observer.h"
 #include "content/browser/service_worker/service_worker_info.h"
+#include "content/browser/service_worker/service_worker_version.h"
 #include "content/common/content_export.h"
+#include "third_party/blink/public/common/service_worker/embedded_worker_status.h"
 
 namespace blink {
 class StorageKey;
@@ -24,7 +27,6 @@ class StorageKey;
 namespace content {
 
 class ServiceWorkerContextWrapper;
-enum class EmbeddedWorkerStatus;
 
 // Used to monitor the status change of the ServiceWorker registrations and
 // versions in the ServiceWorkerContext from UI thread.
@@ -85,21 +87,28 @@ class CONTENT_EXPORT ServiceWorkerContextWatcher
 
   // ServiceWorkerContextCoreObserver implements
   void OnNewLiveRegistration(int64_t registration_id,
-                             const GURL& scope) override;
+                             const GURL& scope,
+                             const blink::StorageKey& key) override;
   void OnNewLiveVersion(const ServiceWorkerVersionInfo& version_info) override;
   void OnStarting(int64_t version_id) override;
   void OnStarted(int64_t version_id,
                  const GURL& scope,
-                 int process_id,
+                 ChildProcessId process_id,
                  const GURL& script_url,
-                 const blink::ServiceWorkerToken& token) override;
+                 const blink::ServiceWorkerToken& token,
+                 const blink::StorageKey& key) override;
   void OnStopping(int64_t version_id) override;
   void OnStopped(int64_t version_id) override;
   void OnVersionStateChanged(int64_t version_id,
                              const GURL& scope,
+                             const blink::StorageKey& key,
                              ServiceWorkerVersion::Status status) override;
+  void OnVersionRouterRulesChanged(
+      int64_t version_id,
+      const ServiceWorkerVersion::RouterRulesForDevTools& router_rules)
+      override;
   void OnVersionDevToolsRoutingIdChanged(int64_t version_id,
-                                         int process_id,
+                                         ChildProcessId process_id,
                                          int devtools_agent_route_id) override;
   void OnMainScriptResponseSet(int64_t version_id,
                                base::Time script_response_time,
@@ -107,9 +116,11 @@ class CONTENT_EXPORT ServiceWorkerContextWatcher
   void OnErrorReported(
       int64_t version_id,
       const GURL& scope,
+      const blink::StorageKey& key,
       const ServiceWorkerContextObserver::ErrorInfo& info) override;
   void OnReportConsoleMessage(int64_t version_id,
                               const GURL& scope,
+                              const blink::StorageKey& key,
                               const ConsoleMessage& message) override;
   void OnControlleeAdded(int64_t version_id,
                          const std::string& uuid,
@@ -117,12 +128,14 @@ class CONTENT_EXPORT ServiceWorkerContextWatcher
   void OnControlleeRemoved(int64_t version_id,
                            const std::string& uuid) override;
   void OnRegistrationCompleted(int64_t registration_id,
-                               const GURL& scope) override;
+                               const GURL& scope,
+                               const blink::StorageKey& key) override;
   void OnRegistrationDeleted(int64_t registration_id,
-                             const GURL& scope) override;
+                             const GURL& scope,
+                             const blink::StorageKey& key) override;
 
   void OnRunningStateChanged(int64_t version_id,
-                             EmbeddedWorkerStatus running_status);
+                             blink::EmbeddedWorkerStatus running_status);
 
   std::unordered_map<int64_t, std::unique_ptr<ServiceWorkerVersionInfo>>
       version_info_map_;

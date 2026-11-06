@@ -1,16 +1,19 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/extensions/menu_manager_test_observer.h"
 
 #include "content/public/browser/browser_thread.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
 MenuManagerTestObserver::MenuManagerTestObserver(MenuManager* menu_manager)
     : menu_manager_(menu_manager) {
-  observation_.Observe(menu_manager_);
+  observation_.Observe(menu_manager_.get());
 }
 
 MenuManagerTestObserver::~MenuManagerTestObserver() = default;

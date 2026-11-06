@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,17 +12,15 @@ namespace {
 DebugStreamData MakeDebugStreamData() {
   NetworkResponseInfo fetch_info;
   fetch_info.status_code = 200;
-  fetch_info.fetch_duration = base::TimeDelta::FromSeconds(4);
-  fetch_info.fetch_time =
-      base::Time::UnixEpoch() + base::TimeDelta::FromMinutes(200);
+  fetch_info.fetch_duration = base::Seconds(4);
+  fetch_info.fetch_time = base::Time::UnixEpoch() + base::Minutes(200);
   fetch_info.bless_nonce = "nonce";
   fetch_info.base_request_url = GURL("https://www.google.com");
 
   NetworkResponseInfo upload_info;
   upload_info.status_code = 200;
-  upload_info.fetch_duration = base::TimeDelta::FromSeconds(2);
-  upload_info.fetch_time =
-      base::Time::UnixEpoch() + base::TimeDelta::FromMinutes(201);
+  upload_info.fetch_duration = base::Seconds(2);
+  upload_info.fetch_time = base::Time::UnixEpoch() + base::Minutes(201);
   upload_info.base_request_url = GURL("https://www.upload.com");
 
   DebugStreamData data;
@@ -37,7 +35,7 @@ DebugStreamData MakeDebugStreamData() {
 TEST(DebugStreamData, CanSerialize) {
   const DebugStreamData test_data = MakeDebugStreamData();
   const auto serialized = SerializeDebugStreamData(test_data);
-  absl::optional<DebugStreamData> result =
+  std::optional<DebugStreamData> result =
       DeserializeDebugStreamData(serialized);
   ASSERT_TRUE(result);
 
@@ -68,10 +66,10 @@ TEST(DebugStreamData, CanSerialize) {
 
 TEST(DebugStreamData, CanSerializeWithoutFetchInfo) {
   DebugStreamData input = MakeDebugStreamData();
-  input.fetch_info = absl::nullopt;
+  input.fetch_info = std::nullopt;
 
   const auto serialized = SerializeDebugStreamData(input);
-  absl::optional<DebugStreamData> result =
+  std::optional<DebugStreamData> result =
       DeserializeDebugStreamData(serialized);
   ASSERT_TRUE(result);
 
@@ -80,10 +78,10 @@ TEST(DebugStreamData, CanSerializeWithoutFetchInfo) {
 
 TEST(DebugStreamData, CanSerializeWithoutUploadInfo) {
   DebugStreamData input = MakeDebugStreamData();
-  input.upload_info = absl::nullopt;
+  input.upload_info = std::nullopt;
 
   const auto serialized = SerializeDebugStreamData(input);
-  absl::optional<DebugStreamData> result =
+  std::optional<DebugStreamData> result =
       DeserializeDebugStreamData(serialized);
   ASSERT_TRUE(result);
 
@@ -91,13 +89,7 @@ TEST(DebugStreamData, CanSerializeWithoutUploadInfo) {
 }
 
 TEST(DebugStreamData, FailsDeserializationGracefully) {
-  ASSERT_EQ(absl::nullopt, DeserializeDebugStreamData({}));
-}
-
-TEST(WebFeedPageInformation, SetUrlStripsFragment) {
-  WebFeedPageInformation info;
-  info.SetUrl(GURL("https://chromium.org#1"));
-  EXPECT_EQ(GURL("https://chromium.org"), info.url());
+  ASSERT_EQ(std::nullopt, DeserializeDebugStreamData({}));
 }
 
 }  // namespace feed

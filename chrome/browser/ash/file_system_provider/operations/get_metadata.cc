@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,19 +9,19 @@
 #include <algorithm>
 #include <memory>
 #include <string>
+#include <tuple>
 #include <utility>
 
-#include "base/macros.h"
-#include "chrome/common/extensions/api/file_system_provider.h"
-#include "chrome/common/extensions/api/file_system_provider_internal.h"
+#include "base/time/time.h"
+#include "chrome/browser/ash/file_system_provider/provided_file_system_interface.h"
+#include "chromeos/ash/experiences/extensions/common/api/file_system_provider.h"
+#include "chromeos/ash/experiences/extensions/common/api/file_system_provider_internal.h"
 
-namespace ash {
-namespace file_system_provider {
-namespace operations {
+namespace ash::file_system_provider::operations {
 namespace {
 
 // Convert |value| into |output|. If parsing fails, then returns false.
-bool ConvertRequestValueToFileInfo(std::unique_ptr<RequestValue> value,
+bool ConvertRequestValueToFileInfo(const RequestValue& value,
                                    int fields,
                                    bool root_entry,
                                    EntryMetadata* output) {
@@ -29,7 +29,7 @@ bool ConvertRequestValueToFileInfo(std::unique_ptr<RequestValue> value,
   using extensions::api::file_system_provider_internal::
       GetMetadataRequestedSuccess::Params;
 
-  const Params* params = value->get_metadata_success_params();
+  const Params* params = value.get_metadata_success_params();
   if (!params)
     return false;
 
@@ -48,29 +48,38 @@ bool ConvertRequestValueToFileInfo(std::unique_ptr<RequestValue> value,
         std::make_unique<int64_t>(static_cast<int64_t>(*params->metadata.size));
 
   if (fields & ProvidedFileSystemInterface::METADATA_FIELD_MODIFICATION_TIME) {
-    std::string input_modification_time;
-    params->metadata.modification_time->additional_properties.GetString(
-        "value", &input_modification_time);
+    const std::string* input_modification_time =
+        params->metadata.modification_time->additional_properties.FindString(
+            "value");
 
-    // Allow to pass invalid modification time, since there is no way to verify
-    // it easily on any earlier stage.
-    base::Time output_modification_time;
-    ignore_result(base::Time::FromString(input_modification_time.c_str(),
-                                         &output_modification_time));
-    output->modification_time =
-        std::make_unique<base::Time>(output_modification_time);
+    if (input_modification_time) {
+      // Allow to pass invalid modification time, since there is no way to
+      // verify it easily on any earlier stage.
+      base::Time output_modification_time;
+      std::ignore = base::Time::FromString(input_modification_time->c_str(),
+                                           &output_modification_time);
+      output->modification_time =
+          std::make_unique<base::Time>(output_modification_time);
+    }
   }
 
   if (fields & ProvidedFileSystemInterface::METADATA_FIELD_MIME_TYPE &&
-      params->metadata.mime_type.get()) {
+      params->metadata.mime_type) {
     output->mime_type =
-        std::make_unique<std::string>(*params->metadata.mime_type.get());
+        std::make_unique<std::string>(*params->metadata.mime_type);
   }
 
   if (fields & ProvidedFileSystemInterface::METADATA_FIELD_THUMBNAIL &&
-      params->metadata.thumbnail.get()) {
+      params->metadata.thumbnail) {
     output->thumbnail =
-        std::make_unique<std::string>(*params->metadata.thumbnail.get());
+        std::make_unique<std::string>(*params->metadata.thumbnail);
+  }
+
+  if (fields & ProvidedFileSystemInterface::METADATA_FIELD_CLOUD_IDENTIFIER &&
+      params->metadata.cloud_identifier) {
+    output->cloud_identifier = std::make_unique<CloudIdentifier>(
+        params->metadata.cloud_identifier->provider_name,
+        params->metadata.cloud_identifier->id);
   }
 
   return true;
@@ -85,26 +94,30 @@ bool ValidateIDLEntryMetadata(
   using extensions::api::file_system_provider::EntryMetadata;
 
   if (fields & ProvidedFileSystemInterface::METADATA_FIELD_IS_DIRECTORY &&
-      !metadata.is_directory.get()) {
+      !metadata.is_directory) {
     return false;
   }
 
   if (fields & ProvidedFileSystemInterface::METADATA_FIELD_NAME &&
-      (!metadata.name.get() || !ValidateName(*metadata.name, root_entry))) {
+      (!metadata.name || !ValidateName(*metadata.name, root_entry))) {
     return false;
   }
 
-  if (fields & ProvidedFileSystemInterface::METADATA_FIELD_SIZE &&
-      !metadata.size.get()) {
-    return false;
+  if (fields & ProvidedFileSystemInterface::METADATA_FIELD_SIZE) {
+    if (!metadata.size) {
+      return false;
+    }
+    if (!base::IsValueInRangeForNumericType<int64_t>(*metadata.size)) {
+      return false;
+    }
   }
 
   if (fields & ProvidedFileSystemInterface::METADATA_FIELD_MODIFICATION_TIME) {
     if (!metadata.modification_time)
       return false;
-    std::string input_modification_time;
-    if (!metadata.modification_time->additional_properties.GetString(
-            "value", &input_modification_time)) {
+    const std::string* input_modification_time =
+        metadata.modification_time->additional_properties.FindString("value");
+    if (!input_modification_time) {
       return false;
     }
   }
@@ -113,20 +126,24 @@ bool ValidateIDLEntryMetadata(
   // accepted. Note, that there is a warning in custom bindings for it.
 
   if (fields & ProvidedFileSystemInterface::METADATA_FIELD_THUMBNAIL &&
-      metadata.thumbnail.get()) {
+      metadata.thumbnail) {
     // Sanity check for the thumbnail format. Note, that another, more
     // granural check is done in custom bindings. Note, this is an extra check
     // only for the security reasons.
     const std::string expected_prefix = "data:";
     std::string thumbnail_prefix =
-        metadata.thumbnail.get()->substr(0, expected_prefix.size());
-    std::transform(thumbnail_prefix.begin(),
-                   thumbnail_prefix.end(),
-                   thumbnail_prefix.begin(),
-                   ::tolower);
+        metadata.thumbnail->substr(0, expected_prefix.size());
+    std::ranges::transform(thumbnail_prefix, thumbnail_prefix.begin(),
+                           ::tolower);
 
     if (expected_prefix != thumbnail_prefix)
       return false;
+  }
+
+  if (fields & ProvidedFileSystemInterface::METADATA_FIELD_CLOUD_IDENTIFIER &&
+      (!metadata.cloud_identifier ||
+       !ValidateCloudIdentifier(*metadata.cloud_identifier))) {
+    return false;
   }
 
   return true;
@@ -138,21 +155,27 @@ bool ValidateName(const std::string& name, bool root_entry) {
   return !name.empty() && name.find('/') == std::string::npos;
 }
 
+bool ValidateCloudIdentifier(
+    const extensions::api::file_system_provider::CloudIdentifier&
+        cloud_identifier) {
+  return !cloud_identifier.provider_name.empty() &&
+         !cloud_identifier.id.empty();
+}
+
 GetMetadata::GetMetadata(
-    extensions::EventRouter* event_router,
+    RequestDispatcher* dispatcher,
     const ProvidedFileSystemInfo& file_system_info,
     const base::FilePath& entry_path,
     ProvidedFileSystemInterface::MetadataFieldMask fields,
     ProvidedFileSystemInterface::GetMetadataCallback callback)
-    : Operation(event_router, file_system_info),
+    : Operation(dispatcher, file_system_info),
       entry_path_(entry_path),
       fields_(fields),
       callback_(std::move(callback)) {
-  DCHECK_NE(0, fields_);
+  CHECK_NE(0, fields_, base::NotFatalUntil::M160);
 }
 
-GetMetadata::~GetMetadata() {
-}
+GetMetadata::~GetMetadata() = default;
 
 bool GetMetadata::Execute(int request_id) {
   using extensions::api::file_system_provider::GetMetadataRequestedOptions;
@@ -171,23 +194,27 @@ bool GetMetadata::Execute(int request_id) {
       fields_ & ProvidedFileSystemInterface::METADATA_FIELD_MIME_TYPE;
   options.thumbnail =
       fields_ & ProvidedFileSystemInterface::METADATA_FIELD_THUMBNAIL;
+  options.cloud_identifier =
+      fields_ & ProvidedFileSystemInterface::METADATA_FIELD_CLOUD_IDENTIFIER;
 
+  auto event_args = base::MakeRefCounted<extensions::EventArgs>(
+      extensions::api::file_system_provider::OnGetMetadataRequested::Create(
+          options));
   return SendEvent(
       request_id,
       extensions::events::FILE_SYSTEM_PROVIDER_ON_GET_METADATA_REQUESTED,
       extensions::api::file_system_provider::OnGetMetadataRequested::kEventName,
-      extensions::api::file_system_provider::OnGetMetadataRequested::Create(
-          options));
+      std::move(event_args));
 }
 
-void GetMetadata::OnSuccess(int /* request_id */,
-                            std::unique_ptr<RequestValue> result,
+void GetMetadata::OnSuccess(/*request_id=*/int,
+                            const RequestValue& result,
                             bool has_more) {
-  DCHECK(callback_);
+  CHECK(callback_, base::NotFatalUntil::M160);
   std::unique_ptr<EntryMetadata> metadata(new EntryMetadata);
   const bool convert_result = ConvertRequestValueToFileInfo(
-      std::move(result), fields_,
-      entry_path_.AsUTF8Unsafe() == FILE_PATH_LITERAL("/"), metadata.get());
+      result, fields_, entry_path_.AsUTF8Unsafe() == FILE_PATH_LITERAL("/"),
+      metadata.get());
 
   if (!convert_result) {
     LOG(ERROR) << "Failed to parse a response for the get metadata operation.";
@@ -198,13 +225,11 @@ void GetMetadata::OnSuccess(int /* request_id */,
   std::move(callback_).Run(std::move(metadata), base::File::FILE_OK);
 }
 
-void GetMetadata::OnError(int /* request_id */,
-                          std::unique_ptr<RequestValue> /* result */,
+void GetMetadata::OnError(/*request_id=*/int,
+                          /*result=*/const RequestValue&,
                           base::File::Error error) {
-  DCHECK(callback_);
+  CHECK(callback_, base::NotFatalUntil::M160);
   std::move(callback_).Run(nullptr, error);
 }
 
-}  // namespace operations
-}  // namespace file_system_provider
-}  // namespace ash
+}  // namespace ash::file_system_provider::operations

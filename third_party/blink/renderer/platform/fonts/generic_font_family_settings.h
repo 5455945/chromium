@@ -31,14 +31,17 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_GENERIC_FONT_FAMILY_SETTINGS_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_GENERIC_FONT_FAMILY_SETTINGS_H_
 
+#include <unicode/uscript.h>
+
+#include <array>
+
+#include "third_party/blink/public/platform/generic_font_family.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string_hash.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
-
-#include <unicode/uscript.h>
 
 namespace blink {
 
@@ -50,78 +53,59 @@ class PLATFORM_EXPORT GenericFontFamilySettings {
 
   explicit GenericFontFamilySettings(const GenericFontFamilySettings&);
 
-  bool UpdateStandard(const AtomicString&, UScriptCode = USCRIPT_COMMON);
-  const AtomicString& Standard(UScriptCode = USCRIPT_COMMON) const;
-
-  bool UpdateFixed(const AtomicString&, UScriptCode = USCRIPT_COMMON);
-  const AtomicString& Fixed(UScriptCode = USCRIPT_COMMON) const;
-
-  bool UpdateSerif(const AtomicString&, UScriptCode = USCRIPT_COMMON);
-  const AtomicString& Serif(UScriptCode = USCRIPT_COMMON) const;
-
-  bool UpdateSansSerif(const AtomicString&, UScriptCode = USCRIPT_COMMON);
-  const AtomicString& SansSerif(UScriptCode = USCRIPT_COMMON) const;
-
-  bool UpdateCursive(const AtomicString&, UScriptCode = USCRIPT_COMMON);
-  const AtomicString& Cursive(UScriptCode = USCRIPT_COMMON) const;
-
-  bool UpdateFantasy(const AtomicString&, UScriptCode = USCRIPT_COMMON);
-  const AtomicString& Fantasy(UScriptCode = USCRIPT_COMMON) const;
-
-  bool UpdatePictograph(const AtomicString&, UScriptCode = USCRIPT_COMMON);
-  const AtomicString& Pictograph(UScriptCode = USCRIPT_COMMON) const;
+  // Returns whether the font family has changed. An empty family removes the
+  // entry for the script.
+  //
+  // crbug.com/40535332. For GenericFontFamily::kFixed, Osaka font should be
+  // represented as "Osaka" in the argument of Update(), and Get() returns
+  // "Osaka-Mono" for it.
+  bool Update(GenericFontFamily,
+              const AtomicString&,
+              UScriptCode = USCRIPT_COMMON);
+  const AtomicString& Get(GenericFontFamily,
+                          UScriptCode = USCRIPT_COMMON) const;
 
   // Only called by InternalSettings to clear font family maps.
   void Reset();
 
   GenericFontFamilySettings& operator=(const GenericFontFamilySettings&);
 
-  // Returns a new instance with String instead of AtomicString objects.
-  // This allows GenericFontFamilySettings to be sent from one thread to
-  // another, since AtomicStrings can't be shared cross-threads.
-  // Before using it, call it MakeAtomic() on the final thread, to bring back
-  // the AtomicStrings.
-  void IsolatedCopyTo(GenericFontFamilySettings& dest) const;
-
-  bool IsIsolated() const { return isolated_copy_.get(); }
-
-  // Transform an IsolatedCopy GenericFontFamilySettings into a regular
-  // GenericFontFamilySettings.
-  void MakeAtomic();
-
  private:
   // UScriptCode uses -1 and 0 for UScriptInvalidCode and UScriptCommon.
   // We need to use -2 and -3 for empty value and deleted value.
-  struct UScriptCodeHashTraits : WTF::GenericHashTraits<int> {
-    STATIC_ONLY(UScriptCodeHashTraits);
-    static const bool kEmptyValueIsZero = false;
-    static int EmptyValue() { return -2; }
-    static void ConstructDeletedValue(int& slot, bool) { slot = -3; }
-    static bool IsDeletedValue(int value) { return value == -3; }
-  };
+  using UScriptCodeHashTraits = IntHashTraits<int, -1, -3>;
 
-  typedef HashMap<int,
-                  AtomicString,
-                  DefaultHash<int>::Hash,
-                  UScriptCodeHashTraits>
-      ScriptFontFamilyMap;
+  using ScriptFontFamilyMap = HashMap<int, AtomicString, UScriptCodeHashTraits>;
 
-  void SetGenericFontFamilyMap(ScriptFontFamilyMap&,
+  // Returns true if the font map was modified.
+  bool SetGenericFontFamilyMap(ScriptFontFamilyMap&,
                                const AtomicString&,
                                UScriptCode);
+
+  // Warning: Calling this method might result in a synchronous IPC call, which
+  // waits until the browser process to load a font and blocks the current
+  // thread.
   const AtomicString& GenericFontFamilyForScript(const ScriptFontFamilyMap&,
                                                  UScriptCode) const;
 
-  ScriptFontFamilyMap standard_font_family_map_;
-  ScriptFontFamilyMap serif_font_family_map_;
-  ScriptFontFamilyMap fixed_font_family_map_;
-  ScriptFontFamilyMap sans_serif_font_family_map_;
-  ScriptFontFamilyMap cursive_font_family_map_;
-  ScriptFontFamilyMap fantasy_font_family_map_;
-  ScriptFontFamilyMap pictograph_font_family_map_;
+  // Returns true if the first available font of `new_family` could be different
+  // from `old_family`.
+  bool ShouldUpdateFontFamily(const AtomicString& old_family,
+                              const AtomicString& new_family) const;
 
-  typedef Vector<std::pair<int, String>> IsolatedCopyVector;
-  std::unique_ptr<IsolatedCopyVector[]> isolated_copy_;
+  ScriptFontFamilyMap& MapFor(GenericFontFamily);
+  const ScriptFontFamilyMap& MapFor(GenericFontFamily) const;
+
+  std::array<ScriptFontFamilyMap,
+             static_cast<size_t>(GenericFontFamily::kMaxValue) + 1>
+      font_family_maps_;
+
+  // For the given font families, caches the first available font. If none of
+  // them is available, the value will be the first font of the given
+  // families. To save memory, the key should contain more than one font, in
+  // the format of ",font1, font2, ...".
+  mutable HashMap<AtomicString, AtomicString>
+      first_available_font_for_families_;
 };
 
 }  // namespace blink

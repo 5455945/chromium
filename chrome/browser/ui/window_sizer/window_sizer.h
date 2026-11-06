@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,17 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "ui/base/mojom/window_show_state.mojom-forward.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/gfx/geometry/rect.h"
 
-class Browser;
+class BrowserWindowInterface;
 
 namespace display {
 class Display;
 class Screen;
-}
+}  // namespace display
 
 ///////////////////////////////////////////////////////////////////////////////
 // WindowSizer
@@ -38,23 +39,31 @@ class WindowSizer {
    public:
     virtual ~StateProvider() = default;
 
-    // Retrieve the persisted bounds of the window. Returns true if there was
-    // persisted data to retrieve state information, false otherwise.
-    // The |show_state| variable will only be touched if there was persisted
-    // data and the |show_state| variable is SHOW_STATE_DEFAULT.
-    virtual bool GetPersistentState(gfx::Rect* bounds,
-                                    gfx::Rect* work_area,
-                                    ui::WindowShowState* show_state) const = 0;
+    // Retrieve the persisted bounds of the window. Returns true if there were
+    // persisted bounds and false otherwise. If this method returns false, none
+    // of the out parameters are touched. If it returns true, |bounds| was
+    // overwritten, and |work_area| may have been overwritten if there was also
+    // a saved work area.  The |show_state| variable will only be touched if
+    // there was persisted data and the |show_state| variable is
+    // WindowShowState::kDefault.
+    virtual bool GetPersistentState(
+        gfx::Rect* bounds,
+        gfx::Rect* work_area,
+        ui::mojom::WindowShowState* show_state) const = 0;
 
     // Retrieve the bounds of the most recent window of the matching type.
     // Returns true if there was a last active window to retrieve state
     // information from, false otherwise.
     // The |show_state| variable will only be touched if we have found a
-    // suitable window and the |show_state| variable is SHOW_STATE_DEFAULT.
+    // suitable window and the |show_state| variable is
+    // WindowShowState::kDefault.
     virtual bool GetLastActiveWindowState(
         gfx::Rect* bounds,
-        ui::WindowShowState* show_state) const = 0;
+        ui::mojom::WindowShowState* show_state) const = 0;
   };
+
+  WindowSizer(const WindowSizer&) = delete;
+  WindowSizer& operator=(const WindowSizer&) = delete;
 
   // Determines the position and size for a window as it is created as well
   // as the initial state. This function uses several strategies to figure out
@@ -68,17 +77,17 @@ class WindowSizer {
   // the window to use.
   static void GetBrowserWindowBoundsAndShowState(
       const gfx::Rect& specified_bounds,
-      const Browser* browser,
+      BrowserWindowInterface* browser,
       gfx::Rect* window_bounds,
-      ui::WindowShowState* show_state);
+      ui::mojom::WindowShowState* show_state);
 
   // As above, but takes a state provider for testing.
   static void GetBrowserWindowBoundsAndShowState(
       std::unique_ptr<StateProvider> state_provider,
       const gfx::Rect& specified_bounds,
-      const Browser* browser,
+      BrowserWindowInterface* browser,
       gfx::Rect* window_bounds,
-      ui::WindowShowState* show_state);
+      ui::mojom::WindowShowState* show_state);
 
   // Returns the default origin for popups of the given size.
   static gfx::Point GetDefaultPopupOrigin(const gfx::Size& size);
@@ -92,33 +101,39 @@ class WindowSizer {
 
  protected:
   const StateProvider* state_provider() const { return state_provider_.get(); }
-  const Browser* browser() const { return browser_; }
+  BrowserWindowInterface* browser() { return browser_; }
+  const BrowserWindowInterface* browser() const { return browser_; }
 
   // WindowSizer will use the platform's display::Screen.
   WindowSizer(std::unique_ptr<StateProvider> state_provider,
-              const Browser* browser);
+              BrowserWindowInterface* browser);
   virtual ~WindowSizer();
 
   // See GetBrowserWindowBoundsAndShowState() above.
   virtual void DetermineWindowBoundsAndShowState(
       const gfx::Rect& specified_bounds,
       gfx::Rect* bounds,
-      ui::WindowShowState* show_state);
+      ui::mojom::WindowShowState* show_state);
+
+  // Adjusts the work area the platform-specific way.
+  virtual void AdjustWorkAreaForPlatform(gfx::Rect& work_area);
 
   // Gets the size and placement of the last active window. Returns true if this
   // data is valid, false if there is no last window and the application should
   // restore saved state from preferences using RestoreWindowPosition.
-  // |show_state| will only be changed if it was set to SHOW_STATE_DEFAULT.
+  // |show_state| will only be changed if it was set to
+  // WindowShowState::kDefault.
   bool GetLastActiveWindowBounds(gfx::Rect* bounds,
-                                 ui::WindowShowState* show_state) const;
+                                 ui::mojom::WindowShowState* show_state) const;
 
   // Gets the size and placement of the last window in the last session, saved
   // in local state preferences. Returns true if local state exists containing
   // this information, false if this information does not exist and a default
   // size should be used.
-  // |show_state| will only be changed if it was set to SHOW_STATE_DEFAULT.
+  // |show_state| will only be changed if it was set to
+  // WindowShowState::kDefault.
   bool GetSavedWindowBounds(gfx::Rect* bounds,
-                            ui::WindowShowState* show_state) const;
+                            ui::mojom::WindowShowState* show_state) const;
 
   // Gets the default window position and size to be shown on
   // |display| if there is no last window and no saved window
@@ -141,7 +156,8 @@ class WindowSizer {
 
   // Determine the default show state for the window - not looking at other
   // windows or at persistent information.
-  static ui::WindowShowState GetWindowDefaultShowState(const Browser* browser);
+  static ui::mojom::WindowShowState GetWindowDefaultShowState(
+      const BrowserWindowInterface* browser);
 
   // Returns the target display for a new window with |bounds| in screen
   // coordinates.
@@ -155,9 +171,7 @@ class WindowSizer {
   std::unique_ptr<StateProvider> state_provider_;
 
   // Note that this browser handle might be NULL.
-  const Browser* const browser_;
-
-  DISALLOW_COPY_AND_ASSIGN(WindowSizer);
+  const raw_ptr<BrowserWindowInterface> browser_;
 };
 
 #endif  // CHROME_BROWSER_UI_WINDOW_SIZER_WINDOW_SIZER_H_

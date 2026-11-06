@@ -1,17 +1,18 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_SPDY_HTTP2_PRIORITY_DEPENDENCIES_H_
 #define NET_SPDY_HTTP2_PRIORITY_DEPENDENCIES_H_
 
+#include <array>
 #include <list>
 #include <map>
 #include <utility>
 #include <vector>
 
 #include "net/base/net_export.h"
-#include "net/third_party/quiche/src/spdy/core/spdy_protocol.h"
+#include "net/third_party/quiche/src/quiche/http2/core/spdy_protocol.h"
 
 namespace net {
 
@@ -57,9 +58,6 @@ class NET_EXPORT_PRIVATE Http2PriorityDependencies {
   std::vector<DependencyUpdate> OnStreamUpdate(spdy::SpdyStreamId id,
                                                spdy::SpdyPriority new_priority);
 
-  // Returns the estimate of dynamically allocated memory in bytes.
-  size_t EstimateMemoryUsage() const;
-
  private:
   // The requirements for the internal data structure for this class are:
   //     a) Constant time insertion of entries at the end of the list,
@@ -72,7 +70,7 @@ class NET_EXPORT_PRIVATE Http2PriorityDependencies {
   using IdList = std::list<std::pair<spdy::SpdyStreamId, spdy::SpdyPriority>>;
   using EntryMap = std::map<spdy::SpdyStreamId, IdList::iterator>;
 
-  IdList id_priority_lists_[spdy::kV3LowestPriority + 1];
+  std::array<IdList, spdy::kV3LowestPriority + 1> id_priority_lists_;
 
   // Tracks the location of an id anywhere in the above vector of lists.
   // Iterators to list elements remain valid until those particular elements

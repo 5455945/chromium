@@ -21,9 +21,10 @@
 
 #include "third_party/blink/renderer/platform/transforms/rotation.h"
 
+#include "base/numerics/angle_conversions.h"
 #include "third_party/blink/renderer/platform/geometry/blend.h"
-#include "third_party/blink/renderer/platform/transforms/transformation_matrix.h"
 #include "ui/gfx/geometry/quaternion.h"
+#include "ui/gfx/geometry/transform.h"
 
 namespace blink {
 
@@ -31,31 +32,27 @@ using gfx::Quaternion;
 
 namespace {
 
-const double kEpsilon = 1e-5;
 const double kAngleEpsilon = 1e-4;
 
 Quaternion ComputeQuaternion(const Rotation& rotation) {
-  return Quaternion::FromAxisAngle(rotation.axis.X(), rotation.axis.Y(),
-                                   rotation.axis.Z(), deg2rad(rotation.angle));
+  return Quaternion::FromAxisAngle(rotation.axis.x(), rotation.axis.y(),
+                                   rotation.axis.z(),
+                                   base::DegToRad(rotation.angle));
 }
 
-FloatPoint3D NormalizeAxis(FloatPoint3D axis) {
-  FloatPoint3D normalized(axis);
-  double length = normalized.length();
-  if (length > kEpsilon) {
-    normalized.Normalize();
-  } else {
-    // Rotation angle is zero so the axis is arbitrary.
-    normalized.Set(0, 0, 1);
-  }
-  return normalized;
+gfx::Vector3dF NormalizeAxis(gfx::Vector3dF axis) {
+  gfx::Vector3dF normalized;
+  if (axis.GetNormalized(&normalized))
+    return normalized;
+  // Rotation angle is zero so the axis is arbitrary.
+  return gfx::Vector3dF(0, 0, 1);
 }
 
 Rotation ComputeRotation(Quaternion q) {
   double cos_half_angle = q.w();
-  double interpolated_angle = rad2deg(2 * std::acos(cos_half_angle));
-  FloatPoint3D interpolated_axis =
-      NormalizeAxis(FloatPoint3D(q.x(), q.y(), q.z()));
+  double interpolated_angle = base::RadToDeg(2 * std::acos(cos_half_angle));
+  gfx::Vector3dF interpolated_axis =
+      NormalizeAxis(gfx::Vector3dF(q.x(), q.y(), q.z()));
   return Rotation(interpolated_axis, interpolated_angle);
 }
 
@@ -63,15 +60,27 @@ Rotation ComputeRotation(Quaternion q) {
 
 bool Rotation::GetCommonAxis(const Rotation& a,
                              const Rotation& b,
-                             FloatPoint3D& result_axis,
+                             gfx::Vector3dF& result_axis,
                              double& result_angle_a,
                              double& result_angle_b) {
-  result_axis = FloatPoint3D(0, 0, 1);
+  result_axis = gfx::Vector3dF(0, 0, 1);
   result_angle_a = 0;
   result_angle_b = 0;
 
-  bool is_zero_a = a.axis.IsZero() || fabs(a.angle) < kAngleEpsilon;
-  bool is_zero_b = b.axis.IsZero() || fabs(b.angle) < kAngleEpsilon;
+  // We have to consider two definitions of "is zero" here, because we
+  // sometimes need to preserve (as an interpolation result) and expose
+  // to web content an axis that is associated with a zero angle.  Thus
+  // we consider having a zero axis stronger than having a zero angle.
+  bool a_has_zero_axis = a.axis.IsZero();
+  bool b_has_zero_axis = b.axis.IsZero();
+  bool is_zero_a, is_zero_b;
+  if (a_has_zero_axis || b_has_zero_axis) {
+    is_zero_a = a_has_zero_axis;
+    is_zero_b = b_has_zero_axis;
+  } else {
+    is_zero_a = fabs(a.angle) < kAngleEpsilon;
+    is_zero_b = fabs(b.angle) < kAngleEpsilon;
+  }
 
   if (is_zero_a && is_zero_b)
     return true;
@@ -88,7 +97,7 @@ bool Rotation::GetCommonAxis(const Rotation& a,
     return true;
   }
 
-  double dot = a.axis.Dot(b.axis);
+  double dot = gfx::DotProduct(a.axis, b.axis);
   if (dot < 0)
     return false;
 
@@ -109,7 +118,7 @@ Rotation Rotation::Slerp(const Rotation& from,
                          double progress) {
   double from_angle;
   double to_angle;
-  FloatPoint3D axis;
+  gfx::Vector3dF axis;
   if (GetCommonAxis(from, to, axis, from_angle, to_angle))
     return Rotation(axis, blink::Blend(from_angle, to_angle, progress));
 
@@ -123,13 +132,36 @@ Rotation Rotation::Slerp(const Rotation& from,
 Rotation Rotation::Add(const Rotation& a, const Rotation& b) {
   double angle_a;
   double angle_b;
-  FloatPoint3D axis;
+  gfx::Vector3dF axis;
   if (GetCommonAxis(a, b, axis, angle_a, angle_b))
     return Rotation(axis, angle_a + angle_b);
 
   Quaternion qa = ComputeQuaternion(a);
   Quaternion qb = ComputeQuaternion(b);
   Quaternion qc = qa * qb;
+  if (qc.w() < 0) {
+    // Choose the equivalent rotation with the smaller angle.
+    qc = qc.flip();
+  }
+
+  return ComputeRotation(qc);
+}
+
+Rotation Rotation::AddN(const Rotation& a, const Rotation& b, int n) {
+  double angle_a;
+  double angle_b;
+  gfx::Vector3dF axis;
+  if (GetCommonAxis(a, b, axis, angle_a, angle_b)) {
+    return Rotation(axis, angle_a + n * angle_b);
+  }
+
+  Quaternion qa = ComputeQuaternion(a);
+  Quaternion qb = ComputeQuaternion(b);
+  // Slerp() interpolates between two quaternions at a given point and supports
+  // extrapolation beyond [0,1], so Slerp(identity, qb, n) gives us the result
+  // of applying rotation b n times.
+  Quaternion qb_n = Quaternion().Slerp(qb, static_cast<double>(n));
+  Quaternion qc = qa * qb_n;
   if (qc.w() < 0) {
     // Choose the equivalent rotation with the smaller angle.
     qc = qc.flip();

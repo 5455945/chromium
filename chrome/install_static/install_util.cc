@@ -1,19 +1,25 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/install_static/install_util.h"
+
+#include <windows.h>
 
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include <algorithm>
-#include <iterator>
+#include <array>
 #include <limits>
 #include <memory>
+#include <ranges>
 #include <sstream>
 
+#include "base/compiler_specific.h"
+#include "base/containers/heap_array.h"
+#include "base/version_info/channel.h"
 #include "build/branding_buildflags.h"
 #include "chrome/chrome_elf/nt_registry/nt_registry.h"
 #include "chrome/install_static/buildflags.h"
@@ -21,8 +27,6 @@
 #include "chrome/install_static/install_modes.h"
 #include "chrome/install_static/policy_path_parser.h"
 #include "chrome/install_static/user_data_dir.h"
-#include "components/nacl/common/buildflags.h"
-#include "components/version_info/channel.h"
 
 namespace install_static {
 
@@ -30,11 +34,6 @@ enum class ProcessType {
   UNINITIALIZED,
   OTHER_PROCESS,
   BROWSER_PROCESS,
-  CLOUD_PRINT_SERVICE_PROCESS,
-#if BUILDFLAG(ENABLE_NACL)
-  NACL_BROKER_PROCESS,
-  NACL_LOADER_PROCESS,
-#endif
   CRASHPAD_HANDLER_PROCESS,
 };
 
@@ -48,9 +47,6 @@ const wchar_t kRegValueChromeStatsSample[] = L"UsageStatsInSample";
 // The constants defined in this file are also defined in chrome/installer and
 // other places. we need to unify them.
 const wchar_t kHeadless[] = L"CHROME_HEADLESS";
-const wchar_t kShowRestart[] = L"CHROME_CRASHED";
-const wchar_t kRestartInfo[] = L"CHROME_RESTART";
-const wchar_t kRtlLocale[] = L"RIGHT_TO_LEFT";
 
 const wchar_t kCrashpadHandler[] = L"crashpad-handler";
 const wchar_t kFallbackHandler[] = L"fallback-handler";
@@ -77,18 +73,8 @@ constexpr wchar_t kChromeChannelStableExplicit[] = L"stable";
 // http://crbug.com/604923
 // These constants are defined in the chrome/installer directory as well. We
 // need to unify them.
-#if BUILDFLAG(USE_GOOGLE_UPDATE_INTEGRATION)
-constexpr wchar_t kRegValueAp[] = L"ap";
-constexpr wchar_t kRegValueName[] = L"name";
-#endif
 constexpr wchar_t kRegValueUsageStats[] = L"usagestats";
 constexpr wchar_t kMetricsReportingEnabled[] = L"MetricsReportingEnabled";
-
-constexpr wchar_t kCloudPrintServiceProcess[] = L"service";
-#if BUILDFLAG(ENABLE_NACL)
-constexpr wchar_t kNaClBrokerProcess[] = L"nacl-broker";
-constexpr wchar_t kNaClLoaderProcess[] = L"nacl-loader";
-#endif
 
 void Trace(const wchar_t* format_string, ...) {
   static const int kMaxLogBufferSize = 1024;
@@ -97,7 +83,7 @@ void Trace(const wchar_t* format_string, ...) {
   va_list args = {};
 
   va_start(args, format_string);
-  vswprintf(buffer, kMaxLogBufferSize, format_string, args);
+  UNSAFE_TODO(vswprintf(buffer, kMaxLogBufferSize, format_string, args));
   OutputDebugStringW(buffer);
   va_end(args);
 }
@@ -142,36 +128,31 @@ bool GetValueFromVersionResource(const char* version_resource,
     return false;
   }
 
-  const size_t array_size = 8;
-  WORD lang_codepage[array_size] = {};
-  size_t i = 0;
-  // Use the language and codepage
-  lang_codepage[i++] = language;
-  lang_codepage[i++] = code_page;
-  // Use the default language and codepage from the resource.
-  lang_codepage[i++] = ::GetUserDefaultLangID();
-  lang_codepage[i++] = code_page;
-  // Use the language from the resource and Latin codepage (most common).
-  lang_codepage[i++] = language;
-  lang_codepage[i++] = 1252;
-  // Use the default language and Latin codepage (most common).
-  lang_codepage[i++] = ::GetUserDefaultLangID();
-  lang_codepage[i++] = 1252;
+  struct LangCodePage {
+    WORD language;
+    WORD code_page;
+  };
+  const WORD default_lang = ::GetUserDefaultLangID();
+  const std::array<LangCodePage, 4> lang_codepages = {{
+      // Use the language and codepage
+      {language, code_page},
+      // Use the default language and codepage from the resource.
+      {default_lang, code_page},
+      // Use the language from the resource and Latin codepage (most common).
+      {language, 1252},
+      // Use the default language and Latin codepage (most common).
+      {default_lang, 1252},
+  }};
 
-  static_assert((array_size % 2) == 0,
-                "Language code page size should be a multiple of 2");
-  assert(array_size == i);
-
-  for (i = 0; i < array_size;) {
-    wchar_t sub_block[MAX_PATH];
-    WORD language = lang_codepage[i++];
-    WORD code_page = lang_codepage[i++];
-    _snwprintf_s(sub_block, MAX_PATH, MAX_PATH,
-                 L"\\StringFileInfo\\%04hx%04hx\\%ls", language, code_page,
-                 name.c_str());
+  for (const auto& [entry_language, entry_code_page] : lang_codepages) {
+    std::array<wchar_t, MAX_PATH> sub_block{};
+    _snwprintf_s(sub_block.data(), sub_block.size(), sub_block.size(),
+                 L"\\StringFileInfo\\%04hx%04hx\\%ls", entry_language,
+                 entry_code_page, name.c_str());
     void* value = nullptr;
     uint32_t size = 0;
-    BOOL r = ::VerQueryValueW(version_resource, sub_block, &value, &size);
+    BOOL r =
+        ::VerQueryValueW(version_resource, sub_block.data(), &value, &size);
     if (r && value) {
       value_str->assign(static_cast<wchar_t*>(value));
       return true;
@@ -185,59 +166,6 @@ bool DirectoryExists(const std::wstring& path) {
   if (file_attributes == INVALID_FILE_ATTRIBUTES)
     return false;
   return (file_attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-}
-
-// Returns true if the |source| string matches the |pattern|. The pattern
-// may contain wildcards like '?' which matches one character or a '*'
-// which matches 0 or more characters.
-// Please note that pattern matches the whole string. If you want to find
-// something in the middle of the string then you need to specify the pattern
-// as '*xyz*'.
-// |source_index| is the index of the current character being matched in
-// |source|.
-// |pattern_index| is the index of the current pattern character in |pattern|
-// which is matched with source.
-bool MatchPatternImpl(const std::wstring& source,
-                      const std::wstring& pattern,
-                      size_t source_index,
-                      size_t pattern_index) {
-  if (source.empty() && pattern.empty())
-    return true;
-
-  if (source_index > source.length() || pattern_index > pattern.length())
-    return false;
-
-  // If we reached the end of both strings, then we are done.
-  if ((source_index == source.length()) &&
-      (pattern_index == pattern.length())) {
-    return true;
-  }
-
-  // If the current character in the pattern is a '*' then make sure that
-  // characters after the pattern are present in the source string. This
-  // assumes that you won't have two consecutive '*' characters in the pattern.
-  if ((pattern[pattern_index] == L'*') &&
-      (pattern_index + 1 < pattern.length()) &&
-      (source_index >= source.length())) {
-    return false;
-  }
-
-  // If the pattern contains wildcard characters '?' or '.' or there is a match
-  // then move ahead in both strings.
-  if ((pattern[pattern_index] == L'?') ||
-      (pattern[pattern_index] == source[source_index])) {
-    return MatchPatternImpl(source, pattern, source_index + 1,
-                            pattern_index + 1);
-  }
-
-  // If we have a '*' then there are two possibilities
-  // 1. We consider current character of source.
-  // 2. We ignore current character of source.
-  if (pattern[pattern_index] == L'*') {
-    return MatchPatternImpl(source, pattern, source_index + 1, pattern_index) ||
-           MatchPatternImpl(source, pattern, source_index, pattern_index + 1);
-  }
-  return false;
 }
 
 // Define specializations for white spaces based on the type of the string.
@@ -276,50 +204,29 @@ std::vector<StringType> TokenizeStringT(
 }
 
 #if BUILDFLAG(USE_GOOGLE_UPDATE_INTEGRATION)
-// Returns Chrome's update channel name based on the contents of the given "ap"
-// value from Chrome's ClientState key.
-std::wstring ChannelFromAdditionalParameters(const InstallConstants& mode,
-                                             const std::wstring& ap_value) {
-  static constexpr wchar_t kChromeChannelBetaPattern[] = L"1?1-*";
-  static constexpr wchar_t kChromeChannelBetaX64Pattern[] = L"*x64-beta*";
-  static constexpr wchar_t kChromeChannelDevPattern[] = L"2?0-d*";
-  static constexpr wchar_t kChromeChannelDevX64Pattern[] = L"*x64-dev*";
-
-  std::wstring value;
-  value.reserve(ap_value.size());
-  std::transform(ap_value.begin(), ap_value.end(), std::back_inserter(value),
-                 ::tolower);
-
-  // Empty channel names or those containing "stable" should be reported as
-  // an empty string.
-  if (value.empty() ||
-      (value.find(kChromeChannelStableExplicit) != std::wstring::npos)) {
-    return std::wstring();
-  }
-  if (MatchPattern(value, kChromeChannelDevPattern) ||
-      MatchPattern(value, kChromeChannelDevX64Pattern)) {
-    return kChromeChannelDev;
-  }
-  if (MatchPattern(value, kChromeChannelBetaPattern) ||
-      MatchPattern(value, kChromeChannelBetaX64Pattern)) {
-    return kChromeChannelBeta;
-  }
-  // Else report values with garbage as stable since they will match the stable
-  // rules in the update configs.
-  return std::wstring();
-}
-
+// Returns true if `channel_test` is a valid name of a Chrome update channel
+// (irrespective of case), or false otherwise. When returning true, `channel` is
+// populated with the canonical channel name and `is_extended_stable` is set to
+// true if `channel_test` identifies the extended stable update channel. The
+// accepted channel names and their canonical names are:
+//
+// channel            inputs            canonical name
+// ---------------------------------------------------
+// extended stable    "extended"        "extended"
+// stable             "" or "stable"    ""
+// beta               "beta"            "beta"
+// dev                "dev"             "dev"
 bool GetChromeChannelNameFromString(const wchar_t* channel_test,
                                     std::wstring& channel,
                                     bool& is_extended_stable) {
-  if (!channel_test)
-    return false;
+  assert(channel_test);
+
   if (!*channel_test ||
       !lstrcmpiW(channel_test, kChromeChannelStableExplicit)) {
-    channel = std::wstring();
+    channel.clear();
     is_extended_stable = false;
   } else if (!lstrcmpiW(channel_test, kChromeChannelExtended)) {
-    channel = std::wstring();
+    channel.clear();
     is_extended_stable = true;
   } else if (!lstrcmpiW(channel_test, kChromeChannelBeta)) {
     channel = kChromeChannelBeta;
@@ -339,14 +246,6 @@ bool GetChromeChannelNameFromString(const wchar_t* channel_test,
 ProcessType GetProcessType(const std::wstring& process_type) {
   if (process_type.empty())
     return ProcessType::BROWSER_PROCESS;
-  if (process_type == kCloudPrintServiceProcess)
-    return ProcessType::CLOUD_PRINT_SERVICE_PROCESS;
-#if BUILDFLAG(ENABLE_NACL)
-  if (process_type == kNaClBrokerProcess)
-    return ProcessType::NACL_BROKER_PROCESS;
-  if (process_type == kNaClLoaderProcess)
-    return ProcessType::NACL_LOADER_PROCESS;
-#endif
   if (process_type == kCrashpadHandler)
     return ProcessType::CRASHPAD_HANDLER_PROCESS;
   return ProcessType::OTHER_PROCESS;
@@ -359,11 +258,6 @@ bool ProcessNeedsProfileDir(ProcessType process_type) {
   // lies on a network share the sandbox will prevent us from accessing it.
   switch (process_type) {
     case ProcessType::BROWSER_PROCESS:
-    case ProcessType::CLOUD_PRINT_SERVICE_PROCESS:
-#if BUILDFLAG(ENABLE_NACL)
-    case ProcessType::NACL_BROKER_PROCESS:
-    case ProcessType::NACL_LOADER_PROCESS:
-#endif
       return true;
     case ProcessType::OTHER_PROCESS:
       return false;
@@ -375,6 +269,27 @@ bool ProcessNeedsProfileDir(ProcessType process_type) {
   }
   assert(false);
   return false;
+}
+
+// Returns the user's temporary directory, or an empty string in case of
+// failure.
+std::wstring GetTempDir() {
+  constexpr DWORD kBufferLength = MAX_PATH + 1U;
+  wchar_t temp_path[kBufferLength];
+  DWORD temp_path_len = ::GetTempPath(kBufferLength, temp_path);
+  if (temp_path_len == 0 || temp_path_len > kBufferLength) {
+    return {};
+  }
+
+  std::wstring temp_dir(temp_path, temp_path_len);
+
+  // Strip the trailing slashes if any to duplicate //base method behavior.
+  while (!temp_dir.empty() &&
+         (temp_dir.back() == '\\' || temp_dir.back() == '/')) {
+    temp_dir.pop_back();
+  }
+
+  return temp_dir;
 }
 
 }  // namespace
@@ -412,8 +327,9 @@ std::wstring GetClientStateMediumKeyPath() {
 std::wstring GetUninstallRegistryPath() {
   std::wstring result(
       L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\");
-  if (*kCompanyPathName)
+  if constexpr (*kCompanyPathName) {
     result.append(kCompanyPathName).append(1, L' ');
+  }
   result.append(kProductPathName, kProductPathNameLength);
   return result.append(InstallDetails::Get().mode().install_suffix);
 }
@@ -430,13 +346,17 @@ const CLSID& GetElevatorClsid() {
   return InstallDetails::Get().elevator_clsid();
 }
 
-const CLSID& GetElevatorIid() {
+const IID& GetElevatorIid() {
   return InstallDetails::Get().elevator_iid();
+}
+
+base::span<const IID> GetOldElevatorIids() {
+  return InstallDetails::Get().old_elevator_iids();
 }
 
 std::wstring GetElevationServiceName() {
   std::wstring name = GetElevationServiceDisplayName();
-  name.erase(std::remove_if(name.begin(), name.end(), isspace), name.end());
+  std::erase_if(name, isspace);
   return name;
 }
 
@@ -444,6 +364,29 @@ std::wstring GetElevationServiceDisplayName() {
   static constexpr wchar_t kElevationServiceDisplayName[] =
       L" Elevation Service";
   return GetBaseAppName() + kElevationServiceDisplayName;
+}
+
+const CLSID& GetTracingServiceClsid() {
+  return InstallDetails::Get().tracing_service_clsid();
+}
+
+const IID& GetTracingServiceIid() {
+  return InstallDetails::Get().tracing_service_iid();
+}
+
+base::span<const IID> GetOldTracingServiceIids() {
+  return InstallDetails::Get().old_tracing_service_iids();
+}
+
+std::wstring GetTracingServiceName() {
+  std::wstring name = GetTracingServiceDisplayName();
+  std::erase_if(name, isspace);
+  return name;
+}
+
+std::wstring GetTracingServiceDisplayName() {
+  static constexpr wchar_t kTracingServiceDisplayName[] = L" Tracing Service";
+  return GetBaseAppName() + kTracingServiceDisplayName;
 }
 
 std::wstring GetBaseAppName() {
@@ -454,12 +397,24 @@ const wchar_t* GetBaseAppId() {
   return InstallDetails::Get().base_app_id();
 }
 
-const wchar_t* GetProgIdPrefix() {
-  return InstallDetails::Get().mode().prog_id_prefix;
+const wchar_t* GetBrowserProgIdPrefix() {
+  return InstallDetails::Get().mode().browser_prog_id_prefix;
 }
 
-const wchar_t* GetProgIdDescription() {
-  return InstallDetails::Get().mode().prog_id_description;
+const wchar_t* GetBrowserProgIdDescription() {
+  return InstallDetails::Get().mode().browser_prog_id_description;
+}
+
+const char* GetDirectLaunchUrlScheme() {
+  return InstallDetails::Get().mode().direct_launch_url_scheme;
+}
+
+const wchar_t* GetPDFProgIdPrefix() {
+  return InstallDetails::Get().mode().pdf_prog_id_prefix;
+}
+
+const wchar_t* GetPDFProgIdDescription() {
+  return InstallDetails::Get().mode().pdf_prog_id_description;
 }
 
 std::wstring GetActiveSetupPath() {
@@ -468,20 +423,20 @@ std::wstring GetActiveSetupPath() {
       .append(InstallDetails::Get().mode().active_setup_guid);
 }
 
-std::wstring GetLegacyCommandExecuteImplClsid() {
-  return InstallDetails::Get().mode().legacy_command_execute_clsid;
-}
-
 bool SupportsSetAsDefaultBrowser() {
   return InstallDetails::Get().mode().supports_set_as_default_browser;
 }
 
-bool SupportsRetentionExperiments() {
-  return InstallDetails::Get().mode().supports_retention_experiments;
+int GetAppIconResourceIndex() {
+  return InstallDetails::Get().mode().app_icon_resource_index;
 }
 
-int GetIconResourceIndex() {
-  return InstallDetails::Get().mode().app_icon_resource_index;
+int GetHTMLIconResourceIndex() {
+  return InstallDetails::Get().mode().html_doc_icon_resource_index;
+}
+
+int GetPDFIconResourceIndex() {
+  return InstallDetails::Get().mode().pdf_doc_icon_resource_index;
 }
 
 const wchar_t* GetSandboxSidPrefix() {
@@ -552,7 +507,7 @@ bool SetCollectStatsInSample(bool in_sample) {
 std::wstring& AppendChromeInstallSubDirectory(const InstallConstants& mode,
                                               bool include_suffix,
                                               std::wstring* path) {
-  if (*kCompanyPathName) {
+  if constexpr (*kCompanyPathName) {
     path->append(kCompanyPathName);
     path->push_back(L'\\');
   }
@@ -587,9 +542,8 @@ bool ReportingIsEnforcedByPolicy(bool* crash_reporting_enabled) {
 
 void InitializeProcessType() {
   assert(g_process_type == ProcessType::UNINITIALIZED);
-  std::wstring process_type =
-      GetSwitchValueFromCommandLine(::GetCommandLine(), kProcessType);
-  g_process_type = GetProcessType(process_type);
+  g_process_type = GetProcessType(
+      GetCommandLineSwitchValue(::GetCommandLine(), kProcessType));
 }
 
 bool IsProcessTypeInitialized() {
@@ -613,9 +567,11 @@ bool ProcessNeedsProfileDir(const std::string& process_type) {
 std::wstring GetCrashDumpLocation() {
   // In order to be able to start crash handling very early and in chrome_elf,
   // we cannot rely on chrome's PathService entries (for DIR_CRASH_DUMPS) being
-  // available on Windows. See https://crbug.com/564398.
+  // available on Windows. See https://crbug.com/40447216.
   std::wstring user_data_dir;
-  bool ret = GetUserDataDirectory(&user_data_dir, nullptr);
+  bool ret = GetUserDataDirectory(&user_data_dir,
+                                  /*invalid_user_data_directory=*/nullptr,
+                                  /*policy_set=*/nullptr);
   assert(ret);
   IgnoreUnused(ret);
   return user_data_dir.append(L"\\Crashpad");
@@ -674,18 +630,18 @@ void GetExecutableVersionDetails(const std::wstring& exe_path,
   DWORD dummy = 0;
   DWORD length = ::GetFileVersionInfoSize(exe_path.c_str(), &dummy);
   if (length) {
-    std::unique_ptr<char[]> data(new char[length]);
-    if (::GetFileVersionInfo(exe_path.c_str(), dummy, length, data.get())) {
-      GetValueFromVersionResource(data.get(), L"ProductVersion", version);
+    auto data = base::HeapArray<char>::Uninit(length);
+    if (::GetFileVersionInfo(exe_path.c_str(), dummy, length, data.data())) {
+      GetValueFromVersionResource(data.data(), L"ProductVersion", version);
 
       std::wstring official_build;
-      GetValueFromVersionResource(data.get(), L"Official Build",
+      GetValueFromVersionResource(data.data(), L"Official Build",
                                   &official_build);
       if (official_build != L"1")
         version->append(L"-devel");
-      GetValueFromVersionResource(data.get(), L"ProductShortName",
+      GetValueFromVersionResource(data.data(), L"ProductShortName",
                                   product_name);
-      GetValueFromVersionResource(data.get(), L"SpecialBuild", special_build);
+      GetValueFromVersionResource(data.data(), L"SpecialBuild", special_build);
     }
   }
   *channel_name = GetChromeChannelName(/*with_extended_stable=*/true);
@@ -722,14 +678,9 @@ bool IsExtendedStableChannel() {
   return InstallDetails::Get().is_extended_stable_channel();
 }
 
-bool MatchPattern(const std::wstring& source, const std::wstring& pattern) {
-  assert(pattern.find(L"**") == std::wstring::npos);
-  return MatchPatternImpl(source, pattern, 0, 0);
-}
-
 std::string WideToUTF8(const std::wstring& source) {
   if (source.empty() ||
-      static_cast<int>(source.size()) > std::numeric_limits<int>::max()) {
+      source.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
     return std::string();
   }
   int size = ::WideCharToMultiByte(CP_UTF8, 0, &source[0],
@@ -747,7 +698,7 @@ std::string WideToUTF8(const std::wstring& source) {
 
 std::wstring UTF8ToWide(const std::string& source) {
   if (source.empty() ||
-      static_cast<int>(source.size()) > std::numeric_limits<int>::max()) {
+      source.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
     return std::wstring();
   }
   int size = ::MultiByteToWideChar(CP_UTF8, 0, &source[0],
@@ -808,24 +759,25 @@ std::vector<std::wstring> TokenizeCommandLineToArray(
   // on its first character.
   size_t argv0_length = 0;
   if (p[0] == L'"') {
-    const wchar_t* closing = wcschr(++p, L'"');
+    const wchar_t* closing = UNSAFE_TODO(wcschr(++p, L'"'));
     if (!closing)
       argv0_length = command_line.size() - 1;  // Skip the opening quote.
     else
-      argv0_length = closing - (command_line.c_str() + 1);
+      argv0_length = UNSAFE_TODO(closing - (command_line.c_str() + 1));
   } else {
-    argv0_length = wcscspn(p, kSpaceTab);
+    argv0_length = UNSAFE_TODO(wcscspn(p, kSpaceTab));
   }
   result.emplace_back(p, argv0_length);
-  if (p[argv0_length] == 0)
+  if (UNSAFE_TODO(p[argv0_length]) == 0) {
     return result;
-  p += argv0_length + 1;
+  }
+  UNSAFE_TODO(p += argv0_length + 1);
 
   std::wstring token;
   // This loops the entire string, with a subloop for each argument.
   for (;;) {
     // Advance past leading whitespace (only space and tab are handled).
-    p += wcsspn(p, kSpaceTab);
+    UNSAFE_TODO(p += wcsspn(p, kSpaceTab));
 
     // End of arguments.
     if (p[0] == 0)
@@ -837,8 +789,8 @@ std::vector<std::wstring> TokenizeCommandLineToArray(
     for (;;) {
       // Count and advance past collections of backslashes, which have special
       // meaning when followed by a double quote.
-      int num_backslashes = wcsspn(p, L"\\");
-      p += num_backslashes;
+      int num_backslashes = UNSAFE_TODO(wcsspn(p, L"\\"));
+      UNSAFE_TODO(p += num_backslashes);
 
       if (p[0] == L'"') {
         // Emit a backslash for each pair of backslashes found. A non-paired
@@ -849,11 +801,12 @@ std::vector<std::wstring> TokenizeCommandLineToArray(
           // An odd number of backslashes followed by a quote is treated as
           // pairs of protected backslashes, followed by the protected quote.
           token += L'"';
-        } else if (p[1] == L'"' && state == SpecialChars::kIgnore) {
+        } else if (UNSAFE_TODO(p[1]) == L'"' &&
+                   state == SpecialChars::kIgnore) {
           // Special case for consecutive double quotes within a quoted string:
           // emit one for the pair, and switch back to interpreting special
           // characters.
-          ++p;
+          UNSAFE_TODO(++p);
           token += L'"';
           state = SpecialChars::kInterpret;
         } else {
@@ -863,8 +816,8 @@ std::vector<std::wstring> TokenizeCommandLineToArray(
       } else {
         // Emit backslashes that do not precede a quote verbatim.
         token.append(num_backslashes, L'\\');
-        if (p[0] == 0 ||
-            (state == SpecialChars::kInterpret && wcschr(kSpaceTab, p[0]))) {
+        if (p[0] == 0 || (state == SpecialChars::kInterpret &&
+                          UNSAFE_TODO(wcschr(kSpaceTab, p[0])))) {
           result.push_back(token);
           token.clear();
           break;
@@ -873,29 +826,45 @@ std::vector<std::wstring> TokenizeCommandLineToArray(
         token += *p;
       }
 
-      ++p;
+      UNSAFE_TODO(++p);
     }
   }
 
   return result;
 }
 
-std::wstring GetSwitchValueFromCommandLine(const std::wstring& command_line,
-                                           const std::wstring& switch_name) {
-  static constexpr wchar_t kSwitchTerminator[] = L"--";
+std::optional<std::wstring> GetCommandLineSwitch(
+    const std::wstring& command_line,
+    std::wstring_view switch_name) {
   assert(!command_line.empty());
   assert(!switch_name.empty());
 
-  std::vector<std::wstring> as_array = TokenizeCommandLineToArray(command_line);
-  std::wstring switch_with_equal = L"--" + switch_name + L"=";
-  auto end = std::find(as_array.cbegin(), as_array.cend(), kSwitchTerminator);
-  for (auto scan = as_array.cbegin(); scan != end; ++scan) {
-    const std::wstring& arg = *scan;
-    if (arg.compare(0, switch_with_equal.size(), switch_with_equal) == 0)
-      return arg.substr(switch_with_equal.size());
+  std::vector<std::wstring> switches = TokenizeCommandLineToArray(command_line);
+
+  // Stop scanning if lone '--' switch prefix is found.
+  auto cend = std::ranges::find(switches, L"--");
+
+  std::wstring switch_with_prefix = L"--" + std::wstring(switch_name);
+  for (auto it = switches.cbegin(); it != cend; ++it) {
+    if (it->starts_with(switch_with_prefix)) {
+      if (it->length() == switch_with_prefix.length()) {
+        return std::wstring();
+      }
+      if ((*it)[switch_with_prefix.length()] == L'=') {
+        return it->substr(switch_with_prefix.length() + 1);
+      }
+    }
   }
 
-  return std::wstring();
+  return std::nullopt;
+}
+
+std::wstring GetCommandLineSwitchValue(const std::wstring& command_line,
+                                       std::wstring_view switch_name) {
+  assert(!command_line.empty());
+  assert(!switch_name.empty());
+  return GetCommandLineSwitch(command_line, switch_name)
+      .value_or(std::wstring());
 }
 
 bool RecursiveDirectoryCreate(const std::wstring& full_path) {
@@ -943,6 +912,45 @@ bool RecursiveDirectoryCreate(const std::wstring& full_path) {
   return true;
 }
 
+std::wstring CreateUniqueTempDirectory(std::wstring_view prefix) {
+  std::wstring temp_dir = GetTempDir();
+  if (temp_dir.empty()) {
+    Trace(L"Failed to retrieve temporary directory");
+    return {};
+  }
+
+  // The following code uses std::to_wstring() which is banned in Chrome,
+  // however, since the //base alternative is not available here, we use it as
+  // the last resort. Please DO NOT copy/paste this code outside install_static!
+  temp_dir.push_back(L'\\');
+  temp_dir.append(prefix);
+  temp_dir.append(kProductPathName, kProductPathNameLength);
+  temp_dir.append(std::to_wstring(::GetCurrentProcessId()));
+  temp_dir.append(std::to_wstring(::GetTickCount()));
+  size_t temp_dir_length = temp_dir.length();
+
+  // Try to create a new temporary directory. If the one exists, keep trying
+  // adding a randomized suffix to the path until we reach some limit.
+  for (int count = 0; count < 50; ++count) {
+    if (::CreateDirectory(temp_dir.c_str(), /*lpSecurityAttributes*/ nullptr)) {
+      return temp_dir;
+    }
+
+    // Seed the rand() once.
+    [[maybe_unused]] static bool once = []() {
+      srand(::GetTickCount());
+      return true;
+    }();
+
+    temp_dir.erase(temp_dir_length);
+    temp_dir.append(std::to_wstring(rand()));
+  }
+
+  Trace(L"Failed to create unique temporary directory %ls", temp_dir.c_str());
+
+  return {};
+}
+
 // This function takes these inputs rather than accessing the module's
 // InstallDetails instance since it is used to bootstrap InstallDetails.
 DetermineChannelResult DetermineChannel(const InstallConstants& mode,
@@ -953,47 +961,41 @@ DetermineChannelResult DetermineChannel(const InstallConstants& mode,
 #if !BUILDFLAG(USE_GOOGLE_UPDATE_INTEGRATION)
   return {std::wstring(), ChannelOrigin::kInstallMode,
           /*is_extended_stable=*/false};
-#else
-  // Read the "ap" value and cache it if requested.
-  std::wstring client_state(GetClientStateKeyPath(mode.app_guid));
-  std::wstring ap_value;
-  // An empty |ap_value| is used in case of error.
-  nt::QueryRegValueSZ(system_level ? nt::HKLM : nt::HKCU, nt::WOW6432,
-                      client_state.c_str(), kRegValueAp, &ap_value);
-  if (update_ap)
-    *update_ap = ap_value;
+#else   // !BUILDFLAG(USE_GOOGLE_UPDATE_INTEGRATION)
+  // Cache the "ap" value if requested.
+  if (update_ap &&
+      !nt::QueryRegValueSZ(system_level ? nt::HKLM : nt::HKCU, nt::WOW6432,
+                           GetClientStateKeyPath(mode.app_guid).c_str(), L"ap",
+                           update_ap)) {
+    update_ap->erase();
+  }
 
   // Cache the cohort name if requested.
-  if (update_cohort_name) {
-    nt::QueryRegValueSZ(system_level ? nt::HKLM : nt::HKCU, nt::WOW6432,
-                        client_state.append(L"\\cohort").c_str(), kRegValueName,
-                        update_cohort_name);
+  if (update_cohort_name &&
+      !nt::QueryRegValueSZ(
+          system_level ? nt::HKLM : nt::HKCU, nt::WOW6432,
+          GetClientStateKeyPath(mode.app_guid).append(L"\\cohort").c_str(),
+          L"name", update_cohort_name)) {
+    update_cohort_name->erase();
   }
 
   switch (mode.channel_strategy) {
-    case ChannelStrategy::UNSUPPORTED:
-      assert(false);
-      break;
-    case ChannelStrategy::ADDITIONAL_PARAMETERS: {
-      std::wstring channel_override_value;
+    case ChannelStrategy::FLOATING: {
+      std::wstring channel_from_override;
       bool is_extended_stable = false;
       if (channel_override &&
           GetChromeChannelNameFromString(
-              channel_override, channel_override_value, is_extended_stable)) {
-        return {std::move(channel_override_value), ChannelOrigin::kPolicy,
+              channel_override, channel_from_override, is_extended_stable)) {
+        return {std::move(channel_from_override), ChannelOrigin::kPolicy,
                 is_extended_stable};
       }
-      return {ChannelFromAdditionalParameters(mode, ap_value),
-              ChannelOrigin::kAdditionalParameters,
-              /*is_extended_stable=*/false};
+      [[fallthrough]];  // Return the default channel name for the mode.
     }
     case ChannelStrategy::FIXED:
       return {mode.default_channel_name, ChannelOrigin::kInstallMode,
               /*is_extended_stable=*/false};
   }
-  return {std::wstring(), ChannelOrigin::kInstallMode,
-          /*is_extended_stable=*/false};
-#endif
+#endif  // !BUILDFLAG(USE_GOOGLE_UPDATE_INTEGRATION)
 }
 
 }  // namespace install_static

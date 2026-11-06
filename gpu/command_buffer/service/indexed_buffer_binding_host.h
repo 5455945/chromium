@@ -1,4 +1,4 @@
-// Copyright (c) 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -50,6 +50,8 @@ class GPU_GLES2_EXPORT IndexedBufferBindingHost
 
   void SetIsBound(bool bound);
 
+  virtual bool AttachedBuffersAreLocked() const;
+
   Buffer* GetBufferBinding(GLuint index) const;
   // Returns |size| set by glBindBufferRange; 0 if set by glBindBufferBase.
   GLsizeiptr GetBufferSize(GLuint index) const;
@@ -71,6 +73,8 @@ class GPU_GLES2_EXPORT IndexedBufferBindingHost
   friend class base::RefCounted<IndexedBufferBindingHost>;
 
   virtual ~IndexedBufferBindingHost();
+
+  void ForceUnbindBuffers();
 
   // Whether this object is currently bound into the context.
   bool is_bound_;

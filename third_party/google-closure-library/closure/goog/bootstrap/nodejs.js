@@ -48,6 +48,9 @@ var vm = require('vm');
  */
 global.goog = {};
 
+/** The runtime nodejs bootstrap relies on the Debug Loader being enabled. */
+global.CLOSURE_UNCOMPILED_DEFINES = global.CLOSURE_UNCOMPILED_DEFINES || {};
+global.CLOSURE_UNCOMPILED_DEFINES['goog.ENABLE_DEBUG_LOADER'] = true;
 
 /**
  * Imports a script using Node's require() API.
@@ -98,7 +101,6 @@ nodeGlobalRequire(path.resolve(__dirname, '..', 'base.js'));
  * This is strictly for cases where normal require() won't work,
  * because the file declares global symbols with 'var' that need to
  * be added to the global scope.
- * @suppress {missingProvide}
  *
  * @param {string} file The path to the file.
  */

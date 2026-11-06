@@ -1,24 +1,33 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+import {SourcesTestRunner} from 'sources_test_runner';
+import {SDKTestRunner} from 'sdk_test_runner';
+
+import * as Bindings from 'devtools/models/bindings/bindings.js';
+import * as SDK from 'devtools/core/sdk/sdk.js';
+import * as Sources from 'devtools/panels/sources/sources.js';
+import * as UI from 'devtools/ui/legacy/legacy.js';
+import * as Workspace from 'devtools/models/workspace/workspace.js';
+import * as Main from 'devtools/entrypoints/main/main.js';
+
 (async function() {
   TestRunner.addResult(`Tests scripts panel file selectors.\n`);
-  await TestRunner.loadModule('sources'); await TestRunner.loadTestModule('sources_test_runner');
-  await TestRunner.loadTestModule('sdk_test_runner');
   await TestRunner.showPanel('sources');
   await TestRunner.addIframe(
       'resources/post-message-listener.html', {name: 'childframe'});
 
-  Bindings.debuggerWorkspaceBinding._resetForTest(TestRunner.mainTarget);
-  Bindings.resourceMapping._resetForTest(TestRunner.mainTarget);
+  Bindings.DebuggerWorkspaceBinding.DebuggerWorkspaceBinding.instance().resetForTest(TestRunner.mainTarget);
+  Bindings.DebuggerWorkspaceBinding.DebuggerWorkspaceBinding.instance().resourceMapping.resetForTest(TestRunner.mainTarget);
 
   var subframe = TestRunner.mainFrame().childFrames[0];
 
-  var sourcesNavigatorView = new Sources.NetworkNavigatorView();
-  sourcesNavigatorView.show(UI.inspectorView.element);
-  var contentScriptsNavigatorView = new Sources.ContentScriptsNavigatorView();
-  contentScriptsNavigatorView.show(UI.inspectorView.element);
+  var sourcesNavigatorView = new Sources.SourcesNavigator.NetworkNavigatorView(Main.MainImpl.MainImpl.universeForTest.networkProjectManager);
+  sourcesNavigatorView.show(UI.InspectorView.InspectorView.instance().element);
+  var contentScriptsNavigatorView = new Sources.SourcesNavigator.ContentScriptsNavigatorView(Main.MainImpl.MainImpl.universeForTest.networkProjectManager);
+  contentScriptsNavigatorView.show(UI.InspectorView.InspectorView.instance().element);
 
   var uiSourceCodes = [];
   async function addUISourceCode(url, isContentScript, frame) {
@@ -45,14 +54,14 @@
   function waitForUISourceCodeAdded(url) {
     var fulfill;
     var promise = new Promise(x => fulfill = x);
-    Workspace.workspace.addEventListener(
+    Workspace.Workspace.WorkspaceImpl.instance().addEventListener(
         Workspace.Workspace.Events.UISourceCodeAdded, uiSourceCodeAdded);
     return promise;
 
     function uiSourceCodeAdded(event) {
       if (event.data.url() !== url)
         return;
-      Workspace.workspace.removeEventListener(
+      Workspace.Workspace.WorkspaceImpl.instance().removeEventListener(
           Workspace.Workspace.Events.UISourceCodeAdded, uiSourceCodeAdded);
       fulfill(event.data);
     }
@@ -63,7 +72,7 @@
     contentScriptsNavigatorView.revealUISourceCode(uiSourceCode);
   }
 
-  var rootURL = 'http://localhost:8080/LayoutTests/inspector/debugger/';
+  var rootURL = TestRunner.url('LayoutTests/inspector/debugger/');
 
   TestRunner.addResult('\n\n================================================');
   TestRunner.addResult('Adding first resource:');
@@ -93,19 +102,16 @@
   await addUISourceCode(rootURL + 'foo/bar/contentScript2.js?a=1', true);
   await addUISourceCode(rootURL + 'foo/bar/contentScript.js?a=2', true);
   await addUISourceCode(rootURL + 'foo/bar/contentScript.js?a=1', true);
-  await addUISourceCode('http://example.com/', false);
-  await addUISourceCode('http://example.com/?a=b', false);
+  await addUISourceCode(TestRunner.url(''), false);
+  await addUISourceCode(TestRunner.url('?a=b'), false);
   await addUISourceCode(
-      'http://example.com/the%2fdir/foo?bar=100&baz=a%20%2fb', false);
+      TestRunner.url('the%2fdir/foo?bar=100&baz=a%20%2fb'), false);
   // Verify that adding invalid URL does not throw exception.
   await addUISourceCode(
-      'http://example.com/the%2fdir/foo?bar=100%&baz=a%20%2fb', false);
+      TestRunner.url('the%2fdir/foo?bar=100%&baz=a%20%2fb'), false);
   await addUISourceCode(
-      'http://example.com/path%20with%20spaces/white%20space.html', false);
-  await addUISourceCode('?a=b', false);
-  await addUISourceCode(
-      'very_looooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooong_url',
-      false);
+      TestRunner.url('path%20with%20spaces/white%20space.html'), false);
+
   SourcesTestRunner.dumpNavigatorViewInAllModes(sourcesNavigatorView);
   SourcesTestRunner.dumpNavigatorViewInAllModes(contentScriptsNavigatorView);
 
@@ -119,7 +125,7 @@
   TestRunner.addResult('\n\n================================================');
   TestRunner.addResult(
       'Adding some resources to change the way debugger folder looks like, first:');
-  var rootURL2 = 'http://localhost:8080/LayoutTests/inspector/debugger2/';
+  var rootURL2 = TestRunner.url('LayoutTests/inspector/debugger2/');
   await addUISourceCode(rootURL2 + 'foo/bar/script.js', false);
   SourcesTestRunner.dumpNavigatorViewInAllModes(sourcesNavigatorView);
 
@@ -135,7 +141,7 @@
   SourcesTestRunner.dumpNavigatorViewInAllModes(sourcesNavigatorView);
 
   TestRunner.addResult('\n\n================================================');
-  var rootURL3 = 'http://localhost:8080/LayoutTests/inspector/debugger3/';
+  var rootURL3 = TestRunner.url('LayoutTests/inspector/debugger3/');
   await addUISourceCode(
       rootURL3 + 'hasOwnProperty/__proto__/constructor/foo.js', false);
   await addUISourceCode(rootURL3 + 'hasOwnProperty/__proto__/foo.js', false);
@@ -151,9 +157,9 @@
 
   TestRunner.addResult('\n\n================================================');
   TestRunner.addResult('Removing all resources:');
-  for (const target of SDK.targetManager.targets()) {
+  for (const target of SDK.TargetManager.TargetManager.instance().targets()) {
     if (target !== TestRunner.mainTarget)
-      Bindings.debuggerWorkspaceBinding._resetForTest(target);
+      Bindings.DebuggerWorkspaceBinding.DebuggerWorkspaceBinding.instance().resetForTest(target);
   }
   SourcesTestRunner.dumpNavigatorViewInAllModes(sourcesNavigatorView);
   SourcesTestRunner.dumpNavigatorViewInAllModes(contentScriptsNavigatorView);

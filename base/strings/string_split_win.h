@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,40 +6,61 @@
 #define BASE_STRINGS_STRING_SPLIT_WIN_H_
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/base_export.h"
 #include "base/compiler_specific.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 
 namespace base {
 
+namespace internal {
+
+template <>
+inline constexpr std::wstring_view WhitespaceForType<wchar_t>() {
+  return kWhitespaceWide;
+}
+
+}  // namespace internal
+
 // The following section contains overloads of the cross-platform APIs for
-// std::wstring and base::WStringPiece.
-BASE_EXPORT std::vector<std::wstring> SplitString(WStringPiece input,
-                                                  WStringPiece separators,
-                                                  WhitespaceHandling whitespace,
-                                                  SplitResult result_type)
-    WARN_UNUSED_RESULT;
-
-BASE_EXPORT std::vector<WStringPiece> SplitStringPiece(
-    WStringPiece input,
-    WStringPiece separators,
+// std::wstring and std::wstring_view.
+[[nodiscard]] BASE_EXPORT constexpr std::vector<std::wstring> SplitString(
+    std::wstring_view input,
+    std::wstring_view separators,
     WhitespaceHandling whitespace,
-    SplitResult result_type) WARN_UNUSED_RESULT;
+    SplitResult result_type) {
+  return internal::SplitStringT<std::wstring>(input, separators, whitespace,
+                                              result_type);
+}
 
-BASE_EXPORT std::vector<std::wstring> SplitStringUsingSubstr(
-    WStringPiece input,
-    WStringPiece delimiter,
-    WhitespaceHandling whitespace,
-    SplitResult result_type) WARN_UNUSED_RESULT;
+[[nodiscard]] BASE_EXPORT constexpr std::vector<std::wstring_view>
+SplitStringPiece(std::wstring_view input LIFETIME_BOUND,
+                 std::wstring_view separators,
+                 WhitespaceHandling whitespace,
+                 SplitResult result_type) {
+  return internal::SplitStringT<std::wstring_view>(input, separators,
+                                                   whitespace, result_type);
+}
 
-BASE_EXPORT std::vector<WStringPiece> SplitStringPieceUsingSubstr(
-    WStringPiece input,
-    WStringPiece delimiter,
-    WhitespaceHandling whitespace,
-    SplitResult result_type) WARN_UNUSED_RESULT;
+[[nodiscard]] BASE_EXPORT constexpr std::vector<std::wstring>
+SplitStringUsingSubstr(std::wstring_view input,
+                       std::wstring_view delimiter,
+                       WhitespaceHandling whitespace,
+                       SplitResult result_type) {
+  return internal::SplitStringUsingSubstrT<std::wstring>(
+      input, delimiter, whitespace, result_type);
+}
+
+[[nodiscard]] BASE_EXPORT constexpr std::vector<std::wstring_view>
+SplitStringPieceUsingSubstr(std::wstring_view input LIFETIME_BOUND,
+                            std::wstring_view delimiter,
+                            WhitespaceHandling whitespace,
+                            SplitResult result_type) {
+  return internal::SplitStringUsingSubstrT<std::wstring_view>(
+      input, delimiter, whitespace, result_type);
+}
 
 }  // namespace base
 

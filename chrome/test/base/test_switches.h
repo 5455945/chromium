@@ -1,12 +1,9 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_TEST_BASE_TEST_SWITCHES_H_
 #define CHROME_TEST_BASE_TEST_SWITCHES_H_
-
-#include "build/build_config.h"
-#include "ppapi/buildflags/buildflags.h"
 
 namespace switches {
 
@@ -16,11 +13,9 @@ extern const char kAlsoEmitSuccessLogs[];
 
 extern const char kDevtoolsCodeCoverage[];
 
-extern const char kPerfTestPrintUmaMeans[];
+extern const char kDisableOmniboxPopupOnDemandCreation[];
 
-#if defined(OS_WIN)
-extern const char kEnableHighDpiSupport[];
-#endif
+extern const char kPerfTestPrintUmaMeans[];
 
 }  // namespace switches
 

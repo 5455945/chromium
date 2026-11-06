@@ -1,11 +1,10 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.browserservices.permissiondelegation;
 
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -16,64 +15,79 @@ import static org.robolectric.Shadows.shadowOf;
 
 import android.content.ComponentName;
 import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
-import android.content.pm.ResolveInfo;
 
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TestRule;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.RuntimeEnvironment;
-import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowPackageManager;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.browserservices.TrustedWebActivityClient;
-import org.chromium.chrome.test.util.browser.Features;
+import org.chromium.chrome.browser.webapps.WebappRegistry;
+import org.chromium.components.content_settings.ContentSetting;
 import org.chromium.components.content_settings.ContentSettingsType;
 import org.chromium.components.embedder_support.util.Origin;
+import org.chromium.components.permissions.PermissionsAndroidFeatureList;
 
-/**
- * Tests for {@link NotificationPermissionUpdater}.
- */
+/** Tests for {@link NotificationPermissionUpdater}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
+@EnableFeatures(PermissionsAndroidFeatureList.APPROXIMATE_GEOLOCATION_PERMISSION)
 public class NotificationPermissionUpdaterTest {
     private static final Origin ORIGIN = Origin.create("https://www.website.com");
+    private static final String URL = "https://www.website.com";
     private static final String PACKAGE_NAME = "com.package.name";
+    private static final String APP_LABEL = "name";
     private static final String OTHER_PACKAGE_NAME = "com.other.package.name";
 
-    @Rule
-    public TestRule mProcessor = new Features.JUnitProcessor();
-
-    @Mock public TrustedWebActivityPermissionManager mPermissionManager;
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock public TrustedWebActivityClient mTrustedWebActivityClient;
+    @Mock public InstalledWebappPermissionStore mStore;
 
-    private NotificationPermissionUpdater mNotificationPermissionUpdater;
     private ShadowPackageManager mShadowPackageManager;
 
-    private boolean mNotificationsEnabled;
+    @ContentSetting private int mNotificationPermission;
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
-
-        PackageManager pm = RuntimeEnvironment.application.getPackageManager();
+        PackageManager pm = RuntimeEnvironment.getApplication().getPackageManager();
         mShadowPackageManager = shadowOf(pm);
-        mNotificationPermissionUpdater =
-                new NotificationPermissionUpdater(mPermissionManager, mTrustedWebActivityClient);
+        mShadowPackageManager.installPackage(generateTestPackageInfo(PACKAGE_NAME));
+        mShadowPackageManager.installPackage(generateTestPackageInfo(OTHER_PACKAGE_NAME));
+        WebappRegistry.getInstance().setPermissionStoreForTesting(mStore);
+        TrustedWebActivityClient.setInstanceForTesting(mTrustedWebActivityClient);
 
         installBrowsableIntentHandler(ORIGIN, PACKAGE_NAME);
+    }
+
+    private PackageInfo generateTestPackageInfo(String packageName) {
+        ApplicationInfo appInfo = new ApplicationInfo();
+        appInfo.flags = ApplicationInfo.FLAG_INSTALLED;
+        appInfo.packageName = packageName;
+        appInfo.sourceDir = "/";
+        appInfo.name = APP_LABEL;
+
+        PackageInfo packageInfo = new PackageInfo();
+        packageInfo.packageName = packageName;
+        packageInfo.applicationInfo = appInfo;
+        packageInfo.versionCode = 1;
+        return packageInfo;
     }
 
     @Test
     @Feature("TrustedWebActivities")
     public void doesntRegister_whenClientDoesntHaveService() {
-        mNotificationPermissionUpdater.onOriginVerified(ORIGIN, PACKAGE_NAME);
+        NotificationPermissionUpdater.onOriginVerified(ORIGIN, URL, PACKAGE_NAME);
 
         verifyPermissionNotUpdated();
     }
@@ -82,62 +96,61 @@ public class NotificationPermissionUpdaterTest {
     @Feature("TrustedWebActivities")
     public void disablesNotifications_whenClientNotificationsAreDisabled() {
         installTrustedWebActivityService(ORIGIN, PACKAGE_NAME);
-        setNotificationsEnabledForClient(false);
+        setNotificationPermission(ContentSetting.BLOCK);
 
-        mNotificationPermissionUpdater.onOriginVerified(ORIGIN, PACKAGE_NAME);
+        NotificationPermissionUpdater.onOriginVerified(ORIGIN, URL, PACKAGE_NAME);
 
-        verifyPermissionUpdated(false);
+        verifyPermissionUpdated(ContentSetting.BLOCK);
     }
 
     @Test
     @Feature("TrustedWebActivities")
     public void enablesNotifications_whenClientNotificationsAreEnabled() {
         installTrustedWebActivityService(ORIGIN, PACKAGE_NAME);
-        setNotificationsEnabledForClient(true);
+        setNotificationPermission(ContentSetting.ALLOW);
 
-        mNotificationPermissionUpdater.onOriginVerified(ORIGIN, PACKAGE_NAME);
+        NotificationPermissionUpdater.onOriginVerified(ORIGIN, URL, PACKAGE_NAME);
 
-        verifyPermissionUpdated(true);
+        verifyPermissionUpdated(ContentSetting.ALLOW);
     }
 
     @Test
     @Feature("TrustedWebActivities")
     public void updatesPermission_onSubsequentCalls() {
-
         installTrustedWebActivityService(ORIGIN, PACKAGE_NAME);
-        setNotificationsEnabledForClient(true);
-        mNotificationPermissionUpdater.onOriginVerified(ORIGIN, PACKAGE_NAME);
-        verifyPermissionUpdated(true);
+        setNotificationPermission(ContentSetting.ALLOW);
+        NotificationPermissionUpdater.onOriginVerified(ORIGIN, URL, PACKAGE_NAME);
+        verifyPermissionUpdated(ContentSetting.ALLOW);
 
-        setNotificationsEnabledForClient(false);
-        mNotificationPermissionUpdater.onOriginVerified(ORIGIN, PACKAGE_NAME);
-        verifyPermissionUpdated(false);
+        setNotificationPermission(ContentSetting.BLOCK);
+        NotificationPermissionUpdater.onOriginVerified(ORIGIN, URL, PACKAGE_NAME);
+        verifyPermissionUpdated(ContentSetting.BLOCK);
     }
 
     @Test
     @Feature("TrustedWebActivities")
     public void updatesPermission_onNewClient() {
         installTrustedWebActivityService(ORIGIN, PACKAGE_NAME);
-        setNotificationsEnabledForClient(true);
-        mNotificationPermissionUpdater.onOriginVerified(ORIGIN, PACKAGE_NAME);
-        verifyPermissionUpdated(true);
+        setNotificationPermission(ContentSetting.ALLOW);
+        NotificationPermissionUpdater.onOriginVerified(ORIGIN, URL, PACKAGE_NAME);
+        verifyPermissionUpdated(ContentSetting.ALLOW);
 
         installTrustedWebActivityService(ORIGIN, OTHER_PACKAGE_NAME);
-        setNotificationsEnabledForClient(false);
-        mNotificationPermissionUpdater.onOriginVerified(ORIGIN, OTHER_PACKAGE_NAME);
-        verifyPermissionUpdated(OTHER_PACKAGE_NAME, false);
+        setNotificationPermission(ContentSetting.BLOCK);
+        NotificationPermissionUpdater.onOriginVerified(ORIGIN, URL, OTHER_PACKAGE_NAME);
+        verifyPermissionUpdated(OTHER_PACKAGE_NAME, ContentSetting.BLOCK);
     }
 
     @Test
     @Feature("TrustedWebActivities")
     public void unregisters_onClientUninstall() {
         installTrustedWebActivityService(ORIGIN, PACKAGE_NAME);
-        setNotificationsEnabledForClient(true);
+        setNotificationPermission(ContentSetting.ALLOW);
 
-        mNotificationPermissionUpdater.onOriginVerified(ORIGIN, PACKAGE_NAME);
+        NotificationPermissionUpdater.onOriginVerified(ORIGIN, URL, PACKAGE_NAME);
 
         uninstallTrustedWebActivityService(ORIGIN);
-        mNotificationPermissionUpdater.onClientAppUninstalled(ORIGIN);
+        NotificationPermissionUpdater.onClientAppUninstalled(ORIGIN);
 
         verifyPermissionUnregistered();
     }
@@ -145,83 +158,93 @@ public class NotificationPermissionUpdaterTest {
     @Test
     @Feature("TrustedWebActivities")
     public void doesntUnregister_whenOtherClientsRemain() {
-
         installTrustedWebActivityService(ORIGIN, PACKAGE_NAME);
-        setNotificationsEnabledForClient(true);
+        setNotificationPermission(ContentSetting.ALLOW);
 
-        mNotificationPermissionUpdater.onOriginVerified(ORIGIN, PACKAGE_NAME);
-        verifyPermissionUpdated(true);
+        NotificationPermissionUpdater.onOriginVerified(ORIGIN, URL, PACKAGE_NAME);
+        verifyPermissionUpdated(ContentSetting.ALLOW);
 
         // Since we haven't called uninstallTrustedWebActivityService, the Updater sees that
         // notifications can still be handled by other apps. We don't unregister, but we do update
         // to the permission to that of the other app.
-        setNotificationsEnabledForClient(false);
-        mNotificationPermissionUpdater.onClientAppUninstalled(ORIGIN);
+        setNotificationPermission(ContentSetting.BLOCK);
+        NotificationPermissionUpdater.onClientAppUninstalled(ORIGIN);
         verifyPermissionNotUnregistered();
-        verifyPermissionUpdated(false);
+        verifyPermissionUpdated(ContentSetting.BLOCK);
 
         uninstallTrustedWebActivityService(ORIGIN);
-        mNotificationPermissionUpdater.onClientAppUninstalled(ORIGIN);
+        NotificationPermissionUpdater.onClientAppUninstalled(ORIGIN);
         verifyPermissionUnregistered();
     }
 
     /** "Installs" the given package to handle intents for that origin. */
     private void installBrowsableIntentHandler(Origin origin, String packageName) {
-        Intent intent = new Intent();
-        intent.setPackage(packageName);
-        intent.setData(origin.uri());
-        intent.setAction(Intent.ACTION_VIEW);
-        intent.addCategory(Intent.CATEGORY_BROWSABLE);
+        ComponentName activity = new ComponentName(packageName, "FakeActivity");
+        mShadowPackageManager.addActivityIfNotPresent(activity);
 
-        mShadowPackageManager.addResolveInfoForIntent(intent, new ResolveInfo());
+        IntentFilter filter = new IntentFilter(Intent.ACTION_VIEW);
+        filter.addCategory(Intent.CATEGORY_BROWSABLE);
+        filter.addCategory(Intent.CATEGORY_DEFAULT);
+        filter.addDataScheme(origin.uri().getScheme());
+        filter.addDataAuthority(origin.uri().getHost(), null);
+        mShadowPackageManager.addIntentFilterForActivity(activity, filter);
     }
 
     /** "Installs" a Trusted Web Activity Service for the origin. */
     @SuppressWarnings("unchecked")
     private void installTrustedWebActivityService(Origin origin, String packageName) {
-        doAnswer(invocation -> {
-            TrustedWebActivityClient.PermissionCheckCallback callback =
-                    invocation.getArgument(1);
-            callback.onPermissionCheck(
-                    new ComponentName(packageName, "FakeClass"),
-                    mNotificationsEnabled);
-            return true;
-        }).when(mTrustedWebActivityClient).checkNotificationPermission(eq(origin), any());
+        doAnswer(
+                        invocation -> {
+                            TrustedWebActivityClient.PermissionCallback callback =
+                                    invocation.getArgument(1);
+                            callback.onPermission(
+                                    new ComponentName(packageName, "FakeClass"),
+                                    mNotificationPermission);
+                            return true;
+                        })
+                .when(mTrustedWebActivityClient)
+                .checkNotificationPermission(eq(origin.toString()), any());
     }
 
-    private void setNotificationsEnabledForClient(boolean enabled) {
-        mNotificationsEnabled = enabled;
+    private void setNotificationPermission(@ContentSetting int permission) {
+        mNotificationPermission = permission;
     }
 
     private void uninstallTrustedWebActivityService(Origin origin) {
-        doAnswer(invocation -> {
-            TrustedWebActivityClient.PermissionCheckCallback callback =
-                    invocation.getArgument(1);
-            callback.onNoTwaFound();
-            return true;
-        }).when(mTrustedWebActivityClient).checkNotificationPermission(eq(origin), any());
+        doAnswer(
+                        invocation -> {
+                            TrustedWebActivityClient.PermissionCallback callback =
+                                    invocation.getArgument(1);
+                            callback.onNoTwaFound();
+                            return true;
+                        })
+                .when(mTrustedWebActivityClient)
+                .checkNotificationPermission(eq(origin.toString()), any());
     }
 
     private void verifyPermissionNotUpdated() {
-        verify(mPermissionManager, never())
-                .updatePermission(any(), anyString(), anyInt(), anyBoolean());
+        verify(mStore, never()).setStateForOrigin(any(), anyString(), any(), anyInt(), anyInt());
     }
 
-    private void verifyPermissionUpdated(boolean enabled) {
-        verifyPermissionUpdated(PACKAGE_NAME, enabled);
+    private void verifyPermissionUpdated(@ContentSetting int permission) {
+        verifyPermissionUpdated(PACKAGE_NAME, permission);
     }
 
-    private void verifyPermissionUpdated(String packageName, boolean enabled) {
-        verify(mPermissionManager)
-                .updatePermission(eq(ORIGIN), eq(packageName),
-                        eq(ContentSettingsType.NOTIFICATIONS), eq(enabled));
+    private void verifyPermissionUpdated(String packageName, @ContentSetting int permission) {
+        verify(mStore)
+                .setStateForOrigin(
+                        eq(ORIGIN),
+                        eq(packageName),
+                        eq(APP_LABEL),
+                        eq(ContentSettingsType.NOTIFICATIONS),
+                        eq(permission));
     }
 
     private void verifyPermissionUnregistered() {
-        verify(mPermissionManager).unregister(eq(ORIGIN));
+        verify(mStore).removeOrigin(eq(ORIGIN));
     }
 
     private void verifyPermissionNotUnregistered() {
-        verify(mPermissionManager, never()).unregister(eq(ORIGIN));
+        verify(mStore, never()).removeOrigin(eq(ORIGIN));
     }
 }

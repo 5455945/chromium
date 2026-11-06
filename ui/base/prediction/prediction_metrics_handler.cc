@@ -1,18 +1,56 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <utility>
-
 #include "ui/base/prediction/prediction_metrics_handler.h"
 
-#include "base/metrics/histogram_functions.h"
+#include <string_view>
+#include <utility>
+
+#include "base/metrics/dummy_histogram.h"
+#include "base/metrics/histogram.h"
 #include "base/strings/strcat.h"
 
 namespace ui {
+namespace {
+base::HistogramBase& GetHistogram(std::string_view name,
+                                  std::string_view suffix,
+                                  bool should_report = true) {
+  if (!should_report) {
+    return *base::DummyHistogram::GetInstance();
+  }
+  return *base::Histogram::FactoryGet(
+      base::StrCat({name, ".", suffix}), 1, 1000, 50,
+      base::HistogramBase::kUmaTargetedHistogramFlag);
+}
+}  // namespace
 
-PredictionMetricsHandler::PredictionMetricsHandler(std::string histogram_name)
-    : histogram_name_(std::move(histogram_name)) {}
+PredictionMetricsHandler::PredictionMetricsHandler(std::string histogram_name,
+                                                   bool report_score_metrics)
+    : histogram_name_(std::move(histogram_name)),
+      report_score_metrics_(report_score_metrics),
+      over_prediction_histogram_(GetHistogram(histogram_name_,
+                                              "OverPrediction",
+                                              report_score_metrics)),
+      under_prediction_histogram_(GetHistogram(histogram_name_,
+                                               "UnderPrediction",
+                                               report_score_metrics)),
+      prediction_score_histogram_(GetHistogram(histogram_name_,
+                                               "PredictionScore",
+                                               report_score_metrics)),
+      frame_over_prediction_histogram_(GetHistogram(histogram_name_,
+                                                    "FrameOverPrediction",
+                                                    report_score_metrics)),
+      frame_under_prediction_histogram_(GetHistogram(histogram_name_,
+                                                     "FrameUnderPrediction",
+                                                     report_score_metrics)),
+      frame_prediction_score_histogram_(GetHistogram(histogram_name_,
+                                                     "FramePredictionScore",
+                                                     report_score_metrics)),
+      prediction_jitter_histogram_(
+          GetHistogram(histogram_name_, "PredictionJitter")),
+      visual_jitter_histogram_(GetHistogram(histogram_name_, "VisualJitter")) {}
+
 PredictionMetricsHandler::~PredictionMetricsHandler() = default;
 
 void PredictionMetricsHandler::AddRealEvent(const gfx::PointF& pos,
@@ -28,6 +66,19 @@ void PredictionMetricsHandler::AddRealEvent(const gfx::PointF& pos,
   // but it has a timestamp earlier than 3, so a DCHECK would fail. Early out
   // here will not impact correctness since 2 already exists in |events_queue_|.
   if (!events_queue_.empty() && time_stamp <= events_queue_.back().time_stamp) {
+    // There can be situations where the metadata does not arrive in time for
+    // the vsync. Rather than skipping drawing for that frame, the metadata is
+    // kept and the trail is drawn from the metadata point to the latest
+    // point in the trail. However, the metadata and points relatively near it
+    // can be cleared from events_queue_ during ComputeMetrics(). Therefore the
+    // following DCHECK is hit when the older points are re-added as real
+    // events. Since those points are not relevant to the front of the trail,
+    // where the prediction happens, they can safely be exempt from the
+    // following DCHECK. Only points that are at or later than the front of the
+    // events_queue_ need to be verified.
+    if (time_stamp < events_queue_.front().time_stamp)
+      return;
+
     // Confirm that the above assertion is true, and that timestamp 2 (from
     // the above example) exists in |events_queue_|.
     bool event_exists = false;
@@ -35,7 +86,7 @@ void PredictionMetricsHandler::AddRealEvent(const gfx::PointF& pos,
       if (events_queue_[i].time_stamp == time_stamp)
         event_exists = true;
     }
-    DCHECK(event_exists);
+    CHECK(event_exists, base::NotFatalUntil::M163);
     return;
   }
 
@@ -54,7 +105,14 @@ void PredictionMetricsHandler::AddPredictedEvent(
     const base::TimeTicks& time_stamp,
     const base::TimeTicks& frame_time,
     bool scrolling) {
-  DCHECK(!events_queue_.empty());
+  // A prediction can be generated synthetically before any real events have
+  // been processed. In this case, the metrics handler has no ground truth to
+  // compare against, so we must return early to avoid a crash from accessing an
+  // empty queue.
+  if (events_queue_.empty()) {
+    return;
+  }
+
   // If the predicted event is prior to the first real event, ignore it as we
   // don't have enough data for interpolation.
   if (time_stamp < events_queue_.front().time_stamp)
@@ -110,7 +168,7 @@ void PredictionMetricsHandler::EvaluatePrediction() {
 void PredictionMetricsHandler::Reset() {
   events_queue_.clear();
   predicted_events_queue_.clear();
-  last_predicted_ = absl::nullopt;
+  last_predicted_ = std::nullopt;
 }
 
 int PredictionMetricsHandler::GetInterpolatedEventForPredictedEvent(
@@ -153,40 +211,30 @@ void PredictionMetricsHandler::ComputeMetrics() {
   for (int i = 0; i < first_needed_event - 1; i++)
     events_queue_.pop_front();
 
-  double score = ComputeOverUnderPredictionMetric();
-  if (score >= 0) {
-    base::UmaHistogramCounts1000(
-        base::StrCat({histogram_name_, ".OverPrediction"}), score);
-  } else {
-    base::UmaHistogramCounts1000(
-        base::StrCat({histogram_name_, ".UnderPrediction"}), -score);
-  }
-  base::UmaHistogramCounts1000(
-      base::StrCat({histogram_name_, ".PredictionScore"}), std::abs(score));
+  if (report_score_metrics_) {
+    double score = ComputeOverUnderPredictionMetric();
+    if (score >= 0) {
+      over_prediction_histogram_->Add(score);
+    } else {
+      under_prediction_histogram_->Add(-score);
+    }
+    prediction_score_histogram_->Add(std::abs(score));
 
-  double frame_score = ComputeFrameOverUnderPredictionMetric();
-  if (frame_score >= 0) {
-    base::UmaHistogramCounts1000(
-        base::StrCat({histogram_name_, ".FrameOverPrediction"}), frame_score);
-  } else {
-    base::UmaHistogramCounts1000(
-        base::StrCat({histogram_name_, ".FrameUnderPrediction"}), -frame_score);
+    double frame_score = ComputeFrameOverUnderPredictionMetric();
+    if (frame_score >= 0) {
+      frame_over_prediction_histogram_->Add(frame_score);
+    } else {
+      frame_under_prediction_histogram_->Add(-frame_score);
+    }
+    frame_prediction_score_histogram_->Add(std::abs(frame_score));
   }
-  base::UmaHistogramCounts1000(
-      base::StrCat({histogram_name_, ".FramePredictionScore"}),
-      std::abs(frame_score));
 
-  // Need |last_predicted_| to compute WrongDirection and Jitter metrics.
+  // Need |last_predicted_| to compute Jitter metrics.
   if (!last_predicted_.has_value())
     return;
 
-  base::UmaHistogramBoolean(base::StrCat({histogram_name_, ".WrongDirection"}),
-                            ComputeWrongDirectionMetric());
-  base::UmaHistogramCounts1000(
-      base::StrCat({histogram_name_, ".PredictionJitter"}),
-      ComputePredictionJitterMetric());
-  base::UmaHistogramCounts1000(base::StrCat({histogram_name_, ".VisualJitter"}),
-                               ComputeVisualJitterMetric());
+  prediction_jitter_histogram_->Add(ComputePredictionJitterMetric());
+  visual_jitter_histogram_->Add(ComputeVisualJitterMetric());
 }
 
 double PredictionMetricsHandler::ComputeOverUnderPredictionMetric() const {
@@ -208,13 +256,6 @@ double PredictionMetricsHandler::ComputeFrameOverUnderPredictionMetric() const {
     return relative_direction.Length();
   else
     return -relative_direction.Length();
-}
-
-bool PredictionMetricsHandler::ComputeWrongDirectionMetric() {
-  gfx::Vector2dF real_direction = next_real_ - interpolated_;
-  gfx::Vector2dF predicted_direction =
-      predicted_events_queue_.front().pos - last_predicted_.value();
-  return gfx::DotProduct(real_direction, predicted_direction) < 0;
 }
 
 double PredictionMetricsHandler::ComputePredictionJitterMetric() {

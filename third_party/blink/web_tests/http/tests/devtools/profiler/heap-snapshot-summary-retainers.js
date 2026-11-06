@@ -1,6 +1,11 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+import {TestRunner} from 'test_runner';
+import {HeapProfilerTestRunner} from 'heap_profiler_test_runner';
+
+import * as ProfilerModule from 'devtools/panels/profiler/profiler.js';
 
 (async function() {
   TestRunner.addResult(`Tests retainers view.
@@ -8,8 +13,7 @@
     - When an object has just one retainer it must be expanded automatically until
       there's an object having two or more retainers.
     - Test the expansion of a long retainment chain is limited by a certain level.\n`);
-  await TestRunner.loadTestModule('heap_profiler_test_runner');
-  await TestRunner.showPanel('heap_profiler');
+  await TestRunner.showPanel('heap-profiler');
 
   var instanceCount = 25;
   function createHeapSnapshot() {
@@ -97,19 +101,19 @@
 
       function step4(retainersRoot) {
         retainersRoot.dataGrid.addEventListener(
-            Profiler.HeapSnapshotRetainmentDataGridEvents.ExpandRetainersComplete, step5.bind(this, retainersRoot));
+            ProfilerModule.HeapSnapshotDataGrids.HeapSnapshotRetainmentDataGridEvents.ExpandRetainersComplete, step5.bind(this, retainersRoot));
       }
 
       function step5(retainersRoot) {
         var l3 = retainersRoot;
         TestRunner.assertEquals(1, l3.children.length, 'One retainer of L3');
         var l2 = l3.children[0];
-        TestRunner.assertEquals('y', l2._referenceName);
+        TestRunner.assertEquals('y', l2.referenceName);
         TestRunner.assertEquals(1, l2.children.length, 'One retainer of L2');
         var l1 = l2.children[0];
-        TestRunner.assertEquals('x', l1._referenceName);
+        TestRunner.assertEquals('x', l1.referenceName);
         TestRunner.assertEquals(2, l1.children.length, 'Two retainers of L1');
-        var l1retainers = [l1.children[0]._referenceName, l1.children[1]._referenceName];
+        var l1retainers = [l1.children[0].referenceName, l1.children[1].referenceName];
         l1retainers.sort();
         TestRunner.assertEquals('l1a', l1retainers[0]);
         TestRunner.assertEquals('l1b', l1retainers[1]);
@@ -168,7 +172,7 @@
 
       function step4(retainersRoot) {
         retainersRoot.dataGrid.addEventListener(
-            Profiler.HeapSnapshotRetainmentDataGridEvents.ExpandRetainersComplete, step5.bind(this, retainersRoot));
+            ProfilerModule.HeapSnapshotDataGrids.HeapSnapshotRetainmentDataGridEvents.ExpandRetainersComplete, step5.bind(this, retainersRoot));
       }
 
       function step5(retainersRoot) {

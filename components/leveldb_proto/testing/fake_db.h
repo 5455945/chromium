@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,18 +11,19 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/check.h"
 #include "base/files/file_path.h"
-#include "base/task/post_task.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/notreached.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/test/test_simple_task_runner.h"
 #include "components/leveldb_proto/internal/proto_database_impl.h"
 #include "components/leveldb_proto/public/proto_database.h"
 #include "components/leveldb_proto/public/shared_proto_database_client_list.h"
 
-namespace leveldb_proto {
-namespace test {
+namespace leveldb_proto::test {
 
 template <typename P, typename T = P>
 class FakeDB : public ProtoDatabaseImpl<P, T> {
@@ -74,6 +75,11 @@ class FakeDB : public ProtoDatabaseImpl<P, T> {
       const std::string& end,
       typename Callbacks::Internal<T>::LoadKeysAndEntriesCallback callback)
       override;
+  void LoadKeysAndEntriesWhile(
+      const std::string& start,
+      const leveldb_proto::KeyIteratorController& controller,
+      typename Callbacks::Internal<T>::LoadKeysAndEntriesCallback callback)
+      override;
   void LoadKeys(Callbacks::LoadKeysCallback callback) override;
   void GetEntry(const std::string& key,
                 typename Callbacks::Internal<T>::GetCallback callback) override;
@@ -97,6 +103,13 @@ class FakeDB : public ProtoDatabaseImpl<P, T> {
 
   static base::FilePath DirectoryForTestDB();
 
+  // These methods allow enqueueing the results for upcoming Get* or Update*
+  // calls in advance. When a Get* or Update* call is issued, if there is a
+  // queued result available, the receiving FakeDB instance will immediately
+  // post an async task to complete that call with the next queued result.
+  void QueueGetResult(bool result) { queued_get_results_.push(result); }
+  void QueueUpdateResult(bool result) { queued_update_results_.push(result); }
+
  private:
   void InvokingInvalidCallback(const std::string& callback_name);
   static void RunLoadCallback(
@@ -119,7 +132,7 @@ class FakeDB : public ProtoDatabaseImpl<P, T> {
       bool success);
 
   base::FilePath dir_;
-  EntryMap* db_;
+  raw_ptr<EntryMap> db_;
 
   Callback init_callback_;
   Callbacks::InitStatusCallback init_status_callback_;
@@ -128,41 +141,30 @@ class FakeDB : public ProtoDatabaseImpl<P, T> {
   Callback get_callback_;
   Callback update_callback_;
   Callback destroy_callback_;
+
+  std::queue<bool> queued_get_results_;
+  std::queue<bool> queued_update_results_;
 };
 
 namespace {
 
-template <typename P,
-          typename T,
-          std::enable_if_t<std::is_base_of<google::protobuf::MessageLite,
-                                           T>::value>* = nullptr>
+template <typename P, typename T>
 void DataToProtoWrap(T* data, P* proto) {
-  proto->Swap(data);
+  if constexpr (std::is_base_of_v<google::protobuf::MessageLite, T>) {
+    proto->Swap(data);
+  } else {
+    DataToProto(data, proto);
+  }
 }
 
-template <typename P,
-          typename T,
-          std::enable_if_t<!std::is_base_of<google::protobuf::MessageLite,
-                                            T>::value>* = nullptr>
-void DataToProtoWrap(T* data, P* proto) {
-  DataToProto(data, proto);
-}
-
-template <typename P,
-          typename T,
-          std::enable_if_t<std::is_base_of<google::protobuf::MessageLite,
-                                           T>::value>* = nullptr>
+template <typename P, typename T>
 void ProtoToDataWrap(const P& proto, T* data) {
-  *data = proto;
-}
-
-template <typename P,
-          typename T,
-          std::enable_if_t<!std::is_base_of<google::protobuf::MessageLite,
-                                            T>::value>* = nullptr>
-void ProtoToDataWrap(const P& proto, T* data) {
-  P copy = proto;
-  ProtoToData(&copy, data);
+  if constexpr (std::is_base_of_v<google::protobuf::MessageLite, T>) {
+    *data = proto;
+  } else {
+    P copy = proto;
+    ProtoToData(&copy, data);
+  }
 }
 
 }  // namespace
@@ -200,6 +202,14 @@ void FakeDB<P, T>::UpdateEntries(
     db_->erase(key);
 
   update_callback_ = std::move(callback);
+
+  if (!queued_update_results_.empty()) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(&FakeDB<P, T>::UpdateCallback, base::Unretained(this),
+                       queued_update_results_.front()));
+    queued_update_results_.pop();
+  }
 }
 
 template <typename P, typename T>
@@ -219,6 +229,14 @@ void FakeDB<P, T>::UpdateEntriesWithRemoveFilter(
     DataToProtoWrap(&pair.second, &(*db_)[pair.first]);
 
   update_callback_ = std::move(callback);
+
+  if (!queued_update_results_.empty()) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(&FakeDB<P, T>::UpdateCallback, base::Unretained(this),
+                       queued_update_results_.front()));
+    queued_update_results_.pop();
+  }
 }
 
 template <typename P, typename T>
@@ -303,6 +321,27 @@ void FakeDB<P, T>::LoadKeysAndEntriesInRange(
 }
 
 template <typename P, typename T>
+void FakeDB<P, T>::LoadKeysAndEntriesWhile(
+    const std::string& start,
+    const leveldb_proto::KeyIteratorController& controller,
+    typename Callbacks::Internal<T>::LoadKeysAndEntriesCallback callback) {
+  auto keys_entries = std::make_unique<std::map<std::string, T>>();
+  for (const auto& pair : *db_) {
+    if (pair.first < start)
+      continue;
+    const Enums::KeyIteratorAction action = controller.Run(pair.first);
+    if (action == Enums::kLoadAndContinue || action == Enums::kLoadAndStop) {
+      ProtoToDataWrap<P, T>(pair.second, &(*keys_entries)[pair.first]);
+    }
+    if (action == Enums::kSkipAndStop || action == Enums::kLoadAndStop)
+      break;
+  }
+
+  load_callback_ = base::BindOnce(RunLoadKeysAndEntriesCallback,
+                                  std::move(callback), std::move(keys_entries));
+}
+
+template <typename P, typename T>
 void FakeDB<P, T>::LoadKeys(Callbacks::LoadKeysCallback callback) {
   std::unique_ptr<std::vector<std::string>> keys(
       new std::vector<std::string>());
@@ -326,6 +365,14 @@ void FakeDB<P, T>::GetEntry(
 
   get_callback_ =
       base::BindOnce(RunGetCallback, std::move(callback), std::move(entry));
+
+  if (!queued_get_results_.empty()) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(&FakeDB<P, T>::GetCallback, base::Unretained(this),
+                       queued_get_results_.front()));
+    queued_get_results_.pop();
+  }
 }
 
 template <typename P, typename T>
@@ -406,7 +453,7 @@ void FakeDB<P, T>::InvokingInvalidCallback(const std::string& callback_name) {
   if (destroy_callback_)
     present_callbacks += " DestroyCallback";
 
-  CHECK(false) << "Test tried to invoke FakeDB " << callback_name
+  NOTREACHED() << "Test tried to invoke FakeDB " << callback_name
                << ", but this callback is not present. Did you mean to invoke "
                   "one of the present callbacks: ("
                << present_callbacks << ")?";
@@ -454,7 +501,6 @@ base::FilePath FakeDB<P, T>::DirectoryForTestDB() {
   return base::FilePath(FILE_PATH_LITERAL("/fake/path"));
 }
 
-}  // namespace test
-}  // namespace leveldb_proto
+}  // namespace leveldb_proto::test
 
 #endif  // COMPONENTS_LEVELDB_PROTO_TESTING_FAKE_DB_H_

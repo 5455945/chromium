@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,11 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
 #include <string>
 
-#include "base/compiler_specific.h"
 #include "base/component_export.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "mojo/public/cpp/bindings/lib/bindings_internal.h"
 
 static const int kMaxRecursionDepth = 200;
@@ -56,6 +56,9 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS_BASE) ValidationContext {
                     const char* description,
                     ValidatorType validator_type);
 
+  ValidationContext(const ValidationContext&) = delete;
+  ValidationContext& operator=(const ValidationContext&) = delete;
+
   ~ValidationContext();
 
   // Claims the specified memory range.
@@ -67,8 +70,9 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS_BASE) ValidationContext {
     uintptr_t begin = reinterpret_cast<uintptr_t>(position);
     uintptr_t end = begin + num_bytes;
 
-    if (!InternalIsValidRange(begin, end))
+    if (!InternalIsValidRange(begin, end)) {
       return false;
+    }
 
     data_begin_ = end;
     return true;
@@ -81,11 +85,13 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS_BASE) ValidationContext {
   // case, the valid range is shinked to begin right after the claimed handle.
   bool ClaimHandle(const Handle_Data& encoded_handle) {
     uint32_t index = encoded_handle.value;
-    if (index == kEncodedInvalidHandleValue)
+    if (index == kEncodedInvalidHandleValue) {
       return true;
+    }
 
-    if (index < handle_begin_ || index >= handle_end_)
+    if (index < handle_begin_ || index >= handle_end_) {
       return false;
+    }
 
     // |index| + 1 shouldn't overflow, because |index| is not the max value of
     // uint32_t (it is less than |handle_end_|).
@@ -102,12 +108,14 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS_BASE) ValidationContext {
   bool ClaimAssociatedEndpointHandle(
       const AssociatedEndpointHandle_Data& encoded_handle) {
     uint32_t index = encoded_handle.value;
-    if (index == kEncodedInvalidHandleValue)
+    if (index == kEncodedInvalidHandleValue) {
       return true;
+    }
 
     if (index < associated_endpoint_handle_begin_ ||
-        index >= associated_endpoint_handle_end_)
+        index >= associated_endpoint_handle_end_) {
       return false;
+    }
 
     // |index| + 1 shouldn't overflow, because |index| is not the max value of
     // uint32_t (it is less than |associated_endpoint_handle_end_|).
@@ -134,16 +142,19 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS_BASE) ValidationContext {
       ++ctx_->stack_depth_;
     }
 
+    ScopedDepthTracker(const ScopedDepthTracker&) = delete;
+    ScopedDepthTracker& operator=(const ScopedDepthTracker&) = delete;
+
     ~ScopedDepthTracker() { --ctx_->stack_depth_; }
 
    private:
-    ValidationContext* ctx_;
-
-    DISALLOW_COPY_AND_ASSIGN(ScopedDepthTracker);
+    // `ctx_` is not a raw_ptr<...> for performance reasons: On-stack pointee
+    // (i.e. not covered by BackupRefPtr protection).
+    RAW_PTR_EXCLUSION ValidationContext* ctx_;
   };
 
   // Returns true if the recursion depth limit has been reached.
-  bool ExceedsMaxDepth() WARN_UNUSED_RESULT {
+  [[nodiscard]] bool ExceedsMaxDepth() {
     return stack_depth_ > kMaxRecursionDepth;
   }
 
@@ -156,7 +167,11 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS_BASE) ValidationContext {
     return end > begin && begin >= data_begin_ && end <= data_end_;
   }
 
-  Message* const message_;
+  // RAW_PTR_EXCLUSION: Performance reasons: on-stack pointer + based on
+  // analysis of sampling profiler data (MultiplexRouter::ProcessIncomingMessage
+  // -> PipeControlMessageHandler::Accept -> PipeControlMessageHandler::Validate
+  // -> constructs ValidationContext).
+  RAW_PTR_EXCLUSION Message* const message_;
   const char* const description_;
   const ValidatorType validator_type_;
 
@@ -174,8 +189,6 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS_BASE) ValidationContext {
   uint32_t associated_endpoint_handle_end_;
 
   int stack_depth_;
-
-  DISALLOW_COPY_AND_ASSIGN(ValidationContext);
 };
 
 }  // namespace internal

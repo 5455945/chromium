@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,6 @@
 
 #include <memory>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
 #include "third_party/skia/include/core/SkBlendMode.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/nine_image_painter_factory.h"
@@ -22,6 +20,7 @@ class Canvas;
 class ImageSkia;
 class InsetsF;
 class Rect;
+class RoundedCornersF;
 class Size;
 }  // namespace gfx
 
@@ -39,6 +38,10 @@ class View;
 class VIEWS_EXPORT Painter {
  public:
   Painter();
+
+  Painter(const Painter&) = delete;
+  Painter& operator=(const Painter&) = delete;
+
   virtual ~Painter();
 
   // A convenience method for painting a Painter in a particular region.
@@ -62,14 +65,38 @@ class VIEWS_EXPORT Painter {
       SkBlendMode blend_mode = SkBlendMode::kSrcOver,
       bool antialias = true);
 
+  // Creates a painter that draws a RoundRect with a solid color and given
+  // corner radii.
+  static std::unique_ptr<Painter> CreateSolidRoundRectPainterWithVariableRadius(
+      SkColor color,
+      gfx::RoundedCornersF radii,
+      const gfx::Insets& insets = gfx::Insets(),
+      SkBlendMode blend_mode = SkBlendMode::kSrcOver,
+      bool antialias = true);
+
   // Creates a painter that draws a RoundRect with a solid color and a given
   // corner radius, and also adds a 1px border (inset) in the given color.
+  // If should_border_scale is true, the 1px border will resize based on the
+  // scale factor.
   static std::unique_ptr<Painter> CreateRoundRectWith1PxBorderPainter(
       SkColor bg_color,
       SkColor stroke_color,
       float radius,
       SkBlendMode blend_mode = SkBlendMode::kSrcOver,
-      bool antialias = true);
+      bool antialias = true,
+      bool should_border_scale = false);
+
+  // Creates a painter that draws a RoundRect with a solid color and a given
+  // corner radii, and also adds a 1px border (inset) in the given color.
+  // If should_border_scale is true, the 1px border will resize based on the
+  // scale factor.
+  static std::unique_ptr<Painter> CreateRoundRectWith1PxBorderPainter(
+      SkColor bg_color,
+      SkColor stroke_color,
+      gfx::RoundedCornersF radii,
+      SkBlendMode blend_mode = SkBlendMode::kSrcOver,
+      bool antialias = true,
+      bool should_border_scale = false);
 
   // Creates a painter that divides |image| into nine regions. The four corners
   // are rendered at the size specified in insets (eg. the upper-left corner is
@@ -84,7 +111,8 @@ class VIEWS_EXPORT Painter {
   // size, while center and edge images are stretched to fill the painted area.
   // The center image may be zero (to be skipped). This ordering must be used:
   // Top-Left/Top/Top-Right/Left/[Center]/Right/Bottom-Left/Bottom/Bottom-Right.
-  static std::unique_ptr<Painter> CreateImageGridPainter(const int image_ids[]);
+  static std::unique_ptr<Painter> CreateImageGridPainter(
+      const ui::NineImageIds& image_ids);
 
   // Deprecated: used the InsetsF version below.
   static std::unique_ptr<Painter> CreateSolidFocusPainter(
@@ -106,9 +134,6 @@ class VIEWS_EXPORT Painter {
 
   // Paints the painter in the specified region.
   virtual void Paint(gfx::Canvas* canvas, const gfx::Size& size) = 0;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(Painter);
 };
 
 }  // namespace views

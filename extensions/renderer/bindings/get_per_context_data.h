@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,7 @@
 
 namespace extensions {
 
-enum CreatePerContextData { kCreateIfMissing, kDontCreateIfMissing };
+enum class CreatePerContextData { kCreateIfMissing, kDontCreateIfMissing };
 
 template <typename PerContextData, typename... ConstructorArgs>
 PerContextData* GetPerContextData(v8::Local<v8::Context> context,
@@ -22,7 +22,7 @@ PerContextData* GetPerContextData(v8::Local<v8::Context> context,
   auto* data = static_cast<PerContextData*>(
       per_context_data->GetUserData(PerContextData::kPerContextDataKey));
 
-  if (!data && should_create == kCreateIfMissing) {
+  if (!data && should_create == CreatePerContextData::kCreateIfMissing) {
     auto created_data = std::make_unique<PerContextData>(constructor_args...);
     data = created_data.get();
     per_context_data->SetUserData(PerContextData::kPerContextDataKey,

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -9,19 +9,18 @@
 
 #include "base/compiler_specific.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if defined(OS_POSIX)
+#if BUILDFLAG(IS_POSIX)
 #include "base/files/scoped_temp_dir.h"
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "base/test/test_reg_util_win.h"
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chromeos/system/fake_statistics_provider.h"
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chromeos/ash/components/system/fake_statistics_provider.h"
 #endif
 
 // A test helper class that constructs and destructs platform dependent machine
@@ -33,11 +32,11 @@ class RlzLibTestNoMachineStateHelper {
   void TearDown();
   void Reset();
 
-#if defined(OS_POSIX)
+#if BUILDFLAG(IS_POSIX)
   base::ScopedTempDir temp_dir_;
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   registry_util::RegistryOverrideManager override_manager_;
 #endif
 };
@@ -59,9 +58,8 @@ class RlzLibTestBase : public RlzLibTestNoMachineState {
   void SetUp() override;
   void TearDown() override;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  std::unique_ptr<chromeos::system::FakeStatisticsProvider>
-      statistics_provider_;
+#if BUILDFLAG(IS_CHROMEOS)
+  std::unique_ptr<ash::system::FakeStatisticsProvider> statistics_provider_;
 #endif
 };
 

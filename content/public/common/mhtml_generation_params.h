@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,22 @@
 #define CONTENT_PUBLIC_COMMON_MHTML_GENERATION_PARAMS_H_
 
 #include "base/files/file_path.h"
+#include "base/functional/callback.h"
 #include "content/common/content_export.h"
 
 namespace content {
 
+class RenderFrameHost;
+
 struct CONTENT_EXPORT MHTMLGenerationParams {
-  MHTMLGenerationParams(const base::FilePath& file_path);
-  ~MHTMLGenerationParams() = default;
+  using FrameFilterCallback = base::RepeatingCallback<bool(RenderFrameHost*)>;
+
+  explicit MHTMLGenerationParams(const base::FilePath& file_path);
+  MHTMLGenerationParams(const MHTMLGenerationParams&);
+  MHTMLGenerationParams& operator=(const MHTMLGenerationParams&);
+  MHTMLGenerationParams(MHTMLGenerationParams&&);
+  MHTMLGenerationParams& operator=(MHTMLGenerationParams&&);
+  ~MHTMLGenerationParams();
 
   // The file that will contain the generated MHTML.
   base::FilePath file_path;
@@ -28,8 +37,10 @@ struct CONTENT_EXPORT MHTMLGenerationParams {
   // Removes popups that could obstruct the user's view of normal content.
   bool remove_popup_overlay = false;
 
-  // Run page problem detectors while generating MTHML if true.
-  bool use_page_problem_detectors = false;
+  // An optional callback that can be used to filter which frames are included
+  // in the generated MHTML. If set, this callback is invoked for each subframe;
+  // returning false skips serializing that frame (and any descendant frames).
+  FrameFilterCallback frame_filter;
 };
 
 }  // namespace content

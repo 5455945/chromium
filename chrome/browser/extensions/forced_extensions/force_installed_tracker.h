@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,17 +7,21 @@
 
 #include <map>
 
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/extensions/extension_management.h"
-#include "chrome/browser/extensions/forced_extensions/install_stage_tracker.h"
 #include "components/policy/core/common/policy_service.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_registry_observer.h"
+#include "extensions/browser/forced_extensions/install_stage_tracker.h"
 #include "extensions/browser/updater/extension_downloader_delegate.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 class PrefService;
 class Profile;
@@ -53,6 +57,15 @@ class ForceInstalledTracker : public ExtensionRegistryObserver,
     // force-installed extensions configured, this method still gets called.
     virtual void OnForceInstalledExtensionsReady() {}
 
+    // Called when a force-installed extension with id `extension_id` fails to
+    // install with failure reason `reason`.
+    //
+    // Can be called multiple times, one for each failed extension install.
+    virtual void OnForceInstalledExtensionFailed(
+        const ExtensionId& extension_id,
+        InstallStageTracker::FailureReason reason,
+        bool is_from_store) {}
+
     // Called when cache status is retrieved from InstallationStageTracker.
     virtual void OnExtensionDownloadCacheStatusRetrieved(
         const ExtensionId& id,
@@ -72,7 +85,11 @@ class ForceInstalledTracker : public ExtensionRegistryObserver,
   // Returns true if all extensions installed/failed installing.
   bool IsReady() const;
 
-  // Add/remove observers to this object, to get notified when installation is
+  // Returns true if all extensions installed/failed installing and there is
+  // at least one such extension.
+  bool IsComplete() const;
+
+  // Adds observers to this object, to get notified when installation is
   // finished.
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
@@ -136,49 +153,53 @@ class ForceInstalledTracker : public ExtensionRegistryObserver,
       const ExtensionId& id) const;
 
   static bool IsExtensionFetchedFromCache(
-      const absl::optional<ExtensionDownloaderDelegate::CacheStatus>& status);
+      const std::optional<ExtensionDownloaderDelegate::CacheStatus>& status);
 
  private:
   policy::PolicyService* policy_service();
 
-  // Fires OnForceInstallationFinished() on observers, then changes |status_| to
+  // Fires OnForceInstallationFinished() on observers, then changes `status_` to
   // kComplete.
   void MaybeNotifyObservers();
 
-  // Increment (or decrement) |load_pending_count_| and |install_pending_count_|
-  // by |delta|, depending on |status|.
+  // Increments (or decrements) `load_pending_count_` and
+  // `install_pending_count_` by `delta`, depending on `status`.
   void UpdateCounters(ExtensionStatus status, int delta);
 
-  // Helper method to modify |extensions_| and bounded counter, adds extension
+  // Modifies `extensions_` and bounded counter by adding extension
   // to the collection.
   void AddExtensionInfo(const ExtensionId& extension_id,
                         ExtensionStatus status,
                         bool is_from_store);
 
-  // Helper method to modify |extensions_| and bounded counter, changes status
-  // of one extensions.
+  // Modifies `extensions_` and bounded counter by changing status
+  // of one extension.
   void ChangeExtensionStatus(const ExtensionId& extension_id,
                              ExtensionStatus status);
 
+  // Proceeds and returns true if `kInstallForceList` pref is not empty.
+  bool ProceedIfForcedExtensionsPrefReady();
   // Loads list of force-installed extensions if available. Only called once.
   void OnForcedExtensionsPrefReady();
 
-  const ExtensionManagement* extension_management_;
+  void OnInstallForcelistChanged();
+
+  raw_ptr<const ExtensionManagement> extension_management_;
 
   // Unowned, but guaranteed to outlive this object.
-  ExtensionRegistry* registry_;
-  Profile* profile_;
-  PrefService* pref_service_;
+  raw_ptr<ExtensionRegistry> registry_;
+  raw_ptr<Profile> profile_;
+  raw_ptr<PrefService> pref_service_;
 
   // Collection of all extensions we are interested in here. Don't update
   // directly, use AddExtensionInfo/RemoveExtensionInfo/ChangeExtensionStatus
-  // methods, as |pending_extension_counter_| has to be in sync with contents of
+  // methods, as `pending_extension_counter_` has to be in sync with contents of
   // this collection.
   std::map<ExtensionId, ExtensionInfo> extensions_;
 
-  // Number of extensions in |extensions_| with status |PENDING|.
+  // Number of extensions in `extensions_` with status `PENDING`.
   size_t load_pending_count_ = 0;
-  // Number of extensions in |extensions_| with status |PENDING| or |LOADED|.
+  // Number of extensions in `extensions_` with status `PENDING` or `LOADED`.
   // (ie. could be loaded, but not ready yet).
   size_t ready_pending_count_ = 0;
 
@@ -188,11 +209,15 @@ class ForceInstalledTracker : public ExtensionRegistryObserver,
     // Waiting for PolicyService to finish initializing. Listening for
     // OnPolicyServiceInitialized().
     kWaitingForPolicyService,
+    // At the startup the `kInstallForceList` preference might be empty, meaning
+    // that no extensions are yet specified to be force installed.
+    // Waiting for `kInstallForceList` to be populated.
+    kWaitingForInstallForcelistPref,
     // Waiting for one or more extensions to finish loading. Listening for
-    // |ExtensionRegistryObserver| events.
+    // `ExtensionRegistryObserver` events.
     kWaitingForExtensionLoads,
     // Waiting for one or more extensions to finish loading. Listening for
-    // |ExtensionRegistryObserver| events. Extensions have already finished
+    // `ExtensionRegistryObserver` events. Extensions have already finished
     // loading; we're still waiting for the "ready" state. IsDoneLoading()
     // returns true, but IsReady() returns false.
     kWaitingForExtensionReady,
@@ -202,6 +227,8 @@ class ForceInstalledTracker : public ExtensionRegistryObserver,
     kComplete,
   };
   Status status_ = kWaitingForPolicyService;
+  bool forced_extensions_pref_ready_ = false;
+  PrefChangeRegistrar pref_change_registrar_;
 
   base::ScopedObservation<ExtensionRegistry, ExtensionRegistryObserver>
       registry_observation_{this};

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -30,7 +30,7 @@ void X11Cursor::OnCursorLoaded(Callback callback) {
 }
 
 void X11Cursor::SetCursor(x11::Cursor cursor) {
-  DCHECK(!loaded_);
+  CHECK(!loaded_, base::NotFatalUntil::M163);
   loaded_ = true;
   xcursor_ = cursor;
   for (auto& callback : callbacks_)

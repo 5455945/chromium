@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,8 @@ package org.chromium.components.media_router;
 
 import androidx.mediarouter.media.MediaRouteSelector;
 import androidx.mediarouter.media.MediaRouter;
+
+import org.chromium.build.annotations.NullMarked;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -17,28 +19,40 @@ import java.util.Set;
  * media sinks were requested for. Once a route is added or removed, updates the
  * {@link BrowserMediaRouter} with the new routes.
  */
+@NullMarked
 public class DiscoveryCallback extends MediaRouter.Callback {
     private final DiscoveryDelegate mDiscoveryDelegate;
     private final MediaRouteSelector mRouteSelector;
-    private Set<String> mSourceUrns = new HashSet<String>();
-    private List<MediaSink> mSinks = new ArrayList<MediaSink>();
+    private final Set<String> mSourceUrns = new HashSet<>();
+    private List<MediaSink> mSinks = new ArrayList<>();
 
-    public DiscoveryCallback(String sourceUrn, List<MediaSink> knownSinks,
-            DiscoveryDelegate delegate, MediaRouteSelector selector) {
+    public DiscoveryCallback(
+            String sourceUrn, DiscoveryDelegate delegate, MediaRouteSelector selector) {
         assert delegate != null;
         assert sourceUrn != null && !sourceUrn.isEmpty();
 
-        mSinks.addAll(knownSinks);
+        mSourceUrns.add(sourceUrn);
         mDiscoveryDelegate = delegate;
         mRouteSelector = selector;
+    }
 
-        addSourceUrn(sourceUrn);
+    public DiscoveryCallback(
+            String sourceUrn,
+            List<MediaSink> knownSinks,
+            DiscoveryDelegate delegate,
+            MediaRouteSelector selector) {
+        this(sourceUrn, delegate, selector);
+        setAndUpdateSinks(knownSinks);
     }
 
     public void addSourceUrn(String sourceUrn) {
         if (mSourceUrns.add(sourceUrn)) {
-            mDiscoveryDelegate.onSinksReceived(sourceUrn, new ArrayList<MediaSink>(mSinks));
+            mDiscoveryDelegate.onSinksReceived(sourceUrn, new ArrayList<>(mSinks));
         }
+    }
+
+    public boolean containsSourceUrn(String sourceUrn) {
+        return mSourceUrns.contains(sourceUrn);
     }
 
     public void removeSourceUrn(String sourceUrn) {
@@ -47,6 +61,15 @@ public class DiscoveryCallback extends MediaRouter.Callback {
 
     public boolean isEmpty() {
         return mSourceUrns.isEmpty();
+    }
+
+    public MediaRouteSelector getRouteSelector() {
+        return mRouteSelector;
+    }
+
+    public void setAndUpdateSinks(List<MediaSink> knownSinks) {
+        mSinks = knownSinks;
+        updateBrowserMediaRouter();
     }
 
     @Override
@@ -82,7 +105,7 @@ public class DiscoveryCallback extends MediaRouter.Callback {
 
     private void updateBrowserMediaRouter() {
         for (String sourceUrn : mSourceUrns) {
-            mDiscoveryDelegate.onSinksReceived(sourceUrn, new ArrayList<MediaSink>(mSinks));
+            mDiscoveryDelegate.onSinksReceived(sourceUrn, new ArrayList<>(mSinks));
         }
     }
 }

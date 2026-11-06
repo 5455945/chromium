@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,17 @@
 #include <string>
 
 #include "base/android/scoped_java_ref.h"
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 
-#include "content/public/android/content_jni_headers/SmsProviderGms_jni.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/android/window_android.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "content/public/android/content_jni_headers/SmsProviderGms_jni.h"
 
 using base::android::AttachCurrentThread;
 using base::android::ConvertJavaStringToUTF8;
@@ -57,6 +60,15 @@ SmsProviderGms::~SmsProviderGms() {
 
 void SmsProviderGms::Retrieve(RenderFrameHost* render_frame_host,
                               SmsFetchType fetch_type) {
+  // This function cannot get called during prerendering because
+  // SmsFetcherImpl::Subscribe calls this, and that is deferred during
+  // prerendering by MojoBinderPolicyApplier. This DCHECK proves we don't have
+  // to worry about prerendering when using WebContents::FromRenderFrameHost()
+  // below (see function comments for WebContents::FromRenderFrameHost() for
+  // more details).
+  CHECK(!render_frame_host || (render_frame_host->GetLifecycleState() !=
+                               RenderFrameHost::LifecycleState::kPrerendering),
+        base::NotFatalUntil::M160);
   WebContents* web_contents =
       WebContents::FromRenderFrameHost(render_frame_host);
   base::android::ScopedJavaLocalRef<jobject> j_window = nullptr;
@@ -70,7 +82,9 @@ void SmsProviderGms::Retrieve(RenderFrameHost* render_frame_host,
                              fetch_type == SmsFetchType::kLocal);
 }
 
-void SmsProviderGms::OnReceive(JNIEnv* env, jstring message, jint backend) {
+void SmsProviderGms::OnReceive(JNIEnv* env,
+                               const base::android::JavaRef<jstring>& message,
+                               int32_t backend) {
   GmsBackend b = static_cast<GmsBackend>(backend);
   auto consent_requirement = UserConsent::kNotObtained;
   if (b == GmsBackend::kUserConsent)
@@ -101,3 +115,5 @@ void SmsProviderGms::SetClientAndWindowForTesting(
 }
 
 }  // namespace content
+
+DEFINE_JNI(SmsProviderGms)

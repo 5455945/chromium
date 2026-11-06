@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,15 +7,23 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
-#include "ui/events/gesture_detection/motion_event.h"
+#include "build/build_config.h"
+#include "ui/events/velocity_tracker/motion_event.h"
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/vector2d_f.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/touch_selection/touch_handle_orientation.h"
 #include "ui/touch_selection/touch_selection_draggable.h"
 #include "ui/touch_selection/ui_touch_selection_export.h"
+
+#if BUILDFLAG(IS_ANDROID)
+namespace cc::slim {
+class Layer;
+}
+#endif
 
 namespace ui {
 
@@ -32,7 +40,7 @@ class UI_TOUCH_SELECTION_EXPORT TouchHandleDrawable {
   // Update the handle visuals to |orientation|.
   // |mirror_vertical| and |mirror_horizontal| are used to invert the drawables
   // if required for adaptive handle orientation.
-  virtual void SetOrientation(ui::TouchHandleOrientation orientation,
+  virtual void SetOrientation(TouchHandleOrientation orientation,
                               bool mirror_vertical,
                               bool mirror_horizontal) = 0;
 
@@ -50,6 +58,11 @@ class UI_TOUCH_SELECTION_EXPORT TouchHandleDrawable {
 
   // Returns the transparent horizontal padding ratio of the handle drawable.
   virtual float GetDrawableHorizontalPaddingRatio() const = 0;
+
+#if BUILDFLAG(IS_ANDROID)
+  virtual void OnUpdateNativeViewTree(gfx::NativeView parent_native_view,
+                                      cc::slim::Layer* parent_layer) {}
+#endif
 };
 
 // Interface through which |TouchHandle| communicates handle manipulation and
@@ -73,6 +86,10 @@ class UI_TOUCH_SELECTION_EXPORT TouchHandle : public TouchSelectionDraggable {
   TouchHandle(TouchHandleClient* client,
               TouchHandleOrientation orientation,
               const gfx::RectF& viewport_rect);
+
+  TouchHandle(const TouchHandle&) = delete;
+  TouchHandle& operator=(const TouchHandle&) = delete;
+
   ~TouchHandle() override;
 
   // TouchSelectionDraggable implementation.
@@ -123,6 +140,11 @@ class UI_TOUCH_SELECTION_EXPORT TouchHandle : public TouchSelectionDraggable {
   // EndDrag() call.
   void SetTransparent();
 
+#if BUILDFLAG(IS_ANDROID)
+  void OnUpdateNativeViewTree(gfx::NativeView parent_native_view,
+                              cc::slim::Layer* parent_layer);
+#endif
+
   const gfx::PointF& focus_bottom() const { return focus_bottom_; }
   TouchHandleOrientation orientation() const { return orientation_; }
   float alpha() const { return alpha_; }
@@ -138,7 +160,7 @@ class UI_TOUCH_SELECTION_EXPORT TouchHandle : public TouchSelectionDraggable {
 
   std::unique_ptr<TouchHandleDrawable> drawable_;
 
-  TouchHandleClient* const client_;
+  const raw_ptr<TouchHandleClient> client_;
 
   gfx::PointF focus_bottom_;
   gfx::PointF focus_top_;
@@ -168,8 +190,6 @@ class UI_TOUCH_SELECTION_EXPORT TouchHandle : public TouchSelectionDraggable {
   bool mirror_vertical_;
   bool mirror_horizontal_;
   float handle_horizontal_padding_;
-
-  DISALLOW_COPY_AND_ASSIGN(TouchHandle);
 };
 
 }  // namespace ui

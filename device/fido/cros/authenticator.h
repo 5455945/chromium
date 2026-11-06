@@ -1,13 +1,15 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef DEVICE_FIDO_CROS_AUTHENTICATOR_H_
 #define DEVICE_FIDO_CROS_AUTHENTICATOR_H_
 
+#include <optional>
 #include <string>
 
 #include "base/component_export.h"
+#include "base/containers/span.h"
 #include "base/memory/weak_ptr.h"
 #include "chromeos/dbus/u2f/u2f_interface.pb.h"
 #include "dbus/bus.h"
@@ -17,27 +19,31 @@
 #include "device/fido/ctap_get_assertion_request.h"
 #include "device/fido/ctap_make_credential_request.h"
 #include "device/fido/fido_authenticator.h"
-#include "device/fido/fido_transport_protocol.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "device/fido/public/fido_transport_protocol.h"
 
 namespace device {
 
 class COMPONENT_EXPORT(DEVICE_FIDO) ChromeOSAuthenticator
     : public FidoAuthenticator {
  public:
-  explicit ChromeOSAuthenticator(
-      base::RepeatingCallback<uint32_t()> generate_request_id_callback);
-  ~ChromeOSAuthenticator() override;
+  struct COMPONENT_EXPORT(DEVICE_FIDO) Config {
+    // Whether uv platform authenticator is available (PIN or fingerprint
+    // enrolled).
+    bool uv_available;
+    // Whether using the power button for user presence checking is enabled.
+    bool power_button_enabled;
+  };
 
-  static void HasCredentialForGetAssertionRequest(
-      const CtapGetAssertionRequest& request,
-      base::OnceCallback<void(bool has_credential)> callback);
+  ChromeOSAuthenticator(
+      base::RepeatingCallback<std::string()> generate_request_id_callback,
+      Config config);
+  ~ChromeOSAuthenticator() override;
 
   static void HasLegacyU2fCredentialForGetAssertionRequest(
       const CtapGetAssertionRequest& request,
       base::OnceCallback<void(bool has_credential)> callback);
 
-  // Invokes |callback| with a bool indicating  whether the platform
+  // Invokes |callback| with a bool indicating whether the platform
   // authenticator is available, which is true if the current user has a PIN set
   // up or biometrics enrolled.
   static void IsUVPlatformAuthenticatorAvailable(
@@ -51,49 +57,65 @@ class COMPONENT_EXPORT(DEVICE_FIDO) ChromeOSAuthenticator
       base::OnceCallback<void(bool is_enabled)> callback);
 
   // FidoAuthenticator
+
+  // Calls the u2fd API `GetAlgorithms` and cache the result.
   void InitializeAuthenticator(base::OnceClosure callback) override;
+
+  // Since this method is synchronous, it will simply return the GetAlgorithms
+  // result obtained during `InitializeAuthenticator`.
+  std::optional<base::span<const int32_t>> GetAlgorithms() override;
+
   void MakeCredential(CtapMakeCredentialRequest request,
                       MakeCredentialOptions request_options,
                       MakeCredentialCallback callback) override;
   void GetAssertion(CtapGetAssertionRequest request,
                     CtapGetAssertionOptions options,
                     GetAssertionCallback callback) override;
-  void GetNextAssertion(GetAssertionCallback callback) override {}
+  void GetPlatformCredentialInfoForRequest(
+      const CtapGetAssertionRequest& request,
+      const CtapGetAssertionOptions& options,
+      GetPlatformCredentialInfoForRequestCallback callback) override;
   void Cancel() override;
+  AuthenticatorType GetType() const override;
   std::string GetId() const override;
-  const absl::optional<AuthenticatorSupportedOptions>& Options() const override;
+  const AuthenticatorSupportedOptions& Options() const override;
 
-  absl::optional<FidoTransportProtocol> AuthenticatorTransport() const override;
-
-  bool IsInPairingMode() const override;
-  bool IsPaired() const override;
-  bool RequiresBlePairingPin() const override;
-
-  bool IsChromeOSAuthenticator() const override;
+  std::optional<FidoTransportProtocol> AuthenticatorTransport() const override;
 
   void GetTouch(base::OnceClosure callback) override {}
   base::WeakPtr<FidoAuthenticator> GetWeakPtr() override;
 
  private:
+  // Cache the supported algorithms in response, and run the barrier callback
+  // of `InitializeAuthenticator`.
+  void OnGetAlgorithmsResponse(
+      base::OnceClosure callback,
+      std::optional<u2f::GetAlgorithmsResponse> response);
+  // Cache whether power button is enabled, and run the barrier callback
+  // of `InitializeAuthenticator`.
+  void OnIsPowerButtonModeEnabled(base::OnceClosure callback, bool enabled);
+  void OnHasCredentialInformationForRequest(
+      GetPlatformCredentialInfoForRequestCallback callback,
+      std::optional<u2f::HasCredentialsResponse> response);
   void OnMakeCredentialResponse(
       CtapMakeCredentialRequest request,
       MakeCredentialCallback callback,
-      absl::optional<u2f::MakeCredentialResponse> response);
+      std::optional<u2f::MakeCredentialResponse> response);
   void OnGetAssertionResponse(
       CtapGetAssertionRequest request,
       GetAssertionCallback callback,
-      absl::optional<u2f::GetAssertionResponse> response);
-  void OnHasLegacyCredentialsResponse(
-      base::OnceCallback<void(bool has_credential)> callback,
-      absl::optional<u2f::HasCredentialsResponse> response);
+      std::optional<u2f::GetAssertionResponse> response);
   void OnCancelResponse(
-      absl::optional<u2f::CancelWebAuthnFlowResponse> response);
+      std::optional<u2f::CancelWebAuthnFlowResponse> response);
 
   // Current request_id, used for cancelling the request.
-  uint32_t current_request_id_ = 0u;
+  std::string current_request_id_;
 
   // Callback to set request_id in the window property.
-  base::RepeatingCallback<uint32_t()> generate_request_id_callback_;
+  base::RepeatingCallback<std::string()> generate_request_id_callback_;
+  const Config config_;
+  std::optional<std::vector<int32_t>> supported_algorithms_;
+  bool u2f_enabled_ = false;
   base::WeakPtrFactory<ChromeOSAuthenticator> weak_factory_;
 };
 

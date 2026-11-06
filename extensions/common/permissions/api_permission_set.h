@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,13 +11,10 @@
 #include <string>
 #include <vector>
 
+#include "base/values.h"
 #include "extensions/common/mojom/api_permission_id.mojom-shared.h"
 #include "extensions/common/permissions/api_permission.h"
 #include "extensions/common/permissions/base_set_operators.h"
-
-namespace base {
-class Value;
-}  // namespace base
 
 namespace extensions {
 
@@ -25,8 +22,8 @@ class APIPermissionSet;
 
 template<>
 struct BaseSetOperatorsTraits<APIPermissionSet> {
-  typedef APIPermission ElementType;
-  typedef mojom::APIPermissionID ElementIDType;
+  using ElementType = APIPermission;
+  using ElementIDType = mojom::APIPermissionID;
 };
 
 class APIPermissionSet : public BaseSetOperators<APIPermissionSet> {
@@ -43,18 +40,18 @@ class APIPermissionSet : public BaseSetOperators<APIPermissionSet> {
 
   void insert(mojom::APIPermissionID id);
 
-  // Inserts |permission| into the APIPermissionSet.
+  // Inserts `permission` into the APIPermissionSet.
   void insert(std::unique_ptr<APIPermission> permission);
 
-  // Parses permissions from |permissions| and adds the parsed permissions to
-  // |api_permissions|. If |source| is kDisallowInternalPermissions, treat
-  // permissions with kFlagInternal as errors. If |unhandled_permissions| is
+  // Parses permissions from `permissions` and adds the parsed permissions to
+  // `api_permissions`. If `source` is kDisallowInternalPermissions, treat
+  // permissions with kFlagInternal as errors. If `unhandled_permissions` is
   // not NULL, the names of all permissions that couldn't be parsed will be
-  // added to this vector. If |error| is NULL, parsing will continue with the
-  // next permission if invalid data is detected. If |error| is not NULL, it
+  // added to this vector. If `error` is NULL, parsing will continue with the
+  // next permission if invalid data is detected. If `error` is not NULL, it
   // will be set to an error message and false is returned when an invalid
   // permission is found.
-  static bool ParseFromJSON(const base::Value* permissions,
+  static bool ParseFromJSON(const base::ListValue& permissions,
                             ParseSource source,
                             APIPermissionSet* api_permissions,
                             std::u16string* error,

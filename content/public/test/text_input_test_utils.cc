@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,14 @@
 #include <memory>
 #include <unordered_set>
 
+#include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
+#include "components/input/render_widget_host_view_input_observer.h"
 #include "content/browser/renderer_host/frame_tree.h"
 #include "content/browser/renderer_host/frame_tree_node.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_view_base.h"
-#include "content/browser/renderer_host/render_widget_host_view_base_observer.h"
 #include "content/browser/renderer_host/text_input_manager.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/render_widget_host_view.h"
@@ -52,10 +53,15 @@ class TextInputManagerTester::InternalObserver
     text_input_manager_->AddObserver(this);
   }
 
+  InternalObserver(const InternalObserver&) = delete;
+  InternalObserver& operator=(const InternalObserver&) = delete;
+
   ~InternalObserver() override {
     if (text_input_manager_)
       text_input_manager_->RemoveObserver(this);
   }
+
+  using WebContentsObserver::OnTextSelectionChanged;
 
   void set_update_text_input_state_called_callback(
       base::RepeatingClosure callback) {
@@ -99,16 +105,16 @@ class TextInputManagerTester::InternalObserver
   }
 
   void OnSelectionBoundsChanged(
-      TextInputManager* text_input_manager_,
+      TextInputManager* text_input_manager,
       RenderWidgetHostViewBase* updated_view) override {
     updated_view_ = updated_view;
     if (!on_selection_bounds_changed_callback_.is_null())
       on_selection_bounds_changed_callback_.Run();
   }
 
-  void OnImeCompositionRangeChanged(
-      TextInputManager* text_input_manager,
-      RenderWidgetHostViewBase* updated_view) override {
+  void OnImeCompositionRangeChanged(TextInputManager* text_input_manager,
+                                    RenderWidgetHostViewBase* updated_view,
+                                    bool character_bounds_changed) override {
     updated_view_ = updated_view;
     const gfx::Range* range =
         text_input_manager_->GetCompositionRangeForTesting();
@@ -134,28 +140,29 @@ class TextInputManagerTester::InternalObserver
   }
 
  private:
-  TextInputManager* text_input_manager_;
-  RenderWidgetHostViewBase* updated_view_;
+  raw_ptr<TextInputManager> text_input_manager_;
+  raw_ptr<RenderWidgetHostViewBase> updated_view_;
   bool text_input_state_changed_;
   std::unique_ptr<gfx::Range> last_composition_range_;
   base::RepeatingClosure update_text_input_state_callback_;
   base::RepeatingClosure on_selection_bounds_changed_callback_;
   base::RepeatingClosure on_ime_composition_range_changed_callback_;
   base::RepeatingClosure on_text_selection_changed_callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(InternalObserver);
 };
 
 // This class observes the lifetime of a RenderWidgetHostView. An instance of
 // this class is used in TestRenderWidgetHostViewDestructionObserver to expose
 // the required observer API for testing outside of content/.
 class TestRenderWidgetHostViewDestructionObserver::InternalObserver
-    : public RenderWidgetHostViewBaseObserver {
+    : public input::RenderWidgetHostViewInputObserver {
  public:
   InternalObserver(RenderWidgetHostViewBase* view)
       : view_(view), destroyed_(false) {
     view->AddObserver(this);
   }
+
+  InternalObserver(const InternalObserver&) = delete;
+  InternalObserver& operator=(const InternalObserver&) = delete;
 
   ~InternalObserver() override {
     if (view_)
@@ -170,8 +177,8 @@ class TestRenderWidgetHostViewDestructionObserver::InternalObserver
   }
 
  private:
-  void OnRenderWidgetHostViewBaseDestroyed(
-      RenderWidgetHostViewBase* view) override {
+  void OnRenderWidgetHostViewInputDestroyed(
+      input::RenderWidgetHostViewInput* view) override {
     DCHECK_EQ(view_, view);
     destroyed_ = true;
     view->RemoveObserver(this);
@@ -180,11 +187,9 @@ class TestRenderWidgetHostViewDestructionObserver::InternalObserver
       message_loop_runner_->Quit();
   }
 
-  RenderWidgetHostViewBase* view_;
+  raw_ptr<RenderWidgetHostViewBase> view_;
   bool destroyed_;
   scoped_refptr<MessageLoopRunner> message_loop_runner_;
-
-  DISALLOW_COPY_AND_ASSIGN(InternalObserver);
 };
 
 #if defined(USE_AURA)
@@ -195,6 +200,9 @@ class InputMethodObserverAura : public TestInputMethodObserver,
       : input_method_(input_method), text_input_client_(nullptr) {
     input_method_->AddObserver(this);
   }
+
+  InputMethodObserverAura(const InputMethodObserverAura&) = delete;
+  InputMethodObserverAura& operator=(const InputMethodObserverAura&) = delete;
 
   ~InputMethodObserverAura() override {
     if (input_method_)
@@ -209,9 +217,9 @@ class InputMethodObserverAura : public TestInputMethodObserver,
     return ui::TEXT_INPUT_TYPE_NONE;
   }
 
-  void SetOnShowVirtualKeyboardIfEnabledCallback(
-      const base::RepeatingClosure& callback) override {
-    on_show_ime_if_needed_callback_ = callback;
+  void SetOnVirtualKeyboardVisibilityChangedIfEnabledCallback(
+      const base::RepeatingCallback<void(bool)>& callback) override {
+    on_virtual_keyboard_visibility_changed_if_enabled_callback_ = callback;
   }
 
  private:
@@ -221,15 +229,15 @@ class InputMethodObserverAura : public TestInputMethodObserver,
   void OnTextInputStateChanged(const ui::TextInputClient* client) override {}
   void OnInputMethodDestroyed(const ui::InputMethod* input_method) override {}
 
-  void OnShowVirtualKeyboardIfEnabled() override {
-    on_show_ime_if_needed_callback_.Run();
+  void OnVirtualKeyboardVisibilityChangedIfEnabled(bool should_show) override {
+    on_virtual_keyboard_visibility_changed_if_enabled_callback_.Run(
+        should_show);
   }
 
-  ui::InputMethod* input_method_;
-  const ui::TextInputClient* text_input_client_;
-  base::RepeatingClosure on_show_ime_if_needed_callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(InputMethodObserverAura);
+  raw_ptr<ui::InputMethod> input_method_;
+  raw_ptr<const ui::TextInputClient> text_input_client_;
+  base::RepeatingCallback<void(bool)>
+      on_virtual_keyboard_visibility_changed_if_enabled_callback_;
 };
 #endif
 
@@ -239,6 +247,13 @@ ui::TextInputType GetTextInputTypeFromWebContents(WebContents* web_contents) {
           ->GetTextInputManager()
           ->GetTextInputState();
   return !!state ? state->type : ui::TEXT_INPUT_TYPE_NONE;
+}
+
+const ui::mojom::TextInputState* GetTextInputStateFromWebContents(
+    WebContents* web_contents) {
+  return static_cast<WebContentsImpl*>(web_contents)
+      ->GetTextInputManager()
+      ->GetTextInputState();
 }
 
 bool GetTextInputTypeForView(WebContents* web_contents,
@@ -294,6 +309,11 @@ void SendImeSetCompositionTextToWidget(
       text, ime_text_spans, replacement_range, selection_start, selection_end);
 }
 
+void SendTextInputStateChangedToWidget(RenderWidgetHost* rwh,
+                                       ui::mojom::TextInputStatePtr state) {
+  RenderWidgetHostImpl::From(rwh)->TextInputStateChanged(std::move(state));
+}
+
 bool DestroyRenderWidgetHost(int32_t process_id,
                              int32_t local_root_routing_id) {
   RenderFrameHostImpl* rfh =
@@ -304,11 +324,13 @@ bool DestroyRenderWidgetHost(int32_t process_id,
   while (!rfh->is_local_root())
     rfh = rfh->GetParent();
 
+  DCHECK(rfh->GetPage().IsPrimary())
+      << "Only implemented for frames in a primary page";
   FrameTreeNode* ftn = rfh->frame_tree_node();
-  if (ftn->IsMainFrame()) {
+  if (rfh->IsOutermostMainFrame()) {
     WebContents::FromRenderFrameHost(rfh)->Close();
   } else {
-    ftn->frame_tree()->RemoveFrame(ftn);
+    ftn->frame_tree().RemoveFrame(ftn);
   }
   return true;
 }

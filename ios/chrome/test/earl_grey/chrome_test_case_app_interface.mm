@@ -1,23 +1,22 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "ios/chrome/test/earl_grey/chrome_test_case_app_interface.h"
 
 #import "base/check.h"
+#import "components/feature_engagement/public/feature_constants.h"
+#import "components/feature_engagement/public/tracker.h"
+#import "ios/chrome/browser/feature_engagement/model/tracker_factory.h"
 #import "ios/chrome/test/app/chrome_test_util.h"
 #import "ios/chrome/test/app/signin_test_util.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
 
 namespace {
 
 // Stores the completion UUIDs when the completion is invoked. The UUIDs can be
 // checked with +[ChromeTestCaseAppInterface isCompletionInvokedWithUUID:].
 NSMutableSet* invokedCompletionUUID = nil;
-}
+}  // namespace
 
 @implementation ChromeTestCaseAppInterface
 
@@ -32,56 +31,42 @@ NSMutableSet* invokedCompletionUUID = nil;
 + (void)resetAuthentication {
   chrome_test_util::ResetSigninPromoPreferences();
   chrome_test_util::ResetMockAuthentication();
-  chrome_test_util::ResetUserApprovedAccountListManager();
+  chrome_test_util::ResetSyncAccountSettingsPrefs();
+  chrome_test_util::ResetHistorySyncPreferencesForTesting();
 }
 
 + (void)removeInfoBarsAndPresentedStateWithCompletionUUID:
     (NSUUID*)completionUUID {
   chrome_test_util::RemoveAllInfoBars();
   chrome_test_util::ClearPresentedState(^() {
-    if (completionUUID)
+    if (completionUUID) {
       [self completionInvokedWithUUID:completionUUID];
+    }
   });
+}
+
++ (void)blockSigninIPH {
+  ProfileIOS* profile = chrome_test_util::GetOriginalProfile();
+  feature_engagement::Tracker* tracker =
+      feature_engagement::TrackerFactory::GetForProfile(profile);
+  tracker->NotifyUsedEvent(
+      feature_engagement::kIPHiOSReplaceSyncPromosWithSignInPromos);
 }
 
 + (BOOL)isCompletionInvokedWithUUID:(NSUUID*)completionUUID {
-  if (![invokedCompletionUUID containsObject:completionUUID])
+  if (![invokedCompletionUUID containsObject:completionUUID]) {
     return NO;
+  }
   [invokedCompletionUUID removeObject:completionUUID];
   return YES;
-}
-
-+ (void)disableKeyboardTutorials {
-  static dispatch_once_t onceToken;
-  dispatch_once(&onceToken, ^{
-    // Set the preferences values directly on simulator for the keyboard
-    // modifiers. For persisting these values, CFPreferencesSynchronize must be
-    // called after.
-    CFStringRef app = CFSTR("com.apple.keyboard.preferences.plist");
-    if (@available(iOS 15, *)) {
-      CFPreferencesSetValue(CFSTR("DidShowContinuousPathIntroduction"),
-                            kCFBooleanTrue, app, kCFPreferencesAnyUser,
-                            kCFPreferencesAnyHost);
-      CFPreferencesSetValue(CFSTR("KeyboardDidShowProductivityTutorial"),
-                            kCFBooleanTrue, app, kCFPreferencesAnyUser,
-                            kCFPreferencesAnyHost);
-      CFPreferencesSetValue(CFSTR("DidShowGestureKeyboardIntroduction"),
-                            kCFBooleanTrue, app, kCFPreferencesAnyUser,
-                            kCFPreferencesAnyHost);
-      CFPreferencesSetValue(
-          CFSTR("UIKeyboardDidShowInternationalInfoIntroduction"),
-          kCFBooleanTrue, app, kCFPreferencesAnyUser, kCFPreferencesAnyHost);
-      CFPreferencesSynchronize(kCFPreferencesAnyApplication,
-                               kCFPreferencesAnyUser, kCFPreferencesAnyHost);
-    }
-  });
 }
 
 #pragma mark - Private
 
 + (void)completionInvokedWithUUID:(NSUUID*)completionUUID {
-  if (!invokedCompletionUUID)
+  if (!invokedCompletionUUID) {
     invokedCompletionUUID = [NSMutableSet set];
+  }
   DCHECK(![invokedCompletionUUID containsObject:completionUUID]);
   [invokedCompletionUUID addObject:completionUUID];
 }

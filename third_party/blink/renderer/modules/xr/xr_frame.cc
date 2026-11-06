@@ -1,18 +1,22 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/xr/xr_frame.h"
 
+#include "third_party/blink/renderer/bindings/core/v8/frozen_array.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
+#include "third_party/blink/renderer/modules/xr/xr_hit_test_result.h"
 #include "third_party/blink/renderer/modules/xr/xr_hit_test_source.h"
 #include "third_party/blink/renderer/modules/xr/xr_input_source.h"
 #include "third_party/blink/renderer/modules/xr/xr_joint_space.h"
 #include "third_party/blink/renderer/modules/xr/xr_light_estimate.h"
 #include "third_party/blink/renderer/modules/xr/xr_light_probe.h"
+#include "third_party/blink/renderer/modules/xr/xr_mesh_set.h"
 #include "third_party/blink/renderer/modules/xr/xr_plane_set.h"
 #include "third_party/blink/renderer/modules/xr/xr_reference_space.h"
 #include "third_party/blink/renderer/modules/xr/xr_session.h"
+#include "third_party/blink/renderer/modules/xr/xr_transient_input_hit_test_result.h"
 #include "third_party/blink/renderer/modules/xr/xr_transient_input_hit_test_source.h"
 #include "third_party/blink/renderer/modules/xr/xr_view.h"
 #include "third_party/blink/renderer/modules/xr/xr_viewer_pose.h"
@@ -27,9 +31,6 @@ const char kInvalidView[] =
 
 const char kSessionMismatch[] = "XRSpace and XRFrame sessions do not match.";
 
-const char kCannotReportPoses[] =
-    "Poses cannot be given out for the current state.";
-
 const char kHitTestSourceUnavailable[] =
     "Unable to obtain hit test results for specified hit test source. Ensure "
     "that it was not already canceled.";
@@ -43,13 +44,16 @@ const char kSpacesSequenceTooLarge[] =
 
 const char kMismatchedBufferSizes[] = "Buffer sizes must be equal";
 
-absl::optional<uint64_t> GetPlaneId(
+const char kTransformsDetached[] =
+    "The transforms array was detached during fillPoses().";
+
+std::optional<device::PlaneId> GetPlaneId(
     const device::mojom::blink::XRNativeOriginInformation& native_origin) {
   if (native_origin.is_plane_id()) {
     return native_origin.get_plane_id();
   }
 
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 }  // namespace
@@ -81,21 +85,35 @@ XRViewerPose* XRFrame::getViewerPose(XRReferenceSpace* reference_space,
   }
 
   // Must use a reference space created from the same session.
-  if (reference_space->session() != session_) {
-    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
-                                      kSessionMismatch);
+  if (!IsSameSession(reference_space->session(), exception_state)) {
     return nullptr;
   }
 
   if (!session_->CanReportPoses()) {
-    exception_state.ThrowSecurityError(kCannotReportPoses);
+    exception_state.ThrowSecurityError(XRSession::kCannotReportPoses);
     return nullptr;
   }
 
   session_->LogGetPose();
 
-  device::mojom::blink::XRReferenceSpaceType type = reference_space->GetType();
-  absl::optional<TransformationMatrix> offset_space_from_viewer =
+  std::optional<gfx::Transform> native_from_mojo =
+      reference_space->NativeFromMojo();
+  if (!native_from_mojo) {
+    DVLOG(1) << __func__ << ": native_from_mojo is invalid";
+    return nullptr;
+  }
+
+  gfx::Transform ref_space_from_mojo =
+      reference_space->OffsetFromNativeMatrix();
+  ref_space_from_mojo.PreConcat(*native_from_mojo);
+
+  // Can only update an XRViewerPose's views with an invertible matrix.
+  if (!ref_space_from_mojo.IsInvertible()) {
+    DVLOG(1) << __func__ << ": ref_space_from_mojo is not invertible";
+    return nullptr;
+  }
+
+  std::optional<gfx::Transform> offset_space_from_viewer =
       reference_space->OffsetFromViewer();
 
   // Can only update an XRViewerPose's views with an invertible matrix.
@@ -107,10 +125,12 @@ XRViewerPose* XRFrame::getViewerPose(XRReferenceSpace* reference_space,
     return nullptr;
   }
 
+  device::mojom::blink::XRReferenceSpaceType type = reference_space->GetType();
+
   // If the |reference_space| type is kViewer, we know that the pose is not
   // emulated. Otherwise, ask the session if the poses are emulated or not.
   return MakeGarbageCollected<XRViewerPose>(
-      this, *offset_space_from_viewer,
+      this, ref_space_from_mojo, *offset_space_from_viewer,
       (type == device::mojom::blink::XRReferenceSpaceType::kViewer)
           ? false
           : session_->EmulatedPosition());
@@ -130,6 +150,18 @@ XRPlaneSet* XRFrame::detectedPlanes(ExceptionState& exception_state) const {
   }
 
   return session_->GetDetectedPlanes();
+}
+
+XRMeshSet* XRFrame::detectedMeshes(ExceptionState& exception_state) const {
+  DVLOG(3) << __func__;
+
+  if (!is_active_) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                      kInactiveFrame);
+    return nullptr;
+  }
+
+  return session_->GetDetectedMeshes();
 }
 
 XRLightEstimate* XRFrame::getLightEstimate(
@@ -152,9 +184,7 @@ XRLightEstimate* XRFrame::getLightEstimate(
   }
 
   // Must use a light probe created from the same session.
-  if (light_probe->session() != session_) {
-    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
-                                      kSessionMismatch);
+  if (!IsSameSession(light_probe->session(), exception_state)) {
     return nullptr;
   }
 
@@ -195,12 +225,9 @@ XRCPUDepthInformation* XRFrame::getDepthInformation(
     return nullptr;
   }
 
-  return session_->GetCpuDepthInformation(this, exception_state);
+  return view->GetCpuDepthInformation(exception_state);
 }
 
-// Return an XRPose that has a transform of basespace_from_space, while
-// accounting for the base pose matrix of this frame. If computing a transform
-// isn't possible, return nullptr.
 XRPose* XRFrame::getPose(XRSpace* space,
                          XRSpace* basespace,
                          ExceptionState& exception_state) {
@@ -217,20 +244,18 @@ XRPose* XRFrame::getPose(XRSpace* space,
     return nullptr;
   }
 
-  if (space->session() != session_) {
-    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
-                                      kSessionMismatch);
-    return nullptr;
-  }
-
-  if (basespace->session() != session_) {
-    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
-                                      kSessionMismatch);
+  if (!IsSameSession(space->session(), exception_state) ||
+      !IsSameSession(basespace->session(), exception_state)) {
     return nullptr;
   }
 
   if (!session_->CanReportPoses()) {
-    exception_state.ThrowSecurityError(kCannotReportPoses);
+    exception_state.ThrowSecurityError(XRSession::kCannotReportPoses);
+    return nullptr;
+  }
+
+  if ((space->IsInputSpace() || basespace->IsInputSpace()) &&
+      !session_->CanReportInputPoses()) {
     return nullptr;
   }
 
@@ -238,7 +263,7 @@ XRPose* XRFrame::getPose(XRSpace* space,
   // identity & we can skip the rest of the logic. The pose is not emulated.
   if (space == basespace) {
     DVLOG(3) << __func__ << ": addresses match, returning identity";
-    return MakeGarbageCollected<XRPose>(TransformationMatrix{}, false);
+    return MakeGarbageCollected<XRPose>(gfx::Transform{}, false);
   }
 
   // If the native origins match, the pose between the spaces is fixed and
@@ -266,7 +291,7 @@ bool XRFrame::IsActive() const {
   return is_active_;
 }
 
-HeapVector<Member<XRHitTestResult>> XRFrame::getHitTestResults(
+const FrozenArray<XRHitTestResult>& XRFrame::getHitTestResults(
     XRHitTestSource* hit_test_source,
     ExceptionState& exception_state) {
   if (!hit_test_source ||
@@ -274,13 +299,14 @@ HeapVector<Member<XRHitTestResult>> XRFrame::getHitTestResults(
     // This should only happen when hit test source was already canceled.
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       kHitTestSourceUnavailable);
-    return {};
+    return *MakeGarbageCollected<FrozenArray<XRHitTestResult>>();
   }
 
-  return hit_test_source->Results();
+  return *MakeGarbageCollected<FrozenArray<XRHitTestResult>>(
+      hit_test_source->Results());
 }
 
-HeapVector<Member<XRTransientInputHitTestResult>>
+const FrozenArray<XRTransientInputHitTestResult>&
 XRFrame::getHitTestResultsForTransientInput(
     XRTransientInputHitTestSource* hit_test_source,
     ExceptionState& exception_state) {
@@ -289,16 +315,18 @@ XRFrame::getHitTestResultsForTransientInput(
     // This should only happen when hit test source was already canceled.
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       kHitTestSourceUnavailable);
-    return {};
+    return *MakeGarbageCollected<FrozenArray<XRTransientInputHitTestResult>>();
   }
 
-  return hit_test_source->Results();
+  return *MakeGarbageCollected<FrozenArray<XRTransientInputHitTestResult>>(
+      hit_test_source->Results());
 }
 
-ScriptPromise XRFrame::createAnchor(ScriptState* script_state,
-                                    XRRigidTransform* offset_space_from_anchor,
-                                    XRSpace* space,
-                                    ExceptionState& exception_state) {
+ScriptPromise<XRAnchor> XRFrame::createAnchor(
+    ScriptState* script_state,
+    XRRigidTransform* offset_space_from_anchor,
+    XRSpace* space,
+    ExceptionState& exception_state) {
   DVLOG(2) << __func__;
 
   if (!session_->IsFeatureEnabled(device::mojom::XRSessionFeature::ANCHORS)) {
@@ -369,17 +397,17 @@ ScriptPromise XRFrame::createAnchor(ScriptState* script_state,
                                             maybe_plane_id, exception_state);
 }
 
-ScriptPromise XRFrame::CreateAnchorFromNonStationarySpace(
+ScriptPromise<XRAnchor> XRFrame::CreateAnchorFromNonStationarySpace(
     ScriptState* script_state,
-    const blink::TransformationMatrix& native_origin_from_anchor,
+    const gfx::Transform& native_origin_from_anchor,
     XRSpace* space,
-    absl::optional<uint64_t> maybe_plane_id,
+    std::optional<device::PlaneId> maybe_plane_id,
     ExceptionState& exception_state) {
   DVLOG(2) << __func__;
 
   // Space is not considered stationary - need to adjust the app-provided pose.
   // Let's ask the session about the appropriate stationary reference space:
-  absl::optional<XRSession::ReferenceSpaceInformation>
+  std::optional<XRSession::ReferenceSpaceInformation>
       reference_space_information = session_->GetStationaryReferenceSpace();
 
   if (!reference_space_information) {
@@ -388,11 +416,8 @@ ScriptPromise XRFrame::CreateAnchorFromNonStationarySpace(
     return {};
   }
 
-  const TransformationMatrix& mojo_from_stationary_space =
-      reference_space_information->mojo_from_space;
-
-  DCHECK(mojo_from_stationary_space.IsInvertible());
-  auto stationary_space_from_mojo = mojo_from_stationary_space.Inverse();
+  auto stationary_space_from_mojo =
+      reference_space_information->mojo_from_space.GetCheckedInverse();
 
   // We now have 2 spaces - the dynamic one passed in to create anchor
   // call, and the stationary one. We also have a rigid transform
@@ -418,23 +443,42 @@ ScriptPromise XRFrame::CreateAnchorFromNonStationarySpace(
       exception_state);
 }
 
-HeapVector<Member<XRImageTrackingResult>> XRFrame::getImageTrackingResults(
+bool XRFrame::IsSameSession(XRSession* space_session,
+                            ExceptionState& exception_state) const {
+  if (space_session != session_) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                      kSessionMismatch);
+    return false;
+  }
+  return true;
+}
+
+const FrozenArray<XRImageTrackingResult>& XRFrame::getImageTrackingResults(
     ExceptionState& exception_state) {
   return session_->ImageTrackingResults(exception_state);
 }
 
 XRJointPose* XRFrame::getJointPose(XRJointSpace* joint,
                                    XRSpace* baseSpace,
-                                   ExceptionState& exception_state) {
+                                   ExceptionState& exception_state) const {
   if (!is_active_) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       kInactiveFrame);
     return nullptr;
   }
 
-  if (session_ != baseSpace->session() || session_ != joint->session()) {
-    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
-                                      kSessionMismatch);
+  if (!IsSameSession(baseSpace->session(), exception_state) ||
+      !IsSameSession(joint->session(), exception_state)) {
+    return nullptr;
+  }
+
+  if (!session_->CanReportPoses()) {
+    exception_state.ThrowSecurityError(XRSession::kCannotReportPoses);
+    return nullptr;
+  }
+
+  // JointSpaces are input spaces, so no need to check if the baseSpace is one.
+  if (!session_->CanReportInputPoses()) {
     return nullptr;
   }
 
@@ -449,13 +493,20 @@ XRJointPose* XRFrame::getJointPose(XRJointSpace* joint,
                                            radius);
 }
 
-bool XRFrame::fillJointRadii(HeapVector<Member<XRJointSpace>>& jointSpaces,
-                             NotShared<DOMFloat32Array> radii,
-                             ExceptionState& exception_state) {
+bool XRFrame::fillJointRadii(
+    const HeapVector<Member<XRJointSpace>>& jointSpaces,
+    NotShared<DOMFloat32Array> radii,
+    ExceptionState& exception_state) const {
   if (!is_active_) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       kInactiveFrame);
     return false;
+  }
+
+  for (const auto& joint_space : jointSpaces) {
+    if (!IsSameSession(joint_space->session(), exception_state)) {
+      return false;
+    }
   }
 
   if (jointSpaces.size() != radii->length()) {
@@ -463,69 +514,83 @@ bool XRFrame::fillJointRadii(HeapVector<Member<XRJointSpace>>& jointSpaces,
     return false;
   }
 
-  for (unsigned offset = 0; offset < jointSpaces.size(); offset++) {
-    const XRJointSpace* jointSpace = jointSpaces[offset];
-    if (session_ != jointSpace->session()) {
-      exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
-                                        kSessionMismatch);
-      return false;
-    }
+  bool all_valid = true;
 
-    radii->Data()[offset] = jointSpace->radius();
+  auto radii_data = radii->AsSpan();
+  for (unsigned offset = 0; offset < jointSpaces.size(); offset++) {
+    const XRJointSpace* joint_space = jointSpaces[offset];
+    if (!session_->CanReportInputPoses() ||
+        joint_space->handHasMissingPoses()) {
+      radii_data[offset] = NAN;
+      all_valid = false;
+    } else {
+      radii_data[offset] = joint_space->radius();
+    }
   }
 
-  return true;
+  return all_valid;
 }
 
-bool XRFrame::fillPoses(HeapVector<Member<XRSpace>>& spaces,
-                        XRSpace* baseSpace,
+bool XRFrame::fillPoses(const HeapVector<Member<XRSpace>>& spaces,
+                        XRSpace* base_space,
                         NotShared<DOMFloat32Array> transforms,
-                        ExceptionState& exception_state) {
+                        ExceptionState& exception_state) const {
+  constexpr unsigned kFloatsPerTransform = 16;
+
   if (!is_active_) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       kInactiveFrame);
     return false;
   }
 
-  const unsigned floats_per_transform = 16;
+  bool using_input_space = base_space->IsInputSpace();
+  for (const auto& space : spaces) {
+    if (!IsSameSession(space->session(), exception_state)) {
+      return false;
+    }
+    using_input_space |= space->IsInputSpace();
+  }
 
-  if (spaces.size() * floats_per_transform > transforms->length()) {
+  if (!IsSameSession(base_space->session(), exception_state)) {
+    return false;
+  }
+
+  if (spaces.size() * kFloatsPerTransform > transforms->length()) {
     exception_state.ThrowTypeError(kSpacesSequenceTooLarge);
     return false;
   }
 
-  if (session_ != baseSpace->session()) {
-    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
-                                      kSessionMismatch);
+  if (!session_->CanReportPoses()) {
+    exception_state.ThrowSecurityError(XRSession::kCannotReportPoses);
     return false;
   }
 
-  bool allValid = true;
-  unsigned offset = 0;
+  if (using_input_space && !session_->CanReportInputPoses()) {
+    return false;
+  }
+
+  bool all_valid = true;
+  auto transforms_data = transforms->AsSpan();
   for (const auto& space : spaces) {
-    if (session_ != space->session()) {
+    auto current_transform = transforms_data.take_first<kFloatsPerTransform>();
+    const XRPose* pose = space->getPose(base_space);
+    // getPose() can synchronously dispatch a reset event if the space requires
+    // updating, which could detach the buffer in a JavaScript listener.
+    if (transforms->IsDetached()) {
       exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
-                                        kSessionMismatch);
+                                        kTransformsDetached);
       return false;
     }
 
-    const XRPose* pose = space->getPose(baseSpace);
-    if (!pose) {
-      for (unsigned i = 0; i < floats_per_transform; i++) {
-        transforms->Data()[offset + i] = NAN;
-        allValid = false;
-      }
+    if (pose) {
+      current_transform.copy_from(pose->transform()->matrix()->AsSpan());
     } else {
-      const float* const poseMatrix = pose->transform()->matrix()->Data();
-      for (unsigned i = 0; i < floats_per_transform; i++) {
-        transforms->Data()[offset + i] = poseMatrix[i];
-      }
+      std::ranges::fill(current_transform, NAN);
+      all_valid = false;
     }
-
-    offset += floats_per_transform;
   }
 
-  return allValid;
+  return all_valid;
 }
 
 void XRFrame::Trace(Visitor* visitor) const {

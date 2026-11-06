@@ -1,10 +1,14 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "ui/wm/core/cursor_manager.h"
+
+#include "ash/constants/ash_switches.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
-#include "ui/wm/core/cursor_manager.h"
+#include "base/command_line.h"
+#include "ui/events/event_switches.h"
 
 namespace ash {
 
@@ -16,8 +20,7 @@ TEST_F(CursorManagerChromeosTest, VerifyVisibilityAfterKeyCommands) {
   ASSERT_TRUE(cursor_manager->IsCursorVisible());
 
   // Pressing the normal key should hide the cursor.
-  GetEventGenerator()->PressKey(ui::KeyboardCode::VKEY_C, ui::EF_NONE);
-  GetEventGenerator()->ReleaseKey(ui::KeyboardCode::VKEY_C, ui::EF_NONE);
+  PressAndReleaseKey(ui::KeyboardCode::VKEY_C);
   EXPECT_FALSE(cursor_manager->IsCursorVisible());
 
   // Move the mouse and the cursor should show.
@@ -25,21 +28,81 @@ TEST_F(CursorManagerChromeosTest, VerifyVisibilityAfterKeyCommands) {
   EXPECT_TRUE(cursor_manager->IsCursorVisible());
 
   // The command key commands should not hide the cursor.
-  GetEventGenerator()->PressKey(ui::KeyboardCode::VKEY_C, ui::EF_COMMAND_DOWN);
-  GetEventGenerator()->ReleaseKey(ui::KeyboardCode::VKEY_C,
-                                  ui::EF_COMMAND_DOWN);
+  PressAndReleaseKey(ui::KeyboardCode::VKEY_C, ui::EF_COMMAND_DOWN);
   EXPECT_TRUE(cursor_manager->IsCursorVisible());
 
   // The alt key commands should not hide the cursor.
-  GetEventGenerator()->PressKey(ui::KeyboardCode::VKEY_C, ui::EF_ALT_DOWN);
-  GetEventGenerator()->ReleaseKey(ui::KeyboardCode::VKEY_C, ui::EF_ALT_DOWN);
+  PressAndReleaseKey(ui::KeyboardCode::VKEY_C, ui::EF_ALT_DOWN);
   EXPECT_TRUE(cursor_manager->IsCursorVisible());
 
   // The control key commands should not hide the cursor.
-  GetEventGenerator()->PressKey(ui::KeyboardCode::VKEY_C, ui::EF_CONTROL_DOWN);
-  GetEventGenerator()->ReleaseKey(ui::KeyboardCode::VKEY_C,
-                                  ui::EF_CONTROL_DOWN);
+  PressAndReleaseKey(ui::KeyboardCode::VKEY_C, ui::EF_CONTROL_DOWN);
   EXPECT_TRUE(cursor_manager->IsCursorVisible());
+}
+
+class ForceShowCursorManagerChromeosTest : public AshTestBase {
+ public:
+  ForceShowCursorManagerChromeosTest() = default;
+  ForceShowCursorManagerChromeosTest(
+      const ForceShowCursorManagerChromeosTest&) = delete;
+  ForceShowCursorManagerChromeosTest& operator=(
+      const ForceShowCursorManagerChromeosTest&) = delete;
+  ~ForceShowCursorManagerChromeosTest() override = default;
+
+  // AshTestBase:
+  void SetUp() override {
+    // Allow debug shortcuts so we can use the accelerator to force showing the
+    // cursor.
+    base::CommandLine::ForCurrentProcess()->AppendSwitch(
+        switches::kForceShowCursor);
+    AshTestBase::SetUp();
+  }
+};
+
+TEST_F(ForceShowCursorManagerChromeosTest, Basic) {
+  auto* cursor_manager = Shell::Get()->cursor_manager();
+  EXPECT_TRUE(cursor_manager->IsCursorVisible());
+
+  cursor_manager->HideCursor();
+  EXPECT_TRUE(cursor_manager->IsCursorVisible());
+
+  Shell::Get()->SetCursorCompositingEnabled(true);
+  EXPECT_TRUE(cursor_manager->IsCursorVisible());
+}
+
+class ForceShowCursorForTouchEmulationManagerChromeosTest : public AshTestBase {
+ public:
+  ForceShowCursorForTouchEmulationManagerChromeosTest() = default;
+  ForceShowCursorForTouchEmulationManagerChromeosTest(
+      const ForceShowCursorForTouchEmulationManagerChromeosTest&) = delete;
+  ForceShowCursorForTouchEmulationManagerChromeosTest& operator=(
+      const ForceShowCursorForTouchEmulationManagerChromeosTest&) = delete;
+  ~ForceShowCursorForTouchEmulationManagerChromeosTest() override = default;
+
+  // AshTestBase:
+  void SetUp() override {
+    // Allow debug shortcuts so we can use the accelerator to force showing the
+    // cursor.
+    base::CommandLine::ForCurrentProcess()->AppendSwitch(
+        switches::kForceShowCursor);
+    base::CommandLine::ForCurrentProcess()->AppendSwitch(
+        ::switches::kTouchDevices);
+    AshTestBase::SetUp();
+  }
+};
+
+TEST_F(ForceShowCursorForTouchEmulationManagerChromeosTest, Basic) {
+  auto* cursor_manager = Shell::Get()->cursor_manager();
+  EXPECT_FALSE(cursor_manager->IsCursorVisible());
+
+  cursor_manager->HideCursor();
+  EXPECT_FALSE(cursor_manager->IsCursorVisible());
+
+  cursor_manager->ShowCursor();
+  EXPECT_FALSE(cursor_manager->IsCursorVisible());
+
+  Shell::Get()->SetCursorCompositingEnabled(true);
+  EXPECT_FALSE(cursor_manager->IsCursorVisible());
 }
 
 }  // namespace ash

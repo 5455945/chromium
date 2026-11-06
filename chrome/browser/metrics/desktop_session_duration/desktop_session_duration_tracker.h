@@ -1,17 +1,18 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_METRICS_DESKTOP_SESSION_DURATION_DESKTOP_SESSION_DURATION_TRACKER_H_
 #define CHROME_BROWSER_METRICS_DESKTOP_SESSION_DURATION_DESKTOP_SESSION_DURATION_TRACKER_H_
 
-#include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
+#include "base/types/optional_ref.h"
 #include "chrome/browser/metrics/desktop_session_duration/audible_contents_tracker.h"
 #include "chrome/browser/metrics/desktop_session_duration/chrome_visibility_observer.h"
+#include "ui/events/types/event_type.h"
 
 namespace metrics {
 
@@ -22,7 +23,7 @@ class DesktopSessionDurationTracker : public AudibleContentsTracker::Observer {
   // The methods for the observer will be called on the UI thread.
   class Observer {
    public:
-    virtual ~Observer() {}
+    virtual ~Observer() = default;
     virtual void OnSessionStarted(base::TimeTicks session_start) {}
     virtual void OnSessionEnded(base::TimeDelta session_length,
                                 base::TimeTicks session_end) {}
@@ -39,8 +40,12 @@ class DesktopSessionDurationTracker : public AudibleContentsTracker::Observer {
   // Returns the |DesktopSessionDurationTracker| instance.
   static DesktopSessionDurationTracker* Get();
 
+  DesktopSessionDurationTracker(const DesktopSessionDurationTracker&) = delete;
+  DesktopSessionDurationTracker& operator=(
+      const DesktopSessionDurationTracker&) = delete;
+
   // Called when user interaction with the browser is caught.
-  void OnUserEvent();
+  void OnUserEvent(base::optional_ref<const ui::EventType> event);
 
   // Called when visibility of the browser changes. These events can be delayed
   // due to timeout logic, the extent of which can be communicated via
@@ -49,6 +54,9 @@ class DesktopSessionDurationTracker : public AudibleContentsTracker::Observer {
 
   bool is_visible() const { return is_visible_; }
   bool in_session() const { return in_session_; }
+  bool waiting_for_first_interactive_session() const {
+    return waiting_for_first_interactive_session_;
+  }
   bool is_audio_playing() const { return is_audio_playing_; }
 
   void SetInactivityTimeoutForTesting(base::TimeDelta inactivity_timeout) {
@@ -58,6 +66,9 @@ class DesktopSessionDurationTracker : public AudibleContentsTracker::Observer {
   // For observing the status of the session tracker.
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
+
+  // Ends the session and saves session information into histograms.
+  void EndSessionForTesting();
 
   // Cleans up any global state for testing.
   static void CleanupForTesting();
@@ -92,6 +103,12 @@ class DesktopSessionDurationTracker : public AudibleContentsTracker::Observer {
   // Used for marking start if the session.
   base::TimeTicks session_start_;
 
+  // This variable either stores the session start time for first interactive
+  // session of an OS launched instance, or falls back to `session_start_` if
+  // those two conditions are not met (not an OS launched instance or not the
+  // first interactive session).
+  base::TimeTicks interactive_session_start_time_;
+
   // Used for marking last user interaction.
   base::TimeTicks last_user_event_;
 
@@ -101,19 +118,22 @@ class DesktopSessionDurationTracker : public AudibleContentsTracker::Observer {
   bool is_audio_playing_ = false;
   bool is_first_session_ = true;
 
+  // Stores whether we are waiting for the first interactive session to start.
+  // This should be false for non-OS launched instances, while in the first
+  // interactive session, or after the first interactive session has ended.
+  bool waiting_for_first_interactive_session_ = true;
+
   // Timeout for waiting for user interaction.
   base::TimeDelta inactivity_timeout_;
 
   base::OneShotTimer timer_;
 
-  base::ObserverList<Observer>::Unchecked observer_list_;
+  base::ObserverList<Observer>::UncheckedAndDanglingUntriaged observer_list_;
 
   ChromeVisibilityObserver visibility_observer_;
   AudibleContentsTracker audio_tracker_;
 
   base::WeakPtrFactory<DesktopSessionDurationTracker> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(DesktopSessionDurationTracker);
 };
 
 }  // namespace metrics

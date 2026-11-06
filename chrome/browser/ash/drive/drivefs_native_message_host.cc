@@ -1,103 +1,80 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/drive/drivefs_native_message_host.h"
 
-#include "ash/constants/ash_features.h"
-#include "base/bind.h"
-#include "base/cxx17_backports.h"
-#include "base/feature_list.h"
+#include <algorithm>
+
+#include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/memory/raw_ptr.h"
+#include "base/task/single_thread_task_runner.h"
+#include "build/buildflag.h"
 #include "chrome/browser/ash/drive/drive_integration_service.h"
-#include "chrome/browser/extensions/api/messaging/native_message_port.h"
+#include "chrome/browser/ash/drive/drive_integration_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/extensions/extension_constants.h"
 #include "components/drive/file_errors.h"
+#include "content/public/browser/browser_context.h"
 #include "extensions/browser/api/messaging/channel_endpoint.h"
 #include "extensions/browser/api/messaging/message_service.h"
+#include "extensions/browser/api/messaging/native_message_host.h"
+#include "extensions/browser/api/messaging/native_message_port.h"
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/api/messaging/messaging_endpoint.h"
+#include "extensions/common/api/messaging/messaging_util.h"
 #include "extensions/common/api/messaging/port_id.h"
+#include "extensions/common/mojom/message_port.mojom-shared.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "url/gurl.h"
 
 namespace drive {
-
-const char kDriveFsNativeMessageHostName[] = "com.google.drive.nativeproxy";
-
-const char* const kDriveFsNativeMessageHostOrigins[] = {
-    "chrome-extension://lmjegmlicamnimmfhcmpkclmigmmcbeh/",
-};
-
-constexpr size_t kDriveFsNativeMessageHostOriginsSize =
-    base::size(kDriveFsNativeMessageHostOrigins);
 
 class DriveFsNativeMessageHost : public extensions::NativeMessageHost,
                                  public drivefs::mojom::NativeMessagingPort {
  public:
   // Used when the native messaging session is initiated by the extension.
-  explicit DriveFsNativeMessageHost(Profile* profile)
-      : drive_service_(DriveIntegrationServiceFactory::GetForProfile(profile)) {
-  }
+  explicit DriveFsNativeMessageHost(CreateNativeHostSessionCallback callback)
+      : create_native_host_callback_(std::move(callback)) {}
 
   // Used when the native messaging session is initiated by DriveFS.
   DriveFsNativeMessageHost(
+      content::BrowserContext* context,
       mojo::PendingReceiver<drivefs::mojom::NativeMessagingPort>
           extension_receiver,
       mojo::PendingRemote<drivefs::mojom::NativeMessagingHost> drivefs_remote)
       : pending_receiver_(std::move(extension_receiver)),
-        drivefs_remote_(std::move(drivefs_remote)) {
-    DCHECK(UseBidirectionalNativeMessaging());
-  }
+        drivefs_remote_(std::move(drivefs_remote)) {}
 
-  explicit DriveFsNativeMessageHost(
-      drivefs::mojom::DriveFs* drivefs_for_testing)
-      : drivefs_for_testing_(drivefs_for_testing) {}
+  DriveFsNativeMessageHost(const DriveFsNativeMessageHost&) = delete;
+  DriveFsNativeMessageHost& operator=(const DriveFsNativeMessageHost&) = delete;
 
   ~DriveFsNativeMessageHost() override = default;
 
   void OnMessage(const std::string& message) override {
-    DCHECK(client_);
+    CHECK(client_, base::NotFatalUntil::M161);
 
-    if (UseBidirectionalNativeMessaging()) {
-      if (drivefs_remote_) {
-        drivefs_remote_->HandleMessageFromExtension(message);
-      }
-    } else {
-      if (!drive_service_ || !drive_service_->GetDriveFsInterface()) {
-        OnDriveFsResponse(FILE_ERROR_SERVICE_UNAVAILABLE, "");
-        return;
-      }
-
-      drive_service_->GetDriveFsInterface()->SendNativeMessageRequest(
-          message, base::BindOnce(&DriveFsNativeMessageHost::OnDriveFsResponse,
-                                  weak_ptr_factory_.GetWeakPtr()));
+    if (drivefs_remote_) {
+      drivefs_remote_->HandleMessageFromExtension(message);
     }
   }
 
   void Start(Client* client) override {
     client_ = client;
 
-    if (!UseBidirectionalNativeMessaging()) {
-      return;
-    }
-
     if (!pending_receiver_) {
       // The session was initiated by the extension.
       mojo::PendingRemote<drivefs::mojom::NativeMessagingPort> extension_port;
       pending_receiver_ = extension_port.InitWithNewPipeAndPassReceiver();
-      drivefs::mojom::DriveFs* drivefs =
-          drivefs_for_testing_ ? drivefs_for_testing_
-                               : drive_service_->GetDriveFsInterface();
-      drivefs->CreateNativeHostSession(
-          drivefs::mojom::ExtensionConnectionParams::New(
-              GURL(kDriveFsNativeMessageHostOrigins[0]).host()),
-          drivefs_remote_.BindNewPipeAndPassReceiver(),
-          std::move(extension_port));
+
+      std::move(create_native_host_callback_)
+          .Run(drivefs::mojom::ExtensionConnectionParams::New(
+                   GURL(kDriveFsNativeMessageHostOrigins[0]).GetHost()),
+               drivefs_remote_.BindNewPipeAndPassReceiver(),
+               std::move(extension_port));
     }
     receiver_.Bind(std::move(std::move(pending_receiver_)));
     receiver_.set_disconnect_with_reason_handler(base::BindOnce(
@@ -109,15 +86,6 @@ class DriveFsNativeMessageHost : public extensions::NativeMessageHost,
   }
 
  private:
-  void OnDriveFsResponse(FileError error, const std::string& response) {
-    if (error == FILE_ERROR_OK) {
-      client_->PostMessageFromNativeHost(response);
-    } else {
-      LOG(WARNING) << "DriveFS returned error " << FileErrorToString(error);
-      client_->CloseChannel(FileErrorToString(error));
-    }
-  }
-
   void PostMessageToExtension(const std::string& message) override {
     client_->PostMessageFromNativeHost(message);
   }
@@ -129,94 +97,116 @@ class DriveFsNativeMessageHost : public extensions::NativeMessageHost,
     drivefs_remote_.reset();
   }
 
-  bool UseBidirectionalNativeMessaging() {
-    return base::FeatureList::IsEnabled(
-        chromeos::features::kDriveFsBidirectionalNativeMessaging);
-  }
-
-  DriveIntegrationService* drive_service_ = nullptr;
-  drivefs::mojom::DriveFs* drivefs_for_testing_ = nullptr;
+  CreateNativeHostSessionCallback create_native_host_callback_;
 
   // Used to buffer messages until Start() has been called.
   mojo::PendingReceiver<drivefs::mojom::NativeMessagingPort> pending_receiver_;
   mojo::Receiver<drivefs::mojom::NativeMessagingPort> receiver_{this};
   mojo::Remote<drivefs::mojom::NativeMessagingHost> drivefs_remote_;
 
-  Client* client_ = nullptr;
+  raw_ptr<Client> client_ = nullptr;
 
   const scoped_refptr<base::SingleThreadTaskRunner> task_runner_ =
-      base::ThreadTaskRunnerHandle::Get();
-
-  base::WeakPtrFactory<DriveFsNativeMessageHost> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(DriveFsNativeMessageHost);
+      base::SingleThreadTaskRunner::GetCurrentDefault();
 };
 
+namespace {
+
+void CreateNativeHostSession(
+    Profile* profile,
+    drivefs::mojom::ExtensionConnectionParamsPtr params,
+    mojo::PendingReceiver<drivefs::mojom::NativeMessagingHost> session,
+    mojo::PendingRemote<drivefs::mojom::NativeMessagingPort> port) {
+  auto* drive_service = DriveIntegrationServiceFactory::GetForProfile(profile);
+  if (!drive_service || !drive_service->GetDriveFsInterface()) {
+    // Mojo uses unsigned int for disconnect reason, but file errors are
+    // negative, so negate the error to pass as it a positive int.
+    port.ResetWithReason(-FILE_ERROR_SERVICE_UNAVAILABLE,
+                         "Drivefs is unavailable.");
+    return;
+  }
+
+  drive_service->GetDriveFsInterface()->CreateNativeHostSession(
+      drivefs::mojom::ExtensionConnectionParams::New(
+          GURL(kDriveFsNativeMessageHostOrigins[0]).GetHost()),
+      std::move(session), std::move(port));
+}
+
+}  // namespace
+
 std::unique_ptr<extensions::NativeMessageHost> CreateDriveFsNativeMessageHost(
-    content::BrowserContext* browser_context) {
-  return std::make_unique<DriveFsNativeMessageHost>(
-      Profile::FromBrowserContext(browser_context));
+    CreateNativeHostSessionCallback callback) {
+  return std::make_unique<DriveFsNativeMessageHost>(std::move(callback));
 }
 
 std::unique_ptr<extensions::NativeMessageHost>
-CreateDriveFsInitiatedNativeMessageHost(
+CreateDriveFsNativeMessageHostAsh(content::BrowserContext* browser_context) {
+  return CreateDriveFsNativeMessageHost(base::BindOnce(
+      CreateNativeHostSession, Profile::FromBrowserContext(browser_context)));
+}
+
+std::unique_ptr<extensions::NativeMessageHost>
+CreateDriveFsInitiatedNativeMessageHostInternal(
+    content::BrowserContext* context,
     mojo::PendingReceiver<drivefs::mojom::NativeMessagingPort>
         extension_receiver,
     mojo::PendingRemote<drivefs::mojom::NativeMessagingHost> drivefs_remote) {
-  if (!base::FeatureList::IsEnabled(
-          chromeos::features::kDriveFsBidirectionalNativeMessaging)) {
-    return nullptr;
-  }
   return std::make_unique<DriveFsNativeMessageHost>(
-      std::move(extension_receiver), std::move(drivefs_remote));
+      context, std::move(extension_receiver), std::move(drivefs_remote));
 }
 
-std::unique_ptr<extensions::NativeMessageHost>
-CreateDriveFsNativeMessageHostForTesting(
-    drivefs::mojom::DriveFs* drivefs_for_testing) {
-  return std::make_unique<DriveFsNativeMessageHost>(drivefs_for_testing);
-}
-
-drivefs::mojom::DriveFsDelegate::ExtensionConnectionStatus
+drivefs::mojom::ExtensionConnectionStatus
 ConnectToDriveFsNativeMessageExtension(
-    Profile* profile,
+    content::BrowserContext* context,
     const std::string& extension_id,
     mojo::PendingReceiver<drivefs::mojom::NativeMessagingPort>
         extension_receiver,
     mojo::PendingRemote<drivefs::mojom::NativeMessagingHost> drivefs_remote) {
+  // If none of the explicitly accepted DriveFS native messaging origins match
+  // the provided |extension_id|, return an error to prevent privilege
+  // escalation:
+  if (std::ranges::none_of(kDriveFsNativeMessageHostOrigins,
+                           [&extension_id](const char* allowed_origin) {
+                             return extension_id == GURL(allowed_origin).host();
+                           })) {
+    return drivefs::mojom::ExtensionConnectionStatus::kExtensionNotFound;
+  }
+
   auto* extension =
-      extensions::ExtensionRegistry::Get(profile)->enabled_extensions().GetByID(
+      extensions::ExtensionRegistry::Get(context)->enabled_extensions().GetByID(
           extension_id);
   if (!extension ||
       !extension->permissions_data()->active_permissions().HasAPIPermission(
           "nativeMessaging") ||
-      !extensions::EventRouter::Get(profile)->ExtensionHasEventListener(
+      !extensions::EventRouter::Get(context)->ExtensionHasEventListener(
           extension_id, "runtime.onConnectNative")) {
-    return drivefs::mojom::DriveFsDelegate::ExtensionConnectionStatus::
-        kExtensionNotFound;
+    return drivefs::mojom::ExtensionConnectionStatus::kExtensionNotFound;
   }
 
-  const extensions::PortId port_id(base::UnguessableToken::Create(),
-                                   /* port_number= */ 1, /* is_opener= */ true);
+  const extensions::PortId port_id(
+      base::UnguessableToken::Create(),
+      /*port_number=*/1, /*is_opener=*/true,
+      extensions::messaging_util::GetSerializationFormat(
+          extension, extensions::mojom::ChannelType::kNative));
   extensions::MessageService* const message_service =
-      extensions::MessageService::Get(profile);
-  auto native_message_host = CreateDriveFsInitiatedNativeMessageHost(
-      std::move(extension_receiver), std::move(drivefs_remote));
+      extensions::MessageService::Get(context);
+  auto native_message_host = CreateDriveFsInitiatedNativeMessageHostInternal(
+      context, std::move(extension_receiver), std::move(drivefs_remote));
   if (!native_message_host) {
-    return drivefs::mojom::DriveFsDelegate::ExtensionConnectionStatus::
-        kExtensionNotFound;
+    return drivefs::mojom::ExtensionConnectionStatus::kFeatureNotEnabled;
   }
 
   auto native_message_port = std::make_unique<extensions::NativeMessagePort>(
       message_service->GetChannelDelegate(), port_id,
       std::move(native_message_host));
   message_service->OpenChannelToExtension(
-      extensions::ChannelEndpoint(profile), port_id,
+      extensions::ChannelEndpoint(context), port_id,
       extensions::MessagingEndpoint::ForNativeApp(
           kDriveFsNativeMessageHostName),
       std::move(native_message_port), extension_id, GURL(),
+      extensions::mojom::ChannelType::kNative,
       /* channel name= */ std::string());
-  return drivefs::mojom::DriveFsDelegate::ExtensionConnectionStatus::kSuccess;
+  return drivefs::mojom::ExtensionConnectionStatus::kSuccess;
 }
 
 }  // namespace drive

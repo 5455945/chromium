@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,26 +7,25 @@
 #include <memory>
 #include <string>
 
-#include "ash/constants/ash_features.h"
-#include "base/bind.h"
-#include "base/run_loop.h"
+#include "base/functional/bind.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "base/test/test_future.h"
 #include "chromeos/components/quick_answers/quick_answers_model.h"
 #include "chromeos/components/quick_answers/utils/quick_answers_utils.h"
 #include "chromeos/services/machine_learning/public/mojom/machine_learning_service.mojom.h"
 #include "chromeos/services/machine_learning/public/mojom/text_classifier.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace chromeos {
 namespace quick_answers {
 namespace {
 
-using chromeos::machine_learning::mojom::TextClassifier;
-using machine_learning::mojom::TextAnnotationRequestPtr;
-using machine_learning::mojom::TextLanguage;
-using machine_learning::mojom::TextLanguagePtr;
-using machine_learning::mojom::TextSuggestSelectionRequestPtr;
+using ::chromeos::machine_learning::mojom::
+    REMOVED_TextSuggestSelectionRequestPtr;
+using ::chromeos::machine_learning::mojom::TextAnnotationRequestPtr;
+using ::chromeos::machine_learning::mojom::TextClassifier;
+using ::chromeos::machine_learning::mojom::TextLanguage;
+using ::chromeos::machine_learning::mojom::TextLanguagePtr;
 
 TextLanguagePtr DefaultLanguage() {
   return TextLanguage::New("en", /*confidence=*/1);
@@ -44,20 +43,18 @@ class FakeTextClassifier
   void Annotate(TextAnnotationRequestPtr request,
                 AnnotateCallback callback) override {}
 
-  void SuggestSelection(TextSuggestSelectionRequestPtr request,
-                        SuggestSelectionCallback callback) override {}
-
   void FindLanguages(const std::string& text,
                      FindLanguagesCallback callback) override {
     std::vector<TextLanguagePtr> languages;
 
-    if (detection_results_.find(text) == detection_results_.end()) {
+    const auto it = detection_results_.find(text);
+    if (it == detection_results_.end()) {
       languages.push_back(DefaultLanguage());
       std::move(callback).Run(std::move(languages));
       return;
     }
 
-    languages.push_back(detection_results_[text].Clone());
+    languages.push_back(it->second.Clone());
     std::move(callback).Run(std::move(languages));
   }
 
@@ -65,33 +62,29 @@ class FakeTextClassifier
     detection_results_[text] = std::move(language);
   }
 
+  void REMOVED_1(REMOVED_TextSuggestSelectionRequestPtr request,
+                 REMOVED_1Callback callback) override {}
+
  private:
   std::map<std::string, TextLanguagePtr> detection_results_;
 };
 
 class LanguageDetectorTest : public testing::Test {
  public:
-  LanguageDetectorTest() : language_detector_(&text_classifier_) {
-    scoped_feature_list_.InitWithFeatures(
-        {chromeos::features::kQuickAnswersTextAnnotator,
-         chromeos::features::kQuickAnswersTranslation},
-        {});
-  }
+  LanguageDetectorTest() : language_detector_(&text_classifier_) {}
 
   LanguageDetectorTest(const LanguageDetectorTest&) = delete;
   LanguageDetectorTest& operator=(const LanguageDetectorTest&) = delete;
 
-  const absl::optional<std::string>& DetectLanguage(
+  const std::optional<std::string>& DetectLanguage(
       const std::string& surrounding_text,
       const std::string& selected_text) {
-    base::RunLoop run_loop;
+    base::test::TestFuture<std::optional<std::string>> future;
 
-    language_detector_.DetectLanguage(
-        surrounding_text, selected_text,
-        base::BindOnce(&LanguageDetectorTest::DetectLanguageCallback,
-                       base::Unretained(this), run_loop.QuitClosure()));
+    language_detector_.DetectLanguage(surrounding_text, selected_text,
+                                      future.GetCallback());
 
-    run_loop.Run();
+    detected_locale_ = future.Take();
 
     return detected_locale_;
   }
@@ -99,15 +92,9 @@ class LanguageDetectorTest : public testing::Test {
   FakeTextClassifier* text_classifier() { return &text_classifier_; }
 
  private:
-  void DetectLanguageCallback(base::OnceClosure quit_closure,
-                              absl::optional<std::string> detected_locale) {
-    detected_locale_ = std::move(detected_locale);
-    std::move(quit_closure).Run();
-  }
-
   base::test::TaskEnvironment task_environment_;
 
-  absl::optional<std::string> detected_locale_;
+  std::optional<std::string> detected_locale_;
 
   FakeTextClassifier text_classifier_;
   LanguageDetector language_detector_;
@@ -178,4 +165,3 @@ TEST_F(LanguageDetectorTest, DetectLanguageLowConfidence) {
 }
 
 }  // namespace quick_answers
-}  // namespace chromeos

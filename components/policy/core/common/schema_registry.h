@@ -1,15 +1,16 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_POLICY_CORE_COMMON_SCHEMA_REGISTRY_H_
 #define COMPONENTS_POLICY_CORE_COMMON_SCHEMA_REGISTRY_H_
 
+#include <array>
 #include <set>
 
 #include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/observer_list.h"
 #include "base/sequence_checker.h"
 #include "components/policy/core/common/policy_namespace.h"
@@ -54,6 +55,8 @@ class POLICY_EXPORT SchemaRegistry {
   };
 
   SchemaRegistry();
+  SchemaRegistry(const SchemaRegistry&) = delete;
+  SchemaRegistry& operator=(const SchemaRegistry&) = delete;
   virtual ~SchemaRegistry();
 
   const scoped_refptr<SchemaMap>& schema_map() const { return schema_map_; }
@@ -98,9 +101,7 @@ class POLICY_EXPORT SchemaRegistry {
  private:
   base::ObserverList<Observer, true>::Unchecked observers_;
   base::ObserverList<InternalObserver, true>::Unchecked internal_observers_;
-  bool domains_ready_[POLICY_DOMAIN_SIZE];
-
-  DISALLOW_COPY_AND_ASSIGN(SchemaRegistry);
+  std::array<bool, POLICY_DOMAIN_SIZE> domains_ready_;
 };
 
 // A registry that combines the maps of other registries.
@@ -110,6 +111,8 @@ class POLICY_EXPORT CombinedSchemaRegistry
       public SchemaRegistry::InternalObserver {
  public:
   CombinedSchemaRegistry();
+  CombinedSchemaRegistry(const CombinedSchemaRegistry&) = delete;
+  CombinedSchemaRegistry& operator=(const CombinedSchemaRegistry&) = delete;
   ~CombinedSchemaRegistry() override;
 
   void Track(SchemaRegistry* registry);
@@ -128,10 +131,8 @@ class POLICY_EXPORT CombinedSchemaRegistry
  private:
   void Combine(bool has_new_schemas);
 
-  std::set<SchemaRegistry*> registries_;
+  std::set<raw_ptr<SchemaRegistry, SetExperimental>> registries_;
   scoped_refptr<SchemaMap> own_schema_map_;
-
-  DISALLOW_COPY_AND_ASSIGN(CombinedSchemaRegistry);
 };
 
 // A registry that wraps another schema registry.
@@ -143,6 +144,8 @@ class POLICY_EXPORT ForwardingSchemaRegistry
   // This registry will stop updating its SchemaMap when |wrapped| is
   // destroyed.
   explicit ForwardingSchemaRegistry(SchemaRegistry* wrapped);
+  ForwardingSchemaRegistry(const ForwardingSchemaRegistry&) = delete;
+  ForwardingSchemaRegistry& operator=(const ForwardingSchemaRegistry&) = delete;
   ~ForwardingSchemaRegistry() override;
 
   // SchemaRegistry:
@@ -160,9 +163,7 @@ class POLICY_EXPORT ForwardingSchemaRegistry
  private:
   void UpdateReadiness();
 
-  SchemaRegistry* wrapped_;
-
-  DISALLOW_COPY_AND_ASSIGN(ForwardingSchemaRegistry);
+  raw_ptr<SchemaRegistry> wrapped_;
 };
 
 }  // namespace policy

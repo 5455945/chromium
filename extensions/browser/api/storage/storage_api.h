@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,14 @@
 #define EXTENSIONS_BROWSER_API_STORAGE_STORAGE_API_H_
 
 #include "base/compiler_specific.h"
-#include "base/memory/ref_counted.h"
+#include "base/gtest_prod_util.h"
+#include "components/value_store/value_store.h"
 #include "extensions/browser/api/storage/session_storage_manager.h"
+#include "extensions/browser/api/storage/settings_namespace.h"
 #include "extensions/browser/api/storage/settings_observer.h"
 #include "extensions/browser/api/storage/storage_area_namespace.h"
+#include "extensions/browser/api/storage/storage_frontend.h"
 #include "extensions/browser/extension_function.h"
-#include "extensions/browser/value_store/settings_namespace.h"
-#include "extensions/browser/value_store/value_store.h"
 
 namespace extensions {
 
@@ -24,36 +25,16 @@ class SettingsFunction : public ExtensionFunction {
 
   // ExtensionFunction:
   bool ShouldSkipQuotaLimiting() const override;
-  ResponseAction Run() override;
+  bool PreRunValidation(std::string* error) override;
 
-  // Extension settings function implementations should do their work here.
-  // The StorageFrontend makes sure this is posted to the appropriate thread.
-  virtual ResponseValue RunWithStorage(ValueStore* storage) = 0;
+  // Returns whether the caller's context has access to the storage or not.
+  bool IsAccessToStorageAllowed(StorageAreaNamespace storage_area_);
 
-  // Extension settings function implementations in `session` namespace should
-  // do their work here.
-  virtual ResponseValue RunInSession() = 0;
+  StorageAreaNamespace storage_area() const { return storage_area_; }
 
-  // Convert the |result| of a read function to the appropriate response value.
-  // - If the |result| succeeded this will return a response object argument.
-  // - If the |result| failed will return an error object.
-  ResponseValue UseReadResult(ValueStore::ReadResult result);
-
-  // Handles the |result| of a write function.
-  // - If the |result| succeeded this will send out change notification(s), if
-  //   appropriate, and return no arguments.
-  // - If the |result| failed will return an error object.
-  ResponseValue UseWriteResult(ValueStore::WriteResult result);
-
-  // Notifies the given `changes`, if non empty, to the observer.
-  void OnSessionSettingsChanged(
-      std::vector<SessionStorageManager::ValueChange> changes);
+  void OnWriteOperationFinished(StorageFrontend::ResultStatus status);
 
  private:
-  // Called via PostTask from Run. Calls RunWithStorage and then
-  // SendResponse with its success value.
-  void AsyncRunWithStorage(ValueStore* storage);
-
   // The Storage Area the call was for. For example: kLocal if the API call was
   // chrome.storage.local, kSync if the API call was chrome.storage.sync, etc.
   StorageAreaNamespace storage_area_ = StorageAreaNamespace::kInvalid;
@@ -62,9 +43,6 @@ class SettingsFunction : public ExtensionFunction {
   // StorageAreaNamespace's that use ValueStore.
   settings_namespace::Namespace settings_namespace_ =
       settings_namespace::INVALID;
-
-  // Observers, cached so that it's only grabbed from the UI thread.
-  scoped_refptr<SettingsObserverList> observers_;
 };
 
 class StorageStorageAreaGetFunction : public SettingsFunction {
@@ -72,11 +50,30 @@ class StorageStorageAreaGetFunction : public SettingsFunction {
   DECLARE_EXTENSION_FUNCTION("storage.get", STORAGE_GET)
 
  protected:
-  ~StorageStorageAreaGetFunction() override {}
+  ~StorageStorageAreaGetFunction() override = default;
 
   // SettingsFunction:
-  ResponseValue RunWithStorage(ValueStore* storage) override;
-  ResponseValue RunInSession() override;
+  ResponseAction Run() override;
+
+  // Called after getting data from storage. If `defaults` is provided, merges
+  // the data from `result` into the dictionary. This allows developers to
+  // provide a fallback for data not present in storage.
+  void OnGetOperationFinished(std::optional<base::DictValue> defaults,
+                              StorageFrontend::GetResult result);
+};
+
+class StorageStorageAreaGetKeysFunction : public SettingsFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("storage.getKeys", STORAGE_GETKEYS)
+
+ protected:
+  ~StorageStorageAreaGetKeysFunction() override = default;
+
+  // SettingsFunction:
+  ResponseAction Run() override;
+
+  // Called after getting keys from storage.
+  void OnGetKeysOperationFinished(StorageFrontend::GetKeysResult result);
 };
 
 class StorageStorageAreaSetFunction : public SettingsFunction {
@@ -84,11 +81,10 @@ class StorageStorageAreaSetFunction : public SettingsFunction {
   DECLARE_EXTENSION_FUNCTION("storage.set", STORAGE_SET)
 
  protected:
-  ~StorageStorageAreaSetFunction() override {}
+  ~StorageStorageAreaSetFunction() override = default;
 
   // SettingsFunction:
-  ResponseValue RunWithStorage(ValueStore* storage) override;
-  ResponseValue RunInSession() override;
+  ResponseAction Run() override;
 
   // ExtensionFunction:
   void GetQuotaLimitHeuristics(QuotaLimitHeuristics* heuristics) const override;
@@ -99,11 +95,10 @@ class StorageStorageAreaRemoveFunction : public SettingsFunction {
   DECLARE_EXTENSION_FUNCTION("storage.remove", STORAGE_REMOVE)
 
  protected:
-  ~StorageStorageAreaRemoveFunction() override {}
+  ~StorageStorageAreaRemoveFunction() override = default;
 
   // SettingsFunction:
-  ResponseValue RunWithStorage(ValueStore* storage) override;
-  ResponseValue RunInSession() override;
+  ResponseAction Run() override;
 
   // ExtensionFunction:
   void GetQuotaLimitHeuristics(QuotaLimitHeuristics* heuristics) const override;
@@ -114,11 +109,10 @@ class StorageStorageAreaClearFunction : public SettingsFunction {
   DECLARE_EXTENSION_FUNCTION("storage.clear", STORAGE_CLEAR)
 
  protected:
-  ~StorageStorageAreaClearFunction() override {}
+  ~StorageStorageAreaClearFunction() override = default;
 
   // SettingsFunction:
-  ResponseValue RunWithStorage(ValueStore* storage) override;
-  ResponseValue RunInSession() override;
+  ResponseAction Run() override;
 
   // ExtensionFunction:
   void GetQuotaLimitHeuristics(QuotaLimitHeuristics* heuristics) const override;
@@ -128,12 +122,32 @@ class StorageStorageAreaGetBytesInUseFunction : public SettingsFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("storage.getBytesInUse", STORAGE_GETBYTESINUSE)
 
+  FRIEND_TEST_ALL_PREFIXES(StorageApiUnittest, GetBytesInUseIntOverflow);
+
  protected:
-  ~StorageStorageAreaGetBytesInUseFunction() override {}
+  ~StorageStorageAreaGetBytesInUseFunction() override = default;
 
   // SettingsFunction:
-  ResponseValue RunWithStorage(ValueStore* storage) override;
-  ResponseValue RunInSession() override;
+  ResponseAction Run() override;
+
+  // Called after retrieving bytes from storage.
+  void OnGetBytesInUseOperationFinished(size_t);
+};
+
+class StorageStorageAreaSetAccessLevelFunction : public SettingsFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("storage.setAccessLevel", STORAGE_SETACCESSLEVEL)
+  StorageStorageAreaSetAccessLevelFunction() = default;
+  StorageStorageAreaSetAccessLevelFunction(
+      const StorageStorageAreaSetAccessLevelFunction&) = delete;
+  StorageStorageAreaSetAccessLevelFunction& operator=(
+      const StorageStorageAreaSetAccessLevelFunction&) = delete;
+
+ protected:
+  ~StorageStorageAreaSetAccessLevelFunction() override = default;
+
+  // SettingsFunction:
+  ResponseAction Run() override;
 };
 
 }  // namespace extensions

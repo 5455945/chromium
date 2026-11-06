@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,6 +10,7 @@
 #include <cups/cups.h>
 
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -39,9 +40,24 @@ struct COMPONENT_EXPORT(PRINT_BACKEND) CupsJob {
     ABORTED      // an error occurred causing the printer to give up
   };
 
+  // Possible reasons sent by CUPS in job-state-reason
+  // The strings are hardcoded in CUPS code and these strings the only once are
+  // currently needed.
+  enum class JobStateReason {
+    kJobCompletedWithErrors = 0,
+    kCupsHeldForAuthentication,
+    kJobCanceledByUser,
+    kJobCanceledByOperator,
+    kJobCanceledAtDevice,
+    kJobCompletedSuccessfully,
+  };
+
   CupsJob();
   CupsJob(const CupsJob& other);
   ~CupsJob();
+
+  // Returns true if `job`.state_reasons contains `reason`.
+  bool ContainsStateReason(JobStateReason reason) const;
 
   // job id
   int id = -1;
@@ -71,12 +87,44 @@ struct COMPONENT_EXPORT(PRINT_BACKEND) PrinterInfo {
   // MIME types for supported formats.
   std::vector<std::string> document_formats;
 
+  // document-format-default
+  // MIME type for default format.
+  std::string document_format_default;
+
+  // document-format-preferred
+  // MIME type for preferred format.
+  std::string document_format_preferred;
+
+  // urf-supported
+  // A collection of supported URF printing modes.
+  std::vector<std::string> urf_supported;
+
+  // pdf-version-supported
+  // A collection of supported PDF versions.
+  std::vector<std::string> pdf_versions;
+
+  // ipp-features-supported
+  // A collection of supported IPP features.
+  std::vector<std::string> ipp_features;
+
+  // mopria-certified
+  // Mopria certification level of the printer.
+  std::string mopria_certified;
+
+  // printer-kind
+  // A collection of supported printing categories.
+  std::vector<std::string> printer_kind;
+
   // ipp-versions-supported
   // A collection of supported IPP protocol versions.
   std::vector<base::Version> ipp_versions;
 
   // Does ipp-features-supported contain 'ipp-everywhere'.
   bool ipp_everywhere = false;
+
+  // URI of OAuth2 Authorization Server and scope. Empty strings if not set.
+  std::string oauth_server;
+  std::string oauth_scope;
 };
 
 // Specifies classes of jobs.
@@ -84,6 +132,10 @@ enum JobCompletionState {
   COMPLETED,  // only completed jobs
   PROCESSING  // only jobs that are being processed
 };
+
+// Converts a JobStateReason to the exact string returned by CUPS.
+const std::string_view COMPONENT_EXPORT(PRINT_BACKEND)
+    ToJobStateReasonString(CupsJob::JobStateReason stateReason);
 
 // Returns the uri for printer with `id` as served by CUPS. Assumes that `id` is
 // a valid CUPS printer name and performs no error checking or escaping.
@@ -100,8 +152,8 @@ void ParseJobsResponse(ipp_t* response,
 void ParsePrinterStatus(ipp_t* response, PrinterStatus* printer_status);
 
 // Queries the printer at `address` on `port` with a Get-Printer-Attributes
-// request to populate `printer_info`. If `encrypted` is true, request is made
-// using ipps, otherwise, ipp is used. Returns false if the request failed.
+// request to populate `printer_info` and `printer_status`. If `encrypted` is
+// true, request is made using ipps, otherwise, ipp is used.
 PrinterQueryResult COMPONENT_EXPORT(PRINT_BACKEND)
     GetPrinterInfo(const std::string& address,
                    int port,

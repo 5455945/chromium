@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,14 +8,14 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
 #include "base/files/file_util.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
-#include "base/single_thread_task_runner.h"
-#include "base/task_runner_util.h"
+#include "base/notimplemented.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/media_galleries/fileapi/media_path_filter.h"
 #include "chrome/browser/media_galleries/fileapi/mtp_device_async_delegate.h"
 #include "chrome/browser/media_galleries/fileapi/mtp_device_map_service.h"
@@ -24,7 +24,7 @@
 #include "chrome/browser/media_galleries/fileapi/readahead_file_stream_reader.h"
 #include "components/services/filesystem/public/mojom/types.mojom.h"
 #include "content/public/browser/browser_thread.h"
-#include "storage/browser/blob/shareable_file_reference.h"
+#include "storage/browser/blob/scoped_file.h"
 #include "storage/browser/file_system/file_stream_reader.h"
 #include "storage/browser/file_system/file_system_context.h"
 #include "storage/browser/file_system/file_system_operation_context.h"
@@ -34,7 +34,7 @@
 using storage::AsyncFileUtil;
 using storage::FileSystemOperationContext;
 using storage::FileSystemURL;
-using storage::ShareableFileReference;
+using storage::ScopedFile;
 
 namespace {
 
@@ -45,7 +45,7 @@ const char kDeviceMediaAsyncFileUtilTempDir[] = "DeviceMediaFileSystem";
 // caller about the file |error|.
 void OnGetFileInfoError(AsyncFileUtil::GetFileInfoCallback callback,
                         base::File::Error error) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
   std::move(callback).Run(error, base::File::Info());
 }
 
@@ -54,7 +54,7 @@ void OnGetFileInfoError(AsyncFileUtil::GetFileInfoCallback callback,
 void OnDidCheckMediaForGetFileInfo(AsyncFileUtil::GetFileInfoCallback callback,
                                    const base::File::Info& file_info,
                                    bool is_valid_file) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
   if (!is_valid_file) {
     OnGetFileInfoError(std::move(callback), base::File::FILE_ERROR_NOT_FOUND);
     return;
@@ -68,58 +68,58 @@ void OnDidCheckMediaForReadDirectory(
     AsyncFileUtil::ReadDirectoryCallback callback,
     bool has_more,
     AsyncFileUtil::EntryList file_list) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
   callback.Run(base::File::FILE_OK, std::move(file_list), has_more);
 }
 
 // Called when CreateDirectory method call failed.
 void OnCreateDirectoryError(AsyncFileUtil::StatusCallback callback,
                             base::File::Error error) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
   std::move(callback).Run(error);
 }
 
 // Called when ReadDirectory method call failed to enumerate the directory
 // objects. |callback| is invoked to notify the caller about the |error|
-// that occured while reading the directory objects.
+// that occurred while reading the directory objects.
 void OnReadDirectoryError(AsyncFileUtil::ReadDirectoryCallback callback,
                           base::File::Error error) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
   callback.Run(error, AsyncFileUtil::EntryList(), false /*no more*/);
 }
 
 // Called when CopyFileLocal method call failed.
 void OnCopyFileLocalError(AsyncFileUtil::StatusCallback callback,
                           base::File::Error error) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
   std::move(callback).Run(error);
 }
 
 // Called when MoveFileLocal method call failed.
 void OnMoveFileLocalError(AsyncFileUtil::StatusCallback callback,
                           base::File::Error error) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
   std::move(callback).Run(error);
 }
 
 // Called when CopyInForeignFile method call failed.
 void OnCopyInForeignFileError(AsyncFileUtil::StatusCallback callback,
                               base::File::Error error) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
   std::move(callback).Run(error);
 }
 
 // Called when DeleteFile method call failed.
 void OnDeleteFileError(AsyncFileUtil::StatusCallback callback,
                        base::File::Error error) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
   std::move(callback).Run(error);
 }
 
 // Called when DeleteDirectory method call failed.
 void OnDeleteDirectoryError(AsyncFileUtil::StatusCallback callback,
                             base::File::Error error) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
   std::move(callback).Run(error);
 }
 
@@ -147,13 +147,14 @@ base::FilePath CreateSnapshotFileOnBlockingPool(
 void OnDidCheckMediaForCreateSnapshotFile(
     AsyncFileUtil::CreateSnapshotFileCallback callback,
     const base::File::Info& file_info,
-    scoped_refptr<storage::ShareableFileReference> platform_file,
+    storage::ScopedFile temp_file,
     base::File::Error error) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
-  base::FilePath platform_path(platform_file.get()->path());
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
+  base::FilePath platform_path(temp_file.path());
   if (error != base::File::FILE_OK)
-    platform_file.reset();
-  std::move(callback).Run(error, file_info, platform_path, platform_file);
+    temp_file.Reset();
+  std::move(callback).Run(error, file_info, platform_path,
+                          std::move(temp_file));
 }
 
 // Called when the snapshot file specified by the |platform_path| is
@@ -164,21 +165,19 @@ void OnDidCreateSnapshotFile(AsyncFileUtil::CreateSnapshotFileCallback callback,
                              bool validate_media_files,
                              const base::File::Info& file_info,
                              const base::FilePath& platform_path) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
-  scoped_refptr<storage::ShareableFileReference> file =
-      ShareableFileReference::GetOrCreate(
-          platform_path,
-          ShareableFileReference::DELETE_ON_FINAL_RELEASE,
-          media_task_runner);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
+  storage::ScopedFile temp_file(platform_path, ScopedFile::DELETE_ON_SCOPE_OUT,
+                                media_task_runner);
 
   if (validate_media_files) {
-    base::PostTaskAndReplyWithResult(
-        media_task_runner, FROM_HERE,
+    media_task_runner->PostTaskAndReplyWithResult(
+        FROM_HERE,
         base::BindOnce(&NativeMediaFileUtil::IsMediaFile, platform_path),
         base::BindOnce(&OnDidCheckMediaForCreateSnapshotFile,
-                       std::move(callback), file_info, file));
+                       std::move(callback), file_info, std::move(temp_file)));
   } else {
-    OnDidCheckMediaForCreateSnapshotFile(std::move(callback), file_info, file,
+    OnDidCheckMediaForCreateSnapshotFile(std::move(callback), file_info,
+                                         std::move(temp_file),
                                          base::File::FILE_OK);
   }
 }
@@ -188,9 +187,9 @@ void OnDidCreateSnapshotFile(AsyncFileUtil::CreateSnapshotFileCallback callback,
 void OnCreateSnapshotFileError(
     AsyncFileUtil::CreateSnapshotFileCallback callback,
     base::File::Error error) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
   std::move(callback).Run(error, base::File::Info(), base::FilePath(),
-                          scoped_refptr<ShareableFileReference>());
+                          ScopedFile());
 }
 
 // Called when the snapshot file specified by the |snapshot_file_path| is
@@ -205,7 +204,7 @@ void OnSnapshotFileCreatedRunTask(
     const FileSystemURL& url,
     bool validate_media_files,
     const base::FilePath& snapshot_file_path) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
   if (snapshot_file_path.empty()) {
     OnCreateSnapshotFileError(std::move(callback),
                               base::File::FILE_ERROR_FAILED);
@@ -238,6 +237,9 @@ class DeviceMediaAsyncFileUtil::MediaPathFilterWrapper
  public:
   MediaPathFilterWrapper();
 
+  MediaPathFilterWrapper(const MediaPathFilterWrapper&) = delete;
+  MediaPathFilterWrapper& operator=(const MediaPathFilterWrapper&) = delete;
+
   // Check if entries in |file_list| look like media files.
   // Append the ones that look like media files to |results|.
   // Should run on a media task runner.
@@ -253,16 +255,14 @@ class DeviceMediaAsyncFileUtil::MediaPathFilterWrapper
   virtual ~MediaPathFilterWrapper();
 
   std::unique_ptr<MediaPathFilter> media_path_filter_;
-
-  DISALLOW_COPY_AND_ASSIGN(MediaPathFilterWrapper);
 };
 
 DeviceMediaAsyncFileUtil::MediaPathFilterWrapper::MediaPathFilterWrapper()
     : media_path_filter_(new MediaPathFilter) {
 }
 
-DeviceMediaAsyncFileUtil::MediaPathFilterWrapper::~MediaPathFilterWrapper() {
-}
+DeviceMediaAsyncFileUtil::MediaPathFilterWrapper::~MediaPathFilterWrapper() =
+    default;
 
 AsyncFileUtil::EntryList
 DeviceMediaAsyncFileUtil::MediaPathFilterWrapper::FilterMediaEntries(
@@ -271,7 +271,7 @@ DeviceMediaAsyncFileUtil::MediaPathFilterWrapper::FilterMediaEntries(
   for (size_t i = 0; i < file_list.size(); ++i) {
     const filesystem::mojom::DirectoryEntry& entry = file_list[i];
     if (entry.type == filesystem::mojom::FsFileType::DIRECTORY ||
-        CheckFilePath(entry.name)) {
+        CheckFilePath(entry.name.path())) {
       results.push_back(entry);
     }
   }
@@ -283,21 +283,20 @@ bool DeviceMediaAsyncFileUtil::MediaPathFilterWrapper::CheckFilePath(
   return media_path_filter_->Match(path);
 }
 
-DeviceMediaAsyncFileUtil::~DeviceMediaAsyncFileUtil() {
-}
+DeviceMediaAsyncFileUtil::~DeviceMediaAsyncFileUtil() = default;
 
 // static
 std::unique_ptr<DeviceMediaAsyncFileUtil> DeviceMediaAsyncFileUtil::Create(
     const base::FilePath& profile_path,
     MediaFileValidationType validation_type) {
-  DCHECK(!profile_path.empty());
+  CHECK(!profile_path.empty(), base::NotFatalUntil::M161);
   return base::WrapUnique(
       new DeviceMediaAsyncFileUtil(profile_path, validation_type));
 }
 
 bool DeviceMediaAsyncFileUtil::SupportsStreaming(
     const storage::FileSystemURL& url) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
   MTPDeviceAsyncDelegate* delegate =
       MTPDeviceMapService::GetInstance()->GetMTPDeviceAsyncDelegate(url);
   if (!delegate)
@@ -308,13 +307,13 @@ bool DeviceMediaAsyncFileUtil::SupportsStreaming(
 void DeviceMediaAsyncFileUtil::CreateOrOpen(
     std::unique_ptr<FileSystemOperationContext> context,
     const FileSystemURL& url,
-    int file_flags,
+    uint32_t file_flags,
     CreateOrOpenCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
   // Returns an error if any unsupported flag is found.
-  if (file_flags & ~(base::File::FLAG_OPEN |
-                     base::File::FLAG_READ |
-                     base::File::FLAG_WRITE_ATTRIBUTES)) {
+  if (file_flags &
+      ~(base::File::FLAG_OPEN | base::File::FLAG_READ |
+        base::File::FLAG_WRITE_ATTRIBUTES | base::File::FLAG_WIN_NO_EXECUTE)) {
     std::move(callback).Run(base::File(base::File::FILE_ERROR_SECURITY),
                             base::OnceClosure());
     return;
@@ -331,7 +330,7 @@ void DeviceMediaAsyncFileUtil::EnsureFileExists(
     std::unique_ptr<FileSystemOperationContext> context,
     const FileSystemURL& url,
     EnsureFileExistsCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
   NOTIMPLEMENTED();
   std::move(callback).Run(base::File::FILE_ERROR_SECURITY, false);
 }
@@ -342,7 +341,7 @@ void DeviceMediaAsyncFileUtil::CreateDirectory(
     bool exclusive,
     bool recursive,
     StatusCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
   MTPDeviceAsyncDelegate* delegate =
       MTPDeviceMapService::GetInstance()->GetMTPDeviceAsyncDelegate(url);
   if (!delegate) {
@@ -357,22 +356,20 @@ void DeviceMediaAsyncFileUtil::CreateDirectory(
   }
 
   // Only one of the success or error callbacks will be called here.
-  auto split_callback = base::SplitOnceCallback(std::move(callback));
+  auto [on_success, on_error] = base::SplitOnceCallback(std::move(callback));
   delegate->CreateDirectory(
       url.path(), exclusive, recursive,
-      base::BindRepeating(&DeviceMediaAsyncFileUtil::OnDidCreateDirectory,
-                          weak_ptr_factory_.GetWeakPtr(),
-                          base::Passed(&split_callback.first)),
-      base::BindOnce(&OnCreateDirectoryError,
-                     std::move(split_callback.second)));
+      base::BindOnce(&DeviceMediaAsyncFileUtil::OnDidCreateDirectory,
+                     weak_ptr_factory_.GetWeakPtr(), std::move(on_success)),
+      base::BindOnce(&OnCreateDirectoryError, std::move(on_error)));
 }
 
 void DeviceMediaAsyncFileUtil::GetFileInfo(
     std::unique_ptr<FileSystemOperationContext> context,
     const FileSystemURL& url,
-    int /* flags */,
+    GetMetadataFieldSet fields,
     GetFileInfoCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
   MTPDeviceAsyncDelegate* delegate =
       MTPDeviceMapService::GetInstance()->GetMTPDeviceAsyncDelegate(url);
   if (!delegate) {
@@ -395,7 +392,7 @@ void DeviceMediaAsyncFileUtil::ReadDirectory(
     std::unique_ptr<FileSystemOperationContext> context,
     const FileSystemURL& url,
     ReadDirectoryCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
   MTPDeviceAsyncDelegate* delegate =
       MTPDeviceMapService::GetInstance()->GetMTPDeviceAsyncDelegate(url);
   if (!delegate) {
@@ -417,7 +414,7 @@ void DeviceMediaAsyncFileUtil::Touch(
     const base::Time& last_access_time,
     const base::Time& last_modified_time,
     StatusCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
   NOTIMPLEMENTED();
   std::move(callback).Run(base::File::FILE_ERROR_SECURITY);
 }
@@ -427,7 +424,7 @@ void DeviceMediaAsyncFileUtil::Truncate(
     const FileSystemURL& url,
     int64_t length,
     StatusCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
   NOTIMPLEMENTED();
   std::move(callback).Run(base::File::FILE_ERROR_SECURITY);
 }
@@ -436,10 +433,10 @@ void DeviceMediaAsyncFileUtil::CopyFileLocal(
     std::unique_ptr<FileSystemOperationContext> context,
     const FileSystemURL& src_url,
     const FileSystemURL& dest_url,
-    CopyOrMoveOption option,
+    CopyOrMoveOptionSet options,
     CopyFileProgressCallback progress_callback,
     StatusCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
 
   MTPDeviceAsyncDelegate* delegate =
       MTPDeviceMapService::GetInstance()->GetMTPDeviceAsyncDelegate(dest_url);
@@ -468,9 +465,9 @@ void DeviceMediaAsyncFileUtil::MoveFileLocal(
     std::unique_ptr<FileSystemOperationContext> context,
     const FileSystemURL& src_url,
     const FileSystemURL& dest_url,
-    CopyOrMoveOption option,
+    CopyOrMoveOptionSet options,
     StatusCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
 
   MTPDeviceAsyncDelegate* delegate =
       MTPDeviceMapService::GetInstance()->GetMTPDeviceAsyncDelegate(dest_url);
@@ -499,7 +496,7 @@ void DeviceMediaAsyncFileUtil::CopyInForeignFile(
     const base::FilePath& src_file_path,
     const FileSystemURL& dest_url,
     StatusCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
 
   MTPDeviceAsyncDelegate* delegate =
       MTPDeviceMapService::GetInstance()->GetMTPDeviceAsyncDelegate(dest_url);
@@ -529,7 +526,7 @@ void DeviceMediaAsyncFileUtil::DeleteFile(
     std::unique_ptr<FileSystemOperationContext> context,
     const FileSystemURL& url,
     StatusCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
 
   MTPDeviceAsyncDelegate* const delegate =
       MTPDeviceMapService::GetInstance()->GetMTPDeviceAsyncDelegate(url);
@@ -556,7 +553,7 @@ void DeviceMediaAsyncFileUtil::DeleteDirectory(
     std::unique_ptr<FileSystemOperationContext> context,
     const FileSystemURL& url,
     StatusCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
 
   MTPDeviceAsyncDelegate* const delegate =
       MTPDeviceMapService::GetInstance()->GetMTPDeviceAsyncDelegate(url);
@@ -586,7 +583,7 @@ void DeviceMediaAsyncFileUtil::DeleteRecursively(
     std::unique_ptr<FileSystemOperationContext> context,
     const FileSystemURL& url,
     StatusCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
   std::move(callback).Run(base::File::FILE_ERROR_INVALID_OPERATION);
 }
 
@@ -594,7 +591,7 @@ void DeviceMediaAsyncFileUtil::CreateSnapshotFile(
     std::unique_ptr<FileSystemOperationContext> context,
     const FileSystemURL& url,
     CreateSnapshotFileCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
   MTPDeviceAsyncDelegate* delegate =
       MTPDeviceMapService::GetInstance()->GetMTPDeviceAsyncDelegate(url);
   if (!delegate) {
@@ -604,8 +601,8 @@ void DeviceMediaAsyncFileUtil::CreateSnapshotFile(
   }
 
   scoped_refptr<base::SequencedTaskRunner> task_runner(context->task_runner());
-  base::PostTaskAndReplyWithResult(
-      task_runner.get(), FROM_HERE,
+  task_runner->PostTaskAndReplyWithResult(
+      FROM_HERE,
       base::BindOnce(&CreateSnapshotFileOnBlockingPool, profile_path_),
       base::BindOnce(&OnSnapshotFileCreatedRunTask, std::move(context),
                      std::move(callback), url, validate_media_files()));
@@ -622,7 +619,7 @@ DeviceMediaAsyncFileUtil::GetFileStreamReader(
   if (!delegate)
     return nullptr;
 
-  DCHECK(delegate->IsStreaming());
+  CHECK(delegate->IsStreaming(), base::NotFatalUntil::M161);
   return std::unique_ptr<storage::FileStreamReader>(
       new ReadaheadFileStreamReader(new MTPFileStreamReader(
           context, url, offset, expected_modification_time,
@@ -670,7 +667,7 @@ DeviceMediaAsyncFileUtil::DeviceMediaAsyncFileUtil(
 }
 
 void DeviceMediaAsyncFileUtil::OnDidCreateDirectory(StatusCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
 
   std::move(callback).Run(base::File::FILE_OK);
 }
@@ -680,15 +677,15 @@ void DeviceMediaAsyncFileUtil::OnDidGetFileInfo(
     const base::FilePath& path,
     AsyncFileUtil::GetFileInfoCallback callback,
     const base::File::Info& file_info) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
   if (file_info.is_directory || !validate_media_files()) {
     OnDidCheckMediaForGetFileInfo(std::move(callback), file_info,
                                   true /* valid */);
     return;
   }
 
-  base::PostTaskAndReplyWithResult(
-      task_runner, FROM_HERE,
+  task_runner->PostTaskAndReplyWithResult(
+      FROM_HERE,
       base::BindOnce(&MediaPathFilterWrapper::CheckFilePath,
                      media_path_filter_wrapper_, path),
       base::BindOnce(&OnDidCheckMediaForGetFileInfo, std::move(callback),
@@ -700,49 +697,49 @@ void DeviceMediaAsyncFileUtil::OnDidReadDirectory(
     AsyncFileUtil::ReadDirectoryCallback callback,
     AsyncFileUtil::EntryList file_list,
     bool has_more) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
   if (!validate_media_files()) {
     OnDidCheckMediaForReadDirectory(callback, has_more, std::move(file_list));
     return;
   }
 
-  base::PostTaskAndReplyWithResult(
-      task_runner, FROM_HERE,
+  task_runner->PostTaskAndReplyWithResult(
+      FROM_HERE,
       base::BindOnce(&MediaPathFilterWrapper::FilterMediaEntries,
                      media_path_filter_wrapper_, std::move(file_list)),
       base::BindOnce(&OnDidCheckMediaForReadDirectory, callback, has_more));
 }
 
 void DeviceMediaAsyncFileUtil::OnDidCopyFileLocal(StatusCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
 
   std::move(callback).Run(base::File::FILE_OK);
 }
 
 void DeviceMediaAsyncFileUtil::OnDidMoveFileLocal(StatusCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
 
   std::move(callback).Run(base::File::FILE_OK);
 }
 
 void DeviceMediaAsyncFileUtil::OnDidCopyInForeignFile(StatusCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
 
   std::move(callback).Run(base::File::FILE_OK);
 }
 
 void DeviceMediaAsyncFileUtil::OnDidDeleteFile(StatusCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
 
   std::move(callback).Run(base::File::FILE_OK);
 }
 
 void DeviceMediaAsyncFileUtil::OnDidDeleteDirectory(StatusCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M161);
 
   std::move(callback).Run(base::File::FILE_OK);
 }
 
 bool DeviceMediaAsyncFileUtil::validate_media_files() const {
-  return media_path_filter_wrapper_.get() != NULL;
+  return media_path_filter_wrapper_.get() != nullptr;
 }

@@ -1,34 +1,26 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_CHROMEOS_EXTENSIONS_LOGIN_SCREEN_LOGIN_LOGIN_API_H_
 #define CHROME_BROWSER_CHROMEOS_EXTENSIONS_LOGIN_SCREEN_LOGIN_LOGIN_API_H_
 
-#include "components/prefs/pref_registry_simple.h"
+#include <optional>
+
+#include "base/types/expected.h"
 #include "extensions/browser/extension_function.h"
 
 namespace extensions {
 
-namespace login_api {
+namespace internal {
+class LoginAsyncFunctionBase : public ExtensionFunction {
+ protected:
+  ~LoginAsyncFunctionBase() override;
 
-void RegisterLocalStatePrefs(PrefRegistrySimple* registry);
-
-}  // namespace login_api
-
-namespace login_api_errors {
-
-extern const char kAlreadyActiveSession[];
-extern const char kAnotherLoginAttemptInProgress[];
-extern const char kNoManagedGuestSessionAccounts[];
-extern const char kNoPermissionToLock[];
-extern const char kSessionIsNotActive[];
-extern const char kNoPermissionToUnlock[];
-extern const char kSessionIsNotLocked[];
-extern const char kAnotherUnlockAttemptInProgress[];
-extern const char kAuthenticationFailed[];
-
-}  // namespace login_api_errors
+  void OnResult(base::expected<void, std::string> result);
+  ResponseAction MaybeResponded();
+};
+}  // namespace internal
 
 class LoginLaunchManagedGuestSessionFunction : public ExtensionFunction {
  public:
@@ -110,7 +102,8 @@ class LoginLockManagedGuestSessionFunction : public ExtensionFunction {
   ResponseAction Run() override;
 };
 
-class LoginUnlockManagedGuestSessionFunction : public ExtensionFunction {
+class LoginUnlockManagedGuestSessionFunction
+    : public internal::LoginAsyncFunctionBase {
  public:
   LoginUnlockManagedGuestSessionFunction();
 
@@ -128,9 +121,207 @@ class LoginUnlockManagedGuestSessionFunction : public ExtensionFunction {
 
   // ExtensionFunction:
   ResponseAction Run() override;
+};
 
- private:
-  void OnAuthenticationComplete(bool success);
+class LoginLockCurrentSessionFunction : public ExtensionFunction {
+ public:
+  LoginLockCurrentSessionFunction();
+
+  LoginLockCurrentSessionFunction(const LoginLockCurrentSessionFunction&) =
+      delete;
+
+  LoginLockCurrentSessionFunction& operator=(
+      const LoginLockCurrentSessionFunction&) = delete;
+
+  DECLARE_EXTENSION_FUNCTION("login.lockCurrentSession",
+                             LOGIN_LOCKCURRENTSESSION)
+
+ protected:
+  ~LoginLockCurrentSessionFunction() override;
+
+  // ExtensionFunction:
+  ResponseAction Run() override;
+};
+
+class LoginUnlockCurrentSessionFunction
+    : public internal::LoginAsyncFunctionBase {
+ public:
+  LoginUnlockCurrentSessionFunction();
+
+  LoginUnlockCurrentSessionFunction(const LoginUnlockCurrentSessionFunction&) =
+      delete;
+
+  LoginUnlockCurrentSessionFunction& operator=(
+      const LoginUnlockCurrentSessionFunction&) = delete;
+
+  DECLARE_EXTENSION_FUNCTION("login.unlockCurrentSession",
+                             LOGIN_UNLOCKCURRENTSESSION)
+
+ protected:
+  ~LoginUnlockCurrentSessionFunction() override;
+
+  // ExtensionFunction:
+  ResponseAction Run() override;
+};
+
+class LoginLaunchSamlUserSessionFunction : public ExtensionFunction {
+ public:
+  LoginLaunchSamlUserSessionFunction();
+
+  LoginLaunchSamlUserSessionFunction(
+      const LoginLaunchSamlUserSessionFunction&) = delete;
+
+  LoginLaunchSamlUserSessionFunction& operator=(
+      const LoginLaunchSamlUserSessionFunction&) = delete;
+
+  DECLARE_EXTENSION_FUNCTION("login.launchSamlUserSession",
+                             LOGIN_LAUNCHSAMLUSERSESSION)
+
+ protected:
+  ~LoginLaunchSamlUserSessionFunction() override;
+
+  // ExtensionFunction:
+  ResponseAction Run() override;
+};
+
+class LoginLaunchSharedManagedGuestSessionFunction : public ExtensionFunction {
+ public:
+  LoginLaunchSharedManagedGuestSessionFunction();
+
+  LoginLaunchSharedManagedGuestSessionFunction(
+      const LoginLaunchSharedManagedGuestSessionFunction&) = delete;
+
+  LoginLaunchSharedManagedGuestSessionFunction& operator=(
+      const LoginLaunchSharedManagedGuestSessionFunction&) = delete;
+
+  DECLARE_EXTENSION_FUNCTION("login.launchSharedManagedGuestSession",
+                             LOGIN_LAUNCHSHAREDMANAGEDGUESTSESSION)
+
+ protected:
+  ~LoginLaunchSharedManagedGuestSessionFunction() override;
+
+  // ExtensionFunction:
+  ResponseAction Run() override;
+};
+
+class LoginEnterSharedSessionFunction
+    : public internal::LoginAsyncFunctionBase {
+ public:
+  LoginEnterSharedSessionFunction();
+
+  LoginEnterSharedSessionFunction(const LoginEnterSharedSessionFunction&) =
+      delete;
+
+  LoginEnterSharedSessionFunction& operator=(
+      const LoginEnterSharedSessionFunction&) = delete;
+
+  DECLARE_EXTENSION_FUNCTION("login.enterSharedSession",
+                             LOGIN_ENTERSHAREDSESSION)
+
+ protected:
+  ~LoginEnterSharedSessionFunction() override;
+
+  // ExtensionFunction:
+  ResponseAction Run() override;
+};
+
+class LoginUnlockSharedSessionFunction
+    : public internal::LoginAsyncFunctionBase {
+ public:
+  LoginUnlockSharedSessionFunction();
+
+  LoginUnlockSharedSessionFunction(const LoginUnlockSharedSessionFunction&) =
+      delete;
+
+  LoginUnlockSharedSessionFunction& operator=(
+      const LoginUnlockSharedSessionFunction&) = delete;
+
+  DECLARE_EXTENSION_FUNCTION("login.unlockSharedSession",
+                             LOGIN_UNLOCKSHAREDSESSION)
+
+ protected:
+  ~LoginUnlockSharedSessionFunction() override;
+
+  // ExtensionFunction:
+  ResponseAction Run() override;
+};
+
+class LoginEndSharedSessionFunction : public internal::LoginAsyncFunctionBase {
+ public:
+  LoginEndSharedSessionFunction();
+
+  LoginEndSharedSessionFunction(const LoginEndSharedSessionFunction&) = delete;
+
+  LoginEndSharedSessionFunction& operator=(
+      const LoginEndSharedSessionFunction&) = delete;
+
+  DECLARE_EXTENSION_FUNCTION("login.endSharedSession", LOGIN_ENDSHAREDSESSION)
+
+ protected:
+  ~LoginEndSharedSessionFunction() override;
+
+  // ExtensionFunction:
+  ResponseAction Run() override;
+};
+
+class LoginSetDataForNextLoginAttemptFunction : public ExtensionFunction {
+ public:
+  LoginSetDataForNextLoginAttemptFunction();
+
+  LoginSetDataForNextLoginAttemptFunction(
+      const LoginSetDataForNextLoginAttemptFunction&) = delete;
+
+  LoginSetDataForNextLoginAttemptFunction& operator=(
+      const LoginSetDataForNextLoginAttemptFunction&) = delete;
+
+  DECLARE_EXTENSION_FUNCTION("login.setDataForNextLoginAttempt",
+                             LOGIN_SETDATAFORNEXTLOGINATTEMPT)
+
+ protected:
+  ~LoginSetDataForNextLoginAttemptFunction() override;
+
+  // ExtensionFunction:
+  ResponseAction Run() override;
+};
+
+class LoginRequestExternalLogoutFunction : public ExtensionFunction {
+ public:
+  LoginRequestExternalLogoutFunction();
+
+  LoginRequestExternalLogoutFunction(
+      const LoginRequestExternalLogoutFunction&) = delete;
+
+  LoginRequestExternalLogoutFunction& operator=(
+      const LoginRequestExternalLogoutFunction&) = delete;
+
+  DECLARE_EXTENSION_FUNCTION("login.requestExternalLogout",
+                             LOGIN_REQUESTEXTERNALLOGOUT)
+
+ protected:
+  ~LoginRequestExternalLogoutFunction() override;
+
+  // ExtensionFunction:
+  ResponseAction Run() override;
+};
+
+class LoginNotifyExternalLogoutDoneFunction : public ExtensionFunction {
+ public:
+  LoginNotifyExternalLogoutDoneFunction();
+
+  LoginNotifyExternalLogoutDoneFunction(
+      const LoginNotifyExternalLogoutDoneFunction&) = delete;
+
+  LoginNotifyExternalLogoutDoneFunction& operator=(
+      const LoginNotifyExternalLogoutDoneFunction&) = delete;
+
+  DECLARE_EXTENSION_FUNCTION("login.notifyExternalLogoutDone",
+                             LOGIN_NOTIFYEXTERNALLOGOUTDONE)
+
+ protected:
+  ~LoginNotifyExternalLogoutDoneFunction() override;
+
+  // ExtensionFunction:
+  ResponseAction Run() override;
 };
 
 }  // namespace extensions

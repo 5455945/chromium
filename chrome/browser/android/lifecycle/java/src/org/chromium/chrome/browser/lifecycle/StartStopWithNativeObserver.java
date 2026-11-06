@@ -1,13 +1,16 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.lifecycle;
 
+import org.chromium.build.annotations.NullMarked;
+
 /**
  * Implement this interface and register in {@link ActivityLifecycleDispatcher} to receive start and
  * stop with native events.
  */
+@NullMarked
 public interface StartStopWithNativeObserver extends LifecycleObserver {
     /**
      * Called when activity is started, provided that native is initialized.
@@ -15,8 +18,6 @@ public interface StartStopWithNativeObserver extends LifecycleObserver {
      */
     void onStartWithNative();
 
-    /**
-     * Similar to {@link #onStartWithNative}, but for the stop event.
-     */
+    /** Similar to {@link #onStartWithNative}, but for the stop event. */
     void onStopWithNative();
 }

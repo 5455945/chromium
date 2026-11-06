@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,25 +8,23 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/strings/string_piece.h"
+#include "base/component_export.h"
+#include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/version.h"
-#include "chromeos/chromeos_export.h"
 #include "chromeos/printing/printer_configuration.h"
 #include "chromeos/printing/usb_printer_id.h"
-
-namespace network {
-namespace mojom {
-class URLLoaderFactory;
-}
-}
 
 namespace chromeos {
 
 class PpdCache;
+class PrinterConfigCache;
+class PpdMetadataManager;
+class RemotePpdFetcher;
 
 // Everything we might know about a printer when looking for a
 // driver for it.  All of the default values for fields in this struct
@@ -34,7 +32,7 @@ class PpdCache;
 //
 // Fields are listed in search order preference -- we use earlier
 // fields first to attempt to find a match.
-struct CHROMEOS_EXPORT PrinterSearchData {
+struct COMPONENT_EXPORT(CHROMEOS_PRINTING) PrinterSearchData {
   PrinterSearchData();
   PrinterSearchData(const PrinterSearchData& other);
   ~PrinterSearchData();
@@ -75,8 +73,13 @@ struct CHROMEOS_EXPORT PrinterSearchData {
 // based on manufacturer/model of the printer.
 //
 // All functions in this class must be called from a sequenced context.
-class CHROMEOS_EXPORT PpdProvider : public base::RefCounted<PpdProvider> {
+class COMPONENT_EXPORT(CHROMEOS_PRINTING) PpdProvider {
  public:
+  PpdProvider(const PpdProvider&) = delete;
+  PpdProvider& operator=(const PpdProvider&) = delete;
+
+  virtual ~PpdProvider() = default;
+
   // Possible result codes of a Resolve*() call.
   enum CallbackResultCode {
     SUCCESS,
@@ -95,21 +98,6 @@ class CHROMEOS_EXPORT PpdProvider : public base::RefCounted<PpdProvider> {
     PPD_TOO_LARGE,
   };
 
-  // Construction-time options.  Everything in this structure should have
-  // a sane default.
-  struct Options {
-    Options() {}
-
-    // Any results from PpdCache older than this are treated as
-    // non-authoritative -- PpdProvider will attempt to re-resolve from the
-    // network anyways and only use the cache results if the network is
-    // unavailable.
-    base::TimeDelta cache_staleness_age = base::TimeDelta::FromDays(14);
-
-    // Root of the ppd serving hierarchy.
-    std::string ppd_server_root = "https://www.gstatic.com/chromeos_printing";
-  };
-
   // Defines the limitations on when we show a particular PPD
   // Not to be confused with the new Restrictions struct used in the
   // v3 PpdProvider, defined in ppd_metadata_parser.h
@@ -117,7 +105,7 @@ class CHROMEOS_EXPORT PpdProvider : public base::RefCounted<PpdProvider> {
     // Minimum milestone for ChromeOS build
     base::Version min_milestone = base::Version("0.0");
 
-    // Maximum milestone for ChomeOS build
+    // Maximum milestone for ChromeOS build
     base::Version max_milestone = base::Version("0.0");
   };
 
@@ -131,10 +119,11 @@ class CHROMEOS_EXPORT PpdProvider : public base::RefCounted<PpdProvider> {
 
   // Result of a ResolvePpd() call.
   // If the result code is SUCCESS, then:
-  //    string holds the contents of a PPD (that may or may not be gzipped).
+  //    the first string holds the contents of a PPD (that may or may not be
+  //    gzipped), the second string holds the ppd_file_name.
   // Otherwise, these fields will be empty.
-  using ResolvePpdCallback =
-      base::OnceCallback<void(CallbackResultCode, const std::string&)>;
+  using ResolvePpdCallback = base::OnceCallback<
+      void(CallbackResultCode, const std::string&, const std::string&)>;
 
   // Result of a ResolveManufacturers() call.  If the result code is SUCCESS,
   // then the vector contains a sorted list of manufacturers for which we have
@@ -181,22 +170,18 @@ class CHROMEOS_EXPORT PpdProvider : public base::RefCounted<PpdProvider> {
                               const std::string& manufacturer,
                               const std::string& model)>;
 
-  // Called to get the current URLLoaderFactory on demand. Needs to be
-  // Repeating since it gets called once per fetch.
-  using LoaderFactoryGetter =
-      base::RepeatingCallback<network::mojom::URLLoaderFactory*()>;
-
   // Create and return a new PpdProvider with the given cache and options.
-  // A references to |url_context_getter| is taken.
-  static scoped_refptr<PpdProvider> Create(
-      const std::string& browser_locale,
-      LoaderFactoryGetter loader_factory_getter,
-      scoped_refptr<PpdCache> cache,
+  static std::unique_ptr<PpdProvider> Create(
       const base::Version& current_version,
-      const Options& options = Options());
+      scoped_refptr<PpdCache> cache,
+      std::unique_ptr<PpdMetadataManager> metadata_manager,
+      std::unique_ptr<PrinterConfigCache> config_cache,
+      std::unique_ptr<RemotePpdFetcher> remote_ppd_fetcher);
 
-  // Get all manufacturers for which we have drivers.  Keys of the map will be
-  // localized in the default browser locale or the closest available fallback.
+  // Return a printable name for |code|.
+  static std::string_view CallbackResultCodeName(CallbackResultCode code);
+
+  // Get all manufacturers for which we have drivers.
   //
   // |cb| will be called on the invoking thread, and will be sequenced.
   //
@@ -206,8 +191,7 @@ class CHROMEOS_EXPORT PpdProvider : public base::RefCounted<PpdProvider> {
   // queue length at which this occurs is unspecified.
   virtual void ResolveManufacturers(ResolveManufacturersCallback cb) = 0;
 
-  // Get all models from a given manufacturer, localized in the
-  // default browser locale or the closest available fallback.
+  // Get all models from a given manufacturer.
   // |manufacturer| must be a value returned from a successful
   // ResolveManufacturers() call performed from this PpdProvider
   // instance.
@@ -234,7 +218,7 @@ class CHROMEOS_EXPORT PpdProvider : public base::RefCounted<PpdProvider> {
   // the PpdIndex will be fetched in order to retrieve the associated license.
   //
   // |cb| will be called on the invoking thread, and will be sequenced.
-  virtual void ResolvePpdLicense(base::StringPiece effective_make_and_model,
+  virtual void ResolvePpdLicense(std::string_view effective_make_and_model,
                                  ResolvePpdLicenseCallback cb) = 0;
 
   // For a given PpdReference, retrieve the make and model strings used to
@@ -252,9 +236,12 @@ class CHROMEOS_EXPORT PpdProvider : public base::RefCounted<PpdProvider> {
   static std::string PpdReferenceToCacheKey(
       const Printer::PpdReference& reference);
 
+  // Used to "dereference" the PPD previously named by the cache key from
+  // Printer::PpdReference::effective_make_and_model.
+  static std::string PpdBasenameToCacheKey(std::string_view ppd_basename);
+
  protected:
-  friend class base::RefCounted<PpdProvider>;
-  virtual ~PpdProvider() {}
+  PpdProvider() = default;
 };
 
 }  // namespace chromeos

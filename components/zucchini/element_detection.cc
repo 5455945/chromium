@@ -1,14 +1,18 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/zucchini/element_detection.h"
 
+#include <algorithm>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "components/zucchini/buildflags.h"
 #include "components/zucchini/disassembler.h"
 #include "components/zucchini/disassembler_no_op.h"
+#include "components/zucchini/image_utils.h"
+#include "components/zucchini/version_info.h"
 
 #if BUILDFLAG(ENABLE_DEX)
 #include "components/zucchini/disassembler_dex.h"
@@ -65,6 +69,18 @@ std::unique_ptr<Disassembler> MakeDisassemblerWithoutFallback(
     if (disasm && disasm->size() >= kMinProgramSize)
       return disasm;
   }
+
+  if (DisassemblerElfAArch32::QuickDetect(image)) {
+    auto disasm = Disassembler::Make<DisassemblerElfAArch32>(image);
+    if (disasm && disasm->size() >= kMinProgramSize)
+      return disasm;
+  }
+
+  if (DisassemblerElfAArch64::QuickDetect(image)) {
+    auto disasm = Disassembler::Make<DisassemblerElfAArch64>(image);
+    if (disasm && disasm->size() >= kMinProgramSize)
+      return disasm;
+  }
 #endif  // BUILDFLAG(ENABLE_ELF)
 
 #if BUILDFLAG(ENABLE_DEX)
@@ -101,6 +117,10 @@ std::unique_ptr<Disassembler> MakeDisassemblerOfType(ConstBufferView image,
       return Disassembler::Make<DisassemblerElfX86>(image);
     case kExeTypeElfX64:
       return Disassembler::Make<DisassemblerElfX64>(image);
+    case kExeTypeElfAArch32:
+      return Disassembler::Make<DisassemblerElfAArch32>(image);
+    case kExeTypeElfAArch64:
+      return Disassembler::Make<DisassemblerElfAArch64>(image);
 #endif  // BUILDFLAG(ENABLE_ELF)
 #if BUILDFLAG(ENABLE_DEX)
     case kExeTypeDex:
@@ -118,32 +138,70 @@ std::unique_ptr<Disassembler> MakeDisassemblerOfType(ConstBufferView image,
   }
 }
 
-absl::optional<Element> DetectElementFromDisassembler(ConstBufferView image) {
+uint16_t DisassemblerVersionOfType(ExecutableType exe_type) {
+  switch (exe_type) {
+#if BUILDFLAG(ENABLE_WIN)
+    case kExeTypeWin32X86:
+      return DisassemblerWin32X86::kVersion;
+    case kExeTypeWin32X64:
+      return DisassemblerWin32X64::kVersion;
+#endif  // BUILDFLAG(ENABLE_WIN)
+#if BUILDFLAG(ENABLE_ELF)
+    case kExeTypeElfX86:
+      return DisassemblerElfX86::kVersion;
+    case kExeTypeElfX64:
+      return DisassemblerElfX64::kVersion;
+    case kExeTypeElfAArch32:
+      return DisassemblerElfAArch32::kVersion;
+    case kExeTypeElfAArch64:
+      return DisassemblerElfAArch64::kVersion;
+#endif  // BUILDFLAG(ENABLE_ELF)
+#if BUILDFLAG(ENABLE_DEX)
+    case kExeTypeDex:
+      return DisassemblerDex::kVersion;
+#endif  // BUILDFLAG(ENABLE_DEX)
+#if BUILDFLAG(ENABLE_ZTF)
+    case kExeTypeZtf:
+      return DisassemblerZtf::kVersion;
+#endif  // BUILDFLAG(ENABLE_ZTF)
+    case kExeTypeNoOp:
+      return DisassemblerNoOp::kVersion;
+    default:
+      // If an architecture is disabled then null is handled gracefully.
+      return kInvalidVersion;
+  }
+}
+
+std::optional<Element> DetectElementFromDisassembler(ConstBufferView image) {
   std::unique_ptr<Disassembler> disasm = MakeDisassemblerWithoutFallback(image);
   if (disasm)
     return Element({0, disasm->size()}, disasm->GetExeType());
-  return absl::nullopt;
+  return std::nullopt;
 }
 
-/******** ProgramScanner ********/
+/******** ElementFinder ********/
 
-ElementFinder::ElementFinder(ConstBufferView image, ElementDetector&& detector)
-    : image_(image), detector_(std::move(detector)) {}
+ElementFinder::ElementFinder(ConstBufferView image,
+                             ElementDetector&& detector,
+                             offset_t init_pos)
+    : image_(image),
+      detector_(std::move(detector)),
+      pos_(std::min(init_pos, static_cast<offset_t>(image.size()))) {}
 
 ElementFinder::~ElementFinder() = default;
 
-absl::optional<Element> ElementFinder::GetNext() {
+std::optional<Element> ElementFinder::GetNext() {
   for (; pos_ < image_.size(); ++pos_) {
-    ConstBufferView test_image =
-        ConstBufferView::FromRange(image_.begin() + pos_, image_.end());
-    absl::optional<Element> element = detector_.Run(test_image);
+    ConstBufferView test_image = ConstBufferView::FromRange(
+        UNSAFE_TODO(image_.begin() + pos_), image_.end());
+    std::optional<Element> element = detector_.Run(test_image);
     if (element) {
       element->offset += pos_;
       pos_ = element->EndOffset();
       return element;
     }
   }
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 }  // namespace zucchini

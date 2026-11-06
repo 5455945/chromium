@@ -1,9 +1,10 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/editing/commands/insert_paragraph_separator_command.h"
 
+#include "third_party/blink/renderer/core/dom/text.h"
 #include "third_party/blink/renderer/core/editing/ephemeral_range.h"
 #include "third_party/blink/renderer/core/editing/frame_selection.h"
 #include "third_party/blink/renderer/core/editing/selection_template.h"
@@ -31,7 +32,7 @@ TEST_F(InsertParagraphSeparatorCommandTest,
 
   EXPECT_EQ(
       "<table contenteditable>"
-      "|    <colgroup style=\"-webkit-appearance:radio;\"></colgroup>"
+      "    <colgroup style=\"-webkit-appearance:radio;\">|</colgroup>"
       "</table>",
       GetSelectionTextFromBody());
 }
@@ -53,8 +54,8 @@ TEST_F(InsertParagraphSeparatorCommandTest,
   command->Apply();
   EXPECT_EQ(
       "<table contenteditable>"
-      "|    <colgroup style=\"-webkit-appearance:radio;\">"
-      "        <col>"
+      "    <colgroup style=\"-webkit-appearance:radio;\">"
+      "        <col>|"
       "    </colgroup>"
       "</table>",
       GetSelectionTextFromBody());
@@ -68,12 +69,13 @@ TEST_F(InsertParagraphSeparatorCommandTest, CrashWithCaptionBeforeBody) {
   SetBodyContent("<style>*{max-width:inherit;display:initial;}</style>");
 
   // Insert <caption> between head and body
-  Element* caption = GetDocument().CreateElementForBinding("caption");
-  caption->setInnerHTML("AxBxC");
+  Element* caption =
+      GetDocument().CreateElementForBinding(AtomicString("caption"));
+  caption->SetInnerHTMLWithoutTrustedTypes("AxBxC");
   GetDocument().documentElement()->insertBefore(caption, GetDocument().body());
 
   Selection().SetSelection(
-      SelectionInDOMTree::Builder()
+      SelectionInDomTree::Builder()
           .SetBaseAndExtent(EphemeralRange::RangeOfContents(*caption))
           .Build(),
       SetSelectionOptions());
@@ -85,7 +87,68 @@ TEST_F(InsertParagraphSeparatorCommandTest, CrashWithCaptionBeforeBody) {
   EXPECT_EQ(
       "<body><style><br>|*{max-width:inherit;display:initial;}</style></body>",
       SelectionSample::GetSelectionText(*GetDocument().documentElement(),
-                                        Selection().GetSelectionInDOMTree()));
+                                        Selection().GetSelectionInDomTree()));
+}
+
+// http://crbug.com/1345989
+TEST_F(InsertParagraphSeparatorCommandTest, CrashWithObject) {
+  GetDocument().setDesignMode("on");
+  Selection().SetSelection(
+      SetSelectionTextToBody("<object><b>|ABC</b></object>"),
+      SetSelectionOptions());
+  base::RunLoop().RunUntilIdle();  // prepare <object> fallback content
+
+  auto* command =
+      MakeGarbageCollected<InsertParagraphSeparatorCommand>(GetDocument());
+
+  EXPECT_TRUE(command->Apply());
+  EXPECT_EQ(
+      "<div><object><b><br></b></object></div>"
+      "<object><b>|ABC</b></object>",
+      GetSelectionTextFromBody());
+}
+
+// http://crbug.com/1357082
+TEST_F(InsertParagraphSeparatorCommandTest, CrashWithObjectWithFloat) {
+  InsertStyleElement("object { float: right; }");
+  GetDocument().setDesignMode("on");
+  Selection().SetSelection(
+      SetSelectionTextToBody("<object><b>|ABC</b></object>"),
+      SetSelectionOptions());
+  base::RunLoop().RunUntilIdle();  // prepare <object> fallback content
+
+  Element& object_element = *QuerySelector("object");
+  object_element.appendChild(Text::Create(GetDocument(), "XYZ"));
+
+  auto* command =
+      MakeGarbageCollected<InsertParagraphSeparatorCommand>(GetDocument());
+
+  EXPECT_TRUE(command->Apply());
+  EXPECT_EQ(
+      "<object><b><br></b></object>"
+      "<object><b>|ABC</b>XYZ</object>",
+      GetSelectionTextFromBody());
+}
+
+// crbug.com/1420675
+TEST_F(InsertParagraphSeparatorCommandTest, PhrasingContent) {
+  const char* html = R"HTML("
+    <span contenteditable>
+      <div>
+        <span>a|</span>
+      </div>
+    </span>)HTML";
+  const char* expected_html = R"HTML("
+    <span contenteditable>
+      <div>
+        <span>a<br>|<br></span>
+      </div>
+    </span>)HTML";
+  Selection().SetSelection(SetSelectionTextToBody(html), SetSelectionOptions());
+  auto* command =
+      MakeGarbageCollected<InsertParagraphSeparatorCommand>(GetDocument());
+  EXPECT_TRUE(command->Apply());
+  EXPECT_EQ(expected_html, GetSelectionTextFromBody());
 }
 
 }  // namespace blink

@@ -1,12 +1,14 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_BLOCKED_CONTENT_TEST_TEST_POPUP_NAVIGATION_DELEGATE_H_
 #define COMPONENTS_BLOCKED_CONTENT_TEST_TEST_POPUP_NAVIGATION_DELEGATE_H_
 
+#include "base/memory/raw_ptr.h"
 #include "components/blocked_content/popup_navigation_delegate.h"
 #include "third_party/blink/public/mojom/window_features/window_features.mojom.h"
+#include "ui/base/mojom/window_open_disposition.mojom.h"
 #include "url/gurl.h"
 
 namespace blocked_content {
@@ -22,7 +24,7 @@ class TestPopupNavigationDelegate : public PopupNavigationDelegate {
 
     bool did_navigate = false;
     blink::mojom::WindowFeatures navigation_window_features;
-    absl::optional<WindowOpenDisposition> navigation_disposition;
+    std::optional<ui::mojom::WindowOpenDisposition> navigation_disposition;
     int total_popups_blocked_on_page = 0;
   };
 
@@ -31,16 +33,17 @@ class TestPopupNavigationDelegate : public PopupNavigationDelegate {
   // PopupNavigationDelegate:
   content::RenderFrameHost* GetOpener() override;
   bool GetOriginalUserGesture() override;
-  const GURL& GetURL() override;
+  GURL GetURL() override;
   NavigateResult NavigateWithGesture(
       const blink::mojom::WindowFeatures& window_features,
-      absl::optional<WindowOpenDisposition> updated_disposition) override;
+      std::optional<ui::mojom::WindowOpenDisposition> updated_disposition)
+      override;
   void OnPopupBlocked(content::WebContents* web_contents,
                       int total_popups_blocked_on_page) override;
 
  private:
   const GURL url_;
-  ResultHolder* result_holder_;
+  raw_ptr<ResultHolder> result_holder_;
 };
 
 }  // namespace blocked_content

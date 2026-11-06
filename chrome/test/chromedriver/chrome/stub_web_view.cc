@@ -1,35 +1,42 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "chrome/test/chromedriver/chrome/stub_web_view.h"
 
 #include "base/files/file_path.h"
 #include "base/values.h"
 #include "chrome/test/chromedriver/chrome/status.h"
-#include "chrome/test/chromedriver/chrome/stub_web_view.h"
 #include "chrome/test/chromedriver/chrome/ui_events.h"
+#include "chrome/test/chromedriver/chrome/web_view.h"
 
 StubWebView::StubWebView(const std::string& id) : id_(id) {}
 
-StubWebView::~StubWebView() {}
+StubWebView::~StubWebView() = default;
 
 bool StubWebView::IsServiceWorker() const {
   return false;
+}
+
+void StubWebView::SetupChildView(std::unique_ptr<StubWebView> child) {
+  child_ = std::move(child);
 }
 
 std::string StubWebView::GetId() {
   return id_;
 }
 
+std::string StubWebView::GetSessionId() {
+  return session_id_;
+}
+
 bool StubWebView::WasCrashed() {
   return false;
 }
 
-Status StubWebView::ConnectIfNecessary() {
-  return Status(kOk);
-}
-
-Status StubWebView::SetUpDevTools() {
-  return Status(kOk);
+Status StubWebView::HandleEventsUntil(const ConditionalFunc& conditional_func,
+                                      const Timeout& timeout) {
+  return Status{kOk};
 }
 
 Status StubWebView::HandleReceivedEvents() {
@@ -56,22 +63,36 @@ Status StubWebView::Resume(const Timeout* timeout) {
   return Status(kOk);
 }
 
+Status StubWebView::StartBidiServer(std::string bidi_mapper_script,
+                                    bool enable_unsafe_extension_debugging) {
+  return Status{kOk};
+}
+
+Status StubWebView::PostBidiCommand(base::DictValue command) {
+  return Status{kOk};
+}
+
+Status StubWebView::SendBidiCommand(base::DictValue command,
+                                    const Timeout& timeout,
+                                    base::DictValue& response) {
+  return Status{kOk};
+}
+
 Status StubWebView::SendCommand(const std::string& cmd,
-                                const base::DictionaryValue& params) {
+                                const base::DictValue& params) {
   return Status(kOk);
 }
 
-Status StubWebView::SendCommandFromWebSocket(
-    const std::string& cmd,
-    const base::DictionaryValue& params,
-    const int client_cmd_id) {
+Status StubWebView::SendCommandFromWebSocket(const std::string& cmd,
+                                             const base::DictValue& params,
+                                             const int client_cmd_id) {
   return Status(kOk);
 }
 
 Status StubWebView::SendCommandAndGetResult(
-        const std::string& cmd,
-        const base::DictionaryValue& params,
-        std::unique_ptr<base::Value>* value) {
+    const std::string& cmd,
+    const base::DictValue& params,
+    std::unique_ptr<base::Value>* value) {
   return Status(kOk);
 }
 
@@ -81,7 +102,7 @@ Status StubWebView::TraverseHistory(int delta, const Timeout* timeout) {
 
 Status StubWebView::EvaluateScript(const std::string& frame,
                                    const std::string& function,
-                                   const bool awaitPromise,
+                                   const bool await_promise,
                                    std::unique_ptr<base::Value>* result) {
   return Status(kOk);
 }
@@ -90,14 +111,6 @@ Status StubWebView::CallFunction(const std::string& frame,
                                  const std::string& function,
                                  const base::ListValue& args,
                                  std::unique_ptr<base::Value>* result) {
-  return Status(kOk);
-}
-
-Status StubWebView::CallAsyncFunction(const std::string& frame,
-                                      const std::string& function,
-                                      const base::ListValue& args,
-                                      const base::TimeDelta& timeout,
-                                      std::unique_ptr<base::Value>* result) {
   return Status(kOk);
 }
 
@@ -152,7 +165,8 @@ Status StubWebView::DispatchKeyEvents(const std::vector<KeyEvent>& events,
   return Status(kOk);
 }
 
-Status StubWebView::GetCookies(std::unique_ptr<base::ListValue>* cookies,
+
+Status StubWebView::GetCookies(base::Value* cookies,
                                const std::string& current_page_url) {
   return Status(kOk);
 }
@@ -169,9 +183,9 @@ Status StubWebView::AddCookie(const std::string& name,
                               const std::string& value,
                               const std::string& domain,
                               const std::string& path,
-                              const std::string& sameSite,
+                              const std::string& same_site,
                               bool secure,
-                              bool httpOnly,
+                              bool http_only,
                               double expiry) {
   return Status(kOk);
 }
@@ -183,12 +197,17 @@ Status StubWebView::WaitForPendingNavigations(const std::string& frame_id,
 }
 
 Status StubWebView::IsPendingNavigation(const Timeout* timeout,
-                                        bool* is_pending) const {
+                                        bool* is_pending) {
   return Status(kOk);
 }
 
-JavaScriptDialogManager* StubWebView::GetJavaScriptDialogManager() {
-  return nullptr;
+Status StubWebView::WaitForPendingActivePage(const Timeout& timeout) {
+  return Status(kOk);
+}
+
+Status StubWebView::IsNotPendingActivePage(const Timeout* timeout,
+                                           bool* is_not_pending) const {
+  return Status(kOk);
 }
 
 MobileEmulationOverrideManager* StubWebView::GetMobileEmulationOverrideManager()
@@ -210,19 +229,18 @@ Status StubWebView::OverrideDownloadDirectoryIfNeeded(
   return Status(kOk);
 }
 
-Status StubWebView::CaptureScreenshot(
-    std::string* screenshot,
-    const base::DictionaryValue& params) {
+Status StubWebView::CaptureScreenshot(std::string* screenshot,
+                                      const base::DictValue& params) {
   return Status(kOk);
 }
 
-Status StubWebView::PrintToPDF(const base::DictionaryValue& params,
+Status StubWebView::PrintToPDF(const base::DictValue& params,
                                std::string* pdf) {
   return Status(kOk);
 }
 
 Status StubWebView::SetFileInputFiles(const std::string& frame,
-                                      const base::DictionaryValue& element,
+                                      const base::Value& element,
                                       const std::vector<base::FilePath>& files,
                                       const bool append) {
   return Status(kOk);
@@ -258,8 +276,8 @@ bool StubWebView::IsNonBlocking() const {
   return false;
 }
 
-bool StubWebView::IsOOPIF(const std::string& frame_id) {
-  return false;
+Status StubWebView::GetFedCmTracker(FedCmTracker** out_tracker) {
+  return Status(kUnknownCommand);
 }
 
 FrameTracker* StubWebView::GetFrameTracker() const {
@@ -276,8 +294,70 @@ std::unique_ptr<base::Value> StubWebView::GetCastIssueMessage() {
 
 void StubWebView::SetFrame(const std::string& new_frame_id) {}
 
-Status StubWebView::GetNodeIdByElement(const std::string& frame,
-                                       const base::DictionaryValue& element,
-                                       int* node_id) {
+Status StubWebView::GetBackendNodeIdByElement(const std::string& frame,
+                                              const base::Value& element,
+                                              int* node_id) {
   return Status(kOk);
+}
+
+Status StubWebView::GetFrameOwnerElementId(const std::string& frame_id,
+                                           const std::string& parent_frame_id,
+                                           std::string* element_id) {
+  return Status(kOk);
+}
+
+bool StubWebView::IsDetached() const {
+  return false;
+}
+
+Status StubWebView::CallFunctionWithTimeout(
+    const std::string& frame,
+    const std::string& function,
+    const base::ListValue& args,
+    const base::TimeDelta& timeout,
+    const CallFunctionOptions& options,
+    std::unique_ptr<base::Value>* result) {
+  return Status{kOk};
+}
+
+bool StubWebView::IsDialogOpen() const {
+  return false;
+}
+
+bool StubWebView::IsTab() const {
+  return false;
+}
+
+PageTracker* StubWebView::GetPageTracker() const {
+  return nullptr;
+}
+
+std::string StubWebView::GetTabId() {
+  return "";
+}
+
+Status StubWebView::GetActivePage(WebView** web_view) {
+  *web_view = child_ ? child_.get() : nullptr;
+  return Status(kOk);
+}
+
+Status StubWebView::GetDialogMessage(std::string& message) const {
+  return Status(kOk);
+}
+
+Status StubWebView::GetTypeOfDialog(std::string& type) const {
+  return Status(kOk);
+}
+
+Status StubWebView::HandleDialog(bool accept,
+                                 const std::optional<std::string>& text) {
+  return Status(kOk);
+}
+
+WebView* StubWebView::FindContainerForFrame(const std::string& frame_id) {
+  return nullptr;
+}
+
+std::unique_ptr<WebViewHolder> StubWebView::GetHolder() {
+  return nullptr;
 }

@@ -1,107 +1,86 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/cache_storage/global_cache_storage.h"
 
+#include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-blink.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/platform/web_security_origin.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
-#include "third_party/blink/renderer/core/frame/local_dom_window.h"
-#include "third_party/blink/renderer/core/workers/worker_global_scope.h"
 #include "third_party/blink/renderer/modules/cache_storage/cache_storage.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
-#include "third_party/blink/renderer/platform/supplementable.h"
 
 namespace blink {
 
-namespace {
+const char GlobalCacheStorage::kSupplementName[] = "GlobalCacheStorage";
 
-template <typename T>
-class GlobalCacheStorageImpl final
-    : public GarbageCollected<GlobalCacheStorageImpl<T>>,
-      public Supplement<T> {
- public:
-  static const char kSupplementName[];
+GlobalCacheStorage::GlobalCacheStorage(ExecutionContext& context)
+    : Supplement<ExecutionContext>(context) {}
 
-  static GlobalCacheStorageImpl& From(T& supplementable,
-                                      ExecutionContext* execution_context) {
-    GlobalCacheStorageImpl* supplement =
-        Supplement<T>::template From<GlobalCacheStorageImpl>(supplementable);
-    if (!supplement) {
-      supplement = MakeGarbageCollected<GlobalCacheStorageImpl>();
-      Supplement<T>::ProvideTo(supplementable, supplement);
-    }
-    return *supplement;
+GlobalCacheStorage& GlobalCacheStorage::From(ExecutionContext& context) {
+  GlobalCacheStorage* supplement =
+      Supplement<ExecutionContext>::From<GlobalCacheStorage>(context);
+  if (!supplement) {
+    supplement = MakeGarbageCollected<GlobalCacheStorage>(context);
+    Supplement<ExecutionContext>::ProvideTo(context, supplement);
   }
-
-  GlobalCacheStorageImpl() : Supplement<T>(nullptr) {}
-  ~GlobalCacheStorageImpl() = default;
-
-  CacheStorage* Caches(T& fetching_scope, ExceptionState& exception_state) {
-    ExecutionContext* context = fetching_scope.GetExecutionContext();
-    if (!context->GetSecurityOrigin()->CanAccessCacheStorage()) {
-      if (context->IsSandboxed(
-              network::mojom::blink::WebSandboxFlags::kOrigin)) {
-        exception_state.ThrowSecurityError(
-            "Cache storage is disabled because the context is sandboxed and "
-            "lacks the 'allow-same-origin' flag.");
-      } else if (context->Url().ProtocolIs("data")) {
-        exception_state.ThrowSecurityError(
-            "Cache storage is disabled inside 'data:' URLs.");
-      } else {
-        exception_state.ThrowSecurityError(
-            "Access to cache storage is denied.");
-      }
-      return nullptr;
-    }
-
-    if (context->GetSecurityOrigin()->IsLocal()) {
-      UseCounter::Count(context, WebFeature::kFileAccessedCache);
-    }
-
-    if (!caches_) {
-      if (&context->GetBrowserInterfaceBroker() ==
-          &GetEmptyBrowserInterfaceBroker()) {
-        exception_state.ThrowSecurityError(
-            "Cache storage isn't available on detached context. No browser "
-            "interface broker.");
-        return nullptr;
-      }
-      caches_ = MakeGarbageCollected<CacheStorage>(
-          context, GlobalFetch::ScopedFetcher::From(fetching_scope));
-    }
-    return caches_;
-  }
-
-  void Trace(Visitor* visitor) const override {
-    visitor->Trace(caches_);
-    Supplement<T>::Trace(visitor);
-  }
-
- private:
-  Member<CacheStorage> caches_;
-};
-
-// static
-template <typename T>
-const char GlobalCacheStorageImpl<T>::kSupplementName[] =
-    "GlobalCacheStorageImpl";
-
-}  // namespace
-
-CacheStorage* GlobalCacheStorage::caches(LocalDOMWindow& window,
-                                         ExceptionState& exception_state) {
-  return GlobalCacheStorageImpl<LocalDOMWindow>::From(
-             window, window.GetExecutionContext())
-      .Caches(window, exception_state);
+  return *supplement;
 }
 
-CacheStorage* GlobalCacheStorage::caches(WorkerGlobalScope& worker,
+CacheStorage* GlobalCacheStorage::Caches(ExecutionContext* context,
                                          ExceptionState& exception_state) {
-  return GlobalCacheStorageImpl<WorkerGlobalScope>::From(
-             worker, worker.GetExecutionContext())
-      .Caches(worker, exception_state);
+  if (!GlobalCacheStorage::CanCreateCacheStorage(context, exception_state)) {
+    return nullptr;
+  }
+
+  if (context->GetSecurityOrigin()->IsLocal()) {
+    UseCounter::Count(context,
+                      blink::mojom::blink::WebFeature::kFileAccessedCache);
+  }
+
+  if (!caches_) {
+    if (&context->GetBrowserInterfaceBroker() ==
+        &GetEmptyBrowserInterfaceBroker()) {
+      exception_state.ThrowSecurityError(
+          "Cache storage isn't available on detached context. No browser "
+          "interface broker.");
+      return nullptr;
+    }
+    caches_ = MakeGarbageCollected<CacheStorage>(
+        context, GlobalFetch::ScopedFetcher::From(*context));
+  }
+  return caches_.Get();
+}
+
+bool GlobalCacheStorage::CanCreateCacheStorage(
+    ExecutionContext* context,
+    ExceptionState& exception_state) {
+  if (context->GetSecurityOrigin()->CanAccessCacheStorage()) {
+    return true;
+  }
+
+  if (context->IsSandboxed(network::mojom::blink::WebSandboxFlags::kOrigin)) {
+    exception_state.ThrowSecurityError(
+        "Cache storage is disabled because the context is sandboxed and "
+        "lacks the 'allow-same-origin' flag.");
+  } else if (context->Url().ProtocolIs("data")) {
+    exception_state.ThrowSecurityError(
+        "Cache storage is disabled inside 'data:' URLs.");
+  } else {
+    exception_state.ThrowSecurityError("Access to cache storage is denied.");
+  }
+  return false;
+}
+
+CacheStorage* GlobalCacheStorage::caches(ExecutionContext& context,
+                                         ExceptionState& exception_state) {
+  return GlobalCacheStorage::From(context).Caches(&context, exception_state);
+}
+
+void GlobalCacheStorage::Trace(Visitor* visitor) const {
+  visitor->Trace(caches_);
+  Supplement<ExecutionContext>::Trace(visitor);
 }
 
 }  // namespace blink

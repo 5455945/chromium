@@ -1,39 +1,39 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/speech/extension_api/tts_engine_extension_observer_chromeos.h"
 
+#include <set>
+
+#include "ash/constants/ash_extension_constants.h"
 #include "base/check.h"
-#include "base/memory/singleton.h"
-#include "chrome/browser/chromeos/service_sandbox_type.h"
 #include "chrome/browser/extensions/extension_service.h"
-#include "chrome/browser/profiles/incognito_helpers.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/speech/extension_api/tts_audio_output_stream_factory.h"
 #include "chrome/browser/speech/extension_api/tts_engine_extension_api.h"
-#include "chrome/common/extensions/api/speech/tts_engine_manifest_handler.h"
-#include "chrome/common/extensions/extension_constants.h"
-#include "components/keyed_service/content/browser_context_dependency_manager.h"
-#include "components/keyed_service/content/browser_context_keyed_service_factory.h"
+#include "chromeos/services/tts/public/mojom/tts_service.mojom.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "content/public/browser/service_process_host.h"
 #include "content/public/browser/tts_controller.h"
 #include "extensions/browser/event_router.h"
-#include "extensions/browser/event_router_factory.h"
 #include "extensions/common/permissions/permissions_data.h"
+#include "ui/accessibility/accessibility_features.h"
 
 namespace {
 
 using ::ash::AccessibilityManager;
 using ::ash::AccessibilityNotificationType;
 
-void UpdateGoogleSpeechSynthesisKeepAliveCountHelper(
-    content::BrowserContext* context,
-    bool increment) {
+}  // namespace
+
+void TtsEngineExtensionObserverChromeOS::
+    UpdateGoogleSpeechSynthesisKeepAliveCountManifestV2(
+        content::BrowserContext* context,
+        bool increment) {
   extensions::ProcessManager* pm = extensions::ProcessManager::Get(context);
   extensions::ExtensionRegistry* registry =
       extensions::ExtensionRegistry::Get(context);
-
   const extensions::Extension* extension =
       registry->enabled_extensions().GetByID(
           extension_misc::kGoogleSpeechSynthesisExtensionId);
@@ -49,8 +49,69 @@ void UpdateGoogleSpeechSynthesisKeepAliveCountHelper(
   }
 }
 
-void UpdateGoogleSpeechSynthesisKeepAliveCount(content::BrowserContext* context,
-                                               bool increment) {
+void TtsEngineExtensionObserverChromeOS::
+    UpdateGoogleSpeechSynthesisKeepAliveCountManifestV3(
+        content::BrowserContext* context,
+        bool increment) {
+  extensions::ProcessManager* pm = extensions::ProcessManager::Get(context);
+  const auto& worker_ids = pm->GetServiceWorkersForExtension(
+      extension_misc::kGoogleSpeechSynthesisExtensionId);
+  if (worker_ids.empty()) {
+    return;
+  }
+
+  // TODO(crbug.com/40936639): increment and decrement the lone service worker
+  // once the bug is fixed. For now, we increment/decrement all active service
+  // workers.
+  if (increment) {
+    for (const extensions::WorkerId& worker_id : worker_ids) {
+      base::Uuid uuid = pm->IncrementServiceWorkerKeepaliveCount(
+          /*worker_id=*/worker_id,
+          /*timeout_type=*/
+          content::ServiceWorkerExternalRequestTimeoutType::kDoesNotTimeout,
+          /*activity_type=*/extensions::Activity::Type::ACCESSIBILITY,
+          /*extra_data=*/std::string());
+      keepalive_uuids_[worker_id].push_back(uuid);
+    }
+  } else {
+    for (auto it = keepalive_uuids_.begin(); it != keepalive_uuids_.end();) {
+      if (it->second.empty()) {
+        // This case should ideally not happen if increments and decrements
+        // are perfectly matched, but we guard against it to prevent a crash.
+        it = keepalive_uuids_.erase(it);
+        continue;
+      }
+
+      pm->DecrementServiceWorkerKeepaliveCount(
+          /*worker_id=*/it->first,
+          /*request_uuid=*/it->second.back(),
+          /*activity_type=*/extensions::Activity::Type::ACCESSIBILITY,
+          /*extra_data=*/std::string());
+
+      it->second.pop_back();
+      if (it->second.empty()) {
+        it = keepalive_uuids_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  }
+}
+
+void TtsEngineExtensionObserverChromeOS::
+    UpdateGoogleSpeechSynthesisKeepAliveCountHelper(
+        content::BrowserContext* context,
+        bool increment) {
+  if (::features::IsAccessibilityManifestV3EnabledForGoogleTts()) {
+    UpdateGoogleSpeechSynthesisKeepAliveCountManifestV3(context, increment);
+  } else {
+    UpdateGoogleSpeechSynthesisKeepAliveCountManifestV2(context, increment);
+  }
+}
+
+void TtsEngineExtensionObserverChromeOS::
+    UpdateGoogleSpeechSynthesisKeepAliveCount(content::BrowserContext* context,
+                                              bool increment) {
   // Deal with profiles that are non-off the record and otr. For a given
   // extension load/unload, we only ever get called for one of the two potential
   // profile types.
@@ -65,8 +126,9 @@ void UpdateGoogleSpeechSynthesisKeepAliveCount(content::BrowserContext* context,
       increment);
 }
 
-void UpdateGoogleSpeechSynthesisKeepAliveCountOnReload(
-    content::BrowserContext* browser_context) {
+void TtsEngineExtensionObserverChromeOS::
+    UpdateGoogleSpeechSynthesisKeepAliveCountOnReload(
+        content::BrowserContext* browser_context) {
   if (AccessibilityManager::Get()->IsSpokenFeedbackEnabled()) {
     UpdateGoogleSpeechSynthesisKeepAliveCount(browser_context,
                                               true /* increment */);
@@ -78,54 +140,6 @@ void UpdateGoogleSpeechSynthesisKeepAliveCountOnReload(
   }
 }
 
-}  // namespace
-
-// Factory to load one instance of TtsExtensionLoaderChromeOs per profile.
-class TtsEngineExtensionObserverChromeOSFactory
-    : public BrowserContextKeyedServiceFactory {
- public:
-  static TtsEngineExtensionObserverChromeOS* GetForProfile(Profile* profile) {
-    return static_cast<TtsEngineExtensionObserverChromeOS*>(
-        GetInstance()->GetServiceForBrowserContext(profile, true));
-  }
-
-  static TtsEngineExtensionObserverChromeOSFactory* GetInstance() {
-    return base::Singleton<TtsEngineExtensionObserverChromeOSFactory>::get();
-  }
-
- private:
-  friend struct base::DefaultSingletonTraits<
-      TtsEngineExtensionObserverChromeOSFactory>;
-
-  TtsEngineExtensionObserverChromeOSFactory()
-      : BrowserContextKeyedServiceFactory(
-            "TtsEngineExtensionObserverChromeOS",
-            BrowserContextDependencyManager::GetInstance()) {
-    DependsOn(extensions::EventRouterFactory::GetInstance());
-  }
-
-  ~TtsEngineExtensionObserverChromeOSFactory() override {}
-
-  content::BrowserContext* GetBrowserContextToUse(
-      content::BrowserContext* context) const override {
-    // If given an incognito profile (including the Chrome OS login
-    // profile), share the service with the original profile.
-    return chrome::GetBrowserContextRedirectedInIncognito(context);
-  }
-
-  KeyedService* BuildServiceInstanceFor(
-      content::BrowserContext* profile) const override {
-    return new TtsEngineExtensionObserverChromeOS(
-        static_cast<Profile*>(profile));
-  }
-};
-
-TtsEngineExtensionObserverChromeOS*
-TtsEngineExtensionObserverChromeOS::GetInstance(Profile* profile) {
-  return TtsEngineExtensionObserverChromeOSFactory::GetInstance()
-      ->GetForProfile(profile);
-}
-
 TtsEngineExtensionObserverChromeOS::TtsEngineExtensionObserverChromeOS(
     Profile* profile)
     : profile_(profile) {
@@ -134,7 +148,7 @@ TtsEngineExtensionObserverChromeOS::TtsEngineExtensionObserverChromeOS(
 
   extensions::EventRouter* event_router =
       extensions::EventRouter::Get(profile_);
-  DCHECK(event_router);
+  CHECK(event_router, base::NotFatalUntil::M162);
   event_router->RegisterObserver(this, tts_engine_events::kOnSpeak);
   event_router->RegisterObserver(this, tts_engine_events::kOnStop);
 
@@ -151,20 +165,23 @@ void TtsEngineExtensionObserverChromeOS::BindGoogleTtsStream(
     mojo::PendingReceiver<chromeos::tts::mojom::GoogleTtsStream> receiver) {
   // At this point, the component extension has loaded, and the js has requested
   // a TtsStreamFactory be bound. It's safe now to update the keep alive count
-  // for important accessibility features. This path is also encountered if the
-  // component extension background page forceably window.close(s) on error.
+  // for important accessibility features.
   UpdateGoogleSpeechSynthesisKeepAliveCountOnReload(profile_);
 
   CreateTtsServiceIfNeeded();
 
-  // Always create a new audio stream for the tts stream. It is assumed once the
-  // tts stream is reset by the service, the audio stream is appropriately
-  // cleaned up by the audio service.
+  // Always create a new audio stream for the tts stream. It is assumed once
+  // the tts stream is reset by the service, the audio stream is appropriately
+  // cleaned up by the audio service. Wrap it in an output-only restricted
+  // factory before passing to the TTS service.
+  // TODO(crbug.com/554915521): Switch to an upstream output-only factory
+  // interface.
   mojo::PendingRemote<media::mojom::AudioStreamFactory> factory_remote;
   auto factory_receiver = factory_remote.InitWithNewPipeAndPassReceiver();
   content::GetAudioService().BindStreamFactory(std::move(factory_receiver));
-  tts_service_->BindGoogleTtsStream(std::move(receiver),
-                                    std::move(factory_remote));
+  tts_service_->BindGoogleTtsStream(
+      std::move(receiver), chromeos::tts::TtsAudioOutputStreamFactory::Create(
+                               std::move(factory_remote)));
 }
 
 void TtsEngineExtensionObserverChromeOS::BindPlaybackTtsStream(
@@ -173,14 +190,19 @@ void TtsEngineExtensionObserverChromeOS::BindPlaybackTtsStream(
     chromeos::tts::mojom::TtsService::BindPlaybackTtsStreamCallback callback) {
   CreateTtsServiceIfNeeded();
 
-  // Always create a new audio stream for the tts stream. It is assumed once the
-  // tts stream is reset by the service, the audio stream is appropriately
-  // cleaned up by the audio service.
+  // Always create a new audio stream for the tts stream. It is assumed once
+  // the tts stream is reset by the service, the audio stream is appropriately
+  // cleaned up by the audio service. Wrap it in an output-only restricted
+  // factory before passing to the TTS service.
+  // TODO(crbug.com/554915521): Switch to an upstream output-only factory
+  // interface.
   mojo::PendingRemote<media::mojom::AudioStreamFactory> factory_remote;
   auto factory_receiver = factory_remote.InitWithNewPipeAndPassReceiver();
   content::GetAudioService().BindStreamFactory(std::move(factory_receiver));
   tts_service_->BindPlaybackTtsStream(
-      std::move(receiver), std::move(factory_remote),
+      std::move(receiver),
+      chromeos::tts::TtsAudioOutputStreamFactory::Create(
+          std::move(factory_remote)),
       std::move(audio_parameters), std::move(callback));
 }
 
@@ -192,9 +214,11 @@ bool TtsEngineExtensionObserverChromeOS::IsLoadedTtsEngine(
     const std::string& extension_id) {
   extensions::EventRouter* event_router =
       extensions::EventRouter::Get(profile_);
-  DCHECK(event_router);
-  if (event_router->ExtensionHasEventListener(extension_id,
-                                              tts_engine_events::kOnSpeak) &&
+  CHECK(event_router, base::NotFatalUntil::M162);
+  if ((event_router->ExtensionHasEventListener(extension_id,
+                                               tts_engine_events::kOnSpeak) ||
+       event_router->ExtensionHasEventListener(
+           extension_id, tts_engine_events::kOnSpeakWithAudioStream)) &&
       event_router->ExtensionHasEventListener(extension_id,
                                               tts_engine_events::kOnStop)) {
     return true;

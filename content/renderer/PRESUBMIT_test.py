@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2018 The Chromium Authors. All rights reserved.
+# Copyright 2018 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -14,18 +14,37 @@ sys.path.append(
 from PRESUBMIT_test_mocks import (MockInputApi, MockOutputApi, MockAffectedFile)
 
 class GetTest(unittest.TestCase):
-  def testNewUsageThreadTaskRunnerHandleGet(self):
+  def testNewUsageSingleThreadTaskRunnerGetCurrentDefault(self):
     diff = ['scoped_refptr<SingleThreadTaskRunner> task_runner =',
-             '    base::ThreadTaskRunnerHandle::Get()']
+            '    base::SingleThreadTaskRunner::GetCurrentDefault()']
     input_api = MockInputApi()
     input_api.files = [MockAffectedFile('content/renderer/foo.cc', diff)]
     errors = PRESUBMIT._CheckForUseOfGlobalTaskRunnerGetter(input_api,
                                                             MockOutputApi())
     self.assertEqual(1, len(errors))
 
-  def testNewUsageSequencedTaskRunnerHandleGet(self):
-    diff = ['scoped_refptr<SequencedThreadTaskRunner> task_runner =',
-             '    base::SequencedTaskRunnerHandle::Get()']
+  def testNewUsageSingleThreadTaskRunnerHandleGetCurrentBestEffort(self):
+    diff = ['scoped_refptr<SingleThreadTaskRunner> task_runner =',
+            '    base::SingleThreadTaskRunner::GetCurrentBestEffort()']
+    input_api = MockInputApi()
+    input_api.files = [MockAffectedFile('content/renderer/foo.cc', diff)]
+    errors = PRESUBMIT._CheckForUseOfGlobalTaskRunnerGetter(input_api,
+                                                            MockOutputApi())
+    self.assertEqual(1, len(errors))
+
+  def testNewUsageSequencedTaskRunnerGetCurrentDefault(self):
+    diff = ['scoped_refptr<SequencedTaskRunner> task_runner =',
+             '    base::SequencedTaskRunner::GetCurrentDefault()']
+    input_api = MockInputApi()
+    input_api.files = [MockAffectedFile('content/renderer/foo.cc', diff)]
+    errors = PRESUBMIT._CheckForUseOfGlobalTaskRunnerGetter(input_api,
+                                                            MockOutputApi())
+    self.assertEqual(1, len(errors))
+
+
+def testNewUsageSequencedTaskRunnerGetCurrentBestEffort(self):
+    diff = ['scoped_refptr<SequencedTaskRunner> task_runner =',
+            '    base::SequencedTaskRunner::GetCurrentBestEffort()']
     input_api = MockInputApi()
     input_api.files = [MockAffectedFile('content/renderer/foo.cc', diff)]
     errors = PRESUBMIT._CheckForUseOfGlobalTaskRunnerGetter(input_api,

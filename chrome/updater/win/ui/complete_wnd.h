@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,18 +9,18 @@
 
 #include <string>
 
-#include "base/win/atl.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/updater/win/ui/resources/resources.grh"
 #include "chrome/updater/win/ui/ui.h"
+#include "ui/gfx/win/msg_util.h"
 
-namespace updater {
-namespace ui {
+namespace updater::ui {
 
 class CompleteWndEvents : public OmahaWndEvents {
  public:
   // Launches the browser and returns true if the browser was successfully
   // launched.
-  virtual bool DoLaunchBrowser(const std::u16string& url) = 0;
+  virtual bool DoLaunchBrowser(const std::string& url) = 0;
 };
 
 class CompleteWnd : public OmahaWnd {
@@ -34,35 +34,31 @@ class CompleteWnd : public OmahaWnd {
 
   void DisplayCompletionDialog(bool is_success,
                                const std::wstring& text,
-                               const std::u16string& help_url);
-  BEGIN_MSG_MAP(CompleteWnd)
-    MESSAGE_HANDLER(WM_INITDIALOG, OnInitDialog)
-    COMMAND_HANDLER(IDC_GET_HELP, BN_CLICKED, OnClickedGetHelp)
-    COMMAND_HANDLER(IDC_CLOSE, BN_CLICKED, OnClickedButton)
-    CHAIN_MSG_MAP(OmahaWnd)
-  END_MSG_MAP()
+                               const std::string& help_url);
+
+  CR_BEGIN_MSG_MAP_EX(CompleteWnd)
+    CR_MESSAGE_HANDLER_EX(WM_INITDIALOG, OnInitDialog)
+    CR_COMMAND_HANDLER_EX(IDC_GET_HELP, BN_CLICKED, OnClickedGetHelp)
+    CR_COMMAND_HANDLER_EX(IDC_CLOSE, BN_CLICKED, OnClickedButton)
+    CR_CHAIN_MSG_MAP(OmahaWnd)
+  CR_END_MSG_MAP()
 
  protected:
   CompleteWnd(int dialog_id,
               DWORD control_classes,
-              WTL::CMessageLoop* message_loop,
-              HWND parent);
+              MessageLoop* message_loop,
+              HWND parent,
+              const std::wstring& lang);
   ~CompleteWnd() override;
 
   // Message and command handlers.
-  LRESULT OnInitDialog(UINT msg,
-                       WPARAM wparam,
-                       LPARAM lparam,
-                       BOOL& handled);  // NOLINT
-  LRESULT OnClickedGetHelp(WORD notify_code,
-                           WORD id,
-                           HWND wnd_ctl,
-                           BOOL& handled);  // NOLINT
-  LRESULT OnClickedButton(WORD notify_code,
-                          WORD id,
-                          HWND wnd_ctl,
-                          BOOL& handled);                          // NOLINT
-  LRESULT OnUrlClicked(int idCtrl, LPNMHDR pnmh, BOOL& bHandled);  // NOLINT
+  LRESULT OnInitDialog(UINT msg, WPARAM wparam, LPARAM lparam);
+  void OnClickedGetHelp(UINT notify_code, int id, HWND wnd_ctl);
+  void OnClickedButton(UINT notify_code, int id, HWND wnd_ctl);
+
+  // Updates the error illustration bitmap to match the active theme.
+  // Overridden by subclasses (e.g., `ProgressWnd`) that manage theme assets.
+  virtual void UpdateErrorIllustration();
 
  private:
   // Handles requests to close the window. Returns true if the window is closed.
@@ -70,12 +66,13 @@ class CompleteWnd : public OmahaWnd {
 
   HRESULT SetControlState(bool is_success);
 
-  std::u16string help_url_;
-  CompleteWndEvents* events_sink_ = nullptr;
+  std::string help_url_;
+  raw_ptr<CompleteWndEvents> events_sink_ = nullptr;
   const DWORD control_classes_;
+
+  CR_MSG_MAP_CLASS_DECLARATIONS(CompleteWnd)
 };
 
-}  // namespace ui
-}  // namespace updater
+}  // namespace updater::ui
 
 #endif  // CHROME_UPDATER_WIN_UI_COMPLETE_WND_H_

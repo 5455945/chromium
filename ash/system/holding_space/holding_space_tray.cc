@@ -1,53 +1,66 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/system/holding_space/holding_space_tray.h"
 
+#include <algorithm>
 #include <memory>
+#include <ranges>
+#include <vector>
 
-#include "ash/accessibility/accessibility_controller_impl.h"
+#include "ash/accessibility/accessibility_controller.h"
+#include "ash/ash_element_identifiers.h"
+#include "ash/constants/tray_background_view_catalog.h"
 #include "ash/public/cpp/holding_space/holding_space_client.h"
 #include "ash/public/cpp/holding_space/holding_space_constants.h"
 #include "ash/public/cpp/holding_space/holding_space_item.h"
 #include "ash/public/cpp/holding_space/holding_space_metrics.h"
 #include "ash/public/cpp/holding_space/holding_space_prefs.h"
+#include "ash/public/cpp/holding_space/holding_space_util.h"
 #include "ash/public/cpp/system_tray_client.h"
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shelf/shelf.h"
 #include "ash/shell.h"
-#include "ash/shell_observer.h"
 #include "ash/strings/grit/ash_strings.h"
-#include "ash/system/holding_space/holding_space_progress_ring.h"
+#include "ash/style/ash_color_id.h"
+#include "ash/system/holding_space/holding_space_animation_registry.h"
+#include "ash/system/holding_space/holding_space_progress_indicator_util.h"
 #include "ash/system/holding_space/holding_space_tray_bubble.h"
 #include "ash/system/holding_space/holding_space_tray_icon.h"
 #include "ash/system/holding_space/pinned_files_section.h"
+#include "ash/system/progress_indicator/progress_indicator.h"
+#include "ash/system/progress_indicator/progress_indicator_animation_registry.h"
 #include "ash/system/tray/tray_constants.h"
 #include "ash/system/tray/tray_container.h"
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "ash/user_education/user_education_class_properties.h"
 #include "base/check.h"
-#include "base/containers/adapters.h"
-#include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
-#include "base/pickle.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/task/sequenced_task_runner.h"
+#include "chromeos/constants/chromeos_features.h"
 #include "components/prefs/pref_change_registrar.h"
+#include "components/vector_icons/vector_icons.h"
 #include "ui/aura/client/drag_drop_client.h"
-#include "ui/aura/client/drag_drop_client_observer.h"
-#include "ui/base/clipboard/custom_data_helper.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
+#include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/ui_base_features.h"
+#include "ui/color/color_id.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
+#include "ui/gfx/geometry/transform_util.h"
 #include "ui/gfx/paint_vector_icon.h"
+#include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/animation/animation_builder.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/controls/image_view.h"
-#include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/vector_icons.h"
+#include "ui/views/view_class_properties.h"
 #include "ui/wm/core/coordinate_conversion.h"
 
 namespace ash {
@@ -56,8 +69,14 @@ namespace {
 using ::ui::mojom::DragOperation;
 
 // Animation.
-constexpr base::TimeDelta kAnimationDuration =
-    base::TimeDelta::FromMilliseconds(167);
+constexpr base::TimeDelta kAnimationDuration = base::Milliseconds(167);
+constexpr base::TimeDelta kInProgressAnimationOpacityDuration =
+    base::Milliseconds(100);
+constexpr base::TimeDelta kInProgressAnimationScaleDelay =
+    base::Milliseconds(50);
+constexpr base::TimeDelta kInProgressAnimationScaleDuration =
+    base::Milliseconds(166);
+constexpr float kInProgressAnimationScaleFactor = 0.875f;
 
 // Helpers ---------------------------------------------------------------------
 
@@ -75,73 +94,16 @@ void AnimateToTargetOpacity(views::View* view, float target_opacity) {
   view->layer()->SetOpacity(target_opacity);
 }
 
-// Returns the file paths extracted from the specified `data` at the filenames
-// storage location. The Files app stores file paths but *not* directory paths
-// at this location.
-std::vector<base::FilePath> ExtractFilePathsFromFilenames(
-    const ui::OSExchangeData& data) {
-  if (!data.HasFile())
-    return {};
-
-  std::vector<ui::FileInfo> filenames;
-  if (!data.GetFilenames(&filenames))
-    return {};
-
-  std::vector<base::FilePath> result;
-  for (const ui::FileInfo& filename : filenames)
-    result.push_back(base::FilePath(filename.path));
-
-  return result;
-}
-
-// Returns the file paths extracted from the specified `data` at the file system
-// sources storage location. The Files app stores both file paths *and*
-// directory paths at this location.
-std::vector<base::FilePath> ExtractFilePathsFromFileSystemSources(
-    const ui::OSExchangeData& data) {
-  base::Pickle pickle;
-  if (!data.GetPickledData(ui::ClipboardFormatType::GetWebCustomDataType(),
-                           &pickle)) {
-    return {};
-  }
-
-  constexpr char16_t kFileSystemSourcesType[] = u"fs/sources";
-
-  std::u16string file_system_sources;
-  ui::ReadCustomDataForType(pickle.data(), pickle.size(),
-                            kFileSystemSourcesType, &file_system_sources);
-  if (file_system_sources.empty())
-    return {};
-
-  HoldingSpaceClient* const client = HoldingSpaceController::Get()->client();
-
-  std::vector<base::FilePath> result;
-  for (const base::StringPiece16& file_system_source :
-       base::SplitStringPiece(file_system_sources, u"\n", base::TRIM_WHITESPACE,
-                              base::SPLIT_WANT_NONEMPTY)) {
-    base::FilePath file_path =
-        client->CrackFileSystemUrl(GURL(file_system_source));
-    if (!file_path.empty())
-      result.push_back(file_path);
-  }
-
-  return result;
-}
-
 // Returns the file paths extracted from the specified `data` which are *not*
 // already pinned to the attached holding space model.
 std::vector<base::FilePath> ExtractUnpinnedFilePaths(
     const ui::OSExchangeData& data) {
-  // Prefer extracting file paths from file system sources when possible. The
-  // Files app populates both file system sources and filenames storage
-  // locations, but only the former contains directory paths.
   std::vector<base::FilePath> unpinned_file_paths =
-      ExtractFilePathsFromFileSystemSources(data);
-  if (unpinned_file_paths.empty())
-    unpinned_file_paths = ExtractFilePathsFromFilenames(data);
+      holding_space_util::ExtractFilePaths(data,
+                                           /*fallback_to_filenames=*/true);
 
   HoldingSpaceModel* const model = HoldingSpaceController::Get()->model();
-  base::EraseIf(unpinned_file_paths, [model](const base::FilePath& file_path) {
+  std::erase_if(unpinned_file_paths, [model](const base::FilePath& file_path) {
     return model->ContainsItem(HoldingSpaceItem::Type::kPinnedFile, file_path);
   });
 
@@ -154,35 +116,66 @@ bool IsPreviewsEnabled() {
   return prefs && holding_space_prefs::IsPreviewsEnabled(prefs);
 }
 
-// Returns whether the holding space model contains any initialized items.
-bool ModelContainsInitializedItems(HoldingSpaceModel* model) {
-  for (const auto& item : model->items()) {
-    if (item->IsInitialized())
-      return true;
-  }
-  return false;
+// Returns whether a preview of `item` should be shown in the shelf. Beyond
+// being initialized, what makes an `item` previewable is having been created by
+// a user action.
+bool IsPreviewable(const std::unique_ptr<HoldingSpaceItem>& item) {
+  return item->IsInitialized() &&
+         !HoldingSpaceItem::IsSuggestionType(item->type());
+}
+
+// Creates a model representing a foreground `tray` image with the specified
+// `vector_icon`. The image must be repainted on changes to `tray` activation.
+ui::ImageModel CreateForegroundImageModel(const HoldingSpaceTray* tray,
+                                          const gfx::VectorIcon& vector_icon) {
+  // `tray` activation affects color.
+  ui::ImageModel active = ui::ImageModel::FromVectorIcon(
+      vector_icon, cros_tokens::kCrosSysSystemOnPrimaryContainer,
+      kHoldingSpaceTrayIconSize);
+  ui::ImageModel inactive = ui::ImageModel::FromVectorIcon(
+      vector_icon, cros_tokens::kCrosSysOnSurface, kHoldingSpaceTrayIconSize);
+
+  // Create a model which considers `tray` activation during rasterization.
+  return ui::ImageModel::FromImageGenerator(
+      base::BindRepeating(
+          [](const HoldingSpaceTray* tray, const ui::ImageModel& active,
+             const ui::ImageModel& inactive,
+             const ui::ColorProvider* color_provider) {
+            return (tray->is_active() ? active : inactive)
+                .Rasterize(color_provider);
+          },
+          base::Unretained(tray), base::OwnedRef(std::move(active)),
+          base::OwnedRef(std::move(inactive))),
+      gfx::Size(kHoldingSpaceTrayIconSize, kHoldingSpaceTrayIconSize));
 }
 
 // Creates the default tray icon.
-std::unique_ptr<views::ImageView> CreateDefaultTrayIcon() {
+std::unique_ptr<views::ImageView> CreateDefaultTrayIcon(
+    const HoldingSpaceTray* tray) {
   auto icon = std::make_unique<views::ImageView>();
   icon->SetID(kHoldingSpaceTrayDefaultIconId);
   icon->SetPreferredSize(gfx::Size(kTrayItemSize, kTrayItemSize));
   icon->SetPaintToLayer();
   icon->layer()->SetFillsBoundsOpaquely(false);
+  icon->SetImage(CreateForegroundImageModel(tray, kHoldingSpaceIcon));
   return icon;
 }
 
 // Creates the icon to be parented by the drop target overlay to indicate that
 // the parent view is a drop target and is capable of handling the current drag
 // payload.
-std::unique_ptr<views::ImageView> CreateDropTargetIcon() {
+std::unique_ptr<views::ImageView> CreateDropTargetIcon(
+    const HoldingSpaceTray* tray) {
   auto icon = std::make_unique<views::ImageView>();
   icon->SetHorizontalAlignment(views::ImageView::Alignment::kCenter);
   icon->SetVerticalAlignment(views::ImageView::Alignment::kCenter);
-  icon->SetPreferredSize({kHoldingSpaceIconSize, kHoldingSpaceIconSize});
+  icon->SetPreferredSize(
+      gfx::Size(kHoldingSpaceIconSize, kHoldingSpaceIconSize));
   icon->SetPaintToLayer();
   icon->layer()->SetFillsBoundsOpaquely(false);
+  icon->SetImage(CreateForegroundImageModel(
+      tray, ::features::IsRoundedIconsEnabled() ? views::kKeepFilledIcon
+                                                : views::kUnpinOldIcon));
   return icon;
 }
 
@@ -194,62 +187,54 @@ std::unique_ptr<views::View> CreateDropTargetOverlay() {
   drop_target_overlay->SetID(kHoldingSpaceTrayDropTargetOverlayId);
   drop_target_overlay->SetLayoutManager(std::make_unique<views::FillLayout>());
   drop_target_overlay->SetPaintToLayer();
+  drop_target_overlay->layer()->SetName("HoldingSpaceTray:DropTargetOverlay");
   drop_target_overlay->layer()->SetFillsBoundsOpaquely(false);
   return drop_target_overlay;
 }
 
-// ScopedDragDropObserver ------------------------------------------------------
-
-// A class which observes an `aura::client::DragDropClient` for the scope of its
-// existence. Drag events are passed to a callback supplied in the constructor.
-class ScopedDragDropObserver : public aura::client::DragDropClientObserver,
-                               public ShellObserver {
- public:
-  ScopedDragDropObserver(
-      aura::client::DragDropClient* client,
-      base::RepeatingCallback<void(const ui::DropTargetEvent*)> event_callback)
-      : event_callback_(std::move(event_callback)) {
-    drag_drop_client_observer_.Observe(client);
-    shell_observer_.Observe(Shell::Get());
+// Returns the `aura::client::DragDropClient` for the given `widget`. Note that
+// this may return `nullptr` if the browser is performing its shutdown sequence.
+aura::client::DragDropClient* GetDragDropClient(views::Widget* widget) {
+  if (widget) {
+    auto* native_window = widget->GetNativeWindow();
+    if (native_window) {
+      auto* root_window = native_window->GetRootWindow();
+      if (root_window)
+        return aura::client::GetDragDropClient(root_window);
+    }
   }
-
-  ScopedDragDropObserver(const ScopedDragDropObserver&) = delete;
-  ScopedDragDropObserver& operator=(const ScopedDragDropObserver&) = delete;
-  ~ScopedDragDropObserver() override = default;
-
- private:
-  // aura::client::DragDropClientObserver:
-  void OnDragUpdated(const ui::DropTargetEvent& event) override {
-    event_callback_.Run(&event);
-  }
-
-  void OnDragEnded() override { event_callback_.Run(/*event=*/nullptr); }
-
-  // ShellObserver:
-  void OnShellDestroying() override { drag_drop_client_observer_.Reset(); }
-
-  base::RepeatingCallback<void(const ui::DropTargetEvent*)> event_callback_;
-  base::ScopedObservation<aura::client::DragDropClient,
-                          aura::client::DragDropClientObserver>
-      drag_drop_client_observer_{this};
-  base::ScopedObservation<Shell,
-                          ShellObserver,
-                          &Shell::AddShellObserver,
-                          &Shell::RemoveShellObserver>
-      shell_observer_{this};
-};
+  return nullptr;
+}
 
 }  // namespace
 
 // HoldingSpaceTray ------------------------------------------------------------
 
-HoldingSpaceTray::HoldingSpaceTray(Shelf* shelf) : TrayBackgroundView(shelf) {
+HoldingSpaceTray::HoldingSpaceTray(Shelf* shelf)
+    : TrayBackgroundView(shelf, TrayBackgroundViewCatalogName::kHoldingSpace) {
+  SetCallback(base::BindRepeating(&HoldingSpaceTray::OnTrayButtonPressed,
+                                  weak_factory_.GetWeakPtr()));
+
+  // Ensure the existence of the singleton animation registry.
+  HoldingSpaceAnimationRegistry::GetInstance();
+
   controller_observer_.Observe(HoldingSpaceController::Get());
   session_observer_.Observe(Shell::Get()->session_controller());
   SetVisible(false);
 
+  // NOTE: Set `kHelpBubbleContextKey` before `views::kElementIdentifierKey`
+  // in case registration causes a help bubble to be created synchronously.
+  SetProperty(kHelpBubbleContextKey, HelpBubbleContext::kAsh);
+  SetProperty(views::kElementIdentifierKey, kHoldingSpaceTrayElementId);
+
+  SetTooltipText(l10n_util::GetStringUTF16(IDS_ASH_HOLDING_SPACE_TITLE));
+
+  // Accessibility.
+  GetViewAccessibility().SetName(GetAccessibleNameForBubble());
+
   // Default icon.
-  default_tray_icon_ = tray_container()->AddChildView(CreateDefaultTrayIcon());
+  default_tray_icon_ =
+      tray_container()->AddChildView(CreateDefaultTrayIcon(this));
 
   // Previews icon.
   previews_tray_icon_ = tray_container()->AddChildView(
@@ -266,18 +251,32 @@ HoldingSpaceTray::HoldingSpaceTray(Shelf* shelf) : TrayBackgroundView(shelf) {
 
   // Drop target icon.
   drop_target_icon_ =
-      drop_target_overlay_->AddChildView(CreateDropTargetIcon());
+      drop_target_overlay_->AddChildView(CreateDropTargetIcon(this));
 
-  // Progress ring.
-  // NOTE: The `progress_ring_` will only be visible when:
+  // Progress indicator.
+  // NOTE: The `progress_indicator_` will only be visible when:
   //   * there is at least one in-progress item in the attached model, and
   //   * previews are hidden.
-  progress_ring_ = HoldingSpaceProgressRing::CreateForController(
-      HoldingSpaceController::Get());
-  layer()->Add(progress_ring_->layer());
+  progress_indicator_ =
+      holding_space_util::CreateProgressIndicatorForController(
+          HoldingSpaceController::Get());
+  layer()->Add(progress_indicator_->CreateLayer(base::BindRepeating(
+      [](const HoldingSpaceTray* self, ui::ColorId color_id) {
+        return self->GetColorProvider()->GetColor(color_id);
+      },
+      base::Unretained(this))));
+
+  // Subscribe to receive notification of changes to the `progress_indicator_`'s
+  // underlying progress. When progress changes, the `default_tray_icon_` may
+  // need to be updated since it occupies the same space as the inner icon of
+  // the `progress_indicator_`.
+  progress_indicator_progress_changed_callback_list_subscription_ =
+      progress_indicator_->AddProgressChangedCallback(base::BindRepeating(
+          &HoldingSpaceTray::UpdateDefaultTrayIcon, base::Unretained(this)));
+  UpdateDefaultTrayIcon();
 
   // Enable context menu, which supports an action to toggle item previews.
-  set_context_menu_controller(this);
+  SetContextMenuEnabled(true);
 }
 
 HoldingSpaceTray::~HoldingSpaceTray() = default;
@@ -299,12 +298,8 @@ void HoldingSpaceTray::Initialize() {
     OnHoldingSpaceModelAttached(HoldingSpaceController::Get()->model());
 }
 
-void HoldingSpaceTray::ClickedOutsideBubble() {
+void HoldingSpaceTray::ClickedOutsideBubble(const ui::LocatedEvent& event) {
   CloseBubble();
-}
-
-std::u16string HoldingSpaceTray::GetAccessibleNameForTray() {
-  return l10n_util::GetStringUTF16(IDS_ASH_HOLDING_SPACE_A11Y_NAME);
 }
 
 views::View* HoldingSpaceTray::GetTooltipHandlerForPoint(
@@ -313,15 +308,14 @@ views::View* HoldingSpaceTray::GetTooltipHandlerForPoint(
   return HitTestPoint(point) ? this : nullptr;
 }
 
-std::u16string HoldingSpaceTray::GetTooltipText(const gfx::Point& point) const {
-  return l10n_util::GetStringUTF16(IDS_ASH_HOLDING_SPACE_TITLE);
-}
-
 void HoldingSpaceTray::HandleLocaleChange() {
   TooltipTextChanged();
 }
 
-void HoldingSpaceTray::HideBubbleWithView(const TrayBubbleView* bubble_view) {}
+void HoldingSpaceTray::HideBubbleWithView(const TrayBubbleView* bubble_view) {
+  if (bubble_->GetBubbleView() == bubble_view)
+    CloseBubble();
+}
 
 void HoldingSpaceTray::AnchorUpdated() {
   if (bubble_)
@@ -332,7 +326,7 @@ void HoldingSpaceTray::UpdateAfterLoginStatusChange() {
   UpdateVisibility();
 }
 
-void HoldingSpaceTray::CloseBubble() {
+void HoldingSpaceTray::CloseBubbleInternal() {
   if (!bubble_)
     return;
 
@@ -354,12 +348,18 @@ void HoldingSpaceTray::ShowBubble() {
 
   DCHECK(tray_container());
 
-  bubble_ = std::make_unique<HoldingSpaceTrayBubble>(this);
+  // Refresh suggestions before showing the bubble so that cached suggestions
+  // will be shown immediately rather than being animated in. This reduces the
+  // likelihood of a suggestions related animation occurring while also
+  // animating in the bubble. Note that a suggestions related animation may
+  // still occur in the case of a cache miss.
+  HoldingSpaceController::Get()->client()->RefreshSuggestions();
 
-  // Observe the bubble widget so that we can do proper clean up when it is
-  // being destroyed. If destruction is due to a call to `CloseBubble()` we will
-  // have already cleaned up state but there are cases where the bubble widget
-  // is destroyed independent of a call to `CloseBubble()`, e.g. ESC key press.
+  bubble_ = std::make_unique<HoldingSpaceTrayBubble>(this);
+  bubble_->Init();
+
+  // Observe the bubble widget so that we can close the bubble when a holding
+  // space item is being dragged.
   widget_observer_.Observe(bubble_->GetBubbleWidget());
 
   SetIsActive(true);
@@ -395,7 +395,7 @@ bool HoldingSpaceTray::GetDropFormats(
   // Support custom web data so that file system sources can be retrieved from
   // pickled data. That is the storage location at which the Files app stores
   // both file paths *and* directory paths.
-  format_types->insert(ui::ClipboardFormatType::GetWebCustomDataType());
+  format_types->insert(ui::ClipboardFormatType::DataTransferCustomType());
   return true;
 }
 
@@ -408,53 +408,44 @@ bool HoldingSpaceTray::CanDrop(const ui::OSExchangeData& data) {
 }
 
 int HoldingSpaceTray::OnDragUpdated(const ui::DropTargetEvent& event) {
-  return ExtractUnpinnedFilePaths(event.data()).empty()
-             ? ui::DragDropTypes::DRAG_NONE
-             : ui::DragDropTypes::DRAG_COPY;
-}
-
-DragOperation HoldingSpaceTray::OnPerformDrop(
-    const ui::DropTargetEvent& event) {
-  std::vector<base::FilePath> unpinned_file_paths(
-      ExtractUnpinnedFilePaths(event.data()));
-  if (unpinned_file_paths.empty())
-    return DragOperation::kNone;
-
-  ui::mojom::DragOperation output_drag_op = DragOperation::kNone;
-  PerformDrop(std::move(unpinned_file_paths), event, output_drag_op);
-
-  return output_drag_op;
+#if EXPENSIVE_DCHECKS_ARE_ON()
+  // NOTE: Data is assumed to be constant during a drag-and-drop sequence.
+  DCHECK(CanDrop(event.data()));
+  DCHECK(can_drop_to_pin_.value_or(false));
+#endif  // EXPENSIVE_DCHECKS_ARE_ON()
+  return ui::DragDropTypes::DRAG_COPY;
 }
 
 views::View::DropCallback HoldingSpaceTray::GetDropCallback(
     const ui::DropTargetEvent& event) {
-  std::vector<base::FilePath> unpinned_file_paths(
-      ExtractUnpinnedFilePaths(event.data()));
-  if (unpinned_file_paths.empty())
-    return base::NullCallback();
-
+#if EXPENSIVE_DCHECKS_ARE_ON()
+  // NOTE: Data is assumed to be constant during a drag-and-drop sequence.
+  // Also note that `can_drop_to_pin_` has been reset when this code is reached.
+  DCHECK(CanDrop(event.data()));
+#endif  // EXPENSIVE_DCHECKS_ARE_ON()
   return base::BindOnce(&HoldingSpaceTray::PerformDrop,
-                        weak_factory_.GetWeakPtr(),
-                        std::move(unpinned_file_paths));
+                        weak_factory_.GetWeakPtr());
 }
 
 void HoldingSpaceTray::PerformDrop(
-    std::vector<base::FilePath> unpinned_file_paths,
     const ui::DropTargetEvent& event,
-    ui::mojom::DragOperation& output_drag_op) {
+    ui::mojom::DragOperation& output_drag_op,
+    std::unique_ptr<ui::LayerTreeOwner> drag_image_layer_owner) {
+  std::vector<base::FilePath> unpinned_file_paths =
+      ExtractUnpinnedFilePaths(event.data());
   DCHECK(!unpinned_file_paths.empty());
 
   holding_space_metrics::RecordPodAction(
       holding_space_metrics::PodAction::kDragAndDropToPin);
 
   HoldingSpaceController::Get()->client()->PinFiles(unpinned_file_paths);
-  did_drop_to_pin_ = true;
 
+  did_drop_to_pin_ = true;
   output_drag_op = DragOperation::kCopy;
 }
 
-void HoldingSpaceTray::Layout() {
-  TrayBackgroundView::Layout();
+void HoldingSpaceTray::Layout(PassKey) {
+  LayoutSuperclass<TrayBackgroundView>(this);
 
   // The `drop_target_overlay_` should always fill this view's bounds as they
   // are perceived by the user. Note that the user perceives the bounds of this
@@ -462,26 +453,35 @@ void HoldingSpaceTray::Layout() {
   const gfx::Rect background_bounds(GetBackgroundBounds());
   drop_target_overlay_->SetBoundsRect(GetMirroredRect(background_bounds));
 
-  // The `progress_ring_` should also fill this view's bounds as they are
+  // The `progress_indicator_` should also fill this view's bounds as they are
   // perceived by the user, but these bounds do not need to be mirrored since
   // they are in layer coordinates.
-  progress_ring_->layer()->SetBounds(background_bounds);
+  progress_indicator_->layer()->SetBounds(background_bounds);
 }
 
 void HoldingSpaceTray::VisibilityChanged(views::View* starting_from,
                                          bool is_visible) {
   TrayBackgroundView::VisibilityChanged(starting_from, is_visible);
 
-  if (!is_visible) {
+  // `drag_drop_observer_` is constructed only when `HoldingSpaceTray` is
+  // drawn. NOTE: `is_visible` indicates the visibility of `starting_from`.
+  // Therefore, `IsDrawn()` should not be replaced by `is_visible`.
+  if (!IsDrawn()) {
     drag_drop_observer_.reset();
+    can_drop_to_pin_.reset();
     return;
   }
+
+  // It's possible that the `drag_drop_client` might be `nullptr` if the browser
+  // is performing its shutdown sequence.
+  auto* drag_drop_client = GetDragDropClient(GetWidget());
+  if (!drag_drop_client)
+    return;
 
   // Observe drag/drop events only when visible. Since the observer is owned by
   // `this` view, it's safe to bind to a raw pointer.
   drag_drop_observer_ = std::make_unique<ScopedDragDropObserver>(
-      /*client=*/aura::client::GetDragDropClient(
-          GetWidget()->GetNativeWindow()->GetRootWindow()),
+      drag_drop_client,
       /*event_callback=*/base::BindRepeating(
           &HoldingSpaceTray::UpdateDropTargetState, base::Unretained(this)));
 }
@@ -489,37 +489,27 @@ void HoldingSpaceTray::VisibilityChanged(views::View* starting_from,
 void HoldingSpaceTray::OnThemeChanged() {
   TrayBackgroundView::OnThemeChanged();
 
-  const SkColor color = AshColorProvider::Get()->GetContentLayerColor(
-      AshColorProvider::ContentLayerType::kIconColorPrimary);
-
-  // Default tray icon.
-  default_tray_icon_->SetImage(gfx::CreateVectorIcon(
-      kHoldingSpaceIcon, kHoldingSpaceTrayIconSize, color));
-
-  // Drop target icon.
-  drop_target_icon_->SetImage(
-      gfx::CreateVectorIcon(views::kUnpinIcon, kHoldingSpaceIconSize, color));
-
-  // Progress ring.
-  progress_ring_->InvalidateLayer();
+  // Progress indicator.
+  progress_indicator_->InvalidateLayer();
 }
 
 void HoldingSpaceTray::UpdateVisibility() {
   // The holding space tray should not be visible if the `model` is not attached
   // or if the user session is blocked.
-  HoldingSpaceModel* const model = HoldingSpaceController::Get()->model();
+  HoldingSpaceController* const controller = HoldingSpaceController::Get();
+  HoldingSpaceModel* const model = controller->model();
   if (!model || Shell::Get()->session_controller()->IsUserSessionBlocked()) {
     SetVisiblePreferred(false);
     return;
   }
 
-  // The holding space tray should always be shown if the `model` contains fully
-  // initialized items. Otherwise, it should only be visible if the pinned files
-  // section is going to show a placeholder.
+  // The holding space tray should always be shown if the `model` contains items
+  // that are previewable. Otherwise, it should only be visible if the time of
+  // first add has been marked but a file has never been pinned.
   auto* prefs = Shell::Get()->session_controller()->GetActivePrefService();
-  SetVisiblePreferred(
-      ModelContainsInitializedItems(model) ||
-      (prefs && PinnedFilesSection::ShouldShowPlaceholder(prefs)));
+  SetVisiblePreferred(std::ranges::any_of(model->items(), IsPreviewable) ||
+                      (prefs && holding_space_prefs::GetTimeOfFirstAdd(prefs) &&
+                       !holding_space_prefs::GetTimeOfFirstPin(prefs)));
 }
 
 void HoldingSpaceTray::FirePreviewsUpdateTimerIfRunningForTesting() {
@@ -528,7 +518,9 @@ void HoldingSpaceTray::FirePreviewsUpdateTimerIfRunningForTesting() {
 }
 
 std::u16string HoldingSpaceTray::GetAccessibleNameForBubble() {
-  return GetAccessibleNameForTray();
+  return l10n_util::GetStringFUTF16(
+      IDS_ASH_HOLDING_SPACE_A11Y_NAME,
+      l10n_util::GetStringUTF16(IDS_ASH_HOLDING_SPACE_TITLE));
 }
 
 bool HoldingSpaceTray::ShouldEnableExtraKeyboardAccessibility() {
@@ -541,6 +533,48 @@ void HoldingSpaceTray::HideBubble(const TrayBubbleView* bubble_view) {
 
 void HoldingSpaceTray::OnShouldShowAnimationChanged(bool should_animate) {
   previews_tray_icon_->set_should_animate_updates(should_animate);
+}
+
+std::unique_ptr<ui::SimpleMenuModel>
+HoldingSpaceTray::CreateContextMenuModel() {
+  holding_space_metrics::RecordPodAction(
+      holding_space_metrics::PodAction::kShowContextMenu);
+
+  bool previews_enabled = holding_space_prefs::IsPreviewsEnabled(
+      Shell::Get()->session_controller()->GetActivePrefService());
+  auto context_menu_model = std::make_unique<ui::SimpleMenuModel>(this);
+
+  if (previews_enabled) {
+    context_menu_model->AddItemWithIcon(
+        static_cast<int>(HoldingSpaceCommandId::kHidePreviews),
+        l10n_util::GetStringUTF16(
+            IDS_ASH_HOLDING_SPACE_CONTEXT_MENU_HIDE_PREVIEWS),
+        ui::ImageModel::FromVectorIcon(
+            ::features::IsRoundedIconsEnabled()
+                ? vector_icons::kVisibilityOffIcon
+                : vector_icons::kVisibilityOffOldIcon,
+            ui::kColorAshSystemUIMenuIcon, kHoldingSpaceIconSize));
+  } else {
+    context_menu_model->AddItemWithIcon(
+        static_cast<int>(HoldingSpaceCommandId::kShowPreviews),
+        l10n_util::GetStringUTF16(
+            IDS_ASH_HOLDING_SPACE_CONTEXT_MENU_SHOW_PREVIEWS),
+        ui::ImageModel::FromVectorIcon(::features::IsRoundedIconsEnabled()
+                                           ? vector_icons::kVisibilityIcon
+                                           : vector_icons::kVisibilityOldIcon,
+                                       ui::kColorAshSystemUIMenuIcon,
+                                       kHoldingSpaceIconSize));
+  }
+
+  return context_menu_model;
+}
+
+void HoldingSpaceTray::UpdateTrayItemColor(bool is_active) {
+  default_tray_icon_->SchedulePaint();
+  drop_target_icon_->SchedulePaint();
+  progress_indicator_->SetColorId(
+      is_active ? cros_tokens::kCrosSysSystemOnPrimaryContainer
+                : cros_tokens::kCrosSysPrimary);
 }
 
 void HoldingSpaceTray::OnHoldingSpaceModelAttached(HoldingSpaceModel* model) {
@@ -568,8 +602,8 @@ void HoldingSpaceTray::OnHoldingSpaceItemsAdded(
   // holding space tray should bounce in (if it isn't already visible) and
   // previews should be animated.
   if (!Shell::Get()->session_controller()->IsUserSessionBlocked()) {
-    const bool has_initialized_item = std::any_of(
-        items.begin(), items.end(),
+    const bool has_initialized_item = std::ranges::any_of(
+        items,
         [](const HoldingSpaceItem* item) { return item->IsInitialized(); });
     if (has_initialized_item)
       SetShouldAnimate(true);
@@ -584,8 +618,8 @@ void HoldingSpaceTray::OnHoldingSpaceItemsRemoved(
   // If an initialized holding space item is removed from the model mid-session,
   // the holding space tray should animate updates.
   if (!Shell::Get()->session_controller()->IsUserSessionBlocked()) {
-    const bool has_initialized_item = std::any_of(
-        items.begin(), items.end(),
+    const bool has_initialized_item = std::ranges::any_of(
+        items,
         [](const HoldingSpaceItem* item) { return item->IsInitialized(); });
     if (has_initialized_item)
       SetShouldAnimate(true);
@@ -621,76 +655,18 @@ void HoldingSpaceTray::ExecuteCommand(int command_id, int event_flags) {
       break;
     default:
       NOTREACHED();
-      break;
   }
 }
 
-void HoldingSpaceTray::ShowContextMenuForViewImpl(
-    views::View* source,
-    const gfx::Point& point,
-    ui::MenuSourceType source_type) {
-  holding_space_metrics::RecordPodAction(
-      holding_space_metrics::PodAction::kShowContextMenu);
-
-  context_menu_model_ = std::make_unique<ui::SimpleMenuModel>(this);
-
-  const bool previews_enabled = holding_space_prefs::IsPreviewsEnabled(
-      Shell::Get()->session_controller()->GetActivePrefService());
-
-  if (previews_enabled) {
-    context_menu_model_->AddItemWithIcon(
-        static_cast<int>(HoldingSpaceCommandId::kHidePreviews),
-        l10n_util::GetStringUTF16(
-            IDS_ASH_HOLDING_SPACE_CONTEXT_MENU_HIDE_PREVIEWS),
-        ui::ImageModel::FromVectorIcon(kVisibilityOffIcon, /*color_id=*/-1,
-                                       kHoldingSpaceIconSize));
-  } else {
-    context_menu_model_->AddItemWithIcon(
-        static_cast<int>(HoldingSpaceCommandId::kShowPreviews),
-        l10n_util::GetStringUTF16(
-            IDS_ASH_HOLDING_SPACE_CONTEXT_MENU_SHOW_PREVIEWS),
-        ui::ImageModel::FromVectorIcon(kVisibilityIcon, /*color_id=*/-1,
-                                       kHoldingSpaceIconSize));
-  }
-
-  const int run_types = views::MenuRunner::USE_TOUCHABLE_LAYOUT |
-                        views::MenuRunner::CONTEXT_MENU |
-                        views::MenuRunner::FIXED_ANCHOR;
-
-  context_menu_runner_ =
-      std::make_unique<views::MenuRunner>(context_menu_model_.get(), run_types);
-
-  views::MenuAnchorPosition anchor;
-  switch (shelf()->alignment()) {
-    case ShelfAlignment::kBottom:
-    case ShelfAlignment::kBottomLocked:
-      anchor = views::MenuAnchorPosition::kBubbleTopRight;
-      break;
-    case ShelfAlignment::kLeft:
-      anchor = views::MenuAnchorPosition::kBubbleRight;
-      break;
-    case ShelfAlignment::kRight:
-      anchor = views::MenuAnchorPosition::kBubbleLeft;
-      break;
-  }
-
-  context_menu_runner_->RunMenuAt(
-      source->GetWidget(), /*button_controller=*/nullptr,
-      source->GetBoundsInScreen(), anchor, source_type);
-}
-
-void HoldingSpaceTray::OnWidgetDragWillStart(views::Widget* widget) {
+void HoldingSpaceTray::OnWidgetDragDropWillStart(views::Widget* widget) {
   // The holding space bubble should be closed while dragging holding space
   // items so as not to obstruct drop targets. Post the task to close the bubble
   // so that we don't attempt to destroy the bubble widget before the associated
   // drag event has been fully initialized.
-  base::SequencedTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::BindOnce(&HoldingSpaceTray::CloseBubble,
-                                weak_factory_.GetWeakPtr()));
-}
-
-void HoldingSpaceTray::OnWidgetDestroying(views::Widget* widget) {
-  CloseBubble();
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE,
+      base::BindOnce(&HoldingSpaceTray::CloseBubble, weak_factory_.GetWeakPtr(),
+                     TrayBackgroundView::CloseReason::kUnspecified));
 }
 
 void HoldingSpaceTray::OnActiveUserPrefServiceChanged(PrefService* prefs) {
@@ -707,30 +683,63 @@ void HoldingSpaceTray::ObservePrefService(PrefService* prefs) {
   pref_change_registrar_ = std::make_unique<PrefChangeRegistrar>();
   pref_change_registrar_->Init(prefs);
 
-  // NOTE: The callback being bound is scoped to `pref_change_registrar_` which
-  // is owned by `this` so it is safe to bind with an unretained raw pointer.
+  // NOTE: The binding of these callbacks is scoped to `pref_change_registrar_`
+  // which is owned by `this` so it is safe to bind with an unretained raw
+  // pointer.
   holding_space_prefs::AddPreviewsEnabledChangedCallback(
       pref_change_registrar_.get(),
       base::BindRepeating(&HoldingSpaceTray::UpdatePreviewsState,
                           base::Unretained(this)));
+  holding_space_prefs::AddTimeOfFirstAddChangedCallback(
+      pref_change_registrar_.get(), base::BindRepeating(
+                                        [](HoldingSpaceTray* tray) {
+                                          tray->SetShouldAnimate(true);
+                                          tray->UpdateVisibility();
+                                        },
+                                        base::Unretained(this)));
+}
+
+void HoldingSpaceTray::OnTrayButtonPressed(const ui::Event& event) {
+  if (GetBubbleWidget()) {
+    CloseBubble();
+    return;
+  }
+
+  ShowBubble();
 }
 
 void HoldingSpaceTray::UpdatePreviewsState() {
   UpdatePreviewsVisibility();
   SchedulePreviewsIconUpdate();
+
+  if (PreviewsShown())
+    return;
+
+  // When previews are shown, progress icon animations are started on completion
+  // of preview animations. When previews are *not* shown, there is nothing to
+  // wait for so progress icon animations should be started immediately.
+  if (auto* model = HoldingSpaceController::Get()->model(); model) {
+    auto* registry = HoldingSpaceAnimationRegistry::GetInstance();
+    for (const auto& item : model->items()) {
+      auto* animation = registry->GetProgressIconAnimationForKey(
+          ProgressIndicatorAnimationRegistry::AsAnimationKey(item.get()));
+      if (animation && !animation->HasAnimated())
+        animation->Start();
+    }
+  }
 }
 
 void HoldingSpaceTray::UpdatePreviewsVisibility() {
-  const bool show_previews =
-      IsPreviewsEnabled() && HoldingSpaceController::Get()->model() &&
-      ModelContainsInitializedItems(HoldingSpaceController::Get()->model());
+  HoldingSpaceModel* const model = HoldingSpaceController::Get()->model();
+  const bool show_previews = IsPreviewsEnabled() && model &&
+                             std::ranges::any_of(model->items(), IsPreviewable);
 
   if (PreviewsShown() == show_previews)
     return;
 
   default_tray_icon_->SetVisible(!show_previews);
   previews_tray_icon_->SetVisible(show_previews);
-  progress_ring_->layer()->SetVisible(!show_previews);
+  progress_indicator_->layer()->SetVisible(!show_previews);
 
   if (!show_previews) {
     previews_tray_icon_->Clear();
@@ -746,7 +755,7 @@ void HoldingSpaceTray::SchedulePreviewsIconUpdate() {
   // previews so items added in quick succession are handled together.
   base::TimeDelta delay = use_zero_previews_update_delay_
                               ? base::TimeDelta()
-                              : base::TimeDelta::FromMilliseconds(50);
+                              : base::Milliseconds(50);
   previews_update_.Start(FROM_HERE, delay,
                          base::BindOnce(&HoldingSpaceTray::UpdatePreviewsIcon,
                                         base::Unretained(this)));
@@ -761,13 +770,15 @@ void HoldingSpaceTray::UpdatePreviewsIcon() {
   std::vector<const HoldingSpaceItem*> items_with_previews;
   std::set<base::FilePath> paths_with_previews;
   for (const auto& item :
-       base::Reversed(HoldingSpaceController::Get()->model()->items())) {
-    if (!item->IsInitialized())
+       std::views::reverse(HoldingSpaceController::Get()->model()->items())) {
+    if (!IsPreviewable(item)) {
       continue;
-    if (base::Contains(paths_with_previews, item->file_path()))
+    }
+    if (paths_with_previews.contains(item->file().file_path)) {
       continue;
+    }
     items_with_previews.push_back(item.get());
-    paths_with_previews.insert(item->file_path());
+    paths_with_previews.insert(item->file().file_path);
   }
   previews_tray_icon_->UpdatePreviews(items_with_previews);
 }
@@ -776,10 +787,81 @@ bool HoldingSpaceTray::PreviewsShown() const {
   return previews_tray_icon_->GetVisible();
 }
 
-void HoldingSpaceTray::UpdateDropTargetState(const ui::DropTargetEvent* event) {
+void HoldingSpaceTray::UpdateDefaultTrayIcon() {
+  const std::optional<float>& progress = progress_indicator_->progress();
+
+  // If `progress` is not `complete`, there is potential for overlap between the
+  // `default_tray_icon_` and the `progress_indicator_`'s inner icon. To address
+  // this, hide the `default_tray_icon_` when `progress` is being indicated.
+  bool complete = progress == ProgressIndicator::kProgressComplete;
+  float target_opacity = complete ? 1.f : 0.f;
+
+  // If `target_opacity` is already set there's nothing to do.
+  ui::Layer* const layer = default_tray_icon_->layer();
+  if (layer->GetTargetOpacity() == target_opacity)
+    return;
+
+  // If `target_opacity` is zero, it should be set immediately w/o animation.
+  if (target_opacity == 0.f) {
+    layer->GetAnimator()->StopAnimating();
+    layer->SetOpacity(0.f);
+    return;
+  }
+
+  // If `bounds` are empty, the `default_tray_icon_` has not yet been laid out
+  // and therefore any changes to its visual state need not be animated.
+  const gfx::Rect& bounds = default_tray_icon_->bounds();
+  if (bounds.IsEmpty()) {
+    layer->SetOpacity(1.f);
+    layer->SetTransform(gfx::Transform());
+    return;
+  }
+
+  const auto preemption_strategy =
+      ui::LayerAnimator::PreemptionStrategy::IMMEDIATELY_ANIMATE_TO_NEW_TARGET;
+  const auto transform = gfx::GetScaleTransform(
+      bounds.CenterPoint(), kInProgressAnimationScaleFactor);
+  const auto tween_type = gfx::Tween::Type::FAST_OUT_SLOW_IN_3;
+
+  views::AnimationBuilder()
+      .SetPreemptionStrategy(preemption_strategy)
+      .Once()
+      .SetDuration(base::TimeDelta())
+      .SetOpacity(layer, 0.f)
+      .SetTransform(layer, transform)
+      .Then()
+      .SetDuration(kInProgressAnimationOpacityDuration)
+      .SetOpacity(layer, 1.f)
+      .Offset(kInProgressAnimationScaleDelay)
+      .SetDuration(kInProgressAnimationScaleDuration)
+      .SetTransform(layer, gfx::Transform(), tween_type);
+}
+
+void HoldingSpaceTray::UpdateDropTargetState(
+    ScopedDragDropObserver::EventType event_type,
+    const ui::DropTargetEvent* event) {
   bool is_drop_target = false;
 
-  if (event && !ExtractUnpinnedFilePaths(event->data()).empty()) {
+  switch (event_type) {
+    case ScopedDragDropObserver::EventType::kDragUpdated:
+      if (!can_drop_to_pin_) {
+        // Cache `can_drop_to_pin_` to avoid costly recalculation.
+        can_drop_to_pin_ = CanDrop(event->data());
+      }
+#if EXPENSIVE_DCHECKS_ARE_ON()
+      else {
+        // NOTE: Data is assumed to be constant during a drag-and-drop sequence.
+        DCHECK_EQ(CanDrop(event->data()), can_drop_to_pin_.value());
+      }
+#endif  // EXPENSIVE_DCHECKS_ARE_ON()
+      break;
+    case ScopedDragDropObserver::EventType::kDragCompleted:
+    case ScopedDragDropObserver::EventType::kDragCancelled:
+      can_drop_to_pin_.reset();
+      break;
+  }
+
+  if (can_drop_to_pin_.value_or(false)) {
     // If the `event` contains pinnable files and is within range of this view,
     // indicate this view is a drop target to increase discoverability.
     constexpr int kProximityThreshold = 20;
@@ -827,7 +909,7 @@ void HoldingSpaceTray::SetShouldAnimate(bool should_animate) {
   }
 }
 
-BEGIN_METADATA(HoldingSpaceTray, TrayBackgroundView)
+BEGIN_METADATA(HoldingSpaceTray)
 END_METADATA
 
 }  // namespace ash

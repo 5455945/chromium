@@ -1,11 +1,11 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_BROWSER_BACKGROUND_FETCH_STORAGE_MARK_REQUEST_COMPLETE_TASK_H_
 #define CONTENT_BROWSER_BACKGROUND_FETCH_STORAGE_MARK_REQUEST_COMPLETE_TASK_H_
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/scoped_refptr.h"
 #include "content/browser/background_fetch/background_fetch.pb.h"
 #include "content/browser/background_fetch/background_fetch_request_info.h"
@@ -27,6 +27,9 @@ class MarkRequestCompleteTask : public DatabaseTask {
       const BackgroundFetchRegistrationId& registration_id,
       scoped_refptr<BackgroundFetchRequestInfo> request_info,
       MarkRequestCompleteCallback callback);
+
+  MarkRequestCompleteTask(const MarkRequestCompleteTask&) = delete;
+  MarkRequestCompleteTask& operator=(const MarkRequestCompleteTask&) = delete;
 
   ~MarkRequestCompleteTask() override;
 
@@ -68,8 +71,6 @@ class MarkRequestCompleteTask : public DatabaseTask {
 
   void FinishWithError(blink::mojom::BackgroundFetchError error) override;
 
-  std::string HistogramName() const override;
-
   BackgroundFetchRegistrationId registration_id_;
   scoped_refptr<BackgroundFetchRequestInfo> request_info_;
   blink::mojom::FetchAPIResponsePtr response_;
@@ -81,8 +82,6 @@ class MarkRequestCompleteTask : public DatabaseTask {
 
   base::WeakPtrFactory<MarkRequestCompleteTask> weak_factory_{
       this};  // Keep as last.
-
-  DISALLOW_COPY_AND_ASSIGN(MarkRequestCompleteTask);
 };
 
 }  // namespace background_fetch

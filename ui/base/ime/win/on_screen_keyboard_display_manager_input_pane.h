@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,9 +13,8 @@
 #include <memory>
 
 #include "base/component_export.h"
-#include "base/macros.h"
 #include "base/observer_list.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/win/windows_types.h"
 #include "ui/base/ime/mojom/virtual_keyboard_types.mojom-shared.h"
 #include "ui/base/ime/virtual_keyboard_controller.h"
@@ -33,6 +32,12 @@ class COMPONENT_EXPORT(UI_BASE_IME_WIN)
     : public VirtualKeyboardController {
  public:
   explicit OnScreenKeyboardDisplayManagerInputPane(HWND hwnd);
+
+  OnScreenKeyboardDisplayManagerInputPane(
+      const OnScreenKeyboardDisplayManagerInputPane&) = delete;
+  OnScreenKeyboardDisplayManagerInputPane& operator=(
+      const OnScreenKeyboardDisplayManagerInputPane&) = delete;
+
   ~OnScreenKeyboardDisplayManagerInputPane() override;
 
   // VirtualKeyboardController:
@@ -63,8 +68,7 @@ class COMPONENT_EXPORT(UI_BASE_IME_WIN)
 
   // The main window which displays the on screen keyboard.
   const HWND hwnd_;
-  base::ObserverList<VirtualKeyboardControllerObserver, false>::Unchecked
-      observers_;
+  base::ObserverList<VirtualKeyboardControllerObserver, false> observers_;
   const scoped_refptr<base::SingleThreadTaskRunner> main_task_runner_;
   const scoped_refptr<base::SingleThreadTaskRunner> background_task_runner_;
   scoped_refptr<VirtualKeyboardInputPane> virtual_keyboard_input_pane_;
@@ -74,8 +78,6 @@ class COMPONENT_EXPORT(UI_BASE_IME_WIN)
   std::unique_ptr<VirtualKeyboardDebounceTimer> debouncer_;
   base::WeakPtrFactory<OnScreenKeyboardDisplayManagerInputPane> weak_factory_{
       this};
-
-  DISALLOW_COPY_AND_ASSIGN(OnScreenKeyboardDisplayManagerInputPane);
 };
 
 }  // namespace ui

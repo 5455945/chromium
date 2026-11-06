@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,14 +9,17 @@
 #include <queue>
 #include <string>
 
-#include "base/macros.h"
-#include "components/arc/mojom/screen_capture.mojom.h"
+#include "base/memory/raw_ptr.h"
+#include "chromeos/ash/experiences/arc/mojom/screen_capture.mojom.h"
 #include "components/viz/common/gpu/context_lost_observer.h"
-#include "gpu/command_buffer/client/gl_helper.h"
+#include "gpu/command_buffer/common/sync_token.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "mojo/public/cpp/platform/platform_handle.h"
 #include "ui/compositor/compositor_animation_observer.h"
+#include "ui/display/display_observer.h"
+#include "ui/display/types/display_constants.h"
 
 class ScreenCaptureNotificationUI;
 
@@ -39,7 +42,8 @@ class CopyOutputResult;
 
 namespace arc {
 
-class ArcScreenCaptureSession : public mojom::ScreenCaptureSession,
+class ArcScreenCaptureSession : public display::DisplayObserver,
+                                public mojom::ScreenCaptureSession,
                                 public ui::CompositorAnimationObserver,
                                 public viz::ContextLostObserver {
  public:
@@ -53,8 +57,17 @@ class ArcScreenCaptureSession : public mojom::ScreenCaptureSession,
       const gfx::Size& size,
       bool enable_notification);
 
+  ArcScreenCaptureSession(const ArcScreenCaptureSession&) = delete;
+  ArcScreenCaptureSession& operator=(const ArcScreenCaptureSession&) = delete;
+
   // Implements mojo::ScreenCaptureSession interface.
-  void SetOutputBuffer(mojo::ScopedHandle graphics_buffer,
+  void SetOutputBufferDeprecated(
+      mojo::PlatformHandle graphics_buffer,
+      uint32_t stride,
+      SetOutputBufferDeprecatedCallback callback) override;
+  void SetOutputBuffer(mojo::PlatformHandle graphics_buffer,
+                       mojom::BufferFormat buffer_format,
+                       uint64_t buffer_format_modifier,
                        uint32_t stride,
                        SetOutputBufferCallback callback) override;
 
@@ -64,6 +77,9 @@ class ArcScreenCaptureSession : public mojom::ScreenCaptureSession,
 
   // Implements viz::ContextLostObserver
   void OnContextLost() override;
+
+  // Implements display::DisplayObserver
+  void OnWillRemoveDisplays(const display::Displays& removed_displays) override;
 
  private:
   struct DesktopTexture;
@@ -90,8 +106,10 @@ class ArcScreenCaptureSession : public mojom::ScreenCaptureSession,
   // Callback for when we perform CopyOutputRequests.
   void OnDesktopCaptured(std::unique_ptr<viz::CopyOutputResult> result);
   // Callback for completion of GL commands.
-  void QueryCompleted(GLuint query_id,
-                      std::unique_ptr<PendingBuffer> pending_buffer);
+  void QueryCompleted(uint32_t query_id,
+                      std::unique_ptr<DesktopTexture> desktop_texture,
+                      std::unique_ptr<PendingBuffer> pending_buffer,
+                      gpu::SyncToken sync_token);
   // Callback for a user clicking Stop on the notification for screen capture.
   void NotificationStop();
 
@@ -100,7 +118,10 @@ class ArcScreenCaptureSession : public mojom::ScreenCaptureSession,
   gfx::Size size_;
   // aura::Window of the display being captured. This corresponds to one of
   // Ash's root windows.
-  aura::Window* display_root_window_ = nullptr;
+  raw_ptr<aura::Window> display_root_window_ = nullptr;
+  // ID of the display being captured.
+  int64_t display_id_ = display::kInvalidDisplayId;
+  display::ScopedDisplayObserver display_observer_{this};
 
   // We have 2 separate queues for handling incoming GPU buffers from Android
   // and also textures for the desktop we have captured already. Due to the
@@ -110,14 +131,10 @@ class ArcScreenCaptureSession : public mojom::ScreenCaptureSession,
   // well as never skip any output buffers.
   std::queue<std::unique_ptr<PendingBuffer>> buffer_queue_;
   std::queue<std::unique_ptr<DesktopTexture>> texture_queue_;
-  std::unique_ptr<gpu::GLHelper> gl_helper_;
-  std::unique_ptr<gpu::GLHelper::ScalerInterface> scaler_;
   std::unique_ptr<ScreenCaptureNotificationUI> notification_ui_;
   std::unique_ptr<gfx::ClientNativePixmapFactory> client_native_pixmap_factory_;
 
   base::WeakPtrFactory<ArcScreenCaptureSession> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ArcScreenCaptureSession);
 };
 
 }  // namespace arc

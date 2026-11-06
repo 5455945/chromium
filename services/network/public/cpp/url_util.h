@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,6 +23,12 @@ namespace network {
 // "chrome:", etc.).
 COMPONENT_EXPORT(NETWORK_CPP)
 bool IsURLHandledByNetworkService(const GURL& url);
+
+// https://fetch.spec.whatwg.org/#serialize-a-response-url-for-reporting
+// This function serializes a URL for reporting, stripping fragments,
+// usernames, and passwords.
+COMPONENT_EXPORT(NETWORK_CPP)
+GURL SerializeResponseUrlForReporting(const GURL& url);
 
 }  // namespace network
 

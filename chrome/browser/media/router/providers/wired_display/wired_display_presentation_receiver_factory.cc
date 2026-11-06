@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,17 +6,11 @@
 
 #include <utility>
 
+#include "base/no_destructor.h"
 #include "chrome/browser/media/router/media_router_feature.h"
 #include "chrome/browser/ui/media_router/presentation_receiver_window_controller.h"
 
 namespace media_router {
-
-namespace {
-
-base::LazyInstance<WiredDisplayPresentationReceiverFactory>::Leaky factory =
-    LAZY_INSTANCE_INITIALIZER;
-
-}  // namespace
 
 // static
 std::unique_ptr<WiredDisplayPresentationReceiver>
@@ -50,7 +44,8 @@ WiredDisplayPresentationReceiverFactory::
 // static
 WiredDisplayPresentationReceiverFactory*
 WiredDisplayPresentationReceiverFactory::GetInstance() {
-  return &factory.Get();
+  static base::NoDestructor<WiredDisplayPresentationReceiverFactory> instance;
+  return instance.get();
 }
 
 }  // namespace media_router

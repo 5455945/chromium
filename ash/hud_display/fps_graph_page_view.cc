@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,10 @@
 #include <cmath>
 #include <numeric>
 
-#include "ash/hud_display/grid.h"
 #include "ash/hud_display/hud_constants.h"
+#include "ash/hud_display/reference_lines.h"
 #include "ash/shell.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "ui/aura/window_tree_host.h"
@@ -26,38 +26,38 @@ namespace hud_display {
 
 namespace {
 // Draw tick on the vertical axis every 5 frames.
-constexpr float kVerticalTicFrames = 5;
+constexpr float kVerticalTickFrames = 5;
 }  // namespace
 
 ////////////////////////////////////////////////////////////////////////////////
 // FPSGraphPageView, public:
 
-BEGIN_METADATA(FPSGraphPageView, GraphPageViewBase)
+BEGIN_METADATA(FPSGraphPageView)
 END_METADATA
 
 FPSGraphPageView::FPSGraphPageView(const base::TimeDelta refresh_interval)
-    : frame_rate_1s_(kDefaultGraphWidth,
-                     Graph::Baseline::BASELINE_BOTTOM,
-                     Graph::Fill::NONE,
-                     Graph::Style::SKYLINE,
+    : frame_rate_1s_(kHUDGraphWidth,
+                     Graph::Baseline::kBaselineBottom,
+                     Graph::Fill::kNone,
+                     Graph::Style::kSkyline,
                      SkColorSetA(SK_ColorYELLOW, kHUDAlpha)),
-      frame_rate_500ms_(kDefaultGraphWidth,
-                        Graph::Baseline::BASELINE_BOTTOM,
-                        Graph::Fill::NONE,
-                        Graph::Style::SKYLINE,
+      frame_rate_500ms_(kHUDGraphWidth,
+                        Graph::Baseline::kBaselineBottom,
+                        Graph::Fill::kNone,
+                        Graph::Style::kSkyline,
                         SkColorSetA(SK_ColorCYAN, kHUDAlpha)),
-      refresh_rate_(kDefaultGraphWidth,
-                    Graph::Baseline::BASELINE_BOTTOM,
-                    Graph::Fill::NONE,
-                    Graph::Style::SKYLINE,
+      refresh_rate_(kHUDGraphWidth,
+                    Graph::Baseline::kBaselineBottom,
+                    Graph::Fill::kNone,
+                    Graph::Style::kSkyline,
                     kHUDBackground /*not drawn*/) {
   const int data_width = frame_rate_1s_.max_data_points();
   // Verical ticks are drawn every 5 frames (5/60 interval).
-  constexpr float vertical_ticks_interval = kVerticalTicFrames / 60.0;
+  constexpr float vertical_ticks_interval = kVerticalTickFrames / 60.F;
   // max_data_points left label, 60fps  top, 0 seconds on the right, 0fps on the
   // bottom. Seconds and fps are dimensions. Number of data points is
-  // data_width, horizontal grid ticks are drawn every 10 frames.
-  grid_ = CreateGrid(
+  // data_width, horizontal tick marks are drawn every 10 frames.
+  reference_lines_ = CreateReferenceLines(
       /*left=*/data_width,
       /*top=*/60, /*right=*/0, /*bottom=*/0,
       /*x_unit=*/u"frames",
@@ -105,8 +105,8 @@ void FPSGraphPageView::OnPaint(gfx::Canvas* canvas) {
 
   // Layout graphs.
   gfx::Rect rect = GetContentsBounds();
-  // Adjust to grid width.
-  rect.Inset(kGridLineWidth, kGridLineWidth);
+  // Adjust bounds to not overlap with bordering reference lines.
+  rect.Inset(kHUDGraphReferenceLineWidth);
 
   frame_rate_500ms_.Layout(rect, /*base=*/nullptr);
   frame_rate_1s_.Layout(rect, /*base=*/nullptr);
@@ -114,10 +114,11 @@ void FPSGraphPageView::OnPaint(gfx::Canvas* canvas) {
   frame_rate_500ms_.Draw(canvas);
   frame_rate_1s_.Draw(canvas);
   // Refresh rate graph is not drawn, it's just used in Legend display and
-  // grid calculations.
+  // reference line calculations.
 }
 
 void FPSGraphPageView::OnDidPresentCompositorFrame(
+    ui::Compositor* compositor,
     uint32_t frame_token,
     const gfx::PresentationFeedback& feedback) {
   UpdateStats(feedback);
@@ -128,14 +129,15 @@ void FPSGraphPageView::OnDidPresentCompositorFrame(
   float refresh_rate = GetWidget()->GetCompositor()->refresh_rate();
 
   UpdateTopLabel(refresh_rate);
-  frame_rate_1s_.AddValue(frame_rate_1s / grid_->top_label(), frame_rate_1s);
+  frame_rate_1s_.AddValue(frame_rate_1s / reference_lines_->top_label(),
+                          frame_rate_1s);
 
-  frame_rate_500ms_.AddValue(frame_rate_500ms / grid_->top_label(),
+  frame_rate_500ms_.AddValue(frame_rate_500ms / reference_lines_->top_label(),
                              frame_rate_500ms);
 
   const float max_refresh_rate =
       std::max(refresh_rate, refresh_rate_.GetUnscaledValueAt(0));
-  refresh_rate_.AddValue(max_refresh_rate / grid_->top_label(),
+  refresh_rate_.AddValue(max_refresh_rate / reference_lines_->top_label(),
                          max_refresh_rate);
   // Legend update is expensive. Do it synchronously on regular intervals only.
   if (GetVisible())
@@ -172,8 +174,8 @@ void FPSGraphPageView::OnWindowRemovingFromRootWindow(aura::Window* window,
 }
 
 void FPSGraphPageView::UpdateStats(const gfx::PresentationFeedback& feedback) {
-  constexpr base::TimeDelta kOneSec = base::TimeDelta::FromSeconds(1);
-  constexpr base::TimeDelta k500ms = base::TimeDelta::FromMilliseconds(500);
+  constexpr base::TimeDelta kOneSec = base::Seconds(1);
+  constexpr base::TimeDelta k500ms = base::Milliseconds(500);
   if (!feedback.failed())
     presented_times_.push_back(feedback.timestamp);
 
@@ -192,13 +194,13 @@ void FPSGraphPageView::UpdateStats(const gfx::PresentationFeedback& feedback) {
 
 void FPSGraphPageView::UpdateTopLabel(float refresh_rate) {
   const float refresh_rate_rounded_10 =
-      ceilf(unsigned(refresh_rate) / 10.0F) * 10;
-  if (grid_->top_label() != refresh_rate_rounded_10) {
+      ceilf(unsigned(refresh_rate) * 0.1F) * 10.F;
+  if (reference_lines_->top_label() != refresh_rate_rounded_10) {
     frame_rate_1s_.Reset();
     frame_rate_500ms_.Reset();
-    grid_->SetTopLabel(refresh_rate_rounded_10);
-    grid_->SetVerticalTicsInterval(kVerticalTicFrames /
-                                   refresh_rate_rounded_10);
+    reference_lines_->SetTopLabel(refresh_rate_rounded_10);
+    reference_lines_->SetVerticalTicksInterval(kVerticalTickFrames /
+                                               refresh_rate_rounded_10);
   }
 }
 

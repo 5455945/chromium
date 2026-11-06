@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,16 +9,15 @@
 #include <string>
 #include <utility>
 
-#if defined(OS_WIN)
+#include "build/build_config.h"
+
+#if BUILDFLAG(IS_WIN)
 #include <windows.h>
 #endif
 
-#include "base/callback.h"
-#include "base/location.h"
-#include "base/macros.h"
-#include "build/build_config.h"
-#include "ui/base/ui_base_types.h"
-#include "ui/gfx/native_widget_types.h"
+#include "base/functional/callback.h"
+#include "ui/base/mojom/window_show_state.mojom-forward.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/views/buildflags.h"
 #include "ui/views/views_export.h"
 #include "ui/views/widget/widget.h"
@@ -29,16 +28,15 @@ class Rect;
 }  // namespace gfx
 
 namespace ui {
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 class ContextFactory;
 #endif
-class TouchEditingControllerFactory;
 }  // namespace ui
 
 namespace views {
 
 class NativeWidget;
-class NonClientFrameView;
+class FrameView;
 class Widget;
 
 #if defined(USE_AURA)
@@ -60,7 +58,7 @@ class VIEWS_EXPORT ViewsDelegate {
   using NativeWidgetFactory =
       base::RepeatingCallback<NativeWidget*(const Widget::InitParams&,
                                             internal::NativeWidgetDelegate*)>;
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   enum AppbarAutohideEdge {
     EDGE_TOP = 1 << 0,
     EDGE_LEFT = 1 << 1,
@@ -78,6 +76,9 @@ class VIEWS_EXPORT ViewsDelegate {
     // handling should stop for this event.
     CLOSE_MENU,
   };
+
+  ViewsDelegate(const ViewsDelegate&) = delete;
+  ViewsDelegate& operator=(const ViewsDelegate&) = delete;
 
   virtual ~ViewsDelegate();
 
@@ -100,14 +101,15 @@ class VIEWS_EXPORT ViewsDelegate {
   virtual void SaveWindowPlacement(const Widget* widget,
                                    const std::string& window_name,
                                    const gfx::Rect& bounds,
-                                   ui::WindowShowState show_state);
+                                   ui::mojom::WindowShowState show_state);
 
   // Retrieves the saved position and size and "show" state for the window with
   // the specified name.
-  virtual bool GetSavedWindowPlacement(const Widget* widget,
-                                       const std::string& window_name,
-                                       gfx::Rect* bounds,
-                                       ui::WindowShowState* show_state) const;
+  virtual bool GetSavedWindowPlacement(
+      const Widget* widget,
+      const std::string& window_name,
+      gfx::Rect* bounds,
+      ui::mojom::WindowShowState* show_state) const;
 
   // For accessibility, notify the delegate that a menu item was focused
   // so that alternate feedback (speech / magnified text) can be provided.
@@ -128,7 +130,7 @@ class VIEWS_EXPORT ViewsDelegate {
   // this returns true.
   virtual bool ShouldCloseMenuIfMouseCaptureLost() const;
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   // Retrieves the default window icon to use for windows if none is specified.
   virtual HICON GetDefaultWindowIcon() const;
   // Retrieves the small window icon to use for windows if none is specified.
@@ -137,15 +139,16 @@ class VIEWS_EXPORT ViewsDelegate {
   // environment.
   virtual bool IsWindowInMetro(gfx::NativeWindow window) const;
 #elif BUILDFLAG(ENABLE_DESKTOP_AURA) && \
-    (defined(OS_LINUX) || defined(OS_CHROMEOS))
+    (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS))
   virtual gfx::ImageSkia* GetDefaultWindowIcon() const;
 #endif
 
-  // Creates a default NonClientFrameView to be used for windows that don't
-  // specify their own. If this function returns NULL, the
-  // views::CustomFrameView type will be used.
-  virtual std::unique_ptr<NonClientFrameView> CreateDefaultNonClientFrameView(
-      Widget* widget);
+  // Creates a default FrameView to be used for windows that don't
+  // specify their own and where no platform frame view is specified.
+  //
+  // Defaults to `DefaultFrameView`. This method should never return null, as a
+  // fallback is needed on all platforms.
+  virtual std::unique_ptr<FrameView> CreateDefaultFrameView(Widget* widget);
 
   // AddRef/ReleaseRef are invoked while a menu is visible. They are used to
   // ensure we don't attempt to exit while a menu is showing.
@@ -165,7 +168,7 @@ class VIEWS_EXPORT ViewsDelegate {
   // maximized windows; otherwise to restored windows.
   virtual bool WindowManagerProvidesTitleBar(bool maximized);
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   // Returns the context factory for new windows.
   virtual ui::ContextFactory* GetContextFactory();
 #endif
@@ -173,7 +176,7 @@ class VIEWS_EXPORT ViewsDelegate {
   // Returns the user-visible name of the application.
   virtual std::string GetApplicationName();
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   // Starts a query for the appbar autohide edges of the specified monitor and
   // returns the current value.  If the query finds the edges have changed from
   // the current value, |callback| is subsequently invoked.  If the edges have
@@ -193,16 +196,11 @@ class VIEWS_EXPORT ViewsDelegate {
 #endif
 
  private:
-  std::unique_ptr<ui::TouchEditingControllerFactory>
-      editing_controller_factory_;
-
 #if defined(USE_AURA)
   std::unique_ptr<TouchSelectionMenuRunnerViews> touch_selection_menu_runner_;
 #endif
 
   NativeWidgetFactory native_widget_factory_;
-
-  DISALLOW_COPY_AND_ASSIGN(ViewsDelegate);
 };
 
 }  // namespace views

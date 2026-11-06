@@ -1,18 +1,18 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chromecast/media/cdm/cast_cdm.h"
 
+#include <array>
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/single_thread_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "chromecast/media/base/decrypt_context_impl.h"
-#include "chromecast/media/base/media_caps.h"
 #include "chromecast/media/common/media_resource_tracker.h"
 #include "media/base/cdm_key_information.h"
 #include "media/base/cdm_promise.h"
@@ -31,8 +31,12 @@ constexpr size_t kKeyStatusCount =
 class CastCdmContextImpl : public CastCdmContext {
  public:
   explicit CastCdmContextImpl(CastCdm* cast_cdm) : cast_cdm_(cast_cdm) {
-    DCHECK(cast_cdm_);
+    CHECK(cast_cdm_, base::NotFatalUntil::M163);
   }
+
+  CastCdmContextImpl(const CastCdmContextImpl&) = delete;
+  CastCdmContextImpl& operator=(const CastCdmContextImpl&) = delete;
+
   ~CastCdmContextImpl() override = default;
 
   std::unique_ptr<::media::CallbackRegistration> RegisterEventCB(
@@ -59,8 +63,6 @@ class CastCdmContextImpl : public CastCdmContext {
  private:
   // The CastCdm object which owns |this|.
   CastCdm* const cast_cdm_;
-
-  DISALLOW_COPY_AND_ASSIGN(CastCdmContextImpl);
 };
 
 // Returns the HDCP version multiplied by ten.
@@ -89,7 +91,6 @@ int HdcpVersionX10(::media::HdcpVersion hdcp_version) {
 
     default:
       NOTREACHED();
-      return 0;
   }
 }
 
@@ -102,7 +103,7 @@ CastCdm::CastCdm(MediaResourceTracker* media_resource_tracker)
 }
 
 CastCdm::~CastCdm() {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  CHECK(thread_checker_.CalledOnValidThread(), base::NotFatalUntil::M163);
 }
 
 void CastCdm::Initialize(
@@ -110,7 +111,7 @@ void CastCdm::Initialize(
     const ::media::SessionClosedCB& session_closed_cb,
     const ::media::SessionKeysChangeCB& session_keys_change_cb,
     const ::media::SessionExpirationUpdateCB& session_expiration_update_cb) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  CHECK(thread_checker_.CalledOnValidThread(), base::NotFatalUntil::M163);
 
   if (media_resource_tracker_) {
     media_resource_usage_ = std::make_unique<MediaResourceTracker::ScopedUsage>(
@@ -138,7 +139,9 @@ void CastCdm::GetStatusForPolicy(
     ::media::HdcpVersion min_hdcp_version,
     std::unique_ptr<::media::KeyStatusCdmPromise> promise) {
   int min_hdcp_x10 = HdcpVersionX10(min_hdcp_version);
-  int cur_hdcp_x10 = MediaCapabilities::GetHdcpVersion();
+  // TODO(sanfin): Implement a function to get the current HDCP version in the
+  // browser process.
+  int cur_hdcp_x10 = 0;
   promise->resolve(cur_hdcp_x10 >= min_hdcp_x10 ? KeyStatus::USABLE
                                                 : KeyStatus::OUTPUT_RESTRICTED);
 }
@@ -157,15 +160,17 @@ void CastCdm::OnSessionClosed(const std::string& session_id,
 void CastCdm::OnSessionKeysChange(const std::string& session_id,
                                   bool newly_usable_keys,
                                   ::media::CdmKeysInfo keys_info) {
-  logging::LogMessage log_message(__FILE__, __LINE__, logging::LOG_INFO);
+  logging::LogMessage log_message(__FILE__, __LINE__, logging::LOGGING_INFO);
   log_message.stream() << "keystatuseschange ";
-  int status_count[kKeyStatusCount] = {0};
+  std::array<int, kKeyStatusCount> status_count = {};
   for (const auto& key_info : keys_info) {
-    status_count[key_info->status]++;
+    size_t status_idx = static_cast<size_t>(key_info->status);
+    status_count[status_idx]++;
   }
-  for (int i = 0; i != ::media::CdmKeyInformation::KEY_STATUS_MAX; ++i) {
-    if (status_count[i] == 0)
+  for (size_t i = 0; i < status_count.size(); ++i) {
+    if (status_count[i] == 0) {
       continue;
+    }
     log_message.stream() << status_count[i] << " " << static_cast<KeyStatus>(i)
                          << " ";
   }
@@ -186,7 +191,7 @@ void CastCdm::OnSessionExpirationUpdate(const std::string& session_id,
 
 void CastCdm::KeyIdAndKeyPairsToInfo(const ::media::KeyIdAndKeyPairs& keys,
                                      ::media::CdmKeysInfo* keys_info) {
-  DCHECK(keys_info);
+  CHECK(keys_info, base::NotFatalUntil::M163);
   for (const std::pair<std::string, std::string>& key : keys) {
     keys_info->push_back(std::make_unique<::media::CdmKeyInformation>(
         key.first, ::media::CdmKeyInformation::USABLE, 0));

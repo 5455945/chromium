@@ -1,33 +1,52 @@
-<style include="diagnostics-shared diagnostics-fonts">
-  #defaultConnectionChip {
-    background-color: var(--google-blue-50);
-    color: var(--google-blue-600);
+<style include="diagnostics-shared">
+  #cardTitle {
+    align-items: center;
+    display: flex;
+  }
+
+  #icon {
+    padding-inline-end: 12px;
+  }
+
+  /* Section ordering: results first, then controls, then details. */
+  routine-section::part(results) {
+    order: 0;
+  }
+
+  routine-section::part(controls) {
+    order: 1;
+  }
+
+  routine-section::part(details) {
+    order: 2;
   }
 </style>
-
 <diagnostics-card is-networking-card="true">
-    <!-- TODO(michaelcheco): Add localized strings. -->
-  <div id="cardTitle" slot="title">[[networkType_]]</div>
-  <div id="defaultConnectionChip" slot="chip" class="diagnostics-chip"
-      aria-hidden="true">
-    Default connection
+  <div id="cardTitle" slot="title" tabindex="0">
+    <diagnostics-network-icon id="icon" network="[[network]]">
+    </diagnostics-network-icon>
+    <span id="titleText">
+      [[getNetworkCardTitle(networkType, networkState)]]
+    </span>
   </div>
+  <template is="dom-if" if="[[macAddress]]">
+    <div id="macAddressChip" slot="chip" class="diagnostics-chip"
+        tabindex="0">
+      [[getMacAddress(macAddress)]]
+    </div>
+  </template>
+  <hr slot="body" hidden$="[[!hasRoutines(routineGroups)]]" />
   <network-info network="[[network]]" slot="body"></network-info>
-  <routine-section slot="left-panel" routines="[[routines_]]"
-  is-test-running="{{isTestRunning}}"
-  run-tests-button-text="Run Network test"
-  routine-runtime="{{getEstimateRuntimeInMinutes_(routines_)}}"
-  is-active="[[isActive]]"
-  run-tests-automatically="true"
-  hide-routine-status="true"
-  opened="true">
-</routine-section>
-<cr-expand-button slot="routines" expanded="{{expanded_}}">
-  <span aria-hidden="true">IP Configuration</span>
-</cr-expand-button>
-<template is="dom-if" if="[[expanded_]]">
-  <network-info slot="routines" show-ip-config-properties="true"
-    network="[[network]]">
-  </network-info>
-</template>
+  <routine-section slot="left-panel" routines="[[routineGroups]]"
+      test-suite-status="{{testSuiteStatus}}"
+      routine-runtime="{{getEstimateRuntimeInMinutes(routineGroups)}}"
+      is-active="[[isActive]]"
+      hide-report-button
+      hide-learn-more
+      show-routine-details
+      opened>
+  </routine-section>
+  <ip-config-info-drawer id="ipConfigInfoDrawer" network="[[network]]"
+      slot="routines">
+  </ip-config-info-drawer>
 </diagnostics-card>

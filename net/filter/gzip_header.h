@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,9 +15,10 @@
 #ifndef NET_FILTER_GZIP_HEADER_H_
 #define NET_FILTER_GZIP_HEADER_H_
 
+#include <stddef.h>
 #include <stdint.h>
 
-#include "base/macros.h"
+#include "base/containers/span.h"
 #include "net/base/net_export.h"
 
 namespace net {
@@ -31,6 +32,10 @@ class NET_EXPORT GZipHeader {
   };
 
   GZipHeader();
+
+  GZipHeader(const GZipHeader&) = delete;
+  GZipHeader& operator=(const GZipHeader&) = delete;
+
   ~GZipHeader();
 
   // Wipe the slate clean and start from scratch.
@@ -41,11 +46,15 @@ class NET_EXPORT GZipHeader {
   // yet constitute a complete gzip header, return
   // INCOMPLETE_HEADER. If these bytes do not constitute a *valid*
   // gzip header, return INVALID_HEADER. When we've seen a complete
-  // gzip header, return COMPLETE_HEADER and set the pointer pointed
-  // to by header_end to the first byte beyond the gzip header.
-  Status ReadMore(const char* inbuf,
-                  int inbuf_len,
-                  const char** header_end);
+  // gzip header, return COMPLETE_HEADER and set `header_end` to the offset
+  // of the first byte beyond the gzip header (i.e., it's the number of bytes of
+  // `inbuf` the are part of the header).
+  Status ReadMore(base::span<const uint8_t> inbuf, size_t& header_end);
+
+  // Returns true if `inbuf` starts with a gzip header, possibly followed by
+  // additional bytes.
+  static bool HasGZipHeader(base::span<const uint8_t> inbuf);
+
  private:
   enum {                       // flags (see RFC)
     FLAG_FTEXT        = 0x01,  // bit 0 set: file probably ascii text
@@ -83,13 +92,9 @@ class NET_EXPORT GZipHeader {
     IN_DONE,
   };
 
-  static const uint8_t magic[];  // gzip magic header
-
   int    state_;  // our current State in the parsing FSM: an int so we can ++
   uint8_t flags_;  // the flags byte of the header ("FLG" in the RFC)
   uint16_t extra_length_;  // how much of the "extra field" we have yet to read
-
-  DISALLOW_COPY_AND_ASSIGN(GZipHeader);
 };
 
 }  // namespace net

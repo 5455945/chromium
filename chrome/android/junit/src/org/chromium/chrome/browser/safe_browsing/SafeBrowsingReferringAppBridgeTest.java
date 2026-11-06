@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 package org.chromium.chrome.browser.safe_browsing;
@@ -8,47 +8,59 @@ import static org.mockito.Mockito.when;
 import android.app.Activity;
 import android.content.Intent;
 import android.net.Uri;
-import android.os.Build;
 import android.os.Bundle;
 import android.provider.Browser;
 
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
-import org.robolectric.annotation.Config;
-import org.robolectric.util.ReflectionHelpers;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
+import org.robolectric.Robolectric;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.IntentHandler;
-import org.chromium.chrome.browser.app.ChromeActivity;
+import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
+import org.chromium.chrome.browser.customtabs.CustomTabActivity;
 import org.chromium.chrome.browser.safe_browsing.SafeBrowsingReferringAppBridge.ReferringAppInfo;
 import org.chromium.chrome.browser.safe_browsing.SafeBrowsingReferringAppBridge.ReferringAppInfo.ReferringAppSource;
+import org.chromium.chrome.test.util.browser.webapps.WebApkIntentDataProviderBuilder;
 import org.chromium.ui.base.WindowAndroid;
 
 import java.lang.ref.WeakReference;
 
-/**
- * Unit tests for SafeBrowsingReferringAppBridge.
- */
+/** Unit tests for SafeBrowsingReferringAppBridge. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class SafeBrowsingReferringAppBridgeTest {
-    @Mock
-    private WindowAndroid mWindowAndroid;
+    // Subclass needed to stub getIntentDataProvider() without running full ChromeActivity startup.
+    private static class TestCustomTabActivity extends CustomTabActivity {
+        private BrowserServicesIntentDataProvider mIntentDataProvider;
 
-    @Mock
-    private ChromeActivity mActivity;
+        void setIntentDataProviderForTesting(BrowserServicesIntentDataProvider provider) {
+            mIntentDataProvider = provider;
+        }
+
+        @Override
+        public BrowserServicesIntentDataProvider getIntentDataProvider() {
+            return mIntentDataProvider;
+        }
+    }
+
+    @Mock private WindowAndroid mWindowAndroid;
+
+    private Activity mActivity;
 
     private WeakReference<Activity> mActivityRef;
 
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
+
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
+        mActivity = Robolectric.buildActivity(Activity.class).get();
         mActivityRef = new WeakReference<>(mActivity);
-
         when(mWindowAndroid.getActivity()).thenReturn(mActivityRef);
     }
 
@@ -56,12 +68,15 @@ public class SafeBrowsingReferringAppBridgeTest {
     public void testFromKnownAppId() {
         Intent intent = new Intent(Intent.ACTION_VIEW);
         intent.putExtra(Browser.EXTRA_APPLICATION_ID, IntentHandler.PACKAGE_GSA);
-        when(mActivity.getIntent()).thenReturn(intent);
+        mActivity.setIntent(intent);
 
-        ReferringAppInfo info = SafeBrowsingReferringAppBridge.getReferringAppInfo(mWindowAndroid);
+        ReferringAppInfo info =
+                SafeBrowsingReferringAppBridge.getReferringAppInfo(mWindowAndroid, false);
 
         Assert.assertEquals(ReferringAppSource.KNOWN_APP_ID, info.getSource());
         Assert.assertEquals("google.search.app", info.getName());
+        Assert.assertEquals("", info.getReferringWebApkStartUrl());
+        Assert.assertEquals("", info.getReferringWebApkManifestId());
     }
 
     @Test
@@ -69,53 +84,81 @@ public class SafeBrowsingReferringAppBridgeTest {
         String packageName = "uncommon.app.name";
         Intent intent = new Intent(Intent.ACTION_VIEW);
         intent.putExtra(Browser.EXTRA_APPLICATION_ID, packageName);
-        when(mActivity.getIntent()).thenReturn(intent);
+        mActivity.setIntent(intent);
 
-        ReferringAppInfo info = SafeBrowsingReferringAppBridge.getReferringAppInfo(mWindowAndroid);
+        ReferringAppInfo info =
+                SafeBrowsingReferringAppBridge.getReferringAppInfo(mWindowAndroid, false);
 
         Assert.assertEquals(ReferringAppSource.UNKNOWN_APP_ID, info.getSource());
         Assert.assertEquals(packageName, info.getName());
+        Assert.assertEquals("", info.getReferringWebApkStartUrl());
+        Assert.assertEquals("", info.getReferringWebApkManifestId());
     }
 
     @Test
-    @Config(sdk = Build.VERSION_CODES.N_MR1)
     public void testFromIntentExtraActivityReferrerHighVersion() {
         String appReferrer = "android-app://app.name/";
         Intent intent = new Intent(Intent.ACTION_VIEW);
         intent.putExtra(IntentHandler.EXTRA_ACTIVITY_REFERRER, appReferrer);
-        when(mActivity.getIntent()).thenReturn(intent);
+        mActivity.setIntent(intent);
 
-        ReferringAppInfo info = SafeBrowsingReferringAppBridge.getReferringAppInfo(mWindowAndroid);
+        ReferringAppInfo info =
+                SafeBrowsingReferringAppBridge.getReferringAppInfo(mWindowAndroid, false);
 
         Assert.assertEquals(ReferringAppSource.ACTIVITY_REFERRER, info.getSource());
         Assert.assertEquals(appReferrer, info.getName());
+        Assert.assertEquals("", info.getReferringWebApkStartUrl());
+        Assert.assertEquals("", info.getReferringWebApkManifestId());
     }
 
     @Test
-    @Config(sdk = Build.VERSION_CODES.N_MR1)
     public void testFromActivityReferrerHighVersion() {
         String appReferrer = "android-app://app.name/";
         setAppReferrerIntent(appReferrer);
 
-        ReferringAppInfo info = SafeBrowsingReferringAppBridge.getReferringAppInfo(mWindowAndroid);
+        ReferringAppInfo info =
+                SafeBrowsingReferringAppBridge.getReferringAppInfo(mWindowAndroid, false);
 
         Assert.assertEquals(ReferringAppSource.ACTIVITY_REFERRER, info.getSource());
         Assert.assertEquals(appReferrer, info.getName());
+        Assert.assertEquals("", info.getReferringWebApkStartUrl());
+        Assert.assertEquals("", info.getReferringWebApkManifestId());
     }
 
     @Test
-    public void testFromActivityReferrerLowVersion() {
-        // @Config(..., sdk = Build.VERSION_CODES.LOLLIPOP) doesn't work. See crbug.com/944476.
-        ReflectionHelpers.setStaticField(
-                Build.VERSION.class, "SDK_INT", Build.VERSION_CODES.LOLLIPOP);
-        String appReferrer = "android-app://app.name/";
-        setAppReferrerIntent(appReferrer);
+    public void testGetWebApkInfo() {
+        final String webApkPackageName = "org.chromium.webapk.foo";
+        final String webApkStartUrl = "https://example.test/app";
+        final String webApkManifestId = "https://example.test/id";
+        // Add a previous app referrer to the Intent, to test that both the previous referrer and
+        // the WebAPK referrer are captured.
+        Intent intent = new Intent(Intent.ACTION_VIEW);
+        intent.putExtra(Browser.EXTRA_APPLICATION_ID, IntentHandler.PACKAGE_GSA);
+        // Set up the WebAPK referrer.
+        TestCustomTabActivity customTabActivity =
+                Robolectric.buildActivity(TestCustomTabActivity.class, intent).get();
+        customTabActivity.setIntentDataProviderForTesting(
+                new WebApkIntentDataProviderBuilder(webApkPackageName, webApkStartUrl)
+                        .setWebApkManifestId(webApkManifestId)
+                        .build());
+        when(mWindowAndroid.getActivity()).thenReturn(new WeakReference<>(customTabActivity));
 
-        ReferringAppInfo info = SafeBrowsingReferringAppBridge.getReferringAppInfo(mWindowAndroid);
+        // Check that when WebAPK info is not explicitly requested, the fields are not populated.
+        ReferringAppInfo infoWithoutWebApk =
+                SafeBrowsingReferringAppBridge.getReferringAppInfo(mWindowAndroid, false);
+        Assert.assertEquals(ReferringAppSource.KNOWN_APP_ID, infoWithoutWebApk.getSource());
+        Assert.assertEquals("google.search.app", infoWithoutWebApk.getName());
+        Assert.assertEquals("", infoWithoutWebApk.getReferringWebApkStartUrl());
+        Assert.assertEquals("", infoWithoutWebApk.getReferringWebApkManifestId());
 
-        // The getReferrer API is not available if the version code is too low.
-        Assert.assertEquals(ReferringAppSource.REFERRING_APP_SOURCE_UNSPECIFIED, info.getSource());
-        Assert.assertEquals("", info.getName());
+        // Now get the WebAPK info. The previous app referrer info should also be present.
+        ReferringAppInfo info =
+                SafeBrowsingReferringAppBridge.getReferringAppInfo(mWindowAndroid, true);
+
+        Assert.assertEquals(ReferringAppSource.KNOWN_APP_ID, info.getSource());
+        Assert.assertEquals("google.search.app", info.getName());
+        Assert.assertEquals(webApkStartUrl, info.getReferringWebApkStartUrl());
+        Assert.assertEquals(webApkManifestId, info.getReferringWebApkManifestId());
     }
 
     private void setAppReferrerIntent(String appReferrer) {
@@ -124,7 +167,6 @@ public class SafeBrowsingReferringAppBridgeTest {
         extras.putParcelable(Intent.EXTRA_REFERRER, appReferrerUri);
         Intent intent = new Intent(Intent.ACTION_VIEW);
         intent.putExtras(extras);
-        when(mActivity.getIntent()).thenReturn(intent);
-        when(mActivity.getReferrer()).thenReturn(appReferrerUri);
+        mActivity.setIntent(intent);
     }
 }

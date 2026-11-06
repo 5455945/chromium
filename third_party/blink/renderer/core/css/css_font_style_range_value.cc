@@ -31,21 +31,27 @@ namespace blink {
 namespace cssvalue {
 
 String CSSFontStyleRangeValue::CustomCSSText() const {
-  if (!oblique_values_)
+  if (!oblique_values_) {
     return font_style_value_->CssText();
+  }
 
   StringBuilder builder;
   builder.Append(font_style_value_->CssText());
   builder.Append(" ");
   builder.Append(oblique_values_->CssText());
-  return builder.ToString();
+  return builder.ReleaseString();
 }
 
 bool CSSFontStyleRangeValue::Equals(const CSSFontStyleRangeValue& other) const {
-  if (!oblique_values_)
+  if (!oblique_values_) {
     return font_style_value_ == other.font_style_value_;
+  }
   return font_style_value_ == other.font_style_value_ &&
          *oblique_values_ == *other.oblique_values_;
+}
+
+bool CSSFontStyleRangeValue::HasRandomFunctions() const {
+  return oblique_values_ && oblique_values_->HasRandomFunctions();
 }
 
 void CSSFontStyleRangeValue::TraceAfterDispatch(blink::Visitor* visitor) const {

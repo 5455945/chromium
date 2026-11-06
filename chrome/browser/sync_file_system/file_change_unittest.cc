@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,8 @@
 
 #include <stddef.h>
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace sync_file_system {
@@ -29,20 +31,20 @@ FileChange DeleteDirectory() {
   return FileChange(FileChange::FILE_CHANGE_DELETE, SYNC_FILE_TYPE_DIRECTORY);
 }
 
-template <size_t INPUT_SIZE>
-void CreateList(FileChangeList* list, const FileChange (&inputs)[INPUT_SIZE]) {
+void CreateList(FileChangeList* list, base::span<const FileChange> inputs) {
   list->clear();
-  for (size_t i = 0; i < INPUT_SIZE; ++i)
-    list->Update(inputs[i]);
+  for (const auto& input : inputs) {
+    list->Update(input);
+  }
 }
 
-template <size_t EXPECTED_SIZE>
 void VerifyList(const FileChangeList& list,
-                const FileChange (&expected)[EXPECTED_SIZE]) {
+                base::span<const FileChange> expected) {
   SCOPED_TRACE(testing::Message() << "actual:" << list.DebugString());
-  ASSERT_EQ(EXPECTED_SIZE, list.size());
+  ASSERT_EQ(expected.size(), list.size());
   for (size_t i = 0; i < list.size(); ++i) {
-    SCOPED_TRACE(testing::Message() << i << ": "
+    SCOPED_TRACE(testing::Message()
+                 << i << ": "
                  << " expected:" << expected[i].DebugString()
                  << " actual:" << list.list().at(i).DebugString());
     EXPECT_EQ(expected[i], list.list().at(i));

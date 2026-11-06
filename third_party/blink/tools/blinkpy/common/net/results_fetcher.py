@@ -28,36 +28,24 @@
 
 import collections
 import logging
-import json
 import re
-import urllib
+from typing import Sequence
 
 from blinkpy.common.memoized import memoized
-from blinkpy.common.net.web import Web
+from blinkpy.common.net.luci_auth import LuciAuth
+from blinkpy.common.net.rpc import Build, ResultDBClient
 from blinkpy.common.net.web_test_results import WebTestResults
-from blinkpy.web_tests.layout_package import json_results_generator
+from blinkpy.common.system.filesystem import FileSystem  # noqa: F401
+from blinkpy.web_tests.builder_list import BuilderList  # noqa: F401
 
 _log = logging.getLogger(__name__)
 
-TEST_RESULTS_SERVER = 'https://test-results.appspot.com'
-RESULTS_URL_BASE = '%s/data/layout_results' % TEST_RESULTS_SERVER
-RESULTS_SUMMARY_URL_BASE = 'https://storage.googleapis.com/chromium-layout-test-archives'
+RESULTS_SUMMARY_URL_BASE = (
+    'https://storage.googleapis.com/chromium-layout-test-archives'
+)
 
 
-class Build(collections.namedtuple('Build', ('builder_name', 'build_number',
-                                             'build_id'))):
-    """Represents a combination of builder and build number.
-
-    If build number is None, this represents the latest build
-    for a given builder.
-    """
-
-    def __new__(cls, builder_name, build_number=None, build_id=None):
-        return super(Build, cls).__new__(cls, builder_name,
-                                         build_number, build_id)
-
-
-class TestResultsFetcher(object):
+class TestResultsFetcher:
     """This class represents an interface to test results for particular builds.
 
     This includes fetching web test results from Google Storage;
@@ -65,31 +53,101 @@ class TestResultsFetcher(object):
         https://www.chromium.org/developers/the-json-test-results-format
     """
 
-    def __init__(self):
-        self.web = Web()
+    # Matches either:
+    # ://\:blink_web_tests!webtest::accessibility#option-removed-from-shadow-dom-crash.html
+    # ninja://:blink_web_tests/accessibility/option-removed-from-shadow-dom-crash.html
+    _test_id_pattern = re.compile(
+        r'(ninja)?://\S+_(web_tests|wpt(|_\w+))(/|\S+::)(?P<name>\S+)'
+    )
 
-    def results_url(self, builder_name, build_number=None, step_name=None):
-        """Returns a URL for one set of archived web test results.
+    def __init__(self, web, luci_auth):
+        self.web = web
+        self._resultdb_client = ResultDBClient(web, luci_auth)
 
-        If a build number is given, this will be results for a particular run;
-        otherwise it will be the accumulated results URL, which should have
-        the latest results.
-        """
-        if build_number:
-            assert str(build_number).isdigit(), \
-                'expected numeric build number, got %s' % build_number
-            url_base = self.builder_results_url_base(builder_name)
-            if step_name is None:
-                step_name = self.get_layout_test_step_name(
-                    Build(builder_name, build_number))
-            if step_name:
-                return '%s/%s/%s/layout-test-results' % (
-                    url_base, build_number, urllib.quote(step_name))
-            return '%s/%s/layout-test-results' % (url_base, build_number)
-        return self.accumulated_results_url_base(builder_name)
+    @classmethod
+    def from_host(cls, host):
+        return cls(host.web, LuciAuth(host))
 
-    def get_full_builder_url(self, url_base, builder_name):
-        """ Returns the url for a builder directory in google storage.
+    @memoized
+    def gather_results(
+        self,
+        build: Build,
+        suite: str,
+        exclude_exonerated: bool = False,
+        only_unexpected: bool = True,
+    ) -> WebTestResults:
+        """Gather all web test results on a given build step from ResultDB."""
+        assert build.build_id, f'{build} must set a build ID'
+        assert not suite.endswith('(with patch)'), suite
+        test_result_predicate = {
+            # TODO(crbug.com/1428727): Using `read_mask` with
+            # `VARIANTS_WITH_ONLY_UNEXPECTED_RESULTS` throws an internal server
+            # error. Use `VARIANTS_WITH_UNEXPECTED_RESULTS` for now and filter
+            # results client-side.
+            'expectancy': 'VARIANTS_WITH_UNEXPECTED_RESULTS',
+            'excludeExonerated': exclude_exonerated,
+            'variant': {
+                'contains': {
+                    'def': {
+                        'test_suite': suite,
+                    },
+                },
+            },
+        }
+        read_mask = ['name', 'testId', 'tags', 'status', 'expected']
+        test_results = self._resultdb_client.query_test_results(
+            [build.build_id], test_result_predicate, read_mask
+        )
+        test_results_by_name = self._group_test_results_by_test_name(
+            test_results
+        )
+        # TODO(crbug.com/1428727): Once the bug is fixed, use `expectancy` to
+        # filter results server-side instead.
+        if only_unexpected:
+            test_results_by_name = {
+                test: raw_results
+                for test, raw_results in test_results_by_name.items()
+                if not any(result.get('expected') for result in raw_results)
+            }
+        artifacts = self._resultdb_client.query_artifacts(
+            [build.build_id],
+            {
+                'testResultPredicate': test_result_predicate,
+                'artifactIdRegexp': 'actual_.*',
+            },
+        )
+        artifacts_by_run = self._group_artifacts_by_test_run(artifacts)
+        return WebTestResults.from_rdb_responses(
+            test_results_by_name, artifacts_by_run, step_name=suite, build=build
+        )
+
+    def _group_test_results_by_test_name(self, test_results):
+        test_results_by_name = collections.defaultdict(list)
+        for test_result in test_results:
+            test_id_match = self._test_id_pattern.fullmatch(
+                test_result['testId']
+            )
+            if not test_id_match:
+                continue
+            test_results_by_name[
+                test_id_match['name'].replace('#', '/')
+            ].append(test_result)
+        return test_results_by_name
+
+    def _group_artifacts_by_test_run(self, artifacts):
+        test_run_pattern = re.compile(
+            r'invocations/[^/\s]+/tests/[^/\s]+/results/[^/\s]+'
+        )
+        artifacts_by_run = collections.defaultdict(list)
+        for artifact in artifacts:
+            test_run_match = test_run_pattern.match(artifact['name'])
+            if not test_run_match:
+                continue
+            artifacts_by_run[test_run_match[0]].append(artifact)
+        return artifacts_by_run
+
+    def get_full_builder_url(self, url_base: str, builder_name: str) -> str:
+        """Returns the URL for the given builder's directory in Google Storage.
 
         Each builder has a directory in the GS bucket, and the directory
         name is the builder name transformed to be more URL-friendly by
@@ -97,137 +155,71 @@ class TestResultsFetcher(object):
         """
         return '%s/%s' % (url_base, re.sub('[ .()]', '_', builder_name))
 
-    def builder_results_url_base(self, builder_name):
-        """Returns the URL for the given builder's directory in Google Storage.
-        """
-        return self.get_full_builder_url(RESULTS_URL_BASE, builder_name)
-
-    def builder_retry_results_url_base(self, builder_name):
-        """Returns the URL for the given builder's directory in Google Storage.
-
-        This is used for fetching the retry data which is now contained in
-        test_results_summary.json which cannot be fetched from
-        https://test-results.appspot.com anymore. Migrating this tool to use
-        resultDB is the ideal solution.
-        """
-        return self.get_full_builder_url(RESULTS_SUMMARY_URL_BASE,
-                                         builder_name)
-
     @memoized
-    def fetch_retry_summary_json(self, build):
-        """Fetches and returns the text of the archived test_results_summary.json file.
+    def fetch_retry_summary_json(self, build, test_suite):
+        """Fetches and returns the text of the archived *test_results_summary.json file.
 
         This file is expected to contain the results of retrying web tests
         with and without a patch in a try job. It includes lists of tests
         that failed only with the patch ("failures"), and tests that failed
         both with and without ("ignored").
         """
-        url_base = '%s/%s' % (self.builder_retry_results_url_base(
-            build.builder_name), build.build_number)
+        url_base = self.get_full_builder_url(
+            RESULTS_SUMMARY_URL_BASE, build.builder_name
+        )
+        url_base = '%s/%s' % (url_base, build.build_number)
         # NOTE(crbug.com/1082907): We used to fetch retry_with_patch_summary.json from
         # test-results.appspot.com. The file has been renamed and can no longer be
         # accessed via test-results, so we download it from GCS directly.
         # There is still a bug in uploading this json file for other platforms than linux.
         # see https://crbug.com/1157202
-        return self.web.get_binary('%s/%s' %
-                                   (url_base, 'test_results_summary.json'),
-                                   return_none_on_404=True)
+        file_name = test_suite + '_' + 'test_results_summary.json'
+        return self.web.get_binary(
+            '%s/%s' % (url_base, file_name), return_none_on_404=True
+        )
 
-    def accumulated_results_url_base(self, builder_name):
-        return self.builder_results_url_base(
-            builder_name) + '/results/layout-test-results'
+    def fetch_wpt_report_urls(self, *build_ids):
+        """Get a list of URLs pointing to a given build's wptreport artifacts.
 
-    @memoized
-    def fetch_results(self, build, full=False, step_name=None):
-        """Returns a WebTestResults object for results from a given Build.
-        Uses full_results.json if full is True, otherwise failing_results.json.
+        wptreports are a wptrunner log format used to store test results.
+
+        The URLs look like:
+            https://results.usercontent.cr.dev/invocations/ \
+                task-chromium-swarm.appspot.com-58590ed6228fd611/ \
+                artifacts/wpt_reports.json?token=AXsiX2kiOiIxNjQx...
+
+        Arguments:
+            build_ids: Build IDs retrieved from Buildbucket.
+
+        Returns:
+            A list of URLs. Note that the URLs contain a time-sensitive `token`
+            query parameter required for access.
         """
-        if not build.builder_name or not build.build_number:
-            _log.debug('Builder name or build number is None')
-            return None
-        step_name = step_name or self.get_layout_test_step_name(build)
-        return self.fetch_web_test_results(
-            self.results_url(
-                build.builder_name,
-                build.build_number,
-                step_name=step_name), full, step_name)
+        return self._fetch_artifact_urls(build_ids, r'wpt_reports\.json')
 
-    @memoized
-    def get_layout_test_step_name(self, build):
-        if not build.builder_name or not build.build_number:
-            _log.debug('Builder name or build number is None')
-            return None
+    def fetch_wpt_screenshot_urls(self, *build_ids: str) -> list[str]:
+        """Fetch a list of wptscreenshot artifacts.
 
-        url = '%s/testfile?%s' % (
-            TEST_RESULTS_SERVER,
-            urllib.urlencode({
-                'builder': build.builder_name,
-                'buildnumber': build.build_number,
-                'name': 'full_results.json',
-                # This forces the server to gives us JSON rather than an HTML page.
-                'callback': json_results_generator.JSON_CALLBACK,
-            }))
-        data = self.web.get_binary(url, return_none_on_404=True)
-        if not data:
-            _log.debug('Got 404 response from:\n%s', url)
-            return None
-
-        # Strip out the callback
-        data = json.loads(json_results_generator.strip_json_wrapper(data))
-        suites = [
-            entry['TestType'] for entry in data
-            # Some suite names are like 'blink_web_tests on Intel GPU (with
-            # patch)'. Only make sure it starts with blink_web_tests and
-            # runs with a patch. This should be changed eventually to use actual
-            # structured data from the test results server.
-            if re.match(
-                r'(blink_web_tests|wpt_tests_suite|high_dpi_blink_web_tests).*\(with patch\)$',
-                entry['TestType'])
-        ]
-        # In manual testing, I sometimes saw results where the same suite was
-        # repeated twice. De-duplicate here to try to catch this.
-        suites = list(set(suites))
-        if len(suites) != 1:
-            raise Exception(
-                'build %s on builder %s expected to only have one web test '
-                'step, instead has %s' % (build.build_number,
-                                          build.builder_name, suites))
-        return suites[0]
-
-    @memoized
-    def fetch_web_test_results(self, results_url, full=False, step_name=None):
-        """Returns a WebTestResults object for results fetched from a given URL.
-        Uses full_results.json if full is True, otherwise failing_results.json.
+        See `fetch_wpt_report_urls()` for usage.
         """
-        base_filename = 'full_results.json' if full else 'failing_results.json'
-        results_file = self.web.get_binary(
-            '%s/%s' % (results_url, base_filename), return_none_on_404=True)
-        if results_file is None:
-            _log.debug('Got 404 response from:\n%s/%s', results_url,
-                       base_filename)
-            return None
-        return WebTestResults.results_from_string(results_file, step_name)
+        return self._fetch_artifact_urls(build_ids, r'wpt_screenshots\.txt')
 
-    def fetch_webdriver_test_results(self, build, master):
-        if not build.builder_name or not build.build_number or not master:
-            _log.debug('Builder name or build number or master is None')
-            return None
-
-        url = '%s/testfile?%s' % (
-            TEST_RESULTS_SERVER,
-            urllib.urlencode({
-                'builder': build.builder_name,
-                'buildnumber': build.build_number,
-                'name': 'full_results.json',
-                'testtype': 'webdriver_tests_suite (with patch)',
-                'master': master
-            }))
-
-        data = self.web.get_binary(url, return_none_on_404=True)
-        if not data:
-            _log.debug('Got 404 response from:\n%s', url)
-            return None
-        return WebTestResults.results_from_string(data)
+    def _fetch_artifact_urls(
+        self, build_ids: Sequence[str], id_pattern: str
+    ) -> list[str]:
+        if not build_ids:
+            return []
+        artifacts = self._resultdb_client.query_artifacts(
+            list(build_ids),
+            {
+                'followEdges': {
+                    'includedInvocations': True,
+                },
+                'artifactIdRegexp': id_pattern,
+            },
+        )
+        artifacts.sort(key=lambda artifact: artifact['artifactId'])
+        return [artifact['fetchUrl'] for artifact in artifacts]
 
 
 def filter_latest_builds(builds):
@@ -245,7 +237,9 @@ def filter_latest_builds(builds):
     latest_builds = {}
     for build in builds:
         builder = build.builder_name
-        if builder not in latest_builds or build.build_number > latest_builds[
-                builder].build_number:
+        if builder not in latest_builds or (
+            build.build_number
+            and build.build_number > latest_builds[builder].build_number
+        ):
             latest_builds[builder] = build
     return sorted(latest_builds.values())

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,22 +7,17 @@ package org.chromium.chrome.browser.customtabs;
 import android.content.Context;
 
 import androidx.test.core.app.ApplicationProvider;
-import androidx.test.filters.SmallTest;
 
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 
-/**
- * Tests for RequestThrottler.
- */
+/** Tests for RequestThrottler. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class RequestThrottlerTest {
     private static final int UID = 1234;
     private static final int UID2 = 12345;
@@ -44,14 +39,12 @@ public class RequestThrottlerTest {
 
     /** Tests that a client starts not banned. */
     @Test
-    @SmallTest
     public void testIsInitiallyNotBanned() {
         Assert.assertTrue(RequestThrottler.getForUid(UID).isPrerenderingAllowed());
     }
 
     /** Tests that a misbehaving client gets banned. */
     @Test
-    @SmallTest
     public void testBansUid() {
         RequestThrottler throttler = RequestThrottler.getForUid(UID);
         Assert.assertTrue(throttler.isPrerenderingAllowed());
@@ -61,7 +54,6 @@ public class RequestThrottlerTest {
 
     /** Tests that the URL needs to match to avoid getting banned. */
     @Test
-    @SmallTest
     public void testBanningMatchesUrls() {
         RequestThrottler throttler = RequestThrottler.getForUid(UID);
         Assert.assertTrue(throttler.isPrerenderingAllowed());
@@ -75,7 +67,6 @@ public class RequestThrottlerTest {
 
     /** Tests that a client can send a lot of requests, as long as they are matched by successes. */
     @Test
-    @SmallTest
     public void testDontBanAccurateClients() {
         RequestThrottler throttler = RequestThrottler.getForUid(UID);
         Assert.assertTrue(throttler.isPrerenderingAllowed());
@@ -88,7 +79,6 @@ public class RequestThrottlerTest {
 
     /** Tests that partially accurate clients are not banned. */
     @Test
-    @SmallTest
     public void testDontBanPartiallyAccurateClients() {
         RequestThrottler throttler = RequestThrottler.getForUid(UID);
         Assert.assertTrue(throttler.isPrerenderingAllowed());
@@ -103,7 +93,6 @@ public class RequestThrottlerTest {
 
     /** Tests that banning a UID doesn't ban another one. */
     @Test
-    @SmallTest
     public void testThrottlingBanIsByUid() {
         RequestThrottler throttler = RequestThrottler.getForUid(UID);
         Assert.assertTrue(throttler.isPrerenderingAllowed());

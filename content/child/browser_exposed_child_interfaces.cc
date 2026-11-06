@@ -1,13 +1,13 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/child/browser_exposed_child_interfaces.h"
 
-#include "base/bind.h"
-#include "base/sequenced_task_runner.h"
-#include "base/threading/sequenced_task_runner_handle.h"
-#include "content/child/child_histogram_fetcher_impl.h"
+#include "base/functional/bind.h"
+#include "base/task/sequenced_task_runner.h"
+#include "components/metrics/child_histogram_fetcher_impl.h"
+#include "content/child/child_process_synthetic_trial_syncer.h"
 #include "content/public/common/content_client.h"
 #include "mojo/public/cpp/bindings/binder_map.h"
 #include "services/tracing/public/cpp/traced_process.h"
@@ -17,12 +17,18 @@ namespace content {
 
 void ExposeChildInterfacesToBrowser(
     scoped_refptr<base::SequencedTaskRunner> io_task_runner,
+    const bool in_browser_process,
     mojo::BinderMap* binders) {
-  binders->Add(base::BindRepeating(&ChildHistogramFetcherFactoryImpl::Create),
-               io_task_runner);
-  binders->Add(
-      base::BindRepeating(&tracing::TracedProcess::OnTracedProcessRequest),
-      base::SequencedTaskRunnerHandle::Get());
+  binders->Add<metrics::mojom::ChildHistogramFetcherFactory>(
+      &metrics::ChildHistogramFetcherFactoryImpl::Create, io_task_runner);
+  if (!in_browser_process) {
+    binders->Add<tracing::mojom::TracedProcess>(
+        &tracing::TracedProcess::OnTracedProcessRequest,
+        base::SequencedTaskRunner::GetCurrentDefault());
+    binders->Add<mojom::SyntheticTrialConfiguration>(
+        &ChildProcessSyntheticTrialSyncer::Create,
+        base::SequencedTaskRunner::GetCurrentDefault());
+  }
 
   GetContentClient()->ExposeInterfacesToBrowser(io_task_runner, binders);
 }

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,30 +8,26 @@
 #include <memory>
 #include <string>
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/weak_ptr.h"
-#include "mojo/public/cpp/platform/named_platform_channel.h"
+#include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "mojo/public/cpp/bindings/remote.h"
+#include "remoting/host/mojom/remote_security_key.mojom.h"
 #include "remoting/host/security_key/security_key_ipc_client.h"
-
-namespace IPC {
-class Channel;
-class Message;
-}  // IPC
-
-namespace mojo {
-class IsolatedConnection;
-}
 
 namespace remoting {
 
 // Simulates the SecurityKeyIpcClient and provides access to data members
-// for testing.  This class is used for scenarios which require an IPC channel
-// as well as for tests which only need callbacks activated.
+// for testing.  This class is used for scenarios which require an IPC
+// connection as well as for tests which only need callbacks activated.
 class FakeSecurityKeyIpcClient : public SecurityKeyIpcClient {
  public:
   explicit FakeSecurityKeyIpcClient(
-      const base::RepeatingClosure& channel_event_callback);
+      const base::RepeatingClosure& connection_event_callback);
+
+  FakeSecurityKeyIpcClient(const FakeSecurityKeyIpcClient&) = delete;
+  FakeSecurityKeyIpcClient& operator=(const FakeSecurityKeyIpcClient&) = delete;
+
   ~FakeSecurityKeyIpcClient() override;
 
   // SecurityKeyIpcClient interface.
@@ -43,11 +39,13 @@ class FakeSecurityKeyIpcClient : public SecurityKeyIpcClient {
                               ResponseCallback response_callback) override;
   void CloseIpcConnection() override;
 
-  // Connects as a client to the |server_name| IPC Channel.
-  bool ConnectViaIpc(const mojo::NamedPlatformChannel::ServerName& server_name);
+  // Returns a pending receiver that can be bound to receive requests from the
+  // fake client.
+  mojo::PendingReceiver<mojom::SecurityKeyForwarder>
+  BindNewPipeAndPassReceiver();
 
   // Override of SendSecurityKeyRequest() interface method for tests which use
-  // an IPC channel for testing.
+  // an IPC connection for testing.
   void SendSecurityKeyRequestViaIpc(const std::string& request_payload);
 
   base::WeakPtr<FakeSecurityKeyIpcClient> AsWeakPtr();
@@ -56,11 +54,9 @@ class FakeSecurityKeyIpcClient : public SecurityKeyIpcClient {
     return last_message_received_;
   }
 
-  bool ipc_channel_connected() { return ipc_channel_connected_; }
+  bool ipc_connected() { return ipc_connected_; }
 
   bool connection_ready() { return connection_ready_; }
-
-  bool invalid_session_error() { return invalid_session_error_; }
 
   void set_check_for_ipc_channel_return_value(bool return_value) {
     check_for_ipc_channel_return_value_ = return_value;
@@ -78,34 +74,16 @@ class FakeSecurityKeyIpcClient : public SecurityKeyIpcClient {
     security_key_response_payload_ = response_payload;
   }
 
-  void set_on_channel_connected_callback(base::OnceClosure callback) {
-    on_channel_connected_callback_ = std::move(callback);
-  }
-
  private:
-  // IPC::Listener implementation.
-  bool OnMessageReceived(const IPC::Message& message) override;
-  void OnChannelConnected(int32_t peer_pid) override;
-  void OnChannelError() override;
+  void OnQueryVersionResult(uint32_t unused_version);
 
   // Handles security key response IPC messages.
   void OnSecurityKeyResponse(const std::string& request_data);
 
-  // Handles the ConnectionReady IPC message.
-  void OnConnectionReady();
+  // Called when a change in the IPC connection state has occurred.
+  base::RepeatingClosure connection_event_callback_;
 
-  // Handles the InvalidSession IPC message.
-  void OnInvalidSession();
-
-  // Called when a change in the IPC channel state has occurred.
-  base::RepeatingClosure channel_event_callback_;
-
-  // Called when the IPC Channel is connected.
-  base::OnceClosure on_channel_connected_callback_;
-
-  // Used for sending/receiving security key messages between processes.
-  std::unique_ptr<mojo::IsolatedConnection> mojo_connection_;
-  std::unique_ptr<IPC::Channel> client_channel_;
+  mojo::Remote<mojom::SecurityKeyForwarder> security_key_forwarder_;
 
   // Provides the contents of the last IPC message received.
   std::string last_message_received_;
@@ -119,21 +97,16 @@ class FakeSecurityKeyIpcClient : public SecurityKeyIpcClient {
   // Value returned by CheckForSecurityKeyIpcServerChannel() method.
   bool check_for_ipc_channel_return_value_ = true;
 
-  // Stores whether a connection to the server IPC channel is active.
-  bool ipc_channel_connected_ = false;
+  // Stores whether a connection to the server IPC connection is active.
+  bool ipc_connected_ = false;
 
   // Tracks whether a ConnectionReady message has been received.
   bool connection_ready_ = false;
-
-  // Tracks whether an InvalidSession message has been received.
-  bool invalid_session_error_ = false;
 
   // Value returned by SendSecurityKeyRequest() method.
   std::string security_key_response_payload_;
 
   base::WeakPtrFactory<FakeSecurityKeyIpcClient> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(FakeSecurityKeyIpcClient);
 };
 
 }  // namespace remoting

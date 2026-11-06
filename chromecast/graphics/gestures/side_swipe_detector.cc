@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include <deque>
 
 #include "base/auto_reset.h"
+#include "base/logging.h"
 #include "chromecast/base/chromecast_switches.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_event_dispatcher.h"
@@ -34,7 +35,7 @@ constexpr int kDefaultSideGestureStartHeight = 35;
 // occurs inside the gesture margin will be valid as long as it occurs within
 // the time specified by this threshold.
 constexpr base::TimeDelta kGestureMarginEventsTimeLimit =
-    base::TimeDelta::FromMilliseconds(500);
+    base::Milliseconds(500);
 
 // Get the correct bottom gesture start height by checking both margin flags in
 // order, and then the default value if neither is set.
@@ -114,9 +115,8 @@ ui::EventDispatchDetails SideSwipeDetector::RewriteEvent(
   // is what the rest of this class expects.
   gfx::Point touch_location = touch_event->root_location();
   root_window_->GetHost()->ConvertPixelsToDIP(&touch_location);
-  gfx::Rect screen_bounds = display::Screen::GetScreen()
-                                ->GetDisplayNearestPoint(touch_location)
-                                .bounds();
+  gfx::Rect screen_bounds =
+      display::Screen::Get()->GetDisplayNearestPoint(touch_location).bounds();
   CastSideSwipeOrigin side_swipe_origin =
       GetDragPosition(touch_location, screen_bounds);
 
@@ -131,7 +131,7 @@ ui::EventDispatchDetails SideSwipeDetector::RewriteEvent(
     }
 
     // Detect the beginning of a system gesture swipe.
-    if (touch_event->type() != ui::ET_TOUCH_PRESSED) {
+    if (touch_event->type() != ui::EventType::kTouchPressed) {
       return SendEvent(continuation, &event);
     }
 
@@ -173,7 +173,7 @@ ui::EventDispatchDetails SideSwipeDetector::RewriteEvent(
 
   // The finger has lifted, which means the end of the gesture, or if the finger
   // hasn't travelled far enough, replay the original events.
-  if (touch_event->type() == ui::ET_TOUCH_RELEASED) {
+  if (touch_event->type() == ui::EventType::kTouchReleased) {
     DVLOG(1) << "gesture release; time since press: "
              << current_swipe_time_.Elapsed().InMilliseconds() << "ms @ "
              << touch_location.ToString();

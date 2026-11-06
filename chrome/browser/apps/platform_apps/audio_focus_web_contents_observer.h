@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,7 @@
 namespace apps {
 
 // AudioFocusWebContentsObserver manages audio focus group ids for apps. This
-// means that apps will have seperate audio focus from the browser.
+// means that apps will have separate audio focus from the browser.
 class AudioFocusWebContentsObserver
     : public content::WebContentsObserver,
       public content::WebContentsUserData<AudioFocusWebContentsObserver> {
@@ -29,7 +29,7 @@ class AudioFocusWebContentsObserver
   explicit AudioFocusWebContentsObserver(content::WebContents*);
 
   // content::WebContentsObserver overrides.
-  void DidFinishNavigation(content::NavigationHandle*) override;
+  void PrimaryPageChanged(content::Page&) override;
 
   // The audio focus group id is used to group media sessions together for apps.
   base::UnguessableToken audio_focus_group_id_ = base::UnguessableToken::Null();

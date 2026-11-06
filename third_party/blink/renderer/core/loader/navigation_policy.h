@@ -45,6 +45,8 @@ enum NavigationPolicy {
   kNavigationPolicyNewForegroundTab,
   kNavigationPolicyNewWindow,
   kNavigationPolicyNewPopup,
+  kNavigationPolicyPictureInPicture,
+  kNavigationPolicySplitView,
 };
 
 // Returns a NavigationPolicy to use for starting a navigation
@@ -58,6 +60,12 @@ CORE_EXPORT NavigationPolicy NavigationPolicyFromEvent(const Event*);
 // and ensures that we don't perform a download instead of navigation.
 CORE_EXPORT NavigationPolicy
 NavigationPolicyForCreateWindow(const WebWindowFeatures&);
+
+// Returns true if the modifiers of the current input event request a specific
+// policy for a new window (e.g. ctrl-click for a background tab, or
+// shift-click for a new window). NavigationPolicyForCreateWindow() honors this
+// request over the window features.
+CORE_EXPORT bool UserRequestedNavigationPolicyForCreateWindow();
 
 }  // namespace blink
 

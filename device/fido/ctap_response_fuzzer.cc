@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "base/at_exit.h"
+#include "base/compiler_specific.h"
 #include "base/i18n/icu_util.h"
 #include "components/cbor/reader.h"
 #include "device/fido/authenticator_get_assertion_response.h"
@@ -16,8 +17,8 @@
 #include "device/fido/ctap2_device_operation.h"
 #include "device/fido/ctap_get_assertion_request.h"
 #include "device/fido/device_response_converter.h"
-#include "device/fido/fido_transport_protocol.h"
 #include "device/fido/get_assertion_task.h"
+#include "device/fido/public/fido_transport_protocol.h"
 
 namespace device {
 
@@ -36,36 +37,41 @@ IcuEnvironment* env = new IcuEnvironment();
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   cbor::Reader::Config config;
   config.allow_invalid_utf8 = true;
-  std::vector<uint8_t> input(data, data + size);
-  absl::optional<cbor::Value> input_cbor = cbor::Reader::Read(input, config);
-  if (input_cbor) {
-    input_cbor =
-        FixInvalidUTF8(std::move(*input_cbor),
-                       [](const std::vector<const cbor::Value*>& path) {
-                         return path.size() == 2;
-                       });
+  std::vector<uint8_t> input(data, UNSAFE_TODO(data + size));
+  std::optional<cbor::Value> input_cbor = cbor::Reader::Read(input, config);
+  if (input_cbor &&
+      !FixInvalidUTF8(*input_cbor,
+                      [](const std::vector<const cbor::Value*>& path) {
+                        return path.size() == 2;
+                      })) {
+    input_cbor.reset();
   }
 
   std::array<uint8_t, 32> relying_party_id_hash = {};
-  auto response = device::ReadCTAPMakeCredentialResponse(
+  auto response = ReadCTAPMakeCredentialResponse(
       FidoTransportProtocol::kUsbHumanInterfaceDevice, input_cbor);
-  if (response)
-    response->EraseAttestationStatement(AttestationObject::AAGUID::kErase);
+  if (response) {
+    response->attestation_object.EraseAttestationStatement(
+        AttestationObject::AAGUID::kErase);
+  }
 
-  response = device::AuthenticatorMakeCredentialResponse::
-      CreateFromU2fRegisterResponse(
-          FidoTransportProtocol::kUsbHumanInterfaceDevice,
-          relying_party_id_hash, input);
-  if (response)
-    response->EraseAttestationStatement(AttestationObject::AAGUID::kErase);
+  response = AuthenticatorMakeCredentialResponse::CreateFromU2fRegisterResponse(
+      FidoTransportProtocol::kUsbHumanInterfaceDevice, relying_party_id_hash,
+      input);
+  if (response) {
+    response->attestation_object.EraseAttestationStatement(
+        AttestationObject::AAGUID::kErase);
+  }
 
-  device::ReadCTAPGetAssertionResponse(input_cbor);
-  std::vector<uint8_t> u2f_response_data(data, data + size);
-  std::vector<uint8_t> key_handle(data, data + size);
-  device::AuthenticatorGetAssertionResponse::CreateFromU2fSignResponse(
-      relying_party_id_hash, u2f_response_data, key_handle);
+  ReadCTAPGetAssertionResponse(FidoTransportProtocol::kUsbHumanInterfaceDevice,
+                               input_cbor);
+  std::vector<uint8_t> u2f_response_data(data, UNSAFE_TODO(data + size));
+  std::vector<uint8_t> key_handle(data, UNSAFE_TODO(data + size));
+  AuthenticatorGetAssertionResponse::CreateFromU2fSignResponse(
+      relying_party_id_hash, u2f_response_data, key_handle,
+      FidoTransportProtocol::kUsbHumanInterfaceDevice);
 
-  device::ReadCTAPGetInfoResponse(input);
+  ReadCTAPGetInfoResponse(input);
   return 0;
 }
 

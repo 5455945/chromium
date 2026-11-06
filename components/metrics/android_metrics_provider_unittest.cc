@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,10 @@
 
 #include "base/test/metrics/histogram_tester.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/metrics_proto/chrome_user_metrics_extension.pb.h"
 
 namespace metrics {
+namespace {
 
 class AndroidMetricsProviderTest : public testing::Test {
  public:
@@ -20,13 +22,15 @@ class AndroidMetricsProviderTest : public testing::Test {
 };
 
 TEST_F(AndroidMetricsProviderTest, ProvidePreviousSessionData_IsLowRamDevice) {
-  metrics_provider_.ProvidePreviousSessionData(nullptr /* uma_proto */);
+  ChromeUserMetricsExtension uma_proto;
+  metrics_provider_.ProvidePreviousSessionData(&uma_proto);
   histogram_tester_.ExpectTotalCount("MemoryAndroid.LowRamDevice", 1);
 }
 
-TEST_F(AndroidMetricsProviderTest, ProvideCurrentSessionData_IsLowRamDevice) {
-  metrics_provider_.ProvideCurrentSessionData(nullptr /* uma_proto */);
+TEST_F(AndroidMetricsProviderTest, OnDidCreateMetricsLog_IsLowRamDevice) {
+  metrics_provider_.OnDidCreateMetricsLog();
   histogram_tester_.ExpectTotalCount("MemoryAndroid.LowRamDevice", 1);
 }
 
+}  // namespace
 }  // namespace metrics

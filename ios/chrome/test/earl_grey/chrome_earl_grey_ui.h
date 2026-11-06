@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,11 @@
 #define IOS_CHROME_TEST_EARL_GREY_CHROME_EARL_GREY_UI_H_
 
 #import <Foundation/Foundation.h>
-#include "base/compiler_specific.h"
+
+#import <string>
+
 #import "ios/testing/earl_grey/base_eg_test_helper_impl.h"
+#import "ios/web/public/test/element_selector.h"
 
 @protocol GREYMatcher;
 
@@ -32,76 +35,18 @@
 // additional test helpers. Category method names must be unique.
 @interface ChromeEarlGreyUIImpl : BaseEGTestHelperImpl
 
-// Makes the toolbar visible by swiping downward, if necessary. Then taps on
-// the Tools menu button. At least one tab needs to be open and visible when
-// calling this method.
-- (void)openToolsMenu;
+#pragma mark - Navigation, Omnibox, and Page Interaction
 
-// Makes the toolbar visible by swiping downward, if necessary. Then taps on
-// the Tools menu button. At least one tab needs to be open and visible when
-// calling this method.
-// Sets and Leaves the root matcher to the given window with |windowNumber|.
-- (void)openToolsMenuInWindowWithNumber:(int)windowNumber;
+// Replaces the content of the omnibox with the given `text`.
+- (void)replaceTextInOmnibox:(NSString*)text;
 
-// Opens the settings menu by opening the tools menu, and then tapping the
-// Settings button. There will be a GREYAssert if the tools menu is open when
-// calling this method.
-- (void)openSettingsMenu;
-
-// Opens the settings menu by opening the tools menu, and then tapping the
-// Settings button. There will be a GREYAssert if the tools menu is open when
-// calling this method.
-// Sets and Leaves the root matcher to the given window with |windowNumber|.
-- (void)openSettingsMenuInWindowWithNumber:(int)windowNumber;
-
-// Scrolls to find the button in the Tools menu with the corresponding
-// |buttonMatcher|, and then taps it. If |buttonMatcher| is not found, or
-// the Tools menu is not open when this is called there will be a GREYAssert.
-- (void)tapToolsMenuButton:(id<GREYMatcher>)buttonMatcher;
-
-// Scrolls to find the button in the Settings menu with the corresponding
-// |buttonMatcher|, and then taps it. If |buttonMatcher| is not found, or
-// the Settings menu is not open when this is called there will be a GREYAssert.
-- (void)tapSettingsMenuButton:(id<GREYMatcher>)buttonMatcher;
-
-// Scrolls to find the button in the Privacy menu with the corresponding
-// |buttonMatcher|, and then taps it. If |buttonMatcher| is not found, or
-// the Privacy menu is not open when this is called there will be a GREYAssert.
-- (void)tapPrivacyMenuButton:(id<GREYMatcher>)buttonMatcher;
-
-// Scrolls to find the button in the Clear Browsing Data menu with the
-// corresponding |buttonMatcher|, and then taps it. If |buttonMatcher| is
-// not found, or the Clear Browsing Data menu is not open when this is called
-// there will be a GREYAssert.
-- (void)tapClearBrowsingDataMenuButton:(id<GREYMatcher>)buttonMatcher;
-
-// Scrolls to find the button in the accounts menu with the corresponding
-// |buttonMatcher|, and then taps it. If |buttonMatcher| is not found, or the
-// accounts menu is not open when this is called there will be a GREYAssert.
-- (void)tapAccountsMenuButton:(id<GREYMatcher>)buttonMatcher;
-
-// Focuses the omnibox by tapping and types |text| into it. The '\n' symbol can
-// be passed in order to commit the string.
-// If |text| is empty or nil, the omnibox is just focused.
-- (void)focusOmniboxAndType:(NSString*)text;
+// Focuses the omnibox by tapping and replaces its content with `text`.
+// The '\n' symbol can be passed in order to commit the string.
+// If `text` is empty or nil, the omnibox is just focused.
+- (void)focusOmniboxAndReplaceText:(NSString*)text;
 
 // Focuses the omnibox by tapping it.
 - (void)focusOmnibox;
-
-// Opens a new tab via the tools menu.
-- (void)openNewTab;
-
-// Opens a new incognito tab via the tools menu.
-- (void)openNewIncognitoTab;
-
-// Opens and clear browsing data from history.
-- (void)openAndClearBrowsingDataFromHistory;
-
-// Clears all browsing data by opening the privacy panel in the settings view.
-- (void)clearAllBrowsingData;
-
-// Asserts that history is empty.
-- (void)assertHistoryHasNoEntries;
 
 // Reloads the page via the reload button, and does not wait for the page to
 // finish loading.
@@ -111,16 +56,137 @@
 // This method requires that there is at least one tab open.
 - (void)openShareMenu;
 
-// Waits for toolbar to become visible if |isVisible| is YES, otherwise waits
+// Waits for toolbar to become visible if `isVisible` is YES, otherwise waits
 // for it to disappear. If the condition is not met within a timeout, a
 // GREYAssert is induced.
 - (void)waitForToolbarVisible:(BOOL)isVisible;
 
+// Opens pageInfo via the tools menu.
+- (void)openPageInfo;
+
+#pragma mark - Tools Menu and Settings Navigation
+
+// Makes the toolbar visible by swiping downward, if necessary. Then taps on
+// the Tools menu button. At least one tab needs to be open and visible when
+// calling this method.
+- (void)openToolsMenu;
+
+// Closes the tools menu by tapping on the Tools menu button, or tapping the
+// background scrim, depending on the current version of the tools menu.
+- (void)closeToolsMenu;
+
+// Makes the toolbar visible by swiping downward, if necessary. Then taps on
+// the Tools menu button. At least one tab needs to be open and visible when
+// calling this method.
+// Sets and Leaves the root matcher to the given window with `windowNumber`.
+- (void)openToolsMenuInWindowWithNumber:(int)windowNumber;
+
+// Opens the settings menu by opening the tools menu, and then tapping the
+// Settings button. There will be a GREYAssert if the tools menu is open when
+// calling this method.
+- (void)openSettingsMenu;
+
+// Scrolls to find the button in the Tools menu with the corresponding
+// `buttonMatcher`, and then taps it. If `buttonMatcher` is not found, or
+// the Tools menu is not open when this is called there will be a GREYAssert.
+- (void)tapToolsMenuButton:(id<GREYMatcher>)buttonMatcher;
+
+// Scrolls to find the action in the Tools menu with the corresponding
+// `buttonMatcher`, and then taps it. If `buttonMatcher` is not found, or
+// the Tools menu is not open when this is called there will be a GREYAssert.
+- (void)tapToolsMenuAction:(id<GREYMatcher>)buttonMatcher;
+
+// Scrolls to find the button in the Settings menu with the corresponding
+// `buttonMatcher`, and then taps it. If `buttonMatcher` is not found, or
+// the Settings menu is not open when this is called there will be a GREYAssert.
+- (void)tapSettingsMenuButton:(id<GREYMatcher>)buttonMatcher;
+
+// Scrolls to find the button in the Privacy menu with the corresponding
+// `buttonMatcher`, and then taps it. If `buttonMatcher` is not found, or
+// the Privacy menu is not open when this is called there will be a GREYAssert.
+- (void)tapPrivacyMenuButton:(id<GREYMatcher>)buttonMatcher;
+
+// Scrolls to find the button in the Privacy Safe Browsing menu with the
+// corresponding `buttonMatcher`, and then taps it. If `buttonMatcher` is not
+// found, or the Privacy Safe Browsing menu is not open when this is called
+// there will be a GREYAssert.
+- (void)tapPrivacySafeBrowsingMenuButton:(id<GREYMatcher>)buttonMatcher;
+
+// Scrolls to find the button in the Clear Browsing Data menu with the
+// corresponding `buttonMatcher`, and then taps it. If `buttonMatcher` is
+// not found, or the Clear Browsing Data menu is not open when this is called
+// there will be a GREYAssert.
+- (void)tapClearBrowsingDataMenuButton:(id<GREYMatcher>)buttonMatcher;
+
+#pragma mark - Tabs, Sign-In Prompts, and History
+
+// Makes the toolbar visible by swiping downward, if necessary. Then long-
+// presses on the New Tab menu button. At least one tab needs to be open and
+// visible when calling this method.
+- (void)openNewTabMenu;
+
+// Scrolls to find the button in the Price Notifications menu with the
+// corresponding `buttonMatcher`, and then taps it. If `buttonMatcher` is not
+// found, or the Price Notifications menu is not open when this is called
+// there will be a GREYAssert.
+- (void)tapPriceNotificationsMenuButton:(id<GREYMatcher>)buttonMatcher;
+
+// Focuses the omnibox by tapping and types `text` into it. The '\n' symbol can
+// be passed in order to commit the string.
+// If `text` is empty or nil, the omnibox is just focused.
+//
+// Note: This approach differs from text replacement by simulating the user's
+// keystrokes in the omnibox, rather than programmatically modifying its
+// content.
+- (void)focusOmniboxAndType:(NSString*)text;
+
+// Simulates the physical keyboard event.
+- (void)pressEnter;
+
+// Opens a new tab via the tools menu.
+- (void)openNewTab;
+
+// Opens a new incognito tab via the tools menu.
+- (void)openNewIncognitoTab;
+
+// Opens the tab grid.
+- (void)openTabGrid;
+
+// Clears browsing data from history.
+- (void)clearBrowsingDataFromHistory;
+
+// Asserts that history is empty.
+- (void)assertHistoryHasNoEntries;
+
+// Shares the current page. It taps the share button on the toolbar if visible,
+// or opens the tools menu and taps the share action.
+- (void)shareCurrentPage;
+
 // Waits for the app to idle.
 - (void)waitForAppToIdle;
 
-// Opens pageInfo via the tools menu.
-- (void)openPageInfo;
+// Tries to dismiss any presented native context menu.
+// Returns `YES` if a context menu was dismissed, otherwise returns `NO`.
+- (BOOL)dismissContextMenuIfPresent;
+
+// Type `text` in Omnibox and optionally press Enter if `shouldPressEnter` is
+// YES.
+- (void)typeTextInOmnibox:(std::string const&)text
+            andPressEnter:(BOOL)shouldPressEnter;
+
+// Dismisses the window of the popover by tapping on the original point.
+// `matcher` can be any view in the popover. Throws if the window is not
+// dismissable by tapping.
+- (void)dismissByTappingOnTheWindowOfPopover:(id<GREYMatcher>)matcher;
+
+// Long presses on `selector`.
+- (void)longPressElementOnWebView:(ElementSelector*)selector;
+
+// Convenient function to trigger the Edit Menu on `selector`.
+- (void)triggerEditMenu:(ElementSelector*)selector;
+
+// Clears the search bar text and dismisses the search bar.
+- (void)clearAndDismissSearchBar;
 
 @end
 

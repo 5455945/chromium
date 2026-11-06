@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,19 +15,20 @@
 #include "base/feature_list.h"
 #include "base/metrics/histogram_macros.h"
 #include "components/prefs/pref_service.h"
-#include "components/safe_browsing/content/browser/threat_details.h"
+#include "components/safe_browsing/content/browser/interstitials/content_unsafe_resource_util.h"
+#include "components/safe_browsing/content/browser/threat_details/threat_details.h"
 #include "components/safe_browsing/content/browser/triggers/trigger_manager.h"
+#include "components/safe_browsing/content/browser/web_contents_key.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
-#include "components/safe_browsing/core/common/safebrowsing_constants.h"
 #include "components/safe_browsing/core/common/utils.h"
 #include "components/security_interstitials/content/security_interstitial_controller_client.h"
 #include "components/security_interstitials/content/settings_page_helper.h"
-#include "components/security_interstitials/content/unsafe_resource_util.h"
 #include "components/security_interstitials/core/base_safe_browsing_error_ui.h"
 #include "components/security_interstitials/core/safe_browsing_quiet_error_ui.h"
 #include "components/security_interstitials/core/unsafe_resource.h"
 #include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 #include "net/base/net_errors.h"
@@ -59,9 +60,9 @@ AwSafeBrowsingBlockingPage::AwSafeBrowsingBlockingPage(
   if (errorUiType == ErrorUiType::QUIET_SMALL ||
       errorUiType == ErrorUiType::QUIET_GIANT) {
     set_sb_error_ui(std::make_unique<SafeBrowsingQuietErrorUI>(
-        unsafe_resources[0].url, main_frame_url,
-        GetInterstitialReason(unsafe_resources), display_options,
-        ui_manager->app_locale(), base::Time::NowFromSystemTime(), controller(),
+        unsafe_resources[0].url, GetInterstitialReason(unsafe_resources),
+        display_options, ui_manager->app_locale(),
+        base::Time::NowFromSystemTime(), controller(),
         errorUiType == ErrorUiType::QUIET_GIANT));
   }
 
@@ -83,8 +84,10 @@ AwSafeBrowsingBlockingPage::AwSafeBrowsingBlockingPage(
                 unsafe_resources[0], url_loader_factory,
                 /*history_service*/ nullptr,
                 /*referrer_chain_provider*/ nullptr,
-                sb_error_ui()->get_error_display_options());
+                safe_browsing::TriggerManager::DataCollectionPermissions(
+                    sb_error_ui()->get_error_display_options()));
   }
+  warning_shown_ts_ = base::Time::Now().InMillisecondsSinceUnixEpoch();
 }
 
 AwSafeBrowsingBlockingPage* AwSafeBrowsingBlockingPage::CreateBlockingPage(
@@ -92,24 +95,20 @@ AwSafeBrowsingBlockingPage* AwSafeBrowsingBlockingPage::CreateBlockingPage(
     content::WebContents* web_contents,
     const GURL& main_frame_url,
     const UnsafeResource& unsafe_resource,
-    std::unique_ptr<AwWebResourceRequest> resource_request) {
-  // Log the resource type that triggers the safe browsing blocking page.
-  UMA_HISTOGRAM_ENUMERATION(
-      "SafeBrowsing.BlockingPage.ResourceType",
-      safe_browsing::GetResourceTypeFromRequestDestination(
-          unsafe_resource.request_destination));
-  // Log the request destination that triggers the safe browsing blocking page.
-  UMA_HISTOGRAM_ENUMERATION("SafeBrowsing.BlockingPage.RequestDestination",
-                            unsafe_resource.request_destination);
+    std::unique_ptr<AwWebResourceRequest> resource_request,
+    std::optional<base::TimeTicks> blocked_page_shown_timestamp) {
+  // Log the threat type that triggers the safe browsing blocking page.
+  UMA_HISTOGRAM_ENUMERATION("SafeBrowsing.BlockingPage.ThreatType",
+                            unsafe_resource.threat_type);
   const UnsafeResourceList unsafe_resources{unsafe_resource};
   AwBrowserContext* browser_context =
       AwBrowserContext::FromWebContents(web_contents);
   PrefService* pref_service = browser_context->GetPrefService();
-  // TODO(crbug.com/1134678): Set is_enhanced_protection_message_enabled once
+  // TODO(crbug.com/40723201): Set is_enhanced_protection_message_enabled once
   // enhanced protection is supported on aw.
   BaseSafeBrowsingErrorUI::SBErrorDisplayOptions display_options =
       BaseSafeBrowsingErrorUI::SBErrorDisplayOptions(
-          IsMainPageLoadBlocked(unsafe_resources),
+          IsMainPageResourceLoadPending(unsafe_resources),
           safe_browsing::IsExtendedReportingOptInAllowed(*pref_service),
           browser_context->IsOffTheRecord(),
           safe_browsing::IsExtendedReportingEnabled(*pref_service),
@@ -129,37 +128,58 @@ AwSafeBrowsingBlockingPage* AwSafeBrowsingBlockingPage::CreateBlockingPage(
   // committed interstitials, it can be cleaned up when removing non-committed
   // interstitials.
   content::NavigationEntry* entry =
-      GetNavigationEntryForResource(unsafe_resource);
+      safe_browsing::unsafe_resource_util::GetNavigationEntryForResource(
+          unsafe_resource);
   GURL url =
       (main_frame_url.is_empty() && entry) ? entry->GetURL() : main_frame_url;
 
-  // TODO(crbug.com/1134678): Set settings_page_helper once enhanced protection
+  // TODO(crbug.com/40723201): Set settings_page_helper once enhanced protection
   // is supported on aw.
   return new AwSafeBrowsingBlockingPage(
       ui_manager, web_contents, url, unsafe_resources,
       CreateControllerClient(web_contents, unsafe_resources, ui_manager,
-                             pref_service, /*settings_page_helper*/ nullptr),
+                             pref_service, /*settings_page_helper*/ nullptr,
+                             blocked_page_shown_timestamp),
       display_options, errorType, std::move(resource_request));
 }
 
 AwSafeBrowsingBlockingPage::~AwSafeBrowsingBlockingPage() {}
+
+void AwSafeBrowsingBlockingPage::CreatedPostCommitErrorPageNavigation(
+    content::NavigationHandle* error_page_navigation_handle) {
+  DCHECK(!resource_request_);
+  resource_request_ = std::make_unique<AwWebResourceRequest>(
+      error_page_navigation_handle->GetURL().spec(),
+      error_page_navigation_handle->IsPost() ? "POST" : "GET",
+      error_page_navigation_handle->IsInPrimaryMainFrame(),
+      error_page_navigation_handle->HasUserGesture(),
+      error_page_navigation_handle->GetRequestHeaders());
+  resource_request_->is_renderer_initiated =
+      error_page_navigation_handle->IsRendererInitiated();
+}
 
 void AwSafeBrowsingBlockingPage::FinishThreatDetails(
     const base::TimeDelta& delay,
     bool did_proceed,
     int num_visits) {
   // Not all interstitials collect threat details, e.g. when not opted in.
-  if (!threat_details_in_progress_)
+  if (!threat_details_in_progress_) {
     return;
+  }
 
   // Finish computing threat details. TriggerManager will decide if it is safe
   // to send the report.
-  bool report_sent = AwBrowserProcess::GetInstance()
-                         ->GetSafeBrowsingTriggerManager()
-                         ->FinishCollectingThreatDetails(
-                             safe_browsing::TriggerType::SECURITY_INTERSTITIAL,
-                             web_contents(), delay, did_proceed, num_visits,
-                             sb_error_ui()->get_error_display_options());
+  auto result =
+      AwBrowserProcess::GetInstance()
+          ->GetSafeBrowsingTriggerManager()
+          ->FinishCollectingThreatDetails(
+              safe_browsing::TriggerType::SECURITY_INTERSTITIAL,
+              safe_browsing::GetWebContentsKey(web_contents()), delay,
+              did_proceed, num_visits,
+              safe_browsing::TriggerManager::DataCollectionPermissions(
+                  sb_error_ui()->get_error_display_options()),
+              warning_shown_ts_);
+  bool report_sent = result.IsReportSent();
 
   if (report_sent) {
     controller()->metrics_helper()->RecordUserInteraction(

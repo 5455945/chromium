@@ -34,7 +34,7 @@
 #include "third_party/blink/renderer/core/editing/iterators/text_iterator_behavior.h"
 #include "third_party/blink/renderer/core/editing/iterators/text_iterator_text_node_handler.h"
 #include "third_party/blink/renderer/core/editing/iterators/text_iterator_text_state.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
 namespace blink {
 
@@ -77,38 +77,34 @@ class TextIteratorAlgorithm {
 
   const Document& OwnerDocument() const;
   const Node& CurrentContainer() const;
-  int StartOffsetInCurrentContainer() const;
-  int EndOffsetInCurrentContainer() const;
+  wtf_size_t StartOffsetInCurrentContainer() const;
+  wtf_size_t EndOffsetInCurrentContainer() const;
   PositionTemplate<Strategy> StartPositionInCurrentContainer() const;
   PositionTemplate<Strategy> EndPositionInCurrentContainer() const;
 
   // Returns the position before |char16_offset| in current text run.
-  PositionTemplate<Strategy> GetPositionBefore(int char16_offset) const;
+  PositionTemplate<Strategy> GetPositionBefore(wtf_size_t char16_offset) const;
 
   // Returns the position after |char16_offset| in current text run.
-  PositionTemplate<Strategy> GetPositionAfter(int char16_offset) const;
+  PositionTemplate<Strategy> GetPositionAfter(wtf_size_t char16_offset) const;
 
   const TextIteratorTextState& GetTextState() const { return text_state_; }
-  int length() const { return text_state_.length(); }
-  UChar CharacterAt(unsigned index) const {
+  wtf_size_t length() const { return text_state_.length(); }
+  UChar CharacterAt(wtf_size_t index) const {
     return text_state_.CharacterAt(index);
-  }
-
-  bool BreaksAtReplacedElement() {
-    return !behavior_.DoesNotBreakAtReplacedElement();
   }
 
   // Computes the length of the given range using a text iterator according to
   // the specified iteration behavior. The default iteration behavior is to
   // always emit object replacement characters for replaced elements.
   // TODO(editing-dev): We should remove start/end version of |RangeLength()|.
-  static int RangeLength(
+  static wtf_size_t RangeLength(
       const PositionTemplate<Strategy>& start,
       const PositionTemplate<Strategy>& end,
       const TextIteratorBehavior& =
           TextIteratorBehavior::DefaultRangeLengthBehavior());
 
-  static int RangeLength(
+  static wtf_size_t RangeLength(
       const EphemeralRangeTemplate<Strategy>&,
       const TextIteratorBehavior& =
           TextIteratorBehavior::DefaultRangeLengthBehavior());
@@ -181,25 +177,19 @@ class TextIteratorAlgorithm {
     return behavior_.ExcludeAutofilledValue();
   }
 
-  bool DoesNotBreakAtReplacedElement() const {
-    return behavior_.DoesNotBreakAtReplacedElement();
-  }
-
   // Clipboard should respect user-select style attribute
   bool SkipsUnselectableContent() const {
     return behavior_.SkipsUnselectableContent();
   }
-
-  bool IsBetweenSurrogatePair(unsigned position) const;
 
   // Ensure container node of current text run for computing position.
   void EnsurePositionContainer() const;
 
   // The range.
   const Node* const start_container_;
-  const unsigned start_offset_;
+  const wtf_size_t start_offset_;
   const Node* const end_container_;
-  const unsigned end_offset_;
+  const wtf_size_t end_offset_;
   // |end_node_| stores |Strategy::ChildAt(*end_container_, end_offfset_ - 1)|,
   // if it exists, or |nullptr| otherwise.
   const Node* const end_node_;
@@ -208,9 +198,9 @@ class TextIteratorAlgorithm {
   // Current position, not necessarily of the text being returned, but position
   // as we walk through the DOM tree.
   const Node* node_;
-  IterationProgress iteration_progress_;
+  IterationProgress iteration_progress_ = kHandledNone;
   FullyClippedStateStackAlgorithm<Strategy> fully_clipped_stack_;
-  unsigned shadow_depth_;
+  wtf_size_t shadow_depth_;
 
   // Used when there is still some pending text from the current node; when
   // these are false, we go back to normal iterating.

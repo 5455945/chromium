@@ -1,11 +1,12 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/metrics/perf/metric_provider.h"
 
 #include "ash/constants/ash_features.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
@@ -13,14 +14,14 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "components/sync/base/user_selectable_type.h"
-#include "components/sync/driver/sync_service.h"
-#include "components/sync/driver/sync_user_settings.h"
+#include "components/sync/service/sync_service.h"
+#include "components/sync/service/sync_user_settings.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "third_party/metrics_proto/device_state.pb.h"
 #include "third_party/metrics_proto/sampled_profile.pb.h"
 
 namespace metrics {
-
 namespace {
 
 // Name prefix of the histogram that counts the number of reports uploaded by a
@@ -48,6 +49,22 @@ void RedactCommMd5Prefixes(PerfDataProto* proto) {
     if (event.has_comm_event()) {
       event.mutable_comm_event()->set_comm_md5_prefix(kRedactedCommMd5Prefix);
     }
+  }
+}
+
+ThermalState ToProtoThermalStateEnum(
+    base::PowerThermalObserver::DeviceThermalState state) {
+  switch (state) {
+    case base::PowerThermalObserver::DeviceThermalState::kUnknown:
+      return THERMAL_STATE_UNKNOWN;
+    case base::PowerThermalObserver::DeviceThermalState::kNominal:
+      return THERMAL_STATE_NOMINAL;
+    case base::PowerThermalObserver::DeviceThermalState::kFair:
+      return THERMAL_STATE_FAIR;
+    case base::PowerThermalObserver::DeviceThermalState::kSerious:
+      return THERMAL_STATE_SERIOUS;
+    case base::PowerThermalObserver::DeviceThermalState::kCritical:
+      return THERMAL_STATE_CRITICAL;
   }
 }
 
@@ -80,9 +97,7 @@ MetricProvider::MetricProvider(std::unique_ptr<MetricCollector> collector,
 MetricProvider::~MetricProvider() {
   // Destroy the metric_collector_ on the collector sequence.
   collector_task_runner_->PostTask(
-      FROM_HERE,
-      base::BindOnce([](std::unique_ptr<MetricCollector> collector_) {},
-                     std::move(metric_collector_)));
+      FROM_HERE, base::DoNothingWithBoundArgs(std::move(metric_collector_)));
 }
 
 void MetricProvider::Init() {
@@ -97,7 +112,7 @@ void MetricProvider::Init() {
 
 bool MetricProvider::GetSampledProfiles(
     std::vector<SampledProfile>* sampled_profiles) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
   if (cached_profile_data_.empty()) {
     base::UmaHistogramExactLinear(upload_uma_histogram_, 0,
                                   kMaxValueUploadReports);
@@ -119,7 +134,7 @@ bool MetricProvider::GetSampledProfiles(
 }
 
 void MetricProvider::OnUserLoggedIn() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
   const base::TimeTicks now = base::TimeTicks::Now();
   collector_task_runner_->PostTask(
@@ -129,7 +144,7 @@ void MetricProvider::OnUserLoggedIn() {
 }
 
 void MetricProvider::Deactivate() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
   // Notifies the collector to turn off the timer. Does not delete any data that
   // was already collected and stored in |cached_profile_data|.
@@ -139,7 +154,7 @@ void MetricProvider::Deactivate() {
 }
 
 void MetricProvider::SuspendDone(base::TimeDelta sleep_duration) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
   collector_task_runner_->PostTask(
       FROM_HERE, base::BindOnce(&MetricCollector::ScheduleSuspendDoneCollection,
                                 base::Unretained(metric_collector_.get()),
@@ -147,7 +162,7 @@ void MetricProvider::SuspendDone(base::TimeDelta sleep_duration) {
 }
 
 void MetricProvider::OnSessionRestoreDone(int num_tabs_restored) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
   collector_task_runner_->PostTask(
       FROM_HERE,
       base::BindOnce(&MetricCollector::ScheduleSessionRestoreCollection,
@@ -177,12 +192,12 @@ void MetricProvider::OnJankStopped() {
 }
 
 void MetricProvider::EnableRecording() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
   recording_enabled_ = true;
 }
 
 void MetricProvider::DisableRecording() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
   recording_enabled_ = false;
 }
 
@@ -194,24 +209,12 @@ MetricProvider::RecordAttemptStatus MetricProvider::AppSyncStateForUserProfile(
     return RecordAttemptStatus::kSyncServiceUnavailable;
   syncer::SyncUserSettings* sync_settings = sync_service->GetUserSettings();
 
-  // Chrome versions >= M78 have a feature that splits the sync settings between
-  // Chrome and ChromeOS. The App Sync toggle is moved under the ChromeOS
-  // settings. If the split sync setting is enabled, we will directly read from
-  // the OS settings. Otherwise, we read from Chrome settings. We then check if
-  // the sync feature is enabled and the App Sync toggle is on.
-  if (chromeos::features::IsSplitSettingsSyncEnabled()) {
-    if (!sync_settings->IsOsSyncFeatureEnabled())
-      return RecordAttemptStatus::kOSSyncFeatureDisabled;
-    if (!sync_settings->GetSelectedOsTypes().Has(
-            syncer::UserSelectableOsType::kOsApps))
-      return RecordAttemptStatus::kOSAppSyncDisabled;
-    return RecordAttemptStatus::kAppSyncEnabled;
-  }
-  // Read chrome settings if split sync is disabled.
   if (!sync_service->IsSyncFeatureEnabled())
     return RecordAttemptStatus::kChromeSyncFeatureDisabled;
-  if (!sync_settings->GetSelectedTypes().Has(syncer::UserSelectableType::kApps))
-    return RecordAttemptStatus::kChromeAppSyncDisabled;
+
+  if (!sync_settings->GetSelectedOsTypes().Has(
+          syncer::UserSelectableOsType::kOsApps))
+    return RecordAttemptStatus::kOSAppSyncDisabled;
   return RecordAttemptStatus::kAppSyncEnabled;
 }
 
@@ -231,7 +234,7 @@ MetricProvider::RecordAttemptStatus MetricProvider::GetAppSyncState() {
     // The Default profile, lock screen app profile and lock screen profile are
     // all not regular user profiles on Chrome OS. They always disable sync and
     // we would skip them.
-    if (!chromeos::ProfileHelper::IsRegularProfile(profile))
+    if (!ash::ProfileHelper::IsUserProfile(profile))
       continue;
     auto app_sync_state = AppSyncStateForUserProfile(profile);
     if (app_sync_state != RecordAttemptStatus::kAppSyncEnabled)
@@ -247,7 +250,7 @@ MetricProvider::RecordAttemptStatus MetricProvider::GetAppSyncState() {
 
 void MetricProvider::AddProfileToCache(
     std::unique_ptr<SampledProfile> sampled_profile) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
   if (!recording_enabled_) {
     base::UmaHistogramEnumeration(record_uma_histogram_,
                                   RecordAttemptStatus::kRecordingDisabled);
@@ -266,10 +269,14 @@ void MetricProvider::AddProfileToCache(
   if (app_sync_state != RecordAttemptStatus::kAppSyncEnabled)
     RedactCommMd5Prefixes(sampled_profile->mutable_perf_data());
 
+  // Add the device thermal state and cpu speed limit to the profile.
+  sampled_profile->set_thermal_state(ToProtoThermalStateEnum(thermal_state_));
+  sampled_profile->set_cpu_speed_limit_percent(cpu_speed_limit_percent_);
+
   collector_task_runner_->PostTask(
       FROM_HERE, base::BindOnce(&MetricCollector::AddCachedDataDelta,
                                 base::Unretained(metric_collector_.get()),
-                                sampled_profile->ByteSize()));
+                                sampled_profile->ByteSizeLong()));
   cached_profile_data_.resize(cached_profile_data_.size() + 1);
   cached_profile_data_.back().Swap(sampled_profile.get());
 

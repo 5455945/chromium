@@ -1,12 +1,14 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <iomanip>
 #include <iostream>
 #include <string>
+#include <string_view>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -43,6 +45,10 @@ struct Info {
   };
   // |next_scales| are swapped with |scales| after receiving output done event.
   std::vector<Scale> scales, next_scales;
+  struct {
+    int32_t top, left, bottom, right;
+  } insets;
+  int32_t logical_transform;
   std::unique_ptr<wl_output> output;
   std::unique_ptr<zaura_output> aura_output;
 };
@@ -60,7 +66,8 @@ void RegistryHandler(void* data,
                      uint32_t version) {
   Globals* globals = static_cast<Globals*>(data);
 
-  if (strcmp(interface, "wl_output") == 0) {
+  std::string_view interface_view(interface);
+  if (interface_view == "wl_output") {
     globals->outputs.push_back(
         {.connection = ZAURA_OUTPUT_CONNECTION_TYPE_UNKNOWN,
          .device_scale_factor = ZAURA_OUTPUT_SCALE_FACTOR_1000,
@@ -70,7 +77,7 @@ void RegistryHandler(void* data,
                       .transform = WL_OUTPUT_TRANSFORM_NORMAL}});
     globals->outputs.back().output.reset(static_cast<wl_output*>(
         wl_registry_bind(registry, id, &wl_output_interface, 2)));
-  } else if (strcmp(interface, "zaura_shell") == 0) {
+  } else if (interface_view == "zaura_shell") {
     if (version >= 2) {
       globals->aura_shell.reset(static_cast<zaura_shell*>(
           wl_registry_bind(registry, id, &zaura_shell_interface, 5)));
@@ -153,6 +160,25 @@ void AuraOutputDeviceScaleFactor(void* data,
   Info* info = static_cast<Info*>(data);
 
   info->device_scale_factor = device_scale_factor;
+}
+
+void AuraOutputInsets(void* data,
+                      zaura_output* output,
+                      int32_t top,
+                      int32_t left,
+                      int32_t bottom,
+                      int32_t right) {
+  Info* info = static_cast<Info*>(data);
+
+  info->insets = {top, left, bottom, right};
+}
+
+void AuraOutputLogicalTransform(void* data,
+                                zaura_output* output,
+                                int32_t transform) {
+  Info* info = static_cast<Info*>(data);
+
+  info->logical_transform = transform;
 }
 
 std::string OutputSubpixelToString(int32_t subpixel) {
@@ -293,7 +319,8 @@ int main(int argc, char* argv[]) {
                                         OutputScale};
 
   zaura_output_listener aura_output_listener = {
-      AuraOutputScale, AuraOutputConnection, AuraOutputDeviceScaleFactor};
+      AuraOutputScale, AuraOutputConnection, AuraOutputDeviceScaleFactor,
+      AuraOutputInsets, AuraOutputLogicalTransform};
   for (auto& info : globals.outputs) {
     wl_output_add_listener(info.output.get(), &output_listener, &info);
     if (globals.aura_shell) {
@@ -349,6 +376,14 @@ int main(int argc, char* argv[]) {
                   << AuraOutputScaleFlagsToString(scale.flags) << std::endl;
       }
     }
+    std::cout << "  insets:" << std::endl
+              << "    top:     " << info.insets.top << std::endl
+              << "    left:    " << info.insets.left << std::endl
+              << "    bottom:  " << info.insets.bottom << std::endl
+              << "    right:   " << info.insets.right << std::endl
+              << std::endl;
+    std::cout << "  logical_transform: "
+              << OutputTransformToString(info.logical_transform) << std::endl;
   }
 
   return 0;

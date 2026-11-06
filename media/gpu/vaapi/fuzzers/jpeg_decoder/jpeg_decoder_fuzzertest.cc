@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,8 @@
 
 #include <algorithm>
 
-#include "base/callback_helpers.h"
-#include "base/cxx17_backports.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
-#include "base/no_destructor.h"
 #include "base/numerics/safe_conversions.h"
 #include "media/gpu/vaapi/fuzzers/jpeg_decoder/jpeg_decoder_fuzzer_input.pb.h"
 #include "media/gpu/vaapi/vaapi_jpeg_decoder.h"
@@ -47,12 +45,17 @@ media::JpegHuffmanTable ConvertToJpegHuffmanTable(
     const media::fuzzing::JpegHuffmanTable& proto_huffman_table) {
   media::JpegHuffmanTable huffman_table{};
   huffman_table.valid = proto_huffman_table.valid();
-  memcpy(huffman_table.code_length, proto_huffman_table.code_length().data(),
-         std::min(base::size(huffman_table.code_length),
-                  proto_huffman_table.code_length().size()));
-  memcpy(huffman_table.code_value, proto_huffman_table.code_value().data(),
-         std::min(base::size(huffman_table.code_value),
-                  proto_huffman_table.code_value().size()));
+  const size_t code_length_min_size =
+      std::min(huffman_table.code_length.size(),
+               proto_huffman_table.code_length().size());
+  base::span(huffman_table.code_length)
+      .copy_prefix_from(base::as_byte_span(proto_huffman_table.code_length())
+                            .first(code_length_min_size));
+  const size_t code_value_min_size = std::min(
+      huffman_table.code_value.size(), proto_huffman_table.code_value().size());
+  base::span(huffman_table.code_value)
+      .copy_prefix_from(base::as_byte_span(proto_huffman_table.code_value())
+                            .first(code_value_min_size));
   return huffman_table;
 }
 
@@ -76,7 +79,7 @@ media::JpegParseResult ConvertToJpegParseResult(
       proto_parse_result.frame_header().coded_height() & 0xFFFF;
 
   const size_t frame_header_num_components =
-      std::min(base::size(parse_result.frame_header.components),
+      std::min(std::size(parse_result.frame_header.components),
                base::checked_cast<size_t>(
                    proto_parse_result.frame_header().components_size()));
   for (size_t i = 0; i < frame_header_num_components; i++) {
@@ -96,36 +99,40 @@ media::JpegParseResult ConvertToJpegParseResult(
 
   // Convert the DC/AC Huffman tables.
   const size_t num_dc_tables =
-      std::min(base::size(parse_result.dc_table),
+      std::min(std::size(parse_result.dc_table),
                base::checked_cast<size_t>(proto_parse_result.dc_table_size()));
   for (size_t i = 0; i < num_dc_tables; i++) {
-    parse_result.dc_table[i] =
+    UNSAFE_TODO(parse_result.dc_table[i]) =
         ConvertToJpegHuffmanTable(proto_parse_result.dc_table()[i]);
   }
   const size_t num_ac_tables =
-      std::min(base::size(parse_result.ac_table),
+      std::min(std::size(parse_result.ac_table),
                base::checked_cast<size_t>(proto_parse_result.ac_table_size()));
   for (size_t i = 0; i < num_ac_tables; i++) {
-    parse_result.ac_table[i] =
+    UNSAFE_TODO(parse_result.ac_table[i]) =
         ConvertToJpegHuffmanTable(proto_parse_result.ac_table()[i]);
   }
 
   // Convert the quantization tables.
   const size_t num_q_tables =
-      std::min(base::size(parse_result.q_table),
+      std::min(std::size(parse_result.q_table),
                base::checked_cast<size_t>(proto_parse_result.q_table_size()));
   for (size_t i = 0; i < num_q_tables; i++) {
     const media::fuzzing::JpegQuantizationTable& input_q_table =
         proto_parse_result.q_table()[i];
-    parse_result.q_table[i].valid = input_q_table.valid();
-    memcpy(parse_result.q_table[i].value, input_q_table.value().data(),
-           std::min(base::size(parse_result.q_table[i].value),
-                    input_q_table.value().size()));
+    UNSAFE_TODO(parse_result.q_table[i]).valid = input_q_table.valid();
+    const size_t value_min_size =
+        std::min(std::size(UNSAFE_TODO(parse_result.q_table[i].value)),
+                 input_q_table.value().size());
+    base::span(UNSAFE_TODO(parse_result.q_table[i]).value)
+        .first(value_min_size)
+        .copy_from_nonoverlapping(
+            base::as_byte_span(input_q_table.value()).first(value_min_size));
   }
 
   // Convert the scan header.
   const size_t scan_num_components = std::min(
-      base::size(parse_result.scan.components),
+      std::size(parse_result.scan.components),
       base::checked_cast<size_t>(proto_parse_result.scan().components_size()));
   for (size_t i = 0; i < scan_num_components; i++) {
     const media::fuzzing::JpegScanHeader::Component& input_component =
@@ -142,8 +149,7 @@ media::JpegParseResult ConvertToJpegParseResult(
   // Convert the coded data. Note that we don't do a deep copy, so we assume
   // that |proto_parse_result| will live for as long as |parse_result|.data is
   // needed.
-  parse_result.data = proto_parse_result.data().data();
-  parse_result.data_size = proto_parse_result.data().size();
+  parse_result.data = base::as_byte_span(proto_parse_result.data());
 
   // Convert the rest of the fields.
   parse_result.restart_interval =
@@ -206,11 +212,15 @@ class VaapiJpegDecoderWrapper {
   VaapiJpegDecoderWrapper() = default;
   ~VaapiJpegDecoderWrapper() = default;
 
-  bool Initialize() { return decoder_.Initialize(base::DoNothing()); }
+  bool Initialize() {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(decoder_.decoder_sequence_checker_);
+    return decoder_.Initialize(base::DoNothing());
+  }
 
   bool MaybeCreateSurface(unsigned int picture_va_rt_format,
                           const gfx::Size& new_coded_size,
                           const gfx::Size& new_visible_size) {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(decoder_.decoder_sequence_checker_);
     if (!decoder_.MaybeCreateSurface(picture_va_rt_format, new_coded_size,
                                      new_visible_size)) {
       decoder_.scoped_va_context_and_surface_.reset();
@@ -220,6 +230,7 @@ class VaapiJpegDecoderWrapper {
   }
 
   bool SubmitBuffers(const media::JpegParseResult& parse_result) {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(decoder_.decoder_sequence_checker_);
     if (!decoder_.SubmitBuffers(parse_result)) {
       decoder_.scoped_va_context_and_surface_.reset();
       return false;
@@ -228,6 +239,7 @@ class VaapiJpegDecoderWrapper {
   }
 
   bool ExecuteAndDestroyPendingBuffers() {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(decoder_.decoder_sequence_checker_);
     if (!decoder_.vaapi_wrapper_->ExecuteAndDestroyPendingBuffers(
             decoder_.scoped_va_context_and_surface_->id())) {
       decoder_.scoped_va_context_and_surface_.reset();
@@ -245,7 +257,7 @@ struct Environment {
 };
 
 DEFINE_PROTO_FUZZER(const JpegImageList& image_list) {
-  static const base::NoDestructor<Environment> env;
+  static const Environment env;
   VaapiJpegDecoderWrapper decoder_wrapper;
   if (!decoder_wrapper.Initialize()) {
     LOG(ERROR) << "Cannot initialize the VaapiJpegDecoder";

@@ -1,26 +1,25 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "dbus/bus.h"
 
 #include <memory>
+#include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/files/file_descriptor_watcher_posix.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ref_counted.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "base/threading/thread.h"
+#include "dbus/error.h"
 #include "dbus/exported_object.h"
 #include "dbus/object_path.h"
 #include "dbus/object_proxy.h"
-#include "dbus/scoped_dbus_error.h"
 #include "dbus/test_service.h"
-
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace dbus {
@@ -34,6 +33,10 @@ namespace {
 class RunLoopWithExpectedCount {
  public:
   RunLoopWithExpectedCount() : expected_quit_calls_(0), actual_quit_calls_(0) {}
+
+  RunLoopWithExpectedCount(const RunLoopWithExpectedCount&) = delete;
+  RunLoopWithExpectedCount& operator=(const RunLoopWithExpectedCount&) = delete;
+
   ~RunLoopWithExpectedCount() = default;
 
   void Run(int expected_quit_calls) {
@@ -56,8 +59,6 @@ class RunLoopWithExpectedCount {
   std::unique_ptr<base::RunLoop> run_loop_;
   int expected_quit_calls_;
   int actual_quit_calls_;
-
-  DISALLOW_COPY_AND_ASSIGN(RunLoopWithExpectedCount);
 };
 
 // Test helper for BusTest.ListenForServiceOwnerChange.
@@ -73,8 +74,7 @@ void OnServiceOwnerChanged(RunLoopWithExpectedCount* run_loop_state,
 }  // namespace
 
 TEST(BusTest, GetObjectProxy) {
-  Bus::Options options;
-  scoped_refptr<Bus> bus = new Bus(options);
+  scoped_refptr<Bus> bus = new Bus(Bus::Options());
 
   ObjectProxy* object_proxy1 =
       bus->GetObjectProxy("org.chromium.TestService",
@@ -100,8 +100,7 @@ TEST(BusTest, GetObjectProxy) {
 }
 
 TEST(BusTest, GetObjectProxyIgnoreUnknownService) {
-  Bus::Options options;
-  scoped_refptr<Bus> bus = new Bus(options);
+  scoped_refptr<Bus> bus = new Bus(Bus::Options());
 
   ObjectProxy* object_proxy1 =
       bus->GetObjectProxyWithOptions(
@@ -143,7 +142,7 @@ TEST(BusTest, RemoveObjectProxy) {
   // Create the bus.
   Bus::Options options;
   options.dbus_task_runner = dbus_thread.task_runner();
-  scoped_refptr<Bus> bus = new Bus(options);
+  scoped_refptr<Bus> bus = new Bus(std::move(options));
   ASSERT_FALSE(bus->shutdown_completed());
 
   // Try to remove a non existant object proxy should return false.
@@ -188,8 +187,7 @@ TEST(BusTest, RemoveObjectProxy) {
 }
 
 TEST(BusTest, GetExportedObject) {
-  Bus::Options options;
-  scoped_refptr<Bus> bus = new Bus(options);
+  scoped_refptr<Bus> bus = new Bus(Bus::Options());
 
   ExportedObject* object_proxy1 =
       bus->GetExportedObject(ObjectPath("/org/chromium/TestObject"));
@@ -221,7 +219,7 @@ TEST(BusTest, UnregisterExportedObject) {
   // Create the bus.
   Bus::Options options;
   options.dbus_task_runner = dbus_thread.task_runner();
-  scoped_refptr<Bus> bus = new Bus(options);
+  scoped_refptr<Bus> bus = new Bus(std::move(options));
   ASSERT_FALSE(bus->shutdown_completed());
 
   ExportedObject* object_proxy1 =
@@ -252,8 +250,7 @@ TEST(BusTest, UnregisterExportedObject) {
 }
 
 TEST(BusTest, ShutdownAndBlock) {
-  Bus::Options options;
-  scoped_refptr<Bus> bus = new Bus(options);
+  scoped_refptr<Bus> bus = new Bus(Bus::Options());
   ASSERT_FALSE(bus->shutdown_completed());
 
   // Shut down synchronously.
@@ -271,7 +268,7 @@ TEST(BusTest, ShutdownAndBlockWithDBusThread) {
   // Create the bus.
   Bus::Options options;
   options.dbus_task_runner = dbus_thread.task_runner();
-  scoped_refptr<Bus> bus = new Bus(options);
+  scoped_refptr<Bus> bus = new Bus(std::move(options));
   ASSERT_FALSE(bus->shutdown_completed());
 
   // Shut down synchronously.
@@ -280,41 +277,62 @@ TEST(BusTest, ShutdownAndBlockWithDBusThread) {
   dbus_thread.Stop();
 }
 
-TEST(BusTest, DoubleAddAndRemoveMatch) {
+TEST(BusTest, DisconnectedCallback) {
+  base::test::SingleThreadTaskEnvironment task_environment;
+  base::Thread::Options thread_options;
+  thread_options.message_pump_type = base::MessagePumpType::IO;
+  base::Thread dbus_thread("D-Bus thread");
+  dbus_thread.StartWithOptions(std::move(thread_options));
+
+  base::RunLoop run_loop;
   Bus::Options options;
-  scoped_refptr<Bus> bus = new Bus(options);
-  ScopedDBusError error;
+  options.dbus_task_runner = dbus_thread.task_runner();
+  options.disconnected_callback = run_loop.QuitClosure();
+  scoped_refptr<Bus> bus = new Bus(std::move(options));
+
+  bus->GetDBusTaskRunner()->PostTask(
+      FROM_HERE, base::BindOnce(
+                     [](Bus* bus) {
+                       ASSERT_TRUE(bus->Connect());
+                       ASSERT_TRUE(bus->SetUpAsyncOperations());
+                       bus->ClosePrivateConnection();
+                     },
+                     base::Unretained(bus.get())));
+  run_loop.Run();
+
+  bus->ShutdownOnDBusThreadAndBlock();
+  dbus_thread.Stop();
+}
+
+TEST(BusTest, DoubleAddAndRemoveMatch) {
+  scoped_refptr<Bus> bus = new Bus(Bus::Options());
+  dbus::Error error;
 
   bus->Connect();
 
   // Adds the same rule twice.
-  bus->AddMatch(
-      "type='signal',interface='org.chromium.TestService',path='/'",
-      error.get());
-  ASSERT_FALSE(error.is_set());
+  bus->AddMatch("type='signal',interface='org.chromium.TestService',path='/'",
+                &error);
+  ASSERT_FALSE(error.IsValid());
 
-  bus->AddMatch(
-      "type='signal',interface='org.chromium.TestService',path='/'",
-      error.get());
-  ASSERT_FALSE(error.is_set());
+  bus->AddMatch("type='signal',interface='org.chromium.TestService',path='/'",
+                &error);
+  ASSERT_FALSE(error.IsValid());
 
   // Removes the same rule twice.
   ASSERT_TRUE(bus->RemoveMatch(
-      "type='signal',interface='org.chromium.TestService',path='/'",
-      error.get()));
-  ASSERT_FALSE(error.is_set());
+      "type='signal',interface='org.chromium.TestService',path='/'", &error));
+  ASSERT_FALSE(error.IsValid());
 
   // The rule should be still in the bus since it was removed only once.
   // A second removal shouldn't give an error.
   ASSERT_TRUE(bus->RemoveMatch(
-      "type='signal',interface='org.chromium.TestService',path='/'",
-      error.get()));
-  ASSERT_FALSE(error.is_set());
+      "type='signal',interface='org.chromium.TestService',path='/'", &error));
+  ASSERT_FALSE(error.IsValid());
 
   // A third attemp to remove the same rule should fail.
   ASSERT_FALSE(bus->RemoveMatch(
-      "type='signal',interface='org.chromium.TestService',path='/'",
-      error.get()));
+      "type='signal',interface='org.chromium.TestService',path='/'", &error));
 
   bus->ShutdownAndBlock();
 }
@@ -326,8 +344,7 @@ TEST(BusTest, ListenForServiceOwnerChange) {
   RunLoopWithExpectedCount run_loop_state;
 
   // Create the bus.
-  Bus::Options bus_options;
-  scoped_refptr<Bus> bus = new Bus(bus_options);
+  scoped_refptr<Bus> bus = new Bus(Bus::Options());
 
   // Add a listener.
   std::string service_owner1;
@@ -394,8 +411,7 @@ TEST(BusTest, ListenForServiceOwnerChange) {
 }
 
 TEST(BusTest, GetConnectionName) {
-  Bus::Options options;
-  scoped_refptr<Bus> bus = new Bus(options);
+  scoped_refptr<Bus> bus = new Bus(Bus::Options());
 
   // Connection name is empty since bus is not connected.
   EXPECT_FALSE(bus->IsConnected());

@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,13 +9,13 @@ import android.content.Context;
 import org.chromium.base.PathUtils;
 import org.chromium.base.library_loader.LibraryLoader;
 import org.chromium.base.library_loader.LibraryProcessType;
+import org.chromium.chrome.browser.app.notifications.ContextualNotificationPermissionRequesterImpl;
+import org.chromium.chrome.browser.app.tab_activity_glue.PopupCreatorImpl;
+import org.chromium.chrome.browser.customtabs.PopupCreatorFactory;
 import org.chromium.chrome.browser.metrics.UmaUtils;
 import org.chromium.native_test.NativeBrowserTestApplication;
-import org.chromium.ui.base.ResourceBundle;
 
-/**
- * A basic chrome.browser.tests {@link android.app.Application}.
- */
+/** A basic chrome.browser.tests {@link android.app.Application}. */
 public class ChromeBrowserTestsApplication extends NativeBrowserTestApplication {
     static final String PRIVATE_DATA_DIRECTORY_SUFFIX = "android_browsertests";
 
@@ -26,15 +26,20 @@ public class ChromeBrowserTestsApplication extends NativeBrowserTestApplication 
         if (isBrowserProcess) UmaUtils.recordMainEntryPointTime();
 
         super.attachBaseContext(base);
-        LibraryLoader.getInstance().setLibraryProcessType(isBrowserProcess
-                        ? LibraryProcessType.PROCESS_BROWSER
-                        : LibraryProcessType.PROCESS_CHILD);
+        LibraryLoader.getInstance()
+                .setLibraryProcessType(
+                        isBrowserProcess
+                                ? LibraryProcessType.PROCESS_BROWSER
+                                : LibraryProcessType.PROCESS_CHILD);
         if (isBrowserProcess) {
             // Test-only stuff, see also NativeUnitTest.java.
             PathUtils.setPrivateDataDirectorySuffix(PRIVATE_DATA_DIRECTORY_SUFFIX);
-            // ResourceBundle asserts that locale paks have been given to it.
-            // In test targets there is no list of paks generated.
-            ResourceBundle.setNoAvailableLocalePaks();
+            // Some browser tests access process singletons that are normally initialized as part
+            // of Chrome startup.
+            // TODO(crbug.com/454692653): This class should share more code with the production
+            // ChromeApplicationImpl so test startup would be more similar to production.
+            ContextualNotificationPermissionRequesterImpl.initialize();
+            PopupCreatorFactory.setInstance(new PopupCreatorImpl());
         }
     }
 }

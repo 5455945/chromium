@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,10 +15,6 @@ Dictionary::Dictionary(v8::Isolate* isolate,
     : isolate_(isolate),
       object_(object) {
 }
-
-Dictionary::Dictionary(const Dictionary& other) = default;
-
-Dictionary::~Dictionary() = default;
 
 Dictionary Dictionary::CreateEmpty(v8::Isolate* isolate) {
   Dictionary dictionary(isolate);

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -27,8 +27,11 @@ void FakeXRSensorProvider::Bind(
   receiver_.Bind(std::move(receiver));
 }
 
-void FakeXRSensorProvider::GetSensor(mojom::SensorType type,
-                                     GetSensorCallback callback) {
+void FakeXRSensorProvider::GetSensor(
+    mojom::SensorType type,
+    mojo::PendingReceiver<mojom::SensorClientController> controller,
+    bool initially_suspended,
+    GetSensorCallback callback) {
   callback_ = std::move(callback);
 }
 

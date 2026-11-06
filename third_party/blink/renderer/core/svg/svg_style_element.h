@@ -23,7 +23,7 @@
 
 #include "third_party/blink/renderer/core/css/style_element.h"
 #include "third_party/blink/renderer/core/svg/svg_element.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -33,6 +33,10 @@ class SVGStyleElement final : public SVGElement, public StyleElement {
  public:
   SVGStyleElement(Document&, const CreateElementFlags);
   ~SVGStyleElement() override;
+
+  ElementType GetElementType() const final {
+    return ElementType::kSVGStyleElement;
+  }
 
   using StyleElement::sheet;
 
@@ -59,7 +63,7 @@ class SVGStyleElement final : public SVGElement, public StyleElement {
   void ChildrenChanged(const ChildrenChange&) override;
 
   void FinishParsingChildren() override;
-  bool LayoutObjectIsNeeded(const ComputedStyle&) const override {
+  bool LayoutObjectIsNeeded(const DisplayStyle&) const override {
     return false;
   }
 
@@ -68,9 +72,11 @@ class SVGStyleElement final : public SVGElement, public StyleElement {
   }
   void NotifyLoadedSheetAndAllCriticalSubresources(
       LoadedSheetErrorStatus) override;
-  void StartLoadingDynamicSheet() override {
-    StyleElement::StartLoadingDynamicSheet(GetDocument());
+  void SetToPendingState() override {
+    StyleElement::SetToPendingState(GetDocument(), *this);
   }
+
+  bool IsSameObject(const Node& node) const override { return this == &node; }
 };
 
 }  // namespace blink

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,11 @@
 #define IOS_WEB_PUBLIC_TEST_FAKES_FAKE_WEB_CLIENT_H_
 
 #import <Foundation/Foundation.h>
+
+#include <optional>
 #include <vector>
 
+#import "base/memory/raw_ptr.h"
 #import "ios/web/public/web_client.h"
 #include "net/ssl/ssl_info.h"
 #include "url/gurl.h"
@@ -15,6 +18,7 @@
 namespace web {
 
 class BrowserState;
+class ExtensionController;
 
 // A WebClient used for testing purposes.
 class FakeWebClient : public web::WebClient {
@@ -30,47 +34,47 @@ class FakeWebClient : public web::WebClient {
 
   std::string GetUserAgent(UserAgentType type) const override;
 
-  // Returns |plugin_not_supported_text_| as the text to be displayed for an
-  // unsupported plugin.
-  std::u16string GetPluginNotSupportedText() const override;
-
-  base::RefCountedMemory* GetDataResourceBytes(int id) const override;
+  scoped_refptr<base::RefCountedMemory> GetDataResourceBytes(
+      int id) const override;
 
   std::vector<JavaScriptFeature*> GetJavaScriptFeatures(
       BrowserState* browser_state) const override;
 
-  NSString* GetDocumentStartScriptForMainFrame(
-      BrowserState* browser_state) const override;
-  NSString* GetDocumentStartScriptForAllFrames(
-      BrowserState* browser_state) const override;
   void PrepareErrorPage(WebState* web_state,
                         const GURL& url,
                         NSError* error,
                         bool is_post,
                         bool is_off_the_record,
-                        const absl::optional<net::SSLInfo>& info,
+                        const std::optional<net::SSLInfo>& info,
                         int64_t navigation_id,
                         base::OnceCallback<void(NSString*)> callback) override;
   UIView* GetWindowedContainer() override;
-  UserAgentType GetDefaultUserAgent(id<UITraitEnvironment> web_view,
-                                    const GURL& url) override;
-
-  // Sets |plugin_not_supported_text_|.
-  void SetPluginNotSupportedText(const std::u16string& text);
-
-  // Changes Early Page Script for testing purposes.
-  void SetEarlyPageScript(NSString* page_script);
+  bool EnableWebInspector(web::BrowserState* browser_state) const override;
+  UserAgentType GetDefaultUserAgent(web::WebState* web_state,
+                                    const GURL& url) const override;
+  bool IsSmoothScrollingSupported() const override;
+  UniversalOptOutState GetUniversalOptOutState(
+      BrowserState* browser_state) const override;
+  ExtensionController* GetExtensionController(
+      BrowserState* browser_state) const override API_AVAILABLE(ios(18.4));
 
   // Changes Java Script Features for testing.
   void SetJavaScriptFeatures(std::vector<JavaScriptFeature*> features);
 
   void SetDefaultUserAgent(UserAgentType type) { default_user_agent_ = type; }
+  void SetUniversalOptOutState(UniversalOptOutState state) {
+    universal_opt_out_state_ = state;
+  }
+  void SetExtensionController(ExtensionController* extension_controller)
+      API_AVAILABLE(ios(18.4));
 
  private:
-  std::u16string plugin_not_supported_text_;
   std::vector<JavaScriptFeature*> java_script_features_;
-  NSString* early_page_script_ = nil;
   UserAgentType default_user_agent_ = UserAgentType::MOBILE;
+  UniversalOptOutState universal_opt_out_state_ =
+      UniversalOptOutState::kNotEligible;
+  API_AVAILABLE(ios(18.4))
+  raw_ptr<ExtensionController> extension_controller_ = nullptr;
 };
 
 }  // namespace web

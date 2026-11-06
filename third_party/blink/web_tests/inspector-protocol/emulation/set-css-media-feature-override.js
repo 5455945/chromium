@@ -1,8 +1,18 @@
-(async function(testRunner) {
+(async function(/** @type {import('test_runner').TestRunner} */ testRunner) {
   const {page, session, dp} = await testRunner.startBlank(
       'Tests that CSS media features can be overridden.');
 
   await session.navigate('../resources/css-media-features.html');
+
+  // For each emulated media feature, produce a list of corresponding
+  // custom properties to inspect.
+  async function formatComputedValues(features) {
+    let props = features.map(f => `--${f}`);
+    let values = [];
+    for (let prop of props)
+      values.push(await session.evaluate(`getComputedStyle(p).getPropertyValue('${prop}')`));
+    return values.join('; ');
+  }
 
   async function setEmulatedMediaFeature(feature, value) {
     await dp.Emulation.setEmulatedMedia({
@@ -17,9 +27,8 @@
     const code = `matchMedia(${JSON.stringify(mediaQuery)}).matches`;
     const result = await session.evaluate(code);
     testRunner.log(`${code}: ${result}`);
-    const width = await session.evaluate('getComputedStyle(p).width');
-    const height = await session.evaluate('getComputedStyle(p).height');
-    testRunner.log(`${code} applied: ${width} x ${height}`);
+    const applied = await formatComputedValues([feature]);
+    testRunner.log(`${code} applied: ${applied}`);
   }
 
   async function setEmulatedMediaFeatures({ features, mediaQuery }) {
@@ -29,9 +38,8 @@
     const code = `matchMedia(${JSON.stringify(mediaQuery)}).matches`;
     const result = await session.evaluate(code);
     testRunner.log(`${code}: ${result}`);
-    const width = await session.evaluate('getComputedStyle(p).width');
-    const height = await session.evaluate('getComputedStyle(p).height');
-    testRunner.log(`${code} applied: ${width} x ${height}`);
+    const applied = await formatComputedValues(features.map(f => f.name));
+    testRunner.log(`${code} applied: ${applied}`);
   }
 
   // Test `prefers-color-scheme`.
@@ -48,6 +56,29 @@
   await setEmulatedMediaFeature('prefers-reduced-motion', 'no-preference');
   await setEmulatedMediaFeature('prefers-reduced-motion', 'reduce');
   await setEmulatedMediaFeature('prefers-reduced-motion', '__invalid__');
+
+  // Test `prefers-reduced-data`.
+  // https://drafts.csswg.org/mediaqueries-5/#prefers-reduced-data
+  await setEmulatedMediaFeature('prefers-reduced-data', '__invalid__');
+  await setEmulatedMediaFeature('prefers-reduced-data', 'no-preference');
+  await setEmulatedMediaFeature('prefers-reduced-data', 'reduce');
+  await setEmulatedMediaFeature('prefers-reduced-data', '__invalid__');
+
+  // Test `prefers-reduced-transparency`.
+  // https://drafts.csswg.org/mediaqueries-5/#prefers-reduced-transparency
+  await setEmulatedMediaFeature('prefers-reduced-transparency', '__invalid__');
+  await setEmulatedMediaFeature('prefers-reduced-transparency', 'no-preference');
+  await setEmulatedMediaFeature('prefers-reduced-transparency', 'reduce');
+  await setEmulatedMediaFeature('prefers-reduced-transparency', '__invalid__');
+
+  // Test `prefers-contrast`.
+  // https://drafts.csswg.org/mediaqueries-5/#prefers-contrast
+  await setEmulatedMediaFeature('prefers-contrast', '__invalid__');
+  await setEmulatedMediaFeature('prefers-contrast', 'no-preference');
+  await setEmulatedMediaFeature('prefers-contrast', 'more');
+  await setEmulatedMediaFeature('prefers-contrast', 'less');
+  await setEmulatedMediaFeature('prefers-contrast', 'custom');
+  await setEmulatedMediaFeature('prefers-contrast', '__invalid__');
 
   // Test `color-gamut`.
   // https://drafts.csswg.org/mediaqueries-5/#color-gamut

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "base/callback_forward.h"
 #include "base/component_export.h"
+#include "base/functional/callback_forward.h"
 #include "build/build_config.h"
 
 namespace storage {
@@ -20,7 +20,7 @@ constexpr size_t kDefaultMaxBlobInMemorySpace = 500u * 1024 * 1024;
 constexpr uint64_t kDefaultMaxBlobDiskSpace = 0ull;
 constexpr uint64_t kDefaultMaxPageFileSize = 100ull * 1024 * 1024;
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 // On minimal Android maximum in-memory space can be as low as 5MB.
 constexpr uint64_t kDefaultMinPageFileSize = 5ull * 1024 * 1024 / 2;
 const float kDefaultMaxBlobInMemorySpaceUnderPressureRatio = 0.02f;
@@ -45,7 +45,9 @@ struct COMPONENT_EXPORT(STORAGE_BROWSER) BlobStorageLimits {
   bool IsValid() const;
 
   size_t memory_limit_before_paging() const {
-    return max_blob_in_memory_space - min_page_file_size;
+    return max_blob_in_memory_space > min_page_file_size
+               ? max_blob_in_memory_space - min_page_file_size
+               : 0;
   }
 
   // If disk space goes less than this we stop allocating more disk quota.
@@ -102,6 +104,17 @@ enum class IPCBlobItemRequestStrategy {
   SHARED_MEMORY,
   FILE,
   LAST = FILE
+};
+
+// Used by BlobURLStoreImpl when determining how to validate Blob URLs received
+// from the renderer over Mojo.
+// TODO(crbug.com/40051700): Once fixed, remove this.
+enum class BlobURLValidityCheckBehavior {
+  DEFAULT,
+  // In cases where we know that the storage key may not be opaque when it
+  // should be, allow Blob URLs with opaque origins to be registered and
+  // revoked.
+  ALLOW_OPAQUE_ORIGIN_STORAGE_KEY_MISMATCH
 };
 
 // This is the enum to rule them all in the blob system.

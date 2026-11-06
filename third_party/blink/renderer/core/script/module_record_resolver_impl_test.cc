@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,8 +14,9 @@
 #include "third_party/blink/renderer/core/testing/module_test_base.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/bindings/v8_throw_exception.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
-#include "third_party/blink/renderer/platform/testing/testing_platform_support_with_mock_scheduler.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
+#include "third_party/blink/renderer/platform/testing/testing_platform_support.h"
 #include "v8/include/v8.h"
 
 namespace blink {
@@ -43,7 +44,7 @@ class ModuleRecordResolverImplTestModulator final : public DummyModulator {
 
  private:
   // Implements Modulator:
-  ScriptState* GetScriptState() override { return script_state_; }
+  ScriptState* GetScriptState() override { return script_state_.Get(); }
 
   KURL ResolveModuleSpecifier(const String& module_request,
                               const KURL& base_url,
@@ -78,7 +79,8 @@ ModuleScript* CreateReferrerModuleScript(Modulator* modulator,
                                          V8TestingScope& scope) {
   KURL js_url("https://example.com/referrer.js");
   v8::Local<v8::Module> referrer_record = ModuleTestBase::CompileModule(
-      scope.GetIsolate(), "import './target.js'; export const a = 42;", js_url);
+      scope.GetScriptState(), "import './target.js'; export const a = 42;",
+      js_url);
   KURL referrer_url("https://example.com/referrer.js");
   auto* referrer_module_script =
       JSModuleScript::CreateForTest(modulator, referrer_record, referrer_url);
@@ -90,7 +92,7 @@ ModuleScript* CreateTargetModuleScript(Modulator* modulator,
                                        bool has_parse_error = false) {
   KURL js_url("https://example.com/target.js");
   v8::Local<v8::Module> record = ModuleTestBase::CompileModule(
-      scope.GetIsolate(), "export const pi = 3.14;", js_url);
+      scope.GetScriptState(), "export const pi = 3.14;", js_url);
   KURL url("https://example.com/target.js");
   auto* module_script = JSModuleScript::CreateForTest(modulator, record, url);
   if (has_parse_error) {
@@ -105,8 +107,10 @@ ModuleScript* CreateTargetModuleScript(Modulator* modulator,
 }  // namespace
 
 class ModuleRecordResolverImplTest : public testing::Test,
-                                     public ParametrizedModuleTest {
+                                     public ModuleTestBase {
  public:
+  ModuleRecordResolverImplTest()
+      : task_environment_(base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
   void SetUp() override;
   void TearDown() override;
 
@@ -115,22 +119,23 @@ class ModuleRecordResolverImplTest : public testing::Test,
   }
 
  protected:
-  ScopedTestingPlatformSupport<TestingPlatformSupportWithMockScheduler>
-      platform_;
+  test::TaskEnvironment task_environment_;
+  ScopedTestingPlatformSupport<TestingPlatformSupport> platform_;
   Persistent<ModuleRecordResolverImplTestModulator> modulator_;
 };
 
 void ModuleRecordResolverImplTest::SetUp() {
-  ParametrizedModuleTest::SetUp();
-  platform_->AdvanceClockSeconds(1.);  // For non-zero DocumentParserTimings
+  ModuleTestBase::SetUp();
+  task_environment_.AdvanceClock(
+      base::Seconds(1.));  // For non-zero DocumentParserTimings
   modulator_ = MakeGarbageCollected<ModuleRecordResolverImplTestModulator>();
 }
 
 void ModuleRecordResolverImplTest::TearDown() {
-  ParametrizedModuleTest::TearDown();
+  ModuleTestBase::TearDown();
 }
 
-TEST_P(ModuleRecordResolverImplTest, RegisterResolveSuccess) {
+TEST_F(ModuleRecordResolverImplTest, RegisterResolveSuccess) {
   V8TestingScope scope;
   ModuleRecordResolver* resolver =
       MakeGarbageCollected<ModuleRecordResolverImpl>(
@@ -147,19 +152,13 @@ TEST_P(ModuleRecordResolverImplTest, RegisterResolveSuccess) {
 
   v8::Local<v8::Module> resolved = resolver->Resolve(
       ModuleRequest("./target.js", TextPosition::MinimumPosition(),
-                    Vector<ImportAssertion>()),
+                    Vector<ImportAttribute>()),
       referrer_module_script->V8Module(), scope.GetExceptionState());
   EXPECT_FALSE(scope.GetExceptionState().HadException());
   EXPECT_EQ(resolved, target_module_script->V8Module());
   EXPECT_EQ(1, modulator_->GetFetchedModuleScriptCalled());
-  EXPECT_EQ(modulator_->FetchedUrl(), target_module_script->BaseURL())
+  EXPECT_EQ(modulator_->FetchedUrl(), target_module_script->BaseUrl())
       << "Unexpectedly fetched URL: " << modulator_->FetchedUrl().GetString();
 }
-
-// Instantiate tests once with TLA and once without:
-INSTANTIATE_TEST_SUITE_P(ModuleRecordResolverImplTestGroup,
-                         ModuleRecordResolverImplTest,
-                         testing::Bool(),
-                         ParametrizedModuleTestParamName());
 
 }  // namespace blink

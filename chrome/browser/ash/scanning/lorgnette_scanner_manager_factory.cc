@@ -1,15 +1,16 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/scanning/lorgnette_scanner_manager_factory.h"
 
-#include "base/memory/singleton.h"
+#include "base/check_deref.h"
+#include "base/no_destructor.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/scanning/lorgnette_scanner_manager.h"
 #include "chrome/browser/ash/scanning/zeroconf_scanner_detector.h"
 #include "chrome/browser/profiles/profile.h"
-#include "components/keyed_service/content/browser_context_dependency_manager.h"
+#include "chrome/browser/profiles/profile_selections.h"
 #include "content/public/browser/browser_context.h"
 
 namespace ash {
@@ -24,27 +25,33 @@ LorgnetteScannerManager* LorgnetteScannerManagerFactory::GetForBrowserContext(
 
 // static
 LorgnetteScannerManagerFactory* LorgnetteScannerManagerFactory::GetInstance() {
-  return base::Singleton<LorgnetteScannerManagerFactory>::get();
+  static base::NoDestructor<LorgnetteScannerManagerFactory> instance;
+  return instance.get();
 }
 
 LorgnetteScannerManagerFactory::LorgnetteScannerManagerFactory()
-    : BrowserContextKeyedServiceFactory(
+    : ProfileKeyedServiceFactory(
           "LorgnetteScannerManager",
-          BrowserContextDependencyManager::GetInstance()) {}
+          ProfileSelections::Builder()
+              .WithGuest(ProfileSelection::kOriginalOnly)
+              .WithAshInternals(ProfileSelection::kNone)
+              // Prevent an instance of LorgnetteScannerManager from being
+              // created on the lock screen.
+              .Build()) {}
 
 LorgnetteScannerManagerFactory::~LorgnetteScannerManagerFactory() = default;
 
-KeyedService* LorgnetteScannerManagerFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+LorgnetteScannerManagerFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  // Prevent an instance of LorgnetteScannerManager from being created on the
-  // lock screen.
-  Profile* profile = Profile::FromBrowserContext(context);
-  if (!ProfileHelper::IsRegularProfile(profile)) {
-    return nullptr;
-  }
-
-  return LorgnetteScannerManager::Create(ZeroconfScannerDetector::Create())
-      .release();
+  auto* profile = Profile::FromBrowserContext(context);
+  // Some browser tests create profiles without corresponding users and set
+  // kIgnoreUserProfileMappingForTests. ProfileHelper honors that test-only
+  // fallback; for regular profiles it delegates to BrowserContextHelper.
+  const user_manager::User& user =
+      CHECK_DEREF(ProfileHelper::Get()->GetUserByProfile(profile));
+  return LorgnetteScannerManager::Create(ZeroconfScannerDetector::Create(),
+                                         user);
 }
 
 bool LorgnetteScannerManagerFactory::ServiceIsCreatedWithBrowserContext()

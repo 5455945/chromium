@@ -1,41 +1,62 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef BASE_FUCHSIA_SCOPED_FX_LOGGER_H_
 #define BASE_FUCHSIA_SCOPED_FX_LOGGER_H_
 
-#include <fuchsia/logger/cpp/fidl.h>
-#include <lib/syslog/logger.h>
+#include <fidl/fuchsia.logger/cpp/fidl.h>
+#include <lib/syslog/structured_backend/cpp/fuchsia_syslog.h>
+#include <lib/syslog/structured_backend/cpp/logger.h>
+#include <lib/zx/socket.h>
+#include <stdint.h>
 
-#include <memory>
+#include <string>
+#include <string_view>
+#include <vector>
 
 #include "base/base_export.h"
-#include "base/strings/string_piece_forward.h"
+#include "base/logging.h"
 
 namespace base {
 
-namespace internal {
+// Emits log lines to a logger created via the specified LogSink.
+// This class is thread-safe.
+class BASE_EXPORT ScopedFxLogger {
+ public:
+  ScopedFxLogger();
+  ~ScopedFxLogger();
 
-struct FxLoggerDeleter {
-  inline void operator()(fx_logger_t* ptr) const { fx_logger_destroy(ptr); }
+  ScopedFxLogger(ScopedFxLogger&& other);
+  ScopedFxLogger& operator=(ScopedFxLogger&& other);
+
+  // Returns an instance connected to the process' incoming LogSink service.
+  // The returned instance has a single tag attributing the calling process in
+  // some way (e.g. by Component or process name).
+  // Additional tags may optionally be specified via `tags`.
+  static ScopedFxLogger CreateForProcess(
+      std::vector<std::string_view> tags = {});
+
+  // Returns an instance connected to the specified LogSink.
+  static ScopedFxLogger CreateFromLogSink(
+      fidl::ClientEnd<fuchsia_logger::LogSink> client_end,
+      std::vector<std::string_view> tags = {});
+
+  // Logs a message to the Fuchsia logger at the specified severity. This will
+  // *not* filter the message based on Fuchsia'a configured minimum severity
+  // level; the caller should take steps to filter messages accordingly.
+  void LogMessage(std::string_view file,
+                  uint32_t line_number,
+                  std::string_view msg,
+                  logging::LogSeverity severity);
+
+  bool is_valid() const { return logger_.IsValid(); }
+
+ private:
+  ScopedFxLogger(fuchsia_logging::Logger logger) : logger_(std::move(logger)) {}
+
+  fuchsia_logging::Logger logger_;
 };
-
-}  // namespace internal
-
-using ScopedFxLogger = std::unique_ptr<fx_logger_t, internal::FxLoggerDeleter>;
-
-// Returns a new logger connected to the specified |log_sink| service.
-// The logger is initially configured to log all severities of message.
-// Returns null if creation of the new logger fails.
-BASE_EXPORT ScopedFxLogger
-CreateFxLoggerFromLogSink(::fuchsia::logger::LogSinkHandle log_sink);
-
-// Similar to CreateFxLoggerFromLogSink(), but returns a logger which annotates
-// messages with the specified |tag|, if non-empty.
-BASE_EXPORT ScopedFxLogger
-CreateFxLoggerFromLogSinkWithTag(::fuchsia::logger::LogSinkHandle log_sink,
-                                 base::StringPiece tag);
 
 }  // namespace base
 

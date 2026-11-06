@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,26 +6,35 @@
 
 #include <stdint.h>
 
+#include <cstddef>
 #include <memory>
-#include <vector>
+#include <utility>
 
+#include "base/location.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/test/task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/functional/any_invocable.h"
+#include "third_party/abseil-cpp/absl/memory/memory.h"
 #include "third_party/blink/public/platform/scheduler/test/renderer_scheduler_test_support.h"
-#include "third_party/blink/renderer/platform/peerconnection/rtc_scoped_refptr_cross_thread_copier.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
-#include "third_party/webrtc/api/array_view.h"
 #include "third_party/webrtc/api/frame_transformer_interface.h"
+#include "third_party/webrtc/api/metronome/metronome.h"
+#include "third_party/webrtc/api/scoped_refptr.h"
+#include "third_party/webrtc/api/test/mock_transformable_video_frame.h"
+#include "third_party/webrtc/api/units/time_delta.h"
 #include "third_party/webrtc/rtc_base/ref_counted_object.h"
 
+using ::testing::_;
 using ::testing::NiceMock;
 using ::testing::Return;
+using ::testing::SaveArg;
 
 namespace blink {
 
@@ -39,6 +48,7 @@ class MockWebRtcTransformedFrameCallback
  public:
   MOCK_METHOD1(OnTransformedFrame,
                void(std::unique_ptr<webrtc::TransformableFrameInterface>));
+  MOCK_METHOD0(StartShortCircuiting, void());
 };
 
 class MockTransformerCallbackHolder {
@@ -47,41 +57,37 @@ class MockTransformerCallbackHolder {
                void(std::unique_ptr<webrtc::TransformableVideoFrameInterface>));
 };
 
-// Not allowed to include
-// third_party/blink/renderer/modules/peerconnection/testing/mock_transformable_video_frame.h
-// from here.
-class MockTransformableVideoFrame
-    : public webrtc::TransformableVideoFrameInterface {
+class MockMetronome : public webrtc::Metronome {
  public:
-  MOCK_METHOD(rtc::ArrayView<const uint8_t>, GetData, (), (const override));
-  MOCK_METHOD(void, SetData, (rtc::ArrayView<const uint8_t> data), (override));
-  MOCK_METHOD(uint32_t, GetTimestamp, (), (const override));
-  MOCK_METHOD(uint32_t, GetSsrc, (), (const, override));
-  MOCK_METHOD(bool, IsKeyFrame, (), (const, override));
-  MOCK_METHOD(std::vector<uint8_t>, GetAdditionalData, (), (const, override));
-  MOCK_METHOD(const webrtc::VideoFrameMetadata&,
-              GetMetadata,
-              (),
-              (const, override));
+  MOCK_METHOD(void,
+              RequestCallOnNextTick,
+              (absl::AnyInvocable<void() &&> callback),
+              (override));
+  MOCK_METHOD(webrtc::TimeDelta, TickPeriod, (), (const, override));
 };
 
-std::unique_ptr<webrtc::TransformableVideoFrameInterface> CreateMockFrame() {
-  auto mock_frame = std::make_unique<NiceMock<MockTransformableVideoFrame>>();
+std::unique_ptr<webrtc::MockTransformableVideoFrame> CreateMockFrame() {
+  auto mock_frame =
+      std::make_unique<NiceMock<webrtc::MockTransformableVideoFrame>>();
   ON_CALL(*mock_frame.get(), GetSsrc).WillByDefault(Return(kSSRC));
   return mock_frame;
 }
 
 }  // namespace
 
-class RTCEncodedVideoStreamTransformerTest : public ::testing::Test {
+// Parameterized by bool whether to suply a metronome or not.
+class RTCEncodedVideoStreamTransformerTest
+    : public testing::TestWithParam<bool> {
  public:
   RTCEncodedVideoStreamTransformerTest()
       : main_task_runner_(
             blink::scheduler::GetSingleThreadTaskRunnerForTesting()),
         webrtc_task_runner_(base::ThreadPool::CreateSingleThreadTaskRunner({})),
         webrtc_callback_(
-            new rtc::RefCountedObject<MockWebRtcTransformedFrameCallback>()),
-        encoded_video_stream_transformer_(main_task_runner_) {}
+            new webrtc::RefCountedObject<MockWebRtcTransformedFrameCallback>()),
+        metronome_(GetParam() ? new NiceMock<MockMetronome>() : nullptr),
+        encoded_video_stream_transformer_(main_task_runner_,
+                                          absl::WrapUnique(metronome_.get())) {}
 
   void SetUp() override {
     EXPECT_FALSE(
@@ -95,9 +101,16 @@ class RTCEncodedVideoStreamTransformerTest : public ::testing::Test {
     EXPECT_FALSE(
         encoded_video_stream_transformer_.HasTransformedFrameSinkCallback(
             kNonexistentSSRC));
+    if (GetParam()) {
+      ON_CALL(*metronome_, RequestCallOnNextTick(_))
+          .WillByDefault([](absl::AnyInvocable<void()&&> callback) {
+            std::move(callback)();
+          });
+    }
   }
 
   void TearDown() override {
+    metronome_ = nullptr;
     encoded_video_stream_transformer_.UnregisterTransformedFrameSinkCallback(
         kSSRC);
     EXPECT_FALSE(
@@ -109,17 +122,23 @@ class RTCEncodedVideoStreamTransformerTest : public ::testing::Test {
   base::test::TaskEnvironment task_environment_;
   scoped_refptr<base::SingleThreadTaskRunner> main_task_runner_;
   scoped_refptr<base::SingleThreadTaskRunner> webrtc_task_runner_;
-  rtc::scoped_refptr<MockWebRtcTransformedFrameCallback> webrtc_callback_;
+  webrtc::scoped_refptr<MockWebRtcTransformedFrameCallback> webrtc_callback_;
   MockTransformerCallbackHolder mock_transformer_callback_holder_;
+  raw_ptr<MockMetronome> metronome_;
   RTCEncodedVideoStreamTransformer encoded_video_stream_transformer_;
 };
 
-TEST_F(RTCEncodedVideoStreamTransformerTest,
+INSTANTIATE_TEST_SUITE_P(MetronomeAlignment,
+                         RTCEncodedVideoStreamTransformerTest,
+                         testing::Values(true, false));
+
+TEST_P(RTCEncodedVideoStreamTransformerTest,
        TransformerForwardsFrameToTransformerCallback) {
   EXPECT_FALSE(encoded_video_stream_transformer_.HasTransformerCallback());
   encoded_video_stream_transformer_.SetTransformerCallback(
-      WTF::BindRepeating(&MockTransformerCallbackHolder::OnEncodedFrame,
-                         WTF::Unretained(&mock_transformer_callback_holder_)));
+      CrossThreadBindRepeating(
+          &MockTransformerCallbackHolder::OnEncodedFrame,
+          CrossThreadUnretained(&mock_transformer_callback_holder_)));
   EXPECT_TRUE(encoded_video_stream_transformer_.HasTransformerCallback());
 
   EXPECT_CALL(mock_transformer_callback_holder_, OnEncodedFrame);
@@ -135,10 +154,178 @@ TEST_F(RTCEncodedVideoStreamTransformerTest,
   task_environment_.RunUntilIdle();
 }
 
-TEST_F(RTCEncodedVideoStreamTransformerTest, TransformerForwardsFrameToWebRTC) {
+TEST_P(RTCEncodedVideoStreamTransformerTest, TransformerForwardsFrameToWebRTC) {
   EXPECT_CALL(*webrtc_callback_, OnTransformedFrame);
   encoded_video_stream_transformer_.SendFrameToSink(CreateMockFrame());
   task_environment_.RunUntilIdle();
+}
+
+TEST_P(RTCEncodedVideoStreamTransformerTest, IgnoresSsrcForSinglecast) {
+  EXPECT_CALL(*webrtc_callback_, OnTransformedFrame);
+  std::unique_ptr<webrtc::MockTransformableVideoFrame> mock_frame =
+      CreateMockFrame();
+  EXPECT_CALL(*mock_frame.get(), GetSsrc)
+      .WillRepeatedly(Return(kNonexistentSSRC));
+  encoded_video_stream_transformer_.SendFrameToSink(std::move(mock_frame));
+  task_environment_.RunUntilIdle();
+}
+
+TEST_P(RTCEncodedVideoStreamTransformerTest, ShortCircuitingPropagated) {
+  EXPECT_CALL(*webrtc_callback_, StartShortCircuiting);
+  encoded_video_stream_transformer_.StartShortCircuiting();
+  task_environment_.RunUntilIdle();
+}
+
+TEST_P(RTCEncodedVideoStreamTransformerTest,
+       ShortCircuitingSetOnLateRegisteredCallback) {
+  EXPECT_CALL(*webrtc_callback_, StartShortCircuiting);
+  encoded_video_stream_transformer_.StartShortCircuiting();
+
+  webrtc::scoped_refptr<MockWebRtcTransformedFrameCallback> webrtc_callback_2(
+      new webrtc::RefCountedObject<MockWebRtcTransformedFrameCallback>());
+  EXPECT_CALL(*webrtc_callback_2, StartShortCircuiting);
+  encoded_video_stream_transformer_.RegisterTransformedFrameSinkCallback(
+      webrtc_callback_2, kSSRC + 1);
+}
+
+TEST_P(RTCEncodedVideoStreamTransformerTest, WaitsForMetronomeTick) {
+  if (!GetParam()) {
+    return;
+  }
+  encoded_video_stream_transformer_.SetTransformerCallback(
+      CrossThreadBindRepeating(
+          &MockTransformerCallbackHolder::OnEncodedFrame,
+          CrossThreadUnretained(&mock_transformer_callback_holder_)));
+  ASSERT_TRUE(encoded_video_stream_transformer_.HasTransformerCallback());
+
+  // There should be no transform call initially.
+  EXPECT_CALL(mock_transformer_callback_holder_, OnEncodedFrame).Times(0);
+  absl::AnyInvocable<void() &&> callback;
+  EXPECT_CALL(*metronome_, RequestCallOnNextTick)
+      .WillOnce(
+          [&](absl::AnyInvocable<void()&&> c) { callback = std::move(c); });
+  const size_t transform_count = 5;
+  for (size_t i = 0; i < transform_count; i++) {
+    PostCrossThreadTask(
+        *webrtc_task_runner_, FROM_HERE,
+        CrossThreadBindOnce(&webrtc::FrameTransformerInterface::Transform,
+                            encoded_video_stream_transformer_.Delegate(),
+                            CreateMockFrame()));
+  }
+  task_environment_.RunUntilIdle();
+  ASSERT_TRUE(callback);
+
+  // But when the metronome ticks, all calls arrive.
+  EXPECT_CALL(mock_transformer_callback_holder_, OnEncodedFrame)
+      .Times(transform_count);
+  // Must be done on the same sequence as the transform calls.
+  PostCrossThreadTask(*webrtc_task_runner_, FROM_HERE,
+                      CrossThreadBindOnce(
+                          [](absl::AnyInvocable<void()&&>* callback) {
+                            std::move (*callback)();
+                          },
+                          CrossThreadUnretained(&callback)));
+
+  task_environment_.RunUntilIdle();
+}
+
+TEST_P(RTCEncodedVideoStreamTransformerTest,
+       FramesBufferedBeforeShortcircuiting) {
+  // Send some frames to be transformed before shortcircuiting.
+  const size_t transform_count = 5;
+  for (size_t i = 0; i < transform_count; i++) {
+    PostCrossThreadTask(
+        *webrtc_task_runner_, FROM_HERE,
+        CrossThreadBindOnce(&webrtc::FrameTransformerInterface::Transform,
+                            encoded_video_stream_transformer_.Delegate(),
+                            CreateMockFrame()));
+  }
+
+  task_environment_.RunUntilIdle();
+
+  // All frames should be passed back once short circuiting starts.
+  EXPECT_CALL(*webrtc_callback_, OnTransformedFrame).Times(transform_count);
+  EXPECT_CALL(*webrtc_callback_, StartShortCircuiting);
+  encoded_video_stream_transformer_.StartShortCircuiting();
+
+  task_environment_.RunUntilIdle();
+}
+
+TEST_P(RTCEncodedVideoStreamTransformerTest,
+       FrameArrivingAfterShortcircuitingIsPassedBack) {
+  EXPECT_CALL(*webrtc_callback_, StartShortCircuiting);
+  encoded_video_stream_transformer_.StartShortCircuiting();
+
+  // Frames passed to Transform after shortcircuting should be passed straight
+  // back.
+  PostCrossThreadTask(
+      *webrtc_task_runner_, FROM_HERE,
+      CrossThreadBindOnce(&webrtc::FrameTransformerInterface::Transform,
+                          encoded_video_stream_transformer_.Delegate(),
+                          CreateMockFrame()));
+
+  EXPECT_CALL(*webrtc_callback_, OnTransformedFrame);
+  task_environment_.RunUntilIdle();
+}
+
+TEST_P(RTCEncodedVideoStreamTransformerTest,
+       FramesBufferedBeforeSettingTransform) {
+  // Send some frames to be transformed before a transform is set.
+  const size_t transform_count = 5;
+  for (size_t i = 0; i < transform_count; i++) {
+    PostCrossThreadTask(
+        *webrtc_task_runner_, FROM_HERE,
+        CrossThreadBindOnce(&webrtc::FrameTransformerInterface::Transform,
+                            encoded_video_stream_transformer_.Delegate(),
+                            CreateMockFrame()));
+  }
+
+  task_environment_.RunUntilIdle();
+
+  // All frames should be passed as soon as a transform callback is provided
+  EXPECT_CALL(mock_transformer_callback_holder_, OnEncodedFrame)
+      .Times(transform_count);
+  encoded_video_stream_transformer_.SetTransformerCallback(
+      CrossThreadBindRepeating(
+          &MockTransformerCallbackHolder::OnEncodedFrame,
+          CrossThreadUnretained(&mock_transformer_callback_holder_)));
+}
+
+TEST_P(RTCEncodedVideoStreamTransformerTest, WorkerOutlivesDelegate) {
+  if (!GetParam()) {
+    return;
+  }
+
+  MockTransformerCallbackHolder lifecycle_callback_holder;
+  scoped_refptr<base::SingleThreadTaskRunner> main_runner =
+      blink::scheduler::GetSingleThreadTaskRunnerForTesting();
+  auto* mock_metronome = new NiceMock<MockMetronome>();
+  // Using AnyInvocable as that's what the libwebrtc Metronome
+  // interface requires.
+  absl::AnyInvocable<void() &&> metronome_callback;
+  EXPECT_CALL(*mock_metronome, RequestCallOnNextTick)
+      .WillOnce([&](absl::AnyInvocable<void() &&> c) {
+        metronome_callback = std::move(c);
+      });
+
+  auto transformer = std::make_unique<RTCEncodedVideoStreamTransformer>(
+      main_runner, absl::WrapUnique(mock_metronome));
+  transformer->SetTransformerCallback(CrossThreadBindRepeating(
+      &MockTransformerCallbackHolder::OnEncodedFrame,
+      CrossThreadUnretained(&lifecycle_callback_holder)));
+
+  // Send a frame to schedule a tick.
+  transformer->Delegate()->Transform(CreateMockFrame());
+  ASSERT_TRUE(metronome_callback);
+
+  // Destroy the transformer. This should call Disconnect() on the delegate's
+  // worker.
+  transformer.reset();
+
+  // Now fire the metronome tick. It should NOT crash and should NOT call
+  // the callback (since the transformer is gone).
+  EXPECT_CALL(lifecycle_callback_holder, OnEncodedFrame).Times(0);
+  std::move(metronome_callback)();
 }
 
 }  // namespace blink

@@ -1,4 +1,4 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,8 @@
 #define IOS_NET_COOKIES_NS_HTTP_SYSTEM_COOKIE_STORE_H_
 
 #import <Foundation/Foundation.h>
+
+#import <optional>
 
 #import "ios/net/cookies/system_cookie_store.h"
 
@@ -20,6 +22,9 @@ class NSHTTPSystemCookieStore : public net::SystemCookieStore {
   NSHTTPSystemCookieStore();
 
   explicit NSHTTPSystemCookieStore(NSHTTPCookieStorage* cookie_store);
+
+  NSHTTPSystemCookieStore(const NSHTTPSystemCookieStore&) = delete;
+  NSHTTPSystemCookieStore& operator=(const NSHTTPSystemCookieStore&) = delete;
 
   ~NSHTTPSystemCookieStore() override;
 
@@ -36,7 +41,7 @@ class NSHTTPSystemCookieStore : public net::SystemCookieStore {
 
   // Sets cookie, and calls |callback| async after that.
   void SetCookieAsync(NSHTTPCookie* cookie,
-                      const base::Time* optional_creation_time,
+                      std::optional<base::Time> optional_creation_time,
                       SystemCookieCallback callback) override;
 
   // Clears all cookies from the store and call |callback| after all cookies are
@@ -61,14 +66,12 @@ class NSHTTPSystemCookieStore : public net::SystemCookieStore {
   // if the |optional_creation_time| is nullptr, uses Time::Now() as the
   // creation time.
   void SetCookie(NSHTTPCookie* cookie,
-                 const base::Time* optional_creation_time);
+                 std::optional<base::Time> optional_creation_time);
 
   // Clears all cookies from the internal cookie store.
   void ClearStore();
 
   NSHTTPCookieStorage* cookie_store_;
-
-  DISALLOW_COPY_AND_ASSIGN(NSHTTPSystemCookieStore);
 };
 
 }  // namespace net

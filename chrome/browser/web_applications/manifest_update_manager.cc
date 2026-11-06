@@ -1,180 +1,218 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/web_applications/manifest_update_manager.h"
 
-#include "base/command_line.h"
-#include "base/containers/contains.h"
-#include "base/metrics/histogram_functions.h"
-#include "base/util/values/values_util.h"
-#include "chrome/browser/content_settings/host_content_settings_map_factory.h"
+#include <optional>
+
+#include "base/containers/map_util.h"
+#include "base/memory/weak_ptr.h"
+#include "base/types/optional_util.h"
+#include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/web_applications/components/app_registrar.h"
-#include "chrome/browser/web_applications/components/os_integration_manager.h"
-#include "chrome/browser/web_applications/components/web_app_constants.h"
-#include "chrome/browser/web_applications/system_web_apps/system_web_app_manager.h"
-#include "chrome/common/chrome_features.h"
-#include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_metrics_helper.h"
+#include "chrome/browser/web_applications/scheduler/manifest_silent_update_result.h"
+#include "chrome/browser/web_applications/web_app_command_scheduler.h"
+#include "chrome/browser/web_applications/web_app_constants.h"
+#include "chrome/browser/web_applications/web_app_filter.h"
+#include "chrome/browser/web_applications/web_app_helpers.h"
+#include "chrome/browser/web_applications/web_app_management_type.h"
+#include "chrome/browser/web_applications/web_app_provider.h"
+#include "chrome/browser/web_applications/web_app_registrar.h"
+#include "chrome/browser/web_applications/web_app_tab_helper.h"
 #include "components/content_settings/core/common/content_settings_types.h"
+#include "components/keep_alive_registry/scoped_keep_alive.h"
+#include "components/page_load_metrics/browser/metrics_web_contents_observer.h"
+#include "components/webapps/browser/features.h"
+#include "content/public/browser/web_contents.h"
+#include "third_party/blink/public/common/manifest/manifest.h"
+#include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-shared.h"
+#include "url/origin.h"
+
+class Profile;
 
 namespace web_app {
-
-constexpr base::TimeDelta kDelayBetweenChecks = base::TimeDelta::FromDays(1);
-constexpr const char kDisableManifestUpdateThrottle[] =
-    "disable-manifest-update-throttle";
 
 ManifestUpdateManager::ManifestUpdateManager() = default;
 
 ManifestUpdateManager::~ManifestUpdateManager() = default;
 
-void ManifestUpdateManager::SetSubsystems(
-    AppRegistrar* registrar,
-    AppIconManager* icon_manager,
-    WebAppUiManager* ui_manager,
-    InstallManager* install_manager,
-    SystemWebAppManager* system_web_app_manager,
-    OsIntegrationManager* os_integration_manager) {
-  registrar_ = registrar;
-  icon_manager_ = icon_manager;
-  ui_manager_ = ui_manager;
-  install_manager_ = install_manager;
-  system_web_app_manager_ = system_web_app_manager;
-  os_integration_manager_ = os_integration_manager;
+void ManifestUpdateManager::SetProvider(base::PassKey<WebAppProvider>,
+                                        WebAppProvider& provider) {
+  provider_ = &provider;
 }
 
 void ManifestUpdateManager::Start() {
-  registrar_observation_.Observe(registrar_);
-
-  DCHECK(!started_);
+  install_manager_observation_.Observe(&provider_->install_manager());
+  CHECK(!started_);
   started_ = true;
 }
 
 void ManifestUpdateManager::Shutdown() {
-  registrar_observation_.Reset();
-
-  tasks_.clear();
+  install_manager_observation_.Reset();
   started_ = false;
 }
 
-void ManifestUpdateManager::MaybeUpdate(const GURL& url,
-                                        const AppId& app_id,
-                                        content::WebContents* web_contents) {
+void ManifestUpdateManager::OnManifestSeenOnPrimaryPage(
+    content::WebContents& web_contents,
+    const blink::Manifest& manifest,
+    base::PassKey<WebAppTabHelper>) {
+  // Developer-specified manifests should always have a valid manifest URL.
+  CHECK(manifest.manifest_url().is_valid());
   if (!started_) {
     return;
   }
 
-  if (app_id.empty() || !registrar_->IsLocallyInstalled(app_id)) {
-    NotifyResult(url, app_id, ManifestUpdateResult::kNoAppInScope);
+  webapps::AppId app_id = GenerateAppIdFromManifest(manifest);
+
+  if (provider_->registrar_unsafe().AppMatches(app_id,
+                                               WebAppFilter::IsIsolatedApp())) {
     return;
   }
 
-  if (system_web_app_manager_->IsSystemWebApp(app_id)) {
-    NotifyResult(url, app_id, ManifestUpdateResult::kAppIsSystemWebApp);
+  if (provider_->registrar_unsafe().AppMatches(
+          app_id, WebAppFilter::IsIsolatedSubApp())) {
+    TriggerManifestUpdateProcess(web_contents, app_id);
     return;
   }
 
-  if (registrar_->IsPlaceholderApp(app_id)) {
-    NotifyResult(url, app_id, ManifestUpdateResult::kAppIsPlaceholder);
-    return;
-  }
+  if (!manifest.migrate_from().empty()) {
+    provider_->scheduler().ScheduleWebAppInstallFromMigrateFromField(
+        web_contents.GetWeakPtr(), manifest, base::DoNothing());
 
-  if (base::Contains(tasks_, app_id))
-    return;
-
-  if (!MaybeConsumeUpdateCheck(url.GetOrigin(), app_id)) {
-    NotifyResult(url, app_id, ManifestUpdateResult::kThrottled);
-    return;
-  }
-
-  tasks_.insert_or_assign(
-      app_id, std::make_unique<ManifestUpdateTask>(
-                  url, app_id, web_contents,
-                  base::BindOnce(&ManifestUpdateManager::OnUpdateStopped,
-                                 base::Unretained(this)),
-                  hang_update_checks_for_testing_, *registrar_, *icon_manager_,
-                  ui_manager_, install_manager_, *os_integration_manager_));
-}
-
-bool ManifestUpdateManager::IsUpdateConsumed(const AppId& app_id) {
-  absl::optional<base::Time> last_check_time = GetLastUpdateCheckTime(app_id);
-  base::Time now = time_override_for_testing_.value_or(base::Time::Now());
-  if (last_check_time.has_value() &&
-      now < *last_check_time + kDelayBetweenChecks &&
-      !base::CommandLine::ForCurrentProcess()->HasSwitch(
-          kDisableManifestUpdateThrottle)) {
-    return true;
-  }
-  return false;
-}
-
-// AppRegistrarObserver:
-void ManifestUpdateManager::OnWebAppWillBeUninstalled(const AppId& app_id) {
-  DCHECK(started_);
-
-  auto it = tasks_.find(app_id);
-  if (it != tasks_.end()) {
-    NotifyResult(it->second->url(), app_id,
-                 ManifestUpdateResult::kAppUninstalled);
-    tasks_.erase(it);
-  }
-  DCHECK(!tasks_.contains(app_id));
-  last_update_check_.erase(app_id);
-}
-
-// Throttling updates to at most once per day is consistent with Android.
-// See |UPDATE_INTERVAL| in WebappDataStorage.java.
-bool ManifestUpdateManager::MaybeConsumeUpdateCheck(const GURL& origin,
-                                                    const AppId& app_id) {
-  if (IsUpdateConsumed(app_id))
-    return false;
-
-  base::Time now = time_override_for_testing_.value_or(base::Time::Now());
-  SetLastUpdateCheckTime(origin, app_id, now);
-  return true;
-}
-
-absl::optional<base::Time> ManifestUpdateManager::GetLastUpdateCheckTime(
-    const AppId& app_id) const {
-  auto it = last_update_check_.find(app_id);
-  return it != last_update_check_.end() ? absl::optional<base::Time>(it->second)
-                                        : absl::nullopt;
-}
-
-void ManifestUpdateManager::SetLastUpdateCheckTime(const GURL& origin,
-                                                   const AppId& app_id,
-                                                   base::Time time) {
-  last_update_check_[app_id] = time;
-}
-
-void ManifestUpdateManager::OnUpdateStopped(const ManifestUpdateTask& task,
-                                            ManifestUpdateResult result) {
-  DCHECK_EQ(&task, tasks_[task.app_id()].get());
-  NotifyResult(task.url(), task.app_id(), result);
-  tasks_.erase(task.app_id());
-}
-
-void ManifestUpdateManager::SetResultCallbackForTesting(
-    ResultCallback callback) {
-  DCHECK(result_callback_for_testing_.is_null());
-  result_callback_for_testing_ = std::move(callback);
-}
-
-void ManifestUpdateManager::NotifyResult(const GURL& url,
-                                         const AppId& app_id,
-                                         ManifestUpdateResult result) {
-  // Don't log kNoAppInScope because it will be far too noisy (most page loads
-  // will hit it).
-  if (result != ManifestUpdateResult::kNoAppInScope) {
-    base::UmaHistogramEnumeration("Webapp.Update.ManifestUpdateResult", result);
-    if (registrar_->HasExternalAppWithInstallSource(
-            app_id, ExternalInstallSource::kExternalDefault)) {
-      base::UmaHistogramEnumeration(
-          "Webapp.Update.ManifestUpdateResult.DefaultApp", result);
+    WebAppTabHelper* tab_helper =
+        WebAppTabHelper::FromWebContents(&web_contents);
+    if (tab_helper && tab_helper->window_app_id().has_value()) {
+      const webapps::AppId& window_app_id = *tab_helper->window_app_id();
+      for (const auto& migrate_from : manifest.migrate_from()) {
+        std::optional<webapps::ManifestId> migrate_from_manifest_id =
+            webapps::ManifestId::Create(migrate_from.id);
+        if (!migrate_from_manifest_id.has_value()) {
+          continue;
+        }
+        if (GenerateAppIdFromManifestId(*migrate_from_manifest_id) ==
+                window_app_id &&
+            migrate_from.install_url.has_value()) {
+          std::optional<base::Time> previous_time_for_silent_icon_update =
+              base::OptionalFromPtr(base::FindOrNull(
+                  update_check_for_silent_updates_, window_app_id));
+          provider_->scheduler().FetchManifestAndUpdate(
+              *migrate_from.install_url, *migrate_from_manifest_id,
+              previous_time_for_silent_icon_update,
+              /*force_trusted_silent_update=*/false,
+              base::BindOnce(&ManifestUpdateManager::
+                                 OnMigrationFetchManifestAndUpdateComplete,
+                             weak_factory_.GetWeakPtr(), window_app_id));
+        }
+      }
     }
   }
-  if (result_callback_for_testing_)
-    std::move(result_callback_for_testing_).Run(url, result);
+  if (manifest.migrate_to() &&
+      provider_->registrar_unsafe().AppMatches(
+          GenerateAppIdFromManifest(manifest),
+          WebAppFilter::CanAppInstallTargetMigrationApp())) {
+    std::optional<webapps::ManifestId> source_manifest_id =
+        webapps::ManifestId::Create(manifest.id());
+    std::optional<webapps::ManifestId> target_manifest_id =
+        webapps::ManifestId::Create(manifest.migrate_to()->id);
+    CHECK(source_manifest_id.has_value() && target_manifest_id.has_value());
+    provider_->scheduler().ScheduleInstallMigrateToApp(
+        *source_manifest_id, *target_manifest_id,
+        manifest.migrate_to()->install_url, base::DoNothing());
+  }
+
+  TriggerManifestUpdateProcess(web_contents, app_id);
+}
+
+void ManifestUpdateManager::TriggerManifestUpdateProcess(
+    content::WebContents& web_contents,
+    const webapps::AppId& app_id) {
+  std::optional<base::Time> previous_time_for_silent_icon_update =
+      base::OptionalFromPtr(
+          base::FindOrNull(update_check_for_silent_updates_, app_id));
+
+  provider_->scheduler().ScheduleManifestSilentUpdate(
+      web_contents, previous_time_for_silent_icon_update,
+      base::BindOnce(&ManifestUpdateManager::OnManifestSilentUpdateComplete,
+                     weak_factory_.GetWeakPtr(), web_contents.GetWeakPtr(),
+                     app_id));
+}
+
+void ManifestUpdateManager::OnManifestSilentUpdateComplete(
+    base::WeakPtr<content::WebContents> contents,
+    const webapps::AppId& app_id,
+    ManifestSilentUpdateCompletionInfo completion_info) {
+  const WebAppRegistrar& registrar = provider_->registrar_unsafe();
+  const WebApp* app = registrar.GetAppById(app_id);
+
+  if (app && app->parent_app_id()) {
+    IsolatedWebAppMetricsHelper::ReportSubAppSilentUpdateResult(
+        url::Origin::Create(registrar.GetAppStartUrl(*app->parent_app_id())),
+        completion_info.result);
+  }
+
+  bool any_update_occurred;
+  switch (completion_info.result) {
+    case ManifestSilentUpdateCheckResult::kAppUpdateFailedDuringInstall:
+    case ManifestSilentUpdateCheckResult::kSystemShutdown:
+    case ManifestSilentUpdateCheckResult::kAppUpToDate:
+    case ManifestSilentUpdateCheckResult::kIconReadFromDiskFailed:
+    case ManifestSilentUpdateCheckResult::kWebContentsWasDestroyed:
+    case ManifestSilentUpdateCheckResult::kPendingIconWriteToDiskFailed:
+    case ManifestSilentUpdateCheckResult::kInvalidManifest:
+    case ManifestSilentUpdateCheckResult::kInvalidPendingUpdateInfo:
+    case ManifestSilentUpdateCheckResult::kUserNavigated:
+    case ManifestSilentUpdateCheckResult::kManifestToWebAppInstallInfoError:
+    case ManifestSilentUpdateCheckResult::kAppNotAllowedToUpdate:
+      any_update_occurred = false;
+      break;
+    case ManifestSilentUpdateCheckResult::kAppOnlyHasSecurityUpdate:
+    case ManifestSilentUpdateCheckResult::kAppSilentlyUpdated:
+    case ManifestSilentUpdateCheckResult::kAppHasNonSecurityAndSecurityChanges:
+    case ManifestSilentUpdateCheckResult::kAppHasSecurityUpdateDueToThrottle:
+    case ManifestSilentUpdateCheckResult::
+        kAppSilentlyUpdatedDueToSmallIconComparison:
+      any_update_occurred = true;
+      break;
+  }
+
+  // If a manifest update happened successfully, record feature usage of
+  // applying a manifest.
+  if (any_update_occurred && contents) {
+    page_load_metrics::MetricsWebContentsObserver::RecordFeatureUsage(
+        contents->GetPrimaryMainFrame(),
+        blink::mojom::WebFeature::kWebAppManifestUpdate);
+  }
+
+  // Track time for throttling future silent icon updates if the current update
+  // triggered a silent icon update.
+  if (completion_info.time_for_icon_diff_check.has_value()) {
+    update_check_for_silent_updates_[app_id] =
+        *completion_info.time_for_icon_diff_check;
+  }
+}
+
+void ManifestUpdateManager::OnMigrationFetchManifestAndUpdateComplete(
+    const webapps::AppId& app_id,
+    FetchManifestAndUpdateCompletionInfo completion_info) {
+  if (completion_info.time_for_icon_diff_check.has_value()) {
+    update_check_for_silent_updates_[app_id] =
+        *completion_info.time_for_icon_diff_check;
+  }
+}
+
+// WebAppInstallManager:
+void ManifestUpdateManager::OnWebAppWillBeUninstalled(
+    const webapps::AppId& app_id) {
+  CHECK(started_);
+
+  // Clear any data necessary for throttling updates for the current web app.
+  update_check_for_silent_updates_.erase(app_id);
+}
+
+void ManifestUpdateManager::OnWebAppInstallManagerDestroyed() {
+  install_manager_observation_.Reset();
 }
 
 }  // namespace web_app

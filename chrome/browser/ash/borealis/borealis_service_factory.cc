@@ -1,12 +1,13 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/borealis/borealis_service_factory.h"
 
+#include "base/no_destructor.h"
 #include "chrome/browser/ash/borealis/borealis_service_impl.h"
+#include "chrome/browser/ash/guest_os/guest_os_registry_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "components/keyed_service/content/browser_context_dependency_manager.h"
 
 namespace borealis {
 BorealisService* BorealisServiceFactory::GetForProfile(Profile* profile) {
@@ -20,17 +21,28 @@ BorealisServiceFactory* BorealisServiceFactory::GetInstance() {
   return factory.get();
 }
 
-// This service does not depend on any other services.
 BorealisServiceFactory::BorealisServiceFactory()
-    : BrowserContextKeyedServiceFactory(
+    : ProfileKeyedServiceFactory(
           "BorealisService",
-          BrowserContextDependencyManager::GetInstance()) {}
+          ProfileSelections::Builder()
+              .WithRegular(ProfileSelection::kOriginalOnly)
+              .WithGuest(ProfileSelection::kNone)
+              .WithAshInternals(ProfileSelection::kNone)
+              .WithSystem(ProfileSelection::kNone)
+              .Build()) {
+  DependsOn(guest_os::GuestOsRegistryServiceFactory::GetInstance());
+}
 
 BorealisServiceFactory::~BorealisServiceFactory() = default;
 
-KeyedService* BorealisServiceFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+BorealisServiceFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  return new BorealisServiceImpl(Profile::FromBrowserContext(context));
+  Profile* profile = Profile::FromBrowserContext(context);
+  if (!profile->IsRegularProfile()) {
+    return nullptr;
+  }
+  return std::make_unique<BorealisServiceImpl>(profile);
 }
 
 bool BorealisServiceFactory::ServiceIsCreatedWithBrowserContext() const {

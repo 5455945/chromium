@@ -1,11 +1,12 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_SUBRESOURCE_FILTER_CONTENT_BROWSER_PAGE_LOAD_STATISTICS_H_
 #define COMPONENTS_SUBRESOURCE_FILTER_CONTENT_BROWSER_PAGE_LOAD_STATISTICS_H_
 
-#include "base/macros.h"
+#include <string_view>
+
 #include "components/subresource_filter/core/mojom/subresource_filter.mojom.h"
 
 namespace subresource_filter {
@@ -15,21 +16,27 @@ namespace subresource_filter {
 // when the page load is complete (at the load event).
 class PageLoadStatistics {
  public:
-  PageLoadStatistics(const mojom::ActivationState& state);
+  PageLoadStatistics(const mojom::ActivationState& state,
+                     std::string_view uma_filter_tag);
+
+  PageLoadStatistics(const PageLoadStatistics&) = delete;
+  PageLoadStatistics& operator=(const PageLoadStatistics&) = delete;
+
   ~PageLoadStatistics();
 
   void OnDocumentLoadStatistics(
       const mojom::DocumentLoadStatistics& statistics);
-  void OnDidFinishLoad();
+  // Only collects incognito-specific metrics for a page load when
+  // `record_incognito_metrics` = true.
+  void OnDidFinishLoad(bool record_incognito_metrics = false);
 
  private:
   mojom::ActivationState activation_state_;
+  std::string_view uma_filter_tag_;
 
   // Statistics about subresource loads, aggregated across all frames of the
   // current page.
   mojom::DocumentLoadStatistics aggregated_document_statistics_;
-
-  DISALLOW_COPY_AND_ASSIGN(PageLoadStatistics);
 };
 
 }  // namespace subresource_filter

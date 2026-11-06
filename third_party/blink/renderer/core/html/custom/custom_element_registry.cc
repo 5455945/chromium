@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,29 +24,39 @@
 #include "third_party/blink/renderer/core/html/custom/custom_element_definition_builder.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element_descriptor.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element_reaction_stack.h"
+#include "third_party/blink/renderer/core/html/custom/custom_element_registry_assignment.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element_upgrade_sorter.h"
 #include "third_party/blink/renderer/core/html_element_type_helpers.h"
+#include "third_party/blink/renderer/platform/bindings/dom_wrapper_world.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
-#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 
 namespace blink {
 
 namespace {
 
-void CollectUpgradeCandidateInNode(Node& root,
+void CollectUpgradeCandidateInNode(CustomElementRegistry* registry,
+                                   Node& root,
                                    HeapVector<Member<Element>>& candidates) {
+  // 1-1. If candidate is not an Element node, then continue.
+  // 1-2. If candidate's custom element registry is not this, then continue.
   if (auto* root_element = DynamicTo<Element>(root)) {
-    if (root_element->GetCustomElementState() == CustomElementState::kUndefined)
+    if (root_element->GetCustomElementState() ==
+            CustomElementState::kUndefined &&
+        root_element->customElementRegistry() == registry) {
       candidates.push_back(root_element);
+    }
     if (auto* shadow_root = root_element->GetShadowRoot()) {
-      if (shadow_root->GetType() != ShadowRootType::kUserAgent)
-        CollectUpgradeCandidateInNode(*shadow_root, candidates);
+      if (shadow_root->GetMode() != ShadowRootMode::kUserAgent) {
+        CollectUpgradeCandidateInNode(registry, *shadow_root, candidates);
+      }
     }
   }
   for (auto& element : Traversal<HTMLElement>::ChildrenOf(root))
-    CollectUpgradeCandidateInNode(element, candidates);
+    CollectUpgradeCandidateInNode(registry, element, candidates);
 }
 
 // Returns true if |name| is invalid.
@@ -57,7 +67,7 @@ bool ThrowIfInvalidName(const AtomicString& name,
     return false;
   exception_state.ThrowDOMException(
       DOMExceptionCode::kSyntaxError,
-      "\"" + name + "\" is not a valid custom element name");
+      StrCat({"\"", name, "\" is not a valid custom element name"}));
   return true;
 }
 
@@ -68,25 +78,51 @@ bool ThrowIfValidName(const AtomicString& name,
     return false;
   exception_state.ThrowDOMException(
       DOMExceptionCode::kNotSupportedError,
-      "\"" + name + "\" is a valid custom element name");
+      StrCat({"\"", name, "\" is a valid custom element name"}));
   return true;
 }
 
 }  // namespace
 
-CustomElementRegistry::CustomElementRegistry(const LocalDOMWindow* owner)
+// static
+CustomElementRegistry* CustomElementRegistry::Create(
+    ScriptState* script_state) {
+  auto* window = LocalDOMWindow::From(script_state);
+  window->document()->SetScopedCustomElementRegistryUsed();
+  return MakeGarbageCollected<CustomElementRegistry>(
+      window, script_state->World().GetWorldId());
+}
+
+CustomElementRegistry* CustomElementRegistry::DefaultRegistry(
+    Document& document) {
+  return document.customElementRegistry();
+}
+
+CustomElementRegistry::CustomElementRegistry(const LocalDOMWindow* owner,
+                                             int32_t world_id)
     : element_definition_is_running_(false),
+      world_id_(world_id),
       owner_(owner),
       upgrade_candidates_(MakeGarbageCollected<UpgradeCandidateMap>()),
-      reaction_stack_(&CustomElementReactionStack::Current()) {}
+      associated_documents_(MakeGarbageCollected<AssociatedDocumentSet>()) {}
+
+Vector<AtomicString> CustomElementRegistry::DefinedNames() const {
+  Vector<AtomicString> names;
+  for (const auto& name : name_map_.Keys()) {
+    names.push_back(name);
+  }
+  return names;
+}
 
 void CustomElementRegistry::Trace(Visitor* visitor) const {
-  visitor->Trace(definitions_);
+  visitor->Trace(constructor_map_);
+  visitor->Trace(name_map_);
   visitor->Trace(owner_);
   visitor->Trace(upgrade_candidates_);
   visitor->Trace(when_defined_promise_map_);
-  visitor->Trace(reaction_stack_);
+  visitor->Trace(associated_documents_);
   ScriptWrappable::Trace(visitor);
+  NodeRareDataField::Trace(visitor);
 }
 
 CustomElementDefinition* CustomElementRegistry::define(
@@ -100,7 +136,7 @@ CustomElementDefinition* CustomElementRegistry::define(
   return DefineInternal(script_state, name, builder, options, exception_state);
 }
 
-// http://w3c.github.io/webcomponents/spec/custom/#dfn-element-definition
+// https://html.spec.whatwg.org/C/#element-definition
 CustomElementDefinition* CustomElementRegistry::DefineInternal(
     ScriptState* script_state,
     const AtomicString& name,
@@ -119,7 +155,8 @@ CustomElementDefinition* CustomElementRegistry::DefineInternal(
   if (NameIsDefined(name)) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kNotSupportedError,
-        "the name \"" + name + "\" has already been used with this registry");
+        StrCat({"the name \"", name,
+                "\" has already been used with this registry"}));
     return nullptr;
   }
 
@@ -142,11 +179,11 @@ CustomElementDefinition* CustomElementRegistry::DefineInternal(
     if (ThrowIfValidName(AtomicString(options->extends()), exception_state))
       return nullptr;
     // 7.2. If element interface is undefined element, throw exception
-    if (htmlElementTypeForTag(extends, owner_->document()) ==
-        HTMLElementType::kHTMLUnknownElement) {
+    if (HtmlElementTypeForTag(extends, owner_->document()) ==
+        ElementType::kHTMLUnknownElement) {
       exception_state.ThrowDOMException(
           DOMExceptionCode::kNotSupportedError,
-          "\"" + extends + "\" is an HTMLUnknownElement");
+          StrCat({"\"", extends, "\" is an HTMLUnknownElement"}));
       return nullptr;
     }
     // 7.3. Set localName to extends
@@ -190,19 +227,18 @@ CustomElementDefinition* CustomElementRegistry::DefineInternal(
   }
 
   CustomElementDescriptor descriptor(name, local_name);
-  if (UNLIKELY(definitions_.size() >=
-               std::numeric_limits<CustomElementDefinition::Id>::max()))
-    return nullptr;
-  CustomElementDefinition::Id id = definitions_.size() + 1;
-  CustomElementDefinition* definition = builder.Build(descriptor, id);
+  CustomElementDefinition* definition = builder.Build(descriptor);
   CHECK(!exception_state.HadException());
   CHECK(definition->Descriptor() == descriptor);
-  if (RuntimeEnabledFeatures::CustomElementDefaultStyleEnabled() &&
-      options->hasStyles())
-    definition->SetDefaultStyleSheets(options->styles());
-  definitions_.emplace_back(definition);
-  NameIdMap::AddResult result = name_id_map_.insert(descriptor.GetName(), id);
-  CHECK(result.is_new_entry);
+
+  auto name_add_result = name_map_.insert(descriptor.GetName(), definition);
+  // This CHECK follows from the NameIsDefined call above.
+  CHECK(name_add_result.is_new_entry);
+
+  auto constructor_add_result =
+      constructor_map_.insert(builder.Constructor(), definition);
+  // This CHECK follows from the CheckConstructorNotRegistered call above.
+  CHECK(constructor_add_result.is_new_entry);
 
   if (definition->IsFormAssociated()) {
     if (Document* document = owner_->document())
@@ -217,8 +253,11 @@ CustomElementDefinition* CustomElementRegistry::DefineInternal(
   // 16: when-defined promise processing
   const auto& entry = when_defined_promise_map_.find(name);
   if (entry != when_defined_promise_map_.end()) {
-    entry->value->Resolve();
+    auto* resolver = entry->value.Get();
     when_defined_promise_map_.erase(entry);
+    // Resolve() may run synchronous JavaScript that invalidates iterators of
+    // |when_defined_promise_map_|, so it must be called after erasing |entry|.
+    resolver->Resolve(definition->GetV8CustomElementConstructor());
   }
 
   return definition;
@@ -233,6 +272,19 @@ ScriptValue CustomElementRegistry::get(const AtomicString& name) {
     return ScriptValue();
   }
   return definition->GetConstructorForScript();
+}
+
+// https://html.spec.whatwg.org/C/#dom-customelementregistry-getname
+const AtomicString& CustomElementRegistry::getName(
+    V8CustomElementConstructor* constructor) {
+  if (!constructor) {
+    return g_null_atom;
+  }
+  CustomElementDefinition* definition = DefinitionForConstructor(constructor);
+  if (!definition) {
+    return g_null_atom;
+  }
+  return definition->Descriptor().GetName();
 }
 
 // https://html.spec.whatwg.org/C/#look-up-a-custom-element-definition
@@ -254,17 +306,33 @@ CustomElementDefinition* CustomElementRegistry::DefinitionFor(
 }
 
 bool CustomElementRegistry::NameIsDefined(const AtomicString& name) const {
-  return name_id_map_.Contains(name);
+  return name_map_.Contains(name);
 }
 
 CustomElementDefinition* CustomElementRegistry::DefinitionForName(
     const AtomicString& name) const {
-  return DefinitionForId(name_id_map_.at(name));
+  const auto it = name_map_.find(name);
+  if (it == name_map_.end())
+    return nullptr;
+  return it->value.Get();
 }
 
-CustomElementDefinition* CustomElementRegistry::DefinitionForId(
-    CustomElementDefinition::Id id) const {
-  return id ? definitions_[id - 1].Get() : nullptr;
+CustomElementDefinition* CustomElementRegistry::DefinitionForConstructor(
+    V8CustomElementConstructor* constructor) const {
+  const auto it = constructor_map_.find(constructor);
+  if (it == constructor_map_.end())
+    return nullptr;
+  return it->value.Get();
+}
+
+CustomElementDefinition* CustomElementRegistry::DefinitionForConstructor(
+    v8::Local<v8::Object> constructor) const {
+  const auto it =
+      constructor_map_.Find<V8CustomElementConstructorHashTranslator>(
+          constructor);
+  if (it == constructor_map_.end())
+    return nullptr;
+  return it->value.Get();
 }
 
 void CustomElementRegistry::AddCandidate(Element& candidate) {
@@ -289,20 +357,22 @@ void CustomElementRegistry::AddCandidate(Element& candidate) {
 }
 
 // https://html.spec.whatwg.org/C/#dom-customelementsregistry-whendefined
-ScriptPromise CustomElementRegistry::whenDefined(
+ScriptPromise<V8CustomElementConstructor> CustomElementRegistry::whenDefined(
     ScriptState* script_state,
     const AtomicString& name,
     ExceptionState& exception_state) {
   if (ThrowIfInvalidName(name, false, exception_state))
-    return ScriptPromise();
-  CustomElementDefinition* definition = DefinitionForName(name);
-  if (definition)
-    return ScriptPromise::CastUndefined(script_state);
-  ScriptPromiseResolver* resolver = when_defined_promise_map_.at(name);
-  if (resolver)
-    return resolver->Promise();
+    return EmptyPromise();
+  if (CustomElementDefinition* definition = DefinitionForName(name)) {
+    return ToResolvedPromise<V8CustomElementConstructor>(
+        script_state, definition->GetV8CustomElementConstructor());
+  }
+  const auto it = when_defined_promise_map_.find(name);
+  if (it != when_defined_promise_map_.end())
+    return it->value->Promise();
   auto* new_resolver =
-      MakeGarbageCollected<ScriptPromiseResolver>(script_state);
+      MakeGarbageCollected<ScriptPromiseResolver<V8CustomElementConstructor>>(
+          script_state, exception_state.GetContext());
   when_defined_promise_map_.insert(name, new_resolver);
   return new_resolver->Promise();
 }
@@ -317,30 +387,113 @@ void CustomElementRegistry::CollectCandidates(
   for (Element* element : *it.Get()->value) {
     if (!element || !desc.Matches(*element))
       continue;
+    if ((*element).customElementRegistry() != this) {
+      // The element has been moved away from the original tree scope and no
+      // longer uses this registry.
+      continue;
+    }
     sorter.Add(element);
   }
 
   upgrade_candidates_->erase(it);
 
-  Document* document = owner_->document();
-  if (!document)
-    return;
-
-  sorter.Sorted(elements, document);
+  for (Document* document : *associated_documents_) {
+    if (document && document->GetFrame()) {
+      sorter.Sorted(elements, document);
+    }
+  }
 }
 
 // https://html.spec.whatwg.org/C/#dom-customelementregistry-upgrade
 void CustomElementRegistry::upgrade(Node* root) {
   DCHECK(root);
 
-  // 1. Let candidates be a list of all of root's shadow-including
-  // inclusive descendant elements, in tree order.
+  // 1. For each shadow-including inclusive descendant candidate of root
+  // in shadow-including tree order:
   HeapVector<Member<Element>> candidates;
-  CollectUpgradeCandidateInNode(*root, candidates);
+  CollectUpgradeCandidateInNode(this, *root, candidates);
 
-  // 2. For each candidate of candidates, try to upgrade candidate.
+  // 1-3. For each candidate of candidates, try to upgrade candidate.
   for (auto& candidate : candidates)
     CustomElement::TryToUpgrade(*candidate);
+}
+
+void CustomElementRegistry::AssociatedWith(Document& document) {
+  associated_documents_->insert(&document);
+}
+
+// Entry point of "Custom Element Registry initialization".
+// https://html.spec.whatwg.org/multipage/custom-elements.html#dom-customelementregistry-initialize
+void CustomElementRegistry::initialize(Node* root,
+                                       ExceptionState& exception_state) {
+  // 1. If this's "is scoped" is false and either root is a Document node or
+  // root's node document's custom element registry is not this, then throw a
+  // "NotSupportedError" DOMException.
+  if (IsGlobalRegistry() &&
+      (root->GetDocument().customElementRegistry() != this)) {
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kNotSupportedError,
+        "The registry provided is a global registry from another document");
+    return;
+  }
+
+  // An iframe may not be aware of the existence of a scoped registry since the
+  // the created scoped registry's local dom window is not tied to the iframe's
+  // document. In such case, when we initialize nodes in the iframe with scoped
+  // registry using CustomElementRegistry::initialize, we should let the
+  // iframe's document know that scoped registry is used.
+  if (!IsGlobalRegistry()) {
+    root->GetDocument().SetScopedCustomElementRegistryUsed();
+  }
+
+  // 2. If root is a Document node whose custom element registry is null, then
+  // set root's custom element registry to this.
+  // 3. Otherwise, if root is a ShadowRoot node whose custom element registry is
+  // null, then set root's custom element registry to this.
+  if (auto* document = DynamicTo<Document>(root);
+      document && !document->customElementRegistry()) {
+    document->SetCustomElementRegistry(
+        CustomElementRegistryAssignment::Explicit(this));
+  } else if (auto* shadow_root = DynamicTo<ShadowRoot>(root);
+             shadow_root && !shadow_root->customElementRegistry()) {
+    shadow_root->SetCustomElementRegistry(
+        CustomElementRegistryAssignment::Explicit(this));
+  }
+
+  // 4. For each inclusive descendant inclusiveDescendant of root, in tree
+  // order.
+  for (Node& descendant : NodeTraversal::InclusiveDescendantsOf(*root)) {
+    Element* descendant_element = DynamicTo<Element>(descendant);
+
+    // 4-1. If inclusiveDescendant is an Element node, then continue.
+    if (!descendant_element) {
+      continue;
+    }
+
+    // 4-2. If inclusiveDescendant's custom element registry is null, then:
+    if (!descendant_element->customElementRegistry()) {
+      // 4-2-1. Set inclusiveDescendant's custom element registry to this.
+      descendant_element->SetCustomElementRegistry(
+          CustomElementRegistryAssignment::Explicit(this));
+      // 4-2-2. If this's "is scoped" is true, then append inclusiveDescendant's
+      // node document to this's scoped document set.
+      if (!this->IsGlobalRegistry()) {
+        this->AssociatedWith(descendant_element->GetDocument());
+      }
+    }
+
+    // 4-3. If inclusiveDescendant's custom element registry is not this, then
+    // continue.
+    if (descendant_element->customElementRegistry() != this) {
+      continue;
+    }
+
+    // 4-4. Try to upgrade inclusiveDescendant.
+    if (descendant_element->GetCustomElementState() ==
+        CustomElementState::kUndefined) {
+      CustomElement::TryToUpgrade(*descendant_element);
+    }
+  }
 }
 
 }  // namespace blink

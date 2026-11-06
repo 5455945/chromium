@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,31 +7,32 @@
 #include <inttypes.h>
 #include <stddef.h>
 
+#include <string>
 #include <utility>
-#include <vector>
 
-#include "base/android/jni_array.h"
-#include "base/android/jni_string.h"
+#include "base/debug/dump_without_crashing.h"
+#include "base/feature_list.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/stringprintf.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/memory_dump_manager.h"
 #include "base/trace_event/memory_usage_estimator.h"
 #include "base/trace_event/process_memory_dump.h"
 #include "base/trace_event/trace_event.h"
 #include "cc/resources/scoped_ui_resource.h"
 #include "cc/resources/ui_resource_manager.h"
+#include "components/viz/common/features.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
+#include "third_party/jni_zero/jni_zero.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkColorFilter.h"
-#include "ui/android/resources/ui_resource_provider.h"
-#include "ui/android/ui_android_jni_headers/ResourceManager_jni.h"
 #include "ui/android/window_android.h"
 #include "ui/gfx/android/java_bitmap.h"
-#include "ui/gfx/geometry/rect.h"
 
-using base::android::JavaArrayOfIntArrayToIntVector;
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "ui/android/ui_android_jni_headers/ResourceManager_jni.h"
+
 using base::android::JavaRef;
 
 namespace {
@@ -60,22 +61,22 @@ namespace ui {
 // static
 ResourceManagerImpl* ResourceManagerImpl::FromJavaObject(
     const JavaRef<jobject>& jobj) {
-  return reinterpret_cast<ResourceManagerImpl*>(
-      Java_ResourceManager_getNativePtr(base::android::AttachCurrentThread(),
-                                        jobj));
+  if (jobj.is_null()) {
+    return nullptr;
+  }
+  return Java_ResourceManager_getNativePtr(base::android::AttachCurrentThread(),
+                                           jobj);
 }
 
-ResourceManagerImpl::ResourceManagerImpl(gfx::NativeWindow native_window)
-    : ui_resource_manager_(nullptr) {
+ResourceManagerImpl::ResourceManagerImpl(gfx::NativeWindow native_window) {
   JNIEnv* env = base::android::AttachCurrentThread();
   java_obj_.Reset(
       env, Java_ResourceManager_create(env, native_window->GetJavaObject(),
-                                       reinterpret_cast<intptr_t>(this))
-               .obj());
-  DCHECK(!java_obj_.is_null());
+                                       jni_zero::MakeRaw(this)));
+  CHECK(!java_obj_.is_null(), base::NotFatalUntil::M163);
   base::trace_event::MemoryDumpManager::GetInstance()->RegisterDumpProvider(
       this, "android::ResourceManagerImpl",
-      base::ThreadTaskRunnerHandle::Get());
+      base::SingleThreadTaskRunner::GetCurrentDefault());
 }
 
 ResourceManagerImpl::~ResourceManagerImpl() {
@@ -85,8 +86,8 @@ ResourceManagerImpl::~ResourceManagerImpl() {
 }
 
 void ResourceManagerImpl::Init(cc::UIResourceManager* ui_resource_manager) {
-  DCHECK(!ui_resource_manager_);
-  DCHECK(ui_resource_manager);
+  CHECK(!ui_resource_manager_, base::NotFatalUntil::M163);
+  CHECK(ui_resource_manager, base::NotFatalUntil::M163);
   ui_resource_manager_ = ui_resource_manager;
 }
 
@@ -97,11 +98,10 @@ ResourceManagerImpl::GetJavaObject() {
 
 Resource* ResourceManagerImpl::GetResource(AndroidResourceType res_type,
                                            int res_id) {
-  DCHECK_GE(res_type, ANDROID_RESOURCE_TYPE_FIRST);
-  DCHECK_LE(res_type, ANDROID_RESOURCE_TYPE_LAST);
+  CHECK_GE(res_type, ANDROID_RESOURCE_TYPE_FIRST, base::NotFatalUntil::M163);
+  CHECK_LE(res_type, ANDROID_RESOURCE_TYPE_LAST, base::NotFatalUntil::M163);
 
-  std::unordered_map<int, std::unique_ptr<Resource>>::iterator item =
-      resources_[res_type].find(res_id);
+  auto item = resources_[res_type].find(res_id);
 
   if (item == resources_[res_type].end() ||
       res_type == ANDROID_RESOURCE_TYPE_DYNAMIC ||
@@ -110,47 +110,61 @@ Resource* ResourceManagerImpl::GetResource(AndroidResourceType res_type,
 
     // Check if the resource has been added (some dynamic may not have been).
     item = resources_[res_type].find(res_id);
-    if (item == resources_[res_type].end())
+    if (item == resources_[res_type].end()) {
       return nullptr;
+    }
   }
 
   return item->second.get();
 }
 
 void ResourceManagerImpl::RemoveUnusedTints() {
-  // Iterate over the currently cached tints and remove ones that were not
-  // used as defined in |used_tints|.
-  for (auto it = tinted_resources_.cbegin(); it != tinted_resources_.cend();) {
-    if (used_tints_.find(it->first) == used_tints_.end()) {
-      it = tinted_resources_.erase(it);
-    } else {
-      ++it;
-    }
+  for (const auto& [res_id, tint_color] : tinted_resources_to_keep_) {
+    used_tints_.insert(tint_color);
   }
+
+  // Iterate over the currently cached tints and remove ones that were not
+  // used as defined in `used_tints_`.
+  absl::erase_if(tinted_resources_, [this](const auto& entry) {
+    return !used_tints_.contains(entry.first);
+  });
 }
 
 void ResourceManagerImpl::OnFrameUpdatesFinished() {
+  if (tinted_resources_.empty()) {
+    used_tints_.clear();
+    return;
+  }
   RemoveUnusedTints();
   used_tints_.clear();
 }
 
 Resource* ResourceManagerImpl::GetStaticResourceWithTint(int res_id,
                                                          SkColor tint_color) {
-  if (tinted_resources_.find(tint_color) == tinted_resources_.end()) {
-    tinted_resources_[tint_color] = std::make_unique<ResourceMap>();
+  return GetStaticResourceWithTint(res_id, tint_color, false);
+}
+
+Resource* ResourceManagerImpl::GetStaticResourceWithTint(
+    int res_id,
+    SkColor tint_color,
+    bool preserve_color_alpha) {
+  std::unique_ptr<ResourceMap>& resource_map_slot =
+      tinted_resources_[tint_color];
+  if (!resource_map_slot) {
+    resource_map_slot = std::make_unique<ResourceMap>();
   }
+  ResourceMap* resource_map = resource_map_slot.get();
 
   used_tints_.insert(tint_color);
-  ResourceMap* resource_map = tinted_resources_[tint_color].get();
 
   // If the resource is already cached, use it.
-  std::unordered_map<int, std::unique_ptr<Resource>>::iterator item =
-      resource_map->find(res_id);
-  if (item != resource_map->end())
+  auto item = resource_map->find(res_id);
+  if (item != resource_map->end()) {
     return item->second.get();
+  }
 
   Resource* base_image = GetResource(ANDROID_RESOURCE_TYPE_STATIC, res_id);
-  DCHECK(base_image);
+  CHECK(base_image, base::NotFatalUntil::M163);
 
   std::unique_ptr<Resource> tinted_resource = base_image->CreateForCopy();
 
@@ -162,13 +176,16 @@ Resource* ResourceManagerImpl::GetStaticResourceWithTint(int res_id,
   SkCanvas canvas(tinted_bitmap);
   canvas.clear(SK_ColorTRANSPARENT);
 
-  // Build a color filter to use on the base resource. This filter multiplies
-  // the RGB components by the components of the new color but retains the
-  // alpha of the original image.
+  // Build a color filter to use on the base resource. This filter ignores
+  // the original image's RGB components, instead using the components of the
+  // new color. The alpha of the original image will be conditionally preserved
+  // based on preserve_color_alpha.
+  float alpha_multiplier =
+      preserve_color_alpha ? SkColorGetA(tint_color) * (1.0f / 255) : 1;
   float color_matrix[20] = {0, 0, 0, 0, SkColorGetR(tint_color) * (1.0f / 255),
                             0, 0, 0, 0, SkColorGetG(tint_color) * (1.0f / 255),
                             0, 0, 0, 0, SkColorGetB(tint_color) * (1.0f / 255),
-                            0, 0, 0, 1, 0};
+                            0, 0, 0, alpha_multiplier, 0};
   SkPaint color_filter;
   color_filter.setColorFilter(SkColorFilters::Matrix(color_matrix));
 
@@ -184,61 +201,78 @@ Resource* ResourceManagerImpl::GetStaticResourceWithTint(int res_id,
                                    cc::UIResourceBitmap(tinted_bitmap)),
       base_image->size());
 
-  (*resource_map)[res_id].swap(tinted_resource);
-
-  return (*resource_map)[res_id].get();
+  Resource* result = tinted_resource.get();
+  (*resource_map)[res_id] = std::move(tinted_resource);
+  return result;
 }
 
-void ResourceManagerImpl::ClearTintedResourceCache(JNIEnv* env,
-    const JavaRef<jobject>& jobj) {
+Resource* ResourceManagerImpl::GetAndRetainStaticResourceWithTint(
+    int res_id,
+    SkColor tint_color) {
+  tinted_resources_to_keep_[res_id] = tint_color;
+  return GetStaticResourceWithTint(res_id, tint_color);
+}
+
+void ResourceManagerImpl::ReleaseStaticResource(int res_id) {
+  tinted_resources_to_keep_.erase(res_id);
+}
+
+void ResourceManagerImpl::ClearTintedResourceCache(JNIEnv* env) {
+  tinted_resources_to_keep_.clear();
   tinted_resources_.clear();
 }
 
 void ResourceManagerImpl::PreloadResource(AndroidResourceType res_type,
                                           int res_id) {
-  DCHECK_GE(res_type, ANDROID_RESOURCE_TYPE_FIRST);
-  DCHECK_LE(res_type, ANDROID_RESOURCE_TYPE_LAST);
+  CHECK_GE(res_type, ANDROID_RESOURCE_TYPE_FIRST, base::NotFatalUntil::M163);
+  CHECK_LE(res_type, ANDROID_RESOURCE_TYPE_LAST, base::NotFatalUntil::M163);
 
   // Don't send out a query if the resource is already loaded.
-  if (resources_[res_type].find(res_id) != resources_[res_type].end())
+  if (resources_[res_type].contains(res_id)) {
     return;
+  }
 
   PreloadResourceFromJava(res_type, res_id);
 }
 
 void ResourceManagerImpl::OnResourceReady(JNIEnv* env,
-                                          const JavaRef<jobject>& jobj,
-                                          jint res_type,
-                                          jint res_id,
-                                          const JavaRef<jobject>& bitmap,
-                                          jint width,
-                                          jint height,
-                                          jlong native_resource) {
-  DCHECK_GE(res_type, ANDROID_RESOURCE_TYPE_FIRST);
-  DCHECK_LE(res_type, ANDROID_RESOURCE_TYPE_LAST);
+                                          int32_t res_type,
+                                          int32_t res_id,
+                                          SkBitmap bitmap,
+                                          int32_t width,
+                                          int32_t height,
+                                          int64_t native_resource) {
+  CHECK_GE(res_type, ANDROID_RESOURCE_TYPE_FIRST, base::NotFatalUntil::M163);
+  CHECK_LE(res_type, ANDROID_RESOURCE_TYPE_LAST, base::NotFatalUntil::M163);
   TRACE_EVENT2("ui", "ResourceManagerImpl::OnResourceReady",
                "resource_type", res_type,
                "resource_id", res_id);
 
-  resources_[res_type][res_id] =
-      base::WrapUnique(reinterpret_cast<Resource*>(native_resource));
-  Resource* resource = resources_[res_type][res_id].get();
+  Resource* resource = reinterpret_cast<Resource*>(native_resource);
+  resources_[res_type][res_id] = base::WrapUnique(resource);
 
-  gfx::JavaBitmap jbitmap(bitmap);
-  SkBitmap skbitmap = gfx::CreateSkBitmapFromJavaBitmap(jbitmap);
-  skbitmap.setImmutable();
+  bitmap.setImmutable();
   resource->SetUIResource(
       cc::ScopedUIResource::Create(ui_resource_manager_,
-                                   cc::UIResourceBitmap(skbitmap)),
+                                   cc::UIResourceBitmap(bitmap)),
       gfx::Size(width, height));
 }
 
-void ResourceManagerImpl::RemoveResource(
-    JNIEnv* env,
-    const base::android::JavaRef<jobject>& jobj,
-    jint res_type,
-    jint res_id) {
+void ResourceManagerImpl::RemoveResource(JNIEnv* env,
+                                         int32_t res_type,
+                                         int32_t res_id) {
   resources_[res_type].erase(res_id);
+}
+
+void ResourceManagerImpl::AssertResourceExists(JNIEnv* env,
+                                               int32_t res_type,
+                                               int32_t res_id) {
+  if (!resources_[res_type].contains(res_id)) {
+    if (base::FeatureList::IsEnabled(
+            features::kAndroidDumpForBadCompositedUiState)) {
+      base::debug::DumpWithoutCrashing();
+    }
+  }
 }
 
 bool ResourceManagerImpl::OnMemoryDump(
@@ -262,6 +296,10 @@ bool ResourceManagerImpl::OnMemoryDump(
   return true;
 }
 
+base::WeakPtr<ResourceManager> ResourceManagerImpl::GetWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
+}
+
 void ResourceManagerImpl::PreloadResourceFromJava(AndroidResourceType res_type,
                                                   int res_id) {
   TRACE_EVENT2("ui", "ResourceManagerImpl::PreloadResourceFromJava",
@@ -281,3 +319,5 @@ void ResourceManagerImpl::RequestResourceFromJava(AndroidResourceType res_type,
 }
 
 }  // namespace ui
+
+DEFINE_JNI(ResourceManager)

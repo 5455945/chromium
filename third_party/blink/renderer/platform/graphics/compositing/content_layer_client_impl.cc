@@ -1,35 +1,61 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/platform/graphics/compositing/content_layer_client_impl.h"
 
 #include <memory>
+#include <optional>
 
-#include "base/bind.h"
-#include "base/stl_util.h"
 #include "base/trace_event/traced_value.h"
+#include "base/types/optional_util.h"
 #include "cc/paint/paint_flags.h"
 #include "cc/paint/paint_op_buffer.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/blink/renderer/platform/geometry/geometry_as_json.h"
+#include "third_party/blink/renderer/platform/graphics/compositing/adjust_mask_layer_geometry.h"
 #include "third_party/blink/renderer/platform/graphics/compositing/paint_chunks_to_cc_layer.h"
+#include "third_party/blink/renderer/platform/graphics/compositing/pending_layer.h"
 #include "third_party/blink/renderer/platform/graphics/logging_canvas.h"
 #include "third_party/blink/renderer/platform/graphics/paint/display_item_list.h"
 #include "third_party/blink/renderer/platform/graphics/paint/drawing_display_item.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_artifact.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_chunk_subset.h"
 #include "third_party/blink/renderer/platform/graphics/paint/raster_invalidation_tracking.h"
+#include "third_party/blink/renderer/platform/graphics/paint/scroll_paint_property_node.h"
 #include "third_party/blink/renderer/platform/json/json_values.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+
+#if DCHECK_IS_ON()
+#include "cc/paint/raster_inducing_values.h"
+#include "cc/trees/layer_tree_host.h"
+#include "cc/trees/property_tree.h"
+#endif
 
 namespace blink {
 
+namespace {
+
+bool DrawingShouldFillScrollingContentsLayer(
+    const PropertyTreeState& layer_state,
+    const cc::PictureLayer& layer) {
+  if (!layer.draws_content()) {
+    return false;
+  }
+  if (const auto* scroll_node = layer_state.Transform().ScrollNode()) {
+    // If the layer covers the whole scrolling contents area, we should fill
+    // the layer with (empty) drawing to avoid recorded bounds and tiling rect
+    // changes (which cause re-rasterization) during scroll.
+    return layer.bounds().width() >= scroll_node->ContentsRect().width() &&
+           layer.bounds().height() >= scroll_node->ContentsRect().height();
+  }
+  return false;
+}
+
+}  // namespace
+
 ContentLayerClientImpl::ContentLayerClientImpl()
     : cc_picture_layer_(cc::PictureLayer::Create(this)),
-      raster_invalidation_function_(
-          base::BindRepeating(&ContentLayerClientImpl::InvalidateRect,
-                              base::Unretained(this))),
-      layer_state_(PropertyTreeState::Uninitialized()) {}
+      raster_invalidator_(MakeGarbageCollected<RasterInvalidator>(*this)) {}
 
 ContentLayerClientImpl::~ContentLayerClientImpl() {
   cc_picture_layer_->ClearClient();
@@ -39,66 +65,84 @@ void ContentLayerClientImpl::AppendAdditionalInfoAsJSON(
     LayerTreeFlags flags,
     const cc::Layer& layer,
     JSONObject& json) const {
-#if DCHECK_IS_ON()
+#if EXPENSIVE_DCHECKS_ARE_ON()
   if (flags & kLayerTreeIncludesDebugInfo)
     json.SetValue("paintChunkContents", paint_chunk_debug_data_->Clone());
-#endif
+#endif  // EXPENSIVE_DCHECKS_ARE_ON()
 
   if ((flags & (kLayerTreeIncludesInvalidations |
                 kLayerTreeIncludesDetailedInvalidations)) &&
-      raster_invalidator_.GetTracking()) {
-    raster_invalidator_.GetTracking()->AsJSON(
+      raster_invalidator_->GetTracking()) {
+    raster_invalidator_->GetTracking()->AsJSON(
         &json, flags & kLayerTreeIncludesDetailedInvalidations);
   }
 
 #if DCHECK_IS_ON()
   if (flags & kLayerTreeIncludesPaintRecords) {
     LoggingCanvas canvas;
-    cc_display_item_list_->Raster(&canvas);
+    cc::RasterInducingValues raster_inducing_values;
+    for (auto& [scroll_element_id, _] :
+         cc_display_item_list_->raster_inducing_scrolls()) {
+      raster_inducing_values.scroll_offsets[scroll_element_id] =
+          layer.layer_tree_host()
+              ->property_trees()
+              ->scroll_tree()
+              .current_scroll_offset(scroll_element_id);
+    }
+    cc_display_item_list_->Raster(&canvas, /*image_provider=*/nullptr,
+                                  &raster_inducing_values);
     json.SetValue("paintRecord", canvas.Log());
   }
 #endif
 }
 
-scoped_refptr<cc::PictureLayer> ContentLayerClientImpl::UpdateCcPictureLayer(
-    const PaintChunkSubset& paint_chunks,
-    const gfx::Rect& layer_bounds,
-    const PropertyTreeState& layer_state) {
-  if (paint_chunks.begin()->is_cacheable)
-    id_.emplace(paint_chunks.begin()->id);
-  else
-    id_ = absl::nullopt;
-
-#if DCHECK_IS_ON()
+void ContentLayerClientImpl::UpdateCcPictureLayer(
+    const PendingLayer& pending_layer,
+    PropertyTreeState property_state_for_paint) {
+  const auto& paint_chunks = pending_layer.Chunks();
+  CHECK_EQ(cc_picture_layer_->client(), this);
+#if EXPENSIVE_DCHECKS_ARE_ON()
   paint_chunk_debug_data_ = std::make_unique<JSONArray>();
   for (auto it = paint_chunks.begin(); it != paint_chunks.end(); ++it) {
     auto json = std::make_unique<JSONObject>();
-    json->SetString("data", it->ToString());
-    json->SetArray("displayItems", DisplayItemList::DisplayItemsAsJSON(
-                                       it->begin_index, it.DisplayItems(),
-                                       DisplayItemList::kCompact));
+    json->SetString("data", it->ToString(paint_chunks.GetPaintArtifact()));
+    json->SetArray("displayItems",
+                   DisplayItemList::DisplayItemsAsJSON(
+                       paint_chunks.GetPaintArtifact(), it->begin_index,
+                       it.DisplayItems(), DisplayItemList::kCompact));
     paint_chunk_debug_data_->PushObject(std::move(json));
   }
-#endif
+#endif  // EXPENSIVE_DCHECKS_ARE_ON()
 
-  // The raster invalidator will only handle invalidations within a cc::Layer so
-  // we need this invalidation if the layer's properties have changed.
-  if (layer_state != layer_state_)
-    cc_picture_layer_->SetSubtreePropertyChanged();
+  auto layer_state = pending_layer.GetPropertyTreeState();
+  auto [layer_offset, layer_bounds] = pending_layer.Bounds();
+  gfx::Size old_layer_bounds = raster_invalidator_->LayerBounds();
 
-  gfx::Size old_layer_size = raster_invalidator_.LayerBounds().size();
-  DCHECK_EQ(old_layer_size, cc_picture_layer_->bounds());
-  raster_invalidator_.Generate(raster_invalidation_function_, paint_chunks,
-                               layer_bounds, layer_state);
-  layer_state_ = layer_state;
+  bool is_mask_layer = layer_state.Effect().BlendMode() == SkBlendMode::kDstIn;
+  if (is_mask_layer) {
+    AdjustMaskLayerGeometry(pending_layer.GetPropertyTreeState().Transform(),
+                            layer_offset, layer_bounds);
+  }
 
-  absl::optional<RasterUnderInvalidationCheckingParams>
+  DCHECK_EQ(old_layer_bounds, cc_picture_layer_->bounds());
+  has_empty_invalidations_ = false;
+  raster_invalidator_->Generate(paint_chunks, layer_offset, layer_bounds,
+                                layer_state);
+
+  std::optional<RasterUnderInvalidationCheckingParams>
       raster_under_invalidation_params;
   if (RuntimeEnabledFeatures::PaintUnderInvalidationCheckingEnabled()) {
     raster_under_invalidation_params.emplace(
-        *raster_invalidator_.GetTracking(),
-        IntRect(0, 0, layer_bounds.width(), layer_bounds.height()),
-        paint_chunks.begin()->id.client.DebugName());
+        *raster_invalidator_->GetTracking(), gfx::Rect(layer_bounds),
+        paint_chunks.GetPaintArtifact().ClientDebugName(
+            paint_chunks[0].id.client_id));
+  }
+
+  if (const auto* state = layer_state.Effect().canvas_drawable_paint_state()) {
+    canvas_drawable_paint_state_ =
+        std::make_unique<CanvasDrawablePaintState>(*state);
+  } else {
+    canvas_drawable_paint_state_.reset();
   }
 
   // Note: cc::Layer API assumes the layer bounds start at (0, 0), but the
@@ -106,42 +150,128 @@ scoped_refptr<cc::PictureLayer> ContentLayerClientImpl::UpdateCcPictureLayer(
   // could even be negative). Internally the generated layer translates the
   // paint chunk to align the bounding box to (0, 0) and we set the layer's
   // offset_to_transform_parent with the origin of the paint chunk here.
-  cc_picture_layer_->SetOffsetToTransformParent(
-      layer_bounds.OffsetFromOrigin());
+  cc_picture_layer_->SetOffsetToTransformParent(layer_offset);
+
+  cc_picture_layer_->SetBounds(layer_bounds);
+  cc_picture_layer_->SetHitTestOpaqueness(pending_layer.GetHitTestOpaqueness());
 
   // If nothing changed in the layer, keep the original display item list.
   // Here check layer_bounds because RasterInvalidator doesn't issue raster
   // invalidation when only layer_bounds changes.
-  if (cc_display_item_list_ && layer_bounds.size() == old_layer_size &&
-      !raster_under_invalidation_params) {
-    DCHECK_EQ(cc_picture_layer_->bounds(), layer_bounds.size());
-    return cc_picture_layer_;
+  bool may_be_unchanged =
+      cc_display_item_list_ && layer_bounds == old_layer_bounds &&
+      cc_picture_layer_->draws_content() == pending_layer.DrawsContent() &&
+      !raster_under_invalidation_params;
+  bool only_empty_invalidations =
+      has_empty_invalidations_ && cc_display_item_list_;
+  if (may_be_unchanged) {
+    DCHECK_EQ(cc_picture_layer_->bounds(), layer_bounds);
+    if (!RuntimeEnabledFeatures::RasterInducingScrollEnabled() ||
+        // See InvalidateRect().
+        !only_empty_invalidations) {
+      return;
+    }
   }
 
-  cc_display_item_list_ = PaintChunksToCcLayer::Convert(
-      paint_chunks, layer_state, layer_bounds.OffsetFromOrigin(),
-      cc::DisplayItemList::kTopLevelDisplayItemList,
-      base::OptionalOrNullptr(raster_under_invalidation_params));
+  bool had_raster_inducing_scroll = HasRasterInducingScroll();
+  auto previous_display_list = std::move(cc_display_item_list_);
+  cc_display_item_list_ = base::MakeRefCounted<cc::DisplayItemList>();
+  PaintChunksToCcLayer::ConvertInto(
+      paint_chunks, property_state_for_paint, layer_offset,
+      base::OptionalToPtr(raster_under_invalidation_params),
+      *cc_display_item_list_);
 
-  cc_picture_layer_->SetBounds(layer_bounds.size());
-  cc_picture_layer_->SetHitTestable(true);
-  cc_picture_layer_->SetIsDrawable(
-      (!layer_bounds.IsEmpty() && cc_display_item_list_->TotalOpCount()) ||
-      // Backdrop effects and filters require the layer to be drawable even if
-      // the layer draws nothing.
-      layer_state.Effect().HasBackdropEffect() ||
-      !layer_state.Effect().Filter().IsEmpty());
+  if (RuntimeEnabledFeatures::RasterInducingScrollEnabled()) {
+    if ((had_raster_inducing_scroll || HasRasterInducingScroll()) &&
+        only_empty_invalidations) {
+      // See InvalidateRect().
+      cc_picture_layer_->SetForceUpdateRecordingSource();
+    } else if (may_be_unchanged) {
+      // Still use the original display item list to save memory.
+      cc_display_item_list_ = std::move(previous_display_list);
+      return;
+    }
+  }
 
-  return cc_picture_layer_;
+  // DrawingShouldFillScrollingContentsLayer() depends on this.
+  cc_picture_layer_->SetIsDrawable(pending_layer.DrawsContent());
+
+  if (is_mask_layer || DrawingShouldFillScrollingContentsLayer(
+                           layer_state, *cc_picture_layer_)) {
+    cc_display_item_list_->StartPaint();
+    cc_display_item_list_->push<cc::NoopOp>();
+    cc_display_item_list_->EndPaintOfUnpaired(gfx::Rect(layer_bounds));
+  }
+  cc_display_item_list_->Finalize();
+
+  cc_picture_layer_->SetBackgroundColor(pending_layer.ComputeBackgroundColor());
+  bool contents_opaque =
+      // If the background color is transparent, don't treat the layer as opaque
+      // because we won't have a good SafeOpaqueBackgroundColor() to fill the
+      // subpixels along the edges in case the layer is not aligned to whole
+      // pixels during rasterization.
+      cc_picture_layer_->background_color() != SkColors::kTransparent &&
+      pending_layer.RectKnownToBeOpaque().Contains(
+          gfx::RectF(gfx::PointAtOffsetFromOrigin(layer_offset),
+                     gfx::SizeF(layer_bounds)));
+  cc_picture_layer_->SetContentsOpaque(contents_opaque);
+  if (!contents_opaque) {
+    cc_picture_layer_->SetContentsOpaqueForText(
+        cc_display_item_list_->has_draw_text_ops() &&
+        pending_layer.TextKnownToBeOnOpaqueBackground());
+  }
 }
 
-void ContentLayerClientImpl::InvalidateRect(const IntRect& rect) {
+bool ContentLayerClientImpl::HasRasterInducingScroll() const {
+  return cc_display_item_list_ &&
+         !cc_display_item_list_->raster_inducing_scrolls().empty();
+}
+
+void ContentLayerClientImpl::InvalidateRect(const gfx::Rect& rect) {
+  if (rect.IsEmpty()) {
+    // In RasterInducingScroll, even the visual rect is empty, paint operations
+    // about DrawScrollingContentsOp may change in the following cases:
+    // - the existence of a raster-inducing scroller changes while the scroller
+    //   doesn't have any visual rendering for now;
+    // - a scrolling content out of the scrollport of a raster-inducing
+    //   scroller changes.
+    // Set a flag so that UpdateCcPictureLayer can force update of the layer to
+    // ensure the recording source is up to date.
+    if (RuntimeEnabledFeatures::RasterInducingScrollEnabled()) {
+      has_empty_invalidations_ = true;
+    }
+    return;
+  }
   cc_display_item_list_ = nullptr;
   cc_picture_layer_->SetNeedsDisplayRect(rect);
 }
 
+std::optional<CanvasDrawablePaintRecord>
+ContentLayerClientImpl::GetCanvasDrawablePaintRecord() const {
+  if (!canvas_drawable_paint_state_) {
+    return std::nullopt;
+  }
+  const bool strip_read_back_disallowed_ops =
+      RuntimeEnabledFeatures::ReadBackDisallowedMitigationEnabled();
+  gfx::Vector2dF offset = cc_picture_layer_->offset_to_transform_parent() -
+                          canvas_drawable_paint_state_->reference_box_offset;
+  cc::PaintRecord record;
+  if (offset.IsZero()) {
+    record = cc_display_item_list_->paint_op_buffer().DeepCopyAsRecord(
+        strip_read_back_disallowed_ops);
+  } else {
+    auto result = sk_make_sp<cc::PaintOpBuffer>();
+    result->push<cc::TranslateOp>(offset.x(), offset.y());
+    result->Append(cc_display_item_list_->paint_op_buffer(),
+                   strip_read_back_disallowed_ops);
+    record = result->ReleaseAsRecord();
+  }
+  return CanvasDrawablePaintRecord{*canvas_drawable_paint_state_,
+                                   std::move(record)};
+}
+
 size_t ContentLayerClientImpl::ApproximateUnsharedMemoryUsage() const {
-  return sizeof(*this) + raster_invalidator_.ApproximateUnsharedMemoryUsage() -
+  return sizeof(*this) + raster_invalidator_->ApproximateUnsharedMemoryUsage() -
          sizeof(raster_invalidator_);
 }
 

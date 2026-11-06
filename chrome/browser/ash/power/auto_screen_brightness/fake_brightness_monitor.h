@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,6 +17,10 @@ namespace auto_screen_brightness {
 class FakeBrightnessMonitor : public BrightnessMonitor {
  public:
   FakeBrightnessMonitor();
+
+  FakeBrightnessMonitor(const FakeBrightnessMonitor&) = delete;
+  FakeBrightnessMonitor& operator=(const FakeBrightnessMonitor&) = delete;
+
   ~FakeBrightnessMonitor() override;
 
   void set_status(const Status status) { brightness_monitor_status_ = status; }
@@ -44,8 +48,6 @@ class FakeBrightnessMonitor : public BrightnessMonitor {
   base::ObserverList<BrightnessMonitor::Observer> observers_;
 
   base::WeakPtrFactory<FakeBrightnessMonitor> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(FakeBrightnessMonitor);
 };
 
 }  // namespace auto_screen_brightness

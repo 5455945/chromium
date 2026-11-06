@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright (c) 2011 The Chromium Authors. All rights reserved.
+# Copyright 2011 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -12,26 +12,28 @@ from syscalls import syscalls
 
 
 def parseEvents(z):
-  crits =  { }
-  calls = { }
+  crits = {}
+  calls = {}
   for e in z:
-    if (e['eventtype'] == 'EVENT_TYPE_ENTER_CS' or
-        e['eventtype'] == 'EVENT_TYPE_TRYENTER_CS' or
-        e['eventtype'] == 'EVENT_TYPE_LEAVE_CS'):
+    if (
+      e['eventtype'] == 'EVENT_TYPE_ENTER_CS'
+      or e['eventtype'] == 'EVENT_TYPE_TRYENTER_CS'
+      or e['eventtype'] == 'EVENT_TYPE_LEAVE_CS'
+    ):
       cs = e['critical_section']
       if cs not in crits:
-        crits[cs] = [ ]
+        crits[cs] = []
       crits[cs].append(e)
 
-#  for cs, es in crits.iteritems():
-#    print('cs: 0x%08x' % cs)
-#    for e in es:
-#      print('  0x%08x - %s - %f' % (e['thread'], e['eventtype'], e['ms']))
+  #  for cs, es in crits.iteritems():
+  #    print('cs: 0x%08x' % cs)
+  #    for e in es:
+  #      print('  0x%08x - %s - %f' % (e['thread'], e['eventtype'], e['ms']))
 
   for cs, es in crits.iteritems():
     print('cs: 0x%08x' % cs)
 
-    tid_stack = [ ]
+    tid_stack = []
     for e in es:
       if e['eventtype'] == 'EVENT_TYPE_ENTER_CS':
         tid_stack.append(e)
@@ -47,7 +49,7 @@ def parseEvents(z):
 
     # Critical section left locked?
     if tid_stack:
-      #raise repr(tid_stack)
+      # raise repr(tid_stack)
       pass
 
 

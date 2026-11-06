@@ -1,8 +1,9 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/rand_util.h"
+
 #include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/perf/perf_result_reporter.h"
@@ -36,7 +37,6 @@ TEST(RandUtilPerfTest, RandUint64) {
 
 TEST(RandUtilPerfTest, InsecureRandomRandUint64) {
   base::InsecureRandomGenerator gen;
-  gen.Seed();
 
   uint64_t inclusive_or = 0;
   constexpr int kIterations = 1e7;

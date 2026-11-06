@@ -1,8 +1,10 @@
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 blink_core_sources_script = [
+  "cache_hint_attribute_value.cc",
+  "cache_hint_attribute_value.h",
   "classic_pending_script.cc",
   "classic_pending_script.h",
   "classic_script.cc",
@@ -23,12 +25,15 @@ blink_core_sources_script = [
   "ignore_destructive_write_count_incrementer.h",
   "import_map.cc",
   "import_map.h",
+  "import_map_error.cc",
+  "import_map_error.h",
   "js_module_script.cc",
   "js_module_script.h",
   "modulator.cc",
   "modulator.h",
   "modulator_impl_base.cc",
   "modulator_impl_base.h",
+  "module_import_meta.cc",
   "module_import_meta.h",
   "module_map.cc",
   "module_map.h",
@@ -56,6 +61,8 @@ blink_core_sources_script = [
   "script_scheduling_type.h",
   "value_wrapper_synthetic_module_script.cc",
   "value_wrapper_synthetic_module_script.h",
+  "wasm_module_script.cc",
+  "wasm_module_script.h",
   "worker_modulator_impl.cc",
   "worker_modulator_impl.h",
   "worklet_modulator_impl.cc",
@@ -63,4 +70,15 @@ blink_core_sources_script = [
   "xml_parser_script_runner.cc",
   "xml_parser_script_runner.h",
   "xml_parser_script_runner_host.h",
+]
+
+blink_core_tests_script = [
+  "document_modulator_impl_test.cc",
+  "document_write_intervention_test.cc",
+  "dynamic_module_resolver_test.cc",
+  "module_map_test.cc",
+  "module_record_resolver_impl_test.cc",
+  "module_script_test.cc",
+  "script_runner_test.cc",
+  "pending_script_test.cc",
 ]

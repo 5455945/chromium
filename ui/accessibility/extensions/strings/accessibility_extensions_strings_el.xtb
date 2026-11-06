@@ -9,6 +9,7 @@
 <translation id="1591070050619849194">Απενεργοποίηση όλων των κινουμένων εικόνων.</translation>
 <translation id="1703735871906654364">Περιήγηση με σύμβολα προσθήκης</translation>
 <translation id="1791496371305830581">Να επιτρέπονται όλες οι κινούμενες εικόνες.</translation>
+<translation id="1974060860693918893">Σύνθετες</translation>
 <translation id="1996252509865389616">Ενεργοποίηση;</translation>
 <translation id="2079545284768500474">Αναίρεση</translation>
 <translation id="2179565792157161713">Άνοιγμα της αναλυτικής περιγραφής σε νέα καρτέλα</translation>
@@ -26,6 +27,7 @@
 <translation id="3812541808639806898">Πρόγραμμα προβολής εναλλακτικού κειμένου εικόνων</translation>
 <translation id="381767806621926835">Κάντε δεξί κλικ σε οποιοδήποτε στοιχείο με ένα χαρακτηριστικό "longdesc" ή "aria-describedat" για να αποκτήσετε πρόσβαση στην πλήρη περιγραφή του.</translation>
 <translation id="4023902424053835668">Περιήγηση στο κείμενο των ιστοσελίδων με τα πλήκτρα βέλους.</translation>
+<translation id="4384008284958619421">Οι σύγχρονοι αναγνώστες οθόνης και το Google Chrome υποστηρίζουν πλέον εγγενώς τις προσβάσιμες περιγραφές στοιχείων και τα πρότυπα ARIA.</translation>
 <translation id="4388820049312272371">Επισήμανση της θέσης του κέρσορα με γρήγορο φλας.</translation>
 <translation id="4394049700291259645">Απενεργοποίηση</translation>
 <translation id="4769065380738716500">Οι εικόνες έχουν αντικατασταθεί από το "alt" κείμενό τους.</translation>
@@ -51,6 +53,7 @@
 <translation id="6170146920149900756">Color Enhancer</translation>
 <translation id="633394792577263429">Κρατήστε πατημένο το στοιχείο &lt;span class='key'&gt;Επιλογή&lt;/span&gt; για να μετακινηθείτε κατά λέξη.</translation>
 <translation id="6550675742724504774">Επιλογές</translation>
+<translation id="6699630355767768222">Βήμα 3: Παράκαμψη του άξονα χρώματος για τη διόρθωση.</translation>
 <translation id="6838518108677880446">Ρύθμιση:</translation>
 <translation id="690628312087070417">Όταν το σύμβολο προσθήκης μεταπηδά σε μεγάλη απόσταση:</translation>
 <translation id="6965382102122355670">OK</translation>
@@ -61,9 +64,11 @@
 <translation id="7658239707568436148">Ακύρωση</translation>
 <translation id="786423340267544509">Προσθήκη περιθωρίου σε στοιχεία με χαρακτηριστικά "aria-describedat" ή "longdesc".</translation>
 <translation id="7942349550061667556">Κόκκινο</translation>
+<translation id="8081200409424070383">Η επέκταση Εκτενείς περιγραφές θα καταργηθεί στις 20 Νοεμβρίου 2026.</translation>
 <translation id="8260673944985561857">Επιλογές περιήγησης με σύμβολα προσθήκης</translation>
 <translation id="8321034316479930120">Πολιτική κινούμενων εικόνων</translation>
 <translation id="8480209185614411573">Υψηλή αντίθεση</translation>
 <translation id="8609925175482059018">Πατήστε &lt;span class='key'&gt;F7&lt;/span&gt; για να ενεργοποιήσετε την Περιήγηση με σύμβολα προσθήκης. Πατήστε ξανά για να την απενεργοποιήσετε.</translation>
+<translation id="8798099450830957504">Προεπιλογή</translation>
 <translation id="894241283505723656">Αναλυτικές περιγραφές στο μενού περιβάλλοντος</translation>
 </translationbundle>

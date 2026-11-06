@@ -26,7 +26,7 @@
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_resource_radial_gradient.h"
 #include "third_party/blink/renderer/core/svg/radial_gradient_attributes.h"
 #include "third_party/blink/renderer/core/svg/svg_animated_length.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -65,14 +65,7 @@ SVGRadialGradientElement::SVGRadialGradientElement(Document& document)
           this,
           svg_names::kFrAttr,
           SVGLengthMode::kOther,
-          SVGLength::Initial::kPercent0)) {
-  AddToPropertyMap(cx_);
-  AddToPropertyMap(cy_);
-  AddToPropertyMap(r_);
-  AddToPropertyMap(fx_);
-  AddToPropertyMap(fy_);
-  AddToPropertyMap(fr_);
-}
+          SVGLength::Initial::kPercent0)) {}
 
 void SVGRadialGradientElement::Trace(Visitor* visitor) const {
   visitor->Trace(cx_);
@@ -90,18 +83,16 @@ void SVGRadialGradientElement::SvgAttributeChanged(
   if (attr_name == svg_names::kCxAttr || attr_name == svg_names::kCyAttr ||
       attr_name == svg_names::kFxAttr || attr_name == svg_names::kFyAttr ||
       attr_name == svg_names::kRAttr || attr_name == svg_names::kFrAttr) {
-    SVGElement::InvalidationGuard invalidation_guard(this);
-    UpdateRelativeLengthsInformation();
-    InvalidateGradient(layout_invalidation_reason::kAttributeChanged);
+    InvalidateGradient();
     return;
   }
 
   SVGGradientElement::SvgAttributeChanged(params);
 }
 
-LayoutObject* SVGRadialGradientElement::CreateLayoutObject(const ComputedStyle&,
-                                                           LegacyLayout) {
-  return new LayoutSVGResourceRadialGradient(this);
+LayoutObject* SVGRadialGradientElement::CreateLayoutObject(
+    const ComputedStyle&) {
+  return MakeGarbageCollected<LayoutSVGResourceRadialGradient>(this);
 }
 
 static void SetGradientAttributes(const SVGGradientElement& element,
@@ -132,33 +123,63 @@ static void SetGradientAttributes(const SVGGradientElement& element,
     attributes.SetFr(radial.fr()->CurrentValue());
 }
 
-void SVGRadialGradientElement::CollectGradientAttributes(
-    RadialGradientAttributes& attributes) const {
+RadialGradientAttributes SVGRadialGradientElement::CollectGradientAttributes()
+    const {
   DCHECK(GetLayoutObject());
 
   VisitedSet visited;
   const SVGGradientElement* current = this;
+  bool is_in_canvas_subtree = IsInCanvasSubtree();
 
+  RadialGradientAttributes attributes;
   while (true) {
     SetGradientAttributes(*current, attributes,
                           IsA<SVGRadialGradientElement>(*current));
     visited.insert(current);
 
     current = current->ReferencedElement();
-    // Ignore the referenced gradient element if it is not attached.
-    if (!current || !current->GetLayoutObject())
+    // Ignore the referenced gradient element if it is not attached or if we
+    // are following a reference chain that started inside the canvas subtree
+    // and an element outside the subtree is found.
+    if (!current || !current->GetLayoutObject() ||
+        (is_in_canvas_subtree && !current->IsInCanvasSubtree())) {
       break;
+    }
     // Cycle detection.
     if (visited.Contains(current))
       break;
   }
 
-  // Handle default values for fx/fy
-  if (!attributes.HasFx())
-    attributes.SetFx(attributes.Cx());
+  // Fill out any ("complex") empty fields with values from this element (where
+  // these values should equal the initial values).
+  if (!attributes.HasCx()) {
+    attributes.SetCx(cx()->CurrentValue());
+  }
+  if (!attributes.HasCy()) {
+    attributes.SetCy(cy()->CurrentValue());
+  }
+  if (!attributes.HasR()) {
+    attributes.SetR(r()->CurrentValue());
+  }
+  DCHECK(attributes.Cx());
+  DCHECK(attributes.Cy());
+  DCHECK(attributes.R());
 
-  if (!attributes.HasFy())
+  // Handle default values for fx/fy (after applying any default values for
+  // cx/cy).
+  if (!attributes.HasFx()) {
+    attributes.SetFx(attributes.Cx());
+  }
+  if (!attributes.HasFy()) {
     attributes.SetFy(attributes.Cy());
+  }
+  if (!attributes.HasFr()) {
+    attributes.SetFr(fr()->CurrentValue());
+  }
+  DCHECK(attributes.Fx());
+  DCHECK(attributes.Fy());
+  DCHECK(attributes.Fr());
+  return attributes;
 }
 
 bool SVGRadialGradientElement::SelfHasRelativeLengths() const {
@@ -167,6 +188,32 @@ bool SVGRadialGradientElement::SelfHasRelativeLengths() const {
          r_->CurrentValue()->IsRelative() ||
          fx_->CurrentValue()->IsRelative() ||
          fy_->CurrentValue()->IsRelative() || fr_->CurrentValue()->IsRelative();
+}
+
+SVGAnimatedPropertyBase* SVGRadialGradientElement::PropertyFromAttribute(
+    const QualifiedName& attribute_name) const {
+  if (attribute_name == svg_names::kCxAttr) {
+    return cx_.Get();
+  } else if (attribute_name == svg_names::kCyAttr) {
+    return cy_.Get();
+  } else if (attribute_name == svg_names::kRAttr) {
+    return r_.Get();
+  } else if (attribute_name == svg_names::kFxAttr) {
+    return fx_.Get();
+  } else if (attribute_name == svg_names::kFyAttr) {
+    return fy_.Get();
+  } else if (attribute_name == svg_names::kFrAttr) {
+    return fr_.Get();
+  } else {
+    return SVGGradientElement::PropertyFromAttribute(attribute_name);
+  }
+}
+
+void SVGRadialGradientElement::SynchronizeAllSVGAttributes() const {
+  SVGAnimatedPropertyBase* attrs[]{cx_.Get(), cy_.Get(), r_.Get(),
+                                   fx_.Get(), fy_.Get(), fr_.Get()};
+  SynchronizeListOfSVGAttributes(attrs);
+  SVGGradientElement::SynchronizeAllSVGAttributes();
 }
 
 }  // namespace blink

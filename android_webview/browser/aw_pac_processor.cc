@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,35 +9,31 @@
 #include <dlfcn.h>
 #include <netdb.h>
 #include <unistd.h>
+
 #include <cstddef>
 #include <memory>
 #include <string>
 
-#include "android_webview/browser_jni_headers/AwPacProcessor_jni.h"
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/no_destructor.h"
-#include "base/task/post_task.h"
+#include "base/memory/raw_ptr.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/threading/thread_restrictions.h"
 #include "net/base/address_list.h"
 #include "net/base/completion_once_callback.h"
 #include "net/base/net_errors.h"
-#include "net/base/network_isolation_key.h"
 #include "net/proxy_resolution/pac_file_data.h"
 #include "net/proxy_resolution/proxy_info.h"
+#include "third_party/jni_zero/default_conversions.h"
+#include "third_party/jni_zero/jni_zero.h"
 
-using base::android::AttachCurrentThread;
-using base::android::ConvertJavaStringToUTF8;
-using base::android::ConvertUTF8ToJavaString;
-using base::android::JavaParamRef;
-using base::android::JavaRef;
-using base::android::ScopedJavaGlobalRef;
-using base::android::ScopedJavaLocalRef;
-class NetworkIsolationKey;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "android_webview/browser_jni_headers/AwPacProcessor_jni.h"
 
 namespace android_webview {
 
@@ -72,15 +68,17 @@ int AndroidGetAddrInfoForNetwork(net_handle_t network,
   return getaddrinfofornetwork(network, node, service, hints, res);
 }
 
-net::IPAddress StringToIPAddress(const std::string& address) {
-  net::IPAddress ip_address;
-  if (!ip_address.AssignFromIPLiteral(std::string(address))) {
-    LOG(ERROR) << "Not a supported IP literal: " << std::string(address);
-  }
-  return ip_address;
+proxy_resolver::ProxyResolverV8TracingFactory* GetProxyResolverFactory() {
+  static std::unique_ptr<proxy_resolver::ProxyResolverV8TracingFactory>
+      factory = proxy_resolver::ProxyResolverV8TracingFactory::Create();
+
+  return factory.get();
 }
 
-scoped_refptr<base::SingleThreadTaskRunner> GetTaskRunner() {
+}  // namespace
+
+// static
+scoped_refptr<base::SingleThreadTaskRunner> AwPacProcessor::GetTaskRunner() {
   struct ThreadHolder {
     base::Thread thread_;
     scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
@@ -95,23 +93,13 @@ scoped_refptr<base::SingleThreadTaskRunner> GetTaskRunner() {
   return thread_holder.task_runner_;
 }
 
-proxy_resolver::ProxyResolverV8TracingFactory* GetProxyResolverFactory() {
-  static std::unique_ptr<proxy_resolver::ProxyResolverV8TracingFactory>
-      factory = proxy_resolver::ProxyResolverV8TracingFactory::Create();
-
-  return factory.get();
-}
-
-}  // namespace
-
 // TODO(amalova): We could use a separate thread or thread pool for executing
 // blocking DNS queries, to get better performance.
 class HostResolver : public proxy_resolver::ProxyHostResolver {
  public:
   std::unique_ptr<proxy_resolver::ProxyHostResolver::Request> CreateRequest(
       const std::string& hostname,
-      net::ProxyResolveDnsOperation operation,
-      const net::NetworkIsolationKey&) override {
+      net::ProxyResolveDnsOperation operation) override {
     return std::make_unique<RequestImpl>(hostname, operation, net_handle_,
                                          link_addresses_);
   }
@@ -170,6 +158,7 @@ class HostResolver : public proxy_resolver::ProxyHostResolver {
       // NetworkCallback#onLinkPropertiesChanged.
       // See SetNetworkAndLinkAddresses.
       if (IsNetworkSpecified()) {
+        CHECK(!link_addresses_.empty());
         results_.push_back(link_addresses_.front());
         return true;
       }
@@ -182,6 +171,7 @@ class HostResolver : public proxy_resolver::ProxyHostResolver {
 
     bool MyIpAddressExImpl() {
       if (IsNetworkSpecified()) {
+        CHECK(!link_addresses_.empty());
         results_ = link_addresses_;
         return true;
       }
@@ -193,8 +183,7 @@ class HostResolver : public proxy_resolver::ProxyHostResolver {
     }
 
     bool DnsResolveImpl(const std::string& host) {
-      struct addrinfo hints;
-      memset(&hints, 0, sizeof hints);
+      struct addrinfo hints = {};
       hints.ai_family = AF_INET;
 
       struct addrinfo* res = nullptr;
@@ -275,7 +264,7 @@ class Bindings : public proxy_resolver::ProxyResolverV8Tracing::Bindings {
   }
 
  private:
-  HostResolver* host_resolver_;
+  raw_ptr<HostResolver> host_resolver_;
 };
 
 
@@ -306,13 +295,17 @@ class Job {
   virtual ~Job() = default;
 
   bool ExecSync() {
-    GetTaskRunner()->PostTask(
+    AwPacProcessor::GetTaskRunner()->PostTask(
         FROM_HERE, base::BindOnce(&Job::Exec, base::Unretained(this)));
     event_.Wait();
     return net_error_ == net::OK;
   }
 
   void Exec() {
+    if (processor_->jobs_cancelled_) {
+      event_.Signal();
+      return;
+    }
     processor_->jobs_.insert(this);
     std::move(task_).Run();
   }
@@ -333,7 +326,7 @@ class Job {
   base::OnceClosure task_;
   int net_error_ = net::ERR_ABORTED;
   base::WaitableEvent event_;
-  AwPacProcessor* processor_;
+  raw_ptr<AwPacProcessor> processor_;
 };
 
 class SetProxyScriptJob : public Job {
@@ -384,29 +377,30 @@ AwPacProcessor::AwPacProcessor() {
 }
 
 AwPacProcessor::~AwPacProcessor() {
-  base::WaitableEvent event;
   // |proxy_resolver_| must be destroyed on the same thread it is created.
+  DCHECK(GetTaskRunner()->BelongsToCurrentThread());
+  CancelJobsOnPacThread();
+}
+
+void AwPacProcessor::DestroyNative() {
+  // Delete on the PAC thread, after the tasks already posted there, without
+  // making the caller wait.
+  GetTaskRunner()->DeleteSoon(FROM_HERE, this);
+}
+
+void AwPacProcessor::CancelJobs() {
   GetTaskRunner()->PostTask(
-      FROM_HERE,
-      base::BindOnce(&AwPacProcessor::Destroy, base::Unretained(this),
-                     base::Unretained(&event)));
-  event.Wait();
+      FROM_HERE, base::BindOnce(&AwPacProcessor::CancelJobsOnPacThread,
+                                base::Unretained(this)));
 }
 
-void AwPacProcessor::Destroy(base::WaitableEvent* event) {
-  // Cancel all unfinished jobs to unblock calling thread.
-  for (auto* job : jobs_) {
-    job->Cancel();
+void AwPacProcessor::CancelJobsOnPacThread() {
+  DCHECK(GetTaskRunner()->BelongsToCurrentThread());
+  jobs_cancelled_ = true;
+  // Job::Cancel() removes the job from |jobs_|.
+  while (!jobs_.empty()) {
+    (*jobs_.begin())->Cancel();
   }
-
-  proxy_resolver_.reset();
-  event->Signal();
-}
-
-void AwPacProcessor::DestroyNative(
-    JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& obj) {
-  delete this;
 }
 
 void AwPacProcessor::SetProxyScriptNative(
@@ -429,28 +423,25 @@ void AwPacProcessor::MakeProxyRequestNative(
 
   if (proxy_resolver_) {
     proxy_resolver_->GetProxyForURL(
-        GURL(url), net::NetworkIsolationKey(), proxy_info, std::move(complete),
-        request, std::make_unique<Bindings>(host_resolver_.get()));
+        GURL(url), proxy_info, std::move(complete), request,
+        std::make_unique<Bindings>(host_resolver_.get()));
   } else {
     std::move(complete).Run(net::ERR_FAILED);
   }
 }
 
-bool AwPacProcessor::SetProxyScript(std::string script) {
+bool AwPacProcessor::SetProxyScript(const std::string& script) {
   SetProxyScriptJob job(this, script);
   return job.ExecSync();
-}
-
-jboolean AwPacProcessor::SetProxyScript(JNIEnv* env,
-                                        const JavaParamRef<jobject>& obj,
-                                        const JavaParamRef<jstring>& jscript) {
-  std::string script = ConvertJavaStringToUTF8(env, jscript);
-  return SetProxyScript(script);
 }
 
 bool AwPacProcessor::MakeProxyRequest(std::string url, std::string* result) {
   MakeProxyRequestJob job(this, url);
   if (job.ExecSync()) {
+    if (job.proxy_info().ContainsMultiProxyChain()) {
+      // Multi-proxy chains cannot be represented as a PAC string.
+      return false;
+    }
     *result = job.proxy_info().ToPacString();
     return true;
   } else {
@@ -458,29 +449,26 @@ bool AwPacProcessor::MakeProxyRequest(std::string url, std::string* result) {
   }
 }
 
-ScopedJavaLocalRef<jstring> AwPacProcessor::MakeProxyRequest(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& obj,
-    const JavaParamRef<jstring>& jurl) {
-  std::string url = ConvertJavaStringToUTF8(env, jurl);
+std::optional<std::string> AwPacProcessor::MakeProxyRequest(
+    const std::string& url) {
   std::string result;
   if (MakeProxyRequest(url, &result)) {
-    return ConvertUTF8ToJavaString(env, result);
-  } else {
-    return nullptr;
+    return result;
   }
+  return std::nullopt;
 }
 
 void AwPacProcessor::SetNetworkAndLinkAddresses(
-    JNIEnv* env,
     net_handle_t net_handle,
-    const base::android::JavaParamRef<jobjectArray>& jlink_addresses) {
-  std::vector<std::string> string_link_addresses;
-  base::android::AppendJavaStringArrayToStringVector(env, jlink_addresses,
-                                                     &string_link_addresses);
+    const std::vector<std::string>& string_link_addresses) {
   std::vector<net::IPAddress> link_addresses;
-  for (std::string const& address : string_link_addresses) {
-    link_addresses.push_back(StringToIPAddress(address));
+  for (const std::string& address : string_link_addresses) {
+    net::IPAddress ip_address;
+    if (ip_address.AssignFromIPLiteral(address)) {
+      link_addresses.push_back(ip_address);
+    } else {
+      LOG(ERROR) << "Not a supported IP literal: " << address;
+    }
   }
 
   GetTaskRunner()->PostTask(
@@ -489,13 +477,22 @@ void AwPacProcessor::SetNetworkAndLinkAddresses(
                                 net_handle, std::move(link_addresses)));
 }
 
-static jlong JNI_AwPacProcessor_CreateNativePacProcessor(JNIEnv* env) {
-  AwPacProcessor* processor = new AwPacProcessor();
-  return reinterpret_cast<intptr_t>(processor);
+static jni_zero::JniUniquePtr<AwPacProcessor>
+JNI_AwPacProcessor_CreateNativePacProcessor() {
+  return jni_zero::MakeUnique<AwPacProcessor>();
 }
 
-static void JNI_AwPacProcessor_InitializeEnvironment(JNIEnv* env) {
+static void JNI_AwPacProcessor_InitializeEnvironment() {
   base::ThreadPoolInstance::CreateAndStartWithDefaultParams("AwPacProcessor");
 }
 
 }  // namespace android_webview
+
+namespace jni_zero {
+void TemplatedDeleter<android_webview::AwPacProcessor>::Destroy(
+    void* ptr) const {
+  static_cast<android_webview::AwPacProcessor*>(ptr)->DestroyNative();
+}
+}  // namespace jni_zero
+
+DEFINE_JNI(AwPacProcessor)

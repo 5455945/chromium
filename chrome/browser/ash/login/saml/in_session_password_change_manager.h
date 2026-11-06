@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,20 +9,30 @@
 #include <string>
 
 #include "ash/public/cpp/session/session_activation_observer.h"
-#include "base/memory/scoped_refptr.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
+#include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
+#include "base/observer_list_types.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/login/saml/password_sync_token_fetcher.h"
-#include "chromeos/login/auth/auth_status_consumer.h"
+#include "chromeos/ash/components/login/auth/password_update_flow.h"
+#include "chromeos/ash/components/osauth/impl/auth_factor_configuration_helper.h"
 
+class PrefService;
 class Profile;
+
+namespace signin {
+class IdentityManager;
+}
 
 namespace user_manager {
 class User;
 }
 
-namespace chromeos {
-class CryptohomeAuthenticator;
+namespace ash {
+
+class AuthenticationError;
 class UserContext;
 
 // There is at most one instance of this task, which is part of the
@@ -32,6 +42,11 @@ class UserContext;
 // rerunning the task or posting the task to be re-run, which means that there
 // is only ever one of task that is scheduled to be run.
 class RecheckPasswordExpiryTask {
+ public:
+  RecheckPasswordExpiryTask(const RecheckPasswordExpiryTask&) = delete;
+  RecheckPasswordExpiryTask& operator=(const RecheckPasswordExpiryTask&) =
+      delete;
+
  private:
   RecheckPasswordExpiryTask();
   ~RecheckPasswordExpiryTask();
@@ -49,19 +64,15 @@ class RecheckPasswordExpiryTask {
 
   // Only InSessionPasswordChangeManager can use this class.
   friend class InSessionPasswordChangeManager;
-
-  DISALLOW_COPY_AND_ASSIGN(RecheckPasswordExpiryTask);
 };
 
 // Manages the flow of changing a password in-session - handles user
 // response from dialogs, and callbacks from subsystems.
 // This singleton is scoped to the primary user session - it will exist for as
 // long as the primary user session exists  (but only if the primary user's
-// InSessionPasswordChange policy is enabled and the kInSessionPasswordChange
-// feature is enabled).
+// InSessionPasswordChange policy is enabled).
 class InSessionPasswordChangeManager
-    : public AuthStatusConsumer,
-      public ash::SessionActivationObserver,
+    : public SessionActivationObserver,
       public PasswordSyncTokenFetcher::Consumer {
  public:
   // Events in the in-session SAML password change flow.
@@ -91,8 +102,11 @@ class InSessionPasswordChangeManager
   };
 
   // Returns null if in-session password change is disabled.
+  // `local_state` must be non-null and must outlive the returned object.
   static std::unique_ptr<InSessionPasswordChangeManager> CreateIfEnabled(
-      Profile* primary_profile);
+      PrefService* local_state,
+      Profile* primary_profile,
+      signin::IdentityManager* identity_manager);
 
   // Returns true if the InSessionPasswordChangeManager is both enabled and
   // ready, so Get() can safely be called.
@@ -102,16 +116,24 @@ class InSessionPasswordChangeManager
   // then returns it.
   static InSessionPasswordChangeManager* Get();
 
-  explicit InSessionPasswordChangeManager(Profile* primary_profile);
-  ~InSessionPasswordChangeManager() override;
+  // `local_state` and `identity_manager` must be non-null and must outlive
+  // `this`.
+  InSessionPasswordChangeManager(PrefService* local_state,
+                                 Profile* primary_profile,
+                                 signin::IdentityManager* identity_manager);
 
-  // Sets the given instance as the singleton for testing.
-  static void SetForTesting(InSessionPasswordChangeManager* instance);
-  static void ResetForTesting();
+  InSessionPasswordChangeManager(const InSessionPasswordChangeManager&) =
+      delete;
+  InSessionPasswordChangeManager& operator=(
+      const InSessionPasswordChangeManager&) = delete;
+
+  ~InSessionPasswordChangeManager() override;
 
   // Checks if the primary user's password has expired or will soon expire, and
   // shows a notification if needed. If the password will expire in the distant
   // future, posts a task to check again in the distant future.
+  // This function first checks if the user has an online password configured,
+  // and only shows the notification if they do.
   void MaybeShowExpiryNotification();
 
   // Shows a password expiry notification. If `time_until_expiry` is zero or
@@ -157,12 +179,7 @@ class InSessionPasswordChangeManager
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
 
-  // AuthStatusConsumer
-  void OnAuthFailure(const AuthFailure& error) override;
-  void OnPasswordChangeDetected(const UserContext& user_context) override;
-  void OnAuthSuccess(const UserContext& user_context) override;
-
-  // ash::SessionActivationObserver
+  // SessionActivationObserver
   void OnSessionActivated(bool activated) override;
   void OnLockStateChanged(bool locked) override;
 
@@ -174,25 +191,34 @@ class InSessionPasswordChangeManager
 
  private:
   void CreateTokenAsync();
-  static InSessionPasswordChangeManager* GetNullable();
 
   void NotifyObservers(Event event);
 
-  Profile* primary_profile_;
-  const user_manager::User* primary_user_;
+  void OnPasswordUpdateFailure(std::unique_ptr<UserContext> user_context,
+                               AuthenticationError error);
+  void OnPasswordUpdateSuccess(std::unique_ptr<UserContext> user_context);
+
+  void MaybeShowExpiryNotificationInternal();
+
+  const raw_ref<PrefService> local_state_;
+  raw_ptr<Profile, DanglingUntriaged> primary_profile_;
+  raw_ptr<const user_manager::User, DanglingUntriaged> primary_user_;
+  const raw_ref<signin::IdentityManager> identity_manager_;
   base::ObserverList<Observer> observer_list_;
   RecheckPasswordExpiryTask recheck_task_;
-  scoped_refptr<CryptohomeAuthenticator> authenticator_;
+  PasswordUpdateFlow password_update_flow_;
+  AuthFactorConfigurationHelper auth_factor_helper_;
   int urgent_warning_days_;
   bool renotify_on_unlock_ = false;
   PasswordSource password_source_ = PasswordSource::PASSWORDS_SCRAPED;
   std::unique_ptr<PasswordSyncTokenFetcher> password_sync_token_fetcher_;
 
-  friend class InSessionPasswordChangeManagerTest;
+  base::WeakPtrFactory<InSessionPasswordChangeManager> weak_ptr_factory_{this};
 
-  DISALLOW_COPY_AND_ASSIGN(InSessionPasswordChangeManager);
+  friend class InSessionPasswordChangeManagerTest;
+  friend class InSessionPasswordChangeManagerTestBase;
 };
 
-}  // namespace chromeos
+}  // namespace ash
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_SAML_IN_SESSION_PASSWORD_CHANGE_MANAGER_H_

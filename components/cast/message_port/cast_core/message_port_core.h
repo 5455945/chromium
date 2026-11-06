@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,9 @@
 #include <memory>
 #include <queue>
 #include <string>
+#include <string_view>
 
+#include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
 #include "components/cast/message_port/cast_core/message_connector.h"
 #include "components/cast/message_port/message_port.h"
@@ -63,9 +65,9 @@ class MessagePortCore : public MessagePort, public MessageConnector {
   MessagePortDescriptor Transfer(MessageConnector* replacement);
 
   // MessagePort implementation:
-  bool PostMessage(base::StringPiece message) override;
+  bool PostMessage(std::string_view message) override;
   bool PostMessageWithTransferables(
-      base::StringPiece message,
+      std::string_view message,
       std::vector<std::unique_ptr<MessagePort>> ports) override;
   void SetReceiver(MessagePort::Receiver* receiver) override;
   void Close() override;
@@ -107,7 +109,7 @@ class MessagePortCore : public MessagePort, public MessageConnector {
   void OnPeerStarted() override;
   void OnPeerError() override;
 
-  MessagePort::Receiver* receiver_ = nullptr;
+  raw_ptr<MessagePort::Receiver> receiver_ = nullptr;
   bool pending_response_ = false;
   bool errored_ = false;
   bool closed_ = false;

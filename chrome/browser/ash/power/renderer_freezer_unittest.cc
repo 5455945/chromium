@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,30 +9,28 @@
 #include <utility>
 
 #include "base/command_line.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
-#include "chrome/browser/ash/login/users/scoped_test_user_manager.h"
+#include "base/values.h"
 #include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/test_extension_system.h"
+#include "chrome/browser/ui/webui/top_chrome/top_chrome_webui_profile.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "chromeos/dbus/power/fake_power_manager_client.h"
 #include "chromeos/dbus/power_manager/suspend.pb.h"
-#include "content/public/browser/notification_service.h"
-#include "content/public/browser/notification_source.h"
-#include "content/public/browser/notification_types.h"
 #include "content/public/browser/site_instance.h"
+#include "content/public/common/child_process_id.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/mock_render_process_host.h"
-#include "extensions/browser/notification_types.h"
+#include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/process_manager.h"
 #include "extensions/browser/process_map.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/manifest_handlers/background_info.h"
-#include "extensions/common/value_builder.h"
 #include "testing/gtest/include/gtest/gtest-death-test.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -43,8 +41,12 @@ namespace {
 // are made by the code being tested.
 class ActionRecorder {
  public:
-  ActionRecorder() {}
-  virtual ~ActionRecorder() {}
+  ActionRecorder() = default;
+
+  ActionRecorder(const ActionRecorder&) = delete;
+  ActionRecorder& operator=(const ActionRecorder&) = delete;
+
+  virtual ~ActionRecorder() = default;
 
   // Returns a comma-separated string describing the actions that were
   // requested since the previous call to GetActions() (i.e. results are
@@ -67,8 +69,6 @@ class ActionRecorder {
  private:
   // Comma-separated list of actions that have been performed.
   std::string actions_;
-
-  DISALLOW_COPY_AND_ASSIGN(ActionRecorder);
 };
 
 // Actions that can be returned by TestDelegate::GetActions().
@@ -86,7 +86,10 @@ class TestDelegate : public RendererFreezer::Delegate, public ActionRecorder {
       : can_freeze_renderers_(true),
         thaw_renderers_result_(true) {}
 
-  ~TestDelegate() override {}
+  TestDelegate(const TestDelegate&) = delete;
+  TestDelegate& operator=(const TestDelegate&) = delete;
+
+  ~TestDelegate() override = default;
 
   // RendererFreezer::Delegate overrides.
   void SetShouldFreezeRenderer(base::ProcessHandle handle,
@@ -121,8 +124,6 @@ class TestDelegate : public RendererFreezer::Delegate, public ActionRecorder {
  private:
   bool can_freeze_renderers_;
   bool thaw_renderers_result_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestDelegate);
 };
 
 }  // namespace
@@ -131,15 +132,23 @@ class RendererFreezerTest : public testing::Test {
  public:
   RendererFreezerTest() : test_delegate_(new TestDelegate()) {}
 
+  RendererFreezerTest(const RendererFreezerTest&) = delete;
+  RendererFreezerTest& operator=(const RendererFreezerTest&) = delete;
+
   ~RendererFreezerTest() override = default;
 
   // testing::Test:
-  void SetUp() override { PowerManagerClient::InitializeFake(); }
+  void SetUp() override { chromeos::PowerManagerClient::InitializeFake(); }
 
   void TearDown() override {
     DCHECK(renderer_freezer_);
-    PowerManagerClient::Shutdown();
+    chromeos::PowerManagerClient::Shutdown();
     renderer_freezer_.reset();
+  }
+
+  void SimulateRenderProcessHostCreated(content::RenderProcessHost* rph) {
+    renderer_freezer_->OnRenderProcessHostCreated(rph);
+    renderer_freezer_->OnRenderProcessLaunched(rph);
   }
 
  protected:
@@ -149,13 +158,11 @@ class RendererFreezerTest : public testing::Test {
   }
 
   // Owned by |renderer_freezer_|.
-  TestDelegate* test_delegate_;
+  raw_ptr<TestDelegate, DanglingUntriaged> test_delegate_;
   std::unique_ptr<RendererFreezer> renderer_freezer_;
 
  private:
   content::BrowserTaskEnvironment task_environment_;
-
-  DISALLOW_COPY_AND_ASSIGN(RendererFreezerTest);
 };
 
 // Tests that the RendererFreezer freezes renderers on suspend and thaws them on
@@ -163,12 +170,12 @@ class RendererFreezerTest : public testing::Test {
 TEST_F(RendererFreezerTest, SuspendResume) {
   Init();
 
-  FakePowerManagerClient::Get()->SendSuspendImminent(
+  chromeos::FakePowerManagerClient::Get()->SendSuspendImminent(
       power_manager::SuspendImminent_Reason_OTHER);
   EXPECT_EQ(kFreezeRenderers, test_delegate_->GetActions());
 
   // The renderers should be thawed when we resume.
-  FakePowerManagerClient::Get()->SendSuspendDone();
+  chromeos::FakePowerManagerClient::Get()->SendSuspendDone();
   EXPECT_EQ(kThawRenderers, test_delegate_->GetActions());
 }
 
@@ -179,12 +186,12 @@ TEST_F(RendererFreezerTest, DelegateCannotFreezeRenderers) {
   Init();
 
   // Nothing happens on suspend.
-  FakePowerManagerClient::Get()->SendSuspendImminent(
+  chromeos::FakePowerManagerClient::Get()->SendSuspendImminent(
       power_manager::SuspendImminent_Reason_OTHER);
   EXPECT_EQ(kNoActions, test_delegate_->GetActions());
 
   // Nothing happens on resume.
-  FakePowerManagerClient::Get()->SendSuspendDone();
+  chromeos::FakePowerManagerClient::Get()->SendSuspendDone();
   EXPECT_EQ(kNoActions, test_delegate_->GetActions());
 }
 
@@ -195,23 +202,29 @@ TEST_F(RendererFreezerTest, ErrorThawingRenderers) {
   // The "threadsafe" style of death test re-executes the unit test binary,
   // which in turn re-initializes some global state leading to failed CHECKs.
   // Instead, we use the "fast" style here to prevent re-initialization.
-  ::testing::FLAGS_gtest_death_test_style = "fast";
+  GTEST_FLAG_SET(death_test_style, "fast");
   Init();
   test_delegate_->set_thaw_renderers_result(false);
 
-  FakePowerManagerClient::Get()->SendSuspendImminent(
+  chromeos::FakePowerManagerClient::Get()->SendSuspendImminent(
       power_manager::SuspendImminent_Reason_OTHER);
   EXPECT_EQ(kFreezeRenderers, test_delegate_->GetActions());
 
-  EXPECT_DEATH(FakePowerManagerClient::Get()->SendSuspendDone(),
+  EXPECT_DEATH(chromeos::FakePowerManagerClient::Get()->SendSuspendDone(),
                "Unable to thaw");
 }
 #endif  // GTEST_HAS_DEATH_TEST
 
 class RendererFreezerTestWithExtensions : public RendererFreezerTest {
  public:
-  RendererFreezerTestWithExtensions() {}
-  ~RendererFreezerTestWithExtensions() override {}
+  RendererFreezerTestWithExtensions() = default;
+
+  RendererFreezerTestWithExtensions(const RendererFreezerTestWithExtensions&) =
+      delete;
+  RendererFreezerTestWithExtensions& operator=(
+      const RendererFreezerTestWithExtensions&) = delete;
+
+  ~RendererFreezerTestWithExtensions() override = default;
 
   // testing::Test overrides.
   void SetUp() override {
@@ -234,9 +247,7 @@ class RendererFreezerTestWithExtensions : public RendererFreezerTest {
         false /* autoupdate_enabled*/);
   }
   void TearDown() override {
-    extensions::ExtensionSystem::Get(profile_)->Shutdown();
-
-    profile_ = NULL;
+    profile_ = nullptr;
 
     profile_manager_->DeleteAllTestingProfiles();
 
@@ -251,32 +262,23 @@ class RendererFreezerTestWithExtensions : public RendererFreezerTest {
   void CreateRenderProcessForExtension(const extensions::Extension* extension) {
     std::unique_ptr<content::MockRenderProcessHostFactory> rph_factory(
         new content::MockRenderProcessHostFactory());
-    scoped_refptr<content::SiteInstance> site_instance(
-        extensions::ProcessManager::Get(profile_)->GetSiteInstanceForURL(
-            extensions::BackgroundInfo::GetBackgroundURL(extension)));
-    content::RenderProcessHost* rph =
-        rph_factory->CreateRenderProcessHost(profile_, site_instance.get());
+    content::RenderProcessHost* rph = rph_factory->CreateRenderProcessHost(
+        profile_, /*site_instance=*/nullptr);
 
     // Fake that the RenderProcessHost is hosting the gcm app.
-    extensions::ProcessMap::Get(profile_)
-        ->Insert(extension->id(), rph->GetID(), site_instance->GetId());
+    extensions::ProcessMap::Get(profile_)->Insert(extension->id(),
+                                                  rph->GetID());
 
-    // Send the notification that the RenderProcessHost has been created.
-    content::NotificationService::current()->Notify(
-        content::NOTIFICATION_RENDERER_PROCESS_CREATED,
-        content::Source<content::RenderProcessHost>(rph),
-        content::NotificationService::NoDetails());
+    SimulateRenderProcessHostCreated(rph);
   }
 
   // Owned by |profile_manager_|.
-  TestingProfile* profile_;
+  raw_ptr<TestingProfile> profile_;
   std::unique_ptr<TestingProfileManager> profile_manager_;
 
  private:
   // Chrome OS needs the CrosSettings test helper.
   ScopedCrosSettingsTestHelper cros_settings_test_helper_;
-
-  DISALLOW_COPY_AND_ASSIGN(RendererFreezerTestWithExtensions);
 };
 
 // Tests that the RendererFreezer freezes renderers that are not hosting
@@ -292,11 +294,7 @@ TEST_F(RendererFreezerTestWithExtensions, FreezesNonExtensionRenderers) {
   content::RenderProcessHost* rph =
       rph_factory->CreateRenderProcessHost(profile_, site_instance.get());
 
-  // Send the notification that the RenderProcessHost has been created.
-  content::NotificationService::current()->Notify(
-      content::NOTIFICATION_RENDERER_PROCESS_CREATED,
-      content::Source<content::RenderProcessHost>(rph),
-      content::NotificationService::NoDetails());
+  SimulateRenderProcessHostCreated(rph);
 
   EXPECT_EQ(kSetShouldFreezeRenderer, test_delegate_->GetActions());
 }
@@ -310,28 +308,20 @@ TEST_F(RendererFreezerTestWithExtensions, DoesNotFreezeGcmExtensionRenderers) {
   scoped_refptr<const extensions::Extension> gcm_app =
       extensions::ExtensionBuilder()
           .SetManifest(
-              extensions::DictionaryBuilder()
+              base::DictValue()
                   .Set("name", "GCM App")
                   .Set("version", "1.0.0")
                   .Set("manifest_version", 2)
-                  .Set("app",
-                       extensions::DictionaryBuilder()
-                           .Set("background",
-                                extensions::DictionaryBuilder()
-                                    .Set("scripts", extensions::ListBuilder()
-                                                        .Append("background.js")
-                                                        .Build())
-                                    .Build())
-                           .Build())
-                  .Set("permissions",
-                       extensions::ListBuilder().Append("gcm").Build())
-                  .Build())
+                  .Set("app", base::DictValue().Set(
+                                  "background",
+                                  base::DictValue().Set(
+                                      "scripts", base::ListValue().Append(
+                                                     "background.js"))))
+                  .Set("permissions", base::ListValue().Append("gcm")))
           .Build();
 
   // Now install it and give it a renderer.
-  extensions::ExtensionSystem::Get(profile_)
-      ->extension_service()
-      ->AddExtension(gcm_app.get());
+  extensions::ExtensionRegistrar::Get(profile_)->AddExtension(gcm_app.get());
   CreateRenderProcessForExtension(gcm_app.get());
 
   EXPECT_EQ(kSetShouldNotFreezeRenderer, test_delegate_->GetActions());
@@ -346,27 +336,43 @@ TEST_F(RendererFreezerTestWithExtensions, FreezesNonGcmExtensionRenderers) {
   scoped_refptr<const extensions::Extension> background_app =
       extensions::ExtensionBuilder()
           .SetManifest(
-              extensions::DictionaryBuilder()
+              base::DictValue()
                   .Set("name", "Background App")
                   .Set("version", "1.0.0")
                   .Set("manifest_version", 2)
-                  .Set("app",
-                       extensions::DictionaryBuilder()
-                           .Set("background",
-                                extensions::DictionaryBuilder()
-                                    .Set("scripts", extensions::ListBuilder()
-                                                        .Append("background.js")
-                                                        .Build())
-                                    .Build())
-                           .Build())
-                  .Build())
+                  .Set("app", base::DictValue().Set(
+                                  "background",
+                                  base::DictValue().Set(
+                                      "scripts", base::ListValue().Append(
+                                                     "background.js")))))
           .Build();
 
   // Now install it and give it a renderer.
-  extensions::ExtensionSystem::Get(profile_)
-      ->extension_service()
-      ->AddExtension(background_app.get());
+  extensions::ExtensionRegistrar::Get(profile_)->AddExtension(
+      background_app.get());
   CreateRenderProcessForExtension(background_app.get());
+
+  EXPECT_EQ(kSetShouldFreezeRenderer, test_delegate_->GetActions());
+}
+
+// Tests that the RendererFreezer freezes renderers for the top-chrome WebUI
+// profile without crashing.
+TEST_F(RendererFreezerTestWithExtensions, FreezesTopChromeWebUIRenderers) {
+  Init();
+
+  webui::ScopedTopChromeWebUIProfileForTesting scoped_top_chrome_webui_profile;
+  Profile* top_chrome_webui_profile = webui::GetTopChromeWebUIProfile();
+  ASSERT_TRUE(top_chrome_webui_profile);
+  ASSERT_TRUE(top_chrome_webui_profile->IsTopChromeWebUIProfile());
+
+  std::unique_ptr<content::MockRenderProcessHostFactory> rph_factory(
+      new content::MockRenderProcessHostFactory());
+  scoped_refptr<content::SiteInstance> site_instance(
+      content::SiteInstance::Create(top_chrome_webui_profile));
+  content::RenderProcessHost* rph = rph_factory->CreateRenderProcessHost(
+      top_chrome_webui_profile, site_instance.get());
+
+  SimulateRenderProcessHostCreated(rph);
 
   EXPECT_EQ(kSetShouldFreezeRenderer, test_delegate_->GetActions());
 }

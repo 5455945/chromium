@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,14 @@
 #include <memory>
 #include <utility>
 
+#include "base/memory/singleton.h"
 #include "base/time/clock.h"
 #include "base/time/time.h"
+#include "build/build_config.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/infobars/browser_infobar_manager.h"
 #include "chrome/browser/infobars/confirm_infobar_creator.h"
+#include "chrome/browser/infobars/infobar_features.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/pref_names.h"
 #include "components/infobars/content/content_infobar_manager.h"
@@ -18,12 +23,12 @@
 #include "components/prefs/pref_service.h"
 #include "components/security_interstitials/content/urls.h"
 #include "components/strings/grit/components_strings.h"
+#include "components/tabs/public/tab_interface.h"
+#include "content/public/common/url_constants.h"
 #include "ui/base/l10n/l10n_util.h"
 
-#if defined(OS_ANDROID)
-#include "chrome/browser/android/android_theme_resources.h"
-#include "chrome/browser/android/tab_android.h"
-#include "chrome/browser/ssl/known_interception_disclosure_infobar.h"
+#if BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ssl/known_interception_disclosure_message_delegate.h"
 #endif
 
 KnownInterceptionDisclosureCooldown*
@@ -34,7 +39,7 @@ KnownInterceptionDisclosureCooldown::GetInstance() {
 bool KnownInterceptionDisclosureCooldown::IsActive(Profile* profile) {
   base::Time last_dismissal;
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   last_dismissal = profile->GetPrefs()->GetTime(
       prefs::kKnownInterceptionDisclosureInfobarLastShown);
 #else
@@ -42,11 +47,11 @@ bool KnownInterceptionDisclosureCooldown::IsActive(Profile* profile) {
 #endif
 
   // Suppress the disclosure UI for 7 days after showing it to the user.
-  return (clock_->Now() - last_dismissal) <= base::TimeDelta::FromDays(7);
+  return (clock_->Now() - last_dismissal) <= base::Days(7);
 }
 
 void KnownInterceptionDisclosureCooldown::Activate(Profile* profile) {
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   profile->GetPrefs()->SetTime(
       prefs::kKnownInterceptionDisclosureInfobarLastShown, clock_->Now());
 #else
@@ -56,7 +61,20 @@ void KnownInterceptionDisclosureCooldown::Activate(Profile* profile) {
 
 void KnownInterceptionDisclosureCooldown::SetClockForTesting(
     std::unique_ptr<base::Clock> clock) {
-  clock_ = std::move(clock);
+  clock_ = clock ? std::move(clock) : std::make_unique<base::DefaultClock>();
+}
+
+void KnownInterceptionDisclosureCooldown::ResetForTesting(Profile* profile) {
+  clock_ = std::make_unique<base::DefaultClock>();
+  has_seen_known_interception_ = false;
+#if BUILDFLAG(IS_ANDROID)
+  if (profile) {
+    profile->GetPrefs()->ClearPref(
+        prefs::kKnownInterceptionDisclosureInfobarLastShown);
+  }
+#else
+  last_dismissal_time_ = base::Time();
+#endif
 }
 
 KnownInterceptionDisclosureCooldown::KnownInterceptionDisclosureCooldown() =
@@ -68,6 +86,13 @@ KnownInterceptionDisclosureCooldown::~KnownInterceptionDisclosureCooldown() =
 void MaybeShowKnownInterceptionDisclosureDialog(
     content::WebContents* web_contents,
     net::CertStatus cert_status) {
+  // Don't show the disclosure on chrome:// URLs. This prevents the somewhat
+  // confusing case of the infobar/message showing on top of the learn more
+  // page.
+  if (web_contents->GetVisibleURL().SchemeIs(content::kChromeUIScheme)) {
+    return;
+  }
+
   auto* disclosure_tracker = KnownInterceptionDisclosureCooldown::GetInstance();
   if (!(cert_status & net::CERT_STATUS_KNOWN_INTERCEPTION_DETECTED) &&
       !disclosure_tracker->get_has_seen_known_interception()) {
@@ -76,19 +101,37 @@ void MaybeShowKnownInterceptionDisclosureDialog(
 
   disclosure_tracker->set_has_seen_known_interception(true);
 
-  infobars::ContentInfoBarManager* infobar_manager =
-      infobars::ContentInfoBarManager::FromWebContents(web_contents);
   auto* profile =
       Profile::FromBrowserContext(web_contents->GetBrowserContext());
-  auto delegate =
-      std::make_unique<KnownInterceptionDisclosureInfoBarDelegate>(profile);
 
   if (!KnownInterceptionDisclosureCooldown::GetInstance()->IsActive(profile)) {
-#if defined(OS_ANDROID)
-    infobar_manager->AddInfoBar(
-        KnownInterceptionDisclosureInfoBar::CreateInfoBar(std::move(delegate)));
+#if BUILDFLAG(IS_ANDROID)
+    KnownInterceptionDisclosureMessageDelegate::CreateForWebContents(
+        web_contents);
+    KnownInterceptionDisclosureMessageDelegate::FromWebContents(web_contents)
+        ->MaybeShow();
 #else
-    infobar_manager->AddInfoBar(CreateConfirmInfoBar(std::move(delegate)));
+    if (infobars::IsInfoBarMigrated(
+            infobars::InfoBarDelegate::
+                KNOWN_INTERCEPTION_DISCLOSURE_INFOBAR_DELEGATE)) {
+      if (auto* manager =
+              infobars::BrowserInfoBarManager::From(g_browser_process)) {
+        auto* tab = tabs::TabInterface::MaybeGetFromContents(web_contents);
+        if (tab) {
+          manager->Show(tab,
+                        infobars::InfoBarDelegate::
+                            KNOWN_INTERCEPTION_DISCLOSURE_INFOBAR_DELEGATE);
+        }
+      }
+    } else {
+      infobars::ContentInfoBarManager* infobar_manager =
+          infobars::ContentInfoBarManager::FromWebContents(web_contents);
+      auto delegate =
+          std::make_unique<KnownInterceptionDisclosureInfoBarDelegate>(profile);
+      infobar_manager->AddInfoBar(CreateConfirmInfoBar(
+          ConfirmInfoBarCreationAllowlist::GetPassKeyForMigration(),
+          std::move(delegate)));
+    }
 #endif
   }
 }
@@ -100,6 +143,11 @@ KnownInterceptionDisclosureInfoBarDelegate::
 infobars::InfoBarDelegate::InfoBarIdentifier
 KnownInterceptionDisclosureInfoBarDelegate::GetIdentifier() const {
   return KNOWN_INTERCEPTION_DISCLOSURE_INFOBAR_DELEGATE;
+}
+
+infobars::InfoBarDelegate::InfobarPriority
+KnownInterceptionDisclosureInfoBarDelegate::GetPriority() const {
+  return infobars::InfoBarDelegate::InfobarPriority::kCriticalSecurity;
 }
 
 std::u16string KnownInterceptionDisclosureInfoBarDelegate::GetLinkText() const {
@@ -126,7 +174,7 @@ std::u16string KnownInterceptionDisclosureInfoBarDelegate::GetMessageText()
 }
 
 int KnownInterceptionDisclosureInfoBarDelegate::GetButtons() const {
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   return BUTTON_OK;
 #else
   return BUTTON_NONE;
@@ -139,21 +187,7 @@ bool KnownInterceptionDisclosureInfoBarDelegate::Accept() {
 }
 
 // Platform specific implementations.
-#if defined(OS_ANDROID)
-int KnownInterceptionDisclosureInfoBarDelegate::GetIconId() const {
-  return IDR_ANDROID_INFOBAR_WARNING;
-}
-
-std::u16string KnownInterceptionDisclosureInfoBarDelegate::GetButtonLabel(
-    InfoBarButton button) const {
-  return l10n_util::GetStringUTF16(IDS_KNOWN_INTERCEPTION_INFOBAR_BUTTON_TEXT);
-}
-
-std::u16string KnownInterceptionDisclosureInfoBarDelegate::GetDescriptionText()
-    const {
-  return l10n_util::GetStringUTF16(IDS_KNOWN_INTERCEPTION_BODY1);
-}
-
+#if BUILDFLAG(IS_ANDROID)
 // static
 void KnownInterceptionDisclosureInfoBarDelegate::RegisterProfilePrefs(
     user_prefs::PrefRegistrySyncable* registry) {

@@ -1,34 +1,35 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef DEVICE_UDEV_LINUX_UDEV1_LOADER_H_
 #define DEVICE_UDEV_LINUX_UDEV1_LOADER_H_
 
-#include <memory>
-
-#include "base/macros.h"
 #include "device/udev_linux/udev_loader.h"
-
-class LibUdev1Loader;
 
 namespace device {
 
-class Udev1Loader : public UdevLoader {
+class COMPONENT_EXPORT(DEVICE_UDEV_LINUX) Udev1Loader : public UdevLoader {
  public:
   Udev1Loader();
+
+  Udev1Loader(const Udev1Loader&) = delete;
+  Udev1Loader& operator=(const Udev1Loader&) = delete;
+
   ~Udev1Loader() override;
 
  private:
-  bool Init() override;
   const char* udev_device_get_action(udev_device* udev_device) override;
   const char* udev_device_get_devnode(udev_device* udev_device) override;
   const char* udev_device_get_devtype(udev_device* udev_device) override;
+  const char* udev_device_get_driver(struct udev_device* udev_device) override;
   udev_device* udev_device_get_parent(udev_device* udev_device) override;
   udev_device* udev_device_get_parent_with_subsystem_devtype(
       udev_device* udev_device,
       const char* subsystem,
       const char* devtype) override;
+  udev_list_entry* udev_device_get_properties_list_entry(
+      struct udev_device* udev_device) override;
   const char* udev_device_get_property_value(udev_device* udev_device,
                                              const char* key) override;
   const char* udev_device_get_subsystem(udev_device* udev_device) override;
@@ -67,18 +68,7 @@ class Udev1Loader : public UdevLoader {
   udev_device* udev_monitor_receive_device(udev_monitor* udev_monitor) override;
   void udev_monitor_unref(udev_monitor* udev_monitor) override;
   udev* udev_new() override;
-  void udev_set_log_fn(
-      struct udev* udev,
-      void (*log_fn)(struct udev* udev, int priority,
-                     const char* file, int line,
-                     const char* fn, const char* format,
-                     va_list args)) override;
-  void udev_set_log_priority(struct udev* udev, int priority) override;
   void udev_unref(udev* udev) override;
-
-  std::unique_ptr<LibUdev1Loader> lib_loader_;
-
-  DISALLOW_COPY_AND_ASSIGN(Udev1Loader);
 };
 
 }  // namespace device

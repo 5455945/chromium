@@ -1,14 +1,12 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/network/conditional_cache_deletion_helper.h"
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/location.h"
-#include "base/single_thread_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/task/single_thread_task_runner.h"
 #include "net/http/http_cache.h"
 #include "net/http/http_util.h"
 
@@ -20,7 +18,7 @@ bool EntryPredicateFromURLsAndTime(
     const base::Time& end_time,
     const disk_cache::Entry* entry) {
   std::string entry_key(entry->GetKey());
-  std::string url_string(
+  std::string_view url_string(
       net::HttpCache::GetResourceURLFromHttpCacheKey(entry_key));
   return (entry->GetLastUsed() >= begin_time &&
           entry->GetLastUsed() < end_time && url_matcher.Run(GURL(url_string)));
@@ -71,17 +69,17 @@ void ConditionalCacheDeletionHelper::IterateOverEntries(
     // won't be invalidated. Always close the previous entry so it does not
     // leak.
     if (previous_entry_) {
-      if (condition_.Run(previous_entry_)) {
+      if (condition_.Run(previous_entry_.get())) {
         previous_entry_->Doom();
       }
-      previous_entry_->Close();
+      previous_entry_.ExtractAsDangling()->Close();
     }
 
     if (result.net_error() == net::ERR_FAILED) {
       // The iteration finished successfully or we can no longer iterate
       // (e.g. the cache was destroyed). We cannot distinguish between the two,
       // but we know that there is nothing more that we can do.
-      base::ThreadTaskRunnerHandle::Get()->PostTask(
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE,
           base::BindOnce(&ConditionalCacheDeletionHelper::NotifyCompletion,
                          weak_factory_.GetWeakPtr()));

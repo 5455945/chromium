@@ -1,20 +1,21 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/sessions/session_data_service.h"
 
-#include "base/bind.h"
 #include "base/feature_list.h"
-#include "base/metrics/histogram_functions.h"
-#include "base/time/time.h"
+#include "base/functional/bind.h"
 #include "chrome/browser/defaults.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/sessions/exit_type_service.h"
 #include "chrome/browser/sessions/session_data_deleter.h"
-#include "chrome/browser/sessions/sessions_features.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/common/pref_names.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
 #include "storage/browser/quota/special_storage_policy.h"
@@ -29,15 +30,16 @@ void SessionDataService::RegisterProfilePrefs(
     user_prefs::PrefRegistrySyncable* registry) {
   registry->RegisterIntegerPref(kSessionDataStatusPref,
                                 static_cast<int>(Status::kUninitialized));
+  registry->RegisterDictionaryPref(prefs::kPreSmartRestartSessionState);
 }
 
 SessionDataService::SessionDataService(
     Profile* profile,
     std::unique_ptr<SessionDataDeleter> deleter)
     : profile_(profile), deleter_(std::move(deleter)) {
-  DCHECK(profile_);
-  DCHECK(!profile_->IsOffTheRecord());
-  DCHECK(deleter_);
+  CHECK(profile_, base::NotFatalUntil::M163);
+  CHECK(!profile_->IsOffTheRecord(), base::NotFatalUntil::M163);
+  CHECK(deleter_, base::NotFatalUntil::M163);
 
   Status last_status = static_cast<Status>(
       profile_->GetPrefs()->GetInteger(kSessionDataStatusPref));
@@ -49,27 +51,18 @@ SessionDataService::SessionDataService(
   SetStatusPref(Status::kInitialized);
   auto* policy = profile_->GetSpecialStoragePolicy();
   if (policy && policy->HasSessionOnlyOrigins()) {
-    RecordHistogramForLastSession(last_status);
-    if (base::FeatureList::IsEnabled(kDeleteSessionOnlyDataOnStartup))
-      MaybeContinueDeletionFromLastSesssion(last_status);
+    MaybeContinueDeletionFromLastSesssion(last_status);
   }
 
-  for (Browser* browser : *BrowserList::GetInstance())
-    OnBrowserAdded(browser);
-
-  BrowserList::AddObserver(this);
+  auto* browser_collection = GlobalBrowserCollection::GetInstance();
+  browser_collection_observation_.Observe(browser_collection);
+  browser_collection->ForEach([this](BrowserWindowInterface* browser) {
+    OnBrowserCreated(browser);
+    return true;
+  });
 }
 
-SessionDataService::~SessionDataService() {
-  BrowserList::RemoveObserver(this);
-}
-
-void SessionDataService::RecordHistogramForLastSession(Status last_status) {
-  if (last_status == Status::kUninitialized)
-    return;
-  base::UmaHistogramEnumeration("Session.SessionData.StatusFromLastSession",
-                                last_status);
-}
+SessionDataService::~SessionDataService() = default;
 
 void SessionDataService::MaybeContinueDeletionFromLastSesssion(
     Status last_status) {
@@ -81,13 +74,13 @@ void SessionDataService::MaybeContinueDeletionFromLastSesssion(
     case Status::kInitialized:
       // Deletion did not happen on shutdown and we didn't even update the
       // status preference. Check profile status:
-      switch (profile_->GetLastSessionExitType()) {
-        case Profile::EXIT_CRASHED:
+      switch (ExitTypeService::GetLastSessionExitType(profile_)) {
+        case ExitType::kCrashed:
           // To allow the user to continue a session after a crash, we will not
           // delete cookies.
           return;
-        case Profile::EXIT_NORMAL:
-        case Profile::EXIT_SESSION_ENDED:
+        case ExitType::kClean:
+        case ExitType::kForcedShutdown:
           // In case of a regular shutdown that skipped deletion, we should
           // delete cookies.
           break;
@@ -103,38 +96,41 @@ void SessionDataService::MaybeContinueDeletionFromLastSesssion(
   deleter_->DeleteSessionOnlyData(
       /*skip_session_cookies=*/true,
       base::BindOnce(&SessionDataService::OnCleanupAtStartupFinished,
-                     base::Unretained(this), base::TimeTicks::Now()));
+                     weak_factory_.GetWeakPtr()));
 }
 
-void SessionDataService::OnCleanupAtStartupFinished(
-    base::TimeTicks time_started) {
-  base::UmaHistogramMediumTimes("Session.SessionData.StartupCleanupTime",
-                                base::TimeTicks::Now() - time_started);
-}
+void SessionDataService::OnCleanupAtStartupFinished() {}
 
 void SessionDataService::SetStatusPref(Status status) {
   profile_->GetPrefs()->SetInteger(kSessionDataStatusPref,
                                    static_cast<int>(status));
 }
 
-void SessionDataService::OnBrowserAdded(Browser* browser) {
-  if (browser->profile() != profile_)
+void SessionDataService::OnBrowserCreated(BrowserWindowInterface* browser) {
+  if (browser->GetProfile() != profile_) {
     return;
-
+  }
   // A window was opened. Ensure that we run another cleanup the next time
   // all windows are closed.
   SetStatusPref(Status::kInitialized);
   cleanup_started_ = false;
 }
 
-void SessionDataService::OnBrowserRemoved(Browser* browser) {
-  if (browser->profile() != profile_)
+void SessionDataService::OnBrowserClosed(BrowserWindowInterface* browser) {
+  if (browser->GetProfile() != profile_) {
     return;
-
+  }
   // Check for any open windows for the current profile.
-  for (auto* browser : *BrowserList::GetInstance()) {
-    if (browser->profile() == profile_)
-      return;
+  bool has_open_window = false;
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [this, &has_open_window](BrowserWindowInterface* bwi) {
+        if (bwi->GetProfile() == profile_) {
+          has_open_window = true;
+        }
+        return !has_open_window;
+      });
+  if (has_open_window) {
+    return;
   }
 
   // Session cookies should stay alive on platforms where the browser stays
@@ -164,22 +160,14 @@ void SessionDataService::StartCleanupInternal(bool skip_session_cookies) {
   cleanup_started_ = true;
   SetStatusPref(Status::kDeletionStarted);
 
-  // Using base::Unretained is safe as DeleteSessionOnlyData() uses a
-  // ScopedProfileKeepAlive.
   deleter_->DeleteSessionOnlyData(
       skip_session_cookies,
       base::BindOnce(&SessionDataService::OnCleanupAtSessionEndFinished,
-                     base::Unretained(this), base::TimeTicks::Now()));
+                     weak_factory_.GetWeakPtr()));
 }
 
-void SessionDataService::OnCleanupAtSessionEndFinished(
-    base::TimeTicks time_started) {
+void SessionDataService::OnCleanupAtSessionEndFinished() {
   SetStatusPref(Status::kDeletionFinished);
-  auto* policy = profile_->GetSpecialStoragePolicy();
-  if (policy && policy->HasSessionOnlyOrigins()) {
-    base::UmaHistogramMediumTimes("Session.SessionData.CleanupTime",
-                                  base::TimeTicks::Now() - time_started);
-  }
 }
 
 void SessionDataService::SetForceKeepSessionState() {

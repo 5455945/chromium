@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,13 +10,16 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/containers/flat_set.h"
+#include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/types/expected.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/load_timing_info.h"
@@ -24,27 +27,21 @@
 #include "net/base/net_export.h"
 #include "net/base/network_change_notifier.h"
 #include "net/base/proxy_server.h"
+#include "net/base/reconnect_notifier.h"
+#include "net/dns/public/host_resolver_results.h"
 #include "net/log/net_log_source.h"
 #include "net/proxy_resolution/proxy_config.h"
 #include "net/socket/connect_job.h"
 #include "net/socket/ssl_client_socket.h"
-#include "net/spdy/http2_push_promise_index.h"
-#include "net/spdy/server_push_delegate.h"
+#include "net/spdy/multiplexed_session_creation_initiator.h"
 #include "net/spdy/spdy_session_key.h"
 #include "net/ssl/ssl_config_service.h"
-#include "net/third_party/quiche/src/quic/core/quic_versions.h"
-#include "net/third_party/quiche/src/spdy/core/spdy_protocol.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-
-namespace base {
-namespace trace_event {
-class ProcessMemoryDump;
-}
-}
+#include "net/third_party/quiche/src/quiche/http2/core/spdy_protocol.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_versions.h"
 
 namespace net {
 
-class ClientSocketHandle;
+class StreamSocketHandle;
 class HostResolver;
 class HttpServerProperties;
 class NetLogWithSource;
@@ -53,12 +50,22 @@ class SpdySession;
 class StreamSocket;
 class TransportSecurityState;
 
+// Represents the initiator of a session.
+// TODO(crbug.com/406932139, crbug.com/406936736): Remove once we identify
+// the cause of bugs.
+enum class SpdySessionInitiator : uint32_t {
+  kUnknown = 0,
+  kHttpStreamFactoryJob = 1,
+  kHttpStreamPoolAttemptManager = 2,
+  kHttpProxyConnectJob = 3,
+};
+
 // This is a very simple pool for open SpdySessions.
 class NET_EXPORT SpdySessionPool
     : public NetworkChangeNotifier::IPAddressObserver,
       public SSLClientContext::Observer {
  public:
-  typedef base::TimeTicks (*TimeFunc)(void);
+  typedef base::TimeTicks (*TimeFunc)();
 
   // Struct to hold randomly generated frame parameters to be used for sending
   // frames on the wire to "grease" frame type.  Frame type has to be one of
@@ -85,23 +92,27 @@ class NET_EXPORT SpdySessionPool
     class NET_EXPORT_PRIVATE Delegate {
      public:
       Delegate();
+
+      Delegate(const Delegate&) = delete;
+      Delegate& operator=(const Delegate&) = delete;
+
       virtual ~Delegate();
 
       // |spdy_session| will not be null.
       virtual void OnSpdySessionAvailable(
           base::WeakPtr<SpdySession> spdy_session) = 0;
-
-     private:
-      DISALLOW_COPY_AND_ASSIGN(Delegate);
     };
 
     // Constructor - this is called by the SpdySessionPool.
     SpdySessionRequest(const SpdySessionKey& key,
-                       bool enable_ip_based_pooling,
+                       bool enable_ip_based_pooling_for_h2,
                        bool is_websocket,
                        bool is_blocking_request_for_session,
                        Delegate* delegate,
                        SpdySessionPool* spdy_session_pool);
+
+    SpdySessionRequest(const SpdySessionRequest&) = delete;
+    SpdySessionRequest& operator=(const SpdySessionRequest&) = delete;
 
     ~SpdySessionRequest();
 
@@ -110,7 +121,9 @@ class NET_EXPORT SpdySessionPool
     void OnRemovedFromPool();
 
     const SpdySessionKey& key() const { return key_; }
-    bool enable_ip_based_pooling() const { return enable_ip_based_pooling_; }
+    bool enable_ip_based_pooling_for_h2() const {
+      return enable_ip_based_pooling_for_h2_;
+    }
     bool is_websocket() const { return is_websocket_; }
     bool is_blocking_request_for_session() const {
       return is_blocking_request_for_session_;
@@ -123,13 +136,11 @@ class NET_EXPORT SpdySessionPool
 
    private:
     const SpdySessionKey key_;
-    const bool enable_ip_based_pooling_;
+    const bool enable_ip_based_pooling_for_h2_;
     const bool is_websocket_;
     const bool is_blocking_request_for_session_;
-    Delegate* const delegate_;
-    SpdySessionPool* spdy_session_pool_;
-
-    DISALLOW_COPY_AND_ASSIGN(SpdySessionRequest);
+    const raw_ptr<Delegate> delegate_;
+    raw_ptr<SpdySessionPool> spdy_session_pool_;
   };
 
   SpdySessionPool(HostResolver* host_resolver,
@@ -143,11 +154,18 @@ class NET_EXPORT SpdySessionPool
                   size_t session_max_recv_window_size,
                   int session_max_queued_capped_frames,
                   const spdy::SettingsMap& initial_settings,
-                  const absl::optional<GreasedHttp2Frame>& greased_http2_frame,
+                  bool enable_http2_settings_grease,
+                  const std::optional<GreasedHttp2Frame>& greased_http2_frame,
                   bool http2_end_stream_with_data_frame,
                   bool enable_priority_update,
+                  bool go_away_on_ip_change,
                   SpdySessionPool::TimeFunc time_func,
-                  NetworkQualityEstimator* network_quality_estimator);
+                  NetworkQualityEstimator* network_quality_estimator,
+                  bool cleanup_sessions_on_ip_address_changed);
+
+  SpdySessionPool(const SpdySessionPool&) = delete;
+  SpdySessionPool& operator=(const SpdySessionPool&) = delete;
+
   ~SpdySessionPool() override;
 
   // In the functions below, a session is "available" if this pool has
@@ -165,41 +183,69 @@ class NET_EXPORT SpdySessionPool
   // Returns a net error code on failure, in which case the value of |*session|
   // is undefined.
   //
-  // Note that the SpdySession begins reading from |client_socket_handle| on a
+  // Note that the SpdySession begins reading from |stream_socket_handle| on a
   // subsequent event loop iteration, so it may be closed immediately afterwards
-  // if the first read of |client_socket_handle| fails.
+  // if the first read of |stream_socket_handle| fails.
   int CreateAvailableSessionFromSocketHandle(
       const SpdySessionKey& key,
-      std::unique_ptr<ClientSocketHandle> client_socket_handle,
+      std::unique_ptr<StreamSocketHandle> stream_socket_handle,
       const NetLogWithSource& net_log,
-      base::WeakPtr<SpdySession>* session);
+      const MultiplexedSessionCreationInitiator session_creation_initiator,
+      base::WeakPtr<SpdySession>* session,
+      std::optional<ConnectionManagementConfig> connection_management_config,
+      SpdySessionInitiator spdy_session_initiator =
+          SpdySessionInitiator::kUnknown);
 
   // Just like the above method, except it takes a SocketStream instead of a
-  // ClientSocketHandle, and separate connect timing information. When this
+  // StreamSocketHandle, and separate connect timing information. When this
   // constructor is used, there is no socket pool beneath the SpdySession.
   // Instead, the session takes exclusive ownership of the underting socket, and
   // destroying the session will directly destroy the socket, as opposed to
   // disconnected it and then returning it to the socket pool. This is intended
   // for use with H2 proxies, which are layered beneath the socket pools and
   // can have sockets above them for tunnels, which are put in a socket pool.
-  base::WeakPtr<SpdySession> CreateAvailableSessionFromSocket(
+  base::expected<base::WeakPtr<SpdySession>, int>
+  CreateAvailableSessionFromSocket(
       const SpdySessionKey& key,
       std::unique_ptr<StreamSocket> socket_stream,
       const LoadTimingInfo::ConnectTiming& connect_timing,
-      const NetLogWithSource& net_log);
+      const NetLogWithSource& net_log,
+      SpdySessionInitiator spdy_session_initiator =
+          SpdySessionInitiator::kUnknown);
 
   // If there is an available session for |key|, return it.
   // Otherwise if there is a session to pool to based on IP address:
-  //   * if |enable_ip_based_pooling == true|,
+  //   * if |enable_ip_based_pooling_for_h2 == true|,
   //     then mark it as available for |key| and return it;
-  //   * if |enable_ip_based_pooling == false|,
+  //   * if |enable_ip_based_pooling_for_h2 == false|,
   //     then remove it from the available sessions, and return nullptr.
   // Otherwise return nullptr.
   base::WeakPtr<SpdySession> FindAvailableSession(
       const SpdySessionKey& key,
-      bool enable_ip_based_pooling,
+      bool enable_ip_based_pooling_for_h2,
       bool is_websocket,
       const NetLogWithSource& net_log);
+
+  using AvailableSessionMap =
+      std::map<SpdySessionKey, base::WeakPtr<SpdySession>>;
+  const AvailableSessionMap& available_sessions_for_testing() const {
+    return available_sessions_;
+  }
+
+  // Returns an available session if there is active session for `key` and the
+  // session can be used for IP addresses in `service_endpoint`. Should be
+  // called only when IP-based pooling is enabled.
+  base::WeakPtr<SpdySession> FindMatchingIpSessionForServiceEndpoint(
+      const SpdySessionKey& key,
+      const ServiceEndpoint& service_endpoint,
+      const base::flat_set<std::string>& dns_aliases);
+
+  // Returns true if there is an available session for `key`. Otherwise, if
+  // there is a session to pool to based on IP address, returns true if
+  // `enable_ip_based_pooling_for_h2` is true. Otherwise returns false.
+  bool HasAvailableSession(const SpdySessionKey& key,
+                           bool enable_ip_based_pooling_for_h2,
+                           bool is_websocket) const;
 
   // Just like FindAvailableSession.
   //
@@ -228,7 +274,7 @@ class NET_EXPORT SpdySessionPool
   // all requests for a session have been successfully responded to.
   base::WeakPtr<SpdySession> RequestSession(
       const SpdySessionKey& key,
-      bool enable_ip_based_pooling,
+      bool enable_ip_based_pooling_for_h2,
       bool is_websocket,
       const NetLogWithSource& net_log,
       base::RepeatingClosure on_blocking_request_destroyed_callback,
@@ -239,10 +285,21 @@ class NET_EXPORT SpdySessionPool
   // Invoked when a host resolution completes. Returns
   // OnHostResolutionCallbackResult::kMayBeDeletedAsync if there's a SPDY
   // session that's a suitable alias for |key|, setting up the alias if needed.
+  //
+  // TODO(crbug.com/484073410): Once TcpConnectJob ships and TransportConnectJob
+  // is removed,remove this overload in favor of the other one.
   OnHostResolutionCallbackResult OnHostResolutionComplete(
       const SpdySessionKey& key,
       bool is_websocket,
-      const AddressList& addresses);
+      base::span<const HostResolverEndpointResult> endpoint_results,
+      const base::flat_set<std::string>& aliases);
+
+  // Overload of above function that takes a ServiceEndpoint.
+  OnHostResolutionCallbackResult OnHostResolutionComplete(
+      const SpdySessionKey& key,
+      bool is_websocket,
+      base::span<const ServiceEndpoint> endpoint_results,
+      const base::flat_set<std::string>& aliases);
 
   // Remove all mappings and aliases for the given session, which must
   // still be available. Except for in tests, this must be called by
@@ -274,17 +331,14 @@ class NET_EXPORT SpdySessionPool
   // the process of closing those new ones, etc.) are unavailable.
   void CloseAllSessions();
 
+  // Mark all current sessions as going away.
+  void MakeCurrentSessionsGoingAway(Error error);
+
   // Creates a Value summary of the state of the spdy session pool.
-  std::unique_ptr<base::Value> SpdySessionPoolInfoToValue() const;
+  base::Value SpdySessionPoolInfoToValue() const;
 
   HttpServerProperties* http_server_properties() {
     return http_server_properties_;
-  }
-
-  Http2PushPromiseIndex* push_promise_index() { return &push_promise_index_; }
-
-  void set_server_push_delegate(ServerPushDelegate* push_delegate) {
-    push_delegate_ = push_delegate;
   }
 
   // NetworkChangeNotifier::IPAddressObserver methods:
@@ -292,20 +346,20 @@ class NET_EXPORT SpdySessionPool
   // We flush all idle sessions and release references to the active ones so
   // they won't get re-used.  The active ones will either complete successfully
   // or error out due to the IP address change.
-  void OnIPAddressChanged() override;
+  void OnIPAddressChanged(
+      NetworkChangeNotifier::IPAddressChangeType change_type) override;
 
   // SSLClientContext::Observer methods:
 
   // We perform the same flushing as described above when SSL settings change.
-  void OnSSLConfigChanged(bool is_cert_database_change) override;
+  void OnSSLConfigChanged(
+      SSLClientContext::SSLConfigChangeType change_type) override;
 
   // Makes all sessions using |server|'s SSL configuration unavailable, meaning
   // they will not be used to service new streams. Does not close any existing
   // streams.
-  void OnSSLConfigForServerChanged(const HostPortPair& server) override;
-
-  void DumpMemoryStats(base::trace_event::ProcessMemoryDump* pmd,
-                       const std::string& parent_dump_absolute_name) const;
+  void OnSSLConfigForServersChanged(
+      const base::flat_set<HostPortPair>& servers) override;
 
   void set_network_quality_estimator(
       NetworkQualityEstimator* network_quality_estimator) {
@@ -313,20 +367,23 @@ class NET_EXPORT SpdySessionPool
   }
 
   // Returns the stored DNS aliases for the session key.
-  std::vector<std::string> GetDnsAliasesForSessionKey(
+  const base::flat_set<std::string>& GetDnsAliasesForSessionKey(
       const SpdySessionKey& key) const;
+
+  // Adds the connection management config to
+  // the given session key.
+  void AddConnectionManagementConfig(const SpdySessionKey& key,
+                                     ConnectionManagementConfig& observer);
 
  private:
   friend class SpdySessionPoolPeer;  // For testing.
 
-  using SessionSet = std::set<SpdySession*>;
+  using SessionSet = std::set<raw_ptr<SpdySession>>;
   using WeakSessionList = std::vector<base::WeakPtr<SpdySession>>;
-  using AvailableSessionMap =
-      std::map<SpdySessionKey, base::WeakPtr<SpdySession>>;
   using AliasMap = std::multimap<IPEndPoint, SpdySessionKey>;
   using DnsAliasesBySessionKeyMap =
-      std::map<SpdySessionKey, std::vector<std::string>>;
-  using RequestSet = std::set<SpdySessionRequest*>;
+      std::map<SpdySessionKey, base::flat_set<std::string>>;
+  using RequestSet = std::set<raw_ptr<SpdySessionRequest>>;
 
   struct RequestInfoForKey {
     RequestInfoForKey();
@@ -356,7 +413,7 @@ class NET_EXPORT SpdySessionPool
   // given key, replaces them.
   void MapKeyToAvailableSession(const SpdySessionKey& key,
                                 const base::WeakPtr<SpdySession>& session,
-                                std::vector<std::string> dns_aliases);
+                                base::flat_set<std::string> dns_aliases);
 
   // Returns an iterator into |available_sessions_| for the given key,
   // which may be equal to |available_sessions_.end()|.
@@ -384,15 +441,20 @@ class NET_EXPORT SpdySessionPool
 
   // Creates a new session. The session must be initialized before
   // InsertSession() is invoked.
-  std::unique_ptr<SpdySession> CreateSession(const SpdySessionKey& key,
-                                             NetLog* net_log);
+  std::unique_ptr<SpdySession> CreateSession(
+      const SpdySessionKey& key,
+      NetLog* net_log,
+      const MultiplexedSessionCreationInitiator session_creation_initiator,
+      SpdySessionInitiator spdy_session_initiator,
+      std::optional<ConnectionManagementConfig> connection_management_config);
   // Adds a new session previously created with CreateSession to the pool.
   // |source_net_log| is the NetLog for the object that created the session.
-  base::WeakPtr<SpdySession> InsertSession(
+  base::expected<base::WeakPtr<SpdySession>, int> InsertSession(
       const SpdySessionKey& key,
       std::unique_ptr<SpdySession> new_session,
       const NetLogWithSource& source_net_log,
-      std::vector<std::string> dns_aliases);
+      base::flat_set<std::string> dns_aliases,
+      bool perform_post_insertion_checks);
 
   // If a session with the specified |key| exists, invokes
   // OnSpdySessionAvailable on all matching members of
@@ -409,9 +471,41 @@ class NET_EXPORT SpdySessionPool
       SpdySessionRequestMap::iterator request_map_iterator,
       RequestSet::iterator request_set_iterator);
 
-  HttpServerProperties* http_server_properties_;
+  // Helper method of `FindMatchingIpSessionForServiceEndpoint()`. This is
+  // basically a subset of OnHostResolutionComplete(), i.e.,:
+  // * Doesn't support SocketTag.
+  // * Assumes there is only one host resolution for `key` at the same time.
+  base::WeakPtr<SpdySession> FindMatchingIpSession(
+      const SpdySessionKey& key,
+      const std::vector<IPEndPoint>& ip_endpoints,
+      const base::flat_set<std::string>& dns_aliases);
 
-  TransportSecurityState* transport_security_state_;
+  // Methods to notify the ConnectionChangeObserver about connection changing
+  // events. `NotifyOnNetworkEvent` will notify all of the notifiers on network
+  // change events, since it affects all of the connections. Otherwise, the
+  // events are specific to each connection.
+  void NotifyOnNetworkEvent(net::NetworkChangeEvent event);
+  void NotifyOnSessionClosed(const SpdySessionKey& session_key,
+                             bool was_ever_used_to_create_streams);
+  void NotifyOnConnectionFailure(const SpdySessionKey& session_key);
+
+  // Shared logic for the two OnHostResolutionComplete() overloads. Checks if
+  // any of the passed in endpoints can be used to set up an aliased session for
+  // `key`. Returns true if it set up an alias, and the caller should thus
+  // return kMayBeDeletedAsync.
+  //
+  // TODO(crbug.com/484073410): Once TcpConnectJob ships and TransportConnectJob
+  // is removed, merge this back into OnHostResolutionComplete().
+  bool OnHostResolutionCompleteShared(
+      const SpdySessionKey& key,
+      bool is_websocket,
+      const ConnectionEndpointMetadata& metadata,
+      base::span<const IPEndPoint> ip_endpoints,
+      const base::flat_set<std::string>& aliases);
+
+  raw_ptr<HttpServerProperties> http_server_properties_;
+
+  raw_ptr<TransportSecurityState> transport_security_state_;
 
   // The set of all sessions. This is a superset of the sessions in
   // |available_sessions_|.
@@ -429,17 +523,14 @@ class NET_EXPORT SpdySessionPool
   // A map of DNS alias vectors by session keys.
   DnsAliasesBySessionKeyMap dns_aliases_by_session_key_;
 
-  // The index of all unclaimed pushed streams of all SpdySessions in this pool.
-  Http2PushPromiseIndex push_promise_index_;
-
-  SSLClientContext* const ssl_client_context_;
-  HostResolver* const resolver_;
+  const raw_ptr<SSLClientContext> ssl_client_context_;
+  const raw_ptr<HostResolver> resolver_;
 
   // Versions of QUIC which may be used.
   const quic::ParsedQuicVersionVector quic_supported_versions_;
 
   // Defaults to true. May be controlled via SpdySessionPoolPeer for tests.
-  bool enable_sending_initial_data_;
+  bool enable_sending_initial_data_ = true;
   bool enable_ping_based_connection_checking_;
 
   const bool is_http2_enabled_;
@@ -456,10 +547,17 @@ class NET_EXPORT SpdySessionPool
   // and maximum HPACK dynamic table size.
   const spdy::SettingsMap initial_settings_;
 
+  // If true, a setting parameter with reserved identifier will be sent in every
+  // initial SETTINGS frame, see
+  // https://tools.ietf.org/html/draft-bishop-httpbis-grease-00.
+  // The setting identifier and value will be drawn independently for each
+  // connection to prevent tracking of the client.
+  const bool enable_http2_settings_grease_;
+
   // If set, an HTTP/2 frame with a reserved frame type will be sent after
   // every HTTP/2 SETTINGS frame and before every HTTP/2 DATA frame. See
   // https://tools.ietf.org/html/draft-bishop-httpbis-grease-00.
-  const absl::optional<GreasedHttp2Frame> greased_http2_frame_;
+  const std::optional<GreasedHttp2Frame> greased_http2_frame_;
 
   // If set, the HEADERS frame carrying a request without body will not have the
   // END_STREAM flag set.  The stream will be closed by a subsequent empty DATA
@@ -476,16 +574,22 @@ class NET_EXPORT SpdySessionPool
   // HEADERS frames and PRIORITY frames if it has value 1.
   const bool enable_priority_update_;
 
+  // If set, sessions will be marked as going away upon relevant network changes
+  // (instead of being closed).
+  const bool go_away_on_ip_change_;
+
+  std::map<SpdySessionKey, std::unique_ptr<ConnectionChangeNotifier>>
+      connection_change_notifier_map_;
+
   SpdySessionRequestMap spdy_session_request_map_;
 
   TimeFunc time_func_;
-  ServerPushDelegate* push_delegate_;
 
-  NetworkQualityEstimator* network_quality_estimator_;
+  raw_ptr<NetworkQualityEstimator> network_quality_estimator_;
+
+  const bool cleanup_sessions_on_ip_address_changed_;
 
   base::WeakPtrFactory<SpdySessionPool> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(SpdySessionPool);
 };
 
 }  // namespace net

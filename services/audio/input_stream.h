@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,11 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/sequence_checker.h"
 #include "base/sync_socket.h"
 #include "base/unguessable_token.h"
 #include "media/mojo/mojom/audio_data_pipe.mojom.h"
@@ -20,27 +23,26 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/bindings/shared_remote.h"
 #include "services/audio/input_controller.h"
+#include "services/audio/loopback_mixin.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 namespace media {
-
+class AecdumpRecordingManager;
 class AudioManager;
 class AudioParameters;
-
 }  // namespace media
 
 namespace audio {
-
-class InputStreamActivityMonitor;
 class InputSyncWriter;
-class UserInputMonitor;
+class MlModelManager;
 
 class InputStream final : public media::mojom::AudioInputStream,
                           public InputController::EventHandler {
  public:
   using CreatedCallback =
-      base::OnceCallback<void(media::mojom::ReadOnlyAudioDataPipePtr,
+      base::OnceCallback<void(media::mojom::ReadWriteAudioDataPipePtr,
                               bool,
-                              const absl::optional<base::UnguessableToken>&)>;
+                              const std::optional<base::UnguessableToken>&)>;
   using DeleteCallback = base::OnceCallback<void(InputStream*)>;
 
   InputStream(
@@ -49,14 +51,21 @@ class InputStream final : public media::mojom::AudioInputStream,
       mojo::PendingReceiver<media::mojom::AudioInputStream> receiver,
       mojo::PendingRemote<media::mojom::AudioInputStreamClient> client,
       mojo::PendingRemote<media::mojom::AudioInputStreamObserver> observer,
-      mojo::PendingRemote<media::mojom::AudioLog> log,
+      mojo::SharedRemote<media::mojom::AudioLog> log,
       media::AudioManager* manager,
-      std::unique_ptr<UserInputMonitor> user_input_monitor,
-      InputStreamActivityMonitor* activity_monitor,
+      media::AecdumpRecordingManager* aecdump_recording_manager,
+      raw_ptr<MlModelManager> ml_model_manager,
+      std::unique_ptr<ReferenceSignalProvider> reference_signal_provider,
+      media::mojom::AudioProcessingConfigPtr processing_config,
+      LoopbackMixin::MaybeCreateCallback maybe_create_loopback_mixin_cb,
       const std::string& device_id,
       const media::AudioParameters& params,
       uint32_t shared_memory_count,
       bool enable_agc);
+
+  InputStream(const InputStream&) = delete;
+  InputStream& operator=(const InputStream&) = delete;
+
   ~InputStream() override;
 
   const base::UnguessableToken& id() const { return id_; }
@@ -69,16 +78,18 @@ class InputStream final : public media::mojom::AudioInputStream,
   // InputController::EventHandler implementation.
   void OnCreated(bool initially_muted) override;
   void OnError(InputController::ErrorCode error_code) override;
-  void OnLog(base::StringPiece) override;
+  void OnLog(std::string_view) override;
   void OnMuted(bool is_muted) override;
 
  private:
   void OnStreamError(
-      absl::optional<media::mojom::AudioInputStreamObserver::DisconnectReason>
+      std::optional<media::mojom::AudioInputStreamObserver::DisconnectReason>
           reason_to_report);
   void OnStreamPlatformError();
   void CallDeleter();
-  void SendLogMessage(const char* format, ...) PRINTF_FORMAT(2, 3);
+  void SendLogMessage(const std::string& message);
+
+  SEQUENCE_CHECKER(owning_sequence_);
 
   const base::UnguessableToken id_;
 
@@ -96,13 +107,9 @@ class InputStream final : public media::mojom::AudioInputStream,
   base::CancelableSyncSocket foreign_socket_;
   const std::unique_ptr<InputSyncWriter> writer_;
   std::unique_ptr<InputController> controller_;
-  const std::unique_ptr<UserInputMonitor> user_input_monitor_;
 
-  SEQUENCE_CHECKER(owning_sequence_);
-
+  const perfetto::NamedTrack trace_track_;
   base::WeakPtrFactory<InputStream> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(InputStream);
 };
 
 }  // namespace audio

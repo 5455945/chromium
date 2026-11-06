@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,13 +10,15 @@
 #include <memory>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/run_loop.h"
+#include "base/task/thread_pool.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
+#include "components/viz/test/test_context_provider.h"
 #include "media/capture/video/chromeos/mock_camera_module.h"
 #include "media/capture/video/chromeos/mock_vendor_tag_ops.h"
 #include "media/capture/video/chromeos/video_capture_device_factory_chromeos.h"
-#include "media/capture/video/mock_gpu_memory_buffer_manager.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -24,7 +26,6 @@
 
 using testing::_;
 using testing::A;
-using testing::Invoke;
 using testing::Return;
 
 namespace {
@@ -38,21 +39,29 @@ namespace media {
 
 class CameraHalDelegateTest : public ::testing::Test {
  public:
-  CameraHalDelegateTest() : hal_delegate_thread_("HalDelegateThread") {}
+  CameraHalDelegateTest() {}
+
+  CameraHalDelegateTest(const CameraHalDelegateTest&) = delete;
+  CameraHalDelegateTest& operator=(const CameraHalDelegateTest&) = delete;
 
   void SetUp() override {
-    VideoCaptureDeviceFactoryChromeOS::SetGpuBufferManager(
-        &mock_gpu_memory_buffer_manager_);
-    hal_delegate_thread_.Start();
-    camera_hal_delegate_ =
-        new CameraHalDelegate(hal_delegate_thread_.task_runner());
+    test_sii_ = base::MakeRefCounted<gpu::TestSharedImageInterface>();
+    VideoCaptureDeviceFactoryChromeOS::SetSharedImageInterface(test_sii_);
+    camera_hal_delegate_ = std::make_unique<CameraHalDelegate>(
+        base::SingleThreadTaskRunner::GetCurrentDefault());
+    if (!camera_hal_delegate_->Init()) {
+      LOG(ERROR) << "Failed to initialize CameraHalDelegate";
+      camera_hal_delegate_.reset();
+      return;
+    }
     camera_hal_delegate_->SetCameraModule(
         mock_camera_module_.GetPendingRemote());
   }
 
   void TearDown() override {
-    camera_hal_delegate_->Reset();
-    hal_delegate_thread_.Stop();
+    VideoCaptureDeviceFactoryChromeOS::SetSharedImageInterface(nullptr);
+    camera_hal_delegate_.reset();
+    task_environment_.RunUntilIdle();
   }
 
   void Wait() {
@@ -62,15 +71,13 @@ class CameraHalDelegateTest : public ::testing::Test {
 
  protected:
   base::test::TaskEnvironment task_environment_;
-  scoped_refptr<CameraHalDelegate> camera_hal_delegate_;
+  std::unique_ptr<CameraHalDelegate> camera_hal_delegate_;
   testing::StrictMock<unittest_internal::MockCameraModule> mock_camera_module_;
   testing::StrictMock<unittest_internal::MockVendorTagOps> mock_vendor_tag_ops_;
-  unittest_internal::MockGpuMemoryBufferManager mock_gpu_memory_buffer_manager_;
+  scoped_refptr<gpu::TestSharedImageInterface> test_sii_;
 
  private:
-  base::Thread hal_delegate_thread_;
   std::unique_ptr<base::RunLoop> run_loop_;
-  DISALLOW_COPY_AND_ASSIGN(CameraHalDelegateTest);
 };
 
 TEST_F(CameraHalDelegateTest, GetBuiltinCameraInfo) {
@@ -109,7 +116,8 @@ TEST_F(CameraHalDelegateTest, GetBuiltinCameraInfo) {
     min_frame_durations[6] = 720;
     min_frame_durations[7] = 16666666;
     uint8_t* as_int8 = reinterpret_cast<uint8_t*>(min_frame_durations.data());
-    entry->data.assign(as_int8, as_int8 + entry->count * sizeof(int64_t));
+    entry->data.assign(as_int8,
+                       UNSAFE_TODO(as_int8 + entry->count * sizeof(int64_t)));
     static_metadata->entries->push_back(std::move(entry));
 
     entry = cros::mojom::CameraMetadataEntry::New();
@@ -120,7 +128,8 @@ TEST_F(CameraHalDelegateTest, GetBuiltinCameraInfo) {
     entry->count = 4;
     std::vector<int32_t> default_fps_range{30, 30, 60, 60};
     as_int8 = reinterpret_cast<uint8_t*>(default_fps_range.data());
-    entry->data.assign(as_int8, as_int8 + entry->count * sizeof(int32_t));
+    entry->data.assign(as_int8,
+                       UNSAFE_TODO(as_int8 + entry->count * sizeof(int32_t)));
     static_metadata->entries->push_back(std::move(entry));
 
     switch (camera_id) {
@@ -176,7 +185,7 @@ TEST_F(CameraHalDelegateTest, GetBuiltinCameraInfo) {
 
   EXPECT_CALL(mock_camera_module_, DoGetNumberOfCameras(_))
       .Times(1)
-      .WillOnce(Invoke(get_number_of_cameras_cb));
+      .WillOnce(get_number_of_cameras_cb);
   EXPECT_CALL(
       mock_camera_module_,
       DoSetCallbacksAssociated(
@@ -184,28 +193,28 @@ TEST_F(CameraHalDelegateTest, GetBuiltinCameraInfo) {
               cros::mojom::CameraModuleCallbacks>&>(),
           A<cros::mojom::CameraModule::SetCallbacksAssociatedCallback&>()))
       .Times(1)
-      .WillOnce(Invoke(set_callbacks_cb));
+      .WillOnce(set_callbacks_cb);
   EXPECT_CALL(mock_camera_module_,
               DoGetVendorTagOps(
                   A<mojo::PendingReceiver<cros::mojom::VendorTagOps>>(),
                   A<cros::mojom::CameraModule::GetVendorTagOpsCallback&>()))
       .Times(1)
-      .WillOnce(Invoke(get_vendor_tag_ops_cb));
+      .WillOnce(get_vendor_tag_ops_cb);
   EXPECT_CALL(mock_camera_module_,
               DoGetCameraInfo(
                   0, A<cros::mojom::CameraModule::GetCameraInfoCallback&>()))
       .Times(1)
-      .WillOnce(Invoke(get_camera_info_cb));
+      .WillOnce(get_camera_info_cb);
   EXPECT_CALL(mock_camera_module_,
               DoGetCameraInfo(
                   1, A<cros::mojom::CameraModule::GetCameraInfoCallback&>()))
       .Times(1)
-      .WillOnce(Invoke(get_camera_info_cb));
+      .WillOnce(get_camera_info_cb);
   EXPECT_CALL(mock_camera_module_,
               DoGetCameraInfo(
                   2, A<cros::mojom::CameraModule::GetCameraInfoCallback&>()))
       .Times(1)
-      .WillOnce(Invoke(get_camera_info_cb));
+      .WillOnce(get_camera_info_cb);
 
   EXPECT_CALL(mock_vendor_tag_ops_, DoGetTagCount())
       .Times(1)
@@ -228,14 +237,11 @@ TEST_F(CameraHalDelegateTest, GetBuiltinCameraInfo) {
       .WillOnce(
           Return(static_cast<int32_t>(cros::mojom::EntryType::TYPE_BYTE)));
 
-  EXPECT_CALL(mock_gpu_memory_buffer_manager_,
-              CreateGpuMemoryBuffer(
-                  _, gfx::BufferFormat::YUV_420_BIPLANAR,
-                  gfx::BufferUsage::VEA_READ_CAMERA_AND_CPU_READ_WRITE,
-                  gpu::kNullSurfaceHandle, nullptr))
-      .Times(1)
-      .WillOnce(Invoke(&unittest_internal::MockGpuMemoryBufferManager::
-                           CreateFakeGpuMemoryBuffer));
+  EXPECT_CALL(*test_sii_,
+              DoCreateSharedImage(
+                  _, viz::MultiPlaneFormat::kNV12, gpu::kNullSurfaceHandle,
+                  gfx::BufferUsage::VEA_READ_CAMERA_AND_CPU_READ_WRITE))
+      .Times(1);
 
   std::vector<VideoCaptureDeviceInfo> devices_info;
   base::RunLoop run_loop;

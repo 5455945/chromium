@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,9 @@
 
 #include <utility>
 
-#include "ash/public/cpp/accessibility_controller.h"
+#include "ash/accessibility/accessibility_controller.h"
+#include "base/i18n/language_tag.h"
+#include "base/time/time.h"
 #include "ui/gfx/geometry/point_f.h"
 
 namespace ash {
@@ -70,7 +72,8 @@ void TestAccessibilityControllerClient::RequestSelectToSpeakStateChange() {
 }
 
 void TestAccessibilityControllerClient::
-    RequestAutoclickScrollableBoundsForPoint(gfx::Point& point_in_screen) {}
+    RequestAutoclickScrollableBoundsForPoint(
+        const gfx::Point& point_in_screen) {}
 
 void TestAccessibilityControllerClient::MagnifierBoundsChanged(
     const gfx::Rect& bounds_in_screen) {}
@@ -87,9 +90,32 @@ void TestAccessibilityControllerClient::OnSelectToSpeakPanelAction(
 void TestAccessibilityControllerClient::SetA11yOverrideWindow(
     aura::Window* a11y_override_window) {}
 
-absl::optional<Sound>
+base::i18n::LanguageTag
+TestAccessibilityControllerClient::GetDictationDefaultLocale(bool new_user) {
+  return base::i18n::GetKnownLanguageTag("en-US");
+}
+
+void TestAccessibilityControllerClient::
+    SendFaceGazeDisableDialogResultToSettings(bool accepted) {}
+
+void TestAccessibilityControllerClient::OnHoverTextPointUpdated(
+    const gfx::Point& point_in_screen,
+    HoverTextPointerType pointer_type) {
+  last_hover_text_point_ = point_in_screen;
+  last_hover_text_pointer_type_ = pointer_type;
+  ++hover_text_point_update_count_;
+}
+
+void TestAccessibilityControllerClient::OnHoverTextKeyEvent(bool is_active,
+                                                            bool stop_speech) {
+  last_hover_text_activation_key_held_ = is_active;
+  last_hover_text_stop_speech_ = stop_speech;
+  ++hover_text_key_event_count_;
+}
+
+std::optional<Sound>
 TestAccessibilityControllerClient::GetPlayedEarconAndReset() {
-  return std::exchange(sound_key_, absl::nullopt);
+  return std::exchange(sound_key_, std::nullopt);
 }
 
 }  // namespace ash

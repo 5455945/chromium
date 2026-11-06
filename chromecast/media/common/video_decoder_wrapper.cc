@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,6 +19,9 @@ class VideoDecoderWrapper::RevokedVideoDecoder
   explicit RevokedVideoDecoder(const Statistics& statistics)
       : statistics_(statistics) {}
 
+  RevokedVideoDecoder(const RevokedVideoDecoder&) = delete;
+  RevokedVideoDecoder& operator=(const RevokedVideoDecoder&) = delete;
+
   ~RevokedVideoDecoder() override = default;
 
  private:
@@ -36,13 +39,12 @@ class VideoDecoderWrapper::RevokedVideoDecoder
   }
 
   Statistics statistics_;
-  DISALLOW_COPY_AND_ASSIGN(RevokedVideoDecoder);
 };
 
 VideoDecoderWrapper::VideoDecoderWrapper(
     MediaPipelineBackend::VideoDecoder* decoder)
     : decoder_(decoder) {
-  DCHECK(decoder_);
+  CHECK(decoder_, base::NotFatalUntil::M163);
 }
 
 VideoDecoderWrapper::VideoDecoderWrapper() {

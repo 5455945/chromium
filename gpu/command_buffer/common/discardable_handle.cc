@@ -1,4 +1,4 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -43,16 +43,12 @@ bool DiscardableHandleBase::ValidateParameters(const Buffer* buffer,
   return true;
 }
 
-bool DiscardableHandleBase::IsDeletedForTracing() const {
-  return kHandleDeleted == base::subtle::NoBarrier_Load(AsAtomic());
-}
-
 bool DiscardableHandleBase::IsLockedForTesting() const {
   return kHandleLockedStart <= base::subtle::NoBarrier_Load(AsAtomic());
 }
 
 bool DiscardableHandleBase::IsDeletedForTesting() const {
-  return IsDeletedForTracing();
+  return kHandleDeleted == base::subtle::NoBarrier_Load(AsAtomic());
 }
 
 scoped_refptr<Buffer> DiscardableHandleBase::BufferForTesting() const {

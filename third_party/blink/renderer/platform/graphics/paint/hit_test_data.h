@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,29 +7,38 @@
 
 #include "third_party/blink/renderer/platform/graphics/paint/transform_paint_property_node.h"
 #include "third_party/blink/renderer/platform/graphics/touch_action_rect.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 
 namespace blink {
 
-struct PLATFORM_EXPORT HitTestData {
+struct PLATFORM_EXPORT HitTestData : public GarbageCollected<HitTestData> {
+ public:
   Vector<TouchActionRect> touch_action_rects;
-  Vector<IntRect> wheel_event_rects;
+  Vector<gfx::Rect> wheel_event_rects;
+#if BUILDFLAG(IS_ANDROID)
+  Vector<CompositorElementId> xr_regions;
+#endif
 
-  // If scroll_translation is nullptr or in pre-CompositeAfterPaint, this marks
-  // a region in which composited scroll is not allowed. In CompositeAfterPaint
-  // when scroll_translation is not nullptr, this is the bounds of the scroll
-  // container, and whether the region allows composited scrolling depends
-  // whether the scroll_translation is composited.
-  IntRect scroll_hit_test_rect;
-  const TransformPaintPropertyNode* scroll_translation = nullptr;
+  // If scroll_translation is nullptr, this marks a region in which composited
+  // scroll is not allowed. When scroll_translation is not nullptr, this is the
+  // bounds of the scroll container, and whether the region allows composited
+  // scrolling depends whether the scroll_translation is composited.
+  gfx::Rect scroll_hit_test_rect;
+  Member<const TransformPaintPropertyNode> scroll_translation;
+
+  void Trace(Visitor* visitor) const { visitor->Trace(scroll_translation); }
 
   bool operator==(const HitTestData& rhs) const {
     return touch_action_rects == rhs.touch_action_rects &&
            wheel_event_rects == rhs.wheel_event_rects &&
+#if BUILDFLAG(IS_ANDROID)
+           xr_regions == rhs.xr_regions &&
+#endif
            scroll_hit_test_rect == rhs.scroll_hit_test_rect &&
            scroll_translation == rhs.scroll_translation;
   }
-  bool operator!=(const HitTestData& rhs) const { return !(*this == rhs); }
 
   String ToString() const;
 };

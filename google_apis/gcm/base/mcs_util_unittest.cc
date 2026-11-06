@@ -1,16 +1,17 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 
 #include "google_apis/gcm/base/mcs_util.h"
 
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <memory>
 
-#include "base/bind.h"
-#include "base/cxx17_backports.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -48,11 +49,9 @@ TEST(MCSUtilTest, ProtobufToTag) {
 // Test getting and setting persistent ids.
 TEST(MCSUtilTest, PersistentIds) {
   static_assert(kNumProtoTypes == 16U, "Update Persistent Ids");
-  const int kTagsWithPersistentIds[] = {
-    kIqStanzaTag,
-    kDataMessageStanzaTag
-  };
-  for (size_t i = 0; i < base::size(kTagsWithPersistentIds); ++i) {
+  const auto kTagsWithPersistentIds =
+      std::to_array<int>({kIqStanzaTag, kDataMessageStanzaTag});
+  for (size_t i = 0; i < std::size(kTagsWithPersistentIds); ++i) {
     int tag = kTagsWithPersistentIds[i];
     std::unique_ptr<google::protobuf::MessageLite> protobuf =
         BuildProtobufFromTag(tag);
@@ -67,14 +66,14 @@ TEST(MCSUtilTest, PersistentIds) {
 // Test getting and setting stream ids.
 TEST(MCSUtilTest, StreamIds) {
   static_assert(kNumProtoTypes == 16U, "Update Stream Ids");
-  const int kTagsWithStreamIds[] = {
-    kIqStanzaTag,
-    kDataMessageStanzaTag,
-    kHeartbeatPingTag,
-    kHeartbeatAckTag,
-    kLoginResponseTag,
-  };
-  for (size_t i = 0; i < base::size(kTagsWithStreamIds); ++i) {
+  const auto kTagsWithStreamIds = std::to_array<int>({
+      kIqStanzaTag,
+      kDataMessageStanzaTag,
+      kHeartbeatPingTag,
+      kHeartbeatAckTag,
+      kLoginResponseTag,
+  });
+  for (size_t i = 0; i < std::size(kTagsWithStreamIds); ++i) {
     int tag = kTagsWithStreamIds[i];
     std::unique_ptr<google::protobuf::MessageLite> protobuf =
         BuildProtobufFromTag(tag);

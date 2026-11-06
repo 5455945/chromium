@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,21 +6,24 @@
 
 #undef Bool
 
+#include "base/containers/span.h"
 #include "base/memory/ref_counted_memory.h"
-#include "base/sys_byteorder.h"
+#include "base/numerics/byte_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace ui {
 
 namespace {
-std::vector<XCursorLoader::Image> ParseFile(std::vector<uint32_t>* data,
+std::vector<XCursorLoader::Image> ParseFile(base::span<const uint32_t> data,
                                             uint32_t preferred_size) {
-  for (uint32_t& i : *data)
-    i = base::ByteSwapToLE32(i);
-  std::vector<uint8_t> vec(data->size() * sizeof(uint32_t));
-  memcpy(vec.data(), data->data(), vec.size());
-  return ParseCursorFile(base::RefCountedBytes::TakeVector(&vec),
-                         preferred_size);
+  std::vector<uint8_t> vec(data.size() * 4u);
+  for (size_t i = 0; i < data.size(); ++i) {
+    auto bytes = base::span(vec).subspan(i * 4u).first<4u>();
+    bytes.copy_from(base::U32ToLittleEndian(data[i]));
+  }
+  return ParseCursorFile(
+      base::MakeRefCounted<base::RefCountedBytes>(std::move(vec)),
+      preferred_size);
 }
 
 }  // namespace
@@ -64,7 +67,7 @@ TEST(XCursorLoaderTest, Basic) {
       // chunk data (ARGB image)
       0xff123456,
   };
-  auto images = ParseFile(&file, 1);
+  auto images = ParseFile(file, 1);
   ASSERT_EQ(images.size(), 1ul);
   EXPECT_EQ(images[0].frame_delay.InMilliseconds(), 123);
   EXPECT_EQ(images[0].bitmap.width(), 1);
@@ -146,10 +149,10 @@ TEST(XCursorLoaderTest, BestSize) {
       // delay
       0,
       // chunk data (ARGB image)
-      0xffffffff,
-      0xffffffff,
-      0xffffffff,
-      0xffffffff,
+      0xff112233,
+      0xff445566,
+      0xff778899,
+      0xffaabbcc,
 
       // bytes in header
       16,
@@ -180,10 +183,14 @@ TEST(XCursorLoaderTest, BestSize) {
       0xffffffff,
       0xffffffff,
   };
-  auto images = ParseFile(&file, 2);
+  auto images = ParseFile(file, 2);
   ASSERT_EQ(images.size(), 1ul);
-  EXPECT_EQ(images[0].bitmap.width(), 2);
-  EXPECT_EQ(images[0].bitmap.height(), 2);
+  ASSERT_EQ(images[0].bitmap.width(), 2);
+  ASSERT_EQ(images[0].bitmap.height(), 2);
+  EXPECT_EQ(images[0].bitmap.getColor(0, 0), 0xff112233);
+  EXPECT_EQ(images[0].bitmap.getColor(1, 0), 0xff445566);
+  EXPECT_EQ(images[0].bitmap.getColor(0, 1), 0xff778899);
+  EXPECT_EQ(images[0].bitmap.getColor(1, 1), 0xffaabbcc);
 }
 
 TEST(XCursorLoaderTest, Animated) {
@@ -253,10 +260,37 @@ TEST(XCursorLoaderTest, Animated) {
       // chunk data (ARGB image)
       0xff123456,
   };
-  auto images = ParseFile(&file, 1);
+  auto images = ParseFile(file, 1);
   ASSERT_EQ(images.size(), 2ul);
   EXPECT_EQ(images[0].frame_delay.InMilliseconds(), 500);
   EXPECT_EQ(images[1].frame_delay.InMilliseconds(), 500);
+}
+
+TEST(XCursorLoaderTest, ThemeNameValidation) {
+  const char* const kInvalidThemes[] = {
+      "",
+      ".",
+      "..",
+      "/foo",
+      "/tmp/evil",
+      "../foo",
+      "foo/..",
+      "../../../../tmp/poc-cursor-evil",
+      "foo/bar",
+  };
+  for (const char* theme : kInvalidThemes) {
+    EXPECT_FALSE(IsValidCursorThemeNameForTesting(theme));
+  }
+
+  const char* const kValidThemes[] = {
+      "default",
+      "Adwaita",
+      "DMZ-White",
+      "my_theme-123",
+  };
+  for (const char* theme : kValidThemes) {
+    EXPECT_TRUE(IsValidCursorThemeNameForTesting(theme));
+  }
 }
 
 }  // namespace ui

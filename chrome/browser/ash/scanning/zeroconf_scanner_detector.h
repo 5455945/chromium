@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,23 +7,36 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "base/containers/flat_map.h"
-#include "chrome/browser/ash/scanning/scanner_detector.h"
+#include "base/functional/callback.h"
 #include "chrome/browser/local_discovery/service_discovery_device_lister.h"
+#include "chromeos/ash/components/scanning/scanner.h"
 
 namespace ash {
 
 // Uses mDNS and DNS-SD to detect nearby networked scanners.
+//
+// All of the interface calls in this class must be called from the same
+// sequence but do not have to be on any specific thread.
+//
+// The usual usage of this interface by a class that wants to maintain an
+// up-to-date list of detected scanners is:
+//
+// detector_ = ZeroconfScannerDetector::Create();
+// detector_->RegisterScannersDetectedCallback(callback);
+// scanners_ = detector_->GetScanners();
+//
 class ZeroconfScannerDetector
-    : public ScannerDetector,
-      public local_discovery::ServiceDiscoveryDeviceLister::Delegate {
+    : public local_discovery::ServiceDiscoveryDeviceLister::Delegate {
  public:
   // Service types used by the detector.
   static const char kEsclServiceType[];
   static const char kEsclsServiceType[];
+  static const char kGenericScannerServiceType[];
 
-  ~ZeroconfScannerDetector() override = default;
+  virtual ~ZeroconfScannerDetector() = default;
 
   static std::unique_ptr<ZeroconfScannerDetector> Create();
 
@@ -36,6 +49,16 @@ class ZeroconfScannerDetector
       std::unique_ptr<local_discovery::ServiceDiscoveryDeviceLister>>;
   static std::unique_ptr<ZeroconfScannerDetector> CreateForTesting(
       ListersMap&& device_listers);
+
+  // Registers the callback used to provide notifications when scanners are
+  // detected.
+  using OnScannersDetectedCallback =
+      base::RepeatingCallback<void(std::vector<Scanner> scanners)>;
+  virtual void RegisterScannersDetectedCallback(
+      OnScannersDetectedCallback callback) = 0;
+
+  // Returns the detected scanners.
+  virtual std::vector<Scanner> GetScanners() = 0;
 };
 
 }  // namespace ash

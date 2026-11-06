@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,7 +24,6 @@ class PaymentResponse {
   ~PaymentResponse();
 
   bool operator==(const PaymentResponse& other) const;
-  bool operator!=(const PaymentResponse& other) const;
 
   // The same ID present in the original PaymentRequest.
   std::string payment_request_id;

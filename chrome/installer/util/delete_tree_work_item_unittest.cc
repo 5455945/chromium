@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,6 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/macros.h"
 #include "chrome/installer/util/work_item.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -18,6 +17,10 @@ namespace {
 constexpr char kTextContent[] = "delete me";
 
 class DeleteTreeWorkItemTest : public testing::Test {
+ public:
+  DeleteTreeWorkItemTest(const DeleteTreeWorkItemTest&) = delete;
+  DeleteTreeWorkItemTest& operator=(const DeleteTreeWorkItemTest&) = delete;
+
  protected:
   DeleteTreeWorkItemTest() = default;
 
@@ -37,13 +40,11 @@ class DeleteTreeWorkItemTest : public testing::Test {
     ASSERT_TRUE(base::PathExists(dir_name_2_));
 
     file_name_1_ = dir_name_1_.Append(FILE_PATH_LITERAL("File_1.txt"));
-    ASSERT_TRUE(
-        base::WriteFile(file_name_1_, kTextContent, sizeof(kTextContent)));
+    ASSERT_TRUE(base::WriteFile(file_name_1_, kTextContent));
     ASSERT_TRUE(base::PathExists(file_name_1_));
 
     file_name_2_ = dir_name_2_.Append(FILE_PATH_LITERAL("File_2.txt"));
-    ASSERT_TRUE(
-        base::WriteFile(file_name_2_, kTextContent, sizeof(kTextContent)));
+    ASSERT_TRUE(base::WriteFile(file_name_2_, kTextContent));
     ASSERT_TRUE(base::PathExists(file_name_2_));
   }
 
@@ -71,8 +72,6 @@ class DeleteTreeWorkItemTest : public testing::Test {
   base::FilePath dir_name_2_;
   base::FilePath file_name_1_;
   base::FilePath file_name_2_;
-
-  DISALLOW_COPY_AND_ASSIGN(DeleteTreeWorkItemTest);
 };
 
 }  // namespace

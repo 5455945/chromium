@@ -31,18 +31,25 @@
 #ifndef THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_FRAME_H_
 #define THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_FRAME_H_
 
-#include "cc/paint/paint_canvas.h"
+#include "base/unguessable_token.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
+#include "third_party/blink/public/mojom/frame/frame.mojom-shared.h"
+#include "third_party/blink/public/mojom/frame/frame_replication_state.mojom-forward.h"
 #include "third_party/blink/public/mojom/frame/tree_scope_type.mojom-shared.h"
 #include "third_party/blink/public/mojom/security_context/insecure_request_policy.mojom-shared.h"
+#include "third_party/blink/public/platform/cross_variant_mojo_util.h"
 #include "third_party/blink/public/platform/web_common.h"
 #include "third_party/blink/public/web/web_frame_load_type.h"
 #include "third_party/blink/public/web/web_node.h"
-#include "v8/include/v8.h"
+#include "v8/include/v8-forward.h"
 
 namespace blink {
 
+#if INSIDE_BLINK
 class Frame;
+#endif
+
+class WebElement;
 class WebLocalFrame;
 class WebRemoteFrame;
 class WebSecurityOrigin;
@@ -80,12 +87,15 @@ class BLINK_EXPORT WebFrame {
   virtual WebRemoteFrame* ToWebRemoteFrame() = 0;
   virtual const WebRemoteFrame* ToWebRemoteFrame() const = 0;
 
-  bool Swap(WebFrame*);
-
-  // This method closes and deletes the WebFrame. This is typically called by
-  // the embedder in response to a frame detached callback to the WebFrame
-  // client.
-  virtual void Close();
+  bool Swap(WebLocalFrame* new_frame);
+  bool Swap(
+      WebRemoteFrame* new_frame,
+      CrossVariantMojoAssociatedRemote<mojom::RemoteFrameHostInterfaceBase>
+          remote_frame_host,
+      CrossVariantMojoAssociatedReceiver<mojom::RemoteFrameInterfaceBase>
+          receiver,
+      mojom::FrameReplicationStatePtr replicated_state,
+      const std::optional<base::UnguessableToken>& devtools_frame_token);
 
   // Called by the embedder when it needs to detach the subtree rooted at this
   // frame.
@@ -100,7 +110,7 @@ class BLINK_EXPORT WebFrame {
   mojom::InsecureRequestPolicy GetInsecureRequestPolicy() const;
 
   // The frame's upgrade insecure navigations set.
-  WebVector<unsigned> GetInsecureRequestToUpgrade() const;
+  std::vector<unsigned> GetInsecureRequestToUpgrade() const;
 
   // Hierarchy ----------------------------------------------------------
 
@@ -116,6 +126,10 @@ class BLINK_EXPORT WebFrame {
 
   // Returns the parent frame or 0 if this is a top-most frame.
   WebFrame* Parent() const;
+
+  // Returns the local element that embeds this frame, or a null element when
+  // its owner is not in this renderer.
+  WebElement FrameOwnerElement() const;
 
   // Returns the top-most frame in the hierarchy containing this frame.
   WebFrame* Top() const;
@@ -135,14 +149,20 @@ class BLINK_EXPORT WebFrame {
   // Returns the next frame in "frame traversal order".
   WebFrame* TraverseNext() const;
 
+  // Returns true if this frame is the top-level main frame (associated with
+  // the root Document in a WebContents). See content::Page for detailed
+  // documentation.
+  // This is false for main frames created for fenced-frames.
+  bool IsOutermostMainFrame() const;
+
   // Scripting ----------------------------------------------------------
 
   // Returns the global proxy object.
-  virtual v8::Local<v8::Object> GlobalProxy() const = 0;
+  virtual v8::Local<v8::Object> GlobalProxy(v8::Isolate* isolate) const = 0;
 
   // Returns true if the WebFrame currently executing JavaScript has access
   // to the given WebFrame, or false otherwise.
-  static bool ScriptCanAccess(WebFrame*);
+  static bool ScriptCanAccess(v8::Isolate* isolate, WebFrame*);
 
   // Navigation ----------------------------------------------------------
 
@@ -154,13 +174,17 @@ class BLINK_EXPORT WebFrame {
 
   // True if the frame is thought (heuristically) to be created for
   // advertising purposes.
-  virtual bool IsAdSubframe() const = 0;
+  virtual bool IsAdFrame() const = 0;
 
   // Utility -------------------------------------------------------------
 
   // Returns the frame inside a given frame or iframe element. Returns 0 if
   // the given node is not a frame, iframe or if the frame is empty.
   static WebFrame* FromFrameOwnerElement(const WebNode&);
+
+  // Returns the frame associated with a window or window proxy object. Returns
+  // nullptr if the given value is not a window or if the frame has detached.
+  static WebFrame* FromWindow(v8::Isolate* isolate, v8::Local<v8::Value> value);
 
   // Whether the owner element of this frame is in the document tree or the
   // shadow tree, per https://w3c.github.io/webcomponents/spec/shadow/.

@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,10 @@
 #include <stdint.h>
 
 #include <string>
+#include <string_view>
 
 #include "base/command_line.h"
-#include "base/cxx17_backports.h"
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/notreached.h"
 #include "base/strings/string_util.h"
@@ -19,10 +20,10 @@
 #include "chrome/common/chrome_switches.h"
 #include "ui/base/ui_base_paths.h"
 
-#if defined(OS_POSIX)
+#if BUILDFLAG(IS_POSIX)
 #include <stdio.h>
 #include <unistd.h>
-#elif defined(OS_WIN)
+#elif BUILDFLAG(IS_WIN)
 #include <windows.h>
 #endif
 
@@ -37,7 +38,7 @@ class SimpleConsole {
     GREEN,
   };
 
-  virtual ~SimpleConsole() {}
+  virtual ~SimpleConsole() = default;
 
   // Init must be called before using any other method. If it returns
   // false there will be no console output.
@@ -57,7 +58,7 @@ class SimpleConsole {
   static SimpleConsole* Create();
 };
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 namespace {
 
 // Wrapper for the windows console operating in high-level IO mode.
@@ -70,6 +71,9 @@ class WinConsole : public SimpleConsole {
         std_in_(INVALID_HANDLE_VALUE) {
     ::AllocConsole();
   }
+
+  WinConsole(const WinConsole&) = delete;
+  WinConsole& operator=(const WinConsole&) = delete;
 
   ~WinConsole() override { ::FreeConsole(); }
 
@@ -88,7 +92,7 @@ class WinConsole : public SimpleConsole {
     SetColor(SimpleConsole::DEFAULT);
     Write(u"Press [enter] to continue\n");
     wchar_t buf[256];
-    DWORD read = base::size(buf);
+    DWORD read = std::size(buf);
     ::ReadConsoleW(std_in_, buf, read, &read, NULL);
   }
 
@@ -123,20 +127,21 @@ class WinConsole : public SimpleConsole {
   // implemented as pipes but they have non-documented protocol.
   HANDLE std_out_;
   HANDLE std_in_;
-
-  DISALLOW_COPY_AND_ASSIGN(WinConsole);
 };
 
 }  // namespace
 
 SimpleConsole* SimpleConsole::Create() { return new WinConsole(); }
 
-#elif defined(OS_POSIX)
+#elif BUILDFLAG(IS_POSIX)
 namespace {
 
 class PosixConsole : public SimpleConsole {
  public:
   PosixConsole() : use_color_(false) {}
+
+  PosixConsole(const PosixConsole&) = delete;
+  PosixConsole& operator=(const PosixConsole&) = delete;
 
   bool Init() override {
     // Technically, we should also check the terminal capabilities before using
@@ -173,21 +178,19 @@ class PosixConsole : public SimpleConsole {
       default:
         NOTREACHED();
     }
-    printf("%s", code);
+    UNSAFE_TODO(printf("%s", code));
     return true;
   }
 
  private:
   bool use_color_;
-
-  DISALLOW_COPY_AND_ASSIGN(PosixConsole);
 };
 
 }  // namespace
 
 SimpleConsole* SimpleConsole::Create() { return new PosixConsole(); }
 
-#else  // !defined(OS_WIN) && !defined(OS_POSIX)
+#else  // !BUILDFLAG(IS_WIN) && !BUILDFLAG(IS_POSIX)
 SimpleConsole* SimpleConsole::Create() { return NULL; }
 #endif
 
@@ -238,7 +241,8 @@ void DiagnosticsWriter::OnAllTestsDone(DiagnosticsModel* model) {
 
 void DiagnosticsWriter::OnRecoveryFinished(int index, DiagnosticsModel* model) {
   const DiagnosticsModel::TestInfo& test_info = model->GetTest(index);
-  WriteInfoLine("Finished Recovery for: " + test_info.GetTitle());
+  WriteInfoLine(
+      base::StringPrintf("Finished Recovery for: %s", test_info.GetTitle()));
 }
 
 void DiagnosticsWriter::OnAllRecoveryDone(DiagnosticsModel* model) {
@@ -246,8 +250,8 @@ void DiagnosticsWriter::OnAllRecoveryDone(DiagnosticsModel* model) {
 }
 
 bool DiagnosticsWriter::WriteResult(bool success,
-                                    const std::string& id,
-                                    const std::string& name,
+                                    std::string_view id,
+                                    std::string_view name,
                                     int outcome_code,
                                     const std::string& extra) {
   std::string result;
@@ -268,19 +272,16 @@ bool DiagnosticsWriter::WriteResult(bool success,
       console_->Write(base::ASCIIToUTF16(result));
     }
     if (format_ == MACHINE) {
-      return WriteInfoLine(base::StringPrintf(
-          "%03d %s (%s)", outcome_code, id.c_str(), extra.c_str()));
+      return WriteInfoLine(
+          base::StringPrintf("%03d %s (%s)", outcome_code, id, extra.c_str()));
     } else {
-      return WriteInfoLine(name + "\n       " + extra + "\n");
+      return WriteInfoLine(base::StringPrintf("%s\n       %s\n", name, extra));
     }
   } else {
     if (!success) {
       // For log output, we only care about the tests that failed.
-      return WriteInfoLine(base::StringPrintf("%s%03d %s (%s)",
-                                              result.c_str(),
-                                              outcome_code,
-                                              id.c_str(),
-                                              extra.c_str()));
+      return WriteInfoLine(base::StringPrintf("%s%03d %s (%s)", result.c_str(),
+                                              outcome_code, id, extra.c_str()));
     }
   }
   return true;

@@ -1,11 +1,14 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_HEAP_HEAP_TEST_OBJECTS_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_HEAP_HEAP_TEST_OBJECTS_H_
 
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "base/functional/callback_forward.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
+#include "third_party/blink/renderer/platform/heap/visitor.h"
 
 namespace blink {
 
@@ -98,7 +101,7 @@ class LinkedObject : public GarbageCollected<LinkedObject> {
   explicit LinkedObject(LinkedObject* next) : next_(next) {}
 
   void set_next(LinkedObject* next) { next_ = next; }
-  LinkedObject* next() const { return next_; }
+  LinkedObject* next() const { return next_.Get(); }
   Member<LinkedObject>& next_ref() { return next_; }
 
   virtual void Trace(Visitor* visitor) const { visitor->Trace(next_); }
@@ -125,15 +128,15 @@ class IntegerObject : public GarbageCollected<IntegerObject> {
     return other.Value() == Value();
   }
 
-  unsigned GetHash() { return IntHash<int>::GetHash(x_); }
+  uint32_t GetHash() { return blink::GetHash(x_); }
 
  private:
   int x_;
 };
 
 struct IntegerObjectHash {
-  static unsigned GetHash(const IntegerObject& key) {
-    return WTF::HashInt(static_cast<uint32_t>(key.Value()));
+  static uint32_t GetHash(const IntegerObject& key) {
+    return HashInt(static_cast<uint32_t>(key.Value()));
   }
 
   static bool Equal(const IntegerObject& a, const IntegerObject& b) {

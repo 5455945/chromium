@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,12 +10,10 @@
 #include <memory>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/threading/thread_checker.h"
+#include "base/time/time.h"
 #include "media/capture/video/video_capture_device.h"
-
-namespace gpu {
-class GpuMemoryBufferSupport;
-}  // namespace gpu
 
 namespace media {
 
@@ -47,7 +45,7 @@ class PacmanFramePainter {
                   int bytes_per_row);
 
   const Format pixel_format_;
-  const FakeDeviceState* fake_device_state_ = nullptr;
+  raw_ptr<const FakeDeviceState> fake_device_state_ = nullptr;
 };
 
 // Implementation of VideoCaptureDevice that generates test frames. This is
@@ -69,6 +67,10 @@ class FakeVideoCaptureDevice : public VideoCaptureDevice {
       std::unique_ptr<FrameDelivererFactory> frame_deliverer_factory,
       std::unique_ptr<FakePhotoDevice> photo_device,
       std::unique_ptr<FakeDeviceState> device_state);
+
+  FakeVideoCaptureDevice(const FakeVideoCaptureDevice&) = delete;
+  FakeVideoCaptureDevice& operator=(const FakeVideoCaptureDevice&) = delete;
+
   ~FakeVideoCaptureDevice() override;
 
   static void GetSupportedSizes(std::vector<gfx::Size>* supported_sizes);
@@ -81,15 +83,18 @@ class FakeVideoCaptureDevice : public VideoCaptureDevice {
   void SetPhotoOptions(mojom::PhotoSettingsPtr settings,
                        SetPhotoOptionsCallback callback) override;
   void TakePhoto(TakePhotoCallback callback) override;
+  void InvalidateBuffers() override;
 
  private:
   void BeepAndScheduleNextCapture(base::TimeTicks expected_execution_time);
   void OnNextFrameDue(base::TimeTicks expected_execution_time, int session_id);
 
   const VideoCaptureFormats supported_formats_;
-  const std::unique_ptr<FrameDelivererFactory> frame_deliverer_factory_;
-  const std::unique_ptr<FakePhotoDevice> photo_device_;
+  // `photo_device_` and `frame_deliverer_factory_` both hold a raw pointer on
+  // `device_state_`, so they need to be declared last to be destroyed first.
   const std::unique_ptr<FakeDeviceState> device_state_;
+  const std::unique_ptr<FakePhotoDevice> photo_device_;
+  const std::unique_ptr<FrameDelivererFactory> frame_deliverer_factory_;
   std::unique_ptr<FrameDeliverer> frame_deliverer_;
   int current_session_id_ = 0;
 
@@ -103,8 +108,6 @@ class FakeVideoCaptureDevice : public VideoCaptureDevice {
   // FakeVideoCaptureDevice post tasks to itself for frame construction and
   // needs to deal with asynchronous StopAndDeallocate().
   base::WeakPtrFactory<FakeVideoCaptureDevice> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(FakeVideoCaptureDevice);
 };
 
 // Represents the current state of a FakeVideoCaptureDevice.
@@ -117,18 +120,7 @@ struct FakeDeviceState {
                   double exposure_time,
                   double focus_distance,
                   float frame_rate,
-                  VideoPixelFormat pixel_format)
-      : pan(pan),
-        tilt(tilt),
-        zoom(zoom),
-        exposure_time(exposure_time),
-        focus_distance(focus_distance),
-        format(gfx::Size(), frame_rate, pixel_format) {
-    exposure_mode = (exposure_time >= 0.0f) ? mojom::MeteringMode::MANUAL
-                                            : mojom::MeteringMode::CONTINUOUS;
-    focus_mode = (focus_distance >= 0.0f) ? mojom::MeteringMode::MANUAL
-                                          : mojom::MeteringMode::CONTINUOUS;
-  }
+                  VideoPixelFormat pixel_format);
 
   double pan;
   double tilt;
@@ -138,15 +130,17 @@ struct FakeDeviceState {
   double focus_distance;
   mojom::MeteringMode focus_mode;
   VideoCaptureFormat format;
+  bool background_blur = false;
+  bool background_segmentation_mask = false;
+  bool eye_gaze_correction = false;
+  bool face_framing = false;
 };
 
 // A dependency needed by FakeVideoCaptureDevice.
 class FrameDelivererFactory {
  public:
-  FrameDelivererFactory(
-      FakeVideoCaptureDevice::DeliveryMode delivery_mode,
-      const FakeDeviceState* device_state,
-      std::unique_ptr<gpu::GpuMemoryBufferSupport> gmb_support);
+  FrameDelivererFactory(FakeVideoCaptureDevice::DeliveryMode delivery_mode,
+                        const FakeDeviceState* device_state);
   ~FrameDelivererFactory();
 
   std::unique_ptr<FrameDeliverer> CreateFrameDeliverer(
@@ -155,8 +149,7 @@ class FrameDelivererFactory {
 
  private:
   const FakeVideoCaptureDevice::DeliveryMode delivery_mode_;
-  const FakeDeviceState* device_state_ = nullptr;
-  std::unique_ptr<gpu::GpuMemoryBufferSupport> gmb_support_;
+  raw_ptr<const FakeDeviceState> device_state_ = nullptr;
 };
 
 struct FakePhotoDeviceConfig {
@@ -183,7 +176,7 @@ class FakePhotoDevice {
 
  private:
   const std::unique_ptr<PacmanFramePainter> sk_n32_painter_;
-  const FakeDeviceState* const fake_device_state_;
+  const raw_ptr<const FakeDeviceState> fake_device_state_;
   const FakePhotoDeviceConfig config_;
 };
 

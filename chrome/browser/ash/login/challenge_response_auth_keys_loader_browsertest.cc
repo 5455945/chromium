@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,22 @@
 
 #include <vector>
 
-#include "base/callback_helpers.h"
+#include "base/check_deref.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/scoped_observation.h"
 #include "base/test/bind.h"
 #include "chrome/browser/ash/certificate_provider/test_certificate_provider_extension.h"
+#include "chrome/browser/ash/certificate_provider/test_certificate_provider_extension_mixin.h"
 #include "chrome/browser/ash/login/test/device_state_mixin.h"
 #include "chrome/browser/ash/login/test/oobe_base_test.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/policy/extension_force_install_mixin.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chromeos/login/auth/challenge_response/known_user_pref_utils.h"
-#include "chromeos/login/auth/challenge_response_key.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "chromeos/ash/components/login/auth/challenge_response/known_user_pref_utils.h"
+#include "chromeos/ash/components/login/auth/public/challenge_response_key.h"
 #include "components/account_id/account_id.h"
 #include "components/user_manager/known_user.h"
 #include "content/public/test/browser_test.h"
@@ -27,18 +31,19 @@
 #include "extensions/common/extension_id.h"
 #include "extensions/common/features/simple_feature.h"
 
-namespace chromeos {
-
+namespace ash {
 namespace {
 
 constexpr char kUserEmail[] = "testuser@example.com";
 
-Profile* GetProfile() {
-  return ProfileHelper::GetSigninProfile()->GetOriginalProfile();
+Profile* GetOriginalProfile() {
+  return Profile::FromBrowserContext(
+             BrowserContextHelper::Get()->GetSigninBrowserContext())
+      ->GetOriginalProfile();
 }
 
 extensions::ProcessManager* GetProcessManager() {
-  return extensions::ProcessManager::Get(GetProfile());
+  return extensions::ProcessManager::Get(GetOriginalProfile());
 }
 
 }  // namespace
@@ -58,23 +63,21 @@ class ChallengeResponseAuthKeysLoaderBrowserTest : public OobeBaseTest {
   void SetUpOnMainThread() override {
     OobeBaseTest::SetUpOnMainThread();
     challenge_response_auth_keys_loader_ =
-        std::make_unique<ChallengeResponseAuthKeysLoader>();
+        std::make_unique<ChallengeResponseAuthKeysLoader>(
+            g_browser_process->local_state());
     challenge_response_auth_keys_loader_->SetMaxWaitTimeForTesting(
         base::TimeDelta::Max());
 
-    certificate_provider_extension_ =
-        std::make_unique<TestCertificateProviderExtension>(GetProfile());
     extension_force_install_mixin_.InitWithDeviceStateMixin(
-        GetProfile(), &device_state_mixin_);
+        GetOriginalProfile(), &device_state_mixin_);
 
     // Register the ChallengeResponseKey for the user.
-    user_manager::known_user::SaveKnownUser(account_id_);
+    user_manager::KnownUser(g_browser_process->local_state())
+        .SaveKnownUser(account_id_);
   }
 
   void TearDownOnMainThread() override {
-    certificate_provider_extension_.reset();
-    if (!should_delete_loader_after_shutdown_)
-      challenge_response_auth_keys_loader_.reset();
+    challenge_response_auth_keys_loader_.reset();
     OobeBaseTest::TearDownOnMainThread();
   }
 
@@ -82,14 +85,16 @@ class ChallengeResponseAuthKeysLoaderBrowserTest : public OobeBaseTest {
     std::vector<ChallengeResponseKey> challenge_response_keys;
     ChallengeResponseKey challenge_response_key;
     challenge_response_key.set_public_key_spki_der(GetSpki());
-    if (with_extension_id)
+    if (with_extension_id) {
       challenge_response_key.set_extension_id(extension_id());
+    }
 
     challenge_response_keys.push_back(challenge_response_key);
-    base::Value challenge_response_keys_value =
+    base::ListValue challenge_response_keys_value =
         SerializeChallengeResponseKeysForKnownUser(challenge_response_keys);
-    user_manager::known_user::SetChallengeResponseKeys(
-        account_id_, std::move(challenge_response_keys_value));
+    user_manager::KnownUser(g_browser_process->local_state())
+        .SetChallengeResponseKeys(account_id_,
+                                  std::move(challenge_response_keys_value));
   }
 
   void OnAvailableKeysLoaded(
@@ -110,12 +115,10 @@ class ChallengeResponseAuthKeysLoaderBrowserTest : public OobeBaseTest {
   }
 
   void InstallExtension(bool wait_on_extension_loaded) {
-    EXPECT_TRUE(extension_force_install_mixin_.ForceInstallFromSourceDir(
-        TestCertificateProviderExtension::GetExtensionSourcePath(),
-        TestCertificateProviderExtension::GetExtensionPemPath(),
-        wait_on_extension_loaded
-            ? ExtensionForceInstallMixin::WaitMode::kBackgroundPageFirstLoad
-            : ExtensionForceInstallMixin::WaitMode::kPrefSet));
+    test_certificate_provider_extension_mixin_.ForceInstall(
+        GetOriginalProfile(),
+        /*wait_on_extension_loaded=*/wait_on_extension_loaded,
+        /*immediately_provide_certificates=*/wait_on_extension_loaded);
   }
 
   std::vector<ChallengeResponseKey> LoadChallengeResponseKeys() {
@@ -146,9 +149,6 @@ class ChallengeResponseAuthKeysLoaderBrowserTest : public OobeBaseTest {
     challenge_response_auth_keys_loader_.reset();
   }
 
-  void set_should_delete_loader_after_shutdown() {
-    should_delete_loader_after_shutdown_ = true;
-  }
 
  private:
   const AccountId account_id_{AccountId::FromUserEmail(kUserEmail)};
@@ -159,16 +159,15 @@ class ChallengeResponseAuthKeysLoaderBrowserTest : public OobeBaseTest {
 
   DeviceStateMixin device_state_mixin_{
       &mixin_host_, DeviceStateMixin::State::OOBE_COMPLETED_CLOUD_ENROLLED};
-  std::unique_ptr<TestCertificateProviderExtension>
-      certificate_provider_extension_;
+
   ExtensionForceInstallMixin extension_force_install_mixin_{&mixin_host_};
+  TestCertificateProviderExtensionMixin
+      test_certificate_provider_extension_mixin_{
+          &mixin_host_, &extension_force_install_mixin_};
 
   std::unique_ptr<ChallengeResponseAuthKeysLoader>
       challenge_response_auth_keys_loader_;
 
-  // Whether `challenge_response_auth_keys_loader_` should be destroyed after
-  // the browser shutdown, not before it.
-  bool should_delete_loader_after_shutdown_ = false;
 
   base::WeakPtrFactory<ChallengeResponseAuthKeysLoaderBrowserTest>
       weak_ptr_factory_{this};
@@ -180,8 +179,8 @@ IN_PROC_BROWSER_TEST_F(ChallengeResponseAuthKeysLoaderBrowserTest,
   InstallExtension(/*wait_on_extension_loaded=*/true);
 
   // Challenge Response Auth Keys cannot be loaded.
-  EXPECT_FALSE(
-      ChallengeResponseAuthKeysLoader::CanAuthenticateUser(account_id()));
+  EXPECT_FALSE(ChallengeResponseAuthKeysLoader::CanAuthenticateUser(
+      CHECK_DEREF(g_browser_process->local_state()), account_id()));
   EXPECT_EQ(LoadChallengeResponseKeys().size(), static_cast<size_t>(0));
 }
 
@@ -191,8 +190,8 @@ IN_PROC_BROWSER_TEST_F(ChallengeResponseAuthKeysLoaderBrowserTest,
   RegisterChallengeResponseKey(/*with_extension_id=*/true);
 
   // Challenge Response Auth Keys can be loaded.
-  EXPECT_TRUE(
-      ChallengeResponseAuthKeysLoader::CanAuthenticateUser(account_id()));
+  EXPECT_TRUE(ChallengeResponseAuthKeysLoader::CanAuthenticateUser(
+      CHECK_DEREF(g_browser_process->local_state()), account_id()));
 
   // LoadAvailableKeys returns no keys, since there's no extension available.
   EXPECT_EQ(LoadChallengeResponseKeys().size(), static_cast<size_t>(0));
@@ -206,8 +205,8 @@ IN_PROC_BROWSER_TEST_F(ChallengeResponseAuthKeysLoaderBrowserTest,
   InstallExtension(/*wait_on_extension_loaded=*/true);
 
   // Challenge Response Auth Keys can be loaded.
-  EXPECT_TRUE(
-      ChallengeResponseAuthKeysLoader::CanAuthenticateUser(account_id()));
+  EXPECT_TRUE(ChallengeResponseAuthKeysLoader::CanAuthenticateUser(
+      CHECK_DEREF(g_browser_process->local_state()), account_id()));
 
   // LoadAvailableKeys returns the expected keys.
   std::vector<ChallengeResponseKey> challenge_response_keys =
@@ -227,8 +226,8 @@ IN_PROC_BROWSER_TEST_F(ChallengeResponseAuthKeysLoaderBrowserTest,
   InstallExtension(/*wait_on_extension_loaded=*/false);
 
   // Challenge Response Auth Keys can be loaded.
-  EXPECT_TRUE(
-      ChallengeResponseAuthKeysLoader::CanAuthenticateUser(account_id()));
+  EXPECT_TRUE(ChallengeResponseAuthKeysLoader::CanAuthenticateUser(
+      CHECK_DEREF(g_browser_process->local_state()), account_id()));
 
   // LoadAvailableKeys returns the expected keys.
   std::vector<ChallengeResponseKey> challenge_response_keys =
@@ -247,8 +246,8 @@ IN_PROC_BROWSER_TEST_F(ChallengeResponseAuthKeysLoaderBrowserTest,
       base::TimeDelta::Min());
 
   // Challenge Response Auth Keys can be loaded.
-  EXPECT_TRUE(
-      ChallengeResponseAuthKeysLoader::CanAuthenticateUser(account_id()));
+  EXPECT_TRUE(ChallengeResponseAuthKeysLoader::CanAuthenticateUser(
+      CHECK_DEREF(g_browser_process->local_state()), account_id()));
 
   // LoadAvailableKeys returns before any keys are available.
   std::vector<ChallengeResponseKey> challenge_response_keys =
@@ -263,8 +262,8 @@ IN_PROC_BROWSER_TEST_F(ChallengeResponseAuthKeysLoaderBrowserTest,
   InstallExtension(/*wait_on_extension_loaded=*/true);
 
   // Challenge Response Auth Keys can be loaded.
-  EXPECT_TRUE(
-      ChallengeResponseAuthKeysLoader::CanAuthenticateUser(account_id()));
+  EXPECT_TRUE(ChallengeResponseAuthKeysLoader::CanAuthenticateUser(
+      CHECK_DEREF(g_browser_process->local_state()), account_id()));
 
   // LoadAvailableKeys returns the expected keys.
   std::vector<ChallengeResponseKey> challenge_response_keys =
@@ -281,8 +280,8 @@ IN_PROC_BROWSER_TEST_F(ChallengeResponseAuthKeysLoaderBrowserTest,
   InstallExtension(/*wait_on_extension_loaded=*/false);
 
   // Challenge Response Auth Keys can be loaded.
-  EXPECT_TRUE(
-      ChallengeResponseAuthKeysLoader::CanAuthenticateUser(account_id()));
+  EXPECT_TRUE(ChallengeResponseAuthKeysLoader::CanAuthenticateUser(
+      CHECK_DEREF(g_browser_process->local_state()), account_id()));
 
   // Start the LoadAvailableKeys operation. The operation is expected to never
   // complete.
@@ -296,25 +295,6 @@ IN_PROC_BROWSER_TEST_F(ChallengeResponseAuthKeysLoaderBrowserTest,
   DeleteChallengeResponseAuthKeysLoader();
 }
 
-// Tests the case when the load operation isn't completed by the time the
-// browser shuts down.
-IN_PROC_BROWSER_TEST_F(ChallengeResponseAuthKeysLoaderBrowserTest,
-                       AfterShutdown) {
-  RegisterChallengeResponseKey(/*with_extension_id=*/true);
-  InstallExtension(/*wait_on_extension_loaded=*/false);
-
-  // Challenge Response Auth Keys can be loaded.
-  EXPECT_TRUE(
-      ChallengeResponseAuthKeysLoader::CanAuthenticateUser(account_id()));
-
-  // Start the key loading operation. Intentionally do not wait for its
-  // completion.
-  challenge_response_auth_keys_loader()->LoadAvailableKeys(account_id(),
-                                                           base::DoNothing());
-  // Postpone destroying the loader until after the browser shutdown. No crash
-  // should occur.
-  set_should_delete_loader_after_shutdown();
-}
 
 class ChallengeResponseExtensionLoadObserverTest
     : public ChallengeResponseAuthKeysLoaderBrowserTest,
@@ -376,8 +356,9 @@ class ChallengeResponseExtensionLoadObserverTest
   }
 
  private:
-  base::RunLoop* extension_host_created_loop_ = nullptr;
-  extensions::ExtensionHost* extension_host_ = nullptr;
+  raw_ptr<base::RunLoop> extension_host_created_loop_ = nullptr;
+  raw_ptr<extensions::ExtensionHost, DanglingUntriaged> extension_host_ =
+      nullptr;
   base::ScopedObservation<extensions::ProcessManager,
                           extensions::ProcessManagerObserver>
       process_manager_observation_{this};
@@ -394,8 +375,8 @@ IN_PROC_BROWSER_TEST_F(ChallengeResponseExtensionLoadObserverTest,
   InstallExtension(/*wait_on_extension_loaded=*/false);
 
   // Challenge Response Auth Keys can be loaded.
-  EXPECT_TRUE(
-      ChallengeResponseAuthKeysLoader::CanAuthenticateUser(account_id()));
+  EXPECT_TRUE(ChallengeResponseAuthKeysLoader::CanAuthenticateUser(
+      CHECK_DEREF(g_browser_process->local_state()), account_id()));
 
   base::RunLoop load_challenge_response_keys_complete;
   StartLoadingChallengeResponseKeys(&load_challenge_response_keys_complete);
@@ -403,4 +384,4 @@ IN_PROC_BROWSER_TEST_F(ChallengeResponseExtensionLoadObserverTest,
   load_challenge_response_keys_complete.Run();
 }
 
-}  // namespace chromeos
+}  // namespace ash

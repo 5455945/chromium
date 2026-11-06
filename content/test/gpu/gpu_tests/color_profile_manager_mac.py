@@ -1,27 +1,27 @@
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-# The Foundation and Quartz modules are opaque and will trigger no-member
-# warnings on Mac. They will not exist on other platforms and will trigger
-# import-error warnings.
-# pylint: disable=no-member
-# pylint: disable=import-error
 # Variables will be pulled into globals() from the ColorSync framework, and will
 # trigger undefined-variables.
-# pylint: disable=undefined-variable
+# pytype: disable=name-error
 
-from __future__ import print_function
 
-import sys
-if sys.platform.startswith('darwin'):
+from gpu_tests.util import host_information
+
+if host_information.IsMac():
+  # pytype: disable=import-error
   import Foundation
   import Quartz
   import objc
+
+  # pytype: enable=import-error
   # There is no module for the ColorSync framework, so synthesize one using
   # bridge # support.
-  color_sync_framework = '/System/Library/Frameworks/ApplicationServices.' \
-                         'framework/Versions/A/Frameworks/ColorSync.framework'
+  color_sync_framework = (
+    '/System/Library/Frameworks/ApplicationServices.'
+    'framework/Versions/A/Frameworks/ColorSync.framework'
+  )
   # This string is the output of running gen_bridge_metadata on the ColorSync
   # headers.
   color_sync_bridge_string = """<?xml version='1.0'?>
@@ -45,36 +45,45 @@ if sys.platform.startswith('darwin'):
         <retval type='B'/>
       </function>
     </signatures>"""
-  objc.parseBridgeSupport(color_sync_bridge_string, globals(),
-                          color_sync_framework)
+  objc.parseBridgeSupport(
+    color_sync_bridge_string, globals(), color_sync_framework
+  )
+else:
+  Foundation = None
+  Quartz = None
+  objc = None
 
 
 # Set |display_id| to use the color profile specified in |profile_url|. If
 # |profile_url| is None, then use the factor default.
-def SetDisplayCustomProfile(device_id, profile_url):
-  if profile_url == None:
+def SetDisplayCustomProfile(device_id: int, profile_url: str) -> None:
+  if profile_url is None:
     profile_url = Foundation.kCFNull
   profile_info = {
-      kColorSyncDeviceDefaultProfileID: profile_url,
-      kColorSyncProfileUserScope: Foundation.kCFPreferencesCurrentUser
+    kColorSyncDeviceDefaultProfileID: profile_url,  # noqa: F821
+    kColorSyncProfileUserScope: Foundation.kCFPreferencesCurrentUser,  # noqa: F821
   }
-  result = ColorSyncDeviceSetCustomProfiles(kColorSyncDisplayDeviceClass,
-                                            device_id, profile_info)
-  if result != True:
+  result = ColorSyncDeviceSetCustomProfiles(  # noqa: F821
+    kColorSyncDisplayDeviceClass,  # noqa: F821
+    device_id,
+    profile_info,  # noqa: F821
+  )
+  if not result:
     raise Exception('Failed to set display custom profile')
 
 
 # Returns the URL for the system's sRGB color profile.
-def GetSRGBProfileURL():
+def GetSRGBProfileURL() -> str:
   srgb_profile_path = '/System/Library/ColorSync/Profiles/sRGB Profile.icc'
   srgb_profile_url = Foundation.CFURLCreateFromFileSystemRepresentation(
-      None, srgb_profile_path, len(srgb_profile_path), False)
+    None, srgb_profile_path.encode('utf-8'), len(srgb_profile_path), False
+  )
   return srgb_profile_url
 
 
 # Return a map from display ID to custom color profiles set on the display or
 # None if no custom color profile is set.
-def GetDisplaysToProfileURLMap():
+def GetDisplaysToProfileURLMap() -> dict:
   display_profile_url_map = {}
   online_display_list_result = Quartz.CGGetOnlineDisplayList(32, None, None)
   error = online_display_list_result[0]
@@ -82,9 +91,10 @@ def GetDisplaysToProfileURLMap():
     raise Exception('Failed to get online displays from Quartz')
   online_displays = online_display_list_result[1]
   for display_id in online_displays:
-    device_info = ColorSyncDeviceCopyDeviceInfo(
-        kColorSyncDisplayDeviceClass,
-        CGDisplayCreateUUIDFromDisplayID(display_id))
+    device_info = ColorSyncDeviceCopyDeviceInfo(  # noqa: F821
+      kColorSyncDisplayDeviceClass,  # noqa: F821
+      CGDisplayCreateUUIDFromDisplayID(display_id),  # noqa: F821
+    )
     if not device_info:
       raise Exception('KVM connection on bot is broken, please file a bug')
     device_id = device_info['DeviceID']

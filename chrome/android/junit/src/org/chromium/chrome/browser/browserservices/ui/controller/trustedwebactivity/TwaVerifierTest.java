@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,6 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
@@ -19,87 +17,91 @@ import static org.mockito.Mockito.when;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TestRule;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
-import org.robolectric.annotation.Config;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.Promise;
+import org.chromium.base.TriState;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.chrome.browser.browserservices.verification.OriginVerifier;
-import org.chromium.chrome.browser.browserservices.verification.OriginVerifier.OriginVerificationListener;
-import org.chromium.chrome.browser.browserservices.verification.OriginVerifierFactory;
+import org.chromium.chrome.browser.browserservices.verification.ChromeOriginVerifier;
+import org.chromium.chrome.browser.browserservices.verification.ChromeOriginVerifierFactory;
 import org.chromium.chrome.browser.customtabs.CustomTabIntentDataProvider;
 import org.chromium.chrome.browser.customtabs.content.CustomTabActivityTabProvider;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
-import org.chromium.chrome.test.util.browser.Features;
-import org.chromium.chrome.test.util.browser.Features.DisableFeatures;
+import org.chromium.components.content_relationship_verification.OriginVerifier.OriginVerificationListener;
 import org.chromium.components.embedder_support.util.Origin;
-import org.chromium.components.externalauth.ExternalAuthUtils;
 
 import java.util.Collections;
+import java.util.HashSet;
 
-/**
- * Tests for {@link TwaVerifier}.
- */
+/** Tests for {@link TwaVerifier}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
-@DisableFeatures(ChromeFeatureList.TRUSTED_WEB_ACTIVITY_POST_MESSAGE)
 public class TwaVerifierTest {
     private static final String INITIAL_URL = "https://www.initialurl.com/page.html";
     private static final String ADDITIONAL_ORIGIN = "https://www.otherverifiedorigin.com";
     private static final String OTHER_URL = "https://www.notverifiedurl.com/page2.html";
-    private static final String PACKAGE_NAME = "some.package.name";
 
-    @Rule
-    public TestRule mFeaturesProcessor = new Features.JUnitProcessor();
-
-    @Mock
-    ActivityLifecycleDispatcher mLifecycleDispatcher;
-    @Mock
-    CustomTabIntentDataProvider mIntentDataProvider;
-    @Mock
-    OriginVerifierFactory mOriginVerifierFactory;
-    @Mock
-    OriginVerifier mOriginVerifier;
-    @Mock
-    CustomTabActivityTabProvider mActivityTabProvider;
-    @Mock
-    ClientPackageNameProvider mClientPackageNameProvider;
-    @Mock
-    ExternalAuthUtils mExternalAuthUtils;
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Mock ActivityLifecycleDispatcher mLifecycleDispatcher;
+    @Mock CustomTabIntentDataProvider mIntentDataProvider;
+    @Mock ChromeOriginVerifier mOriginVerifier;
+    @Mock CustomTabActivityTabProvider mActivityTabProvider;
+    @Mock ClientPackageNameProvider mClientPackageNameProvider;
 
     private TwaVerifier mDelegate;
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
 
         when(mIntentDataProvider.getUrlToLoad()).thenReturn(INITIAL_URL);
-        when(mIntentDataProvider.getTrustedWebActivityAdditionalOrigins())
-                .thenReturn(Collections.singletonList(ADDITIONAL_ORIGIN));
-
-        when(mOriginVerifierFactory.create(anyString(), anyInt(), any(), any(), any()))
-                .thenReturn(mOriginVerifier);
+        HashSet<Origin> trustedOrigins = new HashSet<>();
+        Collections.addAll(
+                trustedOrigins, Origin.create(INITIAL_URL), Origin.create(ADDITIONAL_ORIGIN));
+        when(mIntentDataProvider.getAllTrustedWebActivityOrigins()).thenReturn(trustedOrigins);
+        ChromeOriginVerifierFactory.setInstanceForTesting(mOriginVerifier);
 
         when(mClientPackageNameProvider.get()).thenReturn("some.package.name");
 
         mDelegate =
-                new TwaVerifier(mLifecycleDispatcher, mIntentDataProvider, mOriginVerifierFactory,
-                        mActivityTabProvider, mClientPackageNameProvider, mExternalAuthUtils);
+                new TwaVerifier(
+                        mLifecycleDispatcher,
+                        mIntentDataProvider,
+                        mClientPackageNameProvider,
+                        mActivityTabProvider);
     }
 
     @Test
     public void verifiedScopeIsOrigin() {
         assertEquals(
                 "https://www.example.com", mDelegate.getVerifiedScope("https://www.example.com"));
-        assertEquals("https://www.example.com",
+        assertEquals(
+                "https://www.example.com",
                 mDelegate.getVerifiedScope("https://www.example.com/page1.html"));
-        assertEquals("https://www.example.com",
+        assertEquals(
+                "https://www.example.com",
                 mDelegate.getVerifiedScope("https://www.example.com/dir/page2.html"));
+    }
+
+    /**
+     * Tests that {@link TwaVerifier#getVerifiedScope} returns the URL itself for URLs with
+     * non-HTTP(S) schemes.
+     */
+    @Test
+    public void verifiedScopeIsUrl_forUrlsWithNonHttpSchemes() {
+        assertEquals(
+                "blob:https://www.example.com/1234-5678",
+                mDelegate.getVerifiedScope("blob:https://www.example.com/1234-5678"));
+        assertEquals("about:blank", mDelegate.getVerifiedScope("about:blank"));
+        assertEquals(
+                "data:text/html,sample_text",
+                mDelegate.getVerifiedScope("data:text/html,sample_text"));
+        assertEquals(
+                "filesystem:https://www.example.com/temporary/f",
+                mDelegate.getVerifiedScope("filesystem:https://www.example.com/temporary/f"));
+        assertEquals("not-an-origin", mDelegate.getVerifiedScope("not-an-origin"));
     }
 
     @Test
@@ -117,6 +119,15 @@ public class TwaVerifierTest {
     public void verify_failsInvalidUrl() {
         Promise<Boolean> result = mDelegate.verify("not-an-origin");
         assertFalse(result.getResult());
+    }
+
+    /** Tests that verification fails for URLs with non-HTTP(S) schemes. */
+    @Test
+    public void verify_failsUrlsWithNonHttpSchemes() {
+        assertFalse(mDelegate.verify("blob:" + INITIAL_URL).getResult());
+        assertFalse(mDelegate.verify("about:blank").getResult());
+        assertFalse(mDelegate.verify("data:text/html,sample_text").getResult());
+        verify(mOriginVerifier, never()).start(any(), any());
     }
 
     /** Tests that the first call to verify for a trusted origin performs full verification. */
@@ -148,7 +159,7 @@ public class TwaVerifierTest {
                 ArgumentCaptor.forClass(OriginVerificationListener.class);
         verify(mOriginVerifier).start(callback.capture(), eq(Origin.create(url)));
 
-        callback.getValue().onOriginVerified(null, null, true, true);
+        callback.getValue().onOriginVerified(null, null, true, TriState.TRUE);
 
         assertTrue(promise.getResult());
 

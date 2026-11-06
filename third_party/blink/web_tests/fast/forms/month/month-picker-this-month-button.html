@@ -1,13 +1,13 @@
 <!DOCTYPE html>
-<html>
-<head>
+<meta name=fuzzy content="maxDifference=0-3; totalPixels=0-1000">
 <script src="../../../resources/testharness.js"></script>
 <script src="../../../resources/testharnessreport.js"></script>
+<script src="../../../resources/testdriver.js"></script>
+<script src="../../../resources/testdriver-vendor.js"></script>
 <script src="../resources/common.js"></script>
 <script src="../resources/picker-common.js"></script>
 <script src="../calendar-picker/resources/calendar-picker-common.js"></script>
-</head>
-<body>
+
 <input type="month" id="month0" value="2019-02">
 <input type="month" id="month1" value="2019-02">
 <input type="month" id="month2" value="2019-02" max="2019-05">
@@ -15,7 +15,7 @@
 
 promise_test(() => {
   let monthElement = document.getElementById('month0');
-  return openPickerWithPromise(monthElement)
+  return openPicker(monthElement)
   .then(() => {
     clickThisMonthButton();
 
@@ -32,8 +32,9 @@ promise_test(() => {
 
 promise_test(() => {
   let monthElement = document.getElementById('month1');
-  return openPickerWithPromise(monthElement)
+  return openPicker(monthElement)
   .then(() => {
+    eventSender.keyDown('Tab'); // Tab over to the 'Clear' button
     eventSender.keyDown('Tab'); // Tab over to the 'This month' button
     eventSender.keyDown('Enter');
 
@@ -50,7 +51,7 @@ promise_test(() => {
 
 promise_test(() => {
   let monthElement = document.getElementById('month2');
-  return openPickerWithPromise(monthElement)
+  return openPicker(monthElement)
   .then(() => {
     clickThisMonthButton();
 
@@ -63,5 +64,3 @@ promise_test(() => {
 }, "Date picker: 'This month' button should be disabled when current month is not valid");
 
 </script>
-</body>
-</html>

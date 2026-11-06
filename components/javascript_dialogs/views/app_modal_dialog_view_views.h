@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,9 @@
 
 #include <memory>
 
-#include "base/macros.h"
-#include "build/chromeos_buildflags.h"
+#include "base/memory/raw_ptr.h"
 #include "components/javascript_dialogs/app_modal_dialog_view.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/views/window/dialog_delegate.h"
 
 namespace views {
@@ -20,14 +20,15 @@ namespace javascript_dialogs {
 
 class AppModalDialogController;
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-class LayerDimmer;
-#endif  // IS_CHROMEOS_LACROS
-
 class AppModalDialogViewViews : public AppModalDialogView,
                                 public views::DialogDelegate {
  public:
-  explicit AppModalDialogViewViews(AppModalDialogController* controller);
+  explicit AppModalDialogViewViews(
+      std::unique_ptr<AppModalDialogController> controller);
+
+  AppModalDialogViewViews(const AppModalDialogViewViews&) = delete;
+  AppModalDialogViewViews& operator=(const AppModalDialogViewViews&) = delete;
+
   ~AppModalDialogViewViews() override;
 
   // AppModalDialogView:
@@ -40,7 +41,7 @@ class AppModalDialogViewViews : public AppModalDialogView,
 
   // views::DialogDelegate:
   std::u16string GetWindowTitle() const override;
-  ui::ModalType GetModalType() const override;
+  ui::mojom::ModalType GetModalType() const override;
   views::View* GetContentsView() override;
   views::View* GetInitiallyFocusedView() override;
   views::Widget* GetWidget() override;
@@ -48,17 +49,14 @@ class AppModalDialogViewViews : public AppModalDialogView,
   bool ShouldShowCloseButton() const override;
   void WindowClosing() override;
 
+ protected:
+  AppModalDialogController* controller() { return controller_.get(); }
+
  private:
   std::unique_ptr<AppModalDialogController> controller_;
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  std::unique_ptr<LayerDimmer> layerDimmer_;
-#endif  // IS_CHROMEOS_LACROS
-
   // The message box view whose commands we handle.
-  views::MessageBoxView* message_box_view_;
-
-  DISALLOW_COPY_AND_ASSIGN(AppModalDialogViewViews);
+  raw_ptr<views::MessageBoxView> message_box_view_;
 };
 
 }  // namespace javascript_dialogs

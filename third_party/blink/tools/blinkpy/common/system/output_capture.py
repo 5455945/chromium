@@ -28,10 +28,9 @@
 #
 # Class for unittest support.  Used for capturing stderr/stdout.
 
+import io
 import logging
 import sys
-
-from six import StringIO
 
 
 class OutputCapture(object):
@@ -50,7 +49,7 @@ class OutputCapture(object):
 
     def _capture_output_with_name(self, output_name):
         stream = getattr(sys, output_name)
-        captured_output = StringIO()
+        captured_output = io.StringIO()
         self.saved_outputs[output_name] = stream
         setattr(sys, output_name, captured_output)
         return captured_output
@@ -62,15 +61,17 @@ class OutputCapture(object):
         return captured_output
 
     def capture_output(self):
-        self._logs = StringIO()
+        self._logs = io.StringIO()
         self._logs_handler = logging.StreamHandler(self._logs)
         self._logs_handler.setLevel(self._log_level)
         self._logger = logging.getLogger()
         self._orig_log_level = self._logger.level
         self._logger.addHandler(self._logs_handler)
         self._logger.setLevel(min(self._log_level, self._orig_log_level))
-        return (self._capture_output_with_name('stdout'),
-                self._capture_output_with_name('stderr'))
+        return (
+            self._capture_output_with_name('stdout'),
+            self._capture_output_with_name('stderr'),
+        )
 
     def restore_output(self):
         self._logger.removeHandler(self._logs_handler)
@@ -80,25 +81,31 @@ class OutputCapture(object):
         logs_string = self._logs.getvalue()
         delattr(self, '_logs_handler')
         delattr(self, '_logs')
-        return (self._restore_output_with_name('stdout'),
-                self._restore_output_with_name('stderr'), logs_string)
+        return (
+            self._restore_output_with_name('stdout'),
+            self._restore_output_with_name('stderr'),
+            logs_string,
+        )
 
-    def assert_outputs(self,
-                       testcase,
-                       function,
-                       args=None,
-                       kwargs=None,
-                       expected_stdout='',
-                       expected_stderr='',
-                       expected_exception=None,
-                       expected_logs=None):
+    def assert_outputs(
+        self,
+        testcase,
+        function,
+        args=None,
+        kwargs=None,
+        expected_stdout='',
+        expected_stderr='',
+        expected_exception=None,
+        expected_logs=None,
+    ):
         args = args or []
         kwargs = kwargs or {}
         self.capture_output()
         try:
             if expected_exception:
-                return_value = testcase.assertRaises(expected_exception,
-                                                     function, *args, **kwargs)
+                return_value = testcase.assertRaises(
+                    expected_exception, function, *args, **kwargs
+                )
             else:
                 return_value = function(*args, **kwargs)
         finally:

@@ -26,13 +26,11 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_SCRIPT_HTML_PARSER_SCRIPT_RUNNER_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_SCRIPT_HTML_PARSER_SCRIPT_RUNNER_H_
 
-#include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/core/html/parser/html_parser_reentry_permit.h"
 #include "third_party/blink/renderer/core/script/pending_script.h"
 #include "third_party/blink/renderer/platform/bindings/name_client.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
-#include "third_party/blink/renderer/platform/loader/fetch/resource_client.h"
-#include "third_party/blink/renderer/platform/wtf/deque.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_deque.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/text/text_position.h"
 
 namespace blink {
@@ -40,7 +38,6 @@ namespace blink {
 class Document;
 class Element;
 class HTMLParserScriptRunnerHost;
-class ScriptLoader;
 
 // HTMLParserScriptRunner is responsible for for arranging the execution of
 // script elements inserted by the parser, according to the rules for
@@ -51,6 +48,15 @@ class ScriptLoader;
 // executing it when required.
 //
 // An HTMLParserScriptRunner is owned by its host, an HTMLDocumentParser.
+//
+// Design Rationale:
+// Its sole responsibility is to manage scripts that directly interfere with the
+// parser's lifecycle (i.e., parser-blocking and deferred scripts).
+//
+// Asynchronous scripts do not affect the parser's lifecycle. To keep
+// this class's responsibility pure, they are routed directly to
+// Document::ScriptRunner during the preparation phase in ScriptLoader and are
+// never processed by this class.
 class HTMLParserScriptRunner final
     : public GarbageCollected<HTMLParserScriptRunner>,
       public PendingScriptClient,
@@ -58,14 +64,16 @@ class HTMLParserScriptRunner final
  public:
   static HTMLParserScriptRunner* Create(HTMLParserReentryPermit* reentry_permit,
                                         Document* document,
-                                        HTMLParserScriptRunnerHost* host) {
-    return MakeGarbageCollected<HTMLParserScriptRunner>(reentry_permit,
-                                                        document, host);
+                                        HTMLParserScriptRunnerHost* host,
+                                        bool is_parsing_fragment = false) {
+    return MakeGarbageCollected<HTMLParserScriptRunner>(
+        reentry_permit, document, host, is_parsing_fragment);
   }
 
   HTMLParserScriptRunner(HTMLParserReentryPermit*,
                          Document*,
-                         HTMLParserScriptRunnerHost*);
+                         HTMLParserScriptRunnerHost*,
+                         bool is_parsing_fragment = false);
   HTMLParserScriptRunner(const HTMLParserScriptRunner&) = delete;
   HTMLParserScriptRunner& operator=(const HTMLParserScriptRunner&) = delete;
   ~HTMLParserScriptRunner() override;
@@ -101,9 +109,13 @@ class HTMLParserScriptRunner final
   }
 
   void Trace(Visitor*) const override;
-  const char* NameInHeapSnapshot() const override {
+  const char* GetHumanReadableName() const override {
     return "HTMLParserScriptRunner";
   }
+
+  // Script execution might be blocked during prerendering, and if so, it will
+  // be unblocked upon prerender activation.
+  void UnblockForPrerenderActivation();
 
  private:
   // PendingScriptClient
@@ -113,27 +125,27 @@ class HTMLParserScriptRunner final
   void ExecutePendingDeferredScriptAndDispatchEvent(PendingScript*);
   void ExecuteParsingBlockingScripts();
 
-  void RequestParsingBlockingScript(ScriptLoader*);
-  void RequestDeferredScript(ScriptLoader*);
-
   // Processes the provided script element, but does not execute any
   // parsing-blocking scripts that may remain after execution.
   void ProcessScriptElementInternal(Element*,
                                     const TextPosition& script_start_position);
 
   const PendingScript* ParserBlockingScript() const {
-    return parser_blocking_script_;
+    return parser_blocking_script_.Get();
   }
 
   bool IsParserBlockingScriptReady();
-
-  void PossiblyFetchBlockedDocWriteScript(PendingScript*);
 
   // Takes and returns the first PendingScript from |waiting_scripts| if it is
   // ready for execution. Otherwise, informs it that |this| is a
   // PendingScriptClient to be informed when it is ready.
   PendingScript* TryTakeReadyScriptWaitingForParsing(
       HeapDeque<Member<PendingScript>>* waiting_scripts);
+
+  // Posts a task that continues executing the deferred scripts
+  // (ExecuteScriptsWaitingForParsing()) and notifies the host once they are
+  // all done, so that execution yields to the event loop in between.
+  void ScheduleDeferredScriptExecution();
 
   Member<HTMLParserReentryPermit> reentry_permit_;
   Member<Document> document_;
@@ -145,6 +157,9 @@ class HTMLParserScriptRunner final
   // Scripts that were deferred by the web developer. This is an ordered list.
   // https://html.spec.whatwg.org/C/#list-of-scripts-that-will-execute-when-the-document-has-finished-parsing
   HeapDeque<Member<PendingScript>> scripts_to_execute_after_parsing_;
+
+  const bool is_parsing_fragment_;
+  bool should_yield_before_executing_deferred_scripts_ = false;
 };
 
 }  // namespace blink

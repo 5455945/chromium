@@ -1,9 +1,9 @@
-// Copyright (c) 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/message_center/popup_timer.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 
 namespace message_center {
 
@@ -14,7 +14,7 @@ PopupTimer::PopupTimer(const std::string& id,
       timeout_(timeout),
       timer_delegate_(delegate),
       timer_(new base::OneShotTimer) {
-  DCHECK(timer_delegate_);
+  CHECK(timer_delegate_, base::NotFatalUntil::M163);
 }
 
 PopupTimer::~PopupTimer() {

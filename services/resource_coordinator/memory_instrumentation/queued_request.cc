@@ -1,8 +1,11 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/resource_coordinator/memory_instrumentation/queued_request.h"
+
+#include "base/containers/to_vector.h"
+#include "services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics.h"
 
 namespace memory_instrumentation {
 
@@ -51,13 +54,11 @@ base::trace_event::MemoryDumpRequestArgs QueuedRequest::GetRequestArgs() {
   return request_args;
 }
 
-QueuedVmRegionRequest::Response::Response() = default;
-QueuedVmRegionRequest::Response::~Response() = default;
-
-QueuedVmRegionRequest::QueuedVmRegionRequest(
-    uint64_t dump_guid,
-    mojom::HeapProfilerHelper::GetVmRegionsForHeapProfilerCallback callback)
-    : dump_guid(dump_guid), callback(std::move(callback)) {}
-QueuedVmRegionRequest::~QueuedVmRegionRequest() = default;
+std::vector<mojom::MemDumpFlags> QueuedRequest::memory_dump_flags() const {
+  if (!args.memory_footprint_only) {
+    return base::ToVector(OSMetrics::MemDumpFlagSet::All());
+  }
+  return {};
+}
 
 }  // namespace memory_instrumentation

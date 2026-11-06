@@ -1,18 +1,17 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef BASE_WIN_OBJECT_WATCHER_H_
 #define BASE_WIN_OBJECT_WATCHER_H_
 
-#include "base/win/windows_types.h"
-
 #include "base/base_export.h"
-#include "base/callback.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/win/windows_types.h"
 
 namespace base {
 namespace win {
@@ -52,7 +51,8 @@ namespace win {
 // still called after (but not necessarily immediately after) watch is started.
 //
 // NOTE: Except for the constructor, all public methods of this class must be
-// called in sequence, in a scope where SequencedTaskRunnerHandle::IsSet().
+// called in sequence, in a scope where
+// SequencedTaskRunner::HasCurrentDefault().
 class BASE_EXPORT ObjectWatcher {
  public:
   class BASE_EXPORT Delegate {
@@ -65,6 +65,10 @@ class BASE_EXPORT ObjectWatcher {
   };
 
   ObjectWatcher();
+
+  ObjectWatcher(const ObjectWatcher&) = delete;
+  ObjectWatcher& operator=(const ObjectWatcher&) = delete;
+
   ~ObjectWatcher();
 
   // When the object is signaled, the given delegate is notified on the sequence
@@ -108,9 +112,11 @@ class BASE_EXPORT ObjectWatcher {
                              bool execute_only_once,
                              const Location& from_here);
 
-  void Signal(Delegate* delegate);
+  void Signal();
 
   void Reset();
+
+  raw_ptr<Delegate> delegate_ = nullptr;
 
   Location location_;
 
@@ -130,8 +136,6 @@ class BASE_EXPORT ObjectWatcher {
   bool run_once_ = true;
 
   WeakPtrFactory<ObjectWatcher> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ObjectWatcher);
 };
 
 }  // namespace win

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,13 +9,14 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/discardable_memory.h"
 #include "base/memory/scoped_refptr.h"
 #include "cc/cc_export.h"
 #include "cc/paint/decoded_draw_image.h"
 #include "cc/paint/draw_image.h"
 #include "cc/paint/paint_image.h"
+#include "cc/paint/target_color_params.h"
 #include "cc/raster/tile_task.h"
 #include "cc/tiles/image_decode_cache_utils.h"
 #include "third_party/skia/include/core/SkImage.h"
@@ -51,6 +52,7 @@ class SoftwareImageDecodeCacheUtils {
                                   SkColorType color_type);
 
     CacheKey(const CacheKey& other);
+    CacheKey& operator=(const CacheKey& other);
 
     bool operator==(const CacheKey& other) const {
       // The frame_key always has to be the same. However, after that all
@@ -61,7 +63,7 @@ class SoftwareImageDecodeCacheUtils {
       // (just passed to skia for the filtering to be done at raster time).
       DCHECK(!is_nearest_neighbor_ || type_ != kSubrectAndScale);
       return frame_key_ == other.frame_key_ && type_ == other.type_ &&
-             target_color_space_ == other.target_color_space_ &&
+             target_color_params_ == other.target_color_params_ &&
              (type_ == kOriginal || (src_rect_ == other.src_rect_ &&
                                      target_size_ == other.target_size_));
     }
@@ -74,8 +76,8 @@ class SoftwareImageDecodeCacheUtils {
     bool is_nearest_neighbor() const { return is_nearest_neighbor_; }
     gfx::Rect src_rect() const { return src_rect_; }
     gfx::Size target_size() const { return target_size_; }
-    const gfx::ColorSpace& target_color_space() const {
-      return target_color_space_;
+    const TargetColorParams& target_color_params() const {
+      return target_color_params_;
     }
 
     size_t get_hash() const { return hash_; }
@@ -99,7 +101,7 @@ class SoftwareImageDecodeCacheUtils {
              bool is_nearest_neighbor,
              const gfx::Rect& src_rect,
              const gfx::Size& size,
-             const gfx::ColorSpace& target_color_space);
+             const TargetColorParams& target_color_params);
 
     PaintImage::FrameKey frame_key_;
     // The stable id is does not factor into the cache key's value for hashing
@@ -110,7 +112,7 @@ class SoftwareImageDecodeCacheUtils {
     bool is_nearest_neighbor_;
     gfx::Rect src_rect_;
     gfx::Size target_size_;
-    gfx::ColorSpace target_color_space_;
+    TargetColorParams target_color_params_;
     size_t hash_;
   };
 
@@ -123,7 +125,8 @@ class SoftwareImageDecodeCacheUtils {
   class CC_EXPORT CacheEntry {
    public:
     CacheEntry();
-    CacheEntry(const SkImageInfo& info,
+    CacheEntry(sk_sp<SkImage> image,
+               sk_sp<SkImage> gainmap_image,
                std::unique_ptr<base::DiscardableMemory> memory,
                const SkSize& src_rect_offset);
     ~CacheEntry();
@@ -136,6 +139,13 @@ class SoftwareImageDecodeCacheUtils {
       DCHECK(is_locked);
       return image_;
     }
+    sk_sp<SkImage> gainmap_image() const {
+      if (!memory) {
+        return nullptr;
+      }
+      DCHECK(is_locked);
+      return gainmap_image_;
+    }
     const SkSize& src_rect_offset() const { return src_rect_offset_; }
 
     bool Lock();
@@ -147,9 +157,7 @@ class SoftwareImageDecodeCacheUtils {
     // Mark this image as being used in either a draw or as a source for a
     // scaled image. Either case represents this decode as being valuable and
     // not wasted.
-    void mark_used() { usage_stats_.used = true; }
     void mark_cached() { cached_ = true; }
-    void mark_out_of_raster() { usage_stats_.first_lock_out_of_raster = true; }
 
     // Since this is an inner class, we expose these variables publicly for
     // simplicity.
@@ -167,21 +175,10 @@ class SoftwareImageDecodeCacheUtils {
     std::unique_ptr<base::DiscardableMemory> memory;
 
    private:
-    struct UsageStats {
-      // We can only create a decoded image in a locked state, so the initial
-      // lock count is 1.
-      int lock_count = 1;
-      bool used = false;
-      bool last_lock_failed = false;
-      bool first_lock_wasted = false;
-      bool first_lock_out_of_raster = false;
-    };
-
-    SkImageInfo image_info_;
     sk_sp<SkImage> image_;
+    sk_sp<SkImage> gainmap_image_;
     SkSize src_rect_offset_;
     uint64_t tracing_id_;
-    UsageStats usage_stats_;
     // Indicates whether this entry was ever in the cache.
     bool cached_ = false;
   };

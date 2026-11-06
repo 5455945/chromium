@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,11 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
-#include "base/macros.h"
 #include "base/path_service.h"
 #include "base/strings/string_number_conversions.h"
 #include "build/build_config.h"
@@ -25,17 +24,16 @@
 #include "content/public/browser/devtools_socket_factory.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/content_switches.h"
-#include "content/public/common/user_agent.h"
 #include "net/base/ip_address.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/net_errors.h"
 #include "net/log/net_log_source.h"
 #include "net/socket/tcp_server_socket.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include "content/public/browser/android/devtools_auth.h"
 #include "net/socket/unix_domain_server_socket_posix.h"
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
 
 namespace chromecast {
 namespace shell {
@@ -46,11 +44,15 @@ const uint16_t kDefaultRemoteDebuggingPort = 9222;
 
 const int kBackLog = 10;
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 class UnixDomainServerSocketFactory : public content::DevToolsSocketFactory {
  public:
   explicit UnixDomainServerSocketFactory(const std::string& socket_name)
       : socket_name_(socket_name) {}
+
+  UnixDomainServerSocketFactory(const UnixDomainServerSocketFactory&) = delete;
+  UnixDomainServerSocketFactory& operator=(
+      const UnixDomainServerSocketFactory&) = delete;
 
  private:
   // content::DevToolsSocketFactory.
@@ -71,8 +73,6 @@ class UnixDomainServerSocketFactory : public content::DevToolsSocketFactory {
   }
 
   std::string socket_name_;
-
-  DISALLOW_COPY_AND_ASSIGN(UnixDomainServerSocketFactory);
 };
 #else
 class TCPServerSocketFactory : public content::DevToolsSocketFactory {
@@ -80,14 +80,19 @@ class TCPServerSocketFactory : public content::DevToolsSocketFactory {
   explicit TCPServerSocketFactory(const net::IPEndPoint& endpoint)
       : endpoint_(endpoint) {}
 
+  TCPServerSocketFactory(const TCPServerSocketFactory&) = delete;
+  TCPServerSocketFactory& operator=(const TCPServerSocketFactory&) = delete;
+
  private:
   // content::DevToolsSocketFactory.
   std::unique_ptr<net::ServerSocket> CreateForHttpServer() override {
     std::unique_ptr<net::ServerSocket> socket(
         new net::TCPServerSocket(nullptr, net::NetLogSource()));
 
-    if (socket->Listen(endpoint_, kBackLog) != net::OK)
+    if (socket->Listen(endpoint_, kBackLog, /*ipv6_only=*/std::nullopt) !=
+        net::OK) {
       return nullptr;
+    }
 
     return socket;
   }
@@ -98,14 +103,12 @@ class TCPServerSocketFactory : public content::DevToolsSocketFactory {
   }
 
   const net::IPEndPoint endpoint_;
-
-  DISALLOW_COPY_AND_ASSIGN(TCPServerSocketFactory);
 };
 #endif
 
 std::unique_ptr<content::DevToolsSocketFactory> CreateSocketFactory(
     uint16_t port) {
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
   std::string socket_name = "cast_shell_devtools_remote";
   if (command_line->HasSwitch(switches::kRemoteDebuggingSocketName)) {
@@ -147,6 +150,9 @@ class RemoteDebuggingServer::WebContentsObserver
     Observe(contents);
   }
 
+  WebContentsObserver(const WebContentsObserver&) = delete;
+  WebContentsObserver& operator=(const WebContentsObserver&) = delete;
+
   ~WebContentsObserver() override {}
 
   // content::WebContentsObserver implementation:
@@ -158,8 +164,6 @@ class RemoteDebuggingServer::WebContentsObserver
 
  private:
   RemoteDebuggingServer* const server_;
-
-  DISALLOW_COPY_AND_ASSIGN(WebContentsObserver);
 };
 
 RemoteDebuggingServer::RemoteDebuggingServer(bool start_immediately)

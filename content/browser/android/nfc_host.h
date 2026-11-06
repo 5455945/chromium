@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,14 +15,16 @@
 
 namespace content {
 
-class PermissionControllerImpl;
-
 // On Android, NFC requires the Activity associated with the context in order to
 // access the NFC system APIs. NFCHost provides this functionality by mapping
 // NFC context IDs to the WebContents associated with those IDs.
 class NFCHost : public WebContentsObserver {
  public:
   explicit NFCHost(WebContents* web_contents);
+
+  NFCHost(const NFCHost&) = delete;
+  NFCHost& operator=(const NFCHost&) = delete;
+
   ~NFCHost() override;
 
   void GetNFC(RenderFrameHost* render_frame_host,
@@ -35,18 +37,13 @@ class NFCHost : public WebContentsObserver {
 
  private:
   void MaybeResumeOrSuspendOperations(Visibility visibility);
-  void OnPermissionStatusChange(blink::mojom::PermissionStatus status);
+  void OnPermissionResultChange(PermissionResult permission_result);
   void Close();
-
-  // The permission controller for this browser context.
-  PermissionControllerImpl* permission_controller_;
 
   mojo::Remote<device::mojom::NFCProvider> nfc_provider_;
 
-  // Permission change subscription ID provided by |permission_controller_|.
-  PermissionController::SubscriptionId subscription_id_;
-
-  DISALLOW_COPY_AND_ASSIGN(NFCHost);
+  std::unique_ptr<PermissionController::PermissionSubscription>
+      permission_subscription_;
 };
 
 }  // namespace content

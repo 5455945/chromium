@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,15 +13,17 @@
 #include <utility>
 #include <vector>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/observer_list.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/predictors/autocomplete_action_predictor_table.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/history/core/browser/history_service_observer.h"
 #include "components/history/core/browser/history_types.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "content/public/browser/web_contents.h"
 #include "url/gurl.h"
 
 struct AutocompleteMatch;
@@ -29,10 +31,6 @@ class AutocompleteResult;
 struct OmniboxLog;
 class PredictorsHandler;
 class Profile;
-
-namespace content {
-class SessionStorageNamespace;
-}
 
 namespace gfx {
 class Size;
@@ -42,12 +40,7 @@ namespace history {
 class URLDatabase;
 }
 
-namespace prerender {
-class NoStatePrefetchHandle;
-}
-
 namespace predictors {
-
 // This class is responsible for determining the correct predictive network
 // action to take given for a given AutocompleteMatch and entered text. It can
 // be instantiated for both normal and incognito profiles.  For normal profiles,
@@ -61,67 +54,9 @@ namespace predictors {
 // This class can be accessed as a weak pointer so that it can safely use
 // PostTaskAndReply without fear of crashes if it is destroyed before the reply
 // triggers. This is necessary during initialization.
-class AutocompleteActionPredictor
-    : public KeyedService,
-      public history::HistoryServiceObserver,
-      public base::SupportsWeakPtr<AutocompleteActionPredictor> {
+class AutocompleteActionPredictor : public KeyedService,
+                                    public history::HistoryServiceObserver {
  public:
-  enum Action {
-    ACTION_PRERENDER = 0,
-    ACTION_PRECONNECT,
-    ACTION_NONE,
-    LAST_PREDICT_ACTION = ACTION_NONE
-  };
-
-  explicit AutocompleteActionPredictor(Profile* profile);
-  ~AutocompleteActionPredictor() override;
-
-  // Registers an AutocompleteResult for a given |user_text|. This will be used
-  // when the user navigates from the Omnibox to determine early opportunities
-  // to predict their actions.
-  void RegisterTransitionalMatches(const std::u16string& user_text,
-                                   const AutocompleteResult& result);
-
-  // Clears any transitional matches that have been registered. Called when, for
-  // example, the OmniboxEditModel is reverted.
-  void ClearTransitionalMatches();
-
-  // Return the recommended action given |user_text|, the text the user has
-  // entered in the Omnibox, and |match|, the suggestion from Autocomplete.
-  // This method uses information from the ShortcutsBackend including how much
-  // of the matching entry the user typed, and how long it's been since the user
-  // visited the matching URL, to calculate a score between 0 and 1. This score
-  // is then mapped to an Action.
-  Action RecommendAction(const std::u16string& user_text,
-                         const AutocompleteMatch& match) const;
-
-  // Begin prerendering |url| with |session_storage_namespace|. The |size| gives
-  // the initial size for the target prerender. The predictor will run at most
-  // one prerender at a time, so launching a prerender will cancel our previous
-  // prerenders (if any).
-  void StartPrerendering(
-      const GURL& url,
-      content::SessionStorageNamespace* session_storage_namespace,
-      const gfx::Size& size);
-
-  // Cancels the current prerender, unless it has already been abandoned.
-  void CancelPrerender();
-
-  // Return true if the suggestion type warrants a TCP/IP preconnection.
-  // i.e., it is now quite likely that the user will select the related domain.
-  static bool IsPreconnectable(const AutocompleteMatch& match);
-
-  // Returns true if there is an active Omnibox prerender and it has been
-  // abandoned.
-  bool IsPrerenderAbandonedForTesting();
-
-  // Should be called when a URL is opened from the omnibox.
-  void OnOmniboxOpenedUrl(const OmniboxLog& log);
-
- private:
-  friend class AutocompleteActionPredictorTest;
-  friend class ::PredictorsHandler;
-
   struct TransitionalMatch {
     TransitionalMatch();
     explicit TransitionalMatch(const std::u16string in_user_text);
@@ -130,11 +65,88 @@ class AutocompleteActionPredictor
 
     std::u16string user_text;
     std::vector<GURL> urls;
-
-    bool operator==(const std::u16string& other_user_text) const {
-      return user_text == other_user_text;
-    }
   };
+
+  // An `Action` is a recommendation on what pre* technology to invoke on a
+  // given `AutocompleteMatch`.
+  enum Action {
+    // Trigger Prerendering.
+    ACTION_PRERENDER = 0,
+
+    // Invoke `LoadingPredictor::PrepareForPageLoad` to
+    // prefetch, preconnect, and preresolve.
+    ACTION_PRECONNECT,
+
+    // The recommendation is to not perform any action.
+    ACTION_NONE,
+  };
+
+  explicit AutocompleteActionPredictor(Profile* profile);
+
+  AutocompleteActionPredictor(const AutocompleteActionPredictor&) = delete;
+  AutocompleteActionPredictor& operator=(const AutocompleteActionPredictor&) =
+      delete;
+
+  ~AutocompleteActionPredictor() override;
+
+  class Observer : public base::CheckedObserver {
+   public:
+    // Called once per FinishInitialization() call.
+    virtual void OnInitialized() {}
+  };
+
+  void AddObserver(Observer* observer);
+  void RemoveObserver(Observer* observer);
+
+  // Registers an AutocompleteResult for a given |user_text|. This will be used
+  // when the user navigates from the Omnibox to determine early opportunities
+  // to predict their actions.
+  void RegisterTransitionalMatches(const std::u16string& user_text,
+                                   const AutocompleteResult& result);
+
+  // Updates the database using the current transitional matches, given the URL
+  // the user navigated to (or an empty URL if the user did not navigate). This
+  // clears the transitional matches.
+  void UpdateDatabaseFromTransitionalMatches(const GURL& opened_url);
+
+  // Clears and returns any transitional matches that have been registered.
+  // Called when, for example, the OmniboxEditModel is reverted.
+  std::vector<TransitionalMatch> TakeTransitionalMatches();
+
+  // Returns the recommended action given |user_text|, the text the user has
+  // entered in the Omnibox associated with |web_contents|, and |match|, the
+  // suggestion from Autocomplete. This method uses information from the
+  // ShortcutsBackend including how much of the matching entry the user typed,
+  // and how long it's been since the user visited the matching URL, to
+  // calculate a score between 0 and 1. This score is then mapped to an Action.
+  Action RecommendAction(const std::u16string& user_text,
+                         const AutocompleteMatch& match,
+                         content::WebContents* web_contents) const;
+
+  // The predictor will run at most one prerender
+  // at a time, so launching a prerender will cancel our previous prerenders (if
+  // any).
+  void StartPrerendering(const GURL& url, content::WebContents& web_contents);
+
+  // Returns true if the suggestion type warrants a TCP/IP preconnection.
+  // i.e., it is now quite likely that the user will select the related domain.
+  static bool IsPreconnectable(const AutocompleteMatch& match);
+
+  // Should be called when a URL is opened from the omnibox.
+  void OnOmniboxOpenedUrl(const OmniboxLog& log);
+
+  // Uses local caches to calculate an exact percentage prediction that the user
+  // will take a particular match given what they have typed.
+  double CalculateConfidence(const std::u16string& user_text,
+                             const AutocompleteMatch& match) const;
+
+  bool initialized() { return initialized_; }
+
+  static Action DecideActionByConfidence(double confidence);
+
+ private:
+  friend class AutocompleteActionPredictorTest;
+  friend class ::PredictorsHandler;
 
   struct DBCacheKey {
     std::u16string user_text;
@@ -161,6 +173,11 @@ class AutocompleteActionPredictor
   static const int kMaximumDaysToKeepEntry;
   static const size_t kMinimumUserTextLength;
   static const size_t kMaximumStringLength;
+
+  // Updates the database using the passed transitional matches.
+  void UpdateDatabaseFromTransitionalMatchesInternal(
+      const GURL& opened_url,
+      std::vector<TransitionalMatch> transitional_matches);
 
   // Removes all rows from the database and caches.
   void DeleteAllRows();
@@ -211,14 +228,6 @@ class AutocompleteActionPredictor
   // Registers for notifications and sets the |initialized_| flag.
   void FinishInitialization();
 
-  // Uses local caches to calculate an exact percentage prediction that the user
-  // will take a particular match given what they have typed. |is_in_db| is set
-  // to differentiate trivial zero results resulting from a match not being
-  // found from actual zero results where the calculation returns 0.0.
-  double CalculateConfidence(const std::u16string& user_text,
-                             const AutocompleteMatch& match,
-                             bool* is_in_db) const;
-
   // Calculates the confidence for an entry in the DBCacheMap.
   double CalculateConfidenceForDbEntry(DBCacheMap::const_iterator iter) const;
 
@@ -226,20 +235,20 @@ class AutocompleteActionPredictor
   void Shutdown() override;
 
   // history::HistoryServiceObserver:
-  void OnURLsDeleted(history::HistoryService* history_service,
-                     const history::DeletionInfo& deletion_info) override;
+  void OnHistoryDeletions(history::HistoryService* history_service,
+                          const history::DeletionInfo& deletion_info) override;
   void OnHistoryServiceLoaded(
       history::HistoryService* history_service) override;
 
-  Profile* profile_;
+  raw_ptr<Profile> profile_ = nullptr;
 
   // Set when this is a predictor for an incognito profile.
-  AutocompleteActionPredictor* main_profile_predictor_;
+  raw_ptr<AutocompleteActionPredictor> main_profile_predictor_ = nullptr;
 
   // Set when this is a predictor for a non-incognito profile, and the incognito
   // profile creates a predictor.  If this is non-NULL when we finish
   // initialization, we should call CopyFromMainProfile() on it.
-  AutocompleteActionPredictor* incognito_predictor_;
+  raw_ptr<AutocompleteActionPredictor> incognito_predictor_ = nullptr;
 
   // The backing data store.  This is nullptr for incognito-owned predictors.
   scoped_refptr<AutocompleteActionPredictorTable> table_;
@@ -251,24 +260,22 @@ class AutocompleteActionPredictor
   // This is used to limit the maximum size of |transitional_matches_|.
   size_t transitional_matches_size_ = 0;
 
-  std::unique_ptr<prerender::NoStatePrefetchHandle> no_state_prefetch_handle_;
-
-  // This allows us to predict the effect of confidence threshold changes on
-  // accuracy.  This is cleared after every omnibox navigation.
-  mutable std::vector<std::pair<GURL, double> > tracked_urls_;
+  base::WeakPtr<content::PrerenderHandle> direct_url_input_prerender_handle_;
 
   // Local caches of the data store.  For incognito-owned predictors this is the
   // only copy of the data.
   DBCacheMap db_cache_;
   DBIdCacheMap db_id_cache_;
 
-  bool initialized_;
+  bool initialized_ = false;
+
+  base::ObserverList<Observer> observers_;
 
   base::ScopedObservation<history::HistoryService,
                           history::HistoryServiceObserver>
       history_service_observation_{this};
 
-  DISALLOW_COPY_AND_ASSIGN(AutocompleteActionPredictor);
+  base::WeakPtrFactory<AutocompleteActionPredictor> weak_ptr_factory_{this};
 };
 
 }  // namespace predictors

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,8 @@
 #include <memory>
 #include <string>
 
-#include "base/memory/ref_counted.h"
-#include "base/memory/weak_ptr.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "remoting/host/host_status_observer.h"
 #include "services/device/wake_lock/power_save_blocker/power_save_blocker.h"
 
@@ -29,8 +29,7 @@ class HostPowerSaveBlocker : public HostStatusObserver {
  public:
   HostPowerSaveBlocker(
       scoped_refptr<HostStatusMonitor> monitor,
-      const scoped_refptr<base::SingleThreadTaskRunner>& ui_task_runner,
-      const scoped_refptr<base::SingleThreadTaskRunner>& file_task_runner);
+      const scoped_refptr<base::SingleThreadTaskRunner>& ui_task_runner);
 
   ~HostPowerSaveBlocker() override;
 
@@ -43,7 +42,6 @@ class HostPowerSaveBlocker : public HostStatusObserver {
   scoped_refptr<HostStatusMonitor> monitor_;
 
   scoped_refptr<base::SequencedTaskRunner> ui_task_runner_;
-  scoped_refptr<base::SingleThreadTaskRunner> file_task_runner_;
 
   // The remoting host doesn't have access to the service manager, so it
   // instantiates device::PowerSaveBlocker directly: https://crbug.com/689423

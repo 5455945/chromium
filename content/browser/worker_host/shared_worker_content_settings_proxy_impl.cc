@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,7 +16,7 @@ SharedWorkerContentSettingsProxyImpl::SharedWorkerContentSettingsProxyImpl(
     const GURL& script_url,
     SharedWorkerHost* owner,
     mojo::PendingReceiver<blink::mojom::WorkerContentSettingsProxy> receiver)
-    : origin_(url::Origin::Create(script_url)),
+    : origin_(owner->GetWorkerStorageKey().origin()),
       owner_(owner),
       receiver_(this, std::move(receiver)) {}
 
@@ -50,8 +50,15 @@ void SharedWorkerContentSettingsProxyImpl::AllowWebLocks(
   }
 }
 
-void SharedWorkerContentSettingsProxyImpl::RequestFileSystemAccessSync(
-    RequestFileSystemAccessSyncCallback callback) {
+void SharedWorkerContentSettingsProxyImpl::AllowWriteToClipboard(
+    AllowWriteToClipboardCallback callback) {
+  // Clipboard write is only reachable from extension service workers, which
+  // are not shared workers.
+  std::move(callback).Run(false);
+}
+
+void SharedWorkerContentSettingsProxyImpl::AllowFileSystem(
+    AllowFileSystemCallback callback) {
   if (!origin_.opaque()) {
     owner_->AllowFileSystem(origin_.GetURL(), std::move(callback));
   } else {

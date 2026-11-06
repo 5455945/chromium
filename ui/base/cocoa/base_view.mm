@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,44 +6,48 @@
 
 #include "base/check_op.h"
 #include "base/mac/mac_util.h"
+#include "ui/base/cocoa/tracking_area.h"
 
 NSString* kViewDidBecomeFirstResponder =
     @"Chromium.kViewDidBecomeFirstResponder";
 NSString* kSelectionDirection = @"Chromium.kSelectionDirection";
 
-@implementation BaseView
-
-- (instancetype)initWithFrame:(NSRect)frame {
-  if ((self = [super initWithFrame:frame])) {
-    [self enableTracking];
-  }
-  return self;
+@implementation BaseView {
+  ui::ScopedCrTrackingArea _trackingArea;
+  BOOL _dragging;
+  BOOL _mouseInside;
+  NSEvent* __strong _pendingExitEvent;
+  NSInteger _pressureEventStage;
 }
 
-- (instancetype)initWithCoder:(NSCoder*)decoder {
-  if ((self = [super initWithCoder:decoder])) {
-    [self enableTracking];
+- (instancetype)initWithFrame:(NSRect)frame tracking:(BOOL)tracking {
+  if ((self = [super initWithFrame:frame])) {
+    if (tracking) {
+      [self enableTracking];
+    }
   }
   return self;
 }
 
 - (void)dealloc {
   [self disableTracking];
-  [super dealloc];
 }
 
 - (void)enableTracking {
-  if (_trackingArea.get())
+  if (_trackingArea.get()) {
     return;
+  }
 
   NSTrackingAreaOptions trackingOptions = NSTrackingMouseEnteredAndExited |
                                           NSTrackingMouseMoved |
                                           NSTrackingActiveAlways |
                                           NSTrackingInVisibleRect;
-  _trackingArea.reset([[CrTrackingArea alloc] initWithRect:NSZeroRect
-                                                   options:trackingOptions
-                                                     owner:self
-                                                  userInfo:nil]);
+  CrTrackingArea* trackingArea =
+      [[CrTrackingArea alloc] initWithRect:NSZeroRect
+                                   options:trackingOptions
+                                     owner:self
+                                  userInfo:nil];
+  _trackingArea.reset(trackingArea);
   [self addTrackingArea:_trackingArea.get()];
 }
 
@@ -54,42 +58,25 @@ NSString* kSelectionDirection = @"Chromium.kSelectionDirection";
   }
 }
 
-- (void)updateTrackingAreas {
-  [super updateTrackingAreas];
-
-  // NSTrackingInVisibleRect doesn't work correctly with Lion's window
-  // resizing (See https://crbug.com/176725 and
-  // http://openradar.appspot.com/radar?id=2773401). It also doesn't work
-  // correctly when the window enters fullscreen
-  // (See https://crbug.com/170058).
-  //
-  // Work around it by reinstalling the tracking area after the window resizes
-  // or enters fullscreen. This AppKit bug is fixed on High Sierra, so we only
-  // apply this workaround on 10.12 or earlier.
-  if (base::mac::IsAtMostOS10_12()) {
-    [self disableTracking];
-    [self enableTracking];
-  }
-}
-
 - (void)handleLeftMouseUp:(NSEvent*)theEvent {
-  DCHECK_EQ([theEvent type], NSLeftMouseUp);
+  CHECK_EQ(theEvent.type, NSEventTypeLeftMouseUp, base::NotFatalUntil::M163);
   _dragging = NO;
-  if (!_pendingExitEvent)
+  if (!_pendingExitEvent) {
     return;
+  }
 
   NSEvent* exitEvent =
-      [NSEvent enterExitEventWithType:NSMouseExited
-                             location:[theEvent locationInWindow]
-                        modifierFlags:[theEvent modifierFlags]
-                            timestamp:[theEvent timestamp]
-                         windowNumber:[theEvent windowNumber]
-                              context:[theEvent context]
-                          eventNumber:[_pendingExitEvent eventNumber]
-                       trackingNumber:[_pendingExitEvent trackingNumber]
-                             userData:[_pendingExitEvent userData]];
+      [NSEvent enterExitEventWithType:NSEventTypeMouseExited
+                             location:theEvent.locationInWindow
+                        modifierFlags:theEvent.modifierFlags
+                            timestamp:theEvent.timestamp
+                         windowNumber:theEvent.windowNumber
+                              context:nil
+                          eventNumber:_pendingExitEvent.eventNumber
+                       trackingNumber:_pendingExitEvent.trackingNumber
+                             userData:_pendingExitEvent.userData];
   [self mouseEvent:exitEvent];
-  _pendingExitEvent.reset();
+  _pendingExitEvent = nil;
 }
 
 - (void)mouseEvent:(NSEvent*)theEvent {
@@ -138,6 +125,7 @@ NSString* kSelectionDirection = @"Chromium.kSelectionDirection";
 }
 
 - (void)mouseMoved:(NSEvent*)theEvent {
+  _mouseInside = YES;
   [self mouseEvent:theEvent];
 }
 
@@ -153,9 +141,49 @@ NSString* kSelectionDirection = @"Chromium.kSelectionDirection";
   [self mouseEvent:theEvent];
 }
 
+- (void)viewDidHide {
+  [super viewDidHide];
+
+  // AppKit does not send a mouse exited event when a view is hidden (or has
+  // an ancestor hidden) while the cursor is over it, e.g. on a
+  // keyboard-triggered tab switch. Synthesize one so hover state does not go
+  // stale, similar to what aura::WindowEventDispatcher::
+  // DispatchMouseExitToHidingWindow() does on other platforms. Cursor
+  // containment is tracked via the event stream in |_mouseInside| rather than
+  // queried from the window, since in headless mode the mouse location
+  // reported by the window does not reflect synthesized headless events.
+  NSWindow* window = self.window;
+  if (!window || !_mouseInside) {
+    return;
+  }
+  NSEvent* exitEvent =
+      [NSEvent enterExitEventWithType:NSEventTypeMouseExited
+                             location:window.mouseLocationOutsideOfEventStream
+                        modifierFlags:0
+                            timestamp:NSProcessInfo.processInfo.systemUptime
+                         windowNumber:window.windowNumber
+                              context:nil
+                          eventNumber:0
+                       trackingNumber:0
+                             userData:nil];
+  [self mouseExited:exitEvent];
+}
+
+- (void)viewDidUnhide {
+  [super viewDidUnhide];
+  // Re-create the tracking area when unhiding so AppKit re-evaluates cursor
+  // containment and sends mouseEntered:/mouseMoved: if the cursor is inside
+  // the unhidden view (balancing the synthesized mouseExited: in -viewDidHide).
+  if (_trackingArea.get()) {
+    [self disableTracking];
+    [self enableTracking];
+  }
+}
+
 - (void)mouseEntered:(NSEvent*)theEvent {
+  _mouseInside = YES;
   if (_pendingExitEvent) {
-    _pendingExitEvent.reset();
+    _pendingExitEvent = nil;
     return;
   }
 
@@ -163,11 +191,12 @@ NSString* kSelectionDirection = @"Chromium.kSelectionDirection";
 }
 
 - (void)mouseExited:(NSEvent*)theEvent {
+  _mouseInside = NO;
   // The tracking area will send an exit event even during a drag, which isn't
   // how the event flow for drags should work. This stores the exit event, and
   // sends it when the drag completes instead.
   if (_dragging) {
-    _pendingExitEvent.reset([theEvent retain]);
+    _pendingExitEvent = theEvent;
     return;
   }
 
@@ -185,7 +214,7 @@ NSString* kSelectionDirection = @"Chromium.kSelectionDirection";
 }
 
 - (void)pressureChangeWithEvent:(NSEvent*)theEvent {
-  NSInteger newStage = [theEvent stage];
+  NSInteger newStage = theEvent.stage;
   if (_pressureEventStage == newStage)
     return;
 
@@ -203,14 +232,14 @@ NSString* kSelectionDirection = @"Chromium.kSelectionDirection";
 }
 
 - (gfx::Rect)flipNSRectToRect:(NSRect)rect {
-  gfx::Rect new_rect(NSRectToCGRect(rect));
-  new_rect.set_y(NSHeight([self bounds]) - new_rect.bottom());
+  gfx::Rect new_rect(rect);
+  new_rect.set_y(NSHeight(self.bounds) - new_rect.bottom());
   return new_rect;
 }
 
 - (NSRect)flipRectToNSRect:(gfx::Rect)rect {
-  NSRect new_rect(NSRectFromCGRect(rect.ToCGRect()));
-  new_rect.origin.y = NSHeight([self bounds]) - NSMaxY(new_rect);
+  NSRect new_rect = rect.ToCGRect();
+  new_rect.origin.y = NSHeight(self.bounds) - NSMaxY(new_rect);
   return new_rect;
 }
 

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -9,12 +9,12 @@
 #ifndef CHROME_BROWSER_ASH_FILE_MANAGER_FILESYSTEM_API_UTIL_H_
 #define CHROME_BROWSER_ASH_FILE_MANAGER_FILESYSTEM_API_UTIL_H_
 
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "storage/common/file_system/file_system_types.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class Profile;
 
@@ -25,12 +25,12 @@ class FilePath;
 namespace file_manager {
 namespace util {
 
-// Obtains whether |type| is non-native file system or not.
-bool IsNonNativeFileSystemType(storage::FileSystemType type);
-
 // Checks whether the given |path| points to a non-local filesystem that
 // requires special handling.
 bool IsUnderNonNativeLocalPath(Profile* profile, const base::FilePath& path);
+
+// Checks whether the given |path| is a Drive path.
+bool IsDriveLocalPath(Profile* profile, const base::FilePath& path);
 
 // Checks whether |path| points to a filesystem that requires special handling
 // for retrieving mime types.
@@ -41,7 +41,7 @@ bool HasNonNativeMimeTypeProvider(Profile* profile, const base::FilePath& path);
 void GetNonNativeLocalPathMimeType(
     Profile* profile,
     const base::FilePath& path,
-    base::OnceCallback<void(const absl::optional<std::string>&)> callback);
+    base::OnceCallback<void(const std::optional<std::string>&)> callback);
 
 // Checks whether the |path| points to a directory, and asynchronously sends
 // the result to |callback|.

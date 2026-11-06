@@ -1,19 +1,24 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/subresource_filter/content/browser/subresource_filter_observer_manager.h"
 
+#include "base/observer_list.h"
+#include "base/trace_event/trace_event.h"
 #include "components/subresource_filter/core/mojom/subresource_filter.mojom.h"
 
 namespace subresource_filter {
 
 SubresourceFilterObserverManager::SubresourceFilterObserverManager(
-    content::WebContents* web_contents) {}
+    content::WebContents* web_contents)
+    : content::WebContentsUserData<SubresourceFilterObserverManager>(
+          *web_contents) {}
 
 SubresourceFilterObserverManager::~SubresourceFilterObserverManager() {
-  for (auto& observer : observers_)
+  for (auto& observer : observers_) {
     observer.OnSubresourceFilterGoingAway();
+  }
 }
 
 void SubresourceFilterObserverManager::AddObserver(
@@ -29,6 +34,9 @@ void SubresourceFilterObserverManager::RemoveObserver(
 void SubresourceFilterObserverManager::NotifySafeBrowsingChecksComplete(
     content::NavigationHandle* navigation_handle,
     const SubresourceFilterSafeBrowsingClient::CheckResult& result) {
+  TRACE_EVENT0(
+      TRACE_DISABLED_BY_DEFAULT("loading"),
+      "SubresourceFilterObserverManager::NotifySafeBrowsingChecksComplete");
   for (auto& observer : observers_) {
     observer.OnSafeBrowsingChecksComplete(navigation_handle, result);
   }
@@ -37,25 +45,29 @@ void SubresourceFilterObserverManager::NotifySafeBrowsingChecksComplete(
 void SubresourceFilterObserverManager::NotifyPageActivationComputed(
     content::NavigationHandle* navigation_handle,
     const mojom::ActivationState& activation_state) {
+  TRACE_EVENT0(
+      TRACE_DISABLED_BY_DEFAULT("loading"),
+      "SubresourceFilterObserverManager::NotifyPageActivationComputed");
   for (auto& observer : observers_) {
     observer.OnPageActivationComputed(navigation_handle, activation_state);
   }
 }
 
-void SubresourceFilterObserverManager::NotifySubframeNavigationEvaluated(
+void SubresourceFilterObserverManager::NotifyChildFrameNavigationEvaluated(
     content::NavigationHandle* navigation_handle,
     LoadPolicy load_policy) {
-  for (auto& observer : observers_)
-    observer.OnSubframeNavigationEvaluated(navigation_handle, load_policy);
+  for (auto& observer : observers_) {
+    observer.OnChildFrameNavigationEvaluated(navigation_handle, load_policy);
+  }
 }
 
-void SubresourceFilterObserverManager::NotifyIsAdSubframeChanged(
-    content::RenderFrameHost* render_frame_host,
-    bool is_ad_subframe) {
-  for (auto& observer : observers_)
-    observer.OnIsAdSubframeChanged(render_frame_host, is_ad_subframe);
+void SubresourceFilterObserverManager::NotifyFrameTaggedAsAd(
+    content::RenderFrameHost* render_frame_host) {
+  for (auto& observer : observers_) {
+    observer.OnFrameTaggedAsAd(render_frame_host);
+  }
 }
 
-WEB_CONTENTS_USER_DATA_KEY_IMPL(SubresourceFilterObserverManager)
+WEB_CONTENTS_USER_DATA_KEY_IMPL(SubresourceFilterObserverManager);
 
 }  // namespace subresource_filter

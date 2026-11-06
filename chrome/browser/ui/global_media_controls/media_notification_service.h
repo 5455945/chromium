@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,192 +6,271 @@
 #define CHROME_BROWSER_UI_GLOBAL_MEDIA_CONTROLS_MEDIA_NOTIFICATION_SERVICE_H_
 
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
+#include "base/timer/timer.h"
 #include "chrome/browser/ui/global_media_controls/cast_media_notification_producer.h"
-#include "chrome/browser/ui/global_media_controls/media_notification_container_observer.h"
+#include "chrome/browser/ui/global_media_controls/media_item_ui_device_selector_delegate.h"
 #include "chrome/browser/ui/global_media_controls/media_notification_device_provider.h"
-#include "chrome/browser/ui/global_media_controls/media_notification_producer.h"
-#include "chrome/browser/ui/global_media_controls/overlay_media_notifications_manager_impl.h"
 #include "chrome/browser/ui/global_media_controls/presentation_request_notification_producer.h"
+#include "components/global_media_controls/public/media_session_item_producer.h"
+#include "components/global_media_controls/public/media_session_item_producer_observer.h"
+#include "components/global_media_controls/public/mojom/device_service.mojom.h"
+#include "components/global_media_controls/public/supplemental_device_picker_producer.h"
 #include "components/keyed_service/core/keyed_service.h"
-#include "components/media_message_center/media_notification_controller.h"
-#include "components/media_router/browser/presentation/web_contents_presentation_manager.h"
-#include "content/public/browser/web_contents_observer.h"
-#include "media/audio/audio_device_description.h"
+#include "content/public/browser/presentation_observer.h"
+#include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
-#include "mojo/public/cpp/bindings/remote.h"
-#include "services/media_session/public/mojom/media_controller.mojom-forward.h"
+#include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+
+#if BUILDFLAG(IS_CHROMEOS)
+#include "ash/system/media/media_notification_provider.h"
+#include "ash/system/media/media_notification_provider_observer.h"
+#endif
+
+namespace ash {
+class GlobalMediaControlsCastStartTest;
+}  // namespace ash
 
 namespace content {
-class StartPresentationContext;
 class WebContents;
 }  // namespace content
 
+namespace global_media_controls {
+class MediaDialogDelegate;
+class MediaItemManager;
+}  // namespace global_media_controls
+
 namespace media_router {
 class CastDialogController;
-}
-
-class MediaDialogDelegate;
-class MediaNotificationServiceObserver;
-class MediaSessionNotificationProducer;
+class StartPresentationContext;
+}  // namespace media_router
 
 class MediaNotificationService
     : public KeyedService,
-      public media_message_center::MediaNotificationController {
+      public MediaItemUIDeviceSelectorDelegate,
+      public global_media_controls::MediaSessionItemProducerObserver,
+      public global_media_controls::mojom::DeviceService
+#if BUILDFLAG(IS_CHROMEOS)
+    ,
+      public ash::MediaNotificationProviderObserver
+#endif
+{
  public:
   MediaNotificationService(Profile* profile, bool show_from_all_profiles);
   MediaNotificationService(const MediaNotificationService&) = delete;
   MediaNotificationService& operator=(const MediaNotificationService&) = delete;
   ~MediaNotificationService() override;
 
-  void AddObserver(MediaNotificationServiceObserver* observer);
-  void RemoveObserver(MediaNotificationServiceObserver* observer);
-
-  // media_message_center::MediaNotificationController implementation.
-  void ShowNotification(const std::string& id) override;
-  void HideNotification(const std::string& id) override;
-  void RemoveItem(const std::string& id) override;
-  scoped_refptr<base::SequencedTaskRunner> GetTaskRunner() const override;
-  void LogMediaSessionActionButtonPressed(
-      const std::string& id,
-      media_session::mojom::MediaSessionAction action) override;
-
   // KeyedService implementation.
   void Shutdown() override;
 
-  // Called by the |overlay_media_notifications_manager_| when an overlay
-  // notification is closed.
-  void OnOverlayNotificationClosed(const std::string& id);
+  global_media_controls::MediaItemManager* media_item_manager() {
+    return item_manager_.get();
+  }
 
-  void OnCastNotificationsChanged();
+  // MediaItemUIDeviceSelectorDelegate:
+  void OnAudioSinkChosen(const std::string& item_id,
+                         const std::string& sink_id) override;
+  base::CallbackListSubscription RegisterAudioOutputDeviceDescriptionsCallback(
+      MediaNotificationDeviceProvider::GetOutputDevicesCallback callback)
+      override;
+  base::CallbackListSubscription
+  RegisterIsAudioOutputDeviceSwitchingSupportedCallback(
+      const std::string& id,
+      base::RepeatingCallback<void(bool)> callback) override;
+  void OnMediaRemotingRequested(const std::string& item_id) override;
 
-  // Called if the dialog is opened from the toolbar button. It shows all active
-  // and controllable media notifications.
-  void SetDialogDelegate(MediaDialogDelegate* delegate);
-  // Called if the dialog is opened for a presentation request from |contents|.
-  // It only shows media session notifications from |contents|.
-  void SetDialogDelegateForWebContents(MediaDialogDelegate* delegate,
-                                       content::WebContents* contents);
+  void OnSinksDiscovered(const std::string& item_id);
 
-  // Returns active controllable notifications gathered from all the
-  // notification producers. If empty, then there's nothing to show in the
-  // dialog and we can hide the toolbar icon.
-  std::set<std::string> GetActiveControllableNotificationIds() const;
+  // global_media_controls::MediaSessionItemProducerObserver:
+  void OnMediaSessionActionButtonPressed(
+      const std::string& id,
+      media_session::mojom::MediaSessionAction action) override;
+  void OnMediaSessionInfoChanged(
+      const std::string& id,
+      const media_session::mojom::MediaSessionInfoPtr& session_info) override;
+  void OnMediaSessionActionsChanged(
+      const std::string& id,
+      const std::vector<media_session::mojom::MediaSessionAction>& actions)
+      override;
+  void OnMediaSessionPositionChanged(
+      const std::string& id,
+      const std::optional<media_session::MediaPosition>& position) override;
 
-  // True if there are active non-frozen media session notifications or active
-  // cast notifications.
-  bool HasActiveNotifications() const;
+  void SetDialogDelegateForWebContents(
+      global_media_controls::MediaDialogDelegate* delegate,
+      content::WebContents* contents);
+
   // True if there are active non-frozen media session notifications or active
   // cast notifications associated with |web_contents|.
   bool HasActiveNotificationsForWebContents(
       content::WebContents* web_contents) const;
 
-  // True if there are active frozen media session notifications.
-  bool HasFrozenNotifications() const;
-
-  // True if there is an open MediaDialogView associated with this service.
-  bool HasOpenDialog() const;
-
-  void HideMediaDialog();
-
-  std::unique_ptr<OverlayMediaNotification> PopOutNotification(
-      const std::string& id,
-      gfx::Rect bounds);
-
-  // Used by a |MediaNotificationDeviceSelectorView| to query the system
-  // for connected audio output devices.
-  base::CallbackListSubscription RegisterAudioOutputDeviceDescriptionsCallback(
-      MediaNotificationDeviceProvider::GetOutputDevicesCallback callback);
-
-  // Used by a |MediaNotificationAudioDeviceSelectorView| to become notified of
-  // audio device switching capabilities. The callback will be immediately run
-  // with the current availability.
-  base::CallbackListSubscription
-  RegisterIsAudioOutputDeviceSwitchingSupportedCallback(
-      const std::string& id,
-      base::RepeatingCallback<void(bool)> callback);
-
-  void OnPresentationRequestCreated(
-      std::unique_ptr<media_router::StartPresentationContext> context);
+  // True if there are local cast notifications.
+  bool HasLocalCastNotifications() const;
 
   void OnStartPresentationContextCreated(
       std::unique_ptr<media_router::StartPresentationContext> context);
+
+  // global_media_controls::mojom::DeviceService:
+  void GetDeviceListHostForSession(
+      const std::string& session_id,
+      mojo::PendingReceiver<global_media_controls::mojom::DeviceListHost>
+          host_receiver,
+      mojo::PendingRemote<global_media_controls::mojom::DeviceListClient>
+          client_remote) override;
+  void GetDeviceListHostForPresentation(
+      mojo::PendingReceiver<global_media_controls::mojom::DeviceListHost>
+          host_receiver,
+      mojo::PendingRemote<global_media_controls::mojom::DeviceListClient>
+          client_remote) override;
+  void SetDevicePickerProvider(
+      mojo::PendingRemote<global_media_controls::mojom::DevicePickerProvider>
+          provider_remote) override;
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // Show the Global Media Controls dialog in Ash.
+  void ShowDialogAsh(
+      std::unique_ptr<media_router::StartPresentationContext> context);
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+  bool should_show_cast_local_media_iph() const {
+    return iph_state_.should_show_cast_local_media;
+  }
+  void set_device_provider_for_testing(
+      std::unique_ptr<MediaNotificationDeviceProvider> device_provider);
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // ash::MediaNotificationProviderObserver:
+  void OnMediaNotificationProviderWillBeDestroyed() override;
+  void OnNotificationListChanged() override {}
+  void OnNotificationListViewSizeChanged() override {}
+#endif
+
+ private:
+  friend class MediaNotificationProviderImplTest;
+  friend class MediaNotificationServiceTest;
+  friend class MediaNotificationServiceCastTest;
+  friend class MediaToolbarButtonControllerTest;
+  friend class ash::GlobalMediaControlsCastStartTest;
 
   // Instantiates a MediaRouterViewsUI object associated with the Session with
   // the given |session_id|.
   std::unique_ptr<media_router::CastDialogController>
   CreateCastDialogControllerForSession(const std::string& session_id);
+
   // Instantiates a MediaRouterViewsUI object associated with the
   // PresentationRequest that |presentation_request_notification_producer_|
   // manages.
   std::unique_ptr<media_router::CastDialogController>
   CreateCastDialogControllerForPresentationRequest();
 
-  void ShowAndObserveContainer(const std::string& id);
+  void CreateCastDeviceListHost(
+      std::unique_ptr<media_router::CastDialogController> dialog_controller,
+      mojo::PendingReceiver<global_media_controls::mojom::DeviceListHost>
+          host_receiver,
+      mojo::PendingRemote<global_media_controls::mojom::DeviceListClient>
+          client_remote,
+      std::optional<std::string> remoting_session_id);
 
- private:
-  // TODO(crbug.com/1021643): Remove this friend declaration once the Session
-  // class is moved to MediaSessionNotificationProducer.
-  friend class MediaSessionNotificationProducer;
-  friend class MediaNotificationProviderImplTest;
-  friend class MediaNotificationServiceTest;
-  friend class MediaNotificationServiceCastTest;
-  friend class MediaToolbarButtonControllerTest;
-  friend class PresentationRequestNotificationProducerTest;
+  // True if there is a presentation context for the given session ID.
+  bool HasPresentationContextForSession(const std::string& session_id);
 
-  FRIEND_TEST_ALL_PREFIXES(MediaNotificationServiceTest,
-                           HideAfterTimeoutAndActiveAgainOnPlay);
-  FRIEND_TEST_ALL_PREFIXES(MediaNotificationServiceTest,
-                           SessionIsRemovedImmediatelyWhenATabCloses);
-  FRIEND_TEST_ALL_PREFIXES(MediaNotificationServiceTest, DismissesMediaSession);
-  FRIEND_TEST_ALL_PREFIXES(MediaNotificationServiceTest,
-                           HidesInactiveNotifications);
-  FRIEND_TEST_ALL_PREFIXES(MediaNotificationServiceTest,
-                           HidingNotification_FeatureDisabled);
-  FRIEND_TEST_ALL_PREFIXES(MediaNotificationServiceCastTest,
-                           ShowSupplementalNotifications);
+  // Resets the presentation context and related states.
+  void ResetPresentationContext();
 
-  // Looks up a notification from any source.  Returns null if not found.
-  base::WeakPtr<media_message_center::MediaNotificationItem>
-  GetNotificationItem(const std::string& id);
+  // True if there are cast notifications associated with |web_contents|.
+  bool HasCastNotificationsForWebContents(
+      content::WebContents* web_contents) const;
 
-  // Called after changing anything about a notification to notify any observers
-  // and update the visibility of supplemental notifications.
-  void OnNotificationChanged();
+  // True if there is tab mirroring session associated with `web_contents`.
+  bool HasTabMirroringSessionForWebContents(
+      content::WebContents* web_contents) const;
 
-  MediaNotificationProducer* GetNotificationProducer(
-      const std::string& notification_id);
+  bool HasActiveControllableSessionForWebContents(
+      content::WebContents* web_contents) const;
 
-  // Updates |dialog_delegate_| and notifies |observers_|. Called from
-  // SetDialogDelegate() and SetDialogDelegateForPresentationRequest().
-  void SetDialogDelegateCommon(MediaDialogDelegate* delegate);
+  std::string GetActiveControllableSessionForWebContents(
+      content::WebContents* web_contents) const;
 
-  // True if there is an open MediaDialogView and the dialog is opened for a
-  // PresentationRequest.
-  bool HasOpenDialogForPresentationRequest() const;
+  void RemoveDeviceListHost(int host);
 
-  MediaDialogDelegate* dialog_delegate_ = nullptr;
+  // Checks if the given `request_id` should always be blocked (i.e.
+  // notification hidden). Mainly used for glic.
+  bool IsIdBlocked(const std::string& request_id) const;
 
-  // True if the dialog was opened by |SetDialogDelegateForWebContents()|. The
-  // value does not indicate whether the MediaDialogView is opened or not.
-  bool dialog_opened_from_presentation_ = false;
+  void EvaluateSaveVideoFrameIphConditions(const std::string& id);
+  void OnSaveVideoFrameIphTimerFired(const std::string& id);
+  void MaybeShowSaveVideoFrameIph(const std::string& id);
 
-  std::unique_ptr<MediaSessionNotificationProducer>
-      media_session_notification_producer_;
+  global_media_controls::MediaItemManager*
+  GetMediaItemManagerForSupplementalDevicePickerProducer();
+
+  const raw_ptr<Profile> profile_;
+
+  std::unique_ptr<global_media_controls::MediaItemManager> item_manager_;
+
+  std::unique_ptr<global_media_controls::MediaSessionItemProducer>
+      media_session_item_producer_;
   std::unique_ptr<CastMediaNotificationProducer> cast_notification_producer_;
+  std::unique_ptr<global_media_controls::SupplementalDevicePickerProducer>
+      supplemental_device_picker_producer_;
   std::unique_ptr<PresentationRequestNotificationProducer>
       presentation_request_notification_producer_;
 
-  // Pointers to all notification producers owned by |this|.
-  std::set<MediaNotificationProducer*> notification_producers_;
+  // Used to initialize a MediaRouterUI.
+  std::unique_ptr<media_router::StartPresentationContext> context_;
 
-  base::ObserverList<MediaNotificationServiceObserver> observers_;
+  // The ID of the media session item currently associated with `context_`.
+  std::string context_item_id_;
+
+  // Generates a list of available audio devices.
+  std::unique_ptr<MediaNotificationDeviceProvider> device_provider_;
+
+  // Tracks the number of times we have recorded an action for a specific
+  // source. We use this to cap the number of UKM recordings per site.
+  std::map<ukm::SourceId, int> actions_recorded_to_ukm_;
+
+  mojo::Receiver<global_media_controls::mojom::DeviceService> receiver_;
+
+  // Maps from hosts' IDs to hosts.
+  std::map<
+      int,
+      mojo::SelfOwnedReceiverRef<global_media_controls::mojom::DeviceListHost>>
+      host_receivers_;
+
+  bool shutdown_has_started_ = false;
+
+  struct IphState {
+    // Set to true when MediaNotificationService receives sink updates for local
+    // media.
+    bool should_show_cast_local_media = false;
+
+    // Save Video Frame IPH state.
+    bool is_video_frame_available = false;
+    bool is_playing = false;
+    bool is_ad = false;
+    bool is_duration_sufficient = false;
+    bool is_fullscreen = false;
+    bool has_played_sufficient_time = false;
+  };
+  IphState iph_state_;
+  base::OneShotTimer save_video_frame_iph_timer_;
+
+#if BUILDFLAG(IS_CHROMEOS)
+  base::ScopedObservation<ash::MediaNotificationProvider,
+                          ash::MediaNotificationProviderObserver>
+      provider_observation_{this};
+#endif
 
   base::WeakPtrFactory<MediaNotificationService> weak_ptr_factory_{this};
 };

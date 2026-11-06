@@ -1,9 +1,13 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_COMMON_EXTENSIONS_SYNC_HELPER_H_
 #define CHROME_COMMON_EXTENSIONS_SYNC_HELPER_H_
+
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -20,7 +24,7 @@ bool IsSyncable(const Extension* extension);
 
 // Component extensions usually aren't synced, but some are so that they'll
 // retain their position in the app list. Returns true for component extensions
-// on that whitelist.
+// that are allowed.
 bool IsSyncableComponentExtension(const Extension* extension);
 
 }  // namespace sync_helper

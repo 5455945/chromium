@@ -1,15 +1,24 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/prefs/session_startup_pref.h"
+
 #include <memory>
 
-#include "chrome/browser/prefs/session_startup_pref.h"
+#include "base/values.h"
+#include "build/build_config.h"
 #include "chrome/common/pref_names.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/device_info.h"
+#include "base/test/scoped_feature_list.h"
+#include "chrome/browser/flags/android/chrome_feature_list.h"
+#endif
 
 // Unit tests for SessionStartupPref.
 class SessionStartupPrefTest : public testing::Test {
@@ -28,10 +37,45 @@ class SessionStartupPrefTest : public testing::Test {
   std::unique_ptr<sync_preferences::TestingPrefServiceSyncable> pref_service_;
 };
 
+TEST_F(SessionStartupPrefTest, DefaultStartupType) {
+  SessionStartupPref result =
+      SessionStartupPref::GetStartupPref(pref_service_.get());
+  EXPECT_EQ(SessionStartupPref::GetDefaultStartupType(), result.type);
+#if BUILDFLAG(IS_CHROMEOS)
+  EXPECT_EQ(SessionStartupPref::LAST,
+            SessionStartupPref::GetDefaultStartupType());
+#elif BUILDFLAG(IS_ANDROID)
+  base::android::device_info::set_is_desktop_for_testing(true);
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndEnableFeature(
+        chrome::android::kSyncRestoreOnStartupPref);
+    EXPECT_EQ(SessionStartupPref::LAST,
+              SessionStartupPref::GetDefaultStartupType());
+  }
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndDisableFeature(
+        chrome::android::kSyncRestoreOnStartupPref);
+    EXPECT_EQ(SessionStartupPref::DEFAULT,
+              SessionStartupPref::GetDefaultStartupType());
+  }
+
+  base::android::device_info::set_is_desktop_for_testing(false);
+  EXPECT_EQ(SessionStartupPref::DEFAULT,
+            SessionStartupPref::GetDefaultStartupType());
+
+  base::android::device_info::reset_is_desktop_for_testing();
+#else
+  EXPECT_EQ(SessionStartupPref::DEFAULT,
+            SessionStartupPref::GetDefaultStartupType());
+#endif
+}
+
 TEST_F(SessionStartupPrefTest, URLListIsFixedUp) {
-  auto url_pref_list = std::make_unique<base::ListValue>();
-  url_pref_list->Set(0, std::make_unique<base::Value>("google.com"));
-  url_pref_list->Set(1, std::make_unique<base::Value>("chromium.org"));
+  base::ListValue url_pref_list;
+  url_pref_list.Append("google.com");
+  url_pref_list.Append("chromium.org");
   pref_service_->SetUserPref(prefs::kURLsToRestoreOnStartup,
                              std::move(url_pref_list));
 
@@ -43,15 +87,15 @@ TEST_F(SessionStartupPrefTest, URLListIsFixedUp) {
 }
 
 TEST_F(SessionStartupPrefTest, URLListManagedOverridesUser) {
-  auto url_pref_list1 = std::make_unique<base::ListValue>();
-  url_pref_list1->Set(0, std::make_unique<base::Value>("chromium.org"));
+  base::ListValue url_pref_list1;
+  url_pref_list1.Append("chromium.org");
   pref_service_->SetUserPref(prefs::kURLsToRestoreOnStartup,
                              std::move(url_pref_list1));
 
-  auto url_pref_list2 = std::make_unique<base::ListValue>();
-  url_pref_list2->Set(0, std::make_unique<base::Value>("chromium.org"));
-  url_pref_list2->Set(1, std::make_unique<base::Value>("chromium.org"));
-  url_pref_list2->Set(2, std::make_unique<base::Value>("chromium.org"));
+  base::ListValue url_pref_list2;
+  url_pref_list2.Append("chromium.org");
+  url_pref_list2.Append("chromium.org");
+  url_pref_list2.Append("chromium.org");
   pref_service_->SetManagedPref(prefs::kURLsToRestoreOnStartup,
                                 std::move(url_pref_list2));
 

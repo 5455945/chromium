@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,6 +20,8 @@ const char kBiodFake[] = "biod-fake";
 const char kCrosDisksFake[] = "cros-disks-fake";
 
 // Forces the stub implementation of D-Bus clients.
+// Using stub D-Bus clients is the default for non-Chrome OS environment, to use
+// real D-Bus clients in non-Chrome OS environment, set this flag to "never".
 const char kDbusStub[] = "dbus-stub";
 
 // Path to a OOBE configuration JSON file (used by FakeOobeConfigurationClient).

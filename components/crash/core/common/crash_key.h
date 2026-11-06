@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,21 +8,23 @@
 #include <stdint.h>
 
 #include <string>
+#include <string_view>
 
-#include "base/macros.h"
-#include "base/strings/string_piece.h"
+#include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "build/build_config.h"
 #include "components/crash/core/common/crash_buildflags.h"
 #include "components/crash/core/common/crash_export.h"
 
 // The crash key interface exposed by this file is the same as the Crashpad
-// Annotation interface. Because not all platforms use Crashpad yet, a
-// source-compatible interface is provided on top of the older Breakpad
-// storage mechanism.
+// Annotation interface. For CastOS (which still uses the older Breakpad storage
+// mechanism) and Fuchsia (which uses no-op stubs), a source-compatible
+// interface is provided.
 //
 // See https://cs.chromium.org/chromium/src/docs/debugging_with_crash_keys.md
 // for more information on using this.
-#if BUILDFLAG(USE_CRASHPAD_ANNOTATION) || BUILDFLAG(USE_COMBINED_ANNOTATIONS)
+#if BUILDFLAG(USE_CRASHPAD_ANNOTATION)
 #include "third_party/crashpad/crashpad/client/annotation.h"  // nogncheck
 #endif
 
@@ -33,8 +35,6 @@ class StackTrace;
 }  // namespace base
 
 namespace crash_reporter {
-
-class CrashKeyBreakpadTest;
 
 // A CrashKeyString stores a name-value pair that will be recorded within a
 // crash report.
@@ -73,6 +73,8 @@ using CrashKeyString = crashpad::StringAnnotation<MaxLength>;
 
 #else  // Crashpad-compatible crash key interface:
 
+class CrashKeyBreakpadTest;
+
 namespace internal {
 
 constexpr size_t kCrashKeyStorageKeySize = 40;
@@ -85,13 +87,13 @@ constexpr size_t kCrashKeyStorageValueSize = 128;
 class CRASH_KEY_EXPORT CrashKeyStringImpl {
  public:
   constexpr explicit CrashKeyStringImpl(const char name[],
-                                        size_t* index_array,
-                                        size_t index_array_count)
-      : name_(name),
-        index_array_(index_array),
-        index_array_count_(index_array_count) {}
+                                        base::span<size_t> indexes)
+      : name_(name), indexes_(indexes) {}
 
-  void Set(base::StringPiece value);
+  CrashKeyStringImpl(const CrashKeyStringImpl&) = delete;
+  CrashKeyStringImpl& operator=(const CrashKeyStringImpl&) = delete;
+
+  void Set(std::string_view value);
   void Clear();
 
   bool is_set() const;
@@ -105,10 +107,8 @@ class CRASH_KEY_EXPORT CrashKeyStringImpl {
   // If the crash key is set, this is the index into the storage that can be
   // used to set/clear the key without requiring a linear scan of the storage
   // table. This will be |num_entries| if unset.
-  size_t* index_array_;
-  size_t index_array_count_;
-
-  DISALLOW_COPY_AND_ASSIGN(CrashKeyStringImpl);
+  // RAW_PTR_EXCLUSION: #global-scope
+  RAW_PTR_EXCLUSION base::span<size_t> indexes_;
 };
 
 // This type creates a C array that is initialized with a specific default
@@ -149,10 +149,13 @@ class CrashKeyStringBreakpad : public internal::CrashKeyStringImpl {
   enum class Tag { kArray };
 
   constexpr explicit CrashKeyStringBreakpad(const char name[])
-      : internal::CrashKeyStringImpl(name, indexes_.data, chunk_count) {}
+      : internal::CrashKeyStringImpl(name, indexes_.data) {}
 
   constexpr CrashKeyStringBreakpad(const char name[], Tag tag)
       : CrashKeyStringBreakpad(name) {}
+
+  CrashKeyStringBreakpad(const CrashKeyStringBreakpad&) = delete;
+  CrashKeyStringBreakpad& operator=(const CrashKeyStringBreakpad&) = delete;
 
  private:
   // Indexes into the TransitionalCrashKeyStorage for when a value is set.
@@ -164,67 +167,10 @@ class CrashKeyStringBreakpad : public internal::CrashKeyStringImpl {
                              chunk_count,
                              internal::kCrashKeyStorageNumEntries>
       indexes_;
-
-  DISALLOW_COPY_AND_ASSIGN(CrashKeyStringBreakpad);
 };
 
-#if BUILDFLAG(USE_COMBINED_ANNOTATIONS)
-
-namespace internal {
-
-class CrashKeyStringCombinedImpl {
- public:
-  constexpr CrashKeyStringCombinedImpl(CrashKeyStringImpl* breakpad_key,
-                                       crashpad::Annotation* crashpad_key)
-      : breakpad_key_(breakpad_key), crashpad_key_(crashpad_key) {}
-
-  void Clear() {
-    breakpad_key_->Clear();
-    crashpad_key_->Clear();
-  }
-
-  bool is_set() const { return breakpad_key_->is_set(); }
-
- private:
-  CrashKeyStringImpl* breakpad_key_;
-  crashpad::Annotation* crashpad_key_;
-
-  DISALLOW_COPY_AND_ASSIGN(CrashKeyStringCombinedImpl);
-};
-
-}  // namespace internal
-
-template <uint32_t MaxLength>
-class CrashKeyStringCombined : public internal::CrashKeyStringCombinedImpl {
- public:
-  enum class Tag { kArray };
-
-  constexpr explicit CrashKeyStringCombined(const char name[])
-      : internal::CrashKeyStringCombinedImpl(&breakpad_key_, &crashpad_key_),
-        breakpad_key_(name),
-        crashpad_key_(name) {}
-
-  constexpr CrashKeyStringCombined(const char name[], Tag tag)
-      : CrashKeyStringCombined(name) {}
-
-  void Set(base::StringPiece value) {
-    breakpad_key_.Set(value);
-    crashpad_key_.Set(value);
-  }
-
- private:
-  CrashKeyStringBreakpad<MaxLength> breakpad_key_;
-  crashpad::StringAnnotation<MaxLength> crashpad_key_;
-
-  DISALLOW_COPY_AND_ASSIGN(CrashKeyStringCombined);
-};
-
-template <uint32_t MaxLength>
-using CrashKeyString = CrashKeyStringCombined<MaxLength>;
-#else
 template <uint32_t MaxLength>
 using CrashKeyString = CrashKeyStringBreakpad<MaxLength>;
-#endif  // BUILDFLAG(USE_COMBINED_ANNOTATIONS)
 
 #endif  // BUILDFLAG(USE_CRASHPAD_ANNOTATION)
 
@@ -238,27 +184,27 @@ using CrashKeyString = CrashKeyStringBreakpad<MaxLength>;
 //
 //      DoSomethignImpl(data);
 //    }
-class ScopedCrashKeyString {
+class [[nodiscard]] ScopedCrashKeyString {
  public:
 #if BUILDFLAG(USE_CRASHPAD_ANNOTATION)
   using CrashKeyType = crashpad::Annotation;
-#elif BUILDFLAG(USE_COMBINED_ANNOTATIONS)
-  using CrashKeyType = internal::CrashKeyStringCombinedImpl;
 #else
   using CrashKeyType = internal::CrashKeyStringImpl;
 #endif
 
   template <class T>
-  ScopedCrashKeyString(T* crash_key, base::StringPiece value)
+  ScopedCrashKeyString(T* crash_key, std::string_view value)
       : crash_key_(crash_key) {
     crash_key->Set(value);
   }
 
+  ScopedCrashKeyString(const ScopedCrashKeyString&) = delete;
+  ScopedCrashKeyString& operator=(const ScopedCrashKeyString&) = delete;
+
   ~ScopedCrashKeyString() { crash_key_->Clear(); }
 
  private:
-  CrashKeyType* const crash_key_;
-  DISALLOW_COPY_AND_ASSIGN(ScopedCrashKeyString);
+  const raw_ptr<CrashKeyType> crash_key_;
 };
 
 namespace internal {
@@ -281,12 +227,17 @@ void SetCrashKeyStringToStackTrace(CrashKeyString<Size>* key,
   key->Set(trace_string);
 }
 
-// Initializes the crash key subsystem if it is required.
+// Initializes the crash key subsystem if it is required. Calling this multiple
+// times is safe (though not thread-safe) and will not result in data loss from
+// crash keys set prior to the last initialization.
 CRASH_KEY_EXPORT void InitializeCrashKeys();
 
 #if defined(UNIT_TEST) || defined(CRASH_CORE_COMMON_IMPLEMENTATION)
 // Returns a value for the crash key named |key_name|. For Crashpad-based
-// clients, this returns the first instance found of the name.
+// clients, this returns the first instance found of the name. On Breakpad
+// clients, oversized crash key values (those longer than
+// |kCrashKeyStorageValueSize| - 1) are stored in chunks and must be retrieved
+// piecewise, using syntax <key name>__1, <key name>__2, etc.
 // Note: In a component build, this will only retrieve crash keys for the
 // current component.
 CRASH_KEY_EXPORT std::string GetCrashKeyValue(const std::string& key_name);
@@ -297,6 +248,8 @@ CRASH_KEY_EXPORT void InitializeCrashKeysForTesting();
 
 // Resets crash key state and, depending on the platform, de-initializes
 // the system.
+// WARNING: this does not work on Breakpad, which is used on CastOS
+// (crbug.com/1041106).
 CRASH_KEY_EXPORT void ResetCrashKeysForTesting();
 #endif
 

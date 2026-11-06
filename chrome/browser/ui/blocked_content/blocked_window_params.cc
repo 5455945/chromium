@@ -1,27 +1,31 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/blocked_content/blocked_window_params.h"
 
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
-#include "content/public/browser/render_frame_host.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
+#include "third_party/blink/public/mojom/window_features/window_features.mojom.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
+#include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
 
 BlockedWindowParams::BlockedWindowParams(
     const GURL& target_url,
+    std::optional<content::GlobalRenderFrameHostToken> initiator_frame_token,
     const url::Origin& initiator_origin,
     content::SiteInstance* source_site_instance,
     const content::Referrer& referrer,
     const std::string& frame_name,
-    WindowOpenDisposition disposition,
+    ui::mojom::WindowOpenDisposition disposition,
     const blink::mojom::WindowFeatures& features,
     bool user_gesture,
     bool opener_suppressed)
     : target_url_(target_url),
+      initiator_frame_token_(initiator_frame_token),
       initiator_origin_(initiator_origin),
       source_site_instance_(source_site_instance),
       referrer_(referrer),
@@ -44,25 +48,20 @@ NavigateParams BlockedWindowParams::CreateNavigateParams(
   NavigateParams nav_params(
       Profile::FromBrowserContext(web_contents->GetBrowserContext()), popup_url,
       ui::PAGE_TRANSITION_LINK);
+  if (initiator_frame_token_.has_value()) {
+    nav_params.initiator_process_id = initiator_frame_token_->child_id;
+    nav_params.initiator_frame_token = initiator_frame_token_->frame_token;
+  }
   nav_params.initiator_origin = initiator_origin_;
   nav_params.source_site_instance = source_site_instance_;
   nav_params.referrer = referrer_;
   nav_params.frame_name = frame_name_;
   nav_params.source_contents = web_contents;
-  nav_params.is_renderer_initiated = true;
-  nav_params.window_action = NavigateParams::SHOW_WINDOW;
+  nav_params.is_renderer_initiated = false;
+  nav_params.window_action = NavigateParams::WindowAction::kShowWindow;
   nav_params.user_gesture = user_gesture_;
-  nav_params.created_with_opener = !opener_suppressed_;
-  nav_params.window_bounds = web_contents->GetContainerBounds();
-  if (features_.has_x)
-    nav_params.window_bounds.set_x(features_.x);
-  if (features_.has_y)
-    nav_params.window_bounds.set_y(features_.y);
-  if (features_.has_width)
-    nav_params.window_bounds.set_width(features_.width);
-  if (features_.has_height)
-    nav_params.window_bounds.set_height(features_.height);
-
+  nav_params.opened_by_another_window = !opener_suppressed_;
+  nav_params.window_features = features_;
   nav_params.disposition = disposition_;
 
   return nav_params;

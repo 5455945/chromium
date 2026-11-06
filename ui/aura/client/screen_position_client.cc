@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -33,8 +33,8 @@ void ScreenPositionClient::ConvertPointFromScreen(const Window* window,
 void ScreenPositionClient::ConvertPointToRootWindowIgnoringTransforms(
     const Window* window,
     gfx::Point* point) {
-  DCHECK(window);
-  DCHECK(window->GetRootWindow());
+  CHECK(window, base::NotFatalUntil::M163);
+  CHECK(window->GetRootWindow(), base::NotFatalUntil::M163);
   Window* ancestor = const_cast<Window*>(window);
   while (ancestor && !ancestor->IsRootWindow()) {
     const gfx::Point origin = ancestor->bounds().origin();
@@ -54,15 +54,20 @@ void ScreenPositionClient::ConvertPointToScreenIgnoringTransforms(
 
 void SetScreenPositionClient(Window* root_window,
                              ScreenPositionClient* client) {
-  DCHECK_EQ(root_window->GetRootWindow(), root_window);
+  CHECK_EQ(root_window->GetRootWindow(), root_window,
+           base::NotFatalUntil::M163);
   root_window->SetProperty(kScreenPositionClientKey, client);
 }
 
 ScreenPositionClient* GetScreenPositionClient(const Window* root_window) {
-  if (root_window)
-    DCHECK_EQ(root_window->GetRootWindow(), root_window);
-  return root_window ?
-      root_window->GetProperty(kScreenPositionClientKey) : NULL;
+#if DCHECK_IS_ON()
+  if (root_window) {
+    CHECK_EQ(root_window->GetRootWindow(), root_window,
+             base::NotFatalUntil::M163);
+  }
+#endif
+  return root_window ? root_window->GetProperty(kScreenPositionClientKey)
+                     : nullptr;
 }
 
 }  // namespace client

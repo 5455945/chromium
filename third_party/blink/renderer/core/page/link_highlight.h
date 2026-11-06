@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,35 +7,39 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/platform/graphics/compositor_element_id.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
 
 namespace cc {
 class AnimationHost;
+class AnimationTimeline;
 }
 
 namespace blink {
-class CompositorAnimationTimeline;
 class GraphicsContext;
 class LinkHighlightImpl;
 class LayoutObject;
 class LocalFrame;
 class Node;
 class Page;
+class PaintArtifactCompositor;
 
 class CORE_EXPORT LinkHighlight final : public GarbageCollected<LinkHighlight> {
  public:
   explicit LinkHighlight(Page&);
-  virtual ~LinkHighlight();
+  ~LinkHighlight();
 
-  virtual void Trace(Visitor*) const;
+  void Trace(Visitor*) const;
 
   void ResetForPageNavigation();
 
   void SetTapHighlight(Node*);
 
-  void StartHighlightAnimationIfNeeded();
+  void UpdateOpacityAndRequestAnimation();
 
   void AnimationHostInitialized(cc::AnimationHost&);
   void WillCloseAnimationHost();
@@ -47,6 +51,7 @@ class CORE_EXPORT LinkHighlight final : public GarbageCollected<LinkHighlight> {
   void UpdateBeforePrePaint();
   void UpdateAfterPrePaint();
   void Paint(GraphicsContext&) const;
+  void UpdateAfterPaint(const PaintArtifactCompositor*);
 
  private:
   friend class LinkHighlightImplTest;
@@ -64,8 +69,9 @@ class CORE_EXPORT LinkHighlight final : public GarbageCollected<LinkHighlight> {
 
   Member<Page> page_;
   std::unique_ptr<LinkHighlightImpl> impl_;
-  cc::AnimationHost* animation_host_ = nullptr;
-  std::unique_ptr<CompositorAnimationTimeline> timeline_;
+  raw_ptr<cc::AnimationHost, UnprotectedInRelease | DanglingUntriaged>
+      animation_host_ = nullptr;
+  scoped_refptr<cc::AnimationTimeline> timeline_;
 };
 
 }  // namespace blink

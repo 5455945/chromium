@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,18 +11,18 @@
 #include <stddef.h>
 
 #import "base/mac/scoped_sending_event.h"
-#import "base/message_loop/message_pump_mac.h"
+#import "base/message_loop/message_pump_apple.h"
+#import "components/remote_cocoa/app_shim/cr_application.h"
 
-@interface BrowserCrApplication : NSApplication<CrAppProtocol,
-                                                CrAppControlProtocol> {
- @private
-  BOOL _handlingSendEvent;
-}
+@interface BrowserCrApplication : CrApplication
 
 // Our implementation of |-terminate:| only attempts to terminate the
 // application, i.e., begins a process which may lead to termination. This
 // method cancels that process.
 - (void)cancelTerminate:(id)sender;
+
+- (BOOL)voiceOverStateForTesting;
+
 @end
 
 #endif  // __OBJC__

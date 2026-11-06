@@ -1,17 +1,16 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/updater/external_constants.h"
 
-#include <memory>
-#include <utility>
+#include "base/memory/scoped_refptr.h"
 
 namespace updater {
 
 ExternalConstants::ExternalConstants(
-    std::unique_ptr<ExternalConstants> next_provider)
-    : next_provider_(std::move(next_provider)) {}
+    scoped_refptr<ExternalConstants> next_provider)
+    : next_provider_(next_provider) {}
 
 ExternalConstants::~ExternalConstants() = default;
 

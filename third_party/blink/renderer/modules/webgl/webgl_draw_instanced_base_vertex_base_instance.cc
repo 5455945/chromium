@@ -31,7 +31,8 @@
 namespace blink {
 
 WebGLDrawInstancedBaseVertexBaseInstance::
-    WebGLDrawInstancedBaseVertexBaseInstance(WebGLRenderingContextBase* context)
+    WebGLDrawInstancedBaseVertexBaseInstance(WebGLRenderingContextBase* context,
+                                             ExecutionContext*)
     : WebGLExtension(context) {
   context->ExtensionsUtil()->EnsureExtensionEnabled(
       "GL_WEBGL_draw_instanced_base_vertex_base_instance");
@@ -67,10 +68,12 @@ void WebGLDrawInstancedBaseVertexBaseInstance::
   if (scoped.IsLost())
     return;
 
-  scoped.Context()->RecordUKMCanvasDrawnToAtFirstDrawCall();
-
-  scoped.Context()->ContextGL()->DrawArraysInstancedBaseInstanceANGLE(
-      mode, first, count, instance_count, baseinstance);
+  scoped.Context()->DrawWrapper(
+      "drawArraysInstancedBaseInstanceWEBGL",
+      CanvasPerformanceMonitor::DrawType::kDrawArrays, [&]() {
+        scoped.Context()->ContextGL()->DrawArraysInstancedBaseInstanceANGLE(
+            mode, first, count, instance_count, baseinstance);
+      });
 }
 
 void WebGLDrawInstancedBaseVertexBaseInstance::
@@ -85,13 +88,15 @@ void WebGLDrawInstancedBaseVertexBaseInstance::
   if (scoped.IsLost())
     return;
 
-  scoped.Context()->RecordUKMCanvasDrawnToAtFirstDrawCall();
-
-  scoped.Context()
-      ->ContextGL()
-      ->DrawElementsInstancedBaseVertexBaseInstanceANGLE(
-          mode, count, type, reinterpret_cast<void*>(offset), instance_count,
-          basevertex, baseinstance);
+  scoped.Context()->DrawWrapper(
+      "drawElementsInstancedBaseVertexBaseInstanceWEBGL",
+      CanvasPerformanceMonitor::DrawType::kDrawElements, [&]() {
+        scoped.Context()
+            ->ContextGL()
+            ->DrawElementsInstancedBaseVertexBaseInstanceANGLE(
+                mode, count, type, reinterpret_cast<void*>(offset),
+                instance_count, basevertex, baseinstance);
+      });
 }
 
 }  // namespace blink

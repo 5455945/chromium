@@ -1,35 +1,69 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/network/resolve_host_request.h"
 
+#include <algorithm>
+#include <optional>
+#include <string>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check_op.h"
-#include "base/no_destructor.h"
+#include "base/containers/to_vector.h"
+#include "base/functional/bind.h"
+#include "base/strings/string_util.h"
+#include "net/base/host_port_pair.h"
 #include "net/base/net_errors.h"
+#include "net/base/network_handle.h"
+#include "net/base/url_util.h"
 #include "net/log/net_log.h"
 #include "net/log/net_log_with_source.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "url/url_canon.h"
 
 namespace network {
 
+namespace {
+
+// Attempts URL canonicalization, but if unable, leaves `host_port_pair` alone.
+void TryToCanonicalizeHost(net::HostPortPair& host_port_pair) {
+  url::CanonHostInfo info;
+  std::string canonicalized =
+      net::CanonicalizeHost(host_port_pair.host(), &info);
+  if (info.family != url::CanonHostInfo::BROKEN) {
+    host_port_pair.set_host(canonicalized);
+  }
+}
+
+}  // namespace
+
 ResolveHostRequest::ResolveHostRequest(
     net::HostResolver* resolver,
-    const net::HostPortPair& host,
-    const net::NetworkIsolationKey& network_isolation_key,
-    const absl::optional<net::HostResolver::ResolveHostParameters>&
+    mojom::HostResolverHostPtr host,
+    const net::NetworkAnonymizationKey& network_anonymization_key,
+    net::handles::NetworkHandle target_network,
+    const std::optional<net::HostResolver::ResolveHostParameters>&
         optional_parameters,
     net::NetLog* net_log) {
   DCHECK(resolver);
   DCHECK(net_log);
 
-  internal_request_ = resolver->CreateRequest(
-      host, network_isolation_key,
-      net::NetLogWithSource::Make(net_log, net::NetLogSourceType::NONE),
-      optional_parameters);
+  if (host->is_host_port_pair()) {
+    // net::HostResolver expects canonicalized hostnames.
+    net::HostPortPair& host_port_pair = host->get_host_port_pair();
+    TryToCanonicalizeHost(host_port_pair);
+    internal_request_ = resolver->CreateRequest(
+        host_port_pair, network_anonymization_key, target_network,
+        net::NetLogWithSource::Make(
+            net_log, net::NetLogSourceType::NETWORK_SERVICE_HOST_RESOLVER),
+        optional_parameters);
+  } else {
+    internal_request_ = resolver->CreateRequest(
+        host->get_scheme_host_port(), network_anonymization_key, target_network,
+        net::NetLogWithSource::Make(
+            net_log, net::NetLogSourceType::NETWORK_SERVICE_HOST_RESOLVER),
+        optional_parameters);
+  }
 }
 
 ResolveHostRequest::~ResolveHostRequest() {
@@ -38,7 +72,8 @@ ResolveHostRequest::~ResolveHostRequest() {
   if (response_client_.is_bound()) {
     response_client_->OnComplete(net::ERR_NAME_NOT_RESOLVED,
                                  net::ResolveErrorInfo(net::ERR_FAILED),
-                                 absl::nullopt);
+                                 /*resolved_addresses=*/{},
+                                 /*alternative_endpoints=*/{});
     response_client_.reset();
   }
 }
@@ -56,10 +91,12 @@ int ResolveHostRequest::Start(
   // callback.
   int rv = internal_request_->Start(
       base::BindOnce(&ResolveHostRequest::OnComplete, base::Unretained(this)));
+
   mojo::Remote<mojom::ResolveHostClient> response_client(
       std::move(pending_response_client));
   if (rv != net::ERR_IO_PENDING) {
-    response_client->OnComplete(rv, GetResolveErrorInfo(), GetAddressResults());
+    response_client->OnComplete(rv, GetResolveErrorInfo(), GetAddressResults(),
+                                GetAlternativeEndpoints());
     return rv;
   }
 
@@ -96,9 +133,9 @@ void ResolveHostRequest::OnComplete(int error) {
   control_handle_receiver_.reset();
   SignalNonAddressResults();
   response_client_->OnComplete(error, GetResolveErrorInfo(),
-                               GetAddressResults());
-  response_client_.reset();
+                               GetAddressResults(), GetAlternativeEndpoints());
 
+  response_client_.reset();
   // Invoke completion callback last as it may delete |this|.
   std::move(callback_).Run(GetResolveErrorInfo().error);
 }
@@ -112,31 +149,52 @@ net::ResolveErrorInfo ResolveHostRequest::GetResolveErrorInfo() const {
   return internal_request_->GetResolveErrorInfo();
 }
 
-const absl::optional<net::AddressList>& ResolveHostRequest::GetAddressResults()
-    const {
+net::AddressList ResolveHostRequest::GetAddressResults() const {
   if (cancelled_) {
-    static base::NoDestructor<absl::optional<net::AddressList>>
-        cancelled_result(absl::nullopt);
-    return *cancelled_result;
+    return net::AddressList();
   }
 
   DCHECK(internal_request_);
   return internal_request_->GetAddressResults();
 }
 
-void ResolveHostRequest::SignalNonAddressResults() {
-  if (cancelled_)
-    return;
-  DCHECK(internal_request_);
-
-  if (internal_request_->GetTextResults()) {
-    response_client_->OnTextResults(
-        internal_request_->GetTextResults().value());
+net::HostResolverEndpointResults ResolveHostRequest::GetAlternativeEndpoints()
+    const {
+  if (cancelled_) {
+    return {};
   }
 
-  if (internal_request_->GetHostnameResults()) {
+  DCHECK(internal_request_);
+  auto endpoints = internal_request_->GetEndpointResults();
+
+  // `endpoints` contains both alternative endpoints (from HTTPS/SVCB) and
+  // authority endpoints (from A/AAAA directly). The authority endpoints are
+  // redundant with `AddressList`, so return only the alternative endpoints.
+  //
+  // TODO(crbug.com/40203587): This is the opposite of the design taken
+  // everywhere else in the DNS logic, where we aimed to migrate `AddressList`
+  // to `HostResolverEndpointResult`.
+  net::HostResolverEndpointResults alternative_endpoints;
+  std::ranges::copy_if(
+      endpoints, std::back_inserter(alternative_endpoints),
+      [](const auto& endpoint) { return endpoint.metadata.IsAlternative(); });
+  return alternative_endpoints;
+}
+
+void ResolveHostRequest::SignalNonAddressResults() {
+  if (cancelled_) {
+    return;
+  }
+  DCHECK(internal_request_);
+
+  if (!internal_request_->GetTextResults().empty()) {
+    response_client_->OnTextResults(
+        base::ToVector(internal_request_->GetTextResults()));
+  }
+
+  if (!internal_request_->GetHostnameResults().empty()) {
     response_client_->OnHostnameResults(
-        internal_request_->GetHostnameResults().value());
+        base::ToVector(internal_request_->GetHostnameResults()));
   }
 }
 

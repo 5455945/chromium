@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 #define IOS_WEB_VIEW_INTERNAL_CWV_FAVICON_INTERNAL_H_
 
 #include <vector>
+
 #include "ios/web/public/favicon/favicon_url.h"
 #import "ios/web_view/public/cwv_favicon.h"
 

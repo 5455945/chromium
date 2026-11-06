@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,22 +7,31 @@
 
 #include <memory>
 
-#include "base/callback_forward.h"
 #include "base/files/file_path.h"
-#include "chromeos/components/drivefs/drivefs_host.h"
-#include "chromeos/components/drivefs/fake_drivefs.h"
+#include "base/functional/callback_forward.h"
+#include "chromeos/ash/components/drivefs/drivefs_host.h"
+#include "chromeos/ash/components/drivefs/fake_drivefs.h"
+#include "components/account_id/account_id.h"
+#include "google_apis/gaia/gaia_id.h"
 
 class Profile;
 
 namespace drive {
 
 bool SetUpUserDataDirectoryForDriveFsTest();
+bool SetUpUserDataDirectoryForDriveFsTest(const AccountId& account_id);
 
 class FakeDriveFsHelper {
  public:
   static const char kPredefinedProfileSalt[];
+  static const char kDefaultUserEmail[];
+  static const GaiaId::Literal kDefaultGaiaId;
 
   FakeDriveFsHelper(Profile* profile, const base::FilePath& mount_path);
+
+  FakeDriveFsHelper(const FakeDriveFsHelper&) = delete;
+  FakeDriveFsHelper& operator=(const FakeDriveFsHelper&) = delete;
+
   ~FakeDriveFsHelper();
 
   base::RepeatingCallback<std::unique_ptr<drivefs::DriveFsBootstrapListener>()>
@@ -34,8 +43,6 @@ class FakeDriveFsHelper {
  private:
   const base::FilePath mount_path_;
   drivefs::FakeDriveFs fake_drivefs_;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeDriveFsHelper);
 };
 
 }  // namespace drive

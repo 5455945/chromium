@@ -6,121 +6,78 @@ others are optional, and are currently unused.
 
 ## Building the instrumented libraries
 
-### Setting up a chroot
+Building the libraries requires `apt-get source`, so the build must be done in
+an Ubuntu 26.04 (Resolute) environment.
+`third_party/instrumented_libs/scripts/build_in_chroot.py` takes care of this.
+It sets up an Ubuntu chroot under `out/` as an unprivileged user, and builds the
+libraries in it, so it works on any Linux distro.
 
-Building the libraries requires `apt-get source`, so the build must be done from
-an Ubuntu 14.04 environment. The preferred way is using a chroot. To get
-started, install `debootstrap` and `schroot`. If you're running a Debian-based
-distro, run:
+Apt is pinned to a fixed snapshot.ubuntu.com timestamp (`SNAPSHOT` in the
+script), so the package sources and build dependencies are reproducible. Bump it
+to pick up newer packages.
 
-```shell
-sudo apt install debootstrap schroot
-```
-
-Create a configuration for a Trusty chroot:
-
-```shell
-sudo $EDITOR /etc/schroot/chroot.d/trusty_amd64.conf
-```
-
-Add the following to the new file, replacing the instances of `thomasanderson`
-with your own username.
-
-```
-[trusty_amd64]
-description=Ubuntu 14.04 Trusty for amd64
-directory=/srv/chroot/trusty_amd64
-personality=linux
-root-users=thomasanderson
-type=directory
-users=thomasanderson
-```
-
-Bootstrap the chroot:
+To build both the `msan-no-origins` and `msan-chained-origins` libraries:
 
 ```shell
-sudo mkdir -p /srv/chroot/trusty_amd64
-sudo debootstrap --variant=buildd --arch=amd64 trusty /srv/chroot/trusty_amd64 http://archive.ubuntu.com/ubuntu/
+third_party/instrumented_libs/scripts/build_in_chroot.py
 ```
 
-If your `$HOME` directory is not `/home` (as is the case on gLinux), then route
-`/home` to the real thing. `schroot` automatically mounts `/home`, which is
-where I'm assuming you keep your source tree and `depot_tools`.
+The first run creates the chroot in `out/instrumented_libs_chroot_resolute`,
+which takes a while. Later runs reuse it. If only
+`third_party/instrumented_libs/resolute/scripts/install-build-deps.sh` changed,
+the new packages are installed into the existing chroot. Pass `--recreate` to
+start from scratch.
+
+The libraries are built in `out/instrumented_libs_build_resolute`, and are
+packaged as `msan-*-resolute-lib.tar.gz` in the root of the source tree.
+
+### Isolation modes
+
+The chroot is entered using one of two mechanisms, selected with `--mode`:
+
+*   `namespace` (the default): Unprivileged user namespaces + `chroot`. This
+    runs at native speed.
+*   `proot`: For machines that have unprivileged user namespaces disabled. Only
+    `ptrace` is required, but builds are about 3x slower.
+
+On a 128-thread machine, creating the chroot takes about 13 minutes in
+`namespace` mode and 20 minutes in `proot` mode, mostly spent downloading and
+installing packages. A clean build of both sets of libraries then takes about 13
+minutes in `namespace` mode and 40 minutes in `proot` mode.
+
+### Iterating on a package
+
+These options are useful when fixing build failures:
+
+*   `--packages=<pkg1>,<pkg2>`: Build only these packages (GN target names in
+    `third_party/instrumented_libs/resolute/BUILD.gn`), and skip packaging.
+*   `--keep-going`: Continue building other packages after a failure.
+*   `--no-clobber`: Keep each package's source and build tree, and reuse it on
+    the next build. Failed builds always keep their tree, under
+    `out/instrumented_libs_build_resolute/Instrumented-*/gen/third_party/instrumented_libs/resolute/<pkg>`.
+*   `--shell`: Open a shell in the chroot.
+
+For example:
 
 ```shell
-sudo mount --bind "$HOME" /home
+third_party/instrumented_libs/scripts/build_in_chroot.py --keep-going --packages=nss,pango1.0
 ```
 
-Add `sources.list`:
-
-```shell
-sudo $EDITOR /srv/chroot/trusty_amd64/etc/apt/sources.list
-```
-
-Add the following contents to the file:
-
-```
-deb     http://archive.ubuntu.com/ubuntu/ trusty          main restricted universe
-deb-src	http://archive.ubuntu.com/ubuntu/ trusty          main restricted universe
-deb     http://archive.ubuntu.com/ubuntu/ trusty-security main restricted universe
-deb-src http://archive.ubuntu.com/ubuntu/ trusty-security main restricted universe
-deb     http://archive.ubuntu.com/ubuntu/ trusty-updates  main restricted universe
-deb-src http://archive.ubuntu.com/ubuntu/ trusty-updates  main restricted universe
-```
-
-Enter the chroot and install the necessary packages:
-
-```shell
-schroot -c trusty_amd64 -u root --directory /
-apt update
-apt install lsb-release sudo python pkg-config libgtk2.0-bin libdrm-dev nih-dbus-tool help2man
-```
-
-Add `depot_tools` to your `PATH`. For example, I have it in `~/dev/depot_tools`,
-so I use:
-
-```shell
-export PATH=/home/thomasanderson/dev/depot_tools/:$PATH
-```
-
-Change to your src directory:
-
-```shell
-cd /home/thomasanderson/dev/chromium/src
-```
-
-Install library packages:
-
-```shell
-third_party/instrumented_libraries/scripts/install-build-deps.sh
-```
-
-Now we're ready to build the libraries. A clean build takes a little over 8
-minutes on a 72-thread machine.
-
-```shell
-third_party/instrumented_libraries/scripts/build_and_package.py --parallel -j $(nproc) all
-```
+See `--help` for the remaining options.
 
 ## Uploading the libraries
 
 This requires write permission on the `chromium-instrumented-libraries` GCS
-bucket. `dpranke@` can grant access.
+bucket. File a ticket at [go/pdeiosec-bug](https://goto.google.com/pdeiosec-bug)
+to request access.
 
 ```shell
-# Exit the chroot.
-exit
-
-# Fix permissions.
-sudo chown -R `whoami`:`groups | awk '{print $1;}'` *.tgz out/Instrumented-*
-
-# Move files into place.
-mv *.tgz third_party/instrumented_libraries/binaries
-
-# Upload.
-upload_to_google_storage.py -b chromium-instrumented-libraries third_party/instrumented_libraries/binaries/msan-chained-origins-trusty.tgz
-upload_to_google_storage.py -b chromium-instrumented-libraries third_party/instrumented_libraries/binaries/msan-no-origins-trusty.tgz
+upload_to_google_storage_first_class.py -b chromium-instrumented-libraries msan-chained-origins-resolute-lib.tar.gz
+upload_to_google_storage_first_class.py -b chromium-instrumented-libraries msan-no-origins-resolute-lib.tar.gz
 ```
+
+Each command prints an object entry. Add (or update) them in the `objects` list
+in `third_party/instrumented_libs/DEPS`.
 
 ## Testing and uploading a CL
 
@@ -133,4 +90,12 @@ the MSAN bot will run on the CQ:
 
 ```
 CQ_INCLUDE_TRYBOTS=luci.chromium.try:linux_chromium_msan_rel_ng
+```
+
+## Cleaning up
+
+The chroot, its package cache, and the build directories are all under `out/`:
+
+```shell
+rm -rf out/instrumented_libs_chroot_resolute* out/instrumented_libs_build_resolute
 ```

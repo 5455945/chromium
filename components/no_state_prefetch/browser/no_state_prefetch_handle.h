@@ -1,11 +1,11 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_NO_STATE_PREFETCH_BROWSER_NO_STATE_PREFETCH_HANDLE_H_
 #define COMPONENTS_NO_STATE_PREFETCH_BROWSER_NO_STATE_PREFETCH_HANDLE_H_
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/no_state_prefetch/browser/no_state_prefetch_manager.h"
 
@@ -27,15 +27,13 @@ class NoStatePrefetchHandle : public NoStatePrefetchContents::Observer {
     // Signals that the prefetch has stopped running.
     virtual void OnPrefetchStop(NoStatePrefetchHandle* handle) = 0;
 
-    // Signals that a resource finished loading and altered the running byte
-    // count.
-    virtual void OnPrefetchNetworkBytesChanged(
-        NoStatePrefetchHandle* handle) = 0;
-
    protected:
     Observer();
     virtual ~Observer();
   };
+
+  NoStatePrefetchHandle(const NoStatePrefetchHandle&) = delete;
+  NoStatePrefetchHandle& operator=(const NoStatePrefetchHandle&) = delete;
 
   // Before calling the destructor, the caller must invalidate the handle by
   // calling either OnNavigateAway or OnCancel.
@@ -60,9 +58,6 @@ class NoStatePrefetchHandle : public NoStatePrefetchContents::Observer {
   // True if we started prefetch, and it has finished loading.
   bool IsFinishedLoading() const;
 
-  // True if the prefetch is currently active, but is abandoned.
-  bool IsAbandoned() const;
-
   NoStatePrefetchContents* contents() const;
 
   // Returns whether this NoStatePrefetchHandle represents the same prefetch as
@@ -78,15 +73,11 @@ class NoStatePrefetchHandle : public NoStatePrefetchContents::Observer {
   // From NoStatePrefetchContents::Observer:
   void OnPrefetchStop(
       NoStatePrefetchContents* no_state_prefetch_contents) override;
-  void OnPrefetchNetworkBytesChanged(
-      NoStatePrefetchContents* no_state_prefetch_contents) override;
 
-  Observer* observer_;
+  raw_ptr<Observer> observer_;
 
   base::WeakPtr<NoStatePrefetchManager::NoStatePrefetchData> prefetch_data_;
   base::WeakPtrFactory<NoStatePrefetchHandle> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(NoStatePrefetchHandle);
 };
 
 }  // namespace prerender

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 #define SERVICES_RESOURCE_COORDINATOR_PUBLIC_CPP_MEMORY_INSTRUMENTATION_MEMORY_INSTRUMENTATION_MOJOM_TRAITS_H_
 
 #include "base/component_export.h"
+#include "base/notreached.h"
 #include "base/process/process_handle.h"
 #include "base/trace_event/memory_allocator_dump.h"
 #include "base/trace_event/memory_dump_manager.h"
@@ -21,8 +22,8 @@ struct COMPONENT_EXPORT(RESOURCE_COORDINATOR_PUBLIC_MOJOM)
                base::trace_event::MemoryDumpType> {
   static memory_instrumentation::mojom::DumpType ToMojom(
       base::trace_event::MemoryDumpType type);
-  static bool FromMojom(memory_instrumentation::mojom::DumpType input,
-                        base::trace_event::MemoryDumpType* out);
+  static base::trace_event::MemoryDumpType FromMojom(
+      memory_instrumentation::mojom::DumpType input);
 };
 
 template <>
@@ -31,8 +32,8 @@ struct COMPONENT_EXPORT(RESOURCE_COORDINATOR_PUBLIC_MOJOM)
                base::trace_event::MemoryDumpLevelOfDetail> {
   static memory_instrumentation::mojom::LevelOfDetail ToMojom(
       base::trace_event::MemoryDumpLevelOfDetail level_of_detail);
-  static bool FromMojom(memory_instrumentation::mojom::LevelOfDetail input,
-                        base::trace_event::MemoryDumpLevelOfDetail* out);
+  static base::trace_event::MemoryDumpLevelOfDetail FromMojom(
+      memory_instrumentation::mojom::LevelOfDetail input);
 };
 
 template <>
@@ -41,8 +42,8 @@ struct COMPONENT_EXPORT(RESOURCE_COORDINATOR_PUBLIC_MOJOM)
                base::trace_event::MemoryDumpDeterminism> {
   static memory_instrumentation::mojom::Determinism ToMojom(
       base::trace_event::MemoryDumpDeterminism determinism);
-  static bool FromMojom(memory_instrumentation::mojom::Determinism input,
-                        base::trace_event::MemoryDumpDeterminism* out);
+  static base::trace_event::MemoryDumpDeterminism FromMojom(
+      memory_instrumentation::mojom::Determinism input);
 };
 
 template <>
@@ -107,14 +108,12 @@ struct COMPONENT_EXPORT(RESOURCE_COORDINATOR_PUBLIC_MOJOM) UnionTraits<
     switch (args.entry_type) {
       case base::trace_event::MemoryAllocatorDump::Entry::EntryType::kUint64:
         return memory_instrumentation::mojom::
-            RawAllocatorDumpEntryValueDataView::Tag::VALUE_UINT64;
+            RawAllocatorDumpEntryValueDataView::Tag::kValueUint64;
       case base::trace_event::MemoryAllocatorDump::Entry::EntryType::kString:
         return memory_instrumentation::mojom::
-            RawAllocatorDumpEntryValueDataView::Tag::VALUE_STRING;
+            RawAllocatorDumpEntryValueDataView::Tag::kValueString;
     }
     NOTREACHED();
-    return memory_instrumentation::mojom::RawAllocatorDumpEntryValueDataView::
-        Tag::VALUE_UINT64;
   }
 
   static uint64_t value_uint64(
@@ -167,7 +166,7 @@ struct COMPONENT_EXPORT(RESOURCE_COORDINATOR_PUBLIC_MOJOM)
   }
   static bool weak(
       const std::unique_ptr<base::trace_event::MemoryAllocatorDump>& mad) {
-    return mad->flags() & base::trace_event::MemoryAllocatorDump::WEAK;
+    return mad->flags() & base::trace_event::MemoryAllocatorDump::kWeak;
   }
   static base::trace_event::MemoryDumpLevelOfDetail level_of_detail(
       const std::unique_ptr<base::trace_event::MemoryAllocatorDump>& mad) {
@@ -199,8 +198,9 @@ struct COMPONENT_EXPORT(RESOURCE_COORDINATOR_PUBLIC_MOJOM)
       const std::unique_ptr<base::trace_event::ProcessMemoryDump>& pmd) {
     std::vector<std::unique_ptr<base::trace_event::MemoryAllocatorDump>> dumps;
     dumps.reserve(pmd->mutable_allocator_dumps_for_serialization()->size());
-    for (auto& it : *pmd->mutable_allocator_dumps_for_serialization())
+    for (auto& it : *pmd->mutable_allocator_dumps_for_serialization()) {
       dumps.push_back(std::move(it.second));
+    }
     return dumps;
   }
   static base::trace_event::MemoryDumpLevelOfDetail level_of_detail(

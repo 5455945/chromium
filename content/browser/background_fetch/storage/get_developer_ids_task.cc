@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,10 @@
 
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "content/browser/background_fetch/storage/database_helpers.h"
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
+#include "content/browser/service_worker/service_worker_registration.h"
 
 namespace content {
 namespace background_fetch {
@@ -26,6 +27,28 @@ GetDeveloperIdsTask::GetDeveloperIdsTask(
 GetDeveloperIdsTask::~GetDeveloperIdsTask() = default;
 
 void GetDeveloperIdsTask::Start() {
+  service_worker_context()->FindReadyRegistrationForIdOnly(
+      service_worker_registration_id_,
+      base::BindOnce(&GetDeveloperIdsTask::DidGetServiceWorkerRegistration,
+                     weak_factory_.GetWeakPtr()));
+}
+
+void GetDeveloperIdsTask::DidGetServiceWorkerRegistration(
+    blink::ServiceWorkerStatusCode status,
+    scoped_refptr<ServiceWorkerRegistration> registration) {
+  if (ToDatabaseStatus(status) != DatabaseStatus::kOk || !registration) {
+    SetStorageErrorAndFinish(
+        BackgroundFetchStorageError::kServiceWorkerStorageError);
+    return;
+  }
+
+  // TODO(crbug.com/40177656): Move this check into the SW context.
+  if (registration->key() != storage_key_) {
+    SetStorageErrorAndFinish(
+        BackgroundFetchStorageError::kServiceWorkerStorageError);
+    return;
+  }
+
   service_worker_context()->GetRegistrationUserKeysAndDataByKeyPrefix(
       service_worker_registration_id_, {kActiveRegistrationUniqueIdKeyPrefix},
       base::BindOnce(&GetDeveloperIdsTask::DidGetUniqueIds,
@@ -55,13 +78,8 @@ void GetDeveloperIdsTask::DidGetUniqueIds(
 
 void GetDeveloperIdsTask::FinishWithError(
     blink::mojom::BackgroundFetchError error) {
-  ReportStorageError();
   std::move(callback_).Run(error, std::move(developer_ids_));
   Finished();  // Destroys |this|.
-}
-
-std::string GetDeveloperIdsTask::HistogramName() const {
-  return "GetDeveloperIdsTask";
 }
 
 }  // namespace background_fetch

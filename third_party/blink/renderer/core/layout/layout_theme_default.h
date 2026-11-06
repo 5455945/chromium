@@ -37,51 +37,7 @@ namespace blink {
 
 class CORE_EXPORT LayoutThemeDefault : public LayoutTheme {
  public:
-  String ExtraDefaultStyleSheet() override;
-  String ExtraQuirksStyleSheet() override;
-
-  Color PlatformActiveSelectionBackgroundColor(
-      mojom::blink::ColorScheme color_scheme) const override;
-  Color PlatformInactiveSelectionBackgroundColor(
-      mojom::blink::ColorScheme color_scheme) const override;
-  Color PlatformActiveSelectionForegroundColor(
-      mojom::blink::ColorScheme color_scheme) const override;
-  Color PlatformInactiveSelectionForegroundColor(
-      mojom::blink::ColorScheme color_scheme) const override;
-
-  IntSize SliderTickSize() const override;
-  int SliderTickOffsetFromTrackCenter() const override;
-  void AdjustSliderThumbSize(ComputedStyle&) const override;
-
-  void SetCheckboxSize(ComputedStyle&) const override;
-  void SetRadioSize(ComputedStyle&) const override;
-  void AdjustInnerSpinButtonStyle(ComputedStyle&) const override;
-  void AdjustButtonStyle(ComputedStyle&) const override;
-
-  Color PlatformTapHighlightColor() const override {
-    return Color(kDefaultTapHighlightColor);
-  }
-
-  void SetSelectionColors(Color active_background_color,
-                          Color active_foreground_color,
-                          Color inactive_background_color,
-                          Color inactive_foreground_color) override;
-  Color PlatformFocusRingColor() const override;
-
-  void AdjustSearchFieldStyle(ComputedStyle&) const override;
-  void AdjustSearchFieldCancelButtonStyle(ComputedStyle&) const override;
-
-  // MenuList refers to an unstyled menulist (meaning a menulist without
-  // background-color or border set) and MenuListButton refers to a styled
-  // menulist (a menulist with background-color or border set). They have
-  // this distinction to support showing aqua style themes whenever they
-  // possibly can, which is something we don't want to replicate.
-  //
-  // In short, we either go down the MenuList code path or the MenuListButton
-  // codepath. We never go down both. And in both cases, they layout the
-  // entire menulist.
-  void AdjustMenuListStyle(ComputedStyle&) const override;
-  void AdjustMenuListButtonStyle(ComputedStyle&) const override;
+  void AdjustSearchFieldCancelButtonStyle(ComputedStyleBuilder&) const override;
 
   // These methods define the padding for the MenuList's inner block.
   int PopupInternalPaddingStart(const ComputedStyle&) const override;
@@ -104,13 +60,6 @@ class CORE_EXPORT LayoutThemeDefault : public LayoutTheme {
   ThemePainter& Painter() override { return painter_; }
 
   int MenuListInternalPadding(const ComputedStyle&, int padding) const;
-
-  static const RGBA32 kDefaultTapHighlightColor = 0x2e000000;  // 18% black.
-
-  static Color active_selection_background_color_;
-  static Color active_selection_foreground_color_;
-  static Color inactive_selection_background_color_;
-  static Color inactive_selection_foreground_color_;
 
   ThemePainterDefault painter_;
   // Cached values for crbug.com/673754.

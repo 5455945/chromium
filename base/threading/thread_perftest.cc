@@ -1,6 +1,8 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "base/threading/thread.h"
 
 #include <stddef.h>
 
@@ -8,23 +10,22 @@
 #include <vector>
 
 #include "base/base_switches.h"
-#include "base/bind.h"
 #include "base/command_line.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/memory/ptr_util.h"
-#include "base/single_thread_task_runner.h"
 #include "base/synchronization/condition_variable.h"
 #include "base/synchronization/lock.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/current_thread.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/task_observer.h"
-#include "base/threading/thread.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/perf/perf_result_reporter.h"
 
-#if defined(OS_POSIX)
+#if BUILDFLAG(IS_POSIX)
 #include <pthread.h>
 #endif
 
@@ -44,9 +45,9 @@ constexpr char kStoryBaseCondVar[] = "condition_variable";
 constexpr char kStorySuffixOneThread[] = "_1_thread";
 constexpr char kStorySuffixFourThreads[] = "_4_threads";
 
-#if defined(OS_POSIX)
+#if BUILDFLAG(IS_POSIX)
 constexpr char kStoryBasePthreadCondVar[] = "pthread_condition_variable";
-#endif  // defined(OS_POSIX)
+#endif  // BUILDFLAG(IS_POSIX)
 
 perf_test::PerfResultReporter SetUpReporter(const std::string& story_name) {
   perf_test::PerfResultReporter reporter(kMetricPrefixThread, story_name);
@@ -67,8 +68,9 @@ class ThreadPerfTest : public testing::Test {
   // their cpu-time can be measured. Test must return from PingPong() _and_
   // call FinishMeasurement from any thread to complete the test.
   virtual void Init() {
-    if (ThreadTicks::IsSupported())
+    if (ThreadTicks::IsSupported()) {
       ThreadTicks::WaitUntilInitialized();
+    }
   }
   virtual void PingPong(int hops) = 0;
   virtual void Reset() {}
@@ -95,8 +97,9 @@ class ThreadPerfTest : public testing::Test {
     while (threads_.size() < num_threads) {
       threads_.push_back(std::make_unique<base::Thread>("PingPonger"));
       threads_.back()->Start();
-      if (base::ThreadTicks::IsSupported())
+      if (base::ThreadTicks::IsSupported()) {
         thread_starts.push_back(ThreadNow(*threads_.back()));
+      }
     }
 
     Init();
@@ -160,13 +163,12 @@ class TaskPerfTest : public ThreadPerfTest {
 // This tries to test the 'best-case' as well as the 'worst-case' task posting
 // performance. The best-case keeps one thread alive such that it never yeilds,
 // while the worse-case forces a context switch for every task. Four threads are
-// used to ensure the threads do yeild (with just two it might be possible for
+// used to ensure the threads do yield (with just two it might be possible for
 // both threads to stay awake if they can signal each other fast enough).
 TEST_F(TaskPerfTest, TaskPingPong) {
   RunPingPongTest(std::string(kStoryBaseTask) + kStorySuffixOneThread, 1);
   RunPingPongTest(std::string(kStoryBaseTask) + kStorySuffixFourThreads, 4);
 }
-
 
 // Same as above, but add observers to test their perf impact.
 class MessageLoopObserver : public base::TaskObserver {
@@ -224,8 +226,9 @@ class EventPerfTest : public ThreadPerfTest {
     } while (my_hops > 0);
     // Once we are done, all threads will signal as hops passes zero.
     // We only signal completion once, on the thread that reaches zero.
-    if (!my_hops)
+    if (!my_hops) {
       FinishMeasurement();
+    }
   }
 
   void PingPong(int hops) override {
@@ -259,7 +262,7 @@ class ConditionVariableEvent {
  public:
   ConditionVariableEvent(WaitableEvent::ResetPolicy reset_policy,
                          WaitableEvent::InitialState initial_state)
-      : cond_(&lock_), signaled_(false) {
+      : cond_(&lock_) {
     DCHECK_EQ(WaitableEvent::ResetPolicy::AUTOMATIC, reset_policy);
     DCHECK_EQ(WaitableEvent::InitialState::NOT_SIGNALED, initial_state);
   }
@@ -274,15 +277,16 @@ class ConditionVariableEvent {
 
   void Wait() {
     base::AutoLock scoped_lock(lock_);
-    while (!signaled_)
+    while (!signaled_) {
       cond_.Wait();
+    }
     signaled_ = false;
   }
 
  private:
   base::Lock lock_;
   base::ConditionVariable cond_;
-  bool signaled_;
+  bool signaled_ = false;
 };
 
 // This is meant to test the absolute minimal context switching time
@@ -291,7 +295,7 @@ typedef EventPerfTest<ConditionVariableEvent> ConditionVariablePerfTest;
 TEST_F(ConditionVariablePerfTest, EventPingPong) {
   RunPingPongTest(std::string(kStoryBaseCondVar) + kStorySuffixFourThreads, 4);
 }
-#if defined(OS_POSIX)
+#if BUILDFLAG(IS_POSIX)
 
 // Absolutely 100% minimal posix waitable event. If there is a better/faster
 // way to force a context switch, we should use that instead.
@@ -320,8 +324,9 @@ class PthreadEvent {
 
   void Wait() {
     pthread_mutex_lock(&mutex_);
-    while (!signaled_)
+    while (!signaled_) {
       pthread_cond_wait(&cond_, &mutex_);
+    }
     signaled_ = false;
     pthread_mutex_unlock(&mutex_);
   }

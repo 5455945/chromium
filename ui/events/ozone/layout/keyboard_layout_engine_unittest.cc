@@ -1,6 +1,8 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include <string_view>
 
 #include "base/memory/ptr_util.h"
 #include "base/strings/stringprintf.h"
@@ -23,7 +25,7 @@ namespace ui {
 namespace {
 
 // Hardcoded US layout for standalone testing of XkbKeyboardLayoutEngine.
-const char* kUsLayoutXkbKeymap =
+constexpr std::string_view kUsLayoutXkbKeymap =
     "xkb_keymap{"
     "xkb_keycodes \"evdev_aliases(qwerty)\"{minimum=8;maximum=255;"
     "<ESC>=9;<AE01>=10;<AE02>=11;<AE03>=12;<AE04>=13;<AE05>=14;"
@@ -183,15 +185,13 @@ void TestLookup(const char* name, KeyboardLayoutEngine* engine) {
   static const struct {
     DomCode input_dom_code;
     int input_flags;
-    DomKey::Base output_dom_key;
+    DomKey output_dom_key;
     KeyboardCode output_keycode;
     char16_t output_character;
   } kTestCases[] = {
-      {DomCode::US_A, EF_NONE, DomKey::Constant<'a'>::Character, VKEY_A, 'a'},
-      {DomCode::US_A, EF_SHIFT_DOWN, DomKey::Constant<'A'>::Character, VKEY_A,
-       'A'},
-      {DomCode::US_A, EF_CONTROL_DOWN, DomKey::Constant<'a'>::Character,
-       VKEY_A, 1},
+      {DomCode::US_A, EF_NONE, DomKey::FromCharacter('a'), VKEY_A, 'a'},
+      {DomCode::US_A, EF_SHIFT_DOWN, DomKey::FromCharacter('A'), VKEY_A, 'A'},
+      {DomCode::US_A, EF_CONTROL_DOWN, DomKey::FromCharacter('a'), VKEY_A, 1},
       {DomCode::LAUNCH_ASSISTANT, EF_NONE, DomKey::LAUNCH_ASSISTANT,
        VKEY_ASSISTANT, 0},
   };
@@ -201,14 +201,14 @@ void TestLookup(const char* name, KeyboardLayoutEngine* engine) {
     KeyboardCode keycode;
     SCOPED_TRACE(base::StringPrintf(
         "%s(%s, 0x%X)", name,
-        KeycodeConverter::DomCodeToCodeString(t.input_dom_code),
+        KeycodeConverter::DomCodeToCodeString(t.input_dom_code).c_str(),
         t.input_flags));
     EXPECT_TRUE(
         engine->Lookup(t.input_dom_code, t.input_flags, &dom_key, &keycode));
     EXPECT_EQ(t.output_dom_key, dom_key);
     EXPECT_EQ(t.output_keycode, keycode);
-    KeyEvent key_event(ET_KEY_PRESSED, keycode, t.input_dom_code, t.input_flags,
-                       dom_key, EventTimeForNow());
+    KeyEvent key_event(EventType::kKeyPressed, keycode, t.input_dom_code,
+                       t.input_flags, dom_key, EventTimeForNow());
     EXPECT_EQ(t.output_character, key_event.GetCharacter());
   }
 }
@@ -227,8 +227,7 @@ TEST(LayoutEngineTest, Lookup) {
     XkbEvdevCodes xkb_evdev_code_converter;
     auto xkb_engine =
         std::make_unique<XkbKeyboardLayoutEngine>(xkb_evdev_code_converter);
-    xkb_engine->SetCurrentLayoutFromBuffer(kUsLayoutXkbKeymap,
-                                           strlen(kUsLayoutXkbKeymap));
+    xkb_engine->SetCurrentLayoutFromBuffer(kUsLayoutXkbKeymap);
     TestLookup("XkbKeyboardLayoutEngine", xkb_engine.get());
   }
 }

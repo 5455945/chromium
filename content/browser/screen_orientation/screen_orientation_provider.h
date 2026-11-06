@@ -1,19 +1,20 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_BROWSER_SCREEN_ORIENTATION_SCREEN_ORIENTATION_PROVIDER_H_
 #define CONTENT_BROWSER_SCREEN_ORIENTATION_SCREEN_ORIENTATION_PROVIDER_H_
 
-#include "base/callback.h"
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include <optional>
+
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "content/common/content_export.h"
+#include "content/public/browser/render_frame_host_receiver_set.h"
 #include "content/public/browser/web_contents_observer.h"
-#include "content/public/browser/web_contents_receiver_set.h"
 #include "services/device/public/mojom/screen_orientation.mojom.h"
 #include "services/device/public/mojom/screen_orientation_lock_types.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "ui/display/mojom/screen_orientation.mojom.h"
 
 namespace content {
 
@@ -28,7 +29,21 @@ class CONTENT_EXPORT ScreenOrientationProvider
  public:
   ScreenOrientationProvider(WebContents* web_contents);
 
+  ScreenOrientationProvider(const ScreenOrientationProvider&) = delete;
+  ScreenOrientationProvider& operator=(const ScreenOrientationProvider&) =
+      delete;
+
   ~ScreenOrientationProvider() override;
+
+  void BindScreenOrientation(
+      RenderFrameHost* rfh,
+      mojo::PendingAssociatedReceiver<device::mojom::ScreenOrientation>
+          receiver);
+
+  // Return if orientation lock is enabled.  This does not guarantee that any
+  // particular call to `Lock` will succeed, but lack of support here does mean
+  // that `Lock` will definitely won't work.
+  bool IsOrientationLockSupported() const;
 
   // device::mojom::ScreenOrientation:
   void LockOrientation(device::mojom::ScreenOrientationLockType,
@@ -43,11 +58,33 @@ class CONTENT_EXPORT ScreenOrientationProvider
   // The delegate is not owned by ScreenOrientationProvider.
   static void SetDelegate(ScreenOrientationDelegate* delegate);
   static ScreenOrientationDelegate* GetDelegateForTesting();
+  static bool LockMatchesOrientation(
+      device::mojom::ScreenOrientationLockType lock,
+      display::mojom::ScreenOrientation orientation);
+
+  // Enable/disable DevTools emulation mode for orientation lock.
+  // When enabled, LockOrientation() succeeds even without a platform delegate.
+  void SetDevToolsEmulationEnabled(bool enabled);
+
+  // Callback type for notifying DevTools when orientation lock state changes.
+  using OrientationLockChangedCallback = base::RepeatingCallback<void(
+      bool locked,
+      std::optional<device::mojom::ScreenOrientationLockType> orientation)>;
+  void SetOrientationLockChangedCallback(
+      OrientationLockChangedCallback callback);
+
+  // Hook used by web test infrastructure to mirror renderer-side orientation
+  // lock state changes to DevTools emulation callbacks.
+  void NotifyOrientationLockChanged(
+      bool locked,
+      std::optional<device::mojom::ScreenOrientationLockType> orientation);
+
+  void SetCurrentTargetFrameForTesting(RenderFrameHost* render_frame_host);
 
   // WebContentsObserver
   void DidToggleFullscreenModeForTab(bool entered_fullscreen,
                                      bool will_cause_resize) override;
-  void DidFinishNavigation(NavigationHandle* navigation_handle) override;
+  void PrimaryPageChanged(Page& page) override;
 
  private:
   // Calls on |on_result_callback_| with |result|, followed by resetting
@@ -72,14 +109,19 @@ class CONTENT_EXPORT ScreenOrientationProvider
 
   // Lock that require orientation changes are not completed until
   // OnOrientationChange.
-  absl::optional<device::mojom::ScreenOrientationLockType>
+  std::optional<device::mojom::ScreenOrientationLockType>
       pending_lock_orientation_;
 
   LockOrientationCallback pending_callback_;
 
-  WebContentsFrameReceiverSet<device::mojom::ScreenOrientation> receivers_;
+  // Whether DevTools device emulation is active, allowing orientation lock
+  // even without a platform delegate.
+  bool devtools_emulation_enabled_ = false;
 
-  DISALLOW_COPY_AND_ASSIGN(ScreenOrientationProvider);
+  // Callback to notify DevTools of orientation lock state changes.
+  OrientationLockChangedCallback lock_changed_callback_;
+
+  RenderFrameHostReceiverSet<device::mojom::ScreenOrientation> receivers_;
 };
 
 }  // namespace content

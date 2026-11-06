@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,21 +6,21 @@
 
 #include <algorithm>
 #include <array>
+#include <functional>
 #include <limits>
+#include <ranges>
 
-#include "base/containers/adapters.h"
 #include "base/containers/circular_deque.h"
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 
+namespace ash {
 namespace {
 
 constexpr SkColor kDefaultPointColor = SkColorSetRGB(0x42, 0x85, 0xF4);
 constexpr int kDefaultOpacity = 0xCC;
 
 }  // namespace
-
-namespace fast_ink {
 
 const SkColor FastInkPoints::kDefaultColor =
     SkColorSetA(kDefaultPointColor, kDefaultOpacity);
@@ -62,9 +62,8 @@ void FastInkPoints::MoveForwardToTime(const base::TimeTicks& latest_time) {
   if (!points_.empty() && !life_duration_.is_zero()) {
     // Remove obsolete points.
     const base::TimeTicks expiration = latest_time - life_duration_;
-    auto first_alive_point = std::find_if(
-        points_.begin(), points_.end(),
-        [expiration](const FastInkPoint& p) { return p.time > expiration; });
+    auto first_alive_point = std::ranges::lower_bound(
+        points_, expiration, std::ranges::less_equal(), &FastInkPoint::time);
     points_.erase(points_.begin(), first_alive_point);
   }
 }
@@ -163,9 +162,8 @@ void FastInkPoints::Predict(const FastInkPoints& real_points,
   const float kPredictionIntervalMs = 5.0f;
   const float kMaxPointIntervalMs = 10.0f;
   base::TimeDelta prediction_interval =
-      base::TimeDelta::FromMilliseconds(kPredictionIntervalMs);
-  base::TimeDelta max_point_interval =
-      base::TimeDelta::FromMilliseconds(kMaxPointIntervalMs);
+      base::Milliseconds(kPredictionIntervalMs);
+  base::TimeDelta max_point_interval = base::Milliseconds(kMaxPointIntervalMs);
   const FastInkPoint newest_real_point = real_points.GetNewest();
   base::TimeTicks last_point_time = newest_real_point.time;
   gfx::PointF last_point_location =
@@ -175,7 +173,7 @@ void FastInkPoints::Predict(const FastInkPoints& real_points,
   using PositionArray = std::array<gfx::PointF, 4>;
   PositionArray position;
   PositionArray::iterator it = position.begin();
-  for (const auto& point : base::Reversed(real_points.points())) {
+  for (const auto& point : std::views::reverse(real_points.points())) {
     // Stop adding positions if interval between points is too large to provide
     // an accurate history for prediction.
     if ((last_point_time - point.time) > max_point_interval)
@@ -197,12 +195,12 @@ void FastInkPoints::Predict(const FastInkPoints& real_points,
   // Note: Currently there's no need to divide by the time delta between
   // points as we assume a constant delta between points that matches the
   // prediction point interval.
-  gfx::Vector2dF velocity[3];
+  std::array<gfx::Vector2dF, 3> velocity = {};
   for (size_t i = 0; i < valid_positions - 1; ++i)
     velocity[i] = position[i] - position[i + 1];
   // velocity[0] is always valid, since |valid_positions| >=2
 
-  gfx::Vector2dF acceleration[2];
+  std::array<gfx::Vector2dF, 2> acceleration = {};
   for (size_t i = 0; i < valid_positions - 2; ++i)
     acceleration[i] = velocity[i] - velocity[i + 1];
   // acceleration[0] is always valid (zero if |valid_positions| < 3).
@@ -242,4 +240,4 @@ void FastInkPoints::Predict(const FastInkPoints& real_points,
   }
 }
 
-}  // namespace fast_ink
+}  // namespace ash

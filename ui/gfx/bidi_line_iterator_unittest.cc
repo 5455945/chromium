@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,12 +16,13 @@ class BiDiLineIteratorTest
  public:
   BiDiLineIteratorTest() = default;
 
+  BiDiLineIteratorTest(const BiDiLineIteratorTest&) = delete;
+  BiDiLineIteratorTest& operator=(const BiDiLineIteratorTest&) = delete;
+
   BiDiLineIterator* iterator() { return &iterator_; }
 
  private:
   BiDiLineIterator iterator_;
-
-  DISALLOW_COPY_AND_ASSIGN(BiDiLineIteratorTest);
 };
 
 TEST_P(BiDiLineIteratorTest, OnlyLTR) {

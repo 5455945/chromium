@@ -1,17 +1,18 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 // These tests have been added to specifically tests issues arising from (A)LPC
 // lock down.
 
-#include <algorithm>
-#include <cctype>
-
 #include <windows.h>
+
 #include <winioctl.h>
 
-#include "base/win/windows_version.h"
+#include <algorithm>
+
+#include "base/containers/heap_array.h"
+#include "base/strings/string_number_conversions_win.h"
 #include "build/build_config.h"
 #include "sandbox/win/src/heap_helper.h"
 #include "sandbox/win/src/sandbox.h"
@@ -26,151 +27,80 @@ namespace sandbox {
 namespace {
 
 bool CsrssDisconnectSupported() {
-  // This functionality has not been verified on versions before Win10.
-  if (base::win::GetVersion() < base::win::Version::WIN10)
-    return false;
-
-  // Does not work on 32-bit on x64 (ie Wow64).
-  return (base::win::OSInfo::GetInstance()->wow64_status() !=
-          base::win::OSInfo::WOW64_ENABLED);
+#if defined(_WIN64) && !defined(ADDRESS_SANITIZER)
+  return true;
+#else
+  return false;
+#endif  // defined(_WIN64) && !defined(ADDRESS_SANITIZER)
 }
 
 }  // namespace
-// Converts LCID to std::wstring for passing to sbox tests.
-std::wstring LcidToWString(LCID lcid) {
-  wchar_t buff[10] = {0};
-  int res = swprintf_s(buff, sizeof(buff) / sizeof(buff[0]), L"%08x", lcid);
-  if (-1 != res) {
-    return std::wstring(buff);
-  }
-  return std::wstring();
-}
-
-// Converts LANGID to std::wstring for passing to sbox tests.
-std::wstring LangidToWString(LANGID langid) {
-  wchar_t buff[10] = {0};
-  int res = swprintf_s(buff, sizeof(buff) / sizeof(buff[0]), L"%04x", langid);
-  if (-1 != res) {
-    return std::wstring(buff);
-  }
-  return std::wstring();
-}
-
-SBOX_TESTS_COMMAND int Lpc_GetUserDefaultLangID(int argc, wchar_t** argv) {
-  if (argc != 1)
+SBOX_TEST_COMMAND(Lpc_GetUserDefaultLangID) {
+  if (args.size() != 1) {
     return SBOX_TEST_FAILED_TO_EXECUTE_COMMAND;
-  std::wstring expected_langid_string(argv[0]);
-
-  // This will cause an exception if not warmed up suitably.
-  LANGID langid = ::GetUserDefaultLangID();
-
-  std::wstring langid_string = LangidToWString(langid);
-  if (0 == wcsncmp(langid_string.c_str(), expected_langid_string.c_str(), 4)) {
-    return SBOX_TEST_SUCCEEDED;
   }
-  return SBOX_TEST_FAILED;
+  unsigned int langid;
+  if (!base::StringToUint(args[0], &langid)) {
+    return SBOX_TEST_INVALID_PARAMETER;
+  }
+  // This will cause an exception if not warmed up suitably.
+  return langid == ::GetUserDefaultLangID() ? SBOX_TEST_SUCCEEDED
+                                            : SBOX_TEST_FAILED;
 }
 
 TEST(LpcPolicyTest, GetUserDefaultLangID) {
-  LANGID langid = ::GetUserDefaultLangID();
-  std::wstring cmd = L"Lpc_GetUserDefaultLangID " + LangidToWString(langid);
-  TestRunner runner;
-  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(cmd.c_str()));
+  Lpc_GetUserDefaultLangIDTestRunner runner;
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(::GetUserDefaultLangID()));
 }
 
-SBOX_TESTS_COMMAND int Lpc_GetUserDefaultLCID(int argc, wchar_t** argv) {
-  if (argc != 1)
+SBOX_TEST_COMMAND(Lpc_GetUserDefaultLCID) {
+  if (args.size() != 1) {
     return SBOX_TEST_FAILED_TO_EXECUTE_COMMAND;
-  std::wstring expected_lcid_string(argv[0]);
-
-  // This will cause an exception if not warmed up suitably.
-  LCID lcid = ::GetUserDefaultLCID();
-
-  std::wstring lcid_string = LcidToWString(lcid);
-  if (0 == wcsncmp(lcid_string.c_str(), expected_lcid_string.c_str(), 8)) {
-    return SBOX_TEST_SUCCEEDED;
   }
-  return SBOX_TEST_FAILED;
+
+  unsigned int lcid;
+  if (!base::StringToUint(args[0], &lcid)) {
+    return SBOX_TEST_INVALID_PARAMETER;
+  }
+  // This will cause an exception if not warmed up suitably.
+  return lcid == ::GetUserDefaultLCID() ? SBOX_TEST_SUCCEEDED
+                                        : SBOX_TEST_FAILED;
 }
 
 TEST(LpcPolicyTest, GetUserDefaultLCID) {
-  LCID lcid = ::GetUserDefaultLCID();
-  std::wstring cmd = L"Lpc_GetUserDefaultLCID " + LcidToWString(lcid);
-  TestRunner runner;
-  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(cmd.c_str()));
+  Lpc_GetUserDefaultLCIDTestRunner runner;
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(::GetUserDefaultLCID()));
 }
 
-// GetUserDefaultLocaleName is not available on WIN XP.  So we'll
-// load it on-the-fly.
-const wchar_t kKernel32DllName[] = L"kernel32.dll";
-typedef int(WINAPI* GetUserDefaultLocaleNameFunction)(LPWSTR lpLocaleName,
-                                                      int cchLocaleName);
+std::wstring GetLocaleName() {
+  wchar_t locale_name[LOCALE_NAME_MAX_LENGTH] = {};
+  if (!::GetUserDefaultLocaleName(locale_name, LOCALE_NAME_MAX_LENGTH)) {
+    return {};
+  }
+  return locale_name;
+}
 
-SBOX_TESTS_COMMAND int Lpc_GetUserDefaultLocaleName(int argc, wchar_t** argv) {
-  if (argc != 1)
+SBOX_TEST_COMMAND(Lpc_GetUserDefaultLocaleName) {
+  if (args.size() != 1) {
     return SBOX_TEST_FAILED_TO_EXECUTE_COMMAND;
-  std::wstring expected_locale_name(argv[0]);
-  static GetUserDefaultLocaleNameFunction GetUserDefaultLocaleName_func =
-      nullptr;
-  if (!GetUserDefaultLocaleName_func) {
-    // GetUserDefaultLocaleName is not available on WIN XP.  So we'll
-    // load it on-the-fly.
-    HMODULE kernel32_dll = ::GetModuleHandle(kKernel32DllName);
-    if (!kernel32_dll) {
-      return SBOX_TEST_FAILED;
-    }
-    GetUserDefaultLocaleName_func =
-        reinterpret_cast<GetUserDefaultLocaleNameFunction>(
-            GetProcAddress(kernel32_dll, "GetUserDefaultLocaleName"));
-    if (!GetUserDefaultLocaleName_func) {
-      return SBOX_TEST_FAILED;
-    }
   }
-  wchar_t locale_name[LOCALE_NAME_MAX_LENGTH] = {0};
-  // This will cause an exception if not warmed up suitably.
-  int ret = GetUserDefaultLocaleName_func(
-      locale_name, LOCALE_NAME_MAX_LENGTH * sizeof(wchar_t));
-  if (!ret) {
-    return SBOX_TEST_FAILED;
+
+  std::wstring locale_name = GetLocaleName();
+  if (locale_name.empty()) {
+    return SBOX_TEST_FIRST_ERROR;
   }
-  if (!wcsnlen(locale_name, LOCALE_NAME_MAX_LENGTH)) {
-    return SBOX_TEST_FAILED;
-  }
-  if (0 == wcsncmp(locale_name, expected_locale_name.c_str(),
-                   LOCALE_NAME_MAX_LENGTH)) {
-    return SBOX_TEST_SUCCEEDED;
-  }
-  return SBOX_TEST_FAILED;
+
+  return args[0] == locale_name ? SBOX_TEST_SUCCEEDED : SBOX_TEST_FAILED;
 }
 
 TEST(LpcPolicyTest, GetUserDefaultLocaleName) {
-  static GetUserDefaultLocaleNameFunction GetUserDefaultLocaleName_func =
-      nullptr;
-  if (!GetUserDefaultLocaleName_func) {
-    // GetUserDefaultLocaleName is not available on WIN XP.  So we'll
-    // load it on-the-fly.
-    HMODULE kernel32_dll = ::GetModuleHandle(kKernel32DllName);
-    EXPECT_NE(nullptr, kernel32_dll);
-    GetUserDefaultLocaleName_func =
-        reinterpret_cast<GetUserDefaultLocaleNameFunction>(
-            GetProcAddress(kernel32_dll, "GetUserDefaultLocaleName"));
-    EXPECT_NE(nullptr, GetUserDefaultLocaleName_func);
-  }
-  wchar_t locale_name[LOCALE_NAME_MAX_LENGTH] = {0};
-  EXPECT_NE(0, GetUserDefaultLocaleName_func(
-                   locale_name, LOCALE_NAME_MAX_LENGTH * sizeof(wchar_t)));
-  EXPECT_NE(0U, wcsnlen(locale_name, LOCALE_NAME_MAX_LENGTH));
-  std::wstring cmd =
-      L"Lpc_GetUserDefaultLocaleName " + std::wstring(locale_name);
-  TestRunner runner;
-  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(cmd.c_str()));
+  Lpc_GetUserDefaultLocaleNameTestRunner runner;
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(GetLocaleName()));
 }
 
 // Closing ALPC port can invalidate its heap.
 // Test that all heaps are valid.
-SBOX_TESTS_COMMAND int Lpc_TestValidProcessHeaps(int argc, wchar_t** argv) {
-  if (argc != 0)
-    return SBOX_TEST_FAILED_TO_EXECUTE_COMMAND;
+SBOX_TEST_COMMAND(Lpc_TestValidProcessHeaps) {
   // Retrieves the number of heaps in the current process.
   DWORD number_of_heaps = ::GetProcessHeaps(0, nullptr);
   // Try to retrieve a handle to all the heaps owned by this process. Returns
@@ -178,9 +108,10 @@ SBOX_TESTS_COMMAND int Lpc_TestValidProcessHeaps(int argc, wchar_t** argv) {
   //
   // This is inherently racy as is, but it's not something that we observe a lot
   // in Chrome, the heaps tend to be created at startup only.
-  std::unique_ptr<HANDLE[]> all_heaps(new HANDLE[number_of_heaps]);
-  if (::GetProcessHeaps(number_of_heaps, all_heaps.get()) != number_of_heaps)
+  auto all_heaps = base::HeapArray<HANDLE>::Uninit(number_of_heaps);
+  if (::GetProcessHeaps(number_of_heaps, all_heaps.data()) != number_of_heaps) {
     return SBOX_TEST_FIRST_ERROR;
+  }
 
   for (size_t i = 0; i < number_of_heaps; ++i) {
     HANDLE handle = all_heaps[i];
@@ -195,8 +126,8 @@ SBOX_TESTS_COMMAND int Lpc_TestValidProcessHeaps(int argc, wchar_t** argv) {
 }
 
 TEST(LpcPolicyTest, TestValidProcessHeaps) {
-  TestRunner runner;
-  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(L"Lpc_TestValidProcessHeaps"));
+  Lpc_TestValidProcessHeapsTestRunner runner;
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest());
 }
 
 // All processes should have a shared heap with csrss.exe. This test ensures
@@ -218,10 +149,9 @@ TEST(LpcPolicyTest, TestCanFindCsrPortHeap) {
 
 TEST(LpcPolicyTest, MAYBE_TestHeapFlags) {
   if (!CsrssDisconnectSupported()) {
-    // This functionality has not been verified on versions before Win10.
     return;
   }
-  // Windows does not support callers supplying arbritary flag values. So we
+  // Windows does not support callers supplying arbitrary flag values. So we
   // write some non-trivial value to reduce the chance we match this in random
   // data.
   DWORD flags = 0x41007;

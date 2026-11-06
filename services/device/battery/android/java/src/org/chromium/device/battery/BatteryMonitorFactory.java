@@ -1,11 +1,12 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.device.battery;
 
-import org.chromium.base.Log;
 import org.chromium.base.ThreadUtils;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.device.battery.BatteryStatusManager.BatteryStatusCallback;
 import org.chromium.device.mojom.BatteryMonitor;
 import org.chromium.device.mojom.BatteryStatus;
@@ -19,7 +20,8 @@ import java.util.List;
  * Factory that creates instances of BatteryMonitor implementations and notifies them about battery
  * status changes.
  */
-public class BatteryMonitorFactory implements InterfaceFactory<BatteryMonitor> {
+@NullMarked
+public class BatteryMonitorFactory implements InterfaceFactory<@Nullable BatteryMonitor> {
     private static final String TAG = "BattMonitorFactory";
 
     // Backing source of battery information.
@@ -29,22 +31,23 @@ public class BatteryMonitorFactory implements InterfaceFactory<BatteryMonitor> {
             new HashSet<BatteryMonitorImpl>();
     // Tracks the latest battery status update for newly added observers.
     private boolean mHasStatusUpdate;
-    private BatteryStatus mBatteryStatus;
+    private @Nullable BatteryStatus mBatteryStatus;
 
-    private final BatteryStatusCallback mCallback = new BatteryStatusCallback() {
-        @Override
-        public void onBatteryStatusChanged(BatteryStatus batteryStatus) {
-            ThreadUtils.assertOnUiThread();
+    private final BatteryStatusCallback mCallback =
+            new BatteryStatusCallback() {
+                @Override
+                public void onBatteryStatusChanged(BatteryStatus batteryStatus) {
+                    ThreadUtils.checkUiThread();
 
-            mHasStatusUpdate = true;
-            mBatteryStatus = batteryStatus;
+                    mHasStatusUpdate = true;
+                    mBatteryStatus = batteryStatus;
 
-            List<BatteryMonitorImpl> monitors = new ArrayList<>(mSubscribedMonitors);
-            for (BatteryMonitorImpl monitor : monitors) {
-                monitor.didChange(batteryStatus);
-            }
-        }
-    };
+                    List<BatteryMonitorImpl> monitors = new ArrayList<>(mSubscribedMonitors);
+                    for (BatteryMonitorImpl monitor : monitors) {
+                        monitor.didChange(batteryStatus);
+                    }
+                }
+            };
 
     public BatteryMonitorFactory() {
         mHasStatusUpdate = false;
@@ -53,13 +56,11 @@ public class BatteryMonitorFactory implements InterfaceFactory<BatteryMonitor> {
 
     @Override
     public BatteryMonitor createImpl() {
-        ThreadUtils.assertOnUiThread();
+        ThreadUtils.checkUiThread();
 
-        if (mSubscribedMonitors.isEmpty() && !mManager.start()) {
-            Log.e(TAG, "BatteryStatusManager failed to start.");
+        if (mSubscribedMonitors.isEmpty()) {
+            mManager.start();
         }
-        // TODO(ppi): record the "BatteryStatus.StartAndroid" histogram here once we have a Java API
-        //            for UMA - http://crbug.com/442300.
 
         BatteryMonitorImpl monitor = new BatteryMonitorImpl(this);
         if (mHasStatusUpdate) {
@@ -71,7 +72,7 @@ public class BatteryMonitorFactory implements InterfaceFactory<BatteryMonitor> {
     }
 
     void unsubscribe(BatteryMonitorImpl monitor) {
-        ThreadUtils.assertOnUiThread();
+        ThreadUtils.checkUiThread();
 
         assert mSubscribedMonitors.contains(monitor);
         mSubscribedMonitors.remove(monitor);

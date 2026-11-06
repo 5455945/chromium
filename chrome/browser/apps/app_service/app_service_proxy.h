@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,15 @@
 #define CHROME_BROWSER_APPS_APP_SERVICE_APP_SERVICE_PROXY_H_
 
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "chrome/browser/apps/app_service/app_service_proxy_forward.h"  // IWYU pragma: export
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/apps/app_service/app_service_proxy_chromeos.h"
+// TODO(crbug.com/477191550): Extract a common AppServiceProxy interface and
+// inherit from it instead of swapping out separate (re)definitions of the same
+// interface.
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/apps/app_service/app_service_proxy_ash.h"  // IWYU pragma: export
 #else
-#include "chrome/browser/apps/app_service/app_service_proxy_desktop.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#include "chrome/browser/apps/app_service/app_service_proxy_base.h"  // IWYU pragma: export
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 #endif  // CHROME_BROWSER_APPS_APP_SERVICE_APP_SERVICE_PROXY_H_

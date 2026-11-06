@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <stddef.h>
 
 #include "base/component_export.h"
+#include "base/time/time.h"
 #include "ui/events/event_constants.h"
 
 namespace ui {
@@ -57,6 +58,9 @@ struct COMPONENT_EXPORT(EVDEV) InProgressTouchEvdev {
   bool touching = false;
   float x = 0;
   float y = 0;
+  // Center of the touch
+  float tool_x = 0;
+  float tool_y = 0;
   int tracking_id = -1;
   size_t slot = 0;
   float radius_x = 0;
@@ -68,6 +72,25 @@ struct COMPONENT_EXPORT(EVDEV) InProgressTouchEvdev {
   float tilt_y = 0;
   ui::EventPointerType reported_tool_type = ui::EventPointerType::kTouch;
   bool stylus_button = false;
+
+  // The starting position of the stroke.
+  float start_x = 0;
+  float start_y = 0;
+};
+
+// Contains information about stylus event, the useful relate ddevice info and
+// the timestamp.
+struct COMPONENT_EXPORT(EVDEV) InProgressStylusState {
+  InProgressStylusState();
+  InProgressStylusState(const InProgressStylusState& other);
+  ~InProgressStylusState();
+
+  InProgressTouchEvdev stylus_event;
+  // Stylus x and y resolution, used for normalization.
+  int x_res = 1;
+  int y_res = 1;
+
+  base::TimeTicks timestamp = base::TimeTicks();
 };
 
 }  // namespace ui

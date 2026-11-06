@@ -1,12 +1,13 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/svg/svg_tree_scope_resources.h"
 
-#include "third_party/blink/renderer/core/dom/element.h"
+#include "third_party/blink/renderer/core/dom/container_node.h"
 #include "third_party/blink/renderer/core/dom/tree_scope.h"
 #include "third_party/blink/renderer/core/svg/svg_resource.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 
 namespace blink {
@@ -15,19 +16,40 @@ SVGTreeScopeResources::SVGTreeScopeResources(TreeScope* tree_scope)
     : tree_scope_(tree_scope) {}
 
 LocalSVGResource* SVGTreeScopeResources::ResourceForId(const AtomicString& id) {
-  if (id.IsEmpty())
+  if (id.empty()) {
     return nullptr;
-  auto& entry = resources_.insert(id, nullptr).stored_value->value;
-  if (!entry)
-    entry = MakeGarbageCollected<LocalSVGResource>(*tree_scope_, id);
-  return entry;
+  }
+  auto it = resources_.find(id);
+  if (it != resources_.end()) {
+    return it->value;
+  }
+  // Use explicit Set() (rather than insert()) to avoid garbage collection
+  // shrinking the `resources_` map.
+  auto* new_entry = MakeGarbageCollected<LocalSVGResource>(*tree_scope_, id);
+  resources_.Set(id, new_entry);
+  return new_entry;
 }
 
 LocalSVGResource* SVGTreeScopeResources::ExistingResourceForId(
     const AtomicString& id) const {
-  if (id.IsEmpty())
+  if (id.empty())
     return nullptr;
-  return resources_.at(id);
+  auto it = resources_.find(id);
+  if (it == resources_.end())
+    return nullptr;
+  return it->value.Get();
+}
+
+void SVGTreeScopeResources::NotifyDisplayLockChanged(
+    const Element& element,
+    const SVGForeignObjectElement* enclosing_foreign_object) {
+  if (resources_.empty() || !tree_scope_->RootNode().isConnected()) {
+    return;
+  }
+  HeapVector<Member<LocalSVGResource>, 16> resources(resources_.Values());
+  for (LocalSVGResource* resource : resources) {
+    resource->NotifyDisplayLockChanged(element, enclosing_foreign_object);
+  }
 }
 
 void SVGTreeScopeResources::ProcessCustomWeakness(const LivenessBroker& info) {
@@ -46,7 +68,6 @@ void SVGTreeScopeResources::Trace(Visitor* visitor) const {
   visitor->template RegisterWeakCallbackMethod<
       SVGTreeScopeResources, &SVGTreeScopeResources::ProcessCustomWeakness>(
       this);
-  visitor->Trace(resources_);
   visitor->Trace(tree_scope_);
 }
 

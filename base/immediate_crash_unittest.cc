@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,28 +6,32 @@
 
 #include <stdint.h>
 
+#include <algorithm>
+#include <array>
+#include <optional>
+
 #include "base/base_paths.h"
+#include "base/check_op.h"
 #include "base/clang_profiling_buildflags.h"
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/path_service.h"
-#include "base/ranges/algorithm.h"
 #include "base/scoped_native_library.h"
 #include "base/strings/string_number_conversions.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
 
 namespace {
 
-// If IMMEDIATE_CRASH() is not treated as noreturn by the compiler, the compiler
+// If ImmediateCrash() is not treated as noreturn by the compiler, the compiler
 // will complain that not all paths through this function return a value.
-int ALLOW_UNUSED_TYPE TestImmediateCrashTreatedAsNoReturn() {
-  IMMEDIATE_CRASH();
+[[maybe_unused]] int TestImmediateCrashTreatedAsNoReturn() {
+  ImmediateCrash();
 }
 
 #if defined(ARCH_CPU_X86_FAMILY)
@@ -36,6 +40,7 @@ int ALLOW_UNUSED_TYPE TestImmediateCrashTreatedAsNoReturn() {
 // decoder.
 using Instruction = uint8_t;
 
+#if defined(OFFICIAL_BUILD)
 // https://software.intel.com/en-us/download/intel-64-and-ia-32-architectures-sdm-combined-volumes-1-2a-2b-2c-2d-3a-3b-3c-3d-and-4
 // Look for RET opcode (0xc3). Note that 0xC3 is a substring of several
 // other opcodes (VMRESUME, MOVNTI), and can also be encoded as part of an
@@ -43,22 +48,28 @@ using Instruction = uint8_t;
 // present, so a simple byte scan should be Good Enough™.
 constexpr Instruction kRet = 0xc3;
 // INT3 ; UD2
-constexpr Instruction kRequiredBody[] = {0xcc, 0x0f, 0x0b};
-constexpr Instruction kOptionalFooter[] = {};
+
+constexpr auto kRequiredBody = std::to_array<Instruction>({0xcc, 0x0f, 0x0b});
+constexpr auto kOptionalFooter = std::array<Instruction, 0u>{};
+#endif  // defined(OFFICIAL_BUILD)
 
 #elif defined(ARCH_CPU_ARMEL)
 using Instruction = uint16_t;
 
+#if defined(OFFICIAL_BUILD)
 // T32 opcode reference: https://developer.arm.com/docs/ddi0487/latest
 // Actually BX LR, canonical encoding:
 constexpr Instruction kRet = 0x4770;
+
 // BKPT #0; UDF #0
-constexpr Instruction kRequiredBody[] = {0xbe00, 0xde00};
-constexpr Instruction kOptionalFooter[] = {};
+constexpr auto kRequiredBody = std::to_array<Instruction>({0xbe00, 0xde00});
+constexpr auto kOptionalFooter = std::array<Instruction, 0u>{};
+#endif  // defined(OFFICIAL_BUILD)
 
 #elif defined(ARCH_CPU_ARM64)
 using Instruction = uint32_t;
 
+#if defined(OFFICIAL_BUILD)
 // A64 opcode reference: https://developer.arm.com/docs/ddi0487/latest
 // Use an enum here rather than separate constexpr vars because otherwise some
 // of the vars will end up unused on each platform, upsetting
@@ -73,24 +84,26 @@ enum : Instruction {
   kHlt0 = 0xd4400000,
 };
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 
-constexpr Instruction kRequiredBody[] = {kBrkF000, kBrk1};
-constexpr Instruction kOptionalFooter[] = {};
+constexpr auto kRequiredBody = std::to_array<Instruction>({kBrkF000, kBrk1});
+constexpr auto kOptionalFooter = std::array<Instruction, 0u>{};
 
-#elif defined(OS_MAC)
+#elif BUILDFLAG(IS_MAC)
 
-constexpr Instruction kRequiredBody[] = {kBrk0, kHlt0};
+constexpr auto kRequiredBody = std::to_array<Instruction>({kBrk0, kHlt0});
 // Some clangs emit a BRK #1 for __builtin_unreachable(), but some do not, so
 // it is allowed but not required to occur.
-constexpr Instruction kOptionalFooter[] = {kBrk1};
+constexpr auto kOptionalFooter = std::to_array<Instruction>({kBrk1});
 
 #else
 
-constexpr Instruction kRequiredBody[] = {kBrk0, kHlt0};
-constexpr Instruction kOptionalFooter[] = {};
+constexpr auto kRequiredBody = std::to_array<Instruction>({kBrk0, kHlt0});
+constexpr auto kOptionalFooter = std::array<Instruction, 0u>{};
 
 #endif
+
+#endif  // defined(OFFICIAL_BUILD)
 
 #endif
 
@@ -99,7 +112,7 @@ constexpr Instruction kOptionalFooter[] = {};
 // whichever of those functions happens to come first in the library.
 void GetTestFunctionInstructions(std::vector<Instruction>* body) {
   FilePath helper_library_path;
-#if !defined(OS_ANDROID) && !defined(OS_FUCHSIA)
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_FUCHSIA)
   // On Android M, DIR_EXE == /system/bin when running base_unittests.
   // On Fuchsia, NativeLibrary understands the native convention that libraries
   // are not colocated with the binary.
@@ -107,9 +120,6 @@ void GetTestFunctionInstructions(std::vector<Instruction>* body) {
 #endif
   helper_library_path = helper_library_path.AppendASCII(
       GetNativeLibraryName("immediate_crash_test_helper"));
-#if defined(OS_ANDROID) && defined(COMPONENT_BUILD)
-  helper_library_path = helper_library_path.ReplaceExtension(".cr.so");
-#endif
   ScopedNativeLibrary helper_library(helper_library_path);
   ASSERT_TRUE(helper_library.is_valid())
       << "shared library load failed: "
@@ -139,76 +149,56 @@ void GetTestFunctionInstructions(std::vector<Instruction>* body) {
   const Instruction* const start = static_cast<Instruction*>(std::min(a, b));
   const Instruction* const end = static_cast<Instruction*>(std::max(a, b));
 
-  for (const Instruction& instruction : make_span(start, end))
-    body->push_back(instruction);
+  auto instructions = UNSAFE_TODO(span(start, end));
+  body->insert(body->end(), instructions.begin(), instructions.end());
 }
 
-absl::optional<std::vector<Instruction>> ExpectImmediateCrashInvocation(
-    std::vector<Instruction> instructions) {
-  auto iter = instructions.begin();
-  for (const auto inst : kRequiredBody) {
-    if (iter == instructions.end())
-      return absl::nullopt;
-    EXPECT_EQ(inst, *iter);
-    iter++;
-  }
-  return absl::make_optional(
-      std::vector<Instruction>(iter, instructions.end()));
-}
+#if defined(OFFICIAL_BUILD)
 
-std::vector<Instruction> MaybeSkipOptionalFooter(
-    std::vector<Instruction> instructions) {
-  auto iter = instructions.begin();
+// Consumes as many elements from the front of `instructions` as match
+// in `kOptionalFooter`, returning the result.
+span<const Instruction> MaybeSkipOptionalFooter(
+    span<const Instruction> instructions) {
   for (const auto inst : kOptionalFooter) {
-    if (iter == instructions.end() || *iter != inst)
+    if (instructions.empty() || inst != instructions[0u]) {
       break;
-    iter++;
+    }
+    instructions.take_first<1u>();
   }
-  return std::vector<Instruction>(iter, instructions.end());
+  return instructions;
 }
 
-#if BUILDFLAG(USE_CLANG_COVERAGE)
-bool MatchPrefix(const std::vector<Instruction>& haystack,
-                 const base::span<const Instruction>& needle) {
-  for (size_t i = 0; i < needle.size(); i++) {
-    if (i >= haystack.size() || needle[i] != haystack[i])
-      return false;
-  }
-  return true;
-}
-
-std::vector<Instruction> DropUntilMatch(
-    std::vector<Instruction> haystack,
-    const base::span<const Instruction>& needle) {
-  while (!haystack.empty() && !MatchPrefix(haystack, needle))
-    haystack.erase(haystack.begin());
-  return haystack;
-}
-#endif  // USE_CLANG_COVERAGE
-
-std::vector<Instruction> MaybeSkipCoverageHook(
-    std::vector<Instruction> instructions) {
-#if BUILDFLAG(USE_CLANG_COVERAGE)
+span<const Instruction> MaybeSkipCoverageHook(
+    span<const Instruction> instructions) {
+#if BUILDFLAG(USE_CLANG_COVERAGE) || BUILDFLAG(CLANG_PROFILING)
   // Warning: it is not illegal for the entirety of the expected crash sequence
   // to appear as a subsequence of the coverage hook code. If that happens, this
   // code will falsely exit early, having not found the real expected crash
   // sequence, so this may not adequately ensure that the immediate crash
   // sequence is present. We do check when not under coverage, at least.
-  return DropUntilMatch(instructions, base::make_span(kRequiredBody));
+  while (instructions.size() >= kRequiredBody.size()) {
+    if (instructions.first<kRequiredBody.size()>() == kRequiredBody) {
+      return instructions;
+    }
+    instructions.take_first<1u>();
+  }
+  return {};
 #else
   return instructions;
-#endif  // USE_CLANG_COVERAGE
+#endif  // USE_CLANG_COVERAGE || BUILDFLAG(CLANG_PROFILING)
 }
+
+#endif  // defined(OFFICIAL_BUILD)
 
 }  // namespace
 
-// Attempts to verify the actual instructions emitted by IMMEDIATE_CRASH().
+// Attempts to verify the actual instructions emitted by ImmediateCrash().
 // While the test results are highly implementation-specific, this allows macro
 // changes (e.g. CLs like https://crrev.com/671123) to be verified using the
 // trybots/waterfall, without having to build and disassemble Chrome on
 // multiple platforms. This makes it easier to evaluate changes to
-// IMMEDIATE_CRASH() against its requirements (e.g. size of emitted sequence,
-// whether or not multiple IMMEDIATE_CRASH sequences can be folded together, et
+// ImmediateCrash() against its requirements (e.g. size of emitted sequence,
+// whether or not multiple ImmediateCrash sequences can be folded together, et
 // cetera). Please see immediate_crash.h for more details about the
 // requirements.
 //
@@ -219,19 +209,27 @@ std::vector<Instruction> MaybeSkipCoverageHook(
 TEST(ImmediateCrashTest, ExpectedOpcodeSequence) {
   std::vector<Instruction> body;
   ASSERT_NO_FATAL_FAILURE(GetTestFunctionInstructions(&body));
-  SCOPED_TRACE(HexEncode(body.data(), body.size() * sizeof(Instruction)));
+  SCOPED_TRACE(HexEncode(base::as_byte_span(body)));
 
-  auto it = ranges::find(body, kRet);
+  // In non-official builds, we std::abort instead, so the result will be
+  // false - but let's still go through the motions above so we spot any
+  // problems in this _test code_ in as many build permutations as possible.
+#if defined(OFFICIAL_BUILD)
+  auto it = std::ranges::find(body, kRet);
   ASSERT_NE(body.end(), it) << "Failed to find return opcode";
   it++;
 
   body = std::vector<Instruction>(it, body.end());
-  absl::optional<std::vector<Instruction>> result = MaybeSkipCoverageHook(body);
-  result = ExpectImmediateCrashInvocation(result.value());
-  result = MaybeSkipOptionalFooter(result.value());
-  result = MaybeSkipCoverageHook(result.value());
-  result = ExpectImmediateCrashInvocation(result.value());
-  ASSERT_TRUE(result);
+  base::span<const Instruction> result = MaybeSkipCoverageHook(body);
+  // `result` must have a `kRequiredBody`.
+  ASSERT_TRUE(std::ranges::starts_with(result, kRequiredBody));
+  result.take_first<kRequiredBody.size()>();
+
+  result = MaybeSkipOptionalFooter(result);
+  result = MaybeSkipCoverageHook(result);
+  // `result` must have a second `kRequiredBody`.
+  ASSERT_TRUE(std::ranges::starts_with(result, kRequiredBody));
+#endif  // defined(OFFICIAL_BUILD)
 }
 
 }  // namespace base

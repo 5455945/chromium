@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,22 +8,23 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
-#include "base/threading/thread_checker.h"
+#include "base/component_export.h"
+#include "base/functional/callback.h"
+#include "base/sequence_checker.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "media/audio/audio_system.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/audio/public/mojom/system_info.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace audio {
 
 // Provides media::AudioSystem implementation on top of Audio service.
 // In case connection to Audio service is lost, reply callbacks will run with
 // empty optionals / false booleans.
-class AudioSystemToServiceAdapter : public media::AudioSystem {
+class COMPONENT_EXPORT(AUDIO_PUBLIC_CPP) AudioSystemToServiceAdapter
+    : public media::AudioSystem {
  public:
   // A callback which can be used to acquire a new SystemInfo interface pipe
   // lazily as needed.
@@ -36,6 +37,11 @@ class AudioSystemToServiceAdapter : public media::AudioSystem {
   AudioSystemToServiceAdapter(SystemInfoBinder system_info_binder,
                               base::TimeDelta disconnect_timeout);
   explicit AudioSystemToServiceAdapter(SystemInfoBinder system_info_binder);
+
+  AudioSystemToServiceAdapter(const AudioSystemToServiceAdapter&) = delete;
+  AudioSystemToServiceAdapter& operator=(const AudioSystemToServiceAdapter&) =
+      delete;
+
   ~AudioSystemToServiceAdapter() override;
 
   // AudioSystem implementation.
@@ -61,15 +67,14 @@ class AudioSystemToServiceAdapter : public media::AudioSystem {
   mojom::SystemInfo* GetSystemInfo();
   void OnConnectionError();
 
-  // Will be bound to the thread AudioSystemToServiceAdapter is used on.
+  // Will be bound to the sequence AudioSystemToServiceAdapter is used on.
   const SystemInfoBinder system_info_binder_;
   mojo::Remote<mojom::SystemInfo> system_info_;
 
   // To disconnect from the audio service when not in use.
   const base::TimeDelta disconnect_timeout_;
 
-  THREAD_CHECKER(thread_checker_);
-  DISALLOW_COPY_AND_ASSIGN(AudioSystemToServiceAdapter);
+  SEQUENCE_CHECKER(sequence_checker_);
 };
 
 }  // namespace audio

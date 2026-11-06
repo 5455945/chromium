@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,15 +17,18 @@ namespace blink {
 #endif
 
 const WrapperTypeInfo DOMArrayBufferView::wrapper_type_info_body_{
-    gin::kEmbedderBlink,
+    {gin::kEmbedderBlink},
     nullptr,
     nullptr,
     "ArrayBufferView",
     nullptr,
+    static_cast<v8::CppHeapPointerTag>(
+        CppHeapPointerTag::kDOMArrayBufferViewTag),
+    static_cast<v8::CppHeapPointerTag>(
+        CppHeapPointerTag::kDOMFloat64ArrayTag),
     WrapperTypeInfo::kWrapperTypeObjectPrototype,
     WrapperTypeInfo::kObjectClassId,
-    WrapperTypeInfo::kNotInheritFromActiveScriptWrappable,
-    WrapperTypeInfo::kIdlBufferSourceType,
+    WrapperTypeInfo::kIdlOtherType,
 };
 
 const WrapperTypeInfo& DOMArrayBufferView::wrapper_type_info_ =

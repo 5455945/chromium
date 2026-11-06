@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,5 +23,7 @@
 #endif
 
 // InfoBar resources.
-DECLARE_RESOURCE_ID(IDR_ANDROID_INFOBAR_BLOCKED_POPUPS,
-                    R.drawable.infobar_blocked_popups)
+DECLARE_RESOURCE_ID(IDR_ANDROID_MESSAGE_BLOCKED_POPUPS,
+                    R.drawable.message_blocked_popups)
+
+DECLARE_RESOURCE_ID(IDR_ANDROID_SETTINGS, R.drawable.ic_settings_24dp)

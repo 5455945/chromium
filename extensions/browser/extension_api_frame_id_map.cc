@@ -1,35 +1,32 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/browser/extension_api_frame_id_map.h"
 
+#include <string_view>
 #include <tuple>
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check_op.h"
-#include "base/task/post_task.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/uuid.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/child_process_host.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/common/child_process_host.h"
 #include "extensions/browser/extensions_browser_client.h"
 #include "extensions/common/constants.h"
+#include "extensions/common/extension_features.h"
+#include "third_party/blink/public/common/tokens/tokens.h"
 
 namespace extensions {
-
-namespace {
-
-// The map is accessed on the IO and UI thread, so construct it once and never
-// delete it.
-base::LazyInstance<ExtensionApiFrameIdMap>::Leaky g_map_instance =
-    LAZY_INSTANCE_INITIALIZER;
-
-}  // namespace
 
 const int ExtensionApiFrameIdMap::kInvalidFrameId = -1;
 const int ExtensionApiFrameIdMap::kTopFrameId = 0;
@@ -38,16 +35,27 @@ ExtensionApiFrameIdMap::FrameData::FrameData()
     : frame_id(kInvalidFrameId),
       parent_frame_id(kInvalidFrameId),
       tab_id(extension_misc::kUnknownTabId),
-      window_id(extension_misc::kUnknownWindowId) {}
+      window_id(extension_misc::kUnknownWindowId),
+      frame_type(api::extension_types::FrameType::kOutermostFrame),
+      document_lifecycle(api::extension_types::DocumentLifecycle::kActive) {}
 
-ExtensionApiFrameIdMap::FrameData::FrameData(int frame_id,
-                                             int parent_frame_id,
-                                             int tab_id,
-                                             int window_id)
+ExtensionApiFrameIdMap::FrameData::FrameData(
+    int frame_id,
+    int parent_frame_id,
+    int tab_id,
+    int window_id,
+    const DocumentId& document_id,
+    const DocumentId& parent_document_id,
+    api::extension_types::FrameType frame_type,
+    api::extension_types::DocumentLifecycle document_lifecycle)
     : frame_id(frame_id),
       parent_frame_id(parent_frame_id),
       tab_id(tab_id),
-      window_id(window_id) {}
+      window_id(window_id),
+      document_id(document_id),
+      parent_document_id(parent_document_id),
+      frame_type(frame_type),
+      document_lifecycle(document_lifecycle) {}
 
 ExtensionApiFrameIdMap::FrameData::~FrameData() = default;
 
@@ -62,35 +70,44 @@ ExtensionApiFrameIdMap::~ExtensionApiFrameIdMap() = default;
 
 // static
 ExtensionApiFrameIdMap* ExtensionApiFrameIdMap::Get() {
-  return g_map_instance.Pointer();
+  // The map is accessed on the IO and UI thread, so construct it once and never
+  // delete it.
+  static base::NoDestructor<ExtensionApiFrameIdMap> instance;
+  return instance.get();
 }
 
 // static
-int ExtensionApiFrameIdMap::GetFrameId(content::RenderFrameHost* rfh) {
-  if (!rfh)
+int ExtensionApiFrameIdMap::GetFrameId(
+    content::RenderFrameHost* render_frame_host) {
+  if (!render_frame_host) {
     return kInvalidFrameId;
-  if (rfh->GetParent())
-    return rfh->GetFrameTreeNodeId();
+  }
+  if (!render_frame_host->IsInPrimaryMainFrame()) {
+    return render_frame_host->GetFrameTreeNodeId().value();
+  }
   return kTopFrameId;
 }
 
 // static
 int ExtensionApiFrameIdMap::GetFrameId(
     content::NavigationHandle* navigation_handle) {
-  return navigation_handle->IsInMainFrame()
+  return navigation_handle->IsInPrimaryMainFrame()
              ? kTopFrameId
-             : navigation_handle->GetFrameTreeNodeId();
+             : navigation_handle->GetFrameTreeNodeId().value();
 }
 
 // static
-int ExtensionApiFrameIdMap::GetParentFrameId(content::RenderFrameHost* rfh) {
-  return rfh ? GetFrameId(rfh->GetParent()) : kInvalidFrameId;
+int ExtensionApiFrameIdMap::GetParentFrameId(
+    content::RenderFrameHost* render_frame_host) {
+  return render_frame_host
+             ? GetFrameId(render_frame_host->GetParentOrOuterDocument())
+             : kInvalidFrameId;
 }
 
 // static
 int ExtensionApiFrameIdMap::GetParentFrameId(
     content::NavigationHandle* navigation_handle) {
-  return GetFrameId(navigation_handle->GetParentFrame());
+  return GetFrameId(navigation_handle->GetParentFrameOrOuterDocument());
 }
 
 // static
@@ -100,14 +117,17 @@ content::RenderFrameHost* ExtensionApiFrameIdMap::GetRenderFrameHostById(
   // Although it is technically possible to map |frame_id| to a RenderFrameHost
   // without WebContents, we choose to not do that because in the extension API
   // frameIds are only guaranteed to be meaningful in combination with a tabId.
-  if (!web_contents)
+  if (!web_contents) {
     return nullptr;
+  }
 
-  if (frame_id == kInvalidFrameId)
+  if (frame_id == kInvalidFrameId) {
     return nullptr;
+  }
 
-  if (frame_id == kTopFrameId)
-    return web_contents->GetMainFrame();
+  if (frame_id == kTopFrameId) {
+    return web_contents->GetPrimaryMainFrame();
+  }
 
   DCHECK_GE(frame_id, 1);
 
@@ -115,7 +135,78 @@ content::RenderFrameHost* ExtensionApiFrameIdMap::GetRenderFrameHostById(
   // given frame ID, so we must use an unsafe API here that could return a
   // different RenderFrameHost than the caller may have expected (e.g., one that
   // changed after a cross-process navigation).
-  return web_contents->UnsafeFindFrameByFrameTreeNodeId(frame_id);
+  content::RenderFrameHost* render_frame_host =
+      web_contents->UnsafeFindFrameByFrameTreeNodeId(
+          content::FrameTreeNodeId(frame_id));
+
+  // Fail if the frame is not active or in prerendering (e.g. in the
+  // back/forward cache).
+  if (!render_frame_host ||
+      (!render_frame_host->IsActive() &&
+       !render_frame_host->IsInLifecycleState(
+           content::RenderFrameHost::LifecycleState::kPrerendering))) {
+    return nullptr;
+  }
+
+  return render_frame_host;
+}
+
+content::RenderFrameHost*
+ExtensionApiFrameIdMap::GetRenderFrameHostByDocumentId(
+    const DocumentId& document_id) {
+  // TODO(crbug.com/576815295): When `kApiRuntimeGetDocumentId` is enabled, the
+  // renderer can return a `DocumentId` before `ExtensionDocumentUserData` has
+  // been lazily created for that frame on the browser side. Ensure all frames
+  // can be resolved by `DocumentId` before enabling the feature by default.
+  auto iter = document_id_map_.find(document_id);
+  if (iter == document_id_map_.end()) {
+    return nullptr;
+  }
+  return &iter->second->render_frame_host();
+}
+
+content::RenderFrameHost* ExtensionApiFrameIdMap::GetRenderFrameHostByFrameId(
+    int frame_id) {
+  // Frame_id values of 0 are not guaranteed to be unique. Values less than 0
+  // are invalid.
+  if (frame_id < 1) {
+    return nullptr;
+  }
+
+  for (const auto& iter : document_id_map_) {
+    content::RenderFrameHost* render_frame_host =
+        &iter.second->render_frame_host();
+    if (frame_id == ExtensionApiFrameIdMap::GetFrameId(render_frame_host) &&
+        (render_frame_host->IsActive() ||
+         render_frame_host->IsInLifecycleState(
+             content::RenderFrameHost::LifecycleState::kPrerendering))) {
+      return render_frame_host;
+    }
+  }
+
+  return nullptr;
+}
+
+ExtensionApiFrameIdMap::DocumentId ExtensionApiFrameIdMap::DocumentIdFromString(
+    const std::string& document_id) {
+  if (document_id.length() != 32) {
+    return DocumentId();
+  }
+
+  std::string_view string_piece(document_id);
+  uint64_t high = 0;
+  uint64_t low = 0;
+  if (!base::HexStringToUInt64(string_piece.substr(0, 16), &high) ||
+      !base::HexStringToUInt64(string_piece.substr(16, 16), &low)) {
+    return DocumentId();
+  }
+
+  std::optional<base::UnguessableToken> token =
+      base::UnguessableToken::Deserialize(high, low);
+  if (!token.has_value()) {
+    return DocumentId();
+  }
+  return token.value();
 }
 
 ExtensionApiFrameIdMap::FrameData ExtensionApiFrameIdMap::KeyToValue(
@@ -125,44 +216,177 @@ ExtensionApiFrameIdMap::FrameData ExtensionApiFrameIdMap::KeyToValue(
 }
 
 ExtensionApiFrameIdMap::FrameData ExtensionApiFrameIdMap::KeyToValue(
-    content::RenderFrameHost* rfh,
+    content::RenderFrameHost* render_frame_host,
     bool require_live_frame) const {
-  if (!rfh || (require_live_frame && !rfh->IsRenderFrameLive()))
+  if (!render_frame_host ||
+      (require_live_frame && !render_frame_host->IsRenderFrameLive())) {
     return FrameData();
+  }
 
   int tab_id = extension_misc::kUnknownTabId;
   int window_id = extension_misc::kUnknownWindowId;
   // The browser client can be null in unittests.
   if (ExtensionsBrowserClient::Get()) {
     ExtensionsBrowserClient::Get()->GetTabAndWindowIdForWebContents(
-        content::WebContents::FromRenderFrameHost(rfh), &tab_id, &window_id);
+        content::WebContents::FromRenderFrameHost(render_frame_host), &tab_id,
+        &window_id);
   }
-  return FrameData(GetFrameId(rfh), GetParentFrameId(rfh), tab_id, window_id);
+
+  return FrameData(
+      GetFrameId(render_frame_host), GetParentFrameId(render_frame_host),
+      tab_id, window_id, GetDocumentId(render_frame_host),
+      GetDocumentId(render_frame_host->GetParentOrOuterDocument()),
+      GetFrameType(render_frame_host), GetDocumentLifecycle(render_frame_host));
 }
 
 ExtensionApiFrameIdMap::FrameData ExtensionApiFrameIdMap::GetFrameData(
-    content::GlobalRenderFrameHostId rfh_id) {
+    content::GlobalRenderFrameHostId render_frame_host_id) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  auto frame_id_iter = deleted_frame_data_map_.find(rfh_id);
-  if (frame_id_iter != deleted_frame_data_map_.end())
+  auto frame_id_iter = deleted_frame_data_map_.find(render_frame_host_id);
+  if (frame_id_iter != deleted_frame_data_map_.end()) {
     return frame_id_iter->second;
+  }
 
-  return KeyToValue(rfh_id, true /* require_live_frame */);
+  return KeyToValue(render_frame_host_id, true /* require_live_frame */);
+}
+
+ExtensionApiFrameIdMap::DocumentId ExtensionApiFrameIdMap::GetDocumentId(
+    content::RenderFrameHost* render_frame_host) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  // This check allows callers to pass in the result from
+  // GetParentOrOuterDocument() without needing to check whether the resulting
+  // frame exists. When kApiRuntimeGetDocumentId is enabled,
+  // ExtensionDocumentUserData queries RenderFrameHost::GetDocumentToken(),
+  // which CHECKs that the frame is not speculative or pending commit (where
+  // GetDocumentLifecycle() is kNone), so return an empty DocumentId in that
+  // state.
+  if (!render_frame_host ||
+      (base::FeatureList::IsEnabled(
+           extensions_features::kApiRuntimeGetDocumentId) &&
+       GetDocumentLifecycle(render_frame_host) ==
+           api::extension_types::DocumentLifecycle::kNone)) {
+    return DocumentId();
+  }
+  return ExtensionDocumentUserData::GetOrCreateForCurrentDocument(
+             render_frame_host)
+      ->document_id();
+}
+
+ExtensionApiFrameIdMap::DocumentId ExtensionApiFrameIdMap::GetDocumentId(
+    content::NavigationHandle* navigation_handle) {
+  // When kApiRuntimeGetDocumentId is enabled, ExtensionDocumentUserData queries
+  // RenderFrameHost::GetDocumentToken(), which is disallowed while the target
+  // RenderFrameHost is in kPendingCommit (including while IsWaitingToCommit()
+  // is true before commit), so only access GetRenderFrameHost() once the
+  // navigation has committed.
+  if (navigation_handle->HasCommitted() ||
+      (!base::FeatureList::IsEnabled(
+           extensions_features::kApiRuntimeGetDocumentId) &&
+       navigation_handle->IsWaitingToCommit())) {
+    return GetDocumentId(navigation_handle->GetRenderFrameHost());
+  }
+  return DocumentId();
+}
+
+// static
+base::Uuid ExtensionApiFrameIdMap::GetContextId(
+    content::RenderFrameHost* render_frame_host) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  // Similar to GetDocumentId(), when kApiRuntimeGetDocumentId is enabled, avoid
+  // creating ExtensionDocumentUserData for speculative or pending-commit frames
+  // (where GetDocumentLifecycle() is kNone), as ExtensionDocumentUserData's
+  // constructor queries GetDocumentToken().
+  if (!render_frame_host ||
+      (base::FeatureList::IsEnabled(
+           extensions_features::kApiRuntimeGetDocumentId) &&
+       GetDocumentLifecycle(render_frame_host) ==
+           api::extension_types::DocumentLifecycle::kNone)) {
+    return base::Uuid();
+  }
+  return ExtensionDocumentUserData::GetOrCreateForCurrentDocument(
+             render_frame_host)
+      ->context_id();
+}
+
+api::extension_types::FrameType ExtensionApiFrameIdMap::GetFrameType(
+    content::RenderFrameHost* render_frame_host) {
+  DCHECK(render_frame_host);
+  if (!render_frame_host->GetParentOrOuterDocument()) {
+    return api::extension_types::FrameType::kOutermostFrame;
+  }
+  if (render_frame_host->IsFencedFrameRoot()) {
+    return api::extension_types::FrameType::kFencedFrame;
+  }
+  return api::extension_types::FrameType::kSubFrame;
+}
+
+api::extension_types::FrameType ExtensionApiFrameIdMap::GetFrameType(
+    content::NavigationHandle* navigation_handle) {
+  switch (navigation_handle->GetNavigatingFrameType()) {
+    case content::FrameType::kSubframe:
+      return api::extension_types::FrameType::kSubFrame;
+    case content::FrameType::kFencedFrameRoot:
+      return api::extension_types::FrameType::kFencedFrame;
+    case content::FrameType::kPrimaryMainFrame:
+    case content::FrameType::kPrerenderMainFrame:
+    case content::FrameType::kGuestMainFrame:
+      return api::extension_types::FrameType::kOutermostFrame;
+  }
+}
+
+api::extension_types::DocumentLifecycle
+ExtensionApiFrameIdMap::GetDocumentLifecycle(
+    content::RenderFrameHost* render_frame_host) {
+  DCHECK(render_frame_host);
+  // We use IsInLifecycleState as opposed to GetLifecycleState with a switch
+  // because we cannot call GetLifecycleState for speculative frames.
+  if (render_frame_host->IsInLifecycleState(
+          content::RenderFrameHost::LifecycleState::kActive)) {
+    return api::extension_types::DocumentLifecycle::kActive;
+  }
+  if (render_frame_host->IsInLifecycleState(
+          content::RenderFrameHost::LifecycleState::kInBackForwardCache)) {
+    return api::extension_types::DocumentLifecycle::kCached;
+  }
+  if (render_frame_host->IsInLifecycleState(
+          content::RenderFrameHost::LifecycleState::kPrerendering)) {
+    return api::extension_types::DocumentLifecycle::kPrerender;
+  }
+  if (render_frame_host->IsInLifecycleState(
+          content::RenderFrameHost::LifecycleState::kPendingDeletion)) {
+    return api::extension_types::DocumentLifecycle::kPendingDeletion;
+  }
+  return api::extension_types::DocumentLifecycle::kNone;
+}
+
+api::extension_types::DocumentLifecycle
+ExtensionApiFrameIdMap::GetDocumentLifecycle(
+    content::NavigationHandle* navigation_handle) {
+  if (content::RenderFrameHost* parent_or_outer_document =
+          navigation_handle->GetParentFrameOrOuterDocument()) {
+    return GetDocumentLifecycle(parent_or_outer_document);
+  }
+  if (navigation_handle->IsInPrerenderedMainFrame()) {
+    return api::extension_types::DocumentLifecycle::kPrerender;
+  } else if (navigation_handle->IsInPrimaryMainFrame()) {
+    return api::extension_types::DocumentLifecycle::kActive;
+  }
+  return api::extension_types::DocumentLifecycle::kNone;
 }
 
 void ExtensionApiFrameIdMap::OnRenderFrameDeleted(
-    content::RenderFrameHost* rfh) {
+    content::RenderFrameHost* render_frame_host) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(rfh);
+  DCHECK(render_frame_host);
 
-  const content::GlobalRenderFrameHostId key(rfh->GetGlobalId());
-  // TODO(http://crbug.com/522129): This is necessary right now because beacon
+  const content::GlobalRenderFrameHostId key(render_frame_host->GetGlobalId());
+  // TODO(http://crbug.com/40431900): This is necessary right now because beacon
   // requests made in window.onunload may start after this has been called.
   // Delay the RemoveFrameData() call, so we will still have the frame data
   // cached when the beacon request comes in.
   deleted_frame_data_map_.insert(
-      {key, KeyToValue(rfh, false /* require_live_frame */)});
-  base::SequencedTaskRunnerHandle::Get()->PostTask(
+      {key, KeyToValue(render_frame_host, false /* require_live_frame */)});
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(
                      [](ExtensionApiFrameIdMap* self,
                         content::GlobalRenderFrameHostId key) {
@@ -170,5 +394,27 @@ void ExtensionApiFrameIdMap::OnRenderFrameDeleted(
                      },
                      base::Unretained(this), key));
 }
+
+ExtensionApiFrameIdMap::ExtensionDocumentUserData::ExtensionDocumentUserData(
+    content::RenderFrameHost* render_frame_host)
+    : content::DocumentUserData<ExtensionDocumentUserData>(render_frame_host),
+      context_id_(base::Uuid::GenerateRandomV4()) {
+  if (base::FeatureList::IsEnabled(
+          extensions_features::kApiRuntimeGetDocumentId)) {
+    CHECK_NE(GetDocumentLifecycle(render_frame_host),
+             api::extension_types::DocumentLifecycle::kNone);
+    document_id_ = render_frame_host->GetDocumentToken().value();
+  } else {
+    document_id_ = DocumentId::Create();
+  }
+  Get()->document_id_map_[document_id_] = this;
+}
+
+ExtensionApiFrameIdMap::ExtensionDocumentUserData::
+    ~ExtensionDocumentUserData() {
+  Get()->document_id_map_.erase(document_id_);
+}
+
+DOCUMENT_USER_DATA_KEY_IMPL(ExtensionApiFrameIdMap::ExtensionDocumentUserData);
 
 }  // namespace extensions

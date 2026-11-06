@@ -1,30 +1,29 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_ENCRYPTEDMEDIA_MEDIA_KEY_STATUS_MAP_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_ENCRYPTEDMEDIA_MEDIA_KEY_STATUS_MAP_H_
 
+#include "base/containers/span.h"
 #include "third_party/blink/renderer/bindings/core/v8/iterable.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_typedefs.h"
-#include "third_party/blink/renderer/core/typed_arrays/dom_array_piece.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_sync_iterator_media_key_status_map.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_union_mediakeystatus_undefined.h"
+#include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 
 namespace blink {
 
-class ExceptionState;
-class ScriptState;
 class WebData;
 
 // Represents a read-only map (to JavaScript) of key IDs and their current
 // status known to a particular session. Since it can be updated any time there
 // is a keychange event, iteration order and completeness is not guaranteed
 // if the event loop runs.
-class MediaKeyStatusMap final
-    : public ScriptWrappable,
-      public PairIterable<Member<V8BufferSource>, String>
-{
+class MediaKeyStatusMap final : public ScriptWrappable,
+                                public PairSyncIterable<MediaKeyStatusMap> {
   DEFINE_WRAPPERTYPEINFO();
 
  private:
@@ -40,21 +39,22 @@ class MediaKeyStatusMap final
   MediaKeyStatusMap() = default;
 
   void Clear();
-  void AddEntry(WebData key_id, const String& status);
+  void AddEntry(WebData key_id, const V8MediaKeyStatus&);
   const MapEntry& at(uint32_t) const;
 
   // IDL attributes / methods
   uint32_t size() const { return entries_.size(); }
-  bool has(const V8BufferSource* key_id);
-  ScriptValue get(ScriptState*, const V8BufferSource* key_id);
+  bool has(base::span<const uint8_t> key_id);
+  V8UnionMediaKeyStatusOrUndefined::Ret get(ScriptState*,
+                                            base::span<const uint8_t> key_id);
 
   void Trace(Visitor*) const override;
 
  private:
-  // PairIterable<> implementation.
-  IterationSource* StartIteration(ScriptState*, ExceptionState&) override;
+  // PairSyncIterable<> implementation.
+  IterationSource* CreateIterationSource(ScriptState*) override;
 
-  uint32_t IndexOf(const DOMArrayPiece& key_id) const;
+  uint32_t IndexOf(base::span<const uint8_t> key_id) const;
 
   MediaKeyStatusMapType entries_;
 };

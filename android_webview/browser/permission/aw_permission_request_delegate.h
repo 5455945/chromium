@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,15 +7,20 @@
 
 #include <stdint.h>
 
-#include "base/macros.h"
 #include "url/gurl.h"
 
 namespace android_webview {
 
 // The delegate interface to be implemented for a specific permission request.
+// Lifetime: Temporary
 class AwPermissionRequestDelegate {
  public:
   AwPermissionRequestDelegate();
+
+  AwPermissionRequestDelegate(const AwPermissionRequestDelegate&) = delete;
+  AwPermissionRequestDelegate& operator=(const AwPermissionRequestDelegate&) =
+      delete;
+
   virtual ~AwPermissionRequestDelegate();
 
   // Get the origin which initiated the permission request.
@@ -26,8 +31,6 @@ class AwPermissionRequestDelegate {
 
   // Notify the permission request is allowed or not.
   virtual void NotifyRequestResult(bool allowed) = 0;
-
-  DISALLOW_COPY_AND_ASSIGN(AwPermissionRequestDelegate);
 };
 
 }  // namespace android_webview

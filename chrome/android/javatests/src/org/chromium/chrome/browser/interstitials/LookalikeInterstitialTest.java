@@ -1,17 +1,13 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.interstitials;
 
-import android.support.test.InstrumentationRegistry;
-
 import androidx.test.filters.MediumTest;
 
-import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
-import org.junit.Ignore;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -19,11 +15,14 @@ import org.junit.runner.RunWith;
 import org.chromium.base.test.params.ParameterizedCommandLineFlags;
 import org.chromium.base.test.params.ParameterizedCommandLineFlags.Switches;
 import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.DisabledTest;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
+import org.chromium.chrome.test.transit.ChromeTransitTestRules;
+import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
+import org.chromium.chrome.test.transit.ntp.RegularNewTabPageStation;
 import org.chromium.chrome.test.util.ChromeTabUtils;
 import org.chromium.chrome.test.util.browser.TabTitleObserver;
 import org.chromium.content_public.common.ContentSwitches;
@@ -32,14 +31,14 @@ import org.chromium.net.test.EmbeddedTestServer;
 /** Tests for the Lookalike URL interstitial (aka confusables). */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @MediumTest
-@CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE,
-        ContentSwitches.HOST_RESOLVER_RULES + "=MAP * 127.0.0.1"})
-// clang-format off
-@ParameterizedCommandLineFlags({
-  @Switches(),
-  @Switches("enable-features=" + ChromeFeatureList.LOOKALIKE_NAVIGATION_URL_SUGGESTIONS_UI),
+@CommandLineFlags.Add({
+    ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE,
+    ContentSwitches.HOST_RESOLVER_RULES + "=MAP * 127.0.0.1"
 })
-// clang-format on
+@ParameterizedCommandLineFlags({
+    @Switches,
+    @Switches("enable-features=" + ChromeFeatureList.LOOKALIKE_NAVIGATION_URL_SUGGESTIONS_UI),
+})
 public class LookalikeInterstitialTest {
     private static final String INTERSTITIAL_TITLE_PREFIX = "Continue to ";
 
@@ -48,25 +47,25 @@ public class LookalikeInterstitialTest {
     private EmbeddedTestServer mServer;
 
     @Rule
-    public ChromeTabbedActivityTestRule mActivityTestRule = new ChromeTabbedActivityTestRule();
+    public FreshCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.freshChromeTabbedActivityRule();
+
+    private RegularNewTabPageStation mPage;
 
     @Before
     public void setUp() {
-        mActivityTestRule.startMainActivityFromLauncher();
-        mServer = EmbeddedTestServer.createAndStartServer(InstrumentationRegistry.getContext());
-    }
-
-    @After
-    public void tearDown() {
-        mServer.stopAndDestroyServer();
+        mPage = mActivityTestRule.startFromLauncherAtNtp();
+        mServer = mActivityTestRule.getTestServer();
     }
 
     @Test
-    @Ignore("crbug/941488")
+    @DisabledTest(message = "https://crbug.com/41446661")
     public void testBasicInterstitialShown() throws Exception {
-        Tab tab = mActivityTestRule.getActivity().getActivityTab();
-        ChromeTabUtils.loadUrlOnUiThread(tab,
-                mServer.getURLWithHostName("xn--googl-fsa.com", // googlé.com
+        Tab tab = mPage.getTab();
+        ChromeTabUtils.loadUrlOnUiThread(
+                tab,
+                mServer.getURLWithHostName(
+                        "xn--googl-fsa.com", // googlé.com
                         "/chrome/test/data/android/navigate/simple.html"));
 
         // Wait for the interstitial page to commit and check the page title.

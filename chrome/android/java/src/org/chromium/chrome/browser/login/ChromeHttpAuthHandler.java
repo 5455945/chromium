@@ -1,47 +1,63 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.login;
 
 import android.app.Activity;
+import android.view.WindowManager;
+
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JniPtr;
+import org.jni_zero.JniRawPtr;
+import org.jni_zero.JniType;
+import org.jni_zero.JniTypeToken;
+import org.jni_zero.NativeMethods;
 
 import org.chromium.base.Callback;
 import org.chromium.base.ThreadUtils;
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.NativeMethods;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.autofill.AndroidAutofillAvailabilityStatus;
+import org.chromium.chrome.browser.autofill.AutofillClientProviderUtils;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabHidingType;
+import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.components.browser_ui.http_auth.LoginPrompt;
+import org.chromium.components.user_prefs.UserPrefs;
 import org.chromium.ui.base.WindowAndroid;
+import org.chromium.url.GURL;
 
 /**
- * Represents an HTTP authentication request to be handled by the UI.
- * The request can be fulfilled or canceled using setAuth() or cancelAuth().
- * This class also provides strings for building a login form.
+ * Represents an HTTP authentication request to be handled by the UI. The request can be fulfilled
+ * or canceled using setAuth() or cancelAuth(). This class also provides strings for building a
+ * login form.
  *
- * Note: this class supercedes android.webkit.HttpAuthHandler, but does not
- * extend HttpAuthHandler due to the private access of HttpAuthHandler's
- * constructor.
+ * <p>Note: this class supercedes android.webkit.HttpAuthHandler, but does not extend
+ * HttpAuthHandler due to the private access of HttpAuthHandler's constructor.
  */
-public class ChromeHttpAuthHandler extends EmptyTabObserver implements LoginPrompt.Observer {
-    private static Callback<ChromeHttpAuthHandler> sTestCreationCallback;
+@NullMarked
+public class ChromeHttpAuthHandler implements TabObserver, LoginPrompt.Observer {
+    @JniType("::ChromeHttpAuthHandler")
+    interface NativeChromeHttpAuthHandler extends JniTypeToken {}
 
-    private long mNativeChromeHttpAuthHandler;
-    private String mAutofillUsername;
-    private String mAutofillPassword;
-    private LoginPrompt mLoginPrompt;
-    private Tab mTab;
+    private static @Nullable Callback<ChromeHttpAuthHandler> sTestCreationCallback;
 
-    private ChromeHttpAuthHandler(long nativeChromeHttpAuthHandler) {
-        assert nativeChromeHttpAuthHandler != 0;
+    private @Nullable JniRawPtr<NativeChromeHttpAuthHandler> mNativeChromeHttpAuthHandler;
+    private @Nullable String mAutofillUsername;
+    private @Nullable String mAutofillPassword;
+    private @Nullable LoginPrompt mLoginPrompt;
+    private @Nullable Tab mTab;
+
+    private ChromeHttpAuthHandler(
+            JniRawPtr<NativeChromeHttpAuthHandler> nativeChromeHttpAuthHandler) {
         mNativeChromeHttpAuthHandler = nativeChromeHttpAuthHandler;
         if (sTestCreationCallback != null) sTestCreationCallback.onResult(this);
     }
 
     @CalledByNative
-    private static ChromeHttpAuthHandler create(long nativeChromeHttpAuthHandler) {
+    static ChromeHttpAuthHandler create(
+            JniRawPtr<NativeChromeHttpAuthHandler> nativeChromeHttpAuthHandler) {
         return new ChromeHttpAuthHandler(nativeChromeHttpAuthHandler);
     }
 
@@ -67,14 +83,14 @@ public class ChromeHttpAuthHandler extends EmptyTabObserver implements LoginProm
 
     @Override
     public void cancel() {
-        ChromeHttpAuthHandlerJni.get().cancelAuth(
-                mNativeChromeHttpAuthHandler, ChromeHttpAuthHandler.this);
+        if (mNativeChromeHttpAuthHandler == null) return;
+        ChromeHttpAuthHandlerJni.get().cancelAuth(mNativeChromeHttpAuthHandler);
     }
 
     @Override
     public void proceed(String username, String password) {
-        ChromeHttpAuthHandlerJni.get().setAuth(
-                mNativeChromeHttpAuthHandler, ChromeHttpAuthHandler.this, username, password);
+        if (mNativeChromeHttpAuthHandler == null) return;
+        ChromeHttpAuthHandlerJni.get().setAuth(mNativeChromeHttpAuthHandler, username, password);
     }
 
     /** Return whether the auth dialog is being shown. */
@@ -83,7 +99,8 @@ public class ChromeHttpAuthHandler extends EmptyTabObserver implements LoginProm
     }
 
     @CalledByNative
-    private void showDialog(Tab tab, WindowAndroid windowAndroid) {
+    private void showDialog(
+            Tab tab, WindowAndroid windowAndroid, @JniType("GURL") GURL challengerUrl) {
         if (tab == null || tab.isHidden() || windowAndroid == null) {
             cancel();
             return;
@@ -93,16 +110,32 @@ public class ChromeHttpAuthHandler extends EmptyTabObserver implements LoginProm
             cancel();
             return;
         }
+        if (activity.isFinishing() || activity.isDestroyed()) {
+            cancel();
+            return;
+        }
+        assert mNativeChromeHttpAuthHandler != null;
         mTab = tab;
         mTab.addObserver(this);
-        String messageBody = ChromeHttpAuthHandlerJni.get().getMessageBody(
-                mNativeChromeHttpAuthHandler, ChromeHttpAuthHandler.this);
-        mLoginPrompt = new LoginPrompt(activity, messageBody, null, this);
+        String messageBody =
+                ChromeHttpAuthHandlerJni.get().getMessageBody(mNativeChromeHttpAuthHandler);
+
+        GURL autofillUrl = null;
+        if (shouldProvideAutofillUrl()) {
+            autofillUrl = challengerUrl;
+        }
+
+        mLoginPrompt = new LoginPrompt(activity, messageBody, autofillUrl, this);
         // In case the autofill data arrives before the prompt is created.
+
         if (mAutofillUsername != null && mAutofillPassword != null) {
             mLoginPrompt.onAutofillDataAvailable(mAutofillUsername, mAutofillPassword);
         }
-        mLoginPrompt.show();
+        try {
+            mLoginPrompt.show();
+        } catch (WindowManager.BadTokenException ex) {
+            cancel();
+        }
     }
 
     @CalledByNative
@@ -112,7 +145,10 @@ public class ChromeHttpAuthHandler extends EmptyTabObserver implements LoginProm
 
     @CalledByNative
     private void onNativeDestroyed() {
-        mNativeChromeHttpAuthHandler = 0;
+        if (mNativeChromeHttpAuthHandler != null) {
+            mNativeChromeHttpAuthHandler.release();
+            mNativeChromeHttpAuthHandler = null;
+        }
         if (mTab != null) mTab.removeObserver(this);
         mTab = null;
     }
@@ -122,8 +158,14 @@ public class ChromeHttpAuthHandler extends EmptyTabObserver implements LoginProm
         cancel();
     }
 
+    public @Nullable LoginPrompt getLoginPromptForTesting() {
+        return mLoginPrompt;
+    }
+
     @CalledByNative
-    private void onAutofillDataAvailable(String username, String password) {
+    private void onAutofillDataAvailable(
+            @JniType("std::u16string_view") String username,
+            @JniType("std::u16string_view") String password) {
         mAutofillUsername = username;
         mAutofillPassword = password;
         if (mLoginPrompt != null) {
@@ -131,12 +173,23 @@ public class ChromeHttpAuthHandler extends EmptyTabObserver implements LoginProm
         }
     }
 
+    private boolean shouldProvideAutofillUrl() {
+        if (mTab == null) return false;
+        return AutofillClientProviderUtils.getAndroidAutofillFrameworkAvailability(
+                        UserPrefs.get(mTab.getProfile()))
+                == AndroidAutofillAvailabilityStatus.AVAILABLE;
+    }
+
     @NativeMethods
     interface Natives {
-        void setAuth(long nativeChromeHttpAuthHandler, ChromeHttpAuthHandler caller,
-                String username, String password);
+        void setAuth(
+                JniPtr<NativeChromeHttpAuthHandler> self,
+                @JniType("std::u16string") String username,
+                @JniType("std::u16string") String password);
 
-        void cancelAuth(long nativeChromeHttpAuthHandler, ChromeHttpAuthHandler caller);
-        String getMessageBody(long nativeChromeHttpAuthHandler, ChromeHttpAuthHandler caller);
+        void cancelAuth(JniPtr<NativeChromeHttpAuthHandler> self);
+
+        @JniType("std::u16string")
+        String getMessageBody(JniPtr<NativeChromeHttpAuthHandler> self);
     }
 }

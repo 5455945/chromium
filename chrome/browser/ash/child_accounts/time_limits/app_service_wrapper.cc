@@ -1,41 +1,41 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/child_accounts/time_limits/app_service_wrapper.h"
 
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/unguessable_token.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
-#include "chrome/browser/apps/app_service/launch_utils.h"
+#include "chrome/browser/ash/app_list/arc/arc_app_utils.h"
 #include "chrome/browser/ash/child_accounts/time_limits/app_time_limit_utils.h"
 #include "chrome/browser/ash/child_accounts/time_limits/app_types.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/app_list/arc/arc_app_utils.h"
-#include "chrome/common/chrome_features.h"
+#include "components/services/app_service/public/cpp/app_launch_util.h"
+#include "components/services/app_service/public/cpp/app_types.h"
 #include "components/services/app_service/public/cpp/app_update.h"
+#include "components/services/app_service/public/cpp/icon_effects.h"
 #include "components/services/app_service/public/cpp/instance_update.h"
 #include "components/services/app_service/public/cpp/types_util.h"
-#include "components/services/app_service/public/mojom/types.mojom.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/gfx/image/image_skia.h"
 
-namespace ash {
-namespace app_time {
+namespace ash::app_time {
 
 namespace {
 
 // Gets AppId from |update|.
 AppId AppIdFromAppUpdate(const apps::AppUpdate& update) {
-  bool is_arc = update.AppType() == apps::mojom::AppType::kArc;
+  bool is_arc = update.AppType() == apps::AppType::kArc;
   return AppId(update.AppType(),
                is_arc ? update.PublisherId() : update.AppId());
 }
@@ -43,7 +43,7 @@ AppId AppIdFromAppUpdate(const apps::AppUpdate& update) {
 // Gets AppId from |update|.
 AppId AppIdFromInstanceUpdate(const apps::InstanceUpdate& update,
                               apps::AppRegistryCache* app_cache) {
-  AppId app_id(apps::mojom::AppType::kUnknown, update.AppId());
+  AppId app_id(apps::AppType::kUnknown, update.AppId());
 
   app_cache->ForOneApp(update.AppId(),
                        [&app_id](const apps::AppUpdate& update) {
@@ -54,7 +54,7 @@ AppId AppIdFromInstanceUpdate(const apps::InstanceUpdate& update,
 
 // Gets app service id from |app_id|.
 std::string AppServiceIdFromAppId(const AppId& app_id, Profile* profile) {
-  return app_id.app_type() == apps::mojom::AppType::kArc
+  return app_id.app_type() == apps::AppType::kArc
              ? arc::ArcPackageNameToAppId(app_id.app_id(), profile)
              : app_id.app_id();
 }
@@ -70,8 +70,8 @@ apps::PauseData PauseAppInfoToPauseData(const PauseAppInfo& pause_info) {
 }  // namespace
 
 AppServiceWrapper::AppServiceWrapper(Profile* profile) : profile_(profile) {
-  apps::AppRegistryCache::Observer::Observe(&GetAppCache());
-  apps::InstanceRegistry::Observer::Observe(&GetInstanceRegistry());
+  app_registry_cache_observer_.Observe(&GetAppCache());
+  instance_registry_observation_.Observe(&GetInstanceRegistry());
 }
 
 AppServiceWrapper::~AppServiceWrapper() = default;
@@ -97,21 +97,23 @@ void AppServiceWrapper::ResumeApp(const AppId& app_id) {
 }
 
 void AppServiceWrapper::LaunchApp(const std::string& app_service_id) {
-  GetAppProxy()->Launch(app_service_id, ui::EventFlags::EF_NONE,
-                        apps::mojom::LaunchSource::kFromParentalControls,
-                        apps::MakeWindowInfo(display::kDefaultDisplayId));
+  GetAppProxy()->Launch(
+      app_service_id, ui::EF_NONE, apps::LaunchSource::kFromParentalControls,
+      std::make_unique<apps::WindowInfo>(display::kDefaultDisplayId));
 }
 
 std::vector<AppId> AppServiceWrapper::GetInstalledApps() const {
   std::vector<AppId> installed_apps;
   GetAppCache().ForEachApp(
       [&installed_apps, this](const apps::AppUpdate& update) {
-        if (!apps_util::IsInstalled(update.Readiness()))
+        if (!apps_util::IsInstalled(update.Readiness())) {
           return;
+        }
 
         const AppId app_id = AppIdFromAppUpdate(update);
-        if (!ShouldIncludeApp(app_id))
+        if (!ShouldIncludeApp(app_id)) {
           return;
+        }
 
         installed_apps.push_back(app_id);
       });
@@ -119,19 +121,20 @@ std::vector<AppId> AppServiceWrapper::GetInstalledApps() const {
 }
 
 bool AppServiceWrapper::IsHiddenArcApp(const AppId& app_id) const {
-  if (app_id.app_type() != apps::mojom::AppType::kArc)
+  if (app_id.app_type() != apps::AppType::kArc) {
     return false;
+  }
 
   bool is_hidden = false;
   const std::string app_service_id = AppServiceIdFromAppId(app_id, profile_);
 
   GetAppCache().ForOneApp(
       app_service_id, [&is_hidden](const apps::AppUpdate& update) {
-        if (!apps_util::IsInstalled(update.Readiness()))
+        if (!apps_util::IsInstalled(update.Readiness())) {
           return;
+        }
 
-        is_hidden =
-            update.ShowInLauncher() == apps::mojom::OptionalBool::kFalse;
+        is_hidden = !update.ShowInLauncher().value_or(false);
       });
 
   return is_hidden;
@@ -140,12 +143,13 @@ bool AppServiceWrapper::IsHiddenArcApp(const AppId& app_id) const {
 std::vector<AppId> AppServiceWrapper::GetHiddenArcApps() const {
   std::vector<AppId> hidden_arc_apps;
   GetAppCache().ForEachApp([&hidden_arc_apps](const apps::AppUpdate& update) {
-    if (!apps_util::IsInstalled(update.Readiness()))
+    if (!apps_util::IsInstalled(update.Readiness())) {
       return;
+    }
 
     const AppId app_id = AppIdFromAppUpdate(update);
-    if (app_id.app_type() != apps::mojom::AppType::kArc ||
-        update.ShowInLauncher() != apps::mojom::OptionalBool::kFalse) {
+    if (app_id.app_type() != apps::AppType::kArc ||
+        update.ShowInLauncher().value_or(true)) {
       return;
     }
 
@@ -156,7 +160,7 @@ std::vector<AppId> AppServiceWrapper::GetHiddenArcApps() const {
 
 std::string AppServiceWrapper::GetAppName(const AppId& app_id) const {
   const std::string app_service_id = AppServiceIdFromAppId(app_id, profile_);
-  DCHECK(!app_service_id.empty());
+  CHECK(!app_service_id.empty(), base::NotFatalUntil::M160);
 
   std::string app_name;
   GetAppCache().ForOneApp(
@@ -168,30 +172,21 @@ std::string AppServiceWrapper::GetAppName(const AppId& app_id) const {
 void AppServiceWrapper::GetAppIcon(
     const AppId& app_id,
     int size_hint_in_dp,
-    base::OnceCallback<void(absl::optional<gfx::ImageSkia>)> on_icon_ready)
+    base::OnceCallback<void(std::optional<gfx::ImageSkia>)> on_icon_ready)
     const {
-  apps::AppServiceProxyChromeOs* proxy =
-      apps::AppServiceProxyFactory::GetForProfile(profile_);
   const std::string app_service_id = AppServiceIdFromAppId(app_id, profile_);
-  DCHECK(!app_service_id.empty());
+  CHECK(!app_service_id.empty(), base::NotFatalUntil::M160);
 
-  auto icon_type =
-      (base::FeatureList::IsEnabled(features::kAppServiceAdaptiveIcon))
-          ? apps::mojom::IconType::kStandard
-          : apps::mojom::IconType::kUncompressed;
-  proxy->LoadIconFromIconKey(
-      app_id.app_type(), app_service_id, apps::mojom::IconKey::New(), icon_type,
+  GetAppProxy()->LoadIconWithIconEffects(
+      app_service_id, apps::IconEffects::kNone, apps::IconType::kStandard,
       size_hint_in_dp,
       /* allow_placeholder_icon */ false,
       base::BindOnce(
-          [](base::OnceCallback<void(absl::optional<gfx::ImageSkia>)> callback,
-             apps::mojom::IconValuePtr icon_value) {
-            auto icon_type = (base::FeatureList::IsEnabled(
-                                 features::kAppServiceAdaptiveIcon))
-                                 ? apps::mojom::IconType::kStandard
-                                 : apps::mojom::IconType::kUncompressed;
-            if (!icon_value || icon_value->icon_type != icon_type) {
-              std::move(callback).Run(absl::nullopt);
+          [](base::OnceCallback<void(std::optional<gfx::ImageSkia>)> callback,
+             apps::IconValuePtr icon_value) {
+            if (!icon_value ||
+                icon_value->icon_type != apps::IconType::kStandard) {
+              std::move(callback).Run(std::nullopt);
             } else {
               std::move(callback).Run(icon_value->uncompressed);
             }
@@ -204,42 +199,44 @@ std::string AppServiceWrapper::GetAppServiceId(const AppId& app_id) const {
 }
 
 bool AppServiceWrapper::IsAppInstalled(const std::string& app_id) {
-  return GetAppCache().GetAppType(app_id) != apps::mojom::AppType::kUnknown;
+  return GetAppCache().GetAppType(app_id) != apps::AppType::kUnknown;
 }
 
 AppId AppServiceWrapper::AppIdFromAppServiceId(
     const std::string& app_service_id,
-    apps::mojom::AppType app_type) const {
-  absl::optional<AppId> app_id;
+    apps::AppType app_type) const {
+  std::optional<AppId> app_id;
   GetAppCache().ForOneApp(app_service_id,
                           [&app_id](const apps::AppUpdate& update) {
                             app_id = AppIdFromAppUpdate(update);
                           });
-  DCHECK(app_id);
+  CHECK(app_id, base::NotFatalUntil::M160);
   return *app_id;
 }
 
 void AppServiceWrapper::AddObserver(EventListener* listener) {
-  DCHECK(listener);
+  CHECK(listener, base::NotFatalUntil::M160);
   listeners_.AddObserver(listener);
 }
 
 void AppServiceWrapper::RemoveObserver(EventListener* listener) {
-  DCHECK(listener);
+  CHECK(listener, base::NotFatalUntil::M160);
   listeners_.RemoveObserver(listener);
 }
 
 void AppServiceWrapper::OnAppUpdate(const apps::AppUpdate& update) {
-  if (!update.ReadinessChanged())
+  if (!update.ReadinessChanged()) {
     return;
+  }
 
   const AppId app_id = AppIdFromAppUpdate(update);
-  if (!ShouldIncludeApp(app_id))
+  if (!ShouldIncludeApp(app_id)) {
     return;
+  }
 
   switch (update.Readiness()) {
-    case apps::mojom::Readiness::kReady:
-      for (auto& listener : listeners_)
+    case apps::Readiness::kReady:
+      for (auto& listener : listeners_) {
         if (update.StateIsNull()) {
           // It is the first update about this app.
           // Note that AppService does not store info between sessions and this
@@ -248,17 +245,21 @@ void AppServiceWrapper::OnAppUpdate(const apps::AppUpdate& update) {
         } else {
           listener.OnAppAvailable(app_id);
         }
+      }
       break;
-    case apps::mojom::Readiness::kUninstalledByUser:
-    case apps::mojom::Readiness::kUninstalledByMigration:
-      for (auto& listener : listeners_)
+    case apps::Readiness::kUninstalledByUser:
+    case apps::Readiness::kUninstalledByNonUser:
+      for (auto& listener : listeners_) {
         listener.OnAppUninstalled(app_id);
+      }
       break;
-    case apps::mojom::Readiness::kDisabledByUser:
-    case apps::mojom::Readiness::kDisabledByPolicy:
-    case apps::mojom::Readiness::kDisabledByBlocklist:
-      for (auto& listener : listeners_)
+    case apps::Readiness::kDisabledByUser:
+    case apps::Readiness::kDisabledByPolicy:
+    case apps::Readiness::kDisabledByBlocklist:
+    case apps::Readiness::kDisabledByLocalSettings:
+      for (auto& listener : listeners_) {
         listener.OnAppBlocked(app_id);
+      }
       break;
     default:
       break;
@@ -267,28 +268,36 @@ void AppServiceWrapper::OnAppUpdate(const apps::AppUpdate& update) {
 
 void AppServiceWrapper::OnAppRegistryCacheWillBeDestroyed(
     apps::AppRegistryCache* cache) {
-  apps::AppRegistryCache::Observer::Observe(nullptr);
+  app_registry_cache_observer_.Reset();
 }
 
 void AppServiceWrapper::OnInstanceUpdate(const apps::InstanceUpdate& update) {
-  if (!update.StateChanged())
+  if (!update.StateChanged()) {
     return;
-
-  const AppId app_id = AppIdFromInstanceUpdate(update, &GetAppCache());
-  if (!ShouldIncludeApp(app_id))
-    return;
+  }
 
   bool is_active = update.State() & apps::InstanceState::kActive;
   bool is_destroyed = update.State() & apps::InstanceState::kDestroyed;
+  const AppId app_id = AppIdFromInstanceUpdate(update, &GetAppCache());
+  // When the window is destroyed, the app might be destroyed from extensions,
+  // then ShouldIncludeApp returns false. But if the app type is valid, listener
+  // should be notified as well to stop the activities on the app window.
+  if (!ShouldIncludeApp(app_id) &&
+      !(app_id.app_type() != apps::AppType::kUnknown && is_destroyed)) {
+    return;
+  }
+
   for (auto& listener : listeners_) {
     if (is_active) {
-      listener.OnAppActive(app_id, update.Window(), update.LastUpdatedTime());
+      listener.OnAppActive(app_id, update.InstanceId(),
+                           update.LastUpdatedTime());
     } else {
-      listener.OnAppInactive(app_id, update.Window(), update.LastUpdatedTime());
+      listener.OnAppInactive(app_id, update.InstanceId(),
+                             update.LastUpdatedTime());
     }
 
     if (is_destroyed) {
-      listener.OnAppDestroyed(app_id, update.Window(),
+      listener.OnAppDestroyed(app_id, update.InstanceId(),
                               update.LastUpdatedTime());
     }
   }
@@ -296,45 +305,44 @@ void AppServiceWrapper::OnInstanceUpdate(const apps::InstanceUpdate& update) {
 
 void AppServiceWrapper::OnInstanceRegistryWillBeDestroyed(
     apps::InstanceRegistry* cache) {
-  apps::InstanceRegistry::Observer::Observe(nullptr);
+  instance_registry_observation_.Reset();
 }
 
-apps::AppServiceProxyChromeOs* AppServiceWrapper::GetAppProxy() {
+apps::AppServiceProxy* AppServiceWrapper::GetAppProxy() const {
   return apps::AppServiceProxyFactory::GetForProfile(profile_);
 }
 
 apps::AppRegistryCache& AppServiceWrapper::GetAppCache() const {
-  return apps::AppServiceProxyFactory::GetForProfile(profile_)
-      ->AppRegistryCache();
+  return GetAppProxy()->AppRegistryCache();
 }
 
 apps::InstanceRegistry& AppServiceWrapper::GetInstanceRegistry() const {
-  return apps::AppServiceProxyFactory::GetForProfile(profile_)
-      ->InstanceRegistry();
+  return GetAppProxy()->InstanceRegistry();
 }
 
 bool AppServiceWrapper::ShouldIncludeApp(const AppId& app_id) const {
-  if (IsHiddenArcApp(app_id))
+  if (IsHiddenArcApp(app_id)) {
     return false;
+  }
 
-  if (app_id.app_type() == apps::mojom::AppType::kExtension) {
+  if (app_id.app_type() == apps::AppType::kChromeApp) {
     const extensions::Extension* extension =
         extensions::ExtensionRegistry::Get(profile_)->GetExtensionById(
             app_id.app_id(),
             extensions::ExtensionRegistry::IncludeFlag::EVERYTHING);
 
     // If we are not able to find the extension, return false.
-    if (!extension)
+    if (!extension) {
       return false;
+    }
 
     // Some preinstalled apps that open in browser window are legacy packaged
     // apps. Example Google Slides app.
     return extension->is_hosted_app() || extension->is_legacy_packaged_app();
   }
 
-  return app_id.app_type() == apps::mojom::AppType::kArc ||
-         app_id.app_type() == apps::mojom::AppType::kWeb;
+  return app_id.app_type() == apps::AppType::kArc ||
+         app_id.app_type() == apps::AppType::kWeb;
 }
 
-}  // namespace app_time
-}  // namespace ash
+}  // namespace ash::app_time

@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,6 +25,11 @@ namespace {
 
 PowerPolicyController* g_power_policy_controller = nullptr;
 
+// See crbug.com/439382852 - if the policy for screen lock delay is set but no
+// value is specified we should use the system defaults.
+const int kDefaultACScreenlockDelayMs = 510000;
+const int kDefaultBatteryScreenlockDelayMs = 390000;
+
 // Appends a description of |field|, a field within |delays|, a
 // power_manager::PowerManagementPolicy::Delays object, to |str|, an
 // std::string, if the field is set.  |name| is a char* describing the
@@ -42,8 +47,10 @@ PowerPolicyController* g_power_policy_controller = nullptr;
 #define APPEND_DELAYS(str, delays, prefix)                                 \
   {                                                                        \
     APPEND_DELAY(str, delays, screen_dim_ms, prefix "_screen_dim_ms");     \
+    APPEND_DELAY(str, delays, quick_dim_ms, prefix "_quick_dim_ms");       \
     APPEND_DELAY(str, delays, screen_off_ms, prefix "_screen_off_ms");     \
     APPEND_DELAY(str, delays, screen_lock_ms, prefix "_screen_lock_ms");   \
+    APPEND_DELAY(str, delays, quick_lock_ms, prefix "_quick_lock_ms");     \
     APPEND_DELAY(str, delays, idle_warning_ms, prefix "_idle_warning_ms"); \
     APPEND_DELAY(str, delays, idle_ms, prefix "_idle_ms");                 \
   }
@@ -63,7 +70,6 @@ power_manager::PowerManagementPolicy_Action GetProtoAction(
       return power_manager::PowerManagementPolicy_Action_DO_NOTHING;
     default:
       NOTREACHED() << "Unhandled action " << action;
-      return power_manager::PowerManagementPolicy_Action_DO_NOTHING;
   }
 }
 
@@ -110,22 +116,22 @@ void AdjustDelaysForBacklightsForcedOff(
 // Saves appropriate value to |week_day| and returns true if there is mapping
 // between week day string and enum value.
 bool GetWeekDayFromString(
-    const std::string& week_day_str,
+    const std::string* week_day_str,
     power_manager::PowerManagementPolicy::WeekDay* week_day) {
   DCHECK(week_day);
-  if (week_day_str == "MONDAY") {
+  if (*week_day_str == "MONDAY") {
     *week_day = power_manager::PowerManagementPolicy::MONDAY;
-  } else if (week_day_str == "TUESDAY") {
+  } else if (*week_day_str == "TUESDAY") {
     *week_day = power_manager::PowerManagementPolicy::TUESDAY;
-  } else if (week_day_str == "WEDNESDAY") {
+  } else if (*week_day_str == "WEDNESDAY") {
     *week_day = power_manager::PowerManagementPolicy::WEDNESDAY;
-  } else if (week_day_str == "THURSDAY") {
+  } else if (*week_day_str == "THURSDAY") {
     *week_day = power_manager::PowerManagementPolicy::THURSDAY;
-  } else if (week_day_str == "FRIDAY") {
+  } else if (*week_day_str == "FRIDAY") {
     *week_day = power_manager::PowerManagementPolicy::FRIDAY;
-  } else if (week_day_str == "SATURDAY") {
+  } else if (*week_day_str == "SATURDAY") {
     *week_day = power_manager::PowerManagementPolicy::SATURDAY;
-  } else if (week_day_str == "SUNDAY") {
+  } else if (*week_day_str == "SUNDAY") {
     *week_day = power_manager::PowerManagementPolicy::SUNDAY;
   } else {
     return false;
@@ -143,52 +149,56 @@ const char PowerPolicyController::kPrefsReason[] = "Prefs";
 
 // static
 bool PowerPolicyController::GetPeakShiftDayConfigs(
-    const base::DictionaryValue& value,
+    const base::DictValue& value,
     std::vector<PeakShiftDayConfig>* configs_out) {
   DCHECK(configs_out);
   configs_out->clear();
 
-  const base::Value* entries =
-      value.FindKeyOfType({"entries"}, base::Value::Type::LIST);
+  const base::ListValue* entries = value.FindList("entries");
   if (!entries) {
     return false;
   }
 
-  for (const base::Value& item : entries->GetList()) {
-    const base::Value* week_day_value =
-        item.FindKeyOfType({"day"}, base::Value::Type::STRING);
-    const base::Value* start_time_hour =
-        item.FindPathOfType({"start_time", "hour"}, base::Value::Type::INTEGER);
-    const base::Value* start_time_minute = item.FindPathOfType(
-        {"start_time", "minute"}, base::Value::Type::INTEGER);
-    const base::Value* end_time_hour =
-        item.FindPathOfType({"end_time", "hour"}, base::Value::Type::INTEGER);
-    const base::Value* end_time_minute =
-        item.FindPathOfType({"end_time", "minute"}, base::Value::Type::INTEGER);
-    const base::Value* charge_start_time_hour = item.FindPathOfType(
-        {"charge_start_time", "hour"}, base::Value::Type::INTEGER);
-    const base::Value* charge_start_time_minute = item.FindPathOfType(
-        {"charge_start_time", "minute"}, base::Value::Type::INTEGER);
+  for (const base::Value& item : *entries) {
+    const base::DictValue* item_dict = item.GetIfDict();
+    if (!item_dict) {
+      return false;
+    }
+
+    const std::string* week_day_value = item_dict->FindString("day");
+    std::optional<int> start_time_hour =
+        item_dict->FindIntByDottedPath("start_time.hour");
+    std::optional<int> start_time_minute =
+        item_dict->FindIntByDottedPath("start_time.minute");
+    std::optional<int> end_time_hour =
+        item_dict->FindIntByDottedPath("end_time.hour");
+    std::optional<int> end_time_minute =
+        item_dict->FindIntByDottedPath("end_time.minute");
+    std::optional<int> charge_start_time_hour =
+        item_dict->FindIntByDottedPath("charge_start_time.hour");
+    std::optional<int> charge_start_time_minute =
+        item_dict->FindIntByDottedPath("charge_start_time.minute");
 
     power_manager::PowerManagementPolicy::WeekDay week_day_enum;
     if (!week_day_value ||
-        !GetWeekDayFromString(week_day_value->GetString(), &week_day_enum) ||
-        !start_time_hour || !start_time_minute || !end_time_hour ||
-        !end_time_minute || !charge_start_time_hour ||
-        !charge_start_time_minute) {
+        !GetWeekDayFromString(week_day_value, &week_day_enum) ||
+        !start_time_hour.has_value() || !start_time_minute.has_value() ||
+        !end_time_hour.has_value() || !end_time_minute.has_value() ||
+        !charge_start_time_hour.has_value() ||
+        !charge_start_time_minute.has_value()) {
       return false;
     }
 
     PeakShiftDayConfig config;
     config.set_day(week_day_enum);
-    config.mutable_start_time()->set_hour(start_time_hour->GetInt());
-    config.mutable_start_time()->set_minute(start_time_minute->GetInt());
-    config.mutable_end_time()->set_hour(end_time_hour->GetInt());
-    config.mutable_end_time()->set_minute(end_time_minute->GetInt());
+    config.mutable_start_time()->set_hour(start_time_hour.value());
+    config.mutable_start_time()->set_minute(start_time_minute.value());
+    config.mutable_end_time()->set_hour(end_time_hour.value());
+    config.mutable_end_time()->set_minute(end_time_minute.value());
     config.mutable_charge_start_time()->set_hour(
-        charge_start_time_hour->GetInt());
+        charge_start_time_hour.value());
     config.mutable_charge_start_time()->set_minute(
-        charge_start_time_minute->GetInt());
+        charge_start_time_minute.value());
 
     configs_out->push_back(std::move(config));
   }
@@ -198,46 +208,51 @@ bool PowerPolicyController::GetPeakShiftDayConfigs(
 
 // static
 bool PowerPolicyController::GetAdvancedBatteryChargeModeDayConfigs(
-    const base::DictionaryValue& value,
+    const base::DictValue& value,
     std::vector<AdvancedBatteryChargeModeDayConfig>* configs_out) {
   DCHECK(configs_out);
   configs_out->clear();
 
-  const base::Value* entries =
-      value.FindKeyOfType({"entries"}, base::Value::Type::LIST);
+  const base::ListValue* entries = value.FindList("entries");
   if (!entries) {
     return false;
   }
 
-  for (const base::Value& item : entries->GetList()) {
-    const base::Value* week_day_value =
-        item.FindKeyOfType({"day"}, base::Value::Type::STRING);
-    const base::Value* charge_start_time_hour = item.FindPathOfType(
-        {"charge_start_time", "hour"}, base::Value::Type::INTEGER);
-    const base::Value* charge_start_time_minute = item.FindPathOfType(
-        {"charge_start_time", "minute"}, base::Value::Type::INTEGER);
-    const base::Value* charge_end_time_hour = item.FindPathOfType(
-        {"charge_end_time", "hour"}, base::Value::Type::INTEGER);
-    const base::Value* charge_end_time_minute = item.FindPathOfType(
-        {"charge_end_time", "minute"}, base::Value::Type::INTEGER);
+  for (const base::Value& item : *entries) {
+    const base::DictValue* item_dict = item.GetIfDict();
+    if (!item_dict) {
+      return false;
+    }
+
+    const std::string* week_day_value = item_dict->FindString("day");
+    std::optional<int> charge_start_time_hour =
+        item_dict->FindIntByDottedPath("charge_start_time.hour");
+    std::optional<int> charge_start_time_minute =
+        item_dict->FindIntByDottedPath("charge_start_time.minute");
+    std::optional<int> charge_end_time_hour =
+        item_dict->FindIntByDottedPath("charge_end_time.hour");
+    std::optional<int> charge_end_time_minute =
+        item_dict->FindIntByDottedPath("charge_end_time.minute");
 
     power_manager::PowerManagementPolicy::WeekDay week_day_enum;
     if (!week_day_value ||
-        !GetWeekDayFromString(week_day_value->GetString(), &week_day_enum) ||
-        !charge_start_time_hour || !charge_start_time_minute ||
-        !charge_end_time_hour || !charge_end_time_minute) {
+        !GetWeekDayFromString(week_day_value, &week_day_enum) ||
+        !charge_start_time_hour.has_value() ||
+        !charge_start_time_minute.has_value() ||
+        !charge_end_time_hour.has_value() ||
+        !charge_end_time_minute.has_value()) {
       return false;
     }
 
     AdvancedBatteryChargeModeDayConfig config;
     config.set_day(week_day_enum);
     config.mutable_charge_start_time()->set_hour(
-        charge_start_time_hour->GetInt());
+        charge_start_time_hour.value());
     config.mutable_charge_start_time()->set_minute(
-        charge_start_time_minute->GetInt());
-    config.mutable_charge_end_time()->set_hour(charge_end_time_hour->GetInt());
+        charge_start_time_minute.value());
+    config.mutable_charge_end_time()->set_hour(charge_end_time_hour.value());
     config.mutable_charge_end_time()->set_minute(
-        charge_end_time_minute->GetInt());
+        charge_end_time_minute.value());
 
     configs_out->push_back(std::move(config));
   }
@@ -351,8 +366,14 @@ std::string PowerPolicyController::GetPolicyDebugString(
     StringAppendF(&str, "usb_power_share=%d ", policy.usb_power_share());
   }
 
-  if (policy.has_reason())
+  if (policy.has_send_feedback_if_undimmed()) {
+    StringAppendF(&str, "send_feedback_if_undimmed=%d ",
+                  policy.send_feedback_if_undimmed());
+  }
+
+  if (policy.has_reason()) {
     StringAppendF(&str, "reason=\"%s\" ", policy.reason().c_str());
+  }
   base::TrimWhitespaceASCII(str, base::TRIM_TRAILING, &str);
   return str;
 }
@@ -455,6 +476,28 @@ void PowerPolicyController::ApplyPrefs(const PrefValues& values) {
   delays->set_idle_warning_ms(values.battery_idle_warning_delay_ms);
   delays->set_idle_ms(values.battery_idle_delay_ms);
 
+  // Sets quick_dim_ms and send_feedback_if_undimmed for prefs_policy_.
+  if (values.battery_quick_dim_delay_ms >= 0) {
+    prefs_policy_.mutable_battery_delays()->set_quick_dim_ms(
+        values.battery_quick_dim_delay_ms);
+  }
+  if (values.ac_quick_dim_delay_ms >= 0) {
+    prefs_policy_.mutable_ac_delays()->set_quick_dim_ms(
+        values.ac_quick_dim_delay_ms);
+  }
+  if (values.battery_quick_lock_delay_ms >= 0) {
+    prefs_policy_.mutable_battery_delays()->set_quick_lock_ms(
+        values.battery_quick_lock_delay_ms);
+  }
+  if (values.ac_quick_lock_delay_ms >= 0) {
+    prefs_policy_.mutable_ac_delays()->set_quick_lock_ms(
+        values.ac_quick_lock_delay_ms);
+  }
+  if (values.send_feedback_if_undimmed.has_value()) {
+    prefs_policy_.set_send_feedback_if_undimmed(
+        values.send_feedback_if_undimmed.value());
+  }
+
   lock_ms = delays->screen_off_ms() + kScreenLockAfterOffDelayMs;
   if (values.enable_auto_screen_lock && delays->screen_off_ms() > 0 &&
       (delays->screen_lock_ms() <= 0 || lock_ms < delays->screen_lock_ms()) &&
@@ -522,17 +565,49 @@ void PowerPolicyController::ApplyPrefs(const PrefValues& values) {
 
   prefs_policy_.set_usb_power_share(values.usb_power_share);
 
+  if (values.adaptive_charging_enabled.has_value()) {
+    prefs_policy_.set_adaptive_charging_enabled(
+        values.adaptive_charging_enabled.value());
+    if (values.adaptive_charging_enabled.value()) {
+      prefs_policy_.set_adaptive_charging_min_probability(
+          values.adaptive_charging_min_probability);
+      prefs_policy_.set_adaptive_charging_hold_percent(
+          values.adaptive_charging_hold_percent);
+      prefs_policy_.set_adaptive_charging_max_delay_percentile(
+          values.adaptive_charging_max_delay_percentile);
+      prefs_policy_.set_adaptive_charging_min_days_history(
+          values.adaptive_charging_min_days_history);
+      prefs_policy_.set_adaptive_charging_min_full_on_ac_ratio(
+          values.adaptive_charging_min_full_on_ac_ratio);
+    }
+  }
+
+  if (values.charge_limit_enabled.has_value()) {
+    prefs_policy_.set_charge_limit_enabled(values.charge_limit_enabled.value());
+  }
+
   prefs_were_set_ = true;
   SendCurrentPolicy();
 }
 
 base::TimeDelta PowerPolicyController::GetMaxPolicyAutoScreenLockDelay() {
-  if (!prefs_were_set_ || !auto_screen_lock_enabled_) {
+  if (!auto_screen_lock_enabled_) {
     return base::TimeDelta();
   }
-  int ac_delay = prefs_policy_.ac_delays().screen_lock_ms();
-  int battery_delay = prefs_policy_.battery_delays().screen_lock_ms();
-  return base::TimeDelta::FromMilliseconds(std::max(ac_delay, battery_delay));
+
+  int ac_delay = kDefaultACScreenlockDelayMs;
+  if (prefs_policy_.ac_delays().has_screen_lock_ms() &&
+      prefs_policy_.ac_delays().screen_lock_ms() >= 0) {
+    ac_delay = prefs_policy_.ac_delays().screen_lock_ms();
+  }
+
+  int battery_delay = kDefaultBatteryScreenlockDelayMs;
+  if (prefs_policy_.battery_delays().has_screen_lock_ms() &&
+      prefs_policy_.battery_delays().screen_lock_ms() >= 0) {
+    battery_delay = prefs_policy_.battery_delays().screen_lock_ms();
+  }
+
+  return base::Milliseconds(std::max(ac_delay, battery_delay));
 }
 
 int PowerPolicyController::AddScreenWakeLock(WakeLockReason reason,
@@ -579,6 +654,14 @@ void PowerPolicyController::NotifyChromeIsExiting() {
   SendCurrentPolicy();
 }
 
+void PowerPolicyController::SetShouldDoNothingWhenIdleInDemoMode() {
+  if (should_do_nothing_when_idle_in_demo_mode_) {
+    return;
+  }
+  should_do_nothing_when_idle_in_demo_mode_ = true;
+  SendCurrentPolicy();
+}
+
 void PowerPolicyController::HandleBacklightsForcedOffForPowerButton(
     bool forced_off) {
   if (forced_off == backlights_forced_off_for_power_button_)
@@ -598,12 +681,10 @@ void PowerPolicyController::SetEncryptionMigrationActive(bool active) {
 PowerPolicyController::PowerPolicyController(PowerManagerClient* client)
     : client_(client) {
   DCHECK(client_);
-  client_->AddObserver(this);
+  power_manager_client_observation_.Observe(client_);
 }
 
-PowerPolicyController::~PowerPolicyController() {
-  client_->RemoveObserver(this);
-}
+PowerPolicyController::~PowerPolicyController() = default;
 
 PowerPolicyController::WakeLock::WakeLock(Type type,
                                           WakeLockReason reason,
@@ -690,6 +771,18 @@ void PowerPolicyController::SendCurrentPolicy() {
         power_manager::PowerManagementPolicy_Action_SUSPEND);
     causes +=
         std::string((causes.empty() ? "" : ", ")) + "encryption migration";
+  }
+
+  if (should_do_nothing_when_idle_in_demo_mode_ &&
+      (policy.ac_idle_action() !=
+           power_manager::PowerManagementPolicy_Action_DO_NOTHING ||
+       policy.battery_idle_action() !=
+           power_manager::PowerManagementPolicy_Action_DO_NOTHING)) {
+    LOG(WARNING) << "Idle action is overriden to DO_NOTHING by demo mode.";
+    policy.set_ac_idle_action(
+        power_manager::PowerManagementPolicy_Action_DO_NOTHING);
+    policy.set_battery_idle_action(
+        power_manager::PowerManagementPolicy_Action_DO_NOTHING);
   }
 
   // To avoid a race in the case where the user asks Chrome to sign out

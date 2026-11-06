@@ -1,15 +1,13 @@
-android.webkit.WebView focusable focused scrollable
+android.webkit.WebView focusable focused
 ++android.view.View
 ++++android.view.View role_description='video' disabled focusable name='Unable to play media.'
+++++++android.widget.TextView
+++++++android.widget.Button clickable focusable name='play'
 ++++++android.view.View
 ++++++++android.view.View
-++++++++android.view.View
-++++++++++android.widget.Button role_description='button' clickable focusable name='play'
-++++++++++android.view.View
-++++++++++++android.view.View name='elapsed time: 0:00'
-++++++++++++android.view.View
-++++++++++++++android.view.View
-++++++++++++++android.widget.Button role_description='button' disabled name='mute'
-++++++++++++android.widget.Button role_description='button' disabled name='enter full screen'
-++++++++++++android.widget.Button role_description='button' disabled name='show more media controls' hint='more options'
-++++++++++android.widget.SeekBar role_description='slider' disabled range name='0:00' hint='video time scrubber' item_count=100
+++++++++++android.widget.TextView
+++++++++++android.widget.Button clickable disabled name='mute'
+++++++++android.widget.Button clickable disabled name='enter full screen'
+++++++++android.widget.Button role_description='menu pop up button' clickable disabled name='show more media controls' hint='more options'
+++++++++++android.widget.TextView
+++++++android.widget.SeekBar clickable disabled range name='elapsed time: 0:00, video time scrubber' hint='total time: 0:00' range_max=100

@@ -1,6 +1,6 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
-# Copyright (c) 2012 The Chromium Authors. All rights reserved.
+# Copyright 2012 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -15,8 +15,10 @@ import re
 import subprocess
 import sys
 
+
 class LineBuffered(object):
   """Disable buffering on a file object."""
+
   def __init__(self, stream):
     self.stream = stream
 
@@ -45,9 +47,15 @@ def set_symbolizer_path():
     # Assume this script resides three levels below src/ (i.e.
     # src/tools/valgrind/asan/).
     src_root = os.path.join(script_dir, "..", "..", "..")
-    symbolizer_path = os.path.join(src_root, 'third_party',
-        'llvm-build', 'Release+Asserts', 'bin', 'llvm-symbolizer')
-    assert(os.path.isfile(symbolizer_path))
+    symbolizer_path = os.path.join(
+      src_root,
+      'third_party',
+      'llvm-build',
+      'Release+Asserts',
+      'bin',
+      'llvm-symbolizer',
+    )
+    assert os.path.isfile(symbolizer_path)
     os.environ['LLVM_SYMBOLIZER_PATH'] = os.path.abspath(symbolizer_path)
 
 
@@ -100,30 +108,6 @@ def find_inode_at_path(inode, path):
   return ret
 
 
-# Create a binary name filter that works around https://crbug.com/444835.
-# When running tests on OSX swarming servers, ASan sometimes prints paths to
-# files in cache (ending with SHA1 filenames) instead of paths to hardlinks to
-# those files in the product dir.
-# For a given |binary_path| chrome_osx_binary_name_filter() returns one of the
-# hardlinks to the same inode in |product_dir_path|.
-def make_chrome_osx_binary_name_filter(product_dir_path=''):
-  def chrome_osx_binary_name_filter(binary_path):
-    basename = os.path.basename(binary_path)
-    if is_hash_name(basename) and product_dir_path:
-      inode = os.stat(binary_path).st_ino
-      new_binary_path = find_inode_at_path(inode, product_dir_path)
-      if new_binary_path:
-        return new_binary_path
-    return binary_path
-  return chrome_osx_binary_name_filter
-
-
-def make_sysroot_filter(sysroot):
-  """Creates a binary name filter for a symbol tree of a remote system."""
-
-  return lambda binary_path: sysroot + binary_path
-
-
 # Construct a path to the .dSYM bundle for the given binary.
 # There are three possible cases for binary location in Chromium:
 # 1. The binary is a standalone executable or dynamic library in the product
@@ -149,15 +133,17 @@ def chrome_dsym_hints(binary):
       framework_positions.append(index)
   bundle_positions = app_positions + framework_positions
   bundle_positions.sort()
-  assert len(bundle_positions) <= 2, \
-      "The path contains more than two nested bundles: %s" % binary
+  assert len(bundle_positions) <= 2, (
+    "The path contains more than two nested bundles: %s" % binary
+  )
   if len(bundle_positions) == 0:
     # Case 1: this is a standalone executable or dylib.
     return []
-  assert (not (len(app_positions) == 1 and
-               len(framework_positions) == 1 and
-               app_positions[0] > framework_positions[0])), \
-      "The path contains an app bundle inside a framework: %s" % binary
+  assert not (
+    len(app_positions) == 1
+    and len(framework_positions) == 1
+    and app_positions[0] > framework_positions[0]
+  ), "The path contains an app bundle inside a framework: %s" % binary
   # Cases 2 and 3. The outermost bundle (which is the only bundle in the case 2)
   # is located in the product dir.
   outermost_bundle = bundle_positions[0]
@@ -180,19 +166,27 @@ class JSONTestRunSymbolizer(object):
     return '\n'.join(symbolized_lines)
 
   def symbolize(self, test_run):
-    original_snippet = base64.b64decode(test_run['output_snippet_base64'])
+    original_snippet = base64.b64decode(
+      test_run['output_snippet_base64']
+    ).decode('utf-8', 'replace')
+
+    # replace non-ascii character with '?'.
+    original_snippet = ''.join(i if i <= '~' else '?' for i in original_snippet)
+
     symbolized_snippet = self.symbolize_snippet(original_snippet)
     if symbolized_snippet == original_snippet:
       # No sanitizer reports in snippet.
       return
 
     test_run['original_output_snippet'] = test_run['output_snippet']
-    test_run['original_output_snippet_base64'] = \
-        test_run['output_snippet_base64']
+    test_run['original_output_snippet_base64'] = test_run[
+      'output_snippet_base64'
+    ]
 
-    test_run['output_snippet'] = symbolized_snippet.decode('utf-8', 'replace')
-    test_run['output_snippet_base64'] = \
-        base64.b64encode(symbolized_snippet)
+    test_run['output_snippet'] = symbolized_snippet
+    test_run['output_snippet_base64'] = base64.b64encode(
+      symbolized_snippet.encode('utf-8', 'replace')
+    ).decode()
     test_run['snippet_processed_by'] = 'asan_symbolize.py'
 
 
@@ -202,7 +196,7 @@ def symbolize_snippets_in_json(filename, symbolization_loop):
 
   test_run_symbolizer = JSONTestRunSymbolizer(symbolization_loop)
   for iteration_data in json_data['per_iteration_data']:
-    for test_name, test_runs in iteration_data.iteritems():
+    for test_name, test_runs in iteration_data.items():
       for test_run in test_runs:
         test_run_symbolizer.symbolize(test_run)
 
@@ -210,19 +204,71 @@ def symbolize_snippets_in_json(filename, symbolization_loop):
     json.dump(json_data, f, indent=3, sort_keys=True)
 
 
+class macOSBinaryNameFilterPlugin(asan_symbolize.AsanSymbolizerPlugIn):
+  def __init__(self):
+    self.product_dir_path = ''
+
+  def filter_binary_path(self, binary_path):
+    # Create a binary name filter that works around https://crbug.com/444835.
+    # When running tests on OSX swarming servers, ASan sometimes prints paths to
+    # files in cache (ending with SHA1 filenames) instead of paths to hardlinks
+    # to those files in the product dir.
+    # For a given |binary_path| macOSBinaryNameFilterPlugin returns one of the
+    # hardlinks to the same inode in |product_dir_path|.
+    basename = os.path.basename(binary_path)
+    if is_hash_name(basename) and self.product_dir_path:
+      inode = os.stat(binary_path).st_ino
+      new_binary_path = find_inode_at_path(inode, self.product_dir_path)
+      if new_binary_path:
+        return new_binary_path
+    return binary_path
+
+
+class CheckUTF8:
+  # This wraps stream and show warnings if stream gets invalid data as utf-8.
+  def __init__(self, stream):
+    self._stream = stream
+
+  def __iter__(self):
+    return self
+
+  def __next__(self):
+
+    l = self._stream.buffer.readline()
+
+    if not l:
+      raise StopIteration
+
+    try:
+      return l.decode()
+    except UnicodeDecodeError:
+      print(
+        "WARNING: asan_symbolize.py failed to decode %s (base64 encoded)"
+        % base64.b64encode(l).decode()
+      )
+      return ""
+
+
 def main():
   parser = argparse.ArgumentParser(description='Symbolize sanitizer reports.')
-  parser.add_argument('--test-summary-json-file',
-      help='Path to a JSON file produced by the test launcher. The script will '
-           'ignore stdandard input and instead symbolize the output stnippets '
-           'inside the JSON file. The result will be written back to the JSON '
-           'file.')
-  parser.add_argument('strip_path_prefix', nargs='*',
-      help='When printing source file names, the longest prefix ending in one '
-           'of these substrings will be stripped. E.g.: "Release/../../".')
-  parser.add_argument('--executable-path',
-      help='Path to program executable. Used on OSX swarming bots to locate '
-           'dSYM bundles for associated frameworks and bundles.')
+  parser.add_argument(
+    '--test-summary-json-file',
+    help='Path to a JSON file produced by the test launcher. The script will '
+    'ignore stdandard input and instead symbolize the output stnippets '
+    'inside the JSON file. The result will be written back to the JSON '
+    'file.',
+  )
+  parser.add_argument(
+    'strip_path_prefix',
+    nargs='*',
+    help='When printing source file names, the longest prefix ending in one '
+    'of these substrings will be stripped. E.g.: "Release/../../".',
+  )
+  parser.add_argument(
+    '--executable-path',
+    help='Path to program executable. Used on OSX swarming bots to locate '
+    'dSYM bundles for associated frameworks and bundles.',
+  )
   parser.add_argument('--sysroot', help='Root directory for symbol files')
   args = parser.parse_args()
 
@@ -233,22 +279,27 @@ def main():
   # Most source paths for Chromium binaries start with
   # /path/to/src/out/Release/../../
   asan_symbolize.fix_filename_patterns.append('Release/../../')
-  binary_name_filter = None
-  if args.sysroot:
-    binary_name_filter = make_sysroot_filter(args.sysroot)
-  elif platform.uname()[0] == 'Darwin':
-    binary_name_filter = make_chrome_osx_binary_name_filter(
-        chrome_product_dir_path(args.executable_path))
-  loop = asan_symbolize.SymbolizationLoop(
-      binary_name_filter=binary_name_filter,
-      dsym_hint_producer=chrome_dsym_hints)
 
-  if args.test_summary_json_file:
-    symbolize_snippets_in_json(args.test_summary_json_file, loop)
-  else:
-    # Process stdin.
-    asan_symbolize.logfile = sys.stdin
-    loop.process_logfile()
+  with asan_symbolize.AsanSymbolizerPlugInProxy() as plugin_proxy:
+    if args.sysroot:
+      sysroot_filter = asan_symbolize.SysRootFilterPlugIn()
+      sysroot_filter.sysroot_path = args.sysroot
+      plugin_proxy.add_plugin(sysroot_filter)
+    elif platform.uname()[0] == 'Darwin':
+      macos_filter = macOSBinaryNameFilterPlugin()
+      macos_filter.product_dir_path = args.executable_path
+      plugin_proxy.add_plugin(macos_filter)
+
+    loop = asan_symbolize.SymbolizationLoop(
+      plugin_proxy=plugin_proxy, dsym_hint_producer=chrome_dsym_hints
+    )
+
+    if args.test_summary_json_file:
+      symbolize_snippets_in_json(args.test_summary_json_file, loop)
+    else:
+      asan_symbolize.logfile = CheckUTF8(sys.stdin)
+      loop.process_logfile()
+
 
 if __name__ == '__main__':
   main()

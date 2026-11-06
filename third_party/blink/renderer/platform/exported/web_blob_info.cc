@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,43 +10,20 @@
 
 namespace blink {
 
-WebBlobInfo::WebBlobInfo(const WebString& uuid,
-                         const WebString& type,
-                         uint64_t size,
-                         CrossVariantMojoRemote<mojom::BlobInterfaceBase> blob)
-    : WebBlobInfo(BlobDataHandle::Create(
-          uuid,
-          type,
-          size,
-          mojo::PendingRemote<mojom::blink::Blob>(std::move(blob)))) {}
-
-WebBlobInfo::WebBlobInfo(const WebString& uuid,
-                         const WebString& file_name,
-                         const WebString& type,
-                         const absl::optional<base::Time>& last_modified,
-                         uint64_t size,
-                         CrossVariantMojoRemote<mojom::BlobInterfaceBase> blob)
-    : WebBlobInfo(BlobDataHandle::Create(
-                      uuid,
-                      type,
-                      size,
-                      mojo::PendingRemote<mojom::blink::Blob>(std::move(blob))),
-                  file_name,
-                  last_modified) {}
-
 // static
 WebBlobInfo WebBlobInfo::BlobForTesting(const WebString& uuid,
                                         const WebString& type,
                                         uint64_t size) {
-  return WebBlobInfo(uuid, type, size, mojo::NullRemote());
+  return WebBlobInfo(BlobDataHandle::CreateForTesting(uuid, type, size));
 }
 
 // static
 WebBlobInfo WebBlobInfo::FileForTesting(const WebString& uuid,
                                         const WebString& file_name,
                                         const WebString& type) {
-  return WebBlobInfo(uuid, file_name, type, absl::nullopt,
-                     std::numeric_limits<uint64_t>::max(), mojo::NullRemote());
+  return WebBlobInfo(BlobDataHandle::CreateForTesting(
+                         uuid, type, std::numeric_limits<uint64_t>::max()),
+                     file_name, std::nullopt);
 }
 
 WebBlobInfo::~WebBlobInfo() {
@@ -67,11 +44,14 @@ CrossVariantMojoRemote<mojom::BlobInterfaceBase> WebBlobInfo::CloneBlobRemote()
 }
 
 WebBlobInfo::WebBlobInfo(scoped_refptr<BlobDataHandle> handle)
-    : WebBlobInfo(handle, handle->GetType(), handle->size()) {}
+    : is_file_(false),
+      type_(handle->GetType()),
+      size_(handle->size()),
+      blob_handle_(std::move(handle)) {}
 
 WebBlobInfo::WebBlobInfo(scoped_refptr<BlobDataHandle> handle,
                          const WebString& file_name,
-                         const absl::optional<base::Time>& last_modified)
+                         const std::optional<base::Time>& last_modified)
     : WebBlobInfo(handle,
                   file_name,
                   handle->GetType(),
@@ -79,21 +59,11 @@ WebBlobInfo::WebBlobInfo(scoped_refptr<BlobDataHandle> handle,
                   handle->size()) {}
 
 WebBlobInfo::WebBlobInfo(scoped_refptr<BlobDataHandle> handle,
-                         const WebString& type,
-                         uint64_t size)
-    : is_file_(false),
-      uuid_(handle->Uuid()),
-      type_(type),
-      size_(size),
-      blob_handle_(std::move(handle)) {}
-
-WebBlobInfo::WebBlobInfo(scoped_refptr<BlobDataHandle> handle,
                          const WebString& file_name,
                          const WebString& type,
-                         const absl::optional<base::Time>& last_modified,
+                         const std::optional<base::Time>& last_modified,
                          uint64_t size)
     : is_file_(true),
-      uuid_(handle->Uuid()),
       type_(type),
       size_(size),
       blob_handle_(std::move(handle)),

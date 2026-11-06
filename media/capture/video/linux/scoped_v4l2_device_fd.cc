@@ -1,8 +1,10 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/capture/video/linux/scoped_v4l2_device_fd.h"
+
+#include "media/capture/video/linux/v4l2_capture_device.h"
 
 namespace media {
 

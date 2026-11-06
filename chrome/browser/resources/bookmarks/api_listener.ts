@@ -1,17 +1,17 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {assert} from 'chrome://resources/js/assert.m.js';
-import {addWebUIListener, removeWebUIListener} from 'chrome://resources/js/cr.m.js';
-import {Action} from 'chrome://resources/js/cr/ui/store.m.js';
+import {addWebUiListener, removeWebUiListener} from 'chrome://resources/js/cr.js';
+import type {Action} from 'chrome://resources/js/store.js';
 
-import {createBookmark, editBookmark, moveBookmark, refreshNodes, removeBookmark, reorderChildren, setCanEditBookmarks, setIncognitoAvailability} from './actions.js';
-import {BrowserProxy} from './browser_proxy.js';
-import {IncognitoAvailability} from './constants.js';
+import {createBookmark, editBookmark, moveBookmark, removeBookmark, reorderChildren, setCanEditBookmarks, setIncognitoAvailability} from './actions.js';
+import {BookmarksApiProxyImpl} from './bookmarks_api_proxy.js';
+import {BrowserProxyImpl} from './browser_proxy.js';
+import type {IncognitoAvailability} from './constants.js';
 import {Debouncer} from './debouncer.js';
 import {Store} from './store.js';
-import {normalizeNodes} from './util.js';
+import type {BookmarkNode} from './types.js';
 
 /**
  * @fileoverview Listener functions which translate events from the
@@ -21,7 +21,7 @@ import {normalizeNodes} from './util.js';
 let trackUpdates: boolean = false;
 let updatedItems: string[] = [];
 
-let debouncer: Debouncer;
+let debouncer: Debouncer|null = null;
 
 /**
  * Batches UI updates so that no changes will be made to UI until the next
@@ -29,7 +29,7 @@ let debouncer: Debouncer;
  * can be called in a tight loop by UI actions.
  */
 function batchUIUpdates() {
-  if (!debouncer) {
+  if (debouncer === null) {
     debouncer = new Debouncer(() => Store.getInstance().endBatchUpdate());
   }
 
@@ -68,7 +68,10 @@ function highlightUpdatedItemsImpl() {
 export function highlightUpdatedItems() {
   // Ensure that the items are highlighted after the current batch update (if
   // there is one) is completed.
-  assert(debouncer);
+  if (!debouncer) {
+    highlightUpdatedItemsImpl();
+    return;
+  }
   debouncer.promise.then(highlightUpdatedItemsImpl);
 }
 
@@ -76,55 +79,37 @@ function dispatch(action: Action) {
   Store.getInstance().dispatch(action);
 }
 
-function onBookmarkChanged(
-    id: string, changeInfo: chrome.bookmarks.ChangeInfo) {
-  dispatch(editBookmark(id, changeInfo));
+function onBookmarkChanged(id: string, node: BookmarkNode) {
+  dispatch(editBookmark(id, {title: node.title, url: node.url}));
 }
 
 function onBookmarkCreated(
-    id: string, treeNode: chrome.bookmarks.BookmarkTreeNode) {
+    parentId: string, index: number, node: BookmarkNode) {
   batchUIUpdates();
   if (trackUpdates) {
-    updatedItems.push(id);
+    updatedItems.push(node.id);
   }
-  dispatch(createBookmark(id, treeNode));
+  dispatch(createBookmark(parentId, index, node));
 }
 
-function onBookmarkRemoved(
-    id: string, removeInfo: chrome.bookmarks.RemoveInfo) {
+function onBookmarkRemoved(id: string, parentId: string, index: number) {
   batchUIUpdates();
   const nodes = Store.getInstance().data.nodes;
-  dispatch(removeBookmark(id, removeInfo.parentId, removeInfo.index, nodes));
+  dispatch(removeBookmark(id, parentId, index, nodes));
 }
 
-function onBookmarkMoved(id: string, moveInfo: chrome.bookmarks.MoveInfo) {
+function onBookmarkMoved(
+    id: string, oldParentId: string, oldIndex: number, newParentId: string,
+    newIndex: number) {
   batchUIUpdates();
   if (trackUpdates) {
     updatedItems.push(id);
   }
-  dispatch(moveBookmark(
-      id, moveInfo.parentId, moveInfo.index, moveInfo.oldParentId,
-      moveInfo.oldIndex));
+  dispatch(moveBookmark(id, newParentId, newIndex, oldParentId, oldIndex));
 }
 
-function onChildrenReordered(
-    id: string, reorderInfo: chrome.bookmarks.ReorderInfo) {
+function onChildrenReordered(id: string, reorderInfo: {childIds: string[]}) {
   dispatch(reorderChildren(id, reorderInfo.childIds));
-}
-
-/**
- * Pauses the Created handler during an import. The imported nodes will all be
- * loaded at once when the import is finished.
- */
-function onImportBegan() {
-  chrome.bookmarks.onCreated.removeListener(onBookmarkCreated);
-}
-
-function onImportEnded() {
-  chrome.bookmarks.getTree(function(results) {
-    dispatch(refreshNodes(normalizeNodes(results[0]!)));
-  });
-  chrome.bookmarks.onCreated.addListener(onBookmarkCreated);
 }
 
 function onIncognitoAvailabilityChanged(availability: IncognitoAvailability) {
@@ -140,38 +125,38 @@ let incognitoAvailabilityListener: {eventName: string, uid: number}|null = null;
 let canEditBookmarksListener: {eventName: string, uid: number}|null = null;
 
 export function init() {
-  chrome.bookmarks.onChanged.addListener(onBookmarkChanged);
-  chrome.bookmarks.onChildrenReordered.addListener(onChildrenReordered);
-  chrome.bookmarks.onCreated.addListener(onBookmarkCreated);
-  chrome.bookmarks.onMoved.addListener(onBookmarkMoved);
-  chrome.bookmarks.onRemoved.addListener(onBookmarkRemoved);
-  chrome.bookmarks.onImportBegan.addListener(onImportBegan);
-  chrome.bookmarks.onImportEnded.addListener(onImportEnded);
+  const apiProxy = BookmarksApiProxyImpl.getInstance();
+  apiProxy.onChanged.addListener(onBookmarkChanged);
+  apiProxy.onChildrenReordered.addListener(onChildrenReordered);
+  apiProxy.onCreated.addListener(onBookmarkCreated);
+  apiProxy.onMoved.addListener(onBookmarkMoved);
+  apiProxy.onRemoved.addListener(onBookmarkRemoved);
 
-  const browserProxy = BrowserProxy.getInstance();
+  const browserProxy = BrowserProxyImpl.getInstance();
   browserProxy.getIncognitoAvailability().then(onIncognitoAvailabilityChanged);
-  incognitoAvailabilityListener = addWebUIListener(
+  incognitoAvailabilityListener = addWebUiListener(
       'incognito-availability-changed', onIncognitoAvailabilityChanged);
 
   browserProxy.getCanEditBookmarks().then(onCanEditBookmarksChanged);
   canEditBookmarksListener =
-      addWebUIListener('can-edit-bookmarks-changed', onCanEditBookmarksChanged);
+      addWebUiListener('can-edit-bookmarks-changed', onCanEditBookmarksChanged);
 }
 
 export function destroy() {
-  chrome.bookmarks.onChanged.removeListener(onBookmarkChanged);
-  chrome.bookmarks.onChildrenReordered.removeListener(onChildrenReordered);
-  chrome.bookmarks.onCreated.removeListener(onBookmarkCreated);
-  chrome.bookmarks.onMoved.removeListener(onBookmarkMoved);
-  chrome.bookmarks.onRemoved.removeListener(onBookmarkRemoved);
-  chrome.bookmarks.onImportBegan.removeListener(onImportBegan);
-  chrome.bookmarks.onImportEnded.removeListener(onImportEnded);
+  const apiProxy = BookmarksApiProxyImpl.getInstance();
+  apiProxy.onChanged.removeListener(onBookmarkChanged);
+  apiProxy.onChildrenReordered.removeListener(onChildrenReordered);
+  apiProxy.onCreated.removeListener(onBookmarkCreated);
+  apiProxy.onMoved.removeListener(onBookmarkMoved);
+  apiProxy.onRemoved.removeListener(onBookmarkRemoved);
   if (incognitoAvailabilityListener) {
-    removeWebUIListener(/** @type {{eventName: string, uid: number}} */ (
-        incognitoAvailabilityListener));
+    removeWebUiListener(incognitoAvailabilityListener);
   }
   if (canEditBookmarksListener) {
-    removeWebUIListener(/** @type {{eventName: string, uid: number}} */ (
-        canEditBookmarksListener));
+    removeWebUiListener(canEditBookmarksListener);
   }
+}
+
+export function setDebouncerForTesting() {
+  debouncer = new Debouncer(() => {});
 }

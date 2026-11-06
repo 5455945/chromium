@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,7 +21,7 @@ void CheckFreeLibrary(HMODULE module) {
 }  // namespace
 
 ModuleList::~ModuleList() {
-  std::for_each(modules_.begin(), modules_.end(), &CheckFreeLibrary);
+  std::ranges::for_each(modules_, &CheckFreeLibrary);
 }
 
 std::unique_ptr<ModuleList> ModuleList::FromLoadedModuleSnapshot(
@@ -63,4 +63,4 @@ void ModuleList::GetModuleInfoSet(std::set<ModuleInfo>* module_info_set) {
   }
 }
 
-ModuleList::ModuleList() {}
+ModuleList::ModuleList() = default;

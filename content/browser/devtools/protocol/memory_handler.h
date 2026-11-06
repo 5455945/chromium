@@ -1,24 +1,32 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_BROWSER_DEVTOOLS_PROTOCOL_MEMORY_HANDLER_H_
 #define CONTENT_BROWSER_DEVTOOLS_PROTOCOL_MEMORY_HANDLER_H_
 
-#include "base/macros.h"
-#include "base/memory/weak_ptr.h"
+#include <optional>
+
+#include "base/memory/memory_pressure_listener_registry.h"
 #include "content/browser/devtools/protocol/devtools_domain_handler.h"
 #include "content/browser/devtools/protocol/memory.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "third_party/blink/public/mojom/leak_detector/leak_detector.mojom.h"
 
 namespace content {
+
+class RenderProcessHost;
+
 namespace protocol {
 
 class MemoryHandler : public DevToolsDomainHandler,
                       public Memory::Backend {
  public:
   MemoryHandler();
+
+  MemoryHandler(const MemoryHandler&) = delete;
+  MemoryHandler& operator=(const MemoryHandler&) = delete;
+
   ~MemoryHandler() override;
 
   void Wire(UberDispatcher* dispatcher) override;
@@ -31,17 +39,27 @@ class MemoryHandler : public DevToolsDomainHandler,
   Response SimulatePressureNotification(const std::string& level) override;
   void PrepareForLeakDetection(
       std::unique_ptr<PrepareForLeakDetectionCallback> callback) override;
+  void GetDOMCountersForLeakDetection(
+      std::unique_ptr<GetDOMCountersForLeakDetectionCallback> callback)
+      override;
 
  private:
+  void RequestLeakDetection(RenderProcessHost* process);
   void OnLeakDetectionComplete(blink::mojom::LeakDetectionResultPtr result);
   void OnLeakDetectorIsGone();
+  std::unique_ptr<protocol::Array<protocol::Memory::DOMCounter>> GetDOMCounters(
+      const blink::mojom::LeakDetectionResult& result);
 
   int process_host_id_;
   mojo::Remote<blink::mojom::LeakDetector> leak_detector_;
-  std::unique_ptr<PrepareForLeakDetectionCallback> leak_detection_callback_;
-  base::WeakPtrFactory<MemoryHandler> weak_factory_{this};
+  std::unique_ptr<PrepareForLeakDetectionCallback>
+      prepare_for_leak_detection_callback_;
+  std::unique_ptr<GetDOMCountersForLeakDetectionCallback>
+      get_dom_counters_for_leak_detection_callback_;
 
-  DISALLOW_COPY_AND_ASSIGN(MemoryHandler);
+  // Suppresses memory pressure notifications when engaged.
+  std::optional<base::MemoryPressureSuppressionToken>
+      memory_pressure_suppression_token_;
 };
 
 }  // namespace protocol

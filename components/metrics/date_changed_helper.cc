@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -45,8 +45,9 @@ bool HasDateChangedSinceLastCall(PrefService* prefs, const char* pref_name) {
   DCHECK(prefs);
   DCHECK(pref_name);
   base::Time now = base::Time::Now();
-  if (IsStoredDateToday(prefs, pref_name, now))
+  if (IsStoredDateToday(prefs, pref_name, now)) {
     return false;
+  }
   UpdateStoredDate(prefs, pref_name, now);
   return true;
 }

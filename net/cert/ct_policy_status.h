@@ -1,13 +1,13 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_CERT_CT_POLICY_STATUS_H_
 #define NET_CERT_CT_POLICY_STATUS_H_
 
-namespace net {
+#include "net/base/net_export.h"
 
-namespace ct {
+namespace net::ct {
 
 // Information about the connection's compliance with the CT policy. This value
 // is histogrammed, so do not re-order or change values, and add new values at
@@ -27,11 +27,37 @@ enum class CTPolicyCompliance {
   // Compliance details for the connection are not available, e.g. because a
   // resource was loaded from disk cache.
   CT_POLICY_COMPLIANCE_DETAILS_NOT_AVAILABLE = 4,
+  // TODO(crbug.com/41392053): remove CT_POLICY_COUNT, use kMaxValue instead.
   CT_POLICY_COUNT
 };
 
-}  // namespace ct
+NET_EXPORT const char* CTPolicyComplianceToString(CTPolicyCompliance status);
 
-}  // namespace net
+// Indicates whether a path met CT requirements.
+// This value is histogrammed, so do not re-order or change values, and add new
+// values at the end.
+// TODO(crbug.com/41392053): remove the comment about this being histogrammed
+// once we've finished the refactoring and removed the histogram.
+enum class CTRequirementsStatus {
+  // CT was not required for the path.
+  CT_NOT_REQUIRED,
+  // CT was required for the path and valid Certificate Transparency
+  // information was provided.
+  CT_REQUIREMENTS_MET,
+  // CT was required for the path but valid CT info was not provided.
+  CT_REQUIREMENTS_NOT_MET,
+  // CT requirements were not met, but the delegate allowed it anyway (eg, due
+  // to enterprise policy overriding the CT requirement).
+  CT_REQUIREMENT_OVERRIDDEN,
+  // CT requirements were not met, but the delegate allowed it anyway (eg, due
+  // to enterprise policy overriding the CT requirement), and the override
+  // applies to all SANs in the leaf certificate.
+  CT_REQUIREMENT_OVERRIDDEN_APPLIES_ACROSS_NAMES,
+  kMaxValue = CT_REQUIREMENT_OVERRIDDEN_APPLIES_ACROSS_NAMES
+};
+
+NET_EXPORT const char* CTRequirementStatusToString(CTRequirementsStatus status);
+
+}  // namespace net::ct
 
 #endif  // NET_CERT_CT_POLICY_STATUS_H_

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 
 #include "components/page_load_metrics/browser/metrics_navigation_throttle.h"
 #include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/navigation_throttle_registry.h"
 
 namespace page_load_metrics {
 
@@ -18,15 +19,11 @@ PageLoadMetricsTestContentBrowserClient::
 PageLoadMetricsTestContentBrowserClient::
     ~PageLoadMetricsTestContentBrowserClient() = default;
 
-std::vector<std::unique_ptr<content::NavigationThrottle>>
-PageLoadMetricsTestContentBrowserClient::CreateThrottlesForNavigation(
-    content::NavigationHandle* navigation_handle) {
-  std::vector<std::unique_ptr<content::NavigationThrottle>> throttles;
-  if (navigation_handle->IsInMainFrame()) {
-    throttles.push_back(page_load_metrics::MetricsNavigationThrottle::Create(
-        navigation_handle));
+void PageLoadMetricsTestContentBrowserClient::CreateThrottlesForNavigation(
+    content::NavigationThrottleRegistry& registry) {
+  if (registry.GetNavigationHandle().IsInMainFrame()) {
+    page_load_metrics::MetricsNavigationThrottle::CreateAndAdd(registry);
   }
-  return throttles;
 }
 
 }  // namespace page_load_metrics

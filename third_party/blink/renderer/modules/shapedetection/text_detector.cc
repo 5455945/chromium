@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,20 +6,44 @@
 
 #include <utility>
 
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_throw_dom_exception.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_detected_text.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_point_2d.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
-#include "third_party/blink/renderer/core/frame/local_frame.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/geometry/dom_rect.h"
-#include "third_party/blink/renderer/core/html/canvas/canvas_image_source.h"
 #include "third_party/blink/renderer/core/workers/worker_thread.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/modules/canvas/imagebitmap/image_bitmap_source_util.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
 TextDetector* TextDetector::Create(ExecutionContext* context) {
   return MakeGarbageCollected<TextDetector>(context);
+}
+
+ScriptPromise<TextDetector> TextDetector::create(
+    ScriptState* script_state,
+    ExceptionState& exception_state) {
+  if (!script_state->ContextIsValid()) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                      "The execution context is invalid.");
+    return ScriptPromise<TextDetector>();
+  }
+
+  ExecutionContext* context = ExecutionContext::From(script_state);
+  auto* detector = Create(context);
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<TextDetector>>(
+      script_state, exception_state.GetContext());
+  auto promise = resolver->Promise();
+
+  detector->create_request_ = resolver;
+  detector->text_service_->EnsureReady(
+      BindOnce(&TextDetector::OnEnsureReady, WrapPersistent(detector)));
+
+  return promise;
 }
 
 TextDetector::TextDetector(ExecutionContext* context) : text_service_(context) {
@@ -28,29 +52,60 @@ TextDetector::TextDetector(ExecutionContext* context) : text_service_(context) {
   context->GetBrowserInterfaceBroker().GetInterface(
       text_service_.BindNewPipeAndPassReceiver(task_runner));
 
-  text_service_.set_disconnect_handler(WTF::Bind(
+  text_service_.set_disconnect_handler(BindOnce(
       &TextDetector::OnTextServiceConnectionError, WrapWeakPersistent(this)));
 }
 
-ScriptPromise TextDetector::DoDetect(ScriptPromiseResolver* resolver,
-                                     SkBitmap bitmap) {
-  ScriptPromise promise = resolver->Promise();
+ScriptPromise<IDLSequence<DetectedText>> TextDetector::detect(
+    ScriptState* script_state,
+    const V8ImageBitmapSource* image_source,
+    ExceptionState& exception_state) {
+  std::optional<SkBitmap> bitmap = GetBitmapFromV8ImageBitmapSource(
+      script_state, image_source, exception_state);
+  if (!bitmap) {
+    return ScriptPromise<IDLSequence<DetectedText>>();
+  }
+
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLSequence<DetectedText>>>(
+          script_state, exception_state.GetContext());
+  auto promise = resolver->Promise();
+  if (bitmap->isNull()) {
+    resolver->Resolve(HeapVector<Member<DetectedText>>());
+    return promise;
+  }
   if (!text_service_.is_bound()) {
-    resolver->Reject(MakeGarbageCollected<DOMException>(
-        DOMExceptionCode::kNotSupportedError,
-        "Text detection service unavailable."));
+    resolver->RejectWithDOMException(DOMExceptionCode::kNotSupportedError,
+                                     "Text detection service unavailable.");
     return promise;
   }
   text_service_requests_.insert(resolver);
   text_service_->Detect(
-      std::move(bitmap),
-      WTF::Bind(&TextDetector::OnDetectText, WrapPersistent(this),
-                WrapPersistent(resolver)));
+      std::move(*bitmap),
+      BindOnce(&TextDetector::OnDetectText, WrapPersistent(this),
+               WrapPersistent(resolver)));
   return promise;
 }
 
+void TextDetector::OnEnsureReady(bool is_ready) {
+  CHECK(create_request_);
+  auto* resolver = create_request_.Release();
+  if (!IsInParallelAlgorithmRunnable(resolver->GetExecutionContext(),
+                                     resolver->GetScriptState())) {
+    return;
+  }
+  ScriptState::Scope scope(resolver->GetScriptState());
+  if (!is_ready) {
+    text_service_.reset();
+    resolver->RejectWithDOMException(DOMExceptionCode::kNotSupportedError,
+                                     "Failed to initialize TextDetector.");
+    return;
+  }
+  resolver->Resolve(this);
+}
+
 void TextDetector::OnDetectText(
-    ScriptPromiseResolver* resolver,
+    ScriptPromiseResolver<IDLSequence<DetectedText>>* resolver,
     Vector<shape_detection::mojom::blink::TextDetectionResultPtr>
         text_detection_results) {
   DCHECK(text_service_requests_.Contains(resolver));
@@ -68,9 +123,8 @@ void TextDetector::OnDetectText(
 
     DetectedText* detected_text = DetectedText::Create();
     detected_text->setRawValue(text->raw_value);
-    detected_text->setBoundingBox(DOMRectReadOnly::Create(
-        text->bounding_box.x(), text->bounding_box.y(),
-        text->bounding_box.width(), text->bounding_box.height()));
+    detected_text->setBoundingBox(
+        DOMRectReadOnly::FromRectF(text->bounding_box));
     detected_text->setCornerPoints(corner_points);
     results.push_back(detected_text);
   }
@@ -79,18 +133,35 @@ void TextDetector::OnDetectText(
 }
 
 void TextDetector::OnTextServiceConnectionError() {
+  if (auto* resolver = create_request_.Release()) {
+    if (IsInParallelAlgorithmRunnable(resolver->GetExecutionContext(),
+                                      resolver->GetScriptState())) {
+      resolver->RejectWithDOMException(DOMExceptionCode::kNotSupportedError,
+                                       "Text Detection not implemented.");
+    }
+  }
   for (const auto& request : text_service_requests_) {
-    request->Reject(
-        MakeGarbageCollected<DOMException>(DOMExceptionCode::kNotSupportedError,
-                                           "Text Detection not implemented."));
+    // Check if callback's resolver is still valid.
+    if (!IsInParallelAlgorithmRunnable(request->GetExecutionContext(),
+                                       request->GetScriptState())) {
+      continue;
+    }
+    // Enter into resolver's context to support creating DOMException.
+    ScriptState::Scope script_state_scope(request->GetScriptState());
+
+    request->Reject(V8ThrowDOMException::CreateOrDie(
+        request->GetScriptState()->GetIsolate(),
+        DOMExceptionCode::kNotSupportedError,
+        "Text Detection not implemented."));
   }
   text_service_requests_.clear();
   text_service_.reset();
 }
 
 void TextDetector::Trace(Visitor* visitor) const {
-  ShapeDetector::Trace(visitor);
+  ScriptWrappable::Trace(visitor);
   visitor->Trace(text_service_);
+  visitor->Trace(create_request_);
   visitor->Trace(text_service_requests_);
 }
 

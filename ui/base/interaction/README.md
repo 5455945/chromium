@@ -1,11 +1,14 @@
-# Elements and Interaction Sequences
+# Chromium Interaction Library
+
+Note: for **Interactive Testing**, see the
+[Interactive Test Documentation](/chrome/test/interaction/README.md)
 
 This folder contains primitives for locating named elements in different
 application windows as well as following specific sequences of user interactions
 with the UI. It is designed to support things like User Education Tutorials and
 interactive UI testing, and to work with multiple UI presentation frameworks.
 
-See the [Supported Frameworks](#Supported%20Frameworks) section for a list of
+See the [Supported Frameworks](#Supported-Frameworks) section for a list of
 currently-supported  frameworks.
 
 [TOC]
@@ -15,7 +18,7 @@ currently-supported  frameworks.
 Named elements are the fundamental building blocks of these systems. Each
 supported framework must define how a UI element can be assigned an
 [ElementIdentifier](/ui/base/interaction/element_identifier.h) which its
-[framework implementation](#Framework%20implementation) must be able to read.
+[framework implementation](#Supporting-additional-UI-frameworks) must be able to read.
 A UI element with a non-null `ElementIdentifier` assigned to it is known as a
 *named element*.
 
@@ -30,7 +33,7 @@ dialogs, bubbles, etc. - are represented by a single `ElementContext`. Like
 identifiers, contexts are opaque handles that are unique to each primary window.
 To get the context associated with a UI element or window, you will need to call
 a method specific to your framework; see
-[the relevant section](#2.%20Define%20how%20`ElementContext`%20works%20in%20your%20framework)
+[the relevant section](#2_Define-how-works-in-your-framework)
 below.
 
 `ElementIdentifier` and `ElementContext` both support the methods one might
@@ -75,7 +78,7 @@ To create a class member that is a unique identifier, use:
 // also make the identifier protected or private if you wanted.
 class MyClass {
  public:
-  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kClassMemberIdentifier);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(MyClass, kClassMemberIdentifier);
 };
 
 // This goes in the .cc file:
@@ -86,12 +89,14 @@ class method, there is a single-line declaration available, as shown in these
 examples:
 ``` cpp
 // This declares a module-local identifier. The anonymous namespace is optional
-// (though recommended) as kModuleLocalIdentifier will also be marked 'static'.
+// (though recommended) as kModuleLocalIdentifier will also be marked 'static'
+// and the identifier's name will contain the file and line.
 namespace {
 DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kModuleLocalIdentifier);
 }
 
-// This declares a method-local identifier.
+// This declares a method-local identifier. Again, the use of the local
+// identifier will cause the generated name to include file and line number.
 /* static */ ui::ElementIdentifier MyClass::GetIdentifier() {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kMethodLocalIdentifier);
   return kMethodLocalIdentifier;
@@ -148,6 +153,21 @@ if (element->IsA<views::TrackedElementViews>()) {
   // Do something with the view that was shown here.
 }
 ```
+
+Then, in your production code, assign an element identifier to the element you
+want to track:
+``` cpp
+// Note: matching DECLARE macro must go in header file.
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(MyView, kMyElementIdentifier);
+
+MyView::MyView() {
+  auto* const child_view = AddChildView(std::make_unique<ChildViewType>());
+
+  // This child view will now generate events with the given identifier.
+  // The context will be derived from the widget the parent view is added to.
+  child_view->SetProperty(views::kElementIdentifierKey, kMyElementIdentifier);
+}
+```
 ## Defining and following user interaction sequences
 
 The `InteractionSequence` class provides a way to describe a sequence of
@@ -157,14 +177,25 @@ the steps of using a new feature, or for simulating user input during
 interaction testing.
 
 Each sequence consists of a series of steps of the following types:
-* **Shown** - a UI element becomes visible to the user
-* **Activated** - the user clics on or otherwise interacts with the UI element
-* **Hidden** - a UI element stops being visible to the user
+* **Shown** - a UI element is or becomes visible to the user
+* **Activated** - the element is visible and user clicks on or otherwise interacts with the UI element
+* **Hidden** - a UI element is not visible or stops being visible to the user
 
-These are equivalent to the corresponding events provided by `ElementTracker`.
-All of the steps must be followed in order, or the sequence is _aborted_.
-Callbacks may be registered at the start and end of each step, and for when the
-sequence completes or aborts.
+These are respective to the corresponding events provided by
+`ElementTracker`, but it is an important distinction that these signify
+both events *and* the current element state.
+
+Once a step runs, interaction sequence will watch for the event/state of
+the next step to occur. For example, the next kShown/kHidden step starts if:
+
+1. the element is visible/not visible at start of step
+2. the element becomes visible/not visible during or after step transition
+
+If SetTransitionOnlyOnEvent() is set to true, (1) does not apply.
+
+All of the steps must be followed in order, or the sequence is
+_aborted_. Callbacks may be registered at the start and end of each
+step, and for when the sequence completes or aborts.
 
 Events not in the sequence (other UI elements appearing, focus changes, mouse
 hover, scroll) are ignored unless they result in a required UI element being
@@ -172,9 +203,9 @@ dismissed (such as if a dialog or menu is closed).
 
 To create an interaction sequence, use a `InteractionSequence::Builder`. To add
 steps to the builder, use an `InteractionSequence::StepBuilder`, or call a
-convenience method like `InitialElement()`. Here is an example that expects the
-user to interact with a feature entry point and then displays a help bubble on
-the resulting dialog:
+convenience method like `WithInitialElement()`. Here is an example that expects
+the user to interact with a feature entry point and then displays a help bubble
+on the resulting dialog:
 
 ``` cpp
 initial_element =
@@ -183,7 +214,7 @@ sequence_ = InteractionSequence::Builder()
     .SetCompletedCallback(base::BindOnce(
         &MyClass::OnSequenceComplete,
         base::Unretained(this)))
-    .AddStep(InteractionSequence::InitialElement(initial_element))
+    .AddStep(InteractionSequence::WithInitialElement(initial_element))
     .AddStep(InteractionSequence::StepBuilder()
         .SetElementID(initial_element->identifier())
         .SetType(StepType::kActivated)
@@ -215,16 +246,17 @@ whether the element must be visible at start or remain visible, default values
 will be assigned according to the type of step. All callbacks are optional.
 
 Instead of using `StepBuilder`, for the initial step you can call
-`InteractionSequence::InitialElement()`. This creates a default **shown** step
-for an element that is already visible; it expects the element to be visible
-when `Start()` is called or the sequence will abort. You may pass optional
-step start and end callbacks to `InitialElement()`; these are useful for
-displaying an initial prompt to the user (in the case of a tutorial).
+`InteractionSequence::WithInitialElement()`. This creates a default **shown**
+step for an element that is already visible; it expects the element to be
+visible when `Start()` is called or the sequence will abort. You may pass
+optional step start and end callbacks to `WithInitialElement()`; these are
+useful for displaying an initial prompt to the user (in the case of a
+tutorial).
 
 There is an additional method on `StepBuilder`, `SetContext()`, but it is only
 used by helper methods and for testing. You should instead use
-`Builder::SetContext()` or `InteractionSequence::InitialElement()`. There is
-currently no support for cross-context sequences and setting conflicting
+`Builder::SetContext()` or `InteractionSequence::WithInitialElement()`. There
+is currently no support for cross-context sequences and setting conflicting
 contexts in a sequence is an error and will crash if DCHECK is enabled.
 
 ### Step callbacks
@@ -238,7 +270,7 @@ Each step callback (start or end) has three parameters:
 
 The **element** can be used to retrieve the UI element in your framework by
 downcasting via `AsA()` - see
-[UI Elements and element events](#UI%20Elements%20and%20element%20events) above.
+[UI Elements and element events](#UI-Elements-and-element-events) above.
 
 Typically, when using a sequence to run a tutorial, this will be the code that
 shows or hides a tutorial dialog or prompt. When using the sequence for
@@ -250,8 +282,8 @@ input to the UI.
 In general, it will be pretty obvious how to construct your sequence, because
 you know the steps you need to perform in the UI to get where you want to go.
 However, keep the following in mind:
-* Try to start the sequence with a step generated by `InitialElement()`, keyed
-  to a UI element you know will be visible when the sequence starts.
+* Try to start the sequence with a step generated by `WithInitialElement()`,
+  keyed to a UI element you know will be visible when the sequence starts.
 * Do not assume the order in which elements will become visible when a surface
   is shown.
 * Do not assume that interacting with a button or menu item will bring up a
@@ -303,7 +335,7 @@ See [`ElementTrackerViews`](/ui/views/interaction/element_tracker_views.h) for
 an example implementation.
 
 When you are done, please add the folder containing the implementation code to
-the [Supported Frameworks](#Supported%20Frameworks) section below.
+the [Supported Frameworks](#Supported-Frameworks) section below.
 
 ### 1. Derive a class from `TrackedElement`
 
@@ -387,7 +419,7 @@ action, and therefore should be the action that results in
 How you proxy events from UI elements to calls to
 `ElementTrackerFrameworkDelegate` is entirely up to you. In Views we go through
 a mediator object -
-[`ElementTrackerViews`](ui/views/interaction/element_tracker_views.h) - which
+[`ElementTrackerViews`](/ui/views/interaction/element_tracker_views.h) - which
 first maps the `Button`, `MenuItem`, etc. to an `TrackedElementViews`
 before passing that object to the appropriate delegate method.
 

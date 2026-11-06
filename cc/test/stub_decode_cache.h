@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,10 +14,12 @@ class StubDecodeCache : public ImageDecodeCache {
   StubDecodeCache() = default;
   ~StubDecodeCache() override = default;
 
-  TaskResult GetTaskForImageAndRef(const DrawImage& image,
+  TaskResult GetTaskForImageAndRef(ClientId client_id,
+                                   const DrawImage& image,
                                    const TracingInfo& tracing_info) override;
-  TaskResult GetOutOfRasterDecodeTaskForImageAndRef(
-      const DrawImage& image) override;
+  TaskResult GetOutOfRasterDecodeTaskForImageAndRef(ClientId client_id,
+                                                    const DrawImage& image,
+                                                    bool speculative) override;
   void UnrefImage(const DrawImage& image) override {}
   DecodedDrawImage GetDecodedImageForDraw(const DrawImage& image) override;
   void DrawWithImageFinished(const DrawImage& image,

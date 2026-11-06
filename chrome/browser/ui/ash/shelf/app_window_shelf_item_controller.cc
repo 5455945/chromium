@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,17 +8,16 @@
 #include <iterator>
 #include <utility>
 
-#include "ash/public/cpp/desks_helper.h"
-#include "ash/public/cpp/new_window_delegate.h"
 #include "ash/public/cpp/shelf_types.h"
 #include "ash/public/cpp/window_properties.h"
-#include "chrome/browser/ash/crosapi/browser_util.h"
-#include "chrome/browser/ui/ash/ash_util.h"
+#include "ash/wm/window_animations.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/ui/ash/shelf/app_window_base.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chrome/browser/ui/ash/shelf/shelf_context_menu.h"
 #include "chrome/browser/ui/ash/shelf/shelf_controller_helper.h"
-#include "extensions/common/constants.h"
+#include "chromeos/ui/wm/desks/desks_helper.h"
+#include "components/app_constants/constants.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/wm/core/window_util.h"
 
@@ -42,42 +41,24 @@ ash::ShelfAction ShowAndActivateOrMinimize(ui::BaseWindow* app_window,
 ash::ShelfAction ActivateOrAdvanceToNextAppWindow(
     AppWindowBase* window_to_show,
     const AppWindowShelfItemController::WindowList& windows) {
-  DCHECK(window_to_show);
+  CHECK(window_to_show, base::NotFatalUntil::M162);
 
-  auto i = std::find(windows.begin(), windows.end(), window_to_show);
+  auto i = std::ranges::find(windows, window_to_show);
   if (i != windows.end()) {
-    if (++i != windows.end())
+    if (++i != windows.end()) {
       window_to_show = *i;
-    else
+    } else {
       window_to_show = windows.front();
+    }
   }
   if (window_to_show->IsActive()) {
     // Coming here, only a single window is active. For keyboard activations
     // the window gets animated.
-    ash_util::BounceWindow(window_to_show->GetNativeWindow());
+    ash::BounceWindow(window_to_show->GetNativeWindow());
   } else {
     return ShowAndActivateOrMinimize(window_to_show, windows.size() == 1);
   }
   return ash::SHELF_ACTION_NONE;
-}
-
-// Launches a new lacros window if there isn't already one on the active desk.
-bool MaybeLaunchNewWindow(const std::list<AppWindowBase*>& app_windows) {
-  if (!crosapi::browser_util::IsLacrosPrimaryBrowser())
-    return false;
-
-  // Do not launch a new window if there is already a lacros window on the
-  // current desk.
-  for (auto* window : app_windows) {
-    aura::Window* aura_window = window->GetNativeWindow();
-    if (crosapi::browser_util::IsLacrosWindow(aura_window) &&
-        ash::DesksHelper::Get()->BelongsToActiveDesk(aura_window)) {
-      return false;
-    }
-  }
-
-  ash::NewWindowDelegate::GetPrimary()->NewWindow(/*incognito=*/false);
-  return true;
 }
 
 }  // namespace
@@ -88,48 +69,61 @@ AppWindowShelfItemController::AppWindowShelfItemController(
 
 AppWindowShelfItemController::~AppWindowShelfItemController() {
   WindowList windows(windows_);
-  for (auto* window : hidden_windows_)
+  for (AppWindowBase* window : hidden_windows_) {
     windows.push_back(window);
+  }
 
-  for (auto* window : windows)
+  for (AppWindowBase* window : windows) {
     window->SetController(nullptr);
+  }
 }
 
 void AppWindowShelfItemController::AddWindow(AppWindowBase* app_window) {
   aura::Window* window = app_window->GetNativeWindow();
-  if (window && !observed_windows_.IsObservingSource(window))
+  if (window && !observed_windows_.IsObservingSource(window)) {
     observed_windows_.AddObservation(window);
-  if (window && window->GetProperty(ash::kHideInShelfKey))
+  }
+  if (window && window->GetProperty(ash::kHideInShelfKey)) {
     hidden_windows_.push_front(app_window);
-  else
+  } else {
     windows_.push_front(app_window);
+  }
   UpdateShelfItemIcon();
 }
 
 AppWindowShelfItemController::WindowList::iterator
 AppWindowShelfItemController::GetFromNativeWindow(aura::Window* window,
                                                   WindowList& list) {
-  return std::find_if(list.begin(), list.end(),
-                      [window](AppWindowBase* base_window) {
-                        return base_window->GetNativeWindow() == window;
-                      });
+  return std::ranges::find(list, window, &AppWindowBase::GetNativeWindow);
+}
+
+AppWindowBase* AppWindowShelfItemController::GetAppMenuWindow(
+    int64_t command_id) {
+  if (command_id < 0 ||
+      static_cast<size_t>(command_id) >= app_menu_windows_.size()) {
+    return nullptr;
+  }
+  return *std::next(app_menu_windows_.begin(), command_id);
 }
 
 void AppWindowShelfItemController::RemoveWindow(AppWindowBase* app_window) {
-  DCHECK(app_window);
+  CHECK(app_window, base::NotFatalUntil::M162);
   aura::Window* window = app_window->GetNativeWindow();
-  if (window && observed_windows_.IsObservingSource(window))
+  if (window && observed_windows_.IsObservingSource(window)) {
     observed_windows_.RemoveObservation(window);
-  if (app_window == last_active_window_)
+  }
+  if (app_window == last_active_window_) {
     last_active_window_ = nullptr;
-  auto iter = std::find(windows_.begin(), windows_.end(), app_window);
+  }
+  std::ranges::replace(app_menu_windows_, app_window, nullptr);
+  auto iter = std::ranges::find(windows_, app_window);
   if (iter != windows_.end()) {
     windows_.erase(iter);
   } else {
-    iter =
-        std::find(hidden_windows_.begin(), hidden_windows_.end(), app_window);
-    if (iter == hidden_windows_.end())
+    iter = std::ranges::find(hidden_windows_, app_window);
+    if (iter == hidden_windows_.end()) {
       return;
+    }
     hidden_windows_.erase(iter);
   }
   UpdateShelfItemIcon();
@@ -138,12 +132,14 @@ void AppWindowShelfItemController::RemoveWindow(AppWindowBase* app_window) {
 AppWindowBase* AppWindowShelfItemController::GetAppWindow(aura::Window* window,
                                                           bool include_hidden) {
   auto iter = GetFromNativeWindow(window, windows_);
-  if (iter != windows_.end())
+  if (iter != windows_.end()) {
     return *iter;
+  }
   if (include_hidden) {
     iter = GetFromNativeWindow(window, hidden_windows_);
-    if (iter != hidden_windows_.end())
+    if (iter != hidden_windows_.end()) {
       return *iter;
+    }
   }
   return nullptr;
 }
@@ -151,8 +147,9 @@ AppWindowBase* AppWindowShelfItemController::GetAppWindow(aura::Window* window,
 void AppWindowShelfItemController::SetActiveWindow(aura::Window* window) {
   // If the window is hidden, do not set it as last_active_window
   AppWindowBase* app_window = GetAppWindow(window, false);
-  if (app_window)
+  if (app_window) {
     last_active_window_ = app_window;
+  }
   UpdateShelfItemIcon();
 }
 
@@ -168,7 +165,7 @@ void AppWindowShelfItemController::ItemSelected(
     ItemSelectedCallback callback,
     const ItemFilterPredicate& filter_predicate) {
   WindowList filtered_windows;
-  for (auto* window : windows_) {
+  for (AppWindowBase* window : windows_) {
     if (filter_predicate.is_null() ||
         filter_predicate.Run(window->GetNativeWindow())) {
       filtered_windows.push_back(window);
@@ -180,30 +177,19 @@ void AppWindowShelfItemController::ItemSelected(
     return;
   }
 
-  // If this app is the lacros browser, create a new window if there isn't a
-  // lacros window on the current workspace. Otherwise, fallthrough to minimize
-  // or activate or advance.
-  // TODO(sammiequon): This feature should only be for lacros browser and not
-  // lacros PWAs. Revisit when there is a way to differentiate the two.
-  if (app_id() == extension_misc::kLacrosAppId &&
-      MaybeLaunchNewWindow(filtered_windows)) {
-    std::move(callback).Run(ash::SHELF_ACTION_NEW_WINDOW_CREATED, {});
-    return;
-  }
-
-  auto* last_active = last_active_window_;
+  auto* last_active = last_active_window_.get();
   if (last_active && !filter_predicate.is_null() &&
       !filter_predicate.Run(last_active->GetNativeWindow())) {
     last_active = nullptr;
   }
 
   AppWindowBase* window_to_show =
-      last_active ? last_active : filtered_windows.front();
+      last_active ? last_active : filtered_windows.front().get();
   // If the event was triggered by a keystroke, we try to advance to the next
   // item if the window we are trying to activate is already active.
   ash::ShelfAction action = ash::SHELF_ACTION_NONE;
   if (filtered_windows.size() >= 1 && window_to_show->IsActive() && event &&
-      event->type() == ui::ET_KEY_RELEASED) {
+      event->type() == ui::EventType::kKeyReleased) {
     action = ActivateOrAdvanceToNextAppWindow(window_to_show, filtered_windows);
   } else if (filtered_windows.size() <= 1 || source != ash::LAUNCH_FROM_SHELF) {
     action = ShowAndActivateOrMinimize(
@@ -223,16 +209,18 @@ ash::ShelfItemDelegate::AppMenuItems
 AppWindowShelfItemController::GetAppMenuItems(
     int event_flags,
     const ItemFilterPredicate& filter_predicate) {
+  CacheAppMenuWindows();
   AppMenuItems items;
   std::u16string app_title = ShelfControllerHelper::GetAppTitle(
       ChromeShelfController::instance()->profile(), app_id());
   int command_id = -1;
-  for (const auto* it : windows()) {
+  for (const AppWindowBase* it : windows()) {
     ++command_id;
     aura::Window* window = it->GetNativeWindow();
     // Can window be null?
-    if (!filter_predicate.is_null() && !filter_predicate.Run(window))
+    if (!filter_predicate.is_null() && !filter_predicate.Run(window)) {
       continue;
+    }
 
     auto title = (window && !window->GetTitle().empty()) ? window->GetTitle()
                                                          : app_title;
@@ -245,12 +233,22 @@ AppWindowShelfItemController::GetAppMenuItems(
         // Fall back to the larger app icon.
         icon = window->GetProperty(aura::client::kAppIconKey);
       }
-      if (icon && !icon->isNull())
+      if (icon && !icon->isNull()) {
         image = *icon;
+      }
     }
     items.push_back({command_id, title, image});
   }
   return items;
+}
+
+base::expected<aura::Window*, std::u16string>
+AppWindowShelfItemController::GetAppMenuItemWindow(int command_id) {
+  AppWindowBase* window = GetAppMenuWindow(command_id);
+  if (!window || !window->GetNativeWindow()) {
+    return base::unexpected(std::u16string());
+  }
+  return window->GetNativeWindow();
 }
 
 void AppWindowShelfItemController::GetContextMenu(
@@ -263,18 +261,13 @@ void AppWindowShelfItemController::GetContextMenu(
 }
 
 void AppWindowShelfItemController::Close() {
-  for (auto* window : windows_)
+  for (AppWindowBase* window : windows_) {
     window->Close();
-  for (auto* window : hidden_windows_)
+  }
+  for (AppWindowBase* window : hidden_windows_) {
     window->Close();
-}
-
-void AppWindowShelfItemController::ActivateIndexedApp(size_t index) {
-  if (index >= windows_.size())
-    return;
-  auto it = windows_.begin();
-  std::advance(it, index);
-  ShowAndActivateOrMinimize(*it, /*allow_minimize=*/windows_.size() == 1);
+  }
+  ClearAppMenu();
 }
 
 void AppWindowShelfItemController::OnWindowPropertyChanged(aura::Window* window,
@@ -298,11 +291,21 @@ void AppWindowShelfItemController::OnWindowPropertyChanged(aura::Window* window,
 }
 
 AppWindowBase* AppWindowShelfItemController::GetLastActiveWindow() {
-  if (last_active_window_)
+  if (last_active_window_) {
     return last_active_window_;
-  if (windows_.empty())
+  }
+  if (windows_.empty()) {
     return nullptr;
+  }
   return windows_.front();
+}
+
+void AppWindowShelfItemController::CacheAppMenuWindows() {
+  app_menu_windows_ = windows_;
+}
+
+void AppWindowShelfItemController::ClearAppMenu() {
+  app_menu_windows_.clear();
 }
 
 void AppWindowShelfItemController::UpdateShelfItemIcon() {
@@ -316,7 +319,8 @@ void AppWindowShelfItemController::UpdateShelfItemIcon() {
         aura::client::kAppIconKey);
   }
   // TODO(khmel): Remove using image_set_by_controller
-  if (app_icon && !app_icon->isNull()) {
+  if (app_icon && !app_icon->isNull() &&
+      ChromeShelfController::instance()->GetItem(shelf_id())) {
     set_image_set_by_controller(true);
     ChromeShelfController::instance()->SetItemImage(shelf_id(), *app_icon);
   } else if (image_set_by_controller()) {
@@ -349,8 +353,10 @@ void AppWindowShelfItemController::ExecuteCommand(bool from_context_menu,
                                                   int64_t command_id,
                                                   int32_t event_flags,
                                                   int64_t display_id) {
-  if (from_context_menu && ExecuteContextMenuCommand(command_id, event_flags))
-    return;
+  CHECK(!from_context_menu, base::NotFatalUntil::M162);
 
-  ActivateIndexedApp(command_id);
+  if (AppWindowBase* window = GetAppMenuWindow(command_id)) {
+    ShowAndActivateOrMinimize(window, /*allow_minimize=*/windows_.size() == 1);
+  }
+  ClearAppMenu();
 }

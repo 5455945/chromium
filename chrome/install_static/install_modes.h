@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -28,40 +28,30 @@
 #ifndef CHROME_INSTALL_STATIC_INSTALL_MODES_H_
 #define CHROME_INSTALL_STATIC_INSTALL_MODES_H_
 
+#include <stdlib.h>
+
 #include <string>
 
 #include "build/branding_buildflags.h"
-#include "chrome/install_static/install_constants.h"
 
 // Include the brand-specific values. Each of these must define:
+// - kCompanyPathName, kProductPathName and kSafeBrowsingName constants.
 // - enum InstallConstantIndex: named indices of the brand's kInstallModes
 //   array.
 // - NUM_INSTALL_MODES: the total number of modes (i.e., the number of items in
 //   kInstallModes.
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
 #include "chrome/install_static/google_chrome_install_modes.h"
+#elif BUILDFLAG(GOOGLE_CHROME_FOR_TESTING_BRANDING)
+#include "chrome/install_static/google_chrome_for_testing_install_modes.h"
 #else
 #include "chrome/install_static/chromium_install_modes.h"
 #endif
 
 namespace install_static {
 
-// The brand-specific company name to be included as a component of the install
-// and user data directory paths. May be empty if no such dir is to be used.
-extern const wchar_t kCompanyPathName[];
-
-// The brand-specific product name to be included as a component of the install
-// and user data directory paths.
-extern const wchar_t kProductPathName[];
-
 // The length, in characters, of kProductPathName not including the terminator.
-extern const size_t kProductPathNameLength;
-
-// The brand-specific safe browsing client name.
-extern const char kSafeBrowsingName[];
-
-// A brand's collection of install modes.
-extern const InstallConstants kInstallModes[];
+inline constexpr size_t kProductPathNameLength = _countof(kProductPathName) - 1;
 
 // The following convenience functions behave conditionally on whether or not
 // the brand uses Chrome's integration with Google Update. For brands that do
@@ -73,6 +63,9 @@ extern const InstallConstants kInstallModes[];
 std::wstring GetClientsKeyPath(const wchar_t* app_guid);
 std::wstring GetClientStateKeyPath(const wchar_t* app_guid);
 std::wstring GetClientStateMediumKeyPath(const wchar_t* app_guid);
+
+static_assert(kInstallModes.size() == NUM_INSTALL_MODES,
+              "Imbalance between kInstallModes and InstallConstantIndex");
 
 }  // namespace install_static
 

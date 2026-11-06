@@ -1,19 +1,14 @@
 #!/usr/bin/env python3
-# Copyright (c) 2012 The Chromium Authors. All rights reserved.
+# Copyright 2012 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-'''Class for reading GRD files into memory, without processing them.
-'''
-
-from __future__ import print_function
+'''Class for reading GRD files into memory, without processing them.'''
 
 import os.path
 import sys
 import xml.sax
 import xml.sax.handler
-
-import six
 
 from grit import exception
 from grit import util
@@ -23,12 +18,23 @@ from grit.node import misc
 
 class StopParsingException(Exception):
   '''An exception used to stop parsing.'''
+
   pass
 
 
 class GrdContentHandler(xml.sax.handler.ContentHandler):
-  def __init__(self, stop_after, debug, dir, defines, tags_to_ignore,
-               target_platform, source):
+  def __init__(
+    self,
+    stop_after,
+    debug,
+    dir,
+    defines,
+    tags_to_ignore,
+    target_platform,
+    source,
+    skip_validation_checks,
+    translate_genders,
+  ):
     # Invariant of data:
     # 'root' is the root of the parse tree being created, or None if we haven't
     # parsed out any elements.
@@ -45,6 +51,8 @@ class GrdContentHandler(xml.sax.handler.ContentHandler):
     self.ignore_depth = 0
     self.target_platform = target_platform
     self.source = source
+    self.skip_validation_checks = skip_validation_checks
+    self.translate_genders = translate_genders
 
   def startElement(self, name, attrs):
     if self.ignore_depth or name in self.tags_to_ignore:
@@ -55,12 +63,15 @@ class GrdContentHandler(xml.sax.handler.ContentHandler):
 
     if self.debug:
       attr_list = ' '.join('%s="%s"' % kv for kv in attrs.items())
-      print("Starting parsing of element %s with attributes %r" %
-            (name, attr_list or '(none)'))
+      print(
+        "Starting parsing of element %s with attributes %r"
+        % (name, attr_list or '(none)')
+      )
 
     typeattr = attrs.get('type')
     node = mapping.ElementToClass(name, typeattr)()
     node.source = self.source
+    node.SetTranslateGenders(self.translate_genders)
 
     if self.stack:
       self.stack[-1].AddChild(node)
@@ -74,6 +85,7 @@ class GrdContentHandler(xml.sax.handler.ContentHandler):
       node.StartParsing(name, None)
       if self.defines:
         node.SetDefines(self.defines)
+      node.skip_validation_checks = self.skip_validation_checks
     self.stack.append(node)
 
     for attr, attrval in attrs.items():
@@ -131,7 +143,8 @@ class GrdPartContentHandler(xml.sax.handler.ContentHandler):
         raise exception.MissingElement("root tag must be <grit-part>")
       if attrs:
         raise exception.UnexpectedAttribute(
-            "<grit-part> tag must not have attributes")
+          "<grit-part> tag must not have attributes"
+        )
     self.depth += 1
 
   def endElement(self, name):
@@ -146,9 +159,19 @@ class GrdPartContentHandler(xml.sax.handler.ContentHandler):
     self.parent.ignorableWhitespace(whitespace)
 
 
-def Parse(filename_or_stream, dir=None, stop_after=None, first_ids_file=None,
-          debug=False, defines=None, tags_to_ignore=None, target_platform=None,
-          predetermined_ids_file=None):
+def Parse(
+  filename_or_stream,
+  dir=None,
+  stop_after=None,
+  first_ids_file=None,
+  debug=False,
+  defines=None,
+  tags_to_ignore=None,
+  target_platform=None,
+  predetermined_ids_file=None,
+  skip_validation_checks=False,
+  translate_genders=False,
+):
   '''Parses a GRD file into a tree of nodes (from grit.node).
 
   If filename_or_stream is a stream, 'dir' should point to the directory
@@ -180,6 +203,11 @@ def Parse(filename_or_stream, dir=None, stop_after=None, first_ids_file=None,
     predetermined_ids_file: File path to a file containing a pre-determined
         mapping from resource names to resource ids which will be used to assign
         resource ids to those resources.
+    skip_validation_checks: Whether to skip any validation after successfull
+        parsing, for example uniqueness of IDs, or that all variables
+        encountered in <if expr> statements are defined.
+    translate_genders: Whether to translate each language into up to 4 gendered
+        files.
 
   Return:
     Subclass of grit.node.base.Node
@@ -188,16 +216,24 @@ def Parse(filename_or_stream, dir=None, stop_after=None, first_ids_file=None,
     grit.exception.Parsing
   '''
 
-  if isinstance(filename_or_stream, six.string_types):
+  if isinstance(filename_or_stream, str):
     source = filename_or_stream
     if dir is None:
       dir = util.dirname(filename_or_stream)
   else:
     source = None
 
-  handler = GrdContentHandler(stop_after=stop_after, debug=debug, dir=dir,
-                              defines=defines, tags_to_ignore=tags_to_ignore,
-                              target_platform=target_platform, source=source)
+  handler = GrdContentHandler(
+    stop_after=stop_after,
+    debug=debug,
+    dir=dir,
+    defines=defines,
+    tags_to_ignore=tags_to_ignore,
+    target_platform=target_platform,
+    source=source,
+    skip_validation_checks=skip_validation_checks,
+    translate_genders=translate_genders,
+  )
   try:
     xml.sax.parse(filename_or_stream, handler)
   except StopParsingException:
@@ -222,8 +258,10 @@ def Parse(filename_or_stream, dir=None, stop_after=None, first_ids_file=None,
       # Make the path to the first_ids_file relative to the grd file,
       # unless it begins with GRIT_DIR.
       GRIT_DIR_PREFIX = 'GRIT_DIR'
-      if not (first_ids_file.startswith(GRIT_DIR_PREFIX)
-          and first_ids_file[len(GRIT_DIR_PREFIX)] in ['/', '\\']):
+      if not (
+        first_ids_file.startswith(GRIT_DIR_PREFIX)
+        and first_ids_file[len(GRIT_DIR_PREFIX)] in ['/', '\\']
+      ):
         rel_dir = os.path.relpath(os.getcwd(), dir)
         first_ids_file = util.normpath(os.path.join(rel_dir, first_ids_file))
       handler.root.attrs['first_ids_file'] = first_ids_file
@@ -235,4 +273,4 @@ def Parse(filename_or_stream, dir=None, stop_after=None, first_ids_file=None,
 
 if __name__ == '__main__':
   util.ChangeStdoutEncoding()
-  print(six.text_type(Parse(sys.argv[1])))
+  print(str(Parse(sys.argv[1])))

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,10 @@
 
 #include <type_traits>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/time/time.h"
+
+@class UIWindow;
 
 namespace web {
 
@@ -19,22 +21,29 @@ class BrowserState;
 enum class ClearBrowsingDataMask {
   kRemoveNothing = 0,
 
-  kRemoveAppCache = 1 << 0,
   kRemoveCookies = 1 << 1,
   kRemoveIndexedDB = 1 << 2,
   kRemoveLocalStorage = 1 << 3,
   kRemoveWebSQL = 1 << 4,
   kRemoveCacheStorage = 1 << 5,
   kRemoveVisitedLinks = 1 << 6,
-
+  kRemoveOriginPrivateFileSystem = 1 << 7,
+  kRemoveServiceWorkers = 1 << 8,
 };
 
-// Clears the browsing data store in the Web layer. |modified_since| is the data
-// since which all data is removed. |closure| is called when the browsing data
+// Clears the browsing data store in the Web layer. `modified_since` is the data
+// since which all data is removed. `closure` is called when the browsing data
 // have been cleared.
-// TODO(crbug.com/906199): Remove closure once WebStateObserver callback is
+//
+// `window` is used to insert the WKWebView in the view hierarchy to ensure the
+// out-of-process process used by the WKWebView is not suspended (the process
+// appear to be sometimes suspended when the WKWebView is not part of the view
+// hierarchy according to the unit tests).
+//
+// TODO(crbug.com/40602822): Remove closure once WebStateObserver callback is
 // implemented.
-void ClearBrowsingData(BrowserState* browser_state,
+void ClearBrowsingData(UIWindow* window,
+                       BrowserState* browser_state,
                        ClearBrowsingDataMask types,
                        base::Time modified_since,
                        base::OnceClosure closure);
@@ -68,7 +77,7 @@ inline ClearBrowsingDataMask& operator&=(ClearBrowsingDataMask& lhs,
   return lhs;
 }
 
-// Returns whether the |flag| is set in |mask|.
+// Returns whether the `flag` is set in `mask`.
 constexpr bool IsRemoveDataMaskSet(ClearBrowsingDataMask mask,
                                    ClearBrowsingDataMask flag) {
   return (mask & flag) == flag;

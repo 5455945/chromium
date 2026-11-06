@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -37,6 +37,15 @@ void VideoCaptureBufferTracker::RemoveConsumerHolds(int count) {
 bool VideoCaptureBufferTracker::IsSameGpuMemoryBuffer(
     const gfx::GpuMemoryBufferHandle& handle) const {
   return false;
+}
+
+media::mojom::VideoBufferHandlePtr
+VideoCaptureBufferTracker::GetVideoBufferHandle() {
+  if (GetBufferType() == VideoCaptureBufferType::kGpuMemoryBuffer) {
+    return media::mojom::VideoBufferHandle::NewGpuMemoryBufferHandle(
+        GetGpuMemoryBufferHandle());
+  }
+  return nullptr;
 }
 
 void VideoCaptureBufferTracker::OnHeldByConsumersChanged(

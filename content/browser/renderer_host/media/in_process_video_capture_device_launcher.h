@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,14 +8,15 @@
 #include <memory>
 #include <string>
 
-#include "base/single_thread_task_runner.h"
+#include "base/memory/raw_ptr.h"
+#include "base/task/single_thread_task_runner.h"
+#include "content/browser/media/capture/pip_screen_capture_coordinator_proxy.h"
 #include "content/browser/renderer_host/media/video_capture_controller.h"
 #include "content/browser/renderer_host/media/video_capture_provider.h"
 #include "content/public/browser/video_capture_device_launcher.h"
 #include "media/capture/video/video_capture_device.h"
 #include "media/capture/video/video_capture_device_client.h"
 #include "media/capture/video/video_capture_device_descriptor.h"
-#include "media/capture/video/video_capture_system.h"
 #include "third_party/blink/public/common/mediastream/media_stream_request.h"
 
 namespace media {
@@ -25,6 +26,7 @@ class FakeVideoCaptureDeviceFactory;
 namespace content {
 
 struct DesktopMediaID;
+class NativeScreenCapturePicker;
 
 // Implementation of BuildableVideoCaptureDevice that creates capture devices
 // in the same process as it is being operated on, which must be the Browser
@@ -34,7 +36,7 @@ class InProcessVideoCaptureDeviceLauncher : public VideoCaptureDeviceLauncher {
  public:
   InProcessVideoCaptureDeviceLauncher(
       scoped_refptr<base::SingleThreadTaskRunner> device_task_runner,
-      media::VideoCaptureSystem* video_capture_system);
+      NativeScreenCapturePicker* picker);
   ~InProcessVideoCaptureDeviceLauncher() override;
 
   void LaunchDeviceAsync(const std::string& device_id,
@@ -46,6 +48,11 @@ class InProcessVideoCaptureDeviceLauncher : public VideoCaptureDeviceLauncher {
                          base::OnceClosure done_cb) override;
 
   void AbortLaunch() override;
+
+  // Asks the launched screen, window, or tab capture device to deliver its
+  // frames in shared memory instead of GPU buffers. Must be called before
+  // LaunchDeviceAsync().
+  void SetPreferSharedMemoryBuffers();
 
  private:
   using ReceiveDeviceCallback = base::OnceCallback<void(
@@ -67,46 +74,57 @@ class InProcessVideoCaptureDeviceLauncher : public VideoCaptureDeviceLauncher {
                        base::OnceClosure done_cb,
                        std::unique_ptr<media::VideoCaptureDevice> device);
 
-  void DoStartDeviceCaptureOnDeviceThread(
+  static void DoStartTabCaptureOnDeviceThread(
       const std::string& device_id,
       const media::VideoCaptureParams& params,
-      std::unique_ptr<media::VideoCaptureDeviceClient> client,
-      ReceiveDeviceCallback result_callback);
-
-  void DoStartTabCaptureOnDeviceThread(
-      const std::string& device_id,
-      const media::VideoCaptureParams& params,
+      bool prefer_shared_memory_buffers,
       std::unique_ptr<media::VideoFrameReceiver> receiver,
       ReceiveDeviceCallback result_callback);
 
-  void DoStartVizFrameSinkWindowCaptureOnDeviceThread(
+#if defined(USE_AURA) || BUILDFLAG(IS_MAC)
+  static void DoStartVizFrameSinkWindowCaptureOnDeviceThread(
       const DesktopMediaID& device_id,
       const media::VideoCaptureParams& params,
+      bool prefer_shared_memory_buffers,
       std::unique_ptr<media::VideoFrameReceiver> receiver,
       ReceiveDeviceCallback result_callback);
+#endif  // defined(USE_AURA) || BUILDFLAG(IS_MAC)
 
-  void DoStartDesktopCaptureOnDeviceThread(
+  static void DoStartDesktopCaptureOnDeviceThread(
+      NativeScreenCapturePicker* picker,
       const DesktopMediaID& desktop_id,
       const media::VideoCaptureParams& params,
       std::unique_ptr<media::VideoCaptureDeviceClient> client,
       ReceiveDeviceCallback result_callback);
 
-  void DoStartFakeDisplayCaptureOnDeviceThread(
+  static void OnPipScreenCaptureCoordinatorProxyCreated(
+      NativeScreenCapturePicker* picker,
+      const DesktopMediaID& desktop_id,
+      const media::VideoCaptureParams& params,
+      std::unique_ptr<media::VideoCaptureDeviceClient> device_client,
+      ReceiveDeviceCallback result_callback,
+      std::unique_ptr<PipScreenCaptureCoordinatorProxy>
+          pip_screen_capture_coordinator_proxy);
+
+  static void DoStartFakeDisplayCaptureOnDeviceThread(
       const DesktopMediaID& desktop_id,
       const media::VideoCaptureParams& params,
       std::unique_ptr<media::VideoCaptureDeviceClient> client,
       ReceiveDeviceCallback result_callback);
 
-  void OnFakeDevicesEnumerated(
+  static void OnFakeDevicesEnumerated(
+      std::unique_ptr<media::FakeVideoCaptureDeviceFactory> fake_device_factory,
       const media::VideoCaptureParams& params,
       std::unique_ptr<media::VideoCaptureDeviceClient> device_client,
       ReceiveDeviceCallback result_callback,
       std::vector<media::VideoCaptureDeviceInfo> devices_info);
 
   const scoped_refptr<base::SingleThreadTaskRunner> device_task_runner_;
-  media::VideoCaptureSystem* const video_capture_system_;
   State state_;
-  std::unique_ptr<media::FakeVideoCaptureDeviceFactory> fake_device_factory_;
+  // See SetPreferSharedMemoryBuffers().
+  bool prefer_shared_memory_buffers_ = false;
+  raw_ptr<NativeScreenCapturePicker> native_screen_capture_picker_;
+  base::WeakPtrFactory<InProcessVideoCaptureDeviceLauncher> weak_factory_{this};
 };
 
 }  // namespace content

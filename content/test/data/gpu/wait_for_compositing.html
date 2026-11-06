@@ -1,11 +1,4 @@
 <!DOCTYPE HTML>
-
-<!-- READ BEFORE UPDATING:
-If this test is updated make sure to increment the "revision" value of the
-associated test in content/test/gpu/page_sets/pixel_tests.py. This will ensure
-that the baseline images are regenerated on the next run.
--->
-
 <html>
 <head>
 <meta name="viewport" content="initial-scale=1">
@@ -16,21 +9,32 @@ that the baseline images are regenerated on the next run.
 }
 </style>
 <script>
-var g_swaps_before_success = 5
+var g_swaps_before_success = 7;
+
+function scheduleNextFrame() {
+  document.body.style.backgroundColor =
+      (g_swaps_before_success % 2 === 0) ? 'blue' : 'green';
+  if (window.chrome && chrome.gpuBenchmarking &&
+      chrome.gpuBenchmarking.addSwapCompletionEventListener) {
+    chrome.gpuBenchmarking.addSwapCompletionEventListener(
+        waitForSwapsToComplete);
+  } else {
+    window.requestAnimationFrame(waitForSwapsToComplete);
+  }
+}
 
 function waitForSwapsToComplete() {
   g_swaps_before_success--;
   if (g_swaps_before_success > 0) {
-    window.requestAnimationFrame(waitForSwapsToComplete);
+    window.requestAnimationFrame(scheduleNextFrame);
   } else {
     domAutomationController.send("SUCCESS");
   }
 }
 
 function main() {
-  window.requestAnimationFrame(waitForSwapsToComplete);
+  window.requestAnimationFrame(scheduleNextFrame);
 }
-
 </script>
 </head>
 <body onload="main()">

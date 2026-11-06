@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,154 +8,276 @@
 #include <vector>
 
 #include "base/check.h"
+#include "base/command_line.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/i18n/language_tag.h"
+#include "base/i18n/tag_converters.h"
 #include "base/notreached.h"
 #include "base/path_service.h"
 #include "base/strings/string_split.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/language/accept_languages_service_factory.h"
 #include "chrome/browser/language/language_model_manager_factory.h"
 #include "chrome/browser/language/url_language_histogram_factory.h"
+#include "chrome/browser/language_detection/language_detection_model_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_key.h"
-#include "chrome/browser/translate/translate_accept_languages_factory.h"
-#include "chrome/browser/translate/translate_model_service_factory.h"
 #include "chrome/browser/translate/translate_ranker_factory.h"
 #include "chrome/browser/translate/translate_service.h"
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/read_anything/read_anything_controller.h"
+#include "chrome/browser/ui/read_anything/read_anything_entry_point_controller.h"
+#include "chrome/browser/ui/read_anything/read_anything_lifecycle_observer.h"
 #include "chrome/browser/ui/translate/translate_bubble_factory.h"
+#include "components/tabs/public/tab_interface.h"
+#include "content/public/common/content_switches.h"
+#endif
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/theme_resources.h"
-#include "components/autofill_assistant/browser/public/runtime_manager.h"
 #include "components/infobars/content/content_infobar_manager.h"
+#include "components/language/core/browser/accept_languages_service.h"
 #include "components/language/core/browser/language_model_manager.h"
 #include "components/language/core/browser/pref_names.h"
+#include "components/language_detection/content/browser/content_language_detection_driver.h"
+#include "components/language_detection/core/browser/language_detection_model_service.h"
 #include "components/prefs/pref_service.h"
-#include "components/translate/content/browser/translate_model_service.h"
+#include "components/translate/content/browser/content_translate_driver.h"
 #include "components/translate/core/browser/language_state.h"
 #include "components/translate/core/browser/page_translated_details.h"
-#include "components/translate/core/browser/translate_accept_languages.h"
 #include "components/translate/core/browser/translate_browser_metrics.h"
 #include "components/translate/core/browser/translate_download_manager.h"
-#include "components/translate/core/browser/translate_infobar_delegate.h"
 #include "components/translate/core/browser/translate_manager.h"
 #include "components/translate/core/browser/translate_metrics_logger.h"
 #include "components/translate/core/browser/translate_prefs.h"
 #include "components/translate/core/common/language_detection_details.h"
+#include "components/translate/core/common/translate_constants.h"
+#include "components/translate/core/common/translate_features.h"
 #include "components/translate/core/common/translate_util.h"
 #include "components/variations/service/variations_service.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/metrics_proto/translate_event.pb.h"
-#include "ui/base/ui_base_features.h"
 #include "url/gurl.h"
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/android/android_theme_resources.h"
+#include "chrome/browser/translate/android/auto_translate_snackbar_controller.h"
+#include "components/translate/content/android/translate_message.h"
+#include "content/public/browser/page.h"
+#include "content/public/browser/visibility.h"
 #else
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_command_controller.h"  // nogncheck crbug.com/40147906
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck crbug.com/40147906
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"  // nogncheck crbug.com/40147906
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/toasts/api/toast_id.h"
+#include "chrome/browser/ui/toasts/toast_controller.h"
+#include "chrome/browser/ui/toasts/toast_features.h"
+#include "chrome/browser/ui/views/translate/translate_bubble_controller.h"
+#include "ui/base/l10n/l10n_util.h"
 #endif
 
 namespace {
-using base::FeatureList;
 using metrics::TranslateEventProto;
 
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
 TranslateEventProto::EventType BubbleResultToTranslateEvent(
     ShowTranslateBubbleResult result) {
   switch (result) {
-    case ShowTranslateBubbleResult::BROWSER_WINDOW_NOT_VALID:
+    case ShowTranslateBubbleResult::kBrowserWindowNotValid:
       return TranslateEventProto::BROWSER_WINDOW_IS_INVALID;
-    case ShowTranslateBubbleResult::BROWSER_WINDOW_MINIMIZED:
+    case ShowTranslateBubbleResult::kBrowserWindowMinimized:
       return TranslateEventProto::BROWSER_WINDOW_IS_MINIMIZED;
-    case ShowTranslateBubbleResult::BROWSER_WINDOW_NOT_ACTIVE:
+    case ShowTranslateBubbleResult::kBrowserWindowNotActive:
       return TranslateEventProto::BROWSER_WINDOW_NOT_ACTIVE;
-    case ShowTranslateBubbleResult::WEB_CONTENTS_NOT_ACTIVE:
+    case ShowTranslateBubbleResult::kWebContentsNotActive:
       return TranslateEventProto::WEB_CONTENTS_NOT_ACTIVE;
-    case ShowTranslateBubbleResult::EDITABLE_FIELD_IS_ACTIVE:
+    case ShowTranslateBubbleResult::kEditableFieldIsActive:
       return TranslateEventProto::EDITABLE_FIELD_IS_ACTIVE;
     default:
       NOTREACHED();
-      return metrics::TranslateEventProto::UNKNOWN;
   }
 }
 #endif
 
+#if BUILDFLAG(IS_ANDROID)
+// helper function for use in ChromeTranslateClient::ShowTranslateUI.
+bool IsAutomaticTranslationType(translate::TranslationType type) {
+  return type == translate::TranslationType::kAutomaticTranslationByHref ||
+         type == translate::TranslationType::kAutomaticTranslationByLink ||
+         type == translate::TranslationType::kAutomaticTranslationByPref ||
+         type == translate::TranslationType::
+                     kAutomaticTranslationToPredefinedTarget ||
+         type == translate::TranslationType::kForcedTranslationByCommandline;
+}
+#endif  // BUILDFLAG(IS_ANDROID)
+
 }  // namespace
 
-ChromeTranslateClient::ChromeTranslateClient(content::WebContents* web_contents)
-    : content::WebContentsObserver(web_contents) {
-  if (translate::IsSubFrameTranslationEnabled()) {
-    per_frame_translate_driver_ =
-        std::make_unique<translate::PerFrameContentTranslateDriver>(
-            &web_contents->GetController(),
-            UrlLanguageHistogramFactory::GetForBrowserContext(
-                web_contents->GetBrowserContext()));
-  } else {
-    translate_driver_ = std::make_unique<translate::ContentTranslateDriver>(
-        &web_contents->GetController(),
-        UrlLanguageHistogramFactory::GetForBrowserContext(
-            web_contents->GetBrowserContext()),
-        TranslateModelServiceFactory::GetOrBuildForKey(
-            Profile::FromBrowserContext(web_contents->GetBrowserContext())
-                ->GetProfileKey()));
-  }
-  translate_manager_ = std::make_unique<translate::TranslateManager>(
-      this,
-      translate::TranslateRankerFactory::GetForBrowserContext(
-          web_contents->GetBrowserContext()),
-      LanguageModelManagerFactory::GetForBrowserContext(
-          web_contents->GetBrowserContext())
-          ->GetPrimaryModel());
-  if (translate_driver_) {
-    translate_driver_->AddLanguageDetectionObserver(this);
-    translate_driver_->set_translate_manager(translate_manager_.get());
-  }
-  if (per_frame_translate_driver_) {
-    per_frame_translate_driver_->AddLanguageDetectionObserver(this);
-    per_frame_translate_driver_->set_translate_manager(
-        translate_manager_.get());
+#if !BUILDFLAG(IS_ANDROID)
+class ChromeTranslateClient::ReadAnythingObserver
+    : public ReadAnythingLifecycleObserver {
+ public:
+  explicit ReadAnythingObserver(ChromeTranslateClient* client)
+      : client_(client) {}
+  ~ReadAnythingObserver() override = default;
+
+  void OnWillClose(ReadAnythingCloseReason reason) override {
+    // Reading Mode stays open when switching tabs (it's shown again when
+    // switching back) or when switching between the side panel and the
+    // immersive overlay, so do not clear the client's state or stop observing:
+    // a PDF translation must only be reverted or cancelled when it's actually
+    // closed.
+    if (reason == ReadAnythingCloseReason::kTabSwitched ||
+        reason == ReadAnythingCloseReason::kToggledPresentation) {
+      return;
+    }
+    client_->OnSidePanelClosed();
+    if (client_->web_contents()) {
+      tabs::TabInterface* tab =
+          tabs::TabInterface::MaybeGetFromContents(client_->web_contents());
+      if (tab) {
+        if (auto* controller = ReadAnythingController::From(tab)) {
+          controller->RemoveObserver(this);
+        }
+      }
+    }
   }
 
-  auto* assistant_runtime_manager =
-      autofill_assistant::RuntimeManager::GetOrCreateForWebContents(
-          web_contents);
-  assistant_runtime_manager->AddObserver(this);
+  void OnDestroyed() override {}
+
+ private:
+  raw_ptr<ChromeTranslateClient> client_;
+};
+#endif
+
+void ChromeTranslateClient::TriggerPdfTranslation() {
+#if !BUILDFLAG(IS_ANDROID)
+  if (!IsReadingModeOpen()) {
+    opened_side_panel_for_pdf_translation_ = true;
+  }
+  tabs::TabInterface* tab =
+      tabs::TabInterface::MaybeGetFromContents(web_contents());
+  if (tab) {
+    if (auto* controller = ReadAnythingController::From(tab)) {
+      if (!read_anything_observer_) {
+        read_anything_observer_ =
+            std::make_unique<ReadAnythingObserver>(this);
+      }
+      // The observer may still be observing, e.g. if a translation was already
+      // requested while Reading Mode is open, and observers can't be added
+      // twice.
+      controller->RemoveObserver(read_anything_observer_.get());
+      controller->AddObserver(read_anything_observer_.get());
+    }
+  }
+  read_anything::ReadAnythingEntryPointController::ShowUI(
+      tab ? tab->GetBrowserWindowInterface() : nullptr,
+      ReadAnythingOpenTrigger::kPdfTranslation,
+      read_anything::ReadAnythingEntryPointController::Presentation::
+          kSidePanel);
+#endif
+}
+
+void ChromeTranslateClient::RevertPdfTranslation() {
+#if !BUILDFLAG(IS_ANDROID)
+  if (opened_side_panel_for_pdf_translation_) {
+    opened_side_panel_for_pdf_translation_ = false;
+    tabs::TabInterface* tab =
+        tabs::TabInterface::MaybeGetFromContents(web_contents());
+    read_anything::ReadAnythingEntryPointController::CloseUI(
+        tab ? tab->GetBrowserWindowInterface() : nullptr,
+        ReadAnythingCloseReason::kClosedByPdfTranslation);
+  }
+#endif
+}
+
+void ChromeTranslateClient::OnSidePanelClosed() {
+#if !BUILDFLAG(IS_ANDROID)
+  // Revert translation specifically for PDF documents when Reading Mode UI closes.
+  const bool is_pdf =
+      translate_driver_ &&
+      translate_driver_->GetContentsMimeType() == translate::kPdfMimeType;
+
+  if (opened_side_panel_for_pdf_translation_ || is_pdf) {
+    opened_side_panel_for_pdf_translation_ = false;
+    translate::LanguageState* language_state =
+        GetTranslateManager()->GetLanguageState();
+    if (language_state->IsPageTranslated()) {
+      GetTranslateManager()->RevertTranslation();
+    } else if (language_state->pending_source_language().has_value()) {
+      // Reading Mode closed before the PDF translation started, which only
+      // happens once its content is distilled. Cancel the translation, which
+      // also clears the pending translation languages, so that it doesn't
+      // start while Reading Mode is closed.
+      language_state->set_translation_pending(false);
+    }
+  }
+#endif
+}
+
+bool ChromeTranslateClient::IsReadingModeOpen() const {
+#if !BUILDFLAG(IS_ANDROID)
+  tabs::TabInterface* tab =
+      tabs::TabInterface::MaybeGetFromContents(web_contents());
+  return read_anything::ReadAnythingEntryPointController::IsUIShowing(
+      tab ? tab->GetBrowserWindowInterface() : nullptr);
+#else
+  return false;
+#endif
+}
+
+ChromeTranslateClient::ChromeTranslateClient(content::WebContents* web_contents)
+    : content::WebContentsObserver(web_contents),
+      content::WebContentsUserData<ChromeTranslateClient>(*web_contents),
+      translate_driver_(new translate::ContentTranslateDriver(
+          *web_contents,
+          UrlLanguageHistogramFactory::GetForBrowserContext(
+              web_contents->GetBrowserContext()))),
+      language_detection_driver_(
+          new language_detection::ContentLanguageDetectionDriver(
+              LanguageDetectionModelServiceFactory::GetForProfile(
+                  Profile::FromBrowserContext(
+                      web_contents->GetBrowserContext())))),
+      translate_manager_(new translate::TranslateManager(
+          this,
+          translate::TranslateRankerFactory::GetForBrowserContext(
+              web_contents->GetBrowserContext()),
+          LanguageModelManagerFactory::GetForBrowserContext(
+              web_contents->GetBrowserContext())
+              ->GetPrimaryModel())) {
+  translate_driver_->AddLanguageDetectionObserver(this);
+  translate_driver_->set_translate_manager(translate_manager_.get());
 }
 
 ChromeTranslateClient::~ChromeTranslateClient() {
-  if (translate_driver_) {
-    translate_driver_->RemoveLanguageDetectionObserver(this);
-    translate_driver_->set_translate_manager(nullptr);
+  translate_driver_->RemoveLanguageDetectionObserver(this);
+  translate_driver_->set_translate_manager(nullptr);
+#if !BUILDFLAG(IS_ANDROID)
+  if (read_anything_observer_ && web_contents()) {
+    tabs::TabInterface* tab =
+        tabs::TabInterface::MaybeGetFromContents(web_contents());
+    if (tab) {
+      if (auto* controller = ReadAnythingController::From(tab)) {
+        controller->RemoveObserver(read_anything_observer_.get());
+      }
+    }
   }
-  if (per_frame_translate_driver_) {
-    per_frame_translate_driver_->RemoveLanguageDetectionObserver(this);
-    per_frame_translate_driver_->set_translate_manager(nullptr);
-  }
+#endif
 }
 
 const translate::LanguageState& ChromeTranslateClient::GetLanguageState() {
   return *translate_manager_->GetLanguageState();
-}
-
-translate::ContentTranslateDriver* ChromeTranslateClient::translate_driver() {
-  if (translate_driver_) {
-    DCHECK(!translate::IsSubFrameTranslationEnabled());
-    return translate_driver_.get();
-  }
-
-  return per_frame_translate_driver();
-}
-
-translate::PerFrameContentTranslateDriver*
-ChromeTranslateClient::per_frame_translate_driver() {
-  DCHECK(translate::IsSubFrameTranslationEnabled());
-  return per_frame_translate_driver_.get();
 }
 
 // static
@@ -166,7 +288,7 @@ ChromeTranslateClient::CreateTranslatePrefs(PrefService* prefs) {
 
   // We need to obtain the country here, since it comes from VariationsService.
   // components/ does not have access to that.
-  DCHECK(g_browser_process);
+  CHECK(g_browser_process, base::NotFatalUntil::M163);
   variations::VariationsService* variations_service =
       g_browser_process->variations_service();
   if (variations_service) {
@@ -178,10 +300,10 @@ ChromeTranslateClient::CreateTranslatePrefs(PrefService* prefs) {
 }
 
 // static
-translate::TranslateAcceptLanguages*
-ChromeTranslateClient::GetTranslateAcceptLanguages(
+language::AcceptLanguagesService*
+ChromeTranslateClient::GetAcceptLanguagesService(
     content::BrowserContext* browser_context) {
-  return TranslateAcceptLanguagesFactory::GetForBrowserContext(browser_context);
+  return AcceptLanguagesServiceFactory::GetForBrowserContext(browser_context);
 }
 
 // static
@@ -189,17 +311,19 @@ translate::TranslateManager* ChromeTranslateClient::GetManagerFromWebContents(
     content::WebContents* web_contents) {
   ChromeTranslateClient* chrome_translate_client =
       FromWebContents(web_contents);
-  if (!chrome_translate_client)
+  if (!chrome_translate_client) {
     return nullptr;
+  }
   return chrome_translate_client->GetTranslateManager();
 }
 
 void ChromeTranslateClient::GetTranslateLanguages(
     content::WebContents* web_contents,
     std::string* source,
-    std::string* target) {
-  DCHECK(source != nullptr);
-  DCHECK(target != nullptr);
+    std::string* target,
+    bool for_display) {
+  CHECK(source != nullptr, base::NotFatalUntil::M163);
+  CHECK(target != nullptr, base::NotFatalUntil::M163);
 
   *source = translate::TranslateDownloadManager::GetLanguageCode(
       GetLanguageState().source_language());
@@ -208,20 +332,17 @@ void ChromeTranslateClient::GetTranslateLanguages(
       Profile::FromBrowserContext(web_contents->GetBrowserContext());
   std::unique_ptr<translate::TranslatePrefs> translate_prefs =
       CreateTranslatePrefs(profile->GetPrefs());
-  if (!profile->IsOffTheRecord()) {
-    std::string auto_translate_language =
-        translate::TranslateManager::GetAutoTargetLanguage(
-            *source, translate_prefs.get());
-    if (!auto_translate_language.empty()) {
-      *target = auto_translate_language;
-      return;
-    }
+  if (for_display) {
+    *target = translate_manager_->GetTargetLanguageForDisplay(
+        translate_prefs.get(), LanguageModelManagerFactory::GetInstance()
+                                   ->GetForBrowserContext(profile)
+                                   ->GetPrimaryModel());
+  } else {
+    *target = translate_manager_->GetTargetLanguage(
+        translate_prefs.get(), LanguageModelManagerFactory::GetInstance()
+                                   ->GetForBrowserContext(profile)
+                                   ->GetPrimaryModel());
   }
-
-  *target = translate::TranslateManager::GetTargetLanguage(
-      translate_prefs.get(), LanguageModelManagerFactory::GetInstance()
-                                 ->GetForBrowserContext(profile)
-                                 ->GetPrimaryModel());
 }
 
 translate::TranslateManager* ChromeTranslateClient::GetTranslateManager() {
@@ -232,38 +353,62 @@ bool ChromeTranslateClient::ShowTranslateUI(
     translate::TranslateStep step,
     const std::string& source_language,
     const std::string& target_language,
-    translate::TranslateErrors::Type error_type,
+    translate::TranslateErrors error_type,
     bool triggered_from_menu) {
-  DCHECK(web_contents());
-  DCHECK(translate_manager_);
+  if (!web_contents() || !translate_manager_) {
+    return false;
+  }
 
-  if (error_type != translate::TranslateErrors::NONE)
+  if (error_type != translate::TranslateErrors::NONE) {
     step = translate::TRANSLATE_STEP_TRANSLATE_ERROR;
+  }
 
-// Translate uses a bubble UI on desktop and an infobar on Android (here)
+// Translate uses a bubble UI on desktop and the Message UI on Android (here)
 // and iOS (in ios/chrome/browser/translate/chrome_ios_translate_client.mm).
-#if defined(OS_ANDROID)
-  // Infobar UI.
-  DCHECK(!TranslateService::IsTranslateBubbleEnabled());
-  translate::TranslateInfoBarDelegate::Create(
-      step != translate::TRANSLATE_STEP_BEFORE_TRANSLATE,
-      translate_manager_->GetWeakPtr(),
-      infobars::ContentInfoBarManager::FromWebContents(web_contents()),
-      web_contents()->GetBrowserContext()->IsOffTheRecord(), step,
-      source_language, target_language, error_type, triggered_from_menu);
-
+#if BUILDFLAG(IS_ANDROID)
+  CHECK(!TranslateService::IsTranslateBubbleEnabled(),
+        base::NotFatalUntil::M163);
+  // Message UI.
+  translate::TranslationType translate_type =
+      GetLanguageState().translation_type();
+  // Use the automatic translation Snackbar if the current translation is an
+  // automatic translation and there was no error.
+  if (IsAutomaticTranslationType(translate_type) &&
+      step != translate::TRANSLATE_STEP_TRANSLATE_ERROR) {
+    // The Automatic translation snackbar is only shown after translation
+    // has completed. The translating step is a no-op with the Snackbar.
+    if (step == translate::TRANSLATE_STEP_AFTER_TRANSLATE) {
+      // An automatic translation has completed show the snackbar.
+      if (!auto_translate_snackbar_controller_) {
+        auto_translate_snackbar_controller_ =
+            std::make_unique<translate::AutoTranslateSnackbarController>(
+                web_contents(), translate_manager_->GetWeakPtr());
+      }
+      auto_translate_snackbar_controller_->ShowSnackbar(target_language);
+    }
+  } else {
+    // Not an automatic translation. Use TranslateMessage instead.
+    if (!translate_message_) {
+      translate_message_ = std::make_unique<translate::TranslateMessage>(
+          web_contents(), translate_manager_->GetWeakPtr(),
+          base::BindRepeating([]() {}));
+    }
+    translate_message_->ShowTranslateStep(step, source_language,
+                                          target_language);
+  }
   translate_manager_->GetActiveTranslateMetricsLogger()->LogUIChange(true);
 #else
-  DCHECK(TranslateService::IsTranslateBubbleEnabled());
+  CHECK(TranslateService::IsTranslateBubbleEnabled(),
+        base::NotFatalUntil::M163);
   // Bubble UI.
   if (step == translate::TRANSLATE_STEP_BEFORE_TRANSLATE &&
-      translate_manager_->ShouldSuppressBubbleUI()) {
+      translate_manager_->ShouldSuppressBubbleUI(target_language)) {
     return false;
   }
 
   ShowTranslateBubbleResult result = ShowBubble(
       step, source_language, target_language, error_type, triggered_from_menu);
-  if (result != ShowTranslateBubbleResult::SUCCESS &&
+  if (result != ShowTranslateBubbleResult::kSuccess &&
       step == translate::TRANSLATE_STEP_BEFORE_TRANSLATE) {
     translate_manager_->RecordTranslateEvent(
         BubbleResultToTranslateEvent(result));
@@ -274,11 +419,11 @@ bool ChromeTranslateClient::ShowTranslateUI(
 }
 
 translate::TranslateDriver* ChromeTranslateClient::GetTranslateDriver() {
-  return translate_driver();
+  return translate_driver_.get();
 }
 
 PrefService* ChromeTranslateClient::GetPrefs() {
-  DCHECK(web_contents());
+  CHECK(web_contents(), base::NotFatalUntil::M163);
   Profile* profile =
       Profile::FromBrowserContext(web_contents()->GetBrowserContext());
   return profile->GetPrefs();
@@ -289,113 +434,152 @@ ChromeTranslateClient::GetTranslatePrefs() {
   return CreateTranslatePrefs(GetPrefs());
 }
 
-translate::TranslateAcceptLanguages*
-ChromeTranslateClient::GetTranslateAcceptLanguages() {
-  DCHECK(web_contents());
-  return GetTranslateAcceptLanguages(web_contents()->GetBrowserContext());
+language::AcceptLanguagesService*
+ChromeTranslateClient::GetAcceptLanguagesService() {
+  CHECK(web_contents(), base::NotFatalUntil::M163);
+  return GetAcceptLanguagesService(web_contents()->GetBrowserContext());
 }
 
-#if defined(OS_ANDROID)
-int ChromeTranslateClient::GetInfobarIconID() const {
-  return IDR_ANDROID_INFOBAR_TRANSLATE;
-}
-
+#if BUILDFLAG(IS_ANDROID)
 void ChromeTranslateClient::ManualTranslateWhenReady() {
   if (GetLanguageState().source_language().empty()) {
     manual_translate_on_ready_ = true;
   } else {
     translate::TranslateManager* manager = GetTranslateManager();
-    manager->InitiateManualTranslation(/*auto_translate=*/true,
-                                       /*triggered_from_menu=*/true);
+    manager->ShowTranslateUI(/*auto_translate=*/true,
+                             /*triggered_from_menu=*/true);
   }
 }
 #endif
 
 void ChromeTranslateClient::SetPredefinedTargetLanguage(
-    const std::string& translate_language_code) {
+    const base::i18n::LanguageTag& language,
+    bool should_auto_translate) {
   translate::TranslateManager* manager = GetTranslateManager();
-  manager->SetPredefinedTargetLanguage(translate_language_code);
+  manager->SetPredefinedTargetLanguage(language, should_auto_translate);
 }
 
 bool ChromeTranslateClient::IsTranslatableURL(const GURL& url) {
   return TranslateService::IsTranslatableURL(url);
 }
 
-bool ChromeTranslateClient::IsAutofillAssistantRunning() const {
-  auto* assistant_runtime_manager =
-      autofill_assistant::RuntimeManager::GetForWebContents(web_contents());
-  return assistant_runtime_manager && assistant_runtime_manager->GetState() ==
-                                          autofill_assistant::UIState::kShown;
-}
+void ChromeTranslateClient::UndoTranslate() {
+  std::string source_language = GetLanguageState().source_language();
+  std::string target_language = GetLanguageState().current_language();
 
-void ChromeTranslateClient::OnStateChanged(autofill_assistant::UIState state) {
-  if (state == autofill_assistant::UIState::kNotShown) {
-    GetTranslateManager()->OnAutofillAssistantFinished();
-  }
-}
-
-void ChromeTranslateClient::ShowReportLanguageDetectionErrorUI(
-    const GURL& report_url) {
-#if defined(OS_ANDROID)
-  // Android does not support reporting language detection errors.
-  NOTREACHED();
-#else
-  // We'll open the URL in a new tab so that the user can tell us more.
-  Browser* browser = chrome::FindBrowserWithWebContents(web_contents());
-  if (!browser) {
-    NOTREACHED();
-    return;
+  if (GetLanguageState().IsPageTranslated()) {
+    GetTranslateManager()->RevertTranslation();
   }
 
-  chrome::AddSelectedTabWithURL(browser, report_url,
-                                ui::PAGE_TRANSITION_AUTO_BOOKMARK);
-#endif  // defined(OS_ANDROID)
+  ShowTranslateUI(translate::TRANSLATE_STEP_AFTER_UNDO, source_language,
+                  target_language, translate::TranslateErrors::NONE,
+                  /*triggered_from_menu=*/true);
 }
 
+// content::WebContentsObserver implementation.
 void ChromeTranslateClient::WebContentsDestroyed() {
   // Translation process can be interrupted.
   // Destroying the TranslateManager now guarantees that it never has to deal
   // with NULL WebContents.
-  translate_manager_.reset();
-
-  auto* assistant_runtime_manager =
-      autofill_assistant::RuntimeManager::GetForWebContents(web_contents());
-  if (assistant_runtime_manager) {
-    assistant_runtime_manager->RemoveObserver(this);
+  if (translate_manager_) {
+    if (translate_driver_) {
+      translate_driver_->set_translate_manager(nullptr);
+    }
+    translate_manager_.reset();
   }
 }
 
-// TranslateDriver::LanguageDetectionObserver implementation.
+void ChromeTranslateClient::PrimaryPageChanged(content::Page& page) {
+#if BUILDFLAG(IS_ANDROID)
+  if (auto_translate_snackbar_controller_ &&
+      auto_translate_snackbar_controller_->IsShowing()) {
+    auto_translate_snackbar_controller_->NativeDismissSnackbar();
+  }
+#else
+  // If Reading Mode was opened specifically to translate the PDF, close it
+  // when navigating to a new page.
+  if (!opened_side_panel_for_pdf_translation_) {
+    return;
+  }
+  opened_side_panel_for_pdf_translation_ = false;
 
+  tabs::TabInterface* tab =
+      tabs::TabInterface::MaybeGetFromContents(web_contents());
+
+  // Stop observing Reading Mode before closing it: the translation belonged to
+  // the previous page, so there is nothing to revert on the new one.
+  if (read_anything_observer_ && tab) {
+    if (auto* controller = ReadAnythingController::From(tab)) {
+      controller->RemoveObserver(read_anything_observer_.get());
+    }
+  }
+
+  read_anything::ReadAnythingEntryPointController::CloseUI(
+      tab ? tab->GetBrowserWindowInterface() : nullptr,
+      ReadAnythingCloseReason::kClosedByPdfTranslation);
+#endif  // BUILDFLAG(IS_ANDROID)
+}
+
+#if BUILDFLAG(IS_ANDROID)
+void ChromeTranslateClient::OnVisibilityChanged(
+    content::Visibility visibility) {
+  if (auto_translate_snackbar_controller_ &&
+      auto_translate_snackbar_controller_->IsShowing() &&
+      visibility == content::Visibility::HIDDEN) {
+    auto_translate_snackbar_controller_->NativeDismissSnackbar();
+  }
+}
+#endif  // BUILDFLAG(IS_ANDROID)
+
+// TranslateDriver::LanguageDetectionObserver implementation.
 void ChromeTranslateClient::OnLanguageDetermined(
     const translate::LanguageDetectionDetails& details) {
-  translate::TranslateBrowserMetrics::ReportLanguageDetectionContentLength(
-      details.contents.size());
+  if (details.has_run_lang_detection) {
+    translate::TranslateBrowserMetrics::ReportLanguageDetectionContentLength(
+        details.contents.size());
+  }
 
   if (!web_contents()->GetBrowserContext()->IsOffTheRecord() &&
       IsTranslatableURL(details.url)) {
     GetTranslateManager()->NotifyLanguageDetected(details);
   }
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   // See ChromeTranslateClient::ManualTranslateOnReady
   if (manual_translate_on_ready_) {
-    GetTranslateManager()->InitiateManualTranslation(true);
+    GetTranslateManager()->ShowTranslateUI(/*auto_translate=*/true);
     manual_translate_on_ready_ = false;
+  }
+#else
+  // The availability of the app menu's Translate command depends on the
+  // detected source language. Language detection may complete after the last
+  // tab state update (e.g. for PDFs, where detection runs once the document
+  // text is available), so refresh the browser's command state here.
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          web_contents());
+  if (browser &&
+      web_contents() == browser->GetTabStripModel()->GetActiveWebContents()) {
+    if (auto* command_controller =
+            chrome::BrowserCommandController::From(browser)) {
+      command_controller->TabStateChanged();
+    }
   }
 #endif
 }
 
 // The bubble is implemented only on the desktop platforms.
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
 ShowTranslateBubbleResult ChromeTranslateClient::ShowBubble(
     translate::TranslateStep step,
     const std::string& source_language,
     const std::string& target_language,
-    translate::TranslateErrors::Type error_type,
+    translate::TranslateErrors error_type,
     bool is_user_gesture) {
-  DCHECK(translate_manager_);
-  Browser* browser = chrome::FindBrowserWithWebContents(web_contents());
+  CHECK(translate_manager_, base::NotFatalUntil::M163);
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          web_contents());
 
   // |browser| might be NULL when testing. In this case, Show(...) should be
   // called because the implementation for testing is used.
@@ -405,28 +589,60 @@ ShowTranslateBubbleResult ChromeTranslateClient::ShowBubble(
                                         error_type, is_user_gesture);
   }
 
-  if (web_contents() != browser->tab_strip_model()->GetActiveWebContents())
-    return ShowTranslateBubbleResult::WEB_CONTENTS_NOT_ACTIVE;
+  if (web_contents() != browser->GetTabStripModel()->GetActiveWebContents()) {
+    return ShowTranslateBubbleResult::kWebContentsNotActive;
+  }
 
   // This ShowBubble function is also used for updating the existing bubble.
   // However, with the bubble shown, any browser windows are NOT activated
   // because the bubble takes the focus from the other widgets including the
   // browser windows. So it is checked that |browser| is the last activated
   // browser, not is now activated.
-  if (browser != chrome::FindLastActive())
-    return ShowTranslateBubbleResult::BROWSER_WINDOW_NOT_ACTIVE;
+  if (browser !=
+      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser()) {
+    return ShowTranslateBubbleResult::kBrowserWindowNotActive;
+  }
 
   // During auto-translating, the bubble should not be shown.
   if (!is_user_gesture && (step == translate::TRANSLATE_STEP_TRANSLATING ||
                            step == translate::TRANSLATE_STEP_AFTER_TRANSLATE)) {
-    if (GetLanguageState().InTranslateNavigation())
-      return ShowTranslateBubbleResult::SUCCESS;
+    if (GetLanguageState().InTranslateNavigation()) {
+      return ShowTranslateBubbleResult::kSuccess;
+    }
+    ToastController* toast_controller =
+        ToastController::MaybeGetForWebContents(web_contents());
+    bool is_toast_enabled =
+        toast_controller &&
+        base::FeatureList::IsEnabled(toast_features::kTranslateToast);
+
+    // If not in a translate navigation, this is the first time we are
+    // auto-translating this page/site in this session. Show the toast instead
+    // of the bubble.
+    if (step == translate::TRANSLATE_STEP_AFTER_TRANSLATE) {
+      TranslateController* controller = TranslateController::From(browser);
+      if (controller && controller->GetTranslateBubble()) {
+        return TranslateBubbleFactory::Show(
+            BrowserWindow::FromBrowser(browser), web_contents(), step,
+            source_language, target_language, error_type, is_user_gesture);
+      }
+
+      if (is_toast_enabled) {
+        ToastParams params(ToastId::kTranslate);
+        std::u16string language_name = l10n_util::GetDisplayNameForLocale(
+            target_language, g_browser_process->GetApplicationLocale(), true);
+        params.body_string_replacement_params.push_back(language_name);
+        toast_controller->MaybeShowToast(std::move(params));
+      }
+    }
+    if (is_toast_enabled) {
+      return ShowTranslateBubbleResult::kSuccess;
+    }
   }
 
-  return TranslateBubbleFactory::Show(browser->window(), web_contents(), step,
-                                      source_language, target_language,
-                                      error_type, is_user_gesture);
+  return TranslateBubbleFactory::Show(
+      BrowserWindow::FromBrowser(browser), web_contents(), step,
+      source_language, target_language, error_type, is_user_gesture);
 }
 #endif
 
-WEB_CONTENTS_USER_DATA_KEY_IMPL(ChromeTranslateClient)
+WEB_CONTENTS_USER_DATA_KEY_IMPL(ChromeTranslateClient);

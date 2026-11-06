@@ -1,76 +1,58 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/country_codes/country_codes.h"
 
-#if defined(OS_POSIX) && !defined(OS_APPLE)
+#include "build/build_config.h"
+
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
 #include <locale.h>
 #endif
 
-#include "base/strings/string_util.h"
-#include "build/build_config.h"
-#include "components/pref_registry/pref_registry_syncable.h"
-#include "components/prefs/pref_service.h"
-
-#if defined(OS_WIN)
-#include <windows.h>
-#undef IN  // On Windows, windef.h defines this, which screws up "India" cases.
-#elif defined(OS_APPLE)
-#include "base/mac/scoped_cftyperef.h"
+#if BUILDFLAG(IS_APPLE)
+#include <CoreFoundation/CoreFoundation.h>
 #endif
 
-#if defined(OS_ANDROID)
-#include "base/android/locale_utils.h"
+#include "base/strings/string_util.h"
+
+#if BUILDFLAG(IS_WIN)
+#include <windows.h>
+#undef IN  // On Windows, windef.h defines this, which screws up "India" cases.
+#elif BUILDFLAG(IS_APPLE)
+#include "base/apple/scoped_cftyperef.h"
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/i18n/android_locale.h"
 #endif
 
 namespace country_codes {
 
 namespace {
 
-// TODO(hcarmona/johntlee): remove this function after confirming if it only
-// pertains to obsolete OSes.
-int CountryCharsToCountryIDWithUpdate(char c1, char c2) {
-  // SPECIAL CASE: In 2003, Yugoslavia renamed itself to Serbia and Montenegro.
-  // Serbia and Montenegro dissolved their union in June 2006. Yugoslavia was
-  // ISO 'YU' and Serbia and Montenegro were ISO 'CS'. Serbia was subsequently
-  // issued 'RS' and Montenegro 'ME'. Windows XP and Mac OS X Leopard still use
-  // the value 'YU'. If we get a value of 'YU' or 'CS' we will map it to 'RS'.
-  if ((c1 == 'Y' && c2 == 'U') || (c1 == 'C' && c2 == 'S')) {
-    c1 = 'R';
-    c2 = 'S';
-  }
-
-  // SPECIAL CASE: Timor-Leste changed from 'TP' to 'TL' in 2002. Windows XP
-  // predates this; we therefore map this value.
-  if (c1 == 'T' && c2 == 'P')
-    c2 = 'L';
-
-  return CountryCharsToCountryID(c1, c2);
-}
-
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 
 // For reference, a list of GeoIDs can be found at
 // http://msdn.microsoft.com/en-us/library/dd374073.aspx .
-int GeoIDToCountryID(GEOID geo_id) {
+CountryId GeoIDToCountryID(GEOID geo_id) {
   const int kISOBufferSize = 3;  // Two plus one for the terminator.
   wchar_t isobuf[kISOBufferSize] = {};
   int retval = GetGeoInfo(geo_id, GEO_ISO2, isobuf, kISOBufferSize, 0);
 
   if (retval == kISOBufferSize && !(isobuf[0] == L'X' && isobuf[1] == L'X')) {
-    return CountryCharsToCountryIDWithUpdate(static_cast<char>(isobuf[0]),
-                                             static_cast<char>(isobuf[1]));
+    char code[2]{static_cast<char>(isobuf[0]), static_cast<char>(isobuf[1])};
+    return CountryId(std::string_view(code, std::size(code)));
   }
 
   // Various locations have ISO codes that Windows does not return.
   switch (geo_id) {
     case 0x144:  // Guernsey
-      return CountryCharsToCountryID('G', 'G');
+      return CountryId("GG");
     case 0x148:  // Jersey
-      return CountryCharsToCountryID('J', 'E');
+      return CountryId("JE");
     case 0x3B16:  // Isle of Man
-      return CountryCharsToCountryID('I', 'M');
+      return CountryId("IM");
 
     // 'UM' (U.S. Minor Outlying Islands)
     case 0x7F:    // Johnston Atoll
@@ -81,98 +63,82 @@ int GeoIDToCountryID(GEOID geo_id) {
     case 0x149:   // Kingman Reef
     case 0x152:   // Palmyra Atoll
     case 0x52FA:  // Midway Islands
-      return CountryCharsToCountryID('U', 'M');
+      return CountryId("UM");
 
     // 'SH' (Saint Helena)
     case 0x12F:  // Ascension Island
     case 0x15C:  // Tristan da Cunha
-      return CountryCharsToCountryID('S', 'H');
+      return CountryId("SH");
 
     // 'IO' (British Indian Ocean Territory)
     case 0x13A:  // Diego Garcia
-      return CountryCharsToCountryID('I', 'O');
+      return CountryId("IO");
 
     // Other cases where there is no ISO country code; we assign countries that
     // can serve as reasonable defaults.
     case 0x154:  // Rota Island
     case 0x155:  // Saipan
     case 0x15A:  // Tinian Island
-      return CountryCharsToCountryID('U', 'S');
+      return CountryId("US");
     case 0x134:  // Channel Islands
-      return CountryCharsToCountryID('G', 'B');
+      return CountryId("GB");
     case 0x143:  // Guantanamo Bay
     default:
-      return kCountryIDUnknown;
+      return CountryId();
   }
 }
 
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
 }  // namespace
 
-const char kCountryIDAtInstall[] = "countryid_at_install";
+#if BUILDFLAG(IS_WIN)
 
-int CountryStringToCountryID(const std::string& country) {
-  return (country.length() == 2)
-             ? CountryCharsToCountryIDWithUpdate(country[0], country[1])
-             : kCountryIDUnknown;
+CountryId GetCurrentCountryID() {
+  // Calls to GetCurrentCountryID occur fairly frequently and incur a heavy
+  // registry hit within the Windows GetUserGeoID API call. Registry hits can be
+  // impactful to perf, particularly on virtualized systems.  To mitigate this
+  // we store the result of the first call in a static. The Id is only
+  // updated by calls to SetUserGeoID or the user manually updating the
+  // language and region settings.  It is expected that if it changes the user
+  // would need to restart applications to ensure the updated value is
+  // respected.
+  static CountryId id = GeoIDToCountryID(GetUserGeoID(GEOCLASS_NATION));
+  return id;
 }
 
-int GetCountryIDFromPrefs(PrefService* prefs) {
-  if (!prefs)
-    return GetCurrentCountryID();
+#elif BUILDFLAG(IS_APPLE)
 
-  // Cache first run Country ID value in prefs, and use it afterwards.  This
-  // ensures that just because the user moves around, we won't automatically
-  // make major changes to their available search providers, which would feel
-  // surprising.
-  if (!prefs->HasPrefPath(country_codes::kCountryIDAtInstall)) {
-    prefs->SetInteger(country_codes::kCountryIDAtInstall,
-                      GetCurrentCountryID());
-  }
-  return prefs->GetInteger(country_codes::kCountryIDAtInstall);
-}
-
-void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
-  registry->RegisterIntegerPref(country_codes::kCountryIDAtInstall,
-                                kCountryIDUnknown);
-}
-
-#if defined(OS_WIN)
-
-int GetCurrentCountryID() {
-  return GeoIDToCountryID(GetUserGeoID(GEOCLASS_NATION));
-}
-
-#elif defined(OS_APPLE)
-
-int GetCurrentCountryID() {
-  base::ScopedCFTypeRef<CFLocaleRef> locale(CFLocaleCopyCurrent());
+CountryId GetCurrentCountryID() {
+  base::apple::ScopedCFTypeRef<CFLocaleRef> locale(CFLocaleCopyCurrent());
   CFStringRef country =
       (CFStringRef)CFLocaleGetValue(locale.get(), kCFLocaleCountryCode);
-  if (!country)
-    return kCountryIDUnknown;
+  if (!country) {
+    return CountryId();
+  }
 
   UniChar isobuf[2];
   CFRange char_range = CFRangeMake(0, 2);
   CFStringGetCharacters(country, char_range, isobuf);
 
-  return CountryCharsToCountryIDWithUpdate(static_cast<char>(isobuf[0]),
-                                           static_cast<char>(isobuf[1]));
+  char code[2]{static_cast<char>(isobuf[0]), static_cast<char>(isobuf[1])};
+
+  return CountryId(std::string_view(code, std::size(code)));
 }
 
-#elif defined(OS_ANDROID)
+#elif BUILDFLAG(IS_ANDROID)
 
-int GetCurrentCountryID() {
-  return CountryStringToCountryID(base::android::GetDefaultCountryCode());
+CountryId GetCurrentCountryID() {
+  return CountryId(base::i18n::GetAndroidDefaultCountryCode());
 }
 
-#elif defined(OS_POSIX) || defined(OS_FUCHSIA)
+#elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
 
-int GetCurrentCountryID() {
+CountryId GetCurrentCountryID() {
   const char* locale = setlocale(LC_MESSAGES, nullptr);
-  if (!locale)
-    return kCountryIDUnknown;
+  if (!locale) {
+    return CountryId();
+  }
 
   // The format of a locale name is:
   // language[_territory][.codeset][@modifier], where territory is an ISO 3166
@@ -181,15 +147,15 @@ int GetCurrentCountryID() {
   // First remove the language portion.
   std::string locale_str(locale);
   size_t territory_delim = locale_str.find('_');
-  if (territory_delim == std::string::npos)
-    return kCountryIDUnknown;
+  if (territory_delim == std::string::npos) {
+    return CountryId();
+  }
   locale_str.erase(0, territory_delim + 1);
 
   // Next remove any codeset/modifier portion and uppercase.
-  return CountryStringToCountryID(
+  return CountryId(
       base::ToUpperASCII(locale_str.substr(0, locale_str.find_first_of(".@"))));
 }
 
 #endif  // OS_*
-
 }  // namespace country_codes

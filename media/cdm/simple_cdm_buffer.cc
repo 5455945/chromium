@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,7 +13,7 @@ namespace media {
 
 // static
 SimpleCdmBuffer* SimpleCdmBuffer::Create(size_t capacity) {
-  DCHECK(capacity);
+  CHECK(capacity);
 
   // cdm::Buffer interface limits capacity to uint32.
   DCHECK_LE(capacity, std::numeric_limits<uint32_t>::max());
@@ -38,7 +38,7 @@ uint8_t* SimpleCdmBuffer::Data() {
 }
 
 void SimpleCdmBuffer::SetSize(uint32_t size) {
-  DCHECK(size <= Capacity());
+  CHECK(size <= Capacity());
   size_ = size > Capacity() ? 0 : size;
 }
 

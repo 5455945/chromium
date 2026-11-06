@@ -22,53 +22,47 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_SVG_SVG_DOCUMENT_EXTENSIONS_H_
 
 #include "base/dcheck_is_on.h"
-#include "base/macros.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/platform/geometry/float_point.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
-#include "third_party/blink/renderer/platform/wtf/hash_set.h"
+#include "ui/gfx/geometry/point_f.h"
+#include "ui/gfx/geometry/vector2d_f.h"
 
 namespace blink {
 
 class Document;
-class SVGElement;
 class SVGSVGElement;
-class SubtreeLayoutScope;
 
 class CORE_EXPORT SVGDocumentExtensions final
     : public GarbageCollected<SVGDocumentExtensions> {
  public:
   explicit SVGDocumentExtensions(Document*);
+  SVGDocumentExtensions(const SVGDocumentExtensions&) = delete;
+  SVGDocumentExtensions& operator=(const SVGDocumentExtensions&) = delete;
   ~SVGDocumentExtensions();
 
   void AddTimeContainer(SVGSVGElement*);
   void RemoveTimeContainer(SVGSVGElement*);
 
-  // Records the SVG element as having a Web Animation on an SVG attribute that
-  // needs applying.
-  void AddWebAnimationsPendingSVGElement(SVGElement&);
+  void SetContainsForeignObject() { may_contain_foreign_objects_ = true; }
+  bool MayContainForeignObjects() const { return may_contain_foreign_objects_; }
 
   // True if a SMIL animation frame is successfully scheduled.
   static bool ServiceSmilOnAnimationFrame(Document&);
-  static void ServiceWebAnimationsOnAnimationFrame(Document&);
 
   void StartAnimations();
   void PauseAnimations();
+  bool HasSmilAnimations() const;
   // True if a SMIL animation frame is successfully scheduled.
   bool ServiceSmilAnimations();
-  void ServiceWebAnimations();
 
   void DispatchSVGLoadEventToOutermostSVGElements();
 
-  void AddSVGRootWithRelativeLengthDescendents(SVGSVGElement*);
-  void RemoveSVGRootWithRelativeLengthDescendents(SVGSVGElement*);
-  void InvalidateSVGRootsWithRelativeLengthDescendents(SubtreeLayoutScope*);
-
   bool ZoomAndPanEnabled() const;
 
-  void StartPan(const FloatPoint& start);
-  void UpdatePan(const FloatPoint& pos) const;
+  void StartPan(const gfx::PointF& start);
+  void UpdatePan(const gfx::PointF& pos) const;
 
   static SVGSVGElement* rootElement(const Document&);
 
@@ -77,15 +71,10 @@ class CORE_EXPORT SVGDocumentExtensions final
  private:
   Member<Document> document_;
   HeapHashSet<Member<SVGSVGElement>> time_containers_;
-  using SVGElementSet = HeapHashSet<Member<SVGElement>>;
-  SVGElementSet web_animations_pending_svg_elements_;
-  // Root SVG elements with relative length descendants.
-  HeapHashSet<Member<SVGSVGElement>> relative_length_svg_roots_;
-  FloatPoint translate_;
-#if DCHECK_IS_ON()
-  bool in_relative_length_svg_roots_invalidation_ = false;
-#endif
-  DISALLOW_COPY_AND_ASSIGN(SVGDocumentExtensions);
+  gfx::Vector2dF translate_;
+  // Set to true whenever a <foreignObject> is connected to the document. Does
+  // not get reset if all <foreignObject>s are removed.
+  bool may_contain_foreign_objects_ = false;
 };
 
 }  // namespace blink

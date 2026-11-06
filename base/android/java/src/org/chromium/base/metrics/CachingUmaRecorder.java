@@ -1,18 +1,25 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.base.metrics;
 
+import android.annotation.SuppressLint;
+
 import androidx.annotation.IntDef;
-import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 
+import org.chromium.base.Callback;
 import org.chromium.base.Log;
+import org.chromium.build.BuildConfig;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -25,7 +32,8 @@ import javax.annotation.concurrent.GuardedBy;
  * Stores metrics until given an {@link UmaRecorder} to forward the samples to. After flushing, no
  * longer stores metrics, instead immediately forwards them to the given {@link UmaRecorder}.
  */
-/* package */ final class CachingUmaRecorder implements UmaRecorder {
+/* package */ @NullMarked
+final class CachingUmaRecorder implements UmaRecorder {
     private static final String TAG = "CachingUmaRecorder";
 
     /**
@@ -42,52 +50,40 @@ import javax.annotation.concurrent.GuardedBy;
      * Maximum number of user actions cached at the same time. It is better to drop some samples
      * rather than have a bug cause the cache to grow without limit.
      */
-    @VisibleForTesting
-    static final int MAX_USER_ACTION_COUNT = 256;
+    @VisibleForTesting static final int MAX_USER_ACTION_COUNT = 256;
 
     /** Stores the definition and samples of a single cached histogram. */
     @VisibleForTesting
     static class Histogram {
         /**
-         * Maximum number of cached samples in a single histogram. it is better to drop some
-         * samples rather than have a bug cause the cache to grow without limit
+         * Maximum number of cached samples in a single histogram. it is better to drop some samples
+         * rather than have a bug cause the cache to grow without limit
          */
-        @VisibleForTesting
-        static final int MAX_SAMPLE_COUNT = 256;
+        @VisibleForTesting static final int MAX_SAMPLE_COUNT = 256;
 
-        /**
-         * Identifies the type of the histogram.
-         */
+        /** Identifies the type of the histogram. */
         @IntDef({
-                Type.BOOLEAN,
-                Type.EXPONENTIAL,
-                Type.LINEAR,
-                Type.SPARSE,
+            Type.BOOLEAN,
+            Type.EXPONENTIAL,
+            Type.LINEAR,
+            Type.SPARSE,
         })
         @Retention(RetentionPolicy.SOURCE)
         @interface Type {
-            /**
-             * Used by histograms recorded with {@link UmaRecorder#recordBooleanHistogram}.
-             */
+            /** Used by histograms recorded with {@link UmaRecorder#recordBooleanHistogram}. */
             int BOOLEAN = 1;
-            /**
-             * Used by histograms recorded with {@link UmaRecorder#recordExponentialHistogram}.
-             */
+
+            /** Used by histograms recorded with {@link UmaRecorder#recordExponentialHistogram}. */
             int EXPONENTIAL = 2;
 
-            /**
-             * Used by histograms recorded with {@link UmaRecorder#recordLinearHistogram}.
-             */
+            /** Used by histograms recorded with {@link UmaRecorder#recordLinearHistogram}. */
             int LINEAR = 3;
 
-            /**
-             * Used by histograms recorded with {@link UmaRecorder#recordSparseHistogram}.
-             */
+            /** Used by histograms recorded with {@link UmaRecorder#recordSparseHistogram}. */
             int SPARSE = 4;
         }
 
-        @Type
-        private final int mType;
+        @Type private final int mType;
         private final String mName;
 
         private final int mMin;
@@ -108,16 +104,17 @@ import javax.annotation.concurrent.GuardedBy;
          *         histograms.
          */
         Histogram(@Type int type, String name, int min, int max, int numBuckets) {
-            assert type == Type.EXPONENTIAL || type == Type.LINEAR
-                    || (min == 0 && max == 0 && numBuckets == 0)
-                : "Histogram type " + type + " must have no min/max/buckets set";
+            assert type == Type.EXPONENTIAL
+                            || type == Type.LINEAR
+                            || (min == 0 && max == 0 && numBuckets == 0)
+                    : "Histogram type " + type + " must have no min/max/buckets set";
             mType = type;
             mName = name;
             mMin = min;
             mMax = max;
             mNumBuckets = numBuckets;
 
-            mSamples = new ArrayList<>(/*initialCapacity=*/1);
+            mSamples = new ArrayList<>(/* initialCapacity= */ 1);
         }
 
         /**
@@ -210,11 +207,11 @@ import javax.annotation.concurrent.GuardedBy;
     /**
      * The lock doesn't need to be fair - in the worst case a writing record*Histogram call will be
      * starved until reading calls reach cache size limits.
-     * <p>
-     * A read-write lock is used rather than {@code synchronized} blocks to the limit opportunities
-     * for stutter on the UI thread when waiting for this shared resource.
+     *
+     * <p>A read-write lock is used rather than {@code synchronized} blocks to the limit
+     * opportunities for stutter on the UI thread when waiting for this shared resource.
      */
-    private final ReentrantReadWriteLock mRwLock = new ReentrantReadWriteLock(/*fair=*/false);
+    private final ReentrantReadWriteLock mRwLock = new ReentrantReadWriteLock(/* fair= */ false);
 
     /** Cached histograms keyed by histogram name. */
     @GuardedBy("mRwLock")
@@ -226,7 +223,7 @@ import javax.annotation.concurrent.GuardedBy;
      * <p>
      * Using {@link AtomicInteger} because the value may need to be updated with a read lock held.
      */
-    private AtomicInteger mDroppedHistogramSampleCount = new AtomicInteger();
+    private final AtomicInteger mDroppedHistogramSampleCount = new AtomicInteger();
 
     /** Cache of user actions. */
     @GuardedBy("mRwLock")
@@ -245,8 +242,10 @@ import javax.annotation.concurrent.GuardedBy;
      * The read lock must be held while invoking methods on {@code mDelegate}.
      */
     @GuardedBy("mRwLock")
-    @Nullable
-    private UmaRecorder mDelegate;
+    private @Nullable UmaRecorder mDelegate;
+
+    @GuardedBy("mRwLock")
+    private @Nullable List<Callback<String>> mUserActionCallbacksForTesting;
 
     /**
      * Sets the current delegate to {@code recorder}. Forwards and clears all cached metrics if
@@ -255,7 +254,7 @@ import javax.annotation.concurrent.GuardedBy;
      * @param recorder new delegate.
      * @return the previous delegate.
      */
-    public UmaRecorder setDelegate(@Nullable final UmaRecorder recorder) {
+    public @Nullable UmaRecorder setDelegate(@Nullable final UmaRecorder recorder) {
         UmaRecorder previous;
         Map<String, Histogram> histogramCache = null;
         int droppedHistogramSampleCount = 0;
@@ -266,6 +265,9 @@ import javax.annotation.concurrent.GuardedBy;
         try {
             previous = mDelegate;
             mDelegate = recorder;
+            if (BuildConfig.IS_FOR_TEST) {
+                swapUserActionCallbacksForTesting(previous, recorder);
+            }
             if (recorder == null) {
                 return previous;
             }
@@ -317,15 +319,12 @@ import javax.annotation.concurrent.GuardedBy;
         for (Histogram histogram : cache.values()) {
             flushedHistogramSampleCount += histogram.flushTo(mDelegate);
         }
-        Log.i(TAG, "Flushed %d samples from %d histograms.", flushedHistogramSampleCount,
-                flushedHistogramCount);
-        // Using RecordHistogram here could cause an infinite recursion.
-        mDelegate.recordExponentialHistogram("UMA.JavaCachingRecorder.DroppedHistogramSampleCount",
-                droppedHistogramSampleCount, 1, 1_000_000, 50);
-        mDelegate.recordExponentialHistogram("UMA.JavaCachingRecorder.FlushedHistogramCount",
-                flushedHistogramCount, 1, 100_000, 50);
-        mDelegate.recordExponentialHistogram("UMA.JavaCachingRecorder.InputHistogramSampleCount",
-                flushedHistogramSampleCount + droppedHistogramSampleCount, 1, 1_000_000, 50);
+        Log.i(
+                TAG,
+                "Flushed %d samples from %d histograms, %d samples were dropped.",
+                flushedHistogramSampleCount,
+                flushedHistogramCount,
+                droppedHistogramSampleCount);
     }
 
     /**
@@ -342,11 +341,11 @@ import javax.annotation.concurrent.GuardedBy;
         for (UserAction userAction : cache) {
             userAction.flushTo(mDelegate);
         }
-        // Using RecordHistogram here could cause an infinite recursion.
-        mDelegate.recordExponentialHistogram("UMA.JavaCachingRecorder.DroppedUserActionCount",
-                droppedUserActionCount, 1, 1_000, 50);
-        mDelegate.recordExponentialHistogram("UMA.JavaCachingRecorder.InputUserActionCount",
-                cache.size() + droppedUserActionCount, 1, 10_000, 50);
+        Log.i(
+                TAG,
+                "Flushed %d user action samples, %d samples were dropped.",
+                cache.size(),
+                droppedUserActionCount);
     }
 
     /**
@@ -537,6 +536,11 @@ import javax.annotation.concurrent.GuardedBy;
                     assert false : "Too many user actions in cache";
                     mDroppedUserActionCount++;
                 }
+                if (mUserActionCallbacksForTesting != null) {
+                    for (int i = 0; i < mUserActionCallbacksForTesting.size(); i++) {
+                        mUserActionCallbacksForTesting.get(i).onResult(name);
+                    }
+                }
                 return; // Skip the lock downgrade.
             }
             // Downgrade by acquiring read lock before releasing write lock
@@ -552,6 +556,120 @@ import javax.annotation.concurrent.GuardedBy;
             mDelegate.recordUserAction(name, elapsedRealtimeMillis);
         } finally {
             mRwLock.readLock().unlock();
+        }
+    }
+
+    @Override
+    public int getHistogramValueCountForTesting(String name, int sample) {
+        mRwLock.readLock().lock();
+        try {
+            if (mDelegate != null) return mDelegate.getHistogramValueCountForTesting(name, sample);
+
+            Histogram histogram = mHistogramByName.get(name);
+            if (histogram == null) return 0;
+            int sampleCount = 0;
+            synchronized (histogram) {
+                for (int i = 0; i < histogram.mSamples.size(); i++) {
+                    if (histogram.mSamples.get(i) == sample) sampleCount++;
+                }
+            }
+            return sampleCount;
+        } finally {
+            mRwLock.readLock().unlock();
+        }
+    }
+
+    @Override
+    public int getHistogramTotalCountForTesting(String name) {
+        mRwLock.readLock().lock();
+        try {
+            if (mDelegate != null) return mDelegate.getHistogramTotalCountForTesting(name);
+
+            Histogram histogram = mHistogramByName.get(name);
+            if (histogram == null) return 0;
+            synchronized (histogram) {
+                return histogram.mSamples.size();
+            }
+        } finally {
+            mRwLock.readLock().unlock();
+        }
+    }
+
+    @Override
+    public List<HistogramBucket> getHistogramSamplesForTesting(String name) {
+        mRwLock.readLock().lock();
+        try {
+            if (mDelegate != null) return mDelegate.getHistogramSamplesForTesting(name);
+
+            Histogram histogram = mHistogramByName.get(name);
+            if (histogram == null) return Collections.emptyList();
+            Integer[] samplesCopy;
+            synchronized (histogram) {
+                samplesCopy = histogram.mSamples.toArray(new Integer[0]);
+            }
+            Arrays.sort(samplesCopy);
+            List<HistogramBucket> buckets = new ArrayList<>();
+            for (int i = 0; i < samplesCopy.length; ) {
+                int value = samplesCopy[i];
+                int countInBucket = 0;
+                do {
+                    countInBucket++;
+                    i++;
+                } while (i < samplesCopy.length && samplesCopy[i] == value);
+
+                buckets.add(new HistogramBucket(value, value + 1, countInBucket));
+            }
+            return buckets;
+        } finally {
+            mRwLock.readLock().unlock();
+        }
+    }
+
+    @Override
+    public void addUserActionCallbackForTesting(Callback<String> callback) {
+        mRwLock.writeLock().lock();
+        try {
+            if (mUserActionCallbacksForTesting == null) {
+                mUserActionCallbacksForTesting = new ArrayList<>();
+            }
+            mUserActionCallbacksForTesting.add(callback);
+            if (mDelegate != null) mDelegate.addUserActionCallbackForTesting(callback);
+        } finally {
+            mRwLock.writeLock().unlock();
+        }
+    }
+
+    @Override
+    public void removeUserActionCallbackForTesting(Callback<String> callback) {
+        mRwLock.writeLock().lock();
+        try {
+            if (mUserActionCallbacksForTesting == null) {
+                assert false
+                        : "Attempting to remove a user action callback without previously "
+                                + "registering any.";
+                return;
+            }
+            mUserActionCallbacksForTesting.remove(callback);
+            if (mDelegate != null) mDelegate.removeUserActionCallbackForTesting(callback);
+        } finally {
+            mRwLock.writeLock().unlock();
+        }
+    }
+
+    @SuppressLint("VisibleForTests")
+    @GuardedBy("mRwLock")
+    private void swapUserActionCallbacksForTesting(
+            @Nullable UmaRecorder previousRecorder, @Nullable UmaRecorder newRecorder) {
+        if (mUserActionCallbacksForTesting == null) return;
+
+        for (int i = 0; i < mUserActionCallbacksForTesting.size(); i++) {
+            if (previousRecorder != null) {
+                previousRecorder.removeUserActionCallbackForTesting(
+                        mUserActionCallbacksForTesting.get(i));
+            }
+            if (newRecorder != null) {
+                newRecorder.addUserActionCallbackForTesting(mUserActionCallbacksForTesting.get(i));
+            }
         }
     }
 }

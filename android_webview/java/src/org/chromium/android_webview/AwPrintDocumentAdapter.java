@@ -1,10 +1,9 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.android_webview;
 
-import android.annotation.SuppressLint;
 import android.os.Bundle;
 import android.os.CancellationSignal;
 import android.os.ParcelFileDescriptor;
@@ -16,20 +15,20 @@ import android.print.PrintDocumentInfo;
 import java.util.ArrayList;
 
 /**
- * Adapter for printing Webview. This class implements the abstract
- * system class PrintDocumentAdapter and hides all printing details from
- * the developer.
+ * Adapter for printing Webview.
+ *
+ * <p>This class implements the abstract system class PrintDocumentAdapter and hides all printing
+ * details from the developer.
  */
-@SuppressLint("NewApi")  // Printing requires API level 19.
 public class AwPrintDocumentAdapter extends PrintDocumentAdapter {
 
-    private AwPdfExporter mPdfExporter;
+    private final AwPdfExporter mPdfExporter;
     private PrintAttributes mAttributes;
-    private String mDocumentName;
+    private final String mDocumentName;
 
+    // TODO(sgurun) remove in favor of constructor below once the AOSP changes are in.
     /**
      * Constructor.
-     * TODO(sgurun) remove in favor of constructor below once the AOSP changes are in.
      *
      * @param pdfExporter The PDF exporter to export the webview contents to a PDF file.
      */
@@ -41,22 +40,22 @@ public class AwPrintDocumentAdapter extends PrintDocumentAdapter {
      * Constructor.
      *
      * @param pdfExporter The PDF exporter to export the webview contents to a PDF file.
-     * @param documentName  The name of the pdf document.
+     * @param documentName The name of the pdf document.
      */
     public AwPrintDocumentAdapter(AwPdfExporter pdfExporter, String documentName) {
         mPdfExporter = pdfExporter;
         mDocumentName = documentName;
     }
 
-
     @Override
-    public void onLayout(PrintAttributes oldAttributes, PrintAttributes newAttributes,
-            CancellationSignal cancellationSignal, LayoutResultCallback callback,
+    public void onLayout(
+            PrintAttributes oldAttributes,
+            PrintAttributes newAttributes,
+            CancellationSignal cancellationSignal,
+            LayoutResultCallback callback,
             Bundle metadata) {
         mAttributes = newAttributes;
-        PrintDocumentInfo documentInfo = new PrintDocumentInfo
-                .Builder(mDocumentName)
-                .build();
+        PrintDocumentInfo documentInfo = new PrintDocumentInfo.Builder(mDocumentName).build();
         // TODO(sgurun) once componentization is done, do layout changes and
         // generate PDF here, set the page range information to documentinfo
         // and call onLayoutFinished with true/false depending on whether
@@ -65,22 +64,29 @@ public class AwPrintDocumentAdapter extends PrintDocumentAdapter {
     }
 
     @Override
-    public void onWrite(final PageRange[] pages, ParcelFileDescriptor destination,
-            CancellationSignal cancellationSignal, final WriteResultCallback callback) {
+    public void onWrite(
+            final PageRange[] pages,
+            ParcelFileDescriptor destination,
+            CancellationSignal cancellationSignal,
+            final WriteResultCallback callback) {
         if (pages == null || pages.length == 0) {
             callback.onWriteFailed(null);
             return;
         }
 
-        mPdfExporter.exportToPdf(destination, mAttributes,
-                normalizeRanges(pages), pageCount -> {
+        mPdfExporter.exportToPdf(
+                destination,
+                mAttributes,
+                normalizeRanges(pages),
+                pageCount -> {
                     if (pageCount > 0) {
                         callback.onWriteFinished(validatePageRanges(pages, pageCount));
                     } else {
                         // TODO(sgurun) provide a localized error message
                         callback.onWriteFailed(null);
                     }
-                }, cancellationSignal);
+                },
+                cancellationSignal);
     }
 
     private static PageRange[] validatePageRanges(PageRange[] pages, int pageCount) {

@@ -1,11 +1,14 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/platform/network/network_utils.h"
 
+#include "base/test/scoped_feature_list.h"
 #include "net/base/ip_address.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/features.h"
+#include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
@@ -51,12 +54,12 @@ TEST(NetworkUtilsTest, IsReservedIPAddress) {
   for (int i = 0; i < 256; i++) {
     net::IPAddress address(i, 0, 0, 1);
     std::string address_string = address.ToString();
-    if (i == 0 || i == 10 || i == 127 || i > 223) {
-      EXPECT_TRUE(network_utils::IsReservedIPAddress(
-          String::FromUTF8(address_string.data(), address_string.length())));
+    if (i == 0 || i == 10 || i == 127 || i == 192 || i > 223) {
+      EXPECT_TRUE(
+          network_utils::IsReservedIPAddress(String::FromUtf8(address_string)));
     } else {
-      EXPECT_FALSE(network_utils::IsReservedIPAddress(
-          String::FromUTF8(address_string.data(), address_string.length())));
+      EXPECT_FALSE(
+          network_utils::IsReservedIPAddress(String::FromUtf8(address_string)));
     }
   }
 }
@@ -110,6 +113,40 @@ TEST(NetworkUtilsTest, GetDomainAndRegistry) {
             network_utils::GetDomainAndRegistry(
                 "www.example.notarealregistry",
                 network_utils::kIncludePrivateRegistries));
+}
+
+TEST(NetworkUtilsTest, GetFetchCategoryIdFromUrl) {
+  // By default, category_prefix is empty and logging is inactive.
+  EXPECT_EQ(network_utils::GetFetchCategoryIdFromUrl(
+                KURL("https://example.com/?category=test-123")),
+            std::nullopt);
+
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeatureWithParameters(
+      features::kFetchErrorCategoryLogging,
+      {{"category_param_name", "category"}, {"category_prefix", "test-"}});
+
+  EXPECT_EQ(network_utils::GetFetchCategoryIdFromUrl(
+                KURL("https://example.com/?category=test-123")),
+            123u);
+  EXPECT_EQ(network_utils::GetFetchCategoryIdFromUrl(
+                KURL("https://example.com/?other=1&category=test-0")),
+            0u);
+  EXPECT_EQ(network_utils::GetFetchCategoryIdFromUrl(
+                KURL("https://example.com/?category=test-test-123")),
+            std::nullopt);
+  EXPECT_EQ(network_utils::GetFetchCategoryIdFromUrl(
+                KURL("https://example.com/?category=test-invalid")),
+            std::nullopt);
+  EXPECT_EQ(network_utils::GetFetchCategoryIdFromUrl(
+                KURL("https://example.com/?category=other-123")),
+            std::nullopt);
+  EXPECT_EQ(network_utils::GetFetchCategoryIdFromUrl(
+                KURL("https://example.com/?category=test-4294967296")),
+            std::nullopt);
+  EXPECT_EQ(network_utils::GetFetchCategoryIdFromUrl(
+                KURL("ftp://example.com/?category=test-123")),
+            std::nullopt);
 }
 
 }  // namespace blink

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,19 +6,21 @@
 #define NET_HTTP_HTTP_AUTH_CONTROLLER_H_
 
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/threading/thread_checker.h"
 #include "net/base/completion_once_callback.h"
 #include "net/base/net_export.h"
-#include "net/base/network_isolation_key.h"
+#include "net/base/network_anonymization_key.h"
 #include "net/http/http_auth.h"
 #include "net/http/http_auth_preferences.h"
 #include "net/log/net_log_with_source.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
+#include "url/scheme_host_port.h"
 
 namespace net {
 
@@ -32,6 +34,7 @@ class HostResolver;
 class NetLogWithSource;
 struct HttpRequestInfo;
 class SSLInfo;
+class X509Certificate;
 
 // HttpAuthController is the main entry point for external callers into the HTTP
 // authentication stack. A single instance of an HttpAuthController can be used
@@ -60,9 +63,9 @@ class NET_EXPORT_PRIVATE HttpAuthController
   //       If |target| is PROXY, then |auth_url| should have no hierarchical
   //       part since that is meaningless.
   //
-  // * |network_isolation_key| specifies the NetworkIsolationKey associated with
-  //       the resource load. Depending on settings, credentials may be scoped
-  //       to a single NetworkIsolationKey.
+  // * |network_anonymization_key| specifies the NetworkAnonymizationKey
+  //       associated with the resource load. Depending on settings, credentials
+  //       may be scoped to a single NetworkAnonymizationKey.
   //
   // * |http_auth_cache| specifies the credentials cache to use. During
   //       authentication if explicit (user-provided) credentials are used and
@@ -85,16 +88,25 @@ class NET_EXPORT_PRIVATE HttpAuthController
   //       context allows ambient authentication using default credentials.
   HttpAuthController(HttpAuth::Target target,
                      const GURL& auth_url,
-                     const NetworkIsolationKey& network_isolation_key,
+                     const NetworkAnonymizationKey& network_anonymization_key,
                      HttpAuthCache* http_auth_cache,
                      HttpAuthHandlerFactory* http_auth_handler_factory,
                      HostResolver* host_resolver);
 
-  // Generate an authentication token for |target| if necessary. The return
-  // value is a net error code. |OK| will be returned both in the case that
+  // Generate an authentication token for `target` if necessary. The return
+  // value is a net error code. `OK` will be returned both in the case that
   // a token is correctly generated synchronously, as well as when no tokens
   // were necessary.
+  //
+  // `ssl_info` is the certificate information for the connection the token
+  // will be sent over, and must match what HandleAuthChallenge() is given for
+  // responses on that connection. It is empty when no certificate applies to
+  // this controller's target, for example for "http" origins and for proxy
+  // auth. If a connection-based handler was created on a connection with a
+  // different server certificate, it is dropped instead of generating a token,
+  // so that authentication restarts on the current connection.
   int MaybeGenerateAuthToken(const HttpRequestInfo* request,
+                             const SSLInfo& ssl_info,
                              CompletionOnceCallback callback,
                              const NetLogWithSource& net_log);
 
@@ -118,12 +130,24 @@ class NET_EXPORT_PRIVATE HttpAuthController
 
   bool HaveAuth() const;
 
+  // Returns true if HandleAuthChallenge() has ever been called. Unlike
+  // HaveAuthHandler(), this is false when only preemptive auth from the cache
+  // has been used.
+  bool has_handled_challenge() const { return has_handled_challenge_; }
+
+  // Returns true if the target scheme, host, and port that this controller was
+  // constructed to authenticate against matches `scheme_host_port`.
+  bool MatchesSchemeHostPort(
+      const url::SchemeHostPort& scheme_host_port) const {
+    return auth_scheme_host_port_ == scheme_host_port;
+  }
+
   // Return whether the authentication scheme is incompatible with HTTP/2
   // and thus the server would presumably reject a request on HTTP/2 anyway.
   bool NeedsHTTP11() const;
 
   // Swaps the authentication challenge info into |other|.
-  void TakeAuthInfo(absl::optional<AuthChallengeInfo>* other);
+  void TakeAuthInfo(std::optional<AuthChallengeInfo>* other);
 
   bool IsAuthSchemeDisabled(HttpAuth::Scheme scheme) const;
   void DisableAuthScheme(HttpAuth::Scheme scheme);
@@ -188,6 +212,19 @@ class NET_EXPORT_PRIVATE HttpAuthController
 
   void OnGenerateAuthTokenDone(int result);
 
+  enum AuthEvent {
+    AUTH_EVENT_START = 0,
+    AUTH_EVENT_REJECT,
+    AUTH_EVENT_MAX,
+  };
+
+  // Records the number of authentication events per authentication scheme.
+  void HistogramAuthEvent(AuthEvent auth_event);
+
+  // If the current handler is connection-based and was created for a connection
+  // with a different server certificate, invalidates the handler.
+  void InvalidateIfServerCertChanged(const X509Certificate* cert);
+
   // Indicates if this handler is for Proxy auth or Server auth.
   HttpAuth::Target target_;
 
@@ -195,19 +232,26 @@ class NET_EXPORT_PRIVATE HttpAuthController
   const GURL auth_url_;
 
   // Holds the {scheme, host, port} for the authentication target.
-  const GURL auth_origin_;
+  const url::SchemeHostPort auth_scheme_host_port_;
 
   // The absolute path of the resource needing authentication.
   // For proxy authentication, the path is empty.
   const std::string auth_path_;
 
-  // NetworkIsolationKey associated with the request.
-  const NetworkIsolationKey network_isolation_key_;
+  // NetworkAnonymizationKey associated with the request.
+  const NetworkAnonymizationKey network_anonymization_key_;
 
   // |handler_| encapsulates the logic for the particular auth-scheme.
   // This includes the challenge's parameters. If nullptr, then there is no
   // associated auth handler.
   std::unique_ptr<HttpAuthHandler> handler_;
+
+  // The server certificate from the connection on which |handler_| was
+  // created. Connection-based handlers derive per-connection state (such as
+  // channel bindings) from this certificate at creation time, so the handler
+  // must be dropped if a later challenge arrives over a connection with a
+  // different certificate.
+  scoped_refptr<X509Certificate> handler_server_cert_;
 
   // |identity_| holds the credentials that should be used by the handler_ to
   // generate challenge responses. This identity can come from a number of
@@ -219,23 +263,26 @@ class NET_EXPORT_PRIVATE HttpAuthController
   std::string auth_token_;
 
   // Contains information about the auth challenge.
-  absl::optional<AuthChallengeInfo> auth_info_;
+  std::optional<AuthChallengeInfo> auth_info_;
 
   // True if we've used the username:password embedded in the URL.  This
   // makes sure we use the embedded identity only once for the transaction,
   // preventing an infinite auth restart loop.
-  bool embedded_identity_used_;
+  bool embedded_identity_used_ = false;
 
   // True if default credentials have already been tried for this transaction
   // in response to an HTTP authentication challenge.
-  bool default_credentials_used_;
+  bool default_credentials_used_ = false;
+
+  // True if HandleAuthChallenge() has been called.
+  bool has_handled_challenge_ = false;
 
   // These two are owned by the HttpNetworkSession/IOThread, which own the
   // objects which reference |this|. Therefore, these raw pointers are valid
   // for the lifetime of this object.
-  HttpAuthCache* const http_auth_cache_;
-  HttpAuthHandlerFactory* const http_auth_handler_factory_;
-  HostResolver* const host_resolver_;
+  const raw_ptr<HttpAuthCache> http_auth_cache_;
+  const raw_ptr<HttpAuthHandlerFactory> http_auth_handler_factory_;
+  const raw_ptr<HostResolver> host_resolver_;
 
   std::set<HttpAuth::Scheme> disabled_schemes_;
 

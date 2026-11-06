@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,17 @@
 #define NET_DNS_ADDRESS_SORTER_H_
 
 #include <memory>
+#include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "net/base/ip_endpoint.h"
 #include "net/base/net_export.h"
+#include "net/base/network_handle.h"
 
 namespace net {
 
 class AddressList;
+class NetworkAnonymizationKey;
 
 // Sorts AddressList according to RFC3484, by likelihood of successful
 // connection. Depending on the platform, the sort could be performed
@@ -22,23 +25,30 @@ class AddressList;
 class NET_EXPORT AddressSorter {
  public:
   using CallbackType =
-      base::OnceCallback<void(bool success, const AddressList& list)>;
+      base::OnceCallback<void(bool success, std::vector<IPEndPoint> sorted)>;
 
-  virtual ~AddressSorter() {}
+  AddressSorter(const AddressSorter&) = delete;
+  AddressSorter& operator=(const AddressSorter&) = delete;
 
-  // Sorts |list|, which must include at least one IPv6 address.
-  // Calls |callback| upon completion. Could complete synchronously. Could
+  virtual ~AddressSorter() = default;
+
+  // Sorts `endpoints`, which must include at least one IPv6 address.
+  // `target_network` is necessary to correctly sort in multi-network scenarios:
+  // sorting can require connecting an UDP socket, which requires knowledge
+  // about the target network to be performed correctly.
+  // Calls `callback` upon completion. Could complete synchronously. Could
   // complete after this AddressSorter is destroyed.
-  virtual void Sort(const AddressList& list, CallbackType callback) const = 0;
+
+  virtual void Sort(const std::vector<IPEndPoint>& endpoints,
+                    const NetworkAnonymizationKey& anonymization_key,
+                    handles::NetworkHandle target_network,
+                    CallbackType callback) const = 0;
 
   // Creates platform-dependent AddressSorter.
   static std::unique_ptr<AddressSorter> CreateAddressSorter();
 
  protected:
-  AddressSorter() {}
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(AddressSorter);
+  AddressSorter() = default;
 };
 
 }  // namespace net

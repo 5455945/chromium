@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,11 @@
 #include <string>
 
 #include "base/time/time.h"
-#include "components/sync/base/model_type.h"
+#include "components/sync/base/data_type.h"
 #include "components/sync/base/passphrase_enums.h"
 #include "components/sync/engine/sync_encryption_handler.h"
+#include "components/sync/engine/sync_protocol_error.h"
 #include "components/sync/protocol/nigori_specifics.pb.h"
-#include "components/sync/protocol/sync_protocol_error.h"
 
 namespace syncer {
 
@@ -21,7 +21,7 @@ namespace syncer {
 // This struct is closely tied to the AllStatus object which uses instances of
 // it to track and report on the sync engine's internal state, and the functions
 // in sync_ui_util.cc which convert the contents of this struct into a
-// DictionaryValue used to populate the chrome://sync-internals summary tab.
+// base::DictValue used to populate the chrome://sync-internals summary tab.
 struct SyncStatus {
   SyncStatus();
   SyncStatus(const SyncStatus& other);
@@ -37,12 +37,6 @@ struct SyncStatus {
 
   SyncProtocolError sync_protocol_error;
 
-  // Number of encryption conflicts counted during most recent sync cycle.
-  int encryption_conflicts = 0;
-
-  // Number of hierarchy conflicts counted during most recent sync cycle.
-  int hierarchy_conflicts = 0;
-
   // Number of items the server refused to commit due to conflict during most
   // recent sync cycle.
   int server_conflicts = 0;
@@ -55,20 +49,14 @@ struct SyncStatus {
 
   // Total updates received by the syncer since browser start.
   int updates_received = 0;
-  // Total updates received that are echoes of our own changes.
-  int reflected_updates_received = 0;
   // Of updates_received, how many were tombstones.
   int tombstone_updates_received = 0;
 
   // Total successful commits.
   int num_commits_total = 0;
 
-  // Total number of overwrites due to conflict resolver since browser start.
-  int num_local_overwrites_total = 0;
-  int num_server_overwrites_total = 0;
-
   // Encryption related.
-  ModelTypeSet encrypted_types;
+  DataTypeSet encrypted_types;
   bool cryptographer_can_encrypt = false;
   bool crypto_has_pending_keys = false;
   bool has_keystore_key = false;
@@ -77,21 +65,18 @@ struct SyncStatus {
   sync_pb::NigoriSpecifics::TrustedVaultDebugInfo trusted_vault_debug_info;
 
   // Per-datatype throttled status.
-  ModelTypeSet throttled_types;
+  DataTypeSet throttled_types;
 
   // Per-datatype backed off status.
-  ModelTypeSet backed_off_types;
+  DataTypeSet backed_off_types;
 
   std::string cache_guid;
 
-  // The unique identifier for the invalidation client.
-  std::string invalidator_client_id;
+  // Data types having pending invalidations.
+  DataTypeSet invalidated_data_types;
 
   // Time of next retry if sync scheduler is throttled or in backoff.
   base::Time retry_time;
-
-  // The location of the local sync backend db file if local sync is enabled.
-  std::string local_sync_folder;
 };
 
 }  // namespace syncer

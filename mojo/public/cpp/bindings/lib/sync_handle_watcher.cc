@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,8 +23,9 @@ SyncHandleWatcher::SyncHandleWatcher(
 
 SyncHandleWatcher::~SyncHandleWatcher() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (registered_)
+  if (registered_) {
     registry_->UnregisterHandle(handle_);
+  }
 
   destroyed_->data = true;
 }
@@ -46,11 +47,12 @@ bool SyncHandleWatcher::SyncWatch(const bool* should_stop) {
   // the boolean that Wait uses.
   auto destroyed = destroyed_;
   const bool* should_stop_array[] = {should_stop, &destroyed->data};
-  bool result = registry_->Wait(should_stop_array, 2);
+  bool result = registry_->Wait(should_stop_array);
 
   // This object has been destroyed.
-  if (destroyed->data)
+  if (destroyed->data) {
     return false;
+  }
 
   DecrementRegisterCount();
   return result;

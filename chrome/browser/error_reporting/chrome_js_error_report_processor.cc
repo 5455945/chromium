@@ -1,16 +1,20 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/error_reporting/chrome_js_error_report_processor.h"
 
+#include <stddef.h>
+
+#include <string_view>
 #include <tuple>
 #include <utility>
 
-#include "base/callback.h"
-#include "base/callback_helpers.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/strings/escape.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/system/sys_info.h"
@@ -22,15 +26,15 @@
 #include "components/crash/content/browser/error_reporting/javascript_error_report.h"
 #include "components/crash/core/app/client_upload_info.h"
 #include "components/crash/core/app/crashpad.h"
-#include "components/feedback/redaction_tool.h"
-#include "components/startup_metric_utils/browser/startup_metric_utils.h"
+#include "components/feedback/redaction_tool/redaction_tool.h"
+#include "components/startup_metric_utils/common/startup_metric_utils.h"
 #include "components/variations/variations_crash_keys.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/storage_partition.h"
-#include "net/base/escape.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -39,10 +43,9 @@ constexpr char kRegularTabbedWindow[] = "REGULAR_TABBED";
 constexpr char kWebAppWindow[] = "WEB_APP";
 constexpr char kSystemWebAppWindow[] = "SYSTEM_WEB_APP";
 
-#if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_CHROMEOS)
 // Give up if crash_reporter hasn't finished in this long.
-constexpr base::TimeDelta kMaximumWaitForCrashReporter =
-    base::TimeDelta::FromMinutes(1);
+constexpr base::TimeDelta kMaximumWaitForCrashReporter = base::Minutes(1);
 #endif
 
 // Sometimes, the stack trace will contain an error message as the first line,
@@ -67,17 +70,47 @@ void RemoveErrorMessageFromStackTrace(const std::string& error_message,
 }
 
 std::string RedactErrorMessage(const std::string& message) {
-  return feedback::RedactionTool(/*first_party_extension_ids=*/nullptr)
-      .Redact(message);
+  return redaction::RedactionTool().Redact(message);
 }
 
-std::string MapWindowTypeToString(WindowType window_type) {
+// Truncate the error message to no more than 1000 characters. Long messages
+// are not useful and can cause problems in internal systems (such as
+// excessively long URLs used to point to error reports). Note that the
+// truncation is calculated pre-character-escaping ("  " is 3 characters, not
+// the 9 of "%20%20%20") so that we don't break an escape sequence.
+//
+// Return the original message if it's already less than 1000 characters, or
+// a truncated version if it's over 1000 characters
+std::string TruncateErrorMessage(const std::string& message) {
+  constexpr int kMaxCharacters = 1000;
+
+  if (message.length() <= kMaxCharacters) {
+    return message;
+  }
+
+  constexpr std::string_view kTruncationMessage = "--[TRUNCATED]--";
+  constexpr int kTruncationMessageLength = kTruncationMessage.size();
+
+  // Truncate the middle of the message. The useful information is likely to be
+  // at the beginning ('Invalid regex: "....."') or the end ('"...." is not
+  // a valid email address').
+  constexpr int kStartLength =
+      (kMaxCharacters - kTruncationMessageLength + 1) / 2;
+  constexpr int kEndLength = (kMaxCharacters - kTruncationMessageLength) / 2;
+  std::string::size_type begin_end_fragment = message.length() - kEndLength;
+
+  return base::StrCat({message.substr(0, kStartLength), kTruncationMessage,
+                       message.substr(begin_end_fragment)});
+}
+
+std::string MapWindowTypeToString(
+    JavaScriptErrorReport::WindowType window_type) {
   switch (window_type) {
-    case WindowType::kRegularTabbed:
+    case JavaScriptErrorReport::WindowType::kRegularTabbed:
       return kRegularTabbedWindow;
-    case WindowType::kWebApp:
+    case JavaScriptErrorReport::WindowType::kWebApp:
       return kWebAppWindow;
-    case WindowType::kSystemWebApp:
+    case JavaScriptErrorReport::WindowType::kSystemWebApp:
       return kSystemWebAppWindow;
     default:
       return kNoBrowserNoWindow;
@@ -88,7 +121,7 @@ std::string MapWindowTypeToString(WindowType window_type) {
 
 ChromeJsErrorReportProcessor::ChromeJsErrorReportProcessor()
     :
-#if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_CHROMEOS)
       maximium_wait_for_crash_reporter_(kMaximumWaitForCrashReporter),
 #endif
       clock_(base::DefaultClock::GetInstance()) {
@@ -96,16 +129,16 @@ ChromeJsErrorReportProcessor::ChromeJsErrorReportProcessor()
 ChromeJsErrorReportProcessor::~ChromeJsErrorReportProcessor() = default;
 
 // Returns the redacted, fixed-up error report if the user consented to have it
-// sent. Returns absl::nullopt if the user did not consent or we otherwise
+// sent. Returns std::nullopt if the user did not consent or we otherwise
 // should not send the report. All the MayBlock work should be done in here.
-absl::optional<JavaScriptErrorReport>
+std::optional<JavaScriptErrorReport>
 ChromeJsErrorReportProcessor::CheckConsentAndRedact(
     JavaScriptErrorReport error_report) {
   // Consent is handled at the OS level by crash_reporter so we don't need to
   // check it here for Chrome OS.
-#if !BUILDFLAG(IS_CHROMEOS_ASH) && !BUILDFLAG(IS_CHROMEOS_LACROS)
+#if !BUILDFLAG(IS_CHROMEOS)
   if (!crash_reporter::GetClientCollectStatsConsent()) {
-    return absl::nullopt;
+    return std::nullopt;
   }
 #endif
 
@@ -117,28 +150,15 @@ ChromeJsErrorReportProcessor::CheckConsentAndRedact(
   }
 
   error_report.message = RedactErrorMessage(error_report.message);
-  // TODO(https://crbug.com/1121816): Also redact stack trace, but don't
+  // TODO(crbug.com/40146362): Also redact stack trace, but don't
   // completely remove the URL (only query & fragment).
   return error_report;
 }
 
-struct ChromeJsErrorReportProcessor::PlatformInfo {
-  std::string product_name;
-  std::string version;
-  std::string channel;
-};
-
-ChromeJsErrorReportProcessor::PlatformInfo
-ChromeJsErrorReportProcessor::GetPlatformInfo() {
-  PlatformInfo info;
-
-  // TODO(https://crbug.com/1121816): Get correct product_name for non-POSIX
-  // platforms.
-#if defined(OS_POSIX)
-  crash_reporter::GetClientProductNameAndVersion(&info.product_name,
-                                                 &info.version, &info.channel);
-#endif
-  return info;
+crash_reporter::ProductInfo ChromeJsErrorReportProcessor::GetProductInfo() {
+  crash_reporter::ProductInfo product_info;
+  crash_reporter::GetClientProductInfo(&product_info);
+  return product_info;
 }
 
 variations::ExperimentListInfo
@@ -160,29 +180,32 @@ void ChromeJsErrorReportProcessor::OnConsentCheckCompleted(
     scoped_refptr<network::SharedURLLoaderFactory> loader_factory,
     base::TimeDelta browser_process_uptime,
     base::Time report_time,
-    absl::optional<JavaScriptErrorReport> error_report) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    std::optional<JavaScriptErrorReport> error_report) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
   if (!error_report) {
     // User didn't consent. This isn't an error so don't log an error.
     return;
   }
 
-  const auto platform = GetPlatformInfo();
+  const crash_reporter::ProductInfo product_info = GetProductInfo();
   const GURL source(error_report->url);
-  const auto product = error_report->product.empty() ? platform.product_name
-                                                     : error_report->product;
-  const auto version =
-      error_report->version.empty() ? platform.version : error_report->version;
+  const std::string product_name =
+      error_report->product.empty() ? std::string(product_info.product_name())
+                                    : error_report->product;
+  const std::string version = error_report->version.empty()
+                                  ? std::string(product_info.version())
+                                  : error_report->version;
 
   ParameterMap params;
-  params["prod"] = net::EscapeQueryParamValue(product, /*use_plus=*/false);
-  params["ver"] = net::EscapeQueryParamValue(version, /*use_plus=*/false);
+  params["prod"] =
+      base::EscapeQueryParamValue(product_name, /*use_plus=*/false);
+  params["ver"] = base::EscapeQueryParamValue(version, /*use_plus=*/false);
   params["type"] = "JavascriptError";
-  params["error_message"] = error_report->message;
+  params["error_message"] = TruncateErrorMessage(error_report->message);
   params["browser"] = "Chrome";
-  params["browser_version"] = platform.version;
-  params["channel"] = platform.channel;
-#if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
+  params["browser_version"] = std::string(product_info.version());
+  params["channel"] = std::string(product_info.channel());
+#if BUILDFLAG(IS_CHROMEOS)
   // base::SysInfo::OperatingSystemName() returns "Linux" on ChromeOS devices.
   params["os"] = "ChromeOS";
 #else
@@ -199,15 +222,26 @@ void ChromeJsErrorReportProcessor::OnConsentCheckCompleted(
     case JavaScriptErrorReport::SourceSystem::kWebUIObserver:
       params[kSourceSystemParamName] = "webui_observer";
       break;
+    case JavaScriptErrorReport::SourceSystem::kDevToolsObserver:
+      params[kSourceSystemParamName] = "devtools_observer";
+      break;
+    case JavaScriptErrorReport::SourceSystem::kExtensionObserver:
+      params[kSourceSystemParamName] = "extension_observer";
+      break;
   }
   params["full_url"] = source.spec();
-  params["url"] = source.path();
+  params["url"] = source.GetPath();
   params["src"] = source.spec();
-  if (error_report->line_number)
+  if (error_report->line_number) {
     params["line"] = base::NumberToString(*error_report->line_number);
-  if (error_report->column_number)
+  }
+  if (error_report->column_number) {
     params["column"] = base::NumberToString(*error_report->column_number);
-  // TODO(crbug/1121816): Chrome crashes have "Process uptime" and "Process
+  }
+  if (error_report->debug_id) {
+    params["debug_id"] = std::move(*error_report->debug_id);
+  }
+  // TODO(crbug.com/40146362): Chrome crashes have "Process uptime" and "Process
   // type" fields, eventually consider using that for process uptime.
   params["browser_process_uptime_ms"] =
       base::NumberToString(browser_process_uptime.InMilliseconds());
@@ -216,13 +250,16 @@ void ChromeJsErrorReportProcessor::OnConsentCheckCompleted(
   if (error_report->window_type.has_value()) {
     std::string window_type =
         MapWindowTypeToString(error_report->window_type.value());
-    if (window_type != kNoBrowserNoWindow)
+    if (window_type != kNoBrowserNoWindow) {
       params["window_type"] = window_type;
+    }
   }
-  if (error_report->app_locale)
+  if (error_report->app_locale) {
     params["app_locale"] = std::move(*error_report->app_locale);
-  if (error_report->page_url)
+  }
+  if (error_report->page_url) {
     params["page_url"] = std::move(*error_report->page_url);
+  }
   AddExperimentIds(params);
 
   SendReport(std::move(params), std::move(error_report->stack_trace),
@@ -234,10 +271,8 @@ void ChromeJsErrorReportProcessor::CheckAndUpdateRecentErrorReports(
     const JavaScriptErrorReport& error_report,
     bool* should_send) {
   base::Time now = clock_->Now();
-  constexpr base::TimeDelta kTimeBetweenCleanings =
-      base::TimeDelta::FromHours(1);
-  constexpr base::TimeDelta kTimeBetweenDuplicateReports =
-      base::TimeDelta::FromHours(1);
+  constexpr base::TimeDelta kTimeBetweenCleanings = base::Hours(1);
+  constexpr base::TimeDelta kTimeBetweenDuplicateReports = base::Hours(1);
   // Check for cleaning.
   if (last_recent_error_reports_cleaning_.is_null()) {
     // First time in this function, no need to clean.
@@ -312,7 +347,7 @@ void ChromeJsErrorReportProcessor::SendErrorReport(
     JavaScriptErrorReport error_report,
     base::OnceClosure completion_callback,
     content::BrowserContext* browser_context) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
   // In theory, we should wait until the after the consent check to update the
   // sent map. However, that would mean we do a bunch of extra work on each
@@ -333,7 +368,7 @@ void ChromeJsErrorReportProcessor::SendErrorReport(
   base::ScopedClosureRunner callback_runner(std::move(completion_callback));
 
   scoped_refptr<network::SharedURLLoaderFactory> loader_factory;
-#if !BUILDFLAG(IS_CHROMEOS_ASH) && !BUILDFLAG(IS_CHROMEOS_LACROS)
+#if !BUILDFLAG(IS_CHROMEOS)
   // loader_factory must be created on UI thread. Get it now while we still
   // know the browser_context pointer is valid.
   loader_factory = browser_context->GetDefaultStoragePartition()
@@ -342,7 +377,8 @@ void ChromeJsErrorReportProcessor::SendErrorReport(
 
   // Get browser uptime before swapping threads to reduce lag time between the
   // error report occurring and sending it off.
-  base::TimeTicks startup_time = startup_metric_utils::MainEntryPointTicks();
+  base::TimeTicks startup_time =
+      startup_metric_utils::GetCommon().MainEntryPointTicks();
   base::TimeDelta browser_process_uptime =
       (base::TimeTicks::Now() - startup_time);
 

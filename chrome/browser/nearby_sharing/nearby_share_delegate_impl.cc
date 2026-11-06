@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,23 +6,30 @@
 
 #include "ash/public/cpp/nearby_share_controller.h"
 #include "ash/public/cpp/session/session_controller.h"
+#include "ash/webui/settings/public/constants/routes.mojom.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/time/time.h"
+#include "build/branding_buildflags.h"
+#include "chrome/browser/nearby_sharing/common/nearby_share_features.h"
+#include "chrome/browser/nearby_sharing/common/nearby_share_resource_getter.h"
+#include "chrome/browser/nearby_sharing/nearby_share_settings.h"
 #include "chrome/browser/nearby_sharing/nearby_sharing_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/ash/session_util.h"
+#include "chrome/browser/ui/ash/session/session_util.h"
 #include "chrome/browser/ui/settings_window_manager_chromeos.h"
-#include "chrome/browser/ui/webui/settings/chromeos/constants/routes.mojom.h"
+#include "ui/gfx/vector_icon_types.h"
+
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+#include "chrome/browser/nearby_sharing/internal/icons/vector_icons.h"
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
 
 namespace {
 
 const char kStartOnboardingQueryParam[] = "onboarding";
 const char kStartReceivingQueryParam[] = "receive";
 
-constexpr base::TimeDelta kShutoffTimeout = base::TimeDelta::FromMinutes(5);
-constexpr base::TimeDelta kOnboardingWaitTimeout =
-    base::TimeDelta::FromMinutes(5);
+constexpr base::TimeDelta kShutoffTimeout = base::Minutes(10);
 
 std::string GetTimestampString() {
   return base::NumberToString(
@@ -39,17 +46,26 @@ NearbyShareDelegateImpl::NearbyShareDelegateImpl(
           FROM_HERE,
           kShutoffTimeout,
           base::BindRepeating(&NearbyShareDelegateImpl::DisableHighVisibility,
-                              base::Unretained(this))),
-      onboarding_wait_timer_(FROM_HERE,
-                             kOnboardingWaitTimeout,
-                             base::BindRepeating([]() {})) {
+                              base::Unretained(this))) {
   ash::SessionController::Get()->AddObserver(this);
 }
 
 NearbyShareDelegateImpl::~NearbyShareDelegateImpl() {
   ash::SessionController::Get()->RemoveObserver(this);
-  if (nearby_share_service_)
+  if (nearby_share_service_) {
     RemoveNearbyShareServiceObservers();
+  }
+  nearby_share_settings_receiver_.reset();
+}
+
+bool NearbyShareDelegateImpl::IsEnabled() {
+  return nearby_share_service_ != nullptr &&
+         nearby_share_service_->GetSettings()->GetEnabled();
+}
+
+void NearbyShareDelegateImpl::SetEnabled(bool enabled) {
+  CHECK(nearby_share_service_);
+  nearby_share_service_->GetSettings()->SetEnabled(enabled);
 }
 
 bool NearbyShareDelegateImpl::IsPodButtonVisible() {
@@ -59,6 +75,11 @@ bool NearbyShareDelegateImpl::IsPodButtonVisible() {
 
 bool NearbyShareDelegateImpl::IsHighVisibilityOn() {
   return nearby_share_service_ && nearby_share_service_->IsInHighVisibility();
+}
+
+bool NearbyShareDelegateImpl::IsOnboardingComplete() {
+  CHECK(nearby_share_settings_, base::NotFatalUntil::M160);
+  return nearby_share_settings_->IsOnboardingComplete();
 }
 
 bool NearbyShareDelegateImpl::IsEnableHighVisibilityRequestActive() const {
@@ -73,15 +94,7 @@ void NearbyShareDelegateImpl::EnableHighVisibility() {
   if (!nearby_share_service_)
     return;
 
-  // Automatically enable the feature if onboarding is already completed.
-  if (nearby_share_service_->GetSettings()->IsOnboardingComplete())
-    nearby_share_service_->GetSettings()->SetEnabled(true);
-
   settings_opener_->ShowSettingsPage(kStartReceivingQueryParam);
-
-  if (!nearby_share_service_->GetSettings()->GetEnabled()) {
-    onboarding_wait_timer_.Reset();
-  }
 
   is_enable_high_visibility_request_active_ = true;
 }
@@ -101,12 +114,14 @@ void NearbyShareDelegateImpl::OnLockStateChanged(bool locked) {
   }
 }
 
-void NearbyShareDelegateImpl::OnFirstSessionStarted() {
+void NearbyShareDelegateImpl::OnFirstSessionReady() {
   nearby_share_service_ = NearbySharingServiceFactory::GetForBrowserContext(
       ProfileManager::GetPrimaryUserProfile());
 
-  if (nearby_share_service_)
+  if (nearby_share_service_) {
+    nearby_share_settings_ = nearby_share_service_->GetSettings();
     AddNearbyShareServiceObservers();
+  }
 }
 
 void NearbyShareDelegateImpl::SetNearbyShareServiceForTest(
@@ -115,27 +130,52 @@ void NearbyShareDelegateImpl::SetNearbyShareServiceForTest(
   AddNearbyShareServiceObservers();
 }
 
+void NearbyShareDelegateImpl::SetNearbyShareSettingsForTest(
+    NearbyShareSettings* settings) {
+  nearby_share_settings_ = settings;
+}
+
+// In Quick Share v1, not used.
+void NearbyShareDelegateImpl::OnEnabledChanged(bool enabled) {
+  nearby_share_controller_->NearbyShareEnabledChanged(enabled);
+}
+
+void NearbyShareDelegateImpl::OnFastInitiationNotificationStateChanged(
+    ::nearby_share::mojom::FastInitiationNotificationState state) {}
+
+void NearbyShareDelegateImpl::OnIsFastInitiationHardwareSupportedChanged(
+    bool is_supported) {}
+
+void NearbyShareDelegateImpl::OnDeviceNameChanged(
+    const std::string& device_name) {}
+
+void NearbyShareDelegateImpl::OnDataUsageChanged(
+    ::nearby_share::mojom::DataUsage data_usage) {}
+
+void NearbyShareDelegateImpl::OnVisibilityChanged(
+    ::nearby_share::mojom::Visibility visibility) {
+  nearby_share_controller_->VisibilityChanged(visibility);
+}
+
+void NearbyShareDelegateImpl::OnAllowedContactsChanged(
+    const std::vector<std::string>& visible_contact_ids) {}
+
+void NearbyShareDelegateImpl::OnIsOnboardingCompleteChanged(bool is_complete) {}
+
 void NearbyShareDelegateImpl::AddNearbyShareServiceObservers() {
-  DCHECK(nearby_share_service_);
-  DCHECK(!nearby_share_service_->HasObserver(this));
-  DCHECK(!settings_receiver_.is_bound());
+  CHECK(nearby_share_service_, base::NotFatalUntil::M160);
+  CHECK(!nearby_share_service_->HasObserver(this), base::NotFatalUntil::M160);
   nearby_share_service_->AddObserver(this);
-  nearby_share_service_->GetSettings()->AddSettingsObserver(
-      settings_receiver_.BindNewPipeAndPassRemote());
+  if (nearby_share_settings_) {
+    nearby_share_settings_->AddSettingsObserver(
+        nearby_share_settings_receiver_.BindNewPipeAndPassRemote());
+  }
 }
 
 void NearbyShareDelegateImpl::RemoveNearbyShareServiceObservers() {
-  DCHECK(nearby_share_service_);
-  DCHECK(nearby_share_service_->HasObserver(this));
+  CHECK(nearby_share_service_, base::NotFatalUntil::M160);
+  CHECK(nearby_share_service_->HasObserver(this), base::NotFatalUntil::M160);
   nearby_share_service_->RemoveObserver(this);
-  settings_receiver_.reset();
-}
-
-void NearbyShareDelegateImpl::OnEnabledChanged(bool enabled) {
-  if (enabled && onboarding_wait_timer_.IsRunning()) {
-    onboarding_wait_timer_.Stop();
-    EnableHighVisibility();
-  }
 }
 
 void NearbyShareDelegateImpl::OnHighVisibilityChangeRequested() {
@@ -163,13 +203,18 @@ void NearbyShareDelegateImpl::OnShutdown() {
 }
 
 void NearbyShareDelegateImpl::ShowNearbyShareSettings() const {
-  DCHECK(nearby_share_service_);
+  CHECK(nearby_share_service_, base::NotFatalUntil::M160);
 
   std::string query_param =
       nearby_share_service_->GetSettings()->IsOnboardingComplete()
           ? std::string()  // Show settings subpage without dialog.
           : kStartOnboardingQueryParam;  // Show onboarding dialog.
   settings_opener_->ShowSettingsPage(query_param);
+}
+
+void NearbyShareDelegateImpl::ShowOnboardingPage() const {
+  CHECK(settings_opener_, base::NotFatalUntil::M160);
+  settings_opener_->ShowSettingsPage(kStartOnboardingQueryParam);
 }
 
 void NearbyShareDelegateImpl::SettingsOpener::ShowSettingsPage(
@@ -191,4 +236,37 @@ void NearbyShareDelegateImpl::SettingsOpener::ShowSettingsPage(
       ProfileManager::GetPrimaryUserProfile(),
       std::string(chromeos::settings::mojom::kNearbyShareSubpagePath) +
           query_string);
+}
+
+const gfx::VectorIcon& NearbyShareDelegateImpl::GetIcon(bool on_icon) const {
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  if (features::IsNameEnabled()) {
+    return on_icon ? kNearbyShareInternalIcon : kNearbyShareInternalOffIcon;
+  }
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  return gfx::VectorIcon::EmptyIcon();
+}
+
+std::u16string NearbyShareDelegateImpl::GetPlaceholderFeatureName() const {
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  if (features::IsNameEnabled()) {
+    return NearbyShareResourceGetter::GetInstance()->GetFeatureName();
+  }
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  return u"";
+}
+
+::nearby_share::mojom::Visibility NearbyShareDelegateImpl::GetVisibility()
+    const {
+  if (!nearby_share_settings_) {
+    return ::nearby_share::mojom::Visibility::kUnknown;
+  }
+
+  return nearby_share_settings_->GetVisibility();
+}
+
+void NearbyShareDelegateImpl::SetVisibility(
+    ::nearby_share::mojom::Visibility visibility) {
+  CHECK(nearby_share_settings_, base::NotFatalUntil::M160);
+  return nearby_share_settings_->SetVisibility(visibility);
 }

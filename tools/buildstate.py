@@ -1,5 +1,5 @@
-#!/usr/bin/env vpython
-# Copyright 2021 The Chromium Authors. All rights reserved.
+#!/usr/bin/env vpython3
+# Copyright 2021 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """
@@ -9,17 +9,8 @@ the command lines of any processes that are the children of ninja processes.
 The idea is that if the build is serialized (not many build steps running) then
 you can run this to see what it is serialized on.
 
-This uses python3 on Linux and vpython elsewhere (for psutil).
+This uses python3 on Windows and vpython elsewhere (for psutil).
 """
-
-# [VPYTHON:BEGIN]
-# wheel: <
-#   name: "infra/python/wheels/psutil/${vpython_platform}"
-#   version: "version:5.6.2"
-# >
-# [VPYTHON:END]
-
-from __future__ import print_function
 
 import sys
 
@@ -37,6 +28,7 @@ def main():
     # psutil handles short-lived ninja descendants poorly on Windows (it misses
     # most of them) so use wmic instead.
     import subprocess
+
     cmd = 'wmic process get Caption,ParentProcessId,ProcessId,CommandLine'
     lines = subprocess.check_output(cmd, universal_newlines=True).splitlines()
 
@@ -60,6 +52,7 @@ def main():
   else:
     # Portable process-collection code, but works badly on Windows.
     import psutil
+
     for proc in psutil.process_iter(['pid', 'ppid', 'name', 'cmdline']):
       try:
         cmdline = proc.cmdline()
@@ -68,7 +61,8 @@ def main():
       except psutil.AccessDenied:
         cmdline = "Access denied"
       processes.append(
-          (proc.name()[:], cmdline, int(proc.ppid()), int(proc.pid)))
+        (proc.name()[:], cmdline, int(proc.ppid()), int(proc.pid))
+      )
 
   # Scan the list of processes to find ninja.
   for process in processes:

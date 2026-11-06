@@ -1,4 +1,4 @@
-(async function(testRunner) {
+(async function(/** @type {import('test_runner').TestRunner} */ testRunner) {
   const {dp} = await testRunner.startHTML(`
 <link rel='stylesheet' href='${testRunner.url('../resources/set-container-query-text.css')}'/>`, 'Tests CSS.setContainerQueryText method.');
 
@@ -21,14 +21,14 @@
     startLine: 0,
     startColumn: 11,
     endLine: 0,
-    endColumn: 53,
+    endColumn: 55,
   };
 
   testRunner.runTestSuite([
     async function testSimpleEdit() {
       await setContainerQueryText({
         range: containerQueryRange,
-        text: '(min-width: 100px) and (max-height: 200px)',
+        text: '((min-width: 100px) and (max-height: 200px))',
       });
       await dp.DOM.undo();
     },

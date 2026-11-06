@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,7 +14,7 @@ class ActiveSuggestionMarkerListImplTest : public EditingTestBase {
   ActiveSuggestionMarkerListImplTest()
       : marker_list_(MakeGarbageCollected<ActiveSuggestionMarkerListImpl>()) {}
 
-  DocumentMarker* CreateMarker(unsigned start_offset, unsigned end_offset) {
+  DocumentMarker* CreateMarker(wtf_size_t start_offset, wtf_size_t end_offset) {
     return MakeGarbageCollected<ActiveSuggestionMarker>(
         start_offset, end_offset, Color::kTransparent,
         ui::mojom::ImeTextSpanThickness::kThin,

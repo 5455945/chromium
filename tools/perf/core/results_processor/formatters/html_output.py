@@ -1,4 +1,4 @@
-# Copyright 2019 The Chromium Authors. All rights reserved.
+# Copyright 2019 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -19,5 +19,6 @@ def ProcessHistogramDicts(histogram_dicts, options):
   open(output_file, 'a').close()  # Create file if it doesn't exist.
   with codecs.open(output_file, mode='r+', encoding='utf-8') as output_stream:
     vulcanize_histograms_viewer.VulcanizeAndRenderHistogramsViewer(
-        histogram_dicts, output_stream, options.reset_results)
+      histogram_dicts, output_stream, options.reset_results
+    )
   return output_file

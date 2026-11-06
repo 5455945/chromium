@@ -1,30 +1,31 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "ios/web/web_state/ui/crw_web_view_proxy_impl.h"
 
-#include "base/check.h"
-#import "ios/web/common/crw_content_view.h"
-#import "ios/web/public/ui/crw_web_view_scroll_view_proxy.h"
-#import "ios/web/web_state/ui/crw_web_controller.h"
+#import <optional>
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "base/check.h"
+#import "ios/web/public/ui/crw_web_view_scroll_view_proxy.h"
+#import "ios/web/web_state/ui/crw_content_view.h"
+#import "ios/web/web_state/ui/crw_web_controller.h"
+#import "ios/web/web_state/ui/crw_web_view_content_view.h"
 
 namespace {
 
-// Returns the first responder in the subviews of |view|, or nil if no view in
+// Returns the first responder in the subviews of `view`, or nil if no view in
 // the subtree is the first responder.
 UIView* GetFirstResponderSubview(UIView* view) {
-  if ([view isFirstResponder])
+  if ([view isFirstResponder]) {
     return view;
+  }
 
   for (UIView* subview in [view subviews]) {
     UIView* firstResponder = GetFirstResponderSubview(subview);
-    if (firstResponder)
+    if (firstResponder) {
       return firstResponder;
+    }
   }
 
   return nil;
@@ -44,8 +45,9 @@ UIView* GetFirstResponderSubview(UIView* view) {
 @implementation CRWWebViewScrollViewProxy (ContentInsetsAlgebra)
 
 - (void)cr_addInsets:(UIEdgeInsets)insets {
-  if (UIEdgeInsetsEqualToEdgeInsets(insets, UIEdgeInsetsZero))
+  if (UIEdgeInsetsEqualToEdgeInsets(insets, UIEdgeInsetsZero)) {
     return;
+  }
 
   UIEdgeInsets currentInsets = [self contentInset];
   currentInsets.top += insets.top;
@@ -73,8 +75,16 @@ UIView* GetFirstResponderSubview(UIView* view) {
   // The WebViewScrollViewProxy is a wrapper around the web view's
   // UIScrollView to give components access in a limited and controlled manner.
   CRWWebViewScrollViewProxy* _contentViewScrollViewProxy;
+  // Cached so they also apply to content views set later, e.g. when a web view
+  // is created after its WebState was configured.
+  BOOL _shouldUseViewContentInset;
+  std::optional<UIEdgeInsets> _minimumViewportInset;
+  std::optional<UIEdgeInsets> _maximumViewportInset;
+  std::optional<UIEdgeInsets> _obscuredInsets;
 }
 @synthesize contentView = _contentView;
+@synthesize ignoreObscuredInsets = _ignoreObscuredInsets;
+@dynamic keyboardVisible;
 
 - (instancetype)initWithWebController:(CRWWebController*)webController {
   self = [super init];
@@ -99,6 +109,27 @@ UIView* GetFirstResponderSubview(UIView* view) {
     (BOOL)allowsBackForwardNavigationGestures {
   _webController.allowsBackForwardNavigationGestures =
       allowsBackForwardNavigationGestures;
+}
+
+- (BOOL)allowsLinkPreview {
+  return _webController.allowsLinkPreview;
+}
+
+- (void)setAllowsLinkPreview:(BOOL)allowsLinkPreview {
+  _webController.allowsLinkPreview = allowsLinkPreview;
+}
+
+- (UIEdgeInsets)obscuredContentInsets {
+  if (@available(iOS 26.0, *)) {
+    return _webController.obscuredContentInsets;
+  }
+  return UIEdgeInsetsZero;
+}
+
+- (void)setObscuredContentInsets:(UIEdgeInsets)obscuredContentInsets {
+  if (@available(iOS 26.0, *)) {
+    _webController.obscuredContentInsets = obscuredContentInsets;
+  }
 }
 
 - (CGRect)bounds {
@@ -129,14 +160,6 @@ UIView* GetFirstResponderSubview(UIView* view) {
   return [_contentView gestureRecognizers];
 }
 
-- (void)addGestureRecognizer:(UIGestureRecognizer*)gestureRecognizer {
-  [_contentView addGestureRecognizer:gestureRecognizer];
-}
-
-- (void)removeGestureRecognizer:(UIGestureRecognizer*)gestureRecognizer {
-  [_contentView removeGestureRecognizer:gestureRecognizer];
-}
-
 - (BOOL)shouldUseViewContentInset {
   SEL shouldUseInsetSelector = @selector(shouldUseViewContentInset);
   return [_contentView respondsToSelector:shouldUseInsetSelector] &&
@@ -144,16 +167,15 @@ UIView* GetFirstResponderSubview(UIView* view) {
 }
 
 - (void)setShouldUseViewContentInset:(BOOL)shouldUseViewContentInset {
-  if ([_contentView
-          respondsToSelector:@selector(setShouldUseViewContentInset:)]) {
-    [_contentView setShouldUseViewContentInset:shouldUseViewContentInset];
-  }
+  _shouldUseViewContentInset = shouldUseViewContentInset;
+  [self applyShouldUseViewContentInset];
 }
 
 - (void)registerInsets:(UIEdgeInsets)insets forCaller:(id)caller {
   NSValue* callerValue = [NSValue valueWithNonretainedObject:caller];
-  if ([_registeredInsets objectForKey:callerValue])
+  if ([_registeredInsets objectForKey:callerValue]) {
     [self unregisterInsetsForCaller:caller];
+  }
   [self.scrollViewProxy cr_addInsets:insets];
   [_registeredInsets setObject:[NSValue valueWithUIEdgeInsets:insets]
                         forKey:callerValue];
@@ -166,28 +188,110 @@ UIView* GetFirstResponderSubview(UIView* view) {
   [_registeredInsets removeObjectForKey:callerValue];
 }
 
-- (void)setContentView:(CRWContentView*)contentView {
+// Do not use with a `nil` `contentView`. Instead, use
+// `clearContentViewAndAddPlaceholder` whenever `contentView` needs to be set to
+// `nil`. This allows us to evaluate the need of setting up the placeholder
+// scroll view when clearing the content view.
+- (void)setContentView:(nonnull CRWContentView*)contentView {
+  DCHECK(contentView);
   _contentView = contentView;
+  // Applied before updating the scroll view proxy so that its observers,
+  // notified synchronously, see the configured content view.
+  [self applyShouldUseViewContentInset];
+  [self applyViewportInsets];
+  [self applyObscuredInsets];
   [_contentViewScrollViewProxy setScrollView:contentView.scrollView];
+}
+
+- (void)clearContentViewAndAddPlaceholder:(BOOL)addPlaceholder {
+  _contentView = nil;
+  if (addPlaceholder) {
+    [_contentViewScrollViewProxy setScrollView:nil];
+  }
 }
 
 - (void)addSubview:(UIView*)view {
   return [_contentView addSubview:view];
 }
 
-- (UIView*)keyboardAccessory {
-  if (!_contentView)
-    return nil;
+- (BOOL)isKeyboardVisible {
+  if (!_contentView) {
+    return NO;
+  }
   UIView* firstResponder = GetFirstResponderSubview(_contentView);
-  return firstResponder.inputAccessoryView;
+  return firstResponder.inputAccessoryView != nil;
+}
+
+- (BOOL)shouldSuppressInputViews {
+  return _webController.shouldSuppressInputViews;
+}
+
+- (void)setShouldSuppressInputViews:(BOOL)shouldSuppressInputViews {
+  _webController.shouldSuppressInputViews = shouldSuppressInputViews;
 }
 
 - (BOOL)becomeFirstResponder {
   return [_contentView becomeFirstResponder];
 }
 
-- (void)surfaceSizeChanged {
-  [_webController surfaceSizeChanged];
+- (BOOL)isWebPageInFullscreenMode {
+  return [_webController isWebPageInFullscreenMode];
+}
+
+- (UIEdgeInsets)obscuredInsets {
+  return _contentView.obscuredInsets;
+}
+
+- (void)setObscuredInsets:(UIEdgeInsets)obscuredInsets {
+  [self setObscuredInsets:obscuredInsets initialVelocity:0.0];
+}
+
+- (void)setObscuredInsets:(UIEdgeInsets)obscuredInsets
+          initialVelocity:(CGFloat)initialVelocity {
+  if (_ignoreObscuredInsets) {
+    return;
+  }
+  _obscuredInsets = obscuredInsets;
+  [_contentView setObscuredInsets:obscuredInsets
+                  initialVelocity:initialVelocity];
+}
+
+- (void)setMinimumViewportInset:(UIEdgeInsets)minInset
+           maximumViewportInset:(UIEdgeInsets)maxInset {
+  _minimumViewportInset = minInset;
+  _maximumViewportInset = maxInset;
+  [self applyViewportInsets];
+}
+
+#pragma mark - Private
+
+// Applies the cached `shouldUseViewContentInset` value to the content view.
+- (void)applyShouldUseViewContentInset {
+  if ([_contentView
+          respondsToSelector:@selector(setShouldUseViewContentInset:)]) {
+    [_contentView setShouldUseViewContentInset:_shouldUseViewContentInset];
+  }
+}
+
+// Applies the cached viewport insets to the content view, if they were set.
+- (void)applyViewportInsets {
+  if (!_minimumViewportInset || !_maximumViewportInset) {
+    return;
+  }
+  [_contentView setMinimumViewportInset:*_minimumViewportInset
+                   maximumViewportInset:*_maximumViewportInset];
+}
+
+// Applies the cached `obscuredInsets` to the content view, if they were set.
+- (void)applyObscuredInsets {
+  if (!_obscuredInsets || _ignoreObscuredInsets) {
+    return;
+  }
+  CRWContentView* contentView = _contentView;
+  UIEdgeInsets obscuredInsets = *_obscuredInsets;
+  [UIView performWithoutAnimation:^{
+    [contentView setObscuredInsets:obscuredInsets];
+  }];
 }
 
 @end

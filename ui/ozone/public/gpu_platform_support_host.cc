@@ -1,9 +1,10 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/ozone/public/gpu_platform_support_host.h"
 
+#include "base/functional/callback.h"
 #include "base/trace_event/trace_event.h"
 
 namespace ui {
@@ -17,19 +18,17 @@ class StubGpuPlatformSupportHost : public GpuPlatformSupportHost {
   void OnChannelDestroyed(int host_id) override {}
   void OnGpuServiceLaunched(
       int host_id,
-      scoped_refptr<base::SingleThreadTaskRunner> ui_runner,
-      scoped_refptr<base::SingleThreadTaskRunner> process_host_runner,
       GpuHostBindInterfaceCallback binder,
       GpuHostTerminateCallback terminate_callback) override {}
 };
 
 }  // namespace
 
-GpuPlatformSupportHost::GpuPlatformSupportHost() {
-}
+GpuPlatformSupportHost::GpuPlatformSupportHost() = default;
 
-GpuPlatformSupportHost::~GpuPlatformSupportHost() {
-}
+GpuPlatformSupportHost::~GpuPlatformSupportHost() = default;
+
+void GpuPlatformSupportHost::OnHdrEnabledChanged(bool hdr_enabled) {}
 
 GpuPlatformSupportHost* CreateStubGpuPlatformSupportHost() {
   return new StubGpuPlatformSupportHost;

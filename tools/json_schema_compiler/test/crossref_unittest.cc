@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,128 +9,125 @@
 #include <vector>
 
 #include "base/values.h"
+#include "extensions/buildflags/buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "tools/json_schema_compiler/test/simple_api.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace crossref = test::api::crossref;
 namespace simple_api = test::api::simple_api;
 
 namespace {
 
-std::unique_ptr<base::DictionaryValue> CreateTestTypeValue() {
-  auto value = std::make_unique<base::DictionaryValue>();
-  value->SetDouble("number", 1.1);
-  value->SetInteger("integer", 4);
-  value->SetString("string", "bling");
-  value->SetBoolean("boolean", true);
-  return value;
+base::DictValue CreateTestTypeValue() {
+  base::DictValue dict;
+  dict.Set("number", 1.1);
+  dict.Set("integer", 4);
+  dict.Set("string", "bling");
+  dict.Set("boolean", true);
+  return dict;
 }
 
 }  // namespace
 
 TEST(JsonSchemaCompilerCrossrefTest, CrossrefTypePopulateAndToValue) {
-  base::DictionaryValue crossref_orig;
-  crossref_orig.SetKey("testType",
-                       base::Value::FromUniquePtrValue(CreateTestTypeValue()));
-  crossref_orig.SetString("testEnumRequired", "one");
-  crossref_orig.SetString("testEnumOptional", "two");
+  base::DictValue crossref_orig;
+  crossref_orig.Set("testType", CreateTestTypeValue());
+  crossref_orig.Set("testEnumRequired", "one");
+  crossref_orig.Set("testEnumOptional", "two");
 
   // Test Populate of the value --> compiled type.
-  crossref::CrossrefType crossref_type;
-  ASSERT_TRUE(crossref::CrossrefType::Populate(crossref_orig, &crossref_type));
-  EXPECT_EQ(1.1, crossref_type.test_type.number);
-  EXPECT_EQ(4, crossref_type.test_type.integer);
-  EXPECT_EQ("bling", crossref_type.test_type.string);
-  EXPECT_EQ(true, crossref_type.test_type.boolean);
-  EXPECT_EQ(simple_api::TEST_ENUM_ONE, crossref_type.test_enum_required);
-  EXPECT_EQ(simple_api::TEST_ENUM_TWO, crossref_type.test_enum_optional);
-  EXPECT_EQ(simple_api::TEST_ENUM_NONE, crossref_type.test_enum_optional_extra);
+  auto crossref_type = crossref::CrossrefType::FromValue(crossref_orig);
+  ASSERT_TRUE(crossref_type);
+  EXPECT_EQ(1.1, crossref_type->test_type.number);
+  EXPECT_EQ(4, crossref_type->test_type.integer);
+  EXPECT_EQ("bling", crossref_type->test_type.string);
+  EXPECT_EQ(true, crossref_type->test_type.boolean);
+  EXPECT_EQ(simple_api::TestEnum::kOne, crossref_type->test_enum_required);
+  EXPECT_EQ(simple_api::TestEnum::kTwo, crossref_type->test_enum_optional);
+  EXPECT_EQ(simple_api::TestEnum::kNone,
+            crossref_type->test_enum_optional_extra);
 
   // Test ToValue of the compiled type --> value.
-  std::unique_ptr<base::DictionaryValue> crossref_value =
-      crossref_type.ToValue();
-  ASSERT_TRUE(crossref_value);
-  EXPECT_TRUE(crossref_orig.Equals(crossref_value.get()));
+  base::DictValue crossref_value = crossref_type->ToValue();
+  EXPECT_EQ(crossref_orig, crossref_value);
+
+  EXPECT_EQ(crossref_type->Clone().ToValue(), crossref_type->ToValue());
 }
 
 TEST(JsonSchemaCompilerCrossrefTest, TestTypeOptionalParamCreate) {
-  auto params_value = std::make_unique<base::ListValue>();
-  params_value->Append(CreateTestTypeValue());
-  std::unique_ptr<crossref::TestTypeOptionalParam::Params> params(
-      crossref::TestTypeOptionalParam::Params::Create(*params_value));
-  EXPECT_TRUE(params.get());
-  EXPECT_TRUE(params->test_type.get());
-  EXPECT_TRUE(
-      CreateTestTypeValue()->Equals(params->test_type->ToValue().get()));
+  base::ListValue params_value;
+  params_value.Append(CreateTestTypeValue());
+  std::optional<crossref::TestTypeOptionalParam::Params> params(
+      crossref::TestTypeOptionalParam::Params::Create(params_value));
+  EXPECT_TRUE(params.has_value());
+  EXPECT_TRUE(params->test_type);
+  EXPECT_EQ(CreateTestTypeValue(), params->test_type->ToValue());
 }
 
 TEST(JsonSchemaCompilerCrossrefTest, TestTypeOptionalParamFail) {
-  auto params_value = std::make_unique<base::ListValue>();
-  std::unique_ptr<base::DictionaryValue> test_type_value =
-      CreateTestTypeValue();
-  test_type_value->RemoveKey("number");
-  params_value->Append(std::move(test_type_value));
-  std::unique_ptr<crossref::TestTypeOptionalParam::Params> params(
-      crossref::TestTypeOptionalParam::Params::Create(*params_value));
-  EXPECT_FALSE(params.get());
+  base::ListValue params_value;
+  base::DictValue test_type_value = CreateTestTypeValue();
+  test_type_value.Remove("number");
+  params_value.Append(std::move(test_type_value));
+  std::optional<crossref::TestTypeOptionalParam::Params> params(
+      crossref::TestTypeOptionalParam::Params::Create(params_value));
+  EXPECT_FALSE(params.has_value());
 }
 
 TEST(JsonSchemaCompilerCrossrefTest, GetTestType) {
-  std::unique_ptr<base::DictionaryValue> value = CreateTestTypeValue();
-  auto test_type = std::make_unique<simple_api::TestType>();
-  EXPECT_TRUE(simple_api::TestType::Populate(*value, test_type.get()));
+  base::DictValue value = CreateTestTypeValue();
+  auto test_type = simple_api::TestType::FromValue(value);
+  ASSERT_TRUE(test_type);
 
-  std::vector<base::Value> results =
-      crossref::GetTestType::Results::Create(*test_type);
+  base::ListValue results = crossref::GetTestType::Results::Create(*test_type);
   ASSERT_EQ(1u, results.size());
-  EXPECT_EQ(*value, results[0]);
+  EXPECT_EQ(value, results[0]);
 }
 
 TEST(JsonSchemaCompilerCrossrefTest, TestTypeInObjectParamsCreate) {
   {
-    auto params_value = std::make_unique<base::ListValue>();
-    auto param_object_value = std::make_unique<base::DictionaryValue>();
-    param_object_value->SetKey(
-        "testType", base::Value::FromUniquePtrValue(CreateTestTypeValue()));
-    param_object_value->SetBoolean("boolean", true);
-    params_value->Append(std::move(param_object_value));
-    std::unique_ptr<crossref::TestTypeInObject::Params> params(
-        crossref::TestTypeInObject::Params::Create(*params_value));
-    EXPECT_TRUE(params.get());
-    EXPECT_TRUE(params->param_object.test_type.get());
+    base::ListValue params_value;
+    base::DictValue param_object_value;
+    param_object_value.Set("testType", CreateTestTypeValue());
+    param_object_value.Set("boolean", true);
+    params_value.Append(std::move(param_object_value));
+    std::optional<crossref::TestTypeInObject::Params> params(
+        crossref::TestTypeInObject::Params::Create(params_value));
+    EXPECT_TRUE(params.has_value());
+    EXPECT_TRUE(params->param_object.test_type);
     EXPECT_TRUE(params->param_object.boolean);
-    EXPECT_TRUE(CreateTestTypeValue()->Equals(
-        params->param_object.test_type->ToValue().get()));
+    EXPECT_EQ(CreateTestTypeValue(), params->param_object.test_type->ToValue());
   }
   {
-    auto params_value = std::make_unique<base::ListValue>();
-    auto param_object_value = std::make_unique<base::DictionaryValue>();
-    param_object_value->SetBoolean("boolean", true);
-    params_value->Append(std::move(param_object_value));
-    std::unique_ptr<crossref::TestTypeInObject::Params> params(
-        crossref::TestTypeInObject::Params::Create(*params_value));
-    EXPECT_TRUE(params.get());
-    EXPECT_FALSE(params->param_object.test_type.get());
+    base::ListValue params_value;
+    base::DictValue param_object_value;
+    param_object_value.Set("boolean", true);
+    params_value.Append(std::move(param_object_value));
+    std::optional<crossref::TestTypeInObject::Params> params(
+        crossref::TestTypeInObject::Params::Create(params_value));
+    EXPECT_TRUE(params.has_value());
+    EXPECT_FALSE(params->param_object.test_type);
     EXPECT_TRUE(params->param_object.boolean);
   }
   {
-    auto params_value = std::make_unique<base::ListValue>();
-    auto param_object_value = std::make_unique<base::DictionaryValue>();
-    param_object_value->SetString("testType", "invalid");
-    param_object_value->SetBoolean("boolean", true);
-    params_value->Append(std::move(param_object_value));
-    std::unique_ptr<crossref::TestTypeInObject::Params> params(
-        crossref::TestTypeInObject::Params::Create(*params_value));
-    EXPECT_FALSE(params.get());
+    base::ListValue params_value;
+    base::DictValue param_object_value;
+    param_object_value.Set("testType", "invalid");
+    param_object_value.Set("boolean", true);
+    params_value.Append(std::move(param_object_value));
+    std::optional<crossref::TestTypeInObject::Params> params(
+        crossref::TestTypeInObject::Params::Create(params_value));
+    EXPECT_FALSE(params.has_value());
   }
   {
-    auto params_value = std::make_unique<base::ListValue>();
-    auto param_object_value = std::make_unique<base::DictionaryValue>();
-    param_object_value->SetKey(
-        "testType", base::Value::FromUniquePtrValue(CreateTestTypeValue()));
-    params_value->Append(std::move(param_object_value));
-    std::unique_ptr<crossref::TestTypeInObject::Params> params(
-        crossref::TestTypeInObject::Params::Create(*params_value));
-    EXPECT_FALSE(params.get());
+    base::ListValue params_value;
+    base::DictValue param_object_value;
+    param_object_value.Set("testType", CreateTestTypeValue());
+    params_value.Append(std::move(param_object_value));
+    std::optional<crossref::TestTypeInObject::Params> params(
+        crossref::TestTypeInObject::Params::Create(params_value));
+    EXPECT_FALSE(params.has_value());
   }
 }

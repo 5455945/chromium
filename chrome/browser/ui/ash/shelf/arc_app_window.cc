@@ -1,18 +1,18 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/ash/shelf/arc_app_window.h"
 
 #include "base/auto_reset.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/ash/app_list/app_service/app_service_app_icon_loader.h"
+#include "chrome/browser/ash/app_list/arc/arc_app_icon.h"
+#include "chrome/browser/ash/app_list/arc/arc_app_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/app_list/app_service/app_service_app_icon_loader.h"
-#include "chrome/browser/ui/app_list/arc/arc_app_icon.h"
-#include "chrome/browser/ui/app_list/arc/arc_app_utils.h"
 #include "chrome/browser/ui/ash/shelf/arc_app_window_delegate.h"
-#include "components/arc/arc_util.h"
+#include "chromeos/ash/experiences/arc/arc_util.h"
 #include "components/exo/shell_surface_base.h"
 #include "components/exo/shell_surface_util.h"
 #include "extensions/common/constants.h"
@@ -23,8 +23,7 @@
 #include "ui/views/widget/widget.h"
 
 namespace {
-constexpr base::TimeDelta kSetDefaultIconDelayMs =
-    base::TimeDelta::FromMilliseconds(1000);
+constexpr base::TimeDelta kSetDefaultIconDelayMs = base::Milliseconds(1000);
 
 constexpr int kArcAppWindowIconSize = extension_misc::EXTENSION_ICON_MEDIUM;
 }  // namespace
@@ -37,7 +36,7 @@ ArcAppWindow::ArcAppWindow(const arc::ArcAppShelfId& app_shelf_id,
       app_shelf_id_(app_shelf_id),
       owner_(owner),
       profile_(profile) {
-  DCHECK(owner_);
+  CHECK(owner_, base::NotFatalUntil::M162);
 
   // AppService uses app_shelf_id as the app_id to construct ShelfID.
   set_shelf_id(ash::ShelfID(app_shelf_id.ToString()));
@@ -48,14 +47,15 @@ ArcAppWindow::ArcAppWindow(const arc::ArcAppShelfId& app_shelf_id,
 ArcAppWindow::~ArcAppWindow() = default;
 
 void ArcAppWindow::SetFullscreenMode(FullScreenMode mode) {
-  DCHECK(mode != FullScreenMode::kNotDefined);
+  CHECK(mode != FullScreenMode::kNotDefined, base::NotFatalUntil::M162);
   fullscreen_mode_ = mode;
 }
 
 void ArcAppWindow::SetDescription(const std::string& title,
                                   const gfx::ImageSkia& icon) {
-  if (!title.empty())
+  if (!title.empty()) {
     GetNativeWindow()->SetTitle(base::UTF8ToUTF16(title));
+  }
   if (icon.isNull()) {
     // Reset custom icon. Switch back to default.
     SetDefaultAppIcon();
@@ -83,12 +83,16 @@ bool ArcAppWindow::IsActive() const {
 
 void ArcAppWindow::Close() {
   auto task_id = arc::GetWindowTaskId(GetNativeWindow());
-  if (task_id.has_value())
+  if (task_id.has_value()) {
     arc::CloseTask(*task_id);
+  }
 }
 
-void ArcAppWindow::OnAppImageUpdated(const std::string& app_id,
-                                     const gfx::ImageSkia& image) {
+void ArcAppWindow::OnAppImageUpdated(
+    const std::string& app_id,
+    const gfx::ImageSkia& image,
+    bool is_placeholder_icon,
+    const std::optional<gfx::ImageSkia>& badge_image) {
   if (image_fetching_) {
     // This is default app icon. Don't assign it right now to avoid flickering.
     // Wait for another image is loaded and only in case next image is not
@@ -106,7 +110,7 @@ void ArcAppWindow::SetDefaultAppIcon() {
     app_icon_loader_ = std::make_unique<AppServiceAppIconLoader>(
         profile_, kArcAppWindowIconSize, this);
   }
-  DCHECK(!image_fetching_);
+  CHECK(!image_fetching_, base::NotFatalUntil::M162);
   base::AutoReset<bool> auto_image_fetching(&image_fetching_, true);
   app_icon_loader_->FetchImage(app_shelf_id_.ToString());
 }
@@ -124,7 +128,8 @@ void ArcAppWindow::SetIcon(const gfx::ImageSkia& icon) {
   }
   exo::ShellSurfaceBase* shell_surface = static_cast<exo::ShellSurfaceBase*>(
       widget()->widget_delegate()->GetContentsView());
-  if (!shell_surface)
+  if (!shell_surface) {
     return;
+  }
   shell_surface->SetIcon(icon);
 }

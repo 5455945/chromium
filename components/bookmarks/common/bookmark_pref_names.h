@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,19 +7,44 @@
 #ifndef COMPONENTS_BOOKMARKS_COMMON_BOOKMARK_PREF_NAMES_H_
 #define COMPONENTS_BOOKMARKS_COMMON_BOOKMARK_PREF_NAMES_H_
 
-namespace bookmarks {
-namespace prefs {
+namespace bookmarks::prefs {
 
-extern const char kBookmarkEditorExpandedNodes[];
-extern const char kEditBookmarksEnabled[];
-extern const char kManagedBookmarks[];
-extern const char kManagedBookmarksFolderName[];
-extern const char kShowAppsShortcutInBookmarkBar[];
-extern const char kShowReadingListInBookmarkBar[];
-extern const char kShowManagedBookmarksInBookmarkBar[];
-extern const char kShowBookmarkBar[];
+// Modifying bookmarks is completely disabled when this is set to false.
+// This includes uploading bookmarks to a sync-ing account.
+inline constexpr char kEditBookmarksEnabled[] = "bookmarks.editing_enabled";
+// A list of bookmarks to include in a Managed Bookmarks root node. Each
+// list item is a dictionary containing a "name" and an "url" entry, detailing
+// the bookmark name and target URL respectively.
+inline constexpr char kManagedBookmarks[] = "bookmarks.managed_bookmarks";
+// String which specifies the Managed Bookmarks folder name
+inline constexpr char kManagedBookmarksFolderName[] =
+    "bookmarks.managed_bookmarks_folder_name";
+// Time pref used to trigger a metric log for the storage computation of
+// permanent nodes periodically.
+inline constexpr char kBookmarkStorageComputationLastUpdatePref[] =
+    "bookmark.storage_computation_last_update";
+// Boolean which specifies whether the apps shortcut is visible on the bookmark
+// bar.
+inline constexpr char kShowAppsShortcutInBookmarkBar[] =
+    "bookmark_bar.show_apps_shortcut";
 
-}  // namespace prefs
-}  // namespace bookmarks
+// Boolean which specifies whether the saved tab groups are visible on the
+// bookmark bar.
+inline constexpr char kShowTabGroupsInBookmarkBar[] =
+    "bookmark_bar.show_tab_groups";
+
+// Boolean which specifies whether the Managed Bookmarks folder is visible on
+// the bookmark bar.
+inline constexpr char kShowManagedBookmarksInBookmarkBar[] =
+    "bookmark_bar.show_managed_bookmarks";
+// Boolean which specifies whether the bookmark bar is visible on all tabs.
+inline constexpr char kShowBookmarkBar[] = "bookmark_bar.show_on_all_tabs";
+
+// Integer pref which specifies the visibility state of the bookmark bar.
+// Maps to bookmarks::BookmarkBarVisibilityState.
+inline constexpr char kBookmarkBarVisibilityState[] =
+    "bookmark_bar.visibility_state";
+
+}  // namespace bookmarks::prefs
 
 #endif  // COMPONENTS_BOOKMARKS_COMMON_BOOKMARK_PREF_NAMES_H_

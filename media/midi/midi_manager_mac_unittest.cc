@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,7 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "base/containers/span.h"
 #include "base/run_loop.h"
 #include "base/synchronization/lock.h"
 #include "base/test/task_environment.h"
@@ -24,8 +24,6 @@ namespace {
 using mojom::PortState;
 using mojom::Result;
 
-void Noop(const MIDIPacketList*, void*, void*) {}
-
 class FakeMidiManagerClient : public MidiManagerClient {
  public:
   FakeMidiManagerClient()
@@ -33,6 +31,9 @@ class FakeMidiManagerClient : public MidiManagerClient {
         wait_for_result_(true),
         wait_for_port_(true),
         unexpected_callback_(false) {}
+
+  FakeMidiManagerClient(const FakeMidiManagerClient&) = delete;
+  FakeMidiManagerClient& operator=(const FakeMidiManagerClient&) = delete;
 
   // MidiManagerClient implementation.
   void AddInputPort(const mojom::PortInfo& info) override {}
@@ -65,8 +66,7 @@ class FakeMidiManagerClient : public MidiManagerClient {
   }
 
   void ReceiveMidiData(uint32_t port_index,
-                       const uint8_t* data,
-                       size_t size,
+                       base::span<const uint8_t> data,
                        base::TimeTicks timestamp) override {}
   void AccumulateMidiBytesSent(size_t size) override {}
   void Detach() override {}
@@ -105,13 +105,15 @@ class FakeMidiManagerClient : public MidiManagerClient {
   mojom::PortInfo info_;
   bool wait_for_port_;
   bool unexpected_callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeMidiManagerClient);
 };
 
 class MidiManagerMacTest : public ::testing::Test {
  public:
   MidiManagerMacTest() : service_(std::make_unique<MidiService>()) {}
+
+  MidiManagerMacTest(const MidiManagerMacTest&) = delete;
+  MidiManagerMacTest& operator=(const MidiManagerMacTest&) = delete;
+
   ~MidiManagerMacTest() override {
     service_->Shutdown();
     base::RunLoop run_loop;
@@ -127,10 +129,7 @@ class MidiManagerMacTest : public ::testing::Test {
  private:
   std::unique_ptr<MidiService> service_;
   base::test::SingleThreadTaskEnvironment task_environment_;
-
-  DISALLOW_COPY_AND_ASSIGN(MidiManagerMacTest);
 };
-
 
 TEST_F(MidiManagerMacTest, MidiNotification) {
   std::unique_ptr<FakeMidiManagerClient> client(new FakeMidiManagerClient);
@@ -147,8 +146,10 @@ TEST_F(MidiManagerMacTest, MidiNotification) {
   EXPECT_EQ(noErr, status);
 
   MIDIEndpointRef ep = 0;
-  status = MIDIDestinationCreate(
-      midi_client, CFSTR("DestinationTest"), Noop, nullptr, &ep);
+  status = MIDIDestinationCreateWithProtocol(
+      midi_client, CFSTR("DestinationTest"), kMIDIProtocol_1_0, &ep,
+      ^(const MIDIEventList* evtlist, void* srcConnRefCon){
+      });
   EXPECT_EQ(noErr, status);
   SInt32 id;
   status = MIDIObjectGetIntegerProperty(ep, kMIDIPropertyUniqueID, &id);

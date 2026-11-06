@@ -1,13 +1,17 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef MEDIA_FILTERS_MEMORY_DATA_SOURCE_H_
 #define MEDIA_FILTERS_MEMORY_DATA_SOURCE_H_
 
+#include <stddef.h>
 #include <stdint.h>
 
-#include "base/macros.h"
+#include <atomic>
+#include <string>
+
+#include "base/memory/raw_span.h"
 #include "media/base/data_source.h"
 
 namespace media {
@@ -16,37 +20,38 @@ namespace media {
 // system to read data for a media pipeline.
 class MEDIA_EXPORT MemoryDataSource final : public DataSource {
  public:
-  // Construct MemoryDataSource with |data| and |size|. The data is guaranteed
-  // to be valid during the lifetime of MemoryDataSource.
-  MemoryDataSource(const uint8_t* data, size_t size);
+  // Construct MemoryDataSource with |data|. The data is guaranteed to be valid
+  // during the lifetime of MemoryDataSource.
+  explicit MemoryDataSource(base::span<const uint8_t> data);
 
   // Similar to the above, but takes ownership of the std::string.
   explicit MemoryDataSource(std::string data);
+
+  MemoryDataSource(const MemoryDataSource&) = delete;
+  MemoryDataSource& operator=(const MemoryDataSource&) = delete;
 
   ~MemoryDataSource() final;
 
   // Implementation of DataSource.
   void Read(int64_t position,
-            int size,
-            uint8_t* data,
+            base::span<uint8_t> data,
             DataSource::ReadCB read_cb) final;
   void Stop() final;
   void Abort() final;
-  bool GetSize(int64_t* size_out) final;
-  bool IsStreaming() final;
+  [[nodiscard]] bool GetSize(int64_t* size_out) final;
+  bool IsStreaming() const final;
   void SetBitrate(int bitrate) final;
+  bool PassedTimingAllowOriginCheck() final;
+  bool WouldTaintOrigin() const final;
 
  private:
   const std::string data_string_;
-  const uint8_t* data_ = nullptr;
-  const size_t size_ = 0;
+  base::raw_span<const uint8_t> data_;
 
   // Stop may be called from the render thread while this class is being used by
   // the media thread. It's harmless if we fulfill a read after Stop() has been
   // called, so an atomic without a lock is safe.
   std::atomic<bool> is_stopped_{false};
-
-  DISALLOW_COPY_AND_ASSIGN(MemoryDataSource);
 };
 
 }  // namespace media

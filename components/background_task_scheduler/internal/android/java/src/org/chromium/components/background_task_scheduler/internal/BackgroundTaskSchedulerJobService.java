@@ -1,23 +1,23 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.background_task_scheduler.internal;
 
-import android.annotation.TargetApi;
 import android.app.job.JobInfo;
 import android.app.job.JobParameters;
 import android.app.job.JobScheduler;
 import android.content.ComponentName;
 import android.content.Context;
-import android.os.Build;
-import android.os.Bundle;
 import android.os.PersistableBundle;
 
 import androidx.annotation.VisibleForTesting;
+import androidx.core.os.BuildCompat;
 
 import org.chromium.base.Log;
+import org.chromium.base.ResettersForTesting;
 import org.chromium.base.ThreadUtils;
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.components.background_task_scheduler.TaskInfo;
 import org.chromium.components.background_task_scheduler.TaskParameters;
 
@@ -27,7 +27,7 @@ import java.util.List;
  * An implementation of {@link BackgroundTaskSchedulerDelegate} that uses the system
  * {@link JobScheduler} to schedule jobs.
  */
-@TargetApi(Build.VERSION_CODES.LOLLIPOP_MR1)
+@NullMarked
 class BackgroundTaskSchedulerJobService implements BackgroundTaskSchedulerDelegate {
     private static final String TAG = "BkgrdTaskSchedulerJS";
 
@@ -35,13 +35,16 @@ class BackgroundTaskSchedulerJobService implements BackgroundTaskSchedulerDelega
     static final long DEADLINE_DELTA_MS = 1000;
 
     /** Clock to use so we can mock time in tests. */
-    public interface Clock { long currentTimeMillis(); }
+    public interface Clock {
+        long currentTimeMillis();
+    }
 
     private static Clock sClock = System::currentTimeMillis;
 
-    @VisibleForTesting
     static void setClockForTesting(Clock clock) {
+        var oldValue = sClock;
         sClock = clock;
+        ResettersForTesting.register(() -> sClock = oldValue);
     }
 
     /**
@@ -64,12 +67,6 @@ class BackgroundTaskSchedulerJobService implements BackgroundTaskSchedulerDelega
             return TaskInfo.OneOffInfo.getExpirationStatus(
                     scheduleTimeMs, endTimeMs, currentTimeMs);
         } else {
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
-                // Before Android N, there was no control over when the job will execute within
-                // the given interval. This makes it impossible to check for an expiration time.
-                return false;
-            }
-
             long intervalTimeMs = extras.getLong(BACKGROUND_TASK_INTERVAL_TIME_KEY);
             // Based on the JobInfo documentation, attempting to declare a smaller period than
             // this when scheduling a job will result in a job that is still periodic, but will
@@ -82,8 +79,10 @@ class BackgroundTaskSchedulerJobService implements BackgroundTaskSchedulerDelega
             // value is considerably lower from the previous one, since the minimum value
             // allowed for the interval time is of 15 min:
             // https://android.googlesource.com/platform/frameworks/base/+/refs/heads/oreo-release/core/java/android/app/job/JobInfo.java.
-            long flexTimeMs = extras.getLong(BACKGROUND_TASK_FLEX_TIME_KEY, /*defaultValue=*/
-                    JobInfo.getMinFlexMillis());
+            long flexTimeMs =
+                    extras.getLong(
+                            BACKGROUND_TASK_FLEX_TIME_KEY,
+                            /* defaultValue= */ JobInfo.getMinFlexMillis());
 
             return TaskInfo.PeriodicInfo.getExpirationStatus(
                     scheduleTimeMs, intervalTimeMs, flexTimeMs, currentTimeMs);
@@ -105,7 +104,7 @@ class BackgroundTaskSchedulerJobService implements BackgroundTaskSchedulerDelega
         PersistableBundle persistableTaskExtras =
                 jobExtras.getPersistableBundle(BACKGROUND_TASK_EXTRAS_KEY);
 
-        Bundle taskExtras = new Bundle();
+        PersistableBundle taskExtras = new PersistableBundle();
         taskExtras.putAll(persistableTaskExtras);
         builder.addExtras(taskExtras);
 
@@ -116,19 +115,27 @@ class BackgroundTaskSchedulerJobService implements BackgroundTaskSchedulerDelega
     static JobInfo createJobInfoFromTaskInfo(Context context, TaskInfo taskInfo) {
         PersistableBundle jobExtras = new PersistableBundle();
 
-        PersistableBundle persistableBundle = getTaskExtrasAsPersistableBundle(taskInfo);
+        PersistableBundle persistableBundle = taskInfo.getExtras();
         jobExtras.putPersistableBundle(BACKGROUND_TASK_EXTRAS_KEY, persistableBundle);
 
         JobInfo.Builder builder =
-                new JobInfo
-                        .Builder(taskInfo.getTaskId(),
+                new JobInfo.Builder(
+                                taskInfo.getTaskId(),
                                 new ComponentName(context, BackgroundTaskJobService.class))
                         .setPersisted(taskInfo.isPersisted())
                         .setRequiresCharging(taskInfo.requiresCharging())
-                        .setRequiredNetworkType(getJobInfoNetworkTypeFromTaskNetworkType(
-                                taskInfo.getRequiredNetworkType()));
+                        .setRequiredNetworkType(
+                                getJobInfoNetworkTypeFromTaskNetworkType(
+                                        taskInfo.getRequiredNetworkType()));
 
-        JobInfoBuilderVisitor jobInfoBuilderVisitor = new JobInfoBuilderVisitor(builder, jobExtras);
+        boolean isUserInitiated = false;
+        if (BuildCompat.isAtLeastU()) {
+            builder.setUserInitiated(taskInfo.isUserInitiated());
+            isUserInitiated = taskInfo.isUserInitiated();
+        }
+
+        JobInfoBuilderVisitor jobInfoBuilderVisitor =
+                new JobInfoBuilderVisitor(builder, jobExtras, isUserInitiated);
         taskInfo.getTimingInfo().accept(jobInfoBuilderVisitor);
         builder = jobInfoBuilderVisitor.getBuilder();
 
@@ -136,10 +143,13 @@ class BackgroundTaskSchedulerJobService implements BackgroundTaskSchedulerDelega
     }
 
     private static class JobInfoBuilderVisitor implements TaskInfo.TimingInfoVisitor {
+        private final boolean mIsUserInitiated;
         private final JobInfo.Builder mBuilder;
         private final PersistableBundle mJobExtras;
 
-        JobInfoBuilderVisitor(JobInfo.Builder builder, PersistableBundle jobExtras) {
+        JobInfoBuilderVisitor(
+                JobInfo.Builder builder, PersistableBundle jobExtras, boolean isUserInitiated) {
+            mIsUserInitiated = isUserInitiated;
             mBuilder = builder;
             mJobExtras = jobExtras;
         }
@@ -155,19 +165,27 @@ class BackgroundTaskSchedulerJobService implements BackgroundTaskSchedulerDelega
                 mJobExtras.putLong(
                         BackgroundTaskSchedulerDelegate.BACKGROUND_TASK_SCHEDULE_TIME_KEY,
                         sClock.currentTimeMillis());
-                mJobExtras.putLong(BackgroundTaskSchedulerDelegate.BACKGROUND_TASK_END_TIME_KEY,
+                mJobExtras.putLong(
+                        BackgroundTaskSchedulerDelegate.BACKGROUND_TASK_END_TIME_KEY,
                         oneOffInfo.getWindowEndTimeMs());
             }
             mBuilder.setExtras(mJobExtras);
 
             if (oneOffInfo.hasWindowStartTimeConstraint()) {
-                mBuilder.setMinimumLatency(oneOffInfo.getWindowStartTimeMs());
+                long latency = oneOffInfo.getWindowStartTimeMs();
+                if (latency < 0) {
+                    latency = 0;
+                }
+                if (!mIsUserInitiated) mBuilder.setMinimumLatency(latency);
             }
-            long windowEndTimeMs = oneOffInfo.getWindowEndTimeMs();
-            if (oneOffInfo.expiresAfterWindowEndTime()) {
-                windowEndTimeMs += DEADLINE_DELTA_MS;
+            if (oneOffInfo.hasWindowEndTimeConstraint()) {
+                long windowEndTimeMs = oneOffInfo.getWindowEndTimeMs();
+                if (oneOffInfo.expiresAfterWindowEndTime()) {
+                    windowEndTimeMs += DEADLINE_DELTA_MS;
+                }
+
+                if (!mIsUserInitiated) mBuilder.setOverrideDeadline(windowEndTimeMs);
             }
-            mBuilder.setOverrideDeadline(windowEndTimeMs);
         }
 
         @Override
@@ -181,17 +199,11 @@ class BackgroundTaskSchedulerJobService implements BackgroundTaskSchedulerDelega
             }
             mBuilder.setExtras(mJobExtras);
 
-            if (periodicInfo.hasFlex() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            if (periodicInfo.hasFlex()) {
                 mBuilder.setPeriodic(periodicInfo.getIntervalMs(), periodicInfo.getFlexMs());
                 return;
             }
             mBuilder.setPeriodic(periodicInfo.getIntervalMs());
-        }
-
-        @Override
-        public void visit(TaskInfo.ExactInfo exactInfo) {
-            throw new RuntimeException("Exact tasks should not be scheduled with "
-                    + "JobScheduler.");
         }
     }
 
@@ -199,18 +211,6 @@ class BackgroundTaskSchedulerJobService implements BackgroundTaskSchedulerDelega
             @TaskInfo.NetworkType int networkType) {
         // The values are hard coded to represent the same as the network type from JobService.
         return networkType;
-    }
-
-    private static PersistableBundle getTaskExtrasAsPersistableBundle(TaskInfo taskInfo) {
-        Bundle taskExtras = taskInfo.getExtras();
-        BundleToPersistableBundleConverter.Result convertedData =
-                BundleToPersistableBundleConverter.convert(taskExtras);
-        if (convertedData.hasErrors()) {
-            Log.w(TAG,
-                    "Failed converting extras to PersistableBundle: "
-                            + convertedData.getFailedKeysErrorString());
-        }
-        return convertedData.getPersistableBundle();
     }
 
     @Override

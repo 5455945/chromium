@@ -39,10 +39,7 @@ class VariableReference final : public Expression {
 
  private:
   Value Evaluate(EvaluationContext&) const override;
-  Value::Type ResultType() const override {
-    NOTREACHED();
-    return Value::kNumberValue;
-  }
+  Value::Type ResultType() const override { return Value::kStringValue; }
 
   String name_;
 };

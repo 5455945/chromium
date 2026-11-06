@@ -1,5 +1,5 @@
-#!/usr/bin/env python
-# Copyright 2017 The Chromium Authors. All rights reserved.
+#!/usr/bin/env python3
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -15,12 +15,14 @@ import json
 import os.path
 import sys
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'common'))
-import path_util
+import setup_modules  # pylint: disable=unused-import
 
-import update_histogram_enum
+
+import chromium_src.tools.metrics.common.path_util as path_util
+import chromium_src.tools.metrics.histograms.update_histogram_enum as update_histogram_enum
 
 NET_ROOT_CERTS_PATH = 'net/data/ssl/root_stores/root_stores.json'
+
 
 def main():
   if len(sys.argv) > 1:
@@ -37,8 +39,13 @@ def main():
     spki_enum[int(spki_data['id'])] = spki
 
   update_histogram_enum.UpdateHistogramFromDict(
-    'NetTrustAnchors', spki_enum, NET_ROOT_CERTS_PATH,
-    os.path.basename(__file__))
+    'tools/metrics/histograms/metadata/net/enums.xml',
+    'NetTrustAnchors',
+    spki_enum,
+    NET_ROOT_CERTS_PATH,
+    os.path.basename(__file__),
+  )
+
 
 if __name__ == '__main__':
   main()

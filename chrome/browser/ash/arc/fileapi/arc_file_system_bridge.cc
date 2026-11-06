@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,12 +12,13 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/bind_post_task.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/memory/singleton.h"
+#include "base/no_destructor.h"
 #include "base/posix/eintr_wrapper.h"
+#include "base/strings/escape.h"
 #include "base/system/sys_info.h"
+#include "base/task/bind_post_task.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "chrome/browser/ash/arc/fileapi/arc_select_files_handler.h"
@@ -25,24 +26,31 @@
 #include "chrome/browser/ash/arc/fileapi/file_stream_forwarder.h"
 #include "chrome/browser/ash/drive/drive_integration_service.h"
 #include "chrome/browser/ash/drive/file_system_util.h"
-#include "chrome/browser/ash/file_manager/fileapi_util.h"
-#include "chrome/browser/chromeos/file_manager/path_util.h"
-#include "chrome/browser/chromeos/fileapi/external_file_url_util.h"
+#include "chrome/browser/ash/file_manager/path_util.h"
+#include "chrome/browser/ash/fileapi/external_file_url_util.h"
+#include "chrome/browser/ash/fusebox/fusebox_moniker.h"
+#include "chrome/browser/ash/fusebox/fusebox_server.h"
+#include "chrome/browser/ash/guest_os/guest_os_session_tracker.h"
+#include "chrome/browser/ash/guest_os/guest_os_session_tracker_factory.h"
+#include "chrome/browser/ash/guest_os/guest_os_share_path.h"
+#include "chrome/browser/ash/guest_os/guest_os_share_path_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chromeos/dbus/dbus_thread_manager.h"
-#include "chromeos/dbus/virtual_file_provider_client.h"
-#include "components/arc/arc_browser_context_keyed_service_factory_base.h"
-#include "components/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/components/dbus/virtual_file_provider/virtual_file_provider_client.h"
+#include "chromeos/ash/components/dbus/vm_concierge/concierge_service.pb.h"
+#include "chromeos/ash/experiences/arc/arc_browser_context_keyed_service_factory_base.h"
+#include "chromeos/ash/experiences/arc/arc_util.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/common/url_constants.h"
 #include "extensions/browser/api/file_handlers/mime_util.h"
 #include "mojo/public/cpp/platform/platform_handle.h"
-#include "mojo/public/cpp/system/platform_handle.h"
-#include "net/base/escape.h"
 #include "storage/browser/file_system/external_mount_points.h"
 #include "storage/browser/file_system/file_system_context.h"
+#include "storage/browser/file_system/file_system_operation_runner.h"
+#include "storage/browser/file_system/file_system_url.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "url/gurl.h"
 
 namespace {
@@ -54,11 +62,10 @@ namespace arc {
 
 namespace {
 
-// Returns true if it's OK to allow ARC apps to read the given URL.
-bool IsUrlAllowed(const GURL& url) {
-  // Currently, only externalfile URLs are allowed.
-  return url.SchemeIs(content::kExternalFileScheme);
-}
+// The maximum number of Fusebox Monikers that can be shared concurrently. When
+// this number is reached, CreateMoniker() destroys the oldest Moniker. A large
+// number is randomly chosen not to block usual user flows.
+constexpr size_t kMaxNumberOfSharedMonikers = 1024;
 
 // Returns true if this is a testimage build.
 bool IsTestImageBuild() {
@@ -67,50 +74,67 @@ bool IsTestImageBuild() {
          track.find(kTestImageRelease) != std::string::npos;
 }
 
+// Returns true if `download` passes validation.
+bool IsMediaStoreDownloadMetadataValid(
+    const mojom::MediaStoreDownloadMetadataPtr& download) {
+  // Download should have non-empty display name and owner package name.
+  if (download->display_name.empty() || download->owner_package_name.empty()) {
+    return false;
+  }
+
+  // `display_name` should be a single path component.
+  const base::FilePath display_name(download->display_name);
+  if (display_name != display_name.BaseName() ||
+      display_name.ReferencesParent()) {
+    return false;
+  }
+
+  // Download should have path relative to "Download/" which is the download
+  // directory for the associated profile.
+  const base::FilePath download_path("Download/");
+  return download_path == download->relative_path ||
+         (!download->relative_path.IsAbsolute() &&
+          !download->relative_path.ReferencesParent() &&
+          download_path.IsParent(download->relative_path));
+}
+
 // Returns FileSystemContext.
 scoped_refptr<storage::FileSystemContext> GetFileSystemContext(
-    content::BrowserContext* context,
-    const GURL& url) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  content::StoragePartition* storage = context->GetStoragePartitionForUrl(url);
+    content::BrowserContext* context) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  content::StoragePartition* storage = context->GetDefaultStoragePartition();
   return storage->GetFileSystemContext();
 }
 
-// Converts the given URL to a FileSystemURL.
-file_manager::util::FileSystemURLAndHandle GetFileSystemURL(
+// Converts the given URL to a FileSystemURL. The URL is used by the browser
+// process on its own behalf, so the external mount point form of the URL is
+// returned, the same form as ash::FileSystemBackend::CreateInternalURL().
+storage::FileSystemURL GetFileSystemURL(
     const storage::FileSystemContext& context,
     const GURL& url) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  return file_manager::util::CreateIsolatedURLFromVirtualPath(
-      context, /* empty origin */ GURL(),
-      chromeos::ExternalFileURLToVirtualPath(url));
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  return context.CreateCrackedFileSystemURL(
+      blink::StorageKey(), storage::kFileSystemTypeExternal,
+      ash::ExternalFileURLToVirtualPath(url));
 }
 
-// Retrieves the file size on the IO thread, and runs the callback on the UI
+// Retrieves file's metadata on the IO thread, and runs the callback on the UI
 // thread.
-void GetFileSizeOnIOThread(scoped_refptr<storage::FileSystemContext> context,
-                           const storage::FileSystemURL& url,
-                           ArcFileSystemBridge::GetFileSizeCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+void GetMetadataOnIOThread(
+    scoped_refptr<storage::FileSystemContext> context,
+    const storage::FileSystemURL& url,
+    storage::FileSystemOperation::GetMetadataFieldSet flags,
+    storage::FileSystemOperation::GetMetadataCallback callback) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::IO, base::NotFatalUntil::M160);
   context->operation_runner()->GetMetadata(
-      url,
-      storage::FileSystemOperation::GET_METADATA_FIELD_IS_DIRECTORY |
-          storage::FileSystemOperation::GET_METADATA_FIELD_SIZE,
-      base::BindOnce([](base::File::Error result,
-                        const base::File::Info& file_info) -> int64_t {
-        if (result == base::File::FILE_OK && !file_info.is_directory &&
-            file_info.size >= 0) {
-          return file_info.size;
-        }
-        return -1;
-      })
-          .Then(base::BindPostTask(content::GetUIThreadTaskRunner({}),
-                                   std::move(callback))));
+      url, flags,
+      base::BindPostTask(content::GetUIThreadTaskRunner({}),
+                         std::move(callback)));
 }
 
 // TODO(risan): Write test.
 // Open a file from a VFS (vs Chrome-only) filesystem.
-mojo::ScopedHandle OpenVFSFileToRead(const base::FilePath& fs_path) {
+mojo::PlatformHandle OpenVFSFileToRead(const base::FilePath& fs_path) {
   base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
                                                 base::BlockingType::WILL_BLOCK);
   // Open the file and wrap the fd to be returned through mojo.
@@ -118,9 +142,9 @@ mojo::ScopedHandle OpenVFSFileToRead(const base::FilePath& fs_path) {
       open(fs_path.value().c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW)));
   if (!fd.is_valid()) {
     PLOG(WARNING) << "Invalid FD for fs_path: " << fs_path;
-    return mojo::ScopedHandle();
+    return mojo::PlatformHandle();
   }
-  return mojo::WrapPlatformHandle(mojo::PlatformHandle(std::move(fd)));
+  return mojo::PlatformHandle(std::move(fd));
 }
 
 // Factory of ArcFileSystemBridge.
@@ -132,11 +156,12 @@ class ArcFileSystemBridgeFactory
   static constexpr const char* kName = "ArcFileSystemBridgeFactory";
 
   static ArcFileSystemBridgeFactory* GetInstance() {
-    return base::Singleton<ArcFileSystemBridgeFactory>::get();
+    static base::NoDestructor<ArcFileSystemBridgeFactory> instance;
+    return instance.get();
   }
 
  private:
-  friend base::DefaultSingletonTraits<ArcFileSystemBridgeFactory>;
+  friend base::NoDestructor<ArcFileSystemBridgeFactory>;
   ArcFileSystemBridgeFactory() = default;
   ~ArcFileSystemBridgeFactory() override = default;
 };
@@ -147,17 +172,24 @@ ArcFileSystemBridge::ArcFileSystemBridge(content::BrowserContext* context,
                                          ArcBridgeService* bridge_service)
     : profile_(Profile::FromBrowserContext(context)),
       bridge_service_(bridge_service),
+      max_number_of_shared_monikers_(kMaxNumberOfSharedMonikers),
       select_files_handlers_manager_(
           std::make_unique<ArcSelectFilesHandlersManager>(context)) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   bridge_service_->file_system()->SetHost(this);
   bridge_service_->file_system()->AddObserver(this);
 }
 
 ArcFileSystemBridge::~ArcFileSystemBridge() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   bridge_service_->file_system()->RemoveObserver(this);
   bridge_service_->file_system()->SetHost(nullptr);
+  auto* fusebox_server = fusebox::Server::GetInstance();
+  if (fusebox_server) {
+    for (const auto& [moniker, _] : shared_monikers_) {
+      fusebox_server->DestroyMoniker(moniker);
+    }
+  }
 }
 
 // static
@@ -168,40 +200,40 @@ BrowserContextKeyedServiceFactory* ArcFileSystemBridge::GetFactory() {
 // static
 ArcFileSystemBridge* ArcFileSystemBridge::GetForBrowserContext(
     content::BrowserContext* context) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   return ArcFileSystemBridgeFactory::GetForBrowserContext(context);
 }
 
 // static
 ArcFileSystemBridge* ArcFileSystemBridge::GetForBrowserContextForTesting(
     content::BrowserContext* context) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   return ArcFileSystemBridgeFactory::GetForBrowserContextForTesting(context);
 }
 
 void ArcFileSystemBridge::AddObserver(Observer* observer) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   observer_list_.AddObserver(observer);
 }
 
 void ArcFileSystemBridge::RemoveObserver(Observer* observer) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   observer_list_.RemoveObserver(observer);
 }
 
 void ArcFileSystemBridge::GetFileName(const std::string& url,
                                       GetFileNameCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   GURL url_decoded = DecodeFromChromeContentProviderUrl(GURL(url));
   std::string unescaped_file_name;
   // It's generally not safe to unescape path separators in strings to be used
   // in file paths.
   if (url_decoded.is_empty() || !IsUrlAllowed(url_decoded) ||
-      !net::UnescapeBinaryURLComponentSafe(url_decoded.ExtractFileName(),
-                                           true /* fail_on_path_separators */,
-                                           &unescaped_file_name)) {
+      !base::UnescapeBinaryURLComponentSafe(url_decoded.ExtractFileName(),
+                                            true /* fail_on_path_separators */,
+                                            &unescaped_file_name)) {
     LOG(ERROR) << "Invalid URL: " << url << " " << url_decoded;
-    std::move(callback).Run(absl::nullopt);
+    std::move(callback).Run(std::nullopt);
     return;
   }
   std::move(callback).Run(unescaped_file_name);
@@ -209,7 +241,7 @@ void ArcFileSystemBridge::GetFileName(const std::string& url,
 
 void ArcFileSystemBridge::GetFileSize(const std::string& url,
                                       GetFileSizeCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   GURL url_decoded = DecodeFromChromeContentProviderUrl(GURL(url));
   if (url_decoded.is_empty() || !IsUrlAllowed(url_decoded)) {
     LOG(ERROR) << "Invalid URL: " << url << " " << url_decoded;
@@ -222,63 +254,97 @@ void ArcFileSystemBridge::GetFileSize(const std::string& url,
 
 void ArcFileSystemBridge::GetFileSizeInternal(const GURL& url_decoded,
                                               GetFileSizeCallback callback) {
+  GetMetadata(url_decoded,
+              {storage::FileSystemOperation::GetMetadataField::kIsDirectory,
+               storage::FileSystemOperation::GetMetadataField::kSize},
+              base::BindOnce([](base::File::Error result,
+                                const base::File::Info& file_info) -> int64_t {
+                if (result == base::File::FILE_OK && !file_info.is_directory &&
+                    file_info.size >= 0) {
+                  return file_info.size;
+                }
+                return -1;
+              }).Then(std::move(callback)));
+}
+
+void ArcFileSystemBridge::GetLastModified(const GURL& url,
+                                          GetLastModifiedCallback callback) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  GURL url_decoded = DecodeFromChromeContentProviderUrl(url);
+  if (url_decoded.is_empty() || !IsUrlAllowed(url_decoded)) {
+    LOG(ERROR) << "Invalid URL: " << url << " " << url_decoded;
+    std::move(callback).Run(std::nullopt);
+    return;
+  }
+
+  GetMetadata(url_decoded,
+              {storage::FileSystemOperation::GetMetadataField::kLastModified},
+              base::BindOnce([](base::File::Error result,
+                                const base::File::Info& file_info)
+                                 -> std::optional<base::Time> {
+                if (result != base::File::FILE_OK) {
+                  return std::nullopt;
+                }
+                return std::make_optional(file_info.last_modified);
+              }).Then(std::move(callback)));
+}
+
+void ArcFileSystemBridge::GetMetadata(
+    const GURL& url_decoded,
+    storage::FileSystemOperation::GetMetadataFieldSet flags,
+    storage::FileSystemOperation::GetMetadataCallback callback) {
   scoped_refptr<storage::FileSystemContext> context =
-      GetFileSystemContext(profile_, url_decoded);
-  file_manager::util::FileSystemURLAndHandle file_system_url_and_handle =
+      GetFileSystemContext(profile_);
+  const storage::FileSystemURL file_system_url =
       GetFileSystemURL(*context, url_decoded);
   content::GetIOThreadTaskRunner({})->PostTask(
-      FROM_HERE,
-      base::BindOnce(&GetFileSizeOnIOThread, std::move(context),
-                     file_system_url_and_handle.url, std::move(callback)));
-  // TODO(https://crbug.com/963027): This is currently leaking the isolated
-  // file system, the file system should somehow be revoked when the url
-  // returned by GetFileSystemURL is no longer needed.
-  storage::IsolatedContext::GetInstance()->AddReference(
-      file_system_url_and_handle.handle.id());
+      FROM_HERE, base::BindOnce(&GetMetadataOnIOThread, std::move(context),
+                                file_system_url, flags, std::move(callback)));
 }
 
 void ArcFileSystemBridge::GetFileType(const std::string& url,
                                       GetFileTypeCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   GURL url_decoded = DecodeFromChromeContentProviderUrl(GURL(url));
   if (url_decoded.is_empty() || !IsUrlAllowed(url_decoded)) {
     LOG(ERROR) << "Invalid URL: " << url << " " << url_decoded;
-    std::move(callback).Run(absl::nullopt);
+    std::move(callback).Run(std::nullopt);
     return;
   }
   scoped_refptr<storage::FileSystemContext> context =
-      GetFileSystemContext(profile_, url_decoded);
-  file_manager::util::FileSystemURLAndHandle file_system_url_and_handle =
+      GetFileSystemContext(profile_);
+  const storage::FileSystemURL file_system_url =
       GetFileSystemURL(*context, url_decoded);
   extensions::app_file_handler_util::GetMimeTypeForLocalPath(
-      profile_, file_system_url_and_handle.url.path(),
+      profile_, file_system_url.path(),
       base::BindOnce([](const std::string& mime_type) {
-        return mime_type.empty() ? absl::nullopt
-                                 : absl::make_optional(mime_type);
+        return mime_type.empty() ? std::nullopt : std::make_optional(mime_type);
       }).Then(std::move(callback)));
 }
 
 void ArcFileSystemBridge::OnDocumentChanged(
     int64_t watcher_id,
     storage::WatcherManager::ChangeType type) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  for (auto& observer : observer_list_)
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  for (auto& observer : observer_list_) {
     observer.OnDocumentChanged(watcher_id, type);
+  }
 }
 
 void ArcFileSystemBridge::OnRootsChanged() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  for (auto& observer : observer_list_)
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  for (auto& observer : observer_list_) {
     observer.OnRootsChanged();
+  }
 }
 
 void ArcFileSystemBridge::GetVirtualFileId(const std::string& url,
                                            GetVirtualFileIdCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   GURL url_decoded = DecodeFromChromeContentProviderUrl(GURL(url));
   if (url_decoded.is_empty() || !IsUrlAllowed(url_decoded)) {
     LOG(ERROR) << "Invalid URL: " << url << " " << url_decoded;
-    std::move(callback).Run(absl::nullopt);
+    std::move(callback).Run(std::nullopt);
     return;
   }
 
@@ -292,11 +358,11 @@ void ArcFileSystemBridge::HandleIdReleased(const std::string& id,
 
 void ArcFileSystemBridge::OpenFileToRead(const std::string& url,
                                          OpenFileToReadCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   GURL url_decoded = DecodeFromChromeContentProviderUrl(GURL(url));
   if (url_decoded.is_empty() || !IsUrlAllowed(url_decoded)) {
     LOG(ERROR) << "Invalid URL: " << url << " " << url_decoded;
-    std::move(callback).Run(mojo::ScopedHandle());
+    std::move(callback).Run(mojo::PlatformHandle());
     return;
   }
 
@@ -335,7 +401,11 @@ void ArcFileSystemBridge::SelectFiles(mojom::SelectFilesRequestPtr request,
 void ArcFileSystemBridge::OnFileSelectorEvent(
     mojom::FileSelectorEventPtr event,
     ArcFileSystemBridge::OnFileSelectorEventCallback callback) {
-  std::string track;
+  if (!IsTestImageBuild()) {
+    LOG(ERROR) << "OnFileSelectorEvent is only allowed under test conditions";
+    std::move(callback).Run();
+    return;
+  }
   select_files_handlers_manager_->OnFileSelectorEvent(std::move(event),
                                                       std::move(callback));
 }
@@ -353,31 +423,164 @@ void ArcFileSystemBridge::GetFileSelectorElements(
                                                           std::move(callback));
 }
 
+void ArcFileSystemBridge::OnMediaStoreUriAdded(
+    const GURL& uri,
+    mojom::MediaStoreMetadataPtr metadata) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+
+  // Validate `metadata`.
+  bool is_valid = false;
+  if (metadata->is_download()) {
+    is_valid = IsMediaStoreDownloadMetadataValid(metadata->get_download());
+  }
+
+  if (!is_valid) {
+    LOG(ERROR) << "`OnMediaStoreUriAdded()` called with invalid payload.";
+    return;
+  }
+
+  for (auto& observer : observer_list_) {
+    observer.OnMediaStoreUriAdded(uri, *metadata);
+  }
+}
+
+void ArcFileSystemBridge::CreateMoniker(const GURL& content_uri,
+                                        bool read_only,
+                                        CreateMonikerCallback callback) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
+  const GURL url_decoded = DecodeFromChromeContentProviderUrl(content_uri);
+  if (url_decoded.is_empty() || !IsUrlAllowed(url_decoded)) {
+    LOG(ERROR) << "Invalid ChromeContentProvider URI: " << content_uri;
+    std::move(callback).Run(std::nullopt);
+    return;
+  }
+
+  scoped_refptr<storage::FileSystemContext> context =
+      GetFileSystemContext(profile_);
+  const storage::FileSystemURL fs_url = GetFileSystemURL(*context, url_decoded);
+  if (!fs_url.is_valid()) {
+    LOG(ERROR) << "Failed to get FileSystemURL for URL: " << url_decoded;
+    std::move(callback).Run(std::nullopt);
+    return;
+  }
+
+  const auto& vm_info =
+      guest_os::GuestOsSessionTrackerFactory::GetForProfile(profile_)
+          ->GetVmInfo(kArcVmName);
+  if (!vm_info) {
+    LOG(ERROR) << "ARCVM is not running";
+    std::move(callback).Run(std::nullopt);
+    return;
+  }
+
+  auto* fusebox_server = fusebox::Server::GetInstance();
+  if (!fusebox_server) {
+    LOG(ERROR) << "Failed to get Fusebox server";
+    std::move(callback).Run(std::nullopt);
+    return;
+  }
+
+  if (shared_monikers_.size() >= max_number_of_shared_monikers_) {
+    // Destroy the oldest Fusebox Moniker when the maximum number of shared
+    // Monikers is reached.
+    CHECK(!moniker_indices_.empty());
+    const fusebox::Moniker oldest_moniker = moniker_indices_.begin()->second;
+    LOG(WARNING) << "Destroying the oldest Fusebox Moniker: "
+                 << oldest_moniker.ToString();
+    DestroyMoniker(oldest_moniker, base::DoNothing());
+  }
+
+  // `ChromeContentProvider` only supports read access (matching
+  // `OpenFileToRead()`), so always create a read-only Moniker rather than
+  // trusting the guest-supplied `read_only` flag.
+  LOG_IF(WARNING, !read_only)
+      << "Creating a read-only Fusebox Moniker although ARC requested a "
+         "writable one";
+  const fusebox::Moniker moniker =
+      fusebox_server->CreateMoniker(fs_url, /*read_only=*/true);
+  const int index =
+      moniker_indices_.empty() ? 0 : (moniker_indices_.rbegin()->first + 1);
+  shared_monikers_.insert({moniker, index});
+  moniker_indices_.insert({index, moniker});
+  CHECK_EQ(shared_monikers_.size(), moniker_indices_.size());
+
+  guest_os::GuestOsSharePathFactory::GetForProfile(profile_)->SharePath(
+      kArcVmName, vm_info->seneschal_server_handle(),
+      base::FilePath(fusebox::MonikerMap::GetFilename(moniker)),
+      base::BindOnce(&ArcFileSystemBridge::OnShareMonikerPath,
+                     weak_ptr_factory_.GetWeakPtr(), std::move(callback),
+                     moniker));
+}
+
+void ArcFileSystemBridge::OnShareMonikerPath(
+    CreateMonikerCallback callback,
+    const fusebox::Moniker& moniker,
+    const base::FilePath& path,
+    bool success,
+    const std::string& failure_reason) {
+  if (!success) {
+    LOG(ERROR) << "Failed to share Fusebox Moniker path with ARCVM: reason: "
+               << failure_reason << ", path: " << path;
+    std::move(callback).Run(std::nullopt);
+    DestroyMoniker(moniker, base::DoNothing());
+    return;
+  }
+  std::move(callback).Run(moniker);
+}
+
+void ArcFileSystemBridge::DestroyMoniker(const fusebox::Moniker& moniker,
+                                         DestroyMonikerCallback callback) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
+  const auto iter = shared_monikers_.find(moniker);
+  if (iter == shared_monikers_.end()) {
+    LOG(WARNING) << "Cannot destroy unknown Fusebox Moniker: "
+                 << moniker.ToString();
+    std::move(callback).Run(false);
+    return;
+  }
+  const int index = iter->second;
+  shared_monikers_.erase(iter);
+  moniker_indices_.erase(index);
+  CHECK_EQ(shared_monikers_.size(), moniker_indices_.size());
+
+  auto* fusebox_server = fusebox::Server::GetInstance();
+  if (fusebox_server) {
+    fusebox_server->DestroyMoniker(moniker);
+  } else {
+    LOG(ERROR) << "Failed to get Fusebox server";
+    // Not returning false, since the Moniker and the resources held by the
+    // Fusebox server should have already gone.
+  }
+  // No need to call GuestOsSharePath::UnsharePath(), because the method is
+  // eventually called from GuestOsSharePath::PathDeleted().
+  std::move(callback).Run(true);
+}
+
 void ArcFileSystemBridge::GenerateVirtualFileId(
     const GURL& url_decoded,
     GenerateVirtualFileIdCallback callback,
     int64_t size) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   if (size < 0) {
     LOG(ERROR) << "Failed to get file size " << url_decoded;
-    std::move(callback).Run(absl::nullopt);
+    std::move(callback).Run(std::nullopt);
     return;
   }
-  chromeos::DBusThreadManager::Get()
-      ->GetVirtualFileProviderClient()
-      ->GenerateVirtualFileId(
-          size, base::BindOnce(&ArcFileSystemBridge::OnGenerateVirtualFileId,
-                               weak_ptr_factory_.GetWeakPtr(), url_decoded,
-                               std::move(callback)));
+  ash::VirtualFileProviderClient::Get()->GenerateVirtualFileId(
+      size, base::BindOnce(&ArcFileSystemBridge::OnGenerateVirtualFileId,
+                           weak_ptr_factory_.GetWeakPtr(), url_decoded,
+                           std::move(callback)));
 }
 
 void ArcFileSystemBridge::OnGenerateVirtualFileId(
     const GURL& url_decoded,
     GenerateVirtualFileIdCallback callback,
-    const absl::optional<std::string>& id) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(id.has_value());
-  DCHECK_EQ(id_to_url_.count(id.value()), 0u);
+    const std::optional<std::string>& id) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
+  CHECK(id.has_value(), base::NotFatalUntil::M160);
+  CHECK_EQ(id_to_url_.count(id.value()), 0u, base::NotFatalUntil::M160);
   id_to_url_[id.value()] = url_decoded;
 
   std::move(callback).Run(std::move(id));
@@ -385,52 +588,42 @@ void ArcFileSystemBridge::OnGenerateVirtualFileId(
 
 void ArcFileSystemBridge::OpenFileById(const GURL& url_decoded,
                                        OpenFileToReadCallback callback,
-                                       const absl::optional<std::string>& id) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+                                       const std::optional<std::string>& id) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   if (!id.has_value()) {
     LOG(ERROR) << "Missing ID";
-    std::move(callback).Run(mojo::ScopedHandle());
+    std::move(callback).Run(mojo::PlatformHandle());
     return;
   }
 
-  chromeos::DBusThreadManager::Get()
-      ->GetVirtualFileProviderClient()
-      ->OpenFileById(id.value(),
-                     base::BindOnce(&ArcFileSystemBridge::OnOpenFileById,
-                                    weak_ptr_factory_.GetWeakPtr(), url_decoded,
-                                    std::move(callback), id.value()));
+  ash::VirtualFileProviderClient::Get()->OpenFileById(
+      id.value(), base::BindOnce(&ArcFileSystemBridge::OnOpenFileById,
+                                 weak_ptr_factory_.GetWeakPtr(), url_decoded,
+                                 std::move(callback), id.value()));
 }
 
 void ArcFileSystemBridge::OnOpenFileById(const GURL& url_decoded,
                                          OpenFileToReadCallback callback,
                                          const std::string& id,
                                          base::ScopedFD fd) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   if (!fd.is_valid()) {
     LOG(ERROR) << "Invalid FD";
-    if (!HandleIdReleased(id))
+    if (!HandleIdReleased(id)) {
       LOG(ERROR) << "Cannot release ID: " << id;
-    std::move(callback).Run(mojo::ScopedHandle());
+    }
+    std::move(callback).Run(mojo::PlatformHandle());
     return;
   }
 
-  mojo::ScopedHandle wrapped_handle =
-      mojo::WrapPlatformHandle(mojo::PlatformHandle(std::move(fd)));
-  if (!wrapped_handle.is_valid()) {
-    LOG(ERROR) << "Failed to wrap handle";
-    if (!HandleIdReleased(id))
-      LOG(ERROR) << "Cannot release ID: " << id;
-    std::move(callback).Run(mojo::ScopedHandle());
-    return;
-  }
-  std::move(callback).Run(std::move(wrapped_handle));
+  std::move(callback).Run(mojo::PlatformHandle(std::move(fd)));
 }
 
 bool ArcFileSystemBridge::HandleReadRequest(const std::string& id,
                                             int64_t offset,
                                             int64_t size,
                                             base::ScopedFD pipe_write_end) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   auto it_url = id_to_url_.find(id);
   if (it_url == id_to_url_.end()) {
     LOG(ERROR) << "Invalid ID: " << id;
@@ -445,19 +638,14 @@ bool ArcFileSystemBridge::HandleReadRequest(const std::string& id,
 
   const GURL& url = it_url->second;
   scoped_refptr<storage::FileSystemContext> context =
-      GetFileSystemContext(profile_, url);
-  file_manager::util::FileSystemURLAndHandle file_system_url_and_handle =
+      GetFileSystemContext(profile_);
+  const storage::FileSystemURL file_system_url =
       GetFileSystemURL(*context, url);
   *it_forwarder = FileStreamForwarderPtr(new FileStreamForwarder(
-      std::move(context), file_system_url_and_handle.url, offset, size,
+      std::move(context), file_system_url, offset, size,
       std::move(pipe_write_end),
       base::BindOnce(&ArcFileSystemBridge::OnReadRequestCompleted,
                      weak_ptr_factory_.GetWeakPtr(), id, it_forwarder)));
-  // TODO(https://crbug.com/963027): This is currently leaking the isolated
-  // file system, the file system should somehow be revoked when the url
-  // returned by GetFileSystemURL is no longer needed.
-  storage::IsolatedContext::GetInstance()->AddReference(
-      file_system_url_and_handle.handle.id());
   return true;
 }
 
@@ -469,7 +657,7 @@ void ArcFileSystemBridge::OnReadRequestCompleted(
     const std::string& id,
     std::list<FileStreamForwarderPtr>::iterator it,
     bool result) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   LOG_IF(ERROR, !result) << "Failed to read " << id;
   file_stream_forwarders_.erase(it);
 }
@@ -480,12 +668,27 @@ void ArcFileSystemBridge::OnConnectionClosed() {
   select_files_handlers_manager_->DeleteAllHandlers();
 }
 
+bool ArcFileSystemBridge::IsUrlAllowed(const GURL& url) {
+  if (!url.SchemeIs(content::kExternalFileScheme)) {
+    return false;
+  }
+  if (!arc::IsArcVmEnabled()) {
+    return true;
+  }
+  base::FilePath fs_path = GetLinuxVFSPathFromExternalFileURL(profile_, url);
+  if (fs_path.empty()) {
+    return true;
+  }
+  return guest_os::GuestOsSharePathFactory::GetForProfile(profile_)
+      ->IsPathShared(kArcVmName, fs_path);
+}
+
 base::FilePath ArcFileSystemBridge::GetLinuxVFSPathFromExternalFileURL(
     Profile* const profile,
     const GURL& url) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
 
-  base::FilePath virtual_path = chromeos::ExternalFileURLToVirtualPath(url);
+  base::FilePath virtual_path = ash::ExternalFileURLToVirtualPath(url);
 
   std::string mount_name, cracked_id;
   storage::FileSystemType file_system_type;
@@ -510,18 +713,21 @@ base::FilePath ArcFileSystemBridge::GetLinuxVFSPathForPathOnFileSystemType(
   switch (file_system_type) {
     case storage::FileSystemType::kFileSystemTypeDriveFs:
     case storage::FileSystemType::kFileSystemTypeSmbFs:
+    case storage::FileSystemType::kFileSystemTypeFuseBox:
       return path;
     case storage::FileSystemType::kFileSystemTypeLocal: {
       base::FilePath crostini_mount_path =
           file_manager::util::GetCrostiniMountDirectory(profile);
-      if (crostini_mount_path == path || crostini_mount_path.IsParent(path))
+      if (crostini_mount_path == path || crostini_mount_path.IsParent(path)) {
         return path;
+      }
 
       // fuse-zip, rar2fs.
       base::FilePath archive_mount_path =
           base::FilePath(file_manager::util::kArchiveMountPath);
-      if (archive_mount_path.IsParent(path))
+      if (archive_mount_path.IsParent(path)) {
         return path;
+      }
 
       break;
     }
@@ -531,6 +737,10 @@ base::FilePath ArcFileSystemBridge::GetLinuxVFSPathForPathOnFileSystemType(
 
   // The path is not representable on the Linux VFS.
   return base::FilePath();
+}
+
+void ArcFileSystemBridge::SetMaxNumberOfSharedMonikersForTesting(size_t value) {
+  max_number_of_shared_monikers_ = value;
 }
 
 }  // namespace arc

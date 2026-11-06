@@ -33,7 +33,7 @@
 #include "third_party/blink/renderer/platform/wtf/wtf_export.h"
 #include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
 
-namespace WTF {
+namespace blink {
 
 // An abstract number of element in a sequence. The sequence has a first
 // element.  This type should be used instead of integer because 2
@@ -59,7 +59,6 @@ class OrdinalNumber final {
   bool operator==(OrdinalNumber other) const {
     return zero_based_value_ == other.zero_based_value_;
   }
-  bool operator!=(OrdinalNumber other) const { return !((*this) == other); }
 
   static OrdinalNumber First() { return OrdinalNumber(0); }
   static OrdinalNumber BeforeFirst() { return OrdinalNumber(-1); }
@@ -85,10 +84,7 @@ class TextPosition final {
   bool operator==(const TextPosition& other) const {
     return line_ == other.line_ && column_ == other.column_;
   }
-  bool operator!=(const TextPosition& other) const {
-    return !((*this) == other);
-  }
-  WTF_EXPORT OrdinalNumber ToOffset(const Vector<unsigned>&);
+  WTF_EXPORT OrdinalNumber ToOffset(const Vector<wtf_size_t>& line_endings);
 
   // A 'minimum' value of position, used as a default value.
   static TextPosition MinimumPosition() {
@@ -105,8 +101,8 @@ class TextPosition final {
   // A value corresponding to a position with given offset within text having
   // the specified line ending offsets.
   WTF_EXPORT static TextPosition FromOffsetAndLineEndings(
-      unsigned,
-      const Vector<unsigned>&);
+      wtf_size_t offset,
+      const Vector<wtf_size_t>& line_endings);
 
   OrdinalNumber line_;
   OrdinalNumber column_;
@@ -114,12 +110,6 @@ class TextPosition final {
 
 WTF_EXPORT std::unique_ptr<Vector<wtf_size_t>> GetLineEndings(const String&);
 
-}  // namespace WTF
-
-using WTF::OrdinalNumber;
-
-using WTF::TextPosition;
-
-using WTF::GetLineEndings;
+}  // namespace blink
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_TEXT_TEXT_POSITION_H_

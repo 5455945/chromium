@@ -1,18 +1,20 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef GPU_IPC_COMMON_CONTEXT_RESULT_MOJOM_TRAITS_H_
 #define GPU_IPC_COMMON_CONTEXT_RESULT_MOJOM_TRAITS_H_
 
+#include "base/notreached.h"
 #include "gpu/command_buffer/common/context_result.h"
-#include "gpu/gpu_export.h"
 #include "gpu/ipc/common/context_result.mojom-shared.h"
+#include "gpu/ipc/common/gpu_ipc_common_export.h"
 
 namespace mojo {
 
 template <>
-struct GPU_EXPORT EnumTraits<gpu::mojom::ContextResult, gpu::ContextResult> {
+struct GPU_IPC_COMMON_EXPORT EnumTraits<gpu::mojom::ContextResult,
+                                        gpu::ContextResult> {
   static gpu::mojom::ContextResult ToMojom(gpu::ContextResult context_result) {
     switch (context_result) {
       case gpu::ContextResult::kSuccess:
@@ -25,26 +27,20 @@ struct GPU_EXPORT EnumTraits<gpu::mojom::ContextResult, gpu::ContextResult> {
         return gpu::mojom::ContextResult::SurfaceFailure;
     }
     NOTREACHED();
-    return gpu::mojom::ContextResult::FatalFailure;
   }
 
-  static bool FromMojom(gpu::mojom::ContextResult input,
-                        gpu::ContextResult* out) {
+  static gpu::ContextResult FromMojom(gpu::mojom::ContextResult input) {
     switch (input) {
       case gpu::mojom::ContextResult::Success:
-        *out = gpu::ContextResult::kSuccess;
-        return true;
+        return gpu::ContextResult::kSuccess;
       case gpu::mojom::ContextResult::TransientFailure:
-        *out = gpu::ContextResult::kTransientFailure;
-        return true;
+        return gpu::ContextResult::kTransientFailure;
       case gpu::mojom::ContextResult::FatalFailure:
-        *out = gpu::ContextResult::kFatalFailure;
-        return true;
+        return gpu::ContextResult::kFatalFailure;
       case gpu::mojom::ContextResult::SurfaceFailure:
-        *out = gpu::ContextResult::kSurfaceFailure;
-        return true;
+        return gpu::ContextResult::kSurfaceFailure;
     }
-    return false;
+    NOTREACHED();
   }
 };
 

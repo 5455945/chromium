@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,18 +7,18 @@
 
 #include <memory>
 
-#include "base/callback.h"
-#include "base/no_destructor.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "net/http/http_request_headers.h"
 #include "net/log/net_log_with_source.h"
 #include "services/network/public/cpp/features.h"
+#include "services/network/public/mojom/network_context_client.mojom-forward.h"
 #include "services/network/public/mojom/trust_tokens.mojom.h"
-#include "services/network/trust_tokens/local_trust_token_operation_delegate.h"
 #include "services/network/trust_tokens/pending_trust_token_store.h"
 #include "services/network/trust_tokens/suitable_trust_token_origin.h"
 #include "services/network/trust_tokens/trust_token_key_commitment_getter.h"
 #include "services/network/trust_tokens/trust_token_request_helper.h"
 #include "services/network/trust_tokens/trust_token_request_issuance_helper.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace network {
 
@@ -95,8 +95,10 @@ class TrustTokenRequestHelperFactory {
   // |request|'s Trust Tokens parameters, using |store| to access persistent
   // state.
   virtual void CreateTrustTokenHelperForRequest(
-      const net::URLRequest& request,
+      const url::Origin& top_frame_origin,
+      const net::HttpRequestHeaders& headers,
       const mojom::TrustTokenParams& params,
+      const net::NetLogWithSource& net_log,
       base::OnceCallback<void(TrustTokenStatusOrRequestHelper)> done);
 
  private:
@@ -110,8 +112,8 @@ class TrustTokenRequestHelperFactory {
       base::OnceCallback<void(TrustTokenStatusOrRequestHelper)> done,
       TrustTokenStore* store);
 
-  PendingTrustTokenStore* store_;
-  const TrustTokenKeyCommitmentGetter* key_commitment_getter_;
+  raw_ptr<PendingTrustTokenStore> store_;
+  raw_ptr<const TrustTokenKeyCommitmentGetter> key_commitment_getter_;
   base::RepeatingCallback<mojom::NetworkContextClient*(void)>
       context_client_provider_;
   base::RepeatingCallback<bool(void)> authorizer_;

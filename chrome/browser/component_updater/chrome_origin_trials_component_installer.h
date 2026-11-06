@@ -1,17 +1,11 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_COMPONENT_UPDATER_CHROME_ORIGIN_TRIALS_COMPONENT_INSTALLER_H_
 #define CHROME_BROWSER_COMPONENT_UPDATER_CHROME_ORIGIN_TRIALS_COMPONENT_INSTALLER_H_
 
-#include <stdint.h>
-
-#include <memory>
-#include <vector>
-
 #include "base/files/file_path.h"
-#include "base/macros.h"
 #include "base/values.h"
 #include "base/version.h"
 #include "components/component_updater/component_installer.h"
@@ -25,7 +19,6 @@ class ChromeOriginTrialsComponentInstallerPolicy
     : public OriginTrialsComponentInstallerPolicy {
  public:
   ChromeOriginTrialsComponentInstallerPolicy() = default;
-  ~ChromeOriginTrialsComponentInstallerPolicy() override = default;
   ChromeOriginTrialsComponentInstallerPolicy(
       const ChromeOriginTrialsComponentInstallerPolicy&) = delete;
   ChromeOriginTrialsComponentInstallerPolicy& operator=(
@@ -34,7 +27,7 @@ class ChromeOriginTrialsComponentInstallerPolicy
  private:
   void ComponentReady(const base::Version& version,
                       const base::FilePath& install_dir,
-                      std::unique_ptr<base::DictionaryValue> manifest) override;
+                      base::DictValue manifest) override;
 };
 
 // Call once during startup to make the component update service aware of

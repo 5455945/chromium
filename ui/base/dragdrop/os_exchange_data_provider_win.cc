@@ -1,31 +1,43 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/base/dragdrop/os_exchange_data_provider_win.h"
 
-#include <coml2api.h>
 #include <objbase.h>
+
+#include <shobjidl.h>
+
+#include <coml2api.h>
 #include <objidl.h>
 #include <shlobj.h>
-#include <shobjidl.h>
 #include <stdint.h>
 #include <wrl/client.h>
 
 #include <algorithm>
 #include <iterator>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
 
-#include "base/callback.h"
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
-#include "base/cxx17_backports.h"
+#include "base/containers/to_vector.h"
+#include "base/feature_list.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback.h"
 #include "base/i18n/file_util_icu.h"
+#include "base/json/json_writer.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/pickle.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/values.h"
 #include "base/win/scoped_hdc.h"
 #include "base/win/scoped_hglobal.h"
 #include "base/win/shlwapi.h"
@@ -38,11 +50,14 @@
 #include "ui/base/data_transfer_policy/data_transfer_policy_controller.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/l10n_util_win.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/geometry/point.h"
+#include "ui/gfx/geometry/size.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/skbitmap_operations.h"
 #include "ui/strings/grit/ui_strings.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 
 namespace ui {
 
@@ -54,21 +69,126 @@ constexpr STGMEDIUM kNullStorageMedium = {.tymed = TYMED_NULL,
 // owns the resulting object. The "Bytes" version does not NULL terminate, the
 // string version does.
 STGMEDIUM CreateStorageForBytes(const void* data, size_t bytes);
-template <typename T>
-STGMEDIUM CreateStorageForString(const std::basic_string<T>& data);
+STGMEDIUM CreateStorageForIStream(const void* data, size_t bytes);
+STGMEDIUM CreateStorageForString(std::string_view data);
+STGMEDIUM CreateStorageForString(std::u16string_view data);
 STGMEDIUM CreateIdListStorageForFileName(const base::FilePath& path);
 // Creates a File Descriptor for the creation of a file to the given URL and
 // returns a handle to it.
 STGMEDIUM CreateStorageForFileDescriptor(const base::FilePath& path);
+void PopulateFileDescriptorName(FILEDESCRIPTORW& dsc,
+                                const base::FilePath& path);
 
 const ClipboardFormatType& GetRendererTaintFormatType();
+const ClipboardFormatType& GetFromPrivilegedFormatType();
+const ClipboardFormatType& GetChromeDragIdFormatType();
+const ClipboardFormatType& GetIgnoreFileContentsFormatType();
 // Creates the contents of an Internet Shortcut file for the given URL.
-std::string GetInternetShortcutFileContents(const GURL& url);
+std::vector<uint8_t> GetInternetShortcutFileContents(const GURL& url);
 // Creates a valid file name given a suggested title and URL.
 std::wstring CreateValidFileNameFromTitle(const GURL& url,
                                           const std::wstring& title);
 
 }  // namespace
+
+ScopedTargetDevice::ScopedTargetDevice() = default;
+
+ScopedTargetDevice::ScopedTargetDevice(const DVTARGETDEVICE* source) {
+  Reset(source);
+}
+
+ScopedTargetDevice::ScopedTargetDevice(const ScopedTargetDevice& other) {
+  Reset(other.get());
+}
+
+ScopedTargetDevice& ScopedTargetDevice::operator=(
+    const ScopedTargetDevice& other) {
+  if (this != &other) {
+    Reset(other.get());
+  }
+  return *this;
+}
+
+ScopedTargetDevice::ScopedTargetDevice(ScopedTargetDevice&& other) noexcept
+    : device_(std::exchange(other.device_, nullptr)) {}
+
+ScopedTargetDevice& ScopedTargetDevice::operator=(
+    ScopedTargetDevice&& other) noexcept {
+  if (this != &other) {
+    Reset(nullptr);
+    device_ = std::exchange(other.device_, nullptr);
+  }
+  return *this;
+}
+
+ScopedTargetDevice::~ScopedTargetDevice() {
+  Reset(nullptr);
+}
+
+void ScopedTargetDevice::Reset(const DVTARGETDEVICE* source) {
+  if (device_) {
+    ::CoTaskMemFree(device_);
+    device_ = nullptr;
+  }
+  if (source && source->tdSize >= sizeof(DVTARGETDEVICE)) {
+    device_ = static_cast<DVTARGETDEVICE*>(::CoTaskMemAlloc(source->tdSize));
+    if (device_) {
+      auto source_span = UNSAFE_TODO(base::span<const uint8_t>(
+          reinterpret_cast<const uint8_t*>(source), source->tdSize));
+      auto dest_span = UNSAFE_TODO(base::span<uint8_t>(
+          reinterpret_cast<uint8_t*>(device_), source->tdSize));
+      dest_span.copy_from(source_span);
+    }
+  }
+}
+
+DVTARGETDEVICE* ScopedTargetDevice::release() {
+  return std::exchange(device_, nullptr);
+}
+
+ScopedFormatEtc::ScopedFormatEtc() = default;
+
+ScopedFormatEtc::ScopedFormatEtc(const FORMATETC& source)
+    : format_etc(source), target_device(source.ptd) {
+  // Perform a deep copy of the `FORMATETC` structure. This is required because
+  // the incoming `FORMATETC` may contain a pointer to a target device (`ptd`)
+  // that is owned by the COM stub and will be freed as soon as `SetData`
+  // returns.
+  format_etc.ptd = target_device.get();
+}
+
+ScopedFormatEtc::ScopedFormatEtc(const ScopedFormatEtc& other)
+    : format_etc(other.format_etc), target_device(other.target_device) {
+  format_etc.ptd = target_device.get();
+}
+
+ScopedFormatEtc::ScopedFormatEtc(ScopedFormatEtc&& other) noexcept
+    : format_etc(other.format_etc),
+      target_device(std::move(other.target_device)) {
+  format_etc.ptd = target_device.get();
+  other.format_etc.ptd = nullptr;
+}
+
+ScopedFormatEtc& ScopedFormatEtc::operator=(const ScopedFormatEtc& other) {
+  if (this != &other) {
+    format_etc = other.format_etc;
+    target_device = other.target_device;
+    format_etc.ptd = target_device.get();
+  }
+  return *this;
+}
+
+ScopedFormatEtc& ScopedFormatEtc::operator=(ScopedFormatEtc&& other) noexcept {
+  if (this != &other) {
+    format_etc = other.format_etc;
+    target_device = std::move(other.target_device);
+    format_etc.ptd = target_device.get();
+    other.format_etc.ptd = nullptr;
+  }
+  return *this;
+}
+
+ScopedFormatEtc::~ScopedFormatEtc() = default;
 
 ///////////////////////////////////////////////////////////////////////////////
 // FormatEtcEnumerator
@@ -87,7 +207,9 @@ class FormatEtcEnumerator final : public IEnumFORMATETC {
  public:
   FormatEtcEnumerator(DataObjectImpl::StoredData::const_iterator begin,
                       DataObjectImpl::StoredData::const_iterator end);
-  ~FormatEtcEnumerator();
+
+  FormatEtcEnumerator(const FormatEtcEnumerator&) = delete;
+  FormatEtcEnumerator& operator=(const FormatEtcEnumerator&) = delete;
 
   // IEnumFORMATETC implementation:
   HRESULT __stdcall Next(ULONG count,
@@ -116,40 +238,23 @@ class FormatEtcEnumerator final : public IEnumFORMATETC {
   // IEnumFORMATETC API assumes a deterministic ordering of elements through
   // methods like Next and Skip. This exposes the underlying data structure to
   // the user. Bah.
-  std::vector<std::unique_ptr<FORMATETC>> contents_;
+  std::vector<ScopedFormatEtc> contents_;
 
   // The cursor of the active enumeration - an index into |contents_|.
   size_t cursor_;
 
   ULONG ref_count_;
-
-  DISALLOW_COPY_AND_ASSIGN(FormatEtcEnumerator);
 };
-
-// Safely makes a copy of all of the relevant bits of a FORMATETC object.
-static void CloneFormatEtc(const FORMATETC* source, FORMATETC* clone) {
-  *clone = *source;
-  if (source->ptd) {
-    clone->ptd =
-        static_cast<DVTARGETDEVICE*>(CoTaskMemAlloc(sizeof(DVTARGETDEVICE)));
-    *(clone->ptd) = *(source->ptd);
-  }
-}
 
 FormatEtcEnumerator::FormatEtcEnumerator(
     DataObjectImpl::StoredData::const_iterator start,
     DataObjectImpl::StoredData::const_iterator end)
     : cursor_(0), ref_count_(0) {
-  // Copy FORMATETC data from our source into ourselves.
-  while (start != end) {
-    auto format_etc = std::make_unique<FORMATETC>();
-    CloneFormatEtc(&(*start)->format_etc, format_etc.get());
-    contents_.push_back(std::move(format_etc));
-    ++start;
-  }
-}
-
-FormatEtcEnumerator::~FormatEtcEnumerator() {
+  std::ranges::transform(
+      start, end, std::back_inserter(contents_),
+      [](const std::unique_ptr<DataObjectImpl::StoredDataInfo>& info) {
+        return info->format_etc;
+      });
 }
 
 HRESULT FormatEtcEnumerator::Next(ULONG count,
@@ -157,12 +262,15 @@ HRESULT FormatEtcEnumerator::Next(ULONG count,
                                   ULONG* elements_fetched) {
   // MSDN says |elements_fetched| is allowed to be NULL if count is 1.
   if (!elements_fetched)
-    DCHECK_EQ(count, 1ul);
+    CHECK_EQ(count, 1ul, base::NotFatalUntil::M163);
 
   // This method copies count elements into |elements_array|.
   ULONG index = 0;
+  auto elements = UNSAFE_TODO(base::span(elements_array, count));
   while (cursor_ < contents_.size() && index < count) {
-    CloneFormatEtc(contents_[cursor_].get(), &elements_array[index]);
+    ScopedFormatEtc copy = contents_[cursor_];
+    elements[index] = copy.format_etc;
+    elements[index].ptd = copy.target_device.release();
     ++cursor_;
     ++index;
   }
@@ -222,43 +330,13 @@ ULONG FormatEtcEnumerator::Release() {
 FormatEtcEnumerator* FormatEtcEnumerator::CloneFromOther(
     const FormatEtcEnumerator* other) {
   FormatEtcEnumerator* e = new FormatEtcEnumerator;
-  // Copy FORMATETC data from our source into ourselves.
-  std::transform(other->contents_.cbegin(), other->contents_.cend(),
-                 std::back_inserter(e->contents_),
-                 [](const std::unique_ptr<FORMATETC>& format_etc) {
-                   auto clone = std::make_unique<FORMATETC>();
-                   CloneFormatEtc(format_etc.get(), clone.get());
-                   return clone;
-                 });
-  // Carry over
+  e->contents_ = other->contents_;
   e->cursor_ = other->cursor_;
   return e;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 // OSExchangeDataProviderWin, public:
-
-// static
-bool OSExchangeDataProviderWin::HasPlainTextURL(IDataObject* source) {
-  std::u16string plain_text;
-  return (ClipboardUtil::GetPlainText(source, &plain_text) &&
-          !plain_text.empty() && GURL(plain_text).is_valid());
-}
-
-// static
-bool OSExchangeDataProviderWin::GetPlainTextURL(IDataObject* source,
-                                                GURL* url) {
-  std::u16string plain_text;
-  if (ClipboardUtil::GetPlainText(source, &plain_text) &&
-      !plain_text.empty()) {
-    GURL gurl(plain_text);
-    if (gurl.is_valid()) {
-      *url = gurl;
-      return true;
-    }
-  }
-  return false;
-}
 
 // static
 DataObjectImpl* OSExchangeDataProviderWin::GetDataObjectImpl(
@@ -292,62 +370,161 @@ std::unique_ptr<OSExchangeDataProvider> OSExchangeDataProviderWin::Clone()
   return std::make_unique<OSExchangeDataProviderWin>(data_object());
 }
 
-void OSExchangeDataProviderWin::MarkOriginatedFromRenderer() {
-  STGMEDIUM storage = CreateStorageForString(std::string());
+void OSExchangeDataProviderWin::MarkRendererTaintedFromOrigin(
+    const url::Origin& origin) {
+  STGMEDIUM storage = CreateStorageForString(
+      origin.opaque() ? std::string() : origin.Serialize());
   data_->contents_.push_back(DataObjectImpl::StoredDataInfo::TakeStorageMedium(
       GetRendererTaintFormatType().ToFormatEtc(), storage));
 }
 
-bool OSExchangeDataProviderWin::DidOriginateFromRenderer() const {
+bool OSExchangeDataProviderWin::IsRendererTainted() const {
   return HasCustomFormat(GetRendererTaintFormatType());
 }
 
-void OSExchangeDataProviderWin::SetString(const std::u16string& data) {
+std::optional<url::Origin> OSExchangeDataProviderWin::GetRendererTaintedOrigin()
+    const {
+  STGMEDIUM medium;
+  FORMATETC format_etc = GetRendererTaintFormatType().ToFormatEtc();
+  if (FAILED(source_object_->GetData(&format_etc, &medium))) {
+    return std::nullopt;
+  }
+  base::win::ScopedHGlobal<char*> data(medium.hGlobal);
+  if (data.size() == 0) {
+    return url::Origin();
+  }
+  return url::Origin::Create(GURL(std::string_view(data.data(), data.size())));
+}
+
+void OSExchangeDataProviderWin::MarkAsFromPrivileged() {
+  STGMEDIUM storage = CreateStorageForString(std::string_view());
+  data_->contents_.push_back(DataObjectImpl::StoredDataInfo::TakeStorageMedium(
+      GetFromPrivilegedFormatType().ToFormatEtc(), storage));
+}
+
+bool OSExchangeDataProviderWin::IsFromPrivileged() const {
+  return HasCustomFormat(GetFromPrivilegedFormatType());
+}
+
+void OSExchangeDataProviderWin::SetChromeDragId(
+    const base::UnguessableToken& drag_id) {
+  base::Pickle pickle;
+  pickle.WriteString(drag_id.ToString());
+  SetPickledData(GetChromeDragIdFormatType(), pickle);
+}
+
+std::optional<base::UnguessableToken>
+OSExchangeDataProviderWin::GetChromeDragId() const {
+  std::optional<base::Pickle> pickle =
+      GetPickledData(GetChromeDragIdFormatType());
+  if (!pickle.has_value()) {
+    return std::nullopt;
+  }
+  base::PickleIterator iter(*pickle);
+  std::string_view drag_id_str;
+  if (!iter.ReadStringPiece(&drag_id_str)) {
+    return std::nullopt;
+  }
+  return base::UnguessableToken::DeserializeFromString(drag_id_str);
+}
+
+void OSExchangeDataProviderWin::SetString(std::u16string_view data) {
   STGMEDIUM storage = CreateStorageForString(data);
   data_->contents_.push_back(DataObjectImpl::StoredDataInfo::TakeStorageMedium(
-      ClipboardFormatType::GetPlainTextType().ToFormatEtc(), storage));
+      ClipboardFormatType::PlainTextType().ToFormatEtc(), storage));
 
   // Also add the UTF8-encoded version.
   storage = CreateStorageForString(base::UTF16ToUTF8(data));
   data_->contents_.push_back(DataObjectImpl::StoredDataInfo::TakeStorageMedium(
-      ClipboardFormatType::GetPlainTextAType().ToFormatEtc(), storage));
+      ClipboardFormatType::PlainTextAType().ToFormatEtc(), storage));
 }
 
-void OSExchangeDataProviderWin::SetURL(const GURL& url,
-                                       const std::u16string& title) {
+void OSExchangeDataProviderWin::SetURLs(
+    base::span<const ClipboardUrlInfo> url_infos) {
   // NOTE WELL:
   // Every time you change the order of the first two CLIPFORMATS that get
   // added here, you need to update the EnumerationViaCOM test case in
   // the _unittest.cc file to reflect the new arrangement otherwise that test
   // will fail! It assumes an insertion order.
 
-  // Add text/x-moz-url for drags from Firefox
-  std::u16string x_moz_url_str = base::UTF8ToUTF16(url.spec());
-  x_moz_url_str += '\n';
-  x_moz_url_str += title;
-  STGMEDIUM storage = CreateStorageForString(x_moz_url_str);
-  data_->contents_.push_back(DataObjectImpl::StoredDataInfo::TakeStorageMedium(
-      ClipboardFormatType::GetMozUrlType().ToFormatEtc(), storage));
+  // Build shared representations for all URL formats. BookmarkListType stores
+  // a JSON data, while the newline-delimited string remains the fallback
+  // for text/uri-list and plain text.
+  std::string url_title_list;
+  base::ListValue bookmark_entries;
+  for (const auto& url_info : url_infos) {
+    if (!url_title_list.empty()) {
+      url_title_list += '\n';
+    }
+    url_title_list += url_info.url.spec();
+    url_title_list += '\n';
+    url_title_list += base::UTF16ToUTF8(url_info.title);
 
-  // Add a .URL shortcut file for dragging to Explorer.
-  std::wstring valid_file_name =
-      CreateValidFileNameFromTitle(url, base::AsWString(title));
-  std::string shortcut_url_file_contents = GetInternetShortcutFileContents(url);
-  SetFileContents(base::FilePath(valid_file_name), shortcut_url_file_contents);
+    base::DictValue entry;
+    entry.Set("url", url_info.url.spec());
+    entry.Set("title", base::UTF16ToUTF8(url_info.title));
+    bookmark_entries.Append(std::move(entry));
+  }
+
+  // Add MozUrlType clipboard format, which supports a URL/title pair for
+  // bookmark drags.
+  STGMEDIUM storage = CreateStorageForString(
+      base::StrCat({base::UTF8ToUTF16(url_infos.front().url.spec()), u"\n",
+                    url_infos.front().title}));
+  data_->contents_.push_back(DataObjectImpl::StoredDataInfo::TakeStorageMedium(
+      ClipboardFormatType::MozUrlType().ToFormatEtc(), storage));
+
+  // Add BookmarkListType clipboard format only when multiple items are given.
+  if (url_infos.size() > 1) {
+    base::Value bookmark_entries_value(std::move(bookmark_entries));
+    std::string bookmark_list_json;
+    if (base::JSONWriter::Write(bookmark_entries_value, &bookmark_list_json)) {
+      storage = CreateStorageForString(base::UTF8ToUTF16(bookmark_list_json));
+      data_->contents_.push_back(
+          DataObjectImpl::StoredDataInfo::TakeStorageMedium(
+              ClipboardFormatType::BookmarkListType().ToFormatEtc(), storage));
+    }
+  }
+
+  // Add a .URL shortcut file for dragging to Explorer if there is not already
+  // FileContents from dragging an image.  Also mark the synthesized file
+  // contents to be ignored if the drag ends up targeting Chrome. Otherwise,
+  // this may confuse some web pages into dropping a file rather than a link.
+  // See https://crbug.com/1274395 for background.
+  if (!HasFileContents()) {
+    std::wstring valid_file_name = CreateValidFileNameFromTitle(
+        url_infos.front().url, base::AsWString(url_infos.front().title));
+    std::vector<uint8_t> shortcut_url_file_contents =
+        GetInternetShortcutFileContents(url_infos.front().url);
+    SetFileContents(base::FilePath(valid_file_name),
+                    shortcut_url_file_contents);
+    storage = CreateStorageForString(std::string_view());
+    data_->contents_.push_back(
+        DataObjectImpl::StoredDataInfo::TakeStorageMedium(
+            GetIgnoreFileContentsFormatType().ToFormatEtc(), storage));
+  }
 
   // Add a UniformResourceLocator link for apps like IE and Word.
-  storage = CreateStorageForString(base::UTF8ToUTF16(url.spec()));
+  // This sets a single URL, as the CFSTR_INETURL format provides the standard
+  // clipboard representation for a single URL.
+  // https://learn.microsoft.com/en-us/windows/win32/shell/clipboard#cfstr_ineturl
+  const auto& url_info = url_infos.front();
+  storage = CreateStorageForString(base::UTF8ToUTF16(url_info.url.spec()));
   data_->contents_.push_back(DataObjectImpl::StoredDataInfo::TakeStorageMedium(
-      ClipboardFormatType::GetUrlType().ToFormatEtc(), storage));
-  storage = CreateStorageForString(url.spec());
+      ClipboardFormatType::UrlType().ToFormatEtc(), storage));
+  storage = CreateStorageForString(url_info.url.spec());
   data_->contents_.push_back(DataObjectImpl::StoredDataInfo::TakeStorageMedium(
-      ClipboardFormatType::GetUrlAType().ToFormatEtc(), storage));
+      ClipboardFormatType::UrlAType().ToFormatEtc(), storage));
 
-  // TODO(https://crbug.com/6767): add CF_HTML.
+  // TODO(crbug.com/41292596): add CF_HTML.
 
   // Also add text representations (these should be last since they're the
   // least preferable).
-  SetString(base::UTF8ToUTF16(url.spec()));
+  if (url_infos.size() > 1) {
+    SetString(base::UTF8ToUTF16(url_title_list));
+  } else {
+    SetString(base::UTF8ToUTF16(url_info.url.spec()));
+  }
 }
 
 void OSExchangeDataProviderWin::SetFilename(const base::FilePath& path) {
@@ -357,23 +534,46 @@ void OSExchangeDataProviderWin::SetFilename(const base::FilePath& path) {
   if (storage.tymed == TYMED_NULL)
     return;
   data_->contents_.push_back(DataObjectImpl::StoredDataInfo::TakeStorageMedium(
-      ClipboardFormatType::GetIDListType().ToFormatEtc(), storage));
+      ClipboardFormatType::IDListType().ToFormatEtc(), storage));
 }
 
 void OSExchangeDataProviderWin::SetFilenames(
     const std::vector<FileInfo>& filenames) {
-  STGMEDIUM storage = ClipboardUtil::CreateStorageForFileNames(filenames);
+  STGMEDIUM storage = clipboard_util::CreateStorageForFileNames(filenames);
   if (storage.tymed == TYMED_NULL)
     return;
 
   data_->contents_.push_back(DataObjectImpl::StoredDataInfo::TakeStorageMedium(
-      ClipboardFormatType::GetCFHDropType().ToFormatEtc(), storage));
+      ClipboardFormatType::CFHDropType().ToFormatEtc(), storage));
+}
+
+bool OSExchangeDataProviderWin::HasPlainTextURL() const {
+  return GetPlainTextURL().has_value();
+}
+
+std::optional<GURL> OSExchangeDataProviderWin::GetPlainTextURL() const {
+  std::u16string plain_text;
+  if (clipboard_util::GetPlainText(source_object_.Get(), &plain_text) &&
+      !plain_text.empty()) {
+    GURL gurl(plain_text);
+    if (!gurl.is_valid()) {
+      return std::nullopt;
+    }
+    if (base::FeatureList::IsEnabled(
+            features::kDragDropOnlySynthesizeHttpOrHttpsUrlsFromText) &&
+        IsRendererTainted() && !gurl.SchemeIsHTTPOrHTTPS()) {
+      return std::nullopt;
+    }
+    return gurl;
+  }
+  return std::nullopt;
 }
 
 void OSExchangeDataProviderWin::SetVirtualFileContentsForTesting(
-    const std::vector<std::pair<base::FilePath, std::string>>&
+    const std::vector<std::pair<base::FilePath, base::span<const uint8_t>>>&
         filenames_and_contents,
-    DWORD tymed) {
+    DWORD tymed,
+    bool show_cfhdrop_without_data) {
   size_t num_files = filenames_and_contents.size();
   if (!num_files)
     return;
@@ -391,34 +591,93 @@ void OSExchangeDataProviderWin::SetVirtualFileContentsForTesting(
 
   base::win::ScopedHGlobal<FILEGROUPDESCRIPTORW*> locked_mem(hdata);
 
-  FILEGROUPDESCRIPTORW* descriptor = locked_mem.get();
-  descriptor->cItems = num_files;
+  FILEGROUPDESCRIPTORW* descriptor = locked_mem.data();
+  descriptor->cItems = base::checked_cast<UINT>(num_files);
 
   STGMEDIUM storage = {
       .tymed = TYMED_HGLOBAL, .hGlobal = hdata, .pUnkForRelease = nullptr};
   data_->contents_.push_back(DataObjectImpl::StoredDataInfo::TakeStorageMedium(
-      ClipboardFormatType::GetFileDescriptorType().ToFormatEtc(), storage));
+      ClipboardFormatType::FileDescriptorType().ToFormatEtc(), storage));
 
+  auto fgd =
+      UNSAFE_TODO(base::span<FILEDESCRIPTORW>(descriptor->fgd, num_files));
   for (size_t i = 0; i < num_files; i++) {
     // Fill in each FILEDESCRIPTORW with file name.
-    descriptor->fgd[i].dwFlags |= FD_UNICODE;
-    std::wstring file_name = filenames_and_contents[i].first.value();
-    wcsncpy_s(descriptor->fgd[i].cFileName, MAX_PATH, file_name.c_str(),
-              std::min(file_name.size(), static_cast<size_t>(MAX_PATH - 1u)));
+    fgd[i].dwFlags |= static_cast<DWORD>(FD_UNICODE);
+    PopulateFileDescriptorName(fgd[i], filenames_and_contents[i].first);
 
     // Add the contents of each file as CFSTR_FILECONTENTS.
-    base::span<const uint8_t> data_buffer =
-        base::make_span(reinterpret_cast<const uint8_t*>(
-                            filenames_and_contents[i].second.data()),
-                        filenames_and_contents[i].second.length());
-    SetVirtualFileContentAtIndexForTesting(data_buffer, tymed, i);
+    SetVirtualFileContentAtIndexForTesting(filenames_and_contents[i].second,
+                                           tymed,
+                                           static_cast<LONG>(i));  // IN-TEST
+  }
+
+  // This simulates ZIP Shell Folder behavior where data is available via format
+  // FileContentAtIndexType(0)
+  if (show_cfhdrop_without_data) {
+    FORMATETC cf_hdrop_format =
+        ClipboardFormatType::CFHDropType().ToFormatEtc();
+    cf_hdrop_format.tymed = TYMED_NULL;
+    STGMEDIUM null_medium = kNullStorageMedium;
+    data_->contents_.push_back(
+        DataObjectImpl::StoredDataInfo::TakeStorageMedium(cf_hdrop_format,
+                                                          null_medium));
+  }
+}
+
+void OSExchangeDataProviderWin::SetVirtualFileContentsWithDirectoriesForTesting(
+    const std::vector<std::pair<base::FilePath, base::span<const uint8_t>>>&
+        filenames_and_contents,
+    const std::vector<size_t>& directory_indices,
+    DWORD tymed) {
+  size_t num_files = filenames_and_contents.size();
+  if (!num_files) {
+    return;
+  }
+
+  const size_t total_bytes_fgd = sizeof(FILEGROUPDESCRIPTORW) +
+                                 (sizeof(FILEDESCRIPTORW) * (num_files - 1));
+
+  HANDLE hdata = ::GlobalAlloc(GPTR, total_bytes_fgd);
+  if (!hdata) {
+    return;
+  }
+
+  base::win::ScopedHGlobal<FILEGROUPDESCRIPTORW*> locked_mem(hdata);
+
+  FILEGROUPDESCRIPTORW* descriptor = locked_mem.data();
+  descriptor->cItems = base::checked_cast<UINT>(num_files);
+
+  STGMEDIUM storage = {
+      .tymed = TYMED_HGLOBAL, .hGlobal = hdata, .pUnkForRelease = nullptr};
+  data_->contents_.push_back(DataObjectImpl::StoredDataInfo::TakeStorageMedium(
+      ClipboardFormatType::FileDescriptorType().ToFormatEtc(), storage));
+
+  auto fgd =
+      UNSAFE_TODO(base::span<FILEDESCRIPTORW>(descriptor->fgd, num_files));
+  for (size_t i = 0; i < num_files; i++) {
+    fgd[i].dwFlags |= static_cast<DWORD>(FD_UNICODE);
+    PopulateFileDescriptorName(fgd[i], filenames_and_contents[i].first);
+
+    if (std::find(directory_indices.begin(), directory_indices.end(), i) !=
+        directory_indices.end()) {
+      // A directory entry carries the directory attribute and no content
+      // stream, just as a real ZIP folder advertises it.
+      fgd[i].dwFlags |= static_cast<DWORD>(FD_ATTRIBUTES);
+      fgd[i].dwFileAttributes |= static_cast<DWORD>(FILE_ATTRIBUTE_DIRECTORY);
+      continue;
+    }
+
+    SetVirtualFileContentAtIndexForTesting(filenames_and_contents[i].second,
+                                           tymed,
+                                           static_cast<LONG>(i));  // IN-TEST
   }
 }
 
 void OSExchangeDataProviderWin::SetVirtualFileContentAtIndexForTesting(
     base::span<const uint8_t> data_buffer,
     DWORD tymed,
-    size_t index) {
+    LONG index) {
   STGMEDIUM storage_for_contents = kNullStorageMedium;
 
   if (tymed == TYMED_ISTORAGE) {
@@ -441,8 +700,9 @@ void OSExchangeDataProviderWin::SetVirtualFileContentAtIndexForTesting(
 
     Microsoft::WRL::ComPtr<IStream> source_stream;
     if (SUCCEEDED(hr)) {
-      source_stream =
-          ::SHCreateMemStream(data_buffer.data(), data_buffer.size_bytes());
+      source_stream = ::SHCreateMemStream(
+          data_buffer.data(),
+          base::checked_cast<UINT>(data_buffer.size_bytes()));
     }
 
     if (source_stream) {
@@ -458,8 +718,8 @@ void OSExchangeDataProviderWin::SetVirtualFileContentAtIndexForTesting(
       storage_for_contents.tymed = TYMED_ISTORAGE;
 
   } else if (tymed == TYMED_ISTREAM) {
-    storage_for_contents.pstm =
-        ::SHCreateMemStream(data_buffer.data(), data_buffer.size_bytes());
+    storage_for_contents.pstm = ::SHCreateMemStream(
+        data_buffer.data(), base::checked_cast<UINT>(data_buffer.size_bytes()));
     if (storage_for_contents.pstm) {
       // A properly implemented IDataObject::GetData moves the stream pointer
       // to end.
@@ -473,8 +733,7 @@ void OSExchangeDataProviderWin::SetVirtualFileContentAtIndexForTesting(
     storage_for_contents =
         CreateStorageForBytes(data_buffer.data(), data_buffer.size_bytes());
   }
-  ClipboardFormatType type =
-      ClipboardFormatType::GetFileContentAtIndexType(index);
+  ClipboardFormatType type = ClipboardFormatType::FileContentAtIndexType(index);
   // Pass ownership of |storage_for_contents| here.
   data_->contents_.push_back(DataObjectImpl::StoredDataInfo::TakeStorageMedium(
       type.ToFormatEtc(), storage_for_contents));
@@ -490,18 +749,30 @@ void OSExchangeDataProviderWin::SetPickledData(
 
 void OSExchangeDataProviderWin::SetFileContents(
     const base::FilePath& filename,
-    const std::string& file_contents) {
+    base::span<const uint8_t> file_contents) {
   // Add CFSTR_FILEDESCRIPTORW.
   STGMEDIUM storage = CreateStorageForFileDescriptor(filename);
   data_->contents_.push_back(DataObjectImpl::StoredDataInfo::TakeStorageMedium(
-      ClipboardFormatType::GetFileDescriptorType().ToFormatEtc(), storage));
+      ClipboardFormatType::FileDescriptorType().ToFormatEtc(), storage));
 
-  // Add CFSTR_FILECONTENTS.
+  // Add CFSTR_FILECONTENTS as TYMED_ISTREAM.
   STGMEDIUM storage_contents =
-      CreateStorageForBytes(file_contents.data(), file_contents.length());
+      CreateStorageForIStream(file_contents.data(), file_contents.size());
+  if (storage_contents.tymed == TYMED_NULL) {
+    return;
+  }
+  // TODO(https://crbug.com/41451800): add support for TYMED_ISTORAGE (e.g. Drag
+  // multiple mail attachments out of Outlook Web).
+  FORMATETC file_content_format =
+      ClipboardFormatType::FileContentAtIndexType(0).ToFormatEtc();
+  // Advertise both TYMED_ISTREAM and TYMED_HGLOBAL. GetData() converts
+  // TYMED_ISTREAM to TYMED_HGLOBAL on-the-fly to remain backward compatible
+  // with older Chromium versions that request only TYMED_HGLOBAL.
+  // TODO(https://crbug.com/41451800): Remove TYMED_HGLOBAL once confirmed no
+  // app requires it.
+  file_content_format.tymed = TYMED_ISTREAM | TYMED_HGLOBAL;
   data_->contents_.push_back(DataObjectImpl::StoredDataInfo::TakeStorageMedium(
-      ClipboardFormatType::GetFileContentZeroType().ToFormatEtc(),
-      storage_contents));
+      file_content_format, storage_contents));
 }
 
 void OSExchangeDataProviderWin::SetHtml(const std::u16string& html,
@@ -510,157 +781,168 @@ void OSExchangeDataProviderWin::SetHtml(const std::u16string& html,
   std::string utf8_html = base::UTF16ToUTF8(html);
   std::string url = base_url.is_valid() ? base_url.spec() : std::string();
 
-  std::string cf_html = ClipboardUtil::HtmlToCFHtml(utf8_html, url);
+  std::string cf_html = clipboard_util::HtmlToCFHtml(utf8_html, url);
   STGMEDIUM storage = CreateStorageForBytes(cf_html.c_str(), cf_html.size());
   data_->contents_.push_back(DataObjectImpl::StoredDataInfo::TakeStorageMedium(
-      ClipboardFormatType::GetHtmlType().ToFormatEtc(), storage));
+      ClipboardFormatType::HtmlType().ToFormatEtc(), storage));
 
   STGMEDIUM storage_plain =
       CreateStorageForBytes(utf8_html.c_str(), utf8_html.size());
   data_->contents_.push_back(DataObjectImpl::StoredDataInfo::TakeStorageMedium(
-      ClipboardFormatType::GetTextHtmlType().ToFormatEtc(), storage_plain));
+      ClipboardFormatType::TextHtmlType().ToFormatEtc(), storage_plain));
 }
 
-bool OSExchangeDataProviderWin::GetString(std::u16string* data) const {
-  return ClipboardUtil::GetPlainText(source_object_.Get(), data);
-}
-
-bool OSExchangeDataProviderWin::GetURLAndTitle(FilenameToURLPolicy policy,
-                                               GURL* url,
-                                               std::u16string* title) const {
-  std::u16string url_str;
-  bool success = ClipboardUtil::GetUrl(
-      source_object_.Get(), url, title,
-      policy == FilenameToURLPolicy::CONVERT_FILENAMES ? true : false);
-  if (success) {
-    DCHECK(url->is_valid());
-    return true;
-  } else if (GetPlainTextURL(source_object_.Get(), url)) {
-    if (url->is_valid())
-      *title = net::GetSuggestedFilename(*url, "", "", "", "", std::string());
-    else
-      title->clear();
-    return true;
+std::optional<std::u16string> OSExchangeDataProviderWin::GetString() const {
+  std::u16string data;
+  if (clipboard_util::GetPlainText(source_object_.Get(), &data)) {
+    return std::move(data);
   }
-  return false;
+  return std::nullopt;
 }
 
-bool OSExchangeDataProviderWin::GetFilename(base::FilePath* path) const {
-  std::vector<std::wstring> filenames;
-  bool success = ClipboardUtil::GetFilenames(source_object_.Get(), &filenames);
-  if (success)
-    *path = base::FilePath(filenames[0]);
-  return success;
+std::vector<ClipboardUrlInfo> OSExchangeDataProviderWin::GetURLs(
+    FilenameToURLPolicy policy) const {
+  std::vector<ClipboardUrlInfo> url_infos;
+  if (clipboard_util::GetUrlInfos(
+          source_object_.Get(), url_infos,
+          policy == FilenameToURLPolicy::CONVERT_FILENAMES)) {
+    CHECK(!url_infos.empty(), base::NotFatalUntil::M163);
+    return url_infos;
+  }
+
+  if (std::optional<GURL> plaintext_url = GetPlainTextURL();
+      plaintext_url.has_value()) {
+    CHECK(plaintext_url->is_valid(), base::NotFatalUntil::M163);
+    GURL url = std::move(plaintext_url).value();
+    std::u16string title =
+        net::GetSuggestedFilename(url, "", "", "", "", std::string());
+    url_infos.emplace_back(std::move(url), std::move(title));
+  }
+
+  return url_infos;
 }
 
-bool OSExchangeDataProviderWin::GetFilenames(
-    std::vector<FileInfo>* filenames) const {
+std::optional<std::vector<FileInfo>> OSExchangeDataProviderWin::GetFilenames()
+    const {
   std::vector<std::wstring> filenames_local;
   bool success =
-      ClipboardUtil::GetFilenames(source_object_.Get(), &filenames_local);
-  if (success) {
-    for (const std::wstring& filename_local : filenames_local)
-      filenames->push_back(
-          FileInfo(base::FilePath(filename_local), base::FilePath()));
+      clipboard_util::GetFilenames(source_object_.Get(), &filenames_local);
+  if (!success) {
+    return std::nullopt;
   }
-  return success;
+
+  return base::ToVector(filenames_local, [](const std::wstring& filename) {
+    return FileInfo(base::FilePath(filename), base::FilePath());
+  });
 }
 
 bool OSExchangeDataProviderWin::HasVirtualFilenames() const {
-  return ClipboardUtil::HasVirtualFilenames(source_object_.Get());
+  return clipboard_util::HasVirtualFilenames(source_object_.Get());
 }
 
-bool OSExchangeDataProviderWin::GetVirtualFilenames(
-    std::vector<FileInfo>* filenames) const {
+std::optional<std::vector<FileInfo>>
+OSExchangeDataProviderWin::GetVirtualFilenames() const {
   // ui_base_clipboard can't use FileInfo struct which is part of ui_base, so
   // use FilePath instead.
-  // TODO(https://crbug.com/950360): ui_base_clipboard can't use FileInfo struct
+  // TODO(crbug.com/41451590): ui_base_clipboard can't use FileInfo struct
   // which is part of ui_base (layering issue).
-  std::vector<base::FilePath> display_names;
-  bool success =
-      ClipboardUtil::GetVirtualFilenames(source_object_.Get(), &display_names);
-
-  if (success) {
-    // On dragenter scenarios, need a placeholder file path for drag metadata
-    // checks without actually creating the temp file.
-    base::FilePath temp_path(FILE_PATH_LITERAL("temp.tmp"));
-
-    for (const auto& display_name : display_names)
-      filenames->push_back(FileInfo(temp_path, display_name));
+  std::optional<std::vector<base::FilePath>> display_names =
+      clipboard_util::GetVirtualFilenames(source_object_.Get());
+  if (!display_names) {
+    return std::nullopt;
   }
-  return success;
+
+  // On dragenter scenarios, need a placeholder file path for drag metadata
+  // checks without actually creating the temp file.
+  const base::FilePath temp_path(kVirtualFileTempPlaceholderPath);
+
+  std::vector<FileInfo> result;
+  for (const auto& display_name : display_names.value()) {
+    result.emplace_back(temp_path, display_name);
+  }
+
+  return result;
 }
 
-bool OSExchangeDataProviderWin::GetVirtualFilesAsTempFiles(
+void OSExchangeDataProviderWin::GetVirtualFilesAsTempFiles(
     base::OnceCallback<
         void(const std::vector<std::pair<base::FilePath, base::FilePath>>&)>
         callback) const {
-  return ClipboardUtil::GetVirtualFilesAsTempFiles(source_object_.Get(),
-                                                   std::move(callback));
+  clipboard_util::GetVirtualFilesAsTempFiles(source_object_.Get(),
+                                             std::move(callback));
 }
 
-bool OSExchangeDataProviderWin::GetPickledData(
-    const ClipboardFormatType& format,
-    base::Pickle* data) const {
-  DCHECK(data);
-  bool success = false;
+std::optional<base::Pickle> OSExchangeDataProviderWin::GetPickledData(
+    const ClipboardFormatType& format) const {
   STGMEDIUM medium;
   FORMATETC format_etc = format.ToFormatEtc();
   if (SUCCEEDED(source_object_->GetData(&format_etc, &medium))) {
     if (medium.tymed & TYMED_HGLOBAL) {
       base::win::ScopedHGlobal<char*> c_data(medium.hGlobal);
-      DCHECK_GT(c_data.Size(), 0u);
-      *data = base::Pickle(c_data.get(), static_cast<int>(c_data.Size()));
-      success = true;
+      CHECK_GT(c_data.size(), 0u, base::NotFatalUntil::M163);
+      return base::Pickle::WithData(base::as_bytes(base::span(c_data)));
     }
     ReleaseStgMedium(&medium);
   }
-  return success;
+  return std::nullopt;
 }
 
-bool OSExchangeDataProviderWin::GetFileContents(
-    base::FilePath* filename,
-    std::string* file_contents) const {
-  std::wstring filename_str;
-  if (!ClipboardUtil::GetFileContents(source_object_.Get(), &filename_str,
-                                      file_contents)) {
-    return false;
+std::optional<OSExchangeDataProvider::FileContentsInfo>
+OSExchangeDataProviderWin::GetFileContents() const {
+  if (HasCustomFormat(GetIgnoreFileContentsFormatType())) {
+    return std::nullopt;
   }
-  *filename = base::FilePath(filename_str);
-  return true;
+
+  std::wstring filename_str;
+  std::vector<uint8_t> file_contents;
+  if (!clipboard_util::GetFileContents(source_object_.Get(), &filename_str,
+                                       &file_contents) ||
+      filename_str.empty()) {
+    return std::nullopt;
+  }
+
+  return FileContentsInfo{.filename = base::FilePath(filename_str),
+                          .file_contents = std::move(file_contents)};
 }
 
-bool OSExchangeDataProviderWin::GetHtml(std::u16string* html,
-                                        GURL* base_url) const {
+std::optional<OSExchangeDataProvider::HtmlInfo>
+OSExchangeDataProviderWin::GetHtml() const {
+  std::u16string html;
   std::string url;
-  bool success = ClipboardUtil::GetHtml(source_object_.Get(), html, &url);
-  if (success)
-    *base_url = GURL(url);
-  return success;
+  bool success = clipboard_util::GetHtml(source_object_.Get(), &html, &url);
+  if (!success) {
+    return std::nullopt;
+  }
+
+  return HtmlInfo{
+      .html = html,
+      .base_url = GURL(url),
+  };
 }
 
 bool OSExchangeDataProviderWin::HasString() const {
-  return ClipboardUtil::HasPlainText(source_object_.Get());
+  return clipboard_util::HasPlainText(source_object_.Get());
 }
 
 bool OSExchangeDataProviderWin::HasURL(FilenameToURLPolicy policy) const {
-  return (ClipboardUtil::HasUrl(source_object_.Get(),
-                                policy == FilenameToURLPolicy::CONVERT_FILENAMES
-                                    ? true
-                                    : false) ||
-          HasPlainTextURL(source_object_.Get()));
+  return (
+      clipboard_util::HasUrl(
+          source_object_.Get(),
+          policy == FilenameToURLPolicy::CONVERT_FILENAMES ? true : false) ||
+      HasPlainTextURL());
 }
 
 bool OSExchangeDataProviderWin::HasFile() const {
-  return ClipboardUtil::HasFilenames(source_object_.Get());
+  return clipboard_util::HasFilenames(source_object_.Get());
 }
 
 bool OSExchangeDataProviderWin::HasFileContents() const {
-  return ClipboardUtil::HasFileContents(source_object_.Get());
+  return clipboard_util::HasFileContents(source_object_.Get()) &&
+         !HasCustomFormat(GetIgnoreFileContentsFormatType());
 }
 
 bool OSExchangeDataProviderWin::HasHtml() const {
-  return ClipboardUtil::HasHtml(source_object_.Get());
+  return clipboard_util::HasHtml(source_object_.Get());
 }
 
 bool OSExchangeDataProviderWin::HasCustomFormat(
@@ -671,19 +953,11 @@ bool OSExchangeDataProviderWin::HasCustomFormat(
 
 void OSExchangeDataProviderWin::SetDownloadFileInfo(
     DownloadFileInfo* download) {
-  // If the filename is not provided, set storage to NULL to indicate that
-  // the delay rendering will be used.
-  // TODO(dcheng): Is it actually possible for filename to be empty here? I
-  // think we always synthesize one in WebContentsDragWin.
-  STGMEDIUM storage = kNullStorageMedium;
-  if (!download->filename.empty()) {
-    ClipboardUtil::CreateStorageForFileNames(
-        {FileInfo(download->filename, base::FilePath())});
-  }
-
   // Add CF_HDROP.
+  // Set storage to NULL to indicate that the delay rendering will be used.
+  STGMEDIUM storage = kNullStorageMedium;
   auto info = DataObjectImpl::StoredDataInfo::TakeStorageMedium(
-      ClipboardFormatType::GetCFHDropType().ToFormatEtc(), storage);
+      ClipboardFormatType::CFHDropType().ToFormatEtc(), storage);
   info->downloader = std::move(download->downloader);
   data_->contents_.push_back(std::move(info));
 
@@ -694,7 +968,7 @@ void OSExchangeDataProviderWin::SetDownloadFileInfo(
 void OSExchangeDataProviderWin::SetDragImage(
     const gfx::ImageSkia& image_skia,
     const gfx::Vector2d& cursor_offset) {
-  DCHECK(!image_skia.size().IsEmpty());
+  CHECK(!image_skia.size().IsEmpty(), base::NotFatalUntil::M163);
 
   // InitializeFromBitmap() doesn't expect an alpha channel and is confused
   // by premultiplied colors, so unpremultiply the bitmap.
@@ -707,7 +981,7 @@ void OSExchangeDataProviderWin::SetDragImage(
   if (!SUCCEEDED(rv))
     return;
 
-  base::win::ScopedBitmap hbitmap =
+  base::win::ScopedGDIObject<HBITMAP> hbitmap =
       skia::CreateHBitmapFromN32SkBitmap(unpremul_bitmap);
   if (!hbitmap.is_valid())
     return;
@@ -727,7 +1001,6 @@ gfx::ImageSkia OSExchangeDataProviderWin::GetDragImage() const {
   // situations where the drag image is later queried. In that case a different
   // OSExchangeDataProvider should be used.
   NOTREACHED();
-  return gfx::ImageSkia();
 }
 
 gfx::Vector2d OSExchangeDataProviderWin::GetDragImageOffset() const {
@@ -735,7 +1008,6 @@ gfx::Vector2d OSExchangeDataProviderWin::GetDragImageOffset() const {
   // situations where the drag image is later queried. In that case a different
   // OSExchangeDataProvider should be used.
   NOTREACHED();
-  return gfx::Vector2d();
 }
 
 void OSExchangeDataProviderWin::SetSource(
@@ -798,10 +1070,22 @@ static STGMEDIUM DuplicateMedium(CLIPFORMAT clipformat,
       copied.lpszFileName = static_cast<LPOLESTR>(
           OleDuplicateData(storage.lpszFileName, clipformat, 0));
       break;
-    case TYMED_ISTREAM:
-      copied.pstm = storage.pstm;
-      copied.pstm->AddRef();
+    case TYMED_ISTREAM: {
+      // Clone the stream so each GetData() caller gets an independent seek
+      // pointer into the same underlying bytes. This avoids concurrent-read
+      // interference that would occur if we shared the same IStream pointer.
+      IStream* cloned = nullptr;
+      if (SUCCEEDED(storage.pstm->Clone(&cloned)) && cloned) {
+        copied.pstm = cloned;
+      } else {
+        // Fallback for streams that don't support Clone(): share the pointer.
+        copied.pstm = storage.pstm;
+        copied.pstm->AddRef();
+      }
+      const LARGE_INTEGER zero = {};
+      copied.pstm->Seek(zero, STREAM_SEEK_SET, nullptr);
       break;
+    }
     case TYMED_ISTORAGE:
       copied.pstg = storage.pstg;
       copied.pstg->AddRef();
@@ -861,11 +1145,11 @@ void DataObjectImpl::RemoveData(const FORMATETC& format) {
     return;  // Don't attempt to compare target devices.
 
   for (StoredData::iterator i = contents_.begin(); i != contents_.end(); ++i) {
-    if (!(*i)->format_etc.ptd &&
-        format.cfFormat == (*i)->format_etc.cfFormat &&
-        format.dwAspect == (*i)->format_etc.dwAspect &&
-        format.lindex == (*i)->format_etc.lindex &&
-        format.tymed == (*i)->format_etc.tymed) {
+    if (!(*i)->format_etc->ptd &&
+        format.cfFormat == (*i)->format_etc->cfFormat &&
+        format.dwAspect == (*i)->format_etc->dwAspect &&
+        format.lindex == (*i)->format_etc->lindex &&
+        format.tymed == (*i)->format_etc->tymed) {
       contents_.erase(i);
       return;
     }
@@ -874,16 +1158,16 @@ void DataObjectImpl::RemoveData(const FORMATETC& format) {
 
 void DataObjectImpl::OnDownloadCompleted(const base::FilePath& file_path) {
   for (std::unique_ptr<StoredDataInfo>& content : contents_) {
-    if (content->format_etc.cfFormat == CF_HDROP) {
+    if (content->format_etc->cfFormat == CF_HDROP) {
       // Retrieve the downloader first so it won't get destroyed.
       auto downloader = std::move(content->downloader);
       if (downloader)
         downloader->Stop();
       // Replace stored data.
-      STGMEDIUM storage = ClipboardUtil::CreateStorageForFileNames(
+      STGMEDIUM storage = clipboard_util::CreateStorageForFileNames(
           {FileInfo(file_path, base::FilePath())});
       content = StoredDataInfo::TakeStorageMedium(
-          ClipboardFormatType::GetCFHDropType().ToFormatEtc(), storage);
+          ClipboardFormatType::CFHDropType().ToFormatEtc(), storage);
       content->downloader = std::move(downloader);
       break;
     }
@@ -897,13 +1181,49 @@ HRESULT DataObjectImpl::GetData(FORMATETC* format_etc, STGMEDIUM* medium) {
     return DV_E_FORMATETC;
 
   for (const std::unique_ptr<StoredDataInfo>& content : contents_) {
-    if (content->format_etc.cfFormat == format_etc->cfFormat &&
-        content->format_etc.lindex == format_etc->lindex &&
-        (content->format_etc.tymed & format_etc->tymed)) {
+    if (content->format_etc->cfFormat == format_etc->cfFormat &&
+        content->format_etc->lindex == format_etc->lindex &&
+        (content->format_etc->tymed & format_etc->tymed)) {
       // If medium is NULL, delay-rendering will be used.
       if (content->medium.tymed != TYMED_NULL) {
+        // If the drop target requests TYMED_HGLOBAL specifically but the stored
+        // medium is TYMED_ISTREAM, convert the stream to HGLOBAL on the fly.
+        // This supports older native apps that only accept TYMED_HGLOBAL.
+        if (format_etc->tymed == TYMED_HGLOBAL &&
+            content->medium.tymed == TYMED_ISTREAM) {
+          base::UmaHistogramBoolean(
+              "Windows.DragDrop.FileContents.HGlobalConversionUsed", true);
+          IStream* stream = content->medium.pstm;
+          STATSTG stat = {};
+          if (FAILED(stream->Stat(&stat, STATFLAG_NONAME))) {
+            return DV_E_FORMATETC;
+          }
+          const SIZE_T size = static_cast<SIZE_T>(stat.cbSize.QuadPart);
+          HGLOBAL hdata = ::GlobalAlloc(GHND, size);
+          if (!hdata) {
+            return DV_E_FORMATETC;
+          }
+          const LARGE_INTEGER zero = {};
+          stream->Seek(zero, STREAM_SEEK_SET, nullptr);
+          bool read_ok = false;
+          {
+            base::win::ScopedHGlobal<char*> locked(hdata);
+            ULONG bytes_read = 0;
+            HRESULT hr = stream->Read(
+                locked.data(), base::checked_cast<ULONG>(size), &bytes_read);
+            read_ok = SUCCEEDED(hr) && bytes_read == size;
+          }
+          if (!read_ok) {
+            ::GlobalFree(hdata);
+            return DV_E_FORMATETC;
+          }
+          medium->tymed = TYMED_HGLOBAL;
+          medium->hGlobal = hdata;
+          medium->pUnkForRelease = nullptr;
+          return S_OK;
+        }
         *medium =
-            DuplicateMedium(content->format_etc.cfFormat, content->medium);
+            DuplicateMedium(content->format_etc->cfFormat, content->medium);
         return S_OK;
       }
       // Fail all GetData() attempts for DownloadURL data if the drag and drop
@@ -913,12 +1233,22 @@ HRESULT DataObjectImpl::GetData(FORMATETC* format_etc, STGMEDIUM* medium) {
 
       bool wait_for_data = false;
 
-      // In async mode, we do not want to start waiting for the data before
-      // the async operation is started. This is because we want to postpone
-      // until Shell kicks off a background thread to do the work so that
-      // we do not block the UI thread.
-      if (!in_async_mode_ || async_operation_started_)
+      // Determine whether to wait for data generation based on async state.
+      //
+      // ASYNC MODE: Wait only if StartOperation() was called, indicating
+      // the target (Explorer) has created a background thread. This
+      // ensures GetData() runs on the target's background thread, not its UI
+      // thread, preventing UI freezes during long operations (e.g., file
+      // downloads).
+      //
+      // SYNC MODE: Always wait immediately since the entire DoDragDrop()
+      // call blocks both source and target UI threads anyway (no async
+      // support from target).
+      if (in_async_mode_) {
+        wait_for_data = async_operation_started_;
+      } else {
         wait_for_data = true;
+      }
 
       if (!wait_for_data)
         return DV_E_FORMATETC;
@@ -947,8 +1277,9 @@ HRESULT DataObjectImpl::GetDataHere(FORMATETC* format_etc,
 
 HRESULT DataObjectImpl::QueryGetData(FORMATETC* format_etc) {
   for (const std::unique_ptr<StoredDataInfo>& content : contents_) {
-    if (content->format_etc.cfFormat == format_etc->cfFormat)
+    if (content->format_etc->cfFormat == format_etc->cfFormat) {
       return S_OK;
+    }
   }
   return DV_E_FORMATETC;
 }
@@ -968,6 +1299,8 @@ HRESULT DataObjectImpl::SetData(
   // lifetime issues, perform a deep copy of `medium`.
   STGMEDIUM local_medium =
       should_release ? *medium : DuplicateMedium(format_etc->cfFormat, *medium);
+  // TODO(crbug.com/582495563): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK_EQ(local_medium.tymed, format_etc->tymed);
   auto info = StoredDataInfo::TakeStorageMedium(*format_etc, local_medium);
 
@@ -1066,27 +1399,60 @@ ULONG DataObjectImpl::Release() {
 // anonymous namespace functions
 namespace {
 STGMEDIUM CreateStorageForBytes(const void* data, size_t bytes) {
-  HANDLE handle = GlobalAlloc(GPTR, static_cast<int>(bytes));
+  HANDLE handle = GlobalAlloc(GPTR, bytes);
   if (handle) {
     base::win::ScopedHGlobal<uint8_t*> scoped(handle);
-    memcpy(scoped.get(), data, bytes);
+    auto src =
+        UNSAFE_TODO(base::span(static_cast<const uint8_t*>(data), bytes));
+    base::span(scoped).copy_prefix_from(src);
   }
 
-  STGMEDIUM storage = {
+  return STGMEDIUM{
       .tymed = TYMED_HGLOBAL, .hGlobal = handle, .pUnkForRelease = nullptr};
-  return storage;
 }
 
-template <typename T>
-STGMEDIUM CreateStorageForString(const std::basic_string<T>& data) {
-  return CreateStorageForBytes(
-      data.c_str(),
-      (data.size() + 1) * sizeof(typename std::basic_string<T>::value_type));
+STGMEDIUM CreateStorageForIStream(const void* data, size_t bytes) {
+  IStream* stream = ::SHCreateMemStream(static_cast<const BYTE*>(data),
+                                        base::checked_cast<UINT>(bytes));
+  if (!stream) {
+    return kNullStorageMedium;
+  }
+
+  return STGMEDIUM{
+      .tymed = TYMED_ISTREAM, .pstm = stream, .pUnkForRelease = nullptr};
+}
+
+STGMEDIUM CreateStorageForString(std::string_view data) {
+  HANDLE handle = GlobalAlloc(GPTR, data.size() + 1);
+  if (handle) {
+    base::win::ScopedHGlobal<uint8_t*> scoped(handle);
+    auto [bytes_part, null_part] = base::span(scoped).split_at(data.size());
+    bytes_part.copy_from(base::as_byte_span(data));
+    null_part[0] = 0;
+  }
+
+  return STGMEDIUM{
+      .tymed = TYMED_HGLOBAL, .hGlobal = handle, .pUnkForRelease = nullptr};
+}
+
+STGMEDIUM CreateStorageForString(std::u16string_view data) {
+  const size_t size = (data.size() + 1) * sizeof(char16_t);
+  HANDLE handle = GlobalAlloc(GPTR, size);
+  if (handle) {
+    base::win::ScopedHGlobal<uint8_t*> scoped(handle);
+    auto [bytes_part, null_part] =
+        base::span(scoped).split_at(data.size() * sizeof(char16_t));
+    bytes_part.copy_from(base::as_byte_span(data));
+    std::ranges::fill(null_part.first<sizeof(char16_t)>(), 0);
+  }
+
+  return STGMEDIUM{
+      .tymed = TYMED_HGLOBAL, .hGlobal = handle, .pUnkForRelease = nullptr};
 }
 
 LPITEMIDLIST PIDLNext(LPITEMIDLIST pidl) {
   return reinterpret_cast<LPITEMIDLIST>(
-      reinterpret_cast<BYTE*>(pidl) + pidl->mkid.cb);
+      UNSAFE_TODO(reinterpret_cast<BYTE*>(pidl) + pidl->mkid.cb));
 }
 
 size_t PIDLSize(LPITEMIDLIST pidl) {
@@ -1101,7 +1467,7 @@ size_t PIDLSize(LPITEMIDLIST pidl) {
 
 LPITEMIDLIST GetNthPIDL(CIDA* cida, int n) {
   return reinterpret_cast<LPITEMIDLIST>(
-      reinterpret_cast<LPBYTE>(cida) + cida->aoffset[n]);
+      UNSAFE_TODO(reinterpret_cast<LPBYTE>(cida) + cida->aoffset[n]));
 }
 
 LPITEMIDLIST GetPidlFromPath(const base::FilePath& path) {
@@ -1144,32 +1510,40 @@ STGMEDIUM CreateIdListStorageForFileName(const base::FilePath& path) {
   HANDLE hdata = GlobalAlloc(GMEM_MOVEABLE, kCIDASize);
 
   base::win::ScopedHGlobal<CIDA*> locked_mem(hdata);
-  CIDA* cida = locked_mem.get();
+  CIDA* cida = locked_mem.data();
   cida->cidl = 1;     // We have one PIDL (not including the 0th root PIDL).
   cida->aoffset[0] = kFirstPIDLOffset;
-  cida->aoffset[1] = kFirstPIDLOffset + kFirstPIDLSize;
+  UNSAFE_TODO(cida->aoffset[1] = kFirstPIDLOffset + kFirstPIDLSize);
   LPITEMIDLIST idl = GetNthPIDL(cida, 0);
   idl->mkid.cb = 0;
   idl->mkid.abID[0] = 0;
   idl = GetNthPIDL(cida, 1);
-  memcpy(idl, pidl, kSecondPIDLSize);
+  UNSAFE_TODO(memcpy(idl, pidl, kSecondPIDLSize));
 
   STGMEDIUM storage = {
       .tymed = TYMED_HGLOBAL, .hGlobal = hdata, .pUnkForRelease = nullptr};
   return storage;
 }
 
-STGMEDIUM CreateStorageForFileDescriptor(const base::FilePath& path) {
+void PopulateFileDescriptorName(FILEDESCRIPTORW& dsc,
+                                const base::FilePath& path) {
   std::wstring file_name = path.value();
-  DCHECK(!file_name.empty());
+  auto filename_span = base::span(dsc.cFileName);
+  auto src = base::span(file_name).first(
+      std::min(file_name.size(), static_cast<size_t>(MAX_PATH - 1)));
+  filename_span.copy_prefix_from(src);
+  filename_span[src.size()] = 0;
+}
+
+STGMEDIUM CreateStorageForFileDescriptor(const base::FilePath& path) {
+  CHECK(!path.empty(), base::NotFatalUntil::M163);
   HANDLE hdata = GlobalAlloc(GPTR, sizeof(FILEGROUPDESCRIPTORW));
   base::win::ScopedHGlobal<FILEGROUPDESCRIPTORW*> locked_mem(hdata);
 
-  FILEGROUPDESCRIPTORW* descriptor = locked_mem.get();
+  FILEGROUPDESCRIPTORW* descriptor = locked_mem.data();
   descriptor->cItems = 1;
   descriptor->fgd[0].dwFlags = FD_LINKUI;
-  wcsncpy_s(descriptor->fgd[0].cFileName, MAX_PATH, file_name.c_str(),
-            std::min(file_name.size(), static_cast<size_t>(MAX_PATH - 1u)));
+  PopulateFileDescriptorName(descriptor->fgd[0], path);
 
   STGMEDIUM storage = {
       .tymed = TYMED_HGLOBAL, .hGlobal = hdata, .pUnkForRelease = nullptr};
@@ -1178,15 +1552,41 @@ STGMEDIUM CreateStorageForFileDescriptor(const base::FilePath& path) {
 
 const ClipboardFormatType& GetRendererTaintFormatType() {
   static base::NoDestructor<ClipboardFormatType> format(
-      ClipboardFormatType::GetType("chromium/x-renderer-taint"));
+      ClipboardFormatType::CustomPlatformType("chromium/x-renderer-taint"));
   return *format;
 }
 
-std::string GetInternetShortcutFileContents(const GURL& url) {
+const ClipboardFormatType& GetFromPrivilegedFormatType() {
+  static base::NoDestructor<ClipboardFormatType> format(
+      ClipboardFormatType::CustomPlatformType("chromium/from-privileged"));
+  return *format;
+}
+
+const ClipboardFormatType& GetChromeDragIdFormatType() {
+  static base::NoDestructor<ClipboardFormatType> format(
+      ClipboardFormatType::CustomPlatformType("chromium/x-drag-id"));
+  return *format;
+}
+
+// Used to mark file content as synthesized by Chrome itself during a non-file
+// drag for interoperating with the native OS. Synthesized file contents will be
+// treated as non-existent for the purposes of GetFileContent() to avoid
+// confusing web pages that might not expect the synthesized file. See
+// https://crbug.com/1274395 for background.
+const ClipboardFormatType& GetIgnoreFileContentsFormatType() {
+  static base::NoDestructor<ClipboardFormatType> format(
+      ClipboardFormatType::CustomPlatformType(
+          "chromium/x-ignore-file-contents"));
+  return *format;
+}
+
+std::vector<uint8_t> GetInternetShortcutFileContents(const GURL& url) {
   static constexpr char kInternetShortcutFileStart[] =
       "[InternetShortcut]\r\nURL=";
   static constexpr char kInternetShortcutFileEnd[] = "\r\n";
-  return kInternetShortcutFileStart + url.spec() + kInternetShortcutFileEnd;
+  std::string contents =
+      kInternetShortcutFileStart + url.spec() + kInternetShortcutFileEnd;
+  return base::ToVector(base::as_bytes(base::span(std::string_view(contents))));
 }
 
 std::wstring CreateValidFileNameFromTitle(const GURL& url,
@@ -1215,7 +1615,7 @@ std::wstring CreateValidFileNameFromTitle(const GURL& url,
 
   // Maximum length of title after truncation.
   static constexpr size_t kMaxFileTitleLength =
-      kMaxFileNameLength - base::size(kExtension);
+      kMaxFileNameLength - std::size(kExtension);
 
   if (validated.size() > kMaxFileTitleLength)
     validated.erase(kMaxFileTitleLength);

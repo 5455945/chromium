@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,14 @@
 
 #include <stddef.h>
 
-#include "base/macros.h"
-#include "chrome/browser/extensions/test_extension_prefs.h"
+#include <array>
+
 #include "content/public/test/browser_task_environment.h"
+#include "extensions/browser/test_extension_prefs.h"
+#include "extensions/buildflags/buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace user_prefs {
 class PrefRegistrySyncable;
@@ -24,6 +28,10 @@ class Extension;
 class ExtensionPrefsTest : public testing::Test {
  public:
   ExtensionPrefsTest();
+
+  ExtensionPrefsTest(const ExtensionPrefsTest&) = delete;
+  ExtensionPrefsTest& operator=(const ExtensionPrefsTest&) = delete;
+
   ~ExtensionPrefsTest() override;
 
   // This function will get called once, and is the right place to do operations
@@ -44,13 +52,9 @@ class ExtensionPrefsTest : public testing::Test {
 
  protected:
   ExtensionPrefs* prefs() { return prefs_.prefs(); }
-  ChromeAppSorting* app_sorting() { return prefs_.app_sorting(); }
-
+  ChromeAppSorting* app_sorting();
   content::BrowserTaskEnvironment task_environment_;
   TestExtensionPrefs prefs_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ExtensionPrefsTest);
 };
 
 
@@ -59,6 +63,11 @@ class PrefsPrepopulatedTestBase : public ExtensionPrefsTest {
   static const size_t kNumInstalledExtensions = 5;
 
   PrefsPrepopulatedTestBase();
+
+  PrefsPrepopulatedTestBase(const PrefsPrepopulatedTestBase&) = delete;
+  PrefsPrepopulatedTestBase& operator=(const PrefsPrepopulatedTestBase&) =
+      delete;
+
   ~PrefsPrepopulatedTestBase() override;
 
   Extension* extension1() { return extension1_.get(); }
@@ -68,7 +77,7 @@ class PrefsPrepopulatedTestBase : public ExtensionPrefsTest {
   Extension* internal_extension() { return internal_extension_.get(); }
 
  protected:
-  bool installed_[kNumInstalledExtensions];
+  std::array<bool, kNumInstalledExtensions> installed_ = {};
 
   // The following extensions all have mojom::ManifestLocation set to
   // mojom::ManifestLocation::kExternalPref.
@@ -79,9 +88,6 @@ class PrefsPrepopulatedTestBase : public ExtensionPrefsTest {
 
   // This extension has a location of mojom::ManifestLocation::kInternal.
   scoped_refptr<Extension> internal_extension_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(PrefsPrepopulatedTestBase);
 };
 
 }  // namespace extensions

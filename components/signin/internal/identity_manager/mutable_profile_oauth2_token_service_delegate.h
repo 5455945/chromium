@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,22 +10,92 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/auto_reset.h"
+#include "base/containers/span.h"
+#include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/threading/thread_checker.h"
+#include "base/types/optional_ref.h"
 #include "components/signin/internal/identity_manager/account_tracker_service.h"
 #include "components/signin/internal/identity_manager/profile_oauth2_token_service.h"
 #include "components/signin/internal/identity_manager/profile_oauth2_token_service_delegate.h"
-#include "components/signin/public/base/account_consistency_method.h"
+#include "components/signin/internal/identity_manager/token_binding_helper.h"
+#include "components/signin/public/base/binding_key_registration_token_result.h"
+#include "components/signin/public/base/signin_buildflags.h"
+#include "components/signin/public/base/signin_metrics.h"
+#include "components/signin/public/webdata/token_service_table.h"
 #include "components/webdata/common/web_data_service_base.h"
 #include "components/webdata/common/web_data_service_consumer.h"
+#include "crypto/process_bound_string.h"
+#include "crypto/sign.h"
+#include "google_apis/gaia/google_service_auth_error.h"
 #include "net/base/backoff_entry.h"
 #include "services/network/public/cpp/network_connection_tracker.h"
 
-class PrefRegistrySimple;
 class SigninClient;
 class TokenWebData;
+
+// This enum is used to know if an account is known by the client has a valid
+// refresh token or not.
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+enum class AccountStartupState {
+  kKnownValidToken = 0,
+  kKnownInvalidToken = 1,
+  kUnknownValidToken = 2,
+  kUnknownInvalidToken = 3,
+
+  kMaxValue = kUnknownInvalidToken,
+};
+
+enum class RevokeAllTokensOnLoad {
+  kNo = 0,
+  kDeleteSiteDataOnExit = 1,
+  kExplicitRevoke = 2
+};
+
+// Enum for the Signin.LoadTokenFromDB histogram.
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// LINT.IfChange(LoadTokenFromDBStatus)
+enum class LoadTokenFromDBStatus {
+  // Token was loaded.
+  kTokenLoaded = 0,
+
+  // DEPRECATED
+  // Token was revoked as part of Dice migration.
+  // kTokenRevokedDiceMigration = 1,
+
+  // DEPRECATED
+  // Token was revoked because it is a secondary account and account consistency
+  // is disabled.
+  // kTokenRevokedSecondaryAccount = 2,
+
+  // Token was revoked on load due to cookie settings.
+  kTokenRevokedOnLoad = 3,
+
+  // Token was revoked because it contained invalid characters.
+  kTokenRevokedInvalidTokenCharacters = 4,
+
+  // Token was revoked because the account ID was invalid.
+  kTokenRevokedInvalidAccountId = 5,
+
+  kMaxValue = kTokenRevokedInvalidAccountId
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/signin/enums.xml:SigninLoadTokenFromDB)
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// LINT.IfChange(AccountMoveDecision)
+enum class AccountMoveDecision {
+  kCanMoveWithRefreshToken = 0,
+  kCannotMoveAlreadyExists = 1,
+  kCannotMoveInsertWithoutRefreshToken = 2,
+  kMaxValue = kCannotMoveInsertWithoutRefreshToken
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/signin/enums.xml:AccountMoveDecision)
 
 class MutableProfileOAuth2TokenServiceDelegate
     : public ProfileOAuth2TokenServiceDelegate,
@@ -39,76 +109,83 @@ class MutableProfileOAuth2TokenServiceDelegate
       AccountTrackerService* account_tracker_service,
       network::NetworkConnectionTracker* network_connection_tracker,
       scoped_refptr<TokenWebData> token_web_data,
-      signin::AccountConsistencyMethod account_consistency,
-      bool revoke_all_tokens_on_load,
+      RevokeAllTokensOnLoad revoke_all_tokens_on_load,
+      std::unique_ptr<TokenBindingHelper> token_binding_helper,
       FixRequestErrorCallback fix_request_error_callback);
-  ~MutableProfileOAuth2TokenServiceDelegate() override;
 
-  static void RegisterProfilePrefs(PrefRegistrySimple* registry);
+  MutableProfileOAuth2TokenServiceDelegate(
+      const MutableProfileOAuth2TokenServiceDelegate&) = delete;
+  MutableProfileOAuth2TokenServiceDelegate& operator=(
+      const MutableProfileOAuth2TokenServiceDelegate&) = delete;
+
+  ~MutableProfileOAuth2TokenServiceDelegate() override;
 
   // Overridden from ProfileOAuth2TokenServiceDelegate.
   std::unique_ptr<OAuth2AccessTokenFetcher> CreateAccessTokenFetcher(
       const CoreAccountId& account_id,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-      OAuth2AccessTokenConsumer* consumer) override;
-
-  // Updates the internal cache of the result from the most-recently-completed
-  // auth request (used for reporting errors to the user).
-  void UpdateAuthError(const CoreAccountId& account_id,
-                       const GoogleServiceAuthError& error) override;
+      OAuth2AccessTokenConsumer* consumer,
+      const std::string& token_binding_challenge) override;
 
   std::string GetTokenForMultilogin(
       const CoreAccountId& account_id) const override;
   bool RefreshTokenIsAvailable(const CoreAccountId& account_id) const override;
-  GoogleServiceAuthError GetAuthError(
+  bool GenerateBindingKeyRegistrationToken(
+      base::span<const crypto::sign::SignatureKind> supported_algorithms,
+      std::string_view auth_code,
+      base::OnceCallback<void(
+          std::optional<signin::BindingKeyRegistrationTokenResult>)> callback)
+      override;
+  bool IsRefreshTokenBoundToKey(const CoreAccountId& account_id) const override;
+  std::vector<uint8_t> GetWrappedBindingKey(
       const CoreAccountId& account_id) const override;
+  bool IsRefreshTokenBoundToMtls(
+      const CoreAccountId& account_id) const override;
+  bool AllBoundTokensShareSameBindingKey() const override;
+  void GenerateRefreshTokenBindingKeyAssertionForMultilogin(
+      const CoreAccountId& account_id,
+      std::string_view challenge,
+      std::string_view ephemeral_public_key,
+      TokenBindingHelper::GenerateAssertionCallback callback) override;
+  void AddBindingKeyToService(
+      base::span<const uint8_t> wrapped_binding_key) override;
+  TokenBindingHelper::SaveBindingKeyResult UpdateRefreshTokenBindingKey(
+      const CoreAccountId& account_id,
+      std::string_view refresh_token,
+      std::vector<uint8_t> wrapped_binding_key);
   std::vector<CoreAccountId> GetAccounts() const override;
   scoped_refptr<network::SharedURLLoaderFactory> GetURLLoaderFactory()
       const override;
-  void LoadCredentials(const CoreAccountId& primary_account_id) override;
-  void UpdateCredentials(const CoreAccountId& account_id,
-                         const std::string& refresh_token) override;
-  void RevokeAllCredentials() override;
-  void RevokeCredentials(const CoreAccountId& account_id) override;
-  void ExtractCredentials(ProfileOAuth2TokenService* to_service,
-                          const CoreAccountId& account_id) override;
   void Shutdown() override;
 
   // Overridden from NetworkConnectionTracker::NetworkConnectionObserver.
-  void OnConnectionChanged(network::mojom::ConnectionType type) override;
+  void OnConnectionChanged(
+      net::NetworkChangeNotifier::ConnectionType type) override;
 
-  // Overridden from ProfileOAuth2TokenServiceDelegate.
-  const net::BackoffEntry* BackoffEntry() const override;
-
-  bool FixRequestErrorIfPossible() override;
+  bool FixAccountErrorIfPossible() override;
 
   // Returns the account's refresh token used for testing purposes.
   std::string GetRefreshTokenForTest(const CoreAccountId& account_id) const;
 
+  // The use of the IssueToken endpoint for fetching access tokens is gated by
+  // the presence of official Google Chrome API keys.
+  // This function removes the official API keys check for testing.
+  [[nodiscard]] static base::AutoReset<bool>
+  SetIgnoreNonOfficialApiKeysForTesting(bool ignore = true);
+
  private:
-  friend class MutableProfileOAuth2TokenServiceDelegateTest;
-
   class RevokeServerRefreshToken;
-
-  struct AccountStatus {
-    std::string refresh_token;
-    GoogleServiceAuthError last_auth_error;
-  };
 
   FRIEND_TEST_ALL_PREFIXES(MutableProfileOAuth2TokenServiceDelegateTest,
                            PersistenceDBUpgrade);
   FRIEND_TEST_ALL_PREFIXES(MutableProfileOAuth2TokenServiceDelegateTest,
                            FetchPersistentError);
-  FRIEND_TEST_ALL_PREFIXES(
-      MutableProfileOAuth2TokenServiceDelegateTest,
-      PersistenceLoadCredentialsEmptyPrimaryAccountId_DiceEnabled);
-  FRIEND_TEST_ALL_PREFIXES(
-      MutableProfileOAuth2TokenServiceDelegateTest,
-      LoadCredentialsClearsTokenDBWhenNoPrimaryAccount_DiceDisabled);
   FRIEND_TEST_ALL_PREFIXES(MutableProfileOAuth2TokenServiceDelegateTest,
                            RevokeAllCredentialsDuringLoad);
   FRIEND_TEST_ALL_PREFIXES(MutableProfileOAuth2TokenServiceDelegateTest,
                            PersistenceLoadCredentials);
+  FRIEND_TEST_ALL_PREFIXES(MutableProfileOAuth2TokenServiceDelegateTest,
+                           PersistenceLoadCredentialsEmptyPrimaryAccountId);
   FRIEND_TEST_ALL_PREFIXES(MutableProfileOAuth2TokenServiceDelegateTest,
                            RevokeOnUpdate);
   FRIEND_TEST_ALL_PREFIXES(MutableProfileOAuth2TokenServiceDelegateTest,
@@ -126,9 +203,25 @@ class MutableProfileOAuth2TokenServiceDelegate
   FRIEND_TEST_ALL_PREFIXES(MutableProfileOAuth2TokenServiceDelegateTest,
                            LoadInvalidToken);
   FRIEND_TEST_ALL_PREFIXES(MutableProfileOAuth2TokenServiceDelegateTest,
-                           GetAccounts);
+                           LoadTokenWithInvalidAccountId);
   FRIEND_TEST_ALL_PREFIXES(MutableProfileOAuth2TokenServiceDelegateTest,
-                           RetryBackoff);
+                           LoadTokenWithInvalidCharacters);
+  FRIEND_TEST_ALL_PREFIXES(MutableProfileOAuth2TokenServiceDelegateTest,
+                           LoadPrimaryTokenWithInvalidCharacters);
+  FRIEND_TEST_ALL_PREFIXES(
+      MutableProfileOAuth2TokenServiceDelegateTest,
+      LoadAllCredentialsIntoMemoryAccountAvailabilityPrimaryAvailable);
+  FRIEND_TEST_ALL_PREFIXES(
+      MutableProfileOAuth2TokenServiceDelegateTest,
+      LoadAllCredentialsIntoMemoryAccountAvailabilityPrimaryNotAvailable);
+  FRIEND_TEST_ALL_PREFIXES(
+      MutableProfileOAuth2TokenServiceDelegateTest,
+      LoadAllCredentialsIntoMemoryAccountAvailabilitySecondaryAvailable);
+  FRIEND_TEST_ALL_PREFIXES(
+      MutableProfileOAuth2TokenServiceDelegateTest,
+      LoadAllCredentialsIntoMemoryAccountAvailabilitySecondaryNotAvailable);
+  FRIEND_TEST_ALL_PREFIXES(MutableProfileOAuth2TokenServiceDelegateTest,
+                           GetAccounts);
   FRIEND_TEST_ALL_PREFIXES(MutableProfileOAuth2TokenServiceDelegateTest,
                            CanonicalizeAccountId);
   FRIEND_TEST_ALL_PREFIXES(MutableProfileOAuth2TokenServiceDelegateTest,
@@ -141,28 +234,79 @@ class MutableProfileOAuth2TokenServiceDelegate
                            InvalidateTokensForMultilogin);
   FRIEND_TEST_ALL_PREFIXES(MutableProfileOAuth2TokenServiceDelegateTest,
                            ExtractCredentials);
+  FRIEND_TEST_ALL_PREFIXES(MutableProfileOAuth2TokenServiceDelegateTest,
+                           TokenReencryption);
+  FRIEND_TEST_ALL_PREFIXES(
+      MutableProfileOAuth2TokenServiceDelegateBoundTokensTest,
+      UpdateBoundToken);
+  FRIEND_TEST_ALL_PREFIXES(
+      MutableProfileOAuth2TokenServiceDelegateBoundTokensTest,
+      RevokeBoundToken);
+  FRIEND_TEST_ALL_PREFIXES(
+      MutableProfileOAuth2TokenServiceDelegateBoundTokensTest,
+      PersistenceLoadBoundTokens);
+  FRIEND_TEST_ALL_PREFIXES(
+      MutableProfileOAuth2TokenServiceDelegateBoundTokensTest,
+      ClearBoundTokenOnStartup);
+  FRIEND_TEST_ALL_PREFIXES(MutableProfileOAuth2TokenServiceDelegateTest,
+                           KeepPrimaryAccountTokenOnStartupWithClearOnExit);
+  FRIEND_TEST_ALL_PREFIXES(MutableProfileOAuth2TokenServiceDelegateTest,
+                           UpdateCredentialsClearsUnreadableTokens);
+  FRIEND_TEST_ALL_PREFIXES(
+      MutableProfileOAuth2TokenServiceDelegateTest,
+      UpdateCredentialsWithNoErrorDoesNotClearUnreadableTokens);
+  FRIEND_TEST_ALL_PREFIXES(
+      MutableProfileOAuth2TokenServiceDelegateTest,
+      UpdateCredentialsBeforeLoadCompletesDoesNotClearUnreadableTokens);
 
   // WebDataServiceConsumer implementation:
   void OnWebDataServiceRequestDone(
       WebDataServiceBase::Handle handle,
       std::unique_ptr<WDTypedResult> result) override;
 
-  // Loads credentials into in memory stucture.
+  // ProfileOAuth2TokenServiceDelegate implementation:
+  void LoadCredentialsInternal(
+      const CoreAccountId& primary_account_id) override;
+  void UpdateCredentialsInternal(
+      const CoreAccountId& account_id,
+      const std::string& refresh_token,
+      const signin::TokenBindingInfo& token_binding_info) override;
+  void RevokeAllCredentialsInternal(
+      signin_metrics::SourceForRefreshTokenOperation source) override;
+  void RevokeCredentialsInternal(const CoreAccountId& account_id) override;
+  void ExtractCredentialsInternal(ProfileOAuth2TokenService* to_service,
+                                  const CoreAccountId& account_id) override;
+
+  // Loads credentials into in memory structure, and remove any invalid or
+  // revoked tokens. If `should_reencrypt` is true then any tokens successfully
+  // loaded will be written back to the database to rotate the encryption key.
   void LoadAllCredentialsIntoMemory(
-      const std::map<std::string, std::string>& db_tokens);
+      const std::map<std::string, TokenServiceTable::TokenWithBindingInfo>&
+          db_tokens,
+      bool should_reencrypt = false);
 
   // Updates the in-memory representation of the credentials.
-  void UpdateCredentialsInMemory(const CoreAccountId& account_id,
-                                 const std::string& refresh_token);
+  void UpdateCredentialsInMemory(
+      const CoreAccountId& account_id,
+      const std::string& refresh_token,
+      const signin::TokenBindingInfo& token_binding_info,
+      base::optional_ref<const GoogleServiceAuthError> error_for_invalid_token =
+          std::nullopt);
 
   // Sets refresh token in error.
   void InvalidateTokenForMultilogin(
-      const CoreAccountId& failed_account) override;
+      const CoreAccountId& failed_account,
+      const GoogleServiceAuthError& error) override;
 
   // Persists credentials for |account_id|. Enables overriding for
   // testing purposes, or other cases, when accessing the DB is not desired.
   void PersistCredentials(const CoreAccountId& account_id,
-                          const std::string& refresh_token);
+                          const std::string& refresh_token,
+                          const signin::TokenBindingInfo& token_binding_info);
+
+  // Clears credentials that have failed to load into memory but are still
+  // persisted in the DB.
+  void ClearUnreadableCredentials();
 
   // Clears credentials persisted for |account_id|. Enables overriding for
   // testing purposes, or other cases, when accessing the DB is not desired.
@@ -171,16 +315,16 @@ class MutableProfileOAuth2TokenServiceDelegate
   // Revokes the refresh token on the server.
   void RevokeCredentialsOnServer(const std::string& refresh_token);
 
-  // Cancels any outstanding fetch for tokens from the web database.
-  void CancelWebTokenFetch();
+  // Starts a fetch for wrapped keys from the web database.
+  void StartWebWrappedKeyFetch();
+
+  // Callback for the fetch for wrapped keys from the web database.
+  void OnWebWrappedKeyFetchDone(std::unique_ptr<WDTypedResult> result);
+
+  // Cancels any outstanding fetches from the web database.
+  void CancelWebFetches();
 
   std::string GetRefreshToken(const CoreAccountId& account_id) const;
-
-  // Creates a new AccountStatus and adds it to the AccountStatusMap.
-  // The account must not be already in the map.
-  void AddAccountStatus(const CoreAccountId& account_id,
-                        const std::string& refresh_token,
-                        const GoogleServiceAuthError& error);
 
   // Called at when tokens are loaded. Performs housekeeping tasks and notifies
   // the observers.
@@ -192,19 +336,37 @@ class MutableProfileOAuth2TokenServiceDelegate
   void RevokeCredentialsImpl(const CoreAccountId& account_id,
                              bool revoke_on_server);
 
-  // If the Dice migration happened before the tokens could be migrated, delete
-  // all the tokens. This is only called if the tokens could not be loaded
-  // successfully.
-  void MaybeDeletePreDiceTokens();
+  // Records whether the `account_id` is available in the account tracker
+  // service with a valid `refresh_token` or not. Called at startup.
+  void RecordAccountAvailabilityStartup(const CoreAccountId& account_id,
+                                        const std::string& refresh_token);
 
-  // Maps the |account_id| of accounts known to ProfileOAuth2TokenService
-  // to information about the account.
-  typedef std::map<CoreAccountId, AccountStatus> AccountStatusMap;
-  // In memory refresh token store mapping account_id to refresh_token.
-  AccountStatusMap refresh_tokens_;
+  // In memory refresh token store mapping account_id to TokenData.
+  struct TokenData {
+    crypto::ProcessBoundString refresh_token;
+    bool mtls_token_binding = false;
+
+    TokenData(crypto::ProcessBoundString refresh_token,
+              bool mtls_token_binding);
+
+    TokenData(const TokenData&);
+    TokenData& operator=(const TokenData&);
+    TokenData(TokenData&&);
+    TokenData& operator=(TokenData&&);
+
+    ~TokenData();
+  };
+  std::map<CoreAccountId, TokenData> refresh_tokens_;
 
   // Handle to the request reading tokens from database.
   WebDataServiceBase::Handle web_data_service_request_;
+
+  // Handle to the request reading wrapped keys from database for garbage
+  // collection.
+  std::optional<WebDataServiceBase::Handle> web_data_service_request_for_gc_;
+
+  // Flag limiting `ClearUnreadableCredentials()` to take action at most once.
+  bool has_cleared_unreadable_credentials_ = false;
 
   // The primary account id of this service's profile during the loading of
   // credentials.  This member is empty otherwise.
@@ -216,27 +378,25 @@ class MutableProfileOAuth2TokenServiceDelegate
   // this instance was created.
   THREAD_CHECKER(thread_checker_);
 
-  // Used to rate-limit network token requests so as to not overload the server.
-  net::BackoffEntry::Policy backoff_policy_;
-  net::BackoffEntry backoff_entry_;
-  GoogleServiceAuthError backoff_error_;
-
-  SigninClient* client_;
-  AccountTrackerService* account_tracker_service_;
-  network::NetworkConnectionTracker* network_connection_tracker_;
+  raw_ptr<SigninClient> client_;
+  raw_ptr<AccountTrackerService, DanglingUntriaged> account_tracker_service_;
+  raw_ptr<network::NetworkConnectionTracker> network_connection_tracker_;
   scoped_refptr<TokenWebData> token_web_data_;
-  signin::AccountConsistencyMethod account_consistency_;
 
   // Revokes all the tokens after loading them. Secondary accounts will be
   // completely removed, and the primary account will be kept in authentication
   // error state.
-  bool revoke_all_tokens_on_load_;
+  RevokeAllTokensOnLoad revoke_all_tokens_on_load_ = RevokeAllTokensOnLoad::kNo;
+
+  // This is null if token binding is disabled.
+  const std::unique_ptr<TokenBindingHelper> token_binding_helper_;
 
   // Callback function that attempts to correct request errors.  Best effort
   // only.  Returns true if the error was fixed and retry should be reattempted.
   FixRequestErrorCallback fix_request_error_callback_;
 
-  DISALLOW_COPY_AND_ASSIGN(MutableProfileOAuth2TokenServiceDelegate);
+  base::WeakPtrFactory<MutableProfileOAuth2TokenServiceDelegate>
+      weak_ptr_factory_{this};
 };
 
 #endif  // COMPONENTS_SIGNIN_INTERNAL_IDENTITY_MANAGER_MUTABLE_PROFILE_OAUTH2_TOKEN_SERVICE_DELEGATE_H_

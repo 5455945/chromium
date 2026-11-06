@@ -1,16 +1,8 @@
-// Copyright 2010 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 goog.module('goog.testing.DeferredTestCaseTest');
 goog.setTestOnly();
@@ -53,22 +45,22 @@ function createDeferredTestCase(d) {
 
 testSuite({
   testDeferredCallbacks() {
-    let callbackTime = goog.now();
+    let callbackTime = Date.now();
     const callbacks = new Deferred();
     deferredTestCase.addWaitForAsync('Waiting for 1st callback', callbacks);
     callbacks.addCallback(() => {
-      assertTrue('We\'re going back in time!', goog.now() >= callbackTime);
-      callbackTime = goog.now();
+      assertTrue('We\'re going back in time!', Date.now() >= callbackTime);
+      callbackTime = Date.now();
     });
     deferredTestCase.addWaitForAsync('Waiting for 2nd callback', callbacks);
     callbacks.addCallback(() => {
-      assertTrue('We\'re going back in time!', goog.now() >= callbackTime);
-      callbackTime = goog.now();
+      assertTrue('We\'re going back in time!', Date.now() >= callbackTime);
+      callbackTime = Date.now();
     });
     deferredTestCase.addWaitForAsync('Waiting for last callback', callbacks);
     callbacks.addCallback(() => {
-      assertTrue('We\'re going back in time!', goog.now() >= callbackTime);
-      callbackTime = goog.now();
+      assertTrue('We\'re going back in time!', Date.now() >= callbackTime);
+      callbackTime = Date.now();
     });
 
     deferredTestCase.waitForDeferred(callbacks);

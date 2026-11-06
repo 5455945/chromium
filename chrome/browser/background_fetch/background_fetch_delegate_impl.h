@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,6 +11,8 @@
 #include <string>
 #include <vector>
 
+#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/background_fetch/background_fetch_delegate_base.h"
 #include "components/download/public/background_service/download_params.h"
@@ -43,8 +45,8 @@ class BackgroundFetchDelegateImpl
   // BackgroundFetchDelegate implementation:
   void MarkJobComplete(const std::string& job_id) override;
   void UpdateUI(const std::string& job_unique_id,
-                const absl::optional<std::string>& title,
-                const absl::optional<SkBitmap>& icon) override;
+                const std::optional<std::string>& title,
+                const std::optional<SkBitmap>& icon) override;
 
   // OfflineContentProvider implementation:
   void OpenItem(const offline_items_collection::OpenParams& open_params,
@@ -52,8 +54,9 @@ class BackgroundFetchDelegateImpl
   void RemoveItem(const offline_items_collection::ContentId& id) override;
   void CancelDownload(const offline_items_collection::ContentId& id) override;
   void PauseDownload(const offline_items_collection::ContentId& id) override;
-  void ResumeDownload(const offline_items_collection::ContentId& id,
-                      bool has_user_gesture) override;
+  void ResumeDownload(const offline_items_collection::ContentId& id) override;
+  void ValidateDangerousDownload(
+      const offline_items_collection::ContentId& id) override;
   void GetItemById(const offline_items_collection::ContentId& id,
                    SingleItemCallback callback) override;
   void GetAllItems(MultipleItemCallback callback) override;
@@ -65,10 +68,6 @@ class BackgroundFetchDelegateImpl
   void RenameItem(const offline_items_collection::ContentId& id,
                   const std::string& name,
                   RenameCallback callback) override;
-  void ChangeSchedule(
-      const offline_items_collection::ContentId& id,
-      absl::optional<offline_items_collection::OfflineItemSchedule> schedule)
-      override;
 
  protected:
   // BackgroundFetchDelegateBase:
@@ -93,7 +92,7 @@ class BackgroundFetchDelegateImpl
     ~UiState();
 
     offline_items_collection::OfflineItem offline_item;
-    absl::optional<offline_items_collection::UpdateDelta> update_delta;
+    std::optional<offline_items_collection::UpdateDelta> update_delta;
   };
 
   // Updates the entry in |ui_state_map_| based on the corresponding JobDetails
@@ -107,10 +106,10 @@ class BackgroundFetchDelegateImpl
       const url::Origin& origin,
       bool user_initiated_abort);
   void DidGetBackgroundSourceId(bool user_initiated_abort,
-                                absl::optional<ukm::SourceId> source_id);
+                                std::optional<ukm::SourceId> source_id);
 
   // The profile this service is being created for.
-  Profile* profile_;
+  raw_ptr<Profile> profile_;
 
   // The namespace provided to the |offline_content_aggregator_| and used when
   // creating Content IDs.
@@ -119,7 +118,7 @@ class BackgroundFetchDelegateImpl
   // A map from job id to associated UI state.
   std::map<std::string, UiState> ui_state_map_;
 
-  offline_items_collection::OfflineContentAggregator*
+  raw_ptr<offline_items_collection::OfflineContentAggregator>
       offline_content_aggregator_;
 
   base::WeakPtrFactory<BackgroundFetchDelegateImpl> weak_ptr_factory_{this};

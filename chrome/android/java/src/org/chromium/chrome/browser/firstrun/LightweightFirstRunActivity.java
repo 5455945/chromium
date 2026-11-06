@@ -1,11 +1,11 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.firstrun;
 
-import android.content.res.Resources;
-import android.os.Bundle;
+import static org.chromium.build.NullUtil.assertNonNull;
+
 import android.os.Handler;
 import android.os.SystemClock;
 import android.text.method.LinkMovementMethod;
@@ -15,35 +15,31 @@ import android.view.accessibility.AccessibilityEvent;
 import android.widget.Button;
 import android.widget.TextView;
 
-import androidx.annotation.Nullable;
 import androidx.annotation.StringRes;
-import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.IntentUtils;
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.TimeUtils;
 import org.chromium.base.metrics.RecordHistogram;
+import org.chromium.build.annotations.Initializer;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.customtabs.CustomTabActivity;
-import org.chromium.chrome.browser.enterprise.util.EnterpriseInfo;
-import org.chromium.components.signin.ChildAccountStatus;
+import org.chromium.chrome.browser.signin.services.SigninPreferencesManager;
+import org.chromium.components.policy.EnterpriseInfo;
 import org.chromium.ui.base.LocalizationUtils;
-import org.chromium.ui.text.NoUnderlineClickableSpan;
+import org.chromium.ui.text.ChromeClickableSpan;
 import org.chromium.ui.text.SpanApplier;
 import org.chromium.ui.text.SpanApplier.SpanInfo;
 import org.chromium.ui.widget.LoadingView;
 
-/**
-* Lightweight FirstRunActivity. It shows ToS dialog only.
-*/
-public class LightweightFirstRunActivity
-        extends FirstRunActivityBase implements LoadingView.Observer {
-    // TODO(https://crbug.com/1148081) Clean this boolean when releasing this feature, and remove
-    // @Nullable from members below.
-    private static boolean sSupportSkippingTos = true;
+/** Lightweight FirstRunActivity. It shows ToS dialog only. */
+@NullMarked
+public class LightweightFirstRunActivity extends FirstRunActivityBase
+        implements LoadingView.Observer {
+    private final SkipTosDialogPolicyListener mSkipTosDialogPolicyListener;
 
-    private @Nullable SkipTosDialogPolicyListener mSkipTosDialogPolicyListener;
-
-    private FirstRunFlowSequencer mFirstRunFlowSequencer;
     private TextView mTosAndPrivacyTextView;
     private Button mOkButton;
     private LoadingView mLoadingView;
@@ -54,10 +50,10 @@ public class LightweightFirstRunActivity
     private boolean mNativeInitialized;
     private boolean mTriggerAcceptAfterNativeInit;
 
-    private long mViewCreatedTimeMs;
+    @SuppressWarnings("HidingField")
+    private @Nullable Handler mHandler;
 
-    private Handler mHandler;
-    private Runnable mExitFreRunnable;
+    private @Nullable Runnable mExitFreRunnable;
 
     public static final String EXTRA_ASSOCIATED_APP_NAME =
             "org.chromium.chrome.browser.firstrun.AssociatedAppName";
@@ -65,50 +61,49 @@ public class LightweightFirstRunActivity
     public LightweightFirstRunActivity() {
         super();
 
-        if (sSupportSkippingTos) {
-            mSkipTosDialogPolicyListener = new SkipTosDialogPolicyListener(getPolicyLoadListener(),
-                    EnterpriseInfo.getInstance(), new LightWeightTosDialogMetricsNameProvider());
-            // We can ignore the result from #onAvailable here, as views are not created at this
-            // point.
-            mSkipTosDialogPolicyListener.onAvailable((ignored) -> onPolicyLoadListenerAvailable());
-        }
+        mSkipTosDialogPolicyListener =
+                new SkipTosDialogPolicyListener(
+                        getPolicyLoadListener(), EnterpriseInfo.getInstance(), null);
+        // We can ignore the result from #onAvailable here, as views are not created at this
+        // point.
+        mSkipTosDialogPolicyListener.onAvailable((ignored) -> onPolicyLoadListenerAvailable());
     }
 
     @Override
     public void triggerLayoutInflation() {
+        super.triggerLayoutInflation();
+
         setFinishOnTouchOutside(true);
 
-        mFirstRunFlowSequencer = new FirstRunFlowSequencer(this) {
-            @Override
-            public void onFlowIsKnown(Bundle freProperties) {
-                if (freProperties == null) {
-                    completeFirstRunExperience();
-                    return;
-                }
-
-                @ChildAccountStatus.Status
-                int childAccountStatus =
-                        freProperties.getInt(SyncConsentFirstRunFragment.CHILD_ACCOUNT_STATUS,
-                                ChildAccountStatus.NOT_CHILD);
-                initializeViews(ChildAccountStatus.isChild(childAccountStatus));
-            }
-        };
-        mFirstRunFlowSequencer.start();
+        FirstRunFlowSequencer firstRunFlowSequencer =
+                new FirstRunFlowSequencer(
+                        getProfileProviderSupplier(),
+                        assertNonNull(getChildAccountStatusSupplier())) {
+                    @Override
+                    public void onFlowIsKnown(boolean isChild) {
+                        initializeViews(isChild);
+                    }
+                };
+        firstRunFlowSequencer.start();
         onInitialLayoutInflationComplete();
     }
 
     /** Called once it is known whether the device has a child account. */
+    @Initializer
     private void initializeViews(boolean hasChildAccount) {
-        setContentView(LayoutInflater.from(LightweightFirstRunActivity.this)
-                               .inflate(R.layout.lightweight_fre_tos, null));
+        setContentView(
+                LayoutInflater.from(LightweightFirstRunActivity.this)
+                        .inflate(R.layout.lightweight_fre_tos, null));
 
-        final Resources resources = getResources();
-        NoUnderlineClickableSpan clickableGoogleTermsSpan = new NoUnderlineClickableSpan(
-                resources, (view) -> showInfoPage(R.string.google_terms_of_service_url));
-        NoUnderlineClickableSpan clickableChromeAdditionalTermsSpan = new NoUnderlineClickableSpan(
-                resources, (view) -> showInfoPage(R.string.chrome_additional_terms_of_service_url));
-        NoUnderlineClickableSpan clickableFamilyLinkPrivacySpan = new NoUnderlineClickableSpan(
-                resources, (view) -> showInfoPage(R.string.family_link_privacy_policy_url));
+        ChromeClickableSpan clickableGoogleTermsSpan =
+                new ChromeClickableSpan(
+                        this, _ -> showInfoPage(R.string.google_terms_of_service_url));
+        ChromeClickableSpan clickableChromeAdditionalTermsSpan =
+                new ChromeClickableSpan(
+                        this, _ -> showInfoPage(R.string.chrome_additional_terms_of_service_url));
+        ChromeClickableSpan clickableGooglePrivacySpan =
+                new ChromeClickableSpan(
+                        this, _ -> showInfoPage(R.string.google_privacy_policy_url));
         String associatedAppName =
                 IntentUtils.safeGetStringExtra(getIntent(), EXTRA_ASSOCIATED_APP_NAME);
         if (associatedAppName == null) {
@@ -116,29 +111,34 @@ public class LightweightFirstRunActivity
         }
         final CharSequence tosAndPrivacyText;
         if (hasChildAccount) {
-            tosAndPrivacyText = SpanApplier.applySpans(
-                    getString(R.string.lightweight_fre_associated_app_tos_and_privacy_child_account,
-                            associatedAppName),
-                    new SpanInfo("<LINK1>", "</LINK1>", clickableGoogleTermsSpan),
-                    new SpanInfo("<LINK2>", "</LINK2>", clickableChromeAdditionalTermsSpan),
-                    new SpanInfo("<LINK3>", "</LINK3>", clickableFamilyLinkPrivacySpan));
+            tosAndPrivacyText =
+                    SpanApplier.applySpans(
+                            getString(
+                                    R.string
+                                            .lightweight_fre_associated_app_tos_and_privacy_child_account,
+                                    associatedAppName),
+                            new SpanInfo("<LINK1>", "</LINK1>", clickableGoogleTermsSpan),
+                            new SpanInfo("<LINK2>", "</LINK2>", clickableChromeAdditionalTermsSpan),
+                            new SpanInfo("<LINK3>", "</LINK3>", clickableGooglePrivacySpan));
         } else {
-            tosAndPrivacyText = SpanApplier.applySpans(
-                    getString(R.string.lightweight_fre_associated_app_tos, associatedAppName),
-                    new SpanInfo("<LINK1>", "</LINK1>", clickableGoogleTermsSpan),
-                    new SpanInfo("<LINK2>", "</LINK2>", clickableChromeAdditionalTermsSpan));
+            tosAndPrivacyText =
+                    SpanApplier.applySpans(
+                            getString(
+                                    R.string.lightweight_fre_associated_app_tos, associatedAppName),
+                            new SpanInfo("<LINK1>", "</LINK1>", clickableGoogleTermsSpan),
+                            new SpanInfo(
+                                    "<LINK2>", "</LINK2>", clickableChromeAdditionalTermsSpan));
         }
 
-        mTosAndPrivacyTextView = (TextView) findViewById(R.id.lightweight_fre_tos_and_privacy);
+        mTosAndPrivacyTextView = findViewById(R.id.lightweight_fre_tos_and_privacy);
         mTosAndPrivacyTextView.setText(tosAndPrivacyText);
         mTosAndPrivacyTextView.setMovementMethod(LinkMovementMethod.getInstance());
 
         mLightweightFreButtons = findViewById(R.id.lightweight_fre_buttons);
-        mOkButton = (Button) findViewById(R.id.button_primary);
-        mOkButton.setOnClickListener(view -> acceptTermsOfService());
+        mOkButton = findViewById(R.id.button_primary);
+        mOkButton.setOnClickListener(_ -> acceptTermsOfService());
 
-        ((Button) findViewById(R.id.button_secondary))
-                .setOnClickListener(view -> abortFirstRunExperience());
+        findViewById(R.id.button_secondary).setOnClickListener(_ -> abortFirstRunExperience());
 
         mLoadingView = findViewById(R.id.loading_view);
         mLoadingViewContainer = findViewById(R.id.loading_view_container);
@@ -146,18 +146,15 @@ public class LightweightFirstRunActivity
         mPrivacyDisclaimer = findViewById(R.id.privacy_disclaimer);
 
         mViewCreated = true;
-        mViewCreatedTimeMs = SystemClock.elapsedRealtime();
 
-        if (mSkipTosDialogPolicyListener != null) {
-            // Check if we need to setup logic for policy loading.
-            if (mSkipTosDialogPolicyListener.get() == null) {
-                mLoadingView.addObserver(this);
-                mLoadingView.showLoadingUI();
-                setTosComponentVisibility(false);
-            } else if (mSkipTosDialogPolicyListener.get()) {
-                setTosComponentVisibility(false);
-                skipTosByPolicy();
-            }
+        // Check if we need to setup logic for policy loading.
+        if (mSkipTosDialogPolicyListener.get() == null) {
+            mLoadingView.addObserver(this);
+            mLoadingView.showLoadingUi();
+            setTosComponentVisibility(false);
+        } else if (mSkipTosDialogPolicyListener.get()) {
+            setTosComponentVisibility(false);
+            skipTosByPolicy();
         }
     }
 
@@ -168,19 +165,17 @@ public class LightweightFirstRunActivity
     }
 
     private void onPolicyLoadListenerAvailable() {
-        if (mViewCreated) mLoadingView.hideLoadingUI();
+        if (mViewCreated) mLoadingView.hideLoadingUi();
     }
 
     @Override
-    public void onShowLoadingUIComplete() {
+    public void onShowLoadingUiComplete() {
         mLoadingViewContainer.setVisibility(View.VISIBLE);
     }
 
     @Override
-    public void onHideLoadingUIComplete() {
-        assert mSkipTosDialogPolicyListener != null && mSkipTosDialogPolicyListener.get() != null;
-        RecordHistogram.recordTimesHistogram("MobileFre.Lightweight.LoadingDuration",
-                SystemClock.elapsedRealtime() - mViewCreatedTimeMs);
+    public void onHideLoadingUiComplete() {
+        assert mSkipTosDialogPolicyListener.get() != null;
         if (mSkipTosDialogPolicyListener.get()) {
             skipTosByPolicy();
         } else {
@@ -201,12 +196,9 @@ public class LightweightFirstRunActivity
         assert !mNativeInitialized;
 
         mNativeInitialized = true;
+        RecordHistogram.recordTimesHistogram(
+                "MobileFre.NativeInitialized", SystemClock.elapsedRealtime() - getStartTime());
         if (mTriggerAcceptAfterNativeInit) acceptTermsOfService();
-    }
-
-    @Override
-    public void onBackPressed() {
-        abortFirstRunExperience();
     }
 
     @Override
@@ -215,11 +207,17 @@ public class LightweightFirstRunActivity
 
         mLoadingView.destroy();
 
-        if (mSkipTosDialogPolicyListener != null) mSkipTosDialogPolicyListener.destroy();
+        mSkipTosDialogPolicyListener.destroy();
 
         if (mHandler != null && mExitFreRunnable != null) {
             mHandler.removeCallbacks(mExitFreRunnable);
         }
+    }
+
+    @Override
+    public @BackPressResult int handleBackPress() {
+        abortFirstRunExperience();
+        return BackPressResult.SUCCESS;
     }
 
     private void abortFirstRunExperience() {
@@ -229,6 +227,8 @@ public class LightweightFirstRunActivity
 
     public void completeFirstRunExperience() {
         FirstRunStatus.setLightweightFirstRunFlowComplete(true);
+        SigninPreferencesManager.getInstance()
+                .setCctMismatchNoticeSuppressionPeriodStart(TimeUtils.currentTimeMillis());
         exitLightweightFirstRun();
     }
 
@@ -237,18 +237,19 @@ public class LightweightFirstRunActivity
         mPrivacyDisclaimer.setVisibility(View.VISIBLE);
         mPrivacyDisclaimer.sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_FOCUSED);
 
-        mExitFreRunnable = () -> {
-            FirstRunStatus.setFirstRunSkippedByPolicy(true);
-            exitLightweightFirstRun();
-            mExitFreRunnable = null;
-        };
+        mExitFreRunnable =
+                () -> {
+                    FirstRunStatus.setFirstRunSkippedByPolicy(true);
+                    exitLightweightFirstRun();
+                    mExitFreRunnable = null;
+                };
         mHandler = new Handler(ThreadUtils.getUiThreadLooper());
         mHandler.postDelayed(mExitFreRunnable, FirstRunUtils.getSkipTosExitDelayMs());
     }
 
     private void exitLightweightFirstRun() {
         finish();
-        sendFirstRunCompletePendingIntent();
+        sendFirstRunCompleteIntent();
     }
 
     private void acceptTermsOfService() {
@@ -270,27 +271,5 @@ public class LightweightFirstRunActivity
     public void showInfoPage(@StringRes int url) {
         CustomTabActivity.showInfoPage(
                 this, LocalizationUtils.substituteLocalePlaceholder(getString(url)));
-    }
-
-    private class LightWeightTosDialogMetricsNameProvider
-            implements SkipTosDialogPolicyListener.HistogramNameProvider {
-        @Override
-        public String getOnDeviceOwnedDetectedTimeHistogramName() {
-            return mViewCreated
-                    ? "MobileFre.Lightweight.IsDeviceOwnedCheckSpeed.SlowerThanInflation"
-                    : "MobileFre.Lightweight.IsDeviceOwnedCheckSpeed.FasterThanInflation";
-        }
-
-        @Override
-        public String getOnPolicyAvailableTimeHistogramName() {
-            return mViewCreated
-                    ? "MobileFre.Lightweight.EnterprisePolicyCheckSpeed.SlowerThanInflation"
-                    : "MobileFre.Lightweight.EnterprisePolicyCheckSpeed.FasterThanInflation";
-        }
-    }
-
-    @VisibleForTesting
-    public static void setSupportSkippingTos(boolean isSupported) {
-        sSupportSkippingTos = isSupported;
     }
 }

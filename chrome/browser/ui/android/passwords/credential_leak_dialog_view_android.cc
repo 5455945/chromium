@@ -1,25 +1,21 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/android/passwords/credential_leak_dialog_view_android.h"
-#include <cstdint>
+
+#include <optional>
 #include <string>
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
-#include "base/strings/utf_string_conversions.h"
-#include "chrome/android/chrome_jni_headers/CredentialLeakDialogBridge_jni.h"
 #include "chrome/browser/password_manager/android/credential_leak_controller_android.h"
-#include "chrome/browser/password_manager/chrome_password_manager_client.h"
-#include "chrome/grit/generated_resources.h"
-#include "components/password_manager/core/browser/password_form_manager_for_ui.h"
-#include "components/password_manager/core/common/password_manager_pref_names.h"
-#include "components/prefs/pref_service.h"
-#include "components/strings/grit/components_strings.h"
-#include "content/public/browser/web_contents.h"
+#include "third_party/jni_zero/default_conversions.h"
+#include "third_party/jni_zero/jni_zero.h"
 #include "ui/android/window_android.h"
-#include "ui/base/l10n/l10n_util.h"
+
+// Must come after headers that provide symbols used by @JniType.
+#include "chrome/android/chrome_jni_headers/CredentialLeakDialogBridge_jni.h"
 
 CredentialLeakDialogViewAndroid::CredentialLeakDialogViewAndroid(
     CredentialLeakControllerAndroid* controller)
@@ -33,35 +29,26 @@ CredentialLeakDialogViewAndroid::~CredentialLeakDialogViewAndroid() {
 void CredentialLeakDialogViewAndroid::Show(ui::WindowAndroid* window_android) {
   JNIEnv* env = base::android::AttachCurrentThread();
   java_object_.Reset(Java_CredentialLeakDialogBridge_create(
-      env, window_android->GetJavaObject(), reinterpret_cast<intptr_t>(this)));
+      env, window_android, jni_zero::MakeRaw(this)));
 
   Java_CredentialLeakDialogBridge_showDialog(
-      env, java_object_,
-      base::android::ConvertUTF16ToJavaString(env, controller_->GetTitle()),
-      base::android::ConvertUTF16ToJavaString(env,
-                                              controller_->GetDescription()),
-      base::android::ConvertUTF16ToJavaString(
-          env, controller_->GetAcceptButtonLabel()),
+      env, java_object_, controller_->GetTitle(), controller_->GetDescription(),
+      controller_->GetAcceptButtonLabel(),
       controller_->ShouldShowCancelButton()
-          ? base::android::ConvertUTF16ToJavaString(
-                env, controller_->GetCancelButtonLabel())
-          : nullptr);
+          ? std::make_optional(controller_->GetCancelButtonLabel())
+          : std::nullopt);
 }
 
-void CredentialLeakDialogViewAndroid::Accepted(
-    JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& obj) {
+void CredentialLeakDialogViewAndroid::Accepted() {
   controller_->OnAcceptDialog();
 }
 
-void CredentialLeakDialogViewAndroid::Cancelled(
-    JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& obj) {
+void CredentialLeakDialogViewAndroid::Cancelled() {
   controller_->OnCancelDialog();
 }
 
-void CredentialLeakDialogViewAndroid::Closed(
-    JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& obj) {
+void CredentialLeakDialogViewAndroid::Closed() {
   controller_->OnCloseDialog();
 }
+
+DEFINE_JNI(CredentialLeakDialogBridge)

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -30,6 +30,9 @@ class FuzzImpl : public fuzz::mojom::FuzzInterface,
   void FuzzArgsSyncResp(fuzz::mojom::FuzzStructPtr a,
                         fuzz::mojom::FuzzStructPtr b,
                         FuzzArgsSyncRespCallback callback) override;
+
+  void FuzzNullableValueArrays(
+      fuzz::mojom::FuzzNullableValueArrayStructPtr s) override;
 
   void FuzzAssociated(
       mojo::PendingAssociatedReceiver<fuzz::mojom::FuzzDummyInterface> receiver)

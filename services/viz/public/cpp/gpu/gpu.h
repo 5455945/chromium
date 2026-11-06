@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,22 +6,22 @@
 #define SERVICES_VIZ_PUBLIC_CPP_GPU_GPU_H_
 
 #include <stdint.h>
+
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
 #include <vector>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
-#include "base/single_thread_task_runner.h"
-#include "build/chromeos_buildflags.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "components/viz/common/gpu/context_provider.h"
 #include "gpu/ipc/client/gpu_channel_host.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
-#include "services/viz/public/cpp/gpu/client_gpu_memory_buffer_manager.h"
 #include "services/viz/public/mojom/gpu.mojom.h"
-
-namespace service_manager {
-class Connector;
-}
 
 namespace viz {
 
@@ -30,24 +30,24 @@ class Gpu : public gpu::GpuChannelEstablishFactory {
   // The Gpu has to be initialized in the main thread before establishing
   // the gpu channel.
   static std::unique_ptr<Gpu> Create(
-      service_manager::Connector* connector,
-      const std::string& service_name,
-      scoped_refptr<base::SingleThreadTaskRunner> io_task_runner);
-  static std::unique_ptr<Gpu> Create(
       mojo::PendingRemote<mojom::Gpu> remote,
       scoped_refptr<base::SingleThreadTaskRunner> io_task_runner);
 
+  // The Gpu has to be initialized in the main thread before establishing
+  // the gpu channel.
+  static std::unique_ptr<Gpu> CreateWithMessagePipe(
+      mojo::PendingRemote<mojom::Gpu> remote,
+      scoped_refptr<base::SingleThreadTaskRunner> io_task_runner,
+      int client_id,
+      mojom::GpuClientType client_type,
+      mojo::ScopedMessagePipeHandle channel_handle,
+      gpu::GpuChannelEstablishedCallback callback);
+
+  Gpu(const Gpu&) = delete;
+  Gpu& operator=(const Gpu&) = delete;
+
   ~Gpu() override;
 
-  gpu::GpuMemoryBufferManager* gpu_memory_buffer_manager() const {
-    return gpu_memory_buffer_manager_.get();
-  }
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  void CreateJpegDecodeAccelerator(
-      mojo::PendingReceiver<chromeos_camera::mojom::MjpegDecodeAccelerator>
-          jda_receiver);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
   void CreateVideoEncodeAcceleratorProvider(
       mojo::PendingReceiver<media::mojom::VideoEncodeAcceleratorProvider>
           vea_provider_receiver);
@@ -56,7 +56,8 @@ class Gpu : public gpu::GpuChannelEstablishFactory {
   void EstablishGpuChannel(
       gpu::GpuChannelEstablishedCallback callback) override;
   scoped_refptr<gpu::GpuChannelHost> EstablishGpuChannelSync() override;
-  gpu::GpuMemoryBufferManager* GetGpuMemoryBufferManager() override;
+
+  bool gpu_remote_disconnected() { return gpu_remote_disconnected_; }
 
   void LoseChannel();
   scoped_refptr<gpu::GpuChannelHost> GetGpuChannel();
@@ -70,24 +71,51 @@ class Gpu : public gpu::GpuChannelEstablishFactory {
   Gpu(mojo::PendingRemote<mojom::Gpu> gpu_remote,
       scoped_refptr<base::SingleThreadTaskRunner> task_runner);
 
+  void PreestablishChannel(int client_id,
+                           mojom::GpuClientType client_type,
+                           mojo::ScopedMessagePipeHandle initial_channel_handle,
+                           gpu::GpuChannelEstablishedCallback callback);
+
   // Sends a request to establish a gpu channel. If a request is currently
   // pending this will do nothing.
-  void SendEstablishGpuChannelRequest();
+  void SendEstablishGpuChannelRequest(base::WaitableEvent* waitable_event);
 
   // Handles results of request to establish a gpu channel in
   // |pending_request_|.
   void OnEstablishedGpuChannel();
 
+  void OnGPUInfoReceived(
+      const gpu::GPUInfo& gpu_info,
+      const gpu::GpuFeatureInfo& gpu_feature_info,
+      const gpu::SharedImageCapabilities& shared_image_capabilities);
+
+  // Completes the initialization of the GpuChannelHost with the fetched info.
+  // Called when GPUInfo is available (either from the async callback or
+  // fetched synchronously in EstablishGpuChannelSync).
+  void CompleteInitialChannelCreation(
+      const gpu::GPUInfo& gpu_info,
+      const gpu::GpuFeatureInfo& gpu_feature_info,
+      const gpu::SharedImageCapabilities& shared_image_capabilities);
+
+  void RunEstablishCallbacks();
+
   scoped_refptr<base::SingleThreadTaskRunner> main_task_runner_;
   scoped_refptr<base::SingleThreadTaskRunner> io_task_runner_;
-  std::unique_ptr<ClientGpuMemoryBufferManager> gpu_memory_buffer_manager_;
 
   std::unique_ptr<GpuPtrIO, base::OnTaskRunnerDeleter> gpu_;
   scoped_refptr<EstablishRequest> pending_request_;
   scoped_refptr<gpu::GpuChannelHost> gpu_channel_;
-  std::vector<gpu::GpuChannelEstablishedCallback> establish_callbacks_;
+  // The GpuChannelHost builder that is being created asynchronously from the
+  // initial handle.
+  std::optional<gpu::GpuChannelHost::Builder>
+      pending_initial_gpu_channel_builder_;
 
-  DISALLOW_COPY_AND_ASSIGN(Gpu);
+  bool gpu_remote_disconnected_ = false;
+
+  std::vector<std::pair<base::TimeTicks, gpu::GpuChannelEstablishedCallback>>
+      establish_callbacks_;
+
+  base::WeakPtrFactory<Gpu> weak_ptr_factory_{this};
 };
 
 }  // namespace viz

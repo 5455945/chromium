@@ -1,10 +1,8 @@
-# Copyright (c) 2012 The Chromium Authors. All rights reserved.
+# Copyright 2012 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 """Results object and results formatters for checkdeps tool."""
-
-
 
 import json
 
@@ -87,8 +85,9 @@ class NormalResultsFormatter(ResultsFormatter):
     if verbose:
       lines.append('  For %s' % violation.rules)
     lines.append(
-        '  Illegal include: "%s"\n    Because of %s' %
-        (violation.include_path, str(violation.violated_rule)))
+      '  Illegal include: "%s"\n    Because of %s'
+      % (violation.include_path, str(violation.violated_rule))
+    )
     return '\n'.join(lines)
 
   def GetResults(self):
@@ -111,13 +110,18 @@ class JSONResultsFormatter(ResultsFormatter):
     self.results = []
 
   def AddError(self, dependee_status):
-    self.results.append({
+    self.results.append(
+      {
         'dependee_path': dependee_status.dependee_path,
-        'violations': [{
+        'violations': [
+          {
             'include_path': violation.include_path,
             'violated_rule': violation.violated_rule.AsDependencyTuple(),
-        } for violation in dependee_status.violations]
-    })
+          }
+          for violation in dependee_status.violations
+        ],
+      }
+    )
 
     if self.wrapped_formatter:
       self.wrapped_formatter.AddError(dependee_status)

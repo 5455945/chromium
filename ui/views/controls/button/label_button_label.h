@@ -1,40 +1,45 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_VIEWS_CONTROLS_BUTTON_LABEL_BUTTON_LABEL_H_
 #define UI_VIEWS_CONTROLS_BUTTON_LABEL_BUTTON_LABEL_H_
 
-#include <string>
+#include <optional>
+#include <string_view>
 
-#include "base/bind.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/functional/bind.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/metadata/metadata_header_macros.h"
-#include "ui/gfx/color_palette.h"
+#include "ui/color/color_id.h"
+#include "ui/color/color_variant.h"
 #include "ui/views/controls/label.h"
+#include "ui/views/metadata/view_factory.h"
 #include "ui/views/views_export.h"
 
-namespace views {
-
-namespace internal {
+namespace views::internal {
 
 // A Label subclass that can be disabled. This is only used internally for
 // views::LabelButton.
 class VIEWS_EXPORT LabelButtonLabel : public Label {
+  METADATA_HEADER(LabelButtonLabel, Label)
+
  public:
-  METADATA_HEADER(LabelButtonLabel);
-  LabelButtonLabel(const std::u16string& text, int text_context);
+  LabelButtonLabel(std::u16string_view text, int text_context);
+
   LabelButtonLabel(const LabelButtonLabel&) = delete;
   LabelButtonLabel& operator=(const LabelButtonLabel&) = delete;
+
   ~LabelButtonLabel() override;
 
   // Set an explicit disabled color. This will stop the Label responding to
   // changes in the native theme for disabled colors.
-  void SetDisabledColor(SkColor color);
+  void SetDisabledColor(ui::ColorVariant color);
+  std::optional<ui::ColorVariant> GetDisabledColor() const;
 
   // Label:
-  void SetEnabledColor(SkColor color) override;
+  void SetEnabledColor(ui::ColorVariant color) override;
+  std::optional<ui::ColorVariant> GetEnabledColor() const;
 
  protected:
   // Label:
@@ -44,16 +49,22 @@ class VIEWS_EXPORT LabelButtonLabel : public Label {
   void OnEnabledChanged();
   void SetColorForEnableState();
 
-  absl::optional<SkColor> requested_disabled_color_;
-  absl::optional<SkColor> requested_enabled_color_;
+  std::optional<ui::ColorVariant> requested_enabled_color_;
+  std::optional<ui::ColorVariant> requested_disabled_color_;
+
   base::CallbackListSubscription enabled_changed_subscription_ =
-      AddEnabledChangedCallback(
+      AddEnabledInViewsSubtreeChangedCallback(
           base::BindRepeating(&LabelButtonLabel::OnEnabledChanged,
                               base::Unretained(this)));
 };
 
-}  // namespace internal
+BEGIN_VIEW_BUILDER(VIEWS_EXPORT, LabelButtonLabel, Label)
+VIEW_BUILDER_PROPERTY(ui::ColorVariant, EnabledColor)
+VIEW_BUILDER_PROPERTY(ui::ColorVariant, DisabledColor)
+END_VIEW_BUILDER
 
-}  // namespace views
+}  // namespace views::internal
+
+DEFINE_VIEW_BUILDER(VIEWS_EXPORT, internal::LabelButtonLabel)
 
 #endif  // UI_VIEWS_CONTROLS_BUTTON_LABEL_BUTTON_LABEL_H_

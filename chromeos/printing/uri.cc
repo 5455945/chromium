@@ -1,14 +1,14 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chromeos/printing/uri.h"
 
 #include <algorithm>
+#include <string_view>
 
 #include "base/check_op.h"
-#include "base/containers/flat_map.h"
-#include "base/no_destructor.h"
+#include "base/containers/fixed_flat_map.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "chromeos/printing/uri_impl.h"
@@ -98,22 +98,18 @@ class Encoder {
 
 // Returns true if given string has characters outside ASCII (outside 0x00-07F).
 bool HasNonASCII(const std::string& str) {
-  return std::any_of(str.begin(), str.end(), [](char c) {
-    return static_cast<unsigned char>(c) > 0x7f;
-  });
+  return std::ranges::any_of(
+      str, [](char c) { return static_cast<unsigned char>(c) > 0x7f; });
 }
 
 // The map with pairs scheme -> default_port.
-const base::flat_map<std::string, int>& GetDefaultPorts() {
-  static const base::NoDestructor<base::flat_map<std::string, int>>
-      kDefaultPorts({{"ipp", 631},
-                     {"ipps", 443},
-                     {"http", 80},
-                     {"https", 443},
-                     {"lpd", 515},
-                     {"socket", 9100}});
-  return *kDefaultPorts;
-}
+constexpr auto kDefaultPorts =
+    base::MakeFixedFlatMap<std::string_view, int>({{"ipp", 631},
+                                                   {"ipps", 443},
+                                                   {"http", 80},
+                                                   {"https", 443},
+                                                   {"lpd", 515},
+                                                   {"socket", 9100}});
 
 }  //  namespace
 
@@ -123,7 +119,7 @@ Uri::Pim::~Pim() = default;
 
 Uri::Uri() : pim_(std::make_unique<Pim>()) {}
 
-Uri::Uri(const std::string& uri) : pim_(std::make_unique<Pim>()) {
+Uri::Uri(std::string_view uri) : pim_(std::make_unique<Pim>()) {
   // Omits leading and trailing whitespaces ( \r\n\t\f\v).
   const size_t prefix_size =
       uri.size() -
@@ -140,8 +136,8 @@ Uri::Uri(const std::string& uri) : pim_(std::make_unique<Pim>()) {
 
 // static
 int Uri::GetDefaultPort(const std::string& scheme) {
-  auto it = GetDefaultPorts().find(scheme);
-  return it != GetDefaultPorts().end() ? it->second : -1;
+  auto it = kDefaultPorts.find(scheme);
+  return it != kDefaultPorts.end() ? it->second : -1;
 }
 
 Uri::Uri(const Uri& uri) : pim_(std::make_unique<Pim>(*uri.pim_)) {}
@@ -286,6 +282,14 @@ std::vector<std::pair<std::string, std::string>> Uri::GetQuery() const {
 std::string Uri::GetFragment() const {
   return pim_->fragment();
 }
+base::flat_map<std::string, std::vector<std::string>> Uri::GetQueryAsMap()
+    const {
+  base::flat_map<std::string, std::vector<std::string>> output;
+  for (const auto& [key, value] : pim_->query()) {
+    output[key].push_back(value);
+  }
+  return output;
+}
 
 std::string Uri::GetUserinfoEncoded() const {
   Encoder enc("+&=:");
@@ -426,9 +430,10 @@ bool Uri::ShouldPrintPort(bool always_print_port) const {
   if (always_print_port)
     return true;
 
-  auto it = GetDefaultPorts().find(pim_->scheme());
-  if (it == GetDefaultPorts().end())
+  auto it = kDefaultPorts.find(pim_->scheme());
+  if (it == kDefaultPorts.end()) {
     return true;
+  }
 
   return it->second != pim_->port();
 }

@@ -1,38 +1,48 @@
-#!/usr/bin/env python
-# Copyright 2021 The Chromium Authors. All rights reserved.
+#!/usr/bin/env vpython3
+# Copyright 2021 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """Runs //tools/metrics/metrics_python_tests.py as a 'script' test."""
 
 import json
 import os
 import sys
 
-
 import common
 
 
 def main_run(args):
   with common.temporary_file() as tempfile_path:
-    rc = common.run_command(['vpython',
+    rc = common.run_command(
+      [
+        'vpython3',
         os.path.join(common.SRC_DIR, 'testing', 'test_env.py'),
-        os.path.join(common.SRC_DIR, 'tools', 'metrics',
-                     'metrics_python_tests.py'),
-        '--isolated-script-test-output', tempfile_path
-    ], cwd=os.path.join(common.SRC_DIR, 'out', args.build_config_fs))
+        os.path.join(
+          common.SRC_DIR, 'tools', 'metrics', 'metrics_python_tests.py'
+        ),
+        '--isolated-script-test-output',
+        tempfile_path,
+        '--skip-set-lpac-acls=1',
+      ],
+      cwd=args.build_dir,
+    )
 
     with open(tempfile_path) as f:
       isolated_results = json.load(f)
 
-  results = common.parse_common_test_results(isolated_results,
-                                             test_separator='.')
+  results = common.parse_common_test_results(
+    isolated_results, test_separator='.'
+  )
 
   failures = [
-      '%s: %s' % (k, v) for k, v in results['unexpected_failures'].items()
+    '%s: %s' % (k, v) for k, v in results['unexpected_failures'].items()
   ]
-  common.record_local_script_results(
-      'metrics_python_tests', args.output, failures, True)
+
+  # No need to call common.record_local_script_results() since this test
+  # uploads individual results to RDB itself.
+  local_script_results = {'valid': True, 'failures': failures}
+  with open(args.output.name, 'w') as fd:
+    json.dump(local_script_results, fd)
 
   return rc
 

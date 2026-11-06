@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,13 @@
 
 #include <memory>
 #include <string>
-#include <unordered_map>
 
-#include "base/bind.h"
-#include "base/containers/mru_cache.h"
+#include "base/containers/lru_cache.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "components/dom_distiller/core/article_entry.h"
 #include "components/dom_distiller/core/proto/distilled_article.pb.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
 namespace dom_distiller {
 
@@ -63,23 +64,28 @@ class InMemoryContentStore : public DistilledContentStore {
   // The CacheDeletor gets called when anything is removed from the ContentMap.
   class CacheDeletor {
    public:
-    explicit CacheDeletor(InMemoryContentStore* store);
+    CacheDeletor(InMemoryContentStore* store, std::string entry_id);
+    CacheDeletor(const CacheDeletor&);
+    CacheDeletor& operator=(const CacheDeletor&);
     ~CacheDeletor();
     void operator()(DistilledArticleProto* proto);
 
    private:
-    InMemoryContentStore* store_;
+    raw_ptr<InMemoryContentStore> store_;
+    std::string entry_id_;
   };
 
   void AddUrlToIdMapping(const ArticleEntry& entry,
                          const DistilledArticleProto& proto);
 
-  void EraseUrlToIdMapping(const DistilledArticleProto& proto);
+  // Removes URL-to-ID mappings for `proto` that still point to `entry_id`.
+  void EraseUrlToIdMapping(const DistilledArticleProto& proto,
+                           const std::string& entry_id);
 
-  typedef base::MRUCache<std::string,
+  typedef base::LRUCache<std::string,
                          std::unique_ptr<DistilledArticleProto, CacheDeletor>>
       ContentMap;
-  typedef std::unordered_map<std::string, std::string> UrlMap;
+  typedef absl::flat_hash_map<std::string, std::string> UrlMap;
 
   ContentMap cache_;
   UrlMap url_to_id_;

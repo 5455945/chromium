@@ -24,39 +24,48 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_GEOMETRY_LENGTH_FUNCTIONS_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GEOMETRY_LENGTH_FUNCTIONS_H_
 
+#include "third_party/blink/renderer/platform/geometry/evaluation_input.h"
 #include "third_party/blink/renderer/platform/geometry/layout_unit.h"
 #include "third_party/blink/renderer/platform/geometry/length.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 
+namespace gfx {
+class PointF;
+class SizeF;
+}
+
 namespace blink {
 
-class FloatPoint;
-class FloatSize;
-class LayoutUnit;
 class Length;
 class LengthSize;
 
 struct LengthPoint;
 
-PLATFORM_EXPORT int IntValueForLength(const Length&, int maximum_value);
-PLATFORM_EXPORT float FloatValueForLength(const Length&, float maximum_value);
+PLATFORM_EXPORT float FloatValueForLength(const Length&,
+                                          float maximum_value,
+                                          const EvaluationInput& = {});
 PLATFORM_EXPORT LayoutUnit
-MinimumValueForLengthInternal(const Length&, LayoutUnit maximum_value);
+MinimumValueForLengthInternal(const Length&,
+                              LayoutUnit maximum_value,
+                              const EvaluationInput&);
 
 inline LayoutUnit MinimumValueForLength(const Length& length,
-                                        LayoutUnit maximum_value) {
-  if (LIKELY(length.IsFixed()))
-    return LayoutUnit(length.Value());
+                                        LayoutUnit maximum_value,
+                                        const EvaluationInput& input = {}) {
+  if (length.IsFixed()) [[likely]] {
+    return LayoutUnit(length.Pixels());
+  }
 
-  return MinimumValueForLengthInternal(length, maximum_value);
+  return MinimumValueForLengthInternal(length, maximum_value, input);
 }
 
 PLATFORM_EXPORT LayoutUnit ValueForLength(const Length&,
-                                          LayoutUnit maximum_value);
-PLATFORM_EXPORT FloatSize FloatSizeForLengthSize(const LengthSize&,
-                                                 const FloatSize& box_size);
-PLATFORM_EXPORT FloatPoint FloatPointForLengthPoint(const LengthPoint&,
-                                                    const FloatSize& box_size);
+                                          LayoutUnit maximum_value,
+                                          const EvaluationInput& input = {});
+PLATFORM_EXPORT gfx::SizeF SizeForLengthSize(const LengthSize&,
+                                             const gfx::SizeF& box_size);
+PLATFORM_EXPORT gfx::PointF PointForLengthPoint(const LengthPoint&,
+                                                const gfx::SizeF& box_size);
 
 }  // namespace blink
 

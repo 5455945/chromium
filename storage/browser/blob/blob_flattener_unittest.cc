@@ -1,15 +1,14 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "storage/browser/blob/blob_storage_context.h"
-
 #include <memory>
+#include <string_view>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_simple_task_runner.h"
@@ -19,6 +18,7 @@
 #include "storage/browser/blob/blob_data_item.h"
 #include "storage/browser/blob/blob_entry.h"
 #include "storage/browser/blob/blob_memory_controller.h"
+#include "storage/browser/blob/blob_storage_context.h"
 #include "storage/browser/blob/blob_storage_registry.h"
 #include "storage/browser/blob/shareable_blob_data_item.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -72,9 +72,8 @@ class BlobFlattenerTest : public testing::Test {
     return BlobDataItem::CreateBytesDescription(size);
   }
 
-  scoped_refptr<BlobDataItem> CreateDataItem(const char* memory, size_t size) {
-    return BlobDataItem::CreateBytes(
-        base::as_bytes(base::make_span(memory, size)));
+  scoped_refptr<BlobDataItem> CreateDataItem(std::string_view memory) {
+    return BlobDataItem::CreateBytes(base::as_byte_span(memory));
   }
 
   scoped_refptr<BlobDataItem> CreateFileItem(size_t offset, size_t size) {
@@ -97,7 +96,7 @@ class BlobFlattenerTest : public testing::Test {
 
   const ShareableBlobDataItem& GetItemInBlob(const std::string& uuid,
                                              size_t index) {
-    const BlobEntry* entry = registry().GetEntry(uuid);
+    scoped_refptr<const BlobEntry> entry = registry().GetEntry(uuid);
     EXPECT_TRUE(entry);
     return *entry->items()[index];
   }
@@ -135,7 +134,7 @@ TEST_F(BlobFlattenerTest, NoBlobItems) {
   EXPECT_EQ(2u, builder.transport_quota_needed());
 
   ASSERT_EQ(2u, builder.items().size());
-  EXPECT_EQ(*CreateDataItem("hi", 2u), *builder.items()[0]->item());
+  EXPECT_EQ(*CreateDataItem("hi"), *builder.items()[0]->item());
   EXPECT_EQ(*CreateFileItem(0, 10u), *builder.items()[1]->item());
 }
 
@@ -226,7 +225,7 @@ TEST_F(BlobFlattenerTest, BlobWithSlices) {
   EXPECT_EQ(2u, builder.copy_quota_needed());
 
   ASSERT_EQ(8u, builder.items().size());
-  EXPECT_EQ(*CreateDataItem("hi", 2u), *builder.items()[0]->item());
+  EXPECT_EQ(*CreateDataItem("hi"), *builder.items()[0]->item());
   EXPECT_EQ(*CreateDataDescriptionItem(2u), *builder.items()[1]->item());
   EXPECT_EQ(*CreateFileItem(3u, 5u), *builder.items()[2]->item());
   EXPECT_EQ(GetItemInBlob(kDataBlob, 0), *builder.items()[3]);

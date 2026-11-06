@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,17 @@
 #define COMPONENTS_UPDATE_CLIENT_CONFIGURATOR_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <vector>
 
 #include "base/containers/flat_map.h"
+#include "base/files/file_path.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/ref_counted.h"
+#include "base/time/time.h"
+#include "build/branding_buildflags.h"
 
 class GURL;
 class PrefService;
@@ -22,35 +27,38 @@ class Version;
 
 namespace update_client {
 
-class ActivityDataService;
+class CrxCache;
 class CrxDownloaderFactory;
 class NetworkFetcherFactory;
 class PatcherFactory;
+class PersistedData;
 class ProtocolHandlerFactory;
 class UnzipperFactory;
 
+using UpdaterStateAttributes = base::flat_map<std::string, std::string>;
+using UpdaterStateProvider =
+    base::RepeatingCallback<UpdaterStateAttributes(bool is_machine)>;
+
 // Controls the component updater behavior.
-// TODO(sorin): this class will be split soon in two. One class controls
-// the behavior of the update client, and the other class controls the
-// behavior of the component updater.
 class Configurator : public base::RefCountedThreadSafe<Configurator> {
  public:
-  // Delay in seconds from calling Start() to the first update check.
-  virtual double InitialDelay() const = 0;
+  // Delay from calling Start() to the first update check.
+  virtual base::TimeDelta InitialDelay() const = 0;
 
-  // Delay in seconds to every subsequent update check. 0 means don't check.
-  virtual int NextCheckDelay() const = 0;
+  // Delay to every subsequent update check. 0 means don't check.
+  virtual base::TimeDelta NextCheckDelay() const = 0;
 
-  // Minimum delta time in seconds before an on-demand check is allowed
+  // Minimum delta time before an on-demand check is allowed
   // for the same component.
-  virtual int OnDemandDelay() const = 0;
+  virtual base::TimeDelta OnDemandDelay() const = 0;
 
-  // The time delay in seconds between applying updates for different
+  // The time delay between applying updates for different
   // components.
-  virtual int UpdateDelay() const = 0;
+  virtual base::TimeDelta UpdateDelay() const = 0;
 
   // The URLs for the update checks. The URLs are tried in order, the first one
-  // that succeeds wins.
+  // that succeeds wins. Since some components cannot be updated over HTTP,
+  // HTTPS URLs should appear first.
   virtual std::vector<GURL> UpdateUrl() const = 0;
 
   // The URLs for pings. Returns an empty vector if and only if pings are
@@ -70,18 +78,15 @@ class Configurator : public base::RefCountedThreadSafe<Configurator> {
   // "stable".
   virtual std::string GetChannel() const = 0;
 
-  // Returns the brand code or distribution tag that has been assigned to
-  // a partner. A brand code is a 4-character string used to identify
-  // installations that took place as a result of partner deals or website
-  // promotions.
-  virtual std::string GetBrand() const = 0;
-
   // Returns the language for the present locale. Possible return values are
   // standard tags for languages, such as "en", "en-US", "de", "fr", "af", etc.
   virtual std::string GetLang() const = 0;
 
   // Returns the OS's long name like "Windows", "Mac OS X", etc.
   virtual std::string GetOSLongName() const = 0;
+
+  // Returns the device's form factor name like "desktop", "phone", etc.
+  virtual std::string GetDeviceFormFactor() const = 0;
 
   // Parameters added to each url request. It can be empty if none are needed.
   // Returns a map of name-value pairs that match ^[-_a-zA-Z0-9]$ regex.
@@ -102,15 +107,6 @@ class Configurator : public base::RefCountedThreadSafe<Configurator> {
 
   virtual scoped_refptr<PatcherFactory> GetPatcherFactory() = 0;
 
-  // True means that this client can handle delta updates.
-  virtual bool EnabledDeltas() const = 0;
-
-  // True if component updates are enabled. Updates for all components are
-  // enabled by default. This method allows enabling or disabling
-  // updates for certain components such as the plugins. Updates for some
-  // components are always enabled and can't be disabled programatically.
-  virtual bool EnabledComponentUpdates() const = 0;
-
   // True means that the background downloader can be used for downloading
   // non on-demand components.
   virtual bool EnabledBackgroundDownloader() const = 0;
@@ -120,21 +116,17 @@ class Configurator : public base::RefCountedThreadSafe<Configurator> {
 
   // Returns a PrefService that the update_client can use to store persistent
   // update information. The PrefService must outlive the entire update_client,
-  // and be safe to access from the thread the update_client is constructed
+  // and be safe to access from the sequence the update_client is constructed
   // on.
   // Returning null is safe and will disable any functionality that requires
   // persistent storage.
   virtual PrefService* GetPrefService() const = 0;
 
-  // Returns an ActivityDataService that the update_client can use to access
-  // to update information (namely active bit, last active/rollcall days)
-  // normally stored in the user extension profile.
-  // Similar to PrefService, ActivityDataService must outlive the entire
-  // update_client, and be safe to access from the thread the update_client
-  // is constructed on.
-  // Returning null is safe and will disable any functionality that requires
-  // accessing to the information provided by ActivityDataService.
-  virtual ActivityDataService* GetActivityDataService() const = 0;
+  // Returns a PersistedData instance that the update_client can use to access
+  // to update information. Similar to PrefService, PersistedData must outlive
+  // the entire update_client, and be safe to access from the sequence the
+  // update_client is constructed on.
+  virtual PersistedData* GetPersistedData() const = 0;
 
   // Returns true if the Chrome is installed for the current user only, or false
   // if Chrome is installed for all users on the machine. This function must be
@@ -145,6 +137,25 @@ class Configurator : public base::RefCountedThreadSafe<Configurator> {
   // serializer object instances.
   virtual std::unique_ptr<ProtocolHandlerFactory> GetProtocolHandlerFactory()
       const = 0;
+
+  // Returns true if Chrome is installed on a system managed by cloud or
+  // group policies, false if the system is not managed, or nullopt if the
+  // platform does not support client management at all.
+  virtual std::optional<bool> IsMachineExternallyManaged() const = 0;
+
+  // Returns a callable to get the state of the platform updater, if the
+  // embedder includes an updater. Returns a null callback otherwise.
+  virtual UpdaterStateProvider GetUpdaterStateProvider() const = 0;
+
+  // Returns the CrxCache.
+  virtual scoped_refptr<CrxCache> GetCrxCache() const = 0;
+
+#if BUILDFLAG(CHROME_FOR_TESTING)
+  // Returns required component names.
+  virtual std::vector<std::string> GetRequiredComponents() const = 0;
+#endif
+
+  virtual bool IsConnectionMetered() const = 0;
 
  protected:
   friend class base::RefCountedThreadSafe<Configurator>;

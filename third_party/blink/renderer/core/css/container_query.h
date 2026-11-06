@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,35 +6,35 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_CONTAINER_QUERY_H_
 
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/core/css/media_list.h"
-#include "third_party/blink/renderer/core/layout/geometry/axis.h"
+#include "third_party/blink/renderer/core/css/container_selector.h"
 
 namespace blink {
+
+class ConditionalExpNode;
 
 class CORE_EXPORT ContainerQuery final
     : public GarbageCollected<ContainerQuery> {
  public:
-  ContainerQuery(const AtomicString& name, scoped_refptr<MediaQuerySet>);
+  ContainerQuery(ContainerSelector, const ConditionalExpNode* query);
   ContainerQuery(const ContainerQuery&);
 
-  const AtomicString& Name() const { return name_; }
-  PhysicalAxes QueriedAxes() const { return queried_axes_; }
+  const ContainerSelector& Selector() const { return selector_; }
 
   String ToString() const;
+  void Serialize(StringBuilder&) const;
 
-  void Trace(Visitor*) const {}
+  void Trace(Visitor*) const;
 
  private:
   friend class ContainerQueryTest;
   friend class ContainerQueryEvaluator;
   friend class CSSContainerRule;
+  friend class StyleRuleContainer;
 
-  scoped_refptr<MediaQuerySet> MediaQueries() const { return media_queries_; }
+  const ConditionalExpNode* Query() const { return query_; }
 
-  AtomicString name_;
-  // TODO(crbug.com/1214810): Refactor to avoid internal MediaQuerySet.
-  scoped_refptr<MediaQuerySet> media_queries_;
-  PhysicalAxes queried_axes_{kPhysicalAxisNone};
+  ContainerSelector selector_;
+  Member<const ConditionalExpNode> query_;
 };
 
 }  // namespace blink

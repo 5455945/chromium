@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,31 +8,29 @@
 
 WebContentsCloseHandler::WebContentsCloseHandler(
     WebContentsCloseHandlerDelegate* delegate)
-    : delegate_(delegate),
-      in_close_(false),
-      tab_changed_after_clone_(false) {
-}
+    : delegate_(delegate), in_close_(false), tab_changed_after_clone_(false) {}
 
-WebContentsCloseHandler::~WebContentsCloseHandler() {
-}
+WebContentsCloseHandler::~WebContentsCloseHandler() = default;
 
 void WebContentsCloseHandler::TabInserted() {
   // Tests may end up reviving a TabStrip that is empty.
-  if (!in_close_)
+  if (!in_close_) {
     return;
+  }
   in_close_ = false;
   delegate_->DestroyClonedLayer();
 }
 
 void WebContentsCloseHandler::ActiveTabChanged() {
-  if (in_close_)
+  if (in_close_) {
     tab_changed_after_clone_ = true;
-  else
+  } else {
     delegate_->DestroyClonedLayer();
+  }
 }
 
 void WebContentsCloseHandler::WillCloseAllTabs() {
-  DCHECK(!in_close_);
+  CHECK(!in_close_, base::NotFatalUntil::M162);
   in_close_ = true;
   tab_changed_after_clone_ = false;
   delegate_->CloneWebContentsLayer();
@@ -40,7 +38,7 @@ void WebContentsCloseHandler::WillCloseAllTabs() {
 }
 
 void WebContentsCloseHandler::CloseAllTabsCanceled() {
-  DCHECK(in_close_);
+  CHECK(in_close_, base::NotFatalUntil::M162);
   in_close_ = false;
   if (tab_changed_after_clone_) {
     // If the tab changed, destroy immediately. That way we make sure we aren't
@@ -51,8 +49,8 @@ void WebContentsCloseHandler::CloseAllTabsCanceled() {
     // handler. Often times the tab still ends up closing, but only after we get
     // back a response from the renderer. Assume this is going to happen and
     // keep around the cloned layer for a bit more time.
-    timer_.Start(FROM_HERE, base::TimeDelta::FromMilliseconds(500),
-                 this, &WebContentsCloseHandler::OnStillHaventClosed);
+    timer_.Start(FROM_HERE, base::Milliseconds(500), this,
+                 &WebContentsCloseHandler::OnStillHaventClosed);
   }
 }
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,9 +15,9 @@ using content::BrowserThread;
 
 namespace prerender {
 
-NoStatePrefetchHandle::Observer::Observer() {}
+NoStatePrefetchHandle::Observer::Observer() = default;
 
-NoStatePrefetchHandle::Observer::~Observer() {}
+NoStatePrefetchHandle::Observer::~Observer() = default;
 
 NoStatePrefetchHandle::~NoStatePrefetchHandle() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
@@ -32,30 +32,27 @@ void NoStatePrefetchHandle::SetObserver(Observer* observer) {
 
 void NoStatePrefetchHandle::OnNavigateAway() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  if (prefetch_data_)
+  if (prefetch_data_) {
     prefetch_data_->OnHandleNavigatedAway(this);
+  }
 }
 
 void NoStatePrefetchHandle::OnCancel() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  if (prefetch_data_)
+  if (prefetch_data_) {
     prefetch_data_->OnHandleCanceled(this);
+  }
 }
 
 bool NoStatePrefetchHandle::IsPrefetching() const {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   return prefetch_data_.get() != nullptr &&
-         !prefetch_data_->contents()->prerendering_has_been_cancelled();
+         !prefetch_data_->contents()->prefetching_has_been_cancelled();
 }
 
 bool NoStatePrefetchHandle::IsFinishedLoading() const {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   return prefetch_data_ && prefetch_data_->contents()->has_finished_loading();
-}
-
-bool NoStatePrefetchHandle::IsAbandoned() const {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  return prefetch_data_ && !prefetch_data_->abandon_time().is_null();
 }
 
 NoStatePrefetchContents* NoStatePrefetchHandle::contents() const {
@@ -76,15 +73,9 @@ NoStatePrefetchHandle::NoStatePrefetchHandle(
 void NoStatePrefetchHandle::OnPrefetchStop(
     NoStatePrefetchContents* no_state_prefetch_contents) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  if (observer_)
+  if (observer_) {
     observer_->OnPrefetchStop(this);
-}
-
-void NoStatePrefetchHandle::OnPrefetchNetworkBytesChanged(
-    NoStatePrefetchContents* no_state_prefetch_contents) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  if (observer_)
-    observer_->OnPrefetchNetworkBytesChanged(this);
+  }
 }
 
 bool NoStatePrefetchHandle::RepresentingSamePrefetchAs(

@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "chromecast/media/cma/backend/proxy/push_buffer_queue.h"
 #include "chromecast/public/media/decoder_config.h"
 #include "chromecast/public/task_runner.h"
@@ -34,9 +34,9 @@ PushBufferPendingHandler::PushBufferPendingHandler(
       client_(client),
       task_runner_(task_runner),
       weak_factory_(this) {
-  DCHECK(delegated_handler_.get());
-  DCHECK(client_);
-  DCHECK(task_runner_);
+  CHECK(delegated_handler_.get(), base::NotFatalUntil::M163);
+  CHECK(client_, base::NotFatalUntil::M163);
+  CHECK(task_runner_, base::NotFatalUntil::M163);
 }
 
 PushBufferPendingHandler::~PushBufferPendingHandler() = default;
@@ -58,7 +58,7 @@ CmaBackend::BufferStatus PushBufferPendingHandler::PushBuffer(
   const bool had_data = IsCallPending();
 
   if (request.has_buffer()) {
-    DCHECK(!has_push_buffer_queued_);
+    CHECK(!has_push_buffer_queued_, base::NotFatalUntil::M163);
     has_push_buffer_queued_ = true;
   }
 
@@ -77,7 +77,7 @@ bool PushBufferPendingHandler::HasBufferedData() const {
   return delegated_handler_->HasBufferedData();
 }
 
-absl::optional<AudioChannelPushBufferHandler::PushBufferRequest>
+std::optional<AudioChannelPushBufferHandler::PushBufferRequest>
 PushBufferPendingHandler::GetBufferedData() {
   // The pending data is only considered by the producer sequence, so this
   // consumer sequence call does not consider it.
@@ -103,7 +103,7 @@ void PushBufferPendingHandler::TryPushPendingData() {
       // If we removed the buffer containing data from a PushBuffer() call,
       // update the associated variable.
       if (pushed_data_.front().has_buffer()) {
-        DCHECK(has_push_buffer_queued_);
+        CHECK(has_push_buffer_queued_, base::NotFatalUntil::M163);
         has_push_buffer_queued_ = false;
       }
 

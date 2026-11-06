@@ -1,21 +1,12 @@
-// Copyright 2008 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 goog.module('goog.assertsTest');
 goog.setTestOnly();
 
-const AssertionError = goog.require('goog.asserts.AssertionError');
 const TagName = goog.require('goog.dom.TagName');
 const asserts = goog.require('goog.asserts');
 const dom = goog.require('goog.dom');
@@ -23,6 +14,7 @@ const googString = goog.require('goog.string');
 const reflect = goog.require('goog.reflect');
 const testSuite = goog.require('goog.testing.testSuite');
 const userAgent = goog.require('goog.userAgent');
+const {AssertionError} = goog.require('goog.asserts');
 
 /**
  * Test that the function throws an error with the given message.
@@ -251,22 +243,6 @@ testSuite({
     doTestMessage(
         goog.partial(asserts.assertInstanceof, {}, F),
         `Assertion failed: Expected instanceof bar but got ${object}.`);
-  },
-
-  testObjectPrototypeIsIntact() {
-    asserts.assertObjectPrototypeIsIntact();
-    const originalToString = Object.prototype.toString;
-    Object.prototype.toString = () => {};
-    try {
-      asserts.assertObjectPrototypeIsIntact();
-      Object.prototype.foo = 1;
-      doTestMessage(
-          asserts.assertObjectPrototypeIsIntact,
-          'Failure: foo should not be enumerable in Object.prototype.');
-    } finally {
-      Object.prototype.toString = originalToString;
-      delete Object.prototype.foo;
-    }
   },
 
   testAssertionError() {

@@ -29,8 +29,8 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_AUDIO_REVERB_ACCUMULATION_BUFFER_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_AUDIO_REVERB_ACCUMULATION_BUFFER_H_
 
+#include "base/containers/span.h"
 #include "third_party/blink/renderer/platform/audio/audio_array.h"
-#include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
 namespace blink {
@@ -40,16 +40,18 @@ namespace blink {
 // offsets from the read position.  The read operation will zero the memory
 // just read from the buffer, so it will be ready for accumulation the next
 // time around.
-class PLATFORM_EXPORT ReverbAccumulationBuffer {
+class ReverbAccumulationBuffer final {
   DISALLOW_NEW();
 
  public:
-  ReverbAccumulationBuffer(size_t length);
+  ReverbAccumulationBuffer() = default;
   ReverbAccumulationBuffer(const ReverbAccumulationBuffer&) = delete;
   ReverbAccumulationBuffer& operator=(const ReverbAccumulationBuffer&) = delete;
 
+  bool TryAllocate(uint32_t length);
+
   // This will read from, then clear-out numberOfFrames
-  void ReadAndClear(float* destination, size_t number_of_frames);
+  void ReadAndClear(base::span<float> destination);
 
   // Each ReverbConvolverStage will accumulate its output at the appropriate
   // delay from the read position.  We need to pass in and update readIndex
@@ -57,22 +59,15 @@ class PLATFORM_EXPORT ReverbAccumulationBuffer {
   // than the realtime thread calling ReadAndClear() and maintaining
   // m_readIndex
   // Returns the writeIndex where the accumulation took place
-  int Accumulate(float* source,
-                 size_t number_of_frames,
-                 int* read_index,
-                 size_t delay_frames);
+  uint32_t Accumulate(base::span<const float> source,
+                      uint32_t* read_index,
+                      size_t delay_frames);
 
-  size_t ReadIndex() const { return read_index_; }
-  void UpdateReadIndex(int* read_index, size_t number_of_frames) const;
-
-  size_t ReadTimeFrame() const { return read_time_frame_; }
-
-  void Reset();
+  void UpdateReadIndex(uint32_t* read_index, uint32_t number_of_frames) const;
 
  private:
   AudioFloatArray buffer_;
-  size_t read_index_;
-  size_t read_time_frame_;  // for debugging (frame on continuous timeline)
+  uint32_t read_index_ = 0;
 };
 
 }  // namespace blink

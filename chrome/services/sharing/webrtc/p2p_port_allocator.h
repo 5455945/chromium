@@ -1,4 +1,4 @@
-// Copyright (c) 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,8 @@
 
 namespace sharing {
 
-// TODO(crbug.com/1044522): reuse code from blink instead.
-class P2PPortAllocator : public cricket::BasicPortAllocator {
+// TODO(crbug.com/40115622): reuse code from blink instead.
+class P2PPortAllocator : public webrtc::BasicPortAllocator {
  public:
   struct Config {
     // Enable non-proxied UDP-based transport when set to true. When set to
@@ -32,8 +32,8 @@ class P2PPortAllocator : public cricket::BasicPortAllocator {
   };
 
   // NOTE: The network_manager passed must have had Initialize() called.
-  P2PPortAllocator(rtc::NetworkManager* network_manager,
-                   rtc::PacketSocketFactory* socket_factory,
+  P2PPortAllocator(webrtc::NetworkManager* network_manager,
+                   webrtc::PacketSocketFactory* socket_factory,
                    const Config& config);
   P2PPortAllocator(const P2PPortAllocator&) = delete;
   P2PPortAllocator& operator=(const P2PPortAllocator&) = delete;

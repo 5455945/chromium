@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -63,9 +63,8 @@ DnsUdpTracker& DnsUdpTracker::operator=(DnsUdpTracker&&) = default;
 void DnsUdpTracker::RecordQuery(uint16_t port, uint16_t query_id) {
   PurgeOldRecords();
 
-  int reused_port_count = base::checked_cast<int>(std::count_if(
-      recent_queries_.cbegin(), recent_queries_.cend(),
-      [port](const auto& recent_query) { return port == recent_query.port; }));
+  int reused_port_count = base::checked_cast<int>(
+      std::ranges::count(recent_queries_, port, &QueryData::port));
 
   if (reused_port_count >= kPortReuseThreshold && !low_entropy_) {
     low_entropy_ = true;
@@ -126,9 +125,8 @@ void DnsUdpTracker::SaveIdMismatch(uint16_t id) {
 
   base::TimeTicks now = tick_clock_->NowTicks();
   base::TimeTicks time_cutoff = now - kMaxRecognizedIdAge;
-  bool is_recognized = std::any_of(
-      recent_queries_.cbegin(), recent_queries_.cend(),
-      [&](const auto& recent_query) {
+  bool is_recognized =
+      std::ranges::any_of(recent_queries_, [&](const auto& recent_query) {
         return recent_query.query_id == id && recent_query.time >= time_cutoff;
       });
 

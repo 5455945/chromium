@@ -1,9 +1,9 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/font_pref_change_notifier.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "chrome/common/pref_names_util.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/testing_pref_service.h"
@@ -79,10 +79,11 @@ TEST(FontPrefChangeNotifier, Registrars) {
   // Only Registrar 0 should see changes now.
   service->SetString(font3, "3");
   EXPECT_EQ(3u, fonts0.size());
-  EXPECT_EQ(font3, fonts0.back());
   EXPECT_EQ(2u, fonts1.size());
   EXPECT_EQ(1u, fonts2.size());
   EXPECT_EQ(font3, fonts0.back());
+  EXPECT_EQ(font2, fonts1.back());
+  EXPECT_EQ(font1, fonts2.back());
 
   notifier.reset();
 

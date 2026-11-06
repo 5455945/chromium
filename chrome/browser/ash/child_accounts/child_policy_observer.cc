@@ -1,41 +1,40 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/child_accounts/child_policy_observer.h"
 
+#include <optional>
+
 #include "base/timer/timer.h"
-#include "chrome/browser/ash/policy/core/user_cloud_policy_manager_chromeos.h"
+#include "chrome/browser/ash/policy/core/user_cloud_policy_manager_ash.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/policy/core/common/cloud/cloud_policy_core.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace ash {
 
 ChildPolicyObserver::ChildPolicyObserver(Profile* profile) : profile_(profile) {
   policy::CloudPolicyService* cloud_policy_service =
       GetUserCloudPolicyManager()->core()->service();
-  absl::optional<bool> initial_policy_refresh_result =
+  std::optional<bool> initial_policy_refresh_result =
       cloud_policy_service->initial_policy_refresh_result();
   if (initial_policy_refresh_result) {
     OnPolicyReady(*initial_policy_refresh_result
                       ? InitialPolicyRefreshResult::kPolicyRefreshed
                       : InitialPolicyRefreshResult::kPolicyRefreshError);
   }
-  cloud_policy_service->AddObserver(this);
+  cloud_policy_service_observation_.Observe(cloud_policy_service);
 }
 
-ChildPolicyObserver::~ChildPolicyObserver() {
-  GetUserCloudPolicyManager()->core()->service()->RemoveObserver(this);
-}
+ChildPolicyObserver::~ChildPolicyObserver() = default;
 
 void ChildPolicyObserver::NotifyWhenPolicyReady(
     PolicyReadyCallback on_policy_ready,
     base::TimeDelta timeout) {
-  DCHECK(!on_policy_ready_);
+  CHECK(!on_policy_ready_, base::NotFatalUntil::M160);
 
   if (IsChildPolicyReady()) {
-    std::move(on_policy_ready).Run(profile_, refresh_result_);
+    std::move(on_policy_ready).Run(profile_.get(), refresh_result_);
     return;
   }
 
@@ -61,7 +60,8 @@ bool ChildPolicyObserver::IsChildPolicyReady() const {
 
 void ChildPolicyObserver::OnPolicyReady(
     InitialPolicyRefreshResult refresh_result) {
-  DCHECK_NE(InitialPolicyRefreshResult::kUnknown, refresh_result);
+  CHECK_NE(InitialPolicyRefreshResult::kUnknown, refresh_result,
+           base::NotFatalUntil::M160);
 
   refresh_timeout_timer_.reset();
 
@@ -69,14 +69,14 @@ void ChildPolicyObserver::OnPolicyReady(
     refresh_result_ = refresh_result;
 
   if (on_policy_ready_)
-    std::move(on_policy_ready_).Run(profile_, refresh_result_);
+    std::move(on_policy_ready_).Run(profile_.get(), refresh_result_);
 }
 
-policy::UserCloudPolicyManagerChromeOS*
+policy::UserCloudPolicyManagerAsh*
 ChildPolicyObserver::GetUserCloudPolicyManager() {
-  policy::UserCloudPolicyManagerChromeOS* user_cloud_policy_manager =
-      profile_->GetUserCloudPolicyManagerChromeOS();
-  DCHECK(user_cloud_policy_manager);
+  policy::UserCloudPolicyManagerAsh* user_cloud_policy_manager =
+      profile_->GetUserCloudPolicyManagerAsh();
+  CHECK(user_cloud_policy_manager, base::NotFatalUntil::M160);
   return user_cloud_policy_manager;
 }
 

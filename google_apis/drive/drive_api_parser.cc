@@ -1,20 +1,22 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 
 #include "google_apis/drive/drive_api_parser.h"
 
 #include <stddef.h>
 
+#include <array>
 #include <memory>
+#include <string_view>
 
-#include "base/cxx17_backports.h"
 #include "base/json/json_value_converter.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/values.h"
-#include "google_apis/drive/time_util.h"
+#include "google_apis/common/parser_util.h"
+#include "google_apis/common/time_util.h"
 
 namespace google_apis {
 
@@ -38,7 +40,7 @@ bool CreateTeamDriveResourceFromValue(
 // Converts |url_string| to |result|.  Always returns true to be used
 // for JSONValueConverter::RegisterCustomField method.
 // TODO(mukai): make it return false in case of invalid |url_string|.
-bool GetGURLFromString(base::StringPiece url_string, GURL* result) {
+bool GetGURLFromString(std::string_view url_string, GURL* result) {
   *result = GURL(url_string);
   return true;
 }
@@ -49,16 +51,15 @@ bool GetParentsFromValue(const base::Value* value,
   DCHECK(value);
   DCHECK(result);
 
-  const base::ListValue* list_value = nullptr;
-  if (!value->GetAsList(&list_value))
+  if (!value->is_list())
     return false;
 
+  const base::ListValue& list = value->GetList();
   base::JSONValueConverter<ParentReference> converter;
-  result->resize(list_value->GetSize());
-  for (size_t i = 0; i < list_value->GetSize(); ++i) {
-    const base::Value* parent_value = nullptr;
-    if (!list_value->Get(i, &parent_value) ||
-        !converter.Convert(*parent_value, &(*result)[i]))
+  result->resize(list.size());
+  for (size_t i = 0; i < list.size(); ++i) {
+    const base::Value& parent_value = list[i];
+    if (!converter.Convert(parent_value, &(*result)[i]))
       return false;
   }
 
@@ -73,20 +74,20 @@ bool GetOpenWithLinksFromDictionaryValue(
   DCHECK(value);
   DCHECK(result);
 
-  const base::DictionaryValue* dictionary_value;
-  if (!value->GetAsDictionary(&dictionary_value))
+  const auto* dict = value->GetIfDict();
+  if (!dict) {
     return false;
+  }
 
-  result->reserve(dictionary_value->DictSize());
-  for (base::DictionaryValue::Iterator iter(*dictionary_value);
-       !iter.IsAtEnd(); iter.Advance()) {
-    std::string string_value;
-    if (!iter.value().GetAsString(&string_value))
+  result->reserve(dict->size());
+  for (const auto item : *dict) {
+    const std::string* string_value = item.second.GetIfString();
+    if (!string_value)
       return false;
 
     FileResource::OpenWithLink open_with_link;
-    open_with_link.app_id = iter.key();
-    open_with_link.open_url = GURL(string_value);
+    open_with_link.app_id = item.first;
+    open_with_link.open_url = GURL(*string_value);
     result->push_back(open_with_link);
   }
 
@@ -99,12 +100,7 @@ bool GetOpenWithLinksFromDictionaryValue(
 // https://developers.google.com/drive/v2/reference/
 
 // Common
-const char kKind[] = "kind";
-const char kId[] = "id";
-const char kETag[] = "etag";
-const char kItems[] = "items";
 const char kLargestChangeId[] = "largestChangeId";
-const char kName[] = "name";
 const char kNextPageToken[] = "nextPageToken";
 
 // About Resource
@@ -209,22 +205,10 @@ struct ChangeTypeMap {
   const char* type_name;
 };
 
-constexpr ChangeTypeMap kChangeTypeMap[] = {
-  { ChangeResource::FILE, "file" },
-  { ChangeResource::TEAM_DRIVE, "teamDrive" },
-};
-
-// Checks if the JSON is expected kind.  In Drive API, JSON data structure has
-// |kind| property which denotes the type of the structure (e.g. "drive#file").
-bool IsResourceKindExpected(const base::Value& value,
-                            const std::string& expected_kind) {
-  const base::DictionaryValue* as_dict = nullptr;
-  std::string kind;
-  return value.GetAsDictionary(&as_dict) &&
-      as_dict->HasKey(kKind) &&
-      as_dict->GetString(kKind, &kind) &&
-      kind == expected_kind;
-}
+constexpr auto kChangeTypeMap = std::to_array<ChangeTypeMap>({
+    {ChangeResource::FILE, "file"},
+    {ChangeResource::TEAM_DRIVE, "teamDrive"},
+});
 
 }  // namespace
 
@@ -290,8 +274,7 @@ TeamDriveCapabilities::TeamDriveCapabilities()
       can_remove_children_(false),
       can_rename_(false),
       can_rename_team_drive_(false),
-      can_share_(false) {
-}
+      can_share_(false) {}
 
 TeamDriveCapabilities::TeamDriveCapabilities(const TeamDriveCapabilities& src) =
     default;
@@ -347,8 +330,9 @@ std::unique_ptr<TeamDriveResource> TeamDriveResource::CreateFrom(
 // static
 void TeamDriveResource::RegisterJSONConverter(
     base::JSONValueConverter<TeamDriveResource>* converter) {
-  converter->RegisterStringField(kId, &TeamDriveResource::id_);
-  converter->RegisterStringField(kName, &TeamDriveResource::name_);
+  converter->RegisterStringField(kApiResponseIdKey, &TeamDriveResource::id_);
+  converter->RegisterStringField(kApiResponseNameKey,
+                                 &TeamDriveResource::name_);
   converter->RegisterNestedField(kCapabilities,
                                  &TeamDriveResource::capabilities_);
 }
@@ -374,7 +358,7 @@ void TeamDriveList::RegisterJSONConverter(
     base::JSONValueConverter<TeamDriveList>* converter) {
   converter->RegisterStringField(kNextPageToken,
                                  &TeamDriveList::next_page_token_);
-  converter->RegisterRepeatedMessage<TeamDriveResource>(kItems,
+  converter->RegisterRepeatedMessage<TeamDriveResource>(kApiResponseItemsKey,
                                                         &TeamDriveList::items_);
 }
 
@@ -413,7 +397,7 @@ ParentReference::~ParentReference() {}
 // static
 void ParentReference::RegisterJSONConverter(
     base::JSONValueConverter<ParentReference>* converter) {
-  converter->RegisterStringField(kId, &ParentReference::file_id_);
+  converter->RegisterStringField(kApiResponseIdKey, &ParentReference::file_id_);
 }
 
 // static
@@ -516,8 +500,8 @@ FileResource::~FileResource() {}
 // static
 void FileResource::RegisterJSONConverter(
     base::JSONValueConverter<FileResource>* converter) {
-  converter->RegisterStringField(kId, &FileResource::file_id_);
-  converter->RegisterStringField(kETag, &FileResource::etag_);
+  converter->RegisterStringField(kApiResponseIdKey, &FileResource::file_id_);
+  converter->RegisterStringField(kApiResponseETagKey, &FileResource::etag_);
   converter->RegisterStringField(kTitle, &FileResource::title_);
   converter->RegisterStringField(kMimeType, &FileResource::mime_type_);
   converter->RegisterNestedField(kLabels, &FileResource::labels_);
@@ -525,41 +509,30 @@ void FileResource::RegisterJSONConverter(
                                  &FileResource::image_media_metadata_);
   converter->RegisterNestedField(kCapabilities, &FileResource::capabilities_);
   converter->RegisterCustomField<base::Time>(
-      kCreatedDate,
-      &FileResource::created_date_,
-      &util::GetTimeFromString);
+      kCreatedDate, &FileResource::created_date_, &util::GetTimeFromString);
   converter->RegisterCustomField<base::Time>(
-      kModifiedDate,
-      &FileResource::modified_date_,
-      &util::GetTimeFromString);
+      kModifiedDate, &FileResource::modified_date_, &util::GetTimeFromString);
   converter->RegisterCustomField<base::Time>(
       kModifiedByMeDate, &FileResource::modified_by_me_date_,
       &util::GetTimeFromString);
   converter->RegisterCustomField<base::Time>(
-      kLastViewedByMeDate,
-      &FileResource::last_viewed_by_me_date_,
+      kLastViewedByMeDate, &FileResource::last_viewed_by_me_date_,
       &util::GetTimeFromString);
   converter->RegisterCustomField<base::Time>(
-      kSharedWithMeDate,
-      &FileResource::shared_with_me_date_,
+      kSharedWithMeDate, &FileResource::shared_with_me_date_,
       &util::GetTimeFromString);
   converter->RegisterBoolField(kShared, &FileResource::shared_);
   converter->RegisterStringField(kMd5Checksum, &FileResource::md5_checksum_);
   converter->RegisterCustomField<int64_t>(kFileSize, &FileResource::file_size_,
                                           &base::StringToInt64);
-  converter->RegisterCustomField<GURL>(kAlternateLink,
-                                       &FileResource::alternate_link_,
+  converter->RegisterCustomField<GURL>(
+      kAlternateLink, &FileResource::alternate_link_, GetGURLFromString);
+  converter->RegisterCustomField<GURL>(kShareLink, &FileResource::share_link_,
                                        GetGURLFromString);
-  converter->RegisterCustomField<GURL>(kShareLink,
-                                       &FileResource::share_link_,
-                                       GetGURLFromString);
-  converter->RegisterCustomValueField<std::vector<ParentReference> >(
-      kParents,
-      &FileResource::parents_,
-      GetParentsFromValue);
-  converter->RegisterCustomValueField<std::vector<OpenWithLink> >(
-      kOpenWithLinks,
-      &FileResource::open_with_links_,
+  converter->RegisterCustomValueField<std::vector<ParentReference>>(
+      kParents, &FileResource::parents_, GetParentsFromValue);
+  converter->RegisterCustomValueField<std::vector<OpenWithLink>>(
+      kOpenWithLinks, &FileResource::open_with_links_,
       GetOpenWithLinksFromDictionaryValue);
   converter->RegisterStringField(kTeamDriveId, &FileResource::team_drive_id_);
 }
@@ -604,10 +577,9 @@ FileList::~FileList() {}
 // static
 void FileList::RegisterJSONConverter(
     base::JSONValueConverter<FileList>* converter) {
-  converter->RegisterCustomField<GURL>(kNextLink,
-                                       &FileList::next_link_,
+  converter->RegisterCustomField<GURL>(kNextLink, &FileList::next_link_,
                                        GetGURLFromString);
-  converter->RegisterRepeatedMessage<FileResource>(kItems,
+  converter->RegisterRepeatedMessage<FileResource>(kApiResponseItemsKey,
                                                    &FileList::items_);
 }
 
@@ -646,8 +618,8 @@ ChangeResource::~ChangeResource() {}
 // static
 void ChangeResource::RegisterJSONConverter(
     base::JSONValueConverter<ChangeResource>* converter) {
-  converter->RegisterCustomField<int64_t>(kId, &ChangeResource::change_id_,
-                                          &base::StringToInt64);
+  converter->RegisterCustomField<int64_t>(
+      kApiResponseIdKey, &ChangeResource::change_id_, &base::StringToInt64);
   converter->RegisterCustomField<ChangeType>(kType, &ChangeResource::type_,
                                              &ChangeResource::GetType);
   converter->RegisterStringField(kFileId, &ChangeResource::file_id_);
@@ -683,9 +655,9 @@ bool ChangeResource::Parse(const base::Value& value) {
 }
 
 // static
-bool ChangeResource::GetType(base::StringPiece type_name,
+bool ChangeResource::GetType(std::string_view type_name,
                              ChangeResource::ChangeType* result) {
-  for (size_t i = 0; i < base::size(kChangeTypeMap); i++) {
+  for (size_t i = 0; i < std::size(kChangeTypeMap); i++) {
     if (type_name == kChangeTypeMap[i].type_name) {
       *result = kChangeTypeMap[i].type;
       return true;
@@ -705,14 +677,13 @@ ChangeList::~ChangeList() = default;
 // static
 void ChangeList::RegisterJSONConverter(
     base::JSONValueConverter<ChangeList>* converter) {
-  converter->RegisterCustomField<GURL>(kNextLink,
-                                       &ChangeList::next_link_,
+  converter->RegisterCustomField<GURL>(kNextLink, &ChangeList::next_link_,
                                        GetGURLFromString);
   converter->RegisterCustomField<int64_t>(
       kLargestChangeId, &ChangeList::largest_change_id_, &base::StringToInt64);
   converter->RegisterStringField(kNewStartPageToken,
                                  &ChangeList::new_start_page_token_);
-  converter->RegisterRepeatedMessage<ChangeResource>(kItems,
+  converter->RegisterRepeatedMessage<ChangeResource>(kApiResponseItemsKey,
                                                      &ChangeList::items_);
 }
 
@@ -740,13 +711,10 @@ bool ChangeList::Parse(const base::Value& value) {
   return true;
 }
 
-
 ////////////////////////////////////////////////////////////////////////////////
 // FileLabels implementation
 
-FileLabels::FileLabels()
-    : trashed_(false),
-      starred_(false) {}
+FileLabels::FileLabels() : trashed_(false), starred_(false) {}
 
 FileLabels::~FileLabels() {}
 
@@ -780,9 +748,7 @@ bool FileLabels::Parse(const base::Value& value) {
 // ImageMediaMetadata implementation
 
 ImageMediaMetadata::ImageMediaMetadata()
-    : width_(-1),
-      height_(-1),
-      rotation_(-1) {}
+    : width_(-1), height_(-1), rotation_(-1) {}
 
 ImageMediaMetadata::~ImageMediaMetadata() {}
 

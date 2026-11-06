@@ -1,12 +1,13 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <array>
 #include <memory>
 
 #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
 #include "chrome/browser/policy/policy_test_utils.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/permissions/permission_request_manager.h"
 #include "components/permissions/test/mock_permission_prompt_factory.h"
@@ -20,6 +21,7 @@
 #include "content/public/test/browser_test.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
 
 using testing::_;
 
@@ -29,19 +31,13 @@ class MediaStreamDevicesControllerBrowserTest
     : public PolicyTest,
       public testing::WithParamInterface<bool> {
  public:
-  MediaStreamDevicesControllerBrowserTest()
-      : request_url_allowed_via_whitelist_(false) {
-    policy_value_ = GetParam();
-  }
-  virtual ~MediaStreamDevicesControllerBrowserTest() {}
-
   void SetUpOnMainThread() override {
     PolicyTest::SetUpOnMainThread();
 
     ASSERT_TRUE(embedded_test_server()->Start());
     request_url_ = embedded_test_server()->GetURL("/simple.html");
-    request_pattern_ = request_url_.GetOrigin().spec();
-    ui_test_utils::NavigateToURL(browser(), request_url_);
+    request_pattern_ = request_url_.DeprecatedGetOriginAsURL().spec();
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), request_url_));
 
     // Testing both the new (PermissionManager) and old code-paths is not simple
     // since we are already using WithParamInterface. We only test whichever one
@@ -64,64 +60,82 @@ class MediaStreamDevicesControllerBrowserTest
     content::WebContents* web_contents =
         browser()->tab_strip_model()->GetActiveWebContents();
     EXPECT_EQ(request_url_,
-              web_contents->GetMainFrame()->GetLastCommittedURL());
-    int render_process_id = web_contents->GetMainFrame()->GetProcess()->GetID();
-    int render_frame_id = web_contents->GetMainFrame()->GetRoutingID();
+              web_contents->GetPrimaryMainFrame()->GetLastCommittedURL());
+    int render_process_id =
+        web_contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID();
+    int render_frame_id = web_contents->GetPrimaryMainFrame()->GetRoutingID();
     return content::MediaStreamRequest(
-        render_process_id, render_frame_id, 0, request_url_.GetOrigin(), false,
-        blink::MEDIA_DEVICE_ACCESS, std::string(), std::string(),
-        audio_request_type, video_request_type, /*disable_local_echo=*/false,
-        /*request_pan_tilt_zoom_permission=*/false);
+        render_process_id, render_frame_id, 0,
+        url::Origin::Create(request_url_), false, blink::MEDIA_GENERATE_STREAM,
+        /*requested_audio_device_ids=*/{}, /*requested_video_device_ids=*/{},
+        audio_request_type, video_request_type,
+        /*disable_local_echo=*/false,
+        /*request_pan_tilt_zoom_permission=*/false,
+        /*captured_surface_control_active=*/false);
   }
 
   // Configure a given policy map. The |policy_name| is the name of either the
   // audio or video capture allow policy and must never be nullptr.
-  // |whitelist_policy| and |allow_rule| are optional.  If nullptr, no whitelist
-  // policy is set.  If non-nullptr, the whitelist policy is set to contain
+  // |allowlist_policy| and |allow_rule| are optional.  If nullptr, no allowlist
+  // policy is set.  If non-nullptr, the allowlist policy is set to contain
   // either the |allow_rule| (if non-nullptr) or an "allow all" wildcard.
   void ConfigurePolicyMap(PolicyMap* policies,
                           const char* policy_name,
-                          const char* whitelist_policy,
+                          const char* allowlist_policy,
                           const char* allow_rule) {
     policies->Set(policy_name, POLICY_LEVEL_MANDATORY, POLICY_SCOPE_USER,
                   POLICY_SOURCE_CLOUD, base::Value(policy_value_), nullptr);
 
-    if (whitelist_policy) {
-      // Add an entry to the whitelist that allows the specified URL regardless
+    if (allowlist_policy) {
+      // Add an entry to the allowlist that allows the specified URL regardless
       // of the setting of kAudioCapturedAllowed.
-      base::Value list(base::Value::Type::LIST);
+      base::ListValue list;
       if (allow_rule) {
         list.Append(allow_rule);
-        request_url_allowed_via_whitelist_ = true;
+        request_url_allowed_via_allowlist_ = true;
       } else {
         list.Append(ContentSettingsPattern::Wildcard().ToString());
-        // We should ignore all wildcard entries in the whitelist, so even
+        // We should ignore all wildcard entries in the allowlist, so even
         // though we've added an entry, it should be ignored and our expectation
-        // is that the request has not been allowed via the whitelist.
-        request_url_allowed_via_whitelist_ = false;
+        // is that the request has not been allowed via the allowlist.
+        request_url_allowed_via_allowlist_ = false;
       }
-      policies->Set(whitelist_policy, POLICY_LEVEL_MANDATORY, POLICY_SCOPE_USER,
-                    POLICY_SOURCE_CLOUD, std::move(list), nullptr);
+      policies->Set(allowlist_policy, POLICY_LEVEL_MANDATORY, POLICY_SCOPE_USER,
+                    POLICY_SOURCE_CLOUD, base::Value(std::move(list)), nullptr);
     }
   }
 
-  void Accept(const blink::MediaStreamDevices& devices,
+  void Accept(const blink::mojom::StreamDevicesSet& stream_devices_set,
               blink::mojom::MediaStreamRequestResult result,
               bool blocked_by_permissions_policy,
               ContentSetting audio_setting,
               ContentSetting video_setting) {
-    if (policy_value_ || request_url_allowed_via_whitelist_) {
-      ASSERT_EQ(1U, devices.size());
-      ASSERT_EQ("fake_dev", devices[0].id);
+    if (result == blink::mojom::MediaStreamRequestResult::OK) {
+      ASSERT_EQ(stream_devices_set.stream_devices.size(), 1u);
+      const blink::mojom::StreamDevices& devices =
+          *stream_devices_set.stream_devices[0];
+      if (policy_value_ || request_url_allowed_via_allowlist_) {
+        ASSERT_NE(devices.audio_device.has_value(),
+                  devices.video_device.has_value());
+        if (devices.audio_device.has_value()) {
+          ASSERT_EQ("fake_dev", devices.audio_device.value().id);
+        } else if (devices.video_device.has_value()) {
+          ASSERT_EQ("fake_dev", devices.video_device.value().id);
+        }
+      } else {
+        ASSERT_FALSE(devices.audio_device.has_value());
+        ASSERT_FALSE(devices.video_device.has_value());
+      }
     } else {
-      ASSERT_EQ(0U, devices.size());
+      ASSERT_EQ(0u, stream_devices_set.stream_devices.size());
     }
   }
 
-  void FinishAudioTest() {
+  void FinishAudioTest(std::string requested_device_id) {
     content::MediaStreamRequest request(
         CreateRequest(blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE,
                       blink::mojom::MediaStreamType::NO_SERVICE));
+    request.requested_audio_device_ids = {requested_device_id};
     // TODO(raymes): Test MEDIA_DEVICE_OPEN (Pepper) which grants both webcam
     // and microphone permissions at the same time.
     webrtc::MediaStreamDevicesController::RequestPermissions(
@@ -131,10 +145,11 @@ class MediaStreamDevicesControllerBrowserTest
     quit_closure_.Run();
   }
 
-  void FinishVideoTest() {
+  void FinishVideoTest(std::string requested_device_id) {
     content::MediaStreamRequest request(
         CreateRequest(blink::mojom::MediaStreamType::NO_SERVICE,
                       blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE));
+    request.requested_video_device_ids = {requested_device_id};
     // TODO(raymes): Test MEDIA_DEVICE_OPEN (Pepper) which grants both webcam
     // and microphone permissions at the same time.
     webrtc::MediaStreamDevicesController::RequestPermissions(
@@ -145,8 +160,8 @@ class MediaStreamDevicesControllerBrowserTest
   }
 
   std::unique_ptr<permissions::MockPermissionPromptFactory> prompt_factory_;
-  bool policy_value_;
-  bool request_url_allowed_via_whitelist_;
+  bool policy_value_ = GetParam();
+  bool request_url_allowed_via_allowlist_ = false;
   GURL request_url_;
   std::string request_pattern_;
   base::RepeatingClosure quit_closure_;
@@ -171,7 +186,7 @@ IN_PROC_BROWSER_TEST_P(MediaStreamDevicesControllerBrowserTest,
           base::Unretained(MediaCaptureDevicesDispatcher::GetInstance()),
           audio_devices),
       base::BindOnce(&MediaStreamDevicesControllerBrowserTest::FinishAudioTest,
-                     base::Unretained(this)));
+                     base::Unretained(this), fake_audio_device.id));
 
   base::RunLoop loop;
   quit_closure_ = loop.QuitWhenIdleClosure();
@@ -186,15 +201,15 @@ IN_PROC_BROWSER_TEST_P(MediaStreamDevicesControllerBrowserTest,
       "Fake Audio Device");
   audio_devices.push_back(fake_audio_device);
 
-  const char* allow_pattern[] = {
+  auto allow_pattern = std::to_array<const char*>({
       request_pattern_.c_str(),
-      // This will set an allow-all policy whitelist.  Since we do not allow
-      // setting an allow-all entry in the whitelist, this entry should be
+      // This will set an allow-all policy allowlist.  Since we do not allow
+      // setting an allow-all entry in the allowlist, this entry should be
       // ignored and therefore the request should be denied.
       nullptr,
-  };
+  });
 
-  for (size_t i = 0; i < base::size(allow_pattern); ++i) {
+  for (size_t i = 0; i < std::size(allow_pattern); ++i) {
     PolicyMap policies;
     ConfigurePolicyMap(&policies, key::kAudioCaptureAllowed,
                        key::kAudioCaptureAllowedUrls, allow_pattern[i]);
@@ -208,7 +223,7 @@ IN_PROC_BROWSER_TEST_P(MediaStreamDevicesControllerBrowserTest,
             audio_devices),
         base::BindOnce(
             &MediaStreamDevicesControllerBrowserTest::FinishAudioTest,
-            base::Unretained(this)));
+            base::Unretained(this), fake_audio_device.id));
 
     base::RunLoop loop;
     quit_closure_ = loop.QuitWhenIdleClosure();
@@ -235,7 +250,7 @@ IN_PROC_BROWSER_TEST_P(MediaStreamDevicesControllerBrowserTest,
           base::Unretained(MediaCaptureDevicesDispatcher::GetInstance()),
           video_devices),
       base::BindOnce(&MediaStreamDevicesControllerBrowserTest::FinishVideoTest,
-                     base::Unretained(this)));
+                     base::Unretained(this), std::move(fake_video_device.id)));
 
   base::RunLoop loop;
   quit_closure_ = loop.QuitWhenIdleClosure();
@@ -250,15 +265,15 @@ IN_PROC_BROWSER_TEST_P(MediaStreamDevicesControllerBrowserTest,
       "Fake Video Device");
   video_devices.push_back(fake_video_device);
 
-  const char* allow_pattern[] = {
+  auto allow_pattern = std::to_array<const char*>({
       request_pattern_.c_str(),
-      // This will set an allow-all policy whitelist.  Since we do not allow
-      // setting an allow-all entry in the whitelist, this entry should be
+      // This will set an allow-all policy allowlist.  Since we do not allow
+      // setting an allow-all entry in the allowlist, this entry should be
       // ignored and therefore the request should be denied.
       nullptr,
-  };
+  });
 
-  for (size_t i = 0; i < base::size(allow_pattern); ++i) {
+  for (size_t i = 0; i < std::size(allow_pattern); ++i) {
     PolicyMap policies;
     ConfigurePolicyMap(&policies, key::kVideoCaptureAllowed,
                        key::kVideoCaptureAllowedUrls, allow_pattern[i]);
@@ -272,7 +287,7 @@ IN_PROC_BROWSER_TEST_P(MediaStreamDevicesControllerBrowserTest,
             video_devices),
         base::BindOnce(
             &MediaStreamDevicesControllerBrowserTest::FinishVideoTest,
-            base::Unretained(this)));
+            base::Unretained(this), fake_video_device.id));
 
     base::RunLoop loop;
     quit_closure_ = loop.QuitWhenIdleClosure();

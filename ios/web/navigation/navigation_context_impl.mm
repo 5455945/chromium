@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,11 @@
 
 #import <Foundation/Foundation.h>
 
-#include "base/memory/ptr_util.h"
-#include "ios/web/common/features.h"
+#import "base/memory/ptr_util.h"
+#import "ios/web/common/features.h"
 #import "ios/web/navigation/navigation_item_impl.h"
-#include "net/http/http_response_headers.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "ios/web/public/web_state.h"
+#import "net/http/http_response_headers.h"
 
 namespace web {
 
@@ -48,14 +45,14 @@ NSString* NavigationContextImpl::GetDescription() const {
       stringWithFormat:
           @"web::WebState: %ld, url: %s, "
            "is_same_document: %@, error: %@ is_loading_error_page: %@",
-          reinterpret_cast<long>(web_state_), url_.spec().c_str(),
+          reinterpret_cast<long>(web_state_.get()), url_.spec().c_str(),
           is_same_document_ ? @"true" : @"false", error_,
           is_loading_error_page_ ? @"true" : @"false"];
 }
 #endif  // NDEBUG
 
 WebState* NavigationContextImpl::GetWebState() {
-  return web_state_;
+  return web_state_.get();
 }
 
 int64_t NavigationContextImpl::GetNavigationId() const {
@@ -131,6 +128,14 @@ void NavigationContextImpl::SetResponseHeaders(
   response_headers_ = response_headers;
 }
 
+HttpsUpgradeType NavigationContextImpl::GetFailedHttpsUpgradeType() const {
+  return failed_https_upgrade_type_;
+}
+
+void NavigationContextImpl::SetFailedHttpsUpgradeType(HttpsUpgradeType type) {
+  failed_https_upgrade_type_ = type;
+}
+
 int NavigationContextImpl::GetNavigationItemUniqueID() const {
   return navigation_item_unique_id_;
 }
@@ -164,16 +169,6 @@ void NavigationContextImpl::SetLoadingHtmlString(bool is_loading_html_string) {
   is_loading_html_string_ = is_loading_html_string;
 }
 
-bool NavigationContextImpl::IsPlaceholderNavigation() const {
-  DCHECK(!base::FeatureList::IsEnabled(web::features::kUseJSForErrorPage));
-  return is_placeholder_navigation_;
-}
-
-void NavigationContextImpl::SetPlaceholderNavigation(bool flag) {
-  DCHECK(!base::FeatureList::IsEnabled(web::features::kUseJSForErrorPage));
-  is_placeholder_navigation_ = flag;
-}
-
 void NavigationContextImpl::SetMimeType(NSString* mime_type) {
   mime_type_ = mime_type;
 }
@@ -193,7 +188,7 @@ std::unique_ptr<NavigationItemImpl> NavigationContextImpl::ReleaseItem() {
 void NavigationContextImpl::SetItem(std::unique_ptr<NavigationItemImpl> item) {
   DCHECK(!item_);
   if (item) {
-    // |item| can be null for same-docuemnt navigations and reloads, where
+    // `item` can be null for same-docuemnt navigations and reloads, where
     // navigation item is committed and should not be stored in
     // NavigationContext.
     DCHECK_EQ(GetNavigationItemUniqueID(), item->GetUniqueID());
@@ -205,12 +200,16 @@ base::TimeDelta NavigationContextImpl::GetElapsedTimeSinceCreation() const {
   return elapsed_timer_.Elapsed();
 }
 
+base::WeakPtr<NavigationContextImpl> NavigationContextImpl::GetWeakPtr() {
+  return weak_factory_.GetWeakPtr();
+}
+
 NavigationContextImpl::NavigationContextImpl(WebState* web_state,
                                              const GURL& url,
                                              bool has_user_gesture,
                                              ui::PageTransition page_transition,
                                              bool is_renderer_initiated)
-    : web_state_(web_state),
+    : web_state_(web_state ? web_state->GetWeakPtr() : nullptr),
       navigation_id_(CreateUniqueContextId()),
       url_(url),
       has_user_gesture_(has_user_gesture),

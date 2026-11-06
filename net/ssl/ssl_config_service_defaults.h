@@ -1,12 +1,15 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_SSL_SSL_CONFIG_SERVICE_DEFAULTS_H_
 #define NET_SSL_SSL_CONFIG_SERVICE_DEFAULTS_H_
 
-#include "base/macros.h"
+#include <memory>
+#include <string_view>
+
 #include "net/base/net_export.h"
+#include "net/ssl/ech_mode_getter.h"
 #include "net/ssl/ssl_config_service.h"
 
 namespace net {
@@ -16,20 +19,31 @@ namespace net {
 // implementation of SSLConfigService yet.
 class NET_EXPORT SSLConfigServiceDefaults : public SSLConfigService {
  public:
-  SSLConfigServiceDefaults();
+  // If `ech_mode_getter` is provided, it will be used to query the ECH policy.
+  // Otherwise, GetEchMode will default to kOpportunistic.
+  explicit SSLConfigServiceDefaults(
+      std::unique_ptr<EchModeGetter> ech_mode_getter = nullptr);
+
+  SSLConfigServiceDefaults(const SSLConfigServiceDefaults&) = delete;
+  SSLConfigServiceDefaults& operator=(const SSLConfigServiceDefaults&) = delete;
+
   ~SSLConfigServiceDefaults() override;
 
   // Returns the default SSL config settings.
   SSLContextConfig GetSSLContextConfig() override;
 
+  // If `ech_mode_getter_` is provided, EchMode is queried from it;
+  // otherwise, the default `kOpportunistic` is returned.
+  EchMode GetEchMode(std::string_view hostname) const override;
+
   bool CanShareConnectionWithClientCerts(
-      const std::string& hostname) const override;
+      std::string_view hostname) const override;
 
  private:
   // Default value of prefs.
   const SSLContextConfig default_config_;
 
-  DISALLOW_COPY_AND_ASSIGN(SSLConfigServiceDefaults);
+  std::unique_ptr<EchModeGetter> ech_mode_getter_;
 };
 
 }  // namespace net

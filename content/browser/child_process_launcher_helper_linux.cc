@@ -1,23 +1,27 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "content/browser/child_process_launcher_helper.h"
+
+#include "base/command_line.h"
 #include "base/path_service.h"
 #include "base/posix/global_descriptors.h"
+#include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "content/browser/child_process_launcher.h"
-#include "content/browser/child_process_launcher_helper.h"
 #include "content/browser/child_process_launcher_helper_posix.h"
 #include "content/browser/sandbox_host_linux.h"
+#include "content/browser/sandboxed_process_launcher_delegate.h"
 #include "content/browser/zygote_host/zygote_host_impl_linux.h"
 #include "content/common/zygote/zygote_communication_linux.h"
 #include "content/public/browser/child_process_launcher_utils.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_constants.h"
+#include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/result_codes.h"
-#include "content/public/common/sandboxed_process_launcher_delegate.h"
 #include "content/public/common/zygote/sandbox_support_linux.h"
 #include "content/public/common/zygote/zygote_handle.h"
 #include "sandbox/policy/linux/sandbox_linux.h"
@@ -25,55 +29,65 @@
 namespace content {
 namespace internal {
 
-absl::optional<mojo::NamedPlatformChannel>
-ChildProcessLauncherHelper::CreateNamedPlatformChannelOnClientThread() {
-  DCHECK(client_task_runner_->RunsTasksInCurrentSequence());
-  return absl::nullopt;
+std::optional<mojo::NamedPlatformChannel>
+ChildProcessLauncherHelper::CreateNamedPlatformChannelOnLauncherThread() {
+  CHECK(CurrentlyOnProcessLauncherTaskRunner(), base::NotFatalUntil::M159);
+  return std::nullopt;
 }
 
 void ChildProcessLauncherHelper::BeforeLaunchOnClientThread() {
-  DCHECK(client_task_runner_->RunsTasksInCurrentSequence());
+  CHECK(client_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M159);
 }
 
 std::unique_ptr<FileMappedForLaunch>
 ChildProcessLauncherHelper::GetFilesToMap() {
-  DCHECK(CurrentlyOnProcessLauncherTaskRunner());
+  CHECK(CurrentlyOnProcessLauncherTaskRunner(), base::NotFatalUntil::M159);
   return CreateDefaultPosixFilesToMap(
-      child_process_id(), mojo_channel_->remote_endpoint(), files_to_preload_,
-      GetProcessType(), command_line());
+      child_process_id(), mojo_channel_->remote_endpoint(),
+      file_data_->files_to_preload, GetProcessType(), command_line());
+}
+
+bool ChildProcessLauncherHelper::IsUsingLaunchOptions() {
+  return !GetZygoteForLaunch();
 }
 
 bool ChildProcessLauncherHelper::BeforeLaunchOnLauncherThread(
     PosixFileDescriptorInfo& files_to_register,
     base::LaunchOptions* options) {
-  // Convert FD mapping to FileHandleMappingVector
-  options->fds_to_remap = files_to_register.GetMappingWithIDAdjustment(
-      base::GlobalDescriptors::kBaseDescriptor);
+  if (options) {
+    CHECK(!GetZygoteForLaunch(), base::NotFatalUntil::M159);
+    // Convert FD mapping to FileHandleMappingVector
+    options->fds_to_remap = files_to_register.GetMappingWithIDAdjustment(
+        base::GlobalDescriptors::kBaseDescriptor);
 
-  if (GetProcessType() == switches::kRendererProcess) {
-    const int sandbox_fd = SandboxHostLinux::GetInstance()->GetChildSocket();
-    options->fds_to_remap.push_back(std::make_pair(sandbox_fd, GetSandboxFD()));
+    if (GetProcessType() == switches::kRendererProcess) {
+      const int sandbox_fd = SandboxHostLinux::GetInstance()->GetChildSocket();
+      options->fds_to_remap.emplace_back(sandbox_fd, GetSandboxFD());
+    }
+
+    options->environment = delegate_->GetEnvironment();
+  } else {
+    CHECK(GetZygoteForLaunch(), base::NotFatalUntil::M159);
+    // Environment variables could be supported in the future, but are not
+    // currently supported when launching with the zygote.
+    CHECK(delegate_->GetEnvironment().empty(), base::NotFatalUntil::M159);
   }
-
-  options->environment = delegate_->GetEnvironment();
 
   return true;
 }
 
 ChildProcessLauncherHelper::Process
 ChildProcessLauncherHelper::LaunchProcessOnLauncherThread(
-    const base::LaunchOptions& options,
+    const base::LaunchOptions* options,
     std::unique_ptr<FileMappedForLaunch> files_to_register,
     bool* is_synchronous_launch,
     int* launch_result) {
   *is_synchronous_launch = true;
-
-  ZygoteHandle zygote_handle =
-      base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kNoZygote)
-          ? nullptr
-          : delegate_->GetZygote();
+  Process process;
+  ZygoteCommunication* zygote_handle = GetZygoteForLaunch();
   if (zygote_handle) {
-    // TODO(crbug.com/569191): If chrome supported multiple zygotes they could
+    // TODO(crbug.com/40448989): If chrome supported multiple zygotes they could
     // be created lazily here, or in the delegate GetZygote() implementations.
     // Additionally, the delegate could provide a UseGenericZygote() method.
     base::ProcessHandle handle = zygote_handle->ForkRequest(
@@ -81,7 +95,7 @@ ChildProcessLauncherHelper::LaunchProcessOnLauncherThread(
         GetProcessType());
     *launch_result = LAUNCH_RESULT_SUCCESS;
 
-#if !defined(OS_OPENBSD)
+#if !BUILDFLAG(IS_OPENBSD)
     if (handle) {
       // It could be a renderer process or an utility process.
       int oom_score = content::kMiscOomScore;
@@ -92,22 +106,30 @@ ChildProcessLauncherHelper::LaunchProcessOnLauncherThread(
     }
 #endif
 
-    Process process;
     process.process = base::Process(handle);
     process.zygote = zygote_handle;
-    return process;
+  } else {
+    process.process = base::LaunchProcess(*command_line(), *options);
+    *launch_result = process.process.IsValid() ? LAUNCH_RESULT_SUCCESS
+                                               : LAUNCH_RESULT_FAILURE;
   }
 
-  Process process;
-  process.process = base::LaunchProcess(*command_line(), options);
-  *launch_result = process.process.IsValid() ? LAUNCH_RESULT_SUCCESS
-                                             : LAUNCH_RESULT_FAILURE;
+#if BUILDFLAG(IS_CHROMEOS)
+  process_id_ = process.process.Pid();
+  if (GetProcessType() == switches::kRendererProcess ||
+      base::FeatureList::IsEnabled(features::kSchedQoSOnResourcedForChrome)) {
+    process.process.InitializePriority();
+  }
+#endif
+
   return process;
 }
 
 void ChildProcessLauncherHelper::AfterLaunchOnLauncherThread(
     const ChildProcessLauncherHelper::Process& process,
-    const base::LaunchOptions& options) {
+    const base::LaunchOptions* options) {
+  // Reset any FDs still held open.
+  file_data_.reset();
 }
 
 ChildProcessTerminationInfo ChildProcessLauncherHelper::GetTerminationInfo(
@@ -130,7 +152,7 @@ ChildProcessTerminationInfo ChildProcessLauncherHelper::GetTerminationInfo(
 // static
 bool ChildProcessLauncherHelper::TerminateProcess(const base::Process& process,
                                                   int exit_code) {
-  // TODO(https://crbug.com/818244): Determine whether we should also call
+  // TODO(crbug.com/40565504): Determine whether we should also call
   // EnsureProcessTerminated() to make sure of process-exit, and reap it.
   return process.Terminate(exit_code, false);
 }
@@ -138,7 +160,9 @@ bool ChildProcessLauncherHelper::TerminateProcess(const base::Process& process,
 // static
 void ChildProcessLauncherHelper::ForceNormalProcessTerminationSync(
     ChildProcessLauncherHelper::Process process) {
-  DCHECK(CurrentlyOnProcessLauncherTaskRunner());
+  TRACE_EVENT0("chromeos",
+               "ChildProcessLauncherHelper::ForceNormalProcessTerminationSync");
+  CHECK(CurrentlyOnProcessLauncherTaskRunner(), base::NotFatalUntil::M159);
   process.process.Terminate(RESULT_CODE_NORMAL_EXIT, false);
   // On POSIX, we must additionally reap the child.
   if (process.zygote) {
@@ -150,20 +174,27 @@ void ChildProcessLauncherHelper::ForceNormalProcessTerminationSync(
   }
 }
 
-void ChildProcessLauncherHelper::SetProcessPriorityOnLauncherThread(
-    base::Process process,
-    const ChildProcessLauncherPriority& priority) {
-  DCHECK(CurrentlyOnProcessLauncherTaskRunner());
-  if (process.CanBackgroundProcesses())
-    process.SetProcessBackgrounded(priority.is_background());
+// static
+void ChildProcessLauncherHelper::ApplyProcessPriorityOnLauncherThread(
+    base::Process& process,
+    base::Process::Priority priority) {
+  CHECK(CurrentlyOnProcessLauncherTaskRunner(), base::NotFatalUntil::M159);
+  if (process.CanSetPriority()) {
+    process.SetPriority(priority);
+  }
 }
 
-// static
+ZygoteCommunication* ChildProcessLauncherHelper::GetZygoteForLaunch() {
+  return base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kNoZygote)
+             ? nullptr
+             : delegate_->GetZygote();
+}
+
 base::File OpenFileToShare(const base::FilePath& path,
                            base::MemoryMappedFile::Region* region) {
   base::FilePath exe_dir;
   bool result = base::PathService::Get(base::BasePathKey::DIR_EXE, &exe_dir);
-  DCHECK(result);
+  CHECK(result, base::NotFatalUntil::M159);
   base::File file(exe_dir.Append(path),
                   base::File::FLAG_OPEN | base::File::FLAG_READ);
   *region = base::MemoryMappedFile::Region::kWholeFile;

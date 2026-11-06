@@ -1,16 +1,18 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/arc/sharesheet/arc_sharesheet_bridge.h"
 
 #include "base/logging.h"
-#include "base/memory/singleton.h"
-#include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "components/arc/arc_browser_context_keyed_service_factory_base.h"
-#include "components/arc/session/arc_bridge_service.h"
+#include "base/no_destructor.h"
+#include "chromeos/ash/experiences/arc/arc_browser_context_keyed_service_factory_base.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
 #include "content/public/browser/browser_thread.h"
+
+// Enable VLOG level 1.
+#undef ENABLED_VLOG_LEVEL
+#define ENABLED_VLOG_LEVEL 1
 
 namespace arc {
 
@@ -26,11 +28,12 @@ class ArcSharesheetBridgeFactory
   static constexpr const char* kName = "ArcSharesheetBridgeFactory";
 
   static ArcSharesheetBridgeFactory* GetInstance() {
-    return base::Singleton<ArcSharesheetBridgeFactory>::get();
+    static base::NoDestructor<ArcSharesheetBridgeFactory> instance;
+    return instance.get();
   }
 
  private:
-  friend base::DefaultSingletonTraits<ArcSharesheetBridgeFactory>;
+  friend base::NoDestructor<ArcSharesheetBridgeFactory>;
   ArcSharesheetBridgeFactory() = default;
   ~ArcSharesheetBridgeFactory() override = default;
 };
@@ -40,7 +43,7 @@ class ArcSharesheetBridgeFactory
 // static
 ArcSharesheetBridge* ArcSharesheetBridge::GetForBrowserContext(
     content::BrowserContext* context) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   return ArcSharesheetBridgeFactory::GetForBrowserContext(context);
 }
 
@@ -52,16 +55,20 @@ ArcSharesheetBridge* ArcSharesheetBridge::GetForBrowserContextForTesting(
 
 ArcSharesheetBridge::ArcSharesheetBridge(content::BrowserContext* context,
                                          ArcBridgeService* bridge_service)
-    : arc_bridge_service_(bridge_service),
-      profile_(Profile::FromBrowserContext(context)) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    : arc_bridge_service_(bridge_service) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   arc_bridge_service_->sharesheet()->SetHost(this);
   VLOG(1) << "ArcSharesheetBridge created";
 }
 
 ArcSharesheetBridge::~ArcSharesheetBridge() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M160);
   arc_bridge_service_->sharesheet()->SetHost(nullptr);
+}
+
+// static
+void ArcSharesheetBridge::EnsureFactoryBuilt() {
+  ArcSharesheetBridgeFactory::GetInstance();
 }
 
 }  // namespace arc

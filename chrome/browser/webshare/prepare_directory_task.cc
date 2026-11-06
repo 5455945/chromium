@@ -1,20 +1,21 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/webshare/prepare_directory_task.h"
 
+#include "base/check.h"
 #include "base/files/file.h"
 #include "base/files/file_enumerator.h"
+#include "base/files/file_util.h"
+#include "base/logging.h"
 #include "base/system/sys_info.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "content/public/browser/browser_thread.h"
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "third_party/cros_system_api/constants/cryptohome.h"
 #endif
 
@@ -26,7 +27,7 @@ void DeleteSharedFiles(std::vector<base::FilePath> file_paths) {
   base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
                                                 base::BlockingType::WILL_BLOCK);
   for (const base::FilePath& name : file_paths) {
-    base::DeleteFile(name);
+    base::DeletePathRecursively(name);
   }
 }
 
@@ -51,7 +52,7 @@ PrepareDirectoryTask::PrepareDirectoryTask(
 PrepareDirectoryTask::~PrepareDirectoryTask() = default;
 
 void PrepareDirectoryTask::Start() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
       base::BindOnce(&PrepareDirectoryTask::PrepareDirectory, directory_,
@@ -62,7 +63,7 @@ void PrepareDirectoryTask::Start() {
 
 void PrepareDirectoryTask::StartWithCallback(
     PrepareDirectoryCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
       base::BindOnce(&PrepareDirectoryTask::PrepareDirectory, directory_,
@@ -100,11 +101,11 @@ base::File::Error PrepareDirectoryTask::PrepareDirectory(
       }
     }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     if (base::SysInfo::AmountOfFreeDiskSpace(directory) <
         static_cast<int64_t>(cryptohome::kMinFreeSpaceInBytes +
                              required_space)) {
-#elif defined(OS_MAC)
+#elif BUILDFLAG(IS_MAC)
     if (base::SysInfo::AmountOfFreeDiskSpace(directory) <
         static_cast<int64_t>(required_space)) {
 #else
@@ -114,7 +115,7 @@ base::File::Error PrepareDirectoryTask::PrepareDirectory(
       VLOG(1) << "Insufficient space for sharing files";
     }
   } else {
-    DCHECK(result != base::File::FILE_OK);
+    CHECK(result != base::File::FILE_OK, base::NotFatalUntil::M162);
     VLOG(1) << "Could not create directory for shared files";
   }
 
@@ -122,7 +123,7 @@ base::File::Error PrepareDirectoryTask::PrepareDirectory(
 }
 
 void PrepareDirectoryTask::OnPrepareDirectory(base::File::Error result) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M162);
   if (callback_) {
     std::move(callback_).Run((result == base::File::FILE_OK)
                                  ? blink::mojom::ShareError::OK

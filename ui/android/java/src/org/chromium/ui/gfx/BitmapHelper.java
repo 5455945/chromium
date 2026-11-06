@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,20 +6,28 @@ package org.chromium.ui.gfx;
 
 import android.graphics.Bitmap;
 
-import org.chromium.base.Log;
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.JNINamespace;
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JNINamespace;
+import org.jni_zero.JniType;
 
-/**
- * Helper class to decode and sample down bitmap resources.
- */
+import org.chromium.base.Log;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+
+/** Helper class to create and manage Android Bitmaps from native. */
 @JNINamespace("gfx")
+@NullMarked
 public class BitmapHelper {
     private static final String TAG = "BitmapHelper";
 
+    private BitmapHelper() {}
+
     @CalledByNative
-    private static Bitmap createBitmap(
-            int width, int height, int bitmapFormatValue, boolean catchOom) {
+    private static @Nullable Bitmap createBitmap(
+            int width,
+            int height,
+            @JniType("gfx::BitmapFormat") @BitmapFormat int bitmapFormatValue,
+            boolean catchOom) {
         Bitmap.Config bitmapConfig = getBitmapConfigForFormat(bitmapFormatValue);
         try {
             return Bitmap.createBitmap(width, height, bitmapConfig);
@@ -31,49 +39,17 @@ public class BitmapHelper {
     }
 
     /**
-     * Provides a matching integer constant for the Bitmap.Config value passed.
-     *
-     * @param bitmapConfig The Bitmap Configuration value.
-     * @return Matching integer constant for the Bitmap.Config value passed.
-     */
-    @CalledByNative
-    private static int getBitmapFormatForConfig(Bitmap.Config bitmapConfig) {
-        switch (bitmapConfig) {
-            case ALPHA_8:
-                return BitmapFormat.ALPHA_8;
-            case ARGB_4444:
-                return BitmapFormat.ARGB_4444;
-            case ARGB_8888:
-                return BitmapFormat.ARGB_8888;
-            case RGB_565:
-                return BitmapFormat.RGB_565;
-            default:
-                return BitmapFormat.NO_CONFIG;
-        }
-    }
-
-    /**
      * Provides a matching Bitmap.Config for the enum config value passed.
      *
      * @param bitmapFormatValue The Bitmap Configuration enum value.
-     * @return Matching Bitmap.Config  for the enum value passed.
+     * @return Matching Bitmap.Config for the enum value passed.
      */
-    private static Bitmap.Config getBitmapConfigForFormat(int bitmapFormatValue) {
-        switch (bitmapFormatValue) {
-            case BitmapFormat.ALPHA_8:
-                return Bitmap.Config.ALPHA_8;
-            case BitmapFormat.ARGB_4444:
-                return Bitmap.Config.ARGB_4444;
-            case BitmapFormat.RGB_565:
-                return Bitmap.Config.RGB_565;
-            case BitmapFormat.ARGB_8888:
-            default:
-                return Bitmap.Config.ARGB_8888;
-        }
-    }
-
-    @CalledByNative
-    private static int getByteCount(Bitmap bitmap) {
-        return bitmap.getByteCount();
+    private static Bitmap.Config getBitmapConfigForFormat(@BitmapFormat int bitmapFormatValue) {
+        return switch (bitmapFormatValue) {
+            case BitmapFormat.ALPHA_8 -> Bitmap.Config.ALPHA_8;
+            case BitmapFormat.ARGB_4444 -> Bitmap.Config.ARGB_4444;
+            case BitmapFormat.RGB_565 -> Bitmap.Config.RGB_565;
+            default -> Bitmap.Config.ARGB_8888;
+        };
     }
 }

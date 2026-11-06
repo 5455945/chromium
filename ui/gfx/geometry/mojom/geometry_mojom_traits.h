@@ -1,20 +1,23 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_GFX_GEOMETRY_MOJOM_GEOMETRY_MOJOM_TRAITS_H_
 #define UI_GFX_GEOMETRY_MOJOM_GEOMETRY_MOJOM_TRAITS_H_
 
+#include <cmath>
+
+#include "ui/gfx/geometry/axis_transform2d.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/insets_f.h"
 #include "ui/gfx/geometry/mojom/geometry.mojom-shared.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/point3_f.h"
 #include "ui/gfx/geometry/point_f.h"
+#include "ui/gfx/geometry/quad_f.h"
 #include "ui/gfx/geometry/quaternion.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_f.h"
-#include "ui/gfx/geometry/scroll_offset.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/geometry/size_f.h"
 #include "ui/gfx/geometry/vector2d.h"
@@ -30,7 +33,8 @@ struct StructTraits<gfx::mojom::InsetsDataView, gfx::Insets> {
   static int bottom(const gfx::Insets& p) { return p.bottom(); }
   static int right(const gfx::Insets& p) { return p.right(); }
   static bool Read(gfx::mojom::InsetsDataView data, gfx::Insets* out) {
-    out->Set(data.top(), data.left(), data.bottom(), data.right());
+    *out =
+        gfx::Insets::TLBR(data.top(), data.left(), data.bottom(), data.right());
     return true;
   }
 };
@@ -42,7 +46,13 @@ struct StructTraits<gfx::mojom::InsetsFDataView, gfx::InsetsF> {
   static float bottom(const gfx::InsetsF& p) { return p.bottom(); }
   static float right(const gfx::InsetsF& p) { return p.right(); }
   static bool Read(gfx::mojom::InsetsFDataView data, gfx::InsetsF* out) {
-    out->Set(data.top(), data.left(), data.bottom(), data.right());
+    if (!std::isfinite(data.top()) || !std::isfinite(data.left()) ||
+        !std::isfinite(data.bottom()) || !std::isfinite(data.right()))
+        [[unlikely]] {
+      return false;
+    }
+    *out = gfx::InsetsF::TLBR(data.top(), data.left(), data.bottom(),
+                              data.right());
     return true;
   }
 };
@@ -62,6 +72,9 @@ struct StructTraits<gfx::mojom::PointFDataView, gfx::PointF> {
   static float x(const gfx::PointF& p) { return p.x(); }
   static float y(const gfx::PointF& p) { return p.y(); }
   static bool Read(gfx::mojom::PointFDataView data, gfx::PointF* out) {
+    if (!std::isfinite(data.x()) || !std::isfinite(data.y())) [[unlikely]] {
+      return false;
+    }
     out->SetPoint(data.x(), data.y());
     return true;
   }
@@ -73,6 +86,10 @@ struct StructTraits<gfx::mojom::Point3FDataView, gfx::Point3F> {
   static float y(const gfx::Point3F& p) { return p.y(); }
   static float z(const gfx::Point3F& p) { return p.z(); }
   static bool Read(gfx::mojom::Point3FDataView data, gfx::Point3F* out) {
+    if (!std::isfinite(data.x()) || !std::isfinite(data.y()) ||
+        !std::isfinite(data.z())) [[unlikely]] {
+      return false;
+    }
     out->SetPoint(data.x(), data.y(), data.z());
     return true;
   }
@@ -100,6 +117,11 @@ struct StructTraits<gfx::mojom::RectFDataView, gfx::RectF> {
   static float width(const gfx::RectF& p) { return p.width(); }
   static float height(const gfx::RectF& p) { return p.height(); }
   static bool Read(gfx::mojom::RectFDataView data, gfx::RectF* out) {
+    if (!std::isfinite(data.x()) || !std::isfinite(data.y()) ||
+        !std::isfinite(data.width()) || !std::isfinite(data.height()))
+        [[unlikely]] {
+      return false;
+    }
     if (data.width() < 0 || data.height() < 0)
       return false;
 
@@ -126,8 +148,13 @@ struct StructTraits<gfx::mojom::SizeFDataView, gfx::SizeF> {
   static float width(const gfx::SizeF& p) { return p.width(); }
   static float height(const gfx::SizeF& p) { return p.height(); }
   static bool Read(gfx::mojom::SizeFDataView data, gfx::SizeF* out) {
-    if (data.width() < 0 || data.height() < 0)
+    if (!std::isfinite(data.width()) || !std::isfinite(data.height()))
+        [[unlikely]] {
       return false;
+    }
+    if (data.width() < 0 || data.height() < 0) [[unlikely]] {
+      return false;
+    }
 
     out->SetSize(data.width(), data.height());
     return true;
@@ -150,6 +177,9 @@ struct StructTraits<gfx::mojom::Vector2dFDataView, gfx::Vector2dF> {
   static float x(const gfx::Vector2dF& v) { return v.x(); }
   static float y(const gfx::Vector2dF& v) { return v.y(); }
   static bool Read(gfx::mojom::Vector2dFDataView data, gfx::Vector2dF* out) {
+    if (!std::isfinite(data.x()) || !std::isfinite(data.y())) [[unlikely]] {
+      return false;
+    }
     out->set_x(data.x());
     out->set_y(data.y());
     return true;
@@ -162,21 +192,13 @@ struct StructTraits<gfx::mojom::Vector3dFDataView, gfx::Vector3dF> {
   static float y(const gfx::Vector3dF& v) { return v.y(); }
   static float z(const gfx::Vector3dF& v) { return v.z(); }
   static bool Read(gfx::mojom::Vector3dFDataView data, gfx::Vector3dF* out) {
+    if (!std::isfinite(data.x()) || !std::isfinite(data.y()) ||
+        !std::isfinite(data.z())) [[unlikely]] {
+      return false;
+    }
     out->set_x(data.x());
     out->set_y(data.y());
     out->set_z(data.z());
-    return true;
-  }
-};
-
-template <>
-struct StructTraits<gfx::mojom::ScrollOffsetDataView, gfx::ScrollOffset> {
-  static float x(const gfx::ScrollOffset& v) { return v.x(); }
-  static float y(const gfx::ScrollOffset& v) { return v.y(); }
-  static bool Read(gfx::mojom::ScrollOffsetDataView data,
-                   gfx::ScrollOffset* out) {
-    out->set_x(data.x());
-    out->set_y(data.y());
     return true;
   }
 };
@@ -188,11 +210,61 @@ struct StructTraits<gfx::mojom::QuaternionDataView, gfx::Quaternion> {
   static double z(const gfx::Quaternion& q) { return q.z(); }
   static double w(const gfx::Quaternion& q) { return q.w(); }
   static bool Read(gfx::mojom::QuaternionDataView data, gfx::Quaternion* out) {
+    if (!std::isfinite(data.x()) || !std::isfinite(data.y()) ||
+        !std::isfinite(data.z()) || !std::isfinite(data.w())) [[unlikely]] {
+      return false;
+    }
     out->set_x(data.x());
     out->set_y(data.y());
     out->set_z(data.z());
     out->set_w(data.w());
     return true;
+  }
+};
+
+template <>
+struct StructTraits<gfx::mojom::QuadFDataView, gfx::QuadF> {
+  static gfx::PointF p1(const gfx::QuadF& q) { return q.p1(); }
+  static gfx::PointF p2(const gfx::QuadF& q) { return q.p2(); }
+  static gfx::PointF p3(const gfx::QuadF& q) { return q.p3(); }
+  static gfx::PointF p4(const gfx::QuadF& q) { return q.p4(); }
+  static bool Read(gfx::mojom::QuadFDataView data, gfx::QuadF* out) {
+    gfx::PointF p1;
+    if (!data.ReadP1(&p1)) {
+      return false;
+    }
+    out->set_p1(p1);
+    gfx::PointF p2;
+    if (!data.ReadP2(&p2)) {
+      return false;
+    }
+    out->set_p2(p2);
+    gfx::PointF p3;
+    if (!data.ReadP3(&p3)) {
+      return false;
+    }
+    out->set_p3(p3);
+    gfx::PointF p4;
+    if (!data.ReadP4(&p4)) {
+      return false;
+    }
+    out->set_p4(p4);
+    return true;
+  }
+};
+
+template <>
+struct StructTraits<gfx::mojom::AxisTransform2dDataView, gfx::AxisTransform2d> {
+  static const gfx::Vector2dF& scale(const gfx::AxisTransform2d& a) {
+    return a.scale();
+  }
+  static const gfx::Vector2dF& translation(const gfx::AxisTransform2d& a) {
+    return a.translation();
+  }
+  static bool Read(gfx::mojom::AxisTransform2dDataView data,
+                   gfx::AxisTransform2d* out) {
+    return data.ReadScale(&out->scale_) &&
+           data.ReadTranslation(&out->translation_);
   }
 };
 

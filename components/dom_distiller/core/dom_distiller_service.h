@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,8 @@
 #include <memory>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/weak_ptr.h"
 #include "components/dom_distiller/core/article_entry.h"
 #include "components/dom_distiller/core/distilled_page_prefs.h"
 #include "components/dom_distiller/core/distiller_page.h"
@@ -38,6 +38,14 @@ class DomDistillerServiceInterface {
   // The provided |distiller_page| is only used if there is not already a
   // distillation task in progress for the given |url|.
   virtual std::unique_ptr<ViewerHandle> ViewUrl(
+      ViewRequestDelegate* delegate,
+      std::unique_ptr<DistillerPage> distiller_page,
+      const GURL& url) = 0;
+
+  // Same as ViewUrl, but the results come from a fresh distillation of the
+  // current page content rather than the content store. Resulting distillation
+  // is not saved in the content store.
+  virtual std::unique_ptr<ViewerHandle> ViewUrlIgnoreCache(
       ViewRequestDelegate* delegate,
       std::unique_ptr<DistillerPage> distiller_page,
       const GURL& url) = 0;
@@ -79,14 +87,33 @@ class DomDistillerService : public DomDistillerServiceInterface {
       ViewRequestDelegate* delegate,
       std::unique_ptr<DistillerPage> distiller_page,
       const GURL& url) override;
+  std::unique_ptr<ViewerHandle> ViewUrlIgnoreCache(
+      ViewRequestDelegate* delegate,
+      std::unique_ptr<DistillerPage> distiller_page,
+      const GURL& url) override;
   std::unique_ptr<DistillerPage> CreateDefaultDistillerPage(
       const gfx::Size& render_view_size) override;
   std::unique_ptr<DistillerPage> CreateDefaultDistillerPageWithHandle(
       std::unique_ptr<SourcePageHandle> handle) override;
   DistilledPagePrefs* GetDistilledPagePrefs() override;
   DistillerUIHandle* GetDistillerUIHandle() override;
+  base::WeakPtr<DomDistillerService> GetWeakPtr();
+
+  bool HasTaskTrackerForTesting(const GURL& url) const;
+  DistilledContentStore* GetContentStoreForTesting() const {
+    return content_store_.get();
+  }
 
  private:
+  // Common implementation for ViewUrl and ViewUrlIgnoreCache. Only if
+  // |use_cache| is true, it will attempt to retrieve the article from the
+  // content store and it will save the result to content store.
+  std::unique_ptr<ViewerHandle> ViewUrlImpl(
+      ViewRequestDelegate* delegate,
+      std::unique_ptr<DistillerPage> distiller_page,
+      const GURL& url,
+      bool use_cache);
+
   void CancelTask(TaskTracker* task);
 
   TaskTracker* CreateTaskTracker(const ArticleEntry& entry);
@@ -111,6 +138,8 @@ class DomDistillerService : public DomDistillerServiceInterface {
 
   typedef std::vector<std::unique_ptr<TaskTracker>> TaskList;
   TaskList tasks_;
+
+  base::WeakPtrFactory<DomDistillerService> weak_ptr_factory_;
 };
 
 }  // namespace dom_distiller

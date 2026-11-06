@@ -37,7 +37,7 @@
 
 namespace blink {
 
-class LocaleICUTest : public testing::Test {
+class LocaleIcuTest : public testing::Test {
  public:
   // Labels class is used for printing results in EXPECT_EQ macro.
   class Labels {
@@ -48,7 +48,7 @@ class LocaleICUTest : public testing::Test {
     bool operator==(const Labels& other) const {
       if (labels_.size() != other.labels_.size())
         return false;
-      for (unsigned index = 0; index < labels_.size(); ++index) {
+      for (wtf_size_t index = 0; index < labels_.size(); ++index) {
         if (labels_[index] != other.labels_[index])
           return false;
       }
@@ -58,7 +58,7 @@ class LocaleICUTest : public testing::Test {
     String ToString() const {
       StringBuilder builder;
       builder.Append("labels(");
-      for (unsigned index = 0; index < labels_.size(); ++index) {
+      for (wtf_size_t index = 0; index < labels_.size(); ++index) {
         if (index)
           builder.Append(", ");
         builder.Append('"');
@@ -66,7 +66,7 @@ class LocaleICUTest : public testing::Test {
         builder.Append('"');
       }
       builder.Append(')');
-      return builder.ToString();
+      return builder.ReleaseString();
     }
 
    private:
@@ -82,78 +82,85 @@ class LocaleICUTest : public testing::Test {
   }
 
   String MonthFormat(const char* locale_string) {
-    auto locale = std::make_unique<LocaleICU>(locale_string);
+    auto locale = std::make_unique<LocaleIcu>(locale_string);
     return locale->MonthFormat();
   }
 
   String LocalizedDateFormatText(const char* locale_string) {
-    auto locale = std::make_unique<LocaleICU>(locale_string);
+    auto locale = std::make_unique<LocaleIcu>(locale_string);
     return locale->TimeFormat();
   }
 
   String LocalizedShortDateFormatText(const char* locale_string) {
-    auto locale = std::make_unique<LocaleICU>(locale_string);
+    auto locale = std::make_unique<LocaleIcu>(locale_string);
     return locale->ShortTimeFormat();
   }
 
-  String ShortMonthLabel(const char* locale_string, unsigned index) {
-    auto locale = std::make_unique<LocaleICU>(locale_string);
+  String ShortMonthLabel(const char* locale_string, wtf_size_t index) {
+    auto locale = std::make_unique<LocaleIcu>(locale_string);
     return locale->ShortMonthLabels()[index];
   }
 
-  String ShortStandAloneMonthLabel(const char* locale_string, unsigned index) {
-    auto locale = std::make_unique<LocaleICU>(locale_string);
+  String ShortStandAloneMonthLabel(const char* locale_string,
+                                   wtf_size_t index) {
+    auto locale = std::make_unique<LocaleIcu>(locale_string);
     return locale->ShortStandAloneMonthLabels()[index];
   }
 
-  String StandAloneMonthLabel(const char* locale_string, unsigned index) {
-    auto locale = std::make_unique<LocaleICU>(locale_string);
+  String StandAloneMonthLabel(const char* locale_string, wtf_size_t index) {
+    auto locale = std::make_unique<LocaleIcu>(locale_string);
     return locale->StandAloneMonthLabels()[index];
   }
 
-  Labels TimeAMPMLabels(const char* locale_string) {
-    auto locale = std::make_unique<LocaleICU>(locale_string);
-    return Labels(locale->TimeAMPMLabels());
+  Labels TimeAmPmLabels(const char* locale_string) {
+    auto locale = std::make_unique<LocaleIcu>(locale_string);
+    return Labels(locale->TimeAmPmLabels());
   }
 
-  bool IsRTL(const char* locale_string) {
-    auto locale = std::make_unique<LocaleICU>(locale_string);
-    return locale->IsRTL();
+  bool IsRtl(const char* locale_string) {
+    auto locale = std::make_unique<LocaleIcu>(locale_string);
+    return locale->IsRtl();
   }
 };
 
 std::ostream& operator<<(std::ostream& os,
-                         const LocaleICUTest::Labels& labels) {
+                         const LocaleIcuTest::Labels& labels) {
   return os << labels.ToString();
 }
 
-TEST_F(LocaleICUTest, isRTL) {
-  EXPECT_TRUE(IsRTL("ar-EG"));
-  EXPECT_FALSE(IsRTL("en-us"));
-  EXPECT_FALSE(IsRTL("ja-jp"));
-  EXPECT_FALSE(IsRTL("**invalid**"));
+TEST_F(LocaleIcuTest, IsRtl) {
+  EXPECT_TRUE(IsRtl("ar-EG"));
+  EXPECT_FALSE(IsRtl("en-us"));
+  EXPECT_FALSE(IsRtl("ja-jp"));
+  EXPECT_FALSE(IsRtl("**invalid**"));
 }
 
-TEST_F(LocaleICUTest, monthFormat) {
+TEST_F(LocaleIcuTest, monthFormat) {
   EXPECT_EQ("MMMM yyyy", MonthFormat("en_US"));
   EXPECT_EQ("MMMM yyyy", MonthFormat("fr"));
   EXPECT_EQ("yyyy\xE5\xB9\xB4M\xE6\x9C\x88", MonthFormat("ja").Utf8());
 }
 
-TEST_F(LocaleICUTest, localizedDateFormatText) {
+TEST_F(LocaleIcuTest, localizedDateFormatText) {
   // Note: EXPECT_EQ(String, String) doesn't print result as string.
-  EXPECT_EQ("h:mm:ss a", LocalizedDateFormatText("en_US"));
+  EXPECT_EQ(
+      "h:mm:ss\xE2\x80\xAF"
+      "a",
+      LocalizedDateFormatText("en_US").Utf8());
   EXPECT_EQ("HH:mm:ss", LocalizedDateFormatText("fr"));
   EXPECT_EQ("H:mm:ss", LocalizedDateFormatText("ja"));
 }
 
-TEST_F(LocaleICUTest, localizedShortDateFormatText) {
-  EXPECT_EQ("h:mm a", LocalizedShortDateFormatText("en_US"));
+TEST_F(LocaleIcuTest, localizedShortDateFormatText) {
+  EXPECT_EQ(
+      "h:mm\xE2\x80\xAF"
+      "a",
+      LocalizedShortDateFormatText("en_US").Utf8());
   EXPECT_EQ("HH:mm", LocalizedShortDateFormatText("fr"));
   EXPECT_EQ("H:mm", LocalizedShortDateFormatText("ja"));
 }
 
-TEST_F(LocaleICUTest, standAloneMonthLabels) {
+TEST_F(LocaleIcuTest, standAloneMonthLabels) {
   EXPECT_EQ("January", StandAloneMonthLabel("en_US", 0));
   EXPECT_EQ("June", StandAloneMonthLabel("en_US", 5));
   EXPECT_EQ("December", StandAloneMonthLabel("en_US", 11));
@@ -184,7 +191,7 @@ TEST_F(LocaleICUTest, standAloneMonthLabels) {
             StandAloneMonthLabel("ru_RU", 4).Utf8());
 }
 
-TEST_F(LocaleICUTest, shortMonthLabels) {
+TEST_F(LocaleIcuTest, shortMonthLabels) {
   EXPECT_EQ("Jan", ShortMonthLabel("en_US", 0));
   EXPECT_EQ("Jan", ShortStandAloneMonthLabel("en_US", 0));
   EXPECT_EQ("Dec", ShortMonthLabel("en_US", 11));
@@ -227,14 +234,14 @@ TEST_F(LocaleICUTest, shortMonthLabels) {
             ShortStandAloneMonthLabel("ru_RU", 4).Utf8());
 }
 
-TEST_F(LocaleICUTest, timeAMPMLabels) {
-  EXPECT_EQ(LabelsFromTwoElements("AM", "PM"), TimeAMPMLabels("en_US"));
-  EXPECT_EQ(LabelsFromTwoElements("AM", "PM"), TimeAMPMLabels("fr"));
+TEST_F(LocaleIcuTest, TimeAmPmLabels) {
+  EXPECT_EQ(LabelsFromTwoElements("AM", "PM"), TimeAmPmLabels("en_US"));
+  EXPECT_EQ(LabelsFromTwoElements("AM", "PM"), TimeAmPmLabels("fr"));
 
   UChar ja_am[3] = {0x5348, 0x524d, 0};
   UChar ja_pm[3] = {0x5348, 0x5F8C, 0};
   EXPECT_EQ(LabelsFromTwoElements(String(ja_am), String(ja_pm)),
-            TimeAMPMLabels("ja"));
+            TimeAmPmLabels("ja"));
 }
 
 static String TestDecimalSeparator(const AtomicString& locale_identifier) {
@@ -242,9 +249,9 @@ static String TestDecimalSeparator(const AtomicString& locale_identifier) {
   return locale->LocalizedDecimalSeparator();
 }
 
-TEST_F(LocaleICUTest, localizedDecimalSeparator) {
-  EXPECT_EQ(String("."), TestDecimalSeparator("en_US"));
-  EXPECT_EQ(String(","), TestDecimalSeparator("fr"));
+TEST_F(LocaleIcuTest, localizedDecimalSeparator) {
+  EXPECT_EQ(String("."), TestDecimalSeparator(AtomicString("en_US")));
+  EXPECT_EQ(String(","), TestDecimalSeparator(AtomicString("fr")));
 }
 
 void TestNumberIsReversible(const AtomicString& locale_identifier,
@@ -253,28 +260,31 @@ void TestNumberIsReversible(const AtomicString& locale_identifier,
   std::unique_ptr<Locale> locale = Locale::Create(locale_identifier);
   String localized = locale->ConvertToLocalizedNumber(original);
   if (should_have)
-    EXPECT_TRUE(localized.Contains(should_have));
+    EXPECT_TRUE(localized.contains(should_have));
   String converted = locale->ConvertFromLocalizedNumber(localized);
   EXPECT_EQ(original, converted);
 }
 
-void TestNumbers(const char* locale_string) {
+void TestNumbers(const char* locale) {
+  AtomicString locale_string(locale);
   TestNumberIsReversible(locale_string, "123456789012345678901234567890");
   TestNumberIsReversible(locale_string, "-123.456");
   TestNumberIsReversible(locale_string, ".456");
   TestNumberIsReversible(locale_string, "-0.456");
 }
 
-TEST_F(LocaleICUTest, reversible) {
-  TestNumberIsReversible("en_US", "123456789012345678901234567890");
-  TestNumberIsReversible("en_US", "-123.456", ".");
-  TestNumberIsReversible("en_US", ".456", ".");
-  TestNumberIsReversible("en_US", "-0.456", ".");
+TEST_F(LocaleIcuTest, reversible) {
+  AtomicString en_us_locale("en_US");
+  TestNumberIsReversible(en_us_locale, "123456789012345678901234567890");
+  TestNumberIsReversible(en_us_locale, "-123.456", ".");
+  TestNumberIsReversible(en_us_locale, ".456", ".");
+  TestNumberIsReversible(en_us_locale, "-0.456", ".");
 
-  TestNumberIsReversible("fr", "123456789012345678901234567890");
-  TestNumberIsReversible("fr", "-123.456", ",");
-  TestNumberIsReversible("fr", ".456", ",");
-  TestNumberIsReversible("fr", "-0.456", ",");
+  AtomicString fr_locale("fr");
+  TestNumberIsReversible(fr_locale, "123456789012345678901234567890");
+  TestNumberIsReversible(fr_locale, "-123.456", ",");
+  TestNumberIsReversible(fr_locale, ".456", ",");
+  TestNumberIsReversible(fr_locale, "-0.456", ",");
 
   // Persian locale has a negative prefix and a negative suffix.
   TestNumbers("fa");

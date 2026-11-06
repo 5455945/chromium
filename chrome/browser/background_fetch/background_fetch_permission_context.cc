@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,31 +8,29 @@
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/download/download_request_limiter.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/permissions/permission_prompt_decision.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
-#include "third_party/blink/public/mojom/permissions_policy/permissions_policy_feature.mojom.h"
+#include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom.h"
 
 BackgroundFetchPermissionContext::BackgroundFetchPermissionContext(
     content::BrowserContext* browser_context)
-    : PermissionContextBase(browser_context,
-                            ContentSettingsType::BACKGROUND_FETCH,
-                            blink::mojom::PermissionsPolicyFeature::kNotFound) {
-}
+    : ContentSettingPermissionContextBase(
+          browser_context,
+          ContentSettingsType::BACKGROUND_FETCH,
+          network::mojom::PermissionsPolicyFeature::kNotFound) {}
 
-bool BackgroundFetchPermissionContext::IsRestrictedToSecureOrigins() const {
-  return true;
-}
-
-ContentSetting BackgroundFetchPermissionContext::GetPermissionStatusInternal(
+ContentSetting
+BackgroundFetchPermissionContext::GetContentSettingStatusInternal(
     content::RenderFrameHost* render_frame_host,
     const GURL& requesting_origin,
     const GURL& embedding_origin) const {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
   if (render_frame_host && !render_frame_host->GetParent()) {
     DownloadRequestLimiter* limiter =
         g_browser_process->download_request_limiter();
-    DCHECK(limiter);
+    CHECK(limiter, base::NotFatalUntil::M161);
     auto status = limiter->GetDownloadStatus(
         content::WebContents::FromRenderFrameHost(render_frame_host));
 
@@ -54,7 +52,7 @@ ContentSetting BackgroundFetchPermissionContext::GetPermissionStatusInternal(
   // content settings.
   auto* host_content_settings_map =
       HostContentSettingsMapFactory::GetForProfile(browser_context());
-  DCHECK(host_content_settings_map);
+  CHECK(host_content_settings_map, base::NotFatalUntil::M161);
 
   // The set of valid settings for automatic downloads is defined as
   // {CONTENT_SETTING_ALLOW, CONTENT_SETTING_ASK, CONTENT_SETTING_BLOCK}.
@@ -62,7 +60,7 @@ ContentSetting BackgroundFetchPermissionContext::GetPermissionStatusInternal(
       requesting_origin, requesting_origin,
       ContentSettingsType::AUTOMATIC_DOWNLOADS);
 
-  // Due to privacy concerns as outlined in https://crbug.com/896311 the most
+  // Due to privacy concerns as outlined in https://crbug.com/41421247 the most
   // permissive state BGF can be in for non top level frames or service workers
   // is ASK. This causes background fetches that do not originate in a main
   // frame to start paused.
@@ -73,11 +71,7 @@ ContentSetting BackgroundFetchPermissionContext::GetPermissionStatusInternal(
 }
 
 void BackgroundFetchPermissionContext::DecidePermission(
-    content::WebContents* web_contents,
-    const permissions::PermissionRequestID& id,
-    const GURL& requesting_origin,
-    const GURL& embedding_origin,
-    bool user_gesture,
+    std::unique_ptr<permissions::PermissionRequestData> request_data,
     permissions::BrowserPermissionCallback callback) {
   // The user should never be prompted to authorize Background Fetch
   // from BackgroundFetchPermissionContext.
@@ -87,15 +81,14 @@ void BackgroundFetchPermissionContext::DecidePermission(
 }
 
 void BackgroundFetchPermissionContext::NotifyPermissionSet(
-    const permissions::PermissionRequestID& id,
-    const GURL& requesting_origin,
-    const GURL& embedding_origin,
+    const permissions::PermissionRequestData& request_data,
     permissions::BrowserPermissionCallback callback,
     bool persist,
-    ContentSetting content_setting,
-    bool is_one_time) {
-  DCHECK(!persist);
-  permissions::PermissionContextBase::NotifyPermissionSet(
-      id, requesting_origin, embedding_origin, std::move(callback), persist,
-      content_setting, is_one_time);
+    const content::PermissionResult* permission_result,
+    const permissions::PermissionPromptDecision& decision) {
+  CHECK(!persist, base::NotFatalUntil::M161);
+  CHECK(decision.is_final, base::NotFatalUntil::M161);
+
+  permissions::ContentSettingPermissionContextBase::NotifyPermissionSet(
+      request_data, std::move(callback), persist, permission_result, decision);
 }

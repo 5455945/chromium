@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,9 @@ chrome.browserAction.openPopup(function(popupWindow) {
   chrome.test.assertTrue(!!popupWindow);
   chrome.test.notifyPass();
   chrome.test.sendMessage('ready', function(reply) {
-    if (reply !== 'show another')
+    if (reply !== 'show another') {
       return;
+    }
     chrome.browserAction.openPopup(function(popupWindow2) {
       chrome.test.assertTrue(!!popupWindow2);
       chrome.test.notifyPass();

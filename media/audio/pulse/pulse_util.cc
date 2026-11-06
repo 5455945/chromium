@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,13 @@
 #include <string.h>
 
 #include <memory>
+#include <type_traits>
 
 #include "base/files/file_path.h"
 #include "base/logging.h"
-#include "base/macros.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/notreached.h"
 #include "base/synchronization/waitable_event.h"
 #include "build/branding_buildflags.h"
@@ -27,9 +29,7 @@ using media_audio_pulse::InitializeStubs;
 using media_audio_pulse::StubPathMap;
 #endif  // defined(DLOPEN_PULSEAUDIO)
 
-namespace media {
-
-namespace pulse {
+namespace media::pulse {
 
 namespace {
 
@@ -42,7 +42,7 @@ constexpr char kBrowserDisplayName[] = "chromium-browser";
 #endif
 
 #if defined(DLOPEN_PULSEAUDIO)
-static const base::FilePath::CharType kPulseLib[] =
+constexpr base::FilePath::CharType kPulseLib[] =
     FILE_PATH_LITERAL("libpulse.so.0");
 #endif
 
@@ -83,30 +83,46 @@ pa_channel_position ChromiumToPAChannelPosition(Channels channel) {
       return PA_CHANNEL_POSITION_SIDE_LEFT;
     case SIDE_RIGHT:
       return PA_CHANNEL_POSITION_SIDE_RIGHT;
+    case TOP_CENTER:
+      return PA_CHANNEL_POSITION_TOP_CENTER;
+    case TOP_FRONT_LEFT:
+      return PA_CHANNEL_POSITION_TOP_FRONT_LEFT;
+    case TOP_FRONT_CENTER:
+      return PA_CHANNEL_POSITION_TOP_FRONT_CENTER;
+    case TOP_FRONT_RIGHT:
+      return PA_CHANNEL_POSITION_TOP_FRONT_RIGHT;
+    case TOP_BACK_LEFT:
+      return PA_CHANNEL_POSITION_TOP_REAR_LEFT;
+    case TOP_BACK_CENTER:
+      return PA_CHANNEL_POSITION_TOP_REAR_CENTER;
+    case TOP_BACK_RIGHT:
+      return PA_CHANNEL_POSITION_TOP_REAR_RIGHT;
     default:
       NOTREACHED() << "Invalid channel: " << channel;
-      return PA_CHANNEL_POSITION_INVALID;
   }
 }
 
 class ScopedPropertyList {
  public:
   ScopedPropertyList() : property_list_(pa_proplist_new()) {}
-  ~ScopedPropertyList() { pa_proplist_free(property_list_); }
 
-  pa_proplist* get() const { return property_list_; }
+  ScopedPropertyList(const ScopedPropertyList&) = delete;
+  ScopedPropertyList& operator=(const ScopedPropertyList&) = delete;
+
+  pa_proplist* get() const { return property_list_.get(); }
 
  private:
-  pa_proplist* property_list_;
-  DISALLOW_COPY_AND_ASSIGN(ScopedPropertyList);
+  using deleter =
+      std::integral_constant<decltype(pa_proplist_free)*, pa_proplist_free>;
+  std::unique_ptr<pa_proplist, deleter> property_list_;
 };
 
 struct InputBusData {
   InputBusData(pa_threaded_mainloop* loop, const std::string& name)
       : loop_(loop), name_(name), bus_() {}
 
-  pa_threaded_mainloop* const loop_;
-  const std::string& name_;
+  const raw_ptr<pa_threaded_mainloop> loop_;
+  const raw_ref<const std::string> name_;
   std::string bus_;
 };
 
@@ -114,9 +130,9 @@ struct OutputBusData {
   OutputBusData(pa_threaded_mainloop* loop, const std::string& bus)
       : loop_(loop), name_(), bus_(bus) {}
 
-  pa_threaded_mainloop* const loop_;
+  const raw_ptr<pa_threaded_mainloop> loop_;
   std::string name_;
-  const std::string& bus_;
+  const raw_ref<const std::string> bus_;
 };
 
 void InputBusCallback(pa_context* context,
@@ -131,9 +147,9 @@ void InputBusCallback(pa_context* context,
     return;
   }
 
-  if (strcmp(info->name, data->name_.c_str()) == 0 &&
-      pa_proplist_contains(info->proplist, PA_PROP_DEVICE_BUS)) {
-    data->bus_ = pa_proplist_gets(info->proplist, PA_PROP_DEVICE_BUS);
+  if (info->name == *data->name_ &&
+      pa_proplist_contains(info->proplist, PA_PROP_DEVICE_BUS_PATH)) {
+    data->bus_ = pa_proplist_gets(info->proplist, PA_PROP_DEVICE_BUS_PATH);
   }
 }
 
@@ -149,9 +165,9 @@ void OutputBusCallback(pa_context* context,
     return;
   }
 
-  if (pa_proplist_contains(info->proplist, PA_PROP_DEVICE_BUS) &&
-      strcmp(pa_proplist_gets(info->proplist, PA_PROP_DEVICE_BUS),
-             data->bus_.c_str()) == 0) {
+  if (pa_proplist_contains(info->proplist, PA_PROP_DEVICE_BUS_PATH) &&
+      pa_proplist_gets(info->proplist, PA_PROP_DEVICE_BUS_PATH) ==
+          *data->bus_) {
     data->name_ = info->name;
   }
 }
@@ -160,7 +176,7 @@ struct DefaultDevicesData {
   explicit DefaultDevicesData(pa_threaded_mainloop* loop) : loop_(loop) {}
   std::string input_;
   std::string output_;
-  pa_threaded_mainloop* const loop_;
+  const raw_ptr<pa_threaded_mainloop> loop_;
 };
 
 void GetDefaultDeviceIdCallback(pa_context* c,
@@ -174,9 +190,29 @@ void GetDefaultDeviceIdCallback(pa_context* c,
   pa_threaded_mainloop_signal(data->loop_, 0);
 }
 
+struct MonitorSourceData {
+  explicit MonitorSourceData(pa_threaded_mainloop* loop) : loop_(loop) {}
+  const raw_ptr<pa_threaded_mainloop> loop_;
+  std::string monitor_source_name_;
+};
+
+// Callback used by GetMonitorSourceNameForSink(). `info` contains information
+// about the queried sink, in particular, the name of the source which acts as a
+// monitor for the sink.
+void GetMonitorSourceNameForSinkCallback(pa_context* context,
+                                         const pa_sink_info* info,
+                                         int eol,
+                                         void* userdata) {
+  MonitorSourceData* data = static_cast<MonitorSourceData*>(userdata);
+  if (!eol) {
+    data->monitor_source_name_ = info->monitor_source_name;
+  }
+  pa_threaded_mainloop_signal(data->loop_, 0);
+}
+
 struct ContextStartupData {
-  base::WaitableEvent* context_wait;
-  pa_threaded_mainloop* pa_mainloop;
+  raw_ptr<base::WaitableEvent> context_wait;
+  raw_ptr<pa_threaded_mainloop, DanglingUntriaged> pa_mainloop;
 };
 
 void SignalReadyOrErrorStateCallback(pa_context* context, void* context_data) {
@@ -232,6 +268,7 @@ bool InitPulse(pa_threaded_mainloop** mainloop, pa_context** context) {
     VLOG(1) << "Failed to connect to the context.  Error: "
             << pa_strerror(pa_context_errno(pa_context));
     DestroyContext(pa_context);
+    data = {nullptr, nullptr};
     pa_threaded_mainloop_free(pa_mainloop);
     return false;
   }
@@ -244,6 +281,7 @@ bool InitPulse(pa_threaded_mainloop** mainloop, pa_context** context) {
   if (pa_threaded_mainloop_start(pa_mainloop)) {
     DestroyContext(pa_context);
     mainloop_lock.reset();
+    data = {nullptr, nullptr};
     DestroyMainloop(pa_mainloop);
     return false;
   }
@@ -259,7 +297,7 @@ bool InitPulse(pa_threaded_mainloop** mainloop, pa_context** context) {
   // browser startup (other times it's during audio process startup). In the
   // normal case, this should only take ~50ms, but we've seen some test bots
   // hang indefinitely when the pulse daemon can't be started.
-  constexpr base::TimeDelta kStartupTimeout = base::TimeDelta::FromSeconds(5);
+  constexpr base::TimeDelta kStartupTimeout = base::Seconds(5);
   const bool was_signaled = context_wait.TimedWait(kStartupTimeout);
 
   // Require the mainloop lock before checking the context state.
@@ -273,6 +311,7 @@ bool InitPulse(pa_threaded_mainloop** mainloop, pa_context** context) {
       VLOG(1) << "Failed to connect to PulseAudio: " << context_state;
     DestroyContext(pa_context);
     mainloop_lock.reset();
+    data = {nullptr, nullptr};
     DestroyMainloop(pa_mainloop);
     return false;
   }
@@ -305,6 +344,16 @@ void StreamSuccessCallback(pa_stream* s, int error, void* mainloop) {
   pa_threaded_mainloop_signal(pa_mainloop, 0);
 }
 
+// pa_context_success_cb_t
+void ContextSuccessCallback(pa_context* context, int success, void* mainloop) {
+  pa_threaded_mainloop* pa_mainloop =
+      static_cast<pa_threaded_mainloop*>(mainloop);
+  if (!success) {
+    LOG(ERROR) << "Context operation failed.";
+  }
+  pa_threaded_mainloop_signal(pa_mainloop, 0);
+}
+
 // |pa_context| and |pa_stream| state changed cb.
 void ContextStateCallback(pa_context* context, void* mainloop) {
   pa_threaded_mainloop* pa_mainloop =
@@ -322,13 +371,14 @@ pa_channel_map ChannelLayoutToPAChannelMap(ChannelLayout channel_layout) {
     pa_channel_map_init(&channel_map);
 
     channel_map.channels = ChannelLayoutToChannelCount(channel_layout);
+    base::span channel_map_span(channel_map.map);
     for (Channels ch = LEFT; ch <= CHANNELS_MAX;
          ch = static_cast<Channels>(ch + 1)) {
       int channel_index = ChannelOrder(channel_layout, ch);
       if (channel_index < 0)
         continue;
 
-      channel_map.map[channel_index] = ChromiumToPAChannelPosition(ch);
+      channel_map_span[channel_index] = ChromiumToPAChannelPosition(ch);
     }
   }
 
@@ -384,7 +434,7 @@ base::TimeDelta GetHardwareLatency(pa_stream* stream) {
   if (negative)
     return base::TimeDelta();
 
-  return base::TimeDelta::FromMicroseconds(latency_micros);
+  return base::Microseconds(latency_micros);
 }
 
 // Helper macro for CreateInput/OutputStream() to avoid code spam and
@@ -398,7 +448,7 @@ base::TimeDelta GetHardwareLatency(pa_stream* stream) {
 
 bool CreateInputStream(pa_threaded_mainloop* mainloop,
                        pa_context* context,
-                       pa_stream** stream,
+                       raw_ptr<pa_stream>* stream,
                        const AudioParameters& params,
                        const std::string& device_id,
                        pa_stream_notify_cb_t stream_callback,
@@ -471,9 +521,9 @@ bool CreateInputStream(pa_threaded_mainloop* mainloop,
   return true;
 }
 
-bool CreateOutputStream(pa_threaded_mainloop** mainloop,
-                        pa_context** context,
-                        pa_stream** stream,
+bool CreateOutputStream(raw_ptr<pa_threaded_mainloop>* mainloop,
+                        raw_ptr<pa_context>* context,
+                        raw_ptr<pa_stream>* stream,
                         const AudioParameters& params,
                         const std::string& device_id,
                         const std::string& app_name,
@@ -596,6 +646,76 @@ bool CreateOutputStream(pa_threaded_mainloop** mainloop,
   return true;
 }
 
+// Mutes all audio output sinks except the specified sink.
+void MuteAllSinksExcept(pa_threaded_mainloop* mainloop,
+                        pa_context* context,
+                        const std::string& exclude_sink_name) {
+  CHECK(mainloop);
+  CHECK(context);
+  AutoPulseLock lock(mainloop);
+
+  // Retrieve a list of all sinks from the PulseAudio context
+  pa_operation* op = pa_context_get_sink_info_list(
+      context,
+      // Define the callback to process each sink information received
+      [](pa_context* c, const pa_sink_info* i, int eol, void* userdata) {
+        if (eol != 0) {
+          return;  // Handle end of list or error
+        }
+        if (!eol) {
+          std::string* exclude_sink_name = static_cast<std::string*>(userdata);
+          // Check if current sink's name matches the exclude_sink_name
+          if (i->name != *exclude_sink_name) {
+            pa_operation* mute_op = pa_context_set_sink_mute_by_index(
+                c, i->index, 1, /*callback=*/nullptr,
+                /*userdata=*/nullptr);  // Mute the sink
+            if (mute_op) {
+              pa_operation_unref(mute_op);
+            }
+          }
+        }
+      },
+      (void*)&exclude_sink_name);
+
+  WaitForOperationCompletion(mainloop, op, context);
+}
+
+// Unmutes all audio output sinks in the system.
+void UnmuteAllSinks(pa_threaded_mainloop* mainloop, pa_context* context) {
+  CHECK(mainloop);
+  CHECK(context);
+  // Lock the mainloop to ensure thread safety when accessing the context.
+  AutoPulseLock lock(mainloop);
+
+  // Request a list of all sinks from the PulseAudio context.
+  pa_operation* op = pa_context_get_sink_info_list(
+      context,
+      [](pa_context* c, const pa_sink_info* i, int eol, void* userdata) {
+        // eol != 0 indicates the end of list or an error. We return early.
+        if (eol != 0) {
+          return;
+        }
+
+        pa_operation* unmute_op = pa_context_set_sink_mute_by_index(
+            c, i->index, 0,  // 0 means unmute
+            [](pa_context* c, int success, void* userdata) {
+              // This callback ensures the operation completes
+              pa_threaded_mainloop_signal((pa_threaded_mainloop*)userdata, 0);
+            },
+            userdata  // Pass the mainloop as userdata
+        );
+
+        if (unmute_op) {
+          pa_operation_unref(unmute_op);
+        }
+      },
+      mainloop  // Pass mainloop as userdata
+  );
+
+  // Wait for the operation to complete to ensure all sinks are unmuted.
+  WaitForOperationCompletion(mainloop, op, context);
+}
+
 std::string GetBusOfInput(pa_threaded_mainloop* mainloop,
                           pa_context* context,
                           const std::string& name) {
@@ -635,8 +755,20 @@ std::string GetRealDefaultDeviceId(pa_threaded_mainloop* mainloop,
   return (type == RequestType::INPUT) ? data.input_ : data.output_;
 }
 
+std::string GetMonitorSourceNameForSink(pa_threaded_mainloop* mainloop,
+                                        pa_context* context,
+                                        const std::string& sink_name) {
+  CHECK(mainloop);
+  CHECK(context);
+  CHECK(!sink_name.empty());
+  AutoPulseLock auto_lock(mainloop);
+  MonitorSourceData data(mainloop);
+  pa_operation* operation = pa_context_get_sink_info_by_name(
+      context, sink_name.c_str(), &GetMonitorSourceNameForSinkCallback, &data);
+  WaitForOperationCompletion(mainloop, operation, context);
+  return data.monitor_source_name_;
+}
+
 #undef RETURN_ON_FAILURE
 
-}  // namespace pulse
-
-}  // namespace media
+}  // namespace media::pulse

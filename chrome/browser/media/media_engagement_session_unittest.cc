@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -109,7 +109,7 @@ class MediaEngagementSessionTest : public testing::Test {
     test_ukm_recorder_.UpdateSourceURL(ukm_source_id(), origin_.GetURL());
 
     // Advance the test clock to a non null value.
-    test_clock_.Advance(base::TimeDelta::FromMinutes(15));
+    test_clock_.Advance(base::Minutes(15));
   }
 
   MediaEngagementService* service() const { return service_.get(); }
@@ -157,17 +157,14 @@ TEST_F(MediaEngagementSessionTest, IsSameOrigin) {
       service(), origin(), MediaEngagementSession::RestoreType::kNotRestored,
       ukm_source_id());
 
-  std::vector<url::Origin> origins = {
-      origin(),
-      url::Origin::Create(GURL("http://example.com")),
-      url::Origin::Create(GURL("https://example.org")),
-      url::Origin(),
-      url::Origin::Create(GURL("http://google.com")),
-      url::Origin::Create(GURL("http://foo.example.com")),
+  std::vector<GURL> urls = {
+      origin().GetURL(),           GURL("http://example.com"),
+      GURL("https://example.org"), GURL(),
+      GURL("http://google.com"),   GURL("http://foo.example.com"),
   };
 
-  for (const auto& orig : origins) {
-    EXPECT_EQ(origin().IsSameOriginWith(orig), session->IsSameOriginWith(orig));
+  for (const auto& url : urls) {
+    EXPECT_EQ(origin().IsSameOriginWith(url), session->IsSameOriginWith(url));
   }
 }
 
@@ -251,7 +248,7 @@ TEST_F(MediaEngagementSessionTest, TotalPlayers) {
   EXPECT_EQ(0, GetAudiblePlayersTotalForSession(session.get()));
   EXPECT_EQ(0, GetSignificantPlayersTotalForSession(session.get()));
 
-  // Commiting data increment totals.
+  // Committing data increment totals.
   session->RegisterAudiblePlayers(1, 1);
   CommitPendingDataForSession(session.get());
   EXPECT_EQ(2, GetAudiblePlayersTotalForSession(session.get()));
@@ -263,7 +260,7 @@ TEST_F(MediaEngagementSessionTest, TotalPlayers) {
     auto ukm_entries = test_ukm_recorder().GetEntriesByName(Entry::kEntryName);
     EXPECT_EQ(1u, ukm_entries.size());
 
-    auto* ukm_entry = ukm_entries[0];
+    auto* ukm_entry = ukm_entries[0].get();
     test_ukm_recorder().ExpectEntrySourceHasUrl(ukm_entry, origin().GetURL());
     EXPECT_EQ(2, *test_ukm_recorder().GetEntryMetric(
                      ukm_entry, Entry::kPlayer_Audible_DeltaName));
@@ -640,7 +637,7 @@ TEST_F(MediaEngagementSessionTest, RecordUkmMetrics) {
     auto ukm_entries = test_ukm_recorder().GetEntriesByName(Entry::kEntryName);
     EXPECT_EQ(1u, ukm_entries.size());
 
-    auto* ukm_entry = ukm_entries[0];
+    auto* ukm_entry = ukm_entries[0].get();
     test_ukm_recorder().ExpectEntrySourceHasUrl(ukm_entry, origin().GetURL());
     EXPECT_EQ(1, *test_ukm_recorder().GetEntryMetric(
                      ukm_entry, Entry::kPlaybacks_TotalName));
@@ -665,7 +662,7 @@ TEST_F(MediaEngagementSessionTest, RecordUkmMetrics) {
     auto ukm_entries = test_ukm_recorder().GetEntriesByName(Entry::kEntryName);
     EXPECT_EQ(2u, ukm_entries.size());
 
-    auto* ukm_entry = ukm_entries[1];
+    auto* ukm_entry = ukm_entries[1].get();
     test_ukm_recorder().ExpectEntrySourceHasUrl(ukm_entry, origin().GetURL());
 
     EXPECT_EQ(2, *test_ukm_recorder().GetEntryMetric(

@@ -1,24 +1,32 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_VIEWS_VIEW_CLASS_PROPERTIES_H_
 #define UI_VIEWS_VIEW_CLASS_PROPERTIES_H_
 
+#include <string>
+
 #include "ui/base/class_property.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/views/layout/flex_layout_types.h"
+#include "ui/views/layout/layout_types.h"
 #include "ui/views/views_export.h"
 
 namespace gfx {
 class Insets;
+class Rect;
+class Size;
 }  // namespace gfx
 
 namespace views {
 
+class BoxLayoutFlexSpecification;
 class DialogDelegate;
 class FlexSpecification;
+class FocusManager;
 class HighlightPathGenerator;
+class Widget;
 
 // The hit test component (e.g. HTCLIENT) for a View in a window frame. Defaults
 // to HTNOWHERE.
@@ -46,6 +54,20 @@ VIEWS_EXPORT extern const ui::ClassProperty<gfx::Insets*>* const
 VIEWS_EXPORT extern const ui::ClassProperty<DialogDelegate*>* const
     kAnchoredDialogKey;
 
+// A property to store the anchor widget used for anchoring a bubble dialog
+// to this view. If unset, the anchor widget is this view's containing widget.
+//
+// This is useful in macOS fullscreen where a sub views tree is moved to a
+// separate overlay widget that has a higher z-order level. We anchor the bubble
+// to the overlay widget to prevent the bubble from being occluded.
+VIEWS_EXPORT extern const ui::ClassProperty<Widget*>* const
+    kWidgetForAnchoringKey;
+
+// A property to store how a view should flex when placed in a layout.
+// Only supported by BoxLayout.
+VIEWS_EXPORT extern const ui::ClassProperty<BoxLayoutFlexSpecification*>* const
+    kBoxLayoutFlexKey;
+
 // A property to store a highlight-path generator. This generator is used to
 // generate a highlight path for focus rings or ink-drop effects.
 VIEWS_EXPORT extern const ui::ClassProperty<HighlightPathGenerator*>* const
@@ -59,30 +81,69 @@ VIEWS_EXPORT extern const ui::ClassProperty<FlexSpecification*>* const
 VIEWS_EXPORT extern const ui::ClassProperty<LayoutAlignment*>* const
     kCrossAxisAlignmentKey;
 
+// TableLayout-specific properties:
+// Note that col/row span counts padding columns, so if you want to span a
+// region consisting of <column><padding column><column>, it's a column span of
+// 3, not 2.
+VIEWS_EXPORT extern const ui::ClassProperty<gfx::Size*>* const
+    kTableColAndRowSpanKey;
+VIEWS_EXPORT extern const ui::ClassProperty<LayoutAlignment*>* const
+    kTableHorizAlignKey;
+VIEWS_EXPORT extern const ui::ClassProperty<LayoutAlignment*>* const
+    kTableVertAlignKey;
+
 // Property indicating whether a view should be ignored by a layout. Supported
-// by View::DefaultFillLayout.
-// TODO(kylixrd): Revisit using for FillLayout.
+// by View::DefaultFillLayout, BoxLayout, and all LayoutManagerBase-derived
+// layouts including FlexLayout.
+// TODO(kylixrd): Use for other layouts.
 VIEWS_EXPORT extern const ui::ClassProperty<bool>* const
     kViewIgnoredByLayoutKey;
+
+// Property indicating whether a view should not lay out its own children.
+VIEWS_EXPORT extern const ui::ClassProperty<bool>* const
+    kViewDoesNotLayOutChildren;
 
 // Tag for the view associated with ui::ElementTracker.
 VIEWS_EXPORT extern const ui::ClassProperty<ui::ElementIdentifier>* const
     kElementIdentifierKey;
 
+// Secondary identifier (optional) used to differentiate between elements with
+// the same `kElementIdentifierKey`.
+VIEWS_EXPORT extern const ui::ClassProperty<std::string*>* const
+    kElementSecondaryIdentifierKey;
+
+// A property to store a FocusManager* that should be used for a view that is
+// not (yet) attached to a widget. This makes View::GetFocusManager() work.
+VIEWS_EXPORT extern const ui::ClassProperty<FocusManager*>* const
+    kDetachedViewFocusManagerKey;
+
+// A property indicating whether a view (usually a WebView or NativeViewHost)
+// is currently blocked by a tab-modal dialog.
+VIEWS_EXPORT extern const ui::ClassProperty<bool>* const kIsBlockedByModalKey;
+
 }  // namespace views
 
-// Declaring the template specialization here to make sure that the
-// compiler in all builds, including jumbo builds, always knows about
-// the specialization before the first template instance use. Using a
-// template instance before its specialization is declared in a
-// translation unit is a C++ error.
+// Declare template specializations introduced by Views here to make sure that
+// the compiler knows about them before the first template instance use. Using a
+// template instance before its specialization is declared in a translation unit
+// is an error.
 DECLARE_EXPORTED_UI_CLASS_PROPERTY_TYPE(VIEWS_EXPORT, gfx::Insets*)
+DECLARE_EXPORTED_UI_CLASS_PROPERTY_TYPE(VIEWS_EXPORT, ui::ElementIdentifier)
+DECLARE_EXPORTED_UI_CLASS_PROPERTY_TYPE(VIEWS_EXPORT,
+                                        views::BoxLayoutFlexSpecification*)
 DECLARE_EXPORTED_UI_CLASS_PROPERTY_TYPE(VIEWS_EXPORT, views::DialogDelegate*)
+DECLARE_EXPORTED_UI_CLASS_PROPERTY_TYPE(VIEWS_EXPORT, views::FlexSpecification*)
 DECLARE_EXPORTED_UI_CLASS_PROPERTY_TYPE(VIEWS_EXPORT,
                                         views::HighlightPathGenerator*)
-DECLARE_EXPORTED_UI_CLASS_PROPERTY_TYPE(VIEWS_EXPORT, views::FlexSpecification*)
 DECLARE_EXPORTED_UI_CLASS_PROPERTY_TYPE(VIEWS_EXPORT, views::LayoutAlignment*)
-DECLARE_EXPORTED_UI_CLASS_PROPERTY_TYPE(VIEWS_EXPORT, ui::ElementIdentifier)
-DECLARE_EXPORTED_UI_CLASS_PROPERTY_TYPE(VIEWS_EXPORT, bool)
+DECLARE_EXPORTED_UI_CLASS_PROPERTY_TYPE(VIEWS_EXPORT, views::View*)
+DECLARE_EXPORTED_UI_CLASS_PROPERTY_TYPE(VIEWS_EXPORT, views::Widget*)
+
+#if !defined(USE_AURA)
+// aura_constants.h declares this.
+DECLARE_EXPORTED_UI_CLASS_PROPERTY_TYPE(VIEWS_EXPORT, gfx::Rect*)
+DECLARE_EXPORTED_UI_CLASS_PROPERTY_TYPE(VIEWS_EXPORT, gfx::Size*)
+DECLARE_EXPORTED_UI_CLASS_PROPERTY_TYPE(VIEWS_EXPORT, std::string*)
+#endif
 
 #endif  // UI_VIEWS_VIEW_CLASS_PROPERTIES_H_

@@ -1,40 +1,64 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_QUIC_QUIC_SESSION_KEY_H_
 #define NET_QUIC_QUIC_SESSION_KEY_H_
 
+#include <iosfwd>
+
 #include "net/base/host_port_pair.h"
-#include "net/base/network_isolation_key.h"
+#include "net/base/network_anonymization_key.h"
+#include "net/base/network_handle.h"
 #include "net/base/privacy_mode.h"
+#include "net/base/proxy_chain.h"
+#include "net/base/session_usage.h"
 #include "net/dns/public/secure_dns_policy.h"
 #include "net/socket/socket_tag.h"
-#include "net/third_party/quiche/src/quic/core/quic_server_id.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_server_id.h"
 
 namespace net {
 
 // The key used to identify sessions. Includes the quic::QuicServerId and socket
 // tag.
-class QUIC_EXPORT_PRIVATE QuicSessionKey {
+class NET_EXPORT_PRIVATE QuicSessionKey {
  public:
   QuicSessionKey();
   QuicSessionKey(const HostPortPair& host_port_pair,
                  PrivacyMode privacy_mode,
+                 const ProxyChain& proxy_chain,
+                 SessionUsage session_usage,
                  const SocketTag& socket_tag,
-                 const NetworkIsolationKey& network_isolation_key,
-                 SecureDnsPolicy secure_dns_policy);
-  QuicSessionKey(const std::string& host,
+                 const NetworkAnonymizationKey& network_anonymization_key,
+                 SecureDnsPolicy secure_dns_policy,
+                 bool require_dns_https_alpn,
+                 bool disable_cert_verification_network_fetches,
+                 handles::NetworkHandle target_network);
+  QuicSessionKey(std::string host,
                  uint16_t port,
                  PrivacyMode privacy_mode,
+                 const ProxyChain& proxy_chain,
+                 SessionUsage session_usage,
                  const SocketTag& socket_tag,
-                 const NetworkIsolationKey& network_isolation_key,
-                 SecureDnsPolicy secure_dns_policy);
+                 const NetworkAnonymizationKey& network_anonymization_key,
+                 SecureDnsPolicy secure_dns_policy,
+                 bool require_dns_https_alpn,
+                 bool disable_cert_verification_network_fetches,
+                 handles::NetworkHandle target_network);
   QuicSessionKey(const quic::QuicServerId& server_id,
+                 PrivacyMode privacy_mode,
+                 const ProxyChain& proxy_chain,
+                 SessionUsage session_usage,
                  const SocketTag& socket_tag,
-                 const NetworkIsolationKey& network_isolation_key,
-                 SecureDnsPolicy secure_dns_policy);
+                 const NetworkAnonymizationKey& network_anonymization_key,
+                 SecureDnsPolicy secure_dns_policy,
+                 bool require_dns_https_alpn,
+                 bool disable_cert_verification_network_fetches,
+                 handles::NetworkHandle target_network);
   QuicSessionKey(const QuicSessionKey& other);
+  QuicSessionKey(QuicSessionKey&& other);
+  QuicSessionKey& operator=(const QuicSessionKey& other);
+  QuicSessionKey& operator=(QuicSessionKey&& other);
   ~QuicSessionKey() = default;
 
   // Needed to be an element of std::set.
@@ -53,28 +77,46 @@ class QUIC_EXPORT_PRIVATE QuicSessionKey {
 
   const std::string& host() const { return server_id_.host(); }
 
-  PrivacyMode privacy_mode() const {
-    return server_id_.privacy_mode_enabled() ? PRIVACY_MODE_ENABLED
-                                             : PRIVACY_MODE_DISABLED;
-  }
+  PrivacyMode privacy_mode() const { return privacy_mode_; }
 
   const quic::QuicServerId& server_id() const { return server_id_; }
 
+  const ProxyChain& proxy_chain() const { return proxy_chain_; }
+
+  SessionUsage session_usage() const { return session_usage_; }
+
   SocketTag socket_tag() const { return socket_tag_; }
 
-  const NetworkIsolationKey& network_isolation_key() const {
-    return network_isolation_key_;
+  const NetworkAnonymizationKey& network_anonymization_key() const {
+    return network_anonymization_key_;
   }
 
   SecureDnsPolicy secure_dns_policy() const { return secure_dns_policy_; }
 
+  bool require_dns_https_alpn() const { return require_dns_https_alpn_; }
+
+  bool disable_cert_verification_network_fetches() const {
+    return disable_cert_verification_network_fetches_;
+  }
+
+  handles::NetworkHandle target_network() const { return target_network_; }
+
  private:
   quic::QuicServerId server_id_;
+  PrivacyMode privacy_mode_ = PRIVACY_MODE_DISABLED;
+  ProxyChain proxy_chain_;
+  SessionUsage session_usage_ = SessionUsage::kDestination;
   SocketTag socket_tag_;
   // Used to separate requests made in different contexts.
-  NetworkIsolationKey network_isolation_key_;
-  SecureDnsPolicy secure_dns_policy_;
+  NetworkAnonymizationKey network_anonymization_key_;
+  SecureDnsPolicy secure_dns_policy_ = SecureDnsPolicy::kAllow;
+  bool require_dns_https_alpn_ = false;
+  bool disable_cert_verification_network_fetches_ = false;
+  handles::NetworkHandle target_network_ = handles::kInvalidNetworkHandle;
 };
+
+NET_EXPORT_PRIVATE std::ostream& operator<<(std::ostream& os,
+                                            const QuicSessionKey& key);
 
 }  // namespace net
 

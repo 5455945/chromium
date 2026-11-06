@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,15 @@
 
 #include <memory>
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback_forward.h"
+#include "components/viz/common/performance_hint_utils.h"
+#include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/size_f.h"
 #include "ui/gfx/geometry/vector2d_f.h"
+
+namespace cc {
+struct OverscrollBehavior;
+}
 
 namespace ui {
 class TouchHandleDrawable;
@@ -28,6 +32,10 @@ class SynchronousCompositor;
 
 class SynchronousCompositorClient {
  public:
+  SynchronousCompositorClient(const SynchronousCompositorClient&) = delete;
+  SynchronousCompositorClient& operator=(const SynchronousCompositorClient&) =
+      delete;
+
   // Indication to the client that |compositor| is now initialized on the
   // compositor thread, and open for business. |process_id| and |routing_id|
   // belong to the RVH that owns the compositor.
@@ -42,17 +50,19 @@ class SynchronousCompositorClient {
                                     const viz::FrameSinkId& id) = 0;
 
   virtual void UpdateRootLayerState(SynchronousCompositor* compositor,
-                                    const gfx::Vector2dF& total_scroll_offset,
-                                    const gfx::Vector2dF& max_scroll_offset,
+                                    const gfx::PointF& total_scroll_offset,
+                                    const gfx::PointF& max_scroll_offset,
                                     const gfx::SizeF& scrollable_size,
                                     float page_scale_factor,
                                     float min_page_scale_factor,
                                     float max_page_scale_factor) = 0;
 
-  virtual void DidOverscroll(SynchronousCompositor* compositor,
-                             const gfx::Vector2dF& accumulated_overscroll,
-                             const gfx::Vector2dF& latest_overscroll_delta,
-                             const gfx::Vector2dF& current_fling_velocity) = 0;
+  virtual void DidOverscroll(
+      SynchronousCompositor* compositor,
+      const gfx::Vector2dF& accumulated_overscroll,
+      const gfx::Vector2dF& latest_overscroll_delta,
+      const gfx::Vector2dF& current_fling_velocity,
+      const cc::OverscrollBehavior& overscroll_behavior) = 0;
 
   virtual void PostInvalidate(SynchronousCompositor* compositor) = 0;
 
@@ -66,12 +76,11 @@ class SynchronousCompositorClient {
 
   virtual void AddBeginFrameCompletionCallback(base::OnceClosure callback) = 0;
 
+  virtual void SetThreads(const std::vector<viz::Thread>& threads) = 0;
+
  protected:
   SynchronousCompositorClient() {}
   virtual ~SynchronousCompositorClient() {}
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(SynchronousCompositorClient);
 };
 
 }  // namespace content

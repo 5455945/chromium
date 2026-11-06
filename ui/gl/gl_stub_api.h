@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 
 #include <string>
 
+#include "base/compiler_specific.h"
 #include "ui/gl/gl_export.h"
 #include "ui/gl/gl_stub_api_base.h"
 
@@ -15,6 +16,10 @@ namespace gl {
 class GL_EXPORT GLStubApi: public GLStubApiBase {
  public:
   GLStubApi();
+
+  GLStubApi(const GLStubApi&) = delete;
+  GLStubApi& operator=(const GLStubApi&) = delete;
+
   ~GLStubApi() override;
 
   void set_version(std::string version) { version_ = std::move(version); }
@@ -29,10 +34,8 @@ class GL_EXPORT GLStubApi: public GLStubApiBase {
   GLsync glFenceSyncFn(GLenum condition, GLbitfield flags) override;
   void glGenBuffersARBFn(GLsizei n, GLuint* buffers) override;
   void glGenerateMipmapEXTFn(GLenum target) override;
-  void glGenFencesAPPLEFn(GLsizei n, GLuint* fences) override;
   void glGenFencesNVFn(GLsizei n, GLuint* fences) override;
   void glGenFramebuffersEXTFn(GLsizei n, GLuint* framebuffers) override;
-  GLuint glGenPathsNVFn(GLsizei range) override;
   void glGenQueriesFn(GLsizei n, GLuint* ids) override;
   void glGenRenderbuffersEXTFn(GLsizei n, GLuint* renderbuffers) override;
   void glGenSamplersFn(GLsizei n, GLuint* samplers) override;
@@ -54,10 +57,8 @@ class GL_EXPORT GLStubApi: public GLStubApiBase {
   const GLubyte* glGetStringiFn(GLenum name, GLuint index) override;
   GLboolean glIsBufferFn(GLuint buffer) override;
   GLboolean glIsEnabledFn(GLenum cap) override;
-  GLboolean glIsFenceAPPLEFn(GLuint fence) override;
   GLboolean glIsFenceNVFn(GLuint fence) override;
   GLboolean glIsFramebufferEXTFn(GLuint framebuffer) override;
-  GLboolean glIsPathNVFn(GLuint path) override;
   GLboolean glIsProgramFn(GLuint program) override;
   GLboolean glIsQueryFn(GLuint query) override;
   GLboolean glIsRenderbufferEXTFn(GLuint renderbuffer) override;
@@ -67,7 +68,6 @@ class GL_EXPORT GLStubApi: public GLStubApiBase {
   GLboolean glIsTextureFn(GLuint texture) override;
   GLboolean glIsTransformFeedbackFn(GLuint id) override;
   GLboolean glIsVertexArrayOESFn(GLuint array) override;
-  GLboolean glTestFenceAPPLEFn(GLuint fence) override;
   GLboolean glTestFenceNVFn(GLuint fence) override;
   GLboolean glUnmapBufferFn(GLenum target) override;
 
@@ -76,15 +76,15 @@ class GL_EXPORT GLStubApi: public GLStubApiBase {
   // and GPU fuzzers. We get a new GLStubApi for every case executed by
   // fuzzers, so we don't have to worry about ID exhaustion.
   void GenHelper(GLsizei count, GLuint* objects) {
-    for (GLsizei i = 0; i < count; ++i)
-      objects[i] = next_id_++;
+    for (GLsizei i = 0; i < count; ++i) {
+      // SAFETY: required from OpenGL across C API.
+      UNSAFE_BUFFERS(objects[i] = next_id_++);
+    }
   }
 
   std::string version_;
   std::string extensions_;
   GLuint next_id_ = 1;
-
-  DISALLOW_COPY_AND_ASSIGN(GLStubApi);
 };
 
 }  // namespace gl

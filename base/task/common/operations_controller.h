@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,8 @@
 #include <atomic>
 #include <cstdint>
 
+#include "base/base_export.h"
+#include "base/memory/stack_allocated.h"
 #include "base/synchronization/waitable_event.h"
 
 namespace base {
@@ -60,10 +62,13 @@ class BASE_EXPORT OperationsController {
   //
   // This class is thread-safe
   class OperationToken {
+    STACK_ALLOCATED();
+
    public:
     ~OperationToken() {
-      if (outer_)
+      if (outer_) {
         outer_->DecrementBy(1);
+      }
     }
     OperationToken(const OperationToken&) = delete;
     OperationToken(OperationToken&& other) {
@@ -76,6 +81,7 @@ class BASE_EXPORT OperationsController {
    private:
     friend class OperationsController;
     explicit OperationToken(OperationsController* outer) : outer_(outer) {}
+
     OperationsController* outer_;
   };
 

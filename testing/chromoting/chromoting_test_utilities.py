@@ -1,8 +1,9 @@
-# Copyright 2015 The Chromium Authors. All rights reserved.
+# Copyright 2015 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """Utility script to run tests on the Chromoting bot."""
+
+from __future__ import print_function
 
 import hashlib
 import os
@@ -12,6 +13,7 @@ import shutil
 import socket
 import subprocess
 
+# vpython-provided modules.
 import psutil
 
 PROD_DIR_ID = '#PROD_DIR#'
@@ -27,8 +29,9 @@ NATIVE_MESSAGING_DIR = 'NativeMessagingHosts'
 # under the temp folder.
 ISOLATE_CHROMOTING_HOST_PATH = 'remoting/host/linux/linux_me2me_host.py'
 ISOLATE_TEMP_FOLDER = os.path.abspath(os.path.join(os.getcwd(), '../..'))
-CHROMOTING_HOST_PATH = os.path.join(ISOLATE_TEMP_FOLDER,
-                                    ISOLATE_CHROMOTING_HOST_PATH)
+CHROMOTING_HOST_PATH = os.path.join(
+  ISOLATE_TEMP_FOLDER, ISOLATE_CHROMOTING_HOST_PATH
+)
 MAX_RETRIES = 1
 
 
@@ -47,13 +50,14 @@ def RunCommandInSubProcess(command):
 
   cmd_line = [command]
   try:
-    print 'Going to run:\n%s' % command
-    results = subprocess.check_output(cmd_line, stderr=subprocess.STDOUT,
-                                      shell=True)
-  except subprocess.CalledProcessError, e:
+    print('Going to run:\n%s' % command)
+    results = subprocess.check_output(
+      cmd_line, stderr=subprocess.STDOUT, shell=True
+    )
+  except subprocess.CalledProcessError as e:
     results = e.output
   finally:
-    print results
+    print(results)
   return results
 
 
@@ -105,8 +109,9 @@ def InitialiseTestMachineForLinux(cfg_file):
   default_config_file_name = 'host#%s.json' % HOST_HASH_VALUE
   config_file_src = os.path.join(os.getcwd(), cfg_file)
   shutil.copyfile(
-      config_file_src,
-      os.path.join(default_config_file_location, default_config_file_name))
+    config_file_src,
+    os.path.join(default_config_file_location, default_config_file_name),
+  )
 
   # Make sure chromoting host is running.
   RestartMe2MeHost()
@@ -133,7 +138,7 @@ def RestartMe2MeHost():
   # Stop chromoting host.
   RunCommandInSubProcess(CHROMOTING_HOST_PATH + ' --stop')
   # Start chromoting host.
-  print 'Starting chromoting host from %s' % CHROMOTING_HOST_PATH
+  print('Starting chromoting host from %s' % CHROMOTING_HOST_PATH)
   results = RunCommandInSubProcess(CHROMOTING_HOST_PATH + ' --start')
 
   os.chdir(previous_directory)
@@ -148,19 +153,21 @@ def RestartMe2MeHost():
   if HOST_READY_INDICATOR not in results:
     # Host start failed. Print out host-log. Don't run any tests.
     with open(log_file, 'r') as f:
-      print f.read()
+      print(f.read())
     raise HostOperationFailedException('Host restart failed.')
 
   return log_file
 
 
 def CleanupUserProfileDir(args):
-  SetupUserProfileDir(args.me2me_manifest_file, args.it2me_manifest_file,
-                      args.user_profile_dir)
+  SetupUserProfileDir(
+    args.me2me_manifest_file, args.it2me_manifest_file, args.user_profile_dir
+  )
 
 
-def SetupUserProfileDir(me2me_manifest_file, it2me_manifest_file,
-                        user_profile_dir):
+def SetupUserProfileDir(
+  me2me_manifest_file, it2me_manifest_file, user_profile_dir
+):
   """Sets up the Google Chrome user profile directory.
 
   Delete the previous user profile directory if exists and create a new one.
@@ -185,8 +192,9 @@ def SetupUserProfileDir(me2me_manifest_file, it2me_manifest_file,
   manifest_files = [me2me_manifest_file, it2me_manifest_file]
   for manifest_file in manifest_files:
     manifest_file_src = os.path.join(os.getcwd(), manifest_file)
-    manifest_file_dest = (
-        os.path.join(native_messaging_folder, os.path.basename(manifest_file)))
+    manifest_file_dest = os.path.join(
+      native_messaging_folder, os.path.basename(manifest_file)
+    )
     shutil.copyfile(manifest_file_src, manifest_file_dest)
 
 
@@ -194,9 +202,9 @@ def PrintRunningProcesses():
   processes = psutil.get_process_list()
   processes = sorted(processes, key=lambda process: process.name)
 
-  print 'List of running processes:\n'
+  print('List of running processes:\n')
   for process in processes:
-    print process.name
+    print(process.name)
 
 
 def PrintHostLogContents(host_log_files=None):
@@ -205,8 +213,10 @@ def PrintHostLogContents(host_log_files=None):
     for log_file in sorted(host_log_files):
       with open(log_file, 'r') as log:
         host_log_contents += '\nHOST LOG %s\n CONTENTS:\n%s' % (
-            log_file, log.read())
-    print host_log_contents
+          log_file,
+          log.read(),
+        )
+    print(host_log_contents)
 
 
 def TestCaseSetup(args):

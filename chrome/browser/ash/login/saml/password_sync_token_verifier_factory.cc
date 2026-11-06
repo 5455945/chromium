@@ -1,25 +1,30 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/login/saml/password_sync_token_verifier_factory.h"
 
-#include "chrome/browser/ash/login/saml/in_session_password_sync_manager_factory.h"
+#include <memory>
+
+#include "base/no_destructor.h"
 #include "chrome/browser/ash/login/saml/password_sync_token_verifier.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
-#include "components/keyed_service/content/browser_context_dependency_manager.h"
+#include "chrome/browser/profiles/profile_keyed_service_factory.h"
+#include "chrome/browser/profiles/profile_selections.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/user_manager/user.h"
-#include "components/user_manager/user_manager.h"
 #include "content/public/browser/browser_context.h"
 
-namespace chromeos {
+namespace ash {
 
 // static
 PasswordSyncTokenVerifierFactory*
 PasswordSyncTokenVerifierFactory::GetInstance() {
-  return base::Singleton<PasswordSyncTokenVerifierFactory>::get();
+  static base::NoDestructor<PasswordSyncTokenVerifierFactory> instance;
+  return instance.get();
 }
 
 // static
@@ -30,16 +35,27 @@ PasswordSyncTokenVerifier* PasswordSyncTokenVerifierFactory::GetForProfile(
 }
 
 PasswordSyncTokenVerifierFactory::PasswordSyncTokenVerifierFactory()
-    : BrowserContextKeyedServiceFactory(
+    : ProfileKeyedServiceFactory(
           "PasswordSyncTokenVerifier",
-          BrowserContextDependencyManager::GetInstance()) {
-  DependsOn(InSessionPasswordSyncManagerFactory::GetInstance());
+          ProfileSelections::Builder()
+              .WithRegular(ProfileSelection::kOriginalOnly)
+              .WithGuest(ProfileSelection::kNone)
+              .WithAshInternals(ProfileSelection::kNone)
+              .Build()) {
+  // PasswordSyncTokenVerifier holds the IdentityManager, so it must be
+  // destroyed before it.
+  DependsOn(IdentityManagerFactory::GetInstance());
 }
 
 PasswordSyncTokenVerifierFactory::~PasswordSyncTokenVerifierFactory() = default;
 
-KeyedService* PasswordSyncTokenVerifierFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+PasswordSyncTokenVerifierFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
+  // NOTE: Allow g_browser_process here as this class is initialized lazily with
+  // base::NoDestructor.
+  PrefService* local_state = g_browser_process->local_state();
+
   Profile* profile = Profile::FromBrowserContext(context);
   user_manager::User* user = ProfileHelper::Get()->GetUserByProfile(profile);
 
@@ -48,7 +64,8 @@ KeyedService* PasswordSyncTokenVerifierFactory::BuildServiceInstanceFor(
       !user->using_saml()) {
     return nullptr;
   }
-  return new PasswordSyncTokenVerifier(profile);
+  return std::make_unique<PasswordSyncTokenVerifier>(
+      local_state, profile, IdentityManagerFactory::GetForProfile(profile));
 }
 
-}  // namespace chromeos
+}  // namespace ash

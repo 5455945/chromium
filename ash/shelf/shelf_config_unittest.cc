@@ -1,4 +1,4 @@
-// Copyright (c) 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,7 @@
 #include "ash/wm/overview/overview_controller.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
 #include "base/command_line.h"
-#include "base/macros.h"
+#include "ui/display/screen.h"
 #include "ui/views/widget/widget.h"
 
 namespace ash {
@@ -24,9 +24,7 @@ class ShelfConfigTest : public AshTestBase {
  protected:
   bool is_dense() { return ShelfConfig::Get()->is_dense_; }
 
-  bool IsTabletMode() {
-    return Shell::Get()->tablet_mode_controller()->InTabletMode();
-  }
+  bool IsTabletMode() { return display::Screen::Get()->InTabletMode(); }
 
   void SetTabletMode(bool is_tablet_mode) {
     Shell::Get()->tablet_mode_controller()->SetEnabledForTest(is_tablet_mode);
@@ -35,7 +33,7 @@ class ShelfConfigTest : public AshTestBase {
 
 // Make sure ShelfConfig is dense when screen becomes small in tablet mode.
 TEST_F(ShelfConfigTest, SmallDisplayIsDense) {
-  UpdateDisplay("1000x1000");
+  UpdateDisplay("1100x1000");
   SetTabletMode(true);
 
   ASSERT_TRUE(IsTabletMode());
@@ -46,18 +44,18 @@ TEST_F(ShelfConfigTest, SmallDisplayIsDense) {
   ASSERT_TRUE(is_dense());
 
   // Set the display size back.
-  UpdateDisplay("1000x1000");
+  UpdateDisplay("1100x1000");
   ASSERT_FALSE(is_dense());
 
   // Change display to have a small height, and check that ShelfConfig is dense.
-  UpdateDisplay("1000x300");
+  UpdateDisplay("1100x300");
   ASSERT_TRUE(is_dense());
 }
 
 // Make sure ShelfConfig switches between dense and not dense when switching
 // between clamshell and tablet mode.
 TEST_F(ShelfConfigTest, DenseChangeOnTabletModeChange) {
-  UpdateDisplay("1000x1000");
+  UpdateDisplay("1100x1000");
 
   ASSERT_FALSE(IsTabletMode());
   ASSERT_TRUE(is_dense());
@@ -90,7 +88,8 @@ TEST_F(ShelfConfigTest, ShelfSizeChangesWithContext) {
   UpdateDisplay("300x1000");
   SetTabletMode(true);
   ASSERT_TRUE(IsTabletMode());
-  std::unique_ptr<views::Widget> widget = CreateTestWidget();
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   GetAppListTestHelper()->CheckVisibility(false);
   const int tablet_dense_in_app = ShelfConfig::Get()->shelf_size();
   const int system_shelf_tablet_dense_in_app =
@@ -104,9 +103,10 @@ TEST_F(ShelfConfigTest, ShelfSizeChangesWithContext) {
       ShelfConfig::Get()->system_shelf_size();
   const int control_tablet_dense_home = ShelfConfig::Get()->control_size();
 
-  UpdateDisplay("1000x1000");
+  UpdateDisplay("1100x1000");
   ASSERT_TRUE(IsTabletMode());
-  widget = CreateTestWidget();
+  widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   GetAppListTestHelper()->CheckVisibility(false);
   const int tablet_standard_in_app = ShelfConfig::Get()->shelf_size();
   const int system_shelf_tablet_standard_in_app =
@@ -128,7 +128,8 @@ TEST_F(ShelfConfigTest, ShelfSizeChangesWithContext) {
       ShelfConfig::Get()->system_shelf_size();
   const int control_clamshell_home = ShelfConfig::Get()->control_size();
 
-  widget = CreateTestWidget();
+  widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   widget->Maximize();
   const int clamshell_in_app = ShelfConfig::Get()->shelf_size();
   const int system_shelf_clamshell_in_app =
@@ -164,7 +165,8 @@ TEST_F(ShelfConfigTest, InAppMode) {
 
   // Go into tablet mode, open a window. Now we're in an app.
   SetTabletMode(true);
-  std::unique_ptr<views::Widget> widget = CreateTestWidget();
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   EXPECT_TRUE(ShelfConfig::Get()->is_in_app());
 
   // Close the window. We should be back on the home screen.
@@ -172,7 +174,8 @@ TEST_F(ShelfConfigTest, InAppMode) {
   EXPECT_FALSE(ShelfConfig::Get()->is_in_app());
 
   // Open a window again.
-  widget = CreateTestWidget();
+  widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   EXPECT_TRUE(ShelfConfig::Get()->is_in_app());
 
   // Now go into overview.

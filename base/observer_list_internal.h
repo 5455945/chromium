@@ -1,13 +1,20 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef BASE_OBSERVER_LIST_INTERNAL_H_
 #define BASE_OBSERVER_LIST_INTERNAL_H_
 
+#include <memory>
+#include <string>
+#include <type_traits>
+
 #include "base/base_export.h"
-#include "base/check_op.h"
+#include "base/check.h"
 #include "base/containers/linked_list.h"
+#include "base/dcheck_is_on.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list_types.h"
 
@@ -19,10 +26,21 @@ namespace base {
 namespace internal {
 
 // Adapter for putting raw pointers into an ObserverList<Foo>::Unchecked.
+template <base::RawPtrTraits ptr_traits = RawPtrTraits::kEmpty,
+          bool use_raw_pointer = false>
 class BASE_EXPORT UncheckedObserverAdapter {
  public:
+#if DCHECK_IS_ON()
+  UncheckedObserverAdapter(const void* observer, bool collect_stack)
+      : ptr_(const_cast<void*>(observer)) {
+    if (collect_stack) {
+      stack_ = std::make_unique<base::debug::StackTrace>();
+    }
+  }
+#else
   explicit UncheckedObserverAdapter(const void* observer)
       : ptr_(const_cast<void*>(observer)) {}
+#endif  // DCHECK_IS_ON()
   UncheckedObserverAdapter(const UncheckedObserverAdapter&) = delete;
   UncheckedObserverAdapter& operator=(const UncheckedObserverAdapter&) = delete;
   UncheckedObserverAdapter(UncheckedObserverAdapter&& other) = default;
@@ -37,20 +55,24 @@ class BASE_EXPORT UncheckedObserverAdapter {
   template <class ObserverType>
   static ObserverType* Get(const UncheckedObserverAdapter& adapter) {
     static_assert(
-        !std::is_base_of<CheckedObserver, ObserverType>::value,
+        !std::is_base_of_v<CheckedObserver, ObserverType>,
         "CheckedObserver classes must not use ObserverList<T>::Unchecked.");
     return static_cast<ObserverType*>(adapter.ptr_);
   }
 
 #if DCHECK_IS_ON()
-  std::string GetCreationStackString() const { return stack_.ToString(); }
-#endif
+  std::string GetCreationStackString() const {
+    return stack_ ? stack_->ToString() : std::string();
+  }
+#endif  // DCHECK_IS_ON()
 
  private:
-  void* ptr_;
+  using StorageType =
+      std::conditional_t<use_raw_pointer, void*, raw_ptr<void, ptr_traits>>;
+  StorageType ptr_;
 #if DCHECK_IS_ON()
-  base::debug::StackTrace stack_;
-#endif
+  std::unique_ptr<base::debug::StackTrace> stack_;
+#endif  // DCHECK_IS_ON()
 };
 
 // Adapter for CheckedObserver types so that they can use the same syntax as a
@@ -60,7 +82,11 @@ class BASE_EXPORT UncheckedObserverAdapter {
 // whilst an iteration is in progress.
 class BASE_EXPORT CheckedObserverAdapter {
  public:
+#if DCHECK_IS_ON()
+  CheckedObserverAdapter(const CheckedObserver* observer, bool collect_stack);
+#else
   explicit CheckedObserverAdapter(const CheckedObserver* observer);
+#endif
 
   // Move-only construction and assignment is required to store this in STL
   // types.
@@ -76,6 +102,9 @@ class BASE_EXPORT CheckedObserverAdapter {
   }
 
   bool IsMarkedForRemoval() const {
+    if (weak_ptr_) {
+      return false;
+    }
     // If |weak_ptr_| was invalidated then this attempt to iterate over the
     // pointer is a UAF. Tip: If it's unclear where the `delete` occurred, try
     // adding CHECK(!IsInObserverList()) to the ~CheckedObserver() (destructor)
@@ -83,33 +112,36 @@ class BASE_EXPORT CheckedObserverAdapter {
     // observer can exist in an ObserverList so long as nothing iterates over
     // the ObserverList before the list itself is destroyed.
     CHECK(!weak_ptr_.WasInvalidated());
-    return weak_ptr_ == nullptr;
+    return true;
   }
 
   bool IsEqual(const CheckedObserver* rhs) const {
     // Note that inside an iteration, ObserverList::HasObserver() may call this
     // and |weak_ptr_| may be null due to a deferred removal, which is fine.
-    return weak_ptr_.get() == rhs;
+    return weak_ptr_ == rhs;
   }
 
   template <class ObserverType>
   static ObserverType* Get(const CheckedObserverAdapter& adapter) {
     static_assert(
-        std::is_base_of<CheckedObserver, ObserverType>::value,
+        std::is_base_of_v<CheckedObserver, ObserverType>,
         "Observers should inherit from base::CheckedObserver. "
         "Use ObserverList<T>::Unchecked to observe with raw pointers.");
-    DCHECK(adapter.weak_ptr_);
-    return static_cast<ObserverType*>(adapter.weak_ptr_.get());
+    CheckedObserver* observer = adapter.weak_ptr_.get();
+    DCHECK(observer);
+    return static_cast<ObserverType*>(observer);
   }
 
 #if DCHECK_IS_ON()
-  std::string GetCreationStackString() const { return stack_.ToString(); }
+  std::string GetCreationStackString() const {
+    return stack_ ? stack_->ToString() : std::string();
+  }
 #endif
 
  private:
   WeakPtr<CheckedObserver> weak_ptr_;
 #if DCHECK_IS_ON()
-  base::debug::StackTrace stack_;
+  std::unique_ptr<base::debug::StackTrace> stack_;
 #endif
 };
 
@@ -119,7 +151,7 @@ class BASE_EXPORT CheckedObserverAdapter {
 // destructor of ObserverList. This invalidates all WeakLinkNodes. There is no
 // threading support.
 template <class ObserverList>
-class WeakLinkNode : public base::LinkNode<WeakLinkNode<ObserverList>> {
+class WeakLinkNode : public base::UnsafeLinkNode<WeakLinkNode<ObserverList>> {
  public:
   WeakLinkNode() = default;
   explicit WeakLinkNode(ObserverList* list) { SetList(list); }
@@ -148,15 +180,20 @@ class WeakLinkNode : public base::LinkNode<WeakLinkNode<ObserverList>> {
   }
 
   ObserverList* get() const {
-    if (list_)
+#if EXPENSIVE_DCHECKS_ARE_ON()
+    if (list_) {
       DCHECK_CALLED_ON_VALID_SEQUENCE(list_->iteration_sequence_checker_);
+    }
+#endif  // EXPENSIVE_DCHECKS_ARE_ON()
     return list_;
   }
   ObserverList* operator->() const { return get(); }
   explicit operator bool() const { return get(); }
 
  private:
-  ObserverList* list_ = nullptr;
+  // `list_` is not a raw_ptr<...> for performance reasons: on-stack pointer +
+  // based on analysis of sampling profiler data and tab_search:top100:2020.
+  RAW_PTR_EXCLUSION ObserverList* list_ = nullptr;
 };
 
 }  // namespace internal

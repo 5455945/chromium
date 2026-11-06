@@ -1,11 +1,17 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/platform/fonts/script_run_iterator.h"
 
+#include <array>
+#include <utility>
+
+#include "base/compiler_specific.h"
 #include "base/logging.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/threading.h"
@@ -18,12 +24,21 @@ struct ScriptTestRun {
 };
 
 struct ScriptExpectedRun {
-  unsigned limit;
+  wtf_size_t limit;
   UScriptCode code;
 
-  ScriptExpectedRun(unsigned the_limit, UScriptCode the_code)
+  ScriptExpectedRun(wtf_size_t the_limit, UScriptCode the_code)
       : limit(the_limit), code(the_code) {}
+
+  bool operator==(const ScriptExpectedRun& other) const {
+    return limit == other.limit && code == other.code;
+  }
 };
+
+std::ostream& operator<<(std::ostream& output, const ScriptExpectedRun& run) {
+  return output << Format("{}:{} ({})", run.limit, run.code,
+                          uscript_getName(run.code));
+}
 
 class MockScriptData : public ScriptData {
  public:
@@ -51,7 +66,7 @@ class MockScriptData : public ScriptData {
         break;
     }
     int list_bits = kTable[code & kCodeListIndexMask];
-    if (dst.IsEmpty() && list_bits == 0) {
+    if (dst.empty() && list_bits == 0) {
       dst.push_back(USCRIPT_UNKNOWN);
       return;
     }
@@ -95,6 +110,11 @@ class MockScriptData : public ScriptData {
       return PairedBracketType::kBracketTypeClose;
     }
     return PairedBracketType::kBracketTypeOpen;
+  }
+
+  RunExtensionLookups GetSafeToExtendExistingRun(
+      UScriptCode script) const override {
+    return {nullptr, nullptr};
   }
 
   static int TableLookup(int value) {
@@ -251,7 +271,7 @@ class MockScriptData : public ScriptData {
   static const int kListShift = 2;
   static const int kListMask = 0x3;
   static const int kBracketDelta = kCodeBracketCloseBit;
-  static const int kTable[16];
+  static const std::array<int, 16> kTable;
 
   static const int kSawBracket = 0x1;
   static const int kSawSpecial = 0x2;
@@ -266,7 +286,7 @@ static const int kGreek2 = MockScriptData::kGreek << 2;
 static const int kLatin3 = MockScriptData::kLatin << 4;
 static const int kHan3 = MockScriptData::kHan << 4;
 static const int kGreek3 = MockScriptData::kGreek << 4;
-const int MockScriptData::kTable[] = {
+const std::array<int, 16> MockScriptData::kTable = {{
     0,
     kLatin,
     kHan,
@@ -283,7 +303,7 @@ const int MockScriptData::kTable[] = {
     kHan3 + kGreek2 + kLatin,
     kGreek3 + kLatin2 + kHan,
     kGreek3 + kHan2 + kLatin,
-};
+}};
 
 class ScriptRunIteratorTest : public testing::Test {
  protected:
@@ -292,10 +312,10 @@ class ScriptRunIteratorTest : public testing::Test {
     text.Ensure16Bit();
     Vector<ScriptExpectedRun> expect;
     for (auto& run : runs) {
-      text.Append(String::FromUTF8(run.text));
+      text.Append(String::FromUtf8(run.text));
       expect.push_back(ScriptExpectedRun(text.length(), run.code));
     }
-    ScriptRunIterator script_run_iterator(text.Characters16(), text.length());
+    ScriptRunIterator script_run_iterator(text.Span16());
     VerifyRuns(&script_run_iterator, expect);
   }
 
@@ -310,48 +330,38 @@ class ScriptRunIteratorTest : public testing::Test {
       expect.push_back(ScriptExpectedRun(text.length(), run.code));
     }
 
-    ScriptRunIterator script_run_iterator(text.Characters16(), text.length(),
+    ScriptRunIterator script_run_iterator(text.Span16(),
                                           MockScriptData::Instance());
     VerifyRuns(&script_run_iterator, expect);
   }
 
   void VerifyRuns(ScriptRunIterator* script_run_iterator,
                   const Vector<ScriptExpectedRun>& expect) {
-    unsigned limit;
+    Vector<ScriptExpectedRun> actual;
+    wtf_size_t limit;
     UScriptCode code;
-    size_t run_count = 0;
-    while (script_run_iterator->Consume(&limit, &code)) {
-      ASSERT_LT(run_count, expect.size());
-      ASSERT_EQ(expect[run_count].limit, limit);
-      ASSERT_EQ(expect[run_count].code, code);
-      ++run_count;
-    }
-    ASSERT_EQ(expect.size(), run_count);
+    while (script_run_iterator->Consume(&limit, &code))
+      actual.emplace_back(limit, code);
+    EXPECT_THAT(actual, testing::ContainerEq(expect));
   }
 };
 
 TEST_F(ScriptRunIteratorTest, Empty) {
   String empty(g_empty_string16_bit);
-  ScriptRunIterator script_run_iterator(empty.Characters16(), empty.length());
-  unsigned limit = 0;
+  ScriptRunIterator script_run_iterator(empty.Span16());
+  wtf_size_t limit = 0;
   UScriptCode code = USCRIPT_INVALID_CODE;
   DCHECK(!script_run_iterator.Consume(&limit, &code));
   ASSERT_EQ(limit, 0u);
   ASSERT_EQ(code, USCRIPT_INVALID_CODE);
 }
 
-// Some of our compilers cannot initialize a vector from an array yet.
-#define DECLARE_SCRIPT_RUNSVECTOR(...)                   \
-  static const ScriptTestRun kRunsArray[] = __VA_ARGS__; \
-  Vector<ScriptTestRun> runs;                            \
-  runs.Append(kRunsArray, sizeof(kRunsArray) / sizeof(*kRunsArray));
-
-#define CHECK_SCRIPT_RUNS(...)            \
-  DECLARE_SCRIPT_RUNSVECTOR(__VA_ARGS__); \
+#define CHECK_SCRIPT_RUNS(...)              \
+  Vector<ScriptTestRun> runs = __VA_ARGS__; \
   CheckRuns(runs);
 
-#define CHECK_MOCK_SCRIPT_RUNS(...)       \
-  DECLARE_SCRIPT_RUNSVECTOR(__VA_ARGS__); \
+#define CHECK_MOCK_SCRIPT_RUNS(...)         \
+  Vector<ScriptTestRun> runs = __VA_ARGS__; \
   CheckMockRuns(runs);
 
 TEST_F(ScriptRunIteratorTest, Whitespace) {
@@ -363,7 +373,12 @@ TEST_F(ScriptRunIteratorTest, Common) {
 }
 
 TEST_F(ScriptRunIteratorTest, CombiningCircle) {
-  CHECK_SCRIPT_RUNS({{"◌́◌̀◌̈◌̂◌̄◌̊", USCRIPT_COMMON}});
+#if U_ICU_VERSION_MAJOR_NUM >= 76
+  const UScriptCode script = USCRIPT_LATIN;
+#else
+  const UScriptCode script = USCRIPT_COMMON;
+#endif
+  CHECK_SCRIPT_RUNS({{"◌́◌̀◌̈◌̂◌̄◌̊", script}});
 }
 
 TEST_F(ScriptRunIteratorTest, Latin) {
@@ -471,6 +486,114 @@ TEST_F(ScriptRunIteratorTest, ParenChineseParenLatin) {
 TEST_F(ScriptRunIteratorTest, QuoteParenChineseParenLatinQuote) {
   CHECK_SCRIPT_RUNS(
       {{"\"(萬國碼) ", USCRIPT_HAN}, {"Unicode\"", USCRIPT_LATIN}});
+}
+
+TEST_F(ScriptRunIteratorTest, CjkConsecutiveParens1) {
+  CHECK_SCRIPT_RUNS({{"「あ", USCRIPT_HIRAGANA},
+                     // The consecutive punctuation should not be split.
+                     {"国。」", USCRIPT_HAN}});
+}
+
+TEST_F(ScriptRunIteratorTest, CjkConsecutiveParens2) {
+  CHECK_SCRIPT_RUNS({{"あ「あ", USCRIPT_HIRAGANA},
+                     // The consecutive punctuation should not be split.
+                     {"国（国）」", USCRIPT_HAN}});
+}
+
+TEST_F(ScriptRunIteratorTest, CjkConsecutiveParens3) {
+  CHECK_SCRIPT_RUNS({{"国「国", USCRIPT_HAN},
+                     {"ア（", USCRIPT_HIRAGANA},
+                     {"A", USCRIPT_LATIN},
+                     // The consecutive punctuation should not be split.
+                     {"）」", USCRIPT_HIRAGANA}});
+}
+
+TEST_F(ScriptRunIteratorTest, CjkConsecutiveParens4) {
+  CHECK_SCRIPT_RUNS({{"A", USCRIPT_LATIN},
+                     // CJK puncutuation after non-CJK resolves to Bopomofo,
+                     // because it's the first script extension in the Unicode
+                     // data. It's not correct but ok because GPOS/GSUB in CJK
+                     // fonts usually include the same features for all CJK
+                     // scripts including Bopomofo, even when they are not
+                     // intended for Traditional Chinese.
+                     {"「", USCRIPT_BOPOMOFO},
+                     {"A", USCRIPT_LATIN},
+                     {"あ（", USCRIPT_HIRAGANA},
+                     // The consecutive punctuation should not be split.
+                     {"国）」", USCRIPT_HAN}});
+}
+
+TEST_F(ScriptRunIteratorTest, CjkConsecutiveParens5) {
+  CHECK_SCRIPT_RUNS({{"「あ", USCRIPT_HIRAGANA},
+                     {"国", USCRIPT_HAN},
+                     {"A", USCRIPT_LATIN},
+                     {"」", USCRIPT_HIRAGANA}});
+}
+
+TEST_F(ScriptRunIteratorTest, CjkConsecutiveParens6) {
+  CHECK_SCRIPT_RUNS({{"A", USCRIPT_LATIN},
+                     {"「", USCRIPT_BOPOMOFO},  // See CjkConsecutiveParens4
+                     {"A", USCRIPT_LATIN},
+                     {"あ（", USCRIPT_HIRAGANA},
+                     {"国）", USCRIPT_HAN},
+                     {"A", USCRIPT_LATIN},
+                     {"」", USCRIPT_BOPOMOFO}});
+}
+
+TEST_F(ScriptRunIteratorTest, CjkConsecutiveParens7) {
+  CHECK_SCRIPT_RUNS({
+      {"「あ", USCRIPT_HIRAGANA},
+      {"国1」", USCRIPT_HAN},
+  });
+}
+
+TEST_F(ScriptRunIteratorTest, CjkConsecutiveParens8) {
+  CHECK_SCRIPT_RUNS({
+      {"A", USCRIPT_LATIN},
+      {"「", USCRIPT_BOPOMOFO},  // See CjkConsecutiveParens4
+      {"A", USCRIPT_LATIN},
+      {"あ（", USCRIPT_HIRAGANA},
+      {"国）1」", USCRIPT_HAN},
+  });
+}
+
+TEST_F(ScriptRunIteratorTest, CjkConsecutiveParens9) {
+  CHECK_SCRIPT_RUNS({{"「あ", USCRIPT_HIRAGANA},
+                     {"国", USCRIPT_HAN},
+                     {"A1", USCRIPT_LATIN},
+                     {"」", USCRIPT_HIRAGANA}});
+}
+
+TEST_F(ScriptRunIteratorTest, CjkConsecutiveParens10) {
+  CHECK_SCRIPT_RUNS({{"A", USCRIPT_LATIN},
+                     {"「", USCRIPT_BOPOMOFO},  // See CjkConsecutiveParens4
+                     {"A", USCRIPT_LATIN},
+                     {"あ（", USCRIPT_HIRAGANA},
+                     {"国）", USCRIPT_HAN},
+                     {"A1", USCRIPT_LATIN},
+                     {"」", USCRIPT_BOPOMOFO}});
+}
+
+TEST_F(ScriptRunIteratorTest, CjkConsecutiveParensLatin1) {
+  CHECK_SCRIPT_RUNS({{"「", USCRIPT_BOPOMOFO},  // See CjkConsecutiveParens4
+                     {"A", USCRIPT_LATIN},
+                     {"「", USCRIPT_BOPOMOFO},
+                     {"A", USCRIPT_LATIN},
+                     {"」」", USCRIPT_BOPOMOFO}});
+}
+
+TEST_F(ScriptRunIteratorTest, CjkConsecutiveParensLatin2) {
+  CHECK_SCRIPT_RUNS({{"「", USCRIPT_BOPOMOFO},  // See CjkConsecutiveParens4
+                     {"A", USCRIPT_LATIN},
+                     {"（", USCRIPT_BOPOMOFO},
+                     {"A", USCRIPT_LATIN},
+                     {"）」", USCRIPT_BOPOMOFO}});
+}
+
+TEST_F(ScriptRunIteratorTest, CjkConsecutiveParensLatin3) {
+  CHECK_SCRIPT_RUNS({{"「", USCRIPT_BOPOMOFO},  // See CjkConsecutiveParens4
+                     {"A", USCRIPT_LATIN},
+                     {"（国）」", USCRIPT_HAN}});
 }
 
 // Emojies are resolved to the leading script.
@@ -665,22 +788,41 @@ TEST_F(ScriptRunIteratorTest, CommonMalayalam) {
   CHECK_SCRIPT_RUNS({{"100-ാം", USCRIPT_MALAYALAM}});
 }
 
-class ScriptRunIteratorICUDataTest : public testing::Test {
- public:
-  ScriptRunIteratorICUDataTest()
-      : max_extensions_(0), max_extensions_codepoint_(0xffff) {
-    int max_extensions = 0;
-    UChar32 max_extensionscp = 0;
-    for (UChar32 cp = 0; cp < 0x11000; ++cp) {
-      UErrorCode status = U_ZERO_ERROR;
-      int count = uscript_getScriptExtensions(cp, nullptr, 0, &status);
-      if (count > max_extensions) {
-        max_extensions = count;
-        max_extensionscp = cp;
-      }
+TEST_F(ScriptRunIteratorTest, IdeographicCommaDoesNotCountAsLatin) {
+  CHECK_SCRIPT_RUNS({{"也：", USCRIPT_HAN},
+                     {"ABC", USCRIPT_LATIN},
+                     {"、", USCRIPT_BOPOMOFO},
+                     {"DEF", USCRIPT_LATIN}});
+}
+
+std::pair<int, UChar32> MaximumScriptExtensions() {
+  int max_extensions = 0;
+  UChar32 max_extensionscp = 0;
+  for (UChar32 cp = 0; cp < 0x11000; ++cp) {
+    UErrorCode status = U_ZERO_ERROR;
+    int count = uscript_getScriptExtensions(cp, nullptr, 0, &status);
+    if (count > max_extensions) {
+      max_extensions = count;
+      max_extensionscp = cp;
     }
-    max_extensions_ = max_extensions;
-    max_extensions_codepoint_ = max_extensionscp;
+  }
+  return std::make_pair(max_extensions, max_extensionscp);
+}
+
+TEST_F(ScriptRunIteratorTest, MaxUnicodeScriptExtensions) {
+  int max_extensions = 0;
+  UChar32 max_extensionscp = 0;
+  std::tie(max_extensions, max_extensionscp) = MaximumScriptExtensions();
+  // If this test fails (as a result of an ICU update, most likely), it means
+  // we need to change kMaxUnicodeScriptExtensions.
+  EXPECT_LE(max_extensions, ScriptRunIterator::kMaxUnicodeScriptExtensions);
+}
+
+class ScriptRunIteratorIcuDataTest : public testing::Test {
+ public:
+  ScriptRunIteratorIcuDataTest() {
+    std::tie(max_extensions_, max_extensions_codepoint_) =
+        MaximumScriptExtensions();
   }
 
  protected:
@@ -698,20 +840,20 @@ class ScriptRunIteratorICUDataTest : public testing::Test {
 
 // Validate that ICU never returns more than our maximum expected number of
 // script extensions.
-TEST_F(ScriptRunIteratorICUDataTest, ValidateICUMaxScriptExtensions) {
+TEST_F(ScriptRunIteratorIcuDataTest, ValidateIcuMaxScriptExtensions) {
   int max_extensions;
   UChar32 cp = GetACharWithMaxExtensions(&max_extensions);
-  ASSERT_LE(max_extensions, ScriptData::kMaxScriptCount)
+  ASSERT_LT(max_extensions, ScriptData::kMaxScriptCount)
       << "char " << std::hex << cp << std::dec;
 }
 
-// Check that ICUScriptData returns all of a character's scripts.
+// Check that IcuScriptData returns all of a character's scripts.
 // This only checks one likely character, but doesn't check all cases.
-TEST_F(ScriptRunIteratorICUDataTest, ICUDataGetScriptsReturnsAllExtensions) {
+TEST_F(ScriptRunIteratorIcuDataTest, IcuDataGetScriptsReturnsAllExtensions) {
   int max_extensions;
   UChar32 cp = GetACharWithMaxExtensions(&max_extensions);
   ScriptData::UScriptCodeList extensions;
-  ICUScriptData::Instance()->GetScripts(cp, extensions);
+  IcuScriptData::Instance()->GetScripts(cp, extensions);
 
   // It's possible that GetScripts adds the primary script to the list of
   // extensions, resulting in one more script than the raw extension count.
@@ -719,10 +861,10 @@ TEST_F(ScriptRunIteratorICUDataTest, ICUDataGetScriptsReturnsAllExtensions) {
       << "char " << std::hex << cp << std::dec;
 }
 
-TEST_F(ScriptRunIteratorICUDataTest, CommonHaveNoMoreThanOneExtension) {
+TEST_F(ScriptRunIteratorIcuDataTest, CommonHaveNoMoreThanOneExtension) {
   ScriptData::UScriptCodeList extensions;
   for (UChar32 cp = 0; cp < 0x110000; ++cp) {
-    ICUScriptData::Instance()->GetScripts(cp, extensions);
+    IcuScriptData::Instance()->GetScripts(cp, extensions);
     UScriptCode primary = extensions.at(0);
     if (primary == USCRIPT_COMMON) {
       ASSERT_LE(extensions.size(), 2ul) << "cp: " << std::hex << cp << std::dec;

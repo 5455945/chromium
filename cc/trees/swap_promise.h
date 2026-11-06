@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 
+#include "base/time/time.h"
 #include "cc/cc_export.h"
 #include "components/viz/common/quads/compositor_frame_metadata.h"
 
@@ -14,14 +15,14 @@ namespace cc {
 
 // When a change to the compositor's state/invalidation/whatever happens, a
 // Swap Promise can be inserted into LayerTreeHost/LayerTreeImpl, to track
-// whether the compositor's reply to the new state/invaliadtion/whatever is
+// whether the compositor's reply to the new state/invalidation/whatever is
 // completed in the compositor, i.e. the compositor knows it has been sent
 // to its output or not.
 //
 // If the commit results in a successful activation of the pending layer tree,
 // SwapPromise::DidActivate() will be called.
 //
-// If the new compositor state is goint to be sent to the output,
+// If the new compositor state is going to be sent to the output,
 // SwapPromise::WillSwap() will be called before the swap and
 // SwapPromise::DidSwap() will be called once the swap is over.
 //
@@ -29,7 +30,7 @@ namespace cc {
 // fails to send its new state to the output, SwapPromise::DidNotSwap() will
 // be called. Note that it is possible to activate, and subsequently not swap.
 //
-// Promises complete afer either DidSwap() or DidNotSwap() is called, thus
+// Promises complete after either DidSwap() or DidNotSwap() is called, thus
 // there are three possible call sequences:
 //   DidNotSwap()
 //   DidActivate() ; WillSwap(); DidSwap()
@@ -63,16 +64,19 @@ class CC_EXPORT SwapPromise {
   virtual void DidActivate() = 0;
   virtual void WillSwap(viz::CompositorFrameMetadata* metadata) = 0;
   virtual void DidSwap() = 0;
-  // Return |KEEP_ACTIVE| if this promise should remain active (should not be
-  // broken by the owner).
-  virtual DidNotSwapAction DidNotSwap(DidNotSwapReason reason) = 0;
+
+  // Return `DidNotSwapAction::KEEP_ACTIVE` if this promise should remain active
+  // (should not be broken by the owner).
+  virtual DidNotSwapAction DidNotSwap(DidNotSwapReason reason,
+                                      base::TimeTicks timestamp) = 0;
+
   // This is called when the main thread starts a (blocking) commit
   virtual void OnCommit() {}
 
   // A non-zero trace id identifies a trace flow object that is embedded in the
   // swap promise. This can be used for registering additional flow steps to
   // visualize the object's path through the system.
-  virtual int64_t TraceId() const = 0;
+  virtual int64_t GetTraceId() const = 0;
 };
 
 }  // namespace cc

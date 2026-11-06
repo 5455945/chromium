@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,40 +13,40 @@ import androidx.preference.Preference;
 import org.chromium.base.IntentUtils;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.metrics.RecordUserAction;
+import org.chromium.build.annotations.Initializer;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.safe_browsing.SafeBrowsingBridge;
 import org.chromium.chrome.browser.safe_browsing.SafeBrowsingState;
 import org.chromium.chrome.browser.safe_browsing.metrics.SettingsAccessPoint;
 import org.chromium.chrome.browser.safe_browsing.metrics.UserAction;
 import org.chromium.chrome.browser.settings.ChromeManagedPreferenceDelegate;
-import org.chromium.components.browser_ui.settings.FragmentSettingsLauncher;
+import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
+import org.chromium.chrome.browser.settings.search.ChromeBaseSearchIndexProvider;
 import org.chromium.components.browser_ui.settings.ManagedPreferenceDelegate;
-import org.chromium.components.browser_ui.settings.SettingsLauncher;
-import org.chromium.components.browser_ui.settings.TextMessagePreference;
 
-/**
- * Fragment containing Safe Browsing settings.
- */
+/** Fragment containing Safe Browsing settings. */
+@NullMarked
 public class SafeBrowsingSettingsFragment extends SafeBrowsingSettingsFragmentBase
-        implements FragmentSettingsLauncher,
-                   RadioButtonGroupSafeBrowsingPreference.OnSafeBrowsingModeDetailsRequested,
-                   Preference.OnPreferenceChangeListener {
-    @VisibleForTesting
-    static final String PREF_TEXT_MANAGED = "text_managed";
-    @VisibleForTesting
-    static final String PREF_SAFE_BROWSING = "safe_browsing_radio_button_group";
+        implements RadioButtonGroupSafeBrowsingPreference.OnSafeBrowsingModeDetailsRequested,
+                Preference.OnPreferenceChangeListener {
+    @VisibleForTesting static final String PREF_MANAGED_DISCLAIMER_TEXT = "managed_disclaimer_text";
+    @VisibleForTesting static final String PREF_SAFE_BROWSING = "safe_browsing_radio_button_group";
     public static final String ACCESS_POINT = "SafeBrowsingSettingsFragment.AccessPoint";
 
-    // An instance of SettingsLauncher that is used to launch Safe Browsing subsections.
-    private SettingsLauncher mSettingsLauncher;
     private RadioButtonGroupSafeBrowsingPreference mSafeBrowsingPreference;
+
     private @SettingsAccessPoint int mAccessPoint;
 
     /**
      * @return A summary that describes the current Safe Browsing state.
      */
-    public static String getSafeBrowsingSummaryString(Context context) {
+    public static String getSafeBrowsingSummaryString(Context context, Profile profile) {
         @SafeBrowsingState
-        int safeBrowsingState = SafeBrowsingBridge.getSafeBrowsingState();
+        int safeBrowsingState = new SafeBrowsingBridge(profile).getSafeBrowsingState();
         String safeBrowsingStateString = "";
         if (safeBrowsingState == SafeBrowsingState.ENHANCED_PROTECTION) {
             safeBrowsingStateString =
@@ -72,24 +72,24 @@ public class SafeBrowsingSettingsFragment extends SafeBrowsingSettingsFragmentBa
         return result;
     }
 
+    @Initializer
     @Override
-    protected void onCreatePreferencesInternal(Bundle bundle, String s) {
+    protected void onCreatePreferencesInternal(@Nullable Bundle bundle, @Nullable String s) {
         mAccessPoint =
                 IntentUtils.safeGetInt(getArguments(), ACCESS_POINT, SettingsAccessPoint.DEFAULT);
 
         ManagedPreferenceDelegate managedPreferenceDelegate = createManagedPreferenceDelegate();
 
         mSafeBrowsingPreference = findPreference(PREF_SAFE_BROWSING);
-        mSafeBrowsingPreference.init(SafeBrowsingBridge.getSafeBrowsingState(),
-                mAccessPoint);
+        mSafeBrowsingPreference.init(getSafeBrowsingBridge().getSafeBrowsingState(), mAccessPoint);
         mSafeBrowsingPreference.setSafeBrowsingModeDetailsRequestedListener(this);
         mSafeBrowsingPreference.setManagedPreferenceDelegate(managedPreferenceDelegate);
         mSafeBrowsingPreference.setOnPreferenceChangeListener(this);
 
-        TextMessagePreference textManaged = findPreference(PREF_TEXT_MANAGED);
-        textManaged.setManagedPreferenceDelegate(managedPreferenceDelegate);
-        textManaged.setVisible(managedPreferenceDelegate.isPreferenceClickDisabledByPolicy(
-                mSafeBrowsingPreference));
+        findPreference(PREF_MANAGED_DISCLAIMER_TEXT)
+                .setVisible(
+                        managedPreferenceDelegate.isPreferenceClickDisabled(
+                                mSafeBrowsingPreference));
 
         recordUserActionHistogram(UserAction.SHOWED);
     }
@@ -103,30 +103,36 @@ public class SafeBrowsingSettingsFragment extends SafeBrowsingSettingsFragmentBa
     public void onSafeBrowsingModeDetailsRequested(@SafeBrowsingState int safeBrowsingState) {
         recordUserActionHistogramForStateDetailsClicked(safeBrowsingState);
         if (safeBrowsingState == SafeBrowsingState.ENHANCED_PROTECTION) {
-            mSettingsLauncher.launchSettingsActivity(
-                    getActivity(), EnhancedProtectionSettingsFragment.class);
+            SettingsNavigationFactory.createSettingsNavigation(requireContext())
+                    .startSettings(
+                            getActivity(),
+                            EnhancedProtectionSettingsFragment.class,
+                            /* fragmentArgs= */ null,
+                            /* addToBackStack= */ true);
         } else if (safeBrowsingState == SafeBrowsingState.STANDARD_PROTECTION) {
-            mSettingsLauncher.launchSettingsActivity(
-                    getActivity(), StandardProtectionSettingsFragment.class);
+            SettingsNavigationFactory.createSettingsNavigation(requireContext())
+                    .startSettings(
+                            getActivity(),
+                            StandardProtectionSettingsFragment.class,
+                            /* fragmentArgs= */ null,
+                            /* addToBackStack= */ true);
         } else {
             assert false : "Should not be reached";
         }
     }
 
-    @Override
-    public void setSettingsLauncher(SettingsLauncher settingsLauncher) {
-        mSettingsLauncher = settingsLauncher;
-    }
-
     private ChromeManagedPreferenceDelegate createManagedPreferenceDelegate() {
-        return preference -> {
-            String key = preference.getKey();
-            if (PREF_TEXT_MANAGED.equals(key) || PREF_SAFE_BROWSING.equals(key)) {
-                return SafeBrowsingBridge.isSafeBrowsingManaged();
-            } else {
-                assert false : "Should not be reached.";
+        return new ChromeManagedPreferenceDelegate(getProfile()) {
+            @Override
+            public boolean isPreferenceControlledByPolicy(Preference preference) {
+                String key = preference.getKey();
+                if (PREF_MANAGED_DISCLAIMER_TEXT.equals(key) || PREF_SAFE_BROWSING.equals(key)) {
+                    return getSafeBrowsingBridge().isSafeBrowsingManaged();
+                } else {
+                    assert false : "Should not be reached.";
+                }
+                return false;
             }
-            return false;
         };
     }
 
@@ -134,10 +140,8 @@ public class SafeBrowsingSettingsFragment extends SafeBrowsingSettingsFragmentBa
     public boolean onPreferenceChange(Preference preference, Object newValue) {
         String key = preference.getKey();
         assert PREF_SAFE_BROWSING.equals(key) : "Unexpected preference key.";
-        @SafeBrowsingState
-        int newState = (int) newValue;
-        @SafeBrowsingState
-        int currentState = SafeBrowsingBridge.getSafeBrowsingState();
+        @SafeBrowsingState int newState = (int) newValue;
+        @SafeBrowsingState int currentState = getSafeBrowsingBridge().getSafeBrowsingState();
         if (newState == currentState) {
             return true;
         }
@@ -148,16 +152,17 @@ public class SafeBrowsingSettingsFragment extends SafeBrowsingSettingsFragmentBa
             // The user hasn't confirmed to select no protection, keep the radio button / UI checked
             // state at the currently selected level.
             mSafeBrowsingPreference.setCheckedState(currentState);
-            NoProtectionConfirmationDialog
-                    .create(getContext(),
+            NoProtectionConfirmationDialog.create(
+                            getContext(),
                             (didConfirm) -> {
                                 recordUserActionHistogramForNoProtectionConfirmation(didConfirm);
                                 if (didConfirm) {
                                     // The user has confirmed to select no protection, set Safe
                                     // Browsing pref to no protection, and change the radio button /
                                     // UI checked state to no protection.
-                                    SafeBrowsingBridge.setSafeBrowsingState(
-                                            SafeBrowsingState.NO_SAFE_BROWSING);
+                                    getSafeBrowsingBridge()
+                                            .setSafeBrowsingState(
+                                                    SafeBrowsingState.NO_SAFE_BROWSING);
                                     mSafeBrowsingPreference.setCheckedState(
                                             SafeBrowsingState.NO_SAFE_BROWSING);
                                 }
@@ -165,21 +170,42 @@ public class SafeBrowsingSettingsFragment extends SafeBrowsingSettingsFragmentBa
                             })
                     .show();
         } else {
-            SafeBrowsingBridge.setSafeBrowsingState(newState);
+            getSafeBrowsingBridge().setSafeBrowsingState(newState);
+            if (newState == SafeBrowsingState.ENHANCED_PROTECTION) {
+                ChromeSharedPreferences.getInstance()
+                        .writeBoolean(
+                                ChromePreferenceKeys.SETUP_LIST_COMPLETED_KEY_PREFIX.createKey(
+                                        String.valueOf(
+                                                12 /* ModuleType.ENHANCED_SAFE_BROWSING_PROMO */)),
+                                true);
+            }
         }
+        // This function is called when the user manually modifies their safe browsing settings via
+        // the security settings page. This action indicates that the user has seen and interacted
+        // with the notification that informed them of the synced settings.
+        //
+        // The notification is displayed when safe browsing settings are synced across devices.
+        // This function prevents the notification from being shown again for settings explicitly
+        // configured locally, ensuring that users are not repeatedly notified about settings
+        // they've deliberately chosen on this device.
+        //
+        // By marking the notification as "shown" locally, we differentiate between settings applied
+        // via sync and those directly configured by the user on this device, thus avoiding
+        // redundant or misleading notifications.
+        getSafeBrowsingBridge().enableSafeBrowsingSettingSetLocallyPref();
         return true;
     }
 
     private void recordUserActionHistogramForNewStateClicked(
             @SafeBrowsingState int safeBrowsingState) {
         switch (safeBrowsingState) {
-            case (SafeBrowsingState.ENHANCED_PROTECTION):
+            case SafeBrowsingState.ENHANCED_PROTECTION:
                 recordUserActionHistogram(UserAction.ENHANCED_PROTECTION_CLICKED);
                 break;
-            case (SafeBrowsingState.STANDARD_PROTECTION):
+            case SafeBrowsingState.STANDARD_PROTECTION:
                 recordUserActionHistogram(UserAction.STANDARD_PROTECTION_CLICKED);
                 break;
-            case (SafeBrowsingState.NO_SAFE_BROWSING):
+            case SafeBrowsingState.NO_SAFE_BROWSING:
                 recordUserActionHistogram(UserAction.DISABLE_SAFE_BROWSING_CLICKED);
                 break;
             default:
@@ -190,10 +216,10 @@ public class SafeBrowsingSettingsFragment extends SafeBrowsingSettingsFragmentBa
     private void recordUserActionHistogramForStateDetailsClicked(
             @SafeBrowsingState int safeBrowsingState) {
         switch (safeBrowsingState) {
-            case (SafeBrowsingState.ENHANCED_PROTECTION):
+            case SafeBrowsingState.ENHANCED_PROTECTION:
                 recordUserActionHistogram(UserAction.ENHANCED_PROTECTION_EXPAND_ARROW_CLICKED);
                 break;
-            case (SafeBrowsingState.STANDARD_PROTECTION):
+            case SafeBrowsingState.STANDARD_PROTECTION:
                 recordUserActionHistogram(UserAction.STANDARD_PROTECTION_EXPAND_ARROW_CLICKED);
                 break;
             default:
@@ -214,19 +240,36 @@ public class SafeBrowsingSettingsFragment extends SafeBrowsingSettingsFragmentBa
         // The metricsSuffix string shouldn't be changed. When adding a new access point, please
         // also update the "SafeBrowsing.Settings.AccessPoint" histogram suffix in the
         // histograms.xml file.
-        if (mAccessPoint == SettingsAccessPoint.PARENT_SETTINGS) {
-            metricsSuffix = "ParentSettings";
-        } else if (mAccessPoint == SettingsAccessPoint.SAFETY_CHECK) {
-            metricsSuffix = "SafetyCheck";
-        } else if (mAccessPoint == SettingsAccessPoint.SURFACE_EXPLORER_PROMO_SLINGER) {
-            metricsSuffix = "SurfaceExplorerPromoSlinger";
-        } else if (mAccessPoint == SettingsAccessPoint.SECURITY_INTERSTITIAL) {
-            metricsSuffix = "SecurityInterstitial";
-        } else {
-            metricsSuffix = "Default";
+        switch (mAccessPoint) {
+            case SettingsAccessPoint.DEFAULT:
+                metricsSuffix = "Default";
+                break;
+            case SettingsAccessPoint.PARENT_SETTINGS:
+                metricsSuffix = "ParentSettings";
+                break;
+            case SettingsAccessPoint.SAFETY_CHECK:
+                metricsSuffix = "SafetyCheck";
+                break;
+            case SettingsAccessPoint.SURFACE_EXPLORER_PROMO_SLINGER:
+                metricsSuffix = "SurfaceExplorerPromoSlinger";
+                break;
+            case SettingsAccessPoint.SECURITY_INTERSTITIAL:
+                metricsSuffix = "SecurityInterstitial";
+                break;
+            case SettingsAccessPoint.TAILORED_SECURITY:
+                metricsSuffix = "TailoredSecurity";
+                break;
+            case SettingsAccessPoint.TIPS_NOTIFICATIONS_PROMO:
+                metricsSuffix = "TipsNotificationsPromo";
+                break;
+            default:
+                assert false : "Should not be reached.";
+                metricsSuffix = "";
+                break;
         }
         RecordHistogram.recordEnumeratedHistogram(
-                "SafeBrowsing.Settings.UserAction." + metricsSuffix, userAction,
+                "SafeBrowsing.Settings.UserAction." + metricsSuffix,
+                userAction,
                 UserAction.MAX_VALUE + 1);
 
         String userActionSuffix;
@@ -261,4 +304,14 @@ public class SafeBrowsingSettingsFragment extends SafeBrowsingSettingsFragmentBa
         }
         RecordUserAction.record("SafeBrowsing.Settings." + userActionSuffix);
     }
+
+    @Override
+    public @AnimationType int getAnimationType() {
+        return AnimationType.PROPERTY;
+    }
+
+    public static final ChromeBaseSearchIndexProvider SEARCH_INDEX_DATA_PROVIDER =
+            new ChromeBaseSearchIndexProvider(
+                    SafeBrowsingSettingsFragment.class.getName(),
+                    ChromeBaseSearchIndexProvider.INDEX_OPT_OUT);
 }

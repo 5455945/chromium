@@ -1,8 +1,7 @@
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import json
 import os
 import os.path
 import shutil
@@ -20,7 +19,7 @@ class MojomParserTestCase(unittest.TestCase):
   resolution, and module serialization and deserialization."""
 
   def __init__(self, method_name):
-    super(MojomParserTestCase, self).__init__(method_name)
+    super().__init__(method_name)
     self._temp_dir = None
 
   def setUp(self):
@@ -54,8 +53,13 @@ class MojomParserTestCase(unittest.TestCase):
     """Parse all input mojoms relative the temp dir."""
     out_dir = self.GetPath('out')
     args = [
-        '--input-root', self._temp_dir, '--input-root', out_dir,
-        '--output-root', out_dir, '--mojoms'
+      '--input-root',
+      self._temp_dir,
+      '--input-root',
+      out_dir,
+      '--output-root',
+      out_dir,
+      '--mojoms',
     ] + list(map(lambda mojom: os.path.join(self._temp_dir, mojom), mojoms))
     if metadata:
       args.extend(['--check-imports', self.GetPath(metadata)])
@@ -67,7 +71,7 @@ class MojomParserTestCase(unittest.TestCase):
     self.ParseMojoms([filename])
     m = self.LoadModule(filename)
     definitions = {}
-    for kinds in (m.enums, m.structs, m.unions, m.interfaces):
+    for kinds in (m.enums, m.structs, m.unions, m.interfaces, m.features):
       for kind in kinds:
         definitions[kind.mojom_name] = kind
     return definitions

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,14 +8,14 @@
 #include <memory>
 #include <string>
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
-#include "components/sync/base/model_type.h"
+#include "base/time/time.h"
+#include "components/sync/base/data_type.h"
 #include "components/sync_device_info/device_info.h"
 #include "components/sync_device_info/local_device_info_provider.h"
-#include "components/version_info/version_info.h"
 
 namespace syncer {
 
@@ -26,6 +26,11 @@ class LocalDeviceInfoProviderImpl : public MutableLocalDeviceInfoProvider {
   LocalDeviceInfoProviderImpl(version_info::Channel channel,
                               const std::string& version,
                               const DeviceInfoSyncClient* sync_client);
+
+  LocalDeviceInfoProviderImpl(const LocalDeviceInfoProviderImpl&) = delete;
+  LocalDeviceInfoProviderImpl& operator=(const LocalDeviceInfoProviderImpl&) =
+      delete;
+
   ~LocalDeviceInfoProviderImpl() override;
 
   // MutableLocalDeviceInfoProvider implementation.
@@ -35,9 +40,11 @@ class LocalDeviceInfoProviderImpl : public MutableLocalDeviceInfoProvider {
       const std::string& manufacturer_name,
       const std::string& model_name,
       const std::string& full_hardware_class,
-      std::unique_ptr<DeviceInfo> device_info_restored_from_store) override;
+      std::optional<std::string> android_os_build_fingerprint_prefix,
+      const DeviceInfo* device_info_restored_from_store) override;
   void Clear() override;
   void UpdateClientName(const std::string& client_name) override;
+  void UpdateRecentSignInTime(base::Time time) override;
   version_info::Channel GetChannel() const override;
   const DeviceInfo* GetLocalDeviceInfo() const override;
   base::CallbackListSubscription RegisterOnInitializedCallback(
@@ -52,7 +59,7 @@ class LocalDeviceInfoProviderImpl : public MutableLocalDeviceInfoProvider {
 
   void ResetFullHardwareClassIfUmaDisabled() const;
 
-  const DeviceInfoSyncClient* const sync_client_;
+  const raw_ptr<const DeviceInfoSyncClient> sync_client_;
 
   bool IsUmaEnabledOnCrOSDevice() const;
 
@@ -66,8 +73,6 @@ class LocalDeviceInfoProviderImpl : public MutableLocalDeviceInfoProvider {
   SEQUENCE_CHECKER(sequence_checker_);
 
   base::WeakPtrFactory<LocalDeviceInfoProviderImpl> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(LocalDeviceInfoProviderImpl);
 };
 
 }  // namespace syncer

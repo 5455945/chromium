@@ -1,29 +1,30 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "chrome/browser/ui/views/omnibox/omnibox_text_view.h"
 
 #include <limits.h>
 
 #include <algorithm>
 #include <memory>
+#include <optional>
+#include <string_view>
 
-#include "chrome/browser/ui/views/omnibox/omnibox_text_view.h"
-
-#include "base/feature_list.h"
-#include "base/macros.h"
-#include "base/strings/string_util.h"
+#include "base/memory/safety_checks.h"
 #include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/omnibox/omnibox_theme.h"
 #include "chrome/browser/ui/views/chrome_typography.h"
-#include "components/omnibox/browser/omnibox_field_trial.h"
-#include "components/omnibox/common/omnibox_features.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/color/color_provider.h"
 #include "ui/gfx/canvas.h"
-#include "ui/gfx/color_palette.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/range/range.h"
 #include "ui/gfx/render_text.h"
+#include "ui/views/style/typography.h"
+#include "ui/views/style/typography_provider.h"
 
 namespace {
 
@@ -31,203 +32,123 @@ namespace {
 // we use OmniboxTheme for that.
 constexpr int kTextStyle = views::style::STYLE_PRIMARY;
 
-// Indicates to use CONTEXT_OMNIBOX_PRIMARY when picking a font size in legacy
-// code paths.
-constexpr int kInherit = INT_MIN;
-
 // The vertical padding to provide each RenderText in addition to the height
 // of the font. Where possible, RenderText uses this additional space to
 // vertically center the cap height of the font instead of centering the
 // entire font.
 static constexpr int kVerticalPadding = 3;
 
-struct TextStyle {
-  OmniboxPart part;
-
-  // The legacy size delta, relative to the ui::ResourceBundle BaseFont, or
-  // kInherit to use CONTEXT_OMNIBOX_PRIMARY, to match the omnibox font.
-  // Note: the actual font size may differ due to |baseline| altering the size.
-  int legacy_size_delta = kInherit;
-
-  // The size delta from the Touchable chrome spec. This is always relative to
-  // CONTEXT_OMNIBOX_PRIMARY, which defaults to 15pt under touch. Only negative
-  // deltas are supported correctly (the line height will not increase to fit).
-  int touchable_size_delta = 0;
-
-  // The baseline shift. Ignored under touch (text is always baseline-aligned).
-  gfx::BaselineStyle baseline = gfx::NORMAL_BASELINE;
-};
-
-// The new answer layout has separate and different treatment of text styles,
-// and as of writing both styling approaches need to be supported.  When old
-// answer styles are deprecated, the above TextStyle structure and related
-// logic can be removed, and this used exclusively.  This utility function
-// applies new answer text styling for given text_type over range on render_text
-// using result_view as a source for omnibox part colors.
-void ApplyTextStyleForType(SuggestionAnswer::TextStyle text_style,
-                           OmniboxResultView* result_view,
-                           gfx::RenderText* render_text,
-                           const gfx::Range& range) {
-  struct TextStyleNewAnswers {
-    void Apply(gfx::RenderText* render_text, const gfx::Range& range) {
-      render_text->ApplyWeight(weight, range);
-      render_text->ApplyBaselineStyle(baseline, range);
-      render_text->ApplyColor(color, range);
-    }
-    SkColor color;
-    gfx::BaselineStyle baseline = gfx::NORMAL_BASELINE;
-    gfx::Font::Weight weight = gfx::Font::Weight::NORMAL;
-  };
-
-  TextStyleNewAnswers style;
-  const SkColor part_color = result_view->GetColor(
-      (text_style == SuggestionAnswer::TextStyle::NORMAL_DIM)
-          ? OmniboxPart::RESULTS_TEXT_DIMMED
-          : OmniboxPart::RESULTS_TEXT_DEFAULT);
-  switch (text_style) {
-    case SuggestionAnswer::TextStyle::SECONDARY:
-      style = {gfx::kGoogleGrey600};
-      break;
-    case SuggestionAnswer::TextStyle::POSITIVE:
-      style = {gfx::kGoogleGreen600};
-      break;
-    case SuggestionAnswer::TextStyle::NEGATIVE:
-      style = {gfx::kGoogleRed600};
-      break;
-    case SuggestionAnswer::TextStyle::SUPERIOR:
-      style = {.color = part_color, .baseline = gfx::SUPERIOR};
-      break;
-    case SuggestionAnswer::TextStyle::BOLD:
-      style = {.color = part_color,
-               .baseline = gfx::NORMAL_BASELINE,
-               .weight = gfx::Font::Weight::BOLD};
-      break;
-    case SuggestionAnswer::TextStyle::NORMAL:
-    case SuggestionAnswer::TextStyle::NORMAL_DIM:
-    default:
-      style = {part_color};
-      break;
-  }
-  style.Apply(render_text, range);
-}
-
 }  // namespace
 
 OmniboxTextView::OmniboxTextView(OmniboxResultView* result_view)
-    : result_view_(result_view) {}
+    : result_view_(result_view) {
+  SetCanProcessEventsWithinSubtree(false);
+}
 
 OmniboxTextView::~OmniboxTextView() = default;
 
-gfx::Size OmniboxTextView::CalculatePreferredSize() const {
-  return render_text_ ? render_text_->GetStringSize() : gfx::Size();
-}
+gfx::Size OmniboxTextView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
+  if (!render_text_) {
+    return gfx::Size();
+  }
 
-bool OmniboxTextView::GetCanProcessEventsWithinSubtree() const {
-  return false;
-}
+  if (!available_size.width().is_bounded()) {
+    render_text_->SetDisplayRect(gfx::Rect(gfx::Size(INT_MAX, 0)));
+    return render_text_->GetStringSize();
+  }
 
-int OmniboxTextView::GetHeightForWidth(int width) const {
-  if (!render_text_)
-    return 0;
-  // If text wrapping is not called for we can simply return the font height.
-  if (!wrap_text_lines_)
-    return GetLineHeight();
-  render_text_->SetDisplayRect(gfx::Rect(width, 0));
-  gfx::Size string_size = render_text_->GetStringSize();
-  return string_size.height() + kVerticalPadding;
+  const int width = available_size.width().value();
+  if (!wrap_text_lines_) {
+    return gfx::Size(width, GetLineHeight());
+  }
+
+  if (cached_available_size_ != available_size ||
+      cached_calculate_preferred_size_.IsEmpty()) {
+    cached_available_size_ = available_size;
+    render_text_->SetDisplayRect(gfx::Rect(width, 0));
+    gfx::Size string_size = render_text_->GetStringSize();
+    string_size.Enlarge(0, kVerticalPadding);
+    cached_calculate_preferred_size_ = string_size;
+  }
+  return cached_calculate_preferred_size_;
 }
 
 void OmniboxTextView::OnPaint(gfx::Canvas* canvas) {
+  // Omnibox interaction is a critical user journey we exclude it from
+  // additional memory safety checks.
+  // TODO(crbug.com/478634529): Optimize and remove if possible.
+  base::ScopedSafetyChecksExclusion excluded;
   View::OnPaint(canvas);
 
-  if (!render_text_)
+  if (!render_text_) {
     return;
+  }
   render_text_->SetDisplayRect(GetContentsBounds());
   render_text_->Draw(canvas);
 }
 
-void OmniboxTextView::ApplyTextColor(OmniboxPart part) {
-  if (GetText().empty())
+void OmniboxTextView::ApplyTextColor(ui::ColorId id) {
+  if (GetText().empty()) {
     return;
-  render_text_->SetColor(result_view_->GetColor(part));
+  }
+  render_text_->SetColor(GetColorProvider()->GetColor(id));
   SchedulePaint();
 }
 
-const std::u16string& OmniboxTextView::GetText() const {
-  return render_text_ ? render_text_->text() : base::EmptyString16();
+std::u16string_view OmniboxTextView::GetText() const {
+  return render_text_ ? render_text_->text() : std::u16string_view();
 }
 
-void OmniboxTextView::SetText(const std::u16string& new_text) {
+void OmniboxTextView::SetText(std::u16string_view new_text) {
   if (cached_classifications_) {
     cached_classifications_.reset();
-  } else if (GetText() == new_text && !use_deemphasized_font_) {
+  } else if (GetText() == new_text) {
     // Only exit early if |cached_classifications_| was empty,
     // i.e. the last time text was set was through this method.
     return;
   }
 
-  use_deemphasized_font_ = false;
   render_text_ = CreateRenderText(new_text);
 
   OnStyleChanged();
 }
 
 void OmniboxTextView::SetTextWithStyling(
-    const std::u16string& new_text,
-    const ACMatchClassifications& classifications,
-    bool deemphasize) {
+    std::u16string_view new_text,
+    const ACMatchClassifications& classifications) {
   if (GetText() == new_text && cached_classifications_ &&
-      classifications == *cached_classifications_ &&
-      deemphasize == use_deemphasized_font_)
+      classifications == *cached_classifications_) {
     return;
-
-  use_deemphasized_font_ = deemphasize;
+  }
 
   cached_classifications_ =
       std::make_unique<ACMatchClassifications>(classifications);
   render_text_ = CreateRenderText(new_text);
 
-  // ReapplyStyling will update the preferred size and request a repaint.
+  // `ReapplyStyling()` will update the preferred size and request a repaint.
   ReapplyStyling();
 }
 
-void OmniboxTextView::SetTextWithStyling(
-    const SuggestionAnswer::ImageLine& line,
-    bool deemphasize) {
-  use_deemphasized_font_ = deemphasize;
+void OmniboxTextView::SetMultilineText(const std::u16string& text) {
+  // This is a "dirty" check to check if this call is a no-op and no state
+  // change is required. It works only because `SetMultilineText()` is the only
+  // place to set max lines to 3. It's not 100% correct because some of the
+  // other setters don't reset max lines back to 1. Ideally, all these setter
+  // methods would have a clean and robust way to verify no state change is
+  // required and early exit. See comment at `wrap_text_lines_`'s declaration.
+  if (!cached_classifications_ && GetText() == text && render_text_ &&
+      render_text_->max_lines() == 3) {
+    return;
+  }
   cached_classifications_.reset();
-  wrap_text_lines_ = line.num_text_lines() > 1;
-  render_text_ = CreateRenderText(std::u16string());
-
-  for (const SuggestionAnswer::TextField& text_field : line.text_fields())
-    AppendText(text_field, std::u16string());
-  if (!line.text_fields().empty()) {
-    constexpr int kMaxDisplayLines = 3;
-    const SuggestionAnswer::TextField& first_field = line.text_fields().front();
-    if (first_field.has_num_lines() && first_field.num_lines() > 1) {
-      render_text_->SetMultiline(true);
-      render_text_->SetMaxLines(
-          std::min(kMaxDisplayLines, first_field.num_lines()));
-    }
-  }
-
-  // Add the "additional" and "status" text from |line|, if any.
-  AppendExtraText(line);
-
+  render_text_ = CreateRenderText(text);
+  render_text_->SetColor(result_view_->GetColorProvider()->GetColor(
+      kColorOmniboxResultsTextAnswer));
+  render_text_->SetMultiline(true);
+  render_text_->SetMaxLines(3);
+  wrap_text_lines_ = true;
   OnStyleChanged();
-}
-
-void OmniboxTextView::AppendExtraText(const SuggestionAnswer::ImageLine& line) {
-  const std::u16string space = u" ";
-  const auto* text_field = line.additional_text();
-  if (text_field) {
-    AppendText(*text_field, space);
-  }
-  text_field = line.status_text();
-  if (text_field) {
-    AppendText(*text_field, space);
-  }
-  SetPreferredSize(CalculatePreferredSize());
 }
 
 int OmniboxTextView::GetLineHeight() const {
@@ -236,14 +157,16 @@ int OmniboxTextView::GetLineHeight() const {
 
 void OmniboxTextView::ReapplyStyling() {
   // No work required if there are no preexisting styles.
-  if (!cached_classifications_)
+  if (!cached_classifications_) {
     return;
+  }
 
   const size_t text_length = GetText().length();
   for (size_t i = 0; i < cached_classifications_->size(); ++i) {
     const size_t text_start = (*cached_classifications_)[i].offset;
-    if (text_start >= text_length)
+    if (text_start >= text_length) {
       break;
+    }
 
     const size_t text_end =
         (i < (cached_classifications_->size() - 1))
@@ -252,49 +175,49 @@ void OmniboxTextView::ReapplyStyling() {
     const gfx::Range current_range(text_start, text_end);
 
     // Calculate style-related data.
-    if ((*cached_classifications_)[i].style & ACMatchClassification::MATCH)
+    if ((*cached_classifications_)[i].style & ACMatchClassification::MATCH) {
       render_text_->ApplyWeight(gfx::Font::Weight::BOLD, current_range);
+    } else if ((*cached_classifications_)[i].style &
+               ACMatchClassification::TOOLBELT) {
+      // TODO(crbug.com/430318151): Investigate whether this font weight and
+      // size handling can be done in chrome_typography.cc, like other omnibox
+      // text.
+      render_text_->ApplyWeight(gfx::Font::Weight::MEDIUM, current_range);
+      render_text_->ApplyFontSizeOverride(12, current_range);
+    }
 
-    OmniboxPart part = OmniboxPart::RESULTS_TEXT_DEFAULT;
+    const bool selected =
+        result_view_->GetThemeState() == OmniboxPartState::SELECTED;
+    ui::ColorId id =
+        selected ? kColorOmniboxResultsTextSelected : kColorOmniboxText;
     if ((*cached_classifications_)[i].style & ACMatchClassification::URL) {
-      part = OmniboxPart::RESULTS_TEXT_URL;
+      id = selected ? kColorOmniboxResultsUrlSelected : kColorOmniboxResultsUrl;
       render_text_->SetDirectionalityMode(gfx::DIRECTIONALITY_AS_URL);
     } else if ((*cached_classifications_)[i].style &
                ACMatchClassification::DIM) {
-      part = OmniboxPart::RESULTS_TEXT_DIMMED;
+      id = selected ? kColorOmniboxResultsTextDimmedSelected
+                    : kColorOmniboxResultsTextDimmed;
     }
-    render_text_->ApplyColor(result_view_->GetColor(part), current_range);
+    render_text_->ApplyColor(GetColorProvider()->GetColor(id), current_range);
   }
 
   OnStyleChanged();
 }
 
 std::unique_ptr<gfx::RenderText> OmniboxTextView::CreateRenderText(
-    const std::u16string& text) const {
+    std::u16string_view text) const {
   std::unique_ptr<gfx::RenderText> render_text =
       gfx::RenderText::CreateRenderText();
   render_text->SetDisplayRect(gfx::Rect(gfx::Size(INT_MAX, 0)));
   render_text->SetCursorEnabled(false);
   render_text->SetElideBehavior(gfx::ELIDE_TAIL);
-  const gfx::FontList& font = views::style::GetFont(
-      (use_deemphasized_font_ ? CONTEXT_OMNIBOX_DEEMPHASIZED
-                              : CONTEXT_OMNIBOX_PRIMARY),
-      kTextStyle);
+  const gfx::FontList& font = views::TypographyProvider::Get().GetFont(
+      CONTEXT_OMNIBOX_POPUP, kTextStyle);
   render_text->SetFontList(font);
   render_text->SetText(text);
+  // Increase space between lines for multiline texts.
+  render_text->SetMinLineHeight(19);
   return render_text;
-}
-
-void OmniboxTextView::AppendText(const SuggestionAnswer::TextField& field,
-                                 const std::u16string& prefix) {
-  const std::u16string& append_text =
-      prefix.empty() ? field.text() : (prefix + field.text());
-  if (append_text.empty())
-    return;
-  int offset = GetText().length();
-  gfx::Range range(offset, offset + append_text.length());
-  render_text_->AppendText(append_text);
-  ApplyTextStyleForType(field.style(), result_view_, render_text_.get(), range);
 }
 
 void OmniboxTextView::OnStyleChanged() {
@@ -309,11 +232,18 @@ void OmniboxTextView::OnStyleChanged() {
   font_height_ = std::max(height_normal, height_bold);
   font_height_ += kVerticalPadding;
 
-  SetPreferredSize(CalculatePreferredSize());
+  // Cache preferred size for 1-line matches only since their heights don't
+  // depend on the available width.
+  if (!wrap_text_lines_) {
+    SetPreferredSize(CalculatePreferredSize({}));
+  } else {
+    SetPreferredSize({});
+    cached_calculate_preferred_size_.SetSize(0, 0);
+  }
   SchedulePaint();
 }
 
-BEGIN_METADATA(OmniboxTextView, views::View)
+BEGIN_METADATA(OmniboxTextView)
 ADD_PROPERTY_METADATA(std::u16string, Text)
 ADD_READONLY_PROPERTY_METADATA(int, LineHeight)
 END_METADATA

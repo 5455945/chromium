@@ -1,8 +1,7 @@
-# Copyright 2019 The Chromium Authors. All rights reserved.
+# Copyright 2019 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-from .code_generator_info import CodeGeneratorInfo
 from .composition_parts import WithCodeGeneratorInfo
 from .composition_parts import WithComponent
 from .composition_parts import WithDebugInfo
@@ -11,26 +10,41 @@ from .composition_parts import WithExtendedAttributes
 from .composition_parts import WithIdentifier
 from .composition_parts import WithOwner
 from .composition_parts import WithOwnerMixin
-from .exposure import Exposure
 from .idl_type import IdlType
 from .literal_constant import LiteralConstant
 from .make_copy import make_copy
 
 
-class Constant(WithIdentifier, WithExtendedAttributes, WithCodeGeneratorInfo,
-               WithExposure, WithOwner, WithOwnerMixin, WithComponent,
-               WithDebugInfo):
-    """https://heycam.github.io/webidl/#idl-constants"""
+class Constant(
+    WithIdentifier,
+    WithExtendedAttributes,
+    WithCodeGeneratorInfo,
+    WithExposure,
+    WithOwner,
+    WithOwnerMixin,
+    WithComponent,
+    WithDebugInfo,
+):
+    """https://webidl.spec.whatwg.org/#idl-constants"""
 
-    class IR(WithIdentifier, WithExtendedAttributes, WithCodeGeneratorInfo,
-             WithExposure, WithOwnerMixin, WithComponent, WithDebugInfo):
-        def __init__(self,
-                     identifier,
-                     idl_type,
-                     value,
-                     extended_attributes=None,
-                     component=None,
-                     debug_info=None):
+    class IR(
+        WithIdentifier,
+        WithExtendedAttributes,
+        WithCodeGeneratorInfo,
+        WithExposure,
+        WithOwnerMixin,
+        WithComponent,
+        WithDebugInfo,
+    ):
+        def __init__(
+            self,
+            identifier,
+            idl_type,
+            value,
+            extended_attributes=None,
+            component=None,
+            debug_info=None,
+        ):
             assert isinstance(idl_type, IdlType)
             assert isinstance(value, LiteralConstant)
 

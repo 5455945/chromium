@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,11 @@
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/run_loop.h"
+#include "base/test/bind.h"
 #include "base/test/task_environment.h"
 #include "components/cast/message_port/platform_message_port.h"
 #include "components/cast/message_port/test_message_port_receiver.h"
-#include "components/cast_streaming/browser/message_serialization.h"
+#include "components/cast_streaming/common/message_serialization.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace cast_streaming {
@@ -38,7 +39,7 @@ class CastMessagePortImplTest : public testing::Test,
         std::move(receiver),
         base::BindOnce(&CastMessagePortImplTest::OnCastChannelClosed,
                        base::Unretained(this)));
-    receiver_message_port_->SetClient(this, kSenderId);
+    receiver_message_port_->SetClient(*this);
   }
 
  protected:
@@ -86,12 +87,13 @@ class CastMessagePortImplTest : public testing::Test,
       std::move(receiver_message_closure_).Run();
     }
   }
-  void OnError(openscreen::Error error) override {
+  void OnError(const openscreen::Error& error) override {
     latest_error_ = error;
     if (error_closure_) {
       std::move(error_closure_).Run();
     }
   }
+  const std::string& source_id() override { return source_id_; }
 
   base::test::SingleThreadTaskEnvironment task_environment_{
       base::test::SingleThreadTaskEnvironment::MainThreadType::IO};
@@ -105,6 +107,7 @@ class CastMessagePortImplTest : public testing::Test,
   std::unique_ptr<CastMessagePortImpl> receiver_message_port_;
   std::unique_ptr<cast_api_bindings::MessagePort> sender_message_port_;
   cast_api_bindings::TestMessagePortReceiver sender_message_port_receiver_;
+  std::string source_id_ = kSenderId;
 };
 
 // Tests basic connection between the sender and receiver message port is
@@ -151,9 +154,9 @@ TEST_F(CastMessagePortImplTest, BasicConnection) {
 // message.
 TEST_F(CastMessagePortImplTest, InjectMessage) {
   const int kRequestId = 42;
-  base::Value inject_value(base::Value::Type::DICTIONARY);
-  inject_value.SetKey(kKeyType, base::Value(kValueWrapped));
-  inject_value.SetKey(kKeyRequestId, base::Value(kRequestId));
+  base::DictValue inject_value;
+  inject_value.Set(kKeyType, kValueWrapped);
+  inject_value.Set(kKeyRequestId, kRequestId);
   std::string inject_message;
   ASSERT_TRUE(base::JSONWriter::Write(inject_value, &inject_message));
 
@@ -171,24 +174,25 @@ TEST_F(CastMessagePortImplTest, InjectMessage) {
   EXPECT_EQ(sender_id, kSenderId);
   EXPECT_EQ(message_namespace, kInjectNamespace);
 
-  absl::optional<base::Value> return_value = base::JSONReader::Read(message);
+  std::optional<base::Value> return_value =
+      base::JSONReader::Read(message, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   ASSERT_TRUE(return_value);
   ASSERT_TRUE(return_value->is_dict());
 
-  const std::string* type_value = return_value->FindStringKey(kKeyType);
+  const std::string* type_value = return_value->GetDict().FindString(kKeyType);
   ASSERT_TRUE(type_value);
   EXPECT_EQ(*type_value, kValueError);
 
-  absl::optional<int> request_id_value =
-      return_value->FindIntKey(kKeyRequestId);
+  std::optional<int> request_id_value =
+      return_value->GetDict().FindInt(kKeyRequestId);
   ASSERT_TRUE(request_id_value);
   EXPECT_EQ(request_id_value.value(), kRequestId);
 
-  const std::string* data_value = return_value->FindStringKey(kKeyData);
+  const std::string* data_value = return_value->GetDict().FindString(kKeyData);
   ASSERT_TRUE(data_value);
   EXPECT_EQ(*data_value, kValueInjectNotSupportedError);
 
-  const std::string* code_value = return_value->FindStringKey(kKeyCode);
+  const std::string* code_value = return_value->GetDict().FindString(kKeyCode);
   ASSERT_TRUE(code_value);
   EXPECT_EQ(*code_value, kValueWrappedError);
 }
@@ -207,6 +211,160 @@ TEST_F(CastMessagePortImplTest, BadMessage) {
 TEST_F(CastMessagePortImplTest, CastChannelClosed) {
   sender_message_port_.reset();
   RunUntilCastChannelClosed();
+}
+
+// Tests that the client may synchronously destroy the receiver port from
+// within OnError() when the Cast Channel is closed. The on-close closure is
+// owned by the port, so destroying the port cancels it; running it afterwards
+// would mean reading it out of freed memory. Contrast with CastChannelClosed
+// above, where the client leaves the port alive and the closure does run.
+TEST_F(CastMessagePortImplTest, ClientDestroysPortOnErrorSkipsOnClose) {
+  base::RunLoop run_loop;
+  bool on_close_called = false;
+  cast_channel_closed_closure_ =
+      base::BindLambdaForTesting([&]() { on_close_called = true; });
+  error_closure_ = base::BindLambdaForTesting([&]() {
+    receiver_message_port_.reset();
+    run_loop.Quit();
+  });
+  sender_message_port_.reset();
+  run_loop.Run();
+  EXPECT_EQ(latest_error_,
+            openscreen::Error(openscreen::Error::Code::kCastV2CastSocketError));
+  EXPECT_FALSE(on_close_called);
+}
+
+// Tests the media status namespace is properly handled.
+TEST_F(CastMessagePortImplTest, MediaStatus) {
+  const int kRequestId = 42;
+  base::DictValue media_value;
+  media_value.Set(kKeyType, kValueMediaGetStatus);
+  media_value.Set(kKeyRequestId, kRequestId);
+  std::string media_message;
+  ASSERT_TRUE(base::JSONWriter::Write(media_value, &media_message));
+
+  sender_message_port_->PostMessage(
+      SerializeCastMessage(kSenderId, kMediaNamespace, media_message));
+  sender_message_port_receiver_.RunUntilMessageCountEqual(2u);
+  ASSERT_EQ(sender_message_port_receiver_.buffer().size(), 2u);
+
+  std::string sender_id;
+  std::string message_namespace;
+  std::string message;
+  ASSERT_TRUE(
+      DeserializeCastMessage(sender_message_port_receiver_.buffer().at(1).first,
+                             &sender_id, &message_namespace, &message));
+  EXPECT_EQ(sender_id, kSenderId);
+  EXPECT_EQ(message_namespace, kMediaNamespace);
+
+  std::optional<base::Value> return_value =
+      base::JSONReader::Read(message, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  ASSERT_TRUE(return_value);
+  ASSERT_TRUE(return_value->is_dict());
+
+  const std::string* type_value = return_value->GetDict().FindString(kKeyType);
+  ASSERT_TRUE(type_value);
+  EXPECT_EQ(*type_value, kValueMediaStatus);
+
+  std::optional<int> request_id_value =
+      return_value->GetDict().FindInt(kKeyRequestId);
+  ASSERT_TRUE(request_id_value);
+  EXPECT_EQ(request_id_value.value(), kRequestId);
+
+  const base::ListValue* status_value =
+      return_value->GetDict().FindList(kKeyStatus);
+  ASSERT_TRUE(status_value);
+  EXPECT_EQ(status_value->size(), 1u);
+}
+
+// Checks sending invalid media messages results in no response.
+TEST_F(CastMessagePortImplTest, InvalidMediaMessages) {
+  const int kRequestId = 42;
+
+  {
+    // Send an invalid message value.
+    sender_message_port_->PostMessage(
+        SerializeCastMessage(kSenderId, kMediaNamespace, "not a json"));
+  }
+
+  {
+    // Send a non-dictionary value.
+    std::string media_message;
+    ASSERT_TRUE(
+        base::JSONWriter::Write(base::Value("string value"), &media_message));
+    sender_message_port_->PostMessage(
+        SerializeCastMessage(kSenderId, kMediaNamespace, media_message));
+  }
+
+  {
+    // Send a message with no type.
+    base::DictValue media_value;
+    media_value.Set(kKeyRequestId, kRequestId);
+    std::string media_message;
+    ASSERT_TRUE(base::JSONWriter::Write(media_value, &media_message));
+    sender_message_port_->PostMessage(
+        SerializeCastMessage(kSenderId, kMediaNamespace, media_message));
+  }
+
+  {
+    // Send a PLAY message. This is not incorrect but should be ignored.
+    base::DictValue media_value;
+    media_value.Set(kKeyType, kValueMediaPlay);
+    media_value.Set(kKeyRequestId, kRequestId);
+    std::string media_message;
+    ASSERT_TRUE(base::JSONWriter::Write(media_value, &media_message));
+    sender_message_port_->PostMessage(
+        SerializeCastMessage(kSenderId, kMediaNamespace, media_message));
+  }
+
+  {
+    // Send a PAUSE message. This is not incorrect but should be ignored.
+    base::DictValue media_value;
+    media_value.Set(kKeyType, kValueMediaPause);
+    media_value.Set(kKeyRequestId, kRequestId);
+    std::string media_message;
+    ASSERT_TRUE(base::JSONWriter::Write(media_value, &media_message));
+    sender_message_port_->PostMessage(
+        SerializeCastMessage(kSenderId, kMediaNamespace, media_message));
+  }
+
+  {
+    // Send a message with an invalid type.
+    base::DictValue media_value;
+    media_value.Set(kKeyType, "INVALID_TYPE");
+    media_value.Set(kKeyRequestId, kRequestId);
+    std::string media_message;
+    ASSERT_TRUE(base::JSONWriter::Write(media_value, &media_message));
+    sender_message_port_->PostMessage(
+        SerializeCastMessage(kSenderId, kMediaNamespace, media_message));
+  }
+
+  {
+    // Send a GET_STATUS message with no request ID.
+    base::DictValue media_value;
+    media_value.Set(kKeyType, kValueMediaGetStatus);
+    std::string media_message;
+    ASSERT_TRUE(base::JSONWriter::Write(media_value, &media_message));
+    sender_message_port_->PostMessage(
+        SerializeCastMessage(kSenderId, kMediaNamespace, media_message));
+  }
+
+  {
+    // Send a message with a non-integer request ID.
+    base::DictValue media_value;
+    media_value.Set(kKeyType, kValueMediaGetStatus);
+    media_value.Set(kKeyRequestId, "not an integer");
+    std::string media_message;
+    ASSERT_TRUE(base::JSONWriter::Write(media_value, &media_message));
+    sender_message_port_->PostMessage(
+        SerializeCastMessage(kSenderId, kMediaNamespace, media_message));
+  }
+
+  // Process all the things. There should be a single message (the original
+  // system message), since none of the other messages sent will trigger a
+  // response.
+  base::RunLoop().RunUntilIdle();
+  ASSERT_EQ(sender_message_port_receiver_.buffer().size(), 1u);
 }
 
 }  // namespace cast_streaming

@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,17 +7,16 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/macros.h"
+#include "base/check_is_test.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
-#include "base/task/post_task.h"
+#include "base/observer_list.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "base/values.h"
-#include "chrome/browser/drive/drive_notification_manager_factory.h"
-#include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/sync_file_system/drive_backend/callback_helper.h"
@@ -40,10 +39,8 @@
 #include "chrome/browser/sync_file_system/drive_backend/sync_worker.h"
 #include "chrome/browser/sync_file_system/drive_backend/sync_worker_interface.h"
 #include "chrome/browser/sync_file_system/drive_backend/uninstall_app_task.h"
-#include "chrome/browser/sync_file_system/file_status_observer.h"
 #include "chrome/browser/sync_file_system/logger.h"
 #include "chrome/browser/sync_file_system/syncable_file_system_util.h"
-#include "components/drive/drive_notification_manager.h"
 #include "components/drive/drive_uploader.h"
 #include "components/drive/service/drive_api_service.h"
 #include "components/drive/service/drive_service_interface.h"
@@ -52,15 +49,16 @@
 #include "content/public/browser/device_service.h"
 #include "content/public/browser/network_service_instance.h"
 #include "content/public/browser/storage_partition.h"
-#include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/extension_system_provider.h"
 #include "extensions/browser/extensions_browser_client.h"
 #include "extensions/common/extension.h"
 #include "google_apis/drive/drive_api_url_generator.h"
+#include "google_apis/gaia/gaia_urls.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/device/public/mojom/wake_lock_provider.mojom.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "storage/browser/blob/scoped_file.h"
 #include "storage/common/file_system/file_system_util.h"
 
@@ -100,7 +98,7 @@ SyncEngine::DriveServiceFactory::CreateDriveService(
     base::SequencedTaskRunner* blocking_task_runner) {
   return std::make_unique<drive::DriveAPIService>(
       identity_manager, url_loader_factory, blocking_task_runner,
-      GURL(google_apis::DriveApiUrlGenerator::kBaseUrlForProduction),
+      GaiaUrls::GetInstance()->google_apis_origin_url(),
       GURL(google_apis::DriveApiUrlGenerator::kBaseThumbnailUrlForProduction),
       std::string(), /* custom_user_agent */
       kSyncFileSystemTrafficAnnotation);
@@ -112,11 +110,14 @@ class SyncEngine::WorkerObserver : public SyncWorkerInterface::Observer {
                  base::WeakPtr<SyncEngine> sync_engine)
       : ui_task_runner_(ui_task_runner),
         sync_engine_(sync_engine) {
-    sequence_checker_.DetachFromSequence();
+    DETACH_FROM_SEQUENCE(sequence_checker_);
   }
 
+  WorkerObserver(const WorkerObserver&) = delete;
+  WorkerObserver& operator=(const WorkerObserver&) = delete;
+
   ~WorkerObserver() override {
-    DCHECK(sequence_checker_.CalledOnValidSequence());
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   }
 
   void OnPendingFileListUpdated(int item_count) override {
@@ -126,7 +127,7 @@ class SyncEngine::WorkerObserver : public SyncWorkerInterface::Observer {
       return;
     }
 
-    DCHECK(sequence_checker_.CalledOnValidSequence());
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     ui_task_runner_->PostTask(
         FROM_HERE, base::BindOnce(&SyncEngine::OnPendingFileListUpdated,
                                   sync_engine_, item_count));
@@ -144,7 +145,7 @@ class SyncEngine::WorkerObserver : public SyncWorkerInterface::Observer {
       return;
     }
 
-    DCHECK(sequence_checker_.CalledOnValidSequence());
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     ui_task_runner_->PostTask(
         FROM_HERE,
         base::BindOnce(&SyncEngine::OnFileStatusChanged, sync_engine_, url,
@@ -159,30 +160,26 @@ class SyncEngine::WorkerObserver : public SyncWorkerInterface::Observer {
       return;
     }
 
-    DCHECK(sequence_checker_.CalledOnValidSequence());
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     ui_task_runner_->PostTask(
         FROM_HERE, base::BindOnce(&SyncEngine::UpdateServiceState, sync_engine_,
                                   state, description));
   }
 
-  void DetachFromSequence() {
-    sequence_checker_.DetachFromSequence();
-  }
+  void DetachFromSequence() { DETACH_FROM_SEQUENCE(sequence_checker_); }
 
  private:
   scoped_refptr<base::SequencedTaskRunner> ui_task_runner_;
   base::WeakPtr<SyncEngine> sync_engine_;
 
-  base::SequenceChecker sequence_checker_;
-
-  DISALLOW_COPY_AND_ASSIGN(WorkerObserver);
+  SEQUENCE_CHECKER(sequence_checker_);
 };
 
 std::unique_ptr<SyncEngine> SyncEngine::CreateForBrowserContext(
     content::BrowserContext* context,
     TaskLogger* task_logger) {
   scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner =
-      base::ThreadTaskRunnerHandle::Get();
+      base::SingleThreadTaskRunner::GetCurrentDefault();
   scoped_refptr<base::SequencedTaskRunner> worker_task_runner =
       base::ThreadPool::CreateSequencedTaskRunner(
           {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
@@ -193,23 +190,16 @@ std::unique_ptr<SyncEngine> SyncEngine::CreateForBrowserContext(
            base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN});
 
   Profile* profile = Profile::FromBrowserContext(context);
-  drive::DriveNotificationManager* notification_manager =
-      drive::DriveNotificationManagerFactory::GetForBrowserContext(context);
-  extensions::ExtensionService* extension_service =
-      extensions::ExtensionSystem::Get(context)->extension_service();
   signin::IdentityManager* identity_manager =
       IdentityManagerFactory::GetForProfile(profile);
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory =
       context->GetDefaultStoragePartition()
           ->GetURLLoaderFactoryForBrowserProcess();
-  extensions::ExtensionRegistry* extension_registry =
-      extensions::ExtensionRegistry::Get(context);
 
   // Use WrapUnique instead of std::make_unique because of the private ctor.
   auto sync_engine = base::WrapUnique(new SyncEngine(
       ui_task_runner.get(), worker_task_runner.get(), drive_task_runner.get(),
-      GetSyncFileSystemDir(context->GetPath()), task_logger,
-      notification_manager, extension_service, extension_registry,
+      GetSyncFileSystemDir(context->GetPath()), task_logger, profile,
       identity_manager, url_loader_factory,
       std::make_unique<DriveServiceFactory>(), nullptr /* env_override */));
 
@@ -219,8 +209,7 @@ std::unique_ptr<SyncEngine> SyncEngine::CreateForBrowserContext(
 
 void SyncEngine::AppendDependsOnFactories(
     std::set<BrowserContextKeyedServiceFactory*>* factories) {
-  DCHECK(factories);
-  factories->insert(drive::DriveNotificationManagerFactory::GetInstance());
+  CHECK(factories, base::NotFatalUntil::M162);
   factories->insert(
       extensions::ExtensionsBrowserClient::Get()->GetExtensionSystemFactory());
   factories->insert(IdentityManagerFactory::GetInstance());
@@ -232,8 +221,6 @@ SyncEngine::~SyncEngine() {
   content::GetNetworkConnectionTracker()->RemoveNetworkConnectionObserver(this);
   if (identity_manager_)
     identity_manager_->RemoveObserver(this);
-  if (notification_manager_)
-    notification_manager_->RemoveObserver(this);
 }
 
 void SyncEngine::Reset() {
@@ -254,7 +241,7 @@ void SyncEngine::Reset() {
 }
 
 void SyncEngine::Initialize() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
   Reset();
 
   if (!identity_manager_ ||
@@ -262,7 +249,7 @@ void SyncEngine::Initialize() {
     return;
   }
 
-  DCHECK(drive_service_factory_);
+  CHECK(drive_service_factory_, base::NotFatalUntil::M162);
   std::unique_ptr<drive::DriveServiceInterface> drive_service =
       drive_service_factory_->CreateDriveService(
           identity_manager_, url_loader_factory_, drive_task_runner_.get());
@@ -323,15 +310,9 @@ void SyncEngine::InitializeInternal(
   worker_observer_ = std::make_unique<WorkerObserver>(
       ui_task_runner_.get(), weak_ptr_factory_.GetWeakPtr());
 
-  base::WeakPtr<extensions::ExtensionServiceInterface>
-      extension_service_weak_ptr;
-  if (extension_service_)
-    extension_service_weak_ptr = extension_service_->AsWeakPtr();
-
   if (!sync_worker) {
-    sync_worker = std::make_unique<SyncWorker>(
-        sync_file_system_dir_, extension_service_weak_ptr, extension_registry_,
-        env_override_);
+    sync_worker = std::make_unique<SyncWorker>(sync_file_system_dir_, profile_,
+                                               env_override_);
   }
 
   sync_worker_ = std::move(sync_worker);
@@ -347,7 +328,8 @@ void SyncEngine::InitializeInternal(
   drive_service_->AddObserver(this);
 
   service_state_ = REMOTE_SERVICE_TEMPORARY_UNAVAILABLE;
-  auto connection_type = network::mojom::ConnectionType::CONNECTION_NONE;
+  auto connection_type =
+      net::NetworkChangeNotifier::ConnectionType::CONNECTION_NONE;
   if (content::GetNetworkConnectionTracker()->GetConnectionType(
           &connection_type, base::BindOnce(&SyncEngine::OnConnectionChanged,
                                            weak_ptr_factory_.GetWeakPtr()))) {
@@ -361,10 +343,6 @@ void SyncEngine::InitializeInternal(
 
 void SyncEngine::AddServiceObserver(SyncServiceObserver* observer) {
   service_observers_.AddObserver(observer);
-}
-
-void SyncEngine::AddFileStatusObserver(FileStatusObserver* observer) {
-  file_status_observers_.AddObserver(observer);
 }
 
 void SyncEngine::RegisterOrigin(const GURL& origin,
@@ -503,70 +481,6 @@ RemoteServiceState SyncEngine::GetCurrentState() const {
   return service_state_;
 }
 
-void SyncEngine::GetOriginStatusMap(StatusMapCallback callback) {
-  if (!sync_worker_) {
-    std::move(callback).Run(nullptr);
-    return;
-  }
-
-  auto split_callback = base::SplitOnceCallback(std::move(callback));
-
-  base::OnceClosure abort_closure =
-      base::BindOnce(std::move(split_callback.first), nullptr);
-
-  StatusMapCallback tracked_callback = callback_tracker_.Register(
-      std::move(abort_closure), std::move(split_callback.second));
-  StatusMapCallback relayed_callback =
-      RelayCallbackToCurrentThread(FROM_HERE, std::move(tracked_callback));
-
-  worker_task_runner_->PostTask(
-      FROM_HERE, base::BindOnce(&SyncWorkerInterface::GetOriginStatusMap,
-                                base::Unretained(sync_worker_.get()),
-                                std::move(relayed_callback)));
-}
-
-void SyncEngine::DumpFiles(const GURL& origin, ListCallback callback) {
-  if (!sync_worker_) {
-    std::move(callback).Run(nullptr);
-    return;
-  }
-
-  auto split_callback = base::SplitOnceCallback(std::move(callback));
-
-  base::OnceClosure abort_closure =
-      base::BindOnce(std::move(split_callback.first), nullptr);
-
-  ListCallback tracked_callback = callback_tracker_.Register(
-      std::move(abort_closure), std::move(split_callback.second));
-
-  PostTaskAndReplyWithResult(
-      worker_task_runner_.get(), FROM_HERE,
-      base::BindOnce(&SyncWorkerInterface::DumpFiles,
-                     base::Unretained(sync_worker_.get()), origin),
-      std::move(tracked_callback));
-}
-
-void SyncEngine::DumpDatabase(ListCallback callback) {
-  if (!sync_worker_) {
-    std::move(callback).Run(nullptr);
-    return;
-  }
-
-  auto split_callback = base::SplitOnceCallback(std::move(callback));
-
-  base::OnceClosure abort_closure =
-      base::BindOnce(std::move(split_callback.first), nullptr);
-
-  ListCallback tracked_callback = callback_tracker_.Register(
-      std::move(abort_closure), std::move(split_callback.second));
-
-  PostTaskAndReplyWithResult(
-      worker_task_runner_.get(), FROM_HERE,
-      base::BindOnce(&SyncWorkerInterface::DumpDatabase,
-                     base::Unretained(sync_worker_.get())),
-      std::move(tracked_callback));
-}
-
 void SyncEngine::SetSyncEnabled(bool sync_enabled) {
   if (sync_enabled_ == sync_enabled)
     return;
@@ -641,24 +555,6 @@ void SyncEngine::ApplyLocalChange(const FileChange& local_change,
                                 std::move(relayed_callback)));
 }
 
-void SyncEngine::OnNotificationReceived(
-    const std::map<std::string, int64_t>& invalidations) {
-  OnNotificationTimerFired();
-}
-
-void SyncEngine::OnNotificationTimerFired() {
-  if (!sync_worker_)
-    return;
-
-  worker_task_runner_->PostTask(
-      FROM_HERE,
-      base::BindOnce(&SyncWorkerInterface::ActivateService,
-                     base::Unretained(sync_worker_.get()), REMOTE_SERVICE_OK,
-                     "Got push notification for Drive"));
-}
-
-void SyncEngine::OnPushNotificationEnabled(bool /* enabled */) {}
-
 void SyncEngine::OnReadyToSendRequests() {
   has_refresh_token_ = true;
   if (!sync_worker_)
@@ -681,13 +577,14 @@ void SyncEngine::OnRefreshTokenInvalid() {
                                 "Found invalid refresh token."));
 }
 
-void SyncEngine::OnConnectionChanged(network::mojom::ConnectionType type) {
+void SyncEngine::OnConnectionChanged(
+    net::NetworkChangeNotifier::ConnectionType type) {
   if (!sync_worker_)
     return;
 
   bool network_available_old = network_available_;
   network_available_ =
-      (type != network::mojom::ConnectionType::CONNECTION_NONE);
+      (type != net::NetworkChangeNotifier::ConnectionType::CONNECTION_NONE);
 
   if (!network_available_old && network_available_) {
     worker_task_runner_->PostTask(
@@ -724,9 +621,7 @@ SyncEngine::SyncEngine(
     const scoped_refptr<base::SequencedTaskRunner>& drive_task_runner,
     const base::FilePath& sync_file_system_dir,
     TaskLogger* task_logger,
-    drive::DriveNotificationManager* notification_manager,
-    extensions::ExtensionServiceInterface* extension_service,
-    extensions::ExtensionRegistry* extension_registry,
+    Profile* profile,
     signin::IdentityManager* identity_manager,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     std::unique_ptr<DriveServiceFactory> drive_service_factory,
@@ -736,9 +631,6 @@ SyncEngine::SyncEngine(
       drive_task_runner_(drive_task_runner),
       sync_file_system_dir_(sync_file_system_dir),
       task_logger_(task_logger),
-      notification_manager_(notification_manager),
-      extension_service_(extension_service),
-      extension_registry_(extension_registry),
       identity_manager_(identity_manager),
       url_loader_factory_(url_loader_factory),
       drive_service_factory_(std::move(drive_service_factory)),
@@ -748,9 +640,12 @@ SyncEngine::SyncEngine(
       network_available_(false),
       sync_enabled_(false),
       env_override_(env_override) {
-  DCHECK(sync_file_system_dir_.IsAbsolute());
-  if (notification_manager_)
-    notification_manager_->AddObserver(this);
+  CHECK(sync_file_system_dir_.IsAbsolute(), base::NotFatalUntil::M162);
+  if (profile) {
+    profile_ = profile->GetWeakPtr();
+  } else {
+    CHECK_IS_TEST();
+  }
   if (identity_manager_)
     identity_manager_->AddObserver(this);
   content::GetNetworkConnectionTracker()->AddNetworkConnectionObserver(this);
@@ -766,10 +661,7 @@ void SyncEngine::OnFileStatusChanged(const storage::FileSystemURL& url,
                                      SyncFileStatus file_status,
                                      SyncAction sync_action,
                                      SyncDirection direction) {
-  for (auto& observer : file_status_observers_) {
-    observer.OnFileStatusChanged(url, file_type, file_status, sync_action,
-                                 direction);
-  }
+  // TODO(crbug.com/396460818): Cleanup, this function is now a no-op.
 }
 
 void SyncEngine::UpdateServiceState(RemoteServiceState state,

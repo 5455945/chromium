@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,15 +7,13 @@
 
 #include <memory>
 
-#include "base/macros.h"
 #include "base/memory/scoped_refptr.h"
 #include "content/public/browser/browser_thread.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
-#include "services/network/public/mojom/url_loader_factory.mojom-forward.h"
+
+class GURL;
 
 namespace content {
-
-class URLLoaderFactoryGetter;
 
 // Class to own the SharedURLLoaderFactory for use on the IO thread.
 //
@@ -29,9 +27,12 @@ class IOThreadSharedURLLoaderFactoryOwner {
   // To be called on the UI thread. Will block and finish initialization on the
   // IO thread.
   static IOThreadSharedURLLoaderFactoryOwnerPtr Create(
-      URLLoaderFactoryGetter* url_loader_factory_getter);
-  static IOThreadSharedURLLoaderFactoryOwnerPtr Create(
       std::unique_ptr<network::PendingSharedURLLoaderFactory> info);
+
+  IOThreadSharedURLLoaderFactoryOwner(
+      const IOThreadSharedURLLoaderFactoryOwner&) = delete;
+  IOThreadSharedURLLoaderFactoryOwner& operator=(
+      const IOThreadSharedURLLoaderFactoryOwner&) = delete;
 
   // Load the given |url| with the internal |shared_url_loader_factory_| on IO
   // thread and return the |net::Error| code.
@@ -42,15 +43,11 @@ class IOThreadSharedURLLoaderFactoryOwner {
   friend class base::DeleteHelper<IOThreadSharedURLLoaderFactoryOwner>;
 
   explicit IOThreadSharedURLLoaderFactoryOwner(
-      URLLoaderFactoryGetter* url_loader_factory_getter);
-  explicit IOThreadSharedURLLoaderFactoryOwner(
       std::unique_ptr<network::PendingSharedURLLoaderFactory> info);
   ~IOThreadSharedURLLoaderFactoryOwner();
 
   // Lives on the IO thread.
   scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory_;
-
-  DISALLOW_COPY_AND_ASSIGN(IOThreadSharedURLLoaderFactoryOwner);
 };
 
 }  // namespace content

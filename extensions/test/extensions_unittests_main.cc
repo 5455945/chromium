@@ -1,15 +1,17 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <memory>
 
 #include "base/base_paths.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/path_service.h"
 #include "base/test/launcher/unit_test_launcher.h"
 #include "base/test/test_io_thread.h"
+#include "build/android_buildflags.h"
 #include "build/buildflag.h"
+#include "components/content_settings/core/common/content_settings_pattern.h"
 #include "content/public/common/content_client.h"
 #include "content/public/test/content_test_suite_base.h"
 #include "content/public/test/unittest_test_suite.h"
@@ -21,6 +23,9 @@
 #include "url/url_util.h"
 
 namespace {
+
+const char* const kNonWildcardDomainNonPortSchemes[] = {
+    extensions::kExtensionScheme};
 
 // Content client that exists only to register chrome-extension:// scheme with
 // the url module.
@@ -36,6 +41,8 @@ class ExtensionsContentClient : public content::ContentClient {
   // content::ContentClient overrides:
   void AddAdditionalSchemes(Schemes* schemes) override {
     schemes->standard_schemes.push_back(extensions::kExtensionScheme);
+    schemes->extension_schemes.push_back(extensions::kExtensionScheme);
+    schemes->secure_schemes.push_back(extensions::kExtensionScheme);
     schemes->savable_schemes.push_back(extensions::kExtensionScheme);
   }
 };
@@ -59,25 +66,30 @@ class ExtensionsTestSuite : public content::ContentTestSuiteBase {
 ExtensionsTestSuite::ExtensionsTestSuite(int argc, char** argv)
     : content::ContentTestSuiteBase(argc, argv) {}
 
-ExtensionsTestSuite::~ExtensionsTestSuite() {}
+ExtensionsTestSuite::~ExtensionsTestSuite() = default;
 
 void ExtensionsTestSuite::Initialize() {
   content::ContentTestSuiteBase::Initialize();
   gl::GLSurfaceTestSupport::InitializeOneOff();
 
-  // Register the chrome-extension:// scheme via this circuitous path. Note
-  // that this does not persistently set up a ContentClient; individual tests
-  // must use content::SetContentClient().
+  // Register the chrome-extension:// scheme via this circuitous path.
   {
     ExtensionsContentClient content_client;
     RegisterContentSchemes(&content_client);
+    ContentSettingsPattern::SetNonWildcardDomainNonPortSchemes(
+        kNonWildcardDomainNonPortSchemes);
   }
   RegisterInProcessThreads();
 
   extensions::RegisterPathProvider();
 
   base::FilePath extensions_shell_and_test_pak_path;
-  base::PathService::Get(base::DIR_MODULE, &extensions_shell_and_test_pak_path);
+  base::PathService::Get(base::DIR_ASSETS, &extensions_shell_and_test_pak_path);
+#if BUILDFLAG(IS_DESKTOP_ANDROID)
+  // On Android all pak files are inside the paks folder.
+  extensions_shell_and_test_pak_path =
+      extensions_shell_and_test_pak_path.Append(FILE_PATH_LITERAL("paks"));
+#endif
   ui::ResourceBundle::InitSharedInstanceWithPakPath(
       extensions_shell_and_test_pak_path.AppendASCII(
           "extensions_shell_and_test.pak"));
@@ -87,7 +99,7 @@ void ExtensionsTestSuite::Initialize() {
 }
 
 void ExtensionsTestSuite::Shutdown() {
-  extensions::ExtensionsClient::Set(NULL);
+  extensions::ExtensionsClient::Set(nullptr);
   client_.reset();
 
   ui::ResourceBundle::CleanupSharedInstance();
@@ -97,7 +109,10 @@ void ExtensionsTestSuite::Shutdown() {
 }  // namespace
 
 int main(int argc, char** argv) {
-  content::UnitTestTestSuite test_suite(new ExtensionsTestSuite(argc, argv));
+  content::UnitTestTestSuite test_suite(
+      new ExtensionsTestSuite(argc, argv),
+      base::BindRepeating(
+          content::UnitTestTestSuite::CreateTestContentClients));
   return base::LaunchUnitTests(argc, argv,
                                base::BindOnce(&content::UnitTestTestSuite::Run,
                                               base::Unretained(&test_suite)));

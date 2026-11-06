@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,8 @@
 
 #include <memory>
 
-#include "base/macros.h"
 #include "ui/gfx/gpu_fence.h"
+#include "ui/gfx/gpu_fence_handle.h"
 #include "ui/gl/gl_export.h"
 
 namespace gl {
@@ -16,6 +16,10 @@ namespace gl {
 class GL_EXPORT GLFence {
  public:
   GLFence();
+
+  GLFence(const GLFence&) = delete;
+  GLFence& operator=(const GLFence&) = delete;
+
   virtual ~GLFence();
 
   static bool IsSupported();
@@ -25,6 +29,11 @@ class GL_EXPORT GLFence {
   static bool IsGpuFenceSupported();
 
   // Consumes the GpuFenceHandle to create a paired local GL fence.
+  static std::unique_ptr<GLFence> CreateFromGpuFenceHandle(
+      gfx::GpuFenceHandle gpu_fence);
+
+  // Clones the GpuFenceHandle from `gpu_fence` to create a paired local GL
+  // fence.
   static std::unique_ptr<GLFence> CreateFromGpuFence(
       const gfx::GpuFence& gpu_fence);
 
@@ -47,12 +56,11 @@ class GL_EXPORT GLFence {
   // Loses the reference to the fence. Useful if the context is lost.
   virtual void Invalidate();
 
-  // Returns a GpuFence. Only valid on a GLFence created by
+  // Returns a GpuFenceHandle. Only valid on a GLFence created by
   // CreateForGpuFence.
-  virtual std::unique_ptr<gfx::GpuFence> GetGpuFence();
+  virtual gfx::GpuFenceHandle GetGpuFenceHandle();
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(GLFence);
+  std::unique_ptr<gfx::GpuFence> GetGpuFence();
 };
 
 }  // namespace gl

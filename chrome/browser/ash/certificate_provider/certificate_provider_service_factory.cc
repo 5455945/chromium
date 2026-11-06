@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,19 +6,19 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "base/containers/flat_set.h"
 #include "base/containers/span.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/singleton.h"
+#include "base/no_destructor.h"
 #include "base/values.h"
 #include "chrome/browser/ash/certificate_provider/certificate_provider_service.h"
-#include "chrome/browser/profiles/incognito_helpers.h"
-#include "chrome/common/extensions/api/certificate_provider.h"
-#include "components/keyed_service/content/browser_context_dependency_manager.h"
+#include "chromeos/ash/experiences/extensions/common/api/certificate_provider.h"
 #include "extensions/browser/event_listener_map.h"
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/event_router_factory.h"
@@ -33,7 +33,7 @@
 #include "third_party/boringssl/src/include/openssl/digest.h"
 #include "third_party/boringssl/src/include/openssl/ssl.h"
 
-namespace ash {
+namespace chromeos {
 
 namespace {
 
@@ -76,9 +76,9 @@ class DefaultDelegate : public CertificateProviderService::Delegate,
   base::flat_set<std::string> GetSubscribedExtensions(
       const std::string& event_name);
 
-  CertificateProviderService* const service_;
-  extensions::ExtensionRegistry* const registry_;
-  extensions::EventRouter* const event_router_;
+  const raw_ptr<CertificateProviderService> service_;
+  const raw_ptr<extensions::ExtensionRegistry> registry_;
+  const raw_ptr<extensions::EventRouter> event_router_;
 };
 
 // Constructs the "onCertificatesUpdateRequested" event.
@@ -86,9 +86,8 @@ std::unique_ptr<extensions::Event> BuildOnCertificatesUpdateRequestedEvent(
     int request_id) {
   api_cp::CertificatesUpdateRequest certificates_update_request;
   certificates_update_request.certificates_request_id = request_id;
-  std::vector<base::Value> event_args;
-  event_args.push_back(
-      base::Value::FromUniquePtrValue(certificates_update_request.ToValue()));
+  auto event_args = base::MakeRefCounted<extensions::EventArgs>();
+  event_args->data.Append(certificates_update_request.ToValue());
   return std::make_unique<extensions::Event>(
       extensions::events::CERTIFICATEPROVIDER_ON_CERTIFICATES_UPDATE_REQUESTED,
       api_cp::OnCertificatesUpdateRequested::kEventName, std::move(event_args));
@@ -97,8 +96,8 @@ std::unique_ptr<extensions::Event> BuildOnCertificatesUpdateRequestedEvent(
 // Constructs the legacy "onCertificatesRequested" event.
 std::unique_ptr<extensions::Event> BuildOnCertificatesRequestedEvent(
     int request_id) {
-  std::vector<base::Value> event_args;
-  event_args.push_back(base::Value(request_id));
+  auto event_args = base::MakeRefCounted<extensions::EventArgs>();
+  event_args->data.Append(request_id);
   return std::make_unique<extensions::Event>(
       extensions::events::CERTIFICATEPROVIDER_ON_CERTIFICATES_REQUESTED,
       api_cp::OnCertificatesRequested::kEventName, std::move(event_args));
@@ -113,41 +112,38 @@ std::unique_ptr<extensions::Event> BuildOnSignatureRequestedEvent(
   api_cp::SignatureRequest request;
   request.sign_request_id = request_id;
   switch (algorithm) {
-    case SSL_SIGN_RSA_PKCS1_MD5_SHA1:
-      request.algorithm = api_cp::ALGORITHM_RSASSA_PKCS1_V1_5_MD5_SHA1;
-      break;
     case SSL_SIGN_RSA_PKCS1_SHA1:
-      request.algorithm = api_cp::ALGORITHM_RSASSA_PKCS1_V1_5_SHA1;
+      request.algorithm = api_cp::Algorithm::kRsassaPkcs1V1_5Sha1;
       break;
     case SSL_SIGN_RSA_PKCS1_SHA256:
-      request.algorithm = api_cp::ALGORITHM_RSASSA_PKCS1_V1_5_SHA256;
+      request.algorithm = api_cp::Algorithm::kRsassaPkcs1V1_5Sha256;
       break;
     case SSL_SIGN_RSA_PKCS1_SHA384:
-      request.algorithm = api_cp::ALGORITHM_RSASSA_PKCS1_V1_5_SHA384;
+      request.algorithm = api_cp::Algorithm::kRsassaPkcs1V1_5Sha384;
       break;
     case SSL_SIGN_RSA_PKCS1_SHA512:
-      request.algorithm = api_cp::ALGORITHM_RSASSA_PKCS1_V1_5_SHA512;
+      request.algorithm = api_cp::Algorithm::kRsassaPkcs1V1_5Sha512;
       break;
     case SSL_SIGN_RSA_PSS_RSAE_SHA256:
-      request.algorithm = api_cp::ALGORITHM_RSASSA_PSS_SHA256;
+      request.algorithm = api_cp::Algorithm::kRsassaPssSha256;
       break;
     case SSL_SIGN_RSA_PSS_RSAE_SHA384:
-      request.algorithm = api_cp::ALGORITHM_RSASSA_PSS_SHA384;
+      request.algorithm = api_cp::Algorithm::kRsassaPssSha384;
       break;
     case SSL_SIGN_RSA_PSS_RSAE_SHA512:
-      request.algorithm = api_cp::ALGORITHM_RSASSA_PSS_SHA512;
+      request.algorithm = api_cp::Algorithm::kRsassaPssSha512;
       break;
     default:
       LOG(ERROR) << "Unknown signature algorithm";
       return nullptr;
   }
   request.input.assign(input.begin(), input.end());
-  base::StringPiece cert_der =
+  std::string_view cert_der =
       net::x509_util::CryptoBufferAsStringPiece(certificate.cert_buffer());
   request.certificate.assign(cert_der.begin(), cert_der.end());
 
-  std::vector<base::Value> event_args;
-  event_args.push_back(base::Value::FromUniquePtrValue(request.ToValue()));
+  auto event_args = base::MakeRefCounted<extensions::EventArgs>();
+  event_args->data.Append(request.ToValue());
 
   return std::make_unique<extensions::Event>(
       extensions::events::CERTIFICATEPROVIDER_ON_SIGNATURE_REQUESTED,
@@ -164,26 +160,23 @@ std::unique_ptr<extensions::Event> BuildOnSignDigestRequestedEvent(
 
   request.sign_request_id = request_id;
   switch (algorithm) {
-    case SSL_SIGN_RSA_PKCS1_MD5_SHA1:
-      request.hash = api_cp::HASH_MD5_SHA1;
-      break;
     case SSL_SIGN_RSA_PKCS1_SHA1:
-      request.hash = api_cp::HASH_SHA1;
+      request.hash = api_cp::Hash::kSha1;
       break;
     case SSL_SIGN_RSA_PKCS1_SHA256:
-      request.hash = api_cp::HASH_SHA256;
+      request.hash = api_cp::Hash::kSha256;
       break;
     case SSL_SIGN_RSA_PKCS1_SHA384:
-      request.hash = api_cp::HASH_SHA384;
+      request.hash = api_cp::Hash::kSha384;
       break;
     case SSL_SIGN_RSA_PKCS1_SHA512:
-      request.hash = api_cp::HASH_SHA512;
+      request.hash = api_cp::Hash::kSha512;
       break;
     default:
       LOG(ERROR) << "Unknown signature algorithm";
       return nullptr;
   }
-  base::StringPiece cert_der =
+  std::string_view cert_der =
       net::x509_util::CryptoBufferAsStringPiece(certificate.cert_buffer());
   request.certificate.assign(cert_der.begin(), cert_der.end());
 
@@ -197,9 +190,9 @@ std::unique_ptr<extensions::Event> BuildOnSignDigestRequestedEvent(
   }
   request.digest.resize(digest_len);
 
-  std::vector<base::Value> event_args;
-  event_args.push_back(base::Value(request_id));
-  event_args.push_back(base::Value::FromUniquePtrValue(request.ToValue()));
+  auto event_args = base::MakeRefCounted<extensions::EventArgs>();
+  event_args->data.Append(request_id);
+  event_args->data.Append(request.ToValue());
 
   return std::make_unique<extensions::Event>(
       extensions::events::CERTIFICATEPROVIDER_ON_SIGN_DIGEST_REQUESTED,
@@ -210,7 +203,7 @@ DefaultDelegate::DefaultDelegate(CertificateProviderService* service,
                                  extensions::ExtensionRegistry* registry,
                                  extensions::EventRouter* event_router)
     : service_(service), registry_(registry), event_router_(event_router) {
-  DCHECK(service_);
+  CHECK(service_, base::NotFatalUntil::M160);
   registry_->AddObserver(this);
   event_router_->RegisterObserver(
       this, api_cp::OnCertificatesUpdateRequested::kEventName);
@@ -258,7 +251,7 @@ bool DefaultDelegate::DispatchSignRequestToExtension(
     uint16_t algorithm,
     const scoped_refptr<net::X509Certificate>& certificate,
     base::span<const uint8_t> input) {
-  DCHECK(certificate);
+  CHECK(certificate, base::NotFatalUntil::M160);
   std::unique_ptr<extensions::Event> event;
   // Send the up-to-date version of the event, and fall back to the legacy event
   // if the extension is only listening for that one.
@@ -318,35 +311,40 @@ CertificateProviderServiceFactory::GetForBrowserContext(
 // static
 CertificateProviderServiceFactory*
 CertificateProviderServiceFactory::GetInstance() {
-  return base::Singleton<CertificateProviderServiceFactory>::get();
+  static base::NoDestructor<CertificateProviderServiceFactory> instance;
+  return instance.get();
 }
 
 CertificateProviderServiceFactory::CertificateProviderServiceFactory()
-    : BrowserContextKeyedServiceFactory(
+    : ProfileKeyedServiceFactory(
           "CertificateProviderService",
-          BrowserContextDependencyManager::GetInstance()) {
+          ProfileSelections::Builder()
+              .WithRegular(ProfileSelection::kRedirectedToOriginal)
+              // TODO(crbug.com/40257657): Check if this service is needed in
+              // Guest mode.
+              .WithGuest(ProfileSelection::kRedirectedToOriginal)
+              // TODO(crbug.com/41488885): Check if this service is needed for
+              // Ash Internals.
+              .WithAshInternals(ProfileSelection::kRedirectedToOriginal)
+              .Build()) {
   DependsOn(extensions::EventRouterFactory::GetInstance());
   DependsOn(extensions::ExtensionRegistryFactory::GetInstance());
-}
-
-content::BrowserContext*
-CertificateProviderServiceFactory::GetBrowserContextToUse(
-    content::BrowserContext* context) const {
-  return chrome::GetBrowserContextRedirectedInIncognito(context);
 }
 
 bool CertificateProviderServiceFactory::ServiceIsNULLWhileTesting() const {
   return true;
 }
 
-KeyedService* CertificateProviderServiceFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+CertificateProviderServiceFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  CertificateProviderService* const service = new CertificateProviderService();
+  std::unique_ptr<CertificateProviderService> service =
+      std::make_unique<CertificateProviderService>();
   service->SetDelegate(std::make_unique<DefaultDelegate>(
-      service,
+      service.get(),
       extensions::ExtensionRegistryFactory::GetForBrowserContext(context),
       extensions::EventRouterFactory::GetForBrowserContext(context)));
   return service;
 }
 
-}  // namespace ash
+}  // namespace chromeos

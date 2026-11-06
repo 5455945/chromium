@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,32 +8,53 @@
 
 #include <utility>
 
-#include "autocomplete_match.h"
-#include "base/cxx17_backports.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/protobuf_matchers.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/test/task_environment.h"
+#include "build/build_config.h"
+#include "components/omnibox/browser/actions/omnibox_action.h"
+#include "components/omnibox/browser/actions/omnibox_action_in_suggest.h"
+#include "components/omnibox/browser/actions/omnibox_pedal.h"
+#include "components/omnibox/browser/actions/omnibox_pedal_concepts.h"
+#include "components/omnibox/browser/autocomplete_match_type.h"
+#include "components/omnibox/browser/autocomplete_provider.h"
+#include "components/omnibox/browser/fake_autocomplete_provider.h"
+#include "components/omnibox/browser/omnibox_field_trial.h"
 #include "components/omnibox/browser/test_scheme_classifier.h"
 #include "components/omnibox/common/omnibox_features.h"
+#include "components/search_engines/search_engines_test_environment.h"
+#include "components/search_engines/template_url.h"
+#include "components/search_engines/template_url_data.h"
+#include "components/search_engines/template_url_service.h"
+#include "components/search_engines/template_url_starter_pack_data.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/metrics_proto/omnibox_event.pb.h"
+#include "third_party/metrics_proto/omnibox_scoring_signals.pb.h"
+#include "third_party/omnibox_proto/suggest_template_info.pb.h"
+#include "ui/gfx/vector_icon_types.h"
 #include "url/gurl.h"
+
+using ScoringSignals = ::metrics::OmniboxScoringSignals;
 
 namespace {
 
-bool EqualClassifications(const ACMatchClassifications& lhs,
-                          const ACMatchClassifications& rhs) {
-  if (lhs.size() != rhs.size())
-    return false;
-  for (size_t n = 0; n < lhs.size(); ++n)
-    if (lhs[n].style != rhs[n].style || lhs[n].offset != rhs[n].offset)
-      return false;
-  return true;
-}
+class FakeOmniboxAction : public OmniboxAction {
+ public:
+  explicit FakeOmniboxAction(OmniboxActionId id)
+      : OmniboxAction(LabelStrings(u"", u"", u"", u""), GURL{}), id_(id) {}
+  OmniboxActionId ActionId() const override { return id_; }
+
+ private:
+  ~FakeOmniboxAction() override = default;
+  OmniboxActionId id_{};
+};
 
 void TestSetAllowedToBeDefault(int caseI,
                                const std::string input_text,
                                bool input_prevent_inline_autocomplete,
                                const std::string match_inline_autocompletion,
-                               const std::string match_prefix_autocompletion,
                                const std::string expected_inline_autocompletion,
                                bool expected_allowed_to_be_default_match) {
   AutocompleteInput input(base::UTF8ToUTF16(input_text),
@@ -43,7 +64,6 @@ void TestSetAllowedToBeDefault(int caseI,
 
   AutocompleteMatch match;
   match.inline_autocompletion = base::UTF8ToUTF16(match_inline_autocompletion);
-  match.prefix_autocompletion = base::UTF8ToUTF16(match_prefix_autocompletion);
 
   match.SetAllowedToBeDefault(input);
 
@@ -55,134 +75,195 @@ void TestSetAllowedToBeDefault(int caseI,
       << "case " << caseI;
 }
 
+AutocompleteMatch CreateACMatchWithScoringSignals(
+    int typed_count,
+    int visit_count,
+    int elapsed_time_last_visit_secs,
+    int shortcut_visit_count,
+    int shortest_shortcut_len,
+    bool is_host_only,
+    int num_bookmarks_of_url,
+    int first_bookmark_title_match_position,
+    int total_bookmark_title_match_length,
+    int num_input_terms_matched_by_bookmark_title,
+    int first_url_match_position,
+    int total_url_match_length,
+    bool host_match_at_word_boundary,
+    int total_path_match_length,
+    int total_query_or_ref_match_length,
+    int total_title_match_length,
+    bool has_non_scheme_www_match,
+    int num_input_terms_matched_by_title,
+    int num_input_terms_matched_by_url,
+    int length_of_url,
+    float site_engagement,
+    bool allowed_to_be_default_match) {
+  AutocompleteMatch match;
+  match.scoring_signals = std::make_optional<ScoringSignals>();
+  match.scoring_signals->set_typed_count(typed_count);
+  match.scoring_signals->set_visit_count(visit_count);
+  match.scoring_signals->set_elapsed_time_last_visit_secs(
+      elapsed_time_last_visit_secs);
+  match.scoring_signals->set_shortcut_visit_count(shortcut_visit_count);
+  match.scoring_signals->set_shortest_shortcut_len(shortest_shortcut_len);
+  match.scoring_signals->set_is_host_only(is_host_only);
+  match.scoring_signals->set_num_bookmarks_of_url(num_bookmarks_of_url);
+  match.scoring_signals->set_first_bookmark_title_match_position(
+      first_bookmark_title_match_position);
+  match.scoring_signals->set_total_bookmark_title_match_length(
+      total_bookmark_title_match_length);
+  match.scoring_signals->set_num_input_terms_matched_by_bookmark_title(
+      num_input_terms_matched_by_bookmark_title);
+  match.scoring_signals->set_first_url_match_position(first_url_match_position);
+  match.scoring_signals->set_total_url_match_length(total_url_match_length);
+  match.scoring_signals->set_host_match_at_word_boundary(
+      host_match_at_word_boundary);
+  match.scoring_signals->set_total_path_match_length(total_path_match_length);
+  match.scoring_signals->set_total_query_or_ref_match_length(
+      total_query_or_ref_match_length);
+  match.scoring_signals->set_total_title_match_length(total_title_match_length);
+  match.scoring_signals->set_has_non_scheme_www_match(has_non_scheme_www_match);
+  match.scoring_signals->set_num_input_terms_matched_by_title(
+      num_input_terms_matched_by_title);
+  match.scoring_signals->set_num_input_terms_matched_by_url(
+      num_input_terms_matched_by_url);
+  match.scoring_signals->set_length_of_url(length_of_url);
+  match.scoring_signals->set_site_engagement(site_engagement);
+  match.scoring_signals->set_allowed_to_be_default_match(
+      allowed_to_be_default_match);
+
+  return match;
+}
+
+// Use a test fixture to ensure that any scoped settings that are set during the
+// test are cleared after the test is terminated.
+class AutocompleteMatchTest : public testing::Test {
+ protected:
+  void TearDown() override {
+    RichAutocompletionParams::ClearParamsForTesting();
+  }
+
+  base::test::TaskEnvironment task_environment_;
+  search_engines::SearchEnginesTestEnvironment search_engines_test_environment_;
+};
+
 }  // namespace
 
-TEST(AutocompleteMatchTest, MoreRelevant) {
+TEST_F(AutocompleteMatchTest, MoreRelevant) {
   struct RelevantCases {
     int r1;
     int r2;
     bool expected_result;
   } cases[] = {
-    {  10,   0, true  },
-    {  10,  -5, true  },
-    {  -5,  10, false },
-    {   0,  10, false },
-    { -10,  -5, false  },
-    {  -5, -10, true },
+      {10, 0, true},  {10, -5, true},   {-5, 10, false},
+      {0, 10, false}, {-10, -5, false}, {-5, -10, true},
   };
 
   AutocompleteMatch m1(nullptr, 0, false,
-                       AutocompleteMatchType::URL_WHAT_YOU_TYPED);
+                       omnibox::AutocompleteMatchType::kUrlWhatYouTyped);
   AutocompleteMatch m2(nullptr, 0, false,
-                       AutocompleteMatchType::URL_WHAT_YOU_TYPED);
+                       omnibox::AutocompleteMatchType::kUrlWhatYouTyped);
 
-  for (size_t i = 0; i < base::size(cases); ++i) {
-    m1.relevance = cases[i].r1;
-    m2.relevance = cases[i].r2;
-    EXPECT_EQ(cases[i].expected_result,
-              AutocompleteMatch::MoreRelevant(m1, m2));
+  for (const auto& caseI : cases) {
+    m1.relevance = caseI.r1;
+    m2.relevance = caseI.r2;
+    EXPECT_EQ(caseI.expected_result, AutocompleteMatch::MoreRelevant(m1, m2));
   }
 }
 
-TEST(AutocompleteMatchTest, MergeClassifications) {
+TEST_F(AutocompleteMatchTest, MergeClassifications) {
   // Merging two empty vectors should result in an empty vector.
   EXPECT_EQ(std::string(),
-      AutocompleteMatch::ClassificationsToString(
-          AutocompleteMatch::MergeClassifications(
-              AutocompleteMatch::ACMatchClassifications(),
-              AutocompleteMatch::ACMatchClassifications())));
+            AutocompleteMatch::ClassificationsToString(
+                AutocompleteMatch::MergeClassifications(
+                    AutocompleteMatch::ACMatchClassifications(),
+                    AutocompleteMatch::ACMatchClassifications())));
 
   // If one vector is empty and the other is "trivial" but non-empty (i.e. (0,
   // NONE)), the non-empty vector should be returned.
+  EXPECT_EQ("0,0", AutocompleteMatch::ClassificationsToString(
+                       AutocompleteMatch::MergeClassifications(
+                           AutocompleteMatch::ClassificationsFromString("0,0"),
+                           AutocompleteMatch::ACMatchClassifications())));
   EXPECT_EQ("0,0",
-      AutocompleteMatch::ClassificationsToString(
-          AutocompleteMatch::MergeClassifications(
-              AutocompleteMatch::ClassificationsFromString("0,0"),
-              AutocompleteMatch::ACMatchClassifications())));
-  EXPECT_EQ("0,0",
-      AutocompleteMatch::ClassificationsToString(
-          AutocompleteMatch::MergeClassifications(
-              AutocompleteMatch::ACMatchClassifications(),
-              AutocompleteMatch::ClassificationsFromString("0,0"))));
+            AutocompleteMatch::ClassificationsToString(
+                AutocompleteMatch::MergeClassifications(
+                    AutocompleteMatch::ACMatchClassifications(),
+                    AutocompleteMatch::ClassificationsFromString("0,0"))));
 
   // Ditto if the one-entry vector is non-trivial.
+  EXPECT_EQ("0,1", AutocompleteMatch::ClassificationsToString(
+                       AutocompleteMatch::MergeClassifications(
+                           AutocompleteMatch::ClassificationsFromString("0,1"),
+                           AutocompleteMatch::ACMatchClassifications())));
   EXPECT_EQ("0,1",
-      AutocompleteMatch::ClassificationsToString(
-          AutocompleteMatch::MergeClassifications(
-              AutocompleteMatch::ClassificationsFromString("0,1"),
-              AutocompleteMatch::ACMatchClassifications())));
-  EXPECT_EQ("0,1",
-      AutocompleteMatch::ClassificationsToString(
-          AutocompleteMatch::MergeClassifications(
-              AutocompleteMatch::ACMatchClassifications(),
-              AutocompleteMatch::ClassificationsFromString("0,1"))));
+            AutocompleteMatch::ClassificationsToString(
+                AutocompleteMatch::MergeClassifications(
+                    AutocompleteMatch::ACMatchClassifications(),
+                    AutocompleteMatch::ClassificationsFromString("0,1"))));
 
   // Merge an unstyled one-entry vector with a styled one-entry vector.
   EXPECT_EQ("0,1",
-      AutocompleteMatch::ClassificationsToString(
-          AutocompleteMatch::MergeClassifications(
-              AutocompleteMatch::ClassificationsFromString("0,0"),
-              AutocompleteMatch::ClassificationsFromString("0,1"))));
+            AutocompleteMatch::ClassificationsToString(
+                AutocompleteMatch::MergeClassifications(
+                    AutocompleteMatch::ClassificationsFromString("0,0"),
+                    AutocompleteMatch::ClassificationsFromString("0,1"))));
 
   // Test simple cases of overlap.
-  EXPECT_EQ("0,3," "1,2",
+  EXPECT_EQ(
+      "0,3,"
+      "1,2",
       AutocompleteMatch::ClassificationsToString(
           AutocompleteMatch::MergeClassifications(
-              AutocompleteMatch::ClassificationsFromString("0,1," "1,0"),
+              AutocompleteMatch::ClassificationsFromString("0,1,"
+                                                           "1,0"),
               AutocompleteMatch::ClassificationsFromString("0,2"))));
-  EXPECT_EQ("0,3," "1,2",
+  EXPECT_EQ(
+      "0,3,"
+      "1,2",
       AutocompleteMatch::ClassificationsToString(
           AutocompleteMatch::MergeClassifications(
               AutocompleteMatch::ClassificationsFromString("0,2"),
-              AutocompleteMatch::ClassificationsFromString("0,1," "1,0"))));
+              AutocompleteMatch::ClassificationsFromString("0,1,"
+                                                           "1,0"))));
 
   // Test the case where both vectors have classifications at the same
   // positions.
   EXPECT_EQ("0,3",
-      AutocompleteMatch::ClassificationsToString(
-          AutocompleteMatch::MergeClassifications(
-              AutocompleteMatch::ClassificationsFromString("0,1," "1,2"),
-              AutocompleteMatch::ClassificationsFromString("0,2," "1,1"))));
+            AutocompleteMatch::ClassificationsToString(
+                AutocompleteMatch::MergeClassifications(
+                    AutocompleteMatch::ClassificationsFromString("0,1,"
+                                                                 "1,2"),
+                    AutocompleteMatch::ClassificationsFromString("0,2,"
+                                                                 "1,1"))));
 
   // Test an arbitrary complicated case.
-  EXPECT_EQ("0,2," "1,0," "2,1," "4,3," "5,7," "6,3," "7,7," "15,1," "17,0",
+  EXPECT_EQ(
+      "0,2,"
+      "1,0,"
+      "2,1,"
+      "4,3,"
+      "5,7,"
+      "6,3,"
+      "7,7,"
+      "15,1,"
+      "17,0",
       AutocompleteMatch::ClassificationsToString(
           AutocompleteMatch::MergeClassifications(
-              AutocompleteMatch::ClassificationsFromString(
-                  "0,0," "2,1," "4,3," "7,7," "10,6," "15,0"),
-              AutocompleteMatch::ClassificationsFromString(
-                  "0,2," "1,0," "5,7," "6,1," "17,0"))));
+              AutocompleteMatch::ClassificationsFromString("0,0,"
+                                                           "2,1,"
+                                                           "4,3,"
+                                                           "7,7,"
+                                                           "10,6,"
+                                                           "15,0"),
+              AutocompleteMatch::ClassificationsFromString("0,2,"
+                                                           "1,0,"
+                                                           "5,7,"
+                                                           "6,1,"
+                                                           "17,0"))));
 }
 
-TEST(AutocompleteMatchTest, InlineTailPrefix) {
-  struct TestData {
-    std::string before_contents, after_contents;
-    ACMatchClassifications before_contents_class, after_contents_class;
-  } cases[] = {
-      {"90123456",
-       "... 90123456",
-       // should prepend ellipsis, and offset remainder
-       {{0, ACMatchClassification::NONE}, {2, ACMatchClassification::MATCH}},
-       {{0, ACMatchClassification::NONE}, {6, ACMatchClassification::MATCH}}},
-      {"90123456",
-       "... 90123456",
-       // should prepend ellipsis
-       {},
-       {{0, ACMatchClassification::NONE}}},
-  };
-  for (const auto& test_case : cases) {
-    AutocompleteMatch match;
-    match.type = AutocompleteMatchType::SEARCH_SUGGEST_TAIL;
-    match.contents = base::UTF8ToUTF16(test_case.before_contents);
-    match.contents_class = test_case.before_contents_class;
-    match.InlineTailPrefix(u"12345678");
-    EXPECT_EQ(match.contents, base::UTF8ToUTF16(test_case.after_contents));
-    EXPECT_TRUE(EqualClassifications(match.contents_class,
-                                     test_case.after_contents_class));
-  }
-}
-
-TEST(AutocompleteMatchTest, GetMatchComponents) {
+TEST_F(AutocompleteMatchTest, GetMatchComponents) {
   struct MatchComponentsTestData {
     const std::string url;
     std::vector<std::string> input_terms;
@@ -255,7 +336,7 @@ TEST(AutocompleteMatchTest, GetMatchComponents) {
   }
 }
 
-TEST(AutocompleteMatchTest, FormatUrlForSuggestionDisplay) {
+TEST_F(AutocompleteMatchTest, FormatUrlForSuggestionDisplay) {
   // This test does not need to verify url_formatter's functionality in-depth,
   // since url_formatter has its own unit tests. This test is to validate that
   // flipping feature flags and varying the trim_scheme parameter toggles the
@@ -275,7 +356,7 @@ TEST(AutocompleteMatchTest, FormatUrlForSuggestionDisplay) {
                                                             preserve_subdomain);
       EXPECT_EQ(base::WideToUTF16(expected_result),
                 url_formatter::FormatUrl(GURL(url), format_types,
-                                         net::UnescapeRule::SPACES, nullptr,
+                                         base::UnescapeRule::SPACES, nullptr,
                                          nullptr, nullptr));
     }
   };
@@ -298,28 +379,89 @@ TEST(AutocompleteMatchTest, FormatUrlForSuggestionDisplay) {
     test_case.Validate();
 }
 
-TEST(AutocompleteMatchTest, SupportsDeletion) {
+TEST_F(AutocompleteMatchTest, SupportsDeletion) {
   // A non-deletable match with no duplicates.
   AutocompleteMatch m(nullptr, 0, false,
-                      AutocompleteMatchType::URL_WHAT_YOU_TYPED);
+                      omnibox::AutocompleteMatchType::kUrlWhatYouTyped);
   EXPECT_FALSE(m.SupportsDeletion());
 
   // A deletable match with no duplicates.
   AutocompleteMatch m1(nullptr, 0, true,
-                       AutocompleteMatchType::URL_WHAT_YOU_TYPED);
+                       omnibox::AutocompleteMatchType::kUrlWhatYouTyped);
   EXPECT_TRUE(m1.SupportsDeletion());
 
   // A non-deletable match, with non-deletable duplicates.
   m.duplicate_matches.push_back(AutocompleteMatch(
-      nullptr, 0, false, AutocompleteMatchType::URL_WHAT_YOU_TYPED));
+      nullptr, 0, false, omnibox::AutocompleteMatchType::kUrlWhatYouTyped));
   m.duplicate_matches.push_back(AutocompleteMatch(
-      nullptr, 0, false, AutocompleteMatchType::URL_WHAT_YOU_TYPED));
+      nullptr, 0, false, omnibox::AutocompleteMatchType::kUrlWhatYouTyped));
   EXPECT_FALSE(m.SupportsDeletion());
 
   // A non-deletable match, with at least one deletable duplicate.
   m.duplicate_matches.push_back(AutocompleteMatch(
-      nullptr, 0, true, AutocompleteMatchType::URL_WHAT_YOU_TYPED));
+      nullptr, 0, true, omnibox::AutocompleteMatchType::kUrlWhatYouTyped));
   EXPECT_TRUE(m.SupportsDeletion());
+}
+
+TEST_F(AutocompleteMatchTest, GURLToStrippedGURL) {
+  struct {
+    const char* url1;
+    const char* url2;
+    const char* input;
+    bool equal;
+  } test_cases[] = {
+      // Sanity check cases.
+      {"http://google.com", "http://google.com", "", true},
+      {"http://google.com", "http://www.google.com", "", true},
+      {"http://google.com", "http://facebook.com", "", false},
+      {"http://google.com", "https://google.com", "", true},
+      // Because we provided scheme, must match in scheme.
+      {"http://google.com", "https://google.com", "http://google.com", false},
+      {"https://www.apple.com/", "http://www.apple.com/",
+       "https://www.apple.com/", false},
+      {"https://www.apple.com/", "https://www.apple.com/",
+       "https://www.apple.com/", true},
+      // Ignore ref if not in input.
+      {"http://drive.google.com/doc/blablabla#page=10",
+       "http://drive.google.com/doc/blablabla#page=111", "", true},
+      {"http://drive.google.com/doc/blablabla#page=10",
+       "http://drive.google.com/doc/blablabla#page=111",
+       "http://drive.google.com/doc/blablabla", true},
+      {"file:///usr/local/bin/tuxpenguin#ref1",
+       "file:///usr/local/bin/tuxpenguin#ref2", "", true},
+      {"file:///usr/local/bin/tuxpenguin#ref1",
+       "file:///usr/local/bin/tuxpenguin#ref2",
+       "file:///usr/local/bin/tuxpenguin", true},
+      // Do not ignore ref if in input.
+      {"http://drive.google.com/doc/blablabla#page=10",
+       "http://drive.google.com/doc/blablabla#page=111",
+       "http://drive.google.com/doc/blablabla#p", false},
+      {"file:///usr/local/bin/tuxpenguin#ref1",
+       "file:///usr/local/bin/tuxpenguin#ref2",
+       "file:///usr/local/bin/tuxpenguin#r", false}};
+
+  for (const auto& test_case : test_cases) {
+    SCOPED_TRACE(std::string(test_case.url1) + " vs " + test_case.url2 +
+                 ", input '" + test_case.input + "'");
+    AutocompleteInput input(base::ASCIIToUTF16(test_case.input),
+                            test_case.input[0]
+                                ? metrics::OmniboxEventProto::OTHER
+                                : metrics::OmniboxEventProto::BLANK,
+                            TestSchemeClassifier());
+    const auto stripped_url1 = AutocompleteMatch::GURLToStrippedGURL(
+        /*url=*/GURL(test_case.url1),
+        /*input=*/input,
+        /*template_url=*/nullptr,
+        /*search_terms=*/std::u16string(),
+        /*keep_search_intent_params=*/false);
+    const auto stripped_url2 = AutocompleteMatch::GURLToStrippedGURL(
+        /*url=*/GURL(test_case.url2),
+        /*input=*/input,
+        /*template_url=*/nullptr,
+        /*search_terms=*/std::u16string(),
+        /*keep_search_intent_params=*/false);
+    EXPECT_EQ(test_case.equal, stripped_url1 == stripped_url2);
+  }
 }
 
 // Structure containing URL pairs for deduping-related tests.
@@ -339,11 +481,11 @@ void CheckDuplicateCase(const DuplicateCase& duplicate_case) {
                           metrics::OmniboxEventProto::OTHER,
                           TestSchemeClassifier());
   AutocompleteMatch m1(nullptr, 100, false,
-                       AutocompleteMatchType::URL_WHAT_YOU_TYPED);
+                       omnibox::AutocompleteMatchType::kUrlWhatYouTyped);
   m1.destination_url = GURL(duplicate_case.url1);
   m1.ComputeStrippedDestinationURL(input, nullptr);
   AutocompleteMatch m2(nullptr, 100, false,
-                       AutocompleteMatchType::URL_WHAT_YOU_TYPED);
+                       omnibox::AutocompleteMatchType::kUrlWhatYouTyped);
   m2.destination_url = GURL(duplicate_case.url2);
   m2.ComputeStrippedDestinationURL(input, nullptr);
   EXPECT_EQ(duplicate_case.expected_duplicate,
@@ -352,60 +494,53 @@ void CheckDuplicateCase(const DuplicateCase& duplicate_case) {
   EXPECT_TRUE(m2.stripped_destination_url.is_valid());
 }
 
-TEST(AutocompleteMatchTest, Duplicates) {
+TEST_F(AutocompleteMatchTest, Duplicates) {
   DuplicateCase cases[] = {
-    { L"g", "http://www.google.com/",  "https://www.google.com/",    true },
-    { L"g", "http://www.google.com/",  "http://www.google.com",      true },
-    { L"g", "http://google.com/",      "http://www.google.com/",     true },
-    { L"g", "http://www.google.com/",  "HTTP://www.GOOGLE.com/",     true },
-    { L"g", "http://www.google.com/",  "http://www.google.com",      true },
-    { L"g", "https://www.google.com/", "http://google.com",          true },
-    { L"g", "http://www.google.com/",  "wss://www.google.com/",      false },
-    { L"g", "http://www.google.com/1", "http://www.google.com/1/",   false },
-    { L"g", "http://www.google.com/",  "http://www.google.com/1",    false },
-    { L"g", "http://www.google.com/",  "http://www.goo.com/",        false },
-    { L"g", "http://www.google.com/",  "http://w2.google.com/",      false },
-    { L"g", "http://www.google.com/",  "http://m.google.com/",       false },
-    { L"g", "http://www.google.com/",  "http://www.google.com/?foo", false },
+      {L"g", "http://www.google.com/", "https://www.google.com/", true},
+      {L"g", "http://www.google.com/", "http://www.google.com", true},
+      {L"g", "http://google.com/", "http://www.google.com/", true},
+      {L"g", "http://www.google.com/", "HTTP://www.GOOGLE.com/", true},
+      {L"g", "http://www.google.com/", "http://www.google.com", true},
+      {L"g", "https://www.google.com/", "http://google.com", true},
+      {L"g", "http://www.google.com/", "wss://www.google.com/", false},
+      {L"g", "http://www.google.com/1", "http://www.google.com/1/", false},
+      {L"g", "http://www.google.com/", "http://www.google.com/1", false},
+      {L"g", "http://www.google.com/", "http://www.goo.com/", false},
+      {L"g", "http://www.google.com/", "http://w2.google.com/", false},
+      {L"g", "http://www.google.com/", "http://m.google.com/", false},
+      {L"g", "http://www.google.com/", "http://www.google.com/?foo", false},
 
-    // Don't allow URLs with different schemes to be considered duplicates for
-    // certain inputs.
-    { L"http://g", "http://google.com/",
-                   "https://google.com/",  false },
-    { L"http://g", "http://blah.com/",
-                   "https://blah.com/",    true  },
-    { L"http://g", "http://google.com/1",
-                   "https://google.com/1", false },
-    { L"http://g hello",    "http://google.com/",
-                            "https://google.com/", false },
-    { L"hello http://g",    "http://google.com/",
-                            "https://google.com/", false },
-    { L"hello http://g",    "http://blah.com/",
-                            "https://blah.com/",   true  },
-    { L"http://b http://g", "http://google.com/",
-                            "https://google.com/", false },
-    { L"http://b http://g", "http://blah.com/",
-                            "https://blah.com/",   false },
+      // Don't allow URLs with different schemes to be considered duplicates for
+      // certain inputs.
+      {L"http://g", "http://google.com/", "https://google.com/", false},
+      {L"http://g", "http://blah.com/", "https://blah.com/", true},
+      {L"http://g", "http://google.com/1", "https://google.com/1", false},
+      {L"http://g hello", "http://google.com/", "https://google.com/", false},
+      {L"hello http://g", "http://google.com/", "https://google.com/", false},
+      {L"hello http://g", "http://blah.com/", "https://blah.com/", true},
+      {L"http://b http://g", "http://google.com/", "https://google.com/",
+       false},
+      {L"http://b http://g", "http://blah.com/", "https://blah.com/", false},
 
-    // If the user types unicode that matches the beginning of a
-    // punycode-encoded hostname then consider that a match.
-    { L"x",               "http://xn--1lq90ic7f1rc.cn/",
-                          "https://xn--1lq90ic7f1rc.cn/", true  },
-    { L"http://\x5317 x", "http://xn--1lq90ic7f1rc.cn/",
-                          "https://xn--1lq90ic7f1rc.cn/", false },
-    { L"http://\x89c6 x", "http://xn--1lq90ic7f1rc.cn/",
-                          "https://xn--1lq90ic7f1rc.cn/", true  },
+      // If the user types unicode that matches the beginning of a
+      // punycode-encoded hostname then consider that a match.
+      {L"x", "http://xn--1lq90ic7f1rc.cn/", "https://xn--1lq90ic7f1rc.cn/",
+       true},
+      {L"http://\x5317 x", "http://xn--1lq90ic7f1rc.cn/",
+       "https://xn--1lq90ic7f1rc.cn/", false},
+      {L"http://\x89c6 x", "http://xn--1lq90ic7f1rc.cn/",
+       "https://xn--1lq90ic7f1rc.cn/", true},
 
-    // URLs with hosts containing only `www.` should produce valid stripped urls
-    { L"http://www./", "http://www./", "http://google.com/", false },
+      // URLs with hosts containing only `www.` should produce valid stripped
+      // urls
+      {L"http://www./", "http://www./", "http://google.com/", false},
   };
 
-  for (size_t i = 0; i < base::size(cases); ++i) {
-    CheckDuplicateCase(cases[i]);
-  }
+  for (const auto& caseI : cases)
+    CheckDuplicateCase(caseI);
 }
 
-TEST(AutocompleteMatchTest, DedupeDriveURLs) {
+TEST_F(AutocompleteMatchTest, DedupeDriveURLs) {
   DuplicateCase cases[] = {
       // Document URLs pointing to the same document, perhaps with different
       // /edit points, hashes, or cgiargs, are deduped.
@@ -420,92 +555,296 @@ TEST(AutocompleteMatchTest, DedupeDriveURLs) {
        "https://drive.google.com/open?id=another-doc-id", false},
   };
 
-  for (size_t i = 0; i < base::size(cases); ++i) {
-    CheckDuplicateCase(cases[i]);
+  for (const auto& caseI : cases)
+    CheckDuplicateCase(caseI);
+}
+
+TEST_F(AutocompleteMatchTest, UpgradeMatchWithPropertiesFrom) {
+  scoped_refptr<FakeAutocompleteProvider> bookmark_provider =
+      new FakeAutocompleteProvider(AutocompleteProvider::Type::kBookmark);
+  scoped_refptr<FakeAutocompleteProvider> history_provider =
+      new FakeAutocompleteProvider(AutocompleteProvider::Type::kHistoryQuick);
+  scoped_refptr<FakeAutocompleteProvider> search_provider =
+      new FakeAutocompleteProvider(AutocompleteProvider::Type::kSearch);
+
+  AutocompleteMatch search_history_match(
+      search_provider.get(), 500, true,
+      omnibox::AutocompleteMatchType::kSearchHistory);
+
+  // Entity match should get the increased score, but not change types.
+  AutocompleteMatch entity_match(
+      search_provider.get(), 400, false,
+      omnibox::AutocompleteMatchType::kSearchSuggestEntity);
+  entity_match.UpgradeMatchWithPropertiesFrom(search_history_match);
+  EXPECT_EQ(entity_match.relevance, 500);
+  EXPECT_EQ(entity_match.type,
+            omnibox::AutocompleteMatchType::kSearchSuggestEntity);
+
+  // Suggest and search-what-typed matches should get the search history type.
+  AutocompleteMatch suggest_match(
+      search_provider.get(), 400, true,
+      omnibox::AutocompleteMatchType::kSearchSuggest);
+  AutocompleteMatch search_what_you_typed(
+      search_provider.get(), 400, true,
+      omnibox::AutocompleteMatchType::kSearchWhatYouTyped);
+  suggest_match.UpgradeMatchWithPropertiesFrom(search_history_match);
+  search_what_you_typed.UpgradeMatchWithPropertiesFrom(search_history_match);
+  EXPECT_EQ(suggest_match.relevance, 500);
+  EXPECT_EQ(search_what_you_typed.relevance, 500);
+  EXPECT_EQ(suggest_match.type, omnibox::AutocompleteMatchType::kSearchHistory);
+  EXPECT_EQ(search_what_you_typed.type,
+            omnibox::AutocompleteMatchType::kSearchHistory);
+
+  // Some providers should bestow their suggestion texts even if not the primary
+  // duplicate.
+  AutocompleteMatch history_match(
+      history_provider.get(), 800, true,
+      omnibox::AutocompleteMatchType::kHistoryTitle);
+  AutocompleteMatch bookmark_match(
+      bookmark_provider.get(), 400, true,
+      omnibox::AutocompleteMatchType::kBookmarkTitle);
+  history_match.contents = u"overwrite";
+  history_match.inline_autocompletion = u"preserve";
+  bookmark_match.contents = u"propagate";
+  bookmark_match.inline_autocompletion = u"discard";
+  history_match.UpgradeMatchWithPropertiesFrom(bookmark_match);
+  EXPECT_EQ(history_match.type, omnibox::AutocompleteMatchType::kHistoryTitle);
+  EXPECT_EQ(history_match.contents, u"propagate");
+  EXPECT_EQ(history_match.inline_autocompletion, u"preserve");
+}
+
+// The template presentation should travel with the suggestion text bestowed by
+// a preferred duplicate, while the template's other fields stay put.
+TEST_F(AutocompleteMatchTest, UpgradeMatchWithPropertiesFromSuggestTemplate) {
+  scoped_refptr<FakeAutocompleteProvider> bookmark_provider =
+      new FakeAutocompleteProvider(AutocompleteProvider::Type::kBookmark);
+  scoped_refptr<FakeAutocompleteProvider> history_provider =
+      new FakeAutocompleteProvider(AutocompleteProvider::Type::kHistoryQuick);
+  scoped_refptr<FakeAutocompleteProvider> search_provider =
+      new FakeAutocompleteProvider(AutocompleteProvider::Type::kSearch);
+  scoped_refptr<FakeAutocompleteProvider> shortcuts_provider =
+      new FakeAutocompleteProvider(AutocompleteProvider::Type::kShortcuts);
+
+  // Every field of the server template, split into the fields that describe
+  // how the suggestion is displayed...
+  omnibox::SuggestTemplateInfo presentation;
+  presentation.set_style(omnibox::SuggestTemplateInfo::ANNOTATED);
+  presentation.set_type_icon(omnibox::SuggestTemplateInfo::TRENDING);
+  presentation.mutable_primary_text()->set_text("weather");
+  presentation.mutable_secondary_text()->set_text("Sunny");
+  presentation.mutable_image()->set_url("https://example.com/sunny.png");
+  presentation.set_secondary_text_placement(
+      omnibox::SuggestTemplateInfo::BELOW_PRIMARY_TEXT);
+  presentation.set_wrap_secondary_text(true);
+  presentation.set_wrap_primary_text(true);
+  // ...and the fields that describe what it does.
+  omnibox::SuggestTemplateInfo behavior;
+  (*behavior.mutable_default_search_parameters())["foo"] = "bar";
+  behavior.add_action_suggestions()->set_action_type(
+      omnibox::SuggestTemplateInfo::TemplateAction::DIRECTIONS);
+  behavior.mutable_fusebox_action()->set_query_action_override(
+      omnibox::SuggestTemplateInfo::FuseboxAction::QUERY_ACTION_PASTE);
+  behavior.set_entity_id("/m/weather");
+  behavior.set_website_uri("https://weather.example.com");
+  omnibox::SuggestTemplateInfo server_template = presentation;
+  server_template.MergeFrom(behavior);
+
+  auto create_server_match = [&](int relevance) {
+    AutocompleteMatch match(search_provider.get(), relevance, false,
+                            omnibox::AutocompleteMatchType::kSearchSuggest);
+    match.contents = u"weather";
+    match.description = u"Sunny";
+    match.suggest_template = server_template;
+    return match;
+  };
+  auto create_shortcut_match = [&] {
+    AutocompleteMatch match(shortcuts_provider.get(), 1000, true,
+                            omnibox::AutocompleteMatchType::kSearchHistory);
+    match.contents = u"weather";
+    return match;
+  };
+
+  // A shortcut winning over a server suggestion takes its text, along with
+  // the template presentation, but not what the template does.
+  {
+    AutocompleteMatch shortcut_match = create_shortcut_match();
+    AutocompleteMatch server_match = create_server_match(800);
+    shortcut_match.UpgradeMatchWithPropertiesFrom(server_match);
+    EXPECT_EQ(shortcut_match.description, u"Sunny");
+    ASSERT_TRUE(shortcut_match.suggest_template);
+    EXPECT_THAT(*shortcut_match.suggest_template,
+                base::test::EqualsProto(presentation));
+    EXPECT_TRUE(shortcut_match.HasCustomDescription());
+  }
+
+  // A server suggestion winning over a bookmark takes its text, so its own
+  // template presentation no longer applies. What the template does stays.
+  {
+    AutocompleteMatch server_match = create_server_match(1000);
+    AutocompleteMatch bookmark_match(
+        bookmark_provider.get(), 800, true,
+        omnibox::AutocompleteMatchType::kBookmarkTitle);
+    bookmark_match.contents = u"Weather - Google Search";
+    server_match.UpgradeMatchWithPropertiesFrom(bookmark_match);
+    EXPECT_EQ(server_match.contents, u"Weather - Google Search");
+    ASSERT_TRUE(server_match.suggest_template);
+    EXPECT_THAT(*server_match.suggest_template,
+                base::test::EqualsProto(behavior));
+
+    // Without any other fields, the template is dropped altogether.
+    server_match = create_server_match(1000);
+    server_match.suggest_template = presentation;
+    server_match.UpgradeMatchWithPropertiesFrom(bookmark_match);
+    EXPECT_FALSE(server_match.suggest_template);
+  }
+
+  // When both matches have a template, the presentation is replaced rather
+  // than merged, and the match keeps only what its own template does.
+  {
+    omnibox::SuggestTemplateInfo shortcut_behavior;
+    (*shortcut_behavior.mutable_default_search_parameters())["udm"] = "99";
+    shortcut_behavior.mutable_fusebox_action()->set_query_action_override(
+        omnibox::SuggestTemplateInfo::FuseboxAction::QUERY_ACTION_HINT);
+    AutocompleteMatch shortcut_match = create_shortcut_match();
+    shortcut_match.contents = u"weather today";
+    shortcut_match.suggest_template = shortcut_behavior;
+    shortcut_match.suggest_template->set_type_icon(
+        omnibox::SuggestTemplateInfo::HISTORY);
+    shortcut_match.suggest_template->mutable_primary_text()->set_text(
+        "weather today");
+    // The server suggestion has no fusebox action of its own.
+    AutocompleteMatch server_match = create_server_match(800);
+    server_match.suggest_template->clear_fusebox_action();
+    shortcut_match.UpgradeMatchWithPropertiesFrom(server_match);
+    omnibox::SuggestTemplateInfo expected = presentation;
+    expected.MergeFrom(shortcut_behavior);
+    ASSERT_TRUE(shortcut_match.suggest_template);
+    EXPECT_THAT(*shortcut_match.suggest_template,
+                base::test::EqualsProto(expected));
+  }
+
+  // A match without a template doesn't get one from a duplicate without one.
+  {
+    AutocompleteMatch shortcut_match = create_shortcut_match();
+    AutocompleteMatch server_match = create_server_match(800);
+    server_match.suggest_template.reset();
+    shortcut_match.UpgradeMatchWithPropertiesFrom(server_match);
+    EXPECT_EQ(shortcut_match.description, u"Sunny");
+    EXPECT_FALSE(shortcut_match.suggest_template);
+  }
+
+  // The template is unaffected by duplicates from providers that aren't
+  // preferred.
+  {
+    AutocompleteMatch server_match = create_server_match(800);
+    AutocompleteMatch history_match(
+        history_provider.get(), 1000, true,
+        omnibox::AutocompleteMatchType::kHistoryTitle);
+    server_match.UpgradeMatchWithPropertiesFrom(history_match);
+    ASSERT_TRUE(server_match.suggest_template);
+    EXPECT_THAT(*server_match.suggest_template,
+                base::test::EqualsProto(server_template));
   }
 }
 
-TEST(AutocompleteMatchTest, UpgradeMatchPropertiesWhileMergingDuplicates) {
-  AutocompleteMatch search_history_match(nullptr, 500, true,
-                                         AutocompleteMatchType::SEARCH_HISTORY);
+TEST_F(AutocompleteMatchTest, MergeScoringSignals) {
+  AutocompleteMatch match = CreateACMatchWithScoringSignals(
+      /*typed_count*/ 3, /*visit_count*/ 10,
+      /*elapsed_time_last_visit_secs*/ 100, /*shortcut_visit_count*/ 5,
+      /*shortest_shortcut_len*/ 3, /*is_host_only*/ true,
+      /*num_bookmarks_of_url*/ 5, /*first_bookmark_title_match_position*/ 1,
+      /*total_bookmark_title_match_length*/ 8,
+      /*num_input_terms_matched_by_bookmark_title*/ 2,
+      /*first_url_match_position*/ 2, /*total_url_match_length*/ 5,
+      /*host_match_at_word_boundary*/ true, /*total_path_match_length*/ 0,
+      /*total_query_or_ref_match_length*/ 0,
+      /*total_title_match_length*/ 5, /*has_non_scheme_www_match*/ true,
+      /*num_input_terms_matched_by_title*/ 2,
+      /*num_input_terms_matched_by_url*/ 2, /*length_of_url*/ 10,
+      /*site_engagement*/ 0.6, /*allowed_to_be_default_match*/ true);
 
-  // Entity match should get the increased score, but not change types.
-  AutocompleteMatch entity_match(nullptr, 400, false,
-                                 AutocompleteMatchType::SEARCH_SUGGEST_ENTITY);
-  entity_match.UpgradeMatchWithPropertiesFrom(search_history_match);
-  EXPECT_EQ(500, entity_match.relevance);
-  EXPECT_EQ(AutocompleteMatchType::SEARCH_SUGGEST_ENTITY, entity_match.type);
+  AutocompleteMatch other_match = CreateACMatchWithScoringSignals(
+      /*typed_count*/ 1, /*visit_count*/ 2, /*elapsed_time_last_visit_secs*/ 50,
+      /*shortcut_visit_count*/ 1,
+      /*shortest_shortcut_len*/ 2, /*is_host_only*/ false,
+      /*num_bookmarks_of_url*/ 1, /*first_bookmark_title_match_position*/ 2,
+      /*total_bookmark_title_match_length*/ 6,
+      /*num_input_terms_matched_by_bookmark_title*/ 3,
+      /*first_url_match_position*/ 5, /*total_url_match_length*/ 3,
+      /*host_match_at_word_boundary*/ false, /*total_path_match_length*/ 1,
+      /*total_query_or_ref_match_length*/ 2,
+      /*total_title_match_length*/ 3, /*has_non_scheme_www_match*/ false,
+      /*num_input_terms_matched_by_title*/ 0,
+      /*num_input_terms_matched_by_url*/ 1, /*length_of_url*/ 12,
+      /*site_engagement*/ 0.5, /*allowed_to_be_default_match*/ false);
 
-  // Suggest and search-what-typed matches should get the search history type.
-  AutocompleteMatch suggest_match(nullptr, 400, true,
-                                  AutocompleteMatchType::SEARCH_SUGGEST);
-  AutocompleteMatch search_what_you_typed(
-      nullptr, 400, true, AutocompleteMatchType::SEARCH_WHAT_YOU_TYPED);
-  suggest_match.UpgradeMatchWithPropertiesFrom(search_history_match);
-  search_what_you_typed.UpgradeMatchWithPropertiesFrom(search_history_match);
-  EXPECT_EQ(500, suggest_match.relevance);
-  EXPECT_EQ(500, search_what_you_typed.relevance);
-  EXPECT_EQ(AutocompleteMatchType::SEARCH_HISTORY, suggest_match.type);
-  EXPECT_EQ(AutocompleteMatchType::SEARCH_HISTORY, search_what_you_typed.type);
+  match.MergeScoringSignals(other_match);
+
+  EXPECT_EQ(match.scoring_signals->typed_count(), 3);
+  EXPECT_EQ(match.scoring_signals->visit_count(), 10);
+  EXPECT_EQ(match.scoring_signals->elapsed_time_last_visit_secs(), 50);
+  EXPECT_EQ(match.scoring_signals->shortcut_visit_count(), 5);
+  EXPECT_EQ(match.scoring_signals->shortest_shortcut_len(), 2);
+  EXPECT_TRUE(match.scoring_signals->is_host_only());
+  EXPECT_EQ(match.scoring_signals->num_bookmarks_of_url(), 5);
+  EXPECT_EQ(match.scoring_signals->first_bookmark_title_match_position(), 1);
+  EXPECT_EQ(match.scoring_signals->total_bookmark_title_match_length(), 8);
+  EXPECT_EQ(match.scoring_signals->num_input_terms_matched_by_bookmark_title(),
+            3);
+  EXPECT_EQ(match.scoring_signals->first_url_match_position(), 2);
+  EXPECT_EQ(match.scoring_signals->total_url_match_length(), 5);
+  EXPECT_TRUE(match.scoring_signals->host_match_at_word_boundary());
+  EXPECT_EQ(match.scoring_signals->total_path_match_length(), 1);
+  EXPECT_EQ(match.scoring_signals->total_query_or_ref_match_length(), 2);
+  EXPECT_EQ(match.scoring_signals->total_title_match_length(), 5);
+  EXPECT_TRUE(match.scoring_signals->has_non_scheme_www_match());
+  EXPECT_EQ(match.scoring_signals->num_input_terms_matched_by_title(), 2);
+  EXPECT_EQ(match.scoring_signals->num_input_terms_matched_by_url(), 2);
+  EXPECT_EQ(match.scoring_signals->length_of_url(), 10);
+  EXPECT_EQ(match.scoring_signals->site_engagement(), 0.6f);
+  EXPECT_TRUE(match.scoring_signals->allowed_to_be_default_match());
 }
 
-TEST(AutocompleteMatchTest, SetAllowedToBeDefault) {
+TEST_F(AutocompleteMatchTest, SetAllowedToBeDefault) {
   // Test all combinations of:
   // 1) input text in ["goo", "goo ", "goo  "]
   // 2) input prevent_inline_autocomplete in [false, true]
-  // 3) match inline_autocopmletion in ["", "gle.com", " gle.com", "  gle.com"]
-  // match_prefix_autocompletion will be "" for all these cases
-  TestSetAllowedToBeDefault(1, "goo", false, "", "", "", true);
-  TestSetAllowedToBeDefault(2, "goo", false, "gle.com", "", "gle.com", true);
-  TestSetAllowedToBeDefault(3, "goo", false, " gle.com", "", " gle.com", true);
-  TestSetAllowedToBeDefault(4, "goo", false, "  gle.com", "", "  gle.com",
-                            true);
-  TestSetAllowedToBeDefault(5, "goo ", false, "", "", "", true);
-  TestSetAllowedToBeDefault(6, "goo ", false, "gle.com", "", "gle.com", false);
-  TestSetAllowedToBeDefault(7, "goo ", false, " gle.com", "", "gle.com", true);
-  TestSetAllowedToBeDefault(8, "goo ", false, "  gle.com", "", " gle.com",
-                            true);
-  TestSetAllowedToBeDefault(9, "goo  ", false, "", "", "", true);
-  TestSetAllowedToBeDefault(10, "goo  ", false, "gle.com", "", "gle.com",
-                            false);
-  TestSetAllowedToBeDefault(11, "goo  ", false, " gle.com", "", " gle.com",
-                            false);
-  TestSetAllowedToBeDefault(12, "goo  ", false, "  gle.com", "", "gle.com",
-                            true);
-  TestSetAllowedToBeDefault(13, "goo", true, "", "", "", true);
-  TestSetAllowedToBeDefault(14, "goo", true, "gle.com", "", "gle.com", false);
-  TestSetAllowedToBeDefault(15, "goo", true, " gle.com", "", " gle.com", false);
-  TestSetAllowedToBeDefault(16, "goo", true, "  gle.com", "", "  gle.com",
-                            false);
-  TestSetAllowedToBeDefault(17, "goo ", true, "", "", "", true);
-  TestSetAllowedToBeDefault(18, "goo ", true, "gle.com", "", "gle.com", false);
-  TestSetAllowedToBeDefault(19, "goo ", true, " gle.com", "", " gle.com",
-                            false);
-  TestSetAllowedToBeDefault(20, "goo ", true, "  gle.com", "", "  gle.com",
-                            false);
-  TestSetAllowedToBeDefault(21, "goo  ", true, "", "", "", true);
-  TestSetAllowedToBeDefault(22, "goo  ", true, "gle.com", "", "gle.com", false);
-  TestSetAllowedToBeDefault(23, "goo  ", true, " gle.com", "", " gle.com",
-                            false);
-  TestSetAllowedToBeDefault(24, "goo  ", true, "  gle.com", "", "  gle.com",
-                            false);
+  // 3) match inline_autocompletion in ["", "gle.com", " gle.com", "  gle.com"]
+  TestSetAllowedToBeDefault(1, "goo", false, "", "", true);
+  TestSetAllowedToBeDefault(2, "goo", false, "gle.com", "gle.com", true);
+  TestSetAllowedToBeDefault(3, "goo", false, " gle.com", " gle.com", true);
+  TestSetAllowedToBeDefault(4, "goo", false, "  gle.com", "  gle.com", true);
+  TestSetAllowedToBeDefault(5, "goo ", false, "", "", true);
+  TestSetAllowedToBeDefault(6, "goo ", false, "gle.com", "gle.com", false);
+  TestSetAllowedToBeDefault(7, "goo ", false, " gle.com", "gle.com", true);
+  TestSetAllowedToBeDefault(8, "goo ", false, "  gle.com", " gle.com", true);
+  TestSetAllowedToBeDefault(9, "goo  ", false, "", "", true);
+  TestSetAllowedToBeDefault(10, "goo  ", false, "gle.com", "gle.com", false);
+  TestSetAllowedToBeDefault(11, "goo  ", false, " gle.com", " gle.com", false);
+  TestSetAllowedToBeDefault(12, "goo  ", false, "  gle.com", "gle.com", true);
+  TestSetAllowedToBeDefault(13, "goo", true, "", "", true);
+  TestSetAllowedToBeDefault(14, "goo", true, "gle.com", "gle.com", false);
+  TestSetAllowedToBeDefault(15, "goo", true, " gle.com", " gle.com", false);
+  TestSetAllowedToBeDefault(16, "goo", true, "  gle.com", "  gle.com", false);
+  TestSetAllowedToBeDefault(17, "goo ", true, "", "", true);
+  TestSetAllowedToBeDefault(18, "goo ", true, "gle.com", "gle.com", false);
+  TestSetAllowedToBeDefault(19, "goo ", true, " gle.com", " gle.com", false);
+  TestSetAllowedToBeDefault(20, "goo ", true, "  gle.com", "  gle.com", false);
+  TestSetAllowedToBeDefault(21, "goo  ", true, "", "", true);
+  TestSetAllowedToBeDefault(22, "goo  ", true, "gle.com", "gle.com", false);
+  TestSetAllowedToBeDefault(23, "goo  ", true, " gle.com", " gle.com", false);
+  TestSetAllowedToBeDefault(24, "goo  ", true, "  gle.com", "  gle.com", false);
 }
 
-TEST(AutocompleteMatchTest, SetAllowedToBeDefault_PrefixAutocompletion) {
-  // Verify that a non-empty prefix autocompletion will prevent an empty inline
-  // autocompletion from bypassing the other default match requirements.
-  TestSetAllowedToBeDefault(0, "xyz", true, "", "prefix", "", false);
-}
-
-TEST(AutocompleteMatchTest, TryRichAutocompletion) {
+TEST_F(AutocompleteMatchTest, TryRichAutocompletion) {
   auto test = [](const std::string input_text,
                  bool input_prevent_inline_autocomplete,
                  const std::string primary_text,
-                 const std::string secondary_text, bool shortcut_provider,
-                 bool expected_return,
-                 bool expected_rich_autocompletion_triggered,
+                 const std::string secondary_text,
+                 const std::string shortcut_text, bool expected_return,
+                 AutocompleteMatch::RichAutocompletionType
+                     expected_rich_autocompletion_triggered,
                  const std::string expected_inline_autocompletion,
-                 const std::string expected_prefix_autocompletion,
                  const std::string expected_additional_text,
                  bool expected_allowed_to_be_default_match) {
     AutocompleteInput input(base::UTF8ToUTF16(input_text),
@@ -514,316 +853,612 @@ TEST(AutocompleteMatchTest, TryRichAutocompletion) {
     input.set_prevent_inline_autocomplete(input_prevent_inline_autocomplete);
 
     AutocompleteMatch match;
-    EXPECT_EQ(match.TryRichAutocompletion(base::UTF8ToUTF16(primary_text),
-                                          base::UTF8ToUTF16(secondary_text),
-                                          input, shortcut_provider),
-              expected_return);
+    EXPECT_EQ(
+        match.TryRichAutocompletion(input, base::UTF8ToUTF16(primary_text),
+                                    base::UTF8ToUTF16(secondary_text),
+                                    base::UTF8ToUTF16(shortcut_text)),
+        expected_return);
 
     EXPECT_EQ(match.rich_autocompletion_triggered,
               expected_rich_autocompletion_triggered);
 
     EXPECT_EQ(base::UTF16ToUTF8(match.inline_autocompletion).c_str(),
               expected_inline_autocompletion);
-    EXPECT_EQ(base::UTF16ToUTF8(match.prefix_autocompletion).c_str(),
-              expected_prefix_autocompletion);
-    EXPECT_TRUE(match.split_autocompletion.Empty());
     EXPECT_EQ(base::UTF16ToUTF8(match.additional_text).c_str(),
               expected_additional_text);
     EXPECT_EQ(match.allowed_to_be_default_match,
               expected_allowed_to_be_default_match);
   };
 
-  // We won't test every possible combination of rich autocompletion parameters,
-  // but for now, only the state with all enabled. If we decide to launch a
-  // different combination, we can update these tests.
   {
     base::test::ScopedFeatureList feature_list;
     feature_list.InitAndEnableFeatureWithParameters(
         omnibox::kRichAutocompletion,
         {
-            {"RichAutocompletionAutocompleteTitles", "true"},
-            {"RichAutocompletionAutocompleteNonPrefixAll", "true"},
-            {"RichAutocompletionSplitTitleCompletion", "true"},
-            {"RichAutocompletionSplitUrlCompletion", "true"},
+            {"RichAutocompletionAutocompleteTitlesMinChar", "0"},
+            {"RichAutocompletionAutocompleteShortcutTextMinChar", "0"},
         });
+    RichAutocompletionParams::ClearParamsForTesting();
 
-    // Prefer autocompleting primary text prefix. Should not set
-    // |rich_autocompletion_triggered|.
+    // The combinations that are allowed to be autocompleted, in order of
+    // preference:
+    // - Non-shortcut, prefix,     primary   - autocomplete
+    // - Non-shortcut, prefix,     secondary - no
+    // - Non-shortcut, non-prefix, primary   - no
+    // - Non-shortcut, non-prefix, secondary - no
+    // - Shortcut,     prefix,     primary   - autocomplete
+    // - Shortcut,     prefix,     secondary - autocomplete
+    // - Shortcut,     prefix,     shortcut  - autocomplete
+    // - Shortcut,     non-prefix, primary   - no
+    // - Shortcut,     non-prefix, secondary - no
+
     {
-      SCOPED_TRACE("primary prefix");
-      test("x", false, "x_mixd_x_primary", "x_mixd_x_secondary", false, true,
-           false, "_mixd_x_primary", "", "", true);
+      SCOPED_TRACE("non-shortcut, prefix, primary text");
+      // This case shouldn't set `rich_autocompletion_triggered`.
+      test("x", false, "x_mixd_x_primary", "x_mixd_x_secondary", "", true,
+           AutocompleteMatch::RichAutocompletionType::kNone, "_mixd_x_primary",
+           "", true);
     }
 
-    // Otherwise, prefer secondary text prefix.
     {
-      SCOPED_TRACE("secondary prefix");
-      test("x", false, "y_mixd_x_primary", "x_mixd_x_secondary", false, true,
-           true, "_mixd_x_secondary", "", "y_mixd_x_primary", true);
+      SCOPED_TRACE("non-shortcut, all other cases text");
+      test("x", false, "y_mixd_x_primary", "x_mixd_x_secondary", "", false,
+           AutocompleteMatch::RichAutocompletionType::kNone, "", "", false);
     }
 
-    // Otherwise, prefer primary text non-prefix (wordbreak).
     {
-      SCOPED_TRACE("primary non-prefix");
-      test("x", false, "y_mixd_x_primary", "y_mixd_x_secondary", false, true,
-           true, "_primary", "y_mixd_", "", true);
+      SCOPED_TRACE("shortcut, prefix, primary text");
+      test("x", false, "x_mixd_x_primary", "x_mixd_x_secondary",
+           "x_mixd_x_shortcut", true,
+           AutocompleteMatch::RichAutocompletionType::kNone, "_mixd_x_primary",
+           "", true);
     }
 
-    // Otherwise, prefer secondary text non-prefix (wordbreak).
     {
-      SCOPED_TRACE("secondary non-prefix");
-      test("x", false, "y_mid_y_primary", "y_mixd_x_secondary", false, true,
-           true, "_secondary", "y_mixd_", "y_mid_y_primary", true);
+      SCOPED_TRACE("shortcut, prefix, secondary text");
+      test("x", false, "y_mixd_x_primary", "x_mixd_x_secondary",
+           "x_mixd_x_shortcut", true,
+           AutocompleteMatch::RichAutocompletionType::kTitlePrefix,
+           "_mixd_x_secondary", "y_mixd_x_primary", true);
     }
 
-    // We don't explicitly test that non-wordbreak matches aren't autocompleted,
-    // because we rely on providers to not provide suggestions that only match
-    // the input at non-wordbreaks.
-
-    // We test split autocompletion in separate test below since it has a few
-    // edge cases.
-
-    // Otherwise, don't autocomplete but still set |additional_text|.
     {
-      SCOPED_TRACE("no autocompletion applicable");
-      test("x", false, "y_mid_y_primary", "y_mid_y_secondary", false, false,
-           false, "", "", "", false);
+      SCOPED_TRACE("shortcut, prefix, shortcut text");
+      test("x", false, "y_mixd_x_primary", "y_mixd_x_secondary",
+           "x_mixd_x_shortcut", true,
+           AutocompleteMatch::RichAutocompletionType::kShortcutTextPrefix,
+           "_mixd_x_shortcut", "y_mixd_x_primary", true);
     }
 
-    // Don't autocomplete if |prevent_inline_autocomplete| is true.
     {
-      SCOPED_TRACE("prevent inline autocomplete");
-      test("x", true, "x_mixd_x_primary", "x_mixd_x_secondary", false, false,
-           false, "", "", "", false);
+      SCOPED_TRACE("shortcut, all other cases");
+      test("x", false, "y_mixd_x_primary", "y_mixd_x_secondary",
+           "y_mixd_x_shortcut", false,
+           AutocompleteMatch::RichAutocompletionType::kNone, "", "", false);
+    }
+
+    {
+      SCOPED_TRACE("Autocomplete input with spaces");
+      test("x x", false, "primary", "x x secondary", "x x shortcut", true,
+           AutocompleteMatch::RichAutocompletionType::kTitlePrefix,
+           " secondary", "primary", true);
     }
   }
 
-  // Check min char limits.
   {
     base::test::ScopedFeatureList feature_list;
     feature_list.InitAndEnableFeatureWithParameters(
         omnibox::kRichAutocompletion,
         {
-            {"RichAutocompletionAutocompleteTitles", "true"},
-            {"RichAutocompletionAutocompleteNonPrefixAll", "true"},
             {"RichAutocompletionAutocompleteTitlesMinChar", "3"},
-            {"RichAutocompletionAutocompleteNonPrefixMinChar", "2"},
-            {"RichAutocompletionSplitCompletionMinChar", "2"},
+            {"RichAutocompletionAutocompleteShortcutTextMinChar", "3"},
         });
+    RichAutocompletionParams::ClearParamsForTesting();
 
-    // Do autocomplete title if input is greater than limits.
     {
-      SCOPED_TRACE("min char shorter than input");
-      test("x_prim", false, "y_mixd_x_primary", "x_mixd_x_secondary", false,
-           true, true, "ary", "y_mixd_", "", true);
+      SCOPED_TRACE("Do autocomplete title if input is greater than limits");
+      test("x_mixd", false, "y_mixd_x_primary", "x_mixd_x_secondary",
+           "x_mixd_x_shortcut", true,
+           AutocompleteMatch::RichAutocompletionType::kTitlePrefix,
+           "_x_secondary", "y_mixd_x_primary", true);
     }
 
-    // Usually, title autocompletion is preferred to non-prefix. Autocomplete
-    // non-prefix if title autocompletion has a limit larger than the input.
     {
-      SCOPED_TRACE(
-          "title min char longer & non-prefix min char shorter than input");
-      test("x_", false, "y_mixd_x_primary", "x_mixd_x_secondary", false, true,
-           true, "primary", "y_mixd_", "", true);
-    }
-
-    // Don't autocomplete title and non-prefix if input is less than limits.
-    {
-      SCOPED_TRACE("min char longer than input");
-      test("x", false, "y_mixd_x_primary", "x_mixd_x_secondary", false, false,
-           false, "", "", "", false);
-    }
-  }
-
-  // Don't autocomplete if IsRichAutocompletionEnabled is disabled
-  {
-    SCOPED_TRACE("feature disabled");
-    test("x", false, "x_mixd_x_primary", "x_mixd_x_secondary", false, false,
-         false, "", "", "", false);
-  }
-
-  // Don't autocomplete if the RichAutocompletionCounterfactual param is
-  // enabled; do set |rich_autocompletion_triggered| if it would have
-  // autocompleted.
-  {
-    base::test::ScopedFeatureList feature_list;
-    feature_list.InitAndEnableFeatureWithParameters(
-        omnibox::kRichAutocompletion,
-        {
-            {"RichAutocompletionAutocompleteTitles", "true"},
-            {"RichAutocompletionAutocompleteNonPrefixAll", "true"},
-            {"RichAutocompletionAutocompleteTitlesMinChar", "3"},
-            {"RichAutocompletionAutocompleteNonPrefixMinChar", "2"},
-            {"RichAutocompletionSplitCompletionMinChar", "2"},
-            {"RichAutocompletionCounterfactual", "true"},
-        });
-
-    // Do trigger if input is greater than limits.
-    {
-      SCOPED_TRACE("min char shorter than input, counterfactual");
-      test("x_prim", false, "y_mixd_x_primary", "x_mixd_x_secondary", false,
-           false, true, "", "", "", false);
+      SCOPED_TRACE("Do autocomplete shortcut if input is greater than limits");
+      test("x_mixd", false, "y_mixd_x_primary", "y_mixd_x_secondary",
+           "x_mixd_x_shortcut", true,
+           AutocompleteMatch::RichAutocompletionType::kShortcutTextPrefix,
+           "_x_shortcut", "y_mixd_x_primary", true);
     }
 
     {
       SCOPED_TRACE(
-          "title min char longer & non-prefix min char shorter than input, "
-          "counterfactual");
-      test("x_", false, "y_mixd_x_primary", "x_mixd_x_secondary", false, false,
-           true, "", "", "", false);
-    }
-
-    // Don't trigger if input is less than limits.
-    {
-      SCOPED_TRACE("min char longer than input, counterfactual");
-      test("x", false, "y_mixd_x_primary", "x_mixd_x_secondary", false, false,
-           false, "", "", "", false);
-    }
-  }
-
-  // Prefer non-prefix URLs to prefix title autocompletion only if the
-  // appropriate param is set.
-  {
-    base::test::ScopedFeatureList feature_list;
-    feature_list.InitAndEnableFeatureWithParameters(
-        omnibox::kRichAutocompletion,
-        {
-            {"RichAutocompletionAutocompleteTitles", "true"},
-            {"RichAutocompletionAutocompleteNonPrefixAll", "true"},
-            {"RichAutocompletionAutocompletePreferUrlsOverPrefixes", "true"},
-        });
-
-    {
-      SCOPED_TRACE("prefer URLs over prefixes");
-      test("x", false, "y_mixd_x_primary", "x_mixd_x_secondary", false, true,
-           true, "_primary", "y_mixd_", "", true);
-    }
-  }
-
-  // Autocomplete only shortcut suggestions and only inputs without spaces if
-  // appropriate params are set.
-  {
-    base::test::ScopedFeatureList feature_list;
-    feature_list.InitAndEnableFeatureWithParameters(
-        omnibox::kRichAutocompletion,
-        {
-            {"RichAutocompletionAutocompleteTitlesShortcutProvider", "true"},
-            {"RichAutocompletionAutocompleteTitlesNoInputsWithSpaces", "true"},
-            {"RichAutocompletionAutocompleteNonPrefixShortcutProvider", "true"},
-            {"RichAutocompletionAutocompleteNonPrefixNoInputsWithSpaces",
-             "true"},
-        });
-    // Trigger if the suggestion is from the shortcut provider and the input
-    // contains no spaces.
-    {
-      SCOPED_TRACE("shortcut, input contains no spaces");
-      test("x", false, "primary x x", "x x secondary", true, true, true,
-           " x secondary", "", "primary x x", true);
-    }
-
-    // Don't trigger if the suggestion is not from the shortcut provider.
-    {
-      SCOPED_TRACE("not shortcut");
-      test("x", false, "primary x x", "x x secondary", false, false, false, "",
-           "", "", false);
-    }
-
-    // Don't trigger if the input contains spaces.
-    {
-      SCOPED_TRACE("input contains spaces");
-      test("x x", false, "primary x x", "x x secondary", true, false, false, "",
-           "", "", false);
-    }
-  }
-
-  // Autocomplete inputs with spaces if the appropriate params are set.
-  {
-    base::test::ScopedFeatureList feature_list;
-    feature_list.InitAndEnableFeatureWithParameters(
-        omnibox::kRichAutocompletion,
-        {
-            {"RichAutocompletionAutocompleteTitles", "true"},
-            {"RichAutocompletionAutocompleteTitlesNoInputsWithSpaces", "false"},
-            {"RichAutocompletionAutocompleteNonPrefixAll", "true"},
-            {"RichAutocompletionAutocompleteNonPrefixNoInputsWithSpaces",
-             "false"},
-        });
-    {
-      SCOPED_TRACE("input with spaces");
-      test("x x", false, "primary x x", "secondary x x", true, true, true, "",
-           "primary ", "", true);
+          "Don't autocomplete title or shortcut if input is shorter than "
+          "limits");
+      test("x", false, "y_mixd_x_primary", "y_mixd_x_secondary",
+           "x_mixd_x_shortcut", false,
+           AutocompleteMatch::RichAutocompletionType::kNone, "", "", false);
     }
   }
 }
 
-TEST(AutocompleteMatchTest, TryRichAutocompletionSplit) {
-  auto test = [](const std::string input_text, const std::string primary_text,
-                 const std::string secondary_text, bool expected_return,
-                 const std::vector<gfx::Range> expected_split_autocompletion,
-                 const std::string expected_additional_text,
-                 bool expected_allowed_to_be_default_match) {
-    AutocompleteInput input(base::UTF8ToUTF16(input_text),
-                            metrics::OmniboxEventProto::OTHER,
-                            TestSchemeClassifier());
+TEST_F(AutocompleteMatchTest, BetterDuplicate) {
+  const auto create_match =
+      [](scoped_refptr<FakeAutocompleteProvider> provider, int relevance,
+         omnibox::AutocompleteMatchType match_type =
+             omnibox::AutocompleteMatchType::kUrlWhatYouTyped) {
+        return AutocompleteMatch{provider.get(), relevance, false, match_type};
+      };
 
-    AutocompleteMatch match;
-    EXPECT_EQ(
-        match.TryRichAutocompletion(base::UTF8ToUTF16(primary_text),
-                                    base::UTF8ToUTF16(secondary_text), input),
-        expected_return);
+  scoped_refptr<FakeAutocompleteProvider> document_provider =
+      new FakeAutocompleteProvider(AutocompleteProvider::Type::kDocument);
 
-    EXPECT_TRUE(match.inline_autocompletion.empty());
-    EXPECT_TRUE(match.prefix_autocompletion.empty());
-    EXPECT_EQ(match.split_autocompletion.selections,
-              expected_split_autocompletion);
-    EXPECT_EQ(base::UTF16ToUTF8(match.additional_text).c_str(),
-              expected_additional_text);
-    EXPECT_EQ(match.allowed_to_be_default_match,
-              expected_allowed_to_be_default_match);
+  scoped_refptr<FakeAutocompleteProvider> bookmark_provider =
+      new FakeAutocompleteProvider(AutocompleteProvider::Type::kBookmark);
+
+  scoped_refptr<FakeAutocompleteProvider> history_provider =
+      new FakeAutocompleteProvider(AutocompleteProvider::Type::kHistoryQuick);
+
+  scoped_refptr<FakeAutocompleteProvider> shortcuts_provider =
+      new FakeAutocompleteProvider(AutocompleteProvider::Type::kShortcuts);
+
+  scoped_refptr<FakeAutocompleteProvider> featured_search_provider =
+      new FakeAutocompleteProvider(AutocompleteProvider::Type::kFeaturedSearch);
+
+  // Prefer document provider matches over other providers, even if scored
+  // lower.
+  EXPECT_TRUE(
+      AutocompleteMatch::BetterDuplicate(create_match(document_provider, 0),
+                                         create_match(history_provider, 1000)));
+
+  // Prefer bookmark provider matches over other providers, even if scored
+  // lower.
+  EXPECT_TRUE(
+      AutocompleteMatch::BetterDuplicate(create_match(bookmark_provider, 0),
+                                         create_match(history_provider, 1000)));
+
+  // Prefer document provider matches over bookmark provider matches.
+  EXPECT_TRUE(AutocompleteMatch::BetterDuplicate(
+      create_match(document_provider, 0),
+      create_match(bookmark_provider, 1000)));
+
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+  // Prefer non-shortcuts provider matches over shortcuts provider matches.
+  EXPECT_TRUE(AutocompleteMatch::BetterDuplicate(
+      create_match(history_provider, 0),
+      create_match(shortcuts_provider, 1000)));
+
+  // Prefer featured enterprise search over other matches.
+  EXPECT_TRUE(AutocompleteMatch::BetterDuplicate(
+      create_match(featured_search_provider, 100,
+                   omnibox::AutocompleteMatchType::kFeaturedEnterpriseSearch),
+      create_match(featured_search_provider, 500,
+                   omnibox::AutocompleteMatchType::kStarterPack)));
+
+  EXPECT_FALSE(AutocompleteMatch::BetterDuplicate(
+      create_match(featured_search_provider, 500,
+                   omnibox::AutocompleteMatchType::kStarterPack),
+      create_match(featured_search_provider, 100,
+                   omnibox::AutocompleteMatchType::kFeaturedEnterpriseSearch)));
+
+  EXPECT_TRUE(AutocompleteMatch::BetterDuplicate(
+      create_match(featured_search_provider, 100,
+                   omnibox::AutocompleteMatchType::kFeaturedEnterpriseSearch),
+      create_match(bookmark_provider, 500)));
+
+  EXPECT_FALSE(AutocompleteMatch::BetterDuplicate(
+      create_match(bookmark_provider, 500),
+      create_match(featured_search_provider, 100,
+                   omnibox::AutocompleteMatchType::kFeaturedEnterpriseSearch)));
+
+  // Prefer stater pack matches over other matches.
+  EXPECT_TRUE(AutocompleteMatch::BetterDuplicate(
+      create_match(featured_search_provider, 100,
+                   omnibox::AutocompleteMatchType::kStarterPack),
+      create_match(bookmark_provider, 500)));
+
+  EXPECT_FALSE(AutocompleteMatch::BetterDuplicate(
+      create_match(bookmark_provider, 500),
+      create_match(featured_search_provider, 100,
+                   omnibox::AutocompleteMatchType::kStarterPack)));
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+
+  // Prefer entity matches.
+  auto entity_match =
+      create_match(history_provider, 100,
+                   omnibox::AutocompleteMatchType::kSearchSuggestEntity);
+  auto high_relevance_match = create_match(history_provider, 1500);
+  EXPECT_TRUE(
+      AutocompleteMatch::BetterDuplicate(entity_match, high_relevance_match));
+  EXPECT_FALSE(
+      AutocompleteMatch::BetterDuplicate(high_relevance_match, entity_match));
+
+  // Prefer more relevant matches.
+  EXPECT_FALSE(
+      AutocompleteMatch::BetterDuplicate(create_match(history_provider, 500),
+                                         create_match(history_provider, 510)));
+}
+
+TEST_F(AutocompleteMatchTest, FilterOmniboxActions) {
+  scoped_refptr<FakeAutocompleteProvider> provider =
+      new FakeAutocompleteProvider(AutocompleteProvider::Type::kSearch);
+  const OmniboxAction::LabelStrings dummy_labels(u"", u"", u"", u"");
+
+  using OmniboxActionId::ACTION_IN_SUGGEST;
+  using OmniboxActionId::HISTORY_CLUSTERS;
+  using OmniboxActionId::PEDAL;
+
+  struct FilterOmniboxActionsTestData {
+    std::string test_name;
+    // This is what will get added to the AutocompleteMatch.
+    std::vector<OmniboxActionId> actions_attached_to_match;
+    // This is the filter. Order of elements specifies the preference.
+    std::vector<OmniboxActionId> allowed_actions;
+    // This is the expected result.
+    std::vector<OmniboxActionId> resulting_actions;
+  } test_cases[]{
+      {"have nothing, want nothing", {}, {}, {}},
+      {"have nothing, want Pedals", {}, {PEDAL}, {}},
+      {"have Pedals, want nothing", {PEDAL}, {}, {}},
+      {"have Pedals, want Pedals", {PEDAL}, {PEDAL}, {PEDAL}},
+      {"have Pedals, want History Clusters", {PEDAL}, {HISTORY_CLUSTERS}, {}},
+      {"have Pedals, want History Clusters, then Pedals",
+       {PEDAL},
+       {HISTORY_CLUSTERS, PEDAL},
+       {PEDAL}},
+      {"have Pedals and History Clusters, want History Clusters, then Pedals",
+       {PEDAL, HISTORY_CLUSTERS},
+       {HISTORY_CLUSTERS, PEDAL},
+       {HISTORY_CLUSTERS}},
+      {"have Pedals and History Clusters, want Pedals, then History Clusters",
+       {PEDAL, HISTORY_CLUSTERS},
+       {PEDAL, HISTORY_CLUSTERS},
+       {PEDAL}},
+      {"have Pedals and History Clusters, want Actions in Suggest",
+       {PEDAL, HISTORY_CLUSTERS},
+       {ACTION_IN_SUGGEST},
+       {}},
+      {"have Pedals and History Clusters, want Actions in Suggest, then Pedals",
+       {PEDAL, HISTORY_CLUSTERS},
+       {ACTION_IN_SUGGEST, PEDAL},
+       {PEDAL}},
+      {"have Pedals, Actions and History Clusters, want Pedals",
+       {ACTION_IN_SUGGEST, PEDAL, HISTORY_CLUSTERS},
+       {PEDAL},
+       {PEDAL}},
+      {"have multiple, want Actions, then History Clusters, then Pedals",
+       // Mix: 4 pedals, 3 history clusters, 2 actions.
+       {PEDAL, ACTION_IN_SUGGEST, HISTORY_CLUSTERS, PEDAL, ACTION_IN_SUGGEST,
+        HISTORY_CLUSTERS, PEDAL, HISTORY_CLUSTERS, PEDAL},
+       {ACTION_IN_SUGGEST, HISTORY_CLUSTERS, PEDAL},
+       {ACTION_IN_SUGGEST, ACTION_IN_SUGGEST}},
+      {"have multiple, want History Clusters, then Actions, then Pedals",
+       // Mix: 4 pedals, 3 history clusters, 2 actions.
+       {PEDAL, ACTION_IN_SUGGEST, HISTORY_CLUSTERS, PEDAL, ACTION_IN_SUGGEST,
+        HISTORY_CLUSTERS, PEDAL, HISTORY_CLUSTERS, PEDAL},
+       {HISTORY_CLUSTERS, ACTION_IN_SUGGEST, PEDAL},
+       {HISTORY_CLUSTERS, HISTORY_CLUSTERS, HISTORY_CLUSTERS}},
+      {"have multiple, want Pedals, then History Clusters, then Actions",
+       // Mix: 4 pedals, 3 history clusters, 2 actions.
+       {PEDAL, ACTION_IN_SUGGEST, HISTORY_CLUSTERS, PEDAL, ACTION_IN_SUGGEST,
+        HISTORY_CLUSTERS, PEDAL, HISTORY_CLUSTERS, PEDAL},
+       {PEDAL, HISTORY_CLUSTERS, ACTION_IN_SUGGEST},
+       {PEDAL, PEDAL, PEDAL, PEDAL}},
+      {"have multiple, want nothing",
+       // Mix: 4 pedals, 3 history clusters, 2 actions.
+       {PEDAL, ACTION_IN_SUGGEST, HISTORY_CLUSTERS, PEDAL, ACTION_IN_SUGGEST,
+        HISTORY_CLUSTERS, PEDAL, HISTORY_CLUSTERS, PEDAL},
+       {},
+       {}}};
+
+  for (const auto& test_case : test_cases) {
+    AutocompleteMatch match(
+        provider.get(), 1, false,
+        omnibox::AutocompleteMatchType::kSearchSuggestEntity);
+
+    // Populate match with requested actions.
+    for (auto& action_id : test_case.actions_attached_to_match) {
+      match.actions.push_back(
+          base::MakeRefCounted<FakeOmniboxAction>(action_id));
+    }
+
+    match.FilterOmniboxActions(test_case.allowed_actions);
+    EXPECT_EQ(match.actions.size(), test_case.resulting_actions.size())
+        << "while testing variant: " << test_case.test_name;
+
+    for (size_t index = 0u; index < match.actions.size(); ++index) {
+      EXPECT_EQ(match.actions[index]->ActionId(),
+                test_case.resulting_actions[index])
+          << "while testing variant: " << test_case.test_name;
+    }
+  }
+}
+
+TEST_F(AutocompleteMatchTest, RearrangeActionsInSuggest) {
+  scoped_refptr<FakeAutocompleteProvider> provider =
+      new FakeAutocompleteProvider(AutocompleteProvider::Type::kSearch);
+  const OmniboxAction::LabelStrings dummy_labels(u"", u"", u"", u"");
+
+  using ActionType = omnibox::SuggestTemplateInfo::TemplateAction::ActionType;
+  constexpr auto CALL =
+      omnibox::SuggestTemplateInfo_TemplateAction_ActionType_CALL;
+  constexpr auto NAV =
+      omnibox::SuggestTemplateInfo_TemplateAction_ActionType_DIRECTIONS;
+  constexpr auto REVS =
+      omnibox::SuggestTemplateInfo_TemplateAction_ActionType_REVIEWS;
+  constexpr auto TSW =
+      omnibox::SuggestTemplateInfo_TemplateAction_ActionType_CHROME_TAB_SWITCH;
+
+  struct FilterOmniboxActionsTestData {
+    std::string test_name;
+    // This is what will get added to the AutocompleteMatch.
+    std::vector<ActionType> types_to_add;
+    // This is the expected result (and order).
+    std::vector<ActionType> types_to_expect;
+  } test_cases[]{
+      // clang-format off
+      // Retain all
+      {"retain all - no actions, promote calls", {}, {}},
+      {"retain all - have no reviews, promote reviews",
+       {CALL, CALL, CALL}, {CALL, CALL, CALL}},
+      {"retain all - have reviews",
+       {CALL, CALL, REVS}, {CALL, CALL, REVS}},
+      {"retain all - have all types",
+       {CALL, NAV, REVS, TSW}, {CALL, NAV, REVS, TSW}},
+      {"retain all - have all types, sort",
+       {REVS, CALL, TSW, NAV}, {CALL, NAV, REVS, TSW}},
+      {"retain all - have multiple reviews, sort",
+       {REVS, NAV, REVS}, {NAV, REVS, REVS}},
+
+      // clang-format on
   };
 
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeatureWithParameters(
-      omnibox::kRichAutocompletion,
-      {
-          {"RichAutocompletionAutocompleteTitles", "true"},
-          {"RichAutocompletionSplitTitleCompletion", "true"},
-          {"RichAutocompletionSplitUrlCompletion", "true"},
-      });
+  for (const auto& test_case : test_cases) {
+    AutocompleteMatch match(
+        provider.get(), 1, false,
+        omnibox::AutocompleteMatchType::kSearchSuggestEntity);
 
-  // Prefer primary text, match the first word break occurrence, match the
-  // delimiter, and match trailing delimiters.
-  {
-    SCOPED_TRACE("primary split");
-    test("x_z ", "y_mixd_x_x_primary_z_suf fix",
-         "y_mixd_x_x_secondary_z_suffix", true,
-         {{28, 25}, {24, 20}, {19, 9}, {7, 0}}, "", true);
+    // Populate match with requested actions.
+    for (auto& action_type : test_case.types_to_add) {
+      omnibox::SuggestTemplateInfo::TemplateAction action;
+      action.set_action_type(action_type);
+      match.actions.push_back(base::MakeRefCounted<OmniboxActionInSuggest>(
+          std::move(action), std::nullopt));
+    }
+
+    match.FilterAndSortActionsInSuggest();
+
+    EXPECT_EQ(match.actions.size(), test_case.types_to_expect.size())
+        << "while testing variant: " << test_case.test_name;
+
+    for (size_t index = 0u; index < match.actions.size(); ++index) {
+      const auto* action =
+          OmniboxActionInSuggest::FromAction(match.actions[index].get());
+      EXPECT_NE(nullptr, action)
+          << "while testing variant: " << test_case.test_name;
+
+      EXPECT_EQ(action->Type(), test_case.types_to_expect[index])
+          << "at position " << index
+          << " while testing variant: " << test_case.test_name;
+    }
+  }
+}
+
+#if (!BUILDFLAG(IS_ANDROID) || BUILDFLAG(ENABLE_VR)) && !BUILDFLAG(IS_IOS)
+TEST_F(AutocompleteMatchTest, ValidateGetVectorIcons) {
+  AutocompleteMatch match;
+
+  // Irrespective of match type, bookmark suggestions should have a non-empty
+  // icon.
+  EXPECT_FALSE(match.GetVectorIcon(/*is_bookmark=*/true).is_empty());
+
+  for (int type = 0;
+       type <= static_cast<int>(omnibox::AutocompleteMatchType::kMaxValue);
+       type++) {
+    match.type = static_cast<omnibox::AutocompleteMatchType>(type);
+
+    if (match.type == omnibox::AutocompleteMatchType::kStarterPack) {
+      // All STARTER_PACK suggestions should have non-empty vector icons.
+      for (int starter_pack_id = static_cast<int>(
+               template_url_starter_pack_data::StarterPackId::kBookmarks);
+           starter_pack_id !=
+           static_cast<int>(template_url_starter_pack_data::StarterPackId::
+                                kMaxStarterPackId);
+           starter_pack_id++) {
+        TemplateURLData turl_data;
+        turl_data.starter_pack_id = starter_pack_id;
+        TemplateURL turl(turl_data);
+        EXPECT_FALSE(
+            match.GetVectorIcon(/*is_bookmark=*/false, &turl).is_empty());
+      }
+    } else if (match.type ==
+                   omnibox::AutocompleteMatchType::kSearchSuggestTail ||
+               match.type ==
+                   omnibox::AutocompleteMatchType::kHistoryEmbeddingsAnswer ||
+               (match.type ==
+                    omnibox::AutocompleteMatchType::kNullResultMessage &&
+                !match.IsIphSuggestion())) {
+      // SEARCH_SUGGEST_TAIL and non-IPH NULL_RESULT_MESSAGE suggestions use an
+      // empty vector icon.
+      EXPECT_TRUE(match.GetVectorIcon(/*is_bookmark=*/false).is_empty());
+    } else {
+      // All other suggestion types should result in non-empty vector icons.
+      EXPECT_FALSE(match.GetVectorIcon(/*is_bookmark=*/false).is_empty());
+    }
   }
 
-  // Match the secondary text if the primary text does not match.
+  // When the match has a SuggestTemplateInfo, its icon should be set.
+  // This checks the full range to ensure any new additions get mapped.
+  match.suggest_template = omnibox::SuggestTemplateInfo();
+  for (int i = omnibox::SuggestTemplateInfo::IconType_MIN;
+       i <= omnibox::SuggestTemplateInfo::IconType_MAX; i++) {
+    match.suggest_template->set_type_icon(
+        static_cast<omnibox::SuggestTemplateInfo::IconType>(i));
+    EXPECT_FALSE(match.GetVectorIcon(false).is_empty());
+  }
+}
+#endif
+
+TEST_F(AutocompleteMatchTest, IsClipboardType) {
+  std::set<omnibox::AutocompleteMatchType> clipboard_types{
+      omnibox::AutocompleteMatchType::kClipboardText,
+      omnibox::AutocompleteMatchType::kClipboardUrl,
+      omnibox::AutocompleteMatchType::kClipboardImage};
+
+  for (int type = 0;
+       type < static_cast<int>(omnibox::AutocompleteMatchType::kMaxValue);
+       type++) {
+    EXPECT_EQ(AutocompleteMatch::IsClipboardType(
+                  (omnibox::AutocompleteMatchType)type),
+              clipboard_types.contains(
+                  static_cast<omnibox::AutocompleteMatchType>(type)));
+  }
+}
+
+TEST_F(AutocompleteMatchTest, HasLensSearchAction) {
+  AutocompleteMatch match;
+  EXPECT_FALSE(match.HasLensSearchAction());
+
+  match.suggest_template = omnibox::SuggestTemplateInfo();
+  EXPECT_FALSE(match.HasLensSearchAction());
+
+  auto* action = match.suggest_template->add_action_suggestions();
+  action->set_action_type(
+      omnibox::SuggestTemplateInfo_TemplateAction_ActionType_DIRECTIONS);
+  EXPECT_FALSE(match.HasLensSearchAction());
+
+  action = match.suggest_template->add_action_suggestions();
+  action->set_action_type(
+      omnibox::SuggestTemplateInfo_TemplateAction_ActionType_CHROME_LENS);
+  EXPECT_TRUE(match.HasLensSearchAction());
+}
+
+TEST_F(AutocompleteMatchTest, ShouldHideBasedOnStarterPack) {
+  auto* template_url_service =
+      search_engines_test_environment_.template_url_service();
+  // Set up `TemplateURL` for Gemini starter pack.
+  TemplateURLData gemini_turl_data;
+  gemini_turl_data.SetKeyword(u"@gemini");
+  gemini_turl_data.starter_pack_id =
+      static_cast<int>(template_url_starter_pack_data::StarterPackId::kGemini);
+  template_url_service->Add(std::make_unique<TemplateURL>(gemini_turl_data));
+
+  // Set up `TemplateURL` for a different starter pack.
+  TemplateURLData history_turl_data;
+  history_turl_data.SetKeyword(u"@history");
+  history_turl_data.starter_pack_id =
+      static_cast<int>(template_url_starter_pack_data::StarterPackId::kHistory);
+  template_url_service->Add(std::make_unique<TemplateURL>(history_turl_data));
+
+  // Set up `TemplateURL` with no starter pack ID.
+  TemplateURLData search_turl_data;
+  search_turl_data.SetKeyword(u"@keyword");
+  template_url_service->Add(std::make_unique<TemplateURL>(search_turl_data));
+
+  AutocompleteMatch match;
+  // Only @gemini starter pack matches with `from_keyword` set to `true` should
+  // be hidden.
+  match.from_keyword = true;
+  match.keyword = u"@gemini";
+  EXPECT_TRUE(match.ShouldHideBasedOnStarterPack(template_url_service));
+
+  match.from_keyword = false;
+  match.keyword = u"@gemini";
+  EXPECT_FALSE(match.ShouldHideBasedOnStarterPack(template_url_service));
+
+  match.from_keyword = true;
+  match.keyword = u"@history";
+  EXPECT_FALSE(match.ShouldHideBasedOnStarterPack(template_url_service));
+
+  match.from_keyword = true;
+  match.keyword = u"@search";
+  EXPECT_FALSE(match.ShouldHideBasedOnStarterPack(template_url_service));
+
+  match.from_keyword = true;
+  match.keyword = u"@unknown";
+  EXPECT_FALSE(match.ShouldHideBasedOnStarterPack(template_url_service));
+}
+
+TEST_F(AutocompleteMatchTest, GetKeywordUiState) {
+  auto* template_url_service =
+      search_engines_test_environment_.template_url_service();
+  TemplateURLData turl_data;
+  turl_data.SetShortName(u"short_name");
+  turl_data.SetKeyword(u"keyword");
+  turl_data.SetURL("http://youtube.com/?q={searchTerms}");
+  template_url_service->Add(std::make_unique<TemplateURL>(turl_data));
+
+  std::u16string keyword;
+  std::u16string keyword_placeholder;
+  KeywordState keyword_state;
+
   {
-    SCOPED_TRACE("secondary split");
-    test("x_z", "y_mixd_x_x_primary_y_suffix", "y_mixd_x_x_secondary_z_suffix",
-         true, {{29, 22}, {21, 9}, {7, 0}}, "y_mixd_x_x_primary_y_suffix",
-         true);
+    SCOPED_TRACE("No keyword");
+    AutocompleteMatch match;
+    match.GetKeywordUiState(template_url_service, &keyword_state, &keyword,
+                            &keyword_placeholder);
+    EXPECT_TRUE(keyword.empty());
+    EXPECT_EQ(keyword_state, KeywordState::kNone);
+    EXPECT_TRUE(keyword_placeholder.empty());
   }
 
-  // Match a distant delimiter if not found adjacent to the word match.
   {
-    SCOPED_TRACE("primary split, distant delimiter");
-    test("x_z", "y_mixd_xx_primary_z_suffix", "y_mixd_x_x_secondary_z_suffix",
-         true, {{26, 19}, {18, 10}, {9, 8}, {7, 0}}, "", true);
+    SCOPED_TRACE("Keyword hint");
+    AutocompleteMatch match;
+    match.associated_keyword = u"keyword";
+    match.GetKeywordUiState(template_url_service, &keyword_state, &keyword,
+                            &keyword_placeholder);
+    EXPECT_EQ(keyword, u"keyword");
+    EXPECT_EQ(keyword_state, KeywordState::kHint);
+    EXPECT_TRUE(keyword_placeholder.empty());
   }
 
-  // Don't match if the delimiter can't be matched.
   {
-    SCOPED_TRACE("primary split, no delimiter");
-    test("x_z", "x z", "xz", false, {}, "", false);
+    SCOPED_TRACE("Keyword mode");
+    AutocompleteMatch match;
+    match.keyword = u"keyword";
+    match.transition = ui::PAGE_TRANSITION_KEYWORD;
+    match.GetKeywordUiState(template_url_service, &keyword_state, &keyword,
+                            &keyword_placeholder);
+    EXPECT_EQ(keyword, u"keyword");
+    EXPECT_EQ(keyword_state, KeywordState::kKeyword);
+    EXPECT_TRUE(keyword_placeholder.empty());
   }
 
-  // Don't match if word order is not preserved.
   {
-    SCOPED_TRACE("primary split, incorrect order");
-    test("x_y_z", "z_y_x_", "x_z_y_", false, {}, "", false);
+    SCOPED_TRACE("Search Aggregator keyword mode");
+    TemplateURLData aggregator_turl_data;
+    aggregator_turl_data.SetShortName(u"aggregator");
+    aggregator_turl_data.SetKeyword(u"aggregator");
+    aggregator_turl_data.SetURL("http://aggregator.com/?q={searchTerms}");
+    aggregator_turl_data.policy_origin =
+        TemplateURLData::PolicyOrigin::kSearchAggregator;
+    template_url_service->Add(
+        std::make_unique<TemplateURL>(aggregator_turl_data));
+
+    AutocompleteMatch match;
+    match.keyword = u"aggregator";
+    match.transition = ui::PAGE_TRANSITION_KEYWORD;
+    match.GetKeywordUiState(template_url_service, &keyword_state, &keyword,
+                            &keyword_placeholder);
+    EXPECT_EQ(keyword, u"aggregator");
+    EXPECT_EQ(keyword_state, KeywordState::kKeyword);
+#if BUILDFLAG(IS_IOS)
+    EXPECT_TRUE(keyword_placeholder.empty());
+#else
+    EXPECT_EQ(keyword_placeholder, u"Enter a question");
+#endif
+
+    AutocompleteMatch hint_match;
+    hint_match.associated_keyword = u"aggregator";
+    hint_match.GetKeywordUiState(template_url_service, &keyword_state, &keyword,
+                                 &keyword_placeholder);
+    EXPECT_EQ(keyword, u"aggregator");
+    EXPECT_EQ(keyword_state, KeywordState::kHint);
+#if BUILDFLAG(IS_IOS)
+    EXPECT_TRUE(keyword_placeholder.empty());
+#else
+    EXPECT_EQ(keyword_placeholder, u"Enter a question");
+#endif
   }
 }

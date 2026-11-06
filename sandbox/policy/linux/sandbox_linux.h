@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,14 +10,13 @@
 #include <vector>
 
 #include "base/check_op.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/posix/global_descriptors.h"
+#include "base/sanitizer_buildflags.h"
 #include "sandbox/linux/syscall_broker/broker_command.h"
 #include "sandbox/linux/syscall_broker/broker_file_permission.h"
 #include "sandbox/policy/export.h"
 #include "sandbox/policy/linux/sandbox_seccomp_bpf_linux.h"
-#include "sandbox/policy/sandbox_type.h"
-#include "sandbox/policy/sanitizer_buildflags.h"
 
 #if BUILDFLAG(USING_SANITIZER)
 #include <sanitizer/common_interface_defs.h>
@@ -30,6 +29,9 @@ class Thread;
 }  // namespace base
 
 namespace sandbox {
+namespace mojom {
+enum class Sandbox;
+}  // namespace mojom
 namespace syscall_broker {
 class BrokerProcess;
 }  // namespace syscall_broker
@@ -60,7 +62,7 @@ class SANDBOX_POLICY_EXPORT SandboxLinux {
     DEPRECATED_METHOD_GET_FALLBACK_FONT_FOR_CHAR = 64,
     DEPRECATED_METHOD_GET_CHILD_WITH_INODE,
     DEPRECATED_METHOD_GET_STYLE_FOR_STRIKE,
-    METHOD_MAKE_SHARED_MEMORY_SEGMENT,
+    DEPRECATED_METHOD_MAKE_SHARED_MEMORY_SEGMENT,
     DEPRECATED_METHOD_MATCH_WITH_FALLBACK,
   };
 
@@ -121,6 +123,9 @@ class SANDBOX_POLICY_EXPORT SandboxLinux {
   // Get our singleton instance.
   static SandboxLinux* GetInstance();
 
+  SandboxLinux(const SandboxLinux&) = delete;
+  SandboxLinux& operator=(const SandboxLinux&) = delete;
+
   // Do some initialization that can only be done before any of the sandboxes
   // are enabled. If using the setuid sandbox, this should be called manually
   // before the setuid sandbox is engaged.
@@ -159,24 +164,28 @@ class SANDBOX_POLICY_EXPORT SandboxLinux {
   // Currently the layer-2 sandbox is composed of seccomp-bpf and address space
   // limitations.
   // This function should only be called without any thread running.
-  bool InitializeSandbox(SandboxType sandbox_type,
+  bool InitializeSandbox(sandbox::mojom::Sandbox sandbox_type,
                          PreSandboxHook hook,
                          const Options& options);
 
   // Stop |thread| in a way that can be trusted by the sandbox.
   void StopThread(base::Thread* thread);
 
-  // Returns the status of the renderer, worker and ppapi sandbox. Can only
-  // be queried after going through PreinitializeSandbox(). This is a bitmask
-  // and uses the constants defined in "enum Status" above. Since the
-  // status needs to be provided before the sandboxes are actually started,
-  // this returns what will actually happen once InitializeSandbox()
-  // is called from inside these processes.
+  // Returns the status of the renderer and worker sandbox. Can only be queried
+  // after going through PreinitializeSandbox(). This is a bitmask and uses the
+  // constants defined in "enum Status" above. Since the status needs to be
+  // provided before the sandboxes are actually started, this returns what will
+  // actually happen once InitializeSandbox() is called from inside these
+  // processes.
   int GetStatus();
 
   // Returns true if the current process is single-threaded or if the number
   // of threads cannot be determined.
   bool IsSingleThreaded() const;
+
+  // We must have been pre-initialized before using these.
+  bool seccomp_bpf_supported() const;
+  bool seccomp_bpf_with_tsync_supported() const;
 
   // Returns true if we started Seccomp BPF.
   bool seccomp_bpf_started() const;
@@ -192,7 +201,7 @@ class SANDBOX_POLICY_EXPORT SandboxLinux {
   // |options.allow_threads_during_sandbox_init| is true and the kernel
   // supports seccomp's TSYNC feature. If TSYNC is not available we treat
   // multiple threads as a fatal error.
-  bool StartSeccompBPF(SandboxType sandbox_type,
+  bool StartSeccompBPF(sandbox::mojom::Sandbox sandbox_type,
                        PreSandboxHook hook,
                        const Options& options);
 
@@ -218,19 +227,12 @@ class SANDBOX_POLICY_EXPORT SandboxLinux {
   // typically from a pre-sandbox hook, that will serve requests to access
   // files over an IPC channel. The client  of this runs from a SIGSYS handler
   // triggered by the seccomp-bpf sandbox.
-  // |client_sandbox_policy| is the policy being run by the client, and is
-  // used to derive the equivalent broker-side policy.
-  // |broker_side_hook| is an alternate pre-sandbox hook to be run before the
-  // broker itself gets sandboxed, to which the broker side policy and
-  // |options| are passed.
-  // Crashes the process if the broker can not be started since continuation
-  // is impossible (and presumably unsafe).
-  // This should never be destroyed, as after the sandbox is started it is
-  // vital to the process.
+  //
+  // |policy| is the policy being run by the client, and is used to derive the
+  // equivalent broker-side policy.
   void StartBrokerProcess(
       const syscall_broker::BrokerCommandSet& allowed_command_set,
       std::vector<syscall_broker::BrokerFilePermission> permissions,
-      PreSandboxHook broker_side_hook,
       const Options& options);
 
   // Returns true if the broker should handle a particular syscall indicated by
@@ -242,17 +244,13 @@ class SANDBOX_POLICY_EXPORT SandboxLinux {
   // handled transparently by the broker process. This is useful for file
   // syscalls that take pathnames, so we can enforce pathname whitelisting.
   // Only usable if StartBrokerProcess() was already called.
-  bpf_dsl::ResultExpr HandleViaBroker() const;
+  bpf_dsl::ResultExpr HandleViaBroker(int sysno) const;
 
  private:
   friend struct base::DefaultSingletonTraits<SandboxLinux>;
 
   SandboxLinux();
   ~SandboxLinux();
-
-  // We must have been pre_initialized_ before using these.
-  bool seccomp_bpf_supported() const;
-  bool seccomp_bpf_with_tsync_supported() const;
 
   // Returns true if it can be determined that the current process has open
   // directories that are not managed by the SandboxLinux class. This would
@@ -265,7 +263,7 @@ class SANDBOX_POLICY_EXPORT SandboxLinux {
 
   // GetStatus() makes promises as to how the sandbox will behave. This
   // checks that no promises have been broken.
-  void CheckForBrokenPromises(SandboxType sandbox_type);
+  void CheckForBrokenPromises(sandbox::mojom::Sandbox sandbox_type);
 
   // Stop |thread| and make sure it does not appear in /proc/self/tasks/
   // anymore.
@@ -295,9 +293,7 @@ class SANDBOX_POLICY_EXPORT SandboxLinux {
 #if BUILDFLAG(USING_SANITIZER)
   std::unique_ptr<__sanitizer_sandbox_arguments> sanitizer_args_;
 #endif
-  syscall_broker::BrokerProcess* broker_process_;  // Leaked as global.
-
-  DISALLOW_COPY_AND_ASSIGN(SandboxLinux);
+  raw_ptr<syscall_broker::BrokerProcess> broker_process_;  // Leaked as global.
 };
 
 }  // namespace policy

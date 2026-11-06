@@ -30,16 +30,15 @@
 
 #include "third_party/blink/renderer/modules/crypto/crypto_key.h"
 
-#include "base/cxx17_backports.h"
+#include "base/numerics/safe_conversions.h"
 #include "third_party/blink/public/platform/web_crypto_algorithm_params.h"
 #include "third_party/blink/public/platform/web_crypto_key_algorithm.h"
 #include "third_party/blink/public/platform/web_string.h"
+#include "third_party/blink/renderer/bindings/core/v8/to_v8_traits.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_object_builder.h"
-#include "third_party/blink/renderer/bindings/core/v8/v8_uint8_array.h"
+#include "third_party/blink/renderer/core/typed_arrays/dom_typed_array.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
-#include "third_party/blink/renderer/platform/bindings/to_v8.h"
 #include "third_party/blink/renderer/platform/crypto_result.h"
-#include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 
 namespace blink {
 
@@ -55,7 +54,6 @@ const char* KeyTypeToString(WebCryptoKeyType type) {
       return "private";
   }
   NOTREACHED();
-  return nullptr;
 }
 
 struct KeyUsageMapping {
@@ -75,24 +73,29 @@ const KeyUsageMapping kKeyUsageMappings[] = {
     {kWebCryptoKeyUsageDeriveBits, "deriveBits"},
     {kWebCryptoKeyUsageWrapKey, "wrapKey"},
     {kWebCryptoKeyUsageUnwrapKey, "unwrapKey"},
+    {kWebCryptoKeyUsageEncapsulateKey, "encapsulateKey"},
+    {kWebCryptoKeyUsageEncapsulateBits, "encapsulateBits"},
+    {kWebCryptoKeyUsageDecapsulateKey, "decapsulateKey"},
+    {kWebCryptoKeyUsageDecapsulateBits, "decapsulateBits"},
 };
 
-static_assert(kEndOfWebCryptoKeyUsage == (1 << 7) + 1,
+static_assert(kEndOfWebCryptoKeyUsage == (1 << 11) + 1,
               "keyUsageMappings needs to be updated");
 
 const char* KeyUsageToString(WebCryptoKeyUsage usage) {
-  for (size_t i = 0; i < base::size(kKeyUsageMappings); ++i) {
-    if (kKeyUsageMappings[i].value == usage)
-      return kKeyUsageMappings[i].name;
+  for (const auto& mapping : kKeyUsageMappings) {
+    if (mapping.value == usage) {
+      return mapping.name;
+    }
   }
   NOTREACHED();
-  return nullptr;
 }
 
 WebCryptoKeyUsageMask KeyUsageStringToMask(const String& usage_string) {
-  for (size_t i = 0; i < base::size(kKeyUsageMappings); ++i) {
-    if (kKeyUsageMappings[i].name == usage_string)
-      return kKeyUsageMappings[i].value;
+  for (const auto& mapping : kKeyUsageMappings) {
+    if (mapping.name == usage_string) {
+      return mapping.value;
+    }
   }
   return 0;
 }
@@ -122,10 +125,8 @@ class DictionaryBuilder : public WebCryptoKeyAlgorithmDictionary {
   }
 
   void SetUint8Array(const char* property_name,
-                     const WebVector<unsigned char>& vector) override {
-    builder_.Add(property_name,
-                 DOMUint8Array::Create(vector.Data(),
-                                       SafeCast<wtf_size_t>(vector.size())));
+                     const std::vector<unsigned char>& vector) override {
+    builder_.Add(property_name, DOMUint8Array::Create(vector));
   }
 
  private:
@@ -146,26 +147,24 @@ bool CryptoKey::extractable() const {
   return key_.Extractable();
 }
 
-ScriptValue CryptoKey::algorithm(ScriptState* script_state) {
+ScriptObject CryptoKey::algorithm(ScriptState* script_state) {
   V8ObjectBuilder object_builder(script_state);
   DictionaryBuilder dictionary_builder(object_builder);
   key_.Algorithm().WriteToDictionary(&dictionary_builder);
-  return object_builder.GetScriptValue();
+  return object_builder.ToScriptObject();
 }
 
-// FIXME: This creates a new javascript array each time. What should happen
-//        instead is return the same (immutable) array. (Javascript callers can
-//        distinguish this by doing an == test on the arrays and seeing they are
-//        different).
-ScriptValue CryptoKey::usages(ScriptState* script_state) {
+ScriptObject CryptoKey::usages(ScriptState* script_state) {
   Vector<String> result;
-  for (size_t i = 0; i < base::size(kKeyUsageMappings); ++i) {
-    WebCryptoKeyUsage usage = kKeyUsageMappings[i].value;
+  for (const auto& mapping : kKeyUsageMappings) {
+    WebCryptoKeyUsage usage = mapping.value;
     if (key_.Usages() & usage)
       result.push_back(KeyUsageToString(usage));
   }
 
-  return ScriptValue(script_state->GetIsolate(), ToV8(result, script_state));
+  return ScriptObject(
+      script_state->GetIsolate(),
+      ToV8Traits<IDLSequence<IDLString>>::ToV8(script_state, result));
 }
 
 bool CryptoKey::CanBeUsedForAlgorithm(const WebCryptoAlgorithm& algorithm,
@@ -202,7 +201,7 @@ bool CryptoKey::CanBeUsedForAlgorithm(const WebCryptoAlgorithm& algorithm,
 
 bool CryptoKey::ParseFormat(const String& format_string,
                             WebCryptoKeyFormat& format,
-                            CryptoResult* result) {
+                            ExceptionState& exception_state) {
   // There are few enough values that testing serially is fast enough.
   if (format_string == "raw") {
     format = kWebCryptoKeyFormatRaw;
@@ -221,20 +220,36 @@ bool CryptoKey::ParseFormat(const String& format_string,
     return true;
   }
 
-  result->CompleteWithError(kWebCryptoErrorTypeType,
-                            "Invalid keyFormat argument");
+  if (format_string == "raw-public") {
+    format = kWebCryptoKeyFormatRawPublic;
+    return true;
+  }
+  if (format_string == "raw-private") {
+    format = kWebCryptoKeyFormatRawPrivate;
+    return true;
+  }
+  if (format_string == "raw-seed") {
+    format = kWebCryptoKeyFormatRawSeed;
+    return true;
+  }
+  if (format_string == "raw-secret") {
+    format = kWebCryptoKeyFormatRawSecret;
+    return true;
+  }
+
+  exception_state.ThrowTypeError(
+      StrCat({"Invalid keyFormat argument: ", format_string}));
   return false;
 }
 
 bool CryptoKey::ParseUsageMask(const Vector<String>& usages,
                                WebCryptoKeyUsageMask& mask,
-                               CryptoResult* result) {
+                               ExceptionState& exception_state) {
   mask = 0;
   for (wtf_size_t i = 0; i < usages.size(); ++i) {
     WebCryptoKeyUsageMask usage = KeyUsageStringToMask(usages[i]);
     if (!usage) {
-      result->CompleteWithError(kWebCryptoErrorTypeType,
-                                "Invalid keyUsages argument");
+      exception_state.ThrowTypeError("Invalid keyUsages argument");
       return false;
     }
     mask |= usage;

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,39 +6,29 @@ package org.chromium.components.browser_ui.client_certificate;
 
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyZeroInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 
 import android.content.ActivityNotFoundException;
 import android.security.KeyChainAliasCallback;
 
-import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
-import org.robolectric.annotation.Config;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.components.browser_ui.client_certificate.SSLClientCertificateRequest.CertSelectionFailureDialog;
 import org.chromium.components.browser_ui.client_certificate.SSLClientCertificateRequest.KeyChainCertSelectionWrapper;
 
-/**
- * Unit tests for the SSLClientCertificateRequest class.
- */
+/** Unit tests for the SSLClientCertificateRequest class. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class SSLClientCertificateRequestTest {
-    @Mock
-    private KeyChainCertSelectionWrapper mKeyChainMock;
-    @Mock
-    private KeyChainAliasCallback mCallbackMock;
-    @Mock
-    private CertSelectionFailureDialog mFailureDialogMock;
-
-    @Before
-    public void setUp() {
-        MockitoAnnotations.initMocks(this);
-    }
+    @Mock private KeyChainCertSelectionWrapper mKeyChainMock;
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Mock private KeyChainAliasCallback mCallbackMock;
+    @Mock private CertSelectionFailureDialog mFailureDialogMock;
 
     @Test
     public void testSelectCertActivityNotFound() {
@@ -58,6 +48,6 @@ public class SSLClientCertificateRequestTest {
                 mKeyChainMock, mCallbackMock, mFailureDialogMock);
 
         verify(mKeyChainMock).choosePrivateKeyAlias();
-        verifyZeroInteractions(mFailureDialogMock);
+        verifyNoMoreInteractions(mFailureDialogMock);
     }
 }

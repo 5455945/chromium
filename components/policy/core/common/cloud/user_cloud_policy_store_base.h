@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,10 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
-#include "base/memory/weak_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "components/policy/core/common/cloud/cloud_policy_store.h"
 #include "components/policy/core/common/cloud/cloud_policy_validator.h"
+#include "components/policy/core/common/policy_proto_decoders.h"
 #include "components/policy/core/common/policy_types.h"
 #include "components/policy/policy_export.h"
 
@@ -29,39 +28,35 @@ class POLICY_EXPORT UserCloudPolicyStoreBase : public CloudPolicyStore {
   UserCloudPolicyStoreBase(
       scoped_refptr<base::SequencedTaskRunner> background_task_runner,
       PolicyScope policy_scope,
-      PolicySource policy_source);
+      const std::string& policy_type);
+  UserCloudPolicyStoreBase(const UserCloudPolicyStoreBase&) = delete;
+  UserCloudPolicyStoreBase& operator=(const UserCloudPolicyStoreBase&) = delete;
   ~UserCloudPolicyStoreBase() override;
-
-  PolicySource source() {
-    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    return policy_source_;
-  }
-
- protected:
-  // Creates a validator configured to validate a user policy. The caller owns
-  // the resulting object until StartValidation() is invoked.
-  virtual std::unique_ptr<UserCloudPolicyValidator> CreateValidator(
-      std::unique_ptr<enterprise_management::PolicyFetchResponse> policy,
-      CloudPolicyValidatorBase::ValidateTimestampOption option);
-
-  // Sets |policy_data| and |payload| as the active policy, and sets
-  // |policy_signature_public_key| as the active public key.
-  void InstallPolicy(
-      std::unique_ptr<enterprise_management::PolicyData> policy_data,
-      std::unique_ptr<enterprise_management::CloudPolicySettings> payload,
-      const std::string& policy_signature_public_key);
 
   scoped_refptr<base::SequencedTaskRunner> background_task_runner() const {
     return background_task_runner_;
   }
 
+  PolicyScope policy_scope() const { return policy_scope_; }
+
+ protected:
+  // Creates a validator configured to validate a user policy. The caller owns
+  // the resulting object until StartValidation() is invoked.
+  virtual std::unique_ptr<CloudPolicyValidatorBase> CreateValidator(
+      std::unique_ptr<enterprise_management::PolicyFetchResponse> policy,
+      CloudPolicyValidatorBase::ValidateTimestampOption option);
+
+  // Sets |policy_data| as the active policy after decoding the payload from
+  // |validator|, and sets |policy_signature_public_key| as the active public key.
+  void InstallPolicy(
+      std::unique_ptr<enterprise_management::PolicyData> policy_data,
+      CloudPolicyValidatorBase* validator,
+      const std::string& policy_signature_public_key);
+
  private:
   // Task runner for background file operations.
   scoped_refptr<base::SequencedTaskRunner> background_task_runner_;
   PolicyScope policy_scope_;
-  PolicySource policy_source_;
-
-  DISALLOW_COPY_AND_ASSIGN(UserCloudPolicyStoreBase);
 };
 
 }  // namespace policy

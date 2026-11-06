@@ -12,16 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <stdint.h>
-#include <new>
+#include "absl/base/internal/low_level_alloc.h"  // IWYU pragma: keep
 
 // This file is a no-op if the required LowLevelAlloc support is missing.
-#include "absl/base/internal/low_level_alloc.h"
 #ifndef ABSL_LOW_LEVEL_ALLOC_MISSING
 
-#include <string.h>
+#include <atomic>
+#include <cstdint>
+#include <new>
 
 #include "absl/base/attributes.h"
+#include "absl/base/config.h"
+#include "absl/base/internal/scheduling_mode.h"
 #include "absl/base/internal/spinlock.h"
 #include "absl/base/internal/thread_identity.h"
 #include "absl/synchronization/internal/per_thread_sem.h"
@@ -33,12 +35,13 @@ namespace synchronization_internal {
 // ThreadIdentity storage is persistent, we maintain a free-list of previously
 // released ThreadIdentity objects.
 ABSL_CONST_INIT static base_internal::SpinLock freelist_lock(
-    absl::kConstInit, base_internal::SCHEDULE_KERNEL_ONLY);
+    base_internal::SCHEDULE_KERNEL_ONLY);
 ABSL_CONST_INIT static base_internal::ThreadIdentity* thread_identity_freelist;
 
 // A per-thread destructor for reclaiming associated ThreadIdentity objects.
-// Since we must preserve their storage we cache them for re-use.
-void ReclaimThreadIdentity(void* v) {
+// Since we must preserve their storage, we cache them for re-use instead of
+// truly destructing the object.
+static void ReclaimThreadIdentity(void* v) {
   base_internal::ThreadIdentity* identity =
       static_cast<base_internal::ThreadIdentity*>(v);
 
@@ -47,8 +50,6 @@ void ReclaimThreadIdentity(void* v) {
   if (identity->per_thread_synch.all_locks != nullptr) {
     base_internal::LowLevelAlloc::Free(identity->per_thread_synch.all_locks);
   }
-
-  PerThreadSem::Destroy(identity);
 
   // We must explicitly clear the current thread's identity:
   // (a) Subsequent (unrelated) per-thread destructors may require an identity.
@@ -59,7 +60,7 @@ void ReclaimThreadIdentity(void* v) {
   //     association state in this case.
   base_internal::ClearCurrentThreadIdentity();
   {
-    base_internal::SpinLockHolder l(&freelist_lock);
+    base_internal::SpinLockHolder l(freelist_lock);
     identity->next = thread_identity_freelist;
     thread_identity_freelist = identity;
   }
@@ -71,7 +72,25 @@ static intptr_t RoundUp(intptr_t addr, intptr_t align) {
   return (addr + align - 1) & ~(align - 1);
 }
 
-static void ResetThreadIdentity(base_internal::ThreadIdentity* identity) {
+void OneTimeInitThreadIdentity(base_internal::ThreadIdentity* identity) {
+  PerThreadSem::Init(identity);
+  identity->ticker.store(0, std::memory_order_relaxed);
+  identity->wait_start.store(0, std::memory_order_relaxed);
+  identity->is_idle.store(false, std::memory_order_relaxed);
+  // To avoid a circular dependency we declare only the storage in the header
+  // and use placement new to construct the SpinLock.
+  static_assert(
+      sizeof(base_internal::ThreadIdentity::SchedulerState::
+                 association_lock_word) == sizeof(base_internal::SpinLock),
+      "Wrong size for SpinLock");
+  // Protects the association between this identity and its schedulable.  Should
+  // never be cooperative.
+  new (&identity->scheduler_state.association_lock_word)
+      base_internal::SpinLock(base_internal::SCHEDULE_KERNEL_ONLY);
+}
+
+static void ResetThreadIdentityBetweenReuse(
+    base_internal::ThreadIdentity* identity) {
   base_internal::PerThreadSynch* pts = &identity->per_thread_synch;
   pts->next = nullptr;
   pts->skip = nullptr;
@@ -87,6 +106,17 @@ static void ResetThreadIdentity(base_internal::ThreadIdentity* identity) {
   pts->wake = false;
   pts->cond_waiter = false;
   pts->all_locks = nullptr;
+  base_internal::ThreadIdentity::SchedulerState* ss =
+      &identity->scheduler_state;
+  ss->bound_schedulable.store(nullptr, std::memory_order_relaxed);
+  ss->association_lock_word = 0;
+  ss->scheduling_disabled_depth.store(0, std::memory_order_relaxed);
+  ss->potentially_blocking_depth = 0;
+  ss->schedule_next_state = 0;
+  ss->waking_designated_waker = false;
+  identity->static_initialization_depth = 0;
+  identity->wait_state.store(base_internal::ThreadIdentity::WaitState::kActive,
+                             std::memory_order_relaxed);
   identity->blocked_count_ptr = nullptr;
   identity->ticker.store(0, std::memory_order_relaxed);
   identity->wait_start.store(0, std::memory_order_relaxed);
@@ -99,7 +129,7 @@ static base_internal::ThreadIdentity* NewThreadIdentity() {
 
   {
     // Re-use a previously released object if possible.
-    base_internal::SpinLockHolder l(&freelist_lock);
+    base_internal::SpinLockHolder l(freelist_lock);
     if (thread_identity_freelist) {
       identity = thread_identity_freelist;  // Take list-head.
       thread_identity_freelist = thread_identity_freelist->next;
@@ -116,8 +146,12 @@ static base_internal::ThreadIdentity* NewThreadIdentity() {
     identity = reinterpret_cast<base_internal::ThreadIdentity*>(
         RoundUp(reinterpret_cast<intptr_t>(allocation),
                 base_internal::PerThreadSynch::kAlignment));
+    // Note that *identity is never constructed.
+    // TODO(b/357097463): change this "one time init" to be a proper
+    // constructor.
+    OneTimeInitThreadIdentity(identity);
   }
-  ResetThreadIdentity(identity);
+  ResetThreadIdentityBetweenReuse(identity);
 
   return identity;
 }
@@ -127,7 +161,6 @@ static base_internal::ThreadIdentity* NewThreadIdentity() {
 // REQUIRES: CurrentThreadIdentity(false) == nullptr
 base_internal::ThreadIdentity* CreateThreadIdentity() {
   base_internal::ThreadIdentity* identity = NewThreadIdentity();
-  PerThreadSem::Init(identity);
   // Associate the value with the current thread, and attach our destructor.
   base_internal::SetCurrentThreadIdentity(identity, ReclaimThreadIdentity);
   return identity;

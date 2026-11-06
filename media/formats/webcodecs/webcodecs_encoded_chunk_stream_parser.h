@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,8 @@
 
 #include <memory>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "media/base/audio_decoder_config.h"
 #include "media/base/media_export.h"
 #include "media/base/stream_parser.h"
@@ -24,20 +24,27 @@ class MEDIA_EXPORT WebCodecsEncodedChunkStreamParser : public StreamParser {
       std::unique_ptr<AudioDecoderConfig> audio_config);
   explicit WebCodecsEncodedChunkStreamParser(
       std::unique_ptr<VideoDecoderConfig> video_config);
+
+  WebCodecsEncodedChunkStreamParser(const WebCodecsEncodedChunkStreamParser&) =
+      delete;
+  WebCodecsEncodedChunkStreamParser& operator=(
+      const WebCodecsEncodedChunkStreamParser&) = delete;
+
   ~WebCodecsEncodedChunkStreamParser() override;
 
   // StreamParser implementation.
   void Init(InitCB init_cb,
-            const NewConfigCB& config_cb,
-            const NewBuffersCB& new_buffers_cb,
-            bool ignore_text_tracks /* must be true */,
-            const EncryptedMediaInitDataCB& encrypted_media_init_data_cb,
-            const NewMediaSegmentCB& new_segment_cb,
-            const EndMediaSegmentCB& end_of_segment_cb,
+            NewConfigCB config_cb,
+            NewBuffersCB new_buffers_cb,
+            EncryptedMediaInitDataCB encrypted_media_init_data_cb,
+            NewMediaSegmentCB new_segment_cb,
+            EndMediaSegmentCB end_of_segment_cb,
             MediaLog* media_log) override;
   void Flush() override;
   bool GetGenerateTimestampsFlag() const override;
-  bool Parse(const uint8_t* buf, int size) override;
+  [[nodiscard]] bool AppendToParseBuffer(
+      base::span<const uint8_t> buf) override;
+  [[nodiscard]] ParseStatus Parse(int max_pending_bytes_to_expect) override;
 
   // Processes and emits buffers from |buffer_queue|. If state is
   // kWaitingForConfigEmission, first emit the config.
@@ -68,9 +75,7 @@ class MEDIA_EXPORT WebCodecsEncodedChunkStreamParser : public StreamParser {
 
   NewMediaSegmentCB new_segment_cb_;
   EndMediaSegmentCB end_of_segment_cb_;
-  MediaLog* media_log_;
-
-  DISALLOW_COPY_AND_ASSIGN(WebCodecsEncodedChunkStreamParser);
+  std::unique_ptr<MediaLog> media_log_;
 };
 
 }  // namespace media

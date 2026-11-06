@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_multi_source_observation.h"
 #include "chrome/browser/media/webrtc/desktop_media_list.h"
@@ -36,21 +37,29 @@ class DesktopMediaListController : public DesktopMediaListObserver,
     virtual void OnSourceMoved(size_t old_index, size_t new_index) = 0;
     virtual void OnSourceNameChanged(size_t index) = 0;
     virtual void OnSourceThumbnailChanged(size_t index) = 0;
+    virtual void OnSourcePreviewChanged(size_t index) = 0;
+    virtual void OnDelegatedSourceListSelection() = 0;
   };
 
   // The abstract interface implemented by any view controlled by this
   // controller.
   class ListView : public views::View {
-   public:
-    METADATA_HEADER(ListView);
+    METADATA_HEADER(ListView, views::View)
 
+   public:
     // Returns the DesktopMediaID of the selected element of this list, or
     // nullopt if no element is selected.
-    virtual absl::optional<content::DesktopMediaID> GetSelection() = 0;
+    virtual std::optional<content::DesktopMediaID> GetSelection() = 0;
 
     // Returns the SourceListListener to use to notify this ListView of changes
     // to the backing DesktopMediaList.
     virtual SourceListListener* GetSourceListListener() = 0;
+
+    virtual void ClearSelection() = 0;
+
+    // Updates the action button label based on whether audio sharing is
+    // currently enabled.
+    virtual void SetAudioShared(bool audio_shared) {}
 
    protected:
     ListView() = default;
@@ -67,7 +76,8 @@ class DesktopMediaListController : public DesktopMediaListObserver,
   std::unique_ptr<views::View> CreateView(
       DesktopMediaSourceViewStyle generic_style,
       DesktopMediaSourceViewStyle single_style,
-      const std::u16string& accessible_name);
+      const std::u16string& accessible_name,
+      DesktopMediaList::Type type);
 
   std::unique_ptr<views::View> CreateTabListView(
       const std::u16string& accessible_name);
@@ -79,9 +89,29 @@ class DesktopMediaListController : public DesktopMediaListObserver,
   // Focuses this controller's view.
   void FocusView();
 
+  void ShowDelegatedList();
+
+  void HideView();
+
+  // Used to indicate if the underlying DesktopMediaList supports the notion of
+  // Reselecting a source.
+  bool SupportsReselectButton() const;
+
+  void OnReselectRequested();
+
+  // Called when the user toggles the audio sharing checkbox.
+  // Propagates this update to the underlying view.
+  void OnAudioShareToggled(bool audio_shared);
+
+  // Returns whether or not the reselect button (if supported), should be
+  // enabled.
+  bool can_reselect() const { return can_reselect_; }
+
   // Returns the DesktopMediaID corresponding to the current selection in this
   // controller's view, if there is one.
-  absl::optional<content::DesktopMediaID> GetSelection() const;
+  std::optional<content::DesktopMediaID> GetSelection() const;
+
+  void ClearSelection();
 
   // These three methods are called by the view to inform the controller of
   // events. The first two indicate changes in the visual state of the view; the
@@ -95,7 +125,13 @@ class DesktopMediaListController : public DesktopMediaListObserver,
   // update the underlying DesktopMediaList.
   size_t GetSourceCount() const;
   const DesktopMediaList::Source& GetSource(size_t index) const;
+  bool IsSourceSharingBlocked(const content::DesktopMediaID& id) const;
   void SetThumbnailSize(const gfx::Size& size);
+  void SetPreviewedSource(const std::optional<content::DesktopMediaID>& id);
+
+  // Returns a WeakPtr to the current DesktopMediaListController. Note that the
+  // weak pointer must only be used on the UI thread.
+  base::WeakPtr<DesktopMediaListController> GetWeakPtr();
 
  private:
   friend class DesktopMediaPickerViewsTestApi;
@@ -110,14 +146,19 @@ class DesktopMediaListController : public DesktopMediaListObserver,
   // Used in tests.
   void Reject();
 
+  void StartUpdatingInternal();
+
+  void SetCanReselect(bool can_reselect);
+
   // DesktopMediaListObserver:
-  void OnSourceAdded(DesktopMediaList* list, int index) override;
-  void OnSourceRemoved(DesktopMediaList* list, int index) override;
-  void OnSourceMoved(DesktopMediaList* list,
-                     int old_index,
-                     int new_index) override;
-  void OnSourceNameChanged(DesktopMediaList* list, int index) override;
-  void OnSourceThumbnailChanged(DesktopMediaList* list, int index) override;
+  void OnSourceAdded(int index) override;
+  void OnSourceRemoved(int index) override;
+  void OnSourceMoved(int old_index, int new_index) override;
+  void OnSourceNameChanged(int index) override;
+  void OnSourceThumbnailChanged(int index) override;
+  void OnSourcePreviewChanged(size_t index) override;
+  void OnDelegatedSourceListSelection() override;
+  void OnDelegatedSourceListDismissed() override;
 
   // ViewObserver:
   void OnViewIsDeleting(views::View* view) override;
@@ -125,17 +166,30 @@ class DesktopMediaListController : public DesktopMediaListObserver,
   bool ShouldAutoAccept(const DesktopMediaList::Source& source) const;
   bool ShouldAutoReject(const DesktopMediaList::Source& source) const;
 
-  DesktopMediaPickerDialogView* dialog_;
+  raw_ptr<DesktopMediaPickerDialogView> dialog_;
   std::unique_ptr<DesktopMediaList> media_list_;
-  ListView* view_ = nullptr;
+  raw_ptr<ListView> view_ = nullptr;
   base::ScopedMultiSourceObservation<views::View, views::ViewObserver>
       view_observations_{this};
+  bool is_updating_ = false;
+  content::DesktopMediaID dialog_window_id_;
+
+  // Whether or not the reselect button (if supported), should be enabled.
+  bool can_reselect_ = false;
+
+  // Tracks whether the currently selected source is sharing-blocked so
+  // OnSourceThumbnailChanged only notifies the dialog when the blocked state
+  // actually changes.
+  std::optional<bool> selected_source_sharing_blocked_;
 
   // Auto-selection. Used only in tests.
   const std::string auto_select_tab_;        // Only tabs, by title.
+  const std::string auto_select_window_;     // Only windows, by title.
+  const bool auto_select_any_screen_;        // Any screen.
   const std::string auto_select_source_;     // Any source by its title.
   const bool auto_accept_this_tab_capture_;  // Only for current-tab capture.
   const bool auto_reject_this_tab_capture_;  // Only for current-tab capture.
+  const bool auto_reject_capture_;           // Applies to any capture.
 
   base::WeakPtrFactory<DesktopMediaListController> weak_factory_{this};
 };

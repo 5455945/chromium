@@ -1,18 +1,17 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/browser/api/file_handlers/mime_util.h"
 
 #include <memory>
+#include <string_view>
 
-#include "base/bind.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
-#include "base/strings/string_piece.h"
-#include "base/task/post_task.h"
+#include "base/functional/bind.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "content/public/browser/browser_context.h"
@@ -21,13 +20,12 @@
 #include "net/base/mime_util.h"
 #include "storage/browser/file_system/file_system_url.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "extensions/browser/api/extensions_api_client.h"
 #include "extensions/browser/api/file_handlers/non_native_file_system_delegate.h"
 #endif
 
-namespace extensions {
-namespace app_file_handler_util {
+namespace extensions::app_file_handler_util {
 
 const char kMimeTypeApplicationOctetStream[] = "application/octet-stream";
 const char kMimeTypeInodeDirectory[] = "inode/directory";
@@ -43,7 +41,7 @@ void SniffMimeType(const base::FilePath& local_path, std::string* result) {
       base::ReadFile(local_path, &content[0], static_cast<int>(content.size()));
 
   if (bytes_read >= 0) {
-    net::SniffMimeType(base::StringPiece(&content[0], bytes_read),
+    net::SniffMimeType(std::string_view(&content[0], bytes_read),
                        net::FilePathToFileURL(local_path),
                        std::string(),  // type_hint (passes no hint)
                        net::ForceSniffFileUrlsForHtml::kDisabled, result);
@@ -53,8 +51,8 @@ void SniffMimeType(const base::FilePath& local_path, std::string* result) {
       // better match.
       // TODO(amistry): Potentially add other types (i.e. SVG).
       std::string secondary_result;
-      net::SniffMimeTypeFromLocalData(
-          base::StringPiece(&content[0], bytes_read), &secondary_result);
+      net::SniffMimeTypeFromLocalData(std::string_view(&content[0], bytes_read),
+                                      &secondary_result);
       if (!secondary_result.empty())
         *result = secondary_result;
     }
@@ -65,7 +63,7 @@ void SniffMimeType(const base::FilePath& local_path, std::string* result) {
   }
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 // Converts a result passed as a scoped pointer to a dereferenced value passed
 // to |callback|.
 void OnGetMimeTypeFromFileForNonNativeLocalPathCompleted(
@@ -80,7 +78,7 @@ void OnGetMimeTypeFromFileForNonNativeLocalPathCompleted(
 void OnGetMimeTypeFromMetadataForNonNativeLocalPathCompleted(
     const base::FilePath& local_path,
     base::OnceCallback<void(const std::string&)> callback,
-    const absl::optional<std::string>& mime_type) {
+    const std::optional<std::string>& mime_type) {
   if (mime_type) {
     std::move(callback).Run(mime_type.value());
     return;
@@ -88,7 +86,7 @@ void OnGetMimeTypeFromMetadataForNonNativeLocalPathCompleted(
 
   // MIME type not available with metadata, hence try to guess it from the
   // file's extension.
-  std::unique_ptr<std::string> mime_type_from_extension(new std::string);
+  auto mime_type_from_extension = std::make_unique<std::string>();
   std::string* const mime_type_from_extension_ptr =
       mime_type_from_extension.get();
   base::ThreadPool::PostTaskAndReply(
@@ -145,7 +143,7 @@ void GetMimeTypeForLocalPath(
     content::BrowserContext* context,
     const base::FilePath& local_path,
     base::OnceCallback<void(const std::string&)> callback) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   NonNativeFileSystemDelegate* delegate =
       ExtensionsAPIClient::Get()->GetNonNativeFileSystemDelegate();
   if (delegate && delegate->HasNonNativeMimeTypeProvider(context, local_path)) {
@@ -162,7 +160,7 @@ void GetMimeTypeForLocalPath(
 
   // For native local files, try to guess the mime from the extension. If
   // not available, then try to sniff if.
-  std::unique_ptr<std::string> mime_type_from_extension(new std::string);
+  auto mime_type_from_extension = std::make_unique<std::string>();
   std::string* const mime_type_from_extension_ptr =
       mime_type_from_extension.get();
   base::ThreadPool::PostTaskAndReply(
@@ -177,7 +175,7 @@ void GetMimeTypeForLocalPath(
 MimeTypeCollector::MimeTypeCollector(content::BrowserContext* context)
     : context_(context), left_(0) {}
 
-MimeTypeCollector::~MimeTypeCollector() {}
+MimeTypeCollector::~MimeTypeCollector() = default;
 
 void MimeTypeCollector::CollectForURLs(
     const std::vector<storage::FileSystemURL>& urls,
@@ -202,7 +200,7 @@ void MimeTypeCollector::CollectForLocalPaths(
 
   if (!left_) {
     // Nothing to process.
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(callback_), std::move(result_)));
     callback_.Reset();
     return;
@@ -220,7 +218,7 @@ void MimeTypeCollector::OnMimeTypeCollected(size_t index,
                                             const std::string& mime_type) {
   (*result_)[index] = mime_type;
   if (!--left_) {
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(callback_), std::move(result_)));
     // Release the callback to avoid a circullar reference in case an instance
     // of this class is a member of a ref counted class, which instance is bound
@@ -229,5 +227,4 @@ void MimeTypeCollector::OnMimeTypeCollected(size_t index,
   }
 }
 
-}  // namespace app_file_handler_util
-}  // namespace extensions
+}  // namespace extensions::app_file_handler_util

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,12 @@
 #define CHROME_BROWSER_RENDERER_CONTEXT_MENU_SPELLING_MENU_OBSERVER_H_
 
 #include <stddef.h>
-#include <stdint.h>
 
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
 #include "build/build_config.h"
@@ -48,20 +46,24 @@ struct SpellCheckResult;
 class SpellingMenuObserver : public RenderViewContextMenuObserver {
  public:
   explicit SpellingMenuObserver(RenderViewContextMenuProxy* proxy);
+
+  SpellingMenuObserver(const SpellingMenuObserver&) = delete;
+  SpellingMenuObserver& operator=(const SpellingMenuObserver&) = delete;
+
   ~SpellingMenuObserver() override;
 
   // RenderViewContextMenuObserver implementation.
   void InitMenu(const content::ContextMenuParams& params) override;
-#if defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+#if BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
   void OnContextMenuShown(const content::ContextMenuParams& params,
                           const gfx::Rect& bounds_in_screen) override;
-#endif  // defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+#endif  // BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
   bool IsCommandIdSupported(int command_id) override;
   bool IsCommandIdChecked(int command_id) override;
   bool IsCommandIdEnabled(int command_id) override;
   void ExecuteCommand(int command_id) override;
 
-#if defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+#if BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
   // A callback function called when the platform spellchecker finishes getting
   // suggestions for a misspelled word.
   void OnGetPlatformSuggestionsComplete(
@@ -77,7 +79,7 @@ class SpellingMenuObserver : public RenderViewContextMenuObserver {
   // before confirming the presence of expected menu items.
   void RegisterSuggestionsCompleteCallbackForTesting(
       base::OnceClosure callback);
-#endif  // defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+#endif  // BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
 
   // A callback function called when the Spelling service finishes checking a
   // misspelled word.
@@ -88,6 +90,12 @@ class SpellingMenuObserver : public RenderViewContextMenuObserver {
       const std::vector<SpellCheckResult>& results);
 
  private:
+  // When a misspelled word is detected, updates the context menu with
+  // suggestions, an "Add to dictionary" item, and options to use the spelling
+  // service. Suggestions may be retrieved synchronously or asynchronously
+  // depending on the platform and configuration.
+  void UpdateMenuForMisspelledWord(const content::ContextMenuParams& params);
+
   // Method that starts the asynchronous retrieval of suggestions from the
   // remote enhanced spellcheck service.
   void GetRemoteSuggestions();
@@ -97,12 +105,25 @@ class SpellingMenuObserver : public RenderViewContextMenuObserver {
                               bool success,
                               const std::vector<SpellCheckResult>& results);
 
-#if defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+  // Applies the spelling suggestion and registers the word as a custom
+  // dictionary word so it is no longer marked as misspelled.
+  void ApplySpellingSuggestion();
+
+  // Adds the misspelled word to the user's custom-word dictionary (both local
+  // and platform spellcheckers where supported) so it is no longer marked as
+  // misspelled.
+  void AddToDictionary();
+
+  // Toggles the user preference for using the enhanced spelling service. Shows
+  // a confirmation bubble to the user if the service is being enabled.
+  void ToggleSpellingService();
+
+#if BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
   // Fires a callback for testing when local (and possibly remote) retrieval of
   // suggestions has completed. This allows tests to wait in a run loop before
   // confirming the presence of expected menu items.
   void FireSuggestionsCompleteCallbackIfNeededForTesting();
-#endif  // defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+#endif  // BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
 
   // The callback function for base::RepeatingTimer. This function updates the
   // "loading..." animation in the context-menu item for the given command_id.
@@ -110,7 +131,7 @@ class SpellingMenuObserver : public RenderViewContextMenuObserver {
 
   // The interface to add a context-menu item and update it. This class uses
   // this interface to avoid accesing context-menu items directly.
-  RenderViewContextMenuProxy* proxy_;
+  raw_ptr<RenderViewContextMenuProxy> proxy_;
 
   // Suggested words from the local spellchecker. If the spelling service
   // returns a word in this list, we hide the context-menu item to prevent
@@ -159,7 +180,7 @@ class SpellingMenuObserver : public RenderViewContextMenuObserver {
   // available.
   bool use_remote_suggestions_ = false;
 
-#if defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+#if BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
   // Flag indicating that suggestions should be retrieved asynchronously from
   // the platform spellchecker (effectively just Windows versions > Win7).
   bool use_platform_suggestions_ = false;
@@ -175,11 +196,9 @@ class SpellingMenuObserver : public RenderViewContextMenuObserver {
 
   // Callback registered using RegisterSuggestionsCompleteCallbackForTesting.
   base::OnceClosure suggestions_complete_callback_for_testing_;
-#endif  // defined(OS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
+#endif  // BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
 
   base::WeakPtrFactory<SpellingMenuObserver> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(SpellingMenuObserver);
 };
 
 #endif  // CHROME_BROWSER_RENDERER_CONTEXT_MENU_SPELLING_MENU_OBSERVER_H_

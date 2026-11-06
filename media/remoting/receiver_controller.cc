@@ -1,11 +1,11 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/remoting/receiver_controller.h"
 
-#include "base/single_thread_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/no_destructor.h"
+#include "base/task/single_thread_task_runner.h"
 
 namespace media {
 namespace remoting {
@@ -17,16 +17,18 @@ ReceiverController* ReceiverController::GetInstance() {
 }
 
 ReceiverController::ReceiverController()
-    : rpc_broker_(base::BindRepeating(&ReceiverController::OnSendRpc,
-                                      base::Unretained(this))),
-      main_task_runner_(base::ThreadTaskRunnerHandle::Get()) {}
+    : rpc_messenger_([this](std::vector<uint8_t> message) {
+        OnSendRpc(std::move(message));
+      }),
+      main_task_runner_(base::SingleThreadTaskRunner::GetCurrentDefault()) {}
 
 ReceiverController::~ReceiverController() = default;
 
 void ReceiverController::Initialize(
     mojo::PendingRemote<mojom::Remotee> remotee) {
-  DCHECK(main_task_runner_->BelongsToCurrentThread());
-  DCHECK(!media_remotee_.is_bound());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  receiver_.reset();
+  media_remotee_.reset();
   media_remotee_.Bind(std::move(remotee));
 
   // Calling NotifyRemotingSinkReady() to notify the host that RemotingSink is
@@ -36,7 +38,7 @@ void ReceiverController::Initialize(
 
 void ReceiverController::OnRendererFlush(uint32_t audio_count,
                                          uint32_t video_count) {
-  if (!main_task_runner_->BelongsToCurrentThread()) {
+  if (!main_task_runner_->RunsTasksInCurrentSequence()) {
     // |this| is a singleton per process, it would be safe to use
     // base::Unretained() here.
     main_task_runner_->PostTask(
@@ -51,7 +53,7 @@ void ReceiverController::OnRendererFlush(uint32_t audio_count,
 }
 
 void ReceiverController::OnVideoNaturalSizeChange(const gfx::Size& size) {
-  if (!main_task_runner_->BelongsToCurrentThread()) {
+  if (!main_task_runner_->RunsTasksInCurrentSequence()) {
     // |this| is a singleton per process, it would be safe to use
     // base::Unretained() here.
     main_task_runner_->PostTask(
@@ -69,7 +71,7 @@ void ReceiverController::StartDataStreams(
         audio_stream,
     mojo::PendingRemote<::media::mojom::RemotingDataStreamReceiver>
         video_stream) {
-  if (!main_task_runner_->BelongsToCurrentThread()) {
+  if (!main_task_runner_->RunsTasksInCurrentSequence()) {
     // |this| is a singleton per process, it would be safe to use
     // base::Unretained() here.
     main_task_runner_->PostTask(
@@ -87,18 +89,17 @@ void ReceiverController::StartDataStreams(
 
 void ReceiverController::OnMessageFromSource(
     const std::vector<uint8_t>& message) {
-  DCHECK(main_task_runner_->BelongsToCurrentThread());
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   auto rpc_message = std::make_unique<openscreen::cast::RpcMessage>(
       openscreen::cast::RpcMessage());
   if (!rpc_message->ParseFromArray(message.data(), message.size()))
     return;
 
-  rpc_broker_.ProcessMessageFromRemote(std::move(rpc_message));
+  rpc_messenger_.ProcessMessageFromRemote(std::move(rpc_message));
 }
 
-void ReceiverController::OnSendRpc(
-    std::unique_ptr<std::vector<uint8_t>> message) {
-  if (!main_task_runner_->BelongsToCurrentThread()) {
+void ReceiverController::OnSendRpc(std::vector<uint8_t> message) {
+  if (!main_task_runner_->RunsTasksInCurrentSequence()) {
     // |this| is a singleton per process, it would be safe to use
     // base::Unretained() here.
     main_task_runner_->PostTask(
@@ -108,9 +109,8 @@ void ReceiverController::OnSendRpc(
   }
 
   DCHECK(media_remotee_.is_bound());
-  std::vector<uint8_t> binary_message = *message;
   if (media_remotee_.is_bound())
-    media_remotee_->SendMessageToSource(binary_message);
+    media_remotee_->SendMessageToSource(message);
 }
 
 }  // namespace remoting

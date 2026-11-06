@@ -28,11 +28,10 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/input/web_coalesced_input_event.h"
 #include "third_party/blink/public/common/input/web_touch_event.h"
-#include "third_party/blink/public/platform/web_url_loader_mock_factory.h"
 #include "third_party/blink/public/web/web_document.h"
 #include "third_party/blink/public/web/web_frame.h"
 #include "third_party/blink/public/web/web_hit_test_result.h"
@@ -56,7 +55,9 @@
 #include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
 #include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
+#include "third_party/blink/renderer/platform/testing/url_loader_mock_factory.h"
 #include "third_party/blink/renderer/platform/testing/url_test_helpers.h"
 
 using blink::test::RunPendingTasks;
@@ -112,7 +113,7 @@ class TouchActionTest : public testing::Test {
  public:
   TouchActionTest()
       : base_url_("http://www.test.com/"),
-        web_view_helper_(base::BindRepeating(
+        web_view_helper_(blink::BindRepeating(
             &frame_test_helpers::WebViewHelper::CreateTestWebFrameWidget<
                 TouchActionTrackingWebFrameWidget>)) {
     // TODO(crbug.com/751425): We should use the mock functionality
@@ -140,9 +141,11 @@ class TouchActionTest : public testing::Test {
   void RunTouchActionTest(String file);
   void RunShadowDOMTest(String file);
   void RunIFrameTest(String file);
-  void SendTouchEvent(WebView*, WebInputEvent::Type, IntPoint client_point);
+  void SendTouchEvent(WebView*, WebInputEvent::Type, gfx::Point client_point);
   WebViewImpl* SetupTest(String file);
   void RunTestOnTree(ContainerNode* root, WebView*);
+
+  test::TaskEnvironment task_environment_;
 
   String base_url_;
   frame_test_helpers::WebViewHelper web_view_helper_;
@@ -179,7 +182,7 @@ void TouchActionTest::RunShadowDOMTest(String file) {
   Persistent<Document> document =
       static_cast<Document*>(web_view->MainFrameImpl()->GetDocument());
   Persistent<StaticElementList> host_nodes =
-      document->QuerySelectorAll("[shadow-host]", es);
+      document->QuerySelectorAll(AtomicString("[shadow-host]"), es);
   ASSERT_FALSE(es.HadException());
   ASSERT_GE(host_nodes->length(), 1u);
 
@@ -232,25 +235,17 @@ WebViewImpl* TouchActionTest::SetupTest(String file) {
   Document* document =
       static_cast<Document*>(web_view->MainFrameImpl()->GetDocument());
   document->GetFrame()->View()->LayoutViewport()->SetScrollOffset(
-      ScrollOffset(0, kScrollOffset), mojom::blink::ScrollType::kProgrammatic);
+      ScrollOffset(0, kScrollOffset), mojom::blink::ScrollType::kProgrammatic,
+      cc::ScrollSourceType::kNone);
 
   return web_view;
 }
 
-static const LayoutBoxModelObject& EnclosingCompositedContainer(
-    const LayoutObject& layout_object) {
-  DCHECK(!RuntimeEnabledFeatures::CompositeAfterPaintEnabled());
-  return layout_object.PaintingLayer()
-      ->EnclosingLayerForPaintInvalidationCrossingFrameBoundaries()
-      ->GetLayoutObject();
-}
-
-IntRect WindowClipRect(const LocalFrameView& frame_view) {
+gfx::Rect WindowClipRect(const LocalFrameView& frame_view) {
   PhysicalRect clip_rect(PhysicalOffset(), PhysicalSize(frame_view.Size()));
-  frame_view.GetLayoutView()->MapToVisualRectInAncestorSpace(
-      &EnclosingCompositedContainer(*frame_view.GetLayoutView()), clip_rect, 0,
-      kDefaultVisualRectFlags);
-  return EnclosingIntRect(clip_rect);
+  frame_view.GetLayoutView()->MapToVisualRectInAncestorSpace(nullptr,
+                                                             clip_rect);
+  return ToEnclosingRect(clip_rect);
 }
 
 void TouchActionTest::RunTestOnTree(ContainerNode* root, WebView* web_view) {
@@ -260,7 +255,7 @@ void TouchActionTest::RunTestOnTree(ContainerNode* root, WebView* web_view) {
   // Oilpan: see runTouchActionTest() comment why these are persistent
   // references.
   Persistent<StaticElementList> elements =
-      root->QuerySelectorAll("[expected-action]", es);
+      root->QuerySelectorAll(AtomicString("[expected-action]"), es);
   ASSERT_FALSE(es.HadException());
 
   for (unsigned index = 0; index < elements->length(); index++) {
@@ -293,47 +288,47 @@ void TouchActionTest::RunTestOnTree(ContainerNode* root, WebView* web_view) {
     if (!rects->length())
       continue;
     Persistent<DOMRect> r = rects->item(0);
-    FloatRect client_float_rect =
-        FloatRect(r->left(), r->top(), r->width(), r->height());
-    IntRect client_rect = EnclosedIntRect(client_float_rect);
+    gfx::RectF client_float_rect =
+        gfx::RectF(r->left(), r->top(), r->width(), r->height());
+    gfx::Rect client_rect = ToEnclosedRect(client_float_rect);
     for (int loc_idx = 0; loc_idx < 3; loc_idx++) {
-      IntPoint frame_point;
+      gfx::Point frame_point;
       std::stringstream context_stream;
       context_stream << failure_context.ToString() << " (";
       switch (loc_idx) {
         case 0:
-          frame_point = client_rect.Center();
+          frame_point = client_rect.CenterPoint();
           context_stream << "center";
           break;
         case 1:
-          frame_point = client_rect.Location();
+          frame_point = client_rect.origin();
           context_stream << "top-left";
           break;
         case 2:
-          frame_point = client_rect.MaxXMaxYCorner();
-          frame_point.Move(-1, -1);
+          frame_point = client_rect.bottom_right();
+          frame_point.Offset(-1, -1);
           context_stream << "bottom-right";
           break;
         default:
           FAIL() << "Invalid location index.";
       }
 
-      IntPoint window_point =
+      gfx::Point window_point =
           root->GetDocument().GetFrame()->View()->ConvertToRootFrame(
               frame_point);
-      context_stream << "=" << window_point.X() << "," << window_point.Y()
+      context_stream << "=" << window_point.x() << "," << window_point.y()
                      << ").";
-      String failure_context_pos = String::FromUTF8(context_stream.str());
+      String failure_context_pos = String::FromUtf8(context_stream.str());
 
       LocalFrame* main_frame =
           To<LocalFrame>(WebFrame::ToCoreFrame(*web_view->MainFrame()));
       LocalFrameView* main_frame_view = main_frame->View();
-      IntRect visible_rect = WindowClipRect(*main_frame_view);
+      gfx::Rect visible_rect = WindowClipRect(*main_frame_view);
       ASSERT_TRUE(visible_rect.Contains(window_point))
           << failure_context_pos
-          << " Test point not contained in visible area: " << visible_rect.X()
-          << "," << visible_rect.Y() << "-" << visible_rect.MaxX() << ","
-          << visible_rect.MaxY();
+          << " Test point not contained in visible area: " << visible_rect.x()
+          << "," << visible_rect.y() << "-" << visible_rect.right() << ","
+          << visible_rect.bottom();
 
       // First validate that a hit test at this point will really hit the
       // element we intended. This is the easiest way for a test to be broken,
@@ -347,9 +342,9 @@ void TouchActionTest::RunTestOnTree(ContainerNode* root, WebView* web_view) {
           << "Unexpected hit test result " << failure_context_pos
           << "  Got element: \""
           << result.InnerElement()
-                 ->outerHTML()
+                 ->GetOuterHTMLString()
                  .StripWhiteSpace()
-                 .Left(80)
+                 .substr(0, 80)
                  .Ascii()
                  .data()
           << "\"" << std::endl
@@ -364,7 +359,8 @@ void TouchActionTest::RunTestOnTree(ContainerNode* root, WebView* web_view) {
           static_cast<TouchActionTrackingWebFrameWidget*>(
               web_view->MainFrameWidget());
 
-      AtomicString expected_action = element->getAttribute("expected-action");
+      AtomicString expected_action =
+          element->getAttribute(AtomicString("expected-action"));
       // Should have received exactly one touch action, even for auto.
       EXPECT_EQ(1, widget->TouchActionSetCount()) << failure_context_pos;
       if (widget->TouchActionSetCount()) {
@@ -372,23 +368,28 @@ void TouchActionTest::RunTestOnTree(ContainerNode* root, WebView* web_view) {
           EXPECT_EQ(TouchAction::kAuto, widget->LastTouchAction())
               << failure_context_pos;
         } else if (expected_action == "none") {
-          EXPECT_EQ(TouchAction::kNone, widget->LastTouchAction())
+          EXPECT_EQ(TouchAction::kNone, widget->LastTouchAction() &
+                                            ~TouchAction::kInternalNotWritable)
               << failure_context_pos;
         } else if (expected_action == "pan-x") {
           EXPECT_EQ(TouchAction::kPanX, widget->LastTouchAction() &
-                                            ~TouchAction::kInternalPanXScrolls)
+                                            ~TouchAction::kInternalPanXScrolls &
+                                            ~TouchAction::kInternalNotWritable)
               << failure_context_pos;
         } else if (expected_action == "pan-y") {
-          EXPECT_EQ(TouchAction::kPanY, widget->LastTouchAction())
+          EXPECT_EQ(TouchAction::kPanY, widget->LastTouchAction() &
+                                            ~TouchAction::kInternalNotWritable)
               << failure_context_pos;
         } else if (expected_action == "pan-x-y") {
           EXPECT_EQ(TouchAction::kPan, widget->LastTouchAction() &
-                                           ~TouchAction::kInternalPanXScrolls)
+                                           ~TouchAction::kInternalPanXScrolls &
+                                           ~TouchAction::kInternalNotWritable)
               << failure_context_pos;
         } else if (expected_action == "manipulation") {
-          EXPECT_EQ(
-              TouchAction::kManipulation,
-              widget->LastTouchAction() & ~TouchAction::kInternalPanXScrolls)
+          EXPECT_EQ(TouchAction::kManipulation,
+                    widget->LastTouchAction() &
+                        ~TouchAction::kInternalPanXScrolls &
+                        ~TouchAction::kInternalNotWritable)
               << failure_context_pos;
         } else {
           FAIL() << "Unrecognized expected-action " << expected_action << " "
@@ -406,7 +407,7 @@ void TouchActionTest::RunTestOnTree(ContainerNode* root, WebView* web_view) {
 }
 void TouchActionTest::SendTouchEvent(WebView* web_view,
                                      WebInputEvent::Type type,
-                                     IntPoint client_point) {
+                                     gfx::Point client_point) {
   ASSERT_TRUE(type == WebInputEvent::Type::kPointerDown ||
               type == WebInputEvent::Type::kPointerCancel);
 
@@ -414,8 +415,8 @@ void TouchActionTest::SendTouchEvent(WebView* web_view,
       type,
       WebPointerProperties(1, WebPointerProperties::PointerType::kTouch,
                            WebPointerProperties::Button::kLeft,
-                           gfx::PointF(client_point.X(), client_point.Y()),
-                           gfx::PointF(client_point.X(), client_point.Y())),
+                           gfx::PointF(client_point.x(), client_point.y()),
+                           gfx::PointF(client_point.x(), client_point.y())),
       10.0f, 10.0f);
   if (type == WebInputEvent::Type::kPointerCancel)
     event.dispatch_type = WebInputEvent::DispatchType::kEventNonBlocking;
@@ -423,7 +424,7 @@ void TouchActionTest::SendTouchEvent(WebView* web_view,
     event.touch_start_or_first_touch_move = true;
 
   web_view->MainFrameWidget()->ProcessInputEventSynchronouslyForTesting(
-      WebCoalescedInputEvent(event, ui::LatencyInfo()), base::DoNothing());
+      WebCoalescedInputEvent(event, ui::LatencyInfo()));
   web_view->MainFrameWidget()->DispatchBufferedTouchEvents();
   RunPendingTasks();
 }

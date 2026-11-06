@@ -1,12 +1,14 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+import {TestRunner} from 'test_runner';
+import {HeapProfilerTestRunner} from 'heap_profiler_test_runner';
 
 (async function() {
   TestRunner.addResult(
       `Tests Comparison view of detailed heap snapshots. Expanded nodes must be preserved after sorting.\n`);
-  await TestRunner.loadTestModule('heap_profiler_test_runner');
-  await TestRunner.showPanel('heap_profiler');
+  await TestRunner.showPanel('heap-profiler');
 
   var instanceCount = 24;
   function createHeapSnapshotA() {
@@ -51,7 +53,7 @@
       HeapProfilerTestRunner.expandRow(bInstanceRow, expandA);
       function expandA(row) {
         function propertyMatcher(node) {
-          return node._referenceName === 'a' && node._name.charAt(0) === 'A';
+          return node.referenceName === 'a' && node.name.charAt(0) === 'A';
         }
         var aRow = HeapProfilerTestRunner.findMatchingRow(propertyMatcher, row);
         TestRunner.assertEquals(true, !!aRow, '"a: A" row');
@@ -63,14 +65,14 @@
       var row = HeapProfilerTestRunner.findRow('B');
       TestRunner.assertEquals(true, !!row, '"B" row');
       function deletedNodeMatcher(data) {
-        return data._isDeletedNode && data._name.charAt(0) === 'B';
+        return data.isDeletedNode && data.name.charAt(0) === 'B';
       }
       var bInstanceRow = HeapProfilerTestRunner.findMatchingRow(deletedNodeMatcher, row);
       TestRunner.assertEquals(true, !!bInstanceRow, '"B" instance row');
       HeapProfilerTestRunner.expandRow(bInstanceRow, expandA);
       function expandA(row) {
         function propertyMatcher(data) {
-          return data._referenceName === 'a' && data._name.charAt(0) === 'A';
+          return data.referenceName === 'a' && data.name.charAt(0) === 'A';
         }
         var aRow = HeapProfilerTestRunner.findMatchingRow(propertyMatcher, row);
         TestRunner.assertEquals(true, !!aRow, '"a: A" row');

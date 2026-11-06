@@ -1,22 +1,20 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/win/conflicts/module_database.h"
 
 #include <memory>
+#include <optional>
 
-#include "base/bind.h"
-#include "base/task/post_task.h"
+#include "base/functional/bind.h"
 #include "base/time/time.h"
 #include "chrome/browser/win/conflicts/module_database_observer.h"
 #include "chrome/browser/win/conflicts/module_info.h"
 #include "chrome/services/util_win/util_win_impl.h"
-#include "chrome/test/base/scoped_testing_local_state.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace {
 
@@ -35,18 +33,21 @@ constexpr uint32_t kTime2 = 0xBAADF00D;
 }  // namespace
 
 class ModuleDatabaseTest : public testing::Test {
+ public:
+  ModuleDatabaseTest(const ModuleDatabaseTest&) = delete;
+  ModuleDatabaseTest& operator=(const ModuleDatabaseTest&) = delete;
+
  protected:
   ModuleDatabaseTest()
       : dll1_(kDll1),
         dll2_(kDll2),
         task_environment_(base::test::TaskEnvironment::MainThreadType::UI,
                           base::test::TaskEnvironment::TimeSource::MOCK_TIME),
-        scoped_testing_local_state_(TestingBrowserProcess::GetGlobal()),
-        module_database_(std::make_unique<ModuleDatabase>(
-            /* third_party_blocking_policy_enabled = */ false)) {
+        module_database_(std::make_unique<ModuleDatabase>()) {
     module_database_->module_inspector_.SetUtilWinFactoryCallbackForTesting(
         base::BindRepeating(&ModuleDatabaseTest::CreateUtilWinService,
                             base::Unretained(this)));
+    module_database_->StartInspection();
   }
 
   ~ModuleDatabaseTest() override {
@@ -83,13 +84,9 @@ class ModuleDatabaseTest : public testing::Test {
   // Must be before |module_database_|.
   content::BrowserTaskEnvironment task_environment_;
 
-  ScopedTestingLocalState scoped_testing_local_state_;
-
-  absl::optional<UtilWinImpl> util_win_impl_;
+  std::optional<UtilWinImpl> util_win_impl_;
 
   std::unique_ptr<ModuleDatabase> module_database_;
-
-  DISALLOW_COPY_AND_ASSIGN(ModuleDatabaseTest);
 };
 
 TEST_F(ModuleDatabaseTest, DatabaseIsConsistent) {
@@ -135,6 +132,10 @@ TEST_F(ModuleDatabaseTest, DatabaseIsConsistent) {
 class DummyObserver : public ModuleDatabaseObserver {
  public:
   DummyObserver() = default;
+
+  DummyObserver(const DummyObserver&) = delete;
+  DummyObserver& operator=(const DummyObserver&) = delete;
+
   ~DummyObserver() override = default;
 
   void OnNewModuleFound(const ModuleInfoKey& module_key,
@@ -161,8 +162,6 @@ class DummyObserver : public ModuleDatabaseObserver {
   int new_module_count_ = 0;
   int known_module_loaded_count_ = 0;
   bool on_module_database_idle_called_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(DummyObserver);
 };
 
 TEST_F(ModuleDatabaseTest, Observers) {

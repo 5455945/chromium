@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,22 +10,20 @@
 #include <memory>
 #include <utility>
 
-#include "base/mac/foundation_util.h"
-#include "base/mac/mach_logging.h"
+#include "base/apple/foundation_util.h"
+#include "base/apple/mach_logging.h"
 #include "base/mac/scoped_mach_msg_destroy.h"
-#include "base/strings/stringprintf.h"
+#include "base/strings/strcat.h"
 #include "chrome/common/mac/app_mode_common.h"
 
 namespace apps {
 
 MachBootstrapAcceptor::MachBootstrapAcceptor(const std::string& name_fragment,
                                              Delegate* delegate)
-    : server_name_(base::StringPrintf("%s.%s",
-                                      base::mac::BaseBundleID(),
-                                      name_fragment.c_str())
-                       .c_str()),
+    : server_name_(
+          base::StrCat({base::apple::BaseBundleID(), ".", name_fragment})),
       delegate_(delegate) {
-  DCHECK(delegate_);
+  CHECK(delegate_, base::NotFatalUntil::M161);
 }
 
 MachBootstrapAcceptor::~MachBootstrapAcceptor() {
@@ -42,7 +40,7 @@ void MachBootstrapAcceptor::Start() {
     return;
   }
 
-  dispatch_source_ = std::make_unique<base::DispatchSourceMach>(
+  dispatch_source_ = std::make_unique<base::apple::DispatchSource>(
       server_name_.c_str(), port(), ^{
         HandleRequest();
       });
@@ -50,8 +48,12 @@ void MachBootstrapAcceptor::Start() {
 }
 
 void MachBootstrapAcceptor::Stop() {
-  endpoint_.reset();
+  // `dispatch_source_` runs `HandleRequest()` on a background dispatch queue,
+  // which accesses `endpoint_` via `port()`. Reset `dispatch_source_` first
+  // (which cancels the source and waits for any in-flight event handler to
+  // finish) before resetting `endpoint_`.
   dispatch_source_.reset();
+  endpoint_.reset();
 }
 
 void MachBootstrapAcceptor::HandleRequest() {
@@ -77,21 +79,20 @@ void MachBootstrapAcceptor::HandleRequest() {
     return;
   }
 
-  pid_t sender_pid = audit_token_to_pid(request.trailer.msgh_audit);
-
   mojo::PlatformChannelEndpoint remote_endpoint(mojo::PlatformHandle(
-      base::mac::ScopedMachSendRight(request.header.msgh_remote_port)));
+      base::apple::ScopedMachSendRight(request.header.msgh_remote_port)));
   if (!remote_endpoint.is_valid()) {
     return;
   }
 
+  audit_token_t audit_token = request.trailer.msgh_audit;
   scoped_message.Disarm();
 
-  delegate_->OnClientConnected(std::move(remote_endpoint), sender_pid);
+  delegate_->OnClientConnected(std::move(remote_endpoint), audit_token);
 }
 
 mach_port_t MachBootstrapAcceptor::port() {
-  DCHECK(endpoint_.is_valid());
+  CHECK(endpoint_.is_valid(), base::NotFatalUntil::M161);
   return endpoint_.platform_handle().GetMachReceiveRight().get();
 }
 

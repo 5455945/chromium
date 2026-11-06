@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,12 +9,11 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/threading/thread_checker.h"
-#include "chromecast/common/mojom/multiroom.mojom.h"
 #include "chromecast/media/api/cma_backend.h"
 #include "chromecast/public/media/decoder_config.h"
+#include "chromecast/public/media/media_pipeline_device_params.h"
 #include "media/base/audio_parameters.h"
 #include "media/base/audio_timestamp_helper.h"
 
@@ -33,7 +32,9 @@ class CmaAudioOutput {
                  SampleFormat sample_format,
                  const std::string& device_id,
                  const std::string& application_session_id,
-                 chromecast::mojom::MultiroomInfoPtr multiroom_info,
+                 MediaPipelineDeviceParams::MediaSyncType sync_type,
+                 bool use_hw_av_sync,
+                 int audio_track_session_id,
                  CmaBackendFactory* cma_backend_factory,
                  CmaBackend::Decoder::Delegate* delegate);
   // Disallow copy and assign.
@@ -41,27 +42,29 @@ class CmaAudioOutput {
   CmaAudioOutput& operator=(const CmaAudioOutput&) = delete;
   ~CmaAudioOutput();
 
-  void SetObserver(CmaBackend::AudioDecoder::Observer* observer);
-
   bool Start(int64_t start_pts);
   void Stop();
   bool Pause();
   bool Resume();
   bool SetVolume(double volume);
 
-  void PushBuffer(scoped_refptr<CastDecoderBufferImpl> decoder_buffer);
+  void PushBuffer(scoped_refptr<CastDecoderBufferImpl> decoder_buffer,
+                  bool is_silence);
   CmaBackend::AudioDecoder::RenderingDelay GetRenderingDelay();
+  CmaBackend::AudioDecoder::AudioTrackTimestamp GetAudioTrackTimestamp();
   int64_t GetTotalFrames();
 
  private:
   void Initialize(SampleFormat sample_format,
                   const std::string& device_id,
                   const std::string& application_session_id,
-                  chromecast::mojom::MultiroomInfoPtr multiroom_info,
+                  MediaPipelineDeviceParams::MediaSyncType sync_type,
+                  int audio_track_session_id,
                   CmaBackendFactory* cma_backend_factory);
 
   const ::media::AudioParameters audio_params_;
   const int sample_size_;
+  const bool use_hw_av_sync_;
   CmaBackend::Decoder::Delegate* const delegate_;
 
   ::media::AudioTimestampHelper timestamp_helper_;

@@ -1,11 +1,11 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CC_LAYERS_VIDEO_FRAME_PROVIDER_H_
 #define CC_LAYERS_VIDEO_FRAME_PROVIDER_H_
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/time/time.h"
 #include "cc/cc_export.h"
 
@@ -93,9 +93,19 @@ class CC_EXPORT VideoFrameProvider {
   // frame missed its intended deadline.
   virtual void PutCurrentFrame() = 0;
 
+  // Called when feedback of a presented frame becomes known.
+  virtual void OnFramePresented(
+      base::TimeTicks display_time,
+      std::optional<base::TimeTicks> capture_begin_time,
+      std::optional<uint32_t> rtp_timestamp) {}
+
   // Returns the interval at which the provider expects to have new frames for
   // the client.
   virtual base::TimeDelta GetPreferredRenderInterval() = 0;
+
+  // Inform the provider that the context is lost. The provider need to reset
+  // the current frame if it's invald.
+  virtual void OnContextLost() = 0;
 
  protected:
   virtual ~VideoFrameProvider() {}

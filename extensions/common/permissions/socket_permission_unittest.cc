@@ -1,14 +1,16 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "extensions/common/permissions/socket_permission.h"
+
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "base/pickle.h"
 #include "base/values.h"
 #include "extensions/common/permissions/permissions_info.h"
-#include "extensions/common/permissions/socket_permission.h"
 #include "extensions/common/permissions/socket_permission_data.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -271,17 +273,18 @@ TEST(SocketPermissionTest, Value) {
   std::unique_ptr<APIPermission> permission2(
       permission_info->CreateAPIPermission());
 
-  std::unique_ptr<base::ListValue> value(new base::ListValue());
-  value->AppendString("tcp-connect:*.example.com:80");
-  value->AppendString("udp-bind::8080");
-  value->AppendString("udp-send-to::8888");
-  ASSERT_TRUE(permission1->FromValue(value.get(), NULL, NULL));
+  base::ListValue list;
+  list.Append("tcp-connect:*.example.com:80");
+  list.Append("udp-bind::8080");
+  list.Append("udp-send-to::8888");
+  base::Value value(std::move(list));
+  ASSERT_TRUE(permission1->FromValue(&value, nullptr, nullptr));
 
   EXPECT_FALSE(permission1->Equal(permission2.get()));
 
-  std::unique_ptr<base::Value> vtmp(permission1->ToValue());
+  std::optional<base::Value> vtmp = permission1->ToValue();
   ASSERT_TRUE(vtmp);
-  ASSERT_TRUE(permission2->FromValue(vtmp.get(), NULL, NULL));
+  ASSERT_TRUE(permission2->FromValue(&*vtmp, nullptr, nullptr));
   EXPECT_TRUE(permission1->Equal(permission2.get()));
 }
 

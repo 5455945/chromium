@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -42,9 +42,8 @@ class COMPONENT_EXPORT(SERVICE_MANAGER_CPP_TYPES) Identity {
   ~Identity();
 
   Identity& operator=(const Identity& other);
-  bool operator<(const Identity& other) const;
-  bool operator==(const Identity& other) const;
-  bool operator!=(const Identity& other) const { return !(*this == other); }
+  friend bool operator==(const Identity&, const Identity&) = default;
+  friend auto operator<=>(const Identity&, const Identity&) = default;
 
   bool IsValid() const;
 

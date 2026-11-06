@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,11 @@
 #include <stdint.h>
 
 #include "base/base64.h"
-#include "base/bind.h"
 #include "base/files/file_util.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task/post_task.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "build/build_config.h"
@@ -20,23 +19,20 @@
 #include "chrome/browser/download/download_crx_util.h"
 #include "chrome/browser/download/download_ui_model.h"
 #include "chrome/browser/image_decoder/image_decoder.h"
-#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/common/url_constants.h"
+#include "components/download/public/common/download_features.h"
 #include "components/google/core/common/google_util.h"
 #include "content/public/browser/browser_thread.h"
 #include "net/base/url_util.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 
-#if defined(OS_WIN) || defined(OS_LINUX) || defined(OS_CHROMEOS) || \
-    defined(OS_MAC)
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || \
+    BUILDFLAG(IS_MAC)
 #include "chrome/browser/ui/scoped_tabbed_browser_displayer.h"
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "chrome/browser/download/download_target_determiner.h"
-#include "chrome/browser/ui/pdf/adobe_reader_info_win.h"
 #endif
 
 namespace {
@@ -47,17 +43,26 @@ const int64_t kMaxImageClipboardSize = 20 * 1024 * 1024;  // 20 MB
 
 class ImageClipboardCopyManager : public ImageDecoder::ImageRequest {
  public:
-  static void Start(const base::FilePath& file_path,
+  ImageClipboardCopyManager() = delete;
+  ImageClipboardCopyManager(const ImageClipboardCopyManager&) = delete;
+  ImageClipboardCopyManager& operator=(const ImageClipboardCopyManager&) =
+      delete;
+
+  static void Start(const base::FilePath file_path,
+                    const base::FilePath file_name_to_report_user,
                     base::SequencedTaskRunner* task_runner) {
-    new ImageClipboardCopyManager(file_path, task_runner);
+    new ImageClipboardCopyManager(
+        std::move(file_path), std::move(file_name_to_report_user), task_runner);
   }
 
  private:
-  ImageClipboardCopyManager(const base::FilePath& file_path,
+  ImageClipboardCopyManager(const base::FilePath file_path,
+                            const base::FilePath file_name_to_report_user,
                             base::SequencedTaskRunner* task_runner)
-      : file_path_(file_path) {
+      : file_path_(std::move(file_path)),
+        file_name_to_report_user_(std::move(file_name_to_report_user)) {
     // Constructor must be called in the UI thread.
-    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
     task_runner->PostTask(
         FROM_HERE, base::BindOnce(&ImageClipboardCopyManager::StartDecoding,
@@ -69,9 +74,8 @@ class ImageClipboardCopyManager : public ImageDecoder::ImageRequest {
         FROM_HERE, base::BlockingType::WILL_BLOCK);
 
     // Re-check the filesize since the file may be modified after downloaded.
-    int64_t filesize;
-    if (!GetFileSize(file_path_, &filesize) ||
-        filesize > kMaxImageClipboardSize) {
+    std::optional<int64_t> filesize = base::GetFileSize(file_path_);
+    if (!filesize.has_value() || filesize.value() > kMaxImageClipboardSize) {
       OnFailedBeforeDecoding();
       return;
     }
@@ -85,25 +89,28 @@ class ImageClipboardCopyManager : public ImageDecoder::ImageRequest {
 
     // Note: An image over 128MB (uncompressed) may fail, due to the limitation
     // of IPC message size.
-    ImageDecoder::Start(this, data);
+    ImageDecoder::Start(this, std::move(data));
   }
 
   void OnImageDecoded(const SkBitmap& decoded_image) override {
     // This method is called on the same thread as constructor (the UI thread).
-    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
     ui::ScopedClipboardWriter scw(ui::ClipboardBuffer::kCopyPaste);
     scw.Reset();
 
-    if (!decoded_image.empty() && !decoded_image.isNull())
+    if (!decoded_image.empty() && !decoded_image.isNull()) {
+      scw.WriteFilenames(ui::FileInfosToURIList(
+          {ui::FileInfo(file_path_, file_name_to_report_user_)}));
       scw.WriteImage(decoded_image);
+    }
 
     delete this;
   }
 
   void OnDecodeImageFailed() override {
     // This method is called on the same thread as constructor (the UI thread).
-    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M161);
 
     delete this;
   }
@@ -115,15 +122,14 @@ class ImageClipboardCopyManager : public ImageDecoder::ImageRequest {
   }
 
   const base::FilePath file_path_;
-
-  DISALLOW_IMPLICIT_CONSTRUCTORS(ImageClipboardCopyManager);
+  const base::FilePath file_name_to_report_user_;
 };
 
 }  // namespace
 
 DownloadCommands::DownloadCommands(base::WeakPtr<DownloadUIModel> model)
     : model_(model) {
-  DCHECK(model_);
+  CHECK(model_, base::NotFatalUntil::M161);
 }
 
 DownloadCommands::~DownloadCommands() = default;
@@ -137,7 +143,7 @@ GURL DownloadCommands::GetLearnMoreURLForInterruptedDownload() const {
       learn_more_url, g_browser_process->GetApplicationLocale());
   return net::AppendQueryParameter(
       learn_more_url, "ctx",
-      base::NumberToString(model_->download()->GetLastReason()));
+      base::NumberToString(model_->GetDownloadItem()->GetLastReason()));
 }
 
 bool DownloadCommands::IsCommandEnabled(Command command) const {
@@ -165,16 +171,17 @@ void DownloadCommands::ExecuteCommand(Command command) {
   model_->ExecuteCommand(this, command);
 }
 
-#if defined(OS_WIN) || defined(OS_MAC) || defined(OS_LINUX) || \
-    defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+    BUILDFLAG(IS_CHROMEOS)
 
-Browser* DownloadCommands::GetBrowser() const {
+BrowserWindowInterface* DownloadCommands::GetBrowser() const {
   if (!model_)
     return nullptr;
 
   chrome::ScopedTabbedBrowserDisplayer browser_displayer(model_->profile());
-  DCHECK(browser_displayer.browser());
-  return browser_displayer.browser();
+  CHECK(browser_displayer.browser_window_interface(),
+        base::NotFatalUntil::M161);
+  return browser_displayer.browser_window_interface();
 }
 
 bool DownloadCommands::IsDownloadPdf() const {
@@ -186,22 +193,11 @@ bool DownloadCommands::IsDownloadPdf() const {
 }
 
 bool DownloadCommands::CanOpenPdfInSystemViewer() const {
-#if defined(OS_WIN)
-  bool is_adobe_pdf_reader_up_to_date = false;
-  if (IsDownloadPdf() && IsAdobeReaderDefaultPDFViewer()) {
-    is_adobe_pdf_reader_up_to_date =
-        DownloadTargetDeterminer::IsAdobeReaderUpToDate();
-  }
-  return IsDownloadPdf() &&
-         (IsAdobeReaderDefaultPDFViewer() ? is_adobe_pdf_reader_up_to_date
-                                          : true);
-#elif defined(OS_MAC) || defined(OS_LINUX) || defined(OS_CHROMEOS)
   return IsDownloadPdf();
-#endif
 }
 
-#endif  // defined(OS_WIN) || defined(OS_MAC) || defined(OS_LINUX) ||
-        // defined(OS_CHROMEOS)
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+        // BUILDFLAG(IS_CHROMEOS)
 
 void DownloadCommands::CopyFileAsImageToClipboard() {
   if (!model_)
@@ -215,14 +211,15 @@ void DownloadCommands::CopyFileAsImageToClipboard() {
   if (!model_->HasSupportedImageMimeType())
     return;
 
-  base::FilePath file_path = model_->GetFullPath();
-
   if (!task_runner_) {
     task_runner_ = base::ThreadPool::CreateSequencedTaskRunner(
         {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
          base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN});
   }
-  ImageClipboardCopyManager::Start(file_path, task_runner_.get());
+
+  ImageClipboardCopyManager::Start(model_->GetFullPath(),
+                                   model_->GetFileNameToReportUser(),
+                                   task_runner_.get());
 }
 
 bool DownloadCommands::CanBeCopiedToClipboard() const {

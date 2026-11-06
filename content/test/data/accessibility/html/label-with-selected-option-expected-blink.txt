@@ -6,11 +6,12 @@ rootWebArea
 ++++++++labelText
 ++++++++++staticText name='Test 1: Flash the screen '
 ++++++++++++inlineTextBox name='Test 1: Flash the screen '
-++++++++++popUpButton collapsed value='2'
-++++++++++++menuListPopup invisible
-++++++++++++++menuListOption invisible name='1' selected=false
-++++++++++++++menuListOption name='2' selected=true
-++++++++++++++menuListOption invisible name='3' selected=false
+++++++++++comboBoxSelect collapsed value='2'
+++++++++++++menuListPopup invisible ispopup=auto
+++++++++++++++genericContainer ignored invisible
+++++++++++++++++menuListOption invisible name='1' selected=false
+++++++++++++++++menuListOption name='2' selected=true
+++++++++++++++++menuListOption invisible name='3' selected=false
 ++++++++++staticText name=' times.'
 ++++++++++++inlineTextBox name=' times.'
 ++++++genericContainer
@@ -30,11 +31,12 @@ rootWebArea
 ++++++++labelText
 ++++++++++staticText name='Test 3: Flash the screen '
 ++++++++++++inlineTextBox name='Test 3: Flash the screen '
-++++++++++popUpButton collapsed value='two'
-++++++++++++menuListPopup invisible
-++++++++++++++menuListOption invisible name='1' selected=false
-++++++++++++++menuListOption name='two' selected=true
-++++++++++++++menuListOption invisible name='3' selected=false
+++++++++++comboBoxSelect collapsed value='two'
+++++++++++++menuListPopup invisible ispopup=auto
+++++++++++++++genericContainer ignored invisible
+++++++++++++++++menuListOption invisible name='1' selected=false
+++++++++++++++++menuListOption name='two' selected=true
+++++++++++++++++menuListOption invisible name='3' selected=false
 ++++++++++staticText name=' times.'
 ++++++++++++inlineTextBox name=' times.'
 ++++++genericContainer

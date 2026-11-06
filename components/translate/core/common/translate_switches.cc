@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,6 +15,10 @@ const char kTranslateSecurityOrigin[] = "translate-security-origin";
 
 // Overrides the URL from which the translate ranker model is downloaded.
 const char kTranslateRankerModelURL[] = "translate-ranker-model-url";
+
+// Overrides the target language for translation and forces translation of all
+// pages to the new target language.
+const char kForcedTranslateLanguage[] = "forced-translate-language";
 
 }  // namespace switches
 }  // namespace translate

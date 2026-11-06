@@ -1,48 +1,57 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.tab;
 
-import android.app.Activity;
-import android.os.Handler;
+import static org.chromium.build.NullUtil.assumeNonNull;
 
-import androidx.annotation.IntDef;
+import android.app.Activity;
+
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.ActivityState;
-import org.chromium.base.ApplicationState;
 import org.chromium.base.ApplicationStatus;
 import org.chromium.base.Callback;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.Log;
 import org.chromium.base.ObserverList;
 import org.chromium.base.ObserverList.RewindableIterator;
+import org.chromium.base.TerminationStatus;
 import org.chromium.base.metrics.RecordHistogram;
+import org.chromium.base.task.PostTask;
+import org.chromium.base.task.TaskTraits;
+import org.chromium.blink.mojom.ViewportFit;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.AppHooks;
 import org.chromium.chrome.browser.SwipeRefreshHandler;
+import org.chromium.chrome.browser.app.bluetooth.BluetoothNotificationService;
+import org.chromium.chrome.browser.app.serial.SerialNotificationService;
+import org.chromium.chrome.browser.app.usb.UsbNotificationService;
+import org.chromium.chrome.browser.bluetooth.BluetoothNotificationManager;
 import org.chromium.chrome.browser.display_cutout.DisplayCutoutTabHelper;
 import org.chromium.chrome.browser.feedback.HelpAndFeedbackLauncherImpl;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.media.MediaCaptureNotificationServiceImpl;
+import org.chromium.chrome.browser.pdf.PdfUtils;
 import org.chromium.chrome.browser.policy.PolicyAuditor;
 import org.chromium.chrome.browser.policy.PolicyAuditor.AuditEvent;
-import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.serial.SerialNotificationManager;
+import org.chromium.chrome.browser.ui.native_page.NativePage;
+import org.chromium.chrome.browser.usb.UsbNotificationManager;
 import org.chromium.content_public.browser.GlobalRenderFrameHostId;
 import org.chromium.content_public.browser.LifecycleState;
 import org.chromium.content_public.browser.NavigationHandle;
+import org.chromium.content_public.browser.Page;
 import org.chromium.content_public.browser.WebContents;
-import org.chromium.content_public.browser.WebContentsAccessibility;
 import org.chromium.content_public.browser.WebContentsObserver;
 import org.chromium.net.NetError;
+import org.chromium.ui.mojom.VirtualKeyboardMode;
 import org.chromium.url.GURL;
 
-import java.lang.annotation.Retention;
-import java.lang.annotation.RetentionPolicy;
-
-/**
- * WebContentsObserver used by Tab.
- */
+/** WebContentsObserver used by Tab. */
+@NullMarked
 public class TabWebContentsObserver extends TabWebContentsUserData {
     // URL didFailLoad error code. Should match the value in net_error_list.h.
     public static final int BLOCKED_BY_ADMINISTRATOR = -22;
@@ -52,36 +61,10 @@ public class TabWebContentsObserver extends TabWebContentsUserData {
     /** Used for logging. */
     private static final String TAG = "TabWebContentsObs";
 
-    // TabRendererCrashStatus defined in tools/metrics/histograms/histograms.xml.
-    private static final int TAB_RENDERER_CRASH_STATUS_SHOWN_IN_FOREGROUND_APP = 0;
-    private static final int TAB_RENDERER_CRASH_STATUS_HIDDEN_IN_FOREGROUND_APP = 1;
-    private static final int TAB_RENDERER_CRASH_STATUS_HIDDEN_IN_BACKGROUND_APP = 2;
-    private static final int TAB_RENDERER_CRASH_STATUS_MAX = 3;
-
-    // TabRendererExitStatus defined in tools/metrics/histograms/histograms.xml.
-    // Designed to replace TabRendererCrashStatus if numbers line up.
-    @IntDef({TabRendererExitStatus.OOM_PROTECTED_IN_RUNNING_APP,
-            TabRendererExitStatus.OOM_PROTECTED_IN_PAUSED_APP,
-            TabRendererExitStatus.OOM_PROTECTED_IN_BACKGROUND_APP,
-            TabRendererExitStatus.NOT_PROTECTED_IN_RUNNING_APP,
-            TabRendererExitStatus.NOT_PROTECTED_IN_PAUSED_APP,
-            TabRendererExitStatus.NOT_PROTECTED_IN_BACKGROUND_APP})
-    @Retention(RetentionPolicy.SOURCE)
-    private @interface TabRendererExitStatus {
-        int OOM_PROTECTED_IN_RUNNING_APP = 0;
-        int OOM_PROTECTED_IN_PAUSED_APP = 1;
-        int OOM_PROTECTED_IN_BACKGROUND_APP = 2;
-        int NOT_PROTECTED_IN_RUNNING_APP = 3;
-        int NOT_PROTECTED_IN_PAUSED_APP = 4;
-        int NOT_PROTECTED_IN_BACKGROUND_APP = 5;
-        int NUM_ENTRIES = 6;
-    }
-
     private final TabImpl mTab;
     private final ObserverList<Callback<WebContents>> mInitObservers = new ObserverList<>();
-    private final Handler mHandler = new Handler();
-    private WebContentsObserver mObserver;
-    private GURL mLastUrl;
+    private @Nullable Observer mObserver;
+    private @Nullable GURL mLastUrl;
 
     public static TabWebContentsObserver from(Tab tab) {
         TabWebContentsObserver observer = get(tab);
@@ -93,7 +76,7 @@ public class TabWebContentsObserver extends TabWebContentsUserData {
     }
 
     @VisibleForTesting
-    public static TabWebContentsObserver get(Tab tab) {
+    public static @Nullable TabWebContentsObserver get(Tab tab) {
         return tab.getUserDataHost().getUserData(USER_DATA_KEY);
     }
 
@@ -115,9 +98,7 @@ public class TabWebContentsObserver extends TabWebContentsUserData {
         }
     }
 
-    /**
-     * Remove the InitWebContents observer from the list.
-     */
+    /** Remove the InitWebContents observer from the list. */
     public void removeInitWebContentsObserver(Callback<WebContents> observer) {
         mInitObservers.removeObserver(observer);
     }
@@ -131,24 +112,55 @@ public class TabWebContentsObserver extends TabWebContentsUserData {
     public void initWebContents(WebContents webContents) {
         mObserver = new Observer(webContents);
 
-        // For browser tabs, we want to set accessibility focus to the page when it loads. This
-        // is not the default behavior for embedded web views.
-        WebContentsAccessibility.fromWebContents(webContents).setShouldFocusOnPageLoad(true);
-
         for (Callback<WebContents> callback : mInitObservers) callback.onResult(webContents);
     }
 
     @Override
     public void cleanupWebContents(WebContents webContents) {
         if (mObserver != null) {
-            mObserver.destroy();
+            mObserver.updateNotificationsForTab();
+            mObserver.observe(null);
             mObserver = null;
         }
     }
 
-    @VisibleForTesting
-    public void simulateRendererKilledForTesting(boolean wasOomProtected) {
-        if (mObserver != null) mObserver.renderProcessGone(wasOomProtected);
+    public void simulateRendererKilledForTesting() {
+        if (mObserver != null) {
+            mObserver.primaryMainFrameRenderProcessGone(TerminationStatus.PROCESS_WAS_KILLED);
+        }
+    }
+
+    public @Nullable WebContentsObserver getWebContentsObserverForTesting() {
+        return mObserver;
+    }
+
+    private void showSadTab(SadTab sadTab) {
+        sadTab.show(
+                TabImpl.getThemedApplicationContext(),
+                /* suggestionAction= */ () -> {
+                    Activity activity = mTab.getWindowAndroidChecked().getActivity().get();
+                    assert activity != null;
+                    HelpAndFeedbackLauncherImpl.getForProfile(mTab.getProfile())
+                            .show(
+                                    activity,
+                                    activity.getString(R.string.help_context_sad_tab),
+                                    null);
+                },
+
+                /* buttonAction= */ () -> {
+                    if (sadTab.showSendFeedbackView()) {
+                        Activity activity = TabUtils.getActivity(mTab);
+                        if (activity != null) {
+                            HelpAndFeedbackLauncherImpl.getForProfile(mTab.getProfile())
+                                    .showHelpAndFeedbackForUrl(
+                                            activity,
+                                            mTab.getUrl().getSpec(),
+                                            "MobileSadTabFeedback");
+                        }
+                    } else {
+                        mTab.reload();
+                    }
+                });
     }
 
     private class Observer extends WebContentsObserver {
@@ -157,11 +169,19 @@ public class TabWebContentsObserver extends TabWebContentsUserData {
         }
 
         @Override
-        public void renderProcessGone(boolean processWasOomProtected) {
-            Log.i(TAG,
-                    "renderProcessGone() for tab id: " + mTab.getId()
-                            + ", oom protected: " + Boolean.toString(processWasOomProtected)
-                            + ", already needs reload: " + Boolean.toString(mTab.needsReload()));
+        public void primaryMainFrameRenderProcessGone(@TerminationStatus int terminationStatus) {
+            // If the renderer process was destroyed due to the tab being destroyed, don't try to
+            // handle this or treat it as a tab crash.
+            if (mTab.isDestroyed()) return;
+
+            Log.i(
+                    TAG,
+                    "primaryMainFrameRenderProcessGone() for tab id: "
+                            + mTab.getId()
+                            + ", already needs reload: "
+                            + Boolean.toString(mTab.needsReload())
+                            + ", termination status: "
+                            + Integer.toString(terminationStatus));
             // Do nothing for subsequent calls that happen while the tab remains crashed. This
             // can occur when the tab is in the background and it shares the renderer with other
             // tabs. After the renderer crashes, the WebContents of its tabs are still around
@@ -171,103 +191,79 @@ public class TabWebContentsObserver extends TabWebContentsUserData {
             // potential background tabs that did not reload yet).
             if (mTab.needsReload() || SadTab.isShowing(mTab)) return;
 
-            // This will replace TabRendererCrashStatus if numbers line up.
-            int appState = ApplicationStatus.getStateForApplication();
-            boolean applicationRunning = (appState == ApplicationState.HAS_RUNNING_ACTIVITIES);
-            boolean applicationPaused = (appState == ApplicationState.HAS_PAUSED_ACTIVITIES);
-            @TabRendererExitStatus
-            int rendererExitStatus;
-            if (processWasOomProtected) {
-                if (applicationRunning) {
-                    rendererExitStatus = TabRendererExitStatus.OOM_PROTECTED_IN_RUNNING_APP;
-                } else if (applicationPaused) {
-                    rendererExitStatus = TabRendererExitStatus.OOM_PROTECTED_IN_PAUSED_APP;
-                } else {
-                    rendererExitStatus = TabRendererExitStatus.OOM_PROTECTED_IN_BACKGROUND_APP;
-                }
-            } else {
-                if (applicationRunning) {
-                    rendererExitStatus = TabRendererExitStatus.NOT_PROTECTED_IN_RUNNING_APP;
-                } else if (applicationPaused) {
-                    rendererExitStatus = TabRendererExitStatus.NOT_PROTECTED_IN_PAUSED_APP;
-                } else {
-                    rendererExitStatus = TabRendererExitStatus.NOT_PROTECTED_IN_BACKGROUND_APP;
-                }
+            // If the renderer crashes for a native page, it can be ignored as we never show that
+            // content. The URL check is done in addition to the isNativePage to ensure a navigation
+            // off the native page did not result in the crash.
+            if (mTab.isNativePage()
+                    && (assumeNonNull(mTab.getNativePage()).getUrl().equals(mTab.getUrl().getSpec())
+                            || NativePage.isNativePageUrl(
+                                    mTab.getUrl(),
+                                    mTab.isIncognito(),
+                                    PdfUtils.shouldOpenPdfInline(mTab.isIncognito())
+                                            && PdfUtils.isDownloadedPdf(
+                                                    mTab.getUrl().getSpec())))) {
+                return;
             }
-            RecordHistogram.recordEnumeratedHistogram("Tab.RendererExitStatus", rendererExitStatus,
-                    TabRendererExitStatus.NUM_ENTRIES);
 
-            int activityState = ApplicationStatus.getStateForActivity(
-                    mTab.getWindowAndroid().getActivity().get());
-            int rendererCrashStatus = TAB_RENDERER_CRASH_STATUS_MAX;
-            if (mTab.isHidden() || activityState == ActivityState.PAUSED
+            int activityState =
+                    ApplicationStatus.getStateForActivity(
+                            mTab.getWindowAndroidChecked().getActivity().get());
+            if (mTab.isHidden()
+                    || activityState == ActivityState.PAUSED
                     || activityState == ActivityState.STOPPED
                     || activityState == ActivityState.DESTROYED) {
                 // The tab crashed in background or was killed by the OS out-of-memory killer.
                 mTab.setNeedsReload();
-                if (applicationRunning) {
-                    rendererCrashStatus = TAB_RENDERER_CRASH_STATUS_HIDDEN_IN_FOREGROUND_APP;
-                } else {
-                    rendererCrashStatus = TAB_RENDERER_CRASH_STATUS_HIDDEN_IN_BACKGROUND_APP;
-                }
             } else {
-                rendererCrashStatus = TAB_RENDERER_CRASH_STATUS_SHOWN_IN_FOREGROUND_APP;
-                // TODO(crbug.com/1074078): Remove the Handler and call SadTab directly when
+                // TODO(crbug.com/40127852): Remove the PostTask and call SadTab directly when
                 // WebContentsObserverProxy observers' iterator concurrency issue is fixed.
                 // Showing the SadTab will cause the content view hosting WebContents to lose focus.
                 // Post the show in order to avoid immediately triggering
                 // {@link WebContentsObserver#onWebContentsLostFocus}. This will ensure all
                 // observers in {@link WebContentsObserverProxy} receive callbacks for
-                // {@link WebContentsObserver#renderProcessGone} first.
+                // {@link WebContentsObserver#primaryMainFrameRenderProcessGone} first.
                 SadTab sadTab = SadTab.from(mTab);
-                (new Handler()).post(() -> {
-                    sadTab.show(mTab.getThemedApplicationContext(),
-                            /* suggestionAction= */ () -> {
-                                Activity activity = mTab.getWindowAndroid().getActivity().get();
-                                assert activity != null;
-                                HelpAndFeedbackLauncherImpl.getInstance().show(activity,
-                                        activity.getString(R.string.help_context_sad_tab),
-                                        Profile.fromWebContents(mTab.getWebContents()), null);
-                            },
-
-                            /* buttonAction= */ () -> {
-                                if (sadTab.showSendFeedbackView()) {
-                                    mTab.getActivity().startHelpAndFeedback(mTab.getUrl().getSpec(),
-                                            "MobileSadTabFeedback",
-                                            Profile.fromWebContents(mTab.getWebContents()));
-                                } else {
-                                    mTab.reload();
-                                }
-                            });
-                });
+                PostTask.postTask(TaskTraits.UI_DEFAULT, () -> showSadTab(sadTab));
                 // This is necessary to correlate histogram data with stability counts.
                 RecordHistogram.recordBooleanHistogram("Stability.Android.RendererCrash", true);
             }
-            RecordHistogram.recordEnumeratedHistogram(
-                    "Tab.RendererCrashStatus", rendererCrashStatus, TAB_RENDERER_CRASH_STATUS_MAX);
 
             mTab.handleTabCrash();
         }
 
         @Override
-        public void didFinishLoad(GlobalRenderFrameHostId frameId, GURL url, boolean isKnownValid,
-                boolean isMainFrame, @LifecycleState int frameLifecycleState) {
+        public void didFinishLoadInPrimaryMainFrame(
+                Page page,
+                GlobalRenderFrameHostId frameId,
+                GURL url,
+                boolean isKnownValid,
+                @LifecycleState int frameLifecycleState) {
             assert isKnownValid;
             if (frameLifecycleState == LifecycleState.ACTIVE) {
                 if (mTab.getNativePage() != null) {
                     mTab.pushNativePageStateToNavigationEntry();
                 }
-                if (isMainFrame) mTab.didFinishPageLoad(url);
+                mTab.didFinishPageLoad(url);
             }
-            PolicyAuditor auditor = AppHooks.get().getPolicyAuditor();
-            auditor.notifyAuditEvent(ContextUtils.getApplicationContext(),
-                    AuditEvent.OPEN_URL_SUCCESS, url.getSpec(), "");
         }
 
         @Override
-        public void didFailLoad(boolean isMainFrame, int errorCode, GURL failingGurl,
+        public void documentLoadedInPrimaryMainFrame(
+                Page page, GlobalRenderFrameHostId rfhId, @LifecycleState int rfhLifecycleState) {
+            if (rfhLifecycleState == LifecycleState.ACTIVE) {
+                for (TabObserver observer : mTab.getTabObservers()) {
+                    observer.onDocumentLoadedInPrimaryMainFrame(mTab);
+                }
+            }
+        }
+
+        @Override
+        public void didFailLoad(
+                boolean isInPrimaryMainFrame,
+                int errorCode,
+                GURL failingGurl,
                 @LifecycleState int frameLifecycleState) {
-            if (frameLifecycleState == LifecycleState.ACTIVE && isMainFrame) {
+            if (isInPrimaryMainFrame) {
                 mTab.didFailPageLoad(errorCode);
             }
 
@@ -278,12 +274,20 @@ public class TabWebContentsObserver extends TabWebContentsUserData {
                 String failingUrl, String description, int errorCode) {
             assert description != null;
 
-            PolicyAuditor auditor = AppHooks.get().getPolicyAuditor();
-            auditor.notifyAuditEvent(ContextUtils.getApplicationContext(),
-                    AuditEvent.OPEN_URL_FAILURE, failingUrl, description);
-            if (errorCode == BLOCKED_BY_ADMINISTRATOR) {
-                auditor.notifyAuditEvent(ContextUtils.getApplicationContext(),
-                        AuditEvent.OPEN_URL_BLOCKED, failingUrl, "");
+            PolicyAuditor auditor = PolicyAuditor.maybeGetInstance();
+            if (auditor != null) {
+                auditor.notifyAuditEvent(
+                        ContextUtils.getApplicationContext(),
+                        AuditEvent.OPEN_URL_FAILURE,
+                        failingUrl,
+                        description);
+                if (errorCode == BLOCKED_BY_ADMINISTRATOR) {
+                    auditor.notifyAuditEvent(
+                            ContextUtils.getApplicationContext(),
+                            AuditEvent.OPEN_URL_BLOCKED,
+                            failingUrl,
+                            "");
+                }
             }
         }
 
@@ -293,58 +297,77 @@ public class TabWebContentsObserver extends TabWebContentsUserData {
         }
 
         @Override
-        public void didStartNavigation(NavigationHandle navigation) {
-            if (navigation.isInPrimaryMainFrame() && !navigation.isSameDocument()) {
+        public void didStartNavigationInPrimaryMainFrame(NavigationHandle navigation) {
+            if (!navigation.isSameDocument()) {
                 mTab.didStartPageLoad(navigation.getUrl());
+                mTab.setNavigationStartMs(navigation.getNavigationStartMs());
             }
 
-            RewindableIterator<TabObserver> observers = mTab.getTabObservers();
-            while (observers.hasNext()) {
-                observers.next().onDidStartNavigation(mTab, navigation);
+            for (TabObserver observer : mTab.getTabObservers()) {
+                observer.onDidStartNavigationInPrimaryMainFrame(mTab, navigation);
             }
         }
 
         @Override
         public void didRedirectNavigation(NavigationHandle navigation) {
-            RewindableIterator<TabObserver> observers = mTab.getTabObservers();
-            while (observers.hasNext()) {
-                observers.next().onDidRedirectNavigation(mTab, navigation);
+            for (TabObserver observer : mTab.getTabObservers()) {
+                observer.onDidRedirectNavigation(mTab, navigation);
             }
         }
 
         @Override
-        public void didFinishNavigation(NavigationHandle navigation) {
-            RewindableIterator<TabObserver> observers = mTab.getTabObservers();
+        public void didFinishNavigationInPrimaryMainFrame(NavigationHandle navigation) {
+            RewindableIterator<TabObserver> observers = mTab.getRewindableTabObservers();
             while (observers.hasNext()) {
-                observers.next().onDidFinishNavigation(mTab, navigation);
+                observers.next().onDidFinishNavigationInPrimaryMainFrame(mTab, navigation);
             }
 
             if (navigation.errorCode() != NetError.OK) {
-                if (navigation.isInPrimaryMainFrame()) mTab.didFailPageLoad(navigation.errorCode());
-
-                recordErrorInPolicyAuditor(navigation.getUrl().getSpec(),
-                        navigation.errorDescription(), navigation.errorCode());
+                mTab.didFailPageLoad(navigation.errorCode());
             }
             mLastUrl = navigation.getUrl();
 
-            if (!navigation.hasCommitted()) return;
+            if (!navigation.hasCommitted()) {
+                // A navigation that started but never committed (e.g. a same-document
+                // traversal cancelled from the Navigation API's 'navigate' event) must
+                // still tell observers the navigation is over. Otherwise
+                // LocationBarModel's same-document debounce stays latched and silently
+                // drops later URL and security state updates.
+                observers.rewind();
+                while (observers.hasNext()) {
+                    observers.next().onDidFinishNavigationEnd();
+                }
+                return;
+            }
 
-            if (navigation.isInPrimaryMainFrame()) {
-                mTab.setIsTabStateDirty(true);
-                mTab.updateTitle();
-                mTab.handleDidFinishNavigation(navigation.getUrl(), navigation.pageTransition());
-                mTab.setIsShowingErrorPage(navigation.isErrorPage());
+            mTab.updateTitle();
+            mTab.handleDidFinishNavigation(
+                    navigation.getUrl(),
+                    navigation.pageTransition(),
+                    navigation.isPdf(),
+                    navigation.isRendererInitiated(),
+                    navigation.getInitiatorOrigin());
+            mTab.setIsShowingErrorPage(navigation.isErrorPage());
 
+            // TODO(crbug.com/40264745) remove this call. onUrlUpdated should have been called
+            // by NotifyNavigationStateChanged, which is always called before didFinishNavigation
+            if (!ChromeFeatureList.sSkipDuplicateOnUrlUpdated.isEnabled()) {
                 observers.rewind();
                 while (observers.hasNext()) {
                     observers.next().onUrlUpdated(mTab);
                 }
             }
 
-            if (navigation.isInPrimaryMainFrame()) {
-                // Stop swipe-to-refresh animation.
-                SwipeRefreshHandler handler = SwipeRefreshHandler.get(mTab);
-                if (handler != null) handler.didStopRefreshing();
+            // Stop swipe-to-refresh animation.
+            SwipeRefreshHandler handler = SwipeRefreshHandler.get(mTab);
+            if (handler != null) handler.didStopRefreshing();
+
+            // TODO(crbug.com/40264745) add this here to clear LocationBarModel's cache for
+            // being in a same site navigation. Remove this call when the onUrlUpdated call
+            // above is removed.
+            observers.rewind();
+            while (observers.hasNext()) {
+                observers.next().onDidFinishNavigationEnd();
             }
         }
 
@@ -356,15 +379,28 @@ public class TabWebContentsObserver extends TabWebContentsUserData {
 
         @Override
         public void didFirstVisuallyNonEmptyPaint() {
-            RewindableIterator<TabObserver> observers = mTab.getTabObservers();
-            while (observers.hasNext()) {
-                observers.next().didFirstVisuallyNonEmptyPaint(mTab);
+            mTab.notifyDidFirstVisuallyNonEmptyPaint();
+            for (TabObserver observer : mTab.getTabObservers()) {
+                observer.didFirstVisuallyNonEmptyPaint(mTab);
             }
         }
 
         @Override
         public void didChangeThemeColor() {
-            mTab.updateThemeColor(mTab.getWebContents().getThemeColor());
+            mTab.updateThemeColor(assumeNonNull(mTab.getWebContents()).getThemeColor());
+        }
+
+        @Override
+        public void didChangeVisibleSecurityState() {
+            if (!mTab.isThemingAllowed()) {
+                mTab.updateThemeColor(assumeNonNull(mTab.getWebContents()).getThemeColor());
+            }
+        }
+
+        @Override
+        public void onBackgroundColorChanged() {
+            mTab.changeWebContentBackgroundColor(
+                    assumeNonNull(mTab.getWebContents()).getBackgroundColor());
         }
 
         @Override
@@ -373,20 +409,53 @@ public class TabWebContentsObserver extends TabWebContentsUserData {
         }
 
         @Override
-        public void navigationEntriesChanged() {
-            mTab.setIsTabStateDirty(true);
-        }
-
-        @Override
         public void viewportFitChanged(@WebContentsObserver.ViewportFitType int value) {
             DisplayCutoutTabHelper.from(mTab).setViewportFit(value);
+            DisplayCutoutTabHelper.from(mTab).setSafeAreaConstraint(value == ViewportFit.CONTAIN);
         }
 
         @Override
-        public void destroy() {
+        public void safeAreaConstraintChanged(boolean hasConstraint) {
+            DisplayCutoutTabHelper.from(mTab).setSafeAreaConstraint(hasConstraint);
+        }
+
+        @Override
+        public void virtualKeyboardModeChanged(@VirtualKeyboardMode.EnumType int mode) {
+            for (TabObserver observer : mTab.getTabObservers()) {
+                observer.onVirtualKeyboardModeChanged(mTab, mode);
+            }
+        }
+
+        @Override
+        public void webContentsDestroyed() {
+            updateNotificationsForTab();
+        }
+
+        void updateNotificationsForTab() {
+            assumeNonNull(mLastUrl);
             MediaCaptureNotificationServiceImpl.updateMediaNotificationForTab(
                     ContextUtils.getApplicationContext(), mTab.getId(), null, mLastUrl);
-            super.destroy();
+            BluetoothNotificationManager.updateBluetoothNotificationForTab(
+                    ContextUtils.getApplicationContext(),
+                    BluetoothNotificationService.class,
+                    mTab.getId(),
+                    null,
+                    mLastUrl,
+                    mTab.isIncognito());
+            UsbNotificationManager.updateUsbNotificationForTab(
+                    ContextUtils.getApplicationContext(),
+                    UsbNotificationService.class,
+                    mTab.getId(),
+                    null,
+                    mLastUrl,
+                    mTab.isIncognito());
+            SerialNotificationManager.updateSerialNotificationForTab(
+                    ContextUtils.getApplicationContext(),
+                    SerialNotificationService.class,
+                    mTab.getId(),
+                    null,
+                    mLastUrl,
+                    mTab.isIncognito());
         }
     }
 }

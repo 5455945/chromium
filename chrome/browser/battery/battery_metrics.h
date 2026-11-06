@@ -1,12 +1,13 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_BATTERY_BATTERY_METRICS_H_
 #define CHROME_BROWSER_BATTERY_BATTERY_METRICS_H_
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
+#include <optional>
+
+#include "base/functional/callback_forward.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "build/build_config.h"
@@ -14,13 +15,16 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/device/public/mojom/battery_monitor.mojom.h"
 #include "services/device/public/mojom/battery_status.mojom-forward.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 // Records metrics around battery usage on all platforms. Connects to
 // Battery monitor via mojo.
 class BatteryMetrics {
  public:
   BatteryMetrics();
+
+  BatteryMetrics(const BatteryMetrics&) = delete;
+  BatteryMetrics& operator=(const BatteryMetrics&) = delete;
+
   ~BatteryMetrics();
 
   // Allows tests to override how this class binds a BatteryMonitor receiver.
@@ -45,7 +49,7 @@ class BatteryMetrics {
   // The battery level at the last time the battery level was recorded. This
   // value is updated by the amount of battery drop reported, so may be
   // different from the last update by .01.
-  absl::optional<float> last_recorded_battery_level_;
+  std::optional<float> last_recorded_battery_level_;
 
   // The battery monitor backend for the device Chrome is running on.
   mojo::Remote<device::mojom::BatteryMonitor> battery_monitor_;
@@ -53,8 +57,6 @@ class BatteryMetrics {
   SEQUENCE_CHECKER(sequence_checker_);
 
   base::WeakPtrFactory<BatteryMetrics> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(BatteryMetrics);
 };
 
 #endif  // CHROME_BROWSER_BATTERY_BATTERY_METRICS_H_

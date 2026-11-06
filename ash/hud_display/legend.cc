@@ -1,22 +1,28 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/hud_display/legend.h"
 
+#include <string_view>
+
 #include "ash/hud_display/graph.h"
 #include "ash/hud_display/hud_constants.h"
 #include "ash/hud_display/solid_source_background.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "cc/paint/paint_flags.h"
 #include "third_party/skia/include/core/SkBlendMode.h"
 #include "third_party/skia/include/core/SkPaint.h"
 #include "third_party/skia/include/core/SkPath.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/gfx/canvas.h"
+#include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/text_constants.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout.h"
+#include "ui/views/view_utils.h"
 
 namespace ash {
 namespace hud_display {
@@ -24,9 +30,9 @@ namespace hud_display {
 namespace {
 
 class LegendEntry : public views::View {
- public:
-  METADATA_HEADER(LegendEntry);
+  METADATA_HEADER(LegendEntry, views::View)
 
+ public:
   explicit LegendEntry(const Legend::Entry& data);
 
   LegendEntry(const LegendEntry&) = delete;
@@ -45,18 +51,18 @@ class LegendEntry : public views::View {
 
  private:
   const SkColor color_;
-  const Graph& graph_;
+  const raw_ref<const Graph> graph_;
   size_t value_index_ = 0;
   Legend::Formatter formatter_;
-  views::Label* value_ = nullptr;
+  raw_ptr<views::Label> value_ = nullptr;
 };
 
-BEGIN_METADATA(LegendEntry, views::View)
+BEGIN_METADATA(LegendEntry)
 END_METADATA
 
 LegendEntry::LegendEntry(const Legend::Entry& data)
-    : color_(data.graph.color()),
-      graph_(data.graph),
+    : color_(data.graph->color()),
+      graph_(*data.graph),
       formatter_(data.formatter) {
   views::BoxLayout* layout_manager =
       SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -68,23 +74,23 @@ LegendEntry::LegendEntry(const Legend::Entry& data)
   // edge size matching default views::Label height.  This is not known until
   // layout runs, so just hard code it.
   constexpr int kColorpickerAreaWidth = 20;
-  SetBorder(views::CreateEmptyBorder(0, kColorpickerAreaWidth, 0, 0));
+  SetBorder(views::CreateEmptyBorder(
+      gfx::Insets::TLBR(0, kColorpickerAreaWidth, 0, 0)));
 
   views::Label* label = AddChildView(
       std::make_unique<views::Label>(data.label, views::style::CONTEXT_LABEL));
   label->SetEnabledColor(kHUDDefaultColor);
   if (!data.tooltip.empty())
-    label->SetTooltipText(data.tooltip);
+    label->SetCustomTooltipText(data.tooltip);
 
   constexpr int kLabelToValueSpece = 5;
   value_ = AddChildView(std::make_unique<views::Label>(
       std::u16string(), views::style::CONTEXT_LABEL));
   layout_manager->SetFlexForView(value_, /*flex=*/1);
   value_->SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_RIGHT);
-  value_->SetBorder(views::CreateEmptyBorder(0, kLabelToValueSpece, 0, 0));
+  value_->SetBorder(
+      views::CreateEmptyBorder(gfx::Insets::TLBR(0, kLabelToValueSpece, 0, 0)));
   value_->SetEnabledColor(kHUDDefaultColor);
-
-  ALLOW_UNUSED_LOCAL(formatter_);
 }
 
 LegendEntry::~LegendEntry() = default;
@@ -93,33 +99,26 @@ void LegendEntry::OnPaint(gfx::Canvas* canvas) {
   // Draw 10x10 sold color rectangle in the middle of the left border.
   // (We used border to allocate space for the colorpicker above.)
   constexpr int kBoxSize = 10;
-  const gfx::Rect bounds(border()->GetInsets().left(), height());
+  const gfx::Rect bounds(GetInsets().left(), height());
 
   constexpr int kBoxBorderWidth = 1;
 
-  gfx::Rect box = bounds;
-  box.ClampToCenteredSize(gfx::Size(kBoxSize, kBoxSize));
-
-  const SkRect border =
-      SkRect::MakeXYWH(box.x(), box.y(), box.width(), box.height());
-
-  SkPath box_border;
-  box_border.addRect(border);
-
-  SkPath box_filled;
-  box_filled.addRect(border.makeInset(kBoxBorderWidth, kBoxBorderWidth));
+  gfx::Rect box_border = bounds;
+  box_border.ClampToCenteredSize(gfx::Size(kBoxSize, kBoxSize));
+  gfx::Rect box_filled = box_border;
+  box_filled.Inset(kBoxBorderWidth);
 
   cc::PaintFlags flags;
   flags.setAntiAlias(true);
   flags.setBlendMode(SkBlendMode::kSrc);
   flags.setStyle(cc::PaintFlags::kFill_Style);
   flags.setColor(color_);
-  canvas->DrawPath(box_filled, flags);
+  canvas->DrawRect(box_filled, flags);
 
   flags.setStyle(cc::PaintFlags::kStroke_Style);
   flags.setStrokeWidth(kBoxBorderWidth);
   flags.setColor(kHUDDefaultColor);
-  canvas->DrawPath(box_border, flags);
+  canvas->DrawRect(box_border, flags);
 
   views::View::OnPaint(canvas);
 }
@@ -133,8 +132,8 @@ void LegendEntry::SetValueIndex(size_t index) {
 }
 
 void LegendEntry::RefreshValue() {
-  if (graph_.IsFilledIndex(value_index_)) {
-    value_->SetText(formatter_.Run(graph_.GetUnscaledValueAt(value_index_)));
+  if (graph_->IsFilledIndex(value_index_)) {
+    value_->SetText(formatter_.Run(graph_->GetUnscaledValueAt(value_index_)));
   } else {
     value_->SetText(std::u16string());
   }
@@ -152,7 +151,7 @@ Legend::Entry::Entry(const Entry&) = default;
 
 Legend::Entry::~Entry() = default;
 
-BEGIN_METADATA(Legend, views::View)
+BEGIN_METADATA(Legend)
 END_METADATA
 
 Legend::Legend(const std::vector<Legend::Entry>& contents) {
@@ -165,7 +164,7 @@ Legend::Legend(const std::vector<Legend::Entry>& contents) {
   SetBackground(std::make_unique<SolidSourceBackground>(kHUDLegendBackground,
                                                         /*radius=*/0));
 
-  SetBorder(views::CreateEmptyBorder(gfx::Insets(kHUDInset)));
+  SetBorder(views::CreateEmptyBorder(kHUDInset));
 
   for (const auto& entry : contents)
     AddChildView(std::make_unique<LegendEntry>(entry));
@@ -173,45 +172,41 @@ Legend::Legend(const std::vector<Legend::Entry>& contents) {
 
 Legend::~Legend() = default;
 
-void Legend::Layout() {
-  views::View::Layout();
+void Legend::Layout(PassKey) {
+  LayoutSuperclass<views::View>(this);
 
   gfx::Size max_size;
   bool updated = false;
-  for (auto* view : children()) {
-    if (view->GetClassName() != LegendEntry::kViewClassName)
-      continue;
-
-    views::View* value = static_cast<LegendEntry*>(view)->value();
-    max_size.SetToMax(value->GetPreferredSize());
-    updated |= max_size != value->GetPreferredSize();
+  for (views::View* view : children()) {
+    if (auto* entry = views::AsViewClass<LegendEntry>(view)) {
+      views::View* value = entry->value();
+      max_size.SetToMax(value->GetPreferredSize());
+      updated |= max_size != value->GetPreferredSize();
+    }
   }
   if (updated) {
-    for (auto* view : children()) {
-      if (view->GetClassName() != LegendEntry::kViewClassName)
-        continue;
-
-      static_cast<LegendEntry*>(view)->value()->SetPreferredSize(max_size);
+    for (views::View* view : children()) {
+      if (auto* entry = views::AsViewClass<LegendEntry>(view)) {
+        entry->value()->SetPreferredSize(max_size);
+      }
     }
-    views::View::Layout();
+    LayoutSuperclass<views::View>(this);
   }
 }
 
 void Legend::SetValuesIndex(size_t index) {
-  for (auto* view : children()) {
-    if (view->GetClassName() != LegendEntry::kViewClassName)
-      continue;
-
-    static_cast<LegendEntry*>(view)->SetValueIndex(index);
+  for (views::View* view : children()) {
+    if (auto* entry = views::AsViewClass<LegendEntry>(view)) {
+      entry->SetValueIndex(index);
+    }
   }
 }
 
 void Legend::RefreshValues() {
-  for (auto* view : children()) {
-    if (view->GetClassName() != LegendEntry::kViewClassName)
-      continue;
-
-    static_cast<LegendEntry*>(view)->RefreshValue();
+  for (views::View* view : children()) {
+    if (auto* entry = views::AsViewClass<LegendEntry>(view)) {
+      entry->RefreshValue();
+    }
   }
 }
 

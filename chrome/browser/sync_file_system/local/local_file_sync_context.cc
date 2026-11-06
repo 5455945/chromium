@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,13 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/containers/contains.h"
+#include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
-#include "base/single_thread_task_runner.h"
-#include "base/task_runner_util.h"
+#include "base/observer_list.h"
+#include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/sync_file_system/file_change.h"
 #include "chrome/browser/sync_file_system/local/local_file_change_tracker.h"
 #include "chrome/browser/sync_file_system/local/local_origin_change_observer.h"
@@ -28,7 +28,10 @@
 #include "storage/browser/file_system/file_system_file_util.h"
 #include "storage/browser/file_system/file_system_operation_context.h"
 #include "storage/browser/file_system/file_system_operation_runner.h"
+#include "storage/browser/file_system/file_system_url.h"
+#include "storage/common/file_system/file_system_types.h"
 #include "storage/common/file_system/file_system_util.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "url/origin.h"
 
 using storage::FileSystemContext;
@@ -61,16 +64,18 @@ LocalFileSyncContext::LocalFileSyncContext(
       shutdown_on_ui_(false),
       shutdown_on_io_(false),
       mock_notify_changes_duration_in_sec_(-1) {
-  DCHECK(base_path.IsAbsolute());
-  DCHECK(ui_task_runner_->RunsTasksInCurrentSequence());
+  CHECK(base_path.IsAbsolute(), base::NotFatalUntil::M162);
+  CHECK(ui_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M162);
 }
 
 void LocalFileSyncContext::MaybeInitializeFileSystemContext(
     const GURL& source_url,
     FileSystemContext* file_system_context,
     SyncStatusCallback callback) {
-  DCHECK(ui_task_runner_->RunsTasksInCurrentSequence());
-  if (base::Contains(file_system_contexts_, file_system_context)) {
+  CHECK(ui_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M162);
+  if (file_system_contexts_.contains(file_system_context)) {
     // The context has been already initialized. Just dispatch the callback
     // with SYNC_STATUS_OK.
     ui_task_runner_->PostTask(
@@ -88,22 +93,25 @@ void LocalFileSyncContext::MaybeInitializeFileSystemContext(
   // for writable way (even when MaybeInitializeFileSystemContext is called
   // from read-only OpenFileSystem), so open the filesystem with
   // CREATE_IF_NONEXISTENT here.
-  storage::FileSystemBackend::OpenFileSystemCallback open_filesystem_callback =
+  storage::FileSystemBackend::ResolveURLCallback open_filesystem_callback =
       base::BindOnce(
           &LocalFileSyncContext::InitializeFileSystemContextOnIOThread, this,
           source_url, base::RetainedRef(file_system_context));
+  const blink::StorageKey storage_key =
+      blink::StorageKey::CreateFirstParty(url::Origin::Create(source_url));
   io_task_runner_->PostTask(
       FROM_HERE,
       base::BindOnce(&storage::SandboxFileSystemBackendDelegate::OpenFileSystem,
                      base::Unretained(file_system_context->sandbox_delegate()),
-                     url::Origin::Create(source_url),
+                     storage::BucketLocator::ForDefaultBucket(storage_key),
                      storage::kFileSystemTypeSyncable,
                      storage::OPEN_FILE_SYSTEM_CREATE_IF_NONEXISTENT,
                      std::move(open_filesystem_callback), GURL()));
 }
 
 void LocalFileSyncContext::ShutdownOnUIThread() {
-  DCHECK(ui_task_runner_->RunsTasksInCurrentSequence());
+  CHECK(ui_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M162);
   shutdown_on_ui_ = true;
   io_task_runner_->PostTask(
       FROM_HERE,
@@ -113,11 +121,12 @@ void LocalFileSyncContext::ShutdownOnUIThread() {
 void LocalFileSyncContext::GetFileForLocalSync(
     FileSystemContext* file_system_context,
     LocalFileSyncInfoCallback callback) {
-  DCHECK(file_system_context);
-  DCHECK(ui_task_runner_->RunsTasksInCurrentSequence());
+  CHECK(file_system_context, base::NotFatalUntil::M162);
+  CHECK(ui_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M162);
 
-  base::PostTaskAndReplyWithResult(
-      file_system_context->default_file_task_runner(), FROM_HERE,
+  file_system_context->default_file_task_runner()->PostTaskAndReplyWithResult(
+      FROM_HERE,
       base::BindOnce(&LocalFileSyncContext::GetNextURLsForSyncOnFileThread,
                      this, base::RetainedRef(file_system_context)),
       base::BindOnce(&LocalFileSyncContext::TryPrepareForLocalSync, this,
@@ -130,10 +139,11 @@ void LocalFileSyncContext::ClearChangesForURL(
     const FileSystemURL& url,
     base::OnceClosure done_callback) {
   // This is initially called on UI thread and to be relayed to FILE thread.
-  DCHECK(file_system_context);
+  CHECK(file_system_context, base::NotFatalUntil::M162);
   if (!file_system_context->default_file_task_runner()->
           RunsTasksInCurrentSequence()) {
-    DCHECK(ui_task_runner_->RunsTasksInCurrentSequence());
+    CHECK(ui_task_runner_->RunsTasksInCurrentSequence(),
+          base::NotFatalUntil::M162);
     file_system_context->default_file_task_runner()->PostTask(
         FROM_HERE, base::BindOnce(&LocalFileSyncContext::ClearChangesForURL,
                                   this, base::RetainedRef(file_system_context),
@@ -143,8 +153,8 @@ void LocalFileSyncContext::ClearChangesForURL(
 
   SyncFileSystemBackend* backend =
       SyncFileSystemBackend::GetBackend(file_system_context);
-  DCHECK(backend);
-  DCHECK(backend->change_tracker());
+  CHECK(backend, base::NotFatalUntil::M162);
+  CHECK(backend->change_tracker(), base::NotFatalUntil::M162);
   backend->change_tracker()->ClearChangesForURL(url);
 
   // Call the completion callback on UI thread.
@@ -156,8 +166,8 @@ void LocalFileSyncContext::FinalizeSnapshotSync(
     const storage::FileSystemURL& url,
     SyncStatusCode sync_finish_status,
     base::OnceClosure done_callback) {
-  DCHECK(file_system_context);
-  DCHECK(url.is_valid());
+  CHECK(file_system_context, base::NotFatalUntil::M162);
+  CHECK(url.is_valid(), base::NotFatalUntil::M162);
   if (!file_system_context->default_file_task_runner()->
           RunsTasksInCurrentSequence()) {
     file_system_context->default_file_task_runner()->PostTask(
@@ -170,8 +180,8 @@ void LocalFileSyncContext::FinalizeSnapshotSync(
 
   SyncFileSystemBackend* backend =
       SyncFileSystemBackend::GetBackend(file_system_context);
-  DCHECK(backend);
-  DCHECK(backend->change_tracker());
+  CHECK(backend, base::NotFatalUntil::M162);
+  CHECK(backend->change_tracker(), base::NotFatalUntil::M162);
 
   if (sync_finish_status == SYNC_STATUS_OK ||
       sync_finish_status == SYNC_STATUS_HAS_CONFLICT) {
@@ -198,7 +208,7 @@ void LocalFileSyncContext::FinalizeExclusiveSync(
     const storage::FileSystemURL& url,
     bool clear_local_changes,
     base::OnceClosure done_callback) {
-  DCHECK(file_system_context);
+  CHECK(file_system_context, base::NotFatalUntil::M162);
   if (!url.is_valid()) {
     std::move(done_callback).Run();
     return;
@@ -227,14 +237,16 @@ void LocalFileSyncContext::PrepareForSync(
     LocalFileSyncInfoCallback callback) {
   // This is initially called on UI thread and to be relayed to IO thread.
   if (!io_task_runner_->RunsTasksInCurrentSequence()) {
-    DCHECK(ui_task_runner_->RunsTasksInCurrentSequence());
+    CHECK(ui_task_runner_->RunsTasksInCurrentSequence(),
+          base::NotFatalUntil::M162);
     io_task_runner_->PostTask(
         FROM_HERE, base::BindOnce(&LocalFileSyncContext::PrepareForSync, this,
                                   base::RetainedRef(file_system_context), url,
                                   sync_mode, std::move(callback)));
     return;
   }
-  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
+  CHECK(io_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M162);
   const bool syncable = sync_status()->IsSyncable(url);
   // Disable writing if it's ready to be synced.
   if (syncable)
@@ -252,14 +264,16 @@ void LocalFileSyncContext::RegisterURLForWaitingSync(
     base::OnceClosure on_syncable_callback) {
   // This is initially called on UI thread and to be relayed to IO thread.
   if (!io_task_runner_->RunsTasksInCurrentSequence()) {
-    DCHECK(ui_task_runner_->RunsTasksInCurrentSequence());
+    CHECK(ui_task_runner_->RunsTasksInCurrentSequence(),
+          base::NotFatalUntil::M162);
     io_task_runner_->PostTask(
         FROM_HERE,
         base::BindOnce(&LocalFileSyncContext::RegisterURLForWaitingSync, this,
                        url, std::move(on_syncable_callback)));
     return;
   }
-  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
+  CHECK(io_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M162);
   if (shutdown_on_io_)
     return;
   if (sync_status()->IsSyncable(url)) {
@@ -278,7 +292,8 @@ void LocalFileSyncContext::ApplyRemoteChange(
     const FileSystemURL& url,
     SyncStatusCallback callback) {
   if (!io_task_runner_->RunsTasksInCurrentSequence()) {
-    DCHECK(ui_task_runner_->RunsTasksInCurrentSequence());
+    CHECK(ui_task_runner_->RunsTasksInCurrentSequence(),
+          base::NotFatalUntil::M162);
     io_task_runner_->PostTask(
         FROM_HERE,
         base::BindOnce(&LocalFileSyncContext::ApplyRemoteChange, this,
@@ -286,9 +301,10 @@ void LocalFileSyncContext::ApplyRemoteChange(
                        local_path, url, std::move(callback)));
     return;
   }
-  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
-  DCHECK(!sync_status()->IsWritable(url));
-  DCHECK(!sync_status()->IsWriting(url));
+  CHECK(io_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M162);
+  CHECK(!sync_status()->IsWritable(url), base::NotFatalUntil::M162);
+  CHECK(!sync_status()->IsWriting(url), base::NotFatalUntil::M162);
 
   FileSystemOperation::StatusCallback operation_callback;
   switch (change.change()) {
@@ -301,7 +317,6 @@ void LocalFileSyncContext::ApplyRemoteChange(
       return;
   }
   NOTREACHED();
-  std::move(callback).Run(SYNC_STATUS_FAILED);
 }
 
 void LocalFileSyncContext::HandleRemoteDelete(
@@ -313,7 +328,7 @@ void LocalFileSyncContext::HandleRemoteDelete(
 
   // Handle root directory case differently.
   if (storage::VirtualPath::IsRootPath(url.path())) {
-    DCHECK(!root_delete_helper_);
+    CHECK(!root_delete_helper_, base::NotFatalUntil::M162);
     root_delete_helper_ = std::make_unique<RootDeleteHelper>(
         file_system_context, sync_status(), url,
         base::BindOnce(&LocalFileSyncContext::DidApplyRemoteChange, this, url,
@@ -365,9 +380,10 @@ void LocalFileSyncContext::DidRemoveExistingEntryForRemoteAddOrUpdate(
     return;
   }
 
-  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
-  DCHECK(!sync_status()->IsWritable(url));
-  DCHECK(!sync_status()->IsWriting(url));
+  CHECK(io_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M162);
+  CHECK(!sync_status()->IsWritable(url), base::NotFatalUntil::M162);
+  CHECK(!sync_status()->IsWriting(url), base::NotFatalUntil::M162);
 
   FileSystemURL url_for_sync = CreateSyncableFileSystemURLForSync(
       file_system_context, url);
@@ -375,10 +391,11 @@ void LocalFileSyncContext::DidRemoveExistingEntryForRemoteAddOrUpdate(
       base::BindOnce(&LocalFileSyncContext::DidApplyRemoteChange, this, url,
                      std::move(callback));
 
-  DCHECK_EQ(FileChange::FILE_CHANGE_ADD_OR_UPDATE, change.change());
+  CHECK_EQ(FileChange::FILE_CHANGE_ADD_OR_UPDATE, change.change(),
+           base::NotFatalUntil::M162);
   switch (change.file_type()) {
     case SYNC_FILE_TYPE_FILE: {
-      DCHECK(!local_path.empty());
+      CHECK(!local_path.empty(), base::NotFatalUntil::M162);
       base::FilePath dir_path = storage::VirtualPath::DirName(url.path());
       if (dir_path.empty() ||
           storage::VirtualPath::DirName(dir_path) == dir_path) {
@@ -387,7 +404,7 @@ void LocalFileSyncContext::DidRemoveExistingEntryForRemoteAddOrUpdate(
             local_path, url_for_sync, std::move(operation_callback));
       } else {
         FileSystemURL dir_url = file_system_context->CreateCrackedFileSystemURL(
-            url_for_sync.origin(), url_for_sync.mount_type(),
+            url_for_sync.storage_key(), url_for_sync.mount_type(),
             storage::VirtualPath::DirName(url_for_sync.virtual_path()));
         file_system_context->operation_runner()->CreateDirectory(
             dir_url, false /* exclusive */, true /* recursive */,
@@ -413,10 +430,11 @@ void LocalFileSyncContext::RecordFakeLocalChange(
     const FileChange& change,
     SyncStatusCallback callback) {
   // This is called on UI thread and to be relayed to FILE thread.
-  DCHECK(file_system_context);
+  CHECK(file_system_context, base::NotFatalUntil::M162);
   if (!file_system_context->default_file_task_runner()->
           RunsTasksInCurrentSequence()) {
-    DCHECK(ui_task_runner_->RunsTasksInCurrentSequence());
+    CHECK(ui_task_runner_->RunsTasksInCurrentSequence(),
+          base::NotFatalUntil::M162);
     file_system_context->default_file_task_runner()->PostTask(
         FROM_HERE, base::BindOnce(&LocalFileSyncContext::RecordFakeLocalChange,
                                   this, base::RetainedRef(file_system_context),
@@ -426,8 +444,8 @@ void LocalFileSyncContext::RecordFakeLocalChange(
 
   SyncFileSystemBackend* backend =
       SyncFileSystemBackend::GetBackend(file_system_context);
-  DCHECK(backend);
-  DCHECK(backend->change_tracker());
+  CHECK(backend, base::NotFatalUntil::M162);
+  CHECK(backend->change_tracker(), base::NotFatalUntil::M162);
   backend->change_tracker()->MarkDirtyOnDatabase(url);
   backend->change_tracker()->RecordChange(url, change);
 
@@ -442,22 +460,24 @@ void LocalFileSyncContext::GetFileMetadata(
     SyncFileMetadataCallback callback) {
   // This is initially called on UI thread and to be relayed to IO thread.
   if (!io_task_runner_->RunsTasksInCurrentSequence()) {
-    DCHECK(ui_task_runner_->RunsTasksInCurrentSequence());
+    CHECK(ui_task_runner_->RunsTasksInCurrentSequence(),
+          base::NotFatalUntil::M162);
     io_task_runner_->PostTask(
         FROM_HERE, base::BindOnce(&LocalFileSyncContext::GetFileMetadata, this,
                                   base::RetainedRef(file_system_context), url,
                                   std::move(callback)));
     return;
   }
-  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
+  CHECK(io_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M162);
 
   FileSystemURL url_for_sync = CreateSyncableFileSystemURLForSync(
       file_system_context, url);
   file_system_context->operation_runner()->GetMetadata(
       url_for_sync,
-      FileSystemOperation::GET_METADATA_FIELD_IS_DIRECTORY |
-          FileSystemOperation::GET_METADATA_FIELD_SIZE |
-          FileSystemOperation::GET_METADATA_FIELD_LAST_MODIFIED,
+      {storage::FileSystemOperation::GetMetadataField::kIsDirectory,
+       storage::FileSystemOperation::GetMetadataField::kSize,
+       storage::FileSystemOperation::GetMetadataField::kLastModified},
       base::BindOnce(&LocalFileSyncContext::DidGetFileMetadata, this,
                      std::move(callback)));
 }
@@ -467,10 +487,11 @@ void LocalFileSyncContext::HasPendingLocalChanges(
     const FileSystemURL& url,
     HasPendingLocalChangeCallback callback) {
   // This gets called on UI thread and relays the task on FILE thread.
-  DCHECK(file_system_context);
+  CHECK(file_system_context, base::NotFatalUntil::M162);
   if (!file_system_context->default_file_task_runner()->
           RunsTasksInCurrentSequence()) {
-    DCHECK(ui_task_runner_->RunsTasksInCurrentSequence());
+    CHECK(ui_task_runner_->RunsTasksInCurrentSequence(),
+          base::NotFatalUntil::M162);
     file_system_context->default_file_task_runner()->PostTask(
         FROM_HERE, base::BindOnce(&LocalFileSyncContext::HasPendingLocalChanges,
                                   this, base::RetainedRef(file_system_context),
@@ -480,8 +501,8 @@ void LocalFileSyncContext::HasPendingLocalChanges(
 
   SyncFileSystemBackend* backend =
       SyncFileSystemBackend::GetBackend(file_system_context);
-  DCHECK(backend);
-  DCHECK(backend->change_tracker());
+  CHECK(backend, base::NotFatalUntil::M162);
+  CHECK(backend->change_tracker(), base::NotFatalUntil::M162);
   FileChangeList changes;
   backend->change_tracker()->GetChangesForURL(url, &changes);
 
@@ -496,10 +517,11 @@ void LocalFileSyncContext::PromoteDemotedChanges(
     storage::FileSystemContext* file_system_context,
     base::OnceClosure callback) {
   // This is initially called on UI thread and to be relayed to FILE thread.
-  DCHECK(file_system_context);
+  CHECK(file_system_context, base::NotFatalUntil::M162);
   if (!file_system_context->default_file_task_runner()->
           RunsTasksInCurrentSequence()) {
-    DCHECK(ui_task_runner_->RunsTasksInCurrentSequence());
+    CHECK(ui_task_runner_->RunsTasksInCurrentSequence(),
+          base::NotFatalUntil::M162);
     file_system_context->default_file_task_runner()->PostTask(
         FROM_HERE,
         base::BindOnce(&LocalFileSyncContext::PromoteDemotedChanges, this,
@@ -510,8 +532,8 @@ void LocalFileSyncContext::PromoteDemotedChanges(
 
   SyncFileSystemBackend* backend =
       SyncFileSystemBackend::GetBackend(file_system_context);
-  DCHECK(backend);
-  DCHECK(backend->change_tracker());
+  CHECK(backend, base::NotFatalUntil::M162);
+  CHECK(backend->change_tracker(), base::NotFatalUntil::M162);
   if (!backend->change_tracker()->PromoteDemotedChanges()) {
     ui_task_runner_->PostTask(FROM_HERE, std::move(callback));
     return;
@@ -524,7 +546,8 @@ void LocalFileSyncContext::PromoteDemotedChanges(
 
 void LocalFileSyncContext::UpdateChangesForOrigin(const GURL& origin,
                                                   base::OnceClosure callback) {
-  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
+  CHECK(io_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M162);
   if (shutdown_on_io_)
     return;
   origins_with_pending_changes_.insert(origin);
@@ -543,19 +566,22 @@ void LocalFileSyncContext::RemoveOriginChangeObserver(
 
 base::WeakPtr<SyncableFileOperationRunner>
 LocalFileSyncContext::operation_runner() const {
-  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
+  CHECK(io_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M162);
   if (operation_runner_)
     return operation_runner_->AsWeakPtr();
   return base::WeakPtr<SyncableFileOperationRunner>();
 }
 
 LocalFileSyncStatus* LocalFileSyncContext::sync_status() const {
-  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
+  CHECK(io_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M162);
   return sync_status_.get();
 }
 
 void LocalFileSyncContext::OnSyncEnabled(const FileSystemURL& url) {
-  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
+  CHECK(io_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M162);
   if (shutdown_on_io_)
     return;
   UpdateChangesForOrigin(url.origin().GetURL(), base::DoNothing());
@@ -568,16 +594,17 @@ void LocalFileSyncContext::OnSyncEnabled(const FileSystemURL& url) {
 }
 
 void LocalFileSyncContext::OnWriteEnabled(const FileSystemURL& url) {
-  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
+  CHECK(io_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M162);
   // Nothing to do for now.
 }
 
-LocalFileSyncContext::~LocalFileSyncContext() {
-}
+LocalFileSyncContext::~LocalFileSyncContext() = default;
 
 void LocalFileSyncContext::ScheduleNotifyChangesUpdatedOnIOThread(
     base::OnceClosure callback) {
-  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
+  CHECK(io_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M162);
   if (shutdown_on_io_)
     return;
   pending_completion_callbacks_.push_back(std::move(callback));
@@ -592,7 +619,8 @@ void LocalFileSyncContext::ScheduleNotifyChangesUpdatedOnIOThread(
 }
 
 void LocalFileSyncContext::NotifyAvailableChangesOnIOThread() {
-  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
+  CHECK(io_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M162);
   if (shutdown_on_io_)
     return;
 
@@ -617,7 +645,8 @@ void LocalFileSyncContext::NotifyAvailableChanges(
 }
 
 void LocalFileSyncContext::ShutdownOnIOThread() {
-  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
+  CHECK(io_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M162);
   shutdown_on_io_ = true;
   operation_runner_.reset();
   root_delete_helper_.reset();
@@ -631,7 +660,8 @@ void LocalFileSyncContext::InitializeFileSystemContextOnIOThread(
     const GURL& /* root */,
     const std::string& /* name */,
     base::File::Error error) {
-  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
+  CHECK(io_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M162);
   if (shutdown_on_io_)
     error = base::File::FILE_ERROR_ABORT;
   if (error != base::File::FILE_OK) {
@@ -639,18 +669,18 @@ void LocalFileSyncContext::InitializeFileSystemContextOnIOThread(
                   FileErrorToSyncStatusCode(error));
     return;
   }
-  DCHECK(file_system_context);
+  CHECK(file_system_context, base::NotFatalUntil::M162);
   SyncFileSystemBackend* backend =
       SyncFileSystemBackend::GetBackend(file_system_context);
-  DCHECK(backend);
+  CHECK(backend, base::NotFatalUntil::M162);
   if (!backend->change_tracker()) {
     // Create and initialize LocalFileChangeTracker and call back this method
     // later again.
     std::set<GURL>* origins_with_changes = new std::set<GURL>;
-    std::unique_ptr<LocalFileChangeTracker>* tracker_ptr(
-        new std::unique_ptr<LocalFileChangeTracker>);
-    base::PostTaskAndReplyWithResult(
-        file_system_context->default_file_task_runner(), FROM_HERE,
+    scoped_refptr<LocalFileChangeTracker>* tracker_ptr(
+        new scoped_refptr<LocalFileChangeTracker>);
+    file_system_context->default_file_task_runner()->PostTaskAndReplyWithResult(
+        FROM_HERE,
         base::BindOnce(
             &LocalFileSyncContext::InitializeChangeTrackerOnFileThread, this,
             tracker_ptr, base::RetainedRef(file_system_context),
@@ -663,8 +693,8 @@ void LocalFileSyncContext::InitializeFileSystemContextOnIOThread(
     return;
   }
   if (!operation_runner_) {
-    DCHECK(!sync_status_);
-    DCHECK(!timer_on_io_);
+    CHECK(!sync_status_, base::NotFatalUntil::M162);
+    CHECK(!timer_on_io_, base::NotFatalUntil::M162);
     sync_status_ = std::make_unique<LocalFileSyncStatus>();
     timer_on_io_ = std::make_unique<base::OneShotTimer>();
     operation_runner_ = std::make_unique<SyncableFileOperationRunner>(
@@ -677,13 +707,13 @@ void LocalFileSyncContext::InitializeFileSystemContextOnIOThread(
 }
 
 SyncStatusCode LocalFileSyncContext::InitializeChangeTrackerOnFileThread(
-    std::unique_ptr<LocalFileChangeTracker>* tracker_ptr,
+    scoped_refptr<LocalFileChangeTracker>* tracker_ptr,
     FileSystemContext* file_system_context,
     std::set<GURL>* origins_with_changes) {
-  DCHECK(file_system_context);
-  DCHECK(tracker_ptr);
-  DCHECK(origins_with_changes);
-  *tracker_ptr = std::make_unique<LocalFileChangeTracker>(
+  CHECK(file_system_context, base::NotFatalUntil::M162);
+  CHECK(tracker_ptr, base::NotFatalUntil::M162);
+  CHECK(origins_with_changes, base::NotFatalUntil::M162);
+  *tracker_ptr = base::MakeRefCounted<LocalFileChangeTracker>(
       file_system_context->partition_path(), env_override_,
       file_system_context->default_file_task_runner());
   const SyncStatusCode status = (*tracker_ptr)->Initialize(file_system_context);
@@ -705,14 +735,15 @@ SyncStatusCode LocalFileSyncContext::InitializeChangeTrackerOnFileThread(
 }
 
 void LocalFileSyncContext::DidInitializeChangeTrackerOnIOThread(
-    std::unique_ptr<LocalFileChangeTracker>* tracker_ptr,
+    scoped_refptr<LocalFileChangeTracker>* tracker_ptr,
     const GURL& source_url,
     FileSystemContext* file_system_context,
     std::set<GURL>* origins_with_changes,
     SyncStatusCode status) {
-  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
-  DCHECK(file_system_context);
-  DCHECK(origins_with_changes);
+  CHECK(io_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M162);
+  CHECK(file_system_context, base::NotFatalUntil::M162);
+  CHECK(origins_with_changes, base::NotFatalUntil::M162);
   if (shutdown_on_io_)
     status = SYNC_STATUS_ABORT;
   if (status != SYNC_STATUS_OK) {
@@ -722,7 +753,7 @@ void LocalFileSyncContext::DidInitializeChangeTrackerOnIOThread(
 
   SyncFileSystemBackend* backend =
       SyncFileSystemBackend::GetBackend(file_system_context);
-  DCHECK(backend);
+  CHECK(backend, base::NotFatalUntil::M162);
   backend->SetLocalFileChangeTracker(std::move(*tracker_ptr));
 
   origins_with_pending_changes_.insert(origins_with_changes->begin(),
@@ -745,14 +776,17 @@ void LocalFileSyncContext::DidInitialize(
                        base::RetainedRef(file_system_context), status));
     return;
   }
-  DCHECK(ui_task_runner_->RunsTasksInCurrentSequence());
-  DCHECK(!base::Contains(file_system_contexts_, file_system_context));
-  DCHECK(base::Contains(pending_initialize_callbacks_, file_system_context));
+  CHECK(ui_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M162);
+  CHECK(!file_system_contexts_.contains(file_system_context),
+        base::NotFatalUntil::M162);
+  CHECK(pending_initialize_callbacks_.contains(file_system_context),
+        base::NotFatalUntil::M162);
 
   SyncFileSystemBackend* backend =
       SyncFileSystemBackend::GetBackend(file_system_context);
-  DCHECK(backend);
-  DCHECK(backend->change_tracker());
+  CHECK(backend, base::NotFatalUntil::M162);
+  CHECK(backend->change_tracker(), base::NotFatalUntil::M162);
 
   file_system_contexts_.insert(file_system_context);
 
@@ -769,13 +803,14 @@ void LocalFileSyncContext::DidInitialize(
 std::unique_ptr<LocalFileSyncContext::FileSystemURLQueue>
 LocalFileSyncContext::GetNextURLsForSyncOnFileThread(
     FileSystemContext* file_system_context) {
-  DCHECK(file_system_context);
-  DCHECK(file_system_context->default_file_task_runner()->
-             RunsTasksInCurrentSequence());
+  CHECK(file_system_context, base::NotFatalUntil::M162);
+  CHECK(file_system_context->default_file_task_runner()
+            ->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M162);
   SyncFileSystemBackend* backend =
       SyncFileSystemBackend::GetBackend(file_system_context);
-  DCHECK(backend);
-  DCHECK(backend->change_tracker());
+  CHECK(backend, base::NotFatalUntil::M162);
+  CHECK(backend->change_tracker(), base::NotFatalUntil::M162);
   std::unique_ptr<FileSystemURLQueue> urls(new FileSystemURLQueue);
   backend->change_tracker()->GetNextChangedURLs(
       urls.get(), kMaxURLsToFetchForLocalSync);
@@ -790,8 +825,9 @@ void LocalFileSyncContext::TryPrepareForLocalSync(
     FileSystemContext* file_system_context,
     LocalFileSyncInfoCallback callback,
     std::unique_ptr<FileSystemURLQueue> urls) {
-  DCHECK(ui_task_runner_->RunsTasksInCurrentSequence());
-  DCHECK(urls);
+  CHECK(ui_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M162);
+  CHECK(urls, base::NotFatalUntil::M162);
 
   if (shutdown_on_ui_) {
     std::move(callback).Run(SYNC_STATUS_ABORT, LocalFileSyncInfo(),
@@ -822,7 +858,8 @@ void LocalFileSyncContext::DidTryPrepareForLocalSync(
     SyncStatusCode status,
     const LocalFileSyncInfo& sync_file_info,
     storage::ScopedFile snapshot) {
-  DCHECK(ui_task_runner_->RunsTasksInCurrentSequence());
+  CHECK(ui_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M162);
   if (status != SYNC_STATUS_FILE_BUSY) {
     PromoteDemotedChangesForURLs(file_system_context,
                                  std::move(remaining_urls));
@@ -840,10 +877,11 @@ void LocalFileSyncContext::DidTryPrepareForLocalSync(
 void LocalFileSyncContext::PromoteDemotedChangesForURL(
     FileSystemContext* file_system_context,
     const FileSystemURL& url) {
-  DCHECK(file_system_context);
+  CHECK(file_system_context, base::NotFatalUntil::M162);
   if (!file_system_context->default_file_task_runner()->
           RunsTasksInCurrentSequence()) {
-    DCHECK(ui_task_runner_->RunsTasksInCurrentSequence());
+    CHECK(ui_task_runner_->RunsTasksInCurrentSequence(),
+          base::NotFatalUntil::M162);
     if (shutdown_on_ui_)
       return;
     file_system_context->default_file_task_runner()->PostTask(
@@ -855,18 +893,19 @@ void LocalFileSyncContext::PromoteDemotedChangesForURL(
 
   SyncFileSystemBackend* backend =
       SyncFileSystemBackend::GetBackend(file_system_context);
-  DCHECK(backend);
-  DCHECK(backend->change_tracker());
+  CHECK(backend, base::NotFatalUntil::M162);
+  CHECK(backend->change_tracker(), base::NotFatalUntil::M162);
   backend->change_tracker()->PromoteDemotedChangesForURL(url);
 }
 
 void LocalFileSyncContext::PromoteDemotedChangesForURLs(
     FileSystemContext* file_system_context,
     std::unique_ptr<FileSystemURLQueue> urls) {
-  DCHECK(file_system_context);
+  CHECK(file_system_context, base::NotFatalUntil::M162);
   if (!file_system_context->default_file_task_runner()->
           RunsTasksInCurrentSequence()) {
-    DCHECK(ui_task_runner_->RunsTasksInCurrentSequence());
+    CHECK(ui_task_runner_->RunsTasksInCurrentSequence(),
+          base::NotFatalUntil::M162);
     if (shutdown_on_ui_)
       return;
     file_system_context->default_file_task_runner()->PostTask(
@@ -889,10 +928,11 @@ void LocalFileSyncContext::DidGetWritingStatusForSync(
     SyncMode sync_mode,
     LocalFileSyncInfoCallback callback) {
   // This gets called on UI thread and relays the task on FILE thread.
-  DCHECK(file_system_context);
+  CHECK(file_system_context, base::NotFatalUntil::M162);
   if (!file_system_context->default_file_task_runner()->
           RunsTasksInCurrentSequence()) {
-    DCHECK(ui_task_runner_->RunsTasksInCurrentSequence());
+    CHECK(ui_task_runner_->RunsTasksInCurrentSequence(),
+          base::NotFatalUntil::M162);
     if (shutdown_on_ui_) {
       std::move(callback).Run(SYNC_STATUS_ABORT, LocalFileSyncInfo(),
                               storage::ScopedFile());
@@ -908,8 +948,8 @@ void LocalFileSyncContext::DidGetWritingStatusForSync(
 
   SyncFileSystemBackend* backend =
       SyncFileSystemBackend::GetBackend(file_system_context);
-  DCHECK(backend);
-  DCHECK(backend->change_tracker());
+  CHECK(backend, base::NotFatalUntil::M162);
+  CHECK(backend->change_tracker(), base::NotFatalUntil::M162);
   FileChangeList changes;
   backend->change_tracker()->GetChangesForURL(url, &changes);
 
@@ -917,7 +957,7 @@ void LocalFileSyncContext::DidGetWritingStatusForSync(
   base::File::Info file_info;
   FileSystemFileUtil* file_util =
       file_system_context->sandbox_delegate()->sync_file_util();
-  DCHECK(file_util);
+  CHECK(file_util, base::NotFatalUntil::M162);
 
   base::File::Error file_error = file_util->GetFileInfo(
       std::make_unique<FileSystemOperationContext>(file_system_context).get(),
@@ -943,7 +983,7 @@ void LocalFileSyncContext::DidGetWritingStatusForSync(
     status = FileErrorToSyncStatusCode(file_error);
   }
 
-  DCHECK(!file_info.is_symbolic_link);
+  CHECK(!file_info.is_symbolic_link, base::NotFatalUntil::M162);
 
   SyncFileType file_type = SYNC_FILE_TYPE_FILE;
   if (file_error == base::File::FILE_ERROR_NOT_FOUND)
@@ -984,7 +1024,8 @@ void LocalFileSyncContext::DidGetWritingStatusForSync(
 void LocalFileSyncContext::ClearSyncFlagOnIOThread(
     const FileSystemURL& url,
     bool for_snapshot_sync) {
-  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
+  CHECK(io_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M162);
   if (shutdown_on_io_)
     return;
   sync_status()->EndSyncing(url);
@@ -1001,7 +1042,8 @@ void LocalFileSyncContext::ClearSyncFlagOnIOThread(
 
 void LocalFileSyncContext::FinalizeSnapshotSyncOnIOThread(
     const FileSystemURL& url) {
-  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
+  CHECK(io_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M162);
   if (shutdown_on_io_)
     return;
   sync_status()->EndWriting(url);
@@ -1014,7 +1056,8 @@ void LocalFileSyncContext::DidApplyRemoteChange(
     const FileSystemURL& url,
     SyncStatusCallback callback_on_ui,
     base::File::Error file_error) {
-  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
+  CHECK(io_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M162);
   root_delete_helper_.reset();
   ui_task_runner_->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback_on_ui),
@@ -1025,7 +1068,8 @@ void LocalFileSyncContext::DidGetFileMetadata(
     SyncFileMetadataCallback callback,
     base::File::Error file_error,
     const base::File::Info& file_info) {
-  DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
+  CHECK(io_task_runner_->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M162);
   SyncFileMetadata metadata;
   if (file_error == base::File::FILE_OK) {
     metadata.file_type = file_info.is_directory ?
@@ -1041,8 +1085,8 @@ void LocalFileSyncContext::DidGetFileMetadata(
 
 base::TimeDelta LocalFileSyncContext::NotifyChangesDuration() {
   if (mock_notify_changes_duration_in_sec_ >= 0)
-    return base::TimeDelta::FromSeconds(mock_notify_changes_duration_in_sec_);
-  return base::TimeDelta::FromSeconds(kNotifyChangesDurationInSec);
+    return base::Seconds(mock_notify_changes_duration_in_sec_);
+  return base::Seconds(kNotifyChangesDurationInSec);
 }
 
 void LocalFileSyncContext::DidCreateDirectoryForCopyIn(

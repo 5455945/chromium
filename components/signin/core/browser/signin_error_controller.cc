@@ -1,9 +1,10 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/signin/core/browser/signin_error_controller.h"
 
+#include "base/observer_list.h"
 #include "components/signin/public/base/signin_metrics.h"
 
 SigninErrorController::SigninErrorController(
@@ -13,7 +14,7 @@ SigninErrorController::SigninErrorController(
       identity_manager_(identity_manager),
       auth_error_(GoogleServiceAuthError::AuthErrorNone()) {
   DCHECK(identity_manager_);
-  scoped_identity_manager_observation_.Observe(identity_manager_);
+  scoped_identity_manager_observation_.Observe(identity_manager_.get());
 
   Update();
 }
@@ -55,8 +56,9 @@ void SigninErrorController::Update() {
     error_changed = true;
   }
 
-  if (!error_changed)
+  if (!error_changed) {
     return;
+  }
 
   if (auth_error_.state() == prev_error_state &&
       error_account_id_ == prev_account_id) {
@@ -65,8 +67,9 @@ void SigninErrorController::Update() {
   }
 
   signin_metrics::LogAuthError(auth_error_);
-  for (auto& observer : observer_list_)
+  for (auto& observer : observer_list_) {
     observer.OnErrorChanged();
+  }
 }
 
 bool SigninErrorController::UpdateSecondaryAccountErrors(
@@ -145,19 +148,21 @@ void SigninErrorController::OnEndBatchOfRefreshTokenStateChanges() {
 
 void SigninErrorController::OnErrorStateOfRefreshTokenUpdatedForAccount(
     const CoreAccountInfo& account_info,
-    const GoogleServiceAuthError& error) {
+    const GoogleServiceAuthError& error,
+    signin_metrics::SourceForRefreshTokenOperation token_operation_source) {
   Update();
 }
 
 void SigninErrorController::OnPrimaryAccountChanged(
     const signin::PrimaryAccountChangeEvent& event) {
-  if (event.GetEventTypeFor(signin::ConsentLevel::kSync) ==
+  if (event.GetEventTypeFor(signin::ConsentLevel::kSignin) ==
       signin::PrimaryAccountChangeEvent::Type::kNone) {
     return;
   }
   // Ignore updates to the primary account if not in PRIMARY_ACCOUNT mode.
-  if (account_mode_ != AccountMode::PRIMARY_ACCOUNT)
+  if (account_mode_ != AccountMode::PRIMARY_ACCOUNT) {
     return;
+  }
 
   Update();
 }

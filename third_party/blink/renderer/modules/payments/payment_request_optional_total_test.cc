@@ -1,19 +1,18 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "third_party/blink/renderer/modules/payments/payment_request.h"
-
-#include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/mojom/payments/payment_request.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_testing.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/event_type_names.h"
+#include "third_party/blink/renderer/modules/payments/payment_request.h"
 #include "third_party/blink/renderer/modules/payments/payment_test_helper.h"
 #include "third_party/blink/renderer/platform/bindings/exception_code.h"
-#include "third_party/blink/renderer/platform/heap/heap_allocator.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/testing/testing_platform_support.h"
 
 namespace blink {
@@ -22,26 +21,15 @@ namespace {
 class MockPaymentProvider : public payments::mojom::blink::PaymentRequest {
  public:
   // mojom::PaymentRequest
-#if defined(OS_ANDROID)
   void Init(
       mojo::PendingRemote<payments::mojom::blink::PaymentRequestClient> client,
-      WTF::Vector<payments::mojom::blink::PaymentMethodDataPtr> method_data,
-      payments::mojom::blink::PaymentDetailsPtr details,
-      payments::mojom::blink::PaymentOptionsPtr options,
-      bool google_pay_bridge_eligible) override {
-    details_ = std::move(details);
-  }
-#else
-  void Init(
-      mojo::PendingRemote<payments::mojom::blink::PaymentRequestClient> client,
-      WTF::Vector<payments::mojom::blink::PaymentMethodDataPtr> method_data,
+      Vector<payments::mojom::blink::PaymentMethodDataPtr> method_data,
       payments::mojom::blink::PaymentDetailsPtr details,
       payments::mojom::blink::PaymentOptionsPtr options) override {
     details_ = std::move(details);
   }
-#endif
 
-  void Show(bool is_user_gesture, bool wait_for_updated_details) override {
+  void Show(bool wait_for_updated_details, bool had_user_activation) override {
     NOTREACHED();
   }
   void Retry(
@@ -82,6 +70,7 @@ class PaymentRequestOptionalTotalTest : public testing::Test {
     payment_provider_ = std::make_unique<MockPaymentProvider>();
   }
 
+  test::TaskEnvironment task_environment_;
   std::unique_ptr<MockPaymentProvider> payment_provider_;
   ScopedTestingPlatformSupport<TestingPlatformSupport> platform_;
 };

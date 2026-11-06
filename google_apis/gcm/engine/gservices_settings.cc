@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,8 @@
 
 #include <stdint.h>
 
-#include "base/bind.h"
 #include "base/command_line.h"
-#include "base/cxx17_backports.h"
+#include "base/functional/bind.h"
 #include "base/hash/sha1.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
@@ -178,12 +177,11 @@ namespace gcm {
 
 // static
 const base::TimeDelta GServicesSettings::MinimumCheckinInterval() {
-  return base::TimeDelta::FromSeconds(kMinimumCheckinInterval);
+  return base::Seconds(kMinimumCheckinInterval);
 }
 
 // static
 std::string GServicesSettings::CalculateDigest(const SettingsMap& settings) {
-  unsigned char hash[base::kSHA1Length];
   std::string data;
   for (SettingsMap::const_iterator iter = settings.begin();
        iter != settings.end();
@@ -193,11 +191,8 @@ std::string GServicesSettings::CalculateDigest(const SettingsMap& settings) {
     data += iter->second;
     data += '\0';
   }
-  base::SHA1HashBytes(
-      reinterpret_cast<const unsigned char*>(&data[0]), data.size(), hash);
-  std::string digest =
-      kDigestVersionPrefix + base::HexEncode(hash, base::kSHA1Length);
-  digest = base::ToLowerASCII(digest);
+  std::string digest = kDigestVersionPrefix;
+  digest += base::HexEncodeLower(base::SHA1Hash(base::as_byte_span(data)));
   return digest;
 }
 
@@ -231,7 +226,7 @@ bool GServicesSettings::UpdateFromCheckinResponse(
     if (settings_diff && base::StartsWith(name, kDeleteSettingPrefix,
                                           base::CompareCase::SENSITIVE)) {
       std::string setting_to_delete =
-          name.substr(base::size(kDeleteSettingPrefix) - 1);
+          name.substr(std::size(kDeleteSettingPrefix) - 1);
       new_settings.erase(setting_to_delete);
       DVLOG(1) << "Setting deleted: " << setting_to_delete;
     } else {
@@ -279,7 +274,7 @@ base::TimeDelta GServicesSettings::GetCheckinInterval() const {
   if (checkin_interval < kMinimumCheckinInterval)
     checkin_interval = kMinimumCheckinInterval;
 
-  return base::TimeDelta::FromSeconds(checkin_interval);
+  return base::Seconds(checkin_interval);
 }
 
 GURL GServicesSettings::GetCheckinURL() const {

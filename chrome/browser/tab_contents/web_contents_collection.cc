@@ -1,10 +1,11 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/tab_contents/web_contents_collection.h"
 
 #include "base/check.h"
+#include "base/memory/raw_ptr.h"
 #include "content/public/browser/web_contents_observer.h"
 
 class WebContentsCollection::ForwardingWebContentsObserver
@@ -24,22 +25,27 @@ class WebContentsCollection::ForwardingWebContentsObserver
     collection_->WebContentsDestroyed(web_contents());
   }
 
-  void RenderProcessGone(base::TerminationStatus status) override {
+  void PrimaryMainFrameRenderProcessGone(
+      base::TerminationStatus status) override {
     observer_->RenderProcessGone(web_contents(), status);
   }
 
-  void NavigationEntryCommitted(
-      const content::LoadCommittedDetails& load_details) override {
-    observer_->NavigationEntryCommitted(web_contents(), load_details);
+  void DidFinishNavigation(
+      content::NavigationHandle* navigation_handle) override {
+    observer_->DidFinishNavigation(web_contents(), navigation_handle);
+  }
+
+  void DidStartLoading() override {
+    observer_->DidStartLoading(web_contents());
   }
 
   // The observer that callbacks should forward to, annotating the
   // web contents they were fired in.
-  WebContentsCollection::Observer* observer_;
+  raw_ptr<WebContentsCollection::Observer> observer_;
 
   // The collection this observer belongs to, needed to cleanup observer
   // lifetime.
-  WebContentsCollection* collection_;
+  raw_ptr<WebContentsCollection> collection_;
 };
 
 WebContentsCollection::WebContentsCollection(
@@ -56,7 +62,7 @@ void WebContentsCollection::StartObserving(content::WebContents* web_contents) {
   auto emplace_result = web_contents_observers_.emplace(
       web_contents, std::make_unique<ForwardingWebContentsObserver>(
                         web_contents, observer_, this));
-  DCHECK(emplace_result.second);
+  CHECK(emplace_result.second, base::NotFatalUntil::M162);
 }
 
 void WebContentsCollection::StopObserving(content::WebContents* web_contents) {

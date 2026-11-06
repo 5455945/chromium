@@ -1,20 +1,23 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <stddef.h>
 #include <stdint.h>
+
 #include <algorithm>
+#include <iomanip>
 #include <ostream>
 #include <string>
 #include <utility>
 
+#include "base/containers/span.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/bindings/tests/bindings_test_base.h"
-#include "mojo/public/interfaces/bindings/tests/sample_service.mojom.h"
+#include "mojo/public/interfaces/bindings/tests/sample_service.test-mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace mojo {
@@ -53,8 +56,9 @@ FooPtr MakeFoo() {
   }
 
   std::vector<uint8_t> data(10);
-  for (size_t i = 0; i < data.size(); ++i)
+  for (size_t i = 0; i < data.size(); ++i) {
     data[i] = static_cast<uint8_t>(data.size() - i);
+  }
 
   std::vector<mojo::ScopedDataPipeConsumerHandle> input_streams(2);
   std::vector<mojo::ScopedDataPipeProducerHandle> output_streams(2);
@@ -74,8 +78,9 @@ FooPtr MakeFoo() {
   std::vector<std::vector<bool>> array_of_array_of_bools(2);
   for (size_t i = 0; i < 2; ++i) {
     std::vector<bool> array_of_bools(2);
-    for (size_t j = 0; j < 2; ++j)
+    for (size_t j = 0; j < 2; ++j) {
       array_of_bools[j] = j;
+    }
     array_of_array_of_bools[i] = std::move(array_of_bools);
   }
 
@@ -84,7 +89,7 @@ FooPtr MakeFoo() {
                   std::move(extra_bars), std::move(data),
                   std::move(pipe.handle1), std::move(input_streams),
                   std::move(output_streams), std::move(array_of_array_of_bools),
-                  absl::nullopt, absl::nullopt);
+                  std::nullopt, std::nullopt);
 }
 
 // Check that the given |Foo| is identical to the one made by |MakeFoo()|.
@@ -140,8 +145,9 @@ void CheckFoo(const Foo& foo) {
 }
 
 void PrintSpacer(int depth) {
-  for (int i = 0; i < depth; ++i)
+  for (int i = 0; i < depth; ++i) {
     std::cout << "   ";
+  }
 }
 
 void Print(int depth, const char* name, bool value) {
@@ -201,11 +207,12 @@ void Print(int depth, const char* name, const std::vector<T>& array) {
 template <typename T>
 void Print(int depth,
            const char* name,
-           const absl::optional<std::vector<T>>& array) {
-  if (array)
+           const std::optional<std::vector<T>>& array) {
+  if (array) {
     Print(depth, name, *array);
-  else
+  } else {
     Print(depth, name, std::vector<T>());
+  }
 }
 
 void Print(int depth, const char* name, const FooPtr& foo) {
@@ -230,20 +237,22 @@ void Print(int depth, const char* name, const FooPtr& foo) {
   }
 }
 
-void DumpHex(const uint8_t* bytes, size_t num_bytes) {
-  for (size_t i = 0; i < num_bytes; ++i) {
+void DumpHex(base::span<const uint8_t> bytes) {
+  for (size_t i = 0; i < bytes.size(); ++i) {
     std::cout << std::setw(2) << std::setfill('0') << std::hex
-              << uint32_t(bytes[i]);
+              << static_cast<uint32_t>(bytes[i]);
 
     if (i % 16 == 15) {
       std::cout << std::endl;
       continue;
     }
 
-    if (i % 2 == 1)
+    if (i % 2 == 1) {
       std::cout << " ";
-    if (i % 8 == 7)
+    }
+    if (i % 8 == 7) {
       std::cout << " ";
+    }
   }
 }
 
@@ -257,8 +266,9 @@ class ServiceImpl : public Service {
 
     // We mainly check that we're given the expected arguments.
     EXPECT_FALSE(foo.is_null());
-    if (!foo.is_null())
+    if (!foo.is_null()) {
       CheckFoo(*foo);
+    }
     EXPECT_EQ(BazOptions::EXTRA, baz);
 
     mojo::Remote<Port> port(std::move(pending_port));
@@ -284,14 +294,11 @@ class ServiceProxyImpl : public ServiceProxy {
 
 class SimpleMessageReceiver : public mojo::MessageReceiverWithResponder {
  public:
-  bool PrefersSerializedMessages() override { return true; }
-
   bool Accept(mojo::Message* message) override {
     // Imagine some IPC happened here.
 
     if (g_dump_message_as_hex) {
-      DumpHex(reinterpret_cast<const uint8_t*>(message->data()),
-              message->data_num_bytes());
+      DumpHex(message->data_as_span());
     }
 
     // In the receiving process, an implementation of ServiceStub is known to
@@ -312,7 +319,7 @@ class SimpleMessageReceiver : public mojo::MessageReceiverWithResponder {
 
 using BindingsSampleTest = mojo::BindingsTestBase;
 
-TEST_P(BindingsSampleTest, Basic) {
+TEST_F(BindingsSampleTest, Basic) {
   SimpleMessageReceiver receiver;
 
   // User has a proxy to a Service somehow.
@@ -333,7 +340,7 @@ TEST_P(BindingsSampleTest, Basic) {
   delete service;
 }
 
-TEST_P(BindingsSampleTest, DefaultValues) {
+TEST_F(BindingsSampleTest, DefaultValues) {
   DefaultsTestPtr defaults(DefaultsTest::New());
   EXPECT_EQ(-12, defaults->a0);
   EXPECT_EQ(kTwelve, defaults->a1);
@@ -364,8 +371,6 @@ TEST_P(BindingsSampleTest, DefaultValues) {
   EXPECT_EQ(0x123456789, defaults->a24);
   EXPECT_EQ(-0x123456789, defaults->a25);
 }
-
-INSTANTIATE_MOJO_BINDINGS_TEST_SUITE_P(BindingsSampleTest);
 
 }  // namespace
 }  // namespace sample

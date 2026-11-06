@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,14 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #include <initializer_list>
 #include <type_traits>
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "components/zucchini/buffer_view.h"
 
 namespace zucchini {
@@ -32,17 +35,18 @@ class BufferSource : public ConstBufferView {
 
   using ConstBufferView::ConstBufferView;
   BufferSource() = default;
-  explicit BufferSource(ConstBufferView buffer);
+  explicit BufferSource(const ConstBufferView& buffer);
+
+  // Constructs view into |buffer| starting at |offset| (truncated if size
+  // exceeded).
+  BufferSource(const ConstBufferView& buffer, size_type offset);
+
   BufferSource(const BufferSource&) = default;
   BufferSource& operator=(BufferSource&&) = default;
 
-  // Moves the cursor forward by |n| bytes, or to the end if data is exhausted.
-  // Returns a reference to *this, to allow chaining, e.g.:
-  //   if (!buffer_source.Skip(1024).GetValue<uint32_t>(&value)) {
-  //      ... // Handle error.
-  //   }
-  // Notice that Skip() defers error handling to GetValue().
-  BufferSource& Skip(size_type n);
+  // Advances the cursor by |n| bytes and returns true if there are enough bytes
+  // remaining. Otherwise moves cursor to end and returns false.
+  bool Skip(size_type n);
 
   // Returns true if |value| matches data starting at the cursor when
   // reinterpreted as the integral type |T|.
@@ -51,9 +55,12 @@ class BufferSource : public ConstBufferView {
     static_assert(std::is_integral<T>::value,
                   "Value type must be an integral type");
     DCHECK_NE(begin(), nullptr);
-    if (Remaining() < sizeof(T))
+    if (Remaining() < sizeof(T)) {
       return false;
-    return value == *reinterpret_cast<const T*>(begin());
+    }
+    T next_value = {};
+    UNSAFE_TODO(::memcpy(&next_value, begin(), sizeof(T)));
+    return value == next_value;
   }
 
   // Returns true if the next bytes.size() bytes at the cursor match those in
@@ -73,9 +80,10 @@ class BufferSource : public ConstBufferView {
                   "Value type must be a standard layout type");
 
     DCHECK_NE(begin(), nullptr);
-    if (Remaining() < sizeof(T))
+    if (Remaining() < sizeof(T)) {
       return false;
-    *value = *reinterpret_cast<const T*>(begin());
+    }
+    UNSAFE_TODO(::memcpy(value, begin(), sizeof(T)));
     remove_prefix(sizeof(T));
     return true;
   }
@@ -88,29 +96,37 @@ class BufferSource : public ConstBufferView {
   const T* GetPointer() {
     static_assert(std::is_standard_layout<T>::value,
                   "Value type must be a standard layout type");
+    // Ensures unaligned data access is allowed.
+    static_assert(alignof(T) == 1, "Value type requires byte alignment");
 
     DCHECK_NE(begin(), nullptr);
-    if (Remaining() < sizeof(T))
+    if (Remaining() < sizeof(T)) {
       return nullptr;
+    }
     const T* ptr = reinterpret_cast<const T*>(begin());
     remove_prefix(sizeof(T));
     return ptr;
   }
 
   // Tries to reinterpret data as an array of type |T| with |count| elements,
-  // starting at the cursor, and to return a reinterpreted pointer of type |T|
-  // pointing into the underlying data, while advancing the cursor beyond the
-  // array. Returns nullptr if insufficient data is available.
+  // starting at the cursor, and to return a span of type |T| pointing into the
+  // underlying data, while advancing the cursor beyond the array. Returns an
+  // empty span if insufficient data is available.
   template <class T>
-  const T* GetArray(size_t count) {
+  base::span<const T> GetArray(size_t count) {
     static_assert(std::is_standard_layout<T>::value,
                   "Value type must be a standard layout type");
+    // Ensures unaligned data access is allowed. Currently this is not used
+    // with POD types. If the need arises, then more work will be needed (e.g.,
+    // create a POD wrapper template to force unaligned data access).
+    static_assert(alignof(T) == 1, "Value type requires byte alignment");
 
-    if (Remaining() / sizeof(T) < count)
-      return nullptr;
-    const T* array = reinterpret_cast<const T*>(begin());
-    remove_prefix(count * sizeof(T));
-    return array;
+    if (Remaining() / sizeof(T) < count) {
+      return {};
+    }
+    auto bytes = as_span().first(count * sizeof(T));
+    remove_prefix(bytes.size());
+    return base::subtle::reinterpret_span<const T>(bytes);
   }
 
   // If sufficient data is available, assigns |buffer| to point to a region of

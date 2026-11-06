@@ -1,15 +1,14 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/mojo/mojom/video_frame_metadata_mojom_traits.h"
 
-#include "base/callback_helpers.h"
-#include "base/macros.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ref_counted.h"
 #include "base/test/task_environment.h"
 #include "build/build_config.h"
-#include "media/mojo/mojom/traits_test_service.mojom.h"
+#include "media/mojo/mojom/traits_test_service.test-mojom.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -24,6 +23,11 @@ class VideoFrameMetadataStructTraitsTest
       public mojom::VideoFrameMetadataTraitsTestService {
  public:
   VideoFrameMetadataStructTraitsTest() = default;
+
+  VideoFrameMetadataStructTraitsTest(
+      const VideoFrameMetadataStructTraitsTest&) = delete;
+  VideoFrameMetadataStructTraitsTest& operator=(
+      const VideoFrameMetadataStructTraitsTest&) = delete;
 
  protected:
   mojo::Remote<mojom::VideoFrameMetadataTraitsTestService>
@@ -48,8 +52,6 @@ class VideoFrameMetadataStructTraitsTest
 
   base::test::TaskEnvironment task_environment_;
   mojo::ReceiverSet<VideoFrameMetadataTraitsTestService> traits_test_receivers_;
-
-  DISALLOW_COPY_AND_ASSIGN(VideoFrameMetadataStructTraitsTest);
 };
 
 }  // namespace
@@ -60,21 +62,17 @@ TEST_F(VideoFrameMetadataStructTraitsTest, EmptyMetadata) {
 
   ASSERT_TRUE(RoundTrip(metadata_in, &metadata_out));
 
-  EXPECT_FALSE(metadata_out.capture_counter.has_value());
-  EXPECT_FALSE(metadata_out.capture_update_rect.has_value());
+  EXPECT_EQ(metadata_out.capture, media::CaptureMetadata());
   EXPECT_FALSE(metadata_out.transformation.has_value());
-  EXPECT_FALSE(metadata_out.allow_overlay);
-  EXPECT_FALSE(metadata_out.copy_mode.has_value());
   EXPECT_FALSE(metadata_out.end_of_stream);
-  EXPECT_FALSE(metadata_out.texture_owner);
+  EXPECT_FALSE(metadata_out.in_surface_view);
   EXPECT_FALSE(metadata_out.wants_promotion_hint);
   EXPECT_FALSE(metadata_out.protected_video);
   EXPECT_FALSE(metadata_out.hw_protected);
-  EXPECT_FALSE(metadata_out.hw_protected_validation_id);
   EXPECT_FALSE(metadata_out.power_efficient);
   EXPECT_FALSE(metadata_out.read_lock_fences_enabled);
   EXPECT_FALSE(metadata_out.interactive_content);
-  EXPECT_FALSE(metadata_out.overlay_plane_id.has_value());
+  EXPECT_FALSE(metadata_out.tracking_token.has_value());
   EXPECT_FALSE(metadata_out.device_scale_factor.has_value());
   EXPECT_FALSE(metadata_out.page_scale_factor.has_value());
   EXPECT_FALSE(metadata_out.root_scroll_offset_x.has_value());
@@ -91,6 +89,12 @@ TEST_F(VideoFrameMetadataStructTraitsTest, EmptyMetadata) {
   EXPECT_FALSE(metadata_out.processing_time.has_value());
   EXPECT_FALSE(metadata_out.frame_duration.has_value());
   EXPECT_FALSE(metadata_out.wallclock_frame_duration.has_value());
+  EXPECT_FALSE(metadata_out.frame_sequence.has_value());
+  EXPECT_FALSE(metadata_out.source_id.has_value());
+  EXPECT_FALSE(metadata_out.background_blur.has_value());
+#if BUILDFLAG(IS_ANDROID)
+  EXPECT_FALSE(metadata_out.ycbcr_info.has_value());
+#endif
 }
 
 TEST_F(VideoFrameMetadataStructTraitsTest, ValidMetadata) {
@@ -99,22 +103,28 @@ TEST_F(VideoFrameMetadataStructTraitsTest, ValidMetadata) {
   VideoFrameMetadata metadata_in;
 
   // ints
-  metadata_in.capture_counter = 123;
-  metadata_in.hw_protected_validation_id = 456;
+  metadata_in.frame_sequence = 456;
+  metadata_in.source_id = 789;
 
-  // gfx::Rects
-  metadata_in.capture_update_rect = gfx::Rect(12, 34, 360, 480);
+  // CaptureMetadata
+  metadata_in.capture.counter = 123;
+  metadata_in.capture.update_rect = gfx::Rect(12, 34, 360, 480);
+  metadata_in.capture.source_size = gfx::Size(720, 960);
+  metadata_in.capture.region_capture_rect = gfx::Rect(56, 78, 180, 240);
+
+  base::Token token1(0x12345678, 0x9abcdef0);
+  base::Token token2(0xfedcba98, 0x76543210);
+  metadata_in.capture.region_capture_bounds =
+      base::flat_map<base::Token, gfx::Rect>{
+          {token1, gfx::Rect(10, 20, 100, 200)},
+          {token2, gfx::Rect(30, 40, 300, 400)}};
 
   // VideoTransformation
   metadata_in.transformation = VideoTransformation(VIDEO_ROTATION_90, true);
 
-  // VideoFrameMetadata::CopyMode
-  metadata_in.copy_mode = VideoFrameMetadata::CopyMode::kCopyToNewTexture;
-
   // bools
-  metadata_in.allow_overlay = true;
   metadata_in.end_of_stream = true;
-  metadata_in.texture_owner = true;
+  metadata_in.in_surface_view = true;
   metadata_in.wants_promotion_hint = true;
   metadata_in.protected_video = true;
   metadata_in.hw_protected = true;
@@ -123,7 +133,7 @@ TEST_F(VideoFrameMetadataStructTraitsTest, ValidMetadata) {
   metadata_in.interactive_content = true;
 
   // base::UnguessableTokens
-  metadata_in.overlay_plane_id = base::UnguessableToken::Create();
+  metadata_in.tracking_token = base::UnguessableToken::Create();
 
   // doubles
   metadata_in.device_scale_factor = 2.0;
@@ -136,40 +146,47 @@ TEST_F(VideoFrameMetadataStructTraitsTest, ValidMetadata) {
 
   // base::TimeTicks
   base::TimeTicks now = base::TimeTicks::Now();
-  metadata_in.receive_time = now + base::TimeDelta::FromMilliseconds(10);
-  metadata_in.capture_begin_time = now + base::TimeDelta::FromMilliseconds(20);
-  metadata_in.capture_end_time = now + base::TimeDelta::FromMilliseconds(30);
-  metadata_in.decode_begin_time = now + base::TimeDelta::FromMilliseconds(40);
-  metadata_in.decode_end_time = now + base::TimeDelta::FromMilliseconds(50);
-  metadata_in.reference_time = now + base::TimeDelta::FromMilliseconds(60);
+  metadata_in.receive_time = now + base::Milliseconds(10);
+  metadata_in.capture_begin_time = now + base::Milliseconds(20);
+  metadata_in.capture_end_time = now + base::Milliseconds(30);
+  metadata_in.decode_begin_time = now + base::Milliseconds(40);
+  metadata_in.decode_end_time = now + base::Milliseconds(50);
+  metadata_in.reference_time = now + base::Milliseconds(60);
 
   // base::TimeDeltas
-  metadata_in.processing_time = base::TimeDelta::FromMilliseconds(500);
-  metadata_in.frame_duration = base::TimeDelta::FromMilliseconds(16);
-  metadata_in.wallclock_frame_duration = base::TimeDelta::FromMilliseconds(17);
+  metadata_in.processing_time = base::Milliseconds(500);
+  metadata_in.frame_duration = base::Milliseconds(16);
+  metadata_in.wallclock_frame_duration = base::Milliseconds(17);
+
+  metadata_in.background_blur = media::EffectInfo{.enabled = true};
+
+#if BUILDFLAG(IS_ANDROID)
+  metadata_in.ycbcr_info = gpu::VulkanYCbCrInfo(
+      /*image_format=*/0, /*external_format=*/2, /*suggested_ycbcr_model=*/3,
+      /*suggested_ycbcr_range=*/1, /*suggested_xchroma_offset=*/0,
+      /*suggested_ychroma_offset=*/1, /*format_features=*/7);
+#endif
+
+  metadata_in.capture.version =
+      media::CaptureVersion(/*source=*/123, /*sub_capture=*/456);
 
   VideoFrameMetadata metadata_out;
 
   ASSERT_TRUE(RoundTrip(metadata_in, &metadata_out));
 
-  EXPECT_EQ(metadata_in.capture_counter, metadata_out.capture_counter);
-  EXPECT_EQ(metadata_in.capture_update_rect, metadata_out.capture_update_rect);
+  EXPECT_EQ(metadata_in.capture, metadata_out.capture);
   EXPECT_EQ(metadata_in.transformation, metadata_out.transformation);
-  EXPECT_EQ(metadata_in.allow_overlay, metadata_out.allow_overlay);
-  EXPECT_EQ(metadata_in.copy_mode, metadata_out.copy_mode);
   EXPECT_EQ(metadata_in.end_of_stream, metadata_out.end_of_stream);
-  EXPECT_EQ(metadata_in.texture_owner, metadata_out.texture_owner);
+  EXPECT_EQ(metadata_in.in_surface_view, metadata_out.in_surface_view);
   EXPECT_EQ(metadata_in.wants_promotion_hint,
             metadata_out.wants_promotion_hint);
   EXPECT_EQ(metadata_in.protected_video, metadata_out.protected_video);
   EXPECT_EQ(metadata_in.hw_protected, metadata_out.hw_protected);
-  EXPECT_EQ(metadata_in.hw_protected_validation_id,
-            metadata_out.hw_protected_validation_id);
   EXPECT_EQ(metadata_in.power_efficient, metadata_out.power_efficient);
   EXPECT_EQ(metadata_in.read_lock_fences_enabled,
             metadata_out.read_lock_fences_enabled);
   EXPECT_EQ(metadata_in.interactive_content, metadata_out.interactive_content);
-  EXPECT_EQ(metadata_in.overlay_plane_id, metadata_out.overlay_plane_id);
+  EXPECT_EQ(metadata_in.tracking_token, metadata_out.tracking_token);
   EXPECT_EQ(metadata_in.device_scale_factor, metadata_out.device_scale_factor);
   EXPECT_EQ(metadata_in.page_scale_factor, metadata_out.page_scale_factor);
   EXPECT_EQ(metadata_in.root_scroll_offset_x,
@@ -190,6 +207,27 @@ TEST_F(VideoFrameMetadataStructTraitsTest, ValidMetadata) {
   EXPECT_EQ(metadata_in.frame_duration, metadata_out.frame_duration);
   EXPECT_EQ(metadata_in.wallclock_frame_duration,
             metadata_out.wallclock_frame_duration);
+  EXPECT_EQ(metadata_in.frame_sequence, metadata_out.frame_sequence);
+  EXPECT_EQ(metadata_in.source_id, metadata_out.source_id);
+  EXPECT_EQ(metadata_in.background_blur->enabled,
+            metadata_out.background_blur->enabled);
+#if BUILDFLAG(IS_ANDROID)
+  ASSERT_TRUE(metadata_out.ycbcr_info.has_value());
+  EXPECT_EQ(metadata_in.ycbcr_info->image_format,
+            metadata_out.ycbcr_info->image_format);
+  EXPECT_EQ(metadata_in.ycbcr_info->external_format,
+            metadata_out.ycbcr_info->external_format);
+  EXPECT_EQ(metadata_in.ycbcr_info->suggested_ycbcr_model,
+            metadata_out.ycbcr_info->suggested_ycbcr_model);
+  EXPECT_EQ(metadata_in.ycbcr_info->suggested_ycbcr_range,
+            metadata_out.ycbcr_info->suggested_ycbcr_range);
+  EXPECT_EQ(metadata_in.ycbcr_info->suggested_xchroma_offset,
+            metadata_out.ycbcr_info->suggested_xchroma_offset);
+  EXPECT_EQ(metadata_in.ycbcr_info->suggested_ychroma_offset,
+            metadata_out.ycbcr_info->suggested_ychroma_offset);
+  EXPECT_EQ(metadata_in.ycbcr_info->format_features,
+            metadata_out.ycbcr_info->format_features);
+#endif
 }
 
 }  // namespace media

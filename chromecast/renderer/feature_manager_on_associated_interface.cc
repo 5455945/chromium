@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,66 +15,29 @@
 namespace chromecast {
 FeatureManagerOnAssociatedInterface::FeatureManagerOnAssociatedInterface(
     content::RenderFrame* render_frame)
-    : content::RenderFrameObserver(render_frame), configured_(false) {
-  registry_.AddInterface(base::BindRepeating(
-      &FeatureManagerOnAssociatedInterface::OnFeatureManagerAssociatedRequest,
-      base::Unretained(this)));
-}
+    : FeatureManager(render_frame) {}
 
 FeatureManagerOnAssociatedInterface::~FeatureManagerOnAssociatedInterface() {}
 
-bool FeatureManagerOnAssociatedInterface::OnAssociatedInterfaceRequestForFrame(
-    const std::string& interface_name,
-    mojo::ScopedInterfaceEndpointHandle* handle) {
-  return registry_.TryBindInterface(interface_name, handle);
-}
+void FeatureManagerOnAssociatedInterface::ConfigureFeaturesInternal() {
+  FeatureManager::ConfigureFeaturesInternal();
 
-void FeatureManagerOnAssociatedInterface::OnDestruct() {
-  delete this;
-}
-
-void FeatureManagerOnAssociatedInterface::ConfigureFeatures(
-    std::vector<chromecast::shell::mojom::FeaturePtr> features) {
-  if (configured_)
-    return;
-  configured_ = true;
-  for (auto& feature : features) {
-    // If we want to add enabled/disabled status to FeaturePtr, we can overlap
-    // previous setting via [] operator
-    features_map_[feature->name] = std::move(feature);
-  }
-
-  if (FeatureEnabled(feature::kEnableTrackAppRendererFeatureUse)) {
+  if (FeatureEnabled(feature::kEnableTrackControlAppRendererFeatureUse)) {
     std::string app_id("MissingAppId");
-    auto& feature = GetFeature(feature::kEnableTrackAppRendererFeatureUse);
-    std::string* app_id_received = feature->config.FindStringPath("app_id");
+    auto& feature =
+        GetFeature(feature::kEnableTrackControlAppRendererFeatureUse);
+    const std::string* app_id_received =
+        feature->config.FindString(feature::kKeyAppId);
     if (app_id_received) {
       app_id = *app_id_received;
     } else {
       LOG(ERROR) << __func__ << " failed to receive valid app_id";
     }
+    bool allow_insecure_content = true;
     // Lifetime is tied to |render_frame| via content::RenderFrameObserver.
-    new CastContentSettingsClient(render_frame(), app_id);
+    new CastContentSettingsClient(render_frame(), app_id,
+                                  allow_insecure_content);
   }
-}
-
-void FeatureManagerOnAssociatedInterface::OnFeatureManagerAssociatedRequest(
-    mojo::PendingAssociatedReceiver<shell::mojom::FeatureManager>
-        pending_receiver) {
-  receivers_.Add(this, std::move(pending_receiver));
-}
-
-bool FeatureManagerOnAssociatedInterface::FeatureEnabled(
-    const std::string& feature) const {
-  return features_map_.find(feature) != features_map_.end();
-}
-
-const chromecast::shell::mojom::FeaturePtr&
-FeatureManagerOnAssociatedInterface::GetFeature(
-    const std::string& feature) const {
-  auto itor = features_map_.find(feature);
-  DCHECK(itor != features_map_.end());
-  return itor->second;
 }
 
 }  // namespace chromecast

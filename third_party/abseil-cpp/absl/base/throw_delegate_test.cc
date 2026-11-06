@@ -12,28 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "absl/base/internal/throw_delegate.h"
+#include "absl/base/throw_delegate.h"
 
 #include <functional>
 #include <new>
 #include <stdexcept>
+#include <string>
 
-#include "absl/base/config.h"
 #include "gtest/gtest.h"
+#include "absl/base/config.h"
 
 namespace {
 
-using absl::base_internal::ThrowStdLogicError;
-using absl::base_internal::ThrowStdInvalidArgument;
-using absl::base_internal::ThrowStdDomainError;
-using absl::base_internal::ThrowStdLengthError;
-using absl::base_internal::ThrowStdOutOfRange;
-using absl::base_internal::ThrowStdRuntimeError;
-using absl::base_internal::ThrowStdRangeError;
-using absl::base_internal::ThrowStdOverflowError;
-using absl::base_internal::ThrowStdUnderflowError;
-using absl::base_internal::ThrowStdBadFunctionCall;
-using absl::base_internal::ThrowStdBadAlloc;
+using absl::ThrowStdBadAlloc;
+using absl::ThrowStdBadArrayNewLength;
+using absl::ThrowStdBadFunctionCall;
+using absl::ThrowStdDomainError;
+using absl::ThrowStdInvalidArgument;
+using absl::ThrowStdLengthError;
+using absl::ThrowStdLogicError;
+using absl::ThrowStdOutOfRange;
+using absl::ThrowStdOverflowError;
+using absl::ThrowStdRangeError;
+using absl::ThrowStdRuntimeError;
+using absl::ThrowStdUnderflowError;
 
 constexpr const char* what_arg = "The quick brown fox jumps over the lazy dog";
 
@@ -78,30 +80,88 @@ void ExpectThrowNoWhat(void (*f)()) {
 #endif
 }
 
-TEST(ThrowHelper, Test) {
-  // Not using EXPECT_THROW because we want to check the .what() message too.
+TEST(ThrowDelegate, ThrowStdLogicErrorChar) {
   ExpectThrowChar<std::logic_error>(ThrowStdLogicError);
+}
+
+TEST(ThrowDelegate, ThrowStdInvalidArgumentChar) {
   ExpectThrowChar<std::invalid_argument>(ThrowStdInvalidArgument);
+}
+
+TEST(ThrowDelegate, ThrowStdDomainErrorChar) {
   ExpectThrowChar<std::domain_error>(ThrowStdDomainError);
+}
+
+TEST(ThrowDelegate, ThrowStdLengthErrorChar) {
   ExpectThrowChar<std::length_error>(ThrowStdLengthError);
+}
+
+TEST(ThrowDelegate, ThrowStdOutOfRangeChar) {
   ExpectThrowChar<std::out_of_range>(ThrowStdOutOfRange);
+}
+
+TEST(ThrowDelegate, ThrowStdRuntimeErrorChar) {
   ExpectThrowChar<std::runtime_error>(ThrowStdRuntimeError);
+}
+
+TEST(ThrowDelegate, ThrowStdRangeErrorChar) {
   ExpectThrowChar<std::range_error>(ThrowStdRangeError);
+}
+
+TEST(ThrowDelegate, ThrowStdOverflowErrorChar) {
   ExpectThrowChar<std::overflow_error>(ThrowStdOverflowError);
+}
+
+TEST(ThrowDelegate, ThrowStdUnderflowErrorChar) {
   ExpectThrowChar<std::underflow_error>(ThrowStdUnderflowError);
+}
 
+TEST(ThrowDelegate, ThrowStdLogicErrorString) {
   ExpectThrowString<std::logic_error>(ThrowStdLogicError);
-  ExpectThrowString<std::invalid_argument>(ThrowStdInvalidArgument);
-  ExpectThrowString<std::domain_error>(ThrowStdDomainError);
-  ExpectThrowString<std::length_error>(ThrowStdLengthError);
-  ExpectThrowString<std::out_of_range>(ThrowStdOutOfRange);
-  ExpectThrowString<std::runtime_error>(ThrowStdRuntimeError);
-  ExpectThrowString<std::range_error>(ThrowStdRangeError);
-  ExpectThrowString<std::overflow_error>(ThrowStdOverflowError);
-  ExpectThrowString<std::underflow_error>(ThrowStdUnderflowError);
+}
 
+TEST(ThrowDelegate, ThrowStdInvalidArgumentString) {
+  ExpectThrowString<std::invalid_argument>(ThrowStdInvalidArgument);
+}
+
+TEST(ThrowDelegate, ThrowStdDomainErrorString) {
+  ExpectThrowString<std::domain_error>(ThrowStdDomainError);
+}
+
+TEST(ThrowDelegate, ThrowStdLengthErrorString) {
+  ExpectThrowString<std::length_error>(ThrowStdLengthError);
+}
+
+TEST(ThrowDelegate, ThrowStdOutOfRangeString) {
+  ExpectThrowString<std::out_of_range>(ThrowStdOutOfRange);
+}
+
+TEST(ThrowDelegate, ThrowStdRuntimeErrorString) {
+  ExpectThrowString<std::runtime_error>(ThrowStdRuntimeError);
+}
+
+TEST(ThrowDelegate, ThrowStdRangeErrorString) {
+  ExpectThrowString<std::range_error>(ThrowStdRangeError);
+}
+
+TEST(ThrowDelegate, ThrowStdOverflowErrorString) {
+  ExpectThrowString<std::overflow_error>(ThrowStdOverflowError);
+}
+
+TEST(ThrowDelegate, ThrowStdUnderflowErrorString) {
+  ExpectThrowString<std::underflow_error>(ThrowStdUnderflowError);
+}
+
+TEST(ThrowDelegate, ThrowStdBadFunctionCallNoWhat) {
   ExpectThrowNoWhat<std::bad_function_call>(ThrowStdBadFunctionCall);
+}
+
+TEST(ThrowDelegate, ThrowStdBadAllocNoWhat) {
   ExpectThrowNoWhat<std::bad_alloc>(ThrowStdBadAlloc);
+}
+
+TEST(ThrowDelegate, ThrowStdBadArrayNewLength) {
+  ExpectThrowNoWhat<std::bad_array_new_length>(ThrowStdBadArrayNewLength);
 }
 
 }  // namespace

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,69 +11,103 @@
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/cxx17_backports.h"
+#include "base/command_line.h"
+#include "base/functional/bind.h"
+#include "base/no_destructor.h"
+#include "base/notreached.h"
 #include "base/path_service.h"
-#include "base/single_thread_task_runner.h"
 #include "base/strings/pattern.h"
+#include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
+#include "base/task/single_thread_task_runner.h"
+#include "build/build_config.h"
 #include "cc/base/switches.h"
+#include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/public/browser/browser_child_process_observer.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/child_process_data.h"
 #include "content/public/browser/client_hints_controller_delegate.h"
+#include "content/public/browser/immersive_playback_options.h"
 #include "content/public/browser/login_delegate.h"
+#include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/navigation_throttle_registry.h"
 #include "content/public/browser/overlay_window.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/site_isolation_policy.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/common/content_switches.h"
 #include "content/shell/browser/shell_browser_context.h"
 #include "content/shell/browser/shell_content_browser_client.h"
 #include "content/test/data/mojo_bindings_web_test.test-mojom.h"
-#include "content/test/data/mojo_web_test_helper_test.mojom.h"
+#include "content/test/data/mojo_web_test_helper.test-mojom.h"
 #include "content/test/mock_badge_service.h"
 #include "content/test/mock_clipboard_host.h"
-#include "content/test/mock_platform_notification_service.h"
-#include "content/test/mock_raw_clipboard_host.h"
 #include "content/web_test/browser/fake_bluetooth_chooser.h"
 #include "content/web_test/browser/fake_bluetooth_chooser_factory.h"
 #include "content/web_test/browser/fake_bluetooth_delegate.h"
 #include "content/web_test/browser/mojo_echo.h"
+#include "content/web_test/browser/mojo_optional_numerics_unittest.h"
 #include "content/web_test/browser/mojo_web_test_helper.h"
 #include "content/web_test/browser/web_test_bluetooth_fake_adapter_setter_impl.h"
 #include "content/web_test/browser/web_test_browser_context.h"
 #include "content/web_test/browser/web_test_browser_main_parts.h"
 #include "content/web_test/browser/web_test_control_host.h"
+#include "content/web_test/browser/web_test_cookie_manager.h"
+#include "content/web_test/browser/web_test_device_posture_provider.h"
+#include "content/web_test/browser/web_test_fedcm_manager.h"
+#include "content/web_test/browser/web_test_origin_trial_throttle.h"
 #include "content/web_test/browser/web_test_permission_manager.h"
+#include "content/web_test/browser/web_test_sensor_provider_manager.h"
 #include "content/web_test/browser/web_test_storage_access_manager.h"
 #include "content/web_test/browser/web_test_tts_platform.h"
 #include "content/web_test/common/web_test_bluetooth_fake_adapter_setter.mojom.h"
 #include "content/web_test/common/web_test_string_util.h"
 #include "content/web_test/common/web_test_switches.h"
-#include "device/bluetooth/public/mojom/test/fake_bluetooth.mojom.h"
-#include "device/bluetooth/test/fake_bluetooth.h"
+#include "device/bluetooth/emulation/fake_bluetooth.h"
+#include "device/bluetooth/public/mojom/emulation/fake_bluetooth.mojom.h"
 #include "gpu/config/gpu_switches.h"
 #include "mojo/public/cpp/bindings/associated_receiver_set.h"
 #include "mojo/public/cpp/bindings/binder_map.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
+#include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/bindings/remote_set.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
+#include "net/base/is_potentially_trustworthy.h"
+#include "net/base/switches.h"
 #include "net/net_buildflags.h"
+#include "net/proxy_resolution/proxy_config_with_annotation.h"
+#include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
+#include "services/device/public/cpp/compute_pressure/buildflags.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/network_service.mojom.h"
+#include "services/proxy_resolver/proxy_resolver_factory_impl.h"  // nogncheck
+#include "services/proxy_resolver/public/mojom/proxy_resolver.mojom.h"
+#include "services/service_manager/public/cpp/connector.h"
 #include "services/service_manager/public/cpp/manifest.h"
 #include "services/service_manager/public/cpp/manifest_builder.h"
+#include "services/service_manager/public/mojom/connector.mojom.h"
 #include "storage/browser/quota/quota_settings.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
 #include "third_party/blink/public/common/web_preferences/web_preferences.h"
+#include "third_party/blink/public/test/mojom/device_posture/device_posture_provider_automation.test-mojom.h"
+#include "third_party/blink/public/test/mojom/select_file_dialog/select_file_dialog_automation.test-mojom.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
 #include "ui/base/ui_base_switches.h"
 #include "url/origin.h"
+#include "url/url_constants.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(ENABLE_COMPUTE_PRESSURE)
+#include "content/web_test/browser/web_test_pressure_manager.h"
+#endif
+
+#if BUILDFLAG(IS_WIN)
 #include "base/strings/utf_string_conversions.h"
+#include "sandbox/policy/features.h"
+#include "sandbox/policy/mojom/sandbox.mojom.h"
 #include "sandbox/policy/win/sandbox_win.h"
 #include "sandbox/win/src/sandbox.h"
 #endif
@@ -91,7 +125,7 @@ void BindWebTestHelper(
 
 // An OverlayWindow that returns the last given video natural size as the
 // window's bounds.
-class BoundsMatchVideoSizeOverlayWindow : public OverlayWindow {
+class BoundsMatchVideoSizeOverlayWindow : public VideoOverlayWindow {
  public:
   BoundsMatchVideoSizeOverlayWindow() = default;
   ~BoundsMatchVideoSizeOverlayWindow() override = default;
@@ -101,14 +135,13 @@ class BoundsMatchVideoSizeOverlayWindow : public OverlayWindow {
   BoundsMatchVideoSizeOverlayWindow& operator=(
       const BoundsMatchVideoSizeOverlayWindow&) = delete;
 
-  bool IsActive() override { return false; }
+  bool IsActive() const override { return false; }
   void Close() override {}
   void ShowInactive() override {}
   void Hide() override {}
-  bool IsVisible() override { return false; }
-  bool IsAlwaysOnTop() override { return false; }
+  bool IsVisible() const override { return false; }
   gfx::Rect GetBounds() override { return gfx::Rect(size_); }
-  void UpdateVideoSize(const gfx::Size& natural_size) override {
+  void UpdateNaturalSize(const gfx::Size& natural_size) override {
     size_ = natural_size;
   }
   void SetPlaybackState(PlaybackState playback_state) override {}
@@ -116,13 +149,22 @@ class BoundsMatchVideoSizeOverlayWindow : public OverlayWindow {
   void SetSkipAdButtonVisibility(bool is_visible) override {}
   void SetNextTrackButtonVisibility(bool is_visible) override {}
   void SetPreviousTrackButtonVisibility(bool is_visible) override {}
+  void SetHidePictureInPictureButtonVisibility(bool is_visible) override {}
   void SetMicrophoneMuted(bool muted) override {}
   void SetCameraState(bool turned_on) override {}
+  void SetMediaMuted(bool muted) override {}
   void SetToggleMicrophoneButtonVisibility(bool is_visible) override {}
   void SetToggleCameraButtonVisibility(bool is_visible) override {}
   void SetHangUpButtonVisibility(bool is_visible) override {}
+  void SetNextSlideButtonVisibility(bool is_visible) override {}
+  void SetPreviousSlideButtonVisibility(bool is_visible) override {}
+  void SetMediaPosition(const media_session::MediaPosition&) override {}
+  void SetSourceTitle(const std::u16string& source_title) override {}
+  void SetFaviconImages(
+      const std::vector<media_session::MediaImage>& images) override {}
   void SetSurfaceId(const viz::SurfaceId& surface_id) override {}
-  cc::Layer* GetLayerForTesting() override { return nullptr; }
+  void SetPlaybackControlsVisibility(bool is_visible) override {}
+  void SetImmersiveVideoOptions(const ImmersiveOptions& options) override {}
 
  private:
   gfx::Size size_;
@@ -142,11 +184,10 @@ void CreateChildProcessCrashWatcher() {
         const ChildProcessData& data,
         const ChildProcessTerminationInfo& info) override {
       // Child processes should not crash in web tests.
-      LOG(ERROR) << "Child process crashed with\n"
-                    "   process_type: "
-                 << data.process_type << "\n"
-                 << "   name: " << data.name;
-      CHECK(false);
+      NOTREACHED() << "Child process crashed with\n"
+                      "   process_type: "
+                   << data.process_type << "\n"
+                   << "   name: " << data.name;
     }
   };
 
@@ -172,8 +213,13 @@ class MojoWebTestCounterImpl : public mojo_bindings_test::mojom::Counter {
   }
 
   // mojo_bindings_test::mojom::Counter:
-  void AddObserver(
+  void AddObserver1(
       mojo::PendingAssociatedRemote<CounterObserver> observer) override {
+    observers_.Add(std::move(observer));
+  }
+
+  void AddObserver2(mojo::PendingAssociatedRemote<CounterObserver> observer,
+                    int unused) override {
     observers_.Add(std::move(observer));
   }
 
@@ -185,7 +231,12 @@ class MojoWebTestCounterImpl : public mojo_bindings_test::mojom::Counter {
 
   void RemoveAllObservers() override { observers_.Clear(); }
 
-  void Clone(mojo::PendingAssociatedReceiver<Counter> receiver) override {
+  void Clone1(mojo::PendingAssociatedReceiver<Counter> receiver) override {
+    additional_receivers_.Add(this, std::move(receiver));
+  }
+
+  void Clone2(mojo::PendingAssociatedReceiver<Counter> receiver,
+              int unused) override {
     additional_receivers_.Add(this, std::move(receiver));
   }
 
@@ -198,20 +249,55 @@ class MojoWebTestCounterImpl : public mojo_bindings_test::mojom::Counter {
 
   void Increment(IncrementCallback callback) override {
     ++count_;
-    for (const auto& observer : observers_)
+    for (const auto& observer : observers_) {
       observer->OnCountChanged(count_);
+    }
     std::move(callback).Run(count_);
   }
 
  private:
   void OnCloneDisconnected() {
-    for (const auto& observer : observers_)
+    for (const auto& observer : observers_) {
       observer->OnCloneDisconnected();
+    }
   }
 
   int count_ = 0;
   mojo::AssociatedReceiverSet<Counter> additional_receivers_;
   mojo::AssociatedRemoteSet<CounterObserver> observers_;
+};
+
+class MojoWebTestProxyResolverFactory
+    : public proxy_resolver::mojom::ProxyResolverFactory {
+ public:
+  MojoWebTestProxyResolverFactory() = default;
+
+  static mojo::PendingRemote<proxy_resolver::mojom::ProxyResolverFactory>
+  CreateWithSelfOwnedReceiver() {
+    mojo::PendingRemote<proxy_resolver::mojom::ProxyResolverFactory> remote;
+    mojo::MakeSelfOwnedReceiver(
+        std::make_unique<MojoWebTestProxyResolverFactory>(),
+        remote.InitWithNewPipeAndPassReceiver());
+    return remote;
+  }
+
+  void CreateResolver(
+      const std::string& pac_script,
+      mojo::PendingReceiver<proxy_resolver::mojom::ProxyResolver> receiver,
+      mojo::PendingRemote<
+          proxy_resolver::mojom::ProxyResolverFactoryRequestClient> client)
+      override {
+    static base::NoDestructor<
+        mojo::Remote<proxy_resolver::mojom::ProxyResolverFactory>>
+        remote;
+    if (!remote->is_bound()) {
+      static base::NoDestructor<proxy_resolver::ProxyResolverFactoryImpl>
+          factory(remote->BindNewPipeAndPassReceiver());
+    }
+
+    remote->get()->CreateResolver(pac_script, std::move(receiver),
+                                  std::move(client));
+  }
 };
 
 }  // namespace
@@ -226,6 +312,13 @@ WebTestContentBrowserClient::WebTestContentBrowserClient() {
   static storage::QuotaSettings quota_settings(
       storage::GetHardCodedSettings(1024 * 1024 * 1024));
   StoragePartition::SetDefaultQuotaSettingsForTesting(&quota_settings);
+
+  // DevTools frontend in web tests is loaded over
+  // http://debug-frontend.test:8000 (see WebTestDevToolsBindings::Inspect).
+  // Treat this origin as secure so that the DevTools frontend has access to
+  // [SecureContext] APIs (e.g. crypto.randomUUID).
+  net::SecureOriginAllowlist::GetInstance().SetAuxiliaryAllowlist(
+      "http://debug-frontend.test:8000", nullptr);
 }
 
 WebTestContentBrowserClient::~WebTestContentBrowserClient() {
@@ -245,28 +338,23 @@ void WebTestContentBrowserClient::SetPopupBlockingEnabled(bool block_popups) {
 }
 
 void WebTestContentBrowserClient::ResetMockClipboardHosts() {
-  if (mock_clipboard_host_)
+  if (mock_clipboard_host_) {
     mock_clipboard_host_->Reset();
-  if (mock_raw_clipboard_host_)
-    mock_raw_clipboard_host_->Reset();
-}
-
-void WebTestContentBrowserClient::SetScreenOrientationChanged(
-    bool screen_orientation_changed) {
-  screen_orientation_changed_ = screen_orientation_changed;
+  }
 }
 
 std::unique_ptr<FakeBluetoothChooser>
 WebTestContentBrowserClient::GetNextFakeBluetoothChooser() {
-  if (!fake_bluetooth_chooser_factory_)
+  if (!fake_bluetooth_chooser_factory_) {
     return nullptr;
+  }
   return fake_bluetooth_chooser_factory_->GetNextFakeBluetoothChooser();
 }
 
 void WebTestContentBrowserClient::BrowserChildProcessHostCreated(
     BrowserChildProcessHost* host) {
   scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner =
-      content::GetUIThreadTaskRunner({});
+      GetUIThreadTaskRunner({});
   ui_task_runner->PostTask(FROM_HERE,
                            base::BindOnce(&CreateChildProcessCrashWatcher));
 }
@@ -276,10 +364,16 @@ void WebTestContentBrowserClient::ExposeInterfacesToRenderer(
     blink::AssociatedInterfaceRegistry* associated_registry,
     RenderProcessHost* render_process_host) {
   scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner =
-      content::GetUIThreadTaskRunner({});
+      GetUIThreadTaskRunner({});
   registry->AddInterface(base::BindRepeating(&MojoWebTestCounterImpl::Bind),
                          ui_task_runner);
   registry->AddInterface(base::BindRepeating(&MojoEcho::Bind), ui_task_runner);
+  registry->AddInterface(
+      base::BindRepeating(&optional_numerics_unittest::Params::Bind),
+      ui_task_runner);
+  registry->AddInterface(
+      base::BindRepeating(&optional_numerics_unittest::ResponseParams::Bind),
+      ui_task_runner);
   registry->AddInterface(
       base::BindRepeating(&WebTestBluetoothFakeAdapterSetterImpl::Create),
       ui_task_runner);
@@ -308,9 +402,21 @@ void WebTestContentBrowserClient::ExposeInterfacesToRenderer(
           base::Unretained(this)),
       ui_task_runner);
 
-  associated_registry->AddInterface(base::BindRepeating(
-      &WebTestContentBrowserClient::BindWebTestControlHost,
-      base::Unretained(this), render_process_host->GetID()));
+  registry->AddInterface(
+      base::BindRepeating(
+          &WebTestContentBrowserClient::BindNonAssociatedWebTestControlHost,
+          base::Unretained(this)),
+      ui_task_runner);
+}
+
+void WebTestContentBrowserClient::
+    RegisterAssociatedInterfaceBindersForRenderFrameHost(
+        RenderFrameHost& render_frame_host,
+        blink::AssociatedInterfaceRegistry& associated_registry) {
+  associated_registry.AddInterface<mojom::WebTestControlHost>(
+      base::BindRepeating(&WebTestContentBrowserClient::BindWebTestControlHost,
+                          base::Unretained(this),
+                          render_frame_host.GetProcess()->GetDeprecatedID()));
 }
 
 void WebTestContentBrowserClient::BindPermissionAutomation(
@@ -326,11 +432,28 @@ void WebTestContentBrowserClient::BindStorageAccessAutomation(
       std::move(receiver));
 }
 
-void WebTestContentBrowserClient::OverrideWebkitPrefs(
+void WebTestContentBrowserClient::OverrideWebPreferences(
     WebContents* web_contents,
+    SiteInstance& main_frame_site,
     blink::web_pref::WebPreferences* prefs) {
-  if (WebTestControlHost::Get())
-    WebTestControlHost::Get()->OverrideWebkitPrefs(prefs);
+  if (WebTestControlHost::Get()) {
+    WebTestControlHost::Get()->OverrideWebPreferences(prefs);
+  }
+}
+
+bool WebTestContentBrowserClient::
+    ShouldUpdateFontRendererPreferencesFromSystemSettings() const {
+  return false;
+}
+
+void WebTestContentBrowserClient::CreateThrottlesForNavigation(
+    NavigationThrottleRegistry& registry) {
+  ShellContentBrowserClient::CreateThrottlesForNavigation(registry);
+  NavigationHandle& navigation_handle = registry.GetNavigationHandle();
+  registry.AddThrottle(std::make_unique<WebTestOriginTrialThrottle>(
+      registry, navigation_handle.GetWebContents()
+                    ->GetBrowserContext()
+                    ->GetOriginTrialsControllerDelegate()));
 }
 
 void WebTestContentBrowserClient::AppendExtraCommandLineSwitches(
@@ -339,36 +462,39 @@ void WebTestContentBrowserClient::AppendExtraCommandLineSwitches(
   ShellContentBrowserClient::AppendExtraCommandLineSwitches(command_line,
                                                             child_process_id);
 
-  static const char* kForwardSwitches[] = {
-    // Switches from web_test_switches.h that are used in the renderer.
-    switches::kEnableAccelerated2DCanvas,
-    switches::kEnableFontAntialiasing,
-    switches::kAlwaysUseComplexText,
-    switches::kStableReleaseMode,
-#if defined(OS_WIN)
-    switches::kRegisterFontFiles,
-#endif
+  static const char* const kForwardSwitches[] = {
+      // Switches from web_test_switches.h that are used in the renderer.
+      switches::kEnableAccelerated2DCanvas,
+      switches::kEnableFontAntialiasing,
+      switches::kAlwaysUseComplexText,
+      switches::kStableReleaseMode,
   };
 
   command_line->CopySwitchesFrom(*base::CommandLine::ForCurrentProcess(),
-                                 kForwardSwitches,
-                                 base::size(kForwardSwitches));
+                                 kForwardSwitches);
+
+  std::vector<std::string> allowlist =
+      net::SecureOriginAllowlist::GetInstance().GetCurrentAllowlist();
+  if (!allowlist.empty()) {
+    command_line->AppendSwitchASCII(
+        net::switches::kUnsafelyTreatInsecureOriginAsSecure,
+        base::JoinString(allowlist, ","));
+  }
 }
 
 std::unique_ptr<BrowserMainParts>
 WebTestContentBrowserClient::CreateBrowserMainParts(
-    const MainFunctionParams& parameters) {
-  auto browser_main_parts =
-      std::make_unique<WebTestBrowserMainParts>(parameters);
+    bool /* is_integration_test */) {
+  auto browser_main_parts = std::make_unique<WebTestBrowserMainParts>();
 
   set_browser_main_parts(browser_main_parts.get());
 
   return browser_main_parts;
 }
 
-std::unique_ptr<OverlayWindow>
-WebTestContentBrowserClient::CreateWindowForPictureInPicture(
-    PictureInPictureWindowController* controller) {
+std::unique_ptr<VideoOverlayWindow>
+WebTestContentBrowserClient::CreateWindowForVideoPictureInPicture(
+    VideoPictureInPictureWindowController* controller) {
   return std::make_unique<BoundsMatchVideoSizeOverlayWindow>();
 }
 
@@ -404,19 +530,18 @@ WebTestContentBrowserClient::GetOriginsRequiringDedicatedProcess() {
     };
 
     // The list of schemes below is based on
-    // //third_party/wpt_tools/wpt.config.json
-    const char* kOriginTemplates[] = {
-        "http://%s/",
-        "https://%s/",
+    // //third_party/blink/web_tests/external/wpt/config.json
+    const char* kSchemes[] = {
+        url::kHttpScheme,
+        url::kHttpsScheme,
     };
 
     origins_to_isolate.reserve(origins_to_isolate.size() +
-                               base::size(kWptHostnames) *
-                                   base::size(kOriginTemplates));
-    for (const char* kWptHostname : kWptHostnames) {
-      for (const char* kOriginTemplate : kOriginTemplates) {
-        std::string origin = base::StringPrintf(kOriginTemplate, kWptHostname);
-        origins_to_isolate.push_back(origin);
+                               std::size(kWptHostnames) * std::size(kSchemes));
+    for (const char* hostname : kWptHostnames) {
+      for (const char* scheme : kSchemes) {
+        origins_to_isolate.push_back(
+            base::StringPrintf("%s://%s/", scheme, hostname));
       }
     }
   }
@@ -424,32 +549,22 @@ WebTestContentBrowserClient::GetOriginsRequiringDedicatedProcess() {
   // Translate std::vector<std::string> into std::vector<url::Origin>.
   std::vector<url::Origin> result;
   result.reserve(origins_to_isolate.size());
-  for (const std::string& s : origins_to_isolate)
+  for (const std::string& s : origins_to_isolate) {
     result.push_back(url::Origin::Create(GURL(s)));
+  }
   return result;
 }
 
-PlatformNotificationService*
-WebTestContentBrowserClient::GetPlatformNotificationService(
-    content::BrowserContext* browser_context) {
-  if (!mock_platform_notification_service_) {
-    mock_platform_notification_service_ =
-        std::make_unique<MockPlatformNotificationService>(browser_context);
-  }
-
-  return mock_platform_notification_service_.get();
-}
-
 bool WebTestContentBrowserClient::CanCreateWindow(
-    content::RenderFrameHost* opener,
+    RenderFrameHost* opener,
     const GURL& opener_url,
     const GURL& opener_top_level_frame_url,
     const url::Origin& source_origin,
-    content::mojom::WindowContainerType container_type,
+    mojom::WindowContainerType container_type,
     const GURL& target_url,
-    const content::Referrer& referrer,
+    const Referrer& referrer,
     const std::string& frame_name,
-    WindowOpenDisposition disposition,
+    ui::mojom::WindowOpenDisposition disposition,
     const blink::mojom::WindowFeatures& features,
     bool user_gesture,
     bool opener_suppressed,
@@ -473,17 +588,37 @@ bool WebTestContentBrowserClient::CanCreateWindow(
 
 void WebTestContentBrowserClient::RegisterBrowserInterfaceBindersForFrame(
     RenderFrameHost* render_frame_host,
-    mojo::BinderMapWithContext<content::RenderFrameHost*>* map) {
+    mojo::BinderMapWithContext<RenderFrameHost*>* map) {
   ShellContentBrowserClient::RegisterBrowserInterfaceBindersForFrame(
       render_frame_host, map);
-  map->Add<mojom::MojoWebTestHelper>(base::BindRepeating(&BindWebTestHelper));
+  map->Add<mojom::MojoWebTestHelper>(&BindWebTestHelper);
   map->Add<blink::mojom::ClipboardHost>(base::BindRepeating(
       &WebTestContentBrowserClient::BindClipboardHost, base::Unretained(this)));
-  map->Add<blink::mojom::RawClipboardHost>(
-      base::BindRepeating(&WebTestContentBrowserClient::BindRawClipboardHost,
-                          base::Unretained(this)));
   map->Add<blink::mojom::BadgeService>(base::BindRepeating(
       &WebTestContentBrowserClient::BindBadgeService, base::Unretained(this)));
+  map->Add<blink::test::mojom::CookieManagerAutomation>(base::BindRepeating(
+      &WebTestContentBrowserClient::BindCookieManagerAutomation,
+      base::Unretained(this)));
+  map->Add<blink::test::mojom::DevicePostureProviderAutomation>(
+      base::BindRepeating(
+          &WebTestContentBrowserClient::BindDevicePostureProviderAutomation,
+          base::Unretained(this)));
+  map->Add<blink::test::mojom::FederatedAuthRequestAutomation>(
+      base::BindRepeating(&WebTestContentBrowserClient::BindFedCmAutomation,
+                          base::Unretained(this)));
+  map->Add<blink::test::mojom::SelectFileDialogAutomation>(base::BindRepeating(
+      &WebTestContentBrowserClient::BindSelectFileDialogAutomation,
+      base::Unretained(this)));
+  map->Add<blink::test::mojom::WebSensorProviderAutomation>(base::BindRepeating(
+      &WebTestContentBrowserClient::BindWebSensorProviderAutomation,
+      base::Unretained(this)));
+
+#if BUILDFLAG(ENABLE_COMPUTE_PRESSURE)
+  map->Add<blink::test::mojom::WebPressureManagerAutomation>(
+      base::BindRepeating(
+          &WebTestContentBrowserClient::BindWebPressureManagerAutomation,
+          base::Unretained(this)));
+#endif  // BUILDFLAG(ENABLE_COMPUTE_PRESSURE)
 }
 
 bool WebTestContentBrowserClient::CanAcceptUntrustedExchangesIfNeeded() {
@@ -491,8 +626,9 @@ bool WebTestContentBrowserClient::CanAcceptUntrustedExchangesIfNeeded() {
 }
 
 BluetoothDelegate* WebTestContentBrowserClient::GetBluetoothDelegate() {
-  if (!fake_bluetooth_delegate_)
+  if (!fake_bluetooth_delegate_) {
     fake_bluetooth_delegate_ = std::make_unique<FakeBluetoothDelegate>();
+  }
   return fake_bluetooth_delegate_.get();
 }
 
@@ -500,51 +636,109 @@ void WebTestContentBrowserClient::ResetFakeBluetoothDelegate() {
   fake_bluetooth_delegate_.reset();
 }
 
-content::TtsPlatform* WebTestContentBrowserClient::GetTtsPlatform() {
+TtsPlatform* WebTestContentBrowserClient::GetTtsPlatform() {
   return WebTestTtsPlatform::GetInstance();
-}
-
-bool WebTestContentBrowserClient::CanEnterFullscreenWithoutUserActivation() {
-  return screen_orientation_changed_;
 }
 
 void WebTestContentBrowserClient::BindClipboardHost(
     RenderFrameHost* render_frame_host,
     mojo::PendingReceiver<blink::mojom::ClipboardHost> receiver) {
-  if (!mock_clipboard_host_)
+  if (!mock_clipboard_host_) {
     mock_clipboard_host_ = std::make_unique<MockClipboardHost>();
-  mock_clipboard_host_->Bind(std::move(receiver));
-}
-
-void WebTestContentBrowserClient::BindRawClipboardHost(
-    RenderFrameHost* render_frame_host,
-    mojo::PendingReceiver<blink::mojom::RawClipboardHost> receiver) {
-  if (!mock_clipboard_host_)
-    mock_clipboard_host_ = std::make_unique<MockClipboardHost>();
-  if (!mock_raw_clipboard_host_) {
-    mock_raw_clipboard_host_ =
-        std::make_unique<MockRawClipboardHost>(mock_clipboard_host_.get());
   }
-  mock_raw_clipboard_host_->Bind(std::move(receiver));
+  mock_clipboard_host_->Bind(std::move(receiver));
 }
 
 void WebTestContentBrowserClient::BindBadgeService(
     RenderFrameHost* render_frame_host,
     mojo::PendingReceiver<blink::mojom::BadgeService> receiver) {
-  if (!mock_badge_service_)
+  if (!mock_badge_service_) {
     mock_badge_service_ = std::make_unique<MockBadgeService>();
+  }
   mock_badge_service_->Bind(std::move(receiver));
 }
 
+void WebTestContentBrowserClient::BindCookieManagerAutomation(
+    RenderFrameHost* render_frame_host,
+    mojo::PendingReceiver<blink::test::mojom::CookieManagerAutomation>
+        receiver) {
+  cookie_managers_.Add(
+      std::make_unique<WebTestCookieManager>(
+          GetWebTestBrowserContext()
+              ->GetDefaultStoragePartition()
+              ->GetCookieManagerForBrowserProcess(),
+          render_frame_host->GetLastCommittedURL(),
+          render_frame_host->GetIsolationInfoForSubresources()),
+      std::move(receiver));
+}
+
+void WebTestContentBrowserClient::BindDevicePostureProviderAutomation(
+    RenderFrameHost* render_frame_host,
+    mojo::PendingReceiver<blink::test::mojom::DevicePostureProviderAutomation>
+        receiver) {
+  device_posture_provider_managers_.Add(
+      std::make_unique<WebTestDevicePostureProvider>(
+          static_cast<RenderFrameHostImpl*>(render_frame_host)->GetWeakPtr()),
+      std::move(receiver));
+}
+
+void WebTestContentBrowserClient::BindFedCmAutomation(
+    RenderFrameHost* render_frame_host,
+    mojo::PendingReceiver<blink::test::mojom::FederatedAuthRequestAutomation>
+        receiver) {
+  fedcm_managers_.Add(std::make_unique<WebTestFedCmManager>(render_frame_host),
+                      std::move(receiver));
+}
+
+void WebTestContentBrowserClient::BindSelectFileDialogAutomation(
+    RenderFrameHost* render_frame_host,
+    mojo::PendingReceiver<blink::test::mojom::SelectFileDialogAutomation>
+        receiver) {
+  if (WebTestControlHost::Get()) {
+    WebTestControlHost::Get()->BindSelectFileDialogAutomation(
+        std::move(receiver));
+  }
+}
+
+void WebTestContentBrowserClient::BindWebSensorProviderAutomation(
+    RenderFrameHost* render_frame_host,
+    mojo::PendingReceiver<blink::test::mojom::WebSensorProviderAutomation>
+        receiver) {
+  if (!sensor_provider_manager_) {
+    sensor_provider_manager_ = std::make_unique<WebTestSensorProviderManager>(
+        WebContents::FromRenderFrameHost(render_frame_host));
+  }
+  sensor_provider_manager_->Bind(std::move(receiver));
+}
+
+void WebTestContentBrowserClient::ResetWebSensorProviderAutomation() {
+  sensor_provider_manager_.reset();
+}
+
+#if BUILDFLAG(ENABLE_COMPUTE_PRESSURE)
+void WebTestContentBrowserClient::BindWebPressureManagerAutomation(
+    RenderFrameHost* render_frame_host,
+    mojo::PendingReceiver<blink::test::mojom::WebPressureManagerAutomation>
+        receiver) {
+  WebTestPressureManager::GetOrCreate(
+      WebContents::FromRenderFrameHost(render_frame_host))
+      ->Bind(std::move(receiver));
+}
+#endif  // BUILDFLAG(ENABLE_COMPUTE_PRESSURE)
+
 std::unique_ptr<LoginDelegate> WebTestContentBrowserClient::CreateLoginDelegate(
     const net::AuthChallengeInfo& auth_info,
-    content::WebContents* web_contents,
-    const content::GlobalRequestID& request_id,
-    bool is_main_frame,
+    WebContents* web_contents,
+    BrowserContext* browser_context,
+    const GlobalRequestID& request_id,
+    bool is_request_for_primary_main_frame_navigation,
+    bool is_request_for_navigation,
     const GURL& url,
     scoped_refptr<net::HttpResponseHeaders> response_headers,
     bool first_auth_attempt,
-    LoginAuthRequiredCallback auth_required_callback) {
+    bool do_not_prompt_for_login,
+    GuestPageHolder* guest,
+    LoginDelegate::LoginAuthRequiredCallback auth_required_callback) {
   return nullptr;
 }
 
@@ -556,7 +750,6 @@ void WebTestContentBrowserClient::ConfigureNetworkContextParamsForShell(
   ShellContentBrowserClient::ConfigureNetworkContextParamsForShell(
       context, context_params, cert_verifier_creation_params);
 
-#if BUILDFLAG(ENABLE_REPORTING)
   // Configure the Reporting service in a manner expected by certain Web
   // Platform Tests (network-error-logging and reporting-api).
   //
@@ -565,12 +758,22 @@ void WebTestContentBrowserClient::ConfigureNetworkContextParamsForShell(
   context_params->reporting_delivery_interval =
       kReportingDeliveryIntervalTimeForWebTests;
   context_params->skip_reporting_send_permission_check = true;
-#endif
+
+  const char* kProxyPacUrl = "proxy-pac-url";
+  auto pac_url =
+      base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(kProxyPacUrl);
+
+  if (!pac_url.empty()) {
+    auto proxy_config = net::ProxyConfig::CreateFromCustomPacURL(GURL(pac_url));
+    context_params->proxy_resolver_factory =
+        MojoWebTestProxyResolverFactory::CreateWithSelfOwnedReceiver();
+    context_params->initial_proxy_config = net::ProxyConfigWithAnnotation(
+        proxy_config, TRAFFIC_ANNOTATION_FOR_TESTS);
+  }
 }
 
 void WebTestContentBrowserClient::CreateFakeBluetoothChooserFactory(
     mojo::PendingReceiver<mojom::FakeBluetoothChooserFactory> receiver) {
-  DCHECK(!fake_bluetooth_chooser_factory_);
   fake_bluetooth_chooser_factory_ =
       FakeBluetoothChooserFactory::Create(std::move(receiver));
 }
@@ -578,34 +781,29 @@ void WebTestContentBrowserClient::CreateFakeBluetoothChooserFactory(
 void WebTestContentBrowserClient::BindWebTestControlHost(
     int render_process_id,
     mojo::PendingAssociatedReceiver<mojom::WebTestControlHost> receiver) {
-  if (WebTestControlHost::Get())
+  if (WebTestControlHost::Get()) {
     WebTestControlHost::Get()->BindWebTestControlHostForRenderer(
         render_process_id, std::move(receiver));
+  }
 }
 
-#if defined(OS_WIN)
-bool WebTestContentBrowserClient::PreSpawnChild(
-    sandbox::TargetPolicy* policy,
-    sandbox::policy::SandboxType sandbox_type,
-    ChildSpawnFlags flags) {
-  if (sandbox_type == sandbox::policy::SandboxType::kRenderer) {
-    // Add sideloaded font files for testing. See also DIR_WINDOWS_FONTS
-    // addition in |StartSandboxedProcess|.
-    std::vector<std::string> font_files = switches::GetSideloadFontFiles();
-    for (std::vector<std::string>::const_iterator i(font_files.begin());
-         i != font_files.end(); ++i) {
-      policy->AddRule(sandbox::TargetPolicy::SUBSYS_FILES,
-                      sandbox::TargetPolicy::FILES_ALLOW_READONLY,
-                      base::UTF8ToWide(*i).c_str());
-    }
+void WebTestContentBrowserClient::BindNonAssociatedWebTestControlHost(
+    mojo::PendingReceiver<mojom::NonAssociatedWebTestControlHost> receiver) {
+  if (WebTestControlHost::Get()) {
+    WebTestControlHost::Get()->BindNonAssociatedWebTestControlHost(
+        std::move(receiver));
   }
-  return true;
 }
-#endif  // OS_WIN
 
 std::string WebTestContentBrowserClient::GetAcceptLangs(
     BrowserContext* context) {
-  return content::GetShellLanguage();
+  return GetShellLanguage();
+}
+
+bool WebTestContentBrowserClient::IsPrivacySandboxReportingDestinationAttested(
+    BrowserContext* browser_context,
+    const url::Origin& destination_origin) {
+  return true;
 }
 
 void WebTestContentBrowserClient::GetHyphenationDictionary(
@@ -620,5 +818,13 @@ void WebTestContentBrowserClient::GetHyphenationDictionary(
   }
   // No need to callback if there were no dictionaries.
 }
+
+void WebTestContentBrowserClient::
+    RegisterMojoBinderPoliciesForSameOriginPrerendering(
+        MojoBinderPolicyMap& policy_map) {
+  policy_map.SetAssociatedPolicy<mojom::WebTestControlHost>(
+      MojoBinderAssociatedPolicy::kGrant);
+}
+
 
 }  // namespace content

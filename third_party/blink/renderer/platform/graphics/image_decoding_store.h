@@ -29,8 +29,11 @@
 #include <memory>
 #include <utility>
 
-#include "base/memory/memory_pressure_listener.h"
+#include "base/check_op.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ptr_exclusion.h"
+#include "base/synchronization/lock.h"
 #include "cc/paint/paint_image_generator.h"
 #include "third_party/blink/renderer/platform/graphics/image_frame_generator.h"
 #include "third_party/blink/renderer/platform/graphics/skia/sk_size_hash.h"
@@ -38,7 +41,6 @@
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/doubly_linked_list.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
-#include "third_party/blink/renderer/platform/wtf/threading_primitives.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "third_party/skia/include/core/SkSize.h"
 #include "third_party/skia/include/core/SkTypes.h"
@@ -50,7 +52,7 @@ namespace blink {
 // 2. Size of the image.
 // 3. ImageDecoder::AlphaOption
 struct DecoderCacheKey {
-  const blink::ImageFrameGenerator* gen_;
+  raw_ptr<const blink::ImageFrameGenerator> gen_;
   SkISize size_;
   blink::ImageDecoder::AlphaOption alpha_option_;
   cc::PaintImage::GeneratorClientId client_id_;
@@ -68,15 +70,10 @@ static inline bool operator==(const DecoderCacheKey& a,
          a.alpha_option_ == b.alpha_option_ && a.client_id_ == b.client_id_;
 }
 
-static inline bool operator!=(const DecoderCacheKey& a,
-                              const DecoderCacheKey& b) {
-  return !(a == b);
-}
-
 // Base class for all cache entries.
 class CacheEntry : public DoublyLinkedListNode<CacheEntry> {
   USING_FAST_MALLOC(CacheEntry);
-  friend class WTF::DoublyLinkedListNode<CacheEntry>;
+  friend class DoublyLinkedListNode<CacheEntry>;
 
  public:
   enum CacheType {
@@ -107,12 +104,15 @@ class CacheEntry : public DoublyLinkedListNode<CacheEntry> {
   virtual CacheType GetType() const = 0;
 
  protected:
-  const ImageFrameGenerator* generator_;
+  raw_ptr<const ImageFrameGenerator> generator_;
   int use_count_;
 
  private:
-  CacheEntry* prev_;
-  CacheEntry* next_;
+  // RAW_PTR_EXCLUSION: Rewriting causes a crash, because a base class ctor
+  // accesses child class ptr fields before they're initialized (see
+  // crbug.com/349213429).
+  RAW_PTR_EXCLUSION CacheEntry* prev_;
+  RAW_PTR_EXCLUSION CacheEntry* next_;
 };
 
 class DecoderCacheEntry final : public CacheEntry {
@@ -123,8 +123,8 @@ class DecoderCacheEntry final : public CacheEntry {
                     cc::PaintImage::GeneratorClientId client_id)
       : CacheEntry(generator, count),
         cached_decoder_(std::move(decoder)),
-        size_(SkISize::Make(cached_decoder_->DecodedSize().Width(),
-                            cached_decoder_->DecodedSize().Height())),
+        size_(SkISize::Make(cached_decoder_->DecodedSize().width(),
+                            cached_decoder_->DecodedSize().height())),
         alpha_option_(cached_decoder_->GetAlphaOption()),
         client_id_(client_id) {}
 
@@ -150,8 +150,8 @@ class DecoderCacheEntry final : public CacheEntry {
       const ImageDecoder* decoder,
       cc::PaintImage::GeneratorClientId client_id) {
     return MakeCacheKey(generator,
-                        SkISize::Make(decoder->DecodedSize().Width(),
-                                      decoder->DecodedSize().Height()),
+                        SkISize::Make(decoder->DecodedSize().width(),
+                                      decoder->DecodedSize().height()),
                         decoder->GetAlphaOption(), client_id);
   }
   DecoderCacheKey CacheKey() const {
@@ -166,59 +166,32 @@ class DecoderCacheEntry final : public CacheEntry {
   cc::PaintImage::GeneratorClientId client_id_;
 };
 
-}  // namespace blink
-
-namespace WTF {
-
 template <>
-struct DefaultHash<blink::DecoderCacheKey> {
-  STATIC_ONLY(DefaultHash);
-  struct Hash {
-    STATIC_ONLY(Hash);
-    static unsigned GetHash(const blink::DecoderCacheKey& p) {
-      auto first =
-          HashInts(DefaultHash<blink::ImageFrameGenerator*>::Hash::GetHash(
-                       const_cast<blink::ImageFrameGenerator*>(p.gen_)),
-                   DefaultHash<SkISize>::Hash::GetHash(p.size_));
-      auto second = HashInts(DefaultHash<uint8_t>::Hash::GetHash(
-                                 static_cast<uint8_t>(p.alpha_option_)),
-                             p.client_id_);
-      return HashInts(first, second);
-    }
-    static bool Equal(const blink::DecoderCacheKey& a,
-                      const blink::DecoderCacheKey& b) {
-      return a.gen_ == b.gen_ && a.size_ == b.size_ &&
-             a.alpha_option_ == b.alpha_option_ && a.client_id_ == b.client_id_;
-    }
-    static const bool safe_to_compare_to_empty_or_deleted = true;
-  };
-};
-
-template <>
-struct HashTraits<blink::DecoderCacheKey>
-    : GenericHashTraits<blink::DecoderCacheKey> {
+struct HashTraits<DecoderCacheKey> : GenericHashTraits<DecoderCacheKey> {
   STATIC_ONLY(HashTraits);
+  static uint32_t GetHash(const DecoderCacheKey& p) {
+    auto first =
+        HashInts(blink::GetHash(const_cast<ImageFrameGenerator*>(p.gen_.get())),
+                 blink::GetHash(p.size_));
+    auto second =
+        HashInts(blink::GetHash(static_cast<uint8_t>(p.alpha_option_)),
+                 blink::GetHash(p.client_id_));
+    return HashInts(first, second);
+  }
+
   static const bool kEmptyValueIsZero = true;
-  static blink::DecoderCacheKey EmptyValue() {
-    return blink::DecoderCacheEntry::MakeCacheKey(
-        nullptr, SkISize::Make(0, 0),
-        static_cast<blink::ImageDecoder::AlphaOption>(0),
+  static DecoderCacheKey EmptyValue() {
+    return DecoderCacheEntry::MakeCacheKey(
+        nullptr, SkISize::Make(0, 0), static_cast<ImageDecoder::AlphaOption>(0),
         cc::PaintImage::kDefaultGeneratorClientId);
   }
-  static void ConstructDeletedValue(blink::DecoderCacheKey& slot, bool) {
-    slot = blink::DecoderCacheEntry::MakeCacheKey(
+  static DecoderCacheKey DeletedValue() {
+    return DecoderCacheEntry::MakeCacheKey(
         nullptr, SkISize::Make(-1, -1),
-        static_cast<blink::ImageDecoder::AlphaOption>(0),
+        static_cast<ImageDecoder::AlphaOption>(0),
         cc::PaintImage::kDefaultGeneratorClientId);
-  }
-  static bool IsDeletedValue(const blink::DecoderCacheKey& value) {
-    return value.size_ == SkISize::Make(-1, -1);
   }
 };
-
-}  // namespace WTF
-
-namespace blink {
 
 // FUNCTION
 //
@@ -275,80 +248,68 @@ class PLATFORM_EXPORT ImageDecodingStore final {
   void SetCacheLimitInBytes(size_t);
   size_t MemoryUsageInBytes();
   int CacheEntries();
-  int DecoderCacheEntries();
 
  private:
   void Prune();
 
-  // Called by the memory pressure listener when the memory pressure rises.
-  void OnMemoryPressure(
-      base::MemoryPressureListener::MemoryPressureLevel level);
-
-  // These helper methods are called while m_mutex is locked.
-  template <class T, class U, class V>
-  void InsertCacheInternal(std::unique_ptr<T> cache_entry,
-                           U* cache_map,
-                           V* identifier_map);
+  // These helper methods are called while |lock_| is held.
+  void InsertCacheInternal(std::unique_ptr<DecoderCacheEntry> cache_entry)
+      EXCLUSIVE_LOCKS_REQUIRED(lock_);
 
   // Helper method to remove a cache entry. Ownership is transferred to
   // deletionList. Use of Vector<> is handy when removing multiple entries.
-  template <class T, class U, class V>
   void RemoveFromCacheInternal(
-      const T* cache_entry,
-      U* cache_map,
-      V* identifier_map,
-      Vector<std::unique_ptr<CacheEntry>>* deletion_list);
+      const DecoderCacheEntry* cache_entry,
+      Vector<std::unique_ptr<CacheEntry>>* deletion_list)
+      EXCLUSIVE_LOCKS_REQUIRED(lock_);
 
-  // Helper method to remove a cache entry. Uses the templated version base on
+  // Helper method to remove a cache entry. Uses a specific version base on
   // the type of cache entry.
   void RemoveFromCacheInternal(
-      const CacheEntry*,
-      Vector<std::unique_ptr<CacheEntry>>* deletion_list);
+      const CacheEntry* cache_entry,
+      Vector<std::unique_ptr<CacheEntry>>* deletion_list)
+      EXCLUSIVE_LOCKS_REQUIRED(lock_);
 
   // Helper method to remove all cache entries associated with an
   // ImageFrameGenerator. Ownership of the cache entries is transferred to
   // |deletionList|.
-  template <class U, class V>
   void RemoveCacheIndexedByGeneratorInternal(
-      U* cache_map,
-      V* identifier_map,
       const ImageFrameGenerator*,
-      Vector<std::unique_ptr<CacheEntry>>* deletion_list);
+      Vector<std::unique_ptr<CacheEntry>>* deletion_list)
+      EXCLUSIVE_LOCKS_REQUIRED(lock_);
 
   // Helper method to remove cache entry pointers from the LRU list.
   void RemoveFromCacheListInternal(
-      const Vector<std::unique_ptr<CacheEntry>>& deletion_list);
+      const Vector<std::unique_ptr<CacheEntry>>& deletion_list)
+      EXCLUSIVE_LOCKS_REQUIRED(lock_);
 
   // A doubly linked list that maintains usage history of cache entries.
   // This is used for eviction of old entries.
   // Head of this list is the least recently used cache entry.
   // Tail of this list is the most recently used cache entry.
-  DoublyLinkedList<CacheEntry> ordered_cache_list_ GUARDED_BY(mutex_);
+  DoublyLinkedList<CacheEntry> ordered_cache_list_ GUARDED_BY(lock_);
 
   // A lookup table for all decoder cache objects. Owns all decoder cache
   // objects.
   typedef HashMap<DecoderCacheKey, std::unique_ptr<DecoderCacheEntry>>
       DecoderCacheMap;
-  DecoderCacheMap decoder_cache_map_ GUARDED_BY(mutex_);
+  DecoderCacheMap decoder_cache_map_ GUARDED_BY(lock_);
 
   // A lookup table to map ImageFrameGenerator to all associated
   // decoder cache keys.
   typedef HashSet<DecoderCacheKey> DecoderCacheKeySet;
   typedef HashMap<const ImageFrameGenerator*, DecoderCacheKeySet>
       DecoderCacheKeyMap;
-  DecoderCacheKeyMap decoder_cache_key_map_ GUARDED_BY(mutex_);
+  DecoderCacheKeyMap decoder_cache_key_map_ GUARDED_BY(lock_);
 
-  size_t heap_limit_in_bytes_ GUARDED_BY(mutex_);
-  size_t heap_memory_usage_in_bytes_ GUARDED_BY(mutex_);
-
-  // A listener to global memory pressure events.
-  base::MemoryPressureListener memory_pressure_listener_;
+  size_t heap_limit_in_bytes_ GUARDED_BY(lock_);
+  size_t heap_memory_usage_in_bytes_ GUARDED_BY(lock_);
 
   // Also protects:
   // - the CacheEntry in |decoder_cache_map_|.
   // - calls to underlying skBitmap's LockPixels()/UnlockPixels() as they are
   //   not threadsafe.
-  Mutex mutex_;
+  base::Lock lock_;
 };
 
 }  // namespace blink

@@ -1,11 +1,10 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/base/callback_registry.h"
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "base/test/mock_callback.h"
 #include "base/test/task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -15,7 +14,6 @@ namespace media {
 namespace {
 
 using ::testing::_;
-using ::testing::Invoke;
 using ::testing::IsNull;
 
 class CallbackRegistryTest : public testing::Test {
@@ -158,9 +156,9 @@ TEST_F(CallbackRegistryTest, RegisterDuringNotification) {
   EXPECT_TRUE(registration_1);
 
   // Register callback_2 during callback_1's notification run.
-  EXPECT_CALL(callback_1, Run()).WillOnce(Invoke([&]() {
+  EXPECT_CALL(callback_1, Run()).WillOnce([&]() {
     registration_2 = registry.Register(callback_2.Get());
-  }));
+  });
   registry.Notify();
   task_environment_.RunUntilIdle();
   EXPECT_TRUE(registration_2);

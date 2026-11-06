@@ -1,40 +1,53 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "remoting/host/resizing_host_observer.h"
 
 #include <list>
+#include <optional>
 #include <utility>
 
-#include "base/macros.h"
+#include "base/callback_list.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
+#include "base/notimplemented.h"
 #include "base/run_loop.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/simple_test_tick_clock.h"
 #include "base/test/task_environment.h"
+#include "remoting/host/base/screen_resolution.h"
+#include "remoting/host/desktop_display_info.h"
+#include "remoting/host/desktop_display_info_monitor.h"
 #include "remoting/host/desktop_resizer.h"
-#include "remoting/host/screen_resolution.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_geometry.h"
 
 namespace remoting {
 
-std::ostream& operator<<(std::ostream& os, const ScreenResolution& resolution) {
-  return os << resolution.dimensions().width() << "x"
-            << resolution.dimensions().height() << " @ "
-            << resolution.dpi().x() << "x" << resolution.dpi().y();
-}
-
-bool operator==(const ScreenResolution& a, const ScreenResolution& b) {
-  return a.Equals(b);
-}
+using Monitors = std::map<webrtc::ScreenId, ScreenResolution>;
 
 const int kDefaultDPI = 96;
 
 ScreenResolution MakeResolution(int width, int height) {
   return ScreenResolution(webrtc::DesktopSize(width, height),
                           webrtc::DesktopVector(kDefaultDPI, kDefaultDPI));
+}
+
+// Converts a monitor-list to an object suitable for passing to
+// ResizingHostObserver::OnDisplayInfoChanged().
+DesktopDisplayInfo ToDisplayInfo(const Monitors& monitors) {
+  DesktopDisplayInfo result;
+  for (const auto& [id, resolution] : monitors) {
+    result.AddDisplay({id, /* x */ 0, /* y */ 0,
+                       static_cast<uint32_t>(resolution.dimensions().width()),
+                       static_cast<uint32_t>(resolution.dimensions().height()),
+                       /* dpi */ static_cast<uint32_t>(resolution.dpi().x()),
+                       /* bpp */ 32,
+                       /* is_default */ false,
+                       /* display_name */ "test display"});
+  }
+  return result;
 }
 
 class FakeDesktopResizer : public DesktopResizer {
@@ -46,29 +59,31 @@ class FakeDesktopResizer : public DesktopResizer {
 
   FakeDesktopResizer(bool exact_size_supported,
                      std::vector<ScreenResolution> supported_resolutions,
-                     ScreenResolution* current_resolution,
+                     Monitors* monitors,
                      CallCounts* call_counts,
                      bool check_final_resolution)
       : exact_size_supported_(exact_size_supported),
-        initial_resolution_(*current_resolution),
-        current_resolution_(current_resolution),
+        initial_resolutions_(*monitors),
+        monitors_(monitors),
         supported_resolutions_(std::move(supported_resolutions)),
         call_counts_(call_counts),
-        check_final_resolution_(check_final_resolution) {
-  }
+        check_final_resolution_(check_final_resolution) {}
 
   ~FakeDesktopResizer() override {
     if (check_final_resolution_) {
-      EXPECT_EQ(initial_resolution_, GetCurrentResolution());
+      EXPECT_EQ(initial_resolutions_, *monitors_);
     }
   }
 
   // remoting::DesktopResizer interface
-  ScreenResolution GetCurrentResolution() override {
-    return *current_resolution_;
+  ScreenResolution GetCurrentResolution(webrtc::ScreenId screen_id) override {
+    ExpectValidId(screen_id);
+    return (*monitors_)[screen_id];
   }
   std::list<ScreenResolution> GetSupportedResolutions(
-      const ScreenResolution& preferred) override {
+      const ScreenResolution& preferred,
+      webrtc::ScreenId screen_id) override {
+    ExpectValidId(screen_id);
     std::list<ScreenResolution> result(supported_resolutions_.begin(),
                                        supported_resolutions_.end());
     if (exact_size_supported_) {
@@ -76,22 +91,58 @@ class FakeDesktopResizer : public DesktopResizer {
     }
     return result;
   }
-  void SetResolution(const ScreenResolution& resolution) override {
-    *current_resolution_ = resolution;
+  void SetResolution(const ScreenResolution& resolution,
+                     webrtc::ScreenId screen_id) override {
+    ExpectValidId(screen_id);
+    (*monitors_)[screen_id] = resolution;
     ++call_counts_->set_resolution;
   }
-  void RestoreResolution(const ScreenResolution& resolution) override {
-    *current_resolution_ = resolution;
+  void RestoreResolution(const ScreenResolution& resolution,
+                         webrtc::ScreenId screen_id) override {
+    ExpectValidId(screen_id);
+    (*monitors_)[screen_id] = resolution;
     ++call_counts_->restore_resolution;
+  }
+  void SetVideoLayout(const protocol::VideoLayout& layout) override {
+    NOTIMPLEMENTED();
   }
 
  private:
+  // Fails the unittest if |screen_id| is not a valid monitor ID.
+  void ExpectValidId(webrtc::ScreenId screen_id) {
+    EXPECT_TRUE(monitors_->contains(screen_id));
+  }
+
   bool exact_size_supported_;
-  ScreenResolution initial_resolution_;
-  ScreenResolution *current_resolution_;
+
+  // Used to verify that |monitors_| was restored to the initial resolutions.
+  Monitors initial_resolutions_;
+
+  // List of monitors to be resized.
+  raw_ptr<Monitors> monitors_;
+
   std::vector<ScreenResolution> supported_resolutions_;
-  CallCounts* call_counts_;
+  raw_ptr<CallCounts> call_counts_;
   bool check_final_resolution_;
+};
+
+class FakeDesktopDisplayInfoMonitor : public DesktopDisplayInfoMonitor {
+ public:
+  void Start() override {}
+
+  bool IsStarted() const override { return false; }
+
+  const DesktopDisplayInfo* GetLatestDisplayInfo() const override {
+    return info ? &info.value() : nullptr;
+  }
+
+  base::CallbackListSubscription AddCallback(
+      base::RepeatingClosure callback) override {
+    return callbacks.Add(std::move(callback));
+  }
+
+  std::optional<DesktopDisplayInfo> info;
+  base::RepeatingClosureList callbacks;
 };
 
 class ResizingHostObserverTest : public testing::Test {
@@ -99,31 +150,36 @@ class ResizingHostObserverTest : public testing::Test {
   ResizingHostObserverTest() { clock_.SetNowTicks(base::TimeTicks::Now()); }
 
  protected:
-  void InitDesktopResizer(const ScreenResolution& initial_resolution,
-                         bool exact_size_supported,
-                         std::vector<ScreenResolution> supported_resolutions,
-                         bool restore_resolution) {
-    current_resolution_ = initial_resolution;
+  void InitDesktopResizer(const Monitors& initial_resolutions,
+                          bool exact_size_supported,
+                          std::vector<ScreenResolution> supported_resolutions,
+                          bool restore_resolution) {
+    monitors_ = initial_resolutions;
     call_counts_ = FakeDesktopResizer::CallCounts();
     resizing_host_observer_ = std::make_unique<ResizingHostObserver>(
         std::make_unique<FakeDesktopResizer>(
-            exact_size_supported, std::move(supported_resolutions),
-            &current_resolution_, &call_counts_, restore_resolution),
+            exact_size_supported, std::move(supported_resolutions), &monitors_,
+            &call_counts_, restore_resolution),
         restore_resolution);
     resizing_host_observer_->SetClockForTesting(&clock_);
+    resizing_host_observer_->RegisterForDisplayChanges(display_info_monitor_);
   }
 
-  void SetScreenResolution(const ScreenResolution& client_size) {
-    resizing_host_observer_->SetScreenResolution(client_size);
-    if (auto_advance_clock_)
-      clock_.Advance(base::TimeDelta::FromSeconds(1));
+  void SetScreenResolution(const ScreenResolution& client_size,
+                           std::optional<webrtc::ScreenId> id = std::nullopt) {
+    resizing_host_observer_->SetScreenResolution(client_size, id);
+    if (auto_advance_clock_) {
+      clock_.Advance(base::Seconds(1));
+    }
   }
 
-  ScreenResolution GetBestResolution(const ScreenResolution& client_size) {
-    SetScreenResolution(client_size);
-    return current_resolution_;
+  ScreenResolution GetBestResolution(const ScreenResolution& client_size,
+                           std::optional<webrtc::ScreenId> id = std::nullopt) {
+    SetScreenResolution(client_size, id);
+    return id.has_value() ? monitors_[*id] : monitors_.begin()->second;
   }
 
+  // Should be used only for single-monitor tests.
   void VerifySizes(const std::vector<ScreenResolution>& client_sizes,
                    const std::vector<ScreenResolution>& expected_sizes) {
     ASSERT_EQ(client_sizes.size(), expected_sizes.size())
@@ -132,35 +188,47 @@ class ResizingHostObserverTest : public testing::Test {
          client != client_sizes.end() && expected != expected_sizes.end();
          ++client, ++expected) {
       ScreenResolution best_size = GetBestResolution(*client);
-      EXPECT_EQ(*expected, best_size) << "Input resolution = " << *client;
+      EXPECT_EQ(best_size, *expected) << "Input resolution = " << *client;
     }
   }
 
-  ScreenResolution current_resolution_;
+  // Sends the current display-info to the ResizingHostObserver.
+  void NotifyDisplayInfo() {
+    display_info_monitor_.info = ToDisplayInfo(monitors_);
+    display_info_monitor_.callbacks.Notify();
+  }
+
+  Monitors monitors_;
+  FakeDesktopDisplayInfoMonitor display_info_monitor_;
   FakeDesktopResizer::CallCounts call_counts_;
   std::unique_ptr<ResizingHostObserver> resizing_host_observer_;
   base::SimpleTestTickClock clock_;
   bool auto_advance_clock_ = true;
+  base::test::TaskEnvironment task_environment_{
+      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
 };
 
 // Check that the resolution isn't restored if it wasn't changed by this class.
 TEST_F(ResizingHostObserverTest, NoRestoreResolution) {
-  InitDesktopResizer(MakeResolution(640, 480), false,
+  InitDesktopResizer({{123, MakeResolution(640, 480)}}, false,
                      std::vector<ScreenResolution>(), true);
+  NotifyDisplayInfo();
   resizing_host_observer_.reset();
-  EXPECT_EQ(0, call_counts_.restore_resolution);
+  EXPECT_EQ(call_counts_.restore_resolution, 0);
 }
 
 // Check that the host is not resized if GetSupportedSizes returns an empty
 // list (even if GetCurrentSize is supported).
 TEST_F(ResizingHostObserverTest, EmptyGetSupportedSizes) {
   ScreenResolution initial = MakeResolution(640, 480);
-  InitDesktopResizer(initial, false, std::vector<ScreenResolution>(), true);
+  InitDesktopResizer({{123, initial}}, false, std::vector<ScreenResolution>(),
+                     true);
+  NotifyDisplayInfo();
   VerifySizes({MakeResolution(200, 100), MakeResolution(100, 200)},
               {initial, initial});
   resizing_host_observer_.reset();
-  EXPECT_EQ(0, call_counts_.set_resolution);
-  EXPECT_EQ(0, call_counts_.restore_resolution);
+  EXPECT_EQ(call_counts_.set_resolution, 0);
+  EXPECT_EQ(call_counts_.restore_resolution, 0);
 }
 
 // Check that the restore flag is respected.
@@ -171,48 +239,51 @@ TEST_F(ResizingHostObserverTest, RestoreFlag) {
   std::vector<ScreenResolution> client_sizes = {MakeResolution(1024, 768)};
 
   // Flag false
-  InitDesktopResizer(initial, false, supported_sizes, false);
+  InitDesktopResizer({{123, initial}}, false, supported_sizes, false);
+  NotifyDisplayInfo();
   VerifySizes(client_sizes, client_sizes);
   resizing_host_observer_.reset();
-  EXPECT_EQ(1, call_counts_.set_resolution);
-  EXPECT_EQ(0, call_counts_.restore_resolution);
-  EXPECT_EQ(MakeResolution(1024, 768), current_resolution_);
+  EXPECT_EQ(call_counts_.set_resolution, 1);
+  EXPECT_EQ(call_counts_.restore_resolution, 0);
+  EXPECT_EQ(monitors_[123], MakeResolution(1024, 768));
 
   // Flag true
-  InitDesktopResizer(initial, false, supported_sizes, true);
+  InitDesktopResizer({{123, initial}}, false, supported_sizes, true);
+  NotifyDisplayInfo();
   VerifySizes(client_sizes, client_sizes);
   resizing_host_observer_.reset();
-  EXPECT_EQ(1, call_counts_.set_resolution);
-  EXPECT_EQ(1, call_counts_.restore_resolution);
-  EXPECT_EQ(MakeResolution(640, 480), current_resolution_);
+  EXPECT_EQ(call_counts_.set_resolution, 1);
+  EXPECT_EQ(call_counts_.restore_resolution, 1);
+  EXPECT_EQ(monitors_[123], MakeResolution(640, 480));
 }
 
 // Check that the size is restored if an empty ClientResolution is received.
 TEST_F(ResizingHostObserverTest, RestoreOnEmptyClientResolution) {
-  InitDesktopResizer(MakeResolution(640, 480), true,
+  InitDesktopResizer({{123, MakeResolution(640, 480)}}, true,
                      std::vector<ScreenResolution>(), true);
-  SetScreenResolution(MakeResolution(200, 100));
-  EXPECT_EQ(1, call_counts_.set_resolution);
-  EXPECT_EQ(0, call_counts_.restore_resolution);
-  EXPECT_EQ(MakeResolution(200, 100), current_resolution_);
-  SetScreenResolution(MakeResolution(0, 0));
-  EXPECT_EQ(1, call_counts_.set_resolution);
-  EXPECT_EQ(1, call_counts_.restore_resolution);
-  EXPECT_EQ(MakeResolution(640, 480), current_resolution_);
+  NotifyDisplayInfo();
+  SetScreenResolution(MakeResolution(200, 100), 123);
+  EXPECT_EQ(call_counts_.set_resolution, 1);
+  EXPECT_EQ(call_counts_.restore_resolution, 0);
+  EXPECT_EQ(monitors_[123], MakeResolution(200, 100));
+  SetScreenResolution(MakeResolution(0, 0), 123);
+  EXPECT_EQ(call_counts_.set_resolution, 1);
+  EXPECT_EQ(call_counts_.restore_resolution, 1);
+  EXPECT_EQ(monitors_[123], MakeResolution(640, 480));
 }
 
 // Check that if the implementation supports exact size matching, it is used.
 TEST_F(ResizingHostObserverTest, SelectExactSize) {
-  InitDesktopResizer(MakeResolution(640, 480), true,
+  InitDesktopResizer({{123, MakeResolution(640, 480)}}, true,
                      std::vector<ScreenResolution>(), true);
-  std::vector<ScreenResolution> client_sizes = {MakeResolution(200, 100),
-                                                MakeResolution(100, 200),
-                                                MakeResolution(640, 480),
-                                                MakeResolution(480, 640),
-                                                MakeResolution(1280, 1024)};
+  NotifyDisplayInfo();
+  std::vector<ScreenResolution> client_sizes = {
+      MakeResolution(200, 100), MakeResolution(100, 200),
+      MakeResolution(640, 480), MakeResolution(480, 640),
+      MakeResolution(1280, 1024)};
   VerifySizes(client_sizes, client_sizes);
   resizing_host_observer_.reset();
-  EXPECT_EQ(1, call_counts_.restore_resolution);
+  EXPECT_EQ(call_counts_.restore_resolution, 1);
 }
 
 // Check that if the implementation supports a size that is no larger than
@@ -220,14 +291,12 @@ TEST_F(ResizingHostObserverTest, SelectExactSize) {
 TEST_F(ResizingHostObserverTest, SelectBestSmallerSize) {
   std::vector<ScreenResolution> supported_sizes = {MakeResolution(639, 479),
                                                    MakeResolution(640, 480)};
-  InitDesktopResizer(MakeResolution(640, 480), false, supported_sizes, true);
-  VerifySizes({MakeResolution(639, 479),
-               MakeResolution(640, 480),
-               MakeResolution(641, 481),
-               MakeResolution(999, 999)},
-              {supported_sizes[0],
-               supported_sizes[1],
-               supported_sizes[1],
+  InitDesktopResizer({{123, MakeResolution(640, 480)}}, false, supported_sizes,
+                     true);
+  NotifyDisplayInfo();
+  VerifySizes({MakeResolution(639, 479), MakeResolution(640, 480),
+               MakeResolution(641, 481), MakeResolution(999, 999)},
+              {supported_sizes[0], supported_sizes[1], supported_sizes[1],
                supported_sizes[1]});
 }
 
@@ -236,13 +305,12 @@ TEST_F(ResizingHostObserverTest, SelectBestSmallerSize) {
 TEST_F(ResizingHostObserverTest, SelectBestScaleFactor) {
   std::vector<ScreenResolution> supported_sizes = {MakeResolution(100, 100),
                                                    MakeResolution(200, 100)};
-  InitDesktopResizer(MakeResolution(200, 100), false, supported_sizes, true);
-  VerifySizes({MakeResolution(1, 1),
-               MakeResolution(99, 99),
-               MakeResolution(199, 99)},
-              {supported_sizes[0],
-               supported_sizes[0],
-               supported_sizes[1]});
+  InitDesktopResizer({{123, MakeResolution(200, 100)}}, false, supported_sizes,
+                     true);
+  NotifyDisplayInfo();
+  VerifySizes(
+      {MakeResolution(1, 1), MakeResolution(99, 99), MakeResolution(199, 99)},
+      {supported_sizes[0], supported_sizes[0], supported_sizes[1]});
 }
 
 // Check that if the implementation supports two sizes that have the same
@@ -250,17 +318,14 @@ TEST_F(ResizingHostObserverTest, SelectBestScaleFactor) {
 TEST_F(ResizingHostObserverTest, SelectWidest) {
   std::vector<ScreenResolution> supported_sizes = {MakeResolution(640, 480),
                                                    MakeResolution(480, 640)};
-  InitDesktopResizer(MakeResolution(480, 640), false, supported_sizes, true);
-  VerifySizes({MakeResolution(100, 100),
-               MakeResolution(480, 480),
-               MakeResolution(500, 500),
-               MakeResolution(640, 640),
+  InitDesktopResizer({{123, MakeResolution(480, 640)}}, false, supported_sizes,
+                     true);
+  NotifyDisplayInfo();
+  VerifySizes({MakeResolution(100, 100), MakeResolution(480, 480),
+               MakeResolution(500, 500), MakeResolution(640, 640),
                MakeResolution(1000, 1000)},
-              {supported_sizes[0],
-               supported_sizes[0],
-               supported_sizes[0],
-               supported_sizes[0],
-               supported_sizes[0]});
+              {supported_sizes[0], supported_sizes[0], supported_sizes[0],
+               supported_sizes[0], supported_sizes[0]});
 }
 
 // Check that if the best match for the client size doesn't change, then we
@@ -268,47 +333,109 @@ TEST_F(ResizingHostObserverTest, SelectWidest) {
 TEST_F(ResizingHostObserverTest, NoSetSizeForSameSize) {
   std::vector<ScreenResolution> supported_sizes = {MakeResolution(640, 480),
                                                    MakeResolution(480, 640)};
-  InitDesktopResizer(MakeResolution(480, 640), false, supported_sizes, true);
-  VerifySizes({MakeResolution(640, 640),
-               MakeResolution(1024, 768),
+  InitDesktopResizer({{123, MakeResolution(480, 640)}}, false, supported_sizes,
+                     true);
+  NotifyDisplayInfo();
+  VerifySizes({MakeResolution(640, 640), MakeResolution(1024, 768),
                MakeResolution(640, 480)},
-              {supported_sizes[0],
-               supported_sizes[0],
-               supported_sizes[0]});
-  EXPECT_EQ(1, call_counts_.set_resolution);
+              {supported_sizes[0], supported_sizes[0], supported_sizes[0]});
+  EXPECT_EQ(call_counts_.set_resolution, 1);
 }
 
 // Check that desktop resizes are rate-limited, and that if multiple resize
 // requests are received in the time-out period, the most recent is respected.
 TEST_F(ResizingHostObserverTest, RateLimited) {
-  InitDesktopResizer(MakeResolution(640, 480), true,
+  InitDesktopResizer({{123, MakeResolution(640, 480)}}, true,
                      std::vector<ScreenResolution>(), true);
+  NotifyDisplayInfo();
   auto_advance_clock_ = false;
 
-  base::test::SingleThreadTaskEnvironment task_environment;
-  base::RunLoop run_loop;
-
-  EXPECT_EQ(MakeResolution(100, 100),
-            GetBestResolution(MakeResolution(100, 100)));
-  clock_.Advance(base::TimeDelta::FromMilliseconds(900));
-  EXPECT_EQ(MakeResolution(100, 100),
-            GetBestResolution(MakeResolution(200, 200)));
-  clock_.Advance(base::TimeDelta::FromMilliseconds(99));
-  EXPECT_EQ(MakeResolution(100, 100),
-            GetBestResolution(MakeResolution(300, 300)));
-  clock_.Advance(base::TimeDelta::FromMilliseconds(1));
+  EXPECT_EQ(GetBestResolution(MakeResolution(100, 100)),
+            MakeResolution(100, 100));
+  clock_.Advance(base::Milliseconds(900));
+  EXPECT_EQ(GetBestResolution(MakeResolution(200, 200)),
+            MakeResolution(100, 100));
+  clock_.Advance(base::Milliseconds(99));
+  EXPECT_EQ(GetBestResolution(MakeResolution(300, 300)),
+            MakeResolution(100, 100));
+  clock_.Advance(base::Milliseconds(1));
 
   // Due to the kMinimumResizeIntervalMs constant in resizing_host_observer.cc,
   // We need to wait a total of 1000ms for the final resize to be processed.
   // Since it was queued 900 + 99 ms after the first, we need to wait an
-  // additional 1ms. However, since RunLoop is not guaranteed to process tasks
-  // with the same due time in FIFO order, wait an additional 1ms for safety.
-  task_environment.GetMainThreadTaskRunner()->PostDelayedTask(
-      FROM_HERE, run_loop.QuitClosure(), base::TimeDelta::FromMilliseconds(2));
-  run_loop.Run();
+  // additional 1ms.
+  task_environment_.FastForwardBy(base::Milliseconds(1));
 
-  // If the QuitClosure fired before the final resize, it's a test failure.
-  EXPECT_EQ(MakeResolution(300, 300), current_resolution_);
+  // If the final resize was not processed, it's a test failure.
+  EXPECT_EQ(monitors_[123], MakeResolution(300, 300));
+}
+
+// Check that desktop resizes for different monitors are not rate-limited.
+TEST_F(ResizingHostObserverTest, NotRateLimitedForDifferentMonitors) {
+  InitDesktopResizer(
+      {{123, MakeResolution(640, 480)}, {234, MakeResolution(800, 600)}}, true,
+      std::vector<ScreenResolution>(), false);
+  NotifyDisplayInfo();
+  auto_advance_clock_ = false;
+
+  EXPECT_EQ(GetBestResolution(MakeResolution(100, 100), 123),
+            MakeResolution(100, 100));
+  clock_.Advance(base::Milliseconds(900));
+  EXPECT_EQ(GetBestResolution(MakeResolution(200, 200), 234),
+            MakeResolution(200, 200));
+}
+
+TEST_F(ResizingHostObserverTest, PendingResolutionAppliedToFirstMonitor) {
+  // An anonymous resolution request should be remembered and applied as soon
+  // as the first display-info is provided.
+  InitDesktopResizer({{123, MakeResolution(640, 480)}}, true,
+                     std::vector<ScreenResolution>(), false);
+  SetScreenResolution(MakeResolution(200, 100));
+  EXPECT_EQ(call_counts_.set_resolution, 0);
+  NotifyDisplayInfo();
+  EXPECT_EQ(call_counts_.set_resolution, 1);
+  Monitors expected = {{123, MakeResolution(200, 100)}};
+  EXPECT_EQ(monitors_, expected);
+}
+
+TEST_F(ResizingHostObserverTest, AnonymousRequestDroppedIfMultipleMonitors) {
+  InitDesktopResizer(
+      {{123, MakeResolution(640, 480)}, {234, MakeResolution(800, 600)}}, true,
+      std::vector<ScreenResolution>(), false);
+  NotifyDisplayInfo();
+  SetScreenResolution(MakeResolution(200, 100));
+  EXPECT_EQ(call_counts_.set_resolution, 0);
+}
+
+TEST_F(ResizingHostObserverTest, RequestDroppedForUnknownMonitor) {
+  InitDesktopResizer({{123, MakeResolution(640, 480)}}, true,
+                     std::vector<ScreenResolution>(), false);
+  NotifyDisplayInfo();
+  SetScreenResolution(MakeResolution(200, 100), 234);
+  EXPECT_EQ(call_counts_.set_resolution, 0);
+  SetScreenResolution(MakeResolution(200, 100), 123);
+  EXPECT_EQ(call_counts_.set_resolution, 1);
+}
+
+TEST_F(ResizingHostObserverTest, MultipleMonitorSizesRestored) {
+  InitDesktopResizer({{123, MakeResolution(1230, 1230)},
+                      {234, MakeResolution(2340, 2340)},
+                      {345, MakeResolution(3450, 3450)}},
+                     true, std::vector<ScreenResolution>(), false);
+  NotifyDisplayInfo();
+
+  SetScreenResolution(MakeResolution(999, 999), 123);
+  SetScreenResolution(MakeResolution(999, 999), 234);
+  SetScreenResolution(MakeResolution(999, 999), 345);
+  EXPECT_EQ(call_counts_.set_resolution, 3);
+
+  SetScreenResolution({}, 123);
+  SetScreenResolution({}, 345);
+  EXPECT_EQ(call_counts_.restore_resolution, 2);
+  Monitors expected = {{123, MakeResolution(1230, 1230)},
+                       {234, MakeResolution(999, 999)},
+                       {345, MakeResolution(3450, 3450)}};
+  EXPECT_EQ(monitors_, expected);
 }
 
 }  // namespace remoting

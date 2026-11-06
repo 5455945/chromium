@@ -1,24 +1,16 @@
-// Copyright 2012 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 goog.module('goog.labs.testing.stringMatcherTest');
 goog.setTestOnly();
 
 const MatcherError = goog.require('goog.labs.testing.MatcherError');
-/** @suppress {extraRequire} */
-const StringContainsInOrderMatcher = goog.require('goog.labs.testing.StringContainsInOrderMatcher');
 const assertThat = goog.require('goog.labs.testing.assertThat');
+/** @suppress {extraRequire} */
+const matchers = goog.require('goog.labs.testing');
 const testSuite = goog.require('goog.testing.testSuite');
 
 function assertMatcherError(callable, errorString) {
@@ -50,9 +42,30 @@ testSuite({
   },
 
   testEqualToIgnoringWhitespace() {
+    // This function defines an equivalence relation on strings, where strings
+    // are equivalent if they have whitespace in the same places, disregarding
+    // how much or what kind.  Test the three properties of relations.
+    // Test Symmetry.
     assertThat(
         '    h\n   EL L\tO', equalToIgnoringWhitespace('h el l o'),
         '"   h   EL L\tO   " is equal to "h el l o"');
+    assertThat(
+        'h el l o', equalToIgnoringWhitespace('    h\n   EL L\tO'),
+        '"   h   EL L\tO   " is equal with arguments in the other order to "h el l o"');
+    // Test Reflexivity
+    const x = '\n       Some text and then \nnewlines       \n';
+    assertThat(
+        x, equalToIgnoringWhitespace(x),
+        'Strings including whitespace should compare equal to themselves');
+    // Test Transitivity.
+    const a = 'S  p  a  c  e';
+    const b = ' s\np\na\nc\ne';
+    const c = 's P   a    c    e';
+    assertThat(a, equalToIgnoringWhitespace(b));
+    assertThat(b, equalToIgnoringWhitespace(c));
+    assertThat(
+        a, equalToIgnoringWhitespace(c),
+        'EqualToIgnoringWhitespace should be transitive');
 
     assertMatcherError(() => {
       assertThat('hybrid', equalToIgnoringWhitespace('theory'));

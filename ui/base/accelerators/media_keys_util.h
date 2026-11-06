@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,8 +24,8 @@ enum class MediaHardwareKeyAction {
 };
 
 // The name of the histogram that records |MediaHardwareKeyAction|.
-COMPONENT_EXPORT(UI_BASE)
-extern const char kMediaHardwareKeyActionHistogramName[];
+inline constexpr char kMediaHardwareKeyActionHistogramName[] =
+    "Media.HardwareKeyPressed";
 
 // Records a media hardware key action to the
 // |kMediaHardwareKeyActionHistogramName| histogram.

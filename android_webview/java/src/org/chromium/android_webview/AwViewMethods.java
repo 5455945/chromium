@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,11 +20,10 @@ import android.view.inputmethod.InputConnection;
 /**
  * An interface that defines a subset of the {@link View} functionality.
  *
- * <p>This interface allows us to hook up drawing and input related methods to the
- * {@link AwContents}'s consumer in embedded mode, and to the {@link FullScreenView}
- * in fullscreen mode.
+ * <p>This interface allows us to hook up drawing and input related methods to the {@link
+ * AwContents}'s consumer in embedded mode, and to the {@link FullScreenView} in fullscreen mode.
  */
-interface AwViewMethods {
+public interface AwViewMethods {
 
     /**
      * @see android.view.View#onDraw
@@ -129,8 +128,7 @@ interface AwViewMethods {
     /**
      * @see android.view.View#onOverScrolled
      */
-    void onContainerViewOverScrolled(
-            int scrollX, int scrollY, boolean clampedX, boolean clampedY);
+    void onContainerViewOverScrolled(int scrollX, int scrollY, boolean clampedX, boolean clampedY);
 
     /**
      * @see android.view.View#computeHorizontalScrollRange
@@ -168,12 +166,26 @@ interface AwViewMethods {
     boolean onCheckIsTextEditor();
 
     /**
-     * @see android.view.View#getAccessibilityNodeProvider
+     * If native accessibility (not script injection) is enabled, and if this is running on
+     * JellyBean or later, returns an AccessibilityNodeProvider that implements native accessibility
+     * for this view. Returns null otherwise.
+     *
+     * @return The AccessibilityNodeProvider, if available, or null otherwise.
      */
     AccessibilityNodeProvider getAccessibilityNodeProvider();
 
     /**
      * @see android.view.View#performAccessibilityAction
      */
-    public boolean performAccessibilityAction(final int action, final Bundle arguments);
+    boolean performAccessibilityAction(int action, Bundle arguments);
+
+    /**
+     * @see android.view.View#onStartTemporaryDetach()
+     */
+    void onStartTemporaryDetach();
+
+    /**
+     * @see android.view.View#onFinishTemporaryDetach()
+     */
+    void onFinishTemporaryDetach();
 }

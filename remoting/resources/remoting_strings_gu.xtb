@@ -11,6 +11,7 @@
 <translation id="1546934824884762070">અનપેક્ષિત ભૂલ આવી. કૃપા કરીને વિકાસકર્તાઓને આ સમસ્યાની જાણ કરો.</translation>
 <translation id="1697532407822776718">તમારું બધું સેટ છે!</translation>
 <translation id="1742469581923031760">કનેક્ટ કરી રહ્યું છે...</translation>
+<translation id="177040763384871009">રિમોટ ડિવાઇસ પર ક્લિક કરેલી લિંકને ક્લાયન્ટ બ્રાઉઝર પર ખોલવાની મંજૂરી આપવા માટે, તમારે સિસ્ટમના વેબ બ્રાઉઝરને "<ph name="URL_FORWARDER_NAME" />"માં બદલવાની જરૂર છે.</translation>
 <translation id="177096447311351977">ક્લાઇન્ટ માટે ચેનલ IP: <ph name="CLIENT_GAIA_IDENTIFIER" /> ip='<ph name="CLIENT_IP_ADDRESS_AND_PORT" />' host_ip='<ph name="HOST_IP_ADDRESS_AND_PORT" />' ચેનલ='<ph name="CHANNEL_TYPE" />' કનેક્શન='<ph name="CONNECTION_TYPE" />'.</translation>
 <translation id="1897488610212723051">ડિલીટ કરો</translation>
 <translation id="2009755455353575666">કનેક્શન નિષ્ફળ થયું</translation>
@@ -25,10 +26,8 @@
 <translation id="225614027745146050">સ્વાગત છે</translation>
 <translation id="2320166752086256636">કીબોર્ડ છુપાવો</translation>
 <translation id="2329392777730037872">ગ્રાહકના ડિવાઇસ પર <ph name="URL" /> ખોલવામાં નિષ્ફળ રહ્યાં.</translation>
-<translation id="2333212046079545895">કૉપિરાઇટ 2021 Google LLC. સર્વાધિકાર સુરક્ષિત.</translation>
 <translation id="2359808026110333948">આગળ વધો</translation>
 <translation id="2366718077645204424">હોસ્ટ સુધી પહોંચવામાં અક્ષમ. આ કદાચ તમે ઉપયોગ કરી રહ્યાં છો એ નેટવર્કની ગોઠવણીનાં કારણે છે.</translation>
-<translation id="2370754117186920852"><ph name="OPTIONAL_OFFLINE_REASON" />  છેલ્લે <ph name="RELATIVE_TIMESTAMP" /> ઓનલાઇન જોવામાં આવ્યા.</translation>
 <translation id="2504109125669302160"><ph name="PRODUCT_NAME" />ને 'ઍક્સેસિબિલિટી'ની પરવાનગી આપો</translation>
 <translation id="2509394361235492552"><ph name="HOSTNAME" /> સાથે કનેક્ટ કર્યું</translation>
 <translation id="2540992418118313681">શું તમે આ કમ્પ્યુટર બીજા વપરાશકર્તા માટે જોવા અને નિયંત્રિત કરવા માટે શેર કરવા માંગો છો?</translation>
@@ -40,22 +39,25 @@
 <translation id="2758123043070977469">પ્રમાણીકરણ કરવામાં એક સમસ્યા આવી હતી, કૃપા કરીને ફરી લૉગ ઇન કરો.</translation>
 <translation id="2803375539583399270">PIN દાખલ કરો</translation>
 <translation id="2919669478609886916">હાલમાં તમે આ મશીનને બીજા વપરાશકર્તા સાથે શેર કરી રહ્યાં છો. શું તમે શેર કરવાનું ચાલુ રાખવા માગો છો?</translation>
+<translation id="2929683002824598593">ડિવાઇસ શેર કરો</translation>
 <translation id="2939145106548231838">હોસ્ટ કરવા માટે પ્રમાણીકૃત કરો</translation>
 <translation id="3027681561976217984">ટચ મોડ</translation>
 <translation id="3106379468611574572">રીમોટ કમ્પ્યુટર કનેક્શન વિનંતિઓને પ્રતિસાદ આપી રહ્યું નથી. કૃપા કરીને ચકાસો કે એ ઑનલાઇન છે અને ફરી પ્રયાસ કરો.</translation>
 <translation id="3150823315463303127">હોસ્ટ પૉલિસી વાંચવામાં નિષ્ફળ ગયું.</translation>
 <translation id="3171922709365450819">આ ઉપકરણ આ ક્લાયન્ટ દ્વારા સમર્થિત નથી કારણ કે તેને તૃતીય પક્ષ પ્રમાણીકરણની આવશ્યકતા છે.</translation>
 <translation id="3197730452537982411">રીમોટ ડેસ્કટૉપ</translation>
+<translation id="3236334139428307578">કૉપિરાઇટ 2026 The Chromium Authors. સર્વાધિકાર સુરક્ષિત.</translation>
 <translation id="324272851072175193">આ સૂચનાઓ ઇમેઇલ કરો</translation>
+<translation id="3254626532848657899">નીચે ખસેડો</translation>
 <translation id="3305934114213025800"><ph name="PRODUCT_NAME" /> ફેરફાર કરવા માગે છે.</translation>
 <translation id="3339299787263251426">ઇન્ટરનેટ પર તમારા કમ્પ્યુટરને સુરક્ષિત રીતે ઍક્સેસ કરો</translation>
 <translation id="3385242214819933234">અમાન્ય હોસ્ટ માલિક.</translation>
 <translation id="3423542133075182604">સુરક્ષા કી રીમોટિંગ પ્રક્રિયા</translation>
 <translation id="3581045510967524389">નેટવર્ક સાથે કનેક્ટ કરી શકાયું નથી. કૃપા કરીને તપાસો કે તમારું ઉપકરણ ઓન-લાઇન છે.</translation>
 <translation id="3596628256176442606">આ સેવા Chromoting ક્લાઇન્ટ્સ પાસેથી આવતા કનેક્શન્સ સક્ષમ કરે છે.</translation>
-<translation id="369442766917958684">ઑફલાઇન.</translation>
 <translation id="3695446226812920698">જાણો કેવી રીતે</translation>
 <translation id="3776024066357219166">તમારું Chrome રીમોટ ડેસ્કટૉપ સત્ર સમાપ્ત થયું.</translation>
+<translation id="3858860766373142691">નામ</translation>
 <translation id="3897092660631435901">મેનૂ</translation>
 <translation id="3905196214175737742">અમાન્ય હોસ્ટ માલિક ડોમેન.</translation>
 <translation id="3931191050278863510">હોસ્ટ રોક્યું.</translation>
@@ -74,9 +76,9 @@
 <translation id="4405930547258349619">મુખ્ય લાઇબ્રેરી</translation>
 <translation id="443560535555262820">ઍક્સેસિબિલિટીની પસંદગીઓ ખોલો</translation>
 <translation id="4450893287417543264">ફરી બતાવશો નહીં</translation>
-<translation id="4512952200932940229">કોપિરાઇટ 2021 The Chromium Authors. સર્વાધિકાર સુરક્ષિત.</translation>
 <translation id="4513946894732546136">પ્રતિસાદ</translation>
 <translation id="4563926062592110512">ક્લાઇન્ટ ડિસ્કનેક્ટ થયાં: <ph name="CLIENT_USERNAME" />.</translation>
+<translation id="4618411825115957973"><ph name="URL_FORWARDER_NAME" />નું યોગ્ય રીતે કન્ફિગ્યુરેશન થયું નથી. કૃપા કરીને કોઈ અલગ ડિફૉલ્ટ વેબ બ્રાઉઝર પસંદ કરો અને પછી ફરીથી URL ફૉરવર્ડિંગ ચાલુ કરો.</translation>
 <translation id="4635770493235256822">રિમોટ ઉપકરણો</translation>
 <translation id="4660011489602794167">કીબોર્ડ બતાવો</translation>
 <translation id="4703799847237267011">તમારું Chromoting સત્ર સમાપ્ત થઇ ગયું છે.</translation>
@@ -92,12 +94,12 @@
 <translation id="4987330545941822761">Chrome રીમોટ ડેસ્કટૉપ, કમ્પ્યુટર પર URLsને ખોલવા માટે બ્રાઉઝરને નિર્ધારિત કરી શકતું નથી. કૃપા કરીને નીચે આપેલી સૂચિમાંથી તેને પસંદ કરો.</translation>
 <translation id="5064360042339518108"><ph name="HOSTNAME" /> (ઑફલાઇન)</translation>
 <translation id="507204348399810022">શું તમે ખરેખર <ph name="HOSTNAME" /> માટેના રિમોટ કનેક્શન્સને બંધ કરવા માગો છો?</translation>
+<translation id="5095424396646120601">ક્રૅશ રિપોર્ટિંગ</translation>
 <translation id="5170982930780719864">અમાન્ય હોસ્ટ id.</translation>
 <translation id="5204575267916639804">વારંવાર પૂછાતા સવાલો</translation>
 <translation id="5222676887888702881">સાઇન આઉટ</translation>
 <translation id="5234764350956374838">કાઢી નાખો</translation>
 <translation id="5308380583665731573">કનેક્ટ કરો</translation>
-<translation id="5327248766486351172">નામ</translation>
 <translation id="533625276787323658">કનેક્ટ કરવા માટે કંઈ નથી</translation>
 <translation id="5397086374758643919">Chrome રીમોટ ડેસ્કટૉપ હોસ્ટ અનઇન્સ્ટોલર</translation>
 <translation id="5419418238395129586">છેલ્લે ઑનલાઇન: <ph name="DATE" /></translation>
@@ -105,11 +107,12 @@
 <translation id="5601503069213153581">PIN</translation>
 <translation id="5690427481109656848">Google LLC</translation>
 <translation id="5708869785009007625">તમારું ડેસ્કટૉપ હાલમાં <ph name="USER" /> સાથે શેર કરવામાં આવી રહ્યું છે.</translation>
-<translation id="5750083143895808682"><ph name="EMAIL_ADDRESS" /> તરીકે સાઇન ઇન કર્યું.</translation>
 <translation id="579702532610384533">ફરીથી કનેક્ટ કરો</translation>
 <translation id="5810269635982033450">સ્ક્રીન એ ટ્રૅકપૅડના જેવું કાર્ય કરે છે</translation>
+<translation id="5823554426827907568"><ph name="CLIENT_USERNAME" /> દ્વારા તમારી સ્ક્રીન જોવા અને તમારા કીબોર્ડ અને માઉસના નિયંત્રણના ઍક્સેસ માટે વિનંતી કરવામાં આવી છે. જો તમે આ વિનંતીની અપેક્ષા કરી રહ્યાં ન હો, તો ''<ph name="IDS_SHARE_CONFIRM_DIALOG_DECLINE" />'' દબાવો. અન્યથા જ્યારે તૈયાર હોય, ત્યારે કનેક્શનની મંજૂરી આપવા માટે ''<ph name="IDS_SHARE_CONFIRM_DIALOG_CONFIRM" />'' પસંદ કરો.</translation>
 <translation id="5823658491130719298">તમે જે કમ્પ્યુટર રિમોટલી ઍક્સેસ કરવા માગતા હો, તેના પર Chrome ખોલો અને <ph name="INSTALLATION_LINK" />ની મુલાકાત લો</translation>
 <translation id="5841343754884244200">ડિસ્પ્લેનાં વિકલ્પો</translation>
+<translation id="5965133372831030509">કૉપિરાઇટ 2026 Google LLC. સર્વાધિકાર સુરક્ષિત.</translation>
 <translation id="6033507038939587647">કીબોર્ડનાં વિકલ્પો</translation>
 <translation id="6040143037577758943">બંધ કરો</translation>
 <translation id="6062854958530969723">હોસ્ટ આરંભ નિષ્ફળ રહ્યું.</translation>
@@ -118,10 +121,12 @@
 <translation id="6178645564515549384">રિમોટ સહાયતા માટે મૂળ મેસેજિંગ હોસ્ટ</translation>
 <translation id="618120821413932081">વિંડો સાથે મેળ કરવા માટે રિમોટ રિઝોલ્યુશન અપડેટ કરો</translation>
 <translation id="6223301979382383752">સ્ક્રીન રેકોર્ડિંગની પસંદગીઓ ખોલો</translation>
+<translation id="6252344563748670011"><ph name="CLIENT_USERNAME" /> દ્વારા તમારી સ્ક્રીન જોવા અને તમારા કીબોર્ડ અને માઉસના નિયંત્રણના ઍક્સેસ માટે વિનંતી કરવામાં આવી છે. શું તમે તમારું ડિવાઇસ શેર કરવા માગો છો?</translation>
 <translation id="6284412385303060032">કર્ટન મોડને સહાય આપવા માટે વપરાશકર્તા-વિશિષ્ટ સત્રમાં ચલાત હોસ્ટ પર સ્વિચ કરીને કન્સોલ લોજિક સ્ક્રીન પર ચાલતા હોસ્ટને શટડાઉન કર્યું છે.</translation>
 <translation id="6542902059648396432">સમસ્યાની જાણ કરો…</translation>
 <translation id="6583902294974160967">સહાય</translation>
 <translation id="6612717000975622067">Ctrl-Alt-Del મોકલો</translation>
+<translation id="6625262630437221505">{0,plural, =1{જો તમે કોઈ પગલું નહીં લો, તો # સેકન્ડમાં તમારું ડિવાઇસ ઑટોમૅટિક રીતે શેર કરવાનું શરૂ કરશે.}one{જો તમે કોઈ પગલું નહીં લો, તો # સેકન્ડમાં તમારું ડિવાઇસ ઑટોમૅટિક રીતે શેર કરવાનું શરૂ કરશે.}other{જો તમે કોઈ પગલું નહીં લો, તો # સેકન્ડમાં તમારું ડિવાઇસ ઑટોમૅટિક રીતે શેર કરવાનું શરૂ કરશે.}}</translation>
 <translation id="6654753848497929428">શેર કરો</translation>
 <translation id="677755392401385740">આ વપરાશકર્તા માટે હોસ્ટ શરૂ: <ph name="HOST_USERNAME" />.</translation>
 <translation id="6902524959760471898"><ph name="PRODUCT_NAME" /> ક્લાયન્ટના ડિવાઇસ પર URL ખોલવા માટેની સહાયક ઍપ્લિકેશન</translation>
@@ -142,6 +147,7 @@
 <translation id="7434397035092923453">ક્લાઇન્ટ માટે ઍક્સેસ નકારી: <ph name="CLIENT_USERNAME" />.</translation>
 <translation id="7444276978508498879">ક્લાઇન્ટ કનેક્ટ થયાં: <ph name="CLIENT_USERNAME" />.</translation>
 <translation id="7526139040829362392">એકાઉન્ટ બદલો</translation>
+<translation id="7535110896613603182">ડિફૉલ્ટ ઍપના સેટિંગ ખોલો</translation>
 <translation id="7628469622942688817">આ ઉપકરણ પર મારો પિન યાદ રાખો.</translation>
 <translation id="7649070708921625228">સહાય</translation>
 <translation id="7658239707568436148">રદ કરો</translation>
@@ -161,11 +167,13 @@
 <translation id="8073845705237259513">Chrome રીમોટ ડેસ્કટૉપનો ઉપયોગ કરવા માટે, તમારે તમારા ડિવાઇસ પર એક Google એકાઉન્ટ ઉમેરવાની જરૂર છે.</translation>
 <translation id="809687642899217504">મારા કમ્પ્યુટર્સ</translation>
 <translation id="8116630183974937060">નેટવર્ક ભૂલ આવી. કૃપા કરીને તપાસો કે તમારું ડિવાઇસ ઓન-લાઇન છે અને ફરી પ્રયાસ કરો.</translation>
+<translation id="8249310407154411074">ટોચે ખસેડો</translation>
 <translation id="8295077433896346116"><ph name="PRODUCT_NAME" />નો ઉપયોગ કરવા માટે, તમારે 'ઍક્સેસિબિલિટી'ની પરવાનગી આપવી જરૂરી છે, જેથી કરીને આ Mac પર રિમોટ મશીનનું ઇનપુટ દાખલ કરી શકાય. 
 
 આ પરવાનગી આપવા માટે નીચે '<ph name="BUTTON_NAME" />' બટન પર ક્લિક કરો. 'ઍક્સેસિબિલિટી'ની પસંદગીઓનું જે પૅન ખૂલે છે, '<ph name="SERVICE_SCRIPT_NAME" />'ની એકદમ બાજુમાંના બૉક્સને ચેક કરો.
 
 જો '<ph name="SERVICE_SCRIPT_NAME" />' પહેલેથી જ ચેક કરેલું હોય, તો તેને અનચેક કરીને ફરી ચેક કરો.</translation>
+<translation id="8305209735512572429">વેબનું પ્રમાણીકરણ કરવાની રિમોટિંગ પ્રક્રિયા</translation>
 <translation id="8383794970363966105">Chromoting નો ઉપયોગ કરવા માટે, તમારે તમારા ડિવાઇસ પર એક Google એકાઉન્ટ ઉમેરવાની જરૂર છે.</translation>
 <translation id="8386846956409881180">હોસ્ટ અમાન્ય OAuth ઓળખપત્રો સાથે ગોઠવાયું છે.</translation>
 <translation id="8397385476380433240"><ph name="PRODUCT_NAME" />ને પરવાનગી આપો</translation>

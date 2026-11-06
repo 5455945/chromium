@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,6 +20,7 @@ BorealisServiceFake* BorealisServiceFake::UseFakeForTesting(
           })));
 }
 
+BorealisServiceFake::BorealisServiceFake() = default;
 BorealisServiceFake::~BorealisServiceFake() = default;
 
 BorealisAppLauncher& BorealisServiceFake::AppLauncher() {
@@ -32,14 +33,9 @@ BorealisAppUninstaller& BorealisServiceFake::AppUninstaller() {
   return *app_uninstaller_;
 }
 
-BorealisContextManager& BorealisServiceFake::ContextManager() {
-  CHECK(context_manager_);
-  return *context_manager_;
-}
-
-BorealisDiskManagerDispatcher& BorealisServiceFake::DiskManagerDispatcher() {
-  CHECK(borealis_disk_manager_dispatcher_);
-  return *borealis_disk_manager_dispatcher_;
+BorealisDiskCleanupManager& BorealisServiceFake::DiskCleanupManager() {
+  CHECK(disk_cleanup_manager_);
+  return *disk_cleanup_manager_;
 }
 
 BorealisFeatures& BorealisServiceFake::Features() {
@@ -50,6 +46,11 @@ BorealisFeatures& BorealisServiceFake::Features() {
 BorealisInstaller& BorealisServiceFake::Installer() {
   CHECK(installer_);
   return *installer_;
+}
+
+BorealisLaunchOptions& BorealisServiceFake::LaunchOptions() {
+  CHECK(launch_options_);
+  return *launch_options_;
 }
 
 BorealisShutdownMonitor& BorealisServiceFake::ShutdownMonitor() {
@@ -72,14 +73,9 @@ void BorealisServiceFake::SetAppUninstallerForTesting(
   app_uninstaller_ = app_uninstaller;
 }
 
-void BorealisServiceFake::SetContextManagerForTesting(
-    BorealisContextManager* context_manager) {
-  context_manager_ = context_manager;
-}
-
-void BorealisServiceFake::SetDiskManagerDispatcherForTesting(
-    BorealisDiskManagerDispatcher* borealis_disk_manager_dispatcher) {
-  borealis_disk_manager_dispatcher_ = borealis_disk_manager_dispatcher;
+void BorealisServiceFake::SetDiskCleanupManagerForTesting(
+    BorealisDiskCleanupManager* disk_cleanup_manager) {
+  disk_cleanup_manager_ = disk_cleanup_manager;
 }
 
 void BorealisServiceFake::SetFeaturesForTesting(BorealisFeatures* features) {

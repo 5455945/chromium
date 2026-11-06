@@ -1,16 +1,8 @@
-// Copyright 2011 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 goog.module('goog.crypt.Md5Test');
 goog.setTestOnly();
@@ -78,7 +70,7 @@ testSuite({
     // Message + padding fits in two 64-byte blocks.
     const md5 = new Md5();
     md5.update(sixty);
-    md5.update(sixty.substr(0, 59));
+    md5.update(sixty.slice(0, 59));
     assertEquals(
         '6261005311809757906e04c0d670492d', crypt.byteArrayToHex(md5.digest()));
 

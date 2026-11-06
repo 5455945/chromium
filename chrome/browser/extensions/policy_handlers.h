@@ -1,13 +1,19 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_EXTENSIONS_POLICY_HANDLERS_H_
 #define CHROME_BROWSER_EXTENSIONS_POLICY_HANDLERS_H_
 
-#include "base/macros.h"
+#include <memory>
+#include <optional>
+
 #include "base/values.h"
+#include "build/build_config.h"
 #include "components/policy/core/browser/configuration_policy_handler.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace policy {
 class PolicyMap;
@@ -23,25 +29,32 @@ class ExtensionListPolicyHandler : public policy::ListPolicyHandler {
   ExtensionListPolicyHandler(const char* policy_name,
                              const char* pref_path,
                              bool allow_wildcards);
+
+  ExtensionListPolicyHandler(const ExtensionListPolicyHandler&) = delete;
+  ExtensionListPolicyHandler& operator=(const ExtensionListPolicyHandler&) =
+      delete;
+
   ~ExtensionListPolicyHandler() override;
 
  protected:
   // ListPolicyHandler methods:
 
-  // Checks whether |value| contains a valid extension id (or a wildcard).
+  // Checks whether `value` contains a valid extension id (or a wildcard).
   bool CheckListEntry(const base::Value& value) override;
 
-  // Sets |prefs| at pref_path() to |filtered_list|.
-  void ApplyList(base::Value filtered_list, PrefValueMap* prefs) override;
+  // Sets `prefs` at pref_path() to `filtered_list`.
+  void ApplyList(base::ListValue filtered_list, PrefValueMap* prefs) override;
 
  private:
   const char* pref_path_;
   bool allow_wildcards_;
-
-  DISALLOW_COPY_AND_ASSIGN(ExtensionListPolicyHandler);
 };
 
 // Class for parsing the list of extensions to force install.
+//
+// On ChromeOS the policy values will be filtered before updating the prefs,
+// such that the prefs on Ash only contain the extensions that must be force
+// installed on Ash.
 class ExtensionInstallForceListPolicyHandler
     : public policy::TypeCheckingPolicyHandler {
  public:
@@ -58,11 +71,39 @@ class ExtensionInstallForceListPolicyHandler
   void ApplyPolicySettings(const policy::PolicyMap& policies,
                            PrefValueMap* prefs) override;
 
+  // Returns a `base::DictValue` with the extensions that must be force
+  // installed.
+  //
+  // Returns nullopt if the policy is unset.
+  std::optional<base::DictValue> GetPolicyDict(
+      const policy::PolicyMap& policy_map);
+
  private:
-  // Parses the data in |policy_value| and writes them to |extension_dict|.
+  // Parses the data in `policy_value` and writes them to `extension_dict`.
   bool ParseList(const base::Value* policy_value,
-                 base::DictionaryValue* extension_dict,
+                 base::DictValue* extension_dict,
                  policy::PolicyErrorMap* errors);
+};
+
+// Class for parsing the list of extensions that are blocklisted.
+class ExtensionInstallBlockListPolicyHandler
+    : public policy::ConfigurationPolicyHandler {
+ public:
+  ExtensionInstallBlockListPolicyHandler();
+  ExtensionInstallBlockListPolicyHandler(
+      const ExtensionInstallBlockListPolicyHandler&) = delete;
+  ExtensionInstallBlockListPolicyHandler& operator=(
+      const ExtensionInstallBlockListPolicyHandler&) = delete;
+  ~ExtensionInstallBlockListPolicyHandler() override;
+
+  // `ConfigurationPolicyHandler`:
+  bool CheckPolicySettings(const policy::PolicyMap& policies,
+                           policy::PolicyErrorMap* errors) override;
+  void ApplyPolicySettings(const policy::PolicyMap& policies,
+                           PrefValueMap* prefs) override;
+
+ private:
+  ExtensionListPolicyHandler list_handler_;
 };
 
 // Implements additional checks for policies that are lists of extension
@@ -72,6 +113,12 @@ class ExtensionURLPatternListPolicyHandler
  public:
   ExtensionURLPatternListPolicyHandler(const char* policy_name,
                                        const char* pref_path);
+
+  ExtensionURLPatternListPolicyHandler(
+      const ExtensionURLPatternListPolicyHandler&) = delete;
+  ExtensionURLPatternListPolicyHandler& operator=(
+      const ExtensionURLPatternListPolicyHandler&) = delete;
+
   ~ExtensionURLPatternListPolicyHandler() override;
 
   // ConfigurationPolicyHandler methods:
@@ -82,14 +129,18 @@ class ExtensionURLPatternListPolicyHandler
 
  private:
   const char* pref_path_;
-
-  DISALLOW_COPY_AND_ASSIGN(ExtensionURLPatternListPolicyHandler);
 };
 
 class ExtensionSettingsPolicyHandler
     : public policy::SchemaValidatingPolicyHandler {
  public:
   explicit ExtensionSettingsPolicyHandler(const policy::Schema& chrome_schema);
+
+  ExtensionSettingsPolicyHandler(const ExtensionSettingsPolicyHandler&) =
+      delete;
+  ExtensionSettingsPolicyHandler& operator=(
+      const ExtensionSettingsPolicyHandler&) = delete;
+
   ~ExtensionSettingsPolicyHandler() override;
 
   // ConfigurationPolicyHandler methods:
@@ -97,15 +148,24 @@ class ExtensionSettingsPolicyHandler
                            policy::PolicyErrorMap* errors) override;
   void ApplyPolicySettings(const policy::PolicyMap& policies,
                            PrefValueMap* prefs) override;
+  void OnPolicySettingsNotApplied() override;
 
  private:
   // Performs sanitization for both Check/ApplyPolicySettings(). If an entry
-  // in |dict_value| doesn't pass validation, that entry is removed from the
-  // dictionary. Validation errors are stored in |errors| if non-null.
+  // in `dict_value` doesn't pass validation, that entry is removed from the
+  // dictionary. Validation errors are stored in `errors` if non-null.
   void SanitizePolicySettings(base::Value* dict_value,
                               policy::PolicyErrorMap* errors);
 
-  DISALLOW_COPY_AND_ASSIGN(ExtensionSettingsPolicyHandler);
+  // Cached policy value from CheckPolicySettings(), reused by
+  // ApplyPolicySettings() to avoid redundant clone + normalization +
+  // sanitization of the same data. OnPolicySettingsNotApplied() releases it
+  // when no ApplyPolicySettings() call follows.
+  std::unique_ptr<base::Value> checked_value_;
+
+  // Tracks whether CheckPolicySettings() was called before
+  // ApplyPolicySettings(). Used to enforce the framework contract via CHECK.
+  bool check_called_ = false;
 };
 
 }  // namespace extensions

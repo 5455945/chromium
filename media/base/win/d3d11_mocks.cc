@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,14 @@
 
 namespace media {
 
+DXGIKeyedMutexMock::DXGIKeyedMutexMock() = default;
+DXGIKeyedMutexMock::~DXGIKeyedMutexMock() = default;
+
 D3D11Texture2DMock::D3D11Texture2DMock() = default;
 D3D11Texture2DMock::~D3D11Texture2DMock() = default;
+
+D3D11MultithreadMock::D3D11MultithreadMock() = default;
+D3D11MultithreadMock::~D3D11MultithreadMock() = default;
 
 D3D11BufferMock::D3D11BufferMock() = default;
 D3D11BufferMock::~D3D11BufferMock() = default;
@@ -17,6 +23,9 @@ D3D11DeviceMock::~D3D11DeviceMock() = default;
 
 DXGIFactoryMock::DXGIFactoryMock() = default;
 DXGIFactoryMock::~DXGIFactoryMock() = default;
+
+DXGIFactory2Mock::DXGIFactory2Mock() = default;
+DXGIFactory2Mock::~DXGIFactory2Mock() = default;
 
 DXGIDeviceMock::DXGIDeviceMock() = default;
 DXGIDeviceMock::~DXGIDeviceMock() = default;
@@ -52,5 +61,8 @@ D3D11DeviceContextMock::~D3D11DeviceContextMock() = default;
 
 D3D11FenceMock::D3D11FenceMock() = default;
 D3D11FenceMock::~D3D11FenceMock() = default;
+
+DXGISwapChain1Mock::DXGISwapChain1Mock() = default;
+DXGISwapChain1Mock::~DXGISwapChain1Mock() = default;
 
 }  // namespace media

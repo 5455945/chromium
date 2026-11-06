@@ -1,9 +1,10 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <windows.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -11,9 +12,8 @@
 
 #include "base/check_op.h"
 #include "base/containers/flat_map.h"
-#include "base/cxx17_backports.h"
 #include "base/logging.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "ui/events/keycodes/dom/dom_code.h"
 #include "ui/events/keycodes/dom/dom_key.h"
 #include "ui/events/keycodes/dom/dom_keyboard_layout_map_base.h"
@@ -26,6 +26,10 @@ namespace {
 class DomKeyboardLayoutMapWin : public DomKeyboardLayoutMapBase {
  public:
   DomKeyboardLayoutMapWin();
+
+  DomKeyboardLayoutMapWin(const DomKeyboardLayoutMapWin&) = delete;
+  DomKeyboardLayoutMapWin& operator=(const DomKeyboardLayoutMapWin&) = delete;
+
   ~DomKeyboardLayoutMapWin() override;
 
  private:
@@ -37,9 +41,8 @@ class DomKeyboardLayoutMapWin : public DomKeyboardLayoutMapBase {
 
   // Set of keyboard layout handles provided by the operating system.
   // The handles stored do not need to be released when the vector is destroyed.
-  std::vector<HKL> keyboard_layout_handles_;
-
-  DISALLOW_COPY_AND_ASSIGN(DomKeyboardLayoutMapWin);
+  // RAW_PTR_EXCLUSION: Passed as a contiguous HKL array to external APIs.
+  RAW_PTR_EXCLUSION std::vector<HKL> keyboard_layout_handles_;
 };
 
 DomKeyboardLayoutMapWin::DomKeyboardLayoutMapWin() = default;
@@ -61,14 +64,13 @@ uint32_t DomKeyboardLayoutMapWin::GetKeyboardLayoutCount() {
     DPLOG(ERROR) << "GetKeyboardLayoutList failed: ";
     return false;
   }
-  DCHECK_EQ(keyboard_layout_count, copy_count);
+  CHECK_EQ(keyboard_layout_count, copy_count, base::NotFatalUntil::M163);
 
   // The set of layouts returned from GetKeyboardLayoutList does not follow the
   // the order of the layouts in the control panel so we use GetKeyboardLayout
   // to retrieve the current layout and swap (if needed) to ensure it is always
   // evaluated first.
-  auto iter = std::find(keyboard_layout_handles_.begin(),
-                        keyboard_layout_handles_.end(), GetKeyboardLayout(0));
+  auto iter = std::ranges::find(keyboard_layout_handles_, GetKeyboardLayout(0));
   if (iter != keyboard_layout_handles_.begin() &&
       iter != keyboard_layout_handles_.end())
     std::iter_swap(keyboard_layout_handles_.begin(), iter);
@@ -79,8 +81,9 @@ uint32_t DomKeyboardLayoutMapWin::GetKeyboardLayoutCount() {
 ui::DomKey DomKeyboardLayoutMapWin::GetDomKeyFromDomCodeForLayout(
     ui::DomCode dom_code,
     uint32_t keyboard_layout_index) {
-  DCHECK_NE(dom_code, ui::DomCode::NONE);
-  DCHECK_LT(keyboard_layout_index, keyboard_layout_handles_.size());
+  CHECK_NE(dom_code, ui::DomCode::NONE, base::NotFatalUntil::M163);
+  CHECK_LT(keyboard_layout_index, keyboard_layout_handles_.size(),
+           base::NotFatalUntil::M163);
 
   HKL keyboard_layout = keyboard_layout_handles_[keyboard_layout_index];
   int32_t scan_code = ui::KeycodeConverter::DomCodeToNativeKeycode(dom_code);
@@ -93,7 +96,7 @@ ui::DomKey DomKeyboardLayoutMapWin::GetDomKeyFromDomCodeForLayout(
   }
 
   // Represents a keyboard state with all keys up (i.e. no keys pressed).
-  BYTE keyboard_state[256] = {0};
+  BYTE keyboard_state[256] = {};
 
   // ToUnicodeEx() return value indicates the category for the scan code
   // passed in for the keyboard layout provided.
@@ -101,7 +104,7 @@ ui::DomKey DomKeyboardLayoutMapWin::GetDomKeyFromDomCodeForLayout(
   wchar_t char_buffer[1] = {0};
   int key_type =
       ::ToUnicodeEx(virtual_key_code, scan_code, keyboard_state, char_buffer,
-                    base::size(char_buffer), /*wFlags=*/0, keyboard_layout);
+                    std::size(char_buffer), /*wFlags=*/0, keyboard_layout);
 
   // Handle special cases for Japanese keyboard layout.
   if (0x04110411 == reinterpret_cast<uintptr_t>(keyboard_layout)) {
@@ -143,7 +146,7 @@ ui::DomKey DomKeyboardLayoutMapWin::GetDomKeyFromDomCodeForLayout(
     // the dead key state. See crbug/977609 for details on how this problem
     // exhibits itself to users.
     ::ToUnicodeEx(0x0020, 0x0039, keyboard_state, char_buffer,
-                  base::size(char_buffer), /*wFlags=*/0, keyboard_layout);
+                  std::size(char_buffer), /*wFlags=*/0, keyboard_layout);
   }
   return key;
 }

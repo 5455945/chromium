@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/shared_memory_mapping.h"
 #include "build/build_config.h"
 #include "cc/paint/skia_paint_canvas.h"
@@ -37,8 +37,8 @@ DevToolsEyeDropper::DevToolsEyeDropper(content::WebContents* web_contents,
     : content::WebContentsObserver(web_contents), callback_(callback) {
   mouse_event_callback_ = base::BindRepeating(
       &DevToolsEyeDropper::HandleMouseEvent, base::Unretained(this));
-  if (web_contents->GetMainFrame()->IsRenderFrameCreated())
-    AttachToHost(web_contents->GetMainFrame());
+  if (web_contents->GetPrimaryMainFrame()->IsRenderFrameLive())
+    AttachToHost(web_contents->GetPrimaryMainFrame());
 }
 
 DevToolsEyeDropper::~DevToolsEyeDropper() {
@@ -49,12 +49,12 @@ DevToolsEyeDropper::~DevToolsEyeDropper() {
 }
 
 void DevToolsEyeDropper::AttachToHost(content::RenderFrameHost* frame_host) {
-  DCHECK(frame_host->IsRenderFrameCreated());
-  // Historically, (see https://crbug.com/847363) this code handled the
+  CHECK(frame_host->IsRenderFrameLive(), base::NotFatalUntil::M161);
+  // Historically, (see https://crbug.com/41391521) this code handled the
   // RenderWidgetHostView being null, but now it is listening to creation of the
   // frame which includes creation of the widget so it is implied that
   // RenderWidgetHostView exists.
-  DCHECK(frame_host->GetView());
+  CHECK(frame_host->GetView(), base::NotFatalUntil::M161);
 
   host_ = frame_host->GetView()->GetRenderWidgetHost();
   host_->AddMouseEventCallback(mouse_event_callback_);
@@ -71,17 +71,14 @@ void DevToolsEyeDropper::AttachToHost(content::RenderFrameHost* frame_host) {
       host_->GetView()->GetViewBounds().size(), true);
   video_capturer_->SetAutoThrottlingEnabled(false);
   video_capturer_->SetMinSizeChangePeriod(base::TimeDelta());
-  video_capturer_->SetFormat(media::PIXEL_FORMAT_ARGB,
-                             gfx::ColorSpace::CreateREC709());
-  video_capturer_->SetMinCapturePeriod(base::TimeDelta::FromSeconds(1) /
-                                       kMaxFrameRate);
-  video_capturer_->Start(this);
+  video_capturer_->SetFormat(media::PIXEL_FORMAT_ARGB);
+  video_capturer_->SetMinCapturePeriod(base::Seconds(1) / kMaxFrameRate);
+  video_capturer_->Start(this, viz::mojom::BufferFormatPreference::kDefault);
 }
 
 void DevToolsEyeDropper::DetachFromHost() {
   host_->RemoveMouseEventCallback(mouse_event_callback_);
-  ui::Cursor cursor(ui::mojom::CursorType::kPointer);
-  host_->SetCursor(cursor);
+  host_->SetCursor(ui::mojom::CursorType::kPointer);
   video_capturer_.reset();
   host_ = nullptr;
 }
@@ -89,9 +86,9 @@ void DevToolsEyeDropper::DetachFromHost() {
 void DevToolsEyeDropper::RenderFrameCreated(
     content::RenderFrameHost* frame_host) {
   // Only handle the initial main frame, not speculative ones.
-  if (frame_host != web_contents()->GetMainFrame())
+  if (frame_host != web_contents()->GetPrimaryMainFrame())
     return;
-  DCHECK(!host_);
+  CHECK(!host_, base::NotFatalUntil::M161);
 
   AttachToHost(frame_host);
 }
@@ -99,10 +96,10 @@ void DevToolsEyeDropper::RenderFrameCreated(
 void DevToolsEyeDropper::RenderFrameDeleted(
     content::RenderFrameHost* frame_host) {
   // Only handle the active main frame, not speculative ones.
-  if (frame_host != web_contents()->GetMainFrame())
+  if (frame_host != web_contents()->GetPrimaryMainFrame())
     return;
-  DCHECK(host_);
-  DCHECK_EQ(host_, frame_host->GetRenderWidgetHost());
+  CHECK(host_, base::NotFatalUntil::M161);
+  CHECK_EQ(host_, frame_host->GetRenderWidgetHost(), base::NotFatalUntil::M161);
 
   DetachFromHost();
   ResetFrame();
@@ -113,7 +110,7 @@ void DevToolsEyeDropper::RenderFrameHostChanged(
     content::RenderFrameHost* new_host) {
   // Since we skipped speculative main frames in RenderFrameCreated, we must
   // watch for them being swapped in by watching for RenderFrameHostChanged().
-  if (new_host != web_contents()->GetMainFrame())
+  if (new_host != web_contents()->GetPrimaryMainFrame())
     return;
   // Don't watch for the initial main frame RenderFrameHost, which does not come
   // with a renderer frame. We'll hear about that from RenderFrameCreated.
@@ -122,11 +119,11 @@ void DevToolsEyeDropper::RenderFrameHostChanged(
     // has its renderer frame. Since `old_host` is null only when this observer
     // method is called at startup, it should be before the renderer frame is
     // created.
-    DCHECK(!new_host->IsRenderFrameCreated());
+    CHECK(!new_host->IsRenderFrameLive(), base::NotFatalUntil::M161);
     return;
   }
-  DCHECK(host_);
-  DCHECK_EQ(host_, old_host->GetRenderWidgetHost());
+  CHECK(host_, base::NotFatalUntil::M161);
+  CHECK_EQ(host_, old_host->GetRenderWidgetHost(), base::NotFatalUntil::M161);
 
   DetachFromHost();
   AttachToHost(new_host);
@@ -165,7 +162,7 @@ bool DevToolsEyeDropper::HandleMouseEvent(const blink::WebMouseEvent& event) {
         SkImageInfo::Make(1, 1, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType,
                           SkColorSpace::MakeSRGB()),
         rgba_color, sizeof(rgba_color));
-    DCHECK(ok);
+    CHECK(ok, base::NotFatalUntil::M161);
 
     callback_.Run(rgba_color[0], rgba_color[1], rgba_color[2], rgba_color[3]);
   }
@@ -182,19 +179,18 @@ void DevToolsEyeDropper::UpdateCursor() {
     return;
   }
 
-// Due to platform limitations, we are using two different cursors
-// depending on the platform. Mac and Win have large cursors with two circles
-// for original spot and its magnified projection; Linux gets smaller (64 px)
-// magnified projection only with centered hotspot.
-// Mac Retina requires cursor to be > 120px in order to render smoothly.
-
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+  // Due to platform limitations, we are using two different cursors depending
+  // on the platform. Linux, Mac and Win have large cursors with two circles for
+  // original spot and its magnified projection; Ash gets smaller (64 px)
+  // magnified projection only with centered hotspot.
+#if BUILDFLAG(IS_CHROMEOS)
   const float kCursorSize = 63;
   const float kDiameter = 63;
   const float kHotspotOffset = 32;
   const float kHotspotRadius = 0;
   const float kPixelSize = 9;
 #else
+  // Mac Retina requires cursor to be > 120px in order to render smoothly.
   const float kCursorSize = 150;
   const float kDiameter = 110;
   const float kHotspotOffset = 25;
@@ -238,10 +234,9 @@ void DevToolsEyeDropper::UpdateCursor() {
 
   // Clip circle for magnified projection.
   float padding = (kCursorSize - kDiameter) / 2;
-  SkPath clip_path;
-  clip_path.addOval(SkRect::MakeXYWH(padding, padding, kDiameter, kDiameter));
-  clip_path.close();
-  canvas.clipPath(clip_path, SkClipOp::kIntersect, true);
+  canvas.clipPath(
+      SkPath::Oval(SkRect::MakeXYWH(padding, padding, kDiameter, kDiameter)),
+      SkClipOp::kIntersect, true);
 
   // Project pixels.
   int pixel_count = kDiameter / kPixelSize;
@@ -278,16 +273,16 @@ void DevToolsEyeDropper::UpdateCursor() {
   paint.setAntiAlias(true);
   canvas.drawCircle(kCursorSize / 2, kCursorSize / 2, kDiameter / 2, paint);
 
-  ui::Cursor cursor(ui::mojom::CursorType::kCustom);
-  cursor.set_image_scale_factor(device_scale_factor);
-  cursor.set_custom_bitmap(result);
-  cursor.set_custom_hotspot(gfx::Point(kHotspotOffset * device_scale_factor,
-                                       kHotspotOffset * device_scale_factor));
-  host_->SetCursor(cursor);
+  ui::Cursor cursor =
+      ui::Cursor::NewCustom(std::move(result),
+                            gfx::Point(kHotspotOffset * device_scale_factor,
+                                       kHotspotOffset * device_scale_factor),
+                            device_scale_factor);
+  host_->SetCursor(std::move(cursor));
 }
 
 void DevToolsEyeDropper::OnFrameCaptured(
-    base::ReadOnlySharedMemoryRegion data,
+    ::media::mojom::VideoBufferHandlePtr data,
     ::media::mojom::VideoFrameInfoPtr info,
     const gfx::Rect& content_rect,
     mojo::PendingRemote<viz::mojom::FrameSinkVideoConsumerFrameCallbacks>
@@ -302,28 +297,30 @@ void DevToolsEyeDropper::OnFrameCaptured(
   mojo::Remote<viz::mojom::FrameSinkVideoConsumerFrameCallbacks>
       callbacks_remote(std::move(callbacks));
 
-  if (!data.IsValid()) {
-    callbacks_remote->Done();
-    return;
-  }
-  base::ReadOnlySharedMemoryMapping mapping = data.Map();
+  CHECK(data->is_read_only_shmem_region());
+  base::ReadOnlySharedMemoryRegion& shmem_region =
+      data->get_read_only_shmem_region();
+
+  // The |data| parameter is not nullable and mojo type mapping for
+  // `base::ReadOnlySharedMemoryRegion` defines that nullable version of it is
+  // the same type, with null check being equivalent to IsValid() check. Given
+  // the above, we should never be able to receive a read only shmem region that
+  // is not valid - mojo will enforce it for us.
+  CHECK(shmem_region.IsValid(), base::NotFatalUntil::M161);
+
+  base::ReadOnlySharedMemoryMapping mapping = shmem_region.Map();
   if (!mapping.IsValid()) {
     DLOG(ERROR) << "Shared memory mapping failed.";
     return;
   }
-  if (mapping.size() <
+
+  base::span<const uint8_t> pixels(mapping);
+
+  if (pixels.size() <
       media::VideoFrame::AllocationSize(info->pixel_format, info->coded_size)) {
     DLOG(ERROR) << "Shared memory size was less than expected.";
     return;
   }
-  if (!info->color_space) {
-    DLOG(ERROR) << "Missing mandatory color space info.";
-    return;
-  }
-
-  // The SkBitmap's pixels will be marked as immutable, but the installPixels()
-  // API requires a non-const pointer. So, cast away the const.
-  void* const pixels = const_cast<void*>(mapping.memory());
 
   // Call installPixels() with a |releaseProc| that: 1) notifies the capturer
   // that this consumer has finished with the frame, and 2) releases the shared
@@ -336,13 +333,23 @@ void DevToolsEyeDropper::OnFrameCaptured(
     mojo::PendingRemote<viz::mojom::FrameSinkVideoConsumerFrameCallbacks>
         releaser;
   };
+
+  auto image_info = SkImageInfo::MakeN32(
+      content_rect.width(), content_rect.height(), kPremul_SkAlphaType,
+      info->color_space.ToSkColorSpace());
+  const size_t row_bytes =
+      media::VideoFrame::RowBytes(media::VideoFrame::Plane::kARGB,
+                                  info->pixel_format, info->coded_size.width());
+  // installPixels() takes an unsafe unbounded pointer, ensure it's pointing to
+  // enough memory.
+  CHECK_GE(pixels.size(), image_info.computeByteSize(row_bytes));
+
   frame_.installPixels(
-      SkImageInfo::MakeN32(content_rect.width(), content_rect.height(),
-                           kPremul_SkAlphaType,
-                           info->color_space->ToSkColorSpace()),
-      pixels,
-      media::VideoFrame::RowBytes(media::VideoFrame::kARGBPlane,
-                                  info->pixel_format, info->coded_size.width()),
+      image_info,
+      // The SkBitmap's pixels will be marked as immutable, but the
+      // installPixels() API requires a non-const pointer. So, cast away the
+      // const.
+      const_cast<uint8_t*>(pixels.data()), row_bytes,
       [](void* addr, void* context) {
         delete static_cast<FramePinner*>(context);
       },
@@ -351,5 +358,10 @@ void DevToolsEyeDropper::OnFrameCaptured(
 
   UpdateCursor();
 }
+
+void DevToolsEyeDropper::OnNewCaptureVersion(
+    const media::CaptureVersion& capture_version) {}
+
+void DevToolsEyeDropper::OnFrameWithEmptyRegionCapture() {}
 
 void DevToolsEyeDropper::OnStopped() {}

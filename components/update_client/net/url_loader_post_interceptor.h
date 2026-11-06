@@ -1,9 +1,11 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_UPDATE_CLIENT_NET_URL_LOADER_POST_INTERCEPTOR_H_
 #define COMPONENTS_UPDATE_CLIENT_NET_URL_LOADER_POST_INTERCEPTOR_H_
+
+#include <stddef.h>
 
 #include <memory>
 #include <string>
@@ -11,12 +13,15 @@
 #include <utility>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/containers/flat_map.h"
 #include "base/containers/queue.h"
 #include "base/files/file_path.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "components/update_client/test_configurator.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_status_code.h"
+#include "third_party/abseil-cpp/absl/strings/str_format.h"
 #include "url/gurl.h"
 
 namespace network {
@@ -43,10 +48,6 @@ class URLLoaderPostInterceptor {
   using InterceptedRequest =
       std::tuple<std::string, net::HttpRequestHeaders, GURL>;
 
-  // Called when the load associated with the url request is intercepted
-  // by this object:.
-  using UrlJobRequestReadyCallback = base::OnceCallback<void()>;
-
   // Allows a generic string maching interface when setting up expectations.
   class RequestMatcher {
    public:
@@ -61,6 +62,9 @@ class URLLoaderPostInterceptor {
   URLLoaderPostInterceptor(std::vector<GURL> supported_urls,
                            net::test_server::EmbeddedTestServer*);
 
+  URLLoaderPostInterceptor(const URLLoaderPostInterceptor&) = delete;
+  URLLoaderPostInterceptor& operator=(const URLLoaderPostInterceptor&) = delete;
+
   ~URLLoaderPostInterceptor();
 
   // Sets an expection for the body of the POST request and optionally,
@@ -69,13 +73,19 @@ class URLLoaderPostInterceptor {
   // response body is served. If |response_code| is provided, then an empty
   // response body with that response code is returned.
   // Returns |true| if the expectation was set.
-  bool ExpectRequest(std::unique_ptr<RequestMatcher> request_matcher);
+  bool ExpectRequest(
+      std::unique_ptr<RequestMatcher> request_matcher,
+      const base::flat_map<std::string, std::string>& extra_headers = {});
 
-  bool ExpectRequest(std::unique_ptr<RequestMatcher> request_matcher,
-                     net::HttpStatusCode response_code);
+  bool ExpectRequest(
+      std::unique_ptr<RequestMatcher> request_matcher,
+      net::HttpStatusCode response_code,
+      const base::flat_map<std::string, std::string>& extra_headers = {});
 
-  bool ExpectRequest(std::unique_ptr<RequestMatcher> request_matcher,
-                     const base::FilePath& filepath);
+  bool ExpectRequest(
+      std::unique_ptr<RequestMatcher> request_matcher,
+      const base::FilePath& filepath,
+      const base::flat_map<std::string, std::string>& extra_headers = {});
 
   // Returns how many requests have been intercepted and matched by
   // an expectation. One expectation can only be matched by one request.
@@ -110,7 +120,7 @@ class URLLoaderPostInterceptor {
   // using idle run loops. A paused request can be resumed after this callback
   // has been invoked.
   void url_job_request_ready_callback(
-      UrlJobRequestReadyCallback url_job_request_ready_callback);
+      base::OnceClosure url_job_request_ready_callback);
 
   int GetHitCountForURL(const GURL& url);
 
@@ -122,10 +132,19 @@ class URLLoaderPostInterceptor {
       const net::test_server::HttpRequest& request);
 
   struct ExpectationResponse {
-    ExpectationResponse(net::HttpStatusCode code, const std::string& body)
-        : response_code(code), response_body(body) {}
-    const net::HttpStatusCode response_code;
-    const std::string response_body;
+    ExpectationResponse() = delete;
+    ExpectationResponse(
+        net::HttpStatusCode code,
+        const std::string& body,
+        const base::flat_map<std::string, std::string>& extra_headers);
+    ExpectationResponse(const ExpectationResponse&);
+    ExpectationResponse& operator=(const ExpectationResponse&);
+
+    ~ExpectationResponse();
+
+    net::HttpStatusCode response_code;
+    std::string response_body;
+    base::flat_map<std::string, std::string> extra_headers;
   };
   using Expectation =
       std::pair<std::unique_ptr<RequestMatcher>, ExpectationResponse>;
@@ -144,36 +163,40 @@ class URLLoaderPostInterceptor {
 
   base::queue<PendingExpectation> pending_expectations_;
 
-  network::TestURLLoaderFactory* url_loader_factory_ = nullptr;
-  net::test_server::EmbeddedTestServer* embedded_test_server_ = nullptr;
+  raw_ptr<network::TestURLLoaderFactory> url_loader_factory_ = nullptr;
+  raw_ptr<net::test_server::EmbeddedTestServer> embedded_test_server_ = nullptr;
 
   bool is_paused_ = false;
 
-  std::vector<GURL> filtered_urls_;
+  std::vector<GURL> filtered_urls_{GURL(absl::StrFormat("%s://%s%s",
+                                                        kPostInterceptScheme,
+                                                        kPostInterceptHostname,
+                                                        kPostInterceptPath))};
 
-  UrlJobRequestReadyCallback url_job_request_ready_callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(URLLoaderPostInterceptor);
+  base::OnceClosure url_job_request_ready_callback_;
 };
 
 class PartialMatch : public URLLoaderPostInterceptor::RequestMatcher {
  public:
   explicit PartialMatch(const std::string& expected) : expected_(expected) {}
+
+  PartialMatch(const PartialMatch&) = delete;
+  PartialMatch& operator=(const PartialMatch&) = delete;
+
   bool Match(const std::string& actual) const override;
 
  private:
   const std::string expected_;
-
-  DISALLOW_COPY_AND_ASSIGN(PartialMatch);
 };
 
 class AnyMatch : public URLLoaderPostInterceptor::RequestMatcher {
  public:
   AnyMatch() = default;
-  bool Match(const std::string& actual) const override;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(AnyMatch);
+  AnyMatch(const AnyMatch&) = delete;
+  AnyMatch& operator=(const AnyMatch&) = delete;
+
+  bool Match(const std::string& actual) const override;
 };
 
 }  // namespace update_client

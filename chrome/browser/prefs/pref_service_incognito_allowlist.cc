@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,40 +6,96 @@
 
 #include <vector>
 
-#include "base/cxx17_backports.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/common/pref_names.h"
 #include "components/bookmarks/common/bookmark_pref_names.h"
 #include "components/content_settings/core/common/pref_names.h"
 #include "components/metrics/metrics_pref_names.h"
 #include "components/reading_list/core/reading_list_pref_names.h"
 #include "components/ukm/ukm_pref_names.h"
+#include "extensions/buildflags/buildflags.h"
 
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/accessibility/animation_policy_prefs.h"
-#endif  // !defined(OS_ANDROID)
+#endif  // !BUILDFLAG(IS_ANDROID)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "ash/public/cpp/ash_pref_names.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_pref_names.h"
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace {
 
 // List of keys that can be changed in the user prefs file by the incognito
 // profile.
 const char* const kPersistentPrefNames[] = {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     // Accessibility preferences should be persisted if they are changed in
     // incognito mode.
     ash::prefs::kAccessibilityLargeCursorEnabled,
     ash::prefs::kAccessibilityLargeCursorDipSize,
     ash::prefs::kAccessibilityStickyKeysEnabled,
     ash::prefs::kAccessibilitySpokenFeedbackEnabled,
+    ash::prefs::kAccessibilityChromeVoxAutoRead,
+    ash::prefs::kAccessibilityChromeVoxAnnounceDownloadNotifications,
+    ash::prefs::kAccessibilityChromeVoxAnnounceRichTextAttributes,
+    ash::prefs::kAccessibilityChromeVoxAudioStrategy,
+    ash::prefs::kAccessibilityChromeVoxBrailleSideBySide,
+    ash::prefs::kAccessibilityChromeVoxBrailleTable,
+    ash::prefs::kAccessibilityChromeVoxBrailleTable6,
+    ash::prefs::kAccessibilityChromeVoxBrailleTable8,
+    ash::prefs::kAccessibilityChromeVoxBrailleTableType,
+    ash::prefs::kAccessibilityChromeVoxBrailleWordWrap,
+    ash::prefs::kAccessibilityChromeVoxCapitalStrategy,
+    ash::prefs::kAccessibilityChromeVoxCapitalStrategyBackup,
+    ash::prefs::kAccessibilityChromeVoxEnableBrailleLogging,
+    ash::prefs::kAccessibilityChromeVoxEnableEarconLogging,
+    ash::prefs::kAccessibilityChromeVoxEnableEventStreamLogging,
+    ash::prefs::kAccessibilityChromeVoxEnableSpeechLogging,
+    ash::prefs::kAccessibilityChromeVoxEventStreamFilters,
+    ash::prefs::kAccessibilityChromeVoxLanguageSwitching,
+    ash::prefs::kAccessibilityChromeVoxMenuBrailleCommands,
+    ash::prefs::kAccessibilityChromeVoxNumberReadingStyle,
+    ash::prefs::kAccessibilityChromeVoxPreferredBrailleDisplayAddress,
+    ash::prefs::kAccessibilityChromeVoxPunctuationEcho,
+    ash::prefs::kAccessibilityChromeVoxSmartStickyMode,
+    ash::prefs::kAccessibilityChromeVoxSpeakTextUnderMouse,
+    ash::prefs::kAccessibilityChromeVoxUsePitchChanges,
+    ash::prefs::kAccessibilityChromeVoxUseVerboseMode,
+    ash::prefs::kAccessibilityChromeVoxVirtualBrailleColumns,
+    ash::prefs::kAccessibilityChromeVoxVirtualBrailleRows,
+    ash::prefs::kAccessibilityChromeVoxVoiceName,
+    ash::prefs::kAccessibilityColorCorrectionEnabled,
+    ash::prefs::kAccessibilityColorVisionCorrectionAmount,
+    ash::prefs::kAccessibilityColorVisionCorrectionType,
+    ash::prefs::kAccessibilityReducedAnimationsEnabled,
+    ash::prefs::kAccessibilityAlwaysShowScrollbarsEnabled,
+    ash::prefs::kAccessibilityFaceGazeAcceleratorDialogHasBeenAccepted,
+    ash::prefs::kAccessibilityFaceGazeEnabled,
+    ash::prefs::kAccessibilityFaceGazeCursorSpeedUp,
+    ash::prefs::kAccessibilityFaceGazeCursorSpeedDown,
+    ash::prefs::kAccessibilityFaceGazeCursorSpeedLeft,
+    ash::prefs::kAccessibilityFaceGazeCursorSpeedRight,
+    ash::prefs::kAccessibilityFaceGazeCursorUseAcceleration,
+    ash::prefs::kAccessibilityFaceGazeGesturesToKeyCombos,
+    ash::prefs::kAccessibilityFaceGazeGesturesToMacros,
+    ash::prefs::kAccessibilityFaceGazeGesturesToConfidence,
+    ash::prefs::kAccessibilityFaceGazeActionsEnabled,
+    ash::prefs::kAccessibilityFaceGazeCursorControlEnabled,
+    ash::prefs::kAccessibilityFaceGazeAdjustSpeedSeparately,
+    ash::prefs::kAccessibilityFaceGazeVelocityThreshold,
+    ash::prefs::kAccessibilityFaceGazePrecisionClick,
+    ash::prefs::kAccessibilityFaceGazePrecisionClickSpeedFactor,
+    ash::prefs::kAccessibilityFaceGazeEnabledSentinel,
+    ash::prefs::kAccessibilityFaceGazeEnabledSentinelShowDialog,
+    ash::prefs::kAccessibilityFaceGazeCursorControlEnabledSentinel,
+    ash::prefs::kAccessibilityFaceGazeActionsEnabledSentinel,
+    ash::prefs::kAccessibilityFlashNotificationsEnabled,
+    ash::prefs::kAccessibilityFlashNotificationsColor,
     ash::prefs::kAccessibilityHighContrastEnabled,
-    ash::prefs::kAccessibilityScreenMagnifierCenterFocus,
     ash::prefs::kAccessibilityScreenMagnifierEnabled,
     ash::prefs::kAccessibilityScreenMagnifierFocusFollowingEnabled,
+    ash::prefs::kAccessibilityMagnifierFollowsChromeVox,
+    ash::prefs::kAccessibilityMagnifierFollowsSts,
     ash::prefs::kAccessibilityScreenMagnifierMouseFollowingMode,
     ash::prefs::kAccessibilityScreenMagnifierScale,
     ash::prefs::kAccessibilityVirtualKeyboardEnabled,
@@ -50,12 +106,22 @@ const char* const kPersistentPrefNames[] = {
     ash::prefs::kAccessibilityAutoclickRevertToLeftClick,
     ash::prefs::kAccessibilityAutoclickStabilizePosition,
     ash::prefs::kAccessibilityAutoclickMovementThreshold,
+    ash::prefs::kAccessibilityBounceKeysEnabled,
+    ash::prefs::kAccessibilityBounceKeysDelayMs,
+    ash::prefs::kAccessibilityMouseKeysEnabled,
+    ash::prefs::kAccessibilityMouseKeysAcceleration,
+    ash::prefs::kAccessibilityMouseKeysMaxSpeed,
+    ash::prefs::kAccessibilityMouseKeysUsePrimaryKeys,
+    ash::prefs::kAccessibilityMouseKeysDominantHand,
     ash::prefs::kAccessibilityCaretHighlightEnabled,
+    ash::prefs::kAccessibilityCaretBlinkInterval,
     ash::prefs::kAccessibilityCursorHighlightEnabled,
     ash::prefs::kAccessibilityCursorColorEnabled,
     ash::prefs::kAccessibilityCursorColor,
     ash::prefs::kAccessibilityFocusHighlightEnabled,
     ash::prefs::kAccessibilitySelectToSpeakEnabled,
+    ash::prefs::kAccessibilitySlowKeysEnabled,
+    ash::prefs::kAccessibilitySlowKeysDelayMs,
     ash::prefs::kAccessibilitySwitchAccessEnabled,
     ash::prefs::kAccessibilitySwitchAccessSelectDeviceKeyCodes,
     ash::prefs::kAccessibilitySwitchAccessNextDeviceKeyCodes,
@@ -68,34 +134,35 @@ const char* const kPersistentPrefNames[] = {
     ash::prefs::kAccessibilityDictationLocale,
     ash::prefs::kDockedMagnifierEnabled,
     ash::prefs::kDockedMagnifierScale,
+    ash::prefs::kDockedMagnifierScreenHeightDivisor,
     ash::prefs::kDockedMagnifierAcceleratorDialogHasBeenAccepted,
     ash::prefs::kHighContrastAcceleratorDialogHasBeenAccepted,
     ash::prefs::kScreenMagnifierAcceleratorDialogHasBeenAccepted,
     ash::prefs::kShouldAlwaysShowAccessibilityMenu,
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-#if !defined(OS_ANDROID)
+    ash::prefs::kAccessibilityDisableTrackpadEnabled,
+    ash::prefs::kAccessibilityDisableTrackpadMode,
+#endif  // BUILDFLAG(IS_CHROMEOS)
+#if !BUILDFLAG(IS_ANDROID)
     kAnimationPolicyAllowed,
     kAnimationPolicyOnce,
     kAnimationPolicyNone,
-#endif  // !defined(OS_ANDROID)
+#endif  // !BUILDFLAG(IS_ANDROID)
 #if BUILDFLAG(ENABLE_EXTENSIONS)
     prefs::kAnimationPolicy,
 #endif
 
     // Bookmark preferences are common between incognito and regular mode.
-    bookmarks::prefs::kBookmarkEditorExpandedNodes,
     bookmarks::prefs::kEditBookmarksEnabled,
     bookmarks::prefs::kManagedBookmarks,
     bookmarks::prefs::kManagedBookmarksFolderName,
     bookmarks::prefs::kShowAppsShortcutInBookmarkBar,
-    bookmarks::prefs::kShowReadingListInBookmarkBar,
     bookmarks::prefs::kShowManagedBookmarksInBookmarkBar,
     bookmarks::prefs::kShowBookmarkBar,
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
     prefs::kPartnerBookmarkMappings,
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
     // Clipboard modification state is updated over all profiles.
     prefs::kClipboardLastModifiedTime,
 #endif
@@ -103,9 +170,7 @@ const char* const kPersistentPrefNames[] = {
     // Default browser bar's status is aggregated between regular and incognito
     // modes.
     prefs::kBrowserSuppressDefaultBrowserPrompt,
-    prefs::kDefaultBrowserLastDeclined,
     prefs::kDefaultBrowserSettingEnabled,
-    prefs::kResetCheckDefaultBrowser,
 
     // Devtools preferences are stored cross profiles as they are not storing
     // user data and just keep debugging environment settings.
@@ -121,7 +186,7 @@ const char* const kPersistentPrefNames[] = {
     prefs::kDevToolsDiscoverTCPTargetsEnabled,
     prefs::kDevToolsTCPDiscoveryConfig,
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
     // The total number of times that network profile warning is shown is
     // aggregated between regular and incognito modes.
     prefs::kNetworkProfileWarningsLeft,
@@ -133,20 +198,15 @@ const char* const kPersistentPrefNames[] = {
     prefs::kTabStatsWindowCountMax,
     prefs::kTabStatsDailySample,
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
     prefs::kShowFullscreenToolbar,
 #endif
 
-// TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
-// of lacros-chrome is complete.
-#if defined(OS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_LINUX)
     // Toggleing custom frames affects all open windows in the profile, hence
     // should be written to the regular profile when changed in incognito mode.
     prefs::kUseCustomChromeFrame,
 #endif
-
-    // Reading list preferences are common between incognito and regular mode.
-    reading_list::prefs::kReadingListHasUnseenEntries,
 
     // Although UKMs are not collected in incognito, theses preferences may be
     // changed by UMA/Sync/Unity consent, and need to be the same between
@@ -167,8 +227,8 @@ namespace prefs {
 
 std::vector<const char*> GetIncognitoPersistentPrefsAllowlist() {
   std::vector<const char*> allowlist;
-  allowlist.insert(allowlist.end(), kPersistentPrefNames,
-                   kPersistentPrefNames + base::size(kPersistentPrefNames));
+  allowlist.insert(allowlist.end(), std::begin(kPersistentPrefNames),
+                   std::end(kPersistentPrefNames));
   return allowlist;
 }
 

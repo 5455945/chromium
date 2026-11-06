@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,29 +25,24 @@ constexpr const char* Category() {
 const char kBeginFrameId[] = "begin_frame_id";
 }  // namespace internal
 
-const char kSendBeginFrame[] = "ThreadProxy::ScheduledActionSendBeginMainFrame";
-const char kDoBeginFrame[] = "ThreadProxy::BeginMainFrame";
+constexpr char kSendBeginFrame[] =
+    "ProxyImpl::ScheduledActionSendBeginMainFrame";
+constexpr char kDoBeginFrame[] = "ProxyMain::BeginMainFrame";
 
 class ScopedBeginFrameTask {
  public:
-  ScopedBeginFrameTask(const char* event_name, unsigned int begin_frame_id)
-      : event_name_(event_name) {
-    TRACE_EVENT_BEGIN1(internal::Category(), event_name_,
-                       internal::kBeginFrameId, begin_frame_id);
+  ScopedBeginFrameTask(perfetto::StaticString event_name,
+                       unsigned int begin_frame_id) {
+    TRACE_EVENT_BEGIN(internal::Category(), event_name, internal::kBeginFrameId,
+                      begin_frame_id);
   }
   ScopedBeginFrameTask(const ScopedBeginFrameTask&) = delete;
-  ~ScopedBeginFrameTask() {
-    TRACE_EVENT_END0(internal::Category(), event_name_);
-  }
+  ~ScopedBeginFrameTask() { TRACE_EVENT_END(internal::Category()); }
 
   ScopedBeginFrameTask& operator=(const ScopedBeginFrameTask&) = delete;
-
- private:
-  const char* event_name_;
 };
 
 void IssueImplThreadRenderingStatsEvent(const RenderingStats& stats);
-void CC_EXPORT IssueDisplayRenderingStatsEvent();
 
 }  // namespace benchmark_instrumentation
 }  // namespace cc

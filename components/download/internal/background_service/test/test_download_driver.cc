@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -101,17 +101,21 @@ void TestDownloadDriver::Pause(const std::string& guid) {
   it->second.paused = true;
 }
 
-void TestDownloadDriver::Resume(const std::string& guid) {
+void TestDownloadDriver::ResumeWithFactory(
+    const std::string& guid,
+    scoped_refptr<network::SharedURLLoaderFactory> factory,
+    const std::optional<url::Origin>& request_initiator,
+    const std::optional<net::IsolationInfo>& isolation_info) {
   auto it = entries_.find(guid);
   if (it == entries_.end())
     return;
   it->second.paused = false;
 }
 
-absl::optional<DriverEntry> TestDownloadDriver::Find(const std::string& guid) {
+std::optional<DriverEntry> TestDownloadDriver::Find(const std::string& guid) {
   auto it = entries_.find(guid);
   if (it == entries_.end())
-    return absl::nullopt;
+    return std::nullopt;
   return it->second;
 }
 

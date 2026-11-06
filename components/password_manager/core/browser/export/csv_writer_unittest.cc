@@ -1,14 +1,13 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/password_manager/core/browser/export/csv_writer.h"
 
-#include "base/macros.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #define CSV_EOL_SEQUENCE "\r\n"
 #else
 #define CSV_EOL_SEQUENCE "\n"
@@ -20,6 +19,9 @@ class CSVWriterTest : public testing::Test {
  public:
   CSVWriterTest() = default;
 
+  CSVWriterTest(const CSVWriterTest&) = delete;
+  CSVWriterTest& operator=(const CSVWriterTest&) = delete;
+
   void SetUp() override {
     column_names_.push_back("foo");
     column_names_.push_back("bar");
@@ -28,9 +30,6 @@ class CSVWriterTest : public testing::Test {
  protected:
   std::vector<std::string> column_names_;
   std::vector<std::map<std::string, std::string>> records_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(CSVWriterTest);
 };
 
 TEST_F(CSVWriterTest, EmptyData) {
@@ -51,9 +50,7 @@ TEST_F(CSVWriterTest, OutputArgumentIsOverwritten) {
 
 TEST_F(CSVWriterTest, SingleColumn) {
   const char kExpectedResult[] =
-      "foo" CSV_EOL_SEQUENCE
-      "alpha" CSV_EOL_SEQUENCE
-      "beta" CSV_EOL_SEQUENCE;
+      "foo" CSV_EOL_SEQUENCE "alpha" CSV_EOL_SEQUENCE "beta" CSV_EOL_SEQUENCE;
 
   column_names_.pop_back();
   records_.resize(2);
@@ -75,8 +72,7 @@ TEST_F(CSVWriterTest, HeaderOnly) {
 
 TEST_F(CSVWriterTest, HeaderAndSimpleRecords) {
   const char kExpectedResult[] =
-      "foo,bar,baz" CSV_EOL_SEQUENCE
-      "alpha,beta,gamma" CSV_EOL_SEQUENCE
+      "foo,bar,baz" CSV_EOL_SEQUENCE "alpha,beta,gamma" CSV_EOL_SEQUENCE
       "delta,epsilon,zeta" CSV_EOL_SEQUENCE;
 
   column_names_.push_back("baz");
@@ -96,8 +92,7 @@ TEST_F(CSVWriterTest, HeaderAndSimpleRecords) {
 
 TEST_F(CSVWriterTest, ExtraSpacesArePreserved) {
   const char kExpectedResult[] =
-      "foo,bar" CSV_EOL_SEQUENCE
-      " alpha  beta ,  " CSV_EOL_SEQUENCE;
+      "foo,bar" CSV_EOL_SEQUENCE " alpha  beta ,  " CSV_EOL_SEQUENCE;
 
   records_.resize(1);
   records_[0]["foo"] = " alpha  beta ";
@@ -127,10 +122,8 @@ TEST_F(CSVWriterTest, CharactersOutsideASCIIPrintableArePreservedVerbatim) {
 
 TEST_F(CSVWriterTest, ValueWithSeparatorsIsEnclosedInDoubleQuotes) {
   const char kExpectedResult[] =
-      "foo,bar" CSV_EOL_SEQUENCE
-      "\"A\rB\",\"B\nC\"" CSV_EOL_SEQUENCE
-      "\"C\r\nD\",\"D\n\"" CSV_EOL_SEQUENCE
-      "\",\",\",,\"" CSV_EOL_SEQUENCE;
+      "foo,bar" CSV_EOL_SEQUENCE "\"A\rB\",\"B\nC\"" CSV_EOL_SEQUENCE
+      "\"C\r\nD\",\"D\n\"" CSV_EOL_SEQUENCE "\",\",\",,\"" CSV_EOL_SEQUENCE;
 
   records_.resize(3);
   records_[0]["foo"] = "A\rB";
@@ -161,10 +154,8 @@ TEST_F(CSVWriterTest, DoubleQuotesInValueAreEscaped) {
 
 TEST_F(CSVWriterTest, EmptyFields) {
   const char kExpectedResult[] =
-      "foo,bar" CSV_EOL_SEQUENCE
-      ",alpha" CSV_EOL_SEQUENCE
-      "beta," CSV_EOL_SEQUENCE
-      "," CSV_EOL_SEQUENCE;
+      "foo,bar" CSV_EOL_SEQUENCE ",alpha" CSV_EOL_SEQUENCE
+      "beta," CSV_EOL_SEQUENCE "," CSV_EOL_SEQUENCE;
 
   records_.resize(3);
   records_[0]["foo"] = "";
@@ -181,10 +172,8 @@ TEST_F(CSVWriterTest, EmptyFields) {
 
 TEST_F(CSVWriterTest, MissingValuesAreTreatedAsEmptyValues) {
   const char kExpectedResult[] =
-      "foo,bar" CSV_EOL_SEQUENCE
-      ",alpha" CSV_EOL_SEQUENCE
-      "beta," CSV_EOL_SEQUENCE
-      "," CSV_EOL_SEQUENCE;
+      "foo,bar" CSV_EOL_SEQUENCE ",alpha" CSV_EOL_SEQUENCE
+      "beta," CSV_EOL_SEQUENCE "," CSV_EOL_SEQUENCE;
 
   records_.resize(3);
   records_[0]["bar"] = "alpha";

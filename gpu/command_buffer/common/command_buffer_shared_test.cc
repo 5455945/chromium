@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,9 +10,10 @@
 
 #include <memory>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/threading/thread.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -42,13 +43,15 @@ TEST_F(CommandBufferSharedTest, TestBasic) {
 
 static const int kSize = 100000;
 
-void WriteToState(int32_t* buffer, CommandBufferSharedState* shared_state) {
+void WriteToState(base::span<int32_t, kSize> buffer,
+                  CommandBufferSharedState* shared_state) {
   CommandBuffer::State state;
   for (int i = 0; i < kSize; i++) {
     state.token = i - 1;
     state.get_offset = i + 1;
     state.generation = i + 2;
-    state.error = static_cast<gpu::error::Error>(i + 3);
+    state.error =
+        static_cast<gpu::error::Error>((i + 3) % (gpu::error::kErrorLast + 1));
     // Ensure that the producer doesn't update the buffer until after the
     // consumer reads from it.
     EXPECT_EQ(buffer[i], 0);
@@ -58,19 +61,16 @@ void WriteToState(int32_t* buffer, CommandBufferSharedState* shared_state) {
 }
 
 TEST_F(CommandBufferSharedTest, TestConsistency) {
-  std::unique_ptr<int32_t[]> buffer;
-  buffer.reset(new int32_t[kSize]);
+  std::array<int32_t, kSize> buffer{0};
   base::Thread consumer("Reader Thread");
-
-  memset(buffer.get(), 0, kSize * sizeof(int32_t));
 
   consumer.Start();
   consumer.task_runner()->PostTask(
       FROM_HERE,
-      base::BindOnce(&WriteToState, buffer.get(), shared_state_.get()));
+      base::BindOnce(&WriteToState, base::span(buffer), shared_state_.get()));
 
   CommandBuffer::State last_state;
-  while (1) {
+  while (true) {
     CommandBuffer::State state = last_state;
 
     shared_state_->Read(&state);
@@ -87,7 +87,8 @@ TEST_F(CommandBufferSharedTest, TestConsistency) {
       EXPECT_EQ(state.token, state.get_offset - 2);
       EXPECT_EQ(state.generation,
                 static_cast<unsigned int>(state.get_offset) + 1);
-      EXPECT_EQ(state.error, state.get_offset + 2);
+      EXPECT_EQ(state.error,
+                (state.get_offset + 2) % (gpu::error::kErrorLast + 1));
 
       if (state.get_offset == kSize)
         break;
@@ -96,4 +97,3 @@ TEST_F(CommandBufferSharedTest, TestConsistency) {
 }
 
 }  // namespace gpu
-

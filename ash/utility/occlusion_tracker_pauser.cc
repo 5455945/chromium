@@ -1,11 +1,11 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/utility/occlusion_tracker_pauser.h"
 
 #include "ash/shell.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "ui/aura/window_tree_host.h"
 #include "ui/compositor/compositor.h"
 
@@ -13,16 +13,47 @@ namespace ash {
 
 OcclusionTrackerPauser::OcclusionTrackerPauser() = default;
 
-OcclusionTrackerPauser::~OcclusionTrackerPauser() = default;
-
-void OcclusionTrackerPauser::PauseUntilAnimationsEnd(
-    const base::TimeDelta& extra_pause_duration) {
-  for (auto* root : Shell::GetAllRootWindows())
-    Pause(root->GetHost()->compositor(), extra_pause_duration);
+OcclusionTrackerPauser::~OcclusionTrackerPauser() {
+  DCHECK(!observations_.IsObservingAnySource());
 }
 
-void OcclusionTrackerPauser::OnLastAnimationEnded(ui::Compositor* compositor) {
+void OcclusionTrackerPauser::PauseUntilAnimationsEnd(base::TimeDelta timeout) {
+  for (aura::Window* root : Shell::GetAllRootWindows()) {
+    // Compositors may not be animating yet - start observing all of them. In
+    // fact, it is the common case that none will be animating at this point. We
+    // assume at least one compositor will start animating very soon, and
+    // unpause when all compositors are not animating after that.
+    Pause(root->GetHost()->compositor());
+  }
+
+  if (!scoped_pause_) {
+    scoped_pause_ =
+        std::make_unique<aura::WindowOcclusionTracker::ScopedPause>();
+  }
+
+  timer_.Stop();
+  if (!timeout.is_zero()) {
+    timer_.Start(FROM_HERE, timeout,
+                 base::BindOnce(&OcclusionTrackerPauser::Shutdown,
+                                base::Unretained(this), /*timed_out=*/true));
+  }
+}
+
+void OcclusionTrackerPauser::OnFirstAnimationStarted(
+    ui::Compositor* compositor) {
+  animating_compositors_.insert(compositor);
+}
+
+void OcclusionTrackerPauser::OnFirstNonAnimatedFrameStarted(
+    ui::Compositor* compositor) {
   OnFinish(compositor);
+}
+
+void OcclusionTrackerPauser::OnDidBeginMainFrame(ui::Compositor* compositor) {
+  if (animating_compositors_.size() == 0 && timer_.IsRunning()) {
+    // If no animation was added by the next begin frame, just end pausing.
+    OnFinish(compositor);
+  }
 }
 
 void OcclusionTrackerPauser::OnCompositingShuttingDown(
@@ -30,44 +61,38 @@ void OcclusionTrackerPauser::OnCompositingShuttingDown(
   OnFinish(compositor);
 }
 
-void OcclusionTrackerPauser::Pause(
-    ui::Compositor* compositor,
-    const base::TimeDelta& extra_pause_duration) {
-  timer_.Stop();
-
-  if (extra_pause_duration_ < extra_pause_duration)
-    extra_pause_duration_ = extra_pause_duration;
-
+void OcclusionTrackerPauser::Pause(ui::Compositor* compositor) {
   if (!observations_.IsObservingSource(compositor))
     observations_.AddObservation(compositor);
-
-  if (!scoped_pause_) {
-    scoped_pause_ =
-        std::make_unique<aura::WindowOcclusionTracker::ScopedPause>();
+  if (compositor->IsAnimating()) {
+    animating_compositors_.insert(compositor);
   }
 }
 
 void OcclusionTrackerPauser::OnFinish(ui::Compositor* compositor) {
-  if (!observations_.IsObservingSource(compositor))
-    return;
-  observations_.RemoveObservation(compositor);
-
-  if (observations_.IsObservingAnySource())
-    return;
-
-  if (extra_pause_duration_.is_zero()) {
-    Unpause();
-  } else {
-    timer_.Start(FROM_HERE, extra_pause_duration_,
-                 base::BindOnce(&OcclusionTrackerPauser::Unpause,
-                                base::Unretained(this)));
-    extra_pause_duration_ = base::TimeDelta();
+  animating_compositors_.erase(compositor);
+  if (observations_.IsObservingSource(compositor)) {
+    observations_.RemoveObservation(compositor);
   }
+
+  if (!animating_compositors_.empty()) {
+    return;
+  }
+
+  Shutdown(/*timed_out=*/false);
 }
 
-void OcclusionTrackerPauser::Unpause() {
+void OcclusionTrackerPauser::Shutdown(bool timed_out) {
   DCHECK(scoped_pause_);
+  LOG_IF(WARNING, timed_out)
+      << "Unpausing because animations didn't start and end in time";
+
+  // We are finished pausing, cancel any outstanding timer which would call
+  // `Shutdown` again.
+  timer_.Stop();
   scoped_pause_.reset();
+  observations_.RemoveAllObservations();
+  animating_compositors_.clear();
 }
 
 }  // namespace ash

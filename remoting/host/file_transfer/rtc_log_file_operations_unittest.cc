@@ -1,10 +1,12 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "remoting/host/file_transfer/rtc_log_file_operations.h"
 
+#include "base/memory/raw_ptr.h"
 #include "base/test/task_environment.h"
+#include "base/test/test_future.h"
 #include "remoting/protocol/fake_connection_to_client.h"
 #include "remoting/protocol/session.h"
 #include "remoting/protocol/webrtc_event_log_data.h"
@@ -21,7 +23,7 @@ std::string ToString(const std::vector<std::uint8_t>& data) {
 class FakeConnectionWithRtcLog : public protocol::FakeConnectionToClient {
  public:
   explicit FakeConnectionWithRtcLog(protocol::WebrtcEventLogData* event_log)
-      : protocol::FakeConnectionToClient(nullptr), event_log_(event_log) {}
+      : event_log_(event_log) {}
   ~FakeConnectionWithRtcLog() override = default;
   FakeConnectionWithRtcLog(const FakeConnectionWithRtcLog&) = delete;
   FakeConnectionWithRtcLog& operator=(const FakeConnectionWithRtcLog&) = delete;
@@ -31,7 +33,7 @@ class FakeConnectionWithRtcLog : public protocol::FakeConnectionToClient {
   void set_event_log(protocol::WebrtcEventLogData* log) { event_log_ = log; }
 
  private:
-  protocol::WebrtcEventLogData* event_log_;
+  raw_ptr<protocol::WebrtcEventLogData> event_log_;
 };
 
 }  // namespace
@@ -39,7 +41,7 @@ class FakeConnectionWithRtcLog : public protocol::FakeConnectionToClient {
 class RtcLogFileOperationsTest : public testing::Test {
  public:
   RtcLogFileOperationsTest()
-      : connection_(&event_log_), file_operations_(&connection_) {}
+      : connection_(&event_log_), file_operations_(connection_.GetWeakPtr()) {}
 
   void SetUp() override { reader_ = file_operations_.CreateReader(); }
 
@@ -51,8 +53,8 @@ class RtcLogFileOperationsTest : public testing::Test {
   std::unique_ptr<FileOperations::Reader> reader_;
 
   // These are the most-recent results from the callbacks.
-  absl::optional<FileOperations::Reader::OpenResult> open_result_;
-  absl::optional<FileOperations::Reader::ReadResult> read_result_;
+  std::optional<FileOperations::Reader::OpenResult> open_result_;
+  std::optional<FileOperations::Reader::ReadResult> read_result_;
 
   FileOperations::Reader::OpenCallback MakeOpenCallback() {
     return base::BindOnce(&RtcLogFileOperationsTest::OnOpenResult,
@@ -76,6 +78,10 @@ class RtcLogFileOperationsTest : public testing::Test {
 
 TEST_F(RtcLogFileOperationsTest, InitialState_IsCreated) {
   EXPECT_EQ(reader_->state(), FileOperations::State::kCreated);
+}
+
+TEST_F(RtcLogFileOperationsTest, CreateWriter_ReturnsNullptr) {
+  EXPECT_EQ(file_operations_.CreateWriter(), nullptr);
 }
 
 TEST_F(RtcLogFileOperationsTest, NonWebrtcConnection_RaisesProtocolError) {
@@ -172,6 +178,24 @@ TEST_F(RtcLogFileOperationsTest,
   task_environment_.RunUntilIdle();
 
   EXPECT_EQ(ToString(**read_result_), "cc");
+}
+
+TEST_F(RtcLogFileOperationsTest,
+       ConnectionDestroyedBeforeOpen_RaisesProtocolError) {
+  auto connection = std::make_unique<FakeConnectionWithRtcLog>(&event_log_);
+  RtcLogFileOperations file_operations(connection->GetWeakPtr());
+  std::unique_ptr<FileOperations::Reader> reader =
+      file_operations.CreateReader();
+
+  base::test::TestFuture<FileOperations::Reader::OpenResult> future;
+  reader->Open(future.GetCallback());
+  connection.reset();
+
+  auto result = future.Take();
+  ASSERT_FALSE(result);
+  EXPECT_EQ(result.error().type(),
+            protocol::FileTransfer_Error_Type_PROTOCOL_ERROR);
+  EXPECT_EQ(reader->state(), FileOperations::State::kFailed);
 }
 
 }  // namespace remoting

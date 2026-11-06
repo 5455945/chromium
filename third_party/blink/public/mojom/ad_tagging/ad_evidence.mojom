@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,6 +24,13 @@ enum FrameCreationStackEvidence {
   kNotCreatedByAdScript,
   // At the time the frame was created, ad script was on the v8 stack.
   kCreatedByAdScript
+};
+
+// Represents the ad status and type of a given frame.
+// Note: Ad status can only transition from lower enum values to higher ones.
+enum FrameAdStatus {
+  kNotAd = 0,
+  kAd = 1,
 };
 
 // Mapped to `blink::FrameAdEvidence`.

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,21 +6,19 @@
 
 #include <utility>
 
-#include "base/callback_helpers.h"
+#include "base/functional/callback_helpers.h"
 #include "base/time/time.h"
-#include "chrome/browser/nearby_sharing/logging/logging.h"
+#include "components/cross_device/logging/logging.h"
 #include "device/bluetooth/bluetooth_adapter.h"
 
 namespace {
 
-constexpr base::TimeDelta kIntervalMin = base::TimeDelta::FromMilliseconds(100);
-constexpr base::TimeDelta kIntervalMax = base::TimeDelta::FromMilliseconds(100);
+constexpr base::TimeDelta kIntervalMin = base::Milliseconds(100);
+constexpr base::TimeDelta kIntervalMax = base::Milliseconds(100);
 
 // A value of 0 will restore the interval to the system default.
-constexpr base::TimeDelta kDefaultIntervalMin =
-    base::TimeDelta::FromMilliseconds(0);
-constexpr base::TimeDelta kDefaultIntervalMax =
-    base::TimeDelta::FromMilliseconds(0);
+constexpr base::TimeDelta kDefaultIntervalMin = base::Milliseconds(0);
+constexpr base::TimeDelta kDefaultIntervalMax = base::Milliseconds(0);
 
 }  // namespace
 
@@ -50,14 +48,14 @@ void BluetoothAdvertisingIntervalClient::RestoreDefaultInterval() {
 
 void BluetoothAdvertisingIntervalClient::OnSetIntervalForAdvertisingError(
     device::BluetoothAdvertisement::ErrorCode code) {
-  NS_LOG(WARNING) << __func__
-                  << ": SetAdvertisingInterval() failed with error code = "
-                  << code;
+  CD_LOG(WARNING, Feature::NS)
+      << __func__
+      << ": SetAdvertisingInterval() failed with error code = " << code;
 }
 
 void BluetoothAdvertisingIntervalClient::OnRestoreDefaultIntervalError(
     device::BluetoothAdvertisement::ErrorCode code) {
-  NS_LOG(WARNING) << __func__
-                  << ": SetAdvertisingInterval() failed with error code = "
-                  << code;
+  CD_LOG(WARNING, Feature::NS)
+      << __func__
+      << ": SetAdvertisingInterval() failed with error code = " << code;
 }

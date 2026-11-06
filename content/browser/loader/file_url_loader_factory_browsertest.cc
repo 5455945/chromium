@@ -1,17 +1,24 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// This must be before Windows headers
-#include "base/callback_helpers.h"
-#include "base/strings/stringprintf.h"
-#include "build/build_config.h"
-#include "content/public/test/browser_test.h"
+#include "base/memory/raw_ptr.h"
 
-#if defined(OS_WIN)
+// This must be before Windows headers
+#include "base/functional/callback_helpers.h"
+#include "base/strings/stringprintf.h"
+#include "base/time/time.h"
+#include "build/build_config.h"
+#include "content/public/browser/web_contents_observer.h"
+#include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
+
+#if BUILDFLAG(IS_WIN)
 #include <objbase.h>
-#include <shlobj.h>
+
 #include <windows.h>
+
+#include <shlobj.h>
 #include <wrl/client.h>
 #endif
 
@@ -20,7 +27,6 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/macros.h"
 #include "base/path_service.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -32,10 +38,10 @@
 #include "content/public/common/content_paths.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/content_browser_test.h"
+#include "content/public/test/content_browser_test_content_browser_client.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "content/shell/browser/shell.h"
-#include "content/test/test_content_browser_client.h"
 #include "net/base/filename_util.h"
 #include "net/base/net_errors.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
@@ -58,7 +64,8 @@ base::FilePath AbsoluteFilePath(const base::FilePath& file_path) {
   return base::MakeAbsoluteFilePath(file_path);
 }
 
-class TestFileAccessContentBrowserClient : public TestContentBrowserClient {
+class TestFileAccessContentBrowserClient
+    : public ContentBrowserTestContentBrowserClient {
  public:
   struct FileAccessAllowedArgs {
     base::FilePath path;
@@ -66,17 +73,18 @@ class TestFileAccessContentBrowserClient : public TestContentBrowserClient {
     base::FilePath profile_path;
   };
 
-  TestFileAccessContentBrowserClient() {
-    old_content_browser_client_ = SetBrowserClientForTesting(this);
-  }
+  TestFileAccessContentBrowserClient() = default;
 
   void set_blocked_path(const base::FilePath& blocked_path) {
     blocked_path_ = AbsoluteFilePath(blocked_path);
   }
 
-  ~TestFileAccessContentBrowserClient() override {
-    EXPECT_EQ(this, SetBrowserClientForTesting(old_content_browser_client_));
-  }
+  TestFileAccessContentBrowserClient(
+      const TestFileAccessContentBrowserClient&) = delete;
+  TestFileAccessContentBrowserClient& operator=(
+      const TestFileAccessContentBrowserClient&) = delete;
+
+  ~TestFileAccessContentBrowserClient() override = default;
 
   bool IsFileAccessAllowed(const base::FilePath& path,
                            const base::FilePath& absolute_path,
@@ -95,13 +103,9 @@ class TestFileAccessContentBrowserClient : public TestContentBrowserClient {
   void ClearAccessAllowedArgs() { access_allowed_args_.clear(); }
 
  private:
-  ContentBrowserClient* old_content_browser_client_;
-
   base::FilePath blocked_path_;
 
   std::vector<FileAccessAllowedArgs> access_allowed_args_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestFileAccessContentBrowserClient);
 };
 
 // This class contains integration tests for file URLs.
@@ -165,7 +169,7 @@ IN_PROC_BROWSER_TEST_F(FileURLLoaderFactoryBrowserTest, FileAccessNotAllowed) {
             test_browser_client.access_allowed_args()[0].profile_path);
 }
 
-#if defined(OS_POSIX)
+#if BUILDFLAG(IS_POSIX)
 
 // Test symbolic links on POSIX platforms. These act like the contents of
 // the symbolic link are the same as the contents of the file it links to.
@@ -220,7 +224,7 @@ IN_PROC_BROWSER_TEST_F(FileURLLoaderFactoryBrowserTest, SymlinksToFiles) {
             test_browser_client.access_allowed_args()[0].profile_path);
 }
 
-#elif defined(OS_WIN)
+#elif BUILDFLAG(IS_WIN)
 
 // Test shortcuts on Windows. These are treated as redirects.
 IN_PROC_BROWSER_TEST_F(FileURLLoaderFactoryBrowserTest, ResolveShortcutTest) {
@@ -319,7 +323,7 @@ IN_PROC_BROWSER_TEST_F(FileURLLoaderFactoryBrowserTest, ResolveShortcutTest) {
             test_browser_client.access_allowed_args()[1].profile_path);
 }
 
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
 IN_PROC_BROWSER_TEST_F(FileURLLoaderFactoryBrowserTest,
                        RedirectToFileUrlMainFrame) {
@@ -368,7 +372,7 @@ IN_PROC_BROWSER_TEST_F(FileURLLoaderFactoryBrowserTest,
       RedirectToFileURL().spec().c_str());
   // Unfortunately, fetch doesn't provide a way to unambiguously know if the
   // request failed due to the redirect being unsafe.
-  EXPECT_EQ("error", EvalJs(shell()->web_contents()->GetMainFrame(),
+  EXPECT_EQ("error", EvalJs(shell()->web_contents()->GetPrimaryMainFrame(),
                             fetch_redirect_to_file));
   // There should never have been a request for the file URL.
   EXPECT_TRUE(test_browser_client.access_allowed_args().empty());
@@ -504,7 +508,7 @@ IN_PROC_BROWSER_TEST_F(FileURLLoaderFactoryDisabledSecurityBrowserTest,
   // switch (this is what this test suite is doing) or 2) the following Android
   // WebView API: android.webkit.WebSettings.setAllowFileAccess.  This is why
   // the test asserts below that the access is successful.
-  RenderFrameHost* main_frame = shell()->web_contents()->GetMainFrame();
+  RenderFrameHost* main_frame = shell()->web_contents()->GetPrimaryMainFrame();
   RenderFrameHost* child_frame = ChildFrameAt(main_frame, 0);
   const char kScriptTemplateToTriggerSubresourceFetch[] = R"(
       new Promise(function (resolve, reject) {
@@ -518,6 +522,31 @@ IN_PROC_BROWSER_TEST_F(FileURLLoaderFactoryDisabledSecurityBrowserTest,
   EXPECT_EQ("OK", EvalJs(child_frame,
                          JsReplace(kScriptTemplateToTriggerSubresourceFetch,
                                    img_url)));
+}
+
+IN_PROC_BROWSER_TEST_F(FileURLLoaderFactoryBrowserTest, LastModified) {
+  // Create a temporary file with an arbitrary last-modified timestamp.
+  const char kLastModified[] = "1994-11-15T12:45:26.000Z";
+  base::FilePath path;
+  {
+    base::ScopedAllowBlockingForTesting allow_blocking;
+    ASSERT_TRUE(base::CreateTemporaryFile(&path));
+    base::Time last_modified_time;
+    ASSERT_TRUE(base::Time::FromString(kLastModified, &last_modified_time));
+    ASSERT_TRUE(base::TouchFile(path, /*last_accessed=*/base::Time::Now(),
+                                last_modified_time));
+  }
+  EXPECT_TRUE(NavigateToURL(shell(), net::FilePathToFileURL(path)));
+
+  // Verify the syntax
+  EXPECT_THAT(content::EvalJs(shell()->web_contents(), "document.lastModified")
+                  .ExtractString(),
+              testing::MatchesRegex(R"(\d\d/\d\d/\d\d\d\d \d\d:\d\d:\d\d)"));
+  // Verify the value (it's in local time, so we parse it and convert it in JS
+  // to get a representation in UTC).
+  EXPECT_EQ(kLastModified,
+            content::EvalJs(shell()->web_contents(),
+                            "new Date(document.lastModified).toISOString()"));
 }
 
 }  // namespace

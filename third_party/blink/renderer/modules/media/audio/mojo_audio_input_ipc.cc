@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,14 @@
 
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_macros.h"
 #include "media/audio/audio_device_description.h"
 #include "media/mojo/common/input_error_code_converter.h"
 #include "media/mojo/mojom/audio_data_pipe.mojom-blink.h"
 #include "mojo/public/cpp/system/platform_handle.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 
 namespace blink {
 
@@ -44,9 +45,16 @@ void MojoAudioInputIPC::CreateStream(media::AudioInputIPCDelegate* delegate,
       client;
   factory_client_receiver_.Bind(client.InitWithNewPipeAndPassReceiver());
   factory_client_receiver_.set_disconnect_with_reason_handler(
-      base::BindOnce(&MojoAudioInputIPC::OnDisconnect, base::Unretained(this)));
+      BindOnce(&MojoAudioInputIPC::OnDisconnect, Unretained(this)));
 
-  stream_creator_.Run(source_params_, std::move(client), params,
+  mojo::PendingReceiver<media::mojom::blink::AudioProcessorControls>
+      controls_receiver;
+
+  if (source_params_.processing.has_value())
+    controls_receiver = processor_controls_.BindNewPipeAndPassReceiver();
+
+  stream_creator_.Run(source_params_, std::move(client),
+                      std::move(controls_receiver), params,
                       automatic_gain_control, total_segments);
 }
 
@@ -71,21 +79,47 @@ void MojoAudioInputIPC::SetOutputDeviceForAec(
     stream_associator_.Run(*stream_id_, output_device_id);
 }
 
+media::AudioProcessorControls* MojoAudioInputIPC::GetProcessorControls() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return this;
+}
+
 void MojoAudioInputIPC::CloseStream() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   delegate_ = nullptr;
   factory_client_receiver_.reset();
   stream_client_receiver_.reset();
   stream_.reset();
+  processor_controls_.reset();
+}
+
+void MojoAudioInputIPC::GetStats(GetStatsCB callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (processor_controls_)
+    processor_controls_->GetStats(std::move(callback));
+}
+
+void MojoAudioInputIPC::SetPreferredNumCaptureChannels(
+    int32_t num_preferred_channels) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (processor_controls_)
+    processor_controls_->SetPreferredNumCaptureChannels(num_preferred_channels);
+}
+
+void MojoAudioInputIPC::SetVoiceIsolation(bool enabled) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (processor_controls_) {
+    processor_controls_->SetVoiceIsolation(enabled);
+  }
 }
 
 void MojoAudioInputIPC::StreamCreated(
     mojo::PendingRemote<media::mojom::blink::AudioInputStream> stream,
     mojo::PendingReceiver<media::mojom::blink::AudioInputStreamClient>
         stream_client_receiver,
-    media::mojom::blink::ReadOnlyAudioDataPipePtr data_pipe,
+    media::mojom::blink::ReadWriteAudioDataPipePtr data_pipe,
     bool initially_muted,
-    const absl::optional<base::UnguessableToken>& stream_id) {
+    const std::optional<base::UnguessableToken>& stream_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(delegate_);
   DCHECK(!stream_);
@@ -101,7 +135,7 @@ void MojoAudioInputIPC::StreamCreated(
   DCHECK(data_pipe->socket.is_valid_platform_file());
   base::ScopedPlatformFile socket_handle = data_pipe->socket.TakePlatformFile();
 
-  base::ReadOnlySharedMemoryRegion& shared_memory_region =
+  base::UnsafeSharedMemoryRegion& shared_memory_region =
       data_pipe->shared_memory;
   DCHECK(shared_memory_region.IsValid());
 

@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,19 +10,30 @@
 #include <string>
 
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 
 namespace policy {
+
+// Logged to UMA - keep in sync with enums.xml.
+enum class DeviceManagementAndCBCMState {
+  kNeither = 0,
+  kDeviceManagementOnly = 1,
+  kCBCMOnly = 2,
+  kBoth = 3,
+  kMaxValue = kBoth,
+};
 
 // Implementation of BrowserDMTokenStorage delegate for Windows.
 class BrowserDMTokenStorageWin : public BrowserDMTokenStorage::Delegate {
  public:
   BrowserDMTokenStorageWin();
+  BrowserDMTokenStorageWin(const BrowserDMTokenStorageWin&) = delete;
+  BrowserDMTokenStorageWin& operator=(const BrowserDMTokenStorageWin&) = delete;
   ~BrowserDMTokenStorageWin() override;
+
+  void OnTokenInitialized() override;
 
  private:
   // override BrowserDMTokenStorage::Delegate
@@ -30,10 +41,15 @@ class BrowserDMTokenStorageWin : public BrowserDMTokenStorage::Delegate {
   std::string InitEnrollmentToken() override;
   std::string InitDMToken() override;
   bool InitEnrollmentErrorOption() override;
+  bool CanInitEnrollmentToken() const override;
   BrowserDMTokenStorage::StoreTask SaveDMTokenTask(
       const std::string& token,
       const std::string& client_id) override;
+  BrowserDMTokenStorage::StoreTask DeleteDMTokenTask(
+      const std::string& client_id) override;
   scoped_refptr<base::TaskRunner> SaveDMTokenTaskRunner() override;
+
+  bool umas_collected_ = false;
 
   scoped_refptr<base::SingleThreadTaskRunner> com_sta_task_runner_;
 
@@ -45,8 +61,10 @@ class BrowserDMTokenStorageWin : public BrowserDMTokenStorage::Delegate {
   FRIEND_TEST_ALL_PREFIXES(BrowserDMTokenStorageWinTest, InitDMToken);
   FRIEND_TEST_ALL_PREFIXES(BrowserDMTokenStorageWinTest,
                            InitDMTokenFromBrowserLocation);
-
-  DISALLOW_COPY_AND_ASSIGN(BrowserDMTokenStorageWin);
+  FRIEND_TEST_ALL_PREFIXES(BrowserDMTokenStorageWinTest,
+                           CollectMetricsNotManaged);
+  FRIEND_TEST_ALL_PREFIXES(BrowserDMTokenStorageWinTest,
+                           CollectMetricsCBCMOnly);
 };
 
 }  // namespace policy

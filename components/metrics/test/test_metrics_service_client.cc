@@ -1,14 +1,16 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/metrics/test/test_metrics_service_client.h"
 
 #include <memory>
+#include <string_view>
+#include <utility>
 
-#include "base/callback.h"
-#include "base/containers/contains.h"
+#include "base/functional/callback.h"
 #include "components/metrics/metrics_log_uploader.h"
+#include "components/regional_capabilities/regional_capabilities_country_id.h"
 #include "third_party/metrics_proto/chrome_user_metrics_extension.pb.h"
 
 namespace metrics {
@@ -16,15 +18,13 @@ namespace metrics {
 // static
 const char TestMetricsServiceClient::kBrandForTesting[] = "brand_for_testing";
 
-TestMetricsServiceClient::TestMetricsServiceClient()
-    : version_string_("5.0.322.0-64-devel"),
-      product_(ChromeUserMetricsExtension::CHROME),
-      reporting_is_managed_(false),
-      is_extended_stable_channel_(false),
-      enable_default_(EnableMetricsDefault::DEFAULT_UNKNOWN),
-      storage_limits_(MetricsServiceClient::GetStorageLimits()) {}
+TestMetricsServiceClient::TestMetricsServiceClient() = default;
+TestMetricsServiceClient::~TestMetricsServiceClient() = default;
 
-TestMetricsServiceClient::~TestMetricsServiceClient() {}
+variations::SyntheticTrialRegistry*
+TestMetricsServiceClient::GetSyntheticTrialRegistry() {
+  return synthetic_trial_registry_;
+}
 
 metrics::MetricsService* TestMetricsServiceClient::GetMetricsService() {
   return nullptr;
@@ -35,9 +35,11 @@ void TestMetricsServiceClient::SetMetricsClientId(
   client_id_ = client_id;
 }
 
+#if BUILDFLAG(IS_CHROMEOS)
 bool TestMetricsServiceClient::ShouldUploadMetricsForUserId(uint64_t user_id) {
-  return base::Contains(allowed_user_ids_, user_id);
+  return allowed_user_ids_.contains(user_id);
 }
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 int32_t TestMetricsServiceClient::GetProduct() {
   return product_;
@@ -50,6 +52,11 @@ std::string TestMetricsServiceClient::GetApplicationLocale() {
 bool TestMetricsServiceClient::GetBrand(std::string* brand_code) {
   *brand_code = kBrandForTesting;
   return true;
+}
+
+const network_time::NetworkTimeTracker*
+TestMetricsServiceClient::GetNetworkTimeTracker() {
+  return nullptr;
 }
 
 SystemProfileProto::Channel TestMetricsServiceClient::GetChannel() {
@@ -72,15 +79,26 @@ void TestMetricsServiceClient::CollectFinalMetricsForLog(
 std::unique_ptr<MetricsLogUploader> TestMetricsServiceClient::CreateUploader(
     const GURL& server_url,
     const GURL& insecure_server_url,
-    base::StringPiece mime_type,
+    std::string_view mime_type,
     MetricsLogUploader::MetricServiceType service_type,
     const MetricsLogUploader::UploadCallback& on_upload_complete) {
-  uploader_ = new TestMetricsLogUploader(on_upload_complete);
-  return std::unique_ptr<MetricsLogUploader>(uploader_);
+  auto uploader = std::make_unique<TestMetricsLogUploader>(on_upload_complete);
+  uploader_ = uploader->AsWeakPtr();
+  return uploader;
 }
 
+#if BUILDFLAG(IS_ANDROID)
+bool TestMetricsServiceClient::IsJobSchedulerSupported() const {
+  // For simplicity, don't go through the JobScheduler code path, as all it does
+  // is add a layer of indirection and is usually irrelevant to most tests.
+  // There is a full end to end test of the JobScheduler code path in
+  // chrome/browser/metrics/android/background_upload_task_browsertest.cc.
+  return false;
+}
+#endif  // BUILDFLAG(IS_ANDROID)
+
 base::TimeDelta TestMetricsServiceClient::GetStandardUploadInterval() {
-  return base::TimeDelta::FromMinutes(5);
+  return base::Minutes(5);
 }
 
 bool TestMetricsServiceClient::IsReportingPolicyManaged() {
@@ -103,6 +121,11 @@ bool TestMetricsServiceClient::ShouldResetClientIdsOnClonedInstall() {
 MetricsLogStore::StorageLimits TestMetricsServiceClient::GetStorageLimits()
     const {
   return storage_limits_;
+}
+
+std::optional<regional_capabilities::CountryIdHolder>
+TestMetricsServiceClient::GetProfileCountryIdForPrivateMetricsReporting() {
+  return country_id_holder_;
 }
 
 void TestMetricsServiceClient::AllowMetricUploadForUserId(uint64_t user_id) {

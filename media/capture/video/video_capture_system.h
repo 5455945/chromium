@@ -1,17 +1,18 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef MEDIA_CAPTURE_VIDEO_VIDEO_CAPTURE_SYSTEM_H_
 #define MEDIA_CAPTURE_VIDEO_VIDEO_CAPTURE_SYSTEM_H_
 
+#include "media/capture/mojom/video_capture_types.mojom-shared.h"
 #include "media/capture/video/video_capture_device_factory.h"
 #include "media/capture/video/video_capture_device_info.h"
 
 namespace media {
 
 // GetDeviceInfosAsync() should be called at least once before calling
-// CreateDevice(), because otherwise CreateDevice() will allways return nullptr.
+// CreateDevice(), because otherwise CreateDevice() will always return nullptr.
 class CAPTURE_EXPORT VideoCaptureSystem {
  public:
   using DeviceInfoCallback =
@@ -23,12 +24,20 @@ class CAPTURE_EXPORT VideoCaptureSystem {
   // VideoCaptureSystem instance to guarantee that it stays alive during the
   // asynchronous operation. |result_callback| is invoked on the same thread
   // that calls GetDeviceInfosAsync()
-  virtual void GetDeviceInfosAsync(DeviceInfoCallback result_callback) = 0;
+  virtual void GetDeviceInfosAsync(
+      mojom::VideoCaptureDeviceEnumerationMode enumeration_mode,
+      DeviceInfoCallback result_callback) = 0;
 
-  // Creates a VideoCaptureDevice object. Returns nullptr if something goes
-  // wrong.
-  virtual std::unique_ptr<VideoCaptureDevice> CreateDevice(
+  // Returns true if the latest `GetDeviceInfosAsync()` result came from a
+  // `kDevicesWithCapabilities` enumeration.
+  virtual bool HasDeviceInfosWithCapabilities() const = 0;
+
+  // Creates a VideoCaptureErrorOrDevice object. Contains an error code if
+  // something goes wrong.
+  virtual VideoCaptureErrorOrDevice CreateDevice(
       const std::string& device_id) = 0;
+
+  virtual VideoCaptureDeviceFactory* GetFactory() = 0;
 };
 
 }  // namespace media

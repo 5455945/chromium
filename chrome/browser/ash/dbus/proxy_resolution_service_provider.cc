@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,17 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/strings/stringprintf.h"
-#include "base/threading/thread_task_runner_handle.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_platform_part.h"
-#include "chrome/browser/chromeos/net/system_proxy_manager.h"
+#include "base/task/single_thread_task_runner.h"
+#include "chrome/browser/ash/net/system_proxy_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_types.h"
+#include "components/session_manager/core/session.h"
+#include "components/session_manager/core/session_manager.h"
 #include "content/public/browser/storage_partition.h"
 #include "dbus/bus.h"
 #include "dbus/message.h"
@@ -27,7 +28,7 @@
 #include "services/network/public/mojom/proxy_lookup_client.mojom.h"
 #include "url/gurl.h"
 
-namespace chromeos {
+namespace ash {
 
 namespace {
 
@@ -49,27 +50,31 @@ class ProxyLookupRequest : public network::mojom::ProxyLookupClient {
   ProxyLookupRequest(
       network::mojom::NetworkContext* network_context,
       const GURL& source_url,
-      const net::NetworkIsolationKey& network_isolation_key,
+      const net::NetworkAnonymizationKey& network_anonymization_key,
       ProxyResolutionServiceProvider::NotifyCallback notify_callback,
       chromeos::SystemProxyOverride system_proxy_override)
       : notify_callback_(std::move(notify_callback)),
         system_proxy_override_(system_proxy_override) {
     mojo::PendingRemote<network::mojom::ProxyLookupClient> proxy_lookup_client =
         receiver_.BindNewPipeAndPassRemote();
-    receiver_.set_disconnect_handler(base::BindOnce(
-        &ProxyLookupRequest::OnProxyLookupComplete, base::Unretained(this),
-        net::ERR_ABORTED, absl::nullopt));
+    receiver_.set_disconnect_handler(
+        base::BindOnce(&ProxyLookupRequest::OnProxyLookupComplete,
+                       base::Unretained(this), net::ERR_ABORTED, std::nullopt));
 
-    network_context->LookUpProxyForURL(source_url, network_isolation_key,
+    network_context->LookUpProxyForURL(source_url, network_anonymization_key,
                                        std::move(proxy_lookup_client));
   }
+
+  ProxyLookupRequest(const ProxyLookupRequest&) = delete;
+  ProxyLookupRequest& operator=(const ProxyLookupRequest&) = delete;
 
   ~ProxyLookupRequest() override = default;
 
   void OnProxyLookupComplete(
       int32_t net_error,
-      const absl::optional<net::ProxyInfo>& proxy_info) override {
-    DCHECK_EQ(net_error == net::OK, proxy_info.has_value());
+      const std::optional<net::ProxyInfo>& proxy_info) override {
+    CHECK_EQ(net_error == net::OK, proxy_info.has_value(),
+             base::NotFatalUntil::M160);
 
     std::string error;
     std::string result;
@@ -77,9 +82,16 @@ class ProxyLookupRequest : public network::mojom::ProxyLookupClient {
     if (!proxy_info) {
       error = net::ErrorToString(net_error);
       result = kProxyInfoOnFailure;
+    } else if (proxy_info->ContainsMultiProxyChain()) {
+      // Multi-proxy chains cannot be represented as a PAC string.
+      error = net::ErrorToString(net::ERR_MANDATORY_PROXY_CONFIGURATION_FAILED);
+      result = kProxyInfoOnFailure;
     } else {
       result = proxy_info->ToPacString();
-      if (proxy_info->is_http()) {
+      if (!proxy_info->is_empty() && !proxy_info->is_direct() &&
+          proxy_info->proxy_chain()
+              .GetProxyServer(/*chain_index=*/0)
+              .is_http()) {
         AppendSystemProxyIfActive(&result);
       }
     }
@@ -94,8 +106,7 @@ class ProxyLookupRequest : public network::mojom::ProxyLookupClient {
   // local proxy connection fails. System-proxy itself does proxy resolution
   // trough the same Chrome proxy resolution service to connect to the
   // remote proxy server. The availability of this feature is controlled by the
-  // |SystemProxySettings| policy and the feature flag
-  // `ash::features::kSystemProxyForSystemServices`.
+  // |SystemProxySettings| policy.
   void AppendSystemProxyIfActive(std::string* pac_proxy_list) {
     SystemProxyManager* system_proxy_manager = SystemProxyManager::Get();
     // |system_proxy_manager| may be missing in tests.
@@ -115,26 +126,27 @@ class ProxyLookupRequest : public network::mojom::ProxyLookupClient {
   mojo::Receiver<network::mojom::ProxyLookupClient> receiver_{this};
   ProxyResolutionServiceProvider::NotifyCallback notify_callback_;
   chromeos::SystemProxyOverride system_proxy_override_;
-  DISALLOW_COPY_AND_ASSIGN(ProxyLookupRequest);
 };
 
 }  // namespace
 
 ProxyResolutionServiceProvider::ProxyResolutionServiceProvider()
-    : origin_thread_(base::ThreadTaskRunnerHandle::Get()),
-      network_isolation_key_(net::NetworkIsolationKey::CreateTransient()) {}
+    : origin_thread_(base::SingleThreadTaskRunner::GetCurrentDefault()),
+      network_anonymization_key_(
+          net::NetworkAnonymizationKey::CreateTransient()) {}
 
 ProxyResolutionServiceProvider::~ProxyResolutionServiceProvider() {
-  DCHECK(OnOriginThread());
+  CHECK(OnOriginThread(), base::NotFatalUntil::M160);
 }
 
 void ProxyResolutionServiceProvider::Start(
     scoped_refptr<dbus::ExportedObject> exported_object) {
-  DCHECK(OnOriginThread());
+  CHECK(OnOriginThread(), base::NotFatalUntil::M160);
   exported_object_ = exported_object;
   VLOG(1) << "ProxyResolutionServiceProvider started";
   exported_object_->ExportMethod(
-      kNetworkProxyServiceInterface, kNetworkProxyServiceResolveProxyMethod,
+      chromeos::kNetworkProxyServiceInterface,
+      chromeos::kNetworkProxyServiceResolveProxyMethod,
       base::BindRepeating(&ProxyResolutionServiceProvider::DbusResolveProxy,
                           weak_ptr_factory_.GetWeakPtr()),
       base::BindOnce(&ProxyResolutionServiceProvider::OnExported,
@@ -158,7 +170,7 @@ void ProxyResolutionServiceProvider::OnExported(
 void ProxyResolutionServiceProvider::DbusResolveProxy(
     dbus::MethodCall* method_call,
     dbus::ExportedObject::ResponseSender response_sender) {
-  DCHECK(OnOriginThread());
+  CHECK(OnOriginThread(), base::NotFatalUntil::M160);
 
   VLOG(1) << "Handling method call: " << method_call->ToString();
   dbus::MessageReader reader(method_call);
@@ -217,7 +229,7 @@ void ProxyResolutionServiceProvider::ResolveProxyInternal(
   }
 
   VLOG(1) << "Starting network proxy resolution for " << url;
-  new ProxyLookupRequest(network_context, url, network_isolation_key_,
+  new ProxyLookupRequest(network_context, url, network_anonymization_key_,
                          std::move(callback), system_proxy_override);
 }
 
@@ -226,7 +238,7 @@ void ProxyResolutionServiceProvider::NotifyProxyResolved(
     dbus::ExportedObject::ResponseSender response_sender,
     const std::string& error,
     const std::string& pac_string) {
-  DCHECK(OnOriginThread());
+  CHECK(OnOriginThread(), base::NotFatalUntil::M160);
 
   // Reply to the original D-Bus method call.
   dbus::MessageWriter writer(response.get());
@@ -243,11 +255,26 @@ ProxyResolutionServiceProvider::GetNetworkContext() {
   // TODO(eroman): Instead of retrieving the profile globally (which could be in
   // a variety of states during startup/shutdown), pass the BrowserContext in as
   // a dependency.
-  auto* primary_profile = ProfileManager::GetPrimaryUserProfile();
-  if (!primary_profile)
-    return nullptr;
 
-  auto* storage_partition = primary_profile->GetDefaultStoragePartition();
+  // Can be the profile of the primary user logged in the session or the profile
+  // associated with the sign-in screen.
+  Profile* profile = nullptr;
+  auto* primary_session =
+      session_manager::SessionManager::Get()->GetPrimarySession();
+  if (primary_session) {
+    profile = Profile::FromBrowserContext(
+        ash::BrowserContextHelper::Get()->GetBrowserContextByAccountId(
+            primary_session->account_id()));
+  }
+
+  if (!profile) {
+    profile = ProfileManager::GetActiveUserProfile();
+    if (!profile || !ash::IsSigninBrowserContext(profile)) {
+      return nullptr;
+    }
+  }
+
+  auto* storage_partition = profile->GetDefaultStoragePartition();
 
   if (!storage_partition)
     return nullptr;
@@ -255,4 +282,4 @@ ProxyResolutionServiceProvider::GetNetworkContext() {
   return storage_partition->GetNetworkContext();
 }
 
-}  // namespace chromeos
+}  // namespace ash

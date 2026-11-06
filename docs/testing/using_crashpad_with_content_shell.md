@@ -1,7 +1,7 @@
 # Using crashpad with content shell
 
 When running web tests, it is possible to use
-[crashpad](../third_party/crashpad/)/[breakpad](../../third_party/breakpad/) to
+[crashpad](../../third_party/crashpad/)/[breakpad](../../third_party/breakpad/) to
 capture stack traces on crashes while running without a debugger attached and
 with the sandbox enabled.
 
@@ -11,7 +11,7 @@ On all platforms, build the target `blink_tests`.
 
 *** note
 **Mac:** Add `enable_dsyms = 1` to your [gn build
-arguments](https://gn.googlesource.com/gn/+/master/docs/quick_start.md) before
+arguments](https://gn.googlesource.com/gn/+/main/docs/quick_start.md) before
 building. This slows down linking several minutes, so don't just always set it
 by default.
 ***

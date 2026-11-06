@@ -1,4 +1,4 @@
-(async function(testRunner) {
+(async function(/** @type {import('test_runner').TestRunner} */ testRunner) {
   var {page, session, dp} = await testRunner.startBlank(
       'Verifies that requests made for service worker main scripts get Network.*ExtraInfo events for them.');
   const swHelper = (await testRunner.loadScript('resources/service-worker-helper.js'))(dp, session);
@@ -13,21 +13,25 @@
   const attachedToTarget = await attachedPromise;
 
   const swdp = session.createChild(attachedToTarget.params.sessionId).protocol;
-  await swdp.Network.enable();
 
-  await swdp.Runtime.runIfWaitingForDebugger();
+  const networkEvents = [
+    swdp.Network.onceRequestWillBeSent(),
+    swdp.Network.onceRequestWillBeSentExtraInfo(),
+    swdp.Network.onceResponseReceived(),
+    swdp.Network.onceResponseReceivedExtraInfo()
+  ];
+
+  await Promise.all([
+    swdp.Network.enable(),
+    swdp.Runtime.runIfWaitingForDebugger(),
+  ]);
 
   const [
     requestWillBeSent,
     requestWillBeSentExtraInfo,
     responseReceived,
     responseReceivedExtraInfo
-  ] = await Promise.all([
-      swdp.Network.onceRequestWillBeSent(),
-      swdp.Network.onceRequestWillBeSentExtraInfo(),
-      swdp.Network.onceResponseReceived(),
-      swdp.Network.onceResponseReceivedExtraInfo()
-  ]);
+  ] = await Promise.all(networkEvents);
 
   const idsMatch = requestWillBeSent.params.requestId === requestWillBeSentExtraInfo.params.requestId
     && requestWillBeSent.params.requestId === responseReceived.params.requestId

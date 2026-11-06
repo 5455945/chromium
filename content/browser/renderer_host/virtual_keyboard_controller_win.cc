@@ -1,10 +1,11 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/renderer_host/virtual_keyboard_controller_win.h"
 
 #include "base/trace_event/trace_event.h"
+#include "content/browser/renderer_host/render_widget_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_view_aura.h"
 #include "ui/base/ime/input_method.h"
 #include "ui/base/ime/mojom/text_input_state.mojom.h"
@@ -46,8 +47,9 @@ void VirtualKeyboardControllerWin::OnKeyboardVisible(
   // If the software input panel (SIP) is manually raised by the user, the flag
   // should be set so we don't call TryShow API again.
   virtual_keyboard_shown_ = true;
-  if (!host_view_->ShouldVirtualKeyboardOverlayContent()) {
-    host_view_->SetInsets(gfx::Insets(
+  if (host_view_->GetVirtualKeyboardMode() !=
+      ui::mojom::VirtualKeyboardMode::kOverlaysContent) {
+    host_view_->SetInsets(gfx::Insets::TLBR(
         0, 0, keyboard_rect.IsEmpty() ? 0 : keyboard_rect.height(), 0));
   } else {
     host_view_->NotifyVirtualKeyboardOverlayRect(keyboard_rect);
@@ -63,7 +65,8 @@ void VirtualKeyboardControllerWin::OnKeyboardHidden() {
   // called or not. Calling TryShow/TryHide multiple times leads to SIP
   // flickering.
   virtual_keyboard_shown_ = false;
-  if (!host_view_->ShouldVirtualKeyboardOverlayContent()) {
+  if (host_view_->GetVirtualKeyboardMode() !=
+      ui::mojom::VirtualKeyboardMode::kOverlaysContent) {
     // Restore the viewport.
     host_view_->SetInsets(gfx::Insets());
   } else {
@@ -73,10 +76,10 @@ void VirtualKeyboardControllerWin::OnKeyboardHidden() {
 
 void VirtualKeyboardControllerWin::ShowVirtualKeyboard() {
   TRACE_EVENT0("vk", "VirtualKeyboardControllerWin::ShowVirtualKeyboard");
-  if (auto* controller = input_method_->GetVirtualKeyboardController()) {
+  if (input_method_->GetVirtualKeyboardController()) {
     if (!virtual_keyboard_shown_) {
       virtual_keyboard_shown_ = true;
-      input_method_->ShowVirtualKeyboardIfEnabled();
+      input_method_->SetVirtualKeyboardVisibilityIfEnabled(true);
     }
   }
 }

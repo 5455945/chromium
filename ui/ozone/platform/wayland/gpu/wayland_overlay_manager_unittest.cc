@@ -1,12 +1,21 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "ui/ozone/platform/wayland/gpu/wayland_overlay_manager.h"
 
-#include "base/bind.h"
+#include <drm_fourcc.h>
+
+#include "base/containers/flat_map.h"
+#include "base/functional/bind.h"
+#include "base/run_loop.h"
+#include "components/viz/common/resources/shared_image_format.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/ozone/platform/wayland/gpu/wayland_buffer_manager_gpu.h"
+#include "ui/ozone/platform/wayland/host/wayland_buffer_manager_host.h"
+#include "ui/ozone/platform/wayland/test/wayland_test.h"
 #include "ui/ozone/public/overlay_surface_candidate.h"
 
 namespace ui {
@@ -18,7 +27,7 @@ OverlaySurfaceCandidate CreateCandidate(const gfx::Rect& rect,
                                         int plane_z_order) {
   ui::OverlaySurfaceCandidate candidate;
   candidate.transform = gfx::OVERLAY_TRANSFORM_NONE;
-  candidate.format = gfx::BufferFormat::YUV_420_BIPLANAR;
+  candidate.format = viz::MultiPlaneFormat::kNV12;
   candidate.plane_z_order = plane_z_order;
   candidate.buffer_size = rect.size();
   candidate.display_rect = gfx::RectF(rect);
@@ -28,8 +37,40 @@ OverlaySurfaceCandidate CreateCandidate(const gfx::Rect& rect,
 
 }  // namespace
 
-TEST(WaylandOverlayManagerTest, MultipleOverlayCandidates) {
-  WaylandOverlayManager manager;
+class WaylandOverlayManagerTest : public WaylandTest {
+ public:
+  WaylandOverlayManagerTest() = default;
+
+  WaylandOverlayManagerTest(const WaylandOverlayManagerTest&) = delete;
+  WaylandOverlayManagerTest& operator=(const WaylandOverlayManagerTest&) =
+      delete;
+
+  ~WaylandOverlayManagerTest() override = default;
+
+  void SetUp() override {
+    const base::flat_map<viz::SharedImageFormat, std::vector<uint64_t>>
+        kSupportedFormatsWithModifiers{
+            {viz::MultiPlaneFormat::kNV12, {DRM_FORMAT_MOD_LINEAR}}};
+
+    WaylandTest::SetUp();
+
+    auto manager_ptr = connection_->buffer_manager_host()->BindInterface();
+    buffer_manager_gpu_->Initialize(std::move(manager_ptr),
+                                    kSupportedFormatsWithModifiers,
+                                    /*supports_dma_buf=*/false,
+                                    /*supports_viewporter=*/true,
+                                    /*supports_acquire_fence=*/false,
+                                    /*supports_overlays=*/true,
+                                    /*supports_single_pixel_buffer=*/true);
+
+    // Wait until initialization and mojo calls go through.
+    base::RunLoop().RunUntilIdle();
+  }
+};
+
+TEST_P(WaylandOverlayManagerTest, MultipleOverlayCandidates) {
+  // WaylandBufferManagerGpu manager_gpu;
+  WaylandOverlayManager manager(buffer_manager_gpu_.get());
 
   std::vector<OverlaySurfaceCandidate> candidates = {
       CreateCandidate(gfx::Rect(10, 10, 20, 20), -2),
@@ -48,8 +89,23 @@ TEST(WaylandOverlayManagerTest, MultipleOverlayCandidates) {
   EXPECT_TRUE(candidates[4].overlay_handled);
 }
 
-TEST(WaylandOverlayManagerTest, NonIntegerDisplayRect) {
-  WaylandOverlayManager manager;
+TEST_P(WaylandOverlayManagerTest, FormatSupportTest) {
+  WaylandOverlayManager manager(buffer_manager_gpu_.get());
+
+  std::vector<OverlaySurfaceCandidate> candidates = {
+      CreateCandidate(gfx::Rect(0, 0, 100, 100), 0),
+      CreateCandidate(gfx::Rect(10, 10, 20, 20), 1)};
+  candidates[1].format = viz::SinglePlaneFormat::kRGBX_8888;
+  manager.CheckOverlaySupport(&candidates, kPrimaryWidget);
+  EXPECT_TRUE(candidates[0].overlay_handled);
+  EXPECT_FALSE(candidates[1].overlay_handled);
+}
+
+namespace {
+
+void NonIntegerDisplayRectTestHelper(WaylandBufferManagerGpu* manager_gpu,
+                                     bool expect_candidates_handled) {
+  WaylandOverlayManager manager(manager_gpu);
 
   // Candidates for output surface and single-on-top quad.
   std::vector<OverlaySurfaceCandidate> candidates = {
@@ -66,12 +122,21 @@ TEST(WaylandOverlayManagerTest, NonIntegerDisplayRect) {
   candidates[1].overlay_handled = false;
 
   // Modify the display_rect for the second candidate so it's non-integer. We
-  // will never try to promote this to an overlay. This verifies we don't try to
-  // convert the non-integer RectF into a Rect which DCHECKs.
+  // will try to promote this to an overlay iff subpixel accurate position is
+  // supported and overlay delegation is enabled.
   candidates[1].display_rect = gfx::RectF(9.4, 10.43, 20.11, 20.99);
   manager.CheckOverlaySupport(&candidates, kPrimaryWidget);
   EXPECT_TRUE(candidates[0].overlay_handled);
-  EXPECT_FALSE(candidates[1].overlay_handled);
+  EXPECT_EQ(expect_candidates_handled, candidates[1].overlay_handled);
 }
+
+}  // namespace
+
+TEST_P(WaylandOverlayManagerTest, DoesNotSupportNonIntegerDisplayRect) {
+  NonIntegerDisplayRectTestHelper(buffer_manager_gpu_.get(),
+                                  /*expect_candidates_handled=*/false);
+}
+
+GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(WaylandOverlayManagerTest);
 
 }  // namespace ui

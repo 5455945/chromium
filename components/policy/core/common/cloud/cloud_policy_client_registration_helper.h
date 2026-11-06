@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,11 @@
 
 #include <memory>
 #include <string>
-#include <vector>
 
-#include "base/callback.h"
 #include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/values.h"
 #include "build/build_config.h"
 #include "components/policy/core/common/cloud/cloud_policy_client.h"
 #include "components/policy/core/common/cloud/user_info_fetcher.h"
@@ -24,11 +23,9 @@ namespace signin {
 class IdentityManager;
 }
 
-namespace network {
-class SharedURLLoaderFactory;
-}
-
 namespace policy {
+
+class ClientDataDelegate;
 
 // Helper class that registers a CloudPolicyClient. It fetches an OAuth2 token
 // for the DM service if needed, and checks with Gaia if the account has policy
@@ -40,7 +37,12 @@ class POLICY_EXPORT CloudPolicyClientRegistrationHelper
   // |context| and |client| are not owned and must outlive this object.
   CloudPolicyClientRegistrationHelper(
       CloudPolicyClient* client,
-      enterprise_management::DeviceRegisterRequest::Type registration_type);
+      enterprise_management::DeviceRegisterRequest::Type registration_type,
+      enterprise_management::DeviceRegisterRequest::Flavor flavor);
+  CloudPolicyClientRegistrationHelper(
+      const CloudPolicyClientRegistrationHelper&) = delete;
+  CloudPolicyClientRegistrationHelper& operator=(
+      const CloudPolicyClientRegistrationHelper&) = delete;
   ~CloudPolicyClientRegistrationHelper() override;
 
   // Starts the client registration process. This version uses the
@@ -53,9 +55,30 @@ class POLICY_EXPORT CloudPolicyClientRegistrationHelper
 
   // Starts the device registration with an token enrollment process.
   // |callback| is invoked when the registration is complete.
-  void StartRegistrationWithEnrollmentToken(const std::string& token,
-                                            const std::string& client_id,
-                                            base::OnceClosure callback);
+  void StartRegistrationWithEnrollmentToken(
+      const std::string& token,
+      const std::string& client_id,
+      const ClientDataDelegate& client_data_delegate,
+      bool is_mandatory,
+      base::OnceClosure callback);
+
+  // Starts the client registration with an OIDC token enrollment process.
+  // `oauth_token` and `id_token` pair is received and extracted from a valid
+  // OIDC authentication redirection response. The `oauth_token` is from a 3P
+  // IdP, different from a refresh_token or access_token from GAIA. `client_id`
+  // is randomized if an empty string is provided. `state` contains details
+  // relevant for OIDC profile enrollment. `callback` is invoked when
+  // the registration is complete.
+  // Slightly different from other methods, the callback is invoked inside the
+  // policy client rather than in this class.
+  void StartRegistrationWithOidcTokens(
+      const std::string& oauth_token,
+      const std::string& id_token,
+      const std::string& client_id,
+      const std::string& state,
+      const base::TimeDelta& timeout_duration,
+      bool is_token_encrypted,
+      CloudPolicyClient::ResultCallback callback);
 
  private:
   class IdentityManagerHelper;
@@ -63,11 +86,10 @@ class POLICY_EXPORT CloudPolicyClientRegistrationHelper
   void OnTokenFetched(const std::string& oauth_access_token);
 
   // UserInfoFetcher::Delegate implementation:
-  void OnGetUserInfoSuccess(const base::DictionaryValue* response) override;
+  void OnGetUserInfoSuccess(const base::DictValue& response) override;
   void OnGetUserInfoFailure(const GoogleServiceAuthError& error) override;
 
   // CloudPolicyClient::Observer implementation:
-  void OnPolicyFetched(CloudPolicyClient* client) override;
   void OnRegistrationStateChanged(CloudPolicyClient* client) override;
   void OnClientError(CloudPolicyClient* client) override;
 
@@ -86,12 +108,10 @@ class POLICY_EXPORT CloudPolicyClientRegistrationHelper
   // GAIA to get information about the signed in user.
   std::string oauth_access_token_;
 
-  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
-  CloudPolicyClient* client_;
+  raw_ptr<CloudPolicyClient> client_;
   enterprise_management::DeviceRegisterRequest::Type registration_type_;
+  enterprise_management::DeviceRegisterRequest::Flavor flavor_;
   base::OnceClosure callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(CloudPolicyClientRegistrationHelper);
 };
 
 }  // namespace policy

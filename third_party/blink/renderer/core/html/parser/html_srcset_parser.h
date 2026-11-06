@@ -32,8 +32,13 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_HTML_PARSER_HTML_SRCSET_PARSER_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_PARSER_HTML_SRCSET_PARSER_H_
 
+#include <optional>
+
+#include "base/check_op.h"
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/core/style/computed_style_constants.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_view.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
@@ -97,6 +102,7 @@ class ImageCandidate {
   ImageCandidate()
       : density_(1.0),
         resource_width_(kUninitializedDescriptor),
+        resource_height_(kUninitializedDescriptor),
         origin_attribute_(kSrcsetOrigin) {}
 
   ImageCandidate(const String& source,
@@ -110,6 +116,8 @@ class ImageCandidate {
                                      : kUninitializedDescriptor),
         resource_width_(result.HasWidth() ? result.GetResourceWidth()
                                           : kUninitializedDescriptor),
+        resource_height_(result.HasHeight() ? result.ResourceHeight()
+                                            : kUninitializedDescriptor),
         origin_attribute_(origin_attribute) {}
 
   String ToString() const { return string_.ToString(); }
@@ -122,34 +130,64 @@ class ImageCandidate {
 
   int GetResourceWidth() const { return resource_width_; }
 
+  int GetResourceHeight() const { return resource_height_; }
+
   bool SrcOrigin() const { return (origin_attribute_ == kSrcOrigin); }
 
-  inline bool IsEmpty() const { return string_.IsEmpty(); }
+  inline bool IsEmpty() const { return string_.empty(); }
 
  private:
   String source_;  // Keep the StringView buffer alive.
   StringView string_;
   float density_;
   int resource_width_;
+  int resource_height_;
   OriginAttribute origin_attribute_;
 };
 
-ImageCandidate BestFitSourceForSrcsetAttribute(float device_scale_factor,
-                                               float source_size,
-                                               const String& srcset_attribute,
-                                               Document* = nullptr);
+void ParseImageCandidatesFromSrcsetAttribute(
+    const String& attribute,
+    Vector<ImageCandidate>& image_candidates,
+    Document* document = nullptr);
+
+// The box size and fit resolved from a `sizes` attribute:
+// https://html.spec.whatwg.org/#parsing-a-sizes-attribute
+// For one-dimensional sizes, `height` is nullopt and `object_fit` is `kFill`.
+// Otherwise, the source size of each candidate is derived from the box and the
+// candidate's aspect ratio: https://html.spec.whatwg.org/#source-concrete-width
+struct TargetBoxSize {
+  float width = 0;
+  std::optional<float> height;
+  EObjectFit object_fit = EObjectFit::kFill;
+
+  bool operator==(const TargetBoxSize&) const = default;
+};
+
+// `default_aspect_ratio` is the
+// https://html.spec.whatwg.org/#dimension-attribute-aspect-ratio of the
+// relevant element (or nullopt), used for candidates without an 'h'
+// descriptor.
+CORE_EXPORT ImageCandidate
+BestFitSourceForSrcsetAttribute(float device_scale_factor,
+                                const TargetBoxSize& box_size,
+                                std::optional<float> default_aspect_ratio,
+                                const String& srcset_attribute,
+                                Document* = nullptr);
 
 CORE_EXPORT ImageCandidate
 BestFitSourceForImageAttributes(float device_scale_factor,
-                                float source_size,
+                                const TargetBoxSize& box_size,
+                                std::optional<float> default_aspect_ratio,
                                 const String& src_attribute,
                                 const String& srcset_attribute,
                                 Document* = nullptr);
 
-String BestFitSourceForImageAttributes(float device_scale_factor,
-                                       float source_size,
-                                       const String& src_attribute,
-                                       ImageCandidate& srcset_image_candidate);
+String BestFitSourceForImageAttributes(
+    float device_scale_factor,
+    const TargetBoxSize& box_size,
+    std::optional<float> default_aspect_ratio,
+    const String& src_attribute,
+    ImageCandidate& srcset_image_candidate);
 
 }  // namespace blink
 

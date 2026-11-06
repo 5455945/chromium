@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,10 @@
 #include <map>
 #include <utility>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
+#include "base/time/time.h"
 #include "components/offline_items_collection/core/offline_content_provider.h"
 
 namespace base {
@@ -29,6 +31,12 @@ class ThrottledOfflineContentProvider
   explicit ThrottledOfflineContentProvider(OfflineContentProvider* provider);
   ThrottledOfflineContentProvider(const base::TimeDelta& delay_between_updates,
                                   OfflineContentProvider* provider);
+
+  ThrottledOfflineContentProvider(const ThrottledOfflineContentProvider&) =
+      delete;
+  ThrottledOfflineContentProvider& operator=(
+      const ThrottledOfflineContentProvider&) = delete;
+
   ~ThrottledOfflineContentProvider() override;
 
   // Taking actions on the OfflineContentProvider will flush any queued updates
@@ -38,7 +46,8 @@ class ThrottledOfflineContentProvider
   void RemoveItem(const ContentId& id) override;
   void CancelDownload(const ContentId& id) override;
   void PauseDownload(const ContentId& id) override;
-  void ResumeDownload(const ContentId& id, bool has_user_gesture) override;
+  void ResumeDownload(const ContentId& id) override;
+  void ValidateDangerousDownload(const ContentId& id) override;
 
   // Because this class queues updates, a call to Observer::OnItemUpdated might
   // get triggered with the same contents as returned by these getter methods in
@@ -53,8 +62,6 @@ class ThrottledOfflineContentProvider
   void RenameItem(const ContentId& id,
                   const std::string& name,
                   RenameCallback callback) override;
-  void ChangeSchedule(const ContentId& id,
-                      absl::optional<OfflineItemSchedule> schedule) override;
 
   // Visible for testing. Overrides the time at which this throttle last pushed
   // updates to observers.
@@ -65,13 +72,13 @@ class ThrottledOfflineContentProvider
   void OnItemsAdded(const OfflineItemList& items) override;
   void OnItemRemoved(const ContentId& id) override;
   void OnItemUpdated(const OfflineItem& item,
-                     const absl::optional<UpdateDelta>& update_delta) override;
+                     const std::optional<UpdateDelta>& update_delta) override;
   void OnContentProviderGoingDown() override;
 
   void OnGetAllItemsDone(MultipleItemCallback callback,
                          const OfflineItemList& items);
   void OnGetItemByIdDone(SingleItemCallback callback,
-                         const absl::optional<OfflineItem>& item);
+                         const std::optional<OfflineItem>& item);
 
   // Checks if |item| already has an update pending. If so, replaces the content
   // of the update with |item|.
@@ -86,19 +93,17 @@ class ThrottledOfflineContentProvider
   base::TimeTicks last_update_time_;
   bool update_queued_;
 
-  OfflineContentProvider* const wrapped_provider_;
+  const raw_ptr<OfflineContentProvider> wrapped_provider_;
   base::ScopedObservation<OfflineContentProvider,
                           OfflineContentProvider::Observer>
       observation_{this};
 
   typedef std::map<ContentId,
-                   std::pair<OfflineItem, absl::optional<UpdateDelta>>>
+                   std::pair<OfflineItem, std::optional<UpdateDelta>>>
       OfflineItemMap;
   OfflineItemMap updates_;
 
   base::WeakPtrFactory<ThrottledOfflineContentProvider> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ThrottledOfflineContentProvider);
 };
 
 }  // namespace offline_items_collection

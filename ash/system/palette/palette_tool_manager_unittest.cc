@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,7 @@
 
 #include "ash/system/palette/palette_tool.h"
 #include "ash/system/palette/palette_tool_manager.h"
-#include "base/bind.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/notreached.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -22,6 +21,9 @@ class TestTool : public PaletteTool {
   TestTool(Delegate* delegate, PaletteGroup group, PaletteToolId tool_id)
       : PaletteTool(delegate), group_(group), tool_id_(tool_id) {}
 
+  TestTool(const TestTool&) = delete;
+  TestTool& operator=(const TestTool&) = delete;
+
   // PaletteTool:
   PaletteGroup GetGroup() const override { return group_; }
   PaletteToolId GetToolId() const override { return tool_id_; }
@@ -31,16 +33,11 @@ class TestTool : public PaletteTool {
 
  private:
   // PaletteTool:
-  views::View* CreateView() override {
-    NOTREACHED();
-    return nullptr;
-  }
+  views::View* CreateView() override { NOTREACHED(); }
   void OnViewDestroyed() override { FAIL(); }
 
   PaletteGroup group_;
   PaletteToolId tool_id_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestTool);
 };
 
 // Base class for tool manager unittests.
@@ -50,6 +47,10 @@ class PaletteToolManagerTest : public ::testing::Test,
  public:
   PaletteToolManagerTest()
       : palette_tool_manager_(new PaletteToolManager(this)) {}
+
+  PaletteToolManagerTest(const PaletteToolManagerTest&) = delete;
+  PaletteToolManagerTest& operator=(const PaletteToolManagerTest&) = delete;
+
   ~PaletteToolManagerTest() override = default;
 
  protected:
@@ -57,13 +58,7 @@ class PaletteToolManagerTest : public ::testing::Test,
   void HidePalette() override {}
   void HidePaletteImmediately() override {}
   void OnActiveToolChanged() override { ++tool_changed_count_; }
-  aura::Window* GetWindow() override {
-    NOTREACHED();
-    return nullptr;
-  }
-  void RecordPaletteOptionsUsage(PaletteTrayOptions option,
-                                 PaletteInvocationMethod method) override {}
-  void RecordPaletteModeCancellation(PaletteModeCancelType type) override {}
+  aura::Window* GetWindow() override { NOTREACHED(); }
 
   // PaletteTool::Delegate:
   void EnableTool(PaletteToolId tool_id) override {}
@@ -79,9 +74,6 @@ class PaletteToolManagerTest : public ::testing::Test,
 
   int tool_changed_count_ = 0;
   std::unique_ptr<PaletteToolManager> palette_tool_manager_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(PaletteToolManagerTest);
 };
 
 }  // namespace
@@ -93,7 +85,7 @@ TEST_F(PaletteToolManagerTest, MultipleToolsActivateDeactivate) {
   TestTool* action_1 =
       BuildTool(PaletteGroup::ACTION, PaletteToolId::CREATE_NOTE);
   TestTool* action_2 =
-      BuildTool(PaletteGroup::ACTION, PaletteToolId::CAPTURE_REGION);
+      BuildTool(PaletteGroup::ACTION, PaletteToolId::ENTER_CAPTURE_MODE);
   TestTool* mode_1 = BuildTool(PaletteGroup::MODE, PaletteToolId::MAGNIFY);
 
   EXPECT_FALSE(palette_tool_manager_->HasTool(PaletteToolId::LASER_POINTER));

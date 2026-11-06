@@ -1,4 +1,4 @@
-// Copyright (c) 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,7 +13,6 @@ namespace blink {
 class MODULES_EXPORT ModulesInitializer : public CoreInitializer {
  public:
   void Initialize() override;
-  void RegisterInterfaces(mojo::BinderMap&) override;
 
  protected:
   void InitLocalFrame(LocalFrame&) const override;
@@ -27,16 +26,17 @@ class MODULES_EXPORT ModulesInitializer : public CoreInitializer {
   PictureInPictureController* CreatePictureInPictureController(
       Document&) const override;
   void InitInspectorAgentSession(DevToolsSession*,
-                                 bool,
                                  InspectorDOMAgent*,
                                  InspectedFrames*,
                                  Page*) const override;
+  void InitWorkerInspectorAgentSession(DevToolsSession*,
+                                       WorkerGlobalScope*) const override;
   std::unique_ptr<WebMediaPlayer> CreateWebMediaPlayer(
       WebLocalFrameClient*,
       HTMLMediaElement&,
       const WebMediaPlayerSource&,
       WebMediaPlayerClient*) const override;
-  WebRemotePlaybackClient* CreateWebRemotePlaybackClient(
+  RemotePlaybackClient* CreateRemotePlaybackClient(
       HTMLMediaElement&) const override;
 
   void ProvideModulesToPage(Page&,
@@ -53,6 +53,14 @@ class MODULES_EXPORT ModulesInitializer : public CoreInitializer {
   void DidChangeManifest(LocalFrame&) override;
   void NotifyOrientationChanged(LocalFrame&) override;
   void DidUpdateScreens(LocalFrame&, const display::ScreenInfos&) override;
+  void SetLocalStorageArea(LocalFrame& frame,
+                           mojo::PendingRemote<mojom::blink::StorageArea>
+                               local_storage_area) override;
+  void SetSessionStorageArea(LocalFrame& frame,
+                             mojo::PendingRemote<mojom::blink::StorageArea>
+                                 session_storage_area) override;
+  mojom::blink::FileSystemManager& GetFileSystemManager(
+      ExecutionContext* context) override;
 };
 
 }  // namespace blink

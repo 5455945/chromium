@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include <jni.h>
 
 #include "base/android/scoped_java_ref.h"
-#include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ui/autofill/payments/credit_card_scanner_view.h"
 
@@ -27,20 +26,22 @@ class CreditCardScannerViewAndroid : public CreditCardScannerView {
   CreditCardScannerViewAndroid(
       const base::WeakPtr<CreditCardScannerViewDelegate>& delegate,
       content::WebContents* web_contents);
+
+  CreditCardScannerViewAndroid(const CreditCardScannerViewAndroid&) = delete;
+  CreditCardScannerViewAndroid& operator=(const CreditCardScannerViewAndroid&) =
+      delete;
+
   ~CreditCardScannerViewAndroid() override;
 
   // Called by JNI when user cancelled credit card scan.
-  void ScanCancelled(JNIEnv* env,
-                     const base::android::JavaParamRef<jobject>& object);
+  void ScanCancelled(JNIEnv* env);
 
   // Called by JNI when credit card scan completed successfully.
-  void ScanCompleted(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& object,
-      const base::android::JavaParamRef<jstring>& card_holder_name,
-      const base::android::JavaParamRef<jstring>& card_number,
-      jint expiration_month,
-      jint expiration_year);
+  void ScanCompleted(JNIEnv* env,
+                     const std::u16string& card_holder_name,
+                     const std::u16string& card_number,
+                     int32_t expiration_month,
+                     int32_t expiration_year);
 
  private:
   // CreditCardScannerView implementation.
@@ -51,8 +52,6 @@ class CreditCardScannerViewAndroid : public CreditCardScannerView {
 
   // The corresponding Java object that uses Android APIs for scanning.
   base::android::ScopedJavaGlobalRef<jobject> java_object_;
-
-  DISALLOW_COPY_AND_ASSIGN(CreditCardScannerViewAndroid);
 };
 
 }  // namespace autofill

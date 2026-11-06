@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,11 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/run_loop.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/sync_file_system/drive_backend/drive_backend_constants.h"
 #include "chrome/browser/sync_file_system/drive_backend/drive_backend_test_util.h"
 #include "chrome/browser/sync_file_system/drive_backend/fake_drive_service_helper.h"
@@ -32,7 +31,6 @@
 #include "components/drive/drive_uploader.h"
 #include "components/drive/service/fake_drive_service.h"
 #include "content/public/test/browser_task_environment.h"
-#include "google_apis/drive/drive_api_error_codes.h"
 #include "google_apis/drive/drive_api_parser.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/leveldatabase/leveldb_chrome.h"
@@ -55,7 +53,11 @@ class LocalToRemoteSyncerTest : public testing::Test {
  public:
   LocalToRemoteSyncerTest()
       : task_environment_(content::BrowserTaskEnvironment::IO_MAINLOOP) {}
-  ~LocalToRemoteSyncerTest() override {}
+
+  LocalToRemoteSyncerTest(const LocalToRemoteSyncerTest&) = delete;
+  LocalToRemoteSyncerTest& operator=(const LocalToRemoteSyncerTest&) = delete;
+
+  ~LocalToRemoteSyncerTest() override = default;
 
   void SetUp() override {
     ASSERT_TRUE(database_dir_.CreateUniqueTempDir());
@@ -71,15 +73,17 @@ class LocalToRemoteSyncerTest : public testing::Test {
 
     context_ = std::make_unique<SyncEngineContext>(
         std::move(fake_drive_service), std::move(drive_uploader),
-        nullptr /* task_logger */, base::ThreadTaskRunnerHandle::Get(),
-        base::ThreadTaskRunnerHandle::Get());
+        nullptr /* task_logger */,
+        base::SingleThreadTaskRunner::GetCurrentDefault(),
+        base::SingleThreadTaskRunner::GetCurrentDefault());
     context_->SetRemoteChangeProcessor(remote_change_processor_.get());
 
     RegisterSyncableFileSystem();
 
     sync_task_manager_ = std::make_unique<SyncTaskManager>(
         base::WeakPtr<SyncTaskManager::Client>(),
-        10 /* maximum_background_task */, base::ThreadTaskRunnerHandle::Get());
+        10 /* maximum_background_task */,
+        base::SingleThreadTaskRunner::GetCurrentDefault());
     sync_task_manager_->Initialize(SYNC_STATUS_OK);
   }
 
@@ -174,8 +178,7 @@ class LocalToRemoteSyncerTest : public testing::Test {
   SyncStatusCode ListChanges() {
     SyncStatusCode status = SYNC_STATUS_UNKNOWN;
     sync_task_manager_->ScheduleSyncTask(
-        FROM_HERE,
-        std::unique_ptr<SyncTask>(new ListChangesTask(context_.get())),
+        FROM_HERE, std::make_unique<ListChangesTask>(context_.get()),
         SyncTaskManager::PRIORITY_MED, CreateResultReceiver(&status));
     base::RunLoop().RunUntilIdle();
     return status;
@@ -254,16 +257,14 @@ class LocalToRemoteSyncerTest : public testing::Test {
   std::unique_ptr<FakeDriveServiceHelper> fake_drive_helper_;
   std::unique_ptr<FakeRemoteChangeProcessor> remote_change_processor_;
   std::unique_ptr<SyncTaskManager> sync_task_manager_;
-
-  DISALLOW_COPY_AND_ASSIGN(LocalToRemoteSyncerTest);
 };
 
 TEST_F(LocalToRemoteSyncerTest, CreateFile) {
   const GURL kOrigin("chrome-extension://example");
   const std::string sync_root = CreateSyncRoot();
-  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.host());
+  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.GetHost());
   InitializeMetadataDatabase();
-  RegisterApp(kOrigin.host(), app_root);
+  RegisterApp(kOrigin.GetHost(), app_root);
 
   EXPECT_EQ(SYNC_STATUS_OK, RunLocalToRemoteSyncer(
       FileChange(FileChange::FILE_CHANGE_ADD_OR_UPDATE,
@@ -292,9 +293,9 @@ TEST_F(LocalToRemoteSyncerTest, CreateFile) {
 TEST_F(LocalToRemoteSyncerTest, CreateFileOnMissingPath) {
   const GURL kOrigin("chrome-extension://example");
   const std::string sync_root = CreateSyncRoot();
-  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.host());
+  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.GetHost());
   InitializeMetadataDatabase();
-  RegisterApp(kOrigin.host(), app_root);
+  RegisterApp(kOrigin.GetHost(), app_root);
 
   // Run the syncer 3 times to create missing folder1 and folder2.
   EXPECT_EQ(SYNC_STATUS_RETRY, RunLocalToRemoteSyncer(
@@ -326,9 +327,9 @@ TEST_F(LocalToRemoteSyncerTest, CreateFileOnMissingPath) {
 TEST_F(LocalToRemoteSyncerTest, DeleteFile) {
   const GURL kOrigin("chrome-extension://example");
   const std::string sync_root = CreateSyncRoot();
-  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.host());
+  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.GetHost());
   InitializeMetadataDatabase();
-  RegisterApp(kOrigin.host(), app_root);
+  RegisterApp(kOrigin.GetHost(), app_root);
 
   EXPECT_EQ(SYNC_STATUS_OK, RunLocalToRemoteSyncer(
       FileChange(FileChange::FILE_CHANGE_ADD_OR_UPDATE,
@@ -360,9 +361,9 @@ TEST_F(LocalToRemoteSyncerTest, DeleteFile) {
 TEST_F(LocalToRemoteSyncerTest, Conflict_CreateFileOnFolder) {
   const GURL kOrigin("chrome-extension://example");
   const std::string sync_root = CreateSyncRoot();
-  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.host());
+  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.GetHost());
   InitializeMetadataDatabase();
-  RegisterApp(kOrigin.host(), app_root);
+  RegisterApp(kOrigin.GetHost(), app_root);
 
   CreateRemoteFolder(app_root, "foo");
   EXPECT_EQ(SYNC_STATUS_OK, ListChanges());
@@ -384,9 +385,9 @@ TEST_F(LocalToRemoteSyncerTest, Conflict_CreateFileOnFolder) {
 TEST_F(LocalToRemoteSyncerTest, Conflict_CreateFolderOnFile) {
   const GURL kOrigin("chrome-extension://example");
   const std::string sync_root = CreateSyncRoot();
-  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.host());
+  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.GetHost());
   InitializeMetadataDatabase();
-  RegisterApp(kOrigin.host(), app_root);
+  RegisterApp(kOrigin.GetHost(), app_root);
 
   CreateRemoteFile(app_root, "foo", "data");
   EXPECT_EQ(SYNC_STATUS_OK, ListChanges());
@@ -409,9 +410,9 @@ TEST_F(LocalToRemoteSyncerTest, Conflict_CreateFolderOnFile) {
 TEST_F(LocalToRemoteSyncerTest, Conflict_CreateFileOnFile) {
   const GURL kOrigin("chrome-extension://example");
   const std::string sync_root = CreateSyncRoot();
-  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.host());
+  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.GetHost());
   InitializeMetadataDatabase();
-  RegisterApp(kOrigin.host(), app_root);
+  RegisterApp(kOrigin.GetHost(), app_root);
 
   CreateRemoteFile(app_root, "foo", "data");
   EXPECT_EQ(SYNC_STATUS_OK, ListChanges());
@@ -434,9 +435,9 @@ TEST_F(LocalToRemoteSyncerTest, Conflict_CreateFileOnFile) {
 TEST_F(LocalToRemoteSyncerTest, Conflict_UpdateDeleteOnFile) {
   const GURL kOrigin("chrome-extension://example");
   const std::string sync_root = CreateSyncRoot();
-  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.host());
+  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.GetHost());
   InitializeMetadataDatabase();
-  RegisterApp(kOrigin.host(), app_root);
+  RegisterApp(kOrigin.GetHost(), app_root);
 
   const std::string file_id = CreateRemoteFile(app_root, "foo", "data");
   EXPECT_EQ(SYNC_STATUS_OK, ListChanges());
@@ -466,9 +467,9 @@ TEST_F(LocalToRemoteSyncerTest, Conflict_UpdateDeleteOnFile) {
 TEST_F(LocalToRemoteSyncerTest, Conflict_CreateDeleteOnFile) {
   const GURL kOrigin("chrome-extension://example");
   const std::string sync_root = CreateSyncRoot();
-  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.host());
+  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.GetHost());
   InitializeMetadataDatabase();
-  RegisterApp(kOrigin.host(), app_root);
+  RegisterApp(kOrigin.GetHost(), app_root);
 
   const std::string file_id = CreateRemoteFile(app_root, "foo", "data");
   EXPECT_EQ(SYNC_STATUS_OK, ListChanges());
@@ -496,9 +497,9 @@ TEST_F(LocalToRemoteSyncerTest, Conflict_CreateDeleteOnFile) {
 TEST_F(LocalToRemoteSyncerTest, Conflict_CreateFolderOnFolder) {
   const GURL kOrigin("chrome-extension://example");
   const std::string sync_root = CreateSyncRoot();
-  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.host());
+  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.GetHost());
   InitializeMetadataDatabase();
-  RegisterApp(kOrigin.host(), app_root);
+  RegisterApp(kOrigin.GetHost(), app_root);
 
   const std::string folder_id = CreateRemoteFolder(app_root, "foo");
 
@@ -529,9 +530,9 @@ TEST_F(LocalToRemoteSyncerTest, Conflict_CreateFolderOnFolder) {
 TEST_F(LocalToRemoteSyncerTest, AppRootDeletion) {
   const GURL kOrigin("chrome-extension://example");
   const std::string sync_root = CreateSyncRoot();
-  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.host());
+  const std::string app_root = CreateRemoteFolder(sync_root, kOrigin.GetHost());
   InitializeMetadataDatabase();
-  RegisterApp(kOrigin.host(), app_root);
+  RegisterApp(kOrigin.GetHost(), app_root);
 
   DeleteResource(app_root);
   EXPECT_EQ(SYNC_STATUS_OK, ListChanges());

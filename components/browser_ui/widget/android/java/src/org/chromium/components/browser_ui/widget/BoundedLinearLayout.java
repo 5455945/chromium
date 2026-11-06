@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,31 +11,34 @@ import android.util.DisplayMetrics;
 import android.util.TypedValue;
 import android.widget.LinearLayout;
 
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.ui.base.ViewUtils;
+
 /**
  * A LinearLayout that can be constrained to a maximum size or percentage of the screen size.
  *
- * Example:
- *   <org.chromium.components.browser_ui.widget.BoundedLinearLayout
- *       xmlns:android="http://schemas.android.com/apk/res/android"
- *       xmlns:app="http://schemas.android.com/apk/res-auto"
- *       android:layout_width="match_parent"
- *       android:layout_height="match_parent"
- *       app:maxWidthLandscape="@dimen/modal_dialog_landscape_max_width"
-         app:maxWidthPortrait="@dimen/modal_dialog_portrait_max_width">
- *     ...
+ * <p>Example: <org.chromium.components.browser_ui.widget.BoundedLinearLayout
+ * xmlns:android="http://schemas.android.com/apk/res/android"
+ * xmlns:app="http://schemas.android.com/apk/res-auto" android:layout_width="match_parent"
+ * android:layout_height="match_parent"
+ * app:maxWidthLandscape="@dimen/modal_dialog_landscape_max_width"
+ * app:maxWidthPortrait="@dimen/modal_dialog_portrait_max_width"> ...
  */
+@NullMarked
 public class BoundedLinearLayout extends LinearLayout {
     private static final int NOT_SPECIFIED = -1;
 
-    private TypedValue mMaxWidthLandscape = new TypedValue();
-    private TypedValue mMaxWidthPortrait = new TypedValue();
+    private final TypedValue mMaxWidthLandscape = new TypedValue();
+    private final TypedValue mMaxWidthPortrait = new TypedValue();
 
-    private final int mMaxHeight;
+    private int mMaxHeight;
 
-    /**
-     * Constructor for inflating from XML.
-     */
-    public BoundedLinearLayout(Context context, AttributeSet attrs) {
+    private boolean mIgnoreWidthConstraints;
+    private boolean mIgnoreHeightConstraints;
+
+    /** Constructor for inflating from XML. */
+    public BoundedLinearLayout(Context context, @Nullable AttributeSet attrs) {
         super(context, attrs);
 
         TypedArray a = context.obtainStyledAttributes(attrs, R.styleable.BoundedLinearLayout);
@@ -50,6 +53,25 @@ public class BoundedLinearLayout extends LinearLayout {
         mMaxHeight = maxHeight <= 0 ? NOT_SPECIFIED : maxHeight;
     }
 
+    /**
+     * @param ignoreWidthConstraints A boolean indicating whether we should ignore width constraints
+     *         to support a full-screen type view.
+     * @param ignoreHeightConstraint A boolean indicating whether we should ignore the maxHeight
+     *        constraint to support a full-screen type view.
+     */
+    public void setIgnoreConstraints(
+            boolean ignoreWidthConstraints, boolean ignoreHeightConstraint) {
+        mIgnoreWidthConstraints = ignoreWidthConstraints;
+        mIgnoreHeightConstraints = ignoreHeightConstraint;
+        ViewUtils.requestLayout(this, "BoundedLinearLayout.setIgnoreConstraints");
+    }
+
+    /** Set the maximum height, overriding the default maximum height. */
+    public void setMaxHeight(int maxHeight) {
+        mMaxHeight = maxHeight <= 0 ? NOT_SPECIFIED : maxHeight;
+        ViewUtils.requestLayout(this, "BoundedLinearLayout.setMaxHeight");
+    }
+
     @Override
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
         final DisplayMetrics metrics = getContext().getResources().getDisplayMetrics();
@@ -58,7 +80,7 @@ public class BoundedLinearLayout extends LinearLayout {
         // Limit the width.
         int widthSize = MeasureSpec.getSize(widthMeasureSpec);
         final TypedValue tv = isPortrait ? mMaxWidthPortrait : mMaxWidthLandscape;
-        if (tv.type != TypedValue.TYPE_NULL) {
+        if (tv.type != TypedValue.TYPE_NULL && !isWidthConstraintsIgnored()) {
             int maxWidthPixel = NOT_SPECIFIED;
             if (tv.type == TypedValue.TYPE_DIMENSION) {
                 maxWidthPixel = (int) tv.getDimension(metrics);
@@ -73,7 +95,9 @@ public class BoundedLinearLayout extends LinearLayout {
 
         // Limit the height.
         int heightSize = MeasureSpec.getSize(heightMeasureSpec);
-        if (mMaxHeight != NOT_SPECIFIED && heightSize > mMaxHeight) {
+        if (mMaxHeight != NOT_SPECIFIED
+                && heightSize > mMaxHeight
+                && !areHeightConstraintsIgnored()) {
             heightMeasureSpec = makeMeasureSpec(heightMeasureSpec, mMaxHeight);
         }
         super.onMeasure(widthMeasureSpec, heightMeasureSpec);
@@ -83,5 +107,15 @@ public class BoundedLinearLayout extends LinearLayout {
         int mode = MeasureSpec.getMode(measureSpec);
         if (mode == MeasureSpec.UNSPECIFIED) mode = MeasureSpec.AT_MOST;
         return MeasureSpec.makeMeasureSpec(maxPixel, mode);
+    }
+
+    /** When true, {@code app:maxWidthPortrait} and {@code app:maxWidthLandscape} are ignored. */
+    private boolean isWidthConstraintsIgnored() {
+        return mIgnoreWidthConstraints;
+    }
+
+    /** When true, {@code app:maxHeight} is ignored. */
+    private boolean areHeightConstraintsIgnored() {
+        return mIgnoreHeightConstraints;
     }
 }

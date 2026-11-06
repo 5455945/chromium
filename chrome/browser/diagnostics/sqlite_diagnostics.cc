@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,33 +7,29 @@
 #include <stdint.h>
 
 #include "base/base_paths.h"
-#include "base/bind.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/singleton.h"
 #include "base/memory/weak_ptr.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/path_service.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
 #include "components/history/core/browser/history_constants.h"
 #include "components/webdata/common/webdata_constants.h"
 #include "content/public/common/content_constants.h"
 #include "sql/database.h"
+#include "sql/sqlite_result_code_values.h"
 #include "sql/statement.h"
-#include "storage/browser/database/database_tracker.h"
-#include "third_party/sqlite/sqlite3.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_constants.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace diagnostics {
 
@@ -53,6 +49,9 @@ class SqliteIntegrityTest : public DiagnosticsTest {
                       DiagnosticsTestId id,
                       const base::FilePath& db_path)
       : DiagnosticsTest(id), flags_(flags), db_path_(db_path) {}
+
+  SqliteIntegrityTest(const SqliteIntegrityTest&) = delete;
+  SqliteIntegrityTest& operator=(const SqliteIntegrityTest&) = delete;
 
   bool RecoveryImpl(DiagnosticsModel::Observer* observer) override {
     int outcome_code = GetOutcomeCode();
@@ -103,8 +102,7 @@ class SqliteIntegrityTest : public DiagnosticsTest {
 
     int errors = 0;
     {  // Scope the statement and database so they close properly.
-      sql::Database database(
-          {.exclusive_locking = true, .page_size = 4096, .cache_size = 500});
+      sql::Database database(/*tag=*/"SQLiteDiagnostics");
       scoped_refptr<ErrorRecorder> recorder(new ErrorRecorder);
 
       // Set the error callback so that we can get useful results in a debug
@@ -132,7 +130,7 @@ class SqliteIntegrityTest : public DiagnosticsTest {
       }
       if (!statement.is_valid()) {
         int error = database.GetErrorCode();
-        if (SQLITE_BUSY == error) {
+        if (static_cast<int>(sql::SqliteResultCode::kBusy) == error) {
           RecordFailure(DIAG_SQLITE_DB_LOCKED,
                         "Database locked by another process");
         } else {
@@ -144,7 +142,7 @@ class SqliteIntegrityTest : public DiagnosticsTest {
       }
 
       while (statement.Step()) {
-        std::string result(statement.ColumnString(0));
+        std::string_view result = statement.ColumnStringView(0);
         if ("ok" != result)
           ++errors;
       }
@@ -167,10 +165,12 @@ class SqliteIntegrityTest : public DiagnosticsTest {
   }
 
  private:
-  class ErrorRecorder : public base::RefCounted<ErrorRecorder>,
-                        public base::SupportsWeakPtr<ErrorRecorder> {
+  class ErrorRecorder : public base::RefCounted<ErrorRecorder> {
    public:
-    ErrorRecorder() : has_error_(false), sqlite_error_(0), last_errno_(0) {}
+    ErrorRecorder() = default;
+
+    ErrorRecorder(const ErrorRecorder&) = delete;
+    ErrorRecorder& operator=(const ErrorRecorder&) = delete;
 
     void RecordSqliteError(sql::Database* connection,
                            int sqlite_error,
@@ -190,21 +190,23 @@ class SqliteIntegrityTest : public DiagnosticsTest {
                                 message_.c_str());
     }
 
+    base::WeakPtr<ErrorRecorder> AsWeakPtr() {
+      return weak_ptr_factory_.GetWeakPtr();
+    }
+
    private:
     friend class base::RefCounted<ErrorRecorder>;
-    ~ErrorRecorder() {}
+    ~ErrorRecorder() = default;
 
-    bool has_error_;
-    int sqlite_error_;
-    int last_errno_;
+    bool has_error_ = false;
+    int sqlite_error_ = 0;
+    int last_errno_ = 0;
     std::string message_;
-
-    DISALLOW_COPY_AND_ASSIGN(ErrorRecorder);
+    base::WeakPtrFactory<ErrorRecorder> weak_ptr_factory_{this};
   };
 
   uint32_t flags_;
   base::FilePath db_path_;
-  DISALLOW_COPY_AND_ASSIGN(SqliteIntegrityTest);
 };
 
 }  // namespace
@@ -215,22 +217,13 @@ std::unique_ptr<DiagnosticsTest> MakeSqliteCookiesDbTest() {
       base::FilePath(chrome::kCookieFilename));
 }
 
-std::unique_ptr<DiagnosticsTest> MakeSqliteWebDatabaseTrackerDbTest() {
-  base::FilePath databases_dir(storage::kDatabaseDirectoryName);
-  base::FilePath tracker_db =
-      databases_dir.Append(storage::kTrackerDatabaseFileName);
-  return std::make_unique<SqliteIntegrityTest>(
-      SqliteIntegrityTest::NO_FLAGS_SET,
-      DIAGNOSTICS_SQLITE_INTEGRITY_DATABASE_TRACKER_TEST, tracker_db);
-}
-
 std::unique_ptr<DiagnosticsTest> MakeSqliteHistoryDbTest() {
   return std::make_unique<SqliteIntegrityTest>(
       SqliteIntegrityTest::CRITICAL, DIAGNOSTICS_SQLITE_INTEGRITY_HISTORY_TEST,
       base::FilePath(history::kHistoryFilename));
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 std::unique_ptr<DiagnosticsTest> MakeSqliteNssCertDbTest() {
   base::FilePath home_dir;
   base::PathService::Get(base::DIR_HOME, &home_dir);
@@ -248,7 +241,7 @@ std::unique_ptr<DiagnosticsTest> MakeSqliteNssKeyDbTest() {
       DIAGNOSTICS_SQLITE_INTEGRITY_NSS_KEY_TEST,
       home_dir.Append(ash::kNssKeyDbPath));
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 std::unique_ptr<DiagnosticsTest> MakeSqliteFaviconsDbTest() {
   return std::make_unique<SqliteIntegrityTest>(

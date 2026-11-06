@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,18 +15,20 @@ namespace content {
 class FocusChangedObserver : public WebContentsObserver {
  public:
   explicit FocusChangedObserver(WebContents*);
+
+  FocusChangedObserver(const FocusChangedObserver&) = delete;
+  FocusChangedObserver& operator=(const FocusChangedObserver&) = delete;
+
   ~FocusChangedObserver() override;
 
   // Waits until focus changes in the page. Returns the observed details.
   FocusedNodeDetails Wait();
 
  private:
-  void OnFocusChangedInPage(FocusedNodeDetails*) override;
+  void OnFocusChangedInPage(const FocusedNodeDetails&) override;
 
   base::RunLoop run_loop_;
-  absl::optional<FocusedNodeDetails> observed_details_;
-
-  DISALLOW_COPY_AND_ASSIGN(FocusChangedObserver);
+  std::optional<FocusedNodeDetails> observed_details_;
 };
 
 }  // namespace content

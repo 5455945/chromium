@@ -28,29 +28,48 @@
 
 #include <algorithm>
 #include <memory>
+
+#include "base/check_op.h"
+#include "base/functional/function_ref.h"
+#include "base/gtest_prod_util.h"
+#include "base/memory/values_equivalent.h"
 #include "base/types/pass_key.h"
+#include "third_party/blink/public/mojom/css/preferred_color_scheme.mojom-blink-forward.h"
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/core/css/color_scheme_flags.h"
 #include "third_party/blink/renderer/core/css/css_property_names.h"
+#include "third_party/blink/renderer/core/css/properties/css_bitset.h"
 #include "third_party/blink/renderer/core/css/properties/css_property.h"
+#include "third_party/blink/renderer/core/css/resolver/matched_properties_cache.h"
 #include "third_party/blink/renderer/core/css/style_auto_color.h"
 #include "third_party/blink/renderer/core/css/style_color.h"
 #include "third_party/blink/renderer/core/layout/geometry/box_sides.h"
+#include "third_party/blink/renderer/core/layout/geometry/box_strut.h"
 #include "third_party/blink/renderer/core/layout/geometry/logical_size.h"
-#include "third_party/blink/renderer/core/layout/ng/ng_outline_type.h"
+#include "third_party/blink/renderer/core/layout/geometry/physical_rect.h"
+#include "third_party/blink/renderer/core/layout/outline_type.h"
 #include "third_party/blink/renderer/core/scroll/scroll_types.h"
-#include "third_party/blink/renderer/core/style/border_value.h"
+#include "third_party/blink/renderer/core/style/border_edge.h"
 #include "third_party/blink/renderer/core/style/computed_style_base.h"
 #include "third_party/blink/renderer/core/style/computed_style_constants.h"
 #include "third_party/blink/renderer/core/style/computed_style_initial_values.h"
 #include "third_party/blink/renderer/core/style/cursor_list.h"
-#include "third_party/blink/renderer/core/style/data_ref.h"
+#include "third_party/blink/renderer/core/style/default_anchor_data.h"
+#include "third_party/blink/renderer/core/style/display_style.h"
+#include "third_party/blink/renderer/core/style/filter_operations.h"
+#include "third_party/blink/renderer/core/style/font_size_style.h"
+#include "third_party/blink/renderer/core/style/gap_data_list.h"
+#include "third_party/blink/renderer/core/style/scroll_marker_group.h"
+#include "third_party/blink/renderer/core/style/style_animated_sources.h"
 #include "third_party/blink/renderer/core/style/style_cached_data.h"
+#include "third_party/blink/renderer/core/style/style_highlight_data.h"
+#include "third_party/blink/renderer/core/style/style_scrollbar_color.h"
 #include "third_party/blink/renderer/core/style/transform_origin.h"
-#include "third_party/blink/renderer/platform/geometry/layout_rect_outsets.h"
 #include "third_party/blink/renderer/platform/geometry/length.h"
 #include "third_party/blink/renderer/platform/geometry/length_box.h"
 #include "third_party/blink/renderer/platform/geometry/length_point.h"
 #include "third_party/blink/renderer/platform/geometry/length_size.h"
+#include "third_party/blink/renderer/platform/geometry/path.h"
 #include "third_party/blink/renderer/platform/graphics/color.h"
 #include "third_party/blink/renderer/platform/graphics/touch_action.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
@@ -58,56 +77,56 @@
 #include "third_party/blink/renderer/platform/text/writing_direction_mode.h"
 #include "third_party/blink/renderer/platform/text/writing_mode_utils.h"
 #include "third_party/blink/renderer/platform/transforms/transform_operations.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/blink/renderer/platform/wtf/leak_annotations.h"
 #include "third_party/blink/renderer/platform/wtf/ref_counted.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
+namespace gfx {
+class Transform;
+}
+
 namespace blink {
 
 using std::max;
 
 class AppliedTextDecoration;
-struct BorderEdge;
 class ContentData;
 class CounterDirectives;
 class CSSAnimationData;
-class FloodColor;
 class CSSTransitionData;
 class CSSVariableData;
-class FilterOperations;
 class Font;
 class Hyphenation;
+class LayoutBox;
 class LayoutTheme;
+class Longhand;
 class NinePieceImage;
 class ShadowList;
 class ShapeValue;
 class StyleAdjuster;
-class StyleContentAlignmentData;
 class StyleDifference;
 class StyleImage;
 class StyleInheritedVariables;
-class StyleInitialData;
+class StyleRay;
 class StyleResolver;
+class StyleResolverState;
 class StyleSelfAlignmentData;
-class TransformationMatrix;
 
 namespace css_longhand {
 
 class AccentColor;
-class Appearance;
 class BackgroundColor;
 class BorderBottomColor;
 class BorderLeftColor;
 class BorderRightColor;
 class BorderTopColor;
 class CaretColor;
-class Clear;
 class Color;
 class ColumnRuleColor;
 class Fill;
-class Float;
 class FloodColor;
 class InternalForcedBackgroundColor;
 class InternalForcedBorderColor;
@@ -123,7 +142,10 @@ class InternalVisitedCaretColor;
 class InternalVisitedColor;
 class InternalVisitedColumnRuleColor;
 class InternalVisitedFill;
+class InternalVisitedFloodColor;
+class InternalVisitedLightingColor;
 class InternalVisitedOutlineColor;
+class InternalVisitedStopColor;
 class InternalVisitedStroke;
 class InternalVisitedTextDecorationColor;
 class InternalVisitedTextEmphasisColor;
@@ -131,30 +153,35 @@ class InternalVisitedTextFillColor;
 class InternalVisitedTextStrokeColor;
 class LightingColor;
 class OutlineColor;
-class Position;
-class Resize;
 class StopColor;
 class Stroke;
 class TextDecorationColor;
+class TextEmphasisColor;
 class WebkitTapHighlightColor;
-class WebkitTextEmphasisColor;
 class WebkitTextFillColor;
 class WebkitTextStrokeColor;
 
 }  // namespace css_longhand
 
+namespace css_shorthand {
+
+class TextDecoration;
+
+}  // namespace css_shorthand
+
 // ComputedStyle stores the computed value [1] for every CSS property on an
 // element and provides the interface between the style engine and the rest of
 // Blink. It acts as a container where the computed value of every CSS property
-// can be stored and retrieved:
+// can be retrieved after its created using a builder.
 //
-//   auto style = ComputedStyle::CreateInitialStyleSingleton();
-//   style->SetDisplay(EDisplay::kNone); //'display' keyword property
+//   ComputedStyleBuilder builder(ComputedStyle::GetInitialStyleSingleton());
+//   builder.SetDisplay(EDisplay::kNone); //'display' keyword property
+//   auto style = builder.TakeStyle();
 //   style->Display();
 //
 // In addition to storing the computed value of every CSS property,
 // ComputedStyle also contains various internal style information. Examples
-// include cached_pseudo_element_styles_ (for storing pseudo element styles) and
+// include cached_pseudo_element_styles_ (for storing pseudo-element styles) and
 // has_simple_underline_ (cached indicator flag of text-decoration). These are
 // stored on ComputedStyle for two reasons:
 //
@@ -197,24 +224,29 @@ class WebkitTextStrokeColor;
 //
 // Since this class is huge, do not mark all of it CORE_EXPORT.  Instead,
 // export only the methods you need below.
-class ComputedStyle : public ComputedStyleBase,
-                      public RefCounted<ComputedStyle> {
+class ComputedStyle final : public ComputedStyleBase {
   // Needed to allow access to private/protected getters of fields to allow diff
   // generation
   friend class ComputedStyleBase;
+  friend class ComputedStyleBuilder;
   // Used by CSS animations. We can't allow them to animate based off visited
   // colors.
   friend class CSSPropertyEquality;
+  // Access Visibility()
+  friend class CSSVisibilityInterpolationType;
+  friend class InheritedVisibilityChecker;
 
   // Accesses GetColor().
   friend class ComputedStyleUtils;
-  // These get visited and unvisited colors separately.
+  // Color properties need access to private color utils.
   friend class css_longhand::AccentColor;
   friend class css_longhand::BackgroundColor;
+  friend class css_longhand::BackgroundImage;
   friend class css_longhand::BorderBottomColor;
   friend class css_longhand::BorderLeftColor;
   friend class css_longhand::BorderRightColor;
   friend class css_longhand::BorderTopColor;
+  friend class css_longhand::BoxShadow;
   friend class css_longhand::CaretColor;
   friend class css_longhand::Clear;
   friend class css_longhand::Color;
@@ -236,7 +268,10 @@ class ComputedStyle : public ComputedStyleBase,
   friend class css_longhand::InternalVisitedColor;
   friend class css_longhand::InternalVisitedColumnRuleColor;
   friend class css_longhand::InternalVisitedFill;
+  friend class css_longhand::InternalVisitedFloodColor;
+  friend class css_longhand::InternalVisitedLightingColor;
   friend class css_longhand::InternalVisitedOutlineColor;
+  friend class css_longhand::InternalVisitedStopColor;
   friend class css_longhand::InternalVisitedStroke;
   friend class css_longhand::InternalVisitedTextDecorationColor;
   friend class css_longhand::InternalVisitedTextEmphasisColor;
@@ -244,71 +279,99 @@ class ComputedStyle : public ComputedStyleBase,
   friend class css_longhand::InternalVisitedTextStrokeColor;
   friend class css_longhand::LightingColor;
   friend class css_longhand::OutlineColor;
-  friend class css_longhand::Position;
   friend class css_longhand::Resize;
+  friend class css_longhand::RowRuleColor;
   friend class css_longhand::StopColor;
   friend class css_longhand::Stroke;
   friend class css_longhand::TextDecorationColor;
+  friend class css_longhand::TextEmphasisColor;
+  friend class css_longhand::TextShadow;
   friend class css_longhand::WebkitTapHighlightColor;
-  friend class css_longhand::WebkitTextEmphasisColor;
   friend class css_longhand::WebkitTextFillColor;
   friend class css_longhand::WebkitTextStrokeColor;
+  friend class css_shorthand::TextDecoration;
   // Access to private Appearance() and HasAppearance().
   friend class LayoutTheme;
   friend class StyleAdjuster;
   friend class StyleCascade;
-  friend class css_longhand::Appearance;
   // Editing has to only reveal unvisited info.
   friend class EditingStyle;
-  // Saves Border/Background information for later comparison.
-  friend class CachedUAStyle;
   // Accesses visited and unvisited colors.
   friend class ColorPropertyFunctions;
-  // Edits the background for media controls.
+  // Accesses inset and sizing property values.
+  friend class LengthPropertyFunctions;
+  // Edits the background for media controls and accesses UserModify().
   friend class StyleAdjuster;
-  // Access to private SetFontInternal().
-  friend class FontBuilder;
-  // Access to GetCurrentColor(). (drop-shadow() does not resolve 'currentcolor'
-  // at use-time.)
-  friend class FilterOperationResolver;
-  // Access to SetInitialData() and GetCurrentColor().
+  // Access to GetCurrentColor().
   friend class StyleResolver;
+  // Access to UserModify().
+  friend class MatchedPropertiesCache;
+
+  // Allows unit tests to access protected members.
+  friend class StyleResolverTest;
+
+  using ComputedStyleBase::Clear;
+  using ComputedStyleBase::Floating;
+  using ComputedStyleBase::Resize;
 
  protected:
-  mutable std::unique_ptr<StyleCachedData> cached_data_;
+  mutable Member<StyleCachedData> cached_data_;
 
   StyleCachedData& EnsureCachedData() const;
 
   bool HasCachedPseudoElementStyles() const;
-  PseudoElementStyleCache* GetPseudoElementStyleCache() const;
+  CORE_EXPORT PseudoElementStyleCache* GetPseudoElementStyleCache() const;
   PseudoElementStyleCache& EnsurePseudoElementStyleCache() const;
 
   Vector<AtomicString>* GetVariableNamesCache() const;
   Vector<AtomicString>& EnsureVariableNamesCache() const;
-  void ClearVariableNamesCache() const;
+
+  CORE_EXPORT AppliedTextDecorationVector* EnsureAppliedTextDecorationsCache()
+      const;
 
  private:
   // TODO(sashab): Move these private members to the bottom of ComputedStyle.
   ALWAYS_INLINE ComputedStyle();
-  ALWAYS_INLINE ComputedStyle(const ComputedStyle&);
+  ALWAYS_INLINE ComputedStyle(const ComputedStyle& initial_style);
+  ALWAYS_INLINE explicit ComputedStyle(const ComputedStyleBuilder&);
 
  public:
   using PassKey = base::PassKey<ComputedStyle>;
+  using BuilderPassKey = base::PassKey<ComputedStyleBuilder>;
 
-  ALWAYS_INLINE ComputedStyle(PassKey, const ComputedStyle&);
+  ALWAYS_INLINE ComputedStyle(BuilderPassKey,
+                              const ComputedStyle& initial_style);
+  ALWAYS_INLINE ComputedStyle(BuilderPassKey, const ComputedStyleBuilder&);
   ALWAYS_INLINE explicit ComputedStyle(PassKey);
 
-  // Create the per-document/context singleton that is used for shallow-copying
-  // into new instances.
-  CORE_EXPORT static scoped_refptr<ComputedStyle> CreateInitialStyleSingleton();
+  void TraceAfterDispatch(Visitor* visitor) const {
+    visitor->Trace(cached_data_);
+    ComputedStyleBase::TraceAfterDispatch(visitor);
+  }
 
-  // Shallow copy into a new instance sharing DataPtrs.
-  CORE_EXPORT static scoped_refptr<ComputedStyle> Clone(const ComputedStyle&);
+  // Singletons to be used for StyleBuilder. The instances are
+  // context-independent and must always be used as `const` versions to avoid
+  // pollution of the style. Instances are allocated as per-thread singletons.
+  CORE_EXPORT static const ComputedStyle& GetInitialStyleSingleton();
+
+  static const ComputedStyle* NullifyEnsured(const ComputedStyle* style) {
+    if (!style) {
+      return nullptr;
+    }
+    if (style->IsEnsuredInDisplayNone()) {
+      return nullptr;
+    }
+    return style;
+  }
+
+  static bool IsNullOrEnsured(const ComputedStyle* style) {
+    return !NullifyEnsured(style);
+  }
 
   // Find out how two ComputedStyles differ. Used for figuring out if style
   // recalc needs to propagate style changes down the tree. The constants are
   // listed in increasing severity. E.g. kInherited also means we need to update
-  // pseudo elements (kPseudoElementStyle).
+  // pseudo-elements (kPseudoElementStyle).
   enum class Difference {
     // The ComputedStyle objects have the same computed style. The might have
     // some different extra flags which means we still need to replace the old
@@ -317,7 +380,7 @@ class ComputedStyle : public ComputedStyleBase,
     // Non-inherited properties differ which means we need to apply visual
     // difference changes to the layout tree through LayoutObject::SetStyle().
     kNonInherited,
-    // Pseudo element style is different which means we have to update pseudo
+    // Pseudo-element style is different which means we have to update pseudo-
     // element existence and computed style.
     kPseudoElementStyle,
     // Inherited properties are different which means we need to recalc style
@@ -338,63 +401,75 @@ class ComputedStyle : public ComputedStyleBase,
     //
     // The container-name property affects which container is queried by
     // rules matching descedant elements.
+    //
+    // If scroll-marker-group property changes from/to "none" on scroller, we
+    // should
+    // remove all ::scroll-marker pseudo-elements from the scroller's subtree.
     kDescendantAffecting,
   };
   CORE_EXPORT static Difference ComputeDifference(
       const ComputedStyle* old_style,
       const ComputedStyle* new_style);
 
+  // Returns true if the style difference needs a StyleRecalcChange for the
+  // descendants which invalidates all elements affected by container queries.
+  static bool DiffAffectsContainerQueries(const ComputedStyle* old_style,
+                                          const ComputedStyle* new_style);
+
   // Returns true if the ComputedStyle change requires a LayoutObject re-attach.
   static bool NeedsReattachLayoutTree(const Element& element,
                                       const ComputedStyle* old_style,
                                       const ComputedStyle* new_style);
 
-  // Copies the values of any independent inherited properties from the parent
-  // that are not explicitly set in this style.
-  void PropagateIndependentInheritedProperties(
-      const ComputedStyle& parent_style);
+  // Returns true if the ComputedStyle change requires the LayoutObject to be
+  // reinserted into the layout-tree.
+  static bool NeedsReinsertLayoutTree(const ComputedStyle& old_style,
+                                      const ComputedStyle& new_style);
 
-  ContentPosition ResolvedJustifyContentPosition(
-      const StyleContentAlignmentData& normal_value_behavior) const;
-  ContentDistributionType ResolvedJustifyContentDistribution(
-      const StyleContentAlignmentData& normal_value_behavior) const;
-  ContentPosition ResolvedAlignContentPosition(
-      const StyleContentAlignmentData& normal_value_behavior) const;
-  ContentDistributionType ResolvedAlignContentDistribution(
-      const StyleContentAlignmentData& normal_value_behavior) const;
-  StyleSelfAlignmentData ResolvedAlignItems(
-      ItemPosition normal_value_behaviour) const;
   StyleSelfAlignmentData ResolvedAlignSelf(
-      ItemPosition normal_value_behaviour,
+      const StyleSelfAlignmentData& normal_value_behavior,
       const ComputedStyle* parent_style = nullptr) const;
-  StyleContentAlignmentData ResolvedAlignContent(
-      const StyleContentAlignmentData& normal_behaviour) const;
-  StyleSelfAlignmentData ResolvedJustifyItems(
-      ItemPosition normal_value_behaviour) const;
   StyleSelfAlignmentData ResolvedJustifySelf(
-      ItemPosition normal_value_behaviour,
+      const StyleSelfAlignmentData& normal_value_behavior,
       const ComputedStyle* parent_style = nullptr) const;
-  StyleContentAlignmentData ResolvedJustifyContent(
-      const StyleContentAlignmentData& normal_behaviour) const;
 
   CORE_EXPORT StyleDifference
   VisualInvalidationDiff(const Document&, const ComputedStyle&) const;
 
-  CORE_EXPORT void InheritFrom(const ComputedStyle& inherit_parent,
-                               IsAtShadowBoundary = kNotAtShadowBoundary);
-  void CopyNonInheritedFromCached(const ComputedStyle&);
-
-  PseudoId StyleType() const {
-    return static_cast<PseudoId>(StyleTypeInternal());
-  }
-  void SetStyleType(PseudoId style_type) { SetStyleTypeInternal(style_type); }
-
   CORE_EXPORT const ComputedStyle* GetCachedPseudoElementStyle(
       PseudoId,
       const AtomicString& pseudo_argument = g_null_atom) const;
-  const ComputedStyle* AddCachedPseudoElementStyle(
-      scoped_refptr<const ComputedStyle>) const;
+  const ComputedStyle* AddCachedPseudoElementStyle(const ComputedStyle*,
+                                                   PseudoId,
+                                                   const AtomicString&) const;
+  const ComputedStyle* ReplaceCachedPseudoElementStyle(
+      const ComputedStyle* pseudo_style,
+      PseudoId pseudo_id,
+      const AtomicString& pseudo_argument) const;
   void ClearCachedPseudoElementStyles() const;
+
+  // If this ComputedStyle is affected by animation/transitions, then the
+  // unanimated "base" style can be retrieved with this function.
+  //
+  // If this function returns nullptr, then this ComputedStyle is not
+  // affected by animations, and *is* the base style.
+  CORE_EXPORT const ComputedStyle* GetBaseComputedStyle() const;
+
+  // Indicates which properties are !important in the base style.
+  CORE_EXPORT const CSSBitset* GetBaseImportantSet() const;
+
+  CORE_EXPORT const ComputedStyle* GetBaseComputedStyleOrThis() const {
+    if (auto* base = GetBaseComputedStyle()) {
+      return base;
+    }
+    return this;
+  }
+
+  HashSet<AtomicString>* CustomHighlightNames() const {
+    return CustomHighlightNamesInternal().get();
+  }
+
+  CORE_EXPORT AnimatedSource GetAnimatedSource(CSSPropertyID property) const;
 
   /**
    * ComputedStyle properties
@@ -423,60 +498,43 @@ class ComputedStyle : public ComputedStyleBase,
    * class, and be kept to a minimum.
    */
 
-  const FilterOperations& BackdropFilter() const {
-    DCHECK(BackdropFilterInternal().Get());
-    return BackdropFilterInternal()->operations_;
+  // Regular (non-interleaved) style resolutions happen without an
+  // AnchorEvaluator, which means any anchor*() function will use
+  // the fallback. Since anchor*() functions resolve computed-value time,
+  // we can't distinguish e.g. left:10px and left:anchor(--a right,10px) during
+  // ComputedStyle diffing if the anchor() was evaluated with a null-
+  // AnchorEvaluator, yet we need to invalidate layout in this situation
+  // to enter interleaved style recalc with the *real* AnchorEvaluator.
+  bool HasAnchorFunctionsWithoutEvaluator() const {
+    return HasAnchorFunctions() && !HasAnchorEvaluator();
   }
-  FilterOperations& MutableBackdropFilter() {
-    DCHECK(BackdropFilterInternal().Get());
-    return MutableBackdropFilterInternal()->operations_;
+
+  bool MayUseImplicitAnchor() const {
+    return GetDefaultAnchorData().GetType() ==
+               StylePositionAnchor::Type::kAuto &&
+           HasOutOfFlowPosition() &&
+           (HasAnchorFunctions() ||
+            AlignSelf().GetComputedPosition() == ItemPosition::kAnchorCenter ||
+            JustifySelf().GetComputedPosition() == ItemPosition::kAnchorCenter);
   }
+
   // For containing blocks, use |HasNonInitialBackdropFilter()| which includes
   // will-change: backdrop-filter.
-  bool HasBackdropFilter() const {
-    DCHECK(BackdropFilterInternal().Get());
-    return !BackdropFilterInternal()->operations_.Operations().IsEmpty();
+  static bool HasBackdropFilter(const FilterOperations& backdrop_filter) {
+    return !backdrop_filter.Operations().empty();
   }
-  void SetBackdropFilter(const FilterOperations& ops) {
-    DCHECK(BackdropFilterInternal().Get());
-    if (BackdropFilterInternal()->operations_ != ops)
-      MutableBackdropFilterInternal()->operations_ = ops;
-  }
-  bool BackdropFilterDataEquivalent(const ComputedStyle& o) const {
-    return DataEquivalent(BackdropFilterInternal(), o.BackdropFilterInternal());
-  }
+  bool HasBackdropFilter() const { return HasBackdropFilter(BackdropFilter()); }
+
+  bool HasReferenceFilter() const { return Filter().HasReferenceFilter(); }
 
   // filter (aka -webkit-filter)
-  FilterOperations& MutableFilter() {
-    DCHECK(FilterInternal().Get());
-    return MutableFilterInternal()->operations_;
-  }
-  const FilterOperations& Filter() const {
-    DCHECK(FilterInternal().Get());
-    return FilterInternal()->operations_;
-  }
   // For containing blocks, use |HasNonInitialFilter()| which includes
   // will-change: filter.
-  bool HasFilter() const {
-    DCHECK(FilterInternal().Get());
-    return !FilterInternal()->operations_.Operations().IsEmpty();
-  }
-  void SetFilter(const FilterOperations& v) {
-    DCHECK(FilterInternal().Get());
-    if (FilterInternal()->operations_ != v)
-      MutableFilterInternal()->operations_ = v;
-  }
-  bool FilterDataEquivalent(const ComputedStyle& o) const {
-    return DataEquivalent(FilterInternal(), o.FilterInternal());
-  }
-
+  bool HasFilter() const { return !Filter().Operations().empty(); }
 
   // background-image
   bool HasBackgroundImage() const {
     return BackgroundInternal().AnyLayerHasImage();
-  }
-  bool HasUrlBackgroundImage() const {
-    return BackgroundInternal().AnyLayerHasUrlImage();
   }
   bool HasFixedAttachmentBackgroundImage() const {
     return BackgroundInternal().AnyLayerHasFixedAttachmentImage();
@@ -496,81 +554,52 @@ class ComputedStyle : public ComputedStyleBase,
   const LengthBox& BorderImageSlices() const {
     return BorderImage().ImageSlices();
   }
-  void SetBorderImageSlices(const LengthBox&);
 
   // border-image-source
   StyleImage* BorderImageSource() const { return BorderImage().GetImage(); }
-  CORE_EXPORT void SetBorderImageSource(StyleImage*);
 
   // border-image-width
   const BorderImageLengthBox& BorderImageWidth() const {
     return BorderImage().BorderSlices();
   }
-  void SetBorderImageWidth(const BorderImageLengthBox&);
 
   // border-image-outset
   const BorderImageLengthBox& BorderImageOutset() const {
     return BorderImage().Outset();
   }
-  void SetBorderImageOutset(const BorderImageLengthBox&);
+
+  static int BorderWidth(EBorderStyle style, int width) {
+    if (style == EBorderStyle::kNone || style == EBorderStyle::kHidden) {
+      return 0;
+    }
+    return width;
+  }
+
+  static EBorderStyle CollapsedBorderStyle(EBorderStyle rule_style) {
+    // https://drafts.csswg.org/css-backgrounds-3/#border-style
+    // states that in the collapsing border model, outset is treated as groove
+    // and inset is treated as ridge
+    if (rule_style == EBorderStyle::kOutset) {
+      return EBorderStyle::kGroove;
+    }
+    if (rule_style == EBorderStyle::kInset) {
+      return EBorderStyle::kRidge;
+    }
+    return rule_style;
+  }
 
   // Border width properties.
-  LayoutUnit BorderTopWidth() const {
-    if (BorderTopStyle() == EBorderStyle::kNone ||
-        BorderTopStyle() == EBorderStyle::kHidden)
-      return LayoutUnit(0);
-    return BorderTopWidthInternal();
+  int BorderTopWidth() const {
+    return BorderWidth(BorderTopStyle(), SpecifiedBorderTopWidth());
   }
-  void SetBorderTopWidth(float v) { SetBorderTopWidthInternal(LayoutUnit(v)); }
-  bool BorderTopNonZero() const {
-    return BorderTopWidth() && (BorderTopStyle() != EBorderStyle::kNone);
+  int BorderBottomWidth() const {
+    return BorderWidth(BorderBottomStyle(), SpecifiedBorderBottomWidth());
   }
-
-  // border-bottom-width
-  LayoutUnit BorderBottomWidth() const {
-    if (BorderBottomStyle() == EBorderStyle::kNone ||
-        BorderBottomStyle() == EBorderStyle::kHidden)
-      return LayoutUnit(0);
-    return BorderBottomWidthInternal();
+  int BorderLeftWidth() const {
+    return BorderWidth(BorderLeftStyle(), SpecifiedBorderLeftWidth());
   }
-  void SetBorderBottomWidth(float v) {
-    SetBorderBottomWidthInternal(LayoutUnit(v));
-  }
-  bool BorderBottomNonZero() const {
-    return BorderBottomWidth() && (BorderBottomStyle() != EBorderStyle::kNone);
-  }
-
-  // border-left-width
-  LayoutUnit BorderLeftWidth() const {
-    if (BorderLeftStyle() == EBorderStyle::kNone ||
-        BorderLeftStyle() == EBorderStyle::kHidden)
-      return LayoutUnit(0);
-    return BorderLeftWidthInternal();
-  }
-  void SetBorderLeftWidth(float v) {
-    SetBorderLeftWidthInternal(LayoutUnit(v));
-  }
-  bool BorderLeftNonZero() const {
-    return BorderLeftWidth() && (BorderLeftStyle() != EBorderStyle::kNone);
-  }
-
-  // border-right-width
-  LayoutUnit BorderRightWidth() const {
-    if (BorderRightStyle() == EBorderStyle::kNone ||
-        BorderRightStyle() == EBorderStyle::kHidden)
-      return LayoutUnit(0);
-    return BorderRightWidthInternal();
-  }
-  void SetBorderRightWidth(float v) {
-    SetBorderRightWidthInternal(LayoutUnit(v));
-  }
-  bool BorderRightNonZero() const {
-    return BorderRightWidth() && (BorderRightStyle() != EBorderStyle::kNone);
-  }
-
-  // box-shadow (aka -webkit-box-shadow)
-  bool BoxShadowDataEquivalent(const ComputedStyle& other) const {
-    return DataEquivalent(BoxShadow(), other.BoxShadow());
+  int BorderRightWidth() const {
+    return BorderWidth(BorderRightStyle(), SpecifiedBorderRightWidth());
   }
 
   // clip-path
@@ -580,266 +609,99 @@ class ComputedStyle : public ComputedStyleBase,
     // multiple rare data pointer indirections. |HasClipPath| was added as a way
     // to reduce the cost of these expensive indirections by placing a bit
     // in more easily accessible memory.
-    return HasClipPath() ? ClipPathInternal().get() : nullptr;
-  }
-  void SetClipPath(scoped_refptr<ClipPathOperation> clip_path) {
-    SetHasClipPath(clip_path.get());
-    SetClipPathInternal(std::move(clip_path));
-  }
-
-  // clip
-  void SetClip(const LengthBox& box) {
-    SetHasAutoClipInternal(false);
-    SetClipInternal(box);
-  }
-  void SetHasAutoClip() {
-    SetHasAutoClipInternal(true);
-    SetClipInternal(ComputedStyleInitialValues::InitialClip());
-  }
-
-  // Column properties.
-  // column-count (aka -webkit-column-count)
-  void SetColumnCount(uint16_t c) {
-    SetHasAutoColumnCountInternal(false);
-    SetColumnCountInternal(clampTo<uint16_t>(c, 1));
-  }
-  void SetHasAutoColumnCount() {
-    SetHasAutoColumnCountInternal(true);
-    SetColumnCountInternal(ComputedStyleInitialValues::InitialColumnCount());
-  }
-
-  // column-rule-width (aka -webkit-column-rule-width)
-  uint16_t ColumnRuleWidth() const {
-    if (ColumnRuleStyle() == EBorderStyle::kNone ||
-        ColumnRuleStyle() == EBorderStyle::kHidden)
-      return 0;
-    return ColumnRuleWidthInternal().ToUnsigned();
-  }
-  void SetColumnRuleWidth(uint16_t w) {
-    SetColumnRuleWidthInternal(LayoutUnit(w));
-  }
-
-  // column-width (aka -webkit-column-width)
-  void SetColumnWidth(float f) {
-    SetHasAutoColumnWidthInternal(false);
-    SetColumnWidthInternal(f);
-  }
-  void SetHasAutoColumnWidth() {
-    SetHasAutoColumnWidthInternal(true);
-    SetColumnWidthInternal(0);
+    return HasClipPath() ? ClipPathInternal().Get() : nullptr;
   }
 
   // content
   ContentData* GetContentData() const { return ContentInternal().Get(); }
-  void SetContent(ContentData*);
 
-  // -webkit-line-clamp
-  bool HasLineClamp() const { return LineClamp() > 0; }
-
-  // -webkit-box-ordinal-group
-  void SetBoxOrdinalGroup(unsigned og) {
-    SetBoxOrdinalGroupInternal(
-        std::min(std::numeric_limits<unsigned>::max() - 1, og));
-  }
-
-  // opacity (aka -webkit-opacity)
-  void SetOpacity(float f) {
-    float v = clampTo<float>(f, 0, 1);
-    SetOpacityInternal(v);
-  }
-
-  bool OpacityChangedStackingContext(const ComputedStyle& other) const {
-    // We only need do layout for opacity changes if adding or losing opacity
-    // could trigger a change
-    // in us being a stacking context.
-    if (IsStackingContextWithoutContainment() ==
-            other.IsStackingContextWithoutContainment() ||
-        HasOpacity() == other.HasOpacity()) {
-      // FIXME: We would like to use SimplifiedLayout here, but we can't quite
-      // do that yet.  We need to make sure SimplifiedLayout can operate
-      // correctly on LayoutInlines (we will need to add a
-      // selfNeedsSimplifiedLayout bit in order to not get confused and taint
-      // every line).  In addition we need to solve the floating object issue
-      // when layers come and go. Right now a full layout is necessary to keep
-      // floating object lists sane.
-      return true;
+  // Returns the value of `line-clamp` or of `-webkit-line-clamp`, whichever
+  // applies (i.e. `-webkit-line-clamp` doesn't apply without specifying
+  // `display: -webkit-box`). To get the raw value of the properties, use
+  // `StandardLineClamp()` or `WebkitLineClamp()`.
+  int LineClamp() const {
+    if (!RuntimeEnabledFeatures::CSSLineClampEnabled()) {
+      DCHECK_EQ(Continue(), EContinue::kNormal);
+      if (IsSpecifiedDisplayWebkitBox()) {
+        return WebkitLineClamp();
+      }
+    } else if (IsEffectiveContinueCollapse()) {
+      return MaxLines().Lines();
     }
-    return false;
+    return 0;
   }
-
-  // order (aka -webkit-order)
-  // We restrict the smallest value to int min + 2 because we use int min and
-  // int min + 1 as special values in a hash set.
-  void SetOrder(int o) {
-    SetOrderInternal(max(std::numeric_limits<int>::min() + 2, o));
+  bool IsEffectiveContinueCollapse() const {
+    DCHECK(RuntimeEnabledFeatures::CSSLineClampEnabled());
+    switch (Continue()) {
+      case EContinue::kNormal:
+        return false;
+      case EContinue::kCollapse:
+        return true;
+      case EContinue::kWebkitLegacy:
+        return IsSpecifiedDisplayWebkitBox();
+    }
+  }
+  // Returns whether `line-clamp` or `-webkit-line-clamp` are set and apply.
+  bool HasLineClamp() const {
+    if (!RuntimeEnabledFeatures::CSSLineClampEnabled()) {
+      return IsSpecifiedDisplayWebkitBox() && WebkitLineClamp();
+    }
+    return IsEffectiveContinueCollapse();
   }
 
   // Outline properties.
 
   bool OutlineVisuallyEqual(const ComputedStyle& other) const {
     if (OutlineStyle() == EBorderStyle::kNone &&
-        other.OutlineStyle() == EBorderStyle::kNone)
+        other.OutlineStyle() == EBorderStyle::kNone) {
       return true;
-    return OutlineWidthInternal() == other.OutlineWidthInternal() &&
-           OutlineColor() == other.OutlineColor() &&
+    }
+    return OutlineWidth() == other.OutlineWidth() &&
+           ResolvedColor(OutlineColor()) ==
+               other.ResolvedColor(other.OutlineColor()) &&
            OutlineStyle() == other.OutlineStyle() &&
            OutlineOffset() == other.OutlineOffset() &&
            OutlineStyleIsAuto() == other.OutlineStyleIsAuto();
   }
 
-  // outline-width
-  float OutlineWidth() const {
-    if (OutlineStyle() == EBorderStyle::kNone)
-      return 0;
-    return OutlineWidthInternal();
-  }
-  void SetOutlineWidth(float v) { SetOutlineWidthInternal(LayoutUnit(v)); }
-  // TODO(rego): This is a temporal method that will be removed once we start
-  // using the float OutlineWidth() in the painting code.
-  uint16_t OutlineWidthInt() const {
-    if (OutlineStyle() == EBorderStyle::kNone)
-      return 0;
-    return OutlineWidthInternal().ToUnsigned();
-  }
-
-  // outline-offset
-  int16_t OutlineOffsetInt() const { return OutlineOffset().ToInt(); }
-
   // For history and compatibility reasons, we draw outline:auto (for focus
   // rings) and normal style outline differently.
-  // Focus rings enclose block visual overflows (of line boxes and descendants),
+  // Focus rings enclose block ink overflows (of line boxes and descendants),
   // while normal outlines don't.
-  NGOutlineType OutlineRectsShouldIncludeBlockVisualOverflow() const {
-    return OutlineStyleIsAuto()
-               ? NGOutlineType::kIncludeBlockVisualOverflow
-               : NGOutlineType::kDontIncludeBlockVisualOverflow;
-  }
-
-  // -webkit-perspective-origin-x
-  const Length& PerspectiveOriginX() const { return PerspectiveOrigin().X(); }
-  void SetPerspectiveOriginX(const Length& v) {
-    SetPerspectiveOrigin(LengthPoint(v, PerspectiveOriginY()));
-  }
-
-  // -webkit-perspective-origin-y
-  const Length& PerspectiveOriginY() const { return PerspectiveOrigin().Y(); }
-  void SetPerspectiveOriginY(const Length& v) {
-    SetPerspectiveOrigin(LengthPoint(PerspectiveOriginX(), v));
-  }
-
-  // Transform properties.
-  // -webkit-transform-origin-x
-  const Length& TransformOriginX() const { return GetTransformOrigin().X(); }
-  void SetTransformOriginX(const Length& v) {
-    SetTransformOrigin(
-        TransformOrigin(v, TransformOriginY(), TransformOriginZ()));
-  }
-
-  // -webkit-transform-origin-y
-  const Length& TransformOriginY() const { return GetTransformOrigin().Y(); }
-  void SetTransformOriginY(const Length& v) {
-    SetTransformOrigin(
-        TransformOrigin(TransformOriginX(), v, TransformOriginZ()));
-  }
-
-  // -webkit-transform-origin-z
-  float TransformOriginZ() const { return GetTransformOrigin().Z(); }
-  void SetTransformOriginZ(float f) {
-    SetTransformOrigin(
-        TransformOrigin(TransformOriginX(), TransformOriginY(), f));
+  OutlineType OutlineRectsShouldIncludeBlockInkOverflow() const {
+    return OutlineStyleIsAuto() ? OutlineType::kIncludeBlockInkOverflow
+                                : OutlineType::kDontIncludeBlockInkOverflow;
   }
 
   // Scroll properties.
+
+  PhysicalToLogicalGetter<const Length&, ComputedStyle>
+  PhysicalScrollPaddingToLogicalGetter() const {
+    return PhysicalToLogicalGetter<const Length&, ComputedStyle>(
+        GetWritingDirection(), *this, &ComputedStyleBase::ScrollPaddingTop,
+        &ComputedStyleBase::ScrollPaddingRight,
+        &ComputedStyleBase::ScrollPaddingBottom,
+        &ComputedStyleBase::ScrollPaddingLeft);
+  }
+
   // scroll-padding-block-start
   const Length& ScrollPaddingBlockStart() const {
-    return IsHorizontalWritingMode() ? ScrollPaddingTop() : ScrollPaddingLeft();
-  }
-  void SetScrollPaddingBlockStart(const Length& v) {
-    if (IsHorizontalWritingMode())
-      SetScrollPaddingTop(v);
-    else
-      SetScrollPaddingLeft(v);
+    return PhysicalScrollPaddingToLogicalGetter().BlockStart();
   }
 
   // scroll-padding-block-end
   const Length& ScrollPaddingBlockEnd() const {
-    return IsHorizontalWritingMode() ? ScrollPaddingBottom()
-                                     : ScrollPaddingRight();
-  }
-  void SetScrollPaddingBlockEnd(const Length& v) {
-    if (IsHorizontalWritingMode())
-      SetScrollPaddingBottom(v);
-    else
-      SetScrollPaddingRight(v);
+    return PhysicalScrollPaddingToLogicalGetter().BlockEnd();
   }
 
   // scroll-padding-inline-start
   const Length& ScrollPaddingInlineStart() const {
-    return IsHorizontalWritingMode() ? ScrollPaddingLeft() : ScrollPaddingTop();
-  }
-  void SetScrollPaddingInlineStart(const Length& v) {
-    if (IsHorizontalWritingMode())
-      SetScrollPaddingLeft(v);
-    else
-      SetScrollPaddingTop(v);
+    return PhysicalScrollPaddingToLogicalGetter().InlineStart();
   }
 
   // scroll-padding-inline-end
   const Length& ScrollPaddingInlineEnd() const {
-    return IsHorizontalWritingMode() ? ScrollPaddingRight()
-                                     : ScrollPaddingBottom();
-  }
-  void SetScrollPaddingInlineEnd(const Length& v) {
-    if (IsHorizontalWritingMode())
-      SetScrollPaddingRight(v);
-    else
-      SetScrollPaddingBottom(v);
-  }
-
-  // scroll-margin-block-start
-  float ScrollMarginBlockStart() const {
-    return IsHorizontalWritingMode() ? ScrollMarginTop() : ScrollMarginLeft();
-  }
-  void SetScrollMarginBlockStart(float v) {
-    if (IsHorizontalWritingMode())
-      SetScrollMarginTop(v);
-    else
-      SetScrollMarginLeft(v);
-  }
-
-  // scroll-margin-block-end
-  float ScrollMarginBlockEnd() const {
-    return IsHorizontalWritingMode() ? ScrollMarginBottom()
-                                     : ScrollMarginRight();
-  }
-  void SetScrollMarginBlockEnd(float v) {
-    if (IsHorizontalWritingMode())
-      SetScrollMarginBottom(v);
-    else
-      SetScrollMarginRight(v);
-  }
-
-  // scroll-margin-inline-start
-  float ScrollMarginInlineStart() const {
-    return IsHorizontalWritingMode() ? ScrollMarginLeft() : ScrollMarginTop();
-  }
-  void SetScrollMarginInlineStart(float v) {
-    if (IsHorizontalWritingMode())
-      SetScrollMarginLeft(v);
-    else
-      SetScrollMarginTop(v);
-  }
-
-  // scroll-margin-inline-end
-  float ScrollMarginInlineEnd() const {
-    return IsHorizontalWritingMode() ? ScrollMarginRight()
-                                     : ScrollMarginBottom();
-  }
-  void SetScrollMarginInlineEnd(float v) {
-    if (IsHorizontalWritingMode())
-      SetScrollMarginRight(v);
-    else
-      SetScrollMarginBottom(v);
+    return PhysicalScrollPaddingToLogicalGetter().InlineEnd();
   }
 
   // scrollbar-gutter
@@ -849,163 +711,129 @@ class ComputedStyle : public ComputedStyleBase,
   inline bool IsScrollbarGutterStable() const {
     return ScrollbarGutter() & kScrollbarGutterStable;
   }
-  inline bool IsScrollbarGutterMirror() const {
-    return ScrollbarGutter() & kScrollbarGutterMirror;
+  inline bool IsScrollbarGutterBothEdges() const {
+    return ScrollbarGutter() & kScrollbarGutterBothEdges;
   }
 
-  // ignore non-standard ::-webkit-scrollbar when standard properties are in use
-  bool HasCustomScrollbarStyle() const {
-    return HasPseudoElementStyle(kPseudoIdScrollbar) &&
-           ScrollbarWidth() == EScrollbarWidth::kAuto;
+  bool UsesStandardScrollbarStyle() const {
+    return ScrollbarWidth() != EScrollbarWidth::kAuto || ScrollbarColor();
   }
 
-  // shape-image-threshold (aka -webkit-shape-image-threshold)
-  void SetShapeImageThreshold(float shape_image_threshold) {
-    float clamped_shape_image_threshold =
-        clampTo<float>(shape_image_threshold, 0, 1);
-    SetShapeImageThresholdInternal(clamped_shape_image_threshold);
-  }
+  bool HasCustomScrollbarStyle(Element* element) const;
+
+  // Use UsedScrollbarWidth() instead of ScrollbarWidth() to get the used value.
+  EScrollbarWidth UsedScrollbarWidth() const;
+
+  // Use UsedScrollbarColor() instead of ScrollbarColor() to get the used value.
+  StyleScrollbarColor* UsedScrollbarColor() const;
 
   // shape-outside (aka -webkit-shape-outside)
   ShapeValue* ShapeOutside() const { return ShapeOutsideInternal().Get(); }
-  bool ShapeOutsideDataEquivalent(const ComputedStyle& other) const {
-    return DataEquivalent(ShapeOutside(), other.ShapeOutside());
-  }
-
-  // touch-action
-  TouchAction GetEffectiveTouchAction() const {
-    return EffectiveTouchActionInternal();
-  }
-  void SetEffectiveTouchAction(TouchAction t) {
-    return SetEffectiveTouchActionInternal(t);
-  }
 
   // vertical-align
-  EVerticalAlign VerticalAlign() const { return static_cast<EVerticalAlign>(VerticalAlignInternal()); }
-  void SetVerticalAlign(EVerticalAlign v) { SetVerticalAlignInternal(static_cast<unsigned>(v)); }
-  void SetVerticalAlignLength(const Length& length) {
-    SetVerticalAlignInternal(static_cast<unsigned>(EVerticalAlign::kLength));
-    SetVerticalAlignLengthInternal(length);
+  EVerticalAlign VerticalAlign() const {
+    return static_cast<EVerticalAlign>(VerticalAlignInternal());
   }
 
-  // z-index
-  void SetZIndex(int v) {
-    SetHasAutoZIndexInternal(false);
-    SetZIndexInternal(v);
-  }
-  void SetHasAutoZIndex() {
-    SetHasAutoZIndexInternal(true);
-    SetZIndexInternal(0);
-  }
   // This returns the z-index if it applies (i.e. positioned element or grid or
   // flex children), and 0 otherwise. Note that for most situations,
   // `EffectiveZIndex()` is what the code should use to determine how to stack
   // the element. `ZIndex()` is still available and returns the value as
   // specified in style (used for e.g. style comparisons and computed style
   // reporting)
-  int EffectiveZIndex() const { return EffectiveZIndexZero() ? 0 : ZIndex(); }
-
-  CORE_EXPORT bool SetEffectiveZoom(float);
-
-  // -webkit-clip-path
-  bool ClipPathDataEquivalent(const ComputedStyle& other) const {
-    return DataEquivalent(ClipPath(), other.ClipPath());
-  }
+  int EffectiveZIndex() const { return AllowsZIndex() ? ZIndex() : 0; }
 
   // Mask properties.
   // -webkit-mask-box-image-outset
   bool HasMaskBoxImageOutsets() const {
     return MaskBoxImageInternal().HasImage() && MaskBoxImageOutset().NonZero();
   }
-  LayoutRectOutsets MaskBoxImageOutsets() const {
+  PhysicalBoxStrut MaskBoxImageOutsets() const {
     return ImageOutsets(MaskBoxImageInternal());
   }
   const BorderImageLengthBox& MaskBoxImageOutset() const {
     return MaskBoxImageInternal().Outset();
-  }
-  void SetMaskBoxImageOutset(const BorderImageLengthBox& outset) {
-    MutableMaskBoxImageInternal().SetOutset(outset);
   }
 
   // -webkit-mask-box-image-slice
   const LengthBox& MaskBoxImageSlices() const {
     return MaskBoxImageInternal().ImageSlices();
   }
-  void SetMaskBoxImageSlices(const LengthBox& slices) {
-    MutableMaskBoxImageInternal().SetImageSlices(slices);
-  }
 
   // -webkit-mask-box-image-source
   StyleImage* MaskBoxImageSource() const {
     return MaskBoxImageInternal().GetImage();
-  }
-  void SetMaskBoxImageSource(StyleImage* v) {
-    MutableMaskBoxImageInternal().SetImage(v);
   }
 
   // -webkit-mask-box-image-width
   const BorderImageLengthBox& MaskBoxImageWidth() const {
     return MaskBoxImageInternal().BorderSlices();
   }
-  void SetMaskBoxImageWidth(const BorderImageLengthBox& slices) {
-    MutableMaskBoxImageInternal().SetBorderSlices(slices);
-  }
 
   // Inherited properties.
 
-  // line-height
-  Length LineHeight() const;
-
   // List style properties.
-  // list-style-image
-  CORE_EXPORT StyleImage* ListStyleImage() const;
-  void SetListStyleImage(StyleImage*);
 
   // list-style-type
-  // TODO(crbug.com/687225): These functions are deprecated. Callers should be
-  // migrated to GetListStyleType().
-  CORE_EXPORT EListStyleType ListStyleType() const;
   const AtomicString& ListStyleStringValue() const;
-  // TODO(crbug.com/687225): Get rid of the deprecated functions above so that
-  // the getter can also be auto-generated.
-  CORE_EXPORT ListStyleTypeData* GetListStyleType() const;
-  bool ListStyleTypeDataEquivalent(const ComputedStyle& other) const {
-    return DataEquivalent(ListStyleTypeInternal(),
-                          other.ListStyleTypeInternal());
-  }
 
-  // quotes
-  bool QuotesDataEquivalent(const ComputedStyle&) const;
+  // list-style-position
 
-  // text-shadow
-  bool TextShadowDataEquivalent(const ComputedStyle&) const;
+  // Returns true if ::marker should be rendered inline.
+  // In some cases, it should be inline even if `list-style-position` property
+  // value is `outside`.
+  bool MarkerShouldBeInside(const Element& parent,
+                            const DisplayStyle& marker_style) const;
 
   // Text emphasis properties.
   TextEmphasisMark GetTextEmphasisMark() const;
-  void SetTextEmphasisMark(TextEmphasisMark mark) {
-    SetTextEmphasisMarkInternal(mark);
-  }
   const AtomicString& TextEmphasisMarkString() const;
   LineLogicalSide GetTextEmphasisLineLogicalSide() const;
 
-  // Font properties.
-  CORE_EXPORT const Font& GetFont() const { return FontInternal(); }
-  CORE_EXPORT void SetFont(const Font& font) { SetFontInternal(font); }
-  CORE_EXPORT const FontDescription& GetFontDescription() const {
-    return FontInternal().GetFontDescription();
+  CORE_EXPORT FontSizeStyle GetFontSizeStyle() const {
+    return FontSizeStyle(GetFont(), LineHeight(), EffectiveZoom());
   }
-  CORE_EXPORT bool SetFontDescription(const FontDescription&);
-  bool HasIdenticalAscentDescentAndLineGap(const ComputedStyle& other) const;
+
+  // Font properties.
+  CORE_EXPORT const FontDescription& GetFontDescription() const {
+    return GetFont()->GetFontDescription();
+  }
   bool HasFontRelativeUnits() const {
-    return HasEmUnits() || HasRemUnits() || HasGlyphRelativeUnits();
+    return HasEmUnits() || HasRootRelativeUnits() || HasGlyphRelativeUnits();
+  }
+  bool HasAnyRelativeUnits() const {
+    return HasFontRelativeUnits() || HasContainerRelativeValue() ||
+           HasLogicalDirectionRelativeUnits() || HasViewportUnits();
   }
 
   // If true, the ComputedStyle must be recalculated when fonts are updated.
   bool DependsOnFontMetrics() const {
     return HasGlyphRelativeUnits() || HasFontSizeAdjust() ||
-           CustomStyleCallbackDependsOnFont();
+           CustomStyleCallbackDependsOnFont() ||
+           (StyleType() == kPseudoIdFirstLetter && !InitialLetter().IsNormal());
   }
-  bool CachedPseudoElementStylesDependOnFontMetrics() const;
+
+  bool DependsOnFunc(base::FunctionRef<bool(const ComputedStyle&)> func) const {
+    DCHECK_EQ(StyleType(), kPseudoIdNone);
+
+    if (HasCachedPseudoElementStyles()) {
+      for (const auto& [key, pseudo_style] : *GetPseudoElementStyleCache()) {
+        if (func(*pseudo_style)) {
+          return true;
+        }
+      }
+    }
+
+    if (HighlightData().StylesDependOnFunc(func)) {
+      return true;
+    }
+
+    return false;
+  }
+
+  bool HighlightPseudoElementStylesDependOnRelativeUnits() const;
+  bool HighlightPseudoElementStylesDependOnContainerUnits() const;
+  bool HighlightPseudoElementStylesHaveVariableReferences() const;
 
   // font-size
   int FontSize() const { return GetFontDescription().ComputedPixelSize(); }
@@ -1019,11 +847,13 @@ class ComputedStyle : public ComputedStyleBase,
     return LayoutUnit::FromFloatRound(font.GetFontDescription().ComputedSize());
   }
   LayoutUnit ComputedFontSizeAsFixed() const {
-    return ComputedFontSizeAsFixed(GetFont());
+    return ComputedFontSizeAsFixed(*GetFont());
   }
 
   // font-size-adjust
-  float FontSizeAdjust() const { return GetFontDescription().SizeAdjust(); }
+  blink::FontSizeAdjust FontSizeAdjust() const {
+    return GetFontDescription().SizeAdjust();
+  }
   bool HasFontSizeAdjust() const {
     return GetFontDescription().HasSizeAdjust();
   }
@@ -1038,55 +868,41 @@ class ComputedStyle : public ComputedStyleBase,
     return GetFontDescription().Stretch();
   }
 
+  // font-style
+  FontSelectionValue GetFontStyle() const {
+    return GetFontDescription().Style();
+  }
+
+  // font-palette
+  const FontPalette* GetFontPalette() const {
+    return GetFontDescription().GetFontPalette();
+  }
+
   // Child is aligned to the parent by matching the parent’s dominant baseline
   // to the same baseline in the child.
-  FontBaseline GetFontBaseline() const;
+  CORE_EXPORT FontBaseline GetFontBaseline() const;
 
-  FontHeight GetFontHeight(FontBaseline baseline) const;
-  FontHeight GetFontHeight() const { return GetFontHeight(GetFontBaseline()); }
-
-  // Compute FontOrientation from this style. It is derived from WritingMode and
-  // TextOrientation.
-  FontOrientation ComputeFontOrientation() const;
-
-  // Update FontOrientation in FontDescription if it is different. FontBuilder
-  // takes care of updating it, but if WritingMode or TextOrientation were
-  // changed after the style was constructed, this function synchronizes
-  // FontOrientation to match to this style.
-  void UpdateFontOrientation();
+  CORE_EXPORT FontHeight GetFontHeight(FontBaseline baseline) const;
+  CORE_EXPORT FontHeight GetFontHeight() const {
+    return GetFontHeight(GetFontBaseline());
+  }
 
   // -webkit-locale
   const AtomicString& Locale() const {
     return LayoutLocale::LocaleString(GetFontDescription().Locale());
   }
-  AtomicString LocaleForLineBreakIterator() const;
 
-  // FIXME: Remove letter-spacing/word-spacing and replace them with respective
-  // FontBuilder calls.  letter-spacing
+  // letter-spacing
   float LetterSpacing() const { return GetFontDescription().LetterSpacing(); }
-  void SetLetterSpacing(float);
-
-  // tab-size
-  void SetTabSize(const TabSize& t) {
-    if (t.GetPixelSize(1) < 0) {
-      if (t.IsSpaces())
-        SetTabSizeInternal(TabSize(0, TabSizeValueType::kSpace));
-      else
-        SetTabSizeInternal(TabSize(0, TabSizeValueType::kLength));
-    } else {
-      SetTabSizeInternal(t);
-    }
+  const Length& ComputedLetterSpacing() const {
+    return GetFontDescription().ComputedLetterSpacing();
   }
 
   // word-spacing
   float WordSpacing() const { return GetFontDescription().WordSpacing(); }
-  void SetWordSpacing(float);
-
-  // orphans
-  void SetOrphans(int16_t o) { SetOrphansInternal(clampTo<int16_t>(o, 1)); }
-
-  // widows
-  void SetWidows(int16_t w) { SetWidowsInternal(clampTo<int16_t>(w, 1)); }
+  const Length& ComputedWordSpacing() const {
+    return GetFontDescription().ComputedWordSpacing();
+  }
 
   // fill helpers
   bool HasFill() const { return !FillPaint().IsNone(); }
@@ -1100,9 +916,6 @@ class ComputedStyle : public ComputedStyleBase,
     return MarkerStartResource() || MarkerMidResource() || MarkerEndResource();
   }
 
-  // paint-order helper
-  EPaintOrderType PaintOrderType(unsigned index) const;
-
   // stroke helpers
   bool HasStroke() const { return !StrokePaint().IsNone(); }
   bool HasVisibleStroke() const {
@@ -1112,72 +925,73 @@ class ComputedStyle : public ComputedStyleBase,
     return StrokePaint().HasCurrentColor() ||
            InternalVisitedStrokePaint().HasCurrentColor();
   }
-  bool HasDashArray() const { return !StrokeDashArray()->data.IsEmpty(); }
-  bool StrokeDashArrayDataEquivalent(const ComputedStyle&) const;
+
+  bool IsCaretColorAuto() const { return CaretColor().IsAutoColor(); }
+  bool IsCaretTextColorAuto() const {
+    return CaretColor().TextColor().IsAutoColor();
+  }
+  // Returns the resolved the second value of caret-color for the color of
+  // the text that under block caret shape or nullopt if the value is 'auto'.
+  CORE_EXPORT std::optional<blink::Color> ResolvedCaretTextColor() const;
 
   // accent-color
-  const StyleAutoColor& AccentColor() const { return AccentColorInternal(); }
   // An empty optional means the accent-color is 'auto'
-  absl::optional<Color> AccentColorResolved() const;
+  std::optional<blink::Color> AccentColorResolved() const;
+  // Returns the color mirrored by AccentColor/AccentColorText, or nullopt when
+  // the keywords should use the system accent color.
+  CORE_EXPORT std::optional<blink::Color> ResolveMirroredAccentColor() const;
+
+  // scrollbar-color
+  // An empty optional means the scrollbar-color is 'auto'
+  std::optional<blink::Color> ScrollbarThumbColorResolved() const;
+  std::optional<blink::Color> ScrollbarTrackColorResolved() const;
 
   // Comparison operators
   // FIXME: Replace callers of operator== wth a named method instead, e.g.
   // inheritedEquals().
   CORE_EXPORT bool operator==(const ComputedStyle& other) const;
-  bool operator!=(const ComputedStyle& other) const {
-    return !(*this == other);
-  }
 
   bool InheritedEqual(const ComputedStyle&) const;
   bool NonInheritedEqual(const ComputedStyle&) const;
   inline bool IndependentInheritedEqual(const ComputedStyle&) const;
   inline bool NonIndependentInheritedEqual(const ComputedStyle&) const;
-  bool InheritedDataShared(const ComputedStyle&) const;
+  bool InheritedEqualIncludingInheritedVariables(const ComputedStyle&) const;
+  InheritedPropertyHash FirstDifferingInheritedProperty(
+      const ComputedStyle&) const;
 
   bool HasChildDependentFlags() const { return ChildHasExplicitInheritance(); }
-  void CopyChildDependentFlagsFrom(const ComputedStyle&);
+
+  void SetChildHasExplicitInheritance() const {
+    // Child-dependent flags are contextual, and must not mutate the shared
+    // initial-style singleton.
+    DCHECK(this != &GetInitialStyleSingleton());
+    ComputedStyleBase::SetChildHasExplicitInheritance();
+  }
+
+  void CopyChildDependentFlagsFrom(const ComputedStyle&) const;
 
   // Counters.
   const CounterDirectiveMap* GetCounterDirectives() const;
-  CounterDirectiveMap& AccessCounterDirectives();
   const CounterDirectives GetCounterDirectives(
       const AtomicString& identifier) const;
   bool CounterDirectivesEqual(const ComputedStyle& other) const {
     // If the counter directives change, trigger a relayout to re-calculate
     // counter values and rebuild the counter node tree.
-    return DataEquivalent(CounterDirectivesInternal().get(),
-                          other.CounterDirectivesInternal().get());
+    return base::ValuesEquivalent(CounterDirectivesInternal().get(),
+                                  other.CounterDirectivesInternal().get());
   }
-  void ClearIncrementDirectives();
-  void ClearResetDirectives();
-  void ClearSetDirectives();
 
-  bool IsDeprecatedWebkitBox() const {
+  bool IsDeprecatedFlexbox() const {
     return Display() == EDisplay::kWebkitBox ||
            Display() == EDisplay::kWebkitInlineBox;
-  }
-  bool IsDeprecatedFlexboxUsingFlexLayout() const {
-    return IsDeprecatedWebkitBox() &&
-           !IsDeprecatedWebkitBoxWithVerticalLineClamp();
-  }
-  bool IsDeprecatedWebkitBoxWithVerticalLineClamp() const {
-    return IsDeprecatedWebkitBox() && BoxOrient() == EBoxOrient::kVertical &&
-           HasLineClamp();
   }
 
   // Variables.
   bool HasVariables() const;
-  CORE_EXPORT size_t GetVariableNamesCount() const;
+  CORE_EXPORT wtf_size_t GetVariableNamesCount() const;
   CORE_EXPORT const Vector<AtomicString>& GetVariableNames() const;
-  CORE_EXPORT const StyleInheritedVariables* InheritedVariables() const;
-  CORE_EXPORT const StyleNonInheritedVariables* NonInheritedVariables() const;
-
-  CORE_EXPORT void SetVariableData(const AtomicString&,
-                                   scoped_refptr<CSSVariableData>,
-                                   bool is_inherited_property);
-  CORE_EXPORT void SetVariableValue(const AtomicString&,
-                                    const CSSValue*,
-                                    bool is_inherited_property);
+  CORE_EXPORT const StyleInheritedVariables& InheritedVariables() const;
+  CORE_EXPORT const StyleNonInheritedVariables& NonInheritedVariables() const;
 
   // Handles both inherited and non-inherited variables
   CORE_EXPORT CSSVariableData* GetVariableData(const AtomicString&) const;
@@ -1188,75 +1002,92 @@ class ComputedStyle : public ComputedStyleBase,
   const CSSValue* GetVariableValue(const AtomicString&,
                                    bool is_inherited_property) const;
 
-  // Animations.
-  CORE_EXPORT CSSAnimationData& AccessAnimations();
-  const CSSAnimationData* Animations() const {
-    return AnimationsInternal().get();
-  }
-
-  // Transitions.
-  const CSSTransitionData* Transitions() const {
-    return TransitionsInternal().get();
-  }
-  CORE_EXPORT CSSTransitionData& AccessTransitions();
-
-  // Callback selectors.
-  void AddCallbackSelector(const String& selector);
-
-  // Non-property flags.
-  CORE_EXPORT void SetTextAutosizingMultiplier(float);
-
   // Column utility functions.
-  void ClearMultiCol();
   bool SpecifiesColumns() const {
-    return !HasAutoColumnCount() || !HasAutoColumnWidth();
+    return !HasAutoColumnCount() || !HasAutoColumnWidth() ||
+           !HasAutoColumnHeight();
   }
   bool ColumnRuleIsTransparent() const {
-    return !ColumnRuleColorInternal()
-                .Resolve(GetCurrentColor(), UsedColorScheme())
-                .Alpha();
+    return GapRuleColorIsTransparent(ColumnRuleColor());
   }
-  bool ColumnRuleEquivalent(const ComputedStyle& other_style) const;
   bool HasColumnRule() const {
-    if (LIKELY(!SpecifiesColumns()))
+    if (!IsGapDecorationsContainer()) [[likely]] {
       return false;
-    return ColumnRuleWidth() && !ColumnRuleIsTransparent() &&
+    }
+    return HasRuleWidth(ColumnRuleWidth()) && !ColumnRuleIsTransparent() &&
            BorderStyleIsVisible(ColumnRuleStyle());
+  }
+
+  bool RowRuleIsTransparent() const {
+    return GapRuleColorIsTransparent(RowRuleColor());
+  }
+  bool HasRowRule() const {
+    if (!IsGapDecorationsContainer()) [[likely]] {
+      return false;
+    }
+
+    return HasRuleWidth(RowRuleWidth()) && !RowRuleIsTransparent() &&
+           BorderStyleIsVisible(RowRuleStyle());
+  }
+
+  bool HasGapRule() const {
+    if (!MaybeHasGapDecorations()) {
+      return false;
+    }
+    return HasColumnRule() || HasRowRule();
+  }
+
+  bool IsGapDecorationsContainer() const {
+    // `SpecifiesColumns()` signifies we are in a multicol context. Return false
+    // if we are not in a multicol, grid, grid lanes, or flex context.
+    return SpecifiesColumns() || IsDisplayFlex() || IsDisplayWebkitBox() ||
+           IsDisplayGrid() || IsDisplayGridLanes();
   }
 
   // Flex utility functions.
   bool ResolvedIsColumnFlexDirection() const {
-    if (IsDeprecatedWebkitBox())
+    if (IsDeprecatedFlexbox()) {
       return BoxOrient() == EBoxOrient::kVertical;
+    }
     return FlexDirection() == EFlexDirection::kColumn ||
            FlexDirection() == EFlexDirection::kColumnReverse;
   }
-  bool ResolvedIsColumnReverseFlexDirection() const {
-    if (IsDeprecatedWebkitBox()) {
-      return BoxOrient() == EBoxOrient::kVertical &&
-             BoxDirection() == EBoxDirection::kReverse;
+  bool ResolvedIsReverseFlexDirection() const {
+    if (IsDeprecatedFlexbox()) {
+      return BoxDirection() == EBoxDirection::kReverse;
     }
-    return FlexDirection() == EFlexDirection::kColumnReverse;
+    return FlexDirection() == EFlexDirection::kRowReverse ||
+           FlexDirection() == EFlexDirection::kColumnReverse;
   }
-  bool ResolvedIsRowReverseFlexDirection() const {
-    if (IsDeprecatedWebkitBox()) {
-      return BoxOrient() == EBoxOrient::kHorizontal &&
-             BoxDirection() == EBoxDirection::kReverse;
+  bool ResolvedIsFlexWrapReverse() const {
+    if (IsDeprecatedFlexbox()) {
+      return false;
     }
-    return FlexDirection() == EFlexDirection::kRowReverse;
+    return FlexWrap().GetWrapMode() == FlexWrapMode::kWrapReverse;
   }
-  bool HasBoxReflect() const { return BoxReflect(); }
-  bool ReflectionDataEquivalent(const ComputedStyle& other) const {
-    return DataEquivalent(BoxReflect(), other.BoxReflect());
+  bool ResolvedIsFlexNowrap() const {
+    if (IsDeprecatedFlexbox()) {
+      return true;
+    }
+    return FlexWrap().GetWrapMode() == FlexWrapMode::kNowrap;
   }
+  std::optional<wtf_size_t> ResolvedFlexLineCount() const {
+    if (IsDeprecatedFlexbox() || !FlexWrap().IsBalanced()) {
+      return std::nullopt;
+    }
+    return FlexLineCount();
+  }
+
   float ResolvedFlexGrow(const ComputedStyle& box_style) const {
-    if (box_style.IsDeprecatedWebkitBox())
+    if (box_style.IsDeprecatedFlexbox()) {
       return BoxFlex() > 0 ? BoxFlex() : 0.0f;
+    }
     return FlexGrow();
   }
   float ResolvedFlexShrink(const ComputedStyle& box_style) const {
-    if (box_style.IsDeprecatedWebkitBox())
+    if (box_style.IsDeprecatedFlexbox()) {
       return BoxFlex() > 0 ? BoxFlex() : 0.0f;
+    }
     return FlexShrink();
   }
 
@@ -1265,21 +1096,9 @@ class ComputedStyle : public ComputedStyleBase,
     return MaskInternal().AnyLayerHasImage() ||
            MaskBoxImageInternal().HasImage();
   }
-  StyleImage* MaskImage() const { return MaskInternal().GetImage(); }
-  FillLayer& AccessMaskLayers() { return MutableMaskInternal(); }
   const FillLayer& MaskLayers() const { return MaskInternal(); }
   const NinePieceImage& MaskBoxImage() const { return MaskBoxImageInternal(); }
   bool MaskBoxImageSlicesFill() const { return MaskBoxImageInternal().Fill(); }
-  void AdjustMaskLayers() {
-    if (MaskLayers().Next()) {
-      AccessMaskLayers().CullEmptyLayers();
-      AccessMaskLayers().FillUnsetProperties();
-    }
-  }
-  void SetMaskBoxImage(const NinePieceImage& b) { SetMaskBoxImageInternal(b); }
-  void SetMaskBoxImageSlicesFill(bool fill) {
-    MutableMaskBoxImageInternal().SetFill(fill);
-  }
 
   // Text-combine utility functions.
   bool HasTextCombine() const { return TextCombine() != ETextCombine::kNone; }
@@ -1307,102 +1126,82 @@ class ComputedStyle : public ComputedStyleBase,
            kInternalAutoFlowAlgorithmDense;
   }
 
-  // align-content utility functions.
-  ContentPosition AlignContentPosition() const {
-    return AlignContent().GetPosition();
-  }
-  ContentDistributionType AlignContentDistribution() const {
-    return AlignContent().Distribution();
-  }
-  OverflowAlignment AlignContentOverflowAlignment() const {
-    return AlignContent().Overflow();
-  }
-  void SetAlignContentPosition(ContentPosition position) {
-    MutableAlignContentInternal().SetPosition(position);
-  }
-  void SetAlignContentDistribution(ContentDistributionType distribution) {
-    MutableAlignContentInternal().SetDistribution(distribution);
-  }
-  void SetAlignContentOverflow(OverflowAlignment overflow) {
-    MutableAlignContentInternal().SetOverflow(overflow);
+  // grid-template-*
+  const ComputedGridTrackList& GridTemplateColumns() const {
+    return ComputedGridTemplate(SpecifiedGridTemplateColumns());
   }
 
-  // justify-content utility functions.
-  ContentPosition JustifyContentPosition() const {
-    return JustifyContent().GetPosition();
-  }
-  ContentDistributionType JustifyContentDistribution() const {
-    return JustifyContent().Distribution();
-  }
-  OverflowAlignment JustifyContentOverflowAlignment() const {
-    return JustifyContent().Overflow();
-  }
-  void SetJustifyContentPosition(ContentPosition position) {
-    MutableJustifyContentInternal().SetPosition(position);
-  }
-  void SetJustifyContentDistribution(ContentDistributionType distribution) {
-    MutableJustifyContentInternal().SetDistribution(distribution);
-  }
-  void SetJustifyContentOverflow(OverflowAlignment overflow) {
-    MutableJustifyContentInternal().SetOverflow(overflow);
+  const ComputedGridTrackList& GridTemplateRows() const {
+    return ComputedGridTemplate(SpecifiedGridTemplateRows());
   }
 
-  // align-items utility functions.
-  ItemPosition AlignItemsPosition() const { return AlignItems().GetPosition(); }
-  OverflowAlignment AlignItemsOverflowAlignment() const {
-    return AlignItems().Overflow();
-  }
-  void SetAlignItemsPosition(ItemPosition position) {
-    MutableAlignItemsInternal().SetPosition(position);
-  }
-  void SetAlignItemsOverflow(OverflowAlignment overflow) {
-    MutableAlignItemsInternal().SetOverflow(overflow);
-  }
-
-  // justify-items utility functions.
-  ItemPosition JustifyItemsPosition() const {
-    return JustifyItems().GetPosition();
-  }
-  OverflowAlignment JustifyItemsOverflowAlignment() const {
-    return JustifyItems().Overflow();
-  }
-  ItemPositionType JustifyItemsPositionType() const {
-    return JustifyItems().PositionType();
-  }
-  void SetJustifyItemsPosition(ItemPosition position) {
-    MutableJustifyItemsInternal().SetPosition(position);
-  }
-  void SetJustifyItemsOverflow(OverflowAlignment overflow) {
-    MutableJustifyItemsInternal().SetOverflow(overflow);
-  }
-  void SetJustifyItemsPositionType(ItemPositionType position_type) {
-    MutableJustifyItemsInternal().SetPositionType(position_type);
+  // Grid Lanes utility functions.
+  GridTrackSizingDirection GridLanesTrackSizingDirection() const {
+    switch (GetGridLanesDirection().orientation) {
+      case kColumn:
+        return kForColumns;
+      case kNormal:
+        // The 'normal' keyword resolves to 'columns' or 'rows' depending on
+        // whether 'grid-template-columns' or 'grid-template-rows' was set
+        // (respectively), defaulting to columns if both or neither are set.
+        if (SpecifiedGridTemplateColumns()) {
+          return kForColumns;
+        } else if (SpecifiedGridTemplateRows()) {
+          return kForRows;
+        }
+        return kForColumns;
+      case kRow:
+        return kForRows;
+    }
+    NOTREACHED();
   }
 
-  // align-self utility functions.
-  ItemPosition AlignSelfPosition() const { return AlignSelf().GetPosition(); }
-  OverflowAlignment AlignSelfOverflowAlignment() const {
-    return AlignSelf().Overflow();
-  }
-  void SetAlignSelfPosition(ItemPosition position) {
-    MutableAlignSelfInternal().SetPosition(position);
-  }
-  void SetAlignSelfOverflow(OverflowAlignment overflow) {
-    MutableAlignSelfInternal().SetOverflow(overflow);
+  // If true, it changes the direction that tracks fill themselves; columns fill
+  // from bottom-up, rows fill rtl.
+  bool IsReverseGridLanesFillDirection() const {
+    return GetGridLanesDirection().is_fill_reverse;
   }
 
-  // justify-self utility functions.
-  ItemPosition JustifySelfPosition() const {
-    return JustifySelf().GetPosition();
+  // If true, it changes the order you choose tracks when they're tied and what
+  // direction the track cursor moves in; columns choose the rightmost and go
+  // left; rows choose the bottommost and go up.
+  bool IsReverseGridLanesTrackDirection() const {
+    return GetGridLanesDirection().is_track_reverse;
   }
-  OverflowAlignment JustifySelfOverflowAlignment() const {
-    return JustifySelf().Overflow();
+
+  bool IsGridLanesPackDense() const {
+    return GridLanesPack() == EGridLanesPack::kDense;
   }
-  void SetJustifySelfPosition(ItemPosition position) {
-    MutableJustifySelfInternal().SetPosition(position);
+
+  // Returns whether the given `track_direction` is an axis with grid tracks.
+  // For grid, both axes always have grid tracks. For grid-lanes, only the grid
+  // axis has grid tracks (the stacking axis does not).
+  bool HasGridTrackAxis(GridTrackSizingDirection track_direction) const {
+    if (IsDisplayGrid()) {
+      return true;
+    }
+    DCHECK(IsDisplayGridLanes());
+    return GridLanesTrackSizingDirection() == track_direction;
   }
-  void SetJustifySelfOverflow(OverflowAlignment overflow) {
-    MutableJustifySelfInternal().SetOverflow(overflow);
+
+  // Grid axis utility functions, usable in Grid and Grid Lanes.
+  const GridTrackList& AutoTracks(
+      GridTrackSizingDirection track_direction) const {
+    return (track_direction == kForColumns) ? GridAutoColumns()
+                                            : GridAutoRows();
+  }
+  const ComputedGridTrackList& TemplateTracks(
+      GridTrackSizingDirection track_direction) const {
+    return (track_direction == kForColumns) ? GridTemplateColumns()
+                                            : GridTemplateRows();
+  }
+  const GridPosition& TrackStart(
+      GridTrackSizingDirection track_direction) const {
+    return (track_direction == kForColumns) ? GridColumnStart()
+                                            : GridRowStart();
+  }
+  const GridPosition& TrackEnd(GridTrackSizingDirection track_direction) const {
+    return (track_direction == kForColumns) ? GridColumnEnd() : GridRowEnd();
   }
 
   // Writing mode utility functions.
@@ -1412,6 +1211,12 @@ class ComputedStyle : public ComputedStyleBase,
   bool IsHorizontalWritingMode() const {
     return blink::IsHorizontalWritingMode(GetWritingMode());
   }
+  bool IsVerticalWritingMode() const {
+    return blink::IsVerticalWritingMode(GetWritingMode());
+  }
+  bool IsHorizontalTypographicMode() const {
+    return blink::IsHorizontalTypographicMode(GetWritingMode());
+  }
   bool IsFlippedLinesWritingMode() const {
     return blink::IsFlippedLinesWritingMode(GetWritingMode());
   }
@@ -1420,22 +1225,25 @@ class ComputedStyle : public ComputedStyleBase,
   }
 
   // Will-change utility functions.
-  bool HasWillChangeCompositingHint() const;
-  bool HasWillChangeOpacityHint() const {
-    return WillChangeProperties().Contains(CSSPropertyID::kOpacity) ||
-           WillChangeProperties().Contains(CSSPropertyID::kAliasWebkitOpacity);
+  bool HasWillChangeProperty(CSSPropertyID id) const {
+    DCHECK(!IsPropertyAlias(id));
+    DCHECK_NE(id, CSSPropertyID::kInvalid);
+    DCHECK(!CSSProperty::Get(id).IsShorthand());
+    return WillChange() && WillChange()->resolved_longhand_ids.Has(id);
   }
-  bool HasWillChangeTransformHint() const;
-  bool HasWillChangeFilterHint() const {
-    return WillChangeProperties().Contains(CSSPropertyID::kFilter) ||
-           WillChangeProperties().Contains(CSSPropertyID::kAliasWebkitFilter);
+  bool HasWillChangeScrollPosition() const {
+    return WillChange() && WillChange()->has_scroll_position_value;
   }
-  bool HasWillChangeBackdropFilterHint() const {
-    return WillChangeProperties().Contains(CSSPropertyID::kBackdropFilter);
+  bool HasWillChangeTransformProperty() const {
+    return WillChange() && WillChange()->has_transform_property;
+  }
+  bool HasWillChangeAnyTransformProperty() const {
+    return WillChange() && WillChange()->has_any_transform_property;
   }
 
   // Hyphen utility functions.
   Hyphenation* GetHyphenation() const;
+  Hyphenation* GetHyphenationWithLimits() const;
   const AtomicString& HyphenString() const;
 
   // text-align utility functions.
@@ -1443,39 +1251,30 @@ class ComputedStyle : public ComputedStyleBase,
   ETextAlign GetTextAlign(bool is_last_line) const;
 
   // text-indent utility functions.
-  bool ShouldUseTextIndent(bool is_first_line,
-                           bool is_after_forced_break) const;
+  bool IsTextIndentEachLine() const {
+    return EnumHasFlags(GetTextIndentFlags(), TextIndentFlags::kEachLine);
+  }
+  bool IsTextIndentHanging() const {
+    return EnumHasFlags(GetTextIndentFlags(), TextIndentFlags::kHanging);
+  }
 
   // text-transform utility functions.
-  void ApplyTextTransform(String*, UChar previous_character = ' ') const;
+  [[nodiscard]] CORE_EXPORT String
+  ApplyTextTransform(const String&,
+                     UChar32 previous_character = ' ',
+                     TextOffsetMap* offset_map = nullptr) const;
 
   // Line-height utility functions.
-  const Length& SpecifiedLineHeight() const { return LineHeightInternal(); }
-  int ComputedLineHeight() const;
-  LayoutUnit ComputedLineHeightAsFixed() const;
+  static float ComputedLineHeight(const Length& line_height, const Font&);
+  float ComputedLineHeight() const;
+  CORE_EXPORT LayoutUnit ComputedLineHeightAsFixed() const;
   LayoutUnit ComputedLineHeightAsFixed(const Font& font) const;
 
-  // Width/height utility functions.
   const Length& LogicalWidth() const {
     return IsHorizontalWritingMode() ? Width() : Height();
   }
   const Length& LogicalHeight() const {
     return IsHorizontalWritingMode() ? Height() : Width();
-  }
-  void SetLogicalWidth(const Length& v) {
-    if (IsHorizontalWritingMode()) {
-      SetWidth(v);
-    } else {
-      SetHeight(v);
-    }
-  }
-
-  void SetLogicalHeight(const Length& v) {
-    if (IsHorizontalWritingMode()) {
-      SetHeight(v);
-    } else {
-      SetWidth(v);
-    }
   }
   const Length& LogicalMaxWidth() const {
     return IsHorizontalWritingMode() ? MaxWidth() : MaxHeight();
@@ -1490,129 +1289,84 @@ class ComputedStyle : public ComputedStyleBase,
     return IsHorizontalWritingMode() ? MinHeight() : MinWidth();
   }
 
+  const StyleIntrinsicLength& ContainIntrinsicInlineSize() const {
+    return IsHorizontalWritingMode() ? ContainIntrinsicWidth()
+                                     : ContainIntrinsicHeight();
+  }
+  const StyleIntrinsicLength& ContainIntrinsicBlockSize() const {
+    return IsHorizontalWritingMode() ? ContainIntrinsicHeight()
+                                     : ContainIntrinsicWidth();
+  }
+
+  StyleIntrinsicLength EffectiveContainIntrinsicWidth() const {
+    StyleIntrinsicLength length = ContainIntrinsicWidth();
+    if (HasSizeContainmentForViewTransitionScope() &&
+        RuntimeEnabledFeatures::ScopedViewTransitionSizeContainmentEnabled()) {
+      length.SetHasAuto();
+    }
+    return length;
+  }
+  StyleIntrinsicLength EffectiveContainIntrinsicHeight() const {
+    StyleIntrinsicLength length = ContainIntrinsicHeight();
+    if (HasSizeContainmentForViewTransitionScope() &&
+        RuntimeEnabledFeatures::ScopedViewTransitionSizeContainmentEnabled()) {
+      length.SetHasAuto();
+    }
+    return length;
+  }
+
+  StyleIntrinsicLength EffectiveContainIntrinsicInlineSize() const {
+    return IsHorizontalWritingMode() ? EffectiveContainIntrinsicWidth()
+                                     : EffectiveContainIntrinsicHeight();
+  }
+  StyleIntrinsicLength EffectiveContainIntrinsicBlockSize() const {
+    return IsHorizontalWritingMode() ? EffectiveContainIntrinsicHeight()
+                                     : EffectiveContainIntrinsicWidth();
+  }
+  bool IsResponsivelySized() const {
+    return FrameSizing() != EFrameSizing::kAuto;
+  }
+
   // Margin utility functions.
-  void SetMarginTop(const Length& v) {
-    if (MarginTop() != v) {
-      if (!v.IsZero() || v.IsAuto())
-        SetMayHaveMargin();
-      MutableMarginTopInternal() = v;
-    }
+  bool HasMarginBlockStartQuirk() const {
+    return MayHaveMargin() && MarginBlockStart().Quirk();
   }
-  void SetMarginRight(const Length& v) {
-    if (MarginRight() != v) {
-      if (!v.IsZero() || v.IsAuto())
-        SetMayHaveMargin();
-      MutableMarginRightInternal() = v;
-    }
+  bool HasMarginBlockEndQuirk() const {
+    return MayHaveMargin() && MarginBlockEnd().Quirk();
   }
-  void SetMarginBottom(const Length& v) {
-    if (MarginBottom() != v) {
-      if (!v.IsZero() || v.IsAuto())
-        SetMayHaveMargin();
-      MutableMarginBottomInternal() = v;
-    }
+  const Length& MarginBlockStart() const {
+    return MarginBlockStartUsing(*this);
   }
-  void SetMarginLeft(const Length& v) {
-    if (MarginLeft() != v) {
-      if (!v.IsZero() || v.IsAuto())
-        SetMayHaveMargin();
-      MutableMarginLeftInternal() = v;
-    }
+  const Length& MarginBlockEnd() const { return MarginBlockEndUsing(*this); }
+  const Length& MarginInlineStart() const {
+    return MarginInlineStartUsing(*this);
   }
-  bool HasMarginBeforeQuirk() const {
-    return MayHaveMargin() && MarginBefore().Quirk();
+  const Length& MarginInlineEnd() const { return MarginInlineEndUsing(*this); }
+  const Length& MarginInlineStartUsing(const ComputedStyle& other) const {
+    return PhysicalMarginToLogical(other).InlineStart();
   }
-  bool HasMarginAfterQuirk() const {
-    return MayHaveMargin() && MarginAfter().Quirk();
+  const Length& MarginInlineEndUsing(const ComputedStyle& other) const {
+    return PhysicalMarginToLogical(other).InlineEnd();
   }
-  const Length& MarginBefore() const { return MarginBeforeUsing(*this); }
-  const Length& MarginAfter() const { return MarginAfterUsing(*this); }
-  const Length& MarginStart() const { return MarginStartUsing(*this); }
-  const Length& MarginEnd() const { return MarginEndUsing(*this); }
-  const Length& MarginOver() const {
-    return PhysicalMarginToLogical(*this).Over();
+  const Length& MarginBlockStartUsing(const ComputedStyle& other) const {
+    return PhysicalMarginToLogical(other).BlockStart();
   }
-  const Length& MarginUnder() const {
-    return PhysicalMarginToLogical(*this).Under();
-  }
-  const Length& MarginStartUsing(const ComputedStyle& other) const {
-    return PhysicalMarginToLogical(other).Start();
-  }
-  const Length& MarginEndUsing(const ComputedStyle& other) const {
-    return PhysicalMarginToLogical(other).End();
-  }
-  const Length& MarginBeforeUsing(const ComputedStyle& other) const {
-    return PhysicalMarginToLogical(other).Before();
-  }
-  const Length& MarginAfterUsing(const ComputedStyle& other) const {
-    return PhysicalMarginToLogical(other).After();
-  }
-  void SetMarginStart(const Length&);
-  void SetMarginEnd(const Length&);
-  bool MarginEqual(const ComputedStyle& other) const {
-    return MarginTop() == other.MarginTop() &&
-           MarginLeft() == other.MarginLeft() &&
-           MarginRight() == other.MarginRight() &&
-           MarginBottom() == other.MarginBottom();
+  const Length& MarginBlockEndUsing(const ComputedStyle& other) const {
+    return PhysicalMarginToLogical(other).BlockEnd();
   }
 
   // Padding utility functions.
-  void SetPaddingTop(const Length& v) {
-    if (PaddingTop() != v) {
-      if (!v.IsZero())
-        SetMayHavePadding();
-      MutablePaddingTopInternal() = v;
-    }
+  const Length& PaddingBlockStart() const {
+    return PhysicalPaddingToLogical().BlockStart();
   }
-  void SetPaddingRight(const Length& v) {
-    if (PaddingRight() != v) {
-      if (!v.IsZero())
-        SetMayHavePadding();
-      MutablePaddingRightInternal() = v;
-    }
+  const Length& PaddingBlockEnd() const {
+    return PhysicalPaddingToLogical().BlockEnd();
   }
-  void SetPaddingBottom(const Length& v) {
-    if (PaddingBottom() != v) {
-      if (!v.IsZero())
-        SetMayHavePadding();
-      MutablePaddingBottomInternal() = v;
-    }
+  const Length& PaddingInlineStart() const {
+    return PhysicalPaddingToLogical().InlineStart();
   }
-  void SetPaddingLeft(const Length& v) {
-    if (PaddingLeft() != v) {
-      if (!v.IsZero())
-        SetMayHavePadding();
-      MutablePaddingLeftInternal() = v;
-    }
-  }
-
-  const Length& PaddingBefore() const {
-    return PhysicalPaddingToLogical().Before();
-  }
-  const Length& PaddingAfter() const {
-    return PhysicalPaddingToLogical().After();
-  }
-  const Length& PaddingStart() const {
-    return PhysicalPaddingToLogical().Start();
-  }
-  const Length& PaddingEnd() const { return PhysicalPaddingToLogical().End(); }
-  const Length& PaddingOver() const {
-    return PhysicalPaddingToLogical().Over();
-  }
-  const Length& PaddingUnder() const {
-    return PhysicalPaddingToLogical().Under();
-  }
-  void ResetPadding() {
-    SetPaddingTop(Length::Fixed());
-    SetPaddingBottom(Length::Fixed());
-    SetPaddingLeft(Length::Fixed());
-    SetPaddingRight(Length::Fixed());
-  }
-  void SetPadding(const LengthBox& b) {
-    SetPaddingTop(b.top_);
-    SetPaddingBottom(b.bottom_);
-    SetPaddingLeft(b.left_);
-    SetPaddingRight(b.right_);
+  const Length& PaddingInlineEnd() const {
+    return PhysicalPaddingToLogical().InlineEnd();
   }
   bool PaddingEqual(const ComputedStyle& other) const {
     return PaddingTop() == other.PaddingTop() &&
@@ -1626,32 +1380,16 @@ class ComputedStyle : public ComputedStyleBase,
   }
 
   // Border utility functions
-  LayoutRectOutsets ImageOutsets(const NinePieceImage&) const;
+  PhysicalBoxStrut ImageOutsets(const NinePieceImage&) const;
   bool HasBorderImageOutsets() const {
     return BorderImage().HasImage() && BorderImage().Outset().NonZero();
   }
-  LayoutRectOutsets BorderImageOutsets() const {
+  PhysicalBoxStrut BorderImageOutsets() const {
     return ImageOutsets(BorderImage());
   }
   bool BorderImageSlicesFill() const { return BorderImage().Fill(); }
 
-  void SetBorderImageSlicesFill(bool);
-  const BorderValue BorderLeft() const {
-    return BorderValue(BorderLeftStyle(), BorderLeftColor(),
-                       BorderLeftWidthInternal());
-  }
-  const BorderValue BorderRight() const {
-    return BorderValue(BorderRightStyle(), BorderRightColor(),
-                       BorderRightWidthInternal());
-  }
-  const BorderValue BorderTop() const {
-    return BorderValue(BorderTopStyle(), BorderTopColor(),
-                       BorderTopWidthInternal());
-  }
-  const BorderValue BorderBottom() const {
-    return BorderValue(BorderBottomStyle(), BorderBottomColor(),
-                       BorderBottomWidthInternal());
-  }
+  bool HasBorderShape() const { return BorderShape(); }
 
   bool BorderSizeEquals(const ComputedStyle& o) const {
     return BorderLeftWidth() == o.BorderLeftWidth() &&
@@ -1660,253 +1398,103 @@ class ComputedStyle : public ComputedStyleBase,
            BorderBottomWidth() == o.BorderBottomWidth();
   }
 
-  BorderValue BorderBeforeUsing(const ComputedStyle& other) const {
-    return PhysicalBorderToLogical(other).Before();
+  int BorderBlockEndWidth() const {
+    return PhysicalBorderWidthToLogical().BlockEnd();
   }
-  BorderValue BorderAfterUsing(const ComputedStyle& other) const {
-    return PhysicalBorderToLogical(other).After();
+  int BorderBlockStartWidth() const {
+    return PhysicalBorderWidthToLogical().BlockStart();
   }
-  BorderValue BorderStartUsing(const ComputedStyle& other) const {
-    return PhysicalBorderToLogical(other).Start();
+  int BorderInlineEndWidth() const {
+    return PhysicalBorderWidthToLogical().InlineEnd();
   }
-  BorderValue BorderEndUsing(const ComputedStyle& other) const {
-    return PhysicalBorderToLogical(other).End();
-  }
-
-  BorderValue BorderBefore() const { return BorderBeforeUsing(*this); }
-  BorderValue BorderAfter() const { return BorderAfterUsing(*this); }
-  BorderValue BorderStart() const { return BorderStartUsing(*this); }
-  BorderValue BorderEnd() const { return BorderEndUsing(*this); }
-
-  LayoutUnit BorderAfterWidth() const {
-    return PhysicalBorderWidthToLogical().After();
-  }
-  LayoutUnit BorderBeforeWidth() const {
-    return PhysicalBorderWidthToLogical().Before();
-  }
-  LayoutUnit BorderEndWidth() const {
-    return PhysicalBorderWidthToLogical().End();
-  }
-  LayoutUnit BorderStartWidth() const {
-    return PhysicalBorderWidthToLogical().Start();
-  }
-  LayoutUnit BorderOverWidth() const {
-    return PhysicalBorderWidthToLogical().Over();
-  }
-  LayoutUnit BorderUnderWidth() const {
-    return PhysicalBorderWidthToLogical().Under();
+  int BorderInlineStartWidth() const {
+    return PhysicalBorderWidthToLogical().InlineStart();
   }
 
-  EBorderStyle BorderAfterStyle() const {
-    return PhysicalBorderStyleToLogical().After();
-  }
-  EBorderStyle BorderBeforeStyle() const {
-    return PhysicalBorderStyleToLogical().Before();
-  }
-  EBorderStyle BorderEndStyle() const {
-    return PhysicalBorderStyleToLogical().End();
-  }
-  EBorderStyle BorderStartStyle() const {
-    return PhysicalBorderStyleToLogical().Start();
-  }
-
-  bool HasBorderFill() const {
-    return BorderImage().HasImage() && BorderImage().Fill();
-  }
   bool HasBorder() const {
-    return BorderLeftNonZero() || BorderRightNonZero() || BorderTopNonZero() ||
-           BorderBottomNonZero();
+    return BorderLeftWidth() || BorderRightWidth() || BorderTopWidth() ||
+           BorderBottomWidth();
   }
-  bool HasBorderDecoration() const { return HasBorder() || HasBorderFill(); }
+  bool HasBorderDecoration() const {
+    return HasBorder() || BorderImage().HasImage() || HasBorderShape();
+  }
   bool HasBorderRadius() const {
-    if (!BorderTopLeftRadius().Width().IsZero())
+    if (HasBorderShape()) {
+      return false;
+    }
+    if (!BorderTopLeftRadius().Width().IsZero()) {
       return true;
-    if (!BorderTopRightRadius().Width().IsZero())
+    }
+    if (!BorderTopRightRadius().Width().IsZero()) {
       return true;
-    if (!BorderBottomLeftRadius().Width().IsZero())
+    }
+    if (!BorderBottomLeftRadius().Width().IsZero()) {
       return true;
-    if (!BorderBottomRightRadius().Width().IsZero())
+    }
+    if (!BorderBottomRightRadius().Width().IsZero()) {
       return true;
+    }
     return false;
-  }
-  bool HasBorderColorReferencingCurrentColor() const {
-    return (BorderLeftNonZero() && BorderLeftColor().IsCurrentColor()) ||
-           (BorderRightNonZero() && BorderRightColor().IsCurrentColor()) ||
-           (BorderTopNonZero() && BorderTopColor().IsCurrentColor()) ||
-           (BorderBottomNonZero() && BorderBottomColor().IsCurrentColor());
-  }
-
-  bool RadiiEqual(const ComputedStyle& o) const {
-    return BorderTopLeftRadius() == o.BorderTopLeftRadius() &&
-           BorderTopRightRadius() == o.BorderTopRightRadius() &&
-           BorderBottomLeftRadius() == o.BorderBottomLeftRadius() &&
-           BorderBottomRightRadius() == o.BorderBottomRightRadius();
-  }
-
-  bool BorderLeftEquals(const ComputedStyle& o) const {
-    return BorderLeftWidthInternal() == o.BorderLeftWidthInternal() &&
-           BorderLeftStyle() == o.BorderLeftStyle() &&
-           BorderLeftColor() == o.BorderLeftColor();
-  }
-  bool BorderLeftEquals(const BorderValue& o) const {
-    return BorderLeftWidthInternal() == o.Width() &&
-           BorderLeftStyle() == o.Style() && BorderLeftColor() == o.GetColor();
-  }
-
-  bool BorderLeftVisuallyEqual(const ComputedStyle& o) const {
-    if (BorderLeftStyle() == EBorderStyle::kNone &&
-        o.BorderLeftStyle() == EBorderStyle::kNone)
-      return true;
-    if (BorderLeftStyle() == EBorderStyle::kHidden &&
-        o.BorderLeftStyle() == EBorderStyle::kHidden)
-      return true;
-    return BorderLeftEquals(o);
-  }
-
-  bool BorderRightEquals(const ComputedStyle& o) const {
-    return BorderRightWidthInternal() == o.BorderRightWidthInternal() &&
-           BorderRightStyle() == o.BorderRightStyle() &&
-           BorderRightColor() == o.BorderRightColor();
-  }
-  bool BorderRightEquals(const BorderValue& o) const {
-    return BorderRightWidthInternal() == o.Width() &&
-           BorderRightStyle() == o.Style() &&
-           BorderRightColor() == o.GetColor();
-  }
-
-  bool BorderRightVisuallyEqual(const ComputedStyle& o) const {
-    if (BorderRightStyle() == EBorderStyle::kNone &&
-        o.BorderRightStyle() == EBorderStyle::kNone)
-      return true;
-    if (BorderRightStyle() == EBorderStyle::kHidden &&
-        o.BorderRightStyle() == EBorderStyle::kHidden)
-      return true;
-    return BorderRightEquals(o);
-  }
-
-  bool BorderTopVisuallyEqual(const ComputedStyle& o) const {
-    if (BorderTopStyle() == EBorderStyle::kNone &&
-        o.BorderTopStyle() == EBorderStyle::kNone)
-      return true;
-    if (BorderTopStyle() == EBorderStyle::kHidden &&
-        o.BorderTopStyle() == EBorderStyle::kHidden)
-      return true;
-    return BorderTopEquals(o);
-  }
-
-  bool BorderTopEquals(const ComputedStyle& o) const {
-    return BorderTopWidthInternal() == o.BorderTopWidthInternal() &&
-           BorderTopStyle() == o.BorderTopStyle() &&
-           BorderTopColor() == o.BorderTopColor();
-  }
-  bool BorderTopEquals(const BorderValue& o) const {
-    return BorderTopWidthInternal() == o.Width() &&
-           BorderTopStyle() == o.Style() && BorderTopColor() == o.GetColor();
-  }
-
-  bool BorderBottomVisuallyEqual(const ComputedStyle& o) const {
-    if (BorderBottomStyle() == EBorderStyle::kNone &&
-        o.BorderBottomStyle() == EBorderStyle::kNone)
-      return true;
-    if (BorderBottomStyle() == EBorderStyle::kHidden &&
-        o.BorderBottomStyle() == EBorderStyle::kHidden)
-      return true;
-    return BorderBottomEquals(o);
-  }
-
-  bool BorderBottomEquals(const ComputedStyle& o) const {
-    return BorderBottomWidthInternal() == o.BorderBottomWidthInternal() &&
-           BorderBottomStyle() == o.BorderBottomStyle() &&
-           BorderBottomColor() == o.BorderBottomColor();
-  }
-  bool BorderBottomEquals(const BorderValue& o) const {
-    return BorderBottomWidthInternal() == o.Width() &&
-           BorderBottomStyle() == o.Style() &&
-           BorderBottomColor() == o.GetColor();
-  }
-
-  bool BorderEquals(const ComputedStyle& o) const {
-    return BorderLeftEquals(o) && BorderRightEquals(o) && BorderTopEquals(o) &&
-           BorderBottomEquals(o) && BorderImage() == o.BorderImage();
   }
 
   bool BorderVisuallyEqual(const ComputedStyle& o) const {
-    return BorderLeftVisuallyEqual(o) && BorderRightVisuallyEqual(o) &&
-           BorderTopVisuallyEqual(o) && BorderBottomVisuallyEqual(o) &&
-           BorderImage() == o.BorderImage();
+    auto BorderSideVisuallyEqual =
+        [&](const StyleColor& color, const StyleColor& other_color,
+            EBorderStyle style, EBorderStyle other_style, int width,
+            int other_width) -> bool {
+      if (style == EBorderStyle::kNone && other_style == EBorderStyle::kNone) {
+        if (!HasBorderShape() && !o.HasBorderShape()) {
+          return true;
+        }
+      }
+      if (style == EBorderStyle::kHidden &&
+          other_style == EBorderStyle::kHidden) {
+        return true;
+      }
+      return width == other_width && style == other_style &&
+             ResolvedColor(color) == o.ResolvedColor(other_color);
+    };
+
+    return BorderSideVisuallyEqual(BorderTopColor(), o.BorderTopColor(),
+                                   BorderTopStyle(), o.BorderTopStyle(),
+                                   SpecifiedBorderTopWidth(),
+                                   o.SpecifiedBorderTopWidth()) &&
+           BorderSideVisuallyEqual(BorderRightColor(), o.BorderRightColor(),
+                                   BorderRightStyle(), o.BorderRightStyle(),
+                                   SpecifiedBorderRightWidth(),
+                                   o.SpecifiedBorderRightWidth()) &&
+           BorderSideVisuallyEqual(BorderBottomColor(), o.BorderBottomColor(),
+                                   BorderBottomStyle(), o.BorderBottomStyle(),
+                                   SpecifiedBorderBottomWidth(),
+                                   o.SpecifiedBorderBottomWidth()) &&
+           BorderSideVisuallyEqual(BorderLeftColor(), o.BorderLeftColor(),
+                                   BorderLeftStyle(), o.BorderLeftStyle(),
+                                   SpecifiedBorderLeftWidth(),
+                                   o.SpecifiedBorderLeftWidth()) &&
+           BorderImage() == o.BorderImage() &&
+           base::ValuesEquivalent(BorderShape(), o.BorderShape());
   }
 
   bool BorderVisualOverflowEqual(const ComputedStyle& o) const {
     return BorderImage().Outset() == o.BorderImage().Outset();
   }
 
-  CORE_EXPORT void AdjustDiffForBackgroundVisuallyEqual(
-      const ComputedStyle& o,
-      StyleDifference& diff) const;
-
-  void ResetBorder() {
-    ResetBorderImage();
-    ResetBorderTop();
-    ResetBorderRight();
-    ResetBorderBottom();
-    ResetBorderLeft();
-    ResetBorderTopLeftRadius();
-    ResetBorderTopRightRadius();
-    ResetBorderBottomLeftRadius();
-    ResetBorderBottomRightRadius();
-  }
-
-  void ResetBorderTop() {
-    SetBorderTopStyle(EBorderStyle::kNone);
-    SetBorderTopWidth(3);
-    SetBorderTopColorInternal(StyleColor::CurrentColor());
-  }
-  void ResetBorderRight() {
-    SetBorderRightStyle(EBorderStyle::kNone);
-    SetBorderRightWidth(3);
-    SetBorderRightColorInternal(StyleColor::CurrentColor());
-  }
-  void ResetBorderBottom() {
-    SetBorderBottomStyle(EBorderStyle::kNone);
-    SetBorderBottomWidth(3);
-    SetBorderBottomColorInternal(StyleColor::CurrentColor());
-  }
-  void ResetBorderLeft() {
-    SetBorderLeftStyle(EBorderStyle::kNone);
-    SetBorderLeftWidth(3);
-    SetBorderLeftColorInternal(StyleColor::CurrentColor());
-  }
-
-  void SetBorderRadius(const LengthSize& s) {
-    SetBorderTopLeftRadius(s);
-    SetBorderTopRightRadius(s);
-    SetBorderBottomLeftRadius(s);
-    SetBorderBottomRightRadius(s);
-  }
-  void SetBorderRadius(const IntSize& s) {
-    SetBorderRadius(
-        LengthSize(Length::Fixed(s.Width()), Length::Fixed(s.Height())));
-  }
-
   bool CanRenderBorderImage() const;
 
   // Float utility functions.
-  bool IsFloating() const { return FloatingInternal() != EFloat::kNone; }
-  EFloat UnresolvedFloating() const { return FloatingInternal(); }
+  bool IsFloating() const { return Floating() != EFloat::kNone; }
 
   EFloat Floating(const ComputedStyle& cb_style) const {
     return Floating(cb_style.Direction());
   }
 
   EFloat Floating(TextDirection cb_direction) const {
-    const EFloat value = FloatingInternal();
+    const EFloat value = Floating();
     switch (value) {
       case EFloat::kInlineStart:
-      case EFloat::kInlineEnd: {
-        return IsLtr(cb_direction) == (value == EFloat::kInlineStart)
-                   ? EFloat::kLeft
-                   : EFloat::kRight;
-      }
+        return IsLtr(cb_direction) ? EFloat::kLeft : EFloat::kRight;
+      case EFloat::kInlineEnd:
+        return IsLtr(cb_direction) ? EFloat::kRight : EFloat::kLeft;
       default:
         return value;
     }
@@ -1917,7 +1505,8 @@ class ComputedStyle : public ComputedStyleBase,
 
   // Motion utility functions.
   bool HasOffset() const {
-    return !OffsetPosition().X().IsAuto() || OffsetPath();
+    return (!OffsetPosition().X().IsAuto() && !OffsetPosition().X().IsNone()) ||
+           OffsetPath();
   }
 
   // Direction utility functions.
@@ -1935,60 +1524,68 @@ class ComputedStyle : public ComputedStyleBase,
 
   // Outline utility functions.
   // HasOutline is insufficient to determine whether Node has an outline.
-  // Use NGOutlineUtils::HasPaintedOutline instead.
+  // Use HasPaintedOutline() instead.
   bool HasOutline() const {
-    return OutlineWidth() > 0 && OutlineStyle() > EBorderStyle::kHidden;
+    if (OutlineWidth() <= 0) {
+      return OutlineStyleIsAuto() &&
+             RuntimeEnabledFeatures::OutlineDrawAutoStyleZeroWidthEnabled();
+    }
+    return OutlineStyle() > EBorderStyle::kHidden;
   }
-  CORE_EXPORT int OutlineOutsetExtent() const;
-  CORE_EXPORT float GetOutlineStrokeWidthForFocusRing() const;
   bool HasOutlineWithCurrentColor() const {
-    return HasOutline() && OutlineColor().IsCurrentColor();
+    return HasOutline() && OutlineColor().DependsOnCurrentColor();
   }
 
   // Position utility functions.
+  static bool HasOutOfFlowPosition(EPosition position) {
+    return position == EPosition::kAbsolute || position == EPosition::kFixed;
+  }
   bool HasOutOfFlowPosition() const {
-    return GetPosition() == EPosition::kAbsolute ||
-           GetPosition() == EPosition::kFixed;
-  }
-  bool HasInFlowPosition() const {
-    return GetPosition() == EPosition::kRelative ||
-           GetPosition() == EPosition::kSticky;
-  }
-  bool HasViewportConstrainedPosition() const {
-    return GetPosition() == EPosition::kFixed;
+    return HasOutOfFlowPosition(GetPosition());
   }
   bool HasStickyConstrainedPosition() const {
     return GetPosition() == EPosition::kSticky &&
            (!Top().IsAuto() || !Left().IsAuto() || !Right().IsAuto() ||
             !Bottom().IsAuto());
   }
-  EPosition GetPosition() const {
+  static EPosition GetPosition(EDisplay display, EPosition position_internal) {
     // Applied sticky position is static for table columns and column groups.
-    if (PositionInternal() == EPosition::kSticky &&
-        (Display() == EDisplay::kTableColumnGroup ||
-         Display() == EDisplay::kTableColumn)) {
+    if (position_internal == EPosition::kSticky &&
+        (display == EDisplay::kTableColumnGroup ||
+         display == EDisplay::kTableColumn)) {
       return EPosition::kStatic;
     }
-    return PositionInternal();
+    return position_internal;
+  }
+  EPosition GetPosition() const {
+    return GetPosition(Display(), PositionInternal());
+  }
+
+  DefaultAnchorData GetDefaultAnchorData() const {
+    return DefaultAnchorData(PositionAnchor(), GetPositionArea());
+  }
+
+  bool ReferencesDefaultAnchor() const {
+    return !GetPositionArea().IsNone() ||
+           AlignSelf().GetComputedPosition() == ItemPosition::kAnchorCenter ||
+           JustifySelf().GetComputedPosition() == ItemPosition::kAnchorCenter ||
+           HasDefaultAnchorFunctions();
   }
 
   // Clear utility functions.
-  bool HasClear() const { return ClearInternal() != EClear::kNone; }
-  EClear UnresolvedClear() const { return ClearInternal(); }
+  bool HasClear() const { return Clear() != EClear::kNone; }
 
   EClear Clear(const ComputedStyle& cb_style) const {
     return Clear(cb_style.Direction());
   }
 
   EClear Clear(TextDirection cb_direction) const {
-    const EClear value = ClearInternal();
+    const EClear value = Clear();
     switch (value) {
       case EClear::kInlineStart:
-      case EClear::kInlineEnd: {
-        return IsLtr(cb_direction) == (value == EClear::kInlineStart)
-                   ? EClear::kLeft
-                   : EClear::kRight;
-      }
+        return IsLtr(cb_direction) ? EClear::kLeft : EClear::kRight;
+      case EClear::kInlineEnd:
+        return IsLtr(cb_direction) ? EClear::kRight : EClear::kLeft;
       default:
         return value;
     }
@@ -2000,186 +1597,356 @@ class ComputedStyle : public ComputedStyleBase,
   const Length& ClipTop() const { return Clip().Top(); }
   const Length& ClipBottom() const { return Clip().Bottom(); }
 
-  // Offset utility functions.
-  // Accessors for positioned object edges that take into account writing mode.
-  const Length& LogicalInlineStart() const {
-    return PhysicalBoundsToLogical().InlineStart();
-  }
-  const Length& LogicalInlineEnd() const {
-    return PhysicalBoundsToLogical().InlineEnd();
-  }
-  const Length& LogicalLeft() const {
-    return PhysicalBoundsToLogical().LineLeft();
-  }
-  const Length& LogicalRight() const {
-    return PhysicalBoundsToLogical().LineRight();
-  }
-  const Length& LogicalTop() const {
-    return PhysicalBoundsToLogical().Before();
-  }
-  const Length& LogicalBottom() const {
-    return PhysicalBoundsToLogical().After();
-  }
-  bool OffsetEqual(const ComputedStyle& other) const {
-    return Left() == other.Left() && Right() == other.Right() &&
-           Top() == other.Top() && Bottom() == other.Bottom();
-  }
-
   // Whether or not a positioned element requires normal flow x/y to be computed
   // to determine its position.
-  bool HasAutoLeftAndRight() const {
+  bool HasAutoLeftAndRightIgnoringPositionArea() const {
     return Left().IsAuto() && Right().IsAuto();
   }
-  bool HasAutoTopAndBottom() const {
+  bool HasAutoTopAndBottomIgnoringPositionArea() const {
     return Top().IsAuto() && Bottom().IsAuto();
   }
-  bool HasStaticInlinePosition(bool horizontal) const {
-    return horizontal ? HasAutoLeftAndRight() : HasAutoTopAndBottom();
+
+  // Whether an inset is considered 'auto' for anchor-positioning position
+  // fallback calculation purposes.
+  // https://drafts.csswg.org/css-anchor-position-1/#determine-the-position-fallback-styles
+  bool IsTopInsetNonAuto() const {
+    return !Top().IsAuto() || (PositionAreaOffsets() &&
+                               !PositionAreaOffsets()->behaves_as_auto.top);
   }
-  bool HasStaticBlockPosition(bool horizontal) const {
-    return horizontal ? HasAutoTopAndBottom() : HasAutoLeftAndRight();
+  bool IsRightInsetNonAuto() const {
+    return !Right().IsAuto() || (PositionAreaOffsets() &&
+                                 !PositionAreaOffsets()->behaves_as_auto.right);
+  }
+  bool IsBottomInsetNonAuto() const {
+    return !Bottom().IsAuto() ||
+           (PositionAreaOffsets() &&
+            !PositionAreaOffsets()->behaves_as_auto.bottom);
+  }
+  bool IsLeftInsetNonAuto() const {
+    return !Left().IsAuto() || (PositionAreaOffsets() &&
+                                !PositionAreaOffsets()->behaves_as_auto.left);
   }
 
   // Content utility functions.
   bool ContentDataEquivalent(const ComputedStyle& other) const {
-    return DataEquivalent(GetContentData(), other.GetContentData());
+    return base::ValuesEquivalent(GetContentData(), other.GetContentData());
   }
 
   // Contain utility functions.
   //
   // Containment can be enabled from a variety of sources, not just the
-  // 'contain' property itself. The return values represent whether or not
-  // we should enable containment of a given type, taking those different
-  // sources into account.
+  // 'contain' property itself. The "effective containment" represents whether
+  //  or not we should enable containment of a given type, taking those
+  //  different sources into account.
   //
-  // Note that even with a return value of |true|, containment may still not
-  // be applied if the layout object is ineligible for the given containment
-  // type. See |LayoutObject::IsEligibleForSizeContainment| and similar
-  // functions.
+  // Note that even a certain type of containment appears to be in effect from
+  // the perspective of ComputedStyle, containment may still not be applied if
+  // the LayoutObject is ineligible for the given containment type. See
+  // |LayoutObject::IsEligibleForSizeContainment| and similar functions.
 
-  bool ContainsPaint() const { return Contain() & kContainsPaint; }
-  bool ContainsStyle() const {
-    return (Contain() & kContainsStyle) || IsInlineOrBlockSizeContainer();
+  static unsigned EffectiveContainment(
+      unsigned contain,
+      unsigned container_type,
+      EContentVisibility content_visibility,
+      bool skips_contents,
+      bool has_size_containment_for_vt_scope,
+      EOverscrollContainerType overscroll_container_type,
+      bool has_layout_containment_for_vt_scope) {
+    unsigned effective = contain;
+
+    if (container_type & kContainerTypeInlineSize) {
+      effective |= kContainsStyle;
+      effective |= kContainsInlineSize;
+    }
+    if (container_type & kContainerTypeBlockSize) {
+      effective |= kContainsStyle;
+      effective |= kContainsBlockSize;
+    }
+    if (container_type & kContainerTypeAnchored) {
+      effective |= kContainsStyle;
+    }
+    if (!IsContentVisibilityVisible(content_visibility)) {
+      effective |= kContainsStyle;
+      effective |= kContainsLayout;
+      effective |= kContainsPaint;
+    }
+    if (skips_contents || (has_size_containment_for_vt_scope &&
+                           RuntimeEnabledFeatures::
+                               ScopedViewTransitionSizeContainmentEnabled())) {
+      effective |= kContainsSize;
+    }
+    if (overscroll_container_type != EOverscrollContainerType::kNone) {
+      // TODO(crbug.com/467112943): Layout containment is currently forced to
+      // ensure that the container of the overscroll areas actually contains
+      // the overscroll areas. However, requiring layout containment is
+      // overly restrictive to the child content that can be used within
+      // the scroller. We should remove this requirement while ensuring they are
+      // layout children of the container element.
+      effective |= kContainsLayout;
+    }
+
+    if (has_layout_containment_for_vt_scope) {
+      effective |= kContainsLayout;
+    }
+
+    return effective;
   }
+
+  unsigned EffectiveContainment() const {
+    return ComputedStyle::EffectiveContainment(
+        Contain(), ContainerType(), ContentVisibility(), SkipsContents(),
+        HasSizeContainmentForViewTransitionScope() &&
+            RuntimeEnabledFeatures::
+                ScopedViewTransitionSizeContainmentEnabled(),
+        EffectiveOverscrollContainerType(),
+        HasLayoutContainmentForViewTransitionScope());
+  }
+
+  bool ContainsStyle() const { return EffectiveContainment() & kContainsStyle; }
+  bool ContainsPaint() const { return EffectiveContainment() & kContainsPaint; }
   bool ContainsLayout() const {
-    return (Contain() & kContainsLayout) || IsInlineOrBlockSizeContainer();
+    return EffectiveContainment() & kContainsLayout;
   }
   bool ContainsSize() const {
-    return ((Contain() & kContainsSize) == kContainsSize) ||
-           IsInlineAndBlockSizeContainer();
+    return (EffectiveContainment() & kContainsSize) == kContainsSize;
   }
   bool ContainsInlineSize() const {
-    return (Contain() & kContainsInlineSize) || IsInlineSizeContainer();
+    return EffectiveContainment() & kContainsInlineSize;
   }
   bool ContainsBlockSize() const {
-    return (Contain() & kContainsBlockSize) || IsBlockSizeContainer();
+    return EffectiveContainment() & kContainsBlockSize;
   }
-  CORE_EXPORT bool ShouldApplyAnyContainment(const Element& element) const;
+  bool ContainsAnySize() const {
+    return EffectiveContainment() & kContainsSize;
+  }
 
-  bool IsContainerForContainerQueries() const {
-    return (StyleType() == kPseudoIdNone) &&
-           (ContainsStyle() && ContainsLayout() &&
-            (ContainsInlineSize() || ContainsBlockSize()));
+  CORE_EXPORT static bool ShouldApplyAnyContainment(
+      const Element& element,
+      const DisplayStyle&,
+      unsigned effective_containment);
+
+  CORE_EXPORT bool ShouldApplyAnyContainment(const Element& element) const {
+    return ShouldApplyAnyContainment(element, GetDisplayStyle(),
+                                     EffectiveContainment());
   }
+
+  // Return true if an element can match size container queries. In addition to
+  // checking if it has a size container-type, we check if we are never able to
+  // reach BlockNode::Layout() for legacy layout objects or SVG elements.
+  bool CanMatchSizeContainerQueries(const Element& element) const;
+
+  bool IsContainerForSizeContainerQueries() const {
+    return IsInlineOrBlockSizeContainer() && StyleType() == kPseudoIdNone;
+  }
+
+  bool IsContainerForScrollStateContainerQueries() const {
+    return IsScrollStateContainer() && StyleType() == kPseudoIdNone;
+  }
+
+  bool IsContainerForAnchoredContainerQueries() const {
+    return IsAnchoredContainer() && StyleType() == kPseudoIdNone;
+  }
+
+  bool DependsOnContainerQueries() const {
+    return DependsOnSizeContainerQueries() ||
+           DependsOnStyleContainerQueries() ||
+           DependsOnScrollStateContainerQueries() ||
+           DependsOnAnchoredContainerQueries();
+  }
+
+  static bool IsContentVisibilityVisible(
+      EContentVisibility content_visibility) {
+    return content_visibility == EContentVisibility::kVisible;
+  }
+
+  bool IsContentVisibilityVisible() const {
+    return IsContentVisibilityVisible(ContentVisibility());
+  }
+
+  // Interleaving roots are elements that may require layout to fully update
+  // the style of their descendants.
+  static bool IsInterleavingRoot(const ComputedStyle*);
 
   // Display utility functions.
-  bool IsDisplayReplacedType() const {
-    return IsDisplayReplacedType(Display());
+  bool IsAtomicInlineDisplayType() const {
+    return IsAtomicInlineDisplayType(Display());
   }
   bool IsDisplayInlineType() const { return IsDisplayInlineType(Display()); }
-  bool IsOriginalDisplayInlineType() const {
-    return IsDisplayInlineType(OriginalDisplay());
+  bool IsNonAtomicInlineDisplayType() const {
+    return IsNonAtomicInlineDisplayType(Display());
   }
   bool IsDisplayBlockContainer() const {
     return IsDisplayBlockContainer(Display());
   }
-  bool IsDisplayTableBox() const { return IsDisplayTableBox(Display()); }
-  bool IsDisplayFlexibleBox() const { return IsDisplayFlexibleBox(Display()); }
-  bool IsDisplayFlexibleOrGridBox() const {
-    return IsDisplayFlexibleBox(Display()) || IsDisplayGridBox(Display());
-  }
-  bool IsDisplayLayoutCustomBox() const {
-    return IsDisplayLayoutCustomBox(Display());
+  bool IsDisplayListItem() const { return IsDisplayListItem(Display()); }
+  bool IsDisplayTable() const { return IsDisplayTable(Display()); }
+  bool IsDisplayFlex() const { return IsDisplayFlex(Display()); }
+  bool IsDisplayWebkitBox() const { return IsDisplayWebkitBox(Display()); }
+  bool IsDisplayGrid() const { return IsDisplayGrid(Display()); }
+  bool IsDisplayGridLanes() const { return IsDisplayGridLanes(Display()); }
+  bool IsDisplayLayoutCustom() const {
+    return IsDisplayLayoutCustom(Display());
   }
 
   bool IsDisplayTableType() const { return IsDisplayTableType(Display()); }
 
-  bool IsDisplayMathType() const { return IsDisplayMathBox(Display()); }
+  bool IsDisplayMath() const { return IsDisplayMath(Display()); }
 
   bool BlockifiesChildren() const {
-    return IsDisplayFlexibleOrGridBox() || IsDisplayMathType() ||
-           IsDisplayLayoutCustomBox() ||
-           (Display() == EDisplay::kContents && IsInBlockifyingDisplay());
+    return IsDisplayFlex() || IsDisplayGrid() || IsDisplayGridLanes() ||
+           IsDisplayMath() || IsDisplayLayoutCustom() ||
+           (Display() == EDisplay::kContents && IsInBlockifyingDisplay()) ||
+           ForcesBlockifiesChildren();
   }
 
-  // Return true if an element with this computed style requires LayoutNG
-  // (i.e. has no legacy layout implementation).
-  bool DisplayTypeRequiresLayoutNG() const {
-    return IsDisplayMathType() || IsDisplayLayoutCustomBox();
+  bool InlinifiesChildren() const {
+    EDisplay display = Display();
+    // https://drafts.csswg.org/css-ruby-1/#anon-gen-inlinize
+    if (display == EDisplay::kRuby || display == EDisplay::kBlockRuby ||
+        display == EDisplay::kRubyText) {
+      return true;
+    }
+    // https://drafts.csswg.org/css-display-4/#inlinify
+    // If an inline box (inline flow) is inlinified, it recursively inlinifies
+    // all of its in-flow children
+    return IsInInlinifyingDisplay() &&
+           (display == EDisplay::kContents || display == EDisplay::kInline ||
+            display == EDisplay::kInlineListItem);
+  }
+
+  bool AllowsZIndexOnChildren() const {
+    return IsDisplayFlex() || IsDisplayWebkitBox() || IsDisplayGrid() ||
+           IsDisplayGridLanes() ||
+           (Display() == EDisplay::kContents && IsInZIndexAllowingDisplay());
   }
 
   // Isolation utility functions.
   bool HasIsolation() const { return Isolation() != EIsolation::kAuto; }
 
+  DisplayStyle GetDisplayStyle() const {
+    return DisplayStyle(Display(), StyleType(), GetContentData());
+  }
+
   // Content utility functions.
   bool ContentBehavesAsNormal() const {
-    switch (StyleType()) {
-      case kPseudoIdMarker:
-        return !GetContentData();
-      default:
-        return !GetContentData() || GetContentData()->IsNone();
-    }
+    return GetDisplayStyle().ContentBehavesAsNormal();
   }
   bool ContentPreventsBoxGeneration() const {
-    switch (StyleType()) {
-      case kPseudoIdBefore:
-      case kPseudoIdAfter:
-        return ContentBehavesAsNormal();
-      case kPseudoIdMarker:
-        return GetContentData() && GetContentData()->IsNone();
-      default:
-        return false;
-    }
+    return GetDisplayStyle().ContentPreventsBoxGeneration();
   }
 
   // Cursor utility functions.
   CursorList* Cursors() const { return CursorDataInternal().Get(); }
-  CORE_EXPORT void AddCursor(StyleImage*,
-                             bool hot_spot_specified,
-                             const IntPoint& hot_spot = IntPoint());
-  void SetCursorList(CursorList*);
-  void ClearCursorList();
 
   // Resize utility functions.
   bool HasResize() const {
-    return StyleType() == kPseudoIdNone && ResizeInternal() != EResize::kNone;
+    return StyleType() == kPseudoIdNone && Resize() != EResize::kNone;
   }
-  EResize UnresolvedResize() const { return ResizeInternal(); }
 
-  EResize Resize(const ComputedStyle& cb_style) const {
-    EResize value = ResizeInternal();
+  EResize UsedResize() const {
+    EResize value = Resize();
     switch (value) {
       case EResize::kBlock:
-      case EResize::kInline: {
-        return ::blink::IsHorizontalWritingMode(cb_style.GetWritingMode()) ==
-                       (value == EResize::kBlock)
-                   ? EResize::kVertical
-                   : EResize::kHorizontal;
-      }
+        return IsHorizontalWritingMode() ? EResize::kVertical
+                                         : EResize::kHorizontal;
+      case EResize::kInline:
+        return IsHorizontalWritingMode() ? EResize::kHorizontal
+                                         : EResize::kVertical;
       default:
         return value;
     }
   }
 
+  // Pointer-events utility functions.
+  EPointerEvents UsedPointerEvents() const {
+    if (IsInert()) {
+      return EPointerEvents::kNone;
+    }
+    return PointerEvents();
+  }
+
+  // User modify utility functions.
+  EUserModify UsedUserModify() const {
+    if (IsInert()) {
+      return EUserModify::kReadOnly;
+    }
+    return UserModify();
+  }
+
+  // User select utility functions.
+  EUserSelect UsedUserSelect() const {
+    if (IsInert()) {
+      return EUserSelect::kNone;
+    }
+    return UserSelect();
+  }
+
+  bool IsSelectable() const {
+    return !IsInert() && !(UserSelect() == EUserSelect::kNone &&
+                           UserModify() == EUserModify::kReadOnly);
+  }
+
+  bool IsFocusable() const {
+    // TODO: `visibility: hidden` shouldn't prevent focusability, see
+    // https://html.spec.whatwg.org/multipage/interaction.html#focusable-area
+    return !IsEnsuredInDisplayNone() && !IsInert() &&
+           Visibility() == EVisibility::kVisible &&
+           (Display() != EDisplay::kContents ||
+            RuntimeEnabledFeatures::DisplayContentsFocusableEnabled());
+  }
+
+  // `text-box-trim` utility functions.
+  bool ShouldTextBoxTrimStart() const {
+    const ETextBoxTrim text_box_trim = TextBoxTrim();
+    return text_box_trim == ETextBoxTrim::kTrimStart ||
+           text_box_trim == ETextBoxTrim::kTrimBoth;
+  }
+  bool ShouldTextBoxTrimEnd() const {
+    const ETextBoxTrim text_box_trim = TextBoxTrim();
+    return text_box_trim == ETextBoxTrim::kTrimEnd ||
+           text_box_trim == ETextBoxTrim::kTrimBoth;
+  }
+
   // Text decoration utility functions.
-  bool TextDecorationVisualOverflowEqual(const ComputedStyle& o) const;
-  void ApplyTextDecorations(const Color& parent_text_decoration_color,
-                            bool override_existing_colors);
-  void ClearAppliedTextDecorations();
-  void RestoreParentTextDecorations(const ComputedStyle& parent_style);
-  CORE_EXPORT const Vector<AppliedTextDecoration>& AppliedTextDecorations()
-      const;
-  CORE_EXPORT TextDecoration TextDecorationsInEffect() const;
+  bool TextDecorationVisualOverflowChanged(const ComputedStyle& o) const;
+  CORE_EXPORT TextDecorationLine TextDecorationsInEffect() const;
+  CORE_EXPORT const AppliedTextDecorationVector& AppliedTextDecorations() const;
+  CORE_EXPORT AppliedTextDecorationVector* AppliedTextDecorationData() const {
+    return IsDecoratingBox() ? EnsureAppliedTextDecorationsCache()
+                             : BaseTextDecorationData();
+  }
+
+  // Returns true if this a "decorating box".
+  // https://drafts.csswg.org/css-text-decor-3/#decorating-box
+  bool IsDecoratingBox() const {
+    if (GetTextDecorationLine() == TextDecorationLine::kNone) {
+      return false;
+    }
+    if (Display() == EDisplay::kContents) {
+      return false;
+    }
+    return true;
+  }
+
+  // Returns true if there are any text decorations.
+  bool HasAppliedTextDecorations() const {
+    if (IsDecoratingBox()) {
+      return true;
+    }
+    if (BaseTextDecorationData()) {
+      DCHECK(!BaseTextDecorationData()->empty());
+      return true;
+    }
+    return false;
+  }
+
+  // Returns (by value) the last text decoration, if any.
+  std::optional<AppliedTextDecoration> LastAppliedTextDecoration() const {
+    if (HasAppliedTextDecorations()) {
+      return AppliedTextDecorations().back();
+    }
+    return std::nullopt;
+  }
 
   // Overflow utility functions.
 
@@ -2199,61 +1966,121 @@ class ComputedStyle : public ComputedStyleBase,
            OverflowY() == EOverflow::kVisible;
   }
 
-  // An overflow value of visible or clip is not a scroll container, all other
-  // values result in a scroll container. Also note that if visible or clip is
-  // set on one axis, then the other axis must also be visible or clip. For
-  // example, "overflow-x: clip; overflow-y: visible" is allowed, but
-  // "overflow-x: clip; overflow-y: hidden" is not.
-  bool IsScrollContainer() const {
-    return OverflowX() != EOverflow::kVisible &&
-           OverflowX() != EOverflow::kClip;
+  // Returns true if 'overflow' is 'visible' or 'clip' along both axes.
+  bool IsOverflowVisibleOrClip() const {
+    return (OverflowX() == EOverflow::kVisible ||
+            OverflowX() == EOverflow::kClip) &&
+           (OverflowY() == EOverflow::kVisible ||
+            OverflowY() == EOverflow::kClip);
   }
 
-  bool IsDisplayTableRowOrColumnType() const {
-    return Display() == EDisplay::kTableRow ||
-           Display() == EDisplay::kTableRowGroup ||
-           Display() == EDisplay::kTableColumn ||
-           Display() == EDisplay::kTableColumnGroup;
+  // An overflow value of visible or clip is not a scroll container, all other
+  // values result in a scroll container.
+  static bool IsOverflowValueScrollable(EOverflow overflow) {
+    return overflow != EOverflow::kVisible && overflow != EOverflow::kClip;
+  }
+
+  // An overflow value of visible or clip is not a scroll container, all other
+  // values result in a scroll container. Returns true if either axis has a
+  // scrollable overflow value.
+  bool IsScrollContainer() const {
+    return IsOverflowValueScrollable(OverflowX()) ||
+           IsOverflowValueScrollable(OverflowY());
+  }
+
+  // Returns true if the element has a scrollable overflow value in the logical
+  // inline direction.
+  bool IsOverflowValueScrollableInline() const {
+    return IsOverflowValueScrollable(OverflowInlineDirection());
+  }
+
+  // Returns true if the element has a scrollable overflow value in the logical
+  // block direction.
+  bool IsOverflowValueScrollableBlock() const {
+    return IsOverflowValueScrollable(OverflowBlockDirection());
+  }
+
+  // Returns true if the element has a scrollable overflow value in the physical
+  // horizontal direction.
+  bool IsOverflowValueScrollableX() const {
+    return IsOverflowValueScrollable(OverflowX());
+  }
+
+  // Returns true if the element has a scrollable overflow value in the physical
+  // vertical direction.
+  bool IsOverflowValueScrollableY() const {
+    return IsOverflowValueScrollable(OverflowY());
+  }
+
+  static bool HasAutoScroll(EOverflow overflow) {
+    return overflow == EOverflow::kAuto || overflow == EOverflow::kOverlay;
+  }
+
+  static bool ScrollsOverflow(EOverflow overflow) {
+    return overflow == EOverflow::kScroll || HasAutoScroll(overflow);
   }
 
   bool HasAutoHorizontalScroll() const {
-    return OverflowX() == EOverflow::kAuto ||
-           OverflowX() == EOverflow::kOverlay;
+    return ComputedStyle::HasAutoScroll(OverflowX());
   }
 
   bool HasAutoVerticalScroll() const {
-    return OverflowY() == EOverflow::kAuto ||
-           OverflowY() == EOverflow::kOverlay;
+    return ComputedStyle::HasAutoScroll(OverflowY());
   }
 
   bool ScrollsOverflowX() const {
-    return OverflowX() == EOverflow::kScroll || HasAutoHorizontalScroll();
+    return ComputedStyle::ScrollsOverflow(OverflowX());
   }
 
   bool ScrollsOverflowY() const {
-    return OverflowY() == EOverflow::kScroll || HasAutoVerticalScroll();
+    return ComputedStyle::ScrollsOverflow(OverflowY());
   }
 
   bool ScrollsOverflow() const {
     return ScrollsOverflowX() || ScrollsOverflowY();
   }
 
+  // Returns true if the element is HTML inert, or if 'interactivity' computes
+  // to 'inert'.
+  bool IsInert() const { return IsHTMLInert() || IsCSSInert(); }
+
   // Visibility utility functions.
   bool VisibleToHitTesting() const {
     return Visibility() == EVisibility::kVisible &&
-           PointerEvents() != EPointerEvents::kNone;
+           UsedPointerEvents() != EPointerEvents::kNone;
+  }
+
+  // returns `true` is the element has a non-identity transform, `false`
+  // otherwise.
+  bool HasNonIdentityTransformOperation() const {
+    return HasTransformOperations() && !Transform().IsIdentityOrTranslation();
   }
 
   // Animation utility functions.
-  bool ShouldCompositeForCurrentAnimations() const {
-    return HasCurrentOpacityAnimation() || HasCurrentTransformAnimation() ||
-           HasCurrentFilterAnimation() || HasCurrentBackdropFilterAnimation();
+  bool HasCurrentTransformRelatedAnimation() const {
+    return HasCurrentTransformAnimation() || HasCurrentScaleAnimation() ||
+           HasCurrentRotateAnimation() || HasCurrentTranslateAnimation();
   }
-  bool RequiresPropertyNodeForAnimation() const {
-    return IsRunningOpacityAnimationOnCompositor() ||
-           IsRunningTransformAnimationOnCompositor() ||
-           IsRunningFilterAnimationOnCompositor() ||
-           IsRunningBackdropFilterAnimationOnCompositor();
+  bool HasCurrentCompositableAnimation() const {
+    return HasCurrentOpacityAnimation() ||
+           HasCurrentTransformRelatedAnimation() ||
+           HasCurrentFilterAnimation() || HasCurrentBackdropFilterAnimation() ||
+           (RuntimeEnabledFeatures::CompositeClipPathAnimationEnabled() &&
+            HasCurrentClipPathAnimation()) ||
+           HasCurrentBackgroundColorAnimation();
+  }
+  bool ShouldCompositeForCurrentAnimations() const {
+    return HasCurrentOpacityAnimation() ||
+           HasCurrentTransformRelatedAnimation() ||
+           HasCurrentFilterAnimation() || HasCurrentBackdropFilterAnimation() ||
+           (RuntimeEnabledFeatures::CompositeClipPathAnimationEnabled() &&
+            HasCurrentClipPathAnimation());
+  }
+  bool IsRunningTransformRelatedAnimationOnCompositor() const {
+    return IsRunningTransformAnimationOnCompositor() ||
+           IsRunningScaleAnimationOnCompositor() ||
+           IsRunningRotateAnimationOnCompositor() ||
+           IsRunningTranslateAnimationOnCompositor();
   }
 
   // Opacity utility functions.
@@ -2261,17 +2088,20 @@ class ComputedStyle : public ComputedStyleBase,
 
   // Table layout utility functions.
   bool IsFixedTableLayout() const {
+    if (RuntimeEnabledFeatures::TableIsAutoFixedLayoutEnabled()) {
+      // https://github.com/w3c/csswg-drafts/issues/10937
+      return TableLayout() == ETableLayout::kFixed && !LogicalWidth().IsAuto();
+    }
     // https://www.w3.org/TR/css-tables-3/#table-layout-property
     return TableLayout() == ETableLayout::kFixed &&
-           (LogicalWidth().IsSpecified() || LogicalWidth().IsMinContent() ||
-            LogicalWidth().IsFitContent());
+           (!LogicalWidth().HasAuto() && !LogicalWidth().HasMaxContent());
   }
 
   LogicalSize TableBorderSpacing() const {
-    if (BorderCollapse() == EBorderCollapse::kCollapse)
+    if (BorderCollapse() == EBorderCollapse::kCollapse) {
       return LogicalSize();
-    return LogicalSize(LayoutUnit(HorizontalBorderSpacing()),
-                       LayoutUnit(VerticalBorderSpacing()));
+    }
+    return LogicalSize(HorizontalBorderSpacing(), VerticalBorderSpacing());
   }
 
   // Returns true if the computed style contains a 3D transform operation. This
@@ -2284,37 +2114,27 @@ class ComputedStyle : public ComputedStyleBase,
            (Rotate() && (Rotate()->X() != 0 || Rotate()->Y() != 0)) ||
            (Scale() && Scale()->Z() != 1);
   }
-  // Returns true if the computed style contains a 3D transform operation with a
-  // non-trivial component in the Z axis. This can be individual operations from
-  // the transform property, or individual values from translate/rotate/scale
-  // properties. Perspective is omitted since it does not, by itself, specify a
-  // 3D transform.
-  bool HasNonTrivial3DTransformOperation() const {
-    return Transform().HasNonTrivial3DComponent() ||
-           (Translate() && Translate()->Z() != 0) ||
-           (Rotate() && Rotate()->Angle() != 0 &&
-            (Rotate()->X() != 0 || Rotate()->Y() != 0)) ||
-           (Scale() && Scale()->Z() != 1);
-  }
   bool HasTransform() const {
     return HasTransformOperations() || HasOffset() ||
-           HasCurrentTransformAnimation() || Translate() || Rotate() || Scale();
+           HasCurrentTransformRelatedAnimation() || Translate() || Rotate() ||
+           Scale();
   }
   bool HasTransformOperations() const {
-    return !Transform().Operations().IsEmpty();
+    return !Transform().Operations().empty();
   }
   ETransformStyle3D UsedTransformStyle3D() const {
+    if (TransformStyle3D() == ETransformStyle3D::kFlat) {
+      return ETransformStyle3D::kFlat;
+    }
+
+    // Even if the user specified transform-style: preserves-3d (which is
+    // non-default), it could be overridden by a number of other properties.
+    // These checks are fairly expensive (since there are so many of them),
+    // so we only bother going through them if needed.
+    DCHECK_EQ(TransformStyle3D(), ETransformStyle3D::kPreserve3d);
     return HasGroupingPropertyForUsedTransformStyle3D()
                ? ETransformStyle3D::kFlat
-               : TransformStyle3D();
-  }
-  // Returns whether the transform operations for |otherStyle| differ from the
-  // operations for this style instance. Note that callers may want to also
-  // check hasTransform(), as it is possible for two styles to have matching
-  // transform operations but differ in other transform-impacting style
-  // respects.
-  bool TransformDataEquivalent(const ComputedStyle& other) const {
-    return !DiffTransformData(*this, other);
+               : ETransformStyle3D::kPreserve3d;
   }
   bool Preserves3D() const {
     return UsedTransformStyle3D() != ETransformStyle3D::kFlat;
@@ -2328,18 +2148,32 @@ class ComputedStyle : public ComputedStyleBase,
     kIncludeIndependentTransformProperties,
     kExcludeIndependentTransformProperties
   };
-  void ApplyTransform(TransformationMatrix&,
-                      const LayoutSize& border_box_data_size,
+  enum ApplyTransformOperations {
+    kIncludeTransformOperations,
+    kExcludeTransformOperations
+  };
+  void ApplyTransform(gfx::Transform&,
+                      const LayoutBox* box,
+                      const PhysicalRect& reference_box,
+                      ApplyTransformOperations,
                       ApplyTransformOrigin,
                       ApplyMotionPath,
                       ApplyIndependentTransformProperties) const;
-  void ApplyTransform(TransformationMatrix&,
-                      const FloatRect& bounding_box,
+  void ApplyTransform(gfx::Transform&,
+                      const LayoutBox* box,
+                      const gfx::RectF& reference_box,
+                      ApplyTransformOperations,
                       ApplyTransformOrigin,
                       ApplyMotionPath,
                       ApplyIndependentTransformProperties) const;
 
-  bool HasFilters() const;
+  enum class TransformBoxContext {
+    kLayoutBox,  // For elements with an associated CSS layout box.
+    kSvg,        // For SVG elements without an associated CSS layout box.
+  };
+  ETransformBox UsedTransformBox(TransformBoxContext) const;
+
+  bool HasBoxReflect() const { return BoxReflect(); }
 
   // Returns |true| if any property that renders using filter operations is
   // used (including, but not limited to, 'filter' and 'box-reflect').
@@ -2350,20 +2184,21 @@ class ComputedStyle : public ComputedStyleBase,
   // Returns |true| if filter should be considered to have non-initial value
   // for the purposes of containing blocks.
   bool HasNonInitialFilter() const {
-    return HasFilter() || HasWillChangeFilterHint();
+    return HasFilter() || HasWillChangeProperty(CSSPropertyID::kFilter);
   }
 
   // Returns |true| if backdrop-filter should be considered to have non-initial
   // value for the purposes of containing blocks.
   bool HasNonInitialBackdropFilter() const {
-    return HasBackdropFilter() || HasWillChangeBackdropFilterHint();
+    return HasBackdropFilter() ||
+           HasWillChangeProperty(CSSPropertyID::kBackdropFilter);
   }
 
   // Returns |true| if opacity should be considered to have non-initial value
   // for the purpose of creating stacking contexts.
   bool HasNonInitialOpacity() const {
-    return HasOpacity() || HasWillChangeOpacityHint() ||
-           HasCurrentOpacityAnimation();
+    return HasOpacity() || HasCurrentOpacityAnimation() ||
+           HasWillChangeProperty(CSSPropertyID::kOpacity);
   }
 
   // Returns whether this style contains any grouping property as defined by
@@ -2373,34 +2208,47 @@ class ComputedStyle : public ComputedStyleBase,
   // because box reflection styles only apply for some objects (see:
   // |LayoutObject::HasReflection()|).
   bool HasGroupingProperty(bool has_box_reflection) const {
-    if (HasStackingGroupingProperty(has_box_reflection))
+    if (HasStackingGroupingProperty(has_box_reflection)) {
       return true;
+    }
     // TODO(pdr): Also check for overflow because the spec requires "overflow:
     // any value other than visible or clip."
-    if (!HasAutoClip() && HasOutOfFlowPosition())
+    if (!HasAutoClip() && HasOutOfFlowPosition()) {
       return true;
+    }
     return false;
   }
 
   // This is the subset of grouping properties (see: |HasGroupingProperty|) that
   // also create stacking contexts.
   bool HasStackingGroupingProperty(bool has_box_reflection) const {
-    if (HasNonInitialOpacity())
+    if (HasNonInitialOpacity()) {
       return true;
-    if (HasNonInitialFilter())
+    }
+    if (HasNonInitialFilter()) {
       return true;
-    if (has_box_reflection)
+    }
+    if (has_box_reflection) {
       return true;
-    if (HasClipPath())
+    }
+    if (HasClipPath()) {
       return true;
-    if (HasIsolation())
+    }
+    if (HasIsolation()) {
       return true;
-    if (HasMask())
+    }
+    if (HasMask()) {
       return true;
-    if (HasBlendMode())
+    }
+    if (HasBlendMode()) {
       return true;
-    if (HasNonInitialBackdropFilter())
+    }
+    if (HasNonInitialBackdropFilter()) {
       return true;
+    }
+    if (ViewTransitionName() || ElementIsViewTransitionParticipant()) {
+      return true;
+    }
     return false;
   }
 
@@ -2420,17 +2268,17 @@ class ComputedStyle : public ComputedStyleBase,
   // position descendants.
   bool HasTransformRelatedProperty() const {
     return HasTransform() || Preserves3D() || HasPerspective() ||
-           HasWillChangeTransformHint();
+           HasWillChangeAnyTransformProperty();
+  }
+  bool HasTransformRelatedPropertyForSVG() const {
+    return HasTransform() || HasWillChangeAnyTransformProperty();
   }
 
   // Return true if this style has properties ('filter', 'clip-path' and 'mask')
   // that applies an effect to SVG elements.
   bool HasSVGEffect() const {
-    return HasFilter() || HasClipPath() || MaskerResource();
+    return HasFilter() || HasClipPath() || HasMask();
   }
-
-  // Paint utility functions.
-  CORE_EXPORT void AddPaintImage(StyleImage*);
 
   // Returns true if any property has an <image> value that is a CSS paint
   // function that is using a given custom property.
@@ -2443,97 +2291,61 @@ class ComputedStyle : public ComputedStyleBase,
   // doesn't account for them.
   bool HasVisualOverflowingEffect() const {
     return BoxShadow() || HasBorderImageOutsets() || HasOutline() ||
-           HasMaskBoxImageOutsets();
+           HasMaskBoxImageOutsets() || HasGapRule() || HasBorderShape();
   }
 
-  // Stacking contexts and positioned elements[1] are stacked (sorted in
-  // negZOrderList
-  // and posZOrderList) in their enclosing stacking contexts.
-  //
-  // [1] According to CSS2.1, Appendix E.2.8
-  // (https://www.w3.org/TR/CSS21/zindex.html),
-  // positioned elements with 'z-index: auto' are "treated as if it created a
-  // new stacking context" and z-ordered together with other elements with
-  // 'z-index: 0'.  The difference of them from normal stacking contexts is that
-  // they don't determine the stacking of the elements underneath them.  (Note:
-  // There are also other elements treated as stacking context during painting,
-  // but not managed in stacks. See ObjectPainter::PaintAllPhasesAtomically().)
-  CORE_EXPORT void UpdateIsStackingContextWithoutContainment(
-      bool is_document_element,
-      bool is_in_top_layer,
-      bool is_svg_stacking);
-  bool IsStackedWithoutContainment() const {
-    return IsStackingContextWithoutContainment() ||
-           GetPosition() != EPosition::kStatic;
-  }
-
-  // Pseudo element styles.
+  // Pseudo-element styles.
   bool HasAnyPseudoElementStyles() const;
-  bool HasPseudoElementStyle(PseudoId) const;
-  void SetHasPseudoElementStyle(PseudoId);
-
-  // Note: CanContainAbsolutePositionObjects should return true if
-  // CanContainFixedPositionObjects.  We currently never use this value
-  // directly, always OR'ing it with CanContainFixedPositionObjects.
-  bool CanContainAbsolutePositionObjects() const {
-    return GetPosition() != EPosition::kStatic;
+  bool HasAnyHighlightPseudoElementStyles() const;
+  bool HasPseudoElementStyle(PseudoId pseudo) const {
+    return PseudoIdFlags::FromBits(PseudoElementStylesInternal()).Has(pseudo);
   }
 
-  // Whitespace utility functions.
-  static bool Is(EWhiteSpace a, EWhiteSpace b) {
-    return static_cast<unsigned>(a) & static_cast<unsigned>(b);
-  }
-  static bool IsNot(EWhiteSpace a, EWhiteSpace b) { return !Is(a, b); }
-  static bool AutoWrap(EWhiteSpace ws) {
-    // Nowrap and pre don't automatically wrap.
-    return IsNot(ws, EWhiteSpace::kNowrap | EWhiteSpace::kPre);
+  // This function may return values not defined as the enum values. See
+  // `EWhiteSpace`. Prefer using semantic functions below.
+  EWhiteSpace WhiteSpace() const {
+    return ToWhiteSpace(GetWhiteSpaceCollapse(), GetTextWrapMode());
   }
 
-  bool AutoWrap() const { return AutoWrap(WhiteSpace()); }
-
-  static bool PreserveNewline(EWhiteSpace ws) {
-    // Normal and nowrap do not preserve newlines.
-    return ws != EWhiteSpace::kNormal && ws != EWhiteSpace::kNowrap;
+  // Semantic functions for the `white-space` property and its longhands.
+  bool ShouldPreserveWhiteSpaces() const {
+    return blink::ShouldPreserveWhiteSpaces(GetWhiteSpaceCollapse());
   }
-
-  bool PreserveNewline() const { return PreserveNewline(WhiteSpace()); }
-
-  static bool BorderStyleIsVisible(EBorderStyle style) {
-    return style != EBorderStyle::kNone && style != EBorderStyle::kHidden;
+  bool ShouldCollapseWhiteSpaces() const {
+    return blink::ShouldCollapseWhiteSpaces(GetWhiteSpaceCollapse());
   }
-
-  static bool CollapseWhiteSpace(EWhiteSpace ws) {
-    // Pre and prewrap do not collapse whitespace.
-    return IsNot(ws, EWhiteSpace::kPre | EWhiteSpace::kPreWrap |
-                         EWhiteSpace::kBreakSpaces);
+  bool ShouldPreserveBreaks() const {
+    return blink::ShouldPreserveBreaks(GetWhiteSpaceCollapse());
   }
-
-  bool CollapseWhiteSpace() const { return CollapseWhiteSpace(WhiteSpace()); }
-
+  bool ShouldCollapseBreaks() const {
+    return blink::ShouldCollapseBreaks(GetWhiteSpaceCollapse());
+  }
   bool IsCollapsibleWhiteSpace(UChar c) const {
     switch (c) {
       case ' ':
       case '\t':
-        return CollapseWhiteSpace();
+        return ShouldCollapseWhiteSpaces();
       case '\n':
-        return !PreserveNewline();
+        return ShouldCollapseBreaks();
     }
     return false;
   }
-  bool BreakOnlyAfterWhiteSpace() const {
-    return Is(WhiteSpace(),
-              EWhiteSpace::kPreWrap | EWhiteSpace::kBreakSpaces) ||
+
+  bool ShouldWrapLine() const {
+    return blink::ShouldWrapLine(GetTextWrapMode());
+  }
+  bool ShouldWrapLineGreedy() const {
+    return blink::ShouldWrapLineGreedy(GetTextWrapStyle());
+  }
+  bool ShouldBreakSpaces() const {
+    return blink::ShouldBreakSpaces(GetWhiteSpaceCollapse());
+  }
+  bool ShouldBreakOnlyAfterWhiteSpace() const {
+    return (ShouldPreserveWhiteSpaces() && ShouldWrapLine()) ||
            GetLineBreak() == LineBreak::kAfterWhiteSpace;
   }
-
   bool NeedsTrailingSpace() const {
-    return BreakOnlyAfterWhiteSpace() && AutoWrap();
-  }
-
-  bool BreakWords() const {
-    return (WordBreak() == EWordBreak::kBreakWord ||
-            OverflowWrap() != EOverflowWrap::kNormal) &&
-           IsNot(WhiteSpace(), EWhiteSpace::kPre | EWhiteSpace::kNowrap);
+    return ShouldBreakOnlyAfterWhiteSpace() && ShouldWrapLine();
   }
 
   // Text direction utility functions.
@@ -2542,9 +2354,56 @@ class ComputedStyle : public ComputedStyleBase,
   }
 
   // Border utility functions.
+  static bool BorderStyleIsVisible(EBorderStyle style) {
+    return style != EBorderStyle::kNone && style != EBorderStyle::kHidden;
+  }
+
+  // Rule utility functions.
+  static bool BorderStyleIsVisible(const GapDataList<EBorderStyle>& styles) {
+    for (const auto& style : styles.GetGapDataList()) {
+      if (!style.IsRepeaterData()) {
+        // Simple single value, check directly.
+        if (BorderStyleIsVisible(style.GetValue())) {
+          return true;
+        }
+      } else {
+        // Repeater value, check each repeated value.
+        for (const auto& repeated_style :
+             style.GetValueRepeater()->RepeatedValues()) {
+          if (BorderStyleIsVisible(repeated_style)) {
+            return true;
+          }
+        }
+      }
+    }
+
+    return false;
+  }
+
+  static bool HasRuleWidth(const GapDataList<int>& widths) {
+    for (const auto& width : widths.GetGapDataList()) {
+      if (!width.IsRepeaterData()) {
+        // Simple single value, check directly.
+        if (width.GetValue() != 0) {
+          return true;
+        }
+      } else {
+        // Repeater value, check each repeated value.
+        for (const auto& repeated_width :
+             width.GetValueRepeater()->RepeatedValues()) {
+          if (repeated_width != 0) {
+            return true;
+          }
+        }
+      }
+    }
+
+    return false;
+  }
+
   bool BorderObscuresBackground() const;
   void GetBorderEdgeInfo(
-      BorderEdge edges[],
+      BorderEdgeArray& edges,
       PhysicalBoxSides sides_to_include = PhysicalBoxSides()) const;
 
   bool HasBoxDecorations() const {
@@ -2562,51 +2421,73 @@ class ComputedStyle : public ComputedStyleBase,
            HasEffectiveAppearance() || BoxShadow();
   }
 
-  LayoutRectOutsets BoxDecorationOutsets() const;
+  PhysicalBoxStrut BoxDecorationOutsets() const;
 
   // Background utility functions.
-  FillLayer& AccessBackgroundLayers() { return MutableBackgroundInternal(); }
   const FillLayer& BackgroundLayers() const { return BackgroundInternal(); }
-  void AdjustBackgroundLayers() {
-    if (BackgroundLayers().Next()) {
-      AccessBackgroundLayers().CullEmptyLayers();
-      AccessBackgroundLayers().FillUnsetProperties();
-    }
-  }
   bool HasBackgroundRelatedColorReferencingCurrentColor() const {
     if (BackgroundColor().IsCurrentColor() ||
         InternalVisitedBackgroundColor().IsCurrentColor() ||
-        InternalForcedBackgroundColor().IsCurrentColor())
+        InternalForcedBackgroundColor().IsCurrentColor()) {
       return true;
-    if (!BoxShadow())
+    }
+    if (!BoxShadow()) {
       return false;
+    }
     return ShadowListHasCurrentColor(BoxShadow());
   }
-  bool HasBackground() const {
-    Color color = VisitedDependentColor(GetCSSPropertyBackgroundColor());
-    if (color.Alpha())
-      return true;
-    // When background color animation is running on the compositor thread, we
-    // need to trigger repaint even if the background is transparent to collect
-    // artifacts in order to run the animation on the compositor.
-    if (RuntimeEnabledFeatures::CompositeBGColorAnimationEnabled() &&
-        HasCurrentBackgroundColorAnimation())
-      return true;
-    return HasBackgroundImage();
-  }
+
+  CORE_EXPORT bool HasBackground() const;
 
   // Color utility functions.
-  CORE_EXPORT Color
-  VisitedDependentColor(const CSSProperty& color_property) const;
+  CORE_EXPORT blink::Color VisitedDependentColor(
+      const Longhand& color_property,
+      bool* is_current_color = nullptr) const;
+
+  CORE_EXPORT blink::Color VisitedDependentColor(
+      const blink::Color& unvisited_color,
+      const Longhand& color_property,
+      bool* is_current_color = nullptr) const;
+
+  // Used to resolve gap decoration colors for painting.
+  CORE_EXPORT blink::Color VisitedDependentGapColor(const StyleColor& gap_color,
+                                                    bool is_column_rule) const;
+
+  // Used to resolve 'context-fill' and 'context-stroke' paints
+  CORE_EXPORT blink::Color VisitedDependentContextFill(
+      const SVGPaint& context_paint,
+      const ComputedStyle& context_style) const;
+  CORE_EXPORT blink::Color VisitedDependentContextStroke(
+      const SVGPaint& context_paint,
+      const ComputedStyle& context_style) const;
+
+  // A faster version of VisitedDependentColor() that specializes on the
+  // concrete property class; for the common case of not being inside a link,
+  // can inline the question in function directly. However, it uses more code
+  // space, so only use it on code paths that are actually hot.
+  template <class Property>
+  blink::Color VisitedDependentColorFast(
+      const Property& color_property,
+      bool* is_current_color = nullptr) const {
+    DCHECK(!Property().IsVisited());
+
+    if (InsideLink() != EInsideLink::kInsideVisitedLink) {
+      blink::Color color =
+          color_property.ColorIncludingFallback(false, *this,
+                                                /*is_current_color=*/nullptr);
+      DCHECK(color == VisitedDependentColor(color_property, is_current_color));
+      return color;
+    } else {
+      return VisitedDependentColor(color_property, is_current_color);
+    }
+  }
 
   // -webkit-appearance utility functions.
-  bool HasEffectiveAppearance() const {
-    return EffectiveAppearance() != kNoControlPart;
+  static bool HasEffectiveAppearance(AppearanceValue effective_appearance) {
+    return effective_appearance != AppearanceValue::kNone;
   }
-  bool IsCheckboxOrRadioPart() const {
-    return HasEffectiveAppearance() &&
-           (EffectiveAppearance() == kCheckboxPart ||
-            EffectiveAppearance() == kRadioPart);
+  bool HasEffectiveAppearance() const {
+    return HasEffectiveAppearance(EffectiveAppearance());
   }
 
   // Other utility functions.
@@ -2616,74 +2497,180 @@ class ComputedStyle : public ComputedStyleBase,
   InterpolationQuality GetInterpolationQuality() const;
 
   bool CanGeneratePseudoElement(PseudoId pseudo) const {
-    if (Display() == EDisplay::kNone)
+    if (Display() == EDisplay::kNone) {
       return false;
-    if (IsEnsuredInDisplayNone())
+    }
+    if (IsEnsuredInDisplayNone()) {
       return false;
-    if (pseudo == kPseudoIdMarker)
-      return Display() == EDisplay::kListItem;
-    if (!HasPseudoElementStyle(pseudo))
+    }
+    if (pseudo == kPseudoIdMarker) {
+      // A list item's ::marker generates a box if it has non-normal
+      // 'content' (which requires ::marker rules to have matched), or a
+      // 'list-style-type' or marker image; see
+      // PseudoElementLayoutObjectIsNeeded(). Every <li> in a
+      // 'list-style: none' list has none of these, and creating the
+      // PseudoElement just to resolve its style and throw it away is a
+      // measurable cost on list-heavy pages.
+      return IsDisplayListItem() && (HasPseudoElementStyle(kPseudoIdMarker) ||
+                                     ListStyleType() || GeneratesMarkerImage());
+    }
+    // ::backdrop is generated for top layer elements (where Overlay is not
+    // none).
+    if (pseudo == kPseudoIdBackdrop && Overlay() == EOverlay::kNone) {
       return false;
-    if (Display() != EDisplay::kContents)
+    }
+    if (pseudo == kPseudoIdScrollMarkerGroupBefore) {
+      return HasScrollMarkerGroupBefore() && IsScrollContainer();
+    }
+    if (pseudo == kPseudoIdScrollMarkerGroupAfter) {
+      return HasScrollMarkerGroupAfter() && IsScrollContainer();
+    }
+    if (pseudo == kPseudoIdScrollButtonBlockStart ||
+        pseudo == kPseudoIdScrollButtonInlineStart ||
+        pseudo == kPseudoIdScrollButtonInlineEnd ||
+        pseudo == kPseudoIdScrollButtonBlockEnd) {
+      return HasPseudoElementStyle(kPseudoIdScrollButton);
+    }
+    if (!HasPseudoElementStyle(pseudo)) {
+      return false;
+    }
+    if (Display() != EDisplay::kContents) {
       return true;
+    }
     // For display: contents elements, we still need to generate ::before and
     // ::after, but the rest of the pseudo-elements should only be used for
     // elements with an actual layout object.
-    return pseudo == kPseudoIdBefore || pseudo == kPseudoIdAfter;
+    return pseudo == kPseudoIdCheckMark || pseudo == kPseudoIdBefore ||
+           pseudo == kPseudoIdAfter || pseudo == kPseudoIdExpandIcon ||
+           pseudo == kPseudoIdPickerIcon || pseudo == kPseudoIdInterestButton;
   }
 
-  // Load the images of CSS properties that were deferred by LazyLoad.
-  void LoadDeferredImages(Document&) const;
-
-  mojom::blink::ColorScheme ComputedColorScheme() const {
-    return DarkColorScheme() ? mojom::blink::ColorScheme::kDark
-                             : mojom::blink::ColorScheme::kLight;
+  bool HasScrollMarkerGroupBefore() const {
+    return GetScrollMarkerGroup() && GetScrollMarkerGroup()->PositionBefore();
   }
 
+  bool HasScrollMarkerGroupAfter() const {
+    return GetScrollMarkerGroup() && GetScrollMarkerGroup()->PositionAfter();
+  }
+
+  // Empty value means scroll-marker-group: none.
+  std::optional<ScrollMarkerGroup::ScrollMarkerMode> ScrollMarkerGroupMode()
+      const {
+    if (!GetScrollMarkerGroup()) {
+      return std::nullopt;
+    }
+    return GetScrollMarkerGroup()->Mode();
+  }
+
+  // Empty value means scroll-marker-group: none.
+  std::optional<ScrollMarkerGroup::ScrollMarkerPosition>
+  ScrollMarkerGroupPosition() const {
+    if (!GetScrollMarkerGroup()) {
+      return std::nullopt;
+    }
+    return GetScrollMarkerGroup()->Position();
+  }
+
+  bool ScrollMarkerGroupNone() const { return !GetScrollMarkerGroup(); }
+
+  bool ScrollMarkerGroupEqual(const ComputedStyle& other) const {
+    return base::ValuesEquivalent(GetScrollMarkerGroup(),
+                                  other.GetScrollMarkerGroup());
+  }
+
+  bool ScrollTargetGroupNone() const {
+    return ScrollTargetGroup() == EScrollTargetGroup::kNone;
+  }
+
+  PhysicalBoxStrut ScrollMarginStrut() const {
+    return {LayoutUnit(ScrollMarginTop()), LayoutUnit(ScrollMarginRight()),
+            LayoutUnit(ScrollMarginBottom()), LayoutUnit(ScrollMarginLeft())};
+  }
+
+  // Returns true if the element is rendered in the top layer. That is the case
+  // when the overlay property computes to 'auto', or when the element is a
+  // ::backdrop pseudo.
+  bool IsRenderedInTopLayer(const Element& element) const;
+
+  static mojom::blink::ColorScheme UsedColorScheme(bool is_dark_color_scheme) {
+    return is_dark_color_scheme ? mojom::blink::ColorScheme::kDark
+                                : mojom::blink::ColorScheme::kLight;
+  }
   mojom::blink::ColorScheme UsedColorScheme() const {
-    return ComputedColorScheme();
-  }
-
-  mojom::blink::ColorScheme UsedColorSchemeForInitialColors() const {
-    return ComputedColorScheme();
-  }
-
-  StyleColor InitialColorForColorScheme() const {
-    // TODO(crbug.com/1046753, crbug.com/929098): The initial value of the color
-    // property should be canvastext, but since we do not yet ship color-scheme
-    // aware system colors, we use this method instead. This should be replaced
-    // by default_value:"canvastext" in css_properties.json5.
-    return StyleColor(DarkColorScheme() ? Color::kWhite : Color::kBlack);
+    return UsedColorScheme(DarkColorScheme());
   }
 
   bool GeneratesMarkerImage() const {
-    return Display() == EDisplay::kListItem && ListStyleImage() &&
-           !ListStyleImage()->ErrorOccurred();
+    return IsDisplayListItem() && ListStyleImage() &&
+           !ListStyleImage()->ErrorOccurred() &&
+           (ListStyleImage()->IsLoading() || ListStyleImage()->IsLoaded());
   }
 
   LogicalSize LogicalAspectRatio() const {
     DCHECK_NE(AspectRatio().GetType(), EAspectRatioType::kAuto);
-    FloatSize ratio = AspectRatio().GetRatio();
-    if (!IsHorizontalWritingMode())
-      ratio = ratio.TransposedSize();
-    return LogicalSize::AspectRatioFromFloatSize(ratio);
+    return ToLogicalSize(AspectRatio().GetLayoutRatio(), GetWritingMode());
   }
 
   EBoxSizing BoxSizingForAspectRatio() const {
-    if (AspectRatio().GetType() == EAspectRatioType::kRatio)
+    if (AspectRatio().GetType() == EAspectRatioType::kRatio) {
       return BoxSizing();
+    }
     return EBoxSizing::kContentBox;
   }
 
-  bool DisableForceDark() const {
-    return ColorSchemeOnly() || HasFilterInducingProperty();
+  bool ForceDark() const { return DarkColorScheme() && ColorSchemeForced(); }
+
+  bool HasStaticViewportUnits() const {
+    return ViewportUnitFlags() &
+           static_cast<unsigned>(ViewportUnitFlag::kStatic);
+  }
+  bool HasDynamicViewportUnits() const {
+    return ViewportUnitFlags() &
+           static_cast<unsigned>(ViewportUnitFlag::kDynamic);
+  }
+  bool HasViewportUnits() const { return ViewportUnitFlags(); }
+
+  bool OverflowClipMarginHasAnEffect() const {
+    return OverflowClipMargin() &&
+           (OverflowClipMargin()->GetReferenceBox() !=
+                StyleOverflowClipMargin::ReferenceBox::kPaddingBox ||
+            OverflowClipMargin()->GetMargin() != LayoutUnit());
+  }
+
+  // Field-sizing utility function:
+  // Returns true if field-sizing:fixed or node's owner form control is
+  // autofilled.
+  bool ApplyControlFixedSize(const Node* node) const;
+
+  bool HasPositionVisibility(PositionVisibility visibility) const {
+    return (static_cast<int>(GetPositionVisibility()) &
+            static_cast<int>(visibility)) == static_cast<int>(visibility);
+  }
+
+  // Returns whether the animation-trigger property names a trigger. The name
+  // might refer to a trigger elsewhere in the DOM.
+  bool HasAnimationTrigger() const;
+
+  bool HasBaseEffectiveAppearance() const;
+
+  EOverscrollContainerType EffectiveOverscrollContainerType() const {
+    if (InternalOverscrollContainer() == EInternalOverscrollContainer::kNone) {
+      return EOverscrollContainerType::kNone;
+    }
+    return OverscrollContainerType();
+  }
+
+  bool IsContentMovingOverscrollContainer() const {
+    EOverscrollContainerType type = EffectiveOverscrollContainerType();
+    return type == EOverscrollContainerType::kAuto ||
+           type == EOverscrollContainerType::kPush;
+  }
+
+  bool IsUnboundedElementActive() const {
+    return InternalUnbounded() == EInternalUnbounded::kActive;
   }
 
  private:
-  EClear Clear() const { return ClearInternal(); }
-  EFloat Floating() const { return FloatingInternal(); }
-  EResize Resize() const { return ResizeInternal(); }
-
   bool IsInlineSizeContainer() const {
     return ContainerType() & kContainerTypeInlineSize;
   }
@@ -2691,94 +2678,85 @@ class ComputedStyle : public ComputedStyleBase,
     return ContainerType() & kContainerTypeBlockSize;
   }
   bool IsInlineOrBlockSizeContainer() const {
-    return ContainerType() &
-           (kContainerTypeInlineSize | kContainerTypeBlockSize);
+    return ContainerType() & kContainerTypeSize;
   }
-  bool IsInlineAndBlockSizeContainer() const {
-    const unsigned both = (kContainerTypeInlineSize | kContainerTypeBlockSize);
-    return (ContainerType() & both) == both;
+  bool IsSizeContainer() const {
+    return (ContainerType() & kContainerTypeSize) == kContainerTypeSize;
   }
-
-  void SetInternalVisitedColor(const StyleColor& v) {
-    SetInternalVisitedColorInternal(v);
+  bool IsScrollStateContainer() const {
+    return ContainerType() & kContainerTypeScrollState;
   }
-  void SetInternalVisitedBackgroundColor(const StyleColor& v) {
-    SetInternalVisitedBackgroundColorInternal(v);
-  }
-  void SetInternalVisitedBorderLeftColor(const StyleColor& v) {
-    SetInternalVisitedBorderLeftColorInternal(v);
-  }
-  void SetInternalVisitedBorderRightColor(const StyleColor& v) {
-    SetInternalVisitedBorderRightColorInternal(v);
-  }
-  void SetInternalVisitedBorderBottomColor(const StyleColor& v) {
-    SetInternalVisitedBorderBottomColorInternal(v);
-  }
-  void SetInternalVisitedBorderTopColor(const StyleColor& v) {
-    SetInternalVisitedBorderTopColorInternal(v);
-  }
-  void SetInternalVisitedOutlineColor(const StyleColor& v) {
-    SetInternalVisitedOutlineColorInternal(v);
-  }
-  void SetInternalVisitedColumnRuleColor(const StyleColor& v) {
-    SetInternalVisitedColumnRuleColorInternal(v);
-  }
-  void SetInternalVisitedTextDecorationColor(const StyleColor& v) {
-    SetInternalVisitedTextDecorationColorInternal(v);
-  }
-  void SetInternalVisitedTextEmphasisColor(const StyleColor& color) {
-    SetInternalVisitedTextEmphasisColorInternal(color);
-  }
-  void SetInternalVisitedTextFillColor(const StyleColor& color) {
-    SetInternalVisitedTextFillColorInternal(color);
-  }
-  void SetInternalVisitedTextStrokeColor(const StyleColor& color) {
-    SetInternalVisitedTextStrokeColorInternal(color);
-  }
-
-  void SetInternalForcedVisitedColor(const StyleColor& v) {
-    SetInternalForcedVisitedColorInternal(v);
+  bool IsAnchoredContainer() const {
+    return ContainerType() & kContainerTypeAnchored;
   }
 
   static bool IsDisplayBlockContainer(EDisplay display) {
     return display == EDisplay::kBlock || display == EDisplay::kListItem ||
            display == EDisplay::kInlineBlock ||
-           display == EDisplay::kFlowRoot || display == EDisplay::kTableCell ||
+           display == EDisplay::kFlowRoot ||
+           display == EDisplay::kFlowRootListItem ||
+           display == EDisplay::kInlineFlowRootListItem ||
+           display == EDisplay::kTableCell ||
            display == EDisplay::kTableCaption;
   }
 
-  static bool IsDisplayTableBox(EDisplay display) {
+  static bool IsDisplayListItem(EDisplay display) {
+    return display == EDisplay::kListItem ||
+           display == EDisplay::kInlineListItem ||
+           display == EDisplay::kFlowRootListItem ||
+           display == EDisplay::kInlineFlowRootListItem;
+  }
+
+  static bool IsDisplayTable(EDisplay display) {
     return display == EDisplay::kTable || display == EDisplay::kInlineTable;
   }
 
-  static bool IsDisplayFlexibleBox(EDisplay display) {
+  static bool IsDisplayFlex(EDisplay display) {
     return display == EDisplay::kFlex || display == EDisplay::kInlineFlex;
   }
 
-  static bool IsDisplayGridBox(EDisplay display) {
+  static bool IsDisplayWebkitBox(EDisplay display) {
+    return display == EDisplay::kWebkitBox ||
+           display == EDisplay::kWebkitInlineBox;
+  }
+
+  static bool IsDisplayGrid(EDisplay display) {
     return display == EDisplay::kGrid || display == EDisplay::kInlineGrid;
   }
 
-  static bool IsDisplayMathBox(EDisplay display) {
+  static bool IsDisplayGridLanes(EDisplay display) {
+    return display == EDisplay::kGridLanes ||
+           display == EDisplay::kInlineGridLanes;
+  }
+
+  static bool IsDisplayMath(EDisplay display) {
     return display == EDisplay::kMath || display == EDisplay::kBlockMath;
   }
 
-  static bool IsDisplayLayoutCustomBox(EDisplay display) {
+  static bool IsDisplayLayoutCustom(EDisplay display) {
     return display == EDisplay::kLayoutCustom ||
            display == EDisplay::kInlineLayoutCustom;
   }
 
-  static bool IsDisplayReplacedType(EDisplay display) {
+  static bool IsAtomicInlineDisplayType(EDisplay display) {
     return display == EDisplay::kInlineBlock ||
-           display == EDisplay::kWebkitInlineBox ||
            display == EDisplay::kInlineFlex ||
-           display == EDisplay::kInlineTable ||
-           display == EDisplay::kInlineGrid || display == EDisplay::kMath ||
-           display == EDisplay::kInlineLayoutCustom;
+           display == EDisplay::kInlineFlowRootListItem ||
+           display == EDisplay::kInlineGrid ||
+           display == EDisplay::kInlineLayoutCustom ||
+           display == EDisplay::kInlineGridLanes ||
+           display == EDisplay::kInlineTable || display == EDisplay::kMath ||
+           display == EDisplay::kWebkitInlineBox;
+  }
+
+  static bool IsNonAtomicInlineDisplayType(EDisplay display) {
+    return display == EDisplay::kInline ||
+           display == EDisplay::kInlineListItem || display == EDisplay::kRuby;
   }
 
   static bool IsDisplayInlineType(EDisplay display) {
-    return display == EDisplay::kInline || IsDisplayReplacedType(display);
+    return IsNonAtomicInlineDisplayType(display) ||
+           IsAtomicInlineDisplayType(display);
   }
 
   static bool IsDisplayTableType(EDisplay display) {
@@ -2793,158 +2771,78 @@ class ComputedStyle : public ComputedStyleBase,
            display == EDisplay::kTableCaption;
   }
 
-  // Color accessors are all private to make sure callers use
-  // VisitedDependentColor instead to access them.
-  const StyleColor& BorderLeftColor() const {
-    return BorderLeftColorInternal();
-  }
-  const StyleColor& BorderRightColor() const {
-    return BorderRightColorInternal();
-  }
-  const StyleColor& BorderTopColor() const { return BorderTopColorInternal(); }
-  const StyleColor& BorderBottomColor() const {
-    return BorderBottomColorInternal();
-  }
+  static CORE_EXPORT const ComputedGridTrackList& ComputedGridTemplate(
+      const Member<ComputedGridTrackList>& track_list);
 
-  const StyleColor& BackgroundColor() const {
-    return BackgroundColorInternal();
-  }
-  const StyleAutoColor& CaretColor() const { return CaretColorInternal(); }
-  const StyleColor& GetColor() const { return ColorInternal(); }
-  const StyleColor& ColumnRuleColor() const {
-    return ColumnRuleColorInternal();
-  }
-  const StyleColor& OutlineColor() const { return OutlineColorInternal(); }
-  const StyleColor& StopColor() const { return StopColorInternal(); }
-  const StyleColor& TextDecorationColor() const {
-    return TextDecorationColorInternal();
-  }
-  const StyleColor& TextEmphasisColor() const {
-    return TextEmphasisColorInternal();
-  }
-  const StyleColor& TextFillColor() const { return TextFillColorInternal(); }
-  const StyleColor& TextStrokeColor() const {
-    return TextStrokeColorInternal();
-  }
-  const StyleColor& InternalVisitedColor() const {
-    return InternalVisitedColorInternal();
-  }
-  const StyleAutoColor& InternalVisitedCaretColor() const {
-    return InternalVisitedCaretColorInternal();
-  }
-  const StyleColor& InternalVisitedBackgroundColor() const {
-    return InternalVisitedBackgroundColorInternal();
-  }
-  const StyleColor& InternalVisitedBorderLeftColor() const {
-    return InternalVisitedBorderLeftColorInternal();
-  }
-  bool InternalVisitedBorderLeftColorHasNotChanged(
-      const ComputedStyle& other) const {
-    return (InternalVisitedBorderLeftColor() ==
-                other.InternalVisitedBorderLeftColor() ||
-            !BorderLeftWidth());
-  }
-  const StyleColor& InternalVisitedBorderRightColor() const {
-    return InternalVisitedBorderRightColorInternal();
-  }
-  bool InternalVisitedBorderRightColorHasNotChanged(
-      const ComputedStyle& other) const {
-    return (InternalVisitedBorderRightColor() ==
-                other.InternalVisitedBorderRightColor() ||
-            !BorderRightWidth());
-  }
-  const StyleColor& InternalVisitedBorderBottomColor() const {
-    return InternalVisitedBorderBottomColorInternal();
-  }
-  bool InternalVisitedBorderBottomColorHasNotChanged(
-      const ComputedStyle& other) const {
-    return (InternalVisitedBorderBottomColor() ==
-                other.InternalVisitedBorderBottomColor() ||
-            !BorderBottomWidth());
-  }
-  const StyleColor& InternalVisitedBorderTopColor() const {
-    return InternalVisitedBorderTopColorInternal();
-  }
-  bool InternalVisitedBorderTopColorHasNotChanged(
-      const ComputedStyle& other) const {
-    return (InternalVisitedBorderTopColor() ==
-                other.InternalVisitedBorderTopColor() ||
-            !BorderTopWidth());
-  }
-  const StyleColor& InternalVisitedOutlineColor() const {
-    return InternalVisitedOutlineColorInternal();
-  }
-  bool InternalVisitedOutlineColorHasNotChanged(
-      const ComputedStyle& other) const {
-    return (InternalVisitedOutlineColor() ==
-                other.InternalVisitedOutlineColor() ||
-            !OutlineWidth());
-  }
-  const StyleColor& InternalVisitedColumnRuleColor() const {
-    return InternalVisitedColumnRuleColorInternal();
-  }
-  const StyleColor& InternalVisitedTextDecorationColor() const {
-    return InternalVisitedTextDecorationColorInternal();
-  }
-  const StyleColor& InternalVisitedTextEmphasisColor() const {
-    return InternalVisitedTextEmphasisColorInternal();
-  }
-  const StyleColor& InternalVisitedTextFillColor() const {
-    return InternalVisitedTextFillColorInternal();
-  }
-  const StyleColor& InternalVisitedTextStrokeColor() const {
-    return InternalVisitedTextStrokeColorInternal();
-  }
+  [[nodiscard]] bool HasPropertyDependingOnCurrentColor() const;
 
-  const StyleColor& InternalForcedBackgroundColor() const {
-    return InternalForcedBackgroundColorInternal();
-  }
-  const StyleColor& InternalForcedBorderColor() const {
-    return InternalForcedBorderColorInternal();
-  }
-  const StyleColor& InternalForcedColor() const {
-    return InternalForcedColorInternal();
-  }
-  const StyleColor& InternalForcedOutlineColor() const {
-    return InternalForcedOutlineColorInternal();
-  }
-  const StyleColor& InternalForcedVisitedColor() const {
-    return InternalForcedVisitedColorInternal();
+  bool BorderOutlineVisitedColorChanged(const ComputedStyle& other) const {
+    // Only invalidate if the border/outline is present.
+    if (BorderTopWidth() && InternalVisitedBorderTopColor() !=
+                                other.InternalVisitedBorderTopColor()) {
+      return true;
+    }
+    if (BorderRightWidth() && InternalVisitedBorderRightColor() !=
+                                  other.InternalVisitedBorderRightColor()) {
+      return true;
+    }
+    if (BorderBottomWidth() && InternalVisitedBorderBottomColor() !=
+                                   other.InternalVisitedBorderBottomColor()) {
+      return true;
+    }
+    if (BorderLeftWidth() && InternalVisitedBorderLeftColor() !=
+                                 other.InternalVisitedBorderLeftColor()) {
+      return true;
+    }
+    if (OutlineWidth() &&
+        InternalVisitedOutlineColor() != other.InternalVisitedOutlineColor()) {
+      return true;
+    }
+    return false;
   }
 
   StyleColor DecorationColorIncludingFallback(bool visited_link) const;
 
-  // Appearance accessors are private to make sure callers use
-  // EffectiveAppearance in almost all cases.
-  ControlPart Appearance() const { return AppearanceInternal(); }
-  bool HasAppearance() const { return Appearance() != kNoControlPart; }
+  bool HasAppearance() const { return Appearance() != AppearanceValue::kNone; }
 
-  void AddAppliedTextDecoration(const AppliedTextDecoration&);
-  void OverrideTextDecorationColors(Color propagated_color);
   void ApplyMotionPathTransform(float origin_x,
                                 float origin_y,
-                                const FloatRect& bounding_box,
-                                TransformationMatrix&) const;
+                                const LayoutBox* box,
+                                const gfx::RectF& bounding_box,
+                                gfx::Transform&) const;
+  PointAndTangent CalculatePointAndTangentOnBasicShape(
+      const BasicShape& shape,
+      const gfx::PointF& starting_point,
+      const gfx::SizeF& reference_box_size) const;
+  PointAndTangent CalculatePointAndTangentOnRay(
+      const StyleRay& ray,
+      const LayoutBox* box,
+      const gfx::PointF& starting_point,
+      const gfx::SizeF& reference_box_size) const;
+  PointAndTangent CalculatePointAndTangentOnPath(const Path& path,
+                                                 float zoom) const;
 
-  bool ScrollAnchorDisablingPropertyChanged(const ComputedStyle& other,
-                                            const StyleDifference&) const;
-  bool DiffNeedsFullLayoutAndPaintInvalidation(
-      const ComputedStyle& other) const;
-  bool DiffNeedsFullLayout(const Document&, const ComputedStyle& other) const;
+  bool DiffNeedsReshape(const ComputedStyle& other, uint64_t field_diff) const;
+  bool DiffNeedsFullLayoutAndPaintInvalidation(const ComputedStyle& other,
+                                               uint64_t field_diff) const;
+  bool DiffNeedsFullLayout(const Document&,
+                           const ComputedStyle& other,
+                           uint64_t field_diff) const;
   bool DiffNeedsFullLayoutForLayoutCustom(const Document&,
                                           const ComputedStyle& other) const;
   bool DiffNeedsFullLayoutForLayoutCustomChild(
       const Document&,
       const ComputedStyle& other) const;
-  void AdjustDiffForNeedsPaintInvalidation(const ComputedStyle& other,
-                                           StyleDifference&,
-                                           const Document&) const;
+  bool DiffNeedsNormalPaintInvalidation(const Document&,
+                                        const ComputedStyle& other,
+                                        uint64_t field_diff) const;
   bool DiffNeedsPaintInvalidationForPaintImage(const StyleImage&,
                                                const ComputedStyle& other,
                                                const Document&) const;
-  bool DiffNeedsVisualRectUpdate(const ComputedStyle& other) const;
-  CORE_EXPORT void UpdatePropertySpecificDifferences(const ComputedStyle& other,
-                                                     StyleDifference&) const;
+  bool DiffNeedsRecomputeVisualOverflow(const ComputedStyle& other,
+                                        uint64_t field_diff) const;
+  bool DiffCompositingReasonsChanged(const ComputedStyle& other,
+                                     uint64_t field_diff) const;
   bool PotentialCompositingReasonsFor3DTransformChanged(
       const ComputedStyle& other) const;
 
@@ -2953,24 +2851,28 @@ class ComputedStyle : public ComputedStyleBase,
   CORE_EXPORT bool CustomPropertiesEqual(const Vector<AtomicString>& properties,
                                          const ComputedStyle& other) const;
 
-  Color GetCurrentColor() const;
-  Color GetInternalVisitedCurrentColor() const;
-  Color GetInternalForcedCurrentColor() const;
-  Color GetInternalForcedVisitedCurrentColor() const;
+  CORE_EXPORT blink::Color GetCurrentColor(
+      bool* is_current_color = nullptr) const;
+  blink::Color GetInternalVisitedCurrentColor(
+      bool* is_current_color = nullptr) const;
+  blink::Color GetInternalForcedCurrentColor(
+      bool* is_current_color = nullptr) const;
+  blink::Color GetInternalForcedVisitedCurrentColor(
+      bool* is_current_color = nullptr) const;
+
+  blink::Color VisitedDependentContextPaint(
+      const SVGPaint& context_paint,
+      const SVGPaint& context_visited_paint) const;
 
   // Helper for resolving a StyleColor which may contain currentColor or a
   // system color keyword. This is intended for cases where a given property
   // consists of a StyleColor plus additional information. For <color>
   // properties, prefer VisitedDependentColor() or
   // Longhand::ColorIncludingFallback() instead.
-  Color ResolvedColor(const StyleColor& color) const;
+  blink::Color ResolvedColor(const StyleColor& color,
+                             bool* is_current_color = nullptr) const;
 
   static bool ShadowListHasCurrentColor(const ShadowList*);
-
-  StyleInheritedVariables& MutableInheritedVariables();
-  StyleNonInheritedVariables& MutableNonInheritedVariables();
-
-  CORE_EXPORT void SetInitialData(scoped_refptr<StyleInitialData>);
 
   PhysicalToLogical<const Length&> PhysicalMarginToLogical(
       const ComputedStyle& other) const {
@@ -2985,105 +2887,869 @@ class ComputedStyle : public ComputedStyleBase,
                                             PaddingLeft());
   }
 
-  PhysicalToLogical<BorderValue> PhysicalBorderToLogical(
-      const ComputedStyle& other) const {
-    return PhysicalToLogical<BorderValue>(other.GetWritingDirection(),
-                                          BorderTop(), BorderRight(),
-                                          BorderBottom(), BorderLeft());
-  }
-
-  PhysicalToLogical<LayoutUnit> PhysicalBorderWidthToLogical() const {
-    return PhysicalToLogical<LayoutUnit>(
-        GetWritingDirection(), BorderTopWidth(), BorderRightWidth(),
-        BorderBottomWidth(), BorderLeftWidth());
-  }
-
-  PhysicalToLogical<EBorderStyle> PhysicalBorderStyleToLogical() const {
-    return PhysicalToLogical<EBorderStyle>(
-        GetWritingDirection(), BorderTopStyle(), BorderRightStyle(),
-        BorderBottomStyle(), BorderLeftStyle());
-  }
-
-  PhysicalToLogical<const Length&> PhysicalBoundsToLogical() const {
-    return PhysicalToLogical<const Length&>(GetWritingDirection(), Top(),
-                                            Right(), Bottom(), Left());
+  PhysicalToLogical<int> PhysicalBorderWidthToLogical() const {
+    return PhysicalToLogical<int>(GetWritingDirection(), BorderTopWidth(),
+                                  BorderRightWidth(), BorderBottomWidth(),
+                                  BorderLeftWidth());
   }
 
   static Difference ComputeDifferenceIgnoringInheritedFirstLineStyle(
       const ComputedStyle& old_style,
       const ComputedStyle& new_style);
 
-  bool ShouldForceColor(const StyleColor& unforced_color) const;
+  static bool ShouldForceColor(bool in_forced_colors_mode,
+                               EForcedColorAdjust forced_color_adjust,
+                               const StyleColor& unforced_color) {
+    return in_forced_colors_mode &&
+           forced_color_adjust == EForcedColorAdjust::kAuto &&
+           !unforced_color.IsSystemColorIncludingDeprecated();
+  }
+  bool ShouldForceColor(const StyleColor& unforced_color) const {
+    // If any other properties are added that are affected by ForcedColors mode,
+    // adjust EditingStyle::RemoveForcedColorsIfNeeded and
+    // EditingStyle::MergeStyleFromRulesForSerialization accordingly.
+    return ShouldForceColor(InForcedColorsMode(), ForcedColorAdjust(),
+                            unforced_color);
+  }
 
-  void ClearBackgroundImage();
+  // Returns true if the value for "display" is "none" on the scrollbar
+  // pseudo-element.
+  bool ScrollbarIsHiddenByCustomStyle(Element* element) const;
 
-  FRIEND_TEST_ALL_PREFIXES(
-      ComputedStyleTest,
-      UpdatePropertySpecificDifferencesRespectsTransformAnimation);
-  FRIEND_TEST_ALL_PREFIXES(
-      ComputedStyleTest,
-      UpdatePropertySpecificDifferencesCompositingReasonsTransforom);
-  FRIEND_TEST_ALL_PREFIXES(
-      ComputedStyleTest,
-      UpdatePropertySpecificDifferencesCompositingReasonsOpacity);
-  FRIEND_TEST_ALL_PREFIXES(
-      ComputedStyleTest,
-      UpdatePropertySpecificDifferencesCompositingReasonsFilter);
-  FRIEND_TEST_ALL_PREFIXES(
-      ComputedStyleTest,
-      UpdatePropertySpecificDifferencesCompositingReasonsBackdropFilter);
-  FRIEND_TEST_ALL_PREFIXES(
-      ComputedStyleTest,
-      UpdatePropertySpecificDifferencesCompositingReasonsInlineTransform);
-  FRIEND_TEST_ALL_PREFIXES(
-      ComputedStyleTest,
-      UpdatePropertySpecificDifferencesCompositingReasonsBackfaceVisibility);
-  FRIEND_TEST_ALL_PREFIXES(
-      ComputedStyleTest,
-      UpdatePropertySpecificDifferencesCompositingReasonsWillChange);
-  FRIEND_TEST_ALL_PREFIXES(
-      ComputedStyleTest,
-      UpdatePropertySpecificDifferencesCompositingReasonsUsedStylePreserve3D);
-  FRIEND_TEST_ALL_PREFIXES(
-      ComputedStyleTest,
-      UpdatePropertySpecificDifferencesCompositingReasonsOverflow);
-  FRIEND_TEST_ALL_PREFIXES(
-      ComputedStyleTest,
-      UpdatePropertySpecificDifferencesCompositingReasonsContainsPaint);
-  FRIEND_TEST_ALL_PREFIXES(ComputedStyleTest,
-                           UpdatePropertySpecificDifferencesHasAlpha);
+  // Derived flags:
+  bool CalculateIsStackingContextWithoutContainment() const;
+
+  CORE_EXPORT bool GapRuleColorIsTransparent(
+      const GapDataList<StyleColor>& gap_rule_color) const;
+
   FRIEND_TEST_ALL_PREFIXES(ComputedStyleTest, CustomPropertiesEqual_Values);
   FRIEND_TEST_ALL_PREFIXES(ComputedStyleTest, CustomPropertiesEqual_Data);
-  FRIEND_TEST_ALL_PREFIXES(ComputedStyleTest, InitialVariableNames);
-  FRIEND_TEST_ALL_PREFIXES(ComputedStyleTest,
-                           InitialAndInheritedAndNonInheritedVariableNames);
-  FRIEND_TEST_ALL_PREFIXES(ComputedStyleTest,
-                           GetVariableNamesWithInitialData_Invalidation);
   FRIEND_TEST_ALL_PREFIXES(StyleCascadeTest, ForcedVisitedBackgroundColor);
-  FRIEND_TEST_ALL_PREFIXES(
-      ComputedStyleTest,
-      TextDecorationEqualDoesNotRequireRecomputeInkOverflow);
-  FRIEND_TEST_ALL_PREFIXES(ComputedStyleTest,
-                           TextDecorationNotEqualRequiresRecomputeInkOverflow);
+  FRIEND_TEST_ALL_PREFIXES(StyleEngineTest, ScrollbarStyleNoExcessiveCaching);
+  FRIEND_TEST_ALL_PREFIXES(PermissionShadowElementTest,
+                           PropagateCSSPropertyInnerElement);
 };
 
 inline bool ComputedStyle::HasAnyPseudoElementStyles() const {
-  return !!PseudoBitsInternal();
+  return !!PseudoElementStylesInternal();
 }
 
-inline bool ComputedStyle::HasPseudoElementStyle(PseudoId pseudo) const {
-  DCHECK(pseudo >= kFirstPublicPseudoId);
-  DCHECK(pseudo < kFirstInternalPseudoId);
-  return (1 << (pseudo - kFirstPublicPseudoId)) & PseudoBitsInternal();
+inline bool ComputedStyle::HasAnyHighlightPseudoElementStyles() const {
+  static_assert(kPseudoIdSelection >= kFirstPublicPseudoId &&
+                    kPseudoIdSelection <= kLastTrackedPublicPseudoId,
+                "kPseudoIdSelection must be public");
+  static_assert(kPseudoIdSearchText >= kFirstPublicPseudoId &&
+                    kPseudoIdSearchText <= kLastTrackedPublicPseudoId,
+                "kPseudoIdSearchText must be public");
+  static_assert(kPseudoIdTargetText >= kFirstPublicPseudoId &&
+                    kPseudoIdTargetText <= kLastTrackedPublicPseudoId,
+                "kPseudoIdTargetText must be public");
+  static_assert(kPseudoIdSpellingError >= kFirstPublicPseudoId &&
+                    kPseudoIdSpellingError <= kLastTrackedPublicPseudoId,
+                "kPseudoIdSpellingError must be public");
+  static_assert(kPseudoIdGrammarError >= kFirstPublicPseudoId &&
+                    kPseudoIdGrammarError <= kLastTrackedPublicPseudoId,
+                "kPseudoIdGrammarError must be public");
+  static_assert(kPseudoIdHighlight >= kFirstPublicPseudoId &&
+                    kPseudoIdHighlight <= kLastTrackedPublicPseudoId,
+                "kPseudoIdHighlight must be public");
+
+  PseudoIdFlags flags = PseudoIdFlags::FromBits(PseudoElementStylesInternal());
+  return flags.Has(kPseudoIdSelection) || flags.Has(kPseudoIdSearchText) ||
+         flags.Has(kPseudoIdTargetText) || flags.Has(kPseudoIdSpellingError) ||
+         flags.Has(kPseudoIdGrammarError) || flags.Has(kPseudoIdHighlight);
 }
 
-inline void ComputedStyle::SetHasPseudoElementStyle(PseudoId pseudo) {
-  DCHECK(pseudo >= kFirstPublicPseudoId);
-  DCHECK(pseudo < kFirstInternalPseudoId);
-  // TODO: Fix up this code. It is hard to understand.
-  SetPseudoBitsInternal(PseudoBitsInternal() |
-                        1 << (pseudo - kFirstPublicPseudoId));
-}
+class ComputedStyleBuilder final : public ComputedStyleBuilderBase {
+  STACK_ALLOCATED();
+
+ public:
+  friend class ColorPropertyFunctions;
+  // Access to Appearance().
+  friend class LayoutTheme;
+  friend class StyleAdjuster;
+  friend class StyleCascade;
+  friend class StyleResolverState;
+  friend class StyleResolver;
+  // Access to UserModify().
+  friend class MatchedPropertiesCache;
+
+  // Creates a new ComputedStyle based on the given initial style.
+  CORE_EXPORT explicit ComputedStyleBuilder(const ComputedStyle& style);
+
+  // Creates a new ComputedStyle based on the given initial style,
+  // but with all inheritable properties from the given parent style.
+  CORE_EXPORT ComputedStyleBuilder(
+      const ComputedStyle& initial_style,
+      const ComputedStyle& parent_style,
+      IsAtShadowBoundary is_at_shadow_boundary = kNotAtShadowBoundary);
+
+  ComputedStyleBuilder(const ComputedStyleBuilder& builder) = delete;
+  ComputedStyleBuilder(ComputedStyleBuilder&&) = default;
+  ComputedStyleBuilder& operator=(const ComputedStyleBuilder&) = delete;
+  ComputedStyleBuilder& operator=(ComputedStyleBuilder&&) = default;
+
+  CORE_EXPORT const ComputedStyle* TakeStyle();
+
+  // NOTE: Prefer `TakeStyle()` if possible.
+  CORE_EXPORT const ComputedStyle* CloneStyle() const;
+
+  // Copies the values of any independent inherited properties from the parent
+  // that are not explicitly set in this style.
+  void PropagateIndependentInheritedProperties(
+      const ComputedStyle& parent_style);
+
+  // Pseudo-elements
+  bool HasPseudoElementStyle(PseudoId pseudo) const {
+    return PseudoIdFlags::FromBits(PseudoElementStylesInternal()).Has(pseudo);
+  }
+
+  // animations
+  CORE_EXPORT CSSAnimationData& AccessAnimations() {
+    Member<CSSAnimationData>& animations = MutableAnimationsInternal();
+    if (!has_own_animations_) {
+      animations = animations
+                       ? MakeGarbageCollected<CSSAnimationData>(*animations)
+                       : MakeGarbageCollected<CSSAnimationData>();
+    }
+    has_own_animations_ = true;
+    return *animations;
+  }
+
+  // appearance
+  bool HasEffectiveAppearance() const {
+    return ComputedStyle::HasEffectiveAppearance(EffectiveAppearance());
+  }
+  bool HasBaseAppearance() const {
+    DCHECK(RuntimeEnabledFeatures::AppearanceBaseEnabled() ||
+           Appearance() != AppearanceValue::kBase);
+    return Appearance() == AppearanceValue::kBaseSelect ||
+           Appearance() == AppearanceValue::kBase;
+  }
+
+  // backdrop-filter
+  FilterOperations::FilterOperationVector& MutableBackdropFilterOperations() {
+    return MutableBackdropFilterInternal().Operations();
+  }
+  bool HasBackdropFilter() const {
+    return ComputedStyle::HasBackdropFilter(BackdropFilter());
+  }
+
+  // background
+  FillLayer& AccessBackgroundLayers() { return MutableBackgroundInternal(); }
+  void AdjustBackgroundLayers() {
+    if (BackgroundInternal().Next()) {
+      AccessBackgroundLayers().CullUnusedLayers();
+      AccessBackgroundLayers().FillUnsetProperties();
+    }
+  }
+  bool HasUrlBackgroundImage() const {
+    return BackgroundInternal().AnyLayerHasUrlImage();
+  }
+  void ClearBackgroundImage();
+
+  // border-*-color
+  void SetBorderColorFrom(const ComputedStyle& other) {
+    SetBorderBottomColor(other.BorderBottomColor());
+    SetBorderLeftColor(other.BorderLeftColor());
+    SetBorderRightColor(other.BorderRightColor());
+    SetBorderTopColor(other.BorderTopColor());
+  }
+
+  // border-*-width
+  int BorderTopWidth() const {
+    return ComputedStyle::BorderWidth(BorderTopStyle(),
+                                      SpecifiedBorderTopWidth());
+  }
+  int BorderBottomWidth() const {
+    return ComputedStyle::BorderWidth(BorderBottomStyle(),
+                                      SpecifiedBorderBottomWidth());
+  }
+  int BorderLeftWidth() const {
+    return ComputedStyle::BorderWidth(BorderLeftStyle(),
+                                      SpecifiedBorderLeftWidth());
+  }
+  int BorderRightWidth() const {
+    return ComputedStyle::BorderWidth(BorderRightStyle(),
+                                      SpecifiedBorderRightWidth());
+  }
+
+  // border-image-*
+  void SetBorderImageOutset(const BorderImageLengthBox& outset) {
+    if (BorderImage().Outset() == outset) {
+      return;
+    }
+    MutableBorderImageInternal().SetOutset(outset);
+  }
+  void SetBorderImageSlices(const LengthBox& slices) {
+    if (BorderImage().ImageSlices() == slices) {
+      return;
+    }
+    MutableBorderImageInternal().SetImageSlices(slices);
+  }
+  void SetBorderImageSlicesFill(bool fill) {
+    if (BorderImage().Fill() == fill) {
+      return;
+    }
+    MutableBorderImageInternal().SetFill(fill);
+  }
+  void SetBorderImageSource(StyleImage* image) {
+    if (BorderImage().GetImage() == image) {
+      return;
+    }
+    MutableBorderImageInternal().SetImage(image);
+  }
+  void SetBorderImageWidth(const BorderImageLengthBox& slices) {
+    if (BorderImage().BorderSlices() == slices) {
+      return;
+    }
+    MutableBorderImageInternal().SetBorderSlices(slices);
+  }
+
+  // clip
+  void SetClip(const LengthBox& box) {
+    SetHasAutoClipInternal(false);
+    SetClipInternal(box);
+  }
+  void SetHasAutoClip() {
+    SetHasAutoClipInternal(true);
+    SetClipInternal(ComputedStyleInitialValues::InitialClip());
+  }
+
+  // clip-path
+  void SetClipPath(ClipPathOperation* clip_path) {
+    SetHasClipPath(clip_path);
+    SetClipPathInternal(clip_path);
+  }
+  ClipPathOperation* MutableClipPath() { return ClipPathInternal().Get(); }
+
+  // color
+  blink::Color GetCurrentColor() const {
+    return Color().Resolve(blink::Color(), UsedColorScheme());
+  }
+
+  // accent-color
+  std::optional<blink::Color> ResolveMirroredAccentColor(
+      mojom::blink::ColorScheme color_scheme) const;
+
+  // column-count
+  void SetColumnCount(uint16_t c) {
+    SetHasAutoColumnCountInternal(false);
+    SetColumnCountInternal(ClampTo<uint16_t>(c, 1));
+  }
+  void SetHasAutoColumnCount() {
+    SetHasAutoColumnCountInternal(true);
+    SetColumnCountInternal(ComputedStyleInitialValues::InitialColumnCount());
+  }
+
+  // column-rule-color
+  void SetColumnRuleColor(const GapDataList<StyleColor>& colors) {
+    SetMaybeHasGapDecorations();
+    SetColumnRuleColorInternal(colors);
+  }
+
+  // row-rule-color
+  void SetRowRuleColor(const GapDataList<StyleColor>& colors) {
+    SetMaybeHasGapDecorations();
+    SetRowRuleColorInternal(colors);
+  }
+
+  // column-rule-style
+  void SetColumnRuleStyle(const GapDataList<EBorderStyle>& styles) {
+    SetMaybeHasGapDecorations();
+    SetColumnRuleStyleInternal(styles);
+  }
+
+  // row-rule-style
+  void SetRowRuleStyle(const GapDataList<EBorderStyle>& styles) {
+    SetMaybeHasGapDecorations();
+    SetRowRuleStyleInternal(styles);
+  }
+
+  // column-rule-width
+  void SetColumnRuleWidth(const GapDataList<int>& widths) {
+    SetMaybeHasGapDecorations();
+    SetColumnRuleWidthInternal(widths);
+  }
+
+  // row-rule-width
+  void SetRowRuleWidth(const GapDataList<int>& widths) {
+    SetMaybeHasGapDecorations();
+    SetRowRuleWidthInternal(widths);
+  }
+
+  // column-width
+  void SetColumnWidth(float f) {
+    SetHasAutoColumnWidthInternal(false);
+    SetColumnWidthInternal(f);
+  }
+  void SetHasAutoColumnWidth() {
+    SetHasAutoColumnWidthInternal(true);
+    SetColumnWidthInternal(0);
+  }
+
+  // column-height
+  void SetColumnHeight(float f) {
+    SetHasAutoColumnHeightInternal(false);
+    SetColumnHeightInternal(f);
+  }
+  void SetHasAutoColumnHeight() {
+    SetHasAutoColumnHeightInternal(true);
+    SetColumnHeightInternal(0);
+  }
+
+  void SetFontVariantEmoji(FontVariantEmoji emoji_variant) {
+    FontDescription description(GetFontDescription());
+    description.SetVariantEmoji(emoji_variant);
+    SetFontDescription(description);
+  }
+
+  // contain
+  bool ShouldApplyAnyContainment(const Element& element) const {
+    unsigned effective_containment = ComputedStyle::EffectiveContainment(
+        Contain(), ContainerType(), ContentVisibility(), SkipsContents(),
+        HasSizeContainmentForViewTransitionScope() &&
+            RuntimeEnabledFeatures::
+                ScopedViewTransitionSizeContainmentEnabled(),
+        EffectiveOverscrollContainerType(),
+        HasLayoutContainmentForViewTransitionScope());
+    return ComputedStyle::ShouldApplyAnyContainment(element, GetDisplayStyle(),
+                                                    effective_containment);
+  }
+
+  // content
+  ContentData* GetContentData() const { return ContentInternal().Get(); }
+
+  // counter-*
+  CounterDirectiveMap& AccessCounterDirectives() {
+    std::unique_ptr<CounterDirectiveMap>& map =
+        MutableCounterDirectivesInternal();
+    if (!map) {
+      map = std::make_unique<CounterDirectiveMap>();
+    }
+    return *map;
+  }
+  void ClearIncrementDirectives() {
+    if (const auto& map = MutableCounterDirectivesInternal()) {
+      for (auto& value_pair : *map) {
+        value_pair.value.ClearIncrement();
+      }
+    }
+  }
+  void ClearResetDirectives() {
+    if (const auto& map = MutableCounterDirectivesInternal()) {
+      for (auto& value_pair : *map) {
+        value_pair.value.ClearReset();
+      }
+    }
+  }
+  void ClearSetDirectives() {
+    if (const auto& map = MutableCounterDirectivesInternal()) {
+      for (auto& value_pair : *map) {
+        value_pair.value.ClearSet();
+      }
+    }
+  }
+
+  // cursor
+  void AddCursor(StyleImage* image,
+                 bool hot_spot_specified,
+                 const gfx::Point& hot_spot = gfx::Point()) {
+    if (!CursorDataInternal()) {
+      SetCursorDataInternal(MakeGarbageCollected<CursorList>());
+    }
+    MutableCursorDataInternal()->push_back(
+        CursorData(image, hot_spot_specified, hot_spot));
+  }
+  void SetCursorList(CursorList* list) { SetCursorDataInternal(list); }
+  void ClearCursorList() {
+    if (CursorDataInternal()) {
+      SetCursorDataInternal(nullptr);
+    }
+  }
+  CursorList* Cursors() const { return CursorDataInternal().Get(); }
+
+  // display
+  bool IsDisplayInlineType() const {
+    return ComputedStyle::IsDisplayInlineType(Display());
+  }
+  bool IsNonAtomicInlineDisplayType() const {
+    return ComputedStyle::IsNonAtomicInlineDisplayType(Display());
+  }
+  bool IsAtomicInlineDisplayType() const {
+    return ComputedStyle::IsAtomicInlineDisplayType(Display());
+  }
+  bool IsDisplayMath() const { return ComputedStyle::IsDisplayMath(Display()); }
+  bool IsDisplayTable() const {
+    return ComputedStyle::IsDisplayTable(Display());
+  }
+  bool IsDisplayTableRowOrColumnType() const {
+    return Display() == EDisplay::kTableRow ||
+           Display() == EDisplay::kTableRowGroup ||
+           Display() == EDisplay::kTableColumn ||
+           Display() == EDisplay::kTableColumnGroup;
+  }
+  DisplayStyle GetDisplayStyle() const {
+    return DisplayStyle(Display(), StyleType(), GetContentData());
+  }
+
+  // filter
+  FilterOperations::FilterOperationVector& MutableFilterOperations() {
+    return MutableFilterInternal().Operations();
+  }
+
+  // float
+  bool IsFloating() const { return Floating() != EFloat::kNone; }
+
+  // font
+  void SetFontDescription(const FontDescription& v) {
+    if (GetFont()->GetFontDescription() != v) {
+      SetFont(MakeGarbageCollected<Font>(v, GetFont()->GetFontSelector()));
+    }
+  }
+  const FontDescription& GetFontDescription() const {
+    return GetFont()->GetFontDescription();
+  }
+  int FontSize() const { return GetFontDescription().ComputedPixelSize(); }
+  LayoutUnit FontHeight() const {
+    if (const SimpleFontData* font_data = GetFont()->PrimaryFont()) {
+      return LayoutUnit(font_data->GetFontMetrics().Height());
+    }
+    return LayoutUnit();
+  }
+  FontOrientation ComputeFontOrientation() const;
+  void UpdateFontOrientation();
+
+  FontSizeStyle GetFontSizeStyle() const {
+    return FontSizeStyle(GetFont(), LineHeight(), EffectiveZoom());
+  }
+
+  // grid-template-*
+  const ComputedGridTrackList& GridTemplateColumns() const {
+    return ComputedStyle::ComputedGridTemplate(SpecifiedGridTemplateColumns());
+  }
+
+  const ComputedGridTrackList& GridTemplateRows() const {
+    return ComputedStyle::ComputedGridTemplate(SpecifiedGridTemplateRows());
+  }
+
+  // letter-spacing
+  void SetLetterSpacing(const Length& letter_spacing) {
+    FontDescription description(GetFontDescription());
+    description.SetLetterSpacing(letter_spacing);
+    SetFontDescription(description);
+  }
+
+  // line-height
+  bool HasInitialLineHeight() const {
+    return LineHeight() == ComputedStyleInitialValues::InitialLineHeight();
+  }
+
+  // margin-*
+  void SetMarginTop(const Length& v) {
+    if (MarginTop() != v) {
+      if (!v.IsZero() || v.IsAuto()) {
+        SetMayHaveMargin();
+      }
+      MutableMarginTopInternal() = v;
+    }
+  }
+  void SetMarginRight(const Length& v) {
+    if (MarginRight() != v) {
+      if (!v.IsZero() || v.IsAuto()) {
+        SetMayHaveMargin();
+      }
+      MutableMarginRightInternal() = v;
+    }
+  }
+  void SetMarginBottom(const Length& v) {
+    if (MarginBottom() != v) {
+      if (!v.IsZero() || v.IsAuto()) {
+        SetMayHaveMargin();
+      }
+      MutableMarginBottomInternal() = v;
+    }
+  }
+  void SetMarginLeft(const Length& v) {
+    if (MarginLeft() != v) {
+      if (!v.IsZero() || v.IsAuto()) {
+        SetMayHaveMargin();
+      }
+      MutableMarginLeftInternal() = v;
+    }
+  }
+
+  // mask
+  FillLayer& AccessMaskLayers() { return MutableMaskInternal(); }
+  void AdjustMaskLayers() {
+    if (MaskInternal().Next()) {
+      AccessMaskLayers().CullUnusedLayers();
+      AccessMaskLayers().FillUnsetProperties();
+    }
+  }
+
+  // mask-box-image-*
+  const NinePieceImage& MaskBoxImage() const { return MaskBoxImageInternal(); }
+  void SetMaskBoxImage(const NinePieceImage& b) { SetMaskBoxImageInternal(b); }
+  void SetMaskBoxImageOutset(const BorderImageLengthBox& outset) {
+    MutableMaskBoxImageInternal().SetOutset(outset);
+  }
+  void SetMaskBoxImageSlices(const LengthBox& slices) {
+    MutableMaskBoxImageInternal().SetImageSlices(slices);
+  }
+  void SetMaskBoxImageSlicesFill(bool fill) {
+    MutableMaskBoxImageInternal().SetFill(fill);
+  }
+  void SetMaskBoxImageSource(StyleImage* v) {
+    MutableMaskBoxImageInternal().SetImage(v);
+  }
+  void SetMaskBoxImageWidth(const BorderImageLengthBox& slices) {
+    MutableMaskBoxImageInternal().SetBorderSlices(slices);
+  }
+  StyleImage* MaskBoxImageSource() const {
+    return MaskBoxImageInternal().GetImage();
+  }
+
+  // opacity
+  void SetOpacity(float f) {
+    float v = ClampTo<float>(f, 0, 1);
+    SetOpacityInternal(v);
+  }
+
+  // Sets the element animating the given property.
+  // Must be called after the base style has been resolved, since base styles
+  // can be shared between elements and must not record a specific element.
+  CORE_EXPORT void SetAnimatedSource(CSSPropertyID property,
+                                     Element& animating_element);
+
+  // Copies the animated source for the given property from a parent style
+  // (e.g. when inheriting from a parent style), preserving any untracked
+  // dependencies already on the parent's source.
+  CORE_EXPORT void CopyAnimatedSourceFrom(CSSPropertyID property,
+                                          const ComputedStyle* parent_style,
+                                          bool has_untracked_dependencies);
+
+  // Clears any animated source recorded for the given property.
+  CORE_EXPORT void ClearAnimatedSource(CSSPropertyID property);
+
+  // orphans
+  void SetOrphans(int16_t o) { SetOrphansInternal(ClampTo<int16_t>(o, 1)); }
+
+  // overflow
+  bool ScrollsOverflow() const {
+    return ComputedStyle::ScrollsOverflow(OverflowX()) ||
+           ComputedStyle::ScrollsOverflow(OverflowY());
+  }
+
+  // overscroll
+  EOverscrollContainerType EffectiveOverscrollContainerType() const {
+    if (InternalOverscrollContainer() == EInternalOverscrollContainer::kNone) {
+      return EOverscrollContainerType::kNone;
+    }
+    return OverscrollContainerType();
+  }
+
+  // padding-*
+  void SetPaddingTop(const Length& v) {
+    if (PaddingTop() != v) {
+      if (!v.IsZero()) {
+        SetMayHavePadding();
+      }
+      MutablePaddingTopInternal() = v;
+    }
+  }
+  void SetPaddingRight(const Length& v) {
+    if (PaddingRight() != v) {
+      if (!v.IsZero()) {
+        SetMayHavePadding();
+      }
+      MutablePaddingRightInternal() = v;
+    }
+  }
+  void SetPaddingBottom(const Length& v) {
+    if (PaddingBottom() != v) {
+      if (!v.IsZero()) {
+        SetMayHavePadding();
+      }
+      MutablePaddingBottomInternal() = v;
+    }
+  }
+  void SetPaddingLeft(const Length& v) {
+    if (PaddingLeft() != v) {
+      if (!v.IsZero()) {
+        SetMayHavePadding();
+      }
+      MutablePaddingLeftInternal() = v;
+    }
+  }
+
+  void SetPageMarginSafety(EPageMarginSafety v) {
+    if (GetPageMarginSafety() != v) {
+      if (v != EPageMarginSafety::kNone) {
+        SetMayHaveMargin();
+      }
+      SetPageMarginSafetyInternal(v);
+    }
+  }
+
+  // perspective-origin
+  void SetPerspectiveOriginX(const Length& v) {
+    SetPerspectiveOrigin(LengthPoint(v, PerspectiveOrigin().Y()));
+  }
+  void SetPerspectiveOriginY(const Length& v) {
+    SetPerspectiveOrigin(LengthPoint(PerspectiveOrigin().X(), v));
+  }
+
+  // position
+  EPosition GetPosition() const {
+    return ComputedStyle::GetPosition(Display(), PositionInternal());
+  }
+  bool HasOutOfFlowPosition() const {
+    return ComputedStyle::HasOutOfFlowPosition(GetPosition());
+  }
+
+  DefaultAnchorData GetDefaultAnchorData() const {
+    return DefaultAnchorData(PositionAnchor(), GetPositionArea());
+  }
+
+  // shape-image-threshold
+  void SetShapeImageThreshold(float shape_image_threshold) {
+    float clamped_shape_image_threshold =
+        ClampTo<float>(shape_image_threshold, 0, 1);
+    SetShapeImageThresholdInternal(clamped_shape_image_threshold);
+  }
+
+  // shape-outside
+  ShapeValue* ShapeOutside() const { return ShapeOutsideInternal().Get(); }
+
+  // tab-size
+  void SetTabSize(const TabSize& t) {
+    if (t.GetPixelSize(1) < 0) {
+      if (t.IsSpaces()) {
+        SetTabSizeInternal(TabSize(0, TabSizeValueType::kSpace));
+      } else {
+        SetTabSizeInternal(TabSize(0, TabSizeValueType::kLength));
+      }
+    } else {
+      SetTabSizeInternal(t);
+    }
+  }
+
+  // transform-origin
+  void SetTransformOriginX(const Length& v) {
+    SetTransformOrigin(
+        TransformOrigin(v, GetTransformOrigin().Y(), GetTransformOrigin().Z()));
+  }
+  void SetTransformOriginY(const Length& v) {
+    SetTransformOrigin(
+        TransformOrigin(GetTransformOrigin().X(), v, GetTransformOrigin().Z()));
+  }
+  void SetTransformOriginZ(float f) {
+    SetTransformOrigin(
+        TransformOrigin(GetTransformOrigin().X(), GetTransformOrigin().Y(), f));
+  }
+
+  // transitions
+  CORE_EXPORT CSSTransitionData& AccessTransitions() {
+    Member<CSSTransitionData>& transitions = MutableTransitionsInternal();
+    if (!has_own_transitions_) {
+      transitions = transitions
+                        ? MakeGarbageCollected<CSSTransitionData>(*transitions)
+                        : MakeGarbageCollected<CSSTransitionData>();
+    }
+    has_own_transitions_ = true;
+    return *transitions;
+  }
+
+  // -webkit-box-ordinal-group
+  void SetBoxOrdinalGroup(unsigned ordinal_group) {
+    SetBoxOrdinalGroupInternal(
+        std::min(std::numeric_limits<unsigned>::max() - 1, ordinal_group));
+  }
+
+  // vertical-align
+  void SetVerticalAlign(EVerticalAlign v) {
+    SetVerticalAlignInternal(static_cast<unsigned>(v));
+  }
+  void SetVerticalAlignLength(const Length& length) {
+    SetVerticalAlignInternal(static_cast<unsigned>(EVerticalAlign::kLength));
+    SetVerticalAlignLengthInternal(length);
+  }
+
+  // widows
+  void SetWidows(int16_t w) { SetWidowsInternal(ClampTo<int16_t>(w, 1)); }
+
+  // word-spacing
+  void SetWordSpacing(const Length& word_spacing) {
+    FontDescription description(GetFontDescription());
+    description.SetWordSpacing(word_spacing);
+    SetFontDescription(description);
+  }
+
+  // -internal-unbounded
+  bool IsUnboundedElementActive() const {
+    return InternalUnbounded() == EInternalUnbounded::kActive;
+  }
+
+  // z-index
+  void SetZIndex(int v) {
+    SetHasAutoZIndexInternal(false);
+    SetZIndexInternal(v);
+  }
+  void SetHasAutoZIndex() {
+    SetHasAutoZIndexInternal(true);
+    SetZIndexInternal(0);
+  }
+
+  // zoom
+  CORE_EXPORT bool SetEffectiveZoom(float);
+
+  // BaseData
+  const ComputedStyle* GetBaseComputedStyle() const {
+    if (auto* base_data = BaseData()) {
+      return base_data->GetBaseComputedStyle();
+    }
+    return nullptr;
+  }
+
+  /// CallbackSelector
+  void AddCallbackSelector(const String& selector) {
+    if (!CallbackSelectors().Contains(selector)) {
+      MutableCallbackSelectorsInternal().push_back(selector);
+    }
+  }
+
+  // DocumentRulesSelectors
+  void AddDocumentRulesSelector(StyleRule* selector) {
+    if (!DocumentRulesSelectors()) {
+      MutableDocumentRulesSelectorsInternal() =
+          MakeGarbageCollected<GCedHeapHashSet<WeakMember<StyleRule>>>();
+    }
+    DocumentRulesSelectors()->insert(selector);
+  }
+
+  // ::selection, etc
+  StyleHighlightData& AccessHighlightData() {
+    return MutableHighlightDataInternal();
+  }
+
+  // CustomHighlightNames
+  void SetCustomHighlightNames(
+      const HashSet<AtomicString>& custom_highlight_names) {
+    SetCustomHighlightNamesInternal(
+        std::make_unique<HashSet<AtomicString>>(custom_highlight_names));
+  }
+
+  // PaintImage
+  void AddPaintImage(StyleImage* image) {
+    if (!PaintImagesInternal()) {
+      MutablePaintImagesInternal() = MakeGarbageCollected<PaintImages>();
+    }
+    MutablePaintImagesInternal()->Images().push_back(image);
+  }
+
+  // ColorScheme and ForcedColors
+  bool ShouldPreserveParentColor() const {
+    return InForcedColorsMode() &&
+           ForcedColorAdjust() == EForcedColorAdjust::kPreserveParentColor;
+  }
+  bool ShouldForceColor(const StyleColor& unforced_color) const {
+    return ComputedStyle::ShouldForceColor(InForcedColorsMode(),
+                                           ForcedColorAdjust(), unforced_color);
+  }
+
+  StyleColor InitialColorForColorScheme() const {
+    // TODO(crbug.com/1046753, crbug.com/929098): The initial value of the color
+    // property should be canvastext, but since we do not yet ship color-scheme
+    // aware system colors, we use this method instead. This should be replaced
+    // by default_value:"canvastext" in css_properties.json5.
+    return StyleColor(DarkColorScheme() ? Color::kWhite : Color::kBlack);
+  }
+
+  // Helper method to adjust used values for color-scheme on the current
+  // computed color-scheme passed in as flags. The computed value should
+  // already have been set by the Apply* methods on the ColorScheme class, or
+  // as the initial value.
+  void SetUsedColorScheme(
+      ColorSchemeFlags flags,
+      mojom::blink::PreferredColorScheme preferred_color_scheme,
+      bool force_dark);
+
+  mojom::blink::ColorScheme UsedColorScheme() const {
+    return ComputedStyle::UsedColorScheme(DarkColorScheme());
+  }
+
+  // Variables
+  const StyleInheritedVariables* InheritedVariables() const {
+    return &InheritedVariablesInternal();
+  }
+  const StyleNonInheritedVariables* NonInheritedVariables() const {
+    return &NonInheritedVariablesInternal();
+  }
+  CSSVariableData* GetVariableData(const AtomicString&,
+                                   bool is_inherited_property) const;
+  CORE_EXPORT StyleInheritedVariables& MutableInheritedVariables();
+  CORE_EXPORT StyleNonInheritedVariables& MutableNonInheritedVariables();
+  CORE_EXPORT void SetVariableData(const AtomicString& name,
+                                   CSSVariableData* value,
+                                   bool is_inherited_property) {
+    if (is_inherited_property) {
+      MutableInheritedVariables().SetData(name, value);
+    } else {
+      MutableNonInheritedVariables().SetData(name, value);
+    }
+  }
+  CORE_EXPORT void SetVariableValue(const AtomicString& name,
+                                    const CSSValue* value,
+                                    bool is_inherited_property) {
+    if (is_inherited_property) {
+      MutableInheritedVariables().SetValue(name, value);
+    } else {
+      MutableNonInheritedVariables().SetValue(name, value);
+    }
+  }
+
+  EWhiteSpace WhiteSpace() const {
+    return ToWhiteSpace(GetWhiteSpaceCollapse(), GetTextWrapMode());
+  }
+  void SetWhiteSpace(EWhiteSpace whitespace) {
+    SetWhiteSpaceCollapse(ToWhiteSpaceCollapse(whitespace));
+    SetTextWrapMode(ToTextWrapMode(whitespace));
+  }
+
+  // WritingMode
+  WritingDirectionMode GetWritingDirection() const {
+    return {GetWritingMode(), Direction()};
+  }
+
+  void SetHasStaticViewportUnits() {
+    SetViewportUnitFlags(ViewportUnitFlags() |
+                         static_cast<unsigned>(ViewportUnitFlag::kStatic));
+  }
+  void SetHasDynamicViewportUnits() {
+    SetViewportUnitFlags(ViewportUnitFlags() |
+                         static_cast<unsigned>(ViewportUnitFlag::kDynamic));
+  }
+
+  // ContainIntrinsicSize
+  void SetContainIntrinsicSizeAuto() {
+    StyleIntrinsicLength width = ContainIntrinsicWidth();
+    width.SetHasAuto();
+    SetContainIntrinsicWidth(width);
+
+    StyleIntrinsicLength height = ContainIntrinsicHeight();
+    height.SetHasAuto();
+    SetContainIntrinsicHeight(height);
+  }
+
+ private:
+  void UpdateAnimatedSource(AnimatedSourceProperty property,
+                            const CSSProperty& css_property,
+                            AnimatedSource source);
+
+  mutable bool has_own_animations_ = false;
+  mutable bool has_own_transitions_ = false;
+};
 
 }  // namespace blink
 

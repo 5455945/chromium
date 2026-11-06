@@ -35,16 +35,22 @@ class CORE_EXPORT HTMLBRElement final : public HTMLElement {
  public:
   explicit HTMLBRElement(Document&);
 
+  ElementType GetElementType() const final {
+    return ElementType::kHTMLBRElement;
+  }
+
   bool CanContainRangeEndPoint() const override { return false; }
+
+  bool IsRichlyEditableForAccessibility() const override { return false; }
 
  private:
   bool IsPresentationAttribute(const QualifiedName&) const override;
   void CollectStyleForPresentationAttribute(
       const QualifiedName&,
       const AtomicString&,
-      MutableCSSPropertyValueSet*) override;
+      HeapVector<CSSPropertyValue, 8>&) override;
 
-  LayoutObject* CreateLayoutObject(const ComputedStyle&, LegacyLayout) override;
+  LayoutObject* CreateLayoutObject(const ComputedStyle&) override;
 };
 
 }  // namespace blink

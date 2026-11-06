@@ -1,31 +1,40 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/login/saml/password_sync_token_login_checker.h"
 
-#include "base/task/post_task.h"
-#include "chrome/browser/ash/login/existing_user_controller.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/net/system_network_context_manager.h"
+#include <memory>
+#include <string>
+
+#include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/location.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/time/time.h"
+#include "chrome/browser/ash/login/saml/password_sync_token_fetcher.h"
 #include "components/user_manager/known_user.h"
 #include "components/user_manager/user_manager.h"
-#include "content/public/browser/storage_partition.h"
+#include "net/base/backoff_entry.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 
-namespace chromeos {
-
+namespace ash {
 namespace {
-const base::TimeDelta kPollingInterval = base::TimeDelta::FromMinutes(5);
+
+const base::TimeDelta kPollingInterval = base::Minutes(5);
 }
 
 PasswordSyncTokenLoginChecker::PasswordSyncTokenLoginChecker(
+    scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
     const AccountId& account_id,
     const std::string& sync_token,
     net::BackoffEntry* retry_backoff)
-    : account_id_(account_id),
+    : shared_url_loader_factory_(std::move(shared_url_loader_factory)),
+      account_id_(account_id),
       sync_token_(sync_token),
       retry_backoff_(retry_backoff) {
-  DCHECK(!sync_token_.empty());
+  CHECK(shared_url_loader_factory_);
+  CHECK(!sync_token_.empty(), base::NotFatalUntil::M160);
 }
 
 PasswordSyncTokenLoginChecker::~PasswordSyncTokenLoginChecker() = default;
@@ -39,18 +48,13 @@ void PasswordSyncTokenLoginChecker::RecheckAfter(base::TimeDelta delay) {
 }
 
 void PasswordSyncTokenLoginChecker::CheckForPasswordNotInSync() {
-  DCHECK(!password_sync_token_fetcher_);
-  SystemNetworkContextManager* network_context_manager =
-      g_browser_process->system_network_context_manager();
-  if (!network_context_manager)
-    return;
-  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory =
-      network_context_manager->GetSharedURLLoaderFactory();
-  if (!url_loader_factory.get())
-    return;
-
+  CHECK(!password_sync_token_fetcher_, base::NotFatalUntil::M160);
+  // Passing nullptr to the PasswordSyncTokenFetcher here is fine,
+  // because it is used only for verification.
+  // TODO: consider to remove the explicit nullptr passing by splitting
+  // PasswordSyncTokenFetcher per purposes.
   password_sync_token_fetcher_ = std::make_unique<PasswordSyncTokenFetcher>(
-      url_loader_factory, /*primary_profile_ = */ nullptr, this);
+      shared_url_loader_factory_, /*identity_manager=*/nullptr, this);
   password_sync_token_fetcher_->StartTokenVerify(sync_token_);
 }
 
@@ -58,7 +62,7 @@ void PasswordSyncTokenLoginChecker::CancelPendingChecks() {
   // We should not have any active request at this point. DCHECK makes sure it
   // is really the case for the dev build. In a release build InvalidateWeakPtrs
   // helps to recover by cancelling potential existing requests.
-  DCHECK(!IsCheckPending());
+  CHECK(!IsCheckPending(), base::NotFatalUntil::M160);
   weak_ptr_factory_.InvalidateWeakPtrs();
 }
 
@@ -117,4 +121,4 @@ void PasswordSyncTokenLoginChecker::NotifyObservers() {
   }
 }
 
-}  // namespace chromeos
+}  // namespace ash

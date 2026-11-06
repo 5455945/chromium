@@ -1,12 +1,15 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_ASH_SYSTEM_INPUT_DEVICE_SETTINGS_H_
 #define CHROME_BROWSER_ASH_SYSTEM_INPUT_DEVICE_SETTINGS_H_
 
-#include "base/callback_forward.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include <optional>
+
+#include "base/functional/callback_forward.h"
+
+class PrefService;
 
 namespace ash {
 namespace system {
@@ -68,6 +71,14 @@ class TouchpadSettings {
   bool GetScrollAcceleration() const;
   bool IsScrollAccelerationSet() const;
 
+  void SetHapticFeedback(bool enabled);
+  bool GetHapticFeedback() const;
+  bool IsHapticFeedbackSet() const;
+
+  void SetHapticClickSensitivity(int value);
+  int GetHapticClickSensitivity() const;
+  bool IsHapticClickSensitivitySet() const;
+
   // Updates |this| with |settings|. If at least one setting was updated returns
   // true.
   bool Update(const TouchpadSettings& settings);
@@ -77,14 +88,16 @@ class TouchpadSettings {
                     InputDeviceSettings* input_device_settings);
 
  private:
-  absl::optional<bool> acceleration_;
-  absl::optional<bool> natural_scroll_;
-  absl::optional<int> sensitivity_;
-  absl::optional<bool> scroll_acceleration_;
-  absl::optional<int> scroll_sensitivity_;
-  absl::optional<bool> tap_dragging_;
-  absl::optional<bool> tap_to_click_;
-  absl::optional<bool> three_finger_click_;
+  std::optional<bool> acceleration_;
+  std::optional<bool> haptic_feedback_;
+  std::optional<int> haptic_click_sensitivity_;
+  std::optional<bool> natural_scroll_;
+  std::optional<int> sensitivity_;
+  std::optional<bool> scroll_acceleration_;
+  std::optional<int> scroll_sensitivity_;
+  std::optional<bool> tap_dragging_;
+  std::optional<bool> tap_to_click_;
+  std::optional<bool> three_finger_click_;
 };
 
 // Auxiliary class used to update several mouse settings at a time. User
@@ -132,12 +145,12 @@ class MouseSettings {
                     InputDeviceSettings* input_device_settings);
 
  private:
-  absl::optional<bool> acceleration_;
-  absl::optional<bool> primary_button_right_;
-  absl::optional<bool> reverse_scroll_;
-  absl::optional<bool> scroll_acceleration_;
-  absl::optional<int> scroll_sensitivity_;
-  absl::optional<int> sensitivity_;
+  std::optional<bool> acceleration_;
+  std::optional<bool> primary_button_right_;
+  std::optional<bool> reverse_scroll_;
+  std::optional<bool> scroll_acceleration_;
+  std::optional<int> scroll_sensitivity_;
+  std::optional<int> sensitivity_;
 };
 
 // Auxiliary class used to update several pointing stick settings at a time.
@@ -173,9 +186,9 @@ class PointingStickSettings {
                     InputDeviceSettings* input_device_settings);
 
  private:
-  absl::optional<bool> acceleration_;
-  absl::optional<bool> primary_button_right_;
-  absl::optional<int> sensitivity_;
+  std::optional<bool> acceleration_;
+  std::optional<bool> primary_button_right_;
+  std::optional<int> sensitivity_;
 };
 
 // Interface for configuring input device settings.
@@ -188,6 +201,7 @@ class InputDeviceSettings {
   class FakeInterface {
    public:
     virtual void set_touchpad_exists(bool exists) = 0;
+    virtual void set_haptic_touchpad_exists(bool exists) = 0;
     virtual void set_mouse_exists(bool exists) = 0;
     virtual void set_pointing_stick_exists(bool exists) = 0;
     virtual const TouchpadSettings& current_touchpad_settings() const = 0;
@@ -196,14 +210,14 @@ class InputDeviceSettings {
         const = 0;
   };
 
-  virtual ~InputDeviceSettings() {}
+  virtual ~InputDeviceSettings() = default;
 
   // Returns current instance of InputDeviceSettings.
   static InputDeviceSettings* Get();
 
   // Returns true if UI should implement enhanced keyboard support for cases
   // where other input devices like mouse are absent.
-  static bool ForceKeyboardDrivenUINavigation();
+  static bool ForceKeyboardDrivenUINavigation(const PrefService& local_state);
 
   // Calls |callback|, possibly asynchronously, after determining if a touchpad
   // is connected.
@@ -221,6 +235,17 @@ class InputDeviceSettings {
   // Sets the touchpad scroll sensitivity in the range [kMinPointerSensitivity,
   // kMaxPointerSensitivity].
   virtual void SetTouchpadScrollSensitivity(int value) = 0;
+
+  // Calls |callback|, possibly asynchronously, after determining if at least
+  // one touchpad that supports haptics is connected.
+  virtual void HapticTouchpadExists(DeviceExistsCallback callback) = 0;
+
+  // Turns touchpad haptic feedback on/off.
+  virtual void SetTouchpadHapticFeedback(bool enabled) = 0;
+
+  // Sets the touchpad haptic click sensitivity from Soft feedback to Firm
+  // feedback [1, 3, 5].
+  virtual void SetTouchpadHapticClickSensitivity(int value) = 0;
 
   // Turns tap to click on/off.
   virtual void SetTapToClick(bool enabled) = 0;
@@ -309,17 +334,5 @@ class InputDeviceSettings {
 
 }  // namespace system
 }  // namespace ash
-
-// TODO(https://crbug.com/1164001): remove when Chrome OS code migration is
-// done.
-namespace chromeos {
-namespace system {
-using ::ash::system::InputDeviceSettings;
-using ::ash::system::MouseSettings;
-using ::ash::system::PointerSensitivity;
-using ::ash::system::PointingStickSettings;
-using ::ash::system::TouchpadSettings;
-}  // namespace system
-}  // namespace chromeos
 
 #endif  // CHROME_BROWSER_ASH_SYSTEM_INPUT_DEVICE_SETTINGS_H_

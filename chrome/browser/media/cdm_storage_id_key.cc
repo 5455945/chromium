@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,7 @@
 #endif
 
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-#include "chrome/browser/internal/google_chrome_cdm_storage_id_key.h"
+#include "chrome/browser/internal/google_chrome_cdm_storage_id_key.h"  // nogncheck crbug.com/40147906
 #endif
 
 std::string GetCdmStorageIdKey() {

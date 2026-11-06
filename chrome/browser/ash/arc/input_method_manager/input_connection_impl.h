@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,17 +6,16 @@
 #define CHROME_BROWSER_ASH_ARC_INPUT_METHOD_MANAGER_INPUT_CONNECTION_IMPL_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/macros.h"
-#include "base/memory/weak_ptr.h"
+#include "base/memory/raw_ptr.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/ash/arc/input_method_manager/arc_input_method_manager_bridge.h"
-#include "chrome/browser/chromeos/input_method/input_method_engine.h"
-#include "components/arc/mojom/input_method_manager.mojom-forward.h"
+#include "chrome/browser/ash/input_method/input_method_engine.h"
+#include "chromeos/ash/experiences/arc/mojom/input_method_manager.mojom-forward.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace arc {
 
@@ -24,9 +23,13 @@ namespace arc {
 // each text field and accepts text edit commands from the ARC container.
 class InputConnectionImpl : public mojom::InputConnection {
  public:
-  InputConnectionImpl(chromeos::InputMethodEngine* ime_engine,
+  InputConnectionImpl(ash::input_method::InputMethodEngine* ime_engine,
                       ArcInputMethodManagerBridge* imm_bridge,
                       int input_context_id);
+
+  InputConnectionImpl(const InputConnectionImpl&) = delete;
+  InputConnectionImpl& operator=(const InputConnectionImpl&) = delete;
+
   ~InputConnectionImpl() override;
 
   // Binds this class to a passed pending remote.
@@ -44,7 +47,7 @@ class InputConnectionImpl : public mojom::InputConnection {
   void SetComposingText(
       const std::u16string& text,
       int new_cursor_pos,
-      const absl::optional<gfx::Range>& new_selection_range) override;
+      const std::optional<gfx::Range>& new_selection_range) override;
   void RequestTextInputState(
       mojom::InputConnection::RequestTextInputStateCallback callback) override;
   void SetSelection(const gfx::Range& new_selection_range) override;
@@ -60,15 +63,13 @@ class InputConnectionImpl : public mojom::InputConnection {
 
   void SendControlKeyEvent(const std::u16string& text);
 
-  chromeos::InputMethodEngine* const ime_engine_;  // Not owned
-  ArcInputMethodManagerBridge* const imm_bridge_;  // Not owned
+  const raw_ptr<ash::input_method::InputMethodEngine> ime_engine_;  // Not owned
+  const raw_ptr<ArcInputMethodManagerBridge> imm_bridge_;  // Not owned
   const int input_context_id_;
 
   mojo::Receiver<mojom::InputConnection> receiver_{this};
 
   base::OneShotTimer state_update_timer_;
-
-  DISALLOW_COPY_AND_ASSIGN(InputConnectionImpl);
 };
 
 }  // namespace arc

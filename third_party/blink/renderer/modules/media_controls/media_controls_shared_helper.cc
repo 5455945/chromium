@@ -1,18 +1,22 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/media_controls/media_controls_shared_helper.h"
 
 #include <cmath>
-#include "third_party/blink/public/mojom/web_feature/web_feature.mojom-blink.h"
+
+#include "base/numerics/safe_conversions.h"
+#include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-blink.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/fullscreen/fullscreen.h"
 #include "third_party/blink/renderer/core/html/media/html_media_element.h"
 #include "third_party/blink/renderer/core/html/media/html_media_element_controls_list.h"
+#include "third_party/blink/renderer/core/html/media/html_video_element.h"
 #include "third_party/blink/renderer/core/html/time_ranges.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace {
 
@@ -53,8 +57,9 @@ bool MediaControlsSharedHelpers::TransitionEventListener::IsAttached() const {
 void MediaControlsSharedHelpers::TransitionEventListener::Invoke(
     ExecutionContext* context,
     Event* event) {
-  if (event->target() != element_)
+  if (event->RawTarget() != element_) {
     return;
+  }
 
   if (event->type() == event_type_names::kTransitionend) {
     callback_.Run();
@@ -70,8 +75,7 @@ void MediaControlsSharedHelpers::TransitionEventListener::Trace(
   visitor->Trace(element_);
 }
 
-absl::optional<unsigned>
-MediaControlsSharedHelpers::GetCurrentBufferedTimeRange(
+std::optional<unsigned> MediaControlsSharedHelpers::GetCurrentBufferedTimeRange(
     HTMLMediaElement& media_element) {
   double current_time = media_element.currentTime();
   double duration = media_element.duration();
@@ -79,9 +83,8 @@ MediaControlsSharedHelpers::GetCurrentBufferedTimeRange(
 
   DCHECK(buffered_time_ranges);
 
-  if (std::isnan(duration) || std::isinf(duration) || !duration ||
-      std::isnan(current_time)) {
-    return absl::nullopt;
+  if (!std::isfinite(duration) || !duration || std::isnan(current_time)) {
+    return std::nullopt;
   }
 
   // Calculate the size of the after segment (i.e. what has been buffered).
@@ -102,21 +105,21 @@ MediaControlsSharedHelpers::GetCurrentBufferedTimeRange(
     }
   }
 
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 String MediaControlsSharedHelpers::FormatTime(double time) {
   if (!std::isfinite(time))
     time = 0;
 
-  int seconds = static_cast<int>(fabs(time));
+  int seconds = base::saturated_cast<int>(fabs(time));
   int minutes = seconds / 60;
   int hours = minutes / 60;
 
   seconds %= 60;
   minutes %= 60;
 
-  const char* negative_sign = (time < 0 ? "-" : "");
+  StringView negative_sign = (time < 0 ? StringView("-") : StringView());
 
   // [0-10) minutes duration is m:ss
   // [10-60) minutes duration is mm:ss
@@ -126,11 +129,10 @@ String MediaControlsSharedHelpers::FormatTime(double time) {
   // etc.
 
   if (hours > 0) {
-    return String::Format("%s%d:%02d:%02d", negative_sign, hours, minutes,
-                          seconds);
+    return Format("{}{}:{:02}:{:02}", negative_sign, hours, minutes, seconds);
   }
 
-  return String::Format("%s%d:%02d", negative_sign, minutes, seconds);
+  return Format("{}{}:{:02}", negative_sign, minutes, seconds);
 }
 
 bool MediaControlsSharedHelpers::ShouldShowFullscreenButton(
@@ -152,7 +154,8 @@ bool MediaControlsSharedHelpers::ShouldShowFullscreenButton(
   if (!Fullscreen::FullscreenEnabled(media_element.GetDocument()))
     return false;
 
-  if (media_element.ControlsListInternal()->ShouldHideFullscreen()) {
+  if (media_element.ControlsListInternal()->ShouldHideFullscreen() &&
+      !media_element.UserWantsControlsVisible()) {
     UseCounter::Count(media_element.GetDocument(),
                       WebFeature::kHTMLMediaElementControlsListNoFullscreen);
     return false;

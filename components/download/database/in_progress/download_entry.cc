@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,18 +25,5 @@ DownloadEntry::DownloadEntry(
       request_headers(request_headers) {}
 
 DownloadEntry::~DownloadEntry() = default;
-
-bool DownloadEntry::operator==(const DownloadEntry& other) const {
-  return guid == other.guid && request_origin == other.request_origin &&
-         download_source == other.download_source &&
-         ukm_download_id == other.ukm_download_id &&
-         bytes_wasted == other.bytes_wasted &&
-         fetch_error_body == other.fetch_error_body &&
-         request_headers == other.request_headers;
-}
-
-bool DownloadEntry::operator!=(const DownloadEntry& other) const {
-  return !(*this == other);
-}
 
 }  // namespace download

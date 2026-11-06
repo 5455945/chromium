@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,28 +6,27 @@
 
 #include <stddef.h>
 
+#include <array>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
-#include "base/cxx17_backports.h"
+#include "base/containers/span.h"
 #include "base/format_macros.h"
 #include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
-#include "build/build_config.h"
+#include "base/test/task_environment.h"
 #include "components/omnibox/browser/autocomplete_input.h"
-#include "components/omnibox/browser/autocomplete_match.h"
-#include "components/omnibox/browser/autocomplete_provider.h"
 #include "components/omnibox/browser/history_url_provider.h"
 #include "components/omnibox/browser/mock_autocomplete_provider_client.h"
 #include "components/omnibox/browser/test_scheme_classifier.h"
-#include "components/search_engines/omnibox_focus_type.h"
+#include "components/search_engines/search_engines_test_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/metrics_proto/omnibox_event.pb.h"
+#include "third_party/metrics_proto/omnibox_focus_type.pb.h"
 #include "url/gurl.h"
-
-using base::ASCIIToUTF16;
 
 namespace {
 
@@ -51,7 +50,7 @@ const char16_t kSubpageThree[] = u"three";
 
 class FakeAutocompleteProviderClient : public MockAutocompleteProviderClient {
  public:
-  FakeAutocompleteProviderClient() {}
+  FakeAutocompleteProviderClient() = default;
   FakeAutocompleteProviderClient(const FakeAutocompleteProviderClient&) =
       delete;
   FakeAutocompleteProviderClient& operator=(
@@ -91,16 +90,18 @@ class FakeAutocompleteProviderClient : public MockAutocompleteProviderClient {
 }  // namespace
 
 class BuiltinProviderTest : public testing::Test {
+ public:
+  BuiltinProviderTest(const BuiltinProviderTest&) = delete;
+  BuiltinProviderTest& operator=(const BuiltinProviderTest&) = delete;
+
  protected:
   struct TestData {
     const std::u16string input;
     const std::vector<GURL> output;
   };
 
-  BuiltinProviderTest() : provider_(nullptr) {}
-  ~BuiltinProviderTest() override {}
-  BuiltinProviderTest(const BuiltinProviderTest&) = delete;
-  BuiltinProviderTest& operator=(const BuiltinProviderTest&) = delete;
+  BuiltinProviderTest() = default;
+  ~BuiltinProviderTest() override = default;
 
   void SetUp() override {
     client_ = std::make_unique<FakeAutocompleteProviderClient>();
@@ -108,9 +109,9 @@ class BuiltinProviderTest : public testing::Test {
   }
   void TearDown() override { provider_ = nullptr; }
 
-  void RunTest(const TestData cases[], size_t num_cases) {
+  void RunTest(base::span<const TestData> cases) {
     ACMatches matches;
-    for (size_t i = 0; i < num_cases; ++i) {
+    for (size_t i = 0; i < cases.size(); ++i) {
       SCOPED_TRACE(base::StringPrintf(
           "case %" PRIuS ": %s", i, base::UTF16ToUTF8(cases[i].input).c_str()));
       AutocompleteInput input(cases[i].input, metrics::OmniboxEventProto::OTHER,
@@ -122,22 +123,22 @@ class BuiltinProviderTest : public testing::Test {
       ASSERT_EQ(cases[i].output.size(), matches.size());
       for (size_t j = 0; j < cases[i].output.size(); ++j) {
         EXPECT_EQ(cases[i].output[j], matches[j].destination_url);
-        EXPECT_FALSE(matches[j].allowed_to_be_default_match);
       }
     }
   }
 
+  base::test::TaskEnvironment task_environment_;
+  search_engines::SearchEnginesTestEnvironment search_engines_test_environment_;
   std::unique_ptr<FakeAutocompleteProviderClient> client_;
   scoped_refptr<BuiltinProvider> provider_;
 };
 
 TEST_F(BuiltinProviderTest, TypingScheme) {
-  const std::u16string kAbout = ASCIIToUTF16(url::kAboutScheme);
+  const std::u16string kAbout = url::kAboutScheme16;
   const std::u16string kEmbedder = kEmbedderAboutScheme16;
   const std::u16string kSeparator1 = u":";
   const std::u16string kSeparator2 = u":/";
-  const std::u16string kSeparator3 =
-      ASCIIToUTF16(url::kStandardSchemeSeparator);
+  const std::u16string kSeparator3 = url::kStandardSchemeSeparator16;
 
   // These default URLs should correspond with those in BuiltinProvider::Start.
   const GURL kURL1(kDefaultURL1);
@@ -175,7 +176,7 @@ TEST_F(BuiltinProviderTest, TypingScheme) {
       {u"ChRoMe://", {kURL1, kURL2, kURL3}},
   };
 
-  RunTest(typing_scheme_cases, base::size(typing_scheme_cases));
+  RunTest(typing_scheme_cases);
 }
 
 TEST_F(BuiltinProviderTest, NonEmbedderURLs) {
@@ -193,15 +194,15 @@ TEST_F(BuiltinProviderTest, NonEmbedderURLs) {
       {u"scheme://host/path?query#ref", {}},
   };
 
-  RunTest(test_cases, base::size(test_cases));
+  RunTest(test_cases);
 }
 
 TEST_F(BuiltinProviderTest, EmbedderProvidedURLs) {
-  const std::u16string kAbout = ASCIIToUTF16(url::kAboutScheme);
+  const std::u16string kAbout = url::kAboutScheme16;
   const std::u16string kEmbedder = kEmbedderAboutScheme16;
   const std::u16string kSep1 = u":";
   const std::u16string kSep2 = u":/";
-  const std::u16string kSep3 = ASCIIToUTF16(url::kStandardSchemeSeparator);
+  const std::u16string kSep3 = url::kStandardSchemeSeparator16;
 
   // The following hosts are arbitrary, chosen so that they all start with the
   // letters "me".
@@ -242,16 +243,15 @@ TEST_F(BuiltinProviderTest, EmbedderProvidedURLs) {
       {kEmbedder + kSep2 + kHostM3, {kURLM2, kURLM3}},
   };
 
-  RunTest(test_cases, base::size(test_cases));
+  RunTest(test_cases);
 }
 
 TEST_F(BuiltinProviderTest, AboutBlank) {
-  const std::u16string kAbout = ASCIIToUTF16(url::kAboutScheme);
+  const std::u16string kAbout = url::kAboutScheme16;
   const std::u16string kEmbedder = kEmbedderAboutScheme16;
-  const std::u16string kAboutBlank = ASCIIToUTF16(url::kAboutBlankURL);
+  const std::u16string kAboutBlank = url::kAboutBlankURL16;
   const std::u16string kBlank = u"blank";
-  const std::u16string kSeparator1 =
-      ASCIIToUTF16(url::kStandardSchemeSeparator);
+  const std::u16string kSeparator1 = url::kStandardSchemeSeparator16;
   const std::u16string kSeparator2 = u":///";
   const std::u16string kSeparator3 = u";///";
 
@@ -301,13 +301,13 @@ TEST_F(BuiltinProviderTest, AboutBlank) {
       {kAboutBlank.substr(0, 9) + u"#r", {}},
   };
 
-  RunTest(about_blank_cases, base::size(about_blank_cases));
+  RunTest(about_blank_cases);
 }
 
 TEST_F(BuiltinProviderTest, DoesNotSupportMatchesOnFocus) {
   AutocompleteInput input(u"chrome://m", metrics::OmniboxEventProto::OTHER,
                           TestSchemeClassifier());
-  input.set_focus_type(OmniboxFocusType::ON_FOCUS);
+  input.set_focus_type(metrics::OmniboxFocusType::INTERACTION_FOCUS);
   provider_->Start(input, false);
   EXPECT_TRUE(provider_->matches().empty());
 }
@@ -322,25 +322,25 @@ TEST_F(BuiltinProviderTest, Subpages) {
   const GURL kURLThree(kSubpage + kPageThree);
 
   TestData settings_subpage_cases[] = {
-    // Typing the settings path should show settings and the first two subpages.
-    {kSubpage, {GURL(kSubpage), kURLOne, kURLTwo}},
+      // Typing the settings path should show settings and the first two
+      // subpages.
+      {kSubpage, {GURL(kSubpage), kURLOne, kURLTwo}},
 
-    // Typing a subpage path should return the appropriate results.
-    {kSubpage + kPageTwo.substr(0, 1),                 {kURLTwo, kURLThree}},
-    {kSubpage + kPageTwo.substr(0, 2),                 {kURLTwo}},
-    {kSubpage + kPageThree.substr(0, kPageThree.length() - 1),
-                                                       {kURLThree}},
-    {kSubpage + kPageOne,                              {kURLOne}},
-    {kSubpage + kPageTwo,                              {kURLTwo}},
+      // Typing a subpage path should return the appropriate results.
+      {kSubpage + kPageTwo.substr(0, 1), {kURLTwo, kURLThree}},
+      {kSubpage + kPageTwo.substr(0, 2), {kURLTwo}},
+      {kSubpage + kPageThree.substr(0, kPageThree.length() - 1), {kURLThree}},
+      {kSubpage + kPageOne, {kURLOne}},
+      {kSubpage + kPageTwo, {kURLTwo}},
   };
 
-  RunTest(settings_subpage_cases, base::size(settings_subpage_cases));
+  RunTest(settings_subpage_cases);
 }
 
 TEST_F(BuiltinProviderTest, Inlining) {
-  const std::u16string kAbout = ASCIIToUTF16(url::kAboutScheme);
+  const std::u16string kAbout = url::kAboutScheme16;
   const std::u16string kEmbedder = kEmbedderAboutScheme16;
-  const std::u16string kSep = ASCIIToUTF16(url::kStandardSchemeSeparator);
+  const std::u16string kSep = url::kStandardSchemeSeparator16;
   const std::u16string kHostM = kHostMedia;
   const std::u16string kHostB = kHostBar;
   const std::u16string kHostMem = kHostMemory;
@@ -352,7 +352,8 @@ TEST_F(BuiltinProviderTest, Inlining) {
   struct InliningTestData {
     const std::u16string input;
     const std::u16string expected_inline_autocompletion;
-  } cases[] = {
+  };
+  auto cases = std::to_array<InliningTestData>({
       // Typing along "about://media" should not yield an inline autocompletion
       // until the completion is unique.  We don't bother checking every single
       // character before the first "m" is typed.
@@ -429,12 +430,12 @@ TEST_F(BuiltinProviderTest, Inlining) {
       {kAbout + kSep + kHostB.substr(0, 2) + u"/", std::u16string()},
       {kAbout + kSep + kHostB.substr(0, 2) + u"a", std::u16string()},
       {kAbout + kSep + kHostB.substr(0, 2) + u"+", std::u16string()},
-  };
+  });
 
   ACMatches matches;
-  for (size_t i = 0; i < base::size(cases); ++i) {
-    SCOPED_TRACE(base::StringPrintf(
-        "case %" PRIuS ": %s", i, base::UTF16ToUTF8(cases[i].input).c_str()));
+  for (size_t i = 0; i < std::size(cases); ++i) {
+    SCOPED_TRACE(base::StringPrintf("case %" PRIuS ": %s", i,
+                                    base::UTF16ToUTF8(cases[i].input).c_str()));
     AutocompleteInput input(cases[i].input, metrics::OmniboxEventProto::OTHER,
                             TestSchemeClassifier());
     provider_->Start(input, false);

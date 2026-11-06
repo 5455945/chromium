@@ -1,9 +1,10 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.download.home.filter;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.components.offline_items_collection.OfflineItem;
 
 import java.util.Collection;
@@ -12,6 +13,7 @@ import java.util.Collection;
  * An observer that will be notified on changes to an underlying
  * {@link OfflineItemFilterSource}.
  */
+@NullMarked
 public interface OfflineItemFilterObserver {
     /**
      * Called when items have been added to the observed {@link OfflineItemFilterSource}.

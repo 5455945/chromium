@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,14 @@
 
 #include <utility>
 
+#include "base/gtest_prod_util.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/sequenced_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/bindings/remote_set.h"
 #include "third_party/blink/renderer/platform/context_lifecycle_observer.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/prefinalizer.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_wrapper_mode.h"
 #include "third_party/blink/renderer/platform/mojo/mojo_binding_context.h"
 
@@ -78,15 +80,25 @@ class HeapMojoRemoteSet {
   Iterator end() { return wrapper_->remote_set().end(); }
   Iterator end() const { return wrapper_->remote_set().end(); }
 
+  Interface* Get(mojo::RemoteSetElementId id) {
+    return wrapper_->remote_set().Get(id);
+  }
+
   void Trace(Visitor* visitor) const { visitor->Trace(wrapper_); }
 
  private:
   FRIEND_TEST_ALL_PREFIXES(HeapMojoRemoteSetGCWithContextObserverTest,
                            NoClearOnConservativeGC);
+  FRIEND_TEST_ALL_PREFIXES(HeapMojoRemoteSetGCWithContextObserverTest,
+                           ResetsOnGC);
+  FRIEND_TEST_ALL_PREFIXES(HeapMojoRemoteSetGCWithoutContextObserverTest,
+                           ResetsOnGC);
 
   // Garbage collected wrapper class to add ContextLifecycleObserver.
   class Wrapper final : public GarbageCollected<Wrapper>,
                         public ContextLifecycleObserver {
+    USING_PRE_FINALIZER(Wrapper, Dispose);
+
    public:
     explicit Wrapper(ContextLifecycleNotifier* notifier) {
       SetContextLifecycleNotifier(notifier);
@@ -99,6 +111,8 @@ class HeapMojoRemoteSet {
     void Trace(Visitor* visitor) const override {
       ContextLifecycleObserver::Trace(visitor);
     }
+
+    void Dispose() { remote_set_.Clear(); }
 
     mojo::RemoteSet<Interface>& remote_set() { return remote_set_; }
 

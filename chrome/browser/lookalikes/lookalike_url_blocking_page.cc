@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "base/strings/string_number_conversions.h"
 #include "chrome/common/webui_url_constants.h"
 #include "components/grit/components_resources.h"
 #include "components/lookalikes/core/lookalike_url_ui_util.h"
@@ -17,6 +18,8 @@
 #include "content/public/browser/web_contents.h"
 #include "net/base/net_errors.h"
 
+using lookalikes::LookalikeUrlBlockingPageUserAction;
+using lookalikes::LookalikeUrlMatchType;
 using security_interstitials::MetricsHelper;
 
 // static
@@ -57,15 +60,13 @@ LookalikeUrlBlockingPage::GetTypeForTesting() {
 }
 
 void LookalikeUrlBlockingPage::PopulateInterstitialStrings(
-    base::Value* load_time_data) {
-  CHECK(load_time_data);
-
-  PopulateLookalikeUrlBlockingPageStrings(load_time_data, safe_url_,
-                                          request_url());
+    base::DictValue& load_time_data) {
+  lookalikes::PopulateLookalikeUrlBlockingPageStrings(load_time_data, safe_url_,
+                                                      request_url());
 }
 
 void LookalikeUrlBlockingPage::OnInterstitialClosing() {
-  ReportUkmForLookalikeUrlBlockingPageIfNeeded(
+  lookalikes::ReportUkmForLookalikeUrlBlockingPageIfNeeded(
       source_id_, match_type_, LookalikeUrlBlockingPageUserAction::kCloseOrBack,
       triggered_by_initial_url_);
 }
@@ -84,20 +85,20 @@ void LookalikeUrlBlockingPage::CommandReceived(const std::string& command) {
 
   int cmd = 0;
   bool retval = base::StringToInt(command, &cmd);
-  DCHECK(retval);
+  CHECK(retval, base::NotFatalUntil::M161);
 
   switch (cmd) {
     case security_interstitials::CMD_DONT_PROCEED:
       controller()->metrics_helper()->RecordUserDecision(
           MetricsHelper::DONT_PROCEED);
-      ReportUkmForLookalikeUrlBlockingPageIfNeeded(
+      lookalikes::ReportUkmForLookalikeUrlBlockingPageIfNeeded(
           source_id_, match_type_,
           LookalikeUrlBlockingPageUserAction::kAcceptSuggestion,
           triggered_by_initial_url_);
       // If the interstitial doesn't have a suggested URL (e.g. punycode
       // interstitial), simply open the new tab page.
       if (!safe_url_.is_valid()) {
-        controller()->OpenUrlInCurrentTab(GURL(chrome::kChromeUINewTabURL));
+        controller()->OpenUrlInCurrentTab(chrome::ChromeUINewTabURLAsGURL());
       } else {
         controller()->GoBack();
       }
@@ -105,7 +106,7 @@ void LookalikeUrlBlockingPage::CommandReceived(const std::string& command) {
     case security_interstitials::CMD_PROCEED:
       controller()->metrics_helper()->RecordUserDecision(
           MetricsHelper::PROCEED);
-      ReportUkmForLookalikeUrlBlockingPageIfNeeded(
+      lookalikes::ReportUkmForLookalikeUrlBlockingPageIfNeeded(
           source_id_, match_type_,
           LookalikeUrlBlockingPageUserAction::kClickThrough,
           triggered_by_initial_url_);
@@ -124,7 +125,6 @@ void LookalikeUrlBlockingPage::CommandReceived(const std::string& command) {
     case security_interstitials::CMD_REPORT_PHISHING_ERROR:
       // Not supported by the lookalike URL warning page.
       NOTREACHED() << "Unsupported command: " << command;
-      break;
     case security_interstitials::CMD_ERROR:
     case security_interstitials::CMD_TEXT_FOUND:
     case security_interstitials::CMD_TEXT_NOT_FOUND:

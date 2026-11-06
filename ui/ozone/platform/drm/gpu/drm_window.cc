@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include <stdint.h>
 #include <utility>
 
-#include "base/macros.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -33,7 +32,7 @@ DrmWindow::DrmWindow(gfx::AcceleratedWidget widget,
       device_manager_(device_manager),
       screen_manager_(screen_manager) {}
 
-DrmWindow::~DrmWindow() {}
+DrmWindow::~DrmWindow() = default;
 
 void DrmWindow::Initialize() {
   TRACE_EVENT1("drm", "DrmWindow::Initialize", "widget", widget_);
@@ -66,10 +65,12 @@ void DrmWindow::SetBounds(const gfx::Rect& bounds) {
 }
 
 void DrmWindow::SetCursor(const std::vector<SkBitmap>& bitmaps,
-                          const gfx::Point& location,
+                          const std::optional<gfx::Point>& location,
                           base::TimeDelta frame_delay) {
   cursor_bitmaps_ = bitmaps;
-  cursor_location_ = location;
+  if (location.has_value()) {
+    cursor_location_ = location.value();
+  }
   cursor_frame_ = 0;
   cursor_timer_.Stop();
 
@@ -78,7 +79,11 @@ void DrmWindow::SetCursor(const std::vector<SkBitmap>& bitmaps,
                         &DrmWindow::OnCursorAnimationTimeout);
   }
 
-  ResetCursor();
+  if (location.has_value()) {
+    ResetCursor();
+  } else {
+    UpdateCursorImage();
+  }
 }
 
 void DrmWindow::MoveCursor(const gfx::Point& location) {
@@ -113,7 +118,7 @@ void DrmWindow::SchedulePageFlip(
 
   last_submitted_planes_ = DrmOverlayPlane::Clone(planes);
 
-  if (!controller_) {
+  if (!controller_ || !controller_->GetDrmDevice()->has_master()) {
     std::move(submission_callback)
         .Run(gfx::SwapResult::SWAP_ACK,
              /*release_fence=*/gfx::GpuFenceHandle());

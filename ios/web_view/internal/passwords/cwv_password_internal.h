@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,15 @@
 @interface CWVPassword ()
 
 - (instancetype)initWithPasswordForm:
-    (const password_manager::PasswordForm&)passwordForm
+    (const password_manager::PasswordForm&)passwordForm;
+
+// This is a temporary initializer which can be removed once password
+// affiliaitons is fully rolled out. Non affiliation related code can continue
+// to use the convenience init which has isAffiliationEnabled set to NO by
+// default.
+- (instancetype)initWithPasswordForm:
+                    (const password_manager::PasswordForm&)passwordForm
+                isAffiliationEnabled:(BOOL)isAffiliationEnabled
     NS_DESIGNATED_INITIALIZER;
 
 // The internal autofill credit card that is wrapped by this object.

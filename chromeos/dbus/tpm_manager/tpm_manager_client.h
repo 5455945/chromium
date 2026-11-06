@@ -1,12 +1,12 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROMEOS_DBUS_TPM_MANAGER_TPM_MANAGER_CLIENT_H_
 #define CHROMEOS_DBUS_TPM_MANAGER_TPM_MANAGER_CLIENT_H_
 
-#include "base/callback.h"
 #include "base/component_export.h"
+#include "base/functional/callback.h"
 #include "base/observer_list_types.h"
 #include "chromeos/dbus/tpm_manager/tpm_manager.pb.h"
 
@@ -35,12 +35,16 @@ class COMPONENT_EXPORT(CHROMEOS_DBUS_TPM_MANAGER) TpmManagerClient {
       const ::tpm_manager::GetTpmNonsensitiveStatusReply&)>;
   using GetVersionInfoCallback =
       base::OnceCallback<void(const ::tpm_manager::GetVersionInfoReply&)>;
+  using GetSupportedFeaturesCallback =
+      base::OnceCallback<void(const ::tpm_manager::GetSupportedFeaturesReply&)>;
   using GetDictionaryAttackInfoCallback = base::OnceCallback<void(
       const ::tpm_manager::GetDictionaryAttackInfoReply&)>;
   using TakeOwnershipCallback =
       base::OnceCallback<void(const ::tpm_manager::TakeOwnershipReply&)>;
   using ClearStoredOwnerPasswordCallback = base::OnceCallback<void(
       const ::tpm_manager::ClearStoredOwnerPasswordReply&)>;
+  using ClearTpmCallback =
+      base::OnceCallback<void(const ::tpm_manager::ClearTpmReply&)>;
 
   // Interface with testing functionality. Accessed through GetTestInterface(),
   // only implemented in the fake implementation.
@@ -56,6 +60,10 @@ class COMPONENT_EXPORT(CHROMEOS_DBUS_TPM_MANAGER) TpmManagerClient {
     // Gets a mutable reply that is returned when `GetVersionInfo()` is called.
     virtual ::tpm_manager::GetVersionInfoReply*
     mutable_version_info_reply() = 0;
+    // Gets a mutable reply that is returned when `GetSupportedFeatures()` is
+    // called.
+    virtual ::tpm_manager::GetSupportedFeaturesReply*
+    mutable_supported_features_reply() = 0;
     // Gets a mutable reply that is returned when `GetDictionaryAttackInfo()` is
     // called.
     virtual ::tpm_manager::GetDictionaryAttackInfoReply*
@@ -64,6 +72,8 @@ class COMPONENT_EXPORT(CHROMEOS_DBUS_TPM_MANAGER) TpmManagerClient {
     virtual int take_ownership_count() const = 0;
     // Gets the count of `ClearStoredOwnerPassword()` being called.
     virtual int clear_stored_owner_password_count() const = 0;
+    // Gets the count of `ClearTpm()` being called.
+    virtual int clear_tpm_count() const = 0;
     // Emits ownership taken signal.
     virtual void EmitOwnershipTakenSignal() = 0;
   };
@@ -98,6 +108,11 @@ class COMPONENT_EXPORT(CHROMEOS_DBUS_TPM_MANAGER) TpmManagerClient {
   virtual void GetVersionInfo(
       const ::tpm_manager::GetVersionInfoRequest& request,
       GetVersionInfoCallback callback) = 0;
+  // Queries the features that TPM supports; for the complete list of the
+  // entries, see `GetSupportedFeaturesReply`.
+  virtual void GetSupportedFeatures(
+      const ::tpm_manager::GetSupportedFeaturesRequest& request,
+      GetSupportedFeaturesCallback callback) = 0;
   // Queries the dictionary lockout information of TPM's dictionary attack
   // protection, The reply contains the related information, including the
   // current dictionary attack counter, and the flag if the TPM is in the
@@ -113,6 +128,9 @@ class COMPONENT_EXPORT(CHROMEOS_DBUS_TPM_MANAGER) TpmManagerClient {
   virtual void ClearStoredOwnerPassword(
       const ::tpm_manager::ClearStoredOwnerPasswordRequest& request,
       ClearStoredOwnerPasswordCallback callback) = 0;
+  // Requests tpm manager to clear TPM after reboot.
+  virtual void ClearTpm(const ::tpm_manager::ClearTpmRequest& request,
+                        ClearTpmCallback callback) = 0;
 
   // Adds an observer.
   virtual void AddObserver(Observer* observer) = 0;
@@ -129,11 +147,5 @@ class COMPONENT_EXPORT(CHROMEOS_DBUS_TPM_MANAGER) TpmManagerClient {
 };
 
 }  // namespace chromeos
-
-// TODO(https://crbug.com/1164001): remove after the //chrome/browser/chromeos
-// source migration is finished.
-namespace ash {
-using ::chromeos::TpmManagerClient;
-}
 
 #endif  // CHROMEOS_DBUS_TPM_MANAGER_TPM_MANAGER_CLIENT_H_

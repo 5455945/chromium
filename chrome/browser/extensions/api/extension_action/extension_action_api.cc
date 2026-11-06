@@ -1,54 +1,64 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/extensions/api/extension_action/extension_action_api.h"
 
 #include <stddef.h>
+
+#include <algorithm>
 #include <memory>
+#include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/cxx17_backports.h"
-#include "base/lazy_instance.h"
+#include "base/check.h"
+#include "base/check_op.h"
 #include "base/location.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
-#include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/threading/thread_task_runner_handle.h"
-#include "base/values.h"
-#include "chrome/browser/extensions/extension_action_runner.h"
+#include "base/strings/stringprintf.h"
+#include "chrome/browser/extensions/browser_window_util.h"
+#include "chrome/browser/extensions/extension_action_dispatcher.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
-#include "chrome/browser/extensions/extension_ui_util.h"
-#include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/tab_list/tab_list_interface.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/extensions/extension_popup_types.h"
 #include "chrome/browser/ui/extensions/extensions_container.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/toolbar/toolbar_actions_model.h"
-#include "components/sessions/content/session_tab_helper.h"
-#include "content/public/browser/notification_service.h"
+#include "components/tabs/public/tab_interface.h"
+#include "content/public/common/color_parser.h"
+#include "extensions/browser/api/constants.h"
 #include "extensions/browser/api/declarative_net_request/constants.h"
+#include "extensions/browser/api/declarative_net_request/prefs_helper.h"
 #include "extensions/browser/api/declarative_net_request/utils.h"
-#include "extensions/browser/event_router.h"
+#include "extensions/browser/extension_action.h"
 #include "extensions/browser/extension_action_manager.h"
+#include "extensions/browser/extension_event_histogram_value.h"
 #include "extensions/browser/extension_host.h"
 #include "extensions/browser/extension_prefs.h"
-#include "extensions/browser/extension_registry.h"
-#include "extensions/browser/extension_util.h"
-#include "extensions/browser/notification_types.h"
+#include "extensions/browser/icon_util.h"
 #include "extensions/common/api/extension_action/action_info.h"
+#include "extensions/common/constants.h"
 #include "extensions/common/error_utils.h"
-#include "extensions/common/feature_switch.h"
+#include "extensions/common/extension_id.h"
 #include "extensions/common/image_util.h"
+#include "extensions/common/manifest_constants.h"
 #include "extensions/common/mojom/view_type.mojom.h"
+#include "third_party/skia/include/core/SkBitmap.h"
+#include "ui/base/base_window.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia.h"
+#include "url/origin.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/window_feature_controller/window_feature_controller.h"
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 using content::WebContents;
+using extensions::browser_window_util::GetLastActiveBrowserWithProfile;
 
 namespace extensions {
 
@@ -57,185 +67,106 @@ namespace {
 // Errors.
 const char kNoExtensionActionError[] =
     "This extension has no action specified.";
-const char kNoTabError[] = "No tab with id: *.";
-const char kOpenPopupError[] =
+constexpr char kOpenPopupError[] =
     "Failed to show popup either because there is an existing popup or another "
     "error occurred.";
-const char kInvalidColorError[] =
-    "The color specification could not be parsed.";
+constexpr char kFailedToOpenPopupGenericError[] = "Failed to open popup.";
+constexpr char kNoActiveWindowFound[] =
+    "Could not find an active browser window.";
+constexpr char kNoActivePopup[] =
+    "Extension does not have a popup on the active tab.";
+constexpr char kOpenPopupInactiveWindow[] =
+    "Cannot show popup for an inactive window. To show the popup for this "
+    "window, first call `chrome.windows.update` with `focused` set to "
+    "true.";
+constexpr char kSetBadgeMaximumSizeError[] =
+    "Badge text size is %u bytes which exceeds the limit of %u bytes.";
 
 bool g_report_error_for_invisible_icon = false;
 
-}  // namespace
+// Returns true if the color values provided could be parsed into a color
+// object out param.
+bool ParseColor(const base::Value& color_value, SkColor& color) {
+  if (color_value.is_string()) {
+    return content::ParseCssColorString(color_value.GetString(), &color);
+  }
 
-//
-// ExtensionActionAPI::Observer
-//
+  if (!color_value.is_list()) {
+    return false;
+  }
 
-void ExtensionActionAPI::Observer::OnExtensionActionUpdated(
-    ExtensionAction* extension_action,
-    content::WebContents* web_contents,
-    content::BrowserContext* browser_context) {
+  const base::ListValue& color_list = color_value.GetList();
+  if (color_list.size() != 4 ||
+      std::ranges::any_of(color_list,
+                          [](const auto& color) { return !color.is_int(); })) {
+    return false;
+  }
+
+  color = SkColorSetARGB(color_list[3].GetInt(), color_list[0].GetInt(),
+                         color_list[1].GetInt(), color_list[2].GetInt());
+  return true;
 }
 
-void ExtensionActionAPI::Observer::OnExtensionActionAPIShuttingDown() {
+// Returns the browser that is active in the given `profile`, optionally
+// also checking the incognito profile.
+BrowserWindowInterface* FindActiveBrowserWindow(Profile& profile,
+                                                bool check_incognito_profile) {
+  BrowserWindowInterface* browser = GetLastActiveBrowserWithProfile(
+      profile,
+      /*include_incognito_or_parent=*/check_incognito_profile);
+  return browser && browser->GetWindow()->IsActive() ? browser : nullptr;
 }
 
-ExtensionActionAPI::Observer::~Observer() {
-}
-
-//
-// ExtensionActionAPI
-//
-
-static base::LazyInstance<BrowserContextKeyedAPIFactory<ExtensionActionAPI>>::
-    DestructorAtExit g_extension_action_api_factory = LAZY_INSTANCE_INITIALIZER;
-
-ExtensionActionAPI::ExtensionActionAPI(content::BrowserContext* context)
-    : browser_context_(context), extension_prefs_(nullptr) {}
-
-ExtensionActionAPI::~ExtensionActionAPI() {
-}
-
-// static
-BrowserContextKeyedAPIFactory<ExtensionActionAPI>*
-ExtensionActionAPI::GetFactoryInstance() {
-  return g_extension_action_api_factory.Pointer();
-}
-
-// static
-ExtensionActionAPI* ExtensionActionAPI::Get(content::BrowserContext* context) {
-  return BrowserContextKeyedAPIFactory<ExtensionActionAPI>::Get(context);
-}
-
-void ExtensionActionAPI::AddObserver(Observer* observer) {
-  observers_.AddObserver(observer);
-}
-
-void ExtensionActionAPI::RemoveObserver(Observer* observer) {
-  observers_.RemoveObserver(observer);
-}
-
-bool ExtensionActionAPI::ShowExtensionActionPopupForAPICall(
-    const Extension* extension,
-    Browser* browser) {
+// Returns true if the given `extension` has an active popup on the active tab
+// of `browser`.
+bool HasPopupOnActiveTab(BrowserWindowInterface& browser,
+                         content::BrowserContext* browser_context,
+                         const Extension& extension) {
+  content::WebContents* web_contents =
+      TabListInterface::From(&browser)->GetActiveTab()->GetContents();
   ExtensionAction* extension_action =
-      ExtensionActionManager::Get(browser_context_)->GetExtensionAction(
-          *extension);
-  if (!extension_action)
-    return false;
+      ExtensionActionManager::Get(browser_context)
+          ->GetExtensionAction(extension);
+  CHECK(extension_action, base::NotFatalUntil::M161);
+  int tab_id = ExtensionTabUtil::GetTabId(web_contents);
 
-  // Don't support showing action popups in a popup window.
-  if (!browser->SupportsWindowFeature(Browser::FEATURE_TOOLBAR))
+  return extension_action->HasPopup(tab_id) &&
+         extension_action->GetIsVisibleIgnoringDeclarative(tab_id);
+}
+
+// Attempts to open `extension`'s popup in the given `browser`. Returns true on
+// success; otherwise, populates `error` and returns false.
+bool OpenPopupInBrowser(BrowserWindowInterface& browser,
+                        const Extension& extension,
+                        std::string* error,
+                        ShowPopupCallback callback) {
+#if !BUILDFLAG(IS_ANDROID)
+  // On Android, the extension toolbar exists if and only if ExtensionsContainer
+  // exists, so the check below is sufficient.
+  // On other platforms, ExtensionsContainer is always constructed except for
+  // guest sessions, so we need more detailed checks.
+  if (!WindowFeatureController::From(&browser)->SupportsWindowFeature(
+          WindowFeatureController::WindowFeature::kFeatureToolbar) ||
+      !BrowserWindow::FromBrowser(&browser)->IsToolbarVisible()) {
+    *error = "Browser window has no toolbar.";
     return false;
+  }
+#endif  // !BUILDFLAG(IS_ANDROID)
 
   ExtensionsContainer* extensions_container =
-      browser->window()->GetExtensionsContainer();
-  // The ExtensionsContainer could be null if, e.g., this is a popup window with
-  // no toolbar.
-  return extensions_container &&
-         extensions_container->ShowToolbarActionPopupForAPICall(
-             extension->id());
-}
-
-void ExtensionActionAPI::NotifyChange(ExtensionAction* extension_action,
-                                      content::WebContents* web_contents,
-                                      content::BrowserContext* context) {
-  for (auto& observer : observers_)
-    observer.OnExtensionActionUpdated(extension_action, web_contents, context);
-}
-
-void ExtensionActionAPI::DispatchExtensionActionClicked(
-    const ExtensionAction& extension_action,
-    WebContents* web_contents,
-    const Extension* extension) {
-  events::HistogramValue histogram_value = events::UNKNOWN;
-  const char* event_name = NULL;
-  switch (extension_action.action_type()) {
-    case ActionInfo::TYPE_ACTION:
-      histogram_value = events::ACTION_ON_CLICKED;
-      event_name = "action.onClicked";
-      break;
-    case ActionInfo::TYPE_BROWSER:
-      histogram_value = events::BROWSER_ACTION_ON_CLICKED;
-      event_name = "browserAction.onClicked";
-      break;
-    case ActionInfo::TYPE_PAGE:
-      histogram_value = events::PAGE_ACTION_ON_CLICKED;
-      event_name = "pageAction.onClicked";
-      break;
+      ExtensionsContainer::From(browser);
+  // The ExtensionsContainer could be null if, e.g., this is a guest session.
+  if (!extensions_container ||
+      !extensions_container->ShowToolbarActionPopupForAPICall(
+          extension.id(), std::move(callback))) {
+    *error = kFailedToOpenPopupGenericError;
+    return false;
   }
 
-  if (event_name) {
-    std::unique_ptr<base::ListValue> args(new base::ListValue());
-    // The action APIs (browserAction, pageAction, action) are only available
-    // to blessed extension contexts. As such, we deterministically know that
-    // the right context type here is blessed.
-    constexpr Feature::Context context_type =
-        Feature::BLESSED_EXTENSION_CONTEXT;
-    ExtensionTabUtil::ScrubTabBehavior scrub_tab_behavior =
-        ExtensionTabUtil::GetScrubTabBehavior(extension, context_type,
-                                              web_contents);
-    args->Append(ExtensionTabUtil::CreateTabObject(
-                     web_contents, scrub_tab_behavior, extension)
-                     ->ToValue());
-
-    DispatchEventToExtension(web_contents->GetBrowserContext(),
-                             extension_action.extension_id(), histogram_value,
-                             event_name, std::move(args));
-  }
+  return true;
 }
 
-void ExtensionActionAPI::ClearAllValuesForTab(
-    content::WebContents* web_contents) {
-  DCHECK(web_contents);
-  const SessionID tab_id = sessions::SessionTabHelper::IdForTab(web_contents);
-  content::BrowserContext* browser_context = web_contents->GetBrowserContext();
-  const ExtensionSet& enabled_extensions =
-      ExtensionRegistry::Get(browser_context_)->enabled_extensions();
-  ExtensionActionManager* action_manager =
-      ExtensionActionManager::Get(browser_context_);
-
-  for (ExtensionSet::const_iterator iter = enabled_extensions.begin();
-       iter != enabled_extensions.end(); ++iter) {
-    ExtensionAction* extension_action =
-        action_manager->GetExtensionAction(**iter);
-    if (extension_action) {
-      extension_action->ClearAllValuesForTab(tab_id.id());
-      NotifyChange(extension_action, web_contents, browser_context);
-    }
-  }
-}
-
-ExtensionPrefs* ExtensionActionAPI::GetExtensionPrefs() {
-  // This lazy initialization is more than just an optimization, because it
-  // allows tests to associate a new ExtensionPrefs with the browser context
-  // before we access it.
-  if (!extension_prefs_)
-    extension_prefs_ = ExtensionPrefs::Get(browser_context_);
-  return extension_prefs_;
-}
-
-void ExtensionActionAPI::DispatchEventToExtension(
-    content::BrowserContext* context,
-    const std::string& extension_id,
-    events::HistogramValue histogram_value,
-    const std::string& event_name,
-    std::unique_ptr<base::ListValue> event_args) {
-  if (!EventRouter::Get(context))
-    return;
-
-  auto event = std::make_unique<Event>(
-      histogram_value, event_name, std::move(*event_args).TakeList(), context);
-  event->user_gesture = EventRouter::USER_GESTURE_ENABLED;
-  EventRouter::Get(context)
-      ->DispatchEventToExtension(extension_id, std::move(event));
-}
-
-void ExtensionActionAPI::Shutdown() {
-  for (auto& observer : observers_)
-    observer.OnExtensionActionAPIShuttingDown();
-}
+}  // namespace
 
 //
 // ExtensionActionFunction
@@ -247,15 +178,14 @@ ExtensionActionFunction::ExtensionActionFunction()
       contents_(nullptr),
       extension_action_(nullptr) {}
 
-ExtensionActionFunction::~ExtensionActionFunction() {
-}
+ExtensionActionFunction::~ExtensionActionFunction() = default;
 
 ExtensionFunction::ResponseAction ExtensionActionFunction::Run() {
   ExtensionActionManager* manager =
       ExtensionActionManager::Get(browser_context());
   extension_action_ = manager->GetExtensionAction(*extension());
   if (!extension_action_) {
-    // TODO(kalman): ideally the browserAction/pageAction APIs wouldn't event
+    // TODO(kalman): Ideally the browserAction/pageAction APIs wouldn't even
     // exist for extensions that don't have one declared. This should come as
     // part of the Feature system.
     return RespondNow(Error(kNoExtensionActionError));
@@ -266,14 +196,19 @@ ExtensionFunction::ResponseAction ExtensionActionFunction::Run() {
 
   // Find the WebContents that contains this tab id if one is required.
   if (tab_id_ != ExtensionAction::kDefaultTabId) {
+    content::WebContents* contents_out_param = nullptr;
     ExtensionTabUtil::GetTabById(tab_id_, browser_context(),
-                                 include_incognito_information(), &contents_);
-    if (!contents_)
-      return RespondNow(Error(kNoTabError, base::NumberToString(tab_id_)));
+                                 include_incognito_information(),
+                                 &contents_out_param);
+    if (!contents_out_param) {
+      return RespondNow(
+          Error(kTabNotFoundError, base::NumberToString(tab_id_)));
+    }
+    contents_ = contents_out_param;
   } else {
     // Page actions do not have a default tabId.
     EXTENSION_FUNCTION_VALIDATE(extension_action_->action_type() !=
-                                ActionInfo::TYPE_PAGE);
+                                ActionInfo::Type::kPage);
   }
   return RunExtensionAction();
 }
@@ -283,21 +218,22 @@ bool ExtensionActionFunction::ExtractDataFromArguments() {
   // The tabId might appear in details (if it exists), as the first
   // argument besides the action type (depends on the function), or be omitted
   // entirely.
-  base::Value* first_arg = NULL;
-  if (!args_->Get(0, &first_arg))
+  if (args().empty()) {
     return true;
+  }
 
-  switch (first_arg->type()) {
+  const base::Value& first_arg = args()[0];
+
+  switch (first_arg.type()) {
     case base::Value::Type::INTEGER:
-      tab_id_ = first_arg->GetInt();
+      tab_id_ = first_arg.GetInt();
       break;
 
-    case base::Value::Type::DICTIONARY: {
+    case base::Value::Type::DICT: {
       // Found the details argument.
-      details_ = static_cast<base::DictionaryValue*>(first_arg);
+      details_ = &first_arg.GetDict();
       // Still need to check for the tabId within details.
-      base::Value* tab_id_value = NULL;
-      if (details_->Get("tabId", &tab_id_value)) {
+      if (const base::Value* tab_id_value = details_->Find("tabId")) {
         switch (tab_id_value->type()) {
           case base::Value::Type::NONE:
             // OK; tabId is optional, leave it default.
@@ -326,13 +262,14 @@ bool ExtensionActionFunction::ExtractDataFromArguments() {
 }
 
 void ExtensionActionFunction::NotifyChange() {
-  ExtensionActionAPI::Get(browser_context())
+  ExtensionActionDispatcher::Get(browser_context())
       ->NotifyChange(extension_action_, contents_, browser_context());
 }
 
 void ExtensionActionFunction::SetVisible(bool visible) {
-  if (extension_action_->GetIsVisible(tab_id_) == visible)
+  if (extension_action_->GetIsVisible(tab_id_) == visible) {
     return;
+  }
   extension_action_->SetIsVisible(tab_id_, visible);
   NotifyChange();
 }
@@ -349,6 +286,12 @@ ExtensionActionHideFunction::RunExtensionAction() {
   return RespondNow(NoArguments());
 }
 
+ExtensionFunction::ResponseAction
+ActionIsEnabledFunction::RunExtensionAction() {
+  return RespondNow(WithArguments(
+      extension_action_->GetIsVisibleIgnoringDeclarative(tab_id_)));
+}
+
 // static
 void ExtensionActionSetIconFunction::SetReportErrorForInvisibleIconForTesting(
     bool value) {
@@ -357,78 +300,38 @@ void ExtensionActionSetIconFunction::SetReportErrorForInvisibleIconForTesting(
 
 ExtensionFunction::ResponseAction
 ExtensionActionSetIconFunction::RunExtensionAction() {
-  // TODO(devlin): Temporary logging to track down https://crbug.com/1087948.
-  // Remove this (and the redundant `if (!x) { VALIDATE(x); }`) checks after
-  // the bug is fixed.
-  // Don't reorder or remove values.
-  enum class FailureType {
-    kFailedToParseDetails = 0,
-    kFailedToDecodeCanvas = 1,
-    kFailedToUnpickleCanvas = 2,
-    kNoImageDataOrIconIndex = 3,
-    kMaxValue = kNoImageDataOrIconIndex,
-  };
-
-  auto log_set_icon_failure = [](FailureType type) {
-    base::UmaHistogramEnumeration("Extensions.ActionSetIconFailureType", type);
-  };
-
-  if (!details_) {
-    log_set_icon_failure(FailureType::kFailedToParseDetails);
-    EXTENSION_FUNCTION_VALIDATE(details_);
-  }
+  EXTENSION_FUNCTION_VALIDATE(details_);
 
   // setIcon can take a variant argument: either a dictionary of canvas
   // ImageData, or an icon index.
-  base::DictionaryValue* canvas_set = NULL;
-  int icon_index;
-  if (details_->GetDictionary("imageData", &canvas_set)) {
+  const base::DictValue* canvas_set = details_->FindDict("imageData");
+  if (canvas_set) {
     gfx::ImageSkia icon;
 
-    ExtensionAction::IconParseResult parse_result =
-        ExtensionAction::ParseIconFromCanvasDictionary(*canvas_set, &icon);
+    extensions::IconParseResult parse_result =
+        extensions::ParseIconFromCanvasDictionary(*canvas_set, &icon);
+    EXTENSION_FUNCTION_VALIDATE(parse_result ==
+                                extensions::IconParseResult::kSuccess);
 
-    if (parse_result != ExtensionAction::IconParseResult::kSuccess) {
-      switch (parse_result) {
-        case ExtensionAction::IconParseResult::kDecodeFailure:
-          log_set_icon_failure(FailureType::kFailedToDecodeCanvas);
-          break;
-        case ExtensionAction::IconParseResult::kUnpickleFailure:
-          log_set_icon_failure(FailureType::kFailedToUnpickleCanvas);
-          break;
-        case ExtensionAction::IconParseResult::kSuccess:
-          NOTREACHED();
-          break;
-      }
-      EXTENSION_FUNCTION_VALIDATE(false);
-    }
-
-    if (icon.isNull())
+    if (icon.isNull()) {
       return RespondNow(Error("Icon invalid."));
+    }
 
     gfx::Image icon_image(icon);
     const SkBitmap bitmap = icon_image.AsBitmap();
     const bool is_visible = image_util::IsIconSufficientlyVisible(bitmap);
-    UMA_HISTOGRAM_BOOLEAN("Extensions.DynamicExtensionActionIconWasVisible",
-                          is_visible);
-    const bool is_visible_rendered =
-        extensions::ui_util::IsRenderedIconSufficientlyVisibleForBrowserContext(
-            bitmap, browser_context());
-    UMA_HISTOGRAM_BOOLEAN(
-        "Extensions.DynamicExtensionActionIconWasVisibleRendered",
-        is_visible_rendered);
-
-    if (!is_visible && g_report_error_for_invisible_icon)
+    if (!is_visible && g_report_error_for_invisible_icon) {
       return RespondNow(Error("Icon not sufficiently visible."));
+    }
 
     extension_action_->SetIcon(tab_id_, icon_image);
-  } else if (details_->GetInteger("iconIndex", &icon_index)) {
+  } else if (details_->FindInt("iconIndex")) {
     // Obsolete argument: ignore it.
     return RespondNow(NoArguments());
   } else {
-    log_set_icon_failure(FailureType::kNoImageDataOrIconIndex);
     EXTENSION_FUNCTION_VALIDATE(false);
   }
+
   NotifyChange();
   return RespondNow(NoArguments());
 }
@@ -436,9 +339,14 @@ ExtensionActionSetIconFunction::RunExtensionAction() {
 ExtensionFunction::ResponseAction
 ExtensionActionSetTitleFunction::RunExtensionAction() {
   EXTENSION_FUNCTION_VALIDATE(details_);
-  std::string title;
-  EXTENSION_FUNCTION_VALIDATE(details_->GetString("title", &title));
-  extension_action_->SetTitle(tab_id_, title);
+  const std::string* title = details_->FindString("title");
+  EXTENSION_FUNCTION_VALIDATE(title);
+  // Log title length to determine future length limit.
+  // TODO(crbug.com/492555224): After determining suitable length limit, remove
+  // histogram and add handling for excessively long action titles.
+  base::UmaHistogramCounts10000("Extensions.Action.SetTitleLength",
+                               title->length());
+  extension_action_->SetTitle(tab_id_, *title);
   NotifyChange();
   return RespondNow(NoArguments());
 }
@@ -446,12 +354,19 @@ ExtensionActionSetTitleFunction::RunExtensionAction() {
 ExtensionFunction::ResponseAction
 ExtensionActionSetPopupFunction::RunExtensionAction() {
   EXTENSION_FUNCTION_VALIDATE(details_);
-  std::string popup_string;
-  EXTENSION_FUNCTION_VALIDATE(details_->GetString("popup", &popup_string));
-
+  const std::string* popup_string = details_->FindString("popup");
+  EXTENSION_FUNCTION_VALIDATE(popup_string);
   GURL popup_url;
-  if (!popup_string.empty())
-    popup_url = extension()->GetResourceURL(popup_string);
+
+  // If an empty string is passed, remove the explicitly set popup. Setting it
+  // back to an empty string (URL) will cause no popup to be shown (even if
+  // one is specified in the manifest).
+  if (!popup_string->empty()) {
+    popup_url = extension()->ResolveExtensionURL(*popup_string);
+    if (!popup_url.is_valid() || !popup_url.SchemeIs(kExtensionScheme)) {
+      return RespondNow(Error(manifest_errors::kInvalidExtensionPopupPath));
+    }
+  }
 
   extension_action_->SetPopupUrl(tab_id_, popup_url);
   NotifyChange();
@@ -462,11 +377,19 @@ ExtensionFunction::ResponseAction
 ExtensionActionSetBadgeTextFunction::RunExtensionAction() {
   EXTENSION_FUNCTION_VALIDATE(details_);
 
-  std::string badge_text;
-  if (details_->GetString("text", &badge_text))
-    extension_action_->SetBadgeText(tab_id_, badge_text);
-  else
+  const std::string* badge_text = details_->FindString("text");
+
+  if (badge_text) {
+    // The maximum size (in bytes) for values passed to action.setBadgeText().
+    constexpr size_t kMaxBadgeTextSize = 100;
+    if (badge_text->length() > kMaxBadgeTextSize) {
+      return RespondNow(Error(base::StringPrintf(
+          kSetBadgeMaximumSizeError, badge_text->length(), kMaxBadgeTextSize)));
+    }
+    extension_action_->SetBadgeText(tab_id_, *badge_text);
+  } else {
     extension_action_->ClearBadgeText(tab_id_);
+  }
 
   NotifyChange();
   return RespondNow(NoArguments());
@@ -475,50 +398,52 @@ ExtensionActionSetBadgeTextFunction::RunExtensionAction() {
 ExtensionFunction::ResponseAction
 ExtensionActionSetBadgeBackgroundColorFunction::RunExtensionAction() {
   EXTENSION_FUNCTION_VALIDATE(details_);
-  base::Value* color_value = NULL;
-  EXTENSION_FUNCTION_VALIDATE(details_->Get("color", &color_value));
+  const base::Value* color_value = details_->Find("color");
+  EXTENSION_FUNCTION_VALIDATE(color_value);
   SkColor color = 0;
-  if (color_value->is_list()) {
-    base::ListValue* list = NULL;
-    EXTENSION_FUNCTION_VALIDATE(details_->GetList("color", &list));
-    EXTENSION_FUNCTION_VALIDATE(list->GetSize() == 4);
-
-    int color_array[4] = {0};
-    for (size_t i = 0; i < base::size(color_array); ++i) {
-      EXTENSION_FUNCTION_VALIDATE(list->GetInteger(i, &color_array[i]));
-    }
-
-    color = SkColorSetARGB(color_array[3], color_array[0],
-                           color_array[1], color_array[2]);
-  } else if (color_value->is_string()) {
-    std::string color_string;
-    EXTENSION_FUNCTION_VALIDATE(details_->GetString("color", &color_string));
-    if (!image_util::ParseCssColorString(color_string, &color))
-      return RespondNow(Error(kInvalidColorError));
+  if (!ParseColor(*color_value, color)) {
+    return RespondNow(Error(extension_misc::kInvalidColorError));
   }
-
   extension_action_->SetBadgeBackgroundColor(tab_id_, color);
   NotifyChange();
   return RespondNow(NoArguments());
 }
 
 ExtensionFunction::ResponseAction
+ActionSetBadgeTextColorFunction::RunExtensionAction() {
+  EXTENSION_FUNCTION_VALIDATE(details_);
+  const base::Value* color_value = details_->Find("color");
+  EXTENSION_FUNCTION_VALIDATE(color_value);
+  SkColor color = 0;
+  if (!ParseColor(*color_value, color)) {
+    return RespondNow(Error(extension_misc::kInvalidColorError));
+  }
+
+  if (SkColorGetA(color) == SK_AlphaTRANSPARENT) {
+    return RespondNow(Error(extension_misc::kInvalidColorError));
+  }
+  extension_action_->SetBadgeTextColor(tab_id_, color);
+  NotifyChange();
+  return RespondNow(NoArguments());
+}
+
+ExtensionFunction::ResponseAction
 ExtensionActionGetTitleFunction::RunExtensionAction() {
-  return RespondNow(
-      OneArgument(base::Value(extension_action_->GetTitle(tab_id_))));
+  return RespondNow(WithArguments(extension_action_->GetTitle(tab_id_)));
 }
 
 ExtensionFunction::ResponseAction
 ExtensionActionGetPopupFunction::RunExtensionAction() {
   return RespondNow(
-      OneArgument(base::Value(extension_action_->GetPopupUrl(tab_id_).spec())));
+      WithArguments(extension_action_->GetPopupUrl(tab_id_).spec()));
 }
 
 ExtensionFunction::ResponseAction
 ExtensionActionGetBadgeTextFunction::RunExtensionAction() {
-  ExtensionPrefs* prefs = ExtensionPrefs::Get(browser_context());
+  declarative_net_request::PrefsHelper helper(
+      *ExtensionPrefs::Get(browser_context()));
   bool is_dnr_action_count_active =
-      prefs->GetDNRUseActionCountAsBadgeText(extension_id()) &&
+      helper.GetUseActionCountAsBadgeText(extension_id()) &&
       !extension_action_->HasBadgeText(tab_id_);
 
   // Ensure that the placeholder string is returned if this extension is
@@ -528,31 +453,41 @@ ExtensionActionGetBadgeTextFunction::RunExtensionAction() {
   if (is_dnr_action_count_active &&
       !declarative_net_request::HasDNRFeedbackPermission(extension(),
                                                          tab_id_)) {
-    return RespondNow(OneArgument(base::Value(
-        std::move(declarative_net_request::kActionCountPlaceholderBadgeText))));
+    return RespondNow(WithArguments(
+        std::move(declarative_net_request::kActionCountPlaceholderBadgeText)));
   }
 
-  return RespondNow(OneArgument(
-      base::Value(extension_action_->GetDisplayBadgeText(tab_id_))));
+  return RespondNow(
+      WithArguments(extension_action_->GetDisplayBadgeText(tab_id_)));
 }
 
 ExtensionFunction::ResponseAction
 ExtensionActionGetBadgeBackgroundColorFunction::RunExtensionAction() {
-  std::unique_ptr<base::ListValue> list(new base::ListValue());
+  base::ListValue list;
   SkColor color = extension_action_->GetBadgeBackgroundColor(tab_id_);
-  list->AppendInteger(static_cast<int>(SkColorGetR(color)));
-  list->AppendInteger(static_cast<int>(SkColorGetG(color)));
-  list->AppendInteger(static_cast<int>(SkColorGetB(color)));
-  list->AppendInteger(static_cast<int>(SkColorGetA(color)));
-  return RespondNow(
-      OneArgument(base::Value::FromUniquePtrValue(std::move(list))));
+  list.Append(static_cast<int>(SkColorGetR(color)));
+  list.Append(static_cast<int>(SkColorGetG(color)));
+  list.Append(static_cast<int>(SkColorGetB(color)));
+  list.Append(static_cast<int>(SkColorGetA(color)));
+  return RespondNow(WithArguments(std::move(list)));
+}
+
+ExtensionFunction::ResponseAction
+ActionGetBadgeTextColorFunction::RunExtensionAction() {
+  base::ListValue list;
+  SkColor color = extension_action_->GetBadgeTextColor(tab_id_);
+  list.Append(static_cast<int>(SkColorGetR(color)));
+  list.Append(static_cast<int>(SkColorGetG(color)));
+  list.Append(static_cast<int>(SkColorGetB(color)));
+  list.Append(static_cast<int>(SkColorGetA(color)));
+  return RespondNow(WithArguments(std::move(list)));
 }
 
 ActionGetUserSettingsFunction::ActionGetUserSettingsFunction() = default;
 ActionGetUserSettingsFunction::~ActionGetUserSettingsFunction() = default;
 
 ExtensionFunction::ResponseAction ActionGetUserSettingsFunction::Run() {
-  DCHECK(extension());
+  CHECK(extension(), base::NotFatalUntil::M161);
   ExtensionActionManager* const action_manager =
       ExtensionActionManager::Get(browser_context());
   ExtensionAction* const action =
@@ -560,91 +495,186 @@ ExtensionFunction::ResponseAction ActionGetUserSettingsFunction::Run() {
 
   // This API is only available to extensions with the "action" key in the
   // manifest, so they should always have an action.
-  DCHECK(action);
-  DCHECK_EQ(ActionInfo::TYPE_ACTION, action->action_type());
+  CHECK(action, base::NotFatalUntil::M161);
+  CHECK_EQ(ActionInfo::Type::kAction, action->action_type(),
+           base::NotFatalUntil::M161);
 
   const bool is_pinned =
       ToolbarActionsModel::Get(Profile::FromBrowserContext(browser_context()))
           ->IsActionPinned(extension_id());
 
-  // TODO(devlin): Today, no action APIs are compiled. Unfortunately, this
-  // means we miss out on the compiled types, which would be rather helpful
-  // here.
-  base::Value ui_settings(base::Value::Type::DICTIONARY);
-  ui_settings.SetBoolKey("isOnToolbar", is_pinned);
+  // TODO(crbug.com/360916928): Today, no action APIs are compiled.
+  // Unfortunately, this means we miss out on the compiled types, which would be
+  // rather helpful here.
+  base::DictValue ui_settings;
+  ui_settings.Set("isOnToolbar", is_pinned);
 
-  return RespondNow(OneArgument(std::move(ui_settings)));
+  return RespondNow(WithArguments(std::move(ui_settings)));
+}
+
+ActionOpenPopupFunction::ActionOpenPopupFunction() = default;
+ActionOpenPopupFunction::~ActionOpenPopupFunction() = default;
+
+ExtensionFunction::ResponseAction ActionOpenPopupFunction::Run() {
+  // TODO(crbug.com/360916928): Unfortunately, the action API types aren't
+  // compiled. However, the bindings should still valid the form of the
+  // arguments.
+  EXTENSION_FUNCTION_VALIDATE(args().size() == 1u);
+  EXTENSION_FUNCTION_VALIDATE(extension());
+  const base::Value& options = args()[0];
+
+  // TODO(crbug.com/40057101): Support specifying the tab ID? This is
+  // kind of racy (because really what the extension probably cares about is
+  // the document ID; tab ID persists across pages, whereas document ID would
+  // detect things like navigations).
+  int window_id = extension_misc::kCurrentWindowId;
+  if (options.is_dict()) {
+    const base::Value* window_value = options.GetDict().Find("windowId");
+    if (window_value) {
+      EXTENSION_FUNCTION_VALIDATE(window_value->is_int());
+      window_id = window_value->GetInt();
+    }
+  }
+
+  BrowserWindowInterface* browser = nullptr;
+  Profile* profile = Profile::FromBrowserContext(browser_context());
+  if (window_id == extension_misc::kCurrentWindowId) {
+    browser =
+        FindActiveBrowserWindow(*profile, include_incognito_information());
+    if (!browser) {
+      return RespondNow(Error(kNoActiveWindowFound));
+    }
+  } else {
+    std::string error;
+    WindowController* controller =
+        ExtensionTabUtil::GetControllerInProfileWithId(
+            profile, window_id, include_incognito_information(), &error);
+    if (!controller) {
+      return RespondNow(Error(std::move(error)));
+    }
+    browser = controller->GetBrowserWindowInterface();
+    if (!browser) {
+      // The window exists but isn't a browser window, so it can't host a popup.
+      // TODO(crbug.com/571684513): Update this error to be more specific on
+      // the actual nature of the failure condition, a window was found but it
+      // does not support this operation.
+      return RespondNow(Error(kNoActiveWindowFound));
+    }
+  }
+
+  if (!browser->GetWindow()->IsActive()) {
+    return RespondNow(Error(kOpenPopupInactiveWindow));
+  }
+
+  if (!HasPopupOnActiveTab(*browser, browser_context(), *extension())) {
+    return RespondNow(Error(kNoActivePopup));
+  }
+
+  std::string error;
+  if (!OpenPopupInBrowser(
+          *browser, *extension(), &error,
+          base::BindOnce(&ActionOpenPopupFunction::OnShowPopupComplete,
+                         this))) {
+    CHECK(!error.empty(), base::NotFatalUntil::M161);
+    return RespondNow(Error(std::move(error)));
+  }
+
+  // The function responds in OnShowPopupComplete(). Note that the function is
+  // kept alive by the ref-count owned by the ShowPopupCallback.
+  return RespondLater();
+}
+
+void ActionOpenPopupFunction::OnShowPopupComplete(ExtensionHost* popup_host) {
+  CHECK(!did_respond(), base::NotFatalUntil::M161);
+
+  if (popup_host) {
+    // TODO(crbug.com/40057101): Return the tab for which the extension
+    // popup was shown?
+    CHECK(popup_host->document_element_available(), base::NotFatalUntil::M161);
+    Respond(NoArguments());
+  } else {
+    // NOTE(devlin): We could have the callback pass more information here about
+    // why the popup didn't open (e.g., another active popup vs popup closing
+    // before display, as may happen if the window closes), but it's not clear
+    // whether that would be significantly helpful to developers and it may
+    // leak other information about the user's browser.
+    Respond(Error(kFailedToOpenPopupGenericError));
+  }
 }
 
 BrowserActionOpenPopupFunction::BrowserActionOpenPopupFunction() = default;
+BrowserActionOpenPopupFunction::~BrowserActionOpenPopupFunction() = default;
 
 ExtensionFunction::ResponseAction BrowserActionOpenPopupFunction::Run() {
   // We only allow the popup in the active window.
   Profile* profile = Profile::FromBrowserContext(browser_context());
-  Browser* browser = chrome::FindLastActiveWithProfile(profile);
-  // It's possible that the last active browser actually corresponds to the
-  // associated incognito profile, and this won't be returned by
-  // FindLastActiveWithProfile. If the browser we found isn't active and the
-  // extension can operate incognito, then check the last active incognito, too.
-  if ((!browser || !browser->window()->IsActive()) &&
-      util::IsIncognitoEnabled(extension()->id(), profile) &&
-      profile->HasPrimaryOTRProfile()) {
-    browser = chrome::FindLastActiveWithProfile(
-        profile->GetPrimaryOTRProfile(/*create_if_needed=*/true));
+  BrowserWindowInterface* browser =
+      FindActiveBrowserWindow(*profile, include_incognito_information());
+
+  if (!browser) {
+    return RespondNow(Error(kNoActiveWindowFound));
   }
 
-  // If there's no active browser, or the Toolbar isn't visible, abort.
-  // Otherwise, try to open a popup in the active browser.
-  // TODO(justinlin): Remove toolbar check when http://crbug.com/308645 is
-  // fixed.
-  if (!browser || !browser->window()->IsActive() ||
-      !browser->window()->IsToolbarVisible() ||
-      !ExtensionActionAPI::Get(profile)->ShowExtensionActionPopupForAPICall(
-          extension_.get(), browser)) {
-    return RespondNow(Error(kOpenPopupError));
+  if (!HasPopupOnActiveTab(*browser, browser_context(), *extension())) {
+    return RespondNow(Error(kNoActivePopup));
+  }
+
+  std::string error;
+  if (!OpenPopupInBrowser(*browser, *extension(), &error,
+                          ShowPopupCallback())) {
+    CHECK(!error.empty(), base::NotFatalUntil::M161);
+    return RespondNow(Error(std::move(error)));
   }
 
   // Even if this is for an incognito window, we want to use the normal profile.
   // If the extension is spanning, then extension hosts are created with the
   // original profile, and if it's split, then we know the api call came from
   // the right profile.
-  registrar_.Add(this, NOTIFICATION_EXTENSION_HOST_DID_STOP_FIRST_LOAD,
-                 content::Source<Profile>(profile));
+  host_registry_observation_.Observe(ExtensionHostRegistry::Get(profile));
 
   // Set a timeout for waiting for the notification that the popup is loaded.
   // Waiting is required so that the popup view can be retrieved by the custom
   // bindings for the response callback. It's also needed to keep this function
   // instance around until a notification is observed.
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE,
       base::BindOnce(&BrowserActionOpenPopupFunction::OpenPopupTimedOut, this),
-      base::TimeDelta::FromSeconds(10));
+      base::Seconds(10));
   return RespondLater();
 }
 
+void BrowserActionOpenPopupFunction::OnBrowserContextShutdown() {
+  // No point in responding at this point (the context is gone). However, we
+  // need to explicitly remove the ExtensionHostRegistry observation, since the
+  // ExtensionHostRegistry's lifetime is tied to the BrowserContext. Otherwise,
+  // this would cause a UAF when the observation is destructed as part of this
+  // instance's destruction.
+  host_registry_observation_.Reset();
+}
+
 void BrowserActionOpenPopupFunction::OpenPopupTimedOut() {
-  if (did_respond())
+  if (did_respond()) {
     return;
+  }
 
   DVLOG(1) << "chrome.browserAction.openPopup did not show a popup.";
   Respond(Error(kOpenPopupError));
 }
 
-void BrowserActionOpenPopupFunction::Observe(
-    int type,
-    const content::NotificationSource& source,
-    const content::NotificationDetails& details) {
-  DCHECK_EQ(NOTIFICATION_EXTENSION_HOST_DID_STOP_FIRST_LOAD, type);
-  if (did_respond())
+void BrowserActionOpenPopupFunction::OnExtensionHostCompletedFirstLoad(
+    content::BrowserContext* browser_context,
+    ExtensionHost* host) {
+  if (did_respond()) {
     return;
+  }
 
-  ExtensionHost* host = content::Details<ExtensionHost>(details).ptr();
   if (host->extension_host_type() != mojom::ViewType::kExtensionPopup ||
-      host->extension()->id() != extension_->id())
+      host->extension()->id() != extension_->id()) {
     return;
+  }
 
   Respond(NoArguments());
-  registrar_.RemoveAll();
+  host_registry_observation_.Reset();
 }
 
 }  // namespace extensions

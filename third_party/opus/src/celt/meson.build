@@ -6,11 +6,17 @@ celt_sse2_sources = sources['CELT_SOURCES_SSE2']
 
 celt_sse4_1_sources = sources['CELT_SOURCES_SSE4_1']
 
+celt_avx2_sources = sources['CELT_SOURCES_AVX2']
+
 celt_neon_intr_sources = sources['CELT_SOURCES_ARM_NEON_INTR']
 
 celt_static_libs = []
 
-foreach intr_name : ['sse', 'sse2', 'sse4_1', 'neon_intr']
+if host_cpu_family in ['x86', 'x86_64'] and opus_conf.has('OPUS_HAVE_RTCD')
+  celt_sources +=  sources['CELT_SOURCES_X86_RTCD']
+endif
+
+foreach intr_name : ['sse', 'sse2', 'sse4_1', 'avx2', 'neon_intr']
   have_intr = get_variable('have_' + intr_name)
   if not have_intr
     continue
@@ -30,19 +36,14 @@ if (intrinsics_support.length() + asm_optimization.length() + inline_optimizatio
 endif
 
 if host_cpu_family in ['arm', 'aarch64'] and have_arm_intrinsics_or_asm
-  celt_sources +=  sources['CELT_SOURCES_ARM']
+  if opus_conf.has('OPUS_HAVE_RTCD')
+    celt_sources +=  sources['CELT_SOURCES_ARM_RTCD']
+  endif
   if have_arm_ne10
     celt_sources += sources['CELT_SOURCES_ARM_NE10']
   endif
   if opus_arm_external_asm
-    arm2gnu = [find_program('arm/arm2gnu.pl')] + arm2gnu_args
-    celt_sources_arm_asm = configure_file(input: 'arm/celt_pitch_xcorr_arm.s',
-      output: '@BASENAME@-gnu.S',
-      command: arm2gnu + ['@INPUT@'],
-      capture: true)
-    celt_arm_armopts_s = configure_file(input: 'arm/armopts.s.in',
-      output: 'arm/armopts.s',
-      configuration: opus_conf)
+    subdir('arm')
     celt_static_libs += static_library('celt-armasm',
       celt_arm_armopts_s, celt_sources_arm_asm,
       install: false)

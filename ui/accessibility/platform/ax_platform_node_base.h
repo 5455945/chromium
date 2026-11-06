@@ -1,24 +1,32 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_ACCESSIBILITY_PLATFORM_AX_PLATFORM_NODE_BASE_H_
 #define UI_ACCESSIBILITY_PLATFORM_AX_PLATFORM_NODE_BASE_H_
 
-#include <map>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/component_export.h"
+#include "base/containers/flat_map.h"
+#include "base/containers/span.h"
+#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
+#include "base/strings/string_split.h"
 #include "build/build_config.h"
 #include "ui/accessibility/ax_enums.mojom-forward.h"
 #include "ui/accessibility/ax_node.h"
+#include "ui/accessibility/ax_node_position.h"
+#include "ui/accessibility/ax_text_attributes.h"
 #include "ui/accessibility/platform/ax_platform_node.h"
 #include "ui/accessibility/platform/ax_platform_node_delegate.h"
 #include "ui/accessibility/platform/ax_platform_text_boundary.h"
 #include "ui/base/buildflags.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 #if BUILDFLAG(USE_ATK)
 #include <atk/atk.h>
@@ -26,15 +34,22 @@
 
 namespace ui {
 
+struct AXActionData;
 struct AXNodeData;
 
 // TODO(nektar): Move this struct over to AXNode so that it can be accessed by
 // AXPosition.
-struct AX_EXPORT AXLegacyHypertext {
+struct COMPONENT_EXPORT(AX_PLATFORM) AXLegacyHypertext {
+  using OffsetToIndex = base::flat_map<int32_t, int32_t>;
+
   AXLegacyHypertext();
   ~AXLegacyHypertext();
   AXLegacyHypertext(const AXLegacyHypertext& other);
   AXLegacyHypertext& operator=(const AXLegacyHypertext& other);
+  AXLegacyHypertext(AXLegacyHypertext&& other) noexcept;
+  AXLegacyHypertext& operator=(AXLegacyHypertext&& other);
+
+  void Clear();
 
   // A flag that should be set if the hypertext information in this struct is
   // out-of-date and needs to be updated. This flag should always be set upon
@@ -44,7 +59,7 @@ struct AX_EXPORT AXLegacyHypertext {
 
   // Maps an embedded character offset in |hypertext| to an index in
   // |hyperlinks|.
-  std::map<int32_t, int32_t> hyperlink_offset_to_index;
+  OffsetToIndex hyperlink_offset_to_index;
 
   // The unique id of a AXPlatformNodes for each hyperlink.
   // TODO(nektar): Replace object IDs with child indices if we decide that
@@ -55,25 +70,25 @@ struct AX_EXPORT AXLegacyHypertext {
   std::u16string hypertext;
 };
 
-class AX_EXPORT AXPlatformNodeBase : public AXPlatformNode {
+class COMPONENT_EXPORT(AX_PLATFORM) AXPlatformNodeBase : public AXPlatformNode {
  public:
-  AXPlatformNodeBase();
-  ~AXPlatformNodeBase() override;
+  using AXPosition = AXNodePosition::AXPositionInstance;
 
-  virtual void Init(AXPlatformNodeDelegate* delegate);
+  AXPlatformNodeBase(const AXPlatformNodeBase&) = delete;
+  AXPlatformNodeBase& operator=(const AXPlatformNodeBase&) = delete;
 
   // These are simple wrappers to our delegate.
   const AXNodeData& GetData() const;
   gfx::NativeViewAccessible GetFocus() const;
   gfx::NativeViewAccessible GetParent() const;
-  int GetChildCount() const;
-  gfx::NativeViewAccessible ChildAtIndex(int index) const;
+  size_t GetChildCount() const;
+  gfx::NativeViewAccessible ChildAtIndex(size_t index) const;
 
   std::string GetName() const;
 
   // This returns nullopt if there's no parent, it's unable to find the child in
   // the list of its parent's children, or its parent doesn't have children.
-  virtual absl::optional<int> GetIndexInParent();
+  virtual std::optional<size_t> GetIndexInParent();
 
   // Returns a stack of ancestors of this node. The node at the top of the stack
   // is the top most ancestor.
@@ -85,37 +100,57 @@ class AX_EXPORT AXPlatformNodeBase : public AXPlatformNode {
   //    0: if this position is logically equivalent to the other node
   //   <0: if this position is logically less than (before) the other node
   //   >0: if this position is logically greater than (after) the other node
-  absl::optional<int> CompareTo(AXPlatformNodeBase& other);
+  std::optional<int> CompareTo(AXPlatformNodeBase& other);
 
   // AXPlatformNode.
   void Destroy() override;
+  bool IsDestroyed() const override;
   gfx::NativeViewAccessible GetNativeViewAccessible() override;
   void NotifyAccessibilityEvent(ax::mojom::Event event_type) override;
 
-#if defined(OS_APPLE)
-  void AnnounceText(const std::u16string& text) override;
+  // For testing.
+  AXPlatformNodeDelegate* SetDelegateForTesting(
+      AXPlatformNodeDelegate* delegate);
+
+  // Returns the top-level URL for the active document. This should generally
+  // correspond to what would be shown in the Omnibox.
+  std::string GetRootURL() const override;
+
+  // Returns true if this node from web content.
+  bool IsWebContent() const override;
+
+#if BUILDFLAG(IS_APPLE)
+  void AnnounceTextAs(const std::u16string& text,
+                      AnnouncementType announcement_type) override;
 #endif
 
   AXPlatformNodeDelegate* GetDelegate() const override;
   bool IsDescendantOf(AXPlatformNode* ancestor) const override;
+  bool IsDescendant(AXPlatformNodeBase* descendant) {
+    return descendant->IsDescendantOf(this);
+  }
 
   // Helpers.
+  AXPlatformNodeBase* GetPlatformParent() const;
   AXPlatformNodeBase* GetPreviousSibling() const;
   AXPlatformNodeBase* GetNextSibling() const;
   AXPlatformNodeBase* GetFirstChild() const;
   AXPlatformNodeBase* GetLastChild() const;
-  bool IsDescendant(AXPlatformNodeBase* descendant);
+
+  AXNodeID GetNodeId() const;
+  AXPlatformNodeBase* GetActiveDescendant() const;
+  AXPlatformNodeBase* GetPlatformTextFieldAncestor() const;
 
   using AXPlatformNodeChildIterator =
-      ui::AXNode::ChildIteratorBase<AXPlatformNodeBase,
-                                    &AXPlatformNodeBase::GetNextSibling,
-                                    &AXPlatformNodeBase::GetPreviousSibling,
-                                    &AXPlatformNodeBase::GetFirstChild,
-                                    &AXPlatformNodeBase::GetLastChild>;
+      AXNode::ChildIteratorBase<AXPlatformNodeBase,
+                                &AXPlatformNodeBase::GetNextSibling,
+                                &AXPlatformNodeBase::GetPreviousSibling,
+                                &AXPlatformNodeBase::GetFirstChild,
+                                &AXPlatformNodeBase::GetLastChild>;
   AXPlatformNodeChildIterator AXPlatformNodeChildrenBegin() const;
   AXPlatformNodeChildIterator AXPlatformNodeChildrenEnd() const;
 
-  ax::mojom::Role GetRole() const;
+  virtual ax::mojom::Role GetRole() const;
   bool HasBoolAttribute(ax::mojom::BoolAttribute attribute) const;
   bool GetBoolAttribute(ax::mojom::BoolAttribute attribute) const;
   bool GetBoolAttribute(ax::mojom::BoolAttribute attribute, bool* value) const;
@@ -125,15 +160,18 @@ class AX_EXPORT AXPlatformNodeBase : public AXPlatformNode {
   bool GetFloatAttribute(ax::mojom::FloatAttribute attribute,
                          float* value) const;
 
+  const AXIntAttributes& GetIntAttributes() const;
   bool HasIntAttribute(ax::mojom::IntAttribute attribute) const;
   int GetIntAttribute(ax::mojom::IntAttribute attribute) const;
   bool GetIntAttribute(ax::mojom::IntAttribute attribute, int* value) const;
 
+  const AXStringAttributes& GetStringAttributes() const;
   bool HasStringAttribute(ax::mojom::StringAttribute attribute) const;
   const std::string& GetStringAttribute(
       ax::mojom::StringAttribute attribute) const;
   bool GetStringAttribute(ax::mojom::StringAttribute attribute,
                           std::string* value) const;
+  std::optional<std::string> GetAriaValueTextOrValue() const;
   std::u16string GetString16Attribute(
       ax::mojom::StringAttribute attribute) const;
   bool GetString16Attribute(ax::mojom::StringAttribute attribute,
@@ -149,22 +187,32 @@ class AX_EXPORT AXPlatformNodeBase : public AXPlatformNode {
   bool GetInheritedString16Attribute(ax::mojom::StringAttribute attribute,
                                      std::u16string* value) const;
 
+  const AXIntListAttributes& GetIntListAttributes() const;
   bool HasIntListAttribute(ax::mojom::IntListAttribute attribute) const;
-  const std::vector<int32_t>& GetIntListAttribute(
+  base::span<const int32_t> GetIntListAttribute(
       ax::mojom::IntListAttribute attribute) const;
   bool GetIntListAttribute(ax::mojom::IntListAttribute attribute,
                            std::vector<int32_t>* value) const;
 
   bool HasStringListAttribute(ax::mojom::StringListAttribute attribute) const;
-  const std::vector<std::string>& GetStringListAttribute(
+  base::span<const std::string> GetStringListAttribute(
       ax::mojom::StringListAttribute attribute) const;
   bool GetStringListAttribute(ax::mojom::StringListAttribute attribute,
                               std::vector<std::string>* value) const;
 
-  bool GetHtmlAttribute(const char* attribute, std::string* value) const;
-  bool GetHtmlAttribute(const char* attribute, std::u16string* value) const;
+  const base::StringPairs& GetHtmlAttributes() const;
+
+  AXTextAttributes GetTextAttributes() const;
 
   bool HasState(ax::mojom::State state) const;
+
+  bool HasAction(ax::mojom::Action action) const;
+
+  bool HasTextStyle(ax::mojom::TextStyle text_style) const;
+
+  ax::mojom::NameFrom GetNameFrom() const;
+
+  bool HasNameFromOtherElement() const;
 
   // Returns the selection container if inside one.
   AXPlatformNodeBase* GetSelectionContainer() const;
@@ -189,61 +237,67 @@ class AX_EXPORT AXPlatformNodeBase : public AXPlatformNode {
   // table.
   AXPlatformNodeBase* GetTableCell(int row, int column) const;
 
+  // If inside a table or ARIA grid and given 1-based row and column,
+  // returns the cell in ARIA grid or table that matches the corresponding
+  // 1-based aria-rowindex and aria-colindex values, if one exists.
+  AXPlatformNodeBase* GetAriaTableCell(int aria_row, int aria_column) const;
+
   // If inside a table or ARIA grid, returns the zero-based index of the cell.
   // Indices are in row major order and each cell is counted once regardless of
-  // its span. Returns absl::nullopt if not a cell or if not inside a table.
-  absl::optional<int> GetTableCellIndex() const;
+  // its span. Returns std::nullopt if not a cell or if not inside a table.
+  std::optional<int> GetTableCellIndex() const;
 
   // If inside a table or ARIA grid, returns the physical column number for the
   // current cell. In contrast to logical columns, physical columns always start
   // from 0 and have no gaps in their numbering. Logical columns can be set
-  // using aria-colindex. Returns absl::nullopt if not a cell or if not inside a
+  // using aria-colindex. Returns std::nullopt if not a cell or if not inside a
   // table.
-  absl::optional<int> GetTableColumn() const;
+  std::optional<int> GetTableColumn() const;
 
   // If inside a table or ARIA grid, returns the number of physical columns.
-  // Returns absl::nullopt if not inside a table.
-  absl::optional<int> GetTableColumnCount() const;
+  // Returns std::nullopt if not inside a table.
+  std::optional<int> GetTableColumnCount() const;
 
   // If inside a table or ARIA grid, returns the number of ARIA columns.
-  // Returns absl::nullopt if not inside a table.
-  absl::optional<int> GetTableAriaColumnCount() const;
+  // Returns std::nullopt if not inside a table.
+  std::optional<int> GetTableAriaColumnCount() const;
 
   // If inside a table or ARIA grid, returns the number of physical columns that
-  // this cell spans. Returns absl::nullopt if not a cell or if not inside a
+  // this cell spans. Returns std::nullopt if not a cell or if not inside a
   // table.
-  absl::optional<int> GetTableColumnSpan() const;
+  std::optional<int> GetTableColumnSpan() const;
 
   // If inside a table or ARIA grid, returns the physical row number for the
   // current cell. In contrast to logical rows, physical rows always start from
   // 0 and have no gaps in their numbering. Logical rows can be set using
-  // aria-rowindex. Returns absl::nullopt if not a cell or if not inside a
+  // aria-rowindex. Returns std::nullopt if not a cell or if not inside a
   // table.
-  absl::optional<int> GetTableRow() const;
+  std::optional<int> GetTableRow() const;
 
   // If inside a table or ARIA grid, returns the number of physical rows.
-  // Returns absl::nullopt if not inside a table.
-  absl::optional<int> GetTableRowCount() const;
+  // Returns std::nullopt if not inside a table.
+  std::optional<int> GetTableRowCount() const;
 
   // If inside a table or ARIA grid, returns the number of ARIA rows.
-  // Returns absl::nullopt if not inside a table.
-  absl::optional<int> GetTableAriaRowCount() const;
+  // Returns std::nullopt if not inside a table.
+  std::optional<int> GetTableAriaRowCount() const;
 
   // If inside a table or ARIA grid, returns the number of physical rows that
-  // this cell spans. Returns absl::nullopt if not a cell or if not inside a
+  // this cell spans. Returns std::nullopt if not a cell or if not inside a
   // table.
-  absl::optional<int> GetTableRowSpan() const;
+  std::optional<int> GetTableRowSpan() const;
 
   // Returns the font size converted to points, if available.
-  absl::optional<float> GetFontSizeInPoints() const;
+  std::optional<float> GetFontSizeInPoints() const;
 
-  // Returns true if either a descendant has selection (sel_focus_object_id) or
-  // if this node is a simple text element and has text selection attributes.
-  // Optionally accepts a selection, which can be useful if checking the
-  // unignored selection is required. If not provided, uses the selection from
-  // the tree data, which is safe and fast but does not take ignored nodes into
-  // account.
-  bool HasCaret(const AXTree::Selection* selection = nullptr);
+  // See `AXNode::HasVisibleCaretOrSelection`.
+  bool HasVisibleCaretOrSelection() const;
+
+  // See `AXNode::HasSelectionFocusInSubtree`. Unlike
+  // `HasVisibleCaretOrSelection`, these do not care whether the selection is
+  // rendered, only where it is.
+  bool HasSelectionFocusInSubtree();
+  bool HasSelectionFocusInSubtree(const AXSelection* selection);
 
   // See AXPlatformNodeDelegate::IsChildOfLeaf().
   bool IsChildOfLeaf() const;
@@ -256,6 +310,11 @@ class AX_EXPORT AXPlatformNodeBase : public AXPlatformNode {
 
   // Returns true if this node is currently focused.
   bool IsFocused() const;
+
+  // Returns true if this node is focusable.
+  // This does more than just use HasState(ax::mojom::State::kFocusable) -- it
+  // also checks whether the object is a likely activedescendant.
+  bool IsFocusable() const;
 
   // Returns true if this node can be scrolled either in the horizontal or the
   // vertical direction.
@@ -301,7 +360,8 @@ class AX_EXPORT AXPlatformNodeBase : public AXPlatformNode {
   // Only text displayed on screen is included. Text from ARIA and HTML
   // attributes that is either not displayed on screen, or outside this node,
   // e.g. aria-label and HTML title, is not returned.
-  std::u16string GetInnerText() const;
+  std::u16string GetTextContentUTF16() const;
+  int GetTextContentLengthUTF16() const;
 
   // Returns the value of a control such as a text field, a slider, a <select>
   // element, a date picker or an ARIA combo box. In order to minimize
@@ -316,11 +376,17 @@ class AX_EXPORT AXPlatformNodeBase : public AXPlatformNode {
   // child object appears.
   static const char16_t kEmbeddedCharacter;
 
+  // Prefix for the name of an action from the aria-actions attribute.
+  static const std::string kAriaActionsPrefix;
+
   // Get a node given its unique id or null in the case that the id is unknown.
   static AXPlatformNode* GetFromUniqueId(int32_t unique_id);
 
   // Return the number of instances of AXPlatformNodeBase, for leak testing.
-  static size_t GetInstanceCountForTesting();
+  static size_t GetInstanceCount();
+
+  // Resets the global instance count to zero and returns the previous count.
+  static size_t ResetInstanceCountForTesting();
 
   static void SetOnNotifyEventCallbackForTesting(
       ax::mojom::Event event_type,
@@ -329,6 +395,7 @@ class AX_EXPORT AXPlatformNodeBase : public AXPlatformNode {
   // This method finds text boundaries in the text used for platform text APIs.
   // Implementations may use side-channel data such as line or word indices to
   // produce appropriate results.
+  // Returns -1 if the requested boundary has not been found.
   virtual int FindTextBoundary(ax::mojom::TextBoundary boundary,
                                int offset,
                                ax::mojom::MoveDirection direction,
@@ -358,7 +425,7 @@ class AX_EXPORT AXPlatformNodeBase : public AXPlatformNode {
   // input node. Due to perf concerns, this should only be called on leaf nodes.
   int NearestTextIndexToPoint(gfx::Point point);
 
-  ui::TextAttributeList ComputeTextAttributes() const;
+  TextAttributeList ComputeTextAttributes() const;
 
   // Get the number of items selected. It checks kMultiselectable and uses
   // GetSelectedItems to get the selected number.
@@ -378,16 +445,11 @@ class AX_EXPORT AXPlatformNodeBase : public AXPlatformNode {
       int max_items,
       std::vector<AXPlatformNodeBase*>* out_selected_items = nullptr) const;
 
-  //
-  // Delegate.  This is a weak reference which owns |this|.
-  //
-  AXPlatformNodeDelegate* delegate_ = nullptr;
-
   // Uses the delegate to calculate this node's PosInSet.
-  absl::optional<int> GetPosInSet() const;
+  std::optional<int> GetPosInSet() const;
 
   // Uses the delegate to calculate this node's SetSize.
-  absl::optional<int> GetSetSize() const;
+  std::optional<int> GetSetSize() const;
 
   // Returns true if this object is at the root of what most accessibility APIs
   // consider to be a document, such as the root of a webpage, an iframe, or a
@@ -395,8 +457,13 @@ class AX_EXPORT AXPlatformNodeBase : public AXPlatformNode {
   bool IsPlatformDocument() const;
 
  protected:
+  AXPlatformNodeBase();
+  ~AXPlatformNodeBase() override;
+
+  // AXPlatformNode overrides.
+  void Init(AXPlatformNodeDelegate& delegate) override;
+
   bool IsStructuredAnnotation() const;
-  bool IsSelectionItemSupported() const;
 
   // Get the role description from the node data or from the image annotation
   // status.
@@ -416,6 +483,10 @@ class AX_EXPORT AXPlatformNodeBase : public AXPlatformNode {
   static AXPlatformNodeBase* FromNativeViewAccessible(
       gfx::NativeViewAccessible accessible);
 
+  // Releases resources used by the platform node. Called by `Destroy()`. The
+  // default implementation deletes the instance. Subclasses with different
+  // memory management requirements may provide their own implementation; e.g.,
+  // Windows.
   virtual void Dispose();
 
   // Sets the hypertext selection in this object if possible.
@@ -477,13 +548,45 @@ class AX_EXPORT AXPlatformNodeBase : public AXPlatformNode {
   // embedded element character.
   void UpdateComputedHypertext() const;
 
+  enum class TextSelectionResult {
+    kSuccess,
+    kNoSelection,
+    // IA2 maps an invalid selection to E_INVALIDARG and an operation failure
+    // to S_FALSE. APIs with a boolean result may map both to false.
+    kInvalidSelection,
+    kFailure,
+  };
+
+  // A single text selection whose endpoints are expressed as offsets in the
+  // hypertext of their respective objects. The start and end identify the
+  // logical beginning and end of the range; `start_is_active` preserves the
+  // direction of the selection.
+  struct TextSelection {
+    raw_ptr<AXPlatformNodeBase> start_object = nullptr;
+    int start_offset = 0;
+    raw_ptr<AXPlatformNodeBase> end_object = nullptr;
+    int end_offset = 0;
+    bool start_is_active = false;
+  };
+
+  // Gets, sets, or clears a text selection spanning descendant objects. These
+  // helpers use Chromium's UTF-16 hypertext offsets. Platform adapters are
+  // responsible for converting offsets and object references to and from
+  // their native representations.
+  TextSelectionResult GetTextSelection(TextSelection* selection);
+  TextSelectionResult SetTextSelection(const TextSelection& selection);
+  // Builds an action from positions ordered as anchor and focus.
+  static AXActionData CreateTextSelectionAction(const AXPosition& anchor,
+                                                const AXPosition& focus);
+  TextSelectionResult ClearTextSelection();
+
   // Selection helper functions.
   // The following functions retrieve the endpoints of the current selection.
   // First they check for a local selection found on the current control, e.g.
   // when querying the selection on a textarea.
   // If not found they retrieve the global selection found on the current frame.
-  int GetSelectionAnchor(const AXTree::Selection* selection);
-  int GetSelectionFocus(const AXTree::Selection* selection);
+  int GetSelectionAnchor(const AXSelection* selection);
+  int GetSelectionFocus(const AXSelection* selection);
 
   // Retrieves the selection offsets in the way required by the IA2 APIs.
   // selection_start and selection_end are -1 when there is no selection active
@@ -491,12 +594,20 @@ class AX_EXPORT AXPlatformNodeBase : public AXPlatformNode {
   // The greatest of the two offsets is one past the last character of the
   // selection.)
   void GetSelectionOffsets(int* selection_start, int* selection_end);
-  void GetSelectionOffsets(const AXTree::Selection* selection,
+  void GetSelectionOffsets(const AXSelection* selection,
                            int* selection_start,
                            int* selection_end);
-  void GetSelectionOffsetsFromTree(const AXTree::Selection* selection,
+  // Retrieve selection offsets, or if caret_only is true, the caret offset.
+  // The difference is that a selection end must skip past an embedded object
+  // character's offset if there is a non-collapsed selection inside, to show
+  // that there is something inside the object that is selected, whereas the
+  // caret would be at the start of the embedded object.
+  void GetSelectionOffsetsFromTree(const AXSelection* selection,
                                    int* selection_start,
-                                   int* selection_end);
+                                   int* selection_end,
+                                   bool caret_only = false);
+
+  virtual int GetCaretOffset();
 
   // Returns the hyperlink at the given text position, or nullptr if no
   // hyperlink can be found.
@@ -507,6 +618,7 @@ class AX_EXPORT AXPlatformNodeBase : public AXPlatformNode {
   int32_t GetHyperlinkIndexFromChild(AXPlatformNodeBase* child);
   int32_t GetHypertextOffsetFromHyperlinkIndex(int32_t hyperlink_index);
   int32_t GetHypertextOffsetFromChild(AXPlatformNodeBase* child);
+  int HypertextOffsetFromChildIndex(int child_index) const;
   int32_t GetHypertextOffsetFromDescendant(AXPlatformNodeBase* descendant);
 
   // If the selection endpoint is either equal to or an ancestor of this object,
@@ -519,6 +631,9 @@ class AX_EXPORT AXPlatformNodeBase : public AXPlatformNode {
   int GetHypertextOffsetFromEndpoint(AXPlatformNodeBase* endpoint_object,
                                      int endpoint_offset);
 
+  AXPlatformNodeBase::AXPosition HypertextOffsetToEndpoint(
+      int hypertext_offset) const;
+
   bool IsSameHypertextCharacter(const AXLegacyHypertext& old_hypertext,
                                 size_t old_char_index,
                                 size_t new_char_index);
@@ -528,16 +643,30 @@ class AX_EXPORT AXPlatformNodeBase : public AXPlatformNode {
       size_t* old_len,
       size_t* new_len);
 
-  std::string GetInvalidValue() const;
-
   // Based on the characteristics of this object, such as its role and the
   // presence of a multiselectable attribute, returns the maximum number of
   // selectable children that this object could potentially contain.
   int GetMaxSelectableItems() const;
 
+ private:
+  //
+  // Delegate. This is a weak reference which owns |this|. Valid from `Init()`
+  // through `Destroy()`.
+  //
+  raw_ptr<AXPlatformNodeDelegate> delegate_ = nullptr;
+
+ protected:
   mutable AXLegacyHypertext hypertext_;
 
  private:
+  friend AXPlatformNode::Pointer AXPlatformNode::Create(
+      AXPlatformNodeDelegate& delegate);
+
+  FRIEND_TEST_ALL_PREFIXES(AXPlatformNodeTest, HypertextOffsetFromEndpoint);
+  FRIEND_TEST_ALL_PREFIXES(AXPlatformNodeTest, GetTextSelection);
+  FRIEND_TEST_ALL_PREFIXES(AXPlatformNodeTest, SetTextSelection);
+  FRIEND_TEST_ALL_PREFIXES(AXPlatformNodeTest, ClearTextSelection);
+
   // Returns true if the index represents a text character.
   bool IsText(const std::u16string& text,
               size_t index,
@@ -548,8 +677,6 @@ class AX_EXPORT AXPlatformNodeBase : public AXPlatformNode {
 
   // Is there an aria-describedby that points to a role="tooltip".
   bool IsDescribedByTooltip() const;
-
-  DISALLOW_COPY_AND_ASSIGN(AXPlatformNodeBase);
 };
 
 }  // namespace ui

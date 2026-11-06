@@ -37,6 +37,36 @@
             {"type": "array", "items": {"$ref": "ChoiceType"}}
           ]}
         ]
+      },
+      {
+        "id": "ObjectChoiceA",
+        "type": "object",
+        "properties": {
+          "a": {"type": "integer"}
+        }
+      },
+      {
+        "id": "ObjectChoiceB",
+        "type": "object",
+        "properties": {
+          "b": {"type": "string"}
+        }
+      },
+      {
+        "id": "ObjectChoiceC",
+        "type": "object",
+        "properties": {
+          "c": {"type": "boolean"}
+        }
+      },
+      {
+        "id": "ObjectChoices",
+        "description": "Tests choices between multiple object types.",
+        "choices": [
+          {"$ref": "ObjectChoiceA"},
+          {"$ref": "ObjectChoiceB"},
+          {"$ref": "ObjectChoiceC"}
+        ]
       }
     ],
     "functions": [
@@ -51,13 +81,12 @@
                {"type": "array", "items": {"type": "integer", "minimum": 0}},
                {"type": "integer"}
              ]
-          },
-          {
-            "name": "callback",
-            "type": "function",
-            "parameters": []
           }
-        ]
+        ],
+        "returns_async": {
+          "name": "callback",
+          "parameters": []
+        }
       },
       {
         "name": "takesIntegersOptional",
@@ -71,13 +100,12 @@
                {"type": "integer"}
             ],
             "optional": true
-          },
-          {
-            "name": "callback",
-            "type": "function",
-            "parameters": []
           }
-        ]
+        ],
+        "returns_async": {
+          "name": "callback",
+          "parameters": []
+        }
       },
       {
         "name": "objectWithChoices",
@@ -104,63 +132,59 @@
                  "optional": true
                }
              }
-           },
-          {
-            "name": "callback",
-            "type": "function",
-            "parameters": []
-          }
-        ]
+           }
+        ],
+        "returns_async": {
+          "name": "callback",
+          "parameters": []
+        }
       },
       {
         "name": "returnChoices",
         "type": "function",
         "description": "Gives back a string. Or not.",
-        "parameters": [
-          {
-            "name": "callback",
-            "type": "function",
-            "parameters": [
-              {
-                "name": "result",
-                "choices": [
-                   {"type": "array", "items": {"type": "integer", "minimum": 0}},
-                   {"type": "integer"}
-                 ],
-                "description": "Some integers."
-              }
-            ]
-          }
-        ]
+        "parameters": [],
+        "returns_async": {
+          "name": "callback",
+          "parameters": [
+            {
+              "name": "result",
+              "choices": [
+                 {"type": "array", "items": {"type": "integer", "minimum": 0}},
+                 {"type": "integer"}
+               ],
+              "description": "Some integers."
+            }
+          ]
+        }
       },
       {
         "name": "returnMultipleChoices",
         "type": "function",
         "description": "Gives back two values where each is an integer or a list of integers.",
-        "parameters": [
-          {
-            "name": "callback",
-            "type": "function",
-            "parameters": [
-              {
-                "name": "firstResult",
-                "choices": [
-                   {"type": "array", "items": {"type": "integer", "minimum": 0}},
-                   {"type": "integer"}
-                 ],
-                "description": "Some integers."
-              },
-              {
-                "name": "secondResult",
-                "choices": [
-                   {"type": "array", "items": {"type": "integer", "minimum": 0}},
-                   {"type": "integer"}
-                 ],
-                "description": "Some integers."
-              }
-            ]
-          }
-        ]
+        "parameters": [],
+        "returns_async": {
+          "name": "callback",
+          "does_not_support_promises": "Multi-parameter callback for test",
+          "parameters": [
+            {
+              "name": "firstResult",
+              "choices": [
+                 {"type": "array", "items": {"type": "integer", "minimum": 0}},
+                 {"type": "integer"}
+               ],
+              "description": "Some integers."
+            },
+            {
+              "name": "secondResult",
+              "choices": [
+                 {"type": "array", "items": {"type": "integer", "minimum": 0}},
+                 {"type": "integer"}
+               ],
+              "description": "Some integers."
+            }
+          ]
+        }
       }
     ]
   }

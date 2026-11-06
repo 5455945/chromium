@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,10 +10,10 @@
 #include <set>
 #include <string>
 
-#include "base/bind.h"
+#include "base/apple/foundation_util.h"
 #include "base/file_version_info.h"
 #include "base/files/file_path.h"
-#include "base/mac/foundation_util.h"
+#include "base/functional/bind.h"
 #include "base/process/process_iterator.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -21,7 +21,6 @@
 #include "base/threading/thread.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/url_constants.h"
-#include "chrome/grit/chromium_strings.h"
 #include "components/version_info/version_info.h"
 #include "content/public/browser/browser_child_process_host.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -74,7 +73,7 @@ MemoryDetails::MemoryDetails() {
       base::GetProcessExecutablePath(base::GetCurrentProcessHandle());
 
   ProcessData process;
-  process.name = l10n_util::GetStringUTF16(IDS_PRODUCT_NAME);
+  process.name = base::ASCIIToUTF16(version_info::GetProductName());
   process.process_name =
       base::UTF8ToUTF16(browser_process_path.BaseName().value());
   process_data_.push_back(process);
@@ -113,7 +112,7 @@ void MemoryDetails::CollectProcessData(
   // Get PIDs of the helper.
   {
     base::NamedProcessIterator helper_it(chrome::kHelperProcessExecutableName,
-                                         NULL);
+                                         NULL, /*use_prefix_match=*/true);
     while (const base::ProcessEntry* entry = helper_it.NextProcessEntry()) {
       all_pids.push_back(entry->pid());
     }

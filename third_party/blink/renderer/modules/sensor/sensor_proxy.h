@@ -1,20 +1,20 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_SENSOR_SENSOR_PROXY_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_SENSOR_SENSOR_PROXY_H_
 
-#include "base/macros.h"
 #include "services/device/public/cpp/generic_sensor/sensor_reading.h"
+#include "services/device/public/cpp/generic_sensor/sensor_reading_shared_buffer.h"
 #include "services/device/public/cpp/generic_sensor/sensor_reading_shared_buffer_reader.h"
 #include "services/device/public/mojom/sensor.mojom-blink-forward.h"
 #include "services/device/public/mojom/sensor_provider.mojom-blink.h"
 #include "third_party/blink/renderer/core/page/focus_changed_observer.h"
 #include "third_party/blink/renderer/core/page/page_visibility_observer.h"
-#include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/platform/bindings/exception_code.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -22,9 +22,9 @@ class SensorProviderProxy;
 
 // This class wraps 'Sensor' mojo interface and used by multiple
 // JS sensor instances of the same type (within a single frame).
-class MODULES_EXPORT SensorProxy : public GarbageCollected<SensorProxy>,
-                                   public PageVisibilityObserver,
-                                   public FocusChangedObserver {
+class SensorProxy : public GarbageCollected<SensorProxy>,
+                    public PageVisibilityObserver,
+                    public FocusChangedObserver {
  public:
   class Observer : public GarbageCollectedMixin {
    public:
@@ -40,6 +40,9 @@ class MODULES_EXPORT SensorProxy : public GarbageCollected<SensorProxy>,
                                const String& unsanitized_message) {}
   };
 
+  SensorProxy(const SensorProxy&) = delete;
+  SensorProxy& operator=(const SensorProxy&) = delete;
+
   ~SensorProxy() override;
 
   void Dispose();
@@ -48,14 +51,13 @@ class MODULES_EXPORT SensorProxy : public GarbageCollected<SensorProxy>,
   void RemoveObserver(Observer*);
 
   // Public methods to be implemented by descendants.
-  virtual void Initialize() = 0;
+  virtual void Initialize(bool user_gesture) = 0;
   virtual void AddConfiguration(device::mojom::blink::SensorConfigurationPtr,
                                 base::OnceCallback<void(bool)>) = 0;
   virtual void RemoveConfiguration(
       device::mojom::blink::SensorConfigurationPtr) = 0;
   virtual double GetDefaultFrequency() const = 0;
   virtual std::pair<double, double> GetFrequencyLimits() const = 0;
-  virtual void SetReadingForInspector(const device::SensorReading&) {}
 
   virtual void ReportError(DOMExceptionCode code, const String& description);
   // Getters.
@@ -81,7 +83,7 @@ class MODULES_EXPORT SensorProxy : public GarbageCollected<SensorProxy>,
   virtual void Suspend() {}
   virtual void Resume() {}
 
-  SensorProviderProxy* sensor_provider_proxy() const { return provider_; }
+  SensorProviderProxy* sensor_provider_proxy() const { return provider_.Get(); }
 
   device::mojom::blink::SensorType type_;
   using ObserversSet = HeapHashSet<WeakMember<Observer>>;
@@ -110,8 +112,6 @@ class MODULES_EXPORT SensorProxy : public GarbageCollected<SensorProxy>,
       sizeof(device::SensorReadingSharedBuffer) ==
           device::mojom::blink::SensorInitParams::kReadBufferSizeForTests,
       "Check reading buffer size for tests");
-
-  DISALLOW_COPY_AND_ASSIGN(SensorProxy);
 };
 
 }  // namespace blink

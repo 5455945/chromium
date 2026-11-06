@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 
 #include <string>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
 
 class GURL;
@@ -26,7 +26,7 @@ class BrowserState;
 // notify.
 class URLDataSourceIOS {
  public:
-  // Adds a URL data source to |browser_state|.
+  // Adds a URL data source to `browser_state`.
   static void Add(BrowserState* browser_state, URLDataSourceIOS* source);
 
   virtual ~URLDataSourceIOS() {}
@@ -45,16 +45,16 @@ class URLDataSourceIOS {
   typedef base::OnceCallback<void(scoped_refptr<base::RefCountedMemory>)>
       GotDataCallback;
 
-  // Called by URLDataSourceIOS to request data at |path|. The string parameter
-  // is the path of the request. The child class should run |callback| when the
+  // Called by URLDataSourceIOS to request data at `path`. The string parameter
+  // is the path of the request. The child class should run `callback` when the
   // data is available or if the request could not be satisfied. This can be
   // called either in this callback or asynchronously with the response.
-  virtual void StartDataRequest(const std::string& path,
+  virtual void StartDataRequest(std::string_view path,
                                 GotDataCallback callback) = 0;
 
   // Return the mimetype that should be sent with this response, or empty
   // string to specify no mime type.
-  virtual std::string GetMimeType(const std::string& path) const = 0;
+  virtual std::string GetMimeType(std::string_view path) const = 0;
 
   // The following methods are all called on the IO thread.
 
@@ -66,6 +66,10 @@ class URLDataSourceIOS {
   //
   // TODO: nuke this and convert all callers to not replace.
   virtual bool ShouldReplaceExistingSource() const;
+
+  // Returns true if i18n replacemenents should be performed in JS files. Needed
+  // by UIs that use Web Components.
+  virtual bool ShouldReplaceI18nInJS() const;
 
   // Returns true if responses from this URLDataSourceIOS can be cached.
   virtual bool AllowCaching() const;

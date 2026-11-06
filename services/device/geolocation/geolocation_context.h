@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,12 @@
 #include <memory>
 #include <vector>
 
-#include "base/macros.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "services/device/public/mojom/geolocation.mojom.h"
+#include "services/device/public/mojom/geolocation_client_id.mojom.h"
 #include "services/device/public/mojom/geolocation_context.mojom.h"
 #include "services/device/public/mojom/geoposition.mojom.h"
+#include "url/origin.h"
 
 namespace device {
 
@@ -24,6 +25,10 @@ class GeolocationImpl;
 class GeolocationContext : public mojom::GeolocationContext {
  public:
   GeolocationContext();
+
+  GeolocationContext(const GeolocationContext&) = delete;
+  GeolocationContext& operator=(const GeolocationContext&) = delete;
+
   ~GeolocationContext() override;
 
   // Creates GeolocationContext that is strongly bound to |receiver|.
@@ -31,8 +36,15 @@ class GeolocationContext : public mojom::GeolocationContext {
 
   // mojom::GeolocationContext implementation:
   void BindGeolocation(mojo::PendingReceiver<mojom::Geolocation> receiver,
-                       const GURL& requesting_origin) override;
-  void SetOverride(mojom::GeopositionPtr geoposition) override;
+                       const url::Origin& requesting_origin,
+                       mojom::GeolocationClientId client_id,
+                       bool has_precise_permission) override;
+  void QueryCachedPosition(QueryCachedPositionCallback callback) override;
+  void OnPermissionUpdated(
+      const url::Origin& origin,
+      mojom::GeolocationPermissionLevel permission_level) override;
+
+  void SetOverride(mojom::GeopositionResultPtr geoposition_result) override;
   void ClearOverride() override;
 
   // Called when a GeolocationImpl has a connection error. After this call, it
@@ -41,10 +53,7 @@ class GeolocationContext : public mojom::GeolocationContext {
 
  private:
   std::vector<std::unique_ptr<GeolocationImpl>> impls_;
-
-  mojom::GeopositionPtr geoposition_override_;
-
-  DISALLOW_COPY_AND_ASSIGN(GeolocationContext);
+  mojom::GeopositionResultPtr geoposition_override_;
 };
 
 }  // namespace device

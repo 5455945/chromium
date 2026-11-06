@@ -1,4 +1,4 @@
-(async function(testRunner) {
+(async function(/** @type {import('test_runner').TestRunner} */ testRunner) {
     var {page, session, dp} = await testRunner.startBlank('Tests for correct opener in Page.TargetCreated and Page.TargetInfoChanged protocol method.');
     await dp.Target.setDiscoverTargets({discover: true});
     await dp.Page.enable();
@@ -14,8 +14,17 @@
         testRunner.log(`FAIL: Incorrect ${keyName}`);
     }
 
+    async function evaluate(expression) {
+      const response = await dp.Runtime.evaluate({expression});
+      if (response.error &&
+          response.error.message != 'Inspected target navigated or closed') {
+        testRunner.log(`Error while evaluating async ${expression}: ${
+            response.error.message || response.error}`);
+      }
+    }
+
     testRunner.log(`\nOpening without new browsing context`);
-    session.evaluate(`window.open('./resources/test-page.html', '_blank'); undefined`);
+    evaluate(`window.open('./resources/test-page.html', '_blank')`);
     response = await dp.Target.onceTargetCreated();
     testRunner.log(response.params.targetInfo);
     compareTargetIds(targetId, response.params.targetInfo.openerFrameId, 'openerFrameId');
@@ -26,7 +35,7 @@
     compareTargetIds(targetId, response.params.targetInfo.openerId, 'openerId');
 
     testRunner.log(`\nOpening with new browsing context`);
-    session.evaluate(`window.open('./resources/test-page.html', '_blank', 'noopener'); undefined`);
+    evaluate(`window.open('./resources/test-page.html', '_blank', 'noopener')`);
     response = await dp.Target.onceTargetCreated();
     testRunner.log(response.params.targetInfo);
     compareTargetIds(targetId, response.params.targetInfo.openerFrameId, 'openerFrameId');
@@ -38,7 +47,7 @@
 
     testRunner.log(`\nOpening with COOP header`);
     await dp.Page.navigate({ url: testRunner.url('https://127.0.0.1:8443/inspector-protocol/resources/coop.php')});
-    session.evaluate(`window.open('./resources/test-page.html', '_blank'); undefined`);
+    evaluate(`window.open('./resources/test-page.html', '_blank')`);
     response = await dp.Target.onceTargetCreated();
     testRunner.log(response.params.targetInfo);
     compareTargetIds(targetId, response.params.targetInfo.openerFrameId, 'openerFrameId');

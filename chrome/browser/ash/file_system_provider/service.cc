@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,9 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/files/file.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/values.h"
 #include "chrome/browser/ash/file_system_provider/mount_path_util.h"
 #include "chrome/browser/ash/file_system_provider/observer.h"
@@ -29,9 +30,9 @@
 #include "extensions/common/permissions/permissions_data.h"
 #include "storage/browser/file_system/external_mount_points.h"
 #include "storage/common/file_system/file_system_mount_option.h"
+#include "ui/message_center/message_center.h"
 
-namespace ash {
-namespace file_system_provider {
+namespace ash::file_system_provider {
 namespace {
 
 // Maximum number of file systems to be mounted in the same time, per profile.
@@ -43,11 +44,11 @@ Service::Service(Profile* profile,
                  extensions::ExtensionRegistry* extension_registry)
     : profile_(profile),
       extension_registry_(extension_registry),
-      registry_(new Registry(profile)) {
+      registry_(new Registry(profile->GetPrefs())) {
   extension_registry_->AddObserver(this);
 }
 
-Service::~Service() {}
+Service::~Service() = default;
 
 // static
 Service* Service::Get(content::BrowserContext* context) {
@@ -70,25 +71,29 @@ void Service::Shutdown() {
     ++it;
     const base::File::Error unmount_result =
         UnmountFileSystem(provider_id, file_system_id, UNMOUNT_REASON_SHUTDOWN);
-    DCHECK_EQ(base::File::FILE_OK, unmount_result);
+    CHECK_EQ(base::File::FILE_OK, unmount_result, base::NotFatalUntil::M160);
   }
 
-  DCHECK_EQ(0u, file_system_map_.size());
+  CHECK_EQ(0u, file_system_map_.size(), base::NotFatalUntil::M160);
+
+  for (auto& observer : observers_) {
+    observer.OnShutDown();
+  }
 }
 
 void Service::AddObserver(Observer* observer) {
-  DCHECK(observer);
+  CHECK(observer, base::NotFatalUntil::M160);
   observers_.AddObserver(observer);
 }
 
 void Service::RemoveObserver(Observer* observer) {
-  DCHECK(observer);
+  CHECK(observer, base::NotFatalUntil::M160);
   observers_.RemoveObserver(observer);
 }
 
 void Service::SetRegistryForTesting(
     std::unique_ptr<RegistryInterface> registry) {
-  DCHECK(registry);
+  CHECK(registry, base::NotFatalUntil::M160);
   registry_ = std::move(registry);
 }
 
@@ -101,7 +106,7 @@ base::File::Error Service::MountFileSystemInternal(
     const ProviderId& provider_id,
     const MountOptions& options,
     MountContext context) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  CHECK(thread_checker_.CalledOnValidThread(), base::NotFatalUntil::M160);
 
   ProviderInterface* const provider = GetProvider(provider_id);
   if (!provider) {
@@ -157,7 +162,7 @@ base::File::Error Service::MountFileSystemInternal(
 
   storage::ExternalMountPoints* const mount_points =
       storage::ExternalMountPoints::GetSystemInstance();
-  DCHECK(mount_points);
+  CHECK(mount_points, base::NotFatalUntil::M160);
 
   if (!mount_points->RegisterFileSystem(
           mount_point_name, storage::kFileSystemTypeProvided,
@@ -174,7 +179,7 @@ base::File::Error Service::MountFileSystemInternal(
 
   std::unique_ptr<ProvidedFileSystemInterface> file_system =
       provider->CreateProvidedFileSystem(profile_, file_system_info);
-  DCHECK(file_system);
+  CHECK(file_system, base::NotFatalUntil::M160);
   ProvidedFileSystemInterface* file_system_ptr = file_system.get();
   file_system_map_[FileSystemKey(
       provider_id.ToString(), options.file_system_id)] = std::move(file_system);
@@ -198,7 +203,7 @@ base::File::Error Service::MountFileSystemInternal(
 base::File::Error Service::UnmountFileSystem(const ProviderId& provider_id,
                                              const std::string& file_system_id,
                                              UnmountReason reason) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  CHECK(thread_checker_.CalledOnValidThread(), base::NotFatalUntil::M160);
 
   const auto file_system_it = file_system_map_.find(
       FileSystemKey(provider_id.ToString(), file_system_id));
@@ -213,7 +218,7 @@ base::File::Error Service::UnmountFileSystem(const ProviderId& provider_id,
 
   storage::ExternalMountPoints* const mount_points =
       storage::ExternalMountPoints::GetSystemInstance();
-  DCHECK(mount_points);
+  CHECK(mount_points, base::NotFatalUntil::M160);
 
   const ProvidedFileSystemInfo& file_system_info =
       file_system_it->second->GetFileSystemInfo();
@@ -234,6 +239,10 @@ base::File::Error Service::UnmountFileSystem(const ProviderId& provider_id,
   mount_point_name_to_key_map_.erase(mount_point_name);
 
   if (reason == UNMOUNT_REASON_USER) {
+    // At browser shutdown MessageCenter has already destroyed its
+    // notifications. Only an in-session unmount removes this one explicitly.
+    message_center::MessageCenter::Get()->RemoveNotification(
+        file_system_info.mount_path().value(), /*by_user=*/false);
     registry_->ForgetFileSystem(file_system_info.provider_id(),
                                 file_system_info.file_system_id());
   }
@@ -245,7 +254,7 @@ base::File::Error Service::UnmountFileSystem(const ProviderId& provider_id,
 
 bool Service::RequestUnmount(const ProviderId& provider_id,
                              const std::string& file_system_id) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  CHECK(thread_checker_.CalledOnValidThread(), base::NotFatalUntil::M160);
 
   auto file_system_it = file_system_map_.find(
       FileSystemKey(provider_id.ToString(), file_system_id));
@@ -258,26 +267,32 @@ bool Service::RequestUnmount(const ProviderId& provider_id,
   return true;
 }
 
-bool Service::RequestMount(const ProviderId& provider_id) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+bool Service::RequestMount(const ProviderId& provider_id,
+                           RequestMountCallback callback) {
+  CHECK(thread_checker_.CalledOnValidThread(), base::NotFatalUntil::M160);
 
   ProviderInterface* const provider = GetProvider(provider_id);
-  return provider->RequestMount(profile_);
+  if (!provider) {
+    LOG(ERROR) << "Provider id " << provider_id.ToString() << " not found";
+    std::move(callback).Run(base::File::FILE_ERROR_FAILED);
+    return false;
+  }
+  return provider->RequestMount(profile_, std::move(callback));
 }
 
 std::vector<ProvidedFileSystemInfo> Service::GetProvidedFileSystemInfoList() {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  CHECK(thread_checker_.CalledOnValidThread(), base::NotFatalUntil::M160);
 
   std::vector<ProvidedFileSystemInfo> result;
-  for (auto it = file_system_map_.begin(); it != file_system_map_.end(); ++it) {
-    result.push_back(it->second->GetFileSystemInfo());
+  for (auto& it : file_system_map_) {
+    result.push_back(it.second->GetFileSystemInfo());
   }
   return result;
 }
 
 std::vector<ProvidedFileSystemInfo> Service::GetProvidedFileSystemInfoList(
     const ProviderId& provider_id) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  CHECK(thread_checker_.CalledOnValidThread(), base::NotFatalUntil::M160);
 
   const std::vector<ProvidedFileSystemInfo> full_list =
       GetProvidedFileSystemInfoList();
@@ -295,12 +310,12 @@ std::vector<ProvidedFileSystemInfo> Service::GetProvidedFileSystemInfoList(
 ProvidedFileSystemInterface* Service::GetProvidedFileSystem(
     const ProviderId& provider_id,
     const std::string& file_system_id) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  CHECK(thread_checker_.CalledOnValidThread(), base::NotFatalUntil::M160);
 
   const auto file_system_it = file_system_map_.find(
       FileSystemKey(provider_id.ToString(), file_system_id));
   if (file_system_it == file_system_map_.end())
-    return NULL;
+    return nullptr;
 
   return file_system_it->second.get();
 }
@@ -334,7 +349,7 @@ void Service::UnmountFileSystems(const ProviderId& provider_id,
       const base::File::Error unmount_result =
           UnmountFileSystem(file_system_info.provider_id(),
                             file_system_info.file_system_id(), reason);
-      DCHECK_EQ(base::File::FILE_OK, unmount_result);
+      CHECK_EQ(base::File::FILE_OK, unmount_result, base::NotFatalUntil::M160);
     }
   }
 }
@@ -357,8 +372,20 @@ void Service::OnExtensionLoaded(content::BrowserContext* browser_context,
 void Service::RestoreFileSystems(const ProviderId& provider_id) {
   std::unique_ptr<RegistryInterface::RestoredFileSystems>
       restored_file_systems = registry_->RestoreFileSystems(provider_id);
+  // TODO(crbug.com/1258424): Remove this and conditional below around M108
+  bool is_smb_provider = provider_id.ToString().compare("@smb") == 0;
 
   for (const auto& restored_file_system : *restored_file_systems) {
+    // Remove unsupported smbprovider shares and drop a log so we can verify
+    // whether this correlates with fixing the bug in the field.
+    // See https://crbug.com/40794444
+    if (is_smb_provider) {
+      LOG(WARNING) << "Removing unsupported smbprovider share";
+      registry_->ForgetFileSystem(restored_file_system.provider_id,
+                                  restored_file_system.options.file_system_id);
+      continue;
+    }
+
     const base::File::Error result = MountFileSystemInternal(
         restored_file_system.provider_id, restored_file_system.options,
         MOUNT_CONTEXT_RESTORE);
@@ -377,7 +404,7 @@ void Service::RestoreFileSystems(const ProviderId& provider_id) {
     ProvidedFileSystemInterface* const file_system =
         GetProvidedFileSystem(restored_file_system.provider_id,
                               restored_file_system.options.file_system_id);
-    DCHECK(file_system);
+    CHECK(file_system, base::NotFatalUntil::M160);
 
     if (file_system->GetFileSystemInfo().watchable()) {
       file_system->GetWatchers()->insert(restored_file_system.watchers.begin(),
@@ -388,15 +415,15 @@ void Service::RestoreFileSystems(const ProviderId& provider_id) {
 
 ProvidedFileSystemInterface* Service::GetProvidedFileSystem(
     const std::string& mount_point_name) {
-  DCHECK(thread_checker_.CalledOnValidThread());
+  CHECK(thread_checker_.CalledOnValidThread(), base::NotFatalUntil::M160);
 
   const auto mapping_it = mount_point_name_to_key_map_.find(mount_point_name);
   if (mapping_it == mount_point_name_to_key_map_.end())
-    return NULL;
+    return nullptr;
 
   const auto file_system_it = file_system_map_.find(mapping_it->second);
   if (file_system_it == file_system_map_.end())
-    return NULL;
+    return nullptr;
 
   return file_system_it->second.get();
 }
@@ -425,7 +452,7 @@ void Service::OnWatcherTagUpdated(
     const ProvidedFileSystemInfo& file_system_info,
     const Watcher& watcher) {
   PrefService* const pref_service = profile_->GetPrefs();
-  DCHECK(pref_service);
+  CHECK(pref_service, base::NotFatalUntil::M160);
 
   registry_->UpdateWatcherTag(file_system_info, watcher);
 }
@@ -443,7 +470,8 @@ void Service::RegisterProvider(std::unique_ptr<ProviderInterface> provider) {
 }
 
 ProviderInterface* Service::GetProvider(const ProviderId& provider_id) {
-  DCHECK_NE(ProviderId::INVALID, provider_id.GetType());
+  CHECK_NE(ProviderId::INVALID, provider_id.GetType(),
+           base::NotFatalUntil::M160);
   auto it = provider_map_.find(provider_id);
   if (it == provider_map_.end())
     return nullptr;
@@ -451,5 +479,4 @@ ProviderInterface* Service::GetProvider(const ProviderId& provider_id) {
   return it->second.get();
 }
 
-}  // namespace file_system_provider
-}  // namespace ash
+}  // namespace ash::file_system_provider

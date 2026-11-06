@@ -1,10 +1,12 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/android/compositor/resources/toolbar_resource.h"
 
 #include <memory>
+
+#include "base/check_op.h"
 
 namespace android {
 
@@ -13,7 +15,7 @@ ToolbarResource* ToolbarResource::From(ui::Resource* resource) {
   if (!resource)
     return nullptr;
 
-  DCHECK_EQ(Type::TOOLBAR, resource->type());
+  CHECK_EQ(Type::TOOLBAR, resource->type(), base::NotFatalUntil::M161);
   return static_cast<ToolbarResource*>(resource);
 }
 

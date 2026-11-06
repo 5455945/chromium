@@ -1,28 +1,35 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/remoting/receiver.h"
 
+#include <optional>
 #include <utility>
 
 #include "base/check.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
+#include "base/run_loop.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/gmock_callback_support.h"
+#include "base/test/run_until.h"
 #include "base/test/task_environment.h"
+#include "base/threading/thread.h"
 #include "media/base/audio_decoder_config.h"
 #include "media/base/media_util.h"
 #include "media/base/mock_filters.h"
 #include "media/base/renderer.h"
 #include "media/base/test_helpers.h"
 #include "media/base/video_decoder_config.h"
+#include "media/cast/openscreen/remoting_proto_enum_utils.h"
+#include "media/cast/openscreen/remoting_proto_utils.h"
 #include "media/remoting/mock_receiver_controller.h"
-#include "media/remoting/proto_enum_utils.h"
-#include "media/remoting/proto_utils.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 using base::test::RunOnceCallback;
+using openscreen::cast::RpcMessenger;
 using testing::_;
 using testing::AtLeast;
 using testing::NiceMock;
@@ -33,13 +40,14 @@ namespace remoting {
 
 class MockSender {
  public:
-  MockSender(RpcBroker* rpc_broker, int remote_handle)
-      : rpc_broker_(rpc_broker),
-        rpc_handle_(rpc_broker->GetUniqueHandle()),
+  MockSender(RpcMessenger* rpc_messenger, int remote_handle)
+      : rpc_messenger_(rpc_messenger),
+        rpc_handle_(rpc_messenger->GetUniqueHandle()),
         remote_handle_(remote_handle) {
-    rpc_broker_->RegisterMessageReceiverCallback(
-        rpc_handle_, base::BindRepeating(&MockSender::OnReceivedRpc,
-                                         base::Unretained(this)));
+    rpc_messenger_->RegisterMessageReceiverCallback(
+        rpc_handle_, [this](std::unique_ptr<openscreen::cast::RpcMessage> rpc) {
+          this->OnReceivedRpc(std::move(rpc));
+        });
   }
 
   MOCK_METHOD(void, AcquireRendererDone, ());
@@ -78,8 +86,9 @@ class MockSender {
         break;
       }
       case openscreen::cast::RpcMessage::RPC_RC_ONBUFFERINGSTATECHANGE: {
-        absl::optional<BufferingState> state = ToMediaBufferingState(
-            message->rendererclient_onbufferingstatechange_rpc().state());
+        std::optional<BufferingState> state =
+            media::cast::ToMediaBufferingState(
+                message->rendererclient_onbufferingstatechange_rpc().state());
         if (state.has_value())
           OnBufferingStateChange(state.value());
         break;
@@ -97,7 +106,8 @@ class MockSender {
         const openscreen::cast::AudioDecoderConfig pb_audio_config =
             audio_config_message->audio_decoder_config();
         AudioDecoderConfig out_audio_config;
-        ConvertProtoToAudioDecoderConfig(pb_audio_config, &out_audio_config);
+        media::cast::ConvertProtoToAudioDecoderConfig(pb_audio_config,
+                                                      &out_audio_config);
         DCHECK(out_audio_config.IsValidConfig());
         OnAudioConfigChange(out_audio_config);
         break;
@@ -109,7 +119,8 @@ class MockSender {
         const openscreen::cast::VideoDecoderConfig pb_video_config =
             video_config_message->video_decoder_config();
         VideoDecoderConfig out_video_config;
-        ConvertProtoToVideoDecoderConfig(pb_video_config, &out_video_config);
+        media::cast::ConvertProtoToVideoDecoderConfig(pb_video_config,
+                                                      &out_video_config);
         DCHECK(out_video_config.IsValidConfig());
 
         OnVideoConfigChange(out_video_config);
@@ -147,58 +158,58 @@ class MockSender {
   }
 
   void SendRpcAcquireRenderer() {
-    auto rpc = std::make_unique<openscreen::cast::RpcMessage>();
-    rpc->set_handle(RpcBroker::kAcquireRendererHandle);
-    rpc->set_proc(openscreen::cast::RpcMessage::RPC_ACQUIRE_RENDERER);
-    rpc->set_integer_value(rpc_handle_);
-    rpc_broker_->SendMessageToRemote(std::move(rpc));
+    openscreen::cast::RpcMessage rpc;
+    rpc.set_handle(RpcMessenger::kAcquireRendererHandle);
+    rpc.set_proc(openscreen::cast::RpcMessage::RPC_ACQUIRE_RENDERER);
+    rpc.set_integer_value(rpc_handle_);
+    rpc_messenger_->SendMessageToRemote(rpc);
   }
 
   void SendRpcInitialize() {
-    auto rpc = std::make_unique<openscreen::cast::RpcMessage>();
-    rpc->set_handle(remote_handle_);
-    rpc->set_proc(openscreen::cast::RpcMessage::RPC_R_INITIALIZE);
-    rpc_broker_->SendMessageToRemote(std::move(rpc));
+    openscreen::cast::RpcMessage rpc;
+    rpc.set_handle(remote_handle_);
+    rpc.set_proc(openscreen::cast::RpcMessage::RPC_R_INITIALIZE);
+    rpc_messenger_->SendMessageToRemote(rpc);
   }
 
   void SendRpcSetPlaybackRate(double playback_rate) {
-    auto rpc = std::make_unique<openscreen::cast::RpcMessage>();
-    rpc->set_handle(remote_handle_);
-    rpc->set_proc(openscreen::cast::RpcMessage::RPC_R_SETPLAYBACKRATE);
-    rpc->set_double_value(playback_rate);
-    rpc_broker_->SendMessageToRemote(std::move(rpc));
+    openscreen::cast::RpcMessage rpc;
+    rpc.set_handle(remote_handle_);
+    rpc.set_proc(openscreen::cast::RpcMessage::RPC_R_SETPLAYBACKRATE);
+    rpc.set_double_value(playback_rate);
+    rpc_messenger_->SendMessageToRemote(rpc);
   }
 
   void SendRpcFlushUntil(uint32_t audio_count, uint32_t video_count) {
-    auto rpc = std::make_unique<openscreen::cast::RpcMessage>();
-    rpc->set_handle(remote_handle_);
-    rpc->set_proc(openscreen::cast::RpcMessage::RPC_R_FLUSHUNTIL);
+    openscreen::cast::RpcMessage rpc;
+    rpc.set_handle(remote_handle_);
+    rpc.set_proc(openscreen::cast::RpcMessage::RPC_R_FLUSHUNTIL);
     openscreen::cast::RendererFlushUntil* message =
-        rpc->mutable_renderer_flushuntil_rpc();
+        rpc.mutable_renderer_flushuntil_rpc();
     message->set_audio_count(audio_count);
     message->set_video_count(video_count);
     message->set_callback_handle(rpc_handle_);
-    rpc_broker_->SendMessageToRemote(std::move(rpc));
+    rpc_messenger_->SendMessageToRemote(rpc);
   }
 
   void SendRpcStartPlayingFrom(base::TimeDelta time) {
-    auto rpc = std::make_unique<openscreen::cast::RpcMessage>();
-    rpc->set_handle(remote_handle_);
-    rpc->set_proc(openscreen::cast::RpcMessage::RPC_R_STARTPLAYINGFROM);
-    rpc->set_integer64_value(time.InMicroseconds());
-    rpc_broker_->SendMessageToRemote(std::move(rpc));
+    openscreen::cast::RpcMessage rpc;
+    rpc.set_handle(remote_handle_);
+    rpc.set_proc(openscreen::cast::RpcMessage::RPC_R_STARTPLAYINGFROM);
+    rpc.set_integer64_value(time.InMicroseconds());
+    rpc_messenger_->SendMessageToRemote(rpc);
   }
 
   void SendRpcSetVolume(float volume) {
-    auto rpc = std::make_unique<openscreen::cast::RpcMessage>();
-    rpc->set_handle(remote_handle_);
-    rpc->set_proc(openscreen::cast::RpcMessage::RPC_R_SETVOLUME);
-    rpc->set_double_value(volume);
-    rpc_broker_->SendMessageToRemote(std::move(rpc));
+    openscreen::cast::RpcMessage rpc;
+    rpc.set_handle(remote_handle_);
+    rpc.set_proc(openscreen::cast::RpcMessage::RPC_R_SETVOLUME);
+    rpc.set_double_value(volume);
+    rpc_messenger_->SendMessageToRemote(rpc);
   }
 
  private:
-  RpcBroker* const rpc_broker_;
+  const raw_ptr<RpcMessenger> rpc_messenger_;
   const int rpc_handle_;
   const int remote_handle_;
 };
@@ -213,21 +224,30 @@ class ReceiverTest : public ::testing::Test {
         mock_controller_->mock_remotee()->BindNewPipeAndPassRemote());
     mock_remotee_ = mock_controller_->mock_remotee();
 
-    rpc_broker_ = mock_controller_->rpc_broker();
-    receiver_renderer_handle_ = rpc_broker_->GetUniqueHandle();
+    rpc_messenger_ = mock_controller_->rpc_messenger();
+    receiver_renderer_handle_ = rpc_messenger_->GetUniqueHandle();
 
     mock_sender_ = std::make_unique<StrictMock<MockSender>>(
-        rpc_broker_, receiver_renderer_handle_);
+        rpc_messenger_, receiver_renderer_handle_);
 
-    rpc_broker_->RegisterMessageReceiverCallback(
-        RpcBroker::kAcquireRendererHandle,
-        base::BindRepeating(&ReceiverTest::OnReceivedRpc,
-                            weak_factory_.GetWeakPtr()));
+    rpc_messenger_->RegisterMessageReceiverCallback(
+        RpcMessenger::kAcquireRendererHandle,
+        [ptr = weak_factory_.GetWeakPtr()](
+            std::unique_ptr<openscreen::cast::RpcMessage> message) {
+          if (ptr) {
+            ptr->OnReceivedRpc(std::move(message));
+          }
+        });
   }
 
   void TearDown() override {
-    rpc_broker_->UnregisterMessageReceiverCallback(
-        RpcBroker::kAcquireRendererHandle);
+    mock_renderer_ = nullptr;
+    receiver_.reset();
+    EXPECT_TRUE(base::test::RunUntil([&]() {
+      return !rpc_messenger_->IsRegisteredForTesting(receiver_renderer_handle_);
+    }));
+    rpc_messenger_->UnregisterMessageReceiverCallback(
+        RpcMessenger::kAcquireRendererHandle);
   }
 
   void OnReceivedRpc(std::unique_ptr<openscreen::cast::RpcMessage> message) {
@@ -240,9 +260,9 @@ class ReceiverTest : public ::testing::Test {
   void OnAcquireRenderer(
       std::unique_ptr<openscreen::cast::RpcMessage> message) {
     DCHECK(message->has_integer_value());
-    DCHECK(message->integer_value() != RpcBroker::kInvalidHandle);
+    DCHECK(message->integer_value() != RpcMessenger::kInvalidHandle);
 
-    if (sender_renderer_handle_ == RpcBroker::kInvalidHandle) {
+    if (sender_renderer_handle_ == RpcMessenger::kInvalidHandle) {
       sender_renderer_handle_ = message->integer_value();
       SetRemoteHandle();
     }
@@ -253,11 +273,11 @@ class ReceiverTest : public ::testing::Test {
              << ": Issues RPC_ACQUIRE_RENDERER_DONE RPC message. remote_handle="
              << sender_renderer_handle_
              << " rpc_handle=" << receiver_renderer_handle;
-    auto rpc = std::make_unique<openscreen::cast::RpcMessage>();
-    rpc->set_handle(sender_renderer_handle_);
-    rpc->set_proc(openscreen::cast::RpcMessage::RPC_ACQUIRE_RENDERER_DONE);
-    rpc->set_integer_value(receiver_renderer_handle);
-    rpc_broker_->SendMessageToRemote(std::move(rpc));
+    openscreen::cast::RpcMessage rpc;
+    rpc.set_handle(sender_renderer_handle_);
+    rpc.set_proc(openscreen::cast::RpcMessage::RPC_ACQUIRE_RENDERER_DONE);
+    rpc.set_integer_value(receiver_renderer_handle);
+    rpc_messenger_->SendMessageToRemote(rpc);
   }
 
   void CreateReceiver() {
@@ -265,7 +285,7 @@ class ReceiverTest : public ::testing::Test {
     mock_renderer_ = renderer.get();
     receiver_ = std::make_unique<Receiver>(
         receiver_renderer_handle_, sender_renderer_handle_, mock_controller_,
-        base::ThreadTaskRunnerHandle::Get(), std::move(renderer),
+        base::SingleThreadTaskRunner::GetCurrentDefault(), std::move(renderer),
         base::BindOnce(&ReceiverTest::OnAcquireRendererDone,
                        weak_factory_.GetWeakPtr()));
   }
@@ -286,17 +306,16 @@ class ReceiverTest : public ::testing::Test {
 
   base::test::TaskEnvironment task_environment_;
 
-  int sender_renderer_handle_ = RpcBroker::kInvalidHandle;
-  int receiver_renderer_handle_ = RpcBroker::kInvalidHandle;
+  int sender_renderer_handle_ = RpcMessenger::kInvalidHandle;
+  int receiver_renderer_handle_ = RpcMessenger::kInvalidHandle;
 
   MockMediaResource mock_media_resource_;
-  MockRenderer* mock_renderer_;
   std::unique_ptr<MockSender> mock_sender_;
-
-  RpcBroker* rpc_broker_;
-  MockRemotee* mock_remotee_;
-  MockReceiverController* mock_controller_;
+  raw_ptr<RpcMessenger> rpc_messenger_ = nullptr;
+  raw_ptr<MockRemotee> mock_remotee_;
+  raw_ptr<MockReceiverController> mock_controller_ = nullptr;
   std::unique_ptr<Receiver> receiver_;
+  raw_ptr<MockRenderer> mock_renderer_ = nullptr;
 
   base::WeakPtrFactory<ReceiverTest> weak_factory_{this};
 };
@@ -315,6 +334,163 @@ TEST_F(ReceiverTest, AcquireRendererAfterCreateReceiver) {
   task_environment_.RunUntilIdle();
 }
 
+// Receiver is constructed on the main sequence but, as a media::Renderer,
+// processes RPC messages and is destroyed on the media sequence. The
+// RpcMessenger it registers with is only safe to use from the main sequence,
+// so unregistration must hop back there.
+TEST_F(ReceiverTest, UnregistersOnMainSequenceWhenDestroyedOnMediaSequence) {
+  base::Thread media_thread("TestMediaThread");
+  ASSERT_TRUE(media_thread.Start());
+
+  auto renderer = std::make_unique<NiceMock<MockRenderer>>();
+  MockRenderer* mock_renderer = renderer.get();
+  EXPECT_CALL(*mock_renderer, SetVolume(0.5f))
+      .WillOnce([&media_thread](float volume) {
+        EXPECT_TRUE(media_thread.task_runner()->RunsTasksInCurrentSequence());
+      });
+
+  auto receiver = std::make_unique<Receiver>(
+      receiver_renderer_handle_, sender_renderer_handle_, mock_controller_,
+      media_thread.task_runner(), std::move(renderer),
+      base::BindOnce(&ReceiverTest::OnAcquireRendererDone,
+                     weak_factory_.GetWeakPtr()));
+  EXPECT_TRUE(
+      rpc_messenger_->IsRegisteredForTesting(receiver_renderer_handle_));
+
+  // Verify that RPC messages received on the main thread are dispatched and
+  // handled on the media thread without sequence DCHECK failures.
+  openscreen::cast::RpcMessage rpc;
+  rpc.set_handle(receiver_renderer_handle_);
+  rpc.set_proc(openscreen::cast::RpcMessage::RPC_R_SETVOLUME);
+  rpc.set_double_value(0.5);
+  rpc_messenger_->ProcessMessageFromRemote(
+      std::make_unique<openscreen::cast::RpcMessage>(rpc));
+  media_thread.FlushForTesting();
+
+  // Destroy the Receiver on the media sequence, as the production pipeline
+  // does, and wait for destruction to complete.
+  media_thread.task_runner()->DeleteSoon(FROM_HERE, std::move(receiver));
+  media_thread.FlushForTesting();
+
+  // The handle must still be registered: only the main sequence may mutate the
+  // messenger, and no main-sequence tasks have run yet.
+  EXPECT_TRUE(
+      rpc_messenger_->IsRegisteredForTesting(receiver_renderer_handle_));
+
+  // Send an RPC message on the main sequence post-destruction. The message will
+  // be forwarded to the media sequence after Receiver is destroyed, where
+  // WeakPtr drops the invocation safely without crashing or UAF.
+  openscreen::cast::RpcMessage rpc_post_destruction;
+  rpc_post_destruction.set_handle(receiver_renderer_handle_);
+  rpc_post_destruction.set_proc(openscreen::cast::RpcMessage::RPC_R_SETVOLUME);
+  rpc_post_destruction.set_double_value(0.8);
+  rpc_messenger_->ProcessMessageFromRemote(
+      std::make_unique<openscreen::cast::RpcMessage>(rpc_post_destruction));
+  media_thread.FlushForTesting();
+
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return !rpc_messenger_->IsRegisteredForTesting(receiver_renderer_handle_);
+  }));
+}
+
+// Verifies end-to-end multi-threaded RPC message dispatch from the main
+// sequence to the media sequence, renderer method execution on the media
+// sequence, and response RPC messages sent back on the main sequence.
+TEST_F(ReceiverTest, MultiThreadedRpcDispatchAndRendererCalls) {
+  base::Thread media_thread("TestMediaThread");
+  ASSERT_TRUE(media_thread.Start());
+
+  mock_sender_->SendRpcAcquireRenderer();
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return sender_renderer_handle_ != RpcMessenger::kInvalidHandle;
+  }));
+
+  auto renderer = std::make_unique<NiceMock<MockRenderer>>();
+  MockRenderer* mock_renderer = renderer.get();
+
+  EXPECT_CALL(*mock_sender_, AcquireRendererDone()).Times(1);
+  auto receiver = std::make_unique<Receiver>(
+      receiver_renderer_handle_, sender_renderer_handle_, mock_controller_,
+      media_thread.task_runner(), std::move(renderer),
+      base::BindOnce(&ReceiverTest::OnAcquireRendererDone,
+                     weak_factory_.GetWeakPtr()));
+
+  // Call Initialize on the media sequence (as PipelineImpl does in production).
+  EXPECT_CALL(*mock_renderer,
+              OnInitialize(&mock_media_resource_, testing::NotNull(), _))
+      .WillOnce([&media_thread](MediaResource* media_resource,
+                                RendererClient* client,
+                                PipelineStatusCallback& init_cb) {
+        EXPECT_TRUE(media_thread.task_runner()->RunsTasksInCurrentSequence());
+        std::move(init_cb).Run(PIPELINE_OK);
+      });
+  media_thread.task_runner()->PostTask(
+      FROM_HERE,
+      base::BindOnce(&Receiver::Initialize, base::Unretained(receiver.get()),
+                     &mock_media_resource_, receiver.get(), base::DoNothing()));
+
+  // Send RPC_R_INITIALIZE on main sequence and wait for response on main
+  // sequence.
+  {
+    base::RunLoop run_loop;
+    EXPECT_CALL(*mock_sender_, InitializeCallback(true))
+        .WillOnce(base::test::RunClosure(run_loop.QuitClosure()));
+    mock_sender_->SendRpcInitialize();
+    run_loop.Run();
+  }
+
+  // Send RPC_R_SETPLAYBACKRATE on main sequence and flush media thread.
+  EXPECT_CALL(*mock_renderer, SetPlaybackRate(1.0))
+      .WillOnce([&media_thread](double playback_rate) {
+        EXPECT_TRUE(media_thread.task_runner()->RunsTasksInCurrentSequence());
+      });
+  mock_sender_->SendRpcSetPlaybackRate(1.0);
+  media_thread.FlushForTesting();
+
+  // Send RPC_R_STARTPLAYINGFROM on main sequence and flush media thread.
+  EXPECT_CALL(*mock_renderer, StartPlayingFrom(base::Seconds(5)))
+      .WillOnce([&media_thread](base::TimeDelta time) {
+        EXPECT_TRUE(media_thread.task_runner()->RunsTasksInCurrentSequence());
+      });
+  EXPECT_CALL(*mock_sender_, OnTimeUpdate(_, _)).Times(AtLeast(1));
+  mock_sender_->SendRpcStartPlayingFrom(base::Seconds(5));
+  media_thread.FlushForTesting();
+
+  // Send RPC_R_FLUSHUNTIL on main sequence and wait for response on main
+  // sequence.
+  EXPECT_CALL(*mock_renderer, OnFlush(_))
+      .WillOnce([&media_thread](base::OnceClosure& flush_cb) {
+        EXPECT_TRUE(media_thread.task_runner()->RunsTasksInCurrentSequence());
+        std::move(flush_cb).Run();
+      });
+  {
+    base::RunLoop run_loop;
+    EXPECT_CALL(*mock_sender_, FlushUntilCallback())
+        .WillOnce(base::test::RunClosure(run_loop.QuitClosure()));
+    mock_sender_->SendRpcFlushUntil(0, 0);
+    run_loop.Run();
+  }
+
+  // Trigger OnEnded on media sequence (as the underlying renderer does) and
+  // wait for response on main sequence.
+  {
+    base::RunLoop run_loop;
+    EXPECT_CALL(*mock_sender_, OnEnded())
+        .WillOnce(base::test::RunClosure(run_loop.QuitClosure()));
+    media_thread.task_runner()->PostTask(
+        FROM_HERE, base::BindOnce(&RendererClient::OnEnded,
+                                  base::Unretained(receiver.get())));
+    run_loop.Run();
+  }
+
+  // Destroy Receiver on media sequence.
+  media_thread.task_runner()->DeleteSoon(FROM_HERE, std::move(receiver));
+
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return !rpc_messenger_->IsRegisteredForTesting(receiver_renderer_handle_);
+  }));
+}
+
 // |Receiver::Initialize| will be called by the local pipeline, and the
 // |Receiver::RpcInitialize| will be called once it received the
 // RPC_R_INITIALIZE messages, so these two initialization functions are possible
@@ -328,8 +504,8 @@ TEST_F(ReceiverTest, InitializeBeforeRpcInitialize) {
 
   EXPECT_CALL(*mock_renderer_,
               OnInitialize(&mock_media_resource_, receiver_.get(), _))
-      .WillOnce(RunOnceCallback<2>(PipelineStatus::PIPELINE_OK));
-  EXPECT_CALL(*this, OnRendererInitialized(PipelineStatus::PIPELINE_OK))
+      .WillOnce(RunOnceCallback<2>(PIPELINE_OK));
+  EXPECT_CALL(*this, OnRendererInitialized(HasStatusCode(PIPELINE_OK)))
       .Times(1);
   EXPECT_CALL(*mock_sender_, InitializeCallback(true)).Times(1);
 
@@ -346,8 +522,8 @@ TEST_F(ReceiverTest, InitializeAfterRpcInitialize) {
 
   EXPECT_CALL(*mock_renderer_,
               OnInitialize(&mock_media_resource_, receiver_.get(), _))
-      .WillOnce(RunOnceCallback<2>(PipelineStatus::PIPELINE_OK));
-  EXPECT_CALL(*this, OnRendererInitialized(PipelineStatus::PIPELINE_OK))
+      .WillOnce(RunOnceCallback<2>(PIPELINE_OK));
+  EXPECT_CALL(*this, OnRendererInitialized(HasStatusCode(PIPELINE_OK)))
       .Times(1);
   EXPECT_CALL(*mock_sender_, InitializeCallback(true)).Times(1);
 
@@ -389,7 +565,7 @@ TEST_F(ReceiverTest, RpcRendererMessages) {
   EXPECT_EQ(flush_video_count, mock_remotee_->flush_video_count());
 
   // StartPlayingFrom
-  const base::TimeDelta time = base::TimeDelta::FromSeconds(100);
+  const base::TimeDelta time = base::Seconds(100);
   EXPECT_CALL(*mock_renderer_, StartPlayingFrom(time)).Times(1);
   mock_sender_->SendRpcStartPlayingFrom(time);
   task_environment_.RunUntilIdle();
@@ -417,7 +593,7 @@ TEST_F(ReceiverTest, RendererClientInterface) {
 
   // OnError
   EXPECT_CALL(*mock_sender_, OnFatalError()).Times(1);
-  receiver_->OnError(PipelineStatus::AUDIO_RENDERER_ERROR);
+  receiver_->OnError(AUDIO_RENDERER_ERROR);
   task_environment_.RunUntilIdle();
 
   // OnAudioConfigChange

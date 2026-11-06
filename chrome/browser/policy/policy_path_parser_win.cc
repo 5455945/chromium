@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,6 @@
 
 #include <memory>
 
-#include "base/macros.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/win/registry.h"
 #include "chrome/common/chrome_switches.h"
@@ -39,7 +38,7 @@ namespace policy {
 
 namespace path_parser {
 
-// Replaces all variable occurances in the policy string with the respective
+// Replaces all variable occurrences in the policy string with the respective
 // system settings values.
 base::FilePath::StringType ExpandPathVariables(
     const base::FilePath::StringType& untranslated_string) {
@@ -49,14 +48,13 @@ base::FilePath::StringType ExpandPathVariables(
   return install_static::ExpandPathVariables(untranslated_string);
 }
 
-void CheckUserDataDirPolicy(base::FilePath* user_data_dir) {
-  DCHECK(user_data_dir);
+bool CheckUserDataDirPolicy(base::FilePath* user_data_dir) {
+  CHECK(user_data_dir, base::NotFatalUntil::M162);
   // Policy from the HKLM hive has precedence over HKCU.
-  if (!LoadUserDataDirPolicyFromRegistry(HKEY_LOCAL_MACHINE, key::kUserDataDir,
-                                         user_data_dir)) {
-    LoadUserDataDirPolicyFromRegistry(HKEY_CURRENT_USER, key::kUserDataDir,
-                                      user_data_dir);
-  }
+  return LoadUserDataDirPolicyFromRegistry(HKEY_LOCAL_MACHINE,
+                                           key::kUserDataDir, user_data_dir) ||
+         LoadUserDataDirPolicyFromRegistry(HKEY_CURRENT_USER, key::kUserDataDir,
+                                           user_data_dir);
 }
 
 }  // namespace path_parser

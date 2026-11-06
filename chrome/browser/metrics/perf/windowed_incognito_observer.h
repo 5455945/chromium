@@ -1,17 +1,18 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_METRICS_PERF_WINDOWED_INCOGNITO_OBSERVER_H_
 #define CHROME_BROWSER_METRICS_PERF_WINDOWED_INCOGNITO_OBSERVER_H_
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/no_destructor.h"
+#include "base/scoped_observation.h"
 #include "base/sequence_checker.h"
 #include "base/synchronization/lock.h"
-#include "chrome/browser/ui/browser_list_observer.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 
-class Browser;
+class GlobalBrowserCollection;
 
 namespace metrics {
 
@@ -38,6 +39,11 @@ class WindowedIncognitoObserver {
  public:
   explicit WindowedIncognitoObserver(WindowedIncognitoMonitor* monitor,
                                      uint64_t incognito_open_count);
+
+  WindowedIncognitoObserver(const WindowedIncognitoObserver&) = delete;
+  WindowedIncognitoObserver& operator=(const WindowedIncognitoObserver&) =
+      delete;
+
   virtual ~WindowedIncognitoObserver() = default;
 
   // Made virtual for override in test.
@@ -45,21 +51,19 @@ class WindowedIncognitoObserver {
   bool IncognitoActive() const;
 
  private:
-  WindowedIncognitoMonitor* windowed_incognito_monitor_;
+  raw_ptr<WindowedIncognitoMonitor> windowed_incognito_monitor_;
 
   // The number of incognito windows that has been opened when the observer is
   // created.
   uint64_t num_incognito_window_opened_;
-
-  DISALLOW_COPY_AND_ASSIGN(WindowedIncognitoObserver);
 };
 
 // WindowedIncognitoMonitor watches for any incognito window being opened or
 // closed from the time it is instantiated to the time it is destroyed. The
 // monitor is affine to the UI thread: instantiation, destruction and the
-// BrowserListObserver callbacks are called on the UI thread. The other methods
-// for creating and serving WindowedIncognitoObserver are thread-safe.
-class WindowedIncognitoMonitor : public BrowserListObserver {
+// BrowserCollectionObserver callbacks are called on the UI thread. The other
+// methods for creating and serving WindowedIncognitoObserver are thread-safe.
+class WindowedIncognitoMonitor : public BrowserCollectionObserver {
  public:
   // Must be called on the UI thread before any observers are created.
   static void Init();
@@ -67,6 +71,9 @@ class WindowedIncognitoMonitor : public BrowserListObserver {
   // Returns an instance of WindowedIncognitoObserver that represents the
   // request for monitoring any incognito window launches from now on.
   static std::unique_ptr<WindowedIncognitoObserver> CreateObserver();
+
+  WindowedIncognitoMonitor(const WindowedIncognitoMonitor&) = delete;
+  WindowedIncognitoMonitor& operator=(const WindowedIncognitoMonitor&) = delete;
 
  protected:
   static WindowedIncognitoMonitor* Get();
@@ -91,9 +98,9 @@ class WindowedIncognitoMonitor : public BrowserListObserver {
   // monitor.
   bool IncognitoLaunched(uint64_t num_prev_incognito_opened) const;
 
-  // BrowserListObserver implementation.
-  void OnBrowserAdded(Browser* browser) override;
-  void OnBrowserRemoved(Browser* browser) override;
+  // BrowserCollectionObserver implementation.
+  void OnBrowserCreated(BrowserWindowInterface* browser) override;
+  void OnBrowserClosed(BrowserWindowInterface* browser) override;
 
   // For testing.
   int num_active_incognito_windows() const {
@@ -116,9 +123,13 @@ class WindowedIncognitoMonitor : public BrowserListObserver {
   // The number of incognito windows we have ever seen.
   uint64_t num_incognito_window_opened_;
 
-  SEQUENCE_CHECKER(sequence_checker_);
+  // TODO(crbug.com/496191222): remove when the WindowedIncognitoObserver is no
+  // longer outliving the GlobalBrowserCollection it observes.
+  base::ScopedObservation<GlobalBrowserCollection,
+                          BrowserCollectionObserver>::LeakedDanglingUntriaged
+      browser_collection_observation_{this};
 
-  DISALLOW_COPY_AND_ASSIGN(WindowedIncognitoMonitor);
+  SEQUENCE_CHECKER(sequence_checker_);
 };
 
 }  // namespace metrics

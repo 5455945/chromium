@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,24 +6,31 @@
 
 #include <memory>
 
+#include "base/auto_reset.h"
 #include "base/metrics/histogram_macros.h"
-#include "third_party/blink/public/common/permissions_policy/policy_value.h"
-#include "third_party/blink/public/mojom/permissions_policy/document_policy_feature.mojom-blink.h"
-#include "third_party/blink/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
-#include "third_party/blink/public/mojom/permissions_policy/policy_value.mojom-blink.h"
+#include "base/no_destructor.h"
+#include "base/notreached.h"
+#include "base/time/time.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/loader/resource/image_resource.h"
 #include "third_party/blink/renderer/core/loader/resource/image_resource_info.h"
 #include "third_party/blink/renderer/core/loader/resource/image_resource_observer.h"
 #include "third_party/blink/renderer/core/svg/graphics/svg_image.h"
-#include "third_party/blink/renderer/platform/geometry/int_size.h"
 #include "third_party/blink/renderer/platform/graphics/bitmap_image.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
+#include "third_party/blink/renderer/platform/loader/fetch/resource_load_timing.h"
+#include "third_party/blink/renderer/platform/loader/fetch/resource_response.h"
 #include "third_party/blink/renderer/platform/network/http_parsers.h"
 #include "third_party/blink/renderer/platform/network/mime/mime_type_registry.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
+#include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
+#include "ui/gfx/geometry/size.h"
 #include "v8/include/v8.h"
 
 namespace blink {
@@ -42,16 +49,19 @@ class NullImageResourceInfo final
 
  private:
   const KURL& Url() const override { return url_; }
+  bool IsAutomaticUpgrade() const override { return false; }
   base::TimeTicks LoadResponseEnd() const override { return base::TimeTicks(); }
+  base::TimeTicks LoadStart() const override { return base::TimeTicks(); }
+  base::TimeTicks LoadEnd() const override { return base::TimeTicks(); }
+  base::TimeTicks DiscoveryTime() const override { return base::TimeTicks(); }
   const ResourceResponse& GetResponse() const override { return response_; }
   bool IsCacheValidator() const override { return false; }
-  bool IsAccessAllowed(
+  bool IsCorsSameOrigin(
       DoesCurrentFrameHaveSingleSecurityOrigin) const override {
     return true;
   }
-  bool HasCacheControlNoStoreHeader() const override { return false; }
-  absl::optional<ResourceError> GetResourceError() const override {
-    return absl::nullopt;
+  std::optional<ResourceError> GetResourceError() const override {
+    return std::nullopt;
   }
 
   void SetDecodedSize(size_t) override {}
@@ -59,15 +69,22 @@ class NullImageResourceInfo final
   void DidRemoveClientOrObserver() override {}
   void EmulateLoadStartedForInspector(
       ResourceFetcher*,
-      const KURL&,
       const AtomicString& initiator_name) override {}
 
   void LoadDeferredImage(ResourceFetcher* fetcher) override {}
 
-  bool IsAdResource() const override { return false; }
+  const std::optional<AdProvenance>& GetAdProvenance() const override {
+    static const base::NoDestructor<std::optional<AdProvenance>>
+        kNullProvenance;
+    return *kNullProvenance;
+  }
 
   const HashSet<String>* GetUnsupportedImageMimeTypes() const override {
     return nullptr;
+  }
+
+  std::optional<WebURLRequest::Priority> RequestPriority() const override {
+    return std::nullopt;
   }
 
   const KURL url_;
@@ -77,10 +94,7 @@ class NullImageResourceInfo final
 }  // namespace
 
 ImageResourceContent::ImageResourceContent(scoped_refptr<blink::Image> image)
-    : is_refetchable_data_from_disk_cache_(true),
-      device_pixel_ratio_header_value_(1.0),
-      has_device_pixel_ratio_header_value_(false),
-      image_(std::move(image)) {
+    : image_(std::move(image)) {
   DEFINE_STATIC_LOCAL(Persistent<NullImageResourceInfo>, null_info,
                       (MakeGarbageCollected<NullImageResourceInfo>()));
   info_ = null_info;
@@ -92,6 +106,17 @@ ImageResourceContent* ImageResourceContent::CreateLoaded(
   ImageResourceContent* content =
       MakeGarbageCollected<ImageResourceContent>(std::move(image));
   content->content_status_ = ResourceStatus::kCached;
+  content->size_available_ = Image::kSizeAvailable;
+  return content;
+}
+
+ImageResourceContent* ImageResourceContent::CreatePendingForTest(
+    scoped_refptr<blink::Image> image) {
+  DCHECK(image);
+  ImageResourceContent* content =
+      MakeGarbageCollected<ImageResourceContent>(std::move(image));
+  content->content_status_ = ResourceStatus::kPending;
+  content->size_available_ = Image::kSizeUnavailable;
   return content;
 }
 
@@ -102,6 +127,7 @@ ImageResourceContent* ImageResourceContent::Fetch(FetchParameters& params,
   ImageResource* resource = ImageResource::Fetch(params, fetcher);
   if (!resource)
     return nullptr;
+
   return resource->GetContent();
 }
 
@@ -111,7 +137,10 @@ void ImageResourceContent::SetImageResourceInfo(ImageResourceInfo* info) {
 
 void ImageResourceContent::Trace(Visitor* visitor) const {
   visitor->Trace(info_);
+  visitor->Trace(observers_);
+  visitor->Trace(finished_observers_);
   ImageObserver::Trace(visitor);
+  MediaTiming::Trace(visitor);
 }
 
 void ImageResourceContent::HandleObserverFinished(
@@ -138,16 +167,30 @@ void ImageResourceContent::AddObserver(ImageResourceObserver* observer) {
     ProhibitAddRemoveObserverInScope prohibit_add_remove_observer_in_scope(
         this);
     observers_.insert(observer);
+    if (observer->CachedResourcePriority().has_value()) {
+      ApplyPriorityAndSpeculativeDecodeParams(
+          observer->CachedResourcePriority().value(),
+          observer->CachedSpeculativeDecodeSize(),
+          observer->CachedSpeculativeDecodeQuality());
+    }
   }
 
-  if (info_->IsCacheValidator())
-    return;
+  const bool notify_during_revalidation =
+      RuntimeEnabledFeatures::StaleImageNaturalSizeDuringRevalidationEnabled();
 
-  if (image_ && !image_->IsNull()) {
+  if (!notify_during_revalidation && info_->IsCacheValidator()) {
+    return;
+  }
+
+  if (image_) {
     observer->ImageChanged(this, CanDeferInvalidation::kNo);
   }
 
-  if (IsLoaded() && observers_.Contains(observer))
+  if (info_->IsCacheValidator()) {
+    return;
+  }
+
+  if (IsSufficientContentLoadedForPaint() && observers_.Contains(observer))
     HandleObserverFinished(observer);
 }
 
@@ -163,33 +206,100 @@ void ImageResourceContent::RemoveObserver(ImageResourceObserver* observer) {
                                                finished_observers_.end();
   } else {
     it = finished_observers_.find(observer);
-    DCHECK(it != finished_observers_.end());
+    CHECK(it != finished_observers_.end());
     fully_erased = finished_observers_.erase(it);
   }
-  info_->DidRemoveClientOrObserver();
+  DidRemoveObserver();
   if (fully_erased)
     observer->NotifyImageFullyRemoved(this);
 }
 
-static void PriorityFromObserver(const ImageResourceObserver* observer,
-                                 ResourcePriority& priority) {
-  ResourcePriority next_priority = observer->ComputeResourcePriority();
-  if (next_priority.visibility == ResourcePriority::kNotVisible)
-    return;
-  priority.visibility = ResourcePriority::kVisible;
-  priority.intra_priority_value += next_priority.intra_priority_value;
+void ImageResourceContent::DidRemoveObserver() {
+  info_->DidRemoveClientOrObserver();
 }
 
-ResourcePriority ImageResourceContent::PriorityFromObservers() const {
+void ImageResourceContent::UpdateResourceInfoFromObservers() {
   ProhibitAddRemoveObserverInScope prohibit_add_remove_observer_in_scope(this);
-  ResourcePriority priority;
 
-  for (const auto& it : finished_observers_)
-    PriorityFromObserver(it.key, priority);
-  for (const auto& it : observers_)
-    PriorityFromObserver(it.key, priority);
+  cached_info_.priority_.emplace();
+  cached_info_.priority_excluding_image_loader_.emplace();
+  cached_info_.max_size_ = gfx::Size();
+  cached_info_.max_interpolation_quality_ = kInterpolationNone;
 
-  return priority;
+  auto update = [this](const ImageResourceObserver* observer) -> void {
+    ApplyPriorityAndSpeculativeDecodeParams(
+        observer->ComputeResourcePriority(),
+        observer->ComputeSpeculativeDecodeSize(),
+        observer->ComputeSpeculativeDecodeQuality());
+  };
+
+  for (const auto& it : finished_observers_) {
+    update(it.key);
+  }
+  for (const auto& it : observers_) {
+    update(it.key);
+  }
+}
+
+void ImageResourceContent::ApplyPriorityAndSpeculativeDecodeParams(
+    const ResourcePriority& new_priority,
+    const gfx::Size& new_size,
+    InterpolationQuality new_quality) {
+  if (!cached_info_.priority_.has_value()) {
+    cached_info_.priority_.emplace();
+  }
+  if (!cached_info_.priority_excluding_image_loader_.has_value()) {
+    cached_info_.priority_excluding_image_loader_.emplace();
+  }
+
+  if (new_priority.is_lcp_resource) {
+    // Mark the resource as predicted LCP despite its visibility.
+    cached_info_.priority_->is_lcp_resource = true;
+    cached_info_.priority_excluding_image_loader_->is_lcp_resource = true;
+  }
+
+  if (new_priority.visibility == ResourcePriority::kNotVisible) {
+    return;
+  }
+
+  cached_info_.priority_->visibility = ResourcePriority::kVisible;
+  cached_info_.priority_->intra_priority_value +=
+      new_priority.intra_priority_value;
+
+  if (new_priority.source != ResourcePriority::Source::kImageLoader) {
+    cached_info_.priority_excluding_image_loader_->visibility =
+        ResourcePriority::kVisible;
+    cached_info_.priority_excluding_image_loader_->intra_priority_value +=
+        new_priority.intra_priority_value;
+  }
+  cached_info_.max_size_.SetToMax(new_size);
+  cached_info_.max_interpolation_quality_ =
+      std::max(cached_info_.max_interpolation_quality_, new_quality);
+}
+
+bool ImageResourceContent::CanBeSpeculativelyDecoded() const {
+  for (const auto& it : finished_observers_) {
+    if (!it.key->CanBeSpeculativelyDecoded()) {
+      return false;
+    }
+  }
+  for (const auto& it : observers_) {
+    if (!it.key->CanBeSpeculativelyDecoded()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+std::pair<std::optional<ResourcePriority>, std::optional<ResourcePriority>>
+ImageResourceContent::PriorityFromObservers() const {
+  return std::make_pair(cached_info_.priority_,
+                        cached_info_.priority_excluding_image_loader_);
+}
+
+std::optional<WebURLRequest::Priority> ImageResourceContent::RequestPriority()
+    const {
+  return info_->RequestPriority();
 }
 
 void ImageResourceContent::DestroyDecodedData() {
@@ -226,10 +336,10 @@ blink::Image* ImageResourceContent::GetImage() const {
   return image_.get();
 }
 
-IntSize ImageResourceContent::IntrinsicSize(
+gfx::Size ImageResourceContent::IntrinsicSize(
     RespectImageOrientationEnum should_respect_image_orientation) const {
   if (!image_)
-    return IntSize();
+    return gfx::Size();
   RespectImageOrientationEnum respect_orientation =
       ForceOrientationIfNecessary(should_respect_image_orientation);
   return image_->Size(respect_orientation);
@@ -237,8 +347,9 @@ IntSize ImageResourceContent::IntrinsicSize(
 
 RespectImageOrientationEnum ImageResourceContent::ForceOrientationIfNecessary(
     RespectImageOrientationEnum default_orientation) const {
-  if (image_ && image_->IsBitmapImage() && !IsAccessAllowed())
+  if (image_ && image_->IsBitmapImage() && !IsCorsSameOrigin()) {
     return kRespectImageOrientation;
+  }
   return default_orientation;
 }
 
@@ -246,27 +357,27 @@ void ImageResourceContent::NotifyObservers(
     NotifyFinishOption notifying_finish_option,
     CanDeferInvalidation defer) {
   {
-    Vector<ImageResourceObserver*> finished_observers_as_vector;
+    HeapVector<Member<ImageResourceObserver>> finished_observers_as_vector;
     {
       ProhibitAddRemoveObserverInScope prohibit_add_remove_observer_in_scope(
           this);
-      finished_observers_as_vector = finished_observers_.AsVector();
+      finished_observers_as_vector.assign(finished_observers_.Values());
     }
 
-    for (auto* observer : finished_observers_as_vector) {
+    for (ImageResourceObserver* observer : finished_observers_as_vector) {
       if (finished_observers_.Contains(observer))
         observer->ImageChanged(this, defer);
     }
   }
   {
-    Vector<ImageResourceObserver*> observers_as_vector;
+    HeapVector<Member<ImageResourceObserver>> observers_as_vector;
     {
       ProhibitAddRemoveObserverInScope prohibit_add_remove_observer_in_scope(
           this);
-      observers_as_vector = observers_.AsVector();
+      observers_as_vector.assign(observers_.Values());
     }
 
-    for (auto* observer : observers_as_vector) {
+    for (ImageResourceObserver* observer : observers_as_vector) {
       if (observers_.Contains(observer)) {
         observer->ImageChanged(this, defer);
         if (notifying_finish_option == kShouldNotifyFinish &&
@@ -279,29 +390,32 @@ void ImageResourceContent::NotifyObservers(
 }
 
 scoped_refptr<Image> ImageResourceContent::CreateImage(bool is_multipart) {
-  String content_dpr_value =
-      info_->GetResponse().HttpHeaderField(http_names::kContentDPR);
-  wtf_size_t comma = content_dpr_value.ReverseFind(',');
+  const ResourceResponse& response = info_->GetResponse();
+  const AtomicString& content_dpr_header_value =
+      response.HttpHeaderField(http_names::kContentDPR);
+  StringView content_dpr_value = content_dpr_header_value;
+  wtf_size_t comma = content_dpr_value.rfind(',');
   if (comma != kNotFound && comma < content_dpr_value.length() - 1) {
-    content_dpr_value = content_dpr_value.Substring(comma + 1);
+    content_dpr_value = content_dpr_value.substr(comma + 1);
   }
-  device_pixel_ratio_header_value_ =
-      content_dpr_value.ToFloat(&has_device_pixel_ratio_header_value_);
+  auto optional_header_value = StringToFloat(content_dpr_value);
+  has_device_pixel_ratio_header_value_ = optional_header_value.has_value();
+  device_pixel_ratio_header_value_ = optional_header_value.value_or(0);
   if (!has_device_pixel_ratio_header_value_ ||
       device_pixel_ratio_header_value_ <= 0.0) {
     device_pixel_ratio_header_value_ = 1.0;
     has_device_pixel_ratio_header_value_ = false;
   }
-  if (info_->GetResponse().MimeType() == "image/svg+xml")
-    return SVGImage::Create(this, is_multipart);
-  return BitmapImage::Create(this, is_multipart);
+  const bool is_cors_same_origin = response.IsCorsSameOrigin();
+  if (response.MimeType() == "image/svg+xml") {
+    return SVGImage::Create(this, is_multipart, is_cors_same_origin);
+  }
+  return BitmapImage::Create(this, is_multipart, is_cors_same_origin);
 }
 
 void ImageResourceContent::ClearImage() {
   if (!image_)
     return;
-  int64_t length = image_->Data() ? image_->Data()->size() : 0;
-  v8::Isolate::GetCurrent()->AdjustAmountOfExternalAllocatedMemory(-length);
 
   // If our Image has an observer, it's always us so we need to clear the back
   // pointer before dropping our reference.
@@ -334,8 +448,7 @@ void ImageResourceContent::UpdateToLoadedContentStatus(
       break;
 
     case ResourceStatus::kNotStarted:
-      CHECK(false);
-      break;
+      NOTREACHED();
   }
 
   // Updates the status.
@@ -346,8 +459,7 @@ void ImageResourceContent::NotifyStartLoad() {
   // Checks ImageResourceContent's previous status.
   switch (GetContentStatus()) {
     case ResourceStatus::kPending:
-      CHECK(false);
-      break;
+      NOTREACHED();
 
     case ResourceStatus::kNotStarted:
       // Normal load start.
@@ -422,22 +534,24 @@ ImageResourceContent::UpdateImageResult ImageResourceContent::UpdateImage(
       if (size_available_ == Image::kSizeUnavailable && !all_data_received)
         return UpdateImageResult::kNoDecodeError;
 
-      if (image_ && info_->GetUnsupportedImageMimeTypes()) {
-        // Filename extension is set by the image decoder based on the actual
-        // image content.
-        String file_extension = image_->FilenameExtension();
-        if (info_->GetUnsupportedImageMimeTypes()->Contains(
-                String("image/" + file_extension))) {
-          return UpdateImageResult::kShouldDecodeError;
+      if (image_) {
+        // The MIME type can be null if no decoder was found.
+        const AtomicString& mime_type = image_->MimeType();
+        const HashSet<String>* unsupported_mime_types =
+            info_->GetUnsupportedImageMimeTypes();
+        if (mime_type && unsupported_mime_types &&
+            unsupported_mime_types->Contains(mime_type)) {
+          // Drop the Image, simulating a missing decoder.
+          image_ = nullptr;
         }
       }
 
       // As per spec, zero intrinsic size SVG is a valid image so do not
       // consider such an image as DecodeError.
       // https://www.w3.org/TR/SVG/struct.html#SVGElementWidthAttribute
-      if (!image_ ||
-          (image_->IsNull() && (!IsA<SVGImage>(image_.get()) ||
-                                size_available_ == Image::kSizeUnavailable))) {
+      if (!image_ || (image_->Size().IsEmpty() &&
+                      (!IsA<SVGImage>(image_.get()) ||
+                       size_available_ == Image::kSizeUnavailable))) {
         ClearImage();
         return UpdateImageResult::kShouldDecodeError;
       }
@@ -477,61 +591,20 @@ ImageDecoder::CompressionFormat ImageResourceContent::GetCompressionFormat()
                                             GetResponse().HttpContentType());
 }
 
-bool ImageResourceContent::IsAcceptableCompressionRatio(
-    ExecutionContext& context) {
-  if (!image_)
-    return true;
+std::optional<size_t> ImageResourceContent::ImageDataSize() const {
+  if (image_ && image_->HasData()) {
+    return image_->DataSize();
+  }
+  return std::nullopt;
+}
 
-  uint64_t pixels = image_->Size().Area();
-  if (!pixels)
-    return true;
-
-  double resource_length =
-      static_cast<double>(GetResponse().ExpectedContentLength());
-  if (resource_length <= 0 && image_->Data()) {
+uint64_t ImageResourceContent::ContentSizeForEntropy() const {
+  int64_t resource_length = GetResponse().ExpectedContentLength();
+  if (resource_length <= 0) {
     // WPT and LayoutTests server returns -1 or 0 for the content length.
-    resource_length = static_cast<double>(image_->Data()->size());
+    resource_length = ImageDataSize().value_or(0);
   }
-
-  // Calculate the image's compression ratio (in bytes per pixel) with both 1k
-  // and 10k overhead. The constant overhead allowance is provided to allow room
-  // for headers and to account for small images (which are harder to compress).
-  double compression_ratio_1k = (resource_length - 1024) / pixels;
-  double compression_ratio_10k = (resource_length - 10240) / pixels;
-
-  ImageDecoder::CompressionFormat compression_format = GetCompressionFormat();
-
-  // Pass image url to reporting API.
-  const String& image_url = Url().GetString();
-
-  const char* message_format =
-      "Image bpp (byte per pixel) exceeds max value set in %s.";
-
-  if (compression_format == ImageDecoder::kLossyFormat) {
-    // Enforce the lossy image policy.
-    return context.IsFeatureEnabled(
-        mojom::blink::DocumentPolicyFeature::kLossyImagesMaxBpp,
-        PolicyValue::CreateDecDouble(compression_ratio_1k),
-        ReportOptions::kReportOnFailure,
-        String::Format(message_format, "lossy-images-max-bpp"), image_url);
-  }
-  if (compression_format == ImageDecoder::kLosslessFormat) {
-    // Enforce the lossless image policy.
-    bool enabled_by_10k_policy = context.IsFeatureEnabled(
-        mojom::blink::DocumentPolicyFeature::kLosslessImagesMaxBpp,
-        PolicyValue::CreateDecDouble(compression_ratio_10k),
-        ReportOptions::kReportOnFailure,
-        String::Format(message_format, "lossless-images-max-bpp"), image_url);
-    bool enabled_by_1k_policy = context.IsFeatureEnabled(
-        mojom::blink::DocumentPolicyFeature::kLosslessImagesStrictMaxBpp,
-        PolicyValue::CreateDecDouble(compression_ratio_1k),
-        ReportOptions::kReportOnFailure,
-        String::Format(message_format, "lossless-images-strict-max-bpp"),
-        image_url);
-    return enabled_by_10k_policy && enabled_by_1k_policy;
-  }
-
-  return true;
+  return resource_length;
 }
 
 void ImageResourceContent::DecodedSizeChangedTo(const blink::Image* image,
@@ -589,18 +662,25 @@ void ImageResourceContent::Changed(const blink::Image* image) {
   NotifyObservers(kDoNotNotifyFinish, CanDeferInvalidation::kYes);
 }
 
-bool ImageResourceContent::IsAccessAllowed() const {
-  return info_->IsAccessAllowed(
-      GetImage()->CurrentFrameHasSingleSecurityOrigin()
+bool ImageResourceContent::IsCorsSameOrigin() const {
+  return info_->IsCorsSameOrigin(
+      GetImage()->HasSingleSecurityOrigin()
           ? ImageResourceInfo::kHasSingleSecurityOrigin
           : ImageResourceInfo::kHasMultipleSecurityOrigin);
 }
 
 void ImageResourceContent::EmulateLoadStartedForInspector(
     ResourceFetcher* fetcher,
-    const KURL& url,
     const AtomicString& initiator_name) {
-  info_->EmulateLoadStartedForInspector(fetcher, url, initiator_name);
+  info_->EmulateLoadStartedForInspector(fetcher, initiator_name);
+}
+
+void ImageResourceContent::SetIsSufficientContentLoadedForPaint() {
+  NOTREACHED();
+}
+
+bool ImageResourceContent::IsSufficientContentLoadedForPaint() const {
+  return IsLoaded();
 }
 
 bool ImageResourceContent::IsLoaded() const {
@@ -624,18 +704,56 @@ ResourceStatus ImageResourceContent::GetContentStatus() const {
   return content_status_;
 }
 
-// TODO(hiroshige): Consider removing the following methods, or stoping
+bool ImageResourceContent::IsAnimatedImage() const {
+  return image_ && image_->MaybeAnimated();
+}
+
+bool ImageResourceContent::IsPaintedFirstFrame() const {
+  return IsAnimatedImage() && image_->FirstFrameIsComplete();
+}
+
+// TODO(hiroshige): Consider removing the following methods, or stopping
 // redirecting to ImageResource.
 const KURL& ImageResourceContent::Url() const {
   return info_->Url();
 }
 
-base::TimeTicks ImageResourceContent::LoadResponseEnd() const {
-  return info_->LoadResponseEnd();
+bool ImageResourceContent::IsAutomaticUpgrade() const {
+  return info_->IsAutomaticUpgrade();
 }
 
-bool ImageResourceContent::HasCacheControlNoStoreHeader() const {
-  return info_->HasCacheControlNoStoreHeader();
+bool ImageResourceContent::IsDataUrl() const {
+  return Url().ProtocolIsData();
+}
+
+AtomicString ImageResourceContent::MediaType() const {
+  if (!image_)
+    return AtomicString();
+  return AtomicString(image_->FilenameExtension());
+}
+
+void ImageResourceContent::SetIsBroken() {
+  is_broken_ = true;
+}
+
+bool ImageResourceContent::IsBroken() const {
+  return is_broken_;
+}
+
+base::TimeTicks ImageResourceContent::DiscoveryTime() const {
+  return info_->DiscoveryTime();
+}
+
+base::TimeTicks ImageResourceContent::LoadStart() const {
+  return info_->LoadStart();
+}
+
+base::TimeTicks ImageResourceContent::LoadEnd() const {
+  return info_->LoadEnd();
+}
+
+base::TimeTicks ImageResourceContent::LoadResponseEnd() const {
+  return info_->LoadResponseEnd();
 }
 
 float ImageResourceContent::DevicePixelRatioHeaderValue() const {
@@ -650,25 +768,28 @@ const ResourceResponse& ImageResourceContent::GetResponse() const {
   return info_->GetResponse();
 }
 
-absl::optional<ResourceError> ImageResourceContent::GetResourceError() const {
+std::optional<ResourceError> ImageResourceContent::GetResourceError() const {
   return info_->GetResourceError();
-}
-
-bool ImageResourceContent::IsCacheValidator() const {
-  return info_->IsCacheValidator();
 }
 
 void ImageResourceContent::LoadDeferredImage(ResourceFetcher* fetcher) {
   info_->LoadDeferredImage(fetcher);
 }
 
-bool ImageResourceContent::IsAdResource() const {
-  return info_->IsAdResource();
+const std::optional<AdProvenance>& ImageResourceContent::GetAdProvenance()
+    const {
+  return info_->GetAdProvenance();
 }
 
 void ImageResourceContent::RecordDecodedImageType(UseCounter* use_counter) {
   if (auto* bitmap_image = DynamicTo<BitmapImage>(image_.get()))
     bitmap_image->RecordDecodedImageType(use_counter);
+}
+
+void ImageResourceContent::RecordDecodedImageC2PA(UseCounter* use_counter) {
+  if (auto* bitmap_image = DynamicTo<BitmapImage>(image_.get())) {
+    bitmap_image->RecordDecodedImageC2PA(use_counter);
+  }
 }
 
 }  // namespace blink

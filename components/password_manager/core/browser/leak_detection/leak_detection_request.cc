@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,26 +6,30 @@
 
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
+#include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/browser/leak_detection/encryption_utils.h"
 #include "components/password_manager/core/browser/leak_detection/leak_detection_api.pb.h"
-#include "components/password_manager/core/browser/leak_detection/leak_detection_delegate_interface.h"
 #include "components/password_manager/core/browser/leak_detection/leak_detection_request_utils.h"
+#include "components/password_manager/core/browser/leak_detection/leak_detection_types.h"
 #include "components/password_manager/core/browser/leak_detection/single_lookup_response.h"
 #include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
 #include "net/http/http_request_headers.h"
+#include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 #include "url/gurl.h"
 
 namespace password_manager {
@@ -38,14 +42,72 @@ void RecordLookupResponseResult(
       "PasswordManager.LeakDetection.LookupSingleLeakResponseResult", result);
 }
 
+constexpr char kAuthHeaderApiKey[] = "x-goog-api-key";
 constexpr char kAuthHeaderBearer[] = "Bearer ";
 constexpr char kPostMethod[] = "POST";
 constexpr char kProtobufContentType[] = "application/x-protobuf";
+
+google::internal::identity::passwords::leak::check::v1::
+    LookupSingleLeakRequest::ClientUseCase
+    InitiatorToClientUseCase(LeakDetectionInitiator initiator) {
+  switch (initiator) {
+    case LeakDetectionInitiator::kSignInCheck:
+      return google::internal::identity::passwords::leak::check::v1::
+          LookupSingleLeakRequest::ClientUseCase::
+              LookupSingleLeakRequest_ClientUseCase_CHROME_SIGN_IN_CHECK;
+    case LeakDetectionInitiator::kBulkSyncedPasswordsCheck:
+      return google::internal::identity::passwords::leak::check::v1::
+          LookupSingleLeakRequest::ClientUseCase::
+              LookupSingleLeakRequest_ClientUseCase_CHROME_BULK_SYNCED_PASSWORDS_CHECK;
+    case LeakDetectionInitiator::kEditCheck:
+      return google::internal::identity::passwords::leak::check::v1::
+          LookupSingleLeakRequest::ClientUseCase::
+              LookupSingleLeakRequest_ClientUseCase_CHROME_EDIT_CHECK;
+    case LeakDetectionInitiator::kIGABulkSyncedPasswordsCheck:
+      return google::internal::identity::passwords::leak::check::v1::
+          LookupSingleLeakRequest::ClientUseCase::
+              LookupSingleLeakRequest_ClientUseCase_IGA_BULK_SYNCED_PASSWORDS_CHECK;
+    case LeakDetectionInitiator::kClientUseCaseUnspecified:
+      return google::internal::identity::passwords::leak::check::v1::
+          LookupSingleLeakRequest::ClientUseCase::
+              LookupSingleLeakRequest_ClientUseCase_CLIENT_USE_CASE_UNSPECIFIED;
+    case LeakDetectionInitiator::kDesktopProactivePasswordCheckup:
+      return google::internal::identity::passwords::leak::check::v1::
+          LookupSingleLeakRequest::ClientUseCase::
+              LookupSingleLeakRequest_ClientUseCase_CHROME_DESKTOP_SIGNED_IN_ON_DEVICE_PROACTIVE_PASSWORD_CHECKUP;
+    case LeakDetectionInitiator::kIosProactivePasswordCheckup:
+      return google::internal::identity::passwords::leak::check::v1::
+          LookupSingleLeakRequest::ClientUseCase::
+              LookupSingleLeakRequest_ClientUseCase_CHROME_IOS_SIGNED_IN_ON_DEVICE_PROACTIVE_PASSWORD_CHECKUP;
+    case LeakDetectionInitiator::kIOSWebViewSignInCheck:
+      return google::internal::identity::passwords::leak::check::v1::
+          LookupSingleLeakRequest::ClientUseCase::
+              LookupSingleLeakRequest_ClientUseCase_IOS_WEB_VIEW_SIGN_IN_CHECK;
+  }
+  NOTREACHED();
+}
+
+std::string InitiatorToRequestCriticality(LeakDetectionInitiator initiator) {
+  switch (initiator) {
+    case LeakDetectionInitiator::kSignInCheck:
+    case LeakDetectionInitiator::kBulkSyncedPasswordsCheck:
+    case LeakDetectionInitiator::kEditCheck:
+    case LeakDetectionInitiator::kIGABulkSyncedPasswordsCheck:
+    case LeakDetectionInitiator::kClientUseCaseUnspecified:
+    case LeakDetectionInitiator::kIOSWebViewSignInCheck:
+      return LeakDetectionRequest::kRequestCriticalityCritical;
+    case LeakDetectionInitiator::kDesktopProactivePasswordCheckup:
+    case LeakDetectionInitiator::kIosProactivePasswordCheckup:
+      return LeakDetectionRequest::kRequestCriticalitySheddablePlus;
+  }
+  NOTREACHED();
+}
 
 google::internal::identity::passwords::leak::check::v1::LookupSingleLeakRequest
 MakeLookupSingleLeakRequest(LookupSingleLeakPayload payload) {
   google::internal::identity::passwords::leak::check::v1::
       LookupSingleLeakRequest request;
+  request.set_client_use_case(InitiatorToClientUseCase(payload.initiator));
   request.set_username_hash_prefix(std::move(payload.username_hash_prefix));
   request.set_username_hash_prefix_length(kUsernameHashPrefixLength);
   request.set_encrypted_lookup_hash(std::move(payload.encrypted_payload));
@@ -54,15 +116,14 @@ MakeLookupSingleLeakRequest(LookupSingleLeakPayload payload) {
 
 }  // namespace
 
-constexpr char LeakDetectionRequest::kLookupSingleLeakEndpoint[];
-
 LeakDetectionRequest::LeakDetectionRequest() = default;
 
 LeakDetectionRequest::~LeakDetectionRequest() = default;
 
 void LeakDetectionRequest::LookupSingleLeak(
     network::mojom::URLLoaderFactory* url_loader_factory,
-    const std::string& access_token,
+    const std::optional<std::string>& access_token,
+    const std::optional<std::string>& api_key,
     LookupSingleLeakPayload payload,
     LookupSingleLeakCallback callback) {
   net::NetworkTrafficAnnotationTag traffic_annotation =
@@ -91,8 +152,19 @@ void LeakDetectionRequest::LookupSingleLeak(
             "user"
           data:
             "A hash prefix of the username and the encrypted username and "
-            "password."
+            "password. An OAuth2 access token for the user account."
           destination: GOOGLE_OWNED_SERVICE
+          api_service_name: "passwordsleakcheck-pa.googleapis.com"
+          internal {
+            contacts {
+              owners: "//components/password_manager/OWNERS"
+            }
+          }
+          user_data {
+            type: ACCESS_TOKEN
+            type: CREDENTIALS
+          }
+          last_reviewed: "2023-08-14"
         }
         policy {
           cookies_allowed: NO
@@ -111,9 +183,18 @@ void LeakDetectionRequest::LookupSingleLeak(
   resource_request->load_flags = net::LOAD_DISABLE_CACHE;
   resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
   resource_request->method = kPostMethod;
+  if (access_token.has_value()) {
+    resource_request->headers.SetHeader(
+        net::HttpRequestHeaders::kAuthorization,
+        base::StrCat({kAuthHeaderBearer, access_token.value()}));
+  }
+  if (api_key.has_value()) {
+    resource_request->headers.SetHeader(kAuthHeaderApiKey, api_key.value());
+  }
+
   resource_request->headers.SetHeader(
-      net::HttpRequestHeaders::kAuthorization,
-      base::StrCat({kAuthHeaderBearer, access_token}));
+      kRequestCriticalityHeader,
+      InitiatorToRequestCriticality(payload.initiator));
 
   simple_url_loader_ = network::SimpleURLLoader::Create(
       std::move(resource_request), traffic_annotation);
@@ -129,7 +210,7 @@ void LeakDetectionRequest::LookupSingleLeak(
 
 void LeakDetectionRequest::OnLookupSingleLeakResponse(
     LookupSingleLeakCallback callback,
-    std::unique_ptr<std::string> response) {
+    std::optional<std::string> response) {
   if (!response) {
     RecordLookupResponseResult(LeakLookupResponseResult::kFetchError);
     DLOG(ERROR) << "Empty Lookup Single Leak Response";
@@ -161,8 +242,7 @@ void LeakDetectionRequest::OnLookupSingleLeakResponse(
       LookupSingleLeakResponse leak_response;
   if (!leak_response.ParseFromString(*response)) {
     RecordLookupResponseResult(LeakLookupResponseResult::kParseError);
-    DLOG(ERROR) << "Could not parse response: "
-                << base::HexEncode(response->data(), response->size());
+    DLOG(ERROR) << "Could not parse response: " << base::HexEncode(*response);
     std::move(callback).Run(nullptr,
                             LeakDetectionError::kInvalidServerResponse);
     return;
@@ -180,7 +260,7 @@ void LeakDetectionRequest::OnLookupSingleLeakResponse(
   base::UmaHistogramCounts100000(
       "PasswordManager.LeakDetection.SingleLeakResponsePrefixes",
       single_lookup_response->encrypted_leak_match_prefixes.size());
-  std::move(callback).Run(std::move(single_lookup_response), absl::nullopt);
+  std::move(callback).Run(std::move(single_lookup_response), std::nullopt);
 }
 
 }  // namespace password_manager

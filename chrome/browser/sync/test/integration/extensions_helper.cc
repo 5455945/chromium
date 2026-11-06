@@ -1,19 +1,22 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/sync/test/integration/extensions_helper.h"
 
+#include "base/check.h"
 #include "base/logging.h"
-#include "base/macros.h"
-#include "chrome/browser/chrome_notification_types.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/test/bind.h"
+#include "chrome/browser/extensions/updater/extension_updater.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/test/integration/sync_datatype_helper.h"
 #include "chrome/browser/sync/test/integration/sync_extension_helper.h"
-#include "chrome/browser/sync/test/integration/sync_extension_installer.h"
-#include "content/public/browser/notification_source.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/manifest.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 using sync_datatype_helper::test;
 
@@ -29,45 +32,28 @@ bool HasSameExtensions(int index1, int index2) {
       test()->GetProfile(index1), test()->GetProfile(index2));
 }
 
-bool HasSameExtensionsAsVerifier(int index) {
-  return SyncExtensionHelper::GetInstance()->ExtensionStatesMatch(
-      test()->GetProfile(index), test()->verifier());
-}
-
-bool AllProfilesHaveSameExtensionsAsVerifier() {
-  for (int i = 0; i < test()->num_clients(); ++i) {
-    if (!HasSameExtensionsAsVerifier(i)) {
-      LOG(ERROR) << "Profile " << i << " doesn't have the same extensions as"
-                                       " the verifier profile.";
-      return false;
-    }
-  }
-  return true;
-}
-
 bool AllProfilesHaveSameExtensions() {
   for (int i = 1; i < test()->num_clients(); ++i) {
     if (!SyncExtensionHelper::GetInstance()->ExtensionStatesMatch(
-        test()->GetProfile(0), test()->GetProfile(i))) {
-      LOG(ERROR) << "Profile " << i << " doesnt have the same extensions as"
-                                       " profile 0.";
+            test()->GetProfile(0), test()->GetProfile(i))) {
+      LOG(ERROR) << "Profile " << i
+                 << " doesnt have the same extensions as"
+                    " profile 0.";
       return false;
     }
   }
   return true;
 }
 
-
 std::string InstallExtension(Profile* profile, int index) {
   return SyncExtensionHelper::GetInstance()->InstallExtension(
-      profile,
-      CreateFakeExtensionName(index),
-      extensions::Manifest::TYPE_EXTENSION);
+      profile, CreateFakeExtensionName(index),
+      extensions::Manifest::Type::kExtension);
 }
 
 std::string InstallExtensionForAllProfiles(int index) {
   std::string extension_id;
-  for (auto* profile : test()->GetAllProfiles()) {
+  for (Profile* profile : test()->GetAllProfiles()) {
     extension_id = InstallExtension(profile, index);
   }
   return extension_id;
@@ -126,21 +112,36 @@ void InstallExtensionsPendingForSync(Profile* profile) {
   SyncExtensionHelper::GetInstance()->InstallExtensionsPendingForSync(profile);
 }
 
+extensions::ExtensionId GetExtensionId(int index) {
+  return SyncExtensionHelper::GetInstance()->GetExtensionId(
+      CreateFakeExtensionName(index));
+}
+
 }  // namespace extensions_helper
 
 ExtensionsMatchChecker::ExtensionsMatchChecker()
     : profiles_(test()->GetAllProfiles()) {
-  DCHECK_GE(profiles_.size(), 2U);
+  CHECK_GE(profiles_.size(), 2U, base::NotFatalUntil::M163);
   for (Profile* profile : profiles_) {
-    // Begin mocking the installation of synced extensions from the web store.
-    synced_extension_installers_.push_back(
-        std::make_unique<SyncedExtensionInstaller>(profile));
+    SyncExtensionHelper::GetInstance()->InstallExtensionsPendingForSync(
+        profile);
+
+    auto* updater = extensions::ExtensionUpdater::Get(profile);
+    CHECK(updater);
+    CHECK(updater->enabled());
+    updater->SetUpdatingStartedCallbackForTesting(
+        base::BindLambdaForTesting(
+            [self = weak_ptr_factory_.GetWeakPtr(), profile]() {
+              base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+                  FROM_HERE,
+                  base::BindOnce(
+                      &ExtensionsMatchChecker::OnExtensionUpdatingStarted, self,
+                      base::Unretained(profile)));
+            }));
 
     extensions::ExtensionRegistry* registry =
         extensions::ExtensionRegistry::Get(profile);
     registry->AddObserver(this);
-    registrar_.Add(this, extensions::NOTIFICATION_EXTENSION_UPDATING_STARTED,
-                   content::Source<Profile>(profile));
   }
 }
 
@@ -194,10 +195,12 @@ void ExtensionsMatchChecker::OnExtensionUninstalled(
   CheckExitCondition();
 }
 
-void ExtensionsMatchChecker::Observe(
-    int type,
-    const content::NotificationSource& source,
-    const content::NotificationDetails& details) {
-  DCHECK_EQ(extensions::NOTIFICATION_EXTENSION_UPDATING_STARTED, type);
+void ExtensionsMatchChecker::OnExtensionUpdatingStarted(Profile* profile) {
+  // The extension system is trying to check for updates.  In the real world,
+  // this would be where synced extensions are asynchronously downloaded from
+  // the web store and installed.  In this test framework, we use this event as
+  // a signal that it's time to asynchronously fake the installation of these
+  // extensions.
+  SyncExtensionHelper::GetInstance()->InstallExtensionsPendingForSync(profile);
   CheckExitCondition();
 }

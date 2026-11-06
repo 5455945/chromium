@@ -30,10 +30,13 @@ class SVGTSpanElement final : public SVGTextPositioningElement {
 
  public:
   explicit SVGTSpanElement(Document&);
+  ElementType GetElementType() const final {
+    return ElementType::kSVGTSpanElement;
+  }
 
  private:
-  LayoutObject* CreateLayoutObject(const ComputedStyle&, LegacyLayout) override;
-  bool LayoutObjectIsNeeded(const ComputedStyle&) const override;
+  LayoutObject* CreateLayoutObject(const ComputedStyle&) override;
+  bool LayoutObjectIsNeeded(const DisplayStyle&) const override;
 };
 
 }  // namespace blink

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -8,9 +8,10 @@
 #define COMPONENTS_SAFE_BROWSING_CORE_COMMON_UTILS_H_
 
 #include "base/time/time.h"
+#include "components/safe_browsing/core/browser/db/sb_protocol_manager_util.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
 #include "components/safe_browsing/core/common/safebrowsing_constants.h"
-#include "services/network/public/mojom/fetch_api.mojom-shared.h"
+#include "services/network/public/cpp/simple_url_loader.h"
 #include "url/gurl.h"
 
 namespace policy {
@@ -20,6 +21,14 @@ class BrowserPolicyConnector;
 namespace base {
 class TimeDelta;
 }  // namespace base
+
+namespace network {
+struct ResourceRequest;
+}  // namespace network
+
+namespace security_interstitials {
+struct UnsafeResource;
+}
 
 class PrefService;
 
@@ -52,9 +61,42 @@ base::TimeDelta GetDelayFromPref(PrefService* prefs, const char* pref_name);
 // (6) Its hostname is less than 4 characters.
 bool CanGetReputationOfUrl(const GURL& url);
 
-// Util for UMA logging to get ResourceType from RequestDestination.
-ResourceType GetResourceTypeFromRequestDestination(
-    network::mojom::RequestDestination request_destination);
+// Set |access_token| in |resource_request|.
+void SetAccessToken(network::ResourceRequest* resource_request,
+                    const std::string& access_token);
+
+// Record HTTP response code when there's no error in fetching an HTTP
+// request, and the error code, when there is.
+// |metric_name| is the name of the UMA metric to record the response code or
+// error code against, |net_error| represents the net error code of the HTTP
+// request, and |response code| represents the HTTP response code received
+// from the server.
+void RecordHttpResponseOrErrorCode(const char* metric_name,
+                                   int net_error,
+                                   int response_code);
+
+// If the network response for a request has errors, the corresponding service
+// usually increments the backoff counter. However, some errors are not related
+// to the network infrastructure and therefore don't require this. This function
+// returns whether an error is considered retriable and doesn't need to
+// increment backoff.
+bool ErrorIsRetriable(int net_error, int http_error);
+
+// We populate a parallel set of metrics to differentiate some threat sources.
+std::string_view GetExtraMetricsSuffix(
+    security_interstitials::UnsafeResource unsafe_resource);
+
+// We populate a parallel set of metrics to differentiate some threat subtypes.
+std::string_view GetExtraExtraMetricsSuffix(
+    security_interstitials::UnsafeResource unsafe_resource);
+
+// Return the threat_type string for unsafe site visits.
+std::string GetThreatTypeStringForInterstitial(
+    safe_browsing::SBThreatType threat_type);
+
+// Returns the tier value for the given ClientSideDetectionType.
+int GetClientSideDetectionTypeTier(ClientSideDetectionType type);
+
 }  // namespace safe_browsing
 
 #endif  // COMPONENTS_SAFE_BROWSING_CORE_COMMON_UTILS_H_

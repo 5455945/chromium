@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,9 @@
 
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
-#include "media/base/bind_to_current_loop.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "services/video_capture/public/mojom/constants.mojom.h"
 
@@ -41,8 +40,8 @@ void GpuMemoryBufferVirtualDeviceMojoAdapter::OnNewGpuMemoryBufferHandle(
   if (!video_frame_handler_.is_bound())
     return;
   media::mojom::VideoBufferHandlePtr buffer_handle =
-      media::mojom::VideoBufferHandle::New();
-  buffer_handle->set_gpu_memory_buffer_handle(std::move(gmb_handle));
+      media::mojom::VideoBufferHandle::NewGpuMemoryBufferHandle(
+          std::move(gmb_handle));
   video_frame_handler_->OnNewBuffer(buffer_id, std::move(buffer_handle));
 }
 
@@ -71,10 +70,8 @@ void GpuMemoryBufferVirtualDeviceMojoAdapter::OnFrameReadyInBuffer(
             video_frame_handler_, frame_access_handler_remote_);
     video_frame_handler_has_forwarder_ = true;
   }
-  video_frame_handler_->OnFrameReadyInBuffer(
-      mojom::ReadyFrameInBuffer::New(buffer_id, 0 /* frame_feedback_id */,
-                                     std::move(frame_info)),
-      {});
+  video_frame_handler_->OnFrameReadyInBuffer(mojom::ReadyFrameInBuffer::New(
+      buffer_id, 0 /* frame_feedback_id */, std::move(frame_info)));
 }
 
 void GpuMemoryBufferVirtualDeviceMojoAdapter::OnBufferRetired(int buffer_id) {
@@ -99,8 +96,8 @@ void GpuMemoryBufferVirtualDeviceMojoAdapter::Start(
   // Notify receiver of known buffer handles */
   for (auto& entry : known_buffer_handles_) {
     media::mojom::VideoBufferHandlePtr buffer_handle =
-        media::mojom::VideoBufferHandle::New();
-    buffer_handle->set_gpu_memory_buffer_handle(entry.second.Clone());
+        media::mojom::VideoBufferHandle::NewGpuMemoryBufferHandle(
+            entry.second.Clone());
     video_frame_handler_->OnNewBuffer(entry.first, std::move(buffer_handle));
   }
 }
@@ -132,6 +129,14 @@ void GpuMemoryBufferVirtualDeviceMojoAdapter::TakePhoto(
 
 void GpuMemoryBufferVirtualDeviceMojoAdapter::ProcessFeedback(
     const media::VideoCaptureFeedback& feedback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+}
+
+void GpuMemoryBufferVirtualDeviceMojoAdapter::RequestRefreshFrame() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+}
+
+void GpuMemoryBufferVirtualDeviceMojoAdapter::InvalidateBuffers() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 }
 

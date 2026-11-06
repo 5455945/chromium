@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_AUDIO_MEDIA_MULTI_CHANNEL_RESAMPLER_H_
 
 #include <memory>
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "media/base/multi_channel_resampler.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
@@ -22,16 +22,15 @@ class AudioBus;
 
 // This is a simple wrapper around the MultiChannelResampler provided by the
 // media layer.
-class PLATFORM_EXPORT MediaMultiChannelResampler {
+class PLATFORM_EXPORT MediaMultiChannelResampler final {
   USING_FAST_MALLOC(MediaMultiChannelResampler);
 
   // Callback type for providing more data into the resampler.  Expects AudioBus
   // to be completely filled with data upon return; zero padded if not enough
   // frames are available to satisfy the request.  |frame_delay| is the number
   // of output frames already processed and can be used to estimate delay.
-  typedef WTF::CrossThreadRepeatingFunction<void(int frame_delay,
-                                                 blink::AudioBus*)>
-      ReadCB;
+  using ReadCB =
+      CrossThreadRepeatingFunction<void(int frame_delay, blink::AudioBus*)>;
 
  public:
   // Constructs a MultiChannelResampler with the specified |read_cb|, which is
@@ -40,7 +39,7 @@ class PLATFORM_EXPORT MediaMultiChannelResampler {
   // frames of the AudioBus to be filled by |read_cb|.
   MediaMultiChannelResampler(int channels,
                              double io_sample_rate_ratio,
-                             size_t request_frames,
+                             uint32_t request_frames,
                              ReadCB read_cb);
 
   MediaMultiChannelResampler(const MediaMultiChannelResampler&) = delete;

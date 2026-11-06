@@ -1,21 +1,25 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/public/cpp/app_list/app_list_config_provider.h"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
+#include "ash/constants/ash_features.h"
 #include "ash/public/cpp/app_list/app_list_config.h"
 #include "ash/public/cpp/app_list/app_list_features.h"
-#include "base/containers/contains.h"
-#include "base/stl_util.h"
+#include "base/test/scoped_feature_list.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace ash {
 
 namespace {
+
+// The expected number of columns in the tablet app list apps grid.
+constexpr int kPreferredGridColumnsForWorkArea = 5;
 
 // Does sanity check on apps grid item tile dimensions in config. On error, it
 // causes test failure with additional |scoped_trace| message.
@@ -44,36 +48,41 @@ void SanityCheckGridTileDimensions(AppListConfig* config, int error_margin) {
   // Icon should fit in the tile width.
   EXPECT_LE(config->grid_icon_dimension(), config->grid_tile_width());
 
-  const int folder_unclipped_icon_top =
+  const int folder_icon_top =
       (config->grid_tile_height() - config->grid_icon_bottom_padding() -
-       config->folder_unclipped_icon_dimension()) /
+       config->folder_icon_dimension()) /
       2;
   // The app list folder icon top should be within the tile bounds.
-  EXPECT_GE(folder_unclipped_icon_top, 0);
+  EXPECT_GE(folder_icon_top, 0);
 
   // Unclipped folder icon should not overlap with title.
-  const int folder_unclipped_icon_bottom =
-      folder_unclipped_icon_top + config->folder_unclipped_icon_dimension();
-  EXPECT_LE(folder_unclipped_icon_bottom, title_top + error_margin);
+  const int folder_icon_bottom =
+      folder_icon_top + config->folder_icon_dimension();
+  EXPECT_LE(folder_icon_bottom, title_top + error_margin);
 
   // Unclipped folder icon should fit within available height.
-  EXPECT_LE(folder_unclipped_icon_bottom,
+  EXPECT_LE(folder_icon_bottom,
             config->grid_tile_height() - config->grid_icon_bottom_padding());
 
   // Unclipped folder icon should fit into tile width.
-  EXPECT_LE(config->folder_unclipped_icon_dimension(),
-            config->grid_tile_width());
+  EXPECT_LE(config->folder_icon_dimension(), config->grid_tile_width());
 }
 
 class TestAppListConfigProviderObserver
     : public AppListConfigProvider::Observer {
  public:
   TestAppListConfigProviderObserver() = default;
+
+  TestAppListConfigProviderObserver(const TestAppListConfigProviderObserver&) =
+      delete;
+  TestAppListConfigProviderObserver& operator=(
+      const TestAppListConfigProviderObserver&) = delete;
+
   ~TestAppListConfigProviderObserver() override = default;
 
   // AppListConfigProvider::Observer:
   void OnAppListConfigCreated(ash::AppListConfigType config_type) override {
-    ASSERT_FALSE(base::Contains(created_types_, config_type));
+    ASSERT_FALSE(std::ranges::contains(created_types_, config_type));
 
     created_types_.push_back(config_type);
   }
@@ -86,8 +95,6 @@ class TestAppListConfigProviderObserver
 
  private:
   std::vector<ash::AppListConfigType> created_types_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestAppListConfigProviderObserver);
 };
 
 }  // namespace
@@ -112,18 +119,15 @@ class AppListConfigProviderTest : public testing::Test {
 
   void VerifyScaledConfig(const AppListConfig& base_config,
                           AppListConfig* config,
-                          float scale_x,
-                          float scale_y) {
+                          float scale_x) {
     ASSERT_TRUE(config);
     EXPECT_EQ(base_config.type(), config->type());
 
     EXPECT_EQ(scale_x, config->scale_x());
-    EXPECT_EQ(scale_y, config->scale_y());
 
     EXPECT_EQ(std::round(base_config.grid_tile_width() * scale_x),
               config->grid_tile_width());
-    EXPECT_EQ(std::round(base_config.grid_tile_height() * scale_y),
-              config->grid_tile_height());
+    EXPECT_EQ(base_config.grid_tile_height(), config->grid_tile_height());
 
     auto get_grid_title_height = [](const AppListConfig* config) {
       return config->grid_tile_height() - config->grid_title_top_padding() -
@@ -141,9 +145,8 @@ class AppListConfigProviderTest : public testing::Test {
 
 // Tests GetConfigForType behavior.
 TEST_F(AppListConfigProviderTest, ConfigGetters) {
-  std::vector<AppListConfigType> test_cases = {AppListConfigType::kSmall,
-                                               AppListConfigType::kMedium,
-                                               AppListConfigType::kLarge};
+  std::vector<AppListConfigType> test_cases = {AppListConfigType::kRegular,
+                                               AppListConfigType::kDense};
   std::set<AppListConfigType> created_types;
   for (const auto& config_type : test_cases) {
     SCOPED_TRACE(static_cast<int>(config_type));
@@ -181,20 +184,26 @@ TEST_F(AppListConfigProviderTest, ConfigGetters) {
   }
 }
 
-// Tests calling CreateConfigByDisplayWorkArea creates the appropriate app list
+// Tests calling CreateForFullscreenAppList creates the appropriate app list
 // configuration depending on display size.
 TEST_F(AppListConfigProviderTest, CreateConfigByDisplayWorkArea) {
+  // NOTE: The `available_size` are arbitrary values large enough so the
+  // returned app list config does not get scaled down (i.e. large enough so
+  // they can fit an apps grid with default sized-items).
   const struct TestCase {
     gfx::Size work_area_size;
+    gfx::Size available_size;
     AppListConfigType config_type;
-  } test_cases[] = {{gfx::Size(900, 500), AppListConfigType::kSmall},
-                    {gfx::Size(500, 900), AppListConfigType::kSmall},
-                    {gfx::Size(960, 600), AppListConfigType::kMedium},
-                    {gfx::Size(1100, 700), AppListConfigType::kMedium},
-                    {gfx::Size(600, 960), AppListConfigType::kMedium},
-                    {gfx::Size(700, 1100), AppListConfigType::kMedium},
-                    {gfx::Size(1200, 768), AppListConfigType::kLarge},
-                    {gfx::Size(768, 1200), AppListConfigType::kLarge}};
+  } test_cases[] = {
+      {gfx::Size(900, 500), gfx::Size(788, 321), AppListConfigType::kDense},
+      {gfx::Size(540, 900), gfx::Size(428, 704), AppListConfigType::kDense},
+      {gfx::Size(960, 600), gfx::Size(848, 412), AppListConfigType::kDense},
+      {gfx::Size(1100, 700), gfx::Size(988, 504), AppListConfigType::kRegular},
+      {gfx::Size(600, 960), gfx::Size(488, 764), AppListConfigType::kDense},
+      {gfx::Size(700, 1100), gfx::Size(588, 904), AppListConfigType::kRegular},
+      {gfx::Size(1200, 768), gfx::Size(1088, 572), AppListConfigType::kRegular},
+      {gfx::Size(768, 1200), gfx::Size(656, 1004),
+       AppListConfigType::kRegular}};
 
   for (const auto& test_case : test_cases) {
     SCOPED_TRACE(::testing::Message()
@@ -203,14 +212,13 @@ TEST_F(AppListConfigProviderTest, CreateConfigByDisplayWorkArea) {
                  << static_cast<int>(test_case.config_type));
 
     std::unique_ptr<AppListConfig> config =
-        AppListConfigProvider::Get().CreateForAppListWidget(
-            test_case.work_area_size, gfx::Insets(0, 0, 56, 0) /*shelf_insets*/,
-            nullptr);
+        AppListConfigProvider::Get().CreateForTabletAppList(
+            test_case.work_area_size, kPreferredGridColumnsForWorkArea,
+            test_case.available_size, nullptr);
 
     ASSERT_TRUE(config.get());
     EXPECT_EQ(test_case.config_type, config->type());
     EXPECT_EQ(1, config->scale_x());
-    EXPECT_EQ(1, config->scale_y());
     SanityCheckGridTileDimensions(config.get(), 0);
 
     // Verify that AppListConfigProvider now provides the created config type.
@@ -222,14 +230,14 @@ TEST_F(AppListConfigProviderTest, CreateConfigByDisplayWorkArea) {
     // observed created types are not cleared for |registry_observer_| between
     // test cases, the "observed" count for |test_case.config_type| should
     // always be 1.
-    EXPECT_EQ(1, base::STLCount(registry_observer_.created_types(),
-                                test_case.config_type));
+    EXPECT_EQ(1, std::ranges::count(registry_observer_.created_types(),
+                                    test_case.config_type));
 
     // Verify CreateForAppListWidget returns nullptr if the created config would
     // be the same as |config|.
-    EXPECT_FALSE(AppListConfigProvider::Get().CreateForAppListWidget(
-        test_case.work_area_size, gfx::Insets(0, 0, 56, 0) /*shelf_insets*/,
-        config.get()));
+    EXPECT_FALSE(AppListConfigProvider::Get().CreateForTabletAppList(
+        test_case.work_area_size, kPreferredGridColumnsForWorkArea,
+        test_case.available_size, config.get()));
   }
 }
 
@@ -238,309 +246,257 @@ TEST_F(AppListConfigProviderTest, CreateConfigByDisplayWorkArea) {
 TEST_F(AppListConfigProviderTest,
        CreateConfigByDisplayWorkAreaWithNonNullConfig) {
   // Create initial configuration.
+  gfx::Size work_area(1200, 768);
+  gfx::Size available_size(1088, 572);
   std::unique_ptr<AppListConfig> config =
-      AppListConfigProvider::Get().CreateForAppListWidget(
-          gfx::Size(1200, 768), gfx::Insets(0, 0, 56, 0) /*shelf_insets*/,
-          nullptr);
+      AppListConfigProvider::Get().CreateForTabletAppList(
+          work_area, kPreferredGridColumnsForWorkArea, available_size, nullptr);
   ASSERT_TRUE(config);
-  EXPECT_EQ(AppListConfigType::kLarge, config->type());
+  EXPECT_EQ(AppListConfigType::kRegular, config->type());
 
   // Verify CreateForAppListWidget returns nullptr if the created config would
-  // be the same as |config|.
-  EXPECT_FALSE(AppListConfigProvider::Get().CreateForAppListWidget(
-      gfx::Size(768, 1200), gfx::Insets(0, 0, 56, 0) /*shelf_insets*/,
+  // be the same as `config`.
+  work_area = gfx::Size(768, 1200);
+  available_size = gfx::Size(656, 1004);
+  EXPECT_FALSE(AppListConfigProvider::Get().CreateForTabletAppList(
+      work_area, kPreferredGridColumnsForWorkArea, available_size,
       config.get()));
 
   // Create different config.
+  work_area = gfx::Size(960, 600);
+  available_size = gfx::Size(848, 412);
   std::unique_ptr<AppListConfig> updated_config =
-      AppListConfigProvider::Get().CreateForAppListWidget(
-          gfx::Size(960, 600), gfx::Insets(0, 0, 56, 0) /*shelf_insets*/,
+      AppListConfigProvider::Get().CreateForTabletAppList(
+          work_area, kPreferredGridColumnsForWorkArea, available_size,
           config.get());
   ASSERT_TRUE(updated_config);
-  EXPECT_EQ(AppListConfigType::kMedium, updated_config->type());
+  EXPECT_EQ(AppListConfigType::kDense, updated_config->type());
 }
 
 TEST_F(AppListConfigProviderTest,
-       CreateScaledConfigByDisplayWorkAreaLargeLandscape) {
+       CreateScaledConfigByDisplayWorkAreaRegularLandscape) {
   // The available grid size fits the grid - created config is not scaled.
+  const gfx::Size work_area(1200, 768);
+  const gfx::Size initial_available_size(1088, 572);
   std::unique_ptr<AppListConfig> base_config =
-      AppListConfigProvider::Get().CreateForAppListWidget(
-          gfx::Size(1200, 768) /*display_work_area_size*/,
-          gfx::Insets(0, 0, 56, 0) /*shelf_insets*/, nullptr);
+      AppListConfigProvider::Get().CreateForTabletAppList(
+          work_area, kPreferredGridColumnsForWorkArea, initial_available_size,
+          nullptr);
 
   ASSERT_TRUE(base_config.get());
-  ASSERT_EQ(AppListConfigType::kLarge, base_config->type());
+  ASSERT_EQ(AppListConfigType::kRegular, base_config->type());
   ASSERT_EQ(1, base_config->scale_x());
-  ASSERT_EQ(1, base_config->scale_y());
 
   const int kMinGridWidth =
-      base_config->grid_tile_width() * base_config->preferred_cols();
-  const int kMinGridHeight =
-      base_config->grid_tile_height() * base_config->preferred_rows();
-
-  {
-    SCOPED_TRACE("Horizontal scaling");
-    std::unique_ptr<AppListConfig> config =
-        AppListConfigProvider::Get().CreateForAppListWidget(
-            gfx::Size(1200, 768) /*display_work_area_size*/,
-            gfx::Insets(0, 304, 56, 304) /*shelf_insets*/, base_config.get());
-    VerifyScaledConfig(*base_config, config.get(), 480.0f / kMinGridWidth, 1);
-  }
-
-  {
-    SCOPED_TRACE("Vertical scaling");
-    std::unique_ptr<AppListConfig> config =
-        AppListConfigProvider::Get().CreateForAppListWidget(
-            gfx::Size(1200, 600) /*display_work_area_size*/,
-            gfx::Insets(0, 0, 40, 0) /*shelf_insets*/, base_config.get());
-    VerifyScaledConfig(*base_config, config.get(), 1, 400.0f / kMinGridHeight);
-  }
-
-  {
-    SCOPED_TRACE("Horizontal and vertical scaling");
-    std::unique_ptr<AppListConfig> config =
-        AppListConfigProvider::Get().CreateForAppListWidget(
-            gfx::Size(1200, 600) /*display_work_area_size*/,
-            gfx::Insets(0, 304, 40, 304) /*shelf_insets*/, base_config.get());
-    VerifyScaledConfig(*base_config, config.get(), 480.0f / kMinGridWidth,
-                       400.0f / kMinGridHeight);
-  }
-}
-
-TEST_F(AppListConfigProviderTest,
-       CreateScaledConfigByDisplayWorkAreaMediumLandscape) {
-  // The available grid size fits the grid - created config is not scaled.
-  std::unique_ptr<AppListConfig> base_config =
-      AppListConfigProvider::Get().CreateForAppListWidget(
-          gfx::Size(960, 600) /*display_work_area_size*/,
-          gfx::Insets(0, 0, 56, 0) /*shelf_insets*/, nullptr);
-
-  ASSERT_TRUE(base_config.get());
-  ASSERT_EQ(AppListConfigType::kMedium, base_config->type());
-  ASSERT_EQ(1, base_config->scale_x());
-  ASSERT_EQ(1, base_config->scale_y());
-
-  const int kMinGridWidth =
-      base_config->grid_tile_width() * base_config->preferred_cols();
-  const int kMinGridHeight =
-      base_config->grid_tile_height() * base_config->preferred_rows();
+      base_config->grid_tile_width() * kPreferredGridColumnsForWorkArea;
 
   {
     SCOPED_TRACE("Horizontal scaling");
 
+    // Reduce available width so the grid scales down horizontally.
+    const gfx::Size available_size(480, initial_available_size.height());
     std::unique_ptr<AppListConfig> config =
-        AppListConfigProvider::Get().CreateForAppListWidget(
-            gfx::Size(960, 600) /*display_work_area_size*/,
-            gfx::Insets(0, 224, 56, 224) /*shelf_insets*/, base_config.get());
-    VerifyScaledConfig(*base_config, config.get(), 400.0f / kMinGridWidth, 1);
+        AppListConfigProvider::Get().CreateForTabletAppList(
+            work_area, kPreferredGridColumnsForWorkArea, available_size,
+            nullptr);
+    VerifyScaledConfig(*base_config, config.get(), 480.0f / kMinGridWidth);
   }
 
   {
     SCOPED_TRACE("Vertical scaling");
+
+    // Reduce available height so the grid doesn't fit `preferred_rows` - the
+    // config should not be scaled, as apps grid is expected to reduce the
+    // number of visible rows in this case.
+    const gfx::Size available_size(initial_available_size.width(), 400);
     std::unique_ptr<AppListConfig> config =
-        AppListConfigProvider::Get().CreateForAppListWidget(
-            gfx::Size(960, 500) /*display_work_area_size*/,
-            gfx::Insets(0, 0, 40, 0) /*shelf_insets*/, base_config.get());
-    VerifyScaledConfig(*base_config, config.get(), 1, 300.0f / kMinGridHeight);
+        AppListConfigProvider::Get().CreateForTabletAppList(
+            work_area, kPreferredGridColumnsForWorkArea, available_size,
+            nullptr);
+    VerifyScaledConfig(*base_config, config.get(), 1);
   }
 
   {
     SCOPED_TRACE("Horizontal and vertical scaling");
+
+    // Reduce both available width and height, and expect the grid to scale down
+    // horizontally only.
+    const gfx::Size available_size(480, 400);
     std::unique_ptr<AppListConfig> config =
-        AppListConfigProvider::Get().CreateForAppListWidget(
-            gfx::Size(960, 500) /*display_work_area_size*/,
-            gfx::Insets(0, 224, 40, 224) /*shelf_insets*/, base_config.get());
-    VerifyScaledConfig(*base_config, config.get(), 400.0f / kMinGridWidth,
-                       300.0f / kMinGridHeight);
+        AppListConfigProvider::Get().CreateForTabletAppList(
+            work_area, kPreferredGridColumnsForWorkArea, available_size,
+            nullptr);
+    VerifyScaledConfig(*base_config, config.get(), 480.0f / kMinGridWidth);
   }
 }
 
 TEST_F(AppListConfigProviderTest,
-       CreateScaledConfigByDisplayWorkAreaSmallLandscape) {
+       CreateScaledConfigByDisplayWorkAreaDenseLandscape) {
   // The available grid size fits the grid - created config is not scaled.
+  const gfx::Size work_area(960, 600);
+  const gfx::Size initial_available_size(848, 412);
   std::unique_ptr<AppListConfig> base_config =
-      AppListConfigProvider::Get().CreateForAppListWidget(
-          gfx::Size(900, 500) /*display_work_area_size*/,
-          gfx::Insets(0, 0, 56, 0) /*shelf_insets*/, nullptr);
-
+      AppListConfigProvider::Get().CreateForTabletAppList(
+          work_area, kPreferredGridColumnsForWorkArea, initial_available_size,
+          nullptr);
   ASSERT_TRUE(base_config.get());
-  ASSERT_EQ(AppListConfigType::kSmall, base_config->type());
+  ASSERT_EQ(AppListConfigType::kDense, base_config->type());
   ASSERT_EQ(1, base_config->scale_x());
-  ASSERT_EQ(1, base_config->scale_y());
 
   const int kMinGridWidth =
-      base_config->grid_tile_width() * base_config->preferred_cols();
-  const int kMinGridHeight =
-      base_config->grid_tile_height() * base_config->preferred_rows();
+      base_config->grid_tile_width() * kPreferredGridColumnsForWorkArea;
 
   {
     SCOPED_TRACE("Horizontal scaling");
 
+    // Reduce available width so the grid scales down horizontally.
+    const gfx::Size available_size(300, initial_available_size.height());
     std::unique_ptr<AppListConfig> config =
-        AppListConfigProvider::Get().CreateForAppListWidget(
-            gfx::Size(500, 480) /*display_work_area_size*/,
-            gfx::Insets(0, 24, 0, 24) /*shelf_insets*/, base_config.get());
-    VerifyScaledConfig(*base_config, config.get(), 340.0f / kMinGridWidth, 1);
+        AppListConfigProvider::Get().CreateForTabletAppList(
+            work_area, kPreferredGridColumnsForWorkArea, available_size,
+            nullptr);
+    VerifyScaledConfig(*base_config, config.get(), 300.0f / kMinGridWidth);
   }
 
   {
     SCOPED_TRACE("Vertical scaling");
+
+    // Reduce available height so the grid doesn't fit `preferred_rows` - the
+    // config should not be scaled, as apps grid is expected to reduce the
+    // number of visible rows in this case.
+    const gfx::Size available_size(initial_available_size.width(), 200);
     std::unique_ptr<AppListConfig> config =
-        AppListConfigProvider::Get().CreateForAppListWidget(
-            gfx::Size(900, 460) /*display_work_area_size*/,
-            gfx::Insets(0, 0, 40, 0) /*shelf_insets*/, base_config.get());
-    VerifyScaledConfig(*base_config, config.get(), 1, 260.0f / kMinGridHeight);
+        AppListConfigProvider::Get().CreateForTabletAppList(
+            work_area, kPreferredGridColumnsForWorkArea, available_size,
+            nullptr);
+    VerifyScaledConfig(*base_config, config.get(), 1);
   }
 
   {
     SCOPED_TRACE("Horizontal and vertical scaling");
+
+    // Reduce both available width and height, and expect the grid to scale down
+    // horizontally only.
+    const gfx::Size available_size(300, 200);
     std::unique_ptr<AppListConfig> config =
-        AppListConfigProvider::Get().CreateForAppListWidget(
-            gfx::Size(500, 460) /*display_work_area_size*/,
-            gfx::Insets(0, 24, 40, 24) /*shelf_insets*/, base_config.get());
-    VerifyScaledConfig(*base_config, config.get(), 340.0f / kMinGridWidth,
-                       260.0f / kMinGridHeight);
+        AppListConfigProvider::Get().CreateForTabletAppList(
+            work_area, kPreferredGridColumnsForWorkArea, available_size,
+            nullptr);
+    VerifyScaledConfig(*base_config, config.get(), 300.0f / kMinGridWidth);
   }
 }
 
 TEST_F(AppListConfigProviderTest,
-       CreateScaledConfigByDisplayWorkAreaLargePortrait) {
+       CreateScaledConfigByDisplayWorkAreaRegularPortrait) {
   // The available grid size fits the grid - created config is not scaled.
+  const gfx::Size work_area(768, 1200);
+  const gfx::Size initial_available_size(656, 1004);
   std::unique_ptr<AppListConfig> base_config =
-      AppListConfigProvider::Get().CreateForAppListWidget(
-          gfx::Size(768, 1200) /*display_work_area_size*/,
-          gfx::Insets(0, 0, 56, 0) /*shelf_insets*/, nullptr);
+      AppListConfigProvider::Get().CreateForTabletAppList(
+          work_area, kPreferredGridColumnsForWorkArea, initial_available_size,
+          nullptr);
 
   ASSERT_TRUE(base_config.get());
-  ASSERT_EQ(AppListConfigType::kLarge, base_config->type());
+  ASSERT_EQ(AppListConfigType::kRegular, base_config->type());
   ASSERT_EQ(1, base_config->scale_x());
-  ASSERT_EQ(1, base_config->scale_y());
 
   const int kMinGridWidth =
-      base_config->grid_tile_width() * base_config->preferred_rows();
-  const int kMinGridHeight =
-      base_config->grid_tile_height() * base_config->preferred_cols();
+      base_config->grid_tile_width() * kPreferredGridColumnsForWorkArea;
 
   {
     SCOPED_TRACE("Horizontal scaling");
+
+    // Reduce available width so the grid scales down horizontally.
+    const gfx::Size available_size(440, initial_available_size.height());
     std::unique_ptr<AppListConfig> config =
-        AppListConfigProvider::Get().CreateForAppListWidget(
-            gfx::Size(768, 1200) /*display_work_area_size*/,
-            gfx::Insets(0, 108, 56, 108) /*shelf_insets*/, base_config.get());
-    VerifyScaledConfig(*base_config, config.get(), 440.0f / kMinGridWidth, 1);
+        AppListConfigProvider::Get().CreateForTabletAppList(
+            work_area, kPreferredGridColumnsForWorkArea, available_size,
+            nullptr);
+    VerifyScaledConfig(*base_config, config.get(), 440.0f / kMinGridWidth);
   }
 
   {
     SCOPED_TRACE("Vertical scaling");
+
+    // Reduce available height so the grid doesn't fit `preferred_rows` - the
+    // config should not be scaled, as apps grid is expected to reduce the
+    // number of visible rows in this case.
+    const gfx::Size available_size(initial_available_size.width(), 532);
     std::unique_ptr<AppListConfig> config =
-        AppListConfigProvider::Get().CreateForAppListWidget(
-            gfx::Size(768, 800) /*display_work_area_size*/,
-            gfx::Insets(0, 0, 100, 0) /*shelf_insets*/, base_config.get());
-    VerifyScaledConfig(*base_config, config.get(), 1, 532.0f / kMinGridHeight);
+        AppListConfigProvider::Get().CreateForTabletAppList(
+            work_area, kPreferredGridColumnsForWorkArea, available_size,
+            nullptr);
+    VerifyScaledConfig(*base_config, config.get(), 1);
   }
 
   {
     SCOPED_TRACE("Horizontal and vertical scaling");
+
+    // Reduce both available width and height, and expect the grid to scale down
+    // horizontally only.
+    const gfx::Size available_size(440, 532);
     std::unique_ptr<AppListConfig> config =
-        AppListConfigProvider::Get().CreateForAppListWidget(
-            gfx::Size(768, 800) /*display_work_area_size*/,
-            gfx::Insets(0, 108, 100, 108) /*shelf_insets*/, base_config.get());
-    VerifyScaledConfig(*base_config, config.get(), 440.0f / kMinGridWidth,
-                       532.0f / kMinGridHeight);
+        AppListConfigProvider::Get().CreateForTabletAppList(
+            work_area, kPreferredGridColumnsForWorkArea, available_size,
+            nullptr);
+    VerifyScaledConfig(*base_config, config.get(), 440.0f / kMinGridWidth);
   }
 }
 
 TEST_F(AppListConfigProviderTest,
-       CreateScaledConfigByDisplayWorkAreaMediumPortrait) {
+       CreateScaledConfigByDisplayWorkAreaDensePortrait) {
   // The available grid size fits the grid - created config is not scaled.
+  const gfx::Size work_area(600, 960);
+  const gfx::Size initial_available_size(488, 764);
   std::unique_ptr<AppListConfig> base_config =
-      AppListConfigProvider::Get().CreateForAppListWidget(
-          gfx::Size(600, 960) /*display_work_area_size*/,
-          gfx::Insets(0, 0, 56, 0) /*shelf_insets*/, nullptr);
+      AppListConfigProvider::Get().CreateForTabletAppList(
+          work_area, kPreferredGridColumnsForWorkArea, initial_available_size,
+          nullptr);
 
   ASSERT_TRUE(base_config.get());
-  ASSERT_EQ(AppListConfigType::kMedium, base_config->type());
+  ASSERT_EQ(AppListConfigType::kDense, base_config->type());
   ASSERT_EQ(1, base_config->scale_x());
-  ASSERT_EQ(1, base_config->scale_y());
 
   const int kMinGridWidth =
-      base_config->grid_tile_width() * base_config->preferred_rows();
-  const int kMinGridHeight =
-      base_config->grid_tile_height() * base_config->preferred_cols();
+      base_config->grid_tile_width() * kPreferredGridColumnsForWorkArea;
 
   {
     SCOPED_TRACE("Horizontal scaling");
+
+    // Reduce available width so the grid scales down horizontally.
+    const gfx::Size available_size(300, initial_available_size.height());
     std::unique_ptr<AppListConfig> config =
-        AppListConfigProvider::Get().CreateForAppListWidget(
-            gfx::Size(600, 960) /*display_work_area_size*/,
-            gfx::Insets(0, 94, 0, 94) /*shelf_insets*/, base_config.get());
-    VerifyScaledConfig(*base_config, config.get(), 300.0f / kMinGridWidth, 1);
+        AppListConfigProvider::Get().CreateForTabletAppList(
+            work_area, kPreferredGridColumnsForWorkArea, available_size,
+            nullptr);
+    VerifyScaledConfig(*base_config, config.get(), 300.0f / kMinGridWidth);
   }
 
   {
     SCOPED_TRACE("Vertical scaling");
+
+    // Reduce available height so the grid doesn't fit `preferred_rows` - the
+    // config should not be scaled, as apps grid is expected to reduce the
+    // number of visible rows in this case.
+    const gfx::Size available_size(initial_available_size.width(), 360);
     std::unique_ptr<AppListConfig> config =
-        AppListConfigProvider::Get().CreateForAppListWidget(
-            gfx::Size(600, 620) /*display_work_area_size*/,
-            gfx::Insets(0, 0, 100, 0) /*shelf_insets*/, base_config.get());
-    VerifyScaledConfig(*base_config, config.get(), 1, 360.0f / kMinGridHeight);
+        AppListConfigProvider::Get().CreateForTabletAppList(
+            work_area, kPreferredGridColumnsForWorkArea, available_size,
+            nullptr);
+    VerifyScaledConfig(*base_config, config.get(), 1);
   }
 
   {
     SCOPED_TRACE("Horizontal and vertical scaling");
+
+    // Reduce both available width and height, and expect the grid to scale down
+    // horizontally only.
+    const gfx::Size available_size(300, 320);
     std::unique_ptr<AppListConfig> config =
-        AppListConfigProvider::Get().CreateForAppListWidget(
-            gfx::Size(600, 620) /*display_work_area_size*/,
-            gfx::Insets(0, 94, 100, 94) /*shelf_insets*/, base_config.get());
-    VerifyScaledConfig(*base_config, config.get(), 300.0f / kMinGridWidth,
-                       360.0f / kMinGridHeight);
-  }
-}
-
-TEST_F(AppListConfigProviderTest,
-       CreateScaledConfigByDisplayWorkAreaSmallPortrait) {
-  // The available grid size fits the grid - created config is not scaled.
-  std::unique_ptr<AppListConfig> base_config =
-      AppListConfigProvider::Get().CreateForAppListWidget(
-          gfx::Size(500, 900) /*display_work_area_size*/,
-          gfx::Insets(0, 0, 56, 0) /*shelf_insets*/, nullptr);
-
-  ASSERT_TRUE(base_config.get());
-  ASSERT_EQ(AppListConfigType::kSmall, base_config->type());
-  ASSERT_EQ(1, base_config->scale_x());
-  ASSERT_EQ(1, base_config->scale_y());
-
-  const int kMinGridWidth =
-      base_config->grid_tile_width() * base_config->preferred_rows();
-  const int kMinGridHeight =
-      base_config->grid_tile_height() * base_config->preferred_cols();
-
-  {
-    SCOPED_TRACE("Horizontal scaling");
-    std::unique_ptr<AppListConfig> config =
-        AppListConfigProvider::Get().CreateForAppListWidget(
-            gfx::Size(352, 900) /*display_work_area_size*/,
-            gfx::Insets(0, 0, 56, 0) /*shelf_insets*/, base_config.get());
-    VerifyScaledConfig(*base_config, config.get(), 240.0f / kMinGridWidth, 1);
-  }
-
-  {
-    SCOPED_TRACE("Vertical scaling");
-    std::unique_ptr<AppListConfig> config =
-        AppListConfigProvider::Get().CreateForAppListWidget(
-            gfx::Size(480, 500) /*display_work_area_size*/,
-            gfx::Insets(0, 0, 40, 0) /*shelf_insets*/, base_config.get());
-    VerifyScaledConfig(*base_config, config.get(), 1, 300.0f / kMinGridHeight);
-  }
-
-  {
-    SCOPED_TRACE("Horizontal and vertical scaling");
-    std::unique_ptr<AppListConfig> config =
-        AppListConfigProvider::Get().CreateForAppListWidget(
-            gfx::Size(352, 500) /*display_work_area_size*/,
-            gfx::Insets(0, 0, 40, 0) /*shelf_insets*/, base_config.get());
-    VerifyScaledConfig(*base_config, config.get(), 240.0f / kMinGridWidth,
-                       300.0f / kMinGridHeight);
+        AppListConfigProvider::Get().CreateForTabletAppList(
+            work_area, kPreferredGridColumnsForWorkArea, available_size,
+            nullptr);
+    VerifyScaledConfig(*base_config, config.get(), 300.0f / kMinGridWidth);
   }
 }
 

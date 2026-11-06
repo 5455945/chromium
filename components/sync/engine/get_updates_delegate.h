@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,17 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "base/memory/raw_ref.h"
 #include "components/sync/engine/cycle/nudge_tracker.h"
 #include "components/sync/engine/cycle/status_controller.h"
+#include "components/sync/engine/data_type_registry.h"
 #include "components/sync/engine/events/protocol_event.h"
-#include "components/sync/engine/model_type_registry.h"
-#include "components/sync/protocol/sync.pb.h"
+
+namespace sync_pb {
+class GetUpdatesMessage;
+class ClientToServerMessage;
+enum SyncEnums_GetUpdatesOrigin : int;
+}  // namespace sync_pb
 
 namespace syncer {
 
@@ -23,6 +28,10 @@ namespace syncer {
 class GetUpdatesDelegate {
  public:
   GetUpdatesDelegate() = default;
+
+  GetUpdatesDelegate(const GetUpdatesDelegate&) = delete;
+  GetUpdatesDelegate& operator=(const GetUpdatesDelegate&) = delete;
+
   virtual ~GetUpdatesDelegate() = default;
 
   // Populates GetUpdate message fields that depend on GetUpdates request type.
@@ -33,14 +42,17 @@ class GetUpdatesDelegate {
       base::Time timestamp,
       const sync_pb::ClientToServerMessage& request) const = 0;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(GetUpdatesDelegate);
+  virtual bool IsNotificationInfoRequired() const = 0;
 };
 
 // Functionality specific to the normal GetUpdate request.
 class NormalGetUpdatesDelegate : public GetUpdatesDelegate {
  public:
   explicit NormalGetUpdatesDelegate(const NudgeTracker& nudge_tracker);
+
+  NormalGetUpdatesDelegate(const NormalGetUpdatesDelegate&) = delete;
+  NormalGetUpdatesDelegate& operator=(const NormalGetUpdatesDelegate&) = delete;
+
   ~NormalGetUpdatesDelegate() override;
 
   // Uses the member NudgeTracker to populate some fields of this GU message.
@@ -51,17 +63,22 @@ class NormalGetUpdatesDelegate : public GetUpdatesDelegate {
       base::Time timestamp,
       const sync_pb::ClientToServerMessage& request) const override;
 
- private:
-  const NudgeTracker& nudge_tracker_;
+  bool IsNotificationInfoRequired() const override;
 
-  DISALLOW_COPY_AND_ASSIGN(NormalGetUpdatesDelegate);
+ private:
+  const raw_ref<const NudgeTracker> nudge_tracker_;
 };
 
 // Functionality specific to the configure GetUpdate request.
 class ConfigureGetUpdatesDelegate : public GetUpdatesDelegate {
  public:
   explicit ConfigureGetUpdatesDelegate(
-      sync_pb::SyncEnums::GetUpdatesOrigin origin);
+      sync_pb::SyncEnums_GetUpdatesOrigin origin);
+
+  ConfigureGetUpdatesDelegate(const ConfigureGetUpdatesDelegate&) = delete;
+  ConfigureGetUpdatesDelegate& operator=(const ConfigureGetUpdatesDelegate&) =
+      delete;
+
   ~ConfigureGetUpdatesDelegate() override;
 
   // Sets the 'source' and 'origin' fields for this request.
@@ -72,16 +89,20 @@ class ConfigureGetUpdatesDelegate : public GetUpdatesDelegate {
       base::Time timestamp,
       const sync_pb::ClientToServerMessage& request) const override;
 
- private:
-  const sync_pb::SyncEnums::GetUpdatesOrigin origin_;
+  bool IsNotificationInfoRequired() const override;
 
-  DISALLOW_COPY_AND_ASSIGN(ConfigureGetUpdatesDelegate);
+ private:
+  const sync_pb::SyncEnums_GetUpdatesOrigin origin_;
 };
 
 // Functionality specific to the poll GetUpdate request.
 class PollGetUpdatesDelegate : public GetUpdatesDelegate {
  public:
   PollGetUpdatesDelegate();
+
+  PollGetUpdatesDelegate(const PollGetUpdatesDelegate&) = delete;
+  PollGetUpdatesDelegate& operator=(const PollGetUpdatesDelegate&) = delete;
+
   ~PollGetUpdatesDelegate() override;
 
   // Sets the 'source' and 'origin' to indicate this is a poll request.
@@ -92,8 +113,7 @@ class PollGetUpdatesDelegate : public GetUpdatesDelegate {
       base::Time timestamp,
       const sync_pb::ClientToServerMessage& request) const override;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(PollGetUpdatesDelegate);
+  bool IsNotificationInfoRequired() const override;
 };
 
 }  // namespace syncer

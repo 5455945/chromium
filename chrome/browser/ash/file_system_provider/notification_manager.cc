@@ -1,23 +1,24 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/file_system_provider/notification_manager.h"
 
-#include "base/macros.h"
+#include <memory>
+
+#include "ash/constants/notifier_catalogs.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/extensions/chrome_app_icon_loader.h"
-#include "chrome/browser/notifications/notification_display_service.h"
 #include "chrome/browser/ui/ash/multi_user/multi_user_util.h"
 #include "components/account_id/account_id.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/chromeos/strings/grit/ui_chromeos_strings.h"
+#include "ui/message_center/message_center.h"
 #include "ui/message_center/public/cpp/notification.h"
 #include "ui/message_center/public/cpp/notification_types.h"
 #include "ui/message_center/public/cpp/notifier_id.h"
 
-namespace ash {
-namespace file_system_provider {
+namespace ash::file_system_provider {
 namespace {
 
 // Extension icon size for the notification.
@@ -32,15 +33,11 @@ NotificationManager::NotificationManager(
       file_system_info_(file_system_info),
       icon_loader_(
           new extensions::ChromeAppIconLoader(profile, kIconSize, this)) {
-  DCHECK_EQ(ProviderId::EXTENSION, file_system_info.provider_id().GetType());
+  CHECK_EQ(ProviderId::EXTENSION, file_system_info.provider_id().GetType(),
+           base::NotFatalUntil::M160);
 }
 
-NotificationManager::~NotificationManager() {
-  if (callbacks_.size()) {
-    NotificationDisplayService::GetForProfile(profile_)->Close(
-        NotificationHandler::Type::TRANSIENT, GetNotificationId());
-  }
-}
+NotificationManager::~NotificationManager() = default;
 
 void NotificationManager::ShowUnresponsiveNotification(
     int id,
@@ -55,13 +52,13 @@ void NotificationManager::HideUnresponsiveNotification(int id) {
   if (callbacks_.size()) {
     ShowNotification();
   } else {
-    NotificationDisplayService::GetForProfile(profile_)->Close(
-        NotificationHandler::Type::TRANSIENT, GetNotificationId());
+    message_center::MessageCenter::Get()->RemoveNotification(
+        GetNotificationId(), /*by_user=*/false);
   }
 }
 
-void NotificationManager::Click(const absl::optional<int>& button_index,
-                                const absl::optional<std::u16string>& reply) {
+void NotificationManager::Click(const std::optional<int>& button_index,
+                                const std::optional<std::u16string>& reply) {
   if (!button_index)
     return;
 
@@ -72,9 +69,12 @@ void NotificationManager::Close(bool by_user) {
   OnNotificationResult(CONTINUE);
 }
 
-void NotificationManager::OnAppImageUpdated(const std::string& id,
-                                            const gfx::ImageSkia& image) {
-  extension_icon_ = gfx::Image(image);
+void NotificationManager::OnAppImageUpdated(
+    const std::string& id,
+    const gfx::ImageSkia& image,
+    bool is_placeholder_icon,
+    const std::optional<gfx::ImageSkia>& badge_image) {
+  extension_icon_ = ui::ImageModel::FromImageSkia(image);
   ShowNotification();
 }
 
@@ -87,13 +87,13 @@ void NotificationManager::ShowNotification() {
     icon_loader_->FetchImage(file_system_info_.provider_id().GetExtensionId());
 
   message_center::RichNotificationData rich_notification_data;
-  rich_notification_data.buttons.push_back(
-      message_center::ButtonInfo(l10n_util::GetStringUTF16(
-          IDS_FILE_SYSTEM_PROVIDER_UNRESPONSIVE_ABORT_BUTTON)));
+  rich_notification_data.buttons.emplace_back(l10n_util::GetStringUTF16(
+      IDS_FILE_SYSTEM_PROVIDER_UNRESPONSIVE_ABORT_BUTTON));
 
   message_center::NotifierId notifier_id(
       message_center::NotifierType::SYSTEM_COMPONENT,
-      "chrome://file_system_provider_notification");
+      "chrome://file_system_provider_notification",
+      NotificationCatalogName::kFileSystemProvider);
   notifier_id.profile_id =
       multi_user_util::GetAccountIdFromProfile(profile_).GetUserEmail();
 
@@ -111,8 +111,8 @@ void NotificationManager::ShowNotification() {
           weak_factory_.GetWeakPtr()));
   notification.SetSystemPriority();
 
-  NotificationDisplayService::GetForProfile(profile_)->Display(
-      NotificationHandler::Type::TRANSIENT, notification, /*metadata=*/nullptr);
+  message_center::MessageCenter::Get()->AddNotification(
+      std::make_unique<message_center::Notification>(std::move(notification)));
 }
 
 void NotificationManager::OnNotificationResult(NotificationResult result) {
@@ -125,5 +125,4 @@ void NotificationManager::OnNotificationResult(NotificationResult result) {
   }
 }
 
-}  // namespace file_system_provider
-}  // namespace ash
+}  // namespace ash::file_system_provider

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,14 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "ash/app_list/views/search_result_base_view.h"
 #include "ash/app_list/views/search_result_container_view.h"
 #include "ash/ash_export.h"
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 
 namespace ash {
 
@@ -21,7 +22,8 @@ class SearchResultContainerView;
 
 // This alias is intended to clarify the intended use of this class within the
 // context of this controller.
-using ResultSelectionModel = std::vector<SearchResultContainerView*>;
+using ResultSelectionModel =
+    std::vector<raw_ptr<SearchResultContainerView, VectorExperimental>>;
 
 // Stores and organizes the details for the 'coordinates' of the selected
 // result. This includes all information to determine exactly where a result is,
@@ -69,7 +71,8 @@ class ASH_EXPORT ResultSelectionController {
     kNone,
 
     // The selection has not changed because the selection would cycle.
-    kSelectionCycleRejected,
+    kSelectionCycleBeforeFirstResult,
+    kSelectionCycleAfterLastResult,
 
     // The currently selected result has changed.
     //
@@ -82,6 +85,11 @@ class ASH_EXPORT ResultSelectionController {
   ResultSelectionController(
       const ResultSelectionModel* result_container_views,
       const base::RepeatingClosure& selection_change_callback);
+
+  ResultSelectionController(const ResultSelectionController&) = delete;
+  ResultSelectionController& operator=(const ResultSelectionController&) =
+      delete;
+
   ~ResultSelectionController();
 
   // Returns the currently selected result.
@@ -96,6 +104,10 @@ class ASH_EXPORT ResultSelectionController {
   ResultLocationDetails* selected_location_details() {
     return selected_location_details_.get();
   }
+
+  // Returns whether `selected_result_` locates at the first available location.
+  // Returns false if there is no selected result.
+  bool IsSelectedResultAtFirstAvailableLocation();
 
   // Calls |SetSelection| using the result of |GetNextResultLocation|.
   MoveResult MoveSelection(const ui::KeyEvent& event);
@@ -145,8 +157,7 @@ class ASH_EXPORT ResultSelectionController {
 
   // Returns the location of a result with the provided ID.
   // Returns nullptr if the result cannot be found.
-  std::unique_ptr<ResultLocationDetails> FindResultWithId(
-      const std::string& id);
+  std::unique_ptr<ResultLocationDetails> FindResultWithId(std::string_view id);
 
   // Updates a |ResultLocationDetails| to a new container, updating most
   // attributes based on |result_selection_model_|.
@@ -155,7 +166,7 @@ class ASH_EXPORT ResultSelectionController {
 
   // Container views to be traversed by this controller.
   // Owned by |SearchResultPageView|.
-  const ResultSelectionModel* result_selection_model_;
+  raw_ptr<const ResultSelectionModel> result_selection_model_;
 
   // Returns true if the container at the given |index| within
   // |result_selection_model_| responds true to
@@ -167,7 +178,7 @@ class ASH_EXPORT ResultSelectionController {
   base::RepeatingClosure selection_change_callback_;
 
   // The currently selected result view.
-  SearchResultBaseView* selected_result_ = nullptr;
+  raw_ptr<SearchResultBaseView, DanglingUntriaged> selected_result_ = nullptr;
 
   // The currently selected result ID.
   std::string selected_result_id_;
@@ -177,8 +188,6 @@ class ASH_EXPORT ResultSelectionController {
 
   // The |ResultLocationDetails| for the currently selected result view
   std::unique_ptr<ResultLocationDetails> selected_location_details_;
-
-  DISALLOW_COPY_AND_ASSIGN(ResultSelectionController);
 };
 
 }  // namespace ash

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,15 +10,16 @@
 #include "ash/constants/ash_features.h"
 #include "base/containers/flat_map.h"
 #include "base/metrics/field_trial_params.h"
+#include "base/no_destructor.h"
+#include "chrome/browser/ash/power/ml/smart_dim/example_preprocessing.h"
+#include "chrome/browser/ash/power/ml/smart_dim/example_preprocessor.pb.h"
 #include "chrome/browser/ash/power/ml/smart_dim/metrics.h"
 #include "chrome/browser/ash/power/ml/smart_dim/ml_agent_util.h"
+#include "chrome/browser/ash/power/ml/smart_dim/ranker_example.pb.h"
 #include "chrome/browser/ash/power/ml/user_activity_ukm_logger_helpers.h"
 #include "chromeos/services/machine_learning/public/mojom/graph_executor.mojom.h"
 #include "chromeos/services/machine_learning/public/mojom/model.mojom.h"
 #include "chromeos/services/machine_learning/public/mojom/tensor.mojom.h"
-#include "components/assist_ranker/example_preprocessing.h"
-#include "components/assist_ranker/proto/example_preprocessor.pb.h"
-#include "components/assist_ranker/proto/ranker_example.pb.h"
 
 namespace ash {
 namespace power {
@@ -44,7 +45,7 @@ int ScoreToProbability(float score) {
 void ExecuteCallback(const double threshold,
                      DimDecisionCallback decision_callback,
                      ExecuteResult result,
-                     absl::optional<std::vector<TensorPtr>> outputs) {
+                     std::optional<std::vector<TensorPtr>> outputs) {
   UserActivityEvent::ModelPrediction prediction;
 
   if (result != ExecuteResult::OK) {
@@ -64,7 +65,7 @@ void ExecuteCallback(const double threshold,
     LogPowerMLSmartDimModelResult(SmartDimModelResult::kSuccess);
   }
 
-  std::move(decision_callback).Run(prediction);
+  std::move(decision_callback).Run(std::make_optional(prediction));
 }
 
 // Populates |example| using |features|. Returns true if no error occurred.
@@ -215,7 +216,7 @@ SmartDimModelResult PreprocessInput(
     const assist_ranker::ExamplePreprocessorConfig& preprocessor_config,
     const UserActivityEvent::Features& features,
     std::vector<float>* vectorized_features) {
-  DCHECK(vectorized_features);
+  CHECK(vectorized_features, base::NotFatalUntil::M160);
 
   assist_ranker::RankerExample ranker_example;
   if (!PopulateRankerExample(features, &ranker_example)) {
@@ -265,20 +266,20 @@ void SmartDimMlAgent::RequestDimDecision(
     const UserActivityEvent::Features& features,
     DimDecisionCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  dim_decision_callback_.Reset(std::move(callback));
+  cancelable_dim_decision_callback_.Reset(std::move(callback));
 
   auto* worker = GetWorker();
 
   UserActivityEvent::ModelPrediction prediction;
   prediction.set_response(UserActivityEvent::ModelPrediction::MODEL_ERROR);
 
-  DCHECK(worker->GetPreprocessorConfig());
+  CHECK(worker->GetPreprocessorConfig(), base::NotFatalUntil::M160);
   std::vector<float> vectorized_features;
   auto preprocess_result = PreprocessInput(*(worker->GetPreprocessorConfig()),
                                            features, &vectorized_features);
   if (preprocess_result != SmartDimModelResult::kSuccess) {
     LogPowerMLSmartDimModelResult(preprocess_result);
-    dim_decision_callback_.callback().Run(prediction);
+    cancelable_dim_decision_callback_.callback().Run(prediction);
     return;
   }
 
@@ -286,21 +287,19 @@ void SmartDimMlAgent::RequestDimDecision(
     DVLOG(1) << "Smart Dim vectorized features not of correct size.";
     LogPowerMLSmartDimModelResult(
         SmartDimModelResult::kMismatchedFeatureSizeError);
-    dim_decision_callback_.callback().Run(prediction);
+    cancelable_dim_decision_callback_.callback().Run(prediction);
     return;
   }
 
-  DCHECK(worker->GetExecutor());
+  CHECK(worker->GetExecutor(), base::NotFatalUntil::M160);
   // Prepare the input tensor.
   base::flat_map<std::string, TensorPtr> inputs;
   auto tensor = Tensor::New();
   tensor->shape = Int64List::New();
   tensor->shape->value = std::vector<int64_t>(
       {1, static_cast<int64_t>(vectorized_features.size())});
-  tensor->data = ValueList::New();
-  tensor->data->set_float_list(FloatList::New());
-  tensor->data->get_float_list()->value = std::vector<double>(
-      std::begin(vectorized_features), std::end(vectorized_features));
+  tensor->data = ValueList::NewFloatList(FloatList::New(std::vector<double>(
+      std::begin(vectorized_features), std::end(vectorized_features))));
   inputs.emplace(std::string(kSmartDimInputNodeName), std::move(tensor));
 
   std::vector<std::string> outputs({std::string(kSmartDimOutputNodeName)});
@@ -319,12 +318,19 @@ void SmartDimMlAgent::RequestDimDecision(
   worker->GetExecutor()->Execute(
       std::move(inputs), std::move(outputs),
       base::BindOnce(&ExecuteCallback, dim_threshold,
-                     dim_decision_callback_.callback()));
+                     cancelable_dim_decision_callback_.callback()));
 }
 
 void SmartDimMlAgent::CancelPreviousRequest() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  dim_decision_callback_.Cancel();
+  auto decision_callback{cancelable_dim_decision_callback_.callback()};
+  // If the callback has not already been run, invoke it with an empty model
+  // prediction.
+  if (!decision_callback.is_null()) {
+    std::move(decision_callback)
+        .Run(std::optional<UserActivityEvent::ModelPrediction>());
+  }
+  cancelable_dim_decision_callback_.Cancel();
 }
 
 void SmartDimMlAgent::ResetForTesting() {

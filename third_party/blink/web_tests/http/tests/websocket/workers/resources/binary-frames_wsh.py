@@ -1,8 +1,6 @@
-from six.moves import range
-
-from mod_pywebsocket import common
-from mod_pywebsocket import stream
-from mod_pywebsocket import util
+from pywebsocket3 import common
+from pywebsocket3 import stream
+from pywebsocket3 import util
 
 
 def web_socket_do_extra_handshake(request):
@@ -14,8 +12,9 @@ def web_socket_transfer_data(request):
     for message in messages_to_send:
         # FIXME: Should use better API to send binary messages when pywebsocket
         # supports it.
-        header = stream.create_header(common.OPCODE_BINARY,
-                                      len(message), 1, 0, 0, 0, 0)
+        header = stream.create_header(
+            common.OPCODE_BINARY, len(message), 1, 0, 0, 0, 0
+        )
         request.connection.write(header + message)
 
 

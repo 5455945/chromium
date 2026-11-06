@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -45,34 +45,39 @@ size_t AudioDiscardHelper::TimeDeltaToFrames(base::TimeDelta duration) const {
 void AudioDiscardHelper::Reset(size_t initial_discard) {
   discard_frames_ = initial_discard;
   last_input_timestamp_ = kNoTimestamp;
-  timestamp_helper_.SetBaseTimestamp(kNoTimestamp);
+  timestamp_helper_.Reset();
   delayed_discard_padding_ = DecoderBuffer::DiscardPadding();
 }
 
-bool AudioDiscardHelper::ProcessBuffers(const DecoderBuffer& encoded_buffer,
+bool AudioDiscardHelper::ProcessBuffers(const TimeInfo& time_info,
                                         AudioBuffer* decoded_buffer) {
-  DCHECK(!encoded_buffer.end_of_stream());
-  DCHECK(encoded_buffer.timestamp() != kNoTimestamp);
+  DCHECK(time_info.timestamp != kNoTimestamp);
 
   // Issue a debug warning when we see non-monotonic timestamps.  Only a warning
   // to allow chained OGG playback.
-  WarnOnNonMonotonicTimestamps(last_input_timestamp_,
-                               encoded_buffer.timestamp());
-  last_input_timestamp_ = encoded_buffer.timestamp();
+  WarnOnNonMonotonicTimestamps(last_input_timestamp_, time_info.timestamp);
+  last_input_timestamp_ = time_info.timestamp;
 
   // If this is the first buffer seen, setup the timestamp helper.
   if (!initialized()) {
-    // Clamp the base timestamp to zero.
-    timestamp_helper_.SetBaseTimestamp(
-        std::max(base::TimeDelta(), encoded_buffer.timestamp()));
+    timestamp_helper_.SetBaseTimestamp(time_info.timestamp);
   }
   DCHECK(initialized());
 
   if (!decoded_buffer) {
     // If there's a one buffer delay for decoding, we need to save it so it can
     // be processed with the next decoder buffer.
-    if (delayed_discard_)
-      delayed_discard_padding_ = encoded_buffer.discard_padding();
+    if (delayed_discard_) {
+      delayed_discard_padding_ =
+          time_info.discard_padding.value_or(DecoderBuffer::DiscardPadding());
+    }
+
+    // When we have a negative timestamp and a fully discarded buffer, we reset
+    // the timestamp helper to avoid incorrectly pinning future buffers. The
+    // first timestamp should be based on the first buffer with actual output.
+    if (timestamp_helper_.GetTimestamp() < base::TimeDelta()) {
+      timestamp_helper_.Reset();
+    }
     return false;
   }
 
@@ -81,7 +86,7 @@ bool AudioDiscardHelper::ProcessBuffers(const DecoderBuffer& encoded_buffer,
   // If there's a one buffer delay for decoding, pick up the last encoded
   // buffer's discard padding for processing with the current decoded buffer.
   DecoderBuffer::DiscardPadding current_discard_padding =
-      encoded_buffer.discard_padding();
+      time_info.discard_padding.value_or(DecoderBuffer::DiscardPadding());
   if (delayed_discard_) {
     // For simplicity disallow cases where decoder delay is present with delayed
     // discard (no codecs at present).  Doing so allows us to avoid complexity
@@ -98,6 +103,12 @@ bool AudioDiscardHelper::ProcessBuffers(const DecoderBuffer& encoded_buffer,
     DVLOG(1) << "Initial discard of " << frames_to_discard << " out of "
              << decoded_frames << " frames.";
 
+    // In cases where our timestamp is negative, we need to adjust forwards for
+    // the frames we end up discarding.
+    if (timestamp_helper_.GetTimestamp() < base::TimeDelta()) {
+      timestamp_helper_.AddFrames(frames_to_discard);
+    }
+
     // If everything would be discarded, indicate a new buffer is required.
     if (frames_to_discard == decoded_frames) {
       // For simplicity, we just drop any discard padding if |discard_frames_|
@@ -111,6 +122,7 @@ bool AudioDiscardHelper::ProcessBuffers(const DecoderBuffer& encoded_buffer,
   // Process any delayed end discard from the previous buffer.
   if (delayed_end_discard_ > 0) {
     DCHECK_GT(decoder_delay_, 0u);
+    DCHECK_GE(timestamp_helper_.GetTimestamp(), base::TimeDelta());
 
     const size_t discard_index = decoder_delay_ - delayed_end_discard_;
     DCHECK_LT(discard_index, decoder_delay_);
@@ -127,7 +139,7 @@ bool AudioDiscardHelper::ProcessBuffers(const DecoderBuffer& encoded_buffer,
   }
 
   // Handle front discard padding.
-  if (current_discard_padding.first > base::TimeDelta()) {
+  if (current_discard_padding.first.is_positive()) {
     const size_t decoded_frames = decoded_buffer->frame_count();
 
     // If a complete buffer discard is requested and there's no decoder delay,
@@ -136,7 +148,7 @@ bool AudioDiscardHelper::ProcessBuffers(const DecoderBuffer& encoded_buffer,
     // duration of the encoded buffer.
     const size_t start_frames_to_discard =
         current_discard_padding.first == kInfiniteDuration
-            ? (decoder_delay_ > 0 ? TimeDeltaToFrames(encoded_buffer.duration())
+            ? (decoder_delay_ > 0 ? TimeDeltaToFrames(time_info.duration)
                                   : decoded_frames)
             : TimeDeltaToFrames(current_discard_padding.first);
 
@@ -175,6 +187,12 @@ bool AudioDiscardHelper::ProcessBuffers(const DecoderBuffer& encoded_buffer,
     DVLOG(1) << "Front discard of " << frames_to_discard << " out of "
              << decoded_frames << " frames starting at " << discard_start;
 
+    // In cases where our timestamp is negative, we need to adjust forwards for
+    // the frames we end up discarding.
+    if (timestamp_helper_.GetTimestamp() < base::TimeDelta()) {
+      timestamp_helper_.AddFrames(frames_to_discard);
+    }
+
     // If everything would be discarded, indicate a new buffer is required.
     if (frames_to_discard == decoded_frames) {
       // The buffer should not have been marked with end discard if the front
@@ -191,7 +209,7 @@ bool AudioDiscardHelper::ProcessBuffers(const DecoderBuffer& encoded_buffer,
   }
 
   // Handle end discard padding.
-  if (current_discard_padding.second > base::TimeDelta()) {
+  if (current_discard_padding.second.is_positive()) {
     const size_t decoded_frames = decoded_buffer->frame_count();
     size_t end_frames_to_discard =
         TimeDeltaToFrames(current_discard_padding.second);

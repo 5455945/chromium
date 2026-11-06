@@ -33,11 +33,12 @@
 
 #include "third_party/blink/renderer/core/timing/performance.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 
 namespace blink {
 
+class AnimationFrameTimingInfo;
 class ExecutionContext;
 class WorkerGlobalScope;
 
@@ -46,8 +47,13 @@ class WorkerPerformance final : public Performance {
   explicit WorkerPerformance(WorkerGlobalScope*);
 
   ExecutionContext* GetExecutionContext() const override {
-    return execution_context_;
+    return execution_context_.Get();
   }
+  uint64_t interactionCount() const override { return 0; }
+
+  // Queues a long-animation-frame entry (a worker congested moment) produced by
+  // the worker's AnimationFrameTimingMonitor onto this performance timeline.
+  void QueueLongAnimationFrameTiming(AnimationFrameTimingInfo*);
 
   void Trace(Visitor*) const override;
 

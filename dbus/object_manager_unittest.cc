@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,16 +8,20 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/run_loop.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
 #include "base/threading/thread.h"
 #include "base/threading/thread_restrictions.h"
+#include "base/time/time.h"
 #include "dbus/bus.h"
 #include "dbus/object_path.h"
 #include "dbus/object_proxy.h"
@@ -65,7 +69,7 @@ class ObjectManagerTest
 
   void SetUp() override {
     // Make the main thread not to allow IO.
-    base::ThreadRestrictions::SetIOAllowed(false);
+    disallow_blocking_.emplace();
 
     // Start the D-Bus thread.
     dbus_thread_ = std::make_unique<base::Thread>("D-Bus Thread");
@@ -86,7 +90,7 @@ class ObjectManagerTest
     bus_options.bus_type = Bus::SESSION;
     bus_options.connection_type = Bus::PRIVATE;
     bus_options.dbus_task_runner = dbus_thread_->task_runner();
-    bus_ = new Bus(bus_options);
+    bus_ = new Bus(std::move(bus_options));
     ASSERT_TRUE(bus_->HasDBusThread());
 
     object_manager_ = bus_->GetObjectManager(
@@ -103,11 +107,9 @@ class ObjectManagerTest
     // Shut down the service.
     test_service_->ShutdownAndBlock();
 
-    // Reset to the default.
-    base::ThreadRestrictions::SetIOAllowed(true);
-
     // Stopping a thread is considered an IO operation, so do this after
     // allowing IO.
+    disallow_blocking_.reset();
     test_service_->Stop();
 
     base::RunLoop().RunUntilIdle();
@@ -207,10 +209,11 @@ class ObjectManagerTest
   }
 
   base::test::SingleThreadTaskEnvironment task_environment_;
+  std::optional<base::ScopedDisallowBlocking> disallow_blocking_;
   std::unique_ptr<base::RunLoop> run_loop_;
   std::unique_ptr<base::Thread> dbus_thread_;
   scoped_refptr<Bus> bus_;
-  ObjectManager* object_manager_;
+  raw_ptr<ObjectManager> object_manager_;
   std::unique_ptr<TestService> test_service_;
 
   std::string last_name_value_;
@@ -411,7 +414,7 @@ TEST_F(ObjectManagerTest, DISABLED_PropertiesChangedAsObjectsReceived) {
       FROM_HERE,
       base::BindOnce(&ObjectManagerTest::PropertiesChangedTestTimeout,
                      base::Unretained(this)),
-      base::TimeDelta::FromSeconds(2));
+      base::Seconds(2));
 
   while (last_name_value_ != "ChangedTestServiceName" && !timeout_expired_) {
     run_loop_ = std::make_unique<base::RunLoop>();

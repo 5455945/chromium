@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,11 +12,14 @@ namespace blink {
 class LayoutThemeAndroid final : public LayoutThemeMobile {
  public:
   static scoped_refptr<LayoutTheme> Create();
-  bool DelegatesMenuListRendering() const override { return true; }
+  Color SystemColor(CSSValueID,
+                    const ColorThemeInfo& theme_info) const override;
   Color PlatformActiveSelectionBackgroundColor(
       mojom::blink::ColorScheme color_scheme) const override;
   Color PlatformActiveSelectionForegroundColor(
       mojom::blink::ColorScheme color_scheme) const override;
+  Color PlatformGrammarMarkerUnderlineColor() const override;
+  Color PlatformSpellingMarkerUnderlineColor() const override;
 
  private:
   ~LayoutThemeAndroid() override;

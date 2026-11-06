@@ -1,6 +1,8 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "base/win/scoped_variant.h"
 
 #include <stdint.h>
 #include <wrl/client.h>
@@ -9,7 +11,6 @@
 #include <utility>
 
 #include "base/win/dispatch_stub.h"
-#include "base/win/scoped_variant.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using base::win::test::DispatchStub;
@@ -147,7 +148,7 @@ TEST(ScopedVariantTest, SetSigned1Byte) {
 
 TEST(ScopedVariantTest, SetSigned2Byte) {
   ScopedVariant var;
-  var.Set(static_cast<short>(123));
+  var.Set(static_cast<int16_t>(123));
   ExpectVariantType(VT_I2, var);
   EXPECT_EQ(123, V_I2(var.ptr()));
 }
@@ -175,7 +176,7 @@ TEST(ScopedVariantTest, SetUnsigned1Byte) {
 
 TEST(ScopedVariantTest, SetUnsigned2Byte) {
   ScopedVariant var;
-  var.Set(static_cast<unsigned short>(123));
+  var.Set(static_cast<uint16_t>(123));
   ExpectVariantType(VT_UI2, var);
   EXPECT_EQ(123u, V_UI2(var.ptr()));
 }

@@ -1,350 +1,292 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#import <UIKit/UIKit.h>
+
+#import "base/apple/foundation_util.h"
 #import "base/test/ios/wait_util.h"
-#include "components/autofill/ios/form_util/form_activity_tab_helper.h"
-#import "components/autofill/ios/form_util/form_handlers_java_script_feature.h"
-#import "components/autofill/ios/form_util/form_util_java_script_feature.h"
-#include "components/autofill/ios/form_util/test_form_activity_observer.h"
-#import "ios/web/public/browser_state.h"
-#import "ios/web/public/js_messaging/web_frame_util.h"
-#import "ios/web/public/js_messaging/web_frames_manager.h"
-#import "ios/web/public/test/fakes/fake_web_client.h"
+#import "base/time/time.h"
+#import "components/autofill/ios/browser/autofill_util.h"
+#import "components/autofill/ios/form_util/autofill_test_with_web_state.h"
+#import "ios/web/public/js_messaging/web_view_js_utils.h"
+#import "ios/web/public/test/javascript_test.h"
 #import "ios/web/public/test/js_test_util.h"
-#import "ios/web/public/test/web_test_with_web_state.h"
-#include "testing/gtest/include/gtest/gtest.h"
+#import "testing/gtest_mac.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+using web::test::ExecuteJavaScript;
+using web::test::ExecuteJavaScriptInWebView;
 
-using base::test::ios::WaitUntilConditionOrTimeout;
-using base::test::ios::kWaitForJSCompletionTimeout;
+NSString* const kMessageHandlerName = @"TestHandler";
 
-namespace {
-const int kTrackFormMutationsDelayInMs = 10;
+//
+@interface FakeScriptMessageHandlerForFormTesting
+    : NSObject <WKScriptMessageHandler>
+
+@property(nonatomic, strong) WKScriptMessage* lastReceivedMessage;
+@property(nonatomic, assign) int messageCount;
+
+@end
+
+@implementation FakeScriptMessageHandlerForFormTesting
+
+- (void)userContentController:(WKUserContentController*)userContentController
+      didReceiveScriptMessage:(WKScriptMessage*)message {
+  _lastReceivedMessage = message;
+  ++_messageCount;
 }
 
-// Text fixture to test password controller.
-class FormJsTest : public web::WebTestWithWebState {
- public:
+@end
+
+namespace autofill {
+
+// Text fixture to test form.js.
+class FormJsTest : public web::JavascriptTest {
+ protected:
   FormJsTest()
-      : web::WebTestWithWebState(std::make_unique<web::FakeWebClient>()) {
-    web::FakeWebClient* web_client =
-        static_cast<web::FakeWebClient*>(GetWebClient());
-    web_client->SetJavaScriptFeatures(
-        {autofill::FormUtilJavaScriptFeature::GetInstance(),
-         autofill::FormHandlersJavaScriptFeature::GetInstance()});
+      : handler_([[FakeScriptMessageHandlerForFormTesting alloc] init]) {
+    // Add an handler to get messages.
+    [web_view().configuration.userContentController
+        addScriptMessageHandler:handler_
+                           name:kMessageHandlerName];
   }
 
   void SetUp() override {
-    web::WebTestWithWebState::SetUp();
-    observer_ =
-        std::make_unique<autofill::TestFormActivityObserver>(web_state());
-    autofill::FormActivityTabHelper::GetOrCreateForWebState(web_state())
-        ->AddObserver(observer_.get());
+    web::JavascriptTest::SetUp();
+
+    AddWebViewToKeyWindow();
+
+    // Inject default feature flag placeholders before loading scripts.
+    WKUserScript* script = [[WKUserScript alloc]
+          initWithSource:autofill::test::GetAutofillTestPlaceholders()
+           injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+        forMainFrameOnly:NO];
+    [web_view().configuration.userContentController addUserScript:script];
+
+    AddGCrWebScript();
+    AddUserScript(@"autofill_form_features");
+    AddUserScript(@"form_util_tests");
   }
 
   void TearDown() override {
-    autofill::FormActivityTabHelper::GetOrCreateForWebState(web_state())
-        ->RemoveObserver(observer_.get());
-    web::WebTestWithWebState::TearDown();
+    [web_view() removeFromSuperview];
+    web::JavascriptTest::TearDown();
   }
 
- protected:
-  web::WebFrame* WaitForMainFrame() {
-    __block web::WebFrame* main_frame = nullptr;
-    EXPECT_TRUE(WaitUntilConditionOrTimeout(kWaitForJSCompletionTimeout, ^bool {
-      main_frame = web_state()->GetWebFramesManager()->GetMainWebFrame();
-      return main_frame != nullptr;
-    }));
-    return main_frame;
+  void AddWebViewToKeyWindow() {
+    for (UIScene* scene in UIApplication.sharedApplication.connectedScenes) {
+      UIWindowScene* window_scene = base::apple::ObjCCast<UIWindowScene>(scene);
+      if (!window_scene) {
+        continue;
+      }
+      for (UIWindow* window in window_scene.windows) {
+        if (window.isKeyWindow) {
+          [window.rootViewController.view addSubview:web_view()];
+          return;
+        }
+      }
+    }
   }
 
-  void TrackFormMutations(web::WebFrame* frame) {
-    // Override |__gCrWeb.formHandlers.trackFormMutations| to set a boolean
-    // trackFormMutationsComplete after the function is called.
-    ExecuteJavaScript(
-        @"var trackFormMutationsComplete = false;"
-        @"var originalTrackFormMutations = "
-        @"__gCrWeb.formHandlers.trackFormMutations;"
-        @"__gCrWeb.formHandlers.trackFormMutations = function() {"
-        @"  var result = originalTrackFormMutations.apply(this, arguments);"
-        @"  trackFormMutationsComplete = true;"
-        @"  return result;"
-        @"};");
-
-    autofill::FormHandlersJavaScriptFeature::GetInstance()->TrackFormMutations(
-        frame, kTrackFormMutationsDelayInMs);
-
-    // Wait for |TrackFormMutations| to add form listeners.
-    ASSERT_TRUE(WaitUntilConditionOrTimeout(kWaitForJSCompletionTimeout, ^{
-      return [ExecuteJavaScript(@"trackFormMutationsComplete") boolValue];
-    }));
+  bool LoadHtml(NSString* html) {
+    WKWebView* web_view_instance = web_view();
+    for (int attempt = 0; attempt < 3; ++attempt) {
+      if (web::JavascriptTest::LoadHtml(html) &&
+          base::test::ios::WaitUntilConditionOrTimeout(
+              base::test::ios::kWaitForPageLoadTimeout, ^{
+                return !web_view_instance.loading &&
+                       [ExecuteJavaScript(web_view_instance,
+                                          @"typeof __gCrWeb !== 'undefined' && "
+                                          @"document.readyState === 'complete'")
+                           isEqual:@YES];
+              })) {
+        return true;
+      }
+    }
+    return false;
   }
 
-  std::unique_ptr<autofill::TestFormActivityObserver> observer_;
+  FakeScriptMessageHandlerForFormTesting* handler_;
 };
 
-// Tests that keyup event correctly delivered to WebStateObserver if the element
-// is focused.
-TEST_F(FormJsTest, KeyUpEventFocused) {
-  LoadHtml(@"<p><input id='test'/></p>");
-  ASSERT_FALSE(observer_->form_activity_info());
-  ExecuteJavaScript(
-      @"var e = document.getElementById('test');"
-       "e.focus();"
-       "var ev = new KeyboardEvent('keyup', {bubbles:true});"
-       "e.dispatchEvent(ev);");
-  autofill::TestFormActivityObserver* block_observer = observer_.get();
-  ASSERT_TRUE(WaitUntilConditionOrTimeout(kWaitForJSCompletionTimeout, ^{
-    return block_observer->form_activity_info() != nullptr;
-  }));
-  autofill::TestFormActivityInfo* info = observer_->form_activity_info();
-  ASSERT_TRUE(info);
-  EXPECT_EQ("keyup", info->form_activity.type);
-  EXPECT_FALSE(info->form_activity.input_missing);
+TEST_F(FormJsTest, GetIframeElements) {
+  ASSERT_TRUE(LoadHtml(@"<iframe id='frame1' srcdoc='foo'></iframe>"
+                       @"<p id='not-an-iframe'>"
+                       @"<iframe id='frame2' srcdoc='bar'></iframe>"
+                       @"<marquee id='definitely-not-an-iframe'>baz</marquee>"
+                       @"</p>"));
+
+  EXPECT_NSEQ(
+      @"frame1,frame2",
+      ExecuteJavaScript(web_view(),
+                        @"const frames = "
+                        @"__gCrWeb.getRegisteredApi('form_test_api')."
+                        @"getFunction('getIframeElements')(document.body);"
+                        @"frames.map((f) => { return f.id; }).join();"));
+
+  // Check that the return objects have a truthy contentWindow property.
+  EXPECT_NSEQ(@YES,
+              ExecuteJavaScript(web_view(), @"!!(frames[0].contentWindow);"));
+  EXPECT_NSEQ(@YES,
+              ExecuteJavaScript(web_view(), @"!!(frames[1].contentWindow);"));
 }
 
-// Tests that keyup event is not delivered to WebStateObserver if the element is
-// not focused.
-TEST_F(FormJsTest, KeyUpEventNotFocused) {
-  LoadHtml(@"<p><input id='test'/></p>");
-  ASSERT_FALSE(observer_->form_activity_info());
-  ExecuteJavaScript(
-      @"var e = document.getElementById('test');"
-       "var ev = new KeyboardEvent('keyup', {bubbles:true});"
-       "e.dispatchEvent(ev);");
-  WaitForBackgroundTasks();
-  autofill::TestFormActivityInfo* info = observer_->form_activity_info();
-  ASSERT_FALSE(info);
+// Tests that the `formSubmitted` handler does deduping.
+TEST_F(FormJsTest, FormSubmitted_Deduping) {
+  // Create arbitrary form elements to use as the submitted forms.
+  ASSERT_TRUE(
+      LoadHtml(@"<form name='form1'></form><form name='form2'></form>"));
+
+  // Swizzle the webkit messaging posting method to count the number of messages
+  // sent over. It should only concern submission messages for this test.
+  NSString* swizzleScript =
+      @"var gMsgCount = 0; "
+       "let oldFn = UserMessageHandler.prototype.postMessage; "
+       " function newFn(...args) { ++gMsgCount; return oldFn.apply(this, "
+       "args); }; "
+       "UserMessageHandler.prototype.postMessage = newFn; "
+       "void(0);";
+  ExecuteJavaScriptInWebView(web_view(), swizzleScript);
+
+  // == Submit first form ==
+
+  // Submit the first form for the first time.
+  ExecuteJavaScriptInWebView(web_view(),
+                             @"__gCrWeb.getRegisteredApi('form_test_api')."
+                             @"getFunction('formSubmitted')(document.forms[0], "
+                             @"'TestHandler', false, false)");
+
+  // Wait for the submission message for the first form to be received from the
+  // renderer. This verifies that the submission is at least reported once.
+  {
+    __block WKScriptMessage* messageFromForm;
+    __weak __typeof(handler_) weak_handler = handler_;
+    ASSERT_TRUE(base::test::ios::WaitUntilConditionOrTimeout(
+        base::test::ios::kWaitForJSCompletionTimeout, ^bool() {
+          messageFromForm = weak_handler.lastReceivedMessage;
+          return weak_handler.lastReceivedMessage;
+        }));
+    ASSERT_TRUE(messageFromForm);
+    NSDictionary* messageFromFormContent =
+        base::apple::ObjCCastStrict<NSDictionary>(messageFromForm.body);
+    EXPECT_NSEQ(@"form1", messageFromFormContent[@"formName"]);
+  }
+
+  // Attempt other submissions on the same form, where it should be deduped
+  // this time, hence ignored.
+  for (size_t i = 0; i < 4; ++i) {
+    ExecuteJavaScriptInWebView(web_view(),
+                               @"__gCrWeb.getRegisteredApi('form_test_api')."
+                               @"getFunction('formSubmitted')(document.forms[0]"
+                               @", 'TestHandler', false, false)");
+  }
+
+  // Verify that the submission message was only sent over once despite
+  // triggering formSubmitted() 5 times on the same form (the first form in this
+  // occurrence). Since all the scripts are run in order in the same JS event
+  // loop, it is guaranteed that all formSubmitted() were made before verifying
+  // the number of calls.
+  EXPECT_NSEQ(@(1), ExecuteJavaScript(web_view(), @"gMsgCount"));
+
+  handler_.lastReceivedMessage = nil;
+
+  // == Submit other form ==
+
+  // Submit the other form that wasn't submitted yet.
+  ExecuteJavaScriptInWebView(web_view(),
+                             @"__gCrWeb.getRegisteredApi('form_test_api')."
+                             @"getFunction('formSubmitted')(document.forms[1], "
+                             @"'TestHandler', false, false)");
+
+  // Wait for the submission message for the other form to be received from the
+  // renderer. This verifies that the submission is at least reported once per
+  // form.
+  {
+    __weak __typeof(handler_) weak_handler = handler_;
+    __block WKScriptMessage* messageFromForm;
+    ASSERT_TRUE(base::test::ios::WaitUntilConditionOrTimeout(
+        base::test::ios::kWaitForJSCompletionTimeout, ^bool() {
+          messageFromForm = weak_handler.lastReceivedMessage;
+          return weak_handler.lastReceivedMessage;
+        }));
+    ASSERT_TRUE(messageFromForm);
+    NSDictionary* messageFromFormContent =
+        base::apple::ObjCCastStrict<NSDictionary>(messageFromForm.body);
+    EXPECT_NSEQ(@"form2", messageFromFormContent[@"formName"]);
+  }
+
+  // Attempt other submissions on the same form, where it should be deduped
+  // this time, hence ignored. Verify that the submission message count remains
+  // 2, one message for each form.
+  for (size_t i = 0; i < 4; ++i) {
+    ExecuteJavaScriptInWebView(web_view(),
+                               @"__gCrWeb.getRegisteredApi('form_test_api')."
+                               @"getFunction('formSubmitted')(document.forms[1]"
+                               @", 'TestHandler', false, false)");
+  }
+  EXPECT_TRUE(ExecuteJavaScript(web_view(), @"gMsgCount == 2"));
 }
 
-// Tests that focus event correctly delivered to WebStateObserver.
-TEST_F(FormJsTest, FocusMainFrame) {
-  LoadHtml(
-      @"<form>"
-       "<input type='text' name='username' id='id1'>"
-       "<input type='password' name='password' id='id2'>"
-       "</form>");
-  ASSERT_FALSE(observer_->form_activity_info());
-  ExecuteJavaScript(@"document.getElementById('id1').focus();");
-  autofill::TestFormActivityObserver* block_observer = observer_.get();
-  ASSERT_TRUE(WaitUntilConditionOrTimeout(kWaitForJSCompletionTimeout, ^{
-    return block_observer->form_activity_info() != nullptr;
-  }));
-  autofill::TestFormActivityInfo* info = observer_->form_activity_info();
-  ASSERT_TRUE(info);
-  EXPECT_EQ("focus", info->form_activity.type);
-  EXPECT_FALSE(info->form_activity.input_missing);
+// Tests that calling `setUniqueIDIfNeeded` on an element that was already
+// assigned a node ID via `getOrCreateUniqueNodeId` (e.g. during APC extraction)
+// still populates the `__gCrUniqueID` DOM attribute, registers the element in
+// `getElementByUniqueID`, and tracks password fields.
+TEST_F(FormJsTest, SetUniqueIDIfNeeded_AfterGetOrCreateUniqueNodeId) {
+  ASSERT_TRUE(LoadHtml(@"<form id='form'>"
+                       @"<input id='password_input' type='password'>"
+                       @"</form>"));
+
+  // Simulate APC assigning a node ID before Autofill runs setUniqueIDIfNeeded.
+  EXPECT_NSEQ(@1,
+              ExecuteJavaScript(
+                  web_view(),
+                  @"const input = document.getElementById('password_input');"
+                  @"const api = __gCrWeb.getRegisteredApi('form_test_api');"
+                  @"api.getFunction('getOrCreateUniqueNodeId')(input);"));
+
+  // Before setUniqueIDIfNeeded runs, Autofill registration has not happened.
+  EXPECT_NSEQ(
+      @YES,
+      ExecuteJavaScript(
+          web_view(), @"input.getAttribute('__gCrUniqueID') === null && "
+                      @"api.getFunction('getElementByUniqueID')(1) === null && "
+                      @"!input[Symbol.for('__gCrHasBeenPassword')];"));
+
+  // Now run Autofill's setUniqueIDIfNeeded on the same input.
+  ExecuteJavaScriptInWebView(web_view(),
+                             @"api.getFunction('setUniqueIDIfNeeded')(input);");
+
+  EXPECT_NSEQ(@"1", ExecuteJavaScript(web_view(),
+                                      @"input.getAttribute('__gCrUniqueID');"));
+  EXPECT_NSEQ(@YES,
+              ExecuteJavaScript(
+                  web_view(),
+                  @"api.getFunction('getElementByUniqueID')(1) === input;"));
+  EXPECT_NSEQ(
+      @YES,
+      ExecuteJavaScript(
+          web_view(), @"input[Symbol.for('__gCrHasBeenPassword')] === true;"));
 }
 
-// Tests that submit event correctly delivered to WebStateObserver.
-TEST_F(FormJsTest, FormSubmitMainFrame) {
-  LoadHtml(
-      @"<form id='form1'>"
-       "<input type='password'>"
-       "<input type='submit' id='submit_input'/>"
-       "</form>");
-  ASSERT_FALSE(observer_->submit_document_info());
-  ExecuteJavaScript(@"document.getElementById('submit_input').click();");
-  autofill::TestSubmitDocumentInfo* info = observer_->submit_document_info();
-  ASSERT_TRUE(info);
-  EXPECT_EQ("form1", info->form_name);
+// Tests that `setUniqueIDIfNeeded` succeeds on an HTMLFormElement even when a
+// child input named "setAttribute" shadows `form.setAttribute`.
+TEST_F(FormJsTest, SetUniqueIDIfNeeded_ClobberedSetAttribute) {
+  ASSERT_TRUE(LoadHtml(@"<form id='form'>"
+                       @"<input name='setAttribute'>"
+                       @"</form>"));
+
+  ExecuteJavaScriptInWebView(
+      web_view(), @"const form = document.getElementById('form');"
+                  @"const api = __gCrWeb.getRegisteredApi('form_test_api');"
+                  @"api.getFunction('setUniqueIDIfNeeded')(form);");
+
+  EXPECT_NSEQ(@"1", ExecuteJavaScript(web_view(),
+                                      @"Element.prototype.getAttribute.call("
+                                      @"form, '__gCrUniqueID');"));
+  EXPECT_NSEQ(
+      @YES,
+      ExecuteJavaScript(
+          web_view(), @"api.getFunction('getElementByUniqueID')(1) === form;"));
 }
 
-// Tests that focus event from same-origin iframe correctly delivered to
-// WebStateObserver.
-TEST_F(FormJsTest, FocusSameOriginIFrame) {
-  LoadHtml(@"<iframe id='frame1'></iframe>");
-  ExecuteJavaScript(
-      @"document.getElementById('frame1').contentDocument.body.innerHTML = "
-       "'<form>"
-       "<input type=\"text\" name=\"username\" id=\"id1\">"
-       "<input type=\"password\" name=\"password\" id=\"id2\">"
-       "</form>'");
-
-  ExecuteJavaScript(
-      @"document.getElementById('frame1').contentDocument.getElementById('id1')"
-      @".focus()");
-  autofill::TestFormActivityObserver* block_observer = observer_.get();
-  ASSERT_TRUE(WaitUntilConditionOrTimeout(kWaitForJSCompletionTimeout, ^{
-    return block_observer->form_activity_info() != nullptr;
-  }));
-  autofill::TestFormActivityInfo* info = observer_->form_activity_info();
-  ASSERT_TRUE(info);
-  EXPECT_EQ("focus", info->form_activity.type);
-  EXPECT_FALSE(info->form_activity.input_missing);
-}
-
-// Tests that submit event from same-origin iframe correctly delivered to
-// WebStateObserver.
-TEST_F(FormJsTest, FormSameOriginIFrame) {
-  LoadHtml(@"<iframe id='frame1'></iframe>");
-  ExecuteJavaScript(
-      @"document.getElementById('frame1').contentDocument.body.innerHTML = "
-       "'<form id=\"form1\">"
-       "<input type=\"password\" name=\"password\" id=\"id2\">"
-       "<input type=\"submit\" id=\"submit_input\"/>"
-       "</form>'");
-  ExecuteJavaScript(
-      @"document.getElementById('frame1').contentDocument.getElementById('"
-      @"submit_input').click();");
-  autofill::TestSubmitDocumentInfo* info = observer_->submit_document_info();
-  ASSERT_TRUE(info);
-  EXPECT_EQ("form1", info->form_name);
-}
-
-// Tests that a new form triggers form_changed event.
-TEST_F(FormJsTest, AddForm) {
-  LoadHtml(@"<body></body>");
-
-  web::WebFrame* main_frame = WaitForMainFrame();
-  ASSERT_TRUE(main_frame);
-
-  uint32_t next_available_id = 1;
-  autofill::FormUtilJavaScriptFeature::GetInstance()
-      ->SetUpForUniqueIDsWithInitialState(main_frame, next_available_id);
-
-  // Wait for |SetUpForUniqueIDsWithInitialState| to complete.
-  ASSERT_TRUE(WaitUntilConditionOrTimeout(kWaitForJSCompletionTimeout, ^bool {
-    return [ExecuteJavaScript(@"document[__gCrWeb.fill.ID_SYMBOL]") intValue] ==
-           static_cast<int>(next_available_id);
-  }));
-
-  TrackFormMutations(main_frame);
-
-  ExecuteJavaScript(
-      @"var form = document.createElement('form');"
-      @"document.body.appendChild(form);");
-  autofill::TestFormActivityObserver* block_observer = observer_.get();
-  __block autofill::TestFormActivityInfo* info = nil;
-  ASSERT_TRUE(WaitUntilConditionOrTimeout(kWaitForJSCompletionTimeout, ^{
-    info = block_observer->form_activity_info();
-    return info != nil;
-  }));
-  EXPECT_EQ("form_changed", info->form_activity.type);
-  EXPECT_FALSE(info->form_activity.input_missing);
-}
-
-// Tests that a new input element triggers form_changed event.
-TEST_F(FormJsTest, AddInput) {
-  LoadHtml(@"<form id='formId'/>");
-
-  web::WebFrame* main_frame = WaitForMainFrame();
-  ASSERT_TRUE(main_frame);
-  TrackFormMutations(main_frame);
-
-  ExecuteJavaScript(
-      @"var input = document.createElement('input');"
-      @"document.getElementById('formId').appendChild(input);");
-  autofill::TestFormActivityObserver* block_observer = observer_.get();
-  __block autofill::TestFormActivityInfo* info = nil;
-  ASSERT_TRUE(WaitUntilConditionOrTimeout(kWaitForJSCompletionTimeout, ^{
-    info = block_observer->form_activity_info();
-    return info != nil;
-  }));
-  EXPECT_EQ("form_changed", info->form_activity.type);
-  EXPECT_FALSE(info->form_activity.input_missing);
-}
-
-// Tests that a new select element triggers form_changed event.
-TEST_F(FormJsTest, AddSelect) {
-  LoadHtml(@"<form id='formId'/>");
-
-  web::WebFrame* main_frame = WaitForMainFrame();
-  ASSERT_TRUE(main_frame);
-  TrackFormMutations(main_frame);
-
-  ExecuteJavaScript(
-      @"var select = document.createElement('select');"
-      @"document.getElementById('formId').appendChild(select);");
-  autofill::TestFormActivityObserver* block_observer = observer_.get();
-  __block autofill::TestFormActivityInfo* info = nil;
-  ASSERT_TRUE(WaitUntilConditionOrTimeout(kWaitForJSCompletionTimeout, ^{
-    info = block_observer->form_activity_info();
-    return info != nil;
-  }));
-  EXPECT_EQ("form_changed", info->form_activity.type);
-  EXPECT_FALSE(info->form_activity.input_missing);
-}
-
-// Tests that a new option element triggers form_changed event.
-TEST_F(FormJsTest, AddOption) {
-  LoadHtml(
-      @"<form>"
-       "<select id='select1'><option value='CA'>CA</option></select>"
-       "</form>");
-
-  web::WebFrame* main_frame = WaitForMainFrame();
-  ASSERT_TRUE(main_frame);
-  TrackFormMutations(main_frame);
-
-  ExecuteJavaScript(
-      @"var option = document.createElement('option');"
-      @"document.getElementById('select1').appendChild(option);");
-  autofill::TestFormActivityObserver* block_observer = observer_.get();
-  __block autofill::TestFormActivityInfo* info = nil;
-  ASSERT_TRUE(WaitUntilConditionOrTimeout(kWaitForJSCompletionTimeout, ^{
-    info = block_observer->form_activity_info();
-    return info != nil;
-  }));
-  EXPECT_EQ("form_changed", info->form_activity.type);
-  EXPECT_FALSE(info->form_activity.input_missing);
-}
-
-// Tests that removing password form triggers 'password_form_removed" event.
-TEST_F(FormJsTest, RemoveForm) {
-  LoadHtml(@"<form id=\"form1\">"
-            "<input type=\"text\" name=\"username\" id=\"id1\">"
-            "<input type=\"password\" name=\"password\" id=\"id2\">"
-            "<input type=\"submit\" id=\"submit_input\"/>"
-            "</form>");
-
-  web::WebFrame* main_frame = WaitForMainFrame();
-  ASSERT_TRUE(main_frame);
-
-  uint32_t next_available_id = 1;
-  autofill::FormUtilJavaScriptFeature::GetInstance()
-      ->SetUpForUniqueIDsWithInitialState(main_frame, next_available_id);
-
-  // Wait for |SetUpForUniqueIDsWithInitialState| to complete.
-  ASSERT_TRUE(WaitUntilConditionOrTimeout(kWaitForJSCompletionTimeout, ^bool {
-    return [ExecuteJavaScript(@"document[__gCrWeb.fill.ID_SYMBOL]") intValue] ==
-           static_cast<int>(next_available_id);
-  }));
-
-  TrackFormMutations(main_frame);
-  ExecuteJavaScript(@"var form1 = document.getElementById('form1');"
-                    @"__gCrWeb.fill.setUniqueIDIfNeeded(form1);"
-                    @"form1.parentNode.removeChild(form1);");
-  autofill::TestFormActivityObserver* block_observer = observer_.get();
-  __block autofill::TestFormActivityInfo* info = nil;
-  ASSERT_TRUE(WaitUntilConditionOrTimeout(kWaitForJSCompletionTimeout, ^{
-    info = block_observer->form_activity_info();
-    return info != nil;
-  }));
-  EXPECT_EQ("password_form_removed", info->form_activity.type);
-  EXPECT_FALSE(info->form_activity.input_missing);
-}
-
-// Tests that a new element that contains 'form' in the tag name does not
-// trigger a form_changed event.
-TEST_F(FormJsTest, AddCustomElement) {
-  LoadHtml(@"<body></body>");
-  web::WebFrame* main_frame = WaitForMainFrame();
-  ASSERT_TRUE(main_frame);
-  TrackFormMutations(main_frame);
-
-  ExecuteJavaScript(@"var form = document.createElement('my-form');"
-                    @"document.body.appendChild(form);");
-
-  // Check that no activity is observed upon JS completion.
-  autofill::TestFormActivityObserver* block_observer = observer_.get();
-  __block autofill::TestFormActivityInfo* info = nil;
-  EXPECT_FALSE(WaitUntilConditionOrTimeout(kWaitForJSCompletionTimeout, ^{
-    info = block_observer->form_activity_info();
-    return info != nil;
-  }));
-}
+}  // namespace autofill

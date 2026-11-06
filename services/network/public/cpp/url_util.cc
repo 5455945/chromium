@@ -1,28 +1,28 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/network/public/cpp/url_util.h"
 
-#include "base/feature_list.h"
-#include "build/build_config.h"
-#include "net/net_buildflags.h"
-#include "services/network/public/cpp/features.h"
-#include "services/network/public/cpp/is_potentially_trustworthy.h"
 #include "url/gurl.h"
-#include "url/url_constants.h"
 
 namespace network {
 
 bool IsURLHandledByNetworkService(const GURL& url) {
-  if (url.SchemeIsHTTPOrHTTPS() || url.SchemeIsWSOrWSS())
-    return true;
-#if !BUILDFLAG(DISABLE_FTP_SUPPORT)
-  if (url.SchemeIs(url::kFtpScheme) &&
-      base::FeatureList::IsEnabled(features::kFtpProtocol))
-    return true;
-#endif
-  return false;
+  return (url.SchemeIsHTTPOrHTTPS() || url.SchemeIsWSOrWSS());
+}
+
+GURL SerializeResponseUrlForReporting(const GURL& url) {
+  // https://fetch.spec.whatwg.org/#serialize-a-response-url-for-reporting
+  // To serialize a response URL for reporting, given a URL url:
+  // 1. "Set the username given url and the empty string."
+  // 2. "Set the password given url and the empty string."
+  // 3. "Return the serialization of url with exclude fragment set to true."
+  GURL::Replacements replacements;
+  replacements.ClearUsername();
+  replacements.ClearPassword();
+  replacements.ClearRef();
+  return url.ReplaceComponents(replacements);
 }
 
 }  // namespace network

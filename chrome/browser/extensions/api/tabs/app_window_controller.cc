@@ -1,21 +1,19 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/extensions/api/tabs/app_window_controller.h"
 
 #include <memory>
+#include <string>
 #include <utility>
 
+#include "base/values.h"
 #include "chrome/browser/extensions/api/tabs/app_base_window.h"
-#include "chrome/browser/extensions/api/tabs/tabs_constants.h"
-#include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/extensions/window_controller.h"
 #include "chrome/browser/extensions/window_controller_list.h"
-#include "chrome/common/url_constants.h"
+#include "chrome/common/extensions/api/tabs.h"
 #include "extensions/browser/app_window/app_window.h"
-#include "extensions/browser/app_window/native_app_window.h"
-#include "extensions/common/extension.h"
 
 namespace extensions {
 
@@ -38,22 +36,55 @@ int AppWindowController::GetWindowId() const {
 }
 
 std::string AppWindowController::GetWindowTypeText() const {
-  return tabs_constants::kWindowTypeValueApp;
+  return api::tabs::ToString(api::tabs::WindowType::kApp);
 }
 
-bool AppWindowController::CanClose(Reason* reason) const {
-  return true;
+void AppWindowController::SetFullscreenMode(bool is_fullscreen,
+                                            const GURL& extension_url) const {
+  // Full screen not supported by app windows.
 }
 
-Browser* AppWindowController::GetBrowser() const {
+BrowserWindowInterface* AppWindowController::GetBrowser() const {
+  return nullptr;
+}
+
+content::WebContents* AppWindowController::GetActiveTab() const {
+  return nullptr;
+}
+
+int AppWindowController::GetTabCount() const {
+  return 0;
+}
+
+content::WebContents* AppWindowController::GetWebContentsAt(int i) const {
   return nullptr;
 }
 
 bool AppWindowController::IsVisibleToTabsAPIForExtension(
     const Extension* extension,
-    bool allow_dev_tools_windows) const {
-  DCHECK(extension);
-  return extension->id() == app_window_->extension_id();
+    bool include_dev_tools_windows) const {
+  // Platform app windows are managed via chrome.app.window and are never
+  // exposed to the chrome.tabs or chrome.windows APIs.
+  return false;
+}
+
+base::DictValue AppWindowController::CreateWindowValueForExtension(
+    const Extension* extension,
+    PopulateTabBehavior populate_tab_behavior,
+    mojom::ContextType context) const {
+  return base::DictValue();
+}
+
+base::ListValue AppWindowController::CreateTabList(
+    const Extension* extension,
+    mojom::ContextType context) const {
+  return base::ListValue();
+}
+
+bool AppWindowController::OpenOptionsPage(const Extension* extension,
+                                          const GURL& url,
+                                          bool open_in_tab) {
+  return false;
 }
 
 }  // namespace extensions

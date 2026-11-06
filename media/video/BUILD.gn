@@ -1,75 +1,65 @@
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 import("//media/media_options.gni")
+import("//third_party/libgav1/options.gni")
 
 source_set("video") {
   # Do not expand the visibility here without double-checking with OWNERS, this
   # is a roll-up target which is part of the //media component. Most other DEPs
   # should be using //media and not directly DEP this roll-up target.
   visibility = [
+    ":openh264rs_video_encoder",
     "//media",
     "//media/filters",
     "//media/formats",
+    "//media/gfx",
     "//media/renderers",
   ]
 
   sources = [
-    "gpu_memory_buffer_video_frame_pool.cc",
-    "gpu_memory_buffer_video_frame_pool.h",
+    "alpha_video_encoder_wrapper.cc",
+    "alpha_video_encoder_wrapper.h",
     "gpu_video_accelerator_factories.cc",
     "gpu_video_accelerator_factories.h",
-    "h264_bit_reader.cc",
-    "h264_bit_reader.h",
-    "h264_level_limits.cc",
-    "h264_level_limits.h",
-    "h264_parser.cc",
-    "h264_parser.h",
-    "h264_poc.cc",
-    "h264_poc.h",
-    "half_float_maker.cc",
-    "half_float_maker.h",
+    "offloading_video_encoder.cc",
+    "offloading_video_encoder.h",
     "picture.cc",
     "picture.h",
-    "renderable_gpu_memory_buffer_video_frame_pool.cc",
-    "renderable_gpu_memory_buffer_video_frame_pool.h",
-    "trace_util.cc",
-    "trace_util.h",
     "video_decode_accelerator.cc",
     "video_decode_accelerator.h",
     "video_encode_accelerator.cc",
     "video_encode_accelerator.h",
     "video_encode_accelerator_adapter.cc",
     "video_encode_accelerator_adapter.h",
+    "video_encoder_fallback.cc",
+    "video_encoder_fallback.h",
     "video_encoder_info.cc",
     "video_encoder_info.h",
   ]
 
-  if (proprietary_codecs && enable_platform_hevc) {
-    sources += [
-      "h265_parser.cc",
-      "h265_parser.h",
-    ]
-  }
-
   public_deps = [ "//gpu/command_buffer/client:gles2_interface" ]
 
   deps = [
-    "//build:chromeos_buildflags",
     "//gpu/command_buffer/client",
     "//gpu/command_buffer/common",
+    "//gpu/ipc/common",
     "//media/base",
     "//third_party/libyuv",
     "//ui/gfx",
-    "//ui/gl",
   ]
 
-  configs += [
-    # TODO(crbug.com/167187): Fix size_t to int truncations.
-    "//build/config/compiler:no_size_t_to_int_warning",
-    "//media:subcomponent_config",
-  ]
+  configs += [ "//media:subcomponent_config" ]
+
+  if (enable_libaom) {
+    sources += [
+      "av1_video_encoder.cc",
+      "av1_video_encoder.h",
+    ]
+
+    public_deps += [ "//third_party/libaom" ]
+  }
 
   if (media_use_libvpx) {
     sources += [
@@ -84,7 +74,34 @@ source_set("video") {
       "openh264_video_encoder.cc",
       "openh264_video_encoder.h",
     ]
-    deps += [ "//third_party/openh264:encoder" ]
+    public_deps += [ "//third_party/openh264:encoder" ]
+    deps += [ "//media/parsers" ]
+  }
+
+  if (is_apple) {
+    deps += [ "//media/base/mac" ]
+  }
+}
+
+if (proprietary_codecs && media_use_rust_openh264) {
+  source_set("openh264rs_video_encoder") {
+    visibility = [ "//media" ]
+    sources = [
+      "openh264_video_encoder.cc",
+      "openh264_video_encoder.h",
+    ]
+    defines = [ "RUST_OPENH264_BUILD" ]
+    configs += [ "//media:subcomponent_config" ]
+    deps = [
+      ":video",
+      "//base",
+      "//media:media_buildflags",
+      "//media/base",
+      "//media/formats",
+      "//media/parsers",
+      "//third_party/openh264rs",
+      "//ui/gfx",
+    ]
   }
 }
 
@@ -94,22 +111,17 @@ static_library("test_support") {
   visibility = [ "//media:test_support" ]
   testonly = true
   sources = [
-    "fake_gpu_memory_buffer.cc",
-    "fake_gpu_memory_buffer.h",
     "fake_video_encode_accelerator.cc",
     "fake_video_encode_accelerator.h",
-    "mock_gpu_memory_buffer_video_frame_pool.cc",
-    "mock_gpu_memory_buffer_video_frame_pool.h",
     "mock_gpu_video_accelerator_factories.cc",
     "mock_gpu_video_accelerator_factories.h",
-    "mock_video_decode_accelerator.cc",
-    "mock_video_decode_accelerator.h",
     "mock_video_encode_accelerator.cc",
     "mock_video_encode_accelerator.h",
   ]
   configs += [ "//media:media_config" ]
   deps = [
     "//base",
+    "//gpu:test_support",
     "//gpu/command_buffer/client:gles2_interface",
     "//gpu/command_buffer/common",
     "//media/base:test_support",
@@ -122,18 +134,12 @@ static_library("test_support") {
 source_set("unit_tests") {
   testonly = true
   sources = [
-    "gpu_memory_buffer_video_frame_pool_unittest.cc",
-    "h264_bit_reader_unittest.cc",
-    "h264_parser_unittest.cc",
-    "h264_poc_unittest.cc",
-    "half_float_maker_unittest.cc",
-    "renderable_gpu_memory_buffer_video_frame_pool_unittest.cc",
+    "alpha_video_encoder_wrapper_unittest.cc",
+    "offloading_video_encoder_unittest.cc",
     "software_video_encoder_test.cc",
     "video_encode_accelerator_adapter_test.cc",
+    "video_encoder_fallback_test.cc",
   ]
-  if (enable_platform_hevc) {
-    sources += [ "h265_parser_unittest.cc" ]
-  }
 
   configs += [ "//media:media_config" ]
   deps = [
@@ -146,26 +152,19 @@ source_set("unit_tests") {
     "//media:test_support",
     "//testing/gmock",
     "//testing/gtest",
-    "//third_party/libyuv:libyuv",
+    "//third_party/libvpx",
+    "//third_party/libyuv",
     "//ui/gfx",
   ]
-}
 
-fuzzer_test("media_h264_parser_fuzzer") {
-  sources = [ "h264_parser_fuzzertest.cc" ]
-  deps = [
-    "//base",
-    "//media",
-    "//ui/gfx/geometry",
-  ]
-}
+  if (use_libgav1_parser) {
+    sources += [ "libgav1_decoder_unittest.cc" ]
+    deps += [ "//third_party/libgav1:libgav1_decoder" ]
+  }
 
-if (proprietary_codecs && enable_platform_hevc) {
-  fuzzer_test("media_h265_parser_fuzzer") {
-    sources = [ "h265_parser_fuzzertest.cc" ]
-    deps = [
-      "//base",
-      "//media",
-    ]
+  # TODO(crbug.com/581458350): Enable on Windows and Android once decoder stack
+  # usage and APK test-data lookup are fixed.
+  if (proprietary_codecs && media_use_rust_openh264 && (is_linux || is_mac)) {
+    deps += [ "//third_party/openh264rs:openh264rs_unittests" ]
   }
 }

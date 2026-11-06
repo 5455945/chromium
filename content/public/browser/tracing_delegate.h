@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,49 +7,74 @@
 
 #include <memory>
 
-#include "base/callback.h"
+#include "base/functional/callback_forward.h"
+#include "base/time/time.h"
+#include "base/types/strong_alias.h"
+#include "build/build_config.h"
 #include "content/common/content_export.h"
+#include "services/tracing/public/cpp/perfetto/metadata_data_source.h"
 
-namespace base {
-class DictionaryValue;
-}
-
-namespace network {
-class SharedURLLoaderFactory;
+namespace tracing {
+class BackgroundTracingStateManager;
 }
 
 namespace content {
-class BackgroundTracingConfig;
-class TraceUploader;
 
 // This can be implemented by the embedder to provide functionality for the
 // about://tracing WebUI.
 class CONTENT_EXPORT TracingDelegate {
  public:
-  virtual ~TracingDelegate() {}
+  using IsLocalScenario = base::StrongAlias<class IsLocalScenarioTag, bool>;
 
-  // Provide trace uploading functionality; see trace_uploader.h.
-  virtual std::unique_ptr<TraceUploader> GetTraceUploader(
-      scoped_refptr<network::SharedURLLoaderFactory>) = 0;
+  virtual ~TracingDelegate() = default;
 
-  // This can be used to veto a particular background tracing scenario.
-  virtual bool IsAllowedToBeginBackgroundScenario(
-      const BackgroundTracingConfig& config,
-      bool requires_anonymized_data);
+  // Returns true if a tracing session that started at `session_start` is
+  // allowed to record or save data. Only called for scenarios that require
+  // privacy filtering. `is_local_scenario` indicates whether the scenario saves
+  // traces locally without uploading to metrics servers, in which case metrics
+  // reporting consent is bypassed.
+  virtual bool IsRecordingAllowed(IsLocalScenario is_local_scenario,
+                                  base::TimeTicks session_start) const;
 
-  virtual bool IsAllowedToEndBackgroundScenario(
-      const content::BackgroundTracingConfig& config,
-      bool requires_anonymized_data,
-      bool is_crash_scenario);
+  // Specifies whether traces that aren't uploaded should still be saved.
+  virtual bool ShouldSaveUnuploadedTrace() const;
 
-  virtual bool IsProfileLoaded();
+  // Creates background tracing state manager connected to embedder local state.
+  virtual std::unique_ptr<tracing::BackgroundTracingStateManager>
+  CreateStateManager();
 
-  // Whether system-wide performance trace collection using the external system
-  // tracing service is enabled.
-  virtual bool IsSystemWideTracingEnabled();
+  // Returns a serialized system metrics.
+  virtual std::string RecordSerializedSystemProfileMetrics() const;
 
-  // Used to add any additional metadata to traces.
-  virtual std::unique_ptr<base::DictionaryValue> GenerateMetadataDict();
+  // Returns a callback to fill a bundle packet with system metrics.
+  virtual tracing::MetadataDataSource::BundleRecorder
+  CreateSystemProfileMetadataRecorder() const;
+
+  // Returns a callback to fill a ChromeMetadataPacket with system metrics.
+  virtual tracing::MetadataDataSource::ChromeMetadataRecorder
+  CreateChromeMetadataPacketRecorder() const;
+
+#if BUILDFLAG(IS_WIN)
+  // Runs `on_tracing_state` (asynchronously) with the current state of the
+  // Windows system tracing service for the running browser:
+  // - `service_supported`: true if the service is supported.
+  // - `service_enabled`: true if the service is enabled.
+  virtual void GetSystemTracingState(
+      base::OnceCallback<void(bool service_supported, bool service_enabled)>
+          on_tracing_state);
+
+  // Enables the Windows system tracing service and runs `on_complete` with
+  // the result of the operation. The user must pass a UAC prompt to enable the
+  // service.
+  virtual void EnableSystemTracing(
+      base::OnceCallback<void(bool success)> on_complete);
+
+  // Disables the Windows system tracing service and runs `on_complete` with
+  // the result of the operation. The user must pass a UAC prompt to disable the
+  // service.
+  virtual void DisableSystemTracing(
+      base::OnceCallback<void(bool success)> on_complete);
+#endif  // BUILDFLAG(IS_WIN)
 };
 
 }  // namespace content

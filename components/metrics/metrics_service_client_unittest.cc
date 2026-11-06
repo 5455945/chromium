@@ -1,28 +1,27 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/metrics/metrics_service.h"
 
-#include "base/bind.h"
 #include "base/command_line.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "base/strings/string_number_conversions.h"
 #include "components/metrics/metrics_switches.h"
 #include "components/metrics/test/test_metrics_service_client.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace metrics {
-
 namespace {
 
 class MetricsServiceClientTest : public testing::Test {
  public:
-  MetricsServiceClientTest() {}
-  ~MetricsServiceClientTest() override {}
+  MetricsServiceClientTest() = default;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(MetricsServiceClientTest);
+  MetricsServiceClientTest(const MetricsServiceClientTest&) = delete;
+  MetricsServiceClientTest& operator=(const MetricsServiceClientTest&) = delete;
+
+  ~MetricsServiceClientTest() override = default;
 };
 
 }  // namespace
@@ -42,8 +41,7 @@ TEST_F(MetricsServiceClientTest, TestModifyMetricsUploadInterval) {
   base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
       switches::kMetricsUploadIntervalSec,
       base::NumberToString(specified_upload_sec));
-  ASSERT_EQ(base::TimeDelta::FromSeconds(specified_upload_sec),
-            client.GetUploadInterval());
+  ASSERT_EQ(base::Seconds(specified_upload_sec), client.GetUploadInterval());
 
   base::CommandLine::ForCurrentProcess()->RemoveSwitch(
       switches::kMetricsUploadIntervalSec);
@@ -52,8 +50,7 @@ TEST_F(MetricsServiceClientTest, TestModifyMetricsUploadInterval) {
   base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
       switches::kMetricsUploadIntervalSec,
       base::NumberToString(specified_upload_sec));
-  ASSERT_EQ(base::TimeDelta::FromSeconds(specified_upload_sec),
-            client.GetUploadInterval());
+  ASSERT_EQ(base::Seconds(specified_upload_sec), client.GetUploadInterval());
 }
 
 TEST_F(MetricsServiceClientTest, TestUploadIntervalLimitedForDos) {
@@ -67,7 +64,55 @@ TEST_F(MetricsServiceClientTest, TestUploadIntervalLimitedForDos) {
       switches::kMetricsUploadIntervalSec,
       base::NumberToString(too_short_upload_sec));
   // Upload interval should be the DOS rate limit.
-  ASSERT_EQ(base::TimeDelta::FromSeconds(20), client.GetUploadInterval());
+  ASSERT_EQ(base::Seconds(20), client.GetUploadInterval());
+}
+
+TEST_F(MetricsServiceClientTest, TestGetStorageLimits) {
+  TestMetricsServiceClient client;
+  const MetricsLogStore::StorageLimits storage_limits =
+      client.GetStorageLimits();
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+  EXPECT_EQ(20u, storage_limits.initial_log_queue_limits.min_log_count);
+  EXPECT_EQ(8u, storage_limits.ongoing_log_queue_limits.min_log_count);
+  EXPECT_EQ(3u * 1024 * 1024,
+            storage_limits.initial_log_queue_limits.min_queue_size_bytes);
+  EXPECT_EQ(3u * 1024 * 1024,
+            storage_limits.ongoing_log_queue_limits.min_queue_size_bytes);
+  EXPECT_EQ(0u, storage_limits.initial_log_queue_limits.max_log_size_bytes);
+  EXPECT_EQ(1024u * 1024,
+            storage_limits.ongoing_log_queue_limits.max_log_size_bytes);
+#elif BUILDFLAG(IS_CHROMEOS)
+  EXPECT_EQ(20u, storage_limits.initial_log_queue_limits.min_log_count);
+  EXPECT_EQ(8u, storage_limits.ongoing_log_queue_limits.min_log_count);
+  EXPECT_EQ(300u * 1024,
+            storage_limits.initial_log_queue_limits.min_queue_size_bytes);
+  EXPECT_EQ(300u * 1024,
+            storage_limits.ongoing_log_queue_limits.min_queue_size_bytes);
+  EXPECT_EQ(0u, storage_limits.initial_log_queue_limits.max_log_size_bytes);
+  EXPECT_EQ(1024u * 1024,
+            storage_limits.ongoing_log_queue_limits.max_log_size_bytes);
+#elif BUILDFLAG(IS_ANDROID)
+  EXPECT_EQ(40u, storage_limits.initial_log_queue_limits.min_log_count);
+  EXPECT_EQ(16u, storage_limits.ongoing_log_queue_limits.min_log_count);
+  EXPECT_EQ(3u * 1024 * 1024,
+            storage_limits.initial_log_queue_limits.min_queue_size_bytes);
+  EXPECT_EQ(3u * 1024 * 1024,
+            storage_limits.ongoing_log_queue_limits.min_queue_size_bytes);
+  EXPECT_EQ(0u, storage_limits.initial_log_queue_limits.max_log_size_bytes);
+  EXPECT_EQ(1024u * 1024,
+            storage_limits.ongoing_log_queue_limits.max_log_size_bytes);
+#else
+  EXPECT_EQ(20u, storage_limits.initial_log_queue_limits.min_log_count);
+  EXPECT_EQ(8u, storage_limits.ongoing_log_queue_limits.min_log_count);
+  EXPECT_EQ(300u * 1024,
+            storage_limits.initial_log_queue_limits.min_queue_size_bytes);
+  EXPECT_EQ(300u * 1024,
+            storage_limits.ongoing_log_queue_limits.min_queue_size_bytes);
+  EXPECT_EQ(0u, storage_limits.initial_log_queue_limits.max_log_size_bytes);
+  EXPECT_EQ(100u * 1024,
+            storage_limits.ongoing_log_queue_limits.max_log_size_bytes);
+#endif
 }
 
 }  // namespace metrics

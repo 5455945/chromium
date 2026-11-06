@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,16 +8,17 @@
 #include "device/bluetooth/bluetooth_remote_gatt_characteristic.h"
 
 #import <CoreBluetooth/CoreBluetooth.h>
+
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/mac/scoped_nsobject.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 
 namespace device {
 
-class BluetoothAdapterMac;
+class BluetoothLowEnergyAdapterApple;
 class BluetoothRemoteGattDescriptorMac;
 class BluetoothRemoteGattServiceMac;
 
@@ -29,6 +30,12 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothRemoteGattCharacteristicMac
   BluetoothRemoteGattCharacteristicMac(
       BluetoothRemoteGattServiceMac* gatt_service,
       CBCharacteristic* cb_characteristic);
+
+  BluetoothRemoteGattCharacteristicMac(
+      const BluetoothRemoteGattCharacteristicMac&) = delete;
+  BluetoothRemoteGattCharacteristicMac& operator=(
+      const BluetoothRemoteGattCharacteristicMac&) = delete;
+
   ~BluetoothRemoteGattCharacteristicMac() override;
 
   // Override BluetoothGattCharacteristic methods.
@@ -42,12 +49,12 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothRemoteGattCharacteristicMac
   BluetoothRemoteGattService* GetService() const override;
   bool IsNotifying() const override;
   void ReadRemoteCharacteristic(ValueCallback callback) override;
-  void WriteRemoteCharacteristic(const std::vector<uint8_t>& value,
+  void WriteRemoteCharacteristic(base::span<const uint8_t> value,
                                  WriteType write_type,
                                  base::OnceClosure callback,
                                  ErrorCallback error_callback) override;
   void DeprecatedWriteRemoteCharacteristic(
-      const std::vector<uint8_t>& value,
+      base::span<const uint8_t> value,
       base::OnceClosure callback,
       ErrorCallback error_callback) override;
 
@@ -91,8 +98,8 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothRemoteGattCharacteristicMac
   CBCharacteristicWriteType GetCBWriteType() const;
   // Returns CoreBluetooth characteristic.
   CBCharacteristic* GetCBCharacteristic() const;
-  // Returns the mac adapter.
-  BluetoothAdapterMac* GetMacAdapter() const;
+  // Returns the LowEnergyBluetooth adapter.
+  BluetoothLowEnergyAdapterApple* GetLowEnergyAdapter() const;
   // Returns CoreBluetooth peripheral.
   CBPeripheral* GetCBPeripheral() const;
   // Returns true if this characteristic has been fully discovered.
@@ -113,9 +120,9 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothRemoteGattCharacteristicMac
   // DidDiscoverDescriptors() is called.
   int discovery_pending_count_;
   // gatt_service_ owns instances of this class.
-  BluetoothRemoteGattServiceMac* gatt_service_;
+  raw_ptr<BluetoothRemoteGattServiceMac> gatt_service_;
   // A characteristic from CBPeripheral.services.characteristics.
-  base::scoped_nsobject<CBCharacteristic> cb_characteristic_;
+  CBCharacteristic* __strong cb_characteristic_;
   // Characteristic identifier.
   std::string identifier_;
   // Service UUID.
@@ -139,8 +146,6 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothRemoteGattCharacteristicMac
   PendingNotifyCallbacks unsubscribe_from_notification_callbacks_;
 
   base::WeakPtrFactory<BluetoothRemoteGattCharacteristicMac> weak_ptr_factory_;
-
-  DISALLOW_COPY_AND_ASSIGN(BluetoothRemoteGattCharacteristicMac);
 };
 
 // Stream operator for logging.

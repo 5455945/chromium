@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,7 @@
 #include <memory>
 
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "extensions/browser/api/socket/socket_api.h"
 #include "extensions/common/api/sockets_tcp.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -141,8 +141,8 @@ class SocketsTcpConnectFunction
   void StartConnect();
   void OnCompleted(int net_result);
 
-  std::unique_ptr<sockets_tcp::Connect::Params> params_;
-  TCPSocketEventDispatcher* socket_event_dispatcher_ = nullptr;
+  std::optional<sockets_tcp::Connect::Params> params_;
+  raw_ptr<TCPSocketEventDispatcher> socket_event_dispatcher_ = nullptr;
 };
 
 class SocketsTcpDisconnectFunction : public TCPSocketApiFunction {
@@ -174,7 +174,7 @@ class SocketsTcpSendFunction : public TCPSocketApiFunction {
   void OnCompleted(int net_result);
   void SetSendResult(int net_result, int bytes_sent);
 
-  std::unique_ptr<sockets_tcp::Send::Params> params_;
+  std::optional<sockets_tcp::Send::Params> params_;
 };
 
 class SocketsTcpCloseFunction : public TCPSocketApiFunction {
@@ -222,6 +222,9 @@ class SocketsTcpSecureFunction : public TCPSocketApiFunction {
 
   SocketsTcpSecureFunction();
 
+  SocketsTcpSecureFunction(const SocketsTcpSecureFunction&) = delete;
+  SocketsTcpSecureFunction& operator=(const SocketsTcpSecureFunction&) = delete;
+
  protected:
   ~SocketsTcpSecureFunction() override;
   ResponseAction Work() override;
@@ -237,9 +240,7 @@ class SocketsTcpSecureFunction : public TCPSocketApiFunction {
 
   bool paused_;
   bool persistent_;
-  std::unique_ptr<sockets_tcp::Secure::Params> params_;
-
-  DISALLOW_COPY_AND_ASSIGN(SocketsTcpSecureFunction);
+  std::optional<sockets_tcp::Secure::Params> params_;
 };
 
 }  // namespace api

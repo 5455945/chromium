@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,11 +15,7 @@
 #endif  // defined(EVENTS_DEVICES_IMPLEMENTATION)
 
 #else  // defined(WIN32)
-#if defined(EVENTS_DEVICES_IMPLEMENTATION)
 #define EVENTS_DEVICES_EXPORT __attribute__((visibility("default")))
-#else
-#define EVENTS_DEVICES_EXPORT
-#endif
 #endif
 
 #else  // defined(COMPONENT_BUILD)

@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import collections
 import os
 import sys
 import unittest
@@ -14,6 +13,8 @@ from util import manifest_utils
 _TEST_MANIFEST = """\
 <?xml version="1.0" ?>
 <manifest package="test.pkg"
+    android:versionCode="1234"
+    android:versionName="1.2.33.4"
     tools:ignore="MissingVersion"
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
@@ -52,6 +53,8 @@ _TEST_MANIFEST_NORMALIZED = """\
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     package="test.pkg"
+    android:versionCode="OFFSET=4"
+    android:versionName="#.#.#.#"
     tools:ignore="MissingVersion">
   <uses-feature android:name="android.hardware.vr.headtracking" \
 android:required="false" android:version="1"/>
@@ -82,47 +85,53 @@ _ACTIVITY_DIFF_ANCHOR = '32b3a641'
 _INTENT_FILTER_DIFF_ANCHOR = '4ee601b7'
 
 
-def _CreateTestData(intent_filter_diff_anchor=_INTENT_FILTER_DIFF_ANCHOR,
-                    extra_activity_attr='',
-                    extra_intent_filter_elem=''):
-  if extra_activity_attr:
-    extra_activity_attr += '\n        '
-  if extra_intent_filter_elem:
-    extra_intent_filter_elem += '\n        '
-  test_manifest = _TEST_MANIFEST.format(
-      extra_activity_attr=extra_activity_attr,
-      extra_intent_filter_elem=extra_intent_filter_elem)
-  expected = _TEST_MANIFEST_NORMALIZED.format(
-      activity_diff_anchor=_ACTIVITY_DIFF_ANCHOR,
-      intent_filter_diff_anchor=intent_filter_diff_anchor,
-      extra_activity_attr=extra_activity_attr,
-      extra_intent_filter_elem=extra_intent_filter_elem)
-  return test_manifest, expected
+def _CreateTestData(
+    intent_filter_diff_anchor=_INTENT_FILTER_DIFF_ANCHOR,
+    extra_activity_attr='',
+    extra_intent_filter_elem='',
+):
+    if extra_activity_attr:
+        extra_activity_attr += '\n        '
+    if extra_intent_filter_elem:
+        extra_intent_filter_elem += '\n        '
+    test_manifest = _TEST_MANIFEST.format(
+        extra_activity_attr=extra_activity_attr,
+        extra_intent_filter_elem=extra_intent_filter_elem,
+    )
+    expected = _TEST_MANIFEST_NORMALIZED.format(
+        activity_diff_anchor=_ACTIVITY_DIFF_ANCHOR,
+        intent_filter_diff_anchor=intent_filter_diff_anchor,
+        extra_activity_attr=extra_activity_attr,
+        extra_intent_filter_elem=extra_intent_filter_elem,
+    )
+    return test_manifest, expected
 
 
 class ManifestUtilsTest(unittest.TestCase):
-  # Enable diff output.
-  maxDiff = None
+    # Enable diff output.
+    maxDiff = None
 
-  def testNormalizeManifest_golden(self):
-    test_manifest, expected = _CreateTestData()
-    actual = manifest_utils.NormalizeManifest(test_manifest)
-    self.assertMultiLineEqual(expected, actual)
+    def testNormalizeManifest_golden(self):
+        test_manifest, expected = _CreateTestData()
+        actual = manifest_utils.NormalizeManifest(test_manifest, 1230)
+        self.assertMultiLineEqual(expected, actual)
 
-  def testNormalizeManifest_nameUsedForActivity(self):
-    test_manifest, expected = _CreateTestData(extra_activity_attr='a="b"')
-    actual = manifest_utils.NormalizeManifest(test_manifest)
-    # Checks that the DIFF-ANCHOR does not change with the added attribute.
-    self.assertMultiLineEqual(expected, actual)
+    def testNormalizeManifest_nameUsedForActivity(self):
+        test_manifest, expected = _CreateTestData(extra_activity_attr='a="b"')
+        actual = manifest_utils.NormalizeManifest(test_manifest, 1230)
+        # Checks that the DIFF-ANCHOR does not change with the added attribute.
+        self.assertMultiLineEqual(expected, actual)
 
-  def testNormalizeManifest_nameNotUsedForIntentFilter(self):
-    test_manifest, expected = _CreateTestData(
-        extra_intent_filter_elem='<a/>', intent_filter_diff_anchor='5f5c8a70')
-    actual = manifest_utils.NormalizeManifest(test_manifest)
-    # Checks that the DIFF-ANCHOR does change with the added element despite
-    # having a nested element with an android:name set.
-    self.assertMultiLineEqual(expected, actual)
+    def testNormalizeManifest_nameNotUsedForIntentFilter(self):
+        test_manifest, expected = _CreateTestData(
+            extra_intent_filter_elem='<a/>',
+            intent_filter_diff_anchor='5f5c8a70',
+        )
+        actual = manifest_utils.NormalizeManifest(test_manifest, 1230)
+        # Checks that the DIFF-ANCHOR does change with the added element despite
+        # having a nested element with an android:name set.
+        self.assertMultiLineEqual(expected, actual)
 
 
 if __name__ == '__main__':
-  unittest.main()
+    unittest.main()

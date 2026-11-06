@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,21 +12,21 @@ MockPreferences::MockPreferences() {
   forced_.reset(CFSetCreateMutable(kCFAllocatorDefault,
                                    0,
                                    &kCFTypeSetCallBacks));
+  machine_.reset(
+      CFSetCreateMutable(kCFAllocatorDefault, 0, &kCFTypeSetCallBacks));
 }
 
 MockPreferences::~MockPreferences() {
 }
 
-Boolean MockPreferences::AppSynchronize(CFStringRef applicationID) {
+Boolean MockPreferences::AppSynchronize(CFStringRef application_id) {
   return true;
 }
 
 CFPropertyListRef MockPreferences::CopyAppValue(CFStringRef key,
-                                                CFStringRef applicationID) {
+                                                CFStringRef application_id) {
   CFPropertyListRef value;
-  Boolean found = CFDictionaryGetValueIfPresent(values_,
-                                                key,
-                                                &value);
+  Boolean found = CFDictionaryGetValueIfPresent(values_.get(), key, &value);
   if (!found || !value)
     return NULL;
   CFRetain(value);
@@ -34,14 +34,22 @@ CFPropertyListRef MockPreferences::CopyAppValue(CFStringRef key,
 }
 
 Boolean MockPreferences::AppValueIsForced(CFStringRef key,
-                                          CFStringRef applicationID) {
-  return CFSetContainsValue(forced_, key);
+                                          CFStringRef application_id) {
+  return CFSetContainsValue(forced_.get(), key);
+}
+
+Boolean MockPreferences::IsManagedPolicyAvailableForMachineScope(
+    CFStringRef key) {
+  return CFSetContainsValue(machine_.get(), key);
 }
 
 void MockPreferences::AddTestItem(CFStringRef key,
                                   CFPropertyListRef value,
-                                  bool is_forced) {
-  CFDictionarySetValue(values_, key, value);
+                                  bool is_forced,
+                                  bool is_machine) {
+  CFDictionarySetValue(values_.get(), key, value);
   if (is_forced)
-    CFSetAddValue(forced_, key);
+    CFSetAddValue(forced_.get(), key);
+  if (is_machine)
+    CFSetAddValue(machine_.get(), key);
 }

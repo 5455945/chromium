@@ -1,22 +1,31 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/messages/android/message_wrapper.h"
+#include <string>
 
 #include "base/android/jni_string.h"
 #include "base/logging.h"
-#include "components/messages/android/jni_headers/MessageWrapper_jni.h"
 #include "content/public/browser/web_contents.h"
+#include "ui/gfx/android/java_bitmap.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/messages/android/jni_headers/MessageWrapper_jni.h"
 
 namespace messages {
+
+MessageWrapper::MessageWrapper(MessageIdentifier message_identifier)
+    : MessageWrapper(message_identifier,
+                     base::NullCallback(),
+                     base::NullCallback()) {}
 
 MessageWrapper::MessageWrapper(MessageIdentifier message_identifier,
                                base::OnceClosure action_callback,
                                DismissCallback dismiss_callback)
     : action_callback_(std::move(action_callback)),
       dismiss_callback_(std::move(dismiss_callback)),
-      message_enqueued_(false) {
+      is_in_queue_(false) {
   JNIEnv* env = base::android::AttachCurrentThread();
   java_message_wrapper_ =
       Java_MessageWrapper_create(env, reinterpret_cast<int64_t>(this),
@@ -24,7 +33,14 @@ MessageWrapper::MessageWrapper(MessageIdentifier message_identifier,
 }
 
 MessageWrapper::~MessageWrapper() {
-  CHECK(!message_enqueued_);
+  CHECK(!is_in_queue_);
+  if (java_message_wrapper_) {
+    // Clear the native pointer on the Java side in case the Java object
+    // outlives the C++ object, such as message_wrapper is created but never
+    // enqueued.
+    JNIEnv* env = base::android::AttachCurrentThread();
+    Java_MessageWrapper_clearNativePtr(env, java_message_wrapper_);
+  }
 }
 
 std::u16string MessageWrapper::GetTitle() {
@@ -87,6 +103,32 @@ void MessageWrapper::SetPrimaryButtonText(
                                            jprimary_button_text);
 }
 
+int MessageWrapper::GetPrimaryButtonTextMaxLines() {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  return Java_MessageWrapper_getPrimaryButtonTextMaxLines(
+      env, java_message_wrapper_);
+}
+
+void MessageWrapper::SetPrimaryButtonTextMaxLines(int max_lines) {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_MessageWrapper_setPrimaryButtonTextMaxLines(env, java_message_wrapper_,
+                                                   max_lines);
+}
+
+PrimaryWidgetAppearance MessageWrapper::GetPrimaryWidgetAppearance() {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  return static_cast<PrimaryWidgetAppearance>(
+      Java_MessageWrapper_getPrimaryWidgetAppearance(env,
+                                                     java_message_wrapper_));
+}
+
+void MessageWrapper::SetPrimaryWidgetAppearance(
+    PrimaryWidgetAppearance appearance) {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_MessageWrapper_setPrimaryWidgetAppearance(env, java_message_wrapper_,
+                                                 static_cast<int>(appearance));
+}
+
 std::u16string MessageWrapper::GetSecondaryButtonMenuText() {
   JNIEnv* env = base::android::AttachCurrentThread();
   base::android::ScopedJavaLocalRef<jstring> jsecondary_button_menu_text =
@@ -107,6 +149,69 @@ void MessageWrapper::SetSecondaryButtonMenuText(
                                                  jsecondary_button_menu_text);
 }
 
+std::u16string MessageWrapper::GetSecondaryIconContentDescription() {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  base::android::ScopedJavaLocalRef<jstring>
+      jsecondary_icon_content_description =
+          Java_MessageWrapper_getSecondaryIconContentDescription(
+              env, java_message_wrapper_);
+  return jsecondary_icon_content_description.is_null()
+             ? std::u16string()
+             : base::android::ConvertJavaStringToUTF16(
+                   jsecondary_icon_content_description);
+}
+
+void MessageWrapper::SetSecondaryIconContentDescription(
+    const std::u16string& secondary_icon_content_description) {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  base::android::ScopedJavaLocalRef<jstring>
+      jsecondary_icon_content_description =
+          base::android::ConvertUTF16ToJavaString(
+              env, secondary_icon_content_description);
+  Java_MessageWrapper_setSecondaryIconContentDescription(
+      env, java_message_wrapper_, jsecondary_icon_content_description);
+}
+
+void MessageWrapper::SetSecondaryMenuMaxSize(SecondaryMenuMaxSize max_size) {
+  secondary_menu_max_size_ = max_size;
+}
+
+void MessageWrapper::AddSecondaryMenuItem(int item_id,
+                                          int resource_id,
+                                          const std::u16string& item_text) {
+  DCHECK(!secondary_menu_item_selected_callback_.is_null());
+  JNIEnv* env = base::android::AttachCurrentThread();
+  base::android::ScopedJavaLocalRef<jstring> jitem_text =
+      base::android::ConvertUTF16ToJavaString(env, item_text);
+  Java_MessageWrapper_addSecondaryMenuItem(env, java_message_wrapper_, item_id,
+                                           resource_id, jitem_text);
+}
+
+void MessageWrapper::AddSecondaryMenuItem(
+    int item_id,
+    int resource_id,
+    const std::u16string& item_text,
+    const std::u16string& item_description) {
+  DCHECK(secondary_menu_item_selected_callback_);
+  JNIEnv* env = base::android::AttachCurrentThread();
+  base::android::ScopedJavaLocalRef<jstring> jitem_text =
+      base::android::ConvertUTF16ToJavaString(env, item_text);
+  base::android::ScopedJavaLocalRef<jstring> jitem_desc =
+      base::android::ConvertUTF16ToJavaString(env, item_description);
+  Java_MessageWrapper_addSecondaryMenuItem(env, java_message_wrapper_, item_id,
+                                           resource_id, jitem_text, jitem_desc);
+}
+
+void MessageWrapper::ClearSecondaryMenuItems() {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_MessageWrapper_clearSecondaryMenuItems(env, java_message_wrapper_);
+}
+
+void MessageWrapper::AddSecondaryMenuItemDivider() {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_MessageWrapper_addSecondaryMenuItemDivider(env, java_message_wrapper_);
+}
+
 int MessageWrapper::GetIconResourceId() {
   JNIEnv* env = base::android::AttachCurrentThread();
   return Java_MessageWrapper_getIconResourceId(env, java_message_wrapper_);
@@ -116,6 +221,29 @@ void MessageWrapper::SetIconResourceId(int resource_id) {
   JNIEnv* env = base::android::AttachCurrentThread();
   Java_MessageWrapper_setIconResourceId(env, java_message_wrapper_,
                                         resource_id);
+}
+
+bool MessageWrapper::IsValidIcon() {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  return Java_MessageWrapper_isValidIcon(env, java_message_wrapper_);
+}
+
+void MessageWrapper::SetIcon(const SkBitmap& icon) {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  base::android::ScopedJavaLocalRef<jobject> java_bitmap =
+      gfx::ConvertToJavaBitmap(icon);
+  Java_MessageWrapper_setIcon(env, java_message_wrapper_, java_bitmap);
+}
+
+void MessageWrapper::EnableLargeIcon(bool enabled) {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_MessageWrapper_setLargeIcon(env, java_message_wrapper_, enabled);
+}
+
+void MessageWrapper::SetIconRoundedCornerRadius(int radius) {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_MessageWrapper_setIconRoundedCornerRadius(env, java_message_wrapper_,
+                                                 radius);
 }
 
 void MessageWrapper::DisableIconTint() {
@@ -135,13 +263,27 @@ void MessageWrapper::SetSecondaryIconResourceId(int resource_id) {
                                                  resource_id);
 }
 
-void MessageWrapper::SetSecondaryActionCallback(base::OnceClosure callback) {
+void MessageWrapper::SetSecondaryActionCallback(
+    base::RepeatingClosure callback) {
   secondary_action_callback_ = std::move(callback);
+}
+
+void MessageWrapper::SetSecondaryMenuItemSelectedCallback(
+    base::RepeatingCallback<void(int)> callback) {
+  secondary_menu_item_selected_callback_ = std::move(callback);
 }
 
 void MessageWrapper::SetDuration(long customDuration) {
   JNIEnv* env = base::android::AttachCurrentThread();
   Java_MessageWrapper_setDuration(env, java_message_wrapper_, customDuration);
+}
+
+void MessageWrapper::SetActionClick(base::OnceClosure callback) {
+  action_callback_ = std::move(callback);
+}
+
+void MessageWrapper::SetDismissCallback(DismissCallback callback) {
+  dismiss_callback_ = std::move(callback);
 }
 
 void MessageWrapper::HandleActionClick(JNIEnv* env) {
@@ -151,12 +293,17 @@ void MessageWrapper::HandleActionClick(JNIEnv* env) {
 
 void MessageWrapper::HandleSecondaryActionClick(JNIEnv* env) {
   if (!secondary_action_callback_.is_null())
-    std::move(secondary_action_callback_).Run();
+    secondary_action_callback_.Run();
+}
+
+void MessageWrapper::HandleSecondaryMenuItemSelected(JNIEnv* env, int item_id) {
+  if (!secondary_menu_item_selected_callback_.is_null())
+    secondary_menu_item_selected_callback_.Run(item_id);
 }
 
 void MessageWrapper::HandleDismissCallback(JNIEnv* env, int dismiss_reason) {
   // Make sure message dismissed callback is called exactly once.
-  message_enqueued_ = false;
+  is_in_queue_ = false;
   Java_MessageWrapper_clearNativePtr(env, java_message_wrapper_);
   if (!dismiss_callback_.is_null())
     std::move(dismiss_callback_)
@@ -171,8 +318,24 @@ const base::android::JavaRef<jobject>& MessageWrapper::GetJavaMessageWrapper()
   return java_message_wrapper_;
 }
 
-void MessageWrapper::SetMessageEnqueued() {
-  message_enqueued_ = true;
+void MessageWrapper::SetMessageEnqueued(
+    const base::android::JavaRef<jobject>& java_window_android) {
+  is_in_queue_ = true;
+  java_window_android_ = java_window_android;
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_MessageWrapper_initializeSecondaryMenu(
+      env, java_message_wrapper_, java_window_android_,
+      static_cast<int>(secondary_menu_max_size_));
+}
+
+const SkBitmap MessageWrapper::GetIconBitmap() {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  base::android::ScopedJavaLocalRef<jobject> bitmap =
+      Java_MessageWrapper_getIconBitmap(env, java_message_wrapper_);
+  gfx::JavaBitmap java_bitmap_lock(bitmap);
+  return gfx::CreateSkBitmapFromJavaBitmap(java_bitmap_lock);
 }
 
 }  // namespace messages
+
+DEFINE_JNI(MessageWrapper)

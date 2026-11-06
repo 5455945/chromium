@@ -32,10 +32,11 @@
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_TEXT_DATE_COMPONENTS_H_
 
 #include <limits>
+
+#include "base/time/time.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
-#include "third_party/blink/renderer/platform/wtf/text/unicode.h"
 
 namespace blink {
 
@@ -51,16 +52,9 @@ class PLATFORM_EXPORT DateComponents {
   DISALLOW_NEW();
 
  public:
-  DateComponents()
-      : millisecond_(0),
-        second_(0),
-        minute_(0),
-        hour_(0),
-        month_day_(0),
-        month_(0),
-        year_(0),
-        week_(0),
-        type_(kInvalid) {}
+  DateComponents() = default;
+
+  bool operator==(const DateComponents&) const = default;
 
   enum Type {
     kInvalid,
@@ -76,13 +70,12 @@ class PLATFORM_EXPORT DateComponents {
   int Minute() const { return minute_; }
   int Hour() const { return hour_; }
   int MonthDay() const { return month_day_; }
-  int WeekDay() const;
   int Month() const { return month_; }
   int FullYear() const { return year_; }
   int Week() const { return week_; }
   Type GetType() const { return type_; }
 
-  enum SecondFormat {
+  enum class SecondFormat {
     kNone,  // Suppress the second part and the millisecond part if they are 0.
     kSecond,  // Always show the second part, and suppress the millisecond part
               // if it is 0.
@@ -92,7 +85,7 @@ class PLATFORM_EXPORT DateComponents {
   // Returns an ISO 8601 representation for this instance.
   // The format argument is valid for kDateTime, kDateTimeLocal, and
   // kTime types.
-  String ToString(SecondFormat format = kNone) const;
+  String ToString(SecondFormat format = SecondFormat::kNone) const;
 
   // Parse*() and SetMillisecondsSince*() functions are initializers for an
   // DateComponents instance. If these functions return false, the instance
@@ -105,15 +98,15 @@ class PLATFORM_EXPORT DateComponents {
   // failures, and the trailing extra characters don't cause parse failures.
 
   // Sets FullYear and Month.
-  bool ParseMonth(const String& src, unsigned start, unsigned& end);
+  bool ParseMonth(const String& src, wtf_size_t start, wtf_size_t& end);
   // Sets FullYear, Month and MonthDay.
-  bool ParseDate(const String& src, unsigned start, unsigned& end);
+  bool ParseDate(const String& src, wtf_size_t start, wtf_size_t& end);
   // Sets FullYear and Week.
-  bool ParseWeek(const String& src, unsigned start, unsigned& end);
+  bool ParseWeek(const String& src, wtf_size_t start, wtf_size_t& end);
   // Sets Hour, Minute, Second and Millisecond.
-  bool ParseTime(const String& src, unsigned start, unsigned& end);
+  bool ParseTime(const String& src, wtf_size_t start, wtf_size_t& end);
   // Sets FullYear, Month, MonthDay, Hour, Minute, Second and Millisecond.
-  bool ParseDateTimeLocal(const String&, unsigned start, unsigned& end);
+  bool ParseDateTimeLocal(const String& src, wtf_size_t start, wtf_size_t& end);
 
   // The following SetMillisecondsSinceEpochFor*() functions take
   // the number of milliseconds since 1970-01-01 00:00:00.000 UTC as
@@ -188,12 +181,12 @@ class PLATFORM_EXPORT DateComponents {
   // Returns the maximum week number in this DateComponents's year.
   // The result is either of 52 and 53.
   int MaxWeekNumberInYear() const;
-  bool ParseYear(const String&, unsigned start, unsigned& end);
+  bool ParseYear(const String&, wtf_size_t start, wtf_size_t& end);
   // Helper for MillisecondsSinceEpoch().
-  double MillisecondsSinceEpochForTime() const;
+  base::TimeDelta MillisecondsSinceEpochForTime() const;
   // Helpers for SetMillisecondsSinceEpochFor*().
   bool SetMillisecondsSinceEpochForDateInternal(double ms);
-  void SetMillisecondsSinceMidnightInternal(double ms);
+  void SetMillisecondsSinceMidnightInternal(int ms_in_day);
   // Helper for ToString().
   String ToStringForTime(SecondFormat) const;
 
@@ -208,16 +201,16 @@ class PLATFORM_EXPORT DateComponents {
     kSaturday,
   };
 
-  int millisecond_;  // 0 - 999
-  int second_;
-  int minute_;
-  int hour_;
-  int month_day_;  // 1 - 31
-  int month_;      // 0:January - 11:December
-  int year_;       // 1 - 275760
-  int week_;       // 1 - 53
+  int millisecond_ = 0;  // 0 - 999
+  int second_ = 0;
+  int minute_ = 0;
+  int hour_ = 0;
+  int month_day_ = 0;  // 1 - 31
+  int month_ = 0;      // 0:January - 11:December
+  int year_ = 0;       // 1 - 275760
+  int week_ = 0;       // 1 - 53
 
-  Type type_;
+  Type type_ = kInvalid;
 };
 
 }  // namespace blink

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,10 @@
 
 #import <objc/objc-class.h>
 
-#import "base/mac/scoped_objc_class_swizzler.h"
+#import "base/apple/scoped_objc_class_swizzler.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
+#include "ui/base/mojom/window_open_disposition.mojom-shared.h"
 #import "ui/base/test/cocoa_helper.h"
 #include "ui/events/event_constants.h"
 #import "ui/events/test/cocoa_test_event_utils.h"
@@ -19,7 +20,9 @@
 @interface TestEvent : NSObject
 @end
 @implementation TestEvent
-- (NSUInteger)modifierFlags { return NSShiftKeyMask; }
+- (NSUInteger)modifierFlags {
+  return NSEventModifierFlagShift;
+}
 @end
 
 namespace ui {
@@ -31,41 +34,43 @@ class CocoaBaseUtilsTest : public CocoaTest {
 
 TEST_F(CocoaBaseUtilsTest, WindowOpenDispositionFromNSEvent) {
   // Left Click = same tab.
-  NSEvent* me = cocoa_test_event_utils::MouseEventWithType(NSLeftMouseUp, 0);
-  EXPECT_EQ(WindowOpenDisposition::CURRENT_TAB,
+  NSEvent* me =
+      cocoa_test_event_utils::MouseEventWithType(NSEventTypeLeftMouseUp, 0);
+  EXPECT_EQ(ui::mojom::WindowOpenDisposition::kCurrentTab,
             WindowOpenDispositionFromNSEvent(me));
 
   // Middle Click = new background tab.
-  me = cocoa_test_event_utils::MouseEventWithType(NSOtherMouseUp, 0);
-  EXPECT_EQ(WindowOpenDisposition::NEW_BACKGROUND_TAB,
+  me = cocoa_test_event_utils::MouseEventWithType(NSEventTypeOtherMouseUp, 0);
+  EXPECT_EQ(ui::mojom::WindowOpenDisposition::kNewBackgroundTab,
             WindowOpenDispositionFromNSEvent(me));
 
   // Shift+Middle Click = new foreground tab.
   {
-    base::mac::ScopedObjCClassSwizzler swizzler(
+    base::apple::ScopedObjCClassSwizzler swizzler(
         [NSEvent class], [TestEvent class], @selector(modifierFlags));
-    me = cocoa_test_event_utils::MouseEventWithType(NSOtherMouseUp,
-                                                    NSShiftKeyMask);
-    EXPECT_EQ(WindowOpenDisposition::NEW_FOREGROUND_TAB,
+    me = cocoa_test_event_utils::MouseEventWithType(NSEventTypeOtherMouseUp,
+                                                    NSEventModifierFlagShift);
+    EXPECT_EQ(ui::mojom::WindowOpenDisposition::kNewForegroundTab,
               WindowOpenDispositionFromNSEvent(me));
   }
 
   // Cmd+Left Click = new background tab.
-  me = cocoa_test_event_utils::MouseEventWithType(NSLeftMouseUp,
-                                                  NSCommandKeyMask);
-  EXPECT_EQ(WindowOpenDisposition::NEW_BACKGROUND_TAB,
+  me = cocoa_test_event_utils::MouseEventWithType(NSEventTypeLeftMouseUp,
+                                                  NSEventModifierFlagCommand);
+  EXPECT_EQ(ui::mojom::WindowOpenDisposition::kNewBackgroundTab,
             WindowOpenDispositionFromNSEvent(me));
 
   // Cmd+Shift+Left Click = new foreground tab.
   me = cocoa_test_event_utils::MouseEventWithType(
-      NSLeftMouseUp, NSCommandKeyMask | NSShiftKeyMask);
-  EXPECT_EQ(WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      NSEventTypeLeftMouseUp,
+      NSEventModifierFlagCommand | NSEventModifierFlagShift);
+  EXPECT_EQ(ui::mojom::WindowOpenDisposition::kNewForegroundTab,
             WindowOpenDispositionFromNSEvent(me));
 
   // Shift+Left Click = new window
-  me = cocoa_test_event_utils::MouseEventWithType(NSLeftMouseUp,
-                                                  NSShiftKeyMask);
-  EXPECT_EQ(WindowOpenDisposition::NEW_WINDOW,
+  me = cocoa_test_event_utils::MouseEventWithType(NSEventTypeLeftMouseUp,
+                                                  NSEventModifierFlagShift);
+  EXPECT_EQ(ui::mojom::WindowOpenDisposition::kNewWindow,
             WindowOpenDispositionFromNSEvent(me));
 }
 

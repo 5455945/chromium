@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,7 @@
 
 #include <string>
 
-#include "base/macros.h"
-#include "ui/gfx/native_widget_types.h"
+#include "base/memory/raw_ptr.h"
 
 class Profile;
 class TemplateURL;
@@ -23,10 +22,10 @@ class EditSearchEngineControllerDelegate {
   virtual void OnEditedKeyword(TemplateURL* template_url,
                                const std::u16string& title,
                                const std::u16string& keyword,
-                               const std::string& url) = 0;
+                               const std::string& fixed_up_url) = 0;
 
  protected:
-  virtual ~EditSearchEngineControllerDelegate() {}
+  virtual ~EditSearchEngineControllerDelegate() = default;
 };
 
 // EditSearchEngineController provides the core platform independent logic
@@ -38,7 +37,12 @@ class EditSearchEngineController {
       TemplateURL* template_url,
       EditSearchEngineControllerDelegate* edit_keyword_delegate,
       Profile* profile);
-  ~EditSearchEngineController() {}
+
+  EditSearchEngineController(const EditSearchEngineController&) = delete;
+  EditSearchEngineController& operator=(const EditSearchEngineController&) =
+      delete;
+
+  ~EditSearchEngineController() = default;
 
   // Returns true if the value of |title_input| is a valid search engine name.
   bool IsTitleValid(const std::u16string& title_input) const;
@@ -68,23 +72,17 @@ class EditSearchEngineController {
   Profile* profile() const { return profile_; }
 
  private:
-  // Fixes up and returns the URL the user has input. The returned URL is
-  // suitable for use by TemplateURL.
-  std::string GetFixedUpURL(const std::string& url_input) const;
-
   // The TemplateURL we're displaying information for. It may be nullptr. If we
   // have a keyword_editor_view, we assume that this TemplateURL is already in
   // the TemplateURLService; if not, we assume it isn't.
-  TemplateURL* template_url_;
+  raw_ptr<TemplateURL> template_url_;
 
   // We may have been created by this, in which case we will call back to it on
   // success to add/modify the entry.  May be nullptr.
-  EditSearchEngineControllerDelegate* edit_keyword_delegate_;
+  raw_ptr<EditSearchEngineControllerDelegate> edit_keyword_delegate_;
 
   // Profile whose TemplateURLService we're modifying.
-  Profile* profile_;
-
-  DISALLOW_COPY_AND_ASSIGN(EditSearchEngineController);
+  raw_ptr<Profile> profile_;
 };
 
 #endif  // CHROME_BROWSER_UI_SEARCH_ENGINES_EDIT_SEARCH_ENGINE_CONTROLLER_H_

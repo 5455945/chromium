@@ -1,13 +1,12 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROMECAST_MEDIA_SERVICE_VIDEO_GEOMETRY_SETTER_SERVICE_H_
 #define CHROMECAST_MEDIA_SERVICE_VIDEO_GEOMETRY_SETTER_SERVICE_H_
 
-#include "base/bind.h"
 #include "base/containers/flat_map.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/unguessable_token.h"
@@ -26,11 +25,17 @@ namespace media {
 
 // This service runs and destructs on the sequence where it's constructed, but
 // the public methods can be run on any sequence.
-class VideoGeometrySetterService : public mojom::VideoGeometryChangeSubscriber,
-                                   public mojom::VideoGeometrySetter {
+class VideoGeometrySetterService final
+    : public mojom::VideoGeometryChangeSubscriber,
+      public mojom::VideoGeometrySetter {
  public:
   VideoGeometrySetterService();
-  ~VideoGeometrySetterService() final;
+
+  VideoGeometrySetterService(const VideoGeometrySetterService&) = delete;
+  VideoGeometrySetterService& operator=(const VideoGeometrySetterService&) =
+      delete;
+
+  ~VideoGeometrySetterService() override;
 
   void GetVideoGeometryChangeSubscriber(
       mojo::PendingReceiver<mojom::VideoGeometryChangeSubscriber>
@@ -66,7 +71,6 @@ class VideoGeometrySetterService : public mojom::VideoGeometryChangeSubscriber,
       this};
 
   base::WeakPtrFactory<VideoGeometrySetterService> weak_factory_;
-  DISALLOW_COPY_AND_ASSIGN(VideoGeometrySetterService);
 };
 
 }  // namespace media

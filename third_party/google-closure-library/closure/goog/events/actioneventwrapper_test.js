@@ -1,16 +1,8 @@
-// Copyright 2009 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 goog.module('goog.events.actionEventWrapperTest');
 goog.setTestOnly();
@@ -25,6 +17,7 @@ const testSuite = goog.require('goog.testing.testSuite');
 const testingEvents = goog.require('goog.testing.events');
 
 let a;
+let buttonEl;
 let eh;
 let events;
 
@@ -35,6 +28,7 @@ class Foo {
 }
 
 function assertListenersExist(el, listenerCount, capt) {
+  /** @suppress {visibility} suppression added to enable type checking */
   const EVENT_TYPES = googEvents.ActionEventWrapper_.EVENT_TYPES_;
   for (let i = 0; i < EVENT_TYPES.length; ++i) {
     assertEquals(
@@ -46,8 +40,10 @@ function assertListenersExist(el, listenerCount, capt) {
 testSuite({
   setUpPage() {
     a = document.getElementById('a');
+    buttonEl = document.getElementById('button');
   },
 
+  /** @suppress {checkTypes} suppression added to enable type checking */
   setUp() {
     events = [];
     eh = new EventHandler();
@@ -267,5 +263,50 @@ testSuite({
 
     eh2.dispose();
     assertListenersExist(a, 0, false);
+  },
+
+  testBlockBrowserScrollInteractableRole() {
+    const listener = (e) => {
+      events.push(e);
+    };
+    eh.listenWithWrapper(buttonEl, actionEventWrapper, e => {});
+    eh.listen(
+        buttonEl,
+        [
+          googEvents.EventType.KEYDOWN,
+          googEvents.EventType.KEYUP,
+        ],
+        listener);
+
+    testingEvents.fireKeySequence(buttonEl, KeyCodes.SPACE);
+
+    assertEquals(
+        'KEYUP and KEYDOWN events should have been fired.', 2, events.length);
+    assertTrue(
+        'SPACE key events should have been default prevented.',
+        events.every(e => e.defaultPrevented));
+  },
+
+  testDontPreventDefaultUnknownRole() {
+    const listener = (e) => {
+      events.push(e);
+    };
+    eh.listenWithWrapper(a, actionEventWrapper, e => {});
+    eh.listen(
+        a,
+        [
+          googEvents.EventType.KEYDOWN,
+          googEvents.EventType.KEYUP,
+        ],
+        listener);
+
+    testingEvents.fireKeySequence(a, KeyCodes.SPACE);
+
+    assertEquals(
+        'KEYUP and KEYDOWN events should have been fired.', 2, events.length);
+    assertTrue(
+        'SPACE key events should not have been default prevented on ' +
+            'non-interactable elements.',
+        events.every(e => !e.defaultPrevented));
   },
 });

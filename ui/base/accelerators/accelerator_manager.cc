@@ -1,11 +1,14 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/base/accelerators/accelerator_manager.h"
 
+#include <algorithm>
+#include <ostream>
+
 #include "base/check.h"
-#include "base/containers/contains.h"
+#include "base/logging.h"
 
 namespace ui {
 
@@ -17,7 +20,7 @@ void AcceleratorManager::Register(
     const std::vector<ui::Accelerator>& accelerators,
     HandlerPriority priority,
     AcceleratorTarget* target) {
-  DCHECK(target);
+  CHECK(target, base::NotFatalUntil::M163);
 
   for (const ui::Accelerator& accelerator : accelerators) {
     accelerators_.GetOrInsertDefault(accelerator)
@@ -27,12 +30,18 @@ void AcceleratorManager::Register(
 
 void AcceleratorManager::Unregister(const Accelerator& accelerator,
                                     AcceleratorTarget* target) {
-  DCHECK(target);
+  CHECK(target, base::NotFatalUntil::M163);
   AcceleratorTargetInfo* target_info = accelerators_.Find(accelerator);
-  DCHECK(target_info) << "Unregistering non-existing accelerator";
+  if (!target_info) {
+    DLOG(WARNING) << "Unregistering non-existing accelerator";
+    return;
+  }
 
   const bool was_registered = target_info->Unregister(target);
-  DCHECK(was_registered) << "Unregistering accelerator for wrong target";
+  if (!was_registered) {
+    DLOG(WARNING) << "Unregistering accelerator for wrong target";
+    return;
+  }
 
   // If the last target for the accelerator is removed, then erase the
   // entry from the map.
@@ -54,16 +63,29 @@ void AcceleratorManager::UnregisterAll(AcceleratorTarget* target) {
       continue;
     }
 
-    DCHECK(target_info.HasTargets());
+    CHECK(target_info.HasTargets(), base::NotFatalUntil::M163);
     ++map_iter;
   }
 }
+
+#if DCHECK_IS_ON()
+size_t AcceleratorManager::GetAcceleratorCountForTarget(
+    AcceleratorTarget* target) const {
+  size_t count = 0;
+  for (const auto& [accelerator, target_info] : accelerators_) {
+    if (target_info.Contains(target)) {
+      ++count;
+    }
+  }
+  return count;
+}
+#endif
 
 bool AcceleratorManager::IsRegistered(const Accelerator& accelerator) const {
   const AcceleratorTargetInfo* target_info = accelerators_.Find(accelerator);
 
   // If the accelerator is in the map, the target list should not be empty.
-  DCHECK(!target_info || target_info->HasTargets());
+  CHECK(!target_info || target_info->HasTargets(), base::NotFatalUntil::M163);
   return target_info != nullptr;
 }
 
@@ -73,7 +95,7 @@ bool AcceleratorManager::Process(const Accelerator& accelerator) {
     return false;
 
   // If the accelerator is in the map, the target list should not be empty.
-  DCHECK(target_info->HasTargets());
+  CHECK(target_info->HasTargets(), base::NotFatalUntil::M163);
 
   // We have to copy the target list here, because processing the accelerator
   // event handler may modify the list.
@@ -116,7 +138,7 @@ void AcceleratorManager::AcceleratorTargetInfo::RegisterWithPriority(
     // handler to the front. Otherwise, register it after the first (only)
     // priority handler.
     if (has_priority_handler_) {
-      DCHECK(!targets_.empty());
+      CHECK(!targets_.empty(), base::NotFatalUntil::M163);
       targets_.insert(++targets_.begin(), target);
     } else {
       targets_.push_front(target);
@@ -124,12 +146,12 @@ void AcceleratorManager::AcceleratorTargetInfo::RegisterWithPriority(
   }
 
   // Post condition. Ensure there's at least one target.
-  DCHECK(!targets_.empty());
+  CHECK(!targets_.empty(), base::NotFatalUntil::M163);
 }
 
 bool AcceleratorManager::AcceleratorTargetInfo::Unregister(
     AcceleratorTarget* target) {
-  DCHECK(!targets_.empty());
+  CHECK(!targets_.empty(), base::NotFatalUntil::M163);
 
   // Only one priority handler is allowed, so if we remove the first element we
   // no longer have a priority target.
@@ -137,14 +159,17 @@ bool AcceleratorManager::AcceleratorTargetInfo::Unregister(
     has_priority_handler_ = false;
 
   // Attempt to remove the target and return true if it was present.
-  const size_t original_target_count = targets_.size();
-  targets_.remove(target);
-  return original_target_count != targets_.size();
+  auto iter = std::find(targets_.begin(), targets_.end(), target);
+  if (iter != targets_.end()) {
+    targets_.erase(iter);
+    return true;
+  }
+  return false;
 }
 
 bool AcceleratorManager::AcceleratorTargetInfo::TryProcess(
     const Accelerator& accelerator) {
-  DCHECK(!targets_.empty());
+  CHECK(!targets_.empty(), base::NotFatalUntil::M163);
 
   for (AcceleratorTarget* target : targets_) {
     if (target->CanHandleAccelerators() &&
@@ -157,14 +182,14 @@ bool AcceleratorManager::AcceleratorTargetInfo::TryProcess(
 }
 
 bool AcceleratorManager::AcceleratorTargetInfo::HasPriorityHandler() const {
-  DCHECK(!targets_.empty());
+  CHECK(!targets_.empty(), base::NotFatalUntil::M163);
   return has_priority_handler_ && targets_.front()->CanHandleAccelerators();
 }
 
 bool AcceleratorManager::AcceleratorTargetInfo::Contains(
     AcceleratorTarget* target) const {
-  DCHECK(target);
-  return base::Contains(targets_, target);
+  CHECK(target, base::NotFatalUntil::M163);
+  return std::ranges::contains(targets_, target);
 }
 
 }  // namespace ui

@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,19 +8,32 @@
 #include <stdint.h>
 
 #include "base/files/file.h"
+#include "base/files/file_path.h"
 #include "base/files/memory_mapped_file.h"
+#include "build/build_config.h"
 #include "gin/array_buffer.h"
 #include "gin/gin_export.h"
 #include "gin/public/isolate_holder.h"
 #include "gin/public/v8_platform.h"
-#include "v8/include/v8.h"
+#include "v8/include/v8-callbacks.h"
+
+#if defined(V8_USE_EXTERNAL_STARTUP_DATA)
+#include "gin/public/v8_snapshot_file_type.h"
+#endif
+
+namespace v8 {
+class StartupData;
+}
 
 namespace gin {
 
 class GIN_EXPORT V8Initializer {
  public:
   // This should be called by IsolateHolder::Initialize().
-  static void Initialize(IsolateHolder::ScriptMode mode);
+  static void Initialize(IsolateHolder::ScriptMode mode,
+                         const std::string& js_command_line_flags,
+                         bool disallow_v8_feature_flag_overrides,
+                         v8::OOMErrorCallback oom_error_callback);
 
   // Get address and size information for currently loaded snapshot.
   // If no snapshot is loaded, the return values are null for addresses
@@ -30,15 +43,6 @@ class GIN_EXPORT V8Initializer {
                                         int* snapshot_size_out);
 
 #if defined(V8_USE_EXTERNAL_STARTUP_DATA)
-  // Indicates which file to load as a snapshot blob image.
-  enum class V8SnapshotFileType {
-    kDefault,
-
-    // Snapshot augmented with customized contexts, which can be deserialized
-    // using v8::Context::FromSnapshot.
-    kWithAdditionalContext,
-  };
-
   // Load V8 snapshot from default resources, if they are available.
   static void LoadV8Snapshot(
       V8SnapshotFileType snapshot_file_type = V8SnapshotFileType::kDefault);
@@ -52,10 +56,20 @@ class GIN_EXPORT V8Initializer {
       base::MemoryMappedFile::Region* snapshot_file_region,
       V8SnapshotFileType snapshot_file_type);
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   static base::FilePath GetSnapshotFilePath(
       bool abi_32_bit,
       V8SnapshotFileType snapshot_file_type);
+#endif
+
+#if BUILDFLAG(IS_WIN)
+  // Returns the resolved path for a V8 startup data file (`file_name`),
+  // preferring `base::DIR_MODULE` over `base::DIR_ASSETS` when present.
+  static base::FilePath GetV8FilePathForTesting(const char* file_name);
+
+  // Resets the cached V8 file directory selection so tests can exercise
+  // different `base::DIR_MODULE` and `base::DIR_ASSETS` configurations.
+  static void ResetV8FilePathForTesting();
 #endif
 
 #endif  // V8_USE_EXTERNAL_STARTUP_DATA

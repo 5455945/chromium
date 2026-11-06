@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,8 @@
 #include <memory>
 #include <vector>
 
-#include "base/macros.h"
 #include "chromeos/dbus/power/fake_power_manager_client.h"
+#include "components/session_manager/core/fake_session_manager_delegate.h"
 #include "components/session_manager/core/session_manager.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -21,6 +21,12 @@ class TestUsageTimeStateNotifierObserver
     : public UsageTimeStateNotifier::Observer {
  public:
   TestUsageTimeStateNotifierObserver() = default;
+
+  TestUsageTimeStateNotifierObserver(
+      const TestUsageTimeStateNotifierObserver&) = delete;
+  TestUsageTimeStateNotifierObserver& operator=(
+      const TestUsageTimeStateNotifierObserver&) = delete;
+
   ~TestUsageTimeStateNotifierObserver() override = default;
 
   const std::vector<UsageTimeStateNotifier::UsageTimeState>& events() const {
@@ -34,8 +40,6 @@ class TestUsageTimeStateNotifierObserver
   }
 
   std::vector<UsageTimeStateNotifier::UsageTimeState> usage_time_state_changes_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestUsageTimeStateNotifierObserver);
 };
 
 }  // namespace
@@ -43,15 +47,20 @@ class TestUsageTimeStateNotifierObserver
 class UsageTimeStateNotifierTest : public testing::Test {
  protected:
   UsageTimeStateNotifierTest() = default;
+
+  UsageTimeStateNotifierTest(const UsageTimeStateNotifierTest&) = delete;
+  UsageTimeStateNotifierTest& operator=(const UsageTimeStateNotifierTest&) =
+      delete;
+
   ~UsageTimeStateNotifierTest() override = default;
 
   void SetUp() override {
-    PowerManagerClient::InitializeFake();
+    chromeos::PowerManagerClient::InitializeFake();
     session_manager_.SetSessionState(
         session_manager::SessionState::LOGIN_PRIMARY);
   }
 
-  void TearDown() override { PowerManagerClient::Shutdown(); }
+  void TearDown() override { chromeos::PowerManagerClient::Shutdown(); }
 
   void NotifyScreenIdleOffChanged(bool off) {
     power_manager::ScreenIdleState proto;
@@ -59,8 +68,8 @@ class UsageTimeStateNotifierTest : public testing::Test {
     power_manager_client()->SendScreenIdleStateChanged(proto);
   }
 
-  FakePowerManagerClient* power_manager_client() {
-    return FakePowerManagerClient::Get();
+  chromeos::FakePowerManagerClient* power_manager_client() {
+    return chromeos::FakePowerManagerClient::Get();
   }
 
   session_manager::SessionManager* session_manager() {
@@ -68,9 +77,8 @@ class UsageTimeStateNotifierTest : public testing::Test {
   }
 
  private:
-  session_manager::SessionManager session_manager_;
-
-  DISALLOW_COPY_AND_ASSIGN(UsageTimeStateNotifierTest);
+  session_manager::SessionManager session_manager_{
+      std::make_unique<session_manager::FakeSessionManagerDelegate>()};
 };
 
 TEST_F(UsageTimeStateNotifierTest, CallObserverWhenSessionIsActive) {

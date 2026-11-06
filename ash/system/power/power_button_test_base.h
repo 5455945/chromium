@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 
 #include "ash/system/power/power_button_controller.h"
 #include "ash/test/ash_test_base.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/simple_test_tick_clock.h"
 #include "ui/events/keycodes/keyboard_codes_posix.h"
 
@@ -25,6 +26,9 @@ class PowerButtonTestBase : public AshTestBase {
  public:
   PowerButtonTestBase();
   explicit PowerButtonTestBase(base::test::TaskEnvironment::TimeSource time);
+
+  PowerButtonTestBase(const PowerButtonTestBase&) = delete;
+  PowerButtonTestBase& operator=(const PowerButtonTestBase&) = delete;
 
   ~PowerButtonTestBase() override;
 
@@ -50,6 +54,9 @@ class PowerButtonTestBase : public AshTestBase {
   void SetTabletModeSwitchState(
       chromeos::PowerManagerClient::TabletMode tablet_mode_switch_state);
 
+  // Simulates ARC power button event.
+  void LaunchArcPowerButtonEvent();
+
   // Simulates a power button press.
   void PressPowerButton();
 
@@ -65,9 +72,6 @@ class PowerButtonTestBase : public AshTestBase {
   // Simulates a mouse move event.
   void GenerateMouseMoveEvent();
 
-  // Initializes login status and sets power button type.
-  void Initialize(ButtonType button_type, LoginStatus status);
-
   // Triggers a lock screen operation.
   void LockScreen();
 
@@ -82,15 +86,14 @@ class PowerButtonTestBase : public AshTestBase {
   // they come too close.
   void AdvanceClockToAvoidIgnoring();
 
-  PowerButtonController* power_button_controller_ = nullptr;  // Not owned.
-  LockStateController* lock_state_controller_ = nullptr;      // Not owned.
-  PowerButtonScreenshotController* screenshot_controller_ =
+  raw_ptr<PowerButtonController, DanglingUntriaged> power_button_controller_ =
       nullptr;  // Not owned.
+  raw_ptr<LockStateController> lock_state_controller_ = nullptr;  // Not owned.
+  raw_ptr<PowerButtonScreenshotController, DanglingUntriaged>
+      screenshot_controller_ = nullptr;  // Not owned.
   std::unique_ptr<LockStateControllerTestApi> lock_state_test_api_;
   std::unique_ptr<PowerButtonControllerTestApi> power_button_test_api_;
   base::SimpleTestTickClock tick_clock_;
-
-  DISALLOW_COPY_AND_ASSIGN(PowerButtonTestBase);
 };
 
 }  // namespace ash

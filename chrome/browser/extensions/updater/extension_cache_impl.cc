@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,24 +7,22 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "base/memory/singleton.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/sequenced_task_runner.h"
-#include "base/task/post_task.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
-#include "chrome/browser/chrome_notification_types.h"
-#include "chrome/browser/extensions/crx_installer.h"
+#include "base/version.h"
 #include "chrome/browser/extensions/updater/chromeos_extension_cache_delegate.h"
 #include "chrome/browser/extensions/updater/local_extension_cache.h"
 #include "chrome/common/extensions/extension_constants.h"
-#include "content/public/browser/notification_details.h"
-#include "content/public/browser/notification_service.h"
-#include "content/public/browser/notification_source.h"
+#include "extensions/browser/crx_installer.h"
 #include "extensions/browser/install/crx_install_error.h"
 #include "extensions/browser/install/sandboxed_unpacker_failure_reason.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -37,9 +35,6 @@ ExtensionCacheImpl::ExtensionCacheImpl(
           base::ThreadPool::CreateSequencedTaskRunner(
               {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
                base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN}))) {
-  notification_registrar_.Add(
-      this, extensions::NOTIFICATION_EXTENSION_INSTALL_ERROR,
-      content::NotificationService::AllBrowserContextsAndSources());
   cache_->Init(true, base::BindOnce(&ExtensionCacheImpl::OnCacheInitialized,
                                     weak_ptr_factory_.GetWeakPtr()));
 }
@@ -48,7 +43,7 @@ ExtensionCacheImpl::~ExtensionCacheImpl() = default;
 
 void ExtensionCacheImpl::Start(base::OnceClosure callback) {
   if (!cache_ || cache_->is_ready()) {
-    DCHECK(init_callbacks_.empty());
+    CHECK(init_callbacks_.empty(), base::NotFatalUntil::M161);
     std::move(callback).Run();
   } else {
     init_callbacks_.push_back(std::move(callback));
@@ -82,7 +77,7 @@ void ExtensionCacheImpl::PutExtension(const std::string& id,
                                       const std::string& version,
                                       PutExtensionCallback callback) {
   if (cache_ && CachingAllowed(id)) {
-    cache_->PutExtension(id, expected_hash, file_path, version,
+    cache_->PutExtension(id, expected_hash, file_path, base::Version(version),
                          std::move(callback));
   } else {
     std::move(callback).Run(file_path, true);
@@ -90,7 +85,7 @@ void ExtensionCacheImpl::PutExtension(const std::string& id,
 }
 
 bool ExtensionCacheImpl::CachingAllowed(const std::string& id) {
-  return base::Contains(allowed_extensions_, id);
+  return allowed_extensions_.contains(id);
 }
 
 void ExtensionCacheImpl::OnCacheInitialized() {
@@ -108,38 +103,29 @@ void ExtensionCacheImpl::OnCacheInitialized() {
   }
 }
 
-void ExtensionCacheImpl::Observe(int type,
-                                 const content::NotificationSource& source,
-                                 const content::NotificationDetails& details) {
-  DCHECK_EQ(extensions::NOTIFICATION_EXTENSION_INSTALL_ERROR, type);
-
+bool ExtensionCacheImpl::OnInstallFailed(const std::string& id,
+                                         const std::string& hash,
+                                         const CrxInstallError& error) {
   if (!cache_)
-    return;
+    return false;
 
-  extensions::CrxInstaller* installer =
-      content::Source<extensions::CrxInstaller>(source).ptr();
-  const std::string& id = installer->expected_id();
-  const std::string& hash = installer->expected_hash();
-  const extensions::CrxInstallError* error =
-      content::Details<const extensions::CrxInstallError>(details).ptr();
-  const auto error_type = error->type();
-
-  if (error_type == extensions::CrxInstallErrorType::DECLINED) {
+  if (error.type() == extensions::CrxInstallErrorType::DECLINED) {
     DVLOG(2) << "Extension install was declined, file kept";
-    return;
+    return false;
   }
   // Remove and retry download if the crx present in the cache is corrupted or
   // not according to the expectations,
-  if (error->IsCrxVerificationFailedError() ||
-      error->IsCrxExpectationsFailedError()) {
+  if (error.IsCrxVerificationFailedError() ||
+      error.IsCrxExpectationsFailedError()) {
     if (cache_->ShouldRetryDownload(id, hash)) {
       cache_->RemoveExtension(id, hash);
-      installer->set_verification_check_failed(true);
+      return true;
     }
-    return;
+    return false;
   }
 
   cache_->RemoveExtension(id, hash);
+  return true;
 }
 
 }  // namespace extensions

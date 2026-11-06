@@ -1,14 +1,13 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/offline_pages/core/model/store_visuals_task.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "components/offline_pages/core/offline_clock.h"
 #include "components/offline_pages/core/offline_page_metadata_store.h"
-#include "components/offline_pages/core/offline_store_utils.h"
 #include "sql/database.h"
 #include "sql/statement.h"
 #include "sql/transaction.h"
@@ -19,7 +18,7 @@ namespace offline_pages {
 // eventually deleted if their offline_id does not correspond to an offline
 // item. Two days gives us plenty of time so that the prefetched item can be
 // imported into the offline item database.
-const base::TimeDelta kVisualsExpirationDelta = base::TimeDelta::FromDays(2);
+const base::TimeDelta kVisualsExpirationDelta = base::Days(2);
 
 namespace {
 
@@ -31,7 +30,7 @@ bool EnsureRowExistsSync(sql::Database* db,
       " (offline_id,expiration,thumbnail,favicon) VALUES(?,?,x'',x'')";
   sql::Statement statement(db->GetCachedStatement(SQL_FROM_HERE, kInsertSql));
   statement.BindInt64(0, offline_id);
-  statement.BindInt64(1, store_utils::ToDatabaseTime(expiration));
+  statement.BindTime(1, expiration);
 
   return statement.Run();
 }
@@ -39,12 +38,12 @@ bool EnsureRowExistsSync(sql::Database* db,
 bool StoreThumbnailSync(sql::Database* db,
                         int64_t offline_id,
                         base::Time expiration,
-                        const std::string& thumbnail) {
+                        std::string thumbnail) {
   static const char kUpdateSql[] =
       "UPDATE page_thumbnails SET expiration=?,thumbnail=? WHERE offline_id=?";
   sql::Statement statement(db->GetCachedStatement(SQL_FROM_HERE, kUpdateSql));
-  statement.BindInt64(0, store_utils::ToDatabaseTime(expiration));
-  statement.BindBlob(1, thumbnail.data(), thumbnail.length());
+  statement.BindTime(0, expiration);
+  statement.BindBlob(1, std::move(thumbnail));
   statement.BindInt64(2, offline_id);
   return statement.Run();
 }
@@ -52,20 +51,20 @@ bool StoreThumbnailSync(sql::Database* db,
 bool StoreFaviconSync(sql::Database* db,
                       int64_t offline_id,
                       base::Time expiration,
-                      const std::string& favicon) {
+                      std::string favicon) {
   static const char kUpdateSql[] =
       "UPDATE page_thumbnails SET expiration=?,favicon=? WHERE offline_id=?";
   sql::Statement statement(db->GetCachedStatement(SQL_FROM_HERE, kUpdateSql));
-  statement.BindInt64(0, store_utils::ToDatabaseTime(expiration));
-  statement.BindBlob(1, favicon.data(), favicon.length());
+  statement.BindTime(0, expiration);
+  statement.BindBlob(1, std::move(favicon));
   statement.BindInt64(2, offline_id);
   return statement.Run();
 }
 
 bool StoreVisualsSync(int64_t offline_id,
                       base::Time expiration,
-                      const std::string& thumbnail,
-                      const std::string& favicon,
+                      std::string thumbnail,
+                      std::string favicon,
                       sql::Database* db) {
   if (expiration == base::Time()) {
     expiration = OfflineTimeNow() + kVisualsExpirationDelta;
@@ -75,12 +74,14 @@ bool StoreVisualsSync(int64_t offline_id,
     return false;
 
   if (!thumbnail.empty() &&
-      !StoreThumbnailSync(db, offline_id, expiration, thumbnail))
+      !StoreThumbnailSync(db, offline_id, expiration, std::move(thumbnail))) {
     return false;
+  }
 
   if (!favicon.empty() &&
-      !StoreFaviconSync(db, offline_id, expiration, favicon))
+      !StoreFaviconSync(db, offline_id, expiration, std::move(favicon))) {
     return false;
+  }
 
   return true;
 }

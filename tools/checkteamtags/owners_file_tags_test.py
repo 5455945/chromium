@@ -1,16 +1,15 @@
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 from collections import OrderedDict
 from contextlib import contextmanager
 import os
-import sys
 import unittest
+import unittest.mock as mock
 
 import owners_file_tags
 
-import mock
 
 @contextmanager
 def mock_file_tree(tree):
@@ -28,7 +27,7 @@ def mock_file_tree(tree):
       ret_val = mock.MagicMock()
       if path in files_data and mode == 'r':
 
-        class mock_opened_file(object):
+        class mock_opened_file:
           def __enter__(self, *args, **kwargs):
             return self
 
@@ -40,12 +39,14 @@ def mock_file_tree(tree):
 
         ret_val = mock_opened_file()
       return ret_val
+
     return inner_open
 
   patchers = [
-      mock.patch(
-          'owners_file_tags.open', custom_mock_open(file_mocks), create=True),
-      mock.patch('os.walk', mock.MagicMock(return_value=os_walk_mocks))
+    mock.patch(
+      'owners_file_tags.open', custom_mock_open(file_mocks), create=True
+    ),
+    mock.patch('os.walk', mock.MagicMock(return_value=os_walk_mocks)),
   ]
   for patcher in patchers:
     patcher.start()
@@ -55,90 +56,100 @@ def mock_file_tree(tree):
 
 
 class OwnersFileTagsTest(unittest.TestCase):
-
   """os tag breaking dupe >>"""
+
   def setUp(self):
-    super(OwnersFileTagsTest, self).setUp()
+    super().setUp()
     self.maxDiff = None
 
   def testScrapeOwners(self):
-    with mock_file_tree({
+    with mock_file_tree(
+      {
         'src': 'boss@chromium.org\n',
-        'src/dummydir1':
+        'src/dummydir1': 'dummy@chromium.org\n'
+        '# TEAM: dummy-team@chromium.org\n'
+        '# COMPONENT: Dummy>Component\n',
+        'src/dummydir1/innerdir1': 'dummy@chromium.org\n'
+        '# TEAM: dummy-specialist-team@chromium.org\n',
+        'src/dummydir1/innerdir2': 'dummy@chromium.org\n'
+        '# COMPONENT: Dummy>Component>Subcomponent\n',
+        'src/dummydir1/innerdir3': 'dummy@chromium.org\n# OS: Mac\n',
+      }
+    ):
+      scraped_data = owners_file_tags.scrape_owners('src', False)
+      self.assertEqual(
+        {
+          '.': {},
+          'dummydir1': {
+            'component': 'Dummy>Component',
+            'team': 'dummy-team@chromium.org',
+          },
+          'dummydir1/innerdir1': {
+            'component': 'Dummy>Component',
+            'team': 'dummy-specialist-team@chromium.org',
+          },
+          'dummydir1/innerdir2': {
+            'component': 'Dummy>Component>Subcomponent',
+            'team': 'dummy-team@chromium.org',
+          },
+          'dummydir1/innerdir3': {
+            'component': 'Dummy>Component',
+            'team': 'dummy-team@chromium.org',
+            'os': 'Mac',
+          },
+        },
+        scraped_data,
+      )
+
+  def testScrapeOwnersWithSubdirectories(self):
+    with mock_file_tree(
+      OrderedDict(
+        [
+          ('src', 'boss@chromium.org\n'),
+          (
+            'src/dummydir1',
             'dummy@chromium.org\n'
             '# TEAM: dummy-team@chromium.org\n'
             '# COMPONENT: Dummy>Component\n',
-        'src/dummydir1/innerdir1':
-            'dummy@chromium.org\n'
-            '# TEAM: dummy-specialist-team@chromium.org\n',
-        'src/dummydir1/innerdir2':
-            'dummy@chromium.org\n'
-            '# COMPONENT: Dummy>Component>Subcomponent\n',
-        'src/dummydir1/innerdir3':
-            'dummy@chromium.org\n'
-             '# OS: Mac\n'
-    }):
-      scraped_data = owners_file_tags.scrape_owners('src', False)
-      self.assertEqual({
-          '.': {},
-          'dummydir1': {
-              'component': 'Dummy>Component',
-              'team': 'dummy-team@chromium.org',
-          },
-          'dummydir1/innerdir1': {
-              'component': 'Dummy>Component',
-              'team': 'dummy-specialist-team@chromium.org',
-          },
-          'dummydir1/innerdir2': {
-              'component': 'Dummy>Component>Subcomponent',
-              'team': 'dummy-team@chromium.org',
-          },
-          'dummydir1/innerdir3': {
-              'component': 'Dummy>Component',
-              'team': 'dummy-team@chromium.org',
-              'os': 'Mac'
-          }
-      }, scraped_data)
-
-  def testScrapeOwnersWithSubdirectories(self):
-    with mock_file_tree(OrderedDict([
-        ('src', 'boss@chromium.org\n'),
-        ('src/dummydir1',
-         'dummy@chromium.org\n'
-         '# TEAM: dummy-team@chromium.org\n'
-         '# COMPONENT: Dummy>Component\n'),
-        ('src/dummydir1/innerdir1',
-         'dummy@chromium.org\n'
-         '# TEAM: dummy-specialist-team@chromium.org\n'),
-        ('src/dummydir1/innerdir2',
-         'dummy@chromium.org\n'
-         '# COMPONENT: Dummy>Component>Subcomponent\n'),
-        ('src/dummydir1/innerdir3',
-         'dummy@chromium.org\n# OS: Mac\n'),
-        ('src/dummydir1/innerdir4', None),
-    ])):
+          ),
+          (
+            'src/dummydir1/innerdir1',
+            'dummy@chromium.org\n# TEAM: dummy-specialist-team@chromium.org\n',
+          ),
+          (
+            'src/dummydir1/innerdir2',
+            'dummy@chromium.org\n# COMPONENT: Dummy>Component>Subcomponent\n',
+          ),
+          ('src/dummydir1/innerdir3', 'dummy@chromium.org\n# OS: Mac\n'),
+          ('src/dummydir1/innerdir4', None),
+        ]
+      )
+    ):
       scraped_data = owners_file_tags.scrape_owners('src', True)
-      self.assertEqual({
+      self.assertEqual(
+        {
           '.': {},
           'dummydir1': {
-              'component': 'Dummy>Component',
-              'team': 'dummy-team@chromium.org',
+            'component': 'Dummy>Component',
+            'team': 'dummy-team@chromium.org',
           },
           'dummydir1/innerdir1': {
-              'component': 'Dummy>Component',
-              'team': 'dummy-specialist-team@chromium.org',
+            'component': 'Dummy>Component',
+            'team': 'dummy-specialist-team@chromium.org',
           },
           'dummydir1/innerdir2': {
-              'component': 'Dummy>Component>Subcomponent',
-              'team': 'dummy-team@chromium.org',
+            'component': 'Dummy>Component>Subcomponent',
+            'team': 'dummy-team@chromium.org',
           },
           'dummydir1/innerdir3': {
-              'component': 'Dummy>Component',
-              'team': 'dummy-team@chromium.org',
-              'os': 'Mac'
+            'component': 'Dummy>Component',
+            'team': 'dummy-team@chromium.org',
+            'os': 'Mac',
           },
           'dummydir1/innerdir4': {
-              'component': 'Dummy>Component',
-              'team': 'dummy-team@chromium.org',
+            'component': 'Dummy>Component',
+            'team': 'dummy-team@chromium.org',
           },
-      }, scraped_data)
+        },
+        scraped_data,
+      )

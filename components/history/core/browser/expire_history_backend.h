@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,18 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <vector>
 
 #include "base/containers/queue.h"
+#include "base/containers/span.h"
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
+#include "components/favicon_base/favicon_types.h"
 #include "components/history/core/browser/history_types.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 class GURL;
 
@@ -37,14 +39,17 @@ class HistoryDatabase;
 // Encapsulates visit expiration criteria and type of visits to expire.
 class ExpiringVisitsReader {
  public:
-  virtual ~ExpiringVisitsReader() {}
+  virtual ~ExpiringVisitsReader() = default;
   // Populates `visits` from `db`, using provided `end_time` and `max_visits`
   // cap.
-  virtual bool Read(base::Time end_time, HistoryDatabase* db,
-                    VisitVector* visits, int max_visits) const = 0;
+  virtual bool Read(base::Time end_time,
+                    HistoryDatabase* db,
+                    VisitVector* visits,
+                    int max_visits) const = 0;
 };
 
-typedef std::vector<const ExpiringVisitsReader*> ExpiringVisitsReaders;
+typedef std::vector<raw_ptr<const ExpiringVisitsReader, VectorExperimental>>
+    ExpiringVisitsReaders;
 
 namespace internal {
 // The minimum number of days since last use for an icon to be considered old.
@@ -65,6 +70,10 @@ class ExpireHistoryBackend {
   ExpireHistoryBackend(HistoryBackendNotifier* notifier,
                        HistoryBackendClient* backend_client,
                        scoped_refptr<base::SequencedTaskRunner> task_runner);
+
+  ExpireHistoryBackend(const ExpireHistoryBackend&) = delete;
+  ExpireHistoryBackend& operator=(const ExpireHistoryBackend&) = delete;
+
   ~ExpireHistoryBackend();
 
   // Completes initialization by setting the databases that this class will use.
@@ -79,11 +88,13 @@ class ExpireHistoryBackend {
   void DeleteURL(const GURL& url, base::Time end_time);
 
   // Deletes everything associated with each URL in the list until `end_time`.
-  void DeleteURLs(const std::vector<GURL>& url, base::Time end_time);
+  void DeleteURLs(base::span<const GURL> urls, base::Time end_time);
 
-  // Removes all visits to restrict_urls (or all URLs if empty) in the given
+  // Removes all visits to restrict_urls (or all URLs if empty) and
+  // restrict_app_id (or all entries if absent) in the given
   // time range, updating the URLs accordingly.
   void ExpireHistoryBetween(const std::set<GURL>& restrict_urls,
+                            std::optional<std::string> restrict_app_id,
                             base::Time begin_time,
                             base::Time end_time,
                             bool user_initiated);
@@ -91,11 +102,12 @@ class ExpireHistoryBackend {
   // Removes all visits to all URLs with the given times, updating the
   // URLs accordingly.  `times` must be in reverse chronological order
   // and not contain any duplicates.
-  void ExpireHistoryForTimes(const std::vector<base::Time>& times);
+  void ExpireHistoryForTimes(base::span<const base::Time> times);
 
   // Removes the given list of visits, updating the URLs accordingly (similar to
   // ExpireHistoryBetween(), but affecting a specific set of visits).
-  void ExpireVisits(const VisitVector& visits);
+  void ExpireVisits(const VisitVector& visits,
+                    DeletionInfo::Reason deletion_reason);
 
   // Expires all visits before and including the given time, updating the URLs
   // accordingly.
@@ -113,6 +125,7 @@ class ExpireHistoryBackend {
   }
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(HistoryBackendTest, ExpireSegmentData);
   FRIEND_TEST_ALL_PREFIXES(ExpireHistoryTest, DeleteFaviconsIfPossible);
   FRIEND_TEST_ALL_PREFIXES(ExpireHistoryTest, ExpireSomeOldHistory);
   FRIEND_TEST_ALL_PREFIXES(ExpireHistoryTest, ExpiringVisitsReader);
@@ -144,6 +157,9 @@ class ExpireHistoryBackend {
     // The URLs deleted during this operation.
     URLRows deleted_urls;
 
+    // All the visits that were deleted.
+    std::set<VisitID> deleted_visit_ids_;
+
     // All favicon IDs that the deleted URLs had. Favicons will be shared
     // between all URLs with the same favicon, so this is the set of IDs that we
     // will need to check when the delete operations are complete.
@@ -156,7 +172,8 @@ class ExpireHistoryBackend {
   // Returns a vector with all visits that eventually redirect to `visits`.
   VisitVector GetVisitsAndRedirectParents(const VisitVector& visits);
 
-  // Deletes the visit-related stuff for all the visits in the given list, and
+  // Deletes the visit-related stuff for all the visits in the given list,
+  // decreases the visit_count for corresponding VisitedLinks, and
   // adds the rows for unique URLs affected to the affected_urls list in
   // the dependencies structure.
   void DeleteVisitRelatedInfo(const VisitVector& visits,
@@ -198,7 +215,7 @@ class ExpireHistoryBackend {
   //
   // The visits in the given vector should have already been deleted from the
   // database, and the list of affected URLs already be filled into
-  // `depenencies->affected_urls`.
+  // `dependencies->affected_urls`.
   //
   // Starred URLs will not be deleted. The information in the dependencies that
   // DeleteOneURL fills in will be updated, and this function will also delete
@@ -217,7 +234,8 @@ class ExpireHistoryBackend {
   void ExpireVisitsInternal(const VisitVector& visits,
                             const DeletionTimeRange& time_range,
                             const std::set<GURL>& restrict_urls,
-                            DeletionType type);
+                            DeletionType type,
+                            DeletionInfo::Reason deletion_reason);
 
   // Deletes the favicons listed in `effects->affected_favicons` if they are
   // unused. Fails silently (we don't care about favicons so much, so don't want
@@ -230,7 +248,8 @@ class ExpireHistoryBackend {
   void BroadcastNotifications(DeleteEffects* effects,
                               DeletionType type,
                               const DeletionTimeRange& time_range,
-                              absl::optional<std::set<GURL>> restrict_urls);
+                              std::optional<std::set<GURL>> restrict_urls,
+                              DeletionInfo::Reason deletion_reason);
 
   // Schedules a call to DoExpireIteration.
   void ScheduleExpire();
@@ -241,12 +260,15 @@ class ExpireHistoryBackend {
   void DoExpireIteration();
 
   // Tries to expire the oldest `max_visits` visits from history that are older
-  // than `time_threshold`. The return value indicates if we think there might
-  // be more history to expire with the current time threshold (it does not
-  // indicate success or failure).
+  // than `end_time`. The return value indicates if we think there might be more
+  // history to expire with the current time threshold (it does not indicate
+  // success or failure).
   bool ExpireSomeOldHistory(base::Time end_time,
-                             const ExpiringVisitsReader* reader,
-                             int max_visits);
+                            const ExpiringVisitsReader* reader,
+                            int max_visits);
+
+  // Expire segment data older than `end_time`.
+  void ExpireOldSegmentData(base::Time end_time);
 
   // Tries to detect possible bad history or inconsistencies in the database
   // and deletes items. For example, URLs with no visits.
@@ -265,11 +287,11 @@ class ExpireHistoryBackend {
   const ExpiringVisitsReader* GetAutoSubframeVisitsReader();
 
   // Non-owning pointer to the notification delegate (guaranteed non-NULL).
-  HistoryBackendNotifier* notifier_;
+  raw_ptr<HistoryBackendNotifier> notifier_;
 
   // Non-owning pointers to the databases we deal with (MAY BE NULL).
-  HistoryDatabase* main_db_;       // Main history database.
-  favicon::FaviconDatabase* favicon_db_;
+  raw_ptr<HistoryDatabase> main_db_;  // Main history database.
+  raw_ptr<favicon::FaviconDatabase> favicon_db_;
 
   // The threshold for "old" history where we will automatically delete it.
   base::TimeDelta expiration_threshold_;
@@ -287,7 +309,7 @@ class ExpireHistoryBackend {
   // Work queue for periodic expiration tasks, used by DoExpireIteration() to
   // determine what to do at an iteration, as well as populate it for future
   // iterations.
-  base::queue<const ExpiringVisitsReader*> work_queue_;
+  base::queue<raw_ptr<const ExpiringVisitsReader, CtnExperimental>> work_queue_;
 
   // Readers for various types of visits.
   // TODO(dglazkov): If you are adding another one, please consider reorganizing
@@ -296,15 +318,13 @@ class ExpireHistoryBackend {
   std::unique_ptr<ExpiringVisitsReader> auto_subframe_visits_reader_;
 
   // The HistoryBackendClient; may be null.
-  HistoryBackendClient* backend_client_;
+  raw_ptr<HistoryBackendClient> backend_client_;
 
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
 
   // Used to generate runnable methods to do timers on this class. They will be
   // automatically canceled when this class is deleted.
   base::WeakPtrFactory<ExpireHistoryBackend> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ExpireHistoryBackend);
 };
 
 }  // namespace history

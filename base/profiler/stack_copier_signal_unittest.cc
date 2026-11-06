@@ -1,22 +1,25 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/profiler/stack_copier_signal.h"
+
 #include <string.h>
+
 #include <algorithm>
+#include <array>
 #include <utility>
 
-#include "base/cxx17_backports.h"
+#include "base/compiler_specific.h"
 #include "base/debug/alias.h"
+#include "base/profiler/register_context_registers.h"
 #include "base/profiler/sampling_profiler_thread_token.h"
 #include "base/profiler/stack_buffer.h"
-#include "base/profiler/stack_copier_signal.h"
 #include "base/profiler/thread_delegate_posix.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/simple_thread.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace base {
@@ -24,8 +27,12 @@ namespace base {
 namespace {
 
 // Values to write to the stack and look for in the copy.
-static const uint32_t kStackSentinels[] = {0xf312ecd9, 0x1fcd7f19, 0xe69e617d,
-                                           0x8245f94f};
+static const auto kStackSentinels = std::to_array<uint32_t>({
+    0xf312ecd9,
+    0x1fcd7f19,
+    0xe69e617d,
+    0x8245f94f,
+});
 
 class TargetThread : public SimpleThread {
  public:
@@ -41,9 +48,10 @@ class TargetThread : public SimpleThread {
 
     // Copy the sentinel values onto the stack. Volatile to defeat compiler
     // optimizations.
-    volatile uint32_t sentinels[size(kStackSentinels)];
-    for (size_t i = 0; i < size(kStackSentinels); ++i)
+    std::array<volatile uint32_t, std::size(kStackSentinels)> sentinels;
+    for (size_t i = 0; i < std::size(kStackSentinels); ++i) {
       sentinels[i] = kStackSentinels[i];
+    }
 
     started_.Signal();
     copy_finished_.Wait();
@@ -64,9 +72,7 @@ class TargetThread : public SimpleThread {
 
 class TestStackCopierDelegate : public StackCopier::Delegate {
  public:
-  void OnStackCopy() override {
-    on_stack_copy_was_invoked_ = true;
-  }
+  void OnStackCopy() override { on_stack_copy_was_invoked_ = true; }
 
   bool on_stack_copy_was_invoked() const { return on_stack_copy_was_invoked_; }
 
@@ -83,15 +89,16 @@ class TestStackCopierDelegate : public StackCopier::Delegate {
 #if defined(ADDRESS_SANITIZER) || defined(MEMORY_SANITIZER) || \
     defined(THREAD_SANITIZER)
 #define MAYBE_CopyStack DISABLED_CopyStack
-#elif BUILDFLAG(IS_CHROMEOS_ASH)
-// https://crbug.com/1042974
+#elif BUILDFLAG(IS_LINUX)
+// We don't support getting the stack base address on Linux, and thus can't
+// copy the stack. // https://crbug.com/1394278
 #define MAYBE_CopyStack DISABLED_CopyStack
 #else
 #define MAYBE_CopyStack CopyStack
 #endif
 TEST(StackCopierSignalTest, MAYBE_CopyStack) {
   StackBuffer stack_buffer(/* buffer_size = */ 1 << 20);
-  memset(stack_buffer.buffer(), 0, stack_buffer.size());
+  std::ranges::fill(stack_buffer.as_span(), 0);
   uintptr_t stack_top = 0;
   TimeTicks timestamp;
   RegisterContext context;
@@ -103,10 +110,8 @@ TEST(StackCopierSignalTest, MAYBE_CopyStack) {
   StackCopierSignal copier(std::move(thread_delegate));
 
   // Copy the sentinel values onto the stack.
-  uint32_t sentinels[size(kStackSentinels)];
-  for (size_t i = 0; i < size(kStackSentinels); ++i)
-    sentinels[i] = kStackSentinels[i];
-  base::debug::Alias((void*)sentinels);  // Defeat compiler optimizations.
+  std::array<uint32_t, kStackSentinels.size()> sentinels = kStackSentinels;
+  base::debug::Alias(sentinels.data());  // Defeat compiler optimizations.
 
   bool result = copier.CopyStack(&stack_buffer, &stack_top, &timestamp,
                                  &context, &stack_copier_delegate);
@@ -116,8 +121,10 @@ TEST(StackCopierSignalTest, MAYBE_CopyStack) {
   uint32_t* const sentinel_location = std::find_if(
       reinterpret_cast<uint32_t*>(RegisterContextStackPointer(&context)), end,
       [](const uint32_t& location) {
-        return memcmp(&location, &kStackSentinels[0],
-                      sizeof(kStackSentinels)) == 0;
+        return UNSAFE_TODO(memcmp(
+                   &location, &kStackSentinels[0],
+                   (kStackSentinels.size() *
+                    sizeof(decltype(kStackSentinels)::value_type)))) == 0;
       });
   EXPECT_NE(end, sentinel_location);
 }
@@ -125,12 +132,16 @@ TEST(StackCopierSignalTest, MAYBE_CopyStack) {
 // TSAN hangs on the AsyncSafeWaitableEvent FUTEX_WAIT call.
 #if defined(THREAD_SANITIZER)
 #define MAYBE_CopyStackTimestamp DISABLED_CopyStackTimestamp
+#elif BUILDFLAG(IS_LINUX)
+// We don't support getting the stack base address on Linux, and thus can't
+// copy the stack. // https://crbug.com/1394278
+#define MAYBE_CopyStackTimestamp DISABLED_CopyStackTimestamp
 #else
 #define MAYBE_CopyStackTimestamp CopyStackTimestamp
 #endif
 TEST(StackCopierSignalTest, MAYBE_CopyStackTimestamp) {
   StackBuffer stack_buffer(/* buffer_size = */ 1 << 20);
-  memset(stack_buffer.buffer(), 0, stack_buffer.size());
+  std::ranges::fill(stack_buffer.as_span(), 0);
   uintptr_t stack_top = 0;
   TimeTicks timestamp;
   RegisterContext context;
@@ -154,12 +165,16 @@ TEST(StackCopierSignalTest, MAYBE_CopyStackTimestamp) {
 // TSAN hangs on the AsyncSafeWaitableEvent FUTEX_WAIT call.
 #if defined(THREAD_SANITIZER)
 #define MAYBE_CopyStackDelegateInvoked DISABLED_CopyStackDelegateInvoked
+#elif BUILDFLAG(IS_LINUX)
+// We don't support getting the stack base address on Linux, and thus can't
+// copy the stack. // https://crbug.com/1394278
+#define MAYBE_CopyStackDelegateInvoked DISABLED_CopyStackDelegateInvoked
 #else
 #define MAYBE_CopyStackDelegateInvoked CopyStackDelegateInvoked
 #endif
 TEST(StackCopierSignalTest, MAYBE_CopyStackDelegateInvoked) {
   StackBuffer stack_buffer(/* buffer_size = */ 1 << 20);
-  memset(stack_buffer.buffer(), 0, stack_buffer.size());
+  std::ranges::fill(stack_buffer.as_span(), 0);
   uintptr_t stack_top = 0;
   TimeTicks timestamp;
   RegisterContext context;
@@ -180,14 +195,18 @@ TEST(StackCopierSignalTest, MAYBE_CopyStackDelegateInvoked) {
 // Limit to 32-bit Android, which is the platform we care about for this
 // functionality. The test is broken on too many other varied platforms to try
 // to selectively disable.
-#if !(defined(OS_ANDROID) && defined(ARCH_CPU_32_BITS))
+#if !(BUILDFLAG(IS_ANDROID) && defined(ARCH_CPU_32_BITS))
+#define MAYBE_CopyStackFromOtherThread DISABLED_CopyStackFromOtherThread
+#elif BUILDFLAG(IS_LINUX)
+// We don't support getting the stack base address on Linux, and thus can't
+// copy the stack. // https://crbug.com/1394278
 #define MAYBE_CopyStackFromOtherThread DISABLED_CopyStackFromOtherThread
 #else
 #define MAYBE_CopyStackFromOtherThread CopyStackFromOtherThread
 #endif
 TEST(StackCopierSignalTest, MAYBE_CopyStackFromOtherThread) {
   StackBuffer stack_buffer(/* buffer_size = */ 1 << 20);
-  memset(stack_buffer.buffer(), 0, stack_buffer.size());
+  std::ranges::fill(stack_buffer.as_span(), 0);
   uintptr_t stack_top = 0;
   TimeTicks timestamp;
   RegisterContext context{};
@@ -213,8 +232,10 @@ TEST(StackCopierSignalTest, MAYBE_CopyStackFromOtherThread) {
   uint32_t* const sentinel_location = std::find_if(
       reinterpret_cast<uint32_t*>(RegisterContextStackPointer(&context)), end,
       [](const uint32_t& location) {
-        return memcmp(&location, &kStackSentinels[0],
-                      sizeof(kStackSentinels)) == 0;
+        return UNSAFE_TODO(memcmp(
+                   &location, &kStackSentinels[0],
+                   (kStackSentinels.size() *
+                    sizeof(decltype(kStackSentinels)::value_type)))) == 0;
       });
   EXPECT_NE(end, sentinel_location);
 }

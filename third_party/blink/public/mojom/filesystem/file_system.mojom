@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,9 @@ import "mojo/public/mojom/base/file_error.mojom";
 import "mojo/public/mojom/base/file_path.mojom";
 import "mojo/public/mojom/base/file_info.mojom";
 import "mojo/public/mojom/base/time.mojom";
-import "mojo/public/mojom/base/string16.mojom";
+import "third_party/blink/public/mojom/blob/serialized_blob.mojom";
+import "third_party/blink/public/mojom/blob/blob.mojom";
+import "third_party/blink/public/mojom/blob/file_backed_blob_factory.mojom";
 
 enum FileSystemType {
   kTemporary,
@@ -58,13 +60,6 @@ interface FileSystemOperationListener {
   ErrorOccurred(mojo_base.mojom.FileError error_code);
 };
 
-// Used by the renderer to notify the browser that it has received a snapshot
-// after calling CreateSnapshotFile. The browser sends a pending remote along
-// with the result of the CreateSnapshotFile call.
-interface ReceivedSnapshotListener {
-  DidReceiveSnapshotFile();
-};
-
 // Interface provided by the browser to the renderer to carry out filesystem
 // operations. All [Sync] methods should only be called synchronously on worker
 // threads (and asynchronously otherwise).
@@ -72,10 +67,8 @@ interface FileSystemManager {
   // Opens a new filesystem and returns a name and root path for the requested
   // filesystem and a success error code if the operation succeeds. If the
   // operation fails, |error_code| indicates the reason for failure.
-  // TODO(https://crbug.com/873661): Make interface per frame/worker and remove
-  // |origin|.
   [Sync]
-  Open(url.mojom.Origin origin, blink.mojom.FileSystemType file_system_type) =>
+  Open(blink.mojom.FileSystemType file_system_type) =>
       (string name,
        url.mojom.Url root_url,
        mojo_base.mojom.FileError error_code);
@@ -149,17 +142,17 @@ interface FileSystemManager {
     (array<filesystem.mojom.DirectoryEntry> entries,
      mojo_base.mojom.FileError error_code);
 
-  // Write data (indicated by |blob_uuid|) to the given file at |file_path|,
+  // Write data (indicated by |blob|) to the given file at |file_path|,
   // at |position|. Calls DidWrite on |listener| to provide progress updates on
   // the write, and |ErrorOccurred| if the operation fails. The operation can
   // also be cancelled using the remote associated with |op_receiver|.
   Write(url.mojom.Url file_path,
-        string blob_uuid,
+        pending_remote<blink.mojom.Blob> blob,
         int64 position,
         pending_receiver<FileSystemCancellableOperation> op_receiver,
         pending_remote<FileSystemOperationListener> listener);
   [Sync]
-  WriteSync(url.mojom.Url file_path, string blob_uuid, int64 position) =>
+  WriteSync(url.mojom.Url file_path, pending_remote<blink.mojom.Blob> blob, int64 position) =>
       (int64 byte_count, mojo_base.mojom.FileError error_code);
 
   // Changes the file length of the file at |file_path| to the |length|
@@ -183,18 +176,43 @@ interface FileSystemManager {
   // cases, the backend may download the file into a temporary snapshot file and
   // return the metadata of the temporary file.
   //
-  // If |snapshot_listener| is provided, the renderer is expected to call
-  // DidReceiveSnapshotFile on the listener (which allows the backend to drop
-  // a ref to the temporary snapshot file).
+  // If |snapshot_permission_token| is provided, the renderer must keep it alive
+  // until after Blob registration completes, which can be by passing it to
+  // FileBackedBlobFactory.RegisterBlob or by holding it until
+  // `BlobRegistry.Register` replies.
   [Sync]
   CreateSnapshotFile(url.mojom.Url file_path) =>
       (mojo_base.mojom.FileInfo file_info,
        mojo_base.mojom.FilePath platform_path,
        mojo_base.mojom.FileError error_code,
-       pending_remote<ReceivedSnapshotListener>? snapshot_listener);
+       pending_remote<SnapshotPermissionToken>? snapshot_permission_token);
 
   // Synchronously gets the platform path for the given |file_path|.
   [Sync]
   GetPlatformPath(url.mojom.Url file_path) =>
       (mojo_base.mojom.FilePath platform_path);
+
+  // Register a new blob and return the SerializedBlob (which is typemapped to
+  // blink::BlobDataHandle). Since Blob construction is generally a synchronous
+  // process even in window environments, this IPC is expected to be called
+  // synchronously everywhere.
+  // TODO(crbug.com/974616): Get rid of return/sync behavior after removing
+  // UUIDs
+  //
+  // |content_type| is simply reflected back into the
+  // SerializedBlob returned, and will be used in the "content-type" header if
+  // the blob is fetched with a "blob:" url.
+  // |url| should be a serialized "filesystem:" url that is readable by the
+  // renderer. An invalid url will create a blob that will return an error any
+  // time it is read from.
+  // |expected_modification_time| is used to implement the snapshotting behavior
+  // described in the Blob spec. If a time is provided the resulting Blob will
+  // only be readable as long as the last modified timestamp of the underlying
+  // file doesn't change.
+  [Sync]
+  RegisterBlob(string content_type,
+               url.mojom.Url url,
+               uint64 length,
+               mojo_base.mojom.Time? expected_modification_time) =>
+      (SerializedBlob blob);
 };

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,14 +13,14 @@ namespace safe_browsing {
 BinaryIntegrityIncident::BinaryIntegrityIncident(
     std::unique_ptr<ClientIncidentReport_IncidentData_BinaryIntegrityIncident>
         binary_integrity_incident) {
-  DCHECK(binary_integrity_incident);
-  DCHECK(binary_integrity_incident->has_file_basename());
+  CHECK(binary_integrity_incident, base::NotFatalUntil::M162);
+  CHECK(binary_integrity_incident->has_file_basename(),
+        base::NotFatalUntil::M162);
   payload()->set_allocated_binary_integrity(
       binary_integrity_incident.release());
 }
 
-BinaryIntegrityIncident::~BinaryIntegrityIncident() {
-}
+BinaryIntegrityIncident::~BinaryIntegrityIncident() = default;
 
 IncidentType BinaryIntegrityIncident::GetType() const {
   return IncidentType::BINARY_INTEGRITY;

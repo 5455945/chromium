@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -39,10 +39,10 @@ std::mt19937 RandomEngine() {
 }
 
 std::vector<uint8_t> RandomData(size_t size, std::mt19937* engine) {
-  std::uniform_int_distribution<uint8_t> dist(0, 255);
+  std::uniform_int_distribution<uint32_t> dist(0, 255);
   std::vector<uint8_t> data(size);
   for (size_t i = 0; i < size; ++i)
-    data[i] = dist(*engine);
+    data[i] = static_cast<uint8_t>(dist(*engine));
 
   return data;
 }
@@ -80,9 +80,7 @@ std::pair<int64_t, int64_t> WriteReadData(int size,
     CHECK(f.IsValid());
 
     auto tick = base::TimeTicks::Now();
-    int written =
-        f.WriteAtCurrentPos(reinterpret_cast<const char*>(&data[0]), size);
-    CHECK_EQ(size, written);
+    CHECK(f.WriteAtCurrentPosAndCheck(data));
     auto tock = base::TimeTicks::Now();
 
     LOG(INFO) << DurationLogMessage("\tWrite", tick, tock, size);
@@ -96,7 +94,7 @@ std::pair<int64_t, int64_t> WriteReadData(int size,
     // Sleeping, as posix_fadvise() is asynchronous. On the other hand, we
     // don't need to sleep for too long, as all the pages are already clean
     // after the fsync() above, so no writeback is required here.
-    base::PlatformThread::Sleep(base::TimeDelta::FromSeconds(1));
+    base::PlatformThread::Sleep(base::Seconds(1));
   }
 
   // Read.
@@ -105,8 +103,9 @@ std::pair<int64_t, int64_t> WriteReadData(int size,
     CHECK(f.IsValid());
 
     auto tick = base::TimeTicks::Now();
-    int read = f.ReadAtCurrentPos(reinterpret_cast<char*>(&data[0]), size);
-    CHECK_EQ(size, read);
+    const std::optional<size_t> read = f.ReadAtCurrentPos(data);
+    CHECK(read.has_value());
+    CHECK_EQ(size, static_cast<int>(read.value()));
     auto tock = base::TimeTicks::Now();
 
     LOG(INFO) << DurationLogMessage("\tRead", tick, tock, size);
@@ -132,9 +131,7 @@ void RandomlyReadWrite(std::atomic<bool>* should_stop,
     auto f = base::File(
         path, base::File::FLAG_CREATE_ALWAYS | base::File::FLAG_WRITE);
     CHECK(f.IsValid());
-    int written =
-        f.WriteAtCurrentPos(reinterpret_cast<const char*>(&data[0]), kSize);
-    CHECK_EQ(kSize, written);
+    CHECK(f.WriteAtCurrentPosAndCheck(data));
   }
 
   auto dist = std::uniform_int_distribution<int>(0, kPages - 1);
@@ -151,19 +148,21 @@ void RandomlyReadWrite(std::atomic<bool>* should_stop,
     // O_DIRECT has special requirements on read/write buffers alignment,
     // which are unspecified in "man open(2)". However a page-aligned buffer
     // works with linux filesystems (512 bytes is usually enough).
-    std::unique_ptr<char, base::AlignedFreeDeleter> page_buffer(
-        static_cast<char*>(base::AlignedAlloc(kPageSize, kPageSize)));
+    base::AlignedHeapArray<uint8_t> page_buffer =
+        base::AlignedUninit<uint8_t>(kPageSize, kPageSize);
 
     while (!should_stop->load()) {
-      int i = dist(engine);
-      int offset = i * kPageSize;
-      int size_read = f.Read(offset, page_buffer.get(), kPageSize);
-      CHECK_EQ(size_read, kPageSize);
+      int random = dist(engine);
+      int offset = random * kPageSize;
+      const std::optional<size_t> bytes_read =
+          f.Read(offset, page_buffer.as_span());
+      CHECK(bytes_read.has_value());
+      CHECK_EQ(bytes_read.value(), static_cast<size_t>(kPageSize));
 
       std::vector<uint8_t> random_page = RandomData(kPageSize, &engine);
-      int written =
-          f.Write(offset, reinterpret_cast<char*>(&random_page[0]), kPageSize);
-      CHECK_EQ(written, kPageSize);
+      const std::optional<size_t> bytes_written = f.Write(offset, random_page);
+      CHECK(bytes_written.has_value());
+      CHECK_EQ(bytes_written.value(), static_cast<size_t>(kPageSize));
     }
   }
 
@@ -198,7 +197,7 @@ int main(int argc, char** argv) {
     std::string path = base::StringPrintf("%s-noisy_neighbor-%d", filename, i);
     noisy_neighbors.emplace_back(
         [=]() { RandomlyReadWrite(should_stop_ptr, path, i); });
-    base::PlatformThread::Sleep(base::TimeDelta::FromSeconds(2));
+    base::PlatformThread::Sleep(base::Seconds(2));
   }
 
   for (int i = 0; i < 12; i++) {  // Max 1 << 11 pages = 8MiB.

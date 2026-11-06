@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,15 +7,13 @@
 
 #include <memory>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "net/base/completion_once_callback.h"
 #include "net/proxy_resolution/proxy_resolver.h"
 #include "net/proxy_resolution/proxy_resolver_factory.h"
 
 namespace net {
 class NetLogWithSource;
-class NetworkIsolationKey;
 }  // namespace net
 
 namespace proxy_resolver {
@@ -32,6 +30,10 @@ class ProxyResolverV8Tracing {
   class Bindings {
    public:
     Bindings() {}
+
+    Bindings(const Bindings&) = delete;
+    Bindings& operator=(const Bindings&) = delete;
+
     virtual ~Bindings() {}
 
     // Invoked in response to an alert() call by the PAC script.
@@ -46,9 +48,6 @@ class ProxyResolverV8Tracing {
     // Returns a NetLogWithSource to be passed to the HostResolver returned by
     // GetHostResolver().
     virtual net::NetLogWithSource GetNetLogWithSource() = 0;
-
-   private:
-    DISALLOW_COPY_AND_ASSIGN(Bindings);
   };
 
   virtual ~ProxyResolverV8Tracing() {}
@@ -60,7 +59,6 @@ class ProxyResolverV8Tracing {
   // |*request|.
   virtual void GetProxyForURL(
       const GURL& url,
-      const net::NetworkIsolationKey& network_isolation_key,
       net::ProxyInfo* results,
       net::CompletionOnceCallback callback,
       std::unique_ptr<net::ProxyResolver::Request>* request,
@@ -75,6 +73,11 @@ class ProxyResolverV8Tracing {
 class ProxyResolverV8TracingFactory {
  public:
   ProxyResolverV8TracingFactory() {}
+
+  ProxyResolverV8TracingFactory(const ProxyResolverV8TracingFactory&) = delete;
+  ProxyResolverV8TracingFactory& operator=(
+      const ProxyResolverV8TracingFactory&) = delete;
+
   virtual ~ProxyResolverV8TracingFactory() = default;
 
   virtual void CreateProxyResolverV8Tracing(
@@ -85,9 +88,6 @@ class ProxyResolverV8TracingFactory {
       std::unique_ptr<net::ProxyResolverFactory::Request>* request) = 0;
 
   static std::unique_ptr<ProxyResolverV8TracingFactory> Create();
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ProxyResolverV8TracingFactory);
 };
 
 }  // namespace proxy_resolver

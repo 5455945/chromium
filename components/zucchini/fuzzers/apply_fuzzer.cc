@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,13 +18,13 @@
 
 struct Environment {
   Environment() {
-    logging::SetMinLogLevel(logging::LOG_FATAL);  // Disable console spamming.
+    // Disable console spamming.
+    logging::SetMinLogLevel(logging::LOGGING_FATAL);
   }
 };
 
-Environment* env = new Environment();
-
 DEFINE_BINARY_PROTO_FUZZER(const zucchini::fuzzers::FilePair& file_pair) {
+  static Environment env;
   // Dump code for debugging.
   if (base::Environment::Create()->HasVar("LPM_DUMP_NATIVE_INPUT")) {
     std::cout << "Old File: " << file_pair.old_file() << std::endl

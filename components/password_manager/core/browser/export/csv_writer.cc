@@ -1,10 +1,11 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/password_manager/core/browser/export/csv_writer.h"
 
 #include "base/check.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/string_util.h"
 #include "build/build_config.h"
 
@@ -25,14 +26,15 @@ class CSVFormatter {
   void EndLine();
 
  private:
-  std::string* output_;
+  raw_ptr<std::string> output_;
   bool at_beginning_of_line_;
 };
 
 void CSVFormatter::AppendValue(const std::string& raw_value) {
   // Append the field separator unless this is the first field on the line.
-  if (!at_beginning_of_line_)
+  if (!at_beginning_of_line_) {
     output_->push_back(',');
+  }
   at_beginning_of_line_ = false;
 
   // Fields containing line breaks (CRLF), double quotes, and commas should be
@@ -51,7 +53,7 @@ void CSVFormatter::AppendValue(const std::string& raw_value) {
 }
 
 void CSVFormatter::EndLine() {
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   const char kLineEnding[] = "\r\n";
 #else
   const char kLineEnding[] = "\n";
@@ -81,8 +83,8 @@ void WriteCSV(const std::vector<std::string>& column_names,
   for (const auto& row : records) {
     for (const auto& column_name : column_names) {
       auto it_field = row.find(column_name);
-      formatter.AppendValue(it_field != row.end() ?
-          it_field->second : std::string());
+      formatter.AppendValue(it_field != row.end() ? it_field->second
+                                                  : std::string());
     }
     formatter.EndLine();
   }

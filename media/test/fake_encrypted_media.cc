@@ -1,10 +1,11 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/test/fake_encrypted_media.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/memory/scoped_refptr.h"
 #include "media/base/cdm_key_information.h"
 #include "media/cdm/aes_decryptor.h"
 
@@ -18,7 +19,7 @@ Decryptor* FakeEncryptedMedia::TestCdmContext::GetDecryptor() {
 }
 
 FakeEncryptedMedia::FakeEncryptedMedia(AppBase* app)
-    : decryptor_(new AesDecryptor(
+    : decryptor_(base::MakeRefCounted<AesDecryptor>(
           base::BindRepeating(&FakeEncryptedMedia::OnSessionMessage,
                               base::Unretained(this)),
           base::BindRepeating(&FakeEncryptedMedia::OnSessionClosed,

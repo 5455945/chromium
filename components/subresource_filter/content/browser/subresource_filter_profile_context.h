@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,19 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
 #include "components/keyed_service/core/keyed_service.h"
 
 class HostContentSettingsMap;
+
+namespace safe_browsing {
+class V5GetHashProtocolManager;
+}  // namespace safe_browsing
+
+namespace content_settings {
+class CookieSettings;
+}  // namespace content_settings
 
 namespace subresource_filter {
 
@@ -30,17 +39,30 @@ class SubresourceFilterProfileContext : public KeyedService {
     virtual ~EmbedderData() = default;
   };
 
-  explicit SubresourceFilterProfileContext(
-      HostContentSettingsMap* settings_map);
+  SubresourceFilterProfileContext(
+      HostContentSettingsMap* settings_map,
+      scoped_refptr<content_settings::CookieSettings> cookie_settings,
+      base::WeakPtr<safe_browsing::V5GetHashProtocolManager>
+          v5_get_hash_protocol_manager);
+
+  SubresourceFilterProfileContext(const SubresourceFilterProfileContext&) =
+      delete;
+  SubresourceFilterProfileContext& operator=(
+      const SubresourceFilterProfileContext&) = delete;
+
   ~SubresourceFilterProfileContext() override;
 
-  SubresourceFilterContentSettingsManager* settings_manager() {
-    return settings_manager_.get();
-  }
+  // Accessors for the owned objects. The objects become invalid when
+  // Shutdown() is called and it is invalid to call the methods after
+  // the call to Shutdown().
+  SubresourceFilterContentSettingsManager* settings_manager();
+  AdsInterventionManager* ads_intervention_manager();
+  content_settings::CookieSettings* cookie_settings();
 
-  AdsInterventionManager* ads_intervention_manager() {
-    return ads_intervention_manager_.get();
-  }
+  // Returns a weak pointer to the V5GetHashProtocolManager used for Safe
+  // Browsing v5 lookups.
+  base::WeakPtr<safe_browsing::V5GetHashProtocolManager>
+  GetV5GetHashProtocolManager() const;
 
   // Can be used to attach an embedder-level object to this object. Can only be
   // invoked once. |embedder_data| will be destroyed before the other objects
@@ -51,17 +73,15 @@ class SubresourceFilterProfileContext : public KeyedService {
   // KeyedService:
   void Shutdown() override;
 
-  std::unique_ptr<SubresourceFilterContentSettingsManager> settings_manager_;
+  // Stores the objects owned by this instance, ensuring the correct
+  // construction and destruction orders.
+  class Storage;
 
-  // Manages ads interventions that have been triggered on previous
-  // navigations.
-  std::unique_ptr<AdsInterventionManager> ads_intervention_manager_;
+  std::unique_ptr<Storage> storage_;
 
-  // NOTE: Declared after the objects above to ensure that it is destroyed
-  // before them.
-  std::unique_ptr<EmbedderData> embedder_data_;
-
-  DISALLOW_COPY_AND_ASSIGN(SubresourceFilterProfileContext);
+  // The protocol manager used for Safe Browsing v5 get hash requests.
+  base::WeakPtr<safe_browsing::V5GetHashProtocolManager>
+      v5_get_hash_protocol_manager_;
 };
 
 }  // namespace subresource_filter

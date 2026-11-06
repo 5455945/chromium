@@ -1,18 +1,29 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "remoting/host/file_transfer/ensure_user.h"
 
 #include <Windows.h>
+
 #include <WtsApi32.h>
 
+#include <variant>
+
+#include "base/check_is_test.h"
 #include "base/logging.h"
 #include "base/win/scoped_handle.h"
 
 namespace remoting {
 
-protocol::FileTransferResult<Monostate> EnsureUserContext() {
+static bool g_disable_user_context_check_for_testing = false;
+
+protocol::FileTransferResult<std::monostate> EnsureUserContext() {
+  if (g_disable_user_context_check_for_testing) {
+    CHECK_IS_TEST();
+    return kSuccessTag;
+  }
+
   // Impersonate the currently logged-in user, or fail if there is none.
   HANDLE user_token = nullptr;
   if (!WTSQueryUserToken(WTS_CURRENT_SESSION, &user_token)) {
@@ -32,6 +43,10 @@ protocol::FileTransferResult<Monostate> EnsureUserContext() {
         GetLastError());
   }
   return kSuccessTag;
+}
+
+void DisableUserContextCheckForTesting() {
+  g_disable_user_context_check_for_testing = true;
 }
 
 }  // namespace remoting

@@ -24,22 +24,25 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_LOADER_IMAGE_LOADER_H_
 
 #include <memory>
+
 #include "base/memory/weak_ptr.h"
 #include "services/network/public/mojom/referrer_policy.mojom-blink.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/core/loader/resource/image_resource.h"
 #include "third_party/blink/renderer/core/loader/resource/image_resource_content.h"
 #include "third_party/blink/renderer/core/loader/resource/image_resource_observer.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
-#include "third_party/blink/renderer/platform/wtf/hash_set.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/prefinalizer.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
+
+namespace base {
+class TimeTicks;
+}  // namespace base
 
 namespace blink {
 
-class ContainerNode;
 class DOMWrapperWorld;
 class Element;
 class ExceptionState;
@@ -55,13 +58,21 @@ class CORE_EXPORT ImageLoader : public GarbageCollected<ImageLoader>,
   explicit ImageLoader(Element*);
   ~ImageLoader() override;
 
-  void Trace(Visitor*) const;
+  void Trace(Visitor*) const override;
 
   enum UpdateFromElementBehavior {
     // This should be the update behavior when the element is attached to a
     // document, or when DOM mutations trigger a new load. Starts loading if a
     // load hasn't already been started.
     kUpdateNormal,
+    // This is the behavior when the update is triggered by the lazy loading
+    // mechanism. We can't update synchronously, because doing so may invalidate
+    // style, which is forbidden from lazy load callbacks.
+    kUpdateFromMicrotask,
+    // This is the behavior when the update is triggered during style recalc
+    // (HTMLPlugInElement::CustomStyleForLayoutObject). Queue a task rather than
+    // updating synchronously during style recalc.
+    kUpdateFromTask,
     // This should be the update behavior when the resource was changed (via
     // 'src', 'srcset' or 'sizes'). Starts a new load even if a previous load of
     // the same resource have failed, to match Firefox's behavior.
@@ -75,28 +86,29 @@ class CORE_EXPORT ImageLoader : public GarbageCollected<ImageLoader>,
     kUpdateForcedReload
   };
 
+  enum class ResetTimeline { kAll, kSharedOnly };
+
+  // force_blocking ensures that the image will block the load event.
   void UpdateFromElement(UpdateFromElementBehavior = kUpdateNormal,
-                         network::mojom::ReferrerPolicy =
-                             network::mojom::ReferrerPolicy::kDefault);
+                         bool force_blocking = false);
 
   void ElementDidMoveToNewDocument();
+  void OnAttachLayoutTree();
 
-  Element* GetElement() const { return element_; }
-  bool ImageComplete() const { return image_complete_ && !pending_task_; }
+  Element* GetElement() const { return element_.Get(); }
+  bool ImageComplete() const { return image_complete_; }
 
   ImageResourceContent* GetContent() const { return image_content_.Get(); }
-
-  // Returns true if this loader should be updated via UpdateFromElement() when
-  // being inserted into a new parent; returns false otherwise.
-  bool ShouldUpdateOnInsertedInto(
-      ContainerNode& insertion_point,
-      network::mojom::ReferrerPolicy referrer_policy =
-          network::mojom::ReferrerPolicy::kDefault) const;
 
   // Returns true if a the owner of this loader should consider the image being
   // loaded as "potentially available", i.e that it may eventually become
   // available.
   bool ImageIsPotentiallyAvailable() const;
+
+  // Returns the density corrected natural size (with any image orientation
+  // applied) of the loaded image content.
+  // https://html.spec.whatwg.org/#density-corrected-intrinsic-width-and-height
+  gfx::Size DensityCorrectedNaturalSize(float inverse_density) const;
 
   // Cancels pending load events, and doesn't dispatch new ones.
   // Note: ClearImage/SetImage.*() are not a simple setter.
@@ -133,17 +145,20 @@ class CORE_EXPORT ImageLoader : public GarbageCollected<ImageLoader>,
 
   bool HasPendingError() const { return pending_error_event_.IsActive(); }
 
-  bool HadError() const { return !failed_load_url_.IsEmpty(); }
+  bool HadError() const { return !failed_load_url_.empty(); }
 
   bool GetImageAnimationPolicy(mojom::blink::ImageAnimationPolicy&) final;
 
-  ScriptPromise Decode(ScriptState*, ExceptionState&);
+  ScriptPromise<IDLUndefined> Decode(ScriptState*, ExceptionState&);
 
-  void LoadDeferredImage(network::mojom::ReferrerPolicy);
+  // `force_blocking` ensures that the image will block the load event.
+  void LoadDeferredImage(bool force_blocking = false,
+                         bool update_from_microtask = false);
 
  protected:
   void ImageChanged(ImageResourceContent*, CanDeferInvalidation) override;
   void ImageNotifyFinished(ImageResourceContent*) override;
+  ResourcePriority ComputeResourcePriority() const override;
 
  private:
   class Task;
@@ -158,29 +173,37 @@ class CORE_EXPORT ImageLoader : public GarbageCollected<ImageLoader>,
     kNone,      // LazyImages not active.
     kDeferred,  // Full image load not started, and image load event will not be
                 // fired. Image will not block the document's load event.
-    kFullImage  // Full image is loading/loaded, due to element coming near the
-                // viewport. image_complete_ can be used to differentiate if the
-                // fetch is complete or not. After the fetch, image load event
-                // is fired.
+    kFullImage,  // Full image is loading/loaded, due to element coming near the
+                 // viewport. image_complete_ can be used to differentiate if
+                 // the fetch is complete or not. After the fetch, image load
+                 // event is fired.
   };
 
   // Called from the task or from updateFromElement to initiate the load.
-  void DoUpdateFromElement(
-      scoped_refptr<const DOMWrapperWorld> world,
-      UpdateFromElementBehavior,
-      network::mojom::ReferrerPolicy = network::mojom::ReferrerPolicy::kDefault,
-      UpdateType = UpdateType::kAsync);
+  // force_blocking ensures that the image will block the load event.
+  void DoUpdateFromElement(const DOMWrapperWorld* world,
+                           UpdateFromElementBehavior,
+                           const KURL* source_url = nullptr,
+                           UpdateType = UpdateType::kAsync,
+                           bool force_blocking = false);
 
   virtual void DispatchLoadEvent() = 0;
+  virtual void DispatchErrorEvent() = 0;
   virtual void NoImageResourceToLoad() {}
 
   bool HasPendingEvent() const;
 
-  void DispatchPendingLoadEvent(std::unique_ptr<IncrementLoadEventDelayCount>);
+  // Executed asynchronously on `TaskType::kDOMManipulation` after
+  // `ImageNotifyFinished` queues the load event at `queue_time`.
+  void DispatchPendingLoadEvent(
+      std::unique_ptr<IncrementLoadEventDelayCount> count,
+      base::TimeTicks queue_time);
   void DispatchPendingErrorEvent(std::unique_ptr<IncrementLoadEventDelayCount>);
 
-  LayoutImageResource* GetLayoutImageResource();
+  LayoutImageResource* GetLayoutImageResource() const;
   void UpdateLayoutObject();
+
+  void ResetAnimation(ResetTimeline = ResetTimeline::kAll);
 
   // Note: SetImage.*() are not a simple setter.
   // Check the implementation to see what they do.
@@ -189,10 +212,9 @@ class CORE_EXPORT ImageLoader : public GarbageCollected<ImageLoader>,
   void UpdateImageState(ImageResourceContent*);
 
   void ClearFailedLoadURL();
-  void DispatchErrorEvent();
+  void QueuePendingErrorEvent();
   void CrossSiteOrCSPViolationOccurred(AtomicString);
-  void EnqueueImageLoadingMicroTask(UpdateFromElementBehavior,
-                                    network::mojom::ReferrerPolicy);
+  void EnqueueImageLoadingMicroTask(UpdateFromElementBehavior update_behavior);
 
   KURL ImageSourceToKURL(AtomicString) const;
 
@@ -215,9 +237,6 @@ class CORE_EXPORT ImageLoader : public GarbageCollected<ImageLoader>,
   Member<ImageResourceContent> image_content_;
   Member<ImageResourceContent> image_content_for_image_document_;
 
-  String last_base_element_url_;
-  network::mojom::ReferrerPolicy last_referrer_policy_ =
-      network::mojom::ReferrerPolicy::kDefault;
   AtomicString failed_load_url_;
   base::WeakPtr<Task> pending_task_;  // owned by Microtask
   std::unique_ptr<IncrementLoadEventDelayCount>
@@ -245,12 +264,6 @@ class CORE_EXPORT ImageLoader : public GarbageCollected<ImageLoader>,
 
   bool image_complete_ : 1;
   bool suppress_error_events_ : 1;
-  // Tracks whether or not an image whose load was deferred was explicitly lazy
-  // (i.e., had developer-supplied `loading=lazy`). This matters because images
-  // that were not explicitly lazy but were deferred via automatic lazy image
-  // loading should continue to block the window load event, whereas explicitly
-  // lazy images should never block the window load event.
-  bool was_deferred_explicitly_ : 1;
 
   LazyImageLoadState lazy_image_load_state_;
 
@@ -276,14 +289,14 @@ class CORE_EXPORT ImageLoader : public GarbageCollected<ImageLoader>,
    public:
     enum State { kPendingMicrotask, kPendingLoad, kDispatched };
 
-    DecodeRequest(ImageLoader*, ScriptPromiseResolver*);
+    DecodeRequest(ImageLoader*, ScriptPromiseResolver<IDLUndefined>*);
     ~DecodeRequest() = default;
 
     void Trace(Visitor*) const;
 
     uint64_t request_id() const { return request_id_; }
     State state() const { return state_; }
-    ScriptPromise promise() { return resolver_->Promise(); }
+    ScriptPromise<IDLUndefined> promise() { return resolver_->Promise(); }
 
     void Resolve();
     void Reject();
@@ -297,7 +310,7 @@ class CORE_EXPORT ImageLoader : public GarbageCollected<ImageLoader>,
     uint64_t request_id_ = 0;
     State state_ = kPendingMicrotask;
 
-    Member<ScriptPromiseResolver> resolver_;
+    Member<ScriptPromiseResolver<IDLUndefined>> resolver_;
     Member<ImageLoader> loader_;
   };
 

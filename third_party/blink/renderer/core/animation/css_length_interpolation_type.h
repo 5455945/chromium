@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,17 +15,25 @@ class ComputedStyle;
 
 class CORE_EXPORT CSSLengthInterpolationType : public CSSInterpolationType {
  public:
-  CSSLengthInterpolationType(PropertyHandle,
-                             const PropertyRegistration* = nullptr);
+  explicit CSSLengthInterpolationType(PropertyHandle,
+                                      const PropertyRegistration* = nullptr);
 
   InterpolationValue MaybeConvertStandardPropertyUnderlyingValue(
       const ComputedStyle&) const final;
+  InterpolationValue MaybeConvertCustomPropertyUnderlyingValue(
+      const CSSValue&) const final;
+  void Composite(UnderlyingValueOwner&,
+                 double underlying_fraction,
+                 const InterpolationValue&,
+                 double interpolation_fraction) const final;
   void ApplyStandardPropertyValue(const InterpolableValue&,
                                   const NonInterpolableValue*,
                                   StyleResolverState&) const final;
 
  private:
-  float EffectiveZoom(const ComputedStyle&) const;
+  float EffectiveZoom(float effective_zoom) const {
+    return is_zoomed_length_ ? effective_zoom : 1;
+  }
 
   InterpolationValue MaybeConvertNeutral(const InterpolationValue& underlying,
                                          ConversionCheckers&) const final;
@@ -34,8 +42,17 @@ class CORE_EXPORT CSSLengthInterpolationType : public CSSInterpolationType {
   InterpolationValue MaybeConvertInherit(const StyleResolverState&,
                                          ConversionCheckers&) const final;
   InterpolationValue MaybeConvertValue(const CSSValue&,
-                                       const StyleResolverState*,
+                                       const StyleResolverState&,
                                        ConversionCheckers&) const final;
+
+  InterpolationValue PreInterpolationCompositeIfNeeded(
+      InterpolationValue value,
+      const InterpolationValue& underlying,
+      EffectModel::CompositeOperation,
+      ConversionCheckers&) const override;
+
+  InterpolationValue MaybeConvertUnderlyingValue(
+      const CSSInterpolationEnvironment&) const final;
 
   PairwiseInterpolationValue MaybeMergeSingles(
       InterpolationValue&& start,
@@ -45,7 +62,8 @@ class CORE_EXPORT CSSLengthInterpolationType : public CSSInterpolationType {
                                  const NonInterpolableValue*,
                                  const StyleResolverState&) const final;
 
-  const ValueRange value_range_;
+  const Length::ValueRange value_range_;
+  bool is_zoomed_length_;
 };
 
 }  // namespace blink

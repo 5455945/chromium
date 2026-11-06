@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,11 @@
 #include <queue>
 #include <vector>
 
+#include "ash/accelerators//accelerator_tracker.h"
+#include "ash/accessibility/chromevox/key_accessibility_enabler.h"
+#include "ash/accessibility/magnifier/fullscreen_magnifier_controller.h"
+#include "ash/constants/ash_features.h"
+#include "ash/constants/ash_switches.h"
 #include "ash/display/mouse_cursor_event_filter.h"
 #include "ash/drag_drop/drag_drop_controller.h"
 #include "ash/drag_drop/drag_drop_controller_test_api.h"
@@ -29,32 +34,36 @@
 #include "ash/system/status_area_widget.h"
 #include "ash/test/ash_test_base.h"
 #include "ash/test/ash_test_helper.h"
-#include "ash/test/test_widget_builder.h"
 #include "ash/test_shell_delegate.h"
-#include "ash/wallpaper/wallpaper_widget_controller.h"
+#include "ash/wallpaper/views/wallpaper_widget_controller.h"
 #include "ash/wm/desks/desks_util.h"
 #include "ash/wm/overview/overview_controller.h"
-#include "ash/wm/window_util.h"
 #include "base/command_line.h"
 #include "base/containers/flat_set.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/test/scoped_feature_list.h"
 #include "components/account_id/account_id.h"
-#include "ui/aura/client/aura_constants.h"
 #include "ui/aura/env.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_event_dispatcher.h"
-#include "ui/base/models/simple_menu_model.h"
+#include "ui/aura/window_observer.h"
+#include "ui/base/mojom/menu_source_type.mojom.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/display/scoped_display_for_new_windows.h"
 #include "ui/events/test/event_generator.h"
 #include "ui/events/test/events_test_utils.h"
 #include "ui/events/test/test_event_handler.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/menus/simple_menu_model.h"
 #include "ui/views/controls/menu/menu_controller.h"
 #include "ui/views/controls/menu/menu_runner.h"
+#include "ui/views/test/test_widget_builder.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "ui/views/window/dialog_delegate.h"
+#include "ui/wm/core/accelerator_filter.h"
+#include "ui/wm/core/focus_controller.h"
+#include "ui/wm/core/window_util.h"
 
 using aura::RootWindow;
 
@@ -115,6 +124,8 @@ void ExpectAllContainers() {
   EXPECT_TRUE(Shell::GetContainer(root_window,
                                   kShellWindowId_LockSystemModalContainer));
   EXPECT_TRUE(Shell::GetContainer(root_window, kShellWindowId_MenuContainer));
+  EXPECT_TRUE(Shell::GetContainer(
+      root_window, kShellWindowId_CaptureModeSearchResultsPanel));
   EXPECT_TRUE(Shell::GetContainer(root_window,
                                   kShellWindowId_DragImageAndTooltipContainer));
   EXPECT_TRUE(
@@ -133,18 +144,13 @@ void ExpectAllContainers() {
   EXPECT_FALSE(Shell::GetContainer(root_window, kShellWindowId_PhantomWindow));
 }
 
-std::unique_ptr<views::WidgetDelegateView> CreateModalWidgetDelegate() {
-  auto delegate = std::make_unique<views::WidgetDelegateView>();
-  delegate->SetCanResize(true);
-  delegate->SetModalType(ui::MODAL_TYPE_SYSTEM);
-  delegate->SetOwnedByWidget(true);
-  delegate->SetTitle(u"Modal Window");
-  return delegate;
-}
-
 class SimpleMenuDelegate : public ui::SimpleMenuModel::Delegate {
  public:
   SimpleMenuDelegate() = default;
+
+  SimpleMenuDelegate(const SimpleMenuDelegate&) = delete;
+  SimpleMenuDelegate& operator=(const SimpleMenuDelegate&) = delete;
+
   ~SimpleMenuDelegate() override = default;
 
   bool IsCommandIdChecked(int command_id) const override { return false; }
@@ -152,19 +158,27 @@ class SimpleMenuDelegate : public ui::SimpleMenuModel::Delegate {
   bool IsCommandIdEnabled(int command_id) const override { return true; }
 
   void ExecuteCommand(int command_id, int event_flags) override {}
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(SimpleMenuDelegate);
 };
 
 }  // namespace
 
 class ShellTest : public AshTestBase {
  public:
+  static std::unique_ptr<views::WidgetDelegateView>
+  CreateModalWidgetDelegate() {
+    auto delegate = std::make_unique<views::WidgetDelegateView>(
+        views::WidgetDelegateView::CreatePassKey());
+    delegate->SetCanResize(true);
+    delegate->SetModalType(ui::mojom::ModalType::kSystem);
+    delegate->SetOwnedByWidget(views::WidgetDelegate::OwnedByWidgetPassKey());
+    delegate->SetTitle(u"Modal Window");
+    return delegate;
+  }
+
   void TestCreateWindow(views::Widget::InitParams::Type type,
                         bool always_on_top,
                         aura::Window* expected_container) {
-    TestWidgetBuilder builder;
+    views::test::TestWidgetBuilder builder;
     if (always_on_top)
       builder.SetZOrderLevel(ui::ZOrderLevel::kFloatingWindow);
     views::Widget* widget =
@@ -178,17 +192,17 @@ class ShellTest : public AshTestBase {
     widget->Close();
   }
 
-  void LockScreenAndVerifyMenuClosed() {
+  void LockScreenAndVerifyMenuClosed(views::Widget* menu_owner) {
     // Verify a menu is open before locking.
     views::MenuController* menu_controller =
-        views::MenuController::GetActiveInstance();
+        views::MenuController::GetForOwnerWidget(menu_owner);
     DCHECK(menu_controller);
     EXPECT_EQ(views::MenuController::ExitType::kNone,
               menu_controller->exit_type());
 
     // Create a LockScreen window.
     views::Widget* lock_widget =
-        TestWidgetBuilder()
+        views::test::TestWidgetBuilder()
             .SetWidgetType(views::Widget::InitParams::TYPE_WINDOW)
             .SetShow(false)
             .BuildOwnedByNativeWidget();
@@ -206,7 +220,7 @@ class ShellTest : public AshTestBase {
     EXPECT_TRUE(lock_widget->GetNativeView()->HasFocus());
 
     // Verify menu is closed.
-    EXPECT_EQ(nullptr, views::MenuController::GetActiveInstance());
+    EXPECT_FALSE(views::MenuController::GetActiveInstance());
     lock_widget->Close();
     GetSessionControllerClient()->UnlockScreen();
   }
@@ -231,19 +245,19 @@ TEST_F(ShellTest, CreateWindow) {
 }
 
 // Verifies that a window with a preferred size is created centered on the
-// default display for new windows. Mojo apps like shortcut_viewer rely on this
-// behavior.
+// default display for new windows.
 TEST_F(ShellTest, CreateWindowWithPreferredSize) {
   UpdateDisplay("1024x768,800x600");
 
   aura::Window* secondary_root = Shell::GetAllRootWindows()[1];
   display::ScopedDisplayForNewWindows scoped_display(secondary_root);
 
-  views::Widget::InitParams params;
-  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
+  views::Widget::InitParams params(
+      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   // Don't specify bounds, parent or context.
   {
-    auto delegate = std::make_unique<views::WidgetDelegateView>();
+    auto delegate = std::make_unique<views::WidgetDelegateView>(
+        views::WidgetDelegateView::CreatePassKey());
     delegate->SetPreferredSize(gfx::Size(400, 300));
     params.delegate = delegate.release();
   }
@@ -259,7 +273,8 @@ TEST_F(ShellTest, CreateWindowWithPreferredSize) {
 
 TEST_F(ShellTest, ChangeZOrderLevel) {
   // Creates a normal window.
-  views::Widget* widget = TestWidgetBuilder().BuildOwnedByNativeWidget();
+  views::Widget* widget =
+      views::test::TestWidgetBuilder().BuildOwnedByNativeWidget();
 
   // It should be in the active desk container.
   EXPECT_TRUE(
@@ -287,7 +302,8 @@ TEST_F(ShellTest, ChangeZOrderLevel) {
 
 TEST_F(ShellTest, CreateModalWindow) {
   // Create a normal window.
-  views::Widget* widget = TestWidgetBuilder().BuildOwnedByNativeWidget();
+  views::Widget* widget =
+      views::test::TestWidgetBuilder().BuildOwnedByNativeWidget();
 
   // It should be in the active desk container.
   EXPECT_TRUE(
@@ -309,7 +325,8 @@ TEST_F(ShellTest, CreateModalWindow) {
 
 TEST_F(ShellTest, CreateLockScreenModalWindow) {
   // Create a normal window.
-  views::Widget* widget = TestWidgetBuilder().BuildOwnedByNativeWidget();
+  views::Widget* widget =
+      views::test::TestWidgetBuilder().BuildOwnedByNativeWidget();
   EXPECT_TRUE(widget->GetNativeView()->HasFocus());
 
   // It should be in the active desk container.
@@ -318,8 +335,9 @@ TEST_F(ShellTest, CreateLockScreenModalWindow) {
 
   GetSessionControllerClient()->LockScreen();
   // Create a LockScreen window.
-  views::Widget* lock_widget =
-      TestWidgetBuilder().SetShow(false).BuildOwnedByNativeWidget();
+  views::Widget* lock_widget = views::test::TestWidgetBuilder()
+                                   .SetShow(false)
+                                   .BuildOwnedByNativeWidget();
   Shell::GetContainer(Shell::GetPrimaryRootWindow(),
                       kShellWindowId_LockScreenContainer)
       ->AddChild(lock_widget->GetNativeView());
@@ -394,8 +412,8 @@ TEST_F(ShellTest, LockScreenClosesActiveMenu) {
 
   menu_runner->RunMenuAt(widget, nullptr, gfx::Rect(),
                          views::MenuAnchorPosition::kTopLeft,
-                         ui::MENU_SOURCE_MOUSE);
-  LockScreenAndVerifyMenuClosed();
+                         ui::mojom::MenuSourceType::kMouse);
+  LockScreenAndVerifyMenuClosed(widget);
 }
 
 TEST_F(ShellTest, ManagedWindowModeBasics) {
@@ -419,72 +437,13 @@ TEST_F(ShellTest, ManagedWindowModeBasics) {
   //  EXPECT_FALSE(wallpaper->layer());
 
   // Create a normal window.  It is not maximized.
-  views::Widget* widget = TestWidgetBuilder()
+  views::Widget* widget = views::test::TestWidgetBuilder()
                               .SetBounds(gfx::Rect(11, 22, 300, 400))
                               .BuildOwnedByNativeWidget();
   EXPECT_FALSE(widget->IsMaximized());
 
   // Clean up.
   widget->Close();
-}
-
-TEST_F(ShellTest, FullscreenWindowHidesShelf) {
-  ExpectAllContainers();
-
-  // Create a normal window.  It is not maximized.
-  views::Widget* widget = TestWidgetBuilder()
-                              .SetBounds(gfx::Rect(11, 22, 300, 400))
-                              .BuildOwnedByNativeWidget();
-  EXPECT_FALSE(widget->IsMaximized());
-
-  // Shelf defaults to visible.
-  EXPECT_EQ(SHELF_VISIBLE, Shell::GetPrimaryRootWindowController()
-                               ->GetShelfLayoutManager()
-                               ->visibility_state());
-
-  // Fullscreen window hides it.
-  widget->SetFullscreen(true);
-  EXPECT_EQ(SHELF_HIDDEN, Shell::GetPrimaryRootWindowController()
-                              ->GetShelfLayoutManager()
-                              ->visibility_state());
-
-  // Restoring the window restores it.
-  widget->Restore();
-  EXPECT_EQ(SHELF_VISIBLE, Shell::GetPrimaryRootWindowController()
-                               ->GetShelfLayoutManager()
-                               ->visibility_state());
-
-  // Clean up.
-  widget->Close();
-}
-
-// Various assertions around auto-hide behavior.
-// TODO(jamescook): Move this to ShelfTest.
-TEST_F(ShellTest, ToggleAutoHide) {
-  std::unique_ptr<aura::Window> window =
-      std::make_unique<aura::Window>(nullptr);
-  window->SetProperty(aura::client::kShowStateKey, ui::SHOW_STATE_NORMAL);
-  window->SetType(aura::client::WINDOW_TYPE_NORMAL);
-  window->Init(ui::LAYER_TEXTURED);
-  ParentWindowInPrimaryRootWindow(window.get());
-  window->Show();
-  wm::ActivateWindow(window.get());
-
-  Shelf* shelf = GetPrimaryShelf();
-  shelf->SetAutoHideBehavior(ShelfAutoHideBehavior::kAlways);
-  EXPECT_EQ(ShelfAutoHideBehavior::kAlways, shelf->auto_hide_behavior());
-
-  shelf->SetAutoHideBehavior(ShelfAutoHideBehavior::kNever);
-  EXPECT_EQ(ShelfAutoHideBehavior::kNever, shelf->auto_hide_behavior());
-
-  window->SetProperty(aura::client::kShowStateKey, ui::SHOW_STATE_MAXIMIZED);
-  EXPECT_EQ(ShelfAutoHideBehavior::kNever, shelf->auto_hide_behavior());
-
-  shelf->SetAutoHideBehavior(ShelfAutoHideBehavior::kAlways);
-  EXPECT_EQ(ShelfAutoHideBehavior::kAlways, shelf->auto_hide_behavior());
-
-  shelf->SetAutoHideBehavior(ShelfAutoHideBehavior::kNever);
-  EXPECT_EQ(ShelfAutoHideBehavior::kNever, shelf->auto_hide_behavior());
 }
 
 // Tests that the cursor-filter is ahead of the drag-drop controller in the
@@ -496,12 +455,103 @@ TEST_F(ShellTest, TestPreTargetHandlerOrder) {
 
   ui::EventHandlerList handlers = test_api.GetPreTargetHandlers();
   ui::EventHandlerList::const_iterator cursor_filter =
-      std::find(handlers.begin(), handlers.end(), shell->mouse_cursor_filter());
-  ui::EventHandlerList::const_iterator drag_drop = std::find(
-      handlers.begin(), handlers.end(), shell_test_api.drag_drop_controller());
+      std::ranges::find(handlers, shell->mouse_cursor_filter());
+  ui::EventHandlerList::const_iterator drag_drop =
+      std::ranges::find(handlers, shell_test_api.drag_drop_controller());
   EXPECT_NE(handlers.end(), cursor_filter);
   EXPECT_NE(handlers.end(), drag_drop);
   EXPECT_GT(drag_drop, cursor_filter);
+}
+
+// Tests that the accelerator_tracker is ahead of the accelerator_filter in the
+// pre-target list to make sure the accelerators won't be filtered out before
+// getting AcceleratorTracker.
+TEST_F(ShellTest, AcceleratorPreTargetHandlerOrder) {
+  Shell* shell = Shell::Get();
+  ui::EventTargetTestApi test_api(shell);
+
+  ui::EventHandlerList handlers = test_api.GetPreTargetHandlers();
+  ui::EventHandlerList::const_iterator accelerator_tracker =
+      std::ranges::find(handlers, shell->accelerator_tracker());
+  ui::EventHandlerList::const_iterator accelerator_filter =
+      std::ranges::find(handlers, shell->accelerator_filter());
+  EXPECT_NE(handlers.end(), accelerator_tracker);
+  EXPECT_NE(handlers.end(), accelerator_filter);
+  EXPECT_GT(accelerator_filter, accelerator_tracker);
+}
+
+TEST_F(ShellTest, TestAccessibilityHandlerOrder) {
+  Shell* shell = Shell::Get();
+  ui::EventTargetTestApi test_api(shell);
+  ShellTestApi shell_test_api;
+
+  ui::EventHandler select_to_speak;
+  shell->AddAccessibilityEventHandler(
+      &select_to_speak,
+      AccessibilityEventHandlerManager::HandlerType::kSelectToSpeak);
+
+  // Check ordering.
+  ui::EventHandlerList handlers = test_api.GetPreTargetHandlers();
+
+  ui::EventHandlerList::const_iterator cursor_filter =
+      std::ranges::find(handlers, shell->mouse_cursor_filter());
+  ui::EventHandlerList::const_iterator fullscreen_magnifier_filter =
+      std::ranges::find(handlers, shell->fullscreen_magnifier_controller());
+  ui::EventHandlerList::const_iterator chromevox_filter =
+      std::ranges::find(handlers, shell->key_accessibility_enabler());
+  ui::EventHandlerList::const_iterator select_to_speak_filter =
+      std::ranges::find(handlers, &select_to_speak);
+  EXPECT_NE(handlers.end(), cursor_filter);
+  EXPECT_NE(handlers.end(), fullscreen_magnifier_filter);
+  EXPECT_NE(handlers.end(), chromevox_filter);
+  EXPECT_NE(handlers.end(), select_to_speak_filter);
+
+  EXPECT_LT(cursor_filter, fullscreen_magnifier_filter);
+  EXPECT_LT(fullscreen_magnifier_filter, chromevox_filter);
+  EXPECT_LT(chromevox_filter, select_to_speak_filter);
+
+  // Removing works.
+  shell->RemoveAccessibilityEventHandler(&select_to_speak);
+
+  handlers = test_api.GetPreTargetHandlers();
+  cursor_filter = std::ranges::find(handlers, shell->mouse_cursor_filter());
+  fullscreen_magnifier_filter =
+      std::ranges::find(handlers, shell->fullscreen_magnifier_controller());
+  chromevox_filter =
+      std::ranges::find(handlers, shell->key_accessibility_enabler());
+  select_to_speak_filter = std::ranges::find(handlers, &select_to_speak);
+  EXPECT_NE(handlers.end(), cursor_filter);
+  EXPECT_NE(handlers.end(), fullscreen_magnifier_filter);
+  EXPECT_NE(handlers.end(), chromevox_filter);
+  EXPECT_EQ(handlers.end(), select_to_speak_filter);
+
+  // Ordering still works.
+  EXPECT_LT(cursor_filter, fullscreen_magnifier_filter);
+  EXPECT_LT(fullscreen_magnifier_filter, chromevox_filter);
+
+  // Adding another is correct.
+  ui::EventHandler docked_magnifier;
+  shell->AddAccessibilityEventHandler(
+      &docked_magnifier,
+      AccessibilityEventHandlerManager::HandlerType::kDockedMagnifier);
+
+  handlers = test_api.GetPreTargetHandlers();
+  cursor_filter = std::ranges::find(handlers, shell->mouse_cursor_filter());
+  fullscreen_magnifier_filter =
+      std::ranges::find(handlers, shell->fullscreen_magnifier_controller());
+  chromevox_filter =
+      std::ranges::find(handlers, shell->key_accessibility_enabler());
+  ui::EventHandlerList::const_iterator docked_magnifier_filter =
+      std::ranges::find(handlers, &docked_magnifier);
+  EXPECT_NE(handlers.end(), cursor_filter);
+  EXPECT_NE(handlers.end(), fullscreen_magnifier_filter);
+  EXPECT_NE(handlers.end(), docked_magnifier_filter);
+  EXPECT_NE(handlers.end(), chromevox_filter);
+
+  // Inserted in proper order.
+  EXPECT_LT(cursor_filter, fullscreen_magnifier_filter);
+  EXPECT_LT(fullscreen_magnifier_filter, docked_magnifier_filter);
+  EXPECT_LT(docked_magnifier_filter, chromevox_filter);
 }
 
 // Verifies an EventHandler added to Env gets notified from EventGenerator.
@@ -522,26 +572,23 @@ TEST_F(ShellTest, EnvPreTargetHandler) {
 TEST_F(ShellTest, NoWindowTabFocus) {
   ExpectAllContainers();
 
-  auto* generator = GetEventGenerator();
-
   StatusAreaWidget* status_area_widget =
       GetPrimaryShelf()->status_area_widget();
   ShelfNavigationWidget* home_button = GetPrimaryShelf()->navigation_widget();
 
   // Create a normal window.  It is not maximized.
-  auto widget = CreateTestWidget();
+  auto widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
 
   // Hit tab with window open, and expect that focus is not on the navigation
   // widget or status widget.
-  generator->PressKey(ui::VKEY_TAB, ui::EF_NONE);
-  generator->ReleaseKey(ui::VKEY_TAB, ui::EF_NONE);
+  PressAndReleaseKey(ui::VKEY_TAB);
   EXPECT_FALSE(home_button->GetNativeView()->HasFocus());
   EXPECT_FALSE(status_area_widget->GetNativeView()->HasFocus());
 
   // Minimize the window, hit tab and expect that focus is on the launcher.
   widget->Minimize();
-  generator->PressKey(ui::VKEY_TAB, ui::EF_NONE);
-  generator->ReleaseKey(ui::VKEY_TAB, ui::EF_NONE);
+  PressAndReleaseKey(ui::VKEY_TAB);
   EXPECT_TRUE(home_button->GetNativeView()->HasFocus());
 
   // Show (to steal focus back before continuing testing) and close the window.
@@ -553,14 +600,12 @@ TEST_F(ShellTest, NoWindowTabFocus) {
   // button. Tab should be handled by overview mode and not hit the shell event
   // handler.
   EnterOverview();
-  generator->PressKey(ui::VKEY_TAB, ui::EF_NONE);
-  generator->ReleaseKey(ui::VKEY_TAB, ui::EF_NONE);
+  PressAndReleaseKey(ui::VKEY_TAB);
   EXPECT_FALSE(home_button->GetNativeView()->HasFocus());
   ExitOverview();
 
   // Hit shift tab and expect that focus is on status widget.
-  generator->PressKey(ui::VKEY_TAB, ui::EF_SHIFT_DOWN);
-  generator->ReleaseKey(ui::VKEY_TAB, ui::EF_SHIFT_DOWN);
+  PressAndReleaseKey(ui::VKEY_TAB, ui::EF_SHIFT_DOWN);
   EXPECT_TRUE(status_area_widget->GetNativeView()->HasFocus());
 }
 
@@ -574,13 +619,14 @@ TEST_F(ShellTest, NoWindowTabFocus) {
 class ShellTest2 : public AshTestBase {
  public:
   ShellTest2() = default;
+
+  ShellTest2(const ShellTest2&) = delete;
+  ShellTest2& operator=(const ShellTest2&) = delete;
+
   ~ShellTest2() override = default;
 
  protected:
   std::unique_ptr<aura::Window> window_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ShellTest2);
 };
 
 TEST_F(ShellTest2, DontCrashWhenWindowDeleted) {
@@ -597,7 +643,7 @@ TEST_F(ShellLoginTest, DragAndDropDisabledBeforeLogin) {
   DragDropControllerTestApi drag_drop_controller_test_api(drag_drop_controller);
   EXPECT_FALSE(drag_drop_controller_test_api.enabled());
 
-  SimulateUserLogin("user1@test.com");
+  SimulateUserLogin(AccountId::FromUserEmail("user1@test.com"));
   EXPECT_TRUE(drag_drop_controller_test_api.enabled());
 }
 
@@ -605,6 +651,68 @@ using NoDuplicateShellContainerIdsTest = AshTestBase;
 
 TEST_F(NoDuplicateShellContainerIdsTest, ValidateContainersIds) {
   ExpectAllContainers();
+}
+
+// A test fixture that host `ActivationChanger` to simulate window activation
+// change during Shell shutdown and verifies no crash will happen.
+class ShellShutdownTest : public AshTestBase {
+ protected:
+  // Helper to activate `to_activate` when `to_observe` is destroyed. The
+  // intention is to simulate active window change during Shell destruction.
+  // The activation change needs to affect `CloseAllRootWindowChildWindows()`
+  // in Shell destructor.
+  class ActivationChanger : public aura::WindowObserver {
+   public:
+    ActivationChanger(aura::Window* to_observe, aura::Window* to_activate)
+        : to_observe_(to_observe), to_activate_(to_activate) {
+      // No `RemoveObsever` because `this` outlives `Shell` and all windows.
+      to_observe_->AddObserver(this);
+    }
+
+    // aura::WindowObserver:
+    void OnWindowDestroying(aura::Window* window) override {
+      Shell::Get()->focus_controller()->ActivateWindow(to_activate_);
+
+      // Clear out references to avoid `raw_ptr` dangling pointer warnings.
+      to_observe_ = nullptr;
+      to_activate_ = nullptr;
+    }
+
+   private:
+    raw_ptr<aura::Window> to_observe_;
+    raw_ptr<aura::Window> to_activate_;
+  };
+
+  void CreateActivationChanger(aura::Window* to_observe,
+                               aura::Window* to_activate) {
+    activation_changer_ =
+        std::make_unique<ActivationChanger>(to_observe, to_activate);
+  }
+
+ private:
+  std::unique_ptr<ActivationChanger> activation_changer_;
+};
+
+TEST_F(ShellShutdownTest, ActivateWindow) {
+  aura::Window* to_observe =
+      CreateTestWindowInShell({.bounds = {40, 0, 60, 40}, .window_id = 0})
+          .release();
+  to_observe->Show();
+
+  aura::Window* to_activate =
+      CreateTestWindowInShell({.bounds = {30, 20}, .window_id = 0}).release();
+  // Put `to_activate` in a container after desks containers so that its
+  // destruction (and activations of `to_activate`) comes after desk containers
+  // destruction.
+  Shell::GetPrimaryRootWindow()
+      ->GetChildById(kShellWindowId_FloatContainer)
+      ->AddChild(to_activate);
+  to_activate->Show();
+
+  wm::ActivateWindow(to_observe);
+
+  // Creates an ActivationChanger to activate `to_activate` during shutdown.
+  CreateActivationChanger(to_observe, to_activate);
 }
 
 }  // namespace ash

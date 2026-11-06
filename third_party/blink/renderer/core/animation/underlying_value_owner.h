@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 
 #include <memory>
 
+#include "base/check_op.h"
 #include "third_party/blink/renderer/core/animation/typed_interpolation_value.h"
 #include "third_party/blink/renderer/core/animation/underlying_value.h"
 #include "third_party/blink/renderer/core/core_export.h"
@@ -34,21 +35,21 @@ class CORE_EXPORT UnderlyingValueOwner : public UnderlyingValue {
 
   // UnderlyingValue
   InterpolableValue& MutableInterpolableValue() final;
-  void SetInterpolableValue(std::unique_ptr<InterpolableValue>) final;
+  void SetInterpolableValue(InterpolableValue*) final;
   const NonInterpolableValue* GetNonInterpolableValue() const final;
-  void SetNonInterpolableValue(scoped_refptr<const NonInterpolableValue>) final;
+  void SetNonInterpolableValue(const NonInterpolableValue*) final;
 
-  const InterpolationType& GetType() const {
+  const InterpolationType* GetType() const {
     DCHECK(type_);
-    return *type_;
+    return type_;
   }
 
   const InterpolationValue& Value() const;
 
   void Set(std::nullptr_t);
-  void Set(const InterpolationType&, const InterpolationValue&);
-  void Set(const InterpolationType&, InterpolationValue&&);
-  void Set(std::unique_ptr<TypedInterpolationValue>);
+  void Set(const InterpolationType*, const InterpolationValue&);
+  void Set(const InterpolationType*, InterpolationValue&&);
+  void Set(TypedInterpolationValue*);
   void Set(const TypedInterpolationValue*);
 
   InterpolationValue& MutableValue();

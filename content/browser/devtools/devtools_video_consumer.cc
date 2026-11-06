@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/shared_memory_mapping.h"
 #include "cc/paint/skia_paint_canvas.h"
 #include "components/viz/common/surfaces/subtree_capture_id.h"
@@ -15,15 +15,13 @@
 #include "media/base/limits.h"
 #include "media/capture/mojom/video_capture_buffer.mojom.h"
 #include "media/capture/mojom/video_capture_types.mojom.h"
-#include "media/renderers/paint_canvas_video_renderer.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "media/gfx/paint_canvas_video_renderer.h"
 
 namespace content {
 
 namespace {
 
-constexpr base::TimeDelta kDefaultMinCapturePeriod =
-    base::TimeDelta::FromMilliseconds(10);
+constexpr base::TimeDelta kDefaultMinCapturePeriod = base::Milliseconds(10);
 
 // Frame size can change every frame.
 constexpr base::TimeDelta kDefaultMinPeriod = base::TimeDelta();
@@ -33,8 +31,6 @@ const bool kDefaultUseFixedAspectRatio = false;
 
 constexpr media::VideoPixelFormat kDefaultPixelFormat =
     media::PIXEL_FORMAT_I420;
-
-constexpr gfx::ColorSpace kDefaultColorSpace = gfx::ColorSpace::CreateREC709();
 
 // Creates a ClientFrameSinkVideoCapturer via HostFrameSinkManager.
 std::unique_ptr<viz::ClientFrameSinkVideoCapturer> CreateCapturer() {
@@ -54,8 +50,7 @@ DevToolsVideoConsumer::DevToolsVideoConsumer(OnFrameCapturedCallback callback)
       min_capture_period_(kDefaultMinCapturePeriod),
       min_frame_size_(kDefaultMinFrameSize),
       max_frame_size_(kDefaultMaxFrameSize),
-      pixel_format_(kDefaultPixelFormat),
-      color_space_(kDefaultColorSpace) {}
+      pixel_format_(kDefaultPixelFormat) {}
 
 DevToolsVideoConsumer::~DevToolsVideoConsumer() = default;
 
@@ -87,11 +82,7 @@ void DevToolsVideoConsumer::SetFrameSinkId(
     const viz::FrameSinkId& frame_sink_id) {
   frame_sink_id_ = frame_sink_id;
   if (capturer_) {
-    capturer_->ChangeTarget(
-        frame_sink_id_.is_valid()
-            ? absl::make_optional<viz::FrameSinkId>(frame_sink_id_)
-            : absl::nullopt,
-        viz::SubtreeCaptureId());
+    capturer_->ChangeTarget(viz::VideoCaptureTarget(frame_sink_id_));
   }
 }
 
@@ -104,6 +95,8 @@ void DevToolsVideoConsumer::SetMinCapturePeriod(
 
 void DevToolsVideoConsumer::SetMinAndMaxFrameSize(gfx::Size min_frame_size,
                                                   gfx::Size max_frame_size) {
+  // TODO(crbug.com/567037602): CHECK-exclusion: Convert to a CHECK once we
+  // are confident it won't be triggered.
   DCHECK(IsValidMinAndMaxFrameSize(min_frame_size, max_frame_size));
   min_frame_size_ = min_frame_size;
   max_frame_size_ = max_frame_size;
@@ -113,12 +106,10 @@ void DevToolsVideoConsumer::SetMinAndMaxFrameSize(gfx::Size min_frame_size,
   }
 }
 
-void DevToolsVideoConsumer::SetFormat(media::VideoPixelFormat format,
-                                      gfx::ColorSpace color_space) {
+void DevToolsVideoConsumer::SetFormat(media::VideoPixelFormat format) {
   pixel_format_ = format;
-  color_space_ = color_space;
   if (capturer_) {
-    capturer_->SetFormat(pixel_format_, color_space_);
+    capturer_->SetFormat(pixel_format_);
   }
 }
 
@@ -131,11 +122,10 @@ void DevToolsVideoConsumer::InnerStartCapture(
   capturer_->SetMinSizeChangePeriod(kDefaultMinPeriod);
   capturer_->SetResolutionConstraints(min_frame_size_, max_frame_size_,
                                       kDefaultUseFixedAspectRatio);
-  capturer_->SetFormat(pixel_format_, color_space_);
+  capturer_->SetFormat(pixel_format_);
   if (frame_sink_id_.is_valid())
-    capturer_->ChangeTarget(frame_sink_id_, viz::SubtreeCaptureId());
-
-  capturer_->Start(this);
+    capturer_->ChangeTarget(viz::VideoCaptureTarget(frame_sink_id_));
+  capturer_->Start(this, viz::mojom::BufferFormatPreference::kDefault);
 }
 
 bool DevToolsVideoConsumer::IsValidMinAndMaxFrameSize(
@@ -151,20 +141,29 @@ bool DevToolsVideoConsumer::IsValidMinAndMaxFrameSize(
 }
 
 void DevToolsVideoConsumer::OnFrameCaptured(
-    base::ReadOnlySharedMemoryRegion data,
+    ::media::mojom::VideoBufferHandlePtr data,
     ::media::mojom::VideoFrameInfoPtr info,
     const gfx::Rect& content_rect,
     mojo::PendingRemote<viz::mojom::FrameSinkVideoConsumerFrameCallbacks>
         callbacks) {
-  if (!data.IsValid())
-    return;
+  CHECK(data->is_read_only_shmem_region());
+  base::ReadOnlySharedMemoryRegion& shmem_region =
+      data->get_read_only_shmem_region();
 
-  base::ReadOnlySharedMemoryMapping mapping = data.Map();
+  // The |data| parameter is not nullable and mojo type mapping for
+  // `base::ReadOnlySharedMemoryRegion` defines that nullable version of it is
+  // the same type, with null check being equivalent to IsValid() check. Given
+  // the above, we should never be able to receive a read only shmem region that
+  // is not valid - mojo will enforce it for us.
+  CHECK(shmem_region.IsValid(), base::NotFatalUntil::M159);
+
+  base::ReadOnlySharedMemoryMapping mapping = shmem_region.Map();
   if (!mapping.IsValid()) {
     DLOG(ERROR) << "Shared memory mapping failed.";
     return;
   }
-  if (mapping.size() <
+  base::span<const uint8_t> mapping_memory(mapping);
+  if (mapping_memory.size() <
       media::VideoFrame::AllocationSize(info->pixel_format, info->coded_size)) {
     DLOG(ERROR) << "Shared memory size was less than expected.";
     return;
@@ -181,20 +180,19 @@ void DevToolsVideoConsumer::OnFrameCaptured(
   // portion of the frame that contains content is used.
   scoped_refptr<media::VideoFrame> frame = media::VideoFrame::WrapExternalData(
       info->pixel_format, info->coded_size, content_rect, content_rect.size(),
-      const_cast<uint8_t*>(static_cast<const uint8_t*>(mapping.memory())),
-      mapping.size(), info->timestamp);
+      mapping_memory, info->timestamp);
   if (!frame) {
     DLOG(ERROR) << "Unable to create VideoFrame wrapper around the shmem.";
     return;
   }
   frame->AddDestructionObserver(base::BindOnce(
-      [](base::ReadOnlySharedMemoryMapping mapping,
+      [](media::mojom::VideoBufferHandlePtr data,
+         base::ReadOnlySharedMemoryMapping mapping,
          mojo::PendingRemote<viz::mojom::FrameSinkVideoConsumerFrameCallbacks>
              callbacks) {},
-      std::move(mapping), std::move(callbacks)));
+      std::move(data), std::move(mapping), std::move(callbacks)));
   frame->set_metadata(info->metadata);
-  if (info->color_space.has_value())
-    frame->set_color_space(info->color_space.value());
+  frame->set_color_space(info->color_space);
 
   callback_.Run(std::move(frame));
 }

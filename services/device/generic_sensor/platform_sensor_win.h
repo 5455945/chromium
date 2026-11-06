@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,28 +9,25 @@
 #include "services/device/generic_sensor/platform_sensor.h"
 #include "services/device/generic_sensor/platform_sensor_reader_win.h"
 
-namespace base {
-class SingleThreadTaskRunner;
-}
-
 namespace device {
 
 // Implementation of PlatformSensor interface for Windows platform. Instance
 // of PlatformSensorWin is bound to IPC thread where PlatformSensorProvider is
 // running and communication with Windows platform sensor is done through
 // PlatformSensorReaderWinBase |sensor_reader_| interface which is bound to
-// sensor thread and communicates with PlatformSensorWin using
+// the COM STA sequence and communicates with PlatformSensorWin using
 // PlatformSensorReaderWinBase::Client interface. The error and data change
 // events are forwarded to IPC task runner.
 class PlatformSensorWin final : public PlatformSensor,
                                 public PlatformSensorReaderWinBase::Client {
  public:
-  PlatformSensorWin(
-      mojom::SensorType type,
-      SensorReadingSharedBuffer* reading_buffer,
-      PlatformSensorProvider* provider,
-      scoped_refptr<base::SingleThreadTaskRunner> sensor_thread_runner,
-      std::unique_ptr<PlatformSensorReaderWinBase> sensor_reader);
+  PlatformSensorWin(mojom::SensorType type,
+                    SensorReadingSharedBuffer* reading_buffer,
+                    base::WeakPtr<PlatformSensorProvider> provider,
+                    ScopedPlatformSensorReaderWinBase sensor_reader);
+
+  PlatformSensorWin(const PlatformSensorWin&) = delete;
+  PlatformSensorWin& operator=(const PlatformSensorWin&) = delete;
 
   PlatformSensorConfiguration GetDefaultConfiguration() override;
   mojom::ReportingMode GetReportingMode() override;
@@ -50,11 +47,8 @@ class PlatformSensorWin final : public PlatformSensor,
       const PlatformSensorConfiguration& configuration) override;
 
  private:
-  scoped_refptr<base::SingleThreadTaskRunner> sensor_thread_runner_;
-  PlatformSensorReaderWinBase* const sensor_reader_;
+  ScopedPlatformSensorReaderWinBase sensor_reader_;
   base::WeakPtrFactory<PlatformSensorWin> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(PlatformSensorWin);
 };
 
 }  // namespace device

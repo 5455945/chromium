@@ -1,35 +1,17 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.omnibox;
 
-import android.graphics.drawable.Drawable;
-import android.view.View;
+import org.chromium.build.annotations.NullMarked;
 
-/**
- * A supplement to {@link LocationBarCoordinator} with methods specific to larger devices.
- */
+/** A supplement to {@link LocationBarCoordinator} with methods specific to larger devices. */
+@NullMarked
 public class LocationBarCoordinatorTablet implements LocationBarCoordinator.SubCoordinator {
-    private LocationBarTablet mLocationBarTablet;
 
-    public LocationBarCoordinatorTablet(LocationBarTablet tabletLayout) {
-        mLocationBarTablet = tabletLayout;
-    }
+    public LocationBarCoordinatorTablet(LocationBarTablet tabletLayout) {}
 
     @Override
-    public void destroy() {
-        mLocationBarTablet = null;
-    }
-
-    /**
-     * Gets the background drawable.
-     *
-     * <p>TODO(1133482): Hide this View interaction if possible.
-     *
-     * @see View#getBackground()
-     */
-    public Drawable getBackground() {
-        return mLocationBarTablet.getBackground();
-    }
+    public void destroy() {}
 }

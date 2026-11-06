@@ -1,13 +1,53 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "ios/chrome/credential_provider_extension/ui/feature_flags.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "ios/chrome/common/app_group/app_group_constants.h"
+#import "ios/chrome/common/app_group/app_group_field_trial_version.h"
+#import "ios/chrome/common/credential_provider/constants.h"
 
-BOOL IsPasswordCreationEnabled() {
-  return NO;
+BOOL IsAutomaticPasskeyUpgradeEnabled() {
+  return [[app_group::GetGroupUserDefaults()
+      objectForKey:
+          AppGroupUserDefaulsCredentialProviderAutomaticPasskeyUpgradeEnabled()]
+      boolValue];
+}
+
+BOOL IsPasskeyLargeBlobEnabled() {
+  return [[app_group::GetGroupUserDefaults()
+      objectForKey:
+          AppGroupUserDefaulsCredentialProviderPasskeyLargeBlobEnabled()]
+      boolValue];
+}
+
+BOOL IsPasswordCreationUserEnabled() {
+  return [[app_group::GetGroupUserDefaults()
+      objectForKey:
+          AppGroupUserDefaultsCredentialProviderSavingPasswordsEnabled()]
+      boolValue];
+}
+
+BOOL IsPasswordCreationManaged() {
+  return [[app_group::GetGroupUserDefaults()
+      objectForKey:
+          AppGroupUserDefaultsCredentialProviderSavingPasswordsManaged()]
+      boolValue];
+}
+
+BOOL IsPasswordSyncEnabled() {
+  return [[app_group::GetGroupUserDefaults()
+      objectForKey:AppGroupUserDefaultsCredentialProviderPasswordSyncSetting()]
+      boolValue];
+}
+
+std::optional<bool> GetPasskeyCreationPolicy() {
+  id passkeyCreationPolicy = [app_group::GetGroupUserDefaults()
+      objectForKey:
+          AppGroupUserDefaultsCredentialProviderSavingPasskeysEnabled()];
+  if (!passkeyCreationPolicy) {
+    return std::nullopt;
+  }
+  return [passkeyCreationPolicy boolValue];
 }

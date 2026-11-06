@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,6 +11,7 @@
 #include <list>
 #include <vector>
 #include "base/check_op.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "build/build_config.h"
 #include "gpu/command_buffer/service/buffer_manager.h"
@@ -31,7 +32,7 @@ class VertexArrayManager;
 // glDrawXXX time.
 class GPU_GLES2_EXPORT VertexAttrib {
  public:
-  typedef std::list<VertexAttrib*> VertexAttribList;
+  typedef std::list<raw_ptr<VertexAttrib, CtnExperimental>> VertexAttribList;
 
   VertexAttrib();
   VertexAttrib(const VertexAttrib& other);
@@ -179,7 +180,7 @@ class GPU_GLES2_EXPORT VertexAttrib {
   scoped_refptr<Buffer> buffer_;
 
   // List this info is on.
-  VertexAttribList* list_;
+  raw_ptr<VertexAttribList> list_;
 
   // Iterator for list this info is on. Enabled/Disabled
   VertexAttribList::iterator it_;
@@ -191,11 +192,11 @@ class GPU_GLES2_EXPORT VertexAttrib {
 class GPU_GLES2_EXPORT VertexAttribManager
     : public base::RefCounted<VertexAttribManager> {
  public:
-  typedef std::list<VertexAttrib*> VertexAttribList;
+  typedef std::list<raw_ptr<VertexAttrib, CtnExperimental>> VertexAttribList;
 
   explicit VertexAttribManager(bool do_buffer_refcounting);
 
-  void Initialize(uint32_t num_vertex_attribs, bool init_attribs);
+  void Initialize(uint32_t num_vertex_attribs);
 
   bool Enable(GLuint index, bool enable);
 
@@ -357,7 +358,7 @@ class GPU_GLES2_EXPORT VertexAttribManager
   VertexAttribList disabled_vertex_attribs_;
 
   // The VertexArrayManager that owns this VertexAttribManager
-  VertexArrayManager* manager_;
+  raw_ptr<VertexArrayManager> manager_;
 
   // True if deleted.
   bool deleted_;

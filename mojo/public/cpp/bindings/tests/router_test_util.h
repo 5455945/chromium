@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,9 @@
 #include <string>
 #include <utility>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "mojo/public/cpp/bindings/lib/responder_thunk.h"
 #include "mojo/public/cpp/bindings/message.h"
 
 namespace mojo {
@@ -33,7 +35,7 @@ class MessageAccumulator : public MessageReceiver {
   bool Accept(Message* message) override;
 
  private:
-  MessageQueue* queue_;
+  raw_ptr<MessageQueue> queue_;
   base::OnceClosure closure_;
 };
 
@@ -45,11 +47,11 @@ class ResponseGenerator : public MessageReceiverWithResponderStatus {
 
   bool AcceptWithResponder(
       Message* message,
-      std::unique_ptr<MessageReceiverWithStatus> responder) override;
+      std::unique_ptr<internal::ResponderThunk> responder) override;
   bool SendResponse(uint32_t name,
                     uint64_t request_id,
                     const char* request_string,
-                    MessageReceiver* responder);
+                    internal::ResponderThunk* responder);
 };
 
 class LazyResponseGenerator : public ResponseGenerator {
@@ -61,11 +63,13 @@ class LazyResponseGenerator : public ResponseGenerator {
 
   bool AcceptWithResponder(
       Message* message,
-      std::unique_ptr<MessageReceiverWithStatus> responder) override;
+      std::unique_ptr<internal::ResponderThunk> responder) override;
 
   bool has_responder() const { return !!responder_; }
 
-  bool responder_is_valid() const { return responder_->IsConnected(); }
+  bool responder_is_valid() const {
+    return responder_->IsConnectedForTesting();
+  }
 
   void set_closure(base::OnceClosure closure) { closure_ = std::move(closure); }
 
@@ -80,7 +84,7 @@ class LazyResponseGenerator : public ResponseGenerator {
   // also sends a response.
   void Complete(bool send_response);
 
-  std::unique_ptr<MessageReceiverWithStatus> responder_;
+  std::unique_ptr<internal::ResponderThunk> responder_;
   uint32_t name_;
   uint64_t request_id_;
   std::string request_string_;

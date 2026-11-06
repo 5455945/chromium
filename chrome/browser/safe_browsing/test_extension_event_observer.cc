@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -28,7 +28,7 @@ TestExtensionEventObserver::TestExtensionEventObserver(
 }
 
 base::Value TestExtensionEventObserver::PassEventArgs() {
-  return std::move(latest_event_args_);
+  return base::Value(std::move(latest_event_args_));
 }
 
 void TestExtensionEventObserver::OnBroadcastEvent(
@@ -38,7 +38,7 @@ void TestExtensionEventObserver::OnBroadcastEvent(
       event.event_name == OnPolicySpecifiedPasswordReuseDetected::kEventName ||
       event.event_name == OnPolicySpecifiedPasswordChanged::kEventName ||
       event.event_name == OnDangerousDownloadOpened::kEventName) {
-    latest_event_args_ = event.event_args->Clone();
+    latest_event_args_ = event.args().Clone();
     latest_event_name_ = event.event_name;
   }
 }
@@ -50,18 +50,16 @@ void TestExtensionEventObserver::VerifyLatestSecurityInterstitialEvent(
     const std::string& expected_username,
     int expected_net_error_code) {
   EXPECT_EQ(expected_event_name, latest_event_name_);
-  auto captured_args = PassEventArgs().GetList()[0].Clone();
-  EXPECT_EQ(expected_page_url.spec(),
-            captured_args.FindKey("url")->GetString());
-  EXPECT_EQ(expected_reason, captured_args.FindKey("reason")->GetString());
+  const auto captured_args = std::move(PassEventArgs().GetList()[0].GetDict());
+  EXPECT_EQ(expected_page_url.spec(), *captured_args.FindString("url"));
+  EXPECT_EQ(expected_reason, *captured_args.FindString("reason"));
   if (!expected_username.empty())
-    EXPECT_EQ(expected_username,
-              captured_args.FindKey("userName")->GetString());
+    EXPECT_EQ(expected_username, *captured_args.FindString("userName"));
   if (expected_net_error_code == 0)
-    EXPECT_FALSE(captured_args.FindKey("netErrorCode"));
+    EXPECT_FALSE(captured_args.Find("netErrorCode"));
   else
     EXPECT_EQ(base::NumberToString(expected_net_error_code),
-              captured_args.FindKey("netErrorCode")->GetString());
+              *captured_args.FindString("netErrorCode"));
 }
 
 std::unique_ptr<KeyedService> BuildSafeBrowsingPrivateEventRouter(

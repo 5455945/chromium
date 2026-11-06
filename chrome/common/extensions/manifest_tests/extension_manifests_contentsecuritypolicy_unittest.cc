@@ -1,22 +1,24 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/cxx17_backports.h"
 #include "chrome/common/extensions/manifest_tests/chrome_manifest_test.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/error_utils.h"
 #include "extensions/common/manifest_constants.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
 namespace errors = extensions::manifest_errors;
 namespace keys = extensions::manifest_keys;
-using extensions::ErrorUtils;
 
-class ContentSecurityPolicyManifestTest : public ChromeManifestTest {
-};
+namespace extensions {
+
+using ContentSecurityPolicyManifestTest = ChromeManifestTest;
 
 TEST_F(ContentSecurityPolicyManifestTest, InsecureContentSecurityPolicy) {
-  Testcase testcases[] = {
+  const Testcase testcases[] = {
       Testcase("insecure_contentsecuritypolicy_1.json",
                ErrorUtils::FormatErrorMessage(
                    errors::kInvalidCSPInsecureValueIgnored,
@@ -31,5 +33,7 @@ TEST_F(ContentSecurityPolicyManifestTest, InsecureContentSecurityPolicy) {
                ErrorUtils::FormatErrorMessage(
                    errors::kInvalidCSPMissingSecureSrc,
                    keys::kContentSecurityPolicy, "object-src"))};
-  RunTestcases(testcases, base::size(testcases), EXPECT_TYPE_WARNING);
+  RunTestcases(testcases, ExpectType::kWarning);
 }
+
+}  // namespace extensions

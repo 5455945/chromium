@@ -1,19 +1,28 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_PUBLIC_BROWSER_PAGE_H_
 #define CONTENT_PUBLIC_BROWSER_PAGE_H_
 
-#include "base/callback.h"
+#include <optional>
+
+#include "base/functional/callback.h"
+#include "base/memory/safe_ref.h"
 #include "base/supports_user_data.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/render_frame_host.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "third_party/blink/public/mojom/manifest/manifest.mojom-forward.h"
+#include "third_party/blink/public/mojom/media/capture_handle_config.mojom.h"
+#include "third_party/perfetto/include/perfetto/tracing/traced_value_forward.h"
 #include "url/gurl.h"
 
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/scoped_java_ref.h"
+#endif
+
 namespace blink {
-struct Manifest;
+class Manifest;
 }  // namespace blink
 
 namespace content {
@@ -23,7 +32,7 @@ namespace content {
 // At the moment some navigations might create a new blink::Document in the
 // existing RenderFrameHost, which will lead to a creation of a new Page
 // associated with the same main RenderFrameHost. See the comment in
-// |RenderDocumentHostUserData| for more details and crbug.com/936696 for the
+// |DocumentUserData| for more details and crbug.com/936696 for the
 // progress on always creating a new RenderFrameHost for each new document.
 
 // Page is created when a main document is created, which can happen in the
@@ -34,7 +43,9 @@ namespace content {
 // 3) Main RenderFrameHost is re-created after crash.
 
 // Page is deleted in the following cases:
-// 1) Main RenderFrameHost is deleted.
+// 1) Main RenderFrameHost is deleted. Note that this might be different from
+//    when the navigation commits, see the comment in
+//    RenderFrameHost::LifecycleState::kPendingDeletion for more details.
 // 2) A cross-document non-bfcached navigation is committed in the same
 //    RenderFrameHost.
 // 3) Before main RenderFrameHost is re-created after crash.
@@ -47,40 +58,80 @@ namespace content {
 // additional FrameTrees which will have their own associated Page. Please take
 // into consideration when assuming that Page is appropriate for storing
 // something that's common for all frames you see on a tab.
+// See docs/frame_trees.md for more details.
 
 // NOTE: Depending on the process model, the cross-origin iframes are likely to
 // be hosted in a different renderer process than the main document, so a given
 // page is hosted in multiple renderer processes at the same time.
-// RenderViewHost / RenderView / blink::Page (which are all 1:1:1) represent a
-// part of a given content::Page in a given renderer process (note, however,
-// that like RenderFrameHosts, these objects at the moment can be reused for a
-// new content::Page for a cross-document same-site main-frame navigation).
+// RenderViewHost / `blink::WebView` / blink::Page (which are all 1:1:1)
+// represent a part of a given content::Page in a given renderer process (note,
+// however, that like RenderFrameHosts, these objects at the moment can be
+// reused for a new content::Page for a cross-document same-site main-frame
+// navigation).
 class CONTENT_EXPORT Page : public base::SupportsUserData {
  public:
   ~Page() override = default;
 
   // The GURL for the page's web application manifest.
   // See https://w3c.github.io/manifest/#web-application-manifest
-  virtual const absl::optional<GURL>& GetManifestUrl() const = 0;
+  virtual const std::optional<GURL>& GetManifestUrl() const = 0;
 
-  // The callback invoked when the renderer responds to a request for the main
-  // frame document's manifest. The url will be empty if the document specifies
-  // no manifest, and the manifest will be empty if any other failures occurred.
+  // Callback for `GetManifest()`. The `result` field determines the reason for
+  // step failures, the `GURL` is the URL of the manifest, and the
+  // `std::optional<blink::Manifest>` is the parsed (or default) manifest. If
+  // the document specifies no manifest or fetching/parsing fails, `manifest` is
+  // the default manifest for the document URL; `manifest` is `std::nullopt`
+  // when no manifest is allowed (e.g. opaque origin) or an unexpected failure
+  // occurs.
   using GetManifestCallback =
-      base::OnceCallback<void(const GURL&, const blink::Manifest&)>;
+      base::OnceCallback<void(blink::mojom::ManifestRequestResult,
+                              const GURL&,
+                              std::optional<blink::Manifest>)>;
 
   // Requests the manifest URL and the Manifest of the main frame's document.
+  // |callback| may be called after the WebContents has been destroyed.
+  // This must be invoked on the UI thread, |callback| will be invoked on the UI
+  // thread.
+  // TODO(https://crbug.com/452053908): Replace usage with PageManifestManager
+  // with PrimaryPageChanged, and eventually remove this GetManifest and
+  // WebContentsObserver::DidUpdateWebManifestURL.
   virtual void GetManifest(GetManifestCallback callback) = 0;
 
   // Returns true iff this Page is primary for the associated `WebContents`
   // (i.e. web_contents->GetPrimaryPage() == this_page). Non-primary pages
-  // include pages in bfcache, portal, prerendering, fenced frames, pending
-  // commit and pending deletion pages. See WebContents::GetPrimaryPage for more
-  // details.
-  virtual bool IsPrimary() = 0;
+  // include pages in bfcache, prerendering, fenced frames, pending commit and
+  // pending deletion pages. See WebContents::GetPrimaryPage for more details.
+  virtual bool IsPrimary() const = 0;
 
   // Returns the main RenderFrameHost associated with this Page.
   RenderFrameHost& GetMainDocument() { return GetMainDocumentHelper(); }
+
+  // Write a description of this Page into the provided |context|.
+  virtual void WriteIntoTrace(perfetto::TracedValue context) = 0;
+
+  virtual base::WeakPtr<Page> GetWeakPtr() = 0;
+
+  // Returns a SafeRef to this Page.
+  virtual base::SafeRef<Page> GetSafeRef() = 0;
+
+  // Whether the most recent page scale factor sent by the main frame's renderer
+  // is 1 (i.e. no magnification).
+  virtual bool IsPageScaleFactorOne() = 0;
+
+  // Returns the MIME type bound to the Page contents after a navigation.
+  virtual const std::string& GetContentsMimeType() const = 0;
+
+  // Returns the capture handle configuration for this page.
+  virtual const blink::mojom::CaptureHandleConfig& GetCaptureHandleConfig() = 0;
+
+  // Sets the capture handle configuration for this page.
+  virtual void SetCaptureHandleConfig(
+      blink::mojom::CaptureHandleConfigPtr config) = 0;
+
+#if BUILDFLAG(IS_ANDROID)
+  // Returns a reference to Page Java counterpart.
+  virtual base::android::ScopedJavaLocalRef<jobject> GetJavaPage() = 0;
+#endif
 
  private:
   // This method is needed to ensure that PageImpl can both implement a Page's

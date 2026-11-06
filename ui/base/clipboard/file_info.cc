@@ -1,10 +1,13 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/base/clipboard/file_info.h"
 
+#include <string_view>
+
 #include "base/strings/escape.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -19,7 +22,7 @@ constexpr char kURIListSeparator[] = "\r\n";
 
 // Returns true if path starts with a letter, followed by a colon, followed
 // by a path separator.
-bool StartsWithDriveLetter(base::StringPiece path) {
+bool StartsWithDriveLetter(std::string_view path) {
   return path.length() > 2 && base::IsAsciiAlpha(path[0]) && path[1] == ':' &&
          base::FilePath::IsSeparator(path[2]);
 }
@@ -41,11 +44,10 @@ bool StartsWithDriveLetter(base::StringPiece path) {
 // (file:///C:/path), the path is assumed to be windows path 'C:/path', but
 // without the slash (file:///C:path), the path is assumed to posix '/C:path'
 // rather than windows relative path 'C:path'.
-base::FilePath URLToPath(base::StringPiece url) {
+base::FilePath URLToPath(std::string_view url) {
   // Must start with 'file://' with at least 1 more char.
   std::string prefix(kFileUrlPrefix);
-  if (url.size() <= prefix.size() ||
-      !base::StartsWith(url, prefix, base::CompareCase::SENSITIVE)) {
+  if (url.size() <= prefix.size() || !url.starts_with(prefix)) {
     return base::FilePath();
   }
 
@@ -60,12 +62,12 @@ base::FilePath URLToPath(base::StringPiece url) {
     }
   } else {
     // file://host/path => //host/path
-    DCHECK_EQ(prefix.size(), 7u);
+    CHECK_EQ(prefix.size(), 7u, base::NotFatalUntil::M163);
     path_start = prefix.size() - 2;
   }
 
   std::string result = base::UnescapeBinaryURLComponent(url.substr(path_start));
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   return base::FilePath(base::UTF8ToWide(result)).NormalizePathSeparators();
 #else
   return base::FilePath(result);
@@ -86,12 +88,12 @@ bool FileInfo::operator==(const FileInfo& other) const {
   return path == other.path && display_name == other.display_name;
 }
 
-std::vector<FileInfo> URIListToFileInfos(const base::StringPiece& uri_list) {
+std::vector<FileInfo> URIListToFileInfos(std::string_view uri_list) {
   std::vector<FileInfo> result;
-  std::vector<base::StringPiece> lines =
+  std::vector<std::string_view> lines =
       base::SplitStringPiece(uri_list, kURIListSeparator, base::TRIM_WHITESPACE,
                              base::SPLIT_WANT_NONEMPTY);
-  for (const base::StringPiece& line : lines) {
+  for (std::string_view line : lines) {
     base::FilePath path = URLToPath(line);
     if (!path.empty()) {
       result.push_back(FileInfo(path, base::FilePath()));
@@ -102,7 +104,7 @@ std::vector<FileInfo> URIListToFileInfos(const base::StringPiece& uri_list) {
 
 std::string FilePathToFileURL(const base::FilePath& file_path) {
   std::string url;
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   std::string path = base::WideToUTF8(file_path.value());
 #else
   std::string path = file_path.value();
@@ -132,18 +134,15 @@ std::string FilePathToFileURL(const base::FilePath& file_path) {
   for (char c : path) {
     // Encode special characters `%;#?\`.
     if (c == '%' || c == ';' || c == '#' || c == '?' ||
-#if !defined(OS_WIN)
+#if !BUILDFLAG(IS_WIN)
         // Backslash is percent-encoded on posix platforms.
         c == '\\' ||
 #endif
         // Encode space and all control chars.
         c <= ' ') {
-      static const char kHexChars[] = "0123456789ABCDEF";
       url += '%';
-      url += kHexChars[(c >> 4) & 0xf];
-      url += kHexChars[c & 0xf];
-
-#if defined(OS_WIN)
+      base::AppendHexEncodedByte(static_cast<uint8_t>(c), url);
+#if BUILDFLAG(IS_WIN)
     } else if (c == '\\') {
       // Backslash is converted to slash on windows.
       url += '/';

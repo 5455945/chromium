@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,8 @@
 #define IOS_COMPONENTS_IO_THREAD_LEAK_TRACKER_H_
 
 #include <stddef.h>
+
+#include <array>
 
 #include "build/build_config.h"
 
@@ -66,7 +68,7 @@ class LeakTracker {
 // If leak tracking is enabled we track where the object was allocated from.
 
 template <typename T>
-class LeakTracker : public base::LinkNode<LeakTracker<T>> {
+class LeakTracker : public base::UnsafeLinkNode<LeakTracker<T>> {
  public:
   LeakTracker() { instances()->Append(this); }
 
@@ -79,16 +81,16 @@ class LeakTracker : public base::LinkNode<LeakTracker<T>> {
     // Copy the first 3 leak allocation callstacks onto the stack.
     // This way if we hit the CHECK() in a release build, the leak
     // information will be available in mini-dump.
-    const size_t kMaxStackTracesToCopyOntoStack = 3;
-    base::debug::StackTrace stacktraces[kMaxStackTracesToCopyOntoStack];
+    std::array<base::debug::StackTrace, 3> stacktraces;
 
-    for (base::LinkNode<LeakTracker<T>>* node = instances()->head();
+    for (base::UnsafeLinkNode<LeakTracker<T>>* node = instances()->head();
          node != instances()->end(); node = node->next()) {
       base::debug::StackTrace& allocation_stack =
           node->value()->allocation_stack_;
 
-      if (count < kMaxStackTracesToCopyOntoStack)
+      if (count < stacktraces.size()) {
         stacktraces[count] = allocation_stack;
+      }
 
       ++count;
       if (LOG_IS_ON(ERROR)) {
@@ -99,18 +101,19 @@ class LeakTracker : public base::LinkNode<LeakTracker<T>> {
 
     CHECK_EQ(0u, count);
 
-    // Hack to keep |stacktraces| and |count| alive (so compiler
+    // Hack to keep `stacktraces` and `count` alive (so compiler
     // doesn't optimize it out, and it will appear in mini-dumps).
     if (count == 0x1234) {
-      for (size_t i = 0; i < kMaxStackTracesToCopyOntoStack; ++i)
-        stacktraces[i].Print();
+      for (const base::debug::StackTrace& stacktrace : stacktraces) {
+        stacktrace.Print();
+      }
     }
   }
 
   static int NumLiveInstances() {
     // Walk the allocation list and count how many entries it has.
     int count = 0;
-    for (base::LinkNode<LeakTracker<T>>* node = instances()->head();
+    for (base::UnsafeLinkNode<LeakTracker<T>>* node = instances()->head();
          node != instances()->end(); node = node->next()) {
       ++count;
     }
@@ -119,8 +122,8 @@ class LeakTracker : public base::LinkNode<LeakTracker<T>> {
 
  private:
   // Each specialization of LeakTracker gets its own static storage.
-  static base::LinkedList<LeakTracker<T>>* instances() {
-    static base::LinkedList<LeakTracker<T>> list;
+  static base::UnsafeLinkedList<LeakTracker<T>>* instances() {
+    static base::UnsafeLinkedList<LeakTracker<T>> list;
     return &list;
   }
 

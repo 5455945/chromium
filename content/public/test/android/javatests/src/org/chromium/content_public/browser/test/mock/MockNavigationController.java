@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,10 @@ import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.NavigationController;
 import org.chromium.content_public.browser.NavigationEntry;
 import org.chromium.content_public.browser.NavigationHistory;
+import org.chromium.content_public.browser.NavigationResult;
+import org.chromium.content_public.browser.navigation_controller.NavigationNotStartedReason;
 
-/**
- * Mock NavigationController implementation for Test.
- */
+/** Mock NavigationController implementation for Test. */
 public class MockNavigationController implements NavigationController {
     @Override
     public boolean canGoBack() {
@@ -66,7 +66,9 @@ public class MockNavigationController implements NavigationController {
     public void continuePendingReload() {}
 
     @Override
-    public void loadUrl(LoadUrlParams params) {}
+    public NavigationResult loadUrl(LoadUrlParams params) {
+        return NavigationResult.createFailure(NavigationNotStartedReason.CANCELLED_DURING_START);
+    }
 
     @Override
     public void clearHistory() {}
@@ -85,7 +87,8 @@ public class MockNavigationController implements NavigationController {
     }
 
     @Override
-    public void setUseDesktopUserAgent(boolean override, boolean reloadOnChange) {}
+    public void setUseDesktopUserAgent(
+            boolean override, boolean reloadOnChange, boolean skipOnInitialNavigation) {}
 
     @Override
     public NavigationEntry getEntryAtIndex(int index) {
@@ -116,6 +119,11 @@ public class MockNavigationController implements NavigationController {
     }
 
     @Override
+    public boolean canViewSource() {
+        return false;
+    }
+
+    @Override
     public boolean removeEntryAtIndex(int index) {
         return false;
     }
@@ -132,7 +140,5 @@ public class MockNavigationController implements NavigationController {
     public void setEntryExtraData(int index, String key, String value) {}
 
     @Override
-    public boolean isEntryMarkedToBeSkipped(int index) {
-        return false;
-    }
+    public void copyStateFrom(NavigationController sourceNavigationController) {}
 }

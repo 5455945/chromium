@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,16 +13,16 @@
 #include <string>
 
 #include "base/containers/queue.h"
-#include "base/mac/scoped_nsobject.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/threading/thread_checker.h"
+#include "base/timer/timer.h"
 #include "device/bluetooth/bluetooth_adapter.h"
 #include "device/bluetooth/bluetooth_socket.h"
 #include "device/bluetooth/public/cpp/bluetooth_uuid.h"
 
 @class BluetoothRfcommConnectionListener;
 @class BluetoothL2capConnectionListener;
+@class SDPQueryListener;
 
 namespace net {
 class IOBuffer;
@@ -34,10 +34,13 @@ namespace device {
 class BluetoothAdapterMac;
 class BluetoothChannelMac;
 
-// Implements the BluetoothSocket class for the Mac OS X platform.
+// Implements the BluetoothSocket class for the macOS platform.
 class BluetoothSocketMac : public BluetoothSocket {
  public:
   static scoped_refptr<BluetoothSocketMac> CreateSocket();
+
+  BluetoothSocketMac(const BluetoothSocketMac&) = delete;
+  BluetoothSocketMac& operator=(const BluetoothSocketMac&) = delete;
 
   // Connects this socket to the service on |device| published as UUID |uuid|.
   // The underlying protocol and PSM or Channel is obtained through service
@@ -108,6 +111,9 @@ class BluetoothSocketMac : public BluetoothSocket {
   void OnChannelDataReceived(void* data, size_t length);
   void OnChannelWriteComplete(void* refcon, IOReturn status);
 
+  void OnChannelOpeningTimeout();
+  void OnSDPQueryTimeout();
+
  private:
   struct AcceptRequest {
     AcceptRequest();
@@ -120,12 +126,13 @@ class BluetoothSocketMac : public BluetoothSocket {
   struct SendRequest {
     SendRequest();
     ~SendRequest();
+    scoped_refptr<net::IOBuffer> buffer;
     int buffer_size;
     SendCompletionCallback success_callback;
     ErrorCompletionCallback error_callback;
-    IOReturn status;
-    int active_async_writes;
-    bool error_signaled;
+    IOReturn status = kIOReturnSuccess;
+    int active_async_writes = 0;
+    bool error_signaled = false;
   };
 
   struct ReceiveCallbacks {
@@ -165,14 +172,13 @@ class BluetoothSocketMac : public BluetoothSocket {
 
   // Simple helpers that register for OS notifications and forward them to
   // |this| profile.
-  base::scoped_nsobject<BluetoothRfcommConnectionListener>
-      rfcomm_connection_listener_;
-  base::scoped_nsobject<BluetoothL2capConnectionListener>
-      l2cap_connection_listener_;
+  BluetoothRfcommConnectionListener* __strong rfcomm_connection_listener_;
+  BluetoothL2capConnectionListener* __strong l2cap_connection_listener_;
+  SDPQueryListener* __strong sdp_query_listener_;
 
   // The service record registered in the system SDP server, used to
   // eventually unregister the service.
-  base::scoped_nsobject<IOBluetoothSDPServiceRecord> service_record_;
+  IOBluetoothSDPServiceRecord* __strong service_record_;
 
   // The channel used to issue commands.
   std::unique_ptr<BluetoothChannelMac> channel_;
@@ -196,7 +202,8 @@ class BluetoothSocketMac : public BluetoothSocket {
   // Queue of incoming connections.
   base::queue<std::unique_ptr<BluetoothChannelMac>> accept_queue_;
 
-  DISALLOW_COPY_AND_ASSIGN(BluetoothSocketMac);
+  // One shot timer for detecting SDP query or channel opening timeout.
+  base::OneShotTimer timer_;
 };
 
 }  // namespace device

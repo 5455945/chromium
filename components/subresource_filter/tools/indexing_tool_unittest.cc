@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,6 @@
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/json/json_reader.h"
-#include "base/macros.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/values.h"
@@ -31,15 +30,16 @@ std::vector<uint8_t> ReadFileContents(const base::FilePath& file_path) {
 
   size_t length = base::checked_cast<size_t>(file.GetLength());
   std::vector<uint8_t> contents(length);
-  static_assert(sizeof(uint8_t) == sizeof(char), "Expected char = byte.");
-  file.Read(0, reinterpret_cast<char*>(contents.data()),
-            base::checked_cast<int>(length));
+  file.Read(0, contents);
   return contents;
 }
 
 class IndexingToolTest : public ::testing::Test {
  public:
-  IndexingToolTest() {}
+  IndexingToolTest() = default;
+
+  IndexingToolTest(const IndexingToolTest&) = delete;
+  IndexingToolTest& operator=(const IndexingToolTest&) = delete;
 
  protected:
   void SetUp() override { ASSERT_TRUE(scoped_temp_dir_.CreateUniqueTempDir()); }
@@ -68,16 +68,13 @@ class IndexingToolTest : public ::testing::Test {
     // Write the test unindexed data to a file.
     const std::vector<uint8_t>& unindexed_data =
         test_ruleset_pair_.unindexed.contents;
-    base::WriteFile(path, reinterpret_cast<const char*>(unindexed_data.data()),
-                    base::checked_cast<int>(unindexed_data.size()));
+    base::WriteFile(path, unindexed_data);
   }
 
   int file_count_ = 0;
   base::ScopedTempDir scoped_temp_dir_;
   testing::TestRulesetCreator test_ruleset_creator_;
   testing::TestRulesetPair test_ruleset_pair_;
-
-  DISALLOW_COPY_AND_ASSIGN(IndexingToolTest);
 };
 
 TEST_F(IndexingToolTest, UnindexedFileDoesNotExist) {
@@ -108,7 +105,7 @@ TEST_F(IndexingToolTest, VerifyOutput) {
 
   // Convert the unindexed data to indexed data, and write the result to
   // indexed_path.
-  EXPECT_TRUE(IndexAndWriteRuleset(unindexed_path, indexed_path));
+  EXPECT_TRUE(IndexAndWriteRuleset(unindexed_path, indexed_path, nullptr, 0));
 
   // Verify that the output equals the test indexed data.
   std::vector<uint8_t> indexed_data = ReadFileContents(indexed_path);
@@ -126,25 +123,22 @@ TEST_F(IndexingToolTest, VersionMetadata) {
   // Convert the unindexed data to indexed data, and write the result to
   // indexed_path.
   int checksum = 0;
-  EXPECT_TRUE(IndexAndWriteRuleset(unindexed_path, indexed_path, &checksum));
+  EXPECT_TRUE(IndexAndWriteRuleset(unindexed_path, indexed_path, &checksum, 0));
   EXPECT_NE(0, checksum);
   WriteVersionMetadata(version_path, "1.2.3", checksum);
   std::string version_json;
   EXPECT_TRUE(base::ReadFileToString(version_path, &version_json));
-  std::unique_ptr<base::DictionaryValue> json = base::DictionaryValue::From(
-      base::JSONReader::ReadDeprecated(version_json));
+  std::optional<base::Value> json = base::JSONReader::Read(
+      version_json, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
-  std::string actual_content =
-      json->FindPath({"subresource_filter", "ruleset_version", "content"})
-          ->GetString();
-  EXPECT_EQ("1.2.3", actual_content);
-  int actual_format =
-      json->FindPath({"subresource_filter", "ruleset_version", "format"})
-          ->GetInt();
+  std::string* actual_content = json->GetDict().FindStringByDottedPath(
+      "subresource_filter.ruleset_version.content");
+  EXPECT_EQ("1.2.3", *actual_content);
+  std::optional<int> actual_format = json->GetDict().FindIntByDottedPath(
+      "subresource_filter.ruleset_version.format");
   EXPECT_EQ(RulesetIndexer::kIndexedFormatVersion, actual_format);
-  int actual_checksum =
-      json->FindPath({"subresource_filter", "ruleset_version", "checksum"})
-          ->GetInt();
+  std::optional<int> actual_checksum = json->GetDict().FindIntByDottedPath(
+      "subresource_filter.ruleset_version.checksum");
   EXPECT_EQ(checksum, actual_checksum);
 }
 

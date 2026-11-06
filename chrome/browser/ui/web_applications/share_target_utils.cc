@@ -1,40 +1,41 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/web_applications/share_target_utils.h"
 
+#include <algorithm>
+#include <optional>
+
 #include "base/memory/scoped_refptr.h"
-#include "base/ranges/algorithm.h"
+#include "base/notimplemented.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/web_share_target/target_util.h"
+#include "components/services/app_service/public/cpp/intent_util.h"
 #include "components/services/app_service/public/cpp/share_target.h"
 #include "extensions/common/constants.h"
+#include "net/base/filename_util.h"
 #include "net/base/mime_util.h"
 #include "services/network/public/cpp/resource_request_body.h"
 #include "storage/browser/file_system/file_system_context.h"
 #include "storage/browser/file_system/file_system_url.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/file_manager/fileapi_util.h"
+#include "chrome/browser/profiles/profile.h"
 #endif
 
 namespace web_app {
 
-bool SharedField::operator==(const SharedField& other) const {
-  return name == other.name && value == other.value;
-}
-
 std::vector<SharedField> ExtractSharedFields(
     const apps::ShareTarget& share_target,
-    const apps::mojom::Intent& intent) {
+    const apps::Intent& intent) {
   std::vector<SharedField> result;
 
   if (!share_target.params.title.empty() && intent.share_title.has_value() &&
@@ -43,95 +44,124 @@ std::vector<SharedField> ExtractSharedFields(
         {.name = share_target.params.title, .value = *intent.share_title});
   }
 
-  if (!intent.share_text.has_value())
+  if (!intent.share_text.has_value()) {
     return result;
-
-  std::string extracted_text = *intent.share_text;
-  GURL extracted_url;
-  size_t last_space = extracted_text.find_last_of(' ');
-  if (last_space == std::string::npos) {
-    extracted_url = GURL(extracted_text);
-    if (extracted_url.is_valid())
-      extracted_text.clear();
-  } else {
-    extracted_url = GURL(extracted_text.substr(last_space + 1));
-    if (extracted_url.is_valid())
-      extracted_text.erase(last_space);
   }
 
-  if (!share_target.params.text.empty() && !extracted_text.empty())
-    result.push_back(
-        {.name = share_target.params.text, .value = extracted_text});
+  apps_util::SharedText extracted_text =
+      apps_util::ExtractSharedText(*intent.share_text);
 
-  if (!share_target.params.url.empty() && extracted_url.is_valid())
+  if (!share_target.params.text.empty() && !extracted_text.text.empty()) {
     result.push_back(
-        {.name = share_target.params.url, .value = extracted_url.spec()});
+        {.name = share_target.params.text, .value = extracted_text.text});
+  }
+
+  if (!share_target.params.url.empty() && !extracted_text.url.is_empty()) {
+    result.push_back(
+        {.name = share_target.params.url, .value = extracted_text.url.spec()});
+  }
 
   return result;
 }
 
 NavigateParams NavigateParamsForShareTarget(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     const apps::ShareTarget& share_target,
-    const apps::mojom::Intent& intent) {
+    const apps::Intent& intent,
+    const std::vector<base::FilePath>& launch_files) {
   NavigateParams nav_params(browser, share_target.action,
                             ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
+  // The share target action is always within the app's scope, so the app is
+  // the initiator of this navigation. Attributing the navigation to it makes
+  // the network stack evaluate SameSite as it would for a form submission by
+  // the app; an unattributed navigation would instead be treated like a
+  // user-typed URL and attach SameSite=Strict/Lax cookies even after a
+  // server-side redirect to a cross-site URL.
+  nav_params.initiator_origin = url::Origin::Create(share_target.action);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   std::vector<std::string> names;
   std::vector<std::string> values;
+  std::vector<bool> is_value_file_uris;
   std::vector<std::string> filenames;
   std::vector<std::string> types;
-  std::vector<bool> is_value_file_uris;
 
-  if (intent.mime_type.has_value() && intent.files.has_value()) {
-    const std::string& mime_type = intent.mime_type.value();
-    std::string name;
-    for (const apps::ShareTarget::Files& files : share_target.params.files) {
-      // Filter on MIME types. Chrome OS does not filter on file extensions.
-      // https://w3c.github.io/web-share-target/level-2/#dfn-accepted
-      if (base::ranges::any_of(
-              files.accept, [&mime_type](const auto& criteria) {
-                return !base::StartsWith(criteria, ".") &&
-                       net::MatchesMimeType(criteria, mime_type);
-              })) {
-        name = files.name;
-        break;
-      }
+  if (intent.mime_type.has_value() && !intent.files.empty()) {
+    if (!launch_files.empty()) {
+      CHECK_EQ(launch_files.size(), intent.files.size(),
+               base::NotFatalUntil::M162);
     }
-    if (!name.empty()) {
-      // Files for Web Share intents are created by the browser in
-      // a .WebShare directory, with generated file names and file urls - see
-      // //chrome/browser/webshare/chromeos/sharesheet_client.cc
-      for (const auto& file : intent.files.value()) {
-        storage::FileSystemContext* file_system_context =
-            file_manager::util::GetFileManagerFileSystemContext(
-                browser->profile());
-        storage::FileSystemURL file_system_url =
-            file_system_context->CrackURL(file->url);
-        if (!file_system_url.is_valid()) {
-          VLOG(1) << "Received unexpected file URL: " << file->url.spec();
-          continue;
-        }
 
-        names.push_back(name);
-        values.push_back(file_system_url.path().AsUTF8Unsafe());
-        filenames.push_back(file_system_url.path().BaseName().AsUTF8Unsafe());
-        types.push_back(mime_type);
-        is_value_file_uris.push_back(true);
+    // Files for Web Share intents are created by the browser in
+    // a .WebShare directory, with generated file names and file urls - see
+    // //chrome/browser/webshare/chromeos/sharesheet_client.cc
+    for (size_t i = 0; i < intent.files.size(); ++i) {
+      const apps::IntentFilePtr& file = intent.files[i];
+
+      const std::string& mime_type = file->mime_type.has_value()
+                                         ? file->mime_type.value()
+                                         : intent.mime_type.value();
+      std::string name;
+      for (const apps::ShareTarget::Files& files : share_target.params.files) {
+        // Filter on MIME types. Chrome OS does not filter on file extensions.
+        // https://w3c.github.io/web-share-target/level-2/#dfn-accepted
+        if (std::ranges::any_of(
+                files.accept, [&mime_type](const auto& criteria) {
+                  return !base::StartsWith(criteria, ".") &&
+                         net::MatchesMimeType(criteria, mime_type);
+                })) {
+          name = files.name;
+          break;
+        }
       }
+      if (name.empty()) {
+        continue;
+      }
+
+      storage::FileSystemURL file_system_url;
+
+#if BUILDFLAG(IS_CHROMEOS)
+      storage::FileSystemContext* file_system_context =
+          file_manager::util::GetFileManagerFileSystemContext(
+              browser->GetProfile());
+      file_system_url =
+          file_system_context->CrackURLInFirstPartyContext(file->url);
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+      const std::string filename =
+          (file->file_name.has_value() && !file->file_name->path().empty())
+              ? (file->file_name->path().AsUTF8Unsafe())
+              : file_system_url.path().BaseName().AsUTF8Unsafe();
+
+      names.push_back(name);
+
+      if (launch_files.empty()) {
+        if (file->url.SchemeIsFile()) {
+          base::FilePath file_path;
+          net::FileURLToFilePath(file->url, &file_path);
+          values.push_back(file_path.value());
+        } else {
+          values.push_back(file_system_url.path().AsUTF8Unsafe());
+        }
+      } else {
+        values.push_back(launch_files[i].value());
+      }
+
+      is_value_file_uris.push_back(true);
+      filenames.push_back(filename);
+      types.push_back(mime_type);
     }
   }
 
   std::vector<SharedField> shared_fields =
       ExtractSharedFields(share_target, intent);
   for (const auto& shared_field : shared_fields) {
-    DCHECK(!shared_field.value.empty());
+    CHECK(!shared_field.value.empty(), base::NotFatalUntil::M162);
     names.push_back(shared_field.name);
     values.push_back(shared_field.value);
-    filenames.push_back(std::string());
-    types.push_back("text/plain");
     is_value_file_uris.push_back(false);
+    filenames.emplace_back();
+    types.push_back("text/plain");
   }
 
   if (share_target.enctype == apps::ShareTarget::Enctype::kMultipartFormData) {
@@ -146,20 +176,20 @@ NavigateParams NavigateParamsForShareTarget(
     if (share_target.method == apps::ShareTarget::Method::kPost) {
       nav_params.extra_headers =
           "Content-Type: application/x-www-form-urlencoded\r\n";
-      nav_params.post_data = network::ResourceRequestBody::CreateFromBytes(
-          serialization.c_str(), serialization.length());
+      nav_params.post_data =
+          network::ResourceRequestBody::CreateFromCopyOfBytes(
+              base::as_byte_span(serialization));
     } else {
-      url::Replacements<char> replacements;
-      replacements.SetQuery(serialization.c_str(),
-                            url::Component(0, serialization.length()));
+      GURL::Replacements replacements;
+      replacements.SetQueryStr(serialization);
       nav_params.url = nav_params.url.ReplaceComponents(replacements);
     }
   }
 #else
-  // TODO(crbug.com/1153194): Support Web Share Target on Windows.
-  // TODO(crbug.com/1153195): Support Web Share Target on Mac.
+  // TODO(crbug.com/40158988): Support Web Share Target on Windows.
+  // TODO(crbug.com/40734106): Support Web Share Target on Mac.
   NOTIMPLEMENTED();
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   return nav_params;
 }

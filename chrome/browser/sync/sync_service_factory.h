@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,29 +8,29 @@
 #include <memory>
 #include <vector>
 
-#include "base/macros.h"
-#include "components/keyed_service/content/browser_context_keyed_service_factory.h"
+#include "base/no_destructor.h"
+#include "chrome/browser/profiles/profile_keyed_service_factory.h"
+#include "components/sync/engine/net/http_post_provider_factory.h"
 
 class Profile;
-
-namespace base {
-template <typename T>
-struct DefaultSingletonTraits;
-}  // namespace base
 
 namespace syncer {
 class SyncServiceImpl;
 class SyncService;
 }  // namespace syncer
 
-class SyncServiceFactory : public BrowserContextKeyedServiceFactory {
+class SyncServiceFactory : public ProfileKeyedServiceFactory {
  public:
   // Returns the SyncService for the given profile.
   static syncer::SyncService* GetForProfile(Profile* profile);
+
   // Returns the SyncServiceImpl for the given profile. DO NOT USE unless
   // absolutely necessary! Prefer GetForProfile instead.
-  static syncer::SyncServiceImpl* GetAsSyncServiceImplForProfile(
+  static syncer::SyncServiceImpl* GetAsSyncServiceImplForProfileForTesting(
       Profile* profile);
+
+  SyncServiceFactory(const SyncServiceFactory&) = delete;
+  SyncServiceFactory& operator=(const SyncServiceFactory&) = delete;
 
   // Returns whether a SyncService has already been created for the profile.
   // Note that GetForProfile will create the service if it doesn't exist yet.
@@ -38,7 +38,7 @@ class SyncServiceFactory : public BrowserContextKeyedServiceFactory {
 
   // Checks whether sync is configurable by the user. Returns false if sync is
   // disallowed by the command line or controlled by configuration management.
-  // |profile| must not be nullptr.
+  // `profile` must not be nullptr.
   static bool IsSyncAllowed(Profile* profile);
 
   static SyncServiceFactory* GetInstance();
@@ -47,23 +47,23 @@ class SyncServiceFactory : public BrowserContextKeyedServiceFactory {
   // SyncService if present. Returned pointers are guaranteed to be not null.
   static std::vector<const syncer::SyncService*> GetAllSyncServices();
 
-  // Returns the default factory, useful in tests where it's null by default.
-  static TestingFactory GetDefaultFactory();
+  // Returns the default factory, most useful in tests where it's null by
+  // default. `create_http_post_provider_factory_for_test` allow tests to
+  // override network connections.
+  static TestingFactory GetDefaultFactory(
+      std::optional<syncer::CreateHttpPostProviderFactory>
+          create_http_post_provider_factory_for_test = std::nullopt);
 
  private:
-  friend struct base::DefaultSingletonTraits<SyncServiceFactory>;
+  friend base::NoDestructor<SyncServiceFactory>;
 
   SyncServiceFactory();
   ~SyncServiceFactory() override;
 
   // BrowserContextKeyedServiceFactory:
-  KeyedService* BuildServiceInstanceFor(
-      content::BrowserContext* context) const override;
-  content::BrowserContext* GetBrowserContextToUse(
+  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
       content::BrowserContext* context) const override;
   bool ServiceIsNULLWhileTesting() const override;
-
-  DISALLOW_COPY_AND_ASSIGN(SyncServiceFactory);
 };
 
 #endif  // CHROME_BROWSER_SYNC_SYNC_SERVICE_FACTORY_H_

@@ -1,103 +1,97 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/cert/x509_cert_types.h"
 
-#include <cstdlib>
-#include <cstring>
-
-#include "base/strings/string_piece.h"
-#include "base/time/time.h"
-#include "net/base/parse_number.h"
-#include "net/cert/internal/parse_name.h"
-#include "net/cert/x509_certificate.h"
-#include "net/der/input.h"
+#include "base/notreached.h"
+#include "third_party/boringssl/src/pki/input.h"
+#include "third_party/boringssl/src/pki/parse_name.h"
 
 namespace net {
 
 namespace {
 
-// Helper for ParseCertificateDate. |*field| must contain at least
-// |field_len| characters. |*field| will be advanced by |field_len| on exit.
-// |*ok| is set to false if there is an error in parsing the number, but left
-// untouched otherwise. Returns the parsed integer.
-int ParseIntAndAdvance(const char** field, size_t field_len, bool* ok) {
-  int result = 0;
-  *ok &= ParseInt32(base::StringPiece(*field, field_len),
-                    ParseIntFormat::NON_NEGATIVE, &result);
-  *field += field_len;
-  return result;
+bssl::X509NameAttribute::PrintableStringHandling ConvertPrintableStringHandling(
+    CertPrincipal::PrintableStringHandling handling) {
+  switch (handling) {
+    case CertPrincipal::PrintableStringHandling::kDefault:
+      return bssl::X509NameAttribute::PrintableStringHandling::kDefault;
+    case CertPrincipal::PrintableStringHandling::kAllowASCII:
+      return bssl::X509NameAttribute::PrintableStringHandling::kAllowASCII;
+    case CertPrincipal::PrintableStringHandling::kAsUTF8Hack:
+      return bssl::X509NameAttribute::PrintableStringHandling::kAsUTF8Hack;
+  }
+  NOTREACHED();
 }
 
-}  // anonymous namespace
+}  // namespace
 
 CertPrincipal::CertPrincipal() = default;
 
-CertPrincipal::CertPrincipal(const std::string& name) : common_name(name) {}
+CertPrincipal::CertPrincipal(const CertPrincipal&) = default;
+
+CertPrincipal::CertPrincipal(CertPrincipal&&) = default;
 
 CertPrincipal::~CertPrincipal() = default;
 
+bool CertPrincipal::operator==(const CertPrincipal& other) const = default;
+
+bool CertPrincipal::EqualsForTesting(const CertPrincipal& other) const {
+  return *this == other;
+}
+
 bool CertPrincipal::ParseDistinguishedName(
-    const void* ber_name_data,
-    size_t length,
+    bssl::der::Input ber_name_data,
     PrintableStringHandling printable_string_handling) {
-  RDNSequence rdns;
-  if (!ParseName(
-          der::Input(reinterpret_cast<const uint8_t*>(ber_name_data), length),
-          &rdns))
+  bssl::RDNSequence rdns;
+  if (!ParseName(ber_name_data, &rdns)) {
     return false;
+  }
 
   auto string_handling =
-      printable_string_handling == PrintableStringHandling::kAsUTF8Hack
-          ? X509NameAttribute::PrintableStringHandling::kAsUTF8Hack
-          : X509NameAttribute::PrintableStringHandling::kDefault;
-  for (const RelativeDistinguishedName& rdn : rdns) {
-    for (const X509NameAttribute& name_attribute : rdn) {
-      if (name_attribute.type == TypeCommonNameOid()) {
+      ConvertPrintableStringHandling(printable_string_handling);
+  for (const bssl::RelativeDistinguishedName& rdn : rdns) {
+    for (const bssl::X509NameAttribute& name_attribute : rdn) {
+      if (name_attribute.type == bssl::der::Input(bssl::kTypeCommonNameOid)) {
         if (common_name.empty() &&
             !name_attribute.ValueAsStringWithUnsafeOptions(string_handling,
                                                            &common_name)) {
           return false;
         }
-      } else if (name_attribute.type == TypeLocalityNameOid()) {
+      } else if (name_attribute.type ==
+                 bssl::der::Input(bssl::kTypeLocalityNameOid)) {
         if (locality_name.empty() &&
             !name_attribute.ValueAsStringWithUnsafeOptions(string_handling,
                                                            &locality_name)) {
           return false;
         }
-      } else if (name_attribute.type == TypeStateOrProvinceNameOid()) {
+      } else if (name_attribute.type ==
+                 bssl::der::Input(bssl::kTypeStateOrProvinceNameOid)) {
         if (state_or_province_name.empty() &&
             !name_attribute.ValueAsStringWithUnsafeOptions(
                 string_handling, &state_or_province_name)) {
           return false;
         }
-      } else if (name_attribute.type == TypeCountryNameOid()) {
+      } else if (name_attribute.type ==
+                 bssl::der::Input(bssl::kTypeCountryNameOid)) {
         if (country_name.empty() &&
             !name_attribute.ValueAsStringWithUnsafeOptions(string_handling,
                                                            &country_name)) {
           return false;
         }
-      } else if (name_attribute.type == TypeStreetAddressOid()) {
-        std::string s;
-        if (!name_attribute.ValueAsStringWithUnsafeOptions(string_handling, &s))
-          return false;
-        street_addresses.push_back(s);
-      } else if (name_attribute.type == TypeOrganizationNameOid()) {
+      } else if (name_attribute.type ==
+                 bssl::der::Input(bssl::kTypeOrganizationNameOid)) {
         std::string s;
         if (!name_attribute.ValueAsStringWithUnsafeOptions(string_handling, &s))
           return false;
         organization_names.push_back(s);
-      } else if (name_attribute.type == TypeOrganizationUnitNameOid()) {
+      } else if (name_attribute.type ==
+                 bssl::der::Input(bssl::kTypeOrganizationUnitNameOid)) {
         std::string s;
         if (!name_attribute.ValueAsStringWithUnsafeOptions(string_handling, &s))
           return false;
         organization_unit_names.push_back(s);
-      } else if (name_attribute.type == TypeDomainComponentOid()) {
-        std::string s;
-        if (!name_attribute.ValueAsStringWithUnsafeOptions(string_handling, &s))
-          return false;
-        domain_components.push_back(s);
       }
     }
   }
@@ -113,32 +107,6 @@ std::string CertPrincipal::GetDisplayName() const {
     return organization_unit_names[0];
 
   return std::string();
-}
-
-bool ParseCertificateDate(const base::StringPiece& raw_date,
-                          CertDateFormat format,
-                          base::Time* time) {
-  size_t year_length = format == CERT_DATE_FORMAT_UTC_TIME ? 2 : 4;
-
-  if (raw_date.length() < 11 + year_length)
-    return false;
-
-  const char* field = raw_date.data();
-  bool valid = true;
-  base::Time::Exploded exploded = {0};
-
-  exploded.year =         ParseIntAndAdvance(&field, year_length, &valid);
-  exploded.month =        ParseIntAndAdvance(&field, 2, &valid);
-  exploded.day_of_month = ParseIntAndAdvance(&field, 2, &valid);
-  exploded.hour =         ParseIntAndAdvance(&field, 2, &valid);
-  exploded.minute =       ParseIntAndAdvance(&field, 2, &valid);
-  exploded.second =       ParseIntAndAdvance(&field, 2, &valid);
-  if (valid && year_length == 2)
-    exploded.year += exploded.year < 50 ? 2000 : 1900;
-
-  if (!valid)
-    return false;
-  return base::Time::FromUTCExploded(exploded, time);
 }
 
 }  // namespace net

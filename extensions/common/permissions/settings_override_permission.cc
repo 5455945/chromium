@@ -1,10 +1,11 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "extensions/common/permissions/settings_override_permission.h"
 
 #include <memory>
+#include <optional>
 
 #include "base/strings/utf_string_conversions.h"
 #include "extensions/common/permissions/api_permission_set.h"
@@ -22,7 +23,7 @@ SettingsOverrideAPIPermission::SettingsOverrideAPIPermission(
     const std::string& setting_value)
     : APIPermission(permission), setting_value_(setting_value) {}
 
-SettingsOverrideAPIPermission::~SettingsOverrideAPIPermission() {}
+SettingsOverrideAPIPermission::~SettingsOverrideAPIPermission() = default;
 
 PermissionIDSet SettingsOverrideAPIPermission::GetPermissions() const {
   PermissionIDSet permissions;
@@ -32,7 +33,7 @@ PermissionIDSet SettingsOverrideAPIPermission::GetPermissions() const {
 
 bool SettingsOverrideAPIPermission::Check(
     const APIPermission::CheckParam* param) const {
-  return (param == NULL);
+  return (param == nullptr);
 }
 
 bool SettingsOverrideAPIPermission::Contains(const APIPermission* rhs) const {
@@ -50,11 +51,14 @@ bool SettingsOverrideAPIPermission::FromValue(
     const base::Value* value,
     std::string* /*error*/,
     std::vector<std::string>* unhandled_permissions) {
-  return value && value->GetAsString(&setting_value_);
+  if (!value || !value->is_string())
+    return false;
+  setting_value_ = value->GetString();
+  return true;
 }
 
-std::unique_ptr<base::Value> SettingsOverrideAPIPermission::ToValue() const {
-  return std::make_unique<base::Value>(setting_value_);
+std::optional<base::Value> SettingsOverrideAPIPermission::ToValue() const {
+  return base::Value(setting_value_);
 }
 
 std::unique_ptr<APIPermission> SettingsOverrideAPIPermission::Clone() const {

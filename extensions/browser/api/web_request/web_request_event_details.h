@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,16 @@
 #define EXTENSIONS_BROWSER_API_WEB_REQUEST_WEB_REQUEST_EVENT_DETAILS_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/gtest_prod_util.h"
-#include "base/macros.h"
 #include "base/values.h"
 #include "extensions/browser/extension_api_frame_id_map.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_id.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/origin.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace net {
 class AuthChallengeInfo;
@@ -49,11 +50,15 @@ class WebRequestEventDetails {
   // - type
   // - url
   WebRequestEventDetails(const WebRequestInfo& request, int extra_info_spec);
+
+  WebRequestEventDetails(const WebRequestEventDetails&) = delete;
+  WebRequestEventDetails& operator=(const WebRequestEventDetails&) = delete;
+
   ~WebRequestEventDetails();
 
   // Sets the following key:
   // - requestBody (on demand)
-  // Takes ownership of |request_body_data| in |*request|.
+  // Takes ownership of `request_body_data` in |*request|.
   void SetRequestBody(WebRequestInfo* request);
 
   // Sets the following key:
@@ -74,62 +79,50 @@ class WebRequestEventDetails {
   void SetResponseHeaders(const WebRequestInfo& request,
                           const net::HttpResponseHeaders* response_headers);
 
+  // Sets the following keys:
+  // - securityInfo
+  void SetSecurityInfo(const WebRequestInfo& request);
+
   // Sets the following key:
   // - fromCache
   // - ip
   void SetResponseSource(const WebRequestInfo& request);
 
-  void SetBoolean(const std::string& key, bool value) {
-    dict_.SetBoolean(key, value);
-  }
+  void SetBoolean(const std::string& key, bool value) { dict_.Set(key, value); }
 
-  void SetInteger(const std::string& key, int value) {
-    dict_.SetInteger(key, value);
-  }
+  void SetInteger(const std::string& key, int value) { dict_.Set(key, value); }
 
   void SetString(const std::string& key, const std::string& value) {
-    dict_.SetString(key, value);
+    dict_.Set(key, value);
   }
 
   // Create an event dictionary that contains all required keys, and also the
-  // extra keys as specified by the |extra_info_spec| filter. If the listener
+  // extra keys as specified by the `extra_info_spec` filter. If the listener
   // this event will be dispatched to doesn't have permission for the initiator
   // then the initiator will not be populated.
   // This can be called from any thread.
-  std::unique_ptr<base::DictionaryValue> GetFilteredDict(
-      int extra_info_spec,
-      PermissionHelper* permission_helper,
-      const ExtensionId& extension_id,
-      bool crosses_incognito) const;
+  base::DictValue GetFilteredDict(int extra_info_spec,
+                                  PermissionHelper* permission_helper,
+                                  const ExtensionId& extension_id,
+                                  bool crosses_incognito) const;
 
   // Get the internal dictionary, unfiltered. After this call, the internal
   // dictionary is empty.
-  std::unique_ptr<base::DictionaryValue> GetAndClearDict();
-
-  // Returns a filtered copy with only whitelisted data for public session.
-  std::unique_ptr<WebRequestEventDetails> CreatePublicSessionCopy();
+  base::DictValue GetAndClearDict();
 
  private:
-  FRIEND_TEST_ALL_PREFIXES(
-      WebRequestEventDetailsTest, WhitelistedCopyForPublicSession);
-
-  // Empty constructor used in unittests.
-  WebRequestEventDetails();
-
   // The details that are always included in a webRequest event object.
-  base::DictionaryValue dict_;
+  base::DictValue dict_;
 
-  // Extra event details: Only included when |extra_info_spec_| matches.
-  std::unique_ptr<base::DictionaryValue> request_body_;
-  std::unique_ptr<base::ListValue> request_headers_;
-  std::unique_ptr<base::ListValue> response_headers_;
-  absl::optional<url::Origin> initiator_;
+  // Extra event details: Only included when `extra_info_spec_` matches.
+  std::optional<base::DictValue> request_body_;
+  std::optional<base::ListValue> request_headers_;
+  std::optional<base::ListValue> response_headers_;
+  std::optional<url::Origin> initiator_;
 
   int extra_info_spec_;
 
   int render_process_id_;
-
-  DISALLOW_COPY_AND_ASSIGN(WebRequestEventDetails);
 };
 
 }  // namespace extensions

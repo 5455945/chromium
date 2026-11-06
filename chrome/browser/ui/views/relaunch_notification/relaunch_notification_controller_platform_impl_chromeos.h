@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,9 @@
 
 #include <memory>
 
-#include "base/callback.h"
+#include "ash/public/cpp/update_types.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "components/session_manager/core/session_manager.h"
@@ -15,12 +17,18 @@
 #include "ui/display/manager/display_configurator.h"
 
 class RelaunchRequiredTimer;
+class SystemTrayClientImpl;
 
 class RelaunchNotificationControllerPlatformImpl
     : public display::DisplayConfigurator::Observer,
       public session_manager::SessionManagerObserver {
  public:
   RelaunchNotificationControllerPlatformImpl();
+
+  RelaunchNotificationControllerPlatformImpl(
+      const RelaunchNotificationControllerPlatformImpl&) = delete;
+  RelaunchNotificationControllerPlatformImpl& operator=(
+      const RelaunchNotificationControllerPlatformImpl&) = delete;
 
   ~RelaunchNotificationControllerPlatformImpl() override;
 
@@ -29,6 +37,7 @@ class RelaunchNotificationControllerPlatformImpl
 
   // Shows the relaunch required notification if it is not already open.
   void NotifyRelaunchRequired(base::Time deadline,
+                              bool is_notification_type_overriden,
                               base::OnceCallback<base::Time()> on_visible);
 
   // Sets the notification title to the default one on Chrome OS.
@@ -54,7 +63,7 @@ class RelaunchNotificationControllerPlatformImpl
 
   // Callback triggered whenever the required notification's title has to
   // refresh.
-  void RefreshRelaunchRequiredTitle();
+  void RefreshRelaunchRequiredTitle(bool is_notification_type_overriden);
 
   // Returns true if the display is on && the session is active
   bool CanScheduleReboot();
@@ -64,6 +73,21 @@ class RelaunchNotificationControllerPlatformImpl
 
   // Removes itself from observe display & session state observers
   void StopObserving();
+
+  // Updates the notification state managed in the system tray.
+  // Marking this virtual for testing.
+  // TODO: We should refactor SystemTrayClientImpl so that we can test the
+  // behavior using a fake of SystemTray instead.
+  virtual void SetRelaunchNotificationState(
+      const ash::RelaunchNotificationState& relaunch_notification_state);
+
+  // Resets the notification state managed in the system tray.
+  // Marking this virtual for testing.
+  // TODO: We should refactor SystemTrayClientImpl so that we can test the
+  // behavior using a fake of SystemTray instead.
+  virtual void ResetRelaunchNotification();
+
+  const raw_ptr<SystemTrayClientImpl> system_tray_client_impl_;
 
   // Timer that takes care of the string refresh in the relaunch required
   // notification title.
@@ -77,8 +101,6 @@ class RelaunchNotificationControllerPlatformImpl
   base::ScopedObservation<session_manager::SessionManager,
                           session_manager::SessionManagerObserver>
       session_observation_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(RelaunchNotificationControllerPlatformImpl);
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_RELAUNCH_NOTIFICATION_RELAUNCH_NOTIFICATION_CONTROLLER_PLATFORM_IMPL_CHROMEOS_H_

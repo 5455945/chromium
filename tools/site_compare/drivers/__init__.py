@@ -1,4 +1,4 @@
-# Copyright (c) 2011 The Chromium Authors. All rights reserved.
+# Copyright 2011 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -8,6 +8,6 @@ import sys
 
 platform_dir = sys.platform
 
-keyboard  = __import__(platform_dir+".keyboard",  globals(), locals(), [''])
-mouse     = __import__(platform_dir+".mouse",     globals(), locals(), [''])
-windowing = __import__(platform_dir+".windowing", globals(), locals(), [''])
+keyboard = __import__(platform_dir + ".keyboard", globals(), locals(), [''])
+mouse = __import__(platform_dir + ".mouse", globals(), locals(), [''])
+windowing = __import__(platform_dir + ".windowing", globals(), locals(), [''])

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,6 +13,7 @@
 #include "media/mojo/mojom/media_types.mojom.h"
 #include "media/mojo/mojom/remoting.mojom.h"
 #include "media/remoting/receiver_controller.h"
+#include "mojo/public/cpp/bindings/receiver.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/geometry/size.h"
@@ -52,6 +53,11 @@ class MockRemotee : public mojom::Remotee {
   uint32_t flush_audio_count() { return flush_audio_count_; }
   uint32_t flush_video_count() { return flush_video_count_; }
 
+  void set_send_message_to_source_cb(
+      base::RepeatingCallback<void(const std::vector<uint8_t>&)> cb) {
+    send_message_to_source_cb_ = std::move(cb);
+  }
+
   mojo::PendingRemote<mojom::Remotee> BindNewPipeAndPassRemote() {
     return receiver_.BindNewPipeAndPassRemote();
   }
@@ -70,6 +76,9 @@ class MockRemotee : public mojom::Remotee {
 
   mojo::Remote<mojom::RemotingSink> remoting_sink_;
   mojo::Receiver<mojom::Remotee> receiver_{this};
+
+  base::RepeatingCallback<void(const std::vector<uint8_t>&)>
+      send_message_to_source_cb_;
 };
 
 class MockReceiverController : public ReceiverController {
@@ -85,8 +94,6 @@ class MockReceiverController : public ReceiverController {
 
   MockReceiverController();
   ~MockReceiverController() override;
-
-  void OnSendRpc(std::unique_ptr<std::vector<uint8_t>> message);
 
   std::unique_ptr<MockRemotee> mock_remotee_;
 };

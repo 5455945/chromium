@@ -25,7 +25,9 @@
 #ifndef ABSL_SYNCHRONIZATION_INTERNAL_CREATE_THREAD_IDENTITY_H_
 #define ABSL_SYNCHRONIZATION_INTERNAL_CREATE_THREAD_IDENTITY_H_
 
+#include "absl/base/config.h"
 #include "absl/base/internal/thread_identity.h"
+#include "absl/base/optimization.h"
 #include "absl/base/port.h"
 
 namespace absl {
@@ -35,10 +37,6 @@ namespace synchronization_internal {
 // Allocates and attaches a ThreadIdentity object for the calling thread.
 // For private use only.
 base_internal::ThreadIdentity* CreateThreadIdentity();
-
-// A per-thread destructor for reclaiming associated ThreadIdentity objects.
-// For private use only.
-void ReclaimThreadIdentity(void* v);
 
 // Returns the ThreadIdentity object representing the calling thread; guaranteed
 // to be unique for its lifetime.  The returned object will remain valid for the

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <map>
 #include <set>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/safe_browsing/core/browser/db/test_database_manager.h"
 #include "components/safe_browsing/core/browser/db/util.h"
@@ -20,9 +21,12 @@ class CrowdDenyFakeSafeBrowsingDatabaseManager
  public:
   CrowdDenyFakeSafeBrowsingDatabaseManager();
 
-  void SetSimulatedMetadataForUrl(
-      const GURL& url,
-      const safe_browsing::ThreatMetadata& metadata);
+  CrowdDenyFakeSafeBrowsingDatabaseManager(
+      const CrowdDenyFakeSafeBrowsingDatabaseManager&) = delete;
+  CrowdDenyFakeSafeBrowsingDatabaseManager& operator=(
+      const CrowdDenyFakeSafeBrowsingDatabaseManager&) = delete;
+
+  void SetSimulatedVerdictForUrl(const GURL& url, bool is_abusive);
 
   void RemoveAllBlocklistedUrls();
 
@@ -38,24 +42,19 @@ class CrowdDenyFakeSafeBrowsingDatabaseManager
   ~CrowdDenyFakeSafeBrowsingDatabaseManager() override;
 
   // safe_browsing::TestSafeBrowsingDatabaseManager:
-  bool CheckApiBlocklistUrl(const GURL& url, Client* client) override;
-  bool CancelApiCheck(Client* client) override;
-  bool IsSupported() const override;
-  bool ChecksAreAlwaysAsync() const override;
+  bool CheckNotificationAbuseUrl(const GURL& url, Client* client) override;
+  bool CancelNotificationAbuseCheck(Client* client) override;
 
  private:
-  safe_browsing::ThreatMetadata GetSimulatedMetadataOrSafe(const GURL& url);
+  bool GetSimulatedVerdictOrSafe(const GURL& url);
 
-  std::set<Client*> pending_clients_;
-  std::map<GURL, safe_browsing::ThreatMetadata>
-      url_to_simulated_threat_metadata_;
+  std::set<raw_ptr<Client, SetExperimental>> pending_clients_;
+  std::map<GURL, bool> url_to_simulated_verdict_;
   bool simulate_timeout_ = false;
   bool simulate_synchronous_result_ = false;
 
   base::WeakPtrFactory<CrowdDenyFakeSafeBrowsingDatabaseManager> weak_factory_{
       this};
-
-  DISALLOW_COPY_AND_ASSIGN(CrowdDenyFakeSafeBrowsingDatabaseManager);
 };
 
 #endif  // CHROME_BROWSER_PERMISSIONS_CROWD_DENY_FAKE_SAFE_BROWSING_DATABASE_MANAGER_H_

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include <string>
 
 #include "base/base_export.h"
+#include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_base.h"
 
 namespace base {
@@ -19,7 +20,7 @@ class BASE_EXPORT SingleSampleMetric {
  public:
   virtual ~SingleSampleMetric() = default;
 
-  virtual void SetSample(HistogramBase::Sample sample) = 0;
+  virtual void SetSample(HistogramBase::Sample32 sample) = 0;
 };
 
 // Factory for creating single sample metrics. A single sample metric only
@@ -52,8 +53,8 @@ class BASE_EXPORT SingleSampleMetricsFactory {
   // UMA_HISTOGRAM_CUSTOM_COUNTS()
   virtual std::unique_ptr<SingleSampleMetric> CreateCustomCountsMetric(
       const std::string& histogram_name,
-      HistogramBase::Sample min,
-      HistogramBase::Sample max,
+      HistogramBase::Sample32 min,
+      HistogramBase::Sample32 max,
       uint32_t bucket_count) = 0;
 };
 
@@ -73,31 +74,34 @@ class BASE_EXPORT DefaultSingleSampleMetricsFactory
   // SingleSampleMetricsFactory:
   std::unique_ptr<SingleSampleMetric> CreateCustomCountsMetric(
       const std::string& histogram_name,
-      HistogramBase::Sample min,
-      HistogramBase::Sample max,
+      HistogramBase::Sample32 min,
+      HistogramBase::Sample32 max,
       uint32_t bucket_count) override;
 };
 
 class BASE_EXPORT DefaultSingleSampleMetric : public SingleSampleMetric {
  public:
   DefaultSingleSampleMetric(const std::string& histogram_name,
-                            HistogramBase::Sample min,
-                            HistogramBase::Sample max,
+                            HistogramBase::Sample32 min,
+                            HistogramBase::Sample32 max,
                             uint32_t bucket_count,
                             int32_t flags);
+
+  DefaultSingleSampleMetric(const DefaultSingleSampleMetric&) = delete;
+  DefaultSingleSampleMetric& operator=(const DefaultSingleSampleMetric&) =
+      delete;
+
   ~DefaultSingleSampleMetric() override;
 
   // SingleSampleMetric:
-  void SetSample(HistogramBase::Sample sample) override;
+  void SetSample(HistogramBase::Sample32 sample) override;
 
  private:
-  HistogramBase* const histogram_;
+  const raw_ptr<HistogramBase> histogram_;
 
   // The last sample provided to SetSample(). We use -1 as a sentinel value to
   // indicate no sample has been set.
-  HistogramBase::Sample sample_ = -1;
-
-  DISALLOW_COPY_AND_ASSIGN(DefaultSingleSampleMetric);
+  HistogramBase::Sample32 sample_ = -1;
 };
 
 }  // namespace base

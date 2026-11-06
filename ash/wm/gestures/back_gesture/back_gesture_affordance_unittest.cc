@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -57,23 +57,23 @@ TEST_F(BackGestureAffordanceTest, AffordaceShouldNotOutsideDisplay) {
 TEST_F(BackGestureAffordanceTest,
        DoNotExceedSplitViewDividerInPortraitOrientation) {
   TabletModeControllerTestApi().EnterTabletMode();
-  int64_t display_id = display::Screen::GetScreen()->GetPrimaryDisplay().id();
+  int64_t display_id = display::Screen::Get()->GetPrimaryDisplay().id();
   display::DisplayManager* display_manager = Shell::Get()->display_manager();
   display::test::ScopedSetInternalDisplayId set_internal(display_manager,
                                                          display_id);
   ScreenOrientationControllerTestApi test_api(
       Shell::Get()->screen_orientation_controller());
-  std::unique_ptr<aura::Window> bottom_window = CreateTestWindow();
+  std::unique_ptr<aura::Window> bottom_window = CreateWindowWithAppType();
   auto* split_view_controller =
       SplitViewController::Get(Shell::GetPrimaryRootWindow());
   split_view_controller->SnapWindow(bottom_window.get(),
-                                    SplitViewController::RIGHT);
+                                    SnapPosition::kSecondary);
 
   // Rotate the screen by 270 degree.
   test_api.SetDisplayRotation(display::Display::ROTATE_270,
                               display::Display::RotationSource::ACTIVE);
   EXPECT_EQ(test_api.GetCurrentOrientation(),
-            OrientationLockType::kPortraitPrimary);
+            chromeos::OrientationType::kPortraitPrimary);
 
   gfx::Rect divider_bounds =
       split_view_controller->split_view_divider()->GetDividerBoundsInScreen(

@@ -25,22 +25,30 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_HTML_LINK_ELEMENT_H_
 
 #include <memory>
+#include <utility>
 
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
+#include "services/network/public/mojom/referrer_policy.mojom-shared.h"
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/core/css/css_style_sheet.h"
 #include "third_party/blink/renderer/core/dom/create_element_flags.h"
 #include "third_party/blink/renderer/core/dom/dom_token_list.h"
 #include "third_party/blink/renderer/core/dom/increment_load_event_delay_count.h"
+#include "third_party/blink/renderer/core/html/blocking_attribute.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/html/link_rel_attribute.h"
 #include "third_party/blink/renderer/core/html/link_resource.h"
 #include "third_party/blink/renderer/core/html/link_style.h"
 #include "third_party/blink/renderer/core/html/rel_list.h"
+#include "third_party/blink/renderer/core/loader/link_load_parameters.h"
 #include "third_party/blink/renderer/core/loader/link_loader_client.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_parameters.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
 
 namespace blink {
+namespace scheduler {
+class TaskAttributionInfo;
+}
 
 class KURL;
 class LinkLoader;
@@ -54,13 +62,17 @@ class CORE_EXPORT HTMLLinkElement final : public HTMLElement,
   HTMLLinkElement(Document&, const CreateElementFlags);
   ~HTMLLinkElement() override;
 
+  ElementType GetElementType() const final {
+    return ElementType::kHTMLLinkElement;
+  }
+
   KURL Href() const;
   const AtomicString& Rel() const;
   String Media() const { return media_; }
   String TypeValue() const { return type_; }
   String AsValue() const { return as_; }
   String IntegrityValue() const { return integrity_; }
-  String ImportanceValue() const { return importance_; }
+  String FetchPriorityHintValue() const { return fetch_priority_hint_; }
   network::mojom::ReferrerPolicy GetReferrerPolicy() const {
     return referrer_policy_;
   }
@@ -68,6 +80,7 @@ class CORE_EXPORT HTMLLinkElement final : public HTMLElement,
   DOMTokenList& relList() const {
     return static_cast<DOMTokenList&>(*rel_list_);
   }
+  BlockingAttribute& blocking() const { return *blocking_attribute_; }
 
   const AtomicString& GetType() const;
 
@@ -93,15 +106,6 @@ class CORE_EXPORT HTMLLinkElement final : public HTMLElement,
 
   DOMTokenList* sizes() const;
 
-  // IDL method.
-  DOMTokenList* resources() const;
-  DOMTokenList* scopes() const;
-
-  const HashSet<KURL>& ValidResourceUrls() const {
-    return valid_resource_urls_;
-  }
-  const HashSet<KURL>& ValidScopeUrls() const { return valid_scope_urls_; }
-
   void ScheduleEvent();
 
   // From LinkLoaderClient
@@ -111,7 +115,7 @@ class CORE_EXPORT HTMLLinkElement final : public HTMLElement,
   // For LinkStyle
   bool LoadLink(const LinkLoadParameters&);
   void LoadStylesheet(const LinkLoadParameters&,
-                      const WTF::TextEncoding&,
+                      const TextEncoding&,
                       FetchParameters::DeferOption,
                       ResourceClient*,
                       RenderBlockingBehavior render_blocking);
@@ -130,12 +134,14 @@ class CORE_EXPORT HTMLLinkElement final : public HTMLElement,
   LinkStyle* GetLinkStyle() const;
   LinkResource* LinkResourceToProcess();
 
-  void Process();
+  void Process(
+      LinkLoadParameters::Reason reason = LinkLoadParameters::Reason::kDefault);
   static void ProcessCallback(Node*);
 
   // Always call this asynchronously because this can cause synchronous
   // Document load event and JavaScript execution.
-  void DispatchPendingEvent(std::unique_ptr<IncrementLoadEventDelayCount>);
+  void DispatchPendingEvent(std::unique_ptr<IncrementLoadEventDelayCount>,
+                            scheduler::TaskAttributionInfo*);
 
   // From Node and subclassses
   void ParseAttribute(const AttributeModificationParams&) override;
@@ -143,18 +149,52 @@ class CORE_EXPORT HTMLLinkElement final : public HTMLElement,
   void RemovedFrom(ContainerNode&) override;
   bool IsURLAttribute(const Attribute&) const override;
   bool HasLegalLinkAttribute(const QualifiedName&) const override;
-  const QualifiedName& SubResourceAttributeName() const override;
   bool SheetLoaded() override;
   void NotifyLoadedSheetAndAllCriticalSubresources(
       LoadedSheetErrorStatus) override;
-  void StartLoadingDynamicSheet() override;
+  void SetToPendingState() override;
   void FinishParsingChildren() override;
   bool HasActivationBehavior() const override;
+  bool IsPotentiallyRenderBlocking() const override;
 
   // From LinkLoaderClient
   void LinkLoaded() override;
   void LinkLoadingErrored() override;
-  scoped_refptr<base::SingleThreadTaskRunner> GetLoadingTaskRunner() override;
+
+  bool MediaQueryMatches() const;
+
+  void HandleExpectBlockingChanges();
+  void HandleExpectHrefChanges(const String& old_value,
+                               const String& new_value);
+  void HandleExpectMediaChanges();
+
+  void RemoveExpectRenderBlockingLink(const String& href = String());
+  void AddExpectRenderBlockingLinkIfNeeded(const String& href = String(),
+                                           bool media_known_to_match = false);
+
+  AtomicString ParseSameDocumentIdFromHref(const String& href);
+
+  // Trigger payment link handling if below conditions are met:
+  // 1. `rel` is "payment".
+  // 2. `href` is not empty.
+  // 3. the link element is already attached to the document.
+  void MaybeHandlePaymentLink();
+
+  // Temporary way behind the Skeleton runtime flag to tell the SkeletonLoader
+  // to load a skeleton for a given url via:
+  //
+  // <link rel="prefetch-skeleton" href="...">
+  //
+  // TODO(crbug.com/513276602): This will most likely be done via speculation
+  // rules instead.
+  void HandleSkeletonPrefetchLink();
+
+  void DispatchEventWithTaskState(const AtomicString& type,
+                                  scheduler::TaskAttributionInfo*);
+
+  scheduler::TaskAttributionInfo* TakeLoadInitiatorTaskState() {
+    return std::exchange(load_initiator_task_state_, nullptr);
+  }
 
   Member<LinkResource> link_;
   Member<LinkLoader> link_loader_;
@@ -163,16 +203,15 @@ class CORE_EXPORT HTMLLinkElement final : public HTMLElement,
   String as_;
   String media_;
   String integrity_;
-  String importance_;
-  network::mojom::ReferrerPolicy referrer_policy_;
+  String fetch_priority_hint_;
+  network::mojom::ReferrerPolicy referrer_policy_ =
+      network::mojom::ReferrerPolicy::kDefault;
   Member<DOMTokenList> sizes_;
   Vector<gfx::Size> icon_sizes_;
   Member<RelList> rel_list_;
   LinkRelAttribute rel_attribute_;
-  Member<DOMTokenList> resources_;
-  HashSet<KURL> valid_resource_urls_;
-  Member<DOMTokenList> scopes_;
-  HashSet<KURL> valid_scope_urls_;
+  Member<BlockingAttribute> blocking_attribute_;
+  Member<scheduler::TaskAttributionInfo> load_initiator_task_state_;
 
   bool created_by_parser_;
 };

@@ -1,18 +1,23 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "cc/paint/filter_operations.h"
 
 #include <stddef.h>
+
+#include <algorithm>
 #include <cmath>
 #include <numeric>
 #include <utility>
 
+#include "base/feature_list.h"
 #include "base/trace_event/traced_value.h"
 #include "base/values.h"
+#include "cc/base/features.h"
 #include "cc/paint/filter_operation.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/rect_conversions.h"
 
 namespace cc {
 
@@ -56,23 +61,30 @@ bool FilterOperations::IsEmpty() const {
 }
 
 gfx::Rect FilterOperations::MapRect(const gfx::Rect& rect,
-                                    const SkMatrix& matrix) const {
-  auto accumulate_rect = [matrix](const gfx::Rect& rect,
-                                  const FilterOperation& op) {
-    return op.MapRect(rect, matrix);
+                                    const std::optional<SkMatrix>& ctm) const {
+  auto accumulate_rect = [&ctm](const gfx::Rect& rect,
+                                const FilterOperation& op) {
+    return op.MapRect(rect, ctm);
   };
   return std::accumulate(operations_.begin(), operations_.end(), rect,
                          accumulate_rect);
 }
 
 gfx::Rect FilterOperations::MapRectReverse(const gfx::Rect& rect,
-                                           const SkMatrix& matrix) const {
-  auto accumulate_rect = [&matrix](const gfx::Rect& rect,
-                                   const FilterOperation& op) {
-    return op.MapRectReverse(rect, matrix);
+                                           const SkMatrix& ctm) const {
+  auto accumulate_rect = [&ctm](const gfx::Rect& rect,
+                                const FilterOperation& op) {
+    return op.MapRectReverse(rect, ctm);
   };
   return std::accumulate(operations_.rbegin(), operations_.rend(), rect,
                          accumulate_rect);
+}
+
+gfx::Rect FilterOperations::ExpandRect(const gfx::Rect& rect,
+                                       const SkMatrix& ctm) const {
+  gfx::Rect result = MapRect(rect, ctm);
+  result.Union(MapRectReverse(rect, ctm));
+  return result;
 }
 
 bool FilterOperations::HasFilterThatMovesPixels() const {
@@ -82,7 +94,7 @@ bool FilterOperations::HasFilterThatMovesPixels() const {
       case FilterOperation::BLUR:
       case FilterOperation::DROP_SHADOW:
       case FilterOperation::ZOOM:
-      case FilterOperation::STRETCH:
+      case FilterOperation::OFFSET:
         return true;
       case FilterOperation::REFERENCE:
         // TODO(hendrikw): SkImageFilter needs a function that tells us if the
@@ -105,51 +117,6 @@ bool FilterOperations::HasFilterThatMovesPixels() const {
   return false;
 }
 
-float FilterOperations::MaximumPixelMovement() const {
-  float max_movement = 0.;
-  for (size_t i = 0; i < operations_.size(); ++i) {
-    const FilterOperation& op = operations_[i];
-    switch (op.type()) {
-      case FilterOperation::BLUR:
-        // |op.amount| here is the blur radius.
-        max_movement = fmax(max_movement, op.amount() * 3.f);
-        continue;
-      case FilterOperation::DROP_SHADOW:
-        // |op.amount| here is the blur radius.
-        max_movement =
-            fmax(max_movement, fmax(std::abs(op.drop_shadow_offset().x()),
-                                    std::abs(op.drop_shadow_offset().y())) +
-                                   op.amount() * 3.f);
-        continue;
-      case FilterOperation::ZOOM:
-        max_movement = fmax(max_movement, op.zoom_inset());
-        continue;
-      case FilterOperation::REFERENCE:
-        // TODO(hendrikw): SkImageFilter needs a function that tells us how far
-        // the filter can move pixels. See crbug.com/523538 (sort of).
-        max_movement = fmax(max_movement, 100);
-        continue;
-      case FilterOperation::STRETCH:
-        max_movement =
-            fmax(max_movement, fmax(op.amount(), op.outer_threshold()));
-        continue;
-      case FilterOperation::OPACITY:
-      case FilterOperation::COLOR_MATRIX:
-      case FilterOperation::GRAYSCALE:
-      case FilterOperation::SEPIA:
-      case FilterOperation::SATURATE:
-      case FilterOperation::HUE_ROTATE:
-      case FilterOperation::INVERT:
-      case FilterOperation::BRIGHTNESS:
-      case FilterOperation::CONTRAST:
-      case FilterOperation::SATURATING_BRIGHTNESS:
-      case FilterOperation::ALPHA_THRESHOLD:
-        continue;
-    }
-  }
-  return max_movement;
-}
-
 bool FilterOperations::HasFilterThatAffectsOpacity() const {
   for (size_t i = 0; i < operations_.size(); ++i) {
     const FilterOperation& op = operations_[i];
@@ -164,7 +131,7 @@ bool FilterOperations::HasFilterThatAffectsOpacity() const {
       case FilterOperation::ALPHA_THRESHOLD:
         return true;
       case FilterOperation::COLOR_MATRIX: {
-        const SkScalar* matrix = op.matrix();
+        auto& matrix = op.matrix();
         if (matrix[15] || matrix[16] || matrix[17] || matrix[18] != 1 ||
             matrix[19])
           return true;
@@ -178,7 +145,7 @@ bool FilterOperations::HasFilterThatAffectsOpacity() const {
       case FilterOperation::BRIGHTNESS:
       case FilterOperation::CONTRAST:
       case FilterOperation::SATURATING_BRIGHTNESS:
-      case FilterOperation::STRETCH:
+      case FilterOperation::OFFSET:
         break;
     }
   }
@@ -190,10 +157,7 @@ bool FilterOperations::HasReferenceFilter() const {
 }
 
 bool FilterOperations::HasFilterOfType(FilterOperation::FilterType type) const {
-  return operations_.end() !=
-         std::find_if(
-             operations_.begin(), operations_.end(),
-             [type](const FilterOperation& op) { return op.type() == type; });
+  return std::ranges::contains(operations_, type, &FilterOperation::type);
 }
 
 FilterOperations FilterOperations::Blend(const FilterOperations& from,
@@ -236,6 +200,51 @@ FilterOperations FilterOperations::Blend(const FilterOperations& from,
   }
 
   return blended_filters;
+}
+
+bool FilterOperations::AllowsLCDText() const {
+  if (operations_.empty()) {
+    return true;
+  }
+  // Assumes any complex filter can cause color fringing of LCD-text pixels.
+  if (operations_.size() > 1) {
+    return false;
+  }
+  switch (operations_[0].type()) {
+    // These filters reduce or don't change the color difference between
+    // LCD-text pixels and text pixels.
+    case FilterOperation::GRAYSCALE:
+    case FilterOperation::SEPIA:
+    case FilterOperation::OPACITY:
+    case FilterOperation::BRIGHTNESS:
+    // A blur filter may change color, but it's very common, and the color
+    // change of LCD-text pixels is not obvious.
+    case FilterOperation::BLUR:
+    // A drop shadow draws over the original pixels.
+    case FilterOperation::DROP_SHADOW:
+      return true;
+
+    // These filters are good for LCD text if they reduce or don't change
+    // contrast/saturation.
+    case FilterOperation::CONTRAST:
+    case FilterOperation::SATURATE:
+      return operations_[0].amount() <= 1;
+
+    // Invert<=50% is like combined grayscale and contrast<100%.
+    case FilterOperation::INVERT:
+      return operations_[0].amount() <= 0.5;
+
+    // Other filters may change colors of pixels dramatically, or are not or
+    // rarely used in web.
+    case FilterOperation::COLOR_MATRIX:
+    case FilterOperation::HUE_ROTATE:
+    case FilterOperation::ZOOM:
+    case FilterOperation::REFERENCE:
+    case FilterOperation::SATURATING_BRIGHTNESS:
+    case FilterOperation::ALPHA_THRESHOLD:
+    case FilterOperation::OFFSET:
+      return false;
+  }
 }
 
 void FilterOperations::AsValueInto(

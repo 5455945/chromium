@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,8 @@
 #include <cstddef>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/path_service.h"
 #include "net/base/filename_util.h"
@@ -129,16 +129,21 @@ void FileTransferMessageHandler::OnDisconnecting() {}
 
 void FileTransferMessageHandler::OnMetadata(
     protocol::FileTransfer::Metadata metadata) {
+  std::unique_ptr<FileOperations::Writer> writer =
+      file_operations_->CreateWriter();
+  if (!writer) {
+    Cancel();
+    SendError(protocol::MakeFileTransferError(
+        FROM_HERE, protocol::FileTransfer_Error_Type_PROTOCOL_ERROR));
+    return;
+  }
   SetState(kWriting);
-  // Unretained is sound because the callbacks won't be called after
-  // BufferedFileWriter is destroyed, which is in turn owned by this
-  // FileTransferMessageHandler.
   buffered_file_writer_.emplace(
-      file_operations_->CreateWriter(),
+      std::move(writer),
       base::BindOnce(&FileTransferMessageHandler::OnWritingComplete,
-                     base::Unretained(this)),
+                     weak_ptr_factory_.GetWeakPtr()),
       base::BindOnce(&FileTransferMessageHandler::OnWriteError,
-                     base::Unretained(this)));
+                     weak_ptr_factory_.GetWeakPtr()));
   buffered_file_writer_->Start(
       // Ensure filename is safe, and convert from UTF-8 to a FilePath.
       net::GenerateFileName(GURL(), std::string(), std::string(),
@@ -158,17 +163,24 @@ void FileTransferMessageHandler::OnEnd() {
 }
 
 void FileTransferMessageHandler::OnRequestTransfer() {
-  SetState(kReading);
   file_reader_ = file_operations_->CreateReader();
-  // Unretained is sound because FileReader will not call us after it is
-  // destroyed, and we own it.
+  if (!file_reader_) {
+    Cancel();
+    SendError(protocol::MakeFileTransferError(
+        FROM_HERE, protocol::FileTransfer_Error_Type_PROTOCOL_ERROR));
+    return;
+  }
+  SetState(kReading);
   file_reader_->Open(base::BindOnce(&FileTransferMessageHandler::OnOpenResult,
-                                    base::Unretained(this)));
+                                    weak_ptr_factory_.GetWeakPtr()));
 }
 
 void FileTransferMessageHandler::OnSuccess() {
   DCHECK_EQ(kEof, state_);
   SetState(kClosed);
+
+  // Ensure any resources tied to the reader's lifetime are released.
+  file_reader_.reset();
 }
 
 void FileTransferMessageHandler::OnError(protocol::FileTransfer_Error error) {
@@ -246,11 +258,9 @@ void FileTransferMessageHandler::ReadNextChunk() {
     return;
   }
 
-  // Unretained is sound because file_reader_ is guaranteed not to execute any
-  // callbacks after it is destroyed.
   file_reader_->ReadChunk(
       kChunkSize, base::BindOnce(&FileTransferMessageHandler::OnReadResult,
-                                 base::Unretained(this)));
+                                 weak_ptr_factory_.GetWeakPtr()));
 }
 
 void FileTransferMessageHandler::Cancel() {
@@ -280,7 +290,6 @@ void FileTransferMessageHandler::SetState(State state) {
     case kConnected:
       // This is the initial state, but should never be reached again.
       NOTREACHED();
-      break;
     case kReading:
       DCHECK_EQ(kConnected, state_);
       break;

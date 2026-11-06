@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,9 +17,13 @@ class ScopedUMARecorder {
  public:
   ScopedUMARecorder() = default;
 
+  ScopedUMARecorder(const ScopedUMARecorder&) = delete;
+  ScopedUMARecorder& operator=(const ScopedUMARecorder&) = delete;
+
   ~ScopedUMARecorder() {
-    if (recorded_)
+    if (recorded_) {
       return;
+    }
     RecordImpl(false);
   }
 
@@ -31,13 +35,13 @@ class ScopedUMARecorder {
  private:
   void RecordImpl(bool succeeded) {
     UMA_HISTOGRAM_BOOLEAN(RESULT_HISTOGRAM_NAME, succeeded);
-    if (succeeded)
+    if (succeeded) {
       UMA_HISTOGRAM_TIMES(TIME_HISTOGRAM_NAME, timer_.Elapsed());
+    }
   }
 
   bool recorded_ = false;
   base::ElapsedTimer timer_;
-  DISALLOW_COPY_AND_ASSIGN(ScopedUMARecorder);
 };
 
 }  // namespace extensions

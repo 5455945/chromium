@@ -1,106 +1,30 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/wm/gestures/wm_gesture_handler.h"
 
-#include "ash/constants/ash_features.h"
-#include "ash/public/cpp/ash_pref_names.h"
-#include "ash/public/cpp/toast_data.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
-#include "ash/system/toast/toast_manager_impl.h"
 #include "ash/wm/desks/desks_controller.h"
 #include "ash/wm/desks/desks_histogram_enums.h"
 #include "ash/wm/overview/overview_controller.h"
 #include "ash/wm/screen_pinning_controller.h"
 #include "ash/wm/window_cycle/window_cycle_controller.h"
+#include "ash/wm/window_util.h"
 #include "base/metrics/user_metrics.h"
 #include "base/time/time.h"
-#include "components/prefs/pref_service.h"
+#include "ui/aura/client/window_types.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/events/event.h"
 #include "ui/events/types/event_type.h"
-#include "ui/message_center/message_center.h"
-#include "ui/message_center/message_center_types.h"
-#include "ui/message_center/public/cpp/notification.h"
-#include "ui/message_center/public/cpp/notification_types.h"
-#include "ui/message_center/public/cpp/notifier_id.h"
+#include "ui/wm/core/capture_controller.h"
+#include "ui/wm/public/activation_client.h"
 
 namespace ash {
 
 namespace {
-
-constexpr char kEnterOverviewToastId[] = "ash.wm.reverse_enter_overview_toast";
-constexpr char kExitOverviewToastId[] = "ash.wm.reverse_exit_overview_toast";
-constexpr char kSwitchNextDeskToastId[] = "ash.wm.reverse_next_desk_toast";
-constexpr char kSwitchLastDeskToastId[] = "ash.wm.reverse_last_desk_toast";
-
-constexpr base::TimeDelta kToastDurationMs =
-    base::TimeDelta::FromMilliseconds(2500);
-
-// Check if the user used the wrong gestures.
-bool g_did_wrong_enter_overview_gesture = false;
-bool g_did_wrong_exit_overview_gesture = false;
-bool g_did_wrong_next_desk_gesture = false;
-bool g_did_wrong_last_desk_gesture = false;
-
-// Is the reverse scrolling for touchpad on.
-bool IsNaturalScrollOn() {
-  PrefService* pref =
-      Shell::Get()->session_controller()->GetActivePrefService();
-  return pref->GetBoolean(prefs::kTouchpadEnabled) &&
-         pref->GetBoolean(prefs::kNaturalScroll);
-}
-
-// Reverse an offset when the reverse scrolling is on.
-float GetOffset(float offset) {
-  // The handler code uses the new directions which is the reverse of the old
-  // handler code. Reverse the offset if the ReverseScrollGestures feature is
-  // disabled so that the users get old behavior.
-  if (!features::IsReverseScrollGesturesEnabled())
-    return -offset;
-  return IsNaturalScrollOn() ? -offset : offset;
-}
-
-void ShowReverseGestureToast(const char* toast_id, int message_id) {
-  Shell::Get()->toast_manager()->Show(
-      ToastData(toast_id, l10n_util::GetStringUTF16(message_id),
-                kToastDurationMs.InMilliseconds(), absl::nullopt));
-}
-
-// When reverse scrolling for touchpad is Off, if the user performs wrong
-// vertical gestures (i.e., swiping down/up with three fingers to enter/exit
-// overview), a toast will show up to tell user the correct gesture. The toast
-// will be removed after M89.
-bool MaybeHandleWrongVerticalGesture(float offset_y, bool in_overview) {
-  const bool correct_gesture = in_overview ? (offset_y < 0) : (offset_y > 0);
-
-  if (!features::IsReverseScrollGesturesEnabled() || IsNaturalScrollOn())
-    return correct_gesture;
-
-  bool* const did_wrong_ptr = in_overview ? &g_did_wrong_exit_overview_gesture
-                                          : &g_did_wrong_enter_overview_gesture;
-  const char* toast_id =
-      in_overview ? kExitOverviewToastId : kEnterOverviewToastId;
-
-  if (correct_gesture) {
-    *did_wrong_ptr = false;
-    Shell::Get()->toast_manager()->Cancel(toast_id);
-    return true;
-  }
-
-  if (*did_wrong_ptr) {
-    ShowReverseGestureToast(
-        toast_id, in_overview ? IDS_CHANGE_EXIT_OVERVIEW_REVERSE_GESTURE
-                              : IDS_CHANGE_ENTER_OVERVIEW_REVERSE_GESTURE);
-  } else {
-    *did_wrong_ptr = true;
-  }
-
-  return false;
-}
 
 // Handles vertical 3-finger scroll gesture by entering overview on scrolling
 // up, and exiting it on scrolling down. If entering overview and window cycle
@@ -113,8 +37,11 @@ bool Handle3FingerVerticalScroll(float scroll_y) {
   auto* overview_controller = Shell::Get()->overview_controller();
   const bool in_overview = overview_controller->InOverviewSession();
 
-  if (!MaybeHandleWrongVerticalGesture(GetOffset(scroll_y), in_overview))
+  // Ignore the wrong vertical gestures (i.e., swiping down/up with three
+  // fingers to enter/exit overview).
+  if (in_overview ? (scroll_y > 0) : (scroll_y < 0)) {
     return false;
+  }
 
   if (in_overview) {
     base::RecordAction(base::UserMetricsAction("Touchpad_Gesture_Overview"));
@@ -134,46 +61,6 @@ bool Handle3FingerVerticalScroll(float scroll_y) {
   return true;
 }
 
-// When reverse scrolling for touchpad is Off, if the user performs wrong
-// horizontal gestures (i.e., swiping left/right with four fingers to switch to
-// the next/previous desk), a toast will show up to tell user the correct
-// gesture. The toast will be removed after M89.
-void MaybeHandleWrongHorizontalGesture(bool move_left,
-                                       const Desk* previous_desk,
-                                       const Desk* next_desk) {
-  if (!features::IsReverseScrollGesturesEnabled() || IsNaturalScrollOn())
-    return;
-
-  // Perform wrong gesture on the first desk.
-  if (move_left && next_desk && !previous_desk) {
-    if (!g_did_wrong_next_desk_gesture) {
-      g_did_wrong_next_desk_gesture = true;
-    } else {
-      ShowReverseGestureToast(kSwitchNextDeskToastId,
-                              IDS_CHANGE_NEXT_DESK_REVERSE_GESTURE);
-    }
-    return;
-  }
-
-  // Perform wrong gesture on the last desk.
-  if (!move_left && !next_desk && previous_desk) {
-    if (!g_did_wrong_last_desk_gesture) {
-      g_did_wrong_last_desk_gesture = true;
-    } else {
-      ShowReverseGestureToast(kSwitchLastDeskToastId,
-                              IDS_CHANGE_LAST_DESK_REVERSE_GESTURE);
-    }
-    return;
-  }
-
-  g_did_wrong_next_desk_gesture = false;
-  g_did_wrong_last_desk_gesture = false;
-
-  auto* toast_manager = Shell::Get()->toast_manager();
-  toast_manager->Cancel(kSwitchNextDeskToastId);
-  toast_manager->Cancel(kSwitchLastDeskToastId);
-}
-
 }  // namespace
 
 WmGestureHandler::WmGestureHandler() = default;
@@ -182,32 +69,38 @@ WmGestureHandler::~WmGestureHandler() = default;
 
 bool WmGestureHandler::ProcessScrollEvent(const ui::ScrollEvent& event) {
   // Disable touchpad swipe when screen is pinned.
-  if (Shell::Get()->screen_pinning_controller()->IsPinned())
+  // Also skip touchpad swipe in kiosk mode.
+  if (Shell::Get()->screen_pinning_controller()->IsPinned() ||
+      Shell::Get()->session_controller()->IsRunningInAppMode()) {
     return false;
+  }
 
-  // ET_SCROLL_FLING_CANCEL means a touchpad swipe has started.
-  if (event.type() == ui::ET_SCROLL_FLING_CANCEL) {
+  // EventType::kScrollFlingCancel means a touchpad swipe has started.
+  if (event.type() == ui::EventType::kScrollFlingCancel) {
     scroll_data_ = ScrollData();
     return false;
   }
 
-  // ET_SCROLL_FLING_START means a touchpad swipe has ended.
-  if (event.type() == ui::ET_SCROLL_FLING_START) {
+  // EventType::kScrollFlingStart means a touchpad swipe has ended.
+  if (event.type() == ui::EventType::kScrollFlingStart) {
     bool success = EndScroll();
     DCHECK(!scroll_data_);
     return success;
   }
-  DCHECK_EQ(ui::ET_SCROLL, event.type());
+  DCHECK_EQ(ui::EventType::kScroll, event.type());
 
-  return ProcessEventImpl(event.finger_count(), event.x_offset(),
-                          event.y_offset());
+  const int direction = window_util::IsNaturalScrollOn(event) ? -1 : 1;
+
+  return ProcessEventImpl(event.finger_count(), event.x_offset() * direction,
+                          event.y_offset() * direction);
 }
 
 bool WmGestureHandler::ProcessEventImpl(int finger_count,
                                         float delta_x,
                                         float delta_y) {
-  if (!scroll_data_)
+  if (!scroll_data_) {
     return false;
+  }
 
   // Only three or four finger scrolls are supported.
   if (finger_count != 3 && finger_count != 4) {
@@ -233,12 +126,12 @@ bool WmGestureHandler::ProcessEventImpl(int finger_count,
   if (finger_count == 4) {
     DCHECK(!moved);
     // Horizontal gesture may be flipped.
-    const float offset_x = GetOffset(-delta_x);
-    const float scroll_x = GetOffset(scroll_data_->scroll_x);
+    const float offset_x = -delta_x;
+    const float scroll_x = scroll_data_->scroll_x;
     auto* desks_controller = DesksController::Get();
     // Update the continuous desk animation if it has already been started,
     // otherwise start it if it passes the threshold.
-    if (scroll_data_->continuous_gesture_started) {
+    if (scroll_data_->horizontal_continuous_gesture_started) {
       desks_controller->UpdateSwipeAnimation(offset_x);
     } else if (std::abs(scroll_x) > kContinuousGestureMoveThresholdDp) {
       if (!desks_controller->StartSwipeAnimation(/*move_left=*/offset_x > 0)) {
@@ -249,13 +142,7 @@ bool WmGestureHandler::ProcessEventImpl(int finger_count,
         scroll_data_.reset();
         return false;
       }
-
-      MaybeHandleWrongHorizontalGesture(
-          /*move_left=*/scroll_x < 0,
-          desks_controller->GetPreviousDesk(/*use_target_active_desk=*/false),
-          desks_controller->GetNextDesk(/*use_target_active_desk=*/false));
-
-      scroll_data_->continuous_gesture_started = true;
+      scroll_data_->horizontal_continuous_gesture_started = true;
     }
   }
 
@@ -272,16 +159,27 @@ bool WmGestureHandler::EndScroll() {
   const int finger_count = scroll_data_->finger_count;
   const float scroll_x = scroll_data_->scroll_x;
   const float scroll_y = scroll_data_->scroll_y;
-  const bool continuous_gesture_started =
-      scroll_data_->continuous_gesture_started;
+  const bool horizontal_continuous_gesture_started =
+      scroll_data_->horizontal_continuous_gesture_started;
   scroll_data_.reset();
 
   if (finger_count == 0)
     return false;
 
   if (finger_count == 3) {
-    if (std::fabs(scroll_x) < std::fabs(scroll_y))
+    // If the event should be captured by other normal window, do not handle
+    // this event as overview handling gesture. If it is captured by non-normal
+    // window (e.g. menu/popup), we can force enter overview mode.
+    aura::Window* capture_window =
+        ::wm::CaptureController::Get()->GetCaptureWindow();
+    if (capture_window &&
+        capture_window->GetType() == aura::client::WINDOW_TYPE_NORMAL) {
+      return false;
+    }
+
+    if (std::fabs(scroll_x) < std::fabs(scroll_y)) {
       return Handle3FingerVerticalScroll(scroll_y);
+    }
 
     return MoveOverviewSelection(finger_count, scroll_x, scroll_y);
   }
@@ -289,10 +187,11 @@ bool WmGestureHandler::EndScroll() {
   if (finger_count != 4)
     return false;
 
-  if (continuous_gesture_started)
+  if (horizontal_continuous_gesture_started) {
     DesksController::Get()->EndSwipeAnimation();
+  }
 
-  return continuous_gesture_started;
+  return horizontal_continuous_gesture_started;
 }
 
 bool WmGestureHandler::MoveOverviewSelection(int finger_count,

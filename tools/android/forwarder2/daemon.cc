@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,9 +20,10 @@
 #include <string>
 #include <utility>
 
+#include "base/check_op.h"
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
 #include "base/logging.h"
+#include "base/logging/logging_settings.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
@@ -171,8 +172,8 @@ bool Daemon::SpawnIfNeeded() {
         CHECK_EQ(dup(null_fd), STDERR_FILENO);
         Socket command_socket;
         if (!command_socket.BindUnix(identifier_)) {
-          std::unique_ptr<Socket> client_socket = ConnectToUnixDomainSocket(
-              identifier_, kSingleTry, kNoIdleTime, identifier_);
+          client_socket = ConnectToUnixDomainSocket(identifier_, kSingleTry,
+                                                    kNoIdleTime, identifier_);
           if (client_socket.get()) {
             // The daemon was spawned by a concurrent process.
             exit(0);

@@ -47,6 +47,8 @@ async_test((t) => {
     requestAnimationFrame(() => { // Frame 3.
       requestAnimationFrame(() => { // Frame 4.
         axHidden = axElementById("hidden");
+        // There are now 2 children, as the whitespace nodes are no longer included in the tree.
+        // This is the same as it would be if content-visibility had never been used.
         t.step(() => {
           assert_equals(axHidden.childrenCount, 2, "Child count after activation");
         });

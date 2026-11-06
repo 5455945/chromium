@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -33,7 +33,8 @@ DrawWaiterForTest::~DrawWaiterForTest() {}
 
 void DrawWaiterForTest::WaitImpl(Compositor* compositor) {
   compositor->AddObserver(this);
-  wait_run_loop_ = std::make_unique<base::RunLoop>();
+  wait_run_loop_ = std::make_unique<base::RunLoop>(
+      base::RunLoop::Type::kNestableTasksAllowed);
   wait_run_loop_->Run();
   compositor->RemoveObserver(this);
 }
@@ -49,9 +50,13 @@ void DrawWaiterForTest::OnCompositingStarted(Compositor* compositor,
     wait_run_loop_->Quit();
 }
 
-void DrawWaiterForTest::OnCompositingEnded(Compositor* compositor) {
-  if (wait_event_ == WAIT_FOR_COMPOSITING_ENDED)
+void DrawWaiterForTest::OnDidPresentCompositorFrame(
+    ui::Compositor* compositor,
+    uint32_t frame_token,
+    const gfx::PresentationFeedback& feedback) {
+  if (wait_event_ == WAIT_FOR_COMPOSITING_ENDED) {
     wait_run_loop_->Quit();
+  }
 }
 
 }  // namespace ui

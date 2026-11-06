@@ -1,119 +1,159 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "services/network/public/cpp/client_hints.h"
 
+#include <algorithm>
+#include <optional>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include "base/containers/flat_map.h"
-#include "base/cxx17_backports.h"
-#include "base/no_destructor.h"
+#include "base/containers/fixed_flat_map.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_split.h"
 #include "base/strings/string_tokenizer.h"
 #include "base/strings/string_util.h"
+#include "base/time/time.h"
 #include "net/http/structured_headers.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "url/gurl.h"
+#include "url/origin.h"
 
 namespace network {
 
-const char* const kClientHintsNameMapping[] = {"device-memory",
-                                               "dpr",
-                                               "width",
-                                               "viewport-width",
-                                               "rtt",
-                                               "downlink",
-                                               "ect",
-                                               "lang",
-                                               "sec-ch-ua",
-                                               "sec-ch-ua-arch",
-                                               "sec-ch-ua-platform",
-                                               "sec-ch-ua-model",
-                                               "sec-ch-ua-mobile",
-                                               "sec-ch-ua-full-version",
-                                               "sec-ch-ua-platform-version",
-                                               "sec-ch-prefers-color-scheme",
-                                               "sec-ch-ua-bitness"};
+const char kPrefersColorSchemeDark[] = "dark";
+const char kPrefersColorSchemeLight[] = "light";
 
-const size_t kClientHintsMappingsCount = base::size(kClientHintsNameMapping);
+const char kPrefersReducedMotionNoPreference[] = "no-preference";
+const char kPrefersReducedMotionReduce[] = "reduce";
 
-static_assert(
-    base::size(kClientHintsNameMapping) ==
-        (static_cast<int>(network::mojom::WebClientHintsType::kMaxValue) + 1),
-    "Client Hint name table size must match network::mojom::WebClientHintsType "
-    "range");
+const char kPrefersReducedTransparencyNoPreference[] = "no-preference";
+const char kPrefersReducedTransparencyReduce[] = "reduce";
 
 namespace {
 
-struct ClientHintNameCompator {
-  bool operator()(const std::string& lhs, const std::string& rhs) const {
+struct ClientHintNameComparator {
+  constexpr bool operator()(std::string_view lhs, std::string_view rhs) const {
     return base::CompareCaseInsensitiveASCII(lhs, rhs) < 0;
   }
 };
 
-using DecodeMap = base::flat_map<std::string,
-                                 network::mojom::WebClientHintsType,
-                                 ClientHintNameCompator>;
-
-DecodeMap MakeDecodeMap() {
-  DecodeMap result;
-  for (size_t i = 0;
-       i < static_cast<int>(network::mojom::WebClientHintsType::kMaxValue) + 1;
-       ++i) {
-    result.insert(
-        std::make_pair(kClientHintsNameMapping[i],
-                       static_cast<network::mojom::WebClientHintsType>(i)));
+consteval auto MakeDecodeMap() {
+  std::pair<std::string_view, network::mojom::WebClientHintsType>
+      data[kClientHintToNameMap.size()] = {};
+  size_t i = 0;
+  for (const auto& [type, header] : kClientHintToNameMap) {
+    data[i++] = {header, type};
   }
-  return result;
+  return base::MakeFixedFlatMap<std::string_view,
+                                network::mojom::WebClientHintsType>(
+      std::move(data), ClientHintNameComparator());
 }
 
-const DecodeMap& GetDecodeMap() {
-  static const base::NoDestructor<DecodeMap> decode_map(MakeDecodeMap());
-  return *decode_map;
-}
+constexpr auto kDecodeMap = MakeDecodeMap();
 
 }  // namespace
 
-absl::optional<std::vector<network::mojom::WebClientHintsType>>
+std::optional<std::vector<network::mojom::WebClientHintsType>>
 ParseClientHintsHeader(const std::string& header) {
   // Accept-CH is an sh-list of tokens; see:
-  // https://httpwg.org/http-extensions/client-hints.html#rfc.section.3.1
-  absl::optional<net::structured_headers::List> maybe_list =
+  // https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-header-structure-19#section-3.1
+  std::optional<net::structured_headers::List> maybe_list =
       net::structured_headers::ParseList(header);
   if (!maybe_list.has_value())
-    return absl::nullopt;
+    return std::nullopt;
 
   // Standard validation rules: we want a list of tokens, so this better
   // only have tokens (but params are OK!)
   for (const auto& list_item : maybe_list.value()) {
+    const net::structured_headers::ParameterizedItem* item =
+        list_item.GetIfItem();
     // Make sure not a nested list.
-    if (list_item.member.size() != 1u)
-      return absl::nullopt;
-    if (!list_item.member[0].item.is_token())
-      return absl::nullopt;
+    if (!item || !item->item.is_token()) {
+      return std::nullopt;
+    }
   }
 
   std::vector<network::mojom::WebClientHintsType> result;
 
   // Now convert those to actual hint enums.
-  const DecodeMap& decode_map = GetDecodeMap();
   for (const auto& list_item : maybe_list.value()) {
-    const std::string& token_value = list_item.member[0].item.GetString();
-    auto iter = decode_map.find(token_value);
-    if (iter != decode_map.end())
+    const std::string& token_value = list_item.GetIfItem()->item.GetToken();
+    auto iter = kDecodeMap.find(token_value);
+    if (iter != kDecodeMap.end()) {
       result.push_back(iter->second);
+    }
   }  // for list_item
-  return absl::make_optional(std::move(result));
+  return result;
 }
 
-base::TimeDelta ParseAcceptCHLifetime(const std::string& header) {
-  int64_t persist_duration_seconds = 0;
-  if (!base::StringToInt64(header, &persist_duration_seconds) ||
-      persist_duration_seconds <= 0)
-    return base::TimeDelta();
+ClientHintToDelegatedThirdPartiesHeader::
+    ClientHintToDelegatedThirdPartiesHeader() = default;
 
-  return base::TimeDelta::FromSeconds(persist_duration_seconds);
+ClientHintToDelegatedThirdPartiesHeader::
+    ~ClientHintToDelegatedThirdPartiesHeader() = default;
+
+ClientHintToDelegatedThirdPartiesHeader::
+    ClientHintToDelegatedThirdPartiesHeader(
+        const ClientHintToDelegatedThirdPartiesHeader&) = default;
+
+const ClientHintToDelegatedThirdPartiesHeader
+ParseClientHintToDelegatedThirdPartiesHeader(const std::string& header,
+                                             MetaCHType type) {
+  switch (type) {
+    case MetaCHType::HttpEquivAcceptCH: {
+      // ParseClientHintsHeader should have been called instead.
+      NOTREACHED();
+    }
+    case MetaCHType::HttpEquivDelegateCH: {
+      // We're building a scoped down version of
+      // ParsingContext::ParseFeaturePolicyToIR that supports only client hint
+      // features.
+      ClientHintToDelegatedThirdPartiesHeader result;
+      const auto& entries =
+          base::SplitString(base::ToLowerASCII(header), ";",
+                            base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+      for (const auto& entry : entries) {
+        const auto& components = base::SplitString(
+            entry, " ", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+        // Shouldn't be possible given this only processes non-empty parts.
+        DCHECK(components.size());
+        auto found_token = kDecodeMap.find(components[0]);
+        // Bail early if the token is invalid
+        if (found_token == kDecodeMap.end()) {
+          continue;
+        }
+        std::vector<url::Origin> delegates;
+        for (size_t i = 1; i < components.size(); ++i) {
+          const GURL gurl = GURL(components[i]);
+          if (!gurl.is_valid()) {
+            result.had_invalid_origins = true;
+            continue;
+          }
+          url::Origin origin = url::Origin::Create(gurl);
+          if (origin.opaque()) {
+            result.had_invalid_origins = true;
+            continue;
+          }
+          delegates.push_back(origin);
+        }
+        result.map.insert(std::make_pair(found_token->second, delegates));
+      }
+      return result;
+    }
+  }
+}
+
+// static
+void LogClientHintsPersistenceMetrics(
+    const base::TimeTicks& persistence_started,
+    std::size_t hints_stored) {
+  base::UmaHistogramTimes("ClientHints.StoreLatency",
+                          base::TimeTicks::Now() - persistence_started);
+  base::UmaHistogramExactLinear("ClientHints.UpdateEventCount", 1, 2);
+  base::UmaHistogramCounts100("ClientHints.UpdateSize", hints_stored);
 }
 
 }  // namespace network

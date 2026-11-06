@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,22 +8,24 @@
 #include <Carbon/Carbon.h>
 #import <Cocoa/Cocoa.h>
 
+#include <tuple>
+
 #include "ui/events/events_base_export.h"
 #include "ui/events/keycodes/dom/dom_key.h"
 #include "ui/events/keycodes/keyboard_codes_posix.h"
 
 namespace ui {
 
-enum class DomCode;
+enum class DomCode : uint32_t;
 
 // We use windows virtual keycodes throughout our keyboard event related code,
 // including unit tests. But Mac uses a different set of virtual keycodes.
 // This function converts a windows virtual keycode into Mac's virtual key code
 // and corresponding unicode character. |flags| is the Cocoa modifiers mask
-// such as NSControlKeyMask, NSShiftKeyMask, etc.
+// such as NSEventModifierFlagControl, NSEventModifierFlagShift, etc.
 // When success, the corresponding Mac's virtual key code will be returned.
 // |keyboard_character| is the corresponding keyboard character, suitable for
-// use in -[NSEvent characters]. If NSShiftKeyMask appears in |flags|,
+// use in -[NSEvent characters]. If NSEventModifierFlagShift appears in |flags|,
 // |us_keyboard_shifted_character| is |keyboard_character| with a shift modifier
 // applied using a US keyboard layout (otherwise unmodified).
 // |us_keyboard_shifted_character| is suitable for -[NSEvent
@@ -38,13 +40,22 @@ EVENTS_BASE_EXPORT int MacKeyCodeForWindowsKeyCode(
     unichar* keyboard_character);
 
 // Returns the WindowsKeyCode from the Mac key code.
-EVENTS_BASE_EXPORT KeyboardCode KeyboardCodeFromKeyCode(unsigned short keyCode);
+EVENTS_BASE_EXPORT KeyboardCode
+KeyboardCodeFromKeyCode(unsigned short key_code);
+
+// Returns the KeyboardCode from a |char_code| from AppKit classes.
+EVENTS_BASE_EXPORT KeyboardCode KeyboardCodeFromCharCode(unichar char_code);
 
 // This implementation cribbed from:
 //   content/browser/render_host/input/web_input_event_builder_mac.mm
 // Converts |event| into a |KeyboardCode|.  The mapping is not direct as the Mac
 // has a different notion of key codes.
 EVENTS_BASE_EXPORT KeyboardCode KeyboardCodeFromNSEvent(NSEvent* event);
+
+EVENTS_BASE_EXPORT std::tuple<UniChar, bool> NsKeyCodeAndModifiersToCharacter(
+    unsigned short key_code,
+    int modifiers,
+    TISInputSourceRef input_source = nullptr);
 
 EVENTS_BASE_EXPORT DomCode DomCodeFromNSEvent(NSEvent* event);
 

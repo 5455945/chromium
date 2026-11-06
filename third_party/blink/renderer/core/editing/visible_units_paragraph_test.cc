@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,12 +11,13 @@
 #include "third_party/blink/renderer/core/editing/visible_position.h"
 #include "third_party/blink/renderer/core/html/forms/text_control_element.h"
 #include "third_party/blink/renderer/core/layout/layout_text_fragment.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 
 namespace blink {
 
 class VisibleUnitsParagraphTest : public EditingTestBase {
  protected:
-  static PositionWithAffinity PositionWithAffinityInDOMTree(
+  static PositionWithAffinity PositionWithAffinityInDomTree(
       Node& anchor,
       int offset,
       TextAffinity affinity = TextAffinity::kDownstream) {
@@ -24,7 +25,7 @@ class VisibleUnitsParagraphTest : public EditingTestBase {
                                 affinity);
   }
 
-  static VisiblePosition CreateVisiblePositionInDOMTree(
+  static VisiblePosition CreateVisiblePositionInDomTree(
       Node& anchor,
       int offset,
       TextAffinity affinity = TextAffinity::kDownstream) {
@@ -52,29 +53,29 @@ TEST_F(VisibleUnitsParagraphTest, endOfParagraphFirstLetter) {
       "<style>div::first-letter { color: red }</style><div "
       "id=sample>1ab\nde</div>");
 
-  Node* sample = GetDocument().getElementById("sample");
+  Node* sample = GetElementById("sample");
   Node* text = sample->firstChild();
 
   EXPECT_EQ(Position(text, 6),
-            EndOfParagraph(CreateVisiblePositionInDOMTree(*text, 0))
+            EndOfParagraph(CreateVisiblePositionInDomTree(*text, 0))
                 .DeepEquivalent());
   EXPECT_EQ(Position(text, 6),
-            EndOfParagraph(CreateVisiblePositionInDOMTree(*text, 1))
+            EndOfParagraph(CreateVisiblePositionInDomTree(*text, 1))
                 .DeepEquivalent());
   EXPECT_EQ(Position(text, 6),
-            EndOfParagraph(CreateVisiblePositionInDOMTree(*text, 2))
+            EndOfParagraph(CreateVisiblePositionInDomTree(*text, 2))
                 .DeepEquivalent());
   EXPECT_EQ(Position(text, 6),
-            EndOfParagraph(CreateVisiblePositionInDOMTree(*text, 3))
+            EndOfParagraph(CreateVisiblePositionInDomTree(*text, 3))
                 .DeepEquivalent());
   EXPECT_EQ(Position(text, 6),
-            EndOfParagraph(CreateVisiblePositionInDOMTree(*text, 4))
+            EndOfParagraph(CreateVisiblePositionInDomTree(*text, 4))
                 .DeepEquivalent());
   EXPECT_EQ(Position(text, 6),
-            EndOfParagraph(CreateVisiblePositionInDOMTree(*text, 5))
+            EndOfParagraph(CreateVisiblePositionInDomTree(*text, 5))
                 .DeepEquivalent());
   EXPECT_EQ(Position(text, 6),
-            EndOfParagraph(CreateVisiblePositionInDOMTree(*text, 6))
+            EndOfParagraph(CreateVisiblePositionInDomTree(*text, 6))
                 .DeepEquivalent());
 }
 
@@ -83,29 +84,29 @@ TEST_F(VisibleUnitsParagraphTest, endOfParagraphFirstLetterPre) {
       "<style>pre::first-letter { color: red }</style><pre "
       "id=sample>1ab\nde</pre>");
 
-  Node* sample = GetDocument().getElementById("sample");
+  Node* sample = GetElementById("sample");
   Node* text = sample->firstChild();
 
   EXPECT_EQ(Position(text, 3),
-            EndOfParagraph(CreateVisiblePositionInDOMTree(*text, 0))
+            EndOfParagraph(CreateVisiblePositionInDomTree(*text, 0))
                 .DeepEquivalent());
   EXPECT_EQ(Position(text, 3),
-            EndOfParagraph(CreateVisiblePositionInDOMTree(*text, 1))
+            EndOfParagraph(CreateVisiblePositionInDomTree(*text, 1))
                 .DeepEquivalent());
   EXPECT_EQ(Position(text, 3),
-            EndOfParagraph(CreateVisiblePositionInDOMTree(*text, 2))
+            EndOfParagraph(CreateVisiblePositionInDomTree(*text, 2))
+                .DeepEquivalent());
+  EXPECT_EQ(Position(text, 3),
+            EndOfParagraph(CreateVisiblePositionInDomTree(*text, 3))
                 .DeepEquivalent());
   EXPECT_EQ(Position(text, 6),
-            EndOfParagraph(CreateVisiblePositionInDOMTree(*text, 3))
+            EndOfParagraph(CreateVisiblePositionInDomTree(*text, 4))
                 .DeepEquivalent());
   EXPECT_EQ(Position(text, 6),
-            EndOfParagraph(CreateVisiblePositionInDOMTree(*text, 4))
+            EndOfParagraph(CreateVisiblePositionInDomTree(*text, 5))
                 .DeepEquivalent());
   EXPECT_EQ(Position(text, 6),
-            EndOfParagraph(CreateVisiblePositionInDOMTree(*text, 5))
-                .DeepEquivalent());
-  EXPECT_EQ(Position(text, 6),
-            EndOfParagraph(CreateVisiblePositionInDOMTree(*text, 6))
+            EndOfParagraph(CreateVisiblePositionInDomTree(*text, 6))
                 .DeepEquivalent());
 }
 
@@ -118,13 +119,13 @@ TEST_F(VisibleUnitsParagraphTest, endOfParagraphShadow) {
   SetBodyContent(body_content);
   SetShadowContent(shadow_content, "host");
 
-  Element* one = GetDocument().getElementById("one");
-  Element* two = GetDocument().getElementById("two");
-  Element* three = GetDocument().getElementById("three");
+  Element* one = GetElementById("one");
+  Element* two = GetElementById("two");
+  Element* three = GetElementById("three");
 
   EXPECT_EQ(
       Position(three->firstChild(), 3),
-      EndOfParagraph(CreateVisiblePositionInDOMTree(*one->firstChild(), 1))
+      EndOfParagraph(CreateVisiblePositionInDomTree(*one->firstChild(), 1))
           .DeepEquivalent());
   EXPECT_EQ(
       PositionInFlatTree(one->firstChild(), 1),
@@ -133,7 +134,7 @@ TEST_F(VisibleUnitsParagraphTest, endOfParagraphShadow) {
 
   EXPECT_EQ(
       Position(three->firstChild(), 3),
-      EndOfParagraph(CreateVisiblePositionInDOMTree(*two->firstChild(), 2))
+      EndOfParagraph(CreateVisiblePositionInDomTree(*two->firstChild(), 2))
           .DeepEquivalent());
   EXPECT_EQ(
       PositionInFlatTree(two->firstChild(), 2),
@@ -144,58 +145,126 @@ TEST_F(VisibleUnitsParagraphTest, endOfParagraphShadow) {
 TEST_F(VisibleUnitsParagraphTest, endOfParagraphSimple) {
   SetBodyContent("<div id=sample>1ab\nde</div>");
 
-  Node* sample = GetDocument().getElementById("sample");
+  Node* sample = GetElementById("sample");
   Node* text = sample->firstChild();
 
   EXPECT_EQ(Position(text, 6),
-            EndOfParagraph(CreateVisiblePositionInDOMTree(*text, 0))
+            EndOfParagraph(CreateVisiblePositionInDomTree(*text, 0))
                 .DeepEquivalent());
   EXPECT_EQ(Position(text, 6),
-            EndOfParagraph(CreateVisiblePositionInDOMTree(*text, 1))
+            EndOfParagraph(CreateVisiblePositionInDomTree(*text, 1))
                 .DeepEquivalent());
   EXPECT_EQ(Position(text, 6),
-            EndOfParagraph(CreateVisiblePositionInDOMTree(*text, 2))
+            EndOfParagraph(CreateVisiblePositionInDomTree(*text, 2))
                 .DeepEquivalent());
   EXPECT_EQ(Position(text, 6),
-            EndOfParagraph(CreateVisiblePositionInDOMTree(*text, 3))
+            EndOfParagraph(CreateVisiblePositionInDomTree(*text, 3))
                 .DeepEquivalent());
   EXPECT_EQ(Position(text, 6),
-            EndOfParagraph(CreateVisiblePositionInDOMTree(*text, 4))
+            EndOfParagraph(CreateVisiblePositionInDomTree(*text, 4))
                 .DeepEquivalent());
   EXPECT_EQ(Position(text, 6),
-            EndOfParagraph(CreateVisiblePositionInDOMTree(*text, 5))
+            EndOfParagraph(CreateVisiblePositionInDomTree(*text, 5))
                 .DeepEquivalent());
   EXPECT_EQ(Position(text, 6),
-            EndOfParagraph(CreateVisiblePositionInDOMTree(*text, 6))
+            EndOfParagraph(CreateVisiblePositionInDomTree(*text, 6))
                 .DeepEquivalent());
 }
 
 TEST_F(VisibleUnitsParagraphTest, endOfParagraphSimplePre) {
   SetBodyContent("<pre id=sample>1ab\nde</pre>");
 
-  Node* sample = GetDocument().getElementById("sample");
+  Node* sample = GetElementById("sample");
   Node* text = sample->firstChild();
 
   EXPECT_EQ(Position(text, 3),
-            EndOfParagraph(CreateVisiblePositionInDOMTree(*text, 0))
+            EndOfParagraph(CreateVisiblePositionInDomTree(*text, 0))
                 .DeepEquivalent());
   EXPECT_EQ(Position(text, 3),
-            EndOfParagraph(CreateVisiblePositionInDOMTree(*text, 1))
+            EndOfParagraph(CreateVisiblePositionInDomTree(*text, 1))
                 .DeepEquivalent());
   EXPECT_EQ(Position(text, 3),
-            EndOfParagraph(CreateVisiblePositionInDOMTree(*text, 2))
+            EndOfParagraph(CreateVisiblePositionInDomTree(*text, 2))
                 .DeepEquivalent());
   EXPECT_EQ(Position(text, 3),
-            EndOfParagraph(CreateVisiblePositionInDOMTree(*text, 3))
+            EndOfParagraph(CreateVisiblePositionInDomTree(*text, 3))
                 .DeepEquivalent());
   EXPECT_EQ(Position(text, 6),
-            EndOfParagraph(CreateVisiblePositionInDOMTree(*text, 4))
+            EndOfParagraph(CreateVisiblePositionInDomTree(*text, 4))
                 .DeepEquivalent());
   EXPECT_EQ(Position(text, 6),
-            EndOfParagraph(CreateVisiblePositionInDOMTree(*text, 5))
+            EndOfParagraph(CreateVisiblePositionInDomTree(*text, 5))
                 .DeepEquivalent());
   EXPECT_EQ(Position(text, 6),
-            EndOfParagraph(CreateVisiblePositionInDOMTree(*text, 6))
+            EndOfParagraph(CreateVisiblePositionInDomTree(*text, 6))
+                .DeepEquivalent());
+}
+
+TEST_F(VisibleUnitsParagraphTest, StartOfParagraphSimplePre) {
+  SetBodyContent("<pre id=sample>1ab\nde</pre>");
+  Node* text = GetElementById("sample")->firstChild();
+
+  for (int offset : {0, 1, 2, 3}) {
+    EXPECT_EQ(Position(text, 0),
+              StartOfParagraph(CreateVisiblePositionInDomTree(*text, offset))
+                  .DeepEquivalent())
+        << "offset " << offset;
+  }
+  for (int offset : {4, 5, 6}) {
+    EXPECT_EQ(Position(text, 4),
+              StartOfParagraph(CreateVisiblePositionInDomTree(*text, offset))
+                  .DeepEquivalent())
+        << "offset " << offset;
+  }
+}
+
+TEST_F(VisibleUnitsParagraphTest, StartOfParagraphFirstLetterPre) {
+  SetBodyContent(
+      "<style>pre::first-letter { color: red }</style>"
+      "<pre id=sample>1ab\nde</pre>");
+  Node* text = GetElementById("sample")->firstChild();
+
+  // Must match StartOfParagraphSimplePre: styling the first letter must not
+  // move paragraph boundaries.
+  for (int offset : {0, 1, 2, 3}) {
+    EXPECT_EQ(Position(text, 0),
+              StartOfParagraph(CreateVisiblePositionInDomTree(*text, offset))
+                  .DeepEquivalent())
+        << "offset " << offset;
+  }
+  for (int offset : {4, 5, 6}) {
+    EXPECT_EQ(Position(text, 4),
+              StartOfParagraph(CreateVisiblePositionInDomTree(*text, offset))
+                  .DeepEquivalent())
+        << "offset " << offset;
+  }
+}
+
+TEST_F(VisibleUnitsParagraphTest, FirstLetterParagraphOffsetsDisabled) {
+  ScopedFirstLetterParagraphOffsetsForTest disable_flag(false);
+  SetBodyContent(
+      "<style>pre::first-letter { color: red }</style>"
+      "<pre id=sample>1ab\nde</pre>");
+  Node* text = GetElementById("sample")->firstChild();
+
+  // With the flag disabled, the old behavior returns 6 for offset 3.
+  EXPECT_EQ(Position(text, 6),
+            EndOfParagraph(CreateVisiblePositionInDomTree(*text, 3))
+                .DeepEquivalent());
+}
+
+TEST_F(VisibleUnitsParagraphTest, endOfParagraphHiddenElement) {
+  SetBodyContent(
+      "<div contenteditable='true'><div id='first'>First block</div>"
+      "<div id='second'>Second block<select style='visibility:hidden'>"
+      "<b contenteditable='false'>Non-editable</b>"
+      "</select></div></div>");
+
+  Node* second = GetElementById("second");
+  Node* second_block = second->firstChild();
+
+  EXPECT_EQ(Position(second_block, 12),
+            EndOfParagraph(CreateVisiblePositionInDomTree(*second_block, 0))
                 .DeepEquivalent());
 }
 
@@ -208,23 +277,23 @@ TEST_F(VisibleUnitsParagraphTest, isEndOfParagraph) {
   SetBodyContent(body_content);
   SetShadowContent(shadow_content, "host");
 
-  Node* one = GetDocument().getElementById("one")->firstChild();
-  Node* two = GetDocument().getElementById("two")->firstChild();
-  Node* three = GetDocument().getElementById("three")->firstChild();
+  Node* one = GetElementById("one")->firstChild();
+  Node* two = GetElementById("two")->firstChild();
+  Node* three = GetElementById("three")->firstChild();
 
-  EXPECT_FALSE(IsEndOfParagraph(CreateVisiblePositionInDOMTree(*one, 0)));
+  EXPECT_FALSE(IsEndOfParagraph(CreateVisiblePositionInDomTree(*one, 0)));
   EXPECT_FALSE(IsEndOfParagraph(CreateVisiblePositionInFlatTree(*one, 0)));
 
-  EXPECT_FALSE(IsEndOfParagraph(CreateVisiblePositionInDOMTree(*one, 1)));
+  EXPECT_FALSE(IsEndOfParagraph(CreateVisiblePositionInDomTree(*one, 1)));
   EXPECT_TRUE(IsEndOfParagraph(CreateVisiblePositionInFlatTree(*one, 1)));
 
-  EXPECT_FALSE(IsEndOfParagraph(CreateVisiblePositionInDOMTree(*two, 2)));
+  EXPECT_FALSE(IsEndOfParagraph(CreateVisiblePositionInDomTree(*two, 2)));
   EXPECT_TRUE(IsEndOfParagraph(CreateVisiblePositionInFlatTree(*two, 2)));
 
-  EXPECT_FALSE(IsEndOfParagraph(CreateVisiblePositionInDOMTree(*three, 0)));
+  EXPECT_FALSE(IsEndOfParagraph(CreateVisiblePositionInDomTree(*three, 0)));
   EXPECT_FALSE(IsEndOfParagraph(CreateVisiblePositionInFlatTree(*three, 0)));
 
-  EXPECT_TRUE(IsEndOfParagraph(CreateVisiblePositionInDOMTree(*three, 3)));
+  EXPECT_TRUE(IsEndOfParagraph(CreateVisiblePositionInDomTree(*three, 3)));
   EXPECT_TRUE(IsEndOfParagraph(CreateVisiblePositionInFlatTree(*three, 3)));
 }
 
@@ -237,24 +306,24 @@ TEST_F(VisibleUnitsParagraphTest, isStartOfParagraph) {
   SetBodyContent(body_content);
   SetShadowContent(shadow_content, "host");
 
-  Node* zero = GetDocument().getElementById("zero")->firstChild();
-  Node* one = GetDocument().getElementById("one")->firstChild();
-  Node* two = GetDocument().getElementById("two")->firstChild();
-  Node* three = GetDocument().getElementById("three")->firstChild();
+  Node* zero = GetElementById("zero")->firstChild();
+  Node* one = GetElementById("one")->firstChild();
+  Node* two = GetElementById("two")->firstChild();
+  Node* three = GetElementById("three")->firstChild();
 
-  EXPECT_TRUE(IsStartOfParagraph(CreateVisiblePositionInDOMTree(*zero, 0)));
+  EXPECT_TRUE(IsStartOfParagraph(CreateVisiblePositionInDomTree(*zero, 0)));
   EXPECT_TRUE(IsStartOfParagraph(CreateVisiblePositionInFlatTree(*zero, 0)));
 
-  EXPECT_FALSE(IsStartOfParagraph(CreateVisiblePositionInDOMTree(*one, 0)));
+  EXPECT_FALSE(IsStartOfParagraph(CreateVisiblePositionInDomTree(*one, 0)));
   EXPECT_TRUE(IsStartOfParagraph(CreateVisiblePositionInFlatTree(*one, 0)));
 
-  EXPECT_FALSE(IsStartOfParagraph(CreateVisiblePositionInDOMTree(*one, 1)));
+  EXPECT_FALSE(IsStartOfParagraph(CreateVisiblePositionInDomTree(*one, 1)));
   EXPECT_FALSE(IsStartOfParagraph(CreateVisiblePositionInFlatTree(*one, 1)));
 
-  EXPECT_FALSE(IsStartOfParagraph(CreateVisiblePositionInDOMTree(*two, 0)));
+  EXPECT_FALSE(IsStartOfParagraph(CreateVisiblePositionInDomTree(*two, 0)));
   EXPECT_TRUE(IsStartOfParagraph(CreateVisiblePositionInFlatTree(*two, 0)));
 
-  EXPECT_FALSE(IsStartOfParagraph(CreateVisiblePositionInDOMTree(*three, 0)));
+  EXPECT_FALSE(IsStartOfParagraph(CreateVisiblePositionInDomTree(*three, 0)));
   EXPECT_TRUE(IsStartOfParagraph(CreateVisiblePositionInFlatTree(*three, 0)));
 }
 
@@ -263,10 +332,8 @@ TEST_F(VisibleUnitsParagraphTest, StartOfNextParagraphAfterTableCell) {
       "<input style='display: table-cell' type='file' "
       "maxlength='100'><select>");
 
-  const Position& input =
-      Position::BeforeNode(*GetDocument().QuerySelector("input"));
-  const Position& select =
-      Position::BeforeNode(*GetDocument().QuerySelector("select"));
+  const Position& input = Position::BeforeNode(*QuerySelector("input"));
+  const Position& select = Position::BeforeNode(*QuerySelector("select"));
 
   const VisiblePosition& input_position = CreateVisiblePosition(input);
   const VisiblePosition& after_input =
@@ -286,8 +353,7 @@ TEST_F(VisibleUnitsParagraphTest,
 
   const Position& text_end =
       Position::LastPositionInNode(*GetDocument().body()->firstChild());
-  const Position& before_div =
-      Position::BeforeNode(*GetDocument().QuerySelector("div"));
+  const Position& before_div = Position::BeforeNode(*QuerySelector("div"));
   const VisiblePosition& upstream =
       CreateVisiblePosition(before_div, TextAffinity::kUpstream);
   const VisiblePosition& downstream =
@@ -308,7 +374,7 @@ TEST_F(VisibleUnitsParagraphTest, endOfParagraphCannotBeBeforePosition) {
   SetBodyContent(
       "<span contenteditable>x<br contenteditable=false>"
       "<br contenteditable=false></span>");
-  Element* span = GetDocument().QuerySelector("span");
+  Element* span = QuerySelector("span");
   const Position& p1 = Position(span, 2);
   const Position& p2 = Position::LastPositionInNode(*span);
   const Position& p3 = Position::AfterNode(*span);
@@ -336,11 +402,37 @@ TEST_F(VisibleUnitsParagraphTest, endOfParagraphCannotBeBeforePosition) {
   EXPECT_EQ(p2, end2.DeepEquivalent());
 }
 
+TEST_F(VisibleUnitsParagraphTest, endOfParagraphCannotCrossEditingRoot) {
+  SetBodyContent(
+      "<div><span contenteditable id=span>this </span>"
+      "<a contenteditable=false>link</a>"
+      "<span contenteditable> after</span></div>");
+
+  Element* span = GetElementById("span");
+  const Position& p1 = Position(span->firstChild(), 2);
+  const Position& p2 = Position(span->firstChild(), 5);
+  const VisiblePosition& vp1 = CreateVisiblePosition(p1);
+  const VisiblePosition& vp2 = CreateVisiblePosition(p2);
+
+  EXPECT_EQ(p1, vp1.DeepEquivalent());
+  EXPECT_EQ(p2, vp2.DeepEquivalent());
+
+  const VisiblePosition& end1 = EndOfParagraph(vp1);
+  const VisiblePosition& end2 = EndOfParagraph(
+      vp1, EditingBoundaryCrossingRule::kCanSkipOverEditingBoundary);
+
+  EXPECT_LE(vp1.DeepEquivalent(), end1.DeepEquivalent());
+  EXPECT_LE(vp1.DeepEquivalent(), end2.DeepEquivalent());
+
+  EXPECT_EQ(p2, end1.DeepEquivalent());
+  EXPECT_EQ(p2, end2.DeepEquivalent());
+}
+
 TEST_F(VisibleUnitsParagraphTest, startOfParagraphCannotBeAfterPosition) {
   SetBodyContent(
       "<span contenteditable><br contenteditable=false>"
       "<br contenteditable=false>x</span>");
-  Element* span = GetDocument().QuerySelector("span");
+  Element* span = QuerySelector("span");
   const Position& p1 = Position(span, 1);
   const Position& p2 = Position::FirstPositionInNode(*span);
   const Position& p3 = Position::BeforeNode(*span);

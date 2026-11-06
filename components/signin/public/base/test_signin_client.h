@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,31 +10,56 @@
 #include <utility>
 #include <vector>
 
-#include "base/callback_forward.h"
 #include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/containers/flat_set.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
+#include "components/signin/public/base/bound_session_oauth_multilogin_delegate.h"
+#include "components/signin/public/base/signin_buildflags.h"
 #include "components/signin/public/base/signin_client.h"
+#include "components/signin/public/base/wait_for_network_callback_helper.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/public/mojom/cookie_manager.mojom.h"
+#include "services/network/test/test_network_context.h"
 #include "services/network/test/test_url_loader_factory.h"
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "components/account_manager_core/account.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#endif
-
 class PrefService;
+
+namespace version_info {
+enum class Channel;
+}
+
+class TestWaitForNetworkCallbackHelper : public WaitForNetworkCallbackHelper {
+ public:
+  TestWaitForNetworkCallbackHelper();
+  ~TestWaitForNetworkCallbackHelper() override;
+
+  // WaitForNetworkCallbackHelper:
+  bool AreNetworkCallsDelayed() override;
+  void DelayNetworkCall(base::OnceClosure callback) override;
+
+  void SetNetworkCallsDelayed(bool delayed);
+
+ private:
+  bool network_calls_delayed_ = false;
+  std::vector<base::OnceClosure> delayed_network_calls_;
+};
 
 // An implementation of SigninClient for use in unittests. Instantiates test
 // versions of the various objects that SigninClient is required to provide as
 // part of its interface.
 class TestSigninClient : public SigninClient {
  public:
-  TestSigninClient(
+  explicit TestSigninClient(
       PrefService* pref_service,
       network::TestURLLoaderFactory* test_url_loader_factory = nullptr);
+
+  TestSigninClient(const TestSigninClient&) = delete;
+  TestSigninClient& operator=(const TestSigninClient&) = delete;
+
   ~TestSigninClient() override;
 
   // SigninClient implementation that is specialized for unit tests.
@@ -46,12 +71,6 @@ class TestSigninClient : public SigninClient {
   // once there is a unit test that requires it.
   PrefService* GetPrefs() override;
 
-  // Allow or disallow continuation of sign-out depending on value of
-  // |is_signout_allowed_|;
-  void PreSignOut(
-      base::OnceCallback<void(SignoutDecision)> on_signout_decision_reached,
-      signin_metrics::ProfileSignout signout_source_metric) override;
-
   // Wraps the test_url_loader_factory().
   scoped_refptr<network::SharedURLLoaderFactory> GetURLLoaderFactory() override;
 
@@ -59,6 +78,29 @@ class TestSigninClient : public SigninClient {
   void set_cookie_manager(
       std::unique_ptr<network::mojom::CookieManager> cookie_manager) {
     cookie_manager_ = std::move(cookie_manager);
+  }
+
+  network::mojom::DeviceBoundSessionManager* GetDeviceBoundSessionManager()
+      const override;
+  void set_device_bound_session_manager(
+      network::mojom::DeviceBoundSessionManager* device_bound_session_manager) {
+    device_bound_session_manager_ = device_bound_session_manager;
+  }
+
+  using BoundSessionOAuthMultiLoginDelegateFactory = base::RepeatingCallback<
+      std::unique_ptr<signin::BoundSessionOAuthMultiLoginDelegate>()>;
+  void set_bound_session_oauth_multilogin_delegate_factory(
+      BoundSessionOAuthMultiLoginDelegateFactory factory) {
+    bound_session_oauth_multilogin_delegate_factory_ = std::move(factory);
+  }
+
+  std::unique_ptr<signin::BoundSessionOAuthMultiLoginDelegate>
+  CreateBoundSessionOAuthMultiloginDelegate() const override;
+
+  network::mojom::NetworkContext* GetNetworkContext() override;
+  void set_network_context(
+      std::unique_ptr<network::mojom::NetworkContext> network_context) {
+    network_context_ = std::move(network_context);
   }
 
   // Returns |test_url_loader_factory_| if it is specified. Otherwise, lazily
@@ -72,9 +114,14 @@ class TestSigninClient : public SigninClient {
     are_signin_cookies_allowed_ = value;
   }
 
-  void set_is_signout_allowed(bool value) { is_signout_allowed_ = value; }
+  void set_are_signin_cookies_deleted_on_exit(bool value) {
+    are_signin_cookies_deleted_on_exit_ = value;
+  }
 
-  bool is_dice_migration_completed() { return is_dice_migration_completed_; }
+  void set_accounts_signed_in_on_other_profiles(
+      base::flat_set<GaiaId> gaia_ids) {
+    accounts_signed_in_on_other_profiles_ = std::move(gaia_ids);
+  }
 
   // When |value| is true, network calls posted through DelayNetworkCall() are
   // delayed indefinitely.
@@ -89,40 +136,37 @@ class TestSigninClient : public SigninClient {
       content_settings::Observer* observer) override;
   void RemoveContentSettingsObserver(
       content_settings::Observer* observer) override;
+  bool AreNetworkCallsDelayed() override;
   void DelayNetworkCall(base::OnceClosure callback) override;
   std::unique_ptr<GaiaAuthFetcher> CreateGaiaAuthFetcher(
       GaiaAuthConsumer* consumer,
       gaia::GaiaSource source) override;
-  void SetDiceMigrationCompleted() override;
-  bool IsNonEnterpriseUser(const std::string& email) override;
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  absl::optional<account_manager::Account> GetInitialPrimaryAccount() override;
-#endif
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  void SetInitialPrimaryAccountForTests(
-      const account_manager::Account& account);
-#endif
+  version_info::Channel GetClientChannel() override;
+  void OnPrimaryAccountChanged(
+      signin::PrimaryAccountChangeEvent event_details) override;
+  signin::OAuthConsumer GetOAuthConsumerFromId(
+      signin::OAuthConsumerId oauth_consumer_id) const override;
+  bool IsAccountSignedInOnOtherProfile(const GaiaId& gaia_id) const override;
 
  private:
+  std::unique_ptr<TestWaitForNetworkCallbackHelper>
+      test_wait_for_network_callback_helper_;
   std::unique_ptr<network::TestURLLoaderFactory>
       default_test_url_loader_factory_;
-  network::TestURLLoaderFactory* test_url_loader_factory_;
+  raw_ptr<network::TestURLLoaderFactory> test_url_loader_factory_;
 
-  PrefService* pref_service_;
+  raw_ptr<PrefService> pref_service_;
   std::unique_ptr<network::mojom::CookieManager> cookie_manager_;
+  std::unique_ptr<network::mojom::NetworkContext> network_context_;
+  raw_ptr<network::mojom::DeviceBoundSessionManager>
+      device_bound_session_manager_ = nullptr;
+  BoundSessionOAuthMultiLoginDelegateFactory
+      bound_session_oauth_multilogin_delegate_factory_;
   bool are_signin_cookies_allowed_;
-  bool network_calls_delayed_;
-  bool is_signout_allowed_;
-  bool is_dice_migration_completed_;
+  bool are_signin_cookies_deleted_on_exit_ = false;
+  base::flat_set<GaiaId> accounts_signed_in_on_other_profiles_;
 
-  std::vector<base::OnceClosure> delayed_network_calls_;
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  absl::optional<account_manager::Account> initial_primary_account_;
-#endif
-
-  DISALLOW_COPY_AND_ASSIGN(TestSigninClient);
+  std::unique_ptr<signin::OAuthConsumerRegistry> oauth_consumer_registry_;
 };
 
 #endif  // COMPONENTS_SIGNIN_PUBLIC_BASE_TEST_SIGNIN_CLIENT_H_

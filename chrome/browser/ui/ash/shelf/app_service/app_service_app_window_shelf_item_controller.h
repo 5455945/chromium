@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,14 @@
 
 #include <set>
 
-#include "base/scoped_observation.h"
-#include "chrome/browser/ui/app_list/arc/arc_app_list_prefs.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/ui/ash/shelf/app_window_shelf_item_controller.h"
 
 class AppServiceAppWindowShelfController;
 
 // Shelf item delegate for extension app windows.
 class AppServiceAppWindowShelfItemController
-    : public AppWindowShelfItemController,
-      public ArcAppListPrefs::Observer {
+    : public AppWindowShelfItemController {
  public:
   explicit AppServiceAppWindowShelfItemController(
       const ash::ShelfID& shelf_id,
@@ -42,23 +40,24 @@ class AppServiceAppWindowShelfItemController
   // aura::WindowObserver overrides:
   void OnWindowTitleChanged(aura::Window* window) override;
 
-  // ArcAppListPrefs::Observer:
-  void OnAppStatesChanged(const std::string& app_id,
-                          const ArcAppListPrefs::AppInfo& app_info) override;
-
   void AddTaskId(int task_id);
   void RemoveTaskId(int task_id);
   bool HasAnyTasks() const;
 
+  // ARC ghost windows introduce session ids to identify the ghost window. So
+  // below functions are added to handle session ids for ghost windows.
+  void AddSessionId(int session_id);
+  void RemoveSessionId(int session_id);
+  bool HasAnySessions() const;
+
  private:
   bool IsChromeApp();
 
-  AppServiceAppWindowShelfController* controller_ = nullptr;
-
-  base::ScopedObservation<ArcAppListPrefs, ArcAppListPrefs::Observer>
-      arc_prefs_observer_{this};
+  raw_ptr<AppServiceAppWindowShelfController, DanglingUntriaged> controller_ =
+      nullptr;
 
   std::set<int> task_ids_;
+  std::set<int> session_ids_;
 };
 
 #endif  // CHROME_BROWSER_UI_ASH_SHELF_APP_SERVICE_APP_SERVICE_APP_WINDOW_SHELF_ITEM_CONTROLLER_H_

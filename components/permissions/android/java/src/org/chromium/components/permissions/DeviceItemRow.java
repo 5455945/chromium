@@ -1,24 +1,26 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.permissions;
+
+import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.drawable.Drawable;
 import android.text.TextUtils;
 
-import androidx.annotation.Nullable;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
-/**
- * A class representing one data row in the dialog.
- */
+/** A class representing one data row in the dialog. */
+@NullMarked
 public class DeviceItemRow {
     public final String mKey;
     public String mDescription;
-    public Drawable mIcon;
-    public String mIconDescription;
+    public @Nullable Drawable mIcon;
+    public @Nullable String mIconDescription;
 
     /**
      * Creates a device item row which can be shown in the dialog.
@@ -28,7 +30,10 @@ public class DeviceItemRow {
      * @param icon Item icon.
      * @param iconDescription Item icon description.
      */
-    public DeviceItemRow(String key, String description, @Nullable Drawable icon,
+    public DeviceItemRow(
+            String key,
+            String description,
+            @Nullable Drawable icon,
             @Nullable String iconDescription) {
         mKey = key;
         mDescription = description;
@@ -43,26 +48,38 @@ public class DeviceItemRow {
      * @param description Expected item description.
      * @param icon Expected item icon.
      */
-    public boolean hasSameContents(String key, String description, @Nullable Drawable icon,
+    public boolean hasSameContents(
+            String key,
+            String description,
+            @Nullable Drawable icon,
             @Nullable String iconDescription) {
         if (!TextUtils.equals(mKey, key)) return false;
         if (!TextUtils.equals(mDescription, description)) return false;
         if (!TextUtils.equals(mIconDescription, iconDescription)) return false;
 
         if (icon != null && mIcon != null) {
-            Bitmap myBitmap = Bitmap.createBitmap(
-                    icon.getIntrinsicWidth(), icon.getIntrinsicHeight(), Bitmap.Config.ARGB_8888);
+            Drawable myIcon = assumeNonNull(mIcon.getConstantState()).newDrawable();
+            Drawable theirIcon = assumeNonNull(icon.getConstantState()).newDrawable();
+
+            Bitmap myBitmap =
+                    Bitmap.createBitmap(
+                            myIcon.getIntrinsicWidth(),
+                            myIcon.getIntrinsicHeight(),
+                            Bitmap.Config.ARGB_8888);
             Canvas myCanvas = new Canvas();
             myCanvas.setBitmap(myBitmap);
-            mIcon.setBounds(0, 0, myCanvas.getWidth(), myCanvas.getHeight());
-            mIcon.draw(myCanvas);
+            myIcon.setBounds(0, 0, myCanvas.getWidth(), myCanvas.getHeight());
+            myIcon.draw(myCanvas);
 
-            Bitmap theirBitmap = Bitmap.createBitmap(
-                    icon.getIntrinsicWidth(), icon.getIntrinsicHeight(), Bitmap.Config.ARGB_8888);
+            Bitmap theirBitmap =
+                    Bitmap.createBitmap(
+                            theirIcon.getIntrinsicWidth(),
+                            theirIcon.getIntrinsicHeight(),
+                            Bitmap.Config.ARGB_8888);
             Canvas theirCanvas = new Canvas();
             theirCanvas.setBitmap(theirBitmap);
-            icon.setBounds(0, 0, theirCanvas.getWidth(), theirCanvas.getHeight());
-            icon.draw(theirCanvas);
+            theirIcon.setBounds(0, 0, theirCanvas.getWidth(), theirCanvas.getHeight());
+            theirIcon.draw(theirCanvas);
 
             return myBitmap.sameAs(theirBitmap);
         }

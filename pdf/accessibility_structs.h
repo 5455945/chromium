@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,31 +10,23 @@
 #include <string>
 #include <vector>
 
+#include "base/containers/fixed_flat_map.h"
+#include "base/memory/raw_ptr.h"
+#include "pdf/page_character_index.h"
+#include "pdf/pdf_accessibility_constants.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gfx/geometry/point.h"
+#include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_f.h"
 
 namespace chrome_pdf {
 
-struct AccessibilityDocInfo {
-  bool operator==(const AccessibilityDocInfo& other) const;
-  bool operator!=(const AccessibilityDocInfo& other) const;
-
-  uint32_t page_count = 0;
-  bool text_accessible = false;
-  bool text_copyable = false;
+struct Selection {
+  PageCharacterIndex start;
+  PageCharacterIndex end;
 };
 
-struct AccessibilityPageInfo {
-  uint32_t page_index = 0;
-  gfx::Rect bounds;
-  uint32_t text_run_count = 0;
-  uint32_t char_count = 0;
-};
-
-// TODO(crbug.com/1144444): Remove next line comment after PDF migrates away
-// from Pepper.
-// Explicitly set all enum values to match enum values in PP_TextRenderingMode.
 // See PDF Reference 1.7, page 402, table 5.3.
 enum class AccessibilityTextRenderMode {
   kUnknown = -1,
@@ -57,8 +49,7 @@ struct AccessibilityTextStyleInfo {
                              float font_size,
                              uint32_t fill_color,
                              uint32_t stroke_color,
-                             bool is_italic,
-                             bool is_bold);
+                             bool is_italic);
   AccessibilityTextStyleInfo(const AccessibilityTextStyleInfo& other);
   ~AccessibilityTextStyleInfo();
 
@@ -71,12 +62,8 @@ struct AccessibilityTextStyleInfo {
   uint32_t fill_color = 0;
   uint32_t stroke_color = 0;
   bool is_italic = false;
-  bool is_bold = false;
 };
 
-// TODO(crbug.com/1144444): Remove next line comment after PDF migrates away
-// from Pepper.
-// Explicitly set all enum values to match enum values in PP_PrivateDirection.
 enum class AccessibilityTextDirection {
   kNone = 0,
   kLeftToRight = 1,
@@ -86,19 +73,119 @@ enum class AccessibilityTextDirection {
   kMaxValue = kBottomToTop,
 };
 
+// A consecutive range of text run indices not associated with any structure
+// element, inclusive of both `start` and `end`.
+struct UnassociatedTextRunRange {
+  size_t start;
+  size_t end;
+};
+
 struct AccessibilityTextRunInfo {
   AccessibilityTextRunInfo();
-  AccessibilityTextRunInfo(uint32_t len,
+  AccessibilityTextRunInfo(uint32_t start_index,
+                           uint32_t len,
                            const gfx::RectF& bounds,
                            AccessibilityTextDirection direction,
                            const AccessibilityTextStyleInfo& style);
+  AccessibilityTextRunInfo(uint32_t start_index,
+                           uint32_t len,
+                           const gfx::RectF& bounds,
+                           AccessibilityTextDirection direction,
+                           const AccessibilityTextStyleInfo& style,
+                           bool is_searchified);
   AccessibilityTextRunInfo(const AccessibilityTextRunInfo& other);
   ~AccessibilityTextRunInfo();
 
+  uint32_t start_index = 0;
   uint32_t len = 0;
   gfx::RectF bounds;
   AccessibilityTextDirection direction = AccessibilityTextDirection::kNone;
   AccessibilityTextStyleInfo style;
+  bool is_searchified = false;
+  std::string language;
+};
+
+struct AccessibilityImageInfo {
+  AccessibilityImageInfo();
+  AccessibilityImageInfo(const std::string& alt_text,
+                         uint32_t text_run_index,
+                         const gfx::RectF& bounds,
+                         int32_t page_object_index);
+  AccessibilityImageInfo(const AccessibilityImageInfo& other);
+  ~AccessibilityImageInfo();
+
+  // Alternate text for the image provided by PDF.
+  // TODO(crbug.com/40707542): Remove in favor of AccessibilityStructureElement.
+  std::string alt_text;
+
+  // We anchor the image to a char index, this denotes the text run before
+  // which the image should be inserted in the accessibility tree. The text run
+  // at this index should contain the anchor char index.
+  uint32_t text_run_index = 0;
+
+  // Bounding box of the image.
+  gfx::RectF bounds;
+
+  // Index of the image object in its page.
+  int32_t page_object_index;
+};
+
+// Represents a node in the PDF's structure tree. This tree represents the
+// logical organization of the text inside the PDF, e.g. when data is placed in
+// a table, or points are placed inside a bulleted list. This should result in
+// additional “structural nodes” to be added to the accessibility tree or
+// existing nodes to get new accessibility roles / attributes.
+struct AccessibilityStructureElement {
+  AccessibilityStructureElement();
+  AccessibilityStructureElement(const AccessibilityStructureElement&) = delete;
+  AccessibilityStructureElement& operator=(
+      const AccessibilityStructureElement&) = delete;
+  ~AccessibilityStructureElement();
+
+  // Trailing comments indicate corresponding PDF spec dictionary keys.
+  PdfTagType type = PdfTagType::kNone;  // /S
+  std::string language;                 // /Lang
+  std::string alt_text;                 // /Alt
+  std::string abbreviation_expansion;   // /E
+  std::string actual_text;              // /ActualText
+
+  std::vector<raw_ptr<AccessibilityTextRunInfo, VectorExperimental>>
+      associated_text_runs_if_available;
+  std::unique_ptr<AccessibilityImageInfo> associated_image_if_available;
+
+  // Only used on the node which is the root of a PDF page: ranges of text runs
+  // within a page that are not associated with a structured element. These text
+  // runs form "unstructured" text within a page that will need to be
+  // interleaved with structured content.
+  std::vector<UnassociatedTextRunRange> unassociated_text_run_ranges_for_page;
+
+  std::vector<std::unique_ptr<AccessibilityStructureElement>> children;
+  raw_ptr<AccessibilityStructureElement> parent = nullptr;
+};
+
+struct AccessibilityDocInfo {
+  AccessibilityDocInfo();
+  AccessibilityDocInfo(const AccessibilityDocInfo&) = delete;
+  AccessibilityDocInfo& operator=(const AccessibilityDocInfo&) = delete;
+  ~AccessibilityDocInfo();
+
+  friend bool operator==(const AccessibilityDocInfo&,
+                         const AccessibilityDocInfo&) = default;
+
+  uint32_t page_count = 0;
+  bool is_tagged = false;
+  std::unique_ptr<AccessibilityStructureElement> structure_tree_root;
+  bool text_accessible = false;
+  bool text_copyable = false;
+  std::string language;
+};
+
+struct AccessibilityPageInfo {
+  uint32_t page_index = 0;
+  gfx::Rect bounds;
+  uint32_t text_run_count = 0;
+  uint32_t char_count = 0;
+  bool is_searchified = false;
 };
 
 struct AccessibilityCharInfo {
@@ -132,24 +219,6 @@ struct AccessibilityLinkInfo {
   AccessibilityTextRunRangeInfo text_range;
 };
 
-struct AccessibilityImageInfo {
-  AccessibilityImageInfo();
-  AccessibilityImageInfo(const std::string& alt_text,
-                         uint32_t text_run_index,
-                         const gfx::RectF& bounds);
-  AccessibilityImageInfo(const AccessibilityImageInfo& other);
-  ~AccessibilityImageInfo();
-
-  // Alternate text for the image provided by PDF.
-  std::string alt_text;
-  // We anchor the image to a char index, this denotes the text run before
-  // which the image should be inserted in the accessibility tree. The text run
-  // at this index should contain the anchor char index.
-  uint32_t text_run_index = 0;
-  // Bounding box of the image.
-  gfx::RectF bounds;
-};
-
 struct AccessibilityHighlightInfo {
   AccessibilityHighlightInfo();
   AccessibilityHighlightInfo(const std::string& note_text,
@@ -172,163 +241,25 @@ struct AccessibilityHighlightInfo {
   AccessibilityTextRunRangeInfo text_range;
 };
 
-struct AccessibilityTextFieldInfo {
-  AccessibilityTextFieldInfo();
-  AccessibilityTextFieldInfo(const std::string& name,
-                             const std::string& value,
-                             bool is_read_only,
-                             bool is_required,
-                             bool is_password,
-                             uint32_t index_in_page,
-                             uint32_t text_run_index,
-                             const gfx::RectF& bounds);
-  AccessibilityTextFieldInfo(const AccessibilityTextFieldInfo& other);
-  ~AccessibilityTextFieldInfo();
-
-  // Represents the name property of text field, if present.
-  std::string name;
-  // Represents the value property of text field, if present.
-  std::string value;
-  // Represents if the text field is non-editable.
-  bool is_read_only = false;
-  // Represents if the field should have value at the time it is exported by a
-  // submit form action.
-  bool is_required = false;
-  // Represents if the text field is a password text field type.
-  bool is_password = false;
-  // Index of this text field in the collection of text fields in the page.
-  uint32_t index_in_page = 0;
-  // We anchor the text field to a text run index, this denotes the text run
-  // before which the text field should be inserted in the accessibility tree.
-  uint32_t text_run_index = 0;
-  // Bounding box of the text field.
+// Represents a composite graphic (a PDF Form XObject, such as a chart or
+// diagram) that combines graphical primitives with embedded visible text, as
+// opposed to `AccessibilityImageInfo`, which represents a single bitmap image
+// object.
+struct AccessibilityFormGraphicInfo {
+  // Bounding box of the graphic.
   gfx::RectF bounds;
+  AccessibilityTextRunRangeInfo text_range;
 };
 
-struct AccessibilityChoiceFieldOptionInfo {
-  // Represents the name property of choice field option.
-  std::string name;
-  // Represents if a choice field option is selected or not.
-  bool is_selected = false;
-  // Bounding box of the choice field option.
-  gfx::RectF bounds;
-};
+// A straight line segment stroked on a page, such as a table border, column
+// divider, or decorative separator, in the same pixel coordinates as
+// `AccessibilityTextRunInfo::bounds`.
+struct AccessibilityLineSegment {
+  friend bool operator==(const AccessibilityLineSegment&,
+                         const AccessibilityLineSegment&) = default;
 
-// TODO(crbug.com/702993): Remove next line comment after PDF migrates away
-// from Pepper.
-// Explicitly set all enum values to match enum values in
-// PP_PrivateChoiceFieldType.
-enum class ChoiceFieldType {
-  kListBox = 0,
-  kComboBox = 1,
-  kMaxValue = kComboBox,
-};
-
-struct AccessibilityChoiceFieldInfo {
-  AccessibilityChoiceFieldInfo();
-  AccessibilityChoiceFieldInfo(
-      const std::string& name,
-      const std::vector<AccessibilityChoiceFieldOptionInfo>& options,
-      ChoiceFieldType type,
-      bool is_read_only,
-      bool is_multi_select,
-      bool has_editable_text_box,
-      uint32_t index_in_page,
-      uint32_t text_run_index,
-      const gfx::RectF& bounds);
-  AccessibilityChoiceFieldInfo(const AccessibilityChoiceFieldInfo& other);
-  ~AccessibilityChoiceFieldInfo();
-
-  // Represents the name property of choice field, if present.
-  std::string name;
-  // Represents list of options in choice field, if present.
-  std::vector<AccessibilityChoiceFieldOptionInfo> options;
-  // Represents type of choice field.
-  ChoiceFieldType type;
-  // Represents if the choice field is non-editable.
-  bool is_read_only = false;
-  // Represents if the choice field is multi-selectable.
-  bool is_multi_select = false;
-  // Represents if the choice field includes an editable text box.
-  bool has_editable_text_box = false;
-  // Index of this choice field in the collection of choice fields in the
-  // page.
-  uint32_t index_in_page = 0;
-  // We anchor the choice field to a text run index, this denotes the text run
-  // before which the choice field should be inserted in the accessibility
-  // tree.
-  uint32_t text_run_index = 0;
-  // Bounding box of the choice field.
-  gfx::RectF bounds;
-};
-
-// TODO(crbug.com/702993): Remove next line comment after PDF migrates away
-// from Pepper.
-// Explicitly set all enum values to match enum values in PP_PrivateButtonType.
-enum class ButtonType {
-  kPushButton = 1,
-  kCheckBox = 2,
-  kRadioButton = 3,
-  kMaxValue = kRadioButton,
-};
-
-struct AccessibilityButtonInfo {
-  AccessibilityButtonInfo();
-  AccessibilityButtonInfo(const std::string& name,
-                          const std::string& value,
-                          ButtonType type,
-                          bool is_read_only,
-                          bool is_checked,
-                          uint32_t control_count,
-                          uint32_t control_index,
-                          uint32_t index_in_page,
-                          uint32_t text_run_index,
-                          const gfx::RectF& bounds);
-  AccessibilityButtonInfo(const AccessibilityButtonInfo& other);
-  ~AccessibilityButtonInfo();
-
-  // Represents the name property of button, if present.
-  std::string name;
-  // Represents the value property of button, if present.
-  std::string value;
-  // Represents the button type.
-  ButtonType type;
-  // Represents if the button is non-editable.
-  bool is_read_only = false;
-  // Represents if the radio button or check box is checked or not.
-  bool is_checked = false;
-  // Represents count of controls in the control group. A group of interactive
-  // form annotations is collectively called a form control group. Here, an
-  // interactive form annotation, should be either a radio button or a
-  // checkbox. Value of `control_count` is >= 1.
-  uint32_t control_count = 0;
-  // Represents index of the control in the control group. A group of
-  // interactive form annotations is collectively called a form control group.
-  // Here, an interactive form annotation, should be either a radio button or
-  // a checkbox. Value of `control_index` should always be less than
-  // `control_count`.
-  uint32_t control_index = 0;
-  // Index of this button in the collection of buttons in the page.
-  uint32_t index_in_page = 0;
-  // We anchor the button to a text run index, this denotes the text run
-  // before which the button should be inserted in the accessibility tree.
-  uint32_t text_run_index = 0;
-  // Bounding box of the button.
-  gfx::RectF bounds;
-};
-
-struct AccessibilityFormFieldInfo {
-  AccessibilityFormFieldInfo();
-  AccessibilityFormFieldInfo(
-      const std::vector<AccessibilityTextFieldInfo>& text_fields,
-      const std::vector<AccessibilityChoiceFieldInfo>& choice_fields,
-      const std::vector<AccessibilityButtonInfo>& buttons);
-  AccessibilityFormFieldInfo(const AccessibilityFormFieldInfo& other);
-  ~AccessibilityFormFieldInfo();
-
-  std::vector<AccessibilityTextFieldInfo> text_fields;
-  std::vector<AccessibilityChoiceFieldInfo> choice_fields;
-  std::vector<AccessibilityButtonInfo> buttons;
+  gfx::PointF start;
+  gfx::PointF end;
 };
 
 struct AccessibilityPageObjects {
@@ -336,21 +267,20 @@ struct AccessibilityPageObjects {
   AccessibilityPageObjects(
       const std::vector<AccessibilityLinkInfo>& links,
       const std::vector<AccessibilityImageInfo>& images,
-      const std::vector<AccessibilityHighlightInfo>& highlights,
-      const AccessibilityFormFieldInfo& form_fields);
+      const std::vector<AccessibilityHighlightInfo>& highlights);
   AccessibilityPageObjects(const AccessibilityPageObjects& other);
   ~AccessibilityPageObjects();
 
   std::vector<AccessibilityLinkInfo> links;
   std::vector<AccessibilityImageInfo> images;
   std::vector<AccessibilityHighlightInfo> highlights;
-  AccessibilityFormFieldInfo form_fields;
+  std::vector<AccessibilityFormGraphicInfo> graphics;
+  std::vector<AccessibilityLineSegment> line_segments;
+  // Filled axis-aligned rectangles, in the same pixel coordinates as
+  // `AccessibilityTextRunInfo::bounds`.
+  std::vector<gfx::RectF> filled_rects;
 };
 
-// TODO(crbug.com/702993): Remove next line comment after PDF migrates away
-// from Pepper.
-// Explicitly set all enum values to match enum values in
-// PP_PrivateFocusObjectType.
 enum class FocusObjectType {
   kNone = 0,
   kDocument = 1,
@@ -367,21 +297,19 @@ struct AccessibilityFocusInfo {
 };
 
 struct AccessibilityViewportInfo {
+  AccessibilityViewportInfo();
+  AccessibilityViewportInfo(const AccessibilityViewportInfo& other);
+  ~AccessibilityViewportInfo();
+
   double zoom = 0.0;
   double scale = 0.0;
   gfx::Point scroll;
   gfx::Point offset;
-  uint32_t selection_start_page_index = 0;
-  uint32_t selection_start_char_index = 0;
-  uint32_t selection_end_page_index = 0;
-  uint32_t selection_end_char_index = 0;
+  uint32_t orientation = 0;
+  Selection selection;
   AccessibilityFocusInfo focus_info;
 };
 
-// TODO(crbug.com/702993): Remove next line comment after PDF migrates away
-// from Pepper.
-// Explicitly set all enum values to match enum values in
-// PP_PdfAccessibilityAction.
 enum class AccessibilityAction {
   // No action specified.
   kNone = 0,
@@ -397,10 +325,6 @@ enum class AccessibilityAction {
   kMaxValue = kSetSelection,
 };
 
-// TODO(crbug.com/702993): Remove next line comment after PDF migrates away
-// from Pepper.
-// Explicitly set all enum values to match enum values in
-// PP_PdfAccessibilityAnnotationType.
 enum class AccessibilityAnnotationType {
   // No annotation type defined.
   kNone = 0,
@@ -427,13 +351,6 @@ enum class AccessibilityScrollAlignment {
   kClosestToEdge,
   // Last enum value marker.
   kMaxValue = kClosestToEdge,
-};
-
-struct PageCharacterIndex {
-  // Index of PDF page.
-  uint32_t page_index = 0;
-  // Index of character within the PDF page.
-  uint32_t char_index = 0;
 };
 
 struct AccessibilityActionData {

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,6 @@
 #include "ash/test/ash_test_base.h"
 #include "ash/wallpaper/wallpaper_controller_impl.h"
 #include "base/command_line.h"
-#include "base/macros.h"
 #include "ui/display/manager/display_manager.h"
 
 namespace ash {
@@ -26,6 +25,12 @@ display::Display::Rotation GetDisplayRotation(int64_t display_id) {
 class DisplayConfigurationControllerSmoothRotationTest : public AshTestBase {
  public:
   DisplayConfigurationControllerSmoothRotationTest() = default;
+
+  DisplayConfigurationControllerSmoothRotationTest(
+      const DisplayConfigurationControllerSmoothRotationTest&) = delete;
+  DisplayConfigurationControllerSmoothRotationTest& operator=(
+      const DisplayConfigurationControllerSmoothRotationTest&) = delete;
+
   ~DisplayConfigurationControllerSmoothRotationTest() override = default;
 
   void SetUp() override {
@@ -34,9 +39,6 @@ class DisplayConfigurationControllerSmoothRotationTest : public AshTestBase {
     Shell::Get()->wallpaper_controller()->set_bypass_decode_for_testing();
     Shell::Get()->wallpaper_controller()->ShowDefaultWallpaperForTesting();
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(DisplayConfigurationControllerSmoothRotationTest);
 };
 
 }  // namespace
@@ -44,7 +46,7 @@ class DisplayConfigurationControllerSmoothRotationTest : public AshTestBase {
 using DisplayConfigurationControllerTest = AshTestBase;
 
 TEST_F(DisplayConfigurationControllerTest, OnlyHasOneAnimator) {
-  display::Display display = display::Screen::GetScreen()->GetPrimaryDisplay();
+  display::Display display = display::Screen::Get()->GetPrimaryDisplay();
   DisplayConfigurationControllerTestApi testapi(
       Shell::Get()->display_configuration_controller());
   ScreenRotationAnimator* old_screen_rotation_animator =
@@ -66,7 +68,7 @@ TEST_F(DisplayConfigurationControllerTest, OnlyHasOneAnimator) {
 }
 
 TEST_F(DisplayConfigurationControllerTest, GetTargetRotationWithAnimation) {
-  display::Display display = display::Screen::GetScreen()->GetPrimaryDisplay();
+  display::Display display = display::Screen::Get()->GetPrimaryDisplay();
   DisplayConfigurationController* controller =
       Shell::Get()->display_configuration_controller();
   DisplayConfigurationControllerTestApi(controller).SetDisplayAnimator(true);
@@ -81,7 +83,7 @@ TEST_F(DisplayConfigurationControllerTest, GetTargetRotationWithAnimation) {
 
 TEST_F(DisplayConfigurationControllerSmoothRotationTest,
        GetTargetRotationWithAnimation) {
-  display::Display display = display::Screen::GetScreen()->GetPrimaryDisplay();
+  display::Display display = display::Screen::Get()->GetPrimaryDisplay();
   DisplayConfigurationController* controller =
       Shell::Get()->display_configuration_controller();
   DisplayConfigurationControllerTestApi(controller).SetDisplayAnimator(true);

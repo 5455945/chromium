@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_ANDROID_OOM_INTERVENTION_OOM_INTERVENTION_DECIDER_H_
 
 #include "base/gtest_prod_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/supports_user_data.h"
 
 namespace content {
@@ -27,9 +28,9 @@ class PrefService;
 //   never trigger intervention on the site.
 // - If len(blocklist) > kMaxBlocklistSize, the user is permanently opted out.
 //
-// An instance of this class is associated with BrowserContext when the
-// BrowserContext isn't incognito. You can obtain it via GetForBrowserContext().
-// GetForBrowserContext() will return nullptr when in incognito mode.
+// An instance of this class is associated with a BrowserContext. Incognito
+// instances use session-only preferences that are discarded with the
+// off-the-record BrowserContext.
 class OomInterventionDecider : public base::SupportsUserData::Data {
  public:
   // This delegate is a testing seam.
@@ -43,6 +44,9 @@ class OomInterventionDecider : public base::SupportsUserData::Data {
 
   static OomInterventionDecider* GetForBrowserContext(
       content::BrowserContext* context);
+
+  OomInterventionDecider(const OomInterventionDecider&) = delete;
+  OomInterventionDecider& operator=(const OomInterventionDecider&) = delete;
 
   ~OomInterventionDecider() override;
 
@@ -78,9 +82,7 @@ class OomInterventionDecider : public base::SupportsUserData::Data {
   void AddToList(const char* list_name, const std::string& host);
 
   std::unique_ptr<Delegate> delegate_;
-  PrefService* prefs_;
-
-  DISALLOW_COPY_AND_ASSIGN(OomInterventionDecider);
+  raw_ptr<PrefService> prefs_;
 };
 
 #endif  // CHROME_BROWSER_ANDROID_OOM_INTERVENTION_OOM_INTERVENTION_DECIDER_H_

@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,12 +9,15 @@
 
 #include "ash/ash_export.h"
 #include "ash/projector/ui/projector_button.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 
 namespace ash {
 
 // A view that shows a button with a color view which is used for start/stop
 // recording buttons and color picker buttons.
 class ASH_EXPORT ProjectorColorButton : public ProjectorButton {
+  METADATA_HEADER(ProjectorColorButton, ProjectorButton)
+
  public:
   ProjectorColorButton(views::Button::PressedCallback callback,
                        SkColor color,
@@ -24,6 +27,12 @@ class ASH_EXPORT ProjectorColorButton : public ProjectorButton {
   ProjectorColorButton(const ProjectorColorButton&) = delete;
   ProjectorColorButton& operator=(const ProjectorColorButton&) = delete;
   ~ProjectorColorButton() override = default;
+
+  void PaintButtonContents(gfx::Canvas* canvas) override;
+
+ private:
+  SkColor color_;
+  int size_;
 };
 
 }  // namespace ash

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,12 +7,11 @@
 #include <algorithm>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/files/file.h"
 #include "base/files/memory_mapped_file.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
-#include "base/metrics/histogram_macros.h"
-#include "base/timer/elapsed_timer.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "third_party/blink/public/common/thread_safe_browser_interface_broker_proxy.h"
 #include "third_party/blink/public/mojom/hyphenation/hyphenation.mojom-blink.h"
@@ -20,14 +19,17 @@
 #include "third_party/blink/renderer/platform/text/character.h"
 #include "third_party/blink/renderer/platform/text/hyphenation/hyphenator_aosp.h"
 #include "third_party/blink/renderer/platform/text/layout_locale.h"
+#include "third_party/blink/renderer/platform/wtf/text/ignoring_ascii_case_hash.h"
+#include "third_party/blink/renderer/platform/wtf/text/utf16.h"
 
 namespace blink {
 
 namespace {
 
 inline bool ShouldSkipLeadingChar(UChar32 c) {
-  if (Character::TreatAsSpace(c))
+  if (unicode::TreatAsSpace(c)) {
     return true;
+  }
   // Strip leading punctuation, defined as OP and QU line breaking classes,
   // see UAX #14.
   const int32_t lb = u_getIntPropertyValue(c, UCHAR_LINE_BREAK);
@@ -62,9 +64,7 @@ static mojom::blink::Hyphenation* GetService() {
 bool HyphenationMinikin::OpenDictionary(const AtomicString& locale) {
   mojom::blink::Hyphenation* service = GetService();
   base::File file;
-  base::ElapsedTimer timer;
   service->OpenDictionary(locale, &file);
-  UMA_HISTOGRAM_TIMES("Hyphenation.Open", timer.Elapsed());
 
   return OpenDictionary(std::move(file));
 }
@@ -77,62 +77,62 @@ bool HyphenationMinikin::OpenDictionary(base::File file) {
     return false;
   }
 
-  hyphenator_ = base::WrapUnique(Hyphenator::loadBinary(file_.data()));
+  hyphenator_ = base::WrapUnique(Hyphenator::loadBinary(file_.bytes().data()));
 
   return true;
 }
 
 StringView HyphenationMinikin::WordToHyphenate(
     const StringView& text,
-    unsigned* num_leading_chars_out) {
+    wtf_size_t* num_leading_chars_out) {
   if (text.Is8Bit()) {
-    const LChar* begin = text.Characters8();
-    const LChar* end = begin + text.length();
-    while (begin != end && ShouldSkipLeadingChar(*begin))
+    wtf_size_t begin = 0u;
+    wtf_size_t end = text.length();
+    // SAFETY: begin != end implies begin is valid index.
+    while (begin != end && ShouldSkipLeadingChar(UNSAFE_BUFFERS(text[begin]))) {
       ++begin;
-    while (begin != end && ShouldSkipTrailingChar(end[-1]))
+    }
+    // SAFETY: begin != end implies end - 1 is valid index.
+    while (begin != end &&
+           ShouldSkipTrailingChar(UNSAFE_BUFFERS(text[end - 1]))) {
       --end;
-    *num_leading_chars_out = begin - text.Characters8();
+    }
+    *num_leading_chars_out = begin;
     CHECK_GE(end, begin);
-    return StringView(begin, end - begin);
+    return StringView(text, begin, end - begin);
   }
-  const UChar* begin = text.Characters16();
-  int index = 0;
-  int len = text.length();
+  base::span<const UChar> span = text.Span16();
+  wtf_size_t index = 0;
+  wtf_size_t len = text.length();
   while (index < len) {
-    int next_index = index;
-    UChar32 c;
-    U16_NEXT(begin, next_index, len, c);
+    wtf_size_t next_index = index;
+    UChar32 c = CodePointAtAndNext(span, next_index);
     if (!ShouldSkipLeadingChar(c))
       break;
     index = next_index;
   }
   while (index < len) {
-    int prev_len = len;
-    UChar32 c;
-    U16_PREV(begin, index, prev_len, c);
+    wtf_size_t prev_len = len;
+    UChar32 c = CodePointAtAndPrevious(span, index, prev_len);
     if (!ShouldSkipTrailingChar(c))
       break;
     len = prev_len;
   }
   *num_leading_chars_out = index;
   CHECK_GE(len, index);
-  return StringView(begin + index, len - index);
+  return StringView(text, index, len - index);
 }
 
 Vector<uint8_t> HyphenationMinikin::Hyphenate(const StringView& text) const {
   DCHECK(ShouldHyphenateWord(text));
+  DCHECK_GE(text.length(), MinWordLength());
   Vector<uint8_t> result;
   if (text.Is8Bit()) {
     String text16_bit = text.ToString();
     text16_bit.Ensure16Bit();
-    hyphenator_->hyphenate(
-        &result, reinterpret_cast<const uint16_t*>(text16_bit.Characters16()),
-        text16_bit.length());
+    hyphenator_->hyphenate(&result, text16_bit.SpanUint16());
   } else {
-    hyphenator_->hyphenate(
-        &result, reinterpret_cast<const uint16_t*>(text.Characters16()),
-        text.length());
+    hyphenator_->hyphenate(&result, text.SpanUint16());
   }
   return result;
 }
@@ -140,22 +140,24 @@ Vector<uint8_t> HyphenationMinikin::Hyphenate(const StringView& text) const {
 wtf_size_t HyphenationMinikin::LastHyphenLocation(
     const StringView& text,
     wtf_size_t before_index) const {
-  unsigned num_leading_chars;
-  StringView word = WordToHyphenate(text, &num_leading_chars);
+  wtf_size_t num_leading_chars;
+  const StringView word = WordToHyphenate(text, &num_leading_chars);
   if (before_index <= num_leading_chars || !ShouldHyphenateWord(word))
     return 0;
-  before_index = std::min<wtf_size_t>(before_index - num_leading_chars,
-                                      word.length() - kMinimumSuffixLength);
+  DCHECK_GE(word.length(), MinWordLength());
 
-  if (word.length() < kMinimumPrefixLength + kMinimumSuffixLength ||
-      before_index <= kMinimumPrefixLength)
+  DCHECK_GT(word.length(), MinSuffixLength());
+  before_index = std::min<wtf_size_t>(before_index - num_leading_chars,
+                                      word.length() - MinSuffixLength() + 1);
+  const wtf_size_t min_prefix_len = MinPrefixLength();
+  if (before_index <= min_prefix_len)
     return 0;
 
   Vector<uint8_t> result = Hyphenate(word);
   CHECK_LE(before_index, result.size());
   CHECK_GE(before_index, 1u);
-  static_assert(kMinimumPrefixLength >= 1, "|beforeIndex - 1| can underflow");
-  for (wtf_size_t i = before_index - 1; i >= kMinimumPrefixLength; i--) {
+  DCHECK_GE(min_prefix_len, 1u);
+  for (wtf_size_t i = before_index - 1; i >= min_prefix_len; i--) {
     if (result[i])
       return i + num_leading_chars;
   }
@@ -164,19 +166,20 @@ wtf_size_t HyphenationMinikin::LastHyphenLocation(
 
 Vector<wtf_size_t, 8> HyphenationMinikin::HyphenLocations(
     const StringView& text) const {
-  unsigned num_leading_chars;
+  wtf_size_t num_leading_chars;
   StringView word = WordToHyphenate(text, &num_leading_chars);
 
   Vector<wtf_size_t, 8> hyphen_locations;
-  if (word.length() < kMinimumPrefixLength + kMinimumSuffixLength ||
-      !ShouldHyphenateWord(word))
+  if (!ShouldHyphenateWord(word))
     return hyphen_locations;
+  DCHECK_GE(word.length(), MinWordLength());
 
   Vector<uint8_t> result = Hyphenate(word);
-  static_assert(kMinimumPrefixLength >= 1,
-                "Change the 'if' above if this fails");
-  for (wtf_size_t i = word.length() - kMinimumSuffixLength - 1;
-       i >= kMinimumPrefixLength; i--) {
+  const wtf_size_t min_prefix_len = MinPrefixLength();
+  DCHECK_GE(min_prefix_len, 1u);
+  DCHECK_GT(word.length(), MinSuffixLength());
+  for (wtf_size_t i = word.length() - MinSuffixLength(); i >= min_prefix_len;
+       --i) {
     if (result[i])
       hyphen_locations.push_back(i + num_leading_chars);
   }
@@ -188,8 +191,9 @@ struct HyphenatorLocaleData {
   const char* locale_for_exact_match = nullptr;
 };
 
-using LocaleMap =
-    HashMap<AtomicString, const HyphenatorLocaleData*, CaseFoldingHash>;
+using LocaleMap = HashMap<AtomicString,
+                          const HyphenatorLocaleData*,
+                          IgnoringAsciiCaseHashTraits<AtomicString>>;
 
 static LocaleMap CreateLocaleFallbackMap() {
   // This data is from CLDR, compiled by AOSP.
@@ -268,29 +272,30 @@ AtomicString HyphenationMinikin::MapLocale(const AtomicString& locale) {
     const auto& it = locale_fallback.find(mapped_locale);
     if (it != locale_fallback.end()) {
       if (it->value->locale_for_exact_match && locale == mapped_locale)
-        return it->value->locale_for_exact_match;
-      return it->value->locale;
+        return AtomicString(it->value->locale_for_exact_match);
+      return AtomicString(it->value->locale);
     }
-    const wtf_size_t last_hyphen = mapped_locale.ReverseFind('-');
+    const wtf_size_t last_hyphen = mapped_locale.rfind('-');
     if (last_hyphen == kNotFound || !last_hyphen)
       return mapped_locale;
-    mapped_locale = AtomicString(mapped_locale.GetString().Left(last_hyphen));
+    mapped_locale =
+        AtomicString(mapped_locale.GetString().substr(0, last_hyphen));
   }
 }
 
 scoped_refptr<Hyphenation> Hyphenation::PlatformGetHyphenation(
     const AtomicString& locale) {
   const AtomicString mapped_locale = HyphenationMinikin::MapLocale(locale);
-  if (!EqualIgnoringASCIICase(mapped_locale, locale))
+  if (!EqualIgnoringAsciiCase(mapped_locale, locale)) {
     return LayoutLocale::Get(mapped_locale)->GetHyphenation();
+  }
 
   scoped_refptr<HyphenationMinikin> hyphenation(
       base::AdoptRef(new HyphenationMinikin));
-  const AtomicString lower_ascii_locale = locale.LowerASCII();
+  const AtomicString lower_ascii_locale = locale.ToAsciiLower();
   if (!hyphenation->OpenDictionary(lower_ascii_locale))
     return nullptr;
-  if (lower_ascii_locale.StartsWith("de"))
-    hyphenation->hyphenate_capitalized_word_ = true;
+  hyphenation->Initialize(lower_ascii_locale);
   return hyphenation;
 }
 
@@ -301,8 +306,7 @@ scoped_refptr<HyphenationMinikin> HyphenationMinikin::FromFileForTesting(
       base::AdoptRef(new HyphenationMinikin));
   if (!hyphenation->OpenDictionary(std::move(file)))
     return nullptr;
-  if (locale.StartsWithIgnoringASCIICase("de"))
-    hyphenation->hyphenate_capitalized_word_ = true;
+  hyphenation->Initialize(locale);
   return hyphenation;
 }
 

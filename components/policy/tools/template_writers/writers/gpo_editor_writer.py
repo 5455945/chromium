@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2018 The Chromium Authors. All rights reserved.
+# Copyright 2018 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -22,9 +22,6 @@ class GpoEditorWriter(template_writer.TemplateWriter):
   def IsVersionSupported(self, policy, supported_on):
     # Include deprecated policies in the 'DeprecatedPolicies' group, even if
     # they aren't supported anymore.
-    #
-    # TODO(crbug.com/463990): Eventually exclude some policies, e.g. if they
-    # were deprecated a long time ago.
     major_version = self._GetChromiumMajorVersion()
     if not major_version:
       return True
@@ -34,7 +31,7 @@ class GpoEditorWriter(template_writer.TemplateWriter):
     return not since_version or major_version >= int(since_version)
 
   def IsPolicyOnWin7Only(self, policy):
-    ''' Returns true if the policy is supported on win7 only.'''
+    '''Returns true if the policy is supported on win7 only.'''
     for suppported_on in policy.get('supported_on', []):
       if 'win7' == suppported_on.get('platform', []):
         return True
@@ -70,17 +67,21 @@ class GpoEditorWriter(template_writer.TemplateWriter):
 
     # Remove from top-level list.
     policy_list[:] = [
-        p for p in policy_list if p['name'] not in policies_to_remove
+      p for p in policy_list if p['name'] not in policies_to_remove
     ]
 
     # Remove from groups.
     for group in policy_list:
       if group['type'] != 'group':
         continue
-      # TODO(nicolaso): Remove empty groups
       group['policies'] = [
-          p for p in group['policies'] if p['name'] not in policies_to_remove
+        p for p in group['policies'] if p['name'] not in policies_to_remove
       ]
+
+    # Remove empty groups.
+    policy_list[:] = [
+      p for p in policy_list if p['type'] != 'group' or p['policies']
+    ]
 
   def _MovePolicyGroup(self, policy_list, predicate, policy_desc, group):
     '''Remove policies from |policy_list| that satisfy |predicate| and add them
@@ -96,30 +97,32 @@ class GpoEditorWriter(template_writer.TemplateWriter):
   def PreprocessPolicies(self, policy_list):
     '''Put policies under the DeprecatedPolicies/RemovedPolicies groups.'''
     removed_policies_group = {
-        'name': 'RemovedPolicies',
-        'type': 'group',
-        'caption': self.messages['removed_policy_group_caption']['text'],
-        'desc': self.messages['removed_policy_group_desc']['text'],
-        'policies': []
+      'name': 'RemovedPolicies',
+      'type': 'group',
+      'caption': self.messages['removed_policy_group_caption']['text'],
+      'desc': self.messages['removed_policy_group_desc']['text'],
+      'policies': [],
     }
     self._MovePolicyGroup(
-        policy_list,
-        lambda p: self._IsRemovedPolicy(p),
-        self.messages['removed_policy_desc']['text'],
-        removed_policies_group)
+      policy_list,
+      lambda p: self._IsRemovedPolicy(p),
+      self.messages['removed_policy_desc']['text'],
+      removed_policies_group,
+    )
 
     deprecated_policies_group = {
-        'name': 'DeprecatedPolicies',
-        'type': 'group',
-        'caption': self.messages['deprecated_policy_group_caption']['text'],
-        'desc': self.messages['deprecated_policy_group_desc']['text'],
-        'policies': []
+      'name': 'DeprecatedPolicies',
+      'type': 'group',
+      'caption': self.messages['deprecated_policy_group_caption']['text'],
+      'desc': self.messages['deprecated_policy_group_desc']['text'],
+      'policies': [],
     }
     self._MovePolicyGroup(
-        policy_list,
-        lambda p: p.get('deprecated', False),
-        self.messages['deprecated_policy_desc']['text'],
-        deprecated_policies_group)
+      policy_list,
+      lambda p: p.get('deprecated', False),
+      self.messages['deprecated_policy_desc']['text'],
+      deprecated_policies_group,
+    )
 
     policy_list.append(deprecated_policies_group)
     policy_list.append(removed_policies_group)
